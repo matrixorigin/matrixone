@@ -17,6 +17,7 @@ package brute_force
 import (
 	"context"
 	"fmt"
+	"math"
 	"runtime"
 
 	"github.com/matrixorigin/matrixone/pkg/common/concurrent"
@@ -71,17 +72,18 @@ func GetUsearchQuantizationFromType(v any) (usearch.Quantization, error) {
 
 // NewCpuBruteForceIndex builds a pure-Go brute-force index for any ArrayElement.
 // It dispatches by concrete element type and picks the distance result type R:
-// float64 only for float64 input, float32 for everything else (f32 + the narrow
-// quantizations bf16/f16/int8/uint8 — whose kernels the resolver casts to float32).
+// float64 for native float input, so nearest-centroid comparisons retain the
+// range of stable float64 reductions; float32 for narrow quantizations bf16/f16/
+// int8/uint8, whose native kernels compute in float32.
 func NewCpuBruteForceIndex[T types.ArrayElement](dataset [][]T,
 	dimension uint,
 	m metric.MetricType,
 	elemsz uint) (cache.VectorIndexSearchIf, error) {
 
-	// R = element type for f32/f64; float32 for the narrow quantizations.
+	// R = float64 for native float input; float32 for the narrow quantizations.
 	switch ds := any(dataset).(type) {
 	case [][]float32:
-		return newGoBruteForce[float32, float32](ds, dimension, m), nil
+		return newGoBruteForce[float32, float64](ds, dimension, m), nil
 	case [][]float64:
 		return newGoBruteForce[float64, float64](ds, dimension, m), nil
 	case [][]types.BF16:
@@ -208,6 +210,9 @@ func (idx *UsearchBruteForceIndex[T]) Load(sqlproc *sqlexec.SqlProcess) error {
 
 // GetIndexSize reports the flattened dataset the index holds in host memory. Nothing here
 // reaches a GPU, so the device figure is 0.
+// BuildTS is the fulltext2 async-freshness hook; brute-force search has no async watermark.
+func (idx *UsearchBruteForceIndex[T]) BuildTS() int64 { return 0 }
+
 func (idx *UsearchBruteForceIndex[T]) GetIndexSize() (hostBytes, deviceBytes int64) {
 	if idx.Dataset == nil {
 		return 0, 0
@@ -284,6 +289,9 @@ func (idx *UsearchBruteForceIndex[T]) Search(proc *sqlexec.SqlProcess, _queries 
 	if limit > idx.Count {
 		limit = idx.Count
 	}
+	if idx.MoMetric == metric.Metric_CosineDistance {
+		return idx.searchCosine(proc, flatten, nQueries, limit, rt)
+	}
 
 	keys_ui64, distances_f32, err := usearch.ExactSearchUnsafe(
 		util.UnsafePointer(&((*idx.Dataset)[0])),
@@ -327,6 +335,137 @@ func (idx *UsearchBruteForceIndex[T]) Search(proc *sqlexec.SqlProcess, _queries 
 	return
 }
 
+// searchCosine computes the SQL cosine_distance directly instead of asking usearch to
+// score the vectors. usearch's cosine implementation can underflow on zero/subnormal
+// values, while this path must preserve the scalar metric contract (zero denominator
+// returns distance 1 and boundary values use the scalar implementation). It is used
+// only for the exact brute-force cosine fallback; non-cosine metrics retain the usearch
+// fast path.
+func cosineDistanceLess[T types.RealNumbers](candidate, current T) bool {
+	candidateNaN := math.IsNaN(float64(candidate))
+	currentNaN := math.IsNaN(float64(current))
+	return !candidateNaN && (currentNaN || candidate < current)
+}
+
+func (idx *UsearchBruteForceIndex[T]) searchCosine(
+	proc *sqlexec.SqlProcess,
+	flatten []T,
+	nQueries int,
+	limit uint,
+	rt vectorindex.RuntimeConfig,
+) (any, []float64, error) {
+	if limit == 0 || nQueries == 0 || idx.Count == 0 {
+		return []int64{}, []float64{}, nil
+	}
+	if idx.Dataset == nil {
+		return nil, nil, moerr.NewInternalErrorNoCtx("brute force dataset is nil")
+	}
+
+	limitInt := int(limit)
+	retKeys := make([]int64, nQueries*limitInt)
+	retDistances := make([]float64, nQueries*limitInt)
+	dimension := int(idx.Dimension)
+	dataset := *idx.Dataset
+
+	exec := concurrent.NewThreadPoolExecutor(int(rt.NThreads))
+	err := exec.Execute(
+		proc.GetContext(),
+		nQueries,
+		func(ctx context.Context, _, start, end int) error {
+			var heapKeysBuf []int64
+			var heapDistBuf []T
+			if limitInt > 1 {
+				heapKeysBuf = make([]int64, limitInt)
+				heapDistBuf = make([]T, limitInt)
+			}
+
+			for queryIndex := start; queryIndex < end; queryIndex++ {
+				if err := ctx.Err(); err != nil {
+					return err
+				}
+				queryStart := queryIndex * dimension
+				query := flatten[queryStart : queryStart+dimension]
+
+				if limitInt == 1 {
+					var bestDistance T
+					bestKey := -1
+					for row := 0; row < int(idx.Count); row++ {
+						if row%100 == 0 {
+							if err := ctx.Err(); err != nil {
+								return err
+							}
+						}
+						dataStart := row * dimension
+						distance, err := metric.CosineDistance(query, dataset[dataStart:dataStart+dimension])
+						if err != nil {
+							return err
+						}
+						// SQL ORDER BY places NaN after numeric values. Initialize from the
+						// first real row so an all-NaN dataset never fabricates key -1.
+						if bestKey < 0 || cosineDistanceLess(distance, bestDistance) {
+							bestDistance = distance
+							bestKey = row
+						}
+					}
+					retKeys[queryIndex] = int64(bestKey)
+					retDistances[queryIndex] = float64(bestDistance)
+					continue
+				}
+
+				h := vectorindex.NewFastMaxHeap[T, int64](limitInt, heapKeysBuf, heapDistBuf)
+				var nanKeys []int64
+				for row := 0; row < int(idx.Count); row++ {
+					if row%100 == 0 {
+						if err := ctx.Err(); err != nil {
+							return err
+						}
+					}
+					dataStart := row * dimension
+					distance, err := metric.CosineDistance(query, dataset[dataStart:dataStart+dimension])
+					if err != nil {
+						return err
+					}
+					if math.IsNaN(float64(distance)) {
+						// FastMaxHeap uses ordinary float comparisons, which cannot order
+						// NaN. Keep the real row identity and append these peers after all
+						// finite distances when the result is assembled.
+						if len(nanKeys) < limitInt {
+							nanKeys = append(nanKeys, int64(row))
+						}
+						continue
+					}
+					h.Push(int64(row), distance)
+				}
+
+				offset := queryIndex * limitInt
+				finiteCount := h.Len()
+				for resultIndex := finiteCount - 1; resultIndex >= 0; resultIndex-- {
+					key, distance, ok := h.Pop()
+					if !ok {
+						retKeys[offset+resultIndex] = -1
+						retDistances[offset+resultIndex] = 0
+						continue
+					}
+					retKeys[offset+resultIndex] = key
+					retDistances[offset+resultIndex] = float64(distance)
+				}
+				for nanIndex, key := range nanKeys {
+					resultIndex := finiteCount + nanIndex
+					if resultIndex >= limitInt {
+						break
+					}
+					retKeys[offset+resultIndex] = key
+					retDistances[offset+resultIndex] = math.NaN()
+				}
+			}
+			return nil
+		})
+	if err != nil {
+		return nil, nil, err
+	}
+	return retKeys, retDistances, nil
+}
+
 func (idx *UsearchBruteForceIndex[T]) Destroy() {
 	if idx.deallocator != nil {
 		idx.deallocator.Deallocate()
@@ -346,6 +485,9 @@ func (idx *GoBruteForceIndex[T, R]) Load(sqlproc *sqlexec.SqlProcess) error {
 
 // GetIndexSize reports the row-major dataset the index holds in host memory: the vectors plus
 // the per-row slice headers backing them. Nothing here reaches a GPU, so the device figure is 0.
+// BuildTS is the fulltext2 async-freshness hook; brute-force search has no async watermark.
+func (idx *GoBruteForceIndex[T, R]) BuildTS() int64 { return 0 }
+
 func (idx *GoBruteForceIndex[T, R]) GetIndexSize() (hostBytes, deviceBytes int64) {
 	var elems int64
 	for _, row := range idx.Dataset {

@@ -472,6 +472,195 @@ func TestDecimal128Float(t *testing.T) {
 	}
 }
 
+func TestDecimal128FromFloat64PreservesScaledIntegerPrecision(t *testing.T) {
+	tests := []struct {
+		name  string
+		value float64
+		scale int32
+		want  string
+	}{
+		{name: "positive scale 0", value: 1000000000001, scale: 0, want: "1000000000001"},
+		{name: "positive scale 3", value: 1000000000001, scale: 3, want: "1000000000001.000"},
+		{name: "positive scale 5", value: 1000000000001, scale: 5, want: "1000000000001.00000"},
+		{name: "positive scale 6", value: 1000000000001, scale: 6, want: "1000000000001.000000"},
+		{name: "positive scale 7", value: 1000000000001, scale: 7, want: "1000000000001.0000000"},
+		{name: "negative scale 6", value: -1000000000001, scale: 6, want: "-1000000000001.000000"},
+		{name: "adjacent lower integer", value: 1000000000000, scale: 6, want: "1000000000000.000000"},
+		{name: "adjacent higher integer", value: 1000000000002, scale: 6, want: "1000000000002.000000"},
+		{name: "2^53 minus 1", value: math.Exp2(53) - 1, scale: 6, want: "9007199254740991.000000"},
+		{name: "2^53", value: math.Exp2(53), scale: 6, want: "9007199254740992.000000"},
+	}
+
+	for _, test := range tests {
+		t.Run(test.name, func(t *testing.T) {
+			result, err := Decimal128FromFloat64(test.value, 38, test.scale)
+			require.NoError(t, err)
+			require.Equal(t, test.want, result.Format(test.scale))
+		})
+	}
+}
+
+func TestDecimal128FromFloat64IntegralBoundaries(t *testing.T) {
+	tests := []struct {
+		name  string
+		value float64
+		want  string
+	}{
+		{name: "positive 2^63", value: math.Ldexp(1, 63), want: "9223372036854775808"},
+		{name: "negative 2^63", value: -math.Ldexp(1, 63), want: "-9223372036854775808"},
+		{name: "positive next below 2^64", value: math.Nextafter(math.Ldexp(1, 64), 0), want: "18446744073709549568"},
+		{name: "negative next below 2^64", value: -math.Nextafter(math.Ldexp(1, 64), 0), want: "-18446744073709549568"},
+		{name: "positive 2^64", value: math.Ldexp(1, 64), want: "18446744073709551616"},
+		{name: "negative 2^64", value: -math.Ldexp(1, 64), want: "-18446744073709551616"},
+		{name: "positive 2^126", value: math.Ldexp(1, 126), want: "85070591730234615865843651857942052864"},
+		{name: "negative 2^126", value: -math.Ldexp(1, 126), want: "-85070591730234615865843651857942052864"},
+	}
+
+	for _, test := range tests {
+		t.Run(test.name, func(t *testing.T) {
+			result, err := Decimal128FromFloat64(test.value, 38, 0)
+			require.NoError(t, err)
+			require.Equal(t, test.want, result.Format(0))
+		})
+	}
+
+	result, err := Decimal128FromFloat64(math.Ldexp(1, 64), 38, 6)
+	require.NoError(t, err)
+	require.Equal(t, "18446744073709551616.000000", result.Format(6))
+
+	for _, value := range []float64{
+		math.Ldexp(1, 63),
+		-math.Ldexp(1, 63),
+		math.Nextafter(math.Ldexp(1, 64), 0),
+		-math.Nextafter(math.Ldexp(1, 64), 0),
+		math.Ldexp(1, 64),
+		-math.Ldexp(1, 64),
+	} {
+		_, err := Decimal128FromFloat64(value, 38, 38)
+		require.Error(t, err)
+	}
+	for _, value := range []float64{math.Ldexp(1, 127), -math.Ldexp(1, 127)} {
+		_, err := Decimal128FromFloat64(value, 38, 0)
+		require.Error(t, err)
+	}
+}
+
+func TestDecimal128FromFloat64KeepsDecimalRoundingAndRangeChecks(t *testing.T) {
+	tests := []struct {
+		name  string
+		value float64
+		want  string
+	}{
+		{name: "positive half", value: 1.125, want: "1.13"},
+		{name: "negative half", value: -1.125, want: "-1.13"},
+		{name: "binary fraction", value: 2.675, want: "2.68"},
+	}
+
+	for _, test := range tests {
+		t.Run(test.name, func(t *testing.T) {
+			result, err := Decimal128FromFloat64(test.value, 6, 2)
+			require.NoError(t, err)
+			require.Equal(t, test.want, result.Format(2))
+		})
+	}
+
+	result, err := Decimal128FromFloat64(1000000000001, 19, 6)
+	require.NoError(t, err)
+	require.Equal(t, "1000000000001.000000", result.Format(6))
+
+	for _, width := range []int32{18, 19} {
+		result, err = Decimal128FromFloat64(1.005, width, 2)
+		require.NoError(t, err)
+		require.Equal(t, "1.00", result.Format(2))
+	}
+
+	result, err = Decimal128FromFloat64(1.0000000000000002, 38, 18)
+	require.NoError(t, err)
+	require.Equal(t, "1.000000000000000256", result.Format(18))
+
+	_, err = Decimal128FromFloat64(1000000000001, 18, 6)
+	require.Error(t, err)
+	_, err = Decimal128FromFloat64(999.995, 5, 2)
+	require.Error(t, err)
+	_, err = Decimal128FromFloat64(-999.995, 5, 2)
+	require.Error(t, err)
+
+	_, err = Decimal128FromFloat64(1e20, 19, 6)
+	require.EqualError(t, err, "invalid input: Can't convert Float64 To Decimal128: 100000000000000000000.000000(19,6)")
+}
+
+var decimal128FromFloat64Sink Decimal128
+
+func TestDecimal128FromFloat64DoesNotAllocate(t *testing.T) {
+	tests := []struct {
+		name  string
+		value float64
+		width int32
+		scale int32
+	}{
+		{name: "integral", value: 1000000000001, width: 38, scale: 6},
+		{name: "integral above uint64", value: math.Ldexp(1, 64), width: 38, scale: 0},
+		{name: "fractional", value: 12345.6789, width: 38, scale: 6},
+	}
+
+	for _, test := range tests {
+		t.Run(test.name, func(t *testing.T) {
+			result, err := Decimal128FromFloat64(test.value, test.width, test.scale)
+			require.NoError(t, err)
+			decimal128FromFloat64Sink = result
+
+			allocs := testing.AllocsPerRun(100, func() {
+				decimal128FromFloat64Sink, _ = Decimal128FromFloat64(test.value, test.width, test.scale)
+			})
+			require.Zero(t, allocs)
+		})
+	}
+}
+
+func BenchmarkDecimal128FromFloat64(b *testing.B) {
+	tests := []struct {
+		name  string
+		value float64
+		width int32
+		scale int32
+	}{
+		{name: "integral", value: 1000000000001, width: 38, scale: 6},
+		{name: "integral above uint64", value: math.Ldexp(1, 64), width: 38, scale: 0},
+		{name: "fractional", value: 12345.6789, width: 38, scale: 6},
+	}
+
+	for _, test := range tests {
+		b.Run(test.name, func(b *testing.B) {
+			b.ReportAllocs()
+			for i := 0; i < b.N; i++ {
+				result, err := Decimal128FromFloat64(test.value, test.width, test.scale)
+				if err != nil {
+					b.Fatal(err)
+				}
+				decimal128FromFloat64Sink = result
+			}
+		})
+	}
+}
+
+func TestDecimal128FromFloat64RejectsSpecialValuesAndInvalidTypes(t *testing.T) {
+	for _, value := range []float64{math.NaN(), math.Inf(1), math.Inf(-1)} {
+		_, err := Decimal128FromFloat64(value, 38, 6)
+		require.Error(t, err)
+	}
+
+	for _, target := range [][2]int32{{0, 0}, {39, 0}, {6, -1}, {5, 6}} {
+		_, err := Decimal128FromFloat64(1, target[0], target[1])
+		require.Error(t, err)
+	}
+
+	result, err := Decimal128FromFloat64(math.SmallestNonzeroFloat64, 38, 6)
+	require.NoError(t, err)
+	require.Equal(t, "0.000000", result.Format(6))
+	_, err = Decimal128FromFloat64(math.MaxFloat64, 38, 6)
+	require.Error(t, err)
+}
+
 func TestDecimal64AddSub(t *testing.T) {
 	x := Decimal64(rand.Int() >> 1)
 	z := x

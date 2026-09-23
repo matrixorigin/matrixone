@@ -367,6 +367,10 @@ type ViewData struct {
 	SecurityType        string           `json:"security_type,omitempty"`
 	LowerCaseTableNames *int64           `json:"lower_case_table_names,omitempty"`
 	Dependencies        []ViewDependency `json:"dependencies,omitempty"`
+	// RequiredProtocolVersion records the minimum protocol needed to bind the
+	// persisted view expression on a local CN. It is a defense-in-depth marker;
+	// cluster admission remains the authoritative old-CN re-entry fence.
+	RequiredProtocolVersion *int64 `json:"required_protocol_version,omitempty"`
 }
 
 type QueryBuilder struct {
@@ -488,12 +492,23 @@ type QueryBuilder struct {
 	isInsertIgnore        bool             // INSERT IGNORE: over-length CHAR/VARCHAR writes are truncated instead of rejected
 	deleteNode            map[uint64]int32 //delete node in this query. key is tableId, value is the nodeId of sinkScan node in the delete plan
 
+	insertHasOnDuplicateUpdate bool // statement-local: keep pure INSERT IGNORE auto-increment handling out of ODKU
+
 	// spill memory for aggregate function
 	// jsonProbeFtNodes marks the fulltext index-scan nodes built for a json
 	// PROBE — a prefilter the optimizer injected, not a user MATCH. Their score
 	// is a constant, so the passes that rank by relevance must skip them, and
 	// they sit under a GROUP BY that does not re-expose the scan's columns.
 	jsonProbeFtNodes map[int32]bool
+
+	// jsonProbeTail records, per base-scan node id, that a mandatory json_extract probe against an
+	// async index must SELF-COMPLETE: the fulltext2_search operator binds the generation it actually
+	// searched at runtime and unions a table_changes tail up to the read snapshot, so no UNION arm is
+	// built in the plan. The value is the reconstructed tail SQL, shown in EXPLAIN (Verbose) via the
+	// node's Stats.Sql -- so the internally-run tail is visible, not a black box. Set by
+	// addJSONFulltextProbes, consumed at the join splice (Stats.Sql) and by buildFulltext2SearchCfg
+	// (which flips TableConfig.ProbeTail). Presence ⇒ self-complete; absent ⇒ MATCH / synchronous.
+	jsonProbeTail map[int32]jsonProbeTailInfo
 
 	aggSpillMem int64
 
@@ -875,6 +890,11 @@ type BindContext struct {
 	// VIEW definition. Ordinary SELECT planning must not clone its select list
 	// just to support view metadata persistence.
 	captureViewStarExpansion bool
+	// persistedExpressionProtocolRequirement is shared by the root view bind
+	// context and all nested query blocks. It records protocol-sensitive
+	// expressions immediately after function binding, before a bind-time fold
+	// can erase the function from the persisted plan.
+	persistedExpressionProtocolRequirement *int64
 	// expandedSelectLists records the expanded output for each SELECT clause
 	// participating in a view definition, including UNION branches.
 	expandedSelectLists map[*tree.SelectClause]tree.SelectExprs
@@ -1010,6 +1030,12 @@ type BindContext struct {
 
 	groupingFlag []bool
 
+	// Only GROUP BY validation consumes this query-block-local proof. It is
+	// never a physical uniqueness property or prepared-execution state.
+	fullGroupByInputNode  int32
+	fullGroupByInputReady bool
+	fullGroupByProof      *fullGroupByDependencyProof
+
 	remapOption *tree.RewriteOption
 }
 
@@ -1076,19 +1102,31 @@ type Binder interface {
 }
 
 type baseBinder struct {
-	sysCtx                           context.Context
-	builder                          *QueryBuilder
-	ctx                              *BindContext
-	impl                             Binder
-	boundCols                        []boundColumn
+	sysCtx    context.Context
+	builder   *QueryBuilder
+	ctx       *BindContext
+	impl      Binder
+	boundCols []boundColumn
+	// Integer consumers own the source domain of their operands. An enclosing
+	// default/assignment target must not pre-convert their numeric literals.
+	integerArgumentSourceContext     bool
 	numericParamType                 *Type
 	numericSubqueryTarget            *Type
 	numericFunctionTarget            bool
 	mysqlSpecialTargetType           *Type
 	allowCanonicalNameConstValueCast bool
 	bindRawMySQLSpecialType          bool
-	subqueryInAggregateInput         bool
-	aggregateInputCorrelation        bool
+	// suppressDefaultValueBindType prevents a destination column type from
+	// changing the type of a nested literal while a function-specific binder
+	// resolves that literal.  Some functions, such as INET_NTOA, have a
+	// string-valued result but still preserve native numeric input overloads.
+	suppressDefaultValueBindType bool
+	// inetNtoaNumericLiteralContext preserves HEX/BIT literal provenance until
+	// INET_NTOA can select its numeric overload.  Those literals are otherwise
+	// materialized as binary strings by the generic literal binder.
+	inetNtoaNumericLiteralContext bool
+	subqueryInAggregateInput      bool
+	aggregateInputCorrelation     bool
 }
 
 type boundColumn struct {

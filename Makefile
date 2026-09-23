@@ -506,31 +506,38 @@ endif
 ut: $(UT_PREREQUISITES)
 	$(info [Unit testing])
 ifeq ($(UNAME_S),darwin)
-	@cd optools && ./run_ut.sh UT $(SKIP_TEST)
+	@cd optools && UT_NATIVE_PREPARED="$(NATIVE_PROVENANCE_ACCELERATOR):$(NATIVE_PROVENANCE_OPTIMIZATION):$(NATIVE_PROVENANCE_SIMSIMD)" ./run_ut.sh UT $(SKIP_TEST)
 else
 	# The race suite is internally partitioned into light/HNSW, exclusive issues,
 	# embedded-cluster, heavy/engine, and plan stages. Keep the outer budget above
 	# the per-package timeout so an expanded main branch cannot be killed while a
 	# selected stage is still making progress. GNU timeout sends TERM first so
 	# run_ut.sh can preserve its checkpoint and active-case diagnostics.
-	@cd optools && timeout --signal=TERM --kill-after=120s $(UT_HARD_TIMEOUT) ./run_ut.sh UT $(SKIP_TEST)
+	@cd optools && UT_NATIVE_PREPARED="$(NATIVE_PROVENANCE_ACCELERATOR):$(NATIVE_PROVENANCE_OPTIMIZATION):$(NATIVE_PROVENANCE_SIMSIMD)" timeout --signal=TERM --kill-after=120s $(UT_HARD_TIMEOUT) ./run_ut.sh UT $(SKIP_TEST)
 endif
 
 ###############################################################################
 # bvt and unit test
 ###############################################################################
 UT_PARALLEL ?= 1
+# Compile/test task and heavy-link budgets are independent. The runner falls
+# back to three tasks if kernel link admission is unavailable.
+UT_LIGHT_PARALLEL ?= 6
+UT_LINK_PARALLEL ?= 3
 UT_SHARD ?= all
-# The outer lifecycle budget is separate from each Go test's UT_TIMEOUT. Keep
-# enough time after TERM for checkpoint flushing and artifact upload.
-UT_HARD_TIMEOUT ?= 70m
+# The outer lifecycle budget covers every sequential UT stage, not one package.
+# A cold race run can spend over an hour in light/issues/embedded before the
+# heavy/engine/plan stages start. Keep per-package UT_TIMEOUT unchanged and
+# leave enough time after TERM for checkpoint flushing and artifact upload.
+UT_HARD_TIMEOUT ?= 120m
 # Emit one bounded progress heartbeat per interval while UT is running.
 UT_HEARTBEAT_INTERVAL ?= 60
-# Build embedded test packages ahead of their execution while the issues
-# fixture is active. This is an explicit A/B knob: compile-only work still
-# consumes CPU, memory, and linker capacity, so it remains opt-in until a
-# same-resource measurement proves a critical-path gain.
-UT_PREBUILD_EMBEDDED ?= 0
+# Build embedded race binaries with one compiler while the exclusive issues
+# fixture runs, then execute those exact binaries serially. Build or admission
+# failures fall back before any prebuilt binary executes.
+UT_PREBUILD_EMBEDDED ?= 1
+UT_PREBUILD_MIN_FREE_KB ?= 6291456
+UT_EMBEDDED_HARD_TIMEOUT_SECONDS ?= 0
 # Reuse released engine slots for plan while resource-heavy work finishes.
 # The heavy process budget is unchanged; set 0 for a sequential A/B baseline.
 UT_OVERLAP_PLAN ?= 1
@@ -542,7 +549,7 @@ UT_OVERLAP_LIGHT_PARALLEL ?= 2
 # Parent cancellation waits long enough for helper-owned child process groups
 # to receive TERM and bounded KILL cleanup in sequence.
 UT_HELPER_TERM_GRACE_TICKS ?= 60
-export UT_SHARD UT_HARD_TIMEOUT UT_HEARTBEAT_INTERVAL UT_PREBUILD_EMBEDDED UT_OVERLAP_PLAN UT_OVERLAP_LIGHT UT_OVERLAP_LIGHT_PARALLEL UT_HELPER_TERM_GRACE_TICKS
+export UT_SHARD UT_HARD_TIMEOUT UT_HEARTBEAT_INTERVAL UT_PREBUILD_EMBEDDED UT_PREBUILD_MIN_FREE_KB UT_EMBEDDED_HARD_TIMEOUT_SECONDS UT_OVERLAP_PLAN UT_OVERLAP_LIGHT UT_OVERLAP_LIGHT_PARALLEL UT_LIGHT_PARALLEL UT_LINK_PARALLEL UT_HELPER_TERM_GRACE_TICKS
 # Native compilation runs before Go tests, so it can use an explicit UT CPU
 # budget without increasing peak race-test memory. With the default UT value,
 # omit -j and preserve recursive make's jobserver contract: a plain make stays

@@ -19,8 +19,36 @@ import (
 	"fmt"
 	"testing"
 
+	"github.com/matrixorigin/matrixone/pkg/util/errutil"
 	"github.com/stretchr/testify/require"
 )
+
+func TestFormatDuplicateEntryMatchesErrorMessageWithoutReporting(t *testing.T) {
+	previousReporter := errutil.GetReportErrorFunc()
+	reports := 0
+	errutil.SetErrorReporter(func(context.Context, error, int) {
+		reports++
+	})
+	t.Cleanup(func() {
+		errutil.SetErrorReporter(previousReporter)
+	})
+
+	for _, tc := range []struct {
+		entry string
+		key   string
+	}{
+		{entry: "1", key: "PRIMARY"},
+		{entry: "", key: "unique_%"},
+		{entry: "重复%值", key: "idx_name"},
+	} {
+		want := NewDuplicateEntry(NoReportContext(), tc.entry, tc.key).Error()
+		require.Equal(t, want, FormatDuplicateEntry(tc.entry, tc.key))
+	}
+	require.Zero(t, reports)
+
+	_ = NewDuplicateEntry(context.Background(), "1", "PRIMARY")
+	require.Equal(t, 1, reports)
+}
 
 func pf1() {
 	panic("foo")
@@ -93,6 +121,12 @@ func TestNew_MyErrorCode(t *testing.T) {
 
 	err = NewOutOfRange(context.TODO(), "int8", "1111")
 	require.Equal(t, ER_DATA_OUT_OF_RANGE, err.MySQLCode())
+
+	err = NewCannotConvertString(context.TODO(), "A\\xffB", "binary", "utf8mb4")
+	require.Equal(t, ErrCannotConvertString, err.ErrorCode())
+	require.Equal(t, ER_CANNOT_CONVERT_STRING, err.MySQLCode())
+	require.Equal(t, MySQLDefaultSqlState, err.SqlState())
+	require.Equal(t, "Cannot convert string 'A\\xffB' from binary to utf8mb4", err.Error())
 
 	err = NewPreparedParamOutOfRange(context.TODO(), "unsigned integer", "EXECUTE")
 	require.Equal(t, ErrPreparedParamOutOfRange, err.ErrorCode())

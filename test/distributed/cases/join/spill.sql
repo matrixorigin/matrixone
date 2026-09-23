@@ -158,6 +158,8 @@ create table t_dedup_spill (id int primary key, val int);
 insert into t_dedup_spill select *,* from generate_series(400000) g;
 set @@join_spill_mem = 1000;
 -- @ignore:0
+-- Keep the DEDUP action and primary-key hash shuffle stable without pinning topology-dependent plan layout.
+-- @regex("(?m)^[ \t]*Join Type: DEDUP [(]UPDATE[)][^\r\n]*\r?\n[ \t]*Join Cond: [^\r\n]*shuffle: hash[(]t_dedup_spill[.]id[)]", true)
 explain (check '["Join Type: DEDUP", "shuffle: hash"]')
 insert into t_dedup_spill select *, 0 from generate_series(200000, 600000) g
 on duplicate key update val = val + 1;

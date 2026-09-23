@@ -5034,6 +5034,7 @@ func TestBuildAlterView(t *testing.T) {
 	ctx.EXPECT().ResolveVariable(gomock.Any(), gomock.Any(), gomock.Any()).Return("", nil).AnyTimes()
 	ctx.EXPECT().GetAccountId().Return(catalog.System_Account, nil).AnyTimes()
 	ctx.EXPECT().GetContext().Return(context.Background()).AnyTimes()
+	ctx.EXPECT().SetContext(gomock.Any()).AnyTimes()
 	ctx.EXPECT().GetProcess().Return(nil).AnyTimes()
 	ctx.EXPECT().Stats(gomock.Any(), gomock.Any()).Return(nil, nil).AnyTimes()
 	ctx.EXPECT().GetQueryingSubscription().Return(nil).AnyTimes()

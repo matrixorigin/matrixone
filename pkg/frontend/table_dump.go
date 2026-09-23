@@ -439,7 +439,8 @@ func tableDumpManifestCreateSQL(
 		return "", moerr.NewInternalErrorNoCtx("table definition is unavailable")
 	}
 	needsLegacyCollationRebuild := tableDumpHasLegacyTextMetadata(def)
-	if (!sqlplan.LegacyTinyTextCreateSQLNeedsRebuild(def) && !needsLegacyCollationRebuild) ||
+	needsLegacyBlobRebuild := tableDumpHasLegacyUnboundedBlob(def)
+	if (!sqlplan.LegacyTinyTextCreateSQLNeedsRebuild(def) && !needsLegacyCollationRebuild && !needsLegacyBlobRebuild) ||
 		!canReconstructTableSchema(def) {
 		return def.Createsql, nil
 	}
@@ -461,6 +462,15 @@ func tableDumpManifestCreateSQL(
 		return "", moerr.NewInternalErrorNoCtxf("cannot reconstruct table schema: %v", err)
 	}
 	return canonical, nil
+}
+
+func tableDumpHasLegacyUnboundedBlob(def *plan.TableDef) bool {
+	for _, col := range def.Cols {
+		if col != nil && types.T(col.Typ.Id) == types.T_blob && col.Typ.Width == 0 {
+			return true
+		}
+	}
+	return false
 }
 
 func tableDumpHasLegacyTextMetadata(def *plan.TableDef) bool {
@@ -1501,7 +1511,7 @@ func applyTableDumpAutoIncrementRestore(
 	resetInstalled = true
 	for _, restore := range restores {
 		if err = proc.GetIncrService().SetOffset(
-			ctx,
+			incrservice.WithAutoIDCachePolicy(ctx, def.TblId, def.AutoIdCache),
 			tableID,
 			restore.column.ColIndex,
 			restore.column.ColName,

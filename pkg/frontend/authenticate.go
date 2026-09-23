@@ -6824,7 +6824,7 @@ func determinePrivilegeSetOfStatement(stmt tree.Statement) *privilege {
 		*tree.ShowBackendServers, *tree.ShowStages,
 		*tree.PauseDaemonTask, *tree.CancelDaemonTask, *tree.ResumeDaemonTask, *tree.ShowRecoveryWindow,
 		*tree.ShowSQLTasks, *tree.ShowSQLTaskRuns,
-		*tree.ShowRules, *tree.CheckTableStmt, *tree.ShowProfileStmt,
+		*tree.CheckTableStmt, *tree.ShowProfileStmt,
 		*tree.AnalyzeStmt:
 		objType = objectTypeNone
 		kind = privilegeKindNone
@@ -6842,6 +6842,12 @@ func determinePrivilegeSetOfStatement(stmt tree.Statement) *privilege {
 		canExecInRestricted = true
 	case *tree.AlterRoleAddRule, *tree.AlterRoleDropRule:
 		typs = append(typs, PrivilegeTypeAlterRole, PrivilegeTypeAccountAll)
+	case *tree.ShowRules:
+		// Role rewrite rules embed protected object/column/predicate policy.
+		// Gate reads with the same privilege as rule DDL so ordinary users
+		// cannot bypass mo_catalog.mo_role_rule ACL via SHOW RULES.
+		typs = append(typs, PrivilegeTypeAlterRole, PrivilegeTypeAccountAll)
+		canExecInRestricted = true
 	case *tree.ShowAccounts:
 		objType = objectTypeNone
 		kind = privilegeKindSpecial

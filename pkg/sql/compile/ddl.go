@@ -116,7 +116,9 @@ func (s *Scope) CreateDatabase(c *Compile) error {
 	}
 
 	ctx = context.WithValue(ctx, defines.SqlKey{}, createDatabase.GetSql())
-	datType := ""
+	// Internal database creators can attach a categorical type to the CREATE
+	// itself so the catalog row is atomic with the database definition.
+	datType, _ := ctx.Value(defines.DatTypKey{}).(string)
 	// handle sub
 	if subOption := createDatabase.SubscriptionOption; subOption != nil {
 		datType = catalog.SystemDBTypeSubscription
@@ -618,6 +620,21 @@ func reindexSpecifiedParams(stmt tree.Statement, indexName string) map[string]st
 	return m
 }
 
+// indexBaseColumnType returns the type of indexDef's first key column in tableDef, or zero when
+// the column is not found.
+func indexBaseColumnType(tableDef *plan.TableDef, indexDef *plan.IndexDef) types.T {
+	if len(indexDef.Parts) == 0 {
+		return 0
+	}
+	part := catalog.ResolveAlias(indexDef.Parts[0])
+	for _, col := range tableDef.Cols {
+		if col.Name == part {
+			return types.T(col.Typ.Id)
+		}
+	}
+	return 0
+}
+
 func validateAlterForeignKeyNameActions(
 	ctx context.Context,
 	existing map[string]bool,
@@ -697,7 +714,7 @@ func (s *Scope) alterTableInplace(c *Compile, cleanup *alterAutoIncrementResetCl
 		}
 	}
 	targetTableDef := persistedIPFunctionAlterTarget(qry)
-	if err := plan2.RequirePersistedIPFunctionProtocol(c.proc.Ctx, c.proc, targetTableDef); err != nil {
+	if err := plan2.RequirePersistedIPFunctionProtocolForAuthoring(c.proc.Ctx, c.proc, targetTableDef); err != nil {
 		return err
 	}
 
@@ -1205,9 +1222,10 @@ func (s *Scope) alterTableInplace(c *Compile, cleanup *alterAutoIncrementResetCl
 					// merges the build options it honors on a rebuild
 					// (e.g. IVF-FLAT's `lists`, HNSW's `m`/`ef_*`, CAGRA's
 					// graph degrees) into the algo params and rejects any
-					// other option it does not support. (quantization is left
-					// entirely to the vecf16 quantization work — reindexSpecified
-					// Params does not extract it, so reindex ignores it.) The
+					// other option it does not support, including a QUANTIZATION
+					// change it cannot honor (ivfflat rejects any change; cagra/ivfpq
+					// reject an upcast of the base column type) and, for the vector
+					// indexes, MERGE. The
 					// REINDEX rule shares index_option_list with CREATE INDEX, so
 					// the specified options are read straight off the parse tree
 					// (c.stmt) here — no plan proto field is needed to carry them.
@@ -1218,8 +1236,9 @@ func (s *Scope) alterTableInplace(c *Compile, cleanup *alterAutoIncrementResetCl
 					p, _ := indexplugin.Get(indexAlgo)
 					newParamsMap, err := p.Compile().ValidateReindexParams(oldParams,
 						compileplugin.ReindexParamUpdate{
-							Params: reindexSpecifiedParams(c.stmt, constraintName),
-							Merge:  tableAlterIndex.Merge,
+							Params:         reindexSpecifiedParams(c.stmt, constraintName),
+							Merge:          tableAlterIndex.Merge,
+							BaseVectorType: indexBaseColumnType(oTableDef, alterIndex),
 						})
 					if err != nil {
 						return err
@@ -1528,11 +1547,14 @@ func (s *Scope) createTable(c *Compile, tableCreated func()) error {
 	defer s.ScopeAnalyzer.Stop()
 
 	qry := s.Plan.GetDdl().GetCreateTable()
-	if err := plan2.RequirePersistedIPFunctionProtocol(c.proc.Ctx, c.proc, qry.GetTableDef()); err != nil {
+	if err := incrservice.CheckAutoIDCache(c.proc.Ctx, c.proc.GetService(), qry.GetTableDef().GetAutoIdCache()); err != nil {
+		return err
+	}
+	if err := plan2.RequirePersistedIPFunctionProtocolForAuthoring(c.proc.Ctx, c.proc, qry.GetTableDef()); err != nil {
 		return err
 	}
 	for _, indexTableDef := range qry.GetIndexTables() {
-		if err := plan2.RequirePersistedIPFunctionProtocol(c.proc.Ctx, c.proc, indexTableDef); err != nil {
+		if err := plan2.RequirePersistedIPFunctionProtocolForAuthoring(c.proc.Ctx, c.proc, indexTableDef); err != nil {
 			return err
 		}
 	}
@@ -2938,20 +2960,23 @@ func (s *Scope) CreateIndex(c *Compile) error {
 			}
 		}
 	}
-	{
-		// lockMoTable will lock Table  mo_catalog.mo_tables
-		// for the row with db_name=dbName & table_name = tblName。
-		dbName := c.db
-		if qry.GetDatabase() != "" {
-			dbName = qry.GetDatabase()
+	// Serialize the logical catalog owner first. A waiter may have planned
+	// against the definition held by the preceding transaction, so every retry
+	// at this boundary must rebuild the CREATE INDEX plan.
+	dbName := c.db
+	if qry.GetDatabase() != "" {
+		dbName = qry.GetDatabase()
+	}
+	tblName := qry.GetTableDef().GetName()
+	if err := lockMoDatabase(c, dbName, lock.LockMode_Shared); err != nil {
+		return convertDBEOBToNoSuchTable(c.proc.Ctx, err, dbName, tblName)
+	}
+	if err := lockMoTable(c, dbName, tblName, lock.LockMode_Exclusive); err != nil {
+		if moerr.IsMoErrCode(err, moerr.ErrTxnNeedRetry) ||
+			moerr.IsMoErrCode(err, moerr.ErrTxnNeedRetryWithDefChanged) {
+			return moerr.NewTxnNeedRetryWithDefChanged(c.proc.Ctx)
 		}
-		tblName := qry.GetTableDef().GetName()
-		if err := lockMoDatabase(c, dbName, lock.LockMode_Shared); err != nil {
-			return convertDBEOBToNoSuchTable(c.proc.Ctx, err, dbName, tblName)
-		}
-		if err := lockMoTable(c, dbName, tblName, lock.LockMode_Exclusive); err != nil {
-			return err
-		}
+		return err
 	}
 
 	dbSource, err := c.e.Database(c.proc.Ctx, qry.Database, c.proc.GetTxnOperator())
@@ -2962,6 +2987,18 @@ func (s *Scope) CreateIndex(c *Compile) error {
 	r, err := dbSource.Relation(c.proc.Ctx, qry.Table, nil)
 	if err != nil {
 		return err
+	}
+	// CREATE INDEX reads the complete base relation and then publishes a new
+	// write target. The table lock closes both sides of that handoff: a prior
+	// DML commit advances this build to a fresh snapshot, while later DML plans
+	// observe the definition-change fence and rebuild with the new index target.
+	if err = lockTable(c.proc.Ctx, c.e, c.proc, r, dbName, true); err != nil {
+		return err
+	}
+	if !qry.GetTableDef().GetIsTemporary() {
+		if err = c.advanceCreateIndexSnapshot(); err != nil {
+			return err
+		}
 	}
 
 	ps := c.proc.GetPartitionService()
@@ -2997,6 +3034,83 @@ func (s *Scope) CreateIndex(c *Compile) error {
 	}
 	registerTempIndexAliases()
 	return nil
+}
+
+// advanceCreateIndexSnapshot closes the gap between CREATE INDEX planning and
+// its base-table scan. The caller holds both the catalog-owner lock and the
+// base-table definition lock, so the barrier includes every DML commit that
+// preceded those locks while later DML must rebuild against the new index.
+func (c *Compile) advanceCreateIndexSnapshot() error {
+	txnOp := c.proc.GetTxnOperator()
+	if txnOp == nil || !txnOp.Txn().IsPessimistic() || !txnOp.Txn().IsRCIsolation() {
+		return nil
+	}
+
+	var (
+		frontier timestamp.Timestamp
+		err      error
+	)
+	if supportsLogtailReadBarrier(c.proc.GetService()) {
+		barrier, ok := getLogtailReadBarrier(c.e)
+		if !ok {
+			return moerr.NewInternalError(c.proc.Ctx,
+				"CREATE INDEX logtail read barrier is unavailable")
+		}
+		frontier, err = barrier.AcquireLogtailReadBarrier(c.proc.Ctx)
+	} else {
+		frontier, err = c.createIndexLegacyLogtailFrontier()
+	}
+	if err != nil {
+		return err
+	}
+
+	workspace := txnOp.GetWorkspace()
+	if workspace == nil {
+		return moerr.NewInternalError(c.proc.Ctx,
+			"missing workspace for CREATE INDEX snapshot refresh")
+	}
+	if err = workspace.AdvanceSnapshot(c.proc.Ctx, frontier); err != nil {
+		return err
+	}
+	if !txnOp.SnapshotTS().Greater(frontier) {
+		return moerr.NewInternalError(c.proc.Ctx,
+			"CREATE INDEX transaction snapshot did not advance past the logtail frontier")
+	}
+	return nil
+}
+
+// createIndexLegacyLogtailFrontier is the rolling-upgrade fallback for TNs
+// that predate the ordered logtail read barrier. Waiting beyond the local HLC
+// uncertainty bound makes every earlier remote commit visible on this CN.
+func (c *Compile) createIndexLegacyLogtailFrontier() (timestamp.Timestamp, error) {
+	rt := moruntime.ServiceRuntime(c.proc.GetService())
+	if rt == nil || rt.Clock() == nil {
+		return timestamp.Timestamp{}, moerr.NewInternalError(c.proc.Ctx,
+			"missing transaction clock for CREATE INDEX snapshot refresh")
+	}
+	if rt.Clock().MaxOffset() < 0 {
+		return timestamp.Timestamp{}, moerr.NewInternalError(c.proc.Ctx,
+			"negative transaction clock offset for CREATE INDEX snapshot refresh")
+	}
+	_, upperBound := rt.Clock().Now()
+	if upperBound.PhysicalTime < 0 || upperBound.PhysicalTime == math.MaxInt64 {
+		return timestamp.Timestamp{}, moerr.NewInternalError(c.proc.Ctx,
+			"CREATE INDEX snapshot refresh timestamp overflow")
+	}
+	minimum := timestamp.Timestamp{PhysicalTime: upperBound.PhysicalTime + 1}
+	if c.proc.Base.TxnClient == nil {
+		return timestamp.Timestamp{}, moerr.NewInternalError(c.proc.Ctx,
+			"missing transaction client for CREATE INDEX snapshot refresh")
+	}
+	applied, err := c.proc.Base.TxnClient.WaitLogTailAppliedAt(c.proc.Ctx, minimum)
+	if err != nil {
+		return timestamp.Timestamp{}, err
+	}
+	if applied.Less(minimum) {
+		return timestamp.Timestamp{}, moerr.NewInternalError(c.proc.Ctx,
+			"CREATE INDEX snapshot refresh did not reach the required timestamp")
+	}
+	return applied, nil
 }
 
 func (s *Scope) doCreateIndex(
@@ -5640,7 +5754,7 @@ func maybeResetAutoIncrement(
 	}
 	if containAuto {
 		err = incrservice.GetAutoIncrementService(sid).Reset(
-			ctx,
+			incrservice.WithAutoIDCachePolicy(ctx, tblDef.TblId, tblDef.AutoIdCache),
 			oldId,
 			newId,
 			keepAutoIncrement,
@@ -5758,7 +5872,7 @@ func (c *Compile) appendAlterAutoIncrementReqs(
 			return err
 		}
 		if err = svc.SetOffset(
-			c.proc.Ctx,
+			incrservice.WithAutoIDCachePolicy(c.proc.Ctx, tableDef.TblId, tableDef.AutoIdCache),
 			tid,
 			col.ColIndex,
 			targetCol.Name,

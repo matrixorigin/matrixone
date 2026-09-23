@@ -504,6 +504,7 @@ func TestValidateAndApplyTableDumpAutoIncrementRestore(t *testing.T) {
 		TblId:          42,
 		Name:           "bmsql_history",
 		AutoIncrOffset: 80,
+		AutoIdCache:    8,
 		Cols: []*plan.ColDef{{
 			Name: "hist_id",
 			Typ:  plan.Type{Id: int32(types.T_int32), AutoIncr: true},
@@ -522,7 +523,7 @@ func TestValidateAndApplyTableDumpAutoIncrementRestore(t *testing.T) {
 			return nil
 		},
 	)
-	autoService.EXPECT().SetOffset(ctx, uint64(42), 0, "hist_id", uint64(100), txnOp).Return(nil)
+	autoService.EXPECT().SetOffset(incrservice.WithAutoIDCachePolicy(ctx, def.TblId, def.AutoIdCache), uint64(42), 0, "hist_id", uint64(100), txnOp).Return(nil)
 
 	restores, schemaOffset, err := validateTableDumpAutoIncrementRestore(
 		ctx,
@@ -552,7 +553,7 @@ func TestApplyTableDumpAutoIncrementRestoreReportsCleanupOnSetOffsetFailure(t *t
 	rel.EXPECT().GetTableID(ctx).Return(uint64(42))
 	rel.EXPECT().AlterTable(ctx, nil, gomock.Any()).Return(nil)
 	wantErr := errors.New("set offset failed")
-	autoService.EXPECT().SetOffset(ctx, uint64(42), 0, "hist_id", uint64(100), txnOp).Return(wantErr)
+	autoService.EXPECT().SetOffset(incrservice.WithAutoIDCachePolicy(ctx, 0, 0), uint64(42), 0, "hist_id", uint64(100), txnOp).Return(wantErr)
 
 	installed, err := applyTableDumpAutoIncrementRestore(
 		ctx,
@@ -1799,6 +1800,25 @@ func TestTableDumpManifestCreateSQLRebuildsAlteredLegacyText(t *testing.T) {
 
 	_, err = tableDumpManifestCreateSQL(t.Context(), nil, nil)
 	require.Error(t, err)
+}
+
+func TestTableDumpManifestCreateSQLPreservesLegacyUnboundedBlob(t *testing.T) {
+	def := &plan.TableDef{
+		Name:      "source",
+		TableType: catalog.SystemOrdinaryRel,
+		Createsql: "CREATE TABLE source(payload BLOB)",
+		Cols: []*plan.ColDef{{
+			Name: "payload",
+			Typ:  plan.Type{Id: int32(types.T_blob), Width: 0},
+			Default: &plan.Default{
+				NullAbility: true,
+			},
+		}},
+	}
+
+	createSQL, err := tableDumpManifestCreateSQL(t.Context(), def, nil)
+	require.NoError(t, err)
+	require.Contains(t, strings.ToUpper(createSQL), "`PAYLOAD` LONGBLOB")
 }
 
 func TestTableSchemaHashFallback(t *testing.T) {

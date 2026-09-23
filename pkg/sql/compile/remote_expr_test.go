@@ -20,6 +20,7 @@ import (
 	"fmt"
 	"strings"
 	"testing"
+	"time"
 
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
 	"github.com/matrixorigin/matrixone/pkg/common/runtime"
@@ -39,6 +40,7 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/sql/plan/function"
 	"github.com/matrixorigin/matrixone/pkg/testutil"
 	"github.com/matrixorigin/matrixone/pkg/vm"
+	"github.com/matrixorigin/matrixone/pkg/vm/engine"
 	"github.com/matrixorigin/matrixone/pkg/vm/process"
 	"github.com/stretchr/testify/require"
 )
@@ -115,6 +117,60 @@ func TestRemoteNumericCastWarningAppearsAtExecution(t *testing.T) {
 	require.Len(t, session.warnings, 2)
 	require.Equal(t, moerr.ER_TRUNCATED_WRONG_VALUE, session.warnings[0].code)
 	require.Contains(t, session.warnings[0].msg, "12abc")
+}
+
+func TestMixedTemporalConditionalPreservesFractionalValues(t *testing.T) {
+	proc := testutil.NewProcess(t)
+	proc.Base.SessionInfo.TimeZone = time.UTC
+	condition := &plan.Expr{
+		Typ:  plan.Type{Id: int32(types.T_bool)},
+		Expr: &plan.Expr_Col{Col: &plan.ColRef{ColPos: 0}},
+	}
+	timestamp, err := types.ParseTimestamp(time.UTC, "2024-01-02 12:34:56.123456", 6)
+	require.NoError(t, err)
+	datetime, err := types.ParseDatetime("2024-01-02 12:34:56.654", 3)
+	require.NoError(t, err)
+	value := func(oid types.T, value int64, scale int32) *plan.Expr {
+		result := &plan.Expr{
+			Typ:  plan.Type{Id: int32(oid), Width: scale, Scale: scale},
+			Expr: &plan.Expr_Lit{Lit: &plan.Literal{}},
+		}
+		switch oid {
+		case types.T_timestamp:
+			result.GetLit().Value = &plan.Literal_Timestampval{Timestampval: value}
+		case types.T_datetime:
+			result.GetLit().Value = &plan.Literal_Datetimeval{Datetimeval: value}
+		}
+		return result
+	}
+	expr, err := plan2.BindFuncExprImplByPlanExpr(context.Background(), "if", []*plan.Expr{
+		condition,
+		value(types.T_timestamp, int64(timestamp), 6),
+		value(types.T_datetime, int64(datetime), 3),
+	})
+	require.NoError(t, err)
+	require.Equal(t, types.T_datetime, types.T(expr.Typ.Id))
+	require.Equal(t, int32(6), expr.Typ.Scale)
+
+	executor, err := colexec.NewExpressionExecutor(proc, expr)
+	require.NoError(t, err)
+	defer executor.Free()
+	input := batch.NewWithSize(1)
+	conditions := vector.NewVec(types.T_bool.ToType())
+	require.NoError(t, vector.AppendFixed(conditions, true, false, proc.Mp()))
+	require.NoError(t, vector.AppendFixed(conditions, false, false, proc.Mp()))
+	input.Vecs[0] = conditions
+	input.SetRowCount(2)
+	defer conditions.Free(proc.Mp())
+
+	result, err := executor.Eval(proc, []*batch.Batch{input}, nil)
+	require.NoError(t, err)
+	require.Equal(t, types.T_datetime, result.GetType().Oid)
+	require.Equal(t, int32(6), result.GetType().Scale)
+	require.Equal(t, "2024-01-02 12:34:56.123456",
+		types.Datetime(vector.GetFixedAtNoTypeCheck[types.Datetime](result, 0)).String2(6))
+	require.Equal(t, "2024-01-02 12:34:56.654000",
+		types.Datetime(vector.GetFixedAtNoTypeCheck[types.Datetime](result, 1)).String2(6))
 }
 
 func TestRemoteSecToTimeConversionWarningsRemainBounded(t *testing.T) {
@@ -565,6 +621,169 @@ func TestOrderedSetPercentileRemoteProtocolValidation(t *testing.T) {
 
 	rt.SetGlobalVariables(runtime.MOProtocolVersion, defines.MORPCVersion17)
 	require.NoError(t, validateRemoteAggregateProtocol(proc, percentile))
+
+	extended := []aggexec.AggFuncExecExpression{aggexec.MakeAggFunctionExpression(
+		aggexec.AggIdOfPercentileDisc,
+		false,
+		[]*plan.Expr{makeTestVarExprWithType("value", types.T_varchar.ToType())},
+		aggexec.EncodeOrderedPercentileConfig([]byte("0.5"), false),
+		plan.AggregateConfigType_AGG_CONFIG_NONE,
+	)}
+	// Main's v76-v83 features do not implement extended discrete-percentile inputs.
+	rt.SetGlobalVariables(runtime.MOProtocolVersion, defines.MORPCVersion81)
+	require.ErrorContains(
+		t,
+		validateRemoteAggregateProtocol(proc, extended),
+		"extended discrete percentile input types require MORPC protocol version 84",
+	)
+	rt.SetGlobalVariables(runtime.MOProtocolVersion, defines.MORPCVersion83)
+	require.Error(t, validateRemoteAggregateProtocol(proc, extended),
+		"v83 is reserved for bounded conditional string domains")
+	rt.SetGlobalVariables(runtime.MOProtocolVersion, defines.MORPCVersion84)
+	require.NoError(t, validateRemoteAggregateProtocol(proc, extended))
+	rt.SetGlobalVariables(runtime.MOProtocolVersion, defines.MORPCVersion81)
+	require.Error(t, validateRemoteAggregateProtocol(proc, extended),
+		"rollback must disable extended discrete-percentile state before exchange")
+}
+
+func TestApproxPercentileRemoteProtocolValidation(t *testing.T) {
+	proc := testutil.NewProcess(t)
+	rt := runtime.ServiceRuntime(proc.GetService())
+	defer rt.SetGlobalVariables(runtime.MOProtocolVersion, defines.MORPCLatestVersion)
+	percentile := []aggexec.AggFuncExecExpression{aggexec.MakeAggFunctionExpression(
+		aggexec.AggIdOfApproxPercentile,
+		false,
+		[]*plan.Expr{makeTestVarExpr("value")},
+		aggexec.EncodeApproxPercentileConfig([]byte("0.5"), true),
+	)}
+
+	require.ErrorContains(t, validateRemoteAggregateProtocol(nil, percentile),
+		"requires MORPC protocol version 76")
+	rt.SetGlobalVariables(runtime.MOProtocolVersion, defines.MORPCVersion70)
+	require.ErrorContains(t, validateRemoteAggregateProtocol(proc, percentile),
+		"requires MORPC protocol version 76")
+	rt.SetGlobalVariables(runtime.MOProtocolVersion, defines.MORPCVersion73)
+	require.ErrorContains(t, validateRemoteAggregateProtocol(proc, percentile),
+		"requires MORPC protocol version 76")
+	rt.SetGlobalVariables(runtime.MOProtocolVersion, defines.MORPCVersion74)
+	require.ErrorContains(t, validateRemoteAggregateProtocol(proc, percentile),
+		"requires MORPC protocol version 76")
+	rt.SetGlobalVariables(runtime.MOProtocolVersion, defines.MORPCVersion75)
+	require.ErrorContains(t, validateRemoteAggregateProtocol(proc, percentile),
+		"requires MORPC protocol version 76")
+	rt.SetGlobalVariables(runtime.MOProtocolVersion, defines.MORPCVersion76)
+	require.NoError(t, validateRemoteAggregateProtocol(proc, percentile))
+
+	// Rollback must reject both the new DESC config and ordinary ASC state: the
+	// NaN ordering changed for both forms, so an old receiver cannot merge it.
+	rt.SetGlobalVariables(runtime.MOProtocolVersion, defines.MORPCVersion70)
+	percentile[0].SetExtraConfig([]byte("0.5"))
+	require.ErrorContains(t, validateRemoteAggregateProtocol(proc, percentile),
+		"requires MORPC protocol version 76")
+}
+
+func TestHLLRemoteProtocolValidation(t *testing.T) {
+	proc := testutil.NewProcess(t)
+	rt := runtime.ServiceRuntime(proc.GetService())
+	defer rt.SetGlobalVariables(runtime.MOProtocolVersion, defines.MORPCLatestVersion)
+	for _, aggID := range []int64{
+		aggexec.AggIdOfApproxCount,
+		aggexec.AggIdOfApproxCountDistinct,
+		aggexec.AggIdOfHllAdd,
+		aggexec.AggIdOfHllMerge,
+	} {
+		agg := []aggexec.AggFuncExecExpression{aggexec.MakeAggFunctionExpression(
+			aggID,
+			false,
+			[]*plan.Expr{makeTestVarExpr("value")},
+			nil,
+		)}
+		rt.SetGlobalVariables(runtime.MOProtocolVersion, defines.MORPCVersion70)
+		require.ErrorContains(t, validateRemoteAggregateProtocol(proc, agg),
+			"HLL remote execution requires MORPC protocol version 77")
+		rt.SetGlobalVariables(runtime.MOProtocolVersion, defines.MORPCVersion73)
+		require.ErrorContains(t, validateRemoteAggregateProtocol(proc, agg),
+			"HLL remote execution requires MORPC protocol version 77")
+		rt.SetGlobalVariables(runtime.MOProtocolVersion, defines.MORPCVersion74)
+		require.ErrorContains(t, validateRemoteAggregateProtocol(proc, agg),
+			"HLL remote execution requires MORPC protocol version 77")
+		rt.SetGlobalVariables(runtime.MOProtocolVersion, defines.MORPCVersion75)
+		require.ErrorContains(t, validateRemoteAggregateProtocol(proc, agg),
+			"HLL remote execution requires MORPC protocol version 77")
+		rt.SetGlobalVariables(runtime.MOProtocolVersion, defines.MORPCVersion76)
+		require.ErrorContains(t, validateRemoteAggregateProtocol(proc, agg),
+			"HLL remote execution requires MORPC protocol version 77")
+		rt.SetGlobalVariables(runtime.MOProtocolVersion, defines.MORPCVersion77)
+		require.NoError(t, validateRemoteAggregateProtocol(proc, agg))
+	}
+	vectorArg := &plan.Expr{Typ: plan.Type{Id: int32(types.T_array_float32)}}
+	vectorAgg := []aggexec.AggFuncExecExpression{aggexec.MakeAggFunctionExpression(
+		aggexec.AggIdOfHllAdd, false, []*plan.Expr{vectorArg}, nil,
+	)}
+	rt.SetGlobalVariables(runtime.MOProtocolVersion, defines.MORPCVersion87)
+	require.ErrorContains(t, validateRemoteAggregateProtocol(proc, vectorAgg),
+		"canonical vector HLL_ADD_AGG remote execution requires MORPC protocol version 88")
+	rt.SetGlobalVariables(runtime.MOProtocolVersion, defines.MORPCVersion88)
+	require.NoError(t, validateRemoteAggregateProtocol(proc, vectorAgg))
+}
+
+func TestCanonicalHLLAddRemoteProtocolValidation(t *testing.T) {
+	proc := testutil.NewProcess(t)
+	rt := runtime.ServiceRuntime(proc.GetService())
+	defer rt.SetGlobalVariables(runtime.MOProtocolVersion, defines.MORPCLatestVersion)
+	for _, tc := range []struct {
+		name      string
+		typ       types.Type
+		canonical bool
+	}{
+		{name: "char", typ: types.New(types.T_char, 4, 0), canonical: true},
+		{name: "json", typ: types.T_json.ToType(), canonical: true},
+		{name: "varchar-control", typ: types.New(types.T_varchar, 4, 0)},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			aggs := []aggexec.AggFuncExecExpression{aggexec.MakeAggFunctionExpression(
+				aggexec.AggIdOfHllAdd,
+				false,
+				[]*plan.Expr{makeTestVarExprWithType("value", tc.typ)},
+				nil,
+			)}
+			rt.SetGlobalVariables(runtime.MOProtocolVersion, defines.MORPCVersion87)
+			if tc.canonical {
+				require.ErrorContains(t, validateRemoteAggregateProtocol(proc, aggs),
+					"canonical JSON/CHAR HLL_ADD_AGG remote execution requires MORPC protocol version 91")
+			} else {
+				require.NoError(t, validateRemoteAggregateProtocol(proc, aggs))
+			}
+			rt.SetGlobalVariables(runtime.MOProtocolVersion, defines.MORPCVersion90)
+			if tc.canonical {
+				require.ErrorContains(t, validateRemoteAggregateProtocol(proc, aggs),
+					"canonical JSON/CHAR HLL_ADD_AGG remote execution requires MORPC protocol version 91")
+			} else {
+				require.NoError(t, validateRemoteAggregateProtocol(proc, aggs))
+			}
+			rt.SetGlobalVariables(runtime.MOProtocolVersion, defines.MORPCVersion91)
+			require.NoError(t, validateRemoteAggregateProtocol(proc, aggs))
+		})
+	}
+}
+
+func TestCanonicalFloatHLLAddRemoteProtocolValidation(t *testing.T) {
+	proc := testutil.NewProcess(t)
+	rt := runtime.ServiceRuntime(proc.GetService())
+	defer rt.SetGlobalVariables(runtime.MOProtocolVersion, defines.MORPCLatestVersion)
+	for _, typ := range []types.Type{types.T_float32.ToType(), types.T_float64.ToType()} {
+		aggs := []aggexec.AggFuncExecExpression{aggexec.MakeAggFunctionExpression(
+			aggexec.AggIdOfHllAdd,
+			false,
+			[]*plan.Expr{makeTestVarExprWithType("value", typ)},
+			nil,
+		)}
+		rt.SetGlobalVariables(runtime.MOProtocolVersion, defines.MORPCVersion91)
+		require.ErrorContains(t, validateRemoteAggregateProtocol(proc, aggs),
+			"canonical FLOAT HLL_ADD_AGG remote execution requires MORPC protocol version 92")
+		rt.SetGlobalVariables(runtime.MOProtocolVersion, defines.MORPCVersion92)
+		require.NoError(t, validateRemoteAggregateProtocol(proc, aggs))
+	}
 }
 
 func TestTextMinMaxRemoteProtocolValidation(t *testing.T) {
@@ -629,7 +848,7 @@ func TestOrderedSetPercentileMergeGroupRemoteProtocolValidation(t *testing.T) {
 	merge.Aggs = []aggexec.AggFuncExecExpression{aggexec.MakeAggFunctionExpression(
 		aggexec.AggIdOfPercentileDisc,
 		false,
-		[]*plan.Expr{makeTestVarExpr("value")},
+		[]*plan.Expr{makeTestVarExprWithType("value", types.T_int64.ToType())},
 		aggexec.EncodeOrderedPercentileConfig([]byte("0.5"), false),
 		plan.AggregateConfigType_AGG_CONFIG_NONE,
 	)}
@@ -704,7 +923,7 @@ func TestBinaryStringRemoteProtocolValidationAtSenderAndReceiver(t *testing.T) {
 	defer rt.SetGlobalVariables(runtime.MOProtocolVersion, defines.MORPCLatestVersion)
 
 	affectedFunctionIDs := []int32{
-		function.ORD, function.LENGTH_UTF8, function.LEFT, function.RIGHT,
+		function.ORD, function.LEFT, function.RIGHT,
 		function.SUBSTRING, function.REVERSE, function.LOWER, function.UPPER,
 		function.LTRIM, function.RTRIM, function.TRIM, function.LOCATE,
 		function.POSITION, function.INSTR, function.INSERT, function.REPLACE,
@@ -713,10 +932,14 @@ func TestBinaryStringRemoteProtocolValidationAtSenderAndReceiver(t *testing.T) {
 		function.CHARSET, function.COLLATION, function.INTERNAL_CHAR_SIZE,
 		function.INTERNAL_COLUMN_CHARACTER_SET,
 	}
-	semanticPipeline := func(functionID int32) *pipeline.Pipeline {
+	semanticPipeline := func(functionID int32, resultType ...types.T) *pipeline.Pipeline {
+		typ := types.T_int64
+		if len(resultType) > 0 {
+			typ = resultType[0]
+		}
 		return &pipeline.Pipeline{InstructionList: []*pipeline.Instruction{{
 			Op: int32(vm.Projection), ProjectList: []*plan.Expr{{
-				Typ: plan.Type{Id: int32(types.T_int64)},
+				Typ: plan.Type{Id: int32(typ)},
 				Expr: &plan.Expr_F{F: &plan.Function{Func: &plan.ObjectRef{
 					Obj: function.EncodeOverloadID(functionID, 0),
 				}}},
@@ -754,6 +977,91 @@ func TestBinaryStringRemoteProtocolValidationAtSenderAndReceiver(t *testing.T) {
 			decoded, err := decodeScope(data, proc, true, nil)
 			require.NoError(t, err)
 			require.NotNil(t, decoded)
+		})
+	}
+
+	t.Run("legacy-length-utf8-uint64-v58", func(t *testing.T) {
+		// A pre-v80 serialized LENGTH_UTF8 result is UINT64.  It keeps the
+		// v58 binary-string fence, but must not be mistaken for the corrected
+		// INT64 result contract introduced at v80.
+		p := semanticPipeline(function.LENGTH_UTF8, types.T_uint64)
+		project := projection.NewArgument()
+		defer project.Release()
+		project.ProjectList = p.InstructionList[0].ProjectList
+		scope := &Scope{Proc: proc, RootOp: project}
+
+		rt.SetGlobalVariables(runtime.MOProtocolVersion, defines.MORPCVersion57)
+		require.NoError(t, validateRemoteExpressionPipelineProtocol(proc, p))
+		_, err := encodeRemoteScope(scope, proc)
+		require.ErrorContains(t, err, "require MORPC protocol version 58")
+
+		rt.SetGlobalVariables(runtime.MOProtocolVersion, defines.MORPCVersion58)
+		data, err := encodeRemoteScope(scope, proc)
+		require.NoError(t, err)
+
+		rt.SetGlobalVariables(runtime.MOProtocolVersion, defines.MORPCVersion57)
+		_, err = decodeScope(data, proc, true, nil)
+		require.ErrorContains(t, err, "require MORPC protocol version 58")
+
+		rt.SetGlobalVariables(runtime.MOProtocolVersion, defines.MORPCVersion58)
+		decoded, err := decodeScope(data, proc, true, nil)
+		require.NoError(t, err)
+		require.NotNil(t, decoded)
+	})
+
+	// LENGTH_UTF8 keeps the historical UINT64 wrapper at MORPC v58. The
+	// corrected result wrappers are a separate v80 contract and must not be
+	// folded into the legacy binary-string semantic gate above.
+	for _, test := range []struct {
+		name string
+		id   int32
+		typ  types.T
+	}{
+		{name: "find_in_set", id: function.FINDINSET, typ: types.T_int32},
+		{name: "strcmp", id: function.STRCMP, typ: types.T_int32},
+		{name: "length_utf8", id: function.LENGTH_UTF8, typ: types.T_int64},
+		{name: "uncompressed_length", id: function.UNCOMPRESSED_LENGTH, typ: types.T_int64},
+		{name: "crc32", id: function.CRC32, typ: types.T_uint64},
+	} {
+		t.Run("corrected-"+test.name, func(t *testing.T) {
+			p := semanticPipeline(test.id, test.typ)
+			rt.SetGlobalVariables(runtime.MOProtocolVersion, defines.MORPCVersion72)
+			require.ErrorContains(t, validateRemoteExpressionPipelineProtocol(proc, p),
+				"corrected string numeric result contracts require MORPC protocol version 80")
+
+			c, client := expressionProtocolTestCompile(t)
+			cRT := runtime.ServiceRuntime(c.proc.GetService())
+			op := projection.NewArgument()
+			defer op.Release()
+			op.ProjectList = p.InstructionList[0].ProjectList
+			scope := &Scope{
+				Magic:    Remote,
+				Proc:     c.proc,
+				NodeInfo: engine.Node{Id: "old-worker", Addr: "remote:6001"},
+				RootOp:   op,
+			}
+			client.version = defines.MORPCVersion72
+			cRT.SetGlobalVariables(runtime.MOProtocolVersion, defines.MORPCVersion80)
+			_, err := encodeRemoteScope(scope, c.proc)
+			require.ErrorContains(t, err,
+				"remote destination does not support corrected string numeric result contracts (MORPC version 80)")
+
+			client.version = defines.MORPCVersion80
+			data, err := encodeRemoteScope(scope, c.proc)
+			require.NoError(t, err)
+
+			wire := new(pipeline.Pipeline)
+			require.NoError(t, wire.Unmarshal(data))
+			cRT.SetGlobalVariables(runtime.MOProtocolVersion, defines.MORPCVersion72)
+			require.ErrorContains(t, validateRemoteExpressionPipelineProtocol(c.proc, wire),
+				"corrected string numeric result contracts require MORPC protocol version 80")
+			_, err = decodeScope(data, c.proc, true, nil)
+			require.ErrorContains(t, err,
+				"corrected string numeric result contracts require MORPC protocol version 80")
+
+			cRT.SetGlobalVariables(runtime.MOProtocolVersion, defines.MORPCVersion80)
+			_, err = decodeScope(data, c.proc, true, nil)
+			require.NoError(t, err)
 		})
 	}
 	rt.SetGlobalVariables(runtime.MOProtocolVersion, defines.MORPCVersion49)
@@ -1041,6 +1349,10 @@ func TestScopeContainsVarExprReturnsFalseWithoutVar(t *testing.T) {
 
 func makeTestVarExpr(name string) *plan.Expr {
 	typ := types.T_text.ToType()
+	return makeTestVarExprWithType(name, typ)
+}
+
+func makeTestVarExprWithType(name string, typ types.Type) *plan.Expr {
 	return &plan.Expr{
 		Typ: plan2.MakePlan2Type(&typ),
 		Expr: &plan.Expr_V{

@@ -118,6 +118,17 @@ func Test_fixedTypeCastRule1(t *testing.T) {
 				{Oid: types.T_decimal128, Width: 38, Size: 16, Scale: 4},
 			},
 		},
+		{
+			shouldCast: true,
+			in: [2]types.Type{
+				types.T_int32.ToType(),
+				types.New(types.T_decimal256, 40, 2),
+			},
+			want: [2]types.Type{
+				types.New(types.T_decimal256, 76, 0),
+				types.New(types.T_decimal256, 40, 2),
+			},
+		},
 
 		// special rule, null + null
 		// we just cast it as int64 + int64
@@ -444,28 +455,28 @@ func Test_GetFunctionByName(t *testing.T) {
 			shouldErr:  false,
 			requireFid: LENGTH_UTF8, requireOid: 3,
 			shouldCast: false,
-			requireRet: types.T_uint64.ToType(),
+			requireRet: types.T_int64.ToType(),
 		},
 		{
 			name: "char_length", args: []types.Type{types.T_varbinary.ToType()},
 			shouldErr:  false,
 			requireFid: LENGTH_UTF8, requireOid: 4,
 			shouldCast: false,
-			requireRet: types.T_uint64.ToType(),
+			requireRet: types.T_int64.ToType(),
 		},
 		{
 			name: "char_length", args: []types.Type{types.T_blob.ToType()},
 			shouldErr:  false,
 			requireFid: LENGTH_UTF8, requireOid: 5,
 			shouldCast: false,
-			requireRet: types.T_uint64.ToType(),
+			requireRet: types.T_int64.ToType(),
 		},
 		{
 			name: "character_length", args: []types.Type{types.T_varbinary.ToType()},
 			shouldErr:  false,
 			requireFid: LENGTH_UTF8, requireOid: 4,
 			shouldCast: false,
-			requireRet: types.T_uint64.ToType(),
+			requireRet: types.T_int64.ToType(),
 		},
 
 		{
@@ -479,14 +490,14 @@ func Test_GetFunctionByName(t *testing.T) {
 			name: "elt", args: []types.Type{types.T_uint64.ToType(), types.T_varchar.ToType(), types.T_varchar.ToType()},
 			shouldErr:  false,
 			requireFid: ELT, requireOid: 0,
-			shouldCast: false,
+			shouldCast: true, requireTyp: []types.Type{types.T_int64.ToType(), types.T_varchar.ToType(), types.T_varchar.ToType()},
 			requireRet: types.T_varchar.ToType(),
 		},
 		{
 			name: "elt", args: []types.Type{types.T_bit.ToType(), types.T_varchar.ToType(), types.T_varchar.ToType()},
 			shouldErr:  false,
 			requireFid: ELT, requireOid: 0,
-			shouldCast: false,
+			shouldCast: true, requireTyp: []types.Type{types.T_int64.ToType(), types.T_varchar.ToType(), types.T_varchar.ToType()},
 			requireRet: types.T_varchar.ToType(),
 		},
 		{
@@ -1469,6 +1480,20 @@ func TestUserLevelLockBuiltinRegistration(t *testing.T) {
 			}
 		})
 	}
+}
+
+func TestUncompressedLengthOverloadsAreVolatile(t *testing.T) {
+	for i := range supportedStringBuiltIns {
+		if supportedStringBuiltIns[i].functionId != UNCOMPRESSED_LENGTH {
+			continue
+		}
+		require.Len(t, supportedStringBuiltIns[i].Overloads, 4)
+		for _, overload := range supportedStringBuiltIns[i].Overloads {
+			require.True(t, overload.volatile)
+		}
+		return
+	}
+	require.Fail(t, "UNCOMPRESSED_LENGTH registration not found")
 }
 
 func TestRunPositionCharFunctionDirectly(t *testing.T) {

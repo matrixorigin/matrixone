@@ -31,6 +31,7 @@ import (
 	"testing"
 	"time"
 
+	"github.com/RoaringBitmap/roaring/v2"
 	hll "github.com/axiomhq/hyperloglog"
 	"github.com/google/uuid"
 	"github.com/matrixorigin/matrixone/pkg/lockservice"
@@ -424,7 +425,7 @@ func initL2NormArrayTestCase() []tcTemp {
 					[]bool{false, false}),
 			},
 			expect: NewFunctionTestResult(types.T_float64.ToType(), false,
-				[]float64{3.741657257080078, 8.774964332580566},
+				[]float64{3.741657386773941, 8.774964387392124},
 				[]bool{false, false}),
 		},
 		{
@@ -1048,6 +1049,82 @@ func TestQuoteHonorsSelectList(t *testing.T) {
 	}
 }
 
+func TestQuoteRejectsInvalidUTF8FromBinaryInput(t *testing.T) {
+	proc := testutil.NewProcess(t)
+	defer proc.Free()
+
+	inputType := types.New(types.T_varbinary, 64, 0)
+	input := testutil.NewVector(
+		1, inputType, proc.Mp(), false,
+		[]string{string([]byte{'A', 0xff, 'B'})},
+	)
+	defer input.Free(proc.Mp())
+	result := vector.NewFunctionResultWrapper(
+		types.NewWithCharset(types.T_varchar, 130, 0, types.CharsetUTF8), proc.Mp())
+	defer result.Free()
+	require.NoError(t, result.PreExtendAndReset(1))
+
+	err := Quote([]*vector.Vector{input}, result, proc, 1, nil)
+	var conversionErr *moerr.Error
+	require.ErrorAs(t, err, &conversionErr)
+	require.Equal(t, moerr.ER_CANNOT_CONVERT_STRING, conversionErr.MySQLCode())
+	require.Contains(t, conversionErr.Error(), "from binary to utf8mb4")
+}
+
+func TestQuoteReturnsEmptyForMalformedText(t *testing.T) {
+	proc := testutil.NewProcess(t)
+	defer proc.Free()
+
+	testCase := NewFunctionTestCase(
+		proc,
+		[]FunctionTestInput{
+			NewFunctionTestInput(
+				types.T_varchar.ToType(),
+				[]string{string([]byte{'A', 0xff, 'B'}), "valid"},
+				nil,
+			),
+		},
+		NewFunctionTestResult(
+			types.T_varchar.ToType(),
+			false,
+			[]string{"", "'valid'"},
+			[]bool{false, false},
+		),
+		Quote,
+	)
+	ok, info := testCase.Run()
+	require.True(t, ok, info)
+}
+
+func TestQuoteUTF8MB4BinMalformedText(t *testing.T) {
+	proc := testutil.NewProcess(t)
+	defer proc.Free()
+	typ := types.NewWithCharset(types.T_varchar, 64, 0, types.CharsetUTF8MB4Bin)
+	testCase := NewFunctionTestCase(proc,
+		[]FunctionTestInput{NewFunctionTestInput(typ, []string{"A\xffB", "valid"}, nil)},
+		NewFunctionTestResult(typ, false, []string{"", "'valid'"}, []bool{false, false}), Quote)
+	ok, info := testCase.Run()
+	require.True(t, ok, info)
+}
+
+func TestSoundexBinaryInputPreservesBinaryResultDomain(t *testing.T) {
+	proc := testutil.NewProcess(t)
+	defer proc.Free()
+
+	inputType := types.New(types.T_varbinary, 64, 0)
+	fcTC := NewFunctionTestCase(
+		proc,
+		[]FunctionTestInput{
+			NewFunctionTestInput(inputType, []string{"Ashcraft", string([]byte{'A', 0xff, 'B'})}, []bool{false, false}),
+		},
+		NewFunctionTestResult(inputType, false, []string{"A2613", "A100"}, []bool{false, false}),
+		Soundex,
+	)
+	ok, info := fcTC.Run()
+	require.True(t, ok, info)
+	require.Equal(t, types.CharsetBinary, fcTC.result.GetResultVector().GetType().Charset)
+}
+
 // SOUNDEX
 func initSoundexTestCase() []tcTemp {
 	lateGrowthInput := strings.Repeat("BEB", 4096) + strings.Repeat("BC", 64)
@@ -1175,6 +1252,69 @@ func TestSoundex(t *testing.T) {
 		s, info := fcTC.Run()
 		require.True(t, s, fmt.Sprintf("case is '%s', err info is '%s'", tc.info, info))
 	}
+}
+
+func TestSoundexTextMatchesMySQLUTF8Behavior(t *testing.T) {
+	proc := testutil.NewProcess(t)
+	defer proc.Free()
+
+	testCase := NewFunctionTestCase(
+		proc,
+		[]FunctionTestInput{
+			NewFunctionTestInput(
+				types.T_varchar.ToType(),
+				[]string{
+					"é", "éa", "éB", "AéB", "Café", "中A", "😀", "\uFFFD",
+					"BéB", "A\xffB", "\xffA", "A\xc3",
+				},
+				nil,
+			),
+		},
+		NewFunctionTestResult(
+			types.T_varchar.ToType(),
+			false,
+			[]string{
+				"é000", "é000", "é100", "A100", "C100", "中000", "😀000", "\uFFFD000",
+				"B000", "A000", "", "A000",
+			},
+			make([]bool, 12),
+		),
+		Soundex,
+	)
+	ok, info := testCase.Run()
+	require.True(t, ok, info)
+}
+
+func TestSoundexUTF8MB4BinText(t *testing.T) {
+	proc := testutil.NewProcess(t)
+	defer proc.Free()
+	typ := types.NewWithCharset(types.T_varchar, 64, 0, types.CharsetUTF8MB4Bin)
+	testCase := NewFunctionTestCase(proc,
+		[]FunctionTestInput{NewFunctionTestInput(typ, []string{"é", "AéB", "\xffA"}, nil)},
+		NewFunctionTestResult(typ, false, []string{"é000", "A100", ""}, []bool{false, false, false}), Soundex)
+	ok, info := testCase.Run()
+	require.True(t, ok, info)
+}
+
+func TestSoundexMultibyteOutputFitsCharacterWidth(t *testing.T) {
+	proc := testutil.NewProcess(t)
+	defer proc.Free()
+
+	inputType := types.NewWithCharset(types.T_varchar, 1, 0, types.CharsetUTF8)
+	outputType := types.NewWithCharset(types.T_varchar, 4, 0, types.CharsetUTF8)
+	testCase := NewFunctionTestCase(
+		proc,
+		[]FunctionTestInput{
+			NewFunctionTestInput(inputType, []string{"😀"}, []bool{false}),
+		},
+		NewFunctionTestResult(outputType, false, []string{"😀000"}, []bool{false}),
+		Soundex,
+	)
+	ok, info := testCase.Run()
+	require.True(t, ok, info)
+	result := testCase.result.GetResultVector()
+	require.Equal(t, int32(4), result.GetType().Width)
+	require.Equal(t, 7, len(result.GetStringAt(0)))
 }
 
 func TestSoundexLongTextOutput(t *testing.T) {
@@ -5224,8 +5364,10 @@ func TestSpaceDecimalUsesMySQLRounding(t *testing.T) {
 	resolved, err := GetFunctionByName(context.Background(), "space", []types.Type{decimalType})
 	require.NoError(t, err)
 	targets, shouldCast := resolved.ShouldDoImplicitTypeCast()
-	require.False(t, shouldCast)
-	require.Empty(t, targets)
+	require.True(t, shouldCast)
+	require.Equal(t, []types.Type{types.T_int64.ToType()}, targets)
+	_, overload := DecodeOverloadID(resolved.GetEncodedOverloadID())
+	require.Equal(t, int32(1), overload)
 }
 
 func initToTimeCase() []tcTemp {
@@ -6506,6 +6648,292 @@ func TestHexInt64(t *testing.T) {
 	}
 }
 
+func TestHexNumericTypeResolution(t *testing.T) {
+	for _, tc := range []struct {
+		name       string
+		typ        types.Type
+		overloadID int32
+		cast       bool
+		castType   types.T
+	}{
+		{name: "bool", typ: types.T_bool.ToType(), overloadID: 2, cast: true, castType: types.T_int64},
+		{name: "decimal64", typ: types.New(types.T_decimal64, 18, 1), overloadID: 8},
+		{name: "decimal128", typ: types.New(types.T_decimal128, 38, 0), overloadID: 9},
+		{name: "decimal256", typ: types.New(types.T_decimal256, 65, 0), overloadID: 10},
+		{name: "float32", typ: types.T_float32.ToType(), overloadID: HexFloat32Overload},
+		{name: "float64", typ: types.T_float64.ToType(), overloadID: HexFloat64Overload},
+		{name: "varchar", typ: types.T_varchar.ToType(), overloadID: 0},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			resolved, err := GetFunctionByName(context.Background(), "hex", []types.Type{tc.typ})
+			require.NoError(t, err)
+			require.Equal(t, tc.overloadID, resolved.overloadId)
+			castTypes, cast := resolved.ShouldDoImplicitTypeCast()
+			require.Equal(t, tc.cast, cast)
+			if tc.cast {
+				require.Equal(t, tc.castType, castTypes[0].Oid)
+			}
+		})
+	}
+}
+
+func TestHexLegacyFloatOverloadsKeepOldSemantics(t *testing.T) {
+	proc := testutil.NewProcess(t)
+	for _, tc := range []struct {
+		name       string
+		typ        types.Type
+		value      any
+		overloadID int32
+	}{
+		{name: "float32", typ: types.T_float32.ToType(), value: []float32{14.5}, overloadID: 4},
+		{name: "float64", typ: types.T_float64.ToType(), value: []float64{14.5}, overloadID: 5},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			input := newVectorByType(proc.Mp(), tc.typ, tc.value, nil)
+			defer input.Free(proc.Mp())
+			out, err := RunFunctionDirectly(proc, EncodeOverloadID(HEX, tc.overloadID), []*vector.Vector{input}, 1)
+			require.NoError(t, err)
+			defer out.Free(proc.Mp())
+			require.Equal(t, "F", string(out.GetBytesAt(0)))
+		})
+	}
+}
+
+func TestHexFloatUsesSignedRoundToEven(t *testing.T) {
+	proc := testutil.NewProcess(t)
+	want := []string{"E", "10", "FFFFFFFFFFFFFFF2", "FFFFFFFFFFFFFFF0", "1C9", ""}
+	nulls := []bool{false, false, false, false, false, true}
+	for _, tc := range []struct {
+		name   string
+		input  FunctionTestInput
+		evalFn fEvalFn
+	}{
+		{
+			name: "float32",
+			input: NewFunctionTestInput(types.T_float32.ToType(),
+				[]float32{14.5, 15.5, -14.5, -15.5, 456.789, 0}, nulls),
+			evalFn: HexFloat32,
+		},
+		{
+			name: "float64",
+			input: NewFunctionTestInput(types.T_float64.ToType(),
+				[]float64{14.5, 15.5, -14.5, -15.5, 456.789, 0}, nulls),
+			evalFn: HexFloat64,
+		},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			fc := NewFunctionTestCase(proc, []FunctionTestInput{tc.input},
+				NewFunctionTestResult(types.T_varchar.ToType(), false, want, nulls), tc.evalFn)
+			ok, info := fc.Run()
+			require.True(t, ok, info)
+		})
+	}
+}
+
+func TestHexExplicitFloatTruncates(t *testing.T) {
+	proc := testutil.NewProcess(t)
+	want := []string{"E", "F", "FFFFFFFFFFFFFFF2", "FFFFFFFFFFFFFFF1", "1C8", ""}
+	nulls := []bool{false, false, false, false, false, true}
+	for _, tc := range []struct {
+		name   string
+		input  FunctionTestInput
+		evalFn fEvalFn
+	}{
+		{
+			name: "float32",
+			input: NewFunctionTestInput(types.T_float32.ToType(),
+				[]float32{14.5, 15.5, -14.5, -15.5, 456.789, 0}, nulls),
+			evalFn: HexExplicitFloat32,
+		},
+		{
+			name: "float64",
+			input: NewFunctionTestInput(types.T_float64.ToType(),
+				[]float64{14.5, 15.5, -14.5, -15.5, 456.789, 0}, nulls),
+			evalFn: HexExplicitFloat64,
+		},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			fc := NewFunctionTestCase(proc, []FunctionTestInput{tc.input},
+				NewFunctionTestResult(types.T_varchar.ToType(), false, want, nulls), tc.evalFn)
+			ok, info := fc.Run()
+			require.True(t, ok, info)
+		})
+	}
+}
+
+func TestHexExplicitFloatRejectsSignedIntegerOverflow(t *testing.T) {
+	proc := testutil.NewProcess(t)
+	for _, tc := range []struct {
+		name   string
+		input  FunctionTestInput
+		evalFn fEvalFn
+	}{
+		{"float32_positive", NewFunctionTestInput(types.T_float32.ToType(), []float32{1e20}, nil), HexExplicitFloat32},
+		{"float32_negative", NewFunctionTestInput(types.T_float32.ToType(), []float32{-1e20}, nil), HexExplicitFloat32},
+		{"float32_exact_min", NewFunctionTestInput(types.T_float32.ToType(), []float32{float32(math.MinInt64)}, nil), HexExplicitFloat32},
+		{"float64_positive", NewFunctionTestInput(types.T_float64.ToType(), []float64{1e20}, nil), HexExplicitFloat64},
+		{"float64_negative", NewFunctionTestInput(types.T_float64.ToType(), []float64{-1e20}, nil), HexExplicitFloat64},
+		{"float64_exact_min", NewFunctionTestInput(types.T_float64.ToType(), []float64{float64(math.MinInt64)}, nil), HexExplicitFloat64},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			fc := NewFunctionTestCase(proc, []FunctionTestInput{tc.input},
+				NewFunctionTestResult(types.T_varchar.ToType(), true, nil, nil), tc.evalFn)
+			ok, info := fc.Run()
+			require.True(t, ok, info)
+		})
+	}
+
+	// The next representable float64 toward zero remains inside the accepted domain.
+	insideMin := math.Nextafter(float64(math.MinInt64), 0)
+	fc := NewFunctionTestCase(proc, []FunctionTestInput{NewFunctionTestInput(types.T_float64.ToType(),
+		[]float64{insideMin}, nil)}, NewFunctionTestResult(types.T_varchar.ToType(), false,
+		[]string{fmt.Sprintf("%X", uint64(int64(insideMin)))}, nil), HexExplicitFloat64)
+	ok, info := fc.Run()
+	require.True(t, ok, info)
+
+	// A masked overflow row must not fail short-circuit evaluation.
+	fc = NewFunctionTestCase(proc, []FunctionTestInput{NewFunctionTestInput(types.T_float64.ToType(),
+		[]float64{1e20, 15.5}, nil)}, NewFunctionTestResult(types.T_varchar.ToType(), false,
+		[]string{"", "F"}, []bool{true, false}), HexExplicitFloat64).
+		WithSelectList(&FunctionSelectList{AnyNull: true, SelectList: []bool{false, true}})
+	ok, info = fc.Run()
+	require.True(t, ok, info)
+}
+
+func TestHexDecimalRegistrationExecutesExactly(t *testing.T) {
+	proc := testutil.NewProcess(t)
+
+	decimal64Strings := []string{"15.5", "-15.5", "14.5", "-14.5", "0.0"}
+	decimal64Values := make([]types.Decimal64, len(decimal64Strings))
+	for i, value := range decimal64Strings {
+		parsed, scale, err := types.Parse64(value)
+		require.NoError(t, err)
+		require.Equal(t, int32(1), scale)
+		decimal64Values[i] = parsed
+	}
+	decimal128Strings := []string{"9007199254740993", "9223372036854775808", "-9223372036854775809", "0"}
+	decimal128Values := make([]types.Decimal128, len(decimal128Strings))
+	for i, value := range decimal128Strings {
+		parsed, scale, err := types.Parse128(value)
+		require.NoError(t, err)
+		require.Zero(t, scale)
+		decimal128Values[i] = parsed
+	}
+	decimal256Strings := []string{
+		"99999999999999999999999999999999999999999999999999999999999999999",
+		"-9999999999999999999999999999999999999999999999999999999999999999",
+		"0",
+	}
+	decimal256Values := make([]types.Decimal256, len(decimal256Strings))
+	for i, value := range decimal256Strings {
+		parsed, scale, err := types.Parse256(value)
+		require.NoError(t, err)
+		require.Zero(t, scale)
+		decimal256Values[i] = parsed
+	}
+
+	for _, tc := range []struct {
+		name       string
+		typ        types.Type
+		values     any
+		overloadID int32
+		want       []string
+	}{
+		{
+			name: "decimal64", typ: types.New(types.T_decimal64, 18, 1), values: decimal64Values, overloadID: 8,
+			want: []string{"10", "FFFFFFFFFFFFFFF0", "F", "FFFFFFFFFFFFFFF1", ""},
+		},
+		{
+			name: "decimal128", typ: types.New(types.T_decimal128, 38, 0), values: decimal128Values, overloadID: 9,
+			want: []string{"20000000000001", "7FFFFFFFFFFFFFFF", "8000000000000000", ""},
+		},
+		{
+			name: "decimal256", typ: types.New(types.T_decimal256, 65, 0), values: decimal256Values, overloadID: 10,
+			want: []string{"7FFFFFFFFFFFFFFF", "8000000000000000", ""},
+		},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			resolved, err := GetFunctionByName(proc.Ctx, "hex", []types.Type{tc.typ})
+			require.NoError(t, err)
+			require.Equal(t, tc.overloadID, resolved.overloadId)
+			input := newVectorByType(proc.Mp(), tc.typ, tc.values, nil)
+			defer input.Free(proc.Mp())
+			input.GetNulls().Add(uint64(len(tc.want) - 1))
+			out, err := RunFunctionDirectly(proc, resolved.GetEncodedOverloadID(), []*vector.Vector{input}, len(tc.want))
+			require.NoError(t, err)
+			defer out.Free(proc.Mp())
+			for i, want := range tc.want {
+				if i == len(tc.want)-1 {
+					require.True(t, out.IsNull(uint64(i)))
+					continue
+				}
+				require.Equal(t, want, string(out.GetBytesAt(i)))
+			}
+		})
+	}
+}
+
+func TestHexDecimalHighScaleRoundsOnce(t *testing.T) {
+	proc := testutil.NewProcess(t)
+	for _, tc := range []struct {
+		name string
+		oid  types.T
+		text string
+		want string
+	}{
+		{name: "decimal128_below_half", oid: types.T_decimal128, text: "0.45000000000000000005", want: "0"},
+		{name: "decimal128_negative_below_half", oid: types.T_decimal128, text: "-0.45000000000000000005", want: "0"},
+		{name: "decimal128_half", oid: types.T_decimal128, text: "0.50000000000000000000", want: "1"},
+		{name: "decimal128_negative_half", oid: types.T_decimal128, text: "-0.50000000000000000000", want: "FFFFFFFFFFFFFFFF"},
+		{name: "decimal128_upper_boundary", oid: types.T_decimal128,
+			text: "9223372036854775806.5" + strings.Repeat("0", 18), want: "7FFFFFFFFFFFFFFF"},
+		{name: "decimal128_lower_boundary", oid: types.T_decimal128,
+			text: "-9223372036854775807.5" + strings.Repeat("0", 18), want: "8000000000000000"},
+		{name: "decimal256_below_half", oid: types.T_decimal256,
+			text: "0.45" + strings.Repeat("0", 37) + "5", want: "0"},
+		{name: "decimal256_negative_below_half", oid: types.T_decimal256,
+			text: "-0.45" + strings.Repeat("0", 37) + "5", want: "0"},
+		{name: "decimal256_half", oid: types.T_decimal256,
+			text: "0.5" + strings.Repeat("0", 39), want: "1"},
+		{name: "decimal256_negative_half", oid: types.T_decimal256,
+			text: "-0.5" + strings.Repeat("0", 39), want: "FFFFFFFFFFFFFFFF"},
+		{name: "decimal256_upper_boundary", oid: types.T_decimal256,
+			text: "9223372036854775806.5" + strings.Repeat("0", 39), want: "7FFFFFFFFFFFFFFF"},
+		{name: "decimal256_lower_boundary", oid: types.T_decimal256,
+			text: "-9223372036854775807.5" + strings.Repeat("0", 39), want: "8000000000000000"},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			var value any
+			switch tc.oid {
+			case types.T_decimal128:
+				parsed, scale, err := types.Parse128(tc.text)
+				require.NoError(t, err)
+				value = []types.Decimal128{parsed}
+				typ := types.New(tc.oid, 38, scale)
+				input := newVectorByType(proc.Mp(), typ, value, nil)
+				defer input.Free(proc.Mp())
+				out, err := RunFunctionDirectly(proc, EncodeOverloadID(HEX, 9), []*vector.Vector{input}, 1)
+				require.NoError(t, err)
+				defer out.Free(proc.Mp())
+				require.Equal(t, tc.want, string(out.GetBytesAt(0)))
+			case types.T_decimal256:
+				parsed, scale, err := types.Parse256(tc.text)
+				require.NoError(t, err)
+				value = []types.Decimal256{parsed}
+				typ := types.New(tc.oid, 65, scale)
+				input := newVectorByType(proc.Mp(), typ, value, nil)
+				defer input.Free(proc.Mp())
+				out, err := RunFunctionDirectly(proc, EncodeOverloadID(HEX, 10), []*vector.Vector{input}, 1)
+				require.NoError(t, err)
+				defer out.Free(proc.Mp())
+				require.Equal(t, tc.want, string(out.GetBytesAt(0)))
+			default:
+				t.Fatalf("unexpected decimal type %s", tc.oid)
+			}
+		})
+	}
+}
+
 // HexArray
 func initHexArrayTestCase() []tcTemp {
 
@@ -7332,6 +7760,16 @@ func TestLengthUTF8(t *testing.T) {
 		s, info := fcTC.Run()
 		require.True(t, s, fmt.Sprintf("case is '%s', err info is '%s'", tc.info, info))
 	}
+}
+
+func TestLengthUTF8Int64ResultWrapper(t *testing.T) {
+	proc := testutil.NewProcess(t)
+	input := NewFunctionTestInput(types.T_varchar.ToType(), []string{"你好", "a"}, []bool{false, false})
+	result := NewFunctionTestResult(types.T_int64.ToType(), false,
+		[]int64{2, 1}, []bool{false, false})
+	caseData := NewFunctionTestCase(proc, []FunctionTestInput{input}, result, LengthUTF8)
+	succeed, info := caseData.Run()
+	require.True(t, succeed, info)
 }
 
 func TestLengthBinary(t *testing.T) {
@@ -12803,6 +13241,38 @@ func TestHllCardinality(t *testing.T) {
 		fcTC := NewFunctionTestCase(proc, tc.inputs, tc.expect, HllCardinality)
 		s, info := fcTC.Run()
 		require.True(t, s, fmt.Sprintf("case is '%s', err info is '%s'", tc.info, info))
+	}
+}
+
+func TestBitmapCount(t *testing.T) {
+	bmp := roaring.New()
+	bmp.Add(7)
+	data, err := bmp.MarshalBinary()
+	require.NoError(t, err)
+
+	tests := []struct {
+		name  string
+		input string
+		err   bool
+		value []uint64
+		nulls []bool
+	}{
+		{name: "valid bitmap", input: string(data), value: []uint64{1}, nulls: []bool{false}},
+		{name: "malformed bitmap", input: "not-a-bitmap", err: true, value: []uint64{0}, nulls: []bool{false}},
+	}
+
+	proc := testutil.NewProcess(t)
+	for _, test := range tests {
+		t.Run(test.name, func(t *testing.T) {
+			fcTC := NewFunctionTestCase(proc,
+				[]FunctionTestInput{
+					NewFunctionTestInput(types.T_varbinary.ToType(), []string{test.input}, nil),
+				},
+				NewFunctionTestResult(types.T_uint64.ToType(), test.err, test.value, test.nulls),
+				BitmapCount)
+			s, info := fcTC.Run()
+			require.True(t, s, fmt.Sprintf("case is '%s', err info is '%s'", test.name, info))
+		})
 	}
 }
 

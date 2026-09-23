@@ -42,9 +42,21 @@ func (builder *QueryBuilder) bindInsert(stmt *tree.Insert, bindCtx *BindContext)
 	// INSERT ... SELECT.  Reset it before binding so a QueryBuilder cannot leak
 	// the proof into a later DML path (for example LOAD or REPLACE).
 	builder.insertInputKeysUnique = false
-	// INSERT IGNORE (OnDuplicateUpdate == [nil]) downgrades over-length
-	// CHAR/VARCHAR writes to truncation instead of rejection.
-	builder.isInsertIgnore = len(stmt.OnDuplicateUpdate) == 1 && stmt.OnDuplicateUpdate[0] == nil
+	// INSERT IGNORE is independent from the duplicate-key action.  In
+	// particular, a non-empty ODKU list still selects UPDATE while its input and
+	// assignment conversions use the IGNORE policy.
+	builder.isInsertIgnore = stmt.IsIgnore()
+	// Keep the planner-owned assignment stream structurally independent from the
+	// AST so later plan rewrites cannot resize the statement's mutable slice.
+	astUpdateExprs := slices.Clone(stmt.GetOnDuplicateUpdate())
+	// The auto-increment provenance/reorder metadata belongs only to the pure
+	// INSERT IGNORE multi-key dedup path. A combination statement still uses
+	// IGNORE conversions, but its duplicate action is UPDATE and must not carry
+	// row-skip-only state into PRE_INSERT.
+	builder.insertHasOnDuplicateUpdate = len(astUpdateExprs) > 0
+	defer func() {
+		builder.insertHasOnDuplicateUpdate = false
+	}()
 	dmlCtx := NewDMLContext()
 	// Allow FK tables on the modern insert path: bypass the generic FK-table
 	// rejection in ResolveTables via IgnoreForeignKey, then enforce parent
@@ -140,7 +152,7 @@ func (builder *QueryBuilder) bindInsert(stmt *tree.Insert, bindCtx *BindContext)
 	// action is known: plain INSERT shares its new-row image; INSERT IGNORE
 	// shares accepted rows after arbitration; ODKU shares the post-merge final
 	// image plus an old-row image for dropping stale entries.
-	return builder.appendDedupAndMultiUpdateNodesForBindInsert(bindCtx, dmlCtx, lastNodeID, colName2Idx, skipUniqueIdx, stmt.OnDuplicateUpdate, irregularIndexes, autoIncrementGeneratedColumn)
+	return builder.appendDedupAndMultiUpdateNodesForBindInsert(bindCtx, dmlCtx, lastNodeID, colName2Idx, skipUniqueIdx, astUpdateExprs, irregularIndexes, autoIncrementGeneratedColumn)
 }
 
 func (builder *QueryBuilder) canSkipDedup(tableDef *plan.TableDef) bool {
@@ -923,10 +935,10 @@ func (builder *QueryBuilder) buildIrregularIndexInsertMaintenance(
 
 	// During a copy-based ALTER TABLE, an irregular index whose columns are not
 	// affected by the change is shallow-cloned into the new table (see
-	// cloneUnaffectedIndexes in compile/alter.go) rather than rebuilt. The data
-	// copy runs as a normal INSERT, so skip sync maintenance for such indexes here
-	// — exactly as the regular-index path skips them via SkipIndexesCopy — to avoid
-	// inserting every row's entries twice (cloned + rebuilt).
+	// cloneUnaffectedIndexes in compile/alter.go) rather than rebuilt. A newly
+	// added plugin index is rebuilt after the base-table copy. The data copy runs
+	// as a normal INSERT, so skip synchronous maintenance in both cases to avoid
+	// populating the hidden index table twice.
 	var alterCopyOpt *plan.AlterCopyOpt
 	if v := builder.compCtx.GetContext().Value(defines.AlterCopyOpt{}); v != nil {
 		if opt, ok := v.(*plan.AlterCopyOpt); ok && opt.TargetTableName == tableDef.Name {
@@ -944,9 +956,15 @@ func (builder *QueryBuilder) buildIrregularIndexInsertMaintenance(
 		if !indexdef.TableExist {
 			continue
 		}
-		if alterCopyOpt != nil && alterCopyOpt.SkipIndexesCopy[indexdef.IndexName] {
-			// cloned by the ALTER, not rebuilt by this copy insert
-			continue
+		if alterCopyOpt != nil {
+			if alterCopyOpt.SkipIndexesCopy[indexdef.IndexName] {
+				// cloned by the ALTER, not rebuilt by this copy insert
+				continue
+			}
+			if alterCopyOpt.NewPluginIndexes[indexdef.IndexName] {
+				// rebuilt after the replacement table contains all source rows
+				continue
+			}
 		}
 		indexSourceStep := builder.irregularMaintenanceSourceStep(indexdef, sourceStep)
 		switch {
@@ -2086,17 +2104,19 @@ func (builder *QueryBuilder) buildInsertIgnoreFkFilter(
 	return lastNodeID, newTag, nil
 }
 
-// insertIgnoreAutoIncrementReorderable is deliberately narrow.  The ordered
-// candidate policy is only needed when a real single-column AUTO_INCREMENT
-// primary key is combined with another unique constraint.  Composite/fake
-// keys, generated hidden keys, and tables whose unique checks are bypassed do
-// not have enough provenance here to justify changing their established path.
+// insertIgnoreAutoIncrementReorderable is deliberately narrow. The ordered
+// candidate policy is only needed for a pure INSERT IGNORE with a real
+// single-column AUTO_INCREMENT primary key combined with another unique
+// constraint. ODKU has a different action/affected-row contract and must keep
+// its established pre-insert shape. Composite/fake keys, generated hidden
+// keys, and tables whose unique checks are bypassed do not have enough
+// provenance here to justify changing their established path.
 func (builder *QueryBuilder) insertIgnoreAutoIncrementReorderable(
 	tableDef *plan.TableDef,
 	skipUniqueIdx []bool,
 	compPkeyExpr, clusterByExpr *plan.Expr,
 ) (int32, bool) {
-	if !builder.isInsertIgnore || tableDef == nil || tableDef.Pkey == nil ||
+	if !builder.isInsertIgnore || builder.insertHasOnDuplicateUpdate || tableDef == nil || tableDef.Pkey == nil ||
 		compPkeyExpr != nil || clusterByExpr != nil ||
 		tableDef.Pkey.PkeyColName == catalog.FakePrimaryKeyColName {
 		return 0, false
@@ -2662,7 +2682,11 @@ func (builder *QueryBuilder) appendDedupAndMultiUpdateNodesForBindInsert(
 	autoUpdateCols := make(map[string]bool)
 
 	if len(astUpdateExprs) == 0 {
-		onDupAction = plan.Node_FAIL
+		if builder.isInsertIgnore {
+			onDupAction = plan.Node_IGNORE
+		} else {
+			onDupAction = plan.Node_FAIL
+		}
 	} else if len(astUpdateExprs) == 1 && astUpdateExprs[0] == nil {
 		onDupAction = plan.Node_IGNORE
 	} else if isFakePK && firstUniqueIdxPos < 0 {
@@ -2708,7 +2732,7 @@ func (builder *QueryBuilder) appendDedupAndMultiUpdateNodesForBindInsert(
 					return 0, moerr.NewUnsupportedDML(builder.compCtx.GetContext(), "auto_increment default value")
 				}
 
-				updateExpr, err = getDefaultExpr(builder.GetContext(), colDef)
+				updateExpr, err = getDefaultExprForAssignment(builder.GetContext(), colDef, builder.compCtx.GetProcess(), builder.isInsertIgnore)
 				if err != nil {
 					return 0, err
 				}
@@ -2739,7 +2763,7 @@ func (builder *QueryBuilder) appendDedupAndMultiUpdateNodesForBindInsert(
 				continue
 			}
 
-			updateExpr, err = builder.forceAssignmentCastExpr(updateExpr, colDef.Typ, false)
+			updateExpr, err = builder.forceAssignmentCastExpr(updateExpr, colDef.Typ, builder.isInsertIgnore)
 			if err != nil {
 				return 0, err
 			}
@@ -2792,10 +2816,13 @@ func (builder *QueryBuilder) appendDedupAndMultiUpdateNodesForBindInsert(
 			if col.GeneratedCol == nil {
 				continue
 			}
-			genExpr := builder.applyGeneratedColumnAssignmentCast(
+			genExpr, err := builder.applyGeneratedColumnAssignmentCast(
 				DeepCopyExpr(col.GeneratedCol.Expr),
 				builder.isInsertIgnore,
 			)
+			if err != nil {
+				return 0, err
+			}
 			replaceColRefTag(genExpr, 0, scanTag)
 			updateExprs[col.Name] = genExpr
 			updateColIdxList = append(updateColIdxList, int32(i))
@@ -4766,7 +4793,7 @@ func (builder *QueryBuilder) appendInsertReplaceSourceCasts(bindCtx *BindContext
 		lastNodeID, colName2Idx, skipUniqueIdx, err := builder.appendNodesForReplaceStmt(bindCtx, lastNodeID, tableDef, objRef, insertColToExpr)
 		return lastNodeID, colName2Idx, skipUniqueIdx, -1, err
 	} else {
-		return builder.appendNodesForInsertStmt(bindCtx, lastNodeID, tableDef, objRef, insertColToExpr)
+		return builder.appendNodesForInsertStmt(bindCtx, lastNodeID, tableDef, objRef, insertColToExpr, builder.isInsertIgnore)
 	}
 }
 
@@ -5003,6 +5030,7 @@ func (builder *QueryBuilder) appendNodesForInsertStmt(
 	tableDef *TableDef,
 	objRef *ObjectRef,
 	insertColToExpr map[string]*Expr,
+	assignmentIgnore bool,
 ) (int32, map[string]int32, []bool, int32, error) {
 	colName2Idx := make(map[string]int32)
 	hasAutoCol := false
@@ -5103,7 +5131,7 @@ func (builder *QueryBuilder) appendNodesForInsertStmt(
 			projList2 = append(projList2, nil)
 			colName2Idx[tableDef.Name+"."+col.Name] = int32(len(projList2) - 1)
 		} else {
-			defExpr, err := getDefaultExpr(builder.GetContext(), col)
+			defExpr, err := getDefaultExprForAssignment(builder.GetContext(), col, builder.compCtx.GetProcess(), assignmentIgnore)
 			if err != nil {
 				return 0, nil, nil, -1, err
 			}
@@ -5138,10 +5166,13 @@ func (builder *QueryBuilder) appendNodesForInsertStmt(
 
 	for _, i := range generatedColIdxs {
 		col := tableDef.Cols[i]
-		genExpr := builder.applyGeneratedColumnAssignmentCast(
+		genExpr, err := builder.applyGeneratedColumnAssignmentCast(
 			DeepCopyExpr(col.GeneratedCol.Expr),
-			builder.isInsertIgnore,
+			assignmentIgnore,
 		)
+		if err != nil {
+			return 0, nil, nil, -1, err
+		}
 		proj1Pos := genColIdxToProj1Pos[i]
 		columnExprs[int32(i)] = genExpr
 		colIdxToProjPos[int32(i)] = int32(proj1Pos)
@@ -5396,7 +5427,7 @@ func (builder *QueryBuilder) buildValueScan(
 		}
 		var defExpr *plan.Expr
 		if isAllDefault {
-			defExpr, err := getDefaultExpr(builder.GetContext(), col)
+			defExpr, err := getDefaultExprForAssignment(builder.GetContext(), col, builder.compCtx.GetProcess(), builder.isInsertIgnore)
 			if err != nil {
 				return 0, nil, err
 			}
@@ -5454,12 +5485,15 @@ func (builder *QueryBuilder) buildValueScan(
 				}
 
 				if _, ok := r[i].(*tree.DefaultVal); ok {
-					defExpr, err = getDefaultExpr(builder.GetContext(), col)
+					defExpr, err = getDefaultExprForAssignment(builder.GetContext(), col, builder.compCtx.GetProcess(), builder.isInsertIgnore)
 					if err != nil {
 						return 0, nil, err
 					}
 				} else {
 					valueBinder := binder
+					if types.T(col.Typ.Id).IsInteger() {
+						valueBinder = funcBinder
+					}
 					boundWithNumericContext := false
 					if isNumericAssignmentTarget(col.Typ) {
 						if builder.isPrepareStatement {
@@ -5477,8 +5511,9 @@ func (builder *QueryBuilder) buildValueScan(
 								return 0, nil, err
 							}
 							// A bare marker is the source value of the assignment, not a
-							// numeric expression.  In an IGNORE assignment it must remain
-							// TEXT until the outer cast_ignore runs; otherwise the prepare-time
+							// numeric expression. Integer assignments must retain that source
+							// until execute-time numeric typing; IGNORE must retain TEXT
+							// until the outer cast_ignore runs. Otherwise the prepare-time
 							// numeric context creates an ordinary cast(? AS INT/DECIMAL), and
 							// malformed values fail before the IGNORE warning/adjustment mode
 							// is reached.  Keep numeric context for compound expressions such
@@ -5487,8 +5522,9 @@ func (builder *QueryBuilder) buildValueScan(
 							if _, ok := unwrapParenExpr(r[i]).(*tree.ParamExpr); ok {
 								directPreparedParam = true
 							}
-							if scan.hasParam && !(builder.isInsertIgnore && directPreparedParam &&
-								useIgnoreConversionAssignmentCast(targetTyp.Typ)) {
+							if scan.hasParam && !(directPreparedParam &&
+								(types.T(col.Typ.Id).IsInteger() || (builder.isInsertIgnore &&
+									useIgnoreConversionAssignmentCast(targetTyp.Typ)))) {
 								switch numericBinder := funcBinder.(type) {
 								case *DefaultBinder:
 									defExpr, err = numericBinder.bindNumericExprWithContext(r[i], 0, &col.Typ)
@@ -5613,7 +5649,7 @@ func (builder *QueryBuilder) buildValueScan(
 			col := tableDef.Cols[colIdx]
 			colTyp := makeTypeByPlan2Type(col.Typ)
 			targetTyp := &plan.Expr{Typ: col.Typ, Expr: &plan.Expr_T{T: &plan.TargetType{}}}
-			defExpr, err := getDefaultExpr(builder.GetContext(), col)
+			defExpr, err := getDefaultExprForAssignment(builder.GetContext(), col, builder.compCtx.GetProcess(), builder.isInsertIgnore)
 			if err != nil {
 				return 0, nil, err
 			}

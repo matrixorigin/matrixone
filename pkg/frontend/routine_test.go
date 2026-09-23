@@ -717,6 +717,7 @@ func TestMigrateConnectionFromPreservesLastAffectedRows(t *testing.T) {
 	defer ctrl.Finish()
 	ses := newTestSession(t, ctrl)
 	ses.SetLastAffectedRows(7)
+	ses.SetLastInsertID(13)
 	ses.SetLastFoundRows(11)
 	rt := &Routine{mc: newMigrateController()}
 	rt.setSession(ses)
@@ -724,8 +725,28 @@ func TestMigrateConnectionFromPreservesLastAffectedRows(t *testing.T) {
 	resp := &query.MigrateConnFromResponse{}
 	require.NoError(t, rt.migrateConnectionFrom(resp))
 	require.Equal(t, int64(7), resp.LastAffectedRows)
+	require.Equal(t, uint64(13), resp.LastInsertID)
+	require.True(t, resp.LastInsertIDExported)
 	require.Equal(t, uint64(11), resp.FoundRows)
 	require.True(t, resp.TempTableStateExported)
+}
+
+func TestMigrateConnectionFromRejectsMissingLastInsertIDCapability(t *testing.T) {
+	ctrl := gomock.NewController(t)
+	defer ctrl.Finish()
+	ses := newTestSession(t, ctrl)
+	ses.SetLastInsertID(13)
+	rt := &Routine{mc: newMigrateController()}
+	rt.setSession(ses)
+
+	err := rt.migrateConnectionFromActionWithCapabilities(
+		context.Background(),
+		query.MigrateConnFromAction_MigrateConnFromExport,
+		true,
+		false,
+		&query.MigrateConnFromResponse{},
+	)
+	require.True(t, moerr.IsMoErrCode(err, moerr.OkExpectedNotSafeToStartTransfer))
 }
 
 func TestMigrateConnectionFromExportsTemporaryTablesOnlyToCapableProxy(t *testing.T) {
@@ -740,6 +761,7 @@ func TestMigrateConnectionFromExportsTemporaryTablesOnlyToCapableProxy(t *testin
 		context.Background(),
 		query.MigrateConnFromAction_MigrateConnFromExport,
 		false,
+		true,
 		&query.MigrateConnFromResponse{},
 	)
 	require.Error(t, err)
@@ -749,6 +771,7 @@ func TestMigrateConnectionFromExportsTemporaryTablesOnlyToCapableProxy(t *testin
 	require.NoError(t, rt.migrateConnectionFromActionWithCapabilities(
 		context.Background(),
 		query.MigrateConnFromAction_MigrateConnFromExport,
+		true,
 		true,
 		resp,
 	))
@@ -776,6 +799,7 @@ func TestMigrateConnectionFromRejectsOversizedTemporaryTableSnapshot(t *testing.
 		context.Background(),
 		query.MigrateConnFromAction_MigrateConnFromExport,
 		true,
+		true,
 		resp,
 	)
 	require.True(t, moerr.IsMoErrCode(err, moerr.OkExpectedNotSafeToStartTransfer))
@@ -795,6 +819,13 @@ func TestMigrateConnectionFromRejectsPendingPreparedLongData(t *testing.T) {
 	rt.setSession(ses)
 
 	err := rt.migrateConnectionFrom(&query.MigrateConnFromResponse{})
+	require.Error(t, err)
+	require.True(t, moerr.IsMoErrCode(err, moerr.OkExpectedNotSafeToStartTransfer))
+
+	prepared.resetBinaryParamState()
+	prepared.latchLongDataError(moerr.NewInvalidInput(context.Background(), "deferred long data failure"))
+	require.True(t, prepared.hasPendingLongData())
+	err = rt.migrateConnectionFrom(&query.MigrateConnFromResponse{})
 	require.Error(t, err)
 	require.True(t, moerr.IsMoErrCode(err, moerr.OkExpectedNotSafeToStartTransfer))
 
@@ -2433,8 +2464,6 @@ func Test_ConnectionCount(t *testing.T) {
 
 	waitForClientCount(2)
 	waitForGauge(2)
-
-	time.Sleep(time.Millisecond * 10)
 
 	//close the connection
 	closeDbConn(t, conn1)

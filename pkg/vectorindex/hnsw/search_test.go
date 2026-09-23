@@ -156,6 +156,22 @@ func TestHnswSearchFloat32_BadQueryType(t *testing.T) {
 	require.Error(t, err)
 }
 
+func TestHnswSearchCosineRejected(t *testing.T) {
+	m := mpool.MustNewZero()
+	proc := testutil.NewProcessWithMPool(t, "", m)
+	sqlproc := sqlexec.NewSqlProcess(proc)
+
+	idxcfg := vectorindex.IndexConfig{Type: "hnsw", Usearch: usearch.DefaultConfig(3)}
+	idxcfg.Usearch.Metric = usearch.Cosine
+	s := NewHnswSearch[float32](idxcfg, vectorindex.IndexTableConfig{})
+
+	_, _, err := s.Search(sqlproc, []float32{1e-20, 1e-20, 1e-20}, vectorindex.RuntimeConfig{
+		Limit:        1,
+		OrigFuncName: "cosine_distance",
+	})
+	require.ErrorContains(t, err, "hnsw cosine search is disabled")
+}
+
 func TestBoundedHnswSearchLimits(t *testing.T) {
 	// requested >= every file: each file returns its full cardinality, result = total.
 	perIndex, resultLimit := boundedHnswSearchLimits([]uint{3, 7}, ^uint(0))
@@ -242,10 +258,8 @@ func TestHnsw(t *testing.T) {
 		go func() {
 			defer wg.Done()
 			for j := 0; j < iterations; j++ {
-				cache.Cache.Once()
-
 				algo := NewHnswSearch[float32](idxcfg, tblcfg)
-				anykeys, distances, err := cache.Cache.Search(sqlproc, tblcfg.IndexTable, algo, fp32a, vectorindex.RuntimeConfig{Limit: 4})
+				anykeys, distances, err := testCache.Search(sqlproc, tblcfg.IndexTable, algo, fp32a, vectorindex.RuntimeConfig{Limit: 4})
 				require.Nil(t, err)
 				keys, ok := anykeys.([]int64)
 				require.True(t, ok)
@@ -260,14 +274,23 @@ func TestHnsw(t *testing.T) {
 
 	wg.Wait()
 
-	require.Eventually(t, func() bool {
-		empty := true
-		testCache.IndexMap.Range(func(_, _ any) bool {
-			empty = false
-			return false
-		})
-		return empty
-	}, 3*cacheTTL, 10*time.Millisecond, "cache entry must expire after searches stop")
+	// This stress test intentionally does not start the cache ticker.  Starting
+	// it would introduce a second eviction owner: the ticker can claim the
+	// entry, pause before deleting it, and make the synchronous assertion below
+	// observe an intermediate state.  The cache package owns wall-clock ticker
+	// coverage; this test owns concurrent HNSW load/search and the explicit
+	// idle-eviction invariant.
+	value, loaded := testCache.IndexMap.Load(tblcfg.IndexTable)
+	require.True(t, loaded, "concurrent HNSW searches must leave a resident cache entry")
+	entry, ok := value.(*cache.VectorIndexSearch)
+	require.True(t, ok, "HNSW cache must contain VectorIndexSearch entries")
+	entry.ExpireAt.Store(time.Now().Add(-time.Second).UnixMicro())
+	testCache.HouseKeeping()
+
+	_, loaded = testCache.IndexMap.Load(tblcfg.IndexTable)
+	require.False(t, loaded, "an idle expired HNSW entry must be evicted by HouseKeeping")
+	require.Equal(t, int32(cache.STATUS_DESTROYED), entry.Status.Load(),
+		"HouseKeeping must finish destroying the evicted HNSW entry")
 }
 
 func makeMetaBatch(proc *process.Process) *batch.Batch {
@@ -563,4 +586,47 @@ func TestGetIndexSizeUnknownNrowStillChargesTheMapping(t *testing.T) {
 	host, _ := s.GetIndexSize()
 	require.EqualValues(t, file, host,
 		"an unknown row count drops only the allocation term, never the mapping")
+}
+
+// TestHnswEmptyGeneration: a loaded generation with no models, or only empty (0-vector) models
+// (a freshly created index, or the async-build window before the first model is written), reports
+// EmptyGeneration -> true, so the cache does not retain a vector-less generation. A generation
+// with any populated model reports false.
+func TestHnswEmptyGeneration(t *testing.T) {
+	newModel := func(withVec bool) *HnswModel[float32] {
+		idxcfg := usearch.DefaultConfig(3)
+		idxcfg.Metric = usearch.L2sq
+		uidx, err := usearch.NewIndex(idxcfg)
+		require.NoError(t, err)
+		if withVec {
+			require.NoError(t, uidx.Reserve(1))
+			require.NoError(t, uidx.Add(usearch.Key(0), []float32{1, 2, 3}))
+		}
+		return &HnswModel[float32]{Index: uidx}
+	}
+
+	// No models loaded -> empty generation.
+	require.True(t, (&HnswSearch[float32]{}).EmptyGeneration())
+
+	// All loaded models empty (usearch Len 0) -> empty generation.
+	e1 := newModel(false)
+	defer func() { require.NoError(t, e1.Index.Destroy()) }()
+	require.True(t, (&HnswSearch[float32]{Indexes: []*HnswModel[float32]{e1}}).EmptyGeneration())
+
+	// At least one populated model -> not empty.
+	e2 := newModel(false)
+	defer func() { require.NoError(t, e2.Index.Destroy()) }()
+	full := newModel(true)
+	defer func() { require.NoError(t, full.Index.Destroy()) }()
+	require.False(t, (&HnswSearch[float32]{Indexes: []*HnswModel[float32]{e2, full}}).EmptyGeneration())
+
+	// A model whose size cannot be read (nil usearch handle -> Empty errors) fails CLOSED:
+	// counting it as vector-less would evict a full generation and re-stream every model file
+	// on the next query.
+	e3 := newModel(false)
+	defer func() { require.NoError(t, e3.Index.Destroy()) }()
+	unreadable := &HnswModel[float32]{Id: "no-handle"}
+	_, err := unreadable.Empty()
+	require.Error(t, err, "a nil usearch handle is what makes this model unreadable")
+	require.False(t, (&HnswSearch[float32]{Indexes: []*HnswModel[float32]{e3, unreadable}}).EmptyGeneration())
 }

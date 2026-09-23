@@ -4409,6 +4409,13 @@ func TestCastJsonToJsonOverloadResolution(t *testing.T) {
 	require.NoError(t, err)
 }
 
+func TestCastJsonToBlobOverloadResolution(t *testing.T) {
+	require.True(t, IfTypeCastSupported(types.T_json, types.T_blob))
+
+	_, err := GetFunctionByName(context.Background(), "cast", []types.Type{types.T_json.ToType(), types.T_blob.ToType()})
+	require.NoError(t, err)
+}
+
 func TestCastToJSONSupportedTypes(t *testing.T) {
 	for _, source := range []types.T{
 		types.T_any,
@@ -5375,5 +5382,59 @@ func TestParseStringToFloatWithBitSize(t *testing.T) {
 			require.Error(t, err)
 			require.True(t, moerr.IsMoErrCode(err, moerr.ErrInvalidInput))
 		}
+	})
+}
+
+// #28917: arrayToArray must reject a value whose actual element count does not match the DECLARED
+// target dimension (to.Width) -- otherwise a wrong-dimension vector is copied verbatim under the
+// target label, forming a mixed-dimension column. An UNSIZED target (Width == MaxArrayDimension,
+// which an arithmetic result carries) declares no dimension and is left alone.
+func TestCastArrayDimensionMismatch(t *testing.T) {
+	proc := testutil.NewProcess(t)
+	vecf32 := func(w int32) types.Type { return types.New(types.T_array_float32, w, 0) }
+	vecf64 := func(w int32) types.Type { return types.New(types.T_array_float64, w, 0) }
+
+	t.Run("vecf32(3)->vecf32(4) rejected", func(t *testing.T) {
+		tc := NewFunctionTestCase(proc,
+			[]FunctionTestInput{
+				NewFunctionTestInput(vecf32(3), [][]float32{{1, 2, 3}}, []bool{false}),
+				NewFunctionTestInput(vecf32(4), [][]float32{}, []bool{}),
+			},
+			NewFunctionTestResult(vecf32(4), true, nil, nil), NewCast)
+		ok, info := tc.Run()
+		require.True(t, ok, info)
+	})
+
+	t.Run("vecf32(3)->vecf64(4) rejected (element + dimension change)", func(t *testing.T) {
+		tc := NewFunctionTestCase(proc,
+			[]FunctionTestInput{
+				NewFunctionTestInput(vecf32(3), [][]float32{{1, 2, 3}}, []bool{false}),
+				NewFunctionTestInput(vecf64(4), [][]float64{}, []bool{}),
+			},
+			NewFunctionTestResult(vecf64(4), true, nil, nil), NewCast)
+		ok, info := tc.Run()
+		require.True(t, ok, info)
+	})
+
+	t.Run("vecf32(3)->vecf32(3) allowed (same declared dimension)", func(t *testing.T) {
+		tc := NewFunctionTestCase(proc,
+			[]FunctionTestInput{
+				NewFunctionTestInput(vecf32(3), [][]float32{{1, 2, 3}}, []bool{false}),
+				NewFunctionTestInput(vecf32(3), [][]float32{}, []bool{}),
+			},
+			NewFunctionTestResult(vecf32(3), false, [][]float32{{1, 2, 3}}, []bool{false}), NewCast)
+		ok, info := tc.Run()
+		require.True(t, ok, info)
+	})
+
+	t.Run("unsized target skips the dimension check", func(t *testing.T) {
+		tc := NewFunctionTestCase(proc,
+			[]FunctionTestInput{
+				NewFunctionTestInput(vecf32(3), [][]float32{{1, 2, 3}}, []bool{false}),
+				NewFunctionTestInput(types.T_array_float32.ToType(), [][]float32{}, []bool{}),
+			},
+			NewFunctionTestResult(types.T_array_float32.ToType(), false, [][]float32{{1, 2, 3}}, []bool{false}), NewCast)
+		ok, info := tc.Run()
+		require.True(t, ok, info)
 	})
 }

@@ -183,6 +183,10 @@ type VectorIndexSearchIf interface {
 	// The cache calls it once, right after Load, and caches the result on the entry, so it
 	// need not be cheap and is never called on the search path.
 	GetIndexSize() (hostBytes, deviceBytes int64)
+	// BuildTS reports the greatest source-table commit this loaded generation reflects,
+	// for the async-index freshness gate. fulltext2 returns MAX(metadata.build_ts); the
+	// vector algos, whose freshness is handled elsewhere, return 0. 0 = unknown.
+	BuildTS() int64
 	Destroy()
 }
 
@@ -270,6 +274,10 @@ type VectorIndexSearch struct {
 	// estimate never counts toward anyone's budget.
 	hostBytes   atomic.Int64
 	deviceBytes atomic.Int64
+	// buildTS is Algo.BuildTS() published by captureSize under this entry's lock, so the
+	// freshness gate (GetBuildTS) reads it from the atomic and never touches the algo, which
+	// a concurrent eviction may be tearing down. 0 until Load runs.
+	buildTS atomic.Int64
 	// devicePerCard is deviceBytes broken down by GPU, published by captureSize when the
 	// algorithm knows its placement. nil means "aggregate only".
 	devicePerCard    atomic.Value // map[int]int64
@@ -471,6 +479,7 @@ func (s *VectorIndexSearch) captureSize() {
 	host, device := s.Algo.GetIndexSize()
 	s.hostBytes.Store(host)
 	s.deviceBytes.Store(device)
+	s.buildTS.Store(s.Algo.BuildTS())
 	if placed, ok := s.Algo.(devicePlacement); ok {
 		if perCard := placed.DeviceResidency(); len(perCard) > 0 {
 			s.devicePerCard.Store(perCard)
@@ -603,7 +612,17 @@ func (s *VectorIndexSearch) Search(sqlproc *sqlexec.SqlProcess, newalgo VectorIn
 	if !s.extendForSearch() {
 		return nil, nil, errIndexDestroyed
 	}
-	return s.Algo.Search(sqlproc, query, rt)
+	// Publish the generation being searched to the caller UNDER this lock, atomic with the search,
+	// so a follow-up bounded to it (the fulltext2 json-probe tail) cannot bind a newer generation a
+	// concurrent evict+reload publishes after this returns. See RuntimeConfig.SearchedBuildTS.
+	if rt.SearchedBuildTS != nil {
+		*rt.SearchedBuildTS = s.buildTS.Load()
+	}
+	keys, distances, err = s.Algo.Search(sqlproc, query, rt)
+	if rt.EmptyGeneration != nil {
+		*rt.EmptyGeneration = algoEmptyGeneration(s)
+	}
+	return keys, distances, err
 }
 
 // SearchInto mirrors Search but routes to the box-free SearchInto (caller-owned out
@@ -636,7 +655,15 @@ func (s *VectorIndexSearch) SearchInto(sqlproc *sqlexec.SqlProcess, query any, r
 	if !s.extendForSearch() {
 		return errIndexDestroyed
 	}
-	return s.Algo.SearchInto(sqlproc, query, rt, out)
+	// See Search: publish the searched generation under this lock for a bounded follow-up.
+	if rt.SearchedBuildTS != nil {
+		*rt.SearchedBuildTS = s.buildTS.Load()
+	}
+	err := s.Algo.SearchInto(sqlproc, query, rt, out)
+	if rt.EmptyGeneration != nil {
+		*rt.EmptyGeneration = algoEmptyGeneration(s)
+	}
+	return err
 }
 
 // implementation of VectorIndexCache
@@ -788,6 +815,35 @@ func (c *VectorIndexCache) discardFailedLoad(key string, algo *VectorIndexSearch
 	}
 }
 
+// algoEmptyGeneration reports a freshly loaded generation the cache should NOT retain: one
+// that holds no searchable vectors. Each algorithm defines that for its own layout --
+// fulltext2: no tag=0 base and no tag=1 cdc_tail (the transient copy-alter init window before
+// the REINDEX builds the base, or an empty table); ivfflat: the NULL-vector centroid
+// placeholder only; hnsw: no populated model; ivfpq/cagra: no sub-index and no CDC overflow.
+// An algorithm that does not implement the optional interface is cached as before. Callers
+// must hold the entry's read lock: it reads algo.Algo state that DestroyWithReason mutates
+// under the write lock.
+func algoEmptyGeneration(algo *VectorIndexSearch) bool {
+	e, ok := algo.Algo.(interface{ EmptyGeneration() bool })
+	return ok && e.EmptyGeneration()
+}
+
+// retireEmptyGeneration drops a just-loaded generation that reports no searchable vectors, so the
+// next query reloads and picks up the vectors once the build writes them under the same
+// generation. Only the LOADER retires it: a caller that found the entry already resident is
+// looking at another caller's generation, and a concurrent reader already completed on it.
+//
+// Called on BOTH the success and the post-load error path. An error after Load must retire it
+// too: the loader is the only one who ever would, a later query finds the entry resident and
+// skips this, and ivfflat has no IsStale -- so one failed entries scan during the async-build
+// window would pin bucket-1 routing for as long as traffic keeps refreshing the TTL (#29011).
+func (c *VectorIndexCache) retireEmptyGeneration(key string, algo *VectorIndexSearch, loaded, emptyGen bool) {
+	if loaded || !emptyGen {
+		return
+	}
+	c.evictEntry(key, algo, "empty-generation")
+}
+
 // house keeping to check expired keys and delete from cache
 func (c *VectorIndexCache) HouseKeeping() {
 
@@ -910,7 +966,14 @@ func (c *VectorIndexCache) Destroy() {
 // Get index from cache and return VectorIndexSearchIf interface
 func (c *VectorIndexCache) Search(sqlproc *sqlexec.SqlProcess, key string, newalgo VectorIndexSearchIf,
 	query any, rt vectorindex.RuntimeConfig) (keys any, distances []float64, err error) {
+	var emptyGen bool
+	rt.EmptyGeneration = &emptyGen
 	for {
+		// Per ITERATION, not per call: the flag describes the generation THIS attempt searched,
+		// and a retry searches a different one. VectorIndexSearch.Search writes it only after
+		// the algo ran, so an attempt that returns before that (a torn-down entry, a failed
+		// load) must not be judged on the previous attempt's generation.
+		emptyGen = false
 		s := newVectorIndexSearch(newalgo)
 		value, loaded := c.IndexMap.LoadOrStore(key, s)
 		algo := value.(*VectorIndexSearch)
@@ -1012,9 +1075,20 @@ func (c *VectorIndexCache) Search(sqlproc *sqlexec.SqlProcess, key string, newal
 				}
 				continue
 			}
+			// The generation stays behind on a non-retryable error, so retire it here as well
+			// as on the success path -- see retireEmptyGeneration. The error returns no keys,
+			// so nothing aliases the index memory the teardown frees.
+			c.retireEmptyGeneration(key, algo, loaded, emptyGen)
 			return nil, nil, err
 		}
 
+		// Do not retain a generation with no searchable vectors (the transient copy-alter init
+		// window, the ASYNC-build window before the first vectors are committed, or an empty
+		// table): serve its empty result, but evict so the next query reloads and picks up the
+		// vectors once the build writes them under the same generation. The CDC-flush
+		// RemoveIdle still refreshes a NON-empty stale generation. The evicted result is empty,
+		// so its keys alias no index memory the teardown frees.
+		c.retireEmptyGeneration(key, algo, loaded, emptyGen)
 		return keys, distances, nil
 	}
 }
@@ -1024,7 +1098,14 @@ func (c *VectorIndexCache) Search(sqlproc *sqlexec.SqlProcess, key string, newal
 // Same LoadOrStore / retryable-load discipline as Search.
 func (c *VectorIndexCache) SearchInto(sqlproc *sqlexec.SqlProcess, key string, newalgo VectorIndexSearchIf,
 	query any, rt vectorindex.RuntimeConfig, out *vectorindex.SearchOutput) error {
+	var emptyGen bool
+	rt.EmptyGeneration = &emptyGen
 	for {
+		// Per ITERATION, not per call: the flag describes the generation THIS attempt searched,
+		// and a retry searches a different one. VectorIndexSearch.Search writes it only after
+		// the algo ran, so an attempt that returns before that (a torn-down entry, a failed
+		// load) must not be judged on the previous attempt's generation.
+		emptyGen = false
 		s := newVectorIndexSearch(newalgo)
 		value, loaded := c.IndexMap.LoadOrStore(key, s)
 		algo := value.(*VectorIndexSearch)
@@ -1111,13 +1192,39 @@ func (c *VectorIndexCache) SearchInto(sqlproc *sqlexec.SqlProcess, key string, n
 				}
 				continue
 			}
+			// Retire an empty generation on the error path too -- see Search.
+			c.retireEmptyGeneration(key, algo, loaded, emptyGen)
 			return err
 		}
+		// Do not retain a vector-less generation; see Search. out already holds the (empty)
+		// result and is caller-owned, so the teardown frees nothing it references.
+		c.retireEmptyGeneration(key, algo, loaded, emptyGen)
 		return nil
 	}
 }
 
 // remove key from cache
+// GetBuildTS returns the source-table coverage (MAX(metadata.build_ts), base + cdc_tail)
+// of the LOADED index generation currently cached under key -- i.e. what a probe issued
+// now would actually search. found is false when no loaded generation is cached (a search
+// would load a fresh one), which the async-index freshness gate treats as "no cached copy
+// to under-serve, proceed". Using the cached generation's own build_ts, rather than the
+// durable metadata, is what keeps a stale warm entry from over-reporting coverage.
+func (c *VectorIndexCache) GetBuildTS(key string) (ts int64, found bool) {
+	v, ok := c.IndexMap.Load(key)
+	if !ok {
+		return 0, false
+	}
+	s, ok := v.(*VectorIndexSearch)
+	if !ok || s.Status.Load() != STATUS_LOADED {
+		return 0, false
+	}
+	// Read the entry's published atomic, never s.Algo: a concurrent eviction may be tearing
+	// the algorithm down. captureSize published buildTS under the entry lock before the
+	// STATUS_LOADED store this read observed.
+	return s.buildTS.Load(), true
+}
+
 // Remove drops a cached index by key so the next Search reloads it. Callers use
 // it after a mutation (CDC append, CREATE/REBUILD/MERGE) makes the cached copy
 // stale. It is LOCAL to this process — a prompt local optimization only; cross-CN
@@ -1131,6 +1238,25 @@ func (c *VectorIndexCache) Remove(key string) {
 // The empty reason preserves the historical behavior for all other algorithms.
 func (c *VectorIndexCache) RemoveWithReason(key, reason string) {
 	c.evictEntry(key, nil, reason)
+}
+
+// RemoveIdle drops the cached entry for key ONLY if no search is in flight on it,
+// so the next Search reloads the post-append generation. Unlike Remove it never
+// evicts a busy entry: a concurrent reader keeps the warm object and RemoveIdle
+// returns false, deferring the refresh to a later idle moment (or the pull-based
+// IsStale sweep). Called on a CDC/ISCP append where staleness is tolerable but a
+// forced evict on every flush would thrash concurrent readers. Current entry only
+// — an append does not invalidate a snapshot generation (see RemoveAllGenerations).
+func (c *VectorIndexCache) RemoveIdle(key, reason string) bool {
+	value, loaded := c.IndexMap.Load(key)
+	if !loaded {
+		return false
+	}
+	algo, ok := value.(*VectorIndexSearch)
+	if !ok {
+		return false
+	}
+	return c.evictIdleEntry(key, algo, reason)
 }
 
 // RemoveAllGenerations drops the index's CURRENT entry and every named-snapshot generation of

@@ -228,7 +228,7 @@ func (builder *QueryBuilder) appendSequentialSingleTableUpdateAssignments(
 
 		column := tableDef.Cols[columnIndex]
 		if isDefaultValExpr(rhs) {
-			rhs, err = getDefaultExpr(builder.GetContext(), column)
+			rhs, err = getDefaultExprForAssignment(builder.GetContext(), column, builder.compCtx.GetProcess(), ignore)
 			if err != nil {
 				return 0, nil, 0, err
 			}
@@ -645,7 +645,7 @@ func (builder *QueryBuilder) bindUpdate(stmt *tree.Update, bindCtx *BindContext)
 			if colPos, ok := newColName2Idx[alias+"."+col.Name]; ok {
 				updateExpr := selectNode.ProjectList[colPos]
 				if isDefaultValExpr(updateExpr) { // set col = default
-					updateExpr, err = getDefaultExpr(builder.GetContext(), col)
+					updateExpr, err = getDefaultExprForAssignment(builder.GetContext(), col, builder.compCtx.GetProcess(), stmt.Ignore)
 					if err != nil {
 						return 0, err
 					}
@@ -971,10 +971,13 @@ func (builder *QueryBuilder) bindUpdate(stmt *tree.Update, bindCtx *BindContext)
 			if col.GeneratedCol == nil {
 				continue
 			}
-			genExpr := builder.applyGeneratedColumnAssignmentCast(
+			genExpr, err := builder.applyGeneratedColumnAssignmentCast(
 				DeepCopyExpr(col.GeneratedCol.Expr),
 				stmt.Ignore,
 			)
+			if err != nil {
+				return 0, err
+			}
 			genExpr = substituteColRefsInExpr(genExpr, selectNode.ProjectList, colOffsets[i])
 
 			oldPos := oldColName2Idx[alias+"."+col.Name]
@@ -1762,10 +1765,13 @@ func (builder *QueryBuilder) bindUpdate(stmt *tree.Update, bindCtx *BindContext)
 				if col.GeneratedCol == nil {
 					continue
 				}
-				genExpr := builder.applyGeneratedColumnAssignmentCast(
+				genExpr, err := builder.applyGeneratedColumnAssignmentCast(
 					DeepCopyExpr(col.GeneratedCol.Expr),
 					stmt.Ignore,
 				)
+				if err != nil {
+					return 0, err
+				}
 				genExpr = substituteColRefsInExpr(genExpr, selectNode.ProjectList, colOffsets[ownerIdx])
 				generatedPos, ok := newColName2Idx[ownerAlias+"."+col.Name]
 				if !ok || generatedPos < 0 || int(generatedPos) >= len(selectNode.ProjectList) {
@@ -3462,10 +3468,13 @@ func (builder *QueryBuilder) recomputeMergedPhysicalTargetGeneratedColumns(
 				ownerAlias,
 			)
 		}
-		genExpr := builder.applyGeneratedColumnAssignmentCast(
+		genExpr, err := builder.applyGeneratedColumnAssignmentCast(
 			DeepCopyExpr(col.GeneratedCol.Expr),
 			true,
 		)
+		if err != nil {
+			return err
+		}
 		selectNode.ProjectList[generatedPos] = substituteColRefsInExpr(
 			genExpr,
 			generatedInputs,
@@ -4341,6 +4350,7 @@ func (builder *QueryBuilder) appendTargetRowNumberBelowAssignmentProject(
 		WinSpecList: []*plan.Expr{rowNumberExpr},
 		WindowIdx:   0,
 		BindingTags: []int32{windowTag},
+		SpillMem:    builder.sortSpillMem,
 	}, bindCtx)
 	selectNode.Children[0] = windowID
 
@@ -4825,6 +4835,7 @@ func (builder *QueryBuilder) appendTargetRowNumberNode(
 		WinSpecList: []*plan.Expr{rowNumberExpr},
 		WindowIdx:   0,
 		BindingTags: []int32{windowTag},
+		SpillMem:    builder.sortSpillMem,
 	}, bindCtx)
 
 	rowNumberProjectPos := int32(len(selectNode.ProjectList))
@@ -5039,6 +5050,7 @@ func (builder *QueryBuilder) appendRowNumberGuardNode(
 		WinSpecList: []*plan.Expr{rowNumberExpr},
 		WindowIdx:   rowNumberIdx,
 		BindingTags: []int32{windowTag},
+		SpillMem:    builder.sortSpillMem,
 	}, bindCtx)
 
 	windowProjectTag := builder.genNewBindTag()

@@ -123,6 +123,14 @@ func (Hooks) RestoreInitSQL(_ compileplugin.CompileContext, _ map[string]*plan.I
 	return true, "SELECT 1", nil
 }
 
+// AlterCopyInitSQL — classic fulltext's index is row-based (doc-term rows), so a COPY
+// ALTER's CDC ts=0 replay inserts those rows and rebuilds it; keep the current no-InitSQL
+// behavior. (fulltext2 differs: its base segment is built only by buildFromSource, not CDC,
+// which is the #28837 gap.)
+func (Hooks) AlterCopyInitSQL(_ compileplugin.CompileContext, _ map[string]*plan.IndexDef) (bool, string, error) {
+	return false, "", nil
+}
+
 // ValidateReindexParams — no-op; fulltext has no reindex-time params.
 func (Hooks) ValidateReindexParams(old map[string]string, _ compileplugin.ReindexParamUpdate) (map[string]string, error) {
 	return old, nil

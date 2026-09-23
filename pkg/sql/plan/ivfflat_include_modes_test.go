@@ -207,8 +207,11 @@ func TestEnsureIvfIncludeSearchRoundLimitAtLeastK(t *testing.T) {
 	require.Equal(t, uint64(0), ensureIvfIncludeSearchRoundLimitAtLeastK(0, nil))
 }
 
-func TestApplyIndicesForSortUsingIvfflat_PostModeDoesNotAutoUseIncludeOptimization(t *testing.T) {
-	builder, _, scanNode, scanNodeID, multiTableIndex := newIvfIncludeModeTestBuilder(t)
+func TestApplyIndicesForSortUsingIvfflat_PostModeBuildsEmptyFallback(t *testing.T) {
+	builder, ctx, scanNode, scanNodeID, multiTableIndex := newIvfIncludeModeTestBuilder(t)
+	for _, def := range multiTableIndex.IndexDefs {
+		scanNode.TableDef.Indexes = append(scanNode.TableDef.Indexes, def)
+	}
 
 	scanTag := scanNode.BindingTags[0]
 	scanNode.FilterList = []*plan.Expr{
@@ -239,16 +242,39 @@ func TestApplyIndicesForSortUsingIvfflat_PostModeDoesNotAutoUseIncludeOptimizati
 	}
 
 	vecCtx := newIvfIncludeModeVectorSortContext(scanNode, scanNodeID, "post", 0, 2, 4)
+	vecCtx.providerNodeID = -1
+	sortExpr := &plan.Expr{
+		Typ:  plan.Type{Id: int32(types.T_float64)},
+		Expr: &plan.Expr_F{F: vecCtx.distFnExpr},
+	}
+	sortID := builder.appendNode(&plan.Node{
+		NodeType:   plan.Node_SORT,
+		Children:   []int32{scanNodeID},
+		OrderBy:    []*plan.OrderBySpec{{Expr: sortExpr}},
+		Limit:      DeepCopyExpr(vecCtx.limit),
+		RankOption: DeepCopyRankOption(vecCtx.rankOption),
+	}, ctx)
+	projectID := builder.appendNode(&plan.Node{
+		NodeType:    plan.Node_PROJECT,
+		Children:    []int32{sortID},
+		ProjectList: vecCtx.projNode.ProjectList,
+	}, ctx)
+	vecCtx.projNode = builder.qry.Nodes[projectID]
+	vecCtx.sortNode = builder.qry.Nodes[sortID]
+	vecCtx.orderExpr = sortExpr
+	vecCtx.limit = builder.qry.Nodes[sortID].Limit
+	vecCtx.resultLimit = builder.qry.Nodes[sortID].Limit
 
-	_, err := builder.applyIndicesForSortUsingIvfflat(scanNodeID, vecCtx, multiTableIndex, nil, nil)
+	root, err := builder.applyIndicesForSortUsingIvfflat(projectID, vecCtx, multiTableIndex, nil, nil)
 	require.NoError(t, err)
 
-	sortNode := builder.qry.Nodes[vecCtx.projNode.Children[0]]
-	require.Equal(t, plan.Node_SORT, sortNode.NodeType)
-	joinNode := builder.qry.Nodes[sortNode.Children[0]]
-	require.Equal(t, plan.Node_JOIN, joinNode.NodeType)
+	adaptive := builder.qry.Nodes[root]
+	require.Equal(t, plan.Node_ADAPTIVE_TOP, adaptive.NodeType)
+	require.True(t, adaptive.GetAdaptiveTopFallbackOnEmpty())
+	require.Len(t, adaptive.Children, 2)
 
-	tableFuncNode := findIvfTableFunctionNode(builder, sortNode.Children[0])
+	postRoot := adaptive.Children[0]
+	tableFuncNode := findIvfTableFunctionNode(builder, postRoot)
 	require.NotNil(t, tableFuncNode)
 	require.Equal(t, plan.Node_VECTOR_INDEX_SCAN, tableFuncNode.NodeType)
 	require.Len(t, tableFuncNode.TableDef.Cols, 2)

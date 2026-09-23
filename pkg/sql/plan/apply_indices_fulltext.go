@@ -321,6 +321,131 @@ func (builder *QueryBuilder) applyIndicesForAggUsingFullTextIndex(nodeID int32, 
 	return nodeID, nil
 }
 
+// resolveScanNodeUnderWindow finds the base TABLE_SCAN carrying the WHERE-clause MATCH beneath a
+// WINDOW node. OVER(PARTITION BY ...) makes the binder insert a Node_PARTITION between the window
+// and the scan (appendWindowNode), and a single-input PROJECT may also sit in between; both are
+// passthroughs to descend. A WINDOW child that is itself a WINDOW is NOT descended: stacked
+// windows are rewritten innermost-first by post-order recursion.
+func (builder *QueryBuilder) resolveScanNodeUnderWindow(node *plan.Node) *plan.Node {
+	for node != nil {
+		switch {
+		case node.NodeType == plan.Node_TABLE_SCAN:
+			if node.TableDef != nil && node.TableDef.Indexes != nil {
+				return node
+			}
+			return nil
+		case (node.NodeType == plan.Node_PARTITION || node.NodeType == plan.Node_PROJECT) && len(node.Children) == 1:
+			node = builder.qry.Nodes[node.Children[0]]
+		default:
+			return nil
+		}
+	}
+	return nil
+}
+
+// rewriteWindowMatchesFromServed replaces a fulltext_match inside a WINDOW's own spec (a
+// window-function argument or its OVER clause in WinSpecList), inside the WINDOW's post-evaluation
+// FilterList (a predicate that survives predicate-pushdown onto the window because it also
+// references a window column, e.g. `rn = 1 OR score > 0` -- Node_WINDOW runs compileRestrict on it
+// AFTER compileWin), and inside the PARTITION node the binder places under it for
+// OVER(PARTITION BY ...), with the score column of an index scan already served
+// (builder.ftJoinServed). servedFullTextScoreSameTable is binding-tag-aware, so a MATCH no served
+// scan answers is left intact and still raises 20105.
+func (builder *QueryBuilder) rewriteWindowMatchesFromServed(windowNode *plan.Node) {
+	if windowNode == nil || len(builder.ftJoinServed) == 0 {
+		return
+	}
+	rewriter := func(fn *plan.Function) *plan.Expr {
+		return builder.servedFullTextScoreSameTable(fn, builder.ftJoinServed)
+	}
+	for i := range windowNode.WinSpecList {
+		if exprCallsFunc(windowNode.WinSpecList[i], "fulltext_match") {
+			windowNode.WinSpecList[i] = replaceScoreFnInExprBy(windowNode.WinSpecList[i], rewriter)
+		}
+	}
+	builder.rewriteServedMatchesInFilterList(windowNode)
+	if len(windowNode.Children) == 1 {
+		if child := builder.qry.Nodes[windowNode.Children[0]]; child != nil && child.NodeType == plan.Node_PARTITION {
+			for _, ob := range child.OrderBy {
+				if ob != nil && exprCallsFunc(ob.Expr, "fulltext_match") {
+					ob.Expr = replaceScoreFnInExprBy(ob.Expr, rewriter)
+				}
+			}
+		}
+	}
+}
+
+// rewriteServedMatchesInFilterList rewrites every served fulltext_match in a node's FilterList to the
+// score column of the index scan that answers it (builder.ftJoinServed), binding-tag-aware. It backs
+// two post-window predicates: the WINDOW's own FilterList (a predicate kept on the window because it
+// also references a window column, e.g. `rn = 1 OR score > 0`) and the independent Node_FILTER that
+// predicate pushdown may leave ABOVE a WINDOW -- a `score > 0` it cannot move below the window because
+// it neither references a window column nor pushes onto the partition keys. The node keeps its place,
+// so evaluation stays post-window. A MATCH no served scan answers is left intact and still raises
+// 20105 (#28974 P2).
+func (builder *QueryBuilder) rewriteServedMatchesInFilterList(node *plan.Node) {
+	if node == nil || len(builder.ftJoinServed) == 0 {
+		return
+	}
+	rewriter := func(fn *plan.Function) *plan.Expr {
+		return builder.servedFullTextScoreSameTable(fn, builder.ftJoinServed)
+	}
+	for i := range node.FilterList {
+		if exprCallsFunc(node.FilterList[i], "fulltext_match") {
+			node.FilterList[i] = replaceScoreFnInExprBy(node.FilterList[i], rewriter)
+		}
+	}
+}
+
+// applyIndicesForWindowUsingFullTextIndex rewrites a WINDOW -> [PARTITION ->] SCAN(MATCH) shape
+// (#28974). The scan carries the WHERE-clause fulltext_match; build the index-scan join for those
+// MATCHes and reparent the scan's immediate parent onto it, mirroring the aggregate path.
+func (builder *QueryBuilder) applyIndicesForWindowUsingFullTextIndex(nodeID int32, windowNode *plan.Node, scanNode *plan.Node,
+	filterids []int32, filterIndexDefs []*plan.IndexDef,
+	wrappedExprs []*plan.Expr, wrappedIndexDefs []*plan.IndexDef,
+	colRefCnt map[[2]int32]int, idxColMap map[[2]int32]*plan.Expr) (int32, error) {
+	var err error
+
+	projids := make([]int32, 0)
+	projIndexDefs := make([]*plan.IndexDef, 0)
+	eqmap := make(map[int32]int32)
+
+	idxID, _, _, served, err := builder.applyJoinFullTextIndices(nodeID, nil, scanNode,
+		scanNode.Limit, scanNode.Offset, filterids, filterIndexDefs, projids, projIndexDefs,
+		wrappedExprs, wrappedIndexDefs, eqmap, colRefCnt, idxColMap)
+	if err != nil {
+		return -1, err
+	}
+	joinNode := builder.qry.Nodes[idxID]
+	joinNode.Limit = DeepCopyExpr(scanNode.Limit)
+	joinNode.Offset = DeepCopyExpr(scanNode.Offset)
+	scanNode.Limit = nil
+	scanNode.Offset = nil
+
+	// Reparent the scan's immediate parent onto the index-scan join. With OVER(PARTITION BY ...) a
+	// Node_PARTITION (and any single-input PROJECT) sits between the window and the scan, so the
+	// join must attach below it -- hardcoding windowNode.Children[0] would drop the partition.
+	for parent := windowNode; parent != nil; {
+		childID := parent.Children[0]
+		if childID == scanNode.NodeId {
+			parent.Children[0] = idxID
+			break
+		}
+		parent = builder.qry.Nodes[childID]
+	}
+
+	// Publish the served scores so the PROJECT/SORT above the window (resolveProjectMatchesOverJoin)
+	// and any stacked outer window resolve a MATCH they carry to the score column instead of leaving
+	// a raw fulltext_match that reaches execution as 20105.
+	builder.ftJoinServed = append(builder.ftJoinServed, served...)
+
+	// This window's own spec, and the partition node between it and the scan, may reference the
+	// MATCHes just served.
+	builder.rewriteWindowMatchesFromServed(windowNode)
+
+	return nodeID, nil
+}
+
 func (builder *QueryBuilder) applyJoinFullTextIndices(nodeID int32, projNode *plan.Node, scanNode *plan.Node,
 	paginationLimit, paginationOffset *plan.Expr,
 	filterids []int32, filter_indexDefs []*plan.IndexDef,
@@ -667,6 +792,21 @@ func (builder *QueryBuilder) applyJoinFullTextIndices(nodeID int32, projNode *pl
 		// where a repeated pk multiplies base-table rows. Group by the doc id to
 		// collapse them — the aggregate already spills and is already tested.
 		if mode == fulltext2.JSONProbeMode {
+			// An async index only reflects commits up to the generation the operator searches. The
+			// operator SELF-COMPLETES: it unions a table_changes tail over (searched, snapshot]
+			// internally (there is no UNION arm here), binding the lower bound to the generation it
+			// actually searched at runtime; the group-by dedup below collapses pks the bulk and tail
+			// share, and the base scan re-checks the json predicate on current values. Publish the
+			// reconstructed tail SQL on the scan node's Stats.Sql so EXPLAIN (Verbose) shows it -- the
+			// internally-run tail is visible, not a black box.
+			// displaySQL is empty when the index was caught up as of planning (the tail is expected
+			// not to run); only surface the tail SQL in EXPLAIN when it is expected to execute.
+			if info, ok := builder.jsonProbeTail[scanNode.NodeId]; ok && info.displaySQL != "" {
+				if curr_ftnode.Stats == nil {
+					curr_ftnode.Stats = &plan.Stats{}
+				}
+				curr_ftnode.Stats.Sql = info.displaySQL
+			}
 			curr_ftnode_id, curr_ftnode_pkcol = builder.dedupFulltextDocIDs(ctx, curr_ftnode_id, curr_ftnode_pkcol)
 		}
 
@@ -1419,27 +1559,36 @@ func (builder *QueryBuilder) applyFullTextFiltersForJoinChildren(nodeID int32, j
 	// fulltext-index result on the pk/doc_id. Fulltext search yields one row per matching
 	// doc, so that join is 1:1 and ROW-EQUIVALENT to the filter it replaces.
 	//
-	// A child is eligible iff rewriting it cannot change the enclosing join's
-	// row-preservation:
+	// A fulltext_match on a scan's FilterList is a pure filter on that input's own columns, so
+	// re-expressing it as the 1-row-per-pk semi-join is ROW-EQUIVALENT to the WHERE that placed it
+	// there -- on EITHER side of a join, whether the input is null-extending or row-preserved:
 	//   - INNER/SEMI: neither input is row-preserving, so both are eligible.
-	//   - outer joins (LEFT/RIGHT/SINGLE/OUTER): only the NULL-EXTENDING (non-preserved)
-	//     child. That is where a scalar subquery's match lands -- correlated
-	//     `select (select count(*) ... where match(...))` decorrelates to AGG over
-	//     `outer LEFT/SINGLE JOIN docs(match)` with docs as the non-preserved child (#27962).
+	//   - LEFT/RIGHT/SINGLE: both children are eligible.
+	//       * the NULL-EXTENDING child carries a decorrelated subquery's own filter -- correlated
+	//         `select (select count(*) ... where match(...))` decorrelates to AGG over
+	//         `outer LEFT/SINGLE JOIN docs(match)` with docs as the non-preserved child (#27962);
+	//       * the ROW-PRESERVED child carries the outer query's WHERE MATCH, which filters the
+	//         preserved input BEFORE the outer join exactly as the WHERE did. `A LEFT JOIN B WHERE
+	//         match(A.x)` becomes `(A INNER JOIN A_ft) LEFT JOIN B`: A's matchers, null-extending B
+	//         where B is absent -- the row-preserving matcher with no partner is kept, not dropped.
+	//         This shape was unsupported and failed with 20105 (#20687).
+	//   - all other join types keep the conservative null-extending-only gate: ANTI/MARK/DEDUP
+	//     (filtering the anti/mark input is not a pure filter) and ASOF/ASOF_LEFT (filtering the
+	//     nearest-match input would change which row is "nearest") stay as before. FULL OUTER does
+	//     not exist in MO (its filters never reach a child scan), so it is not listed.
 	//
-	// Critically, applyIndices runs AFTER determineBuildAndProbeSide + swapJoinChildren, which
-	// can physically swap the children and convert LEFT->RIGHT (IsRightJoin) based on input-size
-	// statistics. So the non-preserved child is NOT a fixed index -- it is whatever
-	// nodeNullExtendsChild reports for the POST-SWAP shape (RIGHT -> child 0; right-swapped
-	// SINGLE -> child 0). Hard-coding child 1 made the fix stats-dependent: a swapped plan left
-	// the match unrewritten and failed with 20105 (#27952). The preserved child is never
-	// null-extending, so it stays untouched (TestFullTextJoinRewriteSkipsOuterJoins).
+	// Because both children of these outer joins are eligible, the rewrite is robust to
+	// determineBuildAndProbeSide + swapJoinChildren, which run BEFORE applyIndices and can physically
+	// swap the children and convert LEFT->RIGHT (IsRightJoin) by input-size stats: whichever physical
+	// index the match lands on is served (the earlier child-1 hard-coding was stats-dependent, #27952).
+	// The loop only rewrites a child that actually carries a fulltext filter (ok=false otherwise).
 	if joinNode == nil {
 		return false, nil
 	}
 	eligible := func(i int) bool {
 		switch joinNode.JoinType {
-		case plan.Node_INNER, plan.Node_SEMI:
+		case plan.Node_INNER, plan.Node_SEMI,
+			plan.Node_LEFT, plan.Node_RIGHT, plan.Node_SINGLE:
 			return true
 		default:
 			return nodeNullExtendsChild(joinNode, i)
@@ -1525,6 +1674,66 @@ func (builder *QueryBuilder) fullTextRewriteContextNodeID(preferredNodeID int32,
 	return preferredNodeID
 }
 
+// fullTextColumnName normalizes the display name carried by a ColRef. The same
+// bound column can appear as `title` in a scan predicate and as `ft.title` in
+// an expression copied through a projection. The binding/position is the
+// authoritative identity; the display name is only the fallback used by the
+// lightweight fulltext expression matcher.
+func fullTextColumnName(name string) string {
+	name = strings.TrimSpace(name)
+	if dot := strings.LastIndexByte(name, '.'); dot >= 0 {
+		name = name[dot+1:]
+	}
+	return strings.ToLower(strings.Trim(name, "`"))
+}
+
+func fullTextColumnRefsEqual(left, right *plan.ColRef) bool {
+	if left == nil || right == nil {
+		return false
+	}
+	// Within one scan binding, a different column position is authoritative.
+	// This guard prevents a real column named `a.body` from being conflated with
+	// the column `body` merely because the display-name fallback strips a
+	// qualifier. Positions may legitimately be remapped across projection
+	// boundaries, so the name fallback remains available when the bindings
+	// differ.
+	if left.GetRelPos() == right.GetRelPos() && left.GetColPos() != right.GetColPos() {
+		return false
+	}
+	leftName, rightName := fullTextColumnName(left.GetName()), fullTextColumnName(right.GetName())
+	if leftName != "" && rightName != "" {
+		return leftName == rightName
+	}
+	return left.GetColPos() == right.GetColPos()
+}
+
+// fullTextMatchArgEqual compares MATCH's pattern and mode as execution
+// expressions, excluding decimal provenance metadata. A decimal comparison
+// may annotate every literal in its expression tree for protocol negotiation;
+// that annotation does not change the pattern or mode of a nested MATCH.
+func fullTextMatchArgEqual(left, right *plan.Expr) bool {
+	if left == nil || right == nil {
+		return left == right
+	}
+	left = DeepCopyExpr(left)
+	right = DeepCopyExpr(right)
+	clearFullTextMatchArgProvenance(left)
+	clearFullTextMatchArgProvenance(right)
+	return exprStructuralEqual(left, right)
+}
+
+func clearFullTextMatchArgProvenance(expr *plan.Expr) {
+	_ = plan.VisitExprTree(expr, func(current *plan.Expr) error {
+		if literal := current.GetLit(); literal != nil {
+			literal.DecimalLiteralRequiresV82 = false
+		}
+		if vector := current.GetVec(); vector != nil {
+			vector.DecimalLiteralRequiresV82 = false
+		}
+		return nil
+	})
+}
+
 func (builder *QueryBuilder) equalsFullTextMatchFunc(fn1 *plan.Function, fn2 *plan.Function) bool {
 
 	nargs1 := len(fn1.Args)
@@ -1536,13 +1745,13 @@ func (builder *QueryBuilder) equalsFullTextMatchFunc(fn1 *plan.Function, fn2 *pl
 
 	// Pattern arguments may be bound parameters, so compare the bound
 	// expression tree instead of dereferencing literal strings.
-	if !exprStructuralEqual(fn1.Args[0], fn2.Args[0]) || !exprStructuralEqual(fn1.Args[1], fn2.Args[1]) {
+	if !fullTextMatchArgEqual(fn1.Args[0], fn2.Args[0]) || !fullTextMatchArgEqual(fn1.Args[1], fn2.Args[1]) {
 		return false
 	}
 
 	// check index parts
 	for i := 2; i < nargs1; i++ {
-		if !strings.EqualFold(fn1.Args[i].GetCol().GetName(), fn2.Args[i].GetCol().GetName()) {
+		if !fullTextColumnRefsEqual(fn1.Args[i].GetCol(), fn2.Args[i].GetCol()) {
 			return false
 		}
 	}
@@ -1569,12 +1778,13 @@ type fulltextServedMatch struct {
 // This asks only about the match, not about its scan node, so it is usable before the build
 // loop has created them.
 //
-// Index parts are compared by column NAME, so two tables with an identically named column
-// would look equal. Sound here because both sides always belong to the SAME scan node: the
-// served set is built from that scan's filters and projections, and the callers sweep only
-// expressions of the project sitting directly over it. (A MATCH on the other side of a join
-// never reaches this code -- the join path passes no project node, and such a query raises
-// 20105 today.) equalsFullTextMatchFunc carries the same assumption for eqmap.
+// Index parts are compared by normalized column display name, with the same-binding column
+// position taking precedence. That keeps qualified/unqualified copies stable across projection
+// remaps while not aliasing two columns with different positions in one scan. Two tables with
+// an identically named column would still look equal here, but both sides belong to the SAME
+// scan node: the served set is built from that scan's filters and projections, and callers sweep
+// only expressions of the project sitting directly over it. The join path uses the
+// binding-aware equalsFullTextMatchFuncSameTable variant instead.
 func (builder *QueryBuilder) isServedFullTextMatch(fn *plan.Function, served []fulltextServedMatch) bool {
 	if fn == nil || fn.Func == nil || fn.Func.ObjName != "fulltext_match" || len(fn.Args) < 2 {
 		return false
@@ -1590,8 +1800,9 @@ func (builder *QueryBuilder) isServedFullTextMatch(fn *plan.Function, served []f
 // equalsFullTextMatchFuncSameTable is equalsFullTextMatchFunc plus the requirement that the
 // index-part columns come from the SAME binding, i.e. the same table instance.
 //
-// equalsFullTextMatchFunc compares index parts by column NAME, which is sound while both sides
-// belong to one scan. Resolving a MATCH across the children of a JOIN breaks that assumption:
+// equalsFullTextMatchFunc compares index parts by normalized display name with a same-binding
+// position guard, which is sound while both sides belong to one scan. Resolving a MATCH across
+// the children of a JOIN breaks that assumption:
 // `match(a.body) against('hello')` and `match(b.body) against('hello')` differ only in the
 // binding tag of their column argument, so by name alone they look like the same question and
 // one table's relevance would be reported for the other's.

@@ -787,7 +787,7 @@ func (node *SetLogserviceSettings) StmtKind() StmtKind {
 func IsIgnoreStatement(statement Statement) bool {
 	switch stmt := statement.(type) {
 	case *Insert:
-		return len(stmt.OnDuplicateUpdate) == 1 && stmt.OnDuplicateUpdate[0] == nil
+		return stmt.IsIgnore()
 	case *Update:
 		return stmt.Ignore
 	case *Load:

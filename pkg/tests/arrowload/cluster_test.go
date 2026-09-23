@@ -84,26 +84,27 @@ func startArrowLoadClusterWithOptions(t testing.TB, options arrowLoadClusterOpti
 	return c
 }
 
-// startArrowLoadClusterWithForceModes provisions one CN for each ownership
-// policy in the fallback test. Both CNs use the same storage and fixture, so
-// the policy comparison pays for one cluster lifecycle while still compiling
-// and executing each mode through an independent public frontend.
-func startArrowLoadClusterWithForceModes(t testing.TB) embed.Cluster {
+// startArrowLoadStaticPolicyCluster combines only the two static policy
+// matrices. Both scenarios exercise independent CN frontends and disjoint
+// databases; neither owns a restart or a mutable process-wide fault boundary.
+// The caller owns this one lifecycle and closes it before another test in the
+// package starts an exclusive fixture.
+func startArrowLoadStaticPolicyCluster(t testing.TB) embed.Cluster {
 	t.Helper()
 	nextCN := 0
 	c, err := embed.StartTestCluster(
-		embed.WithCNCount(2),
+		embed.WithCNCount(4),
 		embed.WithPreStart(func(svc embed.ServiceOperator) {
 			if svc.ServiceType() != metadata.ServiceType_CN {
 				return
 			}
-			forceMaterialize := nextCN == 1
+			cnIndex := nextCN
 			nextCN++
 			svc.Adjust(func(cfg *embed.ServiceConfig) {
-				cfg.CN.Frontend.ArrowLoad.Enabled = true
+				cfg.CN.Frontend.ArrowLoad.Enabled = cnIndex != 2
 				cfg.CN.Frontend.ArrowLoad.S3Enabled = true
-				cfg.CN.Frontend.ArrowLoad.DistributedEnabled = true
-				cfg.CN.Frontend.ArrowLoad.ForceMaterialize = forceMaterialize
+				cfg.CN.Frontend.ArrowLoad.DistributedEnabled = cnIndex != 3
+				cfg.CN.Frontend.ArrowLoad.ForceMaterialize = cnIndex == 1
 			})
 		}))
 	if c != nil {
@@ -111,6 +112,16 @@ func startArrowLoadClusterWithForceModes(t testing.TB) embed.Cluster {
 	}
 	require.NoError(t, err)
 	return c
+}
+
+func requireArrowLoadPolicy(t testing.TB, c embed.Cluster, cnIndex int, enabled, s3Enabled, distributedEnabled bool) {
+	t.Helper()
+	cn, err := c.GetCNService(cnIndex)
+	require.NoError(t, err)
+	arrowLoad := cn.GetServiceConfig().CN.Frontend.ArrowLoad
+	require.Equal(t, enabled, arrowLoad.Enabled, "CN%d Arrow LOAD enabled policy", cnIndex)
+	require.Equal(t, s3Enabled, arrowLoad.S3Enabled, "CN%d Arrow LOAD S3 policy", cnIndex)
+	require.Equal(t, distributedEnabled, arrowLoad.DistributedEnabled, "CN%d Arrow LOAD distributed policy", cnIndex)
 }
 
 // adjustArrowLoadCluster changes only the next CN generation's rollout

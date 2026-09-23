@@ -263,7 +263,7 @@ drop database test02;
 
 
 
--- restore pri table, if afflicated table exists, then skip to restore primary table
+-- explicit restore of a referenced table is unsupported
 drop database if exists test04;
 create database test04;
 use test04;
@@ -282,6 +282,7 @@ create snapshot sp04 for account;
 insert into f1 values (3,20);
 insert into f1 values (4,600);
 
+-- @regex("not supported: can not restore table .* referenced by some foreign key constraint",true)
 restore table test04.f1{snapshot="sp04"};
 
 use test04;
@@ -295,7 +296,7 @@ drop database test04;
 
 
 
--- restore pri table, if afflicated table exists, then skip to restore primary table
+-- explicit restore of a referenced table is unsupported
 -- @session:id=1&user=acc01:test_account&password=111
 drop database if exists test05;
 create database test05;
@@ -315,6 +316,7 @@ create snapshot sp05 for account acc01;
 insert into f1 values (3,20);
 insert into f1 values (4,600);
 
+-- @regex("not supported: can not restore table .* referenced by some foreign key constraint",true)
 restore table test05.f1{snapshot="sp05"};
 
 use test04;

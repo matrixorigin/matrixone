@@ -350,6 +350,35 @@ const (
 // helpers mirror that rendering for information_schema.COLUMNS / desc, matching
 // what SHOW CREATE TABLE produces via plan.FormatColType.
 
+func mysqlVisibleStringFamilyName(typ *types.Type) string {
+	switch typ.Oid {
+	case types.T_text:
+		switch typ.Width {
+		case types.MaxTinyTextLen:
+			return "TINYTEXT"
+		case types.MaxMediumTextLen:
+			return "MEDIUMTEXT"
+		case types.MaxLongTextLen:
+			return "LONGTEXT"
+		default:
+			return "TEXT"
+		}
+	case types.T_blob:
+		switch typ.Width {
+		case types.MaxTinyTextLen:
+			return "TINYBLOB"
+		case types.MaxMediumTextLen:
+			return "MEDIUMBLOB"
+		case types.MaxLongTextLen:
+			return "LONGBLOB"
+		default:
+			return "BLOB"
+		}
+	default:
+		return typ.String()
+	}
+}
+
 // geometryShowDataType renders the DATA_TYPE of a geometry column: the subtype
 // name (POINT, LINESTRING, ...) or the base family when the subtype is generic.
 func geometryShowDataType(typ *types.Type) string {
@@ -418,7 +447,7 @@ func builtInMoShowVisibleBin(parameters []*vector.Vector, result vector.Function
 			if err != nil {
 				return nil, err
 			}
-			ts := typ.String()
+			ts := mysqlVisibleStringFamilyName(typ)
 			// after decimal fix, remove this
 			if typ.Oid.IsDecimal() {
 				ts = "DECIMAL"
@@ -453,6 +482,21 @@ func builtInMoShowVisibleBin(parameters []*vector.Vector, result vector.Function
 					ret = "MEDIUMTEXT"
 				case types.MaxLongTextLen:
 					ret = "LONGTEXT"
+				case 0, types.MaxStringSize:
+					ret = "TEXT"
+				default:
+					ret = fmt.Sprintf("%s(%d)", ts, typ.Width)
+				}
+			} else if typ.Oid == types.T_blob {
+				switch typ.Width {
+				case types.MaxTinyTextLen:
+					ret = "TINYBLOB"
+				case types.MaxMediumTextLen:
+					ret = "MEDIUMBLOB"
+				case types.MaxLongTextLen:
+					ret = "LONGBLOB"
+				case types.MaxStringSize:
+					ret = "BLOB"
 				default:
 					ret = fmt.Sprintf("%s(%d)", ts, typ.Width)
 				}
@@ -997,7 +1041,7 @@ func builtInInternalCharacterSet(parameters []*vector.Vector, result vector.Func
 }
 
 func builtInConcatCheck(_ []overload, inputs []types.Type) checkResult {
-	if len(inputs) > 1 {
+	if len(inputs) > 0 {
 		shouldCast := false
 
 		ret := make([]types.Type, len(inputs))
@@ -3245,6 +3289,11 @@ func getPackFun(v *vector.Vector) (func(v *vector.Vector, idx int, ps *types.Pac
 			val := vector.GetFixedAtNoTypeCheck[types.Decimal128](v, idx)
 			ps.EncodeDecimal128(val)
 		}, nil
+	case types.T_decimal256:
+		return func(v *vector.Vector, idx int, ps *types.Packer) {
+			val := vector.GetFixedAtNoTypeCheck[types.Decimal256](v, idx)
+			ps.EncodeDecimal256(val)
+		}, nil
 	case types.T_uuid:
 		return func(v *vector.Vector, idx int, ps *types.Packer) {
 			val := vector.GetFixedAtNoTypeCheck[types.Uuid](v, idx)
@@ -3649,6 +3698,25 @@ func SerialHelper(v *vector.Vector, bitMap *nulls.Nulls, ps []*types.Packer, isF
 				ps[i].EncodeDecimal128(b)
 			}
 		}
+	case types.T_decimal256:
+		s := vector.ExpandFixedCol[types.Decimal256](v)
+		if hasNull {
+			for i, b := range s {
+				if v.IsNull(uint64(i)) {
+					if isFull {
+						ps[i].EncodeNull()
+					} else {
+						nulls.Add(bitMap, uint64(i))
+					}
+				} else {
+					ps[i].EncodeDecimal256(b)
+				}
+			}
+		} else {
+			for i, b := range s {
+				ps[i].EncodeDecimal256(b)
+			}
+		}
 	case types.T_uuid:
 		s := vector.ExpandFixedCol[types.Uuid](v)
 		if hasNull {
@@ -3745,6 +3813,9 @@ func builtInSerialExtract(parameters []*vector.Vector, result vector.FunctionRes
 		return serialExtractExceptStrings(p1, p2, rs, proc, length, selectList)
 	case types.T_decimal128:
 		rs := vector.MustFunctionResult[types.Decimal128](result)
+		return serialExtractExceptStrings(p1, p2, rs, proc, length, selectList)
+	case types.T_decimal256:
+		rs := vector.MustFunctionResult[types.Decimal256](result)
 		return serialExtractExceptStrings(p1, p2, rs, proc, length, selectList)
 	case types.T_bool:
 		rs := vector.MustFunctionResult[bool](result)

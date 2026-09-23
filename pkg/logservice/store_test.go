@@ -25,6 +25,7 @@ import (
 
 	"github.com/matrixorigin/matrixone/pkg/util/toml"
 
+	"github.com/gogo/protobuf/proto"
 	"github.com/google/uuid"
 	"github.com/lni/dragonboat/v4"
 	"github.com/lni/goutils/leaktest"
@@ -116,6 +117,67 @@ func TestCommandDeliveryLogStoresReadyFiltersExpiredStores(t *testing.T) {
 	live.CommandDeliverySupported = false
 	state.LogState.Stores["log-live"] = live
 	require.False(t, store.commandDeliveryLogStoresReady(state))
+}
+
+func TestViewMetadataAdmissionLogStoresReadyWithProtocolChecksCurrentMembers(t *testing.T) {
+	store := &store{cfg: DefaultConfig()}
+	state := &pb.CheckerState{
+		Tick: 100,
+		LogState: pb.LogState{
+			Shards: map[uint64]pb.LogShardInfo{
+				hakeeper.DefaultHAKeeperShardID: {
+					Replicas:          map[uint64]string{1: "voting"},
+					NonVotingReplicas: map[uint64]string{2: "non-voting"},
+				},
+			},
+			Stores: map[string]pb.LogStoreInfo{
+				// These records are expired, but both UUIDs remain current
+				// HAKeeper members and therefore still receive Raft entries.
+				"voting": {
+					Tick:                                     1,
+					ViewMetadataAdmissionSupported:           true,
+					ViewMetadataAdmissionProtocolV3Supported: false,
+				},
+				"non-voting": {
+					Tick:                                     1,
+					ViewMetadataAdmissionSupported:           true,
+					ViewMetadataAdmissionProtocolV3Supported: false,
+				},
+				// A stale record that is no longer in the shard must not block
+				// activation, regardless of its heartbeat or capabilities.
+				"historical": {Tick: 1},
+			},
+		},
+	}
+	require.False(t, store.viewMetadataAdmissionLogStoresReadyWithProtocol(state, true))
+
+	voting := state.LogState.Stores["voting"]
+	voting.ViewMetadataAdmissionProtocolV3Supported = true
+	state.LogState.Stores["voting"] = voting
+	nonVoting := state.LogState.Stores["non-voting"]
+	nonVoting.ViewMetadataAdmissionProtocolV3Supported = true
+	state.LogState.Stores["non-voting"] = nonVoting
+	require.True(t, store.viewMetadataAdmissionLogStoresReadyWithProtocol(state, true))
+
+	// The same membership check also requires the legacy admission capability.
+	nonVoting.ViewMetadataAdmissionSupported = false
+	state.LogState.Stores["non-voting"] = nonVoting
+	require.False(t, store.viewMetadataAdmissionLogStoresReadyWithProtocol(state, false))
+
+	delete(state.LogState.Shards[hakeeper.DefaultHAKeeperShardID].Replicas, 1)
+	delete(state.LogState.Shards[hakeeper.DefaultHAKeeperShardID].NonVotingReplicas, 2)
+	state.LogState.Shards[hakeeper.DefaultHAKeeperShardID] = pb.LogShardInfo{
+		Replicas: map[uint64]string{1: "historical"},
+	}
+	require.False(t, store.viewMetadataAdmissionLogStoresReadyWithProtocol(state, true),
+		"a current member without a heartbeat must block activation")
+	delete(state.LogState.Shards[hakeeper.DefaultHAKeeperShardID].Replicas, 1)
+	state.LogState.Shards[hakeeper.DefaultHAKeeperShardID] = pb.LogShardInfo{
+		Replicas: map[uint64]string{1: "voting"},
+	}
+	delete(state.LogState.Stores, "historical")
+	require.True(t, store.viewMetadataAdmissionLogStoresReadyWithProtocol(state, true),
+		"a stale non-member record must not participate in the gate")
 }
 
 func TestRaftConfig(t *testing.T) {
@@ -690,33 +752,87 @@ func TestAddHeartbeat(t *testing.T) {
 	fn := func(t *testing.T, store *store) {
 		peers := make(map[uint64]dragonboat.Target)
 		peers[1] = store.id()
-		assert.NoError(t, store.startHAKeeperReplica(1, peers, false))
+		require.NoError(t, store.startHAKeeperReplica(1, peers, false))
+		// Startup is asynchronous. Establish applied readiness separately from
+		// the independent one-second budget for each heartbeat below.
+		func() {
+			ctx, cancel := context.WithTimeout(context.Background(), testIOTimeout)
+			defer cancel()
+			ready, err := store.waitHAKeeperLeaderReady(ctx, testIOTimeout)
+			require.NoError(t, err)
+			require.True(t, ready)
+			_, err = store.getCheckerStateWithContext(ctx)
+			require.NoError(t, err)
+		}()
 
 		m := store.getHeartbeatMessage()
-		ctx, cancel := context.WithTimeout(context.Background(), time.Second)
-		defer cancel()
-		_, err := store.addLogStoreHeartbeat(ctx, m)
-		assert.NoError(t, err)
+		func() {
+			ctx, cancel := context.WithTimeout(context.Background(), time.Second)
+			defer cancel()
+			_, err := store.addLogStoreHeartbeat(ctx, m)
+			require.NoError(t, err)
+		}()
 
 		cnMsg := pb.CNStoreHeartbeat{
-			UUID: store.id(),
+			UUID:           store.id(),
+			ServiceAddress: "cn-service",
 		}
-		_, err = store.addCNStoreHeartbeat(ctx, cnMsg)
-		assert.NoError(t, err)
+		func() {
+			ctx, cancel := context.WithTimeout(context.Background(), time.Second)
+			defer cancel()
+			_, err := store.addCNStoreHeartbeat(ctx, cnMsg)
+			require.NoError(t, err)
+		}()
 
 		tnMsg := pb.TNStoreHeartbeat{
 			UUID:   store.id(),
 			Shards: make([]pb.TNShardInfo, 0),
 		}
 		tnMsg.Shards = append(tnMsg.Shards, pb.TNShardInfo{ShardID: 2, ReplicaID: 3})
-		_, err = store.addTNStoreHeartbeat(ctx, tnMsg)
-		assert.NoError(t, err)
+		func() {
+			ctx, cancel := context.WithTimeout(context.Background(), time.Second)
+			defer cancel()
+			_, err := store.addTNStoreHeartbeat(ctx, tnMsg)
+			require.NoError(t, err)
+		}()
 
 		proxyMsg := pb.ProxyHeartbeat{
-			UUID: store.id(),
+			UUID:          store.id(),
+			ListenAddress: "proxy-listen",
 		}
-		_, err = store.addProxyHeartbeat(ctx, proxyMsg)
-		assert.NoError(t, err)
+		func() {
+			ctx, cancel := context.WithTimeout(context.Background(), time.Second)
+			defer cancel()
+			_, err := store.addProxyHeartbeat(ctx, proxyMsg)
+			require.NoError(t, err)
+		}()
+
+		ctx, cancel := context.WithTimeout(context.Background(), testIOTimeout)
+		defer cancel()
+		state, err := store.getCheckerStateWithContext(ctx)
+		require.NoError(t, err)
+		logInfo, ok := state.LogState.Stores[m.UUID]
+		require.True(t, ok)
+		assert.Equal(t, m.ServiceAddress, logInfo.ServiceAddress)
+		assert.Equal(t, m.RaftAddress, logInfo.RaftAddress)
+		assert.Equal(t, m.GossipAddress, logInfo.GossipAddress)
+		assert.Equal(t, m.StoreIncarnation, logInfo.StoreIncarnation)
+		require.Len(t, logInfo.Replicas, len(m.Replicas))
+		for i := range m.Replicas {
+			// Protobuf round trips normalize empty maps to nil.
+			assert.True(t, proto.Equal(&m.Replicas[i], &logInfo.Replicas[i]), "replica %d", i)
+		}
+		cnInfo, ok := state.CNState.Stores[cnMsg.UUID]
+		require.True(t, ok)
+		assert.Equal(t, cnMsg.ServiceAddress, cnInfo.ServiceAddress)
+		assert.Equal(t, metadata.WorkState_Working, cnInfo.WorkState)
+		tnInfo, ok := state.TNState.Stores[tnMsg.UUID]
+		require.True(t, ok)
+		assert.Equal(t, tnMsg.Shards, tnInfo.Shards)
+		proxyInfo, ok := state.ProxyState.Stores[proxyMsg.UUID]
+		require.True(t, ok)
+		assert.Equal(t, proxyMsg.UUID, proxyInfo.UUID)
+		assert.Equal(t, proxyMsg.ListenAddress, proxyInfo.ListenAddress)
 	}
 	runStoreTest(t, fn)
 }

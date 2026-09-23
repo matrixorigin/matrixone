@@ -22,6 +22,7 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/common/runtime"
 	"github.com/matrixorigin/matrixone/pkg/container/batch"
 	"github.com/matrixorigin/matrixone/pkg/container/types"
+	"github.com/matrixorigin/matrixone/pkg/defines"
 	"github.com/matrixorigin/matrixone/pkg/pb/plan"
 	"github.com/matrixorigin/matrixone/pkg/sql/plan/function"
 	"github.com/matrixorigin/matrixone/pkg/sql/plan/rule"
@@ -224,7 +225,7 @@ func (builder *QueryBuilder) canRemoveProject(parentType plan.Node_NodeType, nod
 	if parentType == plan.Node_DISTINCT || parentType == plan.Node_UNKNOWN {
 		return false
 	}
-	if parentType == plan.Node_UNION || parentType == plan.Node_UNION_ALL {
+	if parentType == plan.Node_UNION || parentType == plan.Node_UNION_ALL || parentType == plan.Node_ADAPTIVE_TOP {
 		return false
 	}
 	if parentType == plan.Node_MINUS || parentType == plan.Node_MINUS_ALL {
@@ -1210,11 +1211,11 @@ func (builder *QueryBuilder) rewriteEffectlessAggToProjectImpl(
 		return
 	}
 	scan := builder.qry.Nodes[node.Children[0]]
-	if scan.NodeType != plan.Node_TABLE_SCAN || scan.TableDef == nil || scan.TableDef.Pkey == nil {
+	if scan.NodeType != plan.Node_TABLE_SCAN || scan.TableDef == nil {
 		return
 	}
-	pkPositions, ok := sqlEqualityCompatiblePrimaryKeyColumnPositions(scan.TableDef)
-	if !ok || len(scan.BindingTags) != 1 {
+	uniqueKeys := sqlEqualityCompatibleScanUniqueKeys(scan.TableDef)
+	if len(uniqueKeys) == 0 || len(scan.BindingTags) != 1 {
 		return
 	}
 	seenBindingTags := map[int32]struct{}{scan.BindingTags[0]: {}}
@@ -1238,17 +1239,29 @@ func (builder *QueryBuilder) rewriteEffectlessAggToProjectImpl(
 			groupCol = append(groupCol, col.ColPos)
 		}
 	}
-	for _, pk := range pkPositions {
-		found := false
-		for _, group := range groupCol {
-			if group == pk {
-				found = true
+	containsCompleteUniqueKey := false
+	for _, key := range uniqueKeys {
+		complete := true
+		for _, keyColumn := range key.columnPositions {
+			found := false
+			for _, group := range groupCol {
+				if group == keyColumn {
+					found = true
+					break
+				}
+			}
+			if !found {
+				complete = false
 				break
 			}
 		}
-		if !found {
-			return
+		if complete {
+			containsCompleteUniqueKey = true
+			break
 		}
+	}
+	if !containsCompleteUniqueKey {
+		return
 	}
 	if limitDemand {
 		for _, expr := range node.GroupBy {
@@ -2328,17 +2341,28 @@ func (builder *QueryBuilder) subqueryPredicatePlanningDisabled() bool {
 }
 
 func (builder *QueryBuilder) parseOptimizeHints() {
-	v, ok := runtime.ServiceRuntime(builder.compCtx.GetProcess().GetService()).GetGlobalVariables("optimizer_hints")
-	if !ok {
-		return
+	applyHints := func(str string) {
+		if len(str) == 0 {
+			return
+		}
+		kvs := strings.Split(str, ",")
+		for i := range kvs {
+			handleOptimizerHints(kvs[i], builder)
+		}
 	}
-	str := v.(string)
-	if len(str) == 0 {
-		return
+	if v, ok := runtime.ServiceRuntime(builder.compCtx.GetProcess().GetService()).GetGlobalVariables("optimizer_hints"); ok {
+		if str, ok := v.(string); ok {
+			applyHints(str)
+		}
 	}
-	kvs := strings.Split(str, ",")
-	for i := range kvs {
-		handleOptimizerHints(kvs[i], builder)
+	// Per-statement optimizer_hints (same key=value format as the global variable) carried on the
+	// execution context by the internal SQL executor (StatementOption.WithOptimizerHints). Applied
+	// AFTER the global so a statement can override it -- e.g. the fulltext2 json probe's fallback/
+	// tail SQL passes applyIndices=1 so its base-table scan does not re-trigger the probe rewrite.
+	if v := builder.compCtx.GetContext().Value(defines.OptimizerHints{}); v != nil {
+		if str, ok := v.(string); ok {
+			applyHints(str)
+		}
 	}
 }
 
