@@ -264,38 +264,19 @@ if [ "${MO_SIRIUS:-}" = "1" ]; then
             exit 1
             ;;
     esac
-    python3 "$repo_root/optools/sirius_sdk.py" prepare \
-        --sdk "$SIRIUS_SDK" \
-        --mode "${SIRIUS_BUILD_MODE:-release}" \
-        --merged-ref "${SIRIUS_MERGED_REF:-}" \
-        --output "$repo_root/.sirius-sdk"
-    if [ ! -f "$repo_root/lib/sirius-provenance.json" ]; then
-        echo "missing packaged Sirius runtime closure: $repo_root/lib/sirius-provenance.json" >&2
+    if [ ! -f "$repo_root/.sirius-sdk/provenance.json" ] ||
+       [ ! -f "$repo_root/lib/sirius-provenance.json" ]; then
+        echo "missing prepared or packaged Sirius runtime closure" >&2
         echo "build the combined binary before running native Sirius tests" >&2
         exit 1
     fi
     python3 "$repo_root/optools/sirius_sdk.py" verify-package \
-        --prepared "$repo_root/.sirius-sdk" --output "$repo_root/lib"
+        --prepared "$repo_root/.sirius-sdk" --output "$repo_root/lib" \
+        --sdk "$SIRIUS_SDK"
     sirius_cc=$(python3 -c 'import json,sys; print(json.load(open(sys.argv[1]))["c_compiler"])' "$SIRIUS_SDK/link.json")
     sirius_cxx=$(python3 -c 'import json,sys; print(json.load(open(sys.argv[1]))["compiler"])' "$SIRIUS_SDK/link.json")
-    canonical_compiler() {
-        case "$1" in
-            */*) compiler_path=$1 ;;
-            *) compiler_path=$(command -v "$1") ;;
-        esac
-        readlink -f "$compiler_path"
-    }
-    compilers_match() {
-        left=$(canonical_compiler "$1")
-        right=$(canonical_compiler "$2")
-        [ "$left" = "$right" ] || cmp -s "$left" "$right"
-    }
-    if [ "${MO_CL_CUDA:-}" = "1" ] &&
-       { ! compilers_match "$sirius_cc" "$MO_GPU_CC" ||
-         ! compilers_match "$sirius_cxx" "$MO_GPU_CXX"; }; then
-        echo "Sirius SDK and MO GPU manifest selected different compilers" >&2
-        exit 1
-    fi
+    # SDK preparation has already bound both compilers to the activated Pixi
+    # prefix. Sirius may use Clang while MO's CUDA objects use Pixi GCC/NVCC.
     CC=$sirius_cc
     CXX=$sirius_cxx
     export CC CXX

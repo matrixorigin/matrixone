@@ -287,6 +287,18 @@ endif
 ifeq ($(strip $(SIRIUS_SDK)),)
 $(error MO_SIRIUS=1 requires a generated SIRIUS_SDK directory)
 endif
+ifneq ($(PIXI_ENVIRONMENT_NAME),mo)
+$(error MO_SIRIUS=1 requires pixi run --frozen -e mo)
+endif
+ifeq ($(strip $(PIXI_PROJECT_ROOT)),)
+$(error MO_SIRIUS=1 requires an activated Sirius Pixi project)
+endif
+ifeq ($(strip $(CONDA_PREFIX)),)
+$(error MO_SIRIUS=1 requires an activated Sirius Pixi prefix)
+endif
+ifneq ($(realpath $(CONDA_PREFIX)),$(realpath $(PIXI_PROJECT_ROOT)/.pixi/envs/mo))
+$(error MO_SIRIUS=1 requires the Sirius mo Pixi prefix)
+endif
 	BUILD_TAGS += sirius
 	# Go's cache does not track external headers/archives behind an unchanged
 	# include path or response file. Bind CGo compilation to the verified SDK.
@@ -311,11 +323,13 @@ endif
 # they emit.
 MO_SERVICE_BUILD=$(GOEXPERIMENT_OPT) $(CGO_OPTS) $(GO) build $(GO_MODULE_MODE) $(TAGS) $(RACE_OPT) $(GOLDFLAGS) $(DEBUG_OPT) $(GOBUILD_OPT) -o $(BIN_NAME) ./cmd/mo-service
 
+define SIRIUS_PREPARE
+$(if $(filter 1,$(MO_SIRIUS)),python3 "$(ROOT_DIR)/optools/sirius_sdk.py" prepare --sdk "$(SIRIUS_SDK)" --mode "$(SIRIUS_BUILD_MODE)" --merged-ref "$(SIRIUS_MERGED_REF)" --output "$(SIRIUS_PREPARED)")
+endef
+
 .PHONY: sirius-sdk-prepare
 sirius-sdk-prepare:
-ifeq ($(MO_SIRIUS),1)
-	python3 "$(ROOT_DIR)/optools/sirius_sdk.py" prepare --sdk "$(SIRIUS_SDK)" --mode "$(SIRIUS_BUILD_MODE)" --merged-ref "$(SIRIUS_MERGED_REF)" --output "$(SIRIUS_PREPARED)"
-endif
+	$(SIRIUS_PREPARE)
 
 define SIRIUS_PACKAGE
 $(if $(filter 1,$(MO_SIRIUS)),python3 "$(ROOT_DIR)/optools/sirius_sdk.py" package --prepared "$(SIRIUS_PREPARED)" --binary "$(ROOT_DIR)/$(BIN_NAME)" --output "$(ROOT_DIR)/lib")
@@ -421,7 +435,8 @@ jieba-dict:
 
 # build mo-service binary
 .PHONY: build
-build: config cgo jieba-dict sirius-sdk-prepare
+build: config cgo jieba-dict
+	$(SIRIUS_PREPARE)
 	$(info [Build binary])
 	$(MO_SERVICE_BUILD)
 	$(SIRIUS_PACKAGE)
@@ -430,9 +445,18 @@ build: config cgo jieba-dict sirius-sdk-prepare
 # is for CI image builds: unlike build, it must not rebuild cgo or thirdparties
 # after the source tree has been copied into the builder.
 .PHONY: build-with-prebuilt-native
-build-with-prebuilt-native: config jieba-dict sirius-sdk-prepare
+build-with-prebuilt-native: config jieba-dict
 	@test -f "$(CGO_DIR)/libmo.so" || test -f "$(CGO_DIR)/libmo.dylib"
 	@test -f "$(THIRDPARTIES_INSTALL_DIR)/lib/libusearch_c.so" || test -f "$(THIRDPARTIES_INSTALL_DIR)/lib/libusearch_c.dylib"
+	@"$(ROOT_DIR)/cgo/mo-stage-native-libs" "$(THIRDPARTIES_INSTALL_DIR)/lib" "$(ROOT_DIR)/lib"
+	@"$(ROOT_DIR)/cgo/mo-stage-native-libs" --file \
+		"$(CGO_DIR)/$(LIBMO_NAME)" "$(ROOT_DIR)/lib/$(LIBMO_NAME)"
+ifeq ($(MO_CL_CUDA),1)
+	@"$(ROOT_DIR)/cgo/mo-stage-native-libs" --file \
+		"$(ROOT_DIR)/cgo/cuda/mocl_kernel64.fatbin" \
+		"$(ROOT_DIR)/mocl_kernel64.fatbin"
+endif
+	$(SIRIUS_PREPARE)
 	$(info [Build binary with prebuilt native libraries])
 	$(MO_SERVICE_BUILD)
 	$(SIRIUS_PACKAGE)

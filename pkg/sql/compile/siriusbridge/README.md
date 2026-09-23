@@ -30,10 +30,11 @@ checks their hashes, and copies them with their original permissions into the
 binary's adjacent `lib/`. It rewrites the binary search path to `$ORIGIN/lib`
 and every reachable staged library's search path to `$ORIGIN`, including MO's
 baseline native libraries supplied by `mo-stage-native-libs`. A combined GPU
-build may add a dependency absent from Sirius's static smoke consumer (notably
-shared `libcudart` or `libcuvs_c`); only a file inside the SDK's validated Pixi
-prefix and exact toolchain artifact map may close that gap. Driver libraries,
-linker stubs, unhashed provider files, and other missing baseline files remain
+build records the actual ELF dependency closure of `libmo` after native
+publication, requires the same active Sirius Pixi prefix, and hashes any
+additional user-space libraries (notably `libcudart` and `libcuvs_c`) before
+Go linking. Packaging rechecks those hashes. Driver libraries, linker stubs,
+libraries outside the shared prefix, and unverified baseline files remain
 errors. Patching uses independent temporary copies, so hardlinks or symlinks
 cannot modify the SDK or original baseline artifacts. It excludes host glibc
 and the NVIDIA driver, verifies that every other resolved dependency is local
@@ -42,14 +43,19 @@ in `lib/sirius-provenance.json`. Neither native compilation nor a container
 rebuild is performed by this packaging step.
 
 The in-process coexistence gate runs with two Sirius GPU streams and invokes
-MO cuVS before and after a native query:
+MO cuVS before and after a native query. Run it under Sirius's frozen `mo`
+Pixi environment, the same provider used to build both native components:
 
 ```sh
-MO_CL_CUDA=1 GPU_TOOLCHAIN_MANIFEST=/absolute/toolchain.json \
-MO_SIRIUS=1 SIRIUS_SDK=/absolute/embedding-sdk \
-SIRIUS_BUILD_MODE=development MO_SIRIUS_TEST_CONFIG=/absolute/integration.yaml \
-.agents/skills/mo-dev/scripts/mo-cgo-test -count=1 -timeout=180s \
-  -tags sirius_integration ./pkg/sql/compile/siriusbridge/
+cd /absolute/sirius
+pixi run --frozen -e mo sh -c '
+  cd /absolute/matrixone
+  MO_CL_CUDA=1 MO_SIRIUS=1 SIRIUS_SDK=/absolute/embedding-sdk \
+    SIRIUS_BUILD_MODE=development MO_SIRIUS_TEST_CONFIG=/absolute/integration.yaml \
+    .agents/skills/mo-dev/scripts/mo-cgo-test \
+    -count=1 -timeout=180s -tags sirius_integration \
+    ./pkg/sql/compile/siriusbridge/
+'
 ```
 
 CN configuration selects `backend="embedded"`, an explicit

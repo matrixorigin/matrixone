@@ -266,8 +266,11 @@ extension or hide unresolved/duplicate symbols with broad linker flags.
 Package pinned shared dependencies beside MO with relocatable runtime paths.
 Pin source commits, compiler/toolchain, architecture and native artifacts in
 build provenance. Use Pixi and incremental host builds; no container rebuilds.
-Combined Sirius/cuVS builds must use a single compatible CUDA/RAPIDS dependency
-set and a lifetime-managed allocator arrangement. No per-query replacement of
+Pixi is the sole GPU dependency provider, and combined Sirius/cuVS builds use
+one activated Sirius `mo` prefix, as defined by the
+[GPU toolchain design v2](sirius-gpu-toolchain.md). They do not exchange a
+separate GPU toolchain manifest. The process needs a lifetime-managed allocator
+arrangement. No per-query replacement of
 process-wide device resources or `cudaDeviceReset` is permitted.
 
 The backend selector is `flight` or `embedded`. Empty selection preserves

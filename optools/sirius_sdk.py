@@ -147,110 +147,175 @@ def elf_soname(path):
     return match[1]
 
 
-def gpu_toolchain(manifest):
-    value = manifest.get("gpu_toolchain_manifest")
-    if value is None:
-        return None
-    path = Path(value)
-    hashes = manifest.get("artifact_sha256", {})
+def pixi_provider(manifest, env=None):
+    """Bind the SDK's verified compilers to the one active Sirius Pixi prefix."""
+    if "gpu_toolchain_manifest" in manifest:
+        raise ValueError("SDK still exports the retired GPU toolchain manifest")
+    env = os.environ if env is None else env
+    project_name, prefix_name = env.get("PIXI_PROJECT_ROOT"), env.get("CONDA_PREFIX")
+    if not project_name or not prefix_name or env.get("PIXI_ENVIRONMENT_NAME") != "mo":
+        raise ValueError("embedded Sirius requires pixi run --frozen -e mo")
+    project, prefix = Path(project_name), Path(prefix_name)
+    if not project.is_absolute() or not prefix.is_absolute():
+        raise ValueError("Pixi project and prefix must be absolute")
+    project, prefix = project.resolve(), prefix.resolve()
     if (
-        not path.is_absolute()
-        or not path.is_file()
-        or hashes.get(str(path)) != digest(path)
+        not prefix.is_dir()
+        or prefix != (project / ".pixi/envs/mo").resolve()
+        or project != Path(manifest["source_directory"]).resolve()
     ):
-        raise ValueError("Sirius SDK GPU toolchain manifest is not verified")
-    data = json.loads(path.read_text())
-    prefix_value = data.get("prefix")
-    if not isinstance(prefix_value, str):
-        raise ValueError("Sirius SDK GPU toolchain provider is incompatible")
-    prefix = Path(prefix_value)
-    if (
-        data.get("schema_version") != 1
-        or data.get("provider") != "pixi"
-        or data.get("platform") != "linux-64"
-        or not prefix.is_absolute()
-        or not prefix.is_dir()
-    ):
-        raise ValueError("Sirius SDK GPU toolchain provider is incompatible")
-    prefix = prefix.resolve()
-    artifacts = data.get("artifact_sha256")
-    if not isinstance(artifacts, dict) or not artifacts:
-        raise ValueError("Sirius SDK GPU toolchain artifacts are missing")
-    normalized = {}
-    for name, expected in artifacts.items():
-        artifact = Path(name)
-        if (
-            not artifact.is_absolute()
-            or not artifact.is_file()
-            or not isinstance(expected, str)
-            or hashes.get(name) != expected
-        ):
-            raise ValueError("Sirius SDK GPU toolchain artifact is not verified: " + name)
-        normalized[str(artifact.resolve())] = expected
-    stubs = []
-    for name in data.get("cuda", {}).get("stub_library_dirs", []):
-        directory = Path(name)
-        if (
-            not directory.is_absolute()
-            or not directory.is_dir()
-            or not directory.resolve().is_relative_to(prefix)
-        ):
-            raise ValueError("Sirius SDK GPU stub directory is invalid")
-        stubs.append(str(directory.resolve()))
-    if not stubs:
-        raise ValueError("Sirius SDK GPU stub directory is missing")
-    roots = data.get("runtime_roots")
-    if not isinstance(roots, list) or not roots:
-        raise ValueError("Sirius SDK GPU runtime roots are missing")
-    runtime_paths = []
-    for name in roots:
-        root_path = Path(name)
-        root = root_path.resolve()
-        if (
-            not root_path.is_absolute()
-            or not root.is_file()
-            or not root.is_relative_to(prefix)
-            or any(root.is_relative_to(Path(stub)) for stub in stubs)
-            or root.name.startswith(("libcuda.so", "libnvidia-"))
-            or str(root) not in normalized
-        ):
-            raise ValueError("Sirius SDK GPU runtime root is unsafe: " + name)
-        runtime_paths.append(root)
-    cudart = None
-    for name in data.get("cuda", {}).get("library_dirs", []):
-        candidate = Path(name) / "libcudart.so"
-        if candidate.is_file():
-            cudart = candidate.resolve()
-            break
-    if cudart is None or str(cudart) not in normalized:
-        raise ValueError("Sirius SDK GPU runtime libcudart is not verified")
-    runtime_paths.append(cudart)
-    runtime_libraries = {}
-    for source in runtime_paths:
-        soname = elf_soname(source)
-        item = {"source": str(source), "sha256": normalized[str(source)]}
-        if soname in runtime_libraries and runtime_libraries[soname] != item:
-            raise ValueError("Sirius SDK GPU runtime SONAME is ambiguous: " + soname)
-        runtime_libraries[soname] = item
+        raise ValueError("Sirius SDK and MatrixOne must use one Pixi project and prefix")
+    for field in ("compiler", "c_compiler"):
+        compiler = Path(manifest[field]).resolve()
+        if not compiler.is_file() or not compiler.is_relative_to(prefix / "bin"):
+            raise ValueError("Sirius SDK compiler is outside the activated Pixi prefix")
+    lockfile = project / "pixi.lock"
+    if not lockfile.is_file():
+        raise ValueError("Sirius Pixi lockfile is missing")
     return {
-        "manifest": str(path),
-        "manifest_sha256": hashes[str(path)],
+        "project": str(project),
+        "environment": "mo",
         "prefix": str(prefix),
-        "stub_library_dirs": stubs,
-        "artifact_sha256": normalized,
-        "runtime_libraries": runtime_libraries,
+        "lockfile": str(lockfile),
+        "lock_sha256": digest(lockfile),
     }
 
 
-def runtime_libraries(text, allow_missing=False):
+def runtime_source(source, prefix):
+    """Accept only user-space ELF under the active provider, never stubs/drivers."""
+    lexical = Path(source)
+    resolved = lexical.resolve()
+    if (
+        not resolved.is_file()
+        or not resolved.is_relative_to(prefix)
+        or "stubs" in lexical.parts
+        or "stubs" in resolved.parts
+        or resolved.name.startswith(("libcuda.so", "libnvidia-"))
+    ):
+        raise ValueError("unsafe Pixi runtime dependency: " + str(source))
+    return resolved
+
+
+def mo_gpu_runtime(provider, sdk_libraries, repo=None):
+    """Record the actual GPU dependency closure selected by the built libmo."""
+    repo = Path(__file__).resolve().parents[1] if repo is None else Path(repo)
+    libmo = repo / "cgo/libmo.so"
+    staged = repo / "lib/libmo.so"
+    if not libmo.is_file() or not staged.is_file() or digest(libmo) != digest(staged):
+        raise ValueError("MO GPU native library is missing or not staged")
+    prefix = Path(provider["prefix"])
+    search = [
+        str(prefix / "lib"),
+        str(prefix / "targets/x86_64-linux/lib"),
+        str(repo / "thirdparties/install/lib"),
+        str(repo / "cgo"),
+        str(repo / "lib"),
+    ]
+    environment = dict(os.environ)
+    environment["LD_LIBRARY_PATH"] = ":".join(
+        search + ([environment["LD_LIBRARY_PATH"]] if environment.get("LD_LIBRARY_PATH") else [])
+    )
+    output = subprocess.run(
+        ["ldd", str(libmo)], check=True, capture_output=True, text=True, env=environment
+    ).stdout
+    libraries = runtime_libraries(output, provider_prefix=prefix)
+    gpu = {}
+    baseline_roots = (repo / "thirdparties/install/lib", repo / "cgo", repo / "lib")
+    for name, path in libraries.items():
+        if path.is_relative_to(prefix):
+            source = runtime_source(path, prefix)
+            if elf_soname(source) != name:
+                raise ValueError("MO GPU runtime SONAME mismatch: " + name)
+            item = {"source": str(source), "sha256": digest(source)}
+            sdk_source = sdk_libraries.get(name)
+            if sdk_source is not None and sdk_source != source:
+                raise ValueError("MO and Sirius select different runtime libraries: " + name)
+            gpu[name] = item
+        elif not any(path.is_relative_to(root) for root in baseline_roots):
+            raise ValueError("MO GPU runtime dependency escapes Pixi and MO: " + name)
+    for required in ("libcuvs.so", "libcuvs_c.so", "libcudart.so.13"):
+        if required not in gpu and required not in sdk_libraries:
+            raise ValueError("MO GPU runtime dependency is missing: " + required)
+    return {"libmo": str(libmo), "libmo_sha256": digest(libmo), "runtime_libraries": gpu}
+
+
+def verify_mo_native_generation(mode, mo_gpu, repo=None):
+    if mode != "release" or mo_gpu is None:
+        return
+    repo = Path(__file__).resolve().parents[1] if repo is None else Path(repo)
+    stamp = repo / "cgo/.mo-native-provenance"
+    if not stamp.is_file():
+        raise ValueError("release MO GPU native provenance is missing")
+    values = dict(
+        line.split("=", 1) for line in stamp.read_text().splitlines() if "=" in line
+    )
+    if (
+        values.get("accelerator") != "gpu"
+        or values.get("goos") != "linux"
+        or values.get("goarch") != "amd64"
+        or values.get("optimization") not in ("release", "debug")
+        or values.get("simsimd") not in ("0", "1")
+    ):
+        raise ValueError("release MO GPU native provenance has the wrong build key")
+    run(
+        str(repo / "cgo/mo-native-provenance"),
+        "verify",
+        str(repo),
+        mo_gpu["libmo"],
+        "linux",
+        "amd64",
+        "gpu",
+        values["optimization"],
+        values["simsimd"],
+    )
+
+
+def verify_pixi_provider(provider):
+    project = Path(provider["project"])
+    prefix = Path(provider["prefix"])
+    lockfile = Path(provider["lockfile"])
+    if (
+        not project.is_dir()
+        or not prefix.is_dir()
+        or not lockfile.is_file()
+        or os.environ.get("PIXI_ENVIRONMENT_NAME") != provider["environment"]
+        or not os.environ.get("PIXI_PROJECT_ROOT")
+        or Path(os.environ["PIXI_PROJECT_ROOT"]).resolve() != project
+        or not os.environ.get("CONDA_PREFIX")
+        or Path(os.environ["CONDA_PREFIX"]).resolve() != prefix
+        or lockfile.resolve() != project / "pixi.lock"
+        or digest(lockfile) != provider["lock_sha256"]
+    ):
+        raise ValueError("Pixi provider changed between SDK preparation and packaging")
+    return prefix
+
+
+def mo_baseline_libraries(repo=None):
+    """Bind only native libraries freshly staged by MO's build owner."""
+    repo = Path(__file__).resolve().parents[1] if repo is None else Path(repo)
+    sources = [repo / "cgo/libmo.so"]
+    sources.extend((repo / "thirdparties/install/lib").glob("*.so*"))
+    baseline = {}
+    for source in sources:
+        staged = repo / "lib" / source.name
+        if source.is_file() and staged.is_file():
+            source_hash = digest(source)
+            if source_hash == digest(staged):
+                baseline[source.name] = {"source": str(source), "sha256": source_hash}
+    return baseline
+
+
+def runtime_libraries(text, allow_missing=False, provider_prefix=None):
     libraries = {}
     # glibc and the NVIDIA driver belong to the host ABI, never the SDK bundle.
     host = re.compile(
-        r"^(?:lib(?:cuda|nvidia-ml)\.so(?:\..*)?|lib(?:c|m|mvec|dl|rt|pthread|resolv|util)\.so(?:\..*)?|ld-linux.*)$"
+        r"^(?:libcuda\.so(?:\..*)?|libnvidia-[A-Za-z0-9_-]+\.so(?:\..*)?|lib(?:c|m|mvec|dl|rt|pthread|resolv|util)\.so(?:\..*)?|ld-linux.*)$"
     )
     for line in text.splitlines():
         if "not found" in line:
             missing = re.match(r"\s*(\S+)\s+=>\s+not found\s*$", line)
+            if missing and host.fullmatch(missing[1]):
+                continue
             if (
                 allow_missing
                 and missing
@@ -270,6 +335,15 @@ def runtime_libraries(text, allow_missing=False):
             continue
         name, path = match.groups()
         if host.fullmatch(Path(name).name):
+            if (
+                provider_prefix is not None
+                and name.startswith(("libcuda.so", "libnvidia-"))
+                and (
+                    Path(path).resolve().is_relative_to(provider_prefix)
+                    or "stubs" in Path(path).parts
+                )
+            ):
+                raise ValueError("NVIDIA driver resolved from the Pixi build provider")
             continue
         if Path(name).name != name:
             raise ValueError("dependency SONAME is not relocatable: " + name)
@@ -279,13 +353,20 @@ def runtime_libraries(text, allow_missing=False):
 
 def prepare(args):
     manifest = validate(args.sdk, args.mode, args.merged_ref)
-    toolchain = gpu_toolchain(manifest)
-    libraries = runtime_libraries(run("ldd", manifest["consumer"]))
+    provider = pixi_provider(manifest)
+    prefix = Path(provider["prefix"])
+    libraries = runtime_libraries(run("ldd", manifest["consumer"]), provider_prefix=prefix)
+    libraries = {
+        name: runtime_source(path, prefix) for name, path in libraries.items()
+    }
+    mo_gpu = mo_gpu_runtime(provider, libraries) if os.environ.get("MO_CL_CUDA") == "1" else None
+    verify_mo_native_generation(args.mode, mo_gpu)
     args.output.mkdir(parents=True, exist_ok=True)
     flags = relocatable_flags(manifest["link_arguments"])
     (args.output / "link.rsp").write_text(response(flags))
     provenance = {
         "schema_version": 1,
+        "sdk": str(args.sdk.resolve()),
         "mode": args.mode,
         "source_revision": manifest["source_revision"],
         "compiler": manifest["compiler"],
@@ -297,7 +378,9 @@ def prepare(args):
             name: {"source": str(path), "sha256": digest(path)}
             for name, path in libraries.items()
         },
-        "gpu_toolchain": toolchain,
+        "pixi_provider": provider,
+        "mo_gpu": mo_gpu,
+        "mo_baseline": mo_baseline_libraries(),
     }
     (args.output / "provenance.json").write_text(
         json.dumps(provenance, indent=2) + "\n"
@@ -330,6 +413,17 @@ def package(args):
     if output != binary.parent / "lib":
         raise ValueError("Sirius package output must be binary.parent/lib")
     provenance = json.loads((args.prepared / "provenance.json").read_text())
+    prefix = verify_pixi_provider(provenance["pixi_provider"])
+    mo_gpu = provenance.get("mo_gpu")
+    gpu_libraries = mo_gpu["runtime_libraries"] if mo_gpu is not None else {}
+    if mo_gpu is not None:
+        expected = mo_gpu["libmo_sha256"]
+        if digest(mo_gpu["libmo"]) != expected or digest(output / "libmo.so") != expected:
+            raise ValueError("MO GPU native library changed while linking")
+        for name, item in gpu_libraries.items():
+            source = runtime_source(item["source"], prefix)
+            if Path(name).name != name or digest(source) != item["sha256"]:
+                raise ValueError("MO GPU runtime library changed while linking: " + name)
     # Recheck every artifact after Go linking, closing the prepare/link/stage gap.
     for name, expected in provenance["artifact_sha256"].items():
         if digest(name) != expected:
@@ -341,6 +435,15 @@ def package(args):
             )
         if digest(item["source"]) != item["sha256"]:
             raise ValueError("Sirius runtime library changed while linking: " + name)
+    for name, item in provenance["mo_baseline"].items():
+        staged = output / name
+        if (
+            Path(name).name != name
+            or digest(item["source"]) != item["sha256"]
+            or not staged.is_file()
+            or digest(staged) != item["sha256"]
+        ):
+            raise ValueError("MO baseline native library changed while linking: " + name)
     output.mkdir(parents=True, exist_ok=True)
     provenance["linked_binary_sha256"] = digest(binary)
     for name, item in provenance["runtime_libraries"].items():
@@ -355,57 +458,31 @@ def package(args):
     # transitive dependency). Never copy such baseline inputs from that path:
     # mo-stage-native-libs must already have supplied their local counterparts.
     while True:
-        resolved = runtime_libraries(run("ldd", str(binary)), allow_missing=True)
+        resolved = runtime_libraries(
+            run("ldd", str(binary)), allow_missing=True, provider_prefix=prefix
+        )
         pending = set(resolved) - patched
         if not pending:
             break
         for name in sorted(pending):
             staged = output / name
-            toolchain = provenance.get("gpu_toolchain")
-            provider = (
-                toolchain.get("runtime_libraries", {}).get(name)
-                if toolchain is not None
-                else None
-            )
-            if provider is not None:
-                source = Path(provider["source"]).resolve()
-                expected = provider["sha256"]
-                prefix = Path(toolchain["prefix"])
-                stubs = [Path(path) for path in toolchain["stub_library_dirs"]]
-                if (
-                    not source.is_relative_to(prefix)
-                    or any(source.is_relative_to(stub) for stub in stubs)
-                    or source.name.startswith(("libcuda.so", "libnvidia-"))
-                    or toolchain["artifact_sha256"].get(str(source)) != expected
-                    or digest(source) != expected
-                ):
-                    raise ValueError("unverified MO GPU runtime dependency: " + name)
-                gpu_runtime_hashes[name] = expected
+            gpu = gpu_libraries.get(name)
+            if gpu is not None:
+                source = runtime_source(gpu["source"], prefix)
+                if digest(source) != gpu["sha256"]:
+                    raise ValueError("MO GPU runtime library changed while packaging: " + name)
+                gpu_runtime_hashes[name] = gpu["sha256"]
                 stage_rpath(source, staged, "$ORIGIN")
             elif not staged.is_file():
-                source = resolved[name]
-                if toolchain is None or source is None:
-                    raise ValueError("missing staged MO runtime dependency: " + name)
-                source = source.resolve()
-                prefix = Path(toolchain["prefix"])
-                stubs = [Path(path) for path in toolchain["stub_library_dirs"]]
-                expected = toolchain["artifact_sha256"].get(str(source))
-                if (
-                    not source.is_relative_to(prefix)
-                    or any(source.is_relative_to(stub) for stub in stubs)
-                    or source.name.startswith(("libcuda.so", "libnvidia-"))
-                    or expected is None
-                    or digest(source) != expected
-                ):
-                    raise ValueError("unverified MO GPU runtime dependency: " + name)
-                gpu_runtime_hashes[name] = expected
-                stage_rpath(source, staged, "$ORIGIN")
+                raise ValueError("missing staged MO runtime dependency: " + name)
             else:
+                if name not in provenance["mo_baseline"]:
+                    raise ValueError("unverified staged MO runtime dependency: " + name)
                 baseline_hashes[name] = digest(staged)
                 stage_rpath(staged, staged, "$ORIGIN")
             patched.add(name)
 
-    resolved = runtime_libraries(run("ldd", str(binary)))
+    resolved = runtime_libraries(run("ldd", str(binary)), provider_prefix=prefix)
     for name, actual in resolved.items():
         if actual.parent != output or actual != (output / name).resolve():
             raise ValueError("MO resolved a non-local packaged dependency: " + name)
@@ -422,6 +499,27 @@ def package(args):
 
 def verify_package(args):
     prepared = json.loads((args.prepared / "provenance.json").read_text())
+    sdk = Path(prepared["sdk"])
+    if getattr(args, "sdk", None) is not None and args.sdk.resolve() != sdk:
+        raise ValueError("selected Sirius SDK differs from the packaged SDK")
+    validate(sdk, prepared["mode"], prepared["merged_ref"])
+    if digest(sdk / "link.json") != prepared["sdk_manifest_sha256"]:
+        raise ValueError("Sirius SDK changed after package preparation")
+    verify_pixi_provider(prepared["pixi_provider"])
+    for name, expected in prepared["artifact_sha256"].items():
+        if digest(name) != expected:
+            raise ValueError("Sirius SDK artifact changed after packaging: " + name)
+    for name, item in prepared["mo_baseline"].items():
+        if digest(item["source"]) != item["sha256"]:
+            raise ValueError("MO baseline native library changed after packaging: " + name)
+    mo_gpu = prepared.get("mo_gpu")
+    if mo_gpu is not None:
+        if digest(mo_gpu["libmo"]) != mo_gpu["libmo_sha256"]:
+            raise ValueError("MO GPU native library changed after packaging")
+        prefix = Path(prepared["pixi_provider"]["prefix"])
+        for name, item in mo_gpu["runtime_libraries"].items():
+            if digest(runtime_source(item["source"], prefix)) != item["sha256"]:
+                raise ValueError("MO GPU runtime library changed after packaging: " + name)
     packaged = json.loads((args.output / "sirius-provenance.json").read_text())
     for key, value in prepared.items():
         if packaged.get(key) != value:
@@ -452,6 +550,7 @@ def main():
     p = commands.add_parser("verify-package")
     p.add_argument("--prepared", type=Path, required=True)
     p.add_argument("--output", type=Path, required=True)
+    p.add_argument("--sdk", type=Path)
     p.set_defaults(action=verify_package)
     args = parser.parse_args()
     args.action(args)

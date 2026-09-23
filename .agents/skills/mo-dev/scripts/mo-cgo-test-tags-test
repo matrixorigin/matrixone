@@ -83,6 +83,7 @@ cat > "$fake/sdk/link.json" <<EOF
 {"c_compiler":"$real_cc","compiler":"$real_cxx"}
 EOF
 : > "$fake/.sirius-sdk/link.rsp"
+: > "$fake/.sirius-sdk/provenance.json"
 : > "$fake/lib/sirius-provenance.json"
 
 export PIXI_PROJECT_ROOT="$work/pixi-project"
