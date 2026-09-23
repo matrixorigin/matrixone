@@ -1218,11 +1218,11 @@ func (builder *QueryBuilder) rewriteEffectlessAggToProjectImpl(
 		return
 	}
 	scan := builder.qry.Nodes[node.Children[0]]
-	if scan.NodeType != plan.Node_TABLE_SCAN || scan.TableDef == nil || scan.TableDef.Pkey == nil {
+	if scan.NodeType != plan.Node_TABLE_SCAN || scan.TableDef == nil {
 		return
 	}
-	pkPositions, ok := sqlEqualityCompatiblePrimaryKeyColumnPositions(scan.TableDef)
-	if !ok || len(scan.BindingTags) != 1 {
+	uniqueKeys := sqlEqualityCompatibleScanUniqueKeys(scan.TableDef)
+	if len(uniqueKeys) == 0 || len(scan.BindingTags) != 1 {
 		return
 	}
 	seenBindingTags := map[int32]struct{}{scan.BindingTags[0]: {}}
@@ -1246,17 +1246,29 @@ func (builder *QueryBuilder) rewriteEffectlessAggToProjectImpl(
 			groupCol = append(groupCol, col.ColPos)
 		}
 	}
-	for _, pk := range pkPositions {
-		found := false
-		for _, group := range groupCol {
-			if group == pk {
-				found = true
+	containsCompleteUniqueKey := false
+	for _, key := range uniqueKeys {
+		complete := true
+		for _, keyColumn := range key.columnPositions {
+			found := false
+			for _, group := range groupCol {
+				if group == keyColumn {
+					found = true
+					break
+				}
+			}
+			if !found {
+				complete = false
 				break
 			}
 		}
-		if !found {
-			return
+		if complete {
+			containsCompleteUniqueKey = true
+			break
 		}
+	}
+	if !containsCompleteUniqueKey {
+		return
 	}
 	if limitDemand {
 		for _, expr := range node.GroupBy {

@@ -869,6 +869,15 @@ func (builder *QueryBuilder) pushdownFilters(nodeID int32, filters []*plan.Expr,
 		node.Children[1] = childID
 
 	case plan.Node_UNION, plan.Node_UNION_ALL, plan.Node_MINUS, plan.Node_MINUS_ALL, plan.Node_INTERSECT, plan.Node_INTERSECT_ALL:
+		// Physical equality keys can identify distinct visible values (for
+		// example PAD SPACE 'a' and 'a '). An outer byte-sensitive predicate
+		// must not change which rows match, cancel or survive deduplication.
+		// Until equivalence-preservation is proven, keep such predicates above
+		// the set operation, while still optimizing each branch's own filters.
+		if node.NodeType != plan.Node_UNION_ALL && len(node.PhysicalEqualityKeyList) > 0 {
+			cantPushdown = append(cantPushdown, filters...)
+			filters = nil
+		}
 		// Record middle: processing UNION/MINUS/INTERSECT node
 		builder.optimizationHistory = append(builder.optimizationHistory,
 			fmt.Sprintf("pushdownFilters:middle (nodeID: %d, %s, filters: %d)", nodeID, node.NodeType, len(filters)))

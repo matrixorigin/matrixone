@@ -4463,7 +4463,7 @@ func (builder *QueryBuilder) buildUnionWithResultLen(
 		var keyList []*plan.Expr
 		var err error
 		switch nodeType {
-		case plan.Node_UNION, plan.Node_INTERSECT, plan.Node_INTERSECT_ALL, plan.Node_MINUS:
+		case plan.Node_UNION, plan.Node_INTERSECT, plan.Node_INTERSECT_ALL, plan.Node_MINUS, plan.Node_MINUS_ALL:
 			keyList, err = getSetOperationKeyList(projectList)
 			if err != nil {
 				return 0, err

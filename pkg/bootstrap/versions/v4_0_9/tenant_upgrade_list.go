@@ -27,7 +27,7 @@ var tenantUpgEntries = []versions.UpgradeEntry{upgradeInformationSchemaColumns()
 
 func upgradeInformationSchemaColumns() versions.UpgradeEntry {
 	return versions.UpgradeEntry{Schema: sysview.InformationDBConst, TableName: "COLUMNS", UpgType: versions.MODIFY_VIEW,
-		UpgSql: sysview.InformationSchemaColumnsDDL, RequiredProtocolVersion: defines.MORPCVersion93,
+		UpgSql: sysview.InformationSchemaColumnsDDL, RequiredProtocolVersion: defines.MORPCVersion94,
 		CheckFunc: func(txn executor.TxnExecutor, accountID uint32) (bool, error) {
 			exists, definition, err := versions.CheckViewDefinition(txn, accountID, sysview.InformationDBConst, "COLUMNS")
 			if err == nil && !exists {
