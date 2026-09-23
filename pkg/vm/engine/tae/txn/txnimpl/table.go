@@ -57,6 +57,21 @@ const (
 	TransferSinkerMemorySizeThreshold = common.Const1MBytes * 50
 )
 
+func observePrePrepareDedupStep(isTombstone bool, step string, start time.Time) {
+	observePrePrepareDedupStepDuration(isTombstone, step, time.Since(start))
+}
+
+func observePrePrepareDedupStepDuration(isTombstone bool, step string, duration time.Duration) {
+	if duration <= 0 {
+		return
+	}
+	typ := "data"
+	if isTombstone {
+		typ = "tombstone"
+	}
+	v2.TxnTNPrePrepareDeduplicateStepDurationHistogram.WithLabelValues(typ, step).Observe(duration.Seconds())
+}
+
 // debugSkipFreezePhaseTransfer is a test-only flag. When enabled,
 // TransferDeletes is skipped during the Freeze phase so that the
 // PrePrepare phase is the only transfer pass. This makes vector
@@ -1259,26 +1274,18 @@ func (tbl *txnTable) GetByFilter(
 	}
 	defer candidates.Close()
 	if candidates.HasCandidate() {
-		err = tbl.findDeletesForCandidates(tbl.store.ctx, candidates, types.TS{}, types.MaxTs())
+		err = tbl.findDeletesForCandidates(
+			tbl.store.ctx,
+			candidates,
+			types.TS{},
+			tbl.store.txn.GetStartTS(),
+		)
 		if err != nil && !moerr.IsMoErrCode(err, moerr.ErrTxnWWConflict) {
 			return
 		}
 	}
 	rowIDs := candidates.Merge(tbl.store.rt.VectorPool.Small)
 	defer rowIDs.Close()
-	if rowIDs.IsNull(0) {
-		err = moerr.NewNotFoundNoCtx()
-		return
-	}
-	err = tbl.findDeletes(
-		tbl.store.ctx,
-		rowIDs,
-		types.TS{},
-		tbl.store.txn.GetStartTS(),
-	)
-	if err != nil && !moerr.IsMoErrCode(err, moerr.ErrTxnWWConflict) {
-		return
-	}
 	if rowIDs.IsNull(0) {
 		err = moerr.NewNotFoundNoCtx()
 		return
@@ -1423,12 +1430,14 @@ func (tbl *txnTable) PrePrepareDedup(ctx context.Context, isTombstone bool, phas
 	var zm index.ZM
 	dedupType := tbl.store.txn.GetDedupType()
 	if !dedupType.SkipSourcePersisted() {
+		stepStart := time.Now()
 		for _, stats := range baseTable.tableSpace.stats {
 			err = tbl.DoPrecommitDedupByNode(ctx, stats, isTombstone)
 			if err != nil {
 				return
 			}
 		}
+		observePrePrepareDedupStep(isTombstone, "source_persisted", stepStart)
 	}
 
 	// DoPrecommitDedupByPK checks for data committed by other transactions
@@ -1444,10 +1453,13 @@ func (tbl *txnTable) PrePrepareDedup(ctx context.Context, isTombstone bool, phas
 	}
 	node := baseTable.tableSpace.node
 	pkColPos := baseTable.schema.GetSingleSortKeyIdx()
+	stepStart := time.Now()
 	pkVec, err := node.WindowColumn(0, node.Rows(), pkColPos)
 	if err != nil {
 		return err
 	}
+	observePrePrepareDedupStep(isTombstone, "build_pk_vector", stepStart)
+	stepStart = time.Now()
 	if zm.Valid() {
 		zm.ResetMinMax()
 	} else {
@@ -1458,10 +1470,13 @@ func (tbl *txnTable) PrePrepareDedup(ctx context.Context, isTombstone bool, phas
 		pkVec.Close()
 		return err
 	}
+	observePrePrepareDedupStep(isTombstone, "build_pk_zonemap", stepStart)
+	stepStart = time.Now()
 	if err = tbl.DoPrecommitDedupByPK(pkVec, zm, isTombstone, phase, ts); err != nil {
 		pkVec.Close()
 		return err
 	}
+	observePrePrepareDedupStep(isTombstone, "pk_dedup", stepStart)
 	pkVec.Close()
 	baseTable.dedupTS = ts
 	return
@@ -1601,7 +1616,8 @@ retryScan:
 	for {
 		tbl.entry.WaitTombstoneObjectCommitted(to)
 		snapshot := tbl.entry.MakeTombstoneObjectSnapshot()
-		err = foreachIncrementalObject(snapshot, from, to, func(obj *catalog.ObjectEntry) error {
+		var scanStats incrementalObjectScanStats
+		scanStats, err = foreachIncrementalObjectWithStats(snapshot, true, from, to, tbl.entry.ID, func(obj *catalog.ObjectEntry) error {
 			objData := obj.GetObjectData()
 			if objData == nil {
 				panic(fmt.Sprintf("logic error, object %v", obj.StringWithLevel(3)))
@@ -1625,6 +1641,7 @@ retryScan:
 				common.WorkspaceAllocator,
 			)
 		})
+		observeIncrementalObjectScanStats(true, scanStats)
 		if err != nil {
 			if moerr.IsMoErrCode(err, moerr.ErrTxnWWConflict) &&
 				tbl.waitTombstoneRowsCommittedBefore(to, rowIDs, keysZM) {
@@ -1660,17 +1677,22 @@ func (tbl *txnTable) DoPrecommitDedupByPK(
 			base.dedupTS = tbl.store.txn.GetStartTS()
 		}
 		var rowIDs containers.Vector
+		stepStart := time.Now()
 		rowIDs, err = base.incrementalGetRowsByPK(tbl.store.ctx, pks, base.dedupTS.Next(), ts, phase == txnif.PrePreparePhase)
+		observePrePrepareDedupStep(isTombstone, "incremental_get_rows", stepStart)
 		if err != nil {
 			return
 		}
 		defer rowIDs.Close()
 		if !isTombstone {
+			stepStart = time.Now()
 			err = tbl.findDeletes(tbl.store.ctx, rowIDs, base.dedupTS.Next(), now)
+			observePrePrepareDedupStep(isTombstone, "find_deletes", stepStart)
 			if err != nil {
 				return
 			}
 		}
+		stepStart = time.Now()
 		for i := 0; i < rowIDs.Length(); i++ {
 			var colName string
 			if isTombstone {
@@ -1691,6 +1713,7 @@ func (tbl *txnTable) DoPrecommitDedupByPK(
 				return
 			}
 		}
+		observePrePrepareDedupStep(isTombstone, "check_duplicate_rows", stepStart)
 	})
 	return
 }

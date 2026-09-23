@@ -74,12 +74,19 @@ func (appender *objectAppender) PrepareAppend(
 	rows uint32,
 	txn txnif.AsyncTxn) (node txnif.AppendNode, created bool, n uint32, err error) {
 	appender.obj.appendMVCC.LockForAppend()
-	defer appender.obj.appendMVCC.UnlockForAppend()
+	sealed := false
+	defer func() {
+		appender.obj.appendMVCC.UnlockForAppend()
+		if sealed {
+			appender.obj.appendMVCC.NotifyFinalizedMax()
+		}
+	}()
 	start := appender.obj.reserved.Load()
 	left := appender.obj.meta.Load().GetSchema().Extra.BlockMaxRows - start
 	if left == 0 {
 		appender.obj.frozen.Store(true)
 		appender.obj.appendMVCC.SealLocked()
+		sealed = true
 		return
 	}
 	if rows > left {
@@ -102,6 +109,7 @@ func (appender *objectAppender) PrepareAppend(
 		// allocator can race final max-commit publication.
 		appender.obj.frozen.Store(true)
 		appender.obj.appendMVCC.SealLocked()
+		sealed = true
 	}
 	return
 }

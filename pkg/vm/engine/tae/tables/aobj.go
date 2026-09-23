@@ -54,6 +54,7 @@ func newAObject(
 		// A recovered persisted object does not carry the complete in-memory
 		// AppendNode history. Its max commit bound must remain unknown.
 		obj.appendMVCC.MarkAppendHistoryIncomplete()
+		meta.MarkAppendMaxPending()
 		pnode := newPersistedNode(obj.baseObject)
 		node := NewNode(pnode)
 		node.Ref()
@@ -64,6 +65,9 @@ func newAObject(
 		node := NewNode(mnode)
 		node.Ref()
 		obj.node.Store(node)
+		// A live aobject has no safe prefix bound until it is sealed and all
+		// of its AppendNodes are terminal.
+		meta.MarkAppendMaxPending()
 	}
 	rows, _ := obj.Rows()
 	obj.reserved.Store(uint32(rows))

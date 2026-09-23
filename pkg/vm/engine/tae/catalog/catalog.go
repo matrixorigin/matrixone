@@ -434,4 +434,16 @@ func (catalog *Catalog) RecurLoop(processor Processor) (err error) {
 	return err
 }
 
+// MarkRestartSealedObjectBookmarks publishes the restart-time boundary for
+// recovered frozen appendable objects before normal write traffic resumes.
+func (catalog *Catalog) MarkRestartSealedObjectBookmarks(restartTS types.TS) error {
+	processor := &LoopProcessor{
+		TableFn: func(table *TableEntry) error {
+			table.MarkRestartSealedObjectBookmarks(restartTS)
+			return nil
+		},
+	}
+	return catalog.RecurLoop(processor)
+}
+
 //#endregion
