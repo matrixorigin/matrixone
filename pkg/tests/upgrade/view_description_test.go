@@ -25,15 +25,21 @@ import (
 	"github.com/stretchr/testify/require"
 )
 
+func openViewDescriptionDB(t *testing.T, port int64, user string) *sql.DB {
+	t.Helper()
+	db, err := sql.Open("mysql", fmt.Sprintf("%s@tcp(127.0.0.1:%d)/", user, port))
+	require.NoError(t, err)
+	t.Cleanup(func() { require.NoError(t, db.Close()) })
+	return db
+}
+
 func TestViewDescriptionPublicSQL(t *testing.T) {
 	embed.RunSingleCNBaseClusterTests(t, func(cluster embed.Cluster) {
 		ctx, cancel := context.WithTimeout(context.Background(), 90*time.Second)
 		defer cancel()
 		cn, err := cluster.GetCNService(0)
 		require.NoError(t, err)
-		db, err := sql.Open("mysql", fmt.Sprintf("dump:111@tcp(127.0.0.1:%d)/", cn.GetServiceConfig().CN.Frontend.Port))
-		require.NoError(t, err)
-		defer func() { require.NoError(t, db.Close()) }()
+		db := openViewDescriptionDB(t, cn.GetServiceConfig().CN.Frontend.Port, "dump:111")
 		exec := func(q string) { t.Helper(); _, err := db.ExecContext(ctx, q); require.NoError(t, err, q) }
 		exec("create database view_description_test")
 		defer exec("drop database view_description_test")
@@ -88,6 +94,11 @@ func TestViewDescriptionPublicSQL(t *testing.T) {
 		var width int
 		require.NoError(t, db.QueryRowContext(ctx, "select character_maximum_length from information_schema.columns where table_schema='view_description_test' and table_name='v' and column_name='label'").Scan(&width))
 		require.Equal(t, 60, width)
+		prepared, err := db.PrepareContext(ctx, "select character_maximum_length from information_schema.columns where table_schema='view_description_test' and table_name='v' and column_name='label'")
+		require.NoError(t, err)
+		defer func() { require.NoError(t, prepared.Close()) }()
+		require.NoError(t, prepared.QueryRowContext(ctx).Scan(&width))
+		require.Equal(t, 60, width)
 		exec("drop table view_description_test.src")
 		invalid, err := db.QueryContext(ctx, "desc view_description_test.v")
 		if invalid != nil {
@@ -101,5 +112,73 @@ func TestViewDescriptionPublicSQL(t *testing.T) {
 		require.Equal(t, "11", repaired[1][4].String)
 		require.NoError(t, db.QueryRowContext(ctx, "select character_maximum_length from information_schema.columns where table_schema='view_description_test' and table_name='v' and column_name='label'").Scan(&width))
 		require.Equal(t, 90, width)
+		require.NoError(t, prepared.QueryRowContext(ctx).Scan(&width))
+		require.Equal(t, 90, width, "prepared metadata reads must rebind the View")
+	})
+}
+
+func TestViewDescriptionPrivileges(t *testing.T) {
+	embed.RunSingleCNBaseClusterTests(t, func(cluster embed.Cluster) {
+		ctx, cancel := context.WithTimeout(context.Background(), 90*time.Second)
+		defer cancel()
+		cn, err := cluster.GetCNService(0)
+		require.NoError(t, err)
+		port := cn.GetServiceConfig().CN.Frontend.Port
+		admin := openViewDescriptionDB(t, port, "dump:111")
+		exec := func(q string) { t.Helper(); _, err := admin.ExecContext(ctx, q); require.NoError(t, err, q) }
+		exec("create database view_description_priv")
+		defer exec("drop database view_description_priv")
+		exec("create table view_description_priv.src (x varchar(60))")
+		exec("create view view_description_priv.v as select x from view_description_priv.src")
+		exec("create user view_description_reader identified by 'reader_pass'")
+		defer exec("drop user view_description_reader")
+		exec("create role view_description_role")
+		defer exec("drop role view_description_role")
+		exec("grant view_description_role to view_description_reader")
+		exec("grant connect on account * to view_description_role")
+		reader := openViewDescriptionDB(t, port, "view_description_reader:reader_pass")
+		_, err = reader.ExecContext(ctx, "set role view_description_role")
+		require.NoError(t, err)
+		_, err = reader.ExecContext(ctx, "use view_description_priv")
+		require.NoError(t, err)
+		var width int
+		err = reader.QueryRowContext(ctx, "select character_maximum_length from information_schema.columns where table_schema='view_description_priv' and table_name='v'").Scan(&width)
+		require.Error(t, err, "an invisible View must not be bound or exposed")
+		exec("grant show tables on database view_description_priv to view_description_role")
+		require.NoError(t, reader.QueryRowContext(ctx, "select character_maximum_length from information_schema.columns where table_schema='view_description_priv' and table_name='v'").Scan(&width))
+		require.Equal(t, 60, width)
+		rows, err := reader.QueryContext(ctx, "select * from view_description_priv.src")
+		if rows != nil {
+			require.NoError(t, rows.Close())
+		}
+		require.Error(t, err, "metadata visibility must not grant source-table SELECT")
+	})
+}
+
+func TestViewDescriptionSubscription(t *testing.T) {
+	embed.RunSingleCNBaseClusterTests(t, func(cluster embed.Cluster) {
+		ctx, cancel := context.WithTimeout(context.Background(), 90*time.Second)
+		defer cancel()
+		cn, err := cluster.GetCNService(0)
+		require.NoError(t, err)
+		port := cn.GetServiceConfig().CN.Frontend.Port
+		sys := openViewDescriptionDB(t, port, "dump:111")
+		exec := func(q string) { t.Helper(); _, err := sys.ExecContext(ctx, q); require.NoError(t, err, q) }
+		exec("create account view_description_sub admin_name='admin' identified by '111'")
+		defer exec("drop account view_description_sub")
+		exec("create database view_description_pub")
+		defer exec("drop database view_description_pub")
+		exec("create table view_description_pub.src (x varchar(5))")
+		exec("create view view_description_pub.v as select x from view_description_pub.src")
+		exec("create publication view_description_publication database view_description_pub account view_description_sub")
+		defer exec("drop publication view_description_publication")
+		subscriber := openViewDescriptionDB(t, port, "view_description_sub#admin#accountadmin:111")
+		_, err = subscriber.ExecContext(ctx, "create database subscribed from sys publication view_description_publication")
+		require.NoError(t, err)
+		defer func() { _, err := subscriber.ExecContext(ctx, "drop database subscribed"); require.NoError(t, err) }()
+		exec("alter table view_description_pub.src modify column x varchar(60)")
+		var width int
+		require.NoError(t, subscriber.QueryRowContext(ctx, "select character_maximum_length from information_schema.columns where table_schema='subscribed' and table_name='v' and column_name='x'").Scan(&width))
+		require.Equal(t, 60, width)
 	})
 }

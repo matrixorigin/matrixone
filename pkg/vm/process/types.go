@@ -164,9 +164,12 @@ type SessionInfo struct {
 	SeqAddValues      map[uint64]string
 	SeqLastValue      []string
 	SqlHelper         sqlHelper
-	Buf               *buffer.Buffer
-	LogLevel          zapcore.Level
-	SessionId         uuid.UUID
+	// CompilerContext is request-local and never serialized. Origin-only metadata
+	// operators use it to bind View definitions in the executing transaction.
+	CompilerContext any
+	Buf             *buffer.Buffer
+	LogLevel        zapcore.Level
+	SessionId       uuid.UUID
 }
 
 type Session interface {

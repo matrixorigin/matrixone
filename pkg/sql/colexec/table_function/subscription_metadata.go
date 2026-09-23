@@ -816,7 +816,7 @@ func buildSubscriptionColumnsQuery(candidate subscriptionCandidate, tableNames [
 		"CAST(" + strconv.FormatUint(candidate.localDatabaseID, 10) + " AS BIGINT UNSIGNED) AS att_database_id, " +
 		"CAST(" + sqlquote.String(candidate.localDatabaseName) + " AS VARCHAR(256)) AS att_database, " +
 		"mt.rel_id, mt.relname, mc.attname, mc.atttyp, mc.attnum, mc.attnotnull, mc.att_default, " +
-		"mc.att_constraint_type, mc.att_is_auto_increment, mc.att_comment, mc.att_is_hidden, mc.attr_enum, " +
+		"CAST(mc.att_constraint_type AS CHAR(1)), mc.att_is_auto_increment, mc.att_comment, mc.att_is_hidden, mc.attr_enum, " +
 		"mc.attr_has_generated, mc.attr_generated, CAST(0 AS BIGINT) AS key_priority, mt.rel_id, mt.relkind, " +
 		"mt.rel_createsql, mt.partitioned, mt.extra_info, mt.rel_logical_id, " +
 		"CAST(" + strconv.FormatUint(uint64(candidate.localOwner), 10) + " AS INT UNSIGNED) AS table_owner " +

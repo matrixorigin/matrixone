@@ -25,6 +25,7 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/bootstrap/versions/v4_0_6"
 	"github.com/matrixorigin/matrixone/pkg/bootstrap/versions/v4_0_7"
 	"github.com/matrixorigin/matrixone/pkg/bootstrap/versions/v4_0_8"
+	"github.com/matrixorigin/matrixone/pkg/bootstrap/versions/v4_0_9"
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
 	"github.com/matrixorigin/matrixone/pkg/common/mpool"
 	"github.com/matrixorigin/matrixone/pkg/common/runtime"
@@ -39,7 +40,7 @@ import (
 )
 
 func TestDoCheckUpgradeQueuesStatisticsRefresh(t *testing.T) {
-	final := v4_0_8.Handler.Metadata()
+	final := v4_0_9.Handler.Metadata()
 	require.Greater(t, versions.Compare(final.Version, "4.0.7"), 0)
 	for _, test := range []struct {
 		name    string
@@ -85,7 +86,7 @@ func TestDoCheckUpgradeQueuesStatisticsRefresh(t *testing.T) {
 				require.Equal(t, final, b.getFinalVersionHandle().Metadata())
 				require.NoError(t, b.doCheckUpgrade(context.Background()))
 				if test.upgrade {
-					hops := []versions.Version{final}
+					hops := []versions.Version{v4_0_8.Handler.Metadata(), final}
 					if test.via407 {
 						hops = append([]versions.Version{v4_0_7.Handler.Metadata()}, hops...)
 					}
@@ -295,7 +296,9 @@ func TestStatisticsUpgradeCompensatesPostSnapshotTenantAfterRestart(t *testing.T
 
 		newCN := func() *service {
 			b := newServiceForTest("", &memLocker{}, clock.NewHLCClock(func() int64 { return 0 }, 0),
-				nil, exec, func(s *service) { s.initUpgrade() })
+				nil, exec, func(s *service) {
+					s.handles = append(s.handles, v4_0_6.Handler, v4_0_7.Handler, v4_0_8.Handler)
+				})
 			t.Cleanup(b.stopper.Stop)
 			return b
 		}
@@ -340,11 +343,11 @@ func TestMaybeUpgradeTenantDoesNotCacheUncommittedOrFailedChecks(t *testing.T) {
 		failUpgrade    bool
 		ownTxn         bool
 	}{
-		{name: "caller_owned_transaction", version: "4.0.8", ownTxn: true},
-		{name: "catalog_read_failure", version: "4.0.8", fail: true},
-		{name: "migration_failure", version: "4.0.7", failUpgrade: true},
-		{name: "newer_catalog_version", version: "4.0.9"},
-		{name: "different_cluster_version", version: "4.0.7", clusterVersion: "4.0.9"},
+		{name: "caller_owned_transaction", version: "4.0.9", ownTxn: true},
+		{name: "catalog_read_failure", version: "4.0.9", fail: true},
+		{name: "migration_failure", version: "4.0.8", failUpgrade: true},
+		{name: "newer_catalog_version", version: "4.0.10"},
+		{name: "different_cluster_version", version: "4.0.8", clusterVersion: "4.0.10"},
 	} {
 		t.Run(test.name, func(t *testing.T) {
 			runtime.RunTest("", func(runtime.Runtime) {
@@ -360,7 +363,7 @@ func TestMaybeUpgradeTenantDoesNotCacheUncommittedOrFailedChecks(t *testing.T) {
 						}
 						return newBootstrapStringResult(test.version), nil
 					case strings.HasPrefix(sql, "select version, version_offset, state from mo_version"):
-						latest := v4_0_8.Handler.Metadata()
+						latest := v4_0_9.Handler.Metadata()
 						if test.clusterVersion != "" {
 							latest.Version = test.clusterVersion
 						}
@@ -379,7 +382,7 @@ func TestMaybeUpgradeTenantDoesNotCacheUncommittedOrFailedChecks(t *testing.T) {
 					if test.ownTxn {
 						txnOp = &testTxnOperator{}
 					}
-					fetch := func() (int32, string, error) { return 11, "4.0.8", nil }
+					fetch := func() (int32, string, error) { return 11, "4.0.9", nil }
 					upgraded, err := b.MaybeUpgradeTenant(t.Context(), fetch, txnOp)
 					if test.ownTxn {
 						require.NoError(t, err)
@@ -401,7 +404,7 @@ func TestMaybeUpgradeTenantDoesNotCacheUncommittedOrFailedChecks(t *testing.T) {
 
 func TestMaybeUpgradeTenantRechecksVersionUnderLock(t *testing.T) {
 	runtime.RunTest("", func(runtime.Runtime) {
-		final := v4_0_8.Handler.Metadata()
+		final := v4_0_9.Handler.Metadata()
 		reads := 0
 		exec := executor.NewMemExecutor(func(sql string) (executor.Result, error) {
 			switch {
@@ -431,7 +434,7 @@ func TestMaybeUpgradeTenantRechecksVersionUnderLock(t *testing.T) {
 
 func TestMaybeUpgradeTenantWaitHonorsCancellation(t *testing.T) {
 	runtime.RunTest("", func(runtime.Runtime) {
-		final := v4_0_8.Handler.Metadata()
+		final := v4_0_9.Handler.Metadata()
 		exec := executor.NewMemExecutor(func(sql string) (executor.Result, error) {
 			switch {
 			case sql == "select create_version from mo_account where account_id = 11":
@@ -466,7 +469,7 @@ func TestMaybeUpgradeTenantRejectsConcurrentAccountDeletion(t *testing.T) {
 		}
 		t.Run(name, func(t *testing.T) {
 			runtime.RunTest("", func(runtime.Runtime) {
-				final := v4_0_8.Handler.Metadata()
+				final := v4_0_9.Handler.Metadata()
 				var authenticated, dropped bool
 				exec := &statisticsTransactionTracker{SQLExecutor: executor.NewMemExecutor(
 					func(sql string) (executor.Result, error) {

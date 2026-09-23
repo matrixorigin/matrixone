@@ -24,10 +24,6 @@ import (
 const ViewColumnsFunctionName = "mo_view_columns"
 
 func (builder *QueryBuilder) buildViewColumns(tbl *tree.TableFunction, ctx *BindContext, exprs []*Expr, children []int32) (int32, error) {
-	if err := RequirePersistedProtocolVersion(
-		builder.GetContext(), builder.compCtx.GetProcess(), 94); err != nil {
-		return 0, err
-	}
 	if len(exprs) != 1 {
 		return 0, moerr.NewInvalidInput(builder.GetContext(), "mo_view_columns requires one relation identity")
 	}

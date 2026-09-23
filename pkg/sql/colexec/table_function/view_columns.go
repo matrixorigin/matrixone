@@ -24,7 +24,20 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/vm/process"
 )
 
-type viewColumnsState struct{ simpleOneBatchState }
+const (
+	maxViewDescriptionsPerScan = 65536
+	maxColumnsPerView          = 4096
+)
+
+type viewColumnsState struct {
+	simpleOneBatchState
+	described uint64
+}
+
+func (s *viewColumnsState) reset(tf *TableFunction, proc *process.Process) {
+	s.simpleOneBatchState.reset(tf, proc)
+	s.described = 0
+}
 
 func viewColumnsPrepare(proc *process.Process, tf *TableFunction) (tvfState, error) {
 	state := &viewColumnsState{}
@@ -50,14 +63,17 @@ func (s *viewColumnsState) start(tf *TableFunction, proc *process.Process, nthRo
 	if isNull {
 		return nil
 	}
-	var compilerValue any
-	if helper := proc.GetSessionInfo().SqlHelper; helper != nil {
+	compilerValue := proc.GetSessionInfo().CompilerContext
+	if helper := proc.GetSessionInfo().SqlHelper; compilerValue == nil && helper != nil {
 		compilerValue = helper.GetCompilerContext()
 	} else if provider, ok := proc.GetSession().(interface{ GetCompilerContext() any }); ok {
 		compilerValue = provider.GetCompilerContext()
 	}
 	compiler, ok := compilerValue.(plan.CompilerContext)
 	if !ok || compiler == nil {
+		compiler = plan.ViewDescriptionCompilerContext(proc.Ctx)
+	}
+	if compiler == nil {
 		return moerr.NewNotSupported(proc.Ctx, "View column description requires a compiler context")
 	}
 	_, def, err := compiler.ResolveById(id, nil)
@@ -67,9 +83,16 @@ func (s *viewColumnsState) start(tf *TableFunction, proc *process.Process, nthRo
 	if def == nil || def.ViewSql == nil {
 		return moerr.NewNoSuchTable(proc.Ctx, "", "View metadata object")
 	}
+	if s.described >= maxViewDescriptionsPerScan {
+		return moerr.NewInternalError(proc.Ctx, "View metadata scan exceeds its description budget")
+	}
+	s.described++
 	columns, err := plan.DescribeViewColumns(compiler, def.ViewSql.View)
 	if err != nil {
 		return err
+	}
+	if len(columns) > maxColumnsPerView {
+		return moerr.NewInternalError(proc.Ctx, "View metadata exceeds its column budget")
 	}
 	for i, col := range columns {
 		if err := proc.Ctx.Err(); err != nil {
