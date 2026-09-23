@@ -27,25 +27,29 @@ import (
 )
 
 func TestMemThrottlerUsesCgroupHeadroomForAdmission(t *testing.T) {
+	oldGetCgroupMemoryUsage := getCgroupMemoryUsage
+	getCgroupMemoryUsage = func(int) (int64, error) { return 95 * mpool.GB, nil }
+	t.Cleanup(func() { getCgroupMemoryUsage = oldGetCgroupMemoryUsage })
+
 	throttler := &memThrottler{}
-	throttler.actualTotalMemory.Store(100)
-	throttler.total.Store(200)
-	throttler.cgroup.Store(100)
-	throttler.rss.Store(60)
-	throttler.limit.Store(90)
+	throttler.actualTotalMemory.Store(100 * mpool.GB)
+	throttler.total.Store(200 * mpool.GB)
+	throttler.cgroup.Store(100 * mpool.GB)
+	throttler.rss.Store(60 * mpool.GB)
+	throttler.limit.Store(90 * mpool.GB)
 
 	// Below hard pressure, reclaimable cgroup charge does not reduce the normal
 	// RSS-based component budget.
-	throttler.cgroupUsage.Store(90)
-	require.Equal(t, int64(40), throttler.Available())
+	throttler.cgroupUsage.Store(90 * mpool.GB)
+	require.Equal(t, int64(40*mpool.GB), throttler.Available())
 
 	// Once hard pressure is active, cap new admission by the remaining cgroup
 	// headroom without treating the whole cgroup charge as non-reclaimable RSS.
-	throttler.cgroupUsage.Store(95)
-	require.Equal(t, int64(5), throttler.Available())
+	throttler.cgroupUsage.Store(95 * mpool.GB)
+	require.Equal(t, int64(5*mpool.GB), throttler.Available())
 
 	throttler.options.specializedForMerge = true
-	require.Equal(t, int64(5), throttler.Available())
+	require.Equal(t, int64(5*mpool.GB), throttler.Available())
 }
 
 func TestMemThrottlerPressureUsesCgroupUsage(t *testing.T) {
