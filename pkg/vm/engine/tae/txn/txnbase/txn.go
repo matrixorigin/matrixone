@@ -47,6 +47,12 @@ type OpTxn struct {
 	ctx context.Context
 	Txn txnif.AsyncTxn
 	Op  OpType
+
+	// Queue enqueue timestamps are used only for TN queue wait metrics. They
+	// are owned by the commit pipeline and are not part of txn persistence.
+	preWalEnqueuedAt time.Time
+	walEnqueuedAt    time.Time
+	applyEnqueuedAt  time.Time
 }
 
 func (txn *OpTxn) IsReplay() bool { return txn.Txn.IsReplay() }
