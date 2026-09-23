@@ -3506,7 +3506,7 @@ func (b *baseBinder) coerceBoolNumericAggregateArg(
 func (b *baseBinder) coerceJSONNumericAggregateArg(
 	name string, args []*plan.Expr,
 ) ([]*plan.Expr, error) {
-	if len(args) != 1 || args[0] == nil || args[0].Typ == nil {
+	if len(args) != 1 || args[0] == nil {
 		return args, nil
 	}
 	switch strings.ToLower(name) {

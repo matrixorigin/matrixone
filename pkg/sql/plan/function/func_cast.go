@@ -3040,13 +3040,19 @@ func JsonAggToDouble(
 	if len(ivecs) != 1 {
 		return moerr.NewInternalError(proc.Ctx, "json_agg_to_double expects one argument")
 	}
-	source, err := vector.GenerateFunctionStrParameter[types.Varlena](ivecs[0])
-	if err != nil {
-		return err
+	if selectList != nil && selectList.IgnoreAllRow() {
+		for i := 0; i < length; i++ {
+			if err := vector.MustFunctionResult[float64](result).Append(0, true); err != nil {
+				return err
+			}
+		}
+		return nil
 	}
+	source := vector.GenerateFunctionStrParameter(ivecs[0])
 	rs := vector.MustFunctionResult[float64](result)
+	evalAll := selectList == nil || selectList.ShouldEvalAllRow()
 	for i := uint64(0); i < uint64(length); i++ {
-		if selectList != nil && !selectList.Contains(i) {
+		if !evalAll && !selectList.Contains(i) {
 			if err := rs.Append(0, true); err != nil {
 				return err
 			}
