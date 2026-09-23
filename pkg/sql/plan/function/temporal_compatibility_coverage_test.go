@@ -19,6 +19,7 @@ import (
 	"context"
 	"math"
 	"testing"
+	"time"
 
 	"github.com/matrixorigin/matrixone/pkg/container/types"
 	"github.com/stretchr/testify/require"
@@ -338,4 +339,64 @@ func TestTemporalCompatibilityErrorAndBoundaryHelpers(t *testing.T) {
 	diff, err := timeDiff(types.TimeFromClock(false, 838, 59, 59, 0), -tm)
 	require.NoError(t, err)
 	require.Equal(t, types.Time(int64(types.TimeFromClock(false, 838, 59, 59, 0))-int64(-tm)), diff)
+}
+
+// Exercise the row-level null, invalid-input, timestamp, and string-domain
+// branches which are not reached by the compact compatibility matrix above.
+// These branches are part of the changed temporal execution contract and must
+// remain covered by the PR coverage gate.
+func TestTemporalCompatibilityAdditionalExecutionBranches(t *testing.T) {
+	proc := newTmpProcess(t)
+
+	t.Run("string add and sub domains", func(t *testing.T) {
+		left := NewFunctionTestInput(types.T_varchar.ToType(), []string{
+			"12:00:00", "2024-02-29 12:00:00", "bad", "838:59:59",
+		}, nil)
+		right := NewFunctionTestInput(types.T_varchar.ToType(), []string{
+			"01:00:00", "01:00:00", "01:00:00", "00:00:01",
+		}, nil)
+
+		for _, tc := range []struct {
+			name string
+			fn   fEvalFn
+			want []string
+			null []bool
+		}{
+			{name: "add", fn: AddTime, want: []string{"13:00:00", "2024-02-29 13:00:00", "", "838:59:59"}, null: []bool{false, false, true, false}},
+			{name: "sub", fn: SubTime, want: []string{"11:00:00", "2024-02-29 11:00:00", "", "838:59:58"}, null: []bool{false, false, true, false}},
+		} {
+			t.Run(tc.name, func(t *testing.T) {
+				caseDef := NewFunctionTestCase(proc, []FunctionTestInput{left, right},
+					NewFunctionTestResult(types.T_varchar.ToType(), false, tc.want, tc.null), tc.fn)
+				ok, info := caseDef.Run()
+				require.True(t, ok, info)
+			})
+		}
+	})
+
+	t.Run("typed timestamp null and invalid branches", func(t *testing.T) {
+		dt, err := types.ParseDatetime("2024-02-29 12:00:00", 0)
+		require.NoError(t, err)
+		ts := dt.ToTimestamp(time.UTC)
+		left := NewFunctionTestInput(types.T_timestamp.ToType(), []types.Timestamp{ts, types.ZeroTimestamp, ts}, []bool{false, false, false})
+		right := NewFunctionTestInput(types.T_varchar.ToType(), []string{"01:00:00", "01:00:00", "bad"}, nil)
+		want := (dt + types.Datetime(3600*types.MicroSecsPerSec)).ToTimestamp(time.UTC)
+		caseDef := NewFunctionTestCase(proc, []FunctionTestInput{left, right},
+			NewFunctionTestResult(types.T_timestamp.ToType(), false, []types.Timestamp{want, 0, 0}, []bool{false, true, true}), AddTime)
+		ok, info := caseDef.Run()
+		require.True(t, ok, info)
+	})
+
+	t.Run("time format dynamic and null calendar fields", func(t *testing.T) {
+		values := NewFunctionTestInput(types.T_time.ToTypeWithScale(6), []types.Time{
+			types.TimeFromClock(false, 0, 1, 2, 3),
+			types.TimeFromClock(false, 13, 14, 15, 160000),
+			0,
+		}, []bool{false, false, true})
+		formats := NewFunctionTestInput(types.T_varchar.ToType(), []string{"%H:%i:%s.%f", "%W", "%H"}, []bool{false, false, false})
+		caseDef := NewFunctionTestCase(proc, []FunctionTestInput{values, formats},
+			NewFunctionTestResult(types.T_varchar.ToType(), false, []string{"00:01:02.000003", "", ""}, []bool{false, true, true}), TimeFormat)
+		ok, info := caseDef.Run()
+		require.True(t, ok, info)
+	})
 }
