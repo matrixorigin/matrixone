@@ -1043,23 +1043,53 @@ validation, not a substitute for it.
 The implementation is complete under the approved design. The authorized
 maintainer approval is recorded in the approval record below.
 
-## Current published review artifact (revision 18)
+## Approved design and implementation snapshot at approval (revision 18)
 
-The current implementation/test source head for this review artifact is
+The implementation/test source head recorded when this review artifact was
+approved is
 `2d32e42b1abfbfe42f296179e16e89ac2dc64d66`, based on
 `1634996a33afb3941c9b90a837853122a43e4344`. The revision-18 document is
 updated after the protocol-version allocation so this paragraph remains a
-source-of-truth pointer rather than a pending design request. The current
+historical source pointer. The approved
 implementation keeps the approved strict-default conversion contract, preserves
 main's v93 `LAST_INSERT_ID` migration state, and admits changed string-numeric
 remote expressions only at v94.
 
-Validation on the revision-18 local equivalent passed the focused row-provenance
+Validation recorded at revision 18 passed the focused row-provenance
 and issue regressions; the v93/v94 admission tests and the full affected
 `pkg/pb/plan` and `pkg/sql/compile` packages pass through the repository CGo
 wrapper. `gofmt` and `git diff --check` pass. Revision 18 freezes the design
 decisions below, and the authorized-maintainer sign-off is recorded in the
 approval record.
+
+## Current rebased implementation and validation evidence (2026-09-23)
+
+The approved design decisions below remain unchanged. The implementation
+snapshot `d8a527a347e9cc11f3239059725c6ae8e90d8e94` was rebased onto main
+`16d8e5106caaedfe0a7296e4f628683e1b6a92b4`; test-only formatting is recorded
+in descendant `9aef0619374a265c0b99e01c35d56c923da1dc8b`. The fix closes the
+SQL binder-folding path that had dropped the row-level HEX/BIT numeric marker
+through an implicit string cast; explicit casts and ordinary BINARY column
+values remain outside that literal-provenance behavior. The protocol marker
+remains independently v94-fenced in every SQL mode.
+
+Validation on the descendant test snapshot:
+
+- Repository CGo tests passed for vector, batch, pSpool, plan/pipeline protobuf,
+  colexec, compile, MySQL parser, planner, planner functions/rules, frontend,
+  process, and issue regression packages. The planner package was rerun after
+  the final gofmt-only correction.
+- `func_math_string_numeric.test` passed twice at 128/128 with normal result
+  and metadata comparisons, not metadata suppression. The service binary was
+  built from the implementation snapshot; the only later source change was
+  gofmt in an unrelated planner test, so runtime sources and SQL fixtures were
+  identical.
+- `gofmt -l` on changed Go files, `git diff --check`, and CGo-aware `go vet` on
+  the affected package set passed.
+- Incremental golangci-lint could not type-check this Go 1.27 source with the
+  installed golangci-lint 2.6.2; its importer rejected Go 1.27 export data
+  (`export data version 4` versus maximum supported version 2). This is a
+  tooling incompatibility, not a passing lint result.
 
 ## 7. Approval record
 
