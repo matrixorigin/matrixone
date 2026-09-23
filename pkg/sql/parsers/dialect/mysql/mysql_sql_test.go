@@ -5735,6 +5735,40 @@ func TestFullTextMatchDeparseRoundTrip(t *testing.T) {
 	}
 }
 
+func TestFullTextRoutineVariablePatternRoundTrip(t *testing.T) {
+	for _, sql := range []string{
+		"select id from docs where match(body) against(q)",
+		"select id from docs where match(body) against(q in boolean mode)",
+		"select id from docs where match(body) against(`QueryTerm` in natural language mode)",
+	} {
+		stmt, err := ParseOne(context.Background(), sql, 1)
+		require.NoError(t, err, sql)
+		selectStmt := stmt.(*tree.Select).Select.(*tree.SelectClause)
+		match := selectStmt.Where.Expr.(*tree.FullTextMatchExpr)
+		name, ok := match.Pattern.(*tree.UnresolvedName)
+		require.True(t, ok)
+		require.Equal(t, 1, name.NumParts)
+
+		formatted := tree.String(stmt, dialect.MYSQL)
+		stmt.Free()
+		reparsed, err := ParseOne(context.Background(), formatted, 1)
+		require.NoError(t, err, formatted)
+		require.Equal(t, formatted, tree.String(reparsed, dialect.MYSQL))
+		reparsed.Free()
+	}
+
+	for _, sql := range []string{
+		"select id from docs where match(body) against(t.q)",
+		"select id from docs where match(body) against(@q)",
+		"select id from docs where match(body) against(concat('en', 'gine'))",
+		"select id from docs where match(body) against(sum(id))",
+		"select id from docs where match(body) against(rand())",
+	} {
+		_, err := ParseOne(context.Background(), sql, 1)
+		require.Error(t, err, sql)
+	}
+}
+
 func TestQuotedUnicodeIdentifierAliases(t *testing.T) {
 	for _, sql := range []string{
 		"SELECT 1 AS `الكمية`",
