@@ -54,6 +54,12 @@ type backExec struct {
 	statsArray *statistic.StatsArray
 }
 
+// backExecProcessHook runs after a background statement has created its
+// process, but before the statement is compiled or executed. It is used for
+// control-plane protocols that must operate on the same transaction and
+// process as the following background SQL statements.
+type backExecProcessHook func(context.Context, *process.Process) error
+
 type backgroundExecRowCount interface {
 	GetLastAffectedRows() int64
 	SetLastAffectedRows(int64)
@@ -119,6 +125,22 @@ func installBackExecStatsInfo(
 }
 
 func (back *backExec) Exec(ctx context.Context, sql string) (retErr error) {
+	return back.exec(ctx, sql, "", false)
+}
+
+func (back *backExec) execWithProcessHook(
+	ctx context.Context,
+	sql string,
+	hook backExecProcessHook,
+) error {
+	if back == nil || back.backSes == nil {
+		return moerr.NewInternalError(ctx, "background executor is closed")
+	}
+	previous := back.backSes.processHook
+	back.backSes.processHook = hook
+	defer func() {
+		back.backSes.processHook = previous
+	}()
 	return back.exec(ctx, sql, "", false)
 }
 
@@ -1045,6 +1067,7 @@ type backSession struct {
 	forcePessimisticRC                bool
 	cloneSnapshotUsesBackgroundTxn    bool
 	cancelTxnCreateWithRequest        bool
+	processHook                       backExecProcessHook
 	lineageOwnerLifecycleWritePending bool
 	// lastAffectedRows carries the previous statement's ROW_COUNT() value into
 	// the next process created by this background executor.

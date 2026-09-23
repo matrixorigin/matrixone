@@ -404,13 +404,34 @@ func NormalizeRewriteKey(ctx context.Context, key string, lowerCaseTableNames in
 		}
 		return "", "", "", moerr.NewParseError(ctx, "empty table or database")
 	}
-	compareDB := tree.NewCStr(db, lowerCaseTableNames).Compare()
-	compareTable := tree.NewCStr(table, lowerCaseTableNames).Compare()
+	compareDB, compareTable, err := NormalizeRewriteKeyParts(ctx, db, table, lowerCaseTableNames)
+	if err != nil {
+		return "", "", "", err
+	}
 	if lowerCaseTableNames == 1 {
 		db = compareDB
 		table = compareTable
 	}
 	return compareDB + "." + compareTable, db, table, nil
+}
+
+// NormalizeRewriteKeyParts returns database and table comparison identities
+// independently. This preserves identifier boundaries for names containing a
+// dot; callers consuming the persisted database.table format must still parse
+// that format with SplitRewriteKey first.
+func NormalizeRewriteKeyParts(
+	ctx context.Context,
+	databaseName string,
+	tableName string,
+	lowerCaseTableNames int64,
+) (string, string, error) {
+	databaseName = strings.TrimSpace(databaseName)
+	tableName = strings.TrimSpace(tableName)
+	if databaseName == "" || tableName == "" {
+		return "", "", moerr.NewParseError(ctx, "empty table or database")
+	}
+	return tree.NewCStr(databaseName, lowerCaseTableNames).Compare(),
+		tree.NewCStr(tableName, lowerCaseTableNames).Compare(), nil
 }
 
 // ValidateRemapDb validates a remapdb map: every source/destination must be a

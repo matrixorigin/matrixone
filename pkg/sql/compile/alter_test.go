@@ -110,13 +110,56 @@ func TestRoleRuleRenameNameKeys(t *testing.T) {
 		}
 	}
 
-	require.Equal(t,
-		[]string{"db.t", "db.t2", "db.other", "db.other2"},
-		roleRuleRenameNameKeys([]*plan2.AlterTable{
-			rename("db", "t", "t2"),
-			rename("db", "other", "other2"),
-		}),
-	)
+	qrys := []*plan2.AlterTable{
+		rename("db", "t", "t2"),
+		rename("db", "other", "other2"),
+	}
+	keys, err := roleRuleRenameNameKeys(t.Context(), qrys, 1)
+	require.NoError(t, err)
+	require.Equal(t, []roleRuleRenameKey{
+		{database: "db", table: "t"},
+		{database: "db", table: "t2"},
+		{database: "db", table: "other"},
+		{database: "db", table: "other2"},
+	}, keys)
+
+	keys, err = roleRuleRenameNameKeys(t.Context(), []*plan2.AlterTable{
+		rename("MixedDB ", " MixedTable", " MixedTable2 "),
+	}, 1)
+	require.NoError(t, err)
+	require.Equal(t, []roleRuleRenameKey{
+		{database: "mixeddb", table: "mixedtable"},
+		{database: "mixeddb", table: "mixedtable2"},
+	}, keys)
+
+	keys, err = roleRuleRenameNameKeys(t.Context(), []*plan2.AlterTable{
+		rename("MixedDB", "MixedTable", "MixedTable2"),
+	}, 0)
+	require.NoError(t, err)
+	require.Equal(t, []roleRuleRenameKey{
+		{database: "MixedDB", table: "MixedTable"},
+		{database: "MixedDB", table: "MixedTable2"},
+	}, keys)
+
+	keys, err = roleRuleRenameNameKeys(t.Context(), []*plan2.AlterTable{
+		rename("db", "t.with.dot", "renamed.with.dot"),
+	}, 1)
+	require.NoError(t, err)
+	require.Equal(t, []roleRuleRenameKey{
+		{database: "db", table: "t.with.dot"},
+		{database: "db", table: "renamed.with.dot"},
+	}, keys)
+
+	key, err := roleRuleNameKeyFromCatalog(t.Context(), "MixedDB.MixedTable", 1)
+	require.NoError(t, err)
+	require.Equal(t, roleRuleRenameKey{database: "mixeddb", table: "mixedtable"}, key)
+	_, err = roleRuleNameKeyFromCatalog(t.Context(), "db.t.with.dot", 1)
+	require.ErrorContains(t, err, "mapping name needs to include database name")
+
+	_, err = roleRuleRenameNameKeys(t.Context(), []*plan2.AlterTable{
+		rename("", "t", "t2"),
+	}, 1)
+	require.ErrorContains(t, err, "empty table or database")
 }
 
 func TestIsClusterTableRename(t *testing.T) {
@@ -167,6 +210,7 @@ func TestRoleRuleRenameAdmissionProtocol(t *testing.T) {
 			[]*plan2.AlterTable{{}},
 			true,
 			true,
+			1,
 			roleRuleRenameAdmissionHooks{},
 		)
 		require.NoError(t, err)
@@ -178,6 +222,7 @@ func TestRoleRuleRenameAdmissionProtocol(t *testing.T) {
 			[]*plan2.AlterTable{{IsClusterTable: true, Actions: rename.Actions}},
 			false,
 			false,
+			1,
 			roleRuleRenameAdmissionHooks{},
 		)
 		require.ErrorContains(t, err, "renaming a cluster table")
@@ -185,11 +230,11 @@ func TestRoleRuleRenameAdmissionProtocol(t *testing.T) {
 
 	t.Run("unsupported transaction mode fails closed", func(t *testing.T) {
 		err := checkRoleRuleRenameAdmissionWithHooks(
-			t.Context(), []*plan2.AlterTable{rename}, false, true, roleRuleRenameAdmissionHooks{},
+			t.Context(), []*plan2.AlterTable{rename}, false, true, 1, roleRuleRenameAdmissionHooks{},
 		)
 		require.ErrorContains(t, err, "pessimistic read-committed")
 		err = checkRoleRuleRenameAdmissionWithHooks(
-			t.Context(), []*plan2.AlterTable{rename}, true, false, roleRuleRenameAdmissionHooks{},
+			t.Context(), []*plan2.AlterTable{rename}, true, false, 1, roleRuleRenameAdmissionHooks{},
 		)
 		require.ErrorContains(t, err, "pessimistic read-committed")
 	})
@@ -215,13 +260,16 @@ func TestRoleRuleRenameAdmissionProtocol(t *testing.T) {
 				snapshot = ts
 				return nil
 			},
-			hasRoleRules: func(_ context.Context, names []string) (bool, error) {
+			hasRoleRules: func(_ context.Context, names []roleRuleRenameKey) (bool, error) {
 				events = append(events, "query")
-				require.Equal(t, []string{"db.t", "db.t2"}, names)
+				require.Equal(t, []roleRuleRenameKey{
+					{database: "db", table: "t"},
+					{database: "db", table: "t2"},
+				}, names)
 				return true, nil
 			},
 		}
-		err := checkRoleRuleRenameAdmissionWithHooks(t.Context(), []*plan2.AlterTable{rename}, true, true, hooks)
+		err := checkRoleRuleRenameAdmissionWithHooks(t.Context(), []*plan2.AlterTable{rename}, true, true, 1, hooks)
 		require.ErrorContains(t, err, "role rewrite rules exist")
 		require.Equal(t, []string{"lock", "barrier", "update-snapshot", "query"}, events)
 		require.Equal(t, frontier, snapshot)
@@ -231,6 +279,7 @@ func TestRoleRuleRenameAdmissionProtocol(t *testing.T) {
 		barrierErr := errors.New("barrier failed")
 		err := checkRoleRuleRenameAdmissionWithHooks(
 			t.Context(), []*plan2.AlterTable{rename}, true, true,
+			1,
 			roleRuleRenameAdmissionHooks{
 				lockRoleRules: func(context.Context) error { return nil },
 				acquireReadBarrier: func(context.Context) (timestamp.Timestamp, error) {
@@ -241,7 +290,7 @@ func TestRoleRuleRenameAdmissionProtocol(t *testing.T) {
 					t.Fatal("snapshot update after barrier failure")
 					return nil
 				},
-				hasRoleRules: func(context.Context, []string) (bool, error) {
+				hasRoleRules: func(context.Context, []roleRuleRenameKey) (bool, error) {
 					t.Fatal("query after barrier failure")
 					return false, nil
 				},
@@ -251,6 +300,7 @@ func TestRoleRuleRenameAdmissionProtocol(t *testing.T) {
 
 		err = checkRoleRuleRenameAdmissionWithHooks(
 			t.Context(), []*plan2.AlterTable{rename}, true, true,
+			1,
 			roleRuleRenameAdmissionHooks{
 				lockRoleRules:      func(context.Context) error { return nil },
 				acquireReadBarrier: func(context.Context) (timestamp.Timestamp, error) { return timestamp.Timestamp{}, nil },
@@ -259,7 +309,10 @@ func TestRoleRuleRenameAdmissionProtocol(t *testing.T) {
 					t.Fatal("snapshot update after empty barrier")
 					return nil
 				},
-				hasRoleRules: func(context.Context, []string) (bool, error) { t.Fatal("query after empty barrier"); return false, nil },
+				hasRoleRules: func(context.Context, []roleRuleRenameKey) (bool, error) {
+					t.Fatal("query after empty barrier")
+					return false, nil
+				},
 			},
 		)
 		require.ErrorContains(t, err, "empty timestamp")
@@ -269,12 +322,13 @@ func TestRoleRuleRenameAdmissionProtocol(t *testing.T) {
 		updateErr := errors.New("snapshot update failed")
 		err := checkRoleRuleRenameAdmissionWithHooks(
 			t.Context(), []*plan2.AlterTable{rename}, true, true,
+			1,
 			roleRuleRenameAdmissionHooks{
 				lockRoleRules:      func(context.Context) error { return nil },
 				acquireReadBarrier: func(context.Context) (timestamp.Timestamp, error) { return frontier, nil },
 				currentSnapshot:    func() timestamp.Timestamp { return timestamp.Timestamp{PhysicalTime: 10} },
 				updateSnapshot:     func(context.Context, timestamp.Timestamp) error { return updateErr },
-				hasRoleRules: func(context.Context, []string) (bool, error) {
+				hasRoleRules: func(context.Context, []roleRuleRenameKey) (bool, error) {
 					t.Fatal("query after snapshot failure")
 					return false, nil
 				},
@@ -286,12 +340,13 @@ func TestRoleRuleRenameAdmissionProtocol(t *testing.T) {
 		snapshot := frontier
 		err = checkRoleRuleRenameAdmissionWithHooks(
 			t.Context(), []*plan2.AlterTable{rename}, true, true,
+			1,
 			roleRuleRenameAdmissionHooks{
 				lockRoleRules:      func(context.Context) error { return nil },
 				acquireReadBarrier: func(context.Context) (timestamp.Timestamp, error) { return frontier, nil },
 				currentSnapshot:    func() timestamp.Timestamp { return snapshot },
 				updateSnapshot:     func(context.Context, timestamp.Timestamp) error { return nil },
-				hasRoleRules:       func(context.Context, []string) (bool, error) { return false, queryErr },
+				hasRoleRules:       func(context.Context, []roleRuleRenameKey) (bool, error) { return false, queryErr },
 			},
 		)
 		require.ErrorIs(t, err, queryErr)
@@ -300,12 +355,13 @@ func TestRoleRuleRenameAdmissionProtocol(t *testing.T) {
 	t.Run("snapshot non-advancement and cancellation are fail-closed", func(t *testing.T) {
 		err := checkRoleRuleRenameAdmissionWithHooks(
 			t.Context(), []*plan2.AlterTable{rename}, true, true,
+			1,
 			roleRuleRenameAdmissionHooks{
 				lockRoleRules:      func(context.Context) error { return nil },
 				acquireReadBarrier: func(context.Context) (timestamp.Timestamp, error) { return frontier, nil },
 				currentSnapshot:    func() timestamp.Timestamp { return timestamp.Timestamp{PhysicalTime: 10} },
 				updateSnapshot:     func(context.Context, timestamp.Timestamp) error { return nil },
-				hasRoleRules: func(context.Context, []string) (bool, error) {
+				hasRoleRules: func(context.Context, []roleRuleRenameKey) (bool, error) {
 					t.Fatal("query after non-advancement")
 					return false, nil
 				},
@@ -315,7 +371,7 @@ func TestRoleRuleRenameAdmissionProtocol(t *testing.T) {
 
 		ctx, cancel := context.WithCancel(t.Context())
 		cancel()
-		err = checkRoleRuleRenameAdmissionWithHooks(ctx, []*plan2.AlterTable{rename}, true, true, roleRuleRenameAdmissionHooks{
+		err = checkRoleRuleRenameAdmissionWithHooks(ctx, []*plan2.AlterTable{rename}, true, true, 1, roleRuleRenameAdmissionHooks{
 			lockRoleRules: func(context.Context) error { t.Fatal("lock after cancellation"); return nil },
 		})
 		require.ErrorIs(t, err, context.Canceled)

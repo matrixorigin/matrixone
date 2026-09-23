@@ -10,6 +10,7 @@ drop user if exists test_rule_user_alias;
 drop user if exists test_rule_user_where;
 drop user if exists test_rule_user_dup_projection;
 drop user if exists test_rule_user_expr_projection;
+drop user if exists test_rule_user_legacy;
 drop role if exists test_rule_role;
 drop role if exists test_rule_role_multi_a;
 drop role if exists test_rule_role_multi_b;
@@ -28,6 +29,7 @@ drop role if exists test_rule_role_dup_projection_a;
 drop role if exists test_rule_role_dup_projection_b;
 drop role if exists test_rule_role_expr_projection_a;
 drop role if exists test_rule_role_expr_projection_b;
+drop role if exists test_rule_role_legacy;
 drop database if exists db1;
 drop database if exists db2;
 create database db1;
@@ -41,6 +43,9 @@ insert into db1.t_dup values (1,1),(1,2),(2,3);
 create table db1.t_rename_no_rule(a int);
 alter table db1.t_rename_no_rule rename to db1.t_rename_no_rule_after;
 rename table db1.t_rename_no_rule_after to db1.t_rename_no_rule;
+create table db1.`t.with.dot`(a int);
+alter table db1.`t.with.dot` rename to db1.`t.with.dot.after`;
+rename table db1.`t.with.dot.after` to db1.`t.with.dot`;
 create table db1.t_rename_chain_ok_a(a int);
 create table db1.t_rename_chain_ok_b(a int);
 rename table db1.t_rename_chain_ok_a to db1.t_rename_chain_ok_a_after, db1.t_rename_chain_ok_b to db1.t_rename_chain_ok_b_after;
@@ -59,6 +64,9 @@ alter role test_rule_role add rule "select * from db1.t1 where age > 50" on tabl
 show rules on role test_rule_role;
 
 -- 4. Multiple rules merge verification
+create database db2;
+create table db2.t2(a int, age int);
+insert into db2.t2 values (10,10),(20,35),(200,60);
 alter role test_rule_role add rule "select id from db2.t2_new" on table db2.t2;
 show rules on role test_rule_role;
 
@@ -105,10 +113,26 @@ insert into db1.t_rename_chain_guard values (7);
 rename table db1.t_rename_chain_guard to db1.t_rename_chain_guard_after, db1.t1 to db1.t1_renamed;
 select * from db1.t_rename_chain_guard;
 
+-- 11a. Legacy noncanonical rule keys still guard both rename entry points
+create table db1.t_rename_legacy(a int, age int);
+insert into db1.t_rename_legacy values (1,1),(100,30);
+create role test_rule_role_legacy;
+alter role test_rule_role_legacy add rule "select * from db1.t_rename_legacy where age > 28" on table db1.` t_rename_legacy`;
+create user test_rule_user_legacy identified by '123456' default role test_rule_role_legacy;
+grant connect on account * to test_rule_role_legacy;
+grant select on table db1.t_rename_legacy to test_rule_role_legacy;
+-- @session:id=11&user=sys:test_rule_user_legacy:test_rule_role_legacy&password=123456
+set enable_remap_hint = 1;
+select * from db1.t_rename_legacy order by a;
+-- @session
+alter table db1.t_rename_legacy rename to db1.t_rename_legacy_after;
+rename table db1.t_rename_legacy to db1.t_rename_legacy_after;
+-- @session:id=11&user=sys:test_rule_user_legacy:test_rule_role_legacy&password=123456
+set enable_remap_hint = 1;
+select * from db1.t_rename_legacy order by a;
+-- @session
+
 -- 12. SET SECONDARY ROLE ALL merges select * rewrite rules from all active roles
-create database db2;
-create table db2.t2(a int, age int);
-insert into db2.t2 values (10,10),(20,35),(200,60);
 create role test_rule_role_multi_a;
 create role test_rule_role_multi_b;
 alter role test_rule_role_multi_a add rule "select * from db1.t1 where age > 1" on table db1.t1;
@@ -264,6 +288,7 @@ drop user if exists test_rule_user_alias;
 drop user if exists test_rule_user_where;
 drop user if exists test_rule_user_dup_projection;
 drop user if exists test_rule_user_expr_projection;
+drop user if exists test_rule_user_legacy;
 drop role if exists test_rule_role;
 drop role if exists test_rule_role_multi_a;
 drop role if exists test_rule_role_multi_b;
@@ -282,6 +307,7 @@ drop role if exists test_rule_role_dup_projection_a;
 drop role if exists test_rule_role_dup_projection_b;
 drop role if exists test_rule_role_expr_projection_a;
 drop role if exists test_rule_role_expr_projection_b;
+drop role if exists test_rule_role_legacy;
 drop database if exists db1;
 drop database if exists db2;
 set global enable_privilege_cache = on;

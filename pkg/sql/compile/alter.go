@@ -1949,9 +1949,48 @@ func isClusterTableRename(qry *plan.AlterTable) bool {
 	return alterTableHasRename(qry) && qry.GetIsClusterTable()
 }
 
-func roleRuleRenameNameKeys(qrys []*plan.AlterTable) []string {
-	keys := make([]string, 0, len(qrys)*2)
-	seen := make(map[string]struct{}, len(qrys)*2)
+type roleRuleRenameKey struct {
+	database string
+	table    string
+}
+
+func normalizeRoleRuleNameParts(
+	ctx context.Context,
+	database string,
+	table string,
+	lowerCaseTableNames int64,
+) (roleRuleRenameKey, error) {
+	databaseKey, tableKey, err := parsers.NormalizeRewriteKeyParts(
+		ctx,
+		database,
+		table,
+		lowerCaseTableNames,
+	)
+	if err != nil {
+		return roleRuleRenameKey{}, err
+	}
+	return roleRuleRenameKey{database: databaseKey, table: tableKey}, nil
+}
+
+func roleRuleNameKeyFromCatalog(ctx context.Context, name string, lowerCaseTableNames int64) (roleRuleRenameKey, error) {
+	database, table, ok := parsers.SplitRewriteKey(name)
+	if !ok {
+		_, _, _, err := parsers.NormalizeRewriteKey(ctx, name, lowerCaseTableNames)
+		if err != nil {
+			return roleRuleRenameKey{}, err
+		}
+		return roleRuleRenameKey{}, moerr.NewInternalError(ctx, "invalid persisted role rewrite rule name")
+	}
+	return normalizeRoleRuleNameParts(ctx, database, table, lowerCaseTableNames)
+}
+
+func roleRuleRenameNameKeys(
+	ctx context.Context,
+	qrys []*plan.AlterTable,
+	lowerCaseTableNames int64,
+) ([]roleRuleRenameKey, error) {
+	keys := make([]roleRuleRenameKey, 0, len(qrys)*2)
+	seen := make(map[roleRuleRenameKey]struct{}, len(qrys)*2)
 	for _, qry := range qrys {
 		if qry == nil {
 			continue
@@ -1969,7 +2008,15 @@ func roleRuleRenameNameKeys(qrys []*plan.AlterTable) []string {
 				continue
 			}
 			for _, tableName := range []string{rename.OldName, rename.NewName} {
-				key := database + "." + tableName
+				key, err := normalizeRoleRuleNameParts(
+					ctx,
+					database,
+					tableName,
+					lowerCaseTableNames,
+				)
+				if err != nil {
+					return nil, err
+				}
 				if _, ok := seen[key]; ok {
 					continue
 				}
@@ -1978,7 +2025,7 @@ func roleRuleRenameNameKeys(qrys []*plan.AlterTable) []string {
 			}
 		}
 	}
-	return keys
+	return keys, nil
 }
 
 // checkRoleRuleRenameAdmission closes the gap between the name-keyed role-rule
@@ -1991,7 +2038,7 @@ type roleRuleRenameAdmissionHooks struct {
 	acquireReadBarrier func(context.Context) (timestamp.Timestamp, error)
 	currentSnapshot    func() timestamp.Timestamp
 	updateSnapshot     func(context.Context, timestamp.Timestamp) error
-	hasRoleRules       func(context.Context, []string) (bool, error)
+	hasRoleRules       func(context.Context, []roleRuleRenameKey) (bool, error)
 }
 
 func checkRoleRuleRenameAdmission(c *Compile, qry *plan.AlterTable) error {
@@ -2016,21 +2063,19 @@ func checkRoleRuleRenameAdmissionBatch(c *Compile, qrys []*plan.AlterTable) erro
 		return nil
 	}
 	txnOp := c.proc.GetTxnOperator()
+	lowerCaseTableNames := c.getLower()
 	return checkRoleRuleRenameAdmissionWithHooks(
 		c.proc.Ctx,
 		qrys,
 		txnOp.Txn().IsPessimistic(),
 		txnOp.Txn().IsRCIsolation(),
+		lowerCaseTableNames,
 		roleRuleRenameAdmissionHooks{
 			lockRoleRules: func(ctx context.Context) error {
-				roleRuleRel, err := getRelFromMoCatalog(c, catalog.MO_ROLE_RULE)
-				if err != nil {
-					return err
-				}
-				return lockTableForSnapshotRefresh(ctx, c.e, c.proc, roleRuleRel, false)
+				return lockRoleRuleLifecycleTable(ctx, c.e, c.proc)
 			},
 			acquireReadBarrier: func(ctx context.Context) (timestamp.Timestamp, error) {
-				barrier, ok := loadLogtailReadBarrier(c.e)
+				barrier, ok := getLogtailReadBarrier(c.e)
 				if !ok {
 					return timestamp.Timestamp{}, moerr.NewNotSupported(
 						ctx,
@@ -2041,22 +2086,19 @@ func checkRoleRuleRenameAdmissionBatch(c *Compile, qrys []*plan.AlterTable) erro
 			},
 			currentSnapshot: txnOp.SnapshotTS,
 			updateSnapshot:  txnOp.UpdateSnapshot,
-			hasRoleRules: func(ctx context.Context, names []string) (bool, error) {
+			hasRoleRules: func(ctx context.Context, names []roleRuleRenameKey) (bool, error) {
 				if len(names) == 0 {
 					return false, nil
 				}
-				// Identifiers are case-insensitive, while legacy rule rows may
-				// preserve the spelling used when the rule was created.
-				quotedNames := make([]string, len(names))
-				for i, name := range names {
-					quotedNames[i] = "'" + sqlquote.EscapeString(strings.ToLower(name)) + "'"
+				candidateNames := make(map[roleRuleRenameKey]struct{}, len(names))
+				for _, name := range names {
+					candidateNames[name] = struct{}{}
 				}
 				res, err := c.runSqlWithResultAndOptions(
 					fmt.Sprintf(
-						"select 1 from %s.%s where lower(rule_name) in (%s) limit 1",
+						"select rule_name from %s.%s",
 						catalog.MO_CATALOG,
 						catalog.MO_ROLE_RULE,
-						strings.Join(quotedNames, ","),
 					),
 					NoAccountId,
 					executor.StatementOption{}.WithDisableLog(),
@@ -2067,8 +2109,21 @@ func checkRoleRuleRenameAdmissionBatch(c *Compile, qrys []*plan.AlterTable) erro
 				defer res.Close()
 
 				for _, bat := range res.Batches {
-					if bat != nil && bat.RowCount() > 0 {
-						return true, nil
+					if bat == nil || bat.RowCount() == 0 || len(bat.Vecs) == 0 {
+						continue
+					}
+					for row := 0; row < bat.RowCount(); row++ {
+						key, err := roleRuleNameKeyFromCatalog(
+							ctx,
+							bat.Vecs[0].GetStringAt(row),
+							lowerCaseTableNames,
+						)
+						if err != nil {
+							return false, err
+						}
+						if _, ok := candidateNames[key]; ok {
+							return true, nil
+						}
 					}
 				}
 				return false, nil
@@ -2082,6 +2137,7 @@ func checkRoleRuleRenameAdmissionWithHooks(
 	qrys []*plan.AlterTable,
 	isPessimistic bool,
 	isReadCommitted bool,
+	lowerCaseTableNames int64,
 	hooks roleRuleRenameAdmissionHooks,
 ) error {
 	hasRename := false
@@ -2116,25 +2172,21 @@ func checkRoleRuleRenameAdmissionWithHooks(
 	if err := hooks.lockRoleRules(ctx); err != nil {
 		return err
 	}
-	frontier, err := hooks.acquireReadBarrier(ctx)
-	if err != nil {
+	if err := advanceRoleRuleLifecycleSnapshot(ctx, roleRuleLifecycleSnapshotHooks{
+		acquireReadBarrier: hooks.acquireReadBarrier,
+		currentSnapshot:    hooks.currentSnapshot,
+		updateSnapshot:     hooks.updateSnapshot,
+	}); err != nil {
 		return err
-	}
-	if frontier.IsEmpty() {
-		return moerr.NewInternalError(ctx, "logtail read barrier returned an empty timestamp")
-	}
-	if hooks.currentSnapshot().Less(frontier) {
-		if err = hooks.updateSnapshot(ctx, frontier); err != nil {
-			return err
-		}
-		if hooks.currentSnapshot().Less(frontier) {
-			return moerr.NewInternalError(ctx, "transaction snapshot did not advance after the logtail read barrier")
-		}
 	}
 	if err := ctx.Err(); err != nil {
 		return err
 	}
-	roleRulesExist, err := hooks.hasRoleRules(ctx, roleRuleRenameNameKeys(qrys))
+	names, err := roleRuleRenameNameKeys(ctx, qrys, lowerCaseTableNames)
+	if err != nil {
+		return err
+	}
+	roleRulesExist, err := hooks.hasRoleRules(ctx, names)
 	if err != nil {
 		return err
 	}

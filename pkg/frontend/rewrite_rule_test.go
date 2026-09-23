@@ -35,6 +35,17 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/sql/parsers/tree"
 )
 
+// The production lifecycle hook runs against a real backExec process. Unit
+// tests use a SQL-recording executor, so preserve the sequencing point without
+// requiring an engine-backed process.
+func (bt *backgroundExecTest) execWithProcessHook(
+	ctx context.Context,
+	sql string,
+	_ backExecProcessHook,
+) error {
+	return bt.Exec(ctx, sql)
+}
+
 // Feature: role-rewrite-rules, Property 9: Hint 序列化往返一致性
 // Validates: Requirements 8.1, 8.2, 8.3, 8.4
 //
@@ -1332,7 +1343,7 @@ func TestHandleAlterRoleAddRuleWritesValidRuleAndInvalidatesCache(t *testing.T) 
 	bhStub := gostub.StubFunc(&NewBackgroundExec, bh)
 	defer bhStub.Reset()
 
-	ctx := context.Background()
+	ctx := context.WithValue(context.Background(), defines.TenantIDKey{}, uint32(0))
 	ses := newSes(&privilege{}, ctrl)
 	ses.ruleCache = map[string]string{"db1.t1": "select old_a from db1.t1"}
 	execCtx := &ExecCtx{reqCtx: ctx, ses: ses}
@@ -1340,6 +1351,9 @@ func TestHandleAlterRoleAddRuleWritesValidRuleAndInvalidatesCache(t *testing.T) 
 	roleSQL, err := getSqlForRoleIdOfRole(ctx, "role10")
 	require.NoError(t, err)
 	bh.sql2result[roleSQL] = newMrsForRoleIdOfRole([][]interface{}{{int64(10)}})
+	targetSQL, err := getSqlForCheckDatabaseTable(ctx, "db1", "t1")
+	require.NoError(t, err)
+	bh.sql2result[targetSQL] = newMrsForCheckDatabaseTable([][]interface{}{{int64(100)}})
 
 	stmt := tree.NewAlterRoleAddRule("role10", "db1.t1", "select a from db1.t1", "db1", "t1")
 	require.NoError(t, handleAlterRoleAddRule(ses, execCtx, stmt))
@@ -1365,6 +1379,57 @@ func TestHandleAlterRoleAddRuleWritesValidRuleAndInvalidatesCache(t *testing.T) 
 	ses.ruleCacheMu.RLock()
 	defer ses.ruleCacheMu.RUnlock()
 	require.Nil(t, ses.ruleCache)
+}
+
+func TestHandleAlterRoleRuleCommitFailuresPreserveCache(t *testing.T) {
+	for _, action := range []string{"add", "drop"} {
+		t.Run(action, func(t *testing.T) {
+			ctrl := gomock.NewController(t)
+			defer ctrl.Finish()
+
+			bh := &backgroundExecTest{}
+			bh.init()
+			commitErr := fmt.Errorf("%s rule commit failed", action)
+			bh.sql2err["commit;"] = commitErr
+			bhStub := gostub.StubFunc(&NewBackgroundExec, bh)
+			defer bhStub.Reset()
+
+			ctx := context.WithValue(context.Background(), defines.TenantIDKey{}, uint32(0))
+			ses := newSes(&privilege{}, ctrl)
+			originalCache := map[string]string{"db1.t1": "select old_a from db1.t1"}
+			ses.ruleCache = originalCache
+			execCtx := &ExecCtx{reqCtx: ctx, ses: ses}
+
+			roleSQL, err := getSqlForRoleIdOfRole(ctx, "role10")
+			require.NoError(t, err)
+			bh.sql2result[roleSQL] = newMrsForRoleIdOfRole([][]interface{}{{int64(10)}})
+
+			var runErr error
+			switch action {
+			case "add":
+				targetSQL, getErr := getSqlForCheckDatabaseTable(ctx, "db1", "t1")
+				require.NoError(t, getErr)
+				bh.sql2result[targetSQL] = newMrsForCheckDatabaseTable([][]interface{}{{int64(100)}})
+				stmt := tree.NewAlterRoleAddRule("role10", "db1.t1", "select a from db1.t1", "db1", "t1")
+				runErr = handleAlterRoleAddRule(ses, execCtx, stmt)
+			case "drop":
+				ruleSQL := fmt.Sprintf(
+					"select `rule` from mo_catalog.mo_role_rule where role_id = 10 and rule_name = %s",
+					escapeSQLString("db1.t1"),
+				)
+				bh.sql2result[ruleSQL] = newMrsForRewriteRules([][]interface{}{{
+					int64(10), "db1.t1", "select a from db1.t1",
+				}})
+				stmt := tree.NewAlterRoleDropRule("role10", "db1", "t1")
+				runErr = handleAlterRoleDropRule(ses, execCtx, stmt)
+			}
+
+			require.ErrorIs(t, runErr, commitErr)
+			require.Contains(t, bh.executedSQLs, "commit;")
+			require.Contains(t, bh.executedSQLs, "rollback;")
+			require.Equal(t, originalCache, ses.ruleCache)
+		})
+	}
 }
 
 func TestHandleAlterRoleAddRuleRejectsNonSelectRuleSQLBeforeWriting(t *testing.T) {
