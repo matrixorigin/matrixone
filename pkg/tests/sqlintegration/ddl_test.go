@@ -1128,14 +1128,18 @@ func TestCDCNoFullPublicTakeoverLifecycle(t *testing.T) {
 			freshStart, _, found, err := readWatermark()
 			require.NoError(t, err)
 			require.True(t, found)
-			require.Equal(t, checkpointB, freshStart,
-				"fresh reader must observe B's surviving durable checkpoint")
+			// B may have one final asynchronous watermark flush in flight when
+			// its cancellation completion is published. Re-read the durable row
+			// at C's admission boundary and use that value as the recovery oracle;
+			// it must never move backwards from the checkpoint B had committed.
+			require.True(t, freshStart.GE(&checkpointB),
+				"fresh reader must not observe a checkpoint older than B's durable progress")
 			captureFresh.Store(true)
 			releaseFresh()
 			select {
 			case actualStart := <-freshBoundary:
-				require.Equal(t, checkpointB, actualStart,
-					"fresh reader must collect from B's surviving checkpoint")
+				require.Equal(t, freshStart, actualStart,
+					"fresh reader must collect from the surviving durable checkpoint")
 			case <-ctx.Done():
 				t.Fatal("fresh reader did not reach CollectChanges")
 			}
