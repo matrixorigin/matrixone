@@ -901,10 +901,11 @@ func ContainsSerializedLiteral(exprs []*plan.Expr) bool {
 }
 
 // IsSqlModeDependentTemporalCast identifies string-to-temporal casts whose
-// result can depend on the execution session's SQL mode. Valid calendar
-// literals have the same value in every mode and remain foldable; invalid or
-// zero-component literals must remain executable until the current session is
-// available.
+// result can depend on the execution session's SQL mode or time zone. DATE
+// and DATETIME only need to remain executable for invalid/zero-component
+// literals, while TIMESTAMP always needs the execution session's time zone.
+// Folding a valid TIMESTAMP during PREPARE would bind it to the prepare-time
+// zone and make a later SET time_zone change affect only its display value.
 func IsSqlModeDependentTemporalCast(fn *plan.Function) bool {
 	functionID, _ := function.DecodeOverloadID(fn.Func.GetObj())
 	if functionID != function.CAST || len(fn.Args) != 2 {
@@ -932,10 +933,12 @@ func IsSqlModeDependentTemporalCast(fn *plan.Function) bool {
 		if _, err := types.ParseDateCast(value.Sval); err != nil {
 			return true
 		}
-	case types.T_datetime, types.T_timestamp:
+	case types.T_datetime:
 		if _, err := types.ParseDatetime(value.Sval, fn.Args[1].Typ.Scale); err != nil {
 			return true
 		}
+	case types.T_timestamp:
+		return true
 	default:
 		return false
 	}

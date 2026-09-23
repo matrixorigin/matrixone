@@ -346,6 +346,10 @@ func TestConstantFoldStillFoldsUnaffectedCasts(t *testing.T) {
 	preparedStrictTemporal := makeConstantCastExpr(t, "cast_strict", stringType, types.T_date.ToType(), "2024-01-02")
 	require.NotNil(t, NewConstantFold(true).constantFold(preparedStrictTemporal, proc).GetLit())
 
+	preparedTimestamp := makeConstantCastExpr(t, "cast", stringType, types.T_timestamp.ToTypeWithScale(6), "2024-01-02 03:04:05")
+	require.NotNil(t, NewConstantFold(true).constantFold(preparedTimestamp, proc).GetF(),
+		"prepared TIMESTAMP casts must retain execution-time time-zone semantics")
+
 	ordinaryStrictTime := makeConstantCastExpr(t, "cast_strict", stringType, types.T_time.ToTypeWithScale(6), "12:34:56")
 	require.NotNil(t, NewConstantFold(false).constantFold(ordinaryStrictTime, proc).GetLit())
 }
