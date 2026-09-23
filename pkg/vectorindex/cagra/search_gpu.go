@@ -136,6 +136,11 @@ func (s *CagraSearch[B, Q]) Search(sqlproc *sqlexec.SqlProcess, anyquery any, rt
 		))
 	}
 
+	// Checked here, where the native result crosses into Go, so both entry points inherit it --
+	// SearchFloat32 is this function plus a copy.
+	if err := metric.CheckFiniteDists64(resdistances, "vector index search"); err != nil {
+		return nil, nil, err
+	}
 	return reskeys, resdistances, nil
 }
 
@@ -156,9 +161,6 @@ func (s *CagraSearch[B, Q]) SearchFloat32(proc *sqlexec.SqlProcess, query any, r
 	copy(outKeys, ks)
 	for i, d := range dists {
 		outDists[i] = float32(d)
-	}
-	if err := metric.CheckFiniteDists(outDists, "vector index search"); err != nil {
-		return err
 	}
 	return nil
 }

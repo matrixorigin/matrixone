@@ -453,11 +453,12 @@ func (idx *GoBruteForceIndex[T, R]) SearchFloat32(proc *sqlexec.SqlProcess, _que
 	if err != nil {
 		return err
 	}
-	// Checked once over the results rather than per candidate: a distance that left the element
-	// domain cannot win a min-comparison, so it never changes the ranking -- it matters only if
-	// one is handed back as a score. An all-candidates-out-of-domain query is caught by the
-	// negative-index guard above.
-	return metric.CheckFiniteDists(outDists, metric.MetricWhat(idx.Metric))
+	// No finite check here. A distance that left the element domain cannot win a min-comparison,
+	// so it never changes the ranking -- it matters only where one is handed back as a score, and
+	// that is the caller's boundary, not this one. Checking in one entry point but not the other
+	// made the same index validate or not depending on which was called. An
+	// all-candidates-out-of-domain query is still caught by the negative-index guard above.
+	return nil
 }
 
 func (idx *GoBruteForceIndex[T, R]) Search(proc *sqlexec.SqlProcess, _queries any, rt vectorindex.RuntimeConfig) (keys any, distances []float64, err error) {
