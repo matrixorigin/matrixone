@@ -573,7 +573,7 @@ func materializedViewIncrementalHavingSupported(expr tree.Expr) bool {
 				len(node.Exprs) == 1 && materializedViewIncrementalScalarSupported(node.Exprs[0])
 		case "sum", "avg", "min", "max":
 			return len(node.Exprs) == 1 && materializedViewIncrementalScalarSupported(node.Exprs[0])
-		case "date_trunc", "coalesce", "ifnull", "abs", "floor", "ceil":
+		case "coalesce", "ifnull", "abs", "floor", "ceil":
 			for _, arg := range node.Exprs {
 				if !materializedViewIncrementalHavingSupported(arg) {
 					return false

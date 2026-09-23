@@ -1964,6 +1964,10 @@ func TestMaterializedViewIncrementalExpressionAndAdmissionCoverage(t *testing.T)
 		require.NotNil(t, clause.Having)
 		require.True(t, materializedViewIncrementalHavingSupported(clause.Having.Expr))
 	}
+	dateTruncHaving := parse("select k, count(*) from t group by k having date_trunc('day', ts) > 0")
+	dateTruncHavingClause := dateTruncHaving.Select.(*tree.SelectClause)
+	require.NotNil(t, dateTruncHavingClause.Having)
+	require.False(t, materializedViewIncrementalHavingSupported(dateTruncHavingClause.Having.Expr))
 	// Keep the boolean expression cases explicit as well.  The MySQL parser
 	// represents these nodes differently depending on their operands, so use
 	// the AST forms directly to exercise the recursive admission branches.
