@@ -3,9 +3,9 @@
 Design version: 2.
 
 Tracking: [#28966](https://github.com/matrixorigin/matrixone/issues/28966).
-The owner superseded the earlier optional-provider decision: Pixi is the only
-supported GPU build provider in the final embedded shape. Ordinary CPU-only
-MatrixOne builds remain independent of Pixi.
+The owner [superseded the earlier optional-provider decision](https://github.com/matrixorigin/matrixone/issues/28966#issuecomment-5793447039):
+Pixi is the only supported GPU build provider in the final embedded shape.
+Ordinary CPU-only MatrixOne builds remain independent of Pixi.
 It refines section 7 of the MO-reader-only
 [embedded Sirius design v2](https://github.com/aunjgr/matrixone/blob/d6e95dddbd/docs/design/sirius-embedded.md).
 Implementation approval remains subject to this PR's CI and code-owner review.
