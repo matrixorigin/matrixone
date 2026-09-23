@@ -134,18 +134,18 @@ class GPUContractTest(unittest.TestCase):
         self.assertNotIn("/wrong", result.stdout)
         self.assertIn(str(self.prefix / "bin/nvcc"), result.stdout)
 
-    def test_make_command_line_manifest_cannot_fall_back_to_legacy(self):
+    def test_make_command_line_manifest_is_rejected_without_fallback(self):
         env = dict(self.gpu_env, CONDA_PREFIX="/opt/legacy/gpu")
         env.pop("GPU_TOOLCHAIN_MANIFEST")
         result = self.make_gpu("cgo", "-B", "mo.o", f"GPU_TOOLCHAIN_MANIFEST={self.manifest}", env=env)
-        self.assertEqual(result.returncode, 0, result.stderr)
-        self.assertIn(str(self.prefix / "bin/nvcc"), result.stdout)
+        self.assertNotEqual(result.returncode, 0)
+        self.assertIn("must be set in the environment", result.stderr)
         self.assertNotIn("/usr/local/cuda", result.stdout)
 
         missing = self.root / "missing-toolchain.json"
         result = self.make_gpu("cgo", "-B", "mo.o", f"GPU_TOOLCHAIN_MANIFEST={missing}", env=env)
         self.assertNotEqual(result.returncode, 0)
-        self.assertIn("GPU toolchain", result.stderr)
+        self.assertIn("must be set in the environment", result.stderr)
 
     def test_lock_and_artifact_drift_fail_closed(self):
         old = toolchain.resolve(self.env)["MO_GPU_TOOLCHAIN_FINGERPRINT"]

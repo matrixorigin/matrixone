@@ -22,9 +22,10 @@ description; an invalid description fails before compilation and never falls
 back to the system installation. The manifest supports MO GPU-only builds
 without requiring Sirius source. Pixi is the reproducible provider for the
 new profile, while Make consumes paths and provenance rather than depending
-on the environment directory's spelling. A manifest selected on the Make
-command line is passed to the parse-time resolver explicitly, including on
-the older GNU Make used by supported CI hosts.
+on the environment directory's spelling. The manifest selector must be in
+Make's environment: older GNU Make versions do not reliably pass command-line
+assignments into the parse-time resolver. A command-line selector is rejected
+before it can silently choose the legacy provider.
 
 ## Ownership and layout
 

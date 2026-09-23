@@ -20,8 +20,9 @@ MO_CL_CUDA=1 GPU_TOOLCHAIN_MANIFEST="$PWD/optools/gpu/toolchain.json" make -j8
 distribute it. Re-export after changing the Pixi lockfile or environment. A
 Sirius SDK can export the same schema; use its `toolchain.json` when combining
 MO and Sirius so the two components use one CUDA/RAPIDS installation.
-`GPU_TOOLCHAIN_MANIFEST` may be set in the environment or passed on the Make
-command line; both forms select the same fail-closed resolver.
+Set `GPU_TOOLCHAIN_MANIFEST` in the environment before invoking Make, as in the
+example above. A Make command-line assignment is rejected because older GNU
+Make versions can omit it from the parse-time resolver's environment.
 
 All GPU native sub-builds and Go test entrypoints resolve the manifest through
 `cgo/mo_gpu_toolchain.py`. An explicit manifest must validate completely:
