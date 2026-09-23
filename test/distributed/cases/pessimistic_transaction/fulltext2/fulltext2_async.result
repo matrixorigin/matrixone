@@ -75,6 +75,26 @@ select id from json_null_cdc where match(left_doc, right_doc) against('null' in 
 id
 6
 drop table json_null_cdc;
+
+create table warm_refresh (id bigint primary key, body text);
+insert into warm_refresh values (1, 'refreshmarker baseline'), (2, 'unrelated control');
+create fulltext2 index ft_refresh on warm_refresh(body);
+select id from warm_refresh where match(body) against('refreshmarker' in boolean mode) order by id;
+id
+1
+set @warm_storage = (select index_table_name from mo_catalog.mo_indexes where name = 'ft_refresh' and algo = 'fulltext2' and algo_table_type = 'ftv2_index' and table_id in (select rel_id from mo_catalog.mo_tables where reldatabase = database() and relname = 'warm_refresh') limit 1);
+insert into warm_refresh values (101, 'refreshmarker committed');
+set @warm_tail_sql = concat('select count(*) > 0 as tail_ready from `', database(), '`.`', @warm_storage, '` where index_id = ''cdc_tail'' and tag = 1');
+prepare warm_tail from @warm_tail_sql;
+execute warm_tail;
+➤ tail_ready[-7,1,0]  𝄀
+1
+deallocate prepare warm_tail;
+select id from warm_refresh where match(body) against('refreshmarker' in boolean mode) order by id;
+id
+1
+101
+drop table warm_refresh;
 create table json_null_cdc(id bigint primary key, left_doc json, right_doc json);
 create fulltext2 index ftv on json_null_cdc(left_doc, right_doc) with parser json_value;
 set @json_ft2_index = (
