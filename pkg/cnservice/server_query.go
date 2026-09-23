@@ -420,6 +420,7 @@ func (s *service) handleGetLockInfo(ctx context.Context, req *query.Request, res
 
 	// fill the response
 	resp.GetLockInfoResponse.CnId = s.metadata.UUID
+	resp.GetLockInfoResponse.LockServiceID = s.lockService.GetServiceID()
 	resp.GetLockInfoResponse.LockInfoList = locks
 	return nil
 }
