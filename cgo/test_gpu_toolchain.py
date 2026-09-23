@@ -111,13 +111,28 @@ class GPUContractTest(unittest.TestCase):
         result = self.shell()
         self.assertEqual(result.returncode, 0, result.stderr)
         nvcc, flags, runtime = result.stdout.strip().split("|")
-        self.assertEqual(nvcc, str(self.prefix / "bin/nvcc"))
-        self.assertIn(str(self.prefix / "targets/x86_64-linux/include"), flags)
+        # The shell helper resolves the prefix physically; macOS maps /var to
+        # /private/var, unlike the lexical TemporaryDirectory path.
+        canonical = self.prefix.resolve()
+        self.assertEqual(nvcc, str(canonical / "bin/nvcc"))
+        self.assertIn(str(canonical / "targets/x86_64-linux/include"), flags)
         self.assertNotIn("stubs", runtime)
         self.assertEqual(
             runtime,
-            f"{self.prefix}/targets/x86_64-linux/lib:{self.prefix}/lib",
+            f"{canonical}/targets/x86_64-linux/lib:{canonical}/lib",
         )
+
+    def test_shell_consumer_canonicalizes_project_symlink(self):
+        alias = self.project.parent / "project-alias"
+        alias.symlink_to(self.project, target_is_directory=True)
+        env = dict(
+            self.env,
+            PIXI_PROJECT_ROOT=str(alias),
+            CONDA_PREFIX=str(alias / ".pixi/envs/mo"),
+        )
+        result = self.shell(env)
+        self.assertEqual(result.returncode, 0, result.stderr)
+        self.assertEqual(result.stdout.split("|", 1)[0], str(self.prefix.resolve() / "bin/nvcc"))
 
     def test_missing_or_mismatched_activation_fails_without_legacy_fallback(self):
         cases = (
