@@ -130,6 +130,11 @@ func encodeRemoteScope(s *Scope, proc *process.Process) ([]byte, error) {
 	if err != nil {
 		return nil, err
 	}
+	if features.StatementDigestText {
+		if err = validateMySQLStatementDigestTextDestination(proc, p); err != nil {
+			return nil, err
+		}
+	}
 	if features.IntegerArithmeticDomains {
 		if err = validateIntegerDomainDestination(proc, p); err != nil {
 			return nil, err
@@ -2276,6 +2281,21 @@ func validateRemoteExpressionPipelineProtocol(
 		return moerr.NewNotSupportedNoCtx(
 			"mixed JSON/BOOL equality requires MORPC protocol version 36",
 		)
+	}
+	if features.StatementDigestText &&
+		(!hasProtocolVersion || protocolVersion < defines.MORPCVersion94) {
+		return moerr.NewNotSupportedNoCtx(
+			"STATEMENT_DIGEST_TEXT requires MORPC protocol version 94",
+		)
+	}
+	if features.StatementDigestText {
+		// Resolve the initiating statement's text budget before the
+		// pipeline or ProcessInfo can be dispatched. A resolver failure or an
+		// invalid value must abort the remote path; falling back to 1024 here
+		// would let local and remote fragments compute different digests.
+		if _, err := process.ResolveMaxDigestLengthWithError(proc); err != nil {
+			return err
+		}
 	}
 	if features.FormatNumericArguments &&
 		(!hasProtocolVersion || protocolVersion < defines.MORPCVersion59) {

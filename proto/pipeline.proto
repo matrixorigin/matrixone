@@ -787,6 +787,10 @@ message SessionInfo {
   // IANA identity preserves historical and DST rules. Empty means the legacy
   // time_zone bytes describe a fixed-offset location.
   string time_zone_name = 17;
+  // MySQL statement digest text length captured on the initiating CN; zero is
+  // meaningful when present. These fields belong to MORPC v94.
+  int64 max_digest_length = 18;
+  bool max_digest_length_set = 19;
 }
 
 message SessionLoggerInfo {

@@ -4439,6 +4439,7 @@ func refreshStatementScopedSessionInfoWithNativeMode(nativeMode bool, proc *proc
 	if proc == nil || proc.Base == nil {
 		return
 	}
+	proc.ResetMaxDigestLengthSnapshot()
 	proc.Base.SessionInfo.MatrixOneNativeMode = nativeMode
 }
 

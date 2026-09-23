@@ -296,6 +296,7 @@ const (
 	notEqualFunctionID               int32 = 1
 	nullSafeEqualFunctionID          int32 = 406
 	internalJSONComparisonFunctionID int32 = 577
+	statementDigestTextFunctionID    int32 = 583
 	planBooleanTypeID                int32 = 10
 	planJSONTypeID                   int32 = 62
 	binFunctionID                    int32 = 270
@@ -335,7 +336,8 @@ const (
 // capabilities that can make a pipeline unsafe on an older remote worker.
 // NumericPrefix requires MORPC v30. JSONComparisonParam and
 // MixedJSONBooleanEquality require MORPC v36. FormatNumericArguments requires
-// MORPC v59. TypedConversionFunctions requires MORPC v64 because BIN/CONV
+// MORPC v59. StatementDigestText requires MORPC v94. TypedConversionFunctions
+// requires MORPC v64 because BIN/CONV
 // overload identities and their fixed-width execution contracts changed in
 // the same release. ASCIIInt32Result requires MORPC v65 because ASCII keeps
 // its overload IDs but changes its physical result vector from UINT8 to INT32.
@@ -382,6 +384,7 @@ type RemoteExpressionFeatures struct {
 	ExpressionResultMetadataContracts bool
 	DecimalLiteralSemantics           bool
 	SpatialDistanceSemantics          bool
+	StatementDigestText               bool
 }
 
 func (features RemoteExpressionFeatures) Any() bool {
@@ -401,7 +404,8 @@ func (features RemoteExpressionFeatures) Any() bool {
 		features.IPFunctionResultContracts ||
 		features.ExpressionResultMetadataContracts ||
 		features.DecimalLiteralSemantics ||
-		features.SpatialDistanceSemantics
+		features.SpatialDistanceSemantics ||
+		features.StatementDigestText
 }
 
 func isBoundedConditionalStringDomain(fn *Function) bool {
@@ -830,6 +834,12 @@ func RequiredRemoteExpressionFeatures(owner any) (features RemoteExpressionFeatu
 			if !features.JSONComparisonParam && fn != nil && fn.Func != nil &&
 				int32(fn.Func.Obj>>32) == internalJSONComparisonFunctionID {
 				features.JSONComparisonParam = true
+			}
+			if fn != nil && fn.Func != nil {
+				switch int32(fn.Func.Obj >> 32) {
+				case statementDigestTextFunctionID:
+					features.StatementDigestText = true
+				}
 			}
 			if !features.MixedJSONBooleanEquality && isMixedJSONBooleanEquality(fn) {
 				features.MixedJSONBooleanEquality = true

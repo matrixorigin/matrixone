@@ -182,6 +182,31 @@ func TestRequiresMORPCVersion30NumericPrefix(t *testing.T) {
 	require.False(t, required)
 }
 
+func TestRequiredRemoteExpressionFeaturesDetectsStatementDigestText(t *testing.T) {
+	for _, test := range []struct {
+		name       string
+		id         int64
+		objectName string
+		wantText   bool
+	}{
+		{name: "text", id: 583, objectName: "statement_digest_text", wantText: true},
+		{name: "main JSON storage size", id: 579, objectName: "json_storage_size"},
+		{name: "main JSON storage free", id: 580, objectName: "json_storage_free"},
+	} {
+		t.Run(test.name, func(t *testing.T) {
+			expr := &Expr{Expr: &Expr_F{F: &Function{
+				Func: &ObjectRef{Obj: test.id << 32, ObjName: test.objectName},
+			}}}
+			features, err := RequiredRemoteExpressionFeatures(&struct{ Expr *Expr }{Expr: expr})
+			require.NoError(t, err)
+			require.Equal(t, test.wantText, features.StatementDigestText)
+			if test.wantText {
+				require.True(t, features.Any())
+			}
+		})
+	}
+}
+
 func TestRequiresMORPCVersion23DynamicStringProvenance(t *testing.T) {
 	textType := Type{Id: 61}
 	binaryType := Type{Id: 65}
@@ -532,7 +557,32 @@ func TestRequiredRemoteExpressionFeaturesASCIIResultContract(t *testing.T) {
 	require.NoError(t, err)
 	require.False(t, features.ASCIIInt32Result,
 		"legacy UINT8 ASCII plans remain executable on a newer worker")
+}
 
+func TestRequiredRemoteExpressionFeaturesStatementDigestText(t *testing.T) {
+	ordinary := &Expr{Expr: &Expr_F{F: &Function{
+		Func: &ObjectRef{Obj: int64(21) << 32},
+	}}}
+	digest := &Expr{Expr: &Expr_F{F: &Function{
+		Func: &ObjectRef{Obj: int64(statementDigestTextFunctionID) << 32},
+		Args: []*Expr{ordinary},
+	}}}
+
+	features, err := RequiredRemoteExpressionFeatures(digest)
+	require.NoError(t, err)
+	require.True(t, features.StatementDigestText)
+	require.True(t, features.Any())
+
+	nested := &struct{ Expressions []*Expr }{Expressions: []*Expr{{
+		Expr: &Expr_F{F: &Function{Func: &ObjectRef{ObjName: "coalesce"}, Args: []*Expr{ordinary, digest}}},
+	}}}
+	features, err = RequiredRemoteExpressionFeatures(nested)
+	require.NoError(t, err)
+	require.True(t, features.StatementDigestText)
+
+	features, err = RequiredRemoteExpressionFeatures(ordinary)
+	require.NoError(t, err)
+	require.False(t, features.StatementDigestText)
 }
 
 func TestRequiredRemoteExpressionFeaturesBoundedConditionalStringDomains(t *testing.T) {
