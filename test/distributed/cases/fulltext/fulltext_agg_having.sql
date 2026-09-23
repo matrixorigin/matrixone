@@ -114,4 +114,30 @@ from rd group by cat having max(match(body) against('alpha')) > 0 order by cat;
 select cat, sum(round(match(body) against('alpha'), digits)) as total
 from rd group by cat having max(match(body) against('alpha')) > 0 order by cat;
 
+-- #29065 P1: a cast whose target type does NOT preserve zero breaks drop-safety and membership.
+-- CAST(0 AS YEAR)=2000 and CAST(CAST(0 AS CHAR) AS YEAR)=2000, so a dropped non-matching row
+-- (relevance 0) becomes a non-zero value. Driving would silently change results; conservatively
+-- left at 20105 instead. cat 10 has (alpha) matching and (beta) non-matching.
+create table castrd(id int primary key, cat int, body text);
+insert into castrd values (1,10,'alpha'),(2,10,'beta'),(3,20,'gamma'),(4,30,'delta');
+create fulltext index castft on castrd(body);
+
+-- SUM over a cast chain that turns the dropped non-matching 0 into 2000 is NOT drop-safe -> 20105.
+select cat, sum(cast(cast(match(body) against('alpha') as char) as year)) as s
+from castrd group by cat having max(match(body) against('alpha')) > 0 order by cat;
+
+-- A HAVING that casts MAX(MATCH) through SIGNED/CHAR/YEAR before > 0 is not plain membership
+-- (a non-matching group's 0 casts to 2000 > 0 and must be kept) -> 20105, not a partial result.
+select cat from castrd group by cat
+having cast(cast(cast(max(match(body) against('alpha')) as signed) as char) as year) > 0 order by cat;
+
+-- Control: a cast to a zero-preserving numeric type (DECIMAL) IS drop-safe -- CAST(0 AS DECIMAL)=0 is
+-- the SUM identity -- so driving stays result-preserving and the index is used.
+-- @separator:table
+-- @regex("fulltext_index_scan", true)
+explain select cat, sum(cast(match(body) against('alpha') as decimal(10,2))) as s
+from castrd group by cat having max(match(body) against('alpha')) > 0 order by cat;
+select cat, sum(cast(match(body) against('alpha') as decimal(10,2))) as s
+from castrd group by cat having max(match(body) against('alpha')) > 0 order by cat;
+
 drop database ft_agg_having;

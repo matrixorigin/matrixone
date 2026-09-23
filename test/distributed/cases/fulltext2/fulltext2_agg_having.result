@@ -123,4 +123,33 @@ from rd group by cat having max(match(body) against('alpha')) > 0 order by cat;
 select cat, sum(round(match(body) against('alpha'), digits)) as total
 from rd group by cat having max(match(body) against('alpha')) > 0 order by cat;
 not supported: MATCH() AGAINST() function cannot be replaced by FULLTEXT INDEX and full table scan with fulltext search is not supported yet.
+create table castrd(id int primary key, cat int, body text, fulltext2 index castft(body));
+insert into castrd values (1,10,'alpha'),(2,10,'beta'),(3,20,'gamma'),(4,30,'delta');
+select cat, sum(cast(cast(match(body) against('alpha') as char) as year)) as s
+from castrd group by cat having max(match(body) against('alpha')) > 0 order by cat;
+not supported: MATCH() AGAINST() function cannot be replaced by FULLTEXT INDEX and full table scan with fulltext search is not supported yet.
+select cat from castrd group by cat
+having cast(cast(cast(max(match(body) against('alpha')) as signed) as char) as year) > 0 order by cat;
+not supported: MATCH() AGAINST() function cannot be replaced by FULLTEXT INDEX and full table scan with fulltext search is not supported yet.
+explain select cat, sum(cast(match(body) against('alpha') as decimal(10,2))) as s
+from castrd group by cat having max(match(body) against('alpha')) > 0 order by cat;
+-- @regex("fulltext2_search", true)
+➤ TP QUERY PLAN[12,-1,0]  𝄀
+Project  𝄀
+  ->  Sort  𝄀
+        Sort Key: castrd.cat INTERNAL  𝄀
+        ->  Aggregate  𝄀
+              Group Key: castrd.cat  𝄀
+              Aggregate Functions: max(mo_fulltext_alias_0.__mo_ft_score), sum(cast(mo_fulltext_alias_0.__mo_ft_score AS DECIMAL64(10, 2)))  𝄀
+              Filter Cond: (max(MATCH (body) AGAINST ('alpha')) > 0)  𝄀
+              ->  Join  𝄀
+                    Join Type: INNER  𝄀
+                    Join Cond: (castrd.id = mo_fulltext_alias_0.__mo_ft_doc_id)  𝄀
+                    Runtime Filter Build: #[-1,0]  𝄀
+                    ->  Table Scan on ft2_agg_having.castrd  𝄀
+                          Runtime Filter Probe: castrd.id  𝄀
+                    ->  Table Function on fulltext2_search
+select cat, sum(cast(match(body) against('alpha') as decimal(10,2))) as s
+from castrd group by cat having max(match(body) against('alpha')) > 0 order by cat;
+➤ cat[4,32,0]  ¦  s[3,32,2]
 drop database ft2_agg_having;
