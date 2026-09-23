@@ -368,7 +368,7 @@ func TestTemporalCompatibilitySelectListAndNullBranches(t *testing.T) {
 					[]bool{false, true, true, true})
 			}
 			caseDef := NewFunctionTestCase(proc, []FunctionTestInput{input, interval, unit}, result, tc.fn).
-				WithSelectList(&FunctionSelectList{AnyNull: true, SelectList: []bool{false, false, true, true}})
+				WithSelectList(&FunctionSelectList{AnyNull: true, SelectList: []bool{true, true, false, false}})
 			ok, info := caseDef.Run()
 			require.True(t, ok, info)
 		})
@@ -388,7 +388,7 @@ func TestTemporalCompatibilitySelectListAndNullBranches(t *testing.T) {
 			result := NewFunctionTestResult(types.T_varchar.ToType(), false,
 				[]string{"1970", ""}, []bool{false, true})
 			caseDef := NewFunctionTestCase(proc, []FunctionTestInput{tc.in, format}, result, tc.fn).
-				WithSelectList(&FunctionSelectList{AnyNull: true, SelectList: []bool{false, true}})
+				WithSelectList(&FunctionSelectList{AnyNull: true, SelectList: []bool{true, false}})
 			ok, info := caseDef.Run()
 			require.True(t, ok, info)
 		})
