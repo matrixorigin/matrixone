@@ -91,6 +91,8 @@ func TestIssue28912COMStringParametersUseTextSemantics(t *testing.T) {
 		{name: "var-string SOUNDEX", query: "select soundex(?)", mysqlType: defines.MYSQL_TYPE_VAR_STRING, value: "\xc3\xa9", want: "é000"},
 		{name: "string QUOTE", query: "select quote(?)", mysqlType: defines.MYSQL_TYPE_STRING, value: "A\xffB", want: ""},
 		{name: "var-string QUOTE", query: "select quote(?)", mysqlType: defines.MYSQL_TYPE_VAR_STRING, value: "A\xffB", want: ""},
+		{name: "JSON_UNQUOTE string SOUNDEX", query: "select soundex(json_unquote(?))", mysqlType: defines.MYSQL_TYPE_STRING, value: "\"é\"", want: "é000"},
+		{name: "JSON_UNQUOTE CONCAT string QUOTE", query: "select quote(concat(json_unquote('\"\"'), ?))", mysqlType: defines.MYSQL_TYPE_STRING, value: "A\xffB", want: ""},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			ses, prepareStmt, cw, execCtx := newPreparedExecuteEnvForSQL(t, 28912, tc.query)

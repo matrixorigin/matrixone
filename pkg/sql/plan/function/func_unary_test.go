@@ -1096,6 +1096,17 @@ func TestQuoteReturnsEmptyForMalformedText(t *testing.T) {
 	require.True(t, ok, info)
 }
 
+func TestQuoteUTF8MB4BinMalformedText(t *testing.T) {
+	proc := testutil.NewProcess(t)
+	defer proc.Free()
+	typ := types.NewWithCharset(types.T_varchar, 64, 0, types.CharsetUTF8MB4Bin)
+	testCase := NewFunctionTestCase(proc,
+		[]FunctionTestInput{NewFunctionTestInput(typ, []string{"A\xffB", "valid"}, nil)},
+		NewFunctionTestResult(typ, false, []string{"", "'valid'"}, []bool{false, false}), Quote)
+	ok, info := testCase.Run()
+	require.True(t, ok, info)
+}
+
 func TestSoundexBinaryInputPreservesBinaryResultDomain(t *testing.T) {
 	proc := testutil.NewProcess(t)
 	defer proc.Free()
@@ -1270,6 +1281,17 @@ func TestSoundexTextMatchesMySQLUTF8Behavior(t *testing.T) {
 		),
 		Soundex,
 	)
+	ok, info := testCase.Run()
+	require.True(t, ok, info)
+}
+
+func TestSoundexUTF8MB4BinText(t *testing.T) {
+	proc := testutil.NewProcess(t)
+	defer proc.Free()
+	typ := types.NewWithCharset(types.T_varchar, 64, 0, types.CharsetUTF8MB4Bin)
+	testCase := NewFunctionTestCase(proc,
+		[]FunctionTestInput{NewFunctionTestInput(typ, []string{"é", "AéB", "\xffA"}, nil)},
+		NewFunctionTestResult(typ, false, []string{"é000", "A100", ""}, []bool{false, false, false}), Soundex)
 	ok, info := testCase.Run()
 	require.True(t, ok, info)
 }

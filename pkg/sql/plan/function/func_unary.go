@@ -1356,6 +1356,7 @@ func QuoteString(str string) string {
 func Quote(ivecs []*vector.Vector, result vector.FunctionResultWrapper, proc *process.Process, length int, selectList *FunctionSelectList) error {
 	parameter := vector.GenerateFunctionStrParameter(ivecs[0])
 	rs := vector.MustFunctionResult[types.Varlena](result)
+	isUTF8Text := isExplicitUTF8Charset(ivecs[0].GetType().Charset)
 	for row := uint64(0); row < uint64(length); row++ {
 		if selectList != nil && (selectList.IgnoreAllRow() ||
 			(!selectList.ShouldEvalAllRow() && selectList.Contains(row))) {
@@ -1376,7 +1377,7 @@ func Quote(ivecs []*vector.Vector, result vector.FunctionResultWrapper, proc *pr
 			if isBinary {
 				return moerr.NewCannotConvertString(proc.Ctx, string(value), "binary", "utf8mb4")
 			}
-			if ivecs[0].GetType().Charset == types.CharsetUTF8 {
+			if isUTF8Text {
 				// MySQL's text-domain QUOTE returns an empty string for malformed
 				// multibyte input. Keep the binary-domain conversion error above;
 				// SQL EXECUTE markers can be rebound to text without changing bytes.
@@ -5719,7 +5720,7 @@ func soundexTextString(str string) string {
 
 func Soundex(ivecs []*vector.Vector, result vector.FunctionResultWrapper, proc *process.Process, length int, selectList *FunctionSelectList) error {
 	textSoundex := SoundexString
-	if ivecs[0].GetType().Charset == types.CharsetUTF8 {
+	if isExplicitUTF8Charset(ivecs[0].GetType().Charset) {
 		textSoundex = soundexTextString
 	}
 	return opUnaryBytesToBytesByStringDomain(
