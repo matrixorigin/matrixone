@@ -32,7 +32,6 @@ type EmbeddedReadSource uint8
 
 const (
 	EmbeddedReadMO EmbeddedReadSource = iota + 1
-	EmbeddedReadTAE
 )
 
 // EmbeddedReadBinding binds one plan scan to one native query-local input.
@@ -83,7 +82,7 @@ func (c *Candidate) EmbeddedMOReads() ([]EmbeddedMORead, error) {
 // BuildEmbedded serializes a plan whose storage scans resolve only through
 // explicit query-local named-table bindings. MO bindings replace the complete
 // scan because the MO producer already applies its filter, projection and
-// fetch. TAE bindings preserve those operations in Substrait.
+// fetch. The embedded route accepts only MO readers in this milestone.
 func (c *Candidate) BuildEmbedded(bindings map[int32]EmbeddedReadBinding) ([]byte, error) {
 	if c == nil || c.query == nil {
 		return nil, moerr.NewInternalErrorNoCtx("substrait: nil embedded candidate")
@@ -144,18 +143,15 @@ func (c *Candidate) validateEmbeddedBindings(bindings map[int32]EmbeddedReadBind
 		if binding.BindingID != expected {
 			return moerr.NewInternalErrorNoCtxf("substrait: embedded binding mismatch for node %d: got %d, want %d", read.NodeID, binding.BindingID, expected)
 		}
-		switch binding.Source {
-		case EmbeddedReadMO:
-			node, err := c.embeddedReadNode(read.NodeID)
-			if err != nil {
-				return err
-			}
-			if _, _, err = embeddedMORead(node); err != nil {
-				return err
-			}
-		case EmbeddedReadTAE:
-		default:
+		if binding.Source != EmbeddedReadMO {
 			return moerr.NewInternalErrorNoCtxf("substrait: embedded binding %d has unsupported source %d", binding.BindingID, binding.Source)
+		}
+		node, err := c.embeddedReadNode(read.NodeID)
+		if err != nil {
+			return err
+		}
+		if _, _, err = embeddedMORead(node); err != nil {
+			return err
 		}
 	}
 	return nil

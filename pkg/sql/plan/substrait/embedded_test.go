@@ -63,30 +63,19 @@ func TestEmbeddedMOReadIdentityFallsBackToTableDefinition(t *testing.T) {
 	require.Empty(t, reads[0].Schema)
 }
 
-func TestEmbeddedTAEPreservesScanOperationsAndPhysicalSchema(t *testing.T) {
+func TestEmbeddedTAESourceIsDeferred(t *testing.T) {
 	candidate, err := Export(embeddedProjectedScanQuery())
 	require.NoError(t, err)
-	wire, err := candidate.BuildEmbedded(map[int32]EmbeddedReadBinding{0: {BindingID: 1, Source: EmbeddedReadTAE}})
-	require.NoError(t, err)
-
-	input := embeddedPlan(t, wire).Relations[0].GetRoot().Input
-	require.NotNil(t, input.GetFetch())
-	project := input.GetFetch().Input.GetProject()
-	require.NotNil(t, project)
-	filter := project.Input.GetFilter()
-	require.NotNil(t, filter)
-	read := filter.Input.GetRead()
-	require.NotNil(t, read)
-	require.Equal(t, []string{embeddedNamedTable, "1"}, read.GetNamedTable().Names)
-	require.Equal(t, []string{"a", "b"}, read.BaseSchema.Names)
+	_, err = candidate.BuildEmbedded(map[int32]EmbeddedReadBinding{0: {BindingID: 1, Source: 2}})
+	require.ErrorContains(t, err, "unsupported source")
 }
 
-func TestBuildEmbeddedSupportsMixedReadSources(t *testing.T) {
+func TestBuildEmbeddedSupportsMultipleMOReads(t *testing.T) {
 	candidate, err := Export(embeddedJoinQuery(false))
 	require.NoError(t, err)
 	wire, err := candidate.BuildEmbedded(map[int32]EmbeddedReadBinding{
 		0: {BindingID: 1, Source: EmbeddedReadMO},
-		1: {BindingID: 2, Source: EmbeddedReadTAE},
+		1: {BindingID: 2, Source: EmbeddedReadMO},
 	})
 	require.NoError(t, err)
 
@@ -95,7 +84,7 @@ func TestBuildEmbeddedSupportsMixedReadSources(t *testing.T) {
 	require.Equal(t, []string{embeddedNamedTable, "1"}, join.Left.GetRead().GetNamedTable().Names)
 	require.Equal(t, []string{"col_0"}, join.Left.GetRead().BaseSchema.Names)
 	require.Equal(t, []string{embeddedNamedTable, "2"}, join.Right.GetRead().GetNamedTable().Names)
-	require.Equal(t, []string{"right_value"}, join.Right.GetRead().BaseSchema.Names)
+	require.Equal(t, []string{"col_0"}, join.Right.GetRead().BaseSchema.Names)
 }
 
 func TestBuildEmbeddedRejectsInvalidBindings(t *testing.T) {
@@ -107,11 +96,11 @@ func TestBuildEmbeddedRejectsInvalidBindings(t *testing.T) {
 		contains string
 	}{
 		{name: "count mismatch", bindings: map[int32]EmbeddedReadBinding{0: {BindingID: 1, Source: EmbeddedReadMO}}, contains: "binding count mismatch"},
-		{name: "missing scan", bindings: map[int32]EmbeddedReadBinding{1: {BindingID: 2, Source: EmbeddedReadTAE}, 9: {BindingID: 1, Source: EmbeddedReadMO}}, contains: "missing embedded binding for node 0"},
-		{name: "zero", bindings: map[int32]EmbeddedReadBinding{0: {Source: EmbeddedReadMO}, 1: {BindingID: 2, Source: EmbeddedReadTAE}}, contains: "is zero"},
-		{name: "duplicate", bindings: map[int32]EmbeddedReadBinding{0: {BindingID: 1, Source: EmbeddedReadMO}, 1: {BindingID: 1, Source: EmbeddedReadTAE}}, contains: "duplicate embedded binding"},
-		{name: "not deterministic", bindings: map[int32]EmbeddedReadBinding{0: {BindingID: 2, Source: EmbeddedReadMO}, 1: {BindingID: 1, Source: EmbeddedReadTAE}}, contains: "binding mismatch"},
-		{name: "unsupported source", bindings: map[int32]EmbeddedReadBinding{0: {BindingID: 1, Source: 99}, 1: {BindingID: 2, Source: EmbeddedReadTAE}}, contains: "unsupported source"},
+		{name: "missing scan", bindings: map[int32]EmbeddedReadBinding{1: {BindingID: 2, Source: EmbeddedReadMO}, 9: {BindingID: 1, Source: EmbeddedReadMO}}, contains: "missing embedded binding for node 0"},
+		{name: "zero", bindings: map[int32]EmbeddedReadBinding{0: {Source: EmbeddedReadMO}, 1: {BindingID: 2, Source: EmbeddedReadMO}}, contains: "is zero"},
+		{name: "duplicate", bindings: map[int32]EmbeddedReadBinding{0: {BindingID: 1, Source: EmbeddedReadMO}, 1: {BindingID: 1, Source: EmbeddedReadMO}}, contains: "duplicate embedded binding"},
+		{name: "not deterministic", bindings: map[int32]EmbeddedReadBinding{0: {BindingID: 2, Source: EmbeddedReadMO}, 1: {BindingID: 1, Source: EmbeddedReadMO}}, contains: "binding mismatch"},
+		{name: "unsupported source", bindings: map[int32]EmbeddedReadBinding{0: {BindingID: 1, Source: 99}, 1: {BindingID: 2, Source: EmbeddedReadMO}}, contains: "unsupported source"},
 	}
 	for _, test := range tests {
 		t.Run(test.name, func(t *testing.T) {
@@ -141,8 +130,6 @@ func TestEmbeddedReadsRejectReplayAndUnsupportedMOProjection(t *testing.T) {
 		require.ErrorContains(t, err, "not a direct source column")
 		_, err = candidate.BuildEmbedded(map[int32]EmbeddedReadBinding{0: {BindingID: 1, Source: EmbeddedReadMO}})
 		require.ErrorContains(t, err, "not a direct source column")
-		_, err = candidate.BuildEmbedded(map[int32]EmbeddedReadBinding{0: {BindingID: 1, Source: EmbeddedReadTAE}})
-		require.NoError(t, err, "the same projection remains supported by direct TAE")
 	})
 
 	t.Run("projection type mismatch", func(t *testing.T) {

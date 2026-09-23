@@ -220,7 +220,7 @@ func (e *exporter) node(id int32) (*spb.Rel, error) {
 	switch n.NodeType {
 	case planpb.Node_TABLE_SCAN:
 		rel, err = e.read(n)
-		if err == nil && e.embeddedBindings != nil && e.embeddedBindings[n.NodeId].Source == EmbeddedReadMO {
+		if err == nil && e.embeddedBindings != nil {
 			return rel, nil
 		}
 	case planpb.Node_FILTER:
@@ -628,20 +628,11 @@ func (e *exporter) read(n *planpb.Node) (*spb.Rel, error) {
 		if !ok {
 			return nil, moerr.NewInternalErrorNoCtxf("substrait: missing embedded binding for node %d", n.NodeId)
 		}
-		if binding.Source == EmbeddedReadMO {
-			_, outputSchema, embeddedErr := embeddedMORead(n)
-			if embeddedErr != nil {
-				return nil, embeddedErr
-			}
-			return embeddedNamedRead(binding, outputSchema), nil
+		_, outputSchema, embeddedErr := embeddedMORead(n)
+		if embeddedErr != nil {
+			return nil, embeddedErr
 		}
-		rel := embeddedNamedRead(binding, schema)
-		width := len(schema.Struct.Types)
-		rel, err = e.applyFilter(rel, n.FilterList, []int{width})
-		if err != nil {
-			return nil, err
-		}
-		return e.applyProject(rel, width, n.ProjectList, []int{width})
+		return embeddedNamedRead(binding, outputSchema), nil
 	}
 	value := e.readValues[n.NodeId]
 	if !e.validateOnly && len(value) == 0 {
