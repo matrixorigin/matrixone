@@ -666,19 +666,117 @@ func TestSortAndSyncOneTableUsesDataWriter(t *testing.T) {
 	for _, bat := range bats {
 		require.Nil(t, bat)
 	}
+	require.Empty(t, writer.failedWriters, "successful one-shot writers must not be retained")
 	require.NotNil(t, writer.insertBlockInfo[0])
+	require.Equal(t, objectNamesFromInsertInfo(t, writer.insertBlockInfo[0]), writer.syncedObjectNames)
 	info := writer.insertBlockInfo[0]
 	statsData, statsArea := vector.MustVarlenaRawData(info.Vecs[1])
 	stats := objectio.ObjectStats(statsData[0].GetByteSlice(statsArea))
 	objectName := stats.ObjectName().String()
+	objectNames := append([]string(nil), writer.syncedObjectNames...)
 	fs, err := colexec.GetSharedFSFromProc(proc)
 	require.NoError(t, err)
-	_, err = fs.StatFile(proc.Ctx, objectName)
-	require.NoError(t, err)
+	for _, name := range objectNames {
+		_, err = fs.StatFile(proc.Ctx, name)
+		require.NoError(t, err)
+	}
 
-	require.NoError(t, writer.reset(proc, true))
+	deleteErr := errors.New("injected one-shot object cleanup failure")
+	writer.syncedObjectFS = &failOnceMultiUpdateDeleteFS{FileService: fs, failErr: deleteErr}
+	require.ErrorIs(t, writer.reset(proc, true), deleteErr)
+	require.True(t, writer.syncedObjectCleanupPending)
+	require.Equal(t, objectNames, writer.syncedObjectNames)
 	_, err = fs.StatFile(proc.Ctx, objectName)
-	require.True(t, moerr.IsMoErrCode(err, moerr.ErrFileNotFound), "failed pipeline should delete unaccepted object, got %v", err)
+	require.NoError(t, err, "failed cleanup must retain the exact object name for retry")
+
+	// A later success-shaped reset retries the abort cleanup; it cannot
+	// reinterpret an object whose deletion failed as accepted by the workspace.
+	require.NoError(t, writer.reset(proc, false))
+	_, err = fs.StatFile(proc.Ctx, objectName)
+	require.True(t, moerr.IsMoErrCode(err, moerr.ErrFileNotFound), "retry should delete the unaccepted object, got %v", err)
+}
+
+func TestSortAndSyncOneTableReleasesWriterMemoryAcrossSpills(t *testing.T) {
+	_, _, proc := prepareTestCtx(t, true)
+	defer proc.Free()
+	_, tableDef := getTestMainTable()
+	updateCtx := &MultiUpdateCtx{
+		TableDef:   tableDef,
+		InsertCols: []int{0, 1, 2, 3},
+	}
+	update := &MultiUpdate{MultiUpdateCtx: []*MultiUpdateCtx{updateCtx}}
+	update.resetMultiUpdateCtxs()
+	writer, err := newS3Writer(proc.GetService(), update)
+	require.NoError(t, err)
+	defer func() { require.NoError(t, writer.free(proc, true)) }()
+	fs, err := colexec.GetSharedFSFromProc(proc)
+	require.NoError(t, err)
+	analyzer := process.NewAnalyzer(0, false, false, "multi-update-multi-spill-memory")
+	baselineMP := proc.Mp().CurrNB()
+	acceptedObjectNames := make([]string, 0, 4)
+
+	spill := func() []string {
+		bats, _ := prepareTestInsertBatchs(proc.Mp(), 2, colexec.DefaultBatchSize, false, false)
+		before := len(writer.syncedObjectNames)
+		require.NoError(t, writer.sortAndSyncOneTable(
+			proc,
+			tableDef,
+			analyzer,
+			0,
+			false,
+			bats,
+			true,
+		))
+		require.Empty(t, writer.failedWriters, "successful one-shot writers must be closed immediately")
+		require.Greater(t, len(writer.syncedObjectNames), before, "each successful spill must transfer its cleanup names")
+		require.NotNil(t, writer.insertBlockInfo[0])
+		spillObjectNames := objectNamesFromInsertInfo(t, writer.insertBlockInfo[0])
+		require.Equal(t, spillObjectNames, writer.syncedObjectNames[before:])
+		for _, name := range spillObjectNames {
+			_, statErr := fs.StatFile(proc.Ctx, name)
+			require.NoError(t, statErr)
+		}
+
+		// Remove the required output metadata before sampling MPool. Any retained
+		// delta is then temporary Sinker memory, not published metadata growth.
+		writer.insertBlockInfo[0].Clean(proc.Mp())
+		writer.insertBlockInfo[0] = nil
+		writer.insertBlockRowCount[0] = 0
+		require.Equal(t, baselineMP, proc.Mp().CurrNB(), "completed one-shot writer memory must not accumulate across spills")
+		return spillObjectNames
+	}
+
+	for range 3 {
+		acceptedObjectNames = append(acceptedObjectNames, spill()...)
+	}
+	require.NoError(t, writer.reset(proc, false))
+	require.Empty(t, writer.syncedObjectNames)
+	for _, name := range acceptedObjectNames {
+		_, statErr := fs.StatFile(proc.Ctx, name)
+		require.NoError(t, statErr, "a successful handoff must preserve accepted objects")
+	}
+
+	unacceptedObjectNames := spill()
+	require.NoError(t, writer.reset(proc, true))
+	for _, name := range unacceptedObjectNames {
+		_, err = fs.StatFile(proc.Ctx, name)
+		require.True(t, moerr.IsMoErrCode(err, moerr.ErrFileNotFound), "abort must delete the current execution's object %s, got %v", name, err)
+	}
+	for _, name := range acceptedObjectNames {
+		_, err = fs.StatFile(proc.Ctx, name)
+		require.NoError(t, err, "a later abort must not delete an earlier accepted object")
+	}
+}
+
+func objectNamesFromInsertInfo(t *testing.T, info *batch.Batch) []string {
+	t.Helper()
+	statsData, statsArea := vector.MustVarlenaRawData(info.Vecs[1])
+	objectNames := make([]string, len(statsData))
+	for i := range statsData {
+		stats := objectio.ObjectStats(statsData[i].GetByteSlice(statsArea))
+		objectNames[i] = stats.ObjectName().String()
+	}
+	return objectNames
 }
 
 func TestMultiUpdateResetKeepsFailedCleanupOutOfReusableState(t *testing.T) {
@@ -813,6 +911,58 @@ func TestMultiUpdateFreeTransfersFailedCleanupWithBorrowedBuffer(t *testing.T) {
 	require.Zero(t, freeList.Len())
 	_, err = baseFS.StatFile(proc.Ctx, objectName)
 	require.True(t, moerr.IsMoErrCode(err, moerr.ErrFileNotFound), "transaction retry should delete the object, got %v", err)
+}
+
+func TestMultiUpdateFreeTransfersSyncedObjectCleanup(t *testing.T) {
+	_, ctrl, proc := prepareTestCtx(t, true)
+	defer proc.Free()
+	_, tableDef := getTestMainTable()
+	updateCtx := &MultiUpdateCtx{
+		TableDef:   tableDef,
+		InsertCols: []int{0, 1, 2, 3},
+	}
+	arg := &MultiUpdate{MultiUpdateCtx: []*MultiUpdateCtx{updateCtx}}
+	arg.resetMultiUpdateCtxs()
+	delegate, err := newS3Writer(proc.GetService(), arg)
+	require.NoError(t, err)
+	batches, _ := prepareTestInsertBatchs(proc.Mp(), 2, colexec.DefaultBatchSize, false, false)
+	require.NoError(t, delegate.sortAndSyncOneTable(
+		proc,
+		tableDef,
+		process.NewAnalyzer(0, false, false, "multi-update-free-synced-object"),
+		0,
+		false,
+		batches,
+		true,
+	))
+	objectNames := objectNamesFromInsertInfo(t, delegate.insertBlockInfo[0])
+	baseFS, err := colexec.GetSharedFSFromProc(proc)
+	require.NoError(t, err)
+	deleteErr := errors.New("injected synced-object cleanup failure during Free")
+	delegate.syncedObjectFS = &failOnceMultiUpdateDeleteFS{FileService: baseFS, failErr: deleteErr}
+
+	txnOp := mock_frontend.NewMockTxnOperator(ctrl)
+	workspace := &multiUpdateS3CleanupWorkspace{}
+	txnOp.EXPECT().GetWorkspace().Return(workspace).AnyTimes()
+	proc.Base.TxnOperator = txnOp
+	update := &MultiUpdate{}
+	update.ctr.s3Writer = delegate
+	update.Free(proc, true, deleteErr)
+	require.Nil(t, update.ctr.s3Writer, "the transaction owns the lightweight cleanup ledger after operator release")
+	require.Len(t, workspace.cleanups, 1)
+	require.True(t, delegate.syncedObjectCleanupPending)
+	for _, name := range objectNames {
+		_, err = baseFS.StatFile(proc.Ctx, name)
+		require.NoError(t, err, "failed deletion must preserve object %s for the transaction retry", name)
+	}
+
+	require.NoError(t, workspace.cleanups[0](proc.Ctx))
+	require.Empty(t, delegate.syncedObjectNames)
+	require.Nil(t, delegate.insertFreeLists)
+	for _, name := range objectNames {
+		_, err = baseFS.StatFile(proc.Ctx, name)
+		require.True(t, moerr.IsMoErrCode(err, moerr.ErrFileNotFound), "transaction retry should delete object %s, got %v", name, err)
+	}
 }
 
 func TestPartitionMultiUpdateFreeTransfersFailedCleanup(t *testing.T) {
