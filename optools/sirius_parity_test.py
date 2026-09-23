@@ -14,6 +14,8 @@
 
 from pathlib import Path
 import copy
+import io
+import json
 import os
 import select
 import sys
@@ -126,6 +128,11 @@ class SiriusParityTest(unittest.TestCase):
             result["execution_stats"] = stats
         return result
 
+    def campaign_for(self, schedule):
+        campaign = sirius_parity.build_campaign(self.provenance())
+        campaign["schedule"] = copy.deepcopy(list(schedule))
+        return campaign
+
     def test_schedule_is_complete_serial_and_rotated(self):
         schedule = sirius_parity.build_schedule(self.provenance())
         self.assertEqual(1860, len(schedule))
@@ -160,6 +167,7 @@ class SiriusParityTest(unittest.TestCase):
                     (Path(first) / name).read_bytes(),
                     (Path(second) / name).read_bytes(),
                 )
+            self.assertFalse((Path(first) / "failure.json").exists())
             headings = (Path(first) / "summary.csv").read_text().splitlines()[0]
             for query in range(1, 23):
                 self.assertIn(f"Q{query}", headings.split(","))
@@ -167,6 +175,261 @@ class SiriusParityTest(unittest.TestCase):
             markdown = (Path(first) / "summary.md").read_text()
             self.assertIn("## SF1", markdown)
             self.assertIn("## SF10", markdown)
+
+    def test_runner_exception_and_malformed_output_are_bounded(self):
+        schedule = sirius_parity.build_schedule(self.provenance())[:1]
+        secret = "RUNNER-SECRET-29244"
+        for runner, category in (
+            (lambda spec: (_ for _ in ()).throw(RuntimeError(secret)), "runner-exception"),
+            (lambda spec: (_ for _ in ()).throw(sirius_parity.CampaignFailure(
+                secret, 1, secret, 1, 0, "invalid", secret)), "runner-exception"),
+            (lambda spec: None, "malformed-output"),
+        ):
+            with self.assertRaises(sirius_parity.CampaignFailure) as raised:
+                sirius_parity.execute_campaign(self.campaign_for(schedule), runner)
+            self.assertEqual(category, raised.exception.diagnostic["category"])
+            self.assertNotIn(secret, str(raised.exception))
+            self.assertEqual(1, raised.exception.diagnostic["attempted"])
+            self.assertEqual(0, raised.exception.diagnostic["validated"])
+
+    def test_executor_receives_a_private_spec_copy(self):
+        spec = sirius_parity.build_schedule(self.provenance())[0]
+
+        def mutating_runner(executor_spec):
+            executor_spec["route"] = "runner-secret"
+            return self.output(spec)
+
+        runs = sirius_parity.execute_campaign(self.campaign_for([spec]), mutating_runner)
+        self.assertEqual(spec["route"], runs[0]["route"])
+
+    def test_incremental_oracles_support_both_arrival_orders_and_pending_routes(self):
+        specs = sirius_parity.build_schedule(self.provenance())[:5]
+        for ordered in (specs, list(reversed(specs))):
+            campaign = self.campaign_for(ordered)
+            runs = sirius_parity.execute_campaign(campaign, self.output)
+            self.assertEqual(5, len(runs))
+            validator = sirius_parity.IncrementalValidator(campaign)
+            for spec, record in zip(ordered, runs):
+                self.assertEqual(spec, validator.start())
+                validator.accept(record)
+            validator.finish()
+            self.assertEqual(5, validator.attempted)
+            self.assertEqual(5, validator.validated)
+
+    def test_incremental_result_mismatch_uses_native_as_expected_side(self):
+        specs = sirius_parity.build_schedule(self.provenance())[:5]
+        for ordered in (specs, list(reversed(specs))):
+            target = next(spec for spec in ordered if spec["route"] != "mo-native")
+            calls = []
+
+            def runner(spec, target=target):
+                calls.append(spec["route"])
+                output = self.output(spec)
+                if spec["route"] == target["route"]:
+                    output["result"]["rows"][0][0]["value"] = "9.00"
+                return output
+
+            with self.assertRaises(sirius_parity.CampaignFailure) as raised:
+                sirius_parity.execute_campaign(self.campaign_for(ordered), runner)
+            self.assertEqual("result-mismatch", raised.exception.diagnostic["category"])
+            current = ordered[1] if ordered[0]["route"] == "mo-native" else ordered[-1]
+            self.assertEqual(current["sequence"], raised.exception.diagnostic["sequence"])
+            self.assertEqual(current["route"], raised.exception.diagnostic["route"])
+            if ordered[0]["route"] == "mo-native":
+                self.assertEqual(2, len(calls))
+            else:
+                self.assertEqual(len(ordered), len(calls))
+            self.assertEqual(1, raised.exception.diagnostic["validated"])
+
+    def test_incremental_completion_duplicate_and_missing_native_categories(self):
+        specs = sirius_parity.build_schedule(self.provenance())[:5]
+        complete = self.campaign_for(specs)
+        complete_runs = sirius_parity.execute_campaign(complete, self.output)
+        with self.assertRaisesRegex(sirius_parity.CampaignFailure, "incomplete campaign"):
+            sirius_parity.validate_runs(complete, complete_runs[:-1])
+        with self.assertRaisesRegex(sirius_parity.CampaignFailure, "incomplete campaign"):
+            sirius_parity.validate_runs(complete, complete_runs + complete_runs[:1])
+
+        duplicate = self.campaign_for([specs[0], specs[0]])
+        duplicate_runs = [
+            {**specs[0], "output": self.output(specs[0])},
+            {**specs[0], "output": self.output(specs[0])},
+        ]
+        with self.assertRaises(sirius_parity.CampaignFailure) as raised:
+            sirius_parity.validate_runs(duplicate, duplicate_runs)
+        self.assertEqual("duplicate", raised.exception.diagnostic["category"])
+
+        missing_native = self.campaign_for([specs[1]])
+        missing_run = {**specs[1], "output": self.output(specs[1])}
+        with self.assertRaises(sirius_parity.CampaignFailure) as raised:
+            sirius_parity.validate_runs(missing_native, [missing_run])
+        self.assertEqual("missing-native", raised.exception.diagnostic["category"])
+        self.assertEqual("incomplete", raised.exception.diagnostic["status"])
+
+    def test_cli_rejects_stale_output_without_running_or_overwriting(self):
+        with tempfile.TemporaryDirectory() as directory:
+            output = Path(directory) / "output"
+            output.mkdir()
+            old = output / "summary.md"
+            old.write_text("old PASS\n", encoding="utf-8")
+            with (
+                mock.patch.object(sirius_parity, "SubprocessExecutor") as executor,
+                mock.patch.object(sys, "stderr", new_callable=io.StringIO) as stderr,
+            ):
+                result = sirius_parity.main([
+                    "--spec", str(Path(directory) / "missing.json"),
+                    "--output", str(output), "--", "runner",
+                ])
+            self.assertEqual(1, result)
+            executor.assert_not_called()
+            self.assertEqual("old PASS\n", old.read_text())
+            self.assertFalse((output / "failure.json").exists())
+            self.assertNotIn("missing.json", stderr.getvalue())
+
+    def test_cli_failure_artifact_and_write_failure_keep_safe_original_category(self):
+        secret = "FAILURE-DETAIL-29244"
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            spec_path = root / "spec.json"
+            spec_path.write_text(json.dumps({"provenance": self.provenance()}), encoding="utf-8")
+            schedule = sirius_parity.build_schedule(self.provenance())
+            for failure_at, invalid in ((1, "fallback"), (3, "fallback"), (1, "encoding")):
+                calls = []
+
+                def runner(spec, failure_at=failure_at):
+                    calls.append(spec["sequence"])
+                    output = self.output(spec)
+                    if len(calls) == failure_at:
+                        output["fallback"] = invalid == "fallback"
+                        output["result"]["rows"][0][0]["value"] = secret + (
+                            "\ud800" if invalid == "encoding" else ""
+                        )
+                        output["unknown_runner_field"] = secret
+                    return output
+
+                output_directory = root / f"failure-{failure_at}-{invalid}"
+                with (
+                    mock.patch.object(sirius_parity, "SubprocessExecutor", return_value=runner),
+                    mock.patch.object(sys, "stderr", new_callable=io.StringIO) as stderr,
+                ):
+                    result = sirius_parity.main([
+                        "--spec", str(spec_path), "--output", str(output_directory),
+                        "--", "runner",
+                    ])
+                self.assertEqual(1, result)
+                self.assertEqual(
+                    [spec["sequence"] for spec in schedule[:failure_at]], calls
+                )
+                payload = json.loads((output_directory / "failure.json").read_text())
+                self.assertEqual({
+                    "category": "invalid-output",
+                    "sequence": schedule[failure_at - 1]["sequence"],
+                    "route": schedule[failure_at - 1]["route"],
+                    "attempted": failure_at,
+                    "validated": failure_at - 1,
+                    "status": "invalid",
+                }, payload)
+                self.assertNotIn(secret, (output_directory / "failure.json").read_text())
+                self.assertNotIn(secret, stderr.getvalue())
+                self.assertIn("artifact_status=written", stderr.getvalue())
+
+            # Even the owner cannot overwrite a prior diagnostic or follow a symlink.
+            failure = sirius_parity.CampaignFailure("invalid-output", 1, "mo-native", 1, 0, "invalid")
+            destination = output_directory / "failure.json"
+            saved = destination.read_bytes()
+            with self.assertRaises(FileExistsError):
+                sirius_parity.write_failure(output_directory, failure, allow_partial=True)
+            link_directory = root / "link"
+            link_directory.mkdir()
+            (link_directory / "failure.json").symlink_to(destination)
+            with self.assertRaises(FileExistsError):
+                sirius_parity.write_failure(link_directory, failure, allow_partial=True)
+            self.assertEqual(saved, destination.read_bytes())
+
+            failure = sirius_parity.CampaignFailure(
+                "invalid-output", 1, "mo-native", 1, 0, "invalid", secret
+            )
+
+            with (
+                mock.patch.object(sirius_parity, "execute_campaign", side_effect=failure),
+                mock.patch.object(
+                    sirius_parity, "write_failure", side_effect=OSError(secret)
+                ),
+                mock.patch.object(sys, "stderr", new_callable=io.StringIO) as stderr,
+            ):
+                result = sirius_parity.main([
+                    "--spec", str(spec_path), "--output", str(root / "write-failure"),
+                    "--", "runner",
+                ])
+            self.assertEqual(1, result)
+            self.assertNotIn(secret, stderr.getvalue())
+            self.assertIn('"category":"invalid-output"', stderr.getvalue())
+            self.assertIn("artifact_status=write-failed", stderr.getvalue())
+
+    def test_cli_partial_artifact_failure_retains_diagnostics_and_counts(self):
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            spec_path = root / "spec.json"
+            spec_path.write_text(json.dumps({"provenance": self.provenance()}), encoding="utf-8")
+            write = Path.write_text
+            for exception in (OSError, UnicodeEncodeError):
+                def fail_write(path, data, *args, **kwargs):
+                    if path.name == "runs.jsonl":
+                        if exception is UnicodeEncodeError:
+                            raise UnicodeEncodeError("utf-8", "\ud800", 0, 1, "test")
+                        raise OSError("WRITE-SECRET")
+                    return write(path, data, *args, **kwargs)
+
+                output = root / exception.__name__
+                with (
+                    mock.patch.object(sirius_parity, "SubprocessExecutor", return_value=self.output),
+                    mock.patch.object(Path, "write_text", fail_write),
+                    mock.patch.object(sys, "stderr", new_callable=io.StringIO) as stderr,
+                ):
+                    code = sirius_parity.main(["--spec", str(spec_path), "--output", str(output), "--", "runner"])
+                self.assertEqual(1, code)
+                self.assertEqual({"campaign.json", "failure.json"}, {p.name for p in output.iterdir()})
+                self.assertEqual({
+                    "category": "artifact-write", "sequence": None, "route": None,
+                    "attempted": 1860, "validated": 1860, "status": "invalid",
+                }, json.loads((output / "failure.json").read_text()))
+                self.assertIn("artifact_status=written", stderr.getvalue())
+                self.assertNotIn("WRITE-SECRET", stderr.getvalue())
+
+    def test_cli_preserves_success_and_performance_exit_codes(self):
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            spec_path = root / "spec.json"
+            spec_path.write_text(json.dumps({"provenance": self.provenance()}), encoding="utf-8")
+
+            def regressed(spec):
+                output = self.output(spec)
+                if spec["route"] == "embedded-mo":
+                    output["wall_seconds"] *= 10
+                return output
+
+            for name, runner, expected_exit, marker in (
+                ("pass", self.output, 0, "Overall: PASS"),
+                ("gate", regressed, 2, "Overall: FAIL"),
+            ):
+                output_directory = root / name
+                with (
+                    mock.patch.object(sirius_parity, "SubprocessExecutor", return_value=runner),
+                    mock.patch.object(sirius_parity, "_validate_output", wraps=sirius_parity._validate_output) as validation,
+                    mock.patch.object(sirius_parity, "_compare_results", wraps=sirius_parity._compare_results) as comparison,
+                    mock.patch.object(sirius_parity, "_result_bytes", wraps=sirius_parity._result_bytes) as encoding,
+                ):
+                    result = sirius_parity.main([
+                        "--spec", str(spec_path), "--output", str(output_directory),
+                        "--", "runner",
+                    ])
+                self.assertEqual(expected_exit, result)
+                self.assertEqual((1860, 1488, 3720),
+                                 (validation.call_count, comparison.call_count, encoding.call_count))
+                self.assertTrue((output_directory / "campaign.json").exists())
+                self.assertTrue((output_directory / "runs.jsonl").exists())
+                self.assertIn(marker, (output_directory / "summary.md").read_text())
+                self.assertFalse((output_directory / "failure.json").exists())
 
     def test_completeness_and_execution_evidence_fail_closed(self):
         campaign = sirius_parity.build_campaign(self.provenance())
@@ -326,6 +589,7 @@ class SiriusParityTest(unittest.TestCase):
             output["result"] = {
                 "schema": [{"name": "value", "type": "varchar"}],
                 "rows": [[{"type": "varchar", "value": secret}]],
+                "ignored": {"number": float("inf"), "text": "\ud800"},
             }
             output["unknown_runner_field"] = {"object_path": secret}
             if "execution_stats" in output:
@@ -333,6 +597,10 @@ class SiriusParityTest(unittest.TestCase):
             return output
 
         runs = sirius_parity.execute_campaign(campaign, sensitive)
+        control = copy.deepcopy(runs[0])
+        del control["output"]["result"]["ignored"]
+        self.assertEqual(sirius_parity._artifact_run(campaign, control),
+                         sirius_parity._artifact_run(campaign, runs[0]))
         with tempfile.TemporaryDirectory() as directory:
             sirius_parity.write_artifacts(campaign, runs, Path(directory))
             for name in ("campaign.json", "runs.jsonl", "summary.csv", "summary.md"):
@@ -344,6 +612,8 @@ class SiriusParityTest(unittest.TestCase):
 
         malicious = sirius_parity.execute_campaign(campaign, self.output)
         malicious[0]["output"]["result"]["schema"][0]["object_path"] = secret
+        with self.assertRaisesRegex(sirius_parity.CampaignError, "invalid result schema"):
+            sirius_parity.summarize(campaign, malicious)
         with tempfile.TemporaryDirectory() as directory:
             with self.assertRaisesRegex(sirius_parity.CampaignError, "invalid result schema"):
                 sirius_parity.write_artifacts(campaign, malicious, Path(directory))

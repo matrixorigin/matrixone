@@ -1071,6 +1071,42 @@ func TestQuoteRejectsInvalidUTF8FromBinaryInput(t *testing.T) {
 	require.Contains(t, conversionErr.Error(), "from binary to utf8mb4")
 }
 
+func TestQuoteReturnsEmptyForMalformedText(t *testing.T) {
+	proc := testutil.NewProcess(t)
+	defer proc.Free()
+
+	testCase := NewFunctionTestCase(
+		proc,
+		[]FunctionTestInput{
+			NewFunctionTestInput(
+				types.T_varchar.ToType(),
+				[]string{string([]byte{'A', 0xff, 'B'}), "valid"},
+				nil,
+			),
+		},
+		NewFunctionTestResult(
+			types.T_varchar.ToType(),
+			false,
+			[]string{"", "'valid'"},
+			[]bool{false, false},
+		),
+		Quote,
+	)
+	ok, info := testCase.Run()
+	require.True(t, ok, info)
+}
+
+func TestQuoteUTF8MB4BinMalformedText(t *testing.T) {
+	proc := testutil.NewProcess(t)
+	defer proc.Free()
+	typ := types.NewWithCharset(types.T_varchar, 64, 0, types.CharsetUTF8MB4Bin)
+	testCase := NewFunctionTestCase(proc,
+		[]FunctionTestInput{NewFunctionTestInput(typ, []string{"A\xffB", "valid"}, nil)},
+		NewFunctionTestResult(typ, false, []string{"", "'valid'"}, []bool{false, false}), Quote)
+	ok, info := testCase.Run()
+	require.True(t, ok, info)
+}
+
 func TestSoundexBinaryInputPreservesBinaryResultDomain(t *testing.T) {
 	proc := testutil.NewProcess(t)
 	defer proc.Free()
@@ -1216,6 +1252,69 @@ func TestSoundex(t *testing.T) {
 		s, info := fcTC.Run()
 		require.True(t, s, fmt.Sprintf("case is '%s', err info is '%s'", tc.info, info))
 	}
+}
+
+func TestSoundexTextMatchesMySQLUTF8Behavior(t *testing.T) {
+	proc := testutil.NewProcess(t)
+	defer proc.Free()
+
+	testCase := NewFunctionTestCase(
+		proc,
+		[]FunctionTestInput{
+			NewFunctionTestInput(
+				types.T_varchar.ToType(),
+				[]string{
+					"é", "éa", "éB", "AéB", "Café", "中A", "😀", "\uFFFD",
+					"BéB", "A\xffB", "\xffA", "A\xc3",
+				},
+				nil,
+			),
+		},
+		NewFunctionTestResult(
+			types.T_varchar.ToType(),
+			false,
+			[]string{
+				"é000", "é000", "é100", "A100", "C100", "中000", "😀000", "\uFFFD000",
+				"B000", "A000", "", "A000",
+			},
+			make([]bool, 12),
+		),
+		Soundex,
+	)
+	ok, info := testCase.Run()
+	require.True(t, ok, info)
+}
+
+func TestSoundexUTF8MB4BinText(t *testing.T) {
+	proc := testutil.NewProcess(t)
+	defer proc.Free()
+	typ := types.NewWithCharset(types.T_varchar, 64, 0, types.CharsetUTF8MB4Bin)
+	testCase := NewFunctionTestCase(proc,
+		[]FunctionTestInput{NewFunctionTestInput(typ, []string{"é", "AéB", "\xffA"}, nil)},
+		NewFunctionTestResult(typ, false, []string{"é000", "A100", ""}, []bool{false, false, false}), Soundex)
+	ok, info := testCase.Run()
+	require.True(t, ok, info)
+}
+
+func TestSoundexMultibyteOutputFitsCharacterWidth(t *testing.T) {
+	proc := testutil.NewProcess(t)
+	defer proc.Free()
+
+	inputType := types.NewWithCharset(types.T_varchar, 1, 0, types.CharsetUTF8)
+	outputType := types.NewWithCharset(types.T_varchar, 4, 0, types.CharsetUTF8)
+	testCase := NewFunctionTestCase(
+		proc,
+		[]FunctionTestInput{
+			NewFunctionTestInput(inputType, []string{"😀"}, []bool{false}),
+		},
+		NewFunctionTestResult(outputType, false, []string{"😀000"}, []bool{false}),
+		Soundex,
+	)
+	ok, info := testCase.Run()
+	require.True(t, ok, info)
+	result := testCase.result.GetResultVector()
+	require.Equal(t, int32(4), result.GetType().Width)
+	require.Equal(t, 7, len(result.GetStringAt(0)))
 }
 
 func TestSoundexLongTextOutput(t *testing.T) {
