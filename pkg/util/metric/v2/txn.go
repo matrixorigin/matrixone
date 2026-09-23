@@ -307,6 +307,41 @@ var (
 	TxnActiveQueueSizeGauge     = txnQueueSizeGauge.WithLabelValues("active")
 	TxnLockRPCQueueSizeGauge    = txnQueueSizeGauge.WithLabelValues("lock-rpc")
 
+	// txnTNCommitQueueStageDurationHistogram measures one transaction's time
+	// in each TN commit-queue stage.  The queue-wait stages are measured from
+	// enqueue to dequeue; the other stages cover the work done by that queue
+	// worker.  Keep this separate from tn_side_duration_seconds so queue
+	// latency is not confused with the client transaction lifecycle metrics.
+	TxnTNCommitQueueStageDurationHistogram = prometheus.NewHistogramVec(
+		prometheus.HistogramOpts{
+			Namespace: "mo",
+			Subsystem: "txn",
+			Name:      "tn_commit_queue_stage_duration_seconds",
+			Help:      "Duration of individual TN transaction commit queue stages.",
+			Buckets:   getDurationBuckets(),
+		}, []string{"stage"})
+	TxnTNPreWalQueueWaitDurationHistogram = TxnTNCommitQueueStageDurationHistogram.WithLabelValues("pre_wal_queue_wait")
+	TxnTNPrePrepareDurationHistogram      = TxnTNCommitQueueStageDurationHistogram.WithLabelValues("pre_prepare")
+	TxnTNPrepareTSDurationHistogram       = TxnTNCommitQueueStageDurationHistogram.WithLabelValues("prepare_ts")
+	TxnTNPrepareCommitDurationHistogram   = TxnTNCommitQueueStageDurationHistogram.WithLabelValues("prepare_commit")
+	TxnTNPreApplyCommitDurationHistogram  = TxnTNCommitQueueStageDurationHistogram.WithLabelValues("pre_apply_commit")
+	TxnTNWalQueueWaitDurationHistogram    = TxnTNCommitQueueStageDurationHistogram.WithLabelValues("wal_queue_wait")
+	TxnTNPrepareWalDurationHistogram      = TxnTNCommitQueueStageDurationHistogram.WithLabelValues("prepare_wal")
+	TxnTNApplyQueueWaitDurationHistogram  = TxnTNCommitQueueStageDurationHistogram.WithLabelValues("apply_queue_wait")
+	TxnTNWaitWalAndTailDurationHistogram  = TxnTNCommitQueueStageDurationHistogram.WithLabelValues("wait_wal_and_tail")
+	TxnTNApplyCommitDurationHistogram     = TxnTNCommitQueueStageDurationHistogram.WithLabelValues("apply_commit")
+
+	TxnTNCommitQueueSizeGauge = prometheus.NewGaugeVec(
+		prometheus.GaugeOpts{
+			Namespace: "mo",
+			Subsystem: "txn",
+			Name:      "tn_commit_queue_size",
+			Help:      "Current number of transactions pending in each TN commit queue.",
+		}, []string{"queue"})
+	TxnTNPreWalQueueSizeGauge = TxnTNCommitQueueSizeGauge.WithLabelValues("pre_wal")
+	TxnTNWalQueueSizeGauge    = TxnTNCommitQueueSizeGauge.WithLabelValues("wal")
+	TxnTNApplyQueueSizeGauge  = TxnTNCommitQueueSizeGauge.WithLabelValues("apply")
+
 	TxnDeadlockDetectorQueueDepthGauge = prometheus.NewGauge(
 		prometheus.GaugeOpts{
 			Namespace: "mo",

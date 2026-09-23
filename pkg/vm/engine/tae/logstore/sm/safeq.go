@@ -44,6 +44,13 @@ type safeQueue struct {
 	blocking bool
 }
 
+// Pending returns the number of items accepted by the queue but not yet
+// handled by its callback. It is intentionally read-only and is used by
+// observability code; queue correctness does not depend on it.
+func (q *safeQueue) Pending() int64 {
+	return q.pending.Load()
+}
+
 // NewSafeQueue is blocking queue by default
 func NewSafeQueue(queueSize, batchSize int, onItem OnItemsCB) *safeQueue {
 	q := &safeQueue{
