@@ -711,6 +711,55 @@ func TestRewriteSQLMaterializesPolicyPerStatement(t *testing.T) {
 	})
 }
 
+func TestRewritePolicyKeepsRoleRulesWhenRemapHintIsDisabled(t *testing.T) {
+	ctx := context.Background()
+	ctrl := gomock.NewController(t)
+	ses := newTestSession(t, ctrl)
+	ses.rewriteEnabled.Store(false)
+	ses.ruleCache = map[string]string{
+		"db.t": "select * from db.t where role_keep = 1",
+	}
+	require.NoError(t, ses.SetSessionSysVar(ctx, "remap_rewrites",
+		`{"rewrites":{"db.t":"select * from db.t where session_keep = 1"},`+
+			`"remapdb":{"db":"session_db"}}`))
+
+	policy, err := captureRewritePolicy(ctx, ses)
+	require.NoError(t, err)
+	require.True(t, policy.enabled)
+	require.False(t, policy.sessionEnabled)
+	require.Equal(t, ses.ruleCache, policy.roleRules)
+	require.Nil(t, policy.sessionRules)
+	require.Nil(t, policy.sessionRemapDb)
+
+	rewritten, err := policy.rewrite(ctx,
+		`/*+ {"rewrites":{"db.t":"select * from db.t where inline_keep = 1"},`+
+			`"remapdb":{"db":"inline_db"}} */ select * from db.t`, "")
+	require.NoError(t, err)
+	content, ok := leadingHintContent(rewritten)
+	require.True(t, ok)
+	chains, remapDb, err := parsers.DecodeRewriteHint(ctx, content)
+	require.NoError(t, err)
+	require.Equal(t, []string{"select * from db.t where role_keep = 1"}, chains["db.t"])
+	require.Empty(t, remapDb)
+}
+
+func TestRewriteSQLFromMaterializedPolicyHonorsDisabledRemapHint(t *testing.T) {
+	ctx := context.Background()
+	outer := `/*+ {"rewrites":{"db.t":"select * from db.t where role_keep = 1"}} */ prepare s from 'select 1'`
+	inner := `/*+ {"rewrites":{"db.t":"select * from db.t where inline_keep = 1"},` +
+		`"remapdb":{"db":"inline_db"}} */ select * from db.t`
+
+	rewritten, err := rewriteSQLFromMaterializedPolicyWithSQLModeAndSessionEnabled(
+		ctx, outer, inner, "", false)
+	require.NoError(t, err)
+	content, ok := leadingHintContent(rewritten)
+	require.True(t, ok)
+	chains, remapDb, err := parsers.DecodeRewriteHint(ctx, content)
+	require.NoError(t, err)
+	require.Equal(t, []string{"select * from db.t where role_keep = 1"}, chains["db.t"])
+	require.Empty(t, remapDb)
+}
+
 func TestRewritePolicySnapshotUsesCurrentSQLModeAndFrozenEnablement(t *testing.T) {
 	ctx := context.Background()
 	ctrl := gomock.NewController(t)
@@ -872,7 +921,7 @@ func BenchmarkRewriteSingleSQLPersistentMultiRulePolicy(b *testing.B) {
 	b.ReportAllocs()
 	b.ResetTimer()
 	for range b.N {
-		if _, err := rewriteSingleSQL(ctx, "select * from policy_db.t0", rules, nil, nil, 1, ""); err != nil {
+		if _, err := rewriteSingleSQL(ctx, "select * from policy_db.t0", rules, nil, nil, true, 1, ""); err != nil {
 			b.Fatal(err)
 		}
 	}
@@ -910,7 +959,7 @@ func TestSelectedRewriteWinnerValidatedForNonConsumerStatements(t *testing.T) {
 		},
 	} {
 		t.Run(test.name, func(t *testing.T) {
-			rewritten, err := rewriteSingleSQL(ctx, test.input, nil, nil, nil, 1, "")
+			rewritten, err := rewriteSingleSQL(ctx, test.input, nil, nil, nil, true, 1, "")
 			require.NoError(t, err)
 			assertAttachRejects(t, rewritten, test.want)
 		})

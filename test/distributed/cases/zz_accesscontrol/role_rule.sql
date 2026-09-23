@@ -77,6 +77,9 @@ grant select on table *.* to test_rule_role;
 -- @session:id=1&user=sys:test_rule_user:test_rule_role&password=123456
 set enable_remap_hint = 1;
 select * from db1.t1;
+-- #29142: disabling the optional remap hint must not bypass mandatory role rules
+set enable_remap_hint = 0;
+select * from db1.t1;
 -- @session
 
 -- 11. SET SECONDARY ROLE ALL merges select * rewrite rules from all active roles
