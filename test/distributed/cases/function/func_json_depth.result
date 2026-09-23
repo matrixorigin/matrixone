@@ -58,7 +58,7 @@ EXECUTE json_depth_prepared USING @json_depth_input;
 Invalid data type for JSON data in argument 1 to function json_depth; a JSON string or JSON type is required.
 SET @json_depth_input = CAST('{"a":[1]}' AS BINARY);
 EXECUTE json_depth_prepared USING @json_depth_input;
-Invalid data type for JSON data in argument 1 to function json_depth; a JSON string or JSON type is required.
+Cannot create a JSON value from a string with CHARACTER SET 'binary'.
 SET @json_depth_input = NULL;
 EXECUTE json_depth_prepared USING @json_depth_input;
 ➤ result[-5,64,0]  𝄀
