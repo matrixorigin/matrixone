@@ -43,7 +43,10 @@ import (
 	moruntime "github.com/matrixorigin/matrixone/pkg/common/runtime"
 	"github.com/matrixorigin/matrixone/pkg/defines"
 	mock_frontend "github.com/matrixorigin/matrixone/pkg/frontend/test"
+	mock_lock "github.com/matrixorigin/matrixone/pkg/frontend/test/mock_lock"
 	icebergmodel "github.com/matrixorigin/matrixone/pkg/iceberg/model"
+	"github.com/matrixorigin/matrixone/pkg/lockservice"
+	"github.com/matrixorigin/matrixone/pkg/pb/metadata"
 	plan2 "github.com/matrixorigin/matrixone/pkg/pb/plan"
 	"github.com/matrixorigin/matrixone/pkg/pb/timestamp"
 	"github.com/matrixorigin/matrixone/pkg/pb/txn"
@@ -54,6 +57,7 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/sql/plan"
 	planfunction "github.com/matrixorigin/matrixone/pkg/sql/plan/function"
 	"github.com/matrixorigin/matrixone/pkg/testutil"
+	"github.com/matrixorigin/matrixone/pkg/txn/clock"
 	"github.com/matrixorigin/matrixone/pkg/util/executor"
 	hnswruntime "github.com/matrixorigin/matrixone/pkg/vectorindex/hnsw/plugin/runtime"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine"
@@ -1036,6 +1040,122 @@ func TestCreateIndexLockProtocol(t *testing.T) {
 		require.ErrorIs(t, err, stop)
 	})
 }
+
+func TestAdvanceCreateIndexSnapshotUsesRollingUpgradeFence(t *testing.T) {
+	const service = "create-index-legacy-logtail-fence"
+	frontier := timestamp.Timestamp{PhysicalTime: 125, LogicalTime: 3}
+
+	rt := moruntime.NewRuntime(
+		metadata.ServiceType_CN,
+		service,
+		nil,
+		moruntime.WithClock(clock.NewHLCClock(func() int64 { return 100 }, 20*time.Nanosecond)),
+	)
+	moruntime.SetupServiceBasedRuntime(service, rt)
+	rt.SetGlobalVariables(moruntime.MOProtocolVersion, defines.MORPCVersion38)
+
+	ctrl := gomock.NewController(t)
+	lockService := mock_lock.NewMockLockService(ctrl)
+	lockService.EXPECT().GetConfig().Return(lockservice.Config{ServiceID: service}).AnyTimes()
+	txnClient := mock_frontend.NewMockTxnClient(ctrl)
+	txnClient.EXPECT().WaitLogTailAppliedAt(
+		gomock.Any(),
+		timestamp.Timestamp{PhysicalTime: 121},
+	).Return(frontier, nil)
+	workspace := mock_frontend.NewMockWorkspace(ctrl)
+	workspace.EXPECT().AdvanceSnapshot(gomock.Any(), frontier).Return(nil)
+	txnOp := mock_frontend.NewMockTxnOperator(ctrl)
+	txnOp.EXPECT().Txn().Return(txn.TxnMeta{
+		Mode:      txn.TxnMode_Pessimistic,
+		Isolation: txn.TxnIsolation_RC,
+	}).AnyTimes()
+	txnOp.EXPECT().GetWorkspace().Return(workspace)
+	txnOp.EXPECT().SnapshotTS().Return(frontier.Next())
+
+	proc := testutil.NewProcess(t)
+	proc.Base.LockService = lockService
+	proc.Base.TxnClient = txnClient
+	proc.Base.TxnOperator = txnOp
+
+	require.NoError(t, (&Compile{proc: proc}).advanceCreateIndexSnapshot())
+}
+
+type testCreateIndexLogtailBarrier struct {
+	engine.Engine
+	acquire func(context.Context) (timestamp.Timestamp, error)
+}
+
+func (e *testCreateIndexLogtailBarrier) AcquireLogtailReadBarrier(
+	ctx context.Context,
+) (timestamp.Timestamp, error) {
+	return e.acquire(ctx)
+}
+
+func TestAdvanceCreateIndexSnapshotFailsClosed(t *testing.T) {
+	frontier := timestamp.Timestamp{PhysicalTime: 80, LogicalTime: 9}
+	wantErr := errors.New("snapshot refresh failed")
+
+	newCompile := func(t *testing.T, eng engine.Engine) (*Compile, *mock_frontend.MockTxnOperator) {
+		t.Helper()
+		service := t.Name()
+		rt := moruntime.NewRuntime(metadata.ServiceType_CN, service, nil)
+		moruntime.SetupServiceBasedRuntime(service, rt)
+		rt.SetGlobalVariables(moruntime.MOProtocolVersion, defines.MORPCVersion39)
+
+		ctrl := gomock.NewController(t)
+		lockService := mock_lock.NewMockLockService(ctrl)
+		lockService.EXPECT().GetConfig().Return(lockservice.Config{ServiceID: service}).AnyTimes()
+		txnOp := mock_frontend.NewMockTxnOperator(ctrl)
+		txnOp.EXPECT().Txn().Return(txn.TxnMeta{
+			Mode:      txn.TxnMode_Pessimistic,
+			Isolation: txn.TxnIsolation_RC,
+		}).AnyTimes()
+
+		proc := testutil.NewProcess(t)
+		proc.Base.LockService = lockService
+		proc.Base.TxnOperator = txnOp
+		return &Compile{proc: proc, e: eng}, txnOp
+	}
+	newBarrier := func(err error) engine.Engine {
+		return &testCreateIndexLogtailBarrier{acquire: func(context.Context) (timestamp.Timestamp, error) {
+			return frontier, err
+		}}
+	}
+
+	t.Run("missing ordered barrier capability", func(t *testing.T) {
+		c, _ := newCompile(t, newStubEngine())
+		require.ErrorContains(t, c.advanceCreateIndexSnapshot(), "barrier is unavailable")
+	})
+
+	t.Run("ordered barrier failure", func(t *testing.T) {
+		c, _ := newCompile(t, newBarrier(wantErr))
+		require.ErrorIs(t, c.advanceCreateIndexSnapshot(), wantErr)
+	})
+
+	t.Run("missing workspace", func(t *testing.T) {
+		c, txnOp := newCompile(t, newBarrier(nil))
+		txnOp.EXPECT().GetWorkspace().Return(nil)
+		require.ErrorContains(t, c.advanceCreateIndexSnapshot(), "missing workspace")
+	})
+
+	t.Run("workspace advance failure", func(t *testing.T) {
+		c, txnOp := newCompile(t, newBarrier(nil))
+		workspace := mock_frontend.NewMockWorkspace(gomock.NewController(t))
+		workspace.EXPECT().AdvanceSnapshot(gomock.Any(), frontier).Return(wantErr)
+		txnOp.EXPECT().GetWorkspace().Return(workspace)
+		require.ErrorIs(t, c.advanceCreateIndexSnapshot(), wantErr)
+	})
+
+	t.Run("workspace remains at the frontier", func(t *testing.T) {
+		c, txnOp := newCompile(t, newBarrier(nil))
+		workspace := mock_frontend.NewMockWorkspace(gomock.NewController(t))
+		workspace.EXPECT().AdvanceSnapshot(gomock.Any(), frontier).Return(nil)
+		txnOp.EXPECT().GetWorkspace().Return(workspace)
+		txnOp.EXPECT().SnapshotTS().Return(frontier)
+		require.ErrorContains(t, c.advanceCreateIndexSnapshot(), "did not advance past")
+	})
+}
+
 func Test_lockIndexTable(t *testing.T) {
 	ctrl := gomock.NewController(t)
 	db := mock_frontend.NewMockDatabase(ctrl)
