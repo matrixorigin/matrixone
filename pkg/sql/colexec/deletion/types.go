@@ -18,10 +18,8 @@ import (
 	"context"
 	"errors"
 	"slices"
-	"time"
 
 	"github.com/matrixorigin/matrixone/pkg/catalog"
-	"github.com/matrixorigin/matrixone/pkg/common/moerr"
 	"github.com/matrixorigin/matrixone/pkg/common/mpool"
 	"github.com/matrixorigin/matrixone/pkg/common/reuse"
 	"github.com/matrixorigin/matrixone/pkg/container/batch"
@@ -31,7 +29,6 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/fileservice"
 	"github.com/matrixorigin/matrixone/pkg/logutil"
 	"github.com/matrixorigin/matrixone/pkg/objectio"
-	"github.com/matrixorigin/matrixone/pkg/objectio/ioutil"
 	"github.com/matrixorigin/matrixone/pkg/perfcounter"
 	"github.com/matrixorigin/matrixone/pkg/sql/colexec"
 	"github.com/matrixorigin/matrixone/pkg/sql/plan"
@@ -76,7 +73,6 @@ type container struct {
 	blockId_bitmap                       map[types.Blockid]*nulls.Nulls
 	partitionId_blockId_rowIdBatch       map[int]map[types.Blockid]*batch.Batch // PartitionId -> blockId -> RowIdBatch
 	partitionId_tombstoneObjectStatsBats map[int][]*batch.Batch                 // PartitionId -> tombstone object stats
-	pendingTombstoneObjectStatsBats      []*batch.Batch
 	fs                                   fileservice.FileService
 	s3Writers                            []*colexec.CNS3Writer
 	// don't flush cn block rowId and rawBatch
@@ -147,7 +143,6 @@ func NewArgument() *Deletion {
 func (deletion *Deletion) Release() {
 	if deletion != nil {
 		if len(deletion.ctr.s3Writers) != 0 ||
-			len(deletion.ctr.pendingTombstoneObjectStatsBats) != 0 ||
 			len(deletion.ctr.partitionId_tombstoneObjectStatsBats) != 0 {
 			return
 		}
@@ -187,9 +182,7 @@ func (deletion *Deletion) Reset(proc *process.Process, pipelineFailed bool, err 
 			delete(ctr.partitionId_blockId_rowIdBatch, pidx)
 		}
 
-		if cleanupErr = ctr.cleanupTombstoneStats(proc.Ctx, proc.GetMPool(), pipelineFailed); cleanupErr != nil {
-			logutil.Warn("failed to clean remote delete tombstone objects", zap.Error(cleanupErr))
-		}
+		ctr.cleanTombstoneStats(proc.GetMPool())
 
 		for blkid := range ctr.blockId_type {
 			delete(ctr.blockId_type, blkid)
@@ -218,10 +211,7 @@ func (deletion *Deletion) Free(proc *process.Process, pipelineFailed bool, err e
 		deletion.retainPendingS3Writers(proc)
 	}
 	if deletion.RemoteDelete {
-		if cleanupErr = ctr.cleanupTombstoneStats(proc.Ctx, proc.GetMPool(), pipelineFailed); cleanupErr != nil {
-			logutil.Warn("failed to clean remote delete tombstone objects", zap.Error(cleanupErr))
-			ctr.retainPendingTombstoneCleanup(proc)
-		}
+		ctr.cleanTombstoneStats(proc.GetMPool())
 		deletion.SegmentMap = nil
 		ctr.blockId_bitmap = nil
 		ctr.partitionId_blockId_rowIdBatch = nil
@@ -286,96 +276,6 @@ func (ctr *container) cleanTombstoneStats(mp *mpool.MPool) {
 	}
 }
 
-func (ctr *container) cleanupTombstoneStats(
-	ctx context.Context,
-	mp *mpool.MPool,
-	pipelineFailed bool,
-) error {
-	if pipelineFailed {
-		for _, bats := range ctr.partitionId_tombstoneObjectStatsBats {
-			ctr.pendingTombstoneObjectStatsBats = append(ctr.pendingTombstoneObjectStatsBats, bats...)
-		}
-		ctr.partitionId_tombstoneObjectStatsBats = make(map[int][]*batch.Batch)
-	} else {
-		ctr.cleanTombstoneStats(mp)
-	}
-	if len(ctr.pendingTombstoneObjectStatsBats) == 0 {
-		return nil
-	}
-	if err := ctr.deleteTombstoneObjects(ctx, ctr.pendingTombstoneObjectStatsBats); err != nil {
-		return err
-	}
-	for _, bat := range ctr.pendingTombstoneObjectStatsBats {
-		if bat != nil {
-			bat.Clean(mp)
-		}
-	}
-	ctr.pendingTombstoneObjectStatsBats = nil
-	return nil
-}
-
-func (ctr *container) deleteTombstoneObjects(ctx context.Context, batches []*batch.Batch) error {
-	names := tombstoneObjectNames(batches)
-	if len(names) == 0 {
-		return nil
-	}
-	return deleteUnpublishedTombstoneObjects(ctx, ctr.fs, names)
-}
-
-func tombstoneObjectNames(batches []*batch.Batch) []string {
-	var names []string
-	for _, bat := range batches {
-		if bat == nil || len(bat.Vecs) == 0 || bat.Vecs[0].Length() == 0 {
-			continue
-		}
-		data, area := vector.MustVarlenaRawData(bat.Vecs[0])
-		for _, value := range data {
-			stats := objectio.ObjectStats(value.GetByteSlice(area))
-			names = append(names, stats.ObjectName().String())
-		}
-	}
-	return names
-}
-
-func deleteUnpublishedTombstoneObjects(
-	ctx context.Context,
-	fs fileservice.FileService,
-	names []string,
-) error {
-	if fs == nil {
-		return moerr.NewInternalError(ctx, "missing file service for remote delete cleanup")
-	}
-	cleanupCtx, cancel := context.WithTimeoutCause(
-		context.WithoutCancel(ctx), 10*time.Minute, moerr.CauseCleanUpUselessFiles,
-	)
-	defer cancel()
-	_, err := ioutil.DeleteUnpublishedObjects(cleanupCtx, fs, names...)
-	return err
-}
-
-func (ctr *container) retainPendingTombstoneCleanup(proc *process.Process) {
-	if len(ctr.pendingTombstoneObjectStatsBats) == 0 || ctr.fs == nil {
-		return
-	}
-	batches := ctr.pendingTombstoneObjectStatsBats
-	names := tombstoneObjectNames(batches)
-	if len(names) == 0 {
-		return
-	}
-	fs := ctr.fs
-	if !colexec.RetainUnpublishedS3Cleanup(proc, func(ctx context.Context) error {
-		return deleteUnpublishedTombstoneObjects(ctx, fs, names)
-	}) {
-		return
-	}
-	for _, bat := range batches {
-		if bat != nil {
-			bat.Clean(proc.GetMPool())
-		}
-	}
-	ctr.pendingTombstoneObjectStatsBats = nil
-}
-
 func (deletion *Deletion) retryPendingS3Cleanup(proc *process.Process) error {
 	var cleanupErrs []error
 	var err error
@@ -384,9 +284,7 @@ func (deletion *Deletion) retryPendingS3Cleanup(proc *process.Process) error {
 		cleanupErrs = append(cleanupErrs, err)
 	}
 	if deletion.RemoteDelete {
-		if err = deletion.ctr.cleanupTombstoneStats(proc.Ctx, proc.GetMPool(), false); err != nil {
-			cleanupErrs = append(cleanupErrs, err)
-		}
+		deletion.ctr.cleanTombstoneStats(proc.GetMPool())
 	}
 	return errors.Join(cleanupErrs...)
 }
@@ -494,6 +392,9 @@ func (ctr *container) flush(proc *process.Process, analyzer process.Analyzer) (u
 			bat.SetRowCount(bat.Vecs[0].Length())
 			ctr.partitionId_tombstoneObjectStatsBats[pidx] =
 				append(ctr.partitionId_tombstoneObjectStatsBats[pidx], bat)
+		}
+		if err = s3writer.TransferPersistedObjects(proc); err != nil {
+			return 0, abortWriter(err)
 		}
 		if err = s3writer.Close(); err != nil {
 			ctr.s3Writers = append(ctr.s3Writers, s3writer)
