@@ -495,6 +495,37 @@ func TestIsAlterAffectedPluginIndexMatchesIndexNamePartsAndIncludedColumns(t *te
 	require.False(t, isAlterAffectedPluginIndex(nil, []string{"idx_vec"}))
 }
 
+func TestIsAlterRebuiltPluginIndexKeepsIdentitySeparateFromColumns(t *testing.T) {
+	existing := &plan2.IndexDef{
+		IndexName: "ft_existing",
+		Parts:     []string{"body"},
+	}
+	newIndex := &plan2.IndexDef{
+		IndexName: "body",
+		Parts:     []string{"content"},
+	}
+	newPluginIndexes := map[string]bool{"body": true}
+
+	require.False(t, isAlterRebuiltPluginIndex(existing, nil, newPluginIndexes),
+		"a new index name equal to an existing index column must not rebuild the existing index")
+	require.True(t, isAlterRebuiltPluginIndex(newIndex, nil, newPluginIndexes))
+	require.True(t, isAlterRebuiltPluginIndex(existing, []string{"body"}, newPluginIndexes))
+	require.False(t, isAlterRebuiltPluginIndex(nil, []string{"body"}, newPluginIndexes))
+}
+
+func TestCloneAlterCopyOptClonesNewPluginIndexes(t *testing.T) {
+	source := &plan2.AlterCopyOpt{
+		SkipUniqueIdxDedup: map[string]bool{"uk": true},
+		SkipIndexesCopy:    map[string]bool{"idx": true},
+		NewPluginIndexes:   map[string]bool{"ft": true},
+	}
+
+	cloned := cloneAlterCopyOpt(source)
+	require.Equal(t, source, cloned)
+	cloned.NewPluginIndexes["ft"] = false
+	require.True(t, source.NewPluginIndexes["ft"])
+}
+
 func TestReplaceRefChildTableID(t *testing.T) {
 	t.Run("replace altered child and preserve siblings", func(t *testing.T) {
 		constraintDef := &engine.ConstraintDef{Cts: []engine.Constraint{

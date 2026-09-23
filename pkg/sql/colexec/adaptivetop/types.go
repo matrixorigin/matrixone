@@ -34,6 +34,9 @@ var _ vm.Operator = (*AdaptiveTop)(nil)
 type AdaptiveTop struct {
 	LimitExpr *plan.Expr
 	Branches  int
+	// FallbackOnEmpty preserves a non-empty partial POST page and activates
+	// the final exact candidate only when POST produced no rows.
+	FallbackOnEmpty bool
 	// 每一执行代由 compile 配置，不能跨 prepared execution 保留预算。
 	SpillConfig materialized.SpillConfig
 
