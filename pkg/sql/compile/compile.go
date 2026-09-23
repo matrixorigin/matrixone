@@ -4052,6 +4052,13 @@ func (c *Compile) compileExternScanWholeFileFanout(node *plan.Node, param *tree.
 		shardParam.Parallel = false
 
 		remote := param.ScanType == tree.S3 && len(stageNodes) > 0
+		var remoteCreateSql string
+		if remote {
+			var err error
+			if remoteCreateSql, err = resolvedExternParamJSON(shardParam); err != nil {
+				return nil, err
+			}
+		}
 		scope := c.constructScopeForExternalNode(shard.node, remote)
 		scope.NodeInfo.Mcpu = 1
 		scope.IsLoad = true
@@ -4063,6 +4070,9 @@ func (c *Compile) compileExternScanWholeFileFanout(node *plan.Node, param *tree.
 			c.arrowExecutionScope(node, shardParam),
 			arrowRuntime...,
 		)
+		if remote {
+			op.Es.CreateSql = remoteCreateSql
+		}
 		op.Es.ParquetWholeFileFanout = parquetWholeFileFanout
 		// Whole-file Arrow fanout also clears Extern.Parallel above. Keep the
 		// execution-side authorization signal independent of that user request.
@@ -4073,6 +4083,31 @@ func (c *Compile) compileExternScanWholeFileFanout(node *plan.Node, param *tree.
 	}
 	c.anal.isFirst = false
 	return ss, nil
+}
+
+// resolvedExternParamJSON serializes a compile-time normalized external param
+// for a shard that may run on another CN.  The remote codec carries only
+// CreateSql, which for an external table is the stored DDL: it lacks the
+// ExternType taken from the plan (so the reader would apply LOAD's exact
+// column-count rule) and any stage-resolved S3 settings.  Fields that are
+// process-local or unused by the reader are dropped; the receiver installs its
+// own FileService.
+func resolvedExternParamJSON(param *tree.ExternParam) (string, error) {
+	resolved := *param
+	resolved.FileService = nil
+	resolved.Ctx = nil
+	if resolved.Tail != nil {
+		tail := *resolved.Tail
+		tail.ColumnList = nil
+		tail.Assignments = nil
+		resolved.Tail = &tail
+	}
+	resolved.Resolved = true
+	b, err := json.Marshal(&resolved)
+	if err != nil {
+		return "", err
+	}
+	return string(b), nil
 }
 
 func (c *Compile) compileExternScanIcebergFileFanout(
@@ -9172,7 +9207,11 @@ func (c *Compile) compileLock(node *plan.Node, ss []*Scope) ([]*Scope, error) {
 	}
 
 	currentFirstFlag := c.anal.isFirst
-	if !c.IsTpQuery() || len(c.pn.GetQuery().Steps) > 1 { // todo: don't support dml with multi steps for now
+	// The lock operator below is attached to ss[0] alone, so every input
+	// pipeline must be merged into it first or the others' rows reach the
+	// writer unlocked -- a multi-file LOAD fanout hands a TP-classified plan one
+	// scope per file shard, the same case compileMultiUpdate merges on.
+	if !c.IsTpQuery() || len(ss) > 1 || len(c.pn.GetQuery().Steps) > 1 { // todo: don't support dml with multi steps for now
 		rs := c.newMergeScope(ss)
 		ss = []*Scope{rs}
 	}

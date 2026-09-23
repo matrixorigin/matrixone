@@ -116,8 +116,10 @@ func (external *External) Prepare(proc *process.Process) error {
 			if err := json.Unmarshal([]byte(param.CreateSql), param.Extern); err != nil {
 				return err
 			}
-			if err := plan2.InitS3Param(param.Extern); err != nil {
-				return err
+			if !param.Extern.Resolved {
+				if err := plan2.InitS3Param(param.Extern); err != nil {
+					return err
+				}
 			}
 			param.Extern.FileService = proc.Base.FileService
 		}

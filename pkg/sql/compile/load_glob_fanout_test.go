@@ -15,10 +15,16 @@
 package compile
 
 import (
+	"encoding/json"
 	"testing"
 
+	"github.com/golang/mock/gomock"
+	"github.com/matrixorigin/matrixone/pkg/container/types"
+	mock_frontend "github.com/matrixorigin/matrixone/pkg/frontend/test"
 	"github.com/matrixorigin/matrixone/pkg/pb/plan"
+	"github.com/matrixorigin/matrixone/pkg/pb/txn"
 	"github.com/matrixorigin/matrixone/pkg/sql/colexec/external"
+	"github.com/matrixorigin/matrixone/pkg/sql/colexec/lockop"
 	"github.com/matrixorigin/matrixone/pkg/sql/parsers/tree"
 	plan2 "github.com/matrixorigin/matrixone/pkg/sql/plan"
 	"github.com/matrixorigin/matrixone/pkg/vm"
@@ -312,4 +318,150 @@ func TestCompileExternScanParallelReadWriteRejectsMultipleFiles(t *testing.T) {
 	)
 	require.Error(t, err)
 	require.Contains(t, err.Error(), "reserved for a single file")
+}
+
+// A multi-file LOAD fanout hands a TP-classified plan one scope per file shard.
+// The lock operator is attached to ss[0] alone, so compileLock must merge first
+// or rows from every other shard reach the writer without their row locks --
+// for a table whose only uniqueness is a UNIQUE key, those are the locks that
+// serialize concurrent writers.
+func TestCompileLockMergesMultiScopeTpPlan(t *testing.T) {
+	newCompile := func() *Compile {
+		c := NewMockCompile(t)
+		c.execType = plan2.ExecTypeTP
+		c.pn = &plan.Plan{Plan: &plan.Plan_Query{Query: &plan.Query{
+			StmtType: plan.Query_INSERT,
+			LoadTag:  true,
+			Steps:    []int32{0},
+		}}}
+		c.lockTables = make(map[uint64]*plan.LockTarget)
+		c.anal = &AnalyzeModule{qry: &plan.Query{}}
+		txnOp := mock_frontend.NewMockTxnOperator(gomock.NewController(t))
+		txnOp.EXPECT().Txn().Return(txn.TxnMeta{Mode: txn.TxnMode_Pessimistic}).AnyTimes()
+		c.proc.Base.TxnOperator = txnOp
+		return c
+	}
+	newNode := func() *plan.Node {
+		return &plan.Node{LockTargets: []*plan.LockTarget{{
+			TableId:       42,
+			PrimaryColTyp: plan.Type{Id: int32(types.T_int64)},
+		}}}
+	}
+	c := newCompile()
+	shard := func() *Scope {
+		return &Scope{
+			Magic:    Normal,
+			NodeInfo: engine.Node{Addr: "cn1:6001", Mcpu: 1},
+			Proc:     c.proc.NewNoContextChildProc(0),
+		}
+	}
+
+	require.True(t, c.IsTpQuery())
+	shards := []*Scope{shard(), shard(), shard()}
+	got, err := c.compileLock(newNode(), shards)
+	require.NoError(t, err)
+	require.Len(t, got, 1)
+	_, ok := got[0].RootOp.(*lockop.LockOp)
+	require.True(t, ok, "the lock must sit above the merge of every shard")
+	require.Len(t, got[0].PreScopes, len(shards))
+	for _, s := range shards {
+		_, isLock := s.RootOp.(*lockop.LockOp)
+		require.False(t, isLock, "no shard may carry a private lock")
+	}
+
+	// One scope under TP keeps the unmerged shape.
+	single := []*Scope{shard()}
+	got, err = newCompile().compileLock(newNode(), single)
+	require.NoError(t, err)
+	require.Equal(t, single, got)
+	_, ok = got[0].RootOp.(*lockop.LockOp)
+	require.True(t, ok)
+}
+
+// A remote whole-file shard is rebuilt on another CN from CreateSql alone.  For
+// an external table that string is the stored DDL, which does not carry the
+// ExternType taken from the plan: decoded as is, the reader would apply LOAD's
+// exact column-count rule and reject rows an external table accepts.  The
+// shard must ship the compile-time normalized param instead, including S3
+// settings resolved from a stage, which InitS3Param cannot rebuild from Option.
+func TestCompileExternScanMultiFileFanoutRemoteKeepsNormalizedParam(t *testing.T) {
+	testCompile := NewMockCompile(t)
+	testCompile.cnList = engine.Nodes{{Addr: "cn1:6001", Mcpu: 2}, {Addr: "cn2:6001", Mcpu: 2}}
+	testCompile.addr = "cn1:6001"
+	testCompile.execType = plan2.ExecTypeAP_MULTICN
+	testCompile.anal = &AnalyzeModule{qry: &plan.Query{}}
+
+	// The stored DDL: no ExternType, and a stage-backed source has no S3
+	// options for InitS3Param to rebuild credentials from.
+	ddl, err := json.Marshal(&tree.ExternParam{
+		ExParamConst: tree.ExParamConst{
+			ScanType: tree.INFILE,
+			Filepath: "stage://s1/part-*.csv",
+			Format:   tree.CSV,
+			Tail:     &tree.TailParameter{},
+		},
+	})
+	require.NoError(t, err)
+
+	// What getExternParam leaves after InitInfileOrStageParam resolved the stage.
+	param := &tree.ExternParam{
+		ExParamConst: tree.ExParamConst{
+			ScanType: tree.S3,
+			Filepath: "prefix/part-*.csv",
+			Format:   tree.CSV,
+			Tail: &tree.TailParameter{
+				Assignments: tree.UpdateExprs{&tree.UpdateExpr{}},
+			},
+		},
+		ExParam: tree.ExParam{
+			ExternType: int32(plan.ExternType_EXTERNAL_TB),
+			S3Param:    &tree.S3Parameter{Bucket: "bkt", Region: "r1", APIKey: "k", APISecret: "s"},
+			Ctx:        testCompile.proc.Ctx,
+		},
+	}
+	n := &plan.Node{
+		TableDef: &plan.TableDef{
+			Createsql: string(ddl),
+			Cols: []*plan.ColDef{{
+				Name: "a",
+				Typ:  plan.Type{Id: int32(types.T_int64)},
+			}},
+		},
+		ExternScan: &plan.ExternScan{
+			Type:           int32(plan.ExternType_EXTERNAL_TB),
+			TbColToDataCol: map[string]int32{"a": 0},
+		},
+	}
+	fileList := []string{"prefix/part-0.csv", "prefix/part-1.csv", "prefix/part-2.csv"}
+	fileSize := []int64{10, 10, 10}
+
+	ss, err := testCompile.compileExternScanMultiFileFanout(n, param, fileList, fileSize, true)
+	require.NoError(t, err)
+	require.Greater(t, len(ss), 1)
+	// The caller's param is not mutated by serializing a shard.
+	require.NotNil(t, param.Ctx)
+	require.Len(t, param.Tail.Assignments, 1)
+
+	for _, scope := range ss {
+		ext, ok := scope.RootOp.(*external.External)
+		require.True(t, ok)
+		require.NotEqual(t, string(ddl), ext.Es.CreateSql)
+
+		_, in, err := convertToPipelineInstruction(ext, testCompile.proc, &scopeContext{}, 1)
+		require.NoError(t, err)
+		op, err := convertToVmOperator(in, &scopeContext{}, nil)
+		require.NoError(t, err)
+		decoded := op.(*external.External)
+		require.Nil(t, decoded.Es.Extern, "the codec carries CreateSql, not Extern")
+
+		require.NoError(t, decoded.Prepare(testCompile.proc))
+		got := decoded.Es.Extern
+		require.Equal(t, int32(plan.ExternType_EXTERNAL_TB), got.ExternType)
+		require.Equal(t, tree.S3, got.ScanType)
+		require.Equal(t, "prefix/part-*.csv", got.Filepath)
+		require.Equal(t, *param.S3Param, *got.S3Param)
+		require.False(t, got.Parallel)
+		require.NotNil(t, got.FileService)
+		decoded.Free(testCompile.proc, false, nil)
+	}
 }
