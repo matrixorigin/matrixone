@@ -412,22 +412,38 @@ func exprNotNullableWithColResolver(
 }
 
 func isIfNullCase(fn *plan.Function) bool {
-	if fn == nil || fn.Func == nil || fn.Func.ObjName != "case" || len(fn.Args) != 3 {
+	source, elseSource, ok := ifNullCaseSources(fn)
+	if !ok {
 		return false
 	}
+	if source.AuxId < 0 && source.AuxId == elseSource.AuxId {
+		return true
+	}
+	return exprStructuralEqual(source, elseSource)
+}
+
+func ifNullCaseSources(fn *plan.Function) (source, elseSource *plan.Expr, ok bool) {
+	if fn == nil || fn.Func == nil || fn.Func.ObjName != "case" || len(fn.Args) != 3 {
+		return nil, nil, false
+	}
 	condition := fn.Args[0].GetF()
-	return condition != nil && condition.Func != nil && condition.Func.ObjName == "isnull" &&
-		len(condition.Args) == 1 && ifNullCaseSourceMatches(condition.Args[0], fn.Args[2])
+	if condition == nil || condition.Func == nil || condition.Func.ObjName != "isnull" || len(condition.Args) != 1 {
+		return nil, nil, false
+	}
+	elseSource = ifNullCaseElseSource(fn.Args[2])
+	if condition.Args[0] == nil || elseSource == nil {
+		return nil, nil, false
+	}
+	return condition.Args[0], elseSource, true
 }
 
 // CASE type reconciliation can add CAST nodes around IFNULL's ELSE source.
-// Ignore those binder-introduced casts when recognizing the rewrite; the
-// initial IFNULL metadata calculation uses the same source relationship.
-func ifNullCaseSourceMatches(source, elseExpr *plan.Expr) bool {
+// Ignore those binder-introduced casts when recognizing the rewrite.
+func ifNullCaseElseSource(elseExpr *plan.Expr) *plan.Expr {
 	for {
 		fn := elseExpr.GetF()
 		if fn == nil || fn.Func == nil || fn.Func.ObjName != "cast" || len(fn.Args) == 0 {
-			return exprStructuralEqual(source, elseExpr)
+			return elseExpr
 		}
 		elseExpr = fn.Args[0]
 	}

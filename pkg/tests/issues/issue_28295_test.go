@@ -122,6 +122,28 @@ func TestIssue28295RowConstructorScalarSubquery(t *testing.T) {
 		assertBool(`select (0,null) <=>
 			(select count(*),sum(v) from scalar_inner i where i.k=o.k having count(*)=0)
 			from scalar_outer o where o.k=2`, sql.NullBool{Bool: true, Valid: true})
+		ifNullValues := func() []int {
+			rows, queryErr := conn.QueryContext(ctx, `select ifnull(
+				(select min(i.v) from scalar_inner i where i.k=o.k), 0)
+				from scalar_outer o order by o.k`)
+			require.NoError(t, queryErr)
+			defer func() { require.NoError(t, rows.Close()) }()
+			columnTypes, queryErr := rows.ColumnTypes()
+			require.NoError(t, queryErr)
+			require.Len(t, columnTypes, 1)
+			nullable, ok := columnTypes[0].Nullable()
+			require.True(t, ok)
+			require.False(t, nullable)
+			var values []int
+			for rows.Next() {
+				var value int
+				require.NoError(t, rows.Scan(&value))
+				values = append(values, value)
+			}
+			require.NoError(t, rows.Err())
+			return values
+		}()
+		require.Equal(t, []int{10, 0}, ifNullValues)
 		err = conn.QueryRowContext(ctx, `select count(*) from scalar_outer o
 			where (1,10) =
 				(select count(*),sum(v) from scalar_inner i where i.k<o.k)`).Scan(&correlatedCount)

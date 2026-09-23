@@ -69,6 +69,31 @@ func TestScalarAggregateSubqueryRefreshesConsumerNullability(t *testing.T) {
 	require.True(t, found, "expected a nullable decimal equality consumer")
 }
 
+func TestScalarAggregateSubqueryRefreshPreservesIfNullContract(t *testing.T) {
+	logicPlan, err := runOneStmt(NewMockOptimizer(false), t, `
+		select ifnull((
+			select min(r.R_REGIONKEY) from REGION r
+			where r.R_REGIONKEY = n.N_REGIONKEY), 0),
+			ifnull((
+				select min(r.R_REGIONKEY) from REGION r
+				where r.R_REGIONKEY = n.N_REGIONKEY), 0) + 1
+		from NATION n`)
+	require.NoError(t, err)
+
+	columns := GetResultColumnsFromPlan(logicPlan)
+	require.Len(t, columns, 2)
+	require.True(t, columns[0].Typ.NotNullable)
+	require.True(t, columns[1].Typ.NotNullable)
+
+	leftJoins := 0
+	for _, node := range logicPlan.GetQuery().Nodes {
+		if node.NodeType == planpb.Node_JOIN && node.JoinType == planpb.Node_LEFT {
+			leftJoins++
+		}
+	}
+	require.Equal(t, 2, leftJoins, "each IFNULL source must be flattened once")
+}
+
 func TestRowConstructorScalarSubqueryComparisonBuilds(t *testing.T) {
 	tests := []struct {
 		name string

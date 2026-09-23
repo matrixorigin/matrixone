@@ -4126,7 +4126,7 @@ func (b *baseBinder) bindFuncExprImplByAstExpr(name string, astArgs []tree.Expr,
 				}
 			}
 			if isIfNull {
-				e.Typ.NotNullable = args[1].Typ.NotNullable || args[2].Typ.NotNullable
+				b.recordIfNullContract(e, args)
 				ensurePreparedNumericMetadata(e).IfnullCommonValue = true
 			}
 			markPreparedResultCastsProvisional(
@@ -4150,7 +4150,7 @@ func (b *baseBinder) bindFuncExprImplByAstExpr(name string, astArgs []tree.Expr,
 			b.GetContext(), name, args, false, nil, nil, findInSetInternalArgs)
 		if err == nil {
 			if isIfNull {
-				builtinExpr.Typ.NotNullable = args[1].Typ.NotNullable || args[2].Typ.NotNullable
+				b.recordIfNullContract(builtinExpr, args)
 				ensurePreparedNumericMetadata(builtinExpr).IfnullCommonValue = true
 			}
 			return builtinExpr, nil
@@ -4178,6 +4178,23 @@ func (b *baseBinder) bindFuncExprImplByAstExpr(name string, astArgs []tree.Expr,
 	}
 
 	return bindFuncExprImplUdf(b, name, udf, astArgs, args, depth)
+}
+
+func (b *baseBinder) recordIfNullContract(expr *plan.Expr, args []*plan.Expr) {
+	expr.Typ.NotNullable = args[1].Typ.NotNullable || args[2].Typ.NotNullable
+	if b.ctx == nil || !hasSubquery(expr) {
+		return
+	}
+	conditionSource, elseSource, ok := ifNullCaseSources(expr.GetF())
+	if !ok {
+		return
+	}
+	// IFNULL evaluates its first argument once, but the CASE rewrite binds that
+	// source twice. Give both copies one flattening memo so a scalar subquery is
+	// decorrelated once and both CASE arms consume the same projected value.
+	b.ctx.volatileExprMemoID--
+	conditionSource.AuxId = b.ctx.volatileExprMemoID
+	elseSource.AuxId = b.ctx.volatileExprMemoID
 }
 
 func sequenceFunctionPublicArity(name string) (minArgs, maxArgs int, ok bool) {

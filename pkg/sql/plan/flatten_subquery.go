@@ -334,6 +334,7 @@ func (builder *QueryBuilder) flattenSubqueriesWithConsumer(
 		for _, arg := range exprImpl.F.Args {
 			containsSubquery = containsSubquery || hasSubquery(arg)
 		}
+		preserveIfNullContract := isIfNullCase(exprImpl.F)
 		if consumer == existentialNegatedFilter && len(builder.pendingExistentials) != 0 {
 			// The caller admits only the direct NOT(EXISTS) WHERE conjunct.
 			sub := *exprImpl.F.Args[0].GetSub()
@@ -353,7 +354,15 @@ func (builder *QueryBuilder) flattenSubqueriesWithConsumer(
 			}
 		}
 		if containsSubquery && exprImpl.F.Func != nil {
-			expr.Typ.NotNullable = function.DeduceNotNullable(exprImpl.F.Func.Obj, exprImpl.F.Args)
+			if preserveIfNullContract {
+				if !isIfNullCase(exprImpl.F) {
+					return 0, nil, moerr.NewInternalError(builder.GetContext(),
+						"IFNULL expression changed shape while flattening subquery")
+				}
+				expr.Typ.NotNullable = exprImpl.F.Args[1].Typ.NotNullable || exprImpl.F.Args[2].Typ.NotNullable
+			} else {
+				expr.Typ.NotNullable = function.DeduceNotNullable(exprImpl.F.Func.Obj, exprImpl.F.Args)
+			}
 		}
 
 	case *plan.Expr_List:
