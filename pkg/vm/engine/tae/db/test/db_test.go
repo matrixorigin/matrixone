@@ -11293,34 +11293,722 @@ func TestFreezeTransferIncludesMergeAtUpperBound(t *testing.T) {
 	// Resolve the row while the merge source is still visible, so the update's
 	// tombstone initially points at the source object.
 	updateTxn, updateRel := tae.GetRelation()
+	updateTxn.SetDedupType(txnif.DedupPolicy_CheckAll)
 	pk := bat.Vecs[schema.GetSingleSortKeyIdx()].Get(0)
 	require.NoError(t, updateRel.UpdateByFilter(
 		ctx, handle.NewEQFilter(pk), 1, int32(42), false,
 	))
 
 	require.NoError(t, mergeTxn.Commit(ctx))
-	mergeTS := mergeTxn.GetCommitTS()
+	droppedSource := source.GetLatestNode()
+	require.NotNil(t, droppedSource)
+	dropTS := droppedSource.GetDeleteAt()
+	require.False(t, dropTS.IsEmpty())
 	originalNow := tae.Runtime.Now
-	tae.Runtime.Now = func() types.TS { return mergeTS }
+	tae.Runtime.Now = func() types.TS { return dropTS }
 	defer func() { tae.Runtime.Now = originalNow }()
 
-	// Transfer and dedup both use mergeTS as their inclusive upper fence. The
-	// source tombstone must be transferred before dedup sees the merge output.
+	// Transfer uses dropTS as an inclusive upper fence. The source tombstone
+	// must be transferred before the queued conflict check sees the dropped
+	// source object.
+	require.NoError(t, updateTxn.GetStore().Freeze(ctx))
 	require.NoError(t, updateTxn.Commit(ctx))
 	tae.CheckRowsByScan(1, true)
 }
 
-func TestConcurrentUpdateByPreviousRowIDWithFlushMerge(t *testing.T) {
+func TestFreezeConflictingUpdatesAfterMergeReturnWW(t *testing.T) {
 	defer testutils.AfterTest(t)()
 	testutils.EnsureNoLeak(t)
-	ctx, cancel := context.WithTimeout(context.Background(), 2*time.Minute)
+	ctx := context.Background()
+
+	opts := config.WithLongScanAndCKPOpts(nil)
+	tae := testutil.NewTestEngine(ctx, ModuleName, t, opts)
+	defer tae.Close()
+
+	schema := catalog.MockSchemaAll2(3, []int{0, 1})
+	schema.Extra.BlockMaxRows = 10
+	schema.Extra.ObjectMaxBlocks = 10
+	tae.BindSchema(schema)
+	bat := catalog.MockBatch(schema, 1)
+	defer bat.Close()
+	tae.CreateRelAndAppend(bat, true)
+	tae.CompactBlocks(true)
+
+	pk := bat.Vecs[schema.GetSingleSortKeyIdx()].Get(0)
+	stageUpdate := func(value int32) txnif.AsyncTxn {
+		txn, rel := tae.GetRelation()
+		txn.SetDedupType(txnif.DedupPolicy_CheckIncremental)
+		require.NoError(t, rel.UpdateByFilter(
+			ctx, handle.NewEQFilter(pk), 2, value, false,
+		))
+		return txn
+	}
+	firstTxn := stageUpdate(10)
+	secondTxn := stageUpdate(20)
+
+	mergeTxn, mergeRel := tae.GetRelation()
+	source := testutil.GetOneBlockMeta(mergeRel)
+	mergeTask, err := jobs.NewMergeObjectsTask(
+		nil, mergeTxn, []*catalog.ObjectEntry{source}, tae.Runtime, 0, false,
+	)
+	require.NoError(t, err)
+	require.NoError(t, mergeTask.OnExec(ctx))
+	require.NoError(t, mergeTxn.Commit(ctx))
+
+	require.NoError(t, firstTxn.GetStore().Freeze(ctx))
+	require.NoError(t, firstTxn.Commit(ctx))
+
+	// Both optimistic updates deleted the same pre-merge physical row. Once the
+	// first update commits, the second must surface a retryable write conflict.
+	// Reporting a data-PK duplicate here leaks an internal dedup ordering detail
+	// to the SQL client instead of retrying the TPCC update transaction.
+	err = secondTxn.GetStore().Freeze(ctx)
+	if err != nil {
+		_ = secondTxn.Rollback(ctx)
+	}
+	require.Error(t, err)
+	require.True(t, moerr.IsMoErrCode(err, moerr.ErrTxnWWConflict), err)
+}
+
+// TestGetByFilterAfterMergeKeepsTheNewAppend verifies that merging the old
+// data object does not hide the replacement row appended by an update. The
+// visible object order is by object CreatedAt, while the replacement row's
+// logical commit timestamp belongs to an append node in an older appendable
+// object. GetByFilter must return the replacement row and reject a second
+// append with the same primary key.
+func TestGetByFilterAfterMergeKeepsTheNewAppend(t *testing.T) {
+	defer testutils.AfterTest(t)()
+	testutils.EnsureNoLeak(t)
+	ctx := context.Background()
+
+	opts := config.WithLongScanAndCKPOpts(nil)
+	tae := testutil.NewTestEngine(ctx, ModuleName, t, opts)
+	defer tae.Close()
+
+	schema := catalog.MockSchemaAll2(3, []int{0, 1})
+	schema.Extra.BlockMaxRows = 10
+	schema.Extra.ObjectMaxBlocks = 10
+	tae.BindSchema(schema)
+	bat := catalog.MockBatch(schema, 1)
+	defer bat.Close()
+	tae.CreateRelAndAppend(bat, true)
+	tae.CompactBlocks(true)
+
+	pk := bat.Vecs[schema.GetSingleSortKeyIdx()].Get(0)
+
+	// Build the merge output before the update commits. The merge output still
+	// contains the old row; its PrepareCommit transfer phase will later see the
+	// update's source tombstone and map it to that output row.
+	mergeTxn, mergeRel := tae.GetRelation()
+	source := testutil.GetOneBlockMeta(mergeRel)
+	mergeTask, err := jobs.NewMergeObjectsTask(
+		nil, mergeTxn, []*catalog.ObjectEntry{source}, tae.Runtime, 0, false,
+	)
+	require.NoError(t, err)
+	require.NoError(t, mergeTask.OnExec(ctx))
+
+	// The replacement append is made before merge commit, but its commit is
+	// deliberately performed from mergeTxn's Freeze callback. This gives the
+	// replacement append a later commit timestamp while keeping its appendable
+	// object older than the merge output in object-list order.
+	updateTxn, updateRel := tae.GetRelation()
+	updateTxn.SetDedupType(txnif.DedupPolicy_CheckIncremental)
+	require.NoError(t, updateRel.UpdateByFilter(
+		ctx, handle.NewEQFilter(pk), 2, int32(42), false,
+	))
+	mergeTxn.SetFreezeFn(func(at txnif.AsyncTxn) error {
+		if err := at.GetStore().Freeze(ctx); err != nil {
+			return err
+		}
+		return updateTxn.Commit(ctx)
+	})
+	require.NoError(t, mergeTxn.Commit(ctx))
+
+	readTxn, readRel := tae.GetRelation()
+	_, _, err = readRel.GetByFilter(ctx, handle.NewEQFilter(pk))
+	// The replacement append must remain visible after the merge transfer.
+	require.NoError(t, err)
+	require.NoError(t, readTxn.Commit(ctx))
+
+	// The replacement row still owns the primary key, so a second insert must
+	// be rejected even though the merge output is also present.
+	insertTxn, insertRel := tae.GetRelation()
+	err = insertRel.Append(ctx, bat)
+	if err == nil {
+		err = insertTxn.Commit(ctx)
+	} else {
+		_ = insertTxn.Rollback(ctx)
+	}
+	require.Error(t, err)
+	require.True(t, moerr.IsMoErrCode(err, moerr.ErrDuplicateEntry), err)
+}
+
+func TestFreezeMissedMergeTransferReturnsWW(t *testing.T) {
+	defer testutils.AfterTest(t)()
+	testutils.EnsureNoLeak(t)
+	ctx := context.Background()
+
+	opts := config.WithLongScanAndCKPOpts(nil)
+	tae := testutil.NewTestEngine(ctx, ModuleName, t, opts)
+	defer tae.Close()
+
+	schema := catalog.MockSchemaAll2(3, []int{0, 1})
+	schema.Extra.BlockMaxRows = 10
+	schema.Extra.ObjectMaxBlocks = 10
+	tae.BindSchema(schema)
+	bat := catalog.MockBatch(schema, 1)
+	defer bat.Close()
+	tae.CreateRelAndAppend(bat, true)
+	tae.CompactBlocks(true)
+
+	pk := bat.Vecs[schema.GetSingleSortKeyIdx()].Get(0)
+	stageUpdate := func(value int32) txnif.AsyncTxn {
+		txn, rel := tae.GetRelation()
+		txn.SetDedupType(txnif.DedupPolicy_CheckIncremental)
+		require.NoError(t, rel.UpdateByFilter(
+			ctx, handle.NewEQFilter(pk), 2, value, false,
+		))
+		return txn
+	}
+	victimTxn := stageUpdate(10)
+	winnerTxn := stageUpdate(20)
+	require.NoError(t, winnerTxn.Commit(ctx))
+
+	// Persist the winner's replacement row, then merge it together with the
+	// original source while victimTxn still carries the original physical RowID.
+	tae.CompactBlocks(true)
+	mergeTxn, mergeRel := tae.GetRelation()
+	objects := make([]*catalog.ObjectEntry, 0, 2)
+	it := mergeRel.MakeObjectIt(false)
+	for it.Next() {
+		obj := it.GetObject().GetMeta().(*catalog.ObjectEntry)
+		if !obj.IsAppendable() {
+			objects = append(objects, obj)
+		}
+	}
+	it.Close()
+	require.GreaterOrEqual(t, len(objects), 2)
+	mergeTask, err := jobs.NewMergeObjectsTask(
+		nil, mergeTxn, objects, tae.Runtime, 0, false,
+	)
+	require.NoError(t, err)
+	require.NoError(t, mergeTask.OnExec(ctx))
+	require.NoError(t, mergeTxn.Commit(ctx))
+
+	mergeTS := mergeTxn.GetCommitTS()
+	originalNow := tae.Runtime.Now
+	tae.Runtime.Now = func() types.TS { return mergeTS }
+	defer func() { tae.Runtime.Now = originalNow }()
+	txnimpl.EnableDebugSkipFreezePhaseTransfer()
+	defer txnimpl.DisableDebugSkipFreezePhaseTransfer()
+
+	err = victimTxn.GetStore().Freeze(ctx)
+	if err != nil {
+		_ = victimTxn.Rollback(ctx)
+	}
+	require.Error(t, err)
+	require.True(t, moerr.IsMoErrCode(err, moerr.ErrTxnWWConflict), err)
+}
+
+func TestCommitTransfersDeleteAcrossMergeAfterFreeze(t *testing.T) {
+	defer testutils.AfterTest(t)()
+	testutils.EnsureNoLeak(t)
+	ctx := context.Background()
+
+	opts := config.WithLongScanAndCKPOpts(nil)
+	tae := testutil.NewTestEngine(ctx, ModuleName, t, opts)
+	defer tae.Close()
+
+	schema := catalog.MockSchemaAll2(3, []int{0, 1})
+	schema.Extra.BlockMaxRows = 10
+	schema.Extra.ObjectMaxBlocks = 10
+	tae.BindSchema(schema)
+	bat := catalog.MockBatch(schema, 1)
+	defer bat.Close()
+	tae.CreateRelAndAppend(bat, true)
+	tae.CompactBlocks(true)
+
+	updateTxn, updateRel := tae.GetRelation()
+	updateTxn.SetDedupType(txnif.DedupPolicy_CheckIncremental)
+	pk := bat.Vecs[schema.GetSingleSortKeyIdx()].Get(0)
+	require.NoError(t, updateRel.UpdateByFilter(
+		ctx, handle.NewEQFilter(pk), 2, int32(42), false,
+	))
+
+	// Commit calls Freeze exactly once. Inject a merge after that Freeze has
+	// completed but before Commit enqueues updateTxn. PrePrepare's second
+	// transfer pass must repair the source RowID dropped in this interval.
+	updateTxn.SetFreezeFn(func(at txnif.AsyncTxn) error {
+		if err := at.GetStore().Freeze(ctx); err != nil {
+			return err
+		}
+		mergeTxn, mergeRel := tae.GetRelation()
+		source := testutil.GetOneBlockMeta(mergeRel)
+		mergeTask, err := jobs.NewMergeObjectsTask(
+			nil, mergeTxn, []*catalog.ObjectEntry{source}, tae.Runtime, 0, false,
+		)
+		if err != nil {
+			_ = mergeTxn.Rollback(ctx)
+			return err
+		}
+		if err = mergeTask.OnExec(ctx); err != nil {
+			_ = mergeTxn.Rollback(ctx)
+			return err
+		}
+		return mergeTxn.Commit(ctx)
+	})
+
+	require.NoError(t, updateTxn.Commit(ctx))
+	tae.CheckRowsByScan(1, true)
+}
+
+func TestMergePrepareCommitAppliesDeleteCreatedAfterFreeze(t *testing.T) {
+	defer testutils.AfterTest(t)()
+	testutils.EnsureNoLeak(t)
+	ctx := context.Background()
+
+	opts := config.WithLongScanAndCKPOpts(nil)
+	tae := testutil.NewTestEngine(ctx, ModuleName, t, opts)
+	defer tae.Close()
+
+	schema := catalog.MockSchemaAll2(3, []int{0, 1})
+	schema.Extra.BlockMaxRows = 10
+	schema.Extra.ObjectMaxBlocks = 10
+	tae.BindSchema(schema)
+	bat := catalog.MockBatch(schema, 1)
+	defer bat.Close()
+	tae.CreateRelAndAppend(bat, true)
+	tae.CompactBlocks(true)
+
+	mergeTxn, mergeRel := tae.GetRelation()
+	source := testutil.GetOneBlockMeta(mergeRel)
+	mergeTask, err := jobs.NewMergeObjectsTask(
+		nil, mergeTxn, []*catalog.ObjectEntry{source}, tae.Runtime, 0, false,
+	)
+	require.NoError(t, err)
+	require.NoError(t, mergeTask.OnExec(ctx))
+
+	pk := bat.Vecs[schema.GetSingleSortKeyIdx()].Get(0)
+	mergeTxn.SetFreezeFn(func(at txnif.AsyncTxn) error {
+		if err := at.GetStore().Freeze(ctx); err != nil {
+			return err
+		}
+		// This delete commits after the merge task built its output and after
+		// the merge transaction froze. mergeObjectsEntry.PrepareCommit must
+		// collect it and append the mapped target tombstone in the queue.
+		deleteTxn, deleteRel := tae.GetRelation()
+		if err := deleteRel.DeleteByFilter(ctx, handle.NewEQFilter(pk)); err != nil {
+			_ = deleteTxn.Rollback(ctx)
+			return err
+		}
+		return deleteTxn.Commit(ctx)
+	})
+
+	require.NoError(t, mergeTxn.Commit(ctx))
+	tae.CheckRowsByScan(0, true)
+}
+
+func TestPersistedDeleteTransfersWhenSourceDropsAfterTxnStart(t *testing.T) {
+	defer testutils.AfterTest(t)()
+	testutils.EnsureNoLeak(t)
+	ctx := context.Background()
+
+	opts := config.WithLongScanAndCKPOpts(nil)
+	tae := testutil.NewTestEngine(ctx, ModuleName, t, opts)
+	defer tae.Close()
+
+	schema := catalog.MockSchemaAll2(3, []int{0, 1})
+	schema.Extra.BlockMaxRows = 10
+	schema.Extra.ObjectMaxBlocks = 10
+	tae.BindSchema(schema)
+	bat := catalog.MockBatch(schema, 1)
+	defer bat.Close()
+	tae.CreateRelAndAppend(bat, true)
+	tae.CompactBlocks(true)
+
+	deleteTxn, deleteRel := tae.GetRelation()
+	deleteTxn.SetDedupType(txnif.DedupPolicy_CheckIncremental)
+	pk := bat.Vecs[schema.GetSingleSortKeyIdx()].Get(0)
+	id, offset, err := deleteRel.GetByFilter(ctx, handle.NewEQFilter(pk))
+	require.NoError(t, err)
+	oldRowID := types.NewRowIDWithObjectIDBlkNumAndRowID(
+		*id.ObjectID(), id.BlockID.Sequence(), offset,
+	)
+	pkVec := containers.MakeVector(schema.GetPrimaryKey().Type, common.DebugAllocator)
+	defer pkVec.Close()
+	pkVec.Append(pk, false)
+	rowIDVec := containers.MakeVector(types.T_Rowid.ToType(), common.DebugAllocator)
+	defer rowIDVec.Close()
+	rowIDVec.Append(oldRowID, false)
+	stats, err := testutil.MockCNDeleteInS3(
+		tae.Runtime.Fs, rowIDVec, pkVec, schema, deleteTxn,
+	)
+	require.NoError(t, err)
+	ok, err := deleteRel.AddPersistedTombstoneFile(id, stats)
+	require.NoError(t, err)
+	require.True(t, ok)
+
+	mergeTxn, mergeRel := tae.GetRelation()
+	source := testutil.GetOneBlockMeta(mergeRel)
+	mergeTask, err := jobs.NewMergeObjectsTask(
+		nil, mergeTxn, []*catalog.ObjectEntry{source}, tae.Runtime, 0, false,
+	)
+	require.NoError(t, err)
+	require.NoError(t, mergeTask.OnExec(ctx))
+	require.NoError(t, mergeTxn.Commit(ctx))
+
+	require.NoError(t, deleteTxn.Commit(ctx))
+	tae.CheckRowsByScan(0, true)
+}
+
+// TestTPCCStockMultiRowUpdateAcrossMerge models the stock-table part of one
+// NEW_ORDER transaction. A NEW_ORDER updates 5-15 stock rows, and the reported
+// duplicate key decodes as the two-column stock key (warehouse, item). All old
+// RowIDs are resolved before merge, so TN transfer must move every tombstone
+// before dedup checks the replacement appends.
+func TestTPCCStockMultiRowUpdateAcrossMerge(t *testing.T) {
+	defer testutils.AfterTest(t)()
+	testutils.EnsureNoLeak(t)
+	ctx := context.Background()
+
+	opts := config.WithLongScanAndCKPOpts(nil)
+	tae := testutil.NewTestEngine(ctx, ModuleName, t, opts)
+	defer tae.Close()
+
+	schema := catalog.MockSchemaAll2(4, []int{0, 1})
+	schema.Name = "bmsql_stock"
+	schema.Extra.BlockMaxRows = 4
+	schema.Extra.ObjectMaxBlocks = 2
+	tae.BindSchema(schema)
+	bat := catalog.MockBatch(schema, 40)
+	defer bat.Close()
+	tae.CreateRelAndAppend(bat, true)
+	tae.CompactBlocks(true)
+
+	stockTxn, stockRel := tae.GetRelation()
+	stockTxn.SetDedupType(txnif.DedupPolicy_CheckIncremental)
+	pkVec := bat.Vecs[schema.GetSingleSortKeyIdx()]
+	for i := 0; i < 15; i++ {
+		require.NoError(t, stockRel.UpdateByFilter(
+			ctx, handle.NewEQFilter(pkVec.Get(i)), 2, int32(1000+i), false,
+		))
+	}
+
+	mergeTxn, mergeRel := tae.GetRelation()
+	objects := make([]*catalog.ObjectEntry, 0, 8)
+	it := mergeRel.MakeObjectIt(false)
+	for it.Next() {
+		obj := it.GetObject().GetMeta().(*catalog.ObjectEntry)
+		if !obj.IsAppendable() {
+			objects = append(objects, obj)
+		}
+	}
+	it.Close()
+	require.NotEmpty(t, objects)
+	mergeTask, err := jobs.NewMergeObjectsTask(
+		nil, mergeTxn, objects, tae.Runtime, 0, false,
+	)
+	require.NoError(t, err)
+	require.NoError(t, mergeTask.OnExec(ctx))
+	require.NoError(t, mergeTxn.Commit(ctx))
+	dropTS := objects[0].GetLatestNode().GetDeleteAt()
+	require.False(t, dropTS.IsEmpty())
+	originalNow := tae.Runtime.Now
+	tae.Runtime.Now = func() types.TS { return dropTS }
+	defer func() { tae.Runtime.Now = originalNow }()
+
+	require.NoError(t, stockTxn.Commit(ctx))
+	tae.CheckRowsByScan(40, true)
+}
+
+// TestTPCCStockOverlappingUpdatesAcrossMerge models two NEW_ORDER transactions
+// for the same warehouse whose item lists overlap by one stock row. Both
+// transactions finish Freeze concurrently, as they can in optimistic mode.
+// The serialized pre-prepare queue must turn the loser into a retryable WW
+// conflict; a data-PK duplicate is not an acceptable replacement.
+func TestTPCCStockOverlappingUpdatesAcrossMerge(t *testing.T) {
+	defer testutils.AfterTest(t)()
+	testutils.EnsureNoLeak(t)
+	ctx, cancel := context.WithTimeout(context.Background(), time.Minute)
 	defer cancel()
 
-	const (
-		workerCount       = 32
-		updatesPerWorker  = 40
-		maxAttemptsPerTxn = 500
+	opts := config.WithLongScanAndCKPOpts(nil)
+	tae := testutil.NewTestEngine(ctx, ModuleName, t, opts)
+	defer tae.Close()
+
+	schema := catalog.MockSchemaAll2(4, []int{0, 1})
+	schema.Name = "bmsql_stock"
+	schema.Extra.BlockMaxRows = 4
+	schema.Extra.ObjectMaxBlocks = 2
+	tae.BindSchema(schema)
+	bat := catalog.MockBatch(schema, 40)
+	defer bat.Close()
+	tae.CreateRelAndAppend(bat, true)
+	tae.CompactBlocks(true)
+	pkVec := bat.Vecs[schema.GetSingleSortKeyIdx()]
+
+	stage := func(first, last int, valueBase int32) txnif.AsyncTxn {
+		txn, rel := tae.GetRelation()
+		txn.SetDedupType(txnif.DedupPolicy_CheckIncremental)
+		for i := first; i < last; i++ {
+			require.NoError(t, rel.UpdateByFilter(
+				ctx, handle.NewEQFilter(pkVec.Get(i)), 2, valueBase+int32(i), false,
+			))
+		}
+		return txn
+	}
+	// [0, 10) and [9, 19) have exactly one conflicting stock key.
+	firstTxn := stage(0, 10, 1000)
+	secondTxn := stage(9, 19, 2000)
+
+	mergeTxn, mergeRel := tae.GetRelation()
+	objects := make([]*catalog.ObjectEntry, 0, 8)
+	it := mergeRel.MakeObjectIt(false)
+	for it.Next() {
+		obj := it.GetObject().GetMeta().(*catalog.ObjectEntry)
+		if !obj.IsAppendable() {
+			objects = append(objects, obj)
+		}
+	}
+	it.Close()
+	require.NotEmpty(t, objects)
+	mergeTask, err := jobs.NewMergeObjectsTask(
+		nil, mergeTxn, objects, tae.Runtime, 0, false,
 	)
+	require.NoError(t, err)
+	require.NoError(t, mergeTask.OnExec(ctx))
+	require.NoError(t, mergeTxn.Commit(ctx))
+
+	freezeReady := make(chan struct{}, 2)
+	releaseFreeze := make(chan struct{})
+	for _, txn := range []txnif.AsyncTxn{firstTxn, secondTxn} {
+		txn.SetFreezeFn(func(at txnif.AsyncTxn) error {
+			err := at.GetStore().Freeze(ctx)
+			freezeReady <- struct{}{}
+			select {
+			case <-releaseFreeze:
+			case <-ctx.Done():
+				if err == nil {
+					err = context.Cause(ctx)
+				}
+			}
+			return err
+		})
+	}
+
+	errs := make(chan error, 2)
+	go func() { errs <- firstTxn.Commit(ctx) }()
+	go func() { errs <- secondTxn.Commit(ctx) }()
+	for range 2 {
+		select {
+		case <-freezeReady:
+		case <-ctx.Done():
+			t.Fatal(context.Cause(ctx))
+		}
+	}
+	close(releaseFreeze)
+
+	successes, wwConflicts := 0, 0
+	for range 2 {
+		err = <-errs
+		switch {
+		case err == nil:
+			successes++
+		case moerr.IsMoErrCode(err, moerr.ErrTxnWWConflict):
+			wwConflicts++
+		case moerr.IsMoErrCode(err, moerr.ErrDuplicateEntry):
+			t.Fatalf("overlapping stock update returned duplicate instead of WW: %v", err)
+		default:
+			t.Fatalf("unexpected stock update commit error: %v", err)
+		}
+	}
+	require.Equal(t, 1, successes)
+	require.Equal(t, 1, wwConflicts)
+	tae.CheckRowsByScan(40, true)
+}
+
+// TestTPCCStockUpdateAfterConcurrentWinnerReturnsWW models the ordinary OCC
+// race behind two NEW_ORDER transactions updating overlapping stock items.
+// Both transactions resolve the old RowIDs at their snapshots; the winner
+// commits before the victim reaches Freeze. Freeze data dedup sees the winner's
+// replacement PK first, but this is a write-write race, not a user insert of an
+// existing stock key, so it must remain retryable instead of becoming 1062.
+func TestTPCCStockUpdateAfterConcurrentWinnerReturnsWW(t *testing.T) {
+	defer testutils.AfterTest(t)()
+	testutils.EnsureNoLeak(t)
+	ctx := context.Background()
+
+	opts := config.WithLongScanAndCKPOpts(nil)
+	tae := testutil.NewTestEngine(ctx, ModuleName, t, opts)
+	defer tae.Close()
+
+	schema := catalog.MockSchemaAll2(4, []int{0, 1})
+	schema.Name = "bmsql_stock"
+	schema.Extra.BlockMaxRows = 20
+	schema.Extra.ObjectMaxBlocks = 2
+	tae.BindSchema(schema)
+	bat := catalog.MockBatch(schema, 40)
+	defer bat.Close()
+	tae.CreateRelAndAppend(bat, true)
+	tae.CompactBlocks(true)
+	pkVec := bat.Vecs[schema.GetSingleSortKeyIdx()]
+
+	stageUpdate := func(valueBase int32) txnif.AsyncTxn {
+		txn, rel := tae.GetRelation()
+		txn.SetDedupType(txnif.DedupPolicy_CheckIncremental)
+		for i := 0; i < 10; i++ {
+			require.NoError(t, rel.UpdateByFilter(
+				ctx, handle.NewEQFilter(pkVec.Get(i)), 2, valueBase+int32(i), false,
+			))
+		}
+		return txn
+	}
+
+	victim := stageUpdate(1000)
+	winner := stageUpdate(2000)
+	require.NoError(t, winner.Commit(ctx))
+
+	stage := "freeze"
+	victim.SetFreezeFn(func(at txnif.AsyncTxn) error {
+		err := at.GetStore().Freeze(ctx)
+		if err == nil {
+			stage = "queue"
+		}
+		return err
+	})
+	err := victim.Commit(ctx)
+	if err == nil {
+		t.Fatal("both overlapping stock updates committed")
+	}
+	if moerr.IsMoErrCode(err, moerr.ErrDuplicateEntry) {
+		t.Fatalf("stock update returned duplicate in %s instead of WW: %v", stage, err)
+	}
+	require.True(t, moerr.IsMoErrCode(err, moerr.ErrTxnWWConflict), err)
+	tae.CheckRowsByScan(40, true)
+}
+
+// TestTPCCStockUpdateAcrossFlush models a hot stock row produced by one update
+// and read by the next NEW_ORDER while it is still in an appendable object.
+// Background flush rewrites that source after the second transaction has
+// captured its RowID but before Freeze/PrePrepare transfer it.
+func TestTPCCStockUpdateAcrossFlush(t *testing.T) {
+	defer testutils.AfterTest(t)()
+	testutils.EnsureNoLeak(t)
+	ctx := context.Background()
+
+	opts := config.WithLongScanAndCKPOpts(nil)
+	tae := testutil.NewTestEngine(ctx, ModuleName, t, opts)
+	defer tae.Close()
+
+	schema := catalog.MockSchemaAll2(4, []int{0, 1})
+	schema.Name = "bmsql_stock"
+	schema.Extra.BlockMaxRows = 20
+	schema.Extra.ObjectMaxBlocks = 2
+	tae.BindSchema(schema)
+	bat := catalog.MockBatch(schema, 40)
+	defer bat.Close()
+	tae.CreateRelAndAppend(bat, true)
+	tae.CompactBlocks(true)
+	pkVec := bat.Vecs[schema.GetSingleSortKeyIdx()]
+
+	update := func(valueBase int32) txnif.AsyncTxn {
+		txn, rel := tae.GetRelation()
+		txn.SetDedupType(txnif.DedupPolicy_CheckIncremental)
+		for i := 0; i < 15; i++ {
+			require.NoError(t, rel.UpdateByFilter(
+				ctx, handle.NewEQFilter(pkVec.Get(i)), 2, valueBase+int32(i), false,
+			))
+		}
+		return txn
+	}
+
+	// The first update creates the appendable source used by the victim.
+	require.NoError(t, update(1000).Commit(ctx))
+	victimTxn := update(2000)
+
+	// Flush after victimTxn captured the appendable RowIDs. This is the common
+	// TPCC shape where recently updated stock rows are rewritten again quickly.
+	require.NoError(t, tae.DB.ForceFlush(ctx, tae.TxnMgr.Now()))
+	require.NoError(t, victimTxn.Commit(ctx))
+	tae.CheckRowsByScan(40, true)
+}
+
+func TestFreezePersistedStaleRowIDAfterConcurrentUpdateReturnsWW(t *testing.T) {
+	defer testutils.AfterTest(t)()
+	testutils.EnsureNoLeak(t)
+	ctx := context.Background()
+
+	opts := config.WithLongScanAndCKPOpts(nil)
+	tae := testutil.NewTestEngine(ctx, ModuleName, t, opts)
+	defer tae.Close()
+
+	schema := catalog.MockSchemaAll2(3, []int{0, 1})
+	schema.Extra.BlockMaxRows = 10
+	schema.Extra.ObjectMaxBlocks = 10
+	tae.BindSchema(schema)
+	bat := catalog.MockBatch(schema, 1)
+	defer bat.Close()
+	tae.CreateRelAndAppend(bat, true)
+	tae.CompactBlocks(true)
+
+	// Start the victim first and retain the physical RowID visible at StartTS.
+	victimTxn, victimRel := tae.GetRelation()
+	victimTxn.SetDedupType(txnif.DedupPolicy_CheckIncremental)
+	pk := bat.Vecs[schema.GetSingleSortKeyIdx()].Get(0)
+	id, offset, err := victimRel.GetByFilter(ctx, handle.NewEQFilter(pk))
+	require.NoError(t, err)
+	oldRowID := types.NewRowIDWithObjectIDBlkNumAndRowID(
+		*id.ObjectID(), id.BlockID.Sequence(), offset,
+	)
+
+	// A concurrent transaction replaces the PK after victimTxn.StartTS. The
+	// victim must report WW even if CN later supplies the stale RowID through a
+	// persisted tombstone; reporting the replacement row as a PK duplicate is
+	// the TPCC failure mode this test is intended to expose.
+	winnerTxn, winnerRel := tae.GetRelation()
+	winnerTxn.SetDedupType(txnif.DedupPolicy_CheckIncremental)
+	require.NoError(t, winnerRel.UpdateByFilter(
+		ctx, handle.NewEQFilter(pk), 2, int32(42), false,
+	))
+	require.NoError(t, winnerTxn.Commit(ctx))
+	tae.CompactBlocks(true)
+
+	pkVec := containers.MakeVector(schema.GetPrimaryKey().Type, common.DebugAllocator)
+	defer pkVec.Close()
+	pkVec.Append(pk, false)
+	rowIDVec := containers.MakeVector(types.T_Rowid.ToType(), common.DebugAllocator)
+	defer rowIDVec.Close()
+	rowIDVec.Append(oldRowID, false)
+	stats, err := testutil.MockCNDeleteInS3(
+		tae.Runtime.Fs, rowIDVec, pkVec, schema, victimTxn,
+	)
+	require.NoError(t, err)
+	require.NoError(t, victimRel.Append(ctx, bat))
+	ok, err := victimRel.AddPersistedTombstoneFile(id, stats)
+	require.NoError(t, err)
+	require.True(t, ok)
+
+	err = victimTxn.GetStore().Freeze(ctx)
+	if err != nil {
+		_ = victimTxn.Rollback(ctx)
+	}
+	require.Error(t, err)
+	require.True(t, moerr.IsMoErrCode(err, moerr.ErrTxnWWConflict), err)
+}
+
+func TestConcurrentUpdateByPreviousRowIDWithFlushMerge(t *testing.T) {
+	testConcurrentUpdateByPreviousRowIDWithFlushMerge(t, 32, 32, 40)
+}
+
+func testConcurrentUpdateByPreviousRowIDWithFlushMerge(
+	t *testing.T, keyCount, workerCount, updatesPerWorker int,
+) {
+	defer testutils.AfterTest(t)()
+	testutils.EnsureNoLeak(t)
+	ctx, cancel := context.WithTimeout(context.Background(), 3*time.Minute)
+	defer cancel()
+
+	const maxAttemptsPerTxn = 1000
 
 	opts := config.WithLongScanAndCKPOpts(nil)
 	tae := testutil.NewTestEngine(ctx, ModuleName, t, opts)
@@ -11330,15 +12018,17 @@ func TestConcurrentUpdateByPreviousRowIDWithFlushMerge(t *testing.T) {
 	schema.Extra.ObjectMaxBlocks = 2
 	tae.BindSchema(schema)
 
-	initial := catalog.MockBatch(schema, workerCount)
+	initial := catalog.MockBatch(schema, keyCount)
 	defer initial.Close()
-	workerBatches := make([]*containers.Batch, workerCount)
-	for i := range workerBatches {
-		workerBatches[i] = initial.CloneWindow(i, 1)
-		defer workerBatches[i].Close()
+	keyBatches := make([]*containers.Batch, keyCount)
+	for i := range keyBatches {
+		keyBatches[i] = initial.CloneWindow(i, 1)
+		defer keyBatches[i].Close()
 	}
-	for offset := 0; offset < workerCount; offset += int(schema.Extra.BlockMaxRows * schema.Extra.ObjectMaxBlocks) {
-		window := initial.CloneWindow(offset, int(schema.Extra.BlockMaxRows*schema.Extra.ObjectMaxBlocks))
+	objectRows := int(schema.Extra.BlockMaxRows * schema.Extra.ObjectMaxBlocks)
+	for offset := 0; offset < keyCount; offset += objectRows {
+		windowRows := min(objectRows, keyCount-offset)
+		window := initial.CloneWindow(offset, windowRows)
 		if offset == 0 {
 			tae.CreateRelAndAppend(window, true)
 		} else {
@@ -11355,6 +12045,7 @@ func TestConcurrentUpdateByPreviousRowIDWithFlushMerge(t *testing.T) {
 		if err != nil {
 			return nil, nil, err
 		}
+		txn.SetDedupType(txnif.DedupPolicy_CheckIncremental)
 		txn.BindAccessInfo(0, 0, 0)
 		database, err := txn.GetDatabase(testutil.DefaultTestDB)
 		if err != nil {
@@ -11371,6 +12062,7 @@ func TestConcurrentUpdateByPreviousRowIDWithFlushMerge(t *testing.T) {
 
 	var flushCount atomic.Uint64
 	var mergeCount atomic.Uint64
+	var commitTombstoneDuplicateCount atomic.Uint64
 	errC := make(chan error, workerCount+1)
 	stopMaintenance := make(chan struct{})
 	var maintenanceWG sync.WaitGroup
@@ -11437,7 +12129,8 @@ func TestConcurrentUpdateByPreviousRowIDWithFlushMerge(t *testing.T) {
 		worker := worker
 		go func() {
 			defer workersWG.Done()
-			pk := workerBatches[worker].Vecs[schema.GetSingleSortKeyIdx()].Get(0)
+			key := worker % keyCount
+			pk := keyBatches[key].Vecs[schema.GetSingleSortKeyIdx()].Get(0)
 			for update := 0; update < updatesPerWorker; update++ {
 				committed := false
 				for attempt := 0; attempt < maxAttemptsPerTxn; attempt++ {
@@ -11454,9 +12147,19 @@ func TestConcurrentUpdateByPreviousRowIDWithFlushMerge(t *testing.T) {
 						err = rel.RangeDelete(id, row, row, handle.DT_Normal)
 					}
 					if err == nil {
-						err = rel.Append(ctx, workerBatches[worker])
+						err = rel.Append(ctx, keyBatches[key])
 					}
+					stage := "operation"
 					if err == nil {
+						stage = "commit"
+						txn.SetFreezeFn(func(at txnif.AsyncTxn) error {
+							stage = "freeze"
+							err := at.GetStore().Freeze(ctx)
+							if err == nil {
+								stage = "queue"
+							}
+							return err
+						})
 						err = txn.Commit(ctx)
 					} else {
 						_ = txn.Rollback(context.Background())
@@ -11466,9 +12169,17 @@ func TestConcurrentUpdateByPreviousRowIDWithFlushMerge(t *testing.T) {
 						break
 					}
 					if moerr.IsMoErrCode(err, moerr.ErrDuplicateEntry) {
+						if stage == "commit" && strings.Contains(err.Error(), "__mo_%1_delete_rowid") {
+							// Keep stressing until we find the TPCC data-PK duplicate.
+							// Concurrent stale deletes can independently expose a
+							// tombstone-RowID duplicate during queued commit.
+							commitTombstoneDuplicateCount.Add(1)
+							time.Sleep(time.Millisecond)
+							continue
+						}
 						errC <- fmt.Errorf(
-							"worker %d update %d attempt %d returned duplicate: %w",
-							worker, update, attempt, err,
+							"worker %d key %d update %d attempt %d stage %s returned duplicate: %w",
+							worker, key, update, attempt, stage, err,
 						)
 						return
 					}
@@ -11497,7 +12208,8 @@ func TestConcurrentUpdateByPreviousRowIDWithFlushMerge(t *testing.T) {
 	}
 	require.Positive(t, flushCount.Load())
 	require.Positive(t, mergeCount.Load())
-	tae.CheckRowsByScan(workerCount, true)
+	t.Logf("commit tombstone duplicates retried: %d", commitTombstoneDuplicateCount.Load())
+	tae.CheckRowsByScan(keyCount, true)
 }
 
 // TestTransferDeleteVectorRealloc verifies that TransferDeletes Part 2

@@ -145,8 +145,8 @@ func NewTableEntryWithTableId(db *DBEntry, schema *Schema, txnCtx txnif.AsyncTxn
 			func() *TableMVCCNode { return &TableMVCCNode{} }),
 		db:               db,
 		TableNode:        &TableNode{},
-		dataObjects:      NewObjectList(false),
-		tombstoneObjects: NewObjectList(true),
+		dataObjects:      NewObjectListWithTableID(tableId, false),
+		tombstoneObjects: NewObjectListWithTableID(tableId, true),
 	}
 	e.TableNode.schema.Store(schema)
 	if dataFactory != nil {
@@ -159,6 +159,8 @@ func NewTableEntryWithTableId(db *DBEntry, schema *Schema, txnCtx txnif.AsyncTxn
 func NewSystemTableEntry(db *DBEntry, id uint64, schema *Schema) *TableEntry {
 	e := NewReplayTableEntry()
 	e.ID = id
+	e.dataObjects.SetTableID(id)
+	e.tombstoneObjects.SetTableID(id)
 	e.db = db
 
 	e.TableNode.schema.Store(schema)
@@ -188,7 +190,7 @@ func NewReplayTableEntry() *TableEntry {
 func MockStaloneTableEntry(id uint64, schema *Schema) *TableEntry {
 	node := &TableNode{}
 	node.schema.Store(schema)
-	return &TableEntry{
+	e := &TableEntry{
 		ID: id,
 		BaseEntryImpl: NewBaseEntry(
 			func() *TableMVCCNode { return &TableMVCCNode{} }),
@@ -196,6 +198,9 @@ func MockStaloneTableEntry(id uint64, schema *Schema) *TableEntry {
 		dataObjects:      NewObjectList(false),
 		tombstoneObjects: NewObjectList(true),
 	}
+	e.dataObjects.SetTableID(id)
+	e.tombstoneObjects.SetTableID(id)
+	return e
 }
 
 func (entry *TableEntry) GetSoftdeleteObjects(dedupedTS, collectTS types.TS) (objs []*ObjectEntry) {
@@ -296,6 +301,11 @@ func (entry *TableEntry) MakeDataVisibleObjectIt(txn txnif.TxnReader) *VisibleCo
 
 func (entry *TableEntry) WaitDataObjectCommitted(ts types.TS) {
 	entry.dataObjects.WaitUntilCommitted(ts)
+}
+
+func (entry *TableEntry) MarkRestartSealedObjectBookmarks(restartTS types.TS) {
+	entry.dataObjects.MarkRestartSealedPrefix(restartTS)
+	entry.tombstoneObjects.MarkRestartSealedPrefix(restartTS)
 }
 
 func (entry *TableEntry) IsTableTailFlushed(start, end types.TS) (bool, *ObjectEntry) {
@@ -1051,5 +1061,7 @@ func MockTableEntryWithDB(dbEntry *DBEntry, tblId uint64) *TableEntry {
 	entry.TableNode.tombstoneSchema.Store(NewEmptySchema("tombstone"))
 	entry.ID = tblId
 	entry.db = dbEntry
+	entry.dataObjects.SetTableID(tblId)
+	entry.tombstoneObjects.SetTableID(tblId)
 	return entry
 }

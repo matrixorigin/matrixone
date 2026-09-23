@@ -15,6 +15,9 @@
 package v2
 
 import (
+	"strconv"
+	"sync"
+
 	"github.com/prometheus/client_golang/prometheus"
 )
 
@@ -159,7 +162,137 @@ var (
 	TxnPKMayBeChangedMemHitCounter        = txnPKMayBeChangedCounter.WithLabelValues("mem_hit")
 	TxnPKMayBeChangedMemNotFlushedCounter = txnPKMayBeChangedCounter.WithLabelValues("mem_not_flushed")
 	TxnPKMayBeChangedPersistedCounter     = txnPKMayBeChangedCounter.WithLabelValues("persisted")
+
+	// TxnAObjectDedupCounter records object-list decisions made by
+	// incremental dedup. max_commit_unavailable means the append history is
+	// not sealed/finalized yet, so the object must be read.
+	txnAObjectDedupCounter = prometheus.NewCounterVec(
+		prometheus.CounterOpts{
+			Namespace: "mo",
+			Subsystem: "txn",
+			Name:      "aobject_dedup_total",
+			Help:      "Total number of appendable objects considered by incremental dedup.",
+		}, []string{"result"})
+	TxnAObjectDedupCandidateCounter            = txnAObjectDedupCounter.WithLabelValues("candidate")
+	TxnAObjectDedupScannedCounter              = txnAObjectDedupCounter.WithLabelValues("scanned")
+	TxnAObjectDedupMaxCommitSkippedCounter     = txnAObjectDedupCounter.WithLabelValues("max_commit_skipped")
+	TxnAObjectDedupMaxCommitUnavailableCounter = txnAObjectDedupCounter.WithLabelValues("max_commit_unavailable")
+
+	// TxnAObjectMaxCommitStateGauge is the current number of appendable
+	// objects in each max-commit state, split by table and data/tombstone.
+	// pending means the object is still accepting appends (or its append
+	// history is unavailable); sealed_waiting means it is sealed but at least
+	// one AppendNode is still non-terminal; finalized means max commit TS is
+	// available.
+	TxnAObjectMaxCommitStateGauge = prometheus.NewGaugeVec(
+		prometheus.GaugeOpts{
+			Namespace: "mo",
+			Subsystem: "txn",
+			Name:      "aobject_max_commit_state",
+			Help:      "Current number of appendable objects by max-commit state.",
+		}, []string{"table_id", "type", "state"})
+
+	TxnAObjectMaxCommitTableTotalGauge = prometheus.NewGauge(
+		prometheus.GaugeOpts{
+			Namespace: "mo",
+			Subsystem: "txn",
+			Name:      "aobject_max_commit_table_total",
+			Help:      "Current number of tables with at least one tracked appendable object.",
+		})
+
+	txnAObjectMetricMu sync.Mutex
+	// table -> data/tombstone -> pending/sealed_waiting/finalized counts.
+	txnAObjectMetricCounts = make(map[uint64][2][3]int)
+	txnAObjectMetricTables = make(map[uint64]struct{})
+
+	// TxnTNPrePrepareObjectCounter counts only the object-list work done by
+	// incremental PrePrepare dedup. The group label identifies the independent
+	// object-list B-tree; result distinguishes traversal from filtering and the
+	// actual GetDuplicatedRows call.
+	TxnTNPrePrepareObjectCounter = prometheus.NewCounterVec(
+		prometheus.CounterOpts{
+			Namespace: "mo",
+			Subsystem: "txn",
+			Name:      "tn_preprepare_object_total",
+			Help:      "Object-list entries considered by TN incremental PrePrepare dedup.",
+		}, []string{"type", "group", "result"})
+
+	// TxnTNPrePrepareObjectScanCounter is the per-table version of the
+	// object-list counter.  Prometheus sample time identifies the scan
+	// interval; callers can use increase() to obtain the number of objects
+	// reached by each PrePrepareDedup scan in that interval.
+	TxnTNPrePrepareObjectScanCounter = prometheus.NewCounterVec(
+		prometheus.CounterOpts{
+			Namespace: "mo",
+			Subsystem: "txn",
+			Name:      "tn_preprepare_object_scan_total",
+			Help:      "Objects reached by TN PrePrepare dedup, split by table and object kind.",
+		}, []string{"table_id", "type", "object_kind", "drop", "group", "result"})
+
+	// TxnTNPrePrepareObjectBookmarkCounter records whether the appendable-create
+	// group could use its prefix max-commit bookmark and how many entries that
+	// bookmark proved safe to skip. valid/invalid are per group scan; the
+	// prefix_skipped value is an object count.
+	TxnTNPrePrepareObjectBookmarkCounter = prometheus.NewCounterVec(
+		prometheus.CounterOpts{
+			Namespace: "mo",
+			Subsystem: "txn",
+			Name:      "tn_preprepare_object_bookmark_total",
+			Help:      "Bookmark decisions and prefix objects skipped by TN incremental PrePrepare dedup.",
+		}, []string{"type", "group", "result"})
 )
+
+// UpdateTxnAObjectMaxCommitState publishes one table/object-list snapshot.
+// It is intentionally called only on object lifecycle transitions, not from
+// the PrePrepare dedup scan.
+func UpdateTxnAObjectMaxCommitState(
+	tableID uint64,
+	isTombstone bool,
+	pending, sealedWaiting, finalized int,
+) {
+	if tableID == 0 {
+		return
+	}
+	typ := "data"
+	listIndex := 0
+	if isTombstone {
+		typ = "tombstone"
+		listIndex = 1
+	}
+	counts := [3]int{pending, sealedWaiting, finalized}
+	for i, state := range [...]string{"pending", "sealed_waiting", "finalized"} {
+		TxnAObjectMaxCommitStateGauge.WithLabelValues(
+			strconv.FormatUint(tableID, 10), typ, state).Set(float64(counts[i]))
+	}
+
+	txnAObjectMetricMu.Lock()
+	oldActive := false
+	for _, list := range txnAObjectMetricCounts[tableID] {
+		if list[0]+list[1]+list[2] > 0 {
+			oldActive = true
+			break
+		}
+	}
+	all := txnAObjectMetricCounts[tableID]
+	all[listIndex] = counts
+	txnAObjectMetricCounts[tableID] = all
+	newActive := false
+	for _, list := range all {
+		if list[0]+list[1]+list[2] > 0 {
+			newActive = true
+			break
+		}
+	}
+	if !oldActive && newActive {
+		txnAObjectMetricTables[tableID] = struct{}{}
+		TxnAObjectMaxCommitTableTotalGauge.Set(float64(len(txnAObjectMetricTables)))
+	} else if oldActive && !newActive {
+		delete(txnAObjectMetricTables, tableID)
+		delete(txnAObjectMetricCounts, tableID)
+		TxnAObjectMaxCommitTableTotalGauge.Set(float64(len(txnAObjectMetricTables)))
+	}
+	txnAObjectMetricMu.Unlock()
+}
 
 var (
 	txnQueueSizeGauge = prometheus.NewGaugeVec(
@@ -442,6 +575,27 @@ var (
 
 	TxnTNAppendDeduplicateDurationHistogram     = txnTNDeduplicateDurationHistogram.WithLabelValues("append_deduplicate")
 	TxnTNPrePrepareDeduplicateDurationHistogram = txnTNDeduplicateDurationHistogram.WithLabelValues("prePrepare_deduplicate")
+
+	TxnTNPrePrepareDeduplicateStepDurationHistogram = prometheus.NewHistogramVec(
+		prometheus.HistogramOpts{
+			Namespace: "mo",
+			Subsystem: "txn",
+			Name:      "tn_preprepare_deduplicate_step_duration_seconds",
+			Help: "Bucketed histogram of individual TN PrePrepare deduplication steps. " +
+				"Object-list steps include object_list_scan (total), object_list_iterator " +
+				"(iterator residual), object_entry_filter, object_max_commit_lookup, and " +
+				"object_operation.",
+			Buckets: getDurationBuckets(),
+		}, []string{"type", "step"})
+
+	TxnTNPrePrepareObjectStepDurationHistogram = prometheus.NewHistogramVec(
+		prometheus.HistogramOpts{
+			Namespace: "mo",
+			Subsystem: "txn",
+			Name:      "tn_preprepare_object_step_duration_seconds",
+			Help:      "Bucketed histogram of TN PrePrepare ObjectList steps by object-list group.",
+			Buckets:   getDurationBuckets(),
+		}, []string{"type", "group", "step"})
 
 	TxnTNLogServiceAppendDurationHistogram = prometheus.NewHistogram(
 		prometheus.HistogramOpts{

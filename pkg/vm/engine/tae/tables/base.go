@@ -38,6 +38,7 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/iface/txnif"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/index"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/tables/updates"
+	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/tasks"
 )
 
 type BlockT[T common.IRef] interface {
@@ -70,6 +71,20 @@ func newBaseObject(
 	obj.meta.Store(meta)
 	obj.appendMVCC.SetAppendListener(
 		obj.OnApplyAppend)
+	obj.appendMVCC.SetAppendMaxListener(func(max types.TS) {
+		meta.UpdateAppendMaxCommit(max)
+	})
+	obj.appendMVCC.SetAppendMaxStateListener(func(finalized bool) {
+		if !finalized {
+			meta.MarkAppendMaxSealedWaiting()
+		}
+	})
+	if rt != nil && rt.Scheduler != nil {
+		meta.SetAppendMaxBookmarkScheduler(func(fn func() error) error {
+			_, err := rt.Scheduler.ScheduleScopedFn(nil, tasks.IOTask, meta.AsCommonID(), fn)
+			return err
+		})
+	}
 	obj.RWMutex = obj.appendMVCC.RWMutex
 	return obj
 }
