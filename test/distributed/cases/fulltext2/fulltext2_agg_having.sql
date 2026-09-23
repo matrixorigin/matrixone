@@ -119,6 +119,7 @@ from rd group by cat having max(match(body) against('alpha')) > 0 order by cat;
 -- left at 20105 instead. cat 10 has (alpha) matching and (beta) non-matching.
 create table castrd(id int primary key, cat int, body text, fulltext2 index castft(body));
 insert into castrd values (1,10,'alpha'),(2,10,'beta'),(3,20,'gamma'),(4,30,'delta');
+alter table castrd alter reindex castft fulltext2 force_sync;
 
 -- SUM over a cast chain that turns the dropped non-matching 0 into 2000 is NOT drop-safe -> 20105.
 select cat, sum(cast(cast(match(body) against('alpha') as char) as year)) as s
