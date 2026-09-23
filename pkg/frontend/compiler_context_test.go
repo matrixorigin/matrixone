@@ -34,6 +34,7 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/sql/plan/function"
 	"github.com/matrixorigin/matrixone/pkg/testutil"
 	"github.com/matrixorigin/matrixone/pkg/txn/client"
+	"github.com/matrixorigin/matrixone/pkg/udf"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine"
 	"github.com/stretchr/testify/require"
 )
@@ -85,6 +86,112 @@ func TestSubscriptionMetasFromSubInfos(t *testing.T) {
 			Tables:      "t1,t2",
 		},
 	}, metas)
+}
+
+func TestResolveUdfBindsExactPythonRevisionAndNamespace(t *testing.T) {
+	ctx := defines.AttachAccountId(context.Background(), 0)
+	ses := &Session{feSessionImpl: feSessionImpl{}}
+	ses.SetAccountId(0)
+	background := &backgroundExecTestWithHistory{}
+	background.init()
+	previousNewBackgroundExec := NewBackgroundExec
+	NewBackgroundExec = func(context.Context, FeSession, ...*BackgroundExecOption) BackgroundExec {
+		return background
+	}
+	t.Cleanup(func() { NewBackgroundExec = previousNewBackgroundExec })
+
+	body := pythonCatalogTestBody(t, types.T_int64)
+	decoded, err := function.DecodePythonRoutineBody(body)
+	require.NoError(t, err)
+	logicalArgs := `[{"name":"value","type":"bigint"}]`
+	compiler := &TxnCompilerContext{execCtx: &ExecCtx{reqCtx: ctx, ses: ses}}
+	compiler.SetDatabase("app")
+	_, candidateSQL := udfCatalogLookup(ctx, nil, "f", "app")
+	background.sql2result[candidateSQL] = resolveUdfCatalogResult(
+		[]string{"function_id", "args", "body", "language", "rettype", "db", "modified_time", "sql_mode"},
+		[]interface{}{int64(44), logicalArgs, body, "python", "bigint", "app", "2026-09-20 00:00:00", ""},
+	)
+
+	inputDescriptor, returnDescriptor, signatureFingerprint, err := function.PythonSignatureMetadata(decoded.ArgTypes, decoded.ReturnType)
+	require.NoError(t, err)
+	definitionFingerprint, err := function.PythonRoutineFingerprint(body)
+	require.NoError(t, err)
+	background.sql2result[pythonRevisionCatalogSQL(nil, 44)] = resolveUdfCatalogResult(
+		[]string{
+			"active_revision", "namespace_version", "revision", "canonical_input_descriptor", "return_descriptor",
+			"signature_key_schema_version", "signature_fingerprint", "args", "arg_types", "body", "language",
+			"rettype", "definition_schema_version", "abi_contract", "adapter_version", "sdk_version", "null_policy",
+			"volatility", "definition_fingerprint", "artifact_digest", "environment_digest", "revision_security_type", "head_security_type",
+		},
+		[]interface{}{
+			int64(1), int64(1), int64(1), inputDescriptor, returnDescriptor, int64(udf.PythonSignatureKeySchemaVersion),
+			signatureFingerprint, logicalArgs, inputDescriptor, body, "python", "bigint", int64(udf.PythonDefinitionSchemaVersion),
+			udf.PythonABIContract, udf.PythonAdapterVersion, udf.PythonSDKVersion, udf.NullCallHandler, "VOLATILE",
+			definitionFingerprint, decoded.ArtifactDigest, decoded.EnvironmentDigest, "INVOKER", "INVOKER",
+		},
+	)
+	background.sql2result["select dat_id from mo_catalog.mo_database where datname = 'app' and account_id = 0;"] = singleInt64Result("dat_id", 88)
+	namespaceSQL := routineNamespacesSQL([]uint64{44}, nil)
+	background.sql2result[namespaceSQL] = namespaceRows(namespaceMember(44, "candidate-state"))
+
+	argumentType := types.T_int64.ToType()
+	resolved, err := compiler.ResolveUdf("f", []*pbplan.Expr{{Typ: plan2.MakePlan2Type(&argumentType)}})
+	require.NoError(t, err)
+	require.Equal(t, int64(44), resolved.FunctionID)
+	require.Equal(t, uint64(1), resolved.Revision)
+	require.Equal(t, uint64(1), resolved.NamespaceVersion)
+	require.Equal(t, uint64(88), resolved.DatabaseID)
+	require.NotEmpty(t, resolved.NamespaceFingerprint)
+	require.Equal(t, []types.Type{types.T_int64.ToType()}, resolved.ArgsType)
+	require.Contains(t, background.executedSqls, candidateSQL)
+	require.Contains(t, background.executedSqls, pythonRevisionCatalogSQL(nil, 44))
+	require.Contains(t, background.executedSqls, namespaceSQL)
+}
+
+func TestResolveUdfKeepsLegacySQLRoutineReadableWithoutRevisionCatalog(t *testing.T) {
+	ctx := defines.AttachAccountId(context.Background(), 0)
+	ses := &Session{feSessionImpl: feSessionImpl{}}
+	ses.SetAccountId(0)
+	background := &backgroundExecTestWithHistory{}
+	background.init()
+	previousNewBackgroundExec := NewBackgroundExec
+	NewBackgroundExec = func(context.Context, FeSession, ...*BackgroundExecOption) BackgroundExec {
+		return background
+	}
+	t.Cleanup(func() { NewBackgroundExec = previousNewBackgroundExec })
+
+	compiler := &TxnCompilerContext{execCtx: &ExecCtx{reqCtx: ctx, ses: ses}}
+	compiler.SetDatabase("app")
+	_, candidateSQL := udfCatalogLookup(ctx, nil, "legacy_f", "app")
+	background.sql2result[candidateSQL] = resolveUdfCatalogResult(
+		[]string{"function_id", "args", "body", "language", "rettype", "db", "modified_time", "sql_mode"},
+		[]interface{}{int64(52), `[{"name":"value","type":"bigint"}]`, "select value + 1", "sql", "bigint", "app", "2026-09-20 00:00:00", ""},
+	)
+	background.sql2err["select active_revision, namespace_version, security_type from mo_catalog.mo_user_defined_function where function_id = 52;"] = errors.New("no such table: mo_function_revisions")
+	argumentType := types.T_int64.ToType()
+	resolved, err := compiler.ResolveUdf("legacy_f", []*pbplan.Expr{{Typ: plan2.MakePlan2Type(&argumentType)}})
+	require.NoError(t, err)
+	require.Equal(t, int64(52), resolved.FunctionID)
+	require.Equal(t, "sql", resolved.Language)
+	require.Zero(t, resolved.Revision, "a legacy SQL definition stays on its existing body while the shared revision table is absent")
+	require.Equal(t, []types.Type{types.T_int64.ToType()}, resolved.ArgsType)
+	require.Contains(t, background.executedSqls, "select active_revision, namespace_version, security_type from mo_catalog.mo_user_defined_function where function_id = 52;")
+}
+
+func resolveUdfCatalogResult(columns []string, row []interface{}) *MysqlResultSet {
+	result := &MysqlResultSet{}
+	for index, name := range columns {
+		column := &MysqlColumn{}
+		column.SetName(name)
+		if _, ok := row[index].(int64); ok {
+			column.SetColumnType(defines.MYSQL_TYPE_LONGLONG)
+		} else {
+			column.SetColumnType(defines.MYSQL_TYPE_VAR_STRING)
+		}
+		result.AddColumn(column)
+	}
+	result.AddRow(row)
+	return result
 }
 
 func TestSubscriptionMetadataEnumerationObservesCancellation(t *testing.T) {

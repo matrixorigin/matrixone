@@ -40,7 +40,9 @@ func TestUTAdmissionHolderEvidence(t *testing.T) {
 			if err := os.WriteFile(path, []byte(strings.Join(tt.events, "\n")), 0600); err != nil {
 				t.Fatal(err)
 			}
-			out, err := exec.Command("python3", "summarize_ut_setup.py", path).CombinedOutput()
+			cmd := exec.Command("python3", "summarize_ut_setup.py", path)
+			cmd.Env = pythonStdlibEnvironment()
+			out, err := cmd.CombinedOutput()
 			if err != nil {
 				t.Fatalf("summary: %v\n%s", err, out)
 			}
@@ -53,4 +55,40 @@ func TestUTAdmissionHolderEvidence(t *testing.T) {
 			}
 		})
 	}
+}
+
+func TestPythonStdlibEnvironmentDropsNativeAndImportOverrides(t *testing.T) {
+	t.Setenv("LD_LIBRARY_PATH", "/matrixone/cgo")
+	t.Setenv("PYTHONPATH", "/matrixone/python")
+	t.Setenv("PYTHONHOME", "/matrixone/python-home")
+	t.Setenv("PYTHONUSERBASE", "/matrixone/user-site")
+
+	env := pythonStdlibEnvironment()
+	if !strings.Contains(strings.Join(env, "\n"), "PATH=") {
+		t.Fatal("sanitized Python environment lost PATH")
+	}
+	for _, entry := range env {
+		for _, forbidden := range []string{"LD_LIBRARY_PATH=", "PYTHONPATH=", "PYTHONHOME=", "PYTHONUSERBASE="} {
+			if strings.HasPrefix(entry, forbidden) {
+				t.Fatalf("Python stdlib helper inherited %q", entry)
+			}
+		}
+	}
+}
+
+// pythonStdlibEnvironment keeps the configured interpreter discoverable while
+// preventing MatrixOne's native-library and Python import paths from changing
+// a standard-library-only report parser's runtime.
+func pythonStdlibEnvironment() []string {
+	env := make([]string, 0, len(os.Environ()))
+	for _, entry := range os.Environ() {
+		key, _, _ := strings.Cut(entry, "=")
+		switch key {
+		case "LD_LIBRARY_PATH", "PYTHONHOME", "PYTHONPATH", "PYTHONUSERBASE", "PYTHONSTARTUP", "PYTHONINSPECT":
+			continue
+		default:
+			env = append(env, entry)
+		}
+	}
+	return env
 }

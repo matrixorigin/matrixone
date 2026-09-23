@@ -17,6 +17,7 @@ package frontend
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"strconv"
 	"strings"
@@ -98,6 +99,123 @@ func TestValidatePythonUdfDefinitionAtCreateUsesTypedWorkerGate(t *testing.T) {
 	require.Equal(t, body.ArtifactDigest, runtime.definition.ArtifactDigest)
 	require.Equal(t, body.EnvironmentDigest, runtime.definition.EnvironmentDigest)
 	require.Equal(t, types.T_int64.ToType(), runtime.definition.ReturnType)
+}
+
+func TestInitPythonFunctionValidatesArtifactBeforeCatalogReadiness(t *testing.T) {
+	const service = "python-create-catalog-gate-test"
+	InitServerLevelVars(service)
+	previousPU := getPuIfPresent(service)
+	t.Cleanup(func() { setPu(service, previousPU) })
+
+	fs, err := fileservice.NewMemoryFS(defines.SharedFileServiceName, fileservice.DisabledCacheConfig, nil)
+	require.NoError(t, err)
+	runtime := &definitionValidationRuntime{}
+	pu := config.NewParameterUnit(&config.FrontendParameters{}, nil, nil, nil)
+	pu.FileService = fs
+	pu.UdfService = runtime
+	setPu(service, pu)
+
+	ctx := defines.AttachAccountId(context.Background(), 27)
+	statement, err := parsers.ParseOne(ctx, dialect.MYSQL,
+		"create function app.py_echo(value bigint) returns bigint language python as 'def py_echo(ctx, value): return value' handler 'py_echo' mode scalar called on null input", 1)
+	require.NoError(t, err)
+	defer statement.Free()
+	createFunction, ok := statement.(*tree.CreateFunction)
+	require.True(t, ok)
+
+	background := &backgroundExecTestWithHistory{}
+	background.init()
+	background.sql2result[pythonUdfCatalogIdentitySchemaCheck] = emptyCatalogProbeResult(6)
+	missingRevisionCatalog := errors.New("revision catalog has not been upgraded")
+	background.sql2err[functionRevisionCatalogSchemaCheck] = missingRevisionCatalog
+	previousNewBackgroundExec := NewBackgroundExec
+	NewBackgroundExec = func(context.Context, FeSession, ...*BackgroundExecOption) BackgroundExec {
+		return background
+	}
+	t.Cleanup(func() { NewBackgroundExec = previousNewBackgroundExec })
+
+	tenant := &TenantInfo{User: "root", TenantID: 27, DefaultRoleID: accountAdminRoleID}
+	session := &Session{feSessionImpl: feSessionImpl{service: service, tenant: tenant}}
+	err = InitFunction(session, &ExecCtx{reqCtx: ctx}, tenant, createFunction)
+	require.ErrorContains(t, err, "Python UDF catalog contract is not ready")
+	require.ErrorContains(t, err, missingRevisionCatalog.Error())
+	require.NotNil(t, runtime.definition, "CREATE must validate the source with the current worker before opening the catalog transaction")
+	require.Equal(t, uint64(27), runtime.definition.AccountID)
+	require.Equal(t, "py_echo", runtime.definition.Handler)
+	require.Equal(t, "def py_echo(ctx, value): return value", runtime.definition.Source)
+	require.Equal(t, "SCALAR", runtime.definition.Mode)
+	require.Equal(t, udf.NullCallHandler, runtime.definition.NullPolicy)
+
+	store, err := pythonudf.NewFileArtifactStore(fs, pythonudf.DefaultMaxArtifactBytes)
+	require.NoError(t, err)
+	resolved, err := store.Resolve(ctx, 27, runtime.definition.Handler, runtime.definition.ArtifactDigest)
+	require.NoError(t, err)
+	require.Equal(t, runtime.definition.Source, resolved)
+	for _, query := range background.executedSqls {
+		require.NotContains(t, query, "insert into mo_catalog.mo_user_defined_function")
+		require.NotContains(t, query, "insert into mo_catalog.mo_function_revisions")
+	}
+}
+
+func TestInitPythonFunctionChecksExactOverloadBeforePublishing(t *testing.T) {
+	const service = "python-create-overload-check-test"
+	InitServerLevelVars(service)
+	previousPU := getPuIfPresent(service)
+	t.Cleanup(func() { setPu(service, previousPU) })
+
+	fs, err := fileservice.NewMemoryFS(defines.SharedFileServiceName, fileservice.DisabledCacheConfig, nil)
+	require.NoError(t, err)
+	runtime := &definitionValidationRuntime{}
+	pu := config.NewParameterUnit(&config.FrontendParameters{}, nil, nil, nil)
+	pu.FileService = fs
+	pu.UdfService = runtime
+	setPu(service, pu)
+
+	ctx := defines.AttachAccountId(context.Background(), 27)
+	statement, err := parsers.ParseOne(ctx, dialect.MYSQL,
+		"create function app.py_echo(value bigint) returns bigint language python as 'def py_echo(ctx, value): return value' handler 'py_echo'", 1)
+	require.NoError(t, err)
+	defer statement.Free()
+	createFunction := statement.(*tree.CreateFunction)
+
+	background := &backgroundExecTestWithHistory{}
+	background.init()
+	background.sql2result[pythonUdfCatalogIdentitySchemaCheck] = emptyCatalogProbeResult(6)
+	background.sql2result[functionRevisionCatalogSchemaCheck] = emptyCatalogProbeResult(20)
+	databaseSQL, err := getSqlForCheckDatabaseByAccount(ctx, "app")
+	require.NoError(t, err)
+	databaseSQL = strings.TrimSuffix(databaseSQL, ";") + " for update;"
+	background.sql2result[databaseSQL] = singleInt64Result("dat_id", 8)
+	decoded, err := function.DecodePythonRoutineBody(pythonCatalogTestBody(t, types.T_int64))
+	require.NoError(t, err)
+	canonicalInput, _, _, err := function.PythonSignatureMetadata(decoded.ArgTypes, decoded.ReturnType)
+	require.NoError(t, err)
+	checkCandidatesSQL := fmt.Sprintf(checkPythonUdfExistence, "py_echo", "app")
+	background.sql2result[checkCandidatesSQL] = resolveUdfCatalogResult(
+		[]string{"function_id", "args", "language", "arg_types", "canonical_input_descriptor"},
+		[]interface{}{int64(55), `[{"name":"value","type":"bigint"}]`, "python", `["bigint"]`,
+			canonicalInput},
+	)
+	previousNewBackgroundExec := NewBackgroundExec
+	NewBackgroundExec = func(context.Context, FeSession, ...*BackgroundExecOption) BackgroundExec {
+		return background
+	}
+	t.Cleanup(func() { NewBackgroundExec = previousNewBackgroundExec })
+
+	tenant := &TenantInfo{User: "root", TenantID: 27, DefaultRoleID: accountAdminRoleID}
+	session := &Session{feSessionImpl: feSessionImpl{service: service, tenant: tenant}}
+	err = InitFunction(session, &ExecCtx{reqCtx: ctx}, tenant, createFunction)
+	require.ErrorContains(t, err, "already exists")
+	require.NotNil(t, runtime.definition, "the submitted source must be validated before the locked exact-signature check")
+	require.Equal(t, uint64(27), runtime.definition.AccountID)
+	require.Equal(t, "py_echo", runtime.definition.Handler)
+	require.Contains(t, background.executedSqls, databaseSQL)
+	require.Contains(t, background.executedSqls, checkCandidatesSQL)
+	require.Contains(t, background.executedSqls, "rollback;")
+	for _, query := range background.executedSqls {
+		require.NotContains(t, query, "insert into mo_catalog.mo_user_defined_function")
+		require.NotContains(t, query, "insert into mo_catalog.mo_function_revisions")
+	}
 }
 
 func TestPersistPythonReplaceRejectsLegacyHeadBeforeWriting(t *testing.T) {
@@ -686,6 +804,114 @@ func TestReadSQLRevisionBindsActiveHeadAndRejectsTampering(t *testing.T) {
 	_, found, err = readSQLRevision(context.Background(), bh, functionID, nil)
 	require.ErrorContains(t, err, "fingerprint mismatch")
 	require.False(t, found)
+
+	for _, tc := range []struct {
+		name          string
+		mutateBase    func(*MysqlResultSet)
+		mutateVersion func(*MysqlResultSet)
+		wantError     string
+		wantFound     bool
+	}{
+		{
+			name: "legacy head before shared revision upgrade",
+			mutateBase: func(result *MysqlResultSet) {
+				result.Data[0][0], result.Data[0][1] = int64(0), int64(0)
+			},
+		},
+		{
+			name: "partial revision head",
+			mutateBase: func(result *MysqlResultSet) {
+				result.Data[0][0] = int64(0)
+			},
+			wantError: "invalid revision head",
+		},
+		{
+			name: "missing active revision row",
+			mutateVersion: func(result *MysqlResultSet) {
+				result.Data = nil
+			},
+			wantError: "expected exactly one",
+		},
+		{
+			name: "revision id differs from head",
+			mutateVersion: func(result *MysqlResultSet) {
+				result.Data[0][0] = int64(2)
+			},
+			wantError: "revision contract is not supported",
+		},
+		{
+			name: "wrong implementation language",
+			mutateVersion: func(result *MysqlResultSet) {
+				result.Data[0][5] = "python"
+			},
+			wantError: "revision contract is not supported",
+		},
+		{
+			name: "wrong definition schema",
+			mutateVersion: func(result *MysqlResultSet) {
+				result.Data[0][6] = int64(udf.SQLDefinitionSchemaVersion + 100)
+			},
+			wantError: "revision contract is not supported",
+		},
+		{
+			name: "non volatile revision",
+			mutateVersion: func(result *MysqlResultSet) {
+				result.Data[0][8] = "IMMUTABLE"
+			},
+			wantError: "revision contract is not supported",
+		},
+		{
+			name: "wrong null policy",
+			mutateVersion: func(result *MysqlResultSet) {
+				result.Data[0][9] = "STRICT"
+			},
+			wantError: "revision contract is not supported",
+		},
+		{
+			name: "security contract differs from head",
+			mutateVersion: func(result *MysqlResultSet) {
+				result.Data[0][10] = "INVOKER"
+			},
+			wantError: "revision contract is not supported",
+		},
+		{
+			name: "malformed logical argument metadata",
+			mutateVersion: func(result *MysqlResultSet) {
+				result.Data[0][1] = "{"
+			},
+			wantError: "argument metadata is invalid",
+		},
+		{
+			name: "logical argument metadata disagrees",
+			mutateVersion: func(result *MysqlResultSet) {
+				result.Data[0][2] = `["int"]`
+			},
+			wantError: "argument metadata is invalid",
+		},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			background := &backgroundExecTest{}
+			background.init()
+			base := newBase()
+			if tc.mutateBase != nil {
+				tc.mutateBase(base)
+			}
+			background.sql2result[baseSQL] = base
+			version := newRevision(body, fingerprint)
+			if tc.mutateVersion != nil {
+				tc.mutateVersion(version)
+			}
+			background.sql2result[revisionSQL] = version
+			_, found, err := readSQLRevision(context.Background(), background, functionID, nil)
+			if tc.wantError != "" {
+				require.ErrorContains(t, err, tc.wantError)
+				require.False(t, found)
+				return
+			}
+			require.NoError(t, err)
+			require.Equal(t, tc.wantFound, found)
+		})
+	}
 }
 
 func TestEnsurePythonUdfCatalogReadyRequiresCurrentSchema(t *testing.T) {
@@ -778,6 +1004,70 @@ func TestValidateRestoredPythonRevisionCatalogChecksCurrentContract(t *testing.T
 		validateRestoredFunctionRevisionCatalog(context.Background(), bh, context.Background()),
 		"fingerprint mismatch",
 	)
+}
+
+func TestValidateRestoredPythonRevisionCatalogRejectsMalformedContracts(t *testing.T) {
+	body := pythonCatalogTestBody(t, types.T_int64)
+	decoded, err := function.DecodePythonRoutineBody(body)
+	require.NoError(t, err)
+	inputDescriptor, _, _, err := function.PythonSignatureMetadata(decoded.ArgTypes, decoded.ReturnType)
+	require.NoError(t, err)
+	fingerprint, err := function.PythonRoutineFingerprint(body)
+	require.NoError(t, err)
+	baseRow := []string{
+		"44", "1", "1", "f", `[{"name":"value","type":"bigint"}]`, inputDescriptor, "bigint", body,
+		udf.LanguagePython, strconv.Itoa(udf.PythonDefinitionSchemaVersion), udf.PythonABIContract,
+		udf.PythonAdapterVersion, decoded.ArtifactDigest, decoded.EnvironmentDigest, udf.PythonSDKVersion,
+		decoded.NullPolicy, "VOLATILE", fingerprint, "2026-09-11 00:00:00", "INVOKER",
+	}
+	query := fmt.Sprintf(
+		"select %s from %s order by function_id, revision;",
+		functionRevisionCatalogColumns,
+		qualifiedTableName(moCatalog, "mo_function_revisions"),
+	)
+	newResult := func(row []string) *MysqlResultSet {
+		result := &MysqlResultSet{}
+		for index := range row {
+			column := &MysqlColumn{}
+			column.SetName(fmt.Sprintf("column_%d", index))
+			column.SetColumnType(defines.MYSQL_TYPE_VAR_STRING)
+			result.AddColumn(column)
+		}
+		values := make([]interface{}, len(row))
+		for index := range row {
+			values[index] = row[index]
+		}
+		result.AddRow(values)
+		return result
+	}
+	for _, tc := range []struct {
+		name  string
+		index int
+		value string
+		want  string
+	}{
+		{name: "function identity", index: 0, value: "not-an-id", want: "invalid function identity"},
+		{name: "zero revision", index: 1, value: "0", want: "invalid revision"},
+		{name: "zero namespace", index: 2, value: "0", want: "invalid namespace version"},
+		{name: "definition schema", index: 9, value: "future", want: "invalid definition schema"},
+		{name: "unsupported ABI", index: 10, value: "future-abi", want: "unsupported execution contract"},
+		{name: "body encoding", index: 7, value: "{", want: "body is invalid"},
+		{name: "artifact digest binding", index: 12, value: strings.Repeat("a", 64), want: "metadata does not match"},
+		{name: "argument JSON", index: 4, value: "{", want: "arguments are invalid"},
+		{name: "argument descriptor", index: 5, value: "stale-descriptor", want: "argument descriptor mismatch"},
+		{name: "volatility", index: 16, value: "IMMUTABLE", want: "unsupported execution contract"},
+		{name: "security mode", index: 19, value: "DEFINER", want: "unsupported execution contract"},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			row := append([]string(nil), baseRow...)
+			row[tc.index] = tc.value
+			background := &backgroundExecTest{}
+			background.init()
+			background.sql2result[query] = newResult(row)
+			err := validateRestoredFunctionRevisionCatalog(context.Background(), background, context.Background())
+			require.ErrorContains(t, err, tc.want)
+		})
+	}
 }
 
 func TestValidateRestoredSharedRevisionCatalogAcceptsSQLAndRejectsTampering(t *testing.T) {

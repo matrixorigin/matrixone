@@ -17,6 +17,7 @@ package frontend
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"strings"
 	"testing"
 
@@ -27,6 +28,68 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/udf"
 	"github.com/stretchr/testify/require"
 )
+
+type routinePlanValidationExec struct {
+	BackgroundExec
+	resultSets          []interface{}
+	catalogResultSets   []interface{}
+	namespaceResultSets []interface{}
+	failOn              string
+	statements          []string
+}
+
+func (e *routinePlanValidationExec) Close() {}
+
+func (e *routinePlanValidationExec) Exec(_ context.Context, statement string) error {
+	e.statements = append(e.statements, statement)
+	if e.failOn != "" && strings.Contains(statement, e.failOn) {
+		return errors.New("injected routine catalog read failure")
+	}
+	if strings.Contains(statement, "select f.function_id") {
+		e.resultSets = e.catalogResultSets
+	} else if strings.Contains(statement, "select selected.function_id") {
+		e.resultSets = e.namespaceResultSets
+	}
+	return nil
+}
+
+func (e *routinePlanValidationExec) GetExecResultSet() []interface{} {
+	return e.resultSets
+}
+
+func (e *routinePlanValidationExec) ClearExecResultSet() {
+	e.resultSets = nil
+}
+
+type routinePlanValidationSession struct {
+	FeSession
+	exec BackgroundExec
+}
+
+func (s *routinePlanValidationSession) GetAccountId() uint32 { return 9 }
+
+func (s *routinePlanValidationSession) GetTxnCompileCtx() *TxnCompilerContext { return nil }
+
+func (s *routinePlanValidationSession) GetBackgroundExec(context.Context, ...*BackgroundExecOption) BackgroundExec {
+	return s.exec
+}
+
+func routinePlanCatalogResultSet(values []interface{}) *MysqlResultSet {
+	result := &MysqlResultSet{}
+	for range values {
+		result.AddColumn(&MysqlColumn{})
+	}
+	result.AddRow(values)
+	return result
+}
+
+func emptyRoutineNamespaceResultSet() *MysqlResultSet {
+	result := &MysqlResultSet{}
+	for range 16 {
+		result.AddColumn(&MysqlColumn{})
+	}
+	return result
+}
 
 func testRoutinePlanDependency() *planpb.RoutinePlanDependency {
 	return &planpb.RoutinePlanDependency{
@@ -244,6 +307,89 @@ func TestCachedRoutinePlanWithDependencyRequiresCatalogSession(t *testing.T) {
 	withRoutine := &cachedPlan{plans: []*sqlplan.Plan{plan}}
 	require.True(t, cachedRoutinePlanDependenciesCurrent(nil, plain))
 	require.False(t, cachedRoutinePlanDependenciesCurrent(nil, withRoutine))
+}
+
+func TestValidateRoutinePlanDependenciesUsesCatalogTransactionAndFailsClosed(t *testing.T) {
+	ctx := context.Background()
+	plainPlan := &planpb.Plan{Plan: &planpb.Plan_Query{Query: &planpb.Query{}}}
+	changed, err := validateRoutinePlanDependencies(ctx, nil, plainPlan)
+	require.NoError(t, err)
+	require.False(t, changed)
+
+	dependency := testRoutinePlanDependency()
+	plan := &planpb.Plan{Plan: &planpb.Plan_Query{Query: &planpb.Query{
+		RoutineDependencies: []*planpb.RoutinePlanDependency{dependency},
+	}}}
+	_, err = validateRoutinePlanDependencies(ctx, nil, plan)
+	require.ErrorContains(t, err, "has no session")
+
+	incomplete := testRoutinePlanDependency()
+	incomplete.NamespaceFingerprint = ""
+	incompletePlan := &planpb.Plan{Plan: &planpb.Plan_Query{Query: &planpb.Query{
+		RoutineDependencies: []*planpb.RoutinePlanDependency{incomplete},
+	}}}
+	changed, err = validateRoutinePlanDependencies(ctx, &routinePlanValidationSession{}, incompletePlan)
+	require.NoError(t, err)
+	require.True(t, changed, "an incomplete namespace fence must invalidate without a catalog read")
+
+	exec := &routinePlanValidationExec{}
+	session := &routinePlanValidationSession{exec: exec}
+	changed, err = validateRoutinePlanDependencies(ctx, session, plan)
+	require.NoError(t, err)
+	require.True(t, changed, "a missing active catalog revision invalidates the prepared plan")
+	require.Len(t, exec.statements, 3)
+	require.Equal(t, "begin;", exec.statements[0])
+	require.Contains(t, exec.statements[1], "where f.function_id in (41)")
+	require.Equal(t, "commit;", exec.statements[2])
+
+	// A present but damaged immutable revision is fully decoded and invalidates
+	// the cached plan; namespace state is still read in the same transaction.
+	row := []interface{}{
+		uint64(41), uint64(7), uint64(12), uint64(8), uint64(7),
+		"python", "VOLATILE", strings.Repeat("a", 64), strings.Repeat("b", 64),
+		strings.Repeat("c", 64), "[]", "{}", int64(udf.PythonSignatureKeySchemaVersion),
+		strings.Repeat("d", 64), "damaged body", "[]", "bigint",
+		int64(udf.PythonDefinitionSchemaVersion), udf.PythonABIContract,
+		udf.PythonAdapterVersion, udf.PythonSDKVersion, udf.NullCallHandler,
+		"INVOKER", "INVOKER",
+	}
+	fullExec := &routinePlanValidationExec{
+		catalogResultSets:   []interface{}{routinePlanCatalogResultSet(row)},
+		namespaceResultSets: []interface{}{emptyRoutineNamespaceResultSet()},
+	}
+	changed, err = validateRoutinePlanDependencies(ctx,
+		&routinePlanValidationSession{exec: fullExec}, plan)
+	require.NoError(t, err)
+	require.True(t, changed)
+	require.Len(t, fullExec.statements, 4)
+	require.Contains(t, fullExec.statements[2], "select selected.function_id")
+	require.Equal(t, "commit;", fullExec.statements[3])
+
+	for _, tc := range []struct {
+		name              string
+		catalogResultSets []interface{}
+		failOn            string
+		want              string
+		rollback          bool
+	}{
+		{name: "transaction begin error", failOn: "begin;", want: "could not start"},
+		{name: "catalog query error", failOn: "mo_user_defined_function", want: "validation failed", rollback: true},
+		{name: "malformed result set", catalogResultSets: []interface{}{struct{}{}}, want: "not the type of result set", rollback: true},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			failingExec := &routinePlanValidationExec{catalogResultSets: tc.catalogResultSets, failOn: tc.failOn}
+			changed, err := validateRoutinePlanDependencies(ctx,
+				&routinePlanValidationSession{exec: failingExec}, plan)
+			require.False(t, changed)
+			require.ErrorContains(t, err, tc.want)
+			lastStatement := failingExec.statements[len(failingExec.statements)-1]
+			if tc.rollback {
+				require.Equal(t, "rollback;", lastStatement)
+			} else {
+				require.Equal(t, "begin;", lastStatement)
+			}
+		})
+	}
 }
 
 func TestExactlyOneCatalogResultSetRequiresOneCompleteResultSet(t *testing.T) {

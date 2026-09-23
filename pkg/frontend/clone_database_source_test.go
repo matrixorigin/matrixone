@@ -22,7 +22,11 @@ import (
 
 	"github.com/golang/mock/gomock"
 	"github.com/matrixorigin/matrixone/pkg/catalog"
+	"github.com/matrixorigin/matrixone/pkg/container/types"
 	"github.com/matrixorigin/matrixone/pkg/defines"
+	"github.com/matrixorigin/matrixone/pkg/fileservice"
+	"github.com/matrixorigin/matrixone/pkg/sql/plan/function"
+	pythonudf "github.com/matrixorigin/matrixone/pkg/udf/python"
 	"github.com/stretchr/testify/require"
 
 	mock_frontend "github.com/matrixorigin/matrixone/pkg/frontend/test"
@@ -341,6 +345,94 @@ func TestRestoreCloneDatabaseUserDefinedFunctions(t *testing.T) {
 	failing := &erroringBackgroundExec{backgroundExecTest: failingBase, err: wantErr}
 	require.ErrorIs(t, restoreCloneDatabaseUserDefinedFunctions(ctx, failing, tenant, []userDefinedFunctionDefinition{function}, "target_db"), wantErr)
 	require.Len(t, failing.executedSQLs, 1)
+}
+
+func TestValidateCloneUserDefinedFunctionsRejectsInertOrMalformedPython(t *testing.T) {
+	validPython := pythonCatalogTestBody(t, types.T_int64)
+	for _, tc := range []struct {
+		name       string
+		definition userDefinedFunctionDefinition
+		wantError  string
+	}{
+		{
+			name:       "current Python definition is cloneable",
+			definition: userDefinedFunctionDefinition{name: "f", lang: "python", body: validPython},
+		},
+		{
+			name:       "old Python demo is rejected",
+			definition: userDefinedFunctionDefinition{name: "legacy", lang: "python", body: `{"handler":"f","source":"old"}`},
+			wantError:  "unsupported python function legacy",
+		},
+		{
+			name:       "malformed body is rejected",
+			definition: userDefinedFunctionDefinition{name: "broken", lang: "python", body: "{"},
+			wantError:  "malformed python function broken",
+		},
+		{
+			name:       "imported non SQL function is rejected",
+			definition: userDefinedFunctionDefinition{name: "imported", lang: "python", body: `{"import":true}`},
+			wantError:  "imported python function imported",
+		},
+		{
+			name:       "SQL definition keeps existing clone behavior",
+			definition: userDefinedFunctionDefinition{name: "sql_f", lang: "sql", body: "select 1"},
+		},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			err := validateCloneUserDefinedFunctions([]userDefinedFunctionDefinition{tc.definition})
+			if tc.wantError == "" {
+				require.NoError(t, err)
+			} else {
+				require.ErrorContains(t, err, tc.wantError)
+			}
+		})
+	}
+}
+
+func TestRestoreCloneDatabasePythonRoutineRepublishesTargetArtifact(t *testing.T) {
+	ctx := context.Background()
+	const accountID = uint32(27)
+	tenant := &TenantInfo{User: "root1", TenantID: accountID, DefaultRoleID: accountAdminRoleID}
+	body := pythonCatalogTestBody(t, types.T_int64)
+	decoded, err := function.DecodePythonRoutineBody(body)
+	require.NoError(t, err)
+	inputDescriptor, _, _, err := function.PythonSignatureMetadata(decoded.ArgTypes, decoded.ReturnType)
+	require.NoError(t, err)
+	definition := userDefinedFunctionDefinition{
+		name:                     "cloned_python",
+		args:                     `[{"name":"value","type":"bigint"}]`,
+		argTypes:                 `["bigint"]`,
+		retType:                  "bigint",
+		body:                     body,
+		lang:                     "python",
+		dbName:                   "source_db",
+		canonicalInputDescriptor: inputDescriptor,
+	}
+	findSQL := `select function_id from mo_catalog.mo_user_defined_function where name = "cloned_python" and db = "target_db" and canonical_input_descriptor = "` + escapeSQLStringForDoubleQuotes(inputDescriptor) + `" and language = 'python' order by function_id desc limit 1;`
+	background := &backgroundExecTest{}
+	background.init()
+	background.sql2result[findSQL] = singleInt64Result("function_id", 97)
+	fs, err := fileservice.NewMemoryFS(defines.SharedFileServiceName, fileservice.DisabledCacheConfig, nil)
+	require.NoError(t, err)
+
+	require.NoError(t, restoreCloneDatabaseUserDefinedFunctions(
+		ctx, background, tenant, []userDefinedFunctionDefinition{definition}, "target_db", fs,
+	))
+	require.Contains(t, background.executedSQLs[0], `"cloned_python"`)
+	require.Contains(t, background.executedSQLs[0], `"target_db"`)
+	store, err := pythonudf.NewFileArtifactStore(fs, pythonudf.DefaultMaxArtifactBytes)
+	require.NoError(t, err)
+	resolved, err := store.Resolve(ctx, uint64(accountID), decoded.Handler, decoded.ArtifactDigest)
+	require.NoError(t, err)
+	require.Equal(t, decoded.Source, resolved)
+
+	withoutStore := &backgroundExecTest{}
+	withoutStore.init()
+	err = restoreCloneDatabaseUserDefinedFunctions(
+		ctx, withoutStore, tenant, []userDefinedFunctionDefinition{definition}, "target_db",
+	)
+	require.ErrorContains(t, err, "artifact store is required")
+	require.Empty(t, withoutStore.executedSQLs, "a routine must not be persisted before its artifact store is available")
 }
 
 func TestRestoreCloneDatabaseStoredProcedures(t *testing.T) {
