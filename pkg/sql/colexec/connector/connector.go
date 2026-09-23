@@ -16,6 +16,7 @@ package connector
 
 import (
 	"bytes"
+	"context"
 
 	"github.com/matrixorigin/matrixone/pkg/container/batch"
 	"github.com/matrixorigin/matrixone/pkg/container/pSpool"
@@ -45,6 +46,22 @@ func (connector *Connector) Prepare(proc *process.Process) error {
 
 func (connector *Connector) Call(proc *process.Process) (vm.CallResult, error) {
 	result := vm.NewCallResult()
+	// A downstream merge can finish before this connector (for example when a
+	// recursive DML branch is canceled).  Do not re-arm a capacity wait on an
+	// edge that is already terminal: no consumer will drain it again.
+	if connector.Reg != nil {
+		select {
+		case <-connector.Reg.Done():
+			if connector.ctr.sp != nil {
+				connector.ctr.sp.Abort(context.Cause(proc.Ctx))
+			}
+			connector.ctr.pendingBatch = nil
+			connector.ctr.spoolSent = false
+			result.Status = vm.ExecStop
+			return result, nil
+		default:
+		}
+	}
 	if connector.ctr.pendingBatch == nil {
 		if connector.Reg != nil && len(connector.Reg.Ch2) >= cap(connector.Reg.Ch2) {
 			result.Status = vm.ExecWaiting
@@ -87,6 +104,15 @@ func (connector *Connector) Call(proc *process.Process) (vm.CallResult, error) {
 		connector.ctr.spoolSent = true
 	}
 	if !connector.Reg.TrySendData(connector.ctr.sp, 0) {
+		select {
+		case <-connector.Reg.Done():
+			connector.ctr.sp.Abort(context.Cause(proc.Ctx))
+			connector.ctr.pendingBatch = nil
+			connector.ctr.spoolSent = false
+			result.Status = vm.ExecStop
+			return result, nil
+		default:
+		}
 		result.Status = vm.ExecWaiting
 		result.OnReady = connector.Reg.RegisterCapacityReady
 		return result, nil

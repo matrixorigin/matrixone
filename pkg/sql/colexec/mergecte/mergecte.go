@@ -71,6 +71,13 @@ func (mergeCTE *MergeCTE) Call(proc *process.Process) (vm.CallResult, error) {
 	switch ctr.status {
 	case sendInitial:
 		result, err = vm.ChildrenCall(mergeCTE.GetChildren(0), proc, analyzer)
+		// Event-driven child pipelines return ExecWaiting with no batch while
+		// their input edge is empty.  That is not EOF: preserve the readiness
+		// callback so the same MergeCTE continuation is resumed when the child
+		// produces data or a terminal signal.
+		if result.Status == vm.ExecWaiting {
+			return result, err
+		}
 		if err != nil {
 			result.Status = vm.ExecStop
 			return result, err
@@ -105,6 +112,9 @@ func (mergeCTE *MergeCTE) Call(proc *process.Process) (vm.CallResult, error) {
 	case sendRecursive:
 		for !mergeCTE.ctr.last {
 			result, err = vm.ChildrenCall(mergeCTE.GetChildren(1), proc, analyzer)
+			if result.Status == vm.ExecWaiting {
+				return result, err
+			}
 			if err != nil {
 				result.Status = vm.ExecStop
 				return result, err

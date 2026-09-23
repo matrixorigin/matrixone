@@ -1704,7 +1704,7 @@ func (c *Compile) compileSinkScan(qry *plan.Query, nodeId int32) error {
 				edge = process.NewPipelineEdge(1, 0)
 			}
 			c.appendStepRegs(s, nodeId, edge)
-			if n.NodeType == plan.Node_SINK_SCAN && len(n.SourceStep) == 1 &&
+			if (n.NodeType == plan.Node_SINK_SCAN || n.NodeType == plan.Node_RECURSIVE_SCAN) && len(n.SourceStep) == 1 &&
 				c.isMaterializedCTEStep(qry, s) {
 				if c.materializedSinkScanNodes == nil {
 					c.materializedSinkScanNodes = make(map[int32][]int32)
@@ -1730,8 +1730,15 @@ func (c *Compile) isMaterializedCTEStep(qry *plan.Query, step int32) bool {
 		return false
 	}
 	sink := qry.Nodes[nodeID]
-	return sink.NodeType == plan.Node_SINK && !sink.RecursiveSink && !sink.RecursiveCte &&
-		sink.ExtraOptions == materialized.CTESinkOption
+	// Recursive CTE sinks have two consumers that can depend on each other:
+	// the recursive member reads the previous generation while the outer
+	// query reads the complete result.  A lock-step pSpool fan-out deadlocks
+	// when either consumer fills its one-batch edge, so use the same
+	// process-local materialized source used by multi-reference CTEs.  The
+	// recursive member still observes the stream in order; only retention and
+	// reader progress are decoupled.
+	return sink.NodeType == plan.Node_SINK && !sink.RecursiveCte &&
+		(sink.ExtraOptions == materialized.CTESinkOption || sink.RecursiveSink)
 }
 
 func (c *Compile) compileSteps(qry *plan.Query, ss []*Scope, step int32) ([]*Scope, error) {
@@ -9258,6 +9265,12 @@ func (c *Compile) compileRecursiveScan(node *plan.Node, curNodeIdx int32) ([]*Sc
 	rs.Proc.Reg.MergeReceivers = receivers
 
 	mergeOp := merge.NewArgument()
+	if len(node.SourceStep) == 1 {
+		if source := c.getMaterializedSource(node.SourceStep[0]); source != nil {
+			mergeOp.MaterializedSource = source
+			mergeOp.MaterializedReaderID = c.materializedReaderIDs[[2]int32{node.SourceStep[0], curNodeIdx}]
+		}
+	}
 	c.hasMergeOp = true
 	rs.setRootOperator(mergeOp)
 	currentFirstFlag := c.anal.isFirst

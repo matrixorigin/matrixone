@@ -449,6 +449,15 @@ func (m *mergeRunEventState) runPreScopeAsync(scope *Scope, done func(error)) (e
 
 	switch scope.Magic {
 	case Normal:
+		// A normal scope can still be a dependency-tree node.  Its
+		// PreScopes are producers for the current VM (for example the hash
+		// build below a DEDUP dispatch), so starting only the normal VM would
+		// leave those producers undispatched and the local edge consumer
+		// waiting forever.  Keep nested activation consistent with
+		// Compile.runAsync's top-level routing.
+		if len(scope.PreScopes) > 0 {
+			return scope.mergeRunAsync(m.c, done)
+		}
 		return scope.runEventAsync(m.c, done)
 	case Merge, MergeInsert, MergeDelete:
 		return scope.mergeRunAsync(m.c, done)

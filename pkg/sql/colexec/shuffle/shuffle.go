@@ -97,7 +97,14 @@ func (shuffle *Shuffle) Prepare(proc *process.Process) error {
 	shuffle.ctr.held = true
 	shuffle.ctr.ending = false
 	shuffle.ctr.runtimeFilterHandled = false
+	shuffle.ctr.runtimeFilterReceiver = nil
 	shuffle.ctr.stableStringHash = proc.UsesCompleteStringShuffleHash()
+	if shuffle.RuntimeFilterSpec != nil {
+		shuffle.ctr.runtimeFilterReceiver = message.NewMessageReceiver(
+			[]int32{shuffle.RuntimeFilterSpec.Tag},
+			message.AddrBroadCastOnCurrentCN(),
+			proc.GetMessageBoard())
+	}
 	if !shuffle.DrainAllBuckets {
 		shuffle.ctr.producerDone = make(chan struct{})
 		shuffle.ctr.producerFinishOnce = sync.Once{}
@@ -114,6 +121,23 @@ func (shuffle *Shuffle) Prepare(proc *process.Process) error {
 }
 
 func (shuffle *Shuffle) Call(proc *process.Process) (vm.CallResult, error) {
+	ready, err := shuffle.waitForRuntimeFilter(proc)
+	if err != nil {
+		return vm.CancelResult, err
+	}
+	if !ready {
+		receiver := shuffle.ctr.runtimeFilterReceiver
+		return vm.CallResult{
+			Status: vm.ExecWaiting,
+			OnReady: func(callback func()) error {
+				if receiver == nil {
+					callback()
+					return nil
+				}
+				return receiver.RegisterReady(callback)
+			},
+		}, nil
+	}
 	if !shuffle.DrainAllBuckets {
 		return shuffle.callLocal(proc)
 	}
@@ -907,31 +931,54 @@ func (shuffle *Shuffle) routeSingleBucket(bat *batch.Batch, shuffleIdx int32, pr
 }
 
 func (shuffle *Shuffle) handleRuntimeFilter(proc *process.Process) error {
+	_, err := shuffle.waitForRuntimeFilter(proc)
+	return err
+}
+
+// waitForRuntimeFilter is the scheduler-aware boundary for the optional
+// runtime-filter dependency of a shuffle.  The old implementation called
+// ReceiveMessage(true) from the VM worker, which parked the only ready worker
+// for a query until a filter producer published PASS/DROP.  A scheduler-owned
+// receiver instead performs a non-blocking probe and lets MessageBoard's
+// readiness callback re-admit the continuation.
+func (shuffle *Shuffle) waitForRuntimeFilter(proc *process.Process) (bool, error) {
 	if shuffle.ctr.runtimeFilterHandled || shuffle.RuntimeFilterSpec == nil {
-		return nil
+		return true, nil
 	}
-	receiver := message.NewMessageReceiver(
-		[]int32{shuffle.RuntimeFilterSpec.Tag},
-		message.AddrBroadCastOnCurrentCN(),
-		proc.GetMessageBoard())
-	msgs, ctxDone, err := receiver.ReceiveMessage(true, proc.Ctx)
-	if ctxDone {
-		shuffle.ctr.runtimeFilterHandled = true
-		return nil
+	if shuffle.ctr.runtimeFilterReceiver == nil {
+		shuffle.ctr.runtimeFilterReceiver = message.NewMessageReceiver(
+			[]int32{shuffle.RuntimeFilterSpec.Tag},
+			message.AddrBroadCastOnCurrentCN(),
+			proc.GetMessageBoard())
 	}
-	if err != nil {
-		return err
-	}
-	for i := range msgs {
-		msg, ok := msgs[i].(message.RuntimeFilterMessage)
-		if !ok {
-			continue
+	receiver := shuffle.ctr.runtimeFilterReceiver
+	msgs, closed := receiver.TryReceive()
+	if len(msgs) == 0 && !closed && !proc.HasEventSubmitter() {
+		var ctxDone bool
+		var err error
+		msgs, ctxDone, err = receiver.ReceiveMessage(true, proc.Ctx)
+		if err != nil {
+			return false, err
 		}
-		if msg.Typ == message.RuntimeFilter_PASS || msg.Typ == message.RuntimeFilter_DROP {
+		if ctxDone {
 			shuffle.ctr.runtimeFilterHandled = true
+			return true, nil
 		}
+		closed = false
 	}
-	return nil
+	if closed && len(msgs) == 0 {
+		return false, moerr.NewInternalErrorNoCtx("message board is closed while waiting for runtime filter")
+	}
+	if len(msgs) == 0 {
+		return false, nil
+	}
+	// A matching runtime-filter message is sufficient to preserve the old
+	// shuffle behavior: the detailed payload is consumed by the scope/table
+	// scan path, while this operator only waits until that dependency exists.
+	// Marking the receiver handled also prevents a persistent receiver from
+	// waiting on the same already-consumed message on every subsequent batch.
+	shuffle.ctr.runtimeFilterHandled = true
+	return true, nil
 }
 
 func (shuffle *Shuffle) clearSels() [][]int32 {

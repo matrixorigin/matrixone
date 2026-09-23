@@ -35,6 +35,7 @@ import (
 	plan2 "github.com/matrixorigin/matrixone/pkg/sql/plan"
 	"github.com/matrixorigin/matrixone/pkg/testutil"
 	"github.com/matrixorigin/matrixone/pkg/vm"
+	"github.com/matrixorigin/matrixone/pkg/vm/message"
 	"github.com/matrixorigin/matrixone/pkg/vm/pipeline"
 	"github.com/matrixorigin/matrixone/pkg/vm/process"
 	"github.com/stretchr/testify/require"
@@ -43,6 +44,46 @@ import (
 const (
 	Rows = 8192 // default rows
 )
+
+func TestRuntimeFilterWaitUsesMessageReadiness(t *testing.T) {
+	proc := testutil.NewProcess(t)
+	defer proc.Free()
+	board := message.NewMessageBoard()
+	proc.SetMessageBoard(board)
+	proc.SetEventSubmitter(func(_ string, task func()) error {
+		task()
+		return nil
+	})
+
+	arg := NewArgument()
+	defer arg.Release()
+	arg.BucketNum = 1
+	arg.RuntimeFilterSpec = &plan.RuntimeFilterSpec{Tag: 991}
+	require.NoError(t, arg.Prepare(proc))
+	defer arg.Reset(proc, false, nil)
+
+	ready, err := arg.waitForRuntimeFilter(proc)
+	require.NoError(t, err)
+	require.False(t, ready)
+
+	fired := make(chan struct{})
+	require.NoError(t, arg.ctr.runtimeFilterReceiver.RegisterReady(func() {
+		close(fired)
+	}))
+	message.SendMessage(message.RuntimeFilterMessage{
+		Tag: arg.RuntimeFilterSpec.Tag,
+		Typ: message.RuntimeFilter_PASS,
+	}, board)
+	select {
+	case <-fired:
+	case <-time.After(time.Second):
+		t.Fatal("runtime-filter readiness callback was not published")
+	}
+
+	ready, err = arg.waitForRuntimeFilter(proc)
+	require.NoError(t, err)
+	require.True(t, ready)
+}
 
 func TestShufflePreparePreservesEarlierAbortCause(t *testing.T) {
 	for _, drainAll := range []bool{false, true} {

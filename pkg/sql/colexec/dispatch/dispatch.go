@@ -51,10 +51,12 @@ func (dispatch *Dispatch) Prepare(proc *process.Process) error {
 	ctr.remoteRegsCnt = len(dispatch.RemoteRegs)
 	ctr.aliveRegCnt = ctr.localRegsCnt + ctr.remoteRegsCnt
 	ctr.pendingBatch = nil
+	ctr.pendingStop = false
 	ctr.pendingSpoolSent = false
 	ctr.pendingRemoteBatch = nil
 	ctr.remoteTask = nil
 	ctr.pendingSignals = make([]bool, ctr.localRegsCnt)
+	ctr.retiredRegs = make([]bool, ctr.localRegsCnt)
 	if dispatch.MaterializedSource != nil {
 		if dispatch.FuncId != SendToAllLocalFunc || ctr.remoteRegsCnt != 0 {
 			return moerr.NewInternalError(proc.Ctx, "materialized dispatch must be local send-to-all")
@@ -146,17 +148,31 @@ func (dispatch *Dispatch) Call(proc *process.Process) (vm.CallResult, error) {
 		return dispatch.completeRemoteTask(result)
 	}
 
-	if dispatch.ctr.pendingBatch != nil {
+	// A pending batch has already passed the recursive marker transition.  The
+	// retry only completes its local delivery; applying the transition again
+	// would toggle hasData a second time and can mark a generation boundary as
+	// End (prematurely terminating a recursive CTE) when the receiver was full.
+	pendingLocalBatch := dispatch.ctr.pendingBatch != nil
+	if pendingLocalBatch {
 		result.Batch = dispatch.ctr.pendingBatch
+		if dispatch.ctr.pendingStop {
+			result.Status = vm.ExecStop
+		}
 	} else {
 		result, err = vm.ChildrenCall(dispatch.GetChildren(0), proc, analyzer)
 		if err != nil {
 			return result, err
 		}
 	}
-
 	whichToSend := result.Batch
 	if result.Batch == nil {
+		// An event-driven child may have no batch while it is waiting for an
+		// upstream edge or external readiness event.  That is not EOF: preserve
+		// its continuation so a materialized producer cannot be finalized before
+		// the recursive CTE publishes the next generation.
+		if result.Status == vm.ExecWaiting {
+			return result, err
+		}
 		// A remote dispatch must attach every receiver even when its child
 		// produces no batches. Otherwise an early NotRegistered response can
 		// outlive this pipeline: cleanup removes the registration before the
@@ -176,8 +192,7 @@ func (dispatch *Dispatch) Call(proc *process.Process) (vm.CallResult, error) {
 		printShuffleResult(dispatch)
 		return result, nil
 	}
-
-	if whichToSend.Recursive == 1 {
+	if !pendingLocalBatch && whichToSend.Recursive == 1 {
 		if !dispatch.ctr.hasData {
 			result.Status = vm.ExecStop
 			whichToSend.SetEnd()
@@ -191,12 +206,10 @@ func (dispatch *Dispatch) Call(proc *process.Process) (vm.CallResult, error) {
 	}
 
 	if dispatch.MaterializedSource != nil {
-		// Last/End batches are pipeline control messages, not rows. Ordinary
-		// SINK_SCAN consumers discard them in merge.Call; a materialized source
-		// must do the same before persisting fanout data.
-		if whichToSend.Last() {
-			return result, nil
-		}
+		// Preserve Last batches as generation boundaries. Ordinary SINK_SCAN
+		// consumers discard them in merge.Call, while recursive-scan consumers
+		// need the marker to let MergeRecursive emit the generation it has
+		// buffered before requesting the next one.
 		stats, err := dispatch.MaterializedSource.AppendWithStats(whichToSend)
 		analyzer.SetMemUsed(stats.RetainedBytes)
 		if stats.SpilledBytes > 0 {
@@ -209,6 +222,7 @@ func (dispatch *Dispatch) Call(proc *process.Process) (vm.CallResult, error) {
 	if dispatch.ctr.pendingBatch == nil &&
 		(dispatch.FuncId == SendToAllLocalFunc || dispatch.FuncId == SendToAnyLocalFunc) {
 		dispatch.ctr.pendingBatch = whichToSend
+		dispatch.ctr.pendingStop = result.Status == vm.ExecStop
 		dispatch.ctr.pendingSpoolSent = false
 		for i := range dispatch.ctr.pendingSignals {
 			dispatch.ctr.pendingSignals[i] = false
@@ -348,26 +362,32 @@ func (dispatch *Dispatch) sendLocalPending(proc *process.Process) (bool, func(fu
 	if dispatch.ctr.pendingBatch == nil {
 		return false, nil, nil
 	}
+	dispatch.retireFinishedLocalReceivers()
+	if !dispatch.hasActiveLocalReceiver() {
+		dispatch.ctr.pendingBatch = nil
+		dispatch.ctr.pendingStop = false
+		dispatch.ctr.pendingSpoolSent = false
+		return true, nil, nil
+	}
 	receiverID := pSpool.SendToAllLocal
 	if dispatch.FuncId == SendToAnyLocalFunc {
-		if dispatch.ctr.localRegsCnt == 0 {
-			return true, nil, nil
-		}
-		receiverID = dispatch.ctr.sendCnt % dispatch.ctr.localRegsCnt
-		if localReceiverTerminal(dispatch.LocalRegs[receiverID]) {
+		if dispatch.ctr.localRegsCnt == 0 || !dispatch.hasActiveLocalReceiver() {
 			dispatch.ctr.pendingBatch = nil
+			dispatch.ctr.pendingStop = false
 			return true, nil, nil
 		}
-	} else {
-		// A terminal receiver is a completed local dispatch, not a full
-		// downstream edge.  Check before copying the batch into the spool so
-		// an aborted remote receiver cannot leave an un-signalled spool slot
-		// that repeatedly re-arms the continuation.
-		for _, reg := range dispatch.LocalRegs {
-			if localReceiverTerminal(reg) {
-				dispatch.ctr.pendingBatch = nil
-				return true, nil, nil
+		for attempts := 0; attempts < dispatch.ctr.localRegsCnt; attempts++ {
+			candidate := dispatch.ctr.sendCnt % dispatch.ctr.localRegsCnt
+			if !dispatch.ctr.retiredRegs[candidate] && dispatch.ctr.sp.ReceiverActive(candidate) {
+				receiverID = candidate
+				break
 			}
+			dispatch.ctr.sendCnt++
+		}
+		if receiverID == pSpool.SendToAllLocal {
+			dispatch.ctr.pendingBatch = nil
+			dispatch.ctr.pendingStop = false
+			return true, nil, nil
 		}
 	}
 	if !dispatch.ctr.pendingSpoolSent {
@@ -378,6 +398,7 @@ func (dispatch *Dispatch) sendLocalPending(proc *process.Process) (bool, func(fu
 		}
 		if queryDone {
 			dispatch.ctr.pendingBatch = nil
+			dispatch.ctr.pendingStop = false
 			return true, nil, nil
 		}
 		if !sent {
@@ -389,6 +410,11 @@ func (dispatch *Dispatch) sendLocalPending(proc *process.Process) (bool, func(fu
 	if dispatch.FuncId == SendToAnyLocalFunc {
 		if !dispatch.ctr.pendingSignals[receiverID] {
 			reg := dispatch.LocalRegs[receiverID]
+			if localReceiverTerminal(reg) {
+				dispatch.retireLocalReceiver(receiverID)
+				dispatch.ctr.pendingSpoolSent = false
+				return dispatch.sendLocalPending(proc)
+			}
 			if !reg.TrySendData(dispatch.ctr.sp, receiverID) {
 				return false, reg.RegisterCapacityReady, nil
 			}
@@ -397,7 +423,11 @@ func (dispatch *Dispatch) sendLocalPending(proc *process.Process) (bool, func(fu
 		dispatch.ctr.sendCnt++
 	} else {
 		for i, reg := range dispatch.LocalRegs {
-			if dispatch.ctr.pendingSignals[i] {
+			if dispatch.ctr.pendingSignals[i] || dispatch.ctr.retiredRegs[i] {
+				continue
+			}
+			if localReceiverTerminal(reg) {
+				dispatch.retireLocalReceiver(i)
 				continue
 			}
 			if !reg.TrySendData(dispatch.ctr.sp, i) {
@@ -407,6 +437,7 @@ func (dispatch *Dispatch) sendLocalPending(proc *process.Process) (bool, func(fu
 		}
 	}
 	dispatch.ctr.pendingBatch = nil
+	dispatch.ctr.pendingStop = false
 	dispatch.ctr.pendingSpoolSent = false
 	for i := range dispatch.ctr.pendingSignals {
 		dispatch.ctr.pendingSignals[i] = false

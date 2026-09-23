@@ -487,7 +487,11 @@ func (s *Scope) runEventAsync(c *Compile, done func(error)) (err error) {
 			}
 			return nil
 		}
-		return scheduler.submitContinuation("scope-vm", continuation, func(runErr error) {
+		continuationName := "scope-vm"
+		if s.RootOp != nil {
+			continuationName += "-" + s.RootOp.OpType().String()
+		}
+		return scheduler.submitContinuation(continuationName, continuation, func(runErr error) {
 			// Cleanup may wait for producer terminals after a consumer stops early
 			// (LIMIT/adaptive branches). Run it as a teardown event source so a
 			// single ready worker remains available to drive those producers.

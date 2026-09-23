@@ -86,6 +86,13 @@ func (merge *Merge) Call(proc *process.Process) (vm.CallResult, error) {
 			}
 			merge.ctr.materializedPosition++
 			merge.ctr.materializedBatch = bat
+			if merge.SinkScan && (bat.Last() || bat.End()) {
+				// Materialized recursive sinks retain generation markers so
+				// MergeRecursive can delimit its input.  A normal outer SINK_SCAN
+				// must consume, but never expose, those control batches.
+				merge.cleanMaterializedBatch(proc)
+				continue
+			}
 			result.Batch = bat
 			return result, nil
 		}
@@ -105,7 +112,7 @@ func (merge *Merge) Call(proc *process.Process) (vm.CallResult, error) {
 			result.Status = vm.ExecStop
 			return result, nil
 		}
-		if merge.SinkScan && result.Batch.Last() {
+		if merge.SinkScan && (result.Batch.Last() || result.Batch.End()) {
 			continue
 		}
 		break

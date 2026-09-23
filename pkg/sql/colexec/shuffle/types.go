@@ -23,6 +23,7 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/pb/plan"
 	"github.com/matrixorigin/matrixone/pkg/sql/colexec"
 	"github.com/matrixorigin/matrixone/pkg/vm"
+	"github.com/matrixorigin/matrixone/pkg/vm/message"
 	"github.com/matrixorigin/matrixone/pkg/vm/pipeline"
 	"github.com/matrixorigin/matrixone/pkg/vm/process"
 )
@@ -85,18 +86,19 @@ func (shuffle *Shuffle) Release() {
 }
 
 type container struct {
-	ending               bool
-	sels                 [][]int32
-	buf                  *batch.Batch
-	pendingBat           *batch.Batch
-	pendingBucket        int
-	pendingOffset        int
-	shufflePool          *ShufflePool
-	runtimeFilterHandled bool
-	stableStringHash     bool
-	exprExec             colexec.ExpressionExecutor
-	held                 bool
-	writingStopped       bool
+	ending                bool
+	sels                  [][]int32
+	buf                   *batch.Batch
+	pendingBat            *batch.Batch
+	pendingBucket         int
+	pendingOffset         int
+	shufflePool           *ShufflePool
+	runtimeFilterHandled  bool
+	runtimeFilterReceiver *message.MessageReceiver
+	stableStringHash      bool
+	exprExec              colexec.ExpressionExecutor
+	held                  bool
+	writingStopped        bool
 
 	producerOnce       sync.Once
 	producerStarted    bool
@@ -188,6 +190,7 @@ func (shuffle *Shuffle) Reset(proc *process.Process, pipelineFailed bool, err er
 	shuffle.ctr.pendingBucket = 0
 	shuffle.ctr.pendingOffset = 0
 	shuffle.ctr.runtimeFilterHandled = false
+	shuffle.ctr.runtimeFilterReceiver = nil
 	shuffle.ctr.stableStringHash = false
 	shuffle.ctr.held = false
 	shuffle.ctr.writingStopped = false

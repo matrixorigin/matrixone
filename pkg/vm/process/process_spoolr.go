@@ -565,6 +565,12 @@ func (receiver *PipelineSignalReceiver) TryGetNextBatch(
 			select {
 			case <-reg.Done():
 				chosen, msg := receiver.receiveSignalOrTerminal(i)
+				// receiveSignalOrTerminal may consume a signal that became
+				// visible at the same time as Done.  Publish the resulting
+				// capacity transition as well; otherwise a producer that was
+				// admitted on the full edge can remain parked forever waiting
+				// for a callback that the terminal path never emits.
+				reg.notifyCapacityOnReceive()
 				content, info, progressed = receiver.consumeReadySignal(chosen, msg, analyzer)
 				if progressed {
 					return content, info, true
@@ -776,11 +782,27 @@ func (receiver *PipelineSignalReceiver) State() PipelineSignalReceiverState {
 // would park a scheduler event source and can deadlock an early consumer (for
 // example LIMIT over a lazy UNION branch). Producers still observe the
 // canceled process context and finish through their own continuations.
-func (receiver *PipelineSignalReceiver) Abort() {
+//
+// On failed/canceled teardown (err != nil), the input edges are aborted as part
+// of the same transition. A producer may be parked on downstream capacity while
+// the consumer is being torn down; a local receiver-only flag cannot wake that
+// producer because no one will ever drain the edge again. Publishing the edge
+// terminal event makes the producer's RegisterCapacityReady callback fire and
+// lets the producer discard its pending batch. A successful End cleanup leaves
+// input edges untouched so still-running sibling/recursive producers can finish
+// their work before their own cleanup event.
+func (receiver *PipelineSignalReceiver) Abort(err error) {
 	if receiver == nil {
 		return
 	}
 	receiver.releaseCurrent()
+	if err != nil {
+		for _, reg := range receiver.srcReg {
+			if reg != nil {
+				reg.Abort(err)
+			}
+		}
+	}
 	receiver.alive = 0
 	receiver.notifyReady()
 }

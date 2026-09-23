@@ -275,6 +275,29 @@ func TestPipelineSignalReceiverSharedFatalCompletesRemainingCount(t *testing.T) 
 	}
 }
 
+func TestPipelineSignalReceiverAbortWakesBlockedProducer(t *testing.T) {
+	edge := NewPipelineEdge(1, 1)
+	edge.Ch2 <- NewPipelineSignalToDirectly(batch.EmptyBatch, nil, nil)
+	receiver := InitPipelineSignalReceiver(context.Background(), []*WaitRegister{edge})
+
+	woke := make(chan struct{})
+	if err := edge.RegisterCapacityReady(func() { close(woke) }); err != nil {
+		t.Fatalf("RegisterCapacityReady failed: %v", err)
+	}
+	receiver.Abort(context.Canceled)
+
+	select {
+	case <-woke:
+	case <-time.After(time.Second):
+		t.Fatal("receiver abort did not wake the blocked producer")
+	}
+	select {
+	case <-edge.Done():
+	case <-time.After(time.Second):
+		t.Fatal("receiver abort did not terminate the input edge")
+	}
+}
+
 func TestPipelineSignalReceiverFailedCleanupWithoutCauseReturnsError(t *testing.T) {
 	reg := NewPipelineEdge(1, 1)
 	if !SendPipelineSignalWithTimeout(reg, BuildCleanupSignal(true, nil), time.Second) {

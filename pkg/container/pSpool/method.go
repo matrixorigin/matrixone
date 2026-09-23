@@ -30,6 +30,7 @@ func InitMyPipelineSpool(mp *mpool.MPool, receiverCnt uint32) *PipelineSpool {
 		shardRefs:    nil,
 		doRefCheck:   make([]bool, bl),
 		rs:           newReceivers(receiverCnt, bl),
+		active:       make([]bool, receiverCnt),
 		cache:        initCachedBatch(mp, bl),
 		csDoneSignal: make(chan struct{}, receiverCnt),
 		abortDone:    make(chan struct{}),
@@ -44,6 +45,9 @@ func InitMyPipelineSpool(mp *mpool.MPool, receiverCnt uint32) *PipelineSpool {
 	ps2.freeShardPool = make(chan uint32, bl)
 	for i := uint32(0); i < bl; i++ {
 		ps2.freeShardPool <- i
+	}
+	for i := range ps2.active {
+		ps2.active[i] = true
 	}
 
 	return ps2

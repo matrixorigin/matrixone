@@ -49,6 +49,116 @@ type emptyDispatchChild struct {
 	called chan struct{}
 }
 
+type waitingDispatchChild struct {
+	*colexec.MockOperator
+	calls int
+}
+
+func (child *waitingDispatchChild) Call(*process.Process) (vm.CallResult, error) {
+	child.calls++
+	if child.calls == 1 {
+		return vm.CallResult{
+			Status:  vm.ExecWaiting,
+			OnReady: func(func()) error { return nil },
+		}, nil
+	}
+	return vm.CallResult{Status: vm.ExecStop}, nil
+}
+
+func TestDispatchPropagatesEmptyChildWait(t *testing.T) {
+	proc := testutil.NewProcess(t)
+	defer proc.Free()
+
+	child := &waitingDispatchChild{MockOperator: colexec.NewMockOperator()}
+	defer child.Release()
+
+	d := NewArgument()
+	defer d.Release()
+	d.FuncId = SendToAllLocalFunc
+	d.AppendChild(child)
+	require.NoError(t, child.Prepare(proc))
+	require.NoError(t, d.Prepare(proc))
+
+	result, err := d.Call(proc)
+	_, yielded := vm.AsYieldError(err)
+	require.True(t, yielded)
+	require.Equal(t, vm.ExecWaiting, result.Status,
+		"an empty child wait is not EOF and must not finalize the dispatch")
+	require.Nil(t, result.Batch)
+}
+
+func TestDispatchPendingRecursiveMarkerDoesNotEndStream(t *testing.T) {
+	proc := testutil.NewProcess(t)
+	defer proc.Free()
+
+	makeBatch := func(value int32, last bool) *batch.Batch {
+		bat := batch.NewWithSize(1)
+		bat.Vecs[0] = testutil.MakeInt32Vector([]int32{value}, nil, proc.Mp())
+		bat.SetRowCount(1)
+		if last {
+			bat.SetLast()
+		}
+		return bat
+	}
+	anchor := makeBatch(1, false)
+	marker := makeBatch(2, true)
+	nextGeneration := makeBatch(3, false)
+	defer func() {
+		anchor.Clean(proc.Mp())
+		marker.Clean(proc.Mp())
+		nextGeneration.Clean(proc.Mp())
+	}()
+
+	child := colexec.NewMockOperator().WithBatchs([]*batch.Batch{
+		anchor, marker, nextGeneration,
+	})
+	defer child.Release()
+	reg := process.NewPipelineEdge(1, 0)
+	d := NewArgument()
+	defer func() {
+		reg.Abort(context.Canceled)
+		d.Reset(proc, true, context.Canceled)
+		d.Release()
+	}()
+	d.FuncId = SendToAllLocalFunc
+	d.LocalRegs = []*process.WaitRegister{reg}
+	d.AppendChild(child)
+	require.NoError(t, child.Prepare(proc))
+	require.NoError(t, d.Prepare(proc))
+
+	result, err := d.Call(proc)
+	require.NoError(t, err)
+	require.Equal(t, vm.ExecNext, result.Status)
+	require.Same(t, anchor, result.Batch)
+
+	result, err = d.Call(proc)
+	require.NoError(t, err)
+	require.Equal(t, vm.ExecWaiting, result.Status)
+	require.NotNil(t, result.OnReady)
+
+	receiver := process.InitPipelineSignalReceiver(proc.Ctx, []*process.WaitRegister{reg})
+	got, err := receiver.GetNextBatch(nil)
+	require.NoError(t, err)
+	require.Equal(t, []int32{1}, vector.MustFixedColWithTypeCheck[int32](got.Vecs[0]))
+
+	result, err = d.Call(proc)
+	require.NoError(t, err)
+	require.Equal(t, vm.ExecNext, result.Status,
+		"retrying a blocked recursive marker must not turn it into End")
+	require.Same(t, marker, result.Batch)
+	require.False(t, result.Batch.End())
+
+	got, err = receiver.GetNextBatch(nil)
+	require.NoError(t, err)
+	require.Equal(t, []int32{2}, vector.MustFixedColWithTypeCheck[int32](got.Vecs[0]))
+
+	result, err = d.Call(proc)
+	require.NoError(t, err)
+	require.Equal(t, vm.ExecNext, result.Status)
+	require.Same(t, nextGeneration, result.Batch,
+		"the next recursive generation must still be requested after a blocked marker")
+}
+
 func TestMarshalRemoteBatchGroupingProtocolGate(t *testing.T) {
 	proc := testutil.NewProcess(t)
 	defer proc.Free()

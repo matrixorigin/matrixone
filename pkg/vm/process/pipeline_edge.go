@@ -618,9 +618,15 @@ func (e *PipelineEdge) RegisterCapacityReady(callback func()) error {
 		callback()
 		return nil
 	}
+	// Keep the capacity check and callback publication under the same lock
+	// used by notifyCapacity.  A receiver can drain Ch2 concurrently without
+	// taking terminalMu; checking len(Ch2) first and only then acquiring
+	// readyMu would therefore lose the wakeup between the check and append.
+	// Once readyMu is held, either we observe the newly available slot or the
+	// receiver's notifyCapacity waits until the callback is visible.
 	e.terminalMu.Lock()
-	ready := e.doneClosed || e.fatalTerminal || len(e.Ch2) < cap(e.Ch2)
 	e.readyMu.Lock()
+	ready := e.doneClosed || e.fatalTerminal || len(e.Ch2) < cap(e.Ch2)
 	if !ready {
 		e.capacityCallbacks = append(e.capacityCallbacks, callback)
 	}
@@ -649,10 +655,17 @@ func (e *PipelineEdge) notifyCapacity() {
 	if e == nil {
 		return
 	}
+	// Serialize notification with RegisterCapacityReady's terminal/capacity
+	// check.  Without the terminal lock, a receiver could drain Ch2 after the
+	// registration check but before the callback was appended, and the
+	// notification would observe an empty callback list.  The producer would
+	// then remain parked on an edge that already had capacity.
+	e.terminalMu.Lock()
 	e.readyMu.Lock()
 	callbacks := e.capacityCallbacks
 	e.capacityCallbacks = nil
 	e.readyMu.Unlock()
+	e.terminalMu.Unlock()
 	for _, callback := range callbacks {
 		callback()
 	}

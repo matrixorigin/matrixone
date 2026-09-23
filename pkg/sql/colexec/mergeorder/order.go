@@ -583,7 +583,6 @@ func (mergeOrder *MergeOrder) Call(
 				}
 				continue
 			}
-
 			if input.Batch.IsEmpty() {
 				continue
 			}
@@ -664,6 +663,15 @@ func (mergeOrder *MergeOrder) Call(
 			}
 
 		case normalSending:
+			// A batch can be retired by the in-memory merge path before the
+			// parent asks for its next quantum.  Do not expose that retired slot
+			// as an EOF batch: compact it and continue with any live input.
+			for len(ctr.batchList) > 0 && ctr.batchList[0] == nil {
+				ctr.batchList = ctr.batchList[1:]
+				if len(ctr.orderCols) > 0 {
+					ctr.orderCols = ctr.orderCols[1:]
+				}
+			}
 			if len(ctr.batchList) == 0 {
 				return vm.CancelResult, nil
 			}

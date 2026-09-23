@@ -81,8 +81,10 @@ type container struct {
 	// receiver edge is full. The batch is copied exactly once; signal progress
 	// is tracked per receiver so retry never duplicates data.
 	pendingBatch     *batch.Batch
+	pendingStop      bool
 	pendingSpoolSent bool
 	pendingSignals   []bool
+	retiredRegs      []bool
 
 	// pendingRemoteBatch is retained while an external remote send is running.
 	// remoteTask publishes exactly one completion event; the VM continuation
@@ -257,6 +259,48 @@ func (dispatch *Dispatch) AdoptCleanupState(from *Dispatch) {
 	from.ctr = nil
 }
 
+func (dispatch *Dispatch) retireLocalReceiver(idx int) {
+	if dispatch == nil || dispatch.ctr == nil || idx < 0 || idx >= len(dispatch.LocalRegs) {
+		return
+	}
+	if len(dispatch.ctr.retiredRegs) != len(dispatch.LocalRegs) {
+		dispatch.ctr.retiredRegs = make([]bool, len(dispatch.LocalRegs))
+	}
+	if dispatch.ctr.retiredRegs[idx] {
+		return
+	}
+	dispatch.ctr.retiredRegs[idx] = true
+	if dispatch.ctr.sp != nil {
+		dispatch.ctr.sp.RetireReceiver(idx)
+	}
+	if idx < len(dispatch.ctr.pendingSignals) {
+		dispatch.ctr.pendingSignals[idx] = true
+	}
+}
+
+func (dispatch *Dispatch) retireFinishedLocalReceivers() {
+	if dispatch == nil || dispatch.ctr == nil {
+		return
+	}
+	for i, reg := range dispatch.LocalRegs {
+		if localReceiverTerminal(reg) {
+			dispatch.retireLocalReceiver(i)
+		}
+	}
+}
+
+func (dispatch *Dispatch) hasActiveLocalReceiver() bool {
+	if dispatch == nil || dispatch.ctr == nil {
+		return false
+	}
+	for i := range dispatch.LocalRegs {
+		if i >= len(dispatch.ctr.retiredRegs) || !dispatch.ctr.retiredRegs[i] {
+			return true
+		}
+	}
+	return false
+}
+
 // sendTerminalSignalsToLocalRegs sends terminalSignal to each local receiver.
 // It first tries non-blocking sends via TrySendPipelineSignal, then retries
 // any pending receivers with the caller-provided cleanup context.
@@ -268,6 +312,19 @@ func sendTerminalSignalsToLocalRegs(ctx context.Context, proc *process.Process, 
 	delivered := make([]bool, len(localRegs))
 	pendingLocalRegs := make([]int, 0, len(localRegs))
 	for i, reg := range localRegs {
+		if reg == nil {
+			pendingLocalRegs = append(pendingLocalRegs, i)
+			continue
+		}
+		select {
+		case <-reg.Done():
+			// The receiver already published its terminal state.  Treat the
+			// signal as delivered; waiting for a channel that no longer has a
+			// consumer would turn normal fanout cleanup into a timeout.
+			delivered[i] = true
+			continue
+		default:
+		}
 		if process.TrySendPipelineSignal(reg, signal) {
 			delivered[i] = true
 			continue
@@ -390,6 +447,7 @@ func (dispatch *Dispatch) Reset(proc *process.Process, pipelineFailed bool, err 
 
 	if dispatch.ctr != nil && dispatch.ctr.sp != nil {
 		sp := dispatch.ctr.sp
+		dispatch.retireFinishedLocalReceivers()
 
 		// Send typed terminal signals to all local receivers.
 		terminalDelivered := sendTerminalSignalsToLocalRegs(signalCtx, proc, dispatch.LocalRegs, terminalSignal, pipelineFailed, terminalErr)

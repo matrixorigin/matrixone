@@ -313,8 +313,9 @@ func TestMaterializedCTEStepGuards(t *testing.T) {
 		{
 			name: "recursive sink",
 			query: &plan.Query{Nodes: []*plan.Node{
-				{NodeType: plan.Node_SINK, RecursiveSink: true, ExtraOptions: materialized.CTESinkOption},
+				{NodeType: plan.Node_SINK, RecursiveSink: true},
 			}, Steps: []int32{0}},
+			want: true,
 		},
 		{
 			name:  "invalid step",

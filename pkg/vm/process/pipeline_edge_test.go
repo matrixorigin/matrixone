@@ -145,6 +145,24 @@ func TestWaitPipelineSignalCapacityWaitsUntilChannelDrains(t *testing.T) {
 	}
 }
 
+func TestPipelineEdgeRegisterCapacityReadyWakesAfterReceive(t *testing.T) {
+	edge := NewPipelineEdge(1, 1)
+	edge.Ch2 <- NewPipelineSignalToDirectly(nil, nil, nil)
+
+	woke := make(chan struct{})
+	if err := edge.RegisterCapacityReady(func() { close(woke) }); err != nil {
+		t.Fatalf("RegisterCapacityReady failed: %v", err)
+	}
+
+	<-edge.Ch2
+	edge.notifyCapacityOnReceive()
+	select {
+	case <-woke:
+	case <-time.After(time.Second):
+		t.Fatal("capacity callback was not delivered after the receiver drained the edge")
+	}
+}
+
 func TestPipelineEdgeResetClearsOrderedStreamContract(t *testing.T) {
 	edge := NewPipelineEdge(1, 1)
 	edge.OrderedStream = true

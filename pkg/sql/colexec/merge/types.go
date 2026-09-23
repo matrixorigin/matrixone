@@ -39,12 +39,11 @@ type container struct {
 }
 
 type Merge struct {
-	ctr      container
-	SinkScan bool
-	Partial  bool  // false means listening on all merge receivers
-	StartIDX int32 // if partial, listening on receivers[start:end]
-	EndIDX   int32
-
+	ctr                  container
+	SinkScan             bool
+	Partial              bool  // false means listening on all merge receivers
+	StartIDX             int32 // if partial, listening on receivers[start:end]
+	EndIDX               int32
 	MaterializedSource   *materialized.Source
 	MaterializedReaderID int
 	vm.OperatorBase
@@ -136,7 +135,16 @@ func (merge *Merge) Reset(proc *process.Process, pipelineFailed bool, err error)
 		// remain live until their own cleanup event completes. Waiting here would
 		// hold that event source while the producer needs the same scheduler, so
 		// detach the receiver and let the producer observe process cancellation.
-		merge.ctr.receiver.Abort()
+		if err == nil && pipelineFailed {
+			// A consumer can finish successfully without draining every input
+			// edge (recursive CTE/early-stop operators are the main example).
+			// Keep the user-visible pipeline successful, but publish an internal
+			// terminal cause so producers blocked on those edges can discard their
+			// pending batches instead of waiting forever for a consumer that has
+			// already ended.
+			err = process.ErrPipelineTerminalWithoutCause
+		}
+		merge.ctr.receiver.Abort(err)
 	}
 }
 

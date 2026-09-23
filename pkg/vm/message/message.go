@@ -366,6 +366,17 @@ func (mr *MessageReceiver) RegisterReady(callback func()) error {
 	return nil
 }
 
+// TryReceive returns the messages currently available to this receiver and
+// whether the board has been closed.  It never waits.  Operators that run
+// under the scope scheduler use this together with RegisterReady so a
+// scheduler worker is not parked on the message board.
+func (mr *MessageReceiver) TryReceive() ([]Message, bool) {
+	if mr == nil || mr.mb == nil {
+		return nil, true
+	}
+	return mr.receiveMessageNonBlock()
+}
+
 func (mr *MessageReceiver) hasMatchingMessageLocked() bool {
 	for i := mr.offset; i < int32(len(mr.mb.messages)); i++ {
 		if mr.mb.messages[i] == nil {

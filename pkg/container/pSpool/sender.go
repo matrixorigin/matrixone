@@ -43,6 +43,11 @@ type PipelineSpool struct {
 	// rs record all receivers' input data queue.
 	// it supports push-index and pop-index methods.
 	rs []receiver
+	// active records receivers that still participate in broadcast delivery.
+	// A fanout consumer may finish early while sibling consumers still need
+	// data; retiring it releases its outstanding slot references without
+	// aborting the shared spool.
+	active []bool
 
 	// cache manage all the reuse memories.
 	cache *cachedBatch
@@ -117,9 +122,17 @@ func (ps *PipelineSpool) SendBatch(
 	ps.updateSpoolMessage(messageIdx, dst, info, useCache, cacheID)
 
 	if receiverID == SendToAllLocal {
-		ps.sendToAll(messageIdx)
-	} else {
-		ps.sendToIdx(messageIdx, receiverID)
+		if !ps.sendToAll(messageIdx) {
+			ps.cleanSlotLocked(messageIdx)
+			ps.freeShardPool <- messageIdx
+			ps.notifySendReady()
+			return true, nil
+		}
+	} else if !ps.sendToIdx(messageIdx, receiverID) {
+		ps.cleanSlotLocked(messageIdx)
+		ps.freeShardPool <- messageIdx
+		ps.notifySendReady()
+		return true, nil
 	}
 	return false, nil
 }
@@ -162,9 +175,19 @@ func (ps *PipelineSpool) TrySendBatch(
 	}
 	ps.updateSpoolMessage(messageIdx, dst, info, useCache, cacheID)
 	if receiverID == SendToAllLocal {
-		ps.sendToAll(messageIdx)
-	} else {
-		ps.sendToIdx(messageIdx, receiverID)
+		if !ps.sendToAll(messageIdx) {
+			ps.cleanSlotLocked(messageIdx)
+			ps.freeShardPool <- messageIdx
+			ps.mu.RUnlock()
+			ps.notifySendReady()
+			return true, true, nil
+		}
+	} else if !ps.sendToIdx(messageIdx, receiverID) {
+		ps.cleanSlotLocked(messageIdx)
+		ps.freeShardPool <- messageIdx
+		ps.mu.RUnlock()
+		ps.notifySendReady()
+		return true, true, nil
 	}
 	ps.mu.RUnlock()
 	return false, true, nil
@@ -434,52 +457,109 @@ func (ps *PipelineSpool) updateSpoolMessage(idx uint32, data *batch.Batch, err e
 	ps.shardPool[idx].cacheID = cacheID
 }
 
-func (ps *PipelineSpool) sendToAll(sharedPoolIndex uint32) {
+// ReceiverActive reports whether a receiver still participates in spool
+// delivery. It is used by the resumable dispatch sender before it retries a
+// signal after another consumer has terminated.
+func (ps *PipelineSpool) ReceiverActive(idx int) bool {
+	if ps == nil {
+		return false
+	}
+	ps.mu.RLock()
+	active := idx >= 0 && idx < len(ps.active) && ps.active[idx]
+	ps.mu.RUnlock()
+	return active
+}
+
+// RetireReceiver removes one local fanout consumer without aborting the
+// shared spool. It releases the consumer's current slot and every queued
+// slot, allowing sibling consumers to continue receiving later broadcasts.
+func (ps *PipelineSpool) RetireReceiver(idx int) {
+	if ps == nil {
+		return
+	}
+	ps.mu.Lock()
+	if idx < 0 || idx >= len(ps.active) || !ps.active[idx] {
+		ps.mu.Unlock()
+		return
+	}
+	ps.active[idx] = false
+	r := &ps.rs[idx]
+	if last, ok := r.getLastPop(); ok {
+		ps.releaseSlotRefLocked(last)
+		r.flagLastPopRelease()
+	}
+	for r.head != r.tail {
+		last := r.elements[r.head]
+		r.head = (r.head + 1) & r.andBase
+		ps.releaseSlotRefLocked(last)
+	}
+	ps.mu.Unlock()
+	ps.notifySendReady()
+}
+
+func (ps *PipelineSpool) sendToAll(sharedPoolIndex uint32) bool {
+	activeCount := 0
+	for _, active := range ps.active {
+		if active {
+			activeCount++
+		}
+	}
+	if activeCount == 0 {
+		return false
+	}
 	if ps.shardRefs == nil {
 		ps.doRefCheck[sharedPoolIndex] = false
 	} else {
-		ps.shardRefs[sharedPoolIndex].Store(int32(len(ps.rs)))
+		ps.shardRefs[sharedPoolIndex].Store(int32(activeCount))
 		ps.doRefCheck[sharedPoolIndex] = true
 	}
 
 	for i := 0; i < len(ps.rs); i++ {
-		ps.rs[i].pushNextIndex(sharedPoolIndex)
+		if ps.active[i] {
+			ps.rs[i].pushNextIndex(sharedPoolIndex)
+		}
 	}
+	return true
 }
 
-func (ps *PipelineSpool) sendToIdx(sharedPoolIndex uint32, idx int) {
+func (ps *PipelineSpool) sendToIdx(sharedPoolIndex uint32, idx int) bool {
+	if idx < 0 || idx >= len(ps.active) || !ps.active[idx] {
+		return false
+	}
 	// if send to only one, there is no need to do ref check.
 	ps.doRefCheck[sharedPoolIndex] = false
 
 	ps.rs[idx].pushNextIndex(sharedPoolIndex)
+	return true
 }
 
 func (ps *PipelineSpool) releaseCurrentLocked(idx int) {
 	if last, hasLast := ps.rs[idx].getLastPop(); hasLast {
-		if ps.aborted {
-			if !ps.doRefCheck[last] || ps.shardRefs[last].Add(-1) == 0 {
-				ps.cleanSlotLocked(last)
-			}
-		} else if !ps.doRefCheck[last] || ps.shardRefs[last].Add(-1) == 0 {
-			if ps.cleanupDone {
-				ps.cleanSlotLocked(last)
-			} else {
-				// The slot and batch pools have independent reuse orders, so a
-				// returned batch may be assigned to a different slot immediately.
-				// Detach the batch before either object is republished; otherwise
-				// this slot can retain an alias that later cleanup frees prematurely.
-				msg := &ps.shardPool[last]
-				data := msg.dataContent
-				useCache := msg.useCache
-				cacheID := msg.cacheID
-				ps.clearSlotLocked(last)
-				ps.cache.CacheBatch(useCache, cacheID, data)
-				ps.freeShardPool <- last
-				ps.notifySendReady()
-			}
-		}
+		ps.releaseSlotRefLocked(last)
 		ps.rs[idx].flagLastPopRelease()
+		ps.notifySendReady()
 	}
+}
+
+func (ps *PipelineSpool) releaseSlotRefLocked(last uint32) {
+	if ps.doRefCheck[last] && ps.shardRefs[last].Add(-1) != 0 {
+		return
+	}
+	if ps.aborted || ps.cleanupDone {
+		ps.cleanSlotLocked(last)
+		return
+	}
+	// The slot and batch pools have independent reuse orders, so a returned
+	// batch may be assigned to a different slot immediately. Detach the batch
+	// before either object is republished; otherwise this slot can retain an
+	// alias that later cleanup frees prematurely.
+	msg := &ps.shardPool[last]
+	data := msg.dataContent
+	useCache := msg.useCache
+	cacheID := msg.cacheID
+	ps.clearSlotLocked(last)
+	ps.cache.CacheBatch(useCache, cacheID, data)
+	ps.freeShardPool <- last
 }
 
 func (ps *PipelineSpool) abortLocked() {

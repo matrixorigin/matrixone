@@ -96,7 +96,7 @@ func TestMaterializedDispatchAttributesSourceSpill(t *testing.T) {
 	source.ReleaseReader(0)
 }
 
-func TestMaterializedDispatchDoesNotPersistLastBatch(t *testing.T) {
+func TestMaterializedDispatchPersistsLastBatchForRecursiveReaders(t *testing.T) {
 	proc := testutil.NewProcess(t)
 	source := materialized.NewSource(1)
 	t.Cleanup(source.Close)
@@ -139,7 +139,11 @@ func TestMaterializedDispatchDoesNotPersistLastBatch(t *testing.T) {
 	stored.Clean(proc.Mp())
 	stored, end, err = source.Next(proc.Ctx, 0, 1)
 	require.NoError(t, err)
+	require.False(t, end)
+	require.True(t, stored.Last())
+	stored.Clean(proc.Mp())
+	_, end, err = source.Next(proc.Ctx, 0, 2)
+	require.NoError(t, err)
 	require.True(t, end)
-	require.Nil(t, stored)
 	source.ReleaseReader(0)
 }
