@@ -63,8 +63,12 @@ func TestParquetNestedAndScalarProjectionPrunesOtherColumns(t *testing.T) {
 	require.False(t, fileEmpty)
 	defer r.Close()
 
-	require.Equal(t, [][]string{{"a_unused_000"}, {"z_nested", "v"}}, r.h.rowReader.Schema().Columns())
-	for _, pages := range r.h.pages {
+	// Only nested columns are fed to the row reader. The projected scalar
+	// sibling remains on the page-vectorized path.
+	require.Equal(t, [][]string{{"z_nested", "v"}}, r.h.rowReader.Schema().Columns())
+	require.Equal(t, []int{0}, r.h.dataColIndices)
+	require.NotNil(t, r.h.pages[0])
+	for _, pages := range r.h.pages[1:] {
 		require.Nil(t, pages)
 	}
 
