@@ -1244,6 +1244,11 @@ message Node {
   // PARTITION Top-N only: retain every peer of the Nth row so the reduced
   // candidate stream is exact for RANK rather than only ROW_NUMBER.
   bool partition_top_n_with_ties = 91;
+
+  // ADAPTIVE_TOP only: select the first candidate with any rows and use the
+  // final candidate only when the initial candidate is empty. This is used by
+  // explicit IVF POST fallback and preserves its partial-result behavior.
+  bool adaptive_top_fallback_on_empty = 92;
 }
 
 message SnapshotExtraInfo {
@@ -2054,6 +2059,7 @@ message AlterCopyOpt {
   bool skip_pk_dedup = 2;
   string target_table_name = 3;
   map<string, bool> skip_indexes_copy = 4;
+  map<string, bool> new_plugin_indexes = 5;
 }
 
 message AlterTable {

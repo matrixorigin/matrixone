@@ -1381,6 +1381,7 @@ func QuoteString(str string) string {
 func Quote(ivecs []*vector.Vector, result vector.FunctionResultWrapper, proc *process.Process, length int, selectList *FunctionSelectList) error {
 	parameter := vector.GenerateFunctionStrParameter(ivecs[0])
 	rs := vector.MustFunctionResult[types.Varlena](result)
+	isUTF8Text := isExplicitUTF8Charset(ivecs[0].GetType().Charset)
 	for row := uint64(0); row < uint64(length); row++ {
 		if selectList != nil && (selectList.IgnoreAllRow() ||
 			(!selectList.ShouldEvalAllRow() && selectList.Contains(row))) {
@@ -1396,8 +1397,20 @@ func Quote(ivecs []*vector.Vector, result vector.FunctionResultWrapper, proc *pr
 			}
 			continue
 		}
-		if ivecs[0].GetIsBinaryStringAt(int(row)) && !utf8.Valid(value) {
-			return moerr.NewCannotConvertString(proc.Ctx, string(value), "binary", "utf8mb4")
+		if !utf8.Valid(value) {
+			isBinary := ivecs[0].GetIsBinaryStringAt(int(row))
+			if isBinary {
+				return moerr.NewCannotConvertString(proc.Ctx, string(value), "binary", "utf8mb4")
+			}
+			if isUTF8Text {
+				// MySQL's text-domain QUOTE returns an empty string for malformed
+				// multibyte input. Keep the binary-domain conversion error above;
+				// SQL EXECUTE markers can be rebound to text without changing bytes.
+				if err := rs.AppendBytes(nil, false); err != nil {
+					return err
+				}
+				continue
+			}
 		}
 		resultBytes := quotedBytesLength(value)
 		if int64(resultBytes) > maxStringFunctionResultLength(result) {
@@ -5607,7 +5620,8 @@ func parseCoordinatePairWithError(point string, errMsg string) (float64, float64
 // soundexCodeMap maps ASCII A-Z to original Soundex digits; '0' means discard.
 const soundexCodeMap = "01230120022455012623010202"
 
-// SoundexString implements MySQL's original Soundex behavior for ASCII input.
+// SoundexString implements MySQL's byte-oriented Soundex behavior for binary
+// strings. Non-ASCII bytes are ignored independently.
 func SoundexString(str string) string {
 	var code strings.Builder
 	firstLetter := true
@@ -5646,12 +5660,107 @@ func SoundexString(str string) string {
 	return code.String()
 }
 
+// soundexTextString implements MySQL 8.0's UTF-8 text path. It preserves the
+// first qualifying non-ASCII character, then emits the usual ASCII Soundex
+// digits. Invalid UTF-8 before the first letter yields empty; invalid UTF-8
+// after it terminates the scan and leaves the result padded.
+func soundexTextString(str string) string {
+	var code strings.Builder
+	firstLetter := true
+	lastCode := byte('0')
+	characters := 0
+	scanFrom := 0
+
+	for i := 0; i < len(str); {
+		start := i
+		r, size := utf8.DecodeRuneInString(str[i:])
+		if r == utf8.RuneError && size == 1 {
+			return ""
+		}
+		i += size
+		if size == 1 {
+			c := str[start]
+			if c >= 'a' && c <= 'z' {
+				c -= 'a' - 'A'
+			}
+			if c < 'A' || c > 'Z' {
+				continue
+			}
+			code.WriteByte(c)
+			lastCode = soundexCodeMap[c-'A']
+		} else {
+			// MySQL 8.0's legacy helper treats every Unicode code point at or
+			// above U+00C0 as alphabetic, and preserves the first one verbatim.
+			if r < 0xC0 {
+				continue
+			}
+			code.WriteString(str[start:i])
+			lastCode = '0'
+		}
+		firstLetter = false
+		characters = 1
+		scanFrom = i
+		break
+	}
+	if firstLetter {
+		return ""
+	}
+
+	for i := scanFrom; i < len(str); {
+		r, size := utf8.DecodeRuneInString(str[i:])
+		if r == utf8.RuneError && size == 1 {
+			break
+		}
+		i += size
+		if size == 1 {
+			c := str[i-size]
+			if c >= 'a' && c <= 'z' {
+				c -= 'a' - 'A'
+			}
+			if c < 'A' || c > 'Z' {
+				continue
+			}
+			r = rune(c)
+		} else if r < 0xC0 {
+			continue
+		}
+
+		codeChar := byte('0')
+		if r >= 'A' && r <= 'Z' {
+			codeChar = soundexCodeMap[byte(r)-'A']
+		}
+		if codeChar != '0' && codeChar != lastCode {
+			code.WriteByte(codeChar)
+			characters++
+			lastCode = codeChar
+		}
+	}
+
+	for characters < 4 {
+		code.WriteByte('0')
+		characters++
+	}
+	return code.String()
+}
+
 func Soundex(ivecs []*vector.Vector, result vector.FunctionResultWrapper, proc *process.Process, length int, selectList *FunctionSelectList) error {
-	return opUnaryBytesToBytes(ivecs, result, proc, length, func(v []byte) []byte {
-		str := functionUtil.QuickBytesToStr(v)
-		soundex := SoundexString(str)
-		return functionUtil.QuickStrToBytes(soundex)
-	}, selectList)
+	textSoundex := SoundexString
+	if isExplicitUTF8Charset(ivecs[0].GetType().Charset) {
+		textSoundex = soundexTextString
+	}
+	return opUnaryBytesToBytesByStringDomain(
+		ivecs,
+		result,
+		proc,
+		length,
+		func(v []byte) []byte {
+			return functionUtil.QuickStrToBytes(textSoundex(functionUtil.QuickBytesToStr(v)))
+		},
+		func(v []byte) []byte {
+			return functionUtil.QuickStrToBytes(SoundexString(functionUtil.QuickBytesToStr(v)))
+		},
+		selectList,
+	)
 }
 
 func ReadFromFile(Filepath string, fs fileservice.FileService) (io.ReadCloser, error) {
