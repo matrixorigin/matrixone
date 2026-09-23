@@ -3,9 +3,11 @@
 Design version: 1.
 
 Tracking: [#28966](https://github.com/matrixorigin/matrixone/issues/28966).
-The user approved this prerequisite split before implementation. It refines
-section 7 of embedded Sirius design v2, revision
-`24161f69ba1bfefbd159d120cecc1758d00f98ed`.
+The owner approved this prerequisite split in the
+[#28966 decision record](https://github.com/matrixorigin/matrixone/issues/28966#issuecomment-5791713361).
+It refines section 7 of the MO-reader-only
+[embedded Sirius design v2](https://github.com/aunjgr/matrixone/blob/d6e95dddbd/docs/design/sirius-embedded.md).
+Implementation approval remains subject to this PR's CI and code-owner review.
 
 ## Contract
 
@@ -20,7 +22,9 @@ description; an invalid description fails before compilation and never falls
 back to the system installation. The manifest supports MO GPU-only builds
 without requiring Sirius source. Pixi is the reproducible provider for the
 new profile, while Make consumes paths and provenance rather than depending
-on the environment directory's spelling.
+on the environment directory's spelling. A manifest selected on the Make
+command line is passed to the parse-time resolver explicitly, including on
+the older GNU Make used by supported CI hosts.
 
 ## Ownership and layout
 
@@ -43,17 +47,19 @@ Different sources for the same runtime library identity are rejected.
 
 The distributed binary uses relative runtime paths beside its packaged
 libraries. Driver libraries (`libcuda.so.1`, NVML) and linker stubs are never
-packaged as runtime implementations. The installed host driver and GPU device
+packaged as runtime implementations or accepted through a runtime library
+directory, including a symlink alias. The installed host driver and GPU device
 access remain deployment requirements. Build tooling and the complete Pixi
 environment are not required in the final runtime artifact.
 
 ## Delivery and alternatives
 
-Three prerequisite changes can proceed independently: MO storage protection,
-the Sirius Pixi/SDK extension, and MO's configurable GPU toolchain. The latter
-two freeze their manifest contract together. The CGo bridge PR integrates
-their merged revisions and owns combined packaging and the GPU coexistence
-test. No intermediate PR enables embedded execution by default.
+Two toolchain prerequisites can proceed independently: the Sirius Pixi/SDK
+extension and MO's configurable GPU toolchain. They freeze their manifest
+contract together. The CGo bridge PR integrates their merged revisions and
+owns combined packaging and the GPU coexistence test. Direct-TAE storage
+protection is deferred; embedded MO-reader input needs no new TAE or
+directory-lock code. No intermediate PR enables embedded execution by default.
 
 Keeping separate Pixi and Conda providers in one binary leaves library
 selection dependent on search order. Requiring a system toolkit prevents

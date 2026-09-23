@@ -13,6 +13,13 @@
 ifndef MO_GPU_TOOLCHAIN_INCLUDED
 MO_GPU_TOOLCHAIN_INCLUDED := 1
 ifneq ($(strip $(filter-out clean clobber,$(if $(MAKECMDGOALS),$(MAKECMDGOALS),all))),)
+# On older GNU Make, command-line variables are not necessarily in the
+# environment of a parse-time $(shell ...) call. Export provider selectors
+# before invoking the resolver so an explicit manifest cannot be lost.
+export GPU_TOOLCHAIN_MANIFEST CONDA_PREFIX CC CXX HOST_COMPILER
+ifneq ($(origin CUDA_PATH),undefined)
+export CUDA_PATH
+endif
 MO_GPU_RESOLVER := $(dir $(abspath $(lastword $(MAKEFILE_LIST))))mo_gpu_toolchain.py
 MO_GPU_TOOLCHAIN_RECORD := $(shell python3 "$(MO_GPU_RESOLVER)" resolve --format make)
 ifeq ($(strip $(MO_GPU_TOOLCHAIN_RECORD)),)

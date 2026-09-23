@@ -74,6 +74,17 @@ def contained(path, prefix):
         raise ToolchainError(f"toolchain input escapes provider prefix: {path}") from error
 
 
+def forbidden_runtime_path(path, stub_roots):
+    lexical = Path(path)
+    resolved = lexical.resolve()
+    return (
+        "stubs" in lexical.parts
+        or "stubs" in resolved.parts
+        or resolved.name.startswith(("libcuda.so", "libnvidia-"))
+        or any(resolved.is_relative_to(stub) for stub in stub_roots)
+    )
+
+
 def load_manifest(filename):
     safe_path(filename, "file")
     manifest = json.loads(Path(filename).read_text())
@@ -97,6 +108,15 @@ def load_manifest(filename):
         for key in keys:
             for path in directories(section, key):
                 contained(path, prefix)
+    stub_roots = [Path(path).resolve() for path in cuda["stub_library_dirs"]]
+    for path in cuda["library_dirs"] + rapids["library_dirs"]:
+        directory = Path(path)
+        if forbidden_runtime_path(path, stub_roots) or any(
+            candidate.is_file()
+            for pattern in ("libcuda.so*", "libnvidia-*.so*")
+            for candidate in directory.glob(pattern)
+        ):
+            raise ToolchainError("driver libraries/stubs cannot be GPU runtime directories")
     for name in ("libcuvs", "libcuvs_c", "librmm"):
         version = rapids["versions"][name]
         if not isinstance(version, str) or not re.fullmatch(r"26\.0?8(?:\.[0-9]+)*", version):
@@ -154,8 +174,7 @@ def load_manifest(filename):
     for path in roots:
         safe_path(path, "file")
         contained(path, prefix)
-        resolved = Path(path).resolve()
-        if "stubs" in resolved.parts or resolved.name.startswith(("libcuda.so", "libnvidia-")):
+        if forbidden_runtime_path(path, stub_roots):
             raise ToolchainError("driver libraries/stubs cannot be GPU runtime roots")
     root_paths = {str(Path(path).resolve()) for path in roots}
     for name in ("libcuvs.so", "libcuvs_c.so"):

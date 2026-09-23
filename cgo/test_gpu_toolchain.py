@@ -134,6 +134,19 @@ class GPUContractTest(unittest.TestCase):
         self.assertNotIn("/wrong", result.stdout)
         self.assertIn(str(self.prefix / "bin/nvcc"), result.stdout)
 
+    def test_make_command_line_manifest_cannot_fall_back_to_legacy(self):
+        env = dict(self.gpu_env, CONDA_PREFIX="/opt/legacy/gpu")
+        env.pop("GPU_TOOLCHAIN_MANIFEST")
+        result = self.make_gpu("cgo", "-B", "mo.o", f"GPU_TOOLCHAIN_MANIFEST={self.manifest}", env=env)
+        self.assertEqual(result.returncode, 0, result.stderr)
+        self.assertIn(str(self.prefix / "bin/nvcc"), result.stdout)
+        self.assertNotIn("/usr/local/cuda", result.stdout)
+
+        missing = self.root / "missing-toolchain.json"
+        result = self.make_gpu("cgo", "-B", "mo.o", f"GPU_TOOLCHAIN_MANIFEST={missing}", env=env)
+        self.assertNotEqual(result.returncode, 0)
+        self.assertIn("GPU toolchain", result.stderr)
+
     def test_lock_and_artifact_drift_fail_closed(self):
         old = toolchain.resolve(self.env)["MO_GPU_TOOLCHAIN_FINGERPRINT"]
         self.data["pixi"]["environment"] = "renamed"
@@ -171,6 +184,37 @@ class GPUContractTest(unittest.TestCase):
         self.data["artifact_sha256"][str(alias)] = toolchain.digest(alias)
         self.write_manifest()
         with self.assertRaisesRegex(toolchain.ToolchainError, "driver libraries/stubs"):
+            toolchain.resolve(self.env)
+
+    def test_rejects_stub_aliases_in_every_runtime_library_directory(self):
+        stub = str(self.prefix / "targets/x86_64-linux/lib/stubs")
+        alias = self.prefix / "lib/runtime_alias"
+        alias.symlink_to(stub, target_is_directory=True)
+        for section in ("cuda", "rapids"):
+            for path in (stub, str(alias)):
+                with self.subTest(section=section, path=path):
+                    data = copy.deepcopy(self.data)
+                    data[section]["library_dirs"].append(path)
+                    self.write_manifest(data)
+                    with self.assertRaisesRegex(toolchain.ToolchainError, "runtime directories"):
+                        toolchain.resolve(self.env)
+
+        link_only = self.prefix / "link_only"
+        link_only.mkdir()
+        (link_only / "libcuda.so").write_text("injected link-only driver")
+        unmarked_alias = self.prefix / "lib/link_only_alias"
+        unmarked_alias.symlink_to(link_only, target_is_directory=True)
+        data = copy.deepcopy(self.data)
+        data["cuda"]["stub_library_dirs"] = [str(link_only)]
+        data["rapids"]["library_dirs"].append(str(unmarked_alias))
+        self.write_manifest(data)
+        with self.assertRaisesRegex(toolchain.ToolchainError, "runtime directories"):
+            toolchain.resolve(self.env)
+
+        driver = self.prefix / "lib/libcuda.so"
+        driver.write_text("injected driver stub")
+        self.write_manifest()
+        with self.assertRaisesRegex(toolchain.ToolchainError, "runtime directories"):
             toolchain.resolve(self.env)
 
     def test_cpu_and_clean_ignore_invalid_manifest_without_python(self):
