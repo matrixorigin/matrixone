@@ -906,7 +906,7 @@ func TestBuildInputRecordCoversEverySupportedType(t *testing.T) {
 			return vector.AppendFixed(v, types.Datetime(0), true, mp)
 		}},
 		{"timestamp", types.New(types.T_timestamp, 0, 6), func(v *vector.Vector) error {
-			if err := vector.AppendFixed(v, types.Timestamp(types.GetUnixEpochSecs()+1), false, mp); err != nil {
+			if err := vector.AppendFixed(v, types.Timestamp(types.TimestampMinValue), false, mp); err != nil {
 				return err
 			}
 			return vector.AppendFixed(v, types.Timestamp(0), true, mp)
@@ -988,6 +988,24 @@ func TestBuildInputRecordCoversEverySupportedType(t *testing.T) {
 			require.Equal(t, int64(2), record.NumRows())
 			require.False(t, record.Column(0).IsNull(0))
 			require.True(t, record.Column(0).IsNull(1))
+
+			// Exercise the reverse boundary with the same SQL values. Re-encoding
+			// the returned MO vector must reproduce the Arrow values and validity
+			// bitmap for every supported SQL descriptor.
+			returned := vector.NewFunctionResultWrapper(tc.typ, mp)
+			defer returned.Free()
+			require.NoError(t, returned.PreExtendAndReset(2))
+			require.NoError(t, AppendArrowResult(descriptor, record.Column(0), returned, mp))
+			require.Equal(t, 2, returned.GetResultVector().Length())
+			require.False(t, returned.GetResultVector().IsNull(0))
+			require.True(t, returned.GetResultVector().IsNull(1))
+
+			returnedRecord, _, err := BuildInputRecord(
+				[]*vector.Vector{returned.GetResultVector()}, []types.Type{tc.typ}, 2,
+			)
+			require.NoError(t, err)
+			defer returnedRecord.Release()
+			require.True(t, array.Equal(record.Column(0), returnedRecord.Column(0)), tc.name)
 		})
 	}
 }

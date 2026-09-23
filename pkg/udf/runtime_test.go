@@ -45,6 +45,15 @@ func (r *closableRuntime) Close() error {
 	return nil
 }
 
+type readinessRuntime struct {
+	*closableRuntime
+	readyErr error
+}
+
+func (r *readinessRuntime) CheckLanguageReady(context.Context, string) error {
+	return r.readyErr
+}
+
 func TestRuntimeRegistryClosesOwnedRuntimesOnce(t *testing.T) {
 	python := &closableRuntime{language: LanguagePython}
 	runtime, err := NewRuntime(python)
@@ -54,6 +63,63 @@ func TestRuntimeRegistryClosesOwnedRuntimesOnce(t *testing.T) {
 	require.NoError(t, closer.Close())
 	require.NoError(t, closer.Close())
 	require.Equal(t, int32(1), python.closed.Load())
+}
+
+func TestRuntimeRegistryFailsClosedForMissingCapabilities(t *testing.T) {
+	ctx := context.Background()
+	registry, err := NewRuntime()
+	require.NoError(t, err)
+	provider, ok := registry.(RuntimeStatusProvider)
+	require.True(t, ok)
+	snapshot := provider.StatusSnapshot(ctx, LanguagePython)
+	require.Equal(t, RuntimeStatusDisabled, snapshot.ErrorClass)
+	require.Equal(t, RuntimeStatusReasonRuntimeDisabled, snapshot.Reason)
+	require.Error(t, registry.(RuntimeReadiness).CheckLanguageReady(ctx, LanguagePython))
+	require.Error(t, registry.(RuntimeDefinitionValidator).ValidateDefinition(ctx, nil))
+	require.Error(t, registry.Execute(ctx, nil, nil, nil))
+
+	plain, err := NewRuntime(&closableRuntime{language: LanguagePython})
+	require.NoError(t, err)
+	snapshot = plain.(RuntimeStatusProvider).StatusSnapshot(ctx, LanguagePython)
+	require.Equal(t, RuntimeStatusUnavailable, snapshot.ErrorClass)
+	require.Equal(t, RuntimeStatusReasonStatusUnavailable, snapshot.Reason)
+	require.Error(t, plain.(RuntimeReadiness).CheckLanguageReady(ctx, LanguagePython))
+	require.Error(t, plain.(RuntimeDefinitionValidator).ValidateDefinition(ctx, &RoutineDefinition{Language: LanguagePython}))
+	require.Error(t, plain.Execute(ctx, &Invocation{Language: "missing"}, nil, nil))
+}
+
+func TestRuntimeRegistryUsesReadinessFallback(t *testing.T) {
+	ctx := context.Background()
+	ready, err := NewRuntime(&readinessRuntime{closableRuntime: &closableRuntime{language: LanguagePython}})
+	require.NoError(t, err)
+	snapshot := ready.(RuntimeStatusProvider).StatusSnapshot(ctx, LanguagePython)
+	require.True(t, snapshot.Ready)
+	require.Empty(t, snapshot.ErrorClass)
+	require.Equal(t, RuntimeStatusReasonReady, snapshot.Reason)
+
+	cause := context.DeadlineExceeded
+	unavailable, err := NewRuntime(&readinessRuntime{
+		closableRuntime: &closableRuntime{language: LanguagePython},
+		readyErr:        cause,
+	})
+	require.NoError(t, err)
+	snapshot = unavailable.(RuntimeStatusProvider).StatusSnapshot(ctx, LanguagePython)
+	require.True(t, snapshot.Enabled)
+	require.False(t, snapshot.Ready)
+	require.Equal(t, RuntimeStatusUnavailable, snapshot.ErrorClass)
+	require.Equal(t, RuntimeStatusReasonWorkerUnavailable, snapshot.Reason)
+}
+
+func TestNewRuntimeRejectsInvalidAndDuplicateLanguageOwners(t *testing.T) {
+	_, err := NewRuntime(nil)
+	require.Error(t, err)
+	_, err = NewRuntime(&closableRuntime{})
+	require.Error(t, err)
+	_, err = NewRuntime(
+		&closableRuntime{language: LanguagePython},
+		&closableRuntime{language: LanguagePython},
+	)
+	require.Error(t, err)
 }
 
 func TestStatementContextFromMapProducesCanonicalTypedSnapshot(t *testing.T) {
