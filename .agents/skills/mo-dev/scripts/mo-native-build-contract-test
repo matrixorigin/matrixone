@@ -252,6 +252,10 @@ else
     fail "CPU debug semantics override conflicting custom optimization flags"
 fi
 
+# GNU Make versions differ in whether a command-line assignment is present in
+# the environment of $(shell ...) during Makefile parsing. The legacy GPU
+# provider's public contract is the activated CONDA_PREFIX environment.
+export CONDA_PREFIX="$work/conda"
 set +e
 gpu_debug=$(make -C "$repo_root/cgo" -Bn MO_CL_CUDA=1 \
     CONDA_PREFIX="$work/conda" UNAME_S=Linux UNAME_M=x86_64 \
