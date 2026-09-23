@@ -56,6 +56,10 @@ func stringCharsetAndCollationName(typ types.Type) (charset, collation string) {
 	}
 }
 
+func isExplicitUTF8Charset(charset uint8) bool {
+	return charset == types.CharsetUTF8 || charset == types.CharsetUTF8MB4Bin
+}
+
 func charsetAndCollationTypeMatch(_ []overload, inputs []types.Type) checkResult {
 	if len(inputs) == 1 {
 		return newCheckResultWithSuccess(0)
