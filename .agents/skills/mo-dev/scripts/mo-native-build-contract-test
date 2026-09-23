@@ -253,8 +253,9 @@ else
 fi
 
 set +e
-gpu_debug=$(make -C "$repo_root/cgo" -n MO_CL_CUDA=1 \
-    CONDA_PREFIX="$work/conda" HOST_ARCH=x86_64 TARGET_ARCH=x86_64 \
+gpu_debug=$(make -C "$repo_root/cgo" -Bn MO_CL_CUDA=1 \
+    CONDA_PREFIX="$work/conda" UNAME_S=Linux UNAME_M=x86_64 \
+    HOST_ARCH=x86_64 TARGET_ARCH=x86_64 \
     TARGET_OS=linux debug 2>&1)
 gpu_debug_status=$?
 set -e
@@ -264,6 +265,7 @@ if [ "$gpu_debug_status" -eq 0 ] &&
     pass "GPU debug mode reaches both native sub-builds"
 else
     fail "GPU debug mode reaches both native sub-builds"
+    printf 'GPU debug dry-run exited %s:\n%s\n' "$gpu_debug_status" "$gpu_debug" >&2
 fi
 
 root_gpu_dry_run=$(make -C "$repo_root" -n MO_CL_CUDA=1 \
