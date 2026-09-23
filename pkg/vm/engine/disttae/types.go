@@ -369,8 +369,10 @@ type Transaction struct {
 	// CN-created S3 owners whose cleanup failed and outlived their
 	// execution-local lifecycle. Retry them during statement/transaction
 	// teardown rather than dropping ownership.
-	unpublishedS3OwnersMu sync.Mutex
-	unpublishedS3Cleanup  []func(context.Context) error
+	unpublishedS3OwnersMu           sync.Mutex
+	unpublishedS3Cleanup            []func(context.Context) error
+	unpublishedS3ObjectOwners       map[*colexec.UnpublishedS3ObjectOwner]struct{}
+	unpublishedS3ObjectOwnersByName map[string]*colexec.UnpublishedS3ObjectOwner
 	// txn workspace size, includes in memory entries and persisted entries.
 	workspaceSize uint64
 	// the approximation of total size for insert entries

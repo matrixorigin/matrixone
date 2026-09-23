@@ -90,12 +90,10 @@ type s3WriterDelegate struct {
 	// failedWriters retain the full sinker only when Write or Sync fails and
 	// cleanup may still need staged objects or asynchronous pipeline results.
 	failedWriters []*colexec.CNS3Writer
-	// syncedObjectNames are the lightweight cleanup owner after a successful
-	// one-shot Sync. The temporary writer can close as soon as its metadata has
-	// been copied into the delegate's output batches.
-	syncedObjectNames          []string
-	syncedObjectFS             fileservice.FileService
-	syncedObjectCleanupPending bool
+	// Object-name owners outlive successful one-shot writers without retaining
+	// their sinker buffers. The workspace accepts them at entry append or
+	// cleans them if the pipeline aborts before registration.
+	syncedObjectOwners []*colexec.UnpublishedS3ObjectOwner
 	// per-table delete column accumulators (rowid + pk only).
 	deleteBatches []*batch.BatchSet
 	segmentMap    map[string]int32
@@ -752,7 +750,9 @@ func (writer *s3WriterDelegate) sortAndSyncOneTable(
 		return
 	}
 	synced = true
-	writer.retainSyncedObjectNames(fs, stats)
+	if err = writer.retainSyncedObjectNames(proc, fs, stats); err != nil {
+		return err
+	}
 
 	if blockInfoBat, err = s3Writer.FillBlockInfoBat(); err != nil {
 		return
@@ -767,21 +767,110 @@ func (writer *s3WriterDelegate) sortAndSyncOneTable(
 }
 
 func (writer *s3WriterDelegate) retainSyncedObjectNames(
+	proc *process.Process,
 	fs fileservice.FileService,
 	stats []objectio.ObjectStats,
-) {
+) error {
 	if len(stats) == 0 {
-		return
+		return nil
 	}
-	if writer.syncedObjectFS == nil {
-		writer.syncedObjectFS = fs
-	}
+	names := make([]string, 0, len(stats))
 	for i := range stats {
-		writer.syncedObjectNames = append(
-			writer.syncedObjectNames,
-			strings.Clone(stats[i].ObjectName().String()),
+		names = append(names, stats[i].ObjectName().String())
+	}
+	owner, err := colexec.NewUnpublishedS3ObjectOwner(fs, names...)
+	if err != nil {
+		return err
+	}
+	if owner == nil {
+		return nil
+	}
+	writer.syncedObjectOwners = append(writer.syncedObjectOwners, owner)
+	txnOp := proc.GetTxnOperator()
+	if txnOp == nil || txnOp.GetWorkspace() == nil {
+		return moerr.NewInternalErrorNoCtx(
+			"transaction workspace is missing for unpublished S3 object ownership",
 		)
 	}
+	if !colexec.RetainUnpublishedS3ObjectOwner(proc, owner) {
+		return moerr.NewInternalErrorNoCtx(
+			"transaction workspace cannot retain unpublished S3 object ownership",
+		)
+	}
+	return nil
+}
+
+// RetainOutputS3ObjectOwnership installs the cleanup lease in the receiving
+// transaction workspace before a remote producer batch is acknowledged. The
+// workspace later accepts each name only when its write entry is appended.
+func RetainOutputS3ObjectOwnership(proc *process.Process, output *batch.Batch) error {
+	if proc == nil || output == nil || output.IsEmpty() {
+		return nil
+	}
+	if output.VectorCount() < 5 {
+		return moerr.NewInternalErrorNoCtx("invalid multi-update S3 output batch")
+	}
+
+	actions := vector.MustFixedColNoTypeCheck[uint8](output.Vecs[0])
+	data, area := vector.MustVarlenaRawData(output.Vecs[4])
+	names := make([]string, 0)
+	seen := make(map[string]struct{})
+	for i, action := range actions {
+		switch actionType(action) {
+		case actionInsert, actionDelete, actionUpdate:
+		default:
+			continue
+		}
+		metadata := batch.NewOffHeapEmpty()
+		if err := metadata.UnmarshalBinaryWithAnyMp(data[i].GetByteSlice(area), proc.Mp()); err != nil {
+			metadata.Clean(proc.Mp())
+			return err
+		}
+		for column, attr := range metadata.Attrs {
+			switch attr {
+			case catalog.ObjectMeta_ObjectStats:
+				for row := 0; row < metadata.Vecs[column].Length(); row++ {
+					stats := objectio.ObjectStats(metadata.Vecs[column].GetBytesAt(row))
+					name := stats.ObjectName().String()
+					if name != "" {
+						if _, ok := seen[name]; !ok {
+							seen[name] = struct{}{}
+							names = append(names, name)
+						}
+					}
+				}
+			case catalog.BlockMeta_BlockInfo:
+				for row := 0; row < metadata.Vecs[column].Length(); row++ {
+					block := objectio.DecodeBlockInfo(metadata.Vecs[column].GetBytesAt(row))
+					name := block.MetaLocation().Name().String()
+					if name != "" {
+						if _, ok := seen[name]; !ok {
+							seen[name] = struct{}{}
+							names = append(names, name)
+						}
+					}
+				}
+			}
+		}
+		metadata.Clean(proc.Mp())
+	}
+	if len(names) == 0 {
+		return nil
+	}
+	fs, err := colexec.GetSharedFSFromProc(proc)
+	if err != nil {
+		return err
+	}
+	owner, err := colexec.NewUnpublishedS3ObjectOwner(fs, names...)
+	if err != nil {
+		return err
+	}
+	if !colexec.RetainUnpublishedS3ObjectOwner(proc, owner) {
+		return moerr.NewInternalErrorNoCtx(
+			"receiving transaction workspace cannot retain remote S3 object ownership",
+		)
+	}
+	return nil
 }
 
 // finalizeSyncedObjects releases completed object names after the successful
@@ -792,36 +881,29 @@ func (writer *s3WriterDelegate) finalizeSyncedObjects(
 	ctx context.Context,
 	pipelineFailed bool,
 ) error {
-	if len(writer.syncedObjectNames) == 0 {
-		writer.syncedObjectFS = nil
-		writer.syncedObjectCleanupPending = false
+	if len(writer.syncedObjectOwners) == 0 {
 		return nil
 	}
-	if !pipelineFailed && !writer.syncedObjectCleanupPending {
-		writer.syncedObjectNames = nil
-		writer.syncedObjectFS = nil
+	if !pipelineFailed && writer.cleanupErr == nil {
+		// The workspace owner outlives the producer and is retired only by
+		// registration or the remote batch-ownership handoff barrier.
+		writer.syncedObjectOwners = nil
 		return nil
-	}
-
-	writer.syncedObjectCleanupPending = true
-	if writer.syncedObjectFS == nil {
-		return moerr.NewInternalErrorNoCtx("missing file service for synced S3 object cleanup")
 	}
 	cleanupCtx, cancel := context.WithTimeoutCause(
 		context.WithoutCancel(ctx), 10*time.Minute, moerr.CauseCleanUpUselessFiles,
 	)
 	defer cancel()
-	if _, err := ioutil.DeleteUnpublishedObjects(
-		cleanupCtx,
-		writer.syncedObjectFS,
-		writer.syncedObjectNames...,
-	); err != nil {
-		return err
+	pendingOwners := make([]*colexec.UnpublishedS3ObjectOwner, 0, len(writer.syncedObjectOwners))
+	var errs []error
+	for _, owner := range writer.syncedObjectOwners {
+		if err := owner.Cleanup(cleanupCtx); err != nil {
+			errs = append(errs, err)
+			pendingOwners = append(pendingOwners, owner)
+		}
 	}
-	writer.syncedObjectNames = nil
-	writer.syncedObjectFS = nil
-	writer.syncedObjectCleanupPending = false
-	return nil
+	writer.syncedObjectOwners = pendingOwners
+	return errors.Join(errs...)
 }
 
 // initBlockInfoBat creates a new off-heap batch matching the schema of src.

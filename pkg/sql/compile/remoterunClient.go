@@ -33,6 +33,7 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/pb/pipeline"
 	"github.com/matrixorigin/matrixone/pkg/sql/colexec/connector"
 	"github.com/matrixorigin/matrixone/pkg/sql/colexec/dispatch"
+	"github.com/matrixorigin/matrixone/pkg/sql/colexec/multi_update"
 	"github.com/matrixorigin/matrixone/pkg/sql/colexec/value_scan"
 	"github.com/matrixorigin/matrixone/pkg/sql/models"
 	"github.com/matrixorigin/matrixone/pkg/util/fault"
@@ -343,12 +344,19 @@ func receiveMessageFromCnServerIfConnector(s *Scope, sender *messageSenderOnClie
 
 	mp := s.Proc.Mp()
 	nextReg := s.RootOp.(*connector.Connector).Reg
+	retainS3ObjectOwnership := scopeWritesMultiUpdateS3(s)
 	for {
 		bat, end, err = sender.receiveBatch()
 		if err != nil || end || bat == nil {
 			return err
 		}
 		connectorAnalyze.Network(bat)
+		if retainS3ObjectOwnership {
+			if err = multi_update.RetainOutputS3ObjectOwnership(s.Proc, bat); err != nil {
+				bat.Clean(mp)
+				return err
+			}
+		}
 
 		var receiverDone bool
 		if receiverDone, err = forwardRemoteBatchWithContext(sender, nextReg, bat, mp); err != nil {
@@ -363,6 +371,21 @@ func receiveMessageFromCnServerIfConnector(s *Scope, sender *messageSenderOnClie
 			return nil
 		}
 	}
+}
+
+func scopeWritesMultiUpdateS3(s *Scope) bool {
+	if s == nil || s.RootOp == nil {
+		return false
+	}
+	found := false
+	_ = vm.HandleAllOp(s.RootOp, func(_ vm.Operator, op vm.Operator) error {
+		if update, ok := op.(*multi_update.MultiUpdate); ok &&
+			update.Action == multi_update.UpdateWriteS3 && update.IsRemote {
+			found = true
+		}
+		return nil
+	})
+	return found
 }
 
 func receiveMessageFromCnServerIfDispatch(s *Scope, sender *messageSenderOnClient) error {

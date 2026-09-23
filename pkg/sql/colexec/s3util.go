@@ -19,6 +19,8 @@ import (
 	"context"
 	"fmt"
 	"math"
+	"strings"
+	"sync"
 	"time"
 
 	"github.com/matrixorigin/matrixone/pkg/catalog"
@@ -61,6 +63,136 @@ type CNS3Writer struct {
 // failed cleanup after the operator that created the object is released.
 type UnpublishedS3CleanupRetainer interface {
 	RetainUnpublishedS3Cleanup(func(context.Context) error)
+}
+
+// UnpublishedS3ObjectOwner keeps only the persisted object names that have
+// not yet crossed the transaction-workspace registration boundary. It can be
+// retained after the writer's buffers are released, then either accept names
+// as workspace entries are appended or delete the remainder on abort.
+type UnpublishedS3ObjectOwner struct {
+	mu    sync.Mutex
+	fs    fileservice.FileService
+	names map[string]struct{}
+}
+
+func NewUnpublishedS3ObjectOwner(
+	fs fileservice.FileService,
+	names ...string,
+) (*UnpublishedS3ObjectOwner, error) {
+	if fs == nil {
+		return nil, moerr.NewInternalErrorNoCtx("missing file service for unpublished S3 object owner")
+	}
+	owner := &UnpublishedS3ObjectOwner{
+		fs:    fs,
+		names: make(map[string]struct{}, len(names)),
+	}
+	for _, name := range names {
+		if name != "" {
+			owner.names[strings.Clone(name)] = struct{}{}
+		}
+	}
+	if len(owner.names) == 0 {
+		return nil, nil
+	}
+	return owner, nil
+}
+
+func (owner *UnpublishedS3ObjectOwner) Names() []string {
+	owner.mu.Lock()
+	defer owner.mu.Unlock()
+	names := make([]string, 0, len(owner.names))
+	for name := range owner.names {
+		names = append(names, name)
+	}
+	return names
+}
+
+func (owner *UnpublishedS3ObjectOwner) Accept(names ...string) {
+	owner.mu.Lock()
+	defer owner.mu.Unlock()
+	for _, name := range names {
+		delete(owner.names, name)
+	}
+}
+
+func (owner *UnpublishedS3ObjectOwner) AcceptAll() {
+	owner.mu.Lock()
+	clear(owner.names)
+	owner.mu.Unlock()
+}
+
+func (owner *UnpublishedS3ObjectOwner) Pending() bool {
+	owner.mu.Lock()
+	defer owner.mu.Unlock()
+	return len(owner.names) != 0
+}
+
+func (owner *UnpublishedS3ObjectOwner) Cleanup(ctx context.Context) error {
+	owner.mu.Lock()
+	defer owner.mu.Unlock()
+	if len(owner.names) == 0 {
+		return nil
+	}
+	names := make([]string, 0, len(owner.names))
+	for name := range owner.names {
+		names = append(names, name)
+	}
+	if _, err := ioutil.DeleteUnpublishedObjects(ctx, owner.fs, names...); err != nil {
+		return err
+	}
+	clear(owner.names)
+	return nil
+}
+
+type UnpublishedS3ObjectOwnershipWorkspace interface {
+	RetainUnpublishedS3ObjectOwner(*UnpublishedS3ObjectOwner)
+	AcceptUnpublishedS3ObjectNames(...string)
+	HasUnpublishedS3ObjectOwners() bool
+	AcceptAllUnpublishedS3ObjectOwners()
+}
+
+func RetainUnpublishedS3ObjectOwner(
+	proc *process.Process,
+	owner *UnpublishedS3ObjectOwner,
+) bool {
+	if proc == nil || owner == nil || !owner.Pending() || proc.GetTxnOperator() == nil {
+		return false
+	}
+	retainer, ok := proc.GetTxnOperator().GetWorkspace().(UnpublishedS3ObjectOwnershipWorkspace)
+	if !ok {
+		return false
+	}
+	retainer.RetainUnpublishedS3ObjectOwner(owner)
+	return true
+}
+
+func AcceptUnpublishedS3ObjectNames(proc *process.Process, names ...string) {
+	if proc == nil || proc.GetTxnOperator() == nil {
+		return
+	}
+	accepter, ok := proc.GetTxnOperator().GetWorkspace().(UnpublishedS3ObjectOwnershipWorkspace)
+	if !ok {
+		return
+	}
+	accepter.AcceptUnpublishedS3ObjectNames(names...)
+}
+
+func HasUnpublishedS3ObjectOwners(proc *process.Process) bool {
+	if proc == nil || proc.GetTxnOperator() == nil {
+		return false
+	}
+	owners, ok := proc.GetTxnOperator().GetWorkspace().(UnpublishedS3ObjectOwnershipWorkspace)
+	return ok && owners.HasUnpublishedS3ObjectOwners()
+}
+
+func AcceptAllUnpublishedS3ObjectOwners(proc *process.Process) {
+	if proc == nil || proc.GetTxnOperator() == nil {
+		return
+	}
+	owners, ok := proc.GetTxnOperator().GetWorkspace().(UnpublishedS3ObjectOwnershipWorkspace)
+	if ok {
+		owners.AcceptAllUnpublishedS3ObjectOwners()
+	}
 }
 
 // RetainUnpublishedS3Cleanup transfers cleanup ownership to the transaction

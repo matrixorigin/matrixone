@@ -1251,6 +1251,67 @@ func TestTransactionRetriesUnpublishedS3CleanupOwners(t *testing.T) {
 	require.Equal(t, 2, attempts)
 }
 
+func TestWorkspaceAppendAcceptsUnpublishedS3ObjectNames(t *testing.T) {
+	proc := testutil.NewProc(t)
+	defer proc.Free()
+	fs, err := colexec.GetSharedFSFromProc(proc)
+	require.NoError(t, err)
+
+	stats := objectio.NewObjectStatsWithObjectID(
+		objectio.NewObjectidWithSegmentIDAndNum(objectio.NewSegmentid(), 7),
+		false,
+		false,
+		true,
+	)
+	owner, err := colexec.NewUnpublishedS3ObjectOwner(fs, stats.ObjectName().String())
+	require.NoError(t, err)
+	txn := &Transaction{}
+	txn.RetainUnpublishedS3ObjectOwner(owner)
+	require.True(t, txn.HasUnpublishedS3ObjectOwners())
+
+	bat := batch.NewWithSize(2)
+	bat.Attrs = []string{catalog.BlockMeta_BlockInfo, catalog.ObjectMeta_ObjectStats}
+	bat.Vecs[0] = vector.NewVec(types.T_text.ToType())
+	bat.Vecs[1] = vector.NewVec(types.T_binary.ToType())
+	require.NoError(t, vector.AppendBytes(bat.Vecs[1], stats.Marshal(), false, proc.Mp()))
+	bat.SetRowCount(1)
+	defer bat.Clean(proc.Mp())
+
+	// Producer completion alone is not acceptance. The workspace retires the
+	// owner only after the metadata-bearing Entry has actually been appended.
+	require.True(t, owner.Pending())
+	txn.appendWorkspaceEntryLocked(Entry{
+		typ:      INSERT,
+		fileName: stats.ObjectLocation().String(),
+		bat:      bat,
+	})
+	require.Len(t, txn.writes, 1)
+	require.False(t, owner.Pending())
+	require.False(t, txn.HasUnpublishedS3ObjectOwners())
+
+	deleteStats := objectio.NewObjectStatsWithObjectID(
+		objectio.NewObjectidWithSegmentIDAndNum(objectio.NewSegmentid(), 8),
+		false,
+		false,
+		true,
+	)
+	deleteOwner, err := colexec.NewUnpublishedS3ObjectOwner(fs, deleteStats.ObjectName().String())
+	require.NoError(t, err)
+	txn.RetainUnpublishedS3ObjectOwner(deleteOwner)
+	deleteBat := batch.NewWithSize(1)
+	deleteBat.Attrs = []string{catalog.ObjectMeta_ObjectStats}
+	deleteBat.Vecs[0] = vector.NewVec(types.T_binary.ToType())
+	require.NoError(t, vector.AppendBytes(deleteBat.Vecs[0], deleteStats.Marshal(), false, proc.Mp()))
+	deleteBat.SetRowCount(1)
+	defer deleteBat.Clean(proc.Mp())
+	txn.appendWorkspaceEntryLocked(Entry{
+		typ: DELETE,
+		bat: deleteBat,
+	})
+	require.False(t, deleteOwner.Pending(), "DELETE metadata must cross the same registration boundary")
+	require.NoError(t, txn.CleanupUnpublishedS3Objects(context.Background()))
+}
+
 type recordingObjectFileService struct {
 	fileservice.FileService
 	mu              sync.Mutex

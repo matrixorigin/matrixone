@@ -53,13 +53,35 @@ import (
 
 type remoteS3CleanupWorkspace struct {
 	client.Workspace
-	cleanupErr error
-	calls      int
+	cleanupErr    error
+	calls         int
+	pendingOwners bool
+	accepted      bool
+	events        []string
 }
 
 func (w *remoteS3CleanupWorkspace) CleanupUnpublishedS3Objects(context.Context) error {
 	w.calls++
+	w.events = append(w.events, "cleanup")
 	return w.cleanupErr
+}
+
+func (w *remoteS3CleanupWorkspace) HasUnpublishedS3ObjectOwners() bool {
+	return w.pendingOwners
+}
+
+func (w *remoteS3CleanupWorkspace) RetainUnpublishedS3ObjectOwner(
+	owner *colexec.UnpublishedS3ObjectOwner,
+) {
+	w.pendingOwners = owner != nil && owner.Pending()
+}
+
+func (w *remoteS3CleanupWorkspace) AcceptUnpublishedS3ObjectNames(...string) {}
+
+func (w *remoteS3CleanupWorkspace) AcceptAllUnpublishedS3ObjectOwners() {
+	w.accepted = true
+	w.pendingOwners = false
+	w.events = append(w.events, "accept")
 }
 
 func TestResolveRemoteCompileMPoolCap(t *testing.T) {
@@ -94,6 +116,53 @@ func TestRetryUnpublishedS3CleanupDrainsRemoteWorkspace(t *testing.T) {
 
 	require.ErrorIs(t, retryUnpublishedS3Cleanup(proc), cleanupErr)
 	require.Equal(t, 1, workspace.calls)
+}
+
+func TestFinalizeRemoteS3OwnershipWaitsForBatchAcknowledgements(t *testing.T) {
+	t.Run("drained acknowledged stream transfers before cleanup", func(t *testing.T) {
+		workspace := &remoteS3CleanupWorkspace{pendingOwners: true}
+		flow := newPipelineBatchFlow(1, 1024)
+		receiver := messageReceiverOnServer{
+			messageCtx:                    context.Background(),
+			unpublishedS3CleanupWorkspace: workspace,
+			unpublishedS3ObjectOwners:     workspace,
+		}
+
+		require.NoError(t, receiver.finalizeUnpublishedS3Objects(nil, &pipelineStreamLifecycle{
+			batchFlow: flow,
+		}))
+		require.True(t, workspace.accepted)
+		require.Equal(t, []string{"accept", "cleanup"}, workspace.events)
+	})
+
+	t.Run("legacy stream cannot silently drop ownership", func(t *testing.T) {
+		workspace := &remoteS3CleanupWorkspace{pendingOwners: true}
+		receiver := messageReceiverOnServer{
+			messageCtx:                    context.Background(),
+			unpublishedS3CleanupWorkspace: workspace,
+			unpublishedS3ObjectOwners:     workspace,
+		}
+
+		err := receiver.finalizeUnpublishedS3Objects(nil, nil)
+		require.ErrorContains(t, err, "ownership handoff requires batch acknowledgements")
+		require.False(t, workspace.accepted)
+		require.Equal(t, []string{"cleanup"}, workspace.events)
+	})
+
+	t.Run("failed handler keeps cleanup ownership", func(t *testing.T) {
+		workspace := &remoteS3CleanupWorkspace{pendingOwners: true}
+		receiver := messageReceiverOnServer{
+			messageCtx:                    context.Background(),
+			unpublishedS3CleanupWorkspace: workspace,
+			unpublishedS3ObjectOwners:     workspace,
+		}
+		handlerErr := errors.New("remote pipeline failed")
+
+		err := receiver.finalizeUnpublishedS3Objects(handlerErr, nil)
+		require.ErrorIs(t, err, handlerErr)
+		require.False(t, workspace.accepted)
+		require.Equal(t, []string{"cleanup"}, workspace.events)
+	})
 }
 
 // TestWorkspaceCreationInRemoteRun tests that workspace is created early in remote run scenario.

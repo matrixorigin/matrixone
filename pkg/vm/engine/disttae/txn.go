@@ -140,6 +140,46 @@ func (txn *Transaction) unaccountWorkspaceEntryLocked(entry *Entry) {
 func (txn *Transaction) appendWorkspaceEntryLocked(entry Entry) {
 	txn.accountWorkspaceEntryLocked(&entry)
 	txn.writes = append(txn.writes, entry)
+	txn.unpublishedS3OwnersMu.Lock()
+	if len(txn.unpublishedS3ObjectOwnersByName) != 0 {
+		txn.acceptUnpublishedS3ObjectNamesLocked(unpublishedS3ObjectNames(entry))
+	}
+	txn.unpublishedS3OwnersMu.Unlock()
+}
+
+func unpublishedS3ObjectNames(entry Entry) []string {
+	if entry.bat == nil || len(entry.bat.Attrs) == 0 {
+		return nil
+	}
+
+	var statsVec *vector.Vector
+	switch {
+	case entry.typ == INSERT && len(entry.bat.Attrs) > 1 &&
+		entry.bat.Attrs[0] == catalog.BlockMeta_BlockInfo &&
+		entry.bat.Attrs[1] == catalog.ObjectMeta_ObjectStats:
+		statsVec = entry.bat.Vecs[1]
+	case entry.typ == DELETE && entry.bat.Attrs[0] == catalog.ObjectMeta_ObjectStats:
+		statsVec = entry.bat.Vecs[0]
+	}
+	if statsVec == nil {
+		return nil
+	}
+
+	names := make([]string, 0, statsVec.Length())
+	seen := make(map[string]struct{}, statsVec.Length())
+	for i := 0; i < statsVec.Length(); i++ {
+		stats := objectio.ObjectStats(statsVec.GetBytesAt(i))
+		name := stats.ObjectName().String()
+		if name == "" {
+			continue
+		}
+		if _, ok := seen[name]; ok {
+			continue
+		}
+		seen[name] = struct{}{}
+		names = append(names, name)
+	}
+	return names
 }
 
 func (txn *Transaction) releaseWorkspaceEntryBatchLocked(idx int) {
@@ -1383,6 +1423,78 @@ func (txn *Transaction) RetainUnpublishedS3Cleanup(cleanup func(context.Context)
 	txn.unpublishedS3OwnersMu.Unlock()
 }
 
+// RetainUnpublishedS3ObjectOwner keeps the names of synced objects in the
+// workspace until their corresponding entries are appended or the statement
+// is aborted. Unlike a generic cleanup callback, this owner can be reduced as
+// individual objects cross the registration boundary.
+func (txn *Transaction) RetainUnpublishedS3ObjectOwner(
+	owner *colexec.UnpublishedS3ObjectOwner,
+) {
+	if owner == nil || !owner.Pending() {
+		return
+	}
+	txn.unpublishedS3OwnersMu.Lock()
+	txn.retainUnpublishedS3ObjectOwnerLocked(owner)
+	txn.unpublishedS3OwnersMu.Unlock()
+}
+
+func (txn *Transaction) retainUnpublishedS3ObjectOwnerLocked(
+	owner *colexec.UnpublishedS3ObjectOwner,
+) {
+	if txn.unpublishedS3ObjectOwners == nil {
+		txn.unpublishedS3ObjectOwners = make(map[*colexec.UnpublishedS3ObjectOwner]struct{})
+	}
+	if txn.unpublishedS3ObjectOwnersByName == nil {
+		txn.unpublishedS3ObjectOwnersByName = make(map[string]*colexec.UnpublishedS3ObjectOwner)
+	}
+	if _, exists := txn.unpublishedS3ObjectOwners[owner]; exists {
+		return
+	}
+	txn.unpublishedS3ObjectOwners[owner] = struct{}{}
+	for _, name := range owner.Names() {
+		txn.unpublishedS3ObjectOwnersByName[name] = owner
+	}
+}
+
+func (txn *Transaction) AcceptUnpublishedS3ObjectNames(names ...string) {
+	txn.unpublishedS3OwnersMu.Lock()
+	defer txn.unpublishedS3OwnersMu.Unlock()
+	txn.acceptUnpublishedS3ObjectNamesLocked(names)
+}
+
+func (txn *Transaction) acceptUnpublishedS3ObjectNamesLocked(names []string) {
+	for _, name := range names {
+		owner := txn.unpublishedS3ObjectOwnersByName[name]
+		if owner == nil {
+			continue
+		}
+		owner.Accept(name)
+		delete(txn.unpublishedS3ObjectOwnersByName, name)
+		if !owner.Pending() {
+			delete(txn.unpublishedS3ObjectOwners, owner)
+		}
+	}
+}
+
+func (txn *Transaction) HasUnpublishedS3ObjectOwners() bool {
+	txn.unpublishedS3OwnersMu.Lock()
+	defer txn.unpublishedS3OwnersMu.Unlock()
+	return len(txn.unpublishedS3ObjectOwners) != 0
+}
+
+// AcceptAllUnpublishedS3ObjectOwners is used on a remote executor only after
+// the coordinator has acknowledged receipt of every output batch and taken
+// cleanup ownership into its own workspace.
+func (txn *Transaction) AcceptAllUnpublishedS3ObjectOwners() {
+	txn.unpublishedS3OwnersMu.Lock()
+	for owner := range txn.unpublishedS3ObjectOwners {
+		owner.AcceptAll()
+	}
+	txn.unpublishedS3ObjectOwners = nil
+	txn.unpublishedS3ObjectOwnersByName = nil
+	txn.unpublishedS3OwnersMu.Unlock()
+}
+
 func (txn *Transaction) closeTransferFlow(
 	ctx context.Context,
 	flow *TransferFlow,
@@ -1403,11 +1515,18 @@ func (txn *Transaction) CleanupUnpublishedS3Objects(ctx context.Context) error {
 	txn.unpublishedS3OwnersMu.Lock()
 	cleanups := txn.unpublishedS3Cleanup
 	txn.unpublishedS3Cleanup = nil
+	owners := make([]*colexec.UnpublishedS3ObjectOwner, 0, len(txn.unpublishedS3ObjectOwners))
+	for owner := range txn.unpublishedS3ObjectOwners {
+		owners = append(owners, owner)
+	}
+	txn.unpublishedS3ObjectOwners = nil
+	txn.unpublishedS3ObjectOwnersByName = nil
 	txn.unpublishedS3OwnersMu.Unlock()
 
 	var (
-		pending []func(context.Context) error
-		errs    []error
+		pending       []func(context.Context) error
+		pendingOwners []*colexec.UnpublishedS3ObjectOwner
+		errs          []error
 	)
 	for _, cleanup := range cleanups {
 		if err := cleanup(ctx); err != nil {
@@ -1415,9 +1534,18 @@ func (txn *Transaction) CleanupUnpublishedS3Objects(ctx context.Context) error {
 			errs = append(errs, err)
 		}
 	}
-	if len(pending) != 0 {
+	for _, owner := range owners {
+		if err := owner.Cleanup(ctx); err != nil {
+			pendingOwners = append(pendingOwners, owner)
+			errs = append(errs, err)
+		}
+	}
+	if len(pending) != 0 || len(pendingOwners) != 0 {
 		txn.unpublishedS3OwnersMu.Lock()
 		txn.unpublishedS3Cleanup = append(txn.unpublishedS3Cleanup, pending...)
+		for _, owner := range pendingOwners {
+			txn.retainUnpublishedS3ObjectOwnerLocked(owner)
+		}
 		txn.unpublishedS3OwnersMu.Unlock()
 	}
 	return errors.Join(errs...)

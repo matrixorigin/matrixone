@@ -167,6 +167,7 @@ func CnServerMessageHandler(
 					zap.Uint64("outstanding-bytes", bytes))
 			})
 	}
+	handlerErr = receiver.finalizeUnpublishedS3Objects(handlerErr, lifecycle)
 	responseSent := false
 	if receiver.messageTyp != pipeline.Method_StopSending {
 		// stop message only close a running pipeline, there is no need to reply the finished-message.
@@ -203,6 +204,36 @@ func CnServerMessageHandler(
 		receiver.colexecServer.RemoveRelatedPipeline(receiver.clientSession, receiver.messageId)
 	}
 	return err
+}
+
+func (receiver *messageReceiverOnServer) finalizeUnpublishedS3Objects(
+	handlerErr error,
+	lifecycle *pipelineStreamLifecycle,
+) error {
+	if receiver.unpublishedS3CleanupWorkspace == nil {
+		return handlerErr
+	}
+	flowAccepted := handlerErr == nil && lifecycle != nil &&
+		lifecycle.batchFlow != nil && !lifecycle.batchFlow.wasStoppedByReceiver()
+	if flowAccepted && receiver.unpublishedS3ObjectOwners != nil {
+		receiver.unpublishedS3ObjectOwners.AcceptAllUnpublishedS3ObjectOwners()
+	} else if handlerErr == nil && receiver.unpublishedS3ObjectOwners != nil &&
+		receiver.unpublishedS3ObjectOwners.HasUnpublishedS3ObjectOwners() {
+		// Without an ACK-capable stream the worker cannot prove the coordinator
+		// retained ownership before accepting its own cleanup lease.
+		handlerErr = moerr.NewNotSupportedNoCtx(
+			"remote multi-update S3 ownership handoff requires batch acknowledgements",
+		)
+	}
+	cleanupCtx, cancel := context.WithTimeoutCause(
+		context.WithoutCancel(receiver.messageCtx), 10*time.Minute, moerr.CauseCleanUpUselessFiles,
+	)
+	handlerErr = errors.Join(
+		handlerErr,
+		receiver.unpublishedS3CleanupWorkspace.CleanupUnpublishedS3Objects(cleanupCtx),
+	)
+	cancel()
+	return handlerErr
 }
 
 func retryUnpublishedS3Cleanup(proc *process.Process) error {
@@ -475,8 +506,12 @@ func handlePipelineMessage(receiver *messageReceiverOnServer) (err error) {
 					receiver.groupConcatReportingIncomplete = receiver.warningSession.incompleteGroupConcatReporting()
 				}
 				receiver.statementLastInsertID = runCompile.proc.GetStatementLastInsertID()
-				if len(runCompile.scopes) != 0 {
-					err = joinAllocationLifecycleErrors(err, retryUnpublishedS3Cleanup(runCompile.proc))
+				if len(runCompile.scopes) != 0 && runCompile.proc.GetTxnOperator() != nil {
+					workspace := runCompile.proc.GetTxnOperator().GetWorkspace()
+					receiver.unpublishedS3CleanupWorkspace, _ = workspace.(interface {
+						CleanupUnpublishedS3Objects(context.Context) error
+					})
+					receiver.unpublishedS3ObjectOwners, _ = workspace.(colexec.UnpublishedS3ObjectOwnershipWorkspace)
 				}
 				runCompile.clear()
 				return nil
@@ -865,9 +900,13 @@ type messageReceiverOnServer struct {
 
 	needNotReply bool
 
-	requestedTeardownMode pipeline.StreamTeardownMode
-	acceptedTeardownMode  pipeline.StreamTeardownMode
-	streamLifecycle       *pipelineStreamLifecycle
+	requestedTeardownMode         pipeline.StreamTeardownMode
+	acceptedTeardownMode          pipeline.StreamTeardownMode
+	streamLifecycle               *pipelineStreamLifecycle
+	unpublishedS3CleanupWorkspace interface {
+		CleanupUnpublishedS3Objects(context.Context) error
+	}
+	unpublishedS3ObjectOwners colexec.UnpublishedS3ObjectOwnershipWorkspace
 
 	colexecServer *colexec.Server
 
