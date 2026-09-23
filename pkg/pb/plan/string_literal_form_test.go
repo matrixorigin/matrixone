@@ -267,7 +267,7 @@ func TestRequiresMORPCVersion94StrictStringNumericCompatibility(t *testing.T) {
 		"historical CEIL VARCHAR overloads also depend on the compatibility mode")
 }
 
-func TestNumericBinaryLiteralProvenanceFeatureTracksMixedFlowControlRows(t *testing.T) {
+func TestNumericBinaryLiteralProvenanceFeatureTracksFlowControlOutputs(t *testing.T) {
 	const (
 		boolType    int32 = 10
 		int64Type   int32 = 23
@@ -324,20 +324,20 @@ func TestNumericBinaryLiteralProvenanceFeatureTracksMixedFlowControlRows(t *test
 			&Expr{Typ: Type{Id: int64Type}, Expr: &Expr_Lit{Lit: &Literal{Value: &Literal_I64Val{I64Val: 2}}}}), want: true},
 		{name: "explicit cast ends numeric literal provenance", expr: call("coalesce", coalesceFunctionID, varcharType,
 			explicitCast(binaryLiteral("1", StringLiteralForm_STRING_LITERAL_HEX)), textLiteral("1"))},
-		{name: "all marked case branches are uniform", expr: call("case", caseFunctionID, varcharType,
+		{name: "all marked case branches still need propagation", expr: call("case", caseFunctionID, varcharType,
 			column, binaryLiteral("1", StringLiteralForm_STRING_LITERAL_HEX),
-			binaryLiteral("2", StringLiteralForm_STRING_LITERAL_BIT))},
-		{name: "all marked if branches are uniform", expr: call("if", iffFunctionID, varcharType,
+			binaryLiteral("2", StringLiteralForm_STRING_LITERAL_BIT)), want: true},
+		{name: "all marked if branches still need propagation", expr: call("if", iffFunctionID, varcharType,
 			column, binaryLiteral("1", StringLiteralForm_STRING_LITERAL_HEX),
-			binaryLiteral("2", StringLiteralForm_STRING_LITERAL_BIT))},
-		{name: "all marked coalesce is stopped by first value", expr: call("coalesce", coalesceFunctionID, varcharType,
-			binaryLiteral("1", StringLiteralForm_STRING_LITERAL_HEX), textLiteral("1"))},
-		{name: "null coalesce argument does not create ordinary output", expr: call("coalesce", coalesceFunctionID, varcharType,
+			binaryLiteral("2", StringLiteralForm_STRING_LITERAL_BIT)), want: true},
+		{name: "all marked coalesce still needs propagation", expr: call("coalesce", coalesceFunctionID, varcharType,
+			binaryLiteral("1", StringLiteralForm_STRING_LITERAL_HEX), textLiteral("1")), want: true},
+		{name: "null coalesce argument leaves marked output", expr: call("coalesce", coalesceFunctionID, varcharType,
 			&Expr{Typ: Type{Id: varcharType}, Expr: &Expr_Lit{Lit: &Literal{Isnull: true}}},
-			binaryLiteral("1", StringLiteralForm_STRING_LITERAL_HEX))},
-		{name: "marked case plus null only has no mixed values", expr: call("case", caseFunctionID, varcharType,
+			binaryLiteral("1", StringLiteralForm_STRING_LITERAL_HEX)), want: true},
+		{name: "marked case with null else still needs propagation", expr: call("case", caseFunctionID, varcharType,
 			column, binaryLiteral("1", StringLiteralForm_STRING_LITERAL_HEX),
-			&Expr{Typ: Type{Id: varcharType}, Expr: &Expr_Lit{Lit: &Literal{Isnull: true}}})},
+			&Expr{Typ: Type{Id: varcharType}, Expr: &Expr_Lit{Lit: &Literal{Isnull: true}}}), want: true},
 		{name: "binary literal in string condition is not a result branch", expr: call("if", iffFunctionID, varcharType,
 			binaryLiteral("1", StringLiteralForm_STRING_LITERAL_HEX), textLiteral("1"), textLiteral("2"))},
 		{name: "plain text flow control", expr: call("coalesce", coalesceFunctionID, varcharType,

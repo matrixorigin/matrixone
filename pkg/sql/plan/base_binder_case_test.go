@@ -2143,6 +2143,7 @@ func TestBoundFlowControlAfterImplicitStringCastFoldRetainsHexBitNumericRows(t *
 		require.NoError(t, vector.AppendFixedList(input.Vecs[i], values, nil, proc.Mp()))
 	}
 	input.SetRowCount(4)
+	signedType := types.T_int64.ToType()
 
 	column := func(pos int32) *planpb.Expr {
 		return &planpb.Expr{
@@ -2215,6 +2216,51 @@ func TestBoundFlowControlAfterImplicitStringCastFoldRetainsHexBitNumericRows(t *
 			}
 		})
 	}
+
+	t.Run("uniformly marked branches preserve their numeric value", func(t *testing.T) {
+		hex := makePlan2StringConstExprWithType("1", true)
+		hex.GetLit().LiteralForm = planpb.StringLiteralForm_STRING_LITERAL_HEX
+		otherHex := makePlan2StringConstExprWithType("2", true)
+		otherHex.GetLit().LiteralForm = planpb.StringLiteralForm_STRING_LITERAL_HEX
+		flow := bind("case", column(0), hex, otherHex)
+		cast, err := appendSyntaxExplicitCastBeforeExpr(ctx, flow, makePlan2Type(&signedType))
+		require.NoError(t, err)
+		features, err := planpb.RequiredRemoteExpressionFeatures(cast)
+		require.NoError(t, err)
+		require.True(t, features.NumericBinaryLiteralProvenance,
+			"the v93 executor drops even uniform flow-control marker values")
+
+		executor, err := colexec.NewExpressionExecutor(proc, cast)
+		require.NoError(t, err)
+		defer executor.Free()
+		result, err := executor.Eval(proc, []*batch.Batch{input}, nil)
+		require.NoError(t, err)
+		values := vector.MustFixedColNoTypeCheck[int64](result)
+		require.Equal(t, []int64{49, 50, 50, 50}, values)
+	})
+
+	t.Run("marked branch with null fallback still preserves its value", func(t *testing.T) {
+		hex := makePlan2StringConstExprWithType("1", true)
+		hex.GetLit().LiteralForm = planpb.StringLiteralForm_STRING_LITERAL_HEX
+		flow := bind("case", column(0), hex, makePlan2NullConstExprWithType())
+		cast, err := appendSyntaxExplicitCastBeforeExpr(ctx, flow, makePlan2Type(&signedType))
+		require.NoError(t, err)
+		features, err := planpb.RequiredRemoteExpressionFeatures(cast)
+		require.NoError(t, err)
+		require.True(t, features.NumericBinaryLiteralProvenance,
+			"NULL alternatives do not make the selected literal marker compatible with v93")
+
+		executor, err := colexec.NewExpressionExecutor(proc, cast)
+		require.NoError(t, err)
+		defer executor.Free()
+		result, err := executor.Eval(proc, []*batch.Batch{input}, nil)
+		require.NoError(t, err)
+		values := vector.MustFixedColNoTypeCheck[int64](result)
+		require.Equal(t, int64(49), values[0])
+		for row := 1; row < input.RowCount(); row++ {
+			require.True(t, result.IsNull(uint64(row)), "row %d must remain NULL", row)
+		}
+	})
 }
 
 func TestBuildPreparedCaseConditionParameter(t *testing.T) {

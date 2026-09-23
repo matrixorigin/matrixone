@@ -393,10 +393,11 @@ const (
 // the strict-by-default contract. Pre-v94 workers understand the prefix-cast
 // representation but default to permissive conversion when the new SessionInfo
 // marker is absent.
-// NumericBinaryLiteralProvenance requires v94 in every mode only when the
-// selected non-NULL value branches of CASE/IF/COALESCE can produce both a
-// row-level HEX/BIT marker and an ordinary value. This is independent of
-// string-prefix conversion mode.
+// NumericBinaryLiteralProvenance requires v94 in every mode when a
+// CASE/IF/COALESCE result can carry a selected non-NULL HEX/BIT marker. The
+// marker can affect a downstream numeric cast even when every non-NULL branch
+// is marked (or the other branch is NULL), and v93 flow-control executors do
+// not propagate it. This is independent of string-prefix conversion mode.
 // HistoricalStringMathCompatibility requires v94 in every mode: old CEIL/FLOOR
 // VARCHAR overloads used ParseFloat, not the current mode-aware parser.
 type RemoteExpressionFeatures struct {
@@ -828,10 +829,12 @@ func classifyNumericBinaryLiteralValue(expr *Expr) numericBinaryLiteralValueClas
 	return numericBinaryLiteralValueClass{hasOrdinaryValue: true}
 }
 
-// isFlowControlNumericBinaryLiteralSource identifies only a heterogeneous
-// CASE/IF/COALESCE result whose selected non-NULL values include both marked
-// HEX/BIT literals and ordinary values. NULL-only alternatives do not require
-// row metadata because NULL rows never carry numeric-literal provenance.
+// isFlowControlNumericBinaryLiteralSource identifies a CASE/IF/COALESCE result
+// that can carry a selected non-NULL HEX/BIT marker. Uniformly marked values
+// still need the v94 contract: older flow-control executors dropped the scalar
+// marker, so a downstream numeric cast could produce a different result.
+// NULL-only alternatives do not create a marker, but a marked value alongside
+// NULL still does.
 func isFlowControlNumericBinaryLiteralSource(expr *Expr) bool {
 	if expr == nil || expr.GetF() == nil || expr.GetF().Func == nil {
 		return false
@@ -847,7 +850,7 @@ func isFlowControlNumericBinaryLiteralSource(expr *Expr) bool {
 		return false
 	}
 	class := classifyNumericBinaryLiteralValue(expr)
-	return class.hasMarkedValue && class.hasOrdinaryValue
+	return class.hasMarkedValue
 }
 
 func conditionalConditionNeedsMetadataFence(fn *Function, functionID int32, name string) bool {
