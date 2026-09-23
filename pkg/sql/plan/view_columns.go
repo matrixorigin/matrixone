@@ -15,6 +15,7 @@
 package plan
 
 import (
+	"context"
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
 	"github.com/matrixorigin/matrixone/pkg/container/types"
 	planpb "github.com/matrixorigin/matrixone/pkg/pb/plan"
@@ -23,10 +24,25 @@ import (
 
 const ViewColumnsFunctionName = "mo_view_columns"
 
+type internalViewColumnsContextKey struct{}
+
+// WithInternalViewColumns authorizes trusted metadata producers that have
+// already established the subscriber-visible publication boundary.
+func WithInternalViewColumns(ctx context.Context) context.Context {
+	return context.WithValue(ctx, internalViewColumnsContextKey{}, true)
+}
+
+func internalViewColumnsAllowed(ctx context.Context) bool {
+	allowed, _ := ctx.Value(internalViewColumnsContextKey{}).(bool)
+	return allowed
+}
+
 func (builder *QueryBuilder) buildViewColumns(tbl *tree.TableFunction, ctx *BindContext, exprs []*Expr, children []int32) (int32, error) {
-	if err := requireSubscriptionMetadataView(
-		builder.GetContext(), ctx, builder.persistedViewTarget, ViewColumnsFunctionName); err != nil {
-		return 0, err
+	if !internalViewColumnsAllowed(builder.GetContext()) {
+		if err := requireSubscriptionMetadataView(
+			builder.GetContext(), ctx, builder.persistedViewTarget, ViewColumnsFunctionName); err != nil {
+			return 0, err
+		}
 	}
 	if len(exprs) != 1 {
 		return 0, moerr.NewInvalidInput(builder.GetContext(), "mo_view_columns requires one relation identity")

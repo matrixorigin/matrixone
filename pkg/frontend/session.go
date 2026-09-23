@@ -1244,13 +1244,6 @@ func (ses *Session) InheritSequenceData(other *Session) {
 	ses.seqLastValue = other.seqLastValue
 }
 
-// GetCompilerContext exposes the active statement compiler context to
-// origin-CN metadata operators. It must not be used by remotely reconstructed
-// sessions, which deliberately do not implement this capability.
-func (ses *Session) GetCompilerContext() any {
-	return ses.txnCompileCtx
-}
-
 func (ses *Session) GetSqlHelper() *SqlHelper {
 	ses.mu.Lock()
 	defer ses.mu.Unlock()

@@ -28,6 +28,7 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/container/types"
 	"github.com/matrixorigin/matrixone/pkg/container/vector"
 	"github.com/matrixorigin/matrixone/pkg/defines"
+	plan "github.com/matrixorigin/matrixone/pkg/sql/plan"
 	"github.com/matrixorigin/matrixone/pkg/util/executor"
 	"github.com/matrixorigin/matrixone/pkg/vectorindex/sqlexec"
 	"github.com/matrixorigin/matrixone/pkg/vm"
@@ -275,6 +276,9 @@ func (s *subscriptionMetadataState) start(
 		return err
 	}
 	ctx, cancel := context.WithCancel(proc.Ctx)
+	if tf.FuncName == subscriptionColumnsFunctionName {
+		ctx = plan.WithInternalViewColumns(ctx)
+	}
 	s.streamCancel = cancel
 	s.streamCh = make(chan executor.Result, subscriptionResultBufferSize)
 	s.errCh = make(chan error, 1)

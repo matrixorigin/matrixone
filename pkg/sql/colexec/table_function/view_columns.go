@@ -63,8 +63,6 @@ func (s *viewColumnsState) start(tf *TableFunction, proc *process.Process, nthRo
 	compilerValue := proc.GetSessionInfo().CompilerContext
 	if helper := proc.GetSessionInfo().SqlHelper; compilerValue == nil && helper != nil {
 		compilerValue = helper.GetCompilerContext()
-	} else if provider, ok := proc.GetSession().(interface{ GetCompilerContext() any }); ok {
-		compilerValue = provider.GetCompilerContext()
 	}
 	compiler, ok := compilerValue.(plan.CompilerContext)
 	if !ok || compiler == nil {
