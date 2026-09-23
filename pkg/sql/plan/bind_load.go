@@ -153,7 +153,13 @@ func (builder *QueryBuilder) bindExternalScan(
 
 	noCompress := getCompressType(stmt.Param, fileName) == tree.NOCOMPRESS
 	var offset int64 = 0
-	if stmt.Param.Tail.IgnoredLines > 0 && stmt.Param.Parallel && noCompress && !stmt.Param.Local {
+	// A pattern that survived checkFileExist matched more than one file, so the
+	// load fans out whole files and never splits one by byte offset.  The
+	// prescan exists only to seed that split: it would stamp one file's header
+	// length onto FileStartOff for every file and zero Tail.IgnoredLines, where
+	// the CSV reader instead re-applies IGNORE n LINES on each file it opens.
+	if stmt.Param.Tail.IgnoredLines > 0 && stmt.Param.Parallel && noCompress &&
+		!stmt.Param.Local && !LoadFilepathHasGlob(stmt.Param) {
 		offset, err = IgnoredLines(stmt.Param, ctx)
 		if err != nil {
 			return -1, nil, err
