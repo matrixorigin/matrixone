@@ -37,15 +37,10 @@ case "$repo_root" in
 esac
 source_cgo_dir="$repo_root/cgo"
 
-# Compiler identity participates in native provenance. Resolve an explicit
-# provider before validating reusable artifacts, as Make does before building.
-gpu_environment=
-if [ "${MO_CL_CUDA:-}" = "1" ] && [ -n "${GPU_TOOLCHAIN_MANIFEST:-}" ]; then
-    gpu_environment=$(python3 "$source_cgo_dir/mo_gpu_toolchain.py" resolve --format shell)
-    eval "$gpu_environment"
-    CC=$MO_GPU_CC
-    CXX=$MO_GPU_CXX
-    export CC CXX
+# Compiler identity participates in native provenance. Source the Pixi profile
+# before validating reusable artifacts, as Make does before building.
+if [ "${MO_CL_CUDA:-}" = "1" ]; then
+    . "$source_cgo_dir/mo-gpu-env"
 fi
 
 goos=$(go env GOOS)
@@ -183,13 +178,6 @@ if [ "${MO_CL_CUDA:-}" = "1" ]; then
         echo "MO_CL_CUDA=1 is only supported on linux, not $goos" >&2
         exit 1
     fi
-    # One resolver owns the system/Conda and explicit manifest layouts for
-    # Make, native sub-builds and tests. It emits shell-quoted assignments only
-    # after validating the complete selected provider.
-    if [ -z "$gpu_environment" ]; then
-        gpu_environment=$(python3 "$source_cgo_dir/mo_gpu_toolchain.py" resolve --format shell)
-    fi
-    eval "$gpu_environment"
     cuda_cflags=$MO_GPU_CFLAGS
     cuda_ldflags=$MO_GPU_LDFLAGS
     cuda_runtime_paths=":$MO_GPU_RUNTIME_PATH"

@@ -1,37 +1,30 @@
-# Optional native GPU toolchain
+# Native GPU toolchain
 
-Ordinary MatrixOne builds do not require Pixi, Python, CUDA, or RAPIDS. GPU
-support remains opt-in with `MO_CL_CUDA=1`. The existing system CUDA installation
-(`CUDA_PATH`, default `/usr/local/cuda`) plus activated `CONDA_PREFIX` remains
-supported when `GPU_TOOLCHAIN_MANIFEST` is unset.
+Ordinary CPU-only MatrixOne builds do not require Pixi or CUDA. GPU builds
+(`MO_CL_CUDA=1`) use Pixi as their only toolchain and dependency provider;
+system CUDA/Conda GPU builds are no longer supported.
 
-The optional Linux x86_64 Pixi profile provides CUDA 13.3, cuVS 26.08, RMM, and
-GCC 14 without a system CUDA installation or Sirius checkout:
+The Linux x86_64 profile provides CUDA 13.3, cuVS 26.08, RMM, and GCC 14
+without a system CUDA installation or Sirius checkout:
 
 ```sh
 cd optools/gpu
-pixi install --frozen
-pixi run --frozen export-toolchain
-cd ../..
-MO_CL_CUDA=1 GPU_TOOLCHAIN_MANIFEST="$PWD/optools/gpu/toolchain.json" make -j8
+pixi run --frozen make -C ../.. MO_CL_CUDA=1 -j8
 ```
 
-`toolchain.json` is a local build input with absolute paths. Do not commit or
-distribute it. Re-export after changing the Pixi lockfile or environment. A
-Sirius SDK can export the same schema; use its `toolchain.json` when combining
-MO and Sirius so the two components use one CUDA/RAPIDS installation.
-Set `GPU_TOOLCHAIN_MANIFEST` in the environment before invoking Make, as in the
-example above. A Make command-line assignment is rejected because older GNU
-Make versions can omit it from the parse-time resolver's environment.
+For a combined MO/Sirius build, use Sirius's frozen `mo` Pixi environment for
+both components. Do not build MO under its standalone profile and Sirius under
+another prefix. The embedding bridge PR will verify that the native MO
+artifacts and Sirius SDK use the same activated prefix before packaging.
 
-All GPU native sub-builds and Go test entrypoints resolve the manifest through
-`cgo/mo_gpu_toolchain.py`. An explicit manifest must validate completely:
-unsupported platform/version, missing files, changed lockfile, package mismatch,
-or changed hashed artifact stops the build. It never falls back to system CUDA.
-GPU artifact reuse includes this manifest fingerprint in native provenance.
+Make and Go test entrypoints require `PIXI_PROJECT_ROOT`,
+`PIXI_ENVIRONMENT_NAME`, and `CONDA_PREFIX` from Pixi activation and fail if
+required CUDA/cuVS inputs are missing. Native provenance includes the Pixi prefix, selected
+environment, and lockfile digest, so changing the profile invalidates cached
+GPU artifacts.
 
-The resolver exports separate compiler, CUDA target include/library, driver
-stub, and RAPIDS paths. NVCC uses the manifest's host C++ compiler. Driver stubs
+The build uses separate compiler and CUDA target roots inside the Pixi prefix.
+NVCC uses Pixi's host C++ compiler. Driver stubs
 are used only for linking; they are excluded from runtime search paths.
 
 Pixi supplies user-space dependencies. GPU execution still requires compatible
@@ -40,7 +33,7 @@ combined Sirius packaging PR owns runtime dependency-closure staging and the
 cuVS/Sirius coexistence test. Changing dependency managers does not by itself
 reduce the bytes required by the deployed runtime.
 
-Focused tests require Python and Make, with no GPU dependencies:
+Focused contract tests require Python and Make, with no GPU dependencies:
 
 ```sh
 python3 -m unittest discover -s cgo -p 'test_gpu_toolchain.py' -v

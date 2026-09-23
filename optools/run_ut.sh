@@ -137,11 +137,7 @@ LD_LIBRARY_PATH="${THIRDPARTIES_INSTALL_DIR}/lib:${BUILD_WKSP}/cgo"
 
 if [[ -n "${MO_CL_CUDA:-}" ]] ; then
     if [[ ${MO_CL_CUDA} == "1" ]] ; then
-         gpu_toolchain_env=$(python3 "${BUILD_WKSP}/cgo/mo_gpu_toolchain.py" resolve --format shell) || exit 1
-         eval "$gpu_toolchain_env"
-         if [[ "${MO_GPU_PROVIDER}" == pixi ]]; then
-             export CC="$MO_GPU_CC" CXX="$MO_GPU_CXX"
-         fi
+         . "${BUILD_WKSP}/cgo/mo-gpu-env" || exit 1
          CGO_CFLAGS="${CGO_CFLAGS} ${MO_GPU_CFLAGS}"
          CGO_LDFLAGS="${CGO_LDFLAGS} ${MO_GPU_LDFLAGS}"
          LD_LIBRARY_PATH="${MO_GPU_RUNTIME_PATH}${LD_LIBRARY_PATH:+:${LD_LIBRARY_PATH}}"

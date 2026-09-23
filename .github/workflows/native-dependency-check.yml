@@ -63,6 +63,7 @@ jobs:
         run: |
           python3 -m unittest discover -s cgo -p 'test_gpu_toolchain.py' -v
           sh -n \
+            cgo/mo-gpu-env \
             cgo/mo-native-provenance \
             cgo/mo-stage-native-libs \
             .agents/skills/mo-dev/scripts/mo-cgo-test \

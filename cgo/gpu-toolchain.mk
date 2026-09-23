@@ -8,35 +8,49 @@
 # See the License for the specific language governing permissions and
 # limitations under the License.
 
-# Include only from GPU builds. Cleaning a CPU/GPU generation must work after
-# the original toolchain was removed, and must not require Python or Pixi.
+# Include only from GPU builds. Cleaning a native generation must work after
+# the original Pixi environment was removed.
 ifndef MO_GPU_TOOLCHAIN_INCLUDED
 MO_GPU_TOOLCHAIN_INCLUDED := 1
 ifneq ($(strip $(filter-out clean clobber,$(if $(MAKECMDGOALS),$(MAKECMDGOALS),all))),)
-# Older GNU Make does not reliably pass command-line variables into a
-# parse-time $(shell ...) call. Reject that spelling before the resolver can
-# silently select the legacy provider instead of an explicit manifest.
-ifeq ($(origin GPU_TOOLCHAIN_MANIFEST),command line)
-$(error GPU_TOOLCHAIN_MANIFEST must be set in the environment before invoking Make)
+ifeq ($(strip $(PIXI_PROJECT_ROOT)),)
+$(error GPU builds require PIXI_PROJECT_ROOT from pixi run --frozen)
 endif
-MO_GPU_RESOLVER := $(dir $(abspath $(lastword $(MAKEFILE_LIST))))mo_gpu_toolchain.py
-MO_GPU_TOOLCHAIN_RECORD := $(shell python3 "$(MO_GPU_RESOLVER)" resolve --format make)
-ifeq ($(strip $(MO_GPU_TOOLCHAIN_RECORD)),)
-$(error GPU toolchain resolution failed; see diagnostic above)
+ifeq ($(strip $(PIXI_ENVIRONMENT_NAME)),)
+$(error GPU builds require PIXI_ENVIRONMENT_NAME from pixi run --frozen)
 endif
-define MO_GPU_NEWLINE
-
-
-endef
-$(eval $(subst |,$(MO_GPU_NEWLINE),$(MO_GPU_TOOLCHAIN_RECORD)))
-# Both thirdparties/CGo and NVCC's host compilation use the selected compilers.
-ifeq ($(MO_GPU_PROVIDER),pixi)
+ifeq ($(strip $(CONDA_PREFIX)),)
+$(error GPU builds require CONDA_PREFIX from pixi run --frozen)
+endif
+ifneq ($(words $(CONDA_PREFIX) $(PIXI_PROJECT_ROOT)),2)
+$(error GPU build paths cannot contain whitespace)
+endif
+MO_GPU_PREFIX := $(realpath $(CONDA_PREFIX))
+ifeq ($(MO_GPU_PREFIX),)
+$(error CONDA_PREFIX does not name an installed Pixi environment)
+endif
+ifneq ($(MO_GPU_PREFIX),$(realpath $(PIXI_PROJECT_ROOT)/.pixi/envs/$(PIXI_ENVIRONMENT_NAME)))
+$(error CONDA_PREFIX does not match the activated Pixi environment)
+endif
+MO_GPU_CUDA_ROOT := $(MO_GPU_PREFIX)/targets/x86_64-linux
+MO_GPU_CC := $(MO_GPU_PREFIX)/bin/x86_64-conda-linux-gnu-cc
+MO_GPU_CXX := $(MO_GPU_PREFIX)/bin/x86_64-conda-linux-gnu-c++
+MO_GPU_NVCC := $(MO_GPU_PREFIX)/bin/nvcc
+MO_GPU_CUDA_INCLUDE_DIRS := $(MO_GPU_CUDA_ROOT)/include
+MO_GPU_CUDA_LIBRARY_DIRS := $(MO_GPU_CUDA_ROOT)/lib
+MO_GPU_CUDA_STUB_DIRS := $(MO_GPU_CUDA_ROOT)/lib/stubs
+MO_GPU_RAPIDS_INCLUDE_DIRS := $(MO_GPU_PREFIX)/include
+MO_GPU_CFLAGS := -I$(MO_GPU_CUDA_INCLUDE_DIRS) -I$(MO_GPU_RAPIDS_INCLUDE_DIRS)
+MO_GPU_LDFLAGS := -L$(MO_GPU_CUDA_STUB_DIRS) -lcuda -L$(MO_GPU_CUDA_LIBRARY_DIRS) -lcudart -L$(MO_GPU_PREFIX)/lib -lcuvs -lcuvs_c -lstdc++
+MO_GPU_RUNTIME_PATH := $(MO_GPU_CUDA_LIBRARY_DIRS):$(MO_GPU_PREFIX)/lib
+MO_GPU_REQUIRED := $(PIXI_PROJECT_ROOT)/pixi.lock $(MO_GPU_PREFIX)/conda-meta $(MO_GPU_CC) $(MO_GPU_CXX) $(MO_GPU_NVCC) $(MO_GPU_CUDA_INCLUDE_DIRS)/cuda.h $(MO_GPU_CUDA_LIBRARY_DIRS)/libcudart.so $(MO_GPU_CUDA_STUB_DIRS)/libcuda.so $(MO_GPU_RAPIDS_INCLUDE_DIRS)/cuvs/core/c_api.h $(MO_GPU_PREFIX)/lib/libcuvs.so $(MO_GPU_PREFIX)/lib/libcuvs_c.so $(MO_GPU_PREFIX)/lib/librmm.so
+ifneq ($(words $(wildcard $(MO_GPU_REQUIRED))),$(words $(MO_GPU_REQUIRED)))
+$(error incomplete Pixi GPU environment; run pixi install --frozen)
+endif
 override CC := $(MO_GPU_CC)
 override CXX := $(MO_GPU_CXX)
 override HOST_COMPILER := $(MO_GPU_CXX)
 override NVCC := $(MO_GPU_NVCC) -ccbin $(MO_GPU_CXX)
 export CC CXX
-endif
-export GPU_TOOLCHAIN_MANIFEST
 endif
 endif

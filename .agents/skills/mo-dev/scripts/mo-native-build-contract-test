@@ -252,13 +252,29 @@ else
     fail "CPU debug semantics override conflicting custom optimization flags"
 fi
 
-# GNU Make versions differ in whether a command-line assignment is present in
-# the environment of $(shell ...) during Makefile parsing. The legacy GPU
-# provider's public contract is the activated CONDA_PREFIX environment.
-export CONDA_PREFIX="$work/conda"
+# The GPU profile is Pixi-only. A small fake installed environment is enough
+# for Make's dry-run contract; no compiler or CUDA program is executed.
+export PIXI_PROJECT_ROOT="$work/pixi-project"
+export PIXI_ENVIRONMENT_NAME=mo
+export CONDA_PREFIX="$PIXI_PROJECT_ROOT/.pixi/envs/mo"
+mkdir -p "$CONDA_PREFIX/conda-meta"
+for gpu_input in pixi.lock \
+    .pixi/envs/mo/bin/x86_64-conda-linux-gnu-cc \
+    .pixi/envs/mo/bin/x86_64-conda-linux-gnu-c++ \
+    .pixi/envs/mo/bin/nvcc \
+    .pixi/envs/mo/targets/x86_64-linux/include/cuda.h \
+    .pixi/envs/mo/targets/x86_64-linux/lib/libcudart.so \
+    .pixi/envs/mo/targets/x86_64-linux/lib/stubs/libcuda.so \
+    .pixi/envs/mo/include/cuvs/core/c_api.h \
+    .pixi/envs/mo/lib/libcuvs.so \
+    .pixi/envs/mo/lib/libcuvs_c.so \
+    .pixi/envs/mo/lib/librmm.so; do
+    mkdir -p "$PIXI_PROJECT_ROOT/$(dirname "$gpu_input")"
+    : >"$PIXI_PROJECT_ROOT/$gpu_input"
+done
 set +e
 gpu_debug=$(make -C "$repo_root/cgo" -Bn MO_CL_CUDA=1 \
-    CONDA_PREFIX="$work/conda" UNAME_S=Linux UNAME_M=x86_64 \
+    UNAME_S=Linux UNAME_M=x86_64 \
     HOST_ARCH=x86_64 TARGET_ARCH=x86_64 \
     TARGET_OS=linux debug 2>&1)
 gpu_debug_status=$?
@@ -273,7 +289,7 @@ else
 fi
 
 root_gpu_dry_run=$(make -C "$repo_root" -n MO_CL_CUDA=1 \
-    CONDA_PREFIX="$work/conda" MAKE=echo cgo 2>&1)
+    MAKE=echo cgo 2>&1)
 if printf '%s\n' "$root_gpu_dry_run" | grep -q -- \
        'mo-stage-native-libs.*--file' &&
    printf '%s\n' "$root_gpu_dry_run" | grep -q -- \
@@ -302,21 +318,27 @@ native_workflow="$repo_root/.github/workflows/native-dependency-check.yml"
 if grep -Fq 'mocl_kernel64.fatbin /mocl_kernel64.fatbin' "$gpu_dockerfile" &&
    grep -Fq 'mocl_kernel64.fatbin /mocl_kernel64.fatbin' \
        "$gpu_dev_dockerfile" &&
+   grep -Fq 'pixi run --frozen' "$gpu_dockerfile" &&
+   grep -Fq 'pixi run --frozen' "$gpu_dev_dockerfile" &&
+   ! grep -Eq 'conda env create|/usr/local/cuda' "$gpu_dockerfile" &&
+   ! grep -Eq 'conda env create|/usr/local/cuda' "$gpu_dev_dockerfile" &&
+   grep -Fq -- "-name 'libcuda.so*'" "$gpu_dockerfile" &&
+   grep -Fq -- "-name 'libcuda.so*'" "$gpu_dev_dockerfile" &&
    [ "$(grep -Fxc '      - "optools/images/gpu/Dockerfile"' \
        "$native_workflow")" -eq 2 ] &&
    [ "$(grep -Fxc '      - "optools/images/gpu/Dockerfile.dev"' \
        "$native_workflow")" -eq 2 ]; then
-    pass "GPU runtime images package the sidecar and select its native contract"
+    pass "GPU runtime images package the sidecar through the Pixi-only contract"
 else
-    fail "GPU runtime images package the sidecar and select its native contract"
+    fail "GPU runtime images package the sidecar through the Pixi-only contract"
 fi
 
 set +e
 cuda_debug=$(make -C "$repo_root/cgo/cuda" -Bn HOST_ARCH=x86_64 \
-    CONDA_PREFIX="$work/conda" TARGET_ARCH=x86_64 TARGET_OS=linux dbg=1 all 2>&1)
+    TARGET_ARCH=x86_64 TARGET_OS=linux dbg=1 all 2>&1)
 cuda_debug_status=$?
 cuvs_debug=$(make -C "$repo_root/cgo/cuvs" -Bn \
-    CONDA_PREFIX="$work/conda" HOST_ARCH=x86_64 debug 2>&1)
+    HOST_ARCH=x86_64 debug 2>&1)
 cuvs_debug_status=$?
 set -e
 if [ "$cuda_debug_status" -eq 0 ] &&
@@ -342,7 +364,7 @@ check_cuda_debug_override() {
     variable=$1
     description=$2
     cuda_debug_override=$(make -C "$repo_root/cgo/cuda" -Bn \
-        CONDA_PREFIX="$work/conda" HOST_ARCH=x86_64 TARGET_ARCH=x86_64 TARGET_OS=linux dbg=1 \
+        HOST_ARCH=x86_64 TARGET_ARCH=x86_64 TARGET_OS=linux dbg=1 \
         "$variable=-O3 -DPROFILE_A" all 2>&1)
     if printf '%s\n' "$cuda_debug_override" | grep -q -- ' -O0 ' &&
        printf '%s\n' "$cuda_debug_override" | grep -q -- ' -DPROFILE_A ' &&
@@ -360,7 +382,7 @@ check_cuda_debug_override CCFLAGS "base host"
 check_cuda_debug_override EXTRA_CCFLAGS "extra host"
 
 cuda_level_override=$(make -C "$repo_root/cgo/cuda" -Bn \
-    CONDA_PREFIX="$work/conda" HOST_ARCH=x86_64 TARGET_ARCH=x86_64 TARGET_OS=linux dbg=1 \
+    HOST_ARCH=x86_64 TARGET_ARCH=x86_64 TARGET_OS=linux dbg=1 \
     CUDA_OPT_LEVEL=-O3 NVCCFLAGS=-DPROFILE_LEVEL all 2>&1)
 if printf '%s\n' "$cuda_level_override" | grep -q -- ' -O0 ' &&
    printf '%s\n' "$cuda_level_override" | grep -q -- ' -DPROFILE_LEVEL ' &&
@@ -371,7 +393,7 @@ else
 fi
 
 cuvs_debug_override=$(make -C "$repo_root/cgo/cuvs" -Bn \
-    CONDA_PREFIX="$work/conda" HOST_ARCH=x86_64 \
+    HOST_ARCH=x86_64 \
     NVCC_FLAGS='-O3 -DPROFILE_A' LDFLAGS='-O3 -DPROFILE_LINK' debug 2>&1)
 if printf '%s\n' "$cuvs_debug_override" | grep -q -- ' -O0 ' &&
    printf '%s\n' "$cuvs_debug_override" | grep -q -- ' -DPROFILE_A ' &&
@@ -383,7 +405,7 @@ else
 fi
 
 cuvs_profile=$(make -C "$repo_root/cgo/cuvs" -Bn \
-    CONDA_PREFIX="$work/conda" HOST_ARCH=x86_64 \
+    HOST_ARCH=x86_64 \
     NVCC_FLAGS=-DPROFILE_A all 2>&1)
 if printf '%s\n' "$cuvs_profile" | grep -q -- 'nvcc -ccbin [^ ]* -DPROFILE_A -c'; then
     pass "cuVS NVCC_FLAGS is an effective compiler-profile input"

@@ -1,83 +1,52 @@
-FROM nvidia/cuda:13.3.1-cudnn-devel-ubuntu24.04 AS builder
-RUN apt-get update
-RUN apt-get install -y locales
-RUN localedef -i en_US -c -f UTF-8 -A /usr/share/locale/locale.alias en_US.UTF-8
-ENV LANG=en_US.utf8
-RUN export LANG=en_US.utf8
+FROM golang:1.26.4-bookworm AS builder
 
 ARG DEBIAN_FRONTEND=noninteractive
-ENV MOHOME=/matrixone
-ENV PATH="/usr/local/cuda/bin:${PATH}"
-ENV LD_LIBRARY_PATH="/usr/local/cuda/lib64:/usr/local/cuda/lib64/stubs:${MOHOME}/thirdparties/install/lib:${MOHOME}/cgo:${LD_LIBRARY_PATH}"
+RUN apt-get update && apt-get install -y --no-install-recommends \
+    build-essential ca-certificates curl git unzip wget && \
+    rm -rf /var/lib/apt/lists/*
+
+# Pixi is the only CUDA/RAPIDS build provider. Pin the installer result; the
+# checked-in pixi.lock pins the environment installed by --frozen below.
+ENV PIXI_HOME=/opt/pixi
+ENV PATH="${PIXI_HOME}/bin:${PATH}"
+RUN curl -fsSL https://pixi.sh/install.sh -o /tmp/pixi-install.sh && \
+    PIXI_VERSION=v0.81.0 PIXI_HOME=${PIXI_HOME} PIXI_NO_PATH_UPDATE=1 \
+    sh /tmp/pixi-install.sh && rm /tmp/pixi-install.sh
 
 WORKDIR /matrixone
 COPY . .
 
-##################################################
-#           install dependecies                  #
-##################################################
-RUN apt-get update && apt-get install -y wget git build-essential nano unzip curl 
-RUN apt-get update && apt-get install -y g++
-
-##################################################
-#           install conda                        #
-##################################################
-ENV CONDA_PLUGINS_AUTO_ACCEPT_TOS=true
-
-RUN wget https://repo.anaconda.com/miniconda/Miniconda3-latest-Linux-x86_64.sh -O miniconda.sh
-RUN bash miniconda.sh -b -p /root/miniconda
-RUN rm miniconda.sh
-ENV PATH="/root/miniconda/bin:${PATH}"
-RUN /root/miniconda/bin/conda init bash
-
-RUN /root/miniconda/bin/conda env create --name go -f /matrixone/optools/images/gpu/go_cuda-133_arch-x86_64.yaml
-RUN echo "source activate go" >> ~/.bashrc
-
-ENV CONDA_PREFIX=/root/miniconda/envs/go
-ENV PATH="${CONDA_PREFIX}/bin:${PATH}"
-ENV LD_LIBRARY_PATH="${LD_LIBRARY_PATH}:${CONDA_PREFIX}/lib"
-
-# goproxy
 ARG GOPROXY="https://proxy.golang.org,direct"
 ENV GOWORK=off
 RUN go env -w GOPROXY=${GOPROXY}
-
 RUN module_files="$(sha256sum go.mod go.sum)" && \
     go mod download && \
-    if [ "$module_files" != "$(sha256sum go.mod go.sum)" ]; then \
-        echo "go mod download changed go.mod/go.sum; run make mod-tidy"; \
-        exit 1; \
-    fi
+    test "$module_files" = "$(sha256sum go.mod go.sum)"
 
-ENV MO_CL_CUDA=1
-RUN make clean && make -j8
+RUN cd optools/gpu && pixi run --frozen make -C ../.. MO_CL_CUDA=1 -j8
 
-# build runtime docker image
-FROM nvidia/cuda:13.3.1-cudnn-runtime-ubuntu24.04
+# Stage user-space libraries from the selected Pixi environment. Only the
+# top-level CUDA target library directory is copied: its stubs/ subdirectory
+# is link-only and must never enter the runtime image.
+RUN mkdir -p /gpu-runtime && \
+    cp -a optools/gpu/.pixi/envs/default/lib/*.so* /gpu-runtime/ && \
+    cp -a optools/gpu/.pixi/envs/default/targets/x86_64-linux/lib/*.so* /gpu-runtime/ && \
+    test -z "$(find /gpu-runtime -maxdepth 1 \
+      \( -name 'libcuda.so*' -o -name 'libnvidia-*' \) -print -quit)"
+
+FROM ubuntu:24.04
 
 COPY --from=builder /matrixone/mo-service /mo-service
 COPY --from=builder /matrixone/mocl_kernel64.fatbin /mocl_kernel64.fatbin
 COPY --from=builder /matrixone/etc /etc
-COPY --from=builder /matrixone/thirdparties/install/lib/*.so /usr/local/lib
-COPY --from=builder /matrixone/cgo/*.so /usr/local/lib
+COPY --from=builder /matrixone/thirdparties/install/lib/*.so /usr/local/lib/
+COPY --from=builder /matrixone/cgo/*.so /usr/local/lib/
 COPY --from=builder /matrixone/pkg/monlp/tokenizer/dict /usr/local/share/jieba
-COPY --from=builder /root/miniconda/envs/go/lib /root/miniconda/envs/go/lib
+COPY --from=builder /gpu-runtime/ /usr/local/lib/
 
 ENV MO_JIEBA_DICT_DIR=/usr/local/share/jieba
-
-ENV PATH="/usr/local/cuda/bin:${PATH}"
-ENV LD_LIBRARY_PATH="/usr/local/lib:/usr/local/cuda/lib64:/usr/local/cuda/lib64/stubs:${LD_LIBRARY_PATH}"
-ENV CONDA_PREFIX=/root/miniconda/envs/go
-ENV PATH="${CONDA_PREFIX}/bin:${PATH}"
-ENV LD_LIBRARY_PATH="${LD_LIBRARY_PATH}:${CONDA_PREFIX}/lib"
-
-
-# ldconfig and run mo-service to check if the shared library is found
-# disable the check because build don't have gpu runtime access
-# RUN /bin/bash -c ldconfig && /mo-service -h
+ENV LD_LIBRARY_PATH=/usr/local/lib
 
 WORKDIR /
-
 EXPOSE 6001
-
-ENTRYPOINT [ "/mo-service", "-debug-http=:12345", "-launch", "/etc/quickstart/launch.toml"]
+ENTRYPOINT ["/mo-service", "-debug-http=:12345", "-launch", "/etc/quickstart/launch.toml"]

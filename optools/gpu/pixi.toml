@@ -5,8 +5,6 @@ platforms = [{ name = "linux-64-cuda13", platform = "linux-64", cuda = "13.3", g
 requires-pixi = ">=0.71"
 
 [dependencies]
-python = "3.12.*"
-pyyaml = "6.*"
 make = "*"
 cmake = ">=4.0"
 ninja = "*"
@@ -29,6 +27,3 @@ libcuvs = "==26.08.01"
 libraft = "26.08.*"
 librmm = "26.08.*"
 nccl = ">=2.19"
-
-[tasks]
-export-toolchain = "python ../../cgo/mo_gpu_toolchain.py export --prefix $CONDA_PREFIX --lockfile pixi.lock --output toolchain.json"
