@@ -341,6 +341,60 @@ func TestTemporalCompatibilityErrorAndBoundaryHelpers(t *testing.T) {
 	require.Equal(t, types.Time(int64(types.TimeFromClock(false, 838, 59, 59, 0))-int64(-tm)), diff)
 }
 
+func TestTemporalCompatibilitySelectListAndNullBranches(t *testing.T) {
+	proc := newTmpProcess(t)
+
+	// The interval kernels have separate all-row, masked-row, NULL, and
+	// invalid-interval paths. Keep those paths covered independently of the
+	// SQL planner's vector selection.
+	tm := types.TimeFromClock(false, 1, 2, 3, 0)
+	for _, tc := range []struct {
+		name string
+		fn   fEvalFn
+	}{
+		{"time-add", TimeAdd},
+		{"time-sub", TimeSub},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			input := NewFunctionTestInput(types.T_time.ToType(), []types.Time{tm, tm, tm, tm}, []bool{false, true, false, false})
+			interval := NewFunctionTestInput(types.T_int64.ToType(), []int64{1, 1, math.MaxInt64, 1}, []bool{false, false, false, false})
+			unit := NewFunctionTestConstInput(types.T_int64.ToType(), []int64{int64(types.Second)}, nil)
+			result := NewFunctionTestResult(types.T_time.ToType(), false,
+				[]types.Time{types.TimeFromClock(false, 1, 2, 4, 0), 0, 0, 0},
+				[]bool{false, true, true, true})
+			if tc.fn == TimeSub {
+				result = NewFunctionTestResult(types.T_time.ToType(), false,
+					[]types.Time{types.TimeFromClock(false, 1, 2, 2, 0), 0, 0, 0},
+					[]bool{false, true, true, true})
+			}
+			caseDef := NewFunctionTestCase(proc, []FunctionTestInput{input, interval, unit}, result, tc.fn).
+				WithSelectList(&FunctionSelectList{AnyNull: true, SelectList: []bool{false, false, true, true}})
+			ok, info := caseDef.Run()
+			require.True(t, ok, info)
+		})
+	}
+
+	format := NewFunctionTestConstInput(types.T_varchar.ToType(), []string{"%Y"}, nil)
+	for _, tc := range []struct {
+		name string
+		in   FunctionTestInput
+		fn   fEvalFn
+	}{
+		{"unix-int", NewFunctionTestInput(types.T_int64.ToType(), []int64{0, -1}, []bool{false, false}), FromUnixTimeInt64Format},
+		{"unix-uint", NewFunctionTestInput(types.T_uint64.ToType(), []uint64{0, maxUnixTimestampInt + 1}, nil), FromUnixTimeUint64Format},
+		{"unix-float", NewFunctionTestInput(types.T_float64.ToType(), []float64{0, math.NaN()}, nil), FromUnixTimeFloat64Format},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			result := NewFunctionTestResult(types.T_varchar.ToType(), false,
+				[]string{"1970", ""}, []bool{false, true})
+			caseDef := NewFunctionTestCase(proc, []FunctionTestInput{tc.in, format}, result, tc.fn).
+				WithSelectList(&FunctionSelectList{AnyNull: true, SelectList: []bool{false, true}})
+			ok, info := caseDef.Run()
+			require.True(t, ok, info)
+		})
+	}
+}
+
 // Exercise the row-level null, invalid-input, timestamp, and string-domain
 // branches which are not reached by the compact compatibility matrix above.
 // These branches are part of the changed temporal execution contract and must
