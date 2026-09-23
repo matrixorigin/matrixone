@@ -437,6 +437,8 @@ type RemoteExpressionFeatures struct {
 	// LeastGreatestCollationSemantics requires v117 for appended overload 4.
 	// Released overload 0 retains its historical byte-order contract.
 	LeastGreatestCollationSemantics bool
+	// StatementDigestText requires v120 for the MySQL statement-digest function.
+	StatementDigestText bool
 }
 
 func (features RemoteExpressionFeatures) Any() bool {
@@ -471,7 +473,7 @@ func (features RemoteExpressionFeatures) Any() bool {
 		features.DecimalStatisticalResultContracts ||
 		features.TableCollationFunction ||
 		features.InvalidDecimalStatisticalResultContract || features.ScalarDivision ||
-		features.LeastGreatestCollationSemantics
+		features.LeastGreatestCollationSemantics || features.StatementDigestText
 }
 
 func isPlanMediumIntType(typ Type) bool {
