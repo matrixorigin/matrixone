@@ -71,8 +71,12 @@ type AppendMVCCHandle struct {
 	// select (PrepareTS, row range) entries without holding the object lock.
 	// Tree items contain values rather than AppendNode pointers because an
 	// AppendNode's transaction timestamps are updated in place.
-	prepareTree    atomic.Pointer[AppendPrepareSnapshot]
-	appendListener func(txnif.AppendNode) error
+	prepareTree       atomic.Pointer[AppendPrepareSnapshot]
+	appendListener    func(txnif.AppendNode) error
+	appendMaxListener func(types.TS)
+	// appendMaxStateListener is called after a seal/terminal transition. The
+	// argument is true only when the exact max commit TS is published.
+	appendMaxStateListener func(finalized bool)
 }
 
 type appendFinalizedCommit struct {
@@ -196,8 +200,29 @@ func (n *AppendMVCCHandle) SealLocked() {
 // transaction; the last ApplyCommit or ApplyRollback completes publication.
 func (n *AppendMVCCHandle) Seal() {
 	n.LockForAppend()
-	defer n.UnlockForAppend()
 	n.SealLocked()
+	n.UnlockForAppend()
+	n.NotifyFinalizedMax()
+}
+
+func (n *AppendMVCCHandle) NotifyFinalizedMax() {
+	stateListener := n.appendMaxStateListener
+	if stateListener != nil {
+		n.RLock()
+		sealed := n.sealed
+		finalized := n.finalizedCommit.Load() != nil
+		n.RUnlock()
+		if sealed {
+			stateListener(finalized)
+		}
+	}
+	listener := n.appendMaxListener
+	if listener == nil {
+		return
+	}
+	if max, ok := n.GetMaxCommitTS(); ok {
+		listener(max)
+	}
 }
 
 func (n *AppendMVCCHandle) tryFinalizeCommitLocked() {
@@ -630,6 +655,14 @@ func (n *AppendMVCCHandle) DeleteAppendNodeLocked(node *AppendNode) {
 
 func (n *AppendMVCCHandle) SetAppendListener(l func(txnif.AppendNode) error) {
 	n.appendListener = l
+}
+
+func (n *AppendMVCCHandle) SetAppendMaxListener(l func(types.TS)) {
+	n.appendMaxListener = l
+}
+
+func (n *AppendMVCCHandle) SetAppendMaxStateListener(l func(finalized bool)) {
+	n.appendMaxStateListener = l
 }
 
 func (n *AppendMVCCHandle) GetAppendListener() func(txnif.AppendNode) error {

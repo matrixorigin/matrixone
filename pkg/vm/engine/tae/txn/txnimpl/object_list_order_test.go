@@ -129,8 +129,8 @@ func TestForeachIncrementalObjectSkipsFinalizedOldAppendableObject(t *testing.T)
 		},
 	)
 	require.NoError(t, err)
-	// The empty finalized object has maxCommitTS=0 and is skipped. The object
-	// whose max equals from is retained because the optimization is strict <.
-	// An object that has not been sealed/finalized is always retained.
+	// A finalized object whose max commit is strictly before from is skipped.
+	// A sealed object with unfinished append history has no safe max bound and
+	// must remain visible to the scan.
 	require.Equal(t, []int64{2, 3}, visited)
 }

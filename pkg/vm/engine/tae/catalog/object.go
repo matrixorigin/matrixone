@@ -472,6 +472,31 @@ func (entry *ObjectEntry) HasPersistedData() bool {
 	return entry.ObjectPersisted()
 }
 func (entry *ObjectEntry) GetObjectData() data.Object { return entry.objData }
+
+// SetAppendMaxBookmarkScheduler wires bookmark rebuilds to the runtime
+// scheduler that owns the object's lifecycle.
+func (entry *ObjectEntry) SetAppendMaxBookmarkScheduler(schedule func(func() error) error) {
+	entry.table.getObjectList(entry.IsTombstone).SetBookmarkScheduler(schedule)
+}
+
+// MarkAppendMaxPending invalidates commit-prefix bookmarks while this live
+// object's AppendNode history is still changing.
+func (entry *ObjectEntry) MarkAppendMaxPending() {
+	entry.table.getObjectList(entry.IsTombstone).MarkAppendMaxPending(entry.ID())
+}
+
+// MarkAppendMaxSealedWaiting records that the appendable object is closed for
+// new rows but still has an outstanding AppendNode whose terminal commit
+// timestamp is needed to publish the exact object maximum.
+func (entry *ObjectEntry) MarkAppendMaxSealedWaiting() {
+	entry.table.getObjectList(entry.IsTombstone).MarkAppendMaxSealedWaiting(entry.ID())
+}
+
+// UpdateAppendMaxCommit publishes the finalized maximum commit timestamp for
+// this object to its in-memory object-list bookmark.
+func (entry *ObjectEntry) UpdateAppendMaxCommit(max types.TS) {
+	entry.table.getObjectList(entry.IsTombstone).UpdateAppendMaxCommit(entry.ID(), max)
+}
 func (entry *ObjectEntry) GetObjectStats() (stats *objectio.ObjectStats) {
 	return &entry.ObjectStats
 }
