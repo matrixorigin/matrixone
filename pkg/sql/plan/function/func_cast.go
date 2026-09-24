@@ -5871,7 +5871,8 @@ func decimal128ToFloat[T constraints.Float](
 // exceed either the declared precision or the physical DECIMAL representation.
 // Scale reduction can carry into the integer part, so it stays on the checked path.
 func canWidenDecimalScale(from, to types.Type) bool {
-	return from.Oid == to.Oid && from.Width > 0 && from.Width <= from.Oid.ToType().Width &&
+	return from.Oid.IsDecimal() && to.Oid.IsDecimal() && from.Oid.TypeLen() <= to.Oid.TypeLen() &&
+		from.Width > 0 && from.Width <= from.Oid.ToType().Width &&
 		from.Scale >= 0 && from.Scale <= from.Width && to.Scale > from.Scale &&
 		to.Width > 0 && to.Width <= to.Oid.ToType().Width && to.Scale <= to.Width &&
 		to.Width-to.Scale >= from.Width-from.Scale
@@ -5915,6 +5916,7 @@ func decimal64ToDecimal128Array(
 	to *vector.FunctionResult[types.Decimal128], length int, selectList *FunctionSelectList) error {
 	fromtype := from.GetType()
 	totype := to.GetType()
+	safeGrowth := canWidenDecimalScale(fromtype, totype)
 
 	if !from.WithAnyNullValue() {
 		v := vector.MustFixedColWithTypeCheck[types.Decimal64](from.GetSourceVector())
@@ -5926,7 +5928,9 @@ func decimal64ToDecimal128Array(
 
 			result := fromdec
 			var err error
-			if totype.Width < fromtype.Width || totype.Scale != fromtype.Scale {
+			if safeGrowth {
+				result, err = fromdec.Scale(totype.Scale - fromtype.Scale)
+			} else if totype.Width < fromtype.Width || totype.Scale != fromtype.Scale {
 				result, err = types.ParseDecimal128(
 					fromdec.Format(fromtype.Scale),
 					totype.Width,
@@ -5944,7 +5948,7 @@ func decimal64ToDecimal128Array(
 			return nil
 		}
 
-		if totype.Width < fromtype.Width || totype.Scale != fromtype.Scale {
+		if !safeGrowth && (totype.Width < fromtype.Width || totype.Scale != fromtype.Scale) {
 			for i := 0; i < length; i++ {
 				fromdec := types.Decimal128{B0_63: uint64(v[i]), B64_127: 0}
 				if v[i].Sign() {
@@ -6026,7 +6030,15 @@ func decimal64ToDecimal128Array(
 					if v.Sign() {
 						fromdec.B64_127 = ^fromdec.B64_127
 					}
-					if totype.Width < fromtype.Width || totype.Scale != fromtype.Scale {
+					if safeGrowth {
+						result, err := fromdec.Scale(totype.Scale - fromtype.Scale)
+						if err != nil {
+							return err
+						}
+						if err = to.Append(result, false); err != nil {
+							return err
+						}
+					} else if totype.Width < fromtype.Width || totype.Scale != fromtype.Scale {
 						dec := fromdec.Format(fromtype.Scale)
 						result, err := types.ParseDecimal128(dec, totype.Width, totype.Scale)
 						if err != nil {
@@ -6066,7 +6078,29 @@ func decimal64ToDecimal256Array(
 			fromdec.B64_127 = ^fromdec.B64_127
 		}
 		result := types.Decimal256FromDecimal128(fromdec)
-		if totype.Width < fromtype.Width || totype.Scale != fromtype.Scale {
+		if canWidenDecimalScale(fromtype, totype) {
+			var scaled types.Decimal256
+			var err error
+			growth := totype.Scale - fromtype.Scale
+			if fromtype.Width+growth <= types.T_decimal64.ToType().Width {
+				var narrow types.Decimal64
+				narrow, err = v.Scale(growth)
+				wide := types.Decimal128{B0_63: uint64(narrow), B64_127: uint64(int64(narrow) >> 63)}
+				scaled = types.Decimal256FromDecimal128(wide)
+			} else if fromtype.Width+growth <= types.T_decimal128.ToType().Width {
+				var narrow types.Decimal128
+				narrow, err = fromdec.Scale(growth)
+				scaled = types.Decimal256FromDecimal128(narrow)
+			} else {
+				scaled, err = result.Scale(growth)
+			}
+			if err != nil {
+				return err
+			}
+			if err = to.Append(scaled, false); err != nil {
+				return err
+			}
+		} else if totype.Width < fromtype.Width || totype.Scale != fromtype.Scale {
 			dec := result.Format(fromtype.Scale)
 			parsed, err := types.ParseDecimal256(dec, totype.Width, totype.Scale)
 			if err != nil {
@@ -6187,7 +6221,23 @@ func decimal128ToDecimal256(
 			continue
 		}
 		result := types.Decimal256FromDecimal128(v)
-		if totype.Width < fromtype.Width || totype.Scale != fromtype.Scale {
+		if canWidenDecimalScale(fromtype, totype) {
+			var scaled types.Decimal256
+			var err error
+			if fromtype.Width+totype.Scale-fromtype.Scale <= types.T_decimal128.ToType().Width {
+				var narrow types.Decimal128
+				narrow, err = v.Scale(totype.Scale - fromtype.Scale)
+				scaled = types.Decimal256FromDecimal128(narrow)
+			} else {
+				scaled, err = result.Scale(totype.Scale - fromtype.Scale)
+			}
+			if err != nil {
+				return err
+			}
+			if err = to.Append(scaled, false); err != nil {
+				return err
+			}
+		} else if totype.Width < fromtype.Width || totype.Scale != fromtype.Scale {
 			dec, scale := result.Format(fromtype.Scale), totype.Scale
 			if totype.Scale < fromtype.Scale {
 				dec, scale = roundDecimalCoefficient(result.Format(0), fromtype.Scale-totype.Scale), 0
