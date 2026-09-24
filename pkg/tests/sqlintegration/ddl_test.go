@@ -851,7 +851,8 @@ func TestCDCNoFullPublicTakeoverLifecycle(t *testing.T) {
 			})
 			defer restoreBoundary()
 
-			var sqlExec = testutils.GetSQLExecutor(cnA)
+			cnAExec := testutils.GetSQLExecutor(cnA)
+			var sqlExec = cnAExec
 			dbName := strings.ToLower(testutils.GetDatabaseName(t))
 			sinkDBName := dbName + "_takeover_sink"
 			tableName := "cdc_takeover_source"
@@ -890,8 +891,8 @@ func TestCDCNoFullPublicTakeoverLifecycle(t *testing.T) {
 			waitTarget := func(id int) bool {
 				return countRows(fmt.Sprintf("select count(*) from %s.%s where id=%d", sinkDBName, tableName, id)) > 0
 			}
-			readWatermark := func() (types.TS, uint64, bool, error) {
-				res, queryErr := sqlExec.Exec(ctx,
+			readWatermarkFrom := func(queryExec executor.SQLExecutor) (types.TS, uint64, bool, error) {
+				res, queryErr := queryExec.Exec(ctx,
 					"select owner_generation, watermark from mo_catalog.mo_cdc_watermark where task_id = (select task_id from mo_catalog.mo_cdc_task where task_name='"+taskName+"') and db_name='"+dbName+"' and table_name='"+tableName+"'",
 					executor.Options{})
 				if queryErr != nil {
@@ -912,6 +913,9 @@ func TestCDCNoFullPublicTakeoverLifecycle(t *testing.T) {
 				}
 				parsed, parseErr := frontend.CDCStrToTS(watermark)
 				return parsed, generation, true, parseErr
+			}
+			readWatermark := func() (types.TS, uint64, bool, error) {
+				return readWatermarkFrom(sqlExec)
 			}
 			readTaskStart := func() (types.TS, error) {
 				res, queryErr := sqlExec.Exec(ctx,
@@ -1041,10 +1045,10 @@ func TestCDCNoFullPublicTakeoverLifecycle(t *testing.T) {
 			case <-ctx.Done():
 				t.Fatal("CN A did not enter delayed claim-loss cleanup")
 			}
-			// stopAllReaders has completed before the cancel barrier. Re-read the
-			// durable row at that linearization point so B is compared with A's
-			// final committed checkpoint, not an earlier polling sample.
-			checkpointA, generationA, found, err = readWatermark()
+			// stopAllReaders has completed before the cancel barrier. Read A's
+			// final checkpoint through A: B's catalog view can still be behind
+			// A's commits when its task service first observes the new claim.
+			checkpointA, generationA, found, err = readWatermarkFrom(cnAExec)
 			require.NoError(t, err)
 			require.True(t, found)
 			require.True(t, checkpointA.GT(&creationStart),
@@ -1057,12 +1061,16 @@ func TestCDCNoFullPublicTakeoverLifecycle(t *testing.T) {
 			case <-ctx.Done():
 				t.Fatal("CN B did not reach replacement admission")
 			}
-			checkpointBeforeB, _, found, err := readWatermark()
-			require.NoError(t, err)
-			require.True(t, found)
-			// The admission barrier runs before B's owner claim. The durable
-			// generation is checked after B has collected and flushed W below.
-			require.Equal(t, checkpointA, checkpointBeforeB)
+			// The admission barrier runs before B's owner claim. Wait for B to
+			// observe A's final committed row before comparing them; a single
+			// cross-CN catalog read may still return an older visible version.
+			var checkpointBeforeB types.TS
+			require.Eventually(t, func() bool {
+				var generationBeforeB uint64
+				checkpointBeforeB, generationBeforeB, found, err = readWatermark()
+				return err == nil && found && generationBeforeB == generationA && checkpointBeforeB == checkpointA
+			}, 30*time.Second, 200*time.Millisecond,
+				"CN B must observe A's final checkpoint before claiming ownership")
 			mustExec(dbName, "insert into "+tableName+" values (3, 'after_takeover')")
 			// Capture a real source transaction snapshot that demonstrably sees
 			// the post-takeover row.  B's durable checkpoint must reach this
