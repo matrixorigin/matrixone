@@ -802,6 +802,40 @@ func TestCompleteDateFunctionsReturnNullForZeroTemporal(t *testing.T) {
 	}
 }
 
+func TestDateNameFunctionsHonorLocale(t *testing.T) {
+	proc := testutil.NewProcess(t)
+	proc.GetSessionInfo().TimeZone = time.UTC
+	proc.SetResolveVariableFunc(func(name string, _, _ bool) (interface{}, error) {
+		if name == "lc_time_names" {
+			return "fr_FR", nil
+		}
+		return "", nil
+	})
+	date := types.DateFromCalendar(2024, 12, 25)
+	datetime := types.DatetimeFromClock(2024, 12, 25, 1, 2, 3, 0)
+	ts, err := types.ParseTimestamp(time.UTC, "2024-12-25 01:02:03", 0)
+	require.NoError(t, err)
+	for _, tc := range []struct {
+		name  string
+		input FunctionTestInput
+		fn    fEvalFn
+		want  string
+	}{
+		{name: "date day", input: NewFunctionTestInput(types.T_date.ToType(), []types.Date{date}, nil), fn: DateToDayName, want: "mercredi"},
+		{name: "datetime day", input: NewFunctionTestInput(types.T_datetime.ToType(), []types.Datetime{datetime}, nil), fn: DatetimeToDayName, want: "mercredi"},
+		{name: "timestamp day", input: NewFunctionTestInput(types.T_timestamp.ToType(), []types.Timestamp{ts}, nil), fn: TimestampToDayName, want: "mercredi"},
+		{name: "date month", input: NewFunctionTestInput(types.T_date.ToType(), []types.Date{date}, nil), fn: DateToMonthName, want: "décembre"},
+		{name: "datetime month", input: NewFunctionTestInput(types.T_datetime.ToType(), []types.Datetime{datetime}, nil), fn: DatetimeToMonthName, want: "décembre"},
+		{name: "timestamp month", input: NewFunctionTestInput(types.T_timestamp.ToType(), []types.Timestamp{ts}, nil), fn: TimestampToMonthName, want: "décembre"},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			caseTest := NewFunctionTestCase(proc, []FunctionTestInput{tc.input}, NewFunctionTestResult(types.T_varchar.ToType(), false, []string{tc.want}, nil), tc.fn)
+			succeed, info := caseTest.Run()
+			require.True(t, succeed, info)
+		})
+	}
+}
+
 func TestPartialDateFunctionsKeepZeroForZeroTemporal(t *testing.T) {
 	proc := testutil.NewProcess(t)
 

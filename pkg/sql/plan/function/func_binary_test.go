@@ -239,6 +239,56 @@ func TestTemporalConversionHelpers(t *testing.T) {
 	}
 }
 
+func TestMakeDateDecimalAndBoundaryInputs(t *testing.T) {
+	proc := testutil.NewProcess(t)
+	inputYear := NewFunctionTestInput(types.T_varchar.ToType(), []string{"24.5", "69", "70", "0"}, nil)
+	inputDay := NewFunctionTestInput(types.T_varchar.ToType(), []string{"32", "1", "1", "0"}, nil)
+	expected := []types.Date{
+		types.DateFromCalendar(2025, 2, 1),
+		types.DateFromCalendar(2069, 1, 1),
+		types.DateFromCalendar(1970, 1, 1),
+		types.ZeroDate,
+	}
+	tc := NewFunctionTestCase(proc, []FunctionTestInput{inputYear, inputDay, NewFunctionTestInput(types.T_date.ToType(), []types.Date{}, nil)}, NewFunctionTestResult(types.T_date.ToType(), false, expected, []bool{false, false, false, true}), MakeDate)
+	succeed, info := tc.Run()
+	require.True(t, succeed, info)
+}
+
+func TestTimestampTemporalResultPaths(t *testing.T) {
+	proc := testutil.NewProcess(t)
+	proc.GetSessionInfo().TimeZone = time.UTC
+	ts, err := types.ParseTimestamp(time.UTC, "2024-01-02 03:04:05.123456", 6)
+	require.NoError(t, err)
+	unit, err := vector.NewConstBytes(types.T_varchar.ToType(), []byte("MICROSECOND"), 1, proc.Mp())
+	require.NoError(t, err)
+	interval, err := vector.NewConstFixed(types.T_int64.ToType(), int64(1), 1, proc.Mp())
+	require.NoError(t, err)
+	timestamp, err := vector.NewConstFixed(types.T_timestamp.ToTypeWithScale(6), ts, 1, proc.Mp())
+	require.NoError(t, err)
+	resultType := types.T_datetime.ToTypeWithScale(6)
+	result := vector.NewFunctionResultWrapper(resultType, proc.Mp())
+	require.NoError(t, result.PreExtendAndReset(1))
+	require.NoError(t, TimestampAddTimestamp([]*vector.Vector{unit, interval, timestamp}, result, proc, 1, nil))
+	got := vector.GenerateFunctionFixedTypeParameter[types.Datetime](result.GetResultVector())
+	value, isNull := got.GetValue(0)
+	require.False(t, isNull)
+	require.Equal(t, types.DatetimeFromClock(2024, 1, 2, 3, 4, 5, 123457), value)
+
+	date, err := vector.NewConstFixed(types.T_datetime.ToTypeWithScale(6), types.DatetimeFromClock(2024, 1, 2, 3, 4, 5, 123456), 1, proc.Mp())
+	require.NoError(t, err)
+	from, err := vector.NewConstBytes(types.T_varchar.ToType(), []byte("UTC"), 1, proc.Mp())
+	require.NoError(t, err)
+	to, err := vector.NewConstBytes(types.T_varchar.ToType(), []byte("+08:00"), 1, proc.Mp())
+	require.NoError(t, err)
+	convertResult := vector.NewFunctionResultWrapper(resultType, proc.Mp())
+	require.NoError(t, convertResult.PreExtendAndReset(1))
+	require.NoError(t, ConvertTz([]*vector.Vector{date, from, to}, convertResult, proc, 1, nil))
+	converted := vector.GenerateFunctionFixedTypeParameter[types.Datetime](convertResult.GetResultVector())
+	convertedValue, isNull := converted.GetValue(0)
+	require.False(t, isNull)
+	require.Equal(t, types.DatetimeFromClock(2024, 1, 2, 11, 4, 5, 0), convertedValue)
+}
+
 func TestTimestampWindowBoundaryLordHoweFold(t *testing.T) {
 	zone, err := time.LoadLocation("Australia/Lord_Howe")
 	require.NoError(t, err)
