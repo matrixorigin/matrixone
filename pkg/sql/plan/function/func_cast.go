@@ -9346,6 +9346,49 @@ func blobToArray[T types.ArrayElement](
 	return nil
 }
 
+// rejectNonFiniteVectorElems rejects a converted or decoded vector whose float element(s) became
+// NaN or +/-Inf, applying the same finite check the text-to-vector path uses (types'
+// rejectNonFiniteArrayElem). It closes the vector-to-vector CAST narrowing and VEC*_FROM_BASE64
+// decode bypasses (#29084). Integer element targets clamp and can never be non-finite, so they are
+// skipped.
+func rejectNonFiniteVectorElems[T types.ArrayElement](out []T) error {
+	// x-x is 0 for every finite x and NaN for +Inf/-Inf/NaN alike (the metric.CheckFinite* test),
+	// catching NaN and Infinity in one comparison. Each element is tested in its NATIVE precision:
+	// narrowing a float64 to float32 first would turn a legitimately finite value (e.g. 1e300 in a
+	// VECF64) into a false +Inf. float16/bf16 have no native arithmetic, so they widen to float32
+	// (exact, preserving finiteness). Integer targets clamp and can never be non-finite -- skipped.
+	fail := func(d float64) error {
+		return moerr.NewInternalErrorNoCtxf("vector element cannot be NaN or Inf: %v", d)
+	}
+	switch v := any(out).(type) {
+	case []float32:
+		for _, x := range v {
+			if x-x != 0 {
+				return fail(float64(x))
+			}
+		}
+	case []float64:
+		for _, x := range v {
+			if x-x != 0 {
+				return fail(x)
+			}
+		}
+	case []types.Float16:
+		for _, x := range types.ToFloat32Array(v) {
+			if x-x != 0 {
+				return fail(float64(x))
+			}
+		}
+	case []types.BF16:
+		for _, x := range types.ToFloat32Array(v) {
+			if x-x != 0 {
+				return fail(float64(x))
+			}
+		}
+	}
+	return nil
+}
+
 func arrayToArray[I types.ArrayElement, O types.ArrayElement](
 	_ context.Context,
 	from vector.FunctionParameterWrapper[types.Varlena],
@@ -9397,6 +9440,12 @@ func arrayToArray[I types.ArrayElement, O types.ArrayElement](
 			_v := types.BytesToArray[I](v)
 			f32 := types.ToFloat32Array[I](_v)
 			out := types.FromFloat32Array[O](f32)
+			// A finite source can narrow to +/-Inf (e.g. VECF64 1e300 -> VECF32, or a VECF32 that
+			// overflows VECF16/VECBF16). Reject it here so the narrowing CAST enforces the same
+			// finite bound as the text cast and direct insert, instead of persisting Infinity (#29084).
+			if err := rejectNonFiniteVectorElems(out); err != nil {
+				return err
+			}
 			bytes := types.ArrayToBytes[O](out)
 			if err := to.AppendBytes(bytes, false); err != nil {
 				return err
