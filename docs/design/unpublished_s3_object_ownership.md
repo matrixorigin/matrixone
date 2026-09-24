@@ -2,7 +2,9 @@
 
 Issue: [#29257](https://github.com/matrixorigin/matrixone/issues/29257).
 Implementation: [#29290](https://github.com/matrixorigin/matrixone/pull/29290).
-Status: **proposed for independent design review; not approved**.
+Status: **bounded-admission revision reviewed by an independent GPT-6 medium
+agent at commit `4014befc34f726913260d4677a22bae370ae7387`: PASS, 0 design
+blockers. Implementation validation and final review are in progress.**
 
 This document records the design embodied by an already-open implementation PR.
 It is retrospective and does not establish that the earlier commits passed a
@@ -188,17 +190,18 @@ behavior and in-memory-only deletion retry are acceptable for this bug fix,
 whether an unbounded outage backlog requires a separate durable-recovery or
 backpressure design before rollout, and verify that no terminal path accepts
 ownership without all receipts.
-Until an independent review links an exact document revision with a decision,
-the design gate identified in PR review remains open.
+The earlier implementation did not pass a design-first gate. The bounded
+admission revision below received independent model review at the exact commit
+above. That review does not replace maintainer approval, and a material
+implementation deviation requires another design review.
 
 ## Proposed revision: bounded in-process cleanup debt
 
-**Status: design proposal, not implemented or approved.** The implementation
-above currently accepts an unbounded number of failed-cleanup callbacks. The
-following revision is required before claiming a finite CN memory bound. The
-proposal supersedes the current document's unbounded-queue limit, heavy-writer
-fallback, and cleanup-error reporting; other ownership and receipt invariants
-remain in force. The
+**Status: implementation under validation.** The ticket ledger, pre-`Sync`
+admission, name-only retry state, and primary-error preservation are now in the
+PR worktree. This revision supersedes the earlier unbounded-queue limit,
+heavy-writer fallback, and cleanup-error reporting; other ownership and
+receipt invariants remain in force. The
 product choice is to stop admitting new CN S3 uploads when cleanup debt reaches
 its limit; an already-uploaded object must never be abandoned because a queue is
 full. Read-only queries and writes that do not upload new S3 objects remain
@@ -221,9 +224,10 @@ The bound covers object-name tickets, not object bytes on S3. Each retained
 record must contain a validated bounded-length name, one file-service handle,
 and a small fixed-size ownership state. Callbacks handed to the CN retry worker
 must close/drain their sinkers and release `mpool` buffers first, then retain
-only file-service/name records. The queue must not retain a transaction,
-`CNS3Writer`, `TransferFlow`, reader, batch, or process. A callback with no
-object-name tickets is not queued. The worker may group tickets per failed
+only file-service/name records. A lightweight `CNS3Writer` or `TransferFlow`
+shell may hold those records so existing retry callbacks remain valid; their
+sinkers, batches, `mpool` buffers, table, and request context must be nil or
+released. A callback with no object-name tickets is not queued. The worker may group tickets per failed
 stream or rollback, but its queue entry count cannot exceed the ticket count.
 The 65,536 default is a concrete admission ceiling; benchmarked retained bytes
 per ticket and operational headroom must be recorded before rollout. In-flight
@@ -278,10 +282,11 @@ upgrade. A capability/version gate at scheduling time is preferable if mixed
 versions must continue serving all writes; that is a separate compatibility
 decision and must be implemented and validated before making that promise.
 
-Expose current and high-water ticket use, failed reservation count, pending
-cleanup names/tasks, retry age, and Delete failures per CN. Alert before the
-admission ceiling and on sustained cleanup debt. Do not log individual object
-names in a high-cardinality metric. During a storage outage, the system trades
+Current and high-water ticket use and failed reservation counts are recorded by
+the ledger. Export them with pending cleanup names/tasks, retry age, and Delete
+failures per CN before production rollout. Alert before the admission ceiling
+and on sustained cleanup debt. Do not log individual object names in a
+high-cardinality metric. During a storage outage, the system trades
 write availability for bounded memory and retained ownership; successful
 cleanup releases tickets and automatically resumes uploads.
 
