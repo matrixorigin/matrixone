@@ -86,8 +86,15 @@ func TestTemporalCastsHonorTimeTruncateFractional(t *testing.T) {
 		{name: "timestamp to timestamp", input: NewFunctionTestInput(types.T_timestamp.ToTypeWithScale(6), []types.Timestamp{ts}, nil), output: types.T_timestamp.ToTypeWithScale(3), value: []types.Timestamp{ts.TruncateToScaleWithoutRounding(3)}},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
-			tc := NewFunctionTestCase(proc, []FunctionTestInput{tc.input, NewFunctionTestInput(tc.output, nil, nil)}, NewFunctionTestResult(tc.output, false, tc.value, nil), NewCast)
-			succeed, info := tc.Run()
+			var output interface{}
+			switch tc.output.Oid {
+			case types.T_time:
+				output = []types.Time{}
+			case types.T_timestamp:
+				output = []types.Timestamp{}
+			}
+			caseTest := NewFunctionTestCase(proc, []FunctionTestInput{tc.input, NewFunctionTestInput(tc.output, output, nil)}, NewFunctionTestResult(tc.output, false, tc.value, nil), NewCast)
+			succeed, info := caseTest.Run()
 			require.True(t, succeed, info)
 		})
 	}

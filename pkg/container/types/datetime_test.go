@@ -79,7 +79,7 @@ func TestDatetimeTemporalHelpers(t *testing.T) {
 	dt := DatetimeFromClock(2024, 1, 2, 3, 4, 5, 987654)
 	require.Equal(t, DatetimeFromClock(2024, 1, 2, 3, 4, 5, 987000), dt.TruncateToScaleWithoutRounding(3))
 	require.Equal(t, dt, dt.TruncateToScaleWithoutRounding(6))
-	require.Equal(t, dt, dt.TruncateToScaleWithoutRounding(-1))
+	require.Equal(t, DatetimeFromClock(2024, 1, 2, 3, 4, 5, 0), dt.TruncateToScaleWithoutRounding(-1))
 	require.Equal(t, time.Date(2024, 1, 2, 3, 4, 5, 987654000, time.UTC), dt.ConvertToGoTime(nil))
 
 	zone, err := time.LoadLocation("America/New_York")

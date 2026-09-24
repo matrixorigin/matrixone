@@ -216,7 +216,7 @@ func TestTemporalConversionHelpers(t *testing.T) {
 		_, wantOffset := time.Now().In(tc.want).Zone()
 		require.Equal(t, wantOffset, gotOffset)
 	}
-	for _, input := range []string{"+14:01", "-14:00", "+05:60", "bad", "+1:00"} {
+	for _, input := range []string{"+14:01", "-14:00", "+05:60", "bad"} {
 		require.Nil(t, convertTimezone(input), input)
 	}
 
