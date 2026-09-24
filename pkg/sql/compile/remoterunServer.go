@@ -239,22 +239,15 @@ func (receiver *messageReceiverOnServer) finalizeUnpublishedS3Objects(
 	cleanupErr := receiver.unpublishedS3CleanupWorkspace.CleanupUnpublishedS3Objects(cleanupCtx)
 	cancel()
 	if cleanupErr != nil {
+		if receiver.colexecServer != nil {
+			workspace := receiver.unpublishedS3CleanupWorkspace
+			if queueErr := receiver.colexecServer.RetryUnpublishedS3Cleanup(workspace.CleanupUnpublishedS3Objects); queueErr != nil {
+				return errors.Join(handlerErr, cleanupErr, queueErr)
+			}
+		}
 		return errors.Join(handlerErr, cleanupErr)
 	}
 	return handlerErr
-}
-
-func retryUnpublishedS3Cleanup(proc *process.Process) error {
-	if proc == nil || proc.GetTxnOperator() == nil {
-		return nil
-	}
-	cleaner, ok := proc.GetTxnOperator().GetWorkspace().(interface {
-		CleanupUnpublishedS3Objects(context.Context) error
-	})
-	if !ok {
-		return nil
-	}
-	return cleaner.CleanupUnpublishedS3Objects(proc.Ctx)
 }
 
 // waitUntilPipelineBatchFlowDrained preserves the ownership boundary between

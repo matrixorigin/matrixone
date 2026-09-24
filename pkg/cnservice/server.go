@@ -539,6 +539,7 @@ func (s *service) closeService() error {
 			// transactions. Drain both before closing their transaction and RPC
 			// dependencies, while keeping the trace consumer alive for final events.
 			s.waitPipelineHandlers,
+			func() error { return s.colexecServer.CloseUnpublishedS3Cleanup(context.Background()) },
 			s.closeIncrService,
 			// Cancel and join pipeline users before retiring execution runtimes;
 			// otherwise retirement can wait for the work we have not stopped yet.

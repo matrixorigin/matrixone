@@ -17,9 +17,7 @@ package disttae
 import (
 	"context"
 	"errors"
-	"time"
 
-	"github.com/matrixorigin/matrixone/pkg/common/moerr"
 	"github.com/matrixorigin/matrixone/pkg/common/mpool"
 	"github.com/matrixorigin/matrixone/pkg/container/batch"
 	"github.com/matrixorigin/matrixone/pkg/container/types"
@@ -28,6 +26,7 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/objectio"
 	"github.com/matrixorigin/matrixone/pkg/objectio/ioutil"
 	"github.com/matrixorigin/matrixone/pkg/objectio/mergeutil"
+	"github.com/matrixorigin/matrixone/pkg/sql/colexec"
 	plan2 "github.com/matrixorigin/matrixone/pkg/sql/plan"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/readutil"
@@ -415,9 +414,7 @@ func (flow *TransferFlow) CloseWithCleanup(ctx context.Context, failed bool) err
 }
 
 func cleanupUnpublishedTransferSinker(ctx context.Context, sinker *ioutil.Sinker) error {
-	cleanupCtx, cancel := context.WithTimeoutCause(
-		context.WithoutCancel(ctx), 10*time.Minute, moerr.CauseCleanUpUselessFiles,
-	)
+	cleanupCtx, cancel := colexec.UnpublishedS3CleanupContext(ctx)
 	defer cancel()
 	_, err := sinker.DeletePersisted(cleanupCtx)
 	return err
