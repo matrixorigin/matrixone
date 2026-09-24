@@ -1124,12 +1124,49 @@ func TestMultiUpdateFreeTransfersFailedCleanupWithBorrowedBuffer(t *testing.T) {
 	require.Same(t, freeList, delegate.insertFreeLists[0], "the retained sinker still borrows this buffer pool")
 	_, err = baseFS.StatFile(proc.Ctx, objectName)
 	require.NoError(t, err)
+	// A second storage outage during transaction teardown must not close the
+	// borrowed buffer or discard the cleanup callback before the next retry.
+	fs.failed = false
+	require.ErrorIs(t, workspace.cleanups[0](proc.Ctx), deleteErr)
+	require.Same(t, s3Writer, delegate.insertSinkers[0])
+	require.Same(t, freeList, delegate.insertFreeLists[0])
+	_, err = baseFS.StatFile(proc.Ctx, objectName)
+	require.NoError(t, err)
 	require.NoError(t, workspace.cleanups[0](proc.Ctx))
 	require.Nil(t, delegate.insertSinkers)
 	require.Nil(t, delegate.insertFreeLists)
 	require.Zero(t, freeList.Len())
 	_, err = baseFS.StatFile(proc.Ctx, objectName)
 	require.True(t, moerr.IsMoErrCode(err, moerr.ErrFileNotFound), "transaction retry should delete the object, got %v", err)
+}
+
+func TestMultiUpdateFailedOneShotWriterCleanupRetries(t *testing.T) {
+	_, _, proc := prepareTestCtx(t, true)
+	defer proc.Free()
+	baseFS, err := colexec.GetSharedFSFromProc(proc)
+	require.NoError(t, err)
+	deleteErr := errors.New("injected one-shot writer cleanup failure")
+	fs := &failOnceMultiUpdateDeleteFS{FileService: baseFS, failErr: deleteErr}
+	_, tableDef := getTestMainTable()
+	writer := colexec.NewCNS3DataWriter(proc.Mp(), fs, tableDef, 1, false)
+	batches, _ := prepareTestInsertBatchs(proc.Mp(), 1, colexec.DefaultBatchSize, false, false)
+	require.NoError(t, writer.Write(proc.Ctx, batches[0]))
+	batches[0].Clean(proc.Mp())
+	blockInfo, err := writer.SyncAndFillBlockInfoBat(proc.Ctx)
+	require.NoError(t, err)
+	stats := objectio.ObjectStats(blockInfo.Vecs[1].GetBytesAt(0))
+	name := stats.ObjectName().String()
+	blockInfo.Clean(proc.Mp())
+
+	delegate := &s3WriterDelegate{failedWriters: []*colexec.CNS3Writer{nil, writer}}
+	require.ErrorIs(t, delegate.cleanupUnpublishedS3Objects(proc.Ctx), deleteErr)
+	require.Same(t, writer, delegate.failedWriters[1])
+	_, err = baseFS.StatFile(proc.Ctx, name)
+	require.NoError(t, err)
+	require.NoError(t, delegate.cleanupUnpublishedS3Objects(proc.Ctx))
+	require.Empty(t, delegate.failedWriters)
+	_, err = baseFS.StatFile(proc.Ctx, name)
+	require.True(t, moerr.IsMoErrCode(err, moerr.ErrFileNotFound), "%v", err)
 }
 
 func TestMultiUpdateFreeTransfersSyncedObjectCleanup(t *testing.T) {
