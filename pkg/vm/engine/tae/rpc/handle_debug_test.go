@@ -137,6 +137,29 @@ func TestTryGetChangedListFromTableIDBatchReadsCompleteIndex(t *testing.T) {
 	require.Equal(t, uint64(1000+rowCount-1), tableIDs[rowCount-1])
 }
 
+func TestTableIDRangeIntersectsWindow(t *testing.T) {
+	from := types.BuildTS(100, 0)
+	to := types.BuildTS(200, 0)
+	tests := []struct {
+		name       string
+		start, end types.TS
+		want       bool
+	}{
+		{"historical range", types.BuildTS(10, 0), types.BuildTS(99, 0), false},
+		{"ends at lower bound", types.BuildTS(10, 0), from, true},
+		{"spans the window", types.BuildTS(10, 0), types.BuildTS(210, 0), true},
+		{"within the window", types.BuildTS(120, 0), types.BuildTS(180, 0), true},
+		{"starts at upper bound", to, types.BuildTS(210, 0), true},
+		{"future range", types.BuildTS(201, 0), types.BuildTS(210, 0), false},
+		{"invalid range", types.BuildTS(150, 0), types.BuildTS(140, 0), false},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			require.Equal(t, tt.want, tableIDRangeIntersectsWindow(tt.start, tt.end, from, to))
+		})
+	}
+}
+
 func TestHandleDiskCleaner_AddCheckerTTL(t *testing.T) {
 	h := mockTAEHandle(context.Background(), t, &options.Options{})
 
