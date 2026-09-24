@@ -49,6 +49,8 @@ func executeXMLFunction(parameters []*vector.Vector, result vector.FunctionResul
 	rs := vector.MustFunctionResult[types.Varlena](result)
 	var program *xmlXPath
 	var warnings process.WarningAccumulator
+	warnings.SetWarningRetentionForProcess(proc)
+	defer warnings.Reset()
 	for row := uint64(0); row < uint64(length); row++ {
 		if selectList != nil && (selectList.IgnoreAllRow() || selectList.Contains(row)) {
 			if err := rs.AppendBytes(nil, true); err != nil {
