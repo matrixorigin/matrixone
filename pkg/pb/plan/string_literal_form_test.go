@@ -86,6 +86,18 @@ func TestValidateStringLiteralFormRejectsNonStringLiteral(t *testing.T) {
 	require.ErrorContains(t, expr.ValidateStringLiteralForms(), "requires a string literal")
 }
 
+func TestValidateStringLiteralFormsRequireIsBinForHexAndBit(t *testing.T) {
+	for _, form := range []StringLiteralForm{
+		StringLiteralForm_STRING_LITERAL_HEX,
+		StringLiteralForm_STRING_LITERAL_BIT,
+	} {
+		expr := &Expr{Typ: Type{Id: 61}, Expr: &Expr_Lit{Lit: &Literal{
+			Value: &Literal_Sval{Sval: "1"}, LiteralForm: form,
+		}}}
+		require.ErrorContains(t, expr.ValidateStringLiteralForms(), "require isBin provenance")
+	}
+}
+
 func TestValidateStringLiteralFormsInNestedOwner(t *testing.T) {
 	owner := struct{ Expressions []*Expr }{Expressions: []*Expr{{
 		Typ: Type{Id: 61}, Expr: &Expr_Lit{Lit: &Literal{

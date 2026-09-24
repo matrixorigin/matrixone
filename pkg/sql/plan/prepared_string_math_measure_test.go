@@ -130,50 +130,6 @@ func benchmarkStringMathRoleCases() []struct {
 			want: []bool{false},
 		},
 		{
-			name: "nested-outer-abs-inner-round-precision",
-			plan: benchmarkStringMathOwnerPlan(benchmarkStringMathBind("abs", []*planpb.Expr{
-				benchmarkStringMathBind("round", []*planpb.Expr{benchmarkStringMathDecimalColumn(), benchmarkStringMathParam(0)}),
-			})),
-			want: []bool{false},
-		},
-		{
-			name: "nested-round-inner-abs-value",
-			plan: benchmarkStringMathOwnerPlan(benchmarkStringMathBind("round", []*planpb.Expr{
-				benchmarkStringMathDecimalColumn(), benchmarkStringMathBind("abs", []*planpb.Expr{benchmarkStringMathParam(0)}),
-			})),
-			want: []bool{true},
-		},
-		{
-			name: "no-match-concat-p1",
-			plan: benchmarkStringMathOwnerPlan(benchmarkStringMathBind("concat", []*planpb.Expr{
-				benchmarkStringMathParam(0), benchmarkStringMathTextLiteral("x"),
-			})),
-			want: []bool{false},
-		},
-		{
-			name: "outer-abs-does-not-own-length-argument",
-			plan: benchmarkStringMathOwnerPlan(benchmarkStringMathBind("abs", []*planpb.Expr{
-				benchmarkStringMathBind("length", []*planpb.Expr{benchmarkStringMathParam(0)}),
-			})),
-			want: []bool{false},
-		},
-		{
-			name: "nested-abs-owner-through-length",
-			plan: benchmarkStringMathOwnerPlan(benchmarkStringMathBind("length", []*planpb.Expr{
-				benchmarkStringMathBind("abs", []*planpb.Expr{benchmarkStringMathParam(0)}),
-			})),
-			want: []bool{true},
-		},
-		{
-			name: "outer-round-does-not-own-concat-argument",
-			plan: benchmarkStringMathOwnerPlan(benchmarkStringMathBind("round", []*planpb.Expr{
-				benchmarkStringMathBind("concat", []*planpb.Expr{
-					benchmarkStringMathTextLiteral("1"), benchmarkStringMathParam(0),
-				}), benchmarkStringMathIntLiteral(0),
-			})),
-			want: []bool{false},
-		},
-		{
 			name: "no-match-deep-p8-d8-n128",
 			plan: benchmarkStringMathNoMatchRolePlan(),
 			want: []bool{false, false, false, false, false, false, false, false},

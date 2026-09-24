@@ -783,6 +783,42 @@ func TestBuildDefaultExprFitsVarchar(t *testing.T) {
 	require.Equal(t, "abc", defaultValue.Expr.GetLit().GetSval())
 }
 
+func TestBuildDefaultExprBinaryLiteralRoundTrip(t *testing.T) {
+	proc := testutil.NewProcess(t)
+
+	for _, sql := range []string{
+		"create table t (a varchar(255) default b'0')",
+		"create table t (a varchar(255) default x'30')",
+	} {
+		t.Run(sql, func(t *testing.T) {
+			stmt, err := mysql.ParseOne(context.Background(), sql, 1)
+			require.NoError(t, err)
+
+			createTable, ok := stmt.(*tree.CreateTable)
+			require.True(t, ok)
+			colDef, ok := createTable.Defs[0].(*tree.ColumnTableDef)
+			require.True(t, ok)
+
+			typ, err := getTypeFromAst(context.Background(), colDef.Type)
+			require.NoError(t, err)
+
+			def, err := buildDefaultExpr(colDef, typ, proc)
+			require.NoError(t, err)
+			require.True(t, def.Expr.GetLit().GetIsBin())
+			require.Equal(t, plan.StringLiteralForm_STRING_LITERAL_BINARY_INTRODUCER,
+				def.Expr.GetLit().GetLiteralForm())
+
+			encoded, err := def.MarshalBinary()
+			require.NoError(t, err)
+			decoded := new(plan.Default)
+			require.NoError(t, decoded.UnmarshalBinary(encoded))
+			require.True(t, decoded.Expr.GetLit().GetIsBin())
+			require.Equal(t, plan.StringLiteralForm_STRING_LITERAL_BINARY_INTRODUCER,
+				decoded.Expr.GetLit().GetLiteralForm())
+		})
+	}
+}
+
 func TestBuildPlanFencesHexDefaultBeforeConstantFold(t *testing.T) {
 	mock := NewMockOptimizer(false)
 	proc := mock.CurrentContext().GetProcess()

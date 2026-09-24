@@ -64,8 +64,8 @@ func (m *Expr) validateStringLiteralForm(lit *Literal) error {
 	}
 	binarySyntax := lit.LiteralForm == StringLiteralForm_STRING_LITERAL_HEX ||
 		lit.LiteralForm == StringLiteralForm_STRING_LITERAL_BIT
-	if lit.IsBin != binarySyntax {
-		return moerr.NewInvalidInputNoCtx("string literal form and isBin disagree")
+	if binarySyntax && !lit.IsBin {
+		return moerr.NewInvalidInputNoCtx("hex and bit string literal forms require isBin provenance")
 	}
 	return nil
 }

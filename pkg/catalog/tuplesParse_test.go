@@ -22,6 +22,7 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/container/types"
 	"github.com/matrixorigin/matrixone/pkg/container/vector"
 	"github.com/matrixorigin/matrixone/pkg/pb/api"
+	"github.com/matrixorigin/matrixone/pkg/pb/plan"
 	"github.com/stretchr/testify/require"
 )
 
@@ -48,6 +49,41 @@ func mustToPBBatch(bat *batch.Batch) *api.Batch {
 		rbat.Vecs = append(rbat.Vecs, pbVector)
 	}
 	return rbat
+}
+
+func TestCollectInsertColBatchReturnsDefaultDecodeError(t *testing.T) {
+	mp := mpool.MustNewZero()
+	packer := types.NewPacker()
+	defer packer.Close()
+
+	columnType := types.T_varchar.ToType()
+	typ, err := types.Encode(&columnType)
+	require.NoError(t, err)
+	badDefault, err := types.Encode(&plan.Default{Expr: &plan.Expr{
+		Typ: plan.Type{Id: int32(types.T_varchar)},
+		Expr: &plan.Expr_Lit{Lit: &plan.Literal{
+			Value:       &plan.Literal_Sval{Sval: "x"},
+			LiteralForm: plan.StringLiteralForm(99),
+		}},
+	}})
+	require.NoError(t, err)
+
+	columnBatch, err := GenCreateColumnTuples([]Column{{
+		TableId: 10001, Name: "col1", Typ: typ, HasDef: 1, DefaultExpr: badDefault,
+	}}, mp, packer)
+	require.NoError(t, err)
+	defer columnBatch.Clean(mp)
+
+	entry := &api.Entry{
+		DatabaseId: MO_CATALOG_ID,
+		TableId:    MO_COLUMNS_ID,
+		Bat:        mustToPBBatch(columnBatch),
+	}
+	var errReturned error
+	require.NotPanics(t, func() {
+		_, errReturned = collectInsertColBatch(entry, &CreateTable{TableId: 10001})
+	})
+	require.ErrorContains(t, errReturned, "invalid string literal form 99")
 }
 
 // improve test coverage
