@@ -43,6 +43,113 @@ type baseTable struct {
 	tableSpace *tableSpace
 }
 
+// duplicatedRowIDs keeps candidates from appendable and non-appendable
+// objects separate. A merge output can be found before the replacement row in
+// an appendable object, but its row may be removed by a transferred tombstone.
+// Keeping both candidates until tombstone filtering is complete lets the
+// caller fall back to the live replacement row instead of treating the key as
+// absent.
+type duplicatedRowIDs struct {
+	appendable         containers.Vector
+	nonAppendable      containers.Vector
+	appendableByKey    [][]int
+	nonAppendableByKey [][]int
+}
+
+func newDuplicatedRowIDs(
+	pool *containers.VectorPool,
+	length int,
+) (*duplicatedRowIDs, error) {
+	rowIDs := &duplicatedRowIDs{
+		appendable:         pool.GetVector(&objectio.RowidType),
+		nonAppendable:      pool.GetVector(&objectio.RowidType),
+		appendableByKey:    make([][]int, length),
+		nonAppendableByKey: make([][]int, length),
+	}
+	return rowIDs, nil
+}
+
+func (r *duplicatedRowIDs) Close() {
+	if r == nil {
+		return
+	}
+	if r.appendable != nil {
+		r.appendable.Close()
+		r.appendable = nil
+	}
+	if r.nonAppendable != nil {
+		r.nonAppendable.Close()
+		r.nonAppendable = nil
+	}
+}
+
+func (r *duplicatedRowIDs) add(appendable bool, key int, rowID types.Rowid) {
+	var (
+		rows containers.Vector
+		keys *[][]int
+	)
+	if appendable {
+		rows = r.appendable
+		keys = &r.appendableByKey
+	} else {
+		rows = r.nonAppendable
+		keys = &r.nonAppendableByKey
+	}
+	idx := rows.Length()
+	rows.Append(rowID, false)
+	(*keys)[key] = append((*keys)[key], idx)
+}
+
+func (r *duplicatedRowIDs) HasCandidate() bool {
+	for i := range r.appendableByKey {
+		for _, idx := range r.appendableByKey[i] {
+			if !r.appendable.IsNull(idx) {
+				return true
+			}
+		}
+		for _, idx := range r.nonAppendableByKey[i] {
+			if !r.nonAppendable.IsNull(idx) {
+				return true
+			}
+		}
+	}
+	return false
+}
+
+func (r *duplicatedRowIDs) firstLive(
+	rows containers.Vector,
+	indexes []int,
+) (types.Rowid, bool) {
+	for _, idx := range indexes {
+		if !rows.IsNull(idx) {
+			return vector.GetFixedAtNoTypeCheck[types.Rowid](rows.GetDownstreamVector(), idx), true
+		}
+	}
+	return types.EmptyRowid, false
+}
+
+// Merge chooses an effective row only after all object candidates have been
+// checked against tombstones. Appendable rows are preferred because they are
+// the replacement rows created after a merge source was written. Multiple
+// candidates from the same object class are retained until that filtering is
+// complete; the first surviving candidate preserves the existing object-list
+// traversal order.
+func (r *duplicatedRowIDs) Merge(pool *containers.VectorPool) containers.Vector {
+	rowIDs := pool.GetVector(&objectio.RowidType)
+	for i := range r.appendableByKey {
+		if rowID, ok := r.firstLive(r.appendable, r.appendableByKey[i]); ok {
+			rowIDs.Append(rowID, false)
+			continue
+		}
+		if rowID, ok := r.firstLive(r.nonAppendable, r.nonAppendableByKey[i]); ok {
+			rowIDs.Append(rowID, false)
+			continue
+		}
+		rowIDs.Append(nil, true)
+	}
+	return rowIDs
+}
+
 func newBaseTable(schema *catalog.Schema, isTombstone bool, txnTable *txnTable) *baseTable {
 	return &baseTable{
 		schema:      schema,
@@ -151,7 +258,7 @@ func (tbl *baseTable) addObjsWithMetaLoc(ctx context.Context, stats objectio.Obj
 	}
 	return tbl.tableSpace.AddDataFiles(pkVecs, stats)
 }
-func (tbl *baseTable) getRowsByPK(ctx context.Context, pks containers.Vector) (rowIDs containers.Vector, err error) {
+func (tbl *baseTable) getRowsByPK(ctx context.Context, pks containers.Vector) (rowIDs *duplicatedRowIDs, err error) {
 	var it *catalog.VisibleCommittedObjectIt
 	if tbl.isTombstone {
 		it = tbl.txnTable.entry.MakeTombstoneVisibleObjectIt(tbl.txnTable.store.txn)
@@ -159,19 +266,24 @@ func (tbl *baseTable) getRowsByPK(ctx context.Context, pks containers.Vector) (r
 		it = tbl.txnTable.entry.MakeDataVisibleObjectIt(tbl.txnTable.store.txn)
 	}
 	defer it.Release()
-	rowIDs = tbl.txnTable.store.rt.VectorPool.Small.GetVector(&objectio.RowidType)
+	rowIDs, err = newDuplicatedRowIDs(
+		tbl.txnTable.store.rt.VectorPool.Small,
+		pks.Length(),
+	)
+	if err != nil {
+		return nil, err
+	}
+	defer func() {
+		// GetByFilter intentionally continues with the candidates returned before
+		// a WW conflict so it can still resolve the visible row after waiting.
+		if err != nil && !moerr.IsMoErrCode(err, moerr.ErrTxnWWConflict) {
+			rowIDs.Close()
+			rowIDs = nil
+		}
+	}()
 	pkType := pks.GetType()
 	keysZM := index.NewZM(pkType.Oid, pkType.Scale)
 	if err = index.BatchUpdateZM(keysZM, pks.GetDownstreamVector()); err != nil {
-		return
-	}
-	if err = vector.AppendMultiFixed[types.Rowid](
-		rowIDs.GetDownstreamVector(),
-		types.EmptyRowid,
-		true,
-		pks.Length(),
-		common.WorkspaceAllocator,
-	); err != nil {
 		return
 	}
 	for it.Next() {
@@ -191,15 +303,37 @@ func (tbl *baseTable) getRowsByPK(ctx context.Context, pks containers.Vector) (r
 				continue
 			}
 		}
-		err = obj.GetObjectData().GetDuplicatedRows(
-			ctx,
-			tbl.txnTable.store.txn,
-			pks,
-			nil,
-			types.TS{}, types.MaxTs(),
-			rowIDs,
+		objectRowIDs := tbl.txnTable.store.rt.VectorPool.Small.GetVector(&objectio.RowidType)
+		err = vector.AppendMultiFixed[types.Rowid](
+			objectRowIDs.GetDownstreamVector(),
+			types.EmptyRowid,
+			true,
+			pks.Length(),
 			common.WorkspaceAllocator,
 		)
+		if err == nil {
+			err = obj.GetObjectData().GetDuplicatedRows(
+				ctx,
+				tbl.txnTable.store.txn,
+				pks,
+				nil,
+				types.TS{}, types.MaxTs(),
+				objectRowIDs,
+				common.WorkspaceAllocator,
+			)
+		}
+		if err == nil || moerr.IsMoErrCode(err, moerr.ErrTxnWWConflict) {
+			for i := 0; i < pks.Length(); i++ {
+				if !objectRowIDs.IsNull(i) {
+					rowIDs.add(
+						obj.IsAppendable(),
+						i,
+						vector.GetFixedAtNoTypeCheck[types.Rowid](objectRowIDs.GetDownstreamVector(), i),
+					)
+				}
+			}
+		}
+		objectRowIDs.Close()
 		if err != nil {
 			logutil.Infof("getRowsByPK failed GetDuplicate: %v, obj %v", err, obj.ID().String())
 			return
@@ -293,7 +427,6 @@ func (tbl *baseTable) incrementalGetRowsByPK(ctx context.Context, pks containers
 		pks.Length(),
 		common.WorkspaceAllocator,
 	)
-
 	err = foreachIncrementalObject(&objIt, from, to, func(obj *catalog.ObjectEntry) error {
 		if isEmptyDroppedAppendableObject(obj) {
 			return nil
