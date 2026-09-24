@@ -36,6 +36,7 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/lockservice"
 	lockpb "github.com/matrixorigin/matrixone/pkg/pb/lock"
 	"github.com/matrixorigin/matrixone/pkg/pb/metadata"
+	"github.com/matrixorigin/matrixone/pkg/pb/pipeline"
 	"github.com/matrixorigin/matrixone/pkg/pb/plan"
 	statspb "github.com/matrixorigin/matrixone/pkg/pb/statsinfo"
 	"github.com/matrixorigin/matrixone/pkg/pb/timestamp"
@@ -1742,12 +1743,23 @@ func TestPreferPrimaryScopeResult(t *testing.T) {
 	cancelRemoteQuery()
 	defer cancelRemotePipeline(nil)
 
+	// A reader's cancellation, wrapped by its library, as it reaches the
+	// scheduler converted locally or after crossing RPC from a remote scope
+	// (CI flake in load_data_parquet, #29315).
+	readerCanceled := fmt.Errorf("reading magic footer of parquet file: %w (read: 0)", context.Canceled)
+	convertedReaderCanceled := moerr.ConvertGoError(context.Background(), readerCanceled)
+	remoteMsg := &pipeline.Message{Err: pipeline.EncodedMessageError(context.Background(), readerCanceled)}
+	remoteReaderCanceled, ok := remoteMsg.TryToGetMoErr()
+	require.True(t, ok)
+
 	tests := []struct {
 		name      string
 		current   scopeRunResult
 		candidate scopeRunResult
 		want      error
 	}{
+		{name: "converted reader cancellation resolves to execution error", current: scopeRunResult{err: convertedReaderCanceled, ctx: internalCancelCtx}, candidate: scopeRunResult{err: executionErr}, want: executionErr},
+		{name: "remote reader cancellation resolves to execution error", current: scopeRunResult{err: remoteReaderCanceled, ctx: internalCancelCtx}, candidate: scopeRunResult{err: executionErr}, want: executionErr},
 		{name: "first error", candidate: scopeRunResult{err: cleanupErr}, want: cleanupErr},
 		{name: "execution error replaces cleanup fallback", current: scopeRunResult{err: cleanupErr}, candidate: scopeRunResult{err: executionErr}, want: executionErr},
 		{name: "joined execution error replaces cleanup fallback", current: scopeRunResult{err: cleanupErr}, candidate: scopeRunResult{err: joinedExecutionErr}, want: joinedExecutionErr},
@@ -1759,6 +1771,9 @@ func TestPreferPrimaryScopeResult(t *testing.T) {
 		{name: "unresolved interrupted sibling is secondary", current: scopeRunResult{err: cleanupErr}, candidate: scopeRunResult{err: queryInterrupted}, want: cleanupErr},
 		{name: "unresolved joined cancellation is secondary", current: scopeRunResult{err: cleanupErr}, candidate: scopeRunResult{err: joinedCancellationErr}, want: cleanupErr},
 		{name: "internally canceled sibling resolves to execution error", current: scopeRunResult{err: context.Canceled, ctx: internalCancelCtx}, candidate: scopeRunResult{err: executionErr}, want: executionErr},
+		// A reader library's wrapped cancellation (as external readers now
+		// return it, see convertReaderError) is still the sibling's cancellation.
+		{name: "wrapped reader cancellation resolves to execution error", current: scopeRunResult{err: fmt.Errorf("reading magic footer of parquet file: %w (read: 0)", context.Canceled), ctx: internalCancelCtx}, candidate: scopeRunResult{err: executionErr}, want: executionErr},
 		{name: "join map cancellation resolves to execution error", current: scopeRunResult{err: joinMapCancellationErr, ctx: internalCancelCtx}, candidate: scopeRunResult{err: executionErr}, want: executionErr},
 		{name: "normal internal cancellation is secondary", current: scopeRunResult{err: context.Canceled, ctx: internalNormalCancelCtx, queryCtx: activeQueryCtx}, candidate: scopeRunResult{err: executionErr}, want: executionErr},
 		{name: "internally interrupted sibling resolves to execution error", current: scopeRunResult{err: queryInterrupted, ctx: internalCancelCtx}, candidate: scopeRunResult{err: executionErr}, want: executionErr},
