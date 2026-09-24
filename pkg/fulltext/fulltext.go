@@ -830,6 +830,16 @@ func ParsePatternInBooleanMode(pattern string, parser string) ([]*Pattern, error
 
 				// open bracket found and find next close bracket
 				bracket += 1
+			} else if i == len(runeSlice)-1 {
+				// A one-rune term in final position after a space both starts and ends on this rune,
+				// so it never reaches the !isspace branch that flushes a multi-rune final term on its
+				// last rune. Flush it here so a trailing single-rune OR term (text `a`, CJK `蕉`, or a
+				// bare `*`) is not silently dropped (#29288).
+				p, err := CreatePattern(string(runeSlice[offset:end+1]), parser)
+				if err != nil {
+					return nil, err
+				}
+				tokens = append(tokens, p)
 			}
 		}
 
