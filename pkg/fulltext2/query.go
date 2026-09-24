@@ -597,6 +597,21 @@ func buildBooleanQuery(query, parser string) (BoolQuery, error) {
 	return q, nil
 }
 
+// phraseClause builds a positional-phrase clause for text under parser. It is shared by every
+// operand that decomposes into byte-offset phrase slots: a bare CJK operand, an explicit "quoted"
+// phrase, a starred CJK operand (#29274), and a multi-token default operand. ok is false when the
+// operand has no phrasable slot.
+func phraseClause(text, parser string, w float32) (clause, bool, error) {
+	slots, err := phraseSlots(text, parser)
+	if err != nil {
+		return clause{}, false, err
+	}
+	if len(slots) == 0 {
+		return clause{}, false, nil
+	}
+	return clause{kind: clausePhrase, phrase: slots, weight: w}, true, nil
+}
+
 // rawToClauseParser is the parser-aware form of rawToClause (boolean.go): a bare
 // CJK operand under ngram/json becomes an exact positional phrase (byte-offset
 // slots); quoted phrases, prefixes, groups and gojieba/Latin operands behave as
@@ -641,14 +656,7 @@ func rawToClauseParser(rc rawClause, parser string) (clause, bool, error) {
 	// That was a workaround for the old token-index phrase matcher; byte positions make
 	// the phrase robust, so it is no longer needed.)
 	if parser != ParserGojieba && !rc.quoted && !rc.star && hasCJK(rc.text) {
-		slots, err := phraseSlots(rc.text, parser)
-		if err != nil {
-			return clause{}, false, err
-		}
-		if len(slots) == 0 {
-			return clause{}, false, nil
-		}
-		return clause{kind: clausePhrase, phrase: slots, weight: w}, true, nil
+		return phraseClause(rc.text, parser, w)
 	}
 
 	tok, err := queryTokenizer(parser)
@@ -666,26 +674,27 @@ func rawToClauseParser(rc rawClause, parser string) (clause, bool, error) {
 	case rc.quoted:
 		// Explicit "phrase": positional (byte-offset) slots — deduped/prefixed the same
 		// way NL is, so a CJK phrase matches by byte offset, not fragile token adjacency.
-		slots, serr := phraseSlots(rc.text, parser)
-		if serr != nil {
-			return clause{}, false, serr
-		}
-		if len(slots) == 0 {
-			return clause{}, false, nil
-		}
-		return clause{kind: clausePhrase, phrase: slots, weight: w}, true, nil
+		return phraseClause(rc.text, parser, w)
 	case rc.star:
+		// A CJK operand that tokenizes into MORE THAN ONE token must require them ALL, not just the
+		// first (#29274). Keeping terms[:1] dropped the rest of the stem, so `苹果香蕉*` over-matched:
+		//   - ngram tiles 苹果香蕉 into 苹果香/果香蕉/香蕉/蕉 and kept only 苹果香 -> matched 苹果香瓜.
+		//   - gojieba segments it into words 苹果/香蕉 and kept only 苹果 -> matched every 苹果* doc.
+		// Decompose it the same way the unstarred/quoted operand does, via phraseSlots: the positional
+		// phrase pins the whole stem (ngram: 苹果香@0+果香蕉@3; gojieba: 苹果@0+香蕉@…), and a phrase
+		// already allows trailing document content -- exactly the `*` semantics -- so `苹果香蕉*`
+		// matches 苹果香蕉 / 苹果香蕉西瓜 but not 苹果香瓜. A SINGLE-token stem keeps its genuine prefix:
+		// gojieba `苹果*` stays a word prefix (matches 红苹果甜's 苹果甜), and for ngram phraseSlots
+		// itself emits a presence-only prefix slot for a run shorter than a trigram (slotPostings
+		// expands it via prefixTerms), so ngram takes the phrase path uniformly. Non-CJK stays a
+		// plain first-token prefix.
+		if hasCJK(rc.text) && (parser != ParserGojieba || len(terms) > 1) {
+			return phraseClause(rc.text, parser, w)
+		}
 		return clause{kind: clausePrefix, terms: terms[:1], weight: w}, true, nil
 	case len(terms) == 1:
 		return clause{kind: clauseTerm, terms: terms, weight: w}, true, nil
 	default:
-		slots, serr := phraseSlots(rc.text, parser)
-		if serr != nil {
-			return clause{}, false, serr
-		}
-		if len(slots) == 0 {
-			return clause{}, false, nil
-		}
-		return clause{kind: clausePhrase, phrase: slots, weight: w}, true, nil
+		return phraseClause(rc.text, parser, w)
 	}
 }
