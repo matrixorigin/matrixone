@@ -185,6 +185,12 @@ func getUnCompressReader(ctx context.Context, compType string, filepath string, 
 			return nil, err
 		}
 		return decompressed(zd, func() error { zd.Close(); return nil }, r), nil
+	case tree.ZIP:
+		zr, closeDecoder, err := getZipReader(ctx, r)
+		if err != nil {
+			return nil, err
+		}
+		return decompressed(zr, closeDecoder, r), nil
 	case tree.LZW:
 		return nil, moerr.NewInternalErrorf(ctx, "the compress type '%s' is not support now", compType)
 	case tree.TAR_GZ:
