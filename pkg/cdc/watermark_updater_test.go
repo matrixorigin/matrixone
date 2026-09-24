@@ -551,6 +551,46 @@ func TestWatermarkUpdater_EvictTaskLocalStateForOwnerPreservesReplacement(t *tes
 	require.Same(t, newFence, activeFence)
 }
 
+func TestWatermarkUpdater_EvictTaskLocalStateForOwnerRetainsCommittedProgress(t *testing.T) {
+	updater := NewCDCWatermarkUpdater(
+		t.Name(),
+		newWmMockSQLExecutor(),
+		WithCustomizedScheduleJob(func(job *UpdaterJob) error {
+			job.DoneWithErr(nil)
+			return nil
+		}),
+	)
+	updater.Start()
+	defer updater.Stop()
+
+	ctx := context.Background()
+	key := WatermarkKey{AccountId: 1, TaskId: "claim-loss-task-no-replacement", DBName: "db", TableName: "tbl"}
+	owner := NewOwnerFenceForGeneration(time.UnixMicro(10), func(context.Context) error { return nil })
+	checkpoint := types.BuildTS(10, 1)
+
+	updater.Lock()
+	updater.cacheCommitted[key] = checkpoint
+	updater.cacheCommittedGeneration[key] = owner.GenerationToken()
+	updater.cacheUncommitted[key] = checkpoint
+	updater.cacheUncommittedGeneration[key] = owner.GenerationToken()
+	updater.cacheUncommittedFence[key] = owner
+	updater.activeWatermarkFence[key] = owner
+	updater.Unlock()
+
+	require.NoError(t, updater.EvictTaskLocalStateForOwner(
+		ctx, key.AccountId, key.TaskId, owner.GenerationToken()))
+
+	updater.RLock()
+	retained, retainedOK := updater.cacheCommitted[key]
+	_, staleBuffered := updater.cacheUncommitted[key]
+	_, active := updater.activeWatermarkFence[key]
+	updater.RUnlock()
+	require.True(t, retainedOK)
+	require.Equal(t, checkpoint, retained)
+	require.False(t, staleBuffered)
+	require.False(t, active)
+}
+
 func TestWatermarkUpdater_DeleteTaskWatermarksRetriesAfterFlushFailure(t *testing.T) {
 	exec := &retryableMockExecutor{failRemaining: 1}
 	updater := NewCDCWatermarkUpdater("delete-task-flush-failure", exec)

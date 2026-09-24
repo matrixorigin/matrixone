@@ -2392,7 +2392,6 @@ func (u *CDCWatermarkUpdater) EvictTaskLocalStateForOwner(
 	collectTaskWatermarkKeys(keys, u.errorMetadataCache, accountID, taskID)
 	collectTaskWatermarkKeys(keys, u.commitFailureCount, accountID, taskID)
 	collectTaskWatermarkKeys(keys, u.commitCircuitOpen, accountID, taskID)
-	collectTaskWatermarkKeys(keys, u.readKeysBuffer, accountID, taskID)
 
 	removedMetrics := make([]WatermarkKey, 0, len(keys))
 	for key := range keys {
@@ -2412,9 +2411,20 @@ func (u *CDCWatermarkUpdater) EvictTaskLocalStateForOwner(
 		}
 
 		if !newerOwner {
-			u.removeWatermarkStateLocked(key)
+			// Keep the last committed progress in the process-wide updater. CN
+			// services in an embedded cluster share this updater, so deleting the
+			// committed tier here can erase the replacement reader's local view
+			// after it has claimed the durable row. ClaimWatermarkOwner (and the
+			// legacy durable read path) refreshes this tier before a subsequent
+			// generation uses it; only obsolete in-flight state is unsafe to retain.
+			delete(u.cacheUncommitted, key)
+			delete(u.cacheUncommittedGeneration, key)
+			delete(u.cacheUncommittedFence, key)
+			delete(u.cacheCommitting, key)
+			delete(u.cacheCommittingGeneration, key)
+			delete(u.cacheCommittingFence, key)
+			delete(u.activeWatermarkFence, key)
 			delete(u.errorMetadataCache, key)
-			delete(u.readKeysBuffer, key)
 			delete(u.commitFailureCount, key)
 			delete(u.commitCircuitOpen, key)
 			removedMetrics = append(removedMetrics, key)
@@ -2439,14 +2449,13 @@ func (u *CDCWatermarkUpdater) EvictTaskLocalStateForOwner(
 				delete(state.fences, key)
 			}
 		}
-		if generation := u.cacheCommittedGeneration[key]; generation != 0 && generation <= ownerGeneration {
-			delete(u.cacheCommitted, key)
-			delete(u.cacheCommittedGeneration, key)
-		}
+		// Keep cacheCommitted even when its generation predates the replacement.
+		// The durable claim/read below refreshes it before the replacement uses
+		// progress, while retaining it avoids a same-process takeover observing
+		// ErrNoWatermarkFound between the claim and the cache refresh.
 		if fence := u.activeWatermarkFence[key]; fence != nil && fence.GenerationToken() <= ownerGeneration {
 			delete(u.activeWatermarkFence, key)
 		}
-		delete(u.readKeysBuffer, key)
 	}
 	u.Unlock()
 

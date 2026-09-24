@@ -1132,11 +1132,30 @@ func TestCDCNoFullPublicTakeoverLifecycle(t *testing.T) {
 			sqlExec = testutils.GetSQLExecutor(cnC)
 			cleanupCN = cnC
 			mustExec("", fmt.Sprintf("update mo_task.sys_daemon_task set task_status=%d, task_runner='%s', last_heartbeat='2000-01-01 00:00:00' where task_id=%d", taskpb.TaskStatus_Running, cnC.ServiceID(), daemonID))
-			select {
-			case <-freshEntered:
-			case <-ctx.Done():
-				t.Fatal("CN C did not reach fresh-reader admission")
+			// Drive C's real detector synchronously as well.  Relying only on the
+			// periodic detector ticker makes this lifecycle test nondeterministic:
+			// after the daemon claim moves to C, the next ticker may be delayed long
+			// enough for the test/UT watchdog to fire before the replacement reader
+			// reaches its admission barrier.
+			var freshScanDone chan error
+			for attempts := 0; ; attempts++ {
+				freshScanDone = make(chan error, 1)
+				go func(done chan error) { done <- cdc.RunTableDetectorScanForTest(cnC.ServiceID()) }(freshScanDone)
+				select {
+				case <-freshEntered:
+					goto freshAdmissionEntered
+				case scanErr := <-freshScanDone:
+					if scanErr != nil && attempts%10 == 0 {
+						t.Logf("CN C detector scan retry %d: %v", attempts, scanErr)
+					}
+					select {
+					case <-ctx.Done():
+						t.Fatal("CN C did not reach fresh-reader admission")
+					case <-time.After(100 * time.Millisecond):
+					}
+				}
 			}
+		freshAdmissionEntered:
 			select {
 			case <-bCancelDone:
 				bCancelErrMu.Lock()
@@ -1157,6 +1176,7 @@ func TestCDCNoFullPublicTakeoverLifecycle(t *testing.T) {
 				"fresh reader must not observe a checkpoint older than B's durable progress")
 			captureFresh.Store(true)
 			releaseFresh()
+			require.NoError(t, <-freshScanDone)
 			select {
 			case actualStart := <-freshBoundary:
 				require.Equal(t, freshStart, actualStart,
