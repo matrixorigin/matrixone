@@ -117,10 +117,8 @@ func resolveRealKernel[T types.RealNumbers](metric MetricType) (DistanceFunction
 // centroid (CENTROIDX JOIN / ProductL2), brute force, pairwise and topn. It
 // works for any storage element type T (types.ArrayElement) and returns the
 // distance in a caller-chosen result type R (types.RealNumbers): pass
-// R=float32 for the common typed path and R=float64 for wide SQL/topn
-// results. Native float input with R=float64 uses the stable float64 kernels
-// before any result narrowing; merely casting a float32 kernel is not a wide
-// computation.
+// R=float32 for the common path and R=float64 only where f64 precision is
+// needed (f64 input, topn ordering values). f32/f64 use the metric kernels;
 // bf16/f16/int8/uint8 use the native narrow kernels (which compute in
 // float32/int64 and are cast to R — casting their float64 down to float32 is
 // bit-identical to a native-float32 kernel, since the intermediate is exact).
@@ -138,19 +136,6 @@ func ResolveDistanceFn[T types.ArrayElement, R types.RealNumbers](metric MetricT
 	// do we add a thin casting wrapper.
 	switch any(*new(T)).(type) {
 	case float32:
-		if _, wide := any(*new(R)).(float64); wide {
-			var fn func([]float32, []float32) (float64, error)
-			var err error
-			if metric == Metric_L2Distance {
-				fn = StableL2DistanceSq[float32]
-			} else {
-				fn, err = StableDistanceFn[float32](metric)
-				if err != nil {
-					return nil, err
-				}
-			}
-			return any(fn).(func(a, b []T) (R, error)), nil
-		}
 		fn, err := resolveRealKernel[float32](metric)
 		if err != nil {
 			return nil, err
@@ -161,19 +146,6 @@ func ResolveDistanceFn[T types.ArrayElement, R types.RealNumbers](metric MetricT
 		w := func(a, b []float32) (R, error) { d, e := fn(a, b); return R(d), e }
 		return any(w).(func(a, b []T) (R, error)), nil
 	case float64:
-		if _, wide := any(*new(R)).(float64); wide {
-			var fn func([]float64, []float64) (float64, error)
-			var err error
-			if metric == Metric_L2Distance {
-				fn = StableL2DistanceSq[float64]
-			} else {
-				fn, err = StableDistanceFn[float64](metric)
-				if err != nil {
-					return nil, err
-				}
-			}
-			return any(fn).(func(a, b []T) (R, error)), nil
-		}
 		fn, err := resolveRealKernel[float64](metric)
 		if err != nil {
 			return nil, err
@@ -252,8 +224,24 @@ func GoPairWiseDistance[T types.ArrayElement](
 	}
 
 	if metric == Metric_L2Distance {
+		// The overflow screen rides along with the sqrt rather than taking a second pass over res:
+		// the squared distance is already non-finite when the float32 accumulation overflowed, and
+		// sqrt keeps it so.
+		//
+		// OR-ing the raw bits keeps the screen branch-free, which a per-entry `finite && ...` is
+		// not (measured: a branch there costs ~2% of this loop at 8192x50). Every non-finite
+		// float32 has all eight exponent bits set, so any such entry sets them in the OR. The
+		// converse does not hold -- two finite entries with complementary exponents can set them
+		// between them -- so the OR only screens, and CheckFiniteDists then decides.
+		var bits uint32
 		for i := range res {
 			res[i] = float32(math.Sqrt(float64(res[i])))
+			bits |= math.Float32bits(res[i])
+		}
+		if bits&0x7f800000 == 0x7f800000 {
+			if err := CheckFiniteDists(res, l2What); err != nil {
+				return nil, err
+			}
 		}
 	}
 

@@ -2744,8 +2744,13 @@ func prepareStringStatement(execCtx *ExecCtx, ses *Session, sql string) (string,
 	rewritten := sql
 	var err error
 	if execCtx.rewriteEnabled {
-		rewritten, err = rewriteSQLFromMaterializedPolicyWithSQLMode(
-			execCtx.reqCtx, execCtx.sqlOfStmt, sql, sessionSQLModeForParser(ses), parserLowerCaseTableNames(ses))
+		sessionEnabled := ses.rewriteEnabled.Load()
+		if execCtx.input != nil && execCtx.input.rewritePolicy != nil {
+			sessionEnabled = execCtx.input.rewritePolicy.sessionEnabled
+		}
+		rewritten, err = rewriteSQLFromMaterializedPolicyWithSQLModeAndSessionEnabled(
+			execCtx.reqCtx, execCtx.sqlOfStmt, sql, sessionSQLModeForParser(ses),
+			sessionEnabled, parserLowerCaseTableNames(ses))
 		if err != nil {
 			return sql, nil, nil, err
 		}
@@ -4167,8 +4172,9 @@ func containsSelectInto(stmts []tree.Statement) bool {
 }
 
 var GetComputationWrapper = func(execCtx *ExecCtx, db string, user string, eng engine.Engine, proc *process.Process, ses *Session) ([]ComputationWrapper, error) {
-	// COM_QUERY carries the switch captured before its first statement. Other
-	// protocols retain their existing session-level behavior.
+	// Inputs that carry a rewrite policy use the snapshot captured at their
+	// protocol boundary. Other inputs retain their existing session-level
+	// behavior.
 	if execCtx.input.rewritePolicy != nil {
 		execCtx.rewriteEnabled = execCtx.input.rewritePolicy.enabled
 	} else {
@@ -6417,19 +6423,29 @@ func ExecRequest(ses *Session, execCtx *ExecCtx, req *Request) (resp *Response, 
 	case COM_STMT_PREPARE:
 		ses.SetCmd(COM_STMT_PREPARE)
 		sql = commonutil.UnsafeBytesToString(req.GetData().([]byte))
+		var rewritePolicy *rewritePolicySnapshot
 		var preparedRemapDb map[string]string
 		// Materialize rewrite rules on the protocol payload before it enters the
 		// prepareable_stmt grammar. The resulting AST consumes the hint once.
-		if ses.rewriteEnabled.Load() {
+		// Always capture and apply the policy: mandatory role rules apply even
+		// when enable_remap_hint is off, while the policy skips optional
+		// session/inline layers in that case.
+		{
 			var rewriteErr error
-			sql, rewriteErr = rewriteSQL(execCtx.reqCtx, ses, sql)
+			rewritePolicy, rewriteErr = captureRewritePolicy(execCtx.reqCtx, ses)
+			if rewriteErr == nil {
+				sql, rewriteErr = rewritePolicy.rewrite(
+					execCtx.reqCtx, sql, sessionSQLModeForParser(ses))
+			}
 			if rewriteErr != nil {
 				ses.beginWarningDiagnostics()
 				markRowCountFailed(ses, ses.GetProc())
 				resp = NewGeneralErrorResponse(COM_STMT_PREPARE, ses.GetTxnHandler().GetServerStatus(), rewriteErr)
 				return resp, nil
 			}
-			preparedRemapDb = extractInlineRemapDb(sql)
+			if rewritePolicy.enabled {
+				preparedRemapDb = extractInlineRemapDb(sql)
+			}
 		}
 		if err = validateNativePrepareJSONHints(execCtx.reqCtx, sql, parserLowerCaseTableNames(ses)); err != nil {
 			ses.beginWarningDiagnostics()
@@ -6448,7 +6464,12 @@ func ExecRequest(ses *Session, execCtx *ExecCtx, req *Request) (resp *Response, 
 		ses.Debug(execCtx.reqCtx, "query trace", logutil.QueryField(sql))
 
 		savedRowCount := ses.GetLastAffectedRows()
-		err = doComQuery(ses, execCtx, &UserInput{sql: sql, remapDb: preparedRemapDb})
+		err = doComQuery(ses, execCtx, &UserInput{
+			sql:                       sql,
+			remapDb:                   preparedRemapDb,
+			rewritePolicy:             rewritePolicy,
+			rewritePolicyMaterialized: true,
+		})
 		if err != nil {
 			resp = NewGeneralErrorResponse(COM_STMT_PREPARE, ses.GetTxnHandler().GetServerStatus(), err)
 		} else {

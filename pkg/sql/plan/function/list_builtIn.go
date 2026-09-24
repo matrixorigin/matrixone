@@ -3890,14 +3890,16 @@ var supportedStringBuiltIns = []FuncNew{
 
 			has0, t01, t1 := fixedTypeCastRule1(inputs[0], inputs[1])
 			has1, t02, t2 := fixedTypeCastRule1(inputs[0], inputs[2])
-			if t01.Oid != t02.Oid {
+			if t01.Oid.IsDecimal() && t02.Oid.IsDecimal() {
+				targets := []types.Type{t01, t1, t2}
+				aligned, ok := alignDecimalComparisonTypes(targets, inputs[:3])
+				if !ok {
+					return newCheckResultWithFailure(failedFunctionParametersWrong)
+				}
+				t01, t1, t2 = targets[0], targets[1], targets[2]
+				has0 = has0 || aligned
+			} else if t01.Oid != t02.Oid {
 				return newCheckResultWithFailure(failedFunctionParametersWrong)
-			}
-
-			if t01.Oid == types.T_decimal64 || t01.Oid == types.T_decimal128 || t01.Oid == types.T_decimal256 {
-				t01.Scale = max(t01.Scale, t02.Scale)
-				t1.Scale = t01.Scale
-				t2.Scale = t01.Scale
 			}
 
 			if has0 || has1 {
