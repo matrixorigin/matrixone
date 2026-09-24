@@ -3350,19 +3350,9 @@ func (mp *MysqlProtocolImpl) appendResultSetBinaryRow2(mrs *MysqlResultSet, colS
 				}
 			} else {
 				// T_datetime
-				value, err2 := GetDatetime(colSlices, rowIdx, i)
+				dt, err2 := GetDatetimeValue(colSlices, rowIdx, i)
 				if err2 != nil {
 					return err2
-				}
-				var dt types.Datetime
-				idx := strings.Index(value, ".")
-				if idx == -1 {
-					dt, err = types.ParseDatetime(value, 0)
-				} else {
-					dt, err = types.ParseDatetime(value, int32(len(value)-idx-1))
-				}
-				if err != nil {
-					return err
 				}
 				err = mp.appendDatetime(dt)
 				if err != nil {

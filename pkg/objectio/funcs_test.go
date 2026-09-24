@@ -61,6 +61,34 @@ func TestNewJsonVectorFromValuesUsesByteAdmission(t *testing.T) {
 	}
 }
 
+func TestTaggedTemporalColumnUsesCompatibilityFence(t *testing.T) {
+	mp := mpool.MustNewZero()
+	defer mpool.DeleteMPool(mp)
+
+	dateVec := vector.NewVec(types.T_date.ToType())
+	defer dateVec.Free(mp)
+	invalidDate := types.DateFromCalendarAllowInvalid(2024, 2, 30)
+	require.NoError(t, vector.AppendFixed(dateVec, invalidDate, false, mp))
+	require.Equal(t, uint16(IOET_ColumnData_V3), columnDataVersion(dateVec))
+	datePayload, err := dateVec.MarshalBinary()
+	require.NoError(t, err)
+
+	encoded := append([]byte(nil), EncodeIOEntryHeader(&IOEntryHeader{
+		Type: IOET_ColData, Version: IOET_ColumnData_V3,
+	})...)
+	encoded = append(encoded, datePayload...)
+	decoded, err := Decode(encoded)
+	require.NoError(t, err)
+	require.Equal(t, invalidDate, vector.MustFixedColNoTypeCheck[types.Date](decoded.(*vector.Vector))[0])
+	defer decoded.(*vector.Vector).Free(mp)
+
+	datetimeVec := vector.NewVec(types.T_datetime.ToType())
+	defer datetimeVec.Free(mp)
+	invalidDatetime := types.DatetimeFromClockAllowInvalid(2024, 2, 30, 1, 2, 3, 4)
+	require.NoError(t, vector.AppendFixed(datetimeVec, invalidDatetime, false, mp))
+	require.Equal(t, uint16(IOET_ColumnData_V3), columnDataVersion(datetimeVec))
+}
+
 func TestValidatedVectorCacheDataRehomePreservesValidation(t *testing.T) {
 	ctx := context.Background()
 	source := &validatedVectorCacheData{

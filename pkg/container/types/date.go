@@ -71,6 +71,9 @@ const (
 	// being normalized by DateFromCalendar. Starting at MinInt32 keeps the
 	// tagged range disjoint from both valid dates and arbitrary raw values.
 	invalidDateEncodingBase = Date(-2_147_483_648)
+
+	dateOrderMonthStride = 32
+	dateOrderYearStride  = 13 * dateOrderMonthStride
 )
 
 type TimeType int32
@@ -419,6 +422,13 @@ func isEncodedInvalidDate(d Date) bool {
 		day > 0 && day <= 31 && !ValidDate(year, month, day)
 }
 
+// IsTaggedInvalid reports whether d uses the ALLOW_INVALID_DATES tagged
+// representation. Storage codecs use this to select a format version that a
+// pre-tag reader cannot silently reinterpret.
+func (d Date) IsTaggedInvalid() bool {
+	return isEncodedInvalidDate(d)
+}
+
 // normalizedDateForCalculation converts an ALLOW_INVALID_DATES tag to the
 // calendar date that Go/MySQL date arithmetic uses for its overflow fields.
 // The stored Date still preserves the original fields for formatting and
@@ -450,6 +460,29 @@ func DateFromCalendarAllowInvalid(year int32, month, day uint8) Date {
 		return DateFromCalendar(year, month, day)
 	}
 	return invalidDateEncodingBase + Date(year*10000+int32(month)*100+int32(day))
+}
+
+// DateOrderKey is the unsigned, order-preserving calendar key used by tuple
+// and index encodings. It intentionally differs from Date's physical scalar
+// representation: invalid calendar fields need a position between their
+// neighboring valid dates, which a fixed-width day offset cannot provide.
+func DateOrderKey(d Date) uint64 {
+	if d == ZeroDate {
+		return 0
+	}
+	year, month, day, _ := d.Calendar(true)
+	return uint64(year)*dateOrderYearStride + uint64(month)*dateOrderMonthStride + uint64(day)
+}
+
+// DateFromOrderKey reverses DateOrderKey, including invalid calendar fields.
+func DateFromOrderKey(key uint64) Date {
+	if key == 0 {
+		return ZeroDate
+	}
+	year := int32(key / dateOrderYearStride)
+	month := uint8((key % dateOrderYearStride) / dateOrderMonthStride)
+	day := uint8(key % dateOrderMonthStride)
+	return DateFromCalendarAllowInvalid(year, month, day)
 }
 
 func (d Date) String() string {

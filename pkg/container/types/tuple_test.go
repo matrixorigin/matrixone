@@ -639,6 +639,46 @@ func TestTupleEnumRoundTrip(t *testing.T) {
 	require.Equal(t, []string{"n1", "2"}, strs)
 }
 
+func TestTupleTemporalKeysPreserveCalendarOrderAndTags(t *testing.T) {
+	dates := []Date{
+		DateFromCalendar(2024, 2, 29),
+		DateFromCalendarAllowInvalid(2024, 2, 30),
+		DateFromCalendar(2024, 3, 1),
+	}
+	var previous []byte
+	for _, value := range dates {
+		packer := NewPacker()
+		packer.EncodeDate(value)
+		encoded := append([]byte(nil), packer.GetBuf()...)
+		if previous != nil {
+			require.Less(t, bytes.Compare(previous, encoded), 0)
+		}
+		previous = encoded
+		decoded, err := Unpack(encoded)
+		require.NoError(t, err)
+		require.Equal(t, value, decoded[0])
+	}
+
+	datetimes := []Datetime{
+		DatetimeFromClock(2024, 2, 29, 23, 59, 59, 999999),
+		DatetimeFromClockAllowInvalid(2024, 2, 30, 0, 0, 0, 0),
+		DatetimeFromClock(2024, 3, 1, 0, 0, 0, 0),
+	}
+	previous = nil
+	for _, value := range datetimes {
+		packer := NewPacker()
+		packer.EncodeDatetime(value)
+		encoded := append([]byte(nil), packer.GetBuf()...)
+		if previous != nil {
+			require.Less(t, bytes.Compare(previous, encoded), 0)
+		}
+		previous = encoded
+		decoded, err := Unpack(encoded)
+		require.NoError(t, err)
+		require.Equal(t, value, decoded[0])
+	}
+}
+
 func TestTupleSQLStrings(t *testing.T) {
 	uuid, _ := BuildUuid()
 	date := DateFromCalendar(2024, 11, 6)

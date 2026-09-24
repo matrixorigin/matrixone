@@ -254,7 +254,7 @@ func validateVectorCacheData(data fscache.Data) (fscache.Data, error) {
 		// path without granting the marker.
 		return data, nil
 	}
-	if header.Version != IOET_ColumnData_V2 {
+	if header.Version != IOET_ColumnData_V2 && header.Version != IOET_ColumnData_V3 {
 		return nil, moerr.NewInvalidInputNoCtx("invalid object column data version")
 	}
 	var vec vector.Vector
@@ -292,7 +292,8 @@ func decode(buf []byte, trusted bool) (any, error) {
 	if codec.NoUnmarshal() {
 		return buf[IOEntryHeaderSize:], nil
 	}
-	if trusted && header.Type == IOET_ColData && header.Version == IOET_ColumnData_V2 {
+	if trusted && header.Type == IOET_ColData &&
+		(header.Version == IOET_ColumnData_V2 || header.Version == IOET_ColumnData_V3) {
 		vec := vector.NewVec(types.Type{})
 		if err := vec.UnmarshalBinaryTrusted(buf[IOEntryHeaderSize:]); err != nil {
 			return nil, err
@@ -960,7 +961,7 @@ func mustVectorTo(toVec *vector.Vector, buf []byte, trusted bool) (err error) {
 	if header.Type != IOET_ColData {
 		return moerr.NewInternalError(context.Background(), fmt.Sprintf("invalid object meta: %s", header.String()))
 	}
-	if header.Version == IOET_ColumnData_V2 {
+	if header.Version == IOET_ColumnData_V2 || header.Version == IOET_ColumnData_V3 {
 		if trusted {
 			err = toVec.UnmarshalBinaryTrusted(buf[IOEntryHeaderSize:])
 		} else {

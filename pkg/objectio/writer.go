@@ -823,7 +823,7 @@ func (w *objectWriterV1) addBlock(blocks *[]blockData, blockMeta BlockObject, ba
 		if needed := vec.Size() + 64; needed > sbuf.Cap() {
 			sbuf.Grow(needed)
 		}
-		h := IOEntryHeader{IOET_ColData, IOET_ColumnData_CurrVer}
+		h := IOEntryHeader{IOET_ColData, columnDataVersion(vec)}
 		sbuf.Write(EncodeIOEntryHeader(&h))
 		if err := vec.MarshalBinaryWithBuffer(sbuf); err != nil {
 			return 0, err

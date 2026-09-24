@@ -70,3 +70,14 @@
 | Type | Version | Name |
 | ---- | ------- | ---- |
 | 3000 | 5 | IOET_WALTxnEntry |
+
+## MatrixOne 4.2
+
+| Type | Version | Name |
+| ---- | ------- | ---- |
+| 2 | 3 | ColumnData with tagged invalid DATE/DATETIME values |
+
+ColumnData V3 uses the V2 vector payload with an explicit compatibility
+boundary. Readers that understand V3 preserve tagged invalid temporal calendar
+fields; older readers must reject V3 rather than decode the payload as a legacy
+scalar.

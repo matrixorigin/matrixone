@@ -312,8 +312,8 @@ func (p *Packer) EncodeBool(e bool) {
 }
 
 func (p *Packer) EncodeDate(e Date) {
-	p.putByte(dateCode)
-	p.encodeInt(int64(e))
+	p.putByte(dateOrderedCode)
+	p.encodeUint(DateOrderKey(e))
 }
 
 func (p *Packer) EncodeTime(e Time) {
@@ -322,8 +322,8 @@ func (p *Packer) EncodeTime(e Time) {
 }
 
 func (p *Packer) EncodeDatetime(e Datetime) {
-	p.putByte(datetimeCode)
-	p.encodeInt(int64(e))
+	p.putByte(datetimeOrderedCode)
+	p.encodeUint(DatetimeOrderKey(e))
 }
 
 func (p *Packer) EncodeTimestamp(e Timestamp) {

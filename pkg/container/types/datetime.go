@@ -599,6 +599,13 @@ func isEncodedInvalidDatetime(dt Datetime) bool {
 		sec <= maxSecondInMinute && msec < MicroSecsPerSec
 }
 
+// IsTaggedInvalid reports whether dt uses the ALLOW_INVALID_DATES tagged
+// representation. Storage codecs use this to select a format version that a
+// pre-tag reader cannot silently reinterpret.
+func (dt Datetime) IsTaggedInvalid() bool {
+	return isEncodedInvalidDatetime(dt)
+}
+
 func encodeInvalidDatetime(year int32, month, day, hour, minute, sec uint8, msec uint32) Datetime {
 	date := int64(year)*10000 + int64(month)*100 + int64(day)
 	clock := (int64(hour)*SecsPerHour+int64(minute)*SecsPerMinute+int64(sec))*MicroSecsPerSec + int64(msec)
@@ -628,6 +635,39 @@ func DatetimeFromClockAllowInvalid(year int32, month, day, hour, minute, sec uin
 		return DatetimeFromClock(year, month, day, hour, minute, sec, msec)
 	}
 	return encodeInvalidDatetime(year, month, day, hour, minute, sec, msec)
+}
+
+// DatetimeOrderKey is the unsigned, order-preserving calendar/time key used
+// by tuple and index encodings. It is separate from Datetime's physical
+// microsecond scalar so tagged invalid dates retain their SQL order.
+func DatetimeOrderKey(dt Datetime) uint64 {
+	if dt == ZeroDatetime {
+		return 0
+	}
+	dateKey := DateOrderKey(dt.ToDate())
+	clockKey := (uint64(dt.Hour())*SecsPerHour+
+		uint64(dt.Minute())*SecsPerMinute+uint64(dt.Sec()))*MicroSecsPerSec +
+		uint64(dt.MicroSec())
+	return dateKey*uint64(microSecsPerDay) + clockKey
+}
+
+// DatetimeFromOrderKey reverses DatetimeOrderKey, including invalid calendar
+// fields and fractional seconds.
+func DatetimeFromOrderKey(key uint64) Datetime {
+	if key == 0 {
+		return ZeroDatetime
+	}
+	dateKey := key / uint64(microSecsPerDay)
+	clockKey := key % uint64(microSecsPerDay)
+	date := DateFromOrderKey(dateKey)
+	year, month, day, _ := date.Calendar(true)
+	hour := uint8(clockKey / (SecsPerHour * MicroSecsPerSec))
+	clockKey %= SecsPerHour * MicroSecsPerSec
+	minute := uint8(clockKey / (SecsPerMinute * MicroSecsPerSec))
+	clockKey %= SecsPerMinute * MicroSecsPerSec
+	second := uint8(clockKey / MicroSecsPerSec)
+	micro := uint32(clockKey % MicroSecsPerSec)
+	return DatetimeFromClockAllowInvalid(year, month, day, hour, minute, second, micro)
 }
 
 func (dt Datetime) ConvertToGoTime(loc *time.Location) time.Time {

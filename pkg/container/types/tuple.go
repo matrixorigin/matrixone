@@ -206,35 +206,40 @@ func printTuple(tuple Tuple) string {
 }
 
 const (
-	nilCode        = 0x00
-	bytesCode      = 0x01
-	bytesMaxCode   = 0x02
-	intZeroCode    = 0x14
-	float32Code    = 0x20
-	float64Code    = 0x21
-	falseCode      = 0x26
-	trueCode       = 0x27
-	int8Code       = 0x28
-	int16Code      = 0x29
-	int32Code      = 0x3a
-	int64Code      = 0x3b
-	uint8Code      = 0x3c
-	uint16Code     = 0x3d
-	uint32Code     = 0x3e
-	uint64Code     = 0x40
-	dateCode       = 0x41
-	datetimeCode   = 0x42
-	timestampCode  = 0x43
-	decimal64Code  = 0x44
-	decimal128Code = 0x45
-	stringTypeCode = 0x46
-	timeCode       = 0x47
-	decimal256Code = 0x48
-	enumCode       = 0x50 // TODO: reorder the list to put timeCode next to date type code?
-	bitCode        = 0x51
-	uuidCode       = 0x52
-	objectIdCode   = 0x53
-	yearCode       = 0x54
+	nilCode      = 0x00
+	bytesCode    = 0x01
+	bytesMaxCode = 0x02
+	intZeroCode  = 0x14
+	float32Code  = 0x20
+	float64Code  = 0x21
+	falseCode    = 0x26
+	trueCode     = 0x27
+	int8Code     = 0x28
+	int16Code    = 0x29
+	int32Code    = 0x3a
+	int64Code    = 0x3b
+	uint8Code    = 0x3c
+	uint16Code   = 0x3d
+	uint32Code   = 0x3e
+	uint64Code   = 0x40
+	dateCode     = 0x41
+	datetimeCode = 0x42
+	// Ordered temporal codes are deliberately distinct from the legacy codes.
+	// This lets readers accept old keys while old binaries fail closed on keys
+	// that require calendar-invalid temporal semantics.
+	timestampCode       = 0x43
+	decimal64Code       = 0x44
+	decimal128Code      = 0x45
+	stringTypeCode      = 0x46
+	timeCode            = 0x47
+	decimal256Code      = 0x48
+	enumCode            = 0x50 // TODO: reorder the list to put timeCode next to date type code?
+	bitCode             = 0x51
+	uuidCode            = 0x52
+	objectIdCode        = 0x53
+	yearCode            = 0x54
+	dateOrderedCode     = 0x55
+	datetimeOrderedCode = 0x56
 )
 
 var sizeLimits = []uint64{
@@ -376,6 +381,16 @@ func decodeInt(code byte, b []byte) (interface{}, int) {
 	default:
 		return ret, n + 1
 	}
+}
+
+func decodeOrderedDate(_ byte, b []byte) (interface{}, int) {
+	value, n := decodeUint(uint64Code, b)
+	return DateFromOrderKey(value.(uint64)), n
+}
+
+func decodeOrderedDatetime(_ byte, b []byte) (interface{}, int) {
+	value, n := decodeUint(uint64Code, b)
+	return DatetimeFromOrderKey(value.(uint64)), n
 }
 
 func decodeUint(code byte, b []byte) (interface{}, int) {
@@ -585,10 +600,16 @@ func decodeTupleTo(b []byte, t Tuple, schema []T) (Tuple, int, []T, error) {
 		case dateCode:
 			schema = append(schema, T_date)
 			el, off, err = decodeWithOffset(i, decodeInt, dateCode)
+		case dateOrderedCode:
+			schema = append(schema, T_date)
+			el, off, err = decodeWithOffset(i, decodeOrderedDate, dateOrderedCode)
 
 		case datetimeCode:
 			schema = append(schema, T_datetime)
 			el, off, err = decodeWithOffset(i, decodeInt, datetimeCode)
+		case datetimeOrderedCode:
+			schema = append(schema, T_datetime)
+			el, off, err = decodeWithOffset(i, decodeOrderedDatetime, datetimeOrderedCode)
 
 		case timestampCode:
 			schema = append(schema, T_timestamp)
@@ -764,9 +785,15 @@ func UnpackNthElement(b []byte, n int) (any, T, error) {
 		case dateCode:
 			schema = T_date
 			el, off, err = decodeWithOffset(i, decodeInt, dateCode)
+		case dateOrderedCode:
+			schema = T_date
+			el, off, err = decodeWithOffset(i, decodeOrderedDate, dateOrderedCode)
 		case datetimeCode:
 			schema = T_datetime
 			el, off, err = decodeWithOffset(i, decodeInt, datetimeCode)
+		case datetimeOrderedCode:
+			schema = T_datetime
+			el, off, err = decodeWithOffset(i, decodeOrderedDatetime, datetimeOrderedCode)
 		case timestampCode:
 			schema = T_timestamp
 			el, off, err = decodeWithOffset(i, decodeInt, timestampCode)
@@ -889,8 +916,14 @@ func StringifyTuple(b []byte, types []plan.Type) ([]string, error) {
 		case b[offset] == dateCode:
 			item, itemLen = stringifyInt(dateCode, b[offset+1:], types[i].Scale)
 			itemLen += 1
+		case b[offset] == dateOrderedCode:
+			item, itemLen = stringifyOrderedDate(b[offset+1:])
+			itemLen += 1
 		case b[offset] == datetimeCode:
 			item, itemLen = stringifyInt(datetimeCode, b[offset+1:], types[i].Scale)
+			itemLen += 1
+		case b[offset] == datetimeOrderedCode:
+			item, itemLen = stringifyOrderedDatetime(b[offset+1:], types[i].Scale)
 			itemLen += 1
 		case b[offset] == timestampCode:
 			item, itemLen = stringifyInt(timestampCode, b[offset+1:], types[i].Scale)
@@ -1002,6 +1035,16 @@ func stringifyInt(code byte, b []byte, scale int32) (string, int) {
 	default:
 		return strconv.FormatInt(ret, 10), n + 1
 	}
+}
+
+func stringifyOrderedDate(b []byte) (string, int) {
+	value, n := decodeUint(uint64Code, b)
+	return DateFromOrderKey(value.(uint64)).String(), n
+}
+
+func stringifyOrderedDatetime(b []byte, scale int32) (string, int) {
+	value, n := decodeUint(uint64Code, b)
+	return DatetimeFromOrderKey(value.(uint64)).String2(scale), n
 }
 
 func stringifyUint(code byte, b []byte) (string, int) {

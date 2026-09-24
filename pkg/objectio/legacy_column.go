@@ -235,7 +235,8 @@ func readLegacyColumnLayout(source io.ReaderAt, originSize int64) (legacyColumnL
 	}
 	header := DecodeIOEntryHeader(prefix)
 	if header.Type != IOET_ColData ||
-		(header.Version != IOET_ColumnData_V1 && header.Version != IOET_ColumnData_V2) {
+		(header.Version != IOET_ColumnData_V1 && header.Version != IOET_ColumnData_V2 &&
+			header.Version != IOET_ColumnData_V3) {
 		return layout, moerr.NewInvalidInputNoCtx("invalid legacy object column header")
 	}
 	offset := IOEntryHeaderSize

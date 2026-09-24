@@ -34,11 +34,15 @@ var (
 )
 
 const (
-	IOET_ObjectMeta_V1  = 1
-	IOET_ObjectMeta_V2  = 2
-	IOET_ObjectMeta_V3  = 3
-	IOET_ColumnData_V1  = 1
-	IOET_ColumnData_V2  = 2
+	IOET_ObjectMeta_V1 = 1
+	IOET_ObjectMeta_V2 = 2
+	IOET_ObjectMeta_V3 = 3
+	IOET_ColumnData_V1 = 1
+	IOET_ColumnData_V2 = 2
+	// V3 has the same vector payload as V2, but is a compatibility fence for
+	// tagged invalid DATE/DATETIME values. Readers predating V3 must reject it
+	// instead of decoding the new scalar representation as a legacy value.
+	IOET_ColumnData_V3  = 3
 	IOET_BloomFilter_V1 = 1
 	IOET_BloomFilter_V2 = 2
 	IOET_ZoneMap_V1     = 1
@@ -57,9 +61,33 @@ func init() {
 	// Break by MustVector. Need to update MustVector to support new version.
 	RegisterIOEnrtyCodec(IOEntryHeader{IOET_ColData, IOET_ColumnData_V1}, EncodeColumnDataV1, DecodeColumnDataV1)
 	RegisterIOEnrtyCodec(IOEntryHeader{IOET_ColData, IOET_ColumnData_V2}, EncodeColumnDataV1, DecodeColumnDataV2)
+	RegisterIOEnrtyCodec(IOEntryHeader{IOET_ColData, IOET_ColumnData_V3}, EncodeColumnDataV1, DecodeColumnDataV2)
 	RegisterIOEnrtyCodec(IOEntryHeader{IOET_BF, IOET_BloomFilter_V1}, nil, nil)
 	RegisterIOEnrtyCodec(IOEntryHeader{IOET_BF, IOET_BloomFilter_V2}, nil, nil)
 	RegisterIOEnrtyCodec(IOEntryHeader{IOET_ZM, IOET_ZoneMap_V1}, nil, nil)
+}
+
+// columnDataVersion selects the compatibility fence only when the payload
+// actually contains a tagged invalid temporal value. Ordinary columns retain
+// V2 byte-for-byte compatibility with existing readers.
+func columnDataVersion(vec *vector.Vector) uint16 {
+	if vec != nil {
+		switch vec.GetType().Oid {
+		case types.T_date:
+			for _, value := range vector.MustFixedColNoTypeCheck[types.Date](vec) {
+				if value.IsTaggedInvalid() {
+					return IOET_ColumnData_V3
+				}
+			}
+		case types.T_datetime:
+			for _, value := range vector.MustFixedColNoTypeCheck[types.Datetime](vec) {
+				if value.IsTaggedInvalid() {
+					return IOET_ColumnData_V3
+				}
+			}
+		}
+	}
+	return IOET_ColumnData_CurrVer
 }
 
 func EncodeColumnDataV1(ioe any) (buf []byte, err error) {
