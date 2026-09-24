@@ -659,7 +659,8 @@ func (a *QCloudSDK) WriteMultipartParallel(
 				<-getParallelUploadSemaphore()
 				<-uploadSlots
 			}()
-			if ctx.Err() != nil {
+			if ctxErr := ctx.Err(); ctxErr != nil {
+				setErr(ctxErr)
 				releasePartBuffer(job.part)
 				return
 			}
@@ -734,9 +735,6 @@ func (a *QCloudSDK) WriteMultipartParallel(
 	if firstErr != nil {
 		err = firstErr
 		return err
-	}
-	if len(parts) == 0 {
-		return nil
 	}
 	if len(parts) != int(partNum) {
 		return moerr.NewInternalErrorNoCtxf("multipart upload incomplete, expect %d parts got %d", partNum, len(parts))

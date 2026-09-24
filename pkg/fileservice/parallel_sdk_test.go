@@ -234,11 +234,17 @@ func awsS3ErrorXML(code, message string) string {
 }
 
 func newTestAWSClient(t *testing.T, srv *httptest.Server) *AwsSDKv2 {
+	return newTestAWSClientWithTransport(t, srv, srv.Client().Transport)
+}
+
+func newTestAWSClientWithTransport(t *testing.T, srv *httptest.Server, transport http.RoundTripper) *AwsSDKv2 {
 	t.Helper()
+	httpClient := srv.Client()
+	httpClient.Transport = transport
 	cfg := aws.Config{
 		Region:      "us-east-1",
 		Credentials: aws.NewCredentialsCache(credentials.NewStaticCredentialsProvider("id", "key", "")),
-		HTTPClient:  srv.Client(),
+		HTTPClient:  httpClient,
 		Retryer: func() aws.Retryer {
 			return aws.NopRetryer{}
 		},
@@ -1175,6 +1181,27 @@ func TestCOSMultipartInitDoesNotRequireListPermission(t *testing.T) {
 	require.NoError(t, sdk.WriteMultipartParallel(context.Background(), "object", bytes.NewReader(data), &size, nil))
 	require.Zero(t, transport.listCalls.Load())
 	require.Equal(t, int32(1), state.initCalls.Load())
+}
+
+func TestAwsMultipartInitCancellationCleansOwnedUpload(t *testing.T) {
+	server, state := newMockAWSServer(t, 0)
+	defer server.Close()
+	state.uploadID = "aws-uid-canceled"
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+	sdk := newTestAWSClientWithTransport(t, server, &cosMultipartInitCancelAfterResponseTransport{
+		base:   server.Client().Transport,
+		cancel: cancel,
+	})
+
+	data := bytes.Repeat([]byte("r"), int(minMultipartPartSize+1))
+	size := int64(len(data))
+	err := sdk.WriteMultipartParallel(ctx, "object", bytes.NewReader(data), &size, nil)
+	require.ErrorIs(t, err, context.Canceled)
+	require.True(t, state.aborted.Load())
+	state.mu.Lock()
+	defer state.mu.Unlock()
+	require.Empty(t, state.completeBody)
 }
 
 func TestCOSMultipartInitCancellationCleansOwnedUpload(t *testing.T) {
