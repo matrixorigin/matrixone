@@ -79,11 +79,11 @@ func Compare(a, b []byte, t types.T, scale1, scale2 int32) int {
 	case types.T_timestamp:
 		return CompareOrdered(types.DecodeTimestamp(a), types.DecodeTimestamp(b))
 	case types.T_date:
-		return CompareOrdered(types.DecodeDate(a), types.DecodeDate(b))
+		return types.DateAscCompare(types.DecodeDate(a), types.DecodeDate(b))
 	case types.T_time:
 		return CompareOrdered(types.DecodeTime(a), types.DecodeTime(b))
 	case types.T_datetime:
-		return CompareOrdered(types.DecodeDatetime(a), types.DecodeDatetime(b))
+		return types.DatetimeAscCompare(types.DecodeDatetime(a), types.DecodeDatetime(b))
 	case types.T_enum:
 		return CompareOrdered(types.DecodeEnum(a), types.DecodeEnum(b))
 	case types.T_year:
@@ -176,11 +176,11 @@ func CompareGeneric(a, b any, t types.T) int {
 	case types.T_timestamp:
 		return CompareOrdered(a.(types.Timestamp), b.(types.Timestamp))
 	case types.T_date:
-		return CompareOrdered(a.(types.Date), b.(types.Date))
+		return types.DateAscCompare(a.(types.Date), b.(types.Date))
 	case types.T_time:
 		return CompareOrdered(a.(types.Time), b.(types.Time))
 	case types.T_datetime:
-		return CompareOrdered(a.(types.Datetime), b.(types.Datetime))
+		return types.DatetimeAscCompare(a.(types.Datetime), b.(types.Datetime))
 	case types.T_enum:
 		return CompareOrdered(a.(types.Enum), b.(types.Enum))
 	case types.T_year:

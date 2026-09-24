@@ -2106,6 +2106,13 @@ func constantFoldWithPreparedExactSource(
 	if rule.IsLegacyTimeAssignmentOutsideInternalRange(fn) {
 		return expr, nil
 	}
+	if rule.ContainsSqlModeDependentTemporalCast(expr) {
+		// Explicit string-to-temporal casts depend on the execution session's
+		// SQL mode (notably ALLOW_INVALID_DATES). Folding the cast or an
+		// enclosing constant expression would bake the planner mode into a
+		// reusable expression.
+		return expr, nil
+	}
 	if f.IsRealTimeRelated() && !varAndParamIsConst {
 		return expr, nil
 	}

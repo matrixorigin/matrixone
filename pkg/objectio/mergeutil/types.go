@@ -82,13 +82,13 @@ func MergeSortBatches(
 		merge = newMerge(sort.GenericLess[float64], ds, nulls)
 	case types.T_date:
 		ds := &fixedDataSlice[types.Date]{getFixedCols[types.Date](batches, sortKeyIdx)}
-		merge = newMerge(sort.GenericLess[types.Date], ds, nulls)
+		merge = newMerge(func(a, b types.Date) bool { return types.DateAscCompare(a, b) < 0 }, ds, nulls)
 	case types.T_year:
 		ds := &fixedDataSlice[types.MoYear]{getFixedCols[types.MoYear](batches, sortKeyIdx)}
 		merge = newMerge(sort.GenericLess[types.MoYear], ds, nulls)
 	case types.T_datetime:
 		ds := &fixedDataSlice[types.Datetime]{getFixedCols[types.Datetime](batches, sortKeyIdx)}
-		merge = newMerge(sort.GenericLess[types.Datetime], ds, nulls)
+		merge = newMerge(func(a, b types.Datetime) bool { return types.DatetimeAscCompare(a, b) < 0 }, ds, nulls)
 	case types.T_time:
 		ds := &fixedDataSlice[types.Time]{getFixedCols[types.Time](batches, sortKeyIdx)}
 		merge = newMerge(sort.GenericLess[types.Time], ds, nulls)

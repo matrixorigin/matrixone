@@ -455,8 +455,15 @@ func fetchDateRows(
 		return parker.Bytes()
 	}
 	if lockTable {
-		min := fn(math.MinInt32)
-		max := fn(math.MaxInt32)
+		// Date keys are now calendar ordered.  The old signed scalar extrema
+		// are not ordered extrema after EncodeDate switched to DateOrderKey:
+		// math.MinInt32 and math.MaxInt32 are arbitrary raw values and can
+		// encode in the reserved raw-key range in either order.  ZeroDate is
+		// the lower SQL key, while -2 is the largest non-zero raw Date value
+		// (Date(-1) is reserved for ZeroDate), so this pair covers both the
+		// calendar key space and the preserved raw scalar compatibility range.
+		min := fn(types.ZeroDate)
+		max := fn(types.Date(-2))
 		return true, [][]byte{min, max},
 			lock.Granularity_Range
 	}
@@ -563,8 +570,11 @@ func fetchDateTimeRows(
 		return parker.Bytes()
 	}
 	if lockTable {
-		min := fn(math.MinInt64)
-		max := fn(math.MaxInt64)
+		// See fetchDateRows.  Datetime(-1) is ZeroDatetime, so -2 is the
+		// largest non-zero raw scalar and keeps the complete encoded domain in
+		// ascending order.
+		min := fn(types.ZeroDatetime)
+		max := fn(types.Datetime(-2))
 		return true, [][]byte{min, max},
 			lock.Granularity_Range
 	}

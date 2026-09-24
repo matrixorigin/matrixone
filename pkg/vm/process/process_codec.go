@@ -169,6 +169,11 @@ func (proc *Process) BuildProcessInfo(
 			AutoIncrementIncrement: proc.Base.SessionInfo.AutoIncrementIncrement,
 			AutoIncrementOffset:    proc.Base.SessionInfo.AutoIncrementOffset,
 		}
+		defaultWeekFormat, err := resolveDefaultWeekFormat(proc)
+		if err != nil {
+			return procInfo, err
+		}
+		procInfo.SessionInfo.DefaultWeekFormat = defaultWeekFormat
 		nullifyZeroTemporal, err := ResolveExplicitZeroTemporalCastReturnsNull(proc)
 		if err != nil {
 			return procInfo, err
@@ -468,6 +473,7 @@ func ConvertToProcessSessionInfo(
 		MatrixOneNativeMode:                 sei.MatrixoneNativeMode,
 		ExplicitZeroTemporalCastReturnsNull: sei.ExplicitZeroTemporalCastReturnsNull,
 		SqlMode:                             sei.SqlMode,
+		DefaultWeekFormat:                   sei.DefaultWeekFormat,
 		AutoIncrementIncrement:              sei.AutoIncrementIncrement,
 		AutoIncrementOffset:                 sei.AutoIncrementOffset,
 	}
@@ -524,6 +530,32 @@ func resolveSqlMode(proc *Process) string {
 		return ""
 	}
 	return proc.Base.SessionInfo.SqlMode
+}
+
+func resolveDefaultWeekFormat(proc *Process) (int64, error) {
+	if proc == nil || proc.Base == nil {
+		return 0, nil
+	}
+	if f := proc.GetResolveVariableFunc(); f != nil {
+		value, err := f("default_week_format", true, false)
+		if err != nil {
+			// Older/background resolvers may not know this variable yet. The
+			// coordinator snapshot is authoritative for remote forwarding.
+			return proc.Base.SessionInfo.DefaultWeekFormat & 7, nil
+		}
+		if value == nil {
+			return proc.Base.SessionInfo.DefaultWeekFormat & 7, nil
+		}
+		mode, ok := value.(int64)
+		if !ok {
+			// Some background resolvers answer unknown variables with their
+			// compiled string default. Preserve the coordinator snapshot in
+			// that case; only a real int64 value is an execution-time override.
+			return proc.Base.SessionInfo.DefaultWeekFormat & 7, nil
+		}
+		return mode & 7, nil
+	}
+	return proc.Base.SessionInfo.DefaultWeekFormat & 7, nil
 }
 
 func resolveLockWaitTimeoutSeconds(proc *Process) int64 {

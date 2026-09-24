@@ -5459,6 +5459,10 @@ func Test_appendResultSet4(t *testing.T) {
 						return "", moerr.NewInternalError(context.TODO(), "invalid string slice")
 					})
 					defer bhStub2.Reset()
+					bhStub3 := gostub.Stub(&GetDatetimeValue, func(slices *ColumnSlices, rowIdx uint64, colIdx uint64) (types.Datetime, error) {
+						return 0, moerr.NewInternalError(context.TODO(), "invalid datetime slice")
+					})
+					defer bhStub3.Reset()
 
 				case defines.MYSQL_TYPE_TIMESTAMP:
 					bhStub2 := gostub.Stub(&GetTimestamp, func(slices *ColumnSlices, rowIdx uint64, colIdx uint64, timeZone *time.Location) (string, error) {
@@ -5469,6 +5473,10 @@ func Test_appendResultSet4(t *testing.T) {
 						return "", moerr.NewInternalError(context.TODO(), "invalid string slice")
 					})
 					defer bhStub3.Reset()
+					bhStub4 := gostub.Stub(&GetDatetimeValue, func(slices *ColumnSlices, rowIdx uint64, colIdx uint64) (types.Datetime, error) {
+						return 0, moerr.NewInternalError(context.TODO(), "invalid datetime slice")
+					})
+					defer bhStub4.Reset()
 				case defines.MYSQL_TYPE_FLOAT:
 					bhStub := gostub.Stub(&GetFloat32, func(slices *ColumnSlices, rowIdx uint64, colIdx uint64) (float32, error) {
 						return 0, moerr.NewInternalError(context.TODO(), "invalid float32 slice")
@@ -5581,6 +5589,10 @@ func Test_appendResultSet5(t *testing.T) {
 				defer colSlices.Close()
 				err = convertBatchToSlices(context.TODO(), ses, bat, colSlices)
 				convey.So(err, convey.ShouldBeNil)
+				bhStubTemporal := gostub.Stub(&GetDatetimeValue, func(slices *ColumnSlices, rowIdx uint64, colIdx uint64) (types.Datetime, error) {
+					return 0, moerr.NewInternalError(context.TODO(), "invalid datetime slice")
+				})
+				defer bhStubTemporal.Reset()
 
 				col, _ := mrs.GetColumn(context.TODO(), 0)
 
@@ -6539,6 +6551,35 @@ func Test_appendResultSetBinaryRow2_DateTimeHandling(t *testing.T) {
 			convey.So(err, convey.ShouldBeNil)
 
 			err := proto.appendResultSetBinaryRow2(rs, colSlices, 0)
+			convey.So(err, convey.ShouldBeNil)
+		})
+
+		convey.Convey("MYSQL_TYPE_DATETIME with tagged invalid DATETIME", func() {
+			rs := &MysqlResultSet{}
+			mysqlCol := new(MysqlColumn)
+			mysqlCol.SetName("datetime_col")
+			mysqlCol.SetColumnType(defines.MYSQL_TYPE_DATETIME)
+			mysqlCol.SetDecimal(0)
+			rs.AddColumn(mysqlCol)
+
+			bat := batch.NewWithSize(1)
+			bat.Vecs[0] = vector.NewVec(types.New(types.T_datetime, 0, 0))
+			invalid := types.DatetimeFromClockAllowInvalid(2024, 2, 30, 10, 20, 30, 0)
+			vector.AppendFixed(bat.Vecs[0], invalid, false, proc.Mp())
+			bat.SetRowCount(1)
+
+			colSlices := &ColumnSlices{
+				ctx:             ctx,
+				colIdx2SliceIdx: make([]int, len(bat.Vecs)),
+				dataSet:         bat,
+			}
+			defer colSlices.Close()
+			err = convertBatchToSlices(ctx, ses, bat, colSlices)
+			convey.So(err, convey.ShouldBeNil)
+
+			// The binary protocol must use the stored calendar fields directly;
+			// reparsing String2() with the strict parser rejects February 30.
+			err = proto.appendResultSetBinaryRow2(rs, colSlices, 0)
 			convey.So(err, convey.ShouldBeNil)
 		})
 	})

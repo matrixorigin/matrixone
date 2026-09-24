@@ -712,6 +712,26 @@ var GetDatetime = func(slices *ColumnSlices, r uint64, i uint64) (string, error)
 	return slices.GetDatetime(r, i)
 }
 
+// GetDatetimeValue returns the stored scalar without formatting and reparsing
+// it. This is required for tagged invalid DATETIME values, whose calendar
+// fields are intentionally accepted by the execution session but rejected by
+// the strict text parser.
+func (slices *ColumnSlices) GetDatetimeValue(r uint64, i uint64) (types.Datetime, error) {
+	if slices.IsConst(i) {
+		r = 0
+	}
+	vec := slices.dataSet.Vecs[i]
+	if vec.GetType().Oid != types.T_datetime {
+		return 0, moerr.NewInternalError(slices.ctx, "invalid datetime slice")
+	}
+	sliceIdx := slices.GetSliceIdx(i)
+	return slices.arrDatetime[sliceIdx][r], nil
+}
+
+var GetDatetimeValue = func(slices *ColumnSlices, r uint64, i uint64) (types.Datetime, error) {
+	return slices.GetDatetimeValue(r, i)
+}
+
 func (slices *ColumnSlices) GetDatetime(r uint64, i uint64) (string, error) {
 	if slices.IsConst(i) {
 		r = 0
@@ -727,10 +747,6 @@ func (slices *ColumnSlices) GetDatetime(r uint64, i uint64) (string, error) {
 	case types.T_datetime:
 		scale := vec.GetType().Scale
 		dt := slices.arrDatetime[sliceIdx][r]
-		// If fractional seconds are 0, format without fractional part (MySQL behavior)
-		if scale > 0 && dt.MicroSec() == 0 {
-			return dt.String2(0), nil
-		}
 		return dt.String2(scale), nil
 	default:
 		return "", moerr.NewInternalError(slices.ctx, "invalid datetime slice")

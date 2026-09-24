@@ -312,6 +312,33 @@ func TestAssignmentDateCastRejectsInvalidStrings(t *testing.T) {
 	}
 }
 
+func TestAssignmentCastAllowsInvalidCalendarDates(t *testing.T) {
+	proc := testutil.NewProcess(t)
+	proc.GetSessionInfo().TimeZone = time.UTC
+	proc.SetResolveVariableFunc(func(varName string, isSystemVar, isGlobalVar bool) (interface{}, error) {
+		require.Equal(t, "sql_mode", varName)
+		return "STRICT_TRANS_TABLES,ALLOW_INVALID_DATES", nil
+	})
+
+	date := runStringTemporalCast(t, proc, NewStrictCast, "2024-02-30", types.T_date.ToType(), nil)
+	require.False(t, date.nulls[0])
+	require.Equal(t, "2024-02-30", date.dates[0].String())
+
+	datetime := runStringTemporalCast(t, proc, NewStrictCast, "2024-02-30 12:34:56.123456", types.T_datetime.ToTypeWithScale(6), nil)
+	require.False(t, datetime.nulls[0])
+	require.Equal(t, "2024-02-30 12:34:56.123456", datetime.datetimes[0].String2(6))
+
+	inputVec := testutil.MakeVarcharVector([]string{"2024-02-30 12:34:56"}, nil, proc.Mp())
+	defer inputVec.Free(proc.Mp())
+	targetType := vector.NewConstNull(types.T_timestamp.ToType(), 1, proc.Mp())
+	defer targetType.Free(proc.Mp())
+	result := vector.NewFunctionResultWrapper(types.T_timestamp.ToType(), proc.Mp())
+	defer result.Free()
+	require.NoError(t, result.PreExtendAndReset(1))
+	err := NewStrictCast([]*vector.Vector{inputVec, targetType}, result, proc, 1, nil)
+	require.Error(t, err)
+}
+
 func TestExplicitCastZeroTemporalResolverErrorPropagates(t *testing.T) {
 	proc := testutil.NewProcess(t)
 	proc.GetSessionInfo().TimeZone = time.UTC

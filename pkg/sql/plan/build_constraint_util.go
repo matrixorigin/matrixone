@@ -1313,15 +1313,26 @@ func useSqlModeStringAssignmentCast(targetType Type) bool {
 
 func useSqlModeAssignmentCast(targetType Type) bool {
 	return useSqlModeStringAssignmentCast(targetType) ||
+		targetType.Id == int32(types.T_date) ||
+		targetType.Id == int32(types.T_datetime) ||
+		targetType.Id == int32(types.T_timestamp) ||
 		targetType.Id == int32(types.T_year) ||
 		targetType.Id == int32(types.T_time)
 }
 
+func useTemporalSqlModeAssignmentCast(targetType Type) bool {
+	switch targetType.Id {
+	case int32(types.T_date), int32(types.T_datetime), int32(types.T_timestamp):
+		return true
+	default:
+		return false
+	}
+}
+
 // useIgnoreConversionAssignmentCast identifies conversions whose lexical
 // failure is adjusted by INSERT/UPDATE IGNORE. Keep this separate from
-// useSqlModeAssignmentCast: ordinary assignments to these types must retain
-// their existing cast/cast_strict selection, while the IGNORE runtime needs
-// the assignment-ignore mode to distinguish lexical failures from range and
+// useSqlModeAssignmentCast because the IGNORE runtime needs the
+// assignment-ignore mode to distinguish lexical failures from range and
 // execution errors.
 func useIgnoreConversionAssignmentCast(targetType Type) bool {
 	switch targetType.Id {
@@ -1455,6 +1466,11 @@ func assignmentCastFunctionName(targetType Type, isIgnore bool, proc *process.Pr
 	}
 	if !assignmentCastProtocolSupported(proc) {
 		if isIgnore {
+			// Preserve the pre-MORPC-v5 IGNORE behavior for temporal targets;
+			// the legacy cast path cannot carry assignment warning semantics.
+			if useTemporalSqlModeAssignmentCast(targetType) {
+				return "cast_strict"
+			}
 			return "cast"
 		}
 		return "cast_strict"
@@ -1484,6 +1500,18 @@ func forceAssignmentCastExprWithProcess(
 }
 
 func assignmentCastFunctionNameForSource(expr *Expr, targetType Type, isIgnore bool, proc *process.Process) string {
+	// Numeric-to-temporal conversions are not SQL-mode-sensitive temporal
+	// assignments. Keep their historical strict conversion path; the runtime
+	// assignment cast is needed for strings and already-typed temporal values,
+	// where ALLOW_INVALID_DATES and permissive assignment semantics apply.
+	if targetType.Id == int32(types.T_date) ||
+		targetType.Id == int32(types.T_datetime) ||
+		targetType.Id == int32(types.T_timestamp) {
+		sourceType := types.T(expr.Typ.Id)
+		if !sourceType.IsDateRelate() && !sourceType.IsMySQLString() {
+			return "cast_strict"
+		}
+	}
 	name := assignmentCastFunctionName(targetType, isIgnore, proc)
 	if types.T(targetType.Id).IsInteger() &&
 		(types.T(expr.Typ.Id).IsFloat() ||
@@ -1929,7 +1957,26 @@ func forceCastExprWithNameAndAssignment(
 	}, nil
 }
 
-func MakeInsertValueConstExpr(proc *process.Process, numVal *tree.NumVal, colType *types.Type, isIgnore bool) (*plan.Expr, error) {
+// MakeInsertValueConstExpr keeps the historical helper contract used by
+// planner tests and non-DML callers. DML supplies whether the statement is a
+// prepared statement through makeInsertValueConstExpr so direct VALUES keeps
+// its left-to-right plan-time error ordering.
+func MakeInsertValueConstExpr(
+	proc *process.Process,
+	numVal *tree.NumVal,
+	colType *types.Type,
+	isIgnore bool,
+) (*plan.Expr, error) {
+	return makeInsertValueConstExpr(proc, numVal, colType, isIgnore, true)
+}
+
+func makeInsertValueConstExpr(
+	proc *process.Process,
+	numVal *tree.NumVal,
+	colType *types.Type,
+	isIgnore bool,
+	deferTemporalToExecution bool,
+) (*plan.Expr, error) {
 	if numVal.ValType == tree.P_null || numVal.ValType == tree.P_nulltext {
 		return makePlan2NullConstExprWithType(), nil
 	}
@@ -1940,6 +1987,18 @@ func MakeInsertValueConstExpr(proc *process.Process, numVal *tree.NumVal, colTyp
 	if isIgnore && numVal.ValType == tree.P_char && useIgnoreConversionAssignmentCast(makePlan2Type(colType)) {
 		expr := MakePlan2StringConstExprWithType(numVal.String())
 		return forceAssignmentCastExprWithProcess(proc.Ctx, expr, makePlan2Type(colType), true, proc)
+	}
+	// Keep string temporal literals as text until execution. Parsing an invalid
+	// DATE/DATETIME/TIMESTAMP under the prepare-time policy would retain that
+	// policy in the cached plan and bypass the execution-time SQL mode check.
+	if deferTemporalToExecution && numVal.ValType == tree.P_char && numVal.String() != "" {
+		targetType := makePlan2Type(colType)
+		if targetType.Id == int32(types.T_date) ||
+			targetType.Id == int32(types.T_datetime) ||
+			targetType.Id == int32(types.T_timestamp) {
+			expr := MakePlan2StringConstExprWithType(numVal.String())
+			return forceAssignmentCastExprWithProcess(proc.Ctx, expr, targetType, isIgnore, proc)
+		}
 	}
 	// Integer assignment must consume the literal's source type, not parse its
 	// spelling as an integer or truncate it in the VALUES fast path.
@@ -2202,7 +2261,7 @@ func buildValueScan(
 					}
 				}
 				if nv, ok := r[i].(*tree.NumVal); ok && !isEnumOrSetPlanType(&col.Typ) && !isTypedArrayPlanType(&col.Typ) {
-					expr, err := MakeInsertValueConstExpr(proc, nv, &colTyp, builder.isInsertIgnore)
+					expr, err := makeInsertValueConstExpr(proc, nv, &colTyp, builder.isInsertIgnore, builder.isPrepareStatement)
 					if err != nil {
 						return nil, err
 					}

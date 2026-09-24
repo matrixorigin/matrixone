@@ -59,9 +59,9 @@ func betweenImpl(parameters []*vector.Vector, result vector.FunctionResultWrappe
 	case types.T_float64:
 		return opBetweenFixed[float64](parameters, rs, proc, length)
 	case types.T_date:
-		return opBetweenFixed[types.Date](parameters, rs, proc, length)
+		return opBetweenFixedWithFn(parameters, rs, proc, length, types.DateAscCompare)
 	case types.T_datetime:
-		return opBetweenFixed[types.Datetime](parameters, rs, proc, length)
+		return opBetweenFixedWithFn(parameters, rs, proc, length, types.DatetimeAscCompare)
 	case types.T_time:
 		return opBetweenFixed[types.Time](parameters, rs, proc, length)
 	case types.T_timestamp:
@@ -125,7 +125,7 @@ func opBetweenDatetimeTimestamp(
 		parameters[1].GetType().Oid == types.T_datetime:
 		return opBetweenTemporal[types.Datetime, types.Datetime, types.Timestamp](
 			parameters, result, length,
-			func(value, lower types.Datetime) bool { return value >= lower },
+			func(value, lower types.Datetime) bool { return types.DatetimeAscCompare(value, lower) >= 0 },
 			func(value types.Datetime, upper types.Timestamp) bool {
 				return value.ToTimestamp(zone).TruncateToScale(upperScale) <= upper
 			})
@@ -136,7 +136,7 @@ func opBetweenDatetimeTimestamp(
 			func(value types.Datetime, lower types.Timestamp) bool {
 				return value.ToTimestamp(zone).TruncateToScale(lowerScale) >= lower
 			},
-			func(value, upper types.Datetime) bool { return value <= upper })
+			func(value, upper types.Datetime) bool { return types.DatetimeAscCompare(value, upper) <= 0 })
 	case parameters[0].GetType().Oid == types.T_datetime:
 		return opBetweenDatetimeAndTimestampBounds(
 			parameters, result, zone, lowerScale, length,
@@ -671,9 +671,9 @@ func inRangeImpl(parameters []*vector.Vector, result vector.FunctionResultWrappe
 	case types.T_float64:
 		return inRangeFixed[float64](parameters, rs, proc, length)
 	case types.T_date:
-		return inRangeFixed[types.Date](parameters, rs, proc, length)
+		return inRangeFixedWithFunc(parameters, rs, proc, length, types.DateAscCompare)
 	case types.T_datetime:
-		return inRangeFixed[types.Datetime](parameters, rs, proc, length)
+		return inRangeFixedWithFunc(parameters, rs, proc, length, types.DatetimeAscCompare)
 	case types.T_time:
 		return inRangeFixed[types.Time](parameters, rs, proc, length)
 	case types.T_timestamp:

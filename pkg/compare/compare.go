@@ -110,14 +110,14 @@ func newCompareFor(typ types.Type, desc, nullsLast, sqlOrder bool) Compare {
 		return newCompare(types.Float64OrderAscCompare, genericCopy[float64], nullsLast)
 	case types.T_date:
 		if desc {
-			return newCompare(types.GenericDescCompare[types.Date], genericCopy[types.Date], nullsLast)
+			return newCompare(types.DateDescCompare, genericCopy[types.Date], nullsLast)
 		}
-		return newCompare(types.GenericAscCompare[types.Date], genericCopy[types.Date], nullsLast)
+		return newCompare(types.DateAscCompare, genericCopy[types.Date], nullsLast)
 	case types.T_datetime:
 		if desc {
-			return newCompare(types.GenericDescCompare[types.Datetime], genericCopy[types.Datetime], nullsLast)
+			return newCompare(types.DatetimeDescCompare, genericCopy[types.Datetime], nullsLast)
 		}
-		return newCompare(types.GenericAscCompare[types.Datetime], genericCopy[types.Datetime], nullsLast)
+		return newCompare(types.DatetimeAscCompare, genericCopy[types.Datetime], nullsLast)
 	case types.T_time:
 		if desc {
 			return newCompare(types.GenericDescCompare[types.Time], genericCopy[types.Time], nullsLast)

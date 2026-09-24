@@ -64,6 +64,17 @@ const (
 	MaxMonthInYear = 12
 	MinMonthInYear = 1
 	ZeroDate       = Date(-1)
+
+	// Valid dates use the compact day-offset representation below 4 million.
+	// Keep a separate, fixed-width range for ALLOW_INVALID_DATES values so the
+	// original calendar fields survive vector/storage round trips instead of
+	// being normalized by DateFromCalendar. Starting at MinInt32 keeps the
+	// tagged range disjoint from both valid dates and arbitrary raw values.
+	invalidDateEncodingBase = Date(-2_147_483_648)
+
+	dateOrderMonthStride = 32
+	dateOrderYearStride  = 13 * dateOrderMonthStride
+	dateOrderRawMarker   = uint64(1) << 63
 )
 
 type TimeType int32
@@ -367,6 +378,23 @@ func ParseDateCast(s string) (Date, error) {
 	return -1, moerr.NewInvalidArgNoCtx("parsedate", s)
 }
 
+// ParseDateCastWithInvalidDates applies MySQL's ALLOW_INVALID_DATES rule:
+// month and day must remain in their normal field ranges, but day need not be
+// valid for the selected month. Zero components and the all-zero sentinel keep
+// the normal ParseDateCast/SQL-mode policy and are not relaxed here.
+func ParseDateCastWithInvalidDates(s string) (Date, error) {
+	date, err := ParseDateCast(s)
+	if err == nil {
+		return date, nil
+	}
+	year, month, day, isZero, componentErr := parseDateCastComponents(strings.TrimSpace(s))
+	if componentErr != nil || isZero || year < MinDateYear || year > MaxDateYear ||
+		month < MinMonthInYear || month > MaxMonthInYear || day == 0 || day > 31 {
+		return -1, err
+	}
+	return DateFromCalendarAllowInvalid(year, month, day), nil
+}
+
 // date[0001-01-01 to 9999-12-31]
 func ValidDate(year int32, month, day uint8) bool {
 	return year >= MinDateYear && ValidCalendarDate(year, month, day)
@@ -383,6 +411,88 @@ func ValidCalendarDate(year int32, month, day uint8) bool {
 		return day <= leapYearMonthDays[month-1]
 	}
 	return day <= flatYearMonthDays[month-1]
+}
+
+func isEncodedInvalidDate(d Date) bool {
+	if d < invalidDateEncodingBase || d > invalidDateEncodingBase+Date(MaxDateYear*10000+MaxMonthInYear*100+31) {
+		return false
+	}
+	year, month, day := decodeInvalidDate(d)
+	return year >= MinDateYear && year <= MaxDateYear &&
+		month >= MinMonthInYear && month <= MaxMonthInYear &&
+		day > 0 && day <= 31 && !ValidDate(year, month, day)
+}
+
+// IsTaggedInvalid reports whether d uses the ALLOW_INVALID_DATES tagged
+// representation. Storage codecs use this to select a format version that a
+// pre-tag reader cannot silently reinterpret.
+func (d Date) IsTaggedInvalid() bool {
+	return isEncodedInvalidDate(d)
+}
+
+// normalizedDateForCalculation converts an ALLOW_INVALID_DATES tag to the
+// calendar date that Go/MySQL date arithmetic uses for its overflow fields.
+// The stored Date still preserves the original fields for formatting and
+// validation; only calendar calculations should use this value.
+func (d Date) normalizedDateForCalculation() Date {
+	if !isEncodedInvalidDate(d) {
+		return d
+	}
+	year, month, day := decodeInvalidDate(d)
+	t := time.Date(int(year), time.Month(month), int(day), 0, 0, 0, 0, time.UTC)
+	return DateFromCalendar(int32(t.Year()), uint8(t.Month()), uint8(t.Day()))
+}
+
+func decodeInvalidDate(d Date) (year int32, month, day uint8) {
+	packed := int32(d - invalidDateEncodingBase)
+	year = packed / 10000
+	month = uint8((packed / 100) % 100)
+	day = uint8(packed % 100)
+	return
+}
+
+// DateFromCalendarAllowInvalid preserves an in-range but calendar-invalid
+// date. Valid values continue to use the legacy day-offset representation.
+func DateFromCalendarAllowInvalid(year int32, month, day uint8) Date {
+	if year < MinDateYear || year > MaxDateYear || month < MinMonthInYear || month > MaxMonthInYear || day == 0 || day > 31 {
+		return ZeroDate
+	}
+	if ValidDate(year, month, day) {
+		return DateFromCalendar(year, month, day)
+	}
+	return invalidDateEncodingBase + Date(year*10000+int32(month)*100+int32(day))
+}
+
+// DateOrderKey is the unsigned, order-preserving calendar key used by tuple
+// and index encodings. It intentionally differs from Date's physical scalar
+// representation: invalid calendar fields need a position between their
+// neighboring valid dates, which a fixed-width day offset cannot provide.
+func DateOrderKey(d Date) uint64 {
+	if d == ZeroDate {
+		return 0
+	}
+	year, month, day, _ := d.Calendar(true)
+	if !d.IsTaggedInvalid() && (!ValidDate(year, month, day) || DateFromCalendar(year, month, day) != d) {
+		// Packer is also used by in-memory branch/hash structures that may carry
+		// an arbitrary raw Date scalar. Preserve that historical round trip in a
+		// reserved, non-SQL key range; real SQL dates use the calendar key below.
+		return dateOrderRawMarker | uint64(uint32(int32(d)))
+	}
+	return uint64(year)*dateOrderYearStride + uint64(month)*dateOrderMonthStride + uint64(day)
+}
+
+// DateFromOrderKey reverses DateOrderKey, including invalid calendar fields.
+func DateFromOrderKey(key uint64) Date {
+	if key == 0 {
+		return ZeroDate
+	}
+	if key&dateOrderRawMarker != 0 {
+		return Date(int32(key &^ dateOrderRawMarker))
+	}
+	year := int32(key / dateOrderYearStride)
+	month := uint8((key % dateOrderYearStride) / dateOrderMonthStride)
+	day := uint8(key % dateOrderMonthStride)
+	return DateFromCalendarAllowInvalid(year, month, day)
 }
 
 func (d Date) String() string {
@@ -553,6 +663,10 @@ func (d Date) Year() uint16 {
 	if d == ZeroDate {
 		return 0
 	}
+	if isEncodedInvalidDate(d) {
+		year, _, _ := decodeInvalidDate(d)
+		return uint16(year)
+	}
 	dayNum := int32(d)
 	insideDayInfoTable := dayNum >= dayNumOfTableEpoch && dayNum < dayNumOfTableEpoch+dayInfoTableSize
 	if insideDayInfoTable {
@@ -630,6 +744,13 @@ func (d Date) Quarter() uint32 {
 func (d Date) Calendar(full bool) (year int32, month, day uint8, yday uint16) {
 	if d == ZeroDate {
 		return 0, 0, 0, 0
+	}
+	if isEncodedInvalidDate(d) {
+		year, month, day = decodeInvalidDate(d)
+		if !full {
+			return year, month, day, uint16(daysBefore[month-1]) + uint16(day)
+		}
+		return year, month, day, uint16(daysBefore[month-1]) + uint16(day)
 	}
 	// Account for 400 year cycles.
 	n := d / daysPer400Years
@@ -771,23 +892,35 @@ func daysSinceEpoch(year int32) int32 {
 
 // DayOfWeek return the day of the week counting from Sunday
 func (d Date) DayOfWeek() Weekday {
+	if isEncodedInvalidDate(d) {
+		return d.normalizedDateForCalculation().DayOfWeek()
+	}
 	// January 1, year 1 in Gregorian calendar, was a Monday.
 	return Weekday((d + 1) % 7)
 }
 
 // DayOfWeek2 return the day of the week counting from Monday
 func (d Date) DayOfWeek2() Weekday {
+	if isEncodedInvalidDate(d) {
+		return d.normalizedDateForCalculation().DayOfWeek2()
+	}
 	// January 1, year 1 in Gregorian calendar, was a Monday.
 	return Weekday(d % 7)
 }
 
 // DayOfYear return day of year (001..366)
 func (d Date) DayOfYear() uint16 {
+	if isEncodedInvalidDate(d) {
+		return d.normalizedDateForCalculation().DayOfYear()
+	}
 	_, _, _, yday := d.Calendar(false)
 	return yday
 }
 
 func (d Date) WeekOfYear() (year int32, week uint8) {
+	if isEncodedInvalidDate(d) {
+		return d.normalizedDateForCalculation().WeekOfYear()
+	}
 	// According to the rule that the first calendar week of a calendar year is
 	// the week including the first Thursday of that year, and that the last one is
 	// the week immediately preceding the first calendar week of the next calendar year.
@@ -810,6 +943,9 @@ func (d Date) WeekOfYear() (year int32, week uint8) {
 }
 
 func (d Date) WeekOfYear2() uint8 {
+	if isEncodedInvalidDate(d) {
+		return d.normalizedDateForCalculation().WeekOfYear2()
+	}
 	// According to the rule that the first calendar week of a calendar year is
 	// the week including the first Thursday of that year, and that the last one is
 	// the week immediately preceding the first calendar week of the next calendar year.
@@ -868,6 +1004,9 @@ func weekMode(mode int) WeekBehaviour {
 // Week (00..53), where Sunday is the first day of the week; WEEK() mode 0
 // Week (00..53), where Monday is the first day of the week; WEEK() mode 1
 func (d Date) Week(mode int) int {
+	if isEncodedInvalidDate(d) {
+		return d.normalizedDateForCalculation().Week(mode)
+	}
 	if d.Month() == 0 || d.Day() == 0 {
 		return 0
 	}
@@ -891,6 +1030,9 @@ func WeekFromCalendar(year int32, month, day uint8, mode int) int {
 
 // YearWeek returns year and week.
 func (d Date) YearWeek(mode int) (year int, week int) {
+	if isEncodedInvalidDate(d) {
+		return d.normalizedDateForCalculation().YearWeek(mode)
+	}
 	behavior := weekMode(mode) | WeekYear
 	return calcWeek(d, behavior)
 }
@@ -986,6 +1128,10 @@ func (d Date) ToDatetime() Datetime {
 	if d == ZeroDate {
 		return ZeroDatetime
 	}
+	if isEncodedInvalidDate(d) {
+		year, month, day := decodeInvalidDate(d)
+		return DatetimeFromClockAllowInvalid(year, month, day, 0, 0, 0, 0)
+	}
 	return Datetime(int64(d) * SecsPerDay * MicroSecsPerSec)
 }
 
@@ -1020,6 +1166,10 @@ func (d Date) Day() uint8 {
 }
 
 func (d Date) DaysSinceUnixEpoch() int32 {
+	if isEncodedInvalidDate(d) {
+		year, month, day := decodeInvalidDate(d)
+		return DateFromCalendar(year, month, day).DaysSinceUnixEpoch()
+	}
 	return int32(d) - unixEpochDays
 }
 

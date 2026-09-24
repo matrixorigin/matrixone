@@ -323,7 +323,7 @@ func TestPreparedConstantFoldKeepsSqlModeDependentTemporalCast(t *testing.T) {
 		types.New(types.T_timestamp, 0, 6),
 	} {
 		t.Run(targetType.Oid.String(), func(t *testing.T) {
-			expr := makeConstantCastExpr(t, "cast", stringType, targetType, "2024-01-02 03:04:05")
+			expr := makeConstantCastExpr(t, "cast", stringType, targetType, "2024-02-30 03:04:05")
 			folded := NewConstantFold(true).constantFold(expr, proc)
 			require.NotNil(t, folded.GetF())
 		})
@@ -337,14 +337,44 @@ func TestConstantFoldStillFoldsUnaffectedCasts(t *testing.T) {
 	nonPreparedTemporal := makeConstantCastExpr(t, "cast", stringType, types.T_date.ToType(), "2024-01-02")
 	require.NotNil(t, NewConstantFold(false).constantFold(nonPreparedTemporal, proc).GetLit())
 
+	nonPreparedInvalidTemporal := makeConstantCastExpr(t, "cast", stringType, types.T_date.ToType(), "2024-02-30")
+	require.NotNil(t, NewConstantFold(false).constantFold(nonPreparedInvalidTemporal, proc).GetF())
+
 	preparedNumeric := makeConstantCastExpr(t, "cast", stringType, types.T_int64.ToType(), "42")
 	require.NotNil(t, NewConstantFold(true).constantFold(preparedNumeric, proc).GetLit())
 
 	preparedStrictTemporal := makeConstantCastExpr(t, "cast_strict", stringType, types.T_date.ToType(), "2024-01-02")
 	require.NotNil(t, NewConstantFold(true).constantFold(preparedStrictTemporal, proc).GetLit())
 
+	preparedTimestamp := makeConstantCastExpr(t, "cast", stringType, types.T_timestamp.ToTypeWithScale(6), "2024-01-02 03:04:05")
+	require.NotNil(t, NewConstantFold(true).constantFold(preparedTimestamp, proc).GetF(),
+		"prepared TIMESTAMP casts must retain execution-time time-zone semantics")
+
+	ordinaryTimestamp := makeConstantCastExpr(t, "cast", stringType, types.T_timestamp.ToTypeWithScale(6), "2024-01-02 03:04:05")
+	require.NotNil(t, NewConstantFold(false).constantFold(ordinaryTimestamp, proc).GetLit(),
+		"ordinary TIMESTAMP casts must remain foldable for constant consumers")
+
 	ordinaryStrictTime := makeConstantCastExpr(t, "cast_strict", stringType, types.T_time.ToTypeWithScale(6), "12:34:56")
 	require.NotNil(t, NewConstantFold(false).constantFold(ordinaryStrictTime, proc).GetLit())
+}
+
+func TestConstantFoldDefersSqlModeDependentTemporalParents(t *testing.T) {
+	proc := testutil.NewProcess(t)
+	stringType := types.New(types.T_varchar, 32, 0)
+	dateType := types.T_date.ToType()
+	cast := makeConstantCastExpr(t, "cast", stringType, dateType, "2024-02-30")
+	weekday, err := function.GetFunctionByName(context.Background(), "weekday", []types.Type{dateType})
+	require.NoError(t, err)
+	parent := &plan.Expr{
+		Typ: plan.Type{Id: int32(types.T_int64)},
+		Expr: &plan.Expr_F{F: &plan.Function{
+			Func: &plan.ObjectRef{Obj: weekday.GetEncodedOverloadID(), ObjName: "weekday"},
+			Args: []*plan.Expr{cast},
+		}},
+	}
+
+	folded := NewConstantFold(false).constantFold(parent, proc)
+	require.NotNil(t, folded.GetF())
 }
 
 func TestConstantFoldDefersLegacyTimeAssignmentCast(t *testing.T) {

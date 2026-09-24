@@ -2866,9 +2866,9 @@ func searchLeftWithLocation(loc *time.Location, start, end, rowIdx int, vec *vec
 		}
 	case types.T_date:
 		col := vector.MustFixedColNoTypeCheck[types.Date](vec)
-		cmpl := genericGreater[types.Date]
+		cmpl := dateGreater
 		if desc {
-			cmpl = genericLess[types.Date]
+			cmpl = dateLess
 		}
 		if expr == nil {
 			left = genericSearchLeft(start, end-1, col, col[rowIdx], genericEqual[types.Date], cmpl)
@@ -2897,9 +2897,9 @@ func searchLeftWithLocation(loc *time.Location, start, end, rowIdx int, vec *vec
 		}
 	case types.T_datetime:
 		col := vector.MustFixedColNoTypeCheck[types.Datetime](vec)
-		cmpl := genericGreater[types.Datetime]
+		cmpl := datetimeGreater
 		if desc {
-			cmpl = genericLess[types.Datetime]
+			cmpl = datetimeLess
 		}
 		if expr == nil {
 			left = genericSearchLeft(start, end-1, col, col[rowIdx], genericEqual[types.Datetime], cmpl)
@@ -3381,9 +3381,9 @@ func searchRightWithLocation(loc *time.Location, start, end, rowIdx int, vec *ve
 		}
 	case types.T_date:
 		col := vector.MustFixedColNoTypeCheck[types.Date](vec)
-		cmpl := genericGreater[types.Date]
+		cmpl := dateGreater
 		if desc {
-			cmpl = genericLess[types.Date]
+			cmpl = dateLess
 		}
 		if expr == nil {
 			right = genericSearchEqualRight(rowIdx, end-1, col, col[rowIdx], genericEqual[types.Date])
@@ -3412,9 +3412,9 @@ func searchRightWithLocation(loc *time.Location, start, end, rowIdx int, vec *ve
 		}
 	case types.T_datetime:
 		col := vector.MustFixedColNoTypeCheck[types.Datetime](vec)
-		cmpl := genericGreater[types.Datetime]
+		cmpl := datetimeGreater
 		if desc {
-			cmpl = genericLess[types.Datetime]
+			cmpl = datetimeLess
 		}
 		i := start
 		for ; i < end; i++ {
@@ -3812,6 +3812,22 @@ func genericSearchEqualRight[T any](low, high int, nums []T, target T, equal fun
 
 func genericEqual[T types.OrderedT](a, b T) bool {
 	return a == b
+}
+
+func dateLess(a, b types.Date) bool {
+	return types.DateAscCompare(a, b) < 0
+}
+
+func dateGreater(a, b types.Date) bool {
+	return types.DateAscCompare(a, b) > 0
+}
+
+func datetimeLess(a, b types.Datetime) bool {
+	return types.DatetimeAscCompare(a, b) < 0
+}
+
+func datetimeGreater(a, b types.Datetime) bool {
+	return types.DatetimeAscCompare(a, b) > 0
 }
 
 func genericGreater[T types.OrderedT](a, b T) bool {

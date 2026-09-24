@@ -260,6 +260,102 @@ func TestParseDateCastStrictValidation(t *testing.T) {
 	}
 }
 
+func TestParseDateCastWithInvalidDatesPreservesCalendarFields(t *testing.T) {
+	for _, tc := range []struct {
+		input string
+		want  string
+	}{
+		{input: "2024-02-30", want: "2024-02-30"},
+		{input: "2023-02-29", want: "2023-02-29"},
+		{input: "2024-04-31", want: "2024-04-31"},
+		{input: "20240230", want: "2024-02-30"},
+	} {
+		t.Run(tc.input, func(t *testing.T) {
+			date, err := ParseDateCastWithInvalidDates(tc.input)
+			require.NoError(t, err)
+			require.Equal(t, tc.want, date.String())
+			year, month, day, _ := date.Calendar(true)
+			require.Equal(t, int32(date.Year()), year)
+			require.Equal(t, month, date.Month())
+			require.Equal(t, day, date.Day())
+		})
+	}
+
+	for _, input := range []string{"2024-13-01", "2024-01-32", "2024-02-00"} {
+		_, err := ParseDateCastWithInvalidDates(input)
+		require.Error(t, err, input)
+	}
+
+	strict, err := ParseDateCast("2024-02-30")
+	require.Error(t, err)
+	require.Equal(t, Date(-1), strict)
+}
+
+func TestInvalidDateCalendarCalculationsNormalizeOverflowFields(t *testing.T) {
+	february30 := DateFromCalendarAllowInvalid(2024, 2, 30)
+	april31 := DateFromCalendarAllowInvalid(2024, 4, 31)
+
+	// Calendar functions use the same overflow semantics as time.Date while
+	// String/Calendar(true) continue to preserve the tagged input fields.
+	require.Equal(t, Weekday(4), february30.DayOfWeek2()) // 2024-03-01
+	require.Equal(t, uint8(18), april31.WeekOfYear2())    // 2024-05-01
+	require.Equal(t, uint16(122), april31.DayOfYear())    // 2024-05-01
+}
+
+func TestCalendarCompareOrdersInvalidDatesByFields(t *testing.T) {
+	valid, err := ParseDateCast("2024-03-01")
+	require.NoError(t, err)
+	invalid, err := ParseDateCastWithInvalidDates("2024-02-30")
+	require.NoError(t, err)
+	require.Equal(t, -1, DateAscCompare(invalid, valid))
+	require.Equal(t, 1, DateDescCompare(invalid, valid))
+}
+
+func TestCalendarCompareInvalidDatesCoversAllCalendarFields(t *testing.T) {
+	cases := []struct {
+		name  string
+		left  string
+		right string
+		want  int
+	}{
+		{name: "year ascending", left: "2023-02-30", right: "2024-02-30", want: -1},
+		{name: "year descending", left: "2024-02-30", right: "2023-02-30", want: 1},
+		{name: "month ascending", left: "2024-02-30", right: "2024-04-31", want: -1},
+		{name: "month descending", left: "2024-04-31", right: "2024-02-30", want: 1},
+		{name: "day ascending", left: "2024-02-28", right: "2024-02-30", want: -1},
+		{name: "day descending", left: "2024-02-30", right: "2024-02-28", want: 1},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			left, err := ParseDateCastWithInvalidDates(tc.left)
+			require.NoError(t, err)
+			right, err := ParseDateCastWithInvalidDates(tc.right)
+			require.NoError(t, err)
+			require.Equal(t, tc.want, DateAscCompare(left, right))
+			require.Equal(t, -tc.want, DateDescCompare(left, right))
+		})
+	}
+}
+
+func TestDateCompareDoesNotTreatRawValuesAsTaggedDates(t *testing.T) {
+	raw := []Date{
+		Date(0x06f3a1a8), Date(0x57b5ffc5), Date(0x717a6d60),
+		Date(-700000), DateFromCalendar(8_000_000, 1, 1),
+	}
+	for i := range raw {
+		for j := range raw {
+			require.Equal(t, GenericAscCompare(raw[i], raw[j]), DateAscCompare(raw[i], raw[j]))
+		}
+	}
+}
+
+func TestInvalidDateArithmeticUsesCalendarFields(t *testing.T) {
+	invalid, err := ParseDateCastWithInvalidDates("2024-02-30")
+	require.NoError(t, err)
+	normalized := DateFromCalendar(2024, 3, 1)
+	require.Equal(t, normalized.DaysSinceUnixEpoch(), invalid.DaysSinceUnixEpoch())
+}
+
 func BenchmarkParseDateCast(b *testing.B) {
 	inputs := []struct {
 		name  string

@@ -787,6 +787,8 @@ message SessionInfo {
   // IANA identity preserves historical and DST rules. Empty means the legacy
   // time_zone bytes describe a fixed-offset location.
   string time_zone_name = 17;
+  // Session default used by WEEK(date) when the SQL expression omits mode.
+  int64 default_week_format = 18;
 }
 
 message SessionLoggerInfo {

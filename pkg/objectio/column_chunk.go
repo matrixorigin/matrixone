@@ -55,7 +55,7 @@ func marshalColumnVectorWindow(
 	}
 	defer window.Free(mp)
 	var buf bytes.Buffer
-	header := IOEntryHeader{Type: IOET_ColData, Version: IOET_ColumnData_CurrVer}
+	header := IOEntryHeader{Type: IOET_ColData, Version: columnDataVersion(window)}
 	buf.Write(EncodeIOEntryHeader(&header))
 	if err = window.MarshalBinaryWithBuffer(&buf); err != nil {
 		return nil, err
@@ -269,7 +269,7 @@ func decodeChunkedColumn(
 		return nil, moerr.NewInvalidInputNoCtx("chunked object column row count mismatch")
 	}
 	var encoded bytes.Buffer
-	header := IOEntryHeader{Type: IOET_ColData, Version: IOET_ColumnData_CurrVer}
+	header := IOEntryHeader{Type: IOET_ColData, Version: columnDataVersion(dst)}
 	encoded.Write(EncodeIOEntryHeader(&header))
 	if err = dst.MarshalBinaryWithBuffer(&encoded); err != nil {
 		return nil, err

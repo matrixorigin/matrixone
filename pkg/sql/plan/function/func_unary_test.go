@@ -9178,6 +9178,95 @@ func TestDateToWeek(t *testing.T) {
 	}
 }
 
+func TestDateToWeekUsesSessionDefaultAtExecution(t *testing.T) {
+	date, err := types.ParseDateCast("2026-05-07")
+	require.NoError(t, err)
+
+	var defaultWeekFormat int64
+	var lookups int
+	proc := testutil.NewProcess(t)
+	proc.SetResolveVariableFunc(func(name string, isSystemVar, isGlobalVar bool) (interface{}, error) {
+		lookups++
+		require.Equal(t, "default_week_format", name)
+		require.True(t, isSystemVar)
+		require.False(t, isGlobalVar)
+		return defaultWeekFormat, nil
+	})
+
+	for _, mode := range []int64{1, 7} {
+		defaultWeekFormat = mode
+		tc := NewFunctionTestCase(proc,
+			[]FunctionTestInput{NewFunctionTestInput(types.T_date.ToType(), []types.Date{date}, []bool{false})},
+			NewFunctionTestResult(types.T_uint8.ToType(), false, []uint8{uint8(date.Week(int(mode)))}, []bool{false}),
+			DateToWeek)
+		ok, info := tc.Run()
+		require.True(t, ok, info)
+	}
+	require.Equal(t, 2, lookups)
+}
+
+func TestDateToWeekUsesSerializedSessionDefaultWithoutResolver(t *testing.T) {
+	date, err := types.ParseDateCast("2016-01-01")
+	require.NoError(t, err)
+	proc := testutil.NewProcess(t)
+	proc.GetSessionInfo().DefaultWeekFormat = 3
+	tc := NewFunctionTestCase(proc,
+		[]FunctionTestInput{NewFunctionTestInput(types.T_date.ToType(), []types.Date{date}, []bool{false})},
+		NewFunctionTestResult(types.T_uint8.ToType(), false, []uint8{uint8(date.Week(3))}, []bool{false}),
+		DateToWeek)
+	ok, info := tc.Run()
+	require.True(t, ok, info)
+}
+
+func TestDateToWeekExplicitModeDoesNotReadSessionDefault(t *testing.T) {
+	date, err := types.ParseDateCast("2026-05-07")
+	require.NoError(t, err)
+
+	proc := testutil.NewProcess(t)
+	var lookups int
+	proc.SetResolveVariableFunc(func(string, bool, bool) (interface{}, error) {
+		lookups++
+		return int64(7), nil
+	})
+	tc := NewFunctionTestCase(proc,
+		[]FunctionTestInput{
+			NewFunctionTestInput(types.T_date.ToType(), []types.Date{date}, []bool{false}),
+			NewFunctionTestInput(types.T_int64.ToType(), []int64{1}, []bool{false}),
+		},
+		NewFunctionTestResult(types.T_uint8.ToType(), false, []uint8{uint8(date.Week(1))}, []bool{false}),
+		DateToWeek)
+	ok, info := tc.Run()
+	require.True(t, ok, info)
+	require.Zero(t, lookups)
+}
+
+func TestDefaultWeekFormatModeFallsBackOnUnexpectedResolverValue(t *testing.T) {
+	proc := testutil.NewProcess(t)
+	proc.GetSessionInfo().DefaultWeekFormat = 5
+	proc.SetResolveVariableFunc(func(string, bool, bool) (interface{}, error) {
+		return "1", nil
+	})
+	mode, err := getDefaultWeekFormatMode(proc)
+	require.NoError(t, err)
+	require.Equal(t, 5, mode)
+}
+
+func TestWeekOneArgumentOverloadsAreSessionSensitive(t *testing.T) {
+	for overloadID := int32(0); overloadID < 4; overloadID++ {
+		overload, err := GetFunctionById(context.Background(), EncodeOverloadID(WEEK, overloadID))
+		require.NoError(t, err)
+		require.Equal(t, overloadID < 2, overload.IsRealTimeRelated())
+	}
+}
+
+func TestLastDayOverloadsAreNotFoldable(t *testing.T) {
+	for overloadID := int32(0); overloadID < 2; overloadID++ {
+		overload, err := GetFunctionById(context.Background(), EncodeOverloadID(LAST_DAY, overloadID))
+		require.NoError(t, err)
+		require.True(t, overload.CannotFold())
+	}
+}
+
 // WeekOfYear
 
 func initDateToWeekOfYearTestCase() []tcTemp {
@@ -9365,6 +9454,26 @@ func TestDateTimeToWeek(t *testing.T) {
 		require.True(t, s, fmt.Sprintf("case is '%s', err info is '%s'", tc.info, info))
 	}
 	//TODO: Ignoring Scalar Nulls: Original code:https://github.com/m-schen/matrixone/blob/749eb739130decdbbf3dcc3dd5b21f656620edd9/pkg/sql/plan/function/builtin/unary/week_test.go#L114
+}
+
+func TestDatetimeToWeekUsesSessionDefaultAtExecution(t *testing.T) {
+	datetime, err := types.ParseDatetime("2026-05-07 10:11:12", 6)
+	require.NoError(t, err)
+
+	var defaultWeekFormat int64
+	proc := testutil.NewProcess(t)
+	proc.SetResolveVariableFunc(func(string, bool, bool) (interface{}, error) {
+		return defaultWeekFormat, nil
+	})
+	for _, mode := range []int64{1, 7} {
+		defaultWeekFormat = mode
+		tc := NewFunctionTestCase(proc,
+			[]FunctionTestInput{NewFunctionTestInput(types.T_datetime.ToType(), []types.Datetime{datetime}, []bool{false})},
+			NewFunctionTestResult(types.T_uint8.ToType(), false, []uint8{uint8(datetime.ToDate().Week(int(mode)))}, []bool{false}),
+			DatetimeToWeek)
+		ok, info := tc.Run()
+		require.True(t, ok, info)
+	}
 }
 
 // Week day

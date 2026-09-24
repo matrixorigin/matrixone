@@ -734,7 +734,7 @@ func TestFetchDateRows(t *testing.T) {
 		lock.Granularity_Row,
 		values,
 		expectRangeValues,
-		[]types.Date{math.MinInt32, math.MaxInt32},
+		[]types.Date{types.ZeroDate, types.Date(-2)},
 		func(packer *types.Packer, v types.Date) {
 			packer.EncodeDate(v)
 		},
@@ -754,7 +754,7 @@ func TestFetchDateRowsWithFilter(t *testing.T) {
 		lock.Granularity_Row,
 		values[:2],
 		expectRangeValues,
-		[]types.Date{math.MinInt32, math.MaxInt32},
+		[]types.Date{types.ZeroDate, types.Date(-2)},
 		func(packer *types.Packer, v types.Date) {
 			packer.EncodeDate(v)
 		},
@@ -774,7 +774,7 @@ func TestFetchDateRowsWithFilterAll(t *testing.T) {
 		lock.Granularity_Row,
 		values[:2],
 		expectRangeValues,
-		[]types.Date{math.MinInt32, math.MaxInt32},
+		[]types.Date{types.ZeroDate, types.Date(-2)},
 		func(packer *types.Packer, v types.Date) {
 			packer.EncodeDate(v)
 		},
@@ -854,7 +854,7 @@ func TestFetchDateTimeRows(t *testing.T) {
 		lock.Granularity_Row,
 		values,
 		expectRangeValues,
-		[]types.Datetime{math.MinInt64, math.MaxInt64},
+		[]types.Datetime{types.ZeroDatetime, types.Datetime(-2)},
 		func(packer *types.Packer, v types.Datetime) {
 			packer.EncodeDatetime(v)
 		},
@@ -874,7 +874,7 @@ func TestFetchDateTimeRowsWithFilter(t *testing.T) {
 		lock.Granularity_Row,
 		values[:2],
 		expectRangeValues,
-		[]types.Datetime{math.MinInt64, math.MaxInt64},
+		[]types.Datetime{types.ZeroDatetime, types.Datetime(-2)},
 		func(packer *types.Packer, v types.Datetime) {
 			packer.EncodeDatetime(v)
 		},
@@ -894,7 +894,7 @@ func TestFetchDateTimeRowsWithFilterAll(t *testing.T) {
 		lock.Granularity_Row,
 		values[:2],
 		expectRangeValues,
-		[]types.Datetime{math.MinInt64, math.MaxInt64},
+		[]types.Datetime{types.ZeroDatetime, types.Datetime(-2)},
 		func(packer *types.Packer, v types.Datetime) {
 			packer.EncodeDatetime(v)
 		},

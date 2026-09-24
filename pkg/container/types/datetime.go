@@ -40,6 +40,11 @@ const (
 	minHourInDay, maxHourInDay           = 0, 23
 	minMinuteInHour, maxMinuteInHour     = 0, 59
 	minSecondInMinute, maxSecondInMinute = 0, 59
+	invalidDatetimeDayMicros             = int64(SecsPerDay) * MicroSecsPerSec
+	// Valid DATETIME values, including dates before the epoch, are well above
+	// this range. Keeping invalid calendar values below MinInt64 plus their
+	// packed payload makes the tag unambiguous for arbitrary Datetime values.
+	invalidDatetimeEncodingBase = int64(math.MinInt64)
 )
 
 var (
@@ -75,7 +80,7 @@ func (dt Datetime) String2(scale int32) string {
 	hour, minute, sec := dt.Clock()
 
 	if scale > 0 {
-		msec := int64(dt) % MicroSecsPerSec
+		msec := dt.MicroSec()
 		// Format microseconds as 6 digits (max precision we store)
 		msecInstr := fmt.Sprintf("%06d", msec)
 		// For scale > 6, pad with zeros to the right (e.g., scale 9: "000001" -> "000001000")
@@ -115,12 +120,29 @@ func (dt Datetime) String2(scale int32) string {
 //	"1999-09-09 11:11"              "1999-09-09 11:11:00.000"
 //	"1999-09-09 11:11:"             "1999-09-09 11:11:00.000"
 func ParseDatetime(s string, scale int32) (Datetime, error) {
+	return parseDatetime(s, scale, false)
+}
+
+// ParseDatetimeWithInvalidDates preserves in-range calendar fields under
+// ALLOW_INVALID_DATES while keeping time-field validation unchanged.
+func ParseDatetimeWithInvalidDates(s string, scale int32) (Datetime, error) {
+	return parseDatetime(s, scale, true)
+}
+
+func parseDatetime(s string, scale int32, allowInvalidDates bool) (Datetime, error) {
 	s = strings.TrimSpace(s)
 	if isZeroDatetimeString(s) {
 		return ZeroDatetime, nil
 	}
 	if len(s) < 14 {
-		if d, err := ParseDateCast(s); err == nil {
+		var d Date
+		var err error
+		if allowInvalidDates {
+			d, err = ParseDateCastWithInvalidDates(s)
+		} else {
+			d, err = ParseDateCast(s)
+		}
+		if err == nil {
 			return d.ToDatetime(), nil
 		}
 		return -1, moerr.NewInvalidInputNoCtxf("invalid datetime value %s", s)
@@ -156,7 +178,7 @@ func ParseDatetime(s string, scale int32) (Datetime, error) {
 				return -1, moerr.NewInvalidInputNoCtxf("invalid datetime value %s", s)
 			}
 			day = uint8(unum)
-			if !ValidDate(year, month, day) {
+			if !dateFieldsValidForParse(year, month, day, allowInvalidDates) {
 				return -1, moerr.NewInvalidInputNoCtxf("invalid datetime value %s", s)
 			}
 			unum, err = strconv.ParseUint(s[11:13], 10, 8)
@@ -221,7 +243,7 @@ func ParseDatetime(s string, scale int32) (Datetime, error) {
 				return -1, moerr.NewInvalidInputNoCtxf("invalid datetime value %s", s)
 			}
 			day = uint8(unum)
-			if !ValidDate(year, month, day) {
+			if !dateFieldsValidForParse(year, month, day, allowInvalidDates) {
 				return -1, moerr.NewInvalidInputNoCtxf("invalid datetime value %s", s)
 			}
 
@@ -300,15 +322,56 @@ func ParseDatetime(s string, scale int32) (Datetime, error) {
 			}
 		}
 	}
-	if !ValidDate(year, month, day) {
+	if !dateFieldsValidForParse(year, month, day, allowInvalidDates) {
 		return -1, moerr.NewInvalidInputNoCtxf("invalid datetime value %s", s)
 	}
-	result := DatetimeFromClock(year, month, day, hour, minute, second+uint8(carry), msec)
+	if carry != 0 {
+		second++
+		if second == 60 {
+			second = 0
+			minute++
+			if minute == 60 {
+				minute = 0
+				hour++
+				if hour == 24 {
+					hour = 0
+					year, month, day = nextDateFieldsAfterRounding(year, month, day, allowInvalidDates)
+				}
+			}
+		}
+	}
+	if !dateFieldsValidForParse(year, month, day, allowInvalidDates) {
+		return -1, moerr.NewInvalidInputNoCtxf("invalid datetime value %s", s)
+	}
+	result := DatetimeFromClockAllowInvalid(year, month, day, hour, minute, second, msec)
 	y, m, d, _ := result.ToDate().Calendar(true)
-	if !ValidDate(y, m, d) {
+	if !allowInvalidDates && !ValidDate(y, m, d) {
 		return -1, moerr.NewInvalidInputNoCtxf("invalid datetime value %s", s)
 	}
 	return result, nil
+}
+
+func nextDateFieldsAfterRounding(year int32, month, day uint8, allowInvalidDates bool) (int32, uint8, uint8) {
+	if allowInvalidDates && !ValidDate(year, month, day) {
+		if day < 31 {
+			return year, month, day + 1
+		}
+		if month < MaxMonthInYear {
+			return year, month + 1, 1
+		}
+		return year + 1, MinMonthInYear, 1
+	}
+	next := DateFromCalendar(year, month, day) + 1
+	nextYear, nextMonth, nextDay, _ := next.Calendar(true)
+	return nextYear, nextMonth, nextDay
+}
+
+func dateFieldsValidForParse(year int32, month, day uint8, allowInvalidDates bool) bool {
+	if allowInvalidDates {
+		return year >= MinDatetimeYear && year <= MaxDatetimeYear &&
+			month >= MinMonthInYear && month <= MaxMonthInYear && day > 0 && day <= 31
+	}
+	return ValidDate(year, month, day)
 }
 
 func isZeroDatetimeString(s string) bool {
@@ -381,6 +444,10 @@ func (dt Datetime) ToDate() Date {
 	if dt == ZeroDatetime {
 		return ZeroDate
 	}
+	if isEncodedInvalidDatetime(dt) {
+		year, month, day, _, _, _, _ := decodeInvalidDatetime(dt)
+		return DateFromCalendarAllowInvalid(year, month, day)
+	}
 	return Date(dt.sec() / SecsPerDay)
 }
 
@@ -434,6 +501,35 @@ func (dt Datetime) TruncateToScale(scale int32) Datetime {
 	if dt == ZeroDatetime {
 		return ZeroDatetime
 	}
+	if isEncodedInvalidDatetime(dt) {
+		year, month, day, hour, minute, second, micro := decodeInvalidDatetime(dt)
+		if scale >= 6 {
+			return dt
+		}
+		divisor := int64(scaleVal[scale])
+		base := micro / divisor
+		if micro%divisor/int64(scaleVal[scale+1]) >= 5 {
+			base++
+		}
+		roundedMicro := base * divisor
+		if roundedMicro >= MicroSecsPerSec {
+			roundedMicro = 0
+			second++
+			if second == 60 {
+				second = 0
+				minute++
+				if minute == 60 {
+					minute = 0
+					hour++
+					if hour == 24 {
+						hour = 0
+						year, month, day = nextDateFieldsAfterRounding(year, month, day, true)
+					}
+				}
+			}
+		}
+		return DatetimeFromClockAllowInvalid(year, month, day, hour, minute, second, uint32(roundedMicro))
+	}
 	// For scale >= 6, return full precision (no truncation)
 	if scale >= 6 {
 		return dt
@@ -457,6 +553,10 @@ func (dt Datetime) TruncateToScale(scale int32) Datetime {
 func (dt Datetime) Clock() (hour, minute, sec int8) {
 	if dt == ZeroDatetime {
 		return 0, 0, 0
+	}
+	if isEncodedInvalidDatetime(dt) {
+		_, _, _, h, m, s, _ := decodeInvalidDatetime(dt)
+		return int8(h), int8(m), int8(s)
 	}
 	t := dt.sec() % SecsPerDay
 	hour = int8(t / SecsPerHour)
@@ -486,6 +586,105 @@ func DatetimeFromClock(year int32, month, day, hour, minute, sec uint8, msec uin
 	return Datetime(secs*MicroSecsPerSec + int64(msec))
 }
 
+func isEncodedInvalidDatetime(dt Datetime) bool {
+	maxPayload := int64(MaxDatetimeYear*10000+12*100+31)*invalidDatetimeDayMicros + invalidDatetimeDayMicros - 1
+	if int64(dt) < invalidDatetimeEncodingBase+1 || int64(dt) > invalidDatetimeEncodingBase+maxPayload {
+		return false
+	}
+	year, month, day, hour, minute, sec, msec := decodeInvalidDatetime(dt)
+	return year >= MinDatetimeYear && year <= MaxDatetimeYear &&
+		month >= MinMonthInYear && month <= MaxMonthInYear &&
+		day > 0 && day <= 31 && !ValidDate(year, month, day) &&
+		hour <= maxHourInDay && minute <= maxMinuteInHour &&
+		sec <= maxSecondInMinute && msec < MicroSecsPerSec
+}
+
+// IsTaggedInvalid reports whether dt uses the ALLOW_INVALID_DATES tagged
+// representation. Storage codecs use this to select a format version that a
+// pre-tag reader cannot silently reinterpret.
+func (dt Datetime) IsTaggedInvalid() bool {
+	return isEncodedInvalidDatetime(dt)
+}
+
+func encodeInvalidDatetime(year int32, month, day, hour, minute, sec uint8, msec uint32) Datetime {
+	date := int64(year)*10000 + int64(month)*100 + int64(day)
+	clock := (int64(hour)*SecsPerHour+int64(minute)*SecsPerMinute+int64(sec))*MicroSecsPerSec + int64(msec)
+	return Datetime(invalidDatetimeEncodingBase + date*invalidDatetimeDayMicros + clock)
+}
+
+func decodeInvalidDatetime(dt Datetime) (year int32, month, day, hour, minute, sec uint8, msec int64) {
+	packed := int64(dt) - invalidDatetimeEncodingBase
+	date := packed / invalidDatetimeDayMicros
+	clock := packed % invalidDatetimeDayMicros
+	year = int32(date / 10000)
+	month = uint8((date / 100) % 100)
+	day = uint8(date % 100)
+	hour = uint8(clock / (SecsPerHour * MicroSecsPerSec))
+	clock %= SecsPerHour * MicroSecsPerSec
+	minute = uint8(clock / (SecsPerMinute * MicroSecsPerSec))
+	clock %= SecsPerMinute * MicroSecsPerSec
+	sec = uint8(clock / MicroSecsPerSec)
+	msec = clock % MicroSecsPerSec
+	return
+}
+
+// DatetimeFromClockAllowInvalid uses the legacy representation for valid
+// dates and a fixed-width packed representation for calendar-invalid dates.
+func DatetimeFromClockAllowInvalid(year int32, month, day, hour, minute, sec uint8, msec uint32) Datetime {
+	if ValidDate(year, month, day) {
+		return DatetimeFromClock(year, month, day, hour, minute, sec, msec)
+	}
+	return encodeInvalidDatetime(year, month, day, hour, minute, sec, msec)
+}
+
+// DatetimeOrderKey is the unsigned, order-preserving calendar/time key used
+// by tuple and index encodings. It is separate from Datetime's physical
+// microsecond scalar so tagged invalid dates retain their SQL order.
+func DatetimeOrderKey(dt Datetime) uint64 {
+	if dt == ZeroDatetime {
+		return 0
+	}
+	dateKey := DateOrderKey(dt.ToDate())
+	year, month, day, _ := dt.ToDate().Calendar(true)
+	if !dt.IsTaggedInvalid() {
+		if dateKey&dateOrderRawMarker != 0 || !ValidDate(year, month, day) {
+			return dateOrderRawMarker | uint64(dt)
+		}
+		canonical := DatetimeFromClock(year, month, day, uint8(dt.Hour()), uint8(dt.Minute()), uint8(dt.Sec()), uint32(dt.MicroSec()))
+		if canonical != dt {
+			// Preserve arbitrary raw values used by in-memory callers while
+			// keeping the SQL calendar key space ordered and versioned.
+			return dateOrderRawMarker | uint64(dt)
+		}
+	}
+	clockKey := (uint64(dt.Hour())*SecsPerHour+
+		uint64(dt.Minute())*SecsPerMinute+uint64(dt.Sec()))*MicroSecsPerSec +
+		uint64(dt.MicroSec())
+	return dateKey*uint64(microSecsPerDay) + clockKey
+}
+
+// DatetimeFromOrderKey reverses DatetimeOrderKey, including invalid calendar
+// fields and fractional seconds.
+func DatetimeFromOrderKey(key uint64) Datetime {
+	if key == 0 {
+		return ZeroDatetime
+	}
+	if key&dateOrderRawMarker != 0 {
+		return Datetime(key &^ dateOrderRawMarker)
+	}
+	dateKey := key / uint64(microSecsPerDay)
+	clockKey := key % uint64(microSecsPerDay)
+	date := DateFromOrderKey(dateKey)
+	year, month, day, _ := date.Calendar(true)
+	hour := uint8(clockKey / (SecsPerHour * MicroSecsPerSec))
+	clockKey %= SecsPerHour * MicroSecsPerSec
+	minute := uint8(clockKey / (SecsPerMinute * MicroSecsPerSec))
+	clockKey %= SecsPerMinute * MicroSecsPerSec
+	second := uint8(clockKey / MicroSecsPerSec)
+	micro := uint32(clockKey % MicroSecsPerSec)
+	return DatetimeFromClockAllowInvalid(year, month, day, hour, minute, second, micro)
+}
+
 func (dt Datetime) ConvertToGoTime(loc *time.Location) time.Time {
 	year, mon, day, _ := dt.ToDate().Calendar(true)
 	hour, minute, sec := dt.Clock()
@@ -498,6 +697,8 @@ func (dt Datetime) AddDateTime(addMonth, addYear int64, timeType TimeType) (Date
 	// only in the month year year-month
 	oldDate := dt.ToDate()
 	y, m, d, _ := oldDate.Calendar(true)
+	hour, minute, second := dt.Clock()
+	micro := dt.MicroSec()
 	year := int64(y) + addYear + addMonth/12
 	month := int64(m) + addMonth%12
 	if month <= 0 {
@@ -528,6 +729,9 @@ func (dt Datetime) AddDateTime(addMonth, addYear int64, timeType TimeType) (Date
 		}
 	}
 	newDate := DateFromCalendar(y, m, d)
+	if isEncodedInvalidDatetime(dt) {
+		return DatetimeFromClock(y, m, d, uint8(hour), uint8(minute), uint8(second), uint32(micro)), true
+	}
 	return dt + Datetime(newDate-oldDate)*SecsPerDay*MicroSecsPerSec, true
 }
 
@@ -536,6 +740,11 @@ func (dt Datetime) AddDateTime(addMonth, addYear int64, timeType TimeType) (Date
 // date/datetime have different regions, so we don't use same valid function
 // return type bool means the if the date/datetime is valid
 func (dt Datetime) AddInterval(nums int64, its IntervalType, timeType TimeType) (Datetime, bool) {
+	if isEncodedInvalidDatetime(dt) {
+		year, month, day, hour, minute, second, micro := decodeInvalidDatetime(dt)
+		normalized := DatetimeFromClock(year, month, day, hour, minute, second, uint32(micro))
+		return normalized.AddInterval(nums, its, timeType)
+	}
 	var addMonth, addYear int64
 	switch its {
 	case MicroSecond:
@@ -596,31 +805,41 @@ func (dt Datetime) AddInterval(nums int64, its IntervalType, timeType TimeType) 
 }
 
 func (dt Datetime) DateTimeDiffWithUnit(its string, secondDt Datetime) (int64, error) {
+	first := normalizedDatetimeForArithmetic(dt)
+	second := normalizedDatetimeForArithmetic(secondDt)
 	switch its {
 	case "microsecond":
-		return int64(dt - secondDt), nil
+		return int64(first - second), nil
 	case "second":
-		return (dt - secondDt).sec(), nil
+		return (first - second).sec(), nil
 	case "minute":
-		return int64(dt-secondDt) / (MicroSecsPerSec * SecsPerMinute), nil
+		return int64(first-second) / (MicroSecsPerSec * SecsPerMinute), nil
 	case "hour":
-		return int64(dt-secondDt) / (MicroSecsPerSec * SecsPerHour), nil
+		return int64(first-second) / (MicroSecsPerSec * SecsPerHour), nil
 	case "day":
-		return int64(dt-secondDt) / (MicroSecsPerSec * SecsPerDay), nil
+		return int64(first-second) / (MicroSecsPerSec * SecsPerDay), nil
 	case "week":
-		return int64(dt-secondDt) / (MicroSecsPerSec * SecsPerWeek), nil
+		return int64(first-second) / (MicroSecsPerSec * SecsPerWeek), nil
 	case "month":
-		return dt.ConvertToMonth(secondDt), nil
+		return first.ConvertToMonth(second), nil
 	case "quarter":
-		return dt.ConvertToMonth(secondDt) / 3, nil
+		return first.ConvertToMonth(second) / 3, nil
 	case "year":
-		return dt.ConvertToMonth(secondDt) / 12, nil
+		return first.ConvertToMonth(second) / 12, nil
 	}
 	return 0, moerr.NewInvalidInputNoCtx("invalid time_stamp_unit input")
 }
 
 func (dt Datetime) DatetimeMinusWithSecond(secondDt Datetime) int64 {
-	return int64((dt - secondDt) / MicroSecsPerSec)
+	return int64((normalizedDatetimeForArithmetic(dt) - normalizedDatetimeForArithmetic(secondDt)) / MicroSecsPerSec)
+}
+
+func normalizedDatetimeForArithmetic(dt Datetime) Datetime {
+	if !isEncodedInvalidDatetime(dt) {
+		return dt
+	}
+	year, month, day, hour, minute, second, micro := decodeInvalidDatetime(dt)
+	return DatetimeFromClock(year, month, day, hour, minute, second, uint32(micro))
 }
 
 func (dt Datetime) ConvertToMonth(secondDt Datetime) int64 {
@@ -639,10 +858,19 @@ func (dt Datetime) MicroSec() int64 {
 	if dt == ZeroDatetime {
 		return 0
 	}
+	if isEncodedInvalidDatetime(dt) {
+		_, _, _, _, _, _, msec := decodeInvalidDatetime(dt)
+		return msec
+	}
 	return int64(dt) % MicroSecsPerSec
 }
 
 func (dt Datetime) sec() int64 {
+	if isEncodedInvalidDatetime(dt) {
+		year, month, day, hour, minute, second, _ := decodeInvalidDatetime(dt)
+		date := DateFromCalendar(year, month, day)
+		return int64(date)*SecsPerDay + int64(hour)*SecsPerHour + int64(minute)*SecsPerMinute + int64(second)
+	}
 	return int64(dt) / MicroSecsPerSec
 }
 

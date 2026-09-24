@@ -945,10 +945,10 @@ func (zm ZM) SubVecIn(vec *vector.Vector) (int, int) {
 		col := vector.MustFixedColNoTypeCheck[types.Date](vec)
 		minVal, maxVal := types.DecodeDate(zm.GetMinBuf()), types.DecodeDate(zm.GetMaxBuf())
 		lowerBound := sort.Search(len(col), func(i int) bool {
-			return minVal <= col[i]
+			return types.DateAscCompare(minVal, col[i]) <= 0
 		})
 		upperBound := sort.Search(len(col), func(i int) bool {
-			return maxVal < col[i]
+			return types.DateAscCompare(maxVal, col[i]) < 0
 		})
 		return lowerBound, upperBound
 
@@ -956,10 +956,10 @@ func (zm ZM) SubVecIn(vec *vector.Vector) (int, int) {
 		col := vector.MustFixedColNoTypeCheck[types.Datetime](vec)
 		minVal, maxVal := types.DecodeDatetime(zm.GetMinBuf()), types.DecodeDatetime(zm.GetMaxBuf())
 		lowerBound := sort.Search(len(col), func(i int) bool {
-			return minVal <= col[i]
+			return types.DatetimeAscCompare(minVal, col[i]) <= 0
 		})
 		upperBound := sort.Search(len(col), func(i int) bool {
-			return maxVal < col[i]
+			return types.DatetimeAscCompare(maxVal, col[i]) < 0
 		})
 		return lowerBound, upperBound
 
@@ -1239,19 +1239,19 @@ func (zm ZM) AnyIn(vec *vector.Vector) bool {
 		col := vector.MustFixedColNoTypeCheck[types.Date](vec)
 		minVal, maxVal := types.DecodeDate(zm.GetMinBuf()), types.DecodeDate(zm.GetMaxBuf())
 		lowerBound := sort.Search(len(col), func(i int) bool {
-			return minVal <= col[i]
+			return types.DateAscCompare(minVal, col[i]) <= 0
 		})
 
-		return lowerBound < len(col) && maxVal >= col[lowerBound]
+		return lowerBound < len(col) && types.DateAscCompare(maxVal, col[lowerBound]) >= 0
 
 	case types.T_datetime:
 		col := vector.MustFixedColNoTypeCheck[types.Datetime](vec)
 		minVal, maxVal := types.DecodeDatetime(zm.GetMinBuf()), types.DecodeDatetime(zm.GetMaxBuf())
 		lowerBound := sort.Search(len(col), func(i int) bool {
-			return minVal <= col[i]
+			return types.DatetimeAscCompare(minVal, col[i]) <= 0
 		})
 
-		return lowerBound < len(col) && maxVal >= col[lowerBound]
+		return lowerBound < len(col) && types.DatetimeAscCompare(maxVal, col[lowerBound]) >= 0
 
 	case types.T_time:
 		col := vector.MustFixedColNoTypeCheck[types.Time](vec)
