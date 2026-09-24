@@ -69,6 +69,13 @@ func newViewDependencyCaptureContext(ctx CompilerContext) *viewDependencyCapture
 	}
 }
 
+func (c *viewDependencyCaptureContext) CheckViewDatabase(name string, snapshot *Snapshot) (bool, error) {
+	if checker, ok := c.CompilerContext.(viewDatabaseExistenceChecker); ok {
+		return checker.CheckViewDatabase(name, snapshot)
+	}
+	return c.CompilerContext.DatabaseExists(name, snapshot), nil
+}
+
 func (c *viewDependencyCaptureContext) enterNestedView() { c.depth++ }
 
 func (c *viewDependencyCaptureContext) leaveNestedView() {

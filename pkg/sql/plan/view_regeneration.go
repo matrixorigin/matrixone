@@ -69,6 +69,19 @@ type viewRegenerationContext struct {
 	lowerCaseTableNames int64
 }
 
+// Use the error-returning catalog lookup rather than DatabaseExists: the
+// latter collapses both genuine absence and storage failures into false.
+func (c *viewRegenerationContext) CheckViewDatabase(name string, snapshot *Snapshot) (bool, error) {
+	_, err := c.CompilerContext.GetDatabaseId(name, snapshot)
+	if err == nil {
+		return true, nil
+	}
+	if moerr.IsMoErrCode(err, moerr.ErrBadDB) || moerr.IsMoErrCode(err, moerr.OkExpectedEOB) {
+		return false, nil
+	}
+	return false, err
+}
+
 func (c *viewRegenerationContext) DefaultDatabase() string { return c.defaultDatabase }
 func (c *viewRegenerationContext) GetRootSql() string      { return c.rootSQL }
 func (c *viewRegenerationContext) GetLowerCaseTableNames() int64 {

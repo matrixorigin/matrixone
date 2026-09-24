@@ -219,6 +219,38 @@ func TestViewDescriptionPublicSQL(t *testing.T) {
 		require.Equal(t, 90, width)
 		require.NoError(t, prepared.QueryRowContext(ctx).Scan(&width))
 		require.Equal(t, 90, width, "prepared metadata reads must rebind the View")
+
+		// A confirmed missing source database remains a skippable View error,
+		// unlike a failed database lookup which must reach the caller unchanged.
+		exec("create database view_description_source_db")
+		exec("create table view_description_source_db.src (x int)")
+		exec("create view view_description_test.missing_db_view as select x from view_description_source_db.src")
+		exec("drop database view_description_source_db")
+		missingConn, err := db.Conn(ctx)
+		require.NoError(t, err)
+		func() {
+			defer missingConn.Close()
+			func() {
+				rows, err := missingConn.QueryContext(ctx,
+					"select column_name from information_schema.columns "+
+						"where table_schema='view_description_test' and table_name='missing_db_view'")
+				require.NoError(t, err)
+				defer rows.Close()
+				require.False(t, rows.Next())
+				require.NoError(t, rows.Err())
+			}()
+			warnings, err := missingConn.QueryContext(ctx, "show warnings")
+			require.NoError(t, err)
+			defer warnings.Close()
+			require.True(t, warnings.Next())
+			var level, message string
+			var code int
+			require.NoError(t, warnings.Scan(&level, &code, &message))
+			require.Equal(t, "Warning", level)
+			require.Equal(t, 1356, code)
+			require.Contains(t, message, "missing_db_view")
+			require.NoError(t, warnings.Err())
+		}()
 	})
 }
 

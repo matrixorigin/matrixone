@@ -18,6 +18,7 @@ import (
 	"context"
 	"testing"
 
+	"github.com/matrixorigin/matrixone/pkg/common/moerr"
 	"github.com/matrixorigin/matrixone/pkg/container/types"
 	planpb "github.com/matrixorigin/matrixone/pkg/pb/plan"
 	"github.com/stretchr/testify/require"
@@ -63,6 +64,40 @@ func TestDescribeViewColumnsFailureDoesNotCache(t *testing.T) {
 	cols, err = DescribeViewColumns(ctx, definition)
 	require.NoError(t, err)
 	require.Len(t, cols, 1)
+}
+
+func TestDescribeViewColumnsPreservesDatabaseLookupFailure(t *testing.T) {
+	const definition = `{"Stmt":"create view v as select n_name from tpch.nation","DefaultDatabase":"tpch"}`
+	for _, tc := range []struct {
+		name        string
+		lookupError error
+		missing     bool
+	}{
+		{name: "storage failure", lookupError: moerr.NewInternalError(t.Context(), "catalog storage unavailable")},
+		{name: "cancelled", lookupError: context.Canceled},
+		{name: "genuinely missing", lookupError: moerr.GetOkExpectedEOB(), missing: true},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			ctx := NewMockCompilerContext(false)
+			ctx.GetAccountIdFunc = func() (uint32, error) { return 42, nil }
+			ctx.DatabaseExistsFunc = func(string, *Snapshot) bool {
+				t.Fatal("View regeneration must not use a bool-only database lookup")
+				return false
+			}
+			ctx.GetDatabaseIdFunc = func(name string, _ *Snapshot) (uint64, error) {
+				require.Equal(t, "tpch", name)
+				return 0, tc.lookupError
+			}
+			cols, err := DescribeViewColumns(ctx, definition)
+			require.Nil(t, cols)
+			if tc.missing {
+				require.Error(t, err)
+				require.True(t, moerr.IsMoErrCode(err, moerr.ErrBadDB), err)
+			} else {
+				require.ErrorIs(t, err, tc.lookupError)
+			}
+		})
+	}
 }
 
 func TestDescribeViewColumnsRejectsInvalidInputAndCancellation(t *testing.T) {
