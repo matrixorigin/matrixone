@@ -330,7 +330,7 @@ infile{'filepath'='stage://wstage/x_*.csv', 'format'='csv', 'compression'='gzip'
 invalid configuration: writable external table does not support compression (effective 'gzip'); the writer emits uncompressed files
 create external table ext_bad15(a int)
 infile{'filepath'='stage://wstage/x_*.csv.gz', 'format'='csv', 'write_file_pattern'='stage://wstage/x_%U.csv'};
-invalid configuration: writable external table does not support compression (effective 'gz'); the writer emits uncompressed files
+invalid configuration: writable external table does not support compression (effective 'gzip'); the writer emits uncompressed files
 create external table ext_bad16(a int)
 infile{'filepath'='stage://wstage/x_*.csv', 'format'='csv', 'format'='parquet', 'write_file_pattern'='stage://wstage/x_%U.csv'};
 invalid configuration: duplicate option key 'format'
