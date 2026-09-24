@@ -1542,7 +1542,9 @@ func materializeOneRow(proc *process.Process, bat *batch.Batch, line []csvparser
 			continue
 		}
 		vec := bat.Vecs[attr.ColIndex]
-		vector.AppendBytes(vec, nil, true, mp)
+		if err := vector.AppendBytes(vec, nil, true, mp); err != nil {
+			return err
+		}
 	}
 	return nil
 }
@@ -1591,8 +1593,7 @@ func getColData(bat *batch.Batch, line []csvparser.Field, rowIdx int, param *Ext
 		isNullOrEmpty = true
 	}
 	if isNullOrEmpty {
-		vector.AppendBytes(vec, nil, true, mp)
-		return nil
+		return vector.AppendBytes(vec, nil, true, mp)
 	}
 
 	var temporalValue loadDataTemporalValue

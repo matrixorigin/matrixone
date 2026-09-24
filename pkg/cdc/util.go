@@ -29,6 +29,7 @@ import (
 	"slices"
 	"strconv"
 	"strings"
+	"sync"
 	"time"
 
 	"go.uber.org/zap"
@@ -737,7 +738,34 @@ var GetSnapshotTS = func(txnOp client.TxnOperator) timestamp.Timestamp {
 	return txnOp.SnapshotTS()
 }
 
+var collectBoundaryHook struct {
+	sync.RWMutex
+	fn func(types.TS, types.TS)
+}
+
+// SetCDCCollectBoundaryHookForTest observes the actual source collection
+// boundary used by a running CDC reader. It is intended for integration tests
+// that must distinguish durable-checkpoint recovery from a replay from the
+// original task creation boundary.
+func SetCDCCollectBoundaryHookForTest(fn func(types.TS, types.TS)) (restore func()) {
+	collectBoundaryHook.Lock()
+	previous := collectBoundaryHook.fn
+	collectBoundaryHook.fn = fn
+	collectBoundaryHook.Unlock()
+	return func() {
+		collectBoundaryHook.Lock()
+		collectBoundaryHook.fn = previous
+		collectBoundaryHook.Unlock()
+	}
+}
+
 var CollectChanges = func(ctx context.Context, rel engine.Relation, fromTs, toTs types.TS, mp *mpool.MPool) (engine.ChangesHandle, error) {
+	collectBoundaryHook.RLock()
+	hook := collectBoundaryHook.fn
+	collectBoundaryHook.RUnlock()
+	if hook != nil {
+		hook(fromTs, toTs)
+	}
 	return rel.CollectChanges(ctx, fromTs, toTs, true, mp)
 }
 
