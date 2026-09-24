@@ -54,14 +54,32 @@ func (builder *QueryBuilder) buildGenerateSeries(tbl *tree.TableFunction, ctx *B
 	return builder.appendNode(node, ctx), nil
 }
 
-// bindGenerateSeriesArgs fixes the table function's output schema during
-// binding. Numeric arguments keep their existing runtime validation. Temporal
-// arguments are normalized to datetime so execution never needs to rewrite
-// plan metadata after Prepare.
+// bindGenerateSeriesArgs fixes the table function's output schema when the
+// first argument has a known domain. Numeric arguments keep their existing
+// runtime validation. Temporal endpoints are normalized to datetime. A direct
+// prepared first argument is specialized at EXECUTE using its runtime type.
 func bindGenerateSeriesArgs(ctx context.Context, exprs []*plan.Expr) ([]*plan.Expr, types.Type, error) {
 	firstType := types.T(exprs[0].Typ.Id)
+	if exprs[0].GetP() != nil {
+		// The SQL PREPARE transport type is TEXT, not the endpoint's domain.
+		// Leave this marker uncoerced so EXECUTE can choose the numeric or
+		// temporal path using the actual parameter type.
+		return exprs, types.T_varchar.ToType(), nil
+	}
 	if firstType.IsInteger() {
-		return exprs, types.T_int64.ToType(), nil
+		boundExprs := append([]*plan.Expr(nil), exprs...)
+		for i := 1; i < len(boundExprs); i++ {
+			if boundExprs[i].GetP() == nil {
+				continue
+			}
+			target := types.T_int64.ToType()
+			casted, err := appendCastBeforeExpr(ctx, boundExprs[i], makePlan2Type(&target))
+			if err != nil {
+				return nil, types.Type{}, err
+			}
+			boundExprs[i] = casted
+		}
+		return boundExprs, types.T_int64.ToType(), nil
 	}
 	if !firstType.IsDateRelate() && !firstType.IsMySQLString() {
 		return exprs, types.T_varchar.ToType(), nil
@@ -79,6 +97,14 @@ func bindGenerateSeriesArgs(ctx context.Context, exprs []*plan.Expr) ([]*plan.Ex
 			return nil, types.Type{}, err
 		}
 		boundExprs[i] = casted
+	}
+	if len(boundExprs) > 2 && boundExprs[2].GetP() != nil {
+		stepType := types.T_varchar.ToType()
+		casted, err := appendCastBeforeExpr(ctx, boundExprs[2], makePlan2Type(&stepType))
+		if err != nil {
+			return nil, types.Type{}, err
+		}
+		boundExprs[2] = casted
 	}
 	if firstType.IsMySQLString() {
 		return boundExprs, types.T_varchar.ToType(), nil
