@@ -479,7 +479,7 @@ func Test_createTablesInMoCatalogOfGeneralTenant(t *testing.T) {
 		}).AnyTimes()
 		bh.EXPECT().ClearExecResultSet().Return().AnyTimes()
 		msr := newMrsForCheckTenant([][]interface{}{{1, "test"}})
-		protocolResult := newMrsForCheckTenant([][]interface{}{{`{"result":"cn-a:94"}`}})
+		protocolResult := newMrsForCheckTenant([][]interface{}{{`{"result":"cn-a:95"}`}})
 		bh.EXPECT().GetExecResultSet().DoAndReturn(func() []interface{} {
 			if protocolQuery {
 				return []interface{}{protocolResult}
@@ -606,10 +606,10 @@ func Test_createTablesInInformationSchemaOfGeneralTenant_UsesProtocolAwareViews(
 	}
 }
 
-func TestCreateTenantInformationSchemaWaitsForAllProtocol94Peers(t *testing.T) {
+func TestCreateTenantInformationSchemaWaitsForAllProtocol95Peers(t *testing.T) {
 	moruntime.RunTest("", func(rt moruntime.Runtime) {
 		previous, exists := rt.GetGlobalVariables(moruntime.MOProtocolVersion)
-		rt.SetGlobalVariables(moruntime.MOProtocolVersion, defines.MORPCVersion94)
+		rt.SetGlobalVariables(moruntime.MOProtocolVersion, defines.MORPCVersion95)
 		defer func() {
 			if exists {
 				rt.SetGlobalVariables(moruntime.MOProtocolVersion, previous)
@@ -621,9 +621,9 @@ func TestCreateTenantInformationSchemaWaitsForAllProtocol94Peers(t *testing.T) {
 			name, response string
 			wantError      bool
 		}{
-			{name: "mixed", response: `{"result":"cn-a:94,cn-b:93"}`, wantError: true},
+			{name: "mixed", response: `{"result":"cn-a:95,cn-b:94"}`, wantError: true},
 			{name: "missing response", wantError: true},
-			{name: "all ready", response: `{"result":"cn-a:94,cn-b:94"}`},
+			{name: "all ready", response: `{"result":"cn-a:95,cn-b:95"}`},
 		} {
 			t.Run(tc.name, func(t *testing.T) {
 				ctrl := gomock.NewController(t)
@@ -641,7 +641,7 @@ func TestCreateTenantInformationSchemaWaitsForAllProtocol94Peers(t *testing.T) {
 				bh.EXPECT().GetExecResultSet().Return([]interface{}{newMrsForCheckTenant(rows)}).AnyTimes()
 				err := createTablesInInformationSchemaOfGeneralTenant(t.Context(), bh, "")
 				if tc.wantError {
-					require.ErrorContains(t, err, "protocol version 94")
+					require.ErrorContains(t, err, "protocol version 95")
 					require.Equal(t, []string{"SELECT mo_ctl('cn', 'GetProtocolVersion', '')"}, executed)
 				} else {
 					require.NoError(t, err)
@@ -649,6 +649,21 @@ func TestCreateTenantInformationSchemaWaitsForAllProtocol94Peers(t *testing.T) {
 				}
 			})
 		}
+		t.Run("CN94 uses legacy definition", func(t *testing.T) {
+			rt.SetGlobalVariables(moruntime.MOProtocolVersion, defines.MORPCVersion94)
+			ctrl := gomock.NewController(t)
+			bh := mock_frontend.NewMockBackgroundExec(ctrl)
+			var executed []string
+			bh.EXPECT().ClearExecResultSet().AnyTimes()
+			bh.EXPECT().Exec(gomock.Any(), gomock.Any()).DoAndReturn(func(_ context.Context, sql string) error {
+				executed = append(executed, sql)
+				return nil
+			}).AnyTimes()
+			require.NoError(t, createTablesInInformationSchemaOfGeneralTenant(t.Context(), bh, ""))
+			require.Contains(t, executed, sysview.InformationSchemaColumnsV58DDL())
+			require.NotContains(t, executed, sysview.InformationSchemaColumnsDDL)
+			require.NotContains(t, executed, "SELECT mo_ctl('cn', 'GetProtocolVersion', '')")
+		})
 	})
 }
 
