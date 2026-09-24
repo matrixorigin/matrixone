@@ -73,9 +73,13 @@ func NewTopProcess(
 		},
 
 		// 1. fields from outer
-		mp:               mp,
-		TxnClient:        txnClient,
-		TxnOperator:      txnOperator,
+		mp:          mp,
+		TxnClient:   txnClient,
+		TxnOperator: txnOperator,
+		SessionInfo: SessionInfo{
+			MaxErrorCount:    WarningDiagnosticDefaultRetentionLimit,
+			MaxErrorCountSet: true,
+		},
 		FileService:      fileService,
 		IncrService:      incrservice.GetAutoIncrementService(sid),
 		LockService:      lockService,
@@ -101,6 +105,10 @@ func NewTopProcess(
 
 	proc := &Process{
 		Base: Base,
+	}
+	if limit, ok := WarningRetentionLimitFromContext(topContext); ok {
+		proc.Base.SessionInfo.MaxErrorCount = limit
+		proc.Base.SessionInfo.MaxErrorCountSet = true
 	}
 	proc.doPrepareForRunningWithoutPipeline()
 	return proc

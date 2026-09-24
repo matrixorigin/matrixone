@@ -141,6 +141,11 @@ type SessionInfo struct {
 	// old process payloads and internal/background processes.
 	AutoIncrementIncrement uint64
 	AutoIncrementOffset    uint64
+	// MaxErrorCount is the statement-scoped capacity for retained diagnostic
+	// records. MaxErrorCountSet distinguishes an explicit zero from an older
+	// ProcessInfo payload which did not carry this field.
+	MaxErrorCount    int
+	MaxErrorCountSet bool
 	// ApplySQLSelectLimit distinguishes client statements from frontend
 	// background SQL, which may inherit a session-variable resolver but must not
 	// be affected by a client's row cap.
@@ -479,6 +484,8 @@ type BaseProcess struct {
 	messageBoard                        *message.MessageBoard
 	executionResourceBudgetMu           sync.Mutex
 	executionResourceBudget             *ExecutionResourceGeneration
+	warningDiagnosticBudgetMu           sync.Mutex
+	warningDiagnosticBudget             *WarningDiagnosticBudget
 	cteMemoryBudgetMu                   sync.Mutex
 	cteMemoryBudget                     *CTEMemoryBudget
 	logger                              *log.MOLogger
@@ -642,6 +649,9 @@ func (proc *Process) SetStmtProfile(sp *StmtProfile) {
 		proc.Base.executionResourceBudget = nil
 	}
 	proc.Base.executionResourceBudgetMu.Unlock()
+	proc.Base.warningDiagnosticBudgetMu.Lock()
+	proc.Base.warningDiagnosticBudget = nil
+	proc.Base.warningDiagnosticBudgetMu.Unlock()
 	proc.Base.cteMemoryBudgetMu.Lock()
 	if proc.Base.cteMemoryBudget != nil {
 		proc.Base.cteMemoryBudget.Close()

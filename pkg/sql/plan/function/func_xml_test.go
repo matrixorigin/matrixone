@@ -23,6 +23,7 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/container/vector"
 	"github.com/matrixorigin/matrixone/pkg/pb/plan"
 	"github.com/matrixorigin/matrixone/pkg/testutil"
+	"github.com/matrixorigin/matrixone/pkg/vm/process"
 	"github.com/stretchr/testify/require"
 )
 
@@ -293,6 +294,67 @@ func TestXMLVectorWarningsMasksAndReuse(t *testing.T) {
 	require.Equal(t, "1", result.GetResultVector().GetStringAt(0))
 	require.NoError(t, result.PreExtendAndReset(0))
 	require.NoError(t, ExtractValue([]*vector.Vector{docs, path}, result, proc, 0, nil))
+}
+
+func TestXMLWarningRetentionUsesProcessLimits(t *testing.T) {
+	for _, tc := range []struct {
+		name            string
+		update          bool
+		maxErrorCount   int
+		queryLimit      int64
+		rowCount        int
+		wantRecordCount int
+	}{
+		{name: "extract capacity above default", maxErrorCount: 2048, rowCount: 1100, wantRecordCount: 1100},
+		{name: "extract explicit zero", maxErrorCount: 0, rowCount: 3, wantRecordCount: 0},
+		{
+			name:            "update shared budget",
+			update:          true,
+			maxErrorCount:   2048,
+			queryLimit:      int64(process.WarningDiagnosticRecordBytes("Incorrect XML value: malformed XML fragment")),
+			rowCount:        2,
+			wantRecordCount: 1,
+		},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			proc := testutil.NewProcess(t)
+			defer proc.Free()
+			proc.Base.SessionInfo.MaxErrorCount = tc.maxErrorCount
+			proc.Base.SessionInfo.MaxErrorCountSet = true
+			warnings := &uncompressWarningSink{}
+			proc.WarningSink = warnings
+
+			doc, err := vector.NewConstBytes(types.T_varchar.ToType(), []byte("<a>"), tc.rowCount, proc.Mp())
+			require.NoError(t, err)
+			defer doc.Free(proc.Mp())
+			path, err := vector.NewConstBytes(types.T_varchar.ToType(), []byte("/a"), tc.rowCount, proc.Mp())
+			require.NoError(t, err)
+			defer path.Free(proc.Mp())
+			parameters := []*vector.Vector{doc, path}
+			if tc.update {
+				replacement, replacementErr := vector.NewConstBytes(types.T_varchar.ToType(), []byte("<b/>"), tc.rowCount, proc.Mp())
+				require.NoError(t, replacementErr)
+				defer replacement.Free(proc.Mp())
+				parameters = append(parameters, replacement)
+			}
+			result := vector.NewFunctionResultWrapper(types.T_varchar.ToType(), proc.Mp())
+			defer result.Free()
+			require.NoError(t, result.PreExtendAndReset(tc.rowCount))
+			if tc.queryLimit > 0 {
+				proc.Base.Lim.Size = tc.queryLimit
+			}
+
+			var callErr error
+			if tc.update {
+				callErr = UpdateXML(parameters, result, proc, tc.rowCount, nil)
+			} else {
+				callErr = ExtractValue(parameters, result, proc, tc.rowCount, nil)
+			}
+			require.NoError(t, callErr)
+			require.Equal(t, uint64(tc.rowCount), warnings.total)
+			require.Len(t, warnings.records, tc.wantRecordCount)
+		})
+	}
 }
 
 func TestXMLXPathPrecedesNullDocument(t *testing.T) {
