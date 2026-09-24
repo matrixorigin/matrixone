@@ -117,6 +117,9 @@ func encodeRemoteScope(s *Scope, proc *process.Process) ([]byte, error) {
 	if err != nil {
 		return nil, err
 	}
+	if err = validateVectorPartitionDestination(proc, p); err != nil {
+		return nil, err
+	}
 	if err = validateGroupingTransportDestinations(proc, p); err != nil {
 		return nil, err
 	}
@@ -280,6 +283,9 @@ func decodeScope(data []byte, proc *process.Process, isRemote bool, eng engine.E
 		return nil, err
 	}
 	if isRemote {
+		if err = validateRemoteVectorPartitionProtocol(proc, p); err != nil {
+			return nil, err
+		}
 		if err = validateRemoteStringProvenancePipelineProtocol(proc, p); err != nil {
 			return nil, err
 		}

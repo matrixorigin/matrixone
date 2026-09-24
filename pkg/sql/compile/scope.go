@@ -2215,6 +2215,7 @@ func (s *Scope) buildVectorIndexReaders(runtimeFilters []receivedRuntimeFilter) 
 	if err != nil {
 		return nil, err
 	}
+	identity.IsRemote = s.IsRemote
 	req, hasQuery, err := vectorscan.RequestFromScalar(
 		spec, identity, membership, hasMembership, membershipRequired)
 	if err != nil {

@@ -96,7 +96,7 @@ func NewPlanReader(proc *process.Process, spec *plan.VectorIndexScan, req search
 		proc:           proc,
 		partitionCount: req.Identity.PartitionCount,
 		partitionIndex: req.Identity.PartitionIndex,
-		ownsInMemory:   ownsInMemoryPartition(req.Identity.PartitionCount, req.Identity.PartitionIndex),
+		ownsInMemory:   req.Identity.PartitionCount <= 1 || !req.Identity.IsRemote,
 		txnOffset:      req.Identity.TxnOffset,
 		snapshot:       cloneIvfSnapshot(req.Identity.Snapshot),
 		executionStats: r.executionStats,
@@ -106,10 +106,6 @@ func NewPlanReader(proc *process.Process, spec *plan.VectorIndexScan, req search
 		r.scanner.accountID = &accountID
 	}
 	return r, nil
-}
-
-func ownsInMemoryPartition(partitionCount, partitionIndex int32) bool {
-	return partitionCount <= 1 || partitionIndex == 0
 }
 
 func cloneIvfSnapshot(snapshot *plan.Snapshot) *plan.Snapshot {
@@ -940,9 +936,8 @@ func (s *relationScanner) recordRelationExecutionStats(
 }
 
 // relationScanPolicy mirrors the distributed table-scan ownership contract:
-// partition zero owns committed in-memory/appendable rows, while every other
-// partition reads only persisted objects assigned by object ID. The scheduler
-// pins the coordinator-local CN at ordinal zero for VECTOR_INDEX_SCAN queries.
+// the coordinator owns in-memory rows independently of its object partition
+// ordinal. Remote partitions read only persisted objects assigned by object ID.
 // Replicated metadata/centroid requests set partitionCount=1 and therefore
 // read all visible data on every executing CN.
 func relationScanPolicy(partitionCount int32, ownsInMemory bool) engine.DataCollectPolicy {
