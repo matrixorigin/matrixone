@@ -15,6 +15,8 @@
 package table_function
 
 import (
+	"fmt"
+
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
 	"github.com/matrixorigin/matrixone/pkg/common/pubsub"
 	"github.com/matrixorigin/matrixone/pkg/container/types"
@@ -27,6 +29,15 @@ import (
 )
 
 const maxViewDescriptionsPerScan = 65536
+
+// Only catalog/column lookup failures prove that a previously valid View
+// definition has become invalid. Other errors may indicate protocol, resource,
+// permission, cancellation or compiler failures and must remain fatal.
+func skippableViewDescriptionError(err error) bool {
+	return moerr.IsMoErrCode(err, moerr.ErrNoSuchTable) ||
+		moerr.IsMoErrCode(err, moerr.ErrBadFieldError) ||
+		moerr.IsMoErrCode(err, moerr.ErrBadDB)
+}
 
 type viewColumnsState struct {
 	simpleOneBatchState
@@ -108,7 +119,20 @@ func (s *viewColumnsState) start(tf *TableFunction, proc *process.Process, nthRo
 	s.described++
 	columns, err := plan.DescribeViewColumns(compiler, def.ViewSql.View)
 	if err != nil {
-		return err
+		// An invalid source makes this View unqueryable, but must not hide
+		// other valid rows in a batch I_S metadata scan. Do not downgrade
+		// cancellation, rollout gates or unexpected compiler failures.
+		if ctxErr := proc.Ctx.Err(); ctxErr != nil {
+			return ctxErr
+		}
+		if !skippableViewDescriptionError(err) {
+			return err
+		}
+		process.AppendWarningBatch(proc, 1, []uint16{moerr.ER_VIEW_INVALID}, []string{
+			fmt.Sprintf("View '%s.%s' references invalid table(s) or column(s) or function(s) or definer/invoker of view lack rights to use them",
+				def.DbName, def.Name),
+		})
+		return nil
 	}
 	if len(columns) > plan.MaxViewMetadataColumns {
 		return moerr.NewInternalError(proc.Ctx, "View metadata exceeds its column budget")

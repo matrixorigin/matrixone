@@ -18,6 +18,7 @@ import (
 	"context"
 	"database/sql"
 	"fmt"
+	"strings"
 	"testing"
 	"time"
 
@@ -184,6 +185,31 @@ func TestViewDescriptionPublicSQL(t *testing.T) {
 			&invalidFields[0], &invalidFields[1], &invalidFields[2], &invalidFields[3],
 			&invalidFields[4], &invalidFields[5], &invalidFields[6])
 		require.Error(t, err)
+		warningConn, err := db.Conn(ctx)
+		require.NoError(t, err)
+		func() {
+			defer warningConn.Close()
+			func() {
+				rows, err := warningConn.QueryContext(ctx,
+					"select column_name from information_schema.columns "+
+						"where table_schema='view_description_test' and table_name='v'")
+				require.NoError(t, err)
+				defer rows.Close()
+				require.False(t, rows.Next(), "invalid View metadata must not expose stored columns")
+				require.NoError(t, rows.Err())
+			}()
+			warnings, err := warningConn.QueryContext(ctx, "show warnings")
+			require.NoError(t, err)
+			defer warnings.Close()
+			require.True(t, warnings.Next())
+			var level, message string
+			var code int
+			require.NoError(t, warnings.Scan(&level, &code, &message))
+			require.Equal(t, "Warning", level)
+			require.Equal(t, 1356, code)
+			require.Contains(t, message, "view_description_test.v")
+			require.NoError(t, warnings.Err())
+		}()
 		exec("create table view_description_test.src (x varchar(90), qty bigint not null default 11)")
 		repaired := describe("desc view_description_test.v")
 		require.Len(t, repaired, 2)
@@ -333,13 +359,43 @@ func TestViewDescriptionSubscription(t *testing.T) {
 		checkSubscribedShow("VARCHAR(90)")
 		require.NoError(t, prepared.QueryRowContext(ctx).Scan(&width))
 		require.Equal(t, 90, width)
+		// Batch metadata scans omit invalid Views, but retain a diagnostic for
+		// the client. Keep both queries on the same connection for SHOW WARNINGS.
+		warningConn, err := subscriber.Conn(ctx)
+		require.NoError(t, err)
+		defer warningConn.Close()
 		func() {
-			rows, err := subscriber.QueryContext(ctx, "select table_name from information_schema.columns where table_schema='subscribed'")
-			if rows != nil {
-				defer rows.Close()
-				require.NoError(t, rows.Err())
+			rows, err := warningConn.QueryContext(ctx,
+				"select distinct table_name from information_schema.columns where table_schema='subscribed'")
+			require.NoError(t, err)
+			defer rows.Close()
+			var names []string
+			for rows.Next() {
+				var name string
+				require.NoError(t, rows.Scan(&name))
+				names = append(names, name)
 			}
-			require.Error(t, err, "an authorized full subscription scan must report its invalid View")
+			require.NoError(t, rows.Err())
+			require.Contains(t, names, "v")
+			require.NotContains(t, names, "bad_view")
+		}()
+		func() {
+			rows, err := warningConn.QueryContext(ctx, "show warnings")
+			require.NoError(t, err)
+			defer rows.Close()
+			var found, warningCount int
+			for rows.Next() {
+				warningCount++
+				var level, message string
+				var code int
+				require.NoError(t, rows.Scan(&level, &code, &message))
+				if level == "Warning" && code == 1356 && strings.Contains(message, "bad_view") {
+					found++
+				}
+			}
+			require.NoError(t, rows.Err())
+			require.Equal(t, 1, warningCount, "one warning per skipped View")
+			require.Equal(t, 1, found, "the skipped invalid View must produce warning 1356")
 		}()
 
 		_, err = subscriber.ExecContext(ctx, "create role metadata_reader")

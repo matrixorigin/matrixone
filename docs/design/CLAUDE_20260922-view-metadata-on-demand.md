@@ -33,7 +33,7 @@
 - 完整类型、default、nullability、特殊类型来源规则共用一个权威推导，不按输出名字回查源列。
 - 绑定前，候选必须通过该入口的可见性/权限检查。不可见对象不得导致绑定、源目录访问或泄露其失败。
 - 读操作不修改 View、源表、权限或恢复状态；不启动独立事务读取“最新”状态。
-- 无可用描述时受控失败，不回退旧列。
+- 无可用描述时单对象受控失败；批量 I_S 依第 8 节跳过并告警，不回退旧列。
 - 合法旧事务按旧快照观察，不能要求不同快照跨 DDL 结果一致。
 - 重启/请求失败只丢弃请求状态；下一请求重算，不维护完成真相。
 
@@ -130,17 +130,43 @@ cursor.Close() -> idempotent release
 
 ## 8. 失败及一致性
 
-拟议首版契约：
+经 MySQL 8.0.45 对照与用户在 2026-09-24 明确选择方案 2 后，首版契约：
 
 - 单 View 绑定失败：错误，不返回旧描述。
-- 批量 I_S 遇到可见且位于候选范围内的失效 View：整条查询返回错误；不静默跳过。
-- 已流出的先前完整行不意味着结果成功；MySQL 响应最终为错误。若产品要求全结果原子，必须另评估缓冲成本，不能通过无限缓冲实现。
-- 不可见或被安全候选条件排除的坏 View：不绑定、不报它的错。
+- 批量 I_S 遇到可见且位于候选范围内的失效 View：仅当错误明确是缺失源表、源库或来源列时跳过该 View 的所有列，向当前语句的诊断 sink 提交 `Warning 1356 (HY000)`；其他合法 View 仍返回。warning 数量精确计数、可供客户端 `SHOW WARNINGS` 查看，诊断记录按现有容量上限保留；不返回旧列。
+- 超出已确认的失效依赖错误集合、定义格式错误、协议不支持、资源上限、权限错误等保持原失败语义，不能把内部故障伪装成无效 View。
+- 不可见或被安全候选条件排除的坏 View：不绑定，不报错也不产生 warning。
 - 超时/取消：停止工作，清理 cursor；不自动换快照重试。
 - DDL 冲突：交由既有语句重试规则，新执行代丢弃所有前代描述；禁止混合重试前后结果。
 - 引用循环：绑定链检测失败；深度/工作量预算防非循环放大。
 
-批量错误契约**待 MySQL 8.0.45 实测及产品批准**；若需跳过，必须明确可观察策略且仍不返回旧列。这个决策未完成前设计不能 PASS。
+MySQL 8.0.45 对照实测（独立 `mysql:8.0.45` 容器，`SELECT VERSION()` 确认；2026-09-24）：
+
+复现命令：
+
+```sql
+CREATE DATABASE claude_view_metadata;
+CREATE TABLE claude_view_metadata.src (x VARCHAR(5), keep_col INT);
+CREATE VIEW claude_view_metadata.good AS SELECT keep_col FROM claude_view_metadata.src;
+CREATE VIEW claude_view_metadata.broken AS SELECT x FROM claude_view_metadata.src;
+ALTER TABLE claude_view_metadata.src MODIFY COLUMN x VARCHAR(60);
+SELECT table_name,column_name,character_maximum_length FROM information_schema.columns
+ WHERE table_schema='claude_view_metadata' ORDER BY table_name,ordinal_position;
+ALTER TABLE claude_view_metadata.src DROP COLUMN x;
+SELECT table_name,column_name FROM information_schema.columns
+ WHERE table_schema='claude_view_metadata' ORDER BY table_name,column_name;
+SHOW WARNINGS;
+DESCRIBE claude_view_metadata.broken;
+```
+
+观测结果：
+
+1. 创建 `src(x varchar(5), keep_col int)`、`good AS SELECT keep_col FROM src`、`broken AS SELECT x FROM src`，查询 `information_schema.columns` 返回两个 View 的列。
+2. `ALTER TABLE src MODIFY COLUMN x varchar(60)` 后，再查 I_S，`broken.x` 宽度变为 60。
+3. `ALTER TABLE src DROP COLUMN x` 后，`SELECT TABLE_NAME,COLUMN_NAME FROM information_schema.columns WHERE TABLE_SCHEMA='claude_view_metadata' ORDER BY TABLE_NAME,COLUMN_NAME` 成功返回 `good.keep_col`、`src.keep_col`，**跳过 `broken`**；`SHOW WARNINGS` 返回 `Warning 1356 (HY000)`，提示 View 引用失效。同样只筛选 `TABLE_NAME='broken'` 时返回空结果与同一 warning。
+4. `SELECT * FROM broken`、`DESCRIBE broken`、`SHOW FULL COLUMNS FROM broken` 均返回 `ERROR 1356 (HY000)`。
+
+此前实现对批量 I_S 的可见失效 View **使整个查询报错**，与 MySQL 8.0.45 的“跳过并发 warning”不一致；不能将单对象 DESC 的 MySQL 行为推断为批量 I_S 契约。实验原始输出保留在本机 `/tmp/claude-pr29139-mysql8045-evidence.log` 与 `/tmp/claude-pr29139-mysql8045-warnings.log`；SQL 和关键结果已记录于此，临时容器已清理。**产品选择：用户在 2026-09-24 的本 PR 修复会话中明确选择方案 2，并在询问 warning 机制后再次确认继续实施。** 按对照结果修改批量扫描，保留单对象 DESC/SHOW 的错误。
 
 ## 9. 资源预算与性能
 
@@ -200,11 +226,11 @@ https://dev.mysql.com/doc/refman/8.0/en/information-schema-columns-table.html
 
 范围：跨 planner/frontend/执行器/系统视图的架构调整，触发权限、持久化兼容、生命周期及热路径设计门禁。
 
-决定：PASS。用户明确选择 definition-only/按需绑定方向并授权完整实施。
+决定：**PASS（含 2026-09-24 批量错误契约补充审批）**。用户选择 definition-only/按需绑定方向，并针对第 8 节 MySQL 8.0.45 对照证据明确选择批量扫描跳过无效 View + warning；该批准不授权将取消、协议、内部或资源错误降格为 warning。
 
 关闭项：
 - B1：执行期 provider 由请求级 `SessionInfo.CompilerContext` 所有，APPLY 强制 origin CN 串行执行；frontend、internal executor、subscription 和双 CN 实测通过。
-- B2：可见且进入候选集合的失效 View 使语句失败；不可见或被安全筛选排除的 View 不绑定。公开 SQL 已覆盖失败、修复及无关坏 View。
+- B2：单对象 View 描述失败仍报错；批量 I_S 在可见且进入候选集合的 View 失效时跳过该 View，向客户端产生 warning 1356；不可见或被安全筛选排除的 View 不绑定、不产生 warning。产品选择、MySQL 8.0.45 对照与公开 SQL 证据见第 8 节。
 - B3：CREATE VIEW 已有 star 固化定义继续作为权威；按需绑定不读取旧派生类型。遗留规范化行为由现有 star 测试保持。
 - B4：4.0.9 + protocol 94 控制混合版本切换；每 scan 最多 65,536 个 View、每 View 4,096 列、定义 16 MiB，并响应 context 取消。
 
