@@ -561,13 +561,7 @@ func (h *Handle) HandleGetChangedTableList(
 			return true
 
 		} else if req.Type == cmd_util.CollectChanged {
-			if start.GT(&to) {
-				return false
-			}
-			if end.LT(&start) {
-				return false
-			}
-			return true
+			return tableIDRangeIntersectsWindow(start, end, from, to)
 		}
 
 		return false
@@ -603,6 +597,12 @@ func (h *Handle) HandleGetChangedTableList(
 	})
 
 	return nil, nil
+}
+
+func tableIDRangeIntersectsWindow(start, end, from, to types.TS) bool {
+	// The checkpoint index retains older rows, so a valid table range must
+	// overlap this request's window before the table is recalculated.
+	return !end.LT(&start) && !start.GT(&to) && !end.LT(&from)
 }
 
 func (h *Handle) HandleFlushTable(

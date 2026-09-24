@@ -40,6 +40,48 @@ type takeoverCheckpointExecutor struct {
 	onCheckpoint     func()
 }
 
+type legacyWatermarkProgressExecutor struct {
+	found      bool
+	watermark  string
+	generation uint64
+}
+
+func (e *legacyWatermarkProgressExecutor) Exec(context.Context, string, ie.SessionOverrideOptions) error {
+	return strconv.ErrSyntax
+}
+
+func (e *legacyWatermarkProgressExecutor) Query(_ context.Context, sql string, _ ie.SessionOverrideOptions) ie.InternalExecResult {
+	if !strings.HasPrefix(sql, "SELECT watermark, source_table_id FROM `mo_catalog`.`mo_cdc_watermark`") {
+		return &InternalExecResultForTest{err: strconv.ErrSyntax}
+	}
+	if !e.found {
+		return &InternalExecResultForTest{resultSet: &MysqlResultSetForTest{}}
+	}
+	return &InternalExecResultForTest{resultSet: &MysqlResultSetForTest{Data: [][]interface{}{{e.watermark, strconv.FormatUint(e.generation, 10)}}}}
+}
+
+func (*legacyWatermarkProgressExecutor) ApplySessionOverride(ie.SessionOverrideOptions) {}
+
+func TestGetWatermarkProgressIfExistsDistinguishesLegacyResume(t *testing.T) {
+	key := &WatermarkKey{AccountId: 1, TaskId: "legacy", DBName: "db", TableName: "table"}
+
+	withProgress := &legacyWatermarkProgressExecutor{found: true, watermark: types.BuildTS(200, 3).ToString(), generation: 0}
+	updater := NewCDCWatermarkUpdater(t.Name()+"-with-progress", withProgress)
+	wm, generation, found, err := updater.GetWatermarkProgressIfExists(context.Background(), key)
+	require.NoError(t, err)
+	require.True(t, found)
+	require.Equal(t, types.BuildTS(200, 3), wm)
+	require.Zero(t, generation)
+
+	withoutProgress := &legacyWatermarkProgressExecutor{}
+	updater = NewCDCWatermarkUpdater(t.Name()+"-without-progress", withoutProgress)
+	wm, generation, found, err = updater.GetWatermarkProgressIfExists(context.Background(), key)
+	require.NoError(t, err)
+	require.False(t, found)
+	require.True(t, wm.IsEmpty())
+	require.Zero(t, generation)
+}
+
 func (e *takeoverCheckpointExecutor) Exec(_ context.Context, sql string, _ ie.SessionOverrideOptions) error {
 	if strings.HasPrefix(sql, "UPDATE `mo_catalog`.`mo_cdc_watermark` SET owner_generation") {
 		match := watermarkOwnerClaim.FindStringSubmatch(sql)

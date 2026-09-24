@@ -7579,22 +7579,20 @@ func constructAddedPartitionDefs(
 // external table writable, plus the column restrictions writability implies.
 // No-op for read-only external tables (option absent). tableDef may be nil when
 // only the param-level options need checking.
-// effectiveWriteCompression mirrors crt.GetCompressType's decision (inlined to
-// avoid the plan<-crt import cycle): an explicit non-auto compression wins,
-// otherwise the type is auto-detected from any of the given file paths'
-// suffixes. Returns the effective type and whether it is compressed.
+// effectiveWriteCompression applies GetCompressType, the detector the read
+// path uses, over several paths: an explicit non-auto compression wins,
+// otherwise the first path whose name implies compression decides. Returns the
+// effective type and whether it is compressed. Sharing the detector keeps
+// write validation from accepting a pattern the read path would decompress.
 func effectiveWriteCompression(comp string, paths ...string) (string, bool) {
-	comp = strings.ToLower(strings.TrimSpace(comp))
-	if comp != "" && comp != tree.AUTO {
-		return comp, comp != tree.NOCOMPRESS
+	comp = strings.TrimSpace(comp)
+	if comp != "" && !strings.EqualFold(comp, tree.AUTO) {
+		eff := GetCompressType(comp, "")
+		return eff, eff != tree.NOCOMPRESS
 	}
-	suffixes := []string{".tar.gz", ".tar.gzip", ".tar.bz2", ".tar.bzip2", ".gz", ".gzip", ".bz2", ".bzip2", ".lz4"}
 	for _, p := range paths {
-		p = strings.ToLower(p)
-		for _, suf := range suffixes {
-			if strings.HasSuffix(p, suf) {
-				return strings.TrimPrefix(suf, "."), true
-			}
+		if eff := GetCompressType("", p); eff != tree.NOCOMPRESS {
+			return eff, true
 		}
 	}
 	return tree.NOCOMPRESS, false
