@@ -55,35 +55,39 @@ func TestGroupedBitwiseCTAS(t *testing.T) {
 				"select g, " + tc.fn + "(i) as v from " + schema + ".src group by g order by g",
 				"select g, v from (select g, " + tc.fn + "(i) as v from " + schema + ".src group by g) as d order by g",
 			} {
-				rows, err := db.QueryContext(ctx, query)
-				require.NoError(t, err, query)
-				count := 0
+				func() {
+					rows, err := db.QueryContext(ctx, query)
+					require.NoError(t, err, query)
+					defer func() { require.NoError(t, rows.Close()) }()
+					count := 0
+					for rows.Next() {
+						var group int
+						var value sql.NullString
+						require.NoError(t, rows.Scan(&group, &value))
+						require.True(t, value.Valid, "%s returned NULL for group %d", query, group)
+						count++
+					}
+					require.NoError(t, rows.Err())
+					require.Equal(t, 2, count)
+				}()
+			}
+			_, err := db.ExecContext(ctx, "create table "+schema+"."+tc.table+" as select g, "+tc.fn+"(i) as v from "+schema+".src group by g")
+			require.NoError(t, err, tc.fn)
+			func() {
+				rows, err := db.QueryContext(ctx, "select g, v from "+schema+"."+tc.table+" order by g")
+				require.NoError(t, err)
+				defer func() { require.NoError(t, rows.Close()) }()
+				var actual []string
 				for rows.Next() {
 					var group int
 					var value sql.NullString
 					require.NoError(t, rows.Scan(&group, &value))
-					require.True(t, value.Valid, "%s returned NULL for group %d", query, group)
-					count++
+					require.True(t, value.Valid)
+					actual = append(actual, fmt.Sprintf("%d:%s", group, value.String))
 				}
 				require.NoError(t, rows.Err())
-				require.NoError(t, rows.Close())
-				require.Equal(t, 2, count)
-			}
-			_, err := db.ExecContext(ctx, "create table "+schema+"."+tc.table+" as select g, "+tc.fn+"(i) as v from "+schema+".src group by g")
-			require.NoError(t, err, tc.fn)
-			rows, err := db.QueryContext(ctx, "select g, v from "+schema+"."+tc.table+" order by g")
-			require.NoError(t, err)
-			var actual []string
-			for rows.Next() {
-				var group int
-				var value sql.NullString
-				require.NoError(t, rows.Scan(&group, &value))
-				require.True(t, value.Valid)
-				actual = append(actual, fmt.Sprintf("%d:%s", group, value.String))
-			}
-			require.NoError(t, rows.Err())
-			require.NoError(t, rows.Close())
-			require.Equal(t, []string{"1:" + tc.first, "2:" + tc.second}, actual)
+				require.Equal(t, []string{"1:" + tc.first, "2:" + tc.second}, actual)
+			}()
 		}
 
 		for _, statement := range []string{
@@ -106,19 +110,21 @@ func TestGroupedBitwiseCTAS(t *testing.T) {
 				table := schema + ".grouped_" + tc.fn + "_" + column
 				_, err := db.ExecContext(ctx, "create table "+table+" as select g, "+tc.fn+"("+column+") as value from "+schema+".src_binary group by g")
 				require.NoError(t, err, "%s(%s)", tc.fn, column)
-				rows, err := db.QueryContext(ctx, "select g, value from "+table+" order by g")
-				require.NoError(t, err)
-				var actual [][]byte
-				for rows.Next() {
-					var group int
-					var value []byte
-					require.NoError(t, rows.Scan(&group, &value))
-					require.Equal(t, len(actual)+1, group)
-					actual = append(actual, value)
-				}
-				require.NoError(t, rows.Err())
-				require.NoError(t, rows.Close())
-				require.Equal(t, [][]byte{tc.first, tc.second}, actual)
+				func() {
+					rows, err := db.QueryContext(ctx, "select g, value from "+table+" order by g")
+					require.NoError(t, err)
+					defer func() { require.NoError(t, rows.Close()) }()
+					var actual [][]byte
+					for rows.Next() {
+						var group int
+						var value []byte
+						require.NoError(t, rows.Scan(&group, &value))
+						require.Equal(t, len(actual)+1, group)
+						actual = append(actual, value)
+					}
+					require.NoError(t, rows.Err())
+					require.Equal(t, [][]byte{tc.first, tc.second}, actual)
+				}()
 			}
 		}
 	})
