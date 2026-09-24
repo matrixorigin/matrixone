@@ -286,7 +286,7 @@ func TestTimestampTemporalResultPaths(t *testing.T) {
 	converted := vector.GenerateFunctionFixedTypeParameter[types.Datetime](convertResult.GetResultVector())
 	convertedValue, isNull := converted.GetValue(0)
 	require.False(t, isNull)
-	require.Equal(t, types.DatetimeFromClock(2024, 1, 2, 11, 4, 5, 0), convertedValue)
+	require.Equal(t, types.DatetimeFromClock(2024, 1, 2, 11, 4, 5, 123456), convertedValue)
 }
 
 func TestTimestampWindowBoundaryLordHoweFold(t *testing.T) {
