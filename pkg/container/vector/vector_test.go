@@ -2564,6 +2564,40 @@ func TestNumericBinaryLiteralRepeatedBatchAppendRetainsUniformSidecar(t *testing
 	for row := 0; row < destination.Length(); row++ {
 		require.True(t, destination.GetIsBinAt(row), "row %d lost numeric-literal provenance", row)
 	}
+
+}
+
+func TestNumericBinaryLiteralRepeatedBatchAppendKeepsScalar(t *testing.T) {
+	mp := mpool.MustNewZero()
+	source := NewVec(types.T_int64.ToType())
+	destination := NewVec(types.T_int64.ToType())
+	require.NoError(t, AppendFixed(source, int64(30), false, mp))
+	source.SetIsBin(true)
+	require.NoError(t, AppendFixedList(destination, []int64{10, 20}, nil, mp))
+	destination.SetIsBin(true)
+	defer func() {
+		destination.Free(mp)
+		source.Free(mp)
+		require.Zero(t, mp.CurrNB())
+	}()
+
+	for range 128 {
+		require.NoError(t, destination.UnionBatch(source, 0, 1, nil, mp))
+		require.True(t, destination.GetIsBin())
+		require.False(t, destination.HasIsBinRows(), "uniform appends should keep scalar provenance")
+	}
+	for row := 0; row < destination.Length(); row++ {
+		require.True(t, destination.GetIsBinAt(row), "row %d lost numeric-literal provenance", row)
+	}
+	for _, prefixMarked := range []bool{false, true} {
+		destination.ResetWithSameType()
+		require.NoError(t, AppendFixed(destination, int64(0), true, mp))
+		destination.SetIsBin(prefixMarked)
+		source.SetIsBin(!prefixMarked)
+		require.NoError(t, destination.UnionBatch(source, 0, 1, nil, mp))
+		require.Equal(t, !prefixMarked, destination.GetIsBin(), "NULL-only prefix must not affect uniform provenance")
+		require.False(t, destination.HasIsBinRows())
+	}
 }
 
 func TestRawAppendClearsNumericBinaryLiteralProvenance(t *testing.T) {
@@ -6638,42 +6672,47 @@ func BenchmarkUnionOnePrepareParamKindLateDivergence(b *testing.B) {
 	}
 }
 
-// This benchmark keeps appending one marked row into an active, initially
-// uniform numeric-provenance sidecar. Runtime should scale with appended rows,
-// not repeatedly classify the growing prefix.
+// This benchmark compares scalar and row-bitmap prefixes while appending one
+// marked row; runtime should scale with appended rows, not prefix length.
 func BenchmarkUnionBatchNumericBinaryLiteralOneRowAppend(b *testing.B) {
-	for _, prefixRows := range []int{4 << 10, 512 << 10} {
-		b.Run(fmt.Sprintf("prefix=%d", prefixRows), func(b *testing.B) {
-			mp := mpool.MustNewZero()
-			source := NewVec(types.T_int64.ToType())
-			destination := NewVec(types.T_int64.ToType())
-			defer source.Free(mp)
-			defer destination.Free(mp)
-			require.NoError(b, AppendFixed(source, int64(1), false, mp))
-			source.SetIsBin(true)
-			values := make([]int64, prefixRows)
-			markers := make([]bool, prefixRows)
-			for row := range values {
-				markers[row] = true
-			}
-			markers[prefixRows-1] = false
-			require.NoError(b, AppendFixedList(destination, values, nil, mp))
-			require.NoError(b, destination.SetIsBinRowsWithMP(markers, mp))
-			require.NoError(b, destination.SetIsBinAt(prefixRows-1, true, mp))
-			require.True(b, destination.HasIsBinRows())
-			require.NoError(b, destination.ensureNumericBinaryLiteralCapacity(prefixRows+b.N, mp))
-			if err := extendWithBitmaps(destination, b.N, mp, false, false); err != nil {
-				b.Fatal(err)
-			}
-
-			b.ReportAllocs()
-			b.ResetTimer()
-			for b.Loop() {
-				if err := destination.UnionBatch(source, 0, 1, nil, mp); err != nil {
+	for _, representation := range []string{"scalar", "uniform-sidecar"} {
+		for _, prefixRows := range []int{4 << 10, 512 << 10} {
+			b.Run(fmt.Sprintf("%s/prefix=%d", representation, prefixRows), func(b *testing.B) {
+				mp := mpool.MustNewZero()
+				source := NewVec(types.T_int64.ToType())
+				destination := NewVec(types.T_int64.ToType())
+				defer source.Free(mp)
+				defer destination.Free(mp)
+				require.NoError(b, AppendFixed(source, int64(1), false, mp))
+				source.SetIsBin(true)
+				values := make([]int64, prefixRows)
+				require.NoError(b, AppendFixedList(destination, values, nil, mp))
+				if representation == "scalar" {
+					destination.SetIsBin(true)
+				} else {
+					markers := make([]bool, prefixRows)
+					for row := range markers {
+						markers[row] = true
+					}
+					markers[prefixRows-1] = false
+					require.NoError(b, destination.SetIsBinRowsWithMP(markers, mp))
+					require.NoError(b, destination.SetIsBinAt(prefixRows-1, true, mp))
+					require.True(b, destination.HasIsBinRows())
+					require.NoError(b, destination.ensureNumericBinaryLiteralCapacity(prefixRows+b.N, mp))
+				}
+				if err := extendWithBitmaps(destination, b.N, mp, false, false); err != nil {
 					b.Fatal(err)
 				}
-			}
-		})
+
+				b.ReportAllocs()
+				b.ResetTimer()
+				for b.Loop() {
+					if err := destination.UnionBatch(source, 0, 1, nil, mp); err != nil {
+						b.Fatal(err)
+					}
+				}
+			})
+		}
 	}
 }
 

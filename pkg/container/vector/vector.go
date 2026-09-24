@@ -4315,12 +4315,10 @@ func (v *Vector) copyNumericBinaryLiteralWindowTo(dst *Vector, start, end int, m
 type numericBinaryLiteralAppendIterator func(visit func(outputRow, sourceRow int))
 
 // propagateNumericBinaryLiteralAppend publishes one appended marker generation
-// in bulk. Existing row bitmaps support O(1) single-row normalization, while
-// this path counts the old and appended markers once and initializes a mixed
-// bitmap directly instead of issuing scalar updates for every appended row.
-// Union paths preflight capacity before extending values, so this method can
-// count once and either keep the scalar representation or fill a mixed bitmap
-// directly, publishing only after every bit is set.
+// in bulk. Scalar prefixes remain scalar when appended non-NULL rows agree;
+// only a transition to mixed provenance inspects old NULLs and builds a bitmap.
+// Union paths preflight capacity before extending values, so mixed metadata is
+// published only after every bit is set.
 func (v *Vector) propagateNumericBinaryLiteralAppend(
 	w *Vector,
 	oldLength int,
@@ -4357,24 +4355,60 @@ func (v *Vector) propagateNumericBinaryLiteralAppend(
 	}
 
 	var nonNull, marked int
-	for row := 0; row < oldLength; row++ {
-		if v.IsNull(uint64(row)) {
-			continue
+	if !v.numericBinaryLiteralRowsActive {
+		var appendedNonNull, appendedMarked int
+		iterate(func(_, sourceRow int) {
+			if w.IsNull(uint64(sourceRow)) {
+				return
+			}
+			appendedNonNull++
+			if w.GetIsBinAt(sourceRow) {
+				appendedMarked++
+			}
+		})
+		prefixMarked := v.numericBinaryLiteral || v.isBin
+		appendedUnmarked := appendedNonNull - appendedMarked
+		if appendedNonNull == 0 || prefixMarked && appendedUnmarked == 0 ||
+			!prefixMarked && appendedMarked == 0 {
+			v.SetIsBin(prefixMarked)
+			return nil
 		}
-		nonNull++
-		if v.GetIsBinAt(row) {
-			marked++
+
+		// A scalar prefix is uniform, so only inspect its NULL bitmap when an
+		// appended value disagrees and a row sidecar may be needed.
+		oldNonNull := oldLength
+		if !v.nsp.EmptyByFlag() {
+			oldNonNull -= v.nsp.CountRange(0, uint64(oldLength))
 		}
+		if oldNonNull == 0 && (appendedMarked == 0 || appendedMarked == appendedNonNull) {
+			v.SetIsBin(appendedMarked != 0)
+			return nil
+		}
+		nonNull = oldNonNull + appendedNonNull
+		marked = appendedMarked
+		if prefixMarked {
+			marked += oldNonNull
+		}
+	} else {
+		for row := 0; row < oldLength; row++ {
+			if v.IsNull(uint64(row)) {
+				continue
+			}
+			nonNull++
+			if v.GetIsBinAt(row) {
+				marked++
+			}
+		}
+		iterate(func(_, sourceRow int) {
+			if w.IsNull(uint64(sourceRow)) {
+				return
+			}
+			nonNull++
+			if w.GetIsBinAt(sourceRow) {
+				marked++
+			}
+		})
 	}
-	iterate(func(outputRow, sourceRow int) {
-		if w.IsNull(uint64(sourceRow)) {
-			return
-		}
-		nonNull++
-		if w.GetIsBinAt(sourceRow) {
-			marked++
-		}
-	})
 
 	switch {
 	case nonNull == 0 || marked == 0:
