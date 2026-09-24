@@ -19,13 +19,20 @@ artifacts and Sirius SDK use the same activated prefix before packaging.
 
 Make and Go test entrypoints require `PIXI_PROJECT_ROOT`,
 `PIXI_ENVIRONMENT_NAME`, and `CONDA_PREFIX` from Pixi activation and fail if
-required CUDA/cuVS inputs are missing. Native provenance includes the Pixi prefix, selected
-environment, and lockfile digest, so changing the profile invalidates cached
-GPU artifacts.
+required CUDA/cuVS inputs are missing. Native provenance includes the Pixi
+prefix, selected environment, and lockfile digest, so changing the profile
+invalidates cached GPU artifacts.
 
 The build uses separate compiler and CUDA target roots inside the Pixi prefix.
-NVCC uses Pixi's host C++ compiler. Driver stubs
-are used only for linking; they are excluded from runtime search paths.
+NVCC uses Pixi's host C++ compiler. Driver stubs are used only for linking;
+they are excluded from runtime search paths.
+
+To upgrade cuVS, change the version constraints in this `pixi.toml` and run
+`pixi lock` here; there is no Conda YAML conversion step. Sirius's separate
+`mo` profile must be upgraded and locked for a combined build. Build MO under
+that Sirius profile and rerun the combined cuVS/Sirius test so both components
+use the same installed libraries. MO's standalone lock is for MO GPU-only
+builds and is never combined with the Sirius SDK.
 
 Pixi supplies user-space dependencies. GPU execution still requires compatible
 NVIDIA hardware and a host driver. This PR configures builds and tests; the
