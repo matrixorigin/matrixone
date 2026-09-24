@@ -18,6 +18,7 @@ import (
 	"testing"
 
 	"github.com/matrixorigin/matrixone/pkg/container/types"
+	"github.com/matrixorigin/matrixone/pkg/container/vector"
 	"github.com/matrixorigin/matrixone/pkg/testutil"
 	"github.com/stretchr/testify/require"
 )
@@ -185,6 +186,38 @@ func TestOperatorBitInAndNotInUseUnsignedThreeValuedLogic(t *testing.T) {
 			)
 			ok, errInfo := inCase.Run()
 			require.True(t, ok, errInfo)
+
+			for _, registered := range []struct {
+				name   string
+				values []bool
+				nulls  []bool
+			}{
+				{name: InFunctionName, values: test.inValues, nulls: test.inNulls},
+				{name: "not_in", values: test.notValues, nulls: test.notNulls},
+			} {
+				resolved, err := GetFunctionByName(
+					proc.Ctx,
+					registered.name,
+					[]types.Type{bitType, bitType},
+				)
+				require.NoError(t, err, registered.name)
+				_, shouldCast := resolved.ShouldDoImplicitTypeCast()
+				require.False(t, shouldCast, registered.name)
+
+				out, err := RunFunctionDirectly(
+					proc,
+					resolved.GetEncodedOverloadID(),
+					inCase.parameters,
+					len(left),
+				)
+				require.NoError(t, err, registered.name)
+				require.NotNil(t, out, registered.name)
+				defer out.Free(proc.Mp())
+				require.Equal(t, registered.values, vector.MustFixedColWithTypeCheck[bool](out), registered.name)
+				for row, wantNull := range registered.nulls {
+					require.Equal(t, wantNull, out.GetNulls().Contains(uint64(row)), registered.name)
+				}
+			}
 
 			notInCase := NewFunctionTestCase(
 				proc,
