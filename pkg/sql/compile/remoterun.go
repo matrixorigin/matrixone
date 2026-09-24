@@ -156,6 +156,11 @@ func encodeRemoteScope(s *Scope, proc *process.Process) ([]byte, error) {
 			return nil, err
 		}
 	}
+	if requiresStringNumericCompatibilityProtocol(proc, features) {
+		if err = validateStrictStringNumericCompatibilityDestination(proc, p); err != nil {
+			return nil, err
+		}
+	}
 	if features.BoundedConditionalStringDomains {
 		if err = validateBoundedConditionalStringDestination(proc, p); err != nil {
 			return nil, err
@@ -2265,6 +2270,18 @@ func validateRemoteExpressionPipelineProtocol(
 			"prepared numeric-prefix casts require MORPC protocol version 30",
 		)
 	}
+	if requiresStringNumericCompatibilityProtocol(proc, features) {
+		if proc != nil && proc.Base != nil && proc.GetSessionInfo().LegacyNumericCompatibilityMode {
+			return moerr.NewNotSupportedNoCtx(
+				"string numeric compatibility cannot run with a legacy session contract",
+			)
+		}
+		if !hasProtocolVersion || protocolVersion < defines.MORPCVersion94 {
+			return moerr.NewNotSupportedNoCtx(
+				"string numeric compatibility requires MORPC protocol version 94",
+			)
+		}
+	}
 	if features.JSONComparisonParam &&
 		(!hasProtocolVersion || protocolVersion < defines.MORPCVersion36) {
 		return moerr.NewNotSupportedNoCtx(
@@ -2339,6 +2356,31 @@ func validateRemoteExpressionPipelineProtocol(
 		)
 	}
 	return nil
+}
+
+// Historical string overloads, FLOAT -> INT64 bounds and scalar math precision
+// changed in every mode. String-prefix casts retain their explicit mapping.
+// Reuse the caller's feature scan so all three admission boundaries agree.
+func requiresStringNumericCompatibilityProtocol(proc *process.Process, features plan.RemoteExpressionFeatures) bool {
+	return features.HistoricalStringMathCompatibility ||
+		features.OrdinaryFloatInt64Bounds ||
+		features.ScalarMathPrecisionCompatibility ||
+		features.NumericBinaryLiteralProvenance ||
+		(features.StrictStringNumericCompatibility && strictStringNumericCompatibilityDefault(proc))
+}
+
+// strictStringNumericCompatibilityDefault reports whether this execution
+// generation relies on the v94 strict-by-default contract. A legacy process
+// snapshot remains strict locally, but is rejected for changed remote
+// expressions until its sender contract is known. Explicit MySQL and native
+// modes preserve the old CAST/IF contract.
+func strictStringNumericCompatibilityDefault(proc *process.Process) bool {
+	if proc == nil || proc.Base == nil {
+		return false
+	}
+	info := proc.GetSessionInfo()
+	return !info.MatrixOneNativeMode &&
+		!info.MySQLNumericCompatibilityMode
 }
 
 // validateRemoteMongoUserQueryPipelineProtocol is the final sender/receiver

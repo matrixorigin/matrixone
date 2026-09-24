@@ -520,6 +520,23 @@ func TestSessionSQLModePresenceChangeClearsPlanCache(t *testing.T) {
 	require.NoError(t, ses.SetSessionSysVar(ctx, "sql_mode", "STRICT_TRANS_TABLES"))
 	require.False(t, ses.isCached("cached-sql"))
 	require.Equal(t, 1, stmt.freed)
+
+	// String-to-floating-number plans use strict parsing unless this explicit
+	// compatibility mode is present, so both membership transitions invalidate.
+	stmt = &trackedStatement{}
+	ses.cachePlan("cached-sql", []tree.Statement{stmt}, []*plan.Plan{{}})
+	require.NoError(t, ses.SetSessionSysVar(ctx, "sql_mode", "STRICT_TRANS_TABLES,MYSQL_NUMERIC_COMPATIBILITY"))
+	require.False(t, ses.isCached("cached-sql"))
+	require.Equal(t, 1, stmt.freed)
+
+	stmt = &trackedStatement{}
+	ses.cachePlan("cached-sql", []tree.Statement{stmt}, []*plan.Plan{{}})
+	require.NoError(t, ses.SetSessionSysVar(ctx, "sql_mode", "STRICT_TRANS_TABLES,mysql_numeric_compatibility"))
+	require.True(t, ses.isCached("cached-sql"), "token case normalization must not invalidate")
+	require.Zero(t, stmt.freed)
+	require.NoError(t, ses.SetSessionSysVar(ctx, "sql_mode", "STRICT_TRANS_TABLES"))
+	require.False(t, ses.isCached("cached-sql"))
+	require.Equal(t, 1, stmt.freed)
 }
 
 func TestSessionProtocolVersionChangeInvalidatesPlanCache(t *testing.T) {
@@ -563,6 +580,17 @@ func TestSessionSQLModePresenceMatcherUsesExactToken(t *testing.T) {
 	has, ok = sqlModeHasMatrixOneNativeValue("STRICT_TRANS_TABLES, MATRIXONE_NATIVE_EXTRA")
 	require.True(t, ok)
 	require.False(t, has)
+
+	has, ok = sqlModeHasMySQLNumericCompatibilityValue("STRICT_TRANS_TABLES, mysql_numeric_compatibility")
+	require.True(t, ok)
+	require.True(t, has)
+
+	has, ok = sqlModeHasMySQLNumericCompatibilityValue("STRICT_TRANS_TABLES, MYSQL_NUMERIC_COMPATIBILITY_EXTRA")
+	require.True(t, ok)
+	require.False(t, has)
+
+	_, ok = sqlModeHasMySQLNumericCompatibilityValue(int64(0))
+	require.False(t, ok)
 
 	has, ok = sqlModeHasOnlyFullGroupByValue("STRICT_TRANS_TABLES, ONLY_FULL_GROUP_BY")
 	require.True(t, ok)

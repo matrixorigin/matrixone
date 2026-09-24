@@ -194,8 +194,8 @@ func CeilStr(ivecs []*vector.Vector, result vector.FunctionResultWrapper, proc *
 		digits = vector.MustFixedColWithTypeCheck[int64](ivecs[1])[0]
 	}
 
-	return opUnaryStrToFixedWithErrorCheck[float64](ivecs, result, proc, length, func(v string) (float64, error) {
-		floatVal, err1 := strconv.ParseFloat(v, 64)
+	return opUnaryStrToFixedWithErrorCheckByRow[float64](ivecs, result, proc, length, func(v string, row uint64) (float64, error) {
+		floatVal, err1 := parseMathStringToFloat(v, ivecs[0].GetIsBinAt(int(row)), proc)
 		if err1 != nil {
 			return 0, err1
 		}
@@ -508,8 +508,8 @@ func FloorStr(ivecs []*vector.Vector, result vector.FunctionResultWrapper, proc 
 		digits = vector.MustFixedColWithTypeCheck[int64](ivecs[1])[0]
 	}
 
-	return opUnaryStrToFixedWithErrorCheck[float64](ivecs, result, proc, length, func(v string) (float64, error) {
-		floatVal, err1 := strconv.ParseFloat(v, 64)
+	return opUnaryStrToFixedWithErrorCheckByRow[float64](ivecs, result, proc, length, func(v string, row uint64) (float64, error) {
+		floatVal, err1 := parseMathStringToFloat(v, ivecs[0].GetIsBinAt(int(row)), proc)
 		if err1 != nil {
 			return 0, err1
 		}
@@ -9458,13 +9458,12 @@ func makeTimeDecimal256IntegerGetter(vec *vector.Vector) func(uint64) (int64, bo
 
 func makeTimeStringIntegerGetter(vec *vector.Vector) func(uint64) (int64, bool) {
 	param := vector.GenerateFunctionStrParameter(vec)
-	isBinary := vec.GetIsBin()
 	return func(i uint64) (int64, bool) {
 		value, null := param.GetStrValue(i)
 		if null {
 			return 0, true
 		}
-		if isBinary {
+		if vec.GetIsBinAt(int(i)) {
 			return makeTimeBinaryInteger(value), false
 		}
 		result, _ := parseLeadingInteger(strings.TrimSpace(functionUtil.QuickBytesToStr(value)))
@@ -9617,13 +9616,12 @@ func makeTimeExactSecond(value string) (int64, uint32, bool) {
 
 func makeTimeStringSecondGetter(vec *vector.Vector) func(uint64) (int64, uint32, bool) {
 	param := vector.GenerateFunctionStrParameter(vec)
-	isBinary := vec.GetIsBin()
 	return func(i uint64) (int64, uint32, bool) {
 		value, null := param.GetStrValue(i)
 		if null {
 			return 0, 0, true
 		}
-		if isBinary {
+		if vec.GetIsBinAt(int(i)) {
 			return makeTimeIntegerSecond(makeTimeBinaryInteger(value), false)
 		}
 		return makeTimeExactSecond(functionUtil.QuickBytesToStr(value))

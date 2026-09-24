@@ -1,0 +1,276 @@
+DROP DATABASE IF EXISTS issue28487_math_string;
+CREATE DATABASE issue28487_math_string;
+USE issue28487_math_string;
+SET @old_math_string_numeric_sql_mode_28487 = @@session.sql_mode;
+SELECT ABS('1.5tail') AS abs_default_prefix_error;
+invalid input: "1.5tail" is invalid numeric string
+SELECT ABS('abc') AS abs_default_invalid_error;
+invalid input: "abc" is invalid numeric string
+SELECT ABS('') AS abs_default_empty_error;
+invalid input: "" is invalid numeric string
+SELECT ABS('   ') AS abs_default_whitespace_error;
+invalid input: "" is invalid numeric string
+SELECT ABS('1eabc') AS abs_default_exponent_error;
+invalid input: "1eabc" is invalid numeric string
+SELECT CAST('1.5tail' AS DOUBLE) AS cast_default_prefix_error;
+invalid input: "1.5tail" is invalid numeric string
+SELECT ABS('  -1.5 ') AS abs_signed_space,
+CEIL('+1.25e1') AS ceil_complete_exponent,
+ROUND('1.25e1') AS round_complete_exponent,
+TRUNCATE('-1.25e1', 1) AS truncate_complete_exponent;
+➤ abs_signed_space[8,53,31]  ¦  ceil_complete_exponent[8,53,31]  ¦  round_complete_exponent[8,53,31]  ¦  truncate_complete_exponent[8,53,31]  𝄀
+1.5  ¦  13.0  ¦  12.0  ¦  -12.5
+SET SESSION sql_mode = '';
+SELECT ABS('1.5tail') AS abs_empty_mode_prefix_error;
+invalid input: "1.5tail" is invalid numeric string
+CREATE TABLE src(id INT PRIMARY KEY, s VARCHAR(30));
+INSERT INTO src VALUES
+(1, '1.5'),
+(2, '-1.5'),
+(3, ' 1.5'),
+(4, '+1.5'),
+(5, '1.5tail'),
+(6, 'abc'),
+(7, ''),
+(8, NULL);
+SELECT id, ABS(s) AS abs_strict_vector FROM src WHERE id < 5 ORDER BY id;
+➤ id[4,32,0]  ¦  abs_strict_vector[8,53,31]  𝄀
+1  ¦  1.5  𝄀
+2  ¦  1.5  𝄀
+3  ¦  1.5  𝄀
+4  ¦  1.5
+SELECT id, ABS(s) AS abs_null FROM src WHERE id = 8;
+➤ id[4,32,0]  ¦  abs_null[8,53,31]  𝄀
+8  ¦  null
+SELECT id, ABS(s) AS abs_strict_column_error FROM src WHERE id = 5;
+invalid input: "1.5tail" is invalid numeric string
+SET SESSION sql_mode = 'MYSQL_NUMERIC_COMPATIBILITY';
+SELECT
+ABS('1.5') AS abs_literal,
+CEIL(' 1.5') AS ceil_literal,
+CEILING('abc') AS ceiling_literal,
+FLOOR('1.5tail') AS floor_literal,
+MOD('-1.5', 2) AS mod_literal,
+MOD(2, '-1.5tail') AS mod_right_literal,
+ROUND('1.5') AS round_literal,
+SIGN('+1.5') AS sign_literal,
+TRUNCATE('1.5tail', 1) AS truncate_literal,
+CAST('1.5tail' AS DOUBLE) AS cast_compatibility;
+➤ abs_literal[8,53,31]  ¦  ceil_literal[8,53,31]  ¦  ceiling_literal[8,53,31]  ¦  floor_literal[8,53,31]  ¦  mod_literal[8,53,31]  ¦  mod_right_literal[8,53,31]  ¦  round_literal[8,53,31]  ¦  sign_literal[-5,64,0]  ¦  truncate_literal[8,53,31]  ¦  cast_compatibility[8,53,31]  𝄀
+1.5  ¦  2.0  ¦  0.0  ¦  1.0  ¦  -1.5  ¦  0.5  ¦  2.0  ¦  1  ¦  1.5  ¦  1.5
+SELECT
+id,
+ABS(s) AS abs_varchar,
+CEIL(s) AS ceil_varchar,
+FLOOR(s) AS floor_varchar,
+MOD(s, 2) AS mod_varchar,
+ROUND(s) AS round_varchar,
+SIGN(s) AS sign_varchar,
+TRUNCATE(s, 1) AS truncate_varchar
+FROM src
+WHERE id < 8
+ORDER BY id;
+➤ id[4,32,0]  ¦  abs_varchar[8,53,31]  ¦  ceil_varchar[8,53,31]  ¦  floor_varchar[8,53,31]  ¦  mod_varchar[8,53,31]  ¦  round_varchar[8,53,31]  ¦  sign_varchar[-5,64,0]  ¦  truncate_varchar[8,53,31]  𝄀
+1  ¦  1.5  ¦  2.0  ¦  1.0  ¦  1.5  ¦  2.0  ¦  1  ¦  1.5  𝄀
+2  ¦  1.5  ¦  -1.0  ¦  -2.0  ¦  -1.5  ¦  -2.0  ¦  -1  ¦  -1.5  𝄀
+3  ¦  1.5  ¦  2.0  ¦  1.0  ¦  1.5  ¦  2.0  ¦  1  ¦  1.5  𝄀
+4  ¦  1.5  ¦  2.0  ¦  1.0  ¦  1.5  ¦  2.0  ¦  1  ¦  1.5  𝄀
+5  ¦  1.5  ¦  2.0  ¦  1.0  ¦  1.5  ¦  2.0  ¦  1  ¦  1.5  𝄀
+6  ¦  0.0  ¦  0.0  ¦  0.0  ¦  0.0  ¦  0.0  ¦  0  ¦  0.0  𝄀
+7  ¦  0.0  ¦  0.0  ¦  0.0  ¦  0.0  ¦  0.0  ¦  0  ¦  0.0
+SELECT id, ABS(s) AS abs_null_compatibility FROM src WHERE id = 8;
+➤ id[4,32,0]  ¦  abs_null_compatibility[8,53,31]  𝄀
+8  ¦  null
+SELECT ABS(X'31') AS binary_literal_value;
+➤ binary_literal_value[8,53,31]  𝄀
+49.0
+SELECT ABS(B'00110001') AS bit_literal_value;
+➤ bit_literal_value[8,53,31]  𝄀
+49.0
+CREATE TABLE numeric_binary_provenance(id INT PRIMARY KEY, binary_value BINARY(1));
+INSERT INTO numeric_binary_provenance VALUES (1, '1'), (2, '1'), (3, '1'), (4, '1');
+SELECT id,
+ABS(CASE
+WHEN id = 1 THEN CAST('1' AS BINARY)
+WHEN id = 2 THEN X'31'
+WHEN id = 3 THEN '1'
+ELSE NULL
+END) AS case_numeric_provenance,
+ABS(CASE WHEN id = 2 THEN X'31' ELSE binary_value END) AS case_binary_column_provenance,
+ABS(IF(id = 2, X'31', CAST('1' AS BINARY))) AS if_numeric_provenance,
+ABS(COALESCE(IF(id = 2, X'31', NULL), CAST('1' AS BINARY))) AS coalesce_numeric_provenance
+FROM numeric_binary_provenance
+ORDER BY id;
+➤ id[4,32,0]  ¦  case_numeric_provenance[8,53,31]  ¦  case_binary_column_provenance[8,53,31]  ¦  if_numeric_provenance[8,53,31]  ¦  coalesce_numeric_provenance[8,53,31]  𝄀
+1  ¦  1.0  ¦  1.0  ¦  1.0  ¦  1.0  𝄀
+2  ¦  49.0  ¦  49.0  ¦  49.0  ¦  49.0  𝄀
+3  ¦  1.0  ¦  1.0  ¦  1.0  ¦  1.0  𝄀
+4  ¦  null  ¦  1.0  ¦  1.0  ¦  1.0
+SELECT id,
+ABS(CASE WHEN id = 3 THEN B'00110001' ELSE CAST('1' AS BINARY) END) AS bit_case_provenance,
+ABS(IF(id = 3, B'00110001', CAST('1' AS BINARY))) AS bit_if_provenance,
+ABS(COALESCE(IF(id = 3, B'00110001', NULL), CAST('1' AS BINARY))) AS bit_coalesce_provenance
+FROM numeric_binary_provenance
+ORDER BY id;
+➤ id[4,32,0]  ¦  bit_case_provenance[8,53,31]  ¦  bit_if_provenance[8,53,31]  ¦  bit_coalesce_provenance[8,53,31]  𝄀
+1  ¦  1.0  ¦  1.0  ¦  1.0  𝄀
+2  ¦  1.0  ¦  1.0  ¦  1.0  𝄀
+3  ¦  49.0  ¦  49.0  ¦  49.0  𝄀
+4  ¦  1.0  ¦  1.0  ¦  1.0
+CREATE TABLE numeric_binary_materialized(id INT PRIMARY KEY, val VARBINARY(8));
+INSERT INTO numeric_binary_materialized
+SELECT id, CASE
+WHEN id = 2 THEN X'31'
+ELSE CAST('1' AS BINARY)
+END
+FROM numeric_binary_provenance
+WHERE id <= 2;
+DROP TABLE numeric_binary_provenance;
+SELECT id, ABS(val) AS stored_numeric_value
+FROM numeric_binary_materialized
+ORDER BY id;
+➤ id[4,32,0]  ¦  stored_numeric_value[8,53,31]  𝄀
+1  ¦  1.0  𝄀
+2  ¦  1.0
+DROP TABLE numeric_binary_materialized;
+SELECT ABS('1.5tail') AS abs_prefix_warning;
+➤ abs_prefix_warning[8,53,31]  𝄀
+1.5
+SHOW WARNINGS;
+➤ Level[12,0,0]  ¦  Code[5,0,0]  ¦  Message[12,0,0]  𝄀
+Warning  ¦  1292  ¦  Truncated incorrect DOUBLE value: '1.5tail'
+SELECT ABS('abc') AS abs_invalid_warning;
+➤ abs_invalid_warning[8,53,31]  𝄀
+0.0
+SHOW WARNINGS;
+➤ Level[12,0,0]  ¦  Code[5,0,0]  ¦  Message[12,0,0]  𝄀
+Warning  ¦  1292  ¦  Truncated incorrect DOUBLE value: 'abc'
+SELECT ABS('1eabc') AS abs_malformed_exponent_warning;
+➤ abs_malformed_exponent_warning[8,53,31]  𝄀
+1.0
+SHOW WARNINGS;
+➤ Level[12,0,0]  ¦  Code[5,0,0]  ¦  Message[12,0,0]  𝄀
+Warning  ¦  1292  ¦  Truncated incorrect DOUBLE value: '1eabc'
+SELECT ABS('') AS abs_empty_no_warning;
+➤ abs_empty_no_warning[8,53,31]  𝄀
+0.0
+SHOW WARNINGS;
+➤ Level[12,0,0]  ¦  Code[5,0,0]  ¦  Message[12,0,0]
+SELECT ABS('   ') AS abs_whitespace_no_warning;
+➤ abs_whitespace_no_warning[8,53,31]  𝄀
+0.0
+SHOW WARNINGS;
+➤ Level[12,0,0]  ¦  Code[5,0,0]  ¦  Message[12,0,0]
+PREPARE math_string_numeric_stmt_28487 FROM 'SELECT ABS(?) AS abs_prepare, CEIL(?) AS ceil_prepare, CEILING(?) AS ceiling_prepare, FLOOR(?) AS floor_prepare, MOD(?, 2) AS mod_prepare, ROUND(?) AS round_prepare, SIGN(?) AS sign_prepare, TRUNCATE(?, 1) AS truncate_prepare';
+SET @math_string_numeric_v_28487 = '1.5tail';
+EXECUTE math_string_numeric_stmt_28487 USING @math_string_numeric_v_28487, @math_string_numeric_v_28487, @math_string_numeric_v_28487, @math_string_numeric_v_28487, @math_string_numeric_v_28487, @math_string_numeric_v_28487, @math_string_numeric_v_28487, @math_string_numeric_v_28487;
+➤ abs_prepare[8,53,31]  ¦  ceil_prepare[8,53,31]  ¦  ceiling_prepare[8,53,31]  ¦  floor_prepare[8,53,31]  ¦  mod_prepare[8,53,31]  ¦  round_prepare[8,53,31]  ¦  sign_prepare[-5,64,0]  ¦  truncate_prepare[8,53,31]  𝄀
+1.5  ¦  2.0  ¦  2.0  ¦  1.0  ¦  1.5  ¦  2.0  ¦  1  ¦  1.5
+SET @math_string_numeric_v_28487 = 'abc';
+EXECUTE math_string_numeric_stmt_28487 USING @math_string_numeric_v_28487, @math_string_numeric_v_28487, @math_string_numeric_v_28487, @math_string_numeric_v_28487, @math_string_numeric_v_28487, @math_string_numeric_v_28487, @math_string_numeric_v_28487, @math_string_numeric_v_28487;
+➤ abs_prepare[8,53,31]  ¦  ceil_prepare[8,53,31]  ¦  ceiling_prepare[8,53,31]  ¦  floor_prepare[8,53,31]  ¦  mod_prepare[8,53,31]  ¦  round_prepare[8,53,31]  ¦  sign_prepare[-5,64,0]  ¦  truncate_prepare[8,53,31]  𝄀
+0.0  ¦  0.0  ¦  0.0  ¦  0.0  ¦  0.0  ¦  0.0  ¦  0  ¦  0.0
+SET @math_string_numeric_v_28487 = '';
+EXECUTE math_string_numeric_stmt_28487 USING @math_string_numeric_v_28487, @math_string_numeric_v_28487, @math_string_numeric_v_28487, @math_string_numeric_v_28487, @math_string_numeric_v_28487, @math_string_numeric_v_28487, @math_string_numeric_v_28487, @math_string_numeric_v_28487;
+➤ abs_prepare[8,53,31]  ¦  ceil_prepare[8,53,31]  ¦  ceiling_prepare[8,53,31]  ¦  floor_prepare[8,53,31]  ¦  mod_prepare[8,53,31]  ¦  round_prepare[8,53,31]  ¦  sign_prepare[-5,64,0]  ¦  truncate_prepare[8,53,31]  𝄀
+0.0  ¦  0.0  ¦  0.0  ¦  0.0  ¦  0.0  ¦  0.0  ¦  0  ¦  0.0
+DEALLOCATE PREPARE math_string_numeric_stmt_28487;
+PREPARE math_string_numeric_null_stmt_28487 FROM 'SELECT ABS(?) AS abs_prepare, CEIL(?) AS ceil_prepare, CEILING(?) AS ceiling_prepare, MOD(?, 2) AS mod_prepare, ROUND(?) AS round_prepare, SIGN(?) AS sign_prepare, TRUNCATE(?, 1) AS truncate_prepare';
+SET @math_string_numeric_v_28487 = NULL;
+EXECUTE math_string_numeric_null_stmt_28487 USING @math_string_numeric_v_28487, @math_string_numeric_v_28487, @math_string_numeric_v_28487, @math_string_numeric_v_28487, @math_string_numeric_v_28487, @math_string_numeric_v_28487, @math_string_numeric_v_28487;
+➤ abs_prepare[8,53,31]  ¦  ceil_prepare[8,53,31]  ¦  ceiling_prepare[8,53,31]  ¦  mod_prepare[-5,64,0]  ¦  round_prepare[8,53,31]  ¦  sign_prepare[-5,64,0]  ¦  truncate_prepare[8,53,31]  𝄀
+null  ¦  null  ¦  null  ¦  null  ¦  null  ¦  null  ¦  null
+DEALLOCATE PREPARE math_string_numeric_null_stmt_28487;
+SET SESSION sql_mode = '';
+SELECT ABS('1.5tail') AS cached_constant_mode_flip;
+invalid input: "1.5tail" is invalid numeric string
+SET SESSION sql_mode = 'MYSQL_NUMERIC_COMPATIBILITY';
+SELECT ABS('1.5tail') AS cached_constant_mode_flip;
+➤ cached_constant_mode_flip[8,53,31]  𝄀
+1.5
+SET SESSION sql_mode = '';
+SELECT ABS('1.5tail') AS cached_constant_mode_flip;
+invalid input: "1.5tail" is invalid numeric string
+SET SESSION sql_mode = 'MYSQL_NUMERIC_COMPATIBILITY';
+SELECT ABS('1.5tail') AS cached_constant_mode_flip;
+➤ cached_constant_mode_flip[8,53,31]  𝄀
+1.5
+SET SESSION sql_mode = '';
+PREPARE math_string_mode_flip_stmt_28487 FROM 'SELECT ABS(?) AS abs_mode_flip';
+SET @math_string_numeric_v_28487 = '1.5tail';
+EXECUTE math_string_mode_flip_stmt_28487 USING @math_string_numeric_v_28487;
+invalid input: "1.5tail" is invalid numeric string
+SET SESSION sql_mode = 'MYSQL_NUMERIC_COMPATIBILITY';
+EXECUTE math_string_mode_flip_stmt_28487 USING @math_string_numeric_v_28487;
+➤ abs_mode_flip[8,53,31]  𝄀
+1.5
+SET SESSION sql_mode = '';
+EXECUTE math_string_mode_flip_stmt_28487 USING @math_string_numeric_v_28487;
+invalid input: "1.5tail" is invalid numeric string
+SET SESSION sql_mode = 'MYSQL_NUMERIC_COMPATIBILITY';
+EXECUTE math_string_mode_flip_stmt_28487 USING @math_string_numeric_v_28487;
+➤ abs_mode_flip[8,53,31]  𝄀
+1.5
+DEALLOCATE PREPARE math_string_mode_flip_stmt_28487;
+SET SESSION sql_mode = 'MATRIXONE_NATIVE,MYSQL_NUMERIC_COMPATIBILITY';
+SELECT ABS('1.5tail') AS abs_both_modes_prefix_error;
+invalid input: "1.5tail" is invalid numeric string
+SELECT ABS('abc') AS abs_both_modes_invalid_error;
+invalid input: "abc" is invalid numeric string
+SET SESSION sql_mode = 'MATRIXONE_NATIVE';
+SELECT ABS('1.5tail') AS abs_native_prefix_error;
+invalid input: "1.5tail" is invalid numeric string
+SELECT ABS('abc') AS abs_native_invalid_error;
+invalid input: "abc" is invalid numeric string
+SELECT ABS('') AS abs_native_empty_error;
+invalid input: "" is invalid numeric string
+SELECT CEIL('1.5tail') AS ceil_native_prefix_error;
+invalid input: "1.5tail" is invalid numeric string
+SELECT FLOOR('1.5tail') AS floor_native_prefix_error;
+invalid input: "1.5tail" is invalid numeric string
+SELECT SIGN('1.5tail') AS sign_native_prefix_error;
+invalid input: "1.5tail" is invalid numeric string
+SELECT ROUND('1.5tail') AS round_native_prefix_error;
+invalid input: "1.5tail" is invalid numeric string
+SELECT TRUNCATE('1.5tail', 0) AS truncate_native_prefix_error;
+invalid input: "1.5tail" is invalid numeric string
+SELECT MOD('1.5tail', 2) AS mod_native_prefix_error;
+invalid input: "1.5tail" is invalid numeric string
+SELECT MOD(2, '1.5tail') AS mod_native_right_prefix_error;
+invalid input: "1.5tail" is invalid numeric string
+SELECT id, ABS(s) AS abs_native_column_error FROM src WHERE id = 5;
+invalid input: "1.5tail" is invalid numeric string
+SET @math_string_native_v_28487 = '1.5tail';
+PREPARE math_string_native_abs_stmt_28487 FROM 'SELECT ABS(?) AS abs_native_prepare';
+EXECUTE math_string_native_abs_stmt_28487 USING @math_string_native_v_28487;
+invalid input: "1.5tail" is invalid numeric string
+DEALLOCATE PREPARE math_string_native_abs_stmt_28487;
+SET SESSION sql_mode = 'MYSQL_NUMERIC_COMPATIBILITY';
+SELECT
+ABS(-2) AS abs_int_compatibility,
+CEIL(1.5) AS ceil_float_compatibility,
+FLOOR(CAST(-1.5 AS DECIMAL(5, 1))) AS floor_decimal_compatibility,
+MOD(5, 2) AS mod_int_compatibility,
+ROUND(1.5) AS round_float_compatibility,
+SIGN(CAST(-1.5 AS DECIMAL(5, 1))) AS sign_decimal_compatibility,
+TRUNCATE(CAST(1.5 AS DECIMAL(5, 1)), 0) AS truncate_decimal_compatibility;
+➤ abs_int_compatibility[-5,64,0]  ¦  ceil_float_compatibility[3,2,0]  ¦  floor_decimal_compatibility[3,5,0]  ¦  mod_int_compatibility[-5,64,0]  ¦  round_float_compatibility[3,2,0]  ¦  sign_decimal_compatibility[-5,64,0]  ¦  truncate_decimal_compatibility[3,4,0]  𝄀
+2  ¦  2  ¦  -2  ¦  1  ¦  2  ¦  -1  ¦  1
+SET SESSION sql_mode = '';
+SELECT
+ABS(-2) AS abs_int,
+CEIL(1.5) AS ceil_float,
+FLOOR(CAST(-1.5 AS DECIMAL(5, 1))) AS floor_decimal,
+MOD(5, 2) AS mod_int,
+ROUND(1.5) AS round_float,
+SIGN(CAST(-1.5 AS DECIMAL(5, 1))) AS sign_decimal,
+TRUNCATE(CAST(1.5 AS DECIMAL(5, 1)), 0) AS truncate_decimal;
+➤ abs_int[-5,64,0]  ¦  ceil_float[3,2,0]  ¦  floor_decimal[3,5,0]  ¦  mod_int[-5,64,0]  ¦  round_float[3,2,0]  ¦  sign_decimal[-5,64,0]  ¦  truncate_decimal[3,4,0]  𝄀
+2  ¦  2  ¦  -2  ¦  1  ¦  2  ¦  -1  ¦  1
+SET SESSION sql_mode = @old_math_string_numeric_sql_mode_28487;
+DROP DATABASE issue28487_math_string;
+SELECT COUNT(*) AS residual_database_count
+FROM information_schema.schemata
+WHERE schema_name = 'issue28487_math_string';
+➤ residual_database_count[-5,64,0]  𝄀
+0

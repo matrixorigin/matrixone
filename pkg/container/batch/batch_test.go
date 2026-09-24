@@ -871,6 +871,74 @@ func TestPrepareParamKindTransportRoundTripAndReuse(t *testing.T) {
 	decoded.Clean(mp)
 }
 
+func TestNumericBinaryLiteralMetadataTransportV3(t *testing.T) {
+	mp := mpool.MustNewZero()
+	source := NewWithSize(1)
+	source.Vecs[0] = vector.NewVec(types.T_text.ToType())
+	require.NoError(t, vector.AppendBytesList(source.Vecs[0], [][]byte{
+		[]byte("hex"), []byte("ordinary-binary"), []byte("text-bit"),
+	}, nil, mp))
+	require.NoError(t, source.Vecs[0].SetIsBinaryStringAt(0, true, mp))
+	require.NoError(t, source.Vecs[0].SetRuntimeStringDomainAtWithMP(1, types.RuntimeStringText, mp))
+	require.NoError(t, source.Vecs[0].SetIsBinRowsWithMP([]bool{true, false, true}, mp))
+	require.NoError(t, source.Vecs[0].SetStringSourcesWithMP([]types.StringSource{
+		types.StringSourceLiteral, types.StringSourceExpression, types.StringSourceSQLPrepare,
+	}, mp))
+	source.SetRowCount(3)
+	defer func() {
+		source.Clean(mp)
+		require.Zero(t, mp.CurrNB())
+	}()
+
+	stable, err := source.MarshalBinary()
+	require.NoError(t, err)
+	var wire bytes.Buffer
+	encoded, err := source.MarshalBinaryWithPrepareParamKinds(&wire, true)
+	require.NoError(t, err)
+	require.Equal(t, wire.Bytes(), encoded)
+	require.Equal(t, byte(3), encoded[len(stable)+3], "numeric literal provenance uses v3")
+	size, err := source.PrepareParamKindMetadataSize()
+	require.NoError(t, err)
+	require.Equal(t, size, len(encoded)-len(stable), "v3 sizing includes its v2 source section")
+
+	decoded := NewOffHeapEmpty()
+	require.NoError(t, decoded.UnmarshalBinaryWithPrepareParamKinds(encoded, mp))
+	require.True(t, decoded.Vecs[0].GetIsBinAt(0))
+	require.False(t, decoded.Vecs[0].GetIsBinAt(1))
+	require.True(t, decoded.Vecs[0].GetIsBinAt(2))
+	require.True(t, decoded.Vecs[0].GetIsBinaryStringAt(0))
+	require.False(t, decoded.Vecs[0].GetIsBinaryStringAt(1),
+		"ordinary binary-domain metadata remains independent of numeric-literal provenance")
+	require.Equal(t, types.RuntimeStringText, decoded.Vecs[0].GetRuntimeStringDomainAt(1),
+		"v3 text-domain bits must survive alongside the numeric-literal mask")
+	require.Equal(t, types.StringSourceSQLPrepare, decoded.Vecs[0].GetStringSourceAt(2))
+	decoded.Clean(mp)
+
+	streamed := NewOffHeapEmpty()
+	require.NoError(t, streamed.UnmarshalFromReaderWithPrepareParamKinds(
+		bytes.NewReader(encoded), int64(len(encoded)), mp))
+	require.True(t, streamed.Vecs[0].GetIsBinAt(0))
+	require.False(t, streamed.Vecs[0].GetIsBinAt(1))
+	require.True(t, streamed.Vecs[0].GetIsBinAt(2))
+	require.Equal(t, types.RuntimeStringText, streamed.Vecs[0].GetRuntimeStringDomainAt(1),
+		"reader decode preserves the first of the optional v3 row masks")
+	streamed.Clean(mp)
+
+	stableDecoded := NewOffHeapEmpty()
+	require.NoError(t, stableDecoded.UnmarshalBinary(stable))
+	require.False(t, stableDecoded.Vecs[0].HasIsBinMetadata(),
+		"execution-only literal provenance must not persist in stable vector bytes")
+	stableDecoded.Clean(mp)
+
+	var downgraded bytes.Buffer
+	bytesBeforeDowngrade := mp.CurrNB()
+	_, err = source.MarshalBinaryWithPrepareParamKindsForProtocol(&downgraded, true, false)
+	require.ErrorContains(t, err, "requires MORPC protocol version 94",
+		"pre-v94 downgrade must fail closed instead of silently dropping numeric provenance")
+	require.Equal(t, bytesBeforeDowngrade, mp.CurrNB(),
+		"failed downgrade must not allocate or mutate vector-owned metadata")
+}
+
 func TestPrepareParamKindDecoderRejectsMixedConstStringSources(t *testing.T) {
 	mp := mpool.MustNewZero()
 	source := NewWithSize(1)
@@ -1378,7 +1446,7 @@ func TestPrepareParamKindStreamingMalformedReuseClearsMetadata(t *testing.T) {
 	encoded, legacy := makePrepareParamKindStreamingWire(t)
 	secondModeOffset := len(legacy) + 4 + 4 + 8 + 1 + 4 + 3
 	malformed := append([]byte(nil), encoded...)
-	malformed[secondModeOffset] = 0x3f
+	malformed[secondModeOffset] = 0x1f
 
 	mp := mpool.MustNewZero()
 	target := NewOffHeapEmpty()

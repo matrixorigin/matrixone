@@ -191,12 +191,12 @@ func collectInsertColBatch(e *api.Entry, cmd *CreateTable) (*batch.Batch, error)
 			return nil, moerr.NewInternalErrorNoCtxf("mismatched column id %d -- %d", ctid, cmd.TableId)
 		}
 		def, err := genTableDefs(row)
+		if err != nil {
+			return nil, err
+		}
 		if def.(*engine.AttributeDef).Attr.Name == Row_ID {
 			// skip rowid for TN, who generate rowid column automatically
 			continue
-		}
-		if err != nil {
-			return nil, err
 		}
 		cmd.Defs = append(cmd.Defs, def)
 	}

@@ -86,6 +86,18 @@ func TestValidateStringLiteralFormRejectsNonStringLiteral(t *testing.T) {
 	require.ErrorContains(t, expr.ValidateStringLiteralForms(), "requires a string literal")
 }
 
+func TestValidateStringLiteralFormsRequireIsBinForHexAndBit(t *testing.T) {
+	for _, form := range []StringLiteralForm{
+		StringLiteralForm_STRING_LITERAL_HEX,
+		StringLiteralForm_STRING_LITERAL_BIT,
+	} {
+		expr := &Expr{Typ: Type{Id: 61}, Expr: &Expr_Lit{Lit: &Literal{
+			Value: &Literal_Sval{Sval: "1"}, LiteralForm: form,
+		}}}
+		require.ErrorContains(t, expr.ValidateStringLiteralForms(), "require isBin provenance")
+	}
+}
+
 func TestValidateStringLiteralFormsInNestedOwner(t *testing.T) {
 	owner := struct{ Expressions []*Expr }{Expressions: []*Expr{{
 		Typ: Type{Id: 61}, Expr: &Expr_Lit{Lit: &Literal{
@@ -180,6 +192,153 @@ func TestRequiresMORPCVersion30NumericPrefix(t *testing.T) {
 	required, err = RequiresMORPCVersion30NumericPrefix(&struct{ Expr *Expr }{Expr: ordinaryCast})
 	require.NoError(t, err)
 	require.False(t, required)
+}
+
+func TestStrictStringNumericCompatibilityFeature(t *testing.T) {
+	strictCompatibilityRequired := func(owner any) bool {
+		features, err := RequiredRemoteExpressionFeatures(owner)
+		require.NoError(t, err)
+		return features.StrictStringNumericCompatibility
+	}
+	stringValue := &Expr{
+		Typ:  Type{Id: planVarcharTypeID},
+		Expr: &Expr_Col{Col: &ColRef{ColPos: 0}},
+	}
+	strictCast := &Expr{
+		Typ: Type{Id: 30},
+		Expr: &Expr_F{F: &Function{
+			Func: &ObjectRef{Obj: 2, ObjName: "cast"},
+			Args: []*Expr{stringValue},
+		}},
+	}
+	require.True(t, strictCompatibilityRequired(&struct{ Expr *Expr }{Expr: strictCast}),
+		"string-to-numeric casts depend on the strict default")
+
+	numericValue := &Expr{Typ: Type{Id: 23}, Expr: &Expr_Col{Col: &ColRef{ColPos: 1}}}
+	numericCast := &Expr{
+		Typ: Type{Id: 30},
+		Expr: &Expr_F{F: &Function{
+			Func: &ObjectRef{ObjName: "cast"},
+			Args: []*Expr{numericValue},
+		}},
+	}
+	require.False(t, strictCompatibilityRequired(&struct{ Expr *Expr }{Expr: numericCast}),
+		"numeric-to-numeric casts do not consult string compatibility")
+	for _, overload := range []int32{0, 1, 2} {
+		cast := &Expr{
+			Typ: Type{Id: 31},
+			Expr: &Expr_F{F: &Function{
+				Func: &ObjectRef{Obj: int64(overload), ObjName: "cast"},
+				Args: []*Expr{stringValue},
+			}},
+		}
+		require.True(t, strictCompatibilityRequired(&struct{ Expr *Expr }{Expr: cast}),
+			"string-to-float CAST overload %d uses the process compatibility mode", overload)
+	}
+	for _, sourceType := range []int32{planCharTypeID, planVarcharTypeID, planTextTypeID,
+		planBinaryTypeID, planVarbinaryTypeID, planBlobTypeID} {
+		cast := &Expr{
+			Typ: Type{Id: 31},
+			Expr: &Expr_F{F: &Function{
+				Func: &ObjectRef{Obj: 2, ObjName: "cast"},
+				Args: []*Expr{{Typ: Type{Id: sourceType}, Expr: &Expr_Col{Col: &ColRef{ColPos: 2}}}},
+			}},
+		}
+		require.True(t, strictCompatibilityRequired(&struct{ Expr *Expr }{Expr: cast}),
+			"declared string source type %d can use mode-aware text provenance", sourceType)
+	}
+
+	prefixCast := &Expr{
+		Typ: Type{Id: 30, Charset: 255},
+		Expr: &Expr_F{F: &Function{
+			Func: &ObjectRef{ObjName: "cast"},
+			Args: []*Expr{stringValue},
+		}},
+	}
+	features, err := RequiredRemoteExpressionFeatures(&struct{ Expr *Expr }{Expr: prefixCast})
+	require.NoError(t, err)
+	require.True(t, features.NumericPrefix)
+	require.True(t, features.StrictStringNumericCompatibility,
+		"a numeric-prefix FLOAT cast also uses the process compatibility mode")
+	require.False(t, features.NumericBinaryLiteralProvenance,
+		"a plain string-to-FLOAT CAST has no mixed literal provenance")
+
+}
+
+func TestNumericBinaryLiteralProvenanceFeatureTracksFlowControlOutputs(t *testing.T) {
+	const (
+		boolType    int32 = 10
+		int64Type   int32 = 23
+		varcharType int32 = planVarcharTypeID
+	)
+	column := &Expr{Typ: Type{Id: boolType}, Expr: &Expr_Col{Col: &ColRef{ColPos: 0}}}
+	textLiteral := func(value string) *Expr {
+		return &Expr{Typ: Type{Id: varcharType}, Expr: &Expr_Lit{Lit: &Literal{
+			Value: &Literal_Sval{Sval: value},
+		}}}
+	}
+	binaryLiteral := func(value string, form StringLiteralForm) *Expr {
+		return &Expr{Typ: Type{Id: varcharType}, Expr: &Expr_Lit{Lit: &Literal{
+			Value: &Literal_Sval{Sval: value}, IsBin: true, LiteralForm: form,
+		}}}
+	}
+	call := func(name string, id int32, typ int32, args ...*Expr) *Expr {
+		return &Expr{Typ: Type{Id: typ}, Expr: &Expr_F{F: &Function{
+			Func: &ObjectRef{Obj: int64(id) << 32, ObjName: name}, Args: args,
+		}}}
+	}
+	caseExpr := func(binary *Expr) *Expr {
+		return call("case", caseFunctionID, varcharType, column, binary, textLiteral("1"))
+	}
+	explicitCast := func(expr *Expr) *Expr {
+		return &Expr{Typ: Type{Id: planBinaryTypeID}, Expr: &Expr_F{F: &Function{
+			Func: &ObjectRef{ObjName: "cast"}, Args: []*Expr{expr}, SyntaxExplicitCast: true,
+		}}}
+	}
+	implicitCast := func(expr *Expr) *Expr {
+		return &Expr{Typ: Type{Id: varcharType}, Expr: &Expr_F{F: &Function{
+			Func: &ObjectRef{ObjName: "cast"}, Args: []*Expr{expr},
+		}}}
+	}
+
+	tests := []struct {
+		name string
+		expr *Expr
+		want bool
+	}{
+		{name: "hex case selected rows", expr: caseExpr(binaryLiteral("1", StringLiteralForm_STRING_LITERAL_HEX)), want: true},
+		{name: "bit coalesce selected rows", expr: call("coalesce", coalesceFunctionID, varcharType,
+			&Expr{Typ: Type{Id: varcharType}, Expr: &Expr_Col{Col: &ColRef{ColPos: 1}}},
+			binaryLiteral("00110001", StringLiteralForm_STRING_LITERAL_BIT)), want: true},
+		{name: "implicit binder cast is transparent", expr: call("if", iffFunctionID, varcharType,
+			column, implicitCast(binaryLiteral("1", StringLiteralForm_STRING_LITERAL_HEX)), textLiteral("1")), want: true},
+		{name: "if marked and ordinary selected rows", expr: call("if", iffFunctionID, varcharType,
+			column, binaryLiteral("1", StringLiteralForm_STRING_LITERAL_HEX), textLiteral("1")), want: true},
+		{name: "nested flow control used as string condition", expr: call("if", iffFunctionID, int64Type,
+			caseExpr(binaryLiteral("0", StringLiteralForm_STRING_LITERAL_BIT)),
+			&Expr{Typ: Type{Id: int64Type}, Expr: &Expr_Lit{Lit: &Literal{Value: &Literal_I64Val{I64Val: 1}}}},
+			&Expr{Typ: Type{Id: int64Type}, Expr: &Expr_Lit{Lit: &Literal{Value: &Literal_I64Val{I64Val: 2}}}}), want: true},
+		{name: "explicit cast ends numeric literal provenance", expr: call("coalesce", coalesceFunctionID, varcharType,
+			explicitCast(binaryLiteral("1", StringLiteralForm_STRING_LITERAL_HEX)), textLiteral("1"))},
+		{name: "null coalesce argument leaves marked output", expr: call("coalesce", coalesceFunctionID, varcharType,
+			&Expr{Typ: Type{Id: varcharType}, Expr: &Expr_Lit{Lit: &Literal{Isnull: true}}},
+			binaryLiteral("1", StringLiteralForm_STRING_LITERAL_HEX)), want: true},
+		{name: "marked case with null else still needs propagation", expr: call("case", caseFunctionID, varcharType,
+			column, binaryLiteral("1", StringLiteralForm_STRING_LITERAL_HEX),
+			&Expr{Typ: Type{Id: varcharType}, Expr: &Expr_Lit{Lit: &Literal{Isnull: true}}}), want: true},
+		{name: "binary literal in string condition is not a result branch", expr: call("if", iffFunctionID, varcharType,
+			binaryLiteral("1", StringLiteralForm_STRING_LITERAL_HEX), textLiteral("1"), textLiteral("2"))},
+		{name: "plain text flow control", expr: call("coalesce", coalesceFunctionID, varcharType,
+			textLiteral("1"), textLiteral("2"))},
+		{name: "direct literal has no row-level marker", expr: binaryLiteral("1", StringLiteralForm_STRING_LITERAL_HEX)},
+	}
+	for _, test := range tests {
+		t.Run(test.name, func(t *testing.T) {
+			features, err := RequiredRemoteExpressionFeatures(&struct{ Expr *Expr }{Expr: test.expr})
+			require.NoError(t, err)
+			require.Equal(t, test.want, features.NumericBinaryLiteralProvenance)
+		})
+	}
 }
 
 func TestRequiresMORPCVersion23DynamicStringProvenance(t *testing.T) {
@@ -941,4 +1100,141 @@ func TestRequiredRemoteExpressionFeaturesDecimalLiteralSemantics(t *testing.T) {
 	features, err = RequiredRemoteExpressionFeatures(makeLiteral(false))
 	require.NoError(t, err)
 	require.False(t, features.DecimalLiteralSemantics)
+}
+
+func TestStrictStringNumericCompatibilityConditionsAndHistoricalOwners(t *testing.T) {
+	for _, identity := range []struct {
+		name string
+		obj  int64
+	}{
+		{name: "encoded_if", obj: int64(iffFunctionID) << 32},
+		{name: "if"},
+		{name: "iff"},
+	} {
+		for _, source := range []struct {
+			id   int32
+			want bool
+		}{
+			{id: planCharTypeID, want: true},
+			{id: planVarcharTypeID, want: true},
+			{id: planTextTypeID, want: true},
+			{id: planBinaryTypeID, want: true},
+			{id: planVarbinaryTypeID, want: true},
+			{id: planBlobTypeID, want: true},
+			{id: 23},
+			{id: 31},
+			{id: planBooleanTypeID},
+			{id: planAnyTypeID},
+		} {
+			t.Run(fmt.Sprintf("%s/source_%d", identity.name, source.id), func(t *testing.T) {
+				condition := &Expr{Typ: Type{Id: source.id}, Expr: &Expr_Col{Col: &ColRef{ColPos: 0}}}
+				if source.id == planAnyTypeID {
+					condition.Expr = &Expr_Lit{Lit: &Literal{Isnull: true}}
+				}
+				expr := &Expr{Typ: Type{Id: 23}, Expr: &Expr_F{F: &Function{
+					Func: &ObjectRef{Obj: identity.obj, ObjName: identity.name},
+					Args: []*Expr{
+						condition,
+						{Typ: Type{Id: 23}, Expr: &Expr_Lit{Lit: &Literal{Value: &Literal_I64Val{I64Val: 10}}}},
+						{Typ: Type{Id: 23}, Expr: &Expr_Lit{Lit: &Literal{Value: &Literal_I64Val{I64Val: 20}}}},
+					},
+				}}}
+				features, err := RequiredRemoteExpressionFeatures(expr)
+				require.NoError(t, err)
+				require.Equal(t, source.want, features.StrictStringNumericCompatibility)
+				require.False(t, features.HistoricalStringMathCompatibility)
+			})
+		}
+	}
+	for _, math := range []struct {
+		name string
+		id   int32
+	}{
+		{name: "ceil", id: ceilFunctionID},
+		{name: "floor", id: floorFunctionID},
+	} {
+		t.Run(math.name+"_generated_owner", func(t *testing.T) {
+			source := &Expr{Typ: Type{Id: planVarcharTypeID}, Expr: &Expr_Col{Col: &ColRef{ColPos: 0}}}
+			generated := &GeneratedCol{Expr: &Expr{Typ: Type{Id: 31}, Expr: &Expr_F{F: &Function{
+				Func: &ObjectRef{Obj: int64(math.id)<<32 | 12, ObjName: math.name},
+				Args: []*Expr{source},
+			}}}}
+			wire, err := generated.MarshalBinary()
+			require.NoError(t, err)
+			decoded := &GeneratedCol{}
+			require.NoError(t, decoded.UnmarshalBinary(wire))
+			require.Equal(t, int64(math.id)<<32|12, decoded.Expr.GetF().Func.Obj)
+			features, err := RequiredRemoteExpressionFeatures(decoded)
+			require.NoError(t, err)
+			require.True(t, features.StrictStringNumericCompatibility,
+				"historical %s VARCHAR overloads depend on the compatibility mode", math.name)
+			require.True(t, features.HistoricalStringMathCompatibility,
+				"decoded historical %s overloads require their own admission feature", math.name)
+			cast := &Expr{Typ: Type{Id: 31}, Expr: &Expr_F{F: &Function{
+				Func: &ObjectRef{ObjName: "cast"},
+				Args: []*Expr{source},
+			}}}
+			owner := &struct {
+				Expressions []*Expr
+				Generated   *GeneratedCol
+			}{Expressions: []*Expr{cast}, Generated: decoded}
+			features, err = RequiredRemoteExpressionFeatures(owner)
+			require.NoError(t, err)
+			require.True(t, features.StrictStringNumericCompatibility)
+			require.True(t, features.HistoricalStringMathCompatibility,
+				"finding an earlier CAST must not stop discovery of a historical generated expression")
+			require.True(t, features.Any())
+		})
+	}
+}
+
+func TestOrdinaryFloatInt64BoundsRemoteFeatures(t *testing.T) {
+	for _, tc := range []struct {
+		id, overload, source, target int32
+		want                         bool
+	}{
+		{21, 0, 30, 23, true}, {21, 0, 31, 23, true},
+		{21, 2, 30, 23, true}, {21, 2, 31, 23, true},
+		{21, 3, 30, 23, true}, {21, 3, 31, 23, true},
+		{21, 1, 31, 23, false}, {21, 4, 31, 23, false},
+		{21, 5, 31, 23, false}, {21, 6, 31, 23, false},
+		{21, 0, 23, 23, false}, {21, 0, 31, 22, false},
+		{21, 0, 31, 28, false}, {21, 0, planTextTypeID, 23, false},
+		{541, 0, 31, 23, false}, {554, 0, 31, 23, false}, {555, 0, 31, 23, false},
+	} {
+		t.Run(fmt.Sprintf("%d_%d_%d_%d", tc.id, tc.overload, tc.source, tc.target), func(t *testing.T) {
+			expr := &Expr{Typ: Type{Id: tc.target}, Expr: &Expr_F{F: &Function{
+				Func: &ObjectRef{Obj: int64(tc.id)<<32 | int64(tc.overload), ObjName: "cast"},
+				Args: []*Expr{
+					{Typ: Type{Id: tc.source}, Expr: &Expr_Col{Col: &ColRef{ColPos: 0}}},
+					{Typ: Type{Id: tc.target}, Expr: &Expr_T{T: &TargetType{}}},
+				},
+			}}}
+			features, err := RequiredRemoteExpressionFeatures(expr)
+			require.NoError(t, err)
+			require.Equal(t, tc.want, features.OrdinaryFloatInt64Bounds)
+			if tc.want {
+				require.True(t, features.Any())
+			}
+		})
+	}
+}
+
+func TestScalarMathPrecisionCompatibilityRemoteFeatures(t *testing.T) {
+	literal := &Expr{Typ: Type{Id: 23}, Expr: &Expr_Lit{Lit: &Literal{Value: &Literal_I64Val{I64Val: 2}}}}
+	parameter := &Expr{Typ: Type{Id: 23}, Expr: &Expr_P{P: &ParamRef{Pos: 0}}}
+	cast := &Expr{Typ: Type{Id: 23}, Expr: &Expr_F{F: &Function{
+		Func: &ObjectRef{Obj: int64(21) << 32, ObjName: "cast"},
+		Args: []*Expr{literal, {Typ: Type{Id: 23}, Expr: &Expr_T{T: &TargetType{}}}},
+	}}}
+	for _, id := range []int32{ceilFunctionID, floorFunctionID, 167} { // ROUND is unchanged.
+		for index, precision := range []*Expr{literal, parameter, cast} {
+			expr := &Expr{Typ: Type{Id: 31}, Expr: &Expr_F{F: &Function{
+				Func: &ObjectRef{Obj: int64(id)<<32 | 4}, Args: []*Expr{literal, precision},
+			}}}
+			features, err := RequiredRemoteExpressionFeatures(expr)
+			require.NoError(t, err)
+			require.Equal(t, id != 167 && index == 2, features.ScalarMathPrecisionCompatibility)
+		}
+	}
 }

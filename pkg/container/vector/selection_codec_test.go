@@ -239,6 +239,73 @@ func TestSelectedRowsCodecPreservesStringSource(t *testing.T) {
 	require.Zero(t, mp.CurrNB())
 }
 
+func TestSelectedRowsCodecPreservesRuntimeAndNumericLiteralProvenance(t *testing.T) {
+	mp := mpool.MustNewZero()
+	source := NewVec(types.T_varchar.ToType())
+	destination := NewOffHeapVecWithType(types.T_varchar.ToType())
+	t.Cleanup(func() {
+		destination.Free(mp)
+		source.Free(mp)
+		require.Zero(t, mp.CurrNB())
+	})
+	require.NoError(t, AppendStringList(source, []string{"ordinary-binary", "", "explicit-text-literal", "literal-b"}, nil, mp))
+	source.SetNull(1)
+	require.NoError(t, source.SetRuntimeStringDomainAtWithMP(0, types.RuntimeStringBinary, mp))
+	require.NoError(t, source.SetRuntimeStringDomainAtWithMP(2, types.RuntimeStringText, mp))
+	require.NoError(t, source.SetIsBinRowsWithMP([]bool{false, false, true, true}, mp))
+	require.NoError(t, source.SetPrepareParamKindsWithMP([]PrepareParamKind{
+		PrepareParamInteger, PrepareParamNone, PrepareParamDecimal,
+		PrepareParamBoolean,
+	}, mp))
+
+	sourceValues := []string{"ordinary-binary", "", "explicit-text-literal", "literal-b"}
+	sourceDomains := []types.RuntimeStringDomain{
+		types.RuntimeStringBinary, types.RuntimeStringInherit,
+		types.RuntimeStringText, types.RuntimeStringInherit,
+	}
+	sourceIsBin := []bool{false, false, true, true}
+	sourceKinds := []PrepareParamKind{
+		PrepareParamInteger, PrepareParamNone, PrepareParamDecimal, PrepareParamBoolean,
+	}
+	for _, encode := range []struct {
+		name   string
+		rows   []int32
+		encode func(*bytes.Buffer) error
+	}{
+		{name: "rows", rows: []int32{3, 1, 2, 0}, encode: func(buf *bytes.Buffer) error {
+			return source.MarshalSelectedRowsTo(buf, []int32{3, 1, 2, 0})
+		}},
+		{name: "flags", rows: []int32{0, 1, 2, 3}, encode: func(buf *bytes.Buffer) error {
+			_, err := source.MarshalSelectedFlagsTo(buf, []uint8{1, 1, 1, 1})
+			return err
+		}},
+	} {
+		t.Run(encode.name, func(t *testing.T) {
+			var wire bytes.Buffer
+			require.NoError(t, encode.encode(&wire))
+			require.NoError(t, destination.UnmarshalSelectedRowsFrom(&wire, len(encode.rows), mp))
+			var wantValues []string
+			var wantDomains []types.RuntimeStringDomain
+			var wantIsBin []bool
+			var wantKinds []PrepareParamKind
+			for _, row := range encode.rows {
+				wantValues = append(wantValues, sourceValues[row])
+				wantDomains = append(wantDomains, sourceDomains[row])
+				wantIsBin = append(wantIsBin, sourceIsBin[row])
+				wantKinds = append(wantKinds, sourceKinds[row])
+			}
+			require.Equal(t, wantValues, InefficientMustStrCol(destination))
+			for row := range wantDomains {
+				require.Equal(t, wantDomains[row], destination.GetRuntimeStringDomainAt(row))
+				require.Equal(t, wantIsBin[row], destination.GetIsBinAt(row))
+			}
+			require.Equal(t, wantKinds, destination.GetPrepareParamKinds())
+			require.True(t, destination.IsNull(1), "NULL rows preserve their selection position")
+			require.False(t, destination.GetIsBin(), "the scalar summary remains conservative for mixed rows")
+		})
+	}
+}
+
 func BenchmarkSelectedRowsCodecAvoidsSparseFlagScans(b *testing.B) {
 	mp := mpool.MustNewZero()
 	source := NewVec(types.T_int64.ToType())

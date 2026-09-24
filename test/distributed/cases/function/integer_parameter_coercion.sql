@@ -2,6 +2,11 @@ drop database if exists integer_parameter_coercion;
 create database integer_parameter_coercion;
 use integer_parameter_coercion;
 
+-- These cases preserve MySQL's permissive integer-parameter behavior. Opt in
+-- explicitly because the server default now rejects numeric prefixes.
+SET @integer_parameter_saved_sql_mode = @@session.sql_mode;
+SET SESSION sql_mode = CONCAT_WS(',', NULLIF(@integer_parameter_saved_sql_mode, ''), 'MYSQL_NUMERIC_COMPATIBILITY');
+
 -- Source-domain behavior is owned by the integer parameter, not only its final type.
 create table sources(id int, d decimal(38,18), v double, s varchar(32), bits bit(8));
 insert into sources values (1,2.5,2.5,'1.9tail',b'10'),(2,1.5,1.5,'-1.9tail',b'1'),(3,null,null,null,null);
@@ -105,9 +110,15 @@ set @v=2;
 execute string_source using @v,@v,@v,@v,@v,@v,@v,@v,@v,@v,@v,@v,@v;
 deallocate prepare string_source;
 
--- Numeric, date/time selector, and bounded utility consumers use the same integer source contract.
+-- Utility consumers use private integer coercion; math precision retains strict INT64.
 select period_add(202401,d),period_diff(202402+d,202401) from sources order by id;
 select ceil(12.345,2.5),floor(12.345,2.5),round(12.345,2.5),truncate(12.345,2.5);
+-- Invalid text precision stays strict even in MYSQL_NUMERIC_COMPATIBILITY.
+select ceil(12.345,'2.5tail');
+select ceiling(12.345,'2.5tail');
+select floor(12.345,'2.5tail');
+select round(12.345,'2.5tail');
+select truncate(12.345,'2.5tail');
 select from_days(d),week(cast('2026-09-20' as date),d),yearweek(cast('2026-09-20' as date),d),timestampadd(day,d,cast('2026-09-20' as date)) from sources order by id;
 select subvector(cast('[1,2,3,4]' as vecf32(4)),d),subvector(cast('[1,2,3,4]' as vecf32(4)),1,d) from sources order by id;
 select split_part('a.b.c','.',d),sha2('matrixone',d),regexp_instr('abcabc','b',d),regexp_replace('abcabc','b','X',d,d),regexp_substr('abcabc','b',d,d) from sources order by id;
@@ -120,9 +131,16 @@ prepare utility_source from 'select period_add(202401,?),round(12.345,?),from_da
 set @v=1.5;
 execute utility_source using @v,@v,@v,@v,@v,@v,@v,@v;
 set @v='2.5tail';
+set @integer_math_precision=2;
+-- @metacmp(true)
+execute utility_source using @v,@integer_math_precision,@v,@v,@v,@v,@v,@v;
+-- Preserve the other utilities' prefix oracle, then reject ROUND's own control.
 execute utility_source using @v,@v,@v,@v,@v,@v,@v,@v;
+set @integer_math_precision=null;
 set @v=null;
 execute utility_source using @v,@v,@v,@v,@v,@v,@v,@v;
 deallocate prepare utility_source;
 
 drop database integer_parameter_coercion;
+SET SESSION sql_mode = @integer_parameter_saved_sql_mode;
+SET @integer_parameter_saved_sql_mode = NULL;

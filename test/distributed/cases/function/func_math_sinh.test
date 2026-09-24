@@ -1,4 +1,7 @@
-#SINH mysql不支持, 仅可在MO中测试
+# SINH is MatrixOne-specific here, and this legacy fixture intentionally uses
+# MySQL numeric-prefix conversion for the string argument.
+SET @func_math_sinh_saved_sql_mode = @@session.sql_mode;
+SET SESSION sql_mode = CONCAT_WS(',', NULLIF(@func_math_sinh_saved_sql_mode, ''), 'MYSQL_NUMERIC_COMPATIBILITY');
 
 SELECT SINH(PI());
 SELECT ROUND(SINH(PI()));
@@ -84,6 +87,6 @@ drop table t1;
 
 #科学计算
 SELECT SINH(0.745e5);
-
-
+SET SESSION sql_mode = @func_math_sinh_saved_sql_mode;
+SET @func_math_sinh_saved_sql_mode = NULL;
 

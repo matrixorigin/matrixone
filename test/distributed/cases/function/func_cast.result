@@ -1,3 +1,5 @@
+SET @func_cast_saved_sql_mode = @@session.sql_mode;
+SET SESSION sql_mode = CONCAT_WS(',', NULLIF(@func_cast_saved_sql_mode, ''), 'MYSQL_NUMERIC_COMPATIBILITY');
 select CAST(1-2 AS UNSIGNED);
 ➤ cast(1 - 2 as unsigned)[-5,64,0]  𝄀
 18446744073709551615
@@ -700,3 +702,5 @@ hex(_binary X'F0' | _binary X'0F'),
 hex(_binary X'FF' ^ _binary X'0F');
 ➤ hex(0xFF & 0x0F)[12,-1,0]  ¦  hex(0xF0 | 0x0F)[12,-1,0]  ¦  hex(0xFF ^ 0x0F)[12,-1,0]  𝄀
 0F  ¦  FF  ¦  F0
+SET SESSION sql_mode = @func_cast_saved_sql_mode;
+SET @func_cast_saved_sql_mode = NULL;

@@ -91,6 +91,7 @@ func newCodecTestProcess(t *testing.T) (*Process, client.TxnOperator) {
 		LockWaitTimeoutSet:                  true,
 		QueryId:                             []string{"stmt-qid"},
 		MatrixOneNativeMode:                 true,
+		MySQLNumericCompatibilityMode:       true,
 		LogLevel:                            zap.WarnLevel,
 		SessionId:                           uuid.MustParse("11111111-2222-3333-4444-555555555555"),
 		ExplicitZeroTemporalCastReturnsNull: true,
@@ -150,6 +151,8 @@ func TestProcessCodecHelpers(t *testing.T) {
 			LockWaitTimeout:                     9,
 			LockWaitTimeoutSet:                  true,
 			MatrixoneNativeMode:                 true,
+			MysqlNumericCompatibilityMode:       true,
+			NumericCompatibilityContractVersion: 1,
 			ExplicitZeroTemporalCastReturnsNull: true,
 			SqlMode:                             "STRICT_ALL_TABLES",
 			AutoIncrementIncrement:              7,
@@ -159,6 +162,8 @@ func TestProcessCodecHelpers(t *testing.T) {
 		require.Equal(t, "u", info.User)
 		require.Equal(t, int64(9), info.LockWaitTimeout)
 		require.True(t, info.MatrixOneNativeMode)
+		require.True(t, info.MySQLNumericCompatibilityMode)
+		require.False(t, info.LegacyNumericCompatibilityMode)
 		require.True(t, info.LockWaitTimeoutSet)
 		require.True(t, info.ExplicitZeroTemporalCastReturnsNull)
 		require.Equal(t, "STRICT_ALL_TABLES", info.SqlMode)
@@ -602,6 +607,8 @@ func TestBuildProcessInfoAndMockProcessInfoWithPro(t *testing.T) {
 	require.Equal(t, uint64(99), info.SessionInfo.ConnectionId)
 	require.Equal(t, int64(7), info.SessionInfo.LockWaitTimeout)
 	require.True(t, info.SessionInfo.MatrixoneNativeMode)
+	require.True(t, info.SessionInfo.MysqlNumericCompatibilityMode)
+	require.Equal(t, uint32(1), info.SessionInfo.NumericCompatibilityContractVersion)
 	require.True(t, info.SessionInfo.ExplicitZeroTemporalCastReturnsNull)
 	require.Equal(t, "STRICT_TRANS_TABLES", info.SessionInfo.SqlMode)
 	require.True(t, info.SessionInfo.LockWaitTimeoutSet)
@@ -744,13 +751,16 @@ func TestCodecServiceEncodeDecodeAndLookup(t *testing.T) {
 	info, err := proc.BuildProcessInfo("select 3")
 	require.NoError(t, err)
 
-	decodedProc, err := svc.Decode(context.Background(), info)
+	decodeCtx := defines.AttachAccountId(context.Background(), 42)
+	decodedProc, err := svc.Decode(decodeCtx, info)
 	require.NoError(t, err)
 	require.Equal(t, info.Id, decodedProc.QueryId())
 	require.Equal(t, info.UnixTime, decodedProc.Base.UnixTime)
 	require.Equal(t, info.SessionInfo.User, decodedProc.Base.SessionInfo.User)
 	require.Equal(t, info.SessionInfo.LockWaitTimeout, decodedProc.Base.SessionInfo.LockWaitTimeout)
 	require.Equal(t, info.SessionInfo.MatrixoneNativeMode, decodedProc.Base.SessionInfo.MatrixOneNativeMode)
+	require.Equal(t, info.SessionInfo.MysqlNumericCompatibilityMode, decodedProc.Base.SessionInfo.MySQLNumericCompatibilityMode)
+	require.False(t, decodedProc.Base.SessionInfo.LegacyNumericCompatibilityMode)
 	require.True(t, decodedProc.Base.SessionInfo.ExplicitZeroTemporalCastReturnsNull)
 	require.Equal(t, info.SessionInfo.SqlMode, decodedProc.Base.SessionInfo.SqlMode)
 	require.Equal(t, info.SessionInfo.LockWaitTimeoutSet, decodedProc.Base.SessionInfo.LockWaitTimeoutSet)
@@ -770,6 +780,33 @@ func TestCodecServiceEncodeDecodeAndLookup(t *testing.T) {
 	require.Equal(t, timestamp.Timestamp{PhysicalTime: 123, LogicalTime: 4}, decodedPlanSnapshot)
 	require.True(t, decodedProc.PlanGenerationReused())
 	require.Equal(t, StringShuffleHashComplete, decodedProc.StringShuffleHashAlgorithm())
+
+	// A second coordinator forward must preserve the explicit flag rather than
+	// derive it from an absent or legacy sql_mode snapshot.
+	reforwarded, err := decodedProc.BuildProcessInfo("select forwarded")
+	require.NoError(t, err)
+	require.True(t, reforwarded.SessionInfo.MysqlNumericCompatibilityMode)
+
+	// A new CN can forward a process received from a pre-contract sender.
+	// Preserve the legacy marker across that second hop instead of silently
+	// changing the effective conversion mode to the strict default.
+	decodedProc.Base.SessionInfo.MatrixOneNativeMode = false
+	decodedProc.Base.SessionInfo.MySQLNumericCompatibilityMode = false
+	decodedProc.Base.SessionInfo.LegacyNumericCompatibilityMode = true
+	legacyForwarded, err := decodedProc.BuildProcessInfo("select legacy forwarded")
+	require.NoError(t, err)
+	require.Zero(t, legacyForwarded.SessionInfo.NumericCompatibilityContractVersion)
+	legacyForwardedSession, err := ConvertToProcessSessionInfo(legacyForwarded.SessionInfo)
+	require.NoError(t, err)
+	require.True(t, legacyForwardedSession.LegacyNumericCompatibilityMode)
+	require.False(t, legacyForwardedSession.MySQLNumericCompatibilityMode)
+
+	legacySession, err := ConvertToProcessSessionInfo(pipeline.SessionInfo{})
+	require.NoError(t, err)
+	require.False(t, legacySession.MySQLNumericCompatibilityMode,
+		"an omitted field must not become an explicit MySQL opt-in")
+	require.True(t, legacySession.LegacyNumericCompatibilityMode,
+		"an omitted contract marker identifies a legacy sender")
 	decodedParams := decodedProc.GetPrepareParams()
 	require.NotPanics(t, decodedProc.Free)
 	require.Nil(t, decodedParams.GetData())

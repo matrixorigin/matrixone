@@ -3981,8 +3981,15 @@ func opUnaryBytesToFixedWithErrorCheck[
 }
 
 func opUnaryStrToFixedWithErrorCheck[
-	Tr types.FixedSizeTExceptStrType](parameters []*vector.Vector, result vector.FunctionResultWrapper, _ *process.Process, length int,
+	Tr types.FixedSizeTExceptStrType](parameters []*vector.Vector, result vector.FunctionResultWrapper, proc *process.Process, length int,
 	resultFn func(v string) (Tr, error), selectList *FunctionSelectList) error {
+	return opUnaryStrToFixedWithErrorCheckByRow(parameters, result, proc, length,
+		func(value string, _ uint64) (Tr, error) { return resultFn(value) }, selectList)
+}
+
+func opUnaryStrToFixedWithErrorCheckByRow[
+	Tr types.FixedSizeTExceptStrType](parameters []*vector.Vector, result vector.FunctionResultWrapper, _ *process.Process, length int,
+	resultFn func(v string, row uint64) (Tr, error), selectList *FunctionSelectList) error {
 	result.UseOptFunctionParamFrame(1)
 	rs := vector.MustFunctionResult[Tr](result)
 	p1 := vector.OptGetBytesParamFromWrapper(rs, 0, parameters[0])
@@ -4012,7 +4019,7 @@ func opUnaryStrToFixedWithErrorCheck[
 		if null1 {
 			nulls.AddRange(rsNull, 0, uint64(length))
 		} else {
-			r, err := resultFn(functionUtil.QuickBytesToStr(v1))
+			r, err := resultFn(functionUtil.QuickBytesToStr(v1), 0)
 			if err != nil {
 				return err
 			}
@@ -4034,7 +4041,7 @@ func opUnaryStrToFixedWithErrorCheck[
 				continue
 			}
 			v1, _ := p1.GetStrValue(i)
-			rss[i], err = resultFn(functionUtil.QuickBytesToStr(v1))
+			rss[i], err = resultFn(functionUtil.QuickBytesToStr(v1), i)
 			if err != nil {
 				return err
 			}
@@ -4045,7 +4052,7 @@ func opUnaryStrToFixedWithErrorCheck[
 	rowCount := uint64(length)
 	for i := uint64(0); i < rowCount; i++ {
 		v1, _ := p1.GetStrValue(i)
-		rss[i], err = resultFn(functionUtil.QuickBytesToStr(v1))
+		rss[i], err = resultFn(functionUtil.QuickBytesToStr(v1), i)
 		if err != nil {
 			return err
 		}

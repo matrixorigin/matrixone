@@ -4,6 +4,9 @@
 -- @label:bvt
 -- MySQL reference: 8.0.46 (verified against a temporary local server).
 
+SET @mysql_compat_user_variables_saved_sql_mode = @@session.sql_mode;
+SET SESSION sql_mode = CONCAT_WS(',', NULLIF(@mysql_compat_user_variables_saved_sql_mode, ''), 'MYSQL_NUMERIC_COMPATIBILITY');
+
 -- Matrix A: an unassigned variable is NULL and an explicit NULL remains NULL.
 select @uv_matrix_missing;
 select @uv_matrix_missing is null;
@@ -116,3 +119,5 @@ select 1 into @uv_matrix_batch_a; select 2 into @uv_matrix_batch_b;
 select @uv_matrix_batch_a, @uv_matrix_batch_b;
 
 drop database mysql_compat_user_variables_matrix;
+SET SESSION sql_mode = @mysql_compat_user_variables_saved_sql_mode;
+SET @mysql_compat_user_variables_saved_sql_mode = NULL;

@@ -547,6 +547,10 @@ func doComQueryInBack(
 				return err
 			}
 		}
+		// Refresh after each preceding statement so a session-mode change is
+		// visible to the next statement. An explicit parser-mode snapshot remains
+		// authoritative, including when it is the empty string.
+		refreshBackgroundStatementScopedSessionInfo(backSes, input, proc)
 		execCtx.txnOpt.Close()
 		execCtx.stmt = stmt
 		execCtx.isLastStmt = i >= len(cws)-1
@@ -574,12 +578,16 @@ func doComQueryInBack(
 
 func refreshBackgroundStatementScopedSessionInfo(backSes *backSession, input *UserInput, proc *process.Process) {
 	nativeMode := backSes.currentMatrixOneNativeMode()
+	mysqlNumericCompatibilityMode := backSes.currentMySQLNumericCompatibilityMode()
 	if input != nil && input.useParserSQLMode {
 		nativeMode = mysql.HasMatrixOneNativeSQLMode(input.parserSQLMode)
+		mysqlNumericCompatibilityMode = mysql.HasMySQLNumericCompatibilitySQLMode(input.parserSQLMode)
 	}
 	backSes.effectiveMatrixOneNativeMode = nativeMode
 	backSes.hasEffectiveMatrixOneNativeMode = true
-	refreshStatementScopedSessionInfoWithNativeMode(nativeMode, proc)
+	backSes.effectiveMySQLNumericCompatibilityMode = mysqlNumericCompatibilityMode
+	backSes.hasEffectiveMySQLNumericCompatibilityMode = true
+	refreshStatementScopedSessionInfoWithModes(nativeMode, mysqlNumericCompatibilityMode, proc)
 }
 
 func appendNestedCallResults(ctx context.Context, backSes *backSession, results []ExecResult) error {
@@ -1039,13 +1047,15 @@ func getResultSet(ctx context.Context, bh BackgroundExec) ([]ExecResult, error) 
 
 type backSession struct {
 	feSessionImpl
-	parentBackSession                 *backSession
-	effectiveMatrixOneNativeMode      bool
-	hasEffectiveMatrixOneNativeMode   bool
-	forcePessimisticRC                bool
-	cloneSnapshotUsesBackgroundTxn    bool
-	cancelTxnCreateWithRequest        bool
-	lineageOwnerLifecycleWritePending bool
+	parentBackSession                         *backSession
+	effectiveMatrixOneNativeMode              bool
+	hasEffectiveMatrixOneNativeMode           bool
+	effectiveMySQLNumericCompatibilityMode    bool
+	hasEffectiveMySQLNumericCompatibilityMode bool
+	forcePessimisticRC                        bool
+	cloneSnapshotUsesBackgroundTxn            bool
+	cancelTxnCreateWithRequest                bool
+	lineageOwnerLifecycleWritePending         bool
 	// lastAffectedRows carries the previous statement's ROW_COUNT() value into
 	// the next process created by this background executor.
 	lastAffectedRows int64
@@ -1104,6 +1114,23 @@ func (backSes *backSession) currentMatrixOneNativeMode() bool {
 	}
 	if backSes.hasEffectiveMatrixOneNativeMode {
 		return backSes.effectiveMatrixOneNativeMode
+	}
+	return false
+}
+
+func (backSes *backSession) currentMySQLNumericCompatibilityMode() bool {
+	if backSes.parentBackSession != nil {
+		parent := backSes.parentBackSession
+		if parent.hasEffectiveMySQLNumericCompatibilityMode {
+			return parent.effectiveMySQLNumericCompatibilityMode
+		}
+		return parent.currentMySQLNumericCompatibilityMode()
+	}
+	if backSes.upstream != nil {
+		return backSes.upstream.sqlModeHasMySQLNumericCompatibility()
+	}
+	if backSes.hasEffectiveMySQLNumericCompatibilityMode {
+		return backSes.effectiveMySQLNumericCompatibilityMode
 	}
 	return false
 }

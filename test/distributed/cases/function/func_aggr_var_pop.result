@@ -1,3 +1,5 @@
+SET @func_aggr_var_pop_saved_sql_mode = @@session.sql_mode;
+SET SESSION sql_mode = CONCAT_WS(',', NULLIF(@func_aggr_var_pop_saved_sql_mode, ''), 'MYSQL_NUMERIC_COMPATIBILITY');
 SELECT var_pop(null);
 ➤ var_pop(null)[8,54,0]  𝄀
 null
@@ -250,6 +252,8 @@ select var_pop(a) from test06;
 66666666660682035200.000000000000
 drop table test06;
 drop database test;
+SET SESSION sql_mode = @func_aggr_var_pop_saved_sql_mode;
+SET @func_aggr_var_pop_saved_sql_mode = NULL;
 SELECT variance(null);
 ➤ variance(null)[8,54,0]  𝄀
 null

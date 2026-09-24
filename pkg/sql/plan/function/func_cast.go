@@ -2023,7 +2023,7 @@ func float32ToOthers(proc *process.Process,
 		return floatToInteger(ctx, source, rs, length, selectList)
 	case types.T_int64:
 		rs := vector.MustFunctionResult[int64](result)
-		return floatToInteger(ctx, source, rs, length, selectList)
+		return floatToInt64(ctx, source, rs, length, selectList)
 	case types.T_uint8:
 		rs := vector.MustFunctionResult[uint8](result)
 		return floatToInteger(ctx, source, rs, length, selectList)
@@ -2094,7 +2094,7 @@ func float64ToOthers(proc *process.Process,
 		return floatToInteger(ctx, source, rs, length, selectList)
 	case types.T_int64:
 		rs := vector.MustFunctionResult[int64](result)
-		return floatToInteger(ctx, source, rs, length, selectList)
+		return floatToInt64(ctx, source, rs, length, selectList)
 	case types.T_uint8:
 		rs := vector.MustFunctionResult[uint8](result)
 		return floatToInteger(ctx, source, rs, length, selectList)
@@ -3516,7 +3516,38 @@ func floatExceedsBitRange(value float64, bitSize int) bool {
 	return value > float64(maxBitValue(bitSize))
 }
 
-// XXX do not use it to cast float to integer, please use floatToInteger
+// floatToInt64 keeps ordinary CAST rounding while checking the exact signed
+// range. float64(MaxInt64) rounds up to 2^63, so its upper bound is exclusive.
+func floatToInt64[T constraints.Float](
+	ctx context.Context,
+	from vector.FunctionParameterWrapper[T], to *vector.FunctionResult[int64],
+	length int, selectList *FunctionSelectList,
+) error {
+	for i := uint64(0); i < uint64(length); i++ {
+		if functionRowSkipped(selectList, i) {
+			if err := to.Append(0, true); err != nil {
+				return err
+			}
+			continue
+		}
+		value, null := from.GetValue(i)
+		if null {
+			if err := to.Append(0, true); err != nil {
+				return err
+			}
+			continue
+		}
+		rounded := math.Round(float64(value))
+		if math.IsNaN(rounded) || rounded < -0x1p63 || rounded >= 0x1p63 {
+			return moerr.NewOutOfRangef(ctx, "int64", "value '%v'", value)
+		}
+		if err := to.Append(int64(rounded), false); err != nil {
+			return err
+		}
+	}
+	return nil
+}
+
 func floatToInteger[T1 constraints.Float, T2 constraints.Integer](
 	ctx context.Context,
 	from vector.FunctionParameterWrapper[T1], to *vector.FunctionResult[T2],
@@ -6579,8 +6610,6 @@ func strToSignedWithProc[T constraints.Signed](
 	length int, selectList *FunctionSelectList, mode castMode, explicit ...bool) error {
 	var i uint64
 	var l = uint64(length)
-	isBinary := from.GetSourceVector().GetIsBin()
-
 	var result T
 	for i = 0; i < l; i++ {
 		if functionRowSkipped(selectList, i) {
@@ -6595,6 +6624,7 @@ func strToSignedWithProc[T constraints.Signed](
 				return err
 			}
 		} else {
+			isBinary := from.GetSourceVector().GetIsBinAt(int(i))
 			if isBinary {
 				var r int64
 				var num uint64
@@ -6701,15 +6731,25 @@ type castNumericToken struct {
 type SQLCompatibilityMode uint8
 
 const (
-	SQLCompatibilityMySQL SQLCompatibilityMode = iota
-	SQLCompatibilityMatrixOne
+	// Zero is strict. A legacy wire payload is tracked separately by
+	// LegacyNumericCompatibilityMode so mode-sensitive remote execution can fail
+	// closed during a rolling upgrade.
+	SQLCompatibilityMatrixOne SQLCompatibilityMode = iota
+	SQLCompatibilityMySQL
 )
 
 func CompatibilityModeFromProcess(proc *process.Process) SQLCompatibilityMode {
-	if proc != nil && proc.GetSessionInfo().MatrixOneNativeMode {
+	if proc == nil || proc.Base == nil {
 		return SQLCompatibilityMatrixOne
 	}
-	return SQLCompatibilityMySQL
+	info := proc.GetSessionInfo()
+	if info.MatrixOneNativeMode {
+		return SQLCompatibilityMatrixOne
+	}
+	if info.MySQLNumericCompatibilityMode {
+		return SQLCompatibilityMySQL
+	}
+	return SQLCompatibilityMatrixOne
 }
 
 func parseCastNumericToken(s string) (castNumericToken, error) {
@@ -6771,19 +6811,31 @@ func parseStringToFloat(s string, mode SQLCompatibilityMode) (float64, error) {
 	return parseStringToFloatWithBitSize(s, 64, mode)
 }
 
-// ParsePreparedStringToFloat64 applies the same compatibility contract as an
-// implicit string-to-DOUBLE cast to a prepared parameter whose plan has
-// already stabilized in the DOUBLE result domain.
-func ParsePreparedStringToFloat64(s string, matrixOneNative bool) (float64, error) {
-	mode := SQLCompatibilityMySQL
-	if matrixOneNative {
-		mode = SQLCompatibilityMatrixOne
+// parseMathStringToFloat is the direct string-math executor counterpart of an
+// implicit string-to-DOUBLE cast. Keep binary literal provenance and warning
+// behavior intact for the historical string overloads that still call the
+// direct executor (for example CEIL/FLOOR's BOOL compatibility fallback).
+func parseMathStringToFloat(s string, isBinary bool, proc *process.Process) (float64, error) {
+	mode := CompatibilityModeFromProcess(proc)
+	value, err := parseBytesToFloat([]byte(s), isBinary, 64, mode)
+	if err != nil {
+		return 0, err
 	}
+	if !isBinary && mode == SQLCompatibilityMySQL {
+		appendNumericCoercionWarning(proc, s)
+	}
+	return value, nil
+}
+
+// ParsePreparedStringToFloat64WithMode applies the selected conversion mode
+// to a prepared parameter whose plan has already stabilized in the DOUBLE
+// result domain.
+func ParsePreparedStringToFloat64WithMode(s string, mode SQLCompatibilityMode) (float64, error) {
 	return parseStringToFloat(s, mode)
 }
 
 func parseStringToFloatWithBitSize(s string, bitSize int, mode SQLCompatibilityMode) (float64, error) {
-	if isExtensionFloatCandidate(s) || mode == SQLCompatibilityMatrixOne {
+	if isExtensionFloatCandidate(s) || mode != SQLCompatibilityMySQL {
 		return parseStrictFloatStringWithBitSize(s, bitSize)
 	}
 
@@ -7503,8 +7555,6 @@ func strToUnsignedWithProc[T constraints.Unsigned](
 	length int, selectList *FunctionSelectList, mode castMode, explicit ...bool) error {
 	var i uint64
 	var l = uint64(length)
-	isBinary := from.GetSourceVector().GetIsBin()
-
 	var val uint64
 	var tErr error
 	for i = 0; i < l; i++ {
@@ -7520,6 +7570,7 @@ func strToUnsignedWithProc[T constraints.Unsigned](
 				return err
 			}
 		} else {
+			isBinary := from.GetSourceVector().GetIsBinAt(int(i))
 			var res *string
 			var integerPrefix string
 			var integerHasPrefix, integerOutOfRange bool
@@ -7602,7 +7653,7 @@ func strToFloatWithProc[T constraints.Float](
 	length int, selectList *FunctionSelectList) error {
 	var i uint64
 	var l = uint64(length)
-	isBinary := from.GetSourceVector().GetIsBin()
+	source := from.GetSourceVector()
 	if selectList != nil && selectList.IgnoreAllRow() {
 		to.SetNullResult(l)
 		return nil
@@ -7624,11 +7675,12 @@ func strToFloatWithProc[T constraints.Float](
 				return err
 			}
 		} else {
+			isBinary := source.GetIsBinAt(int(i))
 			parseBitSize := bitSize
 			if !isBinary && bitSize == 32 && to.GetType().Width > 0 && to.GetType().Scale >= 0 {
 				parseBitSize = 64
 			}
-			if from.GetSourceVector().GetPrepareParamKindAt(int(i)) == vector.PrepareParamBoolean {
+			if source.GetPrepareParamKindAt(int(i)) == vector.PrepareParamBoolean {
 				// Prepared Boolean values travel as canonical text. Restore their
 				// numeric category without changing ordinary SQL string coercion.
 				b, err := strconv.ParseBool(convertByteSliceToString(v))
@@ -7675,7 +7727,6 @@ func strToDecimal64(
 	var l = uint64(length)
 	var dft types.Decimal64
 	totype := to.GetType()
-	isb := from.GetSourceVector().GetIsBin()
 	if totype.Charset == 255 && from.GetSourceVector().IsConst() {
 		v, null := from.GetStrValue(0)
 		var result types.Decimal64
@@ -7706,6 +7757,7 @@ func strToDecimal64(
 				return err
 			}
 		} else {
+			isb := from.GetSourceVector().GetIsBinAt(int(i))
 			s := convertByteSliceToString(v)
 			if !isb {
 				isExplicit := mode == castModeExplicit
@@ -8155,7 +8207,6 @@ func strToDecimal128(
 	var l = uint64(length)
 	var dft types.Decimal128
 	totype := to.GetType()
-	isb := from.GetSourceVector().GetIsBin()
 	if totype.Charset == 255 && from.GetSourceVector().IsConst() {
 		v, null := from.GetStrValue(0)
 		var result types.Decimal128
@@ -8186,6 +8237,7 @@ func strToDecimal128(
 				return err
 			}
 		} else {
+			isb := from.GetSourceVector().GetIsBinAt(int(i))
 			s := convertByteSliceToString(v)
 			if !isb {
 				isExplicit := mode == castModeExplicit
@@ -8281,7 +8333,6 @@ func strToDecimal256(
 	var l = uint64(length)
 	var dft types.Decimal256
 	totype := to.GetType()
-	isb := from.GetSourceVector().GetIsBin()
 	if totype.Charset == 255 && from.GetSourceVector().IsConst() {
 		v, null := from.GetStrValue(0)
 		var result types.Decimal256
@@ -8312,6 +8363,7 @@ func strToDecimal256(
 				return err
 			}
 		} else {
+			isb := from.GetSourceVector().GetIsBinAt(int(i))
 			s := convertByteSliceToString(v)
 			if !isb {
 				isExplicit := mode == castModeExplicit
@@ -8621,7 +8673,6 @@ func strToDate(proc *process.Process,
 	var i uint64
 	var l = uint64(length)
 	var dft types.Date
-	isBinary := from.GetSourceVector().GetIsBin()
 	assignmentCast := mode == castModeStrictStringWidth || mode == castModeAssignmentIgnore
 	modeChecked := false
 	nullifyZero := false
@@ -8633,6 +8684,7 @@ func strToDate(proc *process.Process,
 			continue
 		}
 		v, null := from.GetStrValue(i)
+		isBinary := from.GetSourceVector().GetIsBinAt(int(i))
 		if null {
 			if err := to.Append(dft, true); err != nil {
 				return err
@@ -8755,7 +8807,6 @@ func strToDatetime(proc *process.Process,
 	var i uint64
 	var l = uint64(length)
 	var dft types.Datetime
-	isBinary := from.GetSourceVector().GetIsBin()
 	assignmentCast := mode == castModeStrictStringWidth || mode == castModeAssignmentIgnore
 	totype := to.GetType()
 	modeChecked := false
@@ -8768,6 +8819,7 @@ func strToDatetime(proc *process.Process,
 			continue
 		}
 		v, null := from.GetStrValue(i)
+		isBinary := from.GetSourceVector().GetIsBinAt(int(i))
 		if null {
 			if err := to.Append(dft, true); err != nil {
 				return err
@@ -8824,7 +8876,6 @@ func strToTimestamp(proc *process.Process,
 	var i uint64
 	var l = uint64(length)
 	var dft types.Timestamp
-	isBinary := from.GetSourceVector().GetIsBin()
 	assignmentCast := mode == castModeStrictStringWidth || mode == castModeAssignmentIgnore
 	totype := to.GetType()
 	modeChecked := false
@@ -8837,6 +8888,7 @@ func strToTimestamp(proc *process.Process,
 			continue
 		}
 		v, null := from.GetStrValue(i)
+		isBinary := from.GetSourceVector().GetIsBinAt(int(i))
 		if null {
 			if err := to.Append(dft, true); err != nil {
 				return err

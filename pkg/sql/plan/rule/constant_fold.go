@@ -566,6 +566,7 @@ func GetConstantValue(vec *vector.Vector, transAll bool, row uint64) (literal *p
 				Sval: vec.GetStringAt(int(row)),
 			},
 		}
+		literal.IsBin = vec.GetIsBinAt(int(row))
 		if vec.GetType().Oid.IsMySQLString() {
 			switch vec.GetRuntimeStringDomainAt(int(row)) {
 			case types.RuntimeStringText:
