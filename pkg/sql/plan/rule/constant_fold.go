@@ -253,7 +253,8 @@ func (r *ConstantFold) constantFold(expr *plan.Expr, proc *process.Process) *pla
 		fn.Args[i] = r.constantFold(fn.Args[i], proc)
 		isVec = isVec || fn.Args[i].GetVec() != nil
 	}
-	if ContainsSqlModeDependentTemporalCast(expr) {
+	if ContainsSqlModeDependentTemporalCast(expr) ||
+		(r.isPrepared && ContainsExecutionTimeTemporalCast(expr)) {
 		return expr
 	}
 	if f.IsAgg() || f.IsWin() {
@@ -901,11 +902,10 @@ func ContainsSerializedLiteral(exprs []*plan.Expr) bool {
 }
 
 // IsSqlModeDependentTemporalCast identifies string-to-temporal casts whose
-// result can depend on the execution session's SQL mode or time zone. DATE
-// and DATETIME only need to remain executable for invalid/zero-component
-// literals, while TIMESTAMP always needs the execution session's time zone.
-// Folding a valid TIMESTAMP during PREPARE would bind it to the prepare-time
-// zone and make a later SET time_zone change affect only its display value.
+// result can depend on the execution session's SQL mode. Valid calendar
+// literals have the same value in every mode and remain foldable; invalid or
+// zero-component literals must remain executable until the current session is
+// available.
 func IsSqlModeDependentTemporalCast(fn *plan.Function) bool {
 	functionID, _ := function.DecodeOverloadID(fn.Func.GetObj())
 	if functionID != function.CAST || len(fn.Args) != 2 {
@@ -938,13 +938,64 @@ func IsSqlModeDependentTemporalCast(fn *plan.Function) bool {
 			return true
 		}
 	case types.T_timestamp:
-		return true
+		if _, err := types.ParseDatetime(value.Sval, fn.Args[1].Typ.Scale); err != nil {
+			return true
+		}
 	default:
 		return false
 	}
 
 	year, month, day, err := types.ParseDateCastComponents(value.Sval)
 	return err == nil && (year == 0 || month == 0 || day == 0)
+}
+
+// IsExecutionTimeTemporalCast identifies string-to-TIMESTAMP casts whose
+// valid result still depends on the execution session's time zone. Prepared
+// plans must keep these casts executable so SET time_zone between PREPARE and
+// EXECUTE is observed, while ordinary plans can fold against their current
+// session and preserve constant consumers such as IN_RANGE.
+func IsExecutionTimeTemporalCast(fn *plan.Function) bool {
+	if fn == nil || fn.Func == nil || len(fn.Args) != 2 {
+		return false
+	}
+	functionID, _ := function.DecodeOverloadID(fn.Func.GetObj())
+	if functionID != function.CAST {
+		return false
+	}
+	switch types.T(fn.Args[0].Typ.Id) {
+	case types.T_char, types.T_varchar, types.T_binary, types.T_varbinary,
+		types.T_blob, types.T_text, types.T_datalink:
+	default:
+		return false
+	}
+	return types.T(fn.Args[1].Typ.Id) == types.T_timestamp && fn.Args[0].GetLit() != nil
+}
+
+// ContainsExecutionTimeTemporalCast propagates the prepared TIMESTAMP
+// dependency through enclosing constant expressions.
+func ContainsExecutionTimeTemporalCast(expr *plan.Expr) bool {
+	if expr == nil {
+		return false
+	}
+	if fn := expr.GetF(); fn != nil {
+		if IsExecutionTimeTemporalCast(fn) {
+			return true
+		}
+		for _, arg := range fn.Args {
+			if ContainsExecutionTimeTemporalCast(arg) {
+				return true
+			}
+		}
+		return false
+	}
+	if list := expr.GetList(); list != nil {
+		for _, item := range list.List {
+			if ContainsExecutionTimeTemporalCast(item) {
+				return true
+			}
+		}
+	}
+	return false
 }
 
 // ContainsSqlModeDependentTemporalCast reports whether folding expr would

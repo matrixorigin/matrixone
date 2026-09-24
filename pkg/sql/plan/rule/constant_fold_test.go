@@ -350,6 +350,10 @@ func TestConstantFoldStillFoldsUnaffectedCasts(t *testing.T) {
 	require.NotNil(t, NewConstantFold(true).constantFold(preparedTimestamp, proc).GetF(),
 		"prepared TIMESTAMP casts must retain execution-time time-zone semantics")
 
+	ordinaryTimestamp := makeConstantCastExpr(t, "cast", stringType, types.T_timestamp.ToTypeWithScale(6), "2024-01-02 03:04:05")
+	require.NotNil(t, NewConstantFold(false).constantFold(ordinaryTimestamp, proc).GetLit(),
+		"ordinary TIMESTAMP casts must remain foldable for constant consumers")
+
 	ordinaryStrictTime := makeConstantCastExpr(t, "cast_strict", stringType, types.T_time.ToTypeWithScale(6), "12:34:56")
 	require.NotNil(t, NewConstantFold(false).constantFold(ordinaryStrictTime, proc).GetLit())
 }
