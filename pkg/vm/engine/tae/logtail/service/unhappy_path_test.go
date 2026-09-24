@@ -108,6 +108,135 @@ func TestSessionStopsWhenTransportDisconnects(t *testing.T) {
 	require.ErrorIs(t, session.sessionCtx.Err(), context.Canceled)
 }
 
+func TestSubscriptionPullCancelsWhenSessionCloses(t *testing.T) {
+	entered := make(chan struct{})
+	logtailer := &controlledLogtailer{
+		tableFn: func(ctx context.Context, _ api.TableID, _, _ timestamp.Timestamp) (logtail.TableLogtail, func(), error) {
+			close(entered)
+			<-ctx.Done()
+			return logtail.TableLogtail{}, nil, ctx.Err()
+		},
+	}
+	server := newUnitLogtailServerWithStart(t, logtailer, false)
+	transport := newCaptureSession()
+	session := server.ssmgr.GetSession(
+		server.rootCtx, server.logger, server.pool.responses, server,
+		newCaptureStream(transport), time.Second, time.Second, time.Hour, time.Hour,
+	)
+	t.Cleanup(session.PostClean)
+	table := mockTable(1, 1, 1)
+	id := MarshalTableID(&table)
+	_, generation := session.RegisterWithGeneration(id, table)
+	errCh := make(chan error, 1)
+	go func() {
+		_, err := server.getSubLogtailPhase(server.rootCtx, subscription{
+			timeout:    10 * time.Second,
+			tableID:    id,
+			generation: generation,
+			req:        &logtail.SubscribeRequest{Table: &table},
+			session:    session,
+		}, timestamp.Timestamp{}, timestamp.Timestamp{PhysicalTime: 1})
+		errCh <- err
+	}()
+	select {
+	case <-entered:
+	case <-time.After(10 * time.Second):
+		t.Fatal("subscription pull did not start")
+	}
+	transport.cancel()
+	select {
+	case err := <-errCh:
+		require.ErrorIs(t, err, context.Canceled)
+	case <-time.After(2 * time.Second):
+		t.Fatal("closing the transport did not cancel the in-flight pull")
+	}
+	require.Equal(t, TableNotFound, session.Unregister(id))
+}
+
+func TestAbandonedSubscriptionPullReleasesLateCallback(t *testing.T) {
+	for _, phase := range []string{"phase1", "phase2"} {
+		t.Run(phase, func(t *testing.T) {
+			entered := make(chan struct{})
+			release := make(chan struct{})
+			var closed atomic.Int32
+			logtailer := &controlledLogtailer{
+				tableFn: func(_ context.Context, table api.TableID, _, to timestamp.Timestamp) (logtail.TableLogtail, func(), error) {
+					close(entered)
+					<-release // Deliberately return success after the transport is closed.
+					return mockLogtail(table, to), func() { closed.Add(1) }, nil
+				},
+			}
+			server := newUnitLogtailServerWithStart(t, logtailer, false)
+			session := server.ssmgr.GetSession(
+				server.rootCtx, server.logger, server.pool.responses, server,
+				newCaptureStream(newCaptureSession()), time.Second, time.Second, time.Hour, time.Hour,
+			)
+			t.Cleanup(session.PostClean)
+			table := mockTable(1, 1, 1)
+			id := MarshalTableID(&table)
+			_, generation := session.RegisterWithGeneration(id, table)
+			from := timestamp.Timestamp{}
+			if phase == "phase2" {
+				from.PhysicalTime = 1
+			}
+			errCh := make(chan error, 1)
+			go func() {
+				_, err := server.getSubLogtailPhase(server.rootCtx, subscription{
+					timeout:    10 * time.Second,
+					tableID:    id,
+					generation: generation,
+					req:        &logtail.SubscribeRequest{Table: &table},
+					session:    session,
+				}, from, timestamp.Timestamp{PhysicalTime: 2})
+				errCh <- err
+			}()
+			select {
+			case <-entered:
+			case <-time.After(10 * time.Second):
+				t.Fatal("subscription pull did not start")
+			}
+			session.PostClean()
+			close(release)
+			select {
+			case err := <-errCh:
+				require.ErrorIs(t, err, context.Canceled)
+			case <-time.After(2 * time.Second):
+				t.Fatal("abandoned pull did not release its result")
+			}
+			require.Equal(t, int32(1), closed.Load())
+			require.Equal(t, TableNotFound, session.Unregister(id))
+		})
+	}
+}
+
+func TestClosedSessionPullSkipsCollector(t *testing.T) {
+	var calls atomic.Int32
+	server := newUnitLogtailServerWithStart(t, &controlledLogtailer{
+		tableFn: func(context.Context, api.TableID, timestamp.Timestamp, timestamp.Timestamp) (logtail.TableLogtail, func(), error) {
+			calls.Add(1)
+			return logtail.TableLogtail{}, nil, nil
+		},
+	}, false)
+	session := server.ssmgr.GetSession(
+		server.rootCtx, server.logger, server.pool.responses, server,
+		newCaptureStream(newCaptureSession()), time.Second, time.Second, time.Hour, time.Hour,
+	)
+	table := mockTable(1, 1, 1)
+	id := MarshalTableID(&table)
+	_, generation := session.RegisterWithGeneration(id, table)
+	session.PostClean()
+	_, err := server.getSubLogtailPhase(server.rootCtx, subscription{
+		timeout:    time.Second,
+		tableID:    id,
+		generation: generation,
+		req:        &logtail.SubscribeRequest{Table: &table},
+		session:    session,
+	}, timestamp.Timestamp{}, timestamp.Timestamp{PhysicalTime: 1})
+	require.ErrorIs(t, err, context.Canceled)
+	require.Zero(t, calls.Load())
+	require.Equal(t, TableNotFound, session.Unregister(id))
+}
+
 func TestPostCleanCancelsBeforeClosingTransport(t *testing.T) {
 	transport := &cancelOrderSession{captureSession: newCaptureSession()}
 	responses := NewLogtailResponsePool()

@@ -417,6 +417,10 @@ func (s *LogtailServer) onSubscription(
 			logger.Error("request context done", zap.Error(err))
 			return err
 		}
+		if err := session.sessionCtx.Err(); err != nil {
+			s.lifecycleMu.RUnlock()
+			return err
+		}
 		select {
 		case s.subReqChan <- sub:
 			s.lifecycleMu.RUnlock()
@@ -615,7 +619,7 @@ func (s *LogtailServer) pullLogtailsPhase1(ctx context.Context, sub subscription
 func (s *LogtailServer) enqueuePhase1Tail(ctx context.Context, tail *LogtailPhase) {
 	for {
 		s.lifecycleMu.RLock()
-		if s.rootCtx.Err() != nil || ctx.Err() != nil {
+		if s.rootCtx.Err() != nil || ctx.Err() != nil || tail.sub.session.sessionCtx.Err() != nil {
 			s.lifecycleMu.RUnlock()
 			releaseLogtailPhase(tail)
 			return
@@ -748,7 +752,14 @@ func (s *LogtailServer) sendReadBarrier(ctx context.Context, barrier readBarrier
 func (s *LogtailServer) getSubLogtailPhase(
 	ctx context.Context, sub subscription, from, to timestamp.Timestamp,
 ) (*LogtailPhase, error) {
-	sendCtx, cancel := context.WithTimeoutCause(ctx, sub.timeout, moerr.CauseGetSubLogtailPhase)
+	// A subscription belongs to its transport session, not just the server.
+	// Once that session closes, cancel queued or running pulls that observe
+	// the context and avoid publishing to an obsolete generation.
+	collectCtx, cancelCollect := context.WithCancelCause(sub.session.sessionCtx)
+	stopCaller := context.AfterFunc(ctx, func() { cancelCollect(ctx.Err()) })
+	defer stopCaller()
+	defer cancelCollect(nil)
+	sendCtx, cancel := context.WithTimeoutCause(collectCtx, sub.timeout, moerr.CauseGetSubLogtailPhase)
 	defer cancel()
 
 	var subErr error
@@ -757,6 +768,10 @@ func (s *LogtailServer) getSubLogtailPhase(
 			sub.session.unregisterGeneration(sub.tableID, sub.generation)
 		}
 	}()
+	if err := sendCtx.Err(); err != nil {
+		subErr = err
+		return nil, err
+	}
 
 	table := *sub.req.Table
 
@@ -766,6 +781,9 @@ func (s *LogtailServer) getSubLogtailPhase(
 		tail, closeCB, subErr = s.logtailer.TableLogtail(sendCtx, table, from, to)
 		subErr = moerr.AttachCause(sendCtx, subErr)
 	})
+	if subErr == nil && sendCtx.Err() != nil {
+		subErr = sendCtx.Err()
+	}
 	if subErr != nil {
 		// if error occurs, just send the error immediately.
 		if closeCB != nil {
