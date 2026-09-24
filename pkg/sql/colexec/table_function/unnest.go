@@ -151,7 +151,7 @@ func (u *unnestState) start(tf *TableFunction, proc *process.Process, nthRow int
 
 	if !u.inited {
 		// do some typecheck craziness.  This really should have been done in prepare.
-		if jsonVec.GetType().Oid != types.T_json && jsonVec.GetType().Oid != types.T_varchar {
+		if jsonVec.GetType().Oid != types.T_json && jsonVec.GetType().Oid != types.T_varchar && jsonVec.GetType().Oid != types.T_text {
 			return moerr.NewInvalidInput(proc.Ctx, fmt.Sprintf("unnest: first argument must be json or string, but got %s", jsonVec.GetType().String()))
 		}
 
@@ -188,7 +188,7 @@ func (u *unnestState) start(tf *TableFunction, proc *process.Process, nthRow int
 	switch jsonVec.GetType().Oid {
 	case types.T_json:
 		err = handle(u.batch, jsonVec, nthRow, &u.path, u.outer, &u.param, tf, proc, parseJson)
-	case types.T_varchar:
+	case types.T_varchar, types.T_text:
 		err = handle(u.batch, jsonVec, nthRow, &u.path, u.outer, &u.param, tf, proc, parseStr)
 	default:
 		panic("unreachable")

@@ -47,6 +47,7 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/sql/util"
 	"github.com/matrixorigin/matrixone/pkg/stage"
 	"github.com/matrixorigin/matrixone/pkg/stage/stageutil"
+	"github.com/matrixorigin/matrixone/pkg/util/executor"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/common"
 	"github.com/matrixorigin/matrixone/pkg/vm/process"
 	"go.uber.org/zap"
@@ -1124,6 +1125,12 @@ func preparedNodeOutputContainsParam(
 	}
 	visited[key] = struct{}{}
 	node := query.Nodes[nodeID]
+	if node != nil && node.NodeType == plan.Node_FUNCTION_SCAN && colPos == 0 &&
+		node.TableDef != nil && node.TableDef.TblFunc != nil &&
+		node.TableDef.TblFunc.Name == "generate_series" &&
+		len(node.TblFuncExprList) > 0 && node.TblFuncExprList[0].GetP() != nil {
+		return true
+	}
 	if node == nil || int(colPos) >= len(node.ProjectList) || node.ProjectList[colPos] == nil {
 		return false
 	}
@@ -4542,8 +4549,13 @@ func (rule *preparedRuntimeTextComparisonScanRule) paramTypeIsText(position int)
 func (rule *preparedRuntimeSpecializationScanRule) MatchNode(node *Node) bool {
 	if node.NodeType == plan.Node_FUNCTION_SCAN && node.TableDef != nil &&
 		node.TableDef.TblFunc != nil && node.TableDef.TblFunc.Name == "generate_series" &&
-		len(node.TblFuncExprList) > 0 && node.TblFuncExprList[0].GetP() != nil {
-		rule.needs = true
+		len(node.TblFuncExprList) > 0 {
+		for _, arg := range node.TblFuncExprList {
+			if _, ok := preparedRuntimeSourceParamPosition(arg); ok {
+				rule.needs = true
+				break
+			}
+		}
 	}
 	return false
 }
@@ -5189,10 +5201,6 @@ func fillValuesOfParamsInPlanWithSpecializationSelected(
 	numericPrefixSpecialization := PreparedPlanNeedsNumericPrefixSpecialization(
 		preparePlan, effectiveParamVals)
 	copied := DeepCopyPlan(preparePlan)
-	seriesSpecialized, err := specializePreparedGenerateSeries(ctx, copied, effectiveParamVals)
-	if err != nil {
-		return nil, false, err
-	}
 	runtimeDecimalPrefix := hasRuntimeDecimalPrefixFilter(copied, effectiveParamVals)
 	switch pp := copied.Plan.(type) {
 
@@ -5213,7 +5221,7 @@ func fillValuesOfParamsInPlanWithSpecializationSelected(
 		if err != nil {
 			return nil, false, err
 		}
-		return copied, specialized || runtimeDecimalPrefix || seriesSpecialized, nil
+		return copied, specialized || runtimeDecimalPrefix, nil
 	}
 	return copied, false, nil
 }
@@ -5233,31 +5241,43 @@ func specializePreparedGenerateSeries(ctx context.Context, plan0 *Plan, values [
 			len(node.TblFuncExprList) == 0 || len(node.TableDef.Cols) == 0 {
 			continue
 		}
-		marker := node.TblFuncExprList[0].GetP()
-		if marker == nil || marker.Pos < 0 || int(marker.Pos) >= len(values) {
+		first := unwrapPreparedImplicitCast(node.TblFuncExprList[0], true)
+		marker := first.GetP()
+		parameterized := marker != nil
+		for _, arg := range node.TblFuncExprList[1:] {
+			parameterized = parameterized || unwrapPreparedImplicitCast(arg, true).GetP() != nil
+		}
+		if !parameterized {
 			continue
 		}
-		param, ok := values[marker.Pos].(ParamValue)
-		if !ok {
-			continue
-		}
-		source := types.T_text.ToType()
-		if param.HasRuntimeType {
-			source = param.RuntimeType
-		} else if param.HasSourceType {
-			source = param.SourceType
+		source := makeTypeByPlan2Expr(first)
+		if marker != nil {
+			if marker.Pos < 0 || int(marker.Pos) >= len(values) {
+				continue
+			}
+			param, ok := values[marker.Pos].(ParamValue)
+			if !ok {
+				continue
+			}
+			source = types.T_text.ToType()
+			if param.HasRuntimeType {
+				source = param.RuntimeType
+			} else if param.HasSourceType {
+				source = param.SourceType
+			}
 		}
 		numeric := source.Oid.IsInteger()
 		bound := append([]*plan.Expr(nil), node.TblFuncExprList...)
-		datetimeType := types.T_datetime.ToTypeWithScale(generateSeriesDatetimeScale(bound))
+		datetimeType := types.T_datetime.ToTypeWithScale(generateSeriesDatetimeScale(bound, values))
 		endpointCount := min(len(bound), 2)
 		for i := 0; i < endpointCount; i++ {
+			original := unwrapPreparedImplicitCast(bound[i], true)
 			if numeric {
-				if bound[i].GetP() == nil {
+				if original.GetP() == nil {
 					continue
 				}
 				target := types.T_int64.ToType()
-				casted, err := appendCastBeforeExpr(ctx, bound[i], makePlan2Type(&target))
+				casted, err := appendCastBeforeExpr(ctx, original, makePlan2Type(&target))
 				if err != nil {
 					return false, err
 				}
@@ -5267,18 +5287,18 @@ func specializePreparedGenerateSeries(ctx context.Context, plan0 *Plan, values [
 			if types.T(bound[i].Typ.Id) == types.T_datetime && bound[i].Typ.Scale == datetimeType.Scale {
 				continue
 			}
-			casted, err := appendCastBeforeExpr(ctx, bound[i], makePlan2Type(&datetimeType))
+			casted, err := appendCastBeforeExpr(ctx, original, makePlan2Type(&datetimeType))
 			if err != nil {
 				return false, err
 			}
 			bound[i] = casted
 		}
-		if len(bound) > 2 && bound[2].GetP() != nil {
+		if len(bound) > 2 && unwrapPreparedImplicitCast(bound[2], true).GetP() != nil {
 			target := types.T_varchar.ToType()
 			if numeric {
 				target = types.T_int64.ToType()
 			}
-			casted, err := appendCastBeforeExpr(ctx, bound[2], makePlan2Type(&target))
+			casted, err := appendCastBeforeExpr(ctx, unwrapPreparedImplicitCast(bound[2], true), makePlan2Type(&target))
 			if err != nil {
 				return false, err
 			}
@@ -5767,59 +5787,7 @@ func validatePreparedPaginationValue(value any) (valid bool, negative bool) {
 	}
 }
 
-type ParamValue struct {
-	Value any
-	IsBin bool
-	// IsBinaryString is the legacy binary-domain metadata retained for
-	// compatibility with callers that have not adopted RuntimeStringDomain.
-	IsBinaryString bool
-	// IsBinaryProtocol records that the value came from COM_STMT_EXECUTE.
-	// It is intentionally separate from IsBin: a VAR_STRING parameter is a
-	// binary-protocol value without being a binary string literal.
-	IsBinaryProtocol bool
-	PrepareParamKind vector.PrepareParamKind
-	// SourceType is the logical type of a SQL EXECUTE USING user variable. It
-	// is deliberately separate from RuntimeType: SQL parameters are transported
-	// through a text vector, and their source type is used only after an
-	// arithmetic consumer establishes a numeric domain. Comparisons keep their
-	// existing common-type and numeric-prefix contracts.
-	SourceType          types.Type
-	HasSourceType       bool
-	RuntimeStringDomain types.RuntimeStringDomain
-	// RuntimeType is the type advertised by the binary-protocol parameter
-	// binding.  Prepared plans deliberately keep parameter markers as TEXT
-	// while they are cached, so the execute-time copy can use this optional
-	// type to rebind overloaded functions and result metadata without mutating
-	// the cached plan.
-	RuntimeType    types.Type
-	HasRuntimeType bool
-	// InetNtoaSourceType carries a SQL EXECUTE user's assignment-time domain
-	// only for INET_NTOA. It must not participate in generic parameter
-	// coercion: a DATE/TIME/JSON user variable is still a text transport value
-	// for unrelated arithmetic and comparisons.
-	InetNtoaSourceType    types.Type
-	HasInetNtoaSourceType bool
-	// DirectResultType is the wire-visible DECIMAL domain parsed from the same
-	// binary-protocol lexeme as RuntimeType. RuntimeType keeps the normalized
-	// numeric-prefix domain used by common-type consumers; a direct result keeps
-	// the visible scale when representable and otherwise uses the normalized
-	// domain for lexemes whose only excess digits are removable trailing zeroes.
-	DirectResultType    types.Type
-	HasDirectResultType bool
-	// MaterializedValue is a bounded canonical DECIMAL lexeme produced by the
-	// protocol scanner. Typed literal construction uses it instead of reparsing
-	// the potentially max-packet-sized raw Value.
-	MaterializedValue string
-	// RetainParamRef records that a specialized query plan will be cached and
-	// therefore must retain this parameter as runtime provenance even when the
-	// parameter itself is unrelated to numeric-prefix specialization.
-	RetainParamRef bool
-	// EnableNumericPrefix records that the deployment-wide protocol version can
-	// execute planner-injected MySQL numeric-prefix casts.  Keep the negotiated
-	// capability on each value so execute-time plan specialization does not need
-	// to guess a service identity from context.Context.
-	EnableNumericPrefix bool
-}
+type ParamValue = executor.ParamValue
 
 // PreparedParamValueHasNumericRuntime reports whether the prepared value owns
 // an explicit numeric runtime domain without inferring one from text.
@@ -6969,11 +6937,14 @@ func replaceParamValsWithSelection(
 	originalSetOperationTypes := snapshotPreparedSetOperationOutputTypes(plan0.GetQuery())
 	originalSetOperationInputTypes := snapshotPreparedSetOperationInputTypes(
 		plan0.GetQuery(), originalSetOperationTypes)
+	seriesSpecialized, err := specializePreparedGenerateSeries(ctx, plan0, paramVals)
+	if err != nil {
+		return false, err
+	}
 	directResultPositions := PreparedPlanDirectResultParamPositions(plan0)
 	params := make([]*Expr, len(paramVals))
 	sqlExecuteNumericParams := make([]*Expr, len(paramVals))
 	sqlExecuteStringBackedParams := make([]bool, len(paramVals))
-	var err error
 	for i, val := range paramVals {
 		if selected != nil && (i >= len(selected) || !selected[i]) {
 			continue
@@ -7207,7 +7178,7 @@ func replaceParamValsWithSelection(
 	// its execute-time type through transparent projection/sort/distinct nodes
 	// so the final visible ColDef agrees with the rewritten source expression.
 	directResultSpecialized := propagatePreparedDirectResultTypes(plan0, paramVals)
-	return paramRule.specialized || projectionSpecialized || directResultSpecialized, nil
+	return paramRule.specialized || projectionSpecialized || directResultSpecialized || seriesSpecialized, nil
 }
 
 func propagatePreparedDirectResultTypes(plan0 *Plan, paramVals []any) bool {

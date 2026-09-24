@@ -63,8 +63,11 @@ func bindGenerateSeriesArgs(ctx context.Context, exprs []*plan.Expr) ([]*plan.Ex
 	if exprs[0].GetP() != nil {
 		// The SQL PREPARE transport type is TEXT, not the endpoint's domain.
 		// Leave this marker uncoerced so EXECUTE can choose the numeric or
-		// temporal path using the actual parameter type.
-		return exprs, types.T_varchar.ToType(), nil
+		// temporal path using the actual parameter type. The provisional
+		// integer result permits numeric consumers such as SUM and UNION to
+		// bind at PREPARE; execution refreshes its domain when the endpoint
+		// is temporal.
+		return exprs, types.T_int64.ToType(), nil
 	}
 	if firstType.IsInteger() {
 		boundExprs := append([]*plan.Expr(nil), exprs...)
@@ -112,10 +115,29 @@ func bindGenerateSeriesArgs(ctx context.Context, exprs []*plan.Expr) ([]*plan.Ex
 	return boundExprs, datetimeTyp, nil
 }
 
-func generateSeriesDatetimeScale(exprs []*plan.Expr) int32 {
+func generateSeriesDatetimeScale(exprs []*plan.Expr, runtimeValues ...[]any) int32 {
 	var scale int32
 	for i := 0; i < min(len(exprs), 2); i++ {
 		expr := exprs[i]
+		if len(runtimeValues) > 0 {
+			// PREPARE may have wrapped a marker or a string literal in a
+			// provisional DATETIME(6) cast. Infer the EXECUTE scale from the
+			// original endpoint, not that provisional cast.
+			expr = unwrapPreparedImplicitCast(expr, true)
+		}
+		if marker := expr.GetP(); marker != nil && len(runtimeValues) > 0 &&
+			marker.Pos >= 0 && int(marker.Pos) < len(runtimeValues[0]) {
+			if value, ok := runtimeValues[0][marker.Pos].(ParamValue); ok {
+				if value.HasRuntimeType && value.RuntimeType.Oid.IsDateRelate() {
+					scale = max(scale, value.RuntimeType.Scale)
+					continue
+				}
+				if text, ok := value.Value.(string); ok {
+					scale = max(scale, datetimeLiteralScale(text))
+					continue
+				}
+			}
+		}
 		if expr.Typ.Scale > scale {
 			scale = expr.Typ.Scale
 		}
@@ -131,7 +153,22 @@ func generateSeriesDatetimeScale(exprs []*plan.Expr) int32 {
 	}
 
 	if len(exprs) >= 3 {
-		step := exprs[2].GetLit()
+		stepExpr := exprs[2]
+		if len(runtimeValues) > 0 {
+			stepExpr = unwrapPreparedImplicitCast(stepExpr, true)
+		}
+		step := stepExpr.GetLit()
+		if marker := stepExpr.GetP(); marker != nil && len(runtimeValues) > 0 &&
+			marker.Pos >= 0 && int(marker.Pos) < len(runtimeValues[0]) {
+			if value, ok := runtimeValues[0][marker.Pos].(ParamValue); ok {
+				if text, ok := value.Value.(string); ok {
+					if strings.Contains(strings.ToLower(text), "microsecond") {
+						scale = MaxFsp
+					}
+					return min(scale, int32(MaxFsp))
+				}
+			}
+		}
 		if step == nil || strings.Contains(strings.ToLower(step.GetSval()), "microsecond") {
 			scale = MaxFsp
 		}

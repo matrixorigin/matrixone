@@ -199,7 +199,7 @@ func TestPreparedGenerateSeriesEndpointDomain(t *testing.T) {
 		t.Fatal("generate_series scan not found")
 		return nil
 	}
-	require.Equal(t, types.T_varchar, types.T(findScan(original).TableDef.Cols[0].Typ.Id))
+	require.Equal(t, types.T_int64, types.T(findScan(original).TableDef.Cols[0].Typ.Id))
 	values := []any{
 		ParamValue{Value: int64(1), SourceType: types.T_int64.ToType(), HasSourceType: true},
 		ParamValue{Value: int64(9), SourceType: types.T_int64.ToType(), HasSourceType: true},
@@ -217,7 +217,7 @@ func TestPreparedGenerateSeriesEndpointDomain(t *testing.T) {
 	require.Len(t, columns, 2)
 	require.Equal(t, types.T_int64, types.T(columns[0].Typ.Id))
 	require.Equal(t, types.T_int64, types.T(columns[1].Typ.Id))
-	require.Equal(t, types.T_varchar, types.T(findScan(original).TableDef.Cols[0].Typ.Id))
+	require.Equal(t, types.T_int64, types.T(findScan(original).TableDef.Cols[0].Typ.Id))
 
 	temporal := []any{
 		ParamValue{Value: "2020-01-01 00:00:00", SourceType: types.T_text.ToType(), HasSourceType: true},

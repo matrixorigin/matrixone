@@ -1401,6 +1401,43 @@ func viewJoinCondWithExpandedStars(
 	return &stableCond, rewritten
 }
 
+// RefreshPreparedCTASInferredColumns aligns columns inferred from AS SELECT
+// with the execute-time query. Explicit column definitions remain the user's
+// schema contract even when a parameter changes the source domain.
+func RefreshPreparedCTASInferredColumns(p, original *Plan, stmt tree.Statement) {
+	ctas, ok := stmt.(*tree.CreateTable)
+	if !ok || !ctas.IsAsSelect || p == nil || original == nil || original.GetDdl() == nil ||
+		original.GetDdl().Query == nil || p.GetDdl() == nil ||
+		p.GetDdl().Query == nil || p.GetDdl().GetCreateTable() == nil ||
+		p.GetDdl().GetCreateTable().TableDef == nil {
+		return
+	}
+	explicit := make(map[string]struct{})
+	for _, item := range ctas.Defs {
+		if col, ok := item.(*tree.ColumnTableDef); ok && col.Name != nil {
+			explicit[strings.ToLower(col.Name.ColName())] = struct{}{}
+		}
+	}
+	query := &Plan{Plan: &plan.Plan_Query{Query: p.GetDdl().Query}}
+	originalQuery := &Plan{Plan: &plan.Plan_Query{Query: original.GetDdl().Query}}
+	originalColumns := GetResultColumnsFromPlan(originalQuery)
+	for i, source := range GetResultColumnsFromPlan(query) {
+		if source == nil || i >= len(originalColumns) || originalColumns[i] == nil ||
+			reflect.DeepEqual(source.Typ, originalColumns[i].Typ) {
+			continue
+		}
+		if _, fixed := explicit[strings.ToLower(source.Name)]; fixed {
+			continue
+		}
+		for _, target := range p.GetDdl().GetCreateTable().TableDef.Cols {
+			if strings.EqualFold(target.Name, source.Name) {
+				target.Typ = source.Typ
+				break
+			}
+		}
+	}
+}
+
 func genAsSelectCols(
 	ctx CompilerContext,
 	stmt *tree.Select,

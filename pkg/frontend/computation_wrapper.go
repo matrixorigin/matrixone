@@ -426,6 +426,7 @@ func (cwft *TxnComputationWrapper) Compile(any any, fill func(*batch.Batch, *per
 			if specializationErr != nil {
 				return nil, specializationErr
 			}
+			plan2.RefreshPreparedCTASInferredColumns(runtimePlan, cwft.plan, cwft.stmt)
 			cwft.plan = runtimePlan
 		}
 	}
@@ -601,6 +602,7 @@ func (cwft *TxnComputationWrapper) Compile(any any, fill func(*batch.Batch, *per
 			// retComp
 			cwft.proc.ReplaceTopCtx(execCtx.reqCtx)
 			retComp.SetGroupConcatMaxLenFloor(cwft.preparedStmt.groupConcatMaxLenFloor)
+			retComp.SetPreparedParamValues(cwft.paramVals)
 			retComp.SetBuildPlanFunc(preparedExecutionBuildPlanFunc(
 				cwft.ses,
 				cwft.stmt,
@@ -1997,6 +1999,7 @@ func initExecuteStmtParamWithResolverInSession(
 		return nil, nil, nil, originSQL, false, err
 	}
 	if runtimePlanApplied {
+		plan2.RefreshPreparedCTASInferredColumns(runtimePlan, executionPlan, prepareStmt.PrepareStmt)
 		executionPlan = runtimePlan
 		if binaryExecute {
 			columns := getPreparedResultColumnsForWithGroupConcatMaxLen(
@@ -3370,6 +3373,9 @@ func createCompile(
 		getStatementStartAt(execCtx.reqCtx),
 	)
 	retCompile.SetIsPrepare(isPrepare)
+	if preparedRetry != nil {
+		retCompile.SetPreparedParamValues(preparedRetry.paramVals)
+	}
 	retCompile.SetGroupConcatMaxLenFloor(groupConcatMaxLenFloor)
 	if schedulingSQLMode != nil {
 		retCompile.SetQuerySchedulingIntent(querySchedulingIntentForStatementWithSQLMode(
@@ -3469,6 +3475,7 @@ func buildPlanForCompileRetry(
 	if forcePrepare {
 		runtimePlan, _, err := plan2.FillValuesOfParamsInPlanWithSpecialization(
 			ctx, retryPlan, preparedRetry.paramVals)
+		plan2.RefreshPreparedCTASInferredColumns(runtimePlan, retryPlan, stmt)
 		return runtimePlan, err
 	}
 	runtimePlan, _, applied, err := specializePreparedExecutionPlan(
@@ -3479,6 +3486,7 @@ func buildPlanForCompileRetry(
 		return nil, err
 	}
 	if applied {
+		plan2.RefreshPreparedCTASInferredColumns(runtimePlan, retryPlan, stmt)
 		return runtimePlan, nil
 	}
 	return retryPlan, nil

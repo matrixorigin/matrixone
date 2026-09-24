@@ -73,7 +73,7 @@ func (builder *QueryBuilder) buildUnnest(tbl *tree.TableFunction, ctx *BindConte
 	// table function's argument domain before the executor is constructed.
 	// Explicit casts and typed JSON arguments retain their declared type.
 	boundExprs := append([]*plan.Expr(nil), exprs...)
-	for i, target := range []types.T{types.T_varchar, types.T_varchar, types.T_bool} {
+	for i, target := range []types.T{types.T_text, types.T_varchar, types.T_bool} {
 		if i >= len(boundExprs) {
 			break
 		}

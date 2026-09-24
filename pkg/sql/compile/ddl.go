@@ -2327,6 +2327,21 @@ func (c *Compile) populateCreatedTable(qry *plan.CreateTable, isTemp bool, dbNam
 				}
 			}
 			statementOption = statementOption.WithParamsAndNulls(values, nulls)
+			if len(c.preparedParamValues) == len(values) {
+				semantic := make([]executor.ParamValue, len(values))
+				for i, value := range c.preparedParamValues {
+					param, ok := value.(plan2.ParamValue)
+					if !ok {
+						return moerr.NewInternalErrorf(c.proc.Ctx,
+							"CTAS prepared parameter %d has no semantic value", i)
+					}
+					if numericPrefixPositions[i] && !nulls[i] {
+						param.Value = values[i]
+					}
+					semantic[i] = param
+				}
+				statementOption = statementOption.WithPreparedParamValues(semantic)
+			}
 		}
 		res, err := func() (executor.Result, error) {
 			oldCtx := c.proc.Ctx

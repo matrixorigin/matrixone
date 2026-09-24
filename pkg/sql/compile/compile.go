@@ -487,6 +487,7 @@ func (c *Compile) clear() {
 	c.scopes = c.scopes[:0]
 	c.pn = nil
 	c.fill = nil
+	c.preparedParamValues = nil
 	c.resultSink = nil
 	c.executionGeneration = 0
 	c.retryTimes = 0
@@ -10904,6 +10905,12 @@ func (c *Compile) fatalLog(retry int, err error) {
 
 func (c *Compile) SetOriginSQL(sql string) {
 	c.originSQL = sqlmongodb.RedactSQLForDiagnostics(sql)
+}
+
+func (c *Compile) SetPreparedParamValues(values []any) {
+	// A compile can be pooled, and parameter values may retain large payloads.
+	// Copy only the current execution's values and release the old backing array.
+	c.preparedParamValues = append([]any(nil), values...)
 }
 
 // SetResourceAttemptOwnerEligible marks this Compile as the top-level

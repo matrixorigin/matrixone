@@ -33,7 +33,7 @@ EXECUTE p_series_args USING @lo,@hi,@st;
 SET @lo = '2020-01-01 00:00:00', @hi = '2020-01-03 00:00:00', @st = '1 day';
 EXECUTE p_series_args USING @lo,@hi,@st;
 ➤ c[-5,64,0]  ¦  lo[12,65535,0]  ¦  hi[12,65535,0]  𝄀
-3  ¦  2020-01-01 00:00:00.000000  ¦  2020-01-03 00:00:00.000000
+3  ¦  2020-01-01 00:00:00  ¦  2020-01-03 00:00:00
 SET @lo = CAST('2020-01-01 00:00:00' AS DATETIME), @hi = CAST('2020-01-03 00:00:00' AS DATETIME);
 EXECUTE p_series_args USING @lo,@hi,@st;
 ➤ c[-5,64,0]  ¦  lo[93,26,0]  ¦  hi[93,26,0]  𝄀
@@ -48,7 +48,7 @@ PREPARE p_series_mixed FROM
 SET @start = '2020-01-01 00:00:00';
 EXECUTE p_series_mixed USING @start;
 ➤ c[-5,64,0]  ¦  lo[12,65535,0]  ¦  hi[12,65535,0]  𝄀
-3  ¦  2020-01-01 00:00:00.000000  ¦  2020-01-03 00:00:00.000000
+3  ¦  2020-01-01 00:00:00  ¦  2020-01-03 00:00:00
 DEALLOCATE PREPARE p_series_mixed;
 PREPARE p_series_numeric FROM
 'SELECT count(*) AS c,min(result) AS lo,max(result) AS hi FROM generate_series(1,?,?) g';
