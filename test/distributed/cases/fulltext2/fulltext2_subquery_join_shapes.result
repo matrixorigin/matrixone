@@ -1,0 +1,144 @@
+drop database if exists ft2_subq;
+create database ft2_subq;
+use ft2_subq;
+set experimental_fulltext2_index = 1;
+create table docs(id bigint primary key, body text);
+insert into docs values (1,'needle anchor'),(2,'needle anchor'),(3,'filler'),(5,'needle anchor');
+create table q(name varchar(10) primary key, n int);
+insert into q values ('lo', 0);
+create fulltext2 index ft on docs(body);
+explain select id from docs where match(body) against('+needle +anchor' in boolean mode) order by id;
+-- @regex("fulltext2_search", true)
+➤ TP QUERY PLAN[12,-1,0]  𝄀
+Project  𝄀
+  ->  Sort  𝄀
+        Sort Key: docs.id INTERNAL  𝄀
+        ->  Sort  𝄀
+              Sort Key: mo_fulltext_alias_0.__mo_ft_score DESC  𝄀
+              ->  Join  𝄀
+                    Join Type: INNER  𝄀
+                    Join Cond: (docs.id = mo_fulltext_alias_0.__mo_ft_doc_id)  𝄀
+                    Runtime Filter Build: #[-1,0]  𝄀
+                    ->  Table Scan on ft2_subq.docs  𝄀
+                          Runtime Filter Probe: docs.id  𝄀
+                    ->  Table Function on fulltext2_search
+select id from docs where match(body) against('+needle +anchor' in boolean mode) order by id;
+➤ id[-5,64,0]  𝄀
+1  𝄀
+2  𝄀
+5
+explain select id from docs where match(body) against('+needle +anchor' in boolean mode)
+and id > (select n from q where name='lo') order by id;
+-- @regex("fulltext2_search", true)
+➤ TP QUERY PLAN[12,-1,0]  𝄀
+Project  𝄀
+  ->  Sort  𝄀
+        Sort Key: docs.id INTERNAL  𝄀
+        ->  Filter  𝄀
+              Filter Cond: (docs.id > cast(q.n AS BIGINT))
+              -- HINT: Cast expression may prevent index usage  𝄀
+              ->  Join  𝄀
+                    Join Type: SINGLE  𝄀
+                    ->  Join  𝄀
+                          Join Type: INNER  𝄀
+                          Join Cond: (docs.id = mo_fulltext_alias_0.__mo_ft_doc_id)  𝄀
+                          Runtime Filter Build: #[-1,0]  𝄀
+                          ->  Table Scan on ft2_subq.docs  𝄀
+                                Runtime Filter Probe: docs.id  𝄀
+                          ->  Table Function on fulltext2_search  𝄀
+                    ->  Table Scan on ft2_subq.q  𝄀
+                          Filter Cond: (q.name = 'lo')
+select id from docs where match(body) against('+needle +anchor' in boolean mode)
+and id > (select n from q where name='lo') order by id;
+➤ id[-5,64,0]  𝄀
+1  𝄀
+2  𝄀
+5
+select id, (select n from q where name='lo') as marker from docs
+where match(body) against('+needle +anchor' in boolean mode) order by id;
+➤ id[-5,64,0]  ¦  marker[4,32,0]  𝄀
+1  ¦  0  𝄀
+2  ¦  0  𝄀
+5  ¦  0
+select id from docs where match(body) against('+needle +anchor' in boolean mode)
+order by (select n from q where name='lo'), id;
+➤ id[-5,64,0]  𝄀
+1  𝄀
+2  𝄀
+5
+explain select id from docs where match(body) against('+needle +anchor' in boolean mode)
+and not exists (select 1 from q where name='missing') order by id;
+-- @regex("fulltext2_search", true)
+➤ TP QUERY PLAN[12,-1,0]  𝄀
+Project  𝄀
+  ->  Sort  𝄀
+        Sort Key: docs.id INTERNAL  𝄀
+        ->  Join  𝄀
+              Join Type: ANTI  𝄀
+              Join Cond: true  𝄀
+              ->  Join  𝄀
+                    Join Type: INNER  𝄀
+                    Join Cond: (docs.id = mo_fulltext_alias_0.__mo_ft_doc_id)  𝄀
+                    Runtime Filter Build: #[-1,0]  𝄀
+                    ->  Table Scan on ft2_subq.docs  𝄀
+                          Runtime Filter Probe: docs.id  𝄀
+                    ->  Table Function on fulltext2_search  𝄀
+              ->  Project  𝄀
+                    ->  Table Scan on ft2_subq.q  𝄀
+                          Filter Cond: (q.name = 'missing')
+select id from docs where match(body) against('+needle +anchor' in boolean mode)
+and not exists (select 1 from q where name='missing') order by id;
+➤ id[-5,64,0]  𝄀
+1  𝄀
+2  𝄀
+5
+select id from docs where match(body) against('+needle +anchor' in boolean mode)
+and not exists (select 1 from q where name='lo') order by id;
+➤ id[-5,64,0]
+explain select d.id from docs d where match(d.body) against('+needle +anchor' in boolean mode)
+and exists (select 1 from q where q.n < d.id) order by d.id;
+-- @regex("fulltext2_search", true)
+➤ TP QUERY PLAN[12,-1,0]  𝄀
+Project  𝄀
+  ->  Sort  𝄀
+        Sort Key: d.id INTERNAL  𝄀
+        ->  Filter  𝄀
+              Filter Cond: (#[0,1] IS TRUE)  𝄀
+              ->  Join  𝄀
+                    Join Type: MARK  𝄀
+                    Join Cond: ((q.n < cast(d.id AS INT)) IS TRUE)  𝄀
+                    ->  Join  𝄀
+                          Join Type: INNER  𝄀
+                          Join Cond: (d.id = mo_fulltext_alias_0.__mo_ft_doc_id)  𝄀
+                          Runtime Filter Build: #[-1,0]  𝄀
+                          ->  Table Scan on ft2_subq.docs  𝄀
+                                Runtime Filter Probe: d.id  𝄀
+                          ->  Table Function on fulltext2_search  𝄀
+                    ->  Project  𝄀
+                          ->  Table Scan on ft2_subq.q
+select d.id from docs d where match(d.body) against('+needle +anchor' in boolean mode)
+and exists (select 1 from q where q.n < d.id) order by d.id;
+➤ id[-5,64,0]  𝄀
+1  𝄀
+2  𝄀
+5
+update q set n=2 where name='lo';
+select d.id from docs d where match(d.body) against('+needle +anchor' in boolean mode)
+and exists (select 1 from q where q.n < d.id) order by d.id;
+➤ id[-5,64,0]  𝄀
+5
+update q set n=0 where name='lo';
+select id from docs where match(body) against('+needle +anchor' in boolean mode)
+and exists (select 1 from q where name='lo') order by id;
+➤ id[-5,64,0]  𝄀
+1  𝄀
+2  𝄀
+5
+select id from docs where match(body) against('+needle +anchor' in boolean mode)
+and id in (select n from q) order by id;
+➤ id[-5,64,0]
+select id from docs where id > (select n from q where name='lo') and id < 3 order by id;
+➤ id[-5,64,0]  𝄀
+1  𝄀
+2
+drop database ft2_subq;
