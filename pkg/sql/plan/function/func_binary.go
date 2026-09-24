@@ -45,6 +45,7 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/pb/metadata"
 	fj "github.com/matrixorigin/matrixone/pkg/sql/plan/function/fault"
 	"github.com/matrixorigin/matrixone/pkg/sql/plan/function/functionUtil"
+	"github.com/matrixorigin/matrixone/pkg/util/gpumode"
 	"github.com/matrixorigin/matrixone/pkg/vectorindex/metric"
 	"github.com/matrixorigin/matrixone/pkg/vectorize/floor"
 	"github.com/matrixorigin/matrixone/pkg/vectorize/format"
@@ -10923,25 +10924,33 @@ func SplitSingle(str, sep string, cnt uint32) (string, bool) {
 }
 
 // batchArrayDistanceSync computes a 1×N pairwise distance when exactly one input vector is
-// constant (the typical "ORDER BY distance(col, query)" SQL pattern).  The SQL result type is
-// DOUBLE, so this path uses the stable float64-result kernels directly.  The older pairwise
-// Launch/Wait interface materializes float32 and therefore cannot preserve the range promised
-// by SQL vector functions. This intentionally trades the old GPU fast path for a CPU reduction
-// whose result is identical to the scalar SQL path; preserving the DOUBLE contract is more
-// important than returning a faster, rounded answer. Returns (dist, true, nil) on success, or
-// (nil, false, nil) when neither (or both) inputs are const, or when null propagation requires
-// per-row handling.
+// constant (the typical "ORDER BY distance(col, query)" SQL pattern).
+// Uses GPU for float32 workloads above GPUThresholdSync; falls back to CPU pairwise for
+// float64 or small batches. Returns (dist, true, nil) on success, or (nil, false, nil) when
+// neither (or both) inputs are const, or when null propagation requires per-row handling.
 func batchArrayDistanceSync[T types.RealNumbers](
 	ivecs []*vector.Vector,
 	length int,
 	m metric.MetricType,
 	proc *process.Process,
 	selectList *FunctionSelectList,
-) ([]float64, bool, error) {
-	// Whether a value is constant must not change the value SQL returns, so this path may
-	// only run where it is exactly equivalent to the per-row kernel.  The stable resolver
-	// returns the same float64 value the scalar moarray wrapper uses, including values outside
-	// float32 range and L2 results whose square is not representable.
+) ([]float32, bool, error) {
+	// Whether a value is constant must not change what SQL returns, so this path may only run
+	// where it answers in the same domain as the per-row kernel: same value, or the same
+	// error, up to that domain's own rounding.
+	//
+	// Precision: the result is materialized as []float32 (metric.PairwiseDistance* is
+	// float32-out by construction), which is the domain the scalar path answers in for float32
+	// elements. The two are NOT bit-identical for Metric_L2Distance: this path resolves
+	// L2DistanceSq[float32], which accumulates the square in float32, while the scalar
+	// moarray.L2Distance accumulates in float64 (l2DistanceF64, #29083). Measured at dim 768,
+	// 313 of 2000 random pairs differ, by at most 1.2e-07 relative -- one float32 ULP, the
+	// rounding this domain already carries. For float64 the resolver
+	// wraps the kernel in a float64->float32 cast: `l1_distance(vecf64_col, '[16777217]')`
+	// against [0] answers 16777216 where the scalar path answers 16777217. Distinct
+	// distances can collapse and reorder an ORDER BY, so float64 stays on the scalar path.
+	// Nothing is given up: cuVS pairwise accepts float32/float16 only, so a float64 batch
+	// was never more than a CPU loop.
 	if _, isFloat32 := any(*new(T)).(float32); !isFloat32 {
 		return nil, false, nil
 	}
@@ -10991,17 +11000,28 @@ func batchArrayDistanceSync[T types.RealNumbers](
 		y[i] = types.BytesToArray[T](rowBytes)
 	}
 
-	dist := make([]float64, length)
-	distFn, err := metric.StableDistanceFn[T](m)
+	dist := make([]float32, length)
+	// proc is non-nil under SQL execution; the nil branch keeps unit
+	// tests (which don't synthesize a process) compiling and lets
+	// EffectiveGpuMode fall back to the build-tag default.
+	var resolver func(string, bool, bool) (any, error)
+	if proc != nil {
+		resolver = proc.GetResolveVariableFunc()
+	}
+	gpuMode := gpumode.EffectiveGpuMode(resolver)
+	handle, err := metric.PairwiseDistanceLaunch(x, y, m, dist, metric.GPUThresholdSQL, gpuMode)
 	if err != nil {
 		return nil, false, err
 	}
-	for i := range y {
-		d, err := distFn(x[0], y[i])
-		if err != nil {
-			return nil, false, err
-		}
-		dist[i] = d
+	dist, err = metric.PairwiseDistanceWait(handle, m)
+	if err != nil {
+		return nil, false, err
+	}
+	// Hand a non-finite batch result to the per-row kernel rather than answer with the +Inf/NaN:
+	// it raises the canonical error for the metric, and making an operand constant must not change
+	// what SQL returns.
+	if !metric.AllFiniteF32(dist) {
+		return nil, false, nil
 	}
 	return dist, true, nil
 }
@@ -11025,9 +11045,12 @@ func InnerProductArray[T types.RealNumbers](ivecs []*vector.Vector, result vecto
 }
 
 func CosineSimilarityArray[T types.RealNumbers](ivecs []*vector.Vector, result vector.FunctionResultWrapper, proc *process.Process, length int, selectList *FunctionSelectList) error {
-	// Keep similarity on the scalar stable helper: converting distance back to
-	// similarity would turn the distance's zero-vector convention (1, no error)
-	// into a different similarity contract (zero vector is an error).
+	// No batch path. The batch kernels compute cosine DISTANCE, and recovering similarity from it
+	// as 1-distance loses the precision the subtraction cancels away: for [1e-6,1] against [1,0]
+	// the recovered similarity is 1.0132789611816406e-06 where the kernel answers 1e-06, about
+	// 116k float32 ULP apart, which moves any threshold comparison built on it. The two functions
+	// also disagree on a zero-magnitude vector -- cosine_distance returns 1 by convention while
+	// cosine_similarity rejects it -- so the per-row kernel is the only one that can answer this.
 	return opBinaryBytesBytesToFixedWithErrorCheck[float64](ivecs, result, proc, length, func(v1, v2 []byte) (out float64, err error) {
 		_v1 := types.BytesToArray[T](v1)
 		_v2 := types.BytesToArray[T](v2)

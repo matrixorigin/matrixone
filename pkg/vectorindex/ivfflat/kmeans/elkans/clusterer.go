@@ -330,7 +330,9 @@ func (km *ElkanClusterer[T]) InitCentroids(ctx context.Context) error {
 func (km *ElkanClusterer[T]) Cluster(ctx context.Context) (any, error) {
 	if km.normalize {
 		for i := range km.vectorList {
-			metric.NormalizeL2(km.vectorList[i], km.vectorList[i])
+			if err := metric.NormalizeL2(km.vectorList[i], km.vectorList[i]); err != nil {
+				return nil, err
+			}
 		}
 	}
 
@@ -374,7 +376,10 @@ func (km *ElkanClusterer[T]) elkansCluster(ctx context.Context) ([][]T, error) {
 			return nil, err
 		}
 
-		newCentroids := km.recalculateCentroids(ctx, rnd, km.nextCentroids, km.membersCount) // step 4
+		newCentroids, err := km.recalculateCentroids(ctx, rnd, km.nextCentroids, km.membersCount) // step 4
+		if err != nil {
+			return nil, err
+		}
 
 		err = km.updateBounds(ctx, newCentroids, km.centroidShiftDist) // step 5 and 6
 		if err != nil {
@@ -676,7 +681,7 @@ func (km *ElkanClusterer[T]) assignData(ctx context.Context) (int, error) {
 }
 
 // recalculateCentroids calculates the new mean centroids based on the new assignments.
-func (km *ElkanClusterer[T]) recalculateCentroids(ctx context.Context, rnd *rand.Rand, newCentroids [][]T, membersCount []int64) [][]T {
+func (km *ElkanClusterer[T]) recalculateCentroids(ctx context.Context, rnd *rand.Rand, newCentroids [][]T, membersCount []int64) ([][]T, error) {
 	for i := range membersCount {
 		membersCount[i] = 0
 	}
@@ -708,7 +713,9 @@ func (km *ElkanClusterer[T]) recalculateCentroids(ctx context.Context, rnd *rand
 
 			// normalize the random vector
 			if km.normalize {
-				metric.NormalizeL2(newCentroids[c], newCentroids[c])
+				if err := metric.NormalizeL2(newCentroids[c], newCentroids[c]); err != nil {
+					return nil, err
+				}
 			}
 		} else {
 			// find the mean of the cluster members
@@ -717,13 +724,15 @@ func (km *ElkanClusterer[T]) recalculateCentroids(ctx context.Context, rnd *rand
 			// For spherical k-means, the mean of normalized vectors must be re-normalized
 			// to project the centroid back onto the unit hypersphere.
 			if km.normalize {
-				metric.NormalizeL2(newCentroids[c], newCentroids[c])
+				if err := metric.NormalizeL2(newCentroids[c], newCentroids[c]); err != nil {
+					return nil, err
+				}
 			}
 		}
 
 	}
 
-	return newCentroids
+	return newCentroids, nil
 }
 
 // updateBounds updates the lower and upper bounds for each vector.
