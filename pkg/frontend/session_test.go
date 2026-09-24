@@ -2082,6 +2082,26 @@ func TestInvalidatePrivilegeCacheInvalidatesRewritePreparedStatements(t *testing
 	require.Same(t, newStmt, got)
 }
 
+func TestInvalidatePrivilegeCacheInvalidatesMandatoryRoleRulePreparedStatements(t *testing.T) {
+	stmt := &PrepareStmt{
+		Name:                  "role_rule",
+		rewritePolicyCaptured: true,
+		rewritePolicyEnabled:  true,
+	}
+	ses := &Session{
+		cache:        &privilegeCache{},
+		ruleCache:    map[string]string{"db.t": "select * from db.t where tenant = 1"},
+		prepareStmts: map[string]*PrepareStmt{"role_rule": stmt},
+	}
+	// Mandatory role rules remain active when the optional rewrite switch is
+	// disabled.
+	ses.rewriteEnabled.Store(false)
+
+	ses.InvalidatePrivilegeCache()
+
+	require.True(t, stmt.rewritePolicyInvalidated.Load())
+}
+
 func TestInvalidatePrivilegeCachePreservesPreparedStatementsWithoutRewrite(t *testing.T) {
 	ctx := context.Background()
 	stmt := &PrepareStmt{Name: "stmt"}
@@ -2103,18 +2123,24 @@ func TestSetPrepareStmtRejectsStaleRewritePolicyGeneration(t *testing.T) {
 		name            string
 		capturedEnabled bool
 		currentEnabled  bool
+		currentRoleRule bool
 		invalidated     bool
 	}{
 		{name: "enabled to enabled", capturedEnabled: true, currentEnabled: true, invalidated: true},
 		{name: "enabled to disabled", capturedEnabled: true, currentEnabled: false, invalidated: true},
 		{name: "disabled to enabled", capturedEnabled: false, currentEnabled: true, invalidated: true},
 		{name: "disabled to disabled", capturedEnabled: false, currentEnabled: false},
+		{name: "disabled to mandatory role rule", capturedEnabled: false, currentRoleRule: true, invalidated: true},
 	} {
 		t.Run(testCase.name, func(t *testing.T) {
 			ses := &Session{
 				cache:                   &privilegeCache{},
+				ruleCache:               map[string]string{},
 				prepareStmts:            make(map[string]*PrepareStmt),
 				rewritePolicyGeneration: 1,
+			}
+			if testCase.currentRoleRule {
+				ses.ruleCache["db.t"] = "select * from db.t where tenant = 1"
 			}
 			ses.rewriteEnabled.Store(testCase.currentEnabled)
 			stale := &PrepareStmt{

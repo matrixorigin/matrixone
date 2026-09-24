@@ -796,6 +796,7 @@ func TestDisabledRewritePolicySnapshotCapturesGeneration(t *testing.T) {
 	ctrl := gomock.NewController(t)
 	ses := newTestSession(t, ctrl)
 	ses.rewriteEnabled.Store(false)
+	ses.ruleCache = map[string]string{}
 	ses.bumpRewritePolicyGeneration()
 
 	policy, err := captureRewritePolicy(ctx, ses)

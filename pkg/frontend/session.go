@@ -2222,6 +2222,11 @@ func (ses *Session) invalidateRewriteRuleCache() {
 	ses.mu.Lock()
 	defer ses.mu.Unlock()
 	ses.invalidateRewriteRuleCacheLocked()
+	// ALTER ROLE ... ADD/DROP RULE changes the policy definition itself. The
+	// session cache may be unloaded or may describe the old role state, so every
+	// existing handle must be discarded from execution until explicitly prepared
+	// again.
+	ses.invalidateAllPreparedRewriteStatementsLocked()
 }
 
 func (ses *Session) invalidateRewriteRuleCacheLocked() {
@@ -2230,16 +2235,51 @@ func (ses *Session) invalidateRewriteRuleCacheLocked() {
 	// after this point, even if the invalidation happened earlier in the same
 	// multi-statement request.
 	ses.ruleCacheMu.Lock()
+	roleRulesActive := len(ses.ruleCache) > 0
 	ses.ruleCache = nil
 	ses.rewritePolicyGeneration++
 	ses.ruleCacheMu.Unlock()
 
-	if !ses.rewriteEnabled.Load() {
-		return
-	}
+	optionalRewriteEnabled := ses.rewriteEnabled.Load()
 	for _, stmt := range ses.prepareStmts {
-		stmt.invalidateRewritePolicy()
+		// A disabled optional rewrite switch does not disable mandatory role
+		// rules. Use the policy captured by each handle to invalidate statements
+		// that still contain a role-rule rewrite.
+		if stmt != nil && (optionalRewriteEnabled || roleRulesActive || stmt.rewritePolicyEnabled) {
+			stmt.invalidateRewritePolicy()
+		}
 	}
+}
+
+func (ses *Session) invalidateAllPreparedRewriteStatementsLocked() {
+	for _, stmt := range ses.prepareStmts {
+		if stmt != nil {
+			stmt.invalidateRewritePolicy()
+		}
+	}
+}
+
+func (ses *Session) validatePreparedStatementsAfterRewritePolicyRefresh(
+	policy *rewritePolicySnapshot,
+	refreshErr error,
+) {
+	ses.mu.Lock()
+	defer ses.mu.Unlock()
+
+	ses.ruleCacheMu.RLock()
+	currentGeneration := ses.rewritePolicyGeneration
+	currentPolicyEnabled := ses.rewriteEnabled.Load() || len(ses.ruleCache) > 0
+	ses.ruleCacheMu.RUnlock()
+
+	if refreshErr != nil || policy == nil || policy.enabled || currentPolicyEnabled ||
+		policy.generation != currentGeneration {
+		ses.invalidateAllPreparedRewriteStatementsLocked()
+	}
+}
+
+func (ses *Session) refreshRewritePolicyAndValidatePrepared(ctx context.Context) {
+	policy, err := captureRewritePolicy(ctx, ses)
+	ses.validatePreparedStatementsAfterRewritePolicyRefresh(policy, err)
 }
 
 func (ses *Session) bumpRewritePolicyGeneration() {
@@ -2523,6 +2563,30 @@ func (ses *Session) GetTenantName() string {
 
 func (ses *Session) SetPrepareStmt(ctx context.Context, name string, prepareStmt *PrepareStmt) error {
 	name = strings.ToLower(name)
+	refreshedPolicy := false
+	refreshedPolicyGeneration := uint64(0)
+	refreshedPolicyEnabled := false
+	if prepareStmt != nil && prepareStmt.rewritePolicyCaptured {
+		ses.ruleCacheMu.RLock()
+		currentGeneration := ses.rewritePolicyGeneration
+		cacheUnloaded := ses.ruleCache == nil
+		currentPolicyEnabled := ses.rewriteEnabled.Load() || len(ses.ruleCache) > 0
+		ses.ruleCacheMu.RUnlock()
+		if prepareStmt.rewritePolicyGeneration != currentGeneration &&
+			!prepareStmt.rewritePolicyEnabled && !currentPolicyEnabled && cacheUnloaded {
+			// SET ROLE clears the cache before the new role's rules have been
+			// loaded. If the request snapshot was disabled, refresh only to learn
+			// whether the current role now has mandatory rules; an empty cache
+			// preserves the harmless disabled-to-disabled case.
+			policy, err := captureRewritePolicy(ctx, ses)
+			if err != nil {
+				return err
+			}
+			refreshedPolicy = true
+			refreshedPolicyGeneration = policy.generation
+			refreshedPolicyEnabled = policy.enabled
+		}
+	}
 	ses.mu.Lock()
 	defer ses.mu.Unlock()
 	if stmt, ok := ses.prepareStmts[name]; !ok {
@@ -2540,10 +2604,20 @@ func (ses *Session) SetPrepareStmt(ctx context.Context, name string, prepareStmt
 	if prepareStmt != nil && prepareStmt.rewritePolicyCaptured {
 		ses.ruleCacheMu.RLock()
 		currentGeneration := ses.rewritePolicyGeneration
+		cacheUnloaded := ses.ruleCache == nil
+		currentPolicyEnabled := ses.rewriteEnabled.Load() || len(ses.ruleCache) > 0
 		ses.ruleCacheMu.RUnlock()
-		if prepareStmt.rewritePolicyGeneration != currentGeneration &&
-			(prepareStmt.rewritePolicyEnabled || ses.rewriteEnabled.Load()) {
-			prepareStmt.invalidateRewritePolicy()
+		if prepareStmt.rewritePolicyGeneration != currentGeneration {
+			invalidate := prepareStmt.rewritePolicyEnabled || currentPolicyEnabled
+			if !invalidate && cacheUnloaded {
+				// A policy refresh that no longer matches the generation at the
+				// publication boundary cannot prove the new role has no rules.
+				invalidate = !refreshedPolicy || refreshedPolicyGeneration != currentGeneration ||
+					refreshedPolicyEnabled
+			}
+			if invalidate {
+				prepareStmt.invalidateRewritePolicy()
+			}
 		}
 	}
 	ses.prepareStmts[name] = prepareStmt

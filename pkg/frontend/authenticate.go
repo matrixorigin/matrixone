@@ -3760,6 +3760,11 @@ func doSwitchRole(ctx context.Context, ses *Session, sr *tree.SetRole) (err erro
 		// then, reset secondary role to none
 		account.SetUseSecondaryRole(false)
 		ses.InvalidatePrivilegeCache()
+		// Resolve the new active role's mandatory row rules before leaving the
+		// role switch. If the request was captured under an empty role, this
+		// current-policy check invalidates old handles only when the new role has
+		// rules; a failed load is treated as unknown and fails closed.
+		ses.refreshRewritePolicyAndValidatePrepared(ctx)
 		// SET ROLE validated membership in the transaction above, but a session
 		// with privilege caching disabled must not leave a grant decision behind
 		// for a later OFF -> ON transition to reuse after REVOKE.
