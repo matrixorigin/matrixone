@@ -1057,3 +1057,81 @@ func TestScalarOp(t *testing.T) {
 		})
 	}
 }
+
+// TestVectorVectorArithmeticRejectsOverflow guards #29085: vector-vector +,-,*,/ must reject a
+// result that overflows the element type instead of returning/persisting Infinity, matching the
+// check ScalarOp already applies to vector-scalar arithmetic.
+func TestVectorVectorArithmeticRejectsOverflow(t *testing.T) {
+	const wantErr = "vector contains infinity values"
+
+	// Each op, both element types, with finite inputs whose result overflows the type.
+	t.Run("f32 add", func(t *testing.T) {
+		_, err := Add[float32]([]float32{3e38, 3e38}, []float32{3e38, 3e38})
+		require.ErrorContains(t, err, wantErr)
+	})
+	t.Run("f32 subtract", func(t *testing.T) {
+		_, err := Subtract[float32]([]float32{3e38, 3e38}, []float32{-3e38, -3e38})
+		require.ErrorContains(t, err, wantErr)
+	})
+	t.Run("f32 multiply", func(t *testing.T) {
+		_, err := Multiply[float32]([]float32{2e19, 2e19}, []float32{2e19, 2e19})
+		require.ErrorContains(t, err, wantErr)
+	})
+	t.Run("f32 divide", func(t *testing.T) {
+		_, err := Divide[float32]([]float32{3e38, 3e38}, []float32{1e-1, 1e-1})
+		require.ErrorContains(t, err, wantErr)
+	})
+	t.Run("f64 add", func(t *testing.T) {
+		_, err := Add[float64]([]float64{1e308, 1e308}, []float64{1e308, 1e308})
+		require.ErrorContains(t, err, wantErr)
+	})
+	t.Run("f64 subtract", func(t *testing.T) {
+		_, err := Subtract[float64]([]float64{1e308, 1e308}, []float64{-1e308, -1e308})
+		require.ErrorContains(t, err, wantErr)
+	})
+	t.Run("f64 multiply", func(t *testing.T) {
+		_, err := Multiply[float64]([]float64{2e200, 2e200}, []float64{2e200, 2e200})
+		require.ErrorContains(t, err, wantErr)
+	})
+	t.Run("f64 divide", func(t *testing.T) {
+		_, err := Divide[float64]([]float64{1e308, 1e308}, []float64{1e-308, 1e-308})
+		require.ErrorContains(t, err, wantErr)
+	})
+
+	// Finite results are unaffected (no false positives).
+	t.Run("f32 finite control", func(t *testing.T) {
+		got, err := Add[float32]([]float32{1, 2, 3}, []float32{3, 4, 5})
+		require.NoError(t, err)
+		require.Equal(t, []float32{4, 6, 8}, got)
+	})
+	t.Run("f64 finite control", func(t *testing.T) {
+		got, err := Multiply[float64]([]float64{2, 3}, []float64{4, 5})
+		require.NoError(t, err)
+		require.Equal(t, []float64{8, 15}, got)
+	})
+
+	// A NaN produced from a non-finite input (Inf-Inf) is also rejected -- the x-x!=0 finite
+	// test catches it, whereas a plain math.IsInf check would let it through.
+	t.Run("f32 nan from inf inputs", func(t *testing.T) {
+		inf := float32(math.Inf(1))
+		_, err := Subtract[float32]([]float32{inf, inf}, []float32{inf, inf})
+		require.ErrorContains(t, err, wantErr)
+	})
+	t.Run("f64 nan from inf inputs", func(t *testing.T) {
+		inf := math.Inf(1)
+		_, err := Divide[float64]([]float64{inf, inf}, []float64{inf, inf})
+		require.ErrorContains(t, err, wantErr)
+	})
+
+	// The overflow check does not mask the pre-existing div-by-zero and dimension guards.
+	t.Run("divide by zero still rejected", func(t *testing.T) {
+		_, err := Divide[float64]([]float64{1, 2}, []float64{1, 0})
+		require.Error(t, err)
+		require.NotContains(t, err.Error(), wantErr)
+	})
+	t.Run("dimension mismatch still rejected", func(t *testing.T) {
+		_, err := Add[float32]([]float32{1, 2, 3}, []float32{1, 2})
+		require.Error(t, err)
+		require.NotContains(t, err.Error(), wantErr)
+	})
+}
