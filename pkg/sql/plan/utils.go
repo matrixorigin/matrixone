@@ -4539,7 +4539,12 @@ func (rule *preparedRuntimeTextComparisonScanRule) paramTypeIsText(position int)
 		rule.runtimeParamTypes[position].Oid.IsMySQLString()
 }
 
-func (rule *preparedRuntimeSpecializationScanRule) MatchNode(_ *Node) bool {
+func (rule *preparedRuntimeSpecializationScanRule) MatchNode(node *Node) bool {
+	if node.NodeType == plan.Node_FUNCTION_SCAN && node.TableDef != nil &&
+		node.TableDef.TblFunc != nil && node.TableDef.TblFunc.Name == "generate_series" &&
+		len(node.TblFuncExprList) > 0 && node.TblFuncExprList[0].GetP() != nil {
+		rule.needs = true
+	}
 	return false
 }
 
@@ -5184,6 +5189,10 @@ func fillValuesOfParamsInPlanWithSpecializationSelected(
 	numericPrefixSpecialization := PreparedPlanNeedsNumericPrefixSpecialization(
 		preparePlan, effectiveParamVals)
 	copied := DeepCopyPlan(preparePlan)
+	seriesSpecialized, err := specializePreparedGenerateSeries(ctx, copied, effectiveParamVals)
+	if err != nil {
+		return nil, false, err
+	}
 	runtimeDecimalPrefix := hasRuntimeDecimalPrefixFilter(copied, effectiveParamVals)
 	switch pp := copied.Plan.(type) {
 
@@ -5204,9 +5213,93 @@ func fillValuesOfParamsInPlanWithSpecializationSelected(
 		if err != nil {
 			return nil, false, err
 		}
-		return copied, specialized || runtimeDecimalPrefix, nil
+		return copied, specialized || runtimeDecimalPrefix || seriesSpecialized, nil
 	}
 	return copied, false, nil
+}
+
+// specializePreparedGenerateSeries fixes the FUNCTION_SCAN schema and argument
+// domain together. A prepared endpoint is TEXT only because of its transport;
+// the cached PREPARE plan cannot choose between integer and temporal series.
+func specializePreparedGenerateSeries(ctx context.Context, plan0 *Plan, values []any) (bool, error) {
+	query := plan0.GetQuery()
+	if query == nil {
+		return false, nil
+	}
+	changed := false
+	for _, node := range query.Nodes {
+		if node == nil || node.NodeType != plan.Node_FUNCTION_SCAN || node.TableDef == nil ||
+			node.TableDef.TblFunc == nil || node.TableDef.TblFunc.Name != "generate_series" ||
+			len(node.TblFuncExprList) == 0 || len(node.TableDef.Cols) == 0 {
+			continue
+		}
+		marker := node.TblFuncExprList[0].GetP()
+		if marker == nil || marker.Pos < 0 || int(marker.Pos) >= len(values) {
+			continue
+		}
+		param, ok := values[marker.Pos].(ParamValue)
+		if !ok {
+			continue
+		}
+		source := types.T_text.ToType()
+		if param.HasRuntimeType {
+			source = param.RuntimeType
+		} else if param.HasSourceType {
+			source = param.SourceType
+		}
+		numeric := source.Oid.IsInteger()
+		bound := append([]*plan.Expr(nil), node.TblFuncExprList...)
+		datetimeType := types.T_datetime.ToTypeWithScale(generateSeriesDatetimeScale(bound))
+		endpointCount := min(len(bound), 2)
+		for i := 0; i < endpointCount; i++ {
+			if numeric {
+				if bound[i].GetP() == nil {
+					continue
+				}
+				target := types.T_int64.ToType()
+				casted, err := appendCastBeforeExpr(ctx, bound[i], makePlan2Type(&target))
+				if err != nil {
+					return false, err
+				}
+				bound[i] = casted
+				continue
+			}
+			if types.T(bound[i].Typ.Id) == types.T_datetime && bound[i].Typ.Scale == datetimeType.Scale {
+				continue
+			}
+			casted, err := appendCastBeforeExpr(ctx, bound[i], makePlan2Type(&datetimeType))
+			if err != nil {
+				return false, err
+			}
+			bound[i] = casted
+		}
+		if len(bound) > 2 && bound[2].GetP() != nil {
+			target := types.T_varchar.ToType()
+			if numeric {
+				target = types.T_int64.ToType()
+			}
+			casted, err := appendCastBeforeExpr(ctx, bound[2], makePlan2Type(&target))
+			if err != nil {
+				return false, err
+			}
+			bound[2] = casted
+		}
+		node.TblFuncExprList = bound
+		resultType := types.T_varchar.ToType()
+		if numeric {
+			resultType = types.T_int64.ToType()
+		} else if source.Oid.IsDateRelate() {
+			resultType = datetimeType
+		}
+		node.TableDef.Cols[0].Typ = makePlan2Type(&resultType)
+		for _, projected := range node.ProjectList {
+			if col := projected.GetCol(); col != nil && col.ColPos == 0 {
+				projected.Typ = makePlan2Type(&resultType)
+			}
+		}
+		changed = true
+	}
+	return changed, nil
 }
 
 // ValidatePreparedPaginationParams validates parameter markers used by LIMIT
