@@ -3989,17 +3989,16 @@ func (v *Vector) preflightNumericBinaryLiteralAppend(
 	if v.numericBinaryLiteralRowsActive {
 		return v.ensureNumericBinaryLiteralCapacity(finalLength, mp)
 	}
-	if v.length > 0 {
-		destinationValues := v.nonNullRowsWithinLength()
-		if destinationValues > 0 {
-			if v.numericBinaryLiteral || v.isBin {
-				hasMarked = true
-			} else {
-				hasUnmarked = true
-			}
-		}
+	if !hasMarked && !hasUnmarked {
+		return nil
 	}
 	if hasMarked && hasUnmarked {
+		return v.ensureNumericBinaryLiteralCapacity(finalLength, mp)
+	}
+	if hasMarked == (v.numericBinaryLiteral || v.isBin) {
+		return nil
+	}
+	if v.length > 0 && v.nonNullRowsWithinLength() > 0 {
 		return v.ensureNumericBinaryLiteralCapacity(finalLength, mp)
 	}
 	return nil

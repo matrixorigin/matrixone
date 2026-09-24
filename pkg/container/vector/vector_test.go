@@ -2589,6 +2589,21 @@ func TestNumericBinaryLiteralRepeatedBatchAppendKeepsScalar(t *testing.T) {
 	for row := 0; row < destination.Length(); row++ {
 		require.True(t, destination.GetIsBinAt(row), "row %d lost numeric-literal provenance", row)
 	}
+	destination.ResetWithSameType()
+	require.NoError(t, AppendFixedList(destination, []int64{10, 20}, []bool{false, true}, mp))
+	destination.SetIsBin(true)
+	source.SetIsBin(true)
+	for range 128 {
+		require.NoError(t, destination.UnionBatch(source, 0, 1, nil, mp))
+		require.True(t, destination.GetIsBin())
+		require.False(t, destination.HasIsBinRows(), "NULL-containing uniform prefixes should keep scalar provenance")
+	}
+	require.True(t, destination.GetIsBinAt(0))
+	require.False(t, destination.GetIsBinAt(1))
+	for row := 2; row < destination.Length(); row++ {
+		require.True(t, destination.GetIsBinAt(row))
+	}
+
 	for _, prefixMarked := range []bool{false, true} {
 		destination.ResetWithSameType()
 		require.NoError(t, AppendFixed(destination, int64(0), true, mp))
@@ -6675,7 +6690,7 @@ func BenchmarkUnionOnePrepareParamKindLateDivergence(b *testing.B) {
 // This benchmark compares scalar and row-bitmap prefixes while appending one
 // marked row; runtime should scale with appended rows, not prefix length.
 func BenchmarkUnionBatchNumericBinaryLiteralOneRowAppend(b *testing.B) {
-	for _, representation := range []string{"scalar", "uniform-sidecar"} {
+	for _, representation := range []string{"scalar", "scalar-null", "uniform-sidecar"} {
 		for _, prefixRows := range []int{4 << 10, 512 << 10} {
 			b.Run(fmt.Sprintf("%s/prefix=%d", representation, prefixRows), func(b *testing.B) {
 				mp := mpool.MustNewZero()
@@ -6686,8 +6701,16 @@ func BenchmarkUnionBatchNumericBinaryLiteralOneRowAppend(b *testing.B) {
 				require.NoError(b, AppendFixed(source, int64(1), false, mp))
 				source.SetIsBin(true)
 				values := make([]int64, prefixRows)
-				require.NoError(b, AppendFixedList(destination, values, nil, mp))
-				if representation == "scalar" {
+				if representation == "scalar-null" {
+					nulls := make([]bool, prefixRows)
+					for row := range nulls {
+						nulls[row] = row&1 == 0
+					}
+					require.NoError(b, AppendFixedList(destination, values, nulls, mp))
+				} else {
+					require.NoError(b, AppendFixedList(destination, values, nil, mp))
+				}
+				if representation != "uniform-sidecar" {
 					destination.SetIsBin(true)
 				} else {
 					markers := make([]bool, prefixRows)
