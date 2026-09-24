@@ -2359,6 +2359,104 @@ func (u *CDCWatermarkUpdater) DeleteTaskWatermarks(
 	return nil
 }
 
+// EvictTaskLocalStateForOwner drains watermark work queued before a claim-loss
+// cancellation and evicts only the old owner's in-memory state. It deliberately
+// leaves durable rows untouched: a replacement executor may already own and
+// advance them. When a newer owner is visible in this updater, progress caches
+// at that generation are retained while stale progress from the relinquished
+// generation is removed.
+func (u *CDCWatermarkUpdater) EvictTaskLocalStateForOwner(
+	ctx context.Context,
+	accountID uint64,
+	taskID string,
+	ownerGeneration uint64,
+) error {
+	if ownerGeneration == 0 {
+		return nil
+	}
+	if err := u.ForceFlush(ctx); err != nil {
+		return err
+	}
+
+	keys := make(map[WatermarkKey]struct{})
+	u.Lock()
+	collectTaskWatermarkKeys(keys, u.cacheUncommitted, accountID, taskID)
+	collectTaskWatermarkKeys(keys, u.cacheCommitting, accountID, taskID)
+	collectTaskWatermarkKeys(keys, u.cacheCommitted, accountID, taskID)
+	collectTaskWatermarkKeys(keys, u.cacheUncommittedGeneration, accountID, taskID)
+	collectTaskWatermarkKeys(keys, u.cacheCommittingGeneration, accountID, taskID)
+	collectTaskWatermarkKeys(keys, u.cacheCommittedGeneration, accountID, taskID)
+	collectTaskWatermarkKeys(keys, u.cacheUncommittedFence, accountID, taskID)
+	collectTaskWatermarkKeys(keys, u.cacheCommittingFence, accountID, taskID)
+	collectTaskWatermarkKeys(keys, u.activeWatermarkFence, accountID, taskID)
+	collectTaskWatermarkKeys(keys, u.errorMetadataCache, accountID, taskID)
+	collectTaskWatermarkKeys(keys, u.commitFailureCount, accountID, taskID)
+	collectTaskWatermarkKeys(keys, u.commitCircuitOpen, accountID, taskID)
+	collectTaskWatermarkKeys(keys, u.readKeysBuffer, accountID, taskID)
+
+	removedMetrics := make([]WatermarkKey, 0, len(keys))
+	for key := range keys {
+		newerOwner := false
+		if fence := u.activeWatermarkFence[key]; fence != nil {
+			newerOwner = fence.GenerationToken() > ownerGeneration
+		}
+		for _, generation := range []uint64{
+			u.cacheUncommittedGeneration[key],
+			u.cacheCommittingGeneration[key],
+			u.cacheCommittedGeneration[key],
+		} {
+			if generation > ownerGeneration {
+				newerOwner = true
+				break
+			}
+		}
+
+		if !newerOwner {
+			u.removeWatermarkStateLocked(key)
+			delete(u.errorMetadataCache, key)
+			delete(u.readKeysBuffer, key)
+			delete(u.commitFailureCount, key)
+			delete(u.commitCircuitOpen, key)
+			removedMetrics = append(removedMetrics, key)
+			continue
+		}
+
+		// A replacement owner is already visible. Remove uncommitted and
+		// committing entries without a newer generation as well, since those
+		// entries could otherwise be flushed after the replacement claim.
+		for _, state := range []struct {
+			cache       map[WatermarkKey]types.TS
+			generations map[WatermarkKey]uint64
+			fences      map[WatermarkKey]*OwnerFence
+		}{
+			{u.cacheUncommitted, u.cacheUncommittedGeneration, u.cacheUncommittedFence},
+			{u.cacheCommitting, u.cacheCommittingGeneration, u.cacheCommittingFence},
+		} {
+			generation := state.generations[key]
+			if generation == 0 || generation <= ownerGeneration {
+				delete(state.cache, key)
+				delete(state.generations, key)
+				delete(state.fences, key)
+			}
+		}
+		if generation := u.cacheCommittedGeneration[key]; generation != 0 && generation <= ownerGeneration {
+			delete(u.cacheCommitted, key)
+			delete(u.cacheCommittedGeneration, key)
+		}
+		if fence := u.activeWatermarkFence[key]; fence != nil && fence.GenerationToken() <= ownerGeneration {
+			delete(u.activeWatermarkFence, key)
+		}
+		delete(u.readKeysBuffer, key)
+	}
+	u.Unlock()
+
+	for _, key := range removedMetrics {
+		u.removeWatermarkMetrics(key)
+		u.fallbackLog.Delete(key.String())
+	}
+	return nil
+}
+
 func (u *CDCWatermarkUpdater) MarkTaskDeleted(taskID string) {
 	u.Lock()
 	u.deletedTasks.Store(taskID, struct{}{})

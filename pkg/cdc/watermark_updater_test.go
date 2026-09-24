@@ -505,6 +505,52 @@ func TestWatermarkUpdater_DeleteTaskWatermarksDrainsAndFencesCache(t *testing.T)
 	exec.mu.Unlock()
 }
 
+func TestWatermarkUpdater_EvictTaskLocalStateForOwnerPreservesReplacement(t *testing.T) {
+	updater := NewCDCWatermarkUpdater(
+		t.Name(),
+		newWmMockSQLExecutor(),
+		WithCustomizedScheduleJob(func(job *UpdaterJob) error {
+			job.DoneWithErr(nil)
+			return nil
+		}),
+	)
+	updater.Start()
+	defer updater.Stop()
+
+	ctx := context.Background()
+	key := WatermarkKey{AccountId: 1, TaskId: "claim-loss-task", DBName: "db", TableName: "tbl"}
+	oldFence := NewOwnerFenceForGeneration(time.UnixMicro(10), func(context.Context) error { return nil })
+	newFence := NewOwnerFenceForGeneration(time.UnixMicro(20), func(context.Context) error { return nil })
+	oldTS := types.BuildTS(10, 1)
+	newTS := types.BuildTS(20, 1)
+
+	updater.Lock()
+	// A stale buffered write must be evicted, while B's newer committed
+	// checkpoint and active owner remain available to a fresh reader.
+	updater.cacheUncommitted[key] = oldTS
+	updater.cacheUncommittedGeneration[key] = oldFence.GenerationToken()
+	updater.cacheUncommittedFence[key] = oldFence
+	updater.cacheCommitted[key] = newTS
+	updater.cacheCommittedGeneration[key] = newFence.GenerationToken()
+	updater.activeWatermarkFence[key] = newFence
+	updater.Unlock()
+
+	require.NoError(t, updater.EvictTaskLocalStateForOwner(
+		ctx, key.AccountId, key.TaskId, oldFence.GenerationToken()))
+
+	updater.RLock()
+	_, staleBuffered := updater.cacheUncommitted[key]
+	checkpoint, checkpointPresent := updater.cacheCommitted[key]
+	checkpointGeneration := updater.cacheCommittedGeneration[key]
+	activeFence := updater.activeWatermarkFence[key]
+	updater.RUnlock()
+	require.False(t, staleBuffered)
+	require.True(t, checkpointPresent)
+	require.Equal(t, newTS, checkpoint)
+	require.Equal(t, newFence.GenerationToken(), checkpointGeneration)
+	require.Same(t, newFence, activeFence)
+}
+
 func TestWatermarkUpdater_DeleteTaskWatermarksRetriesAfterFlushFailure(t *testing.T) {
 	exec := &retryableMockExecutor{failRemaining: 1}
 	updater := NewCDCWatermarkUpdater("delete-task-flush-failure", exec)

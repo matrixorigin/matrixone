@@ -1064,6 +1064,27 @@ func TestCDCNoFullPublicTakeoverLifecycle(t *testing.T) {
 			// generation is checked after B has collected and flushed W below.
 			require.Equal(t, checkpointA, checkpointBeforeB)
 			mustExec(dbName, "insert into "+tableName+" values (3, 'after_takeover')")
+			// Capture a real source transaction snapshot that demonstrably sees
+			// the post-takeover row.  B's durable checkpoint must reach this
+			// snapshot, not merely move past its pre-admission value; otherwise a
+			// sink row could be visible while a fresh reader still starts before
+			// the row's committed boundary.
+			var row3Snapshot types.TS
+			require.NoError(t, sqlExec.ExecTxn(ctx, func(tx executor.TxnExecutor) error {
+				res, err := tx.Exec("select count(*) from "+tableName+" where id=3", executor.StatementOption{})
+				if err != nil {
+					return err
+				}
+				defer res.Close()
+				if testutils.ReadCount(res) != 1 {
+					return fmt.Errorf("takeover snapshot does not contain source row 3")
+				}
+				row3Snapshot = types.TimestampToTS(tx.Txn().SnapshotTS())
+				return nil
+			}, executor.Options{}.WithDatabase(dbName)))
+			require.False(t, row3Snapshot.IsEmpty())
+			require.True(t, row3Snapshot.GT(&checkpointBeforeB),
+				"row 3 must commit after B's pre-admission checkpoint")
 			captureB.Store(true)
 			releaseSecond()
 			require.Eventually(t, func() bool { return waitTarget(3) }, 90*time.Second, 200*time.Millisecond)
@@ -1078,7 +1099,7 @@ func TestCDCNoFullPublicTakeoverLifecycle(t *testing.T) {
 			require.Eventually(t, func() bool {
 				var readErr error
 				checkpointB, generationAfterB, found, readErr = readWatermark()
-				return readErr == nil && found && generationAfterB > generationA && checkpointB.GT(&checkpointBeforeB)
+				return readErr == nil && found && generationAfterB > generationA && checkpointB.GE(&row3Snapshot)
 			}, 30*time.Second, 200*time.Millisecond)
 
 			// Let A's delayed runner cleanup return only after B has committed W,

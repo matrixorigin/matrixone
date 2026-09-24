@@ -1813,6 +1813,21 @@ func (exec *CDCTaskExecutor) cancel(deleteWatermarks bool) (err error) {
 			exec.reclaimDeletedWatermark(exec.spec.TaskId, callbackDone, readersDone)
 		}
 	}
+	if !deleteWatermarks && exec.watermarkUpdater != nil && exec.spec != nil && len(exec.spec.Accounts) > 0 {
+		// Claim-loss cancellation must retain the durable row for the
+		// replacement owner, but it must not retain this CN's stale cache tiers.
+		// Evict only after callbacks/readers are fenced and drained so no old
+		// producer can repopulate the local updater while it is being cleaned.
+		if fence := exec.currentDaemonClaimFence(); fence != nil {
+			exec.evictClaimLossWatermarkState(
+				fence.GenerationToken(),
+				exec.spec.TaskId,
+				uint64(exec.spec.Accounts[0].GetId()),
+				callbackDone,
+				readersDone,
+			)
+		}
+	}
 	cancelSucceeded = true
 	return nil
 }
@@ -2045,6 +2060,49 @@ func (exec *CDCTaskExecutor) reclaimDeletedWatermark(
 			exec.watermarkUpdater.ForgetTaskDeleted(taskID)
 		}
 	}()
+}
+
+func (exec *CDCTaskExecutor) evictClaimLossWatermarkState(
+	ownerGeneration uint64,
+	taskID string,
+	accountID uint64,
+	callbacksDone <-chan struct{},
+	readersDone <-chan struct{},
+) {
+	if ownerGeneration == 0 {
+		return
+	}
+	if callbacksDone == nil {
+		callbacksDone = closedChan()
+	}
+	if readersDone == nil {
+		readersDone = closedChan()
+	}
+	cleanup := func() {
+		<-callbacksDone
+		_, lateReadersDone := exec.stopAllReaders()
+		<-readersDone
+		<-lateReadersDone
+		// Claim-loss cleanup is best-effort and must not hold up replacement
+		// admission on a stalled updater queue. A later updater cycle can retry
+		// the local eviction if this bounded barrier cannot complete.
+		cleanupCtx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+		defer cancel()
+		if err := exec.watermarkUpdater.EvictTaskLocalStateForOwner(
+			cleanupCtx, accountID, taskID, ownerGeneration); err != nil {
+			logutil.Warn(
+				"cdc.frontend.task.claim_loss_cache_cleanup_failed",
+				zap.String("task-id", taskID),
+				zap.Uint64("owner-generation", ownerGeneration),
+				zap.Error(err),
+			)
+		}
+	}
+	// Do not hold taskservice's cancellation completion on the updater queue.
+	// The queue barrier and local eviction are safe to finish asynchronously
+	// after all producer fences have closed, and a replacement runner must be
+	// able to publish its claim immediately.
+	go cleanup()
 }
 
 type removedReaderShutdown struct {
