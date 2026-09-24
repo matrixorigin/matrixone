@@ -3950,6 +3950,70 @@ func TestDoAlterPitrRejectsZeroRangeBeforeTransaction(t *testing.T) {
 	require.NotContains(t, bh.executedSQLs, "begin;")
 }
 
+func TestPitrMutationUsesLifecycleOwnerTxn(t *testing.T) {
+	for _, testCase := range []struct {
+		name string
+		run  func(context.Context, *Session) error
+	}{
+		{
+			name: "create",
+			run: func(ctx context.Context, ses *Session) error {
+				return doCreatePitr(ctx, ses, &tree.CreatePitr{
+					Name: "pitr01", Level: tree.PITRLEVELACCOUNT,
+					PitrValue: 1, PitrUnit: "h",
+				})
+			},
+		},
+		{
+			name: "drop",
+			run: func(ctx context.Context, ses *Session) error {
+				return doDropPitr(ctx, ses, &tree.DropPitr{Name: "pitr01"})
+			},
+		},
+		{
+			name: "alter",
+			run: func(ctx context.Context, ses *Session) error {
+				return doAlterPitr(ctx, ses, &tree.AlterPitr{
+					Name: "pitr01", PitrValue: 1, PitrUnit: "h",
+				})
+			},
+		},
+	} {
+		t.Run(testCase.name, func(t *testing.T) {
+			ctrl := gomock.NewController(t)
+			ctx := context.Background()
+			ses := newTestSession(t, ctrl)
+			defer ses.Close()
+			ses.SetTenantInfo(&TenantInfo{
+				Tenant:      sysAccountName,
+				DefaultRole: moAdminRoleName,
+			})
+			bh := &backgroundExecTest{}
+			bh.init()
+			beginErr := errors.New("begin failed")
+			bh.sql2err["begin;"] = beginErr
+			oldNewBackgroundExec := NewBackgroundExec
+			defer func() { NewBackgroundExec = oldNewBackgroundExec }()
+			forcedPessimisticRC := false
+			NewBackgroundExec = func(
+				_ context.Context,
+				_ FeSession,
+				opts ...*BackgroundExecOption,
+			) BackgroundExec {
+				for _, opt := range opts {
+					forcedPessimisticRC = forcedPessimisticRC ||
+						opt != nil && opt.forcePessimisticRC
+				}
+				return bh
+			}
+
+			err := testCase.run(ctx, ses)
+			require.ErrorIs(t, err, beginErr)
+			require.True(t, forcedPessimisticRC)
+		})
+	}
+}
+
 // Test_unservableViewErrorIsIdentifiable pins the contract the restore paths rely on.
 //
 // restoreViews (snapshot.go) and restoreViewsWithPitr (pitr.go) DROP a view before

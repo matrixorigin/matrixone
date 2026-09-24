@@ -30,10 +30,24 @@ const LegacyViewScanCursorRelation = "__mo_legacy_view_scan_cursor__"
 const ViewMetadataLifecycleGateSQL = "select rel_id from mo_catalog.mo_tables " +
 	"where account_id=0 and reldatabase='mo_catalog' and relname='mo_view_refresh' for update"
 
+// ViewMetadataLifecycleSharedGateSQL lets lifecycle readers retain the stable
+// View catalog identity while allowing unrelated readers to make progress.
+// Lifecycle state transitions continue to use ViewMetadataLifecycleGateSQL.
+const ViewMetadataLifecycleSharedGateSQL = "select rel_id from mo_catalog.mo_tables " +
+	"where account_id=0 and reldatabase='mo_catalog' and relname='mo_view_refresh' for share"
+
 // SnapshotLifecycleGateSQL takes the outer lifecycle lock without publishing a
 // new MVCC version. Owner mutations retain their separate write barrier.
 const SnapshotLifecycleGateSQL = "select feature_code from mo_catalog.mo_feature_registry " +
 	"where feature_code = 'SNAPSHOT' for update"
+
+// SnapshotLifecycleSharedGateSQL is the read side of the SNAPSHOT lifecycle
+// gate. It remains incompatible with lifecycle owner mutations while allowing
+// independent readers to coexist.
+const SnapshotLifecycleSharedGateSQL = "select feature_code from mo_catalog.mo_feature_registry " +
+	"where feature_code = 'SNAPSHOT' for share"
+
+const SnapshotLifecycleFeatureCode = "SNAPSHOT"
 
 // FeatureRegistryCatalogGateSQL takes exclusive ownership of the catalog
 // identity that owns SnapshotLifecycleGateSQL. A cluster or system-account
@@ -50,6 +64,15 @@ func LockViewMetadataLifecycle(exec func(string) error) error {
 		return err
 	}
 	return exec(ViewMetadataLifecycleGateSQL)
+}
+
+// LockViewMetadataLifecycleShared preserves SNAPSHOT -> View ordering for
+// readers without serializing readers that operate on disjoint catalog rows.
+func LockViewMetadataLifecycleShared(exec func(string) error) error {
+	if err := exec(SnapshotLifecycleSharedGateSQL); err != nil {
+		return err
+	}
+	return exec(ViewMetadataLifecycleSharedGateSQL)
 }
 
 const MoViewDependenciesColumns = "account_id,target_database_id,target_relation_id," +

@@ -69,6 +69,12 @@ var (
 	sid = ""
 )
 
+func TestWriterFairLockRequestContext(t *testing.T) {
+	require.False(t, isWriterFairLockRequest(context.Background()))
+	require.True(t, isWriterFairLockRequest(
+		defines.AttachLockWriterFair(context.Background())))
+}
+
 type immediateLockTimestampWaiter struct{}
 
 type lockServiceConfigOverride struct {

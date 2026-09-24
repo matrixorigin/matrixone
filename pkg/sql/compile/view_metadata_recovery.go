@@ -32,6 +32,7 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/pb/api"
 	planpb "github.com/matrixorigin/matrixone/pkg/pb/plan"
 	"github.com/matrixorigin/matrixone/pkg/pb/timestamp"
+	"github.com/matrixorigin/matrixone/pkg/pb/txn"
 	plan2 "github.com/matrixorigin/matrixone/pkg/sql/plan"
 	"github.com/matrixorigin/matrixone/pkg/sql/plan/function/ctl"
 	"github.com/matrixorigin/matrixone/pkg/util/executor"
@@ -49,6 +50,13 @@ var viewMetadataSynchronousRefreshBudget = 0
 
 const viewMetadataClosureWritePageSize = 16
 const viewMetadataRecoveryCallTimeout = 30 * time.Second
+
+func viewMetadataLifecycleWriterOptions() executor.Options {
+	return executor.Options{}.
+		WithAccountID(catalog.System_Account).
+		WithTxnMode(txn.TxnMode_Pessimistic).
+		WithTxnIsolation(txn.TxnIsolation_RC)
+}
 
 type viewMetadataRecoveryCommand struct {
 	WorkerID   string `json:"worker_id"`
@@ -129,7 +137,7 @@ func RequireViewMetadataRevalidation(ctx context.Context, sqlExecutor executor.S
 		}
 		_, _, err = seedViewMetadataRevalidationPage(txn)
 		return err
-	}, executor.Options{}.WithAccountID(catalog.System_Account))
+	}, viewMetadataLifecycleWriterOptions())
 }
 
 const viewMetadataRevalidationSeedComplete = uint32(^uint32(0))
@@ -299,7 +307,7 @@ func StartViewMetadataRevalidation(ctx context.Context, sqlExecutor executor.SQL
 		}
 		result.Close()
 		return nil
-	}, executor.Options{}.WithAccountID(catalog.System_Account))
+	}, viewMetadataLifecycleWriterOptions())
 }
 
 // RunViewMetadataRecovery performs one bounded local-CN recovery tick. It is
@@ -344,7 +352,7 @@ func RunViewMetadataRecovery(
 		result, err := sqlExecutor.Exec(callCtx, fmt.Sprintf(
 			"select mo_ctl('CN','RefreshViewMetadata','%s')",
 			sqlquote.EscapeString(string(command))),
-			executor.Options{}.WithAccountID(catalog.System_Account))
+			viewMetadataLifecycleWriterOptions())
 		if err != nil {
 			failure := classifyViewRefreshFailure(err)
 			if !discover && failure.code == viewRefreshFailureTxnConflict {
@@ -530,6 +538,16 @@ func beginViewMetadataRevalidation(proc *process.Process) (int, error) {
 func lockViewMetadataLifecycleGate(proc *process.Process) error {
 	if !viewMetadataRefreshEnabled(proc.GetService()) {
 		return nil
+	}
+	txnOp := proc.GetTxnOperator()
+	if txnOp == nil {
+		return moerr.NewInternalError(proc.Ctx,
+			"view metadata lifecycle writer requires a pessimistic RC transaction")
+	}
+	txnMeta := txnOp.Txn()
+	if !txnMeta.IsPessimistic() || !txnMeta.IsRCIsolation() {
+		return moerr.NewInternalError(proc.Ctx,
+			"view metadata lifecycle writer requires a pessimistic RC transaction")
 	}
 	v, ok := moruntime.ServiceRuntime(proc.GetService()).GetGlobalVariables(moruntime.InternalSQLExecutor)
 	if !ok {

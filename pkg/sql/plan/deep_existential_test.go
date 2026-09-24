@@ -139,7 +139,7 @@ func TestDeepExistentialOldPathAdmissionAllocations(t *testing.T) {
 		t.Run(fmt.Sprint(depth), func(t *testing.T) {
 			ctx := &BindContext{existentialBlock: 1}
 			subCtx := &BindContext{existentialBlock: 2, subqueryNestingDepth: depth}
-			b := &QueryBuilder{qry: &plan.Query{Nodes: []*plan.Node{{NodeType: plan.Node_TABLE_SCAN, BindingTags: []int32{10}, FilterList: []*plan.Expr{constTrue}}}}, ctxByNode: []*BindContext{subCtx}}
+			b := &QueryBuilder{qry: &plan.Query{Nodes: []*plan.Node{{NodeType: plan.Node_TABLE_SCAN, BindingTags: []int32{10}, FilterList: []*plan.Expr{newSubqueryBoolConst(true)}}}}, ctxByNode: []*BindContext{subCtx}}
 			sub := &plan.SubqueryRef{NodeId: 0, Typ: plan.SubqueryRef_EXISTS}
 			allocations := testing.AllocsPerRun(1000, func() {
 				_, _, handled, err := b.tryDeepExistential(0, sub, ctx, existentialFilterTrue)
@@ -157,8 +157,8 @@ func TestDeepExistentialOldPathAdmissionAllocations(t *testing.T) {
 func TestDeepExistentialFilterPreservesMemo(t *testing.T) {
 	// Memo lookup must precede any subquery-node access, even for a root WHERE
 	// conjunct. Its node ID need not remain reachable after prior flattening.
-	ctx := &BindContext{flattenedVolatileExprs: map[int32]*plan.Expr{-1: constTrue}}
-	e := &plan.Expr{AuxId: -1, Typ: constTrue.Typ, Expr: &plan.Expr_Sub{Sub: &plan.SubqueryRef{NodeId: 999, Typ: plan.SubqueryRef_EXISTS}}}
+	ctx := &BindContext{flattenedVolatileExprs: map[int32]*plan.Expr{-1: newSubqueryBoolConst(true)}}
+	e := &plan.Expr{AuxId: -1, Typ: newSubqueryBoolConst(true).Typ, Expr: &plan.Expr_Sub{Sub: &plan.SubqueryRef{NodeId: 999, Typ: plan.SubqueryRef_EXISTS}}}
 	b := &QueryBuilder{}
 	id, result, err := b.flattenFilterSubqueries(7, e, ctx)
 	require.NoError(t, err)
@@ -167,7 +167,7 @@ func TestDeepExistentialFilterPreservesMemo(t *testing.T) {
 	require.True(t, result.GetLit().GetBval())
 	// A shallow NOT(EXISTS) has no pending owner. Keep the legacy child
 	// wrapper, including a memo hit whose original subquery is unreachable.
-	not := &plan.Expr{Typ: constTrue.Typ, Expr: &plan.Expr_F{F: &plan.Function{
+	not := &plan.Expr{Typ: newSubqueryBoolConst(true).Typ, Expr: &plan.Expr_F{F: &plan.Function{
 		Func: &plan.ObjectRef{ObjName: "not"}, Args: []*plan.Expr{e},
 	}}}
 	id, result, err = b.flattenFilterSubqueries(7, not, ctx)
@@ -182,7 +182,7 @@ func TestDeepExistentialGateProjectionSurvivesCopy(t *testing.T) {
 	b := NewQueryBuilder(plan.Query_SELECT, NewMockCompilerContext(false), false, false)
 	ctx := NewBindContext(b, nil)
 	scan := b.appendNode(&plan.Node{NodeType: plan.Node_VALUE_SCAN, RowsetData: &plan.RowsetData{RowCount: 1}}, ctx)
-	project := b.appendNode(&plan.Node{NodeType: plan.Node_PROJECT, Children: []int32{scan}, BindingTags: []int32{b.genNewBindTag()}, ProjectList: []*plan.Expr{constTrue}}, ctx)
+	project := b.appendNode(&plan.Node{NodeType: plan.Node_PROJECT, Children: []int32{scan}, BindingTags: []int32{b.genNewBindTag()}, ProjectList: []*plan.Expr{newSubqueryBoolConst(true)}}, ctx)
 	b.existentialGateProjects = map[int32]struct{}{project: {}}
 	copy := b.copyNode(ctx, project)
 	_, protected := b.existentialGateProjects[copy]

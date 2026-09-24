@@ -54,7 +54,7 @@ func TestDataBranchDeletePrivateOwnerForcesPessimisticRC(t *testing.T) {
 	ses := newTestSession(t, ctrl)
 	t.Cleanup(ses.Close)
 	txnOp := mock_frontend.NewMockTxnOperator(ctrl)
-	txnOp.EXPECT().TxnOptions().Return(txn.TxnOptions{}).Times(4)
+	txnOp.EXPECT().TxnOptions().Return(txn.TxnOptions{}).Times(6)
 	ses.proc.Base.TxnOperator = txnOp
 
 	beginErr := errors.New("begin failed")
@@ -76,8 +76,41 @@ func TestDataBranchDeletePrivateOwnerForcesPessimisticRC(t *testing.T) {
 	require.ErrorIs(t, err, beginErr)
 	err = dataBranchDeleteDatabase(execCtx, ses, &tree.DataBranchDeleteDatabase{})
 	require.ErrorIs(t, err, beginErr)
-	require.Equal(t, []bool{true, true}, forced)
-	require.Equal(t, 2, backExec.closeCalls)
+	err = diffMergeAgency(ses, execCtx, &tree.DataBranchDiff{})
+	require.ErrorIs(t, err, beginErr)
+	require.Equal(t, []bool{true, true, true}, forced)
+	require.Equal(t, 3, backExec.closeCalls)
+}
+
+func TestExplicitCloneInstallsLifecycleValidationOnlyAfterSuccess(t *testing.T) {
+	ctrl := gomock.NewController(t)
+	ses := newTestSession(t, ctrl)
+	t.Cleanup(ses.Close)
+
+	txnOp := mock_frontend.NewMockTxnOperator(ctrl)
+	txnOp.EXPECT().TxnOptions().Return(txn.TxnOptions{ByBegin: true}).AnyTimes()
+	txnOp.EXPECT().SetFootPrints(gomock.Any(), gomock.Any()).AnyTimes()
+	ses.proc.Base.TxnOperator = txnOp
+	handler := ses.GetTxnHandler()
+	handler.txnOp = txnOp
+	handler.txnCtx = context.Background()
+
+	bh, cleanup, err := getCloneMutationExecutor(context.Background(), ses, false)
+	require.NoError(t, err)
+	require.NotNil(t, bh)
+	require.NoError(t, cleanup(nil))
+	require.True(t, handler.lineageOwnerLifecycleValidation)
+
+	handler.mu.Lock()
+	handler.lineageOwnerLifecycleValidation = false
+	handler.mu.Unlock()
+
+	bh, cleanup, err = getCloneMutationExecutor(context.Background(), ses, false)
+	require.NoError(t, err)
+	require.NotNil(t, bh)
+	cloneErr := errors.New("clone failed")
+	require.ErrorIs(t, cleanup(cloneErr), cloneErr)
+	require.False(t, handler.lineageOwnerLifecycleValidation)
 }
 
 func TestDataBranchColumnClassification(t *testing.T) {

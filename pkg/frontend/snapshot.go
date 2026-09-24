@@ -608,7 +608,7 @@ func doCheckCreateSnapshotPriv(ctx context.Context, currentAccount string, stmt 
 func doDropSnapshot(ctx context.Context, ses *Session, stmt *tree.DropSnapShot) (err error) {
 	var sql string
 	var snapshotExist bool
-	bh := ses.GetBackgroundExec(ctx)
+	bh := ses.GetBackgroundExec(ctx, &BackgroundExecOption{forcePessimisticRC: true})
 	defer bh.Close()
 
 	// check create stage priv
@@ -3549,11 +3549,48 @@ func lockViewMetadataLifecycle(ctx context.Context, bh BackgroundExec) error {
 	})
 }
 
-func lockSnapshotLifecycle(ctx context.Context, bh BackgroundExec) error {
-	// The SNAPSHOT gate is a global catalog row and must be resolved in sys.
-	// Keep the caller's transaction; only account resolution changes for this SQL.
+func lockViewMetadataLifecycleShared(
+	ctx context.Context,
+	ses *Session,
+	bh BackgroundExec,
+) error {
+	// Account creation observes the global lifecycle state but writes only its
+	// own marker, so it shares both gates with other account creations. Acquire
+	// the physical rows locally before running the verification SELECTs: an old
+	// remote pipeline may drop new statement metadata, but it can only re-enter
+	// this transaction's already admitted generation.
+	if err := acquireAccountLifecycleSharedGates(
+		ctx,
+		ses,
+		bh,
+		accountLifecycleSnapshotGate,
+		accountLifecycleViewGate,
+	); err != nil {
+		return err
+	}
 	systemCtx := defines.AttachAccountId(ctx, catalog.System_Account)
-	return bh.Exec(systemCtx, catalog.SnapshotLifecycleGateSQL)
+	return catalog.LockViewMetadataLifecycleShared(func(sql string) error {
+		return bh.Exec(systemCtx, sql)
+	})
+}
+
+func lockSnapshotLifecycleShared(
+	ctx context.Context,
+	ses *Session,
+	bh BackgroundExec,
+) error {
+	// The SNAPSHOT gate is a global catalog row and must be resolved in sys.
+	// Perform owner-atomic writer-fair admission before the SQL pipeline.
+	if err := acquireAccountLifecycleSharedGates(
+		ctx,
+		ses,
+		bh,
+		accountLifecycleSnapshotGate,
+	); err != nil {
+		return err
+	}
+	systemCtx := defines.AttachAccountId(ctx, catalog.System_Account)
+	return bh.Exec(systemCtx, catalog.SnapshotLifecycleSharedGateSQL)
 }
 
 func prepareViewMetadataMutation(

@@ -216,6 +216,51 @@ func TestSkipCompletedWaiters(t *testing.T) {
 	})
 }
 
+func TestNotifyLeadingSharedDoesNotPassInFlightReader(t *testing.T) {
+	reuse.RunReuseTests(func() {
+		q := newWaiterQueue()
+		reader := acquireWaiter(pb.WaitTxn{TxnID: []byte("reader")}, "test", nil)
+		reader.lockWaitMode = pb.LockMode_Shared
+		reader.setStatus(completed)
+		writer := acquireWaiter(pb.WaitTxn{TxnID: []byte("writer")}, "test", nil)
+		writer.lockWaitMode = pb.LockMode_Exclusive
+		writer.setStatus(blocking)
+		q.put(reader, writer)
+
+		q.notifyLeadingShared(notifyValue{})
+		require.Equal(t, 2, q.size(),
+			"a reader between notification and retry must retain its FIFO position")
+		require.Equal(t, blocking, writer.getStatus(),
+			"Shared cohort notification must never advance into an Exclusive waiter")
+
+		removed, _ := q.remove(reader)
+		require.True(t, removed)
+		removed, _ = q.remove(writer)
+		require.True(t, removed)
+		reader.close("test", nil)
+		writer.close("test", nil)
+	})
+}
+
+func TestNotifyLeadingSharedSkipsMergeWaiter(t *testing.T) {
+	reuse.RunReuseTests(func() {
+		q := newWaiterQueue()
+		merge := acquireWaiter(pb.WaitTxn{TxnID: []byte("merge")}, "test", nil)
+		merge.lockWaitMode = pb.LockMode_Shared
+		merge.notifyOnSharedHolderChange = true
+		merge.setStatus(blocking)
+		q.put(merge)
+
+		q.notifyLeadingShared(notifyValue{})
+		require.Equal(t, blocking, merge.getStatus(),
+			"range merge waiters wake only when an existing Shared holder leaves")
+
+		removed, _ := q.remove(merge)
+		require.True(t, removed)
+		merge.close("test", nil)
+	})
+}
+
 func TestCanGetCommitTSInWaitQueue(t *testing.T) {
 	reuse.RunReuseTests(func() {
 		q := newWaiterQueue()

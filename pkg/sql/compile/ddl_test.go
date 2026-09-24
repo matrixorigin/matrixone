@@ -153,6 +153,21 @@ func newMongoDBMappingTestCompile(
 		mock_frontend.NewMockDatabase(ctrl), mock_frontend.NewMockRelation(ctrl)
 }
 
+func installDDLLineageLifecycleTestExecutor(t *testing.T, proc *process.Process) {
+	t.Helper()
+	rt := moruntime.ServiceRuntime(proc.GetService())
+	previous, hadPrevious := rt.GetGlobalVariables(moruntime.InternalSQLExecutor)
+	exec := &mongoDBMappingTestExecutor{}
+	rt.SetGlobalVariables(moruntime.InternalSQLExecutor, exec)
+	t.Cleanup(func() {
+		if hadPrevious {
+			rt.SetGlobalVariables(moruntime.InternalSQLExecutor, previous)
+		} else {
+			rt.CompareAndDeleteGlobalVariables(moruntime.InternalSQLExecutor, exec)
+		}
+	})
+}
+
 func TestRequireCheckRenameProtocol(t *testing.T) {
 	proc := testutil.NewProcess(t)
 	c := &Compile{proc: proc}
@@ -825,6 +840,14 @@ func TestTableScopedDDLDatabaseEOBMapsToNoSuchTable(t *testing.T) {
 		proc := testutil.NewProcess(t)
 		proc.Base.SessionInfo.Buf = buffer.New()
 		proc.Ctx = defines.AttachAccountId(context.Background(), sysAccountId)
+		ctrl := gomock.NewController(t)
+		txnOp := mock_frontend.NewMockTxnOperator(ctrl)
+		txnOp.EXPECT().Txn().Return(txn.TxnMeta{
+			Mode: txn.TxnMode_Pessimistic, Isolation: txn.TxnIsolation_RC,
+		}).AnyTimes()
+		txnOp.EXPECT().GetWorkspace().Return(&Ws{}).AnyTimes()
+		proc.Base.TxnOperator = txnOp
+		installDDLLineageLifecycleTestExecutor(t, proc)
 		return NewCompile("test", "db1", sql, "", "", eng, proc, nil, false, nil, time.Now())
 	}
 
@@ -2762,8 +2785,9 @@ func TestDropDatabaseSkipsDeletedRelationsWhenCollectingTables(t *testing.T) {
 	ctx := defines.AttachAccountId(context.Background(), sysAccountId)
 	proc.Ctx = ctx
 	proc.ReplaceTopCtx(ctx)
+	installDDLLineageLifecycleTestExecutor(t, proc)
 
-	txnMeta := txn.TxnMeta{}
+	txnMeta := txn.TxnMeta{Mode: txn.TxnMode_Pessimistic, Isolation: txn.TxnIsolation_RC}
 	txnOp := mock_frontend.NewMockTxnOperator(ctrl)
 	txnOp.EXPECT().Txn().Return(txnMeta).AnyTimes()
 	txnOp.EXPECT().SnapshotTS().Return(timestamp.Timestamp{}).AnyTimes()
@@ -2855,8 +2879,9 @@ func TestDropDatabaseSkipsForeignKeyCleanupWhenIgnored(t *testing.T) {
 	ctx = context.WithValue(ctx, defines.IgnoreForeignKey{}, true)
 	proc.Ctx = ctx
 	proc.ReplaceTopCtx(ctx)
+	installDDLLineageLifecycleTestExecutor(t, proc)
 
-	txnMeta := txn.TxnMeta{}
+	txnMeta := txn.TxnMeta{Mode: txn.TxnMode_Pessimistic, Isolation: txn.TxnIsolation_RC}
 	txnOp := mock_frontend.NewMockTxnOperator(ctrl)
 	txnOp.EXPECT().Txn().Return(txnMeta).AnyTimes()
 	txnOp.EXPECT().SnapshotTS().Return(timestamp.Timestamp{}).AnyTimes()
@@ -2906,8 +2931,9 @@ func TestDropDatabaseReturnsInternalRelationErrorWhenCollectingTables(t *testing
 	ctx := defines.AttachAccountId(context.Background(), sysAccountId)
 	proc.Ctx = ctx
 	proc.ReplaceTopCtx(ctx)
+	installDDLLineageLifecycleTestExecutor(t, proc)
 
-	txnMeta := txn.TxnMeta{}
+	txnMeta := txn.TxnMeta{Mode: txn.TxnMode_Pessimistic, Isolation: txn.TxnIsolation_RC}
 	txnOp := mock_frontend.NewMockTxnOperator(ctrl)
 	txnOp.EXPECT().Txn().Return(txnMeta).AnyTimes()
 	txnOp.EXPECT().SnapshotTS().Return(timestamp.Timestamp{}).AnyTimes()
@@ -3139,8 +3165,9 @@ func TestDropTableSingleSkipsMissingFkTables(t *testing.T) {
 	ctx := defines.AttachAccountId(context.Background(), sysAccountId)
 	proc.Ctx = ctx
 	proc.ReplaceTopCtx(ctx)
+	installDDLLineageLifecycleTestExecutor(t, proc)
 
-	txnMeta := txn.TxnMeta{}
+	txnMeta := txn.TxnMeta{Mode: txn.TxnMode_Pessimistic, Isolation: txn.TxnIsolation_RC}
 	txnOp := mock_frontend.NewMockTxnOperator(ctrl)
 	txnOp.EXPECT().Txn().Return(txnMeta).AnyTimes()
 	txnOp.EXPECT().GetWorkspace().Return(&Ws{}).AnyTimes()

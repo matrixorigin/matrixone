@@ -47,6 +47,14 @@ func TestCanPullupDeepCorrelatedPredicates(t *testing.T) {
 	}
 }
 
+func TestSubqueryBoolConstIsQueryLocal(t *testing.T) {
+	first := newSubqueryBoolConst(true)
+	second := newSubqueryBoolConst(true)
+	require.NotSame(t, first, second)
+	first.Ndv = 7
+	require.Zero(t, second.Ndv)
+}
+
 func TestHasInnerColumnInDeepCorrelatedFilters(t *testing.T) {
 	const (
 		subID    int32 = 0
@@ -2136,7 +2144,7 @@ func TestPrepareCorrelatedScalarAggregatePostJoinProjection(t *testing.T) {
 		aggregates:   aggregates,
 	}
 
-	postJoinProjection, ok, err := builder.prepareCorrelatedScalarAggregatePostJoinProjection(1, ctx, []*plan.Expr{constTrue})
+	postJoinProjection, ok, err := builder.prepareCorrelatedScalarAggregatePostJoinProjection(1, ctx, []*plan.Expr{newSubqueryBoolConst(true)})
 	require.NoError(t, err)
 	require.True(t, ok)
 	require.Len(t, builder.qry.Nodes[1].ProjectList, len(aggregates)+1)
@@ -2306,7 +2314,7 @@ func TestPrepareCorrelatedScalarAggregatePostJoinProjectionRejectsUnsupportedSha
 			builder := NewQueryBuilder(plan.Query_SELECT, NewMockCompilerContext(true), false, true)
 			builder.qry.Nodes = nodes
 
-			postJoinProjection, ok, err := builder.prepareCorrelatedScalarAggregatePostJoinProjection(1, ctx, []*plan.Expr{constTrue})
+			postJoinProjection, ok, err := builder.prepareCorrelatedScalarAggregatePostJoinProjection(1, ctx, []*plan.Expr{newSubqueryBoolConst(true)})
 			if tt.wantErr {
 				require.Error(t, err)
 				return
@@ -2334,7 +2342,7 @@ func TestPrepareCorrelatedScalarAggregatePostJoinProjectionRejectsUnsupportedDir
 		results:      []*plan.Expr{GetColExpr(aggregate.Typ, 21, 0)},
 	}
 
-	postJoinProjection, ok, err := builder.prepareCorrelatedScalarAggregatePostJoinProjection(0, ctx, []*plan.Expr{constTrue})
+	postJoinProjection, ok, err := builder.prepareCorrelatedScalarAggregatePostJoinProjection(0, ctx, []*plan.Expr{newSubqueryBoolConst(true)})
 	require.Error(t, err)
 	require.False(t, ok)
 	require.Nil(t, postJoinProjection)
