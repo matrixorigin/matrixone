@@ -2402,6 +2402,19 @@ func TestCheckSysMoCatalogPitrResult(t *testing.T) {
 		assert.Equal(t, "d", unit)
 	})
 
+	t.Run("update needed with catalog tinyint length", func(t *testing.T) {
+		v1 := vector.NewVec(types.T_uint8.ToType())
+		_ = vector.AppendFixed(v1, uint8(5), false, mp)
+		v2 := vector.NewVec(types.T_varchar.ToType())
+		_ = vector.AppendBytes(v2, []byte("d"), false, mp)
+		needInsert, needUpdate, length, unit, err := CheckSysMoCatalogPitrResult(ctx, []*vector.Vector{v1, v2}, 10, "d")
+		assert.NoError(t, err)
+		assert.False(t, needInsert)
+		assert.True(t, needUpdate)
+		assert.Equal(t, uint64(10), length)
+		assert.Equal(t, "d", unit)
+	})
+
 	t.Run("no update needed", func(t *testing.T) {
 		v1 := vector.NewVec(types.T_uint64.ToType())
 		_ = vector.AppendFixed(v1, uint64(20), false, mp)
