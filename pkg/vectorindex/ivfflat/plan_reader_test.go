@@ -494,33 +494,61 @@ func TestScanEntriesPushesDistanceRangeToStorageTopK(t *testing.T) {
 }
 
 func TestScanEntriesFallsBackForUnsafeDistanceRanges(t *testing.T) {
-	makeRange := func(lower bool, bound float64) *plan.DistRange {
+	makeRange := func(lower, excl bool, bound float64) *plan.DistRange {
 		r := &plan.DistRange{}
+		bt := plan.BoundType_INCLUSIVE
+		if excl {
+			bt = plan.BoundType_EXCLUSIVE
+		}
 		if lower {
-			r.LowerBoundType = plan.BoundType_INCLUSIVE
+			r.LowerBoundType = bt
 			r.LowerBound = ivfFloat64Expr(bound)
 		} else {
-			r.UpperBoundType = plan.BoundType_INCLUSIVE
+			r.UpperBoundType = bt
 			r.UpperBound = ivfFloat64Expr(bound)
 		}
 		return r
 	}
+	// exposedL2 is the entry's distance in the float32 domain the post-filter compares in:
+	// float32(sqrt(rawSquared / QuantMul^2)), QuantMul=255.
+	exposedL2 := func(raw int) float64 { return float64(float32(math.Sqrt(float64(raw) / (255.0 * 255.0)))) }
 
 	for _, test := range []struct {
-		name     string
-		lower    bool
-		raw      int
-		entry    []int8
-		bound    float64
-		wantDist float64
+		name      string
+		lower     bool
+		excl      bool
+		raw       int
+		entry     []int8
+		bound     float64
+		wantDist  float64
+		wantEmpty bool
 	}{
 		{
+			// #29040 blocker: exclusive upper bound one f64 ULP ABOVE the entry's exposed distance.
+			// `exposed < bound` is true, so the row must be KEPT. The previous code rounded the bound
+			// into float32 -- which rounds back DOWN to the exposed distance -- making `exposed < exposed`
+			// false and dropping the row (rowCount 0 instead of 1). Keeping the raw f64 bound fixes it.
+			name: "exclusive upper one ULP above exposed keeps row", entry: []int8{7, 2, 2}, raw: 57, excl: true,
+			bound: math.Nextafter(exposedL2(57), math.Inf(1)), wantDist: 57,
+		},
+		{
+			// upper bound sqrt(57)/255 (raw f64). The entry's exposed distance is
+			// float32(sqrt(57/255^2)) = 0.029607193544507027, just BELOW the bound
+			// 0.029607193863806863, so `<= bound` keeps it -- matching the scalar l2_distance for the
+			// dequantized vector. The post-filter compares the f32 distance against the RAW f64 bound;
+			// it must NOT round the bound (#29040).
 			name: "quantized upper rounding boundary", entry: []int8{7, 2, 2}, raw: 57,
 			bound: math.Sqrt(57.0 / (255.0 * 255.0)), wantDist: 57,
 		},
 		{
+			// lower bound sqrt(11)/255 (raw f64). The entry's exposed distance
+			// float32(sqrt(11/255^2)) = 0.013006371445953846 is just BELOW that bound
+			// (0.01300637172688392), so `>= bound` is FALSE and the row is dropped -- exactly what the
+			// scalar l2_distance predicate does for the dequantized vector. The previous bound-rounding
+			// wrongly rounded the bound down to the entry and kept the row, diverging from the scalar
+			// (#29040).
 			name: "quantized lower rounding boundary", lower: true, entry: []int8{3, 1, 1}, raw: 11,
-			bound: math.Sqrt(11.0 / (255.0 * 255.0)), wantDist: 11,
+			bound: math.Sqrt(11.0 / (255.0 * 255.0)), wantEmpty: true,
 		},
 	} {
 		t.Run(test.name, func(t *testing.T) {
@@ -550,7 +578,7 @@ func TestScanEntriesFallsBackForUnsafeDistanceRanges(t *testing.T) {
 			sqlproc := sqlexec.NewSqlProcess(proc)
 			sqlproc.RelationScanner = scanner
 			sqlproc.IndexReaderParam = &plan.IndexReaderParam{
-				DistRange: makeRange(test.lower, test.bound),
+				DistRange: makeRange(test.lower, test.excl, test.bound),
 			}
 			idxcfg := vectorindex.IndexConfig{}
 			idxcfg.Ivfflat.Metric = uint16(metric.Metric_L2sqDistance)
@@ -563,6 +591,11 @@ func TestScanEntriesFallsBackForUnsafeDistanceRanges(t *testing.T) {
 			require.NoError(t, err)
 			defer res.Close()
 			require.Len(t, res.Batches, 1)
+			if test.wantEmpty {
+				require.Zero(t, res.Batches[0].RowCount(),
+					"exposed f32 distance below the raw f64 lower bound must be dropped, matching the scalar predicate")
+				return
+			}
 			require.Equal(t, []int64{int64(test.raw)},
 				vector.MustFixedColWithTypeCheck[int64](res.Batches[0].Vecs[0]))
 			require.Equal(t, []float64{test.wantDist},
