@@ -645,6 +645,18 @@ func DatetimeOrderKey(dt Datetime) uint64 {
 		return 0
 	}
 	dateKey := DateOrderKey(dt.ToDate())
+	year, month, day, _ := dt.ToDate().Calendar(true)
+	if !dt.IsTaggedInvalid() {
+		if dateKey&dateOrderRawMarker != 0 || !ValidDate(year, month, day) {
+			return dateOrderRawMarker | uint64(dt)
+		}
+		canonical := DatetimeFromClock(year, month, day, uint8(dt.Hour()), uint8(dt.Minute()), uint8(dt.Sec()), uint32(dt.MicroSec()))
+		if canonical != dt {
+			// Preserve arbitrary raw values used by in-memory callers while
+			// keeping the SQL calendar key space ordered and versioned.
+			return dateOrderRawMarker | uint64(dt)
+		}
+	}
 	clockKey := (uint64(dt.Hour())*SecsPerHour+
 		uint64(dt.Minute())*SecsPerMinute+uint64(dt.Sec()))*MicroSecsPerSec +
 		uint64(dt.MicroSec())
@@ -656,6 +668,9 @@ func DatetimeOrderKey(dt Datetime) uint64 {
 func DatetimeFromOrderKey(key uint64) Datetime {
 	if key == 0 {
 		return ZeroDatetime
+	}
+	if key&dateOrderRawMarker != 0 {
+		return Datetime(key &^ dateOrderRawMarker)
 	}
 	dateKey := key / uint64(microSecsPerDay)
 	clockKey := key % uint64(microSecsPerDay)

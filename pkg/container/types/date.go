@@ -74,6 +74,7 @@ const (
 
 	dateOrderMonthStride = 32
 	dateOrderYearStride  = 13 * dateOrderMonthStride
+	dateOrderRawMarker   = uint64(1) << 63
 )
 
 type TimeType int32
@@ -471,6 +472,12 @@ func DateOrderKey(d Date) uint64 {
 		return 0
 	}
 	year, month, day, _ := d.Calendar(true)
+	if !d.IsTaggedInvalid() && (!ValidDate(year, month, day) || DateFromCalendar(year, month, day) != d) {
+		// Packer is also used by in-memory branch/hash structures that may carry
+		// an arbitrary raw Date scalar. Preserve that historical round trip in a
+		// reserved, non-SQL key range; real SQL dates use the calendar key below.
+		return dateOrderRawMarker | uint64(uint32(int32(d)))
+	}
 	return uint64(year)*dateOrderYearStride + uint64(month)*dateOrderMonthStride + uint64(day)
 }
 
@@ -478,6 +485,9 @@ func DateOrderKey(d Date) uint64 {
 func DateFromOrderKey(key uint64) Date {
 	if key == 0 {
 		return ZeroDate
+	}
+	if key&dateOrderRawMarker != 0 {
+		return Date(int32(key &^ dateOrderRawMarker))
 	}
 	year := int32(key / dateOrderYearStride)
 	month := uint8((key % dateOrderYearStride) / dateOrderMonthStride)
