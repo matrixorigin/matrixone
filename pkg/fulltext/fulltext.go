@@ -835,7 +835,8 @@ func ParsePatternInBooleanMode(pattern string, parser string) ([]*Pattern, error
 				// so it never reaches the !isspace branch that flushes a multi-rune final term on its
 				// last rune. Flush it here so a trailing single-rune OR term (text `a`, CJK `蕉`, or a
 				// bare `*`) is not silently dropped (#29288).
-				p, err := CreatePattern(string(runeSlice[offset:end+1]), parser)
+				term := string(runeSlice[offset : end+1])
+				p, err := CreatePattern(term, parser)
 				if err != nil {
 					return nil, err
 				}
