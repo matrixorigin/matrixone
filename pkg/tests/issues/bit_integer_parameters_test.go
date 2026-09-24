@@ -253,12 +253,12 @@ func testBitIntegerPreparedParameters(t *testing.T, ctx context.Context, db *sql
 		_, err = conn.ExecContext(ctx, `set @aggregate_value=1.5e0`)
 		require.NoError(t, err)
 		for _, tc := range []struct {
-			query, want, wantText string
+			query, want, wantText, wantSigned string
 		}{
-			{`select make_set((select max(?) from issue_25408_pagination.page),"a","b")`, "b", "a"},
-			{`select make_set((select min(?) from issue_25408_pagination.page),"a","b")`, "b", "a"},
-			{`select hex(char((select max(?) from issue_25408_pagination.page)))`, "02", "01"},
-			{`select export_set((select min(?) from issue_25408_pagination.page),"Y","N","",4)`, "NYNN", "YNNN"},
+			{`select make_set((select max(?) from issue_25408_pagination.page),"a","b")`, "b", "a", "b"},
+			{`select make_set((select min(?) from issue_25408_pagination.page),"a","b")`, "b", "a", "b"},
+			{`select hex(char((select max(?) from issue_25408_pagination.page)))`, "02", "01", "FFFFFFFE"},
+			{`select export_set((select min(?) from issue_25408_pagination.page),"Y","N","",4)`, "NYNN", "YNNN", "NYYY"},
 		} {
 			t.Run(tc.query, func(t *testing.T) {
 				_, err := conn.ExecContext(ctx, "prepare aggregate_source from '"+tc.query+"'")
@@ -274,9 +274,46 @@ func testBitIntegerPreparedParameters(t *testing.T, ctx context.Context, db *sql
 				require.NoError(t, err)
 				require.NoError(t, conn.QueryRowContext(ctx, "execute aggregate_source using @aggregate_value").Scan(&got))
 				require.Equal(t, tc.wantText, got)
+				_, err = conn.ExecContext(ctx, `set @aggregate_value=-2`)
+				require.NoError(t, err)
+				require.NoError(t, conn.QueryRowContext(ctx, "execute aggregate_source using @aggregate_value").Scan(&got))
+				require.Equal(t, tc.wantSigned, got)
+				_, err = conn.ExecContext(ctx, `set @aggregate_value=cast(9223372036854775808 as decimal(20,0))`)
+				require.NoError(t, err)
+				require.Error(t, conn.QueryRowContext(ctx, "execute aggregate_source using @aggregate_value").Scan(&got))
 				_, err = conn.ExecContext(ctx, `set @aggregate_value=1.5e0`)
 				require.NoError(t, err)
 			})
+		}
+	})
+	t.Run("SQL EXECUTE aggregate signed range", func(t *testing.T) {
+		conn, err := db.Conn(ctx)
+		require.NoError(t, err)
+		defer conn.Close()
+		_, err = conn.ExecContext(ctx, `prepare signed_aggregate from 'select make_set((select max(?) from issue_25408_pagination.page),"a","b")'`)
+		require.NoError(t, err)
+		defer func() {
+			_, err := conn.ExecContext(ctx, "deallocate prepare signed_aggregate")
+			require.NoError(t, err)
+		}()
+		for _, tc := range []struct {
+			source, want string
+			wantErr      bool
+		}{
+			{"-2", "b", false},
+			{"cast(9223372036854775808 as decimal(20,0))", "", true},
+			{"cast(18446744073709551615 as unsigned)", "a,b", false},
+		} {
+			_, err = conn.ExecContext(ctx, "set @signed_aggregate="+tc.source)
+			require.NoError(t, err)
+			var got string
+			err = conn.QueryRowContext(ctx, "execute signed_aggregate using @signed_aggregate").Scan(&got)
+			if tc.wantErr {
+				require.Error(t, err)
+				continue
+			}
+			require.NoError(t, err)
+			require.Equal(t, tc.want, got)
 		}
 	})
 	t.Run("SQL EXECUTE IFNULL grouped subquery common value", func(t *testing.T) {
@@ -298,6 +335,10 @@ func testBitIntegerPreparedParameters(t *testing.T, ctx context.Context, db *sql
 		require.NoError(t, err)
 		require.NoError(t, conn.QueryRowContext(ctx, "execute grouped_ifnull using @grouped_value").Scan(&got))
 		require.Equal(t, "01", got)
+		_, err = conn.ExecContext(ctx, `set @grouped_value=-2`)
+		require.NoError(t, err)
+		require.NoError(t, conn.QueryRowContext(ctx, "execute grouped_ifnull using @grouped_value").Scan(&got))
+		require.Equal(t, "FFFFFFFE", got)
 	})
 	t.Run("COM_STMT numeric and text coalesce", func(t *testing.T) {
 		conn, err := db.Conn(ctx)
@@ -408,5 +449,17 @@ func testBitIntegerPreparedParameters(t *testing.T, ctx context.Context, db *sql
 		require.NoError(t, ifnullStmt.QueryRowContext(ctx, "placeholder").Scan(&got))
 		require.True(t, captured.wasRewritten())
 		require.Equal(t, "2", got)
+
+		aggregateStmt, err := rawDB.PrepareContext(ctx,
+			`select make_set((select max(?) from issue_25408_pagination.page),"a","b")`)
+		require.NoError(t, err)
+		defer aggregateStmt.Close()
+		require.NoError(t, aggregateStmt.QueryRowContext(ctx, int64(-2)).Scan(&got))
+		require.Equal(t, "b", got)
+		decimal := "9223372036854775808"
+		captured.rewriteNext(defines.MYSQL_TYPE_NEWDECIMAL, append([]byte{byte(len(decimal))}, decimal...))
+		err = aggregateStmt.QueryRowContext(ctx, "placeholder").Scan(&got)
+		require.True(t, captured.wasRewritten())
+		require.Error(t, err)
 	})
 }

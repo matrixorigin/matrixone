@@ -120,17 +120,31 @@ func TestPreparedAggregateIntegerSourceDomain(t *testing.T) {
 		`prepare aggregate_source from 'select make_set((select max(?)),"a","b")'`)
 	require.NoError(t, err)
 	original := prepared.GetDcl().GetPrepare().Plan
-	bound, _, err := FillValuesOfParamsInPlanWithSpecialization(context.Background(), original, []any{
-		ParamValue{Value: float64(1.5), SourceType: types.T_float64.ToType(), HasSourceType: true},
-	})
-	require.NoError(t, err)
-	consumer := findPlanFunctionExpr(bound, "make_set")
-	require.NotNil(t, consumer)
-	cast := consumer.GetF().Args[0].GetF()
-	require.NotNil(t, cast)
-	_, overload := planfunction.DecodeOverloadID(cast.Func.Obj)
-	require.NotEqual(t, planfunction.TextIntegerBitsCastOverload, overload)
-	require.Equal(t, int32(types.T_float64), cast.Args[0].Typ.Id)
+	for _, tc := range []struct {
+		name   string
+		param  ParamValue
+		source types.T
+		target types.T
+	}{
+		{"real", ParamValue{Value: float64(1.5), SourceType: types.T_float64.ToType(), HasSourceType: true}, types.T_float64, types.T_int64},
+		{"signed", ParamValue{Value: int64(-2), SourceType: types.T_int64.ToType(), HasSourceType: true}, types.T_int64, types.T_int64},
+		{"decimal beyond signed", ParamValue{Value: "9223372036854775808", SourceType: types.New(types.T_decimal128, 20, 0), HasSourceType: true}, types.T_decimal128, types.T_int64},
+		{"unsigned", ParamValue{Value: uint64(^uint64(0)), SourceType: types.T_uint64.ToType(), HasSourceType: true}, types.T_uint64, types.T_uint64},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			bound, _, err := FillValuesOfParamsInPlanWithSpecialization(context.Background(), original, []any{tc.param})
+			require.NoError(t, err)
+			consumer := findPlanFunctionExpr(bound, "make_set")
+			require.NotNil(t, consumer)
+			arg := consumer.GetF().Args[0]
+			require.Equal(t, int32(tc.target), arg.Typ.Id)
+			if cast := arg.GetF(); cast != nil {
+				_, overload := planfunction.DecodeOverloadID(cast.Func.Obj)
+				require.NotEqual(t, planfunction.TextIntegerBitsCastOverload, overload)
+				require.Equal(t, int32(tc.source), cast.Args[0].Typ.Id)
+			}
+		})
+	}
 }
 
 func TestHexIfNullPreservesCommonNumericValue(t *testing.T) {

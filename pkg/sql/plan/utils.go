@@ -7393,7 +7393,8 @@ func refreshPreparedPlanProjectionExprType(
 			// A projected aggregate can change from provisional TEXT to a
 			// numeric domain after its producer has been specialized. CAST7
 			// is text-only; select the numeric integer conversion here.
-			rebound, err = appendIntegerArgument(ctx, rebindArgs[0], types.T(expr.Typ.Id), false)
+			target := function.IntegerBitSourceTarget(types.T(rebindArgs[0].Typ.Id), rebindArgs[0].GetLit().GetIsBin())
+			rebound, err = appendIntegerArgument(ctx, rebindArgs[0], target, false)
 		}
 		if rebound == nil && err == nil {
 			rebound, err = bindPreparedFuncExprImplByPlanExpr(ctx, expr, functionName, rebindArgs, nil)

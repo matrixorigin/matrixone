@@ -56,8 +56,8 @@ func integerParameterForPosition(name string, position int) (integerParameter, b
 }
 
 func (p integerParameter) sourceTarget(source types.T, binaryLiteral bool) (types.T, bool) {
-	if p.mode == integerBitPatternParameter && source.IsMySQLString() {
-		return types.T_uint64, true
+	if p.mode == integerBitPatternParameter {
+		return IntegerBitSourceTarget(source, binaryLiteral), true
 	}
 	if p.mode == numericOnlyIntegerParameter && !(source.IsInteger() || source.IsFloat() || source.IsDecimal() || source == types.T_bool || source == types.T_bit || source == types.T_year || source == types.T_enum) {
 		return 0, false
@@ -66,6 +66,16 @@ func (p integerParameter) sourceTarget(source types.T, binaryLiteral bool) (type
 		return types.T_uint64, true
 	}
 	return p.target, true
+}
+
+// IntegerBitSourceTarget selects the logical domain for a bit-pattern consumer.
+// A provisional text input cannot freeze an unsigned target when its source
+// later resolves to a signed numeric value.
+func IntegerBitSourceTarget(source types.T, binaryLiteral bool) types.T {
+	if source.IsMySQLString() || source.IsUnsignedInt() || source == types.T_bit || binaryLiteral {
+		return types.T_uint64
+	}
+	return types.T_int64
 }
 
 // IntegerArgumentSourceDependent identifies parameters whose real domain must

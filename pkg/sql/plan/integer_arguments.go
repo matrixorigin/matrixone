@@ -205,7 +205,8 @@ func (rule *ResetParamRefRule) rebindIntegerArgumentCast(expr *Expr) (*Expr, err
 		// CAST7 accepts only text. An aggregate can expose a provisional TEXT
 		// input at PREPARE and a numeric source at EXECUTE; choose the numeric
 		// integer conversion instead of retaining the text-only overload.
-		bound, err := appendIntegerArgument(rule.ctx, rewritten, types.T(expr.Typ.Id), false)
+		target := function.IntegerBitSourceTarget(types.T(rewritten.Typ.Id), rewritten.GetLit().GetIsBin())
+		bound, err := appendIntegerArgument(rule.ctx, rewritten, target, false)
 		if err == nil {
 			rule.specialized = true
 		}

@@ -22,6 +22,29 @@ import (
 	"github.com/stretchr/testify/require"
 )
 
+func TestIntegerBitSourceTargetFollowsRuntimeDomain(t *testing.T) {
+	for _, tc := range []struct {
+		source types.T
+		binary bool
+		want   types.T
+	}{
+		{types.T_int64, false, types.T_int64},
+		{types.T_decimal128, false, types.T_int64},
+		{types.T_float64, false, types.T_int64},
+		{types.T_uint64, false, types.T_uint64},
+		{types.T_bit, false, types.T_uint64},
+		{types.T_varchar, false, types.T_uint64},
+		{types.T_int64, true, types.T_uint64},
+	} {
+		require.Equal(t, tc.want, IntegerBitSourceTarget(tc.source, tc.binary))
+		for _, name := range []string{"char", "make_set", "export_set"} {
+			target, applies := IntegerArgumentTargetForSource(name, 0, tc.source, tc.binary)
+			require.True(t, applies)
+			require.Equal(t, tc.want, target)
+		}
+	}
+}
+
 func TestBitIntegerArgumentCanonicalBinding(t *testing.T) {
 	for _, name := range []string{"hex", "char", "make_set", "export_set"} {
 		for _, source := range []types.T{types.T_int8, types.T_int64, types.T_uint64, types.T_bit, types.T_enum, types.T_bool, types.T_decimal64, types.T_decimal128, types.T_decimal256, types.T_float32, types.T_float64, types.T_varchar} {
