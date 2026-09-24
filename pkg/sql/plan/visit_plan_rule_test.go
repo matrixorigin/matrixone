@@ -100,6 +100,35 @@ func TestHexPreparedArgumentUsesSQLExecuteSourceType(t *testing.T) {
 	require.Equal(t, int32(0), unchangedOverload, "execute-time rebinding must not mutate the prepared plan")
 }
 
+func TestHexPreparedCoalesceRebindsNumericSourceDomain(t *testing.T) {
+	for _, tc := range []struct {
+		name, sql, want string
+		param           ParamValue
+	}{
+		{"real", "select hex(coalesce(?, 2.5e0))", "2", ParamValue{Value: float64(1.5), SourceType: types.T_float64.ToType(), HasSourceType: true}},
+		{"null", "select hex(coalesce(?, 2.5e0))", "2", ParamValue{Value: nil, SourceType: types.T_text.ToType(), HasSourceType: true}},
+		{"negative integer", "select hex(coalesce(?, 2.5e0))", "FFFFFFFFFFFFFFFE", ParamValue{Value: int64(-2), SourceType: types.T_int64.ToType(), HasSourceType: true}},
+		{"text peer", "select hex(coalesce(?, \"peer\"))", "312E35", ParamValue{Value: float64(1.5), SourceType: types.T_float64.ToType(), HasSourceType: true}},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			prepared, err := runOneStmt(NewMockOptimizer(false), t, "prepare stmt_hex_coalesce from '"+tc.sql+"'")
+			require.NoError(t, err)
+			filled, _, err := FillValuesOfParamsInPlanWithSpecialization(context.Background(),
+				prepared.GetDcl().GetPrepare().Plan, []any{tc.param})
+			require.NoError(t, err)
+			hexExpr := findPlanFunctionExpr(filled, "hex")
+			require.NotNil(t, hexExpr)
+			proc := testutil.NewProcess(t)
+			executor, err := colexec.NewExpressionExecutor(proc, hexExpr)
+			require.NoError(t, err)
+			defer executor.Free()
+			out, err := executor.Eval(proc, []*batch.Batch{batch.EmptyForConstFoldBatch}, nil)
+			require.NoError(t, err)
+			require.Equal(t, tc.want, string(out.GetBytesAt(0)))
+		})
+	}
+}
+
 func TestInetNtoaPreparedArgumentUsesSQLExecuteSourceType(t *testing.T) {
 	ctx := context.Background()
 	prepared, err := runOneStmt(NewMockOptimizer(false), t,

@@ -157,6 +157,42 @@ func testBitIntegerPreparedParameters(t *testing.T, ctx context.Context, db *sql
 		require.NoError(t, conn.QueryRowContext(ctx, "execute hex_numeric_selector using @hex_selector_value").Scan(&got))
 		require.Equal(t, "312E35", got)
 	})
+	t.Run("COM_STMT numeric and text coalesce", func(t *testing.T) {
+		conn, err := db.Conn(ctx)
+		require.NoError(t, err)
+		defer conn.Close()
+		for _, tc := range []struct {
+			query string
+			cases []struct {
+				input any
+				want  string
+			}
+		}{
+			{`select hex(coalesce(?, 2.5e0))`, []struct {
+				input any
+				want  string
+			}{{float64(1.5), "2"}, {nil, "2"}, {int64(-2), "FFFFFFFFFFFFFFFE"}}},
+			{`select hex(coalesce(?, 'peer'))`, []struct {
+				input any
+				want  string
+			}{{float64(1.5), "312E35"}, {nil, "70656572"}}},
+			{`select hex(coalesce(?, binary 'fallback'))`, []struct {
+				input any
+				want  string
+			}{{"A", "41"}, {nil, "66616C6C6261636B"}}},
+		} {
+			t.Run(tc.query, func(t *testing.T) {
+				stmt, err := conn.PrepareContext(ctx, tc.query)
+				require.NoError(t, err)
+				defer stmt.Close()
+				for _, test := range tc.cases {
+					var got string
+					require.NoError(t, stmt.QueryRowContext(ctx, test.input).Scan(&got))
+					require.Equal(t, test.want, got)
+				}
+			})
+		}
+	})
 	t.Run("SQL execute binary coalesce", func(t *testing.T) {
 		conn, err := db.Conn(ctx)
 		require.NoError(t, err)

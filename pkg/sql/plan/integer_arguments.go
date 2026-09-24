@@ -495,6 +495,23 @@ func sourceDependentIntegerArgumentNeedsRebind(name string, position int, arg *E
 	if isIntegerSelector(stripIntegerSelectionReconciliation(arg)) {
 		return true
 	}
+	// Only a numeric peer makes COALESCE's PREPARE-time text domain
+	// provisional. A binary/text peer owns the string result, including its
+	// fixed-width padding, and must not be reconstructed here.
+	if fn := arg.GetF(); fn != nil && fn.Func != nil && fn.Func.ObjName == "coalesce" && preparedExprContainsParam(arg) {
+		for _, peer := range fn.Args {
+			if preparedExprContainsParam(peer) {
+				continue
+			}
+			if metadata := peer.GetPreparedNumeric(); metadata.GetProvisionalResultPeer() {
+				if types.T(metadata.GetProvisionalResultPeerTypeId()).ToType().IsNumeric() {
+					return true
+				}
+			} else if makeTypeByPlan2Expr(stripIntegerSelectionReconciliation(peer)).IsNumeric() {
+				return true
+			}
+		}
+	}
 	_, numeric := function.IntegerArgumentTargetForSource(name, position, types.T(arg.Typ.Id), false)
 	return numeric
 }
