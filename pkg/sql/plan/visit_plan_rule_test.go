@@ -100,6 +100,29 @@ func TestHexPreparedArgumentUsesSQLExecuteSourceType(t *testing.T) {
 	require.Equal(t, int32(0), unchangedOverload, "execute-time rebinding must not mutate the prepared plan")
 }
 
+func TestHexIfNullPreservesCommonNumericValue(t *testing.T) {
+	for _, tc := range []struct {
+		name, sql, want string
+	}{
+		{"ifnull", "select hex(ifnull(cast(2.5 as decimal(20,1)),1.5e0))", "2"},
+		{"case selector", "select hex(case when true then cast(2.5 as decimal(20,1)) else 1.5e0 end)", "3"},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			bound, err := runOneStmt(NewMockOptimizer(false), t, tc.sql)
+			require.NoError(t, err)
+			hexExpr := findPlanFunctionExpr(bound, "hex")
+			require.NotNil(t, hexExpr)
+			proc := testutil.NewProcess(t)
+			executor, err := colexec.NewExpressionExecutor(proc, hexExpr)
+			require.NoError(t, err)
+			defer executor.Free()
+			out, err := executor.Eval(proc, []*batch.Batch{batch.EmptyForConstFoldBatch}, nil)
+			require.NoError(t, err)
+			require.Equal(t, tc.want, string(out.GetBytesAt(0)))
+		})
+	}
+}
+
 func TestHexPreparedCoalesceRebindsNumericSourceDomain(t *testing.T) {
 	for _, tc := range []struct {
 		name, sql, want string

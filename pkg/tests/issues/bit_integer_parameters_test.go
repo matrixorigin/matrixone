@@ -157,6 +157,18 @@ func testBitIntegerPreparedParameters(t *testing.T, ctx context.Context, db *sql
 		require.NoError(t, conn.QueryRowContext(ctx, "execute hex_numeric_selector using @hex_selector_value").Scan(&got))
 		require.Equal(t, "312E35", got)
 	})
+	t.Run("IFNULL common value versus CASE source", func(t *testing.T) {
+		for _, tc := range []struct {
+			query, want string
+		}{
+			{`select hex(ifnull(cast(2.5 as decimal(20,1)),1.5e0))`, "2"},
+			{`select hex(case when true then cast(2.5 as decimal(20,1)) else 1.5e0 end)`, "3"},
+		} {
+			var got string
+			require.NoError(t, db.QueryRowContext(ctx, tc.query).Scan(&got))
+			require.Equal(t, tc.want, got, tc.query)
+		}
+	})
 	t.Run("COM_STMT numeric and text coalesce", func(t *testing.T) {
 		conn, err := db.Conn(ctx)
 		require.NoError(t, err)

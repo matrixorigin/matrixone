@@ -3770,6 +3770,17 @@ func (b *baseBinder) bindFuncExprImplByAstExpr(name string, astArgs []tree.Expr,
 					if err == nil {
 						expr, err = b.integerArgumentStorageSource(expr)
 					}
+					// IFNULL owns CASE's reconciled result. Unlike a user CASE,
+					// its branches must not be converted independently before
+					// the common value reaches this numeric consumer.
+					if err == nil {
+						if call, ok := unwrapParenExpr(arg).(*tree.FuncExpr); ok &&
+							numericAstFunctionName(call) == "ifnull" && !preparedExprContainsParam(expr) {
+							if target, applies := function.IntegerArgumentTargetForSource(name, idx, types.T(expr.Typ.Id), false); applies {
+								expr, err = appendIntegerArgument(b.GetContext(), expr, target, false)
+							}
+						}
+					}
 				}
 			} else {
 				expr, err = b.impl.BindExpr(arg, depth, false)
