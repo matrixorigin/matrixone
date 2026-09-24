@@ -189,10 +189,14 @@ func TestRemoteStreamExitRetriesFailedS3Cleanup(t *testing.T) {
 		colexecServer:                 server,
 		unpublishedS3CleanupWorkspace: workspace,
 	}
-	handlerErr := errors.New("remote insert failed after S3 spill")
+	handlerErr := moerr.NewDuplicateEntryNoCtx("value", "key")
 	err = receiver.finalizeUnpublishedS3Objects(handlerErr, lifecycle)
-	require.ErrorIs(t, err, handlerErr)
-	require.ErrorIs(t, err, deleteErr)
+	require.Same(t, handlerErr, err)
+	var rpcMessage pipeline.Message
+	rpcMessage.SetMoError(context.Background(), err)
+	decoded, ok := rpcMessage.TryToGetMoErr()
+	require.True(t, ok)
+	require.True(t, moerr.IsMoErrCode(decoded, moerr.ErrDuplicateEntry), "%v", decoded)
 	require.Equal(t, int32(1), workspace.calls.Load())
 	_, err = baseFS.StatFile(proc.Ctx, objectName)
 	require.NoError(t, err)

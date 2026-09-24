@@ -492,14 +492,7 @@ func retainRemoteS3Output(proc *process.Process, kind remoteS3Output, bat *batch
 	if err != nil {
 		return err
 	}
-	owner, err := colexec.NewUnpublishedS3ObjectOwner(fs, names...)
-	if err != nil {
-		return err
-	}
-	if !colexec.RetainUnpublishedS3ObjectOwner(proc, owner) {
-		return moerr.NewInternalErrorNoCtx("receiving transaction workspace cannot retain remote S3 object ownership")
-	}
-	return nil
+	return colexec.RetainReceivedUnpublishedS3ObjectNames(proc, fs, names...)
 }
 
 func remoteS3MetadataNames(bat *batch.Batch) ([]string, error) {

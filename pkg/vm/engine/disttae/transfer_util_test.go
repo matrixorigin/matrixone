@@ -149,20 +149,19 @@ func TestTransferFlowRetainsUnpublishedSinkerForCleanupRetry(t *testing.T) {
 	deleteErr := errors.New("injected transfer cleanup failure")
 	fs := &failOnceTransferDeleteFS{FileService: baseFS, failErr: deleteErr, failCount: 2}
 	flow, objectName := newTransferFlowWithPersistedObject(t, proc, fs)
-	flowBuffer := flow.buffer
-	sinker := flow.sinker
 	txn := &Transaction{}
 
 	err = txn.closeTransferFlow(proc.Ctx, flow, true)
 	require.ErrorIs(t, err, deleteErr)
-	require.Same(t, sinker, flow.sinker, "failed cleanup must retain the sinker")
-	require.Same(t, flowBuffer, flow.buffer, "the retained sinker shares the flow buffer")
+	require.Nil(t, flow.sinker, "failed cleanup must release the sinker")
+	require.Nil(t, flow.buffer, "failed cleanup must release the flow buffer")
+	require.Equal(t, []string{objectName}, flow.pendingNames)
 	require.Len(t, txn.unpublishedS3Cleanup, 1, "transaction must retain the failed cleanup owner")
 	_, err = baseFS.StatFile(proc.Ctx, objectName)
 	require.NoError(t, err, "the object must remain available for cleanup retry")
 	require.ErrorIs(t, txn.closeTransferFlow(proc.Ctx, flow, false), deleteErr,
 		"a later success-shaped callback must still retry the abort cleanup")
-	require.Same(t, sinker, flow.sinker)
+	require.Equal(t, []string{objectName}, flow.pendingNames)
 
 	require.NoError(t, txn.CleanupUnpublishedS3Objects(proc.Ctx))
 	require.Nil(t, flow.sinker)
@@ -186,6 +185,30 @@ func TestTransferFlowCleanupPreservesOriginalSQLError(t *testing.T) {
 	require.Same(t, originalErr, err)
 	require.Same(t, originalErr, moerr.ConvertGoError(proc.Ctx, err))
 	_, statErr := fs.StatFile(proc.Ctx, objectName)
+	require.True(t, moerr.IsMoErrCode(statErr, moerr.ErrFileNotFound), "%v", statErr)
+}
+
+func TestTransferFlowFailedCleanupPreservesOriginalSQLError(t *testing.T) {
+	proc := testutil.NewProc(t)
+	defer proc.Free()
+	baseFS, err := fileservice.Get[fileservice.FileService](
+		proc.Base.FileService, defines.SharedFileServiceName,
+	)
+	require.NoError(t, err)
+	deleteErr := errors.New("temporary delete failure")
+	fs := &failOnceTransferDeleteFS{FileService: baseFS, failErr: deleteErr, failCount: 1}
+	flow, objectName := newTransferFlowWithPersistedObject(t, proc, fs)
+	txn := &Transaction{}
+	originalErr := moerr.NewDuplicateEntryNoCtx("value", "key")
+
+	err = txn.closeTransferFlowWithError(proc.Ctx, flow, true, originalErr)
+	require.Same(t, originalErr, err)
+	require.Same(t, originalErr, moerr.ConvertGoError(proc.Ctx, err))
+	require.Len(t, txn.unpublishedS3Cleanup, 1)
+	_, statErr := baseFS.StatFile(proc.Ctx, objectName)
+	require.NoError(t, statErr)
+	require.NoError(t, txn.CleanupUnpublishedS3Objects(proc.Ctx))
+	_, statErr = baseFS.StatFile(proc.Ctx, objectName)
 	require.True(t, moerr.IsMoErrCode(statErr, moerr.ErrFileNotFound), "%v", statErr)
 }
 

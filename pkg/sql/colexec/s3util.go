@@ -52,11 +52,23 @@ const (
 type CNS3Writer struct {
 	sinker              *ioutil.Sinker
 	fs                  fileservice.FileService
+	serviceID           string
 	ownedPersistedNames []string
 	cleanupPending      bool
 	isTombstone         bool
 	blockInfoBat        *batch.Batch
 	memorySizeThreshold int
+}
+
+// PendingUnpublishedCleanup reports whether a failed writer still owns object
+// names that must be deleted. A reusable writer without debt must not enter a
+// transaction retry task.
+func (w *CNS3Writer) PendingUnpublishedCleanup() bool {
+	return w != nil && (w.cleanupPending || len(w.ownedPersistedNames) != 0)
+}
+
+func (w *CNS3Writer) ReadyForWrites() bool {
+	return w != nil && w.sinker != nil && !w.cleanupPending
 }
 
 // UnpublishedS3CleanupRetainer is implemented by workspaces that can own a
@@ -70,21 +82,50 @@ type UnpublishedS3CleanupRetainer interface {
 // retained after the writer's buffers are released, then either accept names
 // as workspace entries are appended or delete the remainder on abort.
 type UnpublishedS3ObjectOwner struct {
-	mu    sync.Mutex
-	fs    fileservice.FileService
-	names map[string]struct{}
+	mu        sync.Mutex
+	fs        fileservice.FileService
+	names     map[string]struct{}
+	admission *unpublishedS3Admission
+	charged   map[string]struct{}
 }
 
 func NewUnpublishedS3ObjectOwner(
 	fs fileservice.FileService,
 	names ...string,
 ) (*UnpublishedS3ObjectOwner, error) {
+	return newUnpublishedS3ObjectOwner(fs, nil, nil, names...)
+}
+
+// NewUnpublishedS3ObjectOwnerForService transfers names already charged by a
+// local CN sinker into a lightweight transaction owner.
+func NewUnpublishedS3ObjectOwnerForService(
+	serviceID string,
+	fs fileservice.FileService,
+	names ...string,
+) (*UnpublishedS3ObjectOwner, error) {
+	if serviceID == "" {
+		return NewUnpublishedS3ObjectOwner(fs, names...)
+	}
+	srv := GetServer(serviceID)
+	if srv == nil {
+		return nil, moerr.NewInvalidStateNoCtx("missing CN unpublished S3 admission service")
+	}
+	return newUnpublishedS3ObjectOwner(fs, srv.unpublishedS3Admission, names, names...)
+}
+
+func newUnpublishedS3ObjectOwner(
+	fs fileservice.FileService,
+	admission *unpublishedS3Admission,
+	charged []string,
+	names ...string,
+) (*UnpublishedS3ObjectOwner, error) {
 	if fs == nil {
 		return nil, moerr.NewInternalErrorNoCtx("missing file service for unpublished S3 object owner")
 	}
 	owner := &UnpublishedS3ObjectOwner{
-		fs:    fs,
-		names: make(map[string]struct{}, len(names)),
+		fs:        fs,
+		names:     make(map[string]struct{}, len(names)),
+		admission: admission,
 	}
 	for _, name := range names {
 		if name != "" {
@@ -93,6 +134,14 @@ func NewUnpublishedS3ObjectOwner(
 	}
 	if len(owner.names) == 0 {
 		return nil, nil
+	}
+	if admission != nil {
+		owner.charged = make(map[string]struct{}, len(charged))
+		for _, name := range charged {
+			if _, exists := owner.names[name]; exists {
+				owner.charged[name] = struct{}{}
+			}
+		}
 	}
 	return owner, nil
 }
@@ -112,13 +161,24 @@ func (owner *UnpublishedS3ObjectOwner) Accept(names ...string) {
 	defer owner.mu.Unlock()
 	for _, name := range names {
 		delete(owner.names, name)
+		owner.release(name)
 	}
 }
 
 func (owner *UnpublishedS3ObjectOwner) AcceptAll() {
 	owner.mu.Lock()
 	clear(owner.names)
+	for name := range owner.charged {
+		owner.release(name)
+	}
 	owner.mu.Unlock()
+}
+
+func (owner *UnpublishedS3ObjectOwner) release(name string) {
+	if _, charged := owner.charged[name]; charged {
+		owner.admission.release(name)
+		delete(owner.charged, name)
+	}
 }
 
 func (owner *UnpublishedS3ObjectOwner) Pending() bool {
@@ -141,6 +201,9 @@ func (owner *UnpublishedS3ObjectOwner) Cleanup(ctx context.Context) error {
 		return err
 	}
 	clear(owner.names)
+	for name := range owner.charged {
+		owner.release(name)
+	}
 	return nil
 }
 
@@ -164,6 +227,40 @@ func RetainUnpublishedS3ObjectOwner(
 	}
 	retainer.RetainUnpublishedS3ObjectOwner(owner)
 	return true
+}
+
+// RetainReceivedUnpublishedS3ObjectNames reserves coordinator capacity before
+// acknowledging a remote worker's ownership handoff. A failed retention rolls
+// back only newly reserved names; existing owners remain charged.
+func RetainReceivedUnpublishedS3ObjectNames(
+	proc *process.Process,
+	fs fileservice.FileService,
+	names ...string,
+) error {
+	if len(names) == 0 {
+		return nil
+	}
+	if proc == nil {
+		return moerr.NewInvalidStateNoCtx("missing process for remote S3 ownership")
+	}
+	srv := GetServer(proc.GetService())
+	if srv == nil {
+		return moerr.NewInvalidStateNoCtx("missing CN unpublished S3 admission service")
+	}
+	charged, err := srv.reserveUnpublishedS3Received(names)
+	if err != nil {
+		return err
+	}
+	owner, err := newUnpublishedS3ObjectOwner(fs, srv.unpublishedS3Admission, charged, names...)
+	if err == nil && !RetainUnpublishedS3ObjectOwner(proc, owner) {
+		err = moerr.NewInvalidStateNoCtx("receiving transaction workspace cannot retain remote S3 ownership")
+	}
+	if err != nil {
+		for _, name := range charged {
+			srv.unpublishedS3Admission.release(name)
+		}
+	}
+	return err
 }
 
 func AcceptUnpublishedS3ObjectNames(proc *process.Process, names ...string) {
@@ -227,6 +324,17 @@ func UnpublishedS3CleanupContext(ctx context.Context) (context.Context, context.
 	return context.WithDeadlineCause(base, deadline, moerr.CauseCleanUpUselessFiles)
 }
 
+// TerminalUnpublishedS3CleanupContext starts a bounded cleanup attempt after
+// Commit or Rollback even when the request deadline has already expired. A
+// pipeline teardown deadline, when present, is still shared by nested owners.
+func TerminalUnpublishedS3CleanupContext(ctx context.Context) (context.Context, context.CancelFunc) {
+	deadline := time.Now().Add(10 * time.Minute)
+	if sharedDeadline, ok := process.PipelineCleanupDeadline(ctx); ok && sharedDeadline.Before(deadline) {
+		deadline = sharedDeadline
+	}
+	return context.WithDeadlineCause(context.WithoutCancel(ctx), deadline, moerr.CauseCleanUpUselessFiles)
+}
+
 func (w *CNS3Writer) String() string {
 	buf := bytes.NewBuffer(nil)
 	buf.WriteString(fmt.Sprintf("Sinker: %s\n", w.sinker.String()))
@@ -286,6 +394,7 @@ func newCNS3TombstoneWriter(
 
 	writer := &CNS3Writer{
 		fs:          fs,
+		serviceID:   serviceID,
 		isTombstone: true,
 	}
 
@@ -297,6 +406,9 @@ func newCNS3TombstoneWriter(
 	opts = append(opts, ioutil.WithTailSizeCap(0))
 	if policy := chunkedColumnPolicyForService(serviceID); policy != nil {
 		opts = append(opts, ioutil.WithChunkedColumnPolicy(policy))
+	}
+	if serviceID != "" {
+		opts = append(opts, UnpublishedS3AdmissionOption(serviceID))
 	}
 
 	writer.sinker = ioutil.NewTombstoneSinker(
@@ -398,6 +510,40 @@ func NewCNS3DataWriterForService(
 	)
 }
 
+// UnpublishedS3AdmissionOption attaches the CN's pre-Sync object-name budget
+// to a direct sinker, such as tombstone transfer.
+func UnpublishedS3AdmissionOption(serviceID string) ioutil.SinkerOption {
+	return ioutil.WithObjectSyncAdmission(
+		func(name string) error {
+			return GetServer(serviceID).reserveUnpublishedS3Upload(name)
+		},
+		func(name string) {
+			if srv := GetServer(serviceID); srv != nil {
+				srv.unpublishedS3Admission.release(name)
+			}
+		},
+	)
+}
+
+// ReleaseUnpublishedS3Name retires a ticket after a detached transfer flow
+// successfully deletes its last unpublished name.
+func ReleaseUnpublishedS3Name(serviceID, name string) {
+	if srv := GetServer(serviceID); srv != nil {
+		srv.unpublishedS3Admission.release(name)
+	}
+}
+
+func (w *CNS3Writer) unpublishedS3Admission() (*unpublishedS3Admission, error) {
+	if w.serviceID == "" {
+		return nil, nil
+	}
+	srv := GetServer(w.serviceID)
+	if srv == nil {
+		return nil, moerr.NewInvalidStateNoCtx("missing CN unpublished S3 admission service")
+	}
+	return srv.unpublishedS3Admission, nil
+}
+
 func newCNS3DataWriter(
 	serviceID string,
 	mp *mpool.MPool,
@@ -410,6 +556,7 @@ func newCNS3DataWriter(
 
 	writer := new(CNS3Writer)
 	writer.fs = fs
+	writer.serviceID = serviceID
 
 	sequms, attrTypes, attrs, sortKeyIdx, isPrimaryKey := GetSequmsAttrsSortKeyIdxFromTableDef(tableDef)
 
@@ -434,6 +581,9 @@ func newCNS3DataWriter(
 	sinkerOpts = append(sinkerOpts, ioutil.WithOffHeap())
 	if policy := chunkedColumnPolicyForService(serviceID); policy != nil {
 		sinkerOpts = append(sinkerOpts, ioutil.WithChunkedColumnPolicy(policy))
+	}
+	if serviceID != "" {
+		sinkerOpts = append(sinkerOpts, UnpublishedS3AdmissionOption(serviceID))
 	}
 	writer.sinker = ioutil.NewSinker(
 		sortKeyIdx,
@@ -522,27 +672,39 @@ func (w *CNS3Writer) SyncAndFillBlockInfoBat(ctx context.Context) (*batch.Batch,
 // resetting after retention releases only completed results and reusable state.
 // Until retention succeeds, both sinker and detached names remain writer-owned.
 func (w *CNS3Writer) TransferPersistedObjects(proc *process.Process) error {
+	_, err := w.TransferPersistedObjectsOwner(proc)
+	return err
+}
+
+// TransferPersistedObjectsOwner returns the lightweight owner for callers
+// that must also track a pipeline-level abort before workspace registration.
+func (w *CNS3Writer) TransferPersistedObjectsOwner(proc *process.Process) (*UnpublishedS3ObjectOwner, error) {
 	stats, _ := w.sinker.GetResult()
 	names := append([]string(nil), w.ownedPersistedNames...)
 	for i := range stats {
 		names = append(names, stats[i].ObjectName().String())
 	}
 	if len(names) == 0 {
-		return nil
+		return nil, nil
 	}
-	owner, err := NewUnpublishedS3ObjectOwner(w.fs, names...)
+	admission, err := w.unpublishedS3Admission()
 	if err != nil {
 		w.cleanupPending = true
-		return err
+		return nil, err
+	}
+	owner, err := newUnpublishedS3ObjectOwner(w.fs, admission, names, names...)
+	if err != nil {
+		w.cleanupPending = true
+		return nil, err
 	}
 	if !RetainUnpublishedS3ObjectOwner(proc, owner) {
 		w.cleanupPending = true
-		return moerr.NewInternalErrorNoCtx("transaction workspace cannot retain unpublished S3 objects")
+		return nil, moerr.NewInternalErrorNoCtx("transaction workspace cannot retain unpublished S3 objects")
 	}
 	w.sinker.Reset()
 	w.ownedPersistedNames = nil
 	w.cleanupPending = false
-	return nil
+	return owner, nil
 }
 
 // DeletePersisted removes objects still owned by this writer, including
@@ -553,11 +715,25 @@ func (w *CNS3Writer) DeletePersisted(ctx context.Context) error {
 		return nil
 	}
 	w.cleanupPending = true
+	admission, err := w.unpublishedS3Admission()
+	if err != nil {
+		return err
+	}
 	cleanupCtx, cancel := UnpublishedS3CleanupContext(ctx)
 	defer cancel()
 
 	if w.sinker != nil {
-		if _, err := w.sinker.DeletePersisted(cleanupCtx); err != nil {
+		if names, err := w.sinker.DeletePersisted(cleanupCtx); err != nil {
+			// The snapshot is complete even after an ambiguous pipeline Sync.
+			// Keep only names for the retry; the session mpool and sinker buffers
+			// must not outlive the writer's failed execution.
+			w.ownedPersistedNames = append(w.ownedPersistedNames, names...)
+			if w.blockInfoBat != nil {
+				w.blockInfoBat.Clean(w.sinker.GetMPool())
+				w.blockInfoBat = nil
+			}
+			_ = w.sinker.Close()
+			w.sinker = nil
 			return err
 		}
 	}
@@ -566,7 +742,22 @@ func (w *CNS3Writer) DeletePersisted(ctx context.Context) error {
 		return nil
 	}
 	if _, err := ioutil.DeleteUnpublishedObjects(cleanupCtx, w.fs, w.ownedPersistedNames...); err != nil {
+		// Detached results are the only remaining ownership. Do not let a
+		// failed Delete keep the sinker, output batch, or session mpool alive.
+		if w.sinker != nil {
+			if w.blockInfoBat != nil {
+				w.blockInfoBat.Clean(w.sinker.GetMPool())
+				w.blockInfoBat = nil
+			}
+			_ = w.sinker.Close()
+			w.sinker = nil
+		}
 		return err
+	}
+	if admission != nil {
+		for _, name := range w.ownedPersistedNames {
+			admission.release(name)
+		}
 	}
 	w.ownedPersistedNames = nil
 	w.cleanupPending = false
@@ -574,8 +765,8 @@ func (w *CNS3Writer) DeletePersisted(ctx context.Context) error {
 }
 
 // CloseWithCleanup removes still-owned objects after a failed operation, then
-// closes the writer. A failed delete leaves the writer open so its caller can
-// retry cleanup during the next lifecycle callback.
+// closes the writer. A failed delete retains only file-service names so its
+// caller can retry cleanup during the next lifecycle callback.
 func (w *CNS3Writer) CloseWithCleanup(ctx context.Context, failed bool) error {
 	cleanupRequired := failed || w.cleanupPending
 	if cleanupRequired {
@@ -595,6 +786,19 @@ func (w *CNS3Writer) Close() (err error) {
 	if w.cleanupPending {
 		return moerr.NewInternalErrorNoCtx("cannot close S3 writer with pending object cleanup")
 	}
+	// Close on the successful path means the caller has accepted the result
+	// metadata. Clone readers use this path instead of TransferPersistedObjects.
+	acceptedNames := append([]string(nil), w.ownedPersistedNames...)
+	if w.sinker != nil {
+		stats, _ := w.sinker.GetResult()
+		for i := range stats {
+			acceptedNames = append(acceptedNames, stats[i].ObjectName().String())
+		}
+	}
+	admission, admissionErr := w.unpublishedS3Admission()
+	if admissionErr != nil {
+		return admissionErr
+	}
 	var mp *mpool.MPool
 	if w.sinker != nil {
 		mp = w.sinker.GetMPool()
@@ -605,6 +809,11 @@ func (w *CNS3Writer) Close() (err error) {
 		w.sinker = nil
 	}
 	w.ownedPersistedNames = nil
+	if admission != nil {
+		for _, name := range acceptedNames {
+			admission.release(name)
+		}
+	}
 
 	if w.blockInfoBat != nil {
 		w.blockInfoBat.Clean(mp)
@@ -635,6 +844,20 @@ func (w *CNS3Writer) ResetWithCleanup(ctx context.Context, failed bool) error {
 func (w *CNS3Writer) Reset() {
 	if w.cleanupPending {
 		return
+	}
+	// Reset is used after the caller has accepted these completed results.
+	// TransferPersistedObjects clears the names only after moving their ticket
+	// to the transaction owner, so this release is idempotent there.
+	if admission, err := w.unpublishedS3Admission(); err == nil && admission != nil {
+		for _, name := range w.ownedPersistedNames {
+			admission.release(name)
+		}
+		if w.sinker != nil {
+			stats, _ := w.sinker.GetResult()
+			for i := range stats {
+				admission.release(stats[i].ObjectName().String())
+			}
+		}
 	}
 	if w.sinker != nil {
 		w.sinker.Reset()

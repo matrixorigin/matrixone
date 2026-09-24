@@ -1271,7 +1271,7 @@ func TestRollbackRetriesUnpublishedS3CleanupAfterWorkspaceRemoval(t *testing.T) 
 	txn.RetainUnpublishedS3ObjectOwner(owner)
 
 	err = txn.Rollback(context.Background())
-	require.ErrorIs(t, err, deleteErr)
+	require.NoError(t, err, "CN retry ownership should not turn rollback into a failure")
 	require.True(t, txn.removed, "terminal rollback must retire the workspace")
 	require.False(t, txn.HasUnpublishedS3ObjectOwners(), "the CN must own detached cleanup records")
 	require.Empty(t, txn.unpublishedS3Cleanup)

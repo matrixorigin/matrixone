@@ -202,6 +202,9 @@ type TransferFlow struct {
 	staged            *batch.Batch
 	sinker            *ioutil.Sinker
 	cleanupPending    bool
+	ownerTransferred  bool
+	pendingNames      []string
+	serviceID         string
 	mp                *mpool.MPool
 	fs                fileservice.FileService
 
@@ -225,15 +228,22 @@ func (flow *TransferFlow) fillDefaults() {
 		)
 	}
 	if flow.sinker == nil {
+		opts := []ioutil.SinkerOption{
+			ioutil.WithBuffer(flow.buffer, false),
+			ioutil.WithMemorySizeThreshold(mpool.MB * 16),
+			ioutil.WithTailSizeCap(0),
+		}
+		if flow.table != nil {
+			flow.serviceID = flow.table.getTxn().engine.service
+			opts = append(opts, colexec.UnpublishedS3AdmissionOption(flow.serviceID))
+		}
 		flow.sinker = ioutil.NewTombstoneSinker(
 			flow.hiddenSelection,
 			pkType,
 			flow.mp,
 			flow.fs,
-			ioutil.WithBuffer(flow.buffer, false),
-			ioutil.WithMemorySizeThreshold(mpool.MB*16),
-			ioutil.WithTailSizeCap(0),
-			//readutil.WithAllMergeSorted(),
+			opts...,
+		//readutil.WithAllMergeSorted(),
 		)
 	}
 
@@ -366,19 +376,32 @@ func (flow *TransferFlow) Close() error {
 }
 
 // CloseWithCleanup discards persisted objects if the flow failed before its
-// result metadata was registered on the transaction. If deletion fails, keep
-// the sinker and its shared buffer alive so the transaction can retry cleanup.
+// result metadata was registered on the transaction. A failed delete retains
+// only object names and the file service for the next attempt.
 func (flow *TransferFlow) CloseWithCleanup(ctx context.Context, failed bool) error {
 	var (
-		errs          []error
-		cleanupFailed bool
+		errs []error
 	)
-	if (failed || flow.cleanupPending) && flow.sinker != nil {
-		if err := cleanupUnpublishedTransferSinker(ctx, flow.sinker); err != nil {
+	if (failed || flow.cleanupPending) && flow.sinker != nil && !flow.ownerTransferred {
+		if names, err := cleanupUnpublishedTransferSinker(ctx, flow.sinker); err != nil {
 			errs = append(errs, err)
-			cleanupFailed = true
+			flow.pendingNames = append(flow.pendingNames, names...)
 			flow.cleanupPending = true
 		} else {
+			flow.cleanupPending = false
+		}
+	}
+	if flow.sinker == nil && len(flow.pendingNames) > 0 {
+		cleanupCtx, cancel := colexec.UnpublishedS3CleanupContext(ctx)
+		_, err := ioutil.DeleteUnpublishedObjects(cleanupCtx, flow.fs, flow.pendingNames...)
+		cancel()
+		if err != nil {
+			errs = append(errs, err)
+		} else {
+			for _, name := range flow.pendingNames {
+				colexec.ReleaseUnpublishedS3Name(flow.serviceID, name)
+			}
+			flow.pendingNames = nil
 			flow.cleanupPending = false
 		}
 	}
@@ -392,7 +415,7 @@ func (flow *TransferFlow) CloseWithCleanup(ctx context.Context, failed bool) err
 		flow.staged.Clean(flow.mp)
 		flow.staged = nil
 	}
-	if flow.sinker != nil && !cleanupFailed {
+	if flow.sinker != nil {
 		if err := flow.sinker.Close(); err != nil {
 			errs = append(errs, err)
 		}
@@ -408,14 +431,15 @@ func (flow *TransferFlow) CloseWithCleanup(ctx context.Context, failed bool) err
 	flow.table = nil
 	flow.newDataObjects = nil
 	flow.isObjectDeletedFn = nil
-	flow.fs = nil
+	if len(flow.pendingNames) == 0 {
+		flow.fs = nil
+	}
 	flow.transferred.objDetails = nil
 	return errors.Join(errs...)
 }
 
-func cleanupUnpublishedTransferSinker(ctx context.Context, sinker *ioutil.Sinker) error {
+func cleanupUnpublishedTransferSinker(ctx context.Context, sinker *ioutil.Sinker) ([]string, error) {
 	cleanupCtx, cancel := colexec.UnpublishedS3CleanupContext(ctx)
 	defer cancel()
-	_, err := sinker.DeletePersisted(cleanupCtx)
-	return err
+	return sinker.DeletePersisted(cleanupCtx)
 }

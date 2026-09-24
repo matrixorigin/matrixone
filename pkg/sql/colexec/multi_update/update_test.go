@@ -25,12 +25,15 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/common/hashmap"
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
 	"github.com/matrixorigin/matrixone/pkg/common/mpool"
+	moruntime "github.com/matrixorigin/matrixone/pkg/common/runtime"
 	"github.com/matrixorigin/matrixone/pkg/container/batch"
 	"github.com/matrixorigin/matrixone/pkg/container/types"
 	"github.com/matrixorigin/matrixone/pkg/container/vector"
 	"github.com/matrixorigin/matrixone/pkg/defines"
 	"github.com/matrixorigin/matrixone/pkg/fileservice"
 	mock_frontend "github.com/matrixorigin/matrixone/pkg/frontend/test"
+	mock_lock "github.com/matrixorigin/matrixone/pkg/frontend/test/mock_lock"
+	"github.com/matrixorigin/matrixone/pkg/lockservice"
 	"github.com/matrixorigin/matrixone/pkg/objectio"
 	"github.com/matrixorigin/matrixone/pkg/objectio/ioutil"
 	"github.com/matrixorigin/matrixone/pkg/sql/colexec"
@@ -677,6 +680,15 @@ func TestPersistentInsertProducerTransfersOwnership(t *testing.T) {
 func TestSortAndSyncOneTableUsesDataWriter(t *testing.T) {
 	_, ctrl, proc := prepareTestCtx(t, true)
 	defer proc.Free()
+	serviceID := t.Name()
+	rt := moruntime.DefaultRuntime()
+	throttler, _ := moruntime.ServiceRuntime("").GetGlobalVariables(moruntime.CNMemoryThrottler)
+	rt.SetGlobalVariables(moruntime.CNMemoryThrottler, throttler)
+	moruntime.SetupServiceBasedRuntime(serviceID, rt)
+	colexec.NewServer(serviceID)
+	lockSvc := mock_lock.NewMockLockService(ctrl)
+	lockSvc.EXPECT().GetConfig().Return(lockservice.Config{ServiceID: serviceID}).AnyTimes()
+	proc.Base.LockService = lockSvc
 	workspace := &multiUpdateS3CleanupWorkspace{}
 	txnOp := mock_frontend.NewMockTxnOperator(ctrl)
 	txnOp.EXPECT().GetWorkspace().Return(workspace).AnyTimes()
@@ -713,6 +725,9 @@ func TestSortAndSyncOneTableUsesDataWriter(t *testing.T) {
 	wantNames := append([]string(nil), objectNames...)
 	slices.Sort(wantNames)
 	require.Equal(t, wantNames, unpublishedObjectOwnerNames(writer.syncedObjectOwners))
+	server := colexec.GetServer(proc.GetService())
+	require.Equal(t, len(objectNames), server.UnpublishedS3AdmissionStats().Used,
+		"closed one-shot writer must leave tickets with the workspace owner")
 	info := writer.insertBlockInfo[0]
 	statsData, statsArea := vector.MustVarlenaRawData(info.Vecs[1])
 	stats := objectio.ObjectStats(statsData[0].GetByteSlice(statsArea))
@@ -726,7 +741,9 @@ func TestSortAndSyncOneTableUsesDataWriter(t *testing.T) {
 
 	require.NoError(t, writer.reset(proc, false))
 	require.Empty(t, writer.syncedObjectOwners, "the workspace retains the lease after producer reset")
+	require.Equal(t, len(objectNames), server.UnpublishedS3AdmissionStats().Used)
 	workspace.AcceptUnpublishedS3ObjectNames(objectNames...)
+	require.Zero(t, server.UnpublishedS3AdmissionStats().Used)
 	require.NoError(t, workspace.CleanupUnpublishedS3Objects(proc.Ctx))
 	_, err = fs.StatFile(proc.Ctx, objectName)
 	require.NoError(t, err, "registered metadata must keep its S3 object")
@@ -758,10 +775,10 @@ func TestSortAndSyncOneTableRetainsOwnerWhenWorkspaceCannotAcceptIt(t *testing.T
 		batches,
 		true,
 	)
-	require.ErrorContains(t, err, "cannot retain unpublished S3 object ownership")
-	require.Len(t, writer.syncedObjectOwners, 1,
-		"the delegate must keep cleanup ownership when workspace handoff is rejected")
-	objectNames := writer.syncedObjectOwners[0].Names()
+	require.ErrorContains(t, err, "cannot retain unpublished S3 objects")
+	require.Len(t, writer.failedWriters, 1,
+		"the writer must keep cleanup ownership when workspace handoff is rejected")
+	objectNames := objectNamesFromInsertInfo(t, writer.insertBlockInfo[0])
 	require.NotEmpty(t, objectNames)
 
 	fs, err := colexec.GetSharedFSFromProc(proc)
@@ -995,17 +1012,26 @@ func TestMultiUpdateResetKeepsFailedCleanupOutOfReusableState(t *testing.T) {
 	_, err = baseFS.StatFile(proc.Ctx, firstObject)
 	require.NoError(t, err, "failed cleanup must retain the old object for retry")
 
-	// A later success-shaped reset is not a handoff. The writer retries abort
-	// cleanup before resetting, then remains safe to reuse for the next run.
+	// A later success-shaped reset is not a handoff. It retries abort cleanup
+	// and discards the detached writer; a new execution needs a fresh sinker.
 	require.NoError(t, delegate.reset(proc, false))
 	require.NoError(t, delegate.cleanupErr)
 	require.Same(t, freeList, delegate.insertFreeLists[0])
+	require.Nil(t, delegate.insertSinkers[0])
 	_, err = baseFS.StatFile(proc.Ctx, firstObject)
 	require.True(t, moerr.IsMoErrCode(err, moerr.ErrFileNotFound), "old object should be deleted before reuse, got %v", err)
 
+	nextWriter := colexec.NewCNS3DataWriter(proc.Mp(), fs, tableDef, 1, false,
+		ioutil.WithBuffer(freeList, false))
+	defer func() {
+		if !cleanupDone {
+			_ = nextWriter.CloseWithCleanup(proc.Ctx, true)
+		}
+	}()
+	delegate.insertSinkers[0] = nextWriter
 	nextBatches, _ = prepareTestInsertBatchs(proc.Mp(), 1, colexec.DefaultBatchSize, false, false)
-	require.NoError(t, s3Writer.Write(proc.Ctx, nextBatches[0]))
-	secondInfo, err := s3Writer.SyncAndFillBlockInfoBat(proc.Ctx)
+	require.NoError(t, nextWriter.Write(proc.Ctx, nextBatches[0]))
+	secondInfo, err := nextWriter.SyncAndFillBlockInfoBat(proc.Ctx)
 	require.NoError(t, err)
 	secondData, secondArea := vector.MustVarlenaRawData(secondInfo.Vecs[1])
 	secondStats := objectio.ObjectStats(secondData[0].GetByteSlice(secondArea))
@@ -1128,17 +1154,19 @@ func checkMultiUpdateFreeTransfersFailedCleanupWithBorrowedBuffer(t *testing.T, 
 	} else {
 		update.Free(proc, true, deleteErr)
 	}
-	require.Nil(t, update.ctr.s3Writer, "the transaction owns the delegate after operator release")
+	require.Nil(t, update.ctr.s3Writer, "the transaction owns a detached cleanup task after operator release")
 	require.Len(t, workspace.cleanups, 1)
-	require.Same(t, freeList, delegate.insertFreeLists[0], "the retained sinker still borrows this buffer pool")
+	require.Nil(t, delegate.insertFreeLists, "retry must not retain the shared buffer pool")
+	require.Nil(t, delegate.insertSinkers, "retry must not retain the delegate")
+	require.Nil(t, delegate.cleanupMP, "retry must not retain the session mpool")
 	_, err = baseFS.StatFile(proc.Ctx, objectName)
 	require.NoError(t, err)
-	// A second storage outage during transaction teardown must not close the
-	// borrowed buffer or discard the cleanup callback before the next retry.
+	// A second storage outage during transaction teardown retains the name-only
+	// task without pinning the producer's buffer pool or session mpool.
 	fs.failed = false
 	require.ErrorIs(t, workspace.cleanups[0](proc.Ctx), deleteErr)
-	require.Same(t, s3Writer, delegate.insertSinkers[0])
-	require.Same(t, freeList, delegate.insertFreeLists[0])
+	require.Nil(t, delegate.insertSinkers)
+	require.Nil(t, delegate.insertFreeLists)
 	_, err = baseFS.StatFile(proc.Ctx, objectName)
 	require.NoError(t, err)
 	require.NoError(t, workspace.cleanups[0](proc.Ctx))
@@ -1243,6 +1271,28 @@ func TestMultiUpdateResetRetriesFailedSyncedObjectCleanup(t *testing.T) {
 	require.False(t, owner.Pending())
 	_, err = fs.StatFile(proc.Ctx, objectName)
 	require.True(t, moerr.IsMoErrCode(err, moerr.ErrFileNotFound), "retry should delete the unaccepted object, got %v", err)
+}
+
+func TestMultiUpdateRetryTaskSkipsReusableSinkers(t *testing.T) {
+	_, _, proc := prepareTestCtx(t, true)
+	defer proc.Free()
+	fs, err := colexec.GetSharedFSFromProc(proc)
+	require.NoError(t, err)
+	_, tableDef := getTestMainTable()
+	idle := colexec.NewCNS3DataWriter(proc.Mp(), fs, tableDef, 1, false)
+	owner, err := colexec.NewUnpublishedS3ObjectOwner(fs, "pending-object")
+	require.NoError(t, err)
+	delegate := &s3WriterDelegate{
+		insertSinkers:      []*colexec.CNS3Writer{idle},
+		syncedObjectOwners: []*colexec.UnpublishedS3ObjectOwner{owner},
+		cleanupErr:         errors.New("unpublished object pending"),
+	}
+	task := delegate.retryTask()
+	require.Len(t, task.owners, 1)
+	require.Empty(t, task.insertSinkers, "a reusable writer with no ticket must not enter the retry task")
+	delegate.releaseBuffers(proc.Mp())
+	require.Nil(t, delegate.insertSinkers[0])
+	require.Nil(t, delegate.cleanupMP)
 }
 
 func TestPartitionMultiUpdateFreeTransfersFailedCleanup(t *testing.T) {

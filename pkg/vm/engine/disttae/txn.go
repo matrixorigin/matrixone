@@ -1404,7 +1404,7 @@ func (txn *Transaction) retainUnpublishedS3Writer(writer *colexec.CNS3Writer) {
 }
 
 func (txn *Transaction) retainUnpublishedTransferFlow(flow *TransferFlow) {
-	if flow == nil || flow.sinker == nil {
+	if flow == nil || (flow.sinker == nil && len(flow.pendingNames) == 0) {
 		return
 	}
 	txn.RetainUnpublishedS3Cleanup(func(ctx context.Context) error {
@@ -1509,7 +1509,7 @@ func (txn *Transaction) closeTransferFlow(
 	failed bool,
 ) error {
 	err := flow.CloseWithCleanup(ctx, failed)
-	if flow.sinker != nil {
+	if flow.sinker != nil || len(flow.pendingNames) != 0 {
 		txn.retainUnpublishedTransferFlow(flow)
 	}
 	return err
@@ -2956,8 +2956,14 @@ func (txn *Transaction) getCachedTableByKey(
 }
 
 func (txn *Transaction) Commit(ctx context.Context) (reqs []txn.TxnRequest, err error) {
-	if err := txn.CleanupUnpublishedS3Objects(ctx); err != nil {
-		return nil, err
+	cleanupCtx, cancelCleanup := colexec.TerminalUnpublishedS3CleanupContext(ctx)
+	cleanupErr := txn.CleanupUnpublishedS3Objects(cleanupCtx)
+	cancelCleanup()
+	if cleanupErr != nil {
+		if queueErr := txn.QueueUnpublishedS3Cleanup(colexec.MustGetServer(txn.engine.service)); queueErr != nil {
+			return nil, errors.Join(cleanupErr, queueErr)
+		}
+		logutil.Warn("commit unpublished S3 cleanup transferred to CN retry worker", zap.Error(cleanupErr))
 	}
 
 	common.DoIfDebugEnabled(func() {
@@ -3234,12 +3240,17 @@ func skipTransfer(ctx context.Context, txn *Transaction) bool {
 }
 
 func (txn *Transaction) Rollback(ctx context.Context) error {
-	unpublishedCleanupErr := txn.CleanupUnpublishedS3Objects(ctx)
+	cleanupCtx, cancelCleanup := colexec.TerminalUnpublishedS3CleanupContext(ctx)
+	unpublishedCleanupErr := txn.CleanupUnpublishedS3Objects(cleanupCtx)
+	cancelCleanup()
 	if unpublishedCleanupErr != nil {
 		// The workspace is retired below even when rollback reports an error.
 		// Transfer its remaining cleanup obligation to the CN before that point.
 		queueErr := txn.QueueUnpublishedS3Cleanup(colexec.MustGetServer(txn.engine.service))
-		unpublishedCleanupErr = errors.Join(unpublishedCleanupErr, queueErr)
+		if queueErr == nil {
+			logutil.Warn("rollback unpublished S3 cleanup transferred to CN retry worker", zap.Error(unpublishedCleanupErr))
+		}
+		unpublishedCleanupErr = queueErr
 	}
 	if !txn.ReadOnly() && len(txn.writes) > 0 {
 		logutil.Info(

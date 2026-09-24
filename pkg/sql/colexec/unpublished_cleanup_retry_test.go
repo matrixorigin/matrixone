@@ -21,8 +21,23 @@ import (
 	"testing"
 	"time"
 
+	moruntime "github.com/matrixorigin/matrixone/pkg/common/runtime"
+	metricv2 "github.com/matrixorigin/matrixone/pkg/util/metric/v2"
+	promtestutil "github.com/prometheus/client_golang/prometheus/testutil"
 	"github.com/stretchr/testify/require"
 )
+
+func TestUnpublishedS3RetryQueueMetrics(t *testing.T) {
+	serviceID := t.Name()
+	moruntime.SetupServiceBasedRuntime(serviceID, moruntime.DefaultRuntime())
+	server := NewServer(serviceID)
+	require.NoError(t, server.RetryUnpublishedS3Cleanup(func(context.Context) error { return nil }))
+	require.Equal(t, float64(1), promtestutil.ToFloat64(
+		metricv2.UnpublishedS3PendingTasksGauge.WithLabelValues(serviceID)))
+	require.NoError(t, server.CloseUnpublishedS3Cleanup(context.Background()))
+	require.Zero(t, promtestutil.ToFloat64(
+		metricv2.UnpublishedS3PendingTasksGauge.WithLabelValues(serviceID)))
+}
 
 func TestServerCloseDrainsUnpublishedS3Retry(t *testing.T) {
 	server := NewServer("")

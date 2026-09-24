@@ -194,7 +194,7 @@ func (p *SinkPool) runSyncWorker() {
 		syncStart := time.Now()
 		stats, err := job.fSinker.Sync(r.ctx)
 		atomic.AddInt64(&r.syncNs, int64(time.Since(syncStart)))
-		if err != nil {
+		if err != nil && !objectSyncWasNotStarted(err) {
 			if name := activeFileSinkerObjectName(job.fSinker); name != "" {
 				r.mu.Lock()
 				r.unpublished = append(r.unpublished, name)

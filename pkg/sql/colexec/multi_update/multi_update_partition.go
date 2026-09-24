@@ -581,19 +581,29 @@ func (op *PartitionMultiUpdate) freePartitionWriters(proc *process.Process, pipe
 
 func (op *PartitionMultiUpdate) retainPendingPartitionWriters(proc *process.Process) {
 	for id, writer := range op.writers {
-		if writer != nil && colexec.RetainUnpublishedS3Cleanup(
-			proc,
-			writer.cleanupUnpublishedS3Objects,
-		) {
+		if writer == nil {
+			continue
+		}
+		task := writer.retryTask()
+		if task.empty() || colexec.RetainUnpublishedS3Cleanup(proc, task.cleanup) {
+			writer.releaseBuffers(proc.Mp())
+			writer.syncedObjectOwners = nil
+			writer.failedWriters = nil
+			writer.insertSinkers = nil
 			delete(op.writers, id)
 		}
 	}
 	pending := op.freeWriters[:0]
 	for _, writer := range op.freeWriters {
-		if writer != nil && colexec.RetainUnpublishedS3Cleanup(
-			proc,
-			writer.cleanupUnpublishedS3Objects,
-		) {
+		if writer == nil {
+			continue
+		}
+		task := writer.retryTask()
+		if task.empty() || colexec.RetainUnpublishedS3Cleanup(proc, task.cleanup) {
+			writer.releaseBuffers(proc.Mp())
+			writer.syncedObjectOwners = nil
+			writer.failedWriters = nil
+			writer.insertSinkers = nil
 			continue
 		}
 		pending = append(pending, writer)
