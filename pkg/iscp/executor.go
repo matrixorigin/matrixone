@@ -397,9 +397,40 @@ func (exec *ISCPTaskExecutor) stopLocked() {
 	exec.worker = nil
 }
 
+const ambiguousUnprovenInitError = "ambiguous ISCP initialization state without atomic lifecycle evidence; recreate the ISCP job"
+
+func unprovenInitQuarantineSQL() string {
+	return fmt.Sprintf(
+		`UPDATE mo_catalog.mo_iscp_log
+        SET job_state = %d,
+            job_status = JSON_SET(
+                job_status,
+                '$.ErrorCode', %d,
+                '$.ErrorMsg', '%s')
+		WHERE job_state = %d
+		  AND CAST(COALESCE(JSON_UNQUOTE(JSON_EXTRACT(job_status, '$.Stage')), '0') AS SIGNED) = %d
+		  AND CAST(COALESCE(JSON_UNQUOTE(JSON_EXTRACT(job_status, '$.LifecycleVersion')), '0') AS SIGNED) < %d
+		  AND COALESCE(JSON_UNQUOTE(JSON_EXTRACT(job_spec, '$.InitSQL')), '') != '';`,
+		ISCPJobState_Error,
+		PermanentErrorThreshold,
+		ambiguousUnprovenInitError,
+		ISCPJobState_Completed,
+		JobStage_Init,
+		atomicInitLifecycleVersion,
+	)
+}
+
+func isUnprovenInit(state int8, jobSpec *JobSpec, jobStatus *JobStatus) bool {
+	return state == ISCPJobState_Completed &&
+		jobSpec != nil && jobSpec.ConsumerInfo.InitSQL != "" &&
+		jobStatus != nil && jobStatus.Stage == JobStage_Init &&
+		jobStatus.LifecycleVersion < atomicInitLifecycleVersion
+}
+
 func (exec *ISCPTaskExecutor) repairAbandonedJobs(ctx context.Context) (err error) {
 	ctxWithTimeout, cancel := context.WithTimeout(ctx, time.Minute*5)
 	defer cancel()
+	var quarantinedJobs uint64
 	sql := fmt.Sprintf(
 		`UPDATE mo_catalog.mo_iscp_log
         SET job_state = %d
@@ -418,11 +449,16 @@ func (exec *ISCPTaskExecutor) repairAbandonedJobs(ctx context.Context) (err erro
 	txnOp, err := exec.cnTxnClient.New(ctxWithTimeout, nowTs, createByOpt)
 	if txnOp != nil {
 		defer func() {
-			if err != nil {
-				err = errors.Join(err, txnOp.Rollback(ctxWithTimeout))
-				return
+			err = finishISCPTransaction(ctxWithTimeout, txnOp, err)
+			// Report only a durable repair. Logging before Commit can claim that
+			// jobs were fenced even when the transaction subsequently aborts.
+			if err == nil && quarantinedJobs > 0 {
+				logutil.Warn(
+					"ISCP-Task quarantined initialization without atomic lifecycle evidence",
+					zap.Uint64("jobCount", quarantinedJobs),
+					zap.String("action", "query mo_catalog.mo_iscp_log by the durable ErrorMsg and recreate each affected job"),
+				)
 			}
-			err = txnOp.Commit(ctxWithTimeout)
 		}()
 	}
 	if err != nil {
@@ -436,7 +472,24 @@ func (exec *ISCPTaskExecutor) repairAbandonedJobs(ctx context.Context) (err erro
 	if err != nil {
 		return
 	}
+	result.Close()
+
+	// Every unversioned legacy Init row is ambiguous. Old code committed InitSQL
+	// and its status in separate transactions, so a crash can leave LSN=0, and a
+	// later status-write failure can leave retry/error fields, after InitSQL has
+	// already committed. None of those fields proves that re-execution is safe.
+	// Only generations created with the atomic lifecycle marker may retry InitSQL.
+	result, err = ExecWithResult(
+		ctxWithTimeout,
+		unprovenInitQuarantineSQL(),
+		exec.cnUUID,
+		txnOp,
+	)
+	if err != nil {
+		return
+	}
 	defer result.Close()
+	quarantinedJobs = result.AffectedRows
 	return nil
 }
 
@@ -477,7 +530,7 @@ func (exec *ISCPTaskExecutor) run(ctx context.Context, worker Worker) {
 			if err == nil {
 				exec.iscpLogWm = to
 			}
-			if err != nil && moerr.IsMoErrCode(err, moerr.ErrStaleRead) {
+			if shouldReplayISCPLog(err) {
 				err = exec.replay(ctx)
 			}
 			if err != nil {
@@ -521,12 +574,7 @@ func (exec *ISCPTaskExecutor) run(ctx context.Context, worker Worker) {
 					iter.toTS = types.BuildTS(iter.fromTS.Physical()+DefaultMaxChangeInterval.Nanoseconds(), 0)
 				}
 				// For initialized iterctx (fromTS is empty), do not check whether the table has changed
-				var ok bool
-				if iter.fromTS.IsEmpty() || getDirtyTablesFailed || iter.fromTS.LT(&minTS) {
-					ok = true
-				} else {
-					_, ok = tables[iter.tableID]
-				}
+				ok := shouldProcessIteration(iter, getDirtyTablesFailed, minTS, tables)
 				table, tableExists := exec.getTable(iter.accountID, iter.tableID)
 				if !tableExists {
 					logutil.Error(
@@ -567,7 +615,15 @@ func (exec *ISCPTaskExecutor) run(ctx context.Context, worker Worker) {
 						logutil.Infof("ISCP-Task injected hook %s", msg)
 					}
 				} else {
-					table.UpdateWatermark(iter)
+					if updateErr := table.UpdateWatermark(iter); updateErr != nil {
+						logutil.Error(
+							"ISCP-Task update watermark failed",
+							zap.Uint32("accountID", iter.accountID),
+							zap.Uint64("tableID", iter.tableID),
+							zap.Strings("jobNames", iter.jobNames),
+							zap.Error(updateErr),
+						)
+					}
 				}
 			}
 		case <-flushWatermarkTrigger.C:
@@ -589,6 +645,43 @@ func (exec *ISCPTaskExecutor) run(ctx context.Context, worker Worker) {
 			exec.GCInMemoryJob(exec.option.GCTTL)
 		}
 	}
+}
+
+func shouldReplayISCPLog(err error) bool {
+	return err != nil &&
+		(moerr.IsMoErrCode(err, moerr.ErrStaleRead) || isSupersededIteration(err))
+}
+
+// An Init iteration owns a lifecycle transition, not only a source-table
+// range. It must reach the worker even when the source table is clean so only
+// successful InitSQL can advance its Stage to Running.
+func shouldProcessIteration(
+	iter *IterationContext,
+	getDirtyTablesFailed bool,
+	minTS types.TS,
+	dirtyTables map[uint64]struct{},
+) bool {
+	if iter == nil {
+		return false
+	}
+	if iterationNeedsInit(iter) || iter.fromTS.IsEmpty() ||
+		getDirtyTablesFailed || iter.fromTS.LT(&minTS) {
+		return true
+	}
+	_, ok := dirtyTables[iter.tableID]
+	return ok
+}
+
+func iterationNeedsInit(iter *IterationContext) bool {
+	if iter == nil || len(iter.stages) != len(iter.jobNames) {
+		return false
+	}
+	for _, stage := range iter.stages {
+		if stage == JobStage_Init {
+			return true
+		}
+	}
+	return false
 }
 
 // For UT
@@ -656,7 +749,9 @@ func (exec *ISCPTaskExecutor) applyISCPLog(ctx context.Context, from, to types.T
 		0)
 	txnOp, err := exec.cnTxnClient.New(ctx, nowTs, createByOpt)
 	if txnOp != nil {
-		defer txnOp.Commit(ctx)
+		defer func() {
+			err = finishISCPTransaction(ctx, txnOp, err)
+		}()
 	}
 	if err != nil {
 		return
@@ -773,7 +868,7 @@ func (exec *ISCPTaskExecutor) applyISCPLogWithRel(ctx context.Context, rel engin
 			if !dropAtVector.IsNull(uint64(job.offset)) {
 				dropAt = dropAts[job.offset]
 			}
-			exec.addOrUpdateJob(
+			err = exec.addOrUpdateJob(
 				accountIDs[job.offset],
 				tableIDs[job.offset],
 				jobNameVector.GetStringAt(job.offset),
@@ -785,6 +880,9 @@ func (exec *ISCPTaskExecutor) applyISCPLogWithRel(ctx context.Context, rel engin
 				dropAt,
 				notPrint,
 			)
+			if err != nil {
+				return
+			}
 		}
 	}
 
@@ -838,11 +936,7 @@ func (exec *ISCPTaskExecutor) loadReplay(
 	ctx, cancel := context.WithTimeout(ctx, time.Minute*5)
 	defer cancel()
 	defer func() {
-		if err != nil {
-			err = errors.Join(err, txn.Rollback(ctx))
-			return
-		}
-		err = txn.Commit(ctx)
+		err = finishISCPTransaction(ctx, txn, err)
 	}()
 
 	tableID, _, err = getTableID(ctx, exec.cnUUID, txn, catalog.System_Account, catalog.MO_CATALOG, catalog.MO_ISCP_LOG)
@@ -934,7 +1028,7 @@ func (exec *ISCPTaskExecutor) addOrUpdateRecoveredJob(
 	if state == ISCPJobState_Pending || state == ISCPJobState_Running {
 		state = ISCPJobState_Completed
 	}
-	return exec.addOrUpdateJob(
+	return exec.addOrUpdateJobInternal(
 		accountID,
 		tableID,
 		jobName,
@@ -945,6 +1039,7 @@ func (exec *ISCPTaskExecutor) addOrUpdateRecoveredJob(
 		jobStatusStr,
 		dropAt,
 		notPrint,
+		true,
 	)
 }
 
@@ -997,6 +1092,34 @@ func (exec *ISCPTaskExecutor) addOrUpdateJob(
 	dropAt types.Timestamp,
 	notPrint bool,
 ) error {
+	return exec.addOrUpdateJobInternal(
+		accountID,
+		tableID,
+		jobName,
+		jobID,
+		state,
+		watermarkStr,
+		jobSpecStr,
+		jobStatusStr,
+		dropAt,
+		notPrint,
+		false,
+	)
+}
+
+func (exec *ISCPTaskExecutor) addOrUpdateJobInternal(
+	accountID uint32,
+	tableID uint64,
+	jobName string,
+	jobID uint64,
+	state int8,
+	watermarkStr string,
+	jobSpecStr []byte,
+	jobStatusStr []byte,
+	dropAt types.Timestamp,
+	notPrint bool,
+	recovering bool,
+) error {
 	// SQL NULL is represented by Timestamp(0) for active jobs. A non-NULL zero
 	// timestamp still means dropped, so normalize it to a GC-safe timestamp.
 	if dropAt == types.ZeroTimestamp {
@@ -1031,6 +1154,14 @@ func (exec *ISCPTaskExecutor) addOrUpdateJob(
 	if err != nil {
 		return err
 	}
+	// The durable quarantine transaction can commit before its logtail is
+	// visible to the recovery snapshot. Mirror only that deterministic terminal
+	// decision in memory; never guess that initialization succeeded.
+	if recovering && isUnprovenInit(state, jobSpec, jobStatus) {
+		state = ISCPJobState_Error
+		jobStatus.ErrorCode = PermanentErrorThreshold
+		jobStatus.ErrorMsg = ambiguousUnprovenInitError
+	}
 	var table *TableEntry
 	table, ok := exec.getTable(accountID, tableID)
 	if !ok {
@@ -1048,7 +1179,10 @@ func (exec *ISCPTaskExecutor) addOrUpdateJob(
 		)
 		exec.setTable(table)
 	}
-	newCreate = table.AddOrUpdateSinker(exec.ctx, jobName, jobSpec, jobStatus, jobID, watermark, state, dropAt)
+	newCreate, err = table.AddOrUpdateSinker(exec.ctx, jobName, jobSpec, jobStatus, jobID, watermark, state, dropAt)
+	if err != nil {
+		return err
+	}
 	if dropAt != 0 {
 		exec.RemoveJobFence(fenceKey)
 	}
@@ -1144,7 +1278,7 @@ func (exec *ISCPTaskExecutor) getDirtyTables(
 	)
 	return
 }
-func (exec *ISCPTaskExecutor) FlushWatermarkForAllTables(ttl time.Duration) error {
+func (exec *ISCPTaskExecutor) FlushWatermarkForAllTables(ttl time.Duration) (err error) {
 	tables := exec.getAllTables()
 	if len(tables) == 0 {
 		return nil
@@ -1153,28 +1287,46 @@ func (exec *ISCPTaskExecutor) FlushWatermarkForAllTables(ttl time.Duration) erro
 	if err != nil {
 		return err
 	}
+	return exec.flushWatermarkForAllTablesWithTxn(ttl, txn)
+}
+
+func (exec *ISCPTaskExecutor) flushWatermarkForAllTablesWithTxn(
+	ttl time.Duration,
+	txn client.TxnOperator,
+) (err error) {
+	tables := exec.getAllTables()
 	ctx, cancel := context.WithTimeout(exec.ctx, time.Minute*5)
 	defer cancel()
-	defer func() {
-		if err != nil {
-			err2 := txn.Rollback(ctx)
-			if err2 != nil {
-				logutil.Errorf("flush watermark for all tables rollback failed, err: %v", err2)
-			}
-		} else {
-			err = txn.Commit(ctx)
-		}
-	}()
+	var pending map[*TableEntry][]watermarkFlushReservation
 	jobCount := 0
+	defer func() {
+		err = finishISCPTransaction(ctx, txn, err)
+		if err != nil {
+			for table, reservations := range pending {
+				table.rollbackWatermarkFlushes(reservations)
+			}
+			return
+		}
+		logutil.Info(
+			"ISCP-Task flush watermark",
+			zap.Any("table count", len(tables)),
+			zap.Int("jobCount", jobCount),
+		)
+	}()
 	for _, table := range tables {
-		flushCount := table.tryFlushWatermark(ctx, txn, ttl)
-		jobCount += flushCount
+		reservations, flushErr := table.tryFlushWatermark(ctx, txn, ttl)
+		if len(reservations) > 0 {
+			if pending == nil {
+				pending = make(map[*TableEntry][]watermarkFlushReservation)
+			}
+			pending[table] = reservations
+			jobCount += len(reservations)
+		}
+		if flushErr != nil {
+			err = flushErr
+			return err
+		}
 	}
-	logutil.Info(
-		"ISCP-Task flush watermark",
-		zap.Any("table count", len(tables)),
-		zap.Int("jobCount", jobCount),
-	)
 	return nil
 }
 
@@ -1185,19 +1337,23 @@ func (exec *ISCPTaskExecutor) GC(cleanupThreshold time.Duration) (err error) {
 	}
 	ctx, cancel := context.WithTimeout(exec.ctx, time.Minute*5)
 	defer cancel()
-	defer txn.Commit(ctx)
 	gcTime := time.Now().Add(-cleanupThreshold)
+	defer func() {
+		err = finishISCPTransaction(ctx, txn, err)
+		if err == nil {
+			logutil.Info(
+				"ISCP-Task GC",
+				zap.Any("gcTime", gcTime),
+			)
+		}
+	}()
 	iscpLogGCSql := cdc.CDCSQLBuilder.ISCPLogGCSQL(gcTime)
 	result, err := ExecWithResult(ctx, iscpLogGCSql, exec.cnUUID, txn)
 	if err != nil {
 		return err
 	}
 	result.Close()
-	logutil.Info(
-		"ISCP-Task GC",
-		zap.Any("gcTime", gcTime),
-	)
-	return err
+	return nil
 }
 
 func (exec *ISCPTaskExecutor) String() string {
@@ -1227,24 +1383,39 @@ func retry(
 			return ctx.Err()
 		default:
 		}
-		if time.Since(startTime) > totalDuration {
+		if time.Since(startTime) >= totalDuration {
 			break
 		}
 		err = fn()
 		if err == nil {
 			return
 		}
+		// Every status writer shares this boundary, including nested final/error
+		// status retries. No retry can repair an immutable expected LSN. Preserve
+		// the entire error tree so callers cannot lose a rollback failure.
+		if errors.Is(err, errISCPStatusCASLost) {
+			return err
+		}
 		if i == retryTimes-1 {
 			break
 		}
-		timer := time.NewTimer(interval)
+		remaining := totalDuration - time.Since(startTime)
+		if remaining <= 0 {
+			break
+		}
+		timer := time.NewTimer(min(interval, remaining))
 		select {
 		case <-ctx.Done():
 			timer.Stop()
 			return ctx.Err()
 		case <-timer.C:
 		}
-		interval *= 2
+		// Saturate before doubling to avoid overflow and budget overshoot.
+		if interval >= remaining/2 {
+			interval = remaining
+		} else {
+			interval *= 2
+		}
 	}
 	logutil.Errorf("ISCP-Task retry failed, err: %v", err)
 	return

@@ -41,6 +41,11 @@ import (
 // internal jobs should supply a task-owned deadline instead of relying on it.
 const defaultLockWaitTimeoutSeconds int64 = defines.DefaultLockWaitTimeoutSeconds
 
+const (
+	groupConcatMaxLenVariable = "group_concat_max_len"
+	groupConcatMaxLenMinimum  = 4
+)
+
 var (
 	errorConvertToBoolFailed                   = moerr.NewInternalError(context.Background(), "convert to the system variable bool type failed")
 	errorConvertToIntFailed                    = moerr.NewInternalError(context.Background(), "convert to the system variable int type failed")
@@ -85,6 +90,96 @@ func getErrorConvertFromStringToSetFailed(str string) error {
 
 func getErrorConvertFromStringToNullFailed(str string) error {
 	return moerr.NewInternalErrorf(context.Background(), errorConvertFromStringToNullFailedFormat, str)
+}
+
+// normalizeGroupConcatMaxLenValue implements the assignment-specific part of
+// MySQL's group_concat_max_len contract. The registered type is unsigned so
+// values above math.MaxInt64 remain representable; values below the MySQL
+// minimum are clamped here so the setter can publish the corresponding
+// ER_TRUNCATED_WRONG_VALUE warning only after the assignment succeeds.
+func normalizeGroupConcatMaxLenValue(value interface{}) (interface{}, bool) {
+	switch v := value.(type) {
+	case int:
+		if v < groupConcatMaxLenMinimum {
+			return uint64(groupConcatMaxLenMinimum), true
+		}
+	case uint:
+		if v < groupConcatMaxLenMinimum {
+			return uint64(groupConcatMaxLenMinimum), true
+		}
+	case int8:
+		if v < groupConcatMaxLenMinimum {
+			return uint64(groupConcatMaxLenMinimum), true
+		}
+	case uint8:
+		if v < groupConcatMaxLenMinimum {
+			return uint64(groupConcatMaxLenMinimum), true
+		}
+	case int16:
+		if v < groupConcatMaxLenMinimum {
+			return uint64(groupConcatMaxLenMinimum), true
+		}
+	case uint16:
+		if v < groupConcatMaxLenMinimum {
+			return uint64(groupConcatMaxLenMinimum), true
+		}
+	case int32:
+		if v < groupConcatMaxLenMinimum {
+			return uint64(groupConcatMaxLenMinimum), true
+		}
+	case uint32:
+		if v < groupConcatMaxLenMinimum {
+			return uint64(groupConcatMaxLenMinimum), true
+		}
+	case int64:
+		if v < groupConcatMaxLenMinimum {
+			return uint64(groupConcatMaxLenMinimum), true
+		}
+	case uint64:
+		if v < groupConcatMaxLenMinimum {
+			return uint64(groupConcatMaxLenMinimum), true
+		}
+	case float32:
+		f := float64(v)
+		if !math.IsNaN(f) && !math.IsInf(f, 0) && f == math.Trunc(f) && f < float64(groupConcatMaxLenMinimum) {
+			return uint64(groupConcatMaxLenMinimum), true
+		}
+	case float64:
+		if !math.IsNaN(v) && !math.IsInf(v, 0) && v == math.Trunc(v) && v < float64(groupConcatMaxLenMinimum) {
+			return uint64(groupConcatMaxLenMinimum), true
+		}
+	case string:
+		unsignedValue := strings.TrimPrefix(v, "+")
+		if parsed, err := strconv.ParseUint(unsignedValue, 10, 64); err == nil {
+			if parsed < groupConcatMaxLenMinimum {
+				return uint64(groupConcatMaxLenMinimum), true
+			}
+			// SystemVariableUintType.Convert intentionally accepts numeric
+			// values, not strings. Preserve the existing SET '5' behavior by
+			// converting a valid string before it reaches that type.
+			return parsed, false
+		}
+		if parsed, err := strconv.ParseInt(v, 10, 64); err == nil && parsed < int64(groupConcatMaxLenMinimum) {
+			return uint64(groupConcatMaxLenMinimum), true
+		}
+	}
+	return value, false
+}
+
+func groupConcatMaxLenAsUint64(value interface{}) (uint64, bool) {
+	switch v := value.(type) {
+	case uint64:
+		return v, true
+	case int64:
+		if v >= 0 {
+			return uint64(v), true
+		}
+	}
+	return 0, false
+}
+
+func groupConcatMaxLenTruncationWarning(value interface{}) string {
+	return fmt.Sprintf("Truncated incorrect %s value: '%v'", groupConcatMaxLenVariable, value)
 }
 
 func errorConfigDoesNotExist() string { return "the config variable does not exist" }
@@ -1423,6 +1518,22 @@ var gSysVarsDefs = map[string]SystemVariable{
 		Type:              InitSystemVariableIntType("wait_timeout", 1, 2147483, false),
 		Default:           int64(86400),
 	},
+	warningCountSystemVariable: {
+		Name:              warningCountSystemVariable,
+		Scope:             ScopeSession,
+		Dynamic:           false,
+		SetVarHintApplies: false,
+		Type:              InitSystemVariableUintType(warningCountSystemVariable, 0, math.MaxUint64),
+		Default:           uint64(0),
+	},
+	errorCountSystemVariable: {
+		Name:              errorCountSystemVariable,
+		Scope:             ScopeSession,
+		Dynamic:           false,
+		SetVarHintApplies: false,
+		Type:              InitSystemVariableUintType(errorCountSystemVariable, 0, math.MaxUint64),
+		Default:           uint64(0),
+	},
 	"sql_safe_updates": {
 		Name:              "sql_safe_updates",
 		Scope:             ScopeBoth,
@@ -2088,8 +2199,8 @@ var gSysVarsDefs = map[string]SystemVariable{
 		Scope:             ScopeBoth,
 		Dynamic:           true,
 		SetVarHintApplies: true,
-		Type:              InitSystemVariableIntType("group_concat_max_len", 4, math.MaxInt64, false),
-		Default:           int64(1024),
+		Type:              InitSystemVariableUintType(groupConcatMaxLenVariable, groupConcatMaxLenMinimum, math.MaxUint64),
+		Default:           uint64(1024),
 	},
 	"have_ssl": {
 		Name:              "have_ssl",
@@ -3841,6 +3952,43 @@ var gSysVarsDefs = map[string]SystemVariable{
 		Type:              InitSystemVariableBoolType("fulltext_bloom_filter_pushdown"),
 		Default:           int8(0),
 	},
+	// HOST memory byte budget for the vector/fulltext index cache, read per account. The
+	// value on the SYS account (id 0) caps every tenant's resident indexes on the CN
+	// together; the value on a tenant caps that tenant alone. 0 -- the default -- means "not
+	// set by an operator", and the governor then DERIVES the budget from this machine: a
+	// share of total RAM, read from /proc/meminfo and any cgroup limit. So the cache is
+	// always accounted and always evictable, without an operator having to pick a number.
+	//
+	// Device memory has its own budget, max_gpu_index_cache_size: a CN has far more RAM than
+	// VRAM, so one number cannot express both.
+	"max_index_cache_size": {
+		Name:              "max_index_cache_size",
+		Scope:             ScopeGlobal,
+		Dynamic:           true,
+		SetVarHintApplies: false,
+		Type:              InitSystemVariableIntType("max_index_cache_size", 0, math.MaxInt64, false),
+		// 0, meaning unset. The advertised default used to be a fixed 64 TiB ceiling, which
+		// said nothing true about any particular machine and, being non-zero, took priority
+		// over the derived budget -- so on a bootstrapped cluster the machine-derived sizing
+		// never applied. Defaulting to 0 makes the variable say what the governor does: no
+		// operator limit, budget derived from this host.
+		Default: int64(0),
+	},
+	// DEVICE (VRAM) byte budget for the index cache, the GPU counterpart of
+	// max_index_cache_size and read per account the same way: SYS caps the CN, a tenant's
+	// value caps that tenant. Only the cuVS algorithms (cagra, ivfpq) charge against it.
+	// 0 -- the default -- means "not set by an operator", and the governor derives the budget
+	// from the GPUs actually present. A CN with no GPU derives 0 and charges nothing here.
+	"max_gpu_index_cache_size": {
+		Name:              "max_gpu_index_cache_size",
+		Scope:             ScopeGlobal,
+		Dynamic:           true,
+		SetVarHintApplies: false,
+		Type:              InitSystemVariableIntType("max_gpu_index_cache_size", 0, math.MaxInt64, false),
+		// 0, meaning unset: the budget comes from a CUDA query of the devices on this CN, not
+		// from a constant that guesses at somebody's GPU count. See max_index_cache_size.
+		Default: int64(0),
+	},
 	"probe_limit": {
 		Name:              "probe_limit",
 		Scope:             ScopeBoth,
@@ -4355,8 +4503,9 @@ type UserDefinedVar struct {
 	// compatibility, but MySQL fixes their effective type at statement start.
 	// Keeping the assignment type here prevents a numeric sibling operand from
 	// silently narrowing a decimal or floating-point variable.
-	Type             planpb.Type
-	PrepareParamKind vector.PrepareParamKind
+	Type                planpb.Type
+	PrepareParamKind    vector.PrepareParamKind
+	RuntimeStringDomain types.RuntimeStringDomain
 	// Replayable is true only when the proxy can replay the assignment as a
 	// captured raw COM_QUERY SET statement during legacy migration.
 	Replayable bool

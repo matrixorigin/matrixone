@@ -247,6 +247,23 @@ func TestStringLiteralFormRestoresOnlyCrossDomainOverride(t *testing.T) {
 	}
 }
 
+func TestFoldedBinaryLiteralPreservesResolvedSQLType(t *testing.T) {
+	proc := testutil.NewProcess(t)
+	for _, typ := range []types.Type{
+		types.New(types.T_binary, 3, 0),
+		types.T_varbinary.ToType(),
+		types.T_blob.ToType(),
+	} {
+		vec, err := generateConstExpressionExecutor(proc, typ, &plan.Literal{
+			Value: &plan.Literal_Sval{Sval: "a\x00b"},
+		}, nil)
+		require.NoError(t, err)
+		require.Equal(t, typ.Oid, vec.GetType().Oid)
+		require.Equal(t, []byte("a\x00b"), vec.GetBytesAt(0))
+		vec.Free(proc.Mp())
+	}
+}
+
 func TestConstListExpressionExecutorPreservesLiteralSource(t *testing.T) {
 	proc := testutil.NewProcess(t)
 	exprs := []*plan.Expr{
@@ -1398,6 +1415,41 @@ func TestVarExpressionExecutor(t *testing.T) {
 	require.Equal(t, int64(67890), vector.MustFixedColNoTypeCheck[int64](vec)[0])
 }
 
+func TestVarExpressionExecutorPreservesBinaryStringMetadataOnReuse(t *testing.T) {
+	proc := testutil.NewProcess(t)
+	value := "\xe4\xbd\xa0"
+	runtimeDomain := types.RuntimeStringBinary
+	proc.SetResolveVariableFunc(func(string, bool, bool) (interface{}, error) {
+		return value, nil
+	})
+	proc.SetResolveVariableStringDomainFunc(func(string, bool, bool) (types.RuntimeStringDomain, error) {
+		return runtimeDomain, nil
+	})
+
+	executor, err := NewExpressionExecutor(proc, &plan.Expr{
+		Expr: &plan.Expr_V{V: &plan.VarRef{Name: "domain_var"}},
+		Typ:  plan.Type{Id: int32(types.T_varchar)},
+	})
+	require.NoError(t, err)
+	t.Cleanup(executor.Free)
+
+	input := batch.New(nil)
+	input.SetRowCount(2)
+	vec, err := executor.Eval(proc, []*batch.Batch{input}, nil)
+	require.NoError(t, err)
+	require.True(t, vec.GetBinaryStringMetadataAt(0))
+	require.True(t, vec.GetBinaryStringMetadataAt(1))
+	require.Equal(t, types.StringSourceUserVariable, vec.GetStringSourceAt(0))
+
+	runtimeDomain = types.RuntimeStringText
+	value = "text"
+	vec, err = executor.Eval(proc, []*batch.Batch{input}, nil)
+	require.NoError(t, err)
+	require.Equal(t, types.RuntimeStringText, vec.GetRuntimeStringDomainAt(0),
+		"a reused variable vector must replace the preceding binary override")
+	require.Equal(t, "text", vec.GetStringAt(1))
+}
+
 func TestParamExpressionExecutorMatchesBatchRowCount(t *testing.T) {
 	proc := testutil.NewProcess(t)
 	params := vector.NewVec(types.T_varchar.ToType())
@@ -1720,6 +1772,29 @@ func TestColumnExpressionExecutorConstNullPreservesStringSourceAcrossCacheReuse(
 	}
 }
 
+func TestColumnExpressionExecutorPreservesGroupingSentinel(t *testing.T) {
+	proc := testutil.NewProcess(t)
+	executor, err := NewExpressionExecutor(proc, &plan.Expr{
+		Expr: &plan.Expr_Col{Col: &plan.ColRef{RelPos: 0, ColPos: 0}},
+		Typ:  plan.Type{Id: int32(types.T_varchar)},
+	})
+	require.NoError(t, err)
+
+	bat := batch.NewWithSize(1)
+	bat.Vecs[0] = vector.NewRollupConst(types.T_varchar.ToType(), 3, proc.Mp())
+	bat.SetRowCount(3)
+	result, err := executor.Eval(proc, []*batch.Batch{bat}, nil)
+	require.NoError(t, err)
+	require.Same(t, bat.Vecs[0], result)
+	require.True(t, result.IsGrouping())
+	require.Equal(t, 3, result.GetGrouping().Count())
+
+	executor.Free()
+	bat.Clean(proc.Mp())
+	proc.Free()
+	require.Zero(t, proc.Mp().CurrNB())
+}
+
 // TestColumnExpressionExecutor_RelIndexOutOfRange verifies that Eval returns
 // an error instead of panicking when relIndex >= len(batches).
 // This reproduces the crash seen when IVF-Flat entries table contains NULL
@@ -1891,11 +1966,15 @@ func TestFunctionExpressionExecutorShrinkingSelectList(t *testing.T) {
 func TestFunctionExpressionExecutorSelectedRowsPreservesJSONComparisonIdentity(t *testing.T) {
 	proc := testutil.NewProcess(t)
 	defer proc.Free()
+	jsonValue, err := types.ParseStringToByteJson(`1`)
+	require.NoError(t, err)
+	encoded, err := types.EncodeJson(jsonValue)
+	require.NoError(t, err)
 
 	input := vector.NewVec(types.T_json.ToType())
 	defer input.Free(proc.Mp())
 	for range 3 {
-		require.NoError(t, vector.AppendBytes(input, []byte{1}, false, proc.Mp()))
+		require.NoError(t, vector.AppendBytes(input, encoded, false, proc.Mp()))
 	}
 	bat := batch.NewWithSize(1)
 	bat.Vecs[0] = input
@@ -1913,7 +1992,7 @@ func TestFunctionExpressionExecutorSelectedRowsPreservesJSONComparisonIdentity(t
 	) error {
 		output := vector.MustFunctionResult[types.Varlena](result)
 		for range length {
-			if err := output.AppendBytes([]byte{1}, false); err != nil {
+			if err := output.AppendBytes(encoded, false); err != nil {
 				return err
 			}
 			output.GetResultVector().SetPrepareParamKind(vector.PrepareParamInteger)

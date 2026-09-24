@@ -81,6 +81,131 @@ func TestUnionDecimalLiteralCommonType(t *testing.T) {
 	}
 }
 
+func TestUnionSignedUnsignedIntegerCommonType(t *testing.T) {
+	for _, test := range []struct {
+		name string
+		sql  string
+	}{
+		{
+			name: "union all signed first",
+			sql:  "select cast(-1 as signed) as x union all select cast(18446744073709551615 as unsigned) as x",
+		},
+		{
+			name: "union all unsigned first",
+			sql:  "select cast(18446744073709551615 as unsigned) as x union all select cast(-1 as signed) as x",
+		},
+		{
+			name: "union distinct",
+			sql:  "select cast(-1 as signed) as x union select cast(18446744073709551615 as unsigned) as x",
+		},
+		{
+			name: "intersect",
+			sql:  "select cast(-1 as signed) as x intersect select cast(18446744073709551615 as unsigned) as x",
+		},
+		{
+			name: "intersect all",
+			sql:  "select cast(-1 as signed) as x intersect all select cast(18446744073709551615 as unsigned) as x",
+		},
+		{
+			name: "except",
+			sql:  "select cast(-1 as signed) as x except select cast(18446744073709551615 as unsigned) as x",
+		},
+		{
+			name: "minus",
+			sql:  "select cast(-1 as signed) as x minus select cast(18446744073709551615 as unsigned) as x",
+		},
+		{
+			name: "null branch",
+			sql:  "select null as x union all select cast(-1 as signed) as x union all select cast(18446744073709551615 as unsigned) as x",
+		},
+		{
+			name: "direct coalesce",
+			sql:  "select coalesce(cast(-1 as signed), cast(18446744073709551615 as unsigned)) as x",
+		},
+	} {
+		t.Run(test.name, func(t *testing.T) {
+			typ := buildFirstQueryResultType(t, test.sql)
+			require.Equal(t, int32(types.T_decimal128), typ.Id)
+			require.Equal(t, int32(20), typ.Width)
+			require.Zero(t, typ.Scale)
+			if test.name == "null branch" {
+				require.False(t, typ.NotNullable)
+			} else {
+				require.True(t, typ.NotNullable)
+			}
+		})
+	}
+}
+
+func TestUnionSignedUnsignedIntegerColumnCommonType(t *testing.T) {
+	const tableName = "union_signed_unsigned_columns"
+	ctx := NewMockCompilerContext(true)
+	ctx.dbs["test"] = true
+	ctx.objects[tableName] = &planpb.ObjectRef{DbName: "test", ObjName: tableName, Obj: 1}
+	ctx.tables[tableName] = &planpb.TableDef{
+		Name:   tableName,
+		DbName: "test",
+		Cols: []*planpb.ColDef{
+			{Name: "s", Typ: planpb.Type{Id: int32(types.T_int64)}},
+			{Name: "u", Typ: planpb.Type{Id: int32(types.T_uint64)}},
+		},
+	}
+
+	stmt, err := parsers.ParseOne(context.Background(), dialect.MYSQL,
+		"select s as x from test.union_signed_unsigned_columns union all select u from test.union_signed_unsigned_columns", 1)
+	require.NoError(t, err)
+	defer stmt.Free()
+
+	logicPlan, err := BuildPlan(ctx, stmt, false)
+	require.NoError(t, err)
+	query := logicPlan.GetQuery()
+	require.NotEmpty(t, query.Steps)
+
+	var setNode *planpb.Node
+	for _, node := range query.Nodes {
+		if node.NodeType == planpb.Node_UNION_ALL {
+			setNode = node
+			break
+		}
+	}
+	require.NotNil(t, setNode)
+	require.Len(t, setNode.ProjectList, 1)
+	require.Equal(t, int32(types.T_decimal128), setNode.ProjectList[0].Typ.Id)
+	require.Equal(t, int32(20), setNode.ProjectList[0].Typ.Width)
+	require.Zero(t, setNode.ProjectList[0].Typ.Scale)
+	require.False(t, setNode.ProjectList[0].Typ.NotNullable)
+
+	root := query.Nodes[query.Steps[len(query.Steps)-1]]
+	require.NotEmpty(t, root.ProjectList)
+	require.Equal(t, int32(types.T_decimal128), root.ProjectList[0].Typ.Id)
+	require.Equal(t, int32(20), root.ProjectList[0].Typ.Width)
+	require.Zero(t, root.ProjectList[0].Typ.Scale)
+	require.False(t, root.ProjectList[0].Typ.NotNullable)
+}
+
+func TestCTASUnionSignedUnsignedIntegerMetadata(t *testing.T) {
+	stmt, err := parsers.ParseOne(context.Background(), dialect.MYSQL,
+		"create table t_ctas_union_signed_unsigned as select cast(-1 as signed) as x union all select cast(18446744073709551615 as unsigned) as x", 1)
+	require.NoError(t, err)
+	defer stmt.Free()
+
+	logicPlan, err := BuildPlan(NewMockCompilerContext(true), stmt, false)
+	require.NoError(t, err)
+
+	var visible []*planpb.ColDef
+	for _, col := range logicPlan.GetDdl().GetCreateTable().GetTableDef().GetCols() {
+		if !col.Hidden {
+			visible = append(visible, col)
+		}
+	}
+	require.Len(t, visible, 1)
+	require.Equal(t, "x", visible[0].Name)
+	require.Equal(t, int32(types.T_decimal128), visible[0].Typ.Id)
+	require.Equal(t, int32(20), visible[0].Typ.Width)
+	require.Zero(t, visible[0].Typ.Scale)
+	require.True(t, visible[0].Typ.NotNullable)
+}
+
 func TestCTASUnionDecimalLiteralMetadata(t *testing.T) {
 	stmt, err := parsers.ParseOne(context.Background(), dialect.MYSQL,
 		"create table t_ctas_union_decimal as select 1 as x union all select 2.5 as x", 1)

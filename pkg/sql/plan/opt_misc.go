@@ -22,6 +22,7 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/common/runtime"
 	"github.com/matrixorigin/matrixone/pkg/container/batch"
 	"github.com/matrixorigin/matrixone/pkg/container/types"
+	"github.com/matrixorigin/matrixone/pkg/defines"
 	"github.com/matrixorigin/matrixone/pkg/pb/plan"
 	"github.com/matrixorigin/matrixone/pkg/sql/plan/function"
 	"github.com/matrixorigin/matrixone/pkg/sql/plan/rule"
@@ -45,6 +46,11 @@ func (builder *QueryBuilder) countColRefs(nodeID int32, colRefCnt map[[2]int32]i
 	if node.DedupJoinCtx != nil {
 		increaseRefCntForColRefList(node.DedupJoinCtx.OldColList, 2, colRefCnt)
 		increaseRefCntForExprList(node.DedupJoinCtx.UpdateColExprList, 2, colRefCnt)
+		for _, col := range dedupJoinMetadataCols(node.DedupJoinCtx) {
+			if col != nil {
+				colRefCnt[[2]int32{col.RelPos, col.ColPos}] += 2
+			}
+		}
 		for _, cap := range node.DedupJoinCtx.OldColCaptureList {
 			colRefCnt[[2]int32{cap.BuildPlaceholder.RelPos, cap.BuildPlaceholder.ColPos}] += 2
 			colRefCnt[[2]int32{cap.ProbeSource.RelPos, cap.ProbeSource.ColPos}] += 2
@@ -57,6 +63,11 @@ func (builder *QueryBuilder) countColRefs(nodeID int32, colRefCnt map[[2]int32]i
 		increaseRefCntForColRefList(updateCtx.PartitionCols, 2, colRefCnt)
 		if updateCtx.ChangedRowsCol != nil {
 			colRefCnt[[2]int32{updateCtx.ChangedRowsCol.RelPos, updateCtx.ChangedRowsCol.ColPos}] += 2
+		}
+		for _, col := range []*plan.ColRef{updateCtx.AffectedRowsWeightCol, updateCtx.PhysicalChangedRowsCol} {
+			if col != nil {
+				colRefCnt[[2]int32{col.RelPos, col.ColPos}] += 2
+			}
 		}
 		increaseRefCntForColRefList(updateCtx.AffectedRowsCols, 2, colRefCnt)
 	}
@@ -199,14 +210,22 @@ func increaseRefCntForColRefList(cols []plan.ColRef, inc int, colRefCnt map[[2]i
 
 // FIXME: We should remove PROJECT node for more cases, but keep them now to avoid intricate issues.
 func (builder *QueryBuilder) canRemoveProject(parentType plan.Node_NodeType, node *plan.Node) bool {
+	if _, protected := builder.existentialGateProjects[node.NodeId]; protected {
+		// Inlining its TRUE slot would turn an ANTI hash key back into a
+		// residual and enumerate every duplicate-key match.
+		return false
+	}
 	if node.NodeType != plan.Node_PROJECT || node.Limit != nil || node.Offset != nil {
+		return false
+	}
+	if _, groupingSetExpand := DecodeGroupingSetExpandOption(node.ExtraOptions); groupingSetExpand {
 		return false
 	}
 
 	if parentType == plan.Node_DISTINCT || parentType == plan.Node_UNKNOWN {
 		return false
 	}
-	if parentType == plan.Node_UNION || parentType == plan.Node_UNION_ALL {
+	if parentType == plan.Node_UNION || parentType == plan.Node_UNION_ALL || parentType == plan.Node_ADAPTIVE_TOP {
 		return false
 	}
 	if parentType == plan.Node_MINUS || parentType == plan.Node_MINUS_ALL {
@@ -322,6 +341,13 @@ func replaceColumnsForNode(node *plan.Node, projMap map[[2]int32]*plan.Expr) {
 	if node.DedupJoinCtx != nil {
 		replaceColumnsForColRefList(node.DedupJoinCtx.OldColList, projMap)
 		replaceColumnsForExprList(node.DedupJoinCtx.UpdateColExprList, projMap)
+		for _, col := range dedupJoinMetadataCols(node.DedupJoinCtx) {
+			if col != nil {
+				cols := []plan.ColRef{*col}
+				replaceColumnsForColRefList(cols, projMap)
+				*col = cols[0]
+			}
+		}
 		for i := range node.DedupJoinCtx.OldColCaptureList {
 			cap := &node.DedupJoinCtx.OldColCaptureList[i]
 			if projExpr, ok := projMap[[2]int32{cap.BuildPlaceholder.RelPos, cap.BuildPlaceholder.ColPos}]; ok {
@@ -350,6 +376,13 @@ func replaceColumnsForNode(node *plan.Node, projMap map[[2]int32]*plan.Expr) {
 			cols := []plan.ColRef{*updateCtx.ChangedRowsCol}
 			replaceColumnsForColRefList(cols, projMap)
 			*updateCtx.ChangedRowsCol = cols[0]
+		}
+		for _, col := range []*plan.ColRef{updateCtx.AffectedRowsWeightCol, updateCtx.PhysicalChangedRowsCol} {
+			if col != nil {
+				cols := []plan.ColRef{*col}
+				replaceColumnsForColRefList(cols, projMap)
+				*col = cols[0]
+			}
 		}
 		replaceColumnsForColRefList(updateCtx.AffectedRowsCols, projMap)
 	}
@@ -662,6 +695,11 @@ func (builder *QueryBuilder) removeEffectlessLeftJoins(nodeID int32, tagCnt map[
 	if node.DedupJoinCtx != nil {
 		increaseTagCntForColRefList(node.DedupJoinCtx.OldColList, 2, tagCnt)
 		increaseTagCntForExprList(node.DedupJoinCtx.UpdateColExprList, 2, tagCnt)
+		for _, col := range dedupJoinMetadataCols(node.DedupJoinCtx) {
+			if col != nil {
+				tagCnt[col.RelPos] += 2
+			}
+		}
 	}
 
 	for _, updateCtx := range node.UpdateCtxList {
@@ -670,6 +708,11 @@ func (builder *QueryBuilder) removeEffectlessLeftJoins(nodeID int32, tagCnt map[
 		increaseTagCntForColRefList(updateCtx.PartitionCols, 2, tagCnt)
 		if updateCtx.ChangedRowsCol != nil {
 			tagCnt[updateCtx.ChangedRowsCol.RelPos] += 2
+		}
+		for _, col := range []*plan.ColRef{updateCtx.AffectedRowsWeightCol, updateCtx.PhysicalChangedRowsCol} {
+			if col != nil {
+				tagCnt[col.RelPos] += 2
+			}
 		}
 		increaseTagCntForColRefList(updateCtx.AffectedRowsCols, 2, tagCnt)
 	}
@@ -711,6 +754,11 @@ END:
 	if node.DedupJoinCtx != nil {
 		increaseTagCntForColRefList(node.DedupJoinCtx.OldColList, -2, tagCnt)
 		increaseTagCntForExprList(node.DedupJoinCtx.UpdateColExprList, -2, tagCnt)
+		for _, col := range dedupJoinMetadataCols(node.DedupJoinCtx) {
+			if col != nil {
+				tagCnt[col.RelPos] -= 2
+			}
+		}
 	}
 
 	for _, updateCtx := range node.UpdateCtxList {
@@ -720,10 +768,23 @@ END:
 		if updateCtx.ChangedRowsCol != nil {
 			tagCnt[updateCtx.ChangedRowsCol.RelPos] -= 2
 		}
+		for _, col := range []*plan.ColRef{updateCtx.AffectedRowsWeightCol, updateCtx.PhysicalChangedRowsCol} {
+			if col != nil {
+				tagCnt[col.RelPos] -= 2
+			}
+		}
 		increaseTagCntForColRefList(updateCtx.AffectedRowsCols, -2, tagCnt)
 	}
 
 	return nodeID
+}
+
+func dedupJoinMetadataCols(ctx *plan.DedupJoinCtx) []*plan.ColRef {
+	cols := []*plan.ColRef{ctx.AffectedRowsCol, ctx.PhysicalChangedRowsCol, ctx.ActionFinalCol}
+	for i := range ctx.ForeignKeyChecks {
+		cols = append(cols, ctx.ForeignKeyChecks[i].EligibilityCol)
+	}
+	return cols
 }
 
 func increaseTagCntForExprList(exprs []*plan.Expr, inc int, tagCnt map[int32]int) {
@@ -1150,11 +1211,11 @@ func (builder *QueryBuilder) rewriteEffectlessAggToProjectImpl(
 		return
 	}
 	scan := builder.qry.Nodes[node.Children[0]]
-	if scan.NodeType != plan.Node_TABLE_SCAN || scan.TableDef == nil || scan.TableDef.Pkey == nil {
+	if scan.NodeType != plan.Node_TABLE_SCAN || scan.TableDef == nil {
 		return
 	}
-	pkPositions, ok := sqlEqualityCompatiblePrimaryKeyColumnPositions(scan.TableDef)
-	if !ok || len(scan.BindingTags) != 1 {
+	uniqueKeys := sqlEqualityCompatibleScanUniqueKeys(scan.TableDef)
+	if len(uniqueKeys) == 0 || len(scan.BindingTags) != 1 {
 		return
 	}
 	seenBindingTags := map[int32]struct{}{scan.BindingTags[0]: {}}
@@ -1178,17 +1239,29 @@ func (builder *QueryBuilder) rewriteEffectlessAggToProjectImpl(
 			groupCol = append(groupCol, col.ColPos)
 		}
 	}
-	for _, pk := range pkPositions {
-		found := false
-		for _, group := range groupCol {
-			if group == pk {
-				found = true
+	containsCompleteUniqueKey := false
+	for _, key := range uniqueKeys {
+		complete := true
+		for _, keyColumn := range key.columnPositions {
+			found := false
+			for _, group := range groupCol {
+				if group == keyColumn {
+					found = true
+					break
+				}
+			}
+			if !found {
+				complete = false
 				break
 			}
 		}
-		if !found {
-			return
+		if complete {
+			containsCompleteUniqueKey = true
+			break
 		}
+	}
+	if !containsCompleteUniqueKey {
+		return
 	}
 	if limitDemand {
 		for _, expr := range node.GroupBy {
@@ -2204,6 +2277,8 @@ func handleOptimizerHints(str string, builder *QueryBuilder) {
 		builder.optimizerHints = &OptimizerHints{}
 	}
 	switch key {
+	case "vectorLocalDOP":
+		builder.optimizerHints.vectorLocalDOP = value
 	case "pushDownLimitToScan":
 		builder.optimizerHints.pushDownLimitToScan = value
 	case "pushDownTopThroughLeftJoin":
@@ -2244,6 +2319,8 @@ func handleOptimizerHints(str string, builder *QueryBuilder) {
 		builder.optimizerHints.disableRightJoin = value
 	case "disableRightSingleRF":
 		builder.optimizerHints.disableRightSingleRF = value
+	case "sharedComputation":
+		builder.optimizerHints.sharedComputation = value
 	case "subqueryPredicatePlanning":
 		builder.optimizerHints.subqueryPredicatePlanning = value
 	case "printShuffle":
@@ -2255,22 +2332,37 @@ func handleOptimizerHints(str string, builder *QueryBuilder) {
 	}
 }
 
+func (builder *QueryBuilder) sharedComputationDisabled() bool {
+	return builder.optimizerHints != nil && builder.optimizerHints.sharedComputation == 1
+}
+
 func (builder *QueryBuilder) subqueryPredicatePlanningDisabled() bool {
 	return builder.optimizerHints != nil && builder.optimizerHints.subqueryPredicatePlanning == 1
 }
 
 func (builder *QueryBuilder) parseOptimizeHints() {
-	v, ok := runtime.ServiceRuntime(builder.compCtx.GetProcess().GetService()).GetGlobalVariables("optimizer_hints")
-	if !ok {
-		return
+	applyHints := func(str string) {
+		if len(str) == 0 {
+			return
+		}
+		kvs := strings.Split(str, ",")
+		for i := range kvs {
+			handleOptimizerHints(kvs[i], builder)
+		}
 	}
-	str := v.(string)
-	if len(str) == 0 {
-		return
+	if v, ok := runtime.ServiceRuntime(builder.compCtx.GetProcess().GetService()).GetGlobalVariables("optimizer_hints"); ok {
+		if str, ok := v.(string); ok {
+			applyHints(str)
+		}
 	}
-	kvs := strings.Split(str, ",")
-	for i := range kvs {
-		handleOptimizerHints(kvs[i], builder)
+	// Per-statement optimizer_hints (same key=value format as the global variable) carried on the
+	// execution context by the internal SQL executor (StatementOption.WithOptimizerHints). Applied
+	// AFTER the global so a statement can override it -- e.g. the fulltext2 json probe's fallback/
+	// tail SQL passes applyIndices=1 so its base-table scan does not re-trigger the probe rewrite.
+	if v := builder.compCtx.GetContext().Value(defines.OptimizerHints{}); v != nil {
+		if str, ok := v.(string); ok {
+			applyHints(str)
+		}
 	}
 }
 

@@ -16,6 +16,7 @@ package frontend
 
 import (
 	"context"
+	"slices"
 
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
 	"github.com/matrixorigin/matrixone/pkg/sql/parsers"
@@ -23,15 +24,67 @@ import (
 )
 
 type remapDbContext struct {
+	ctx                 context.Context
 	databases           map[string]string
 	lowerCaseTableNames int64
 	remapUseDatabase    bool
 	unsupported         *bool
+	// rejectUseStateChanges makes dependency collection fail closed for routine
+	// bodies that execute USE. The default database is then path-dependent for
+	// control-flow branches, and assigning one database to every unqualified
+	// reference would risk both false omission and an unsafe persisted body.
+	rejectUseStateChanges bool
+	// cteNames is populated only while dependency collection/remapping walks a
+	// SELECT. It prevents an unqualified CTE reference from being collected as
+	// a source table while preserving qualified references such as db.cte.
+	cteNames             map[string]struct{}
+	collectTableName     func(*tree.TableName)
+	collectProcedureName func(*tree.ProcedureName)
+	collectFunctionName  func(*tree.UnresolvedName)
+	// err, when non-nil, receives the first fail-closed remapping error (for
+	// example a rewrite-key collision under remapdb). Walkers keep going so
+	// later statements stay consistent, and applyRemapDb* returns the error
+	// before authorization/planning sees the statements.
+	err *error
 }
 
 func (remap remapDbContext) lookup(database string) (string, bool) {
 	target, ok := remap.databases[tree.NewCStr(database, remap.lowerCaseTableNames).Compare()]
 	return target, ok
+}
+
+func (remap remapDbContext) fail(err error) {
+	if remap.err != nil && err != nil && *remap.err == nil {
+		*remap.err = err
+	}
+}
+
+func (remap remapDbContext) withVisibleCTEs(ctes ...*tree.CTE) remapDbContext {
+	if len(ctes) == 0 {
+		return remap
+	}
+	scoped := remap
+	scoped.cteNames = make(map[string]struct{}, len(remap.cteNames)+len(ctes))
+	for name := range remap.cteNames {
+		scoped.cteNames[name] = struct{}{}
+	}
+	for _, cte := range ctes {
+		if cte == nil || cte.Name == nil || cte.Name.Alias == "" {
+			continue
+		}
+		scoped.cteNames[tree.NewCStr(
+			string(cte.Name.Alias), remap.lowerCaseTableNames,
+		).Compare()] = struct{}{}
+	}
+	return scoped
+}
+
+func (remap remapDbContext) isVisibleCTE(name string) bool {
+	if len(remap.cteNames) == 0 {
+		return false
+	}
+	_, ok := remap.cteNames[tree.NewCStr(name, remap.lowerCaseTableNames).Compare()]
+	return ok
 }
 
 // applyRemapDb substitutes the database of qualified table and column
@@ -65,11 +118,14 @@ func applyRemapDb(
 	if err != nil {
 		return err
 	}
-	remapCtx := remapDbContext{databases: normalized, lowerCaseTableNames: lowerCaseTableNames}
+	var walkErr error
+	remapCtx := remapDbContext{
+		ctx: ctx, databases: normalized, lowerCaseTableNames: lowerCaseTableNames, err: &walkErr,
+	}
 	for _, stmt := range stmts {
 		remapDbInStmt(stmt, remapCtx)
 	}
-	return nil
+	return walkErr
 }
 
 func applyRemapDbByStatement(
@@ -86,9 +142,13 @@ func applyRemapDbByStatement(
 		if err != nil {
 			return err
 		}
+		var walkErr error
 		remapDbInStmt(stmt, remapDbContext{
-			databases: normalized, lowerCaseTableNames: lowerCaseTableNames,
+			ctx: ctx, databases: normalized, lowerCaseTableNames: lowerCaseTableNames, err: &walkErr,
 		})
+		if walkErr != nil {
+			return walkErr
+		}
 	}
 	return nil
 }
@@ -110,7 +170,8 @@ func remapCloneRoutineStatements(
 	}
 	unsupported := false
 	if !remapDbInStatements(stmts, remapDbContext{
-		databases: normalized, lowerCaseTableNames: lowerCaseTableNames, remapUseDatabase: true, unsupported: &unsupported,
+		ctx: ctx, databases: normalized, lowerCaseTableNames: lowerCaseTableNames,
+		remapUseDatabase: true, unsupported: &unsupported,
 	}) || unsupported {
 		return moerr.NewNotSupported(ctx,
 			"cloned SQL routine contains a statement whose database references cannot be safely remapped",
@@ -195,25 +256,26 @@ func remapDbInStmt(stmt tree.Statement, remap remapDbContext) bool {
 	case *tree.ParenSelect:
 		remapDbInSelect(s.Select, remap)
 	case *tree.Insert:
-		remapDbInWith(s.With, remap)
-		remapDbInTableExpr(s.Table, remap)
-		remapInsertTarget(s.ColumnNames, &s.TargetDatabaseName, remap)
+		scoped := remapDbInWithScope(s.With, remap)
+		remapDbInTableExpr(s.Table, scoped)
+		remapInsertTarget(s.ColumnNames, &s.TargetDatabaseName, scoped)
 		if s.Rows != nil {
-			remapDbInSelect(s.Rows, remap)
+			remapDbInSelect(s.Rows, scoped)
 		}
-		remapDbInUpdateExprs(s.OnDuplicateUpdate, remap)
+		remapDbInUpdateExprs(s.OnDuplicateUpdate, scoped)
+		remapDbInSelectExprs(s.Returning, scoped)
 	case *tree.MultiInsert:
-		remapDbInWith(s.With, remap)
+		scoped := remapDbInWithScope(s.With, remap)
 		for _, target := range s.AllTargets() {
-			remapDbInTableExpr(target.Table, remap)
-			remapInsertTarget(target.ColumnNames, nil, remap)
-			remapDbInExprs(target.Values, remap)
+			remapDbInTableExpr(target.Table, scoped)
+			remapInsertTarget(target.ColumnNames, nil, scoped)
+			remapDbInExprs(target.Values, scoped)
 		}
 		for _, when := range s.Whens {
-			remapDbInExpr(when.Cond, remap)
+			remapDbInExpr(when.Cond, scoped)
 		}
 		if s.Source != nil {
-			remapDbInSelect(s.Source, remap)
+			remapDbInSelect(s.Source, scoped)
 		}
 	case *tree.Replace:
 		remapDbInTableExpr(s.Table, remap)
@@ -221,23 +283,26 @@ func remapDbInStmt(stmt tree.Statement, remap remapDbContext) bool {
 		if s.Rows != nil {
 			remapDbInSelect(s.Rows, remap)
 		}
+		remapDbInSelectExprs(s.Returning, remap)
 	case *tree.Update:
-		remapDbInWith(s.With, remap)
-		remapDbInTableExprs(s.Tables, remap)
+		scoped := remapDbInWithScope(s.With, remap)
+		remapDbInTableExprs(s.Tables, scoped)
 		if s.From != nil {
-			remapDbInTableExprs(s.From.Tables, remap)
+			remapDbInTableExprs(s.From.Tables, scoped)
 		}
-		remapDbInUpdateExprs(s.Exprs, remap)
-		remapDbInWhere(s.Where, remap)
-		remapDbInOrderBy(s.OrderBy, remap)
-		remapDbInLimit(s.Limit, remap)
+		remapDbInUpdateExprs(s.Exprs, scoped)
+		remapDbInWhere(s.Where, scoped)
+		remapDbInOrderBy(s.OrderBy, scoped)
+		remapDbInLimit(s.Limit, scoped)
+		remapDbInSelectExprs(s.Returning, scoped)
 	case *tree.Delete:
-		remapDbInWith(s.With, remap)
-		remapDbInTableExprs(s.Tables, remap)
-		remapDbInTableExprs(s.TableRefs, remap)
-		remapDbInWhere(s.Where, remap)
-		remapDbInOrderBy(s.OrderBy, remap)
-		remapDbInLimit(s.Limit, remap)
+		scoped := remapDbInWithScope(s.With, remap)
+		remapDbInTableExprs(s.Tables, scoped)
+		remapDbInTableExprs(s.TableRefs, scoped)
+		remapDbInWhere(s.Where, scoped)
+		remapDbInOrderBy(s.OrderBy, scoped)
+		remapDbInLimit(s.Limit, scoped)
+		remapDbInSelectExprs(s.Returning, scoped)
 	case *tree.ValuesStatement:
 		for _, row := range s.Rows {
 			remapDbInExprs(row, remap)
@@ -267,21 +332,19 @@ func remapDbInStmt(stmt tree.Statement, remap remapDbContext) bool {
 	case *tree.Do:
 		remapDbInExprs(s.Exprs, remap)
 	case *tree.Merge:
-		remapDbInWith(s.With, remap)
-		remapDbInTableExpr(s.Target, remap)
-		remapDbInTableExpr(s.Source, remap)
-		remapDbInExpr(s.On, remap)
+		scoped := remapDbInWithScope(s.With, remap)
+		remapDbInTableExpr(s.Target, scoped)
+		remapDbInTableExpr(s.Source, scoped)
+		remapDbInExpr(s.On, scoped)
 		for _, clause := range s.Clauses {
 			if clause == nil {
 				continue
 			}
-			remapDbInExpr(clause.Condition, remap)
-			remapDbInUpdateExprs(clause.UpdateExprs, remap)
-			remapDbInExprs(clause.InsertValues, remap)
+			remapDbInExpr(clause.Condition, scoped)
+			remapDbInUpdateExprs(clause.UpdateExprs, scoped)
+			remapDbInExprs(clause.InsertValues, scoped)
 		}
-		for _, returning := range s.Returning {
-			remapDbInExpr(returning.Expr, remap)
-		}
+		remapDbInSelectExprs(s.Returning, scoped)
 	case *tree.Load:
 		remapTableName(s.Table, remap)
 	case *tree.DumpTable:
@@ -385,6 +448,9 @@ func remapDbInStmt(stmt tree.Statement, remap remapDbContext) bool {
 		// These forms carry no database or table identity. Their nested expression
 		// fields, where present, are handled by their dedicated cases above.
 	case *tree.Use:
+		if remap.rejectUseStateChanges && !s.IsUseRole() {
+			remap.markUnsupported()
+		}
 		if remap.remapUseDatabase {
 			remapUseDatabase(s, remap)
 		}
@@ -514,15 +580,94 @@ func remapDbInStatements(stmts []tree.Statement, remap remapDbContext) bool {
 	return remappable
 }
 
+func remapDbInWithScope(w *tree.With, remap remapDbContext) remapDbContext {
+	remapDbInWith(w, remap)
+	if w == nil {
+		return remap
+	}
+	return remap.withVisibleCTEs(w.CTEs...)
+}
+
 func remapDbInWith(w *tree.With, remap remapDbContext) {
 	if w == nil {
 		return
 	}
+	recursiveScope := remap.withVisibleCTEs(w.CTEs...)
+	sequentialScope := remap
 	for _, cte := range w.CTEs {
-		if cte != nil {
-			remapDbInStmt(cte.Stmt, remap)
+		if cte == nil {
+			continue
 		}
+		cteScope := sequentialScope
+		if w.IsRecursive {
+			cteScope = recursiveScope
+		}
+		remapDbInStmt(cte.Stmt, cteScope)
+		sequentialScope = sequentialScope.withVisibleCTEs(cte)
 	}
+}
+
+func remapDbInSelectExprs(exprs tree.SelectExprs, remap remapDbContext) {
+	for _, expr := range exprs {
+		remapDbInExpr(expr.Expr, remap)
+	}
+}
+
+// remapRewriteOption keeps a statement's rewrite policy aligned with remapdb.
+// The planner keys rewrites by the post-remap schema+table and expands the
+// rule body as the table's replacement, so both the map key and every rule
+// body must observe the same database as the outer query. A remap that would
+// land two distinct rewrite keys on one destination fails closed rather than
+// dropping one chain. Keys are planned before any body is mutated so a
+// collision leaves the option untouched.
+func remapRewriteOption(opt *tree.RewriteOption, remap remapDbContext) error {
+	if opt == nil || len(opt.Rewrites) == 0 {
+		return nil
+	}
+	keys := make([]string, 0, len(opt.Rewrites))
+	for key := range opt.Rewrites {
+		keys = append(keys, key)
+	}
+	slices.Sort(keys)
+	newKeys := make([]string, len(keys))
+	owner := make(map[string]string, len(opt.Rewrites))
+	for i, key := range keys {
+		newKey := key
+		if db, table, ok := parsers.SplitRewriteKey(key); ok {
+			if target, found := remap.lookup(db); found {
+				newKey = tree.NewCStr(target, remap.lowerCaseTableNames).Compare() +
+					"." + tree.NewCStr(table, remap.lowerCaseTableNames).Compare()
+			}
+		}
+		if prev, exists := owner[newKey]; exists && prev != key {
+			ctx := remap.ctx
+			if ctx == nil {
+				ctx = context.Background()
+			}
+			return moerr.NewInvalidInputf(ctx,
+				"remapdb rewrite key collision: %q and %q both resolve to %q", prev, key, newKey)
+		}
+		owner[newKey] = key
+		newKeys[i] = newKey
+	}
+	remapped := make(map[string][]*tree.Rewrite, len(opt.Rewrites))
+	for i, key := range keys {
+		chain := opt.Rewrites[key]
+		for _, rewrite := range chain {
+			if rewrite == nil {
+				continue
+			}
+			if target, ok := remap.lookup(rewrite.DbName); ok {
+				rewrite.DbName = target
+			}
+			if rewrite.Stmt != nil {
+				remapDbInStmt(rewrite.Stmt, remap)
+			}
+		}
+		remapped[newKeys[i]] = chain
+	}
+	opt.Rewrites = remapped
+	return nil
 }
 
 func remapDbInSelect(sel *tree.Select, remap remapDbContext) {
@@ -530,10 +675,19 @@ func remapDbInSelect(sel *tree.Select, remap remapDbContext) {
 		return
 	}
 	remapDbInWith(sel.With, remap)
-	remapDbInSelectStatement(sel.Select, remap)
-	remapDbInTimeWindow(sel.TimeWindow, remap)
-	remapDbInOrderBy(sel.OrderBy, remap)
-	remapDbInLimit(sel.Limit, remap)
+	scoped := remap
+	if sel.With != nil {
+		scoped = remap.withVisibleCTEs(sel.With.CTEs...)
+	}
+	remapDbInSelectStatement(sel.Select, scoped)
+	remapDbInTimeWindow(sel.TimeWindow, scoped)
+	remapDbInOrderBy(sel.OrderBy, scoped)
+	remapDbInLimit(sel.Limit, scoped)
+	// Role/session/inline rewrite keys and rule bodies must stay aligned with
+	// the remapped table references. The planner builds its lookup key from the
+	// post-remap schema+table, so a source-keyed rewrite would otherwise miss
+	// and silently drop row-level policy (issue #29161).
+	remap.fail(remapRewriteOption(sel.RewriteOption, remap))
 }
 
 func remapDbInSelectStatement(s tree.SelectStatement, remap remapDbContext) {
@@ -868,6 +1022,12 @@ func remapDbInExpr(expr tree.Expr, remap remapDbContext) {
 	case *tree.VarExpr:
 		remapDbInExpr(e.Expr, remap)
 	case *tree.FuncExpr:
+		if name, ok := e.Func.FunctionReference.(*tree.UnresolvedName); ok {
+			if remap.collectFunctionName != nil {
+				remap.collectFunctionName(name)
+			}
+			remapFunctionName(name, remap)
+		}
 		remapDbInExprs(e.Exprs, remap)
 		remapDbInOrderBy(e.OrderBy, remap)
 		remapDbInWindowSpec(e.WindowSpec, remap)
@@ -927,6 +1087,10 @@ func remapTableName(tn *tree.TableName, remap remapDbContext) {
 	if tn == nil {
 		return
 	}
+	if remap.collectTableName != nil && tn.ObjectName != "" &&
+		(tn.ExplicitSchema || !remap.isVisibleCTE(string(tn.ObjectName))) {
+		remap.collectTableName(tn)
+	}
 	if tn.ExplicitSchema {
 		if target, ok := remap.lookup(string(tn.SchemaName)); ok {
 			tn.SchemaName = tree.Identifier(target)
@@ -938,7 +1102,13 @@ func remapTableName(tn *tree.TableName, remap remapDbContext) {
 }
 
 func remapProcedureName(name *tree.ProcedureName, remap remapDbContext) {
-	if name == nil || !name.Name.ExplicitSchema {
+	if name == nil {
+		return
+	}
+	if remap.collectProcedureName != nil {
+		remap.collectProcedureName(name)
+	}
+	if !name.Name.ExplicitSchema {
 		return
 	}
 	if target, ok := remap.lookup(string(name.Name.SchemaName)); ok {
@@ -955,6 +1125,25 @@ func remapColumnName(name *tree.UnresolvedName, remap remapDbContext) {
 	}
 	if target, ok := remap.lookup(name.DbName()); ok {
 		name.CStrParts[2] = tree.NewCStr(target, remap.lowerCaseTableNames)
+	}
+}
+
+// remapFunctionName substitutes a qualified function's database component.
+// Function references are safe to treat separately from column names because
+// the parser has already classified this UnresolvedName as a function name;
+// a two-part name is therefore db.function rather than table.column.
+func remapFunctionName(name *tree.UnresolvedName, remap remapDbContext) {
+	if name == nil || name.NumParts < 2 {
+		return
+	}
+	part := 1
+	database := name.TblName()
+	if name.NumParts >= 3 {
+		part = 2
+		database = name.DbName()
+	}
+	if target, ok := remap.lookup(database); ok {
+		name.CStrParts[part] = tree.NewCStr(target, remap.lowerCaseTableNames)
 	}
 }
 

@@ -19,8 +19,36 @@ import (
 	"fmt"
 	"testing"
 
+	"github.com/matrixorigin/matrixone/pkg/util/errutil"
 	"github.com/stretchr/testify/require"
 )
+
+func TestFormatDuplicateEntryMatchesErrorMessageWithoutReporting(t *testing.T) {
+	previousReporter := errutil.GetReportErrorFunc()
+	reports := 0
+	errutil.SetErrorReporter(func(context.Context, error, int) {
+		reports++
+	})
+	t.Cleanup(func() {
+		errutil.SetErrorReporter(previousReporter)
+	})
+
+	for _, tc := range []struct {
+		entry string
+		key   string
+	}{
+		{entry: "1", key: "PRIMARY"},
+		{entry: "", key: "unique_%"},
+		{entry: "重复%值", key: "idx_name"},
+	} {
+		want := NewDuplicateEntry(NoReportContext(), tc.entry, tc.key).Error()
+		require.Equal(t, want, FormatDuplicateEntry(tc.entry, tc.key))
+	}
+	require.Zero(t, reports)
+
+	_ = NewDuplicateEntry(context.Background(), "1", "PRIMARY")
+	require.Equal(t, 1, reports)
+}
 
 func pf1() {
 	panic("foo")
@@ -94,6 +122,12 @@ func TestNew_MyErrorCode(t *testing.T) {
 	err = NewOutOfRange(context.TODO(), "int8", "1111")
 	require.Equal(t, ER_DATA_OUT_OF_RANGE, err.MySQLCode())
 
+	err = NewCannotConvertString(context.TODO(), "A\\xffB", "binary", "utf8mb4")
+	require.Equal(t, ErrCannotConvertString, err.ErrorCode())
+	require.Equal(t, ER_CANNOT_CONVERT_STRING, err.MySQLCode())
+	require.Equal(t, MySQLDefaultSqlState, err.SqlState())
+	require.Equal(t, "Cannot convert string 'A\\xffB' from binary to utf8mb4", err.Error())
+
 	err = NewPreparedParamOutOfRange(context.TODO(), "unsigned integer", "EXECUTE")
 	require.Equal(t, ErrPreparedParamOutOfRange, err.ErrorCode())
 	require.Equal(t, ER_DATA_OUT_OF_RANGE, err.MySQLCode())
@@ -162,6 +196,20 @@ func TestMaxPreparedStmtCountReachedMySQLError(t *testing.T) {
 	require.Equal(t,
 		"Can't create more than max_prepared_stmt_count statements (current value: 2)",
 		err.Error())
+}
+
+func TestInvalidBitwiseOperandsSizeMySQLError(t *testing.T) {
+	for _, err := range []*Error{
+		NewInvalidBitwiseOperandsSize(context.Background()),
+		NewInvalidBitwiseOperandsSizeNoCtx(),
+	} {
+		require.Equal(t, ErrInvalidBitwiseOperandsSize, err.ErrorCode())
+		require.Equal(t, ER_INVALID_BITWISE_OPERANDS_SIZE, err.MySQLCode())
+		require.Equal(t, "HY000", err.SqlState())
+		require.Equal(t,
+			"Binary operands of bitwise operators must be of equal length",
+			err.Error())
+	}
 }
 
 func TestIsMoErrCode(t *testing.T) {
@@ -317,6 +365,20 @@ func TestTooLongIdentMySQLError(t *testing.T) {
 	require.Equal(t, "Identifier name 'identifier' is too long", err.Error())
 }
 
+func TestUserLockWrongNameMySQLError(t *testing.T) {
+	err := NewUserLockWrongName(context.Background(), "NULL")
+	require.Equal(t, ErrUserLockWrongName, err.ErrorCode())
+	require.Equal(t, uint16(ER_USER_LOCK_WRONG_NAME), err.MySQLCode())
+	require.Equal(t, "42000", err.SqlState())
+	require.Equal(t, "Incorrect user-level lock name 'NULL'.", err.Error())
+
+	data, marshalErr := err.MarshalBinary()
+	require.NoError(t, marshalErr)
+	decoded := new(Error)
+	require.NoError(t, decoded.UnmarshalBinary(data))
+	require.Equal(t, err, decoded)
+}
+
 type fakeErr struct {
 }
 
@@ -401,6 +463,11 @@ func TestNewErrTooBigPrecision(t *testing.T) {
 
 func Test_ForCoverage(t *testing.T) {
 	ctx := context.Background()
+	cut := NewGroupConcatCut(ctx, "Row 2 was cut by GROUP_CONCAT()")
+	require.True(t, IsMoErrCode(cut, ErrGroupConcatCut))
+	require.Equal(t, ER_CUT_VALUE_GROUP_CONCAT, cut.MySQLCode())
+	require.Equal(t, "Row 2 was cut by GROUP_CONCAT()", cut.Error())
+
 	err := NewDataTruncatedf(ctx, "test", "test")
 	require.True(t, IsMoErrCode(err, ErrDataTruncated))
 

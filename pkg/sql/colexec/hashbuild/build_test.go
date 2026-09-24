@@ -2394,9 +2394,12 @@ func TestRuntimeFilterMarshalBudgetAdmissionFallsBackToPass(t *testing.T) {
 	tests := []struct {
 		name       string
 		membership bool
+		mustApply  bool
+		wantErr    bool
 	}{
 		{name: "in"},
 		{name: "unique join keys", membership: true},
+		{name: "required unique join keys", membership: true, mustApply: true, wantErr: true},
 	}
 
 	for _, test := range tests {
@@ -2408,6 +2411,7 @@ func TestRuntimeFilterMarshalBudgetAdmissionFallsBackToPass(t *testing.T) {
 				UpperLimit:          100,
 				BuildExpr:           newExpr(0, types.T_int32.ToType()),
 				UseMembershipFilter: test.membership,
+				MustApply:           test.mustApply,
 				KeyEncoding:         plan.RuntimeFilterKeyEncoding_RUNTIME_FILTER_KEY_RAW_V1,
 				ProbeType:           runtimeFilterPlanType(types.T_int32.ToType()),
 			}
@@ -2425,7 +2429,12 @@ func TestRuntimeFilterMarshalBudgetAdmissionFallsBackToPass(t *testing.T) {
 				testutil.MakeInt32Vector([]int32{1}, nil, tc.proc.Mp()),
 			}
 
-			require.NoError(t, tc.arg.handleRuntimeFilter(tc.proc))
+			handleErr := tc.arg.handleRuntimeFilter(tc.proc)
+			if test.wantErr {
+				require.Error(t, handleErr)
+			} else {
+				require.NoError(t, handleErr)
+			}
 			require.True(t, tc.arg.ctr.runtimeFilterDone)
 			require.False(t, tc.arg.ctr.runtimeFilterIn)
 			require.Nil(t, tc.arg.ctr.hashmapBuilder.UniqueJoinKeys)
@@ -2445,11 +2454,16 @@ func TestRuntimeFilterMarshalBudgetAdmissionFallsBackToPass(t *testing.T) {
 			require.Empty(t, runtimeFilter.Data)
 
 			extra := tc.arg.OpAnalyzer.GetOpStats().ExtraStats
-			require.Equal(t, int64(1), extra["HashBuildRuntimeFilterBudgetFallbacks"])
-			require.Zero(t, extra["HashBuildRuntimeFilterAllocationFallbacks"])
-			require.Greater(t, extra["HashBuildRuntimeFilterBudgetFallbackRequestedBytes"], int64(1))
-			require.Zero(t, extra["HashBuildRuntimeFilterBudgetFallbackUsedBytes"])
-			require.Equal(t, int64(1), extra["HashBuildRuntimeFilterBudgetFallbackCapBytes"])
+			if test.mustApply {
+				require.Zero(t, extra["HashBuildRuntimeFilterBudgetFallbacks"])
+				require.Zero(t, extra["HashBuildRuntimeFilterAllocationFallbacks"])
+			} else {
+				require.Equal(t, int64(1), extra["HashBuildRuntimeFilterBudgetFallbacks"])
+				require.Zero(t, extra["HashBuildRuntimeFilterAllocationFallbacks"])
+				require.Greater(t, extra["HashBuildRuntimeFilterBudgetFallbackRequestedBytes"], int64(1))
+				require.Zero(t, extra["HashBuildRuntimeFilterBudgetFallbackUsedBytes"])
+				require.Equal(t, int64(1), extra["HashBuildRuntimeFilterBudgetFallbackCapBytes"])
+			}
 
 			generation.Close()
 			tc.proc.Free()

@@ -1636,9 +1636,10 @@ func (gs *GlobalStats) refreshStatsWithMode(
 }
 
 // publishAnalyzedStats publishes one coherent manual-collection generation in
-// one cache transition. Fields absent from this collection stay absent so a
-// planner can use its ordinary fallback instead of mixing statistics produced
-// from different table populations.
+// one cache transition. Before the transition it collects a fresh metadata
+// generation under the same refresh admission, then overlays the fields read by
+// ANALYZE. This keeps physical-layout information available without importing
+// a stale cache entry from an earlier table generation.
 func (gs *GlobalStats) publishAnalyzedStats(
 	ctx context.Context,
 	key pb.StatsInfoKey,
@@ -1659,18 +1660,19 @@ func (gs *GlobalStats) publishAnalyzedStats(
 	}
 	defer stopRefresh()
 
-	if _, err = gs.engine.pClient.toSubscribeTable(
+	ps, subscribeErr := gs.engine.pClient.toSubscribeTable(
 		refreshCtx,
 		uint64(key.AccId),
 		key.TableID,
 		key.TableName,
 		key.DatabaseID,
 		key.DbName,
-	); err != nil {
+	)
+	if subscribeErr != nil {
 		if cause := gs.statsRefreshCancellationCause(ctx); cause != nil {
 			return nil, cause
 		}
-		return nil, moerr.NewInternalErrorNoCtxf("failed to subscribe table: %v", err)
+		return nil, moerr.NewInternalErrorNoCtxf("failed to subscribe table: %v", subscribeErr)
 	}
 	generation, ok := gs.currentOrCreateSubscribedUpdateRecord(key)
 	if !ok {
@@ -1678,7 +1680,36 @@ func (gs *GlobalStats) publishAnalyzedStats(
 			"manual statistics publication crossed subscription boundary for table %d", key.TableID)
 	}
 
-	published := newAnalyzedStatsGeneration(collected)
+	table := gs.engine.GetLatestCatalogCache().GetTableById(
+		key.AccId, key.DatabaseID, key.TableID)
+	if table == nil || table.TableDef == nil {
+		return nil, moerr.NewInternalErrorNoCtx("table not found")
+	}
+	metadata := plan2.NewStatsInfo()
+	approxObjectNum := int64(ps.ApproxDataObjectsNum())
+	if lastActualObjectCnt := gs.GetBaseObjectCnt(key); lastActualObjectCnt > 0 {
+		approxObjectNum = lastActualObjectCnt
+	}
+	now := timestamp.Timestamp{PhysicalTime: time.Now().UnixNano()}
+	req := &updateStatsRequest{
+		statsInfo:       metadata,
+		tableDef:        table.TableDef,
+		partitionState:  ps,
+		fs:              gs.engine.fs,
+		ts:              types.TimestampToTS(now),
+		approxObjectNum: approxObjectNum,
+		samplingMode:    "auto",
+	}
+	samplingRatio, err := CollectAndCalculateStats(
+		refreshCtx, req, gs.concurrentExecutor)
+	if err != nil {
+		if cause := gs.statsRefreshCancellationCause(ctx); cause != nil {
+			return nil, cause
+		}
+		return nil, moerr.NewInternalErrorNoCtxf(
+			"failed to collect physical statistics for analyzed table: %v", err)
+	}
+	published := composeAnalyzedStatsGeneration(metadata, collected)
 
 	if cause := gs.statsRefreshCancellationCause(ctx); cause != nil {
 		return nil, cause
@@ -1696,15 +1727,75 @@ func (gs *GlobalStats) publishAnalyzedStats(
 			"manual statistics publication crossed cleanup boundary for table %d", key.TableID)
 	}
 	gs.markExplicitUpdateComplete(
-		key, generation, published.AccurateObjectNumber, gs.GetSamplingRatio(key))
+		key, generation, published.AccurateObjectNumber, samplingRatio)
 	return published, nil
 }
 
-func newAnalyzedStatsGeneration(collected *pb.StatsInfo) *pb.StatsInfo {
+func composeAnalyzedStatsGeneration(metadata, collected *pb.StatsInfo) *pb.StatsInfo {
 	if collected == nil {
 		return nil
 	}
-	return proto.Clone(collected).(*pb.StatsInfo)
+	published := plan2.NewStatsInfo()
+	if metadata != nil {
+		published = proto.Clone(metadata).(*pb.StatsInfo)
+	}
+	if published.NdvMap == nil {
+		published.NdvMap = make(map[string]float64)
+	}
+	if published.MinValMap == nil {
+		published.MinValMap = make(map[string]float64)
+	}
+	if published.MaxValMap == nil {
+		published.MaxValMap = make(map[string]float64)
+	}
+	if published.DataTypeMap == nil {
+		published.DataTypeMap = make(map[string]uint64)
+	}
+	if published.NullCntMap == nil {
+		published.NullCntMap = make(map[string]uint64)
+	}
+	if published.SizeMap == nil {
+		published.SizeMap = make(map[string]uint64)
+	}
+	if published.ShuffleRangeMap == nil {
+		published.ShuffleRangeMap = make(map[string]*pb.ShuffleRange)
+	}
+
+	published.TableName = collected.TableName
+	published.TableCnt = collected.TableCnt
+	published.BlockNumber = collected.BlockNumber
+	for column, value := range collected.NdvMap {
+		published.NdvMap[column] = min(value, published.TableCnt)
+	}
+	for column, value := range collected.MinValMap {
+		published.MinValMap[column] = value
+	}
+	for column, value := range collected.MaxValMap {
+		published.MaxValMap[column] = value
+	}
+	for column, value := range collected.DataTypeMap {
+		published.DataTypeMap[column] = value
+	}
+	for column, value := range collected.NullCntMap {
+		published.NullCntMap[column] = min(value, uint64(published.TableCnt))
+	}
+	for column, value := range collected.SizeMap {
+		published.SizeMap[column] = value
+	}
+	for column, value := range collected.ShuffleRangeMap {
+		if value == nil {
+			delete(published.ShuffleRangeMap, column)
+			continue
+		}
+		published.ShuffleRangeMap[column] = proto.Clone(value).(*pb.ShuffleRange)
+	}
+	for column, value := range published.NdvMap {
+		published.NdvMap[column] = min(value, published.TableCnt)
+	}
+	for column, value := range published.NullCntMap {
+		published.NullCntMap[column] = min(value, uint64(published.TableCnt))
+	}
+	return published
 }
 
 func applyStatsRefreshOptions(

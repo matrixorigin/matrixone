@@ -16,6 +16,7 @@ package plan
 
 import (
 	"context"
+	"strings"
 	"testing"
 
 	"github.com/matrixorigin/matrixone/pkg/container/types"
@@ -27,6 +28,45 @@ import (
 
 func TestBindControlFlowMetadata(t *testing.T) {
 	ctx := context.Background()
+
+	t.Run("constant IF exposes only the selected string domain to byte slicing", func(t *testing.T) {
+		for _, test := range []struct {
+			name       string
+			condition  bool
+			wantDomain uint8
+		}{
+			{name: "selected binary", condition: true, wantDomain: possibleStringDomainBinary},
+			{name: "selected text", condition: false, wantDomain: possibleStringDomainText},
+		} {
+			t.Run(test.name, func(t *testing.T) {
+				selected, err := BindFuncExprImplByPlanExpr(ctx, "if", []*planpb.Expr{
+					makePlan2BoolConstExprWithType(test.condition),
+					makePlan2VarBinaryConstExprWithType("e4bda0e5a5bd"),
+					makePlan2StringConstExprWithType("你好"),
+				})
+				require.NoError(t, err)
+				require.Equal(t, test.wantDomain, possibleStringDomainsForExpr(selected))
+
+				left, err := BindFuncExprImplByPlanExpr(ctx, "left", []*planpb.Expr{
+					selected, makePlan2Int64ConstExprWithType(2),
+				})
+				require.NoError(t, err)
+				substring, err := BindFuncExprImplByPlanExpr(ctx, "substring", []*planpb.Expr{
+					left, makePlan2Int64ConstExprWithType(2), makePlan2Int64ConstExprWithType(1),
+				})
+				require.NoError(t, err)
+
+				hex, err := BindFuncExprImplByPlanExpr(ctx, "hex", []*planpb.Expr{substring})
+				require.NoError(t, err)
+				require.Equal(t, int32(types.T_varchar), hex.Typ.Id)
+				if test.condition {
+					require.Equal(t, int32(2), hex.Typ.Width)
+				} else {
+					require.Greater(t, hex.Typ.Width, int32(2))
+				}
+			})
+		}
+	})
 
 	t.Run("if mixed string numeric keeps bounded varchar", func(t *testing.T) {
 		expr, err := BindFuncExprImplByPlanExpr(ctx, "if", []*planpb.Expr{
@@ -409,6 +449,58 @@ func TestBindControlFlowMetadata(t *testing.T) {
 		require.True(t, expr.Typ.NotNullable)
 	})
 
+	for _, test := range []struct {
+		name string
+		fn   string
+		args func(*planpb.Expr, *planpb.Expr) []*planpb.Expr
+		oid  types.T
+	}{
+		{
+			name: "coalesce datetime keeps maximum fsp",
+			fn:   "coalesce",
+			args: func(high, low *planpb.Expr) []*planpb.Expr { return []*planpb.Expr{high, low} },
+			oid:  types.T_datetime,
+		},
+		{
+			name: "coalesce time keeps maximum fsp",
+			fn:   "coalesce",
+			args: func(high, low *planpb.Expr) []*planpb.Expr { return []*planpb.Expr{high, low} },
+			oid:  types.T_time,
+		},
+		{
+			name: "if timestamp and datetime keeps precision",
+			fn:   "if",
+			args: func(high, low *planpb.Expr) []*planpb.Expr {
+				return []*planpb.Expr{makePlan2BoolConstExprWithType(true), high, low}
+			},
+			oid: types.T_datetime,
+		},
+	} {
+		t.Run(test.name, func(t *testing.T) {
+			high := makePlan2DateTimeConstExprWithType(0)
+			high.Typ.Scale, high.Typ.Width = 6, 6
+			low := makePlan2DateTimeConstExprWithType(0)
+			low.Typ.Scale, low.Typ.Width = 3, 3
+			if test.oid == types.T_time {
+				high = makePlan2TimeConstExprWithType(0)
+				high.Typ.Scale, high.Typ.Width = 6, 6
+				low = makePlan2TimeConstExprWithType(0)
+				low.Typ.Scale, low.Typ.Width = 3, 3
+			}
+			if test.name == "if timestamp and datetime keeps precision" {
+				high = makePlan2TimestampConstExprWithType(0)
+				high.Typ.Scale, high.Typ.Width = 6, 6
+				low = makePlan2DateTimeConstExprWithType(0)
+				low.Typ.Scale, low.Typ.Width = 3, 3
+			}
+			expr, err := BindFuncExprImplByPlanExpr(ctx, test.fn, test.args(high, low))
+			require.NoError(t, err)
+			require.Equal(t, int32(test.oid), expr.Typ.Id)
+			require.Equal(t, int32(6), expr.Typ.Scale)
+			require.Equal(t, int32(6), expr.Typ.Width)
+		})
+	}
+
 	t.Run("if binary character uses literal byte metadata", func(t *testing.T) {
 		expr, err := BindFuncExprImplByPlanExpr(ctx, "if", []*planpb.Expr{
 			makePlan2BoolConstExprWithType(true),
@@ -431,6 +523,133 @@ func TestBindControlFlowMetadata(t *testing.T) {
 		require.Equal(t, int32(types.T_varbinary), expr.Typ.Id)
 		require.Equal(t, int32(8), expr.Typ.Width)
 	})
+}
+
+func TestBuildControlFlowTemporalFSPMetadata(t *testing.T) {
+	for _, test := range []struct {
+		name  string
+		sql   string
+		oid   types.T
+		scale int32
+		width int32
+	}{
+		{
+			name: "coalesce time",
+			sql: `select coalesce(
+				cast('12:34:56.123456' as time(6)),
+				cast('12:34:56.123' as time(3)))`,
+			oid: types.T_time, scale: 6, width: 6,
+		},
+		{
+			name: "coalesce datetime",
+			sql: `select coalesce(
+				cast('2024-01-02 12:34:56.123456' as datetime(6)),
+				cast('2024-01-02 12:34:56.123' as datetime(3)))`,
+			oid: types.T_datetime, scale: 6, width: 6,
+		},
+		{
+			name: "if timestamp and datetime",
+			sql: `select if(true,
+				cast('2024-01-02 12:34:56.123456' as timestamp(6)),
+				cast('2024-01-02 12:34:56.123' as datetime(3)))`,
+			oid: types.T_datetime, scale: 6, width: 6,
+		},
+		{
+			name: "case timestamp and datetime",
+			sql: `select case when true then
+				cast('2024-01-02 12:34:56.123456' as timestamp(6)) else
+				cast('2024-01-02 12:34:56.123' as datetime(3)) end`,
+			oid: types.T_datetime, scale: 6, width: 6,
+		},
+		{
+			name: "nullif time",
+			sql: `select nullif(
+				cast('12:34:56.123456' as time(6)),
+				cast('12:34:56.123' as time(3)))`,
+			oid: types.T_time, scale: 6, width: 6,
+		},
+		{
+			name: "nullif datetime",
+			sql: `select nullif(
+				cast('2024-01-02 12:34:56.123456' as datetime(6)),
+				cast('2024-01-02 12:34:56.123' as datetime(3)))`,
+			oid: types.T_datetime, scale: 6, width: 6,
+		},
+	} {
+		t.Run(test.name, func(t *testing.T) {
+			stmt, err := parsers.ParseOne(context.Background(), dialect.MYSQL, test.sql, 1)
+			require.NoError(t, err)
+			defer stmt.Free()
+
+			pl, err := BuildPlan(NewMockCompilerContext(true), stmt, false)
+			require.NoError(t, err)
+			query := pl.GetQuery()
+			projectList := query.Nodes[query.Steps[len(query.Steps)-1]].ProjectList
+			require.Len(t, projectList, 1)
+			require.Equal(t, int32(test.oid), projectList[0].Typ.Id)
+			require.Equal(t, test.scale, projectList[0].Typ.Scale)
+			require.Equal(t, test.width, projectList[0].Typ.Width)
+		})
+	}
+}
+
+func TestBindControlFlowTemporalFSPMetadataProtocolFence(t *testing.T) {
+	ctx := context.Background()
+	condition := func(pos int32) *planpb.Expr {
+		return &planpb.Expr{
+			Typ:  planpb.Type{Id: int32(types.T_bool)},
+			Expr: &planpb.Expr_Col{Col: &planpb.ColRef{RelPos: 0, ColPos: pos}},
+		}
+	}
+	timestamp := func() *planpb.Expr {
+		expr := makePlan2TimestampConstExprWithType(0)
+		expr.Typ.Scale = 6
+		return expr
+	}
+	datetime := func() *planpb.Expr {
+		expr := makePlan2DateTimeConstExprWithType(0)
+		expr.Typ.Scale = 3
+		return expr
+	}
+
+	for _, test := range []struct {
+		name     string
+		function string
+		args     func() []*planpb.Expr
+		valuePos []int
+	}{
+		{
+			name:     "if mixed temporal branches",
+			function: "if",
+			args:     func() []*planpb.Expr { return []*planpb.Expr{condition(0), timestamp(), datetime()} },
+			valuePos: []int{1, 2},
+		},
+		{
+			name:     "case mixed temporal branches with else",
+			function: "case",
+			args: func() []*planpb.Expr {
+				return []*planpb.Expr{condition(0), timestamp(), condition(1), datetime(), datetime()}
+			},
+			valuePos: []int{1, 3, 4},
+		},
+	} {
+		t.Run(test.name, func(t *testing.T) {
+			expr, err := BindFuncExprImplByPlanExpr(ctx, test.function, test.args())
+			require.NoError(t, err)
+			require.Equal(t, int32(types.T_datetime), expr.Typ.Id)
+			require.Equal(t, int32(6), expr.Typ.Scale)
+			require.Equal(t, int32(6), expr.Typ.Width)
+			features, err := planpb.RequiredRemoteExpressionFeatures(expr)
+			require.NoError(t, err)
+			require.True(t, features.ExpressionResultMetadataContracts)
+
+			for _, pos := range test.valuePos {
+				value := expr.GetF().Args[pos]
+				require.Equal(t, int32(types.T_datetime), value.Typ.Id)
+				require.Equal(t, int32(6), value.Typ.Scale)
+			}
+		})
+	}
 }
 
 func TestBindControlFlowBinaryCharacterCharsetWidth(t *testing.T) {
@@ -853,6 +1072,182 @@ func TestDecimalLiteralMetadataPrecision(t *testing.T) {
 	require.NoError(t, err)
 	require.Equal(t, int32(2), expr.Typ.Width)
 	require.Equal(t, int32(1), expr.Typ.Scale)
+}
+
+func TestUnquotedDecimal256LiteralKeepsAllDigits(t *testing.T) {
+	ctx := context.Background()
+	cases := []struct {
+		name      string
+		value     string
+		want      types.T
+		wantWidth int32
+		wantScale int32
+	}{
+		{
+			name:      "decimal128 control",
+			value:     strings.Repeat("9", 38),
+			want:      types.T_decimal128,
+			wantWidth: 38,
+		},
+		{
+			name:      "decimal256 39 digits",
+			value:     "12345678901234567890123456789012345678.1",
+			want:      types.T_decimal256,
+			wantWidth: 39,
+			wantScale: 1,
+		},
+		{
+			name:      "decimal256 40 digits",
+			value:     "12345678901234567890123456789012345678.12",
+			want:      types.T_decimal256,
+			wantWidth: 40,
+			wantScale: 2,
+		},
+		{
+			name:      "decimal256 65 digits",
+			value:     "12345678901234567890123456789012345.123456789012345678901234567890",
+			want:      types.T_decimal256,
+			wantWidth: 65,
+			wantScale: 30,
+		},
+		{
+			name:      "negative decimal256",
+			value:     "-12345678901234567890123456789012345678.1",
+			want:      types.T_decimal256,
+			wantWidth: 39,
+			wantScale: 1,
+		},
+		{
+			name:      "decimal256 physical boundary",
+			value:     strings.Repeat("9", 75) + ".1",
+			want:      types.T_decimal256,
+			wantWidth: 76,
+			wantScale: 1,
+		},
+	}
+
+	for _, test := range cases {
+		t.Run(test.name, func(t *testing.T) {
+			expr, err := makePlan2DecimalExprWithType(ctx, test.value)
+			require.NoError(t, err)
+			require.Equal(t, int32(test.want), expr.Typ.Id, expr.String())
+			require.Equal(t, test.wantWidth, expr.Typ.Width, expr.String())
+			require.Equal(t, test.wantScale, expr.Typ.Scale, expr.String())
+			require.NotNil(t, expr.GetF(), expr.String())
+			require.Len(t, expr.GetF().Args, 2, expr.String())
+			if test.want == types.T_decimal256 {
+				require.Equal(t, test.value, expr.GetF().Args[0].GetLit().GetSval())
+			}
+
+			stmt, err := runOneStmt(NewMockOptimizer(false), t, "select "+test.value)
+			require.NoError(t, err)
+			root := stmt.GetQuery().Nodes[stmt.GetQuery().Steps[len(stmt.GetQuery().Steps)-1]]
+			require.Len(t, root.ProjectList, 1)
+			require.Equal(t, int32(test.want), root.ProjectList[0].Typ.Id, root.ProjectList[0].String())
+			require.Equal(t, test.wantWidth, root.ProjectList[0].Typ.Width, root.ProjectList[0].String())
+			require.Equal(t, test.wantScale, root.ProjectList[0].Typ.Scale, root.ProjectList[0].String())
+			if test.want == types.T_decimal256 {
+				require.Contains(t, root.ProjectList[0].String(), strings.TrimPrefix(test.value, "-"))
+			}
+		})
+	}
+}
+
+func TestUnquotedScientificLiteralKeepsExistingFloatPath(t *testing.T) {
+	stmt, err := runOneStmt(NewMockOptimizer(false), t, "select 12345678901234567890123456789012345678e-30")
+	require.NoError(t, err)
+	root := stmt.GetQuery().Nodes[stmt.GetQuery().Steps[len(stmt.GetQuery().Steps)-1]]
+	require.Len(t, root.ProjectList, 1)
+	require.Equal(t, int32(types.T_float64), root.ProjectList[0].Typ.Id, root.ProjectList[0].String())
+}
+
+func TestUnquotedDecimalLiteralRejectsBeyondDecimal256Precision(t *testing.T) {
+	for _, test := range []struct {
+		name  string
+		value string
+	}{
+		{name: "77-digit integer", value: strings.Repeat("9", 77)},
+		{name: "76-digit integer and two fractional digits", value: strings.Repeat("9", 75) + ".11"},
+	} {
+		t.Run(test.name, func(t *testing.T) {
+			_, err := makePlan2DecimalExprWithType(context.Background(), test.value)
+			require.Error(t, err)
+
+			// These cases must go through the parser and binder as well. The
+			// parser classifies a decimal point as P_float64; falling back to
+			// astExpr.Float64 there would hide the Decimal256 range error.
+			_, err = runOneStmt(NewMockOptimizer(false), t, "select "+test.value)
+			require.Error(t, err)
+		})
+	}
+}
+
+func TestUnquotedDecimalLiteralNormalizesSpellingBeforeParsing(t *testing.T) {
+	ctx := context.Background()
+	leadingZeros := strings.Repeat("0", 100) + "1.25"
+	for _, test := range []struct {
+		name          string
+		value         string
+		wantCanonical string
+		wantWidth     int32
+		wantScale     int32
+	}{
+		{
+			name:          "integer leading zeros do not consume precision",
+			value:         leadingZeros,
+			wantCanonical: "1.25",
+			wantWidth:     3,
+			wantScale:     2,
+		},
+		{
+			name:          "display zero does not consume fractional precision",
+			value:         "0." + strings.Repeat("0", 75) + "1",
+			wantCanonical: "." + strings.Repeat("0", 75) + "1",
+			wantWidth:     76,
+			wantScale:     76,
+		},
+	} {
+		t.Run(test.name, func(t *testing.T) {
+			expr, err := makePlan2DecimalExprWithType(ctx, test.value)
+			require.NoError(t, err)
+			require.Equal(t, test.wantWidth, expr.Typ.Width, expr.String())
+			require.Equal(t, test.wantScale, expr.Typ.Scale, expr.String())
+			require.Equal(t, test.wantCanonical, expr.GetF().Args[0].GetLit().GetSval())
+			require.True(t, expr.GetF().Args[0].GetLit().GetDecimalLiteralRequiresV82(), expr.String())
+
+			stmt, err := runOneStmt(NewMockOptimizer(false), t, "select "+test.value)
+			require.NoError(t, err)
+			root := stmt.GetQuery().Nodes[stmt.GetQuery().Steps[len(stmt.GetQuery().Steps)-1]]
+			require.Len(t, root.ProjectList, 1)
+			require.NotNil(t, root.ProjectList[0].GetF(), root.ProjectList[0].String())
+			require.Equal(t, test.wantCanonical, root.ProjectList[0].GetF().Args[0].GetLit().GetSval())
+			require.True(t,
+				root.ProjectList[0].GetF().Args[0].GetLit().GetDecimalLiteralRequiresV82(),
+				root.ProjectList[0].String())
+		})
+	}
+}
+
+func TestUnquotedDecimalLiteralProtocolProvenance(t *testing.T) {
+	ctx := context.Background()
+	for _, test := range []struct {
+		name     string
+		value    string
+		requires bool
+	}{
+		{name: "ordinary narrow decimal", value: "1.25"},
+		{name: "wide exact decimal", value: "12345678901234567890123456789012345678.1", requires: true},
+		{name: "scientific notation remains float", value: "12345678901234567890123456789012345678e-30"},
+		{name: "normalized narrow spelling", value: strings.Repeat("0", 32) + "1.25", requires: true},
+	} {
+		t.Run(test.name, func(t *testing.T) {
+			expr, err := makePlan2DecimalExprWithType(ctx, test.value)
+			require.NoError(t, err)
+			features, err := planpb.RequiredRemoteExpressionFeatures(expr)
+			require.NoError(t, err)
+			require.Equal(t, test.requires, features.DecimalLiteralSemantics, expr.String())
+		})
+	}
 }
 
 func TestBuildIfNullMetadata(t *testing.T) {

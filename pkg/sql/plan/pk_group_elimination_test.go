@@ -23,6 +23,7 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
 	"github.com/matrixorigin/matrixone/pkg/container/types"
 	planpb "github.com/matrixorigin/matrixone/pkg/pb/plan"
+	"github.com/matrixorigin/matrixone/pkg/sql/features"
 	"github.com/matrixorigin/matrixone/pkg/sql/parsers/dialect/mysql"
 	"github.com/matrixorigin/matrixone/pkg/sql/plan/function"
 )
@@ -43,6 +44,101 @@ func TestPrimaryKeyGroupEliminationUnlocksScanLimit(t *testing.T) {
 	require.NotNil(t, scan)
 	require.NotNil(t, scan.Limit)
 	require.Equal(t, uint64(10), scan.Limit.GetLit().GetU64Val())
+}
+
+func TestNotNullUniqueGroupEliminationUnlocksScanLimit(t *testing.T) {
+	optimizer := NewMockOptimizer(false)
+	table := optimizer.ctxt.tablesByQualifiedName[mockQualifiedTableName("constraint_test", "emp")]
+	require.NotNil(t, table)
+	var unique *planpb.IndexDef
+	for _, index := range table.Indexes {
+		if index.Unique {
+			unique = index
+			break
+		}
+	}
+	require.NotNil(t, unique)
+	unique.Parts = []string{"deptno", "mgr"}
+	for _, name := range unique.Parts {
+		pos, ok := tableColumnPosition(table, name)
+		require.True(t, ok)
+		table.Cols[pos].Default.NullAbility = false
+		table.Cols[pos].Typ.NotNullable = true
+	}
+
+	logical, err := runOneStmt(
+		optimizer,
+		t,
+		"select deptno, mgr, count(*) from constraint_test.emp group by deptno, mgr limit 10",
+	)
+	require.NoError(t, err)
+
+	query := logical.GetQuery()
+	require.False(t, reachableNodeType(query, planpb.Node_AGG))
+	scan := firstReachableNode(query, planpb.Node_TABLE_SCAN)
+	require.NotNil(t, scan)
+	require.NotNil(t, scan.Limit)
+	require.Equal(t, uint64(10), scan.Limit.GetLit().GetU64Val())
+}
+
+func TestNotNullUniqueGroupEliminationFailsClosed(t *testing.T) {
+	tests := []struct {
+		name      string
+		sql       string
+		configure func(*planpb.TableDef, *planpb.IndexDef)
+	}{
+		{name: "partial composite key", sql: "select deptno, count(*) from constraint_test.emp group by deptno limit 10"},
+		{name: "nullable component", sql: "select deptno, mgr, count(*) from constraint_test.emp group by deptno, mgr limit 10",
+			configure: func(table *planpb.TableDef, _ *planpb.IndexDef) {
+				pos, _ := tableColumnPosition(table, "mgr")
+				table.Cols[pos].Default.NullAbility = true
+				table.Cols[pos].Typ.NotNullable = false
+			}},
+		{name: "partitioned parent", sql: "select deptno, mgr, count(*) from constraint_test.emp group by deptno, mgr limit 10",
+			configure: func(table *planpb.TableDef, _ *planpb.IndexDef) { table.FeatureFlag |= features.Partitioned }},
+		{name: "empty hidden relation kind", sql: "select deptno, mgr, count(*) from constraint_test.emp group by deptno, mgr limit 10",
+			configure: func(table *planpb.TableDef, _ *planpb.IndexDef) { table.TableType = "" }},
+		{name: "unbuilt key", sql: "select deptno, mgr, count(*) from constraint_test.emp group by deptno, mgr limit 10",
+			configure: func(_ *planpb.TableDef, index *planpb.IndexDef) { index.TableExist = false }},
+		{name: "prefix key", sql: "select deptno, mgr, count(*) from constraint_test.emp group by deptno, mgr limit 10",
+			configure: func(_ *planpb.TableDef, index *planpb.IndexDef) {
+				index.IndexAlgoParams = `{"prefix_lengths":"deptno:3"}`
+			}},
+	}
+
+	for _, test := range tests {
+		t.Run(test.name, func(t *testing.T) {
+			optimizer := NewMockOptimizer(false)
+			table := optimizer.ctxt.tablesByQualifiedName[mockQualifiedTableName("constraint_test", "emp")]
+			require.NotNil(t, table)
+			var unique *planpb.IndexDef
+			for _, index := range table.Indexes {
+				if index.Unique {
+					unique = index
+					break
+				}
+			}
+			require.NotNil(t, unique)
+			unique.Parts = []string{"deptno", "mgr"}
+			for _, name := range unique.Parts {
+				pos, ok := tableColumnPosition(table, name)
+				require.True(t, ok)
+				table.Cols[pos].Default.NullAbility = false
+				table.Cols[pos].Typ.NotNullable = true
+			}
+			if test.configure != nil {
+				test.configure(table, unique)
+			}
+
+			logical, err := runOneStmt(optimizer, t, test.sql)
+			require.NoError(t, err)
+			query := logical.GetQuery()
+			require.True(t, reachableNodeType(query, planpb.Node_AGG))
+			scan := firstReachableNode(query, planpb.Node_TABLE_SCAN)
+			require.NotNil(t, scan)
+			require.Nil(t, scan.Limit)
+		})
+	}
 }
 
 func TestPrimaryKeyGroupEliminationSupportsSingleRowAggregates(t *testing.T) {
@@ -1299,7 +1395,9 @@ func TestPrimaryKeyGroupEliminationPreservesInactiveGroupingSetsWithoutAggregate
 
 	for _, test := range tests {
 		t.Run(test.name, func(t *testing.T) {
-			logical, err := runOneStmt(NewMockOptimizer(false), t, test.sql)
+			optimizer := NewMockOptimizer(false)
+			useLegacyGroupingSetPlan(t, optimizer)
+			logical, err := runOneStmt(optimizer, t, test.sql)
 			require.NoError(t, err)
 			agg := firstReachableNode(logical.GetQuery(), planpb.Node_AGG)
 			require.NotNil(t, agg)

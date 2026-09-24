@@ -252,7 +252,7 @@ from (
 select id, json_type(j), json_unquote(j)
 from convert_json_enum_destination
 order by id;
--- MINUS ALL is parsed but remains unsupported by the planner.
+-- MINUS ALL uses the same physical equality keys as the other set operators.
 select e_json from convert_json_enum
 minus all
 select e_json from convert_json_enum;

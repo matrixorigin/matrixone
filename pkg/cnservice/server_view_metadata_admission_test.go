@@ -18,6 +18,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"strings"
 	"sync"
 	"sync/atomic"
 	"testing"
@@ -31,6 +32,7 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
 	"github.com/matrixorigin/matrixone/pkg/common/runtime"
 	"github.com/matrixorigin/matrixone/pkg/common/stopper"
+	"github.com/matrixorigin/matrixone/pkg/defines"
 	"github.com/matrixorigin/matrixone/pkg/frontend"
 	"github.com/matrixorigin/matrixone/pkg/lockservice"
 	"github.com/matrixorigin/matrixone/pkg/logservice"
@@ -121,10 +123,16 @@ func (*admissionStartLockService) Close() error {
 
 type admissionStartQueryService struct {
 	queryservice.QueryService
+	started     chan struct{}
+	startedOnce sync.Once
+	startErr    error
 }
 
-func (*admissionStartQueryService) Start() error {
-	return nil
+func (s *admissionStartQueryService) Start() error {
+	if s.started != nil {
+		s.startedOnce.Do(func() { close(s.started) })
+	}
+	return s.startErr
 }
 
 func (*admissionStartQueryService) Close() error {
@@ -138,7 +146,7 @@ func newViewMetadataAdmissionStartService(
 	discoveryTimeout time.Duration,
 ) *service {
 	t.Helper()
-	serviceID := t.Name()
+	serviceID := strings.ReplaceAll(t.Name(), "/", "-")
 	runtime.SetupServiceBasedRuntime(serviceID, runtime.DefaultRuntime())
 	cfg := &Config{UUID: serviceID, AutomaticUpgrade: true}
 	cfg.HAKeeper.DiscoveryTimeout.Duration = discoveryTimeout
@@ -167,6 +175,45 @@ func newViewMetadataAdmissionStartService(
 		Admitted:             true,
 	})
 	return s
+}
+
+func TestCNStartsQueryServiceBeforeViewMetadataAdmission(t *testing.T) {
+	started := make(chan struct{})
+	var fenceBeforeQuery atomic.Bool
+	sqlExecutor := executor.NewMemExecutor(func(sql string) (executor.Result, error) {
+		select {
+		case <-started:
+		default:
+			fenceBeforeQuery.Store(true)
+		}
+		if sql == catalog.ViewMetadataLifecycleGateSQL {
+			return viewMetadataLifecycleGateTestResult(), nil
+		}
+		return executor.Result{}, nil
+	})
+	s := newViewMetadataAdmissionStartService(t, &testBootService{}, sqlExecutor, time.Second)
+	s.queryService = &admissionStartQueryService{started: started}
+	t.Cleanup(func() { _ = s.Close() })
+
+	require.NoError(t, s.Start())
+	require.False(t, fenceBeforeQuery.Load(),
+		"catalog admission must not run before the internal QueryService is reachable")
+}
+
+func TestCNStartPropagatesQueryServiceStartFailure(t *testing.T) {
+	startErr := errors.New("query service start failed")
+	s := newViewMetadataAdmissionStartService(
+		t,
+		&testBootService{},
+		executor.NewMemExecutor(func(string) (executor.Result, error) {
+			return executor.Result{}, nil
+		}),
+		time.Second,
+	)
+	s.queryService = &admissionStartQueryService{startErr: startErr}
+	t.Cleanup(func() { _ = s.Close() })
+
+	require.ErrorIs(t, s.Start(), startErr)
 }
 
 func TestCNViewMetadataAdmissionGenerationLifecycle(t *testing.T) {
@@ -251,6 +298,251 @@ func TestCNViewMetadataCatalogFenceShortcuts(t *testing.T) {
 		require.NoError(t, s.fenceViewMetadataCatalog(context.Background(), snapshot))
 		require.Zero(t, s.viewMetadataCatalogFencedEpoch.Load())
 	})
+}
+
+func TestCNViewMetadataAdmissionRejectsUnknownPersistedExpressionProtocol(t *testing.T) {
+	s := &service{
+		cfg:                             &Config{UUID: "legacy-cn"},
+		viewMetadataAdmissionGeneration: 9,
+		viewMetadataEpochFence:          compile.NewViewMetadataEpochFence(),
+	}
+	s.viewMetadataAdmission.Store(&logservicepb.ViewMetadataAdmission{
+		Generation: 9,
+		Admitted:   true,
+	})
+
+	ok, _, err := s.acceptViewMetadataAdmissionSnapshot(
+		&logservicepb.ViewMetadataAdmission{
+			Generation: 9,
+			Admitted:   true,
+			PersistedExpressionRequiredProtocolVersion: uint64(defines.MORPCLatestVersion + 1),
+		}, false, false, nil)
+	require.False(t, ok)
+	require.ErrorContains(t, err, "requires persisted expression protocol version")
+
+	ok, _, err = s.acceptViewMetadataAdmissionSnapshot(
+		&logservicepb.ViewMetadataAdmission{
+			Generation: 9,
+			Admitted:   true,
+			PersistedExpressionRequiredProtocolVersion: uint64(defines.MORPCLatestVersion),
+		}, false, false, nil)
+	require.True(t, ok)
+	require.NoError(t, err)
+}
+
+func TestCNApplyViewMetadataAdmissionFutureFloorFailsClosedBeforeAdvance(t *testing.T) {
+	serviceID := "cn-future-floor-early-gate"
+	rt := runtime.DefaultRuntime()
+	runtime.SetupServiceBasedRuntime(serviceID, rt)
+	t.Cleanup(func() {
+		if value, ok := rt.GetGlobalVariables(runtime.PersistedExpressionProtocolFloor); ok {
+			rt.CompareAndDeleteGlobalVariables(runtime.PersistedExpressionProtocolFloor, value)
+		}
+	})
+	rt.SetGlobalVariables(runtime.MOProtocolVersion, defines.MORPCLatestVersion)
+	rt.SetGlobalVariables(runtime.PersistedExpressionProtocolFloor, int64(0))
+	s := &service{
+		cfg:                             &Config{UUID: serviceID},
+		viewMetadataAdmissionGeneration: 9,
+		viewMetadataEpochFence:          compile.NewViewMetadataEpochFence(),
+		viewMetadataAdmissionUpdated:    make(chan struct{}, 1),
+	}
+	s.viewMetadataAdmission.Store(&logservicepb.ViewMetadataAdmission{
+		Enabled:    true,
+		Epoch:      3,
+		Generation: 9,
+		Admitted:   true,
+		Ready:      true,
+	})
+	err := s.applyViewMetadataAdmission(context.Background(), &logservicepb.ViewMetadataAdmission{
+		Enabled:    true,
+		Epoch:      4,
+		Generation: 9,
+		Admitted:   true,
+		PersistedExpressionRequiredProtocolVersion: uint64(defines.MORPCLatestVersion + 1),
+	})
+	require.ErrorContains(t, err, "requires persisted expression protocol version")
+	require.Zero(t, s.viewMetadataEpochFence.Epoch())
+	poisoned := s.viewMetadataAdmission.Load()
+	require.NotNil(t, poisoned)
+	require.False(t, poisoned.Admitted)
+	require.False(t, poisoned.Ready)
+}
+
+func TestCNApplyViewMetadataAdmissionPublishesDurableFloorBeforeFence(t *testing.T) {
+	serviceID := "cn-future-floor-publish-order"
+	rt := runtime.DefaultRuntime()
+	runtime.SetupServiceBasedRuntime(serviceID, rt)
+	t.Cleanup(func() {
+		if value, ok := rt.GetGlobalVariables(runtime.PersistedExpressionProtocolFloor); ok {
+			rt.CompareAndDeleteGlobalVariables(runtime.PersistedExpressionProtocolFloor, value)
+		}
+	})
+	rt.SetGlobalVariables(runtime.MOProtocolVersion, defines.MORPCLatestVersion)
+	rt.SetGlobalVariables(runtime.PersistedExpressionProtocolFloor, int64(0))
+	rt.SetGlobalVariables(runtime.PersistedExpressionProtocolAuthoringFloor, int64(0))
+	t.Cleanup(func() {
+		if value, ok := rt.GetGlobalVariables(runtime.PersistedExpressionProtocolAuthoringFloor); ok {
+			rt.CompareAndDeleteGlobalVariables(runtime.PersistedExpressionProtocolAuthoringFloor, value)
+		}
+	})
+	s := &service{
+		cfg:                             &Config{UUID: serviceID},
+		viewMetadataAdmissionGeneration: 9,
+		viewMetadataEpochFence:          compile.NewViewMetadataEpochFence(),
+	}
+	require.NoError(t, s.applyViewMetadataAdmission(context.Background(), &logservicepb.ViewMetadataAdmission{
+		Enabled:    true,
+		Epoch:      2,
+		Generation: 9,
+		Admitted:   true,
+		PersistedExpressionRequiredProtocolVersion: uint64(defines.MORPCVersion72),
+	}))
+	floor, ok := rt.GetGlobalVariables(runtime.PersistedExpressionProtocolFloor)
+	require.True(t, ok)
+	require.Equal(t, int64(defines.MORPCVersion72), floor)
+	authoringFloor, ok := rt.GetGlobalVariables(runtime.PersistedExpressionProtocolAuthoringFloor)
+	require.True(t, ok)
+	require.Zero(t, authoringFloor,
+		"a preparing snapshot publishes the read floor but not the authoring floor")
+	require.Equal(t, uint64(2), s.viewMetadataEpochFence.Epoch())
+}
+
+func TestCNViewMetadataAdmissionSeparatesReadAndAuthoringFloors(t *testing.T) {
+	serviceID := "cn-admission-read-authoring-floor"
+	rt := runtime.DefaultRuntime()
+	runtime.SetupServiceBasedRuntime(serviceID, rt)
+	t.Cleanup(func() {
+		for _, name := range []string{
+			runtime.PersistedExpressionProtocolFloor,
+			runtime.PersistedExpressionProtocolAuthoringFloor,
+		} {
+			if value, ok := rt.GetGlobalVariables(name); ok {
+				rt.CompareAndDeleteGlobalVariables(name, value)
+			}
+		}
+	})
+	rt.SetGlobalVariables(runtime.MOProtocolVersion, defines.MORPCLatestVersion)
+	rt.SetGlobalVariables(runtime.PersistedExpressionProtocolFloor, int64(0))
+	rt.SetGlobalVariables(runtime.PersistedExpressionProtocolAuthoringFloor, int64(0))
+	s := &service{
+		cfg:                             &Config{UUID: serviceID},
+		viewMetadataAdmissionGeneration: 9,
+		viewMetadataEpochFence:          compile.NewViewMetadataEpochFence(),
+		viewMetadataAdmissionUpdated:    make(chan struct{}, 1),
+	}
+
+	// Phase one installs the durable read/revalidation floor while the
+	// admission snapshot is still Preparing. Existing marked definitions can
+	// therefore be regenerated, but no new definition may be authored.
+	require.NoError(t, s.applyViewMetadataAdmission(context.Background(), &logservicepb.ViewMetadataAdmission{
+		Preparing:            true,
+		Epoch:                1,
+		Generation:           9,
+		RevalidationRequired: true,
+		PersistedExpressionRequiredProtocolVersion: uint64(defines.MORPCVersion72),
+	}))
+	readFloor, ok := rt.GetGlobalVariables(runtime.PersistedExpressionProtocolFloor)
+	require.True(t, ok)
+	require.Equal(t, int64(defines.MORPCVersion72), readFloor)
+	authoringFloor, ok := rt.GetGlobalVariables(runtime.PersistedExpressionProtocolAuthoringFloor)
+	require.True(t, ok)
+	require.Zero(t, authoringFloor,
+		"a Preparing snapshot must not open the local authoring gate")
+
+	// Phase two is the first point at which this CN is enabled, admitted, and
+	// catalog-fenced. Only then may it author the new protocol's metadata.
+	require.NoError(t, s.applyViewMetadataAdmission(context.Background(), &logservicepb.ViewMetadataAdmission{
+		Enabled:              true,
+		Ready:                true,
+		Admitted:             true,
+		Epoch:                1,
+		Generation:           9,
+		RevalidationRequired: true,
+		CatalogFencedEpoch:   1,
+		PersistedExpressionRequiredProtocolVersion: uint64(defines.MORPCVersion72),
+	}))
+	authoringFloor, ok = rt.GetGlobalVariables(runtime.PersistedExpressionProtocolAuthoringFloor)
+	require.True(t, ok)
+	require.Equal(t, int64(defines.MORPCVersion72), authoringFloor)
+}
+
+func TestCNViewMetadataAdmissionPendingActivationClosesAuthoringAfterRecovery(t *testing.T) {
+	serviceID := "cn-admission-pending-authoring-floor"
+	rt := runtime.DefaultRuntime()
+	runtime.SetupServiceBasedRuntime(serviceID, rt)
+	t.Cleanup(func() {
+		for _, name := range []string{
+			runtime.PersistedExpressionProtocolFloor,
+			runtime.PersistedExpressionProtocolAuthoringFloor,
+		} {
+			if value, ok := rt.GetGlobalVariables(name); ok {
+				rt.CompareAndDeleteGlobalVariables(name, value)
+			}
+		}
+	})
+	rt.SetGlobalVariables(runtime.MOProtocolVersion, defines.MORPCLatestVersion)
+	rt.SetGlobalVariables(runtime.PersistedExpressionProtocolFloor, int64(0))
+	rt.SetGlobalVariables(runtime.PersistedExpressionProtocolAuthoringFloor, int64(0))
+	s := &service{
+		cfg:                             &Config{UUID: serviceID},
+		viewMetadataAdmissionGeneration: 9,
+		viewMetadataEpochFence:          compile.NewViewMetadataEpochFence(),
+	}
+
+	// An earlier acknowledged epoch opened the authoring gate.
+	require.NoError(t, s.applyViewMetadataAdmission(context.Background(), &logservicepb.ViewMetadataAdmission{
+		Enabled:              true,
+		Ready:                true,
+		Admitted:             true,
+		Epoch:                2,
+		Generation:           9,
+		RevalidationRequired: true,
+		CatalogFencedEpoch:   2,
+		PersistedExpressionRequiredProtocolVersion: uint64(defines.MORPCVersion72),
+	}))
+	authoringFloor, ok := rt.GetGlobalVariables(runtime.PersistedExpressionProtocolAuthoringFloor)
+	require.True(t, ok)
+	require.Equal(t, int64(defines.MORPCVersion72), authoringFloor)
+
+	// A rejected floor raise can carry the old enabled/ready/authoring shape
+	// plus the new durable floor. The pending bit must close authoring even
+	// after the snapshot is serialized and recovered by this CN.
+	pending := &logservicepb.ViewMetadataAdmission{
+		Enabled:              true,
+		Ready:                true,
+		Admitted:             true,
+		Epoch:                2,
+		Generation:           9,
+		RevalidationRequired: true,
+		CatalogFencedEpoch:   2,
+		PersistedExpressionRequiredProtocolVersion:   uint64(defines.MORPCVersion72 + 1),
+		PersistedExpressionProtocolActivationPending: true,
+	}
+	encoded, err := pending.Marshal()
+	require.NoError(t, err)
+	recovered := new(logservicepb.ViewMetadataAdmission)
+	require.NoError(t, recovered.Unmarshal(encoded))
+	require.NoError(t, s.applyViewMetadataAdmission(context.Background(), recovered))
+	authoringFloor, ok = rt.GetGlobalVariables(runtime.PersistedExpressionProtocolAuthoringFloor)
+	require.True(t, ok)
+	require.Zero(t, authoringFloor,
+		"pending activation must keep the upgraded CN from authoring new metadata")
+
+	// Only the completed new epoch/catalog fence may reopen authoring.
+	require.NoError(t, s.applyViewMetadataAdmission(context.Background(), &logservicepb.ViewMetadataAdmission{
+		Enabled:              true,
+		Ready:                true,
+		Admitted:             true,
+		Epoch:                3,
+		Generation:           9,
+		RevalidationRequired: true,
+		CatalogFencedEpoch:   3,
+		PersistedExpressionRequiredProtocolVersion: uint64(defines.MORPCVersion72 + 1),
+	}))
+	authoringFloor, ok = rt.GetGlobalVariables(runtime.PersistedExpressionProtocolAuthoringFloor)
+	require.True(t, ok)
+	require.Equal(t, int64(defines.MORPCVersion72+1), authoringFloor)
 }
 
 func TestViewMetadataCatalogFenceRetryable(t *testing.T) {
@@ -643,14 +935,15 @@ func TestViewMetadataCatalogFenceRetryDelayIsBoundedAndJittered(t *testing.T) {
 func TestServiceStartWaitsForCatalogUpgradePastDiscoveryDeadline(t *testing.T) {
 	const discoveryTimeout = 20 * time.Millisecond
 	var catalogCommitted atomic.Bool
-	var catalogStatements atomic.Int64
+	var catalogAttempts atomic.Int64
 	catalogAttempted := make(chan struct{})
 	var attemptOnce sync.Once
 	boot := &testBootService{}
 	sqlExecutor := &admissionRollbackJoiningExecutor{
 		SQLExecutor: executor.NewMemExecutor(func(sql string) (executor.Result, error) {
-			catalogStatements.Add(1)
 			if sql == catalog.ViewMetadataLifecycleGateSQL {
+				// Count fence attempts, not the SQL prefix used to acquire its gates.
+				catalogAttempts.Add(1)
 				if !catalogCommitted.Load() {
 					attemptOnce.Do(func() { close(catalogAttempted) })
 					return executor.Result{}, nil
@@ -682,7 +975,7 @@ func TestServiceStartWaitsForCatalogUpgradePastDiscoveryDeadline(t *testing.T) {
 		t.Fatalf("Start returned before the upgrade owner deadline: %v", err)
 	case <-time.After(2 * discoveryTimeout):
 	}
-	require.Equal(t, int64(1), catalogStatements.Load(),
+	require.Equal(t, int64(1), catalogAttempts.Load(),
 		"heartbeat updates must not bypass the startup catalog backoff")
 
 	catalogCommitted.Store(true)

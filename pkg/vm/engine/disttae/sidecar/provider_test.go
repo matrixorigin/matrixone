@@ -241,6 +241,53 @@ func TestSnapshotProviderStopsObjectVisitationAtManifestBound(t *testing.T) {
 	require.Zero(t, relation.starCalls)
 }
 
+func TestBoundedManifestAccountsObjectDescriptorsAtExactBoundary(t *testing.T) {
+	def := testTableDef()
+	stats := objectStats(t, 3)
+	probe, err := newManifestBuilder(def, 9, 7, "shared", substrait.MaxManifestBytes)
+	require.NoError(t, err)
+	require.NoError(t, probe.add(stats))
+	manifest, names, err := probe.finish()
+	require.NoError(t, err)
+	require.Len(t, names, 1)
+	exact := len(manifest) + 16 + len(names[0])
+
+	bounded, err := newManifestBuilderWithObjectDescriptors(def, 9, 7, "shared", exact, true)
+	require.NoError(t, err)
+	require.NoError(t, bounded.add(stats))
+	actual, actualNames, err := bounded.finish()
+	require.NoError(t, err)
+	require.Equal(t, manifest, actual)
+	require.Equal(t, names, actualNames)
+
+	bounded, err = newManifestBuilderWithObjectDescriptors(def, 9, 7, "shared", exact-1, true)
+	require.NoError(t, err)
+	err = bounded.add(stats)
+	require.ErrorContains(t, err, "maximum")
+	require.True(t, substrait.IsNotEligible(err))
+	require.Empty(t, bounded.manifest.Objects, "over-budget metadata must be rejected before append")
+}
+
+func TestBoundedSnapshotProviderRejectsSecondObjectDuringConstruction(t *testing.T) {
+	def := testTableDef()
+	read := testRead(t, def)
+	stats := []objectio.ObjectStats{objectStats(t, 1), objectStats(t, 2), objectStats(t, 3)}
+	probe, err := newManifestBuilderWithObjectDescriptors(def, read.AccountID, read.DatabaseID, "shared", substrait.MaxManifestBytes, true)
+	require.NoError(t, err)
+	require.NoError(t, probe.add(stats[0]))
+	manifest, names, err := probe.finish()
+	require.NoError(t, err)
+	exactOne := len(manifest) + 16 + len(names[0])
+
+	relation := &snapshotRelationStub{def: def, stats: stats, visible: 6}
+	provider := &SnapshotProvider{MPool: mpool.MustNewZero(), DataDir: "shared", Relations: map[uint64]engine.Relation{42: relation}}
+	_, err = provider.PrepareSnapshotReadBounded(context.Background(), read, make([]byte, types.TxnTsSize), exactOne)
+	require.ErrorContains(t, err, "maximum")
+	require.True(t, substrait.IsNotEligible(err))
+	require.Equal(t, 2, relation.visits)
+	require.Zero(t, relation.starCalls)
+}
+
 func testTableDef() *planpb.TableDef {
 	return &planpb.TableDef{DbId: 7, TblId: 42, Version: 3, DbName: "db", Name: "t", TableType: "r", Cols: []*planpb.ColDef{{Name: "a", ColId: 11, Seqnum: 5, Typ: planpb.Type{Id: int32(types.T_int64)}}}}
 }

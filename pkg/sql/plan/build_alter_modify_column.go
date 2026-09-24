@@ -94,11 +94,9 @@ func ModifyColumn(
 		)
 	}
 
-	// If the column is referenced by a generated column, block the modification
-	if err := checkColumnWithGeneratedDependency(cctx.GetContext(), tableDef, nColName); err != nil {
-		return false, err
-	}
-
+	// COPY ALTER rebinds dependent generated expressions against the final
+	// schema and recomputes them while copying rows. The caller separately
+	// expands index impact through the original dependency graph.
 	pkAffected, err := updateNewColumnInTableDef(cctx, tableDef, oCol, nColSpec, nPos)
 	if err != nil {
 		return false, err
@@ -116,32 +114,69 @@ func modifyColPosition(
 	pos *tree.ColumnPosition,
 ) error {
 	if pos != nil && pos.Typ != tree.ColumnPositionNone {
-		// Find old column position before removing
+		// Capture the complete pre-move schema. Defaults and generated
+		// expressions on both the changed column and its neighbors use these
+		// positions because buildColumnAndConstraint binds against this schema.
+		oldCols := append([]*ColDef(nil), tableDef.Cols...)
 		oldPos := int32(-1)
-		for i, col := range tableDef.Cols {
+		for i, col := range oldCols {
 			if strings.EqualFold(col.Name, oCol.Name) {
 				oldPos = int32(i)
 				break
 			}
 		}
 
-		// delete old column
-		tableDef.Cols = RemoveIf[*ColDef](tableDef.Cols, func(col *ColDef) bool {
-			return strings.EqualFold(col.Name, oCol.Name)
-		})
-		if oldPos >= 0 {
-			remapGeneratedColExprsAfterDrop(tableDef, oldPos)
+		// Remove the old slot before resolving AFTER, matching MySQL's
+		// position semantics and the previous implementation.
+		// Keep the capacity non-negative even if a malformed caller supplies an
+		// old column that is not present in tableDef. The normal path always
+		// finds oCol, but position validation must not turn bad metadata into a
+		// panic before the relative-position error is reported.
+		remaining := make([]*ColDef, 0, len(oldCols))
+		for i, col := range oldCols {
+			if i != int(oldPos) {
+				remaining = append(remaining, col)
+			}
 		}
 
-		targetPos, err := findPositionRelativeColumn(ctx, tableDef.Cols, pos)
+		targetPos, err := findPositionRelativeColumn(ctx, remaining, pos)
 		if err != nil {
 			return err
 		}
-		tableDef.Cols = append(
-			tableDef.Cols[:targetPos],
-			append([]*ColDef{nCol}, tableDef.Cols[targetPos:]...)...,
-		)
-		remapGeneratedColExprsAfterInsert(tableDef, int32(targetPos))
+		finalCols := make([]*ColDef, 0, len(oldCols))
+		finalCols = append(finalCols, remaining[:targetPos]...)
+		finalCols = append(finalCols, nCol)
+		finalCols = append(finalCols, remaining[targetPos:]...)
+		tableDef.Cols = finalCols
+
+		if oldPos >= 0 {
+			// A delete-shift followed by an insert-shift cannot represent the
+			// moved column itself: references at exactly oldPos are skipped by
+			// the delete pass. Build the bijection once, then rewrite every
+			// DEFAULT and generated expression, including nCol's expression.
+			finalPosByName := make(map[string]int32, len(finalCols))
+			for newIdx, newCol := range finalCols {
+				if newCol != nil {
+					finalPosByName[strings.ToLower(newCol.Name)] = int32(newIdx)
+				}
+			}
+			oldToNew := make(map[int32]int32, len(oldCols))
+			for oldIdx, oldCol := range oldCols {
+				if oldCol == nil {
+					continue
+				}
+				if oldIdx == int(oldPos) {
+					if newPos, ok := finalPosByName[strings.ToLower(nCol.Name)]; ok {
+						oldToNew[int32(oldIdx)] = newPos
+					}
+					continue
+				}
+				if newPos, ok := finalPosByName[strings.ToLower(oldCol.Name)]; ok {
+					oldToNew[int32(oldIdx)] = newPos
+				}
+			}
+			remapColumnExprsByPosition(finalCols, oldToNew)
+		}
 	} else {
 		for i, col := range tableDef.Cols {
 			if strings.EqualFold(col.Name, oCol.Name) {
@@ -159,6 +194,17 @@ func checkChangeTypeCompatible(
 	origin *plan.Type,
 	to *plan.Type,
 ) error {
+	// A vector column (VECF32/VECF64/VECBF16/VECF16/VECINT8/VECUINT8) stores fixed-dimension
+	// arrays, and ALTER ... MODIFY/CHANGE copies rows through an array cast that preserves the
+	// element count -- it never reshapes a vector. Changing the declared dimension (Width) --
+	// whether the element type stays the same or also changes -- would leave existing rows at the
+	// old dimension: a mixed-dimension column that breaks distance queries and HNSW/IVFFLAT index
+	// construction (#28917). Reject any vector dimension change here, at validation, BEFORE the
+	// copy runs, rather than relying on the per-row cast guard to fail mid-copy.
+	if types.T(origin.Id).IsArrayRelate() && types.T(to.Id).IsArrayRelate() && origin.Width != to.Width {
+		return moerr.NewNotSupportedf(ctx,
+			"change vector dimension from %d to %d", origin.Width, to.Width)
+	}
 	// Deal with the same type.
 	if origin.Id == to.Id {
 		if isGeometryPlanType(origin) && !geometrySubtypeCompatible(geometrySubtypeName(to), geometrySubtypeName(origin)) {
@@ -222,15 +268,32 @@ func isSupportedDDLTargetJSONCast(source types.T) bool {
 func checkColumnForeignkeyConstraint(ctx CompilerContext, tbInfo *TableDef, originalCol, newCol *ColDef) error {
 	if newCol.Typ.GetId() == originalCol.Typ.GetId() &&
 		newCol.Typ.GetWidth() == originalCol.Typ.GetWidth() &&
+		newCol.Typ.GetScale() == originalCol.Typ.GetScale() &&
+		newCol.Typ.GetEnumvalues() == originalCol.Typ.GetEnumvalues() &&
+		newCol.Typ.GetCharset() == originalCol.Typ.GetCharset() &&
+		newCol.Typ.GetPadSpace() == originalCol.Typ.GetPadSpace() &&
 		newCol.Typ.GetAutoIncr() == originalCol.Typ.GetAutoIncr() {
 		return nil
 	}
 
 	for _, fkInfo := range tbInfo.Fkeys {
+		if fkInfo == nil {
+			return moerr.NewInternalError(ctx.GetContext(), "nil foreign key definition while modifying column")
+		}
+		if len(fkInfo.Cols) != len(fkInfo.ForeignCols) {
+			return moerr.NewInternalErrorf(ctx.GetContext(),
+				"foreign key %s has mismatched child and parent columns", fkInfo.Name)
+		}
 		for i, colId := range fkInfo.Cols {
 			if colId == originalCol.ColId {
-				// Check if the parent table of the foreign key exists
-				_, referTableDef, err := ctx.ResolveById(fkInfo.ForeignTbl, nil)
+				if alterCopyForeignKeyColumnMayChangeValues(
+					originalCol.Typ, newCol.Typ,
+				) {
+					return moerr.NewErrForeignKeyColumnCannotChange(ctx.GetContext(), originalCol.Name, fkInfo.Name)
+				}
+				// A zero foreign-table ID is the durable self-reference marker.
+				// Resolve it from the current table instead of querying the catalog.
+				_, referTableDef, _, err := resolveAlterForeignKeyTable(ctx, tbInfo, fkInfo.ForeignTbl)
 				if err != nil {
 					return err
 				}
@@ -255,46 +318,66 @@ func checkColumnForeignkeyConstraint(ctx CompilerContext, tbInfo *TableDef, orig
 	}
 
 	for _, referredTblId := range tbInfo.RefChildTbls {
-		refObjRef, refTableDef, err := ctx.ResolveById(referredTblId, nil)
+		refObjRef, refTableDef, selfReference, err := resolveAlterForeignKeyTable(ctx, tbInfo, referredTblId)
 		if err != nil {
 			return err
 		}
 		if refTableDef == nil {
 			return moerr.NewInternalErrorf(ctx.GetContext(), "The reference foreign key table %d does not exist", referredTblId)
 		}
-		var referredFK *ForeignKeyDef
 		for _, fkInfo := range refTableDef.Fkeys {
-			if fkInfo.ForeignTbl == tbInfo.TblId {
-				referredFK = fkInfo
-				break
+			if fkInfo == nil {
+				return moerr.NewInternalError(ctx.GetContext(), "nil foreign key definition while modifying column")
 			}
-		}
+			if len(fkInfo.Cols) != len(fkInfo.ForeignCols) {
+				return moerr.NewInternalErrorf(ctx.GetContext(),
+					"foreign key %s has mismatched child and parent columns", fkInfo.Name)
+			}
+			if fkInfo.ForeignTbl != tbInfo.TblId && !(selfReference && fkInfo.ForeignTbl == 0) {
+				continue
+			}
 
-		for i := range referredFK.Cols {
-			if referredFK.ForeignCols[i] == originalCol.ColId {
+			for _, referredColumnID := range fkInfo.ForeignCols {
+				if referredColumnID != originalCol.ColId {
+					continue
+				}
 				if originalCol.Name != newCol.Name {
 					return moerr.NewErrAlterOperationNotSupportedReasonFkRename(ctx.GetContext())
-				} else {
-					return moerr.NewErrForeignKeyColumnCannotChangeChild(ctx.GetContext(), originalCol.Name, referredFK.Name, refObjRef.SchemaName+"."+refTableDef.Name)
 				}
-
-				//childCol := FindColumnByColId(refTableDef.Cols, colId)
-				//if childCol == nil {
-				//	continue
-				//}
-				//
-				//if newCol.Typ.GetId() != childCol.Typ.GetId() {
-				//	return moerr.NewErrFKIncompatibleColumns(ctx.GetContext(), childCol.Name, originalCol.Name, referredFK.Name)
-				//}
-				//
-				//if newCol.Typ.GetWidth() < childCol.Typ.GetWidth() ||
-				//	newCol.Typ.GetWidth() < originalCol.Typ.GetWidth() {
-				//	return moerr.NewErrForeignKeyColumnCannotChangeChild(ctx.GetContext(), originalCol.Name, referredFK.Name, refObjRef.SchemaName+"."+refTableDef.Name)
-				//}
+				return moerr.NewErrForeignKeyColumnCannotChangeChild(
+					ctx.GetContext(), originalCol.Name, fkInfo.Name,
+					alterForeignKeyTableName(refObjRef, refTableDef),
+				)
 			}
 		}
 	}
 	return nil
+}
+
+// resolveAlterForeignKeyTable resolves a FK endpoint while treating the zero
+// table ID as the durable self-reference marker. Older catalog entries may
+// store the current physical table ID instead, so that form is self-referential
+// as well.
+func resolveAlterForeignKeyTable(
+	ctx CompilerContext,
+	currentTable *TableDef,
+	tableID uint64,
+) (*ObjectRef, *TableDef, bool, error) {
+	if tableID == 0 || (currentTable.TblId != 0 && tableID == currentTable.TblId) {
+		return nil, currentTable, true, nil
+	}
+	objRef, tableDef, err := ctx.ResolveById(tableID, nil)
+	return objRef, tableDef, false, err
+}
+
+func alterForeignKeyTableName(objRef *ObjectRef, tableDef *TableDef) string {
+	if objRef != nil && objRef.SchemaName != "" {
+		return objRef.SchemaName + "." + tableDef.Name
+	}
+	if tableDef.DbName != "" {
+		return tableDef.DbName + "." + tableDef.Name
+	}
+	return tableDef.Name
 }
 
 // checkPriKeyConstraint check all parts of a PRIMARY KEY must be NOT NULL

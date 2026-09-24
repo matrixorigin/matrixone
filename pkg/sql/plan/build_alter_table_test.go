@@ -108,6 +108,32 @@ func TestAlterTableAutoIncrementPlan(t *testing.T) {
 	}
 }
 
+func TestBuildAlterInsertDataSQLQuotesIdentifiers(t *testing.T) {
+	alterCtx := &AlterTableContext{
+		schemaName:      "db`name",
+		originTableName: "source`table",
+		copyTableName:   "copy`table",
+		alterColMap: map[string]selectExpr{
+			"target`column": {
+				sexprType: exprColumnName,
+				sexprStr:  "source`column",
+			},
+		},
+	}
+	copyTableDef := &TableDef{Cols: []*ColDef{{Name: "target`column"}}}
+
+	sql, err := buildAlterInsertDataSQL(nil, alterCtx, copyTableDef, false)
+	require.NoError(t, err)
+	require.Equal(t,
+		"INSERT INTO `db``name`.`copy``table` (`target``column`) "+
+			"SELECT `source``column` FROM `db``name`.`source``table`",
+		sql,
+	)
+	statements, err := mysql.Parse(context.Background(), sql, 1)
+	require.NoError(t, err)
+	require.Len(t, statements, 1)
+}
+
 func TestAlterTableAutoIncrementRejectsTableWithoutUserAutoColumn(t *testing.T) {
 	_, err := buildSingleStmt(NewMockOptimizer(false), t,
 		`ALTER TABLE constraint_test.t1 AUTO_INCREMENT = 100;`)
@@ -279,6 +305,113 @@ func TestAlterTableAddColumns(t *testing.T) {
 		//`ALTER TABLE t2 ADD c INT PRIMARY KEY PRIMARY KEY PRIMARY KEY;`,
 	}
 	runTestShouldPass(mock, t, sqls, false, false)
+}
+
+func TestAlterTableCopySupportsForeignKeyOnAddedColumn(t *testing.T) {
+	for _, sql := range []string{
+		`ALTER TABLE t1 ADD COLUMN parent_id BIGINT, ADD CONSTRAINT fk_t1_parent FOREIGN KEY (parent_id) REFERENCES t1(a)`,
+		`ALTER TABLE t1 ADD CONSTRAINT fk_t1_parent FOREIGN KEY (parent_id) REFERENCES t1(a), ADD COLUMN parent_id BIGINT`,
+	} {
+		t.Run(sql, func(t *testing.T) {
+			logicPlan, err := buildSingleStmt(NewMockOptimizer(false), t, sql)
+			require.NoError(t, err)
+
+			alter := logicPlan.GetDdl().GetAlterTable()
+			require.Equal(t, plan.AlterTable_COPY, alter.AlgorithmType)
+			require.Len(t, alter.CopyTableDef.Fkeys, 1)
+			require.Len(t, alter.Actions, 1)
+			require.NotNil(t, alter.Actions[0].GetAddFk())
+			require.NotEmpty(t, alter.DetectSqls)
+			require.NotEmpty(t, alter.UpdateFkSqls)
+
+			fk := alter.CopyTableDef.Fkeys[0]
+			require.Equal(t, "fk_t1_parent", fk.Name)
+			require.Equal(t, uint64(0), fk.ForeignTbl)
+			require.Equal(t, "parent_id", FindColumn(alter.CopyTableDef.Cols, "parent_id").Name)
+			require.Contains(t, alter.CreateTmpTableSql, "CONSTRAINT `fk_t1_parent`")
+			require.Contains(t, alter.CreateTmpTableSql, "FOREIGN KEY (`parent_id`)")
+
+			copied := DeepCopyPlan(logicPlan).GetDdl().GetAlterTable()
+			require.Equal(t, "fk_t1_parent", copied.Actions[0].GetAddFk().GetFkey().GetName())
+		})
+	}
+}
+
+func TestAlterTableCopyForeignKeyUsesAddedUniqueIndex(t *testing.T) {
+	for _, sql := range []string{
+		`ALTER TABLE constraint_test.t1
+			ADD COLUMN parent_code BIGINT,
+			ADD COLUMN ref_code BIGINT,
+			ADD UNIQUE INDEX uk_parent(parent_code),
+			ADD CONSTRAINT fk_self FOREIGN KEY (ref_code)
+				REFERENCES constraint_test.t1(parent_code)`,
+		`ALTER TABLE constraint_test.t1
+			ADD COLUMN parent_code BIGINT,
+			ADD COLUMN ref_code BIGINT,
+			ADD CONSTRAINT fk_self FOREIGN KEY (ref_code)
+				REFERENCES constraint_test.t1(parent_code),
+			ADD UNIQUE INDEX uk_parent(parent_code)`,
+	} {
+		t.Run(sql, func(t *testing.T) {
+			logicPlan, err := buildSingleStmt(NewMockOptimizer(false), t, sql)
+			require.NoError(t, err)
+
+			alter := logicPlan.GetDdl().GetAlterTable()
+			require.Equal(t, plan.AlterTable_COPY, alter.AlgorithmType)
+			require.Len(t, alter.CopyTableDef.Fkeys, 1)
+			require.Equal(t, "uk_parent", alter.CopyTableDef.Fkeys[0].ReferencedIndexName)
+			require.Contains(t, alter.CreateTmpTableSql, "UNIQUE KEY `uk_parent` (`parent_code`)")
+			require.Contains(t, alter.CreateTmpTableSql, "CONSTRAINT `fk_self`")
+
+			require.Len(t, alter.Actions, 2)
+			require.NotNil(t, alter.Actions[0].GetAddIndex())
+			require.Equal(t, "uk_parent", alter.Actions[1].GetAddFk().GetFkey().GetReferencedIndexName())
+		})
+	}
+}
+
+func TestAlterTableCopySupportsExternalForeignKeyOnAddedColumn(t *testing.T) {
+	logicPlan, err := buildSingleStmt(NewMockOptimizer(false), t, `
+		ALTER TABLE constraint_test.t1
+		ADD COLUMN parent_id INT,
+		ADD CONSTRAINT fk_t1_external FOREIGN KEY (parent_id)
+			REFERENCES constraint_test.replace_fk_p(id)`)
+	require.NoError(t, err)
+
+	alter := logicPlan.GetDdl().GetAlterTable()
+	require.Equal(t, plan.AlterTable_COPY, alter.AlgorithmType)
+	require.Len(t, alter.CopyTableDef.Fkeys, 1)
+	require.Len(t, alter.Actions, 1)
+	require.Len(t, alter.DetectSqls, 1)
+	require.Len(t, alter.UpdateFkSqls, 1)
+
+	addFk := alter.Actions[0].GetAddFk()
+	require.NotNil(t, addFk)
+	require.Equal(t, "constraint_test", addFk.DbName)
+	require.Equal(t, "replace_fk_p", addFk.TableName)
+	require.Equal(t, []string{"parent_id"}, addFk.Cols)
+	require.Equal(t, uint64(77001), addFk.Fkey.ForeignTbl)
+	require.Contains(t, alter.CreateTmpTableSql, "CONSTRAINT `fk_t1_external`")
+	require.Contains(t, alter.DetectSqls[0], "`constraint_test`.`replace_fk_p`")
+}
+
+func TestAlterTableCopyRejectsDuplicateForeignKeyName(t *testing.T) {
+	mock := NewMockOptimizer(false)
+	tableDef := mock.ctxt.tablesByQualifiedName[mockQualifiedTableName("constraint_test", "t1")]
+	tableDef.Fkeys = []*plan.ForeignKeyDef{{Name: "FK_T1_PARENT"}}
+
+	_, err := buildSingleStmt(mock, t, `
+		ALTER TABLE constraint_test.t1
+		ADD COLUMN parent_id BIGINT,
+		ADD CONSTRAINT fk_t1_parent FOREIGN KEY (parent_id)
+			REFERENCES constraint_test.t1(a)`)
+	require.ErrorContains(t, err, "Duplicate foreign key constraint name 'fk_t1_parent'")
+}
+
+func TestNextAlterCopyColumnIDIsUnique(t *testing.T) {
+	const unknownColumnID = ^uint64(0)
+	cols := []*ColDef{{ColId: 1}, {ColId: unknownColumnID}}
+	require.Equal(t, unknownColumnID-1, nextAlterCopyColumnID(cols))
 }
 
 func TestAlterTableAddColumnInheritsTableDefaultCharset(t *testing.T) {
@@ -1761,10 +1894,10 @@ func TestAlterTableAlgorithmValidation(t *testing.T) {
 		runTestShouldPass(mock, t, sqls, false, false)
 	})
 
-	t.Run("INPLACE-eligible operations reject ALGORITHM=COPY", func(t *testing.T) {
-		_, err := buildSingleStmt(mock, t,
-			`ALTER TABLE t1 ALGORITHM=COPY, ADD INDEX idx_a(a);`)
-		assert.ErrorContains(t, err, "unsupported alter option in copy mode")
+	t.Run("INPLACE-eligible operations accept explicit ALGORITHM=COPY", func(t *testing.T) {
+		runTestShouldPass(mock, t, []string{
+			`ALTER TABLE t1 ALGORITHM=COPY, ADD INDEX idx_a(a);`,
+		}, false, false)
 	})
 
 	t.Run("COPY with LOCK=NONE", func(t *testing.T) {
@@ -1799,12 +1932,10 @@ func TestAlterTableAlgorithmValidation(t *testing.T) {
 		runTestShouldPass(mock, t, sqls, false, false)
 	})
 
-	t.Run("repeated ALGORITHM hints on INPLACE operation, last hint COPY rejected", func(t *testing.T) {
-		// ALGORITHM=INPLACE then ALGORITHM=COPY on ADD INDEX: last hint (COPY)
-		// routes through buildAlterTableCopy which does not support ADD INDEX.
-		_, err := buildSingleStmt(mock, t,
-			`ALTER TABLE t1 ALGORITHM=INPLACE, ALGORITHM=COPY, ADD INDEX idx_a(a);`)
-		assert.ErrorContains(t, err, "unsupported alter option in copy mode")
+	t.Run("repeated ALGORITHM hints on INPLACE operation, last hint COPY accepted", func(t *testing.T) {
+		runTestShouldPass(mock, t, []string{
+			`ALTER TABLE t1 ALGORITHM=INPLACE, ALGORITHM=COPY, ADD INDEX idx_a(a);`,
+		}, false, false)
 	})
 
 	t.Run("repeated ALGORITHM hints on COPY-required operation, non-COPY rejected", func(t *testing.T) {
@@ -1826,4 +1957,284 @@ func TestAlterTableAlgorithmValidation(t *testing.T) {
 		}
 		runTestShouldPass(mock, t, sqls, false, false)
 	})
+}
+
+func TestAlterTableCopyAddIndex(t *testing.T) {
+	tests := []struct {
+		name      string
+		sql       string
+		indexName string
+		parts     []string
+		algo      string
+		unique    bool
+		hnsw      bool
+	}{
+		{
+			name:      "regular index on newly added column",
+			sql:       `ALTER TABLE constraint_test.t1 ADD COLUMN c BIGINT, ADD INDEX idx_c(c);`,
+			indexName: "idx_c",
+			parts:     []string{"c"},
+		},
+		{
+			name:      "regular index before newly added column",
+			sql:       `ALTER TABLE constraint_test.t1 ADD INDEX idx_c(c), ADD COLUMN c BIGINT;`,
+			indexName: "idx_c",
+			parts:     []string{"c"},
+		},
+		{
+			name:      "anonymous regular index",
+			sql:       `ALTER TABLE constraint_test.t1 ADD COLUMN c BIGINT, ADD INDEX (c);`,
+			indexName: "c",
+			parts:     []string{"c"},
+		},
+		{
+			name:      "unique index on newly added stored generated column",
+			sql:       `ALTER TABLE constraint_test.t1 ADD COLUMN g BIGINT GENERATED ALWAYS AS (a + 1) STORED, ADD UNIQUE INDEX uk_g(g);`,
+			indexName: "uk_g",
+			parts:     []string{"g"},
+			unique:    true,
+		},
+		{
+			name:      "unique index before newly added stored generated column",
+			sql:       `ALTER TABLE constraint_test.t1 ADD UNIQUE INDEX uk_g(g), ADD COLUMN g BIGINT GENERATED ALWAYS AS (a + 1) STORED;`,
+			indexName: "uk_g",
+			parts:     []string{"g"},
+			unique:    true,
+		},
+		{
+			name:      "anonymous unique index",
+			sql:       `ALTER TABLE constraint_test.t1 ADD COLUMN c BIGINT, ADD UNIQUE INDEX (c);`,
+			indexName: "c",
+			parts:     []string{"c"},
+			unique:    true,
+		},
+		{
+			name:      "regular index on newly added virtual generated column",
+			sql:       `ALTER TABLE constraint_test.t1 ADD COLUMN g BIGINT GENERATED ALWAYS AS (a + 1) VIRTUAL, ADD INDEX idx_g(g);`,
+			indexName: "idx_g",
+			parts:     []string{"g"},
+		},
+		{
+			name:      "fulltext index on newly added column",
+			sql:       `ALTER TABLE constraint_test.t1 ADD COLUMN body TEXT, ADD FULLTEXT INDEX ft_body(body);`,
+			indexName: "ft_body",
+			parts:     []string{"body"},
+			algo:      catalog.MOIndexFullTextAlgo.ToString(),
+		},
+		{
+			name:      "fulltext index before newly added column",
+			sql:       `ALTER TABLE constraint_test.t1 ADD FULLTEXT INDEX ft_body(body), ADD COLUMN body TEXT;`,
+			indexName: "ft_body",
+			parts:     []string{"body"},
+			algo:      catalog.MOIndexFullTextAlgo.ToString(),
+		},
+		{
+			name:      "anonymous fulltext index",
+			sql:       `ALTER TABLE constraint_test.t1 ADD COLUMN body TEXT, ADD FULLTEXT INDEX (body);`,
+			indexName: "body",
+			parts:     []string{"body"},
+			algo:      catalog.MOIndexFullTextAlgo.ToString(),
+		},
+		{
+			name:      "hnsw index on existing column with unrelated added column",
+			sql:       `ALTER TABLE constraint_test.docs_vec_raw ADD COLUMN note INT, ADD INDEX h_embedding USING HNSW (embedding) OP_TYPE 'vector_l2_ops';`,
+			indexName: "h_embedding",
+			parts:     []string{"embedding"},
+			algo:      catalog.MoIndexHnswAlgo.ToString(),
+			hnsw:      true,
+		},
+		{
+			name:      "explicit copy index-only alter",
+			sql:       `ALTER TABLE constraint_test.t1 ALGORITHM=COPY, ADD INDEX idx_b(b);`,
+			indexName: "idx_b",
+			parts:     []string{"b"},
+		},
+	}
+
+	for _, test := range tests {
+		t.Run(test.name, func(t *testing.T) {
+			mock := NewMockOptimizer(false)
+			if test.hnsw {
+				tableDef := mock.ctxt.tablesByQualifiedName[mockQualifiedTableName("constraint_test", "docs_vec_raw")]
+				tableDef.Cols[0].Typ.Id = int32(types.T_int64)
+				tableDef.Pkey.CompPkeyCol.Typ.Id = int32(types.T_int64)
+			}
+			logicPlan, err := buildSingleStmt(mock, t, test.sql)
+			require.NoError(t, err)
+
+			alter := logicPlan.GetDdl().GetAlterTable()
+			require.Equal(t, plan.AlterTable_COPY, alter.AlgorithmType)
+			if test.algo == "" {
+				require.NotContains(t, alter.AffectedCols, test.indexName,
+					"regular indexes must not spuriously invalidate plugin indexes on same-named columns")
+			} else {
+				require.NotContains(t, alter.AffectedCols, test.indexName,
+					"plugin index identity must not be mixed into the affected-column namespace")
+			}
+			require.NotNil(t, alter.Options)
+			require.Equal(t, test.algo != "", alter.Options.NewPluginIndexes[test.indexName],
+				"only a newly added plugin index needs a post-copy rebuild marker")
+
+			var copiedDefs []*plan.IndexDef
+			for _, indexDef := range alter.CopyTableDef.Indexes {
+				if indexDef.IndexName == test.indexName {
+					copiedDefs = append(copiedDefs, indexDef)
+				}
+			}
+			require.NotEmpty(t, copiedDefs)
+			for _, indexDef := range copiedDefs {
+				require.GreaterOrEqual(t, len(indexDef.Parts), len(test.parts))
+				require.Equal(t, test.parts, indexDef.Parts[:len(test.parts)])
+				require.Equal(t, test.unique, indexDef.Unique)
+				if test.algo != "" {
+					require.Equal(t, test.algo, indexDef.IndexAlgo)
+				}
+			}
+
+			var actionDefs []*plan.IndexDef
+			for _, action := range alter.Actions {
+				if addIndex := action.GetAddIndex(); addIndex != nil {
+					actionDefs = append(actionDefs, addIndex.IndexInfo.TableDef.Indexes...)
+				}
+			}
+			require.Len(t, actionDefs, len(copiedDefs))
+			for _, indexDef := range actionDefs {
+				require.Equal(t, test.indexName, indexDef.IndexName)
+			}
+		})
+	}
+}
+
+func TestAlterTableCopyNewUniqueIndexKeepsDedup(t *testing.T) {
+	logicPlan, err := buildSingleStmt(NewMockOptimizer(false), t,
+		`ALTER TABLE constraint_test.t1 ADD COLUMN c INT, ADD UNIQUE INDEX uk_b(b);`)
+	require.NoError(t, err)
+
+	alter := logicPlan.GetDdl().GetAlterTable()
+	require.Equal(t, plan.AlterTable_COPY, alter.AlgorithmType)
+	require.NotNil(t, alter.Options)
+	require.False(t, alter.Options.SkipUniqueIdxDedup["uk_b"],
+		"a new UNIQUE index must validate copied rows for duplicates")
+}
+
+func TestAlterTableCopyAddIndexRejectsDuplicateName(t *testing.T) {
+	_, err := buildSingleStmt(NewMockOptimizer(false), t,
+		`ALTER TABLE constraint_test.t1 ADD COLUMN c INT, ADD INDEX idx_c(c), ADD INDEX IDX_C(c);`)
+	require.Error(t, err)
+	require.Contains(t, strings.ToLower(err.Error()), "duplicate key")
+}
+
+func TestAlterTableCopyAddIndexRejectsUnknownColumn(t *testing.T) {
+	for _, sql := range []string{
+		`ALTER TABLE constraint_test.t1 ADD COLUMN c INT, ADD INDEX idx_missing(missing);`,
+		`ALTER TABLE constraint_test.t1 ADD COLUMN c INT, ADD UNIQUE INDEX uk_missing(missing);`,
+		`ALTER TABLE constraint_test.t1 ADD COLUMN c INT, ADD FULLTEXT INDEX ft_missing(missing);`,
+	} {
+		_, err := buildSingleStmt(NewMockOptimizer(false), t, sql)
+		require.ErrorContains(t, err, "missing")
+	}
+}
+
+func TestAlterTemporaryTablePlan(t *testing.T) {
+	for _, tc := range []struct {
+		option string
+		copy   bool
+	}{
+		{"ADD COLUMN extra INT DEFAULT 7", true},
+		{"ADD COLUMN extra INT DEFAULT 7, ADD INDEX idx_v(v)", true},
+		{"DROP COLUMN v", true},
+		{"MODIFY COLUMN v BIGINT", true},
+		{"RENAME COLUMN v TO value_col", false},
+		{"RENAME TO renamed", false},
+	} {
+		t.Run(tc.option, func(t *testing.T) {
+			mock := newAutoIncrementAlterOptimizer()
+			source := mock.ctxt.tables["auto_incr_t"]
+			source.IsTemporary = true
+			source.TableType = catalog.SystemTemporaryTable
+			source.Name = "__mo_tmp_physical_source"
+			p, err := buildSingleStmt(mock, t, "ALTER TABLE constraint_test.auto_incr_t "+tc.option)
+			require.NoError(t, err)
+			alter := p.GetDdl().GetAlterTable()
+			require.True(t, alter.TableDef.IsTemporary)
+			require.Equal(t, "auto_incr_t", alter.TableDef.Name)
+			require.Equal(t, "__mo_tmp_physical_source", source.Name, "planner must not mutate resolved metadata")
+			if tc.copy {
+				require.Equal(t, plan.AlterTable_COPY, alter.AlgorithmType)
+				require.Contains(t, alter.CreateTmpTableSql, "CREATE TEMPORARY TABLE")
+				require.LessOrEqual(t, len(alter.CopyTableDef.Name), 64)
+				require.Contains(t, alter.InsertTmpDataSql, "`auto_incr_t`")
+			} else {
+				require.Equal(t, plan.AlterTable_INPLACE, alter.AlgorithmType)
+			}
+		})
+	}
+}
+
+func TestAlterTemporaryTableKeepsUnsupportedColumnOperationsClosed(t *testing.T) {
+	mock := newAutoIncrementAlterOptimizer()
+	source := mock.ctxt.tables["auto_incr_t"]
+	source.IsTemporary = true
+	source.TableType = catalog.SystemTemporaryTable
+
+	_, err := buildSingleStmt(mock, t,
+		"ALTER TABLE constraint_test.auto_incr_t CHANGE COLUMN v value_col BIGINT")
+	require.True(t, moerr.IsMoErrCode(err, moerr.ErrNYI), "%v", err)
+}
+
+func TestAlterTemporaryTableRenameDestination(t *testing.T) {
+	for _, temporaryDestination := range []bool{false, true} {
+		t.Run(fmt.Sprintf("temporary=%v", temporaryDestination), func(t *testing.T) {
+			mock := newAutoIncrementAlterOptimizer()
+			source := mock.ctxt.tables["auto_incr_t"]
+			source.IsTemporary = true
+			source.TableType = catalog.SystemTemporaryTable
+			destination := DeepCopyTableDef(source, true)
+			destination.Name = "destination"
+			destination.IsTemporary = temporaryDestination
+			mock.ctxt.tables["destination"] = destination
+			mock.ctxt.objects["destination"] = &ObjectRef{SchemaName: "constraint_test", ObjName: "destination"}
+			p, err := buildSingleStmt(mock, t, "ALTER TABLE constraint_test.auto_incr_t RENAME TO destination")
+			if temporaryDestination {
+				require.True(t, moerr.IsMoErrCode(err, moerr.ErrTableAlreadyExists), "%v", err)
+			} else {
+				require.NoError(t, err)
+				require.Equal(t, "destination", p.GetDdl().GetAlterTable().Actions[0].GetAlterName().NewName)
+				require.Empty(t, p.GetDdl().GetAlterTable().UpdateFkSqls)
+			}
+		})
+	}
+}
+
+// #28917: ALTER ... MODIFY/CHANGE copies rows without re-encoding vectors, so changing a vector
+// column's declared dimension would leave a mixed-dimension column. checkChangeTypeCompatible must
+// reject a dimension change (same element type, different Width) while leaving same-dimension and
+// non-vector width changes alone.
+func TestCheckChangeTypeCompatibleVectorDimension(t *testing.T) {
+	ctx := context.Background()
+	vec := func(id types.T, w int32) *plan.Type { return &plan.Type{Id: int32(id), Width: w} }
+
+	// Every width-bearing vector type is covered, not just VECF32 (#28917 review).
+	for _, id := range []types.T{
+		types.T_array_float32, types.T_array_float64, types.T_array_bf16,
+		types.T_array_float16, types.T_array_int8, types.T_array_uint8,
+	} {
+		require.Error(t, checkChangeTypeCompatible(ctx, vec(id, 3), vec(id, 4)),
+			"growing the dimension of %s must be rejected", id.String())
+		require.Error(t, checkChangeTypeCompatible(ctx, vec(id, 4), vec(id, 3)),
+			"shrinking the dimension of %s must be rejected", id.String())
+		require.NoError(t, checkChangeTypeCompatible(ctx, vec(id, 3), vec(id, 3)),
+			"same dimension for %s is allowed (nullability/default change)", id.String())
+	}
+
+	// A dimension change across element types is rejected at validation too (not left to the
+	// per-row cast to fail mid-copy).
+	require.Error(t, checkChangeTypeCompatible(ctx, vec(types.T_array_float32, 3), vec(types.T_array_float64, 4)),
+		"vecf32(3)->vecf64(4) (element + dimension change) must be rejected")
+	// An element-type change that KEEPS the dimension is allowed: the array cast re-encodes rows.
+	require.NoError(t, checkChangeTypeCompatible(ctx, vec(types.T_array_float32, 3), vec(types.T_array_float64, 3)),
+		"vecf32(3)->vecf64(3) (element change, same dimension) is allowed")
+
+	require.NoError(t, checkChangeTypeCompatible(ctx, vec(types.T_varchar, 10), vec(types.T_varchar, 20)),
+		"a non-vector same-type width change is unaffected")
 }

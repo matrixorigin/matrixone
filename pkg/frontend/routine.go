@@ -18,6 +18,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"strings"
 	"sync"
 	"sync/atomic"
 	"time"
@@ -712,6 +713,11 @@ func (rt *Routine) migrateConnectionTo(ctx context.Context, req *query.MigrateCo
 		return moerr.NewInternalErrorNoCtx("cannot start migrate as routine has been closed")
 	}
 	defer rt.mc.endOperation()
+	if !req.LastInsertIDExported {
+		// Do not consume the one-shot migration slot for a request whose source
+		// snapshot cannot prove LAST_INSERT_ID state is authoritative.
+		return moerr.GetOkExpectedNotSafeToStartTransfer()
+	}
 
 	rt.mc.migrateOnce.Do(func() {
 		ses := rt.getSession()
@@ -742,7 +748,7 @@ func (rt *Routine) migrateConnectionFromActionWithContext(
 	resp *query.MigrateConnFromResponse,
 ) error {
 	return rt.migrateConnectionFromActionWithCapabilities(
-		ctx, action, true, resp,
+		ctx, action, true, true, resp,
 	)
 }
 
@@ -750,6 +756,7 @@ func (rt *Routine) migrateConnectionFromActionWithCapabilities(
 	ctx context.Context,
 	action query.MigrateConnFromAction,
 	tempTableMigrationSupported bool,
+	lastInsertIDMigrationSupported bool,
 	resp *query.MigrateConnFromResponse,
 ) error {
 	operationCtx, ok := rt.mc.beginOperationWithContext(ctx)
@@ -777,6 +784,12 @@ func (rt *Routine) migrateConnectionFromActionWithCapabilities(
 	case query.MigrateConnFromAction_MigrateConnFromEnableUserLevelLockRelease:
 		ses.userLevelLocksMigrated = false
 		return nil
+	}
+	if !lastInsertIDMigrationSupported {
+		// A legacy Proxy cannot forward the value or prove that a zero is
+		// authoritative. Keep the source session on this CN instead of allowing
+		// a successful handoff to silently reset LAST_INSERT_ID().
+		return moerr.GetOkExpectedNotSafeToStartTransfer()
 	}
 	if states := function.UserLevelLocksForMigration(ses.proc); len(states) > 0 {
 		return moerr.NewInternalErrorNoCtx("cannot migrate connection while user-level locks are held")
@@ -812,6 +825,8 @@ func (rt *Routine) migrateConnectionFromActionWithCapabilities(
 	resp.UserLevelLockReleaseSupported = true
 	resp.DB = ses.GetDatabaseName()
 	resp.LastAffectedRows = ses.GetLastAffectedRows()
+	resp.LastInsertID = ses.GetLastInsertID()
+	resp.LastInsertIDExported = true
 	prepareStmts := ses.GetPrepareStmts()
 	for _, st := range prepareStmts {
 		// COM_STMT_SEND_LONG_DATA has no protocol response and its parameter
@@ -891,6 +906,145 @@ func (rt *Routine) resetSessionWithContext(
 	resp *query.ResetSessionResponse,
 ) error {
 	return rt.resetSessionWithAdmission(ctx, baseServiceID, resp, true, false)
+}
+
+// refreshSessionAuthWithContext reauthenticates a backend that was reset for
+// cache reuse. ResetSession intentionally keeps the physical protocol alive,
+// but its credential and resolved-role snapshot can become stale while the
+// backend is idle. Build a candidate session, authenticate it against the
+// current catalog, and publish it only after the old generation is retired.
+func (rt *Routine) refreshSessionAuthWithContext(
+	ctx context.Context,
+	req *query.RefreshSessionAuthRequest,
+	resp *query.RefreshSessionAuthResponse,
+) error {
+	if resp != nil {
+		resp.Success = false
+		resp.AuthString = nil
+		resp.AuthenticationFailed = false
+		resp.RequestRejected = false
+	}
+	operationCtx, ok := rt.mc.tryBeginOperationWithContext(ctx)
+	if !ok {
+		if ctx != nil {
+			if cause := context.Cause(ctx); cause != nil {
+				return cause
+			}
+		}
+		return moerr.NewInternalErrorNoCtx("cannot refresh session authentication as routine is closed or busy")
+	}
+	defer rt.mc.endOperation()
+	if cause := context.Cause(operationCtx); cause != nil {
+		return cause
+	}
+
+	oldSession := rt.getSession()
+	if oldSession == nil {
+		return moerr.NewInternalError(operationCtx, "cannot refresh authentication for a missing session")
+	}
+	protocolValue := rt.getProtocol()
+	if protocolValue == nil {
+		return moerr.NewInternalError(operationCtx, "cannot refresh authentication without a protocol")
+	}
+	protocol, ok := protocolValue.(*MysqlProtocolImpl)
+	if !ok {
+		return moerr.NewInternalError(operationCtx, "refresh session authentication requires the MySQL wire protocol")
+	}
+	if resp == nil {
+		return moerr.NewInvalidInput(operationCtx, "refresh session authentication response is nil")
+	}
+	if req == nil || req.UserInput == "" {
+		return moerr.NewInvalidInput(operationCtx, "refresh session authentication requires a user")
+	}
+	if len(req.Salt) == 0 {
+		return moerr.NewInvalidInput(operationCtx, "refresh session authentication requires a salt")
+	}
+
+	oldTenant := oldSession.GetTenantInfo()
+	routineManager := oldSession.getRoutineManager()
+	oldRestricted := rt.isRestricted()
+	oldExpired := rt.isExpired()
+	previousProtocolState := protocol.snapshotSessionState()
+
+	newSession := NewSession(rt.getCancelRoutineCtx(), oldSession.GetService(), protocol, nil)
+	newSession.inheritPhysicalConnection(oldSession)
+	// Never inherit the previous client's host admission input. An empty value
+	// is deliberately fail-closed when host checks are enabled.
+	newSession.clientAddr = req.ClientAddress
+	previousSalt := append([]byte(nil), protocol.GetSalt()...)
+	change := changeUserRequest{
+		username:     req.UserInput,
+		database:     req.Database,
+		authResponse: append([]byte(nil), req.AuthResponse...),
+	}
+	protocol.setChangeUserState(newSession, change)
+	committed := false
+	defer func() {
+		if committed {
+			return
+		}
+		if tenant := newSession.GetTenantInfo(); tenant != nil && newSession.getRoutineManager() != nil &&
+			(oldTenant == nil || tenant.GetTenantID() != oldTenant.GetTenantID()) {
+			newSession.getRoutineManager().accountRoutine.deleteRoutine(int64(tenant.GetTenantID()), rt)
+		}
+		protocol.setSessionState(previousProtocolState)
+		protocol.SetSalt(previousSalt)
+		rt.setResricted(oldRestricted)
+		rt.setExpired(oldExpired)
+		newSession.ReserveConn()
+		newSession.Close()
+	}()
+
+	rt.setResricted(false)
+	rt.setExpired(false)
+	// A cached backend retains the salt from its previous client. Rebind the
+	// physical protocol to the current handshake salt before invoking the
+	// canonical authentication path; this also validates special users and
+	// initializes system variables exactly as a fresh login does.
+	protocol.SetSalt(append([]byte(nil), req.Salt...))
+	if err := protocol.authenticateUser(operationCtx, change.authResponse); err != nil {
+		resp.AuthenticationFailed = isAuthenticationRejected(err) ||
+			needConvertedToAccessDeniedError(strings.ToLower(err.Error()))
+		resp.RequestRejected = isAuthenticationRequestRejected(err)
+		return err
+	}
+	authString := append([]byte(nil), protocol.GetAuthString()...)
+	newSession.SetDatabaseName(req.Database)
+	allowedPacketSize, err := newSession.GetSessionSysVar("max_allowed_packet")
+	if err != nil {
+		return err
+	}
+	maxPacketSize, ok := allowedPacketSize.(int64)
+	if !ok {
+		return moerr.NewInternalErrorf(operationCtx, "invalid max_allowed_packet value %T", allowedPacketSize)
+	}
+	if cause := context.Cause(operationCtx); cause != nil {
+		return cause
+	}
+	if err = oldSession.closeForReset(operationCtx); err != nil {
+		return err
+	}
+
+	newTenant := newSession.GetTenantInfo()
+	if oldTenant != nil && newTenant != nil && oldTenant.GetTenantID() != newTenant.GetTenantID() {
+		routineManager.accountRoutine.deleteRoutine(int64(oldTenant.GetTenantID()), rt)
+		if rt.connectionBeCounted.Load() {
+			metric.ConnectionCounter(oldTenant.GetTenant(), oldTenant.GetTenantID()).Dec()
+			metric.ConnectionCounter(newTenant.GetTenant(), newTenant.GetTenantID()).Inc()
+		}
+	}
+	if protocol.tcpConn != nil {
+		protocol.tcpConn.allowedPacketSize = int(maxPacketSize)
+	}
+	protocol.m.Lock()
+	protocol.authString = append(protocol.authString[:0], authString...)
+	protocol.m.Unlock()
+	rt.setSession(newSession)
+	newSession.getRoutineManager().sessionManager.AddSession(newSession)
+	resp.Success = true
+	resp.AuthString = append([]byte(nil), authString...)
+	committed = true
+	return nil
 }
 
 func (rt *Routine) resetConnectionWithContext(

@@ -122,7 +122,8 @@ var PathExists = func(path string) (bool, bool, error) {
 
 func getSystemVariables(configFile string) (*mo_config.FrontendParameters, error) {
 	sv := &mo_config.FrontendParameters{
-		MongoDB: *mo_config.NewMongoDBParameters(),
+		MongoDB:   *mo_config.NewMongoDBParameters(),
+		ArrowLoad: *mo_config.NewArrowLoadParameters(),
 	}
 	var err error
 	_, err = toml.DecodeFile(configFile, sv)
@@ -201,7 +202,7 @@ func getExprValueWithPrepareMode(
 	preparedExpression bool,
 	isBin ...*bool,
 ) (interface{}, error) {
-	value, _, err := getExprValueWithPrepareMeta(e, ses, execCtx, preparedExpression, nil, nil, isBin...)
+	value, _, err := getExprValueWithPrepareMeta(e, ses, execCtx, preparedExpression, nil, nil, nil, isBin...)
 	return value, err
 }
 
@@ -212,6 +213,7 @@ func getExprValueWithPrepareMeta(
 	preparedExpression bool,
 	materializedResult **plan.Expr,
 	prepareParamKind *vector.PrepareParamKind,
+	runtimeDomain *types.RuntimeStringDomain,
 	isBin ...*bool,
 ) (interface{}, plan.Type, error) {
 	/*
@@ -334,6 +336,9 @@ func getExprValueWithPrepareMeta(
 
 	if len(isBin) > 0 {
 		*isBin[0] = resultVec.GetIsBin()
+	}
+	if runtimeDomain != nil {
+		*runtimeDomain = resultVec.GetRuntimeStringDomainAt(0)
 	}
 	if prepareParamKind != nil {
 		*prepareParamKind = resultVec.GetPrepareParamKind()
@@ -558,6 +563,7 @@ func getPreparedPlanExprValueWithSubqueries(
 	ses *Session,
 	execCtx *ExecCtx,
 	prepareParamKind *vector.PrepareParamKind,
+	runtimeDomain *types.RuntimeStringDomain,
 	isBin *bool,
 ) (interface{}, plan.Type, error) {
 	var subqueries []*tree.Subquery
@@ -567,7 +573,7 @@ func getPreparedPlanExprValueWithSubqueries(
 		var subqueryKind vector.PrepareParamKind
 		var subqueryIsBin bool
 		_, _, err := getExprValueWithPrepareMeta(
-			subquery, ses, execCtx, true, &replacements[i], &subqueryKind, &subqueryIsBin)
+			subquery, ses, execCtx, true, &replacements[i], &subqueryKind, nil, &subqueryIsBin)
 		if err != nil {
 			return nil, plan.Type{}, err
 		}
@@ -582,7 +588,8 @@ func getPreparedPlanExprValueWithSubqueries(
 	if position != len(replacements) {
 		return nil, plan.Type{}, moerr.NewInternalErrorNoCtx("prepared SET expression subquery count mismatch")
 	}
-	return getPreparedPlanExprValueWithMeta(runtimeExpr, ses, execCtx, prepareParamKind, isBin)
+	return getPreparedPlanExprValueWithMeta(
+		runtimeExpr, ses, execCtx, prepareParamKind, runtimeDomain, isBin)
 }
 
 func preparedPlanExprContainsSubquery(expr *plan.Expr) bool {
@@ -599,6 +606,7 @@ func getPreparedPlanExprValueWithMeta(
 	ses *Session,
 	execCtx *ExecCtx,
 	prepareParamKind *vector.PrepareParamKind,
+	runtimeDomain *types.RuntimeStringDomain,
 	isBin *bool,
 ) (interface{}, plan.Type, error) {
 	executor, err := colexec.NewExpressionExecutor(execCtx.proc, expr)
@@ -615,6 +623,9 @@ func getPreparedPlanExprValueWithMeta(
 	}
 	if isBin != nil {
 		*isBin = result.GetIsBin()
+	}
+	if runtimeDomain != nil {
+		*runtimeDomain = result.GetRuntimeStringDomainAt(0)
 	}
 	if prepareParamKind != nil {
 		*prepareParamKind = result.GetPrepareParamKind()
@@ -805,10 +816,10 @@ func getValueFromVector(ctx context.Context, vec *vector.Vector, feSes FeSession
 		return val.String(), nil
 	case types.T_time:
 		val := vector.MustFixedColNoTypeCheck[types.Time](vec)[0]
-		return val.String(), nil
+		return val.String2(vec.GetType().Scale), nil
 	case types.T_datetime:
 		val := vector.MustFixedColNoTypeCheck[types.Datetime](vec)[0]
-		return val.String(), nil
+		return val.String2(vec.GetType().Scale), nil
 	case types.T_timestamp:
 		val := vector.MustFixedColNoTypeCheck[types.Timestamp](vec)[0]
 		return val.String2(feSes.GetTimeZone(), vec.GetType().Scale), nil
@@ -1363,7 +1374,7 @@ func RewriteError(err error, username string) (uint16, string, string) {
 	var msg string
 
 	errMsg := strings.ToLower(err.Error())
-	if needConvertedToAccessDeniedError(errMsg) {
+	if isAuthenticationRejected(err) || needConvertedToAccessDeniedError(errMsg) {
 		failed := moerr.MysqlErrorMsgRefer[moerr.ER_ACCESS_DENIED_ERROR]
 		if len(username) > 0 {
 			tipsFormat := "Access denied for user %s. %s"
@@ -2026,6 +2037,37 @@ func setMysqlColumnTypeInfo(ctx context.Context, typ types.Type, col *MysqlColum
 }
 
 func setMysqlBinaryBlobColumnMetadata(col *MysqlColumn, length uint32) {
+	switch length {
+	case 0, math.MaxUint32:
+		col.SetColumnType(defines.MYSQL_TYPE_BLOB)
+	case types.MaxTinyTextLen:
+		col.SetColumnType(defines.MYSQL_TYPE_TINY_BLOB)
+	case types.MaxMediumTextLen:
+		col.SetColumnType(defines.MYSQL_TYPE_MEDIUM_BLOB)
+	case types.MaxLongTextLen:
+		col.SetColumnType(defines.MYSQL_TYPE_LONG_BLOB)
+	default:
+		switch {
+		case length <= types.MaxTinyTextLen:
+			col.SetColumnType(defines.MYSQL_TYPE_TINY_BLOB)
+		case length <= types.MaxStringSize:
+			col.SetColumnType(defines.MYSQL_TYPE_BLOB)
+		case length <= types.MaxMediumTextLen:
+			col.SetColumnType(defines.MYSQL_TYPE_MEDIUM_BLOB)
+		default:
+			col.SetColumnType(defines.MYSQL_TYPE_LONG_BLOB)
+		}
+	}
+	col.SetCharset(charsetBinary)
+	col.SetLength(length)
+	col.SetFlag(col.Flag() | uint16(defines.BLOB_FLAG|defines.BINARY_FLAG))
+}
+
+// setMysqlOpaqueBinaryBlobColumnMetadata describes an internal binary payload
+// whose chunk size is not a MySQL BLOB family declaration. Keep it as generic
+// BLOB metadata instead of deriving TINY/MEDIUM/LONG_BLOB from the transport
+// limit.
+func setMysqlOpaqueBinaryBlobColumnMetadata(col *MysqlColumn, length uint32) {
 	col.SetColumnType(defines.MYSQL_TYPE_BLOB)
 	col.SetCharset(charsetBinary)
 	col.SetLength(length)
@@ -2608,7 +2650,7 @@ func colDef2MysqlColumn(ctx context.Context, col *plan.ColDef) (*MysqlColumn, er
 	if err = setMysqlColumnTypeInfo(ctx, typ, c); err != nil {
 		return nil, err
 	}
-	if typ.Oid == types.T_blob && col.OriginTblName != "" {
+	if typ.Oid == types.T_blob && typ.Width == 0 && col.OriginTblName != "" {
 		// A directly selected table BLOB has MySQL's regular BLOB capacity.
 		// Width-less computed BLOB expressions keep the conservative upper bound
 		// installed by setMysqlColumnTypeInfo instead.

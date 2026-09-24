@@ -15,10 +15,12 @@
 package function
 
 import (
+	"math/big"
 	"math/bits"
 	"math/rand"
 	"testing"
 
+	"github.com/matrixorigin/matrixone/pkg/common/moerr"
 	"github.com/matrixorigin/matrixone/pkg/container/nulls"
 	"github.com/matrixorigin/matrixone/pkg/container/types"
 	"github.com/matrixorigin/matrixone/pkg/sql/plan/function/functionUtil"
@@ -2762,6 +2764,110 @@ func TestD256Div(t *testing.T) {
 	})
 }
 
+func TestD256DivViaD128PreservesWideQuotient(t *testing.T) {
+	x, err := types.ParseDecimal256("1", 65, 30)
+	require.NoError(t, err)
+	y, err := types.ParseDecimal256("0.000000000000000003", 65, 18)
+	require.NoError(t, err)
+
+	got := make([]types.Decimal256, 1)
+	resultNulls := nulls.NewWithSize(1)
+	err = d256Div([]types.Decimal256{x}, []types.Decimal256{y}, got, 30, 18, resultNulls, true)
+	require.NoError(t, err)
+	require.Equal(t, "333333333333333333.333333333333333333333333333333", got[0].Format(30))
+
+	// The same quotient cannot fit a Decimal128 result and must remain an
+	// overflow for callers whose declared result domain is Decimal128.
+	x128, err := types.ParseDecimal128("1", 38, 30)
+	require.NoError(t, err)
+	y128, err := types.ParseDecimal128("0.000000000000000003", 38, 18)
+	require.NoError(t, err)
+	got128 := make([]types.Decimal128, 1)
+	err = d128Div([]types.Decimal128{x128}, []types.Decimal128{y128}, got128, 30, 18, nulls.NewWithSize(1), true)
+	require.Error(t, err)
+}
+
+func TestD256DivViaD128MinInt128Divisor(t *testing.T) {
+	const numerator = "85070591730234615865843651857943"
+	const divisor = "-170141183460469231731687303715884105728"
+
+	for _, negativeNumerator := range []bool{false, true} {
+		leftText := numerator
+		want := "-0.000001"
+		if negativeNumerator {
+			leftText = "-" + leftText
+			want = "0.000001"
+		}
+
+		left, err := types.ParseDecimal256(leftText, 65, 0)
+		require.NoError(t, err)
+		right, err := types.ParseDecimal256(divisor, 65, 0)
+		require.NoError(t, err)
+
+		got := make([]types.Decimal256, 1)
+		err = d256Div([]types.Decimal256{left}, []types.Decimal256{right}, got, 0, 0, nulls.NewWithSize(1), true)
+		require.NoError(t, err, "negativeNumerator=%t", negativeNumerator)
+		require.Equal(t, want, got[0].Format(6), "negativeNumerator=%t", negativeNumerator)
+	}
+}
+
+func TestD128DivLargeDivisorHalfUp(t *testing.T) {
+	x, err := types.ParseDecimal128("123456789012345", 38, 0)
+	require.NoError(t, err)
+	y, err := types.ParseDecimal128("999999999999999.999999999999999999", 38, 18)
+	require.NoError(t, err)
+
+	for _, negativeX := range []bool{false, true} {
+		for _, negativeY := range []bool{false, true} {
+			left, right := x, y
+			if negativeX {
+				left = left.Minus()
+			}
+			if negativeY {
+				right = right.Minus()
+			}
+
+			got := make([]types.Decimal128, 1)
+			err := d128Div([]types.Decimal128{left}, []types.Decimal128{right}, got, 0, 18, nulls.NewWithSize(1), true)
+			require.NoError(t, err)
+			want := "0.123457"
+			if negativeX != negativeY {
+				want = "-" + want
+			}
+			require.Equal(t, want, got[0].Format(6), "negativeX=%t negativeY=%t", negativeX, negativeY)
+		}
+	}
+}
+
+func TestD128DivOneToD256FailurePaths(t *testing.T) {
+	x := types.Decimal128{B0_63: 1}
+	zero := types.Decimal128{}
+
+	t.Run("zero divisor returns error", func(t *testing.T) {
+		nul := nulls.NewWithSize(1)
+		var dst types.Decimal256
+		err := d128DivOneToD256(x, zero, &dst, 0, nul, 0, true, 0, 0)
+		require.Error(t, err)
+	})
+
+	t.Run("zero divisor sets null", func(t *testing.T) {
+		nul := nulls.NewWithSize(1)
+		var dst types.Decimal256
+		err := d128DivOneToD256(x, zero, &dst, 0, nul, 0, false, 0, 0)
+		require.NoError(t, err)
+		require.True(t, nul.Contains(0))
+	})
+
+	t.Run("D256 scale-up overflow", func(t *testing.T) {
+		numerator := []types.Decimal256{{B0_63: 20}}
+		divisor := []types.Decimal256{{B0_63: 1}}
+		result := make([]types.Decimal256, 1)
+		err := d256Div(numerator, divisor, result, 0, 76, nulls.NewWithSize(1), true)
+		require.Error(t, err)
+		require.Contains(t, err.Error(), "Decimal256 Div overflow")
+	})
+}
+
 func TestD256Div_LargeValues(t *testing.T) {
 	v1 := make([]types.Decimal256, 4)
 	v2 := make([]types.Decimal256, 4)
@@ -2931,6 +3037,32 @@ func TestD256Mod_LargeValues(t *testing.T) {
 		want, _, err := v1[i].Mod(v2[i], 2, 2)
 		require.NoError(t, err)
 		require.Equal(t, want, rs[i], "d256Mod large[%d]", i)
+	}
+}
+
+func TestD256ModScaleAlignmentOverflow(t *testing.T) {
+	maxCoefficient := new(big.Int).Sub(
+		new(big.Int).Exp(big.NewInt(10), big.NewInt(65), nil), big.NewInt(1))
+	maximum, err := types.ParseDecimal256(maxCoefficient.String(), 65, 0)
+	require.NoError(t, err)
+	seven := types.Decimal256FromInt64(7)
+	negativeSeven := seven.Minus()
+	values := []types.Decimal256{maximum, maximum.Minus(), maximum, maximum.Minus()}
+	divisors := []types.Decimal256{seven, seven, negativeSeven, negativeSeven}
+	results := make([]types.Decimal256, len(values))
+	require.NoError(t, d256Mod(values, divisors, results, 0, 30, nulls.NewWithSize(len(values)), true))
+	for i, want := range []int64{4, -4, 4, -4} {
+		require.Equal(t, types.Decimal256FromInt64(want), results[i], "scale-up remainder[%d]", i)
+	}
+
+	// The reverse alignment overflows while scaling the divisor; the divisor
+	// is nevertheless larger than the dividend at the common scale.
+	values = []types.Decimal256{seven, negativeSeven, seven, negativeSeven}
+	divisors = []types.Decimal256{maximum, maximum, maximum.Minus(), maximum.Minus()}
+	results = make([]types.Decimal256, len(values))
+	require.NoError(t, d256Mod(values, divisors, results, 30, 0, nulls.NewWithSize(len(values)), true))
+	for i, want := range []int64{7, -7, 7, -7} {
+		require.Equal(t, types.Decimal256FromInt64(want), results[i], "scale-down remainder[%d]", i)
 	}
 }
 
@@ -3590,6 +3722,67 @@ func TestD256IntDiv(t *testing.T) {
 			require.Equal(t, want, rs[i], "d256IntDiv large[%d]", i)
 		}
 	})
+}
+
+func TestD256IntDivScaleAlignmentOverflow(t *testing.T) {
+	maxCoefficient := new(big.Int).Sub(
+		new(big.Int).Exp(big.NewInt(10), big.NewInt(65), nil), big.NewInt(1))
+	maximum, err := types.ParseDecimal256(maxCoefficient.String(), 65, 0)
+	require.NoError(t, err)
+	seven := types.Decimal256FromInt64(7)
+
+	// 7e-30 divided by a 65-digit integer is a representable zero even though
+	// expanding the divisor by 10^30 cannot fit in Decimal256.
+	zeroResults := make([]int64, 4)
+	zeroInputs := []types.Decimal256{seven, seven.Minus(), seven, seven.Minus()}
+	zeroDivisors := []types.Decimal256{maximum, maximum, maximum.Minus(), maximum.Minus()}
+	require.NoError(t, d256IntDiv(
+		zeroInputs, zeroDivisors, zeroResults, 30, 0, nulls.NewWithSize(4), true))
+	require.Equal(t, []int64{0, 0, 0, 0}, zeroResults)
+
+	// This distinguishes truncation from the rounded Scale operation:
+	// floor((10^60-1)/10^30)/(5*10^29) is 1, whereas rounding first yields 2.
+	truncateNumeratorCoefficient := new(big.Int).Sub(
+		new(big.Int).Exp(big.NewInt(10), big.NewInt(60), nil), big.NewInt(1))
+	truncateNumerator, err := types.ParseDecimal256(truncateNumeratorCoefficient.String(), 65, 0)
+	require.NoError(t, err)
+	truncateDivisorCoefficient := new(big.Int).Mul(big.NewInt(5), new(big.Int).Exp(big.NewInt(10), big.NewInt(29), nil))
+	truncateDivisor, err := types.ParseDecimal256(truncateDivisorCoefficient.String(), 65, 0)
+	require.NoError(t, err)
+	truncateResults := make([]int64, 2)
+	require.NoError(t, d256IntDiv(
+		[]types.Decimal256{truncateNumerator, truncateNumerator.Minus()},
+		[]types.Decimal256{truncateDivisor, truncateDivisor},
+		truncateResults, 30, 0, nulls.NewWithSize(2), true))
+	require.Equal(t, []int64{1, -1}, truncateResults)
+
+	// The positive scale adjustment can also overflow the numerator while the
+	// quotient remains representable; preserve the exact quotient and sign.
+	positiveResults := make([]int64, 4)
+	positiveNumerators := []types.Decimal256{maximum, maximum.Minus(), maximum, maximum.Minus()}
+	positiveDivisors := []types.Decimal256{maximum, maximum, maximum.Minus(), maximum.Minus()}
+	require.NoError(t, d256IntDiv(
+		positiveNumerators, positiveDivisors, positiveResults, 0, 12, nulls.NewWithSize(4), true))
+	require.Equal(t, []int64{1_000_000_000_000, -1_000_000_000_000, -1_000_000_000_000, 1_000_000_000_000}, positiveResults)
+
+	// Preserve the null-row short circuit before division-by-zero handling.
+	nullResults := make([]int64, 2)
+	nullsWithZero := nulls.NewWithSize(2)
+	nullsWithZero.Add(1)
+	require.NoError(t, d256IntDiv(
+		[]types.Decimal256{maximum, seven},
+		[]types.Decimal256{maximum, {}},
+		nullResults, 0, 12, nullsWithZero, true))
+	require.Equal(t, int64(1_000_000_000_000), nullResults[0])
+	require.True(t, nullsWithZero.Contains(1))
+
+	// A genuinely out-of-range BIGINT quotient remains an error.
+	err = d256IntDiv(
+		[]types.Decimal256{maximum},
+		[]types.Decimal256{seven},
+		make([]int64, 1), 0, 12, nulls.NewWithSize(1), true)
+	require.Error(t, err)
+	require.True(t, moerr.IsMoErrCode(err, moerr.ErrOutOfRange))
 }
 
 // ---- D256 Diff-Scale Add/Sub correctness tests ----
@@ -4572,6 +4765,47 @@ func TestD128DivPow10_Coverage(t *testing.T) {
 		d128DivPow10(&x, 20)
 		// Should not panic
 	})
+}
+
+func TestDecimalScaleDownMultiStepRounding(t *testing.T) {
+	pow10a, twoStep, pow10b := scalePow10Factors(30)
+	require.True(t, twoStep)
+
+	for _, tc := range []struct {
+		input string
+		want  string
+	}{
+		{"0.499999999999999999999999999999", "0"},
+		{"-0.499999999999999999999999999999", "0"},
+		{"0.500000000000000000000000000001", "1"},
+		{"-0.500000000000000000000000000001", "-1"},
+	} {
+		t.Run("D128/"+tc.input, func(t *testing.T) {
+			x, err := types.ParseDecimal128(tc.input, 38, 30)
+			require.NoError(t, err)
+
+			general := x
+			d128ScaleDown(&general, 30)
+			require.Equal(t, tc.want, general.Format(0))
+
+			optimized := x
+			d128ScaleDownPow10(&optimized, pow10a, twoStep, pow10b)
+			require.Equal(t, tc.want, optimized.Format(0))
+		})
+
+		t.Run("D256/"+tc.input, func(t *testing.T) {
+			x, err := types.ParseDecimal256(tc.input, 65, 30)
+			require.NoError(t, err)
+
+			general := x
+			d256ScaleDown(&general, 30)
+			require.Equal(t, tc.want, general.Format(0))
+
+			optimized := x
+			d256ScaleDownPow10(&optimized, pow10a, twoStep, pow10b)
+			require.Equal(t, tc.want, optimized.Format(0))
+		})
+	}
 }
 
 func TestD128ScaleDown_Coverage(t *testing.T) {

@@ -823,3 +823,34 @@ updated_at    DATETIME(3)    YES        null
 meta    LONGTEXT    YES        null        
 account_id    INT UNSIGNED(32)    NO    PRI    null        the account_id added by the mo
 DROP TABLE mo_catalog.document;
+DROP TABLE IF EXISTS ct_truncate_implicit_account;
+CREATE CLUSTER TABLE ct_truncate_implicit_account (
+id INT NOT NULL,
+payload VARCHAR(20),
+PRIMARY KEY (id, account_id)
+);
+INSERT INTO ct_truncate_implicit_account (id, payload) VALUES (1, 'before');
+TRUNCATE TABLE ct_truncate_implicit_account;
+INSERT INTO ct_truncate_implicit_account (id, payload) VALUES (2, 'after truncate');
+SELECT id, payload FROM ct_truncate_implicit_account ORDER BY id;
+id    payload
+2    after truncate
+DELETE FROM ct_truncate_implicit_account;
+INSERT INTO ct_truncate_implicit_account (id, payload) VALUES (3, 'after delete');
+SELECT id, payload FROM ct_truncate_implicit_account ORDER BY id;
+id    payload
+3    after delete
+DROP TABLE ct_truncate_implicit_account;
+DROP TABLE IF EXISTS ct_truncate_implicit_account_auto;
+CREATE CLUSTER TABLE ct_truncate_implicit_account_auto (
+id INT NOT NULL AUTO_INCREMENT,
+payload VARCHAR(20),
+PRIMARY KEY (id, account_id)
+);
+INSERT INTO ct_truncate_implicit_account_auto (payload) VALUES ('before');
+TRUNCATE TABLE ct_truncate_implicit_account_auto;
+INSERT INTO ct_truncate_implicit_account_auto (payload) VALUES ('after truncate');
+SELECT id, payload FROM ct_truncate_implicit_account_auto ORDER BY id;
+id    payload
+1    after truncate
+DROP TABLE ct_truncate_implicit_account_auto;

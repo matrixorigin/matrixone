@@ -17,7 +17,6 @@ package cnservice
 import (
 	"context"
 	"errors"
-	"strings"
 	"testing"
 	"time"
 
@@ -132,10 +131,6 @@ func (runner *testRunner) RegisterExecutor(code task.TaskCode, executor taskserv
 		runner.executors = make(map[task.TaskCode]taskservice.TaskExecutor)
 	}
 	runner.executors[code] = executor
-	if code == task.TaskCode_MergeObject {
-		tsk := &task.AsyncTask{}
-		_ = executor(context.Background(), tsk)
-	}
 }
 
 func (runner *testRunner) GetExecutor(code task.TaskCode) taskservice.TaskExecutor {
@@ -261,6 +256,10 @@ func (ts *testTS) UpdateDaemonTask(ctx context.Context, tasks []task.DaemonTask,
 	panic("implement me")
 }
 
+func (ts *testTS) UpdateDaemonTaskError(context.Context, task.DaemonTask, bool) (int, error) {
+	panic("unexpected UpdateDaemonTaskError")
+}
+
 func (ts *testTS) UpdateDaemonTaskStatus(
 	ctx context.Context,
 	taskID uint64,
@@ -274,6 +273,11 @@ func (ts *testTS) UpdateDaemonTaskStatus(
 }
 
 func (ts *testTS) HeartbeatDaemonTask(ctx context.Context, task task.DaemonTask) error {
+	//TODO implement me
+	panic("implement me")
+}
+
+func (ts *testTS) ValidateDaemonTask(ctx context.Context, task task.DaemonTask) error {
 	//TODO implement me
 	panic("implement me")
 }
@@ -336,10 +340,7 @@ func Test_registerExecutorsLocked(t *testing.T) {
 
 	run := &testRunner{}
 
-	exec := executor.NewMemExecutor(func(sql string) (executor.Result, error) {
-		if strings.HasPrefix(sql, "select mo_ctl") {
-			return executor.Result{}, moerr.NewInternalErrorNoCtx("return error")
-		}
+	exec := executor.NewMemExecutor(func(string) (executor.Result, error) {
 		return executor.Result{}, nil
 	})
 

@@ -4,12 +4,12 @@ def  ¦  mo_catalog  ¦  mo_tables  ¦  BASE TABLE
 SELECT * FROM `information_schema`.`character_sets` LIMIT 0,1000;
 ➤ character_set_name[12,64,0]  ¦  default_collate_name[12,64,0]  ¦  description[12,2048,0]  ¦  maxlen[4,32,0]  𝄀
 binary  ¦  binary  ¦  Binary pseudo charset  ¦  1  𝄀
-utf8  ¦  utf8_general_ci  ¦  UTF-8 Unicode  ¦  4  𝄀
+utf8  ¦  utf8_general_ci  ¦  UTF-8 Unicode  ¦  3  𝄀
 utf8mb4  ¦  utf8mb4_general_ci  ¦  UTF-8 Unicode  ¦  4
 SELECT * FROM `information_schema`.`columns` where TABLE_NAME = 'mo_tables' order by ORDINAL_POSITION LIMIT 2;
-➤ TABLE_CATALOG[12,3,0]  ¦  TABLE_SCHEMA[12,256,0]  ¦  TABLE_NAME[12,256,0]  ¦  COLUMN_NAME[12,256,0]  ¦  ORDINAL_POSITION[4,32,0]  ¦  COLUMN_DEFAULT[12,65535,0]  ¦  IS_NULLABLE[12,3,0]  ¦  DATA_TYPE[12,65535,0]  ¦  CHARACTER_MAXIMUM_LENGTH[-5,64,0]  ¦  CHARACTER_OCTET_LENGTH[-5,64,0]  ¦  NUMERIC_PRECISION[-5,64,0]  ¦  NUMERIC_SCALE[-5,64,0]  ¦  DATETIME_PRECISION[-5,64,0]  ¦  CHARACTER_SET_NAME[12,6,0]  ¦  COLLATION_NAME[12,8,0]  ¦  COLUMN_TYPE[12,65535,0]  ¦  COLUMN_KEY[12,3,0]  ¦  EXTRA[12,24,0]  ¦  PRIVILEGES[12,31,0]  ¦  COLUMN_COMMENT[12,2048,0]  ¦  GENERATION_EXPRESSION[12,500,0]  ¦  SRS_ID[-5,64,0]  𝄀
-def  ¦  mo_catalog  ¦  mo_tables  ¦  rel_id  ¦  1  ¦  null  ¦  YES  ¦  bigint  ¦  null  ¦  null  ¦  null  ¦  null  ¦  null  ¦  null  ¦  null  ¦  BIGINT UNSIGNED(0)  ¦    ¦    ¦  select,insert,update,references  ¦    ¦    ¦  null  𝄀
-def  ¦  mo_catalog  ¦  mo_tables  ¦  relname  ¦  2  ¦  null  ¦  YES  ¦  varchar  ¦  5000  ¦  20000  ¦  null  ¦  null  ¦  null  ¦  utf8  ¦  utf8_bin  ¦  VARCHAR(5000)  ¦    ¦    ¦  select,insert,update,references  ¦    ¦    ¦  null
+➤ TABLE_CATALOG[12,3,0]  ¦  TABLE_SCHEMA[12,256,0]  ¦  TABLE_NAME[12,256,0]  ¦  COLUMN_NAME[12,256,0]  ¦  ORDINAL_POSITION[4,32,0]  ¦  COLUMN_DEFAULT[12,65535,0]  ¦  IS_NULLABLE[12,3,0]  ¦  DATA_TYPE[12,65535,0]  ¦  CHARACTER_MAXIMUM_LENGTH[-5,64,0]  ¦  CHARACTER_OCTET_LENGTH[-5,64,0]  ¦  NUMERIC_PRECISION[-5,64,0]  ¦  NUMERIC_SCALE[-5,64,0]  ¦  DATETIME_PRECISION[-5,64,0]  ¦  CHARACTER_SET_NAME[12,7,0]  ¦  COLLATION_NAME[12,18,0]  ¦  COLUMN_TYPE[12,65535,0]  ¦  COLUMN_KEY[12,3,0]  ¦  EXTRA[12,24,0]  ¦  PRIVILEGES[12,31,0]  ¦  COLUMN_COMMENT[12,2048,0]  ¦  GENERATION_EXPRESSION[12,500,0]  ¦  SRS_ID[-5,64,0]  𝄀
+def  ¦  mo_catalog  ¦  mo_tables  ¦  rel_id  ¦  1  ¦  null  ¦  YES  ¦  bigint  ¦  null  ¦  null  ¦  20  ¦  0  ¦  null  ¦  null  ¦  null  ¦  BIGINT UNSIGNED  ¦    ¦    ¦  select,insert,update,references  ¦    ¦    ¦  null  𝄀
+def  ¦  mo_catalog  ¦  mo_tables  ¦  relname  ¦  2  ¦  null  ¦  YES  ¦  varchar  ¦  5000  ¦  20000  ¦  null  ¦  null  ¦  null  ¦  utf8mb4  ¦  utf8mb4_general_ci  ¦  VARCHAR(5000)  ¦    ¦    ¦  select,insert,update,references  ¦    ¦    ¦  null
 SELECT * FROM `information_schema`.`key_column_usage` WHERE TABLE_SCHEMA = '__nonexistent_schema__' LIMIT 0,1000;
 ➤ CONSTRAINT_CATALOG[12,64,0]  ¦  CONSTRAINT_SCHEMA[12,64,0]  ¦  CONSTRAINT_NAME[12,64,0]  ¦  TABLE_CATALOG[12,64,0]  ¦  TABLE_SCHEMA[12,64,0]  ¦  TABLE_NAME[12,64,0]  ¦  COLUMN_NAME[12,64,0]  ¦  ORDINAL_POSITION[4,32,0]  ¦  POSITION_IN_UNIQUE_CONSTRAINT[4,32,0]  ¦  REFERENCED_TABLE_SCHEMA[12,64,0]  ¦  REFERENCED_TABLE_NAME[12,64,0]  ¦  REFERENCED_COLUMN_NAME[12,64,0]
 SELECT * FROM `information_schema`.`profiling` LIMIT 0,1000;
@@ -145,24 +145,24 @@ table_catalog  ¦  VARCHAR(3)  ¦  NO  ¦    ¦  null  ¦    ¦    𝄀
 table_schema  ¦  VARCHAR(256)  ¦  YES  ¦    ¦  null  ¦    ¦    𝄀
 table_name  ¦  VARCHAR(256)  ¦  YES  ¦    ¦  null  ¦    ¦    𝄀
 column_name  ¦  VARCHAR(256)  ¦  YES  ¦    ¦  null  ¦    ¦    𝄀
-ordinal_position  ¦  INT(0)  ¦  YES  ¦    ¦  null  ¦    ¦    𝄀
+ordinal_position  ¦  INT  ¦  YES  ¦    ¦  null  ¦    ¦    𝄀
 column_default  ¦  VARCHAR(65535)  ¦  YES  ¦    ¦  null  ¦    ¦    𝄀
 is_nullable  ¦  VARCHAR(3)  ¦  YES  ¦    ¦  null  ¦    ¦    𝄀
 data_type  ¦  VARCHAR(65535)  ¦  YES  ¦    ¦  null  ¦    ¦    𝄀
-character_maximum_length  ¦  BIGINT(0)  ¦  YES  ¦    ¦  null  ¦    ¦    𝄀
-character_octet_length  ¦  BIGINT(0)  ¦  YES  ¦    ¦  null  ¦    ¦    𝄀
-numeric_precision  ¦  BIGINT(0)  ¦  YES  ¦    ¦  null  ¦    ¦    𝄀
-numeric_scale  ¦  BIGINT(0)  ¦  YES  ¦    ¦  null  ¦    ¦    𝄀
-datetime_precision  ¦  BIGINT(0)  ¦  YES  ¦    ¦  null  ¦    ¦    𝄀
-character_set_name  ¦  VARCHAR(6)  ¦  YES  ¦    ¦  null  ¦    ¦    𝄀
-collation_name  ¦  VARCHAR(8)  ¦  YES  ¦    ¦  null  ¦    ¦    𝄀
+character_maximum_length  ¦  BIGINT  ¦  YES  ¦    ¦  null  ¦    ¦    𝄀
+character_octet_length  ¦  BIGINT  ¦  YES  ¦    ¦  null  ¦    ¦    𝄀
+numeric_precision  ¦  BIGINT  ¦  YES  ¦    ¦  null  ¦    ¦    𝄀
+numeric_scale  ¦  BIGINT  ¦  YES  ¦    ¦  null  ¦    ¦    𝄀
+datetime_precision  ¦  BIGINT  ¦  YES  ¦    ¦  null  ¦    ¦    𝄀
+character_set_name  ¦  VARCHAR(7)  ¦  YES  ¦    ¦  null  ¦    ¦    𝄀
+collation_name  ¦  VARCHAR(18)  ¦  YES  ¦    ¦  null  ¦    ¦    𝄀
 column_type  ¦  VARCHAR(65535)  ¦  YES  ¦    ¦  null  ¦    ¦    𝄀
 column_key  ¦  VARCHAR(3)  ¦  YES  ¦    ¦  null  ¦    ¦    𝄀
 extra  ¦  VARCHAR(24)  ¦  YES  ¦    ¦  null  ¦    ¦    𝄀
 privileges  ¦  VARCHAR(31)  ¦  NO  ¦    ¦  null  ¦    ¦    𝄀
 column_comment  ¦  VARCHAR(2048)  ¦  YES  ¦    ¦  null  ¦    ¦    𝄀
 generation_expression  ¦  VARCHAR(500)  ¦  YES  ¦    ¦  null  ¦    ¦    𝄀
-srs_id  ¦  BIGINT(0)  ¦  YES  ¦    ¦  null  ¦    ¦  
+srs_id  ¦  BIGINT  ¦  YES  ¦    ¦  null  ¦    ¦  
 show columns from `PROFILING`;
 ➤ Field[1,0,0]  ¦  Type[1,0,0]  ¦  Null[1,0,0]  ¦  Key[1,0,0]  ¦  Default[1,0,0]  ¦  Extra[1,0,0]  ¦  Comment[1,0,0]  𝄀
 QUERY_ID  ¦  INT(32)  ¦  NO  ¦    ¦  0  ¦    ¦    𝄀
@@ -234,22 +234,22 @@ table_schema  ¦  VARCHAR(5000)  ¦  YES  ¦    ¦  null  ¦    ¦    𝄀
 table_name  ¦  VARCHAR(5000)  ¦  YES  ¦    ¦  null  ¦    ¦    𝄀
 table_type  ¦  VARCHAR(14)  ¦  YES  ¦    ¦  null  ¦    ¦    𝄀
 engine  ¦  VARCHAR(3)  ¦  YES  ¦    ¦  null  ¦    ¦    𝄀
-version  ¦  BIGINT(0)  ¦  YES  ¦    ¦  null  ¦    ¦    𝄀
+version  ¦  BIGINT  ¦  YES  ¦    ¦  null  ¦    ¦    𝄀
 row_format  ¦  VARCHAR(10)  ¦  NO  ¦    ¦  null  ¦    ¦    𝄀
-table_rows  ¦  BIGINT(0)  ¦  YES  ¦    ¦  null  ¦    ¦    𝄀
-avg_row_length  ¦  BIGINT(0)  ¦  YES  ¦    ¦  null  ¦    ¦    𝄀
-data_length  ¦  BIGINT(0)  ¦  YES  ¦    ¦  null  ¦    ¦    𝄀
-max_data_length  ¦  BIGINT(0)  ¦  YES  ¦    ¦  null  ¦    ¦    𝄀
-index_length  ¦  BIGINT(0)  ¦  YES  ¦    ¦  null  ¦    ¦    𝄀
-data_free  ¦  BIGINT(0)  ¦  YES  ¦    ¦  null  ¦    ¦    𝄀
-auto_increment  ¦  BIGINT UNSIGNED(0)  ¦  YES  ¦    ¦  null  ¦    ¦    𝄀
+table_rows  ¦  BIGINT  ¦  YES  ¦    ¦  null  ¦    ¦    𝄀
+avg_row_length  ¦  BIGINT  ¦  YES  ¦    ¦  null  ¦    ¦    𝄀
+data_length  ¦  BIGINT  ¦  YES  ¦    ¦  null  ¦    ¦    𝄀
+max_data_length  ¦  BIGINT  ¦  YES  ¦    ¦  null  ¦    ¦    𝄀
+index_length  ¦  BIGINT  ¦  YES  ¦    ¦  null  ¦    ¦    𝄀
+data_free  ¦  BIGINT  ¦  YES  ¦    ¦  null  ¦    ¦    𝄀
+auto_increment  ¦  BIGINT UNSIGNED  ¦  YES  ¦    ¦  null  ¦    ¦    𝄀
 create_time  ¦  TIMESTAMP(0)  ¦  YES  ¦    ¦  null  ¦    ¦    𝄀
 update_time  ¦  TIMESTAMP(0)  ¦  YES  ¦    ¦  null  ¦    ¦    𝄀
 check_time  ¦  TIMESTAMP(0)  ¦  YES  ¦    ¦  null  ¦    ¦    𝄀
 table_collation  ¦  VARCHAR(18)  ¦  NO  ¦    ¦  null  ¦    ¦    𝄀
-checksum  ¦  BIGINT(0)  ¦  YES  ¦    ¦  null  ¦    ¦    𝄀
+checksum  ¦  BIGINT  ¦  YES  ¦    ¦  null  ¦    ¦    𝄀
 create_options  ¦  VARCHAR(256)  ¦  YES  ¦    ¦  null  ¦    ¦    𝄀
-table_comment  ¦  TEXT(0)  ¦  YES  ¦    ¦  null  ¦    ¦  
+table_comment  ¦  TEXT  ¦  YES  ¦    ¦  null  ¦    ¦  
 show columns from `PARTITIONS`;
 [unknown result because it is related to issue#16438]
 use mo_catalog;

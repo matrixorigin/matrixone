@@ -93,7 +93,7 @@ var upg_information_schema_columns = versions.UpgradeEntry{
 	Schema:                  sysview.InformationDBConst,
 	TableName:               "COLUMNS",
 	UpgType:                 versions.MODIFY_VIEW,
-	UpgSql:                  sysview.InformationSchemaColumnsDDL,
+	UpgSql:                  sysview.InformationSchemaColumnsV46UpgradeDDL,
 	RequiredProtocolVersion: defines.MORPCVersion46,
 	CheckFunc: func(txn executor.TxnExecutor, accountId uint32) (bool, error) {
 		exists, viewDef, err := versions.CheckViewDefinition(txn, accountId, sysview.InformationDBConst, "COLUMNS")
@@ -101,7 +101,7 @@ var upg_information_schema_columns = versions.UpgradeEntry{
 			return false, err
 		}
 
-		if exists && viewDef == sysview.InformationSchemaColumnsDDL {
+		if exists && viewDef == sysview.InformationSchemaColumnsV46UpgradeDDL {
 			return true, nil
 		}
 		return false, nil
@@ -115,7 +115,7 @@ var upg_information_schema_columns_geometry_srid = versions.UpgradeEntry{
 	Schema:                  sysview.InformationDBConst,
 	TableName:               "COLUMNS",
 	UpgType:                 versions.MODIFY_VIEW,
-	UpgSql:                  sysview.InformationSchemaColumnsDDL,
+	UpgSql:                  sysview.InformationSchemaColumnsV46UpgradeDDL,
 	RequiredProtocolVersion: defines.MORPCVersion46,
 	CheckFunc: func(txn executor.TxnExecutor, accountId uint32) (bool, error) {
 		exists, viewDef, err := versions.CheckViewDefinition(txn, accountId, sysview.InformationDBConst, "COLUMNS")
@@ -123,7 +123,7 @@ var upg_information_schema_columns_geometry_srid = versions.UpgradeEntry{
 			return false, err
 		}
 
-		if exists && viewDef == sysview.InformationSchemaColumnsDDL {
+		if exists && viewDef == sysview.InformationSchemaColumnsV46UpgradeDDL {
 			return true, nil
 		}
 		return false, nil
@@ -141,7 +141,7 @@ var upg_information_schema_columns_srs_id_from_type = versions.UpgradeEntry{
 	Schema:                  sysview.InformationDBConst,
 	TableName:               "COLUMNS",
 	UpgType:                 versions.MODIFY_VIEW,
-	UpgSql:                  sysview.InformationSchemaColumnsDDL,
+	UpgSql:                  sysview.InformationSchemaColumnsV46UpgradeDDL,
 	RequiredProtocolVersion: defines.MORPCVersion46,
 	CheckFunc: func(txn executor.TxnExecutor, accountId uint32) (bool, error) {
 		exists, viewDef, err := versions.CheckViewDefinition(txn, accountId, sysview.InformationDBConst, "COLUMNS")
@@ -149,7 +149,7 @@ var upg_information_schema_columns_srs_id_from_type = versions.UpgradeEntry{
 			return false, err
 		}
 
-		if exists && viewDef == sysview.InformationSchemaColumnsDDL {
+		if exists && viewDef == sysview.InformationSchemaColumnsV46UpgradeDDL {
 			return true, nil
 		}
 		return false, nil

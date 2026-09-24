@@ -19,6 +19,9 @@ import (
 	"context"
 	"fmt"
 	"io"
+	"math/bits"
+	"slices"
+	"sort"
 
 	"github.com/matrixorigin/matrixone/pkg/common/malloc"
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
@@ -508,18 +511,29 @@ func (s *ReadFilterSearch) search(source *vector.Vector, sorted bool) []int64 {
 	if len(s.terms) == 1 {
 		return s.terms[0].search(source, sorted)
 	}
-	marks := make([]int64, source.Length())
+	// Keep one bit per source row while unioning the term matches. The old
+	// int64-per-row mark array dominated allocations for large object blocks;
+	// a bitset preserves the same row-order semantics at 1/64 of the size.
+	marks := make([]uint64, (source.Length()+63)/64)
 	for i := range s.terms {
 		for _, row := range s.terms[i].search(source, sorted) {
-			if row >= 0 && row < int64(len(marks)) {
-				marks[row] = 1
+			if row >= 0 && row < int64(source.Length()) {
+				index := uint64(row)
+				marks[index>>6] |= uint64(1) << (index & 63)
 			}
 		}
 	}
-	rows := marks[:0]
-	for row, matched := range marks {
-		if matched != 0 {
-			rows = append(rows, int64(row))
+
+	matchedRows := 0
+	for _, word := range marks {
+		matchedRows += bits.OnesCount64(word)
+	}
+	rows := make([]int64, 0, matchedRows)
+	for wordIndex, word := range marks {
+		for word != 0 {
+			bit := bits.TrailingZeros64(word)
+			rows = append(rows, int64(wordIndex*64+bit))
+			word &= word - 1
 		}
 	}
 	return rows
@@ -544,7 +558,46 @@ func (t *readFilterSearchTerm) search(source *vector.Vector, sorted bool) []int6
 		if sorted {
 			return vector.VarlenBinarySearchOffsetByValFactory(t.values)(source)
 		}
-		return vector.VarlenLinearSearchOffsetByValFactory(t.values)(source)
+		if len(t.values) <= readFilterLinearKeys {
+			return vector.VarlenLinearSearchOffsetByValFactory(t.values)(source)
+		}
+		// Only the needles are sorted. In particular, tombstone PK columns
+		// follow rowid order and cannot be binary-searched. Reuse the already
+		// owned needles instead of doing rows*keys comparisons or allocating
+		// another lookup structure for every block. Keep a short
+		// linear prefix so frequently matching early keys retain the old
+		// constant-time best case instead of paying log(keys) for every row.
+		tail := t.values[readFilterLinearKeys:]
+		if t.exactTail != nil {
+			tail = t.exactTail.values
+		}
+		minLen, maxLen := len(tail[0]), len(tail[len(tail)-1])
+		var members map[string]struct{}
+		if t.exactTail != nil {
+			members = t.exactTail.members
+		}
+		col, area := vector.MustVarlenaRawData(source)
+		var rows []int64
+		for row := 0; row < source.Length(); row++ {
+			value := col[row].GetByteSlice(area)
+			found := false
+			for _, needle := range t.values[:readFilterLinearKeys] {
+				if bytes.Equal(needle, value) {
+					found = true
+					break
+				}
+			}
+			if !found && len(value) >= minLen && len(value) <= maxLen {
+				// Equality can reject unequal lengths without reading payloads.
+				// Preserve that property for long common prefixes, including
+				// absent lengths inside the min/max range of mixed-length keys.
+				found = readFilterExactContains(tail, members, value)
+			}
+			if found {
+				rows = append(rows, int64(row))
+			}
+		}
+		return rows
 	case readFilterSearchPrefix:
 		if len(t.values) == 0 {
 			return nil
@@ -593,6 +646,34 @@ func (t *readFilterSearchTerm) search(source *vector.Vector, sorted bool) []int6
 	default:
 		return nil
 	}
+}
+
+// values is a nonempty length-ordered tail. Reject missing lengths before
+// hashing payloads; a small same-length group is cheaper to compare directly.
+func readFilterExactContains(values [][]byte, members map[string]struct{}, value []byte) bool {
+	if len(values[0]) != len(values[len(values)-1]) {
+		low := sort.Search(len(values), func(i int) bool { return len(values[i]) >= len(value) })
+		if low == len(values) || len(values[low]) != len(value) {
+			return false
+		}
+		high := low + sort.Search(len(values)-low, func(i int) bool { return len(values[low+i]) > len(value) })
+		values = values[low:high]
+	}
+	if len(values) <= readFilterLinearKeys {
+		for _, needle := range values {
+			if bytes.Equal(needle, value) {
+				return true
+			}
+		}
+		return false
+	}
+	if len(value) <= types.VarlenaInlineSize {
+		_, found := slices.BinarySearchFunc(values, value, bytes.Compare)
+		return found
+	}
+	// A transient []byte-to-string map lookup does not copy or retain value.
+	_, found := members[string(value)]
+	return found
 }
 
 func searchSortedReadFilterPrefixes(source *vector.Vector, values [][]byte) []int64 {

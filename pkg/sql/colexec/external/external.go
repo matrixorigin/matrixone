@@ -40,6 +40,7 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/fileservice"
 	"github.com/matrixorigin/matrixone/pkg/geo"
 	"github.com/matrixorigin/matrixone/pkg/logutil"
+	"github.com/matrixorigin/matrixone/pkg/pb/pipeline"
 	"github.com/matrixorigin/matrixone/pkg/pb/plan"
 	"github.com/matrixorigin/matrixone/pkg/sql/colexec"
 	"github.com/matrixorigin/matrixone/pkg/sql/crt"
@@ -81,8 +82,14 @@ func (external *External) Prepare(proc *process.Process) error {
 	}
 
 	param := external.Es
+	if param == nil {
+		return moerr.NewInvalidInput(proc.Ctx, "external parameter is missing")
+	}
 	if err := validateParquetWholeFileFanoutProtocol(proc, param); err != nil {
 		return err
+	}
+	if param.Fileparam == nil {
+		return moerr.NewInvalidInput(proc.Ctx, "external file parameter is missing")
 	}
 	if proc.GetLim().MaxMsgSize == 0 {
 		param.maxBatchSize = uint64(morpc.GetMessageSize())
@@ -115,11 +122,35 @@ func (external *External) Prepare(proc *process.Process) error {
 			param.Extern.FileService = proc.Base.FileService
 		}
 	}
+	if param.Extern.FileService == nil {
+		// Decoded remote parameters carry path/configuration but not the local
+		// FileService interface. Install the executing CN's service before the
+		// rollout gate so aliases are classified against that worker's backend.
+		param.Extern.FileService = proc.Base.FileService
+	}
 	if param.ForeignScan != nil && param.ForeignScan.Kind == foreignScanKindESQL {
 		param.ESQLTemporalUTC = true
 	}
 	if !loadFormatIsValid(param.Extern) {
 		return moerr.NewNYIf(proc.Ctx, "load format '%s'", param.Extern.Format)
+	}
+	if param.Extern.Format == tree.ARROW &&
+		(param.Extern.ExternType != int32(plan.ExternType_LOAD) ||
+			param.ArrowExecutionScope != pipeline.ArrowExecutionScope_ArrowLoadData) {
+		return moerr.NewNotSupported(proc.Ctx, "Arrow format is supported only by LOAD DATA")
+	}
+	if param.Extern.Format == tree.ARROW {
+		// A remote External is reconstructed on the executing CN.  The compile
+		// gate on the coordinator is therefore not sufficient: each worker must
+		// enforce its own rollout configuration before it opens the source.
+		settings, err := plan2.RequireArrowLoadEnabled(proc, param.Extern)
+		if err != nil {
+			return err
+		}
+		if param.ArrowDistributedExecution && !settings.DistributedEnabled {
+			return moerr.NewNotSupported(proc.Ctx,
+				"distributed Arrow LOAD is disabled by configuration")
+		}
 	}
 	if param.Extern.ExternType == int32(plan.ExternType_LOAD) &&
 		(param.Extern.Parallel || param.Extern.ParallelLoadRequested) {
@@ -138,6 +169,12 @@ func (external *External) Prepare(proc *process.Process) error {
 	}
 	param.Ctx = proc.Ctx
 	param.addParquetProfile(icebergParquetProfileStats(param))
+	// Validate the physical output mapping before constructing a reader. A
+	// failed mapping must not leave a reader or batch behind for the caller to
+	// clean up after Prepare returns an error.
+	if err := validateExternalOutputAttrs(proc.Ctx, param.Attrs, param.Cols); err != nil {
+		return err
+	}
 
 	// Filter public preprocessing
 	if param.Filter == nil {
@@ -183,6 +220,12 @@ func (external *External) Prepare(proc *process.Process) error {
 		external.reader = NewZonemapReader(param, proc)
 	case param.Extern.Format == tree.PARQUET:
 		external.reader = NewParquetReader(param, proc)
+	case param.Extern.Format == tree.ARROW:
+		reader, err := NewArrowReader(param, proc, external.allocationAccount)
+		if err != nil {
+			return err
+		}
+		external.reader = reader
 	default:
 		r, err := NewCsvReader(param, proc)
 		if err != nil {
@@ -211,9 +254,12 @@ func (external *External) Prepare(proc *process.Process) error {
 		if param.Extern.Format == tree.PARQUET {
 			flag = false
 		}
-		//alloc space for vector
-		for i := range param.Attrs {
-			typ := makeType(&param.Cols[i].Typ, flag)
+		// Allocate output vectors in Attrs order, but resolve their physical
+		// types through ColIndex. Generated or hidden columns can be omitted
+		// from Attrs, so output position and table-column position differ.
+		for i, attr := range param.Attrs {
+			colIndex := int(attr.ColIndex)
+			typ := makeType(&param.Cols[colIndex].Typ, flag)
 			external.ctr.buf.Vecs[i] = vector.NewOffHeapVecWithType(typ)
 		}
 	}
@@ -243,6 +289,16 @@ func validateParquetWholeFileFanoutProtocol(proc *process.Process, param *Extern
 	protocolVersion, ok := version.(int64)
 	if !ok || protocolVersion < defines.MORPCVersion45 {
 		return moerr.NewNotSupported(proc.Ctx, "Parquet whole-file fanout remote execution requires MORPC protocol version 45")
+	}
+	return nil
+}
+
+func validateExternalOutputAttrs(ctx context.Context, attrs []plan.ExternAttr, cols []*plan.ColDef) error {
+	for _, attr := range attrs {
+		colIndex := int(attr.ColIndex)
+		if colIndex < 0 || colIndex >= len(cols) || cols[colIndex] == nil {
+			return moerr.NewInvalidInputf(ctx, "external output column index %d is invalid", attr.ColIndex)
+		}
 	}
 	return nil
 }
@@ -331,6 +387,9 @@ func (external *External) Call(proc *process.Process) (vm.CallResult, error) {
 		external.reader.Close()
 		external.fileOpened = false
 		param.Fileparam.End = true
+		if external.ctr.buf != nil {
+			external.ctr.buf.CleanOnlyData()
+		}
 		return result, err
 	}
 	if external.ctr.buf != nil && external.ctr.buf.RowCount() > 0 {
@@ -343,7 +402,14 @@ func (external *External) Call(proc *process.Process) (vm.CallResult, error) {
 	}
 
 	if fileFinished {
-		external.reader.Close()
+		if err := external.reader.Close(); err != nil {
+			external.fileOpened = false
+			param.Fileparam.End = true
+			if external.ctr.buf != nil {
+				external.ctr.buf.CleanOnlyData()
+			}
+			return result, err
+		}
 		external.finishCurrentFile(param)
 	}
 
@@ -968,6 +1034,14 @@ func isLegalLine(param *tree.ExternParam, cols []*plan.ColDef, fields []csvparse
 					return false
 				}
 			}
+		case types.T_decimal256:
+			_, err := types.ParseDecimal256(field.Val, col.Typ.Width, col.Typ.Scale)
+			if err != nil {
+				// we tolerate loss of digits.
+				if !moerr.IsMoErrCode(err, moerr.ErrDataTruncated) {
+					return false
+				}
+			}
 		case types.T_timestamp:
 			// Note: isLegalLine is only used for file offset calculation in parallel LOAD DATA,
 			// not for actual data loading. It uses time.Local as fallback since proc is not available.
@@ -1149,7 +1223,7 @@ func isLoadNumericZeroFillType(id types.T) bool {
 		types.T_int8, types.T_int16, types.T_int32, types.T_int64,
 		types.T_uint8, types.T_uint16, types.T_uint32, types.T_uint64,
 		types.T_float32, types.T_float64,
-		types.T_decimal64, types.T_decimal128:
+		types.T_decimal64, types.T_decimal128, types.T_decimal256:
 		return true
 	default:
 		return false
@@ -1161,7 +1235,7 @@ func isLoadNumericAdjustedValueType(id types.T) bool {
 	case types.T_int8, types.T_int16, types.T_int32, types.T_int64,
 		types.T_uint8, types.T_uint16, types.T_uint32, types.T_uint64,
 		types.T_float32, types.T_float64,
-		types.T_decimal64, types.T_decimal128:
+		types.T_decimal64, types.T_decimal128, types.T_decimal256:
 		return true
 	default:
 		return false
@@ -1250,6 +1324,8 @@ func appendLoadEmptyNumericZero(vec *vector.Vector, id types.T, asBytes bool, mp
 		return vector.AppendFixed(vec, types.Decimal64(0), false, mp)
 	case types.T_decimal128:
 		return vector.AppendFixed(vec, types.Decimal128{}, false, mp)
+	case types.T_decimal256:
+		return vector.AppendFixed(vec, types.Decimal256{}, false, mp)
 	default:
 		return moerr.NewInternalErrorNoCtxf("unsupported type %v for empty numeric LOAD DATA zero-fill", id)
 	}
@@ -1982,6 +2058,18 @@ func getColData(bat *batch.Batch, line []csvparser.Field, rowIdx int, param *Ext
 		if err := vector.AppendFixed(vec, d, false, mp); err != nil {
 			return err
 		}
+	case types.T_decimal256:
+		d, err := types.ParseDecimal256(field.Val, vec.GetType().Width, vec.GetType().Scale)
+		if err != nil {
+			// we tolerate loss of digits.
+			if !moerr.IsMoErrCode(err, moerr.ErrDataTruncated) {
+				logutil.Errorf("parse field[%v] err:%v", field.Val, err)
+				return moerr.NewInternalErrorf(param.Ctx, "the input value '%v' is invalid Decimal256 type for column %d", field.Val, colIdx)
+			}
+		}
+		if err := vector.AppendFixed(vec, d, false, mp); err != nil {
+			return err
+		}
 	case types.T_timestamp:
 		d := temporalValue.timestamp
 		if !loadDataNonStrictAdjustments {
@@ -2051,7 +2139,7 @@ func parseLoadDataYear(field csvparser.Field) (types.MoYear, error) {
 
 func loadFormatIsValid(param *tree.ExternParam) bool {
 	switch param.Format {
-	case tree.JSONLINE, tree.CSV, tree.PARQUET:
+	case tree.JSONLINE, tree.CSV, tree.PARQUET, tree.ARROW:
 		return true
 	}
 	return false

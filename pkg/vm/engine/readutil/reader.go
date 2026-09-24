@@ -317,6 +317,8 @@ type reader struct {
 
 	// cacheVectors is used for vector reuse
 	cacheVectors containers.Vectors
+
+	explainVectorTopStats *objectio.IndexReaderTopStats
 }
 
 type mergeReader struct {
@@ -460,6 +462,56 @@ func (r *mergeReader) ReadWithFilter(
 	return true, nil
 }
 
+func (r *mergeReader) ReadWithFilterAndTopK(
+	ctx context.Context,
+	cols []string,
+	earlyColumns []int,
+	filter engine.ReaderFilter,
+	indexParam *plan.IndexReaderParam,
+	mp *mpool.MPool,
+	outBatch *batch.Batch,
+) (bool, bool, error) {
+	start := time.Now()
+	defer func() {
+		v2.TxnMergeReaderDurationHistogram.Observe(time.Since(start).Seconds())
+	}()
+	if filter == nil {
+		return false, false, moerr.NewInvalidInputNoCtx("nil reader filter")
+	}
+
+	for len(r.rds) > 0 {
+		var (
+			isEnd       bool
+			topKApplied bool
+			err         error
+		)
+		if topReader, ok := r.rds[0].(engine.FilteredTopKReader); ok {
+			isEnd, topKApplied, err = topReader.ReadWithFilterAndTopK(
+				ctx, cols, earlyColumns, filter, indexParam, mp, outBatch,
+			)
+		} else if lateReader, ok := r.rds[0].(engine.LateMaterializationReader); ok {
+			isEnd, err = lateReader.ReadWithFilter(ctx, cols, earlyColumns, filter, mp, outBatch)
+		} else {
+			isEnd, err = r.rds[0].Read(ctx, cols, nil, mp, outBatch)
+			if err == nil && !isEnd && !outBatch.IsEmpty() {
+				_, err = filter(outBatch, nil)
+			}
+		}
+		if err != nil {
+			return false, false, errors.Join(err, r.Close())
+		}
+		if !isEnd {
+			return false, topKApplied, nil
+		}
+		child := r.rds[0]
+		r.rds = r.rds[1:]
+		if closeErr := child.Close(); closeErr != nil {
+			return false, false, errors.Join(closeErr, r.Close())
+		}
+	}
+	return true, false, nil
+}
+
 // -----------------------------------------------------------------
 // NewReader consumes source and filterHint.BF on entry. On success the reader
 // releases them from Close; on construction failure NewReader releases them.
@@ -540,6 +592,7 @@ func NewReader(
 func (r *reader) Close() error {
 	r.source.Close()
 	r.withFilterMixin.reset()
+	r.explainVectorTopStats = nil
 	if r.cacheVectors.Allocated() > 0 {
 		logutil.Fatal("cache vector is not empty")
 	}
@@ -573,6 +626,7 @@ func (r *reader) SetIndexParam(param *plan.IndexReaderParam) {
 			Limit:        limitValue.U64Val,
 			OrderedLimit: true,
 			Desc:         param.OrderBy[0].Flag&plan.OrderBySpec_DESC != 0,
+			Stats:        r.explainVectorTopStats,
 		}
 		return
 	}
@@ -609,6 +663,7 @@ func (r *reader) SetIndexParam(param *plan.IndexReaderParam) {
 		Limit:        limitValue.U64Val,
 		OrderedLimit: false,
 		Desc:         param.OrderBy[0].Flag&plan.OrderBySpec_DESC != 0,
+		Stats:        r.explainVectorTopStats,
 	}
 
 	if param.DistRange != nil {
@@ -632,11 +687,38 @@ func (r *reader) SetIndexParam(param *plan.IndexReaderParam) {
 			}
 		}
 
-		if param.OrigFuncName == metric.DistFn_L2Distance {
+		if param.OrigFuncName == metric.DistFn_L2sqDistance {
+			// l2_distance_sq exposes the squared distance itself, float32-rounded
+			// (DistanceTransformIvfflat), while this gate compares the raw float64 square. Widen
+			// the bound to the adjacent float32 so the gate stays a superset of the predicate --
+			// without squaring, since an l2sq bound is already in the squared domain. The exact
+			// source-domain post-filter removes the extra candidates.
 			if indexTop.LowerBoundType != plan.BoundType_UNBOUNDED {
-				if indexTop.LowerBound < 0 {
-					// L2 distance is non-negative, so a negative lower bound
-					// cannot exclude any row.
+				if indexTop.LowerBound <= 0 {
+					// see the L2 case: a squared distance is non-negative, so a bound of 0 or below
+					// excludes nothing here and the post-filter enforces an exclusive `> 0`.
+					indexTop.LowerBoundType = plan.BoundType_UNBOUNDED
+					indexTop.LowerBound = 0
+				} else {
+					indexTop.LowerBound = f32BoundOutward(indexTop.LowerBound, math.Inf(-1))
+				}
+			}
+			if indexTop.UpperBoundType != plan.BoundType_UNBOUNDED && indexTop.UpperBound >= 0 {
+				indexTop.UpperBound = f32BoundOutward(indexTop.UpperBound, math.Inf(1))
+			}
+		} else if param.OrigFuncName == metric.DistFn_L2Distance {
+			// Vector distances are a float32 domain for every base type (usearch/cuvs return float32,
+			// and the scalar l2_distance matches), so the L2 bound must be widened to the next float32
+			// before squaring -- otherwise the squared f64 gate is off by ~1e-6 from the float32
+			// distance a row is actually gated on and drops a boundary row (#29040).
+			if indexTop.LowerBoundType != plan.BoundType_UNBOUNDED {
+				if indexTop.LowerBound <= 0 {
+					// L2 distance is non-negative, so a lower bound of 0 or below cannot exclude any
+					// candidate in the squared superset gate (every squared distance is >= 0). It must
+					// be treated as unbounded: widening a 0 bound outward and squaring it turns it
+					// POSITIVE (~1.96e-90), which would then reject an exact-zero distance even though
+					// `l2_distance(...) >= 0` must include it (#29040). The exact source-domain
+					// post-filter still enforces a `> 0` exclusive lower bound.
 					indexTop.LowerBoundType = plan.BoundType_UNBOUNDED
 					indexTop.LowerBound = 0
 				} else {
@@ -654,11 +736,35 @@ func (r *reader) SetIndexParam(param *plan.IndexReaderParam) {
 	r.orderByLimit = indexTop
 }
 
+// SetExplainVectorTopStats installs a query-local collector. The reader owns no
+// reference to it beyond Close and performs all updates synchronously.
+func (r *reader) SetExplainVectorTopStats(stats *objectio.IndexReaderTopStats) {
+	r.explainVectorTopStats = stats
+	if r.orderByLimit != nil {
+		r.orderByLimit.Stats = stats
+	}
+}
+
 // squareL2BoundOutward keeps the squared-distance storage gate a superset of
 // the original L2 predicate. The source-domain filter removes any boundary
-// false positives introduced by this one-ULP widening.
+// false positives introduced by this widening.
+//
+// Vector distances are a float32 domain for every base type (usearch/cuvs return
+// float32, and MO's scalar l2_distance matches), so the block distance a row is
+// gated on is float32(sqrt(sq)). The L2 bound is therefore first widened to the
+// adjacent float32 before squaring; comparing it against a squared bound nudged
+// only one float64 ULP would leave a ~1e-6 gap that drops a boundary row. The
+// exact source-domain post-filter still removes the extra candidates (#29040).
 func squareL2BoundOutward(bound, direction float64) float64 {
-	return math.Nextafter(bound*bound, direction)
+	b := f32BoundOutward(bound, direction)
+	return math.Nextafter(b*b, direction)
+}
+
+// f32BoundOutward returns the adjacent float32 outward from bound. A row is gated on a distance
+// this repo exposes in the float32 domain, so a bound compared against a raw float64 must first
+// step past that rounding.
+func f32BoundOutward(bound, direction float64) float64 {
+	return float64(math.Nextafter32(float32(bound), float32(direction)))
 }
 
 func validBoundType(boundType plan.BoundType) bool {
@@ -688,7 +794,7 @@ func (r *reader) Read(
 	mp *mpool.MPool,
 	outBatch *batch.Batch,
 ) (isEnd bool, err error) {
-	isEnd, _, err = r.read(ctx, cols, expr, mp, outBatch, nil, nil)
+	isEnd, _, err = r.read(ctx, cols, expr, mp, outBatch, nil, nil, false)
 	return isEnd, err
 }
 
@@ -703,8 +809,41 @@ func (r *reader) ReadWithFilter(
 	if filter == nil {
 		return false, moerr.NewInvalidInputNoCtx("nil reader filter")
 	}
-	isEnd, _, err = r.read(ctx, cols, nil, mp, outBatch, earlyColumns, filter)
+	isEnd, _, err = r.read(ctx, cols, nil, mp, outBatch, earlyColumns, filter, false)
 	return isEnd, err
+}
+
+func (r *reader) ReadWithFilterAndTopK(
+	ctx context.Context,
+	cols []string,
+	earlyColumns []int,
+	filter engine.ReaderFilter,
+	indexParam *plan.IndexReaderParam,
+	mp *mpool.MPool,
+	outBatch *batch.Batch,
+) (isEnd bool, topKApplied bool, err error) {
+	if filter == nil {
+		return false, false, moerr.NewInvalidInputNoCtx("nil reader filter")
+	}
+	// Keep the distance heap across blocks read by this reader. Re-parsing the
+	// parameter on every Read call would reset the heap and turn K into K per
+	// block.
+	if r.orderByLimit == nil {
+		r.SetIndexParam(indexParam)
+	}
+	if r.orderByLimit == nil {
+		isEnd, _, err = r.read(ctx, cols, nil, mp, outBatch, earlyColumns, filter, false)
+		return isEnd, false, err
+	}
+	if r.orderByLimit.OrderedLimit || r.orderByLimit.Desc {
+		// objectio vector TopN is ascending-only. Clear the parsed parameter so
+		// the safe fallback cannot rank rows before applying the exact filter.
+		r.orderByLimit = nil
+		isEnd, _, err = r.read(ctx, cols, nil, mp, outBatch, earlyColumns, filter, false)
+		return isEnd, false, err
+	}
+	isEnd, _, err = r.read(ctx, cols, nil, mp, outBatch, earlyColumns, filter, true)
+	return isEnd, true, err
 }
 
 func (r *reader) read(
@@ -715,6 +854,7 @@ func (r *reader) read(
 	outBatch *batch.Batch,
 	earlyColumns []int,
 	readerFilter engine.ReaderFilter,
+	filterBeforeTopK bool,
 ) (isEnd bool, lateMaterialized bool, err error) {
 	outBatch.CleanOnlyData()
 
@@ -840,6 +980,11 @@ func (r *reader) read(
 		return true, false, nil
 	}
 	if state == engine.InMem {
+		if readerFilter != nil && filterBeforeTopK && !outBatch.IsEmpty() {
+			if _, err = readerFilter(outBatch, nil); err != nil {
+				return false, false, err
+			}
+		}
 		if r.orderByLimit != nil && !r.orderByLimit.OrderedLimit {
 			sels, dists, err := blockio.HandleOrderByLimitOnIVFFlatIndex(ctx, nil, outBatch.Vecs[r.orderByLimit.ColPos], r.orderByLimit)
 			if err != nil {
@@ -867,12 +1012,15 @@ func (r *reader) read(
 			outBatch.Vecs = append(outBatch.Vecs, distVec)
 		}
 
-		if readerFilter != nil && !outBatch.IsEmpty() {
+		if readerFilter != nil && !filterBeforeTopK && !outBatch.IsEmpty() {
 			if _, err = readerFilter(outBatch, nil); err != nil {
 				return false, false, err
 			}
 		}
 		return false, false, nil
+	}
+	if r.explainVectorTopStats != nil {
+		r.explainVectorTopStats.BlocksRead++
 	}
 	//read block
 	filter := r.withFilterMixin.filterState.filter
@@ -900,9 +1048,13 @@ func (r *reader) read(
 		detachedDistVec = nil
 	}
 
-	if readerFilter != nil && r.orderByLimit == nil {
+	if readerFilter != nil && (r.orderByLimit == nil || filterBeforeTopK) {
 		lateMaterialized = true
 		var preFilterRows int
+		var filteredTopK *objectio.IndexReaderTopOp
+		if filterBeforeTopK {
+			filteredTopK = r.orderByLimit
+		}
 		preFilterRows, err = blockio.BlockDataReadWithFilter(
 			statsCtx,
 			blkInfo,
@@ -914,6 +1066,7 @@ func (r *reader) read(
 			r.filterState.seqnums,
 			r.filterState.colTypes,
 			filter,
+			filteredTopK,
 			policy,
 			r.name,
 			outBatch,

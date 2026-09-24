@@ -42,10 +42,13 @@ import (
 	v2 "github.com/matrixorigin/matrixone/pkg/util/metric/v2"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine"
 	"go.uber.org/zap"
-	"golang.org/x/sync/semaphore"
 )
 
 var CDCExectorError_QueryDaemonTaskTimeout = moerr.NewInternalErrorNoCtx("query daemon task timeout")
+
+// All CDC tasks in one CN share the same admission controller because they
+// allocate from the same cgroup/host memory budget.
+var cnInitialSnapshotLimiter = cdc.NewInitialSnapshotLimiter()
 
 var CDCExeutorAllocator *mpool.MPool
 
@@ -89,6 +92,11 @@ func CDCTaskExecutorFactory(
 		if len(tasks) != 1 {
 			return moerr.NewInternalErrorf(ctx, "invalid tasks count %d", len(tasks))
 		}
+		claim, ok := spec.(*task.DaemonTask)
+		if !ok || claim.TaskRunner != cnUUID || tasks[0].TaskRunner != claim.TaskRunner ||
+			!tasks[0].LastRun.Equal(claim.LastRun) {
+			return moerr.NewInvalidTask(ctx, cnUUID, spec.GetID())
+		}
 		details, ok := tasks[0].Details.Details.(*task.Details_CreateCdc)
 		if !ok {
 			return moerr.NewInternalError(ctx, "invalid details type")
@@ -104,6 +112,8 @@ func CDCTaskExecutorFactory(
 			txnEngine,
 			CDCExeutorAllocator,
 		)
+		exec.taskService = ts
+		exec.UpdateDaemonTaskClaim(*claim)
 		// Restart timeout persistence is a control-plane path. It must use a
 		// fresh executor so it cannot queue behind the serialized executor held
 		// by the Start attempt that just timed out.
@@ -125,7 +135,9 @@ func CDCTaskExecutorFactory(
 			return err
 		}
 		if err = exec.Start(ctx); err != nil {
-			exec.cancelLifecycleContext()
+			// Attach transferred lifetime ownership to taskservice. Start's done
+			// notification may already have admitted a same-object replacement;
+			// only generation-fenced runner completion may cancel that lifetime.
 			return err
 		}
 		return nil
@@ -135,10 +147,14 @@ func CDCTaskExecutorFactory(
 type CDCTaskExecutor struct {
 	sync.Mutex
 
-	logger *zap.Logger
-	ie     ie.InternalExecutor
+	logger  *zap.Logger
+	claimMu sync.RWMutex
+	ie      ie.InternalExecutor
 
 	cnUUID      string
+	claimTask   *task.DaemonTask
+	claimFence  *cdc.OwnerFence
+	taskService taskservice.TaskService
 	cnTxnClient client.TxnClient
 	cnEngine    engine.Engine
 	fileService fileservice.FileService
@@ -148,15 +164,16 @@ type CDCTaskExecutor struct {
 	mp         *mpool.MPool
 	packerPool *fileservice.Pool[*types.Packer]
 
-	sinkUri          cdc.UriInfo
-	tables           cdc.PatternTuples
-	exclude          *regexp.Regexp
-	startTs, endTs   types.TS
-	noFull           bool
-	additionalConfig map[string]interface{}
-	// initialSnapshotLimiter bounds retained initial-snapshot batches while
-	// allowing tables to make progress independently.
-	initialSnapshotLimiter *semaphore.Weighted
+	sinkUri               cdc.UriInfo
+	tables                cdc.PatternTuples
+	exclude               *regexp.Regexp
+	startTs, endTs        types.TS
+	stableInitialSnapshot bool
+	noFull                bool
+	additionalConfig      map[string]interface{}
+	// initialSnapshotLimiter bounds retained initial-snapshot batches across all
+	// CDC tasks in this CN while allowing tables to make progress independently.
+	initialSnapshotLimiter *cdc.InitialSnapshotLimiter
 
 	activeRoutineMu sync.RWMutex
 	activeRoutine   *cdc.ActiveRoutine
@@ -600,14 +617,104 @@ func NewCDCTaskExecutor(
 				packer.Close()
 			},
 		),
-		stateMachine: NewExecutorStateMachine(), // Initialize state machine
-		holdCh:       make(chan int, 1),         // Initialize holdCh to prevent race condition
-		initialSnapshotLimiter: semaphore.NewWeighted(
-			cdc.CDCDefaultInitialSnapshotConcurrency,
-		),
+		stateMachine:           NewExecutorStateMachine(), // Initialize state machine
+		holdCh:                 make(chan int, 1),         // Initialize holdCh to prevent race condition
+		initialSnapshotLimiter: cnInitialSnapshotLimiter,
 	}
 	task.startFunc = task.Start
 	return task
+}
+
+// currentDaemonClaimFence returns the immutable claim generation installed by
+// taskservice. Existing table streams retain the old object when Resume or
+// Restart publishes a replacement claim, so stale work cannot borrow the new
+// generation's identity.
+func (exec *CDCTaskExecutor) currentDaemonClaimFence() *cdc.OwnerFence {
+	exec.claimMu.RLock()
+	defer exec.claimMu.RUnlock()
+	return exec.claimFence
+}
+
+func classifyStableSnapshotRestart(
+	watermark types.TS,
+	watermarkGeneration uint64,
+	sourceTableID uint64,
+	state cdc.InitialSnapshotEpochState,
+) (incomplete, resetTarget, metadataMissing, generationAhead bool) {
+	hasProgress := !watermark.IsEmpty()
+	generationAhead = watermarkGeneration > sourceTableID || state.HasNewerGeneration
+	sameGeneration := watermarkGeneration == sourceTableID
+	// A same-generation watermark cannot exist before its immutable epoch. A
+	// non-empty generation-zero watermark with no retired epoch is likewise not
+	// attributable to this stable protocol and must fail closed.
+	metadataMissing = state.Created && hasProgress &&
+		(sameGeneration || (watermarkGeneration == 0 && !state.HasOtherGeneration))
+	incomplete = !sameGeneration || watermark.LT(&state.Epoch)
+	resetTarget = incomplete && (state.HasOtherGeneration ||
+		(hasProgress && watermarkGeneration > 0 && watermarkGeneration < sourceTableID))
+	return
+}
+
+func shouldCompactStableSnapshotEpochs(
+	targetWillReset bool,
+	incomplete bool,
+	hasOtherGeneration bool,
+) bool {
+	return targetWillReset || (!incomplete && hasOtherGeneration)
+}
+
+func capInitialSnapshotEpoch(candidate, end types.TS) types.TS {
+	if !end.IsEmpty() && candidate.GT(&end) {
+		return end
+	}
+	return candidate
+}
+
+// UpdateDaemonTaskClaim advances the exact token used by target and watermark
+// fences after taskservice has durably installed a Resume/Restart generation.
+func (exec *CDCTaskExecutor) UpdateDaemonTaskClaim(claim task.DaemonTask) {
+	exec.claimMu.Lock()
+	if exec.claimTask != nil &&
+		exec.claimTask.ID == claim.ID &&
+		exec.claimTask.TaskRunner == claim.TaskRunner &&
+		exec.claimTask.LastRun.Equal(claim.LastRun) {
+		// Status is an authority phase within one immutable generation. Keep the
+		// same fence pointer (existing pipelines own it), but advance the snapshot
+		// used by future durable checks, notably RestartRequested -> Running.
+		claimCopy := claim
+		exec.claimTask = &claimCopy
+		exec.claimMu.Unlock()
+		return
+	}
+	claimCopy := claim
+	service := exec.taskService
+	var fence *cdc.OwnerFence
+	if service != nil {
+		fence = cdc.NewOwnerFenceForGeneration(claimCopy.LastRun, func(ctx context.Context) error {
+			// Resume/Restart on this CN publishes a new immutable fence before
+			// starting replacement work. Reject a delayed old pipeline locally.
+			// taskservice canonicalizes and monotonically advances the persisted
+			// microsecond last_run token, so status-only publication is the only
+			// path that intentionally retains this fence pointer.
+			exec.claimMu.RLock()
+			currentFence := exec.claimFence
+			currentClaim := exec.claimTask
+			var validationClaim task.DaemonTask
+			if currentClaim != nil {
+				validationClaim = *currentClaim
+			}
+			exec.claimMu.RUnlock()
+			if currentFence != fence || currentClaim == nil {
+				return moerr.NewInvalidTask(ctx, claimCopy.TaskRunner, claimCopy.ID)
+			}
+			fenceCtx, cancel := context.WithTimeout(ctx, 5*time.Second)
+			defer cancel()
+			return service.ValidateDaemonTask(fenceCtx, validationClaim)
+		})
+	}
+	exec.claimTask = &claimCopy
+	exec.claimFence = fence
+	exec.claimMu.Unlock()
 }
 
 func (exec *CDCTaskExecutor) Start(rootCtx context.Context) (err error) {
@@ -1185,8 +1292,6 @@ func (exec *CDCTaskExecutor) Restart() error {
 		exec.recordRestartTimeoutAsync(nil, drainTimeoutErr)
 		return drainTimeoutErr
 	}
-	startupTimeoutErr := moerr.NewInternalErrorNoCtx("CDC restart startup timed out")
-
 	// A Start owns mutable executor resources until it exits. Do not publish a
 	// replacement while a previous Start can still run its deferred cleanup.
 	// This is intentionally stronger than a generation check: generation fences
@@ -1319,6 +1424,9 @@ func (exec *CDCTaskExecutor) Restart() error {
 	if exec.callbackGeneration.Add(1) != generation+1 {
 		attempt.timeoutFence.Store(0)
 	}
+	// Constructing a moerr reports it. Only emit timeout evidence after the
+	// timeout has actually won, never during a successful restart.
+	startupTimeoutErr := moerr.NewInternalErrorNoCtx("CDC restart startup timed out")
 	_ = exec.stateMachine.SetFailed(startupTimeoutErr.Error())
 	exec.recordRestartTimeoutAsync(attempt, startupTimeoutErr)
 	return startupTimeoutErr
@@ -1340,7 +1448,9 @@ func (exec *CDCTaskExecutor) Pause() error {
 
 	// Check if running before state transition
 	wasRunning := state == StateRunning || state == StateStarting
-	needsProducerDrain := wasRunning || state == StatePausing
+	// Failed startup/table callbacks can still own readers while unwinding,
+	// and a retry already in Pausing must finish the same drain.
+	needsProducerDrain := wasRunning || state == StatePausing || state == StateFailed
 
 	// Transition to Pausing state
 	if state != StatePausing {
@@ -1352,6 +1462,7 @@ func (exec *CDCTaskExecutor) Pause() error {
 		// unwind. Fence it before pause completion so it cannot revive the task
 		// after this pause wins the lifecycle transition.
 		exec.callbackGeneration.Add(1)
+		exec.recordLeavingFailedMetrics(state, StatePausing)
 	}
 	exec.cancelCallbackContextLocked()
 	callbackDone := exec.callbackDone
@@ -1441,9 +1552,9 @@ func (exec *CDCTaskExecutor) Pause() error {
 
 	if wasRunning {
 		v2.CdcTaskTotalGauge.WithLabelValues("running").Dec()
-		v2.CdcTaskTotalGauge.WithLabelValues("paused").Inc()
 		v2.CdcTaskStateChangeCounter.WithLabelValues("running", "paused").Inc()
 	}
+	v2.CdcTaskTotalGauge.WithLabelValues("paused").Inc()
 
 	logutil.Info(
 		"cdc.frontend.task.pause_success",
@@ -2575,15 +2686,41 @@ func (exec *CDCTaskExecutor) handleNewTablesForGeneration(
 			zap.String("source-db", newTableInfo.SourceDbName),
 			zap.String("source-table", newTableInfo.SourceTblName),
 		)
-		if err = exec.addExecPipelineForTable(ctx, newTableInfo, txnOp); err != nil {
+		var pipelineOwnerFence *cdc.OwnerFence
+		if exec.stableInitialSnapshot {
+			// Capture one immutable identity for both pipeline effects and any
+			// diagnostic produced while constructing that pipeline. Re-reading the
+			// current fence after a failure could lend a replacement generation's
+			// identity to obsolete work.
+			pipelineOwnerFence = exec.currentDaemonClaimFence()
+		}
+		if err = exec.addExecPipelineForTable(
+			ctx, newTableInfo, txnOp, pipelineOwnerFence); err != nil {
 			logutil.Error(
 				"cdc.frontend.task.add_exec_pipeline_failed",
 				zap.String("task-name", exec.spec.TaskName),
 				zap.String("table", key),
 				zap.Error(err),
 			)
-			// Persist error to database for this table
-			if exec.watermarkUpdater != nil {
+			// Ownership loss is a control-plane result for this obsolete executor.
+			// Do not poison shared table metadata that belongs to the new owner.
+			if cdc.IsOwnerFenceLostError(err) {
+				return err
+			}
+			// Pause, cancel, restart, or CN shutdown can cancel this callback
+			// while target initialization is in flight. The obsolete callback is
+			// lifecycle cleanup, not a table-data failure; never persist it into
+			// shared err_msg state owned by a later generation.
+			if ctx.Err() != nil || !exec.isCurrentCallbackGeneration(callbackGeneration) {
+				return err
+			}
+			// Persist data/setup errors, and retain transient fence/epoch backend
+			// failures as retryable rather than permanently failing the table.
+			// A stable diagnostic without the exact pipeline fence would silently
+			// fall back to the legacy upsert and escape generation ownership. If the
+			// fence itself is missing, leave reporting to the task-level startup error.
+			if exec.watermarkUpdater != nil &&
+				(!exec.stableInitialSnapshot || pipelineOwnerFence != nil) {
 				watermarkKey := cdc.WatermarkKey{
 					AccountId: uint64(exec.spec.Accounts[0].GetId()),
 					TaskId:    exec.spec.TaskId,
@@ -2591,9 +2728,15 @@ func (exec *CDCTaskExecutor) handleNewTablesForGeneration(
 					TableName: newTableInfo.SourceTblName,
 				}
 				errorCtx := &cdc.ErrorContext{
-					IsRetryable: false, // Pipeline creation errors are not retryable by default
+					IsRetryable: cdc.IsRetryableSnapshotEpochError(err) ||
+						cdc.IsRetryableOwnerFenceError(err) ||
+						cdc.IsRetryableTargetLockError(err) ||
+						cdc.IsRetryableConnectionError(err),
 				}
-				if updateErr := exec.watermarkUpdater.UpdateWatermarkErrMsg(ctx, &watermarkKey, err.Error(), errorCtx); updateErr != nil {
+				errorUpdateCtx := cdc.WithWatermarkOwnerFence(
+					ctx, pipelineOwnerFence, newTableInfo.SourceTblId)
+				if updateErr := exec.watermarkUpdater.UpdateWatermarkErrMsg(
+					errorUpdateCtx, &watermarkKey, err.Error(), errorCtx); updateErr != nil {
 					logutil.Warn(
 						"cdc.frontend.task.persist_table_error_failed",
 						zap.String("table", key),
@@ -2855,6 +2998,7 @@ func (exec *CDCTaskExecutor) addExecPipelineForTable(
 	ctx context.Context,
 	info *cdc.DbTableInfo,
 	txnOp client.TxnOperator,
+	ownerFence *cdc.OwnerFence,
 ) (err error) {
 	// for ut
 	if objectio.CDCAddExecConsumeTruncateInjected() {
@@ -2878,12 +3022,99 @@ func (exec *CDCTaskExecutor) addExecPipelineForTable(
 		DBName:    info.SourceDbName,
 		TableName: info.SourceTblName,
 	}
+	var initialSnapshotEpoch types.TS
+	var initialSnapshotPending bool
+	var compactSnapshotEpochs bool
+	if exec.stableInitialSnapshot {
+		if ownerFence == nil {
+			return moerr.NewInternalErrorNoCtx("stable CDC executor has no daemon claim fence")
+		}
+	}
 	if watermark, err = exec.watermarkUpdater.GetOrAddCommitted(
 		ctx,
 		&watermarkKey,
 		&watermark,
 	); err != nil {
 		return err
+	}
+	initialSnapshotPending = !exec.noFull && exec.startTs.IsEmpty() && watermark.IsEmpty()
+	if exec.stableInitialSnapshot {
+		if err = ownerFence.Check(ctx); err != nil {
+			return err
+		}
+		var watermarkGeneration uint64
+		watermark, watermarkGeneration, err = exec.watermarkUpdater.GetWatermarkProgress(ctx, &watermarkKey)
+		if err != nil {
+			return err
+		}
+		var epochState cdc.InitialSnapshotEpochState
+		initialSnapshot := !exec.noFull && exec.startTs.IsEmpty()
+		if initialSnapshot {
+			candidate := types.TimestampToTS(txnOp.SnapshotTS())
+			// Persist the actual bounded snapshot endpoint. Persisting a later
+			// transaction timestamp and only capping it inside the reader would make
+			// a completed EndTs task look permanently pre-epoch after restart.
+			candidate = capInitialSnapshotEpoch(candidate, exec.endTs)
+			epochState, err = exec.watermarkUpdater.GetOrCreateInitialSnapshotEpochStateForProgress(
+				ctx,
+				&watermarkKey,
+				info.SourceTblId,
+				candidate,
+				watermark,
+				watermarkGeneration,
+			)
+			if err != nil {
+				return err
+			}
+			initialSnapshotEpoch = epochState.Epoch
+		}
+		// Publish the execution generation before using progress for admission.
+		// This claim and guarded checkpoints serialize on the same watermark row:
+		// the reread sees an old checkpoint that won first, or fences one that lost.
+		// Explicit StartTs and no-full tasks need the same protection even though
+		// they intentionally have no initial-snapshot epoch row.
+		watermark, watermarkGeneration, err = exec.watermarkUpdater.ClaimWatermarkOwner(
+			ctx, &watermarkKey, ownerFence)
+		if err != nil {
+			return err
+		}
+		if initialSnapshot {
+			// A stable task can only have a non-empty watermark after its epoch
+			// metadata was durable. Missing metadata without an older generation is
+			// corruption/manual deletion; choosing a fresh epoch would strand target
+			// rows from an unknown source image.
+			incomplete, resetTarget, metadataMissing, generationAhead := classifyStableSnapshotRestart(
+				watermark, watermarkGeneration, info.SourceTblId, epochState)
+			if generationAhead {
+				return cdc.NewRetryableSnapshotEpochError(moerr.NewInternalErrorf(
+					ctx,
+					"CDC source table generation %d is older than durable CDC metadata for %s (watermark generation %d, newer snapshot generation present: %t)",
+					info.SourceTblId, watermarkKey.String(), watermarkGeneration,
+					epochState.HasNewerGeneration,
+				))
+			}
+			if metadataMissing {
+				return moerr.NewInternalErrorf(
+					ctx,
+					"CDC stable snapshot metadata is missing for %s generation %d with watermark %s",
+					watermarkKey.String(), info.SourceTblId, watermark.ToString(),
+				)
+			}
+
+			// Empty or pre-epoch progress means the initial snapshot is incomplete.
+			// If another table ID exists, reset the target under the ownership lock;
+			// otherwise retain partial same-epoch target groups for idempotent replay.
+			initialSnapshotPending = incomplete
+			if resetTarget {
+				info.IdChanged = true
+			}
+			// NewSinker clears IdChanged after a successful target reset, so capture
+			// cleanup intent before handing it the mutable table descriptor. A
+			// completed current generation may also compact a retired row left by a
+			// crash after target commit but before metadata cleanup.
+			compactSnapshotEpochs = shouldCompactStableSnapshotEpochs(
+				info.IdChanged, incomplete, epochState.HasOtherGeneration)
+		}
 	}
 
 	// Note: Do NOT clear err_msg here
@@ -2903,9 +3134,11 @@ func (exec *CDCTaskExecutor) addExecPipelineForTable(
 	if routine == nil {
 		return moerr.NewInternalErrorNoCtx("CDC active routine is not initialized")
 	}
+	info.SetOwnerFence(ownerFence)
 
 	// step 2. new sinker
 	sinker, err := cdc.NewSinker(
+		ctx,
 		exec.sinkUri,
 		uint64(exec.spec.Accounts[0].GetId()),
 		exec.spec.TaskId,
@@ -2918,13 +3151,43 @@ func (exec *CDCTaskExecutor) addExecPipelineForTable(
 		uint64(exec.additionalConfig[cdc.CDCTaskExtraOptions_MaxSqlLength].(float64)),
 		exec.additionalConfig[cdc.CDCTaskExtraOptions_SendSqlTimeout].(string),
 	)
+	info.SetOwnerFence(nil)
 	if err != nil {
 		return err
+	}
+	// Sink initialization owns target DDL. A lifecycle transition can race the
+	// final successful statement, so reject publication after initialization as
+	// well as relying on the statement context itself.
+	if err = ctx.Err(); err != nil {
+		sinker.Close()
+		return err
+	}
+	if exec.stableInitialSnapshot && compactSnapshotEpochs {
+		if err = ownerFence.Check(ctx); err != nil {
+			sinker.Close()
+			return err
+		}
+		if err = exec.watermarkUpdater.DeleteInitialSnapshotGenerationsBefore(
+			ctx, &watermarkKey, info.SourceTblId); err != nil {
+			sinker.Close()
+			return err
+		}
+		if err = ownerFence.Check(ctx); err != nil {
+			sinker.Close()
+			return err
+		}
 	}
 
 	// step 3. new reader (using V2 tableChangeStream)
 	frequencyStr := exec.additionalConfig[cdc.CDCTaskExtraOptions_Frequency].(string)
 	frequency := cdc.ParseFrequencyToDuration(frequencyStr)
+	initSnapshotSplitTxn := exec.additionalConfig[cdc.CDCTaskExtraOptions_InitSnapshotSplitTxn].(bool)
+	if exec.stableInitialSnapshot {
+		// Stable-epoch tasks persist the legacy boolean as false so an older CN
+		// safely falls back to an atomic transaction during rolling upgrades.
+		initSnapshotSplitTxn = true
+	}
+
 	reader := cdc.NewTableChangeStream(
 		exec.cnTxnClient,
 		exec.cnEngine,
@@ -2936,13 +3199,16 @@ func (exec *CDCTaskExecutor) addExecPipelineForTable(
 		sinker,
 		exec.watermarkUpdater,
 		tableDef,
-		exec.additionalConfig[cdc.CDCTaskExtraOptions_InitSnapshotSplitTxn].(bool),
+		initSnapshotSplitTxn,
 		exec.runningReaders,
 		exec.startTs,
 		exec.endTs,
 		exec.noFull,
 		frequency,
 		cdc.WithInitialSnapshotLimiter(exec.initialSnapshotLimiter),
+		cdc.WithInitialSnapshotEpoch(initialSnapshotEpoch),
+		cdc.WithInitialSnapshotPending(initialSnapshotPending),
+		cdc.WithOwnerFence(ownerFence),
 	)
 
 	// step 4. start goroutines (sinker first, then reader)
@@ -3060,5 +3326,11 @@ func (exec *CDCTaskExecutor) retrieveCdcTask(ctx context.Context) error {
 	if err != nil {
 		return err
 	}
-	return json.Unmarshal([]byte(additionalConfigStr), &exec.additionalConfig)
+	if err = json.Unmarshal([]byte(additionalConfigStr), &exec.additionalConfig); err != nil {
+		return err
+	}
+
+	protocol, _ := exec.additionalConfig[cdc.CDCTaskExtraOptions_InitialSnapshotProtocol].(string)
+	exec.stableInitialSnapshot = protocol == cdc.CDCInitialSnapshotProtocolStableEpoch
+	return nil
 }

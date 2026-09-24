@@ -58,6 +58,7 @@ func TestPartitionTopNRecognizesLiteralRankBounds(t *testing.T) {
 			query := buildPartitionTopNPlan(t, test.predicate, false)
 			partition := findBoundedPartition(query)
 			require.NotNil(t, partition)
+			require.False(t, partition.PartitionTopNWithTies)
 			require.Equal(t, int32(1), partition.PartitionByCount)
 			require.Len(t, partition.OrderBy, 3)
 			require.Equal(t, test.want, partition.Limit.GetLit().GetU64Val())
@@ -66,6 +67,16 @@ func TestPartitionTopNRecognizesLiteralRankBounds(t *testing.T) {
 			require.Len(t, window.WinSpecList[0].GetW().OrderBy, 2)
 		})
 	}
+}
+
+func TestPartitionTopNRecognizesRankWithBoundaryTies(t *testing.T) {
+	sql := formatPartitionTopNFunctionSQL("rank", "rn <= 2")
+	logicPlan, err := runOneStmt(NewMockOptimizer(false), t, sql)
+	require.NoError(t, err)
+	partition := findBoundedPartition(logicPlan.GetQuery())
+	require.NotNil(t, partition)
+	require.True(t, partition.PartitionTopNWithTies)
+	require.Equal(t, uint64(2), partition.Limit.GetLit().GetU64Val())
 }
 
 func TestPartitionTopNFallsBackForUnsupportedShapes(t *testing.T) {
@@ -81,7 +92,6 @@ func TestPartitionTopNFallsBackForUnsupportedShapes(t *testing.T) {
 		{"volatile residual", formatPartitionTopNSQL("rn <= 2 and rand() >= rn")},
 		{"volatile order", `select * from (select o_orderkey, row_number() over (partition by o_custkey order by rand(), o_orderkey) rn from orders) t where rn <= 2`},
 		{"float partition key", `select * from (select o_orderkey, row_number() over (partition by cast(o_totalprice as double) order by o_orderkey) rn from orders) t where rn <= 2`},
-		{"rank", `select * from (select o_orderkey, rank() over (partition by o_custkey order by o_orderkey) rn from orders) t where rn <= 2`},
 		{"dense rank", `select * from (select o_orderkey, dense_rank() over (partition by o_custkey order by o_orderkey) rn from orders) t where rn <= 2`},
 		{"no partition", `select * from (select o_orderkey, row_number() over (order by o_orderkey) rn from orders) t where rn <= 2`},
 		{"no order", `select * from (select o_orderkey, row_number() over (partition by o_custkey) rn from orders) t where rn <= 2`},
@@ -125,6 +135,17 @@ func buildPartitionTopNPlan(t *testing.T, predicate string, prepared bool) *plan
 
 func formatPartitionTopNSQL(predicate string) string {
 	return fmt.Sprintf(partitionTopNSelect, predicate)
+}
+
+func formatPartitionTopNFunctionSQL(windowFunction, predicate string) string {
+	return fmt.Sprintf(`
+select *
+from (
+    select o_custkey, o_orderkey,
+           %s() over (partition by o_custkey order by o_orderkey, o_totalprice desc) as rn
+    from orders
+) t
+where %s`, windowFunction, predicate)
 }
 
 func findBoundedPartition(query *planpb.Query) *planpb.Node {

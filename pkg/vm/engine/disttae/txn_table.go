@@ -24,9 +24,7 @@ import (
 	"sync"
 	"sync/atomic"
 	"time"
-	"unsafe"
 
-	"github.com/google/uuid"
 	"github.com/matrixorigin/matrixone/pkg/catalog"
 	"github.com/matrixorigin/matrixone/pkg/common/docfilter"
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
@@ -59,7 +57,6 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/common"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/containers"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/index"
-	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/mergesort"
 	"github.com/matrixorigin/matrixone/pkg/vm/process"
 	"go.uber.org/zap"
 )
@@ -1453,8 +1450,8 @@ func (tbl *txnTable) rangesOnePart(
 	if err = ForeachSnapshotObjects(
 		tbl.db.op.SnapshotTS(),
 		func(obj objectio.ObjectEntry, isCommitted bool) (err2 error) {
-			//if need to shuffle objects
-			if plan2.ShouldSkipObjByShuffle(rangesParam.Rsp, &obj.ObjectStats) {
+			// Only the local workspace enumerates uncommitted objects; remote CNs cannot take ownership.
+			if isCommitted && plan2.ShouldSkipObjByShuffle(rangesParam.Rsp, &obj.ObjectStats) {
 				return
 			}
 			var meta objectio.ObjectDataMeta
@@ -1825,6 +1822,7 @@ func (tbl *txnTable) GetTableDef(ctx context.Context) *plan.TableDef {
 			tbl.tableDef.FeatureFlag = tbl.extraInfo.FeatureFlag
 			tbl.tableDef.AutoIncrOffset = tbl.extraInfo.AutoIncrOffset
 			tbl.tableDef.AutoIncrEpoch = tbl.extraInfo.AutoIncrEpoch
+			tbl.tableDef.AutoIdCache = tbl.extraInfo.AutoIdCache
 			tbl.tableDef.Checks = tbl.extraInfo.Checks
 			tbl.tableDef.DefaultCharset = tbl.extraInfo.DefaultCharset
 		}
@@ -2933,6 +2931,7 @@ func pkCommitTSMatchedInRange(
 }
 
 func (tbl *txnTable) PKPersistedBetween(
+	ctx context.Context,
 	p *logtailreplay.PartitionState,
 	from types.TS,
 	to types.TS,
@@ -2947,6 +2946,12 @@ func (tbl *txnTable) PKPersistedBetween(
 	candidateBlks := make(map[types.Blockid]*objectio.BlockInfo)
 	v2.TxnPKChangeCheckTotalCounter.Inc()
 	defer func() {
+		// A statement (including internal SQL in an existing transaction) may
+		// have a shorter lifetime than the relation's transaction process.
+		// Cancellation is terminal, not evidence of a PK/metadata conflict.
+		if ctxErr := ctx.Err(); ctxErr != nil {
+			changed, err = false, ctxErr
+		}
 		if err == nil && changed {
 			v2.TxnPKChangeCheckChangedCounter.Inc()
 		}
@@ -2974,7 +2979,9 @@ func (tbl *txnTable) PKPersistedBetween(
 			)
 		}
 	}()
-	ctx := tbl.proc.Load().Ctx
+	if err := ctx.Err(); err != nil {
+		return false, err
+	}
 	fs := tbl.getTxn().engine.fs
 	primaryIdx := tbl.primaryIdx
 
@@ -2998,6 +3005,9 @@ func (tbl *txnTable) PKPersistedBetween(
 	isFakePK := tbl.GetTableDef(ctx).Pkey.PkeyColName == catalog.FakePrimaryKeyColName
 	if err := ForeachCommittedObjects(cObjs, delObjs, p,
 		func(obj objectio.ObjectEntry) (err2 error) {
+			if err2 = ctx.Err(); err2 != nil {
+				return
+			}
 			var zmCkecked bool
 			if !isFakePK {
 				// if the object info contains a pk zonemap, fast-check with the zonemap
@@ -3076,7 +3086,7 @@ func (tbl *txnTable) PKPersistedBetween(
 	bytes, _ := keys.MarshalBinary()
 	colExpr := readutil.NewColumnExpr(0, plan2.MakePlan2Type(keys.GetType()), tbl.tableDef.Pkey.PkeyColName)
 	inExpr := plan2.MakeInExpr(
-		tbl.proc.Load().Ctx,
+		ctx,
 		colExpr,
 		int32(keys.Length()),
 		bytes,
@@ -3121,8 +3131,8 @@ func (tbl *txnTable) PKPersistedBetween(
 	if len(candidateBlks) > 0 {
 		// Acquire semaphore to limit concurrent block I/O across all transactions.
 		// This prevents 1000 goroutines from simultaneously reading blocks and
-		// exhausting mpool capacity. Scoped to the block loop only — tombstone
-		// checking below is not rate-limited by this semaphore.
+		// exhausting mpool capacity. Release before the tombstone phase, which
+		// acquires its own permit (never nest acquisitions).
 		if err := acquirePKCheckSemaphore(ctx); err != nil {
 			return false, err
 		}
@@ -3130,6 +3140,10 @@ func (tbl *txnTable) PKPersistedBetween(
 		v2.TxnPKChangeCheckIOCounter.Inc()
 
 		for _, blk := range candidateBlks {
+			if err := ctx.Err(); err != nil {
+				releasePKCheckSemaphore()
+				return false, err
+			}
 			searchFunc := filter.DecideSearchFunc(blk.IsSorted())
 			if searchFunc == nil {
 				searchFunc = buildUnsortedFilter()
@@ -3194,7 +3208,7 @@ func (tbl *txnTable) PKPersistedBetween(
 		pkDef := tbl.tableDef.Cols[tbl.primaryIdx]
 		pkType := plan2.ExprType2Type(&pkDef.Typ)
 		changed, tombstoneReason, err := tombstonePKExistsInRange(
-			ctx, p, from, to, keys, pkType, fs, tbl.proc.Load().GetMPool(),
+			ctx, tbl.tableId, p, from, to, keys, pkType, fs, tbl.proc.Load().GetMPool(),
 		)
 		if changed {
 			reason = tombstoneReason
@@ -3206,9 +3220,13 @@ func (tbl *txnTable) PKPersistedBetween(
 
 // tombstonePKExistsInRange checks whether any tombstone object created or deleted
 // after 'from' contains a PK that intersects with 'keys'.
-// If the total tombstone rows exceed the threshold, it conservatively returns true.
+// User tables retain a row-count cost guard. System catalog checks must inspect
+// the requested keys: unrelated DDL/compaction can rewrite many historical
+// tombstones, and a false conflict restarts the entire (potentially expensive)
+// DDL statement. Object row counts are not evidence of a catalog-key change.
 func tombstonePKExistsInRange(
 	ctx context.Context,
+	tableID uint64,
 	p *logtailreplay.PartitionState,
 	from types.TS,
 	to types.TS,
@@ -3217,17 +3235,36 @@ func tombstonePKExistsInRange(
 	fs fileservice.FileService,
 	mp *mpool.MPool,
 ) (bool, string, error) {
+	if err := ctx.Err(); err != nil {
+		return false, "", err
+	}
 	tombObjs := p.GetChangedTombstoneObjsBetween(from)
 	if len(tombObjs) == 0 {
 		return false, "", nil
 	}
 	const tombstoneRowsThreshold = 50000
-	var totalRows uint32
-	for i := range tombObjs {
-		totalRows += tombObjs[i].Rows()
-		if totalRows > tombstoneRowsThreshold {
-			return true, "tombstone_rows_bailout", nil
+	if !catalog.IsSystemTable(tableID) {
+		var totalRows uint64
+		for i := range tombObjs {
+			totalRows += uint64(tombObjs[i].Rows())
+			if totalRows > tombstoneRowsThreshold {
+				return true, "tombstone_rows_bailout", nil
+			}
 		}
+	}
+	// Bound concurrent pinned/decoded blocks, not the number of unrelated
+	// catalog rows. Each iteration releases its block before reading the next.
+	if err := acquirePKCheckSemaphore(ctx); err != nil {
+		return false, "", err
+	}
+	defer releasePKCheckSemaphore()
+	// Preserve conservative I/O-failure handling, but do not turn cancellation
+	// into a metadata-change retry. All readers receive the same caller context.
+	readFailure := func() (bool, string, error) {
+		if err := ctx.Err(); err != nil {
+			return false, "", err
+		}
+		return true, "tombstone_read_error", nil
 	}
 	searchKeys := LinearSearchOffsetByValFactory(keys)
 	var cachedSearch *objectio.ReadFilterSearch
@@ -3244,12 +3281,15 @@ func tombstonePKExistsInRange(
 	}
 	for _, obj := range tombObjs {
 		for blkIdx := uint32(0); blkIdx < obj.BlkCnt(); blkIdx++ {
+			if err := ctx.Err(); err != nil {
+				return false, "", err
+			}
 			loc := obj.BlockLocation(uint16(blkIdx), objectio.BlockMaxRows)
 			isCNCreated := obj.GetCNCreated()
 			if cachedSearch != nil {
 				// Tombstone objects are ordered by rowid, not by the copied PK
-				// column. Always use the linear search even when object metadata
-				// carries a sorted flag.
+				// column. Always use the unsorted-source search even when object
+				// metadata carries a sorted flag.
 				if isCNCreated {
 					hits, _, err := ioutil.LoadColumnDataBySearch(
 						ctx,
@@ -3264,7 +3304,7 @@ func tombstonePKExistsInRange(
 						fileservice.Policy(0),
 					)
 					if err != nil {
-						return true, "tombstone_read_error", nil
+						return readFailure()
 					}
 					if len(hits) > 0 {
 						return true, "tombstone_cn_hit", nil
@@ -3287,7 +3327,7 @@ func tombstonePKExistsInRange(
 					fileservice.Policy(0),
 				)
 				if err != nil {
-					return true, "tombstone_read_error", nil
+					return readFailure()
 				}
 				if !usable || changed {
 					if usable {
@@ -3305,7 +3345,7 @@ func tombstonePKExistsInRange(
 			tombVectors := containers.NewVectors(vecCount)
 			_, release, err := ioutil.ReadDeletes(ctx, loc, fs, isCNCreated, tombVectors, &pkType)
 			if err != nil {
-				return true, "tombstone_read_error", nil
+				return readFailure()
 			}
 			pkVec := tombVectors[1]
 			hits := searchKeys(&pkVec)
@@ -3538,300 +3578,15 @@ func (tbl *txnTable) primaryKeysMayBeChanged(
 	//need check pk whether exist on S3 block.
 	v2.TxnPKMayBeChangedPersistedCounter.Inc()
 	return tbl.PKPersistedBetween(
+		ctx,
 		snap,
 		from,
 		to,
 		keysVector, checkTombstone)
 }
 
-func (tbl *txnTable) MergeObjects(
-	ctx context.Context,
-	objStats []objectio.ObjectStats,
-	targetObjSize uint32,
-) (*api.MergeCommitEntry, error) {
-	if len(objStats) < 2 {
-		return nil, moerr.NewInternalErrorNoCtx("no matching objects")
-	}
-
-	snapshot := types.TimestampToTS(tbl.getTxn().op.SnapshotTS())
-	state, err := tbl.getPartitionState(ctx)
-	if err != nil {
-		return nil, err
-	}
-
-	sortKeyPos, sortKeyIsPK := tbl.getSortKeyPosAndSortKeyIsPK()
-
-	// check object visibility and set object stats.
-	for i, objstat := range objStats {
-		info, exist := state.GetObject(*objstat.ObjectShortName())
-		if !exist || (!info.DeleteTime.IsEmpty() && info.DeleteTime.LE(&snapshot)) {
-			logutil.Errorf("object not visible: %s", info.String())
-			return nil, moerr.NewInternalErrorNoCtxf("object %s not exist", objstat.ObjectName().String())
-		}
-		objectio.SetObjectStats(&objstat, &info.ObjectStats)
-		objStats[i] = objstat
-	}
-
-	tbl.ensureSeqnumsAndTypesExpectRowid()
-
-	taskHost, err := newCNMergeTask(
-		ctx, tbl, snapshot, // context
-		sortKeyPos, sortKeyIsPK, // schema
-		objStats, // targets
-		targetObjSize)
-	if err != nil {
-		return nil, err
-	}
-	defer taskHost.Release()
-
-	err = mergesort.DoMergeAndWrite(ctx, tbl.getTxn().op.Txn().DebugString(), sortKeyPos, taskHost)
-	if err != nil {
-		taskHost.commitEntry.Err = err.Error()
-		return taskHost.commitEntry, err
-	}
-
-	if !taskHost.DoTransfer() {
-		return taskHost.commitEntry, nil
-	}
-
-	return dumpTransferInfo(ctx, taskHost)
-}
-
-func (tbl *txnTable) GetNonAppendableObjectStats(ctx context.Context) ([]objectio.ObjectStats, error) {
-	snapshot := types.TimestampToTS(tbl.getTxn().op.SnapshotTS())
-	state, err := tbl.getPartitionState(ctx)
-	if err != nil {
-		return nil, err
-	}
-
-	sortKeyPos, _ := tbl.getSortKeyPosAndSortKeyIsPK()
-	objStats := make([]objectio.ObjectStats, 0, tbl.ApproxObjectsNum(ctx))
-
-	err = ForeachVisibleObjects(ctx, state, snapshot, func(_ context.Context, obj objectio.ObjectEntry) error {
-		if obj.GetAppendable() {
-			return nil
-		}
-		if sortKeyPos != -1 {
-			sortKeyZM := obj.SortKeyZoneMap()
-			if !sortKeyZM.IsInited() {
-				return nil
-			}
-		}
-		objStats = append(objStats, obj.ObjectStats)
-		return nil
-	}, nil, false)
-	if err != nil {
-		return nil, err
-	}
-	return objStats, nil
-}
-
 func (tbl *txnTable) Reset(op client.TxnOperator) error {
 	return moerr.NewInternalErrorNoCtx("cannot reset a shared relation; use an exclusive relation handle")
-}
-
-func (tbl *txnTable) getSortKeyPosAndSortKeyIsPK() (int, bool) {
-	sortKeyPos := -1
-	sortKeyIsPK := false
-	if tbl.primaryIdx >= 0 && tbl.tableDef.Cols[tbl.primaryIdx].Name != catalog.FakePrimaryKeyColName {
-		if tbl.clusterByIdx < 0 {
-			sortKeyPos = tbl.primaryIdx
-			sortKeyIsPK = true
-		} else {
-			panic(fmt.Sprintf("bad schema pk %v, ck %v", tbl.primaryIdx, tbl.clusterByIdx))
-		}
-	} else if tbl.clusterByIdx >= 0 {
-		sortKeyPos = tbl.clusterByIdx
-		sortKeyIsPK = false
-	}
-	return sortKeyPos, sortKeyIsPK
-}
-
-func dumpTransferInfo(ctx context.Context, mergeTask *cnMergeTask) (*api.MergeCommitEntry, error) {
-	// Count only non-deleted (non-sentinel) rows for the size threshold check.
-	rowCnt := 0
-	tt := mergeTask.transferTable
-	nblks := tt.Len()
-	for i := 0; i < nblks; i++ {
-		m := tt.GetBlockMap(i)
-		for _, pos := range m {
-			if pos.ObjIdx != api.NoTransfer {
-				rowCnt++
-			}
-		}
-	}
-
-	// If transfer info is small, send it to tn directly.
-	// transfer info size is only related to row count.
-	// For api.TransDestPos, 5*10^5 rows is 52*5*10^5 ~= 26MB
-	// For api.TransferDestPos, 5*10^5 rows is 12*5*10^5 ~= 6MB
-	if rowCnt < 500000 {
-		avgPerBlk := rowCnt / nblks
-		mappings := make([]api.BlkTransMap, nblks)
-		for i := 0; i < nblks; i++ {
-			m := tt.GetBlockMap(i)
-			mapping := make(map[int32]api.TransDestPos, avgPerBlk)
-			for r, pos := range m {
-				if pos.ObjIdx == api.NoTransfer {
-					continue
-				}
-				mapping[int32(r)] = api.TransDestPos{
-					ObjIdx: int32(pos.ObjIdx),
-					BlkIdx: int32(pos.BlkIdx),
-					RowIdx: int32(pos.RowIdx),
-				}
-			}
-			mappings[i] = api.BlkTransMap{M: mapping}
-		}
-		mergeTask.commitEntry.Booking = &api.BlkTransferBooking{
-			Mappings: mappings,
-		}
-		return mergeTask.commitEntry, nil
-	}
-
-	// if transfer info is too large, write it down to s3
-	if err := writeTransferInfoToS3(ctx, mergeTask); err != nil {
-		return mergeTask.commitEntry, err
-	}
-	var locStr strings.Builder
-	locations := mergeTask.commitEntry.BookingLoc
-	blkCnt := types.DecodeInt32(commonUtil.UnsafeStringToBytes(locations[0]))
-	for _, filepath := range locations[blkCnt+1:] {
-		locStr.WriteString(filepath)
-		locStr.WriteString(",")
-	}
-	logutil.Infof("mergeblocks %v-%v on cn: write s3 transfer info %v",
-		mergeTask.host.tableId, mergeTask.host.tableName, locStr.String())
-
-	return mergeTask.commitEntry, nil
-}
-
-func writeTransferInfoToS3(ctx context.Context, taskHost *cnMergeTask) (err error) {
-	defer func() {
-		if err != nil {
-			locations := taskHost.commitEntry.BookingLoc
-			for _, filepath := range locations {
-				_ = taskHost.fs.Delete(ctx, filepath)
-			}
-		}
-	}()
-
-	return writeTransferMapsToS3(ctx, taskHost)
-}
-
-func writeTransferMapsToS3(ctx context.Context, taskHost *cnMergeTask) (err error) {
-	tt := taskHost.transferTable
-
-	nblks := tt.Len()
-	blkCnt := int32(nblks)
-	totalRows := 0
-
-	// BookingLoc layout:
-	// | blockCnt | Blk1RowCnt | Blk2RowCnt | ... | filepath1 | filepath2 | ... |
-	taskHost.commitEntry.BookingLoc = append(taskHost.commitEntry.BookingLoc,
-		commonUtil.UnsafeBytesToString(types.EncodeInt32(&blkCnt)))
-	for i := 0; i < nblks; i++ {
-		m := tt.GetBlockMap(i)
-		rowCnt := int32(len(m))
-		taskHost.commitEntry.BookingLoc = append(taskHost.commitEntry.BookingLoc,
-			commonUtil.UnsafeBytesToString(types.EncodeInt32(&rowCnt)))
-		totalRows += len(m)
-	}
-
-	columns := []string{"src_blk", "src_row", "dest_obj", "dest_blk", "dest_row"}
-	colTypes := []types.T{types.T_int32, types.T_uint32, types.T_uint8, types.T_uint16, types.T_uint32}
-	batchSize := min(200*mpool.MB/len(columns)/int(unsafe.Sizeof(int32(0))), totalRows)
-	buffer := batch.New(columns)
-	releases := make([]func(), len(columns))
-	for i := range columns {
-		t := colTypes[i].ToType()
-		vec, release := taskHost.GetVector(&t)
-		err := vec.PreExtend(batchSize, taskHost.GetMPool())
-		if err != nil {
-			return err
-		}
-		buffer.Vecs[i] = vec
-		releases[i] = release
-	}
-	defer func() {
-		for _, rel := range releases {
-			if rel != nil {
-				rel()
-			}
-		}
-	}()
-	objRowCnt := 0
-	for blkIdx := 0; blkIdx < nblks; blkIdx++ {
-		transMap := tt.GetBlockMap(blkIdx)
-		for rowIdx, destPos := range transMap {
-			if destPos.ObjIdx == api.NoTransfer {
-				continue
-			}
-			if err = vector.AppendFixed(buffer.Vecs[0], int32(blkIdx), false, taskHost.GetMPool()); err != nil {
-				return err
-			}
-			if err = vector.AppendFixed(buffer.Vecs[1], uint32(rowIdx), false, taskHost.GetMPool()); err != nil {
-				return err
-			}
-			if err = vector.AppendFixed(buffer.Vecs[2], destPos.ObjIdx, false, taskHost.GetMPool()); err != nil {
-				return err
-			}
-			if err = vector.AppendFixed(buffer.Vecs[3], destPos.BlkIdx, false, taskHost.GetMPool()); err != nil {
-				return err
-			}
-			if err = vector.AppendFixed(buffer.Vecs[4], destPos.RowIdx, false, taskHost.GetMPool()); err != nil {
-				return err
-			}
-
-			buffer.SetRowCount(buffer.RowCount() + 1)
-			objRowCnt++
-
-			if objRowCnt*len(columns)*int(unsafe.Sizeof(int32(0))) > 200*mpool.MB {
-				filename := ioutil.EncodeTmpFileName("tmp", "merge_"+uuid.NewString(), time.Now().UTC().Unix())
-				writer, err := objectio.NewObjectWriterSpecial(objectio.WriterTmp, filename, taskHost.fs)
-				if err != nil {
-					return err
-				}
-
-				_, err = writer.Write(buffer)
-				if err != nil {
-					return err
-				}
-				buffer.CleanOnlyData()
-
-				_, err = writer.WriteEnd(ctx)
-				if err != nil {
-					return err
-				}
-				taskHost.commitEntry.BookingLoc = append(taskHost.commitEntry.BookingLoc, filename)
-				objRowCnt = 0
-			}
-		}
-	}
-
-	// write remaining data
-	if buffer.RowCount() != 0 {
-		filename := ioutil.EncodeTmpFileName("tmp", "merge_"+uuid.NewString(), time.Now().UTC().Unix())
-		writer, err := objectio.NewObjectWriterSpecial(objectio.WriterTmp, filename, taskHost.fs)
-		if err != nil {
-			return err
-		}
-
-		_, err = writer.Write(buffer)
-		if err != nil {
-			return err
-		}
-		buffer.CleanOnlyData()
-
-		_, err = writer.WriteEnd(ctx)
-		if err != nil {
-			return err
-		}
-		taskHost.commitEntry.BookingLoc = append(taskHost.commitEntry.BookingLoc, filename)
-	}
-
-	taskHost.commitEntry.Booking = nil
-	return nil
 }
 
 func (tbl *txnTable) getUncommittedRows(

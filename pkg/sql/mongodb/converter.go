@@ -193,23 +193,23 @@ func (c *Converter) AppendDocumentWithBudget(
 			appendErr = c.appendValue(bat.Vecs[i], value, column, mp, &budget)
 		}
 		if err := appendErr; err != nil {
-			if errors.Is(err, errConversion) && column.Conversion == ConversionTryNull {
-				c.conversionErrors++
-				metric.MongoDBConversionErrorCounter.Inc()
-				if column.NotNullable {
-					return mongoDBNotNullError(ctx, column)
-				}
-				if c.conversionErrors > c.maxConversionErrors ||
-					c.conversionAttempts >= conversionErrorRateMinAttempts &&
-						float64(c.conversionErrors)/float64(c.conversionAttempts) > c.maxConversionErrorRate {
-					return moerr.NewInvalidInput(ctx, "MongoDB try_null conversion error limit exceeded")
-				}
-				if appendErr := vector.AppendNull(bat.Vecs[i], mp); appendErr != nil {
-					return appendErr
-				}
-				continue
-			}
 			if errors.Is(err, errConversion) {
+				metric.MongoDBConversionErrorCounter.Inc()
+				if column.Conversion == ConversionTryNull {
+					c.conversionErrors++
+					if column.NotNullable {
+						return mongoDBNotNullError(ctx, column)
+					}
+					if c.conversionErrors > c.maxConversionErrors ||
+						c.conversionAttempts >= conversionErrorRateMinAttempts &&
+							float64(c.conversionErrors)/float64(c.conversionAttempts) > c.maxConversionErrorRate {
+						return moerr.NewInvalidInput(ctx, "MongoDB try_null conversion error limit exceeded")
+					}
+					if appendErr := vector.AppendNull(bat.Vecs[i], mp); appendErr != nil {
+						return appendErr
+					}
+					continue
+				}
 				return moerr.NewInvalidInputf(ctx, "MongoDB value at path %s cannot be converted to %s", column.Path, types.T(column.TypeID).String())
 			}
 			return err

@@ -67,6 +67,10 @@ var (
 
 // Config defines the Configurations supported by the Log Service.
 type Config struct {
+	// CatalogMetadataMaintenance requires the controlled stop of all legacy
+	// HAKeeper executors before enabling; its durable latch cannot be unset.
+	CatalogMetadataMaintenance bool `toml:"catalog-metadata-maintenance"`
+
 	// FS is the underlying virtual FS used by the log service. Leave it as empty
 	// in production.
 	FS vfs.FS
@@ -372,6 +376,15 @@ func (c *Config) Validate() error {
 	}
 	if c.HAKeeperConfig.TNStoreTimeout.Duration == 0 {
 		return moerr.NewBadConfigNoCtx("DNStoreTimeout not set")
+	}
+	if c.HAKeeperTickInterval.Duration <= 0 {
+		return moerr.NewBadConfigNoCtx("HAKeeperTickInterval must be positive")
+	}
+	if c.HAKeeperCheckInterval.Duration <= 0 {
+		return moerr.NewBadConfigNoCtx("HAKeeperCheckInterval must be positive")
+	}
+	if c.HAKeeperCheckInterval.Duration > time.Duration(1<<63-1)/checkBootstrapCycles {
+		return moerr.NewBadConfigNoCtx("HAKeeperCheckInterval is too large")
 	}
 	if c.GossipProbeInterval.Duration == 0 {
 		return moerr.NewBadConfigNoCtx("GossipProbeInterval not set")

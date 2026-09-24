@@ -16,6 +16,7 @@ package iscp
 
 import (
 	"context"
+	"errors"
 	"sync"
 	"sync/atomic"
 	"time"
@@ -150,7 +151,7 @@ func (w *worker) onItem(iterCtx *IterationContext) {
 	if iterCtx == nil {
 		return
 	}
-	err := retry(
+	err := retryISCPTaskIteration(
 		w.ctx,
 		func() error {
 			err := ExecuteIterationWithRuntime(
@@ -162,7 +163,16 @@ func (w *worker) onItem(iterCtx *IterationContext) {
 				iterCtx,
 				w.mp,
 			)
-			if err != nil {
+			// A failed status CAS means a newer catalog owner already won. Retrying
+			// this immutable iteration cannot succeed and used to pin a worker for
+			// up to an hour; the normal logtail loop will merge the winner.
+			if isSupersededIteration(err) {
+				logutil.Info(
+					"ISCP-Task iteration superseded",
+					zap.Uint64("tableID", iterCtx.tableID),
+					zap.Strings("jobs", iterCtx.jobNames),
+				)
+			} else if err != nil {
 				logutil.Error(
 					"ISCP-Task execute iteration failed",
 					zap.Uint64("tableID", iterCtx.tableID),
@@ -172,17 +182,14 @@ func (w *worker) onItem(iterCtx *IterationContext) {
 			}
 			return err
 		},
-		SubmitRetryTimes,
-		DefaultRetryInterval,
-		SubmitRetryDuration,
 	)
+	// A superseded owner must not write an error over the winner. Composite
+	// failures have already been logged above and must retain their cleanup cause.
+	if errors.Is(err, errISCPStatusCASLost) {
+		return
+	}
 	if err != nil {
-		statuses := make([]*JobStatus, len(iterCtx.jobNames))
-		for i := range statuses {
-			statuses[i] = &JobStatus{
-				ErrorMsg: err.Error(),
-			}
-		}
+		statuses := jobStatusesForIterationError(iterCtx, err)
 		preLSN := make([]uint64, len(iterCtx.lsn))
 		for i := range iterCtx.lsn {
 			preLSN[i] = iterCtx.lsn[i] - 1
@@ -210,13 +217,73 @@ func (w *worker) onItem(iterCtx *IterationContext) {
 			DefaultRetryInterval,
 			SubmitRetryDuration,
 		)
-		if err != nil {
+		if err != nil && !isSupersededIteration(err) {
 			logutil.Error(
 				"ISCP-Task workerflush job status failed",
 				zap.Error(err),
 			)
 		}
 	}
+}
+
+func isSupersededIteration(err error) bool {
+	// errors.Is alone also matches Join(CAS, cleanup failure). Only a tree
+	// consisting entirely of CAS losses is a successful superseded outcome.
+	switch e := err.(type) {
+	case *iscpStatusCASLostError:
+		return true
+	case interface{ Unwrap() []error }:
+		causes := e.Unwrap()
+		if len(causes) == 0 {
+			return false
+		}
+		for _, cause := range causes {
+			if !isSupersededIteration(cause) {
+				return false
+			}
+		}
+		return true
+	case interface{ Unwrap() error }:
+		return isSupersededIteration(e.Unwrap())
+	default:
+		return false
+	}
+}
+
+func retryISCPTaskIteration(ctx context.Context, execute func() error) error {
+	err := retry(
+		ctx,
+		execute,
+		SubmitRetryTimes,
+		DefaultRetryInterval,
+		SubmitRetryDuration,
+	)
+	if isSupersededIteration(err) {
+		return nil
+	}
+	return err
+}
+
+func jobStatusesForIterationError(iterCtx *IterationContext, err error) []*JobStatus {
+	statuses := make([]*JobStatus, len(iterCtx.jobNames))
+	for i := range statuses {
+		stage := int8(JobStage_Init)
+		if len(iterCtx.stages) == len(iterCtx.jobNames) {
+			stage = iterCtx.stages[i]
+		}
+		statuses[i] = &JobStatus{
+			ErrorMsg: err.Error(),
+			Stage:    stage,
+		}
+		// For an Init iteration, this CAS can succeed only when the atomic
+		// InitSQL/status transaction did not commit: a committed transaction
+		// already advanced the LSN. Persisting the marker here therefore makes
+		// a later retry/restart safe without guessing the commit outcome.
+		if stage == JobStage_Init {
+			statuses[i].LifecycleVersion = atomicInitLifecycleVersion
+		}
+	}
+	return statuses
 }
 
 func (w *worker) Stop() {

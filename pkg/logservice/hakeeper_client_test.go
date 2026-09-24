@@ -16,6 +16,7 @@ package logservice
 
 import (
 	"context"
+	"errors"
 	"io"
 	"net"
 	"os"
@@ -44,6 +45,20 @@ type countingErrorRPCClient struct {
 	err    error
 	sends  atomic.Int32
 	closes atomic.Int32
+}
+
+type blockingCloseRPCClient struct {
+	countingErrorRPCClient
+	started   chan struct{}
+	release   chan struct{}
+	closeOnce sync.Once
+	closeErr  error
+}
+
+func (c *blockingCloseRPCClient) Close() error {
+	c.closeOnce.Do(func() { close(c.started) })
+	<-c.release
+	return c.closeErr
 }
 
 func (c *countingErrorRPCClient) Send(
@@ -1340,13 +1355,31 @@ func TestNewManagedHAKeeperClientNormalizesInitialConnectionError(t *testing.T) 
 	require.True(t, moerr.IsMoErrCode(err, moerr.ErrUnexpectedEOF))
 }
 
-func TestHAKeeperClientRetryableEOFError(t *testing.T) {
-	c := &managedHAKeeperClient{}
+func TestHAKeeperClientRetryableError(t *testing.T) {
 	ctx := context.Background()
+	tests := []struct {
+		name string
+		err  error
+		want bool
+	}{
+		{name: "eof", err: io.EOF, want: true},
+		{name: "unexpected eof", err: io.ErrUnexpectedEOF, want: true},
+		{name: "normalized eof", err: moerr.NewUnexpectedEOF(ctx, io.EOF.Error()), want: true},
+		{name: "backend closed", err: moerr.NewBackendClosed(ctx), want: true},
+		{name: "backend cannot connect", err: moerr.NewBackendCannotConnect(ctx), want: true},
+		{name: "no available backend", err: moerr.NewNoAvailableBackend(ctx), want: true},
+		{name: "connection reset", err: moerr.NewConnectionReset(ctx), want: true},
+		{name: "context canceled", err: context.Canceled, want: false},
+		{name: "context deadline", err: context.DeadlineExceeded, want: false},
+		{name: "invalid input", err: moerr.NewInvalidInput(ctx, "invalid"), want: false},
+	}
 
-	require.True(t, c.isRetryableError(io.EOF))
-	require.True(t, c.isRetryableError(io.ErrUnexpectedEOF))
-	require.True(t, c.isRetryableError(moerr.NewUnexpectedEOF(ctx, io.EOF.Error())))
+	c := &managedHAKeeperClient{}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			require.Equal(t, tt.want, c.isRetryableError(tt.err))
+		})
+	}
 }
 
 func TestAllocateIDRetriesPrepareClientError(t *testing.T) {
@@ -1396,37 +1429,113 @@ func TestAllocateIDRetriesPrepareClientError(t *testing.T) {
 }
 
 func TestAllocateIDRetriesPrepareClientErrorUntilContextDone(t *testing.T) {
-	originalNew := newHAKeeperClientFunc
-	originalRetryInterval := hakeeperClientRetryInterval
-	defer func() {
-		newHAKeeperClientFunc = originalNew
-		hakeeperClientRetryInterval = originalRetryInterval
-	}()
-
-	attempts := 0
-	newHAKeeperClientFunc = func(
-		context.Context,
-		string,
-		HAKeeperClientConfig,
-	) (*hakeeperClient, error) {
-		attempts++
-		return nil, net.ErrClosed
+	tests := []struct {
+		name string
+		err  error
+	}{
+		{name: "normalized eof", err: net.ErrClosed},
+		{name: "backend closed", err: moerr.NewBackendClosed(context.Background())},
 	}
-	hakeeperClientRetryInterval = 20 * time.Millisecond
 
-	c := &managedHAKeeperClient{
-		cfg: HAKeeperClientConfig{AllocateIDBatch: 2},
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			originalNew := newHAKeeperClientFunc
+			originalRetryInterval := hakeeperClientRetryInterval
+			defer func() {
+				newHAKeeperClientFunc = originalNew
+				hakeeperClientRetryInterval = originalRetryInterval
+			}()
+
+			attempts := 0
+			newHAKeeperClientFunc = func(
+				context.Context,
+				string,
+				HAKeeperClientConfig,
+			) (*hakeeperClient, error) {
+				attempts++
+				return nil, tt.err
+			}
+			hakeeperClientRetryInterval = 20 * time.Millisecond
+
+			c := &managedHAKeeperClient{
+				cfg: HAKeeperClientConfig{AllocateIDBatch: 2},
+			}
+			ctx, cancel := context.WithTimeout(context.Background(), 55*time.Millisecond)
+			defer cancel()
+
+			_, err := c.AllocateID(ctx)
+			require.ErrorIs(t, err, context.DeadlineExceeded)
+			require.GreaterOrEqual(t, attempts, 2)
+			require.Less(t, attempts, 10)
+		})
 	}
-	ctx, cancel := context.WithTimeout(context.Background(), 55*time.Millisecond)
-	defer cancel()
-
-	_, err := c.AllocateID(ctx)
-	require.ErrorIs(t, err, context.DeadlineExceeded)
-	require.GreaterOrEqual(t, attempts, 2)
-	require.Less(t, attempts, 10)
 }
 
-func TestAllocateIDRetriesEOFSendError(t *testing.T) {
+func TestAllocateIDRetriesTransportSendError(t *testing.T) {
+	tests := []struct {
+		name string
+		err  error
+	}{
+		{name: "eof", err: io.EOF},
+		{name: "backend closed", err: moerr.NewBackendClosed(context.Background())},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			originalNew := newHAKeeperClientFunc
+			originalSend := sendCNAllocateIDFunc
+			originalRetryInterval := hakeeperClientRetryInterval
+			defer func() {
+				newHAKeeperClientFunc = originalNew
+				sendCNAllocateIDFunc = originalSend
+				hakeeperClientRetryInterval = originalRetryInterval
+			}()
+
+			hakeeperClientRetryInterval = 0
+			clients := []*hakeeperClient{{}, {}}
+			newCalls := 0
+			newHAKeeperClientFunc = func(
+				context.Context,
+				string,
+				HAKeeperClientConfig,
+			) (*hakeeperClient, error) {
+				client := clients[newCalls]
+				newCalls++
+				return client, nil
+			}
+
+			sendCalls := 0
+			sendCNAllocateIDFunc = func(
+				client *hakeeperClient,
+				_ context.Context,
+				key string,
+				batch uint64,
+			) (uint64, error) {
+				sendCalls++
+				require.Same(t, clients[sendCalls-1], client)
+				require.Empty(t, key)
+				require.Equal(t, uint64(2), batch)
+				if sendCalls == 1 {
+					return 0, tt.err
+				}
+				return 42, nil
+			}
+
+			c := &managedHAKeeperClient{
+				cfg: HAKeeperClientConfig{AllocateIDBatch: 2},
+			}
+			ctx, cancel := context.WithTimeout(context.Background(), time.Second)
+			defer cancel()
+			firstID, err := c.AllocateID(ctx)
+			require.NoError(t, err)
+			require.Equal(t, uint64(42), firstID)
+			require.Equal(t, 2, newCalls)
+			require.Equal(t, 2, sendCalls)
+		})
+	}
+}
+
+func TestHAKeeperClientDoesNotRecreateAfterClose(t *testing.T) {
 	originalNew := newHAKeeperClientFunc
 	originalSend := sendCNAllocateIDFunc
 	originalRetryInterval := hakeeperClientRetryInterval
@@ -1437,18 +1546,9 @@ func TestAllocateIDRetriesEOFSendError(t *testing.T) {
 	}()
 
 	hakeeperClientRetryInterval = 0
-	attempts := 0
-	clients := []*hakeeperClient{{}, {}}
-	newHAKeeperClientFunc = func(
-		context.Context,
-		string,
-		HAKeeperClientConfig,
-	) (*hakeeperClient, error) {
-		client := clients[attempts]
-		attempts++
-		return client, nil
-	}
-
+	current := &hakeeperClient{}
+	sendStarted := make(chan struct{})
+	releaseSend := make(chan struct{})
 	sendCalls := 0
 	sendCNAllocateIDFunc = func(
 		client *hakeeperClient,
@@ -1457,25 +1557,71 @@ func TestAllocateIDRetriesEOFSendError(t *testing.T) {
 		batch uint64,
 	) (uint64, error) {
 		sendCalls++
+		require.Same(t, current, client)
 		require.Empty(t, key)
-		require.Equal(t, uint64(2), batch)
-		require.Same(t, clients[sendCalls-1], client)
-		if sendCalls == 1 {
-			return 0, io.EOF
-		}
-		return 42, nil
+		require.Equal(t, uint64(1), batch)
+		close(sendStarted)
+		<-releaseSend
+		return 0, moerr.NewBackendClosed(context.Background())
 	}
 
-	c := &managedHAKeeperClient{
-		cfg: HAKeeperClientConfig{AllocateIDBatch: 2},
+	newCalls := 0
+	newHAKeeperClientFunc = func(
+		context.Context,
+		string,
+		HAKeeperClientConfig,
+	) (*hakeeperClient, error) {
+		newCalls++
+		return &hakeeperClient{}, nil
 	}
+
+	client := &managedHAKeeperClient{
+		cfg: HAKeeperClientConfig{AllocateIDBatch: 1},
+	}
+	client.mu.client = current
 	ctx, cancel := context.WithTimeout(context.Background(), time.Second)
 	defer cancel()
-	firstID, err := c.AllocateID(ctx)
-	require.NoError(t, err)
-	require.Equal(t, uint64(42), firstID)
-	require.Equal(t, 2, attempts)
-	require.Equal(t, 2, sendCalls)
+
+	result := make(chan error, 1)
+	go func() {
+		_, err := client.AllocateID(ctx)
+		result <- err
+	}()
+	<-sendStarted
+
+	require.NoError(t, client.Close())
+	close(releaseSend)
+	err := <-result
+	require.True(t, moerr.IsMoErrCode(err, moerr.ErrClientClosed), err)
+	require.Equal(t, 1, sendCalls)
+	require.Zero(t, newCalls, "a terminally closed client must not recreate its transport")
+}
+
+func TestHAKeeperClientConcurrentCloseJoinsCleanup(t *testing.T) {
+	closeErr := errors.New("close failed")
+	transport := &blockingCloseRPCClient{
+		started:  make(chan struct{}),
+		release:  make(chan struct{}),
+		closeErr: closeErr,
+	}
+	client := &managedHAKeeperClient{}
+	client.mu.client = &hakeeperClient{client: transport}
+
+	firstDone := make(chan error, 1)
+	go func() { firstDone <- client.Close() }()
+	<-transport.started
+	if client.mu.TryLock() {
+		client.mu.Unlock()
+		t.Fatal("Close released the managed lock before inner transport cleanup completed")
+	}
+
+	secondDone := make(chan error, 1)
+	go func() { secondDone <- client.Close() }()
+	close(transport.release)
+
+	require.ErrorIs(t, <-firstDone, closeErr)
+	require.ErrorIs(t, <-secondDone, closeErr,
+		"a concurrent Close must join the cleanup owner and report its result")
 }
 
 func TestAllocateIDByKeyWithRequestIDRetriesLostResponse(t *testing.T) {

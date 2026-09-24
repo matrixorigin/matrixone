@@ -19,6 +19,7 @@ import (
 	"fmt"
 	"time"
 
+	"github.com/matrixorigin/matrixone/pkg/catalog"
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
 	"github.com/matrixorigin/matrixone/pkg/common/mpool"
 	"github.com/matrixorigin/matrixone/pkg/container/types"
@@ -36,12 +37,13 @@ import (
 // reads workspace mutations and cannot observe compaction, spill or rollback halfway
 // through request encoding.
 type workspaceCommitBuilder struct {
-	entries             *workspaceEntrySet
-	droppedTables       workspaceDroppedTables
-	op                  client.TxnOperator
-	service             string
-	syncProtectionJobID string
-	mp                  *mpool.MPool
+	entries                *workspaceEntrySet
+	droppedTables          workspaceDroppedTables
+	op                     client.TxnOperator
+	service                string
+	syncProtectionJobID    string
+	mp                     *mpool.MPool
+	pendingDatabaseCreates map[databaseKey]uint64
 }
 
 func (txn *Transaction) newWorkspaceCommitBuilder() (*workspaceCommitBuilder, error) {
@@ -53,12 +55,13 @@ func (txn *Transaction) newWorkspaceCommitBuilder() (*workspaceCommitBuilder, er
 		return nil, err
 	}
 	return &workspaceCommitBuilder{
-		entries:             entries,
-		droppedTables:       txn.workspace.droppedTablesSnapshot(),
-		op:                  txn.op,
-		service:             txn.proc.GetService(),
-		syncProtectionJobID: txn.syncProtectionJobID,
-		mp:                  txn.proc.Mp(),
+		entries:                entries,
+		droppedTables:          txn.workspace.droppedTablesSnapshot(),
+		op:                     txn.op,
+		service:                txn.proc.GetService(),
+		syncProtectionJobID:    txn.syncProtectionJobID,
+		mp:                     txn.proc.Mp(),
+		pendingDatabaseCreates: txn.pendingCreatedDatabaseWrites(),
 	}, nil
 }
 
@@ -127,6 +130,12 @@ func (b *workspaceCommitBuilder) Build(ctx context.Context) ([]txn.TxnRequest, e
 
 		e.pkChkByTN = pkChkByTN
 		pe, err := toPBEntry(e)
+		if err == nil && len(b.pendingDatabaseCreates) != 0 &&
+			e.typ == INSERT &&
+			e.databaseId == catalog.MO_CATALOG_ID &&
+			e.tableId == catalog.MO_DATABASE_ID {
+			consumeCreatedDatabaseWrites(b.pendingDatabaseCreates, e.bat)
+		}
 		release()
 		if err != nil {
 			return nil, err
@@ -141,6 +150,9 @@ func (b *workspaceCommitBuilder) Build(ctx context.Context) ([]txn.TxnRequest, e
 			pe.TableName = "alter"
 		}
 		entries = append(entries, pe)
+	}
+	if len(b.pendingDatabaseCreates) != 0 {
+		return nil, missingCreatedDatabaseWriteError(ctx, b.pendingDatabaseCreates)
 	}
 
 	if requiresAutoIncrEpochFenceCommit(entries) &&

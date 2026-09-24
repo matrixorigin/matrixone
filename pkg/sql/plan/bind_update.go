@@ -227,7 +227,28 @@ func (builder *QueryBuilder) appendSequentialSingleTableUpdateAssignments(
 
 		column := tableDef.Cols[columnIndex]
 		if isDefaultValExpr(rhs) {
-			rhs, err = getDefaultExpr(builder.GetContext(), column)
+			rhs, err = getDefaultExprForAssignment(builder.GetContext(), column, builder.compCtx.GetProcess(), ignore)
+			if err != nil {
+				return 0, nil, 0, err
+			}
+			currentValues := make(map[int32]*plan.Expr, len(tableDef.Cols))
+			for i := range tableDef.Cols {
+				if i < len(currentProjectList) {
+					// Resolve DEFAULT references against the row image produced by
+					// the preceding assignment projection.  Keeping the raw
+					// expression here would replay a volatile default (for example,
+					// RAND()) instead of reading the value already materialized in
+					// the current row.
+					currentValues[int32(i)] = &plan.Expr{
+						Typ: currentProjectList[i].Typ,
+						Expr: &plan.Expr_Col{Col: &plan.ColRef{
+							RelPos: currentTag,
+							ColPos: int32(i),
+						}},
+					}
+				}
+			}
+			rhs, err = expandDefaultExprWithColumnExprs(builder.GetContext(), rhs, currentValues)
 			if err != nil {
 				return 0, nil, 0, err
 			}
@@ -328,6 +349,7 @@ func (builder *QueryBuilder) bindUpdate(stmt *tree.Update, bindCtx *BindContext)
 	if err := validateUpdateWindowFunctions(builder.compCtx, stmt); err != nil {
 		return 0, err
 	}
+	bindCtx.assignmentIgnore = stmt.Ignore
 
 	dmlCtx := NewDMLContext()
 	err = dmlCtx.ResolveUpdateTables(builder.compCtx, stmt)
@@ -617,7 +639,18 @@ func (builder *QueryBuilder) bindUpdate(stmt *tree.Update, bindCtx *BindContext)
 			if colPos, ok := newColName2Idx[alias+"."+col.Name]; ok {
 				updateExpr := selectNode.ProjectList[colPos]
 				if isDefaultValExpr(updateExpr) { // set col = default
-					updateExpr, err = getDefaultExpr(builder.GetContext(), col)
+					updateExpr, err = getDefaultExprForAssignment(builder.GetContext(), col, builder.compCtx.GetProcess(), stmt.Ignore)
+					if err != nil {
+						return 0, err
+					}
+					oldValues := make(map[int32]*plan.Expr, len(tableDef.Cols))
+					for colIdx, refCol := range tableDef.Cols {
+						if oldPos, exists := oldColName2Idx[alias+"."+refCol.Name]; exists &&
+							oldPos >= 0 && int(oldPos) < len(selectNode.ProjectList) {
+							oldValues[int32(colIdx)] = selectNode.ProjectList[oldPos]
+						}
+					}
+					updateExpr, err = expandDefaultExprWithColumnExprs(builder.GetContext(), updateExpr, oldValues)
 					if err != nil {
 						return 0, err
 					}
@@ -932,10 +965,13 @@ func (builder *QueryBuilder) bindUpdate(stmt *tree.Update, bindCtx *BindContext)
 			if col.GeneratedCol == nil {
 				continue
 			}
-			genExpr := builder.applyGeneratedColumnAssignmentCast(
+			genExpr, err := builder.applyGeneratedColumnAssignmentCast(
 				DeepCopyExpr(col.GeneratedCol.Expr),
 				stmt.Ignore,
 			)
+			if err != nil {
+				return 0, err
+			}
 			genExpr = substituteColRefsInExpr(genExpr, selectNode.ProjectList, colOffsets[i])
 
 			oldPos := oldColName2Idx[alias+"."+col.Name]
@@ -1723,10 +1759,13 @@ func (builder *QueryBuilder) bindUpdate(stmt *tree.Update, bindCtx *BindContext)
 				if col.GeneratedCol == nil {
 					continue
 				}
-				genExpr := builder.applyGeneratedColumnAssignmentCast(
+				genExpr, err := builder.applyGeneratedColumnAssignmentCast(
 					DeepCopyExpr(col.GeneratedCol.Expr),
 					stmt.Ignore,
 				)
+				if err != nil {
+					return 0, err
+				}
 				genExpr = substituteColRefsInExpr(genExpr, selectNode.ProjectList, colOffsets[ownerIdx])
 				generatedPos, ok := newColName2Idx[ownerAlias+"."+col.Name]
 				if !ok || generatedPos < 0 || int(generatedPos) >= len(selectNode.ProjectList) {
@@ -2299,6 +2338,8 @@ func (builder *QueryBuilder) bindUpdate(stmt *tree.Update, bindCtx *BindContext)
 		if builder.fullTableUpdateLockTargets == nil {
 			builder.fullTableUpdateLockTargets = make(map[*plan.LockTarget]struct{}, len(lockTargets))
 		}
+		builder.fullTableUpdateSourceTableID = dmlCtx.tableDefs[0].TblId
+		builder.hasFullTableUpdateSourceTableID = true
 		for _, target := range lockTargets {
 			if target.Mode == lockpb.LockMode_Exclusive {
 				builder.fullTableUpdateLockTargets[target] = struct{}{}
@@ -2380,9 +2421,11 @@ func (builder *QueryBuilder) bindUpdate(stmt *tree.Update, bindCtx *BindContext)
 			localProjList[deletePkPos].Typ,
 			rowNumberPos,
 			activePos,
+			-1,
 			indexes,
 			nil,
 			-1,
+			nil,
 			tableDef,
 			dmlCtx.objRefs[i],
 		)
@@ -2392,15 +2435,16 @@ func (builder *QueryBuilder) bindUpdate(stmt *tree.Update, bindCtx *BindContext)
 		builder.irregularUpdateMaints = append(
 			builder.irregularUpdateMaints,
 			irregularUpdateMaintenance{
-				sourceStep:           builder.irregularMaintSourceStep,
-				deleteStep:           builder.irregularMaintDeleteStep,
-				deletePkPos:          builder.irregularMaintDeletePkPos,
-				deletePkTyp:          builder.irregularMaintDeletePkTyp,
-				indexes:              builder.irregularMaintIndexes,
-				insertOnlySourceStep: builder.irregularMaintInsertOnlySourceStep,
-				insertOnlyIndexes:    builder.irregularMaintInsertOnlyIndexes,
-				tableDef:             builder.irregularMaintTableDef,
-				objRef:               builder.irregularMaintObjRef,
+				sourceStep:              builder.irregularMaintSourceStep,
+				deleteStep:              builder.irregularMaintDeleteStep,
+				deletePkPos:             builder.irregularMaintDeletePkPos,
+				deletePkTyp:             builder.irregularMaintDeletePkTyp,
+				indexes:                 builder.irregularMaintIndexes,
+				insertOnlySourceStep:    builder.irregularMaintInsertOnlySourceStep,
+				insertOnlyIndexes:       builder.irregularMaintInsertOnlyIndexes,
+				valueChangedSourceSteps: builder.irregularMaintValueChangedSourceSteps,
+				tableDef:                builder.irregularMaintTableDef,
+				objRef:                  builder.irregularMaintObjRef,
 			},
 		)
 	}
@@ -3418,10 +3462,13 @@ func (builder *QueryBuilder) recomputeMergedPhysicalTargetGeneratedColumns(
 				ownerAlias,
 			)
 		}
-		genExpr := builder.applyGeneratedColumnAssignmentCast(
+		genExpr, err := builder.applyGeneratedColumnAssignmentCast(
 			DeepCopyExpr(col.GeneratedCol.Expr),
 			true,
 		)
+		if err != nil {
+			return err
+		}
 		selectNode.ProjectList[generatedPos] = substituteColRefsInExpr(
 			genExpr,
 			generatedInputs,
@@ -4297,6 +4344,7 @@ func (builder *QueryBuilder) appendTargetRowNumberBelowAssignmentProject(
 		WinSpecList: []*plan.Expr{rowNumberExpr},
 		WindowIdx:   0,
 		BindingTags: []int32{windowTag},
+		SpillMem:    builder.sortSpillMem,
 	}, bindCtx)
 	selectNode.Children[0] = windowID
 
@@ -4781,6 +4829,7 @@ func (builder *QueryBuilder) appendTargetRowNumberNode(
 		WinSpecList: []*plan.Expr{rowNumberExpr},
 		WindowIdx:   0,
 		BindingTags: []int32{windowTag},
+		SpillMem:    builder.sortSpillMem,
 	}, bindCtx)
 
 	rowNumberProjectPos := int32(len(selectNode.ProjectList))
@@ -4995,6 +5044,7 @@ func (builder *QueryBuilder) appendRowNumberGuardNode(
 		WinSpecList: []*plan.Expr{rowNumberExpr},
 		WindowIdx:   rowNumberIdx,
 		BindingTags: []int32{windowTag},
+		SpillMem:    builder.sortSpillMem,
 	}, bindCtx)
 
 	windowProjectTag := builder.genNewBindTag()

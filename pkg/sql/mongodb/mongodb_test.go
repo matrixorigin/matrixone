@@ -35,6 +35,8 @@ import (
 	planpb "github.com/matrixorigin/matrixone/pkg/pb/plan"
 	"github.com/matrixorigin/matrixone/pkg/sql/parsers/dialect/mysql"
 	"github.com/matrixorigin/matrixone/pkg/sql/parsers/tree"
+	metric "github.com/matrixorigin/matrixone/pkg/util/metric/v2"
+	"github.com/prometheus/client_golang/prometheus/testutil"
 	"github.com/stretchr/testify/require"
 	"go.mongodb.org/mongo-driver/v2/bson"
 	"go.mongodb.org/mongo-driver/v2/mongo/options"
@@ -997,6 +999,42 @@ func TestConverterNestedPathDistinguishesMissingAndInvalidTraversal(t *testing.T
 	require.Equal(t, int64(1), tryNull.ConversionErrors())
 	bat.Clean(mp)
 	require.Zero(t, mp.CurrNB())
+}
+
+func TestConverterConversionErrorMetricCountsStrictAndTryNull(t *testing.T) {
+	mp := mpool.MustNewZero()
+	t.Cleanup(func() { require.Zero(t, mp.CurrNB()) })
+
+	raw, err := bson.Marshal(bson.D{{Key: "value", Value: "not-an-int"}})
+	require.NoError(t, err)
+	validRaw, err := bson.Marshal(bson.D{{Key: "value", Value: int64(7)}})
+	require.NoError(t, err)
+
+	strict, err := NewConverter(t.Context(), []ColumnMapping{{
+		Name: "value", Path: "value", TypeID: int32(types.T_int64),
+	}}, 1024)
+	require.NoError(t, err)
+	strictBatch := strict.NewBatch()
+	t.Cleanup(func() { strictBatch.Clean(mp) })
+
+	strictBefore := testutil.ToFloat64(metric.MongoDBConversionErrorCounter)
+	require.NoError(t, strict.AppendDocument(t.Context(), strictBatch, validRaw, mp))
+	require.Equal(t, strictBefore, testutil.ToFloat64(metric.MongoDBConversionErrorCounter))
+	require.ErrorContains(t, strict.AppendDocument(t.Context(), strictBatch, raw, mp), "cannot be converted")
+	require.Equal(t, strictBefore+1, testutil.ToFloat64(metric.MongoDBConversionErrorCounter))
+	require.Equal(t, 1, strictBatch.RowCount())
+
+	tryNull, err := NewConverter(t.Context(), []ColumnMapping{{
+		Name: "value", Path: "value", TypeID: int32(types.T_int64), Conversion: ConversionTryNull,
+	}}, 1024)
+	require.NoError(t, err)
+	tryNullBatch := tryNull.NewBatch()
+	t.Cleanup(func() { tryNullBatch.Clean(mp) })
+
+	tryNullBefore := testutil.ToFloat64(metric.MongoDBConversionErrorCounter)
+	require.NoError(t, tryNull.AppendDocument(t.Context(), tryNullBatch, raw, mp))
+	require.Equal(t, tryNullBefore+1, testutil.ToFloat64(metric.MongoDBConversionErrorCounter))
+	require.Equal(t, int64(1), tryNull.ConversionErrors())
 }
 
 func TestConverterMpoolFailureLeavesNoPartialRow(t *testing.T) {

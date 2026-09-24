@@ -47,7 +47,15 @@ func (p *SnapshotProvider) PrepareSnapshotRead(ctx context.Context, read substra
 	return p.prepareSnapshotRead(ctx, read, snapshot, substrait.MaxManifestBytes)
 }
 
+func (p *SnapshotProvider) PrepareSnapshotReadBounded(ctx context.Context, read substrait.Read, snapshot []byte, maximum int) (substrait.SnapshotFacts, error) {
+	return p.prepareSnapshotReadWithLimit(ctx, read, snapshot, maximum, true)
+}
+
 func (p *SnapshotProvider) prepareSnapshotRead(ctx context.Context, read substrait.Read, snapshot []byte, maximum int) (substrait.SnapshotFacts, error) {
+	return p.prepareSnapshotReadWithLimit(ctx, read, snapshot, maximum, false)
+}
+
+func (p *SnapshotProvider) prepareSnapshotReadWithLimit(ctx context.Context, read substrait.Read, snapshot []byte, maximum int, includeObjectDescriptors bool) (substrait.SnapshotFacts, error) {
 	var rejected substrait.SnapshotFacts
 	if p == nil || p.MPool == nil || len(snapshot) != types.TxnTsSize || maximum <= 0 || maximum > substrait.MaxManifestBytes {
 		return rejected, moerr.NewInternalErrorNoCtxf("invalid TAE snapshot provider")
@@ -124,7 +132,7 @@ func (p *SnapshotProvider) prepareSnapshotRead(ctx context.Context, read substra
 		return rejected, nil
 	}
 
-	builder, err := newManifestBuilder(def, read.AccountID, read.DatabaseID, p.DataDir, maximum)
+	builder, err := newManifestBuilderWithObjectDescriptors(def, read.AccountID, read.DatabaseID, p.DataDir, maximum, includeObjectDescriptors)
 	if err != nil {
 		return rejected, err
 	}
@@ -200,14 +208,20 @@ type manifestStats struct {
 }
 
 type manifestBuilder struct {
-	manifest    manifest
-	maximum     int
-	emptySize   int
-	objectBytes int
-	rows        uint64
+	manifest                 manifest
+	maximum                  int
+	emptySize                int
+	objectBytes              int
+	objectDescriptorBytes    int
+	includeObjectDescriptors bool
+	rows                     uint64
 }
 
 func newManifestBuilder(def *planpb.TableDef, accountID, databaseID uint64, dataDir string, maximum int) (*manifestBuilder, error) {
+	return newManifestBuilderWithObjectDescriptors(def, accountID, databaseID, dataDir, maximum, false)
+}
+
+func newManifestBuilderWithObjectDescriptors(def *planpb.TableDef, accountID, databaseID uint64, dataDir string, maximum int, includeObjectDescriptors bool) (*manifestBuilder, error) {
 	if def == nil {
 		return nil, moerr.NewInternalErrorNoCtxf("nil table definition")
 	}
@@ -232,7 +246,7 @@ func newManifestBuilder(def *planpb.TableDef, accountID, databaseID uint64, data
 	if len(empty) > maximum {
 		return nil, substrait.NotEligible(substrait.EligibilitySnapshot, fmt.Sprintf("manifest metadata is %d bytes, maximum is %d", len(empty), maximum))
 	}
-	return &manifestBuilder{manifest: m, maximum: maximum, emptySize: len(empty)}, nil
+	return &manifestBuilder{manifest: m, maximum: maximum, emptySize: len(empty), includeObjectDescriptors: includeObjectDescriptors}, nil
 }
 
 func (b *manifestBuilder) add(stats objectio.ObjectStats) error {
@@ -258,13 +272,23 @@ func (b *manifestBuilder) add(stats objectio.ObjectStats) error {
 	if nextObjects > 1 {
 		nextObjectBytes++
 	}
-	projected := b.emptySize - len("[]") + nextObjectBytes + decimalGrowth(uint64(nextRows)) + decimalGrowth(uint64(nextObjects)) + decimalGrowth(nextSize)
-	if projected > b.maximum {
+	// emptySize already includes the two JSON array brackets. Replacing the
+	// empty contents adds object bytes and separators without removing them.
+	projectedManifest := b.emptySize + nextObjectBytes + decimalGrowth(uint64(nextRows)) + decimalGrowth(uint64(nextObjects)) + decimalGrowth(nextSize)
+	nextDescriptorBytes := b.objectDescriptorBytes
+	if b.includeObjectDescriptors {
+		if len(name) > b.maximum-16-nextDescriptorBytes {
+			return substrait.NotEligible(substrait.EligibilitySnapshot, fmt.Sprintf("manifest and descriptors exceed maximum of %d bytes", b.maximum))
+		}
+		nextDescriptorBytes += 16 + len(name)
+	}
+	if projectedManifest > b.maximum-nextDescriptorBytes {
 		return substrait.NotEligible(substrait.EligibilitySnapshot, fmt.Sprintf("manifest exceeds maximum of %d bytes", b.maximum))
 	}
 	b.manifest.Objects = append(b.manifest.Objects, obj)
 	b.manifest.Stats = manifestStats{TotalRows: nextRows, TotalObjects: nextObjects, TotalSize: nextSize}
 	b.objectBytes = nextObjectBytes
+	b.objectDescriptorBytes = nextDescriptorBytes
 	b.rows += uint64(obj.Rows)
 	return nil
 }
@@ -279,11 +303,13 @@ func (b *manifestBuilder) finish() ([]byte, []string, error) {
 	if err != nil {
 		return nil, nil, err
 	}
-	if len(encoded) > b.maximum {
+	if len(encoded) > b.maximum-b.objectDescriptorBytes {
 		return nil, nil, substrait.NotEligible(substrait.EligibilitySnapshot, fmt.Sprintf("manifest is %d bytes, maximum is %d", len(encoded), b.maximum))
 	}
 	return encoded, names, nil
 }
+
+var _ substrait.BoundedSnapshotProvider = (*SnapshotProvider)(nil)
 
 func decimalGrowth(value uint64) int {
 	digits := 1

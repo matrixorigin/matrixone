@@ -107,6 +107,52 @@ func TestCollectGeneratedColumnDependentsRejectsInvalidColPos(t *testing.T) {
 	}
 }
 
+func TestODKUAffectedActionConstraints(t *testing.T) {
+	tableDef := generatedDependencyTestTable()
+	for i, col := range tableDef.Cols {
+		col.ColId = uint64(i + 1)
+	}
+	tableDef.Checks = []*planpb.CheckDef{
+		{Name: "source_check", Check: generatedColumnRefExpr(tableDef.Cols[0].Typ, 0, "source")},
+		{Name: "generated_check", Check: generatedColumnRefExpr(tableDef.Cols[2].Typ, 2, "tail")},
+		{Name: "unrelated_check", Check: generatedColumnRefExpr(tableDef.Cols[5].Typ, 5, "other")},
+		{Name: "constant_check", Check: makePlan2BoolConstExprWithType(true)},
+	}
+	tableDef.Fkeys = []*planpb.ForeignKeyDef{
+		{Name: "composite_affected", Cols: []uint64{tableDef.Cols[1].ColId, tableDef.Cols[5].ColId}, ForeignTbl: 10},
+		{Name: "unrelated", Cols: []uint64{tableDef.Cols[4].ColId}, ForeignTbl: 11},
+		{Name: "self", Cols: []uint64{tableDef.Cols[0].ColId}, ForeignTbl: 0},
+	}
+	changed, err := collectGeneratedColumnDependents(
+		context.Background(), tableDef, map[string]struct{}{"source": {}},
+	)
+	require.NoError(t, err)
+
+	filtered, err := odkuAffectedActionConstraints(context.Background(), tableDef, changed, true)
+	require.NoError(t, err)
+	require.Equal(t, []string{"source_check", "generated_check"},
+		[]string{filtered.Checks[0].Name, filtered.Checks[1].Name})
+	require.Equal(t, []string{"composite_affected"}, []string{filtered.Fkeys[0].Name})
+	require.Len(t, tableDef.Checks, 4, "filtering must not mutate catalog-owned metadata")
+	require.Len(t, tableDef.Fkeys, 3)
+
+	withoutFKs, err := odkuAffectedActionConstraints(context.Background(), tableDef, changed, false)
+	require.NoError(t, err)
+	require.Empty(t, withoutFKs.Fkeys)
+}
+
+func TestODKUAffectedActionConstraintsRejectsMalformedMetadata(t *testing.T) {
+	tableDef := generatedDependencyTestTable()
+	tableDef.Checks = []*planpb.CheckDef{{Name: "bad", Check: generatedColumnRefExpr(tableDef.Cols[0].Typ, 99, "bad")}}
+	_, err := odkuAffectedActionConstraints(context.Background(), tableDef, map[string]struct{}{"source": {}}, true)
+	require.ErrorContains(t, err, "invalid column position")
+
+	tableDef.Checks = nil
+	tableDef.Fkeys = []*planpb.ForeignKeyDef{{Name: "bad_fk", Cols: []uint64{99}, ForeignTbl: 10}}
+	_, err = odkuAffectedActionConstraints(context.Background(), tableDef, map[string]struct{}{"source": {}}, true)
+	require.ErrorContains(t, err, "cannot locate foreign-key column")
+}
+
 func registerMockGeneratedIndexTable(t *testing.T, mock *MockOptimizer, base *planpb.TableDef, indexTableName string, keyCol *planpb.ColDef) {
 	t.Helper()
 	primaryCol := base.Cols[mockTableColPos(t, base, base.Pkey.PkeyColName)]
@@ -195,8 +241,9 @@ func configureMockGeneratedIndex(t *testing.T, mock *MockOptimizer, unique bool)
 	generatedCol := base.Cols[generatedPos]
 	generatedCol.Typ = sourceCol.Typ
 	generatedCol.GeneratedCol = &planpb.GeneratedCol{
-		Expr:     generatedColumnRefExpr(sourceCol.Typ, sourcePos, sourceCol.Name),
-		IsStored: true,
+		Expr:         generatedColumnRefExpr(sourceCol.Typ, sourcePos, sourceCol.Name),
+		IsStored:     true,
+		OriginString: "val",
 	}
 	// Keep this fixture focused on explicit ODKU dependencies rather than the
 	// separate ON UPDATE no-op behavior covered by bind_upsert_affect_rows_test.go.
@@ -205,7 +252,7 @@ func configureMockGeneratedIndex(t *testing.T, mock *MockOptimizer, unique bool)
 	indexTableName := catalog.SecondaryIndexTableNamePrefix + "odku-generated-g"
 	base.Indexes = []*planpb.IndexDef{{
 		IndexName:      "idx_generated_g",
-		Parts:          []string{catalog.CreateAlias("g")},
+		Parts:          []string{"g"},
 		Unique:         unique,
 		IndexTableName: indexTableName,
 		TableExist:     true,
@@ -221,8 +268,9 @@ func configureMockGeneratedPrimaryKey(t *testing.T, mock *MockOptimizer) {
 	sourcePos := mockTableColPos(t, base, "val")
 	idCol := base.Cols[mockTableColPos(t, base, "id")]
 	idCol.GeneratedCol = &planpb.GeneratedCol{
-		Expr:     generatedColumnRefExpr(idCol.Typ, sourcePos, "val"),
-		IsStored: true,
+		Expr:         generatedColumnRefExpr(idCol.Typ, sourcePos, "val"),
+		IsStored:     true,
+		OriginString: "val",
 	}
 	base.Cols[mockTableColPos(t, base, "updated_at")].OnUpdate = nil
 	base.Indexes = nil

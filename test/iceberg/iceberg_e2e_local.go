@@ -127,6 +127,12 @@ func main() {
 		_ = writeRunSummary(cfg.ReportDir, summary)
 		fatal(err)
 	}
+	// Keep the successful seed in the report as well. The E2E artifact contract
+	// requires one complete report directory for every case, including the setup
+	// phase that supplies the catalog tables for the SQL scenarios below.
+	if err := recordSuccessfulRESTSeed(cfg.ReportDir, &summary); err != nil {
+		fatal(err)
+	}
 
 	db, err := sql.Open("mysql", cfg.DSN)
 	if err != nil {
@@ -862,6 +868,12 @@ func waitForLifecycleFaultWaiters(ctx context.Context, db *sql.DB, waitersPoint 
 	ticker := time.NewTicker(10 * time.Millisecond)
 	defer ticker.Stop()
 	for {
+		// A slow query or instrumented test run can make the ticker and
+		// context deadline ready at the same time. Do not start another
+		// database poll after the context has expired.
+		if err := ctx.Err(); err != nil {
+			return err
+		}
 		rows, err := queryLines(ctx, db, fmt.Sprintf("select trigger_fault_point(%s)", sqlString(waitersPoint)))
 		if err != nil {
 			return err
@@ -1543,6 +1555,30 @@ func passedCase(id, name string, sqls, expected, actual []string, details map[st
 
 func failedCase(id, name string, sqls, expected, actual []string, msg string) caseResult {
 	return caseResult{ID: id, Name: name, Status: "failed", SQL: sqls, Expected: expected, Actual: actual, Error: msg}
+}
+
+func recordSuccessfulRESTSeed(reportDir string, summary *runSummary) error {
+	if summary == nil {
+		return errors.New("record REST seed: run summary is nil")
+	}
+	if strings.TrimSpace(reportDir) == "" {
+		return errors.New("record REST seed: report directory is empty")
+	}
+	result := passedCase(
+		"ICE-CI-E2E-000",
+		"rest-seed",
+		[]string{"seed Iceberg REST catalog tables"},
+		[]string{"seed completed"},
+		[]string{"seed completed"},
+		nil,
+	)
+	if err := writeCaseReport(reportDir, result); err != nil {
+		return fmt.Errorf("write REST seed report: %w", err)
+	}
+	// Do not advertise a completed case in the run summary until its artifact
+	// has been written successfully.
+	summary.Cases = append(summary.Cases, result)
+	return nil
 }
 
 func writeCaseReport(reportDir string, result caseResult) error {

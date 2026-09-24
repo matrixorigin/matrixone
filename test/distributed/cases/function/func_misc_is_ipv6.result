@@ -18,7 +18,10 @@ valid_ipv6_5
 1
 SELECT IS_IPV6('::ffff:192.168.1.1') AS valid_ipv6_6;  -- IPv4-mapped IPv6
 valid_ipv6_6
-0
+1
+SELECT IS_IPV6('::ffff:192.168.001.001') AS mapped_ipv6_leading_zeroes;
+mapped_ipv6_leading_zeroes
+1
 SELECT IS_IPV6('invalid') AS invalid1;
 invalid1
 0
@@ -90,7 +93,7 @@ compressed_ipv6
 1
 SELECT IS_IPV6('::ffff:192.168.1.1') AS ipv4_mapped;
 ipv4_mapped
-0
+1
 SELECT IS_IPV6('fe80::1%lo0') AS ipv6_with_zone;  -- May or may not be valid depending on implementation
 ipv6_with_zone
 0

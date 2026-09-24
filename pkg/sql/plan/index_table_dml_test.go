@@ -147,7 +147,7 @@ func TestAppendDedupAndMultiUpdateNodesForBindInsert_CompositeUniqueLockKeyMater
 	dmlCtx.objRefs = []*planpb.ObjectRef{objRef}
 	dmlCtx.tableDefs = []*planpb.TableDef{tableDef}
 
-	lastNodeID, colName2Idx, skipUniqueIdx, err := builder.initInsertReplaceStmt(
+	lastNodeID, colName2Idx, skipUniqueIdx, _, err := builder.initInsertReplaceStmt(
 		bindCtx, stmt.Rows, stmt.Columns, dmlCtx.objRefs[0], dmlCtx.tableDefs[0], false, false,
 	)
 	require.NoError(t, err)
@@ -163,7 +163,7 @@ func TestAppendDedupAndMultiUpdateNodesForBindInsert_CompositeUniqueLockKeyMater
 	require.True(t, forced)
 
 	_, err = builder.appendDedupAndMultiUpdateNodesForBindInsert(
-		bindCtx, dmlCtx, lastNodeID, colName2Idx, skipUniqueIdx, nil, nil,
+		bindCtx, dmlCtx, lastNodeID, colName2Idx, skipUniqueIdx, nil, nil, -1,
 	)
 	require.NoError(t, err)
 }
@@ -187,7 +187,7 @@ func TestAppendDedupAndMultiUpdateNodesForBindInsert_SingleUniqueMissingCol(t *t
 	dmlCtx.objRefs = []*planpb.ObjectRef{objRef}
 	dmlCtx.tableDefs = []*planpb.TableDef{tableDef}
 
-	lastNodeID, colName2Idx, skipUniqueIdx, err := builder.initInsertReplaceStmt(
+	lastNodeID, colName2Idx, skipUniqueIdx, _, err := builder.initInsertReplaceStmt(
 		bindCtx, stmt.Rows, stmt.Columns, dmlCtx.objRefs[0], dmlCtx.tableDefs[0], false, false,
 	)
 	require.NoError(t, err)
@@ -195,7 +195,7 @@ func TestAppendDedupAndMultiUpdateNodesForBindInsert_SingleUniqueMissingCol(t *t
 	delete(colName2Idx, tableDef.Name+".dname")
 
 	_, err = builder.appendDedupAndMultiUpdateNodesForBindInsert(
-		bindCtx, dmlCtx, lastNodeID, colName2Idx, skipUniqueIdx, nil, nil,
+		bindCtx, dmlCtx, lastNodeID, colName2Idx, skipUniqueIdx, nil, nil, -1,
 	)
 	require.Error(t, err)
 	require.Contains(t, err.Error(), "can not find colName = dname")
@@ -220,7 +220,7 @@ func TestAppendDedupAndMultiUpdateNodesForBindInsert_CompositeUniqueMissingPartI
 	dmlCtx.objRefs = []*planpb.ObjectRef{objRef}
 	dmlCtx.tableDefs = []*planpb.TableDef{tableDef}
 
-	lastNodeID, colName2Idx, skipUniqueIdx, err := builder.initInsertReplaceStmt(
+	lastNodeID, colName2Idx, skipUniqueIdx, _, err := builder.initInsertReplaceStmt(
 		bindCtx, stmt.Rows, stmt.Columns, dmlCtx.objRefs[0], dmlCtx.tableDefs[0], false, false,
 	)
 	require.NoError(t, err)
@@ -236,7 +236,7 @@ func TestAppendDedupAndMultiUpdateNodesForBindInsert_CompositeUniqueMissingPartI
 	delete(colName2Idx, tableDef.Name+".job")
 
 	_, err = builder.appendDedupAndMultiUpdateNodesForBindInsert(
-		bindCtx, dmlCtx, lastNodeID, colName2Idx, skipUniqueIdx, nil, nil,
+		bindCtx, dmlCtx, lastNodeID, colName2Idx, skipUniqueIdx, nil, nil, -1,
 	)
 	require.Error(t, err)
 	require.Contains(t, err.Error(), "can not find colName = job")
@@ -261,7 +261,7 @@ func TestAppendDedupAndMultiUpdateNodesForBindInsert_CompositeUniqueMissingPartI
 	dmlCtx.objRefs = []*planpb.ObjectRef{objRef}
 	dmlCtx.tableDefs = []*planpb.TableDef{tableDef}
 
-	lastNodeID, colName2Idx, skipUniqueIdx, err := builder.initInsertReplaceStmt(
+	lastNodeID, colName2Idx, skipUniqueIdx, _, err := builder.initInsertReplaceStmt(
 		bindCtx, stmt.Rows, stmt.Columns, dmlCtx.objRefs[0], dmlCtx.tableDefs[0], false, false,
 	)
 	require.NoError(t, err)
@@ -275,7 +275,7 @@ func TestAppendDedupAndMultiUpdateNodesForBindInsert_CompositeUniqueMissingPartI
 	delete(colName2Idx, tableDef.Name+".job")
 
 	_, err = builder.appendDedupAndMultiUpdateNodesForBindInsert(
-		bindCtx, dmlCtx, lastNodeID, colName2Idx, skipUniqueIdx, nil, nil,
+		bindCtx, dmlCtx, lastNodeID, colName2Idx, skipUniqueIdx, nil, nil, -1,
 	)
 	require.Error(t, err)
 	require.Contains(t, err.Error(), "can not find colName = job")
@@ -300,7 +300,7 @@ func TestAppendDedupAndMultiUpdateNodesForBindInsert_SecondaryIndexMissingPart(t
 	dmlCtx.objRefs = []*planpb.ObjectRef{objRef}
 	dmlCtx.tableDefs = []*planpb.TableDef{tableDef}
 
-	lastNodeID, colName2Idx, skipUniqueIdx, err := builder.initInsertReplaceStmt(
+	lastNodeID, colName2Idx, skipUniqueIdx, _, err := builder.initInsertReplaceStmt(
 		bindCtx, stmt.Rows, stmt.Columns, dmlCtx.objRefs[0], dmlCtx.tableDefs[0], false, false,
 	)
 	require.NoError(t, err)
@@ -308,7 +308,7 @@ func TestAppendDedupAndMultiUpdateNodesForBindInsert_SecondaryIndexMissingPart(t
 	delete(colName2Idx, tableDef.Name+".loc")
 
 	_, err = builder.appendDedupAndMultiUpdateNodesForBindInsert(
-		bindCtx, dmlCtx, lastNodeID, colName2Idx, skipUniqueIdx, nil, nil,
+		bindCtx, dmlCtx, lastNodeID, colName2Idx, skipUniqueIdx, nil, nil, -1,
 	)
 	require.Error(t, err)
 	require.Contains(t, err.Error(), "can not find colName = loc")
@@ -472,7 +472,7 @@ func TestBindReplaceWithUniqueSecondaryIndex(t *testing.T) {
 	}
 	require.True(t, hasUnique, "dept table is expected to have a unique secondary index")
 
-	lastNodeID, colName2Idx, skipUniqueIdx, err := builder.initInsertReplaceStmt(
+	lastNodeID, colName2Idx, skipUniqueIdx, _, err := builder.initInsertReplaceStmt(
 		bindCtx, stmt.Rows, stmt.Columns, dmlCtx.objRefs[0], dmlCtx.tableDefs[0], true, false,
 	)
 	require.NoError(t, err)
@@ -508,7 +508,7 @@ func TestBindReplaceWithCompositeUniqueIndex(t *testing.T) {
 	dmlCtx.objRefs = []*planpb.ObjectRef{objRef}
 	dmlCtx.tableDefs = []*planpb.TableDef{tableDef}
 
-	lastNodeID, colName2Idx, skipUniqueIdx, err := builder.initInsertReplaceStmt(
+	lastNodeID, colName2Idx, skipUniqueIdx, _, err := builder.initInsertReplaceStmt(
 		bindCtx, stmt.Rows, stmt.Columns, dmlCtx.objRefs[0], dmlCtx.tableDefs[0], true, false,
 	)
 	require.NoError(t, err)
@@ -543,7 +543,7 @@ func TestBindReplaceSkipsUniqueIndexForStaticNull(t *testing.T) {
 	require.Len(t, tableDef.Indexes, 1)
 	require.True(t, tableDef.Indexes[0].Unique)
 
-	lastNodeID, colName2Idx, skipUniqueIdx, err := builder.initInsertReplaceStmt(
+	lastNodeID, colName2Idx, skipUniqueIdx, _, err := builder.initInsertReplaceStmt(
 		bindCtx, stmt.Rows, stmt.Columns, dmlCtx.objRefs[0], dmlCtx.tableDefs[0], true, false,
 	)
 	require.NoError(t, err)
@@ -605,7 +605,7 @@ func TestBindReplaceSkipsCompositeUniqueIndexForAnyStaticNull(t *testing.T) {
 			require.Len(t, tableDef.Indexes, 1)
 			require.True(t, tableDef.Indexes[0].Unique)
 
-			lastNodeID, colName2Idx, skipUniqueIdx, err := builder.initInsertReplaceStmt(
+			lastNodeID, colName2Idx, skipUniqueIdx, _, err := builder.initInsertReplaceStmt(
 				bindCtx, stmt.Rows, stmt.Columns, dmlCtx.objRefs[0], dmlCtx.tableDefs[0], true, false,
 			)
 			require.NoError(t, err)

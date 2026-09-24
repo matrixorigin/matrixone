@@ -114,11 +114,12 @@ type s3WriterDelegate struct {
 	batchSize      uint64
 	flushThreshold uint64
 
-	checkSizeCols   []int
-	buf             bytes.Buffer
-	addAffectedRows func(uint64)
-	seenTargetRows  map[uint64]*hashmap.StrHashMap
-	admitSeenGrowth func(int64) error
+	checkSizeCols    []int
+	buf              bytes.Buffer
+	addAffectedRows  func(uint64)
+	takeAffectedRows func() uint64
+	seenTargetRows   map[uint64]*hashmap.StrHashMap
+	admitSeenGrowth  func(int64) error
 
 	memController struct {
 		grantedSize int64
@@ -150,6 +151,7 @@ func newS3Writer(
 		isRemote:            update.IsRemote,
 		rejectZeroTemporal:  update.RejectZeroTemporal,
 		addAffectedRows:     update.addAffectedRowsFunc,
+		takeAffectedRows:    update.takeS3AffectedRowsFunc,
 		seenTargetRows:      update.ctr.seenTargetRows,
 		admitSeenGrowth:     update.admitSeenTargetRowsGrowth,
 	}
@@ -197,6 +199,7 @@ func (writer *s3WriterDelegate) refreshSelectorState(update *MultiUpdate) {
 	writer.seenTargetRows = update.ctr.seenTargetRows
 	writer.admitSeenGrowth = update.admitSeenTargetRowsGrowth
 	writer.addAffectedRows = update.addAffectedRowsFunc
+	writer.takeAffectedRows = update.takeS3AffectedRowsFunc
 }
 
 func s3WriterAction(updateCtxs []*MultiUpdateCtx) actionType {
@@ -873,6 +876,19 @@ func (writer *s3WriterDelegate) flushTailAndWriteToOutput(proc *process.Process,
 		}
 	}
 
+	// Logical ODKU counts are independent of physical blocks: a pure no-op can
+	// have a non-zero CLIENT_FOUND_ROWS result, and parallel writers may be
+	// hidden below merge PreScopes. Emit one control record from the shared
+	// pending owner; the first flushable writer drains it and later writers see
+	// zero. The final FlushS3Info operator then counts it exactly once.
+	if writer.takeAffectedRows != nil {
+		if affectedRows := writer.takeAffectedRows(); affectedRows > 0 {
+			if err = writer.addAffectedRowsToOutput(mp, affectedRows); err != nil {
+				return
+			}
+		}
+	}
+
 	return nil
 }
 
@@ -1014,9 +1030,33 @@ func (writer *s3WriterDelegate) addBatchToOutput(
 	return
 }
 
+func (writer *s3WriterDelegate) addAffectedRowsToOutput(
+	mp *mpool.MPool,
+	affectedRows uint64,
+) (err error) {
+	output := writer.outputBat
+	if err = vector.AppendFixed(output.Vecs[0], uint8(actionAffectedRows), false, mp); err != nil {
+		return
+	}
+	if err = vector.AppendFixed(output.Vecs[1], uint64(0), false, mp); err != nil {
+		return
+	}
+	if err = vector.AppendFixed(output.Vecs[2], affectedRows, false, mp); err != nil {
+		return
+	}
+	if err = vector.AppendBytes(output.Vecs[3], nil, false, mp); err != nil {
+		return
+	}
+	if err = vector.AppendBytes(output.Vecs[4], nil, false, mp); err != nil {
+		return
+	}
+	output.SetRowCount(output.Vecs[0].Length())
+	return
+}
+
 func makeS3OutputBatch() *batch.Batch {
 	bat := batch.NewOffHeapWithSize(5)
-	bat.Vecs[0] = vector.NewOffHeapVecWithType(types.T_uint8.ToType())   // action type  0=actionInsert, 1=actionDelete
+	bat.Vecs[0] = vector.NewOffHeapVecWithType(types.T_uint8.ToType())   // actionInsert/actionDelete/actionAffectedRows
 	bat.Vecs[1] = vector.NewOffHeapVecWithType(types.T_uint64.ToType())  // tableID
 	bat.Vecs[2] = vector.NewOffHeapVecWithType(types.T_uint64.ToType())  // rowCount of s3 blocks
 	bat.Vecs[3] = vector.NewOffHeapVecWithType(types.T_varchar.ToType()) // name for delete. empty for insert

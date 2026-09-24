@@ -29,8 +29,6 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/frontend/databranchutils"
 	"github.com/matrixorigin/matrixone/pkg/iscp"
 	"github.com/matrixorigin/matrixone/pkg/logutil"
-	"github.com/matrixorigin/matrixone/pkg/objectio"
-	"github.com/matrixorigin/matrixone/pkg/pb/api"
 	logservicepb "github.com/matrixorigin/matrixone/pkg/pb/logservice"
 	"github.com/matrixorigin/matrixone/pkg/pb/task"
 	"github.com/matrixorigin/matrixone/pkg/proxy"
@@ -38,7 +36,6 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/sql/compile"
 	"github.com/matrixorigin/matrixone/pkg/taskservice"
 	"github.com/matrixorigin/matrixone/pkg/util"
-	"github.com/matrixorigin/matrixone/pkg/util/executor"
 	"github.com/matrixorigin/matrixone/pkg/util/export"
 	db_holder "github.com/matrixorigin/matrixone/pkg/util/export/etl/db"
 	ie "github.com/matrixorigin/matrixone/pkg/util/internalExecutor"
@@ -348,42 +345,18 @@ func (s *service) registerExecutorsLocked() {
 	s.task.runner.RegisterExecutor(
 		task.TaskCode_MetricStorageUsage,
 		mometric.GetMetricStorageUsageExecutor(s.cfg.UUID, ieFactory))
-	s.task.runner.RegisterExecutor(task.TaskCode_MergeObject,
-		func(ctx context.Context, task task.Task) error {
-			metadata := task.GetMetadata()
-			var mergeTask api.MergeTaskEntry
-			err := mergeTask.Unmarshal(metadata.Context)
-			if err != nil {
-				return err
-			}
-
-			objs := make([]string, len(mergeTask.ToMergeObjs))
-			for i, b := range mergeTask.ToMergeObjs {
-				stats := objectio.ObjectStats(b)
-				objs[i] = stats.ObjectName().String()
-			}
-			sql := fmt.Sprintf("select mo_ctl('CN', 'MERGEOBJECTS', 'o:%d.%d:%s')",
-				mergeTask.TblId, mergeTask.AccountId, strings.Join(objs, ","))
-			ctx, cancel := context.WithTimeoutCause(ctx, 10*time.Minute, moerr.CauseMergeObject)
-			defer cancel()
-			opts := executor.Options{}.WithWaitCommittedLogApplied()
-			_, err = s.sqlExecutor.Exec(ctx, sql, opts)
-			return moerr.AttachCause(ctx, err)
-		},
+	cdcExecutor := frontend.CDCTaskExecutorFactory(
+		s.logger,
+		ieFactory,
+		s.task.runner.Attach,
+		s.cfg.UUID,
+		ts,
+		s.fileService,
+		s._txnClient,
+		s.storeEngine,
 	)
-
-	s.task.runner.RegisterExecutor(task.TaskCode_InitCdc,
-		frontend.CDCTaskExecutorFactory(
-			s.logger,
-			ieFactory,
-			s.task.runner.Attach,
-			s.cfg.UUID,
-			ts,
-			s.fileService,
-			s._txnClient,
-			s.storeEngine,
-		),
-	)
+	s.task.runner.RegisterExecutor(task.TaskCode_InitCdc, cdcExecutor)
+	s.task.runner.RegisterExecutor(task.TaskCode_InitCdcStableEpoch, cdcExecutor)
 
 	s.task.runner.RegisterExecutor(task.TaskCode_ISCPExecutor,
 		iscp.ISCPTaskExecutorFactory(

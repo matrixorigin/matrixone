@@ -91,10 +91,19 @@ func WithBackendBatchSendSize(size int) BackendOption {
 	}
 }
 
-// WithBackendConnectTimeout set the timeout for connect to remote. Default 5s.
+// WithBackendConnectTimeout sets the total timeout for connecting to a remote,
+// including retry waits. Default 5s.
 func WithBackendConnectTimeout(timeout time.Duration) BackendOption {
 	return func(rb *remoteBackend) {
 		rb.options.connectTimeout = timeout
+	}
+}
+
+// WithBackendConnectAttemptTimeout sets the timeout for one TCP connect
+// attempt. By default, one attempt may consume the complete connect timeout.
+func WithBackendConnectAttemptTimeout(timeout time.Duration) BackendOption {
+	return func(rb *remoteBackend) {
+		rb.options.connectAttemptTimeout = timeout
 	}
 }
 
@@ -182,6 +191,7 @@ type remoteBackend struct {
 	writeC          chan *Future
 	waitWriteC      chan struct{}
 	stopWriteC      chan struct{}
+	stopWriteOnce   sync.Once
 	resetConnC      chan error
 	stopper         *stopper.Stopper
 	readStopper     *stopper.Stopper
@@ -195,19 +205,22 @@ type remoteBackend struct {
 	livenessEpoch   time.Time
 
 	options struct {
-		hasPayloadResponse  bool
-		goettyOptions       []goetty.Option
-		connectTimeout      time.Duration
-		bufferSize          int
-		busySize            int
-		batchSendSize       int
-		streamBufferSize    int
-		disconnectAfterRead int
-		filter              func(msg Message, backendAddr string) bool
-		readTimeout         time.Duration
-		livenessProbe       func(context.Context, string) error
-		freeResponse        func(Message)
-		releaseRequest      func(Message)
+		hasPayloadResponse    bool
+		goettyOptions         []goetty.Option
+		connectTimeout        time.Duration
+		connectAttemptTimeout time.Duration
+		connectNow            func() time.Time
+		connectWait           func(context.Context, time.Duration) error
+		bufferSize            int
+		busySize              int
+		batchSendSize         int
+		streamBufferSize      int
+		disconnectAfterRead   int
+		filter                func(msg Message, backendAddr string) bool
+		readTimeout           time.Duration
+		livenessProbe         func(context.Context, string) error
+		freeResponse          func(Message)
+		releaseRequest        func(Message)
 	}
 
 	stateMu struct {
@@ -308,7 +321,10 @@ func NewRemoteBackend(
 	rb.conn = goetty.NewIOSession(rb.options.goettyOptions...)
 
 	if err := rb.resetConn(); err != nil {
-		rb.logger.Error("connect to remote failed", rb.logFields()...)
+		rb.logger.Error(
+			"connect to remote failed",
+			append(rb.logFields(), zap.Error(err))...,
+		)
 		return nil, err
 	}
 	rb.activeReadLoop(false)
@@ -336,6 +352,16 @@ func (rb *remoteBackend) adjust() {
 	}
 	if rb.options.connectTimeout == 0 {
 		rb.options.connectTimeout = time.Second * 5
+	}
+	if rb.options.connectAttemptTimeout <= 0 ||
+		rb.options.connectAttemptTimeout > rb.options.connectTimeout {
+		rb.options.connectAttemptTimeout = rb.options.connectTimeout
+	}
+	if rb.options.connectNow == nil {
+		rb.options.connectNow = time.Now
+	}
+	if rb.options.connectWait == nil {
+		rb.options.connectWait = waitConnectRetry
 	}
 	if rb.options.streamBufferSize == 0 {
 		rb.options.streamBufferSize = 16
@@ -625,7 +651,7 @@ func (rb *remoteBackend) writeLoop(ctx context.Context) {
 
 			var writeDeadline time.Time
 			written := messages[:0]
-			for _, f := range messages {
+			for idx, f := range messages {
 				rb.metrics.writeLatencyDurationHistogram.Observe(start.Sub(f.send.createAt).Seconds())
 
 				id := f.getSendMessageID()
@@ -634,7 +660,23 @@ func (rb *remoteBackend) writeLoop(ctx context.Context) {
 					continue
 				}
 
-				if deadline := rb.doWrite(id, f); !deadline.IsZero() {
+				deadline, err := rb.doWrite(id, f)
+				if err != nil {
+					// Encoding may have written a partial frame (including directly
+					// to the socket). Never flush or reuse this connection after it.
+					rb.changeToStopping()
+					rb.stopWriteLoop()
+					rb.cancelActiveStreams()
+					for _, pending := range written {
+						pending.messageSent(err)
+					}
+					for _, pending := range messages[idx+1:] {
+						pending.messageSent(err)
+					}
+					rb.makeAllWaitingFutureFailed(err)
+					return
+				}
+				if !deadline.IsZero() {
 					writeDeadline = earliestDeadline(writeDeadline, deadline)
 					written = append(written, f)
 				}
@@ -651,6 +693,11 @@ func (rb *remoteBackend) writeLoop(ctx context.Context) {
 							append(rb.logFields(), zap.Uint64("request-id", id), zap.Error(err))...)
 						f.messageSent(err)
 					}
+					rb.changeToStopping()
+					rb.stopWriteLoop()
+					rb.cancelActiveStreams()
+					rb.makeAllWaitingFutureFailed(err)
+					return
 				} else {
 					// Record only transport-complete writes. A request that merely
 					// reached the userspace buffer must not extend the read window
@@ -681,23 +728,28 @@ func (rb *remoteBackend) writeLoop(ctx context.Context) {
 	}
 }
 
-func (rb *remoteBackend) doWrite(id uint64, f *Future) time.Time {
+func (rb *remoteBackend) doWrite(id uint64, f *Future) (time.Time, error) {
 	if !rb.options.filter(f.send.Message, rb.remote) {
 		f.messageSent(messageSkipped)
-		return time.Time{}
+		return time.Time{}, nil
 	}
 	// already timeout in future, and future will get a ctx timeout
 	if f.send.Timeout() {
 		f.messageSent(f.send.Ctx.Err())
-		return time.Time{}
+		return time.Time{}, nil
 	}
 
 	v, err := f.send.GetTimeoutFromContext()
 	if err != nil {
 		f.messageSent(err)
-		return time.Time{}
+		return time.Time{}, nil
 	}
 	deadline := time.Now().Add(v)
+	if f.streamOwner != nil &&
+		!f.streamOwner.assignSendSequence(&f.send) {
+		f.messageSent(backendClosed)
+		return time.Time{}, nil
+	}
 
 	// For PayloadMessage, the internal Codec will write the Payload directly to the underlying socket
 	// instead of copying it to the buffer, so the write deadline of the underlying conn needs to be reset
@@ -726,9 +778,9 @@ func (rb *remoteBackend) doWrite(id uint64, f *Future) time.Time {
 			"write request failed",
 			append(rb.logFields(), zap.Uint64("request-id", id), zap.Error(err))...)
 		f.messageSent(err)
-		return time.Time{}
+		return time.Time{}, err
 	}
-	return deadline
+	return deadline, nil
 }
 
 func (rb *remoteBackend) readLoop(ctx context.Context) {
@@ -994,7 +1046,9 @@ func (rb *remoteBackend) removeActiveStream(s *stream) {
 }
 
 func (rb *remoteBackend) stopWriteLoop() {
-	close(rb.stopWriteC)
+	// Wake every admission waiter before termination waits for stream locks.
+	// The writer's failure path and Close may both own this notification.
+	rb.stopWriteOnce.Do(func() { close(rb.stopWriteC) })
 }
 
 func (rb *remoteBackend) requestDone(
@@ -1152,9 +1206,11 @@ func (rb *remoteBackend) running() bool {
 }
 
 func (rb *remoteBackend) resetConn() error {
-	start := time.Now()
+	start := rb.options.connectNow()
+	deadline := start.Add(rb.options.connectTimeout)
 	defer func() {
-		rb.metrics.connectDurationHistogram.Observe(time.Since(start).Seconds())
+		rb.metrics.connectDurationHistogram.Observe(
+			rb.options.connectNow().Sub(start).Seconds())
 	}()
 
 	wait := time.Second
@@ -1168,11 +1224,21 @@ func (rb *remoteBackend) resetConn() error {
 			return backendClosed
 		default:
 		}
+		remaining := deadline.Sub(rb.options.connectNow())
+		if remaining <= 0 {
+			err := moerr.NewRPCTimeoutNoCtx()
+			rb.metrics.observeBackendError(rb.remote, "connect", err)
+			return err
+		}
 
 		rb.logger.Debug("start connect to remote", rb.logFields()...)
 		rb.closeConn(false)
 		rb.metrics.connectCounter.Inc()
-		err := rb.conn.Connect(rb.remote, rb.options.connectTimeout)
+		attemptTimeout := rb.options.connectAttemptTimeout
+		if attemptTimeout > remaining {
+			attemptTimeout = remaining
+		}
+		err := rb.conn.Connect(rb.remote, attemptTimeout)
 		if err == nil {
 			rb.logger.Debug("connect to remote succeed", rb.logFields()...)
 			// Transport-progress evidence belongs to one physical connection.
@@ -1201,18 +1267,20 @@ func (rb *remoteBackend) resetConn() error {
 		}
 		duration := time.Duration(0)
 		for {
-			time.Sleep(sleep)
-			duration += sleep
-			if time.Since(start) > rb.options.connectTimeout {
+			remaining = deadline.Sub(rb.options.connectNow())
+			if remaining <= 0 {
 				err := moerr.NewRPCTimeoutNoCtx()
 				rb.metrics.observeBackendError(rb.remote, "connect", err)
 				return err
 			}
-			select {
-			case <-rb.ctx.Done():
-				return backendClosed
-			default:
+			delay := sleep
+			if delay > remaining {
+				delay = remaining
 			}
+			if err := rb.options.connectWait(rb.ctx, delay); err != nil {
+				return backendClosed
+			}
+			duration += delay
 			if duration >= wait {
 				break
 			}
@@ -1222,6 +1290,17 @@ func (rb *remoteBackend) resetConn() error {
 		// reconnect failed, notify all future failed
 		backendErr := moerr.NewBackendCannotConnectNoCtx()
 		rb.notifyAllWaitWritesFailed(backendErr)
+	}
+}
+
+func waitConnectRetry(ctx context.Context, delay time.Duration) error {
+	timer := time.NewTimer(delay)
+	defer timer.Stop()
+	select {
+	case <-timer.C:
+		return nil
+	case <-ctx.Done():
+		return ctx.Err()
 	}
 }
 
@@ -1717,6 +1796,8 @@ type stream struct {
 	id                   uint64
 	sequence             uint32
 	lastReceivedSequence uint32
+	sendSequenceMu       sync.Mutex
+	sendSequenceClosed   bool
 	mu                   struct {
 		sync.RWMutex
 		closed   bool
@@ -1749,7 +1830,10 @@ func newStream(
 func (s *stream) init(id uint64, unlockAfterClose bool) {
 	s.id = id
 	s.unlockAfterClose = unlockAfterClose
+	s.sendSequenceMu.Lock()
 	s.sequence = 0
+	s.sendSequenceClosed = false
+	s.sendSequenceMu.Unlock()
 	s.lastReceivedSequence = 0
 	s.mu.closed = false
 	s.mu.terminal = false
@@ -1811,13 +1895,12 @@ func (s *stream) doSendLocked(
 	ctx context.Context,
 	f *Future,
 	request Message) error {
-	s.sequence++
 	f.init(RPCMessage{
-		Ctx:            ctx,
-		Message:        request,
-		stream:         true,
-		streamSequence: s.sequence,
+		Ctx:     ctx,
+		Message: request,
+		stream:  true,
 	})
+	f.streamOwner = s
 	f.ref()
 	err := s.sendFunc(f)
 	if err != nil {
@@ -1840,6 +1923,9 @@ func (s *stream) Receive() (chan Message, error) {
 
 func (s *stream) Close(closeConn bool) error {
 	s.cancel()
+	s.sendSequenceMu.Lock()
+	s.sendSequenceClosed = true
+	s.sendSequenceMu.Unlock()
 	if closeConn {
 		s.rb.logger.Info("stream call closed on client", append(s.rb.logFields(), zap.Uint64("stream-id", s.id))...)
 		s.rb.Close()
@@ -1864,6 +1950,21 @@ func (s *stream) Close(closeConn bool) error {
 		panic("BUG: stream close notification channel is full")
 	}
 	return nil
+}
+
+// assignSendSequence runs in the single backend write loop after a request has
+// passed filter and context checks. Assigning at Stream.Send time would consume
+// a sequence for a queued request that expires before transport write, making
+// the next control message look out of order to the server.
+func (s *stream) assignSendSequence(message *RPCMessage) bool {
+	s.sendSequenceMu.Lock()
+	defer s.sendSequenceMu.Unlock()
+	if s.sendSequenceClosed {
+		return false
+	}
+	s.sequence++
+	message.streamSequence = s.sequence
+	return true
 }
 
 func (s *stream) ID() uint64 {
@@ -1913,6 +2014,9 @@ func (s *stream) done(
 // unregister ownership with Stream.Close, as required by the Stream contract.
 func (s *stream) terminate() {
 	s.cancel()
+	s.sendSequenceMu.Lock()
+	s.sendSequenceClosed = true
+	s.sendSequenceMu.Unlock()
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	if s.mu.closed || s.mu.terminal {

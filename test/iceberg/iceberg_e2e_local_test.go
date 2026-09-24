@@ -324,6 +324,63 @@ func TestLocalE2ECaseReportsRedactAndSummarize(t *testing.T) {
 	}
 }
 
+func TestRecordSuccessfulRESTSeed(t *testing.T) {
+	t.Run("records case and artifact", func(t *testing.T) {
+		dir := t.TempDir()
+		summary := runSummary{}
+		if err := recordSuccessfulRESTSeed(dir, &summary); err != nil {
+			t.Fatalf("record successful REST seed: %v", err)
+		}
+		if len(summary.Cases) != 1 {
+			t.Fatalf("unexpected seed case count: %d", len(summary.Cases))
+		}
+		result := summary.Cases[0]
+		if result.ID != "ICE-CI-E2E-000" || result.Name != "rest-seed" || result.Status != "passed" {
+			t.Fatalf("unexpected seed result: %+v", result)
+		}
+		if !sameLines(result.SQL, []string{"seed Iceberg REST catalog tables"}) ||
+			!sameLines(result.Expected, []string{"seed completed"}) ||
+			!sameLines(result.Actual, []string{"seed completed"}) {
+			t.Fatalf("unexpected seed result contract: %+v", result)
+		}
+		caseDir := filepath.Join(dir, safeFileName(result.ID+"_"+result.Name))
+		for _, name := range []string{"mo.out", "metadata.json", "diff.json", "summary.md"} {
+			if _, err := os.Stat(filepath.Join(caseDir, name)); err != nil {
+				t.Fatalf("missing seed artifact %s: %v", name, err)
+			}
+		}
+	})
+
+	t.Run("rejects invalid arguments", func(t *testing.T) {
+		if err := recordSuccessfulRESTSeed(t.TempDir(), nil); err == nil || !strings.Contains(err.Error(), "summary is nil") {
+			t.Fatalf("expected nil-summary error, got %v", err)
+		}
+		summary := runSummary{}
+		if err := recordSuccessfulRESTSeed(" ", &summary); err == nil || !strings.Contains(err.Error(), "directory is empty") {
+			t.Fatalf("expected empty-directory error, got %v", err)
+		}
+		if len(summary.Cases) != 0 {
+			t.Fatalf("invalid arguments changed summary: %+v", summary.Cases)
+		}
+	})
+
+	t.Run("does not append when artifact write fails", func(t *testing.T) {
+		dir := t.TempDir()
+		blockingFile := filepath.Join(dir, "not-a-directory")
+		if err := os.WriteFile(blockingFile, []byte("x"), 0o644); err != nil {
+			t.Fatalf("write blocking file: %v", err)
+		}
+		summary := runSummary{}
+		err := recordSuccessfulRESTSeed(blockingFile, &summary)
+		if err == nil || !strings.Contains(err.Error(), "write REST seed report") {
+			t.Fatalf("expected wrapped artifact error, got %v", err)
+		}
+		if len(summary.Cases) != 0 {
+			t.Fatalf("failed artifact write changed summary: %+v", summary.Cases)
+		}
+	})
+}
+
 func TestLocalE2EReportErrorBranches(t *testing.T) {
 	dir := t.TempDir()
 	blockingFile := filepath.Join(dir, "not-a-directory")
@@ -842,18 +899,39 @@ func TestLocalE2EWaitForLifecycleFaultWaitersRejectsInvalidResponses(t *testing.
 	}
 }
 
-func TestLocalE2EWaitForLifecycleFaultWaitersHonorsDeadline(t *testing.T) {
+func TestLocalE2EWaitForLifecycleFaultWaitersStopsAfterPollingCanceledContext(t *testing.T) {
+	ctx, cancel := context.WithCancel(context.Background())
+	driver := &lifecycleWaiterTestDriver{
+		cancel:           cancel,
+		firstQueryClosed: make(chan struct{}),
+	}
+	db := sql.OpenDB(driver)
+	defer db.Close()
+
+	if err := waitForLifecycleFaultWaiters(ctx, db, icebergCreateAfterCatalogLockWaitersFault, 1); !errors.Is(err, context.Canceled) {
+		t.Fatalf("lifecycle fault waiter ignored cancellation after polling: %v", err)
+	}
+	select {
+	case <-driver.firstQueryClosed:
+	default:
+		t.Fatal("lifecycle fault waiter returned before completing the first query")
+	}
+	if got := driver.queryCount(); got != 1 {
+		t.Fatalf("lifecycle fault waiter issued %d queries after cancellation", got)
+	}
+}
+
+func TestLocalE2EWaitForLifecycleFaultWaitersStopsBeforePollingCanceledContext(t *testing.T) {
 	db, mock := newLocalE2ESQLMock(t)
 	defer db.Close()
-	mock.ExpectQuery("select trigger_fault_point").
-		WillReturnRows(sqlmock.NewRows([]string{"waiters"}).AddRow(int64(0)))
-	ctx, cancel := context.WithTimeout(context.Background(), 2*time.Millisecond)
-	defer cancel()
-	if err := waitForLifecycleFaultWaiters(ctx, db, icebergCreateAfterCatalogLockWaitersFault, 1); !errors.Is(err, context.DeadlineExceeded) {
-		t.Fatalf("lifecycle fault waiter ignored deadline: %v", err)
+	ctx, cancel := context.WithCancel(context.Background())
+	cancel()
+
+	if err := waitForLifecycleFaultWaiters(ctx, db, icebergCreateAfterCatalogLockWaitersFault, 1); !errors.Is(err, context.Canceled) {
+		t.Fatalf("lifecycle fault waiter ignored canceled context: %v", err)
 	}
 	if err := mock.ExpectationsWereMet(); err != nil {
-		t.Fatalf("lifecycle-fault waiter deadline expectation: %v", err)
+		t.Fatalf("canceled lifecycle-fault waiter issued a query: %v", err)
 	}
 }
 
@@ -1101,6 +1179,82 @@ func TestLocalE2ERestoreSessionLockWaitTimeoutFailureDiscardsConnection(t *testi
 type sessionTimeoutTestDriver struct {
 	mu    sync.Mutex
 	conns []*sessionTimeoutTestConn
+}
+
+type lifecycleWaiterTestDriver struct {
+	mu               sync.Mutex
+	queries          int
+	cancel           context.CancelFunc
+	firstQueryClosed chan struct{}
+}
+
+func (d *lifecycleWaiterTestDriver) Connect(context.Context) (driver.Conn, error) {
+	return &lifecycleWaiterTestConn{driver: d}, nil
+}
+
+func (d *lifecycleWaiterTestDriver) Driver() driver.Driver { return d }
+
+func (d *lifecycleWaiterTestDriver) Open(string) (driver.Conn, error) {
+	return d.Connect(context.Background())
+}
+
+func (d *lifecycleWaiterTestDriver) recordQuery() bool {
+	d.mu.Lock()
+	defer d.mu.Unlock()
+	d.queries++
+	return d.queries == 1
+}
+
+func (d *lifecycleWaiterTestDriver) queryCount() int {
+	d.mu.Lock()
+	defer d.mu.Unlock()
+	return d.queries
+}
+
+type lifecycleWaiterTestConn struct {
+	driver *lifecycleWaiterTestDriver
+}
+
+func (c *lifecycleWaiterTestConn) Prepare(string) (driver.Stmt, error) {
+	return nil, errors.New("prepare is not supported by lifecycle waiter test driver")
+}
+
+func (c *lifecycleWaiterTestConn) Close() error { return nil }
+
+func (c *lifecycleWaiterTestConn) Begin() (driver.Tx, error) {
+	return nil, errors.New("transactions are not supported by lifecycle waiter test driver")
+}
+
+func (c *lifecycleWaiterTestConn) QueryContext(context.Context, string, []driver.NamedValue) (driver.Rows, error) {
+	if !c.driver.recordQuery() {
+		return nil, errors.New("unexpected lifecycle waiter query after cancellation")
+	}
+	return &lifecycleWaiterTestRows{driver: c.driver}, nil
+}
+
+type lifecycleWaiterTestRows struct {
+	driver   *lifecycleWaiterTestDriver
+	closed   sync.Once
+	returned bool
+}
+
+func (r *lifecycleWaiterTestRows) Columns() []string { return []string{"waiters"} }
+
+func (r *lifecycleWaiterTestRows) Close() error {
+	r.closed.Do(func() {
+		close(r.driver.firstQueryClosed)
+		r.driver.cancel()
+	})
+	return nil
+}
+
+func (r *lifecycleWaiterTestRows) Next(dest []driver.Value) error {
+	if r.returned {
+		return io.EOF
+	}
+	dest[0] = int64(0)
+	r.returned = true
+	return nil
 }
 
 func (d *sessionTimeoutTestDriver) Connect(context.Context) (driver.Conn, error) {

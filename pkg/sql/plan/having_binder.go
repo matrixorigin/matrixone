@@ -41,6 +41,15 @@ func NewHavingBinder(builder *QueryBuilder, ctx *BindContext) *HavingBinder {
 }
 
 func (b *HavingBinder) BindExpr(astExpr tree.Expr, depth int32, isRoot bool) (*plan.Expr, error) {
+	if aliasExpr, projectPos, ok := b.ctx.isAliasExpansion(astExpr); ok {
+		if projectPos >= 0 && int(projectPos) < len(b.ctx.projects) {
+			return DeepCopyExpr(b.ctx.projects[projectPos]), nil
+		}
+		previous := b.bindingProjectedAlias
+		b.bindingProjectedAlias = true
+		defer func() { b.bindingProjectedAlias = previous }()
+		return b.BindExpr(aliasExpr.Expr, depth, isRoot)
+	}
 	astStr := windowExprAstKey(astExpr)
 
 	if !b.insideAgg {
@@ -68,7 +77,22 @@ func (b *HavingBinder) BindExpr(astExpr tree.Expr, depth int32, isRoot bool) (*p
 		}
 	}
 
-	if colPos, ok := b.ctx.aggregateByAst[astStr]; ok {
+	if !b.insideAgg {
+		if colPos, ok := b.ctx.groupConcatAggregatePosition(astExpr); ok {
+			return &plan.Expr{
+				Typ: b.ctx.aggregates[colPos].Typ,
+				Expr: &plan.Expr_Col{
+					Col: &plan.ColRef{
+						RelPos: b.ctx.aggregateTag,
+						ColPos: colPos,
+					},
+				},
+			}, nil
+		}
+	}
+
+	if colPos, ok := b.ctx.aggregateByAst[astStr]; ok &&
+		!isGroupConcatAggregateExpr(astExpr) {
 		if !b.insideAgg {
 			return &plan.Expr{
 				Typ: b.ctx.aggregates[colPos].Typ,
@@ -135,9 +159,12 @@ func (b *HavingBinder) BindColRef(astExpr *tree.UnresolvedName, depth int32, isR
 			// suppressing ONLY_FULL_GROUP_BY checks for its source columns. The
 			// flag is scoped to this recursive bind so an anonymous expression
 			// written directly in HAVING still follows normal visibility rules.
+			if projectPos := b.ctx.projectedExprPosition(projected); projectPos >= 0 {
+				projected = b.ctx.wrapAliasExpansion(projected, projectPos)
+			}
 			previous := b.bindingProjectedAlias
 			b.bindingProjectedAlias = true
-			expr, err := b.baseBindExpr(projected, depth, isRoot)
+			expr, err := b.BindExpr(projected, depth, isRoot)
 			b.bindingProjectedAlias = previous
 			return expr, err
 		}
@@ -355,14 +382,14 @@ func (b *HavingBinder) BindAggFunc(funcName string, astExpr *tree.FuncExpr, dept
 		if funcName != "max" && funcName != "min" && funcName != "any_value" {
 			expr.GetF().Func.Obj = int64(uint64(expr.GetF().Func.Obj) | function.Distinct)
 		}
-		// Single-argument COUNT/SUM is rewritten into a GROUP BY later. That
+		// Single-argument COUNT/SUM/AVG is rewritten into a GROUP BY later. That
 		// path already carries a separate physical key and must retain the
 		// visible aggregate argument. The remaining DISTINCT aggregates hash
 		// their arguments directly (for example COUNT(DISTINCT a, b) and
 		// GROUP_CONCAT), so give those hash inputs the promoted-CHAR PAD SPACE
 		// canonical form locally.
 		canRewriteDistinctArgument :=
-			(funcName == "count" || funcName == "sum") &&
+			(funcName == "count" || funcName == "sum" || funcName == "avg") &&
 				len(expr.GetF().Args) == 1 &&
 				expr.GetF().Args[0].Typ.Id != int32(types.T_tuple)
 		if !canRewriteDistinctArgument {
@@ -395,6 +422,12 @@ func (b *HavingBinder) BindAggFunc(funcName string, astExpr *tree.FuncExpr, dept
 	astStr := semanticAstKey(astExpr)
 	b.ctx.aggregateByAst[astStr] = colPos
 	b.ctx.aggregates = append(b.ctx.aggregates, expr)
+	if funcName == NameGroupConcat {
+		if b.ctx.groupConcatByExpr == nil {
+			b.ctx.groupConcatByExpr = make(map[*tree.FuncExpr]int32)
+		}
+		b.ctx.groupConcatByExpr[astExpr] = colPos
+	}
 
 	return &plan.Expr{
 		Typ: expr.Typ,
@@ -411,6 +444,60 @@ func (b *HavingBinder) BindAggFunc(funcName string, astExpr *tree.FuncExpr, dept
 // overload shape: the single WITHIN GROUP ORDER BY expression becomes the
 // first executor argument, followed by any direct arguments. Aggregate-specific
 // execution remains unchanged.
+func validateOrderedSetAggregateShape(
+	ctx context.Context,
+	funcName string,
+	astExpr *tree.FuncExpr,
+	spec orderedSetAggregateSpec,
+) (*tree.Order, error) {
+	if !astExpr.WithinGroup {
+		return nil, moerr.NewSyntaxErrorf(ctx,
+			"%s requires WITHIN GROUP (ORDER BY ...)", funcName)
+	}
+	if len(astExpr.Exprs) != spec.directArgumentCount {
+		if spec.directArgumentCount == 0 {
+			return nil, moerr.NewSyntaxErrorf(ctx,
+				"%s WITHIN GROUP does not accept a direct argument", funcName)
+		}
+		return nil, moerr.NewSyntaxErrorf(ctx,
+			"%s requires exactly one %s argument", funcName, spec.directArgumentName)
+	}
+	if len(astExpr.OrderBy) != 1 {
+		return nil, moerr.NewSyntaxErrorf(ctx,
+			"%s requires exactly one WITHIN GROUP ORDER BY expression", funcName)
+	}
+
+	orderExpr := astExpr.OrderBy[0]
+	if orderExpr == nil || orderExpr.Expr == nil {
+		return nil, moerr.NewSyntaxErrorf(ctx,
+			"%s requires an ORDER BY expression", funcName)
+	}
+	return orderExpr, nil
+}
+
+func applyOrderedSetAggregateDirection(
+	ctx context.Context,
+	expr *plan.Expr,
+	spec orderedSetAggregateSpec,
+	orderExpr *tree.Order,
+) error {
+	if !spec.directionMatters {
+		return nil
+	}
+	fn := expr.GetF()
+	if fn == nil {
+		return moerr.NewInternalError(ctx,
+			"invalid ordered-set aggregate expression")
+	}
+	if orderExpr.Direction == tree.Descending {
+		fn.AggConfig = []byte{1}
+	} else {
+		fn.AggConfig = []byte{0}
+	}
+	fn.AggConfigType = plan.AggregateConfigType_AGG_CONFIG_NONE
+	return nil
+}
+
 func (b *HavingBinder) bindOrderedSetAggregate(
 	funcName string,
 	astExpr *tree.FuncExpr,
@@ -422,27 +509,10 @@ func (b *HavingBinder) bindOrderedSetAggregate(
 		return nil, moerr.NewNotSupported(b.GetContext(),
 			"ordered-set percentile aggregates in time windows")
 	}
-	if !astExpr.WithinGroup {
-		return nil, moerr.NewSyntaxErrorf(b.GetContext(),
-			"%s requires WITHIN GROUP (ORDER BY ...)", funcName)
-	}
-	if len(astExpr.Exprs) != spec.directArgumentCount {
-		if spec.directArgumentCount == 0 {
-			return nil, moerr.NewSyntaxErrorf(b.GetContext(),
-				"%s WITHIN GROUP does not accept a direct argument", funcName)
-		}
-		return nil, moerr.NewSyntaxErrorf(b.GetContext(),
-			"%s requires exactly one %s argument", funcName, spec.directArgumentName)
-	}
-	if len(astExpr.OrderBy) != 1 {
-		return nil, moerr.NewSyntaxErrorf(b.GetContext(),
-			"%s requires exactly one WITHIN GROUP ORDER BY expression", funcName)
-	}
-
-	orderExpr := astExpr.OrderBy[0]
-	if orderExpr == nil || orderExpr.Expr == nil {
-		return nil, moerr.NewSyntaxErrorf(b.GetContext(),
-			"%s requires an ORDER BY expression", funcName)
+	orderExpr, err := validateOrderedSetAggregateShape(
+		b.GetContext(), funcName, astExpr, spec)
+	if err != nil {
+		return nil, err
 	}
 	value, err := b.BindExpr(orderExpr.Expr, depth, isRoot)
 	if err != nil {
@@ -458,8 +528,11 @@ func (b *HavingBinder) bindOrderedSetAggregate(
 		args = append(args, bound)
 	}
 	if spec.useStoredNumericContract {
-		args = useStoredMySQLSpecialTypesForNumericContract(
+		args, err = b.useStoredMySQLSpecialTypesForNumericContractWithProvenance(
 			b.GetContext(), funcName, args)
+		if err != nil {
+			return nil, err
+		}
 	}
 
 	var expr *plan.Expr
@@ -474,20 +547,10 @@ func (b *HavingBinder) bindOrderedSetAggregate(
 	if err != nil {
 		return nil, err
 	}
-	if !spec.directionMatters {
-		return expr, nil
+	if err = applyOrderedSetAggregateDirection(
+		b.GetContext(), expr, spec, orderExpr); err != nil {
+		return nil, err
 	}
-	fn := expr.GetF()
-	if fn == nil {
-		return nil, moerr.NewInternalError(b.GetContext(),
-			"invalid ordered-set aggregate expression")
-	}
-	if orderExpr.Direction == tree.Descending {
-		fn.AggConfig = []byte{1}
-	} else {
-		fn.AggConfig = []byte{0}
-	}
-	fn.AggConfigType = plan.AggregateConfigType_AGG_CONFIG_NONE
 	return expr, nil
 }
 
@@ -678,10 +741,9 @@ func (b *HavingBinder) bindGroupConcatOrderBy(
 			}
 		}
 
-		if _, ok := orderExpr.(*tree.Subquery); ok {
-			return moerr.NewNotSupported(b.GetContext(), "subquery in group_concat ORDER BY")
-		}
-
+		// Keep scalar subqueries as aggregate arguments here. QueryBuilder
+		// flattens every aggregate argument before constructing the AGG node,
+		// including the hidden arguments used as GROUP_CONCAT order keys.
 		var boundExpr *plan.Expr
 		if orderArgIndex >= 0 {
 			// Reuse the already-bound aggregate argument. Rebinding an ordinal
@@ -697,9 +759,6 @@ func (b *HavingBinder) bindGroupConcatOrderBy(
 			if err != nil {
 				return err
 			}
-		}
-		if hasSubquery(boundExpr) {
-			return moerr.NewNotSupported(b.GetContext(), "subquery in group_concat ORDER BY")
 		}
 		// A literal key is equal for every input row and has no effect on the
 		// ordering. Do not expose it as an executor key (NULL has type ANY).
@@ -777,7 +836,7 @@ func (b *HavingBinder) groupConcatOrderKey(expr *plan.Expr) (*plan.Expr, error) 
 		}
 	}
 	if storageType := b.ctx.mysqlSpecialOrderTypeForExpr(expr); storageType != nil {
-		return makeMySQLSpecialOrderKey(b.GetContext(), expr, storageType)
+		return b.builder.mysqlSpecialOrderKey(b.ctx, expr, storageType)
 	}
 	return expr, nil
 }

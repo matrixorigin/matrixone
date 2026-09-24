@@ -4,91 +4,102 @@ name varchar(10),
 level smallint unsigned);
 insert into t1 values ('string',1);
 select reverse("123"+space(level)+"456") from t1;
-reverse(123 + space(level) + 456)
+➤ reverse(123 + space(level) + 456)[-1,16383,0]  𝄀
 654 321
 select concat_ws("abc", name,space(level)), concat_ws("abc",name, space(level)) from t1;
-concat_ws(abc, name, space(level))	concat_ws(abc, name, space(level))
-stringabc 	stringabc 
+➤ concat_ws(abc, name, space(level))[-1,16383,0]  ¦  concat_ws(abc, name, space(level))[-1,16383,0]  𝄀
+stringabc   ¦  stringabc 
 drop table t1;
 create table t1 (a varchar(16383));
 insert into t1 select space(50000);
-invalid input: the space count is greater than max allowed value 8000
 select length(a) from t1;
-length(a)
+➤ length(a)[-5,64,0]  𝄀
+16383
 drop table t1;
 select space(5),concat_ws('*',space(5),'*');
-space(5)	concat_ws(*, space(5), *)
-     	     **
+➤ space(5)[12,65535,0]  ¦  concat_ws(*, space(5), *)[-1,16383,0]  𝄀
+       ¦       **
+SELECT LENGTH(SPACE(8001)), LENGTH(SPACE(10000)), LENGTH(SPACE(65535));
+➤ LENGTH(SPACE(8001))[-5,64,0]  ¦  LENGTH(SPACE(10000))[-5,64,0]  ¦  LENGTH(SPACE(65535))[-5,64,0]  𝄀
+8001  ¦  10000  ¦  65535
+SELECT LENGTH(SPACE(CAST(1.4 AS DECIMAL(4,1)))),
+LENGTH(SPACE(CAST(1.5 AS DECIMAL(4,1)))),
+LENGTH(SPACE(CAST(1.9 AS DECIMAL(4,1)))),
+LENGTH(SPACE(CAST(-1.5 AS DECIMAL(4,1))));
+➤ LENGTH(SPACE(cast(1.4 as decimal(4, 1))))[-5,64,0]  ¦  LENGTH(SPACE(cast(1.5 as decimal(4, 1))))[-5,64,0]  ¦  LENGTH(SPACE(cast(1.9 as decimal(4, 1))))[-5,64,0]  ¦  LENGTH(SPACE(cast(-1.5 as decimal(4, 1))))[-5,64,0]  𝄀
+1  ¦  2  ¦  2  ¦  0
 select space(-1);
-space(-1)
+➤ space(-1)[12,65535,0]  𝄀
 
 select space(-4294967295);
-space(-4294967295)
+➤ space(-4294967295)[12,65535,0]  𝄀
 
 select space(4294967295);
-invalid input: the space count is greater than max allowed value 8000
+invalid input: the space count is greater than max allowed value 65535
 select space(-4294967296);
-space(-4294967296)
+➤ space(-4294967296)[12,65535,0]  𝄀
 
 select space(4294967296);
-invalid input: the space count is greater than max allowed value 8000
+invalid input: the space count is greater than max allowed value 65535
 select space(-4294967297);
-space(-4294967297)
+➤ space(-4294967297)[12,65535,0]  𝄀
 
 select space(4294967297);
-invalid input: the space count is greater than max allowed value 8000
+invalid input: the space count is greater than max allowed value 65535
 select space(-18446744073709551615);
-Data truncation: data out of range: data type uint64, value '-18446744073709551615'
+Data truncation: data out of range: data type int64, integer argument
 select space(18446744073709551615);
-invalid input: the space count is greater than max allowed value 8000
+Data truncation: data out of range: data type int64, integer argument
 select space(-18446744073709551616);
-Data truncation: data out of range: data type uint64, value '-18446744073709551616'
+Data truncation: data out of range: data type int64, integer argument
 select space(18446744073709551616);
-the space count exceeds maxallowedCount 8000
+Data truncation: data out of range: data type int64, integer argument
 select space(-18446744073709551617);
-Data truncation: data out of range: data type uint64, value '-18446744073709551617'
+Data truncation: data out of range: data type int64, integer argument
 select space(18446744073709551617);
-the space count exceeds maxallowedCount 8000
+Data truncation: data out of range: data type int64, integer argument
 SELECT space(9223372036854775808);
-invalid input: the space count is greater than max allowed value 8000
+Data truncation: data out of range: data type int64, integer argument
 SELECT length(space(9223372036854775809));
-invalid input: the space count is greater than max allowed value 8000
+Data truncation: data out of range: data type int64, integer argument
 SELECT SPACE(NULL);
-space(null)
+➤ SPACE(null)[12,65535,0]  𝄀
 null
 SELECT SPACE(12)+"123";
-space(12) + 123
+➤ SPACE(12) + 123[-1,16383,0]  𝄀
             123
-SELECT SPACE(12314.14123)+"123";
-invalid input: the space count is greater than max allowed value 8000
+SELECT LENGTH(SPACE(12314.14123));
+➤ LENGTH(SPACE(12314.14123))[-5,64,0]  𝄀
+12314
 SELECT SPACE("1231")+"123";
-space(1231) + 123
+➤ SPACE(1231) + 123[-1,16383,0]  𝄀
                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                123
 SELECT SPACE("2012-03-12")+"123";
-invalid argument cast to int, bad value 2012-03-12
+➤ SPACE(2012-03-12) + 123[-1,16383,0]  𝄀
+                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                            123
 CREATE TABLE t(i BIGINT UNSIGNED);
 INSERT INTO t values(9223372036854775808);
 SELECT space(i) FROM t;
-invalid input: the space count is greater than max allowed value 8000
+Data truncation: data out of range: data type int64, integer argument
 DROP TABLE t;
 SELECT space(1073741824);
-invalid input: the space count is greater than max allowed value 8000
+invalid input: the space count is greater than max allowed value 65535
 SELECT TO_DATE(SPACE(2),'1');
-to_date(space(2), 1)
+➤ TO_DATE(SPACE(2), 1)[93,19,0]  𝄀
 null
 drop table if exists t1;
 create table t1(a INT);
 insert into t1 values(1),(1),(2),(3);
 select a from t1 group by a having space(a)="   ";
-a
+➤ a[4,32,0]  𝄀
 3
 drop table t1;
 drop table if exists t1;
 create table t1(a INT,  b date);
 insert into t1 values(1, "2012-10-12"),(2, "2004-04-24"),(3, "2008-12-04"),(4, "2012-03-23");
 select * from t1 where space(a)=" ";
-a	b
-1	2012-10-12
+➤ a[4,32,0]  ¦  b[91,10,0]  𝄀
+1  ¦  2012-10-12
 drop table t1;
 drop table if exists t1;
 drop table if exists t2;
@@ -97,11 +108,12 @@ create table t2(a INT,  b date);
 insert into t1 values(1, "2012-10-12"),(1, "2004-04-24"),(3, "2008-12-04"),(4, "2012-03-23");
 insert into t2 values(1, "2013-04-30"),(1, "1994-10-04"),(3, "2018-06-04"),(4, "2012-10-12");
 SELECT distinct t1.a, t2.a FROM t1 JOIN t2 ON (space(t1.a) = space(t2.a));
-a	a
-1	1
-3	3
-4	4
+➤ a[4,32,0]  ¦  a[4,32,0]  𝄀
+1  ¦  1  𝄀
+3  ¦  3  𝄀
+4  ¦  4
 drop table t1;
 drop table t2;
 SELECT space("你好")+"你好";
-invalid argument cast to int, bad value 你好
+➤ space(你好) + 你好[-1,16383,0]  𝄀
+你好

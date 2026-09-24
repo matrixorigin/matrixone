@@ -23,6 +23,7 @@ import (
 	"io"
 	"iter"
 	"math"
+	nethttp "net/http"
 	"net/url"
 	gotrace "runtime/trace"
 	"slices"
@@ -62,6 +63,7 @@ type AwsSDKv2 struct {
 }
 
 var _ objectStorageCopier = new(AwsSDKv2)
+var _ objectStorageIdentityReader = new(AwsSDKv2)
 
 func (a *AwsSDKv2) CopyObject(
 	ctx context.Context,
@@ -98,6 +100,14 @@ func NewAwsSDKv2(
 	// options for loading configs
 	loadConfigOptions := []func(*config.LoadOptions) error{
 		config.WithLogger(logutil.GetS3Logger()),
+		// Keep the pre-v1.99 S3 behavior for existing object-storage
+		// deployments. Newer AWS SDKs default to calculating and validating
+		// checksums whenever an operation supports them, which changes the
+		// wire contract for S3-compatible services. Required checksums remain
+		// enabled while optional checksums stay disabled until each backend has
+		// an explicit compatibility test.
+		config.WithRequestChecksumCalculation(aws.RequestChecksumCalculationWhenRequired),
+		config.WithResponseChecksumValidation(aws.ResponseChecksumValidationWhenRequired),
 		config.WithClientLogMode(
 			aws.LogSigning |
 				aws.LogRetries |
@@ -324,6 +334,67 @@ func (a *AwsSDKv2) Stat(
 	size = *output.ContentLength
 
 	return
+}
+
+func (a *AwsSDKv2) StatObjectIdentity(ctx context.Context, key string) (ObjectIdentity, error) {
+	output, err := a.headObject(ctx, &s3.HeadObjectInput{
+		Bucket: ptrTo(a.bucket),
+		Key:    ptrTo(key),
+	})
+	if err != nil {
+		return ObjectIdentity{}, a.mapError(err, key)
+	}
+	identity := ObjectIdentity{
+		Size:      aws.ToInt64(output.ContentLength),
+		ETag:      aws.ToString(output.ETag),
+		VersionID: aws.ToString(output.VersionId),
+	}
+	if output.LastModified != nil {
+		identity.LastModified = *output.LastModified
+	}
+	return identity, identity.Validate()
+}
+
+func (a *AwsSDKv2) ReadObjectWithIdentity(
+	ctx context.Context,
+	key string,
+	min *int64,
+	max *int64,
+	expected ObjectIdentity,
+) (io.ReadCloser, error) {
+	if err := expected.Validate(); err != nil {
+		return nil, err
+	}
+	params := &s3.GetObjectInput{Bucket: ptrTo(a.bucket), Key: ptrTo(key)}
+	if expected.VersionID != "" {
+		params.VersionId = ptrTo(expected.VersionID)
+	} else {
+		params.IfMatch = ptrTo(expected.ETag)
+	}
+	r, err := a.getObject(ctx, min, max, params)
+	if err != nil {
+		// Preserve the conditional-read contract before the ordinary S3 mapper
+		// turns a deleted planned version into a generic file-not-found error.
+		return nil, a.mapError(mapAWSConditionalReadError(err), key)
+	}
+	r = mapReadCloserErrors(r, mapAWSConditionalReadError)
+	if max == nil {
+		return r, nil
+	}
+	return &readCloser{
+		r:         io.LimitReader(r, *max-*min),
+		closeFunc: r.Close,
+	}, nil
+}
+
+func mapAWSConditionalReadError(err error) error {
+	var responseError *http.ResponseError
+	if errors.As(err, &responseError) && responseError.Response != nil &&
+		(responseError.Response.StatusCode == nethttp.StatusNotFound ||
+			responseError.Response.StatusCode == nethttp.StatusPreconditionFailed) {
+		return errors.Join(ErrObjectChanged, moerr.NewInternalErrorNoCtx("conditional S3 read failed"))
+	}
+	return err
 }
 
 func (a *AwsSDKv2) Exists(
@@ -866,10 +937,10 @@ func (a *AwsSDKv2) deleteMultiObj(ctx context.Context, objs []types.ObjectIdenti
 	})
 	// delete api failed
 	if err != nil {
-		if isS3APIErrorCode(err, "MalformedXML") {
+		if isS3APIErrorCode(err, "MalformedXML") || isS3APIMultiDeleteChecksumError(err) {
 			a.disableMultiDelete.Store(true)
 			logutil.Warn(
-				"s3 delete objects returned MalformedXML, disabling multi-delete and falling back to single deletes",
+				"s3 delete objects is incompatible with this endpoint, disabling multi-delete and falling back to single deletes",
 				zap.String("fs", a.name),
 				zap.String("bucket", a.bucket),
 				zap.Int("count", len(objs)),
@@ -893,6 +964,24 @@ func (a *AwsSDKv2) deleteMultiObj(ctx context.Context, objs []types.ObjectIdenti
 		return moerr.NewInternalErrorNoCtxf("S3 Delete failed: %s", message.String())
 	}
 	return nil
+}
+
+// Newer AWS SDK v2 releases use CRC32 for the required DeleteObjects checksum,
+// while older SDKs sent Content-MD5. Some S3-compatible endpoints reject the
+// newer request with one of these request-level errors. Treat that response as
+// endpoint incompatibility, fall back to individual DeleteObject calls, and
+// disable batching for later calls.
+func isS3APIMultiDeleteChecksumError(err error) bool {
+	for _, code := range []string{"MissingContentMD5", "MissingArgument", "InvalidDigest", "BadDigest", "InvalidRequest", "BadRequest"} {
+		if isS3APIErrorCode(err, code) {
+			return true
+		}
+	}
+	// Some S3-compatible endpoints surface the missing-header rejection as a
+	// generic BadRequest or return the detail without a structured S3 error code.
+	// Keep the fallback narrow to this compatibility signal instead of treating
+	// arbitrary 4xx responses as a reason to disable batch deletes.
+	return strings.Contains(strings.ToLower(err.Error()), "content-md5")
 }
 
 func (a *AwsSDKv2) deleteMultiObjOneByOne(ctx context.Context, objs []types.ObjectIdentifier) error {
@@ -974,7 +1063,7 @@ func (a *AwsSDKv2) getObject(ctx context.Context, min *int64, max *int64, params
 			defer LogEvent(ctx, str_retryable_reader_new_reader_end)
 			var rang string
 			if max != nil {
-				rang = fmt.Sprintf("bytes=%d-%d", offset, *max)
+				rang = fmt.Sprintf("bytes=%d-%d", offset, *max-1)
 			} else {
 				rang = fmt.Sprintf("bytes=%d-", offset)
 			}

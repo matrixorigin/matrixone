@@ -122,6 +122,20 @@ func (r *ConstantFold) Apply(node *plan.Node, _ *plan.Query, proc *process.Proce
 	}
 }
 
+// IsNullIntegerArgumentCast protects the source domain until EXECUTE.
+// Folding this to an INT64 NULL would make a selecting expression choose a
+// signed domain even when its actual non-NULL source is UINT64.
+func IsNullIntegerArgumentCast(expr *plan.Expr) bool {
+	fn := expr.GetF()
+	if fn == nil || fn.Func == nil || len(fn.Args) != 2 {
+		return false
+	}
+	id, overload := function.DecodeOverloadID(fn.Func.Obj)
+	return id == function.CAST &&
+		function.IsIntegerArgumentCastOverload(overload) &&
+		fn.Args[0].GetLit().GetIsnull()
+}
+
 func (r *ConstantFold) constantFold(expr *plan.Expr, proc *process.Process) *plan.Expr {
 	if expr == nil {
 		return expr
@@ -158,6 +172,10 @@ func (r *ConstantFold) constantFold(expr *plan.Expr, proc *process.Process) *pla
 				// and visible to the remote protocol capability analysis.
 				return expr
 			}
+			requiresDecimalProvenance, err := plan.RequiresMORPCVersion89DecimalLiteralSemantics(exprList)
+			if err != nil {
+				return expr
+			}
 			isSerialized := ContainsSerializedLiteral(exprList)
 
 			vec, err := colexec.GenerateConstListExpressionExecutor(proc, exprList)
@@ -185,10 +203,11 @@ func (r *ConstantFold) constantFold(expr *plan.Expr, proc *process.Process) *pla
 				Typ: expr.Typ,
 				Expr: &plan.Expr_Vec{
 					Vec: &plan.LiteralVec{
-						Len:          int32(vec.Length()),
-						Data:         data,
-						IsSerialized: isSerialized,
-						StringSource: uint32(vec.GetStringSource()),
+						Len:                       int32(vec.Length()),
+						Data:                      data,
+						IsSerialized:              isSerialized,
+						StringSource:              uint32(vec.GetStringSource()),
+						DecimalLiteralRequiresV82: requiresDecimalProvenance,
 					},
 				},
 			}
@@ -197,9 +216,20 @@ func (r *ConstantFold) constantFold(expr *plan.Expr, proc *process.Process) *pla
 		return expr
 	}
 	overloadID := fn.Func.GetObj()
+	if r.isPrepared && IsNullIntegerArgumentCast(expr) {
+		return expr
+	}
 	f, exists := function.GetFunctionByIdWithoutError(overloadID)
 
 	if !exists {
+		return expr
+	}
+	// The persisted-expression admission pass runs after optimization. Keep
+	// spatial-distance functions visible until that pass has observed the v86
+	// requirement; folding them to a literal would erase the only durable
+	// capability marker and let an older reader rebind the original SQL under
+	// incompatible planar semantics.
+	if requiresSpatial, err := plan.RequiresMORPCVersion90SpatialDistanceSemantics(expr); err != nil || requiresSpatial {
 		return expr
 	}
 	if f.CannotFold() { // function cannot be fold
@@ -246,6 +276,10 @@ func (r *ConstantFold) constantFold(expr *plan.Expr, proc *process.Process) *pla
 	defer free()
 
 	if isVec {
+		requiresDecimalProvenance, err := plan.RequiresMORPCVersion89DecimalLiteralSemantics(fn.Args)
+		if err != nil {
+			return expr
+		}
 		if vec.GetStringSources() != nil {
 			return expr
 		}
@@ -258,9 +292,10 @@ func (r *ConstantFold) constantFold(expr *plan.Expr, proc *process.Process) *pla
 			Typ: expr.Typ,
 			Expr: &plan.Expr_Vec{
 				Vec: &plan.LiteralVec{
-					Len:          int32(vec.Length()),
-					Data:         data,
-					StringSource: uint32(vec.GetStringSource()),
+					Len:                       int32(vec.Length()),
+					Data:                      data,
+					StringSource:              uint32(vec.GetStringSource()),
+					DecimalLiteralRequiresV82: requiresDecimalProvenance,
 				},
 			},
 		}
@@ -271,6 +306,7 @@ func (r *ConstantFold) constantFold(expr *plan.Expr, proc *process.Process) *pla
 		return expr
 	}
 	PreserveFoldedLiteralStringDomain(expr, c)
+	PreserveFoldedDecimalLiteralSemantics(expr, c)
 
 	MarkFoldedLiteralSerialized(overloadID, fn.Args, c)
 
@@ -414,6 +450,25 @@ func PreserveFoldedLiteralStringDomain(expr *plan.Expr, literal *plan.Literal) {
 	} else {
 		literal.LiteralForm = plan.StringLiteralForm_STRING_LITERAL_TEXT
 	}
+}
+
+// PreserveFoldedDecimalLiteralSemantics carries the planner provenance bit
+// through constant folding. A folded CAST or arithmetic expression may replace
+// the source literal with a new Literal, but an old CN would still rebind the
+// persisted SQL using its pre-Decimal256 rules.
+func PreserveFoldedDecimalLiteralSemantics(expr *plan.Expr, literal *plan.Literal) {
+	if expr == nil || literal == nil || literal.DecimalLiteralRequiresV82 {
+		return
+	}
+	_ = plan.VisitExprTree(expr, func(current *plan.Expr) error {
+		if source := current.GetLit(); source != nil && source.DecimalLiteralRequiresV82 {
+			literal.DecimalLiteralRequiresV82 = true
+		}
+		if source := current.GetVec(); source != nil && source.DecimalLiteralRequiresV82 {
+			literal.DecimalLiteralRequiresV82 = true
+		}
+		return nil
+	})
 }
 
 func GetConstantValue(vec *vector.Vector, transAll bool, row uint64) (literal *plan.Literal) {
@@ -592,23 +647,17 @@ func GetConstantValue2(proc *process.Process, expr *plan.Expr, vec *vector.Vecto
 		if sourceErr != nil {
 			return false, sourceErr
 		}
-		// Existing type-specific branches publish exactly one physical row on a
-		// successful constant match. Apply metadata after that append so NULL and
-		// every physical family share one owner without duplicating switch arms.
-		defer func() {
-			if get && err == nil {
-				err = vec.SetStringSourceAtWithMP(vec.Length()-1, source, proc.Mp())
-			}
-		}()
+		// Publish known provenance with the value, not via an ordinary append
+		// followed by a row-source rewrite (quadratic for uniform VALUES).
 		if cExpr.Lit.Isnull {
-			err = vector.AppendBytes(vec, nil, true, proc.Mp())
+			err = vector.AppendBytesWithStringSource(vec, nil, true, source, proc.Mp())
 			return true, err
 		}
 		switch vec.GetType().Oid {
 		case types.T_bool:
 			if val, ok := cExpr.Lit.Value.(*plan.Literal_Bval); ok {
 				val := val.Bval
-				err = vector.AppendFixed(vec, val, false, proc.GetMPool())
+				err = vector.AppendFixedWithStringSource(vec, val, false, source, proc.GetMPool())
 				return true, err
 			} else {
 				err = vector.AppendBytes(vec, nil, true, proc.Mp())
@@ -617,7 +666,7 @@ func GetConstantValue2(proc *process.Process, expr *plan.Expr, vec *vector.Vecto
 		case types.T_bit:
 			if val, ok := cExpr.Lit.Value.(*plan.Literal_U64Val); ok {
 				val := val.U64Val
-				err = vector.AppendFixed(vec, val, false, proc.GetMPool())
+				err = vector.AppendFixedWithStringSource(vec, val, false, source, proc.GetMPool())
 				return true, err
 			} else {
 				err = vector.AppendBytes(vec, nil, true, proc.Mp())
@@ -626,7 +675,7 @@ func GetConstantValue2(proc *process.Process, expr *plan.Expr, vec *vector.Vecto
 		case types.T_int8:
 			if val, ok := cExpr.Lit.Value.(*plan.Literal_I8Val); ok {
 				val := int8(val.I8Val)
-				err = vector.AppendFixed(vec, val, false, proc.GetMPool())
+				err = vector.AppendFixedWithStringSource(vec, val, false, source, proc.GetMPool())
 				return true, err
 			} else {
 				err = vector.AppendBytes(vec, nil, true, proc.Mp())
@@ -635,7 +684,7 @@ func GetConstantValue2(proc *process.Process, expr *plan.Expr, vec *vector.Vecto
 		case types.T_int16:
 			if val, ok := cExpr.Lit.Value.(*plan.Literal_I16Val); ok {
 				val := int16(val.I16Val)
-				err = vector.AppendFixed(vec, val, false, proc.GetMPool())
+				err = vector.AppendFixedWithStringSource(vec, val, false, source, proc.GetMPool())
 				return true, err
 			} else {
 				err = vector.AppendBytes(vec, nil, true, proc.Mp())
@@ -644,7 +693,7 @@ func GetConstantValue2(proc *process.Process, expr *plan.Expr, vec *vector.Vecto
 		case types.T_int32:
 			if val, ok := cExpr.Lit.Value.(*plan.Literal_I32Val); ok {
 				val := val.I32Val
-				err = vector.AppendFixed(vec, val, false, proc.GetMPool())
+				err = vector.AppendFixedWithStringSource(vec, val, false, source, proc.GetMPool())
 				return true, err
 			} else {
 				err = vector.AppendBytes(vec, nil, true, proc.Mp())
@@ -653,7 +702,7 @@ func GetConstantValue2(proc *process.Process, expr *plan.Expr, vec *vector.Vecto
 		case types.T_int64:
 			if val, ok := cExpr.Lit.Value.(*plan.Literal_I64Val); ok {
 				val := val.I64Val
-				err = vector.AppendFixed(vec, val, false, proc.GetMPool())
+				err = vector.AppendFixedWithStringSource(vec, val, false, source, proc.GetMPool())
 				return true, err
 			} else {
 				err = vector.AppendBytes(vec, nil, true, proc.Mp())
@@ -662,7 +711,7 @@ func GetConstantValue2(proc *process.Process, expr *plan.Expr, vec *vector.Vecto
 		case types.T_uint8:
 			if val, ok := cExpr.Lit.Value.(*plan.Literal_U8Val); ok {
 				val := uint8(val.U8Val)
-				err = vector.AppendFixed(vec, val, false, proc.GetMPool())
+				err = vector.AppendFixedWithStringSource(vec, val, false, source, proc.GetMPool())
 				return true, err
 			} else {
 				err = vector.AppendBytes(vec, nil, true, proc.Mp())
@@ -671,7 +720,7 @@ func GetConstantValue2(proc *process.Process, expr *plan.Expr, vec *vector.Vecto
 		case types.T_uint16:
 			if val, ok := cExpr.Lit.Value.(*plan.Literal_U16Val); ok {
 				val := uint16(val.U16Val)
-				err = vector.AppendFixed(vec, val, false, proc.GetMPool())
+				err = vector.AppendFixedWithStringSource(vec, val, false, source, proc.GetMPool())
 				return true, err
 			} else {
 				err = vector.AppendBytes(vec, nil, true, proc.Mp())
@@ -680,7 +729,7 @@ func GetConstantValue2(proc *process.Process, expr *plan.Expr, vec *vector.Vecto
 		case types.T_uint32:
 			if val, ok := cExpr.Lit.Value.(*plan.Literal_U32Val); ok {
 				val := val.U32Val
-				err = vector.AppendFixed(vec, val, false, proc.GetMPool())
+				err = vector.AppendFixedWithStringSource(vec, val, false, source, proc.GetMPool())
 				return true, err
 			} else {
 				err = vector.AppendBytes(vec, nil, true, proc.Mp())
@@ -689,7 +738,7 @@ func GetConstantValue2(proc *process.Process, expr *plan.Expr, vec *vector.Vecto
 		case types.T_uint64:
 			if val, ok := cExpr.Lit.Value.(*plan.Literal_U64Val); ok {
 				val := val.U64Val
-				err = vector.AppendFixed(vec, val, false, proc.GetMPool())
+				err = vector.AppendFixedWithStringSource(vec, val, false, source, proc.GetMPool())
 				return true, err
 			} else {
 				err = vector.AppendBytes(vec, nil, true, proc.Mp())
@@ -698,7 +747,7 @@ func GetConstantValue2(proc *process.Process, expr *plan.Expr, vec *vector.Vecto
 		case types.T_float32:
 			if val, ok := cExpr.Lit.Value.(*plan.Literal_Fval); ok {
 				val := val.Fval
-				err = vector.AppendFixed(vec, val, false, proc.GetMPool())
+				err = vector.AppendFixedWithStringSource(vec, val, false, source, proc.GetMPool())
 				return true, err
 			} else {
 				err = vector.AppendBytes(vec, nil, true, proc.Mp())
@@ -707,7 +756,7 @@ func GetConstantValue2(proc *process.Process, expr *plan.Expr, vec *vector.Vecto
 		case types.T_float64:
 			if val, ok := cExpr.Lit.Value.(*plan.Literal_Dval); ok {
 				val := val.Dval
-				err = vector.AppendFixed(vec, val, false, proc.GetMPool())
+				err = vector.AppendFixedWithStringSource(vec, val, false, source, proc.GetMPool())
 				return true, err
 			} else {
 				err = vector.AppendBytes(vec, nil, true, proc.Mp())
@@ -717,7 +766,7 @@ func GetConstantValue2(proc *process.Process, expr *plan.Expr, vec *vector.Vecto
 			types.T_blob, types.T_datalink, types.T_json, types.T_geometry:
 			if val, ok := cExpr.Lit.Value.(*plan.Literal_Sval); ok {
 				val := val.Sval
-				err = vector.AppendBytes(vec, []byte(val), false, proc.Mp())
+				err = vector.AppendBytesWithStringSource(vec, []byte(val), false, source, proc.Mp())
 				return true, err
 			} else {
 				err = vector.AppendBytes(vec, nil, false, proc.Mp())
@@ -727,7 +776,7 @@ func GetConstantValue2(proc *process.Process, expr *plan.Expr, vec *vector.Vecto
 			types.T_array_bf16, types.T_array_float16, types.T_array_int8, types.T_array_uint8:
 			if val, ok := cExpr.Lit.Value.(*plan.Literal_VecVal); ok {
 				val := val.VecVal
-				err = vector.AppendBytes(vec, []byte(val), false, proc.Mp())
+				err = vector.AppendBytesWithStringSource(vec, []byte(val), false, source, proc.Mp())
 				return true, err
 			} else {
 				err = vector.AppendBytes(vec, nil, false, proc.Mp())
@@ -736,7 +785,7 @@ func GetConstantValue2(proc *process.Process, expr *plan.Expr, vec *vector.Vecto
 		case types.T_timestamp:
 			if val, ok := cExpr.Lit.Value.(*plan.Literal_Timestampval); ok {
 				val := val.Timestampval
-				err = vector.AppendFixed(vec, val, false, proc.GetMPool())
+				err = vector.AppendFixedWithStringSource(vec, val, false, source, proc.GetMPool())
 				return true, err
 			} else {
 				err = vector.AppendBytes(vec, nil, true, proc.Mp())
@@ -745,7 +794,7 @@ func GetConstantValue2(proc *process.Process, expr *plan.Expr, vec *vector.Vecto
 		case types.T_date:
 			if val, ok := cExpr.Lit.Value.(*plan.Literal_Dval); ok {
 				val := val.Dval
-				err = vector.AppendFixed(vec, val, false, proc.GetMPool())
+				err = vector.AppendFixedWithStringSource(vec, val, false, source, proc.GetMPool())
 				return true, err
 			} else {
 				err = vector.AppendBytes(vec, nil, true, proc.Mp())
@@ -754,7 +803,7 @@ func GetConstantValue2(proc *process.Process, expr *plan.Expr, vec *vector.Vecto
 		case types.T_time:
 			if val, ok := cExpr.Lit.Value.(*plan.Literal_Dval); ok {
 				val := val.Dval
-				err = vector.AppendFixed(vec, val, false, proc.GetMPool())
+				err = vector.AppendFixedWithStringSource(vec, val, false, source, proc.GetMPool())
 				return true, err
 			} else {
 				err = vector.AppendBytes(vec, nil, true, proc.Mp())
@@ -763,16 +812,16 @@ func GetConstantValue2(proc *process.Process, expr *plan.Expr, vec *vector.Vecto
 		case types.T_datetime:
 			if val, ok := cExpr.Lit.Value.(*plan.Literal_Datetimeval); ok {
 				val := val.Datetimeval
-				err = vector.AppendFixed(vec, types.Datetime(val), false, proc.GetMPool())
+				err = vector.AppendFixedWithStringSource(vec, types.Datetime(val), false, source, proc.GetMPool())
 				return true, err
 			} else {
-				err = vector.AppendBytes(vec, nil, true, proc.Mp())
+				err = vector.AppendBytesWithStringSource(vec, nil, true, source, proc.Mp())
 				return true, err
 			}
 		case types.T_enum:
 			if val, ok := cExpr.Lit.Value.(*plan.Literal_EnumVal); ok {
 				val := types.Enum(val.EnumVal)
-				err = vector.AppendFixed(vec, val, false, proc.GetMPool())
+				err = vector.AppendFixedWithStringSource(vec, val, false, source, proc.GetMPool())
 				return true, err
 			} else {
 				err = vector.AppendBytes(vec, nil, true, proc.Mp())
@@ -781,7 +830,7 @@ func GetConstantValue2(proc *process.Process, expr *plan.Expr, vec *vector.Vecto
 		case types.T_decimal64:
 			if val, ok := cExpr.Lit.Value.(*plan.Literal_Decimal64Val); ok {
 				val := val.Decimal64Val.A
-				err = vector.AppendFixed(vec, val, false, proc.GetMPool())
+				err = vector.AppendFixedWithStringSource(vec, val, false, source, proc.GetMPool())
 				return true, err
 			} else {
 				err = vector.AppendBytes(vec, nil, true, proc.Mp())
@@ -790,7 +839,7 @@ func GetConstantValue2(proc *process.Process, expr *plan.Expr, vec *vector.Vecto
 		case types.T_decimal128:
 			if val, ok := cExpr.Lit.Value.(*plan.Literal_Decimal128Val); ok {
 				val := types.Decimal128{B0_63: uint64(val.Decimal128Val.A), B64_127: uint64(val.Decimal128Val.B)}
-				err = vector.AppendFixed(vec, val, false, proc.GetMPool())
+				err = vector.AppendFixedWithStringSource(vec, val, false, source, proc.GetMPool())
 				return true, err
 			} else {
 				err = vector.AppendBytes(vec, nil, true, proc.Mp())

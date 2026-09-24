@@ -163,6 +163,7 @@ func (s *service) initQueryCommandHandler() {
 	s.addQueryCommandHandler(query.CmdMethod_GetReplicaCount, s.handleGetReplicaCount)
 	s.addQueryCommandHandler(query.CmdMethod_CtlReader, s.handleCtlReader)
 	s.addQueryCommandHandler(query.CmdMethod_ResetSession, s.handleResetSession)
+	s.addQueryCommandHandler(query.CmdMethod_RefreshSessionAuth, s.handleRefreshSessionAuth)
 	s.addQueryCommandHandler(query.CmdMethod_GOMAXPROCS, s.handleGoMaxProcs)
 	s.addQueryCommandHandler(query.CmdMethod_GOMEMLIMIT, s.handleGoMemLimit)
 	s.addQueryCommandHandler(query.CmdMethod_GOGCPercent, s.handleGoGCPercent)
@@ -744,6 +745,28 @@ func (s *service) handleResetSession(
 		return err
 	}
 	resp.ResetSessionResponse.Success = true
+	return nil
+}
+
+func (s *service) handleRefreshSessionAuth(
+	ctx context.Context, req *query.Request, resp *query.Response, _ *morpc.Buffer,
+) error {
+	if req == nil || req.RefreshSessionAuthRequest == nil {
+		return moerr.NewInternalError(ctx, "bad request")
+	}
+	rm := s.mo.GetRoutineManager()
+	if rm == nil {
+		return moerr.NewInternalError(ctx, "routine manager not initialized")
+	}
+	resp.RefreshSessionAuthResponse = &query.RefreshSessionAuthResponse{}
+	if err := rm.RefreshSessionAuthWithContext(
+		ctx,
+		req.RefreshSessionAuthRequest,
+		resp.RefreshSessionAuthResponse,
+	); err != nil {
+		logutil.Errorf("failed to refresh session authentication: %v", err)
+		return err
+	}
 	return nil
 }
 

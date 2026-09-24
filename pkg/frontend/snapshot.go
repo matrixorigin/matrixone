@@ -42,6 +42,7 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/sql/parsers/dialect/mysql"
 	"github.com/matrixorigin/matrixone/pkg/sql/parsers/tree"
 	"github.com/matrixorigin/matrixone/pkg/sql/plan"
+	"github.com/matrixorigin/matrixone/pkg/util/fault"
 	"github.com/matrixorigin/matrixone/pkg/util/trace/impl/motrace/statistic"
 	"github.com/matrixorigin/matrixone/pkg/vm/process"
 )
@@ -51,6 +52,12 @@ type tableType string
 const view tableType = "VIEW"
 
 const clusterTable tableType = "CLUSTER TABLE"
+
+// restoreBeforeViewMetadataLifecycleFault pauses a whole-catalog restore after
+// it has taken the feature-registry catalog identity and before the remaining
+// lifecycle gates. It is inert unless a test explicitly installs the fault
+// point and observes the metadata lock ordering at this boundary.
+const restoreBeforeViewMetadataLifecycleFault = "restore-before-view-metadata-lifecycle"
 
 const (
 	insertIntoMoSnapshots = `insert into mo_catalog.mo_snapshots(
@@ -95,8 +102,8 @@ var (
 
 	// systemCatalogRestorePolicies is the ownership boundary for mo_catalog
 	// restore semantics. Most catalog tables are either rebuilt by normal DDL or
-	// can be copied verbatim. Tables containing object IDs must opt into a
-	// post-copy transform instead of relying on incidental physical-ID equality.
+	// can be copied verbatim. Tables containing object IDs must opt into an
+	// owner rebuild instead of relying on incidental physical-ID equality.
 	systemCatalogRestorePolicies = map[string]systemCatalogRestorePolicy{
 		"mo_database":         systemCatalogRestoreSkip,
 		"mo_tables":           systemCatalogRestoreSkip,
@@ -117,7 +124,7 @@ var (
 		"mo_role":                       systemCatalogRestoreCopy,
 		"mo_user_grant":                 systemCatalogRestoreCopy,
 		"mo_role_grant":                 systemCatalogRestoreCopy,
-		"mo_role_privs":                 systemCatalogRestoreCopyThenTransform,
+		"mo_role_privs":                 systemCatalogRestoreRebuild,
 		"mo_role_rule":                  systemCatalogRestoreCopy,
 		"mo_user_defined_function":      systemCatalogRestoreCopy,
 		"mo_stored_procedure":           systemCatalogRestoreCopy,
@@ -129,6 +136,7 @@ var (
 		catalog.MOShardsMetadata:        systemCatalogRestoreCopy,
 		catalog.MO_CDC_TASK:             systemCatalogRestoreCopy,
 		catalog.MO_CDC_WATERMARK:        systemCatalogRestoreCopy,
+		catalog.MO_CDC_SNAPSHOT:         systemCatalogRestoreCopy,
 		catalog.MO_TABLE_STATS:          systemCatalogRestoreCopy,
 		catalog.MO_ACCOUNT_LOCK:         systemCatalogRestoreCopy,
 		catalog.MO_MERGE_SETTINGS:       systemCatalogRestoreCopy,
@@ -686,7 +694,7 @@ func doDropSnapshot(ctx context.Context, ses *Session, stmt *tree.DropSnapShot) 
 				return err
 			}
 			systemCtx := defines.AttachAccountId(ctx, catalog.System_Account)
-			if err = bh.Exec(systemCtx, catalog.ViewMetadataLifecycleGateSQL); err != nil {
+			if err = lockViewMetadataLifecycle(systemCtx, bh); err != nil {
 				return err
 			}
 			if err = bh.Exec(process.WithSystemCTELimits(systemCtx), compile.SnapshotViewMetadataInvalidationSQL(
@@ -771,9 +779,10 @@ func doRestoreSnapshot(ctx context.Context, ses *Session, stmt *tree.RestoreSnap
 		return stats, err
 	}
 	// Serialize catalog restore with View metadata recovery before either path
-	// locks a target View. The gate row belongs to a preserved catalog table, so
-	// it remains stable while relation identities are rebuilt.
-	if err = bh.Exec(ctx, catalog.ViewMetadataLifecycleGateSQL); err != nil {
+	// locks a target View. The restore admission above owns the feature-registry
+	// catalog identity before its SNAPSHOT row can be retained while relation
+	// identities are rebuilt.
+	if err = lockViewMetadataLifecycle(ctx, bh); err != nil {
 		return stats, err
 	}
 
@@ -789,6 +798,12 @@ func doRestoreSnapshot(ctx context.Context, ses *Session, stmt *tree.RestoreSnap
 
 	// check restore priv
 	if err = checkRestorePriv(ctx, ses, snapshot, stmt); err != nil {
+		return stats, err
+	}
+	// Validate every database identity before resolving the target account.
+	// Target resolution may create a dropped account, and account restore later
+	// invalidates view metadata, so neither may happen before capability admission.
+	if err = preflightRestoreSnapshotEntry(ctx, ses, bh, stmt, *snapshot); err != nil {
 		return stats, err
 	}
 
@@ -824,6 +839,12 @@ func doRestoreSnapshot(ctx context.Context, ses *Session, stmt *tree.RestoreSnap
 		}
 		markMongoDBAccountForRetirement(&retiredMongoDBAccountIDs, toAccountId)
 		return
+	}
+
+	if stmt.Level == tree.RESTORELEVELTABLE {
+		if err = validateRestoreTableTarget(ctx, ses.GetService(), bh, snapshotName, dbName, tblName, toAccountId); err != nil {
+			return stats, err
+		}
 	}
 
 	// drop foreign key related tables first
@@ -918,7 +939,11 @@ func doRestoreSnapshot(ctx context.Context, ses *Session, stmt *tree.RestoreSnap
 	}
 
 	if len(fkTableMap) > 0 {
-		if err = restoreTablesWithFk(ctx, ses.GetService(), bh, snapshotName, sortedFkTbls, fkTableMap, toAccountId, snapshot.ts); err != nil {
+		if err = restoreTablesWithFk(
+			ctx, ses.GetService(), bh, snapshotName, sortedFkTbls,
+			fkTableMap, toAccountId, snapshot.ts,
+			stmt.Level == tree.RESTORELEVELTABLE,
+		); err != nil {
 			return
 		}
 	}
@@ -961,6 +986,51 @@ func doRestoreSnapshot(ctx context.Context, ses *Session, stmt *tree.RestoreSnap
 	return
 }
 
+func preflightRestoreSnapshotEntry(
+	ctx context.Context,
+	ses *Session,
+	bh BackgroundExec,
+	stmt *tree.RestoreSnapShot,
+	snapshot snapshotRecord,
+) error {
+	switch stmt.Level {
+	case tree.RESTORELEVELCLUSTER:
+		// Cluster restore builds and validates its complete account plan before
+		// the first account mutation.
+		return nil
+	case tree.RESTORELEVELACCOUNT:
+		if snapshot.level == tree.RESTORELEVELCLUSTER.String() {
+			account, err := getAccountRecordByTs(
+				ctx, ses, bh, snapshot.snapshotName, snapshot.ts, string(stmt.AccountName),
+			)
+			if err != nil {
+				return err
+			}
+			accountID := uint32(account.accountId)
+			return preflightLogicalRestoreAccountFromTS(
+				ctx, ses.GetService(), bh, snapshot.ts, accountID, accountID,
+			)
+		}
+		return preflightLogicalRestoreAccountFromSnapshot(
+			ctx, ses.GetService(), bh, snapshot.snapshotName, snapshot.ts, uint32(snapshot.objId),
+		)
+	case tree.RESTORELEVELDATABASE, tree.RESTORELEVELTABLE:
+		return preflightLogicalRestoreDatabases(
+			ctx,
+			[]string{string(stmt.DatabaseName)},
+			currentProtocolVersionForService(bh.Service()),
+			func(dbName string) (logicalRestoreDatabaseDefinition, error) {
+				return getCreateDatabaseSql(
+					ctx, ses.GetService(), bh, snapshot.snapshotName, snapshot.ts,
+					dbName, ses.GetTenantInfo().GetTenantID(),
+				)
+			},
+		)
+	default:
+		return nil
+	}
+}
+
 func restoreReplacesLineageOwnerCatalogs(level tree.RestoreLevel) bool {
 	return level == tree.RESTORELEVELCLUSTER || level == tree.RESTORELEVELACCOUNT
 }
@@ -973,6 +1043,25 @@ func lockRestoreLineageOwnerLifecycle(
 	if !restoreReplacesLineageOwnerCatalogs(level) {
 		return nil
 	}
+	// The feature-registry relation owns the SNAPSHOT lifecycle row below and
+	// is itself copied during cluster/system-account restore. Acquire its
+	// stable catalog identity before the SNAPSHOT row so a CN heartbeat cannot
+	// hold shared metadata for the relation while waiting on SNAPSHOT as
+	// restore later upgrades that metadata to replace the relation.
+	systemCtx := defines.AttachAccountId(ctx, catalog.System_Account)
+	bh.ClearExecResultSet()
+	if err := bh.Exec(systemCtx, catalog.FeatureRegistryCatalogGateSQL); err != nil {
+		return err
+	}
+	results, err := getResultSet(systemCtx, bh)
+	bh.ClearExecResultSet()
+	if err != nil {
+		return err
+	}
+	if !execResultArrayHasData(results) {
+		return moerr.NewNoSuchTable(systemCtx, catalog.MO_CATALOG, catalog.MO_FEATURE_REGISTRY)
+	}
+	fault.TriggerFaultWithContext(ctx, restoreBeforeViewMetadataLifecycleFault)
 	return lockDataBranchLineageOwnerLifecycle(ctx, bh)
 }
 
@@ -1173,15 +1262,19 @@ func restoreToAccount(
 ) (err error) {
 	getLogger(sid).Debug(fmt.Sprintf("[%s] start to restore account: %v, restore timestamp : %d", snapshotName, toAccountId, snapshotTs))
 
-	var dbNames []string
+	var currentDBNames, restoreDBNames []string
 	toCtx := defines.AttachAccountId(ctx, toAccountId)
 
-	// delete current dbs
-	if dbNames, err = showDatabases(toCtx, sid, bh, ""); err != nil {
+	if restoreDBNames, err = showDatabases(ctx, sid, bh, snapshotName); err != nil {
 		return
 	}
 
-	for _, dbName := range dbNames {
+	// delete current dbs
+	if currentDBNames, err = showDatabases(toCtx, sid, bh, ""); err != nil {
+		return
+	}
+
+	for _, dbName := range currentDBNames {
 		if needSkipDb(dbName) {
 			if toAccountId == 0 && dbName == moCatalog {
 				// drop existing cluster tables
@@ -1200,11 +1293,7 @@ func restoreToAccount(
 	}
 
 	// restore dbs
-	if dbNames, err = showDatabases(ctx, sid, bh, snapshotName); err != nil {
-		return
-	}
-
-	for _, dbName := range dbNames {
+	for _, dbName := range restoreDBNames {
 		if err = restoreToDatabase(ctx,
 			sid,
 			bh,
@@ -1233,6 +1322,28 @@ func restoreToAccount(
 		return
 	}
 	return
+}
+
+func preflightLogicalRestoreAccountFromSnapshot(
+	ctx context.Context,
+	sid string,
+	bh BackgroundExec,
+	snapshotName string,
+	snapshotTS int64,
+	sourceAccount uint32,
+) error {
+	databaseNames, err := showDatabases(ctx, sid, bh, snapshotName)
+	if err != nil {
+		return err
+	}
+	return preflightLogicalRestoreDatabases(
+		ctx,
+		databaseNames,
+		currentProtocolVersionForService(bh.Service()),
+		func(dbName string) (logicalRestoreDatabaseDefinition, error) {
+			return getCreateDatabaseSql(ctx, sid, bh, snapshotName, snapshotTS, dbName, sourceAccount)
+		},
+	)
 }
 
 func restoreToDatabase(
@@ -1313,14 +1424,21 @@ func restoreToDatabaseOrTable(
 		return
 	}
 
-	var createDbSql string
+	var definition logicalRestoreDatabaseDefinition
 	var isSubDb bool
-	createDbSql, err = getCreateDatabaseSql(ctx, sid, bh, snapshotName, snapshotTs, dbName, restoreAccount)
+	definition, err = getCreateDatabaseSql(ctx, sid, bh, snapshotName, snapshotTs, dbName, restoreAccount)
 	if err != nil {
 		return
 	}
+	createDbSql := definition.createSQL
 
 	toCtx := defines.AttachAccountId(ctx, toAccountId)
+	toCtx, err = prepareLogicalRestoreDatabase(
+		toCtx, dbName, definition, currentProtocolVersionForService(bh.Service()),
+	)
+	if err != nil {
+		return
+	}
 	restoreToTbl := tblName != ""
 
 	// if restore to table, check if the db is sub db
@@ -1443,7 +1561,7 @@ func restoreToDatabaseOrTable(
 			return
 		}
 
-		if err = recreateTable(ctx, sid, bh, snapshotName, tblInfo, toAccountId, snapshotTs); err != nil {
+		if err = recreateTable(ctx, sid, bh, snapshotName, tblInfo, toAccountId, snapshotTs, restoreToTbl); err != nil {
 			return
 		}
 	}
@@ -1495,7 +1613,7 @@ func restoreSystemDatabase(
 			return
 		}
 
-		if err = recreateTable(ctx, sid, bh, snapshotName, tblInfo, toAccountId, snapshotTs); err != nil {
+		if err = recreateTable(ctx, sid, bh, snapshotName, tblInfo, toAccountId, snapshotTs, false); err != nil {
 			return
 		}
 	}
@@ -1572,7 +1690,8 @@ func restoreTablesWithFk(
 	sortedFkTbls []string,
 	fkTableMap map[string]*tableInfo,
 	toAccountId uint32,
-	snapshotTs int64) (err error) {
+	snapshotTs int64,
+	rejectMasterTable bool) (err error) {
 	getLogger(sid).Debug(fmt.Sprintf("[%s] start to drop fk related tables", snapshotName))
 
 	// recreate tables as topo order
@@ -1581,7 +1700,7 @@ func restoreTablesWithFk(
 		// e.g. t1.pk <- t2.fk, we only want to restore t2, fkTableMap[t1.key] is nil, ignore t1
 		if tblInfo := fkTableMap[key]; tblInfo != nil {
 			getLogger(sid).Debug(fmt.Sprintf("[%s] start to restore table with fk: %v, restore timestamp: %d", snapshotName, tblInfo.tblName, snapshotTs))
-			if err = recreateTable(ctx, sid, bh, snapshotName, tblInfo, toAccountId, snapshotTs); err != nil {
+			if err = recreateTable(ctx, sid, bh, snapshotName, tblInfo, toAccountId, snapshotTs, rejectMasterTable); err != nil {
 				return
 			}
 		}
@@ -1846,6 +1965,7 @@ func recreateTable(
 	tblInfo *tableInfo,
 	toAccountId uint32,
 	snapshotTs int64,
+	rejectMasterTable bool,
 ) (err error) {
 	if isExternalTable(tblInfo) {
 		return newExternalTableRestoreError(ctx, tblInfo, "snapshot")
@@ -1893,9 +2013,14 @@ func recreateTable(
 
 	ctx = defines.AttachAccountId(ctx, toAccountId)
 
-	var isMasterTable bool
-	isMasterTable, err = checkTableIsMaster(ctx, sid, bh, snapshotName, tblInfo.dbName, tblInfo.tblName)
+	isMasterTable, err := checkTableIsMaster(ctx, sid, bh, snapshotName, tblInfo.dbName, tblInfo.tblName)
+	if err != nil {
+		return err
+	}
 	if isMasterTable {
+		if rejectMasterTable {
+			return newRestoreTableForeignKeyError(ctx, tblInfo.dbName, tblInfo.tblName)
+		}
 		// skip restore the table which is master table
 		getLogger(sid).Debug(fmt.Sprintf("[%s] skip restore master table: %v.%v", snapshotName, tblInfo.dbName, tblInfo.tblName))
 		return
@@ -1955,11 +2080,11 @@ func needSkipDb(dbName string) bool {
 func needSkipTable(accountId uint32, dbName string, tblName string) bool {
 	if accountId == sysAccountID {
 		policy, registered := systemCatalogRestorePolicies[tblName]
-		return dbName == moCatalog && registered && policy == systemCatalogRestoreSkip
+		return dbName == moCatalog && registered && policy.skipsBulkRestore()
 	} else {
 		if dbName == moCatalog {
 			if policy, ok := systemCatalogRestorePolicies[tblName]; ok {
-				return policy == systemCatalogRestoreSkip
+				return policy.skipsBulkRestore()
 			} else {
 				return true
 			}
@@ -1971,10 +2096,10 @@ func needSkipTable(accountId uint32, dbName string, tblName string) bool {
 func needSkipSystemTable(accountId uint32, tblinfo *tableInfo) bool {
 	if accountId == sysAccountID {
 		policy, registered := systemCatalogRestorePolicies[tblinfo.tblName]
-		return tblinfo.dbName == moCatalog && registered && policy == systemCatalogRestoreSkip
+		return tblinfo.dbName == moCatalog && registered && policy.skipsBulkRestore()
 	} else {
 		policy, registered := systemCatalogRestorePolicies[tblinfo.tblName]
-		return tblinfo.dbName == moCatalog && (tblinfo.typ == clusterTable || registered && policy == systemCatalogRestoreSkip)
+		return tblinfo.dbName == moCatalog && (tblinfo.typ == clusterTable || registered && policy.skipsBulkRestore())
 	}
 }
 
@@ -1983,7 +2108,32 @@ func isExternalTable(tblInfo *tableInfo) bool {
 }
 
 func shouldSkipRestoreTableInBulk(tblInfo *tableInfo) bool {
+	// Database clone follows the same bulk-restore policy as snapshot and PITR.
 	return isExternalTable(tblInfo)
+}
+
+func validateRestoreTableTarget(
+	ctx context.Context,
+	sid string,
+	bh BackgroundExec,
+	snapshotName string,
+	dbName string,
+	tblName string,
+	toAccountId uint32,
+) error {
+	toCtx := defines.AttachAccountId(ctx, toAccountId)
+	isMasterTable, err := checkTableIsMaster(toCtx, sid, bh, snapshotName, dbName, tblName)
+	if err != nil {
+		return err
+	}
+	if isMasterTable {
+		return newRestoreTableForeignKeyError(ctx, dbName, tblName)
+	}
+	return nil
+}
+
+func newRestoreTableForeignKeyError(ctx context.Context, dbName, tblName string) error {
+	return moerr.NewNotSupportedf(ctx, "can not restore table '%s.%s' referenced by some foreign key constraint", dbName, tblName)
 }
 
 func newExternalTableRestoreError(ctx context.Context, tblInfo *tableInfo, source string) error {
@@ -2638,11 +2788,45 @@ func parseViewCreateSQLForRestore(ctx context.Context, tblInfo *tableInfo, lower
 }
 
 func executeViewCreateSQLForRestore(ctx context.Context, bh BackgroundExec, tblInfo *tableInfo) error {
+	if err := requirePersistedViewProtocolForRestore(ctx, bh, tblInfo); err != nil {
+		return err
+	}
 	parserSQLMode, err := viewParserSQLModeForRestore(tblInfo.viewDef)
 	if err != nil {
 		return err
 	}
 	return bh.ExecWithSQLMode(ctx, tblInfo.createSql, parserSQLMode)
+}
+
+// requirePersistedViewProtocolForRestore closes the restore path's local SQL
+// execution boundary. A restore BackgroundExec has no planner process, but it
+// does carry the CN service identity used to read the runtime protocol gate.
+// Missing markers remain backward compatible; malformed or future markers fail
+// closed before CREATE VIEW can be submitted.
+func requirePersistedViewProtocolForRestore(
+	ctx context.Context,
+	bh BackgroundExec,
+	tblInfo *tableInfo,
+) error {
+	if tblInfo == nil || tblInfo.viewDef == "" {
+		return nil
+	}
+	var data plan.ViewData
+	if err := json.Unmarshal([]byte(tblInfo.viewDef), &data); err != nil {
+		return err
+	}
+	if data.RequiredProtocolVersion == nil {
+		return nil
+	}
+	if *data.RequiredProtocolVersion < 0 {
+		return moerr.NewInvalidInput(ctx, "invalid persisted view protocol version")
+	}
+	service := ""
+	if bh != nil {
+		service = bh.Service()
+	}
+	return plan.RequirePersistedProtocolVersionForService(
+		ctx, service, *data.RequiredProtocolVersion)
 }
 
 func viewParserSQLModeForRestore(viewDef string) (string, error) {
@@ -2666,24 +2850,24 @@ func getCreateDatabaseSql(ctx context.Context,
 	snapshotName string,
 	snapshotTs int64,
 	dbName string,
-	accountId uint32) (string, error) {
+	accountId uint32) (logicalRestoreDatabaseDefinition, error) {
 
-	sql := "select datname, dat_createsql from mo_catalog.mo_database"
+	sql := "select datname, dat_createsql, dat_type from mo_catalog.mo_database"
 	if snapshotTs > 0 {
 		sql += fmt.Sprintf(" {MO_TS = %d}", snapshotTs)
 	}
 	sql += fmt.Sprintf(" where datname = '%s' and account_id = %d", dbName, accountId)
 	getLogger(sid).Debug(fmt.Sprintf("[%s] get create database `%s` sql: %s", snapshotName, dbName, sql))
 
-	// cols: database_name, create_sql
-	colsList, err := getStringColsList(ctx, bh, sql, 0, 1)
+	// cols: database_name, create_sql, database_type
+	colsList, err := getStringColsList(ctx, bh, sql, 0, 1, 2)
 	if err != nil {
-		return "", err
+		return logicalRestoreDatabaseDefinition{}, err
 	}
 	if len(colsList) == 0 || len(colsList[0]) == 0 {
-		return "", moerr.NewBadDB(ctx, dbName)
+		return logicalRestoreDatabaseDefinition{}, moerr.NewBadDB(ctx, dbName)
 	}
-	return colsList[0][1], nil
+	return newLogicalRestoreDatabaseDefinition(ctx, dbName, colsList[0])
 }
 
 func getTableInfo(
@@ -3083,6 +3267,17 @@ func restoreToCluster(ctx context.Context,
 	if err != nil {
 		return err
 	}
+	// Validate every source account before dropping an account that is absent
+	// from the snapshot. Account drop terminates sessions and sends cross-CN
+	// kill requests that a catalog transaction rollback cannot undo.
+	for _, account := range pastExistsAccount {
+		accountID := uint32(account.accountId)
+		if err = preflightLogicalRestoreAccountFromTS(
+			ctx, ses.GetService(), bh, snapshotTs, accountID, accountID,
+		); err != nil {
+			return err
+		}
+	}
 
 	var currentMap = make(map[string]bool)
 	for _, account := range currentExistsAccount {
@@ -3308,7 +3503,7 @@ func invalidateAccountViewMetadataEnabled(
 	accountID uint32,
 ) error {
 	systemCtx := defines.AttachAccountId(ctx, catalog.System_Account)
-	if err := bh.Exec(systemCtx, catalog.ViewMetadataLifecycleGateSQL); err != nil {
+	if err := lockViewMetadataLifecycle(systemCtx, bh); err != nil {
 		return err
 	}
 	return bh.Exec(process.WithSystemCTELimits(systemCtx),
@@ -3334,7 +3529,7 @@ func reconcileAccountViewMetadataEnabled(
 	accountID uint32,
 ) error {
 	systemCtx := process.WithSystemCTELimits(defines.AttachAccountId(ctx, catalog.System_Account))
-	if err := bh.Exec(systemCtx, catalog.ViewMetadataLifecycleGateSQL); err != nil {
+	if err := lockViewMetadataLifecycle(systemCtx, bh); err != nil {
 		return err
 	}
 	for _, sql := range compile.ReconcileAccountViewMetadataSQL(accountID, uint64(time.Now().UnixNano())) {
@@ -3343,6 +3538,22 @@ func reconcileAccountViewMetadataEnabled(
 		}
 	}
 	return nil
+}
+
+func lockViewMetadataLifecycle(ctx context.Context, bh BackgroundExec) error {
+	// The gates are global catalog rows; mo_feature_registry exists only in sys.
+	// Change resolution for these reads without changing the caller's transaction.
+	systemCtx := defines.AttachAccountId(ctx, catalog.System_Account)
+	return catalog.LockViewMetadataLifecycle(func(sql string) error {
+		return bh.Exec(systemCtx, sql)
+	})
+}
+
+func lockSnapshotLifecycle(ctx context.Context, bh BackgroundExec) error {
+	// The SNAPSHOT gate is a global catalog row and must be resolved in sys.
+	// Keep the caller's transaction; only account resolution changes for this SQL.
+	systemCtx := defines.AttachAccountId(ctx, catalog.System_Account)
+	return bh.Exec(systemCtx, catalog.SnapshotLifecycleGateSQL)
 }
 
 func prepareViewMetadataMutation(

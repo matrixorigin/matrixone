@@ -32,6 +32,7 @@ import (
 )
 
 func TestSpeedupAbortAllTxn(t *testing.T) {
+	releaseSharedSingleCNCluster(t)
 	c, err := embed.StartTestCluster(
 		embed.WithPreStart(
 			func(so embed.ServiceOperator) {

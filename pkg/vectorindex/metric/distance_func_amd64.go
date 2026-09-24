@@ -141,18 +141,20 @@ func InnerProductFloat32(a, b []float32) (float32, error) {
 
 func L2Distance[T types.RealNumbers](v1, v2 []T) (T, error) {
 	if pf32, ok := any(v1).([]float32); ok {
-		dist, err := L2DistanceSqFloat32(pf32, any(v2).([]float32))
+		sq, err := L2DistanceSqFloat32(pf32, any(v2).([]float32))
 		if err != nil {
 			return 0, err
 		}
-		return T(math.Sqrt(float64(dist))), nil
+		d, err := L2FromSquared(sq)
+		return T(d), err
 	}
 	if pf64, ok := any(v1).([]float64); ok {
-		dist, err := L2DistanceSqFloat64(pf64, any(v2).([]float64))
+		sq, err := L2DistanceSqFloat64(pf64, any(v2).([]float64))
 		if err != nil {
 			return 0, err
 		}
-		return T(math.Sqrt(dist)), nil
+		d, err := L2FromSquared(sq)
+		return T(d), err
 	}
 	return 0, moerr.NewInternalErrorNoCtx("vector type not supported")
 }
@@ -383,11 +385,23 @@ func CosineDistanceF32(a, b []float32) (float32, error) {
 	for ; i < n; i++ {
 		dot, normA, normB = dot+a[i]*b[i], normA+a[i]*a[i], normB+b[i]*b[i]
 	}
+	d := float64(dot)
 	den := math.Sqrt(float64(normA)) * math.Sqrt(float64(normB))
+	if !cosineNormsOK(float64(normA), float64(normB), smallestNormalFloat32) {
+		var nP, nQ float64
+		var ok bool
+		if d, nP, nQ, ok = cosineRecomputeF64(a, b); !ok {
+			return 0, moerr.NewInternalErrorNoCtx("cosine distance: vector magnitude overflows the float64 domain")
+		}
+		den = math.Sqrt(nP) * math.Sqrt(nQ)
+	}
 	if den == 0 {
+		if anyNonZero(a) && anyNonZero(b) {
+			return 0, moerr.NewInternalErrorNoCtx("cosine distance: vector magnitude underflows the element domain")
+		}
 		return 1.0, nil
 	}
-	return float32(cosineDistClamped(float64(dot), den)), nil
+	return float32(cosineDistClamped(d, den)), nil
 }
 
 func CosineDistanceF64(a, b []float64) (float64, error) {
@@ -422,11 +436,23 @@ func CosineDistanceF64(a, b []float64) (float64, error) {
 	for ; i < n; i++ {
 		dot, normA, normB = dot+a[i]*b[i], normA+a[i]*a[i], normB+b[i]*b[i]
 	}
-	den := math.Sqrt(normA) * math.Sqrt(normB)
+	d := float64(dot)
+	den := math.Sqrt(float64(normA)) * math.Sqrt(float64(normB))
+	if !cosineNormsOK(float64(normA), float64(normB), smallestNormalFloat64) {
+		var nP, nQ float64
+		var ok bool
+		if d, nP, nQ, ok = cosineRecomputeF64(a, b); !ok {
+			return 0, moerr.NewInternalErrorNoCtx("cosine distance: vector magnitude overflows the float64 domain")
+		}
+		den = math.Sqrt(nP) * math.Sqrt(nQ)
+	}
 	if den == 0 {
+		if anyNonZero(a) && anyNonZero(b) {
+			return 0, moerr.NewInternalErrorNoCtx("cosine distance: vector magnitude underflows the element domain")
+		}
 		return 1.0, nil
 	}
-	return cosineDistClamped(dot, den), nil
+	return cosineDistClamped(d, den), nil
 }
 
 func CosineDistance[T types.RealNumbers](p, q []T) (T, error) {
@@ -476,13 +502,25 @@ func CosineSimilarityF32(a, b []float32) (float32, error) {
 	for ; i < n; i++ {
 		dot, normA, normB = dot+a[i]*b[i], normA+a[i]*a[i], normB+b[i]*b[i]
 	}
+	d := float64(dot)
 	den := math.Sqrt(float64(normA)) * math.Sqrt(float64(normB))
+	if !cosineNormsOK(float64(normA), float64(normB), smallestNormalFloat32) {
+		var nP, nQ float64
+		var ok bool
+		if d, nP, nQ, ok = cosineRecomputeF64(a, b); !ok {
+			return 0, moerr.NewInternalErrorNoCtx("cosine similarity: vector magnitude overflows the float64 domain")
+		}
+		den = math.Sqrt(nP) * math.Sqrt(nQ)
+	}
 	if den == 0 {
-		return 0, moerr.NewInternalErrorNoCtx("cosine similarity zero denominator")
+		if anyNonZero(a) && anyNonZero(b) {
+			return 0, moerr.NewInternalErrorNoCtx("cosine similarity: vector magnitude underflows the element domain")
+		}
+		return 0, moerr.NewInternalErrorNoCtx("cosine similarity: one of the vector is zero")
 	}
 	// Clamp to [-1,1]: float32 accumulation can push the quotient a hair
 	// outside (e.g. 1.000000119) and mirror the scalar CosineSimilarity.
-	sim := float64(dot) / den
+	sim := d / den
 	if sim > 1 {
 		sim = 1
 	} else if sim < -1 {
@@ -526,13 +564,25 @@ func CosineSimilarityF64(a, b []float64) (float64, error) {
 	for ; i < n; i++ {
 		dot, normA, normB = dot+a[i]*b[i], normA+a[i]*a[i], normB+b[i]*b[i]
 	}
-	den := math.Sqrt(normA) * math.Sqrt(normB)
+	d := float64(dot)
+	den := math.Sqrt(float64(normA)) * math.Sqrt(float64(normB))
+	if !cosineNormsOK(float64(normA), float64(normB), smallestNormalFloat64) {
+		var nP, nQ float64
+		var ok bool
+		if d, nP, nQ, ok = cosineRecomputeF64(a, b); !ok {
+			return 0, moerr.NewInternalErrorNoCtx("cosine similarity: vector magnitude overflows the float64 domain")
+		}
+		den = math.Sqrt(nP) * math.Sqrt(nQ)
+	}
 	if den == 0 {
-		return 0, moerr.NewInternalErrorNoCtx("cosine similarity zero denominator")
+		if anyNonZero(a) && anyNonZero(b) {
+			return 0, moerr.NewInternalErrorNoCtx("cosine similarity: vector magnitude underflows the element domain")
+		}
+		return 0, moerr.NewInternalErrorNoCtx("cosine similarity: one of the vector is zero")
 	}
 	// Clamp to [-1,1]: float accumulation can push the quotient a hair
 	// outside and mirror the scalar CosineSimilarity.
-	sim := dot / den
+	sim := d / den
 	if sim > 1 {
 		sim = 1
 	} else if sim < -1 {
@@ -643,25 +693,6 @@ func SphericalDistance[T types.RealNumbers](p, q []T) (T, error) {
 		return T(res), err
 	}
 	return 0, moerr.NewInternalErrorNoCtx("vector type not supported")
-}
-
-func NormalizeL2[T types.RealNumbers](v1 []T, normalized []T) error {
-	if len(v1) == 0 {
-		return moerr.NewInternalErrorNoCtx("cannot normalize empty vector")
-	}
-	var sumSquares float64
-	for _, val := range v1 {
-		sumSquares += float64(val) * float64(val)
-	}
-	norm := math.Sqrt(sumSquares)
-	if norm == 0 {
-		copy(normalized, v1)
-		return nil
-	}
-	for i, val := range v1 {
-		normalized[i] = T(float64(val) / norm)
-	}
-	return nil
 }
 
 func ScaleInPlace[T types.RealNumbers](v []T, scale T) {

@@ -30,12 +30,14 @@ import (
 )
 
 // MaybeUpgradeTenant used to check the tenant need upgrade or not. If need upgrade, it will
-// upgrade the tenant immediately in current txn.
+// upgrade the tenant immediately in current txn. The callback's version is only
+// a hint: mo_account.create_version is authoritative, including for accounts an
+// old CN creates after the background upgrade's account-range snapshot.
 func (s *service) MaybeUpgradeTenant(
 	ctx context.Context,
 	tenantFetchFunc func() (int32, string, error),
 	txnOp client.TxnOperator) (bool, error) {
-	tenantID, version, err := tenantFetchFunc()
+	tenantID, _, err := tenantFetchFunc()
 	if err != nil {
 		return false, err
 	}
@@ -48,12 +50,20 @@ func (s *service) MaybeUpgradeTenant(
 	}
 
 	upgraded := false
-	opts := executor.Options{}.WithTxn(txnOp)
+	opts := executor.Options{}.WithTxn(txnOp).
+		WithAccountID(catalog.System_Account).
+		WithDatabase(catalog.MO_CATALOG).
+		WithMinCommittedTS(s.now()).
+		WithWaitCommittedLogApplied()
 	err = s.exec.ExecTxn(
 		ctx,
 		func(txn executor.TxnExecutor) error {
 			txn.Use(catalog.MO_CATALOG)
-			// tenant create at current cn, can work correctly
+			version, err := versions.GetTenantVersion(tenantID, txn)
+			if err != nil {
+				return err
+			}
+			// Check the persisted account version, not the serving CN's version.
 			currentCN := s.getFinalVersionHandle().Metadata()
 			if currentCN.Version == version {
 				return nil
@@ -71,17 +81,15 @@ func (s *service) MaybeUpgradeTenant(
 				return err
 			}
 			if latestVersion.Version != currentCN.Version {
-				s.logger.Fatal("BUG: current cn's version(" +
-					currentCN.Version +
-					") must equal cluster latest version(" +
-					latestVersion.Version +
-					")")
+				return moerr.NewInvalidStateNoCtxf(
+					"tenant upgrade requires current cn version %s to match cluster latest version %s",
+					currentCN.Version, latestVersion.Version)
 			}
 
-			upgraded = true
 			for {
-				// upgrade completed
-				if s.upgrade.finalVersionCompleted.Load() {
+				// A restarted CN may not have observed completion locally. The
+				// persisted ready state also permits late-account compensation.
+				if latestVersion.IsReady() || s.upgrade.finalVersionCompleted.Load() {
 					break
 				}
 
@@ -95,13 +103,21 @@ func (s *service) MaybeUpgradeTenant(
 					break
 				}
 
-				time.Sleep(time.Second)
+				select {
+				case <-ctx.Done():
+					return ctx.Err()
+				case <-time.After(time.Second):
+				}
 			}
 
 			// upgrade in current goroutine immediately
 			version, err = versions.GetTenantCreateVersionForUpdate(tenantID, txn)
 			if err != nil {
 				return err
+			}
+			if versions.Compare(version, currentCN.Version) > 0 {
+				return moerr.NewInvalidInputNoCtxf("tenant version %s is greater than current cn version %s",
+					version, currentCN.Version)
 			}
 			from := version
 			for _, v := range s.handles {
@@ -114,7 +130,12 @@ func (s *service) MaybeUpgradeTenant(
 						return err
 					}
 					from = v.Metadata().Version
+					upgraded = true
 				}
+			}
+			if from != currentCN.Version {
+				return moerr.NewInvalidInputNoCtxf("cannot upgrade tenant version %s to current cn version %s",
+					from, currentCN.Version)
 			}
 			return nil
 		},
@@ -122,9 +143,12 @@ func (s *service) MaybeUpgradeTenant(
 	if err != nil {
 		return false, err
 	}
-	s.mu.Lock()
-	s.mu.tenants[tenantID] = true
-	s.mu.Unlock()
+	// A caller-owned transaction can still roll back; only cache committed checks.
+	if txnOp == nil {
+		s.mu.Lock()
+		s.mu.tenants[tenantID] = true
+		s.mu.Unlock()
+	}
 	return upgraded, nil
 }
 
@@ -336,6 +360,13 @@ func (s *service) newTenantUpgradePass(ctx context.Context) func() (bool, error)
 				zap.Error(err))
 			return false, err
 		}
+		if !hasUpgradeTenants && s.upgrade.finalVersionCompleted.Load() {
+			if err := s.maintainOrphanObjectPrivileges(ctx); err != nil {
+				err = moerr.AttachCause(ctx, err)
+				s.logger.Error("orphan object privilege maintenance failed", zap.Error(err))
+				return false, err
+			}
+		}
 		return hasUpgradeTenants, nil
 	}
 }
@@ -347,15 +378,28 @@ func (s *service) asyncUpgradeTenantTask(ctx context.Context) {
 	timer := time.NewTimer(s.upgrade.checkUpgradeTenantDuration)
 	defer timer.Stop()
 
+	maintenanceOwner := false
+	defer func() {
+		if maintenanceOwner {
+			s.upgrade.orphanPrivilegeMaintenanceWorkerRunning.Store(false)
+		}
+	}()
+
 	for {
 		select {
 		case <-ctx.Done():
 			return
 		case <-timer.C:
-			if s.upgrade.finalVersionCompleted.Load() {
-				return
+			if s.upgrade.finalVersionCompleted.Load() && !maintenanceOwner {
+				// Tenant upgrade workers used to exit at this point. Keep only one
+				// of them as the process-local periodic maintenance owner; this also
+				// prevents manual upgrade pre-checks from accumulating permanent
+				// maintenance workers.
+				if !s.upgrade.orphanPrivilegeMaintenanceWorkerRunning.CompareAndSwap(false, true) {
+					return
+				}
+				maintenanceOwner = true
 			}
-
 			drainUpgradeTenants(ctx, fn)
 			timer.Reset(s.upgrade.checkUpgradeTenantDuration)
 		}

@@ -39,6 +39,10 @@ const (
 	runtimeStringDomainMax = RuntimeStringBinary
 )
 
+func (domain RuntimeStringDomain) Valid() bool {
+	return domain <= runtimeStringDomainMax
+}
+
 // StringSource identifies the owner that introduced a runtime value. It does
 // not encode the value's string domain or conversion behavior.
 type StringSource uint8

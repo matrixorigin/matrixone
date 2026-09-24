@@ -22,6 +22,7 @@ import (
 
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
 	"github.com/matrixorigin/matrixone/pkg/common/system"
+	"github.com/matrixorigin/matrixone/pkg/defines"
 	"github.com/matrixorigin/matrixone/pkg/logservice"
 	"github.com/matrixorigin/matrixone/pkg/logutil"
 	logservicepb "github.com/matrixorigin/matrixone/pkg/pb/logservice"
@@ -203,13 +204,19 @@ func (s *service) newCNStoreHeartbeat() logservicepb.CNStoreHeartbeat {
 			MemTotal:     system.MemoryTotal(),
 			MemAvailable: system.MemoryAvailable(),
 		},
-		CommitID:                        version.CommitID,
-		AckedCommandBatchID:             s.ackedCommandBatchID.Load(),
-		CommandDeliveryAckSupported:     true,
-		ViewMetadataAdmissionSupported:  s.viewMetadataAdmissionGeneration != 0,
-		ViewMetadataAdmissionGeneration: s.viewMetadataAdmissionGeneration,
-		ViewMetadataCatalogFencedEpoch:  s.viewMetadataCatalogFencedEpoch.Load(),
-		ViewMetadataIngressReady:        s.viewMetadataIngressReady.Load(),
+		CommitID:                           version.CommitID,
+		AckedCommandBatchID:                s.ackedCommandBatchID.Load(),
+		CommandDeliveryAckSupported:        true,
+		ViewMetadataAdmissionSupported:     s.viewMetadataAdmissionGeneration != 0,
+		ViewMetadataAdmissionGeneration:    s.viewMetadataAdmissionGeneration,
+		ViewMetadataCatalogFencedEpoch:     s.viewMetadataCatalogFencedEpoch.Load(),
+		ViewMetadataIngressReady:           s.viewMetadataIngressReady.Load(),
+		PersistedExpressionProtocolVersion: uint64(defines.MORPCLatestVersion),
+		CatalogMetadataCapabilities: &logservicepb.CatalogMetadataCapabilities{
+			PersistedExpressionProtocol: uint64(defines.MORPCLatestVersion),
+			BarrierParticipantProtocol:  1,
+		},
+		CatalogMetadataAck: s.catalogMetadataParticipant.Ack(s.viewMetadataAdmissionGeneration),
 	}
 	if s.viewMetadataEpochFence != nil {
 		hb.ViewMetadataObservedEpoch = s.viewMetadataEpochFence.Epoch()
@@ -241,11 +248,20 @@ func (s *service) withdrawViewMetadataAdmission() error {
 	hb := s.newCNStoreHeartbeat()
 	_, err := s._hakeeperClient.SendCNHeartbeat(ctx, hb)
 	if err != nil {
-		return moerr.AttachCause(ctx, err)
+		err = moerr.AttachCause(ctx, err)
+		s.logger.Error("failed to publish final view metadata withdrawal",
+			zap.Bool("clean_handoff", false), zap.Error(err))
+		return err
 	}
 	if ctx.Err() != nil {
-		return moerr.AttachCause(ctx, ctx.Err())
+		err = moerr.AttachCause(ctx, ctx.Err())
+		s.logger.Error("final view metadata withdrawal timed out",
+			zap.Bool("clean_handoff", false), zap.Error(err))
+		return err
 	}
+	s.logger.Info("published final view metadata withdrawal",
+		zap.Bool("clean_handoff", true),
+		zap.Uint64("generation", s.viewMetadataAdmissionGeneration))
 	return nil
 }
 
@@ -277,6 +293,7 @@ func (s *service) heartbeat(ctx context.Context) {
 		s.notifyCommandPoll()
 		return
 	}
+	s.catalogMetadataParticipant.Observe(s.viewMetadataAdmissionGeneration, cb.CatalogMetadataBarrier)
 	admissionErr := s.applyViewMetadataAdmission(ctx, cb.ViewMetadataAdmission)
 	s.commandPollNeeded.Store(false)
 	s.notifyCommandPoll()

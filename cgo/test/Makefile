@@ -29,7 +29,15 @@ endif
 CFLAGS := -I.. -g -I../../thirdparties/install/include $(COMPILER_FLAGS)
 LDFLAGS := $(LIBS) -lroaring $(LINKER_FLAGS)
 
+ifeq ($(MO_CL_CUDA),1)
+# test_xcall_cuda compares the C loop against the CUDA kernel, so it only exists in a CUDA build.
+all: test_add.exe test_bloom.exe test_varlena.exe test_cbitmap.exe test_croaring.exe test_xcall_cuda.exe
+else
 all: test_add.exe test_bloom.exe test_varlena.exe test_cbitmap.exe test_croaring.exe
+endif
+
+test_xcall_cuda.exe: test_xcall_cuda.c ../xcall.h
+	$(CC) $(CFLAGS) -DMO_CL_CUDA -o $@ test_xcall_cuda.c $(LDFLAGS)
 
 test_add.exe: test_add.c
 	$(CC) $(CFLAGS) -o $@ test_add.c $(LDFLAGS)

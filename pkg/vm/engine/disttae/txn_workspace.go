@@ -1615,6 +1615,25 @@ func (w *txnWorkspace) databaseDeleted(key databaseKey) bool {
 	return len(ops) != 0 && ops[len(ops)-1].kind == DELETE
 }
 
+// pendingCreatedDatabaseWrites identifies active CREATE DATABASE operations
+// whose catalog tuples must be present in the TN commit request.
+func (w *txnWorkspace) pendingCreatedDatabaseWrites() map[databaseKey]uint64 {
+	w.mu.RLock()
+	defer w.mu.RUnlock()
+
+	var pending map[databaseKey]uint64
+	for key, ops := range w.ddl.databases {
+		if len(ops) == 0 || ops[len(ops)-1].kind != INSERT {
+			continue
+		}
+		if pending == nil {
+			pending = make(map[databaseKey]uint64)
+		}
+		pending[key] = ops[len(ops)-1].databaseID
+	}
+	return pending
+}
+
 func (w *txnWorkspace) activeDatabase(key databaseKey) *txnDatabase {
 	w.mu.RLock()
 	defer w.mu.RUnlock()

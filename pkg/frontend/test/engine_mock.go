@@ -1322,21 +1322,6 @@ func (mr *MockRelationMockRecorder) GetFlushTS(ctx interface{}) *gomock.Call {
 	return mr.mock.ctrl.RecordCallWithMethodType(mr.mock, "GetFlushTS", reflect.TypeOf((*MockRelation)(nil).GetFlushTS), ctx)
 }
 
-// GetNonAppendableObjectStats mocks base method.
-func (m *MockRelation) GetNonAppendableObjectStats(ctx context.Context) ([]objectio.ObjectStats, error) {
-	m.ctrl.T.Helper()
-	ret := m.ctrl.Call(m, "GetNonAppendableObjectStats", ctx)
-	ret0, _ := ret[0].([]objectio.ObjectStats)
-	ret1, _ := ret[1].(error)
-	return ret0, ret1
-}
-
-// GetNonAppendableObjectStats indicates an expected call of GetNonAppendableObjectStats.
-func (mr *MockRelationMockRecorder) GetNonAppendableObjectStats(ctx interface{}) *gomock.Call {
-	mr.mock.ctrl.T.Helper()
-	return mr.mock.ctrl.RecordCallWithMethodType(mr.mock, "GetNonAppendableObjectStats", reflect.TypeOf((*MockRelation)(nil).GetNonAppendableObjectStats), ctx)
-}
-
 // GetPrimaryKeys mocks base method.
 func (m *MockRelation) GetPrimaryKeys(arg0 context.Context) ([]*engine.Attribute, error) {
 	m.ctrl.T.Helper()
@@ -1422,21 +1407,6 @@ func (m *MockRelation) MaxAndMinValues(ctx context.Context) ([][2]any, []uint8, 
 func (mr *MockRelationMockRecorder) MaxAndMinValues(ctx interface{}) *gomock.Call {
 	mr.mock.ctrl.T.Helper()
 	return mr.mock.ctrl.RecordCallWithMethodType(mr.mock, "MaxAndMinValues", reflect.TypeOf((*MockRelation)(nil).MaxAndMinValues), ctx)
-}
-
-// MergeObjects mocks base method.
-func (m *MockRelation) MergeObjects(ctx context.Context, objstats []objectio.ObjectStats, targetObjSize uint32) (*api.MergeCommitEntry, error) {
-	m.ctrl.T.Helper()
-	ret := m.ctrl.Call(m, "MergeObjects", ctx, objstats, targetObjSize)
-	ret0, _ := ret[0].(*api.MergeCommitEntry)
-	ret1, _ := ret[1].(error)
-	return ret0, ret1
-}
-
-// MergeObjects indicates an expected call of MergeObjects.
-func (mr *MockRelationMockRecorder) MergeObjects(ctx, objstats, targetObjSize interface{}) *gomock.Call {
-	mr.mock.ctrl.T.Helper()
-	return mr.mock.ctrl.RecordCallWithMethodType(mr.mock, "MergeObjects", reflect.TypeOf((*MockRelation)(nil).MergeObjects), ctx, objstats, targetObjSize)
 }
 
 // PrimaryKeysMayBeModified mocks base method.

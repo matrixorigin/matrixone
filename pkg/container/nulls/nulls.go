@@ -18,11 +18,13 @@
 package nulls
 
 import (
+	"encoding/binary"
 	"fmt"
 	"io"
 
 	"github.com/matrixorigin/matrixone/pkg/common/bitmap"
 	"github.com/matrixorigin/matrixone/pkg/common/util"
+	"github.com/matrixorigin/matrixone/pkg/container/bufferlease"
 	"golang.org/x/exp/constraints"
 )
 
@@ -30,6 +32,15 @@ type Bitmap = Nulls
 
 type Nulls struct {
 	np bitmap.Bitmap
+
+	// Arrow validity uses the inverse convention: bit 1 means valid. Keep the
+	// immutable source representation as a leased view and materialize the MO
+	// null bitmap only at a legacy or mutating boundary.
+	validity       []byte
+	validityOffset int
+	validityLength int
+	validityNulls  int
+	validityLease  bufferlease.BufferLease
 }
 
 func (nsp *Nulls) Clone() *Nulls {
@@ -42,10 +53,23 @@ func (nsp *Nulls) Clone() *Nulls {
 }
 
 func (nsp *Nulls) InitWith(n *Nulls) {
+	nsp.Reset()
+	if n != nil && n.validityLease != nil {
+		if !n.validityLease.Retain() {
+			panic("retain released null validity lease")
+		}
+		nsp.validity = n.validity
+		nsp.validityOffset = n.validityOffset
+		nsp.validityLength = n.validityLength
+		nsp.validityNulls = n.validityNulls
+		nsp.validityLease = n.validityLease
+		return
+	}
 	nsp.np.InitWith(&n.np)
 }
 
 func (nsp *Nulls) InitWithSize(size int) {
+	nsp.releaseValidity()
 	nsp.np.InitWithSize(int64(size))
 }
 
@@ -56,14 +80,17 @@ func NewWithSize(size int) *Nulls {
 }
 
 func (nsp *Nulls) Reset() {
+	nsp.releaseValidity()
 	nsp.np.Reset()
 }
 
 func (nsp *Nulls) Clear() {
+	nsp.releaseValidity()
 	nsp.np.Clear()
 }
 
 func (nsp *Nulls) GetBitmap() *bitmap.Bitmap {
+	nsp.materializeValidity()
 	return &nsp.np
 }
 
@@ -80,11 +107,12 @@ func Or(nsp, m, r *Nulls) {
 		return
 	}
 
+	r.materializeValidity()
 	if nsp != nil {
-		orBitmapInto(r, &nsp.np)
+		orBitmapInto(r, nsp.GetBitmap())
 	}
 	if m != nil {
-		orBitmapInto(r, &m.np)
+		orBitmapInto(r, m.GetBitmap())
 	}
 }
 
@@ -117,21 +145,21 @@ func Any(nsp *Nulls) bool {
 	if nsp == nil {
 		return false
 	}
-	return !nsp.np.IsEmpty()
+	return nsp.Any()
 }
 
 func Ptr(nsp *Nulls) *uint64 {
 	if nsp == nil {
 		return nil
 	}
-	return nsp.np.Ptr()
+	return nsp.GetBitmap().Ptr()
 }
 
 func (nsp *Nulls) RawPtrLen() (uintptr, uintptr) {
 	if nsp == nil {
 		return 0, 0
 	}
-	return nsp.np.RawPtrLen()
+	return nsp.GetBitmap().RawPtrLen()
 }
 
 // Size estimates the memory usage of the Nulls.
@@ -139,23 +167,33 @@ func Size(nsp *Nulls) int {
 	if nsp == nil {
 		return 0
 	}
+	if nsp.validityLease != nil {
+		return len(nsp.validity)
+	}
 	return nsp.np.Size()
 }
 
 func String(nsp *Nulls) string {
-	if nsp == nil || nsp.np.EmptyByFlag() {
+	if nsp == nil || nsp.EmptyByFlag() {
 		return "[]"
 	}
-	return fmt.Sprintf("%v", nsp.np.ToArray())
+	return fmt.Sprintf("%v", nsp.ToArray())
 }
 
 func TryExpand(nsp *Nulls, size int) {
+	nsp.materializeValidity()
 	nsp.np.TryExpandWithSize(size)
 }
 
 // Contains returns true if the integer is contained in the Nulls
 func (nsp *Nulls) Contains(row uint64) bool {
-	return nsp != nil && !nsp.np.EmptyByFlag() && nsp.np.Contains(row)
+	if nsp == nil {
+		return false
+	}
+	if nsp.validityLease != nil {
+		return nsp.validityContainsNull(row)
+	}
+	return !nsp.np.EmptyByFlag() && nsp.np.Contains(row)
 }
 
 func Contains(nsp *Nulls, row uint64) bool {
@@ -188,6 +226,7 @@ func AddRange(nsp *Nulls, start, end uint64) {
 
 func (nsp *Nulls) Del(sels ...uint64) {
 	if nsp != nil {
+		nsp.materializeValidity()
 		for _, sel := range sels {
 			nsp.np.Remove(sel)
 		}
@@ -196,6 +235,7 @@ func (nsp *Nulls) Del(sels ...uint64) {
 
 func (nsp *Nulls) DelI64(rows ...int64) {
 	if nsp != nil {
+		nsp.materializeValidity()
 		for _, row := range rows {
 			nsp.np.Remove(uint64(row))
 		}
@@ -209,14 +249,15 @@ func Del(nsp *Nulls, sels ...uint64) {
 // Set performs union operation on Nulls nsp,m and store the result in nsp
 func Set(nsp, other *Nulls) {
 	if other != nil {
-		orBitmapInto(nsp, &other.np)
+		nsp.materializeValidity()
+		orBitmapInto(nsp, other.GetBitmap())
 	}
 }
 
 // FilterCount returns the number count that appears in both nsp and sel
 func FilterCount(nsp *Nulls, sels []int64) int {
 	var count int
-	if nsp.np.EmptyByFlag() || len(sels) == 0 {
+	if nsp.EmptyByFlag() || len(sels) == 0 {
 		return 0
 	}
 
@@ -224,7 +265,7 @@ func FilterCount(nsp *Nulls, sels []int64) int {
 	idxs := util.UnsafeSliceCast[uint64](sels)
 
 	for _, idx := range idxs {
-		if nsp.np.Contains(idx) {
+		if nsp.Contains(idx) {
 			count++
 		}
 	}
@@ -232,6 +273,7 @@ func FilterCount(nsp *Nulls, sels []int64) int {
 }
 
 func RemoveRange(nsp *Nulls, start, end uint64) {
+	nsp.materializeValidity()
 	if !nsp.np.EmptyByFlag() {
 		nsp.np.RemoveRange(start, end)
 	}
@@ -241,13 +283,14 @@ func RemoveRange(nsp *Nulls, start, end uint64) {
 // `bias` represents the starting offset used for the Range Output
 // Always update in place.
 func Range(nsp *Nulls, start, end, bias uint64, b *Nulls) {
-	if nsp.np.EmptyByFlag() {
+	if nsp.EmptyByFlag() {
 		return
 	}
 
+	b.materializeValidity()
 	b.np.InitWithSize(int64(end - bias))
 	for ; start < end; start++ {
-		if nsp.np.Contains(start) {
+		if nsp.Contains(start) {
 			b.np.Add(start - bias)
 		}
 	}
@@ -255,9 +298,10 @@ func Range(nsp *Nulls, start, end, bias uint64, b *Nulls) {
 
 // XXX old API returns nsp, which is broken -- we update in place.
 func Filter(nsp *Nulls, sels []int64, negate bool) {
-	if nsp.np.EmptyByFlag() {
+	if nsp.EmptyByFlag() {
 		return
 	}
+	nsp.materializeValidity()
 
 	if negate {
 		oldLen := nsp.np.Len()
@@ -303,9 +347,10 @@ func Filter(nsp *Nulls, sels []int64, negate bool) {
 // FilterInPlaceOrdered preserves Filter semantics for Vector.Shrink's ordered
 // selection contract without allocating a second row-scaled bitmap.
 func FilterInPlaceOrdered(nsp *Nulls, sels []int64, negate bool) {
-	if nsp.np.EmptyByFlag() {
+	if nsp.EmptyByFlag() {
 		return
 	}
+	nsp.materializeValidity()
 	if !nsp.np.HasExternalStorage() {
 		Filter(nsp, sels, negate)
 		return
@@ -321,9 +366,10 @@ func FilterByMask(nsp *Nulls, sels *bitmap.Bitmap, negate bool) {
 // offset. The selection bitmap is relative to a window of the owning vector,
 // while the null bitmap remains in the full vector's row domain.
 func FilterByMaskWithOffset(nsp *Nulls, sels *bitmap.Bitmap, negate bool, offset uint64) {
-	if nsp.np.EmptyByFlag() {
+	if nsp.EmptyByFlag() {
 		return
 	}
+	nsp.materializeValidity()
 	length := sels.Count()
 	itr := sels.Iterator()
 	if negate {
@@ -378,9 +424,10 @@ func FilterByMaskInPlace(nsp *Nulls, sels *bitmap.Bitmap, negate bool) {
 // FilterByMaskInPlaceWithOffset is FilterByMaskInPlace for a selection whose
 // row indexes are relative to a window beginning at offset.
 func FilterByMaskInPlaceWithOffset(nsp *Nulls, sels *bitmap.Bitmap, negate bool, offset uint64) {
-	if nsp.np.EmptyByFlag() {
+	if nsp.EmptyByFlag() {
 		return
 	}
+	nsp.materializeValidity()
 	if !nsp.np.HasExternalStorage() {
 		FilterByMaskWithOffset(nsp, sels, negate, offset)
 		return
@@ -391,15 +438,15 @@ func FilterByMaskInPlaceWithOffset(nsp *Nulls, sels *bitmap.Bitmap, negate bool,
 // XXX This emptyFlag thing is broken -- it simply cannot be used concurrently.
 // Make any an alias of EmptyByFlag, otherwise there will be hell lots of race conditions.
 func (nsp *Nulls) Any() bool {
-	return nsp != nil && !nsp.np.EmptyByFlag()
+	return nsp != nil && (nsp.validityNulls > 0 || !nsp.np.EmptyByFlag())
 }
 
 func (nsp *Nulls) IsEmpty() bool {
-	return nsp == nil || nsp.np.IsEmpty()
+	return nsp == nil || (nsp.validityNulls == 0 && nsp.np.IsEmpty())
 }
 
 func (nsp *Nulls) EmptyByFlag() bool {
-	return nsp == nil || nsp.np.EmptyByFlag()
+	return nsp == nil || (nsp.validityNulls == 0 && nsp.np.EmptyByFlag())
 }
 
 func (nsp *Nulls) Set(row uint64) {
@@ -410,6 +457,7 @@ func (nsp *Nulls) Set(row uint64) {
 // Call it unset to match set.   Clear or reset are taken.
 func (nsp *Nulls) Unset(row uint64) {
 	if nsp != nil {
+		nsp.materializeValidity()
 		nsp.np.Remove(row)
 	}
 }
@@ -419,39 +467,131 @@ func (nsp *Nulls) Count() int {
 	if nsp == nil {
 		return 0
 	}
+	if nsp.validityLease != nil {
+		return nsp.validityNulls
+	}
 	return nsp.np.Count()
 }
 
+// CountRange returns the number of NULL rows in [start, end) without forcing
+// a borrowed Arrow validity bitmap to materialize.
+func (nsp *Nulls) CountRange(start, end uint64) int {
+	if nsp == nil || start >= end {
+		return 0
+	}
+	if nsp.validityLease != nil {
+		if start >= uint64(nsp.validityLength) {
+			return 0
+		}
+		if end > uint64(nsp.validityLength) {
+			end = uint64(nsp.validityLength)
+		}
+		count := 0
+		for row := start; row < end; row++ {
+			if nsp.validityContainsNull(row) {
+				count++
+			}
+		}
+		return count
+	}
+	return nsp.np.CountRange(start, end)
+}
+
+// Len returns the logical bitmap domain without forcing a borrowed Arrow
+// validity view to materialize.
+func (nsp *Nulls) Len() int64 {
+	if nsp == nil {
+		return 0
+	}
+	if nsp.validityLease != nil {
+		return int64(nsp.validityLength)
+	}
+	return nsp.np.Len()
+}
+
 func (nsp *Nulls) Show() ([]byte, error) {
-	if nsp.np.EmptyByFlag() {
+	if nsp.EmptyByFlag() {
 		return nil, nil
 	}
+	nsp.materializeValidity()
 	return nsp.np.Marshal(), nil
 }
 
 func (nsp *Nulls) MarshalSize() int {
-	if nsp == nil || nsp.np.EmptyByFlag() {
+	if nsp == nil || nsp.EmptyByFlag() {
 		return 0
 	}
+	if nsp.validityLease != nil {
+		return bitmap.MarshalHeaderSize + (nsp.validityLength+63)/64*8
+	}
+	nsp.materializeValidity()
 	return nsp.np.MarshalSize()
 }
 
 func (nsp *Nulls) MarshalTo(w io.Writer) error {
-	if nsp == nil || nsp.np.EmptyByFlag() {
+	if nsp == nil || nsp.EmptyByFlag() {
 		return nil
 	}
+	if nsp.validityLease != nil {
+		return nsp.marshalBorrowedValidityTo(w)
+	}
+	nsp.materializeValidity()
 	return nsp.np.MarshalTo(w)
+}
+
+func (nsp *Nulls) marshalBorrowedValidityTo(w io.Writer) error {
+	if w == nil {
+		return io.ErrClosedPipe
+	}
+	words := (nsp.validityLength + 63) / 64
+	var value [8]byte
+	writeUint64 := func(v uint64) error {
+		binary.LittleEndian.PutUint64(value[:], v)
+		written, err := w.Write(value[:])
+		if err != nil {
+			return err
+		}
+		if written != len(value) {
+			return io.ErrShortWrite
+		}
+		return nil
+	}
+	if err := writeUint64(uint64(nsp.validityNulls)); err != nil {
+		return err
+	}
+	if err := writeUint64(uint64(nsp.validityLength)); err != nil {
+		return err
+	}
+	if err := writeUint64(uint64(words * 8)); err != nil {
+		return err
+	}
+	for wordIndex := 0; wordIndex < words; wordIndex++ {
+		var word uint64
+		start := wordIndex * 64
+		end := min(start+64, nsp.validityLength)
+		for row := start; row < end; row++ {
+			if nsp.validityContainsNull(uint64(row)) {
+				word |= uint64(1) << uint(row-start)
+			}
+		}
+		if err := writeUint64(word); err != nil {
+			return err
+		}
+	}
+	return nil
 }
 
 // ShowV1 in version 1, bitmap is v1
 func (nsp *Nulls) ShowV1() ([]byte, error) {
-	if nsp.np.EmptyByFlag() {
+	if nsp.EmptyByFlag() {
 		return nil, nil
 	}
+	nsp.materializeValidity()
 	return nsp.np.MarshalV1(), nil
 }
 
 func (nsp *Nulls) Read(data []byte) error {
+	nsp.releaseValidity()
 	if len(data) == 0 {
 		// don't we need to reset?   Or we always, Read into a blank Nulls?
 		// nsp.np.Reset()
@@ -462,6 +602,7 @@ func (nsp *Nulls) Read(data []byte) error {
 }
 
 func (nsp *Nulls) ReadNoCopy(data []byte) error {
+	nsp.releaseValidity()
 	if len(data) == 0 {
 		return nil
 	}
@@ -470,6 +611,7 @@ func (nsp *Nulls) ReadNoCopy(data []byte) error {
 }
 
 func (nsp *Nulls) ReadNoCopyV1(data []byte) error {
+	nsp.releaseValidity()
 	if len(data) == 0 {
 		return nil
 	}
@@ -478,13 +620,15 @@ func (nsp *Nulls) ReadNoCopyV1(data []byte) error {
 }
 
 func (nsp *Nulls) OrBitmap(m *bitmap.Bitmap) {
+	nsp.materializeValidity()
 	orBitmapInto(nsp, m)
 }
 
 // Or the m Nulls into nsp.
 func (nsp *Nulls) Or(m *Nulls) {
 	if m != nil {
-		orBitmapInto(nsp, &m.np)
+		nsp.materializeValidity()
+		orBitmapInto(nsp, m.GetBitmap())
 	}
 }
 
@@ -496,19 +640,37 @@ func (nsp *Nulls) IsSame(m *Nulls) bool {
 		return false
 	}
 
-	return nsp.np.IsSame(&m.np)
+	return nsp.GetBitmap().IsSame(m.GetBitmap())
 }
 
 func (nsp *Nulls) ToArray() []uint64 {
-	if nsp == nil || nsp.np.EmptyByFlag() {
+	if nsp == nil || nsp.EmptyByFlag() {
 		return []uint64{}
+	}
+	if nsp.validityLease != nil {
+		rows := make([]uint64, 0, nsp.validityNulls)
+		for row := 0; row < nsp.validityLength; row++ {
+			if nsp.validityContainsNull(uint64(row)) {
+				rows = append(rows, uint64(row))
+			}
+		}
+		return rows
 	}
 	return nsp.np.ToArray()
 }
 
 func (nsp *Nulls) ToI64Array() []int64 {
-	if nsp == nil || nsp.np.EmptyByFlag() {
+	if nsp == nil || nsp.EmptyByFlag() {
 		return []int64{}
+	}
+	if nsp.validityLease != nil {
+		rows := make([]int64, 0, nsp.validityNulls)
+		for row := 0; row < nsp.validityLength; row++ {
+			if nsp.validityContainsNull(uint64(row)) {
+				rows = append(rows, int64(row))
+			}
+		}
+		return rows
 	}
 	return nsp.np.ToI64Array(nil)
 }
@@ -519,6 +681,14 @@ func (nsp *Nulls) GetCardinality() int {
 
 func (nsp *Nulls) Foreach(fn func(uint64) bool) {
 	if nsp.IsEmpty() {
+		return
+	}
+	if nsp.validityLease != nil {
+		for row := 0; row < nsp.validityLength; row++ {
+			if nsp.validityContainsNull(uint64(row)) && !fn(uint64(row)) {
+				break
+			}
+		}
 		return
 	}
 	itr := nsp.np.Iterator()
@@ -532,13 +702,17 @@ func (nsp *Nulls) Foreach(fn func(uint64) bool) {
 
 func (nsp *Nulls) Merge(other *Nulls) {
 	if other != nil {
-		orBitmapInto(nsp, &other.np)
+		nsp.materializeValidity()
+		orBitmapInto(nsp, other.GetBitmap())
 	}
 }
 
 func (nsp *Nulls) String() string {
 	if nsp.IsEmpty() {
 		return fmt.Sprintf("%v", []uint64{})
+	}
+	if nsp.validityLease != nil {
+		return fmt.Sprintf("%v", nsp.ToArray())
 	}
 	return nsp.np.String()
 }
@@ -548,10 +722,9 @@ func ToArray[T constraints.Integer](nsp *Nulls) []T {
 		return []T{}
 	}
 	ret := make([]T, 0, nsp.Count())
-	it := nsp.np.Iterator()
-	for it.HasNext() {
-		r := it.Next()
-		ret = append(ret, T(r))
-	}
+	nsp.Foreach(func(row uint64) bool {
+		ret = append(ret, T(row))
+		return true
+	})
 	return ret
 }

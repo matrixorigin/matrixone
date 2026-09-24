@@ -26,11 +26,13 @@ import (
 	_ "github.com/go-sql-driver/mysql"
 	"github.com/matrixorigin/matrixone/pkg/embed"
 	"github.com/matrixorigin/matrixone/pkg/pb/metadata"
+	"github.com/matrixorigin/matrixone/pkg/taskservice"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 )
 
 func TestIssue27719DropAccountCleansSQLTaskLifecycle(t *testing.T) {
+	releaseSharedSingleCNCluster(t)
 	cluster, err := embed.StartTestCluster(
 		embed.WithCNCount(2),
 		embed.WithPreStart(func(service embed.ServiceOperator) {
@@ -53,6 +55,62 @@ func TestIssue27719DropAccountCleansSQLTaskLifecycle(t *testing.T) {
 	cn1Port := cn1.GetServiceConfig().CN.Frontend.Port
 	cn2Port := cn2.GetServiceConfig().CN.Frontend.Port
 
+	// HAKeeper owns cron scheduling; CNs execute the resulting tasks. Observe
+	// this cluster's single logservice rather than assuming CN-local cron caches.
+	var schedulerIDs []string
+	cluster.ForeachServices(func(service embed.ServiceOperator) bool {
+		if service.ServiceType() == metadata.ServiceType_LOG {
+			schedulerIDs = append(schedulerIDs, service.ServiceID())
+		}
+		return true
+	})
+	require.Len(t, schedulerIDs, 1)
+	var refreshMu sync.Mutex
+	refreshedTasks := make(map[string][]uint64)
+	catchUps := make(map[string]map[uint64]int)
+	restoreRefreshHook := taskservice.SetSQLTaskRefreshHookForTest(func(serviceID string, ids []uint64) {
+		refreshMu.Lock()
+		defer refreshMu.Unlock()
+		refreshedTasks[serviceID] = ids
+	}, func(serviceID string, taskID uint64, started bool) {
+		refreshMu.Lock()
+		defer refreshMu.Unlock()
+		if catchUps[serviceID] == nil {
+			catchUps[serviceID] = make(map[uint64]int)
+		}
+		if started {
+			catchUps[serviceID][taskID]++
+		} else {
+			catchUps[serviceID][taskID]--
+		}
+	})
+	defer restoreRefreshHook()
+	schedulersHaveTasks := func(taskIDs []uint64, want bool) bool {
+		refreshMu.Lock()
+		defer refreshMu.Unlock()
+		for _, serviceID := range schedulerIDs {
+			ids, observed := refreshedTasks[serviceID]
+			if !observed {
+				return false
+			}
+			for _, id := range taskIDs {
+				if !want && catchUps[serviceID][id] != 0 {
+					return false
+				}
+				found := false
+				for _, current := range ids {
+					if current == id {
+						found = true
+					}
+				}
+				if found != want {
+					return false
+				}
+			}
+		}
+		return true
+	}
+
 	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Minute)
 	defer cancel()
 	sysDB := openIssue27719DB(t, ctx, fmt.Sprintf("dump:111@tcp(127.0.0.1:%d)/", cn1Port))
@@ -60,8 +118,17 @@ func TestIssue27719DropAccountCleansSQLTaskLifecycle(t *testing.T) {
 	sysDBCN2 := openIssue27719DB(t, ctx, fmt.Sprintf("dump:111@tcp(127.0.0.1:%d)/", cn2Port))
 	defer sysDBCN2.Close()
 	require.NoError(t, waitSystemBootstrap(ctx, sysDB))
+	require.NoError(t, waitSystemBootstrap(ctx, sysDBCN2))
 	requireIssue27719Exec(t, ctx, sysDB, "set role moadmin")
 	requireIssue27719Exec(t, ctx, sysDBCN2, "set role moadmin")
+	// Table bootstrap does not imply frontend task-service publication or a
+	// readable task store on either CN. Observe readiness before business DDL.
+	readyCtx, readyCancel := context.WithTimeout(ctx, 30*time.Second)
+	defer readyCancel()
+	for i, db := range []*sql.DB{sysDB, sysDBCN2} {
+		require.NoErrorf(t, waitSQLTaskReady(readyCtx, db), "CN%d SQL task readiness", i+1)
+	}
+	readyCancel()
 
 	accountName := fmt.Sprintf("issue27719_%d", time.Now().UnixNano())
 	defer func() {
@@ -100,7 +167,7 @@ func TestIssue27719DropAccountCleansSQLTaskLifecycle(t *testing.T) {
 		"create task running_task as begin insert into sink select sleep(8) + 5; end",
 	}
 	for _, statement := range createStatements {
-		requireIssue27719EventuallyExec(t, ctx, tenantDB, statement)
+		requireIssue27719Exec(t, ctx, tenantDB, statement)
 	}
 	requireIssue27719Exec(t, ctx, tenantDB, "alter task suspended_task suspend")
 	requireIssue27719Exec(t, ctx, tenantDB, "execute task completed_task")
@@ -118,6 +185,10 @@ func TestIssue27719DropAccountCleansSQLTaskLifecycle(t *testing.T) {
 			"select count(*) from mo_task.sys_async_task where task_parent_id = ?",
 			fmt.Sprintf("sql-task:%d", repeatingTaskID)) > 0
 	}, 20*time.Second, 100*time.Millisecond, "repeating task was not scheduled")
+
+	// Prove the stale-cache precondition before dropping the account.
+	require.Eventually(t, func() bool { return schedulersHaveTasks([]uint64{repeatingTaskID}, true) },
+		20*time.Second, 20*time.Millisecond, "HAKeeper scheduler must cache the repeating task")
 
 	runningDone := make(chan error, 1)
 	go func() {
@@ -153,9 +224,12 @@ func TestIssue27719DropAccountCleansSQLTaskLifecycle(t *testing.T) {
 
 	requireIssue27719AccountTaskResidue(t, ctx, sysDB, accountID, taskIDs, 0)
 
-	// Every CN refreshes its SQL-task cache independently. Wait beyond the
-	// fetch interval and prove stale cron jobs cannot recreate async work.
-	time.Sleep(12 * time.Second)
+	// A successful reconciliation removes the cached cron and joins its running
+	// callbacks. Also join the observed stopper-managed catch-up executions.
+	// Wait for both boundaries in the HAKeeper scheduler before checking durable
+	// residue, rather than sleeping through an assumed number of refreshes.
+	require.Eventually(t, func() bool { return schedulersHaveTasks(taskIDs, false) },
+		20*time.Second, 20*time.Millisecond, "HAKeeper scheduler must remove and drain the deleted tasks")
 	requireIssue27719AccountTaskResidue(t, ctx, sysDB, accountID, taskIDs, 0)
 	require.NoError(t, tenantDB.Close())
 	require.NoError(t, tenantRoot.Close())
@@ -182,7 +256,7 @@ func TestIssue27719DropAccountCleansSQLTaskLifecycle(t *testing.T) {
 	defer recreatedRoot.Close()
 	requireIssue27719Exec(t, ctx, recreatedRoot, "create database `"+databaseName+"`")
 	requireIssue27719Exec(t, ctx, recreatedRoot, "use `"+databaseName+"`")
-	requireIssue27719EventuallyExec(t, ctx, recreatedRoot,
+	requireIssue27719Exec(t, ctx, recreatedRoot,
 		"create task never_run schedule '0 0 0 1 1 *' timezone 'UTC' as begin select 1; end")
 	require.Eventually(t, func() bool {
 		return queryIssue27719Count(t, ctx, sysDB,
@@ -245,16 +319,6 @@ func requireIssue27719Exec(t *testing.T, ctx context.Context, db *sql.DB, statem
 	t.Helper()
 	_, err := db.ExecContext(ctx, statement)
 	require.NoErrorf(t, err, "exec failed: %s", statement)
-}
-
-func requireIssue27719EventuallyExec(t *testing.T, ctx context.Context, db *sql.DB, statement string) {
-	t.Helper()
-	var lastErr error
-	require.Eventually(t, func() bool {
-		_, lastErr = db.ExecContext(ctx, statement)
-		return lastErr == nil || !strings.Contains(lastErr.Error(), "task service not ready yet")
-	}, 10*time.Second, 100*time.Millisecond, "task service did not become ready")
-	require.NoErrorf(t, lastErr, "exec failed: %s", statement)
 }
 
 func queryIssue27719Count(t *testing.T, ctx context.Context, db *sql.DB, query string, args ...any) int {

@@ -449,6 +449,104 @@ func TestGetLocalLockTableUsesGetLockHolderLookupInputs(t *testing.T) {
 	)
 }
 
+func TestKeepRemoteLockRejectsRequestRoutedToReplacementCN(t *testing.T) {
+	runLockServiceTests(
+		t,
+		[]string{"replacement-cn"},
+		func(_ *lockTableAllocator, services []*service) {
+			s := services[0]
+			bind := pb.LockTable{
+				Group:       0,
+				Table:       27707,
+				OriginTable: 27707,
+				ServiceID:   getServiceIdentifier("departed-cn", 1),
+				Version:     1,
+				Valid:       true,
+			}
+			require.NotEqual(t,
+				getUUIDFromServiceIdentifier(s.serviceID),
+				getUUIDFromServiceIdentifier(bind.ServiceID))
+			s.tableGroups.set(bind.Group, bind.Table, s.createLockTableByBind(bind))
+
+			req := &pb.Request{
+				Method:    pb.Method_KeepRemoteLock,
+				LockTable: bind,
+			}
+			req.KeepRemoteLock.ServiceID = "source-cn"
+			resp := acquireResponse()
+			defer releaseResponse(resp)
+			cs := &testClientSession{ctx: context.Background()}
+
+			s.handleKeepRemoteLock(context.Background(), nil, req, resp, cs)
+
+			require.True(t, cs.writeCalled)
+			require.True(t,
+				moerr.IsMoErrCode(resp.UnwrapError(), moerr.ErrLockTableBindChanged))
+			require.False(t, s.activeTxnHolder.hasRemoteLockBind(
+				req.KeepRemoteLock.ServiceID, bind, time.Hour))
+		},
+	)
+}
+
+func TestKeepRemoteLockNotFoundCanRecoverSameBind(t *testing.T) {
+	runLockServiceTests(
+		t,
+		[]string{"owner"},
+		func(alloc *lockTableAllocator, services []*service) {
+			s := services[0]
+			const table = uint64(27709)
+			bind := alloc.Get(
+				s.serviceID,
+				0,
+				table,
+				table,
+				pb.Sharding_None,
+			)
+			req := &pb.Request{
+				Method:    pb.Method_KeepRemoteLock,
+				LockTable: bind,
+			}
+			req.KeepRemoteLock.ServiceID = "source"
+
+			alloc.server.RegisterMethodHandler(
+				pb.Method_GetBind,
+				func(
+					ctx context.Context,
+					cancel context.CancelFunc,
+					_ *pb.Request,
+					resp *pb.Response,
+					cs morpc.ClientSession,
+				) {
+					writeResponse(
+						alloc.logger,
+						cancel,
+						resp,
+						moerr.NewInternalErrorNoCtx("transient allocator failure"),
+						cs,
+					)
+				})
+
+			resp := acquireResponse()
+			cs := &testClientSession{ctx: context.Background()}
+			s.handleKeepRemoteLock(context.Background(), nil, req, resp, cs)
+			require.True(t, cs.writeCalled)
+			require.True(t,
+				moerr.IsMoErrCode(resp.UnwrapError(), moerr.ErrLockTableNotFound))
+			require.Nil(t, s.tableGroups.get(bind.Group, bind.Table))
+			releaseResponse(resp)
+
+			alloc.server.RegisterMethodHandler(pb.Method_GetBind, alloc.handleGetBind)
+			resp = acquireResponse()
+			defer releaseResponse(resp)
+			cs = &testClientSession{ctx: context.Background()}
+			s.handleKeepRemoteLock(context.Background(), nil, req, resp, cs)
+			require.True(t, cs.writeCalled)
+			require.NoError(t, resp.UnwrapError())
+			require.Equal(t, bind, s.tableGroups.get(bind.Group, bind.Table).getBind())
+		},
+	)
+}
+
 func TestRemoteLockResponseLogFieldsDoNotRetainRequest(t *testing.T) {
 	req := &pb.Request{
 		LockTable: pb.LockTable{
@@ -1635,6 +1733,92 @@ func TestHandleCheckActiveTxnKeepsOnlyUnknownCommitCleanupActive(t *testing.T) {
 			s.handleCheckActiveTxn(context.Background(), nil, req, resp, cs)
 			require.True(t, resp.CheckActiveTxn.Valid)
 			require.True(t, resp.CheckActiveTxn.Active)
+		},
+	)
+}
+
+func TestExternalTxnLivenessCoversActiveTxnQueriesAndLocalRecovery(t *testing.T) {
+	runLockServiceTests(
+		t,
+		[]string{"s1"},
+		func(_ *lockTableAllocator, services []*service) {
+			s := services[0]
+			txnID := []byte("session-level-lock")
+			s.cfg.TxnIterFunc = func(func([]byte) bool) {}
+			require.NoError(t, s.RegisterExternalTxn(txnID))
+			defer s.UnregisterExternalTxn(txnID)
+
+			checkReq := &pb.Request{
+				Method: pb.Method_CheckActiveTxn,
+				CheckActiveTxn: pb.CheckActiveTxnRequest{
+					ServiceID: s.serviceID,
+					Txn:       txnID,
+				},
+			}
+			checkResp := acquireResponse()
+			defer releaseResponse(checkResp)
+			s.handleCheckActiveTxn(
+				context.Background(),
+				nil,
+				checkReq,
+				checkResp,
+				&testClientSession{ctx: context.Background()},
+			)
+			require.True(t, checkResp.CheckActiveTxn.Valid)
+			require.True(t, checkResp.CheckActiveTxn.Active)
+
+			getReq := &pb.Request{
+				Method: pb.Method_GetActiveTxn,
+				GetActiveTxn: pb.GetActiveTxnRequest{
+					ServiceID: s.serviceID,
+				},
+			}
+			getResp := acquireResponse()
+			defer releaseResponse(getResp)
+			s.handleGetActiveTxn(
+				context.Background(),
+				nil,
+				getReq,
+				getResp,
+				&testClientSession{ctx: context.Background()},
+			)
+			require.True(t, getResp.GetActiveTxn.Valid)
+			require.Equal(t, [][]byte{txnID}, getResp.GetActiveTxn.Txn)
+
+			canUnlock, _ := s.canUnlockLocalTxn(txnID)
+			require.False(t, canUnlock,
+				"local orphan recovery must preserve externally owned lock txns")
+
+			s.UnregisterExternalTxn(txnID)
+			checkResp = acquireResponse()
+			defer releaseResponse(checkResp)
+			s.handleCheckActiveTxn(
+				context.Background(),
+				nil,
+				checkReq,
+				checkResp,
+				&testClientSession{ctx: context.Background()},
+			)
+			require.True(t, checkResp.CheckActiveTxn.Valid)
+			require.False(t, checkResp.CheckActiveTxn.Active)
+		},
+	)
+}
+
+func TestExternalTxnLivenessIsClearedOnServiceClose(t *testing.T) {
+	runLockServiceTests(
+		t,
+		[]string{"s1"},
+		func(_ *lockTableAllocator, services []*service) {
+			s := services[0]
+			txnID := []byte("session-level-lock")
+			require.NoError(t, s.RegisterExternalTxn(txnID))
+			require.True(t, s.externalTxns.contains(txnID))
+
+			require.NoError(t, s.Close())
+			require.False(t, s.externalTxns.contains(txnID))
+			require.Error(t, s.RegisterExternalTxn(txnID))
+			require.Error(t, s.RegisterExternalTxn(nil))
 		},
 	)
 }

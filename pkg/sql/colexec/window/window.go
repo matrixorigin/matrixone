@@ -17,10 +17,14 @@ package window
 import (
 	"bytes"
 	"context"
+	"fmt"
 	"math"
+	"os"
 	"strconv"
+	"strings"
 	"time"
 
+	"github.com/google/uuid"
 	"github.com/matrixorigin/matrixone/pkg/common/mpool"
 	"github.com/matrixorigin/matrixone/pkg/sql/colexec"
 	"github.com/matrixorigin/matrixone/pkg/sql/colexec/aggexec"
@@ -33,6 +37,7 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/partition"
 	"github.com/matrixorigin/matrixone/pkg/pb/plan"
 	"github.com/matrixorigin/matrixone/pkg/sort"
+	"github.com/matrixorigin/matrixone/pkg/sql/colexec/mergeorder"
 	"github.com/matrixorigin/matrixone/pkg/sql/plan/function"
 	"github.com/matrixorigin/matrixone/pkg/sql/plan/rule"
 	"github.com/matrixorigin/matrixone/pkg/vm"
@@ -159,6 +164,10 @@ func materializeWindowBound(
 	if frameType == plan.FrameClause_RANGE && planned.Val.GetList() != nil {
 		return runtimeBound, nil
 	}
+	if frameType == plan.FrameClause_RANGE && planned.Val.GetVec() != nil {
+		_, err := decimal256RangeOffset(planned.Val, planned.Val.Typ)
+		return runtimeBound, err
+	}
 	if proc == nil || proc.GetPrepareParams() == nil {
 		return nil, moerr.NewInvalidInputNoCtx("window frame bound parameter is missing")
 	}
@@ -191,6 +200,16 @@ func materializeWindowBound(
 			return nil, err
 		}
 	}
+	if vec.GetType().Oid == types.T_decimal256 {
+		data, err := vec.MarshalBinary()
+		if err != nil {
+			return nil, err
+		}
+		runtimeBound.Val = &plan.Expr{Typ: planned.Val.Typ, Expr: &plan.Expr_Vec{Vec: &plan.LiteralVec{
+			Len: 1, Data: data,
+		}}}
+		return runtimeBound, nil
+	}
 
 	runtimeBound.Val = &plan.Expr{
 		Typ:  planned.Val.Typ,
@@ -221,6 +240,8 @@ func validateRangeFrameBound(ctx context.Context, vec *vector.Vector) error {
 		valid = !vector.MustFixedColWithTypeCheck[types.Decimal64](vec)[0].Sign()
 	case types.T_decimal128:
 		valid = !vector.MustFixedColWithTypeCheck[types.Decimal128](vec)[0].Sign()
+	case types.T_decimal256:
+		valid = !vector.MustFixedColWithTypeCheck[types.Decimal256](vec)[0].Sign()
 	default:
 		return moerr.NewInvalidInputf(
 			ctx,
@@ -239,6 +260,36 @@ func (ctr *container) frameAt(idx int, planned *plan.FrameClause) *plan.FrameCla
 		return ctr.runtimeFrames[idx]
 	}
 	return planned
+}
+
+// decimal256RangeOffset borrows a bounded singleton encoding and returns its
+// coefficient by value. It neither retains the vector nor allocates in the
+// row-search path. The payload is owned by the immutable plan/runtime frame.
+func decimal256RangeOffset(expr *plan.Expr, orderType plan.Type) (types.Decimal256, error) {
+	var zero types.Decimal256
+	literal := expr.GetVec()
+	// Non-NULL fixed singleton: type, class, length, three length prefixes,
+	// 32 coefficient bytes and sorted flag. Reject unbounded bitmap/area data
+	// before unmarshalling on every row.
+	if literal == nil || literal.Len != 1 || len(literal.Data) != types.TSize+50 ||
+		expr.Typ.Id != int32(types.T_decimal256) || orderType.Id != int32(types.T_decimal256) || expr.Typ.Scale != orderType.Scale ||
+		expr.Typ.Width != orderType.Width {
+		return zero, moerr.NewInvalidInputNoCtx("invalid Decimal256 window RANGE bound")
+	}
+	var value vector.Vector
+	if err := value.UnmarshalBinary(literal.Data); err != nil {
+		return zero, err
+	}
+	typ := value.GetType()
+	if typ.Oid != types.T_decimal256 || typ.Width != orderType.Width || typ.Scale != orderType.Scale ||
+		value.Length() != 1 || value.IsNull(0) || len(value.GetData()) != 32 || len(value.GetArea()) != 0 {
+		return zero, moerr.NewInvalidInputNoCtx("invalid Decimal256 window RANGE bound")
+	}
+	offset := vector.GetFixedAtNoTypeCheck[types.Decimal256](&value, 0)
+	if offset.Sign() {
+		return zero, moerr.NewInvalidInputNoCtx("window RANGE frame bound must be a finite non-negative numeric value")
+	}
+	return offset, nil
 }
 
 func (window *Window) Call(proc *process.Process) (vm.CallResult, error) {
@@ -303,6 +354,7 @@ func (window *Window) Call(proc *process.Process) (vm.CallResult, error) {
 			// Normally the previous generation is released after its last chunk;
 			// this also closes reuse after an interrupted or failed generation.
 			ctr.freeRunningAgg()
+			ctr.freeOrderedSetPartitionResults(proc.Mp())
 			if err = ctr.evalAggVector(ctr.bat, proc); err != nil {
 				return result, err
 			}
@@ -484,6 +536,7 @@ func (ctr *container) newAggregateExecutor(
 	if err != nil {
 		return nil, err
 	}
+	aggexec.ConfigureGroupConcatTimeZone(exec, proc.Base.SessionInfo.TimeZone)
 	succeeded := false
 	defer func() {
 		if !succeeded {
@@ -495,6 +548,27 @@ func (ctr *container) newAggregateExecutor(
 			return nil, err
 		}
 	}
+	aggexec.ConfigureOrderedPercentileSpill(
+		exec,
+		colexec.ResolveSpillThreshold(ap.SpillThreshold),
+		proc.Ctx,
+		func() (*os.File, error) {
+			spillFS, spillErr := proc.GetSpillFileService()
+			if spillErr != nil {
+				return nil, spillErr
+			}
+			id, _ := uuid.NewV7()
+			return spillFS.CreateAndRemoveFile(
+				proc.Ctx,
+				fmt.Sprintf("window_ordered_percentile_run_%s", id.String()),
+			)
+		},
+		func(bytes, rows, retainedMemory int64) {
+			ap.OpAnalyzer.Spill(bytes)
+			ap.OpAnalyzer.SpillRows(rows)
+			ap.OpAnalyzer.SetMemUsed(retainedMemory)
+		},
+	)
 	if err = exec.GroupGrow(groupCount); err != nil {
 		return nil, err
 	}
@@ -509,13 +583,18 @@ func (ctr *container) processAggregateFuncRange(
 	outputStart int,
 	outputEnd int,
 ) (*vector.Vector, error) {
+	w := ap.WinSpecList[idx].Expr.(*plan.Expr_W).W
+	frame := ctr.frameAt(idx, w.Frame)
+	if orderedSetWindowAggregate(w.Name) && fullPartitionWindowFrame(frame) {
+		return ctr.processOrderedSetFullPartitionRange(
+			idx, ap, proc, outputStart, outputEnd)
+	}
+
 	if err := ctr.makeAggregateExecutor(idx, ap, proc, outputEnd-outputStart); err != nil {
 		return nil, err
 	}
 	defer ctr.freeAggFun()
 
-	w := ap.WinSpecList[idx].Expr.(*plan.Expr_W).W
-	frame := ctr.frameAt(idx, w.Frame)
 	if cumulativeRowsFrame(frame, ctr.ps, ctr.bat.RowCount()) &&
 		aggexec.MergePreservesSource(ctr.batAggs[idx]) {
 		return ctr.processCumulativeAggregateFuncRange(idx, ap, proc, outputStart, outputEnd)
@@ -574,7 +653,7 @@ func (ctr *container) processAggregateFuncRange(
 		}
 	}
 
-	vecs, err := ctr.batAggs[idx].Flush()
+	vecs, err := aggexec.FlushWithContext(proc.Ctx, ctr.batAggs[idx])
 	if err != nil {
 		return nil, err
 	}
@@ -585,10 +664,127 @@ func (ctr *container) processAggregateFuncRange(
 	if err != nil {
 		return nil, err
 	}
+	aggexec.ReportGroupConcatWarnings(ctr.batAggs[idx], proc.GetWarningSink())
 	// Aggregate state initializes its physical capacity as NULL. Keep only
 	// logical-row nulls so downstream HasNull checks do not see an unused tail.
 	nulls.RemoveRange(vec.GetNulls(), uint64(vec.Length()), math.MaxUint64)
 	return vec, nil
+}
+
+func orderedSetWindowAggregate(name string) bool {
+	return strings.EqualFold(name, "median") ||
+		strings.EqualFold(name, "approx_percentile") ||
+		strings.EqualFold(name, "percentile_cont") ||
+		strings.EqualFold(name, "percentile_disc")
+}
+
+func fullPartitionWindowFrame(frame *plan.FrameClause) bool {
+	return frame != nil && frame.Start != nil && frame.End != nil &&
+		frame.Start.Type == plan.FrameBound_PRECEDING && frame.Start.UnBounded &&
+		frame.End.Type == plan.FrameBound_FOLLOWING && frame.End.UnBounded
+}
+
+// processOrderedSetFullPartitionRange evaluates one aggregate state per
+// partition and broadcasts its result to the output rows in that partition.
+// The compact result vector is retained across bounded output chunks and is
+// released after the final chunk (or by Reset/Free on early termination). The
+// ordinary frame evaluator allocates one state per output row; for exact
+// percentiles over a full partition that would retain the same ordered values
+// repeatedly and turn a linear input into quadratic resident state.
+func (ctr *container) processOrderedSetFullPartitionRange(
+	idx int,
+	ap *Window,
+	proc *process.Process,
+	outputStart int,
+	outputEnd int,
+) (_ *vector.Vector, retErr error) {
+	n := ctr.bat.RowCount()
+	if outputStart != ctr.orderedSetNextRow {
+		ctr.freeOrderedSetPartitionResults(proc.Mp())
+		return nil, moerr.NewInternalErrorNoCtx("ordered-set window output is not sequential")
+	}
+	defer func() {
+		if retErr != nil {
+			ctr.freeOrderedSetPartitionResults(proc.Mp())
+		}
+	}()
+
+	if ctr.orderedSetPartitionResults == nil {
+		partitionCount := 1
+		if len(ctr.ps) > 0 {
+			partitionCount = len(ctr.ps)
+		}
+		if err := ctr.makeAggregateExecutor(idx, ap, proc, partitionCount); err != nil {
+			return nil, err
+		}
+		defer ctr.freeAggFun()
+
+		for group := 0; group < partitionCount; group++ {
+			start := 0
+			if len(ctr.ps) > 0 {
+				start = int(ctr.ps[group])
+			}
+			end := partitionEnd(ctr.ps, group, n)
+			if start < 0 || end <= start || end > n {
+				return nil, moerr.NewInternalErrorNoCtx("invalid full-partition window interval")
+			}
+			for row := start; row < end; row++ {
+				if err := checkCanceled(proc, row-start); err != nil {
+					return nil, err
+				}
+				if err := ctr.batAggs[idx].Fill(group, row, ctr.aggVecs[idx].Vec); err != nil {
+					return nil, err
+				}
+			}
+		}
+
+		vecs, err := aggexec.FlushWithContext(proc.Ctx, ctr.batAggs[idx])
+		if err != nil {
+			return nil, err
+		}
+		ctr.orderedSetPartitionResults, err = aggexec.MergeSplitResult(vecs, proc.Mp())
+		if err != nil {
+			return nil, err
+		}
+		if ctr.orderedSetPartitionResults.Length() != partitionCount {
+			return nil, moerr.NewInternalErrorNoCtx("ordered-set partition result count mismatch")
+		}
+	}
+
+	result := vector.NewVec(*ctr.orderedSetPartitionResults.GetType())
+	defer func() {
+		if retErr != nil {
+			result.Free(proc.Mp())
+		}
+	}()
+	for row := outputStart; row < outputEnd; {
+		group := ctr.orderedSetPartition
+		start := 0
+		if len(ctr.ps) > 0 {
+			if group >= len(ctr.ps) {
+				return nil, moerr.NewInternalErrorNoCtx("ordered-set partition cache exhausted")
+			}
+			start = int(ctr.ps[group])
+		}
+		end := partitionEnd(ctr.ps, group, n)
+		if row < start || row >= end {
+			return nil, moerr.NewInternalErrorNoCtx("invalid ordered-set partition cache position")
+		}
+		visibleEnd := min(end, outputEnd)
+		if err := result.UnionMulti(
+			ctr.orderedSetPartitionResults, int64(group), visibleEnd-row, proc.Mp()); err != nil {
+			return nil, err
+		}
+		row = visibleEnd
+		if row == end {
+			ctr.orderedSetPartition++
+		}
+	}
+	ctr.orderedSetNextRow = outputEnd
+	if outputEnd == n {
+		ctr.freeOrderedSetPartitionResults(proc.Mp())
+	}
+	return result, nil
 }
 
 // cumulativeRowsFrame reports whether every frame in the materialized batch
@@ -800,7 +996,7 @@ func (ctr *container) processCumulativeAggregateFuncRange(
 		ctr.runningNextRow = j + 1
 	}
 
-	vecs, err := ctr.batAggs[idx].Flush()
+	vecs, err := aggexec.FlushWithContext(proc.Ctx, ctr.batAggs[idx])
 	if err != nil {
 		return nil, err
 	}
@@ -808,6 +1004,7 @@ func (ctr *container) processCumulativeAggregateFuncRange(
 	if err != nil {
 		return nil, err
 	}
+	aggexec.ReportGroupConcatWarnings(ctr.batAggs[idx], proc.GetWarningSink())
 	nulls.RemoveRange(vec.GetNulls(), uint64(vec.Length()), math.MaxUint64)
 	if outputEnd == n {
 		ctr.freeRunningAgg()
@@ -917,7 +1114,7 @@ func (ctr *container) processSlidingAggregateFuncRange(
 		ctr.runningNextRow = j + 1
 	}
 
-	vecs, err := ctr.batAggs[idx].Flush()
+	vecs, err := aggexec.FlushWithContext(proc.Ctx, ctr.batAggs[idx])
 	if err != nil {
 		return nil, err
 	}
@@ -925,6 +1122,7 @@ func (ctr *container) processSlidingAggregateFuncRange(
 	if err != nil {
 		return nil, err
 	}
+	aggexec.ReportGroupConcatWarnings(ctr.batAggs[idx], proc.GetWarningSink())
 	nulls.RemoveRange(vec.GetNulls(), uint64(vec.Length()), math.MaxUint64)
 	if outputEnd == n {
 		ctr.freeRunningAgg()
@@ -1024,10 +1222,15 @@ func (ctr *container) processOrderFuncRange(
 					peerEnd = int(ctr.os[peerIndex+1])
 				}
 			}
+			partitionStart := 0
+			if ctr.ps != nil {
+				partitionStart, _ = buildPartitionInterval(ctr.ps, j, n)
+			}
 			if funcName == "rank" {
-				values[j-outputStart] = uint64(peerStart + 1)
+				values[j-outputStart] = uint64(peerStart - partitionStart + 1)
 			} else {
-				values[j-outputStart] = uint64(peerIndex + 1)
+				partitionPeerIndex, _, _ := peerInterval(ctr.os, partitionStart, n)
+				values[j-outputStart] = uint64(peerIndex - partitionPeerIndex + 1)
 			}
 		}
 		vec := vector.NewVec(types.T_uint64.ToType())
@@ -2132,12 +2335,136 @@ func (ctr *container) processOrder(idx int, ap *Window, bat *batch.Batch, proc *
 	if err := ctr.evalOrderVector(bat, proc); err != nil {
 		return false, err
 	}
+	w := ap.WinSpecList[idx].Expr.(*plan.Expr_W).W
+	if ap.PartitionTopN {
+		// Grouping-set sentinels are SQL NULLs to a downstream PARTITION BY.
+		// Normalize only the private order-key copies before external sorting;
+		// otherwise the sorter can compare their physical zero payload with an
+		// ordinary value (for example an empty string) and merge two partitions.
+		for i := 0; i < len(w.PartitionBy); i++ {
+			vec := ctr.orderVecs[i].Vec[0]
+			if vec.HasGrouping() {
+				vec.GetNulls().Or(vec.GetGrouping())
+				vec.SetGrouping(nil)
+			}
+		}
+	}
+
+	sortSize := int64(bat.Size())
+	for i := range ctr.aggVecs {
+		for _, vec := range ctr.aggVecs[i].Vec {
+			if vec != nil && !vec.IsConst() {
+				sortSize += int64(vec.Size())
+			}
+		}
+	}
+	for i := range ctr.orderVecs {
+		for _, vec := range ctr.orderVecs[i].Vec {
+			if vec != nil {
+				sortSize += int64(vec.Size())
+			}
+		}
+	}
+
+	externalSorted := false
+	if bat.RowCount() > 1 && sortSize > colexec.ResolveSpillThreshold(ap.SpillThreshold) {
+		var (
+			orderCols    []*vector.Vector
+			orderRefs    [][2]int
+			extraAggVecs []*vector.Vector
+			extraRefs    [][2]int
+		)
+		if len(ctr.orderVecs) != len(ap.Fs) {
+			return false, moerr.NewInternalErrorNoCtx("window order vector count mismatch")
+		}
+		for i := range ctr.orderVecs {
+			if len(ctr.orderVecs[i].Vec) != 1 || ctr.orderVecs[i].Vec[0] == nil {
+				return false, moerr.NewInternalErrorNoCtx("window order vector is missing")
+			}
+			orderCols = append(orderCols, ctr.orderVecs[i].Vec[0])
+			orderRefs = append(orderRefs, [2]int{i, 0})
+		}
+		for i := range ctr.aggVecs {
+			for j, vec := range ctr.aggVecs[i].Vec {
+				if vec == nil || vec.IsConst() {
+					continue
+				}
+				extraAggVecs = append(extraAggVecs, vec)
+				extraRefs = append(extraRefs, [2]int{i, j})
+			}
+		}
+
+		inputConsumed := func() {
+			// The sorter has copied every row into sorter-owned resident or spill
+			// state. Release the materialized source and the carried expression
+			// vectors before final merge collection so the sorted partition does
+			// not overlap a second full copy of the same window payload.
+			if ctr.bat == bat {
+				bat.Clean(proc.Mp())
+				ctr.bat = nil
+			}
+			for _, ref := range orderRefs {
+				vec := ctr.orderVecs[ref[0]].Vec[ref[1]]
+				if vec != nil {
+					vec.Free(proc.Mp())
+					ctr.orderVecs[ref[0]].Vec[ref[1]] = nil
+				}
+			}
+			for _, ref := range extraRefs {
+				vec := ctr.aggVecs[ref[0]].Vec[ref[1]]
+				if vec != nil {
+					vec.Free(proc.Mp())
+					ctr.aggVecs[ref[0]].Vec[ref[1]] = nil
+				}
+			}
+		}
+
+		sorted, sortedOrderVecs, sortedAggVecs, err := mergeorder.SortBatchWithPrecomputedOrderAndRelease(
+			proc,
+			bat,
+			ap.Fs,
+			ap.SpillThreshold,
+			ap.OpAnalyzer,
+			orderCols,
+			extraAggVecs,
+			inputConsumed,
+		)
+		if err != nil {
+			return false, err
+		}
+		if len(sortedOrderVecs) != len(orderRefs) || len(sortedAggVecs) != len(extraRefs) {
+			for _, vec := range sortedOrderVecs {
+				if vec != nil {
+					vec.Free(proc.Mp())
+				}
+			}
+			for _, vec := range sortedAggVecs {
+				if vec != nil {
+					vec.Free(proc.Mp())
+				}
+			}
+			sorted.Clean(proc.Mp())
+			return false, moerr.NewInternalErrorNoCtx("window sorted vector count mismatch")
+		}
+		ctr.bat = sorted
+		bat = sorted
+		// Keep the values evaluated before sorting. Re-evaluating either the order
+		// expressions or the window arguments would duplicate work and change the
+		// result of volatile expressions.
+		for k, ref := range orderRefs {
+			ctr.orderVecs[ref[0]].Vec[ref[1]] = sortedOrderVecs[k]
+		}
+		for k, ref := range extraRefs {
+			ctr.aggVecs[ref[0]].Vec[ref[1]] = sortedAggVecs[k]
+		}
+		externalSorted = true
+	}
+
 	if bat.RowCount() < 2 {
 		return false, nil
 	}
 
 	ovec := ctr.orderVecs[0].Vec[0]
-	w := ap.WinSpecList[idx].Expr.(*plan.Expr_W).W
 	partitionKeyCount := 0
 	if ap.PartitionTopN {
 		// PartitionTopN coalesces input partitions, so its order-vector prefix
@@ -2158,7 +2485,7 @@ func (ctr *container) processOrder(idx int, ap *Window, bat *batch.Batch, proc *
 	}
 
 	// skip sort for const vector
-	if !ovec.IsConst() {
+	if !externalSorted && !ovec.IsConst() {
 		if err := checkCanceled(proc, 0); err != nil {
 			return false, err
 		}
@@ -2177,6 +2504,7 @@ func (ctr *container) processOrder(idx int, ap *Window, bat *batch.Batch, proc *
 
 	ps := make([]int64, 0, 16)
 	ds := make([]bool, len(ctr.sels))
+	var jsonOrderScratch sort.JSONOrderScratch
 
 	i, j := 1, len(ctr.orderVecs)
 	for ; i < j; i++ {
@@ -2191,9 +2519,14 @@ func (ctr *container) processOrder(idx int, ap *Window, bat *batch.Batch, proc *
 			ps = partition.PartitionForOrder(ctr.sels, ds, ps, ovec)
 		}
 		vec := ctr.orderVecs[i].Vec[0]
+		var scratch *sort.JSONOrderScratch
+		nullCnt := vec.GetNulls().Count()
+		if i >= partitionKeyCount && !vec.IsConst() && vec.GetType().Oid == types.T_json && nullCnt < vec.Length() {
+			jsonOrderScratch.Prepare(ctr.sels, vec)
+			scratch = &jsonOrderScratch
+		}
 		// skip sort for const vector
-		if !vec.IsConst() {
-			nullCnt := vec.GetNulls().Count()
+		if !externalSorted && !vec.IsConst() {
 			if nullCnt < vec.Length() {
 				for group, groupCount := 0, len(ps); group < groupCount; group++ {
 					if err := checkCanceled(proc, group); err != nil {
@@ -2207,7 +2540,7 @@ func (ctr *container) processOrder(idx int, ap *Window, bat *batch.Batch, proc *
 					if i < partitionKeyCount {
 						sort.Sort(desc, nullsLast, nullCnt > 0, ctr.sels[start:end], vec)
 					} else {
-						sort.SortForSQLOrder(desc, nullsLast, nullCnt > 0, ctr.sels[start:end], vec)
+						sort.SortForSQLOrderWithScratch(desc, nullsLast, nullCnt > 0, ctr.sels[start:end], vec, scratch)
 					}
 				}
 			}
@@ -2262,6 +2595,12 @@ func searchLeft(start, end, rowIdx int, vec *vector.Vector, expr *plan.Expr, plu
 }
 
 func searchLeftWithLocation(loc *time.Location, start, end, rowIdx int, vec *vector.Vector, expr *plan.Expr, plus bool, desc bool) (int, error) {
+	if start >= end {
+		return start, nil
+	}
+	if vec.IsConstNull() {
+		return start, nil
+	}
 	if vec.GetNulls().Contains(uint64(rowIdx)) {
 		// NULL order-key rows are peers; find the start of the NULL peer group
 		left := rowIdx
@@ -2283,7 +2622,7 @@ func searchLeftWithLocation(loc *time.Location, start, end, rowIdx int, vec *vec
 	// A const vector stores one physical value, while the search bounds are
 	// logical rows. Evaluate the one physical row and project its boundary back
 	// to this logical interval instead of indexing the scalar column by mid.
-	if vec.IsConst() && end-start > 1 {
+	if vec.IsConst() && (start != 0 || end != 1 || rowIdx != 0) {
 		boundary, err := searchLeftWithLocation(loc, 0, 1, 0, vec, expr, plus, desc)
 		if err != nil || boundary == 0 {
 			return start, err
@@ -2294,6 +2633,9 @@ func searchLeftWithLocation(loc *time.Location, start, end, rowIdx int, vec *vec
 	// For DESC, swap the arithmetic direction.
 	if desc {
 		plus = !plus
+	}
+	if vec.GetType().Oid == types.T_decimal256 {
+		return searchDecimal256Range(start, end, rowIdx, vec, expr, plus, desc, false)
 	}
 
 	var left int
@@ -2663,12 +3005,8 @@ func doDateSub(start types.Date, diff int64, unit int64) (types.Date, error) {
 	if !temporalRangeCalendarIntervalInDomain(start.ToDatetime(), diff, types.IntervalType(unit), true) {
 		return 0, moerr.NewOutOfRangeNoCtx("date", "")
 	}
-	if types.IntervalType(unit) == types.MicroSecond {
-		dt, ok := checkedDatetimeMicrosecondInterval(start.ToDatetime(), diff, true, types.DateType)
-		if !ok {
-			return 0, moerr.NewOutOfRangeNoCtx("date", "")
-		}
-		return dt.ToDate(), nil
+	if diff == math.MinInt64 {
+		return 0, moerr.NewOutOfRangeNoCtx("date", "")
 	}
 	dt, success := start.ToDatetime().AddInterval(-diff, types.IntervalType(unit), types.DateType)
 	if success {
@@ -2712,12 +3050,8 @@ func doDatetimeSub(start types.Datetime, diff int64, unit int64) (types.Datetime
 	if !temporalRangeCalendarIntervalInDomain(start, diff, types.IntervalType(unit), true) {
 		return 0, moerr.NewOutOfRangeNoCtx("datetime", "")
 	}
-	if types.IntervalType(unit) == types.MicroSecond {
-		dt, ok := checkedDatetimeMicrosecondInterval(start, diff, true, types.DateTimeType)
-		if !ok {
-			return 0, moerr.NewOutOfRangeNoCtx("datetime", "")
-		}
-		return dt, nil
+	if diff == math.MinInt64 {
+		return 0, moerr.NewOutOfRangeNoCtx("datetime", "")
 	}
 	dt, success := start.AddInterval(-diff, types.IntervalType(unit), types.DateTimeType)
 	if success {
@@ -2738,12 +3072,8 @@ func doTimestampSub(loc *time.Location, start types.Timestamp, diff int64, unit 
 	if !temporalRangeCalendarIntervalInDomain(start.ToDatetime(loc), diff, types.IntervalType(unit), true) {
 		return 0, moerr.NewOutOfRangeNoCtx("timestamp", "")
 	}
-	if types.IntervalType(unit) == types.MicroSecond {
-		dt, ok := checkedDatetimeMicrosecondInterval(start.ToDatetime(loc), diff, true, types.DateTimeType)
-		if !ok {
-			return 0, moerr.NewOutOfRangeNoCtx("timestamp", "")
-		}
-		return timestampRangeBoundary(dt, loc), nil
+	if diff == math.MinInt64 {
+		return 0, moerr.NewOutOfRangeNoCtx("timestamp", "")
 	}
 	dt, success := start.ToDatetime(loc).AddInterval(-diff, types.IntervalType(unit), types.DateTimeType)
 	if success {
@@ -2781,6 +3111,12 @@ func searchRight(start, end, rowIdx int, vec *vector.Vector, expr *plan.Expr, su
 }
 
 func searchRightWithLocation(loc *time.Location, start, end, rowIdx int, vec *vector.Vector, expr *plan.Expr, sub bool, desc bool) (int, error) {
+	if start >= end {
+		return start, nil
+	}
+	if vec.IsConstNull() {
+		return end, nil
+	}
 	if vec.GetNulls().Contains(uint64(rowIdx)) {
 		// NULL order-key rows are peers; find the end of the NULL peer group (exclusive)
 		right := rowIdx + 1
@@ -2801,7 +3137,7 @@ func searchRightWithLocation(loc *time.Location, start, end, rowIdx int, vec *ve
 	}
 	// See searchLeftWithLocation: resolve scalar storage against one physical
 	// row, then preserve the result's logical interval boundary.
-	if vec.IsConst() && end-start > 1 {
+	if vec.IsConst() && (start != 0 || end != 1 || rowIdx != 0) {
 		boundary, err := searchRightWithLocation(loc, 0, 1, 0, vec, expr, sub, desc)
 		if err != nil || boundary == 0 {
 			return start, err
@@ -2812,6 +3148,9 @@ func searchRightWithLocation(loc *time.Location, start, end, rowIdx int, vec *ve
 	// For DESC, swap the arithmetic direction.
 	if desc {
 		sub = !sub
+	}
+	if vec.GetType().Oid == types.T_decimal256 {
+		return searchDecimal256Range(start, end, rowIdx, vec, expr, !sub, desc, true)
 	}
 
 	var right int
@@ -3345,23 +3684,6 @@ func temporalRangeCalendarIntervalInDomain(start types.Datetime, diff int64, uni
 	return boundaryYear >= int64(types.MinDatetimeYear) && boundaryYear <= int64(types.MaxDatetimeYear)
 }
 
-// checkedDatetimeMicrosecondInterval validates both the signed arithmetic and
-// the resulting DATE/DATETIME domain. Datetime.AddInterval intentionally
-// fast-paths MICROSECOND without a calendar validation, so RANGE bounds must
-// validate it before using the result as a binary-search key.
-func checkedDatetimeMicrosecondInterval(start types.Datetime, diff int64, subtract bool, timeType types.TimeType) (types.Datetime, bool) {
-	result, ok := checkedMicrosecondArithmetic(int64(start), diff, subtract)
-	if !ok {
-		return 0, false
-	}
-	dt := types.Datetime(result)
-	year, month, day, _ := dt.ToDate().Calendar(true)
-	if timeType == types.DateType {
-		return dt, types.ValidDate(year, month, day)
-	}
-	return dt, types.ValidDatetime(year, month, day)
-}
-
 func checkedTimeMicrosecondInterval(start types.Time, diff int64, subtract bool) (types.Time, bool) {
 	result, ok := checkedMicrosecondArithmetic(int64(start), diff, subtract)
 	if !ok {
@@ -3380,13 +3702,6 @@ func doDateAdd(start types.Date, diff int64, unit int64) (types.Date, error) {
 	}
 	if !temporalRangeCalendarIntervalInDomain(start.ToDatetime(), diff, types.IntervalType(unit), false) {
 		return 0, moerr.NewOutOfRangeNoCtx("date", "")
-	}
-	if types.IntervalType(unit) == types.MicroSecond {
-		dt, ok := checkedDatetimeMicrosecondInterval(start.ToDatetime(), diff, false, types.DateType)
-		if !ok {
-			return 0, moerr.NewOutOfRangeNoCtx("date", "")
-		}
-		return dt.ToDate(), nil
 	}
 	dt, success := start.ToDatetime().AddInterval(diff, types.IntervalType(unit), types.DateType)
 	if success {
@@ -3430,13 +3745,6 @@ func doDatetimeAdd(start types.Datetime, diff int64, unit int64) (types.Datetime
 	if !temporalRangeCalendarIntervalInDomain(start, diff, types.IntervalType(unit), false) {
 		return 0, moerr.NewOutOfRangeNoCtx("datetime", "")
 	}
-	if types.IntervalType(unit) == types.MicroSecond {
-		dt, ok := checkedDatetimeMicrosecondInterval(start, diff, false, types.DateTimeType)
-		if !ok {
-			return 0, moerr.NewOutOfRangeNoCtx("datetime", "")
-		}
-		return dt, nil
-	}
 	dt, success := start.AddInterval(diff, types.IntervalType(unit), types.DateTimeType)
 	if success {
 		return dt, nil
@@ -3455,13 +3763,6 @@ func doTimestampAdd(loc *time.Location, start types.Timestamp, diff int64, unit 
 	}
 	if !temporalRangeCalendarIntervalInDomain(start.ToDatetime(loc), diff, types.IntervalType(unit), false) {
 		return 0, moerr.NewOutOfRangeNoCtx("timestamp", "")
-	}
-	if types.IntervalType(unit) == types.MicroSecond {
-		dt, ok := checkedDatetimeMicrosecondInterval(start.ToDatetime(loc), diff, false, types.DateTimeType)
-		if !ok {
-			return 0, moerr.NewOutOfRangeNoCtx("timestamp", "")
-		}
-		return timestampRangeBoundary(dt, loc), nil
 	}
 	dt, success := start.ToDatetime(loc).AddInterval(diff, types.IntervalType(unit), types.DateTimeType)
 	if success {
@@ -3560,6 +3861,45 @@ func decimal64Greater(a, b types.Decimal64) bool {
 func decimal64Less(a, b types.Decimal64) bool {
 	return a.Compare(b) == -1
 }
+
+// searchDecimal256Range returns an insertion boundary in [start,end]. Arithmetic
+// overflow is outside the physical coefficient domain, not a wrapped search key.
+func searchDecimal256Range(start, end, rowIdx int, vec *vector.Vector, expr *plan.Expr, add, desc, right bool) (int, error) {
+	col := vector.MustFixedColNoTypeCheck[types.Decimal256](vec)
+	boundary := col[rowIdx]
+	if expr != nil {
+		typ := vec.GetType()
+		offset, err := decimal256RangeOffset(expr, plan.Type{
+			Id: int32(typ.Oid), Width: typ.Width, Scale: typ.Scale,
+		})
+		if err != nil {
+			return 0, err
+		}
+		if add {
+			boundary, err = boundary.Add256(offset)
+		} else {
+			boundary, err = boundary.Sub256(offset)
+		}
+		if err != nil {
+			return outOfDomainRangeBoundary(start, end, add, desc), nil
+		}
+	}
+	greater := decimal256Greater
+	if desc {
+		greater = decimal256Less
+	}
+	if right {
+		if expr == nil {
+			return genericSearchEqualRight(rowIdx, end-1, col, boundary, decimal256Equal) + 1, nil
+		}
+		return genericSearchRight(start, end-1, col, boundary, decimal256Equal, greater) + 1, nil
+	}
+	return genericSearchLeft(start, end-1, col, boundary, decimal256Equal, greater), nil
+}
+
+func decimal256Equal(a, b types.Decimal256) bool   { return a.Compare(b) == 0 }
+func decimal256Greater(a, b types.Decimal256) bool { return a.Compare(b) > 0 }
+func decimal256Less(a, b types.Decimal256) bool    { return a.Compare(b) < 0 }
 
 func decimal128Equal(a, b types.Decimal128) bool {
 	return a.Compare(b) == 0

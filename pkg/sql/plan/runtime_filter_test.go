@@ -136,6 +136,110 @@ func configureRuntimeFilterCompositePK(builder *QueryBuilder) (*planpb.Node, *pl
 	return probe, build
 }
 
+func TestCompositeLeadingColumnRuntimeFilter(t *testing.T) {
+	// Use a small configured budget to test the boundary without large data or
+	// inventing statistics for an actual table. Restore the shared mock runtime.
+	rt := moruntime.ServiceRuntime(newRuntimeFilterSingleTestBuilder(false).compCtx.GetProcess().GetService())
+	originalLimit, hadLimit := rt.GetGlobalVariables("runtime_filter_limit_in")
+	rt.SetGlobalVariables("runtime_filter_limit_in", int64(3))
+	t.Cleanup(func() {
+		if hadLimit {
+			rt.SetGlobalVariables("runtime_filter_limit_in", originalLimit)
+		} else {
+			rt.CompareAndDeleteGlobalVariables("runtime_filter_limit_in", int64(3))
+		}
+	})
+	tests := []struct {
+		name   string
+		mutate func(*QueryBuilder)
+		want   bool
+	}{
+		{name: "leading component at ordinary-column budget", want: true},
+		{name: "below ordinary-column budget", want: true, mutate: func(b *QueryBuilder) {
+			b.qry.Nodes[2].Stats.HashmapStats.HashmapSize = 2
+		}},
+		{name: "above ordinary-column budget", mutate: func(b *QueryBuilder) {
+			b.qry.Nodes[2].Stats.HashmapStats.HashmapSize = 4
+		}},
+		{name: "right semi retains distributed placement", mutate: func(b *QueryBuilder) {
+			b.qry.Nodes[2].JoinType = planpb.Node_SEMI
+			b.qry.Nodes[2].IsRightJoin = true
+		}},
+		{name: "fallible scan predicate is not truncated", mutate: func(b *QueryBuilder) {
+			b.qry.Nodes[0].FilterList = []*planpb.Expr{
+				makeMixedSideRuntimeFilterResidual(b.qry.Nodes[0].TableDef.Cols[0].Typ, 1, 1),
+			}
+		}},
+		{name: "nonleading component retains cost gate", mutate: func(b *QueryBuilder) {
+			col := b.qry.Nodes[2].OnList[0].GetF().Args[0].GetCol()
+			col.ColPos, col.Name = 1, "b"
+		}},
+		{name: "unselective build retains cost gate", mutate: func(b *QueryBuilder) {
+			b.qry.Nodes[2].Stats.HashmapStats.HashmapSize = 100
+		}},
+		{name: "incompatible equality representation", mutate: func(b *QueryBuilder) {
+			b.qry.Nodes[2].OnList[0].GetF().Args[1].Typ.Id = int32(types.T_uint64)
+		}},
+		{name: "disabled by optimizer hint", mutate: func(b *QueryBuilder) {
+			b.optimizerHints = &OptimizerHints{runtimeFilter: 1}
+		}},
+	}
+	for _, test := range tests {
+		t.Run(test.name, func(t *testing.T) {
+			builder := newRuntimeFilterSingleTestBuilder(false)
+			probe, _ := configureRuntimeFilterCompositePK(builder)
+			join := builder.qry.Nodes[2]
+			join.JoinType = planpb.Node_INNER
+			join.OnList = join.OnList[:1]
+			join.OnList[0].GetF().Args[0].GetCol().Name = "a"
+			if test.mutate != nil {
+				test.mutate(builder)
+			}
+			builder.generateRuntimeFilters(2)
+			if !test.want {
+				require.Empty(t, join.RuntimeFilterBuildList)
+				require.Empty(t, probe.RuntimeFilterProbeList)
+				return
+			}
+			require.Len(t, join.RuntimeFilterBuildList, 1)
+			require.Len(t, probe.RuntimeFilterProbeList, 1)
+			buildSpec, probeSpec := join.RuntimeFilterBuildList[0], probe.RuntimeFilterProbeList[0]
+			require.Equal(t, buildSpec.Tag, probeSpec.Tag)
+			require.True(t, probeSpec.NotOnPk, "a component must not use full primary-key lookup")
+			require.True(t, buildSpec.NotOnPk)
+			require.False(t, probeSpec.MatchPrefix)
+			require.Equal(t, int32(0), probeSpec.Expr.GetCol().ColPos)
+			require.Equal(t, int32(types.T_int64), probeSpec.Expr.Typ.Id)
+			require.Equal(t, planpb.RuntimeFilterKeyEncoding_RUNTIME_FILTER_KEY_RAW_V1, buildSpec.KeyEncoding)
+			require.Equal(t, int32(3), buildSpec.UpperLimit)
+		})
+	}
+}
+
+func TestCompositeRuntimeFilterResolvesHiddenKeyBeforeAdmission(t *testing.T) {
+	builder := newRuntimeFilterSingleTestBuilder(false)
+	probe, build := configureRuntimeFilterCompositePK(builder)
+	builder.compCtx = &statsCacheCompilerContext{
+		MockCompilerContext: builder.compCtx.(*MockCompilerContext),
+		statsCache:          NewStatsCache(),
+	}
+	builder.tag2Table = map[int32]*TableDef{1: probe.TableDef, 2: build.TableDef}
+	join := builder.qry.Nodes[2]
+	join.JoinType = planpb.Node_INNER
+	keyType := probe.TableDef.Cols[2].Typ
+	build.TableDef.Cols[0].Typ = keyType
+	join.OnList = []*planpb.Expr{makeRuntimeFilterTestEq(keyType, 1, 2, 2, 0)}
+	// Resolving NDV also supplies the initially absent column name. This is
+	// the full serialized key, not a component subject to the new admission.
+	probe.FilterList = []*planpb.Expr{makeMixedSideRuntimeFilterResidual(probe.TableDef.Cols[0].Typ, 1, 1)}
+	builder.generateRuntimeFilters(2)
+	require.Equal(t, catalog.CPrimaryKeyColName, join.OnList[0].GetF().Args[0].GetCol().Name)
+	require.Len(t, join.RuntimeFilterBuildList, 1)
+	require.Len(t, probe.RuntimeFilterProbeList, 1)
+	require.False(t, probe.RuntimeFilterProbeList[0].NotOnPk)
+	require.Equal(t, GetInFilterCardLimitOnPK(builder.compCtx.GetProcess().GetService(), probe.Stats.TableCnt), join.RuntimeFilterBuildList[0].UpperLimit)
+}
+
 func TestRightSingleRuntimeFilterSemanticAndDeliveryContract(t *testing.T) {
 	t.Run("right single filters only the discardable probe and is colocated", func(t *testing.T) {
 		builder := newRuntimeFilterSingleTestBuilder(true)
@@ -315,19 +419,22 @@ func TestCorrelatedScalarPredicateDoesNotCreateRuntimeFilter(t *testing.T) {
 func TestScalarRuntimeFilterScanColumnStopsAtSemanticBarriers(t *testing.T) {
 	typ := planpb.Type{Id: int32(types.T_int64)}
 	tests := []struct {
-		name       string
-		nodeType   planpb.Node_NodeType
-		joinType   planpb.Node_JoinType
-		childPos   int32
-		rightJoin  bool
-		shuffle    bool
-		unsafeOn   bool
-		unsafeScan bool
-		wantProbe  bool
+		name        string
+		nodeType    planpb.Node_NodeType
+		joinType    planpb.Node_JoinType
+		childPos    int32
+		rightJoin   bool
+		shuffle     bool
+		unsafeOn    bool
+		unsafeScan  bool
+		unsafePeer  bool
+		unboundPeer bool
+		wantProbe   bool
 	}{
 		{name: "inner left", nodeType: planpb.Node_JOIN, joinType: planpb.Node_INNER, wantProbe: true},
-		{name: "shuffled inner lineage", nodeType: planpb.Node_JOIN, joinType: planpb.Node_INNER, shuffle: true},
-		{name: "inner build side", nodeType: planpb.Node_JOIN, joinType: planpb.Node_INNER, childPos: 1},
+		{name: "shuffled inner lineage", nodeType: planpb.Node_JOIN, joinType: planpb.Node_INNER, shuffle: true, wantProbe: true},
+		{name: "inner build side with safe unbound scan peer", nodeType: planpb.Node_JOIN, joinType: planpb.Node_INNER, childPos: 1, unboundPeer: true, wantProbe: true},
+		{name: "inner build side with fallible peer", nodeType: planpb.Node_JOIN, joinType: planpb.Node_INNER, childPos: 1, unsafePeer: true},
 		{name: "semi preserved side", nodeType: planpb.Node_JOIN, joinType: planpb.Node_SEMI, wantProbe: true},
 		{name: "semi build side", nodeType: planpb.Node_JOIN, joinType: planpb.Node_SEMI, childPos: 1},
 		{name: "right semi physical build side", nodeType: planpb.Node_JOIN, joinType: planpb.Node_SEMI, rightJoin: true},
@@ -348,8 +455,18 @@ func TestScalarRuntimeFilterScanColumnStopsAtSemanticBarriers(t *testing.T) {
 				children = []int32{0, 1}
 			}
 			builder := &QueryBuilder{qry: &planpb.Query{Nodes: []*planpb.Node{
-				{NodeType: planpb.Node_TABLE_SCAN, ProjectList: []*planpb.Expr{GetColExpr(typ, 10, 0)}},
-				{NodeType: planpb.Node_TABLE_SCAN, ProjectList: []*planpb.Expr{GetColExpr(typ, 11, 0)}},
+				{
+					NodeType:    planpb.Node_TABLE_SCAN,
+					ProjectList: []*planpb.Expr{GetColExpr(typ, 10, 0)},
+					BindingTags: []int32{10},
+					TableDef:    &planpb.TableDef{Cols: []*planpb.ColDef{{Typ: typ}}},
+				},
+				{
+					NodeType:    planpb.Node_TABLE_SCAN,
+					ProjectList: []*planpb.Expr{GetColExpr(typ, 11, 0)},
+					BindingTags: []int32{11},
+					TableDef:    &planpb.TableDef{Cols: []*planpb.ColDef{{Typ: typ}}},
+				},
 				{
 					NodeType:    tc.nodeType,
 					JoinType:    tc.joinType,
@@ -367,6 +484,12 @@ func TestScalarRuntimeFilterScanColumnStopsAtSemanticBarriers(t *testing.T) {
 			}
 			if tc.unsafeScan {
 				builder.qry.Nodes[0].FilterList = []*planpb.Expr{unsafePredicate}
+			}
+			if tc.unsafePeer {
+				builder.qry.Nodes[0].ProjectList = []*planpb.Expr{unsafePredicate}
+			}
+			if tc.unboundPeer {
+				builder.qry.Nodes[0].BindingTags = nil
 			}
 
 			_, _, ok := builder.scalarRuntimeFilterScanColumn(
@@ -1487,7 +1610,7 @@ func TestRightSingleRuntimeFilterConservativeEligibility(t *testing.T) {
 			join.RuntimeFilterBuildList[0].KeyComponentProbeTypes)
 	})
 
-	t.Run("leading composite prefix is omitted until HashBuild can materialize it", func(t *testing.T) {
+	t.Run("leading composite component does not introduce local-only placement", func(t *testing.T) {
 		builder := newRuntimeFilterSingleTestBuilder(true)
 		probe, _ := configureRuntimeFilterCompositePK(builder)
 		builder.qry.Nodes[2].OnList = builder.qry.Nodes[2].OnList[:1]

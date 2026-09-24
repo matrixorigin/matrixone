@@ -31,7 +31,7 @@ var tenantUpgEntries = []versions.UpgradeEntry{
 	addOrphanFileColumn("table_name", "varchar(1024) not null default ''", "namespace"),
 	addOrphanFileColumn("file_path", "varchar(4096) not null default ''", "table_location_hash"),
 	upgradeInformationSchemaView("TABLES", sysview.InformationSchemaTablesDDL),
-	upgradeInformationSchemaView("COLUMNS", sysview.InformationSchemaColumnsDDL),
+	upgradeInformationSchemaView("COLUMNS", sysview.InformationSchemaColumnsV46UpgradeDDL),
 	upgradeInformationSchemaView("STATISTICS", sysview.InformationSchemaStatisticsDDL),
 	upgradeInformationSchemaViewFromLegacyTable("TABLE_CONSTRAINTS", sysview.InformationSchemaTableConstraintsDDL),
 }

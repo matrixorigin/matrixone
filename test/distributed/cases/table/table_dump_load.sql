@@ -8,6 +8,7 @@ remove files from stage if exists 'stage://table_dump_load_stage/full/objects/*'
 remove files from stage if exists 'stage://table_dump_load_stage/metadata/*';
 remove files from stage if exists 'stage://table_dump_load_stage/auto/*';
 remove files from stage if exists 'stage://table_dump_load_stage/auto/objects/*';
+remove files from stage if exists 'stage://table_dump_load_stage/indexed/*';
 
 create table src (id int primary key, value varchar(32));
 insert into src values (1, 'one'), (2, 'two'), (3, 'three');
@@ -39,10 +40,20 @@ insert into auto_dst (value) values ('after-load');
 select count(*) from auto_dst;
 select hist_id > 100000 as auto_increment_restored from auto_dst where value = 'after-load';
 
+-- An implicit table charset and its explicit server-default spelling create
+-- storage-compatible secondary-index relations. Their internal table-default
+-- metadata can differ even though the indexed column types are identical.
+create table index_src (id varchar(255) primary key, value varchar(32), key idx_value (value));
+dump table index_src to 'stage://table_dump_load_stage/indexed' metadata only;
+create table index_dst (id varchar(255) primary key, value varchar(32), key idx_value (value)) collate=utf8mb4_general_ci;
+load table index_dst from 'stage://table_dump_load_stage/indexed';
+select count(*) from index_dst;
+
 drop database table_dump_load_bvt;
 remove files from stage if exists 'stage://table_dump_load_stage/full/*';
 remove files from stage if exists 'stage://table_dump_load_stage/full/objects/*';
 remove files from stage if exists 'stage://table_dump_load_stage/metadata/*';
 remove files from stage if exists 'stage://table_dump_load_stage/auto/*';
 remove files from stage if exists 'stage://table_dump_load_stage/auto/objects/*';
+remove files from stage if exists 'stage://table_dump_load_stage/indexed/*';
 drop stage table_dump_load_stage;

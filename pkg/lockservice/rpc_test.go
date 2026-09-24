@@ -1146,7 +1146,10 @@ func TestRequestCanBeFilter(t *testing.T) {
 				Method:    lock.Method_Lock})
 			require.Error(t, err)
 			require.Nil(t, resp)
-			require.Equal(t, err, ctx.Err())
+			// AttachCause may wrap the context error with the same deadline
+			// cause. Check the semantic error instead of requiring one concrete
+			// errors.Join shape.
+			require.ErrorIs(t, err, ctx.Err())
 		},
 		WithServerMessageFilter(func(r *lock.Request) bool { return false }),
 	)
@@ -1433,8 +1436,11 @@ func TestLockServiceDiscoveryUsesPendingCNInventory(t *testing.T) {
 		},
 	}
 	serviceID := "0000000000000000000cn-id"
+	present, err := c.activeTxnOwnerPresent(context.Background(), serviceID)
+	require.NoError(t, err)
+	require.True(t, present, "pending public admission must not suppress active-txn recovery")
 
-	_, err := c.AsyncSend(context.Background(), &lock.Request{
+	_, err = c.AsyncSend(context.Background(), &lock.Request{
 		Method:    lock.Method_Unlock,
 		LockTable: lock.LockTable{ServiceID: serviceID},
 	})

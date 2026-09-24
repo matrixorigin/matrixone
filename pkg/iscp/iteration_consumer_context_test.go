@@ -258,6 +258,133 @@ func TestFinishISCPTransactionRollsBackWithIndependentContext(t *testing.T) {
 	require.NoError(t, txn.rollbackErrAtCall)
 }
 
+func TestFinishISCPTransactionDoesNotCommitCanceledSuccess(t *testing.T) {
+	parent, cancel := context.WithCancel(context.Background())
+	cancel()
+	txn := &iscpTxnForTest{}
+
+	err := finishISCPTransaction(parent, txn, nil)
+
+	require.ErrorIs(t, err, context.Canceled)
+	require.True(t, txn.rolledBack)
+	require.False(t, txn.committed)
+	require.NoError(t, txn.rollbackErrAtCall)
+}
+
+func TestRunInitSQLTransactionCommitsStatementsAndStageTogether(t *testing.T) {
+	txn := &iscpTxnForTest{}
+	steps := make([]string, 0, 2)
+
+	err := runInitSQLTransaction(
+		context.Background(),
+		txn,
+		func(_ context.Context, got client.TxnOperator) error {
+			require.Same(t, txn, got)
+			require.False(t, txn.committed)
+			steps = append(steps, "statements")
+			return nil
+		},
+		func(_ context.Context, got client.TxnOperator) error {
+			require.Same(t, txn, got)
+			require.False(t, txn.committed)
+			steps = append(steps, "stage")
+			return nil
+		},
+	)
+
+	require.NoError(t, err)
+	require.Equal(t, []string{"statements", "stage"}, steps)
+	require.True(t, txn.committed)
+	require.False(t, txn.rolledBack)
+}
+
+func TestRunInitSQLTransactionRollsBackStatementsWhenStageWriteFails(t *testing.T) {
+	txn := &iscpTxnForTest{}
+	wantErr := errors.New("stage CAS lost")
+	statementsRan := false
+
+	err := runInitSQLTransaction(
+		context.Background(),
+		txn,
+		func(context.Context, client.TxnOperator) error {
+			statementsRan = true
+			return nil
+		},
+		func(context.Context, client.TxnOperator) error {
+			return wantErr
+		},
+	)
+
+	require.ErrorIs(t, err, wantErr)
+	require.True(t, statementsRan)
+	require.False(t, txn.committed)
+	require.True(t, txn.rolledBack)
+}
+
+func TestRunInitSQLTransactionDoesNotWriteStageAfterStatementFailure(t *testing.T) {
+	txn := &iscpTxnForTest{}
+	wantErr := errors.New("init statement failed")
+	stageWritten := false
+
+	err := runInitSQLTransaction(
+		context.Background(),
+		txn,
+		func(context.Context, client.TxnOperator) error { return wantErr },
+		func(context.Context, client.TxnOperator) error {
+			stageWritten = true
+			return nil
+		},
+	)
+
+	require.ErrorIs(t, err, wantErr)
+	require.False(t, stageWritten)
+	require.False(t, txn.committed)
+	require.True(t, txn.rolledBack)
+}
+
+func TestRunInitSQLTransactionRollsBackCancellationBeforeStageWrite(t *testing.T) {
+	ctx, cancel := context.WithCancel(context.Background())
+	txn := &iscpTxnForTest{}
+	stageWritten := false
+
+	err := runInitSQLTransaction(
+		ctx,
+		txn,
+		func(context.Context, client.TxnOperator) error {
+			cancel()
+			return nil
+		},
+		func(context.Context, client.TxnOperator) error {
+			stageWritten = true
+			return nil
+		},
+	)
+
+	require.ErrorIs(t, err, context.Canceled)
+	require.False(t, stageWritten)
+	require.False(t, txn.committed)
+	require.True(t, txn.rolledBack)
+	require.NoError(t, txn.rollbackErrAtCall)
+}
+
+func TestRunInitSQLTransactionRollsBackBeforePropagatingPanic(t *testing.T) {
+	txn := &iscpTxnForTest{}
+
+	require.PanicsWithValue(t, "init panic", func() {
+		_ = runInitSQLTransaction(
+			context.Background(),
+			txn,
+			func(context.Context, client.TxnOperator) error {
+				panic("init panic")
+			},
+			nil,
+		)
+	})
+	require.False(t, txn.committed)
+	require.True(t, txn.rolledBack)
+	require.NoError(t, txn.rollbackErrAtCall)
+}
+
 func TestRunISCPTaskIterationConsumersCancelSnapshotInFlightConsumer(t *testing.T) {
 	proc := testutil.NewProcess(t)
 	ctx, cancel := context.WithCancel(context.Background())

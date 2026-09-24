@@ -17,6 +17,7 @@ package objectio
 import (
 	"context"
 	"math"
+	"slices"
 	"testing"
 
 	"github.com/stretchr/testify/require"
@@ -47,11 +48,39 @@ func TestTopNVectorAppliesDistanceRangeBeforeHeap(t *testing.T) {
 		LowerBound:     1,
 		UpperBoundType: plan.BoundType_INCLUSIVE,
 		UpperBound:     9,
+		Stats:          new(IndexReaderTopStats),
 	}
 	rows, distances, err := TopNVector(context.Background(), nil, entries, top)
 	require.NoError(t, err)
 	require.Equal(t, []int64{1, 2}, rows)
 	require.Equal(t, []float64{4, 9}, distances)
+	require.Equal(t, uint64(5), top.Stats.VectorRowsScored)
+}
+
+// TestTopNVectorL1BoundComparesInPublicFloat32Domain pins the #29040 storage-domain fix: for non-L2
+// metrics the storage gate is the FINAL predicate (no bound widening, no exact post-filter), so it
+// must compare in the same float32 domain the public scalar distance exposes. For vecf64 L1
+// [1.00000001] vs [0], the public l1_distance rounds to 1, so `<= 1` is TRUE and row 0 must be kept;
+// a raw float64 comparison (1.00000001 > 1) would drop it.
+func TestTopNVectorL1BoundComparesInPublicFloat32Domain(t *testing.T) {
+	mp := mpool.MustNewZero()
+	defer mpool.DeleteMPool(mp)
+	entries := vector.NewVec(types.New(types.T_array_float64, 1, 0))
+	defer entries.Free(mp)
+	require.NoError(t, vector.AppendArray(entries, []float64{1.00000001}, false, mp))
+
+	top := &IndexReaderTopOp{
+		Typ:            types.T_array_float64,
+		MetricType:     metric.Metric_L1Distance,
+		NumVec:         types.ArrayToBytes([]float64{0}),
+		Limit:          10,
+		UpperBoundType: plan.BoundType_INCLUSIVE,
+		UpperBound:     1,
+	}
+	rows, distances, err := TopNVector(context.Background(), nil, entries, top)
+	require.NoError(t, err)
+	require.Equal(t, []int64{0}, rows, "row whose public l1_distance (1) satisfies `<= 1` must be kept")
+	require.Equal(t, []float64{1}, distances, "the gate/heap distance is in the public float32 domain")
 }
 
 func TestTopNVectorNaNRangeSelectsNothing(t *testing.T) {
@@ -68,10 +97,81 @@ func TestTopNVectorNaNRangeSelectsNothing(t *testing.T) {
 		Limit:          1,
 		UpperBoundType: plan.BoundType_INCLUSIVE,
 		UpperBound:     math.NaN(),
+		Stats:          new(IndexReaderTopStats),
 	}
 	rows, distances, err := TopNVector(context.Background(), nil, entries, top)
 	require.NoError(t, err)
 	require.Empty(t, rows)
 	require.Empty(t, distances)
 	require.Empty(t, top.DistHeap)
+	require.Zero(t, top.Stats.VectorRowsScored)
+}
+
+func TestTopNVectorDoesNotMutateSelectedRows(t *testing.T) {
+	mp := mpool.MustNewZero()
+	defer mpool.DeleteMPool(mp)
+	entries := vector.NewVec(types.New(types.T_array_float32, 1, 0))
+	defer entries.Free(mp)
+	require.NoError(t, vector.AppendArray(entries, []float32{1}, false, mp))
+	require.NoError(t, vector.AppendArray(entries, []float32(nil), true, mp))
+	require.NoError(t, vector.AppendArray(entries, []float32{2}, false, mp))
+
+	selected := []int64{-1, 0, 3, 1, 2}
+	wantSelected := append([]int64(nil), selected...)
+	top := &IndexReaderTopOp{
+		Typ:        types.T_array_float32,
+		MetricType: metric.Metric_L2sqDistance,
+		NumVec:     types.ArrayToBytes([]float32{0}),
+		Limit:      2,
+	}
+	rows, distances, err := TopNVector(context.Background(), selected, entries, top)
+	require.NoError(t, err)
+	require.Equal(t, []int64{0, 2}, rows)
+	require.Equal(t, []float64{1, 4}, distances)
+	require.Equal(t, wantSelected, selected)
+}
+
+func TestTopNVectorBoundsDescendingCandidatesByLimit(t *testing.T) {
+	const (
+		rows  = 4096
+		limit = 3
+	)
+
+	results := make(vectorTopResultHeap, 0, limit)
+	for row := 0; row < rows; row++ {
+		// Every successive candidate is better, the adversarial case that used
+		// to append all rows before filtering results by the final heap cutoff.
+		retainVectorTopResult(&results, limit, vectorTopResult{
+			row: int64(row), distance: float64(rows - row), ordinal: row,
+		})
+	}
+	require.Len(t, results, limit)
+	require.LessOrEqual(t, cap(results), limit)
+
+	// The bounded collector retains the same winners TopNVector returns for a
+	// decreasing distance sequence, and stores no row/distance state for the
+	// other 4,093 candidates.
+	slices.SortFunc(results, func(left, right vectorTopResult) int {
+		return left.ordinal - right.ordinal
+	})
+	require.Equal(t, []int64{4093, 4094, 4095}, []int64{
+		results[0].row, results[1].row, results[2].row,
+	})
+
+	mp := mpool.MustNewZero()
+	defer mpool.DeleteMPool(mp)
+	entries := vector.NewVec(types.New(types.T_array_float32, 1, 0))
+	defer entries.Free(mp)
+	for row := 0; row < rows; row++ {
+		require.NoError(t, vector.AppendArray(entries, []float32{float32(rows - row)}, false, mp))
+	}
+	top := &IndexReaderTopOp{
+		Typ:        types.T_array_float32,
+		MetricType: metric.Metric_L2sqDistance,
+		NumVec:     types.ArrayToBytes([]float32{0}),
+		Limit:      limit,
+	}
+	winners, _, err := TopNVector(context.Background(), nil, entries, top)
+	require.NoError(t, err)
+	require.Equal(t, []int64{4093, 4094, 4095}, winners)
 }

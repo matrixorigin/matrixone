@@ -149,6 +149,11 @@ type tunnel struct {
 	// the conn-cache path above and the non-cache path where COM_QUIT is
 	// forwarded to CN.
 	expectedClientQuit atomic.Bool
+	// cacheIdentityChanged permanently disables cache publication for this
+	// tunnel generation after a command changes the authenticated principal.
+	// COM_CHANGE_USER and SET ROLE alter CN-side identity that ResetSession does
+	// not reconstruct from the original handshake.
+	cacheIdentityChanged atomic.Bool
 	// requestBoundary is the authoritative request/response ownership state.
 	// It deliberately becomes permanently unsafe for this tunnel generation if
 	// a client pipelines commands: the MySQL command protocol is sequential and
@@ -358,6 +363,16 @@ func (t *tunnel) markCacheReuseReady() {
 	})
 }
 
+func (t *tunnel) markCacheIdentityChanged() {
+	if t != nil {
+		t.cacheIdentityChanged.Store(true)
+	}
+}
+
+func (t *tunnel) hasCacheIdentityChanged() bool {
+	return t != nil && t.cacheIdentityChanged.Load()
+}
+
 type responsePhase uint8
 
 const (
@@ -437,6 +452,11 @@ func (t *tunnel) trackClientRequest(msg []byte) clientRequestCommit {
 	switch cmd {
 	case frontend.COM_QUIT:
 		return commit
+	case frontend.COM_CHANGE_USER:
+		// COM_CHANGE_USER carries a new authenticated principal and database.
+		// The backend generation cannot be safely reconstructed by ResetSession,
+		// so never publish it to the cache after this command is observed.
+		t.cacheIdentityChanged.Store(true)
 	case frontend.COM_STMT_SEND_LONG_DATA:
 		if mysqlPacketPayloadLength(msg) < 7 || len(msg) < mysqlHeadLen+7 {
 			s.ambiguous = true

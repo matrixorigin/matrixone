@@ -19,8 +19,10 @@ import (
 
 	"github.com/matrixorigin/matrixone/pkg/container/types"
 	planpb "github.com/matrixorigin/matrixone/pkg/pb/plan"
+	"github.com/matrixorigin/matrixone/pkg/sql/colexec"
 	"github.com/matrixorigin/matrixone/pkg/sql/parsers/dialect/mysql"
 	"github.com/matrixorigin/matrixone/pkg/sql/parsers/tree"
+	"github.com/matrixorigin/matrixone/pkg/testutil"
 	"github.com/stretchr/testify/require"
 )
 
@@ -89,6 +91,72 @@ func TestNumericContextLeavesOrdinaryArithmeticOnOriginalPath(t *testing.T) {
 
 			_, err = BuildPlan(optimizer.CurrentContext(), stmts[0], false)
 			require.NoError(t, err)
+		})
+	}
+}
+
+func TestIssue28396StringFunctionNumericPrefixArguments(t *testing.T) {
+	for _, sql := range []string{
+		"select left('abcdef', '2tail')",
+		"select right('abcdef', '2tail')",
+		"select substring('abcdef', 2, '2tail')",
+		"select substr('abcdef', '2tail', '2tail')",
+		"select mid('abcdef', '2tail', '2tail')",
+		"select insert('abcdef', '2tail', '2tail', 'X')",
+		"select locate('a', 'banana', '2tail')",
+		"select repeat('x', '3tail')",
+		"select lpad('x', '3tail', '0')",
+		"select rpad('x', '3tail', '0')",
+		"select substring_index('a,b,c', ',', '2tail')",
+		"select elt('2tail', 'a', 'b')",
+		"select make_set('3tail', 'a', 'b')",
+		"select export_set(5, 'Y', 'N', ',', '3tail')",
+		"select left(n_name, '2tail') from nation",
+		"select left('abcdef', n_name) from nation",
+	} {
+		t.Run(sql, func(t *testing.T) {
+			_, err := runOneExprStmt(NewMockOptimizer(false), t, sql)
+			require.NoError(t, err)
+		})
+	}
+}
+
+func TestIssue28396StringFunctionNumericPrefixResults(t *testing.T) {
+	tests := []struct {
+		sql  string
+		want string
+	}{
+		{sql: "select left('abcdef', '2tail')", want: "ab"},
+		{sql: "select right('abcdef', '2tail')", want: "ef"},
+		{sql: "select substring('abcdef', 2, '2tail')", want: "bc"},
+		{sql: "select substr('abcdef', '2tail', '2tail')", want: "bc"},
+		{sql: "select mid('abcdef', '2tail', '2tail')", want: "bc"},
+		{sql: "select insert('abcdef', '2tail', '2tail', 'X')", want: "aXdef"},
+		{sql: "select repeat('x', '3tail')", want: "xxx"},
+		{sql: "select lpad('x', '3tail', '0')", want: "00x"},
+		{sql: "select rpad('x', '3tail', '0')", want: "x00"},
+		{sql: "select substring_index('a,b,c', ',', '2tail')", want: "a,b"},
+		{sql: "select elt('2tail', 'a', 'b')", want: "b"},
+		{sql: "select make_set('3tail', 'a', 'b')", want: "a,b"},
+		{sql: "select export_set(5, 'Y', 'N', ',', '3tail')", want: "Y,N,Y"},
+		{sql: "select left('abcdef', 'abc')", want: ""},
+		{sql: "select space('3tail')", want: "   "},
+		{sql: "select space('abc')", want: ""},
+		{sql: "select make_set('abc', 'a', 'b')", want: ""},
+	}
+	for _, test := range tests {
+		t.Run(test.sql, func(t *testing.T) {
+			pl, err := runOneExprStmt(NewMockOptimizer(false), t, test.sql)
+			require.NoError(t, err)
+			proc := testutil.NewProc(t)
+			defer proc.Free()
+			expr := pl.GetQuery().Nodes[1].ProjectList[0]
+			executor, err := colexec.NewExpressionExecutor(proc, expr)
+			require.NoError(t, err)
+			defer executor.Free()
+			result, err := executor.Eval(proc, nil, nil)
+			require.NoError(t, err)
+			require.Equal(t, test.want, result.GetStringAt(0))
 		})
 	}
 }

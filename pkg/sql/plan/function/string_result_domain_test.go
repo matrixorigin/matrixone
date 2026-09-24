@@ -15,10 +15,15 @@
 package function
 
 import (
+	"context"
 	"math"
+	"strconv"
+	"strings"
 	"testing"
 
 	"github.com/matrixorigin/matrixone/pkg/container/types"
+	"github.com/matrixorigin/matrixone/pkg/container/vector"
+	planpb "github.com/matrixorigin/matrixone/pkg/pb/plan"
 	"github.com/matrixorigin/matrixone/pkg/testutil"
 	"github.com/stretchr/testify/require"
 )
@@ -46,6 +51,453 @@ func TestStringResultBoundArithmetic(t *testing.T) {
 	}
 	require.True(t, addStringResultBounds(
 		stringResultBound{bytes: math.MaxUint64}, stringResultBound{bytes: 1}).unknown)
+}
+
+func TestBoundedBuiltinReturnTypes(t *testing.T) {
+	proc := testutil.NewProcess(t)
+	defer proc.Free()
+
+	varchar := func(width int32) types.Type { return types.New(types.T_varchar, width, 0) }
+	varbinary := func(width int32) types.Type { return types.New(types.T_varbinary, width, 0) }
+	assertType := func(t *testing.T, name string, inputs []types.Type, oid types.T, width int32, charset uint8) {
+		t.Helper()
+		resolved, err := GetFunctionByName(proc.Ctx, name, inputs)
+		require.NoError(t, err, "%s(%v)", name, inputs)
+		result := resolved.GetReturnType()
+		require.Equal(t, oid, result.Oid, "%s(%v)", name, inputs)
+		require.Equal(t, width, result.Width, "%s(%v)", name, inputs)
+		require.Equal(t, charset, result.Charset, "%s(%v)", name, inputs)
+	}
+
+	for _, oid := range []types.T{
+		types.T_uint8, types.T_uint16, types.T_uint32, types.T_uint64,
+		types.T_int8, types.T_int16, types.T_int32, types.T_int64,
+		types.T_float32, types.T_float64,
+	} {
+		t.Run("bin/"+oid.String(), func(t *testing.T) {
+			assertType(t, "bin", []types.Type{oid.ToType()}, types.T_varchar, 65, types.CharsetUTF8)
+		})
+	}
+
+	for _, input := range []types.Type{varchar(12), types.T_int64.ToType()} {
+		t.Run("conv/"+input.Oid.String(), func(t *testing.T) {
+			assertType(t, "conv", []types.Type{input, types.T_int64.ToType(), types.T_int64.ToType()}, types.T_varchar, 65, types.CharsetUTF8)
+		})
+	}
+
+	assertType(t, "inet_ntoa", []types.Type{types.T_uint64.ToType()}, types.T_varchar, 31, types.CharsetUTF8)
+	assertType(t, "to_base64", []types.Type{varbinary(128)}, types.T_varchar, 174, types.CharsetUTF8)
+	assertType(t, "to_base64", []types.Type{varchar(128)}, types.T_varchar, 692, types.CharsetUTF8)
+	assertType(t, "inet6_ntoa", []types.Type{varbinary(16)}, types.T_varchar, 39, types.CharsetUTF8)
+	assertType(t, "inet6_aton", []types.Type{varchar(39)}, types.T_varbinary, 16, types.CharsetBinary)
+
+	for _, test := range []struct {
+		name      string
+		fn        string
+		input     types.Type
+		wantOID   types.T
+		wantWidth int32
+	}{
+		{name: "hex int", fn: "hex", input: types.T_int64.ToType(), wantOID: types.T_varchar, wantWidth: 16},
+		{name: "hex varchar", fn: "hex", input: varchar(12), wantOID: types.T_varchar, wantWidth: 96},
+		{name: "hex varbinary", fn: "hex", input: varbinary(12), wantOID: types.T_varchar, wantWidth: 24},
+		{name: "hex array", fn: "hex", input: types.T_array_float64.ToType(), wantOID: types.T_text, wantWidth: 0},
+		{name: "unhex varchar", fn: "unhex", input: varchar(2), wantOID: types.T_varbinary, wantWidth: 4},
+		{name: "unhex varbinary", fn: "unhex", input: varbinary(12), wantOID: types.T_varbinary, wantWidth: 6},
+	} {
+		t.Run(test.name, func(t *testing.T) {
+			assertType(t, test.fn, []types.Type{test.input}, test.wantOID, test.wantWidth,
+				map[types.T]uint8{types.T_varchar: types.CharsetUTF8, types.T_text: types.CharsetUTF8, types.T_varbinary: types.CharsetBinary}[test.wantOID])
+		})
+	}
+
+	for _, test := range []struct {
+		name string
+		fn   string
+		args []types.Type
+		want int32
+	}{
+		{name: "md5", fn: "md5", args: []types.Type{types.T_blob.ToType()}, want: 32},
+		{name: "sha1", fn: "sha1", args: []types.Type{varchar(12)}, want: 40},
+		{name: "sha2", fn: "sha2", args: []types.Type{varchar(12), types.T_int64.ToType()}, want: 128},
+		{name: "compress varchar", fn: "compress", args: []types.Type{varchar(12)}, want: 68},
+		{name: "compress varbinary", fn: "compress", args: []types.Type{varbinary(12)}, want: 32},
+		{name: "aes encrypt varchar", fn: "aes_encrypt", args: []types.Type{varchar(12), varchar(3)}, want: 64},
+		{name: "aes encrypt varbinary", fn: "aes_encrypt", args: []types.Type{varbinary(12), varchar(3)}, want: 16},
+	} {
+		t.Run(test.name, func(t *testing.T) {
+			resolved, err := GetFunctionByName(proc.Ctx, test.fn, test.args)
+			require.NoError(t, err)
+			result := resolved.GetReturnType()
+			if test.fn == "md5" || test.fn == "sha1" || test.fn == "sha2" {
+				require.Equal(t, types.T_varchar, result.Oid)
+				require.Equal(t, types.CharsetUTF8, result.Charset)
+			} else {
+				require.Equal(t, types.T_varbinary, result.Oid)
+				require.Equal(t, types.CharsetBinary, result.Charset)
+			}
+			require.Equal(t, test.want, result.Width)
+		})
+	}
+
+	for _, fn := range []string{"uncompressed_length"} {
+		assertType(t, fn, []types.Type{types.T_blob.ToType()}, types.T_int64, 0, types.CharsetLegacy)
+	}
+}
+
+func TestBase64ResultBoundIncludesLineBreaks(t *testing.T) {
+	for _, test := range []struct {
+		input uint64
+		want  uint64
+	}{
+		{input: 0, want: 0},
+		{input: 1, want: 4},
+		{input: 57, want: 76},
+		{input: 58, want: 81},
+		{input: 128, want: 174},
+	} {
+		t.Run(strconv.FormatUint(test.input, 10), func(t *testing.T) {
+			got := base64ResultBound(stringResultBound{bytes: test.input})
+			require.False(t, got.unknown)
+			require.Equal(t, test.want, got.bytes)
+		})
+	}
+	for _, input := range []stringResultBound{
+		unknownStringResultBound(), {bytes: math.MaxUint64}, {bytes: math.MaxUint64 - 2},
+	} {
+		require.True(t, base64ResultBound(input).unknown, "overflow must not become a small known width")
+	}
+	result := base64ReturnType(nil)
+	require.Equal(t, types.T_text, result.Oid)
+	require.Zero(t, result.Width)
+	require.Equal(t, types.CharsetUTF8, result.Charset)
+}
+
+func TestCharacterSliceLiteralWidth(t *testing.T) {
+	source := &planpb.Expr{Typ: planpb.Type{Id: int32(types.T_varchar), Width: 15}, Expr: &planpb.Expr_Col{Col: &planpb.ColRef{}}}
+	unicode := &planpb.Expr{Typ: source.Typ, Expr: &planpb.Expr_Lit{Lit: &planpb.Literal{Value: &planpb.Literal_Sval{Sval: "甲乙丙"}}}}
+	unknown := &planpb.Expr{Typ: planpb.Type{Id: int32(types.T_varchar)}}
+	binary := &planpb.Expr{Typ: planpb.Type{Id: int32(types.T_varbinary), Width: 15}}
+	selected := types.NewWithCharset(types.T_varchar, 15, 0, types.CharsetUTF8)
+	signed := func(n int64) *planpb.Literal { return &planpb.Literal{Value: &planpb.Literal_I64Val{I64Val: n}} }
+	for _, tc := range []struct {
+		name     string
+		source   *planpb.Expr
+		length   *planpb.Literal
+		selected types.Type
+		width    int32
+		narrowed bool
+	}{
+		{"short", source, signed(2), selected, 2, true},
+		{"zero", source, signed(0), selected, 0, true},
+		{"negative", source, signed(math.MinInt64), selected, 0, true},
+		{"runes", unicode, signed(10), selected, 3, true},
+		{"empty literal", &planpb.Expr{Typ: source.Typ, Expr: &planpb.Expr_Lit{Lit: &planpb.Literal{Value: &planpb.Literal_Sval{}}}}, signed(10), selected, 0, true},
+		{"unsigned max", source, &planpb.Literal{Value: &planpb.Literal_U64Val{U64Val: math.MaxUint64}}, types.New(types.T_varchar, 20, 0), 15, true},
+		{"no widening", source, signed(10), types.New(types.T_varchar, 2, 0), 0, false},
+		{"unknown source", unknown, signed(2), selected, 0, false},
+		{"nil source", nil, signed(2), selected, 0, false},
+		{"nil length", source, nil, selected, 0, false},
+		{"null length", source, &planpb.Literal{Isnull: true}, selected, 0, false},
+		{"noninteger", source, &planpb.Literal{Value: &planpb.Literal_Sval{Sval: "2"}}, selected, 0, false},
+		{"binary source", binary, signed(2), selected, 0, false},
+		{"binary result", source, signed(2), types.New(types.T_varbinary, 15, 0), 0, false},
+		{"unknown result", source, signed(2), types.New(types.T_varchar, -1, 0), 0, false},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			original := tc.selected
+			width, narrowed := CharacterSliceLiteralWidth(tc.source, tc.length, tc.selected)
+			require.Equal(t, tc.width, width)
+			require.Equal(t, tc.narrowed, narrowed)
+			require.Equal(t, original, tc.selected)
+		})
+	}
+}
+
+func TestTextSourceCharacterBound(t *testing.T) {
+	column := func(oid types.T, width, scale int32) *planpb.Expr {
+		return &planpb.Expr{Typ: planpb.Type{Id: int32(oid), Width: width, Scale: scale},
+			Expr: &planpb.Expr_Col{Col: &planpb.ColRef{}}}
+	}
+	literal := func(value string, isNull bool) *planpb.Expr {
+		return &planpb.Expr{Typ: planpb.Type{Id: int32(types.T_varchar), Width: 7},
+			Expr: &planpb.Expr_Lit{Lit: &planpb.Literal{Isnull: isNull, Value: &planpb.Literal_Sval{Sval: value}}}}
+	}
+	for _, tc := range []struct {
+		name  string
+		expr  *planpb.Expr
+		want  uint64
+		known bool
+	}{
+		{"nil", nil, 0, false},
+		{"empty literal", literal("", false), 0, true},
+		{"unicode characters not bytes", literal("é😀", false), 2, true},
+		{"typed null ignores literal payload", literal("é😀", true), 7, true},
+		{"signed scalar", column(types.T_int64, 0, 0), 20, true},
+		{"fractional decimal", column(types.T_decimal128, 2, 2), 5, true},
+		{"any", column(types.T_any, 0, 0), 0, false},
+		{"json", column(types.T_json, 0, 0), 0, false},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			got, known := TextSourceCharacterBound(tc.expr)
+			require.Equal(t, tc.known, known)
+			require.Equal(t, tc.want, got)
+		})
+	}
+	for _, oid := range []types.T{types.T_char, types.T_varchar, types.T_text, types.T_binary, types.T_varbinary, types.T_blob} {
+		for _, width := range []int32{-1, 0, 7} {
+			t.Run(oid.String()+"/"+strconv.Itoa(int(width)), func(t *testing.T) {
+				got, known := TextSourceCharacterBound(column(oid, width, 0))
+				wantKnown := width > 0 && (oid == types.T_char || oid == types.T_varchar || oid == types.T_text)
+				require.Equal(t, wantKnown, known)
+				if wantKnown {
+					require.Equal(t, uint64(7), got)
+				} else {
+					require.Zero(t, got)
+				}
+			})
+		}
+	}
+}
+
+func TestToBase64RegisteredBinaryExecutors(t *testing.T) {
+	proc := testutil.NewProcess(t)
+	for _, tc := range []struct {
+		oid      types.T
+		overload int32
+		result   types.T
+		width    int32
+	}{
+		{types.T_binary, 3, types.T_varchar, 4},
+		{types.T_varbinary, 4, types.T_varchar, 4},
+		{types.T_blob, 5, types.T_text, 0},
+	} {
+		t.Run(tc.oid.String(), func(t *testing.T) {
+			typ := types.NewWithCharset(tc.oid, 1, 0, types.CharsetBinary)
+			if tc.oid == types.T_blob {
+				typ.Width = 0
+			}
+			resolved, err := GetFunctionByName(proc.Ctx, "to_base64", []types.Type{typ})
+			require.NoError(t, err)
+			id, overload := DecodeOverloadID(resolved.GetEncodedOverloadID())
+			require.Equal(t, int32(TO_BASE64), id)
+			require.Equal(t, tc.overload, overload)
+			require.Equal(t, tc.result, resolved.GetReturnType().Oid)
+			require.Equal(t, tc.width, resolved.GetReturnType().Width)
+			require.Equal(t, types.CharsetUTF8, resolved.GetReturnType().Charset)
+			input := vector.NewVec(typ)
+			defer input.Free(proc.Mp())
+			require.NoError(t, vector.AppendBytes(input, []byte("f"), false, proc.Mp()))
+			require.NoError(t, vector.AppendBytes(input, nil, true, proc.Mp()))
+			out, err := RunFunctionDirectly(proc, resolved.GetEncodedOverloadID(), []*vector.Vector{input}, 2)
+			require.NoError(t, err)
+			defer out.Free(proc.Mp())
+			require.Equal(t, 2, out.Length())
+			require.False(t, out.IsNull(0))
+			require.Equal(t, "Zg==", out.GetStringAt(0))
+			require.True(t, out.IsNull(1))
+		})
+	}
+}
+
+func TestToBase64ResolverKeepsWireOverloadIDs(t *testing.T) {
+	ctx := context.Background()
+	for _, test := range []struct {
+		name      string
+		input     types.Type
+		overload  int32
+		resultOID types.T
+	}{
+		{name: "character", input: types.New(types.T_varchar, 128, 0), overload: 0, resultOID: types.T_varchar},
+		{name: "binary", input: types.NewWithCharset(types.T_varbinary, 128, 0, types.CharsetBinary), overload: 4, resultOID: types.T_varchar},
+		{name: "array float32", input: types.T_array_float32.ToType(), overload: 1, resultOID: types.T_text},
+	} {
+		t.Run(test.name, func(t *testing.T) {
+			resolved, err := GetFunctionByName(ctx, "to_base64", []types.Type{test.input})
+			require.NoError(t, err)
+			functionID, overloadID := DecodeOverloadID(resolved.GetEncodedOverloadID())
+			require.Equal(t, int32(TO_BASE64), functionID)
+			require.Equal(t, test.overload, overloadID)
+			require.Equal(t, test.resultOID, resolved.GetReturnType().Oid)
+		})
+	}
+}
+
+func TestSoundexReturnTypePreservesOutputCapacity(t *testing.T) {
+	proc := testutil.NewProcess(t)
+	defer proc.Free()
+
+	for _, test := range []struct {
+		name      string
+		input     types.Type
+		wantOID   types.T
+		wantWidth int32
+		charset   uint8
+	}{
+		{name: "short input retains four-character minimum", input: types.New(types.T_char, 1, 0), wantOID: types.T_varchar, wantWidth: 4, charset: types.CharsetUTF8},
+		{name: "varchar boundary", input: types.New(types.T_varchar, types.MaxVarcharLen, 0), wantOID: types.T_varchar, wantWidth: types.MaxVarcharLen, charset: types.CharsetUTF8},
+		{name: "text at varchar boundary", input: types.New(types.T_text, types.MaxVarcharLen, 0), wantOID: types.T_varchar, wantWidth: types.MaxVarcharLen, charset: types.CharsetUTF8},
+		{name: "text above varchar boundary", input: types.New(types.T_text, types.MaxVarcharLen+1, 0), wantOID: types.T_text, wantWidth: types.MaxMediumTextLen, charset: types.CharsetUTF8},
+		{name: "medium text", input: types.New(types.T_text, types.MaxMediumTextLen, 0), wantOID: types.T_text, wantWidth: types.MaxMediumTextLen, charset: types.CharsetUTF8},
+		{name: "long text", input: types.New(types.T_text, types.MaxLongTextLen, 0), wantOID: types.T_text, wantWidth: types.MaxLongTextLen, charset: types.CharsetUTF8},
+		{name: "unbounded text", input: types.T_text.ToType(), wantOID: types.T_text, wantWidth: types.MaxLongTextLen, charset: types.CharsetUTF8},
+		{name: "unknown varchar bound", input: types.New(types.T_varchar, 0, 0), wantOID: types.T_text, wantWidth: types.MaxLongTextLen, charset: types.CharsetUTF8},
+		{name: "binary short input retains byte domain", input: types.New(types.T_varbinary, 1, 0), wantOID: types.T_varbinary, wantWidth: 4, charset: types.CharsetBinary},
+		{name: "binary input preserves byte capacity", input: types.New(types.T_varbinary, 64, 0), wantOID: types.T_varbinary, wantWidth: 64, charset: types.CharsetBinary},
+		{name: "unbounded binary input remains binary", input: types.T_blob.ToType(), wantOID: types.T_blob, wantWidth: 0, charset: types.CharsetBinary},
+	} {
+		t.Run(test.name, func(t *testing.T) {
+			resolved, err := GetFunctionByName(proc.Ctx, "soundex", []types.Type{test.input})
+			require.NoError(t, err)
+			result := resolved.GetReturnType()
+			require.Equal(t, test.wantOID, result.Oid)
+			require.Equal(t, test.wantWidth, result.Width)
+			require.Equal(t, test.charset, result.Charset)
+		})
+	}
+}
+
+func TestBoundedBuiltinRegistryCoversEveryChangedOverload(t *testing.T) {
+	ctx := context.Background()
+	resolve := func(t *testing.T, name string, args []types.Type) types.Type {
+		t.Helper()
+		resolved, err := GetFunctionByName(ctx, name, args)
+		require.NoError(t, err, "%s(%v)", name, args)
+		result := resolved.GetReturnType()
+		require.NotEqual(t, types.T_any, result.Oid, "%s(%v) returned ANY", name, args)
+		return result
+	}
+
+	convInputs := []types.Type{
+		types.T_varchar.ToType(), types.T_char.ToType(), types.T_text.ToType(),
+		types.T_int8.ToType(), types.T_int16.ToType(), types.T_int32.ToType(), types.T_int64.ToType(),
+		types.T_uint8.ToType(), types.T_uint16.ToType(), types.T_uint32.ToType(), types.T_uint64.ToType(),
+		types.T_float32.ToType(), types.T_float64.ToType(),
+	}
+	for overloadID, input := range convInputs {
+		t.Run("conv/"+input.Oid.String(), func(t *testing.T) {
+			args := []types.Type{input, types.T_int64.ToType(), types.T_int64.ToType()}
+			resolved, err := GetFunctionByNameWithOverload(ctx, "conv", args, int32(overloadID))
+			require.NoError(t, err, "conv overload %d (%v)", overloadID, args)
+			result := resolved.GetReturnType()
+			require.Equal(t, types.T_varchar, result.Oid)
+			require.Equal(t, int32(65), result.Width)
+		})
+	}
+
+	for _, input := range []types.Type{
+		types.T_varchar.ToType(), types.T_char.ToType(), types.T_text.ToType(), types.T_blob.ToType(),
+	} {
+		t.Run("compress/"+input.Oid.String(), func(t *testing.T) {
+			result := resolve(t, "compress", []types.Type{input})
+			require.Contains(t, []types.T{types.T_varbinary, types.T_blob}, result.Oid)
+		})
+		t.Run("uncompressed_length/"+input.Oid.String(), func(t *testing.T) {
+			result := resolve(t, "uncompressed_length", []types.Type{input})
+			require.Equal(t, types.T_int64, result.Oid)
+		})
+	}
+
+	for _, input := range []types.Type{
+		types.T_varchar.ToType(), types.T_char.ToType(), types.T_text.ToType(), types.T_blob.ToType(),
+	} {
+		for _, arity := range []int{2, 3} {
+			name := input.Oid.String() + "/" + strconv.Itoa(arity)
+			t.Run("aes_encrypt/"+name, func(t *testing.T) {
+				args := []types.Type{input, types.T_varchar.ToType()}
+				if arity == 3 {
+					args = append(args, types.T_varchar.ToType())
+				}
+				result := resolve(t, "aes_encrypt", args)
+				require.Contains(t, []types.T{types.T_varbinary, types.T_blob}, result.Oid)
+			})
+		}
+	}
+
+	for _, input := range []types.Type{
+		types.T_uint8.ToType(), types.T_uint16.ToType(), types.T_uint32.ToType(), types.T_uint64.ToType(),
+		types.T_int8.ToType(), types.T_int16.ToType(), types.T_int32.ToType(), types.T_int64.ToType(),
+		types.T_float32.ToType(), types.T_float64.ToType(),
+	} {
+		t.Run("bin/"+input.Oid.String(), func(t *testing.T) {
+			result := resolve(t, "bin", []types.Type{input})
+			require.Equal(t, types.T_varchar, result.Oid)
+		})
+	}
+
+	for _, input := range []types.Type{
+		types.T_varchar.ToType(), types.T_char.ToType(),
+		types.T_int64.ToType(), types.T_uint64.ToType(), types.T_float32.ToType(), types.T_float64.ToType(),
+		types.T_array_float32.ToType(), types.T_array_float64.ToType(),
+	} {
+		t.Run("hex/"+input.Oid.String(), func(t *testing.T) {
+			result := resolve(t, "hex", []types.Type{input})
+			require.Contains(t, []types.T{types.T_varchar, types.T_text}, result.Oid)
+		})
+	}
+
+	for _, input := range []types.Type{types.T_varchar.ToType(), types.T_text.ToType(), types.T_blob.ToType()} {
+		t.Run("md5/"+input.Oid.String(), func(t *testing.T) {
+			result := resolve(t, "md5", []types.Type{input})
+			require.Equal(t, types.T_varchar, result.Oid)
+			require.Equal(t, int32(32), result.Width)
+		})
+	}
+
+	for _, input := range []types.Type{types.T_varbinary.ToType(), types.T_binary.ToType(), types.T_blob.ToType()} {
+		t.Run("inet6_ntoa/"+input.Oid.String(), func(t *testing.T) {
+			result := resolve(t, "inet6_ntoa", []types.Type{input})
+			require.Equal(t, types.T_varchar, result.Oid)
+			require.Equal(t, int32(39), result.Width)
+		})
+	}
+
+	for _, input := range []types.Type{
+		types.T_uint64.ToType(), types.T_uint32.ToType(), types.T_int64.ToType(), types.T_int32.ToType(),
+	} {
+		t.Run("inet_ntoa/"+input.Oid.String(), func(t *testing.T) {
+			result := resolve(t, "inet_ntoa", []types.Type{input})
+			require.Equal(t, types.T_varchar, result.Oid)
+			require.Equal(t, int32(31), result.Width)
+		})
+	}
+
+	result := resolve(t, "sha2", []types.Type{types.T_varchar.ToType(), types.T_int64.ToType()})
+	require.Equal(t, types.T_varchar, result.Oid)
+	require.Equal(t, int32(128), result.Width)
+	result = resolve(t, "sha1", []types.Type{types.T_varchar.ToType()})
+	require.Equal(t, types.T_varchar, result.Oid)
+	require.Equal(t, int32(40), result.Width)
+}
+
+func TestBoundedBuiltinResultBoundsFailClosed(t *testing.T) {
+	for _, test := range []struct {
+		name string
+		got  types.Type
+		want types.T
+	}{
+		{name: "compress blob", got: compressReturnType([]types.Type{types.T_blob.ToType()}), want: types.T_blob},
+		{name: "aes encrypt blob", got: aesEncryptReturnType([]types.Type{types.T_blob.ToType()}), want: types.T_blob},
+		{name: "unhex wide varchar", got: unhexReturnType([]types.Type{types.T_varchar.ToType()}), want: types.T_blob},
+		{name: "hex wide varchar", got: stringHexReturnType([]types.Type{types.T_varchar.ToType()}), want: types.T_text},
+	} {
+		t.Run(test.name, func(t *testing.T) {
+			require.Equal(t, test.want, test.got.Oid)
+		})
+	}
+
+	require.Equal(t, uint64(68), compressResultBound(stringResultBound{bytes: 48}).bytes)
+	require.Equal(t, uint64(16), aesPaddedResultBound(stringResultBound{bytes: 0}).bytes)
+	require.Equal(t, uint64(32), aesPaddedResultBound(stringResultBound{bytes: 16}).bytes)
+	require.Equal(t, uint64(32), aesPaddedResultBound(stringResultBound{bytes: 17}).bytes)
+	require.Equal(t, uint64(4), roundedUpHalfStringResultBound(stringResultBound{bytes: 7}).bytes)
+	require.True(t, compressResultBound(unknownStringResultBound()).unknown)
+	require.True(t, roundedUpHalfStringResultBound(unknownStringResultBound()).unknown)
+	require.True(t, aesPaddedResultBound(stringResultBound{bytes: math.MaxUint64}).unknown)
+	require.Equal(t, types.T_text, stringHexReturnType(nil).Oid)
+	require.Equal(t, types.T_blob, unhexReturnType(nil).Oid)
+	require.Equal(t, types.T_blob, compressReturnType(nil).Oid)
+	require.Equal(t, types.T_blob, aesEncryptReturnType(nil).Oid)
 }
 
 func TestStringTypeBoundClassification(t *testing.T) {
@@ -106,8 +558,8 @@ func TestFormattedStringByteBounds(t *testing.T) {
 		{typ: types.T_uint16.ToType(), want: 5},
 		{typ: types.T_uint32.ToType(), want: 10},
 		{typ: types.T_uint64.ToType(), want: 20},
-		{typ: types.T_float32.ToType(), want: 15},
-		{typ: types.T_float64.ToType(), want: 24},
+		{typ: types.T_float32.ToType(), want: 24},
+		{typ: types.T_float64.ToType(), want: 32},
 		{typ: decimal, want: 40},
 		{typ: decimalEqualScale64, want: 5},
 		{typ: decimalEqualScale128, want: 5},
@@ -226,12 +678,51 @@ func TestExpandingReplacementAndInsertBounds(t *testing.T) {
 
 	inserted := insertStringReturnType([]types.Type{varbinary(1), types.T_int64.ToType(), types.T_int64.ToType(), varbinary(1)})
 	require.Equal(t, types.T_varbinary, inserted.Oid)
-	require.Equal(t, int32(4), inserted.Width)
+	require.Equal(t, int32(2), inserted.Width)
 
 	binaryReplacement := replacementStringReturnType([]types.Type{varchar(2), varchar(1), varbinary(1)})
-	require.Equal(t, types.T_varbinary, binaryReplacement.Oid)
+	require.Equal(t, types.T_varchar, binaryReplacement.Oid)
+	require.Equal(t, types.CharsetUTF8, binaryReplacement.Charset)
 	binaryInsertion := insertStringReturnType([]types.Type{varchar(1), types.T_int64.ToType(), types.T_int64.ToType(), varbinary(1)})
-	require.Equal(t, types.T_varbinary, binaryInsertion.Oid)
+	require.Equal(t, types.T_varchar, binaryInsertion.Oid)
+	require.Equal(t, types.CharsetUTF8, binaryInsertion.Charset)
+}
+
+func TestRegexpReplaceReturnTypeCoversZeroWidthExpansion(t *testing.T) {
+	varchar := func(width int32) types.Type { return types.New(types.T_varchar, width, 0) }
+	varbinary := func(width int32) types.Type { return types.New(types.T_varbinary, width, 0) }
+
+	text := regexpReplaceReturnType([]types.Type{varchar(2), varchar(1), varchar(3)})
+	require.Equal(t, types.T_varchar, text.Oid)
+	require.Equal(t, int32(11), text.Width, "S+(S+1)*R")
+	for _, args := range [][]types.Type{
+		{varchar(2), varchar(1), varchar(3)},
+		{varchar(2), varchar(1), varchar(3), types.T_int64.ToType()},
+		{varchar(2), varchar(1), varchar(3), types.T_int64.ToType(), types.T_int64.ToType()},
+	} {
+		resolved, err := GetFunctionByName(context.Background(), "regexp_replace", args)
+		require.NoError(t, err)
+		require.Equal(t, int32(11), resolved.GetReturnType().Width,
+			"every REGEXP_REPLACE arity must use the expansion-aware callback")
+	}
+
+	textWithBlobReplacement := regexpReplaceReturnType([]types.Type{
+		varchar(2), varchar(1), varbinary(3),
+	})
+	require.Equal(t, types.StringDomainText, types.StaticStringDomain(textWithBlobReplacement))
+	require.Equal(t, int32(11), textWithBlobReplacement.Width)
+
+	binary := regexpReplaceReturnType([]types.Type{
+		varbinary(2), varbinary(1), varchar(3),
+	})
+	require.Equal(t, types.T_varbinary, binary.Oid)
+	// A VARCHAR(3) replacement can occupy twelve UTF-8 bytes in byte mode.
+	require.Equal(t, int32(38), binary.Width)
+
+	unbounded := regexpReplaceReturnType([]types.Type{
+		types.T_text.ToType(), varchar(1), varchar(3),
+	})
+	require.Equal(t, types.T_text, unbounded.Oid)
 }
 
 func TestStringConsumersPreserveTextAndBoundedWidths(t *testing.T) {
@@ -239,9 +730,10 @@ func TestStringConsumersPreserveTextAndBoundedWidths(t *testing.T) {
 	binaryReverse, err := GetFunctionByName(proc.Ctx, "reverse", []types.Type{types.New(types.T_varbinary, 1, 0)})
 	require.NoError(t, err)
 	casts, needCast := binaryReverse.ShouldDoImplicitTypeCast()
-	require.True(t, needCast)
-	require.Equal(t, types.T_blob, casts[0].Oid)
-	require.Equal(t, types.T_blob, binaryReverse.GetReturnType().Oid)
+	require.False(t, needCast)
+	require.Empty(t, casts)
+	require.Equal(t, types.T_varbinary, binaryReverse.GetReturnType().Oid)
+	require.Equal(t, int32(1), binaryReverse.GetReturnType().Width)
 
 	blobReverse, err := GetFunctionByName(proc.Ctx, "reverse", []types.Type{types.T_blob.ToType()})
 	require.NoError(t, err)
@@ -357,8 +849,8 @@ func TestStringDomainFunctionsPreserveBinaryInputsBeforeExecution(t *testing.T) 
 		{name: "replace", inputs: []types.Type{
 			types.New(types.T_varbinary, 8, 0), types.New(types.T_varchar, 1, 0), types.New(types.T_varchar, 2, 0),
 		}, wantOID: types.T_varbinary},
-		{name: "quote varbinary", fn: "quote", inputs: []types.Type{types.New(types.T_varbinary, 1, 0)}, wantOID: types.T_varbinary},
-		{name: "quote blob", fn: "quote", inputs: []types.Type{types.T_blob.ToType()}, wantOID: types.T_blob},
+		{name: "quote varbinary", fn: "quote", inputs: []types.Type{types.New(types.T_varbinary, 1, 0)}, wantOID: types.T_varchar},
+		{name: "quote blob", fn: "quote", inputs: []types.Type{types.T_blob.ToType()}, wantOID: types.T_text},
 	} {
 		t.Run(test.name, func(t *testing.T) {
 			fn := test.fn
@@ -373,11 +865,29 @@ func TestStringDomainFunctionsPreserveBinaryInputsBeforeExecution(t *testing.T) 
 			require.Empty(t, casts)
 		})
 	}
+
+	quote, err := GetFunctionByName(proc.Ctx, "quote", []types.Type{types.New(types.T_varbinary, 64, 0)})
+	require.NoError(t, err)
+	require.Equal(t, types.T_varchar, quote.GetReturnType().Oid)
+	require.Equal(t, int32(130), quote.GetReturnType().Width)
+	require.Equal(t, types.CharsetUTF8, quote.GetReturnType().Charset)
+	casts, needCast := quote.ShouldDoImplicitTypeCast()
+	require.False(t, needCast)
+	require.Empty(t, casts)
+
+	soundex, err := GetFunctionByName(proc.Ctx, "soundex", []types.Type{types.New(types.T_varbinary, 64, 0)})
+	require.NoError(t, err)
+	require.Equal(t, types.T_varbinary, soundex.GetReturnType().Oid)
+	require.Equal(t, int32(64), soundex.GetReturnType().Width)
+	require.Equal(t, types.CharsetBinary, soundex.GetReturnType().Charset)
+	casts, needCast = soundex.ShouldDoImplicitTypeCast()
+	require.False(t, needCast)
+	require.Empty(t, casts)
 }
 
 func TestQuotePreservesInvalidUTF8Bytes(t *testing.T) {
 	input := string([]byte{0xff, '\'', '\\', 0})
-	require.Equal(t, []byte{'\'', 0xff, '\'', '\'', '\\', '\\', '\\', '0', '\''}, []byte(QuoteString(input)))
+	require.Equal(t, []byte{'\'', 0xff, '\\', '\'', '\\', '\\', '\\', '0', '\''}, []byte(QuoteString(input)))
 }
 
 func TestExpandingReturnTypeBounds(t *testing.T) {
@@ -392,7 +902,12 @@ func TestExpandingReturnTypeBounds(t *testing.T) {
 
 	quoted := quoteReturnType([]types.Type{types.New(types.T_varchar, 0, 0)})
 	require.Equal(t, types.T_varchar, quoted.Oid)
-	require.Equal(t, int32(2), quoted.Width)
+	require.Equal(t, int32(4), quoted.Width)
+
+	quotedBinary := quoteReturnType([]types.Type{types.New(types.T_varbinary, 0, 0)})
+	require.Equal(t, types.T_varchar, quotedBinary.Oid)
+	require.Equal(t, int32(4), quotedBinary.Width)
+	require.Equal(t, types.CharsetUTF8, quotedBinary.Charset)
 }
 
 func TestPadResultByteLengthEnforcesEncodedBudget(t *testing.T) {
@@ -405,10 +920,42 @@ func TestPadResultByteLengthEnforcesEncodedBudget(t *testing.T) {
 	length, rejected = padResultByteLength("a", 2, "", int64(types.MaxVarcharLen))
 	require.False(t, rejected)
 	require.Zero(t, length)
-	dst := make([]byte, length)
-	require.NotPanics(t, func() { writePadResult(dst, "a", 2, "", true) })
-	require.Empty(t, dst)
-	require.NotPanics(t, func() { writePadResult(dst, "a", 2, "", false) })
+
+	length, rejected = padResultByteLength("abc", 2, "", int64(types.MaxVarcharLen))
+	require.False(t, rejected)
+	require.Equal(t, 2, length)
+
+	_, rejected = padResultByteLength("a", int64(types.MaxVarcharLen)+1, "", int64(types.MaxVarcharLen))
+	require.True(t, rejected)
+
+	const utf8mb4Boundary = int64(16_777_216)
+	length, rejected = padResultByteLength("a", utf8mb4Boundary, "a", int64(types.MaxBlobLen))
+	require.False(t, rejected)
+	require.Equal(t, int(utf8mb4Boundary), length)
+	_, rejected = padResultByteLength("a", utf8mb4Boundary+1, "a", int64(types.MaxBlobLen))
+	require.True(t, rejected)
+	_, rejected = padResultByteLength("a", utf8mb4Boundary+1, "", int64(types.MaxBlobLen))
+	require.True(t, rejected)
+	length, rejected = padResultByteLength(strings.Repeat("a", 100), utf8mb4Boundary+1, "", int64(types.MaxBlobLen))
+	require.False(t, rejected)
+	require.Zero(t, length)
+
+	longSource := strings.Repeat("a", 17_000_000)
+	length, rejected = padResultByteLength(longSource, utf8mb4Boundary+1, "", int64(types.MaxBlobLen))
+	require.False(t, rejected)
+	require.Equal(t, int(utf8mb4Boundary+1), length)
+
+	const utf8mb3Boundary = int64(22_369_622)
+	length, rejected = padResultByteLengthWithCharacterWidth(
+		"a", utf8mb3Boundary, "a", int64(types.MaxBlobLen), 3)
+	require.False(t, rejected)
+	require.Equal(t, int(utf8mb3Boundary), length)
+	_, rejected = padResultByteLengthWithCharacterWidth(
+		"a", utf8mb3Boundary+1, "a", int64(types.MaxBlobLen), 3)
+	require.True(t, rejected)
+
+	legacy := types.NewWithCharset(types.T_text, 0, 0, types.CharsetLegacy)
+	require.Equal(t, 3, maxPadTextCharacterWidth(&legacy))
 }
 
 func TestExpandingTextResultsUseTextCapacity(t *testing.T) {

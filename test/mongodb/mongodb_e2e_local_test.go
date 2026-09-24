@@ -15,6 +15,7 @@
 package main
 
 import (
+	"bufio"
 	"context"
 	"crypto/md5"
 	"database/sql"
@@ -31,6 +32,7 @@ import (
 	"runtime"
 	"strconv"
 	"strings"
+	"syscall"
 	"testing"
 	"time"
 
@@ -171,141 +173,315 @@ func TestMongoDBLocalE2EPortPlanValidatesOverrides(t *testing.T) {
 }
 
 func TestMongoDBLocalE2EPortPlanLeasesPortBlockAcrossProcesses(t *testing.T) {
-	ports, output, err := runMongoDBPortPlan(t, nil)
-	require.NoError(t, err, output)
-	base := strconv.Itoa(ports["LOG_PORT_BASE"])
 	temporaryDirectory := t.TempDir()
 	firstTempDirectory := filepath.Join(temporaryDirectory, "first-tmp")
 	secondTempDirectory := filepath.Join(temporaryDirectory, "second-tmp")
 	require.NoError(t, os.MkdirAll(firstTempDirectory, 0o700))
 	require.NoError(t, os.MkdirAll(secondTempDirectory, 0o700))
-	readyFile := filepath.Join(firstTempDirectory, "port-plan-ready")
-
-	repoRoot := mongoDBTestRepoRoot(t)
-	command := exec.Command("bash", filepath.Join(repoRoot, "optools", "mongodb_ci.bash"), "port-plan")
-	command.Dir = repoRoot
-	command.Env = mongoDBPortPlanEnv(map[string]string{
-		"MO_MONGODB_LOG_PORT_BASE":          base,
-		"MO_MONGODB_PORT_PLAN_HOLD_SECONDS": "2",
-		"MO_MONGODB_PORT_PLAN_READY_FILE":   readyFile,
-		"TMPDIR":                            firstTempDirectory,
-	})
-	outputFile, err := os.CreateTemp(t.TempDir(), "port-plan-output")
-	require.NoError(t, err)
-	command.Stdout = outputFile
-	command.Stderr = outputFile
-	t.Cleanup(func() { _ = outputFile.Close() })
-	require.NoError(t, command.Start())
-	finished := false
-	t.Cleanup(func() {
-		if !finished && command.Process != nil {
-			_ = command.Process.Kill()
-			_ = command.Wait()
+	// Production defaults to this host-user-wide directory, independently of
+	// TMPDIR. The lease-only owner has to pass it explicitly so it never probes
+	// host ports; the contender exercises port-plan's implicit production path.
+	leaseDirectory := filepath.Join("/tmp", fmt.Sprintf("mo-mongodb-port-leases-%d", os.Geteuid()))
+	const firstBase = 57000
+	const lastBase = 65456
+	const baseStep = 80
+	baseCount := (lastBase-firstBase)/baseStep + 1
+	startOffset := os.Getpid() % baseCount
+	var owner *mongoDBPortLeaseTestProcess
+	for attempt := range baseCount {
+		base := firstBase + ((startOffset+attempt)%baseCount)*baseStep
+		readyFile := filepath.Join(firstTempDirectory, fmt.Sprintf("port-lease-ready-%d", base))
+		candidate := startMongoDBPortLeaseTestProcess(
+			t,
+			strconv.Itoa(base),
+			leaseDirectory,
+			firstTempDirectory,
+			readyFile,
+		)
+		if candidate.waitForReady(t) {
+			owner = candidate
+			break
 		}
-	})
+		output := candidate.output(t)
+		require.Error(t, candidate.waitErr, "lease owner exited without acquiring or reporting a conflict: %s", output)
+		require.Containsf(t, output, "MO_MONGODB_LOG_PORT_BASE is already leased by another MongoDB E2E run",
+			"unexpected failure reserving candidate base %d", base)
+		candidate.mayHaveDescendants = false
+	}
+	require.NotNil(t, owner, "could not reserve a free test lease base in %d attempts", baseCount)
 
-	waitForMongoDBPortPlanReady(t, readyFile)
-
-	_, output, err = runMongoDBPortPlan(t, map[string]string{
-		"MO_MONGODB_LOG_PORT_BASE": base,
+	_, output, err := runMongoDBPortPlan(t, map[string]string{
+		"MO_MONGODB_LOG_PORT_BASE": owner.base,
 		"TMPDIR":                   secondTempDirectory,
 	})
 	require.Error(t, err)
-	require.Contains(t, output, "MO_MONGODB_LOG_PORT_BASE is already leased")
-
-	waitErr := command.Wait()
-	finished = true
-	require.NoError(t, outputFile.Close())
-	commandOutput, err := os.ReadFile(outputFile.Name())
-	require.NoError(t, err)
-	require.NoError(t, waitErr, string(commandOutput))
+	require.Contains(t, output, "MO_MONGODB_LOG_PORT_BASE is already leased by another MongoDB E2E run")
+	owner.releaseAndWait(t)
 }
 
 func TestMongoDBLocalE2EPortPlanReleasesLeaseAfterParentDeath(t *testing.T) {
-	ports, output, err := runMongoDBPortPlan(t, nil)
-	require.NoError(t, err, output)
-	base := strconv.Itoa(ports["LOG_PORT_BASE"])
+	const base = "62000"
 	temporaryDirectory := t.TempDir()
+	tempDirectory := filepath.Join(temporaryDirectory, "tmp")
+	require.NoError(t, os.MkdirAll(tempDirectory, 0o700))
 	readyFile := filepath.Join(temporaryDirectory, "port-plan-ready")
 	leaseDirectory := filepath.Join(temporaryDirectory, "leases")
-	outputFile := filepath.Join(temporaryDirectory, "port-plan-output")
+	leaseFile := filepath.Join(leaseDirectory, base+".lock")
+	owner := startMongoDBPortLeaseTestProcess(t, base, leaseDirectory, tempDirectory, readyFile)
+	require.True(t, owner.waitForReady(t), "lease owner did not become ready: %s", owner.output(t))
+	observer := startMongoDBLeaseLockObserver(t, leaseFile)
+	observer.readPhase(t, "blocked")
 
-	repoRoot := mongoDBTestRepoRoot(t)
-	command := exec.Command("bash", filepath.Join(repoRoot, "optools", "mongodb_ci.bash"), "port-plan")
-	command.Dir = repoRoot
-	command.Env = mongoDBPortPlanEnv(map[string]string{
-		"MO_MONGODB_LOG_PORT_BASE":          base,
-		"MO_MONGODB_PORT_LEASE_DIR":         leaseDirectory,
-		"MO_MONGODB_PORT_PLAN_HOLD_SECONDS": "60",
-		"MO_MONGODB_PORT_PLAN_READY_FILE":   readyFile,
-	})
-	commandOutput, err := os.Create(outputFile)
-	require.NoError(t, err)
-	command.Stdout = commandOutput
-	command.Stderr = commandOutput
-	finished := false
-	t.Cleanup(func() {
-		if !finished && command.Process != nil {
-			_ = command.Process.Kill()
-			_ = command.Wait()
-		}
-		_ = commandOutput.Close()
-		killMongoDBLeaseHolders(t, filepath.Join(leaseDirectory, base+".lock"))
-	})
-	require.NoError(t, command.Start())
+	owner.killParent(t)
 
-	waitForMongoDBPortPlanReady(t, readyFile)
-	require.NoError(t, command.Process.Kill())
-	require.Error(t, command.Wait())
-	finished = true
-
-	deadline := time.Now().Add(3 * time.Second)
-	lastOutput := ""
-	for time.Now().Before(deadline) {
-		_, output, err = runMongoDBPortPlan(t, map[string]string{
-			"MO_MONGODB_LOG_PORT_BASE":  base,
-			"MO_MONGODB_PORT_LEASE_DIR": leaseDirectory,
-		})
-		if err == nil {
-			return
-		}
-		lastOutput = output
-		time.Sleep(20 * time.Millisecond)
-	}
-	t.Fatalf("port lease remained after parent death: %s", lastOutput)
+	observer.readPhase(t, "acquired")
+	require.NoError(t, observer.wait(), "lease observer failed: %s", observer.stderr())
+	owner.mayHaveDescendants = false
 }
 
-func waitForMongoDBPortPlanReady(t *testing.T, readyFile string) {
+const mongoDBPortLeaseLockObserver = `import errno
+import fcntl
+import sys
+
+lease_path = sys.argv[1]
+with open(lease_path, "r+") as lease:
+    try:
+        fcntl.flock(lease, fcntl.LOCK_EX | fcntl.LOCK_NB)
+    except BlockingIOError as err:
+        if err.errno not in (errno.EACCES, errno.EAGAIN):
+            raise
+        print("blocked", flush=True)
+    else:
+        print("unexpectedly-acquired", flush=True)
+        raise SystemExit(1)
+
+    fcntl.flock(lease, fcntl.LOCK_EX)
+    print("acquired", flush=True)
+`
+
+type mongoDBLeaseLockObserver struct {
+	command    *exec.Cmd
+	stdout     *bufio.Reader
+	stderrPath string
+	cancel     context.CancelFunc
+	waited     bool
+	waitErr    error
+}
+
+type mongoDBPortLeaseTestProcess struct {
+	command            *exec.Cmd
+	input              io.WriteCloser
+	readyFile          string
+	outputPath         string
+	waitDone           chan error
+	waited             bool
+	waitErr            error
+	inputClosed        bool
+	ownsLease          bool
+	mayHaveDescendants bool
+	base               string
+}
+
+func startMongoDBPortLeaseTestProcess(
+	t *testing.T,
+	base, leaseDirectory, tempDirectory, readyFile string,
+) *mongoDBPortLeaseTestProcess {
+	t.Helper()
+	repoRoot := mongoDBTestRepoRoot(t)
+	command := exec.Command("bash", filepath.Join(repoRoot, "optools", "mongodb_ci.bash"), "port-lease-test")
+	command.Dir = repoRoot
+	command.SysProcAttr = &syscall.SysProcAttr{Setpgid: true}
+	command.Env = mongoDBPortPlanEnv(map[string]string{
+		"MO_MONGODB_LOG_PORT_BASE":        base,
+		"MO_MONGODB_PORT_LEASE_DIR":       leaseDirectory,
+		"MO_MONGODB_PORT_PLAN_READY_FILE": readyFile,
+		"TMPDIR":                          tempDirectory,
+	})
+	outputFile, err := os.CreateTemp(t.TempDir(), "port-lease-test-output")
+	require.NoError(t, err)
+	t.Cleanup(func() { _ = outputFile.Close() })
+	input, err := command.StdinPipe()
+	require.NoError(t, err)
+	command.Stdout = outputFile
+	command.Stderr = outputFile
+	if err := command.Start(); err != nil {
+		_ = input.Close()
+		_ = outputFile.Close()
+		require.NoError(t, err)
+	}
+	process := &mongoDBPortLeaseTestProcess{
+		command:            command,
+		input:              input,
+		readyFile:          readyFile,
+		outputPath:         outputFile.Name(),
+		waitDone:           make(chan error, 1),
+		mayHaveDescendants: true,
+		base:               base,
+	}
+	go func() { process.waitDone <- command.Wait() }()
+	t.Cleanup(process.cleanup)
+	require.NoError(t, outputFile.Close())
+	return process
+}
+
+func (p *mongoDBPortLeaseTestProcess) waitForReady(t *testing.T) bool {
 	t.Helper()
 	deadline := time.Now().Add(3 * time.Second)
 	for time.Now().Before(deadline) {
-		contents, err := os.ReadFile(readyFile)
-		if err == nil && string(contents) == "ready\n" {
-			return
+		contents, err := os.ReadFile(p.readyFile)
+		if err == nil {
+			if string(contents) == "ready\n" {
+				p.ownsLease = true
+				return true
+			}
+			require.Emptyf(t, contents, "lease owner wrote unexpected readiness contents: %q", contents)
+		} else {
+			require.True(t, os.IsNotExist(err), "could not read lease readiness file: %v", err)
+		}
+		if p.observeExit() {
+			p.closeInput()
+			return false
 		}
 		time.Sleep(10 * time.Millisecond)
 	}
-	contents, err := os.ReadFile(readyFile)
-	require.NoError(t, err, "port-plan did not become ready")
-	require.Equal(t, "ready\n", string(contents))
+	t.Fatalf("lease owner did not become ready before deadline: %s", p.output(t))
+	return false
 }
 
-func killMongoDBLeaseHolders(t *testing.T, leaseFile string) {
+func (p *mongoDBPortLeaseTestProcess) observeExit() bool {
+	if p.waited {
+		return true
+	}
+	select {
+	case p.waitErr = <-p.waitDone:
+		p.waited = true
+		return true
+	default:
+		return false
+	}
+}
+
+func (p *mongoDBPortLeaseTestProcess) waitForExit(timeout time.Duration) bool {
+	if p.observeExit() {
+		return true
+	}
+	timer := time.NewTimer(timeout)
+	defer timer.Stop()
+	select {
+	case p.waitErr = <-p.waitDone:
+		p.waited = true
+		return true
+	case <-timer.C:
+		return false
+	}
+}
+
+func (p *mongoDBPortLeaseTestProcess) output(t *testing.T) string {
 	t.Helper()
-	output, err := exec.Command("pgrep", "-f", leaseFile).Output()
+	contents, err := os.ReadFile(p.outputPath)
+	require.NoError(t, err)
+	return string(contents)
+}
+
+func (p *mongoDBPortLeaseTestProcess) closeInput() {
+	if !p.inputClosed {
+		_ = p.input.Close()
+		p.inputClosed = true
+	}
+}
+
+func (p *mongoDBPortLeaseTestProcess) releaseAndWait(t *testing.T) {
+	t.Helper()
+	require.True(t, p.ownsLease, "cannot release a lease not owned by this test process")
+	_, err := io.WriteString(p.input, "release\n")
+	require.NoError(t, err)
+	p.closeInput()
+	require.True(t, p.waitForExit(3*time.Second), "lease owner did not exit after release: %s", p.output(t))
+	require.NoError(t, p.waitErr, p.output(t))
+	p.ownsLease = false
+	p.mayHaveDescendants = false
+}
+
+func (p *mongoDBPortLeaseTestProcess) killParent(t *testing.T) {
+	t.Helper()
+	p.ownsLease = false
+	require.NoError(t, p.command.Process.Kill())
+	require.True(t, p.waitForExit(3*time.Second), "lease owner parent did not die")
+	require.Error(t, p.waitErr, "lease owner parent unexpectedly exited successfully")
+	p.closeInput()
+}
+
+func (p *mongoDBPortLeaseTestProcess) cleanup() {
+	if p.ownsLease && !p.waited {
+		_, _ = io.WriteString(p.input, "release\n")
+		p.closeInput()
+	}
+	if p.mayHaveDescendants {
+		_ = syscall.Kill(-p.command.Process.Pid, syscall.SIGKILL)
+	}
+	if !p.waited {
+		p.closeInput()
+		_ = p.waitForExit(3 * time.Second)
+	}
+}
+
+func startMongoDBLeaseLockObserver(t *testing.T, leaseFile string) *mongoDBLeaseLockObserver {
+	t.Helper()
+	stderrFile, err := os.CreateTemp(t.TempDir(), "lease-observer-stderr")
+	require.NoError(t, err)
+	t.Cleanup(func() { _ = stderrFile.Close() })
+	ctx, cancel := context.WithTimeout(t.Context(), 10*time.Second)
+	t.Cleanup(cancel)
+	command := exec.CommandContext(ctx, "python3", "-c", mongoDBPortLeaseLockObserver, leaseFile)
+	stdout, err := command.StdoutPipe()
+	require.NoError(t, err)
+	command.Stderr = stderrFile
+	require.NoError(t, command.Start())
+
+	observer := &mongoDBLeaseLockObserver{
+		command:    command,
+		stdout:     bufio.NewReader(stdout),
+		stderrPath: stderrFile.Name(),
+		cancel:     cancel,
+	}
+	t.Cleanup(func() {
+		if !observer.waited {
+			observer.cancel()
+			if observer.command.Process != nil {
+				_ = observer.command.Process.Kill()
+			}
+			_ = observer.wait()
+		}
+	})
+	return observer
+}
+
+func (o *mongoDBLeaseLockObserver) readPhase(t *testing.T, want string) {
+	t.Helper()
+	line, err := o.stdout.ReadString('\n')
 	if err != nil {
-		return
+		waitErr := o.wait()
+		t.Fatalf("lease observer did not report %q phase: read error %v, wait error %v, stderr: %s",
+			want, err, waitErr, o.stderr())
 	}
-	for _, line := range strings.Fields(string(output)) {
-		pid, err := strconv.Atoi(line)
-		if err != nil {
-			continue
-		}
-		process, err := os.FindProcess(pid)
-		if err == nil {
-			_ = process.Kill()
-		}
+	require.Equal(t, want+"\n", line)
+}
+
+func (o *mongoDBLeaseLockObserver) wait() error {
+	if !o.waited {
+		o.waitErr = o.command.Wait()
+		o.waited = true
+		o.cancel()
 	}
+	return o.waitErr
+}
+
+func (o *mongoDBLeaseLockObserver) stderr() string {
+	data, err := os.ReadFile(o.stderrPath)
+	if err != nil {
+		return fmt.Sprintf("could not read observer stderr: %v", err)
+	}
+	return string(data)
 }
 
 func runMongoDBPortPlan(t *testing.T, overrides map[string]string) (map[string]int, string, error) {
@@ -430,16 +606,23 @@ func TestMongoDBLocalE2ERunContract(t *testing.T) {
 	expectMongoDBE2EScalar(mock, "2")
 	mock.ExpectExec("deallocate prepare mongo_pruned_text").WillReturnResult(sqlmock.NewResult(0, 0))
 	expectMongoDBE2EScalar(mock, "1")
+	expectMongoDBE2EScalar(mock, "1")
 	expectMongoDBE2EScalar(mock, `{"filter":{"site_id":"site-west"}}`)
 	expectMongoDBE2EScalar(mock, "device-001|4|18.5")
 	expectMongoDBE2EScalar(mock, "device-001|4|18.5")
 	expectMongoDBE2EScalar(mock, "1")
+	expectMongoDBE2EScalar(mock, "64b000000000000000000005")
+	expectMongoDBE2EScalar(mock, "5")
+	expectMongoDBE2EScalar(mock, "10")
+	expectMongoDBE2EScalar(mock, "5")
 	mock.ExpectQuery("explain select").WillReturnRows(sqlmock.NewRows([]string{"QUERY PLAN"}).
 		AddRow("MongoDB Scan: operation=aggregate query_digest=0123456789ab").
 		AddRow("Filter Cond: event_count >= 1"))
 	for range 4 {
 		mock.ExpectQuery("select count").WillReturnError(errors.New("MongoDB pipeline stage is not allowed"))
 	}
+	mock.ExpectQuery("select count").WillReturnError(errors.New("MongoDB $sort requires 1 to 32 fields"))
+	mock.ExpectQuery("select count").WillReturnError(errors.New("MongoDB $unwind requires a valid field path"))
 	mock.ExpectQuery("select count").WillReturnError(errors.New("MongoDB __mo_query must contain only a filter or pipeline field"))
 	mock.ExpectQuery("select count").WillReturnError(errors.New("MongoDB __mo_query must be strict Extended JSON"))
 	expectMongoDBE2EScalar(mock, "5")
@@ -516,8 +699,10 @@ func TestMongoDBLocalE2ERunContract(t *testing.T) {
 		"truncate-read-only-source-preserved",
 		"scan-projection-pushdown-null-conversion",
 		"prepared-scan-binary-and-text-reuse-recovery-metadata",
+		"explicit-filter-residual",
 		"explicit-filter-and-query-column",
 		"explicit-reducing-aggregation-pipeline",
+		"explicit-sort-and-unwind-pipeline",
 		"explicit-query-explain-redaction",
 		"explicit-query-fail-closed",
 		"insert-select-primary-key-targets",

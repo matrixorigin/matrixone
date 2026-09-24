@@ -443,12 +443,21 @@ select * from time01;
 
 drop table if exists time02;
 create table time02 as select date_format(col2, '%W %M %Y') from time01;
--- @bvt:issue#24436
 show create table time02;
 desc time02;
--- @bvt:issue
 select * from time02;
 drop table time02;
+
+-- DATE_FORMAT/TIME_FORMAT metadata must cover every value that CTAS can
+-- materialize from MatrixOne's datetime and extended time domains.
+set @old_ctas_date_format_sql_mode = @@sql_mode;
+set sql_mode = '';
+drop table if exists time_format_bounds;
+create table time_format_bounds as select date_format(cast('0000-00-00' as date), '%U|%u|%V') as zero_weeks, time_format(cast('-2562047787:59:59' as time), '%H') as full_hour, time_format(cast('-2562047787:59:59' as time), '%T') as full_time, time_format(cast('-00:59:00' as time), '%i') as signed_minute;
+desc time_format_bounds;
+select * from time_format_bounds;
+drop table time_format_bounds;
+set sql_mode = @old_ctas_date_format_sql_mode;
 
 drop table if exists time03;
 create table time03 as select date(col1), date(col2), year(col1), day(col1), weekday(col1), dayofyear(col1) as dya from time01;

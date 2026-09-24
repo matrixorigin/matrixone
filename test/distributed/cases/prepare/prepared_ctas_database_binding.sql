@@ -1,0 +1,75 @@
+-- @label:bvt
+
+drop database if exists issue_28376_ctas_a;
+drop database if exists issue_28376_ctas_b;
+create database issue_28376_ctas_a;
+create database issue_28376_ctas_b;
+
+create table issue_28376_ctas_a.src (
+    id int primary key,
+    note varchar(20)
+);
+insert into issue_28376_ctas_a.src values (1, 'from-a');
+create table issue_28376_ctas_a.dim (
+    id int primary key,
+    tag varchar(20)
+);
+insert into issue_28376_ctas_a.dim values (1, 'dim-a');
+
+create table issue_28376_ctas_b.src (
+    id int primary key,
+    note varchar(20)
+);
+insert into issue_28376_ctas_b.src values (2, 'from-b');
+create table issue_28376_ctas_b.dim (
+    id int primary key,
+    tag varchar(20)
+);
+insert into issue_28376_ctas_b.dim values (2, 'dim-b');
+
+use issue_28376_ctas_a;
+prepare p_plain from 'create table copied_plain as select * from src';
+prepare p_cte from 'create table copied_cte as with q as (select * from src) select * from q';
+prepare p_join from 'create table copied_join as select s.id, d.tag from src s join dim d on s.id = d.id';
+prepare p_explicit_target from 'create table issue_28376_ctas_b.copied_explicit_target as select * from src';
+prepare p_explicit_source from 'create table copied_explicit_source as select * from issue_28376_ctas_b.src';
+prepare p_rebuild from 'create table copied_rebuild as select * from src';
+
+use issue_28376_ctas_b;
+execute p_plain;
+select database() as execute_database;
+execute p_cte;
+execute p_join;
+execute p_explicit_target;
+execute p_explicit_source;
+select * from issue_28376_ctas_a.copied_plain;
+select * from issue_28376_ctas_a.copied_cte;
+select * from issue_28376_ctas_a.copied_join;
+select * from issue_28376_ctas_b.copied_explicit_target;
+select * from issue_28376_ctas_a.copied_explicit_source;
+select count(*) as b_plain_count from information_schema.tables
+where table_schema = 'issue_28376_ctas_b' and table_name = 'copied_plain';
+
+use issue_28376_ctas_a;
+prepare p_temp from 'create temporary table copied_temp as select * from src';
+use issue_28376_ctas_b;
+execute p_temp;
+use issue_28376_ctas_a;
+select * from copied_temp;
+
+alter table src add column extra int;
+update src set extra = 10 where id = 1;
+use issue_28376_ctas_b;
+execute p_rebuild;
+use issue_28376_ctas_a;
+select * from copied_rebuild;
+
+deallocate prepare p_plain;
+deallocate prepare p_cte;
+deallocate prepare p_join;
+deallocate prepare p_explicit_target;
+deallocate prepare p_explicit_source;
+deallocate prepare p_rebuild;
+deallocate prepare p_temp;
+drop database issue_28376_ctas_a;
+drop database issue_28376_ctas_b;

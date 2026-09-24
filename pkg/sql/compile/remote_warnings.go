@@ -14,7 +14,12 @@
 
 package compile
 
-import "sync"
+import (
+	"sync"
+
+	"github.com/matrixorigin/matrixone/pkg/common/moerr"
+	"github.com/matrixorigin/matrixone/pkg/vm/process"
+)
 
 // remoteWarningDiagnostic is carried in the existing terminal JSON envelope.
 // Keeping it out of the protobuf message preserves compatibility with older
@@ -24,16 +29,27 @@ type remoteWarningDiagnostic struct {
 	Message string `json:"message"`
 }
 
-type warningDiagnosticSink interface {
-	AppendWarningDiagnostic(code uint16, msg string)
-}
+type warningDiagnosticSink = process.WarningDiagnosticAppender
 
 // warningDiagnosticBatchSink carries the total number of diagnostics separately
 // from the bounded records retained for SHOW WARNINGS. Remote fragments may
 // produce one warning per input row, but only the engine's diagnostic capacity
 // needs to cross the wire.
-type warningDiagnosticBatchSink interface {
-	AppendWarningBatch(total uint64, codes []uint16, messages []string)
+type warningDiagnosticBatchSink = process.WarningDiagnosticBatchAppender
+
+type warningDiagnosticCountSink = process.WarningDiagnosticCountAppender
+
+type groupConcatCutMarker interface {
+	markGroupConcatCut(string)
+	markGroupConcatReportingIncomplete()
+}
+
+// appendWarningBatchToSink preserves the bounded diagnostic batch when the
+// sink supports it and falls back to the legacy one-record interface for
+// older sessions. The sink is captured by the remote sender for one execution
+// attempt, so a closed collector rejects late callbacks from a failed retry.
+func appendWarningBatchToSink(destination any, total uint64, codes []uint16, messages []string) {
+	process.AppendWarningBatchToSink(destination, total, codes, messages)
 }
 
 const remoteWarningRetentionLimit = 64
@@ -42,10 +58,17 @@ const remoteWarningRetentionLimit = 64
 // surface it needs while collecting row-level warnings. It deliberately does
 // not expose a frontend session or variable state to the remote CN.
 type remoteWarningCollector struct {
-	mu           sync.Mutex
-	warningCount uint64
-	warnings     []remoteWarningDiagnostic
-	maxRetained  int
+	mu                             sync.Mutex
+	warningCount                   uint64
+	warnings                       []remoteWarningDiagnostic
+	warningBytes                   int
+	maxRetained                    int
+	groupConcatCut                 bool
+	groupConcatCutMessage          string
+	groupConcatReportingIncomplete bool
+	// Immutable intent inherited by internal SQL compiles in this attempt.
+	requiresCutReporting bool
+	closed               bool
 }
 
 func (*remoteWarningCollector) GetTempTable(string, string) (string, bool) { return "", false }
@@ -61,23 +84,131 @@ func (s *remoteWarningCollector) AppendWarningDiagnostic(code uint16, msg string
 	s.AppendWarningBatch(1, []uint16{code}, []string{msg})
 }
 
+func (s *remoteWarningCollector) AppendWarningCount(total uint64) {
+	if s == nil || total == 0 {
+		return
+	}
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	if s.closed {
+		return
+	}
+	if ^uint64(0)-s.warningCount < total {
+		s.warningCount = ^uint64(0)
+	} else {
+		s.warningCount += total
+	}
+}
+
 func (s *remoteWarningCollector) AppendWarningBatch(total uint64, codes []uint16, messages []string) {
 	if s == nil {
 		return
 	}
 	s.mu.Lock()
-	s.warningCount += total
+	if s.closed {
+		s.mu.Unlock()
+		return
+	}
+	if ^uint64(0)-s.warningCount < total {
+		s.warningCount = ^uint64(0)
+	} else {
+		s.warningCount += total
+	}
+	codeLimit := len(codes)
+	if uint64(codeLimit) > total {
+		codeLimit = int(total)
+	}
+	for i := 0; i < codeLimit; i++ {
+		if codes[i] != moerr.ER_CUT_VALUE_GROUP_CONCAT {
+			continue
+		}
+		message := ""
+		if i < len(messages) {
+			message = messages[i]
+		}
+		s.markGroupConcatCutLocked(message)
+		break
+	}
 	limit := s.maxRetained
 	if limit <= 0 {
 		limit = remoteWarningRetentionLimit
 	}
-	for i := 0; i < len(codes) && i < len(messages) && len(s.warnings) < limit; i++ {
+	batchLimit := len(codes)
+	if len(messages) < batchLimit {
+		batchLimit = len(messages)
+	}
+	if uint64(batchLimit) > total {
+		batchLimit = int(total)
+	}
+	for i := 0; i < batchLimit && len(s.warnings) < limit; i++ {
+		remaining := process.WarningDiagnosticMaxBytes - s.warningBytes
+		if remaining <= 0 {
+			break
+		}
+		if remaining > process.WarningDiagnosticMaxMessageBytes {
+			remaining = process.WarningDiagnosticMaxMessageBytes
+		}
+		message := process.BoundWarningMessage(messages[i], remaining)
 		s.warnings = append(s.warnings, remoteWarningDiagnostic{
 			Code:    codes[i],
-			Message: messages[i],
+			Message: message,
 		})
+		s.warningBytes += len(message)
 	}
 	s.mu.Unlock()
+}
+
+func (s *remoteWarningCollector) markGroupConcatCut(message string) {
+	if s == nil {
+		return
+	}
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	if s.closed {
+		return
+	}
+	s.markGroupConcatCutLocked(message)
+}
+
+func (s *remoteWarningCollector) markGroupConcatCutLocked(message string) {
+	s.groupConcatCut = true
+	if s.groupConcatCutMessage == "" && message != "" {
+		s.groupConcatCutMessage = process.BoundWarningMessage(message, process.WarningDiagnosticMaxMessageBytes)
+	}
+}
+
+func (s *remoteWarningCollector) groupConcatCutDiagnostic() (bool, string) {
+	if s == nil {
+		return false, ""
+	}
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	return s.groupConcatCut, s.groupConcatCutMessage
+}
+
+func (s *remoteWarningCollector) markGroupConcatReportingIncomplete() {
+	if s == nil {
+		return
+	}
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	if !s.closed {
+		s.groupConcatReportingIncomplete = true
+	}
+}
+
+func (s *remoteWarningCollector) incompleteGroupConcatReporting() bool {
+	if s == nil {
+		return false
+	}
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	return s.groupConcatReportingIncomplete
+}
+
+func requiresGroupConcatCutReporting(sink any) bool {
+	collector, ok := sink.(*remoteWarningCollector)
+	return ok && collector != nil && collector.requiresCutReporting
 }
 
 func (s *remoteWarningCollector) SnapshotWarnings() (uint64, []remoteWarningDiagnostic) {
@@ -87,4 +218,26 @@ func (s *remoteWarningCollector) SnapshotWarnings() (uint64, []remoteWarningDiag
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	return s.warningCount, append([]remoteWarningDiagnostic(nil), s.warnings...)
+}
+
+// closeWarnings atomically seals an attempt against late local/RPC writers.
+// Failed attempts discard without copying; successful attempts transfer the
+// bounded records exactly once. A collector is never reopened for a retry.
+func (s *remoteWarningCollector) closeWarnings(success bool) (uint64, []remoteWarningDiagnostic, bool, string, bool) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	if s.closed {
+		return 0, nil, false, "", false
+	}
+	s.closed = true
+	total, warnings := s.warningCount, s.warnings
+	cut, message := s.groupConcatCut, s.groupConcatCutMessage
+	incomplete := s.groupConcatReportingIncomplete
+	s.warningCount, s.warnings, s.warningBytes = 0, nil, 0
+	s.groupConcatCut, s.groupConcatCutMessage = false, ""
+	s.groupConcatReportingIncomplete = false
+	if !success {
+		return 0, nil, false, "", false
+	}
+	return total, warnings, cut, message, incomplete
 }

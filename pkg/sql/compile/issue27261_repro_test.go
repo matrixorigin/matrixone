@@ -90,6 +90,29 @@ func (r *issue27261BlockingRelation) Ranges(
 	return readutil.NewBlockListRelationData(0), nil
 }
 
+func TestReaderContextFollowsSourceScopeBeforeCompileFallback(t *testing.T) {
+	source := testutil.NewProcess(t)
+	defer source.Free()
+	fallback := testutil.NewProcess(t)
+	defer fallback.Free()
+
+	type contextKey struct{}
+	sourceCtx := context.WithValue(source.Ctx, contextKey{}, "source")
+	fallbackCtx := context.WithValue(fallback.Ctx, contextKey{}, "fallback")
+	source.Ctx = sourceCtx
+	fallback.Ctx = fallbackCtx
+	compile := &Compile{proc: fallback}
+
+	readerScope := &Scope{Proc: source}
+	require.Same(t, sourceCtx, readerScope.readerContext(compile))
+	require.Equal(t, "source", readerScope.readerContext(compile).Value(contextKey{}))
+
+	noSourceScope := &Scope{}
+	require.Same(t, fallbackCtx, noSourceScope.readerContext(compile))
+	require.Equal(t, "fallback", noSourceScope.readerContext(compile).Value(contextKey{}))
+	require.Nil(t, noSourceScope.readerContext(nil))
+}
+
 func (r *issue27261BlockingRelation) BuildReaders(
 	ctx context.Context,
 	_ any,

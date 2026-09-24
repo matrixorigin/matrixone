@@ -54,9 +54,19 @@ func pointAtLength(pts []Coord, target float64) Point {
 	return Point{X: last.X, Y: last.Y}
 }
 
-// InterpolatePoint returns the point at fraction f (0..1) of a line's total
-// Cartesian length. Values outside [0,1] are clamped.
+func validateFiniteLineRefParameter(value float64, functionName, parameterName string) error {
+	if math.IsNaN(value) || math.IsInf(value, 0) {
+		return moerr.NewInvalidInputNoCtxf("%s: %s must be finite", functionName, parameterName)
+	}
+	return nil
+}
+
+// InterpolatePoint returns the point at finite fraction f (0..1) of a line's
+// total Cartesian length. Finite values outside [0,1] are clamped.
 func InterpolatePoint(l LineString, f float64) (Point, error) {
+	if err := validateFiniteLineRefParameter(f, "ST_LineInterpolatePoint", "fraction"); err != nil {
+		return Point{}, err
+	}
 	n := len(l.Points)
 	if n == 0 {
 		return Point{}, moerr.NewInvalidInputNoCtx("ST_LineInterpolatePoint: empty line")
@@ -73,10 +83,13 @@ func InterpolatePoint(l LineString, f float64) (Point, error) {
 	return pointAtLength(l.Points, f*planarLineLength(l.Points)), nil
 }
 
-// InterpolatePoints returns points placed at every multiple of fraction f along
-// the line (always including the 100% endpoint). A single resulting point is
-// returned as a Point, otherwise as a MultiPoint.
+// InterpolatePoints returns points placed at every multiple of finite fraction
+// f along the line (always including the 100% endpoint). A single resulting
+// point is returned as a Point, otherwise as a MultiPoint.
 func InterpolatePoints(l LineString, f float64) (Geometry, error) {
+	if err := validateFiniteLineRefParameter(f, "ST_LineInterpolatePoints", "fraction"); err != nil {
+		return nil, err
+	}
 	if f <= 0 || f > 1 {
 		return nil, moerr.NewInvalidInputNoCtx("ST_LineInterpolatePoints: fraction must be in (0, 1]")
 	}
@@ -103,9 +116,12 @@ func InterpolatePoints(l LineString, f float64) (Geometry, error) {
 	return MultiPoint{Points: pts}, nil
 }
 
-// PointAtDistance returns the point reached after travelling dist Cartesian
-// units along the line. dist must lie within [0, length].
+// PointAtDistance returns the point reached after travelling finite dist
+// Cartesian units along the line. dist must lie within [0, length].
 func PointAtDistance(l LineString, dist float64) (Point, error) {
+	if err := validateFiniteLineRefParameter(dist, "ST_PointAtDistance", "distance"); err != nil {
+		return Point{}, err
+	}
 	n := len(l.Points)
 	if n == 0 {
 		return Point{}, moerr.NewInvalidInputNoCtx("ST_PointAtDistance: empty line")

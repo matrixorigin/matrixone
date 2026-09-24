@@ -439,17 +439,29 @@ type managedHAKeeperClient struct {
 
 	mu struct {
 		sync.RWMutex
-		client *hakeeperClient
+		client   *hakeeperClient
+		closed   bool
+		closeErr error
 	}
 }
 
 func (c *managedHAKeeperClient) Close() error {
 	c.mu.Lock()
 	defer c.mu.Unlock()
-	if c.mu.client == nil {
+	if c.mu.closed {
+		return c.mu.closeErr
+	}
+	c.mu.closed = true
+	client := c.mu.client
+	c.mu.client = nil
+	if client == nil {
 		return nil
 	}
-	return c.mu.client.close()
+	// Keep the managed lock until the inner transport has finished closing.
+	// Concurrent Close callers must not observe success while MORPC workers
+	// are still being torn down.
+	c.mu.closeErr = client.close()
+	return c.mu.closeErr
 }
 
 // CheckLogServiceHealth implements the ClusterHAKeeperClient interface.
@@ -863,6 +875,9 @@ func (c *managedHAKeeperClient) GetScheduleCommands(
 func (c *managedHAKeeperClient) getCurrentClient() *hakeeperClient {
 	c.mu.RLock()
 	defer c.mu.RUnlock()
+	if c.mu.closed {
+		return nil
+	}
 	return c.mu.client
 }
 
@@ -1181,9 +1196,20 @@ func (c *managedHAKeeperClient) UpdateNonVotingLocality(
 }
 
 func (c *managedHAKeeperClient) isRetryableError(err error) bool {
+	// A HAKeeper request owns no application-level retry budget of its own;
+	// every caller supplies a deadline and this loop only retries the failed
+	// transport generation inside that deadline.  MORPC reports a closed
+	// generation as ErrBackendClosed (rather than EOF), so omitting it here
+	// lets one transient connection close escape directly to SQL even though
+	// the managed client has already invalidated the generation.  The same
+	// applies while the replacement generation is being connected or admitted.
 	return errors.Is(err, io.EOF) ||
 		errors.Is(err, io.ErrUnexpectedEOF) ||
 		logutil.IsExpectedConnectionCloseError(err) ||
+		moerr.IsMoErrCode(err, moerr.ErrBackendClosed) ||
+		moerr.IsMoErrCode(err, moerr.ErrBackendCannotConnect) ||
+		moerr.IsMoErrCode(err, moerr.ErrNoAvailableBackend) ||
+		moerr.IsMoErrCode(err, moerr.ErrConnectionReset) ||
 		moerr.IsMoErrCode(err, moerr.ErrNoHAKeeper) ||
 		moerr.IsMoErrCode(err, moerr.ErrUnexpectedEOF)
 }
@@ -1241,6 +1267,9 @@ func (c *managedHAKeeperClient) resetClientLocked() {
 }
 
 func (c *managedHAKeeperClient) prepareClientLocked(ctx context.Context) error {
+	if c.mu.closed {
+		return moerr.NewClientClosed(ctx)
+	}
 	if c.mu.client != nil {
 		return nil
 	}

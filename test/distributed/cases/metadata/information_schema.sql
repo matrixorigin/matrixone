@@ -76,4 +76,15 @@ from information_schema.columns
 where table_schema = 'information_schema_data_type_case'
   and table_name = 'composite_pk_probe'
 order by ordinal_position;
+
+-- LIMIT may stop a lazy UNION ALL before every statically planned
+-- materialized-CTE reader starts. Reusing the prepared plan must still begin a
+-- fresh source generation.
+set @metadata_schema = 'information_schema_data_type_case';
+set @metadata_table = 'composite_pk_probe';
+set @metadata_column = 'v';
+prepare metadata_limit_reuse from 'select column_name from information_schema.columns where table_schema = ? and table_name = ? and column_name = ? limit 1';
+execute metadata_limit_reuse using @metadata_schema, @metadata_table, @metadata_column;
+execute metadata_limit_reuse using @metadata_schema, @metadata_table, @metadata_column;
+deallocate prepare metadata_limit_reuse;
 drop database information_schema_data_type_case;

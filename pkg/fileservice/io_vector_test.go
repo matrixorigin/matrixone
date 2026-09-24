@@ -53,6 +53,7 @@ func (r *releaseCountingData) Release() {
 
 func TestIOVectorReleaseReadResultOnErrorSkipsUndoneReleaseData(t *testing.T) {
 	var cacheReleases atomic.Int32
+	var pinReleases atomic.Int32
 	var doneReleaseData atomic.Int32
 	var undoneReleaseData atomic.Int32
 
@@ -60,6 +61,9 @@ func TestIOVectorReleaseReadResultOnErrorSkipsUndoneReleaseData(t *testing.T) {
 		Entries: []IOEntry{
 			{
 				CachedData: &releaseCountingData{releases: &cacheReleases},
+				releaseCachedData: func() {
+					pinReleases.Add(1)
+				},
 				releaseData: func() {
 					doneReleaseData.Add(1)
 				},
@@ -68,6 +72,9 @@ func TestIOVectorReleaseReadResultOnErrorSkipsUndoneReleaseData(t *testing.T) {
 			},
 			{
 				CachedData: &releaseCountingData{releases: &cacheReleases},
+				releaseCachedData: func() {
+					pinReleases.Add(1)
+				},
 				releaseData: func() {
 					undoneReleaseData.Add(1)
 				},
@@ -79,13 +86,16 @@ func TestIOVectorReleaseReadResultOnErrorSkipsUndoneReleaseData(t *testing.T) {
 	vector.ReleaseReadResultOnError()
 
 	require.Equal(t, int32(2), cacheReleases.Load())
+	require.Equal(t, int32(2), pinReleases.Load())
 	require.Equal(t, int32(1), doneReleaseData.Load())
 	require.Equal(t, int32(0), undoneReleaseData.Load())
 	require.Nil(t, vector.Entries[0].CachedData)
+	require.Nil(t, vector.Entries[0].releaseCachedData)
 	require.Nil(t, vector.Entries[0].releaseData)
 	require.False(t, vector.Entries[0].done)
 	require.Nil(t, vector.Entries[0].fromCache)
 	require.Nil(t, vector.Entries[1].CachedData)
+	require.Nil(t, vector.Entries[1].releaseCachedData)
 	require.NotNil(t, vector.Entries[1].releaseData)
 	require.False(t, vector.Entries[1].done)
 	require.Nil(t, vector.Entries[1].fromCache)

@@ -78,6 +78,7 @@ const (
 	ErrRegexpIllegalArgument       uint16 = 20206
 	ErrPreparedParamOutOfRange     uint16 = 20207
 	ErrTruncatedWrongValue         uint16 = 20208
+	ErrGroupConcatCut              uint16 = 20209
 
 	// Group 3: invalid input
 	ErrBadConfig            uint16 = 20300
@@ -116,6 +117,28 @@ const (
 	// allocated separately for SELECT ... INTO statements returning multiple rows.
 	ErrTooManyRows            uint16 = 20328
 	ErrMultiUpdateKeyConflict uint16 = 20329
+	// ErrInvalidJSONCharset reports a string charset that cannot be converted
+	// to a JSON value. Keep this separate from the regexp charset mismatch code.
+	ErrInvalidJSONCharset uint16 = 20331
+	// ErrCharacterSetMismatch reports MySQL's binary/nonbinary regexp
+	// compatibility error. Keep this distinct from ErrInvalidArg so clients can
+	// reliably inspect ER_CHARACTER_SET_MISMATCH (3995).
+	ErrCharacterSetMismatch uint16 = 20330
+	// Keep this distinct from ErrInvalidJSONCharset and ErrCharacterSetMismatch
+	// because all three errors are serialized through the internal error code.
+	ErrInvalidBitwiseAggregateOperandsSize uint16 = 20332
+	// These function errors preserve the native MySQL error contract when the
+	// required argument depends on a runtime system variable.
+	ErrWrongParamCountToNativeFct uint16 = 20333
+	ErrAESInvalidIV               uint16 = 20334
+	// ErrUserLockWrongName preserves MySQL's ER_USER_LOCK_WRONG_NAME contract.
+	ErrUserLockWrongName uint16 = 20335
+	// ErrInvalidBitwiseOperandsSize reports a scalar binary-string bitwise
+	// length mismatch as a user-input error.
+	ErrInvalidBitwiseOperandsSize uint16 = 20336
+	// ErrCannotConvertString preserves MySQL's binary-to-text conversion error
+	// when a character function receives invalid UTF-8 bytes.
+	ErrCannotConvertString uint16 = 20337
 
 	// Group 4: unexpected state and io errors
 	ErrInvalidState                             uint16 = 20400
@@ -434,6 +457,7 @@ var errorMsgRefer = map[uint16]moErrorMsgItem{
 	ErrRegexpIllegalArgument:       {ER_REGEXP_ILLEGAL_ARGUMENT, []string{MySQLDefaultSqlState}, "Illegal argument to a regular expression."},
 	ErrPreparedParamOutOfRange:     {ER_DATA_OUT_OF_RANGE, []string{"22003"}, "%s value is out of range in '%s'"},
 	ErrTruncatedWrongValue:         {ER_TRUNCATED_WRONG_VALUE, []string{"22007"}, "Truncated incorrect %-.64s value: '%-.128s'"},
+	ErrGroupConcatCut:              {ER_CUT_VALUE_GROUP_CONCAT, []string{"HY000"}, "%s"},
 
 	// Group 3: invalid input
 	ErrBadConfig:            {ER_UNKNOWN_ERROR, []string{MySQLDefaultSqlState}, "invalid configuration: %s"},
@@ -452,6 +476,7 @@ var errorMsgRefer = map[uint16]moErrorMsgItem{
 	ErrOperandColumns:       {ER_OPERAND_COLUMNS, []string{"21000"}, "Operand should contain %d column(s)"},
 	ErrSubqueryNo1Row:       {ER_SUBQUERY_NO_1_ROW, []string{"21000"}, "Subquery returns more than 1 row"},
 	ErrInvalidTypeForJSON:   {ER_UNKNOWN_ERROR, []string{MySQLDefaultSqlState}, "Invalid data type for JSON data in argument %d to function %s; a JSON string or JSON type is required."},
+	ErrInvalidJSONCharset:   {ER_INVALID_JSON_CHARSET, []string{"22032"}, "Cannot create a JSON value from a string with CHARACTER SET '%s'."},
 	ErrUnknownStmtHandler:   {ER_UNKNOWN_STMT_HANDLER, []string{MySQLDefaultSqlState}, "Unknown prepared statement handler (%s) given to %s"},
 	ErrViewWrongList:        {ER_VIEW_WRONG_LIST, []string{MySQLDefaultSqlState}, "In definition of view, derived table or common table expression, SELECT list and column names list have different column counts"},
 	ErrWrongArguments:       {ER_WRONG_ARGUMENTS, []string{MySQLDefaultSqlState}, "Incorrect arguments to %s"},
@@ -465,8 +490,15 @@ var errorMsgRefer = map[uint16]moErrorMsgItem{
 	ErrInvalidGroupFuncUse:  {ER_INVALID_GROUP_FUNC_USE, []string{MySQLDefaultSqlState}, "Invalid use of group function"},
 	// Maps to MySQL's ER_FT_MATCHING_KEY_NOT_FOUND (1191), which rejects the same no-index
 	// CREATE / ALTER / CREATE OR REPLACE VIEW, so clients see the code and text they expect.
-	ErrFtMatchingKeyNotFound:  {ER_FT_MATCHING_KEY_NOT_FOUND, []string{MySQLDefaultSqlState}, FtMatchingKeyNotFoundMsg},
-	ErrMultiUpdateKeyConflict: {ER_MULTI_UPDATE_KEY_CONFLICT, []string{MySQLDefaultSqlState}, "Primary key/partition key update is not allowed since the table is updated both as '%-.192s' and '%-.192s'."},
+	ErrFtMatchingKeyNotFound:               {ER_FT_MATCHING_KEY_NOT_FOUND, []string{MySQLDefaultSqlState}, FtMatchingKeyNotFoundMsg},
+	ErrMultiUpdateKeyConflict:              {ER_MULTI_UPDATE_KEY_CONFLICT, []string{MySQLDefaultSqlState}, "Primary key/partition key update is not allowed since the table is updated both as '%-.192s' and '%-.192s'."},
+	ErrCharacterSetMismatch:                {ER_CHARACTER_SET_MISMATCH, []string{"HY000"}, "Character set '%s' cannot be used in conjunction with '%s' in call to %s."},
+	ErrInvalidBitwiseAggregateOperandsSize: {ER_INVALID_BITWISE_AGGREGATE_OPERANDS_SIZE, []string{MySQLDefaultSqlState}, "Aggregate bitwise functions cannot accept arguments longer than 511 bytes; consider using the SUBSTRING() function"},
+	ErrInvalidBitwiseOperandsSize:          {ER_INVALID_BITWISE_OPERANDS_SIZE, []string{MySQLDefaultSqlState}, "Binary operands of bitwise operators must be of equal length"},
+	ErrCannotConvertString:                 {ER_CANNOT_CONVERT_STRING, []string{MySQLDefaultSqlState}, "Cannot convert string '%.64s' from %s to %s"},
+	ErrWrongParamCountToNativeFct:          {ER_WRONG_PARAMCOUNT_TO_NATIVE_FCT, []string{"42000"}, "Incorrect parameter count in the call to native function '%-.192s'"},
+	ErrAESInvalidIV:                        {ER_AES_INVALID_IV, []string{"HY000"}, "The initialization vector supplied to %s is too short. Must be at least %d bytes long"},
+	ErrUserLockWrongName:                   {ER_USER_LOCK_WRONG_NAME, []string{"42000"}, "Incorrect user-level lock name '%-.192s'."},
 
 	// Group 4: unexpected state or file io error
 	ErrInvalidState:                             {ER_UNKNOWN_ERROR, []string{MySQLDefaultSqlState}, "invalid state %s"},
@@ -1065,6 +1097,13 @@ func NewDataTruncatedf(ctx context.Context, typ string, format string, args ...a
 	return newError(ctx, ErrDataTruncated, typ, msg)
 }
 
+func NewGroupConcatCut(ctx context.Context, message string) *Error {
+	if message == "" {
+		message = "Row 1 was cut by GROUP_CONCAT()"
+	}
+	return newError(ctx, ErrGroupConcatCut, message)
+}
+
 func NewInvalidArg(ctx context.Context, arg string, val any) *Error {
 	msg := fmt.Sprintf("%v", val)
 	return newError(ctx, ErrInvalidArg, arg, msg)
@@ -1114,6 +1153,18 @@ func NewWrongArguments(ctx context.Context, function string) *Error {
 	return newError(ctx, ErrWrongArguments, function)
 }
 
+func NewWrongParamCountToNativeFct(ctx context.Context, function string) *Error {
+	return newError(ctx, ErrWrongParamCountToNativeFct, function)
+}
+
+func NewAESInvalidIV(ctx context.Context, function string, minLength int) *Error {
+	return newError(ctx, ErrAESInvalidIV, function, minLength)
+}
+
+func NewUserLockWrongName(ctx context.Context, name string) *Error {
+	return newError(ctx, ErrUserLockWrongName, name)
+}
+
 func NewWrongUsage(ctx context.Context, first, second string) *Error {
 	return newError(ctx, ErrWrongUsage, first, second)
 }
@@ -1130,8 +1181,28 @@ func NewInvalidGroupFuncUse(ctx context.Context) *Error {
 	return newError(ctx, ErrInvalidGroupFuncUse)
 }
 
+func NewInvalidBitwiseAggregateOperandsSize(ctx context.Context) *Error {
+	return newError(ctx, ErrInvalidBitwiseAggregateOperandsSize)
+}
+
+func NewInvalidBitwiseOperandsSize(ctx context.Context) *Error {
+	return newError(ctx, ErrInvalidBitwiseOperandsSize)
+}
+
+func NewCannotConvertString(ctx context.Context, value, from, to string) *Error {
+	return newError(ctx, ErrCannotConvertString, value, from, to)
+}
+
 func NewInvalidTypeForJSON(ctx context.Context, argument int, function string) *Error {
 	return newError(ctx, ErrInvalidTypeForJSON, argument, function)
+}
+
+func NewInvalidJSONCharset(ctx context.Context, charset string) *Error {
+	return newError(ctx, ErrInvalidJSONCharset, charset)
+}
+
+func NewCharacterSetMismatch(ctx context.Context, left, right, function string) *Error {
+	return newError(ctx, ErrCharacterSetMismatch, left, right, function)
 }
 
 func NewUnknownStmtHandler(ctx context.Context, name, operation string) *Error {
@@ -1599,6 +1670,13 @@ func NewDuplicate(ctx context.Context) *Error {
 
 func NewDuplicateEntry(ctx context.Context, entry string, key string) *Error {
 	return newError(ctx, ErrDuplicateEntry, entry, key)
+}
+
+// FormatDuplicateEntry returns the duplicate-entry diagnostic text without
+// constructing or reporting an error. INSERT IGNORE uses this path because a
+// rejected row is an expected warning rather than an execution error.
+func FormatDuplicateEntry(entry string, key string) string {
+	return fmt.Sprintf(errorMsgRefer[ErrDuplicateEntry].errorMsgOrFormat, entry, key)
 }
 
 func NewWrongValueCountOnRow(ctx context.Context, row int) *Error {

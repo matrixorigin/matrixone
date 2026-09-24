@@ -72,3 +72,21 @@ func TestStatementOptionParamsPreserveNulls(t *testing.T) {
 	require.True(t, vec.IsNull(1))
 	require.Equal(t, []byte("value"), vec.GetRawBytesAt(2))
 }
+
+// WithOptimizerHints carries a per-statement optimizer_hints string (same format as the global
+// variable). The internal SQL executor bridges it onto the execution context; the planner applies
+// it. Value semantics: With* returns a new option and never mutates the receiver.
+func TestStatementOptionOptimizerHints(t *testing.T) {
+	var base StatementOption
+	require.Equal(t, "", base.OptimizerHints(), "default is empty")
+
+	set := base.WithOptimizerHints("applyIndices=1")
+	require.Equal(t, "applyIndices=1", set.OptimizerHints())
+	require.Equal(t, "", base.OptimizerHints(), "receiver must not be mutated")
+
+	multi := base.WithOptimizerHints("applyIndices=1,aggPushDown=1")
+	require.Equal(t, "applyIndices=1,aggPushDown=1", multi.OptimizerHints())
+
+	// Overwriting replaces rather than appends.
+	require.Equal(t, "x=1", set.WithOptimizerHints("x=1").OptimizerHints())
+}

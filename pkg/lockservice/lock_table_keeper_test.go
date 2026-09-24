@@ -323,7 +323,14 @@ func TestKeeper(t *testing.T) {
 				newRemoteLockTable(
 					"s1",
 					time.Second,
-					pb.LockTable{ServiceID: "s2"},
+					pb.LockTable{
+						Group:       0,
+						Table:       0,
+						OriginTable: 0,
+						ServiceID:   "s2",
+						Version:     1,
+						Valid:       true,
+					},
 					c,
 					func(lt pb.LockTable) {},
 					getLogger(""),
@@ -335,7 +342,14 @@ func TestKeeper(t *testing.T) {
 				newRemoteLockTable(
 					"s1",
 					time.Second,
-					pb.LockTable{ServiceID: "s1"},
+					pb.LockTable{
+						Group:       0,
+						Table:       1,
+						OriginTable: 1,
+						ServiceID:   "s1",
+						Version:     1,
+						Valid:       true,
+					},
 					c,
 					func(lt pb.LockTable) {},
 					getLogger(""),
@@ -1248,14 +1262,20 @@ func TestKeepRemoteLockBindChangedFencesActiveTxn(t *testing.T) {
 	)
 }
 
-func TestKeepRemoteLockBindChangedRefreshFailureInvalidatesOldBind(t *testing.T) {
+func TestKeepRemoteLockRejectedBindInvalidatesOldBind(t *testing.T) {
 	testCases := []struct {
-		name        string
-		withNewBind bool
-		keepErr     error
+		name               string
+		withNewBind        bool
+		keepErr            error
+		refreshReturnsSame bool
 	}{
 		{name: "new-bind", withNewBind: true},
 		{name: "bind-not-found", keepErr: ErrLockTableNotFound},
+		{
+			name:               "bind-changed-with-stale-allocator",
+			keepErr:            ErrLockTableBindChanged,
+			refreshReturnsSame: true,
+		},
 	}
 	for _, tc := range testCases {
 		t.Run(tc.name, func(t *testing.T) {
@@ -1273,6 +1293,8 @@ func TestKeepRemoteLockBindChangedRefreshFailureInvalidatesOldBind(t *testing.T)
 						Group: 0, Table: 2, OriginTable: 2,
 						ServiceID: "s2", Version: 1, Valid: true,
 					}
+					var oldKeepCalls atomic.Int64
+					var unrelatedKeepCalls atomic.Int64
 
 					server.RegisterMethodHandler(
 						pb.Method_KeepRemoteLock,
@@ -1283,11 +1305,14 @@ func TestKeepRemoteLockBindChangedRefreshFailureInvalidatesOldBind(t *testing.T)
 							resp *pb.Response,
 							cs morpc.ClientSession) {
 							var err error
-							if req.LockTable.Table == oldBind.Table && tc.withNewBind {
-								resp.NewBind = &responseBind
-							}
 							if req.LockTable.Table == oldBind.Table {
+								oldKeepCalls.Add(1)
+								if tc.withNewBind {
+									resp.NewBind = &responseBind
+								}
 								err = tc.keepErr
+							} else {
+								unrelatedKeepCalls.Add(1)
 							}
 							writeResponse(getLogger(""), cancel, resp, err, cs)
 						})
@@ -1299,6 +1324,11 @@ func TestKeepRemoteLockBindChangedRefreshFailureInvalidatesOldBind(t *testing.T)
 							req *pb.Request,
 							resp *pb.Response,
 							cs morpc.ClientSession) {
+							if tc.refreshReturnsSame {
+								resp.GetBind.LockTable = oldBind
+								writeResponse(getLogger(""), cancel, resp, nil, cs)
+								return
+							}
 							writeResponse(
 								getLogger(""),
 								cancel,
@@ -1363,6 +1393,8 @@ func TestKeepRemoteLockBindChangedRefreshFailureInvalidatesOldBind(t *testing.T)
 					}
 					keeper.doKeepRemoteLock(context.Background(), nil, nil)
 
+					require.Equal(t, int64(1), oldKeepCalls.Load())
+					require.Equal(t, int64(1), unrelatedKeepCalls.Load())
 					oldTxn.Lock()
 					require.True(t, oldTxn.bindChanged)
 					oldTxn.Unlock()
@@ -1375,8 +1407,18 @@ func TestKeepRemoteLockBindChangedRefreshFailureInvalidatesOldBind(t *testing.T)
 						unrelatedBind,
 						svc.tableGroups.get(unrelatedBind.Group, unrelatedBind.Table).getBind(),
 					)
+					require.Equal(t, []pb.LockTable{unrelatedBind}, svc.collectRemoteLockBinds(nil))
+					svc.mu.RLock()
+					oldRef := svc.mu.remoteBindRefs[makeRemoteBindKey(oldBind)]
+					svc.mu.RUnlock()
+					require.True(t, oldRef.invalidated)
 
-					closeTxn := func(txnID []byte, txn *activeTxn) {
+					keeper.doKeepRemoteLock(context.Background(), nil, nil)
+					require.Equal(t, int64(1), oldKeepCalls.Load(),
+						"an owner-rejected bind must not be retried while cleanup is pending")
+					require.Equal(t, int64(2), unrelatedKeepCalls.Load())
+
+					closeTxn := func(txnID []byte, txn *activeTxn, bind pb.LockTable) {
 						require.Equal(t, txn, svc.activeTxnHolder.deleteActiveTxn(txnID))
 						txn.Lock()
 						err := txn.close(
@@ -1387,9 +1429,11 @@ func TestKeepRemoteLockBindChangedRefreshFailureInvalidatesOldBind(t *testing.T)
 						)
 						txn.Unlock()
 						require.NoError(t, err)
+						svc.releaseTxnBindRefs([]pb.LockTable{bind})
 					}
-					closeTxn(oldTxnID, oldTxn)
-					closeTxn(unrelatedTxnID, unrelatedTxn)
+					closeTxn(oldTxnID, oldTxn, oldBind)
+					closeTxn(unrelatedTxnID, unrelatedTxn, unrelatedBind)
+					require.Empty(t, svc.collectRemoteLockBinds(nil))
 				},
 			)
 		})
@@ -1585,28 +1629,250 @@ func TestKeepRemoteLockMissingOwnerFencesActiveTxn(t *testing.T) {
 			} else {
 				require.Nil(t, svc.tableGroups.get(oldBind.Group, oldBind.Table))
 			}
-			expectedBinds := []pb.LockTable{oldBind}
+			expectedBinds := []pb.LockTable(nil)
 			if test.addReplacementTxn {
 				expectedBinds = append(expectedBinds, newBind)
 			}
 			require.ElementsMatch(t, expectedBinds, svc.collectRemoteLockBinds(nil),
-				"bind leases stay owned until their transactions clean up")
+				"an invalidated bind must stop keeper retries before transaction cleanup")
+			svc.mu.RLock()
+			oldRef, oldRefExists := svc.mu.remoteBindRefs[makeRemoteBindKey(oldBind)]
+			svc.mu.RUnlock()
+			require.True(t, oldRefExists,
+				"transaction cleanup still owns the invalidated bind ref")
+			require.True(t, oldRef.invalidated)
+			expectedOldRefs := uint64(1)
+			if test.addIntentTxn {
+				expectedOldRefs++
+			}
+			require.Equal(t, expectedOldRefs, oldRef.refs)
+
+			keeper.doKeepRemoteLock(context.Background(), nil, nil)
+			require.Equal(t, int64(1), client.missingKeepCalls.Load(),
+				"an invalidated bind must not be retried while its transaction remains open")
+			if test.addReplacementTxn {
+				require.Equal(t, int64(2), client.otherKeepCalls.Load())
+				require.Equal(t, int64(3), client.getBindCalls.Load())
+			} else {
+				require.Equal(t, int64(0), client.otherKeepCalls.Load())
+				require.Equal(t, int64(1), client.getBindCalls.Load())
+			}
+
+			if test.name == "route present" {
+				svc.mu.allocating = make(map[uint32]map[uint64]chan struct{})
+				cached, err := svc.getLockTableWithCreateContext(
+					context.Background(), oldBind.Group, oldBind.Table, [][]byte{{2}}, oldBind.Sharding)
+				require.NoError(t, err)
+				require.Equal(t, oldBind, cached.getBind())
+				canceled, cancel := context.WithCancel(context.Background())
+				cancel()
+				_, err = svc.Lock(canceled, oldBind.Table, [][]byte{{2}}, []byte("canceled"), pb.LockOptions{})
+				require.ErrorIs(t, err, context.Canceled)
+				require.Nil(t, svc.activeTxnHolder.getActiveTxn([]byte("canceled"), false, ""))
+				require.Same(t, cached, svc.tableGroups.get(oldBind.Group, oldBind.Table))
+				// DN can return the old bind after keeper invalidation but before
+				// membership converges. Each rejected admission must remove that
+				// route without reviving the old transaction or its heartbeats.
+				for _, id := range [][]byte{[]byte("rejected-first"), []byte("rejected-again")} {
+					_, err := svc.Lock(context.Background(), oldBind.Table, [][]byte{{2}}, id, pb.LockOptions{})
+					require.ErrorIs(t, err, ErrLockTableBindChanged)
+					require.Nil(t, svc.tableGroups.get(oldBind.Group, oldBind.Table))
+					txn := svc.activeTxnHolder.getActiveTxn(id, false, "")
+					require.NotNil(t, txn)
+					require.Empty(t, txn.lockHolders, "rejection must not acquire an intent/ref")
+					closeTxn(id, txn, pb.LockTable{})
+				}
+				require.Equal(t, int64(3), client.getBindCalls.Load())
+				_, err = svc.getLockTableWithCreateContext(
+					context.Background(), oldBind.Group, oldBind.Table, [][]byte{{2}}, oldBind.Sharding)
+				require.NoError(t, err)
+				forwardID := []byte("rejected-forward")
+				req := &pb.Request{
+					Method: pb.Method_ForwardLock, LockTable: oldBind,
+					Lock: pb.LockRequest{TxnID: forwardID, Rows: [][]byte{{2}},
+						Options: pb.LockOptions{ForwardTo: svc.serviceID}},
+				}
+				resp := acquireResponse()
+				defer releaseResponse(resp)
+				cs := &testClientSession{ctx: context.Background()}
+				svc.handleForwardLock(context.Background(), nil, req, resp, cs)
+				require.True(t, cs.writeCalled)
+				require.True(t, moerr.IsMoErrCode(resp.UnwrapError(), moerr.ErrLockTableBindChanged))
+				require.Nil(t, svc.tableGroups.get(oldBind.Group, oldBind.Table))
+				forwardTxn := svc.activeTxnHolder.getActiveTxn(forwardID, false, "")
+				require.NotNil(t, forwardTxn)
+				require.Empty(t, forwardTxn.lockHolders)
+				closeTxn(forwardID, forwardTxn, pb.LockTable{})
+				// A Shared proxy can also receive a regular RemoteLock. It must
+				// leave the same refresh path open without sending to the old owner.
+				proxy := newLockTableProxy(svc.serviceID, "", newTable(oldBind), logger)
+				svc.tableGroups.set(oldBind.Group, oldBind.Table, proxy)
+				remoteID := []byte("rejected-remote-proxy")
+				req.Method = pb.Method_Lock
+				req.Lock.TxnID = remoteID
+				req.Lock.ServiceID = "rpc-caller"
+				req.Lock.Options.ForwardTo = ""
+				remoteResp := acquireResponse()
+				defer releaseResponse(remoteResp)
+				remoteSession := &testClientSession{ctx: context.Background()}
+				svc.handleRemoteLock(context.Background(), nil, req, remoteResp, remoteSession)
+				require.True(t, remoteSession.writeCalled)
+				require.True(t, moerr.IsMoErrCode(remoteResp.UnwrapError(), moerr.ErrLockTableBindChanged))
+				require.Nil(t, svc.tableGroups.get(oldBind.Group, oldBind.Table))
+				remoteTxn := svc.activeTxnHolder.getActiveTxn(remoteID, false, "")
+				require.NotNil(t, remoteTxn)
+				require.Empty(t, remoteTxn.lockHolders)
+				closeTxn(remoteID, remoteTxn, pb.LockTable{})
+				client.bind.ServiceID = "healthy-owner"
+				client.bind.Version++
+				cached, err = svc.getLockTableWithCreateContext(
+					context.Background(), oldBind.Group, oldBind.Table, [][]byte{{2}}, oldBind.Sharding)
+				require.NoError(t, err)
+				require.Equal(t, client.bind, cached.getBind())
+				require.Equal(t, int64(5), client.getBindCalls.Load())
+				id := []byte("recovered")
+				txn := svc.activeTxnHolder.getActiveTxn(id, true, "")
+				svc.bindChangeMu.RLock()
+				txn.Lock()
+				acquired := svc.acquireRemoteTxnBindRef(txn, cached.getBind())
+				txn.Unlock()
+				svc.bindChangeMu.RUnlock()
+				require.True(t, acquired, "fresh admission must recover before old transaction cleanup")
+				closeTxn(id, txn, cached.getBind())
+				svc.mu.RLock()
+				retained := svc.mu.remoteBindRefs[makeRemoteBindKey(oldBind)]
+				svc.mu.RUnlock()
+				require.Equal(t, oldRef, retained, "route recovery must retain the exact safety tombstone")
+				require.True(t, oldTxn.bindChanged)
+				require.Empty(t, svc.collectRemoteLockBinds(nil))
+			}
 
 			closeTxn(oldTxnID, oldTxn, oldBind)
 			if test.addIntentTxn {
 				closeTxn(intentTxnID, intentTxn, oldBind)
+			}
+			svc.mu.RLock()
+			_, oldRefExists = svc.mu.remoteBindRefs[makeRemoteBindKey(oldBind)]
+			svc.mu.RUnlock()
+			require.False(t, oldRefExists,
+				"the invalidated tombstone must leave after its last transaction cleans up")
+			if test.addReplacementTxn {
+				newTxn.Lock()
+				require.False(t, newTxn.bindChanged)
+				newTxn.Unlock()
+				closeTxn(newTxnID, newTxn, newBind)
 			}
 			keeper.doKeepRemoteLock(context.Background(), nil, nil)
 			require.Equal(t, int64(1), client.missingKeepCalls.Load(),
 				"a cleaned stale bind must not be retried by later keeper rounds")
 			if test.addReplacementTxn {
 				require.Equal(t, int64(2), client.otherKeepCalls.Load())
-				newTxn.Lock()
-				require.False(t, newTxn.bindChanged)
-				newTxn.Unlock()
-				closeTxn(newTxnID, newTxn, newBind)
 			}
 			require.Empty(t, svc.collectRemoteLockBinds(nil))
+		})
+	}
+}
+
+type rejectedBindTestTable struct {
+	lockTable
+	onGetBind func() pb.LockTable
+	onClose   func(closeReason)
+}
+
+func (l *rejectedBindTestTable) getBind() pb.LockTable    { return l.onGetBind() }
+func (l *rejectedBindTestTable) close(reason closeReason) { l.onClose(reason) }
+
+func TestDetachRejectedRemoteBindPinsReferenceUntilRemoval(t *testing.T) {
+	bind := pb.LockTable{Table: 1, ServiceID: "owner", Version: 1, Valid: true}
+	svc := &service{serviceID: "source"}
+	svc.tableGroups = &lockTableHolders{holders: make(map[uint32]*lockTableHolder)}
+	require.True(t, svc.acquireRemoteBindRef(bind))
+	svc.invalidateRemoteBindRef(bind)
+	closed := 0
+	table := &rejectedBindTestTable{
+		onGetBind: func() pb.LockTable {
+			// Last-release/reacquisition cannot cross the ref-check/removal
+			// boundary, and concurrent publication cannot replace this route.
+			if svc.mu.TryLock() {
+				svc.mu.Unlock()
+				t.Error("reference was not pinned through route removal")
+			}
+			if svc.bindChangeMu.TryLock() {
+				svc.bindChangeMu.Unlock()
+				t.Error("route removal was not serialized with publication")
+			}
+			return bind
+		},
+		onClose: func(reason closeReason) {
+			closed++
+			require.Equal(t, closeReasonBindChanged, reason)
+			// Close runs after every mutation lock is released and can reenter
+			// lookup or release the last transaction reference independently.
+			require.True(t, svc.bindChangeMu.TryLock())
+			svc.bindChangeMu.Unlock()
+			require.Nil(t, svc.tableGroups.get(bind.Group, bind.Table))
+			svc.releaseTxnBindRefs([]pb.LockTable{bind})
+		},
+	}
+	svc.tableGroups.set(bind.Group, bind.Table, table)
+	svc.detachRejectedRemoteBind(bind)
+	svc.detachRejectedRemoteBind(bind)
+	require.Equal(t, 1, closed)
+	require.Empty(t, svc.mu.remoteBindRefs)
+}
+
+func TestDetachRejectedRemoteBindPreservesLiveState(t *testing.T) {
+	oldBind := pb.LockTable{Group: 1, Table: 2, OriginTable: 2, ServiceID: "owner", Version: 1, Valid: true, AllocatorID: "allocator"}
+	for _, test := range []struct {
+		name   string
+		change func(*service, *pb.LockTable)
+		remove bool
+	}{
+		{name: "exact invalidated route", remove: true},
+		{name: "new route", change: func(_ *service, bind *pb.LockTable) { bind.Version++ }},
+		{name: "routing metadata", change: func(_ *service, bind *pb.LockTable) { bind.OriginTable++ }},
+		{name: "allocator incarnation", change: func(_ *service, bind *pb.LockTable) { bind.AllocatorID = "new-allocator" }},
+		{name: "other group", change: func(_ *service, bind *pb.LockTable) { bind.Group++ }},
+		{name: "local owner", change: func(s *service, _ *pb.LockTable) { s.serviceID = oldBind.ServiceID }},
+		{name: "last reference released", change: func(s *service, _ *pb.LockTable) {
+			s.releaseTxnBindRefs([]pb.LockTable{oldBind})
+		}},
+		{name: "same key reacquired", change: func(s *service, _ *pb.LockTable) {
+			s.releaseTxnBindRefs([]pb.LockTable{oldBind})
+			require.True(t, s.acquireRemoteBindRef(oldBind))
+		}},
+	} {
+		t.Run(test.name, func(t *testing.T) {
+			svc := &service{serviceID: "source"}
+			logger := getLogger("")
+			svc.tableGroups = &lockTableHolders{holders: make(map[uint32]*lockTableHolder), logger: logger}
+			require.True(t, svc.acquireRemoteBindRef(oldBind))
+			svc.invalidateRemoteBindRef(oldBind)
+			currentBind := oldBind
+			if test.change != nil {
+				test.change(svc, &currentBind)
+			}
+			table := newRemoteLockTable(svc.serviceID, time.Second, currentBind, nil, nil, logger)
+			svc.tableGroups.set(currentBind.Group, currentBind.Table, table)
+			beforeRef := svc.mu.remoteBindRefs[makeRemoteBindKey(oldBind)]
+			beforeVersion := svc.tableGroups.getVersion()
+			svc.detachRejectedRemoteBind(oldBind)
+			if test.remove {
+				require.Nil(t, svc.tableGroups.get(currentBind.Group, currentBind.Table))
+				require.Equal(t, beforeVersion+1, svc.tableGroups.getVersion())
+			} else {
+				require.Same(t, table, svc.tableGroups.get(currentBind.Group, currentBind.Table))
+				require.Equal(t, beforeVersion, svc.tableGroups.getVersion())
+			}
+			require.Equal(t, beforeRef, svc.mu.remoteBindRefs[makeRemoteBindKey(oldBind)])
+			// A second delayed rejection is idempotent, including the absent-route case.
+			afterVersion := svc.tableGroups.getVersion()
+			svc.detachRejectedRemoteBind(oldBind)
+			require.Equal(t, afterVersion, svc.tableGroups.getVersion())
+			svc.tableGroups.removeWithFilter(func(uint64, lockTable) bool { return true }, closeReasonBindChanged)
+			svc.serviceID = "source"
+			svc.releaseTxnBindRefs([]pb.LockTable{oldBind})
+			require.Empty(t, svc.mu.remoteBindRefs)
 		})
 	}
 }
@@ -1620,6 +1886,7 @@ func TestKeepRemoteLockFailureFetchesNewBindAndFencesActiveTxn(t *testing.T) {
 			newBind.ServiceID = "s3"
 			newBind.Version = 2
 
+			var keepCalls atomic.Int64
 			server.RegisterMethodHandler(
 				pb.Method_GetBind,
 				func(
@@ -1639,6 +1906,7 @@ func TestKeepRemoteLockFailureFetchesNewBindAndFencesActiveTxn(t *testing.T) {
 					req *pb.Request,
 					resp *pb.Response,
 					cs morpc.ClientSession) {
+					keepCalls.Add(1)
 					writeResponse(getLogger(""), cancel, resp, ErrLockTableNotFound, cs)
 				})
 
@@ -1680,10 +1948,17 @@ func TestKeepRemoteLockFailureFetchesNewBindAndFencesActiveTxn(t *testing.T) {
 			}
 			keeper.doKeepRemoteLock(context.Background(), nil, nil)
 
+			require.Equal(t, int64(1), keepCalls.Load())
 			txn.Lock()
 			require.True(t, txn.bindChanged)
 			txn.Unlock()
 			require.Equal(t, newBind, svc.tableGroups.get(newBind.Group, newBind.Table).getBind())
+			require.Empty(t, svc.collectRemoteLockBinds(nil),
+				"a superseded bind must stop keeper retries before transaction cleanup")
+
+			keeper.doKeepRemoteLock(context.Background(), nil, nil)
+			require.Equal(t, int64(1), keepCalls.Load(),
+				"the fenced transaction must not heartbeat its superseded bind")
 
 			require.Equal(t, txn, svc.activeTxnHolder.deleteActiveTxn(txnID))
 			txn.Lock()
@@ -1692,6 +1967,11 @@ func TestKeepRemoteLockFailureFetchesNewBindAndFencesActiveTxn(t *testing.T) {
 			}, logger)
 			txn.Unlock()
 			require.NoError(t, err)
+			svc.releaseTxnBindRefs([]pb.LockTable{oldBind})
+			svc.mu.RLock()
+			_, oldRefExists := svc.mu.remoteBindRefs[makeRemoteBindKey(oldBind)]
+			svc.mu.RUnlock()
+			require.False(t, oldRefExists)
 		},
 	)
 }

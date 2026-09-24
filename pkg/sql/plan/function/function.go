@@ -116,13 +116,22 @@ func GetFunctionIsVolatileOrRealTimeRelatedByName(name string) bool {
 }
 
 func GetFunctionIsWinOrderFunById(overloadID int64) bool {
-	fid, _ := DecodeOverloadID(overloadID)
+	fid, oIndex := DecodeOverloadID(overloadID)
+	if !validFunctionOverloadID(fid, oIndex) {
+		return false
+	}
 	return allSupportedFunctions[fid].isWindowOrder()
+}
+
+func validFunctionOverloadID(fid, oIndex int32) bool {
+	return fid >= 0 && int(fid) < len(allSupportedFunctions) &&
+		int(fid) == allSupportedFunctions[fid].functionId &&
+		oIndex >= 0 && int(oIndex) < len(allSupportedFunctions[fid].Overloads)
 }
 
 func GetFunctionIsZonemappableById(ctx context.Context, overloadID int64) (bool, error) {
 	fid, oIndex := DecodeOverloadID(overloadID)
-	if int(fid) >= len(allSupportedFunctions) || int(fid) != allSupportedFunctions[fid].functionId {
+	if !validFunctionOverloadID(fid, oIndex) {
 		return false, moerr.NewInvalidInput(ctx, "function overload id not found")
 	}
 	f := allSupportedFunctions[fid]
@@ -134,15 +143,15 @@ func GetFunctionIsZonemappableById(ctx context.Context, overloadID int64) (bool,
 
 func GetFunctionById(ctx context.Context, overloadID int64) (f overload, err error) {
 	fid, oIndex := DecodeOverloadID(overloadID)
-	if fid < 0 || int(fid) >= len(allSupportedFunctions) || int(fid) != allSupportedFunctions[fid].functionId {
+	if !validFunctionOverloadID(fid, oIndex) {
 		return overload{}, moerr.NewInvalidInput(ctx, "function overload id not found")
 	}
 	return allSupportedFunctions[fid].Overloads[oIndex], nil
 }
 
 func GetLayoutById(ctx context.Context, overloadID int64) (FuncExplainLayout, error) {
-	fid, _ := DecodeOverloadID(overloadID)
-	if fid < 0 || int(fid) >= len(allSupportedFunctions) || int(fid) != allSupportedFunctions[fid].functionId {
+	fid, oIndex := DecodeOverloadID(overloadID)
+	if !validFunctionOverloadID(fid, oIndex) {
 		return 0, moerr.NewInvalidInput(ctx, "function overload id not found")
 	}
 	return allSupportedFunctions[fid].layout, nil
@@ -150,13 +159,54 @@ func GetLayoutById(ctx context.Context, overloadID int64) (FuncExplainLayout, er
 
 func GetFunctionByIdWithoutError(overloadID int64) (f overload, exists bool) {
 	fid, oIndex := DecodeOverloadID(overloadID)
-	if fid < 0 || int(fid) >= len(allSupportedFunctions) || int(fid) != allSupportedFunctions[fid].functionId {
+	if !validFunctionOverloadID(fid, oIndex) {
 		return overload{}, false
 	}
 	return allSupportedFunctions[fid].Overloads[oIndex], true
 }
 
 func GetFunctionByName(ctx context.Context, name string, args []types.Type) (r FuncGetResult, err error) {
+	return getFunctionByName(ctx, name, args, nil)
+}
+
+// StringDomainCheckMode separates an operand's current string domain from the
+// provenance rules that decide whether it participates in regexp charset
+// compatibility. A single boolean cannot represent both PREPARE-time
+// uncertainty and MySQL's execute-time parameter-marker exception.
+type StringDomainCheckMode uint8
+
+const (
+	// StringDomainCheckKnown applies the operand's current text/binary domain.
+	StringDomainCheckKnown StringDomainCheckMode = iota
+	// StringDomainCheckDeferred omits a PREPARE-time runtime-owned domain. The
+	// concrete execution must bind the operand again with a non-deferred mode.
+	StringDomainCheckDeferred
+	// StringDomainCheckParamMarker keeps the marker's current domain for
+	// compatibility with a fixed binary operand, but a binary marker does not
+	// itself trigger MySQL's static-binary restriction.
+	StringDomainCheckParamMarker
+	// StringDomainCheckDomainless omits a bare, untyped NULL literal.
+	StringDomainCheckDomainless
+)
+
+// GetFunctionByNameWithStringDomainCheckModes resolves a function while
+// preserving the provenance needed by regexp charset checks. Ordinary argument
+// types remain authoritative for overload selection, casts, result metadata,
+// and the executor's effective text/binary domain.
+func GetFunctionByNameWithStringDomainCheckModes(
+	ctx context.Context, name string, args []types.Type, modes []StringDomainCheckMode,
+) (r FuncGetResult, err error) {
+	if len(modes) != len(args) {
+		return r, moerr.NewInternalErrorf(
+			ctx, "string domain check mode count %d does not match argument count %d",
+			len(modes), len(args))
+	}
+	return getFunctionByName(ctx, name, args, modes)
+}
+
+func getFunctionByName(
+	ctx context.Context, name string, args []types.Type, stringDomainModes []StringDomainCheckMode,
+) (r FuncGetResult, err error) {
 	r.fid, err = getFunctionIdByName(ctx, name)
 	if err != nil {
 		return r, err
@@ -166,7 +216,10 @@ func GetFunctionByName(ctx context.Context, name string, args []types.Type) (r F
 		return r, moerr.NewNYIf(ctx, "should implement the function %s", name)
 	}
 
-	check := f.checkFn(f.Overloads, args)
+	check := f.checkArgumentTypes(args, stringDomainModes)
+	if r.fid == MINUS && signedUnsignedSubtraction(ctx, args) {
+		check = newCheckResultWithCast(3, integerDomainOperands(args))
+	}
 	switch check.status {
 	case succeedMatched:
 		r.overloadId = int32(check.idx)
@@ -181,7 +234,10 @@ func GetFunctionByName(ctx context.Context, name string, args []types.Type) (r F
 		r.cannotRunInParallel = f.Overloads[r.overloadId].cannotParallel
 
 	case failedFunctionParametersWrong:
-		if check.invalidJSONArgumentIndex != 0 {
+		if check.characterSetMismatch[0] != "" {
+			err = moerr.NewCharacterSetMismatch(
+				ctx, check.characterSetMismatch[0], check.characterSetMismatch[1], name)
+		} else if check.invalidJSONArgumentIndex != 0 {
 			err = moerr.NewInvalidTypeForJSON(ctx, check.invalidJSONArgumentIndex, name)
 		} else if f.isFunction() {
 			err = moerr.NewInvalidArg(ctx, fmt.Sprintf("function %s", name), args)
@@ -191,6 +247,9 @@ func GetFunctionByName(ctx context.Context, name string, args []types.Type) (r F
 
 	case failedAggParametersWrong:
 		err = moerr.NewInvalidArg(ctx, fmt.Sprintf("aggregate function %s", name), args)
+
+	case failedBitwiseAggregateOperandsSize:
+		err = moerr.NewInvalidBitwiseAggregateOperandsSize(ctx)
 
 	case failedTooManyFunctionMatched:
 		err = moerr.NewInvalidArg(ctx, fmt.Sprintf("too many overloads matched %s", name), args)
@@ -214,7 +273,7 @@ func GetFunctionByNameWithoutError(name string, args []types.Type) (r FuncGetRes
 		return FuncGetResult{}, false
 	}
 
-	check := f.checkFn(f.Overloads, args)
+	check := f.checkArgumentTypes(args, nil)
 	switch check.status {
 	case succeedMatched:
 		r.overloadId = int32(check.idx)
@@ -241,6 +300,12 @@ func GetFunctionByNameWithoutError(name string, args []types.Type) (r FuncGetRes
 func GetFunctionByNameWithOverload(
 	ctx context.Context, name string, args []types.Type, overloadID int32,
 ) (r FuncGetResult, err error) {
+	if name == "cast" && IsIntegerArgumentCastOverload(overloadID) {
+		if !integerArgumentCastSignature(overloadID, args) {
+			return FuncGetResult{}, moerr.NewInvalidInputf(ctx, "invalid integer argument cast signature %v", args)
+		}
+		return FuncGetResult{fid: CAST, overloadId: overloadID, retType: args[1]}, nil
+	}
 	r, err = GetFunctionByName(ctx, name, args)
 	if err != nil {
 		return r, err
@@ -249,7 +314,13 @@ func GetFunctionByNameWithOverload(
 	if overloadID < 0 || int(overloadID) >= len(f.Overloads) {
 		return FuncGetResult{}, moerr.NewInvalidInputf(ctx, "function overload %s.%d not found", name, overloadID)
 	}
+	if !f.bindsOverload(int(overloadID)) {
+		return FuncGetResult{}, moerr.NewInvalidInputf(ctx, "function overload %s.%d is legacy execution only", name, overloadID)
+	}
 	r.overloadId = overloadID
+	if r.needCast {
+		args = r.targetTypes
+	}
 	r.retType = f.Overloads[overloadID].retType(args)
 	r.cannotRunInParallel = f.Overloads[overloadID].cannotParallel
 	return r, nil
@@ -324,8 +395,18 @@ func GetAggFunctionNameByID(overloadID int64) string {
 // non-NULL. STRICT functions normally preserve an all-non-NULL argument
 // guarantee, except for functions that can synthesize NULL from valid values.
 func DeduceNotNullable(overloadID int64, args []*plan.Expr) bool {
-	fid, _ := DecodeOverloadID(overloadID)
+	fid, oid := DecodeOverloadID(overloadID)
 	switch fid {
+	case OCT:
+		// New string executors produce NULL for empty non-NULL input.
+		// Preserve the persisted legacy and numeric overload contracts.
+		if oid >= OctStringOverloadStart && len(args) == 1 {
+			switch types.T(args[0].Typ.Id) {
+			case types.T_char, types.T_varchar, types.T_text,
+				types.T_binary, types.T_varbinary, types.T_blob:
+				return false
+			}
+		}
 	case CASE:
 		if caseHasTemporalPromotion(args) {
 			return false
@@ -379,9 +460,12 @@ func DeduceNotNullable(overloadID int64, args []*plan.Expr) bool {
 	// The UUID extractors do so for non-RFC-4122 variants, and
 	// uuid_extract_timestamp also for versions without a time source (e.g. v4).
 	case DIV, INTEGER_DIV, MOD,
+		POW, EXP, COT,
 		JSON_EXTRACT, JSON_EXTRACT_STRING, JSON_EXTRACT_FLOAT64,
 		REGEXP_SUBSTR,
-		INET6_ATON, ELT, UNHEX, MAKEDATE,
+		INET6_ATON, INET_ATON, INET6_NTOA, ELT, UNHEX, CONV, MAKEDATE,
+		SHA2, AES_ENCRYPT, AES_DECRYPT, COMPRESS, UNCOMPRESS, EXTRACTVALUE, UPDATEXML,
+		DATE_FORMAT, TIME_FORMAT,
 		UUID_EXTRACT_VERSION, UUID_EXTRACT_TIMESTAMP,
 		TO_INTERVAL:
 		return false
@@ -522,13 +606,23 @@ type FuncNew struct {
 	// materializes this function's result as a table column.
 	hasExecutableCTASTypeDefault bool
 
-	// All overloads of the function.
+	// All execution overloads, including identities retained for old plans.
 	Overloads []overload
+
+	// Integer contexts and canonical binding identities are independent of the
+	// source numeric type. An empty bindingOverloads list keeps legacy binding.
+	integerParameters []integerParameter
+	bindingOverloads  []int
 
 	// checkFn was used to check whether the input type can match the requirement of the function.
 	// if matched, return the corresponding id of overload. If type conversion was required,
 	// the required type should be returned at the same time.
 	checkFn func(overloads []overload, inputs []types.Type) checkResult
+
+	// stringDomainCheckFn is the optional second-stage checker for functions
+	// whose string compatibility depends on operand provenance as well as the
+	// current text/binary type.
+	stringDomainCheckFn func(overloads []overload, inputs []types.Type, modes []StringDomainCheckMode) checkResult
 
 	// layout was used for `explain SQL`.
 	layout FuncExplainLayout
@@ -672,11 +766,12 @@ func (fn *FuncNew) testFlag(funcFlag plan.Function_FuncFlag) bool {
 type overloadCheckSituation int
 
 const (
-	succeedMatched                overloadCheckSituation = 0
-	succeedWithCast               overloadCheckSituation = -1
-	failedFunctionParametersWrong overloadCheckSituation = -2
-	failedAggParametersWrong      overloadCheckSituation = -3
-	failedTooManyFunctionMatched  overloadCheckSituation = -4
+	succeedMatched                     overloadCheckSituation = 0
+	succeedWithCast                    overloadCheckSituation = -1
+	failedFunctionParametersWrong      overloadCheckSituation = -2
+	failedAggParametersWrong           overloadCheckSituation = -3
+	failedTooManyFunctionMatched       overloadCheckSituation = -4
+	failedBitwiseAggregateOperandsSize overloadCheckSituation = -5
 )
 
 type checkResult struct {
@@ -686,6 +781,7 @@ type checkResult struct {
 	idx                      int
 	finalType                []types.Type
 	invalidJSONArgumentIndex int
+	characterSetMismatch     [2]string
 }
 
 func newCheckResultWithSuccess(overloadId int) checkResult {
@@ -700,6 +796,13 @@ func newCheckResultWithInvalidJSONArgument(argumentIndex int) checkResult {
 	return checkResult{
 		status:                   failedFunctionParametersWrong,
 		invalidJSONArgumentIndex: argumentIndex,
+	}
+}
+
+func newCheckResultWithCharacterSetMismatch(left, right string) checkResult {
+	return checkResult{
+		status:               failedFunctionParametersWrong,
+		characterSetMismatch: [2]string{left, right},
 	}
 }
 

@@ -1,0 +1,47 @@
+SET experimental_cagra_index = 1;
+drop database if exists cagra_copy_alter;
+create database cagra_copy_alter;
+use cagra_copy_alter;
+create table t (id bigint primary key, v vecf32(8), a int);
+insert into t
+select result,
+cast(concat('[', result, ',', result, ',', result, ',', result, ',',
+result, ',', result, ',', result, ',', result, ']') as vecf32(8)),
+result
+from generate_series(1,200) g;
+create index ix using cagra on t (v)
+op_type 'vector_l2_ops' intermediate_graph_degree=8 graph_degree=4;
+set @stbl = (select index_table_name from mo_catalog.mo_indexes
+where table_id=(select rel_id from mo_catalog.mo_tables
+where relname='t' and reldatabase='cagra_copy_alter')
+and name='ix' and algo_table_type='cagra_index');
+set @q = concat('select count(*) > 0 as has_base from `', @stbl, '` where tag = 0');
+prepare s from @q;
+execute s;
+➤ has_base[-7,1,0]  𝄀
+1
+deallocate prepare s;
+alter table t add column b int;
+set @stbl2 = (select index_table_name from mo_catalog.mo_indexes
+where table_id=(select rel_id from mo_catalog.mo_tables
+where relname='t' and reldatabase='cagra_copy_alter')
+and name='ix' and algo_table_type='cagra_index');
+set @q2 = concat('select count(*) > 0 as has_base from `', @stbl2, '` where tag = 0');
+prepare s2 from @q2;
+execute s2;
+➤ has_base[-7,1,0]  𝄀
+1
+deallocate prepare s2;
+select id from t order by l2_distance(v, '[7,7,7,7,7,7,7,7]') limit 1;
+➤ id[-5,64,0]  𝄀
+7
+select id from t order by l2_distance(v, '[123,123,123,123,123,123,123,123]') limit 1;
+➤ id[-5,64,0]  𝄀
+123
+select count(*) from t;
+➤ count(*)[-5,64,0]  𝄀
+200
+select a, b from t where id = 7;
+➤ a[4,32,0]  ¦  b[4,32,0]  𝄀
+7  ¦  null
+drop database cagra_copy_alter;

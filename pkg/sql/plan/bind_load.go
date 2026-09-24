@@ -18,14 +18,19 @@ import (
 	"encoding/json"
 
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
+	"github.com/matrixorigin/matrixone/pkg/container/types"
 	"github.com/matrixorigin/matrixone/pkg/pb/plan"
 	"github.com/matrixorigin/matrixone/pkg/sql/parsers/tree"
 )
 
 func (builder *QueryBuilder) bindLoad(stmt *tree.Load, bindCtx *BindContext) (int32, error) {
+	// LOAD never carries INSERT's duplicate-key ignore policy. Reset the
+	// statement-local flag in case a QueryBuilder is reused across DML binds.
+	builder.isInsertIgnore = false
+	assignmentIgnore := loadAssignmentIgnore(stmt)
 	dmlCtx := NewDMLContext()
 	builder.qry.LoadTag = true
-	lastNodeID, insertColToExpr, err := builder.bindExternalScan(stmt, bindCtx, dmlCtx)
+	lastNodeID, insertColToExpr, err := builder.bindExternalScan(stmt, bindCtx, dmlCtx, assignmentIgnore)
 	if err != nil {
 		return -1, err
 	}
@@ -39,7 +44,7 @@ func (builder *QueryBuilder) bindLoad(stmt *tree.Load, bindCtx *BindContext) (in
 	// strips them. HNSW/CAGRA/IVF-PQ are cron-maintained and ride the modern path.
 	irregularIndexes := getIrregularIndexes(tableDef)
 
-	lastNodeID, colName2Idx, skipUniqueIdx, err := builder.appendNodesForInsertStmt(bindCtx, lastNodeID, tableDef, dmlCtx.objRefs[0], insertColToExpr)
+	lastNodeID, colName2Idx, skipUniqueIdx, autoIncrementGeneratedColumn, err := builder.appendNodesForInsertStmt(bindCtx, lastNodeID, tableDef, dmlCtx.objRefs[0], insertColToExpr, assignmentIgnore)
 	if err != nil {
 		return -1, err
 	}
@@ -47,13 +52,14 @@ func (builder *QueryBuilder) bindLoad(stmt *tree.Load, bindCtx *BindContext) (in
 	// LOAD never carries ON DUPLICATE KEY UPDATE, so the irregular-index
 	// maintenance source is the pre-dedup new-row image set up inside
 	// appendDedupAndMultiUpdateNodesForBindInsert (insert-only, no old-row delete).
-	return builder.appendDedupAndMultiUpdateNodesForBindInsert(bindCtx, dmlCtx, lastNodeID, colName2Idx, skipUniqueIdx, nil, irregularIndexes)
+	return builder.appendDedupAndMultiUpdateNodesForBindInsert(bindCtx, dmlCtx, lastNodeID, colName2Idx, skipUniqueIdx, nil, irregularIndexes, autoIncrementGeneratedColumn)
 }
 
 func (builder *QueryBuilder) bindExternalScan(
 	stmt *tree.Load,
 	bindCtx *BindContext,
-	dmlCtx *DMLContext) (int32, map[string]*plan.Expr, error) {
+	dmlCtx *DMLContext,
+	assignmentIgnore bool) (int32, map[string]*plan.Expr, error) {
 	externalScanTag := builder.genNewBindTag()
 	err := dmlCtx.ResolveTables(builder.compCtx, tree.TableExprs{stmt.Table}, nil, nil, true)
 	if err != nil {
@@ -70,7 +76,7 @@ func (builder *QueryBuilder) bindExternalScan(
 	if err := InitNullMap(stmt.Param, ctx); err != nil {
 		return -1, nil, err
 	}
-	if err := validateLoadParquetOptions(stmt.Param, ctx); err != nil {
+	if err := validateLoadColumnarOptions(stmt.Param, ctx); err != nil {
 		return -1, nil, err
 	}
 	defaultParquetLoadParallel(stmt.Param, ctx)
@@ -148,19 +154,33 @@ func (builder *QueryBuilder) bindExternalScan(
 		}
 	}
 
+	// External scans expose target-typed columns. For BLOB/TEXT, equal type
+	// metadata does not prove that the runtime payload fits the target family.
+	if err = builder.applyLoadAssignmentCasts(tableDef, insertColToExpr, assignmentIgnore); err != nil {
+		return -1, nil, err
+	}
+
 	if err := checkNullMap(stmt, tableDef.Cols, ctx); err != nil {
 		return -1, nil, err
 	}
 
 	noCompress := getCompressType(stmt.Param, fileName) == tree.NOCOMPRESS
 	var offset int64 = 0
-	if stmt.Param.Tail.IgnoredLines > 0 && stmt.Param.Parallel && noCompress && !stmt.Param.Local {
+	// A pattern that survived checkFileExist matched more than one file, so the
+	// load fans out whole files and never splits one by byte offset.  The
+	// prescan exists only to seed that split: it would stamp one file's header
+	// length onto FileStartOff for every file and zero Tail.IgnoredLines, where
+	// the CSV reader instead re-applies IGNORE n LINES on each file it opens.
+	if stmt.Param.Tail.IgnoredLines > 0 && stmt.Param.Parallel && noCompress &&
+		!stmt.Param.Local && !LoadFilepathHasGlob(stmt.Param) {
 		offset, err = IgnoredLines(stmt.Param, ctx)
 		if err != nil {
 			return -1, nil, err
 		}
 		stmt.Param.FileStartOff = offset
 	}
+	stmt.Param.ArrowMatchByPosition = stmt.Param.Format == tree.ARROW &&
+		stmt.Param.Tail != nil && len(stmt.Param.Tail.ColumnList) > 0
 	applyLoadParallelAdmission(stmt.Param, offset)
 
 	stmt.Param.Tail.ColumnList = nil
@@ -213,4 +233,37 @@ func (builder *QueryBuilder) bindExternalScan(
 	lastNodeId := builder.appendNode(externalScanNode, bindCtx)
 
 	return lastNodeId, insertColToExpr, nil
+}
+
+func loadAssignmentIgnore(stmt *tree.Load) bool {
+	if stmt == nil {
+		return false
+	}
+	if tree.IsIgnoreStatement(stmt) {
+		return true
+	}
+	if !stmt.Local {
+		return false
+	}
+	_, replace := stmt.DuplicateHandling.(*tree.DuplicateKeyReplace)
+	return !replace
+}
+
+func (builder *QueryBuilder) applyLoadAssignmentCasts(
+	tableDef *plan.TableDef,
+	insertColToExpr map[string]*plan.Expr,
+	assignmentIgnore bool,
+) error {
+	for _, col := range tableDef.Cols {
+		expr, ok := insertColToExpr[col.Name]
+		if !ok || (col.Typ.Id != int32(types.T_blob) && col.Typ.Id != int32(types.T_text)) {
+			continue
+		}
+		casted, err := builder.forceAssignmentCastExpr(expr, col.Typ, assignmentIgnore)
+		if err != nil {
+			return err
+		}
+		insertColToExpr[col.Name] = casted
+	}
+	return nil
 }

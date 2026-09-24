@@ -229,6 +229,10 @@ type FeTxnOption struct {
 	// forcePessimisticObjectLifecycle marks statements that delete catalog
 	// objects and therefore must share GRANT's pessimistic lifecycle protocol.
 	forcePessimisticObjectLifecycle bool
+	// implicitCommitBefore marks a top-level TRUNCATE statement. Its old
+	// transaction has already been committed before authorization/planning;
+	// the transaction created for the statement must be finalized separately.
+	implicitCommitBefore bool
 }
 
 func (opt *FeTxnOption) Close() {
@@ -239,6 +243,7 @@ func (opt *FeTxnOption) Close() {
 	opt.activeTxnAtStart = false
 	opt.activeTxnAtStartKnown = false
 	opt.forcePessimisticObjectLifecycle = false
+	opt.implicitCommitBefore = false
 }
 
 const (
@@ -540,8 +545,11 @@ func (th *TxnHandler) Create(execCtx *ExecCtx) error {
 		}
 	}
 
-	// check BEGIN stmt
-	if execCtx.txnOpt.byBegin || !th.inActiveTxnUnsafe() {
+	// BEGIN and implicit-commit statements own a fresh transaction.  The latter
+	// has already committed any previous transaction at the statement boundary;
+	// keeping this condition here also makes the post-boundary transaction
+	// explicit and prevents TRUNCATE from reusing a stale workspace.
+	if execCtx.txnOpt.byBegin || execCtx.txnOpt.implicitCommitBefore || !th.inActiveTxnUnsafe() {
 		//commit existed txn anyway
 		err = th.createUnsafe(execCtx)
 		if err != nil {
@@ -867,6 +875,20 @@ func (th *TxnHandler) Commit(execCtx *ExecCtx) error {
 	return nil
 }
 
+// commitBeforeStatement ends the transaction that precedes a statement with
+// MySQL's implicit-commit-before rule.  It intentionally bypasses Commit's
+// option-bit policy: an explicit BEGIN or AUTOCOMMIT=0 must not keep the old
+// workspace alive across TRUNCATE.  The existing unsafe path remains the sole
+// owner of commit-result-unknown, temporary-table, and DDL-generation cleanup.
+func (th *TxnHandler) commitBeforeStatement(execCtx *ExecCtx) error {
+	if th == nil || execCtx == nil {
+		return nil
+	}
+	th.mu.Lock()
+	defer th.mu.Unlock()
+	return th.commitUnsafe(execCtx)
+}
+
 // validateLineageOwnerLifecycleBeforeCommitUnsafe is the single terminal
 // admission point for explicit transactions that mutated data-branch owner
 // catalogs. Callers hold th.mu and proceed directly to the physical commit, so
@@ -1110,6 +1132,9 @@ func (th *TxnHandler) rollback(
 func needToFinishTransactionAtStatementEnd(execCtx *ExecCtx) bool {
 	if execCtx == nil {
 		return false
+	}
+	if execCtx.txnOpt.implicitCommitBefore {
+		return true
 	}
 	if statementContainsTransactionCharacteristic(execCtx.stmt) {
 		return execCtx.txnOpt.activeTxnAtStartKnown && !execCtx.txnOpt.activeTxnAtStart

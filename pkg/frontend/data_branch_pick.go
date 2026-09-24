@@ -538,7 +538,8 @@ func materializeValuesUnified(
 	// Build a typed Vec from AST expressions.
 	vec := vector.NewVec(pkType)
 	for _, expr := range stmt.Keys.KeyExprs {
-		if appendErr := appendExprToVec(vec, expr, pkType, ses.GetTimeZone(), mp); appendErr != nil {
+		if appendErr := appendExprToVecWithPrepareParams(
+			vec, expr, pkType, ses.GetTimeZone(), mp, ses.proc.GetPrepareParams()); appendErr != nil {
 			vec.Free(mp)
 			return nil, appendErr
 		}
@@ -605,7 +606,8 @@ func materializeCompositeValuesUnified(
 		}
 		for i, elem := range tup.Exprs {
 			colType := tblStuff.def.colTypes[pkColIdxes[i]]
-			if appendErr := appendExprToVec(compVecs[i], elem, colType, ses.GetTimeZone(), mp); appendErr != nil {
+			if appendErr := appendExprToVecWithPrepareParams(
+				compVecs[i], elem, colType, ses.GetTimeZone(), mp, ses.proc.GetPrepareParams()); appendErr != nil {
 				return nil, appendErr
 			}
 		}
@@ -1290,6 +1292,19 @@ func normalizePickTimeZone(loc *time.Location) *time.Location {
 
 // appendExprToVec appends a literal AST expression value to a typed vector.
 func appendExprToVec(vec *vector.Vector, expr tree.Expr, pkType types.Type, tz *time.Location, mp *mpool.MPool) error {
+	return appendExprToVecWithPrepareParams(vec, expr, pkType, tz, mp, nil)
+}
+
+// appendExprToVecWithPrepareParams appends a literal or prepared parameter
+// value to a typed vector.
+func appendExprToVecWithPrepareParams(
+	vec *vector.Vector,
+	expr tree.Expr,
+	pkType types.Type,
+	tz *time.Location,
+	mp *mpool.MPool,
+	prepareParams *vector.Vector,
+) error {
 	expr = unwrapPickKeyParens(expr)
 	switch e := expr.(type) {
 	case *tree.NumVal:
@@ -1317,6 +1332,18 @@ func appendExprToVec(vec *vector.Vector, expr tree.Expr, pkType types.Type, tz *
 		return appendNumericStringToVec(vec, s, pkType, tz, mp)
 	case *tree.StrVal:
 		return appendStrValToVec(vec, unescapeMySQLString(e.String()), pkType, tz, mp)
+	case *tree.ParamExpr:
+		if prepareParams == nil {
+			return moerr.NewInvalidInputNoCtx("DATA BRANCH PICK parameter has no execution value")
+		}
+		paramIndex := e.Offset - 1
+		if paramIndex < 0 || paramIndex >= prepareParams.Length() {
+			return moerr.NewInvalidInputNoCtxf("DATA BRANCH PICK parameter %d is out of range", e.Offset)
+		}
+		if prepareParams.IsNull(uint64(paramIndex)) {
+			return moerr.NewInvalidInputNoCtxf("DATA BRANCH PICK parameter %d must not be NULL", e.Offset)
+		}
+		return appendStrValToVec(vec, prepareParams.GetStringAt(paramIndex), pkType, tz, mp)
 	default:
 		// For complex expressions, skip ZoneMap pruning in CollectChanges.
 		return moerr.NewInvalidInputNoCtxf("unsupported expression type for PK filter: %T", expr)

@@ -17,6 +17,7 @@ package aggexec
 import (
 	"bytes"
 	"encoding/binary"
+	"errors"
 	"math"
 	"slices"
 
@@ -94,6 +95,7 @@ type argumentChunkCapacity struct {
 	arenaConsumed uint64
 	arenaRequired uint64
 	scratch       int
+	legacyScratch int
 }
 
 func addArgumentChunkCapacity(
@@ -154,6 +156,24 @@ func addArgumentChunkCapacityWithValue(
 	return nil
 }
 
+func addLegacyScratchCapacity(
+	needs *[hashmap.UnitLimit]argumentChunkCapacity,
+	count int,
+	chunk int,
+	size int,
+) error {
+	if size < 0 || size > math.MaxUint32 {
+		return mpool.ErrAllocationAccountInvalid
+	}
+	for i := 0; i < count; i++ {
+		if needs[i].chunk == chunk {
+			needs[i].legacyScratch = max(needs[i].legacyScratch, size)
+			return nil
+		}
+	}
+	return mpool.ErrAllocationAccountInvariant
+}
+
 func (ae *aggExec) applyArgumentChunkCapacity(
 	needs *[hashmap.UnitLimit]argumentChunkCapacity,
 	count int,
@@ -165,7 +185,7 @@ func (ae *aggExec) applyArgumentChunkCapacity(
 			return mpool.ErrAllocationAccountInvariant
 		}
 		if err := state.preflightArgumentCapacity(
-			ae.mp, need.arenaRequired, need.scratch); err != nil {
+			ae.mp, need.arenaRequired, need.scratch, need.legacyScratch); err != nil {
 			return err
 		}
 	}
@@ -176,12 +196,18 @@ func (ag *aggState) preflightArgumentCapacity(
 	mp *mpool.MPool,
 	additionalArenaRequired uint64,
 	scratch int,
+	legacyScratch int,
 ) error {
 	if ag == nil || ag.allocation == nil || ag.argSkl == nil {
 		return mpool.ErrAllocationAccountInvariant
 	}
 	if scratch > 0 {
 		if _, err := ag.resizeArgScratch(mp, scratch); err != nil {
+			return err
+		}
+	}
+	if legacyScratch > 0 {
+		if _, err := ag.resizeLegacyValueScratch(mp, legacyScratch); err != nil {
 			return err
 		}
 	}
@@ -372,7 +398,9 @@ func preflightArgumentRowsEqual(
 	vectors []*vector.Vector,
 	left int,
 	right int,
+	legacyPolicy ...bool,
 ) (bool, error) {
+	legacy := len(legacyPolicy) > 0 && legacyPolicy[0]
 	for _, vec := range vectors {
 		leftRow, err := preflightPhysicalRow(vec, left)
 		if err != nil {
@@ -387,7 +415,7 @@ func preflightArgumentRowsEqual(
 		if leftNull || rightNull {
 			return leftNull && rightNull, nil
 		}
-		if !distinctArgumentRowsEqual(vec, leftRow, rightRow) {
+		if !distinctArgumentRowsEqual(vec, leftRow, rightRow, legacy) {
 			return false, nil
 		}
 	}
@@ -396,6 +424,142 @@ func preflightArgumentRowsEqual(
 
 const distinctArgumentBatchSlots = hashmap.UnitLimit * 2
 const distinctArgumentLinearLimit = 8
+
+// distinctFixedPreflightPlan accumulates the exact number of new fixed-width
+// DISTINCT keys for each state touched by one immutable work unit. The index
+// cannot publish reservations while preflight is running: preflight may be
+// retried, and a reservation would either leak into a failed BatchFill or make
+// the result depend on how many times the caller asked for admission. Keeping
+// the plan local lets us admit the table and its per-group log once, for the
+// complete candidate set, before publication starts.
+type distinctFixedPreflightPlan struct {
+	chunks [distinctArgumentBatchSlots]int
+	counts [distinctArgumentBatchSlots]uint64
+	count  int
+}
+
+// distinctFixedAdmissionPlan carries the exact publication decision from
+// PreflightBatchFill to the immediately following BatchFill.  The group
+// operator invokes those methods back-to-back for one immutable work unit; by
+// retaining the already-decoded values here, BatchFill need not probe the
+// resident index a second time.  The plan is deliberately bounded by
+// hashmap.UnitLimit and is invalidated on every new preflight or consumption.
+type distinctFixedAdmissionPlan struct {
+	offset  int
+	length  int
+	vec     *vector.Vector
+	groups  [hashmap.UnitLimit]uint64
+	values  [hashmap.UnitLimit]uint64
+	publish [hashmap.UnitLimit]bool
+	valid   bool
+}
+
+func (plan *distinctFixedAdmissionPlan) reset() {
+	if plan == nil {
+		return
+	}
+	plan.offset = 0
+	plan.length = 0
+	plan.vec = nil
+	plan.valid = false
+	clear(plan.groups[:])
+	clear(plan.values[:])
+	clear(plan.publish[:])
+}
+
+func (plan *distinctFixedAdmissionPlan) matches(
+	offset int,
+	groups []uint64,
+	vec *vector.Vector,
+) bool {
+	if plan == nil || !plan.valid || plan.offset != offset ||
+		plan.length != len(groups) || plan.vec != vec ||
+		len(groups) > len(plan.groups) {
+		return false
+	}
+	return slices.Equal(plan.groups[:len(groups)], groups)
+}
+
+func (plan *distinctFixedPreflightPlan) add(chunk int) error {
+	return plan.addN(chunk, 1)
+}
+
+func (plan *distinctFixedPreflightPlan) addN(chunk int, n uint64) error {
+	if plan == nil || chunk < 0 {
+		return mpool.ErrAllocationAccountInvalid
+	}
+	if n == 0 {
+		return nil
+	}
+	for i := 0; i < plan.count; i++ {
+		if plan.chunks[i] != chunk {
+			continue
+		}
+		if plan.counts[i] > math.MaxUint64-n {
+			return mpool.ErrAllocationAllocatorLimit
+		}
+		plan.counts[i] += n
+		return nil
+	}
+	if plan.count >= len(plan.chunks) {
+		return mpool.ErrAllocationAccountInvalid
+	}
+	plan.chunks[plan.count] = chunk
+	plan.counts[plan.count] = n
+	plan.count++
+	return nil
+}
+
+func (plan *distinctFixedPreflightPlan) apply(ae *aggExec) error {
+	if plan == nil || plan.count == 0 {
+		return nil
+	}
+	if ae == nil {
+		return mpool.ErrAllocationAccountInvariant
+	}
+	for i := 0; i < plan.count; i++ {
+		state := ae.preflightStateAt(plan.chunks[i])
+		if state == nil || !state.distinctFixedDeferred {
+			return mpool.ErrAllocationAccountInvariant
+		}
+		if err := state.distinctIndex.ensureCapacityFor(
+			ae.mp, ae.allocation, plan.counts[i]); err != nil {
+			return err
+		}
+	}
+	return nil
+}
+
+// disableEmptyDistinctFixedStates releases an unpublished optional index when
+// its account cannot admit the next work unit. A state with published fixed
+// keys cannot be switched in place: its deferred representation has no
+// skiplist entries to migrate. Such a state must be spilled/replaced by the
+// caller instead of silently losing its membership set. Empty states are safe
+// to fall back to the original skiplist implementation and let the normal
+// preflight retry decide whether that path fits.
+func (ae *aggExec) disableEmptyDistinctFixedStates() bool {
+	if ae == nil {
+		return false
+	}
+	disabled := false
+	disable := func(state *aggState) {
+		if state == nil || !state.distinctFixedDeferred ||
+			state.distinctIndex.count != 0 {
+			return
+		}
+		state.distinctIndex.free(ae.mp)
+		state.distinctKeyWidth = 0
+		state.distinctFixedDeferred = false
+		disabled = true
+	}
+	for i := range ae.state {
+		disable(&ae.state[i])
+	}
+	for i := range ae.standby {
+		disable(&ae.standby[i])
+	}
+	return disabled
+}
 
 // distinctArgumentLinearBatch keeps the low-cardinality path hash-free. Most
 // duplicate-heavy batches find a representative after one or two exact
@@ -412,6 +576,16 @@ func (batch *distinctArgumentLinearBatch) seen(
 	offset int,
 	row int,
 ) (bool, error) {
+	return batch.seenWithPolicy(groups, vectors, offset, row, false)
+}
+
+func (batch *distinctArgumentLinearBatch) seenWithPolicy(
+	groups []uint64,
+	vectors []*vector.Vector,
+	offset int,
+	row int,
+	legacy bool,
+) (bool, error) {
 	// Cardinality one is the common duplicate-heavy case. Keep its control
 	// flow as short as the former scan over earlier rows: one group check and
 	// one exact comparison, without entering the representative loop.
@@ -419,7 +593,7 @@ func (batch *distinctArgumentLinearBatch) seen(
 		earlier := int(batch.rows[0])
 		if groups[earlier] == groups[row] {
 			equal, err := preflightArgumentRowsEqual(
-				vectors, offset+earlier, offset+row)
+				vectors, offset+earlier, offset+row, legacy)
 			if err != nil {
 				return false, err
 			}
@@ -434,7 +608,7 @@ func (batch *distinctArgumentLinearBatch) seen(
 			continue
 		}
 		equal, err := preflightArgumentRowsEqual(
-			vectors, offset+earlier, offset+row)
+			vectors, offset+earlier, offset+row, legacy)
 		if err != nil {
 			return false, err
 		}
@@ -467,20 +641,42 @@ func distinctArgumentRowHash(
 	group uint64,
 	vectors []*vector.Vector,
 	logicalRow int,
+	scratch []byte,
+	legacy bool,
 ) (uint64, error) {
 	// Start from the target group because DISTINCT is scoped to one aggregate
 	// group. Hash combination preserves column boundaries for multi-argument
 	// DISTINCT; full row comparison below remains the collision oracle.
 	hash := group * 0x9e3779b97f4a7c15
-	var zero [8]byte
 	for _, vec := range vectors {
 		row, err := preflightPhysicalRow(vec, logicalRow)
 		if err != nil {
 			return 0, err
 		}
-		value := vec.GetRawBytesAt(row)
-		if size, ok := canonicalDistinctArgumentSize(vec, row); ok {
-			value = zero[:size]
+		typ := *vec.GetType()
+		var value []byte
+		switch typ.Oid {
+		case types.T_float32:
+			values := vector.MustFixedColNoTypeCheck[float32](vec)
+			bits := distinctFloat32KeyBits(values[row], typ.Scale, legacy)
+			var encoded [4]byte
+			binary.LittleEndian.PutUint32(encoded[:], bits)
+			value = encoded[:]
+		case types.T_float64:
+			values := vector.MustFixedColNoTypeCheck[float64](vec)
+			bits := distinctFloat64KeyBits(values[row], legacy)
+			var encoded [8]byte
+			binary.LittleEndian.PutUint64(encoded[:], bits)
+			value = encoded[:]
+		case types.T_char:
+			value = keycodec.CanonicalCharValue(vec.GetRawBytesAt(row))
+		case types.T_json, types.T_array_float32, types.T_array_float64,
+			types.T_array_bf16, types.T_array_float16:
+			scratch = keycodec.AppendCanonicalValue(
+				scratch[:0], typ, vec.GetRawBytesAt(row))
+			value = scratch
+		default:
+			value = vec.GetRawBytesAt(row)
 		}
 		hash = keycodec.HashCombine(hash, xxhash.Sum64(value))
 	}
@@ -492,11 +688,29 @@ func (batch *distinctArgumentBatch) seenOrInsert(
 	vectors []*vector.Vector,
 	offset int,
 	row int,
+	scratchArgs ...[]byte,
+) (bool, error) {
+	return batch.seenOrInsertWithPolicy(
+		groups, vectors, offset, row, false, scratchArgs...)
+}
+
+func (batch *distinctArgumentBatch) seenOrInsertWithPolicy(
+	groups []uint64,
+	vectors []*vector.Vector,
+	offset int,
+	row int,
+	legacy bool,
+	scratchArgs ...[]byte,
 ) (bool, error) {
 	if batch == nil || row < 0 || row >= len(groups) || len(groups) > hashmap.UnitLimit {
 		return false, mpool.ErrAllocationAccountInvalid
 	}
-	hash, err := distinctArgumentRowHash(groups[row], vectors, offset+row)
+	var scratch []byte
+	if len(scratchArgs) > 0 {
+		scratch = scratchArgs[0]
+	}
+	hash, err := distinctArgumentRowHash(
+		groups[row], vectors, offset+row, scratch, legacy)
 	if err != nil {
 		return false, err
 	}
@@ -513,7 +727,7 @@ func (batch *distinctArgumentBatch) seenOrInsert(
 			continue
 		}
 		equal, err := preflightArgumentRowsEqual(
-			vectors, offset+earlier, offset+row)
+			vectors, offset+earlier, offset+row, legacy)
 		if err != nil {
 			return false, err
 		}
@@ -521,6 +735,39 @@ func (batch *distinctArgumentBatch) seenOrInsert(
 			return true, nil
 		}
 	}
+}
+
+func (ae *aggExec) distinctArgumentHashScratch(
+	group uint64,
+	vectors []*vector.Vector,
+	logicalRow int,
+) ([]byte, error) {
+	_, _, state, err := ae.validatePreflightTarget(group)
+	if err != nil {
+		return nil, err
+	}
+	if state == nil {
+		return nil, mpool.ErrAllocationAccountInvariant
+	}
+	maxSize := 0
+	for _, vec := range vectors {
+		row, err := preflightPhysicalRow(vec, logicalRow)
+		if err != nil {
+			return nil, err
+		}
+		if vec.IsNull(uint64(row)) || !canonicalValueNeedsScratch(*vec.GetType()) {
+			continue
+		}
+		size := keycodec.CanonicalValueSize(
+			*vec.GetType(), vec.GetRawBytesAt(row))
+		if size > maxSize {
+			maxSize = size
+		}
+	}
+	if maxSize == 0 {
+		return nil, nil
+	}
+	return state.resizeArgScratch(ae.mp, maxSize)
 }
 
 func (ag *aggState) preparePreflightArgumentKey(
@@ -556,7 +803,10 @@ func (ag *aggState) preparePreflightArgumentKey(
 		}
 		raw := vectors[0].GetRawBytesAt(row)
 		if distinct {
-			copyCanonicalDistinctArgument(key[off:], vectors[0], row)
+			if copied := copyCanonicalDistinctArgument(
+				key[off:], vectors[0], row, ag.legacyDistinctFloatKeys); copied != payload {
+				return nil, mpool.ErrAllocationAccountInvariant
+			}
 		} else {
 			copy(key[off:], raw)
 		}
@@ -567,14 +817,21 @@ func (ag *aggState) preparePreflightArgumentKey(
 				return nil, err
 			}
 			raw := vec.GetRawBytesAt(row)
-			binary.BigEndian.PutUint32(key[off:], uint32(len(raw)))
+			valueSize := len(raw)
+			if distinct {
+				valueSize = canonicalDistinctArgumentKeySize(vec, row)
+			}
+			binary.BigEndian.PutUint32(key[off:], uint32(valueSize))
 			off += 4
 			if distinct {
-				copyCanonicalDistinctArgument(key[off:], vec, row)
+				if copied := copyCanonicalDistinctArgument(
+					key[off:], vec, row, ag.legacyDistinctFloatKeys); copied != valueSize {
+					return nil, mpool.ErrAllocationAccountInvariant
+				}
 			} else {
 				copy(key[off:], raw)
 			}
-			off += len(raw)
+			off += valueSize
 		}
 	}
 	return key, nil
@@ -755,16 +1012,104 @@ func (ae *aggExec) addDistinctArgumentCapacity(
 	vectors []*vector.Vector,
 	needs *[hashmap.UnitLimit]argumentChunkCapacity,
 	needCount *int,
+	fixedPlan *distinctFixedPreflightPlan,
 ) error {
 	key, err := state.preparePreflightArgumentKey(
 		ae.mp, y, vectors, logicalRow, payload, true, 0)
 	if err != nil {
 		return err
 	}
+	if state.distinctFixedDeferred {
+		group, value, ok := decodeDistinctFixedKey(key, state.distinctKeyWidth)
+		if !ok {
+			return mpool.ErrAllocationAccountInvariant
+		}
+		if state.distinctIndex.lookup(group, value) {
+			return nil
+		}
+		if fixedPlan != nil {
+			return fixedPlan.add(x)
+		}
+		// Production admission supplies a batch plan. Keep a safe fallback for
+		// any future single-row caller that does not carry one.
+		return state.distinctIndex.ensureCapacityFor(ae.mp, ae.allocation, 1)
+	}
+	if state.distinctFixedIndexContains(key) {
+		return nil
+	}
 	if state.argSkl.Contains(key) {
 		return nil
 	}
-	return addArgumentChunkCapacity(needs, needCount, x, key)
+	valueSize, err := distinctLegacyRepresentativeSize(
+		vectors, logicalRow, key, state.legacyDistinctFloatKeys)
+	if err != nil {
+		return err
+	}
+	if err := addArgumentChunkCapacityWithValue(
+		needs, needCount, x, key, valueSize); err != nil {
+		return err
+	}
+	if len(vectors) > 1 && valueSize > 0 {
+		return addLegacyScratchCapacity(needs, *needCount, x, valueSize)
+	}
+	return nil
+}
+
+func distinctLegacyRepresentativeSize(
+	vectors []*vector.Vector,
+	logicalRow int,
+	key []byte,
+	legacyFloat bool,
+) (int, error) {
+	if len(vectors) == 0 || len(key) < kAggArgPrefixSz {
+		return 0, mpool.ErrAllocationAccountInvariant
+	}
+	if len(vectors) == 1 {
+		row, err := preflightPhysicalRow(vectors[0], logicalRow)
+		if err != nil {
+			return 0, err
+		}
+		raw := vectors[0].GetRawBytesAt(row)
+		if distinctRepresentativeNeedsRaw(
+			*vectors[0].GetType(), key[kAggArgPrefixSz:], raw, legacyFloat) {
+			return len(raw), nil
+		}
+		return 0, nil
+	}
+	off := kAggArgPrefixSz
+	rawSize := 0
+	needsRaw := false
+	for _, vec := range vectors {
+		row, err := preflightPhysicalRow(vec, logicalRow)
+		if err != nil {
+			return 0, err
+		}
+		if len(key)-off < 4 {
+			return 0, mpool.ErrAllocationAccountInvariant
+		}
+		canonicalSize := int(binary.BigEndian.Uint32(key[off:]))
+		off += 4
+		if canonicalSize > len(key)-off {
+			return 0, mpool.ErrAllocationAccountInvariant
+		}
+		raw := vec.GetRawBytesAt(row)
+		if len(raw) > math.MaxInt-rawSize-4 {
+			return 0, mpool.ErrAllocationAllocatorLimit
+		}
+		rawSize += 4 + len(raw)
+		if distinctRepresentativeNeedsRaw(
+			*vec.GetType(), key[off:off+canonicalSize], raw, legacyFloat) {
+			needsRaw = true
+		}
+		off += canonicalSize
+	}
+	if off != len(key) {
+		return 0, mpool.ErrAllocationAccountInvariant
+	}
+	if needsRaw {
+		return rawSize, nil
+	}
+	return 0, nil
 }
 
 func (ae *aggExec) preflightDistinctBatchFillArgs(
@@ -772,8 +1117,29 @@ func (ae *aggExec) preflightDistinctBatchFillArgs(
 	groups []uint64,
 	vectors []*vector.Vector,
 ) error {
+	err := ae.preflightDistinctBatchFillArgsOnce(offset, groups, vectors)
+	if errors.Is(err, mpool.ErrAllocationAccountCapacity) &&
+		ae.disableEmptyDistinctFixedStates() {
+		return ae.preflightDistinctBatchFillArgsOnce(offset, groups, vectors)
+	}
+	return err
+}
+
+func (ae *aggExec) preflightDistinctBatchFillArgsOnce(
+	offset int,
+	groups []uint64,
+	vectors []*vector.Vector,
+) error {
+	ae.distinctFixedAdmission.reset()
+	if width, err := ae.fixedDistinctPreflightWidth(groups, vectors); err != nil {
+		return err
+	} else if width > 0 {
+		return ae.preflightFixedDistinctBatchFillArgs(
+			offset, groups, vectors[0])
+	}
 	var needs [hashmap.UnitLimit]argumentChunkCapacity
 	needCount := 0
+	var fixedPlan distinctFixedPreflightPlan
 	var linear distinctArgumentLinearBatch
 	for i, group := range groups {
 		if group == GroupNotMatched {
@@ -805,16 +1171,21 @@ func (ae *aggExec) preflightDistinctBatchFillArgs(
 					break
 				}
 				raw := vec.GetRawBytesAt(row)
-				if len(raw) > math.MaxInt-payload-4 {
+				valueSize := len(raw)
+				if len(vectors) > 1 {
+					valueSize = canonicalDistinctArgumentKeySize(vec, row)
+				}
+				if valueSize > math.MaxInt-payload-4 {
 					return mpool.ErrAllocationAllocatorLimit
 				}
-				payload += 4 + len(raw)
+				payload += 4 + valueSize
 			}
 			if payload < 0 {
 				continue
 			}
 		}
-		duplicate, err := linear.seen(groups, vectors, offset, i)
+		duplicate, err := linear.seenWithPolicy(
+			groups, vectors, offset, i, ae.legacyDistinctFloatKeys)
 		if err != nil {
 			return err
 		}
@@ -823,22 +1194,113 @@ func (ae *aggExec) preflightDistinctBatchFillArgs(
 		}
 		if !linear.insertUnique(i) {
 			return ae.preflightDistinctBatchFillArgsHashed(
-				offset, groups, vectors, i, &linear, &needs, &needCount)
+				offset, groups, vectors, i, &linear, &needs, &needCount,
+				&fixedPlan)
 		}
 		if len(vectors) == 1 {
 			// Duplicate rows need neither a retained key nor its payload size.
 			// Delay the raw-value access until exact admission accepts this row.
-			payload = len(vectors[0].GetRawBytesAt(physicalRow))
+			payload = canonicalDistinctArgumentKeySize(vectors[0], physicalRow)
 		}
 		if payload > math.MaxInt-kAggArgPrefixSz {
 			return mpool.ErrAllocationAllocatorLimit
 		}
 		if err = ae.addDistinctArgumentCapacity(
-			x, y, state, logicalRow, payload, vectors, &needs, &needCount); err != nil {
+			x, y, state, logicalRow, payload, vectors, &needs, &needCount,
+			&fixedPlan); err != nil {
 			return err
 		}
 	}
+	if err := fixedPlan.apply(ae); err != nil {
+		return err
+	}
 	return ae.applyArgumentChunkCapacity(&needs, needCount)
+}
+
+func (ae *aggExec) fixedDistinctPreflightWidth(
+	groups []uint64,
+	vectors []*vector.Vector,
+) (int, error) {
+	if ae == nil || len(vectors) != 1 {
+		return 0, nil
+	}
+	width := distinctFixedKeyWidth(&ae.aggInfo)
+	if width == 0 {
+		return 0, nil
+	}
+	for _, group := range groups {
+		if group == GroupNotMatched {
+			continue
+		}
+		_, _, state, err := ae.validatePreflightTarget(group)
+		if err != nil {
+			return 0, err
+		}
+		if state == nil || !state.distinctFixedDeferred ||
+			state.distinctKeyWidth != width {
+			return 0, nil
+		}
+	}
+	return width, nil
+}
+
+func (ae *aggExec) preflightFixedDistinctBatchFillArgs(
+	offset int,
+	groups []uint64,
+	vec *vector.Vector,
+) error {
+	var plan distinctFixedPreflightPlan
+	var batch distinctFixedBatch
+	batch.reset()
+	admission := &ae.distinctFixedAdmission
+	for i, group := range groups {
+		// Preserve the complete input mapping, including duplicates, NULL rows,
+		// and GroupNotMatched.  `publish` is the separate publication bitmap;
+		// leaving non-publishing entries at zero makes a valid admission plan
+		// fail its exact-input check and needlessly repeats all decode/probe work.
+		admission.groups[i] = group
+		if group == GroupNotMatched {
+			continue
+		}
+		x, y, state, err := ae.validatePreflightTarget(group)
+		if err != nil {
+			return err
+		}
+		row, err := preflightPhysicalRow(vec, offset+i)
+		if err != nil {
+			return err
+		}
+		if vec.IsNull(uint64(row)) {
+			continue
+		}
+		value, err := distinctFixedValue(
+			vec, row, state.distinctKeyWidth, state.legacyDistinctFloatKeys)
+		if err != nil {
+			return err
+		}
+		duplicate, err := batch.seenOrInsert(group, value)
+		if err != nil {
+			return err
+		}
+		if duplicate || state.distinctIndex.lookup(y, value) {
+			continue
+		}
+		if err := plan.add(x); err != nil {
+			return err
+		}
+		admission.groups[i] = group
+		admission.values[i] = value
+		admission.publish[i] = true
+	}
+	if err := plan.apply(ae); err != nil {
+		admission.reset()
+		return err
+	}
+	admission.offset = offset
+	admission.length = len(groups)
+	admission.vec = vec
+	admission.valid = true
+	return nil
 }
 
 // preflightDistinctBatchFillArgsHashed owns the large table in a separate
@@ -853,14 +1315,21 @@ func (ae *aggExec) preflightDistinctBatchFillArgsHashed(
 	linear *distinctArgumentLinearBatch,
 	needs *[hashmap.UnitLimit]argumentChunkCapacity,
 	needCount *int,
+	fixedPlan *distinctFixedPreflightPlan,
 ) error {
 	if start < 0 || start >= len(groups) || linear == nil {
 		return mpool.ErrAllocationAccountInvalid
 	}
 	var hashed distinctArgumentBatch
 	for i := uint16(0); i < linear.count; i++ {
-		duplicate, err := hashed.seenOrInsert(
-			groups, vectors, offset, int(linear.rows[i]))
+		row := int(linear.rows[i])
+		scratch, err := ae.distinctArgumentHashScratch(
+			groups[row], vectors, offset+row)
+		if err != nil {
+			return err
+		}
+		duplicate, err := hashed.seenOrInsertWithPolicy(
+			groups, vectors, offset, row, ae.legacyDistinctFloatKeys, scratch)
 		if err != nil {
 			return err
 		}
@@ -898,17 +1367,23 @@ func (ae *aggExec) preflightDistinctBatchFillArgsHashed(
 					payload = -1
 					break
 				}
-				raw := vec.GetRawBytesAt(row)
-				if len(raw) > math.MaxInt-payload-4 {
+				valueSize := canonicalDistinctArgumentKeySize(vec, row)
+				if valueSize > math.MaxInt-payload-4 {
 					return mpool.ErrAllocationAllocatorLimit
 				}
-				payload += 4 + len(raw)
+				payload += 4 + valueSize
 			}
 			if payload < 0 {
 				continue
 			}
 		}
-		duplicate, err := hashed.seenOrInsert(groups, vectors, offset, i)
+		scratch, err := ae.distinctArgumentHashScratch(
+			group, vectors, logicalRow)
+		if err != nil {
+			return err
+		}
+		duplicate, err := hashed.seenOrInsertWithPolicy(
+			groups, vectors, offset, i, ae.legacyDistinctFloatKeys, scratch)
 		if err != nil {
 			return err
 		}
@@ -916,15 +1391,19 @@ func (ae *aggExec) preflightDistinctBatchFillArgsHashed(
 			continue
 		}
 		if len(vectors) == 1 {
-			payload = len(vectors[0].GetRawBytesAt(physicalRow))
+			payload = canonicalDistinctArgumentKeySize(vectors[0], physicalRow)
 		}
 		if payload > math.MaxInt-kAggArgPrefixSz {
 			return mpool.ErrAllocationAllocatorLimit
 		}
 		if err = ae.addDistinctArgumentCapacity(
-			x, y, state, logicalRow, payload, vectors, needs, needCount); err != nil {
+			x, y, state, logicalRow, payload, vectors, needs, needCount,
+			fixedPlan); err != nil {
 			return err
 		}
+	}
+	if err := fixedPlan.apply(ae); err != nil {
+		return err
 	}
 	return ae.applyArgumentChunkCapacity(needs, *needCount)
 }
@@ -937,10 +1416,75 @@ func (ae *aggExec) preflightBatchMergeArgs(
 	if other == nil || offset < 0 || offset > other.GetNumGroups()-len(groups) {
 		return mpool.ErrAllocationAccountInvalid
 	}
+	if err := validateDistinctFloatMergePolicy(
+		&ae.aggInfo,
+		ae.legacyDistinctFloatKeys,
+		other.legacyDistinctFloatKeys,
+	); err != nil {
+		// The destination must reject a modern-to-legacy merge before any
+		// capacity reservation or key publication. Canonical state cannot
+		// recreate the legacy NaN variants that the old contract distinguishes.
+		return err
+	}
+	// A merge destination may already contain published fixed-index keys when
+	// a later work unit is admitted. Converting that representation to a
+	// skiplist would require a second copy, so only empty fixed states may be
+	// disabled when a small hard account cannot admit the index. Published
+	// states retain their representation and use the fixed merge plan below.
+	mergeFixedAllowed := ae.allocation == nil || ae.allocation.account == nil ||
+		ae.allocation.account.Snapshot().Limit >= distinctFixedIndexMinAccountLimit
+	if !mergeFixedAllowed {
+		ae.disableEmptyDistinctFixedStates()
+	}
+	if width := distinctFixedKeyWidth(&ae.aggInfo); width > 0 &&
+		distinctFixedKeyWidth(&other.aggInfo) == width {
+		// Keep the fast aggregate plan when every mapped target is fixed.  A
+		// source may still be a legacy skiplist state (for example after a
+		// small-account fallback or an older spill restore); the merge path below
+		// imports those fixed-width payloads into the target index directly.
+		fixedReady := true
+		for i, group := range groups {
+			if group == GroupNotMatched {
+				continue
+			}
+			x, _, target, err := ae.validatePreflightTarget(group)
+			if err != nil {
+				return err
+			}
+			otherX, otherY := other.getXY(uint64(offset + i))
+			if otherX < 0 || otherX >= len(other.state) ||
+				int(otherY) >= int(other.state[otherX].length) {
+				return mpool.ErrAllocationAccountInvariant
+			}
+			if target == nil || !target.distinctFixedDeferred {
+				fixedReady = false
+				break
+			}
+			xState := ae.preflightStateAt(x)
+			if xState == nil || xState.distinctKeyWidth != width {
+				fixedReady = false
+				break
+			}
+			source := &other.state[otherX]
+			if source.distinctFixedDeferred && source.distinctKeyWidth != width {
+				fixedReady = false
+				break
+			}
+		}
+		if fixedReady {
+			err := ae.preflightFixedDistinctBatchMergeArgs(other, offset, groups)
+			if errors.Is(err, mpool.ErrAllocationAccountCapacity) &&
+				ae.disableEmptyDistinctFixedStates() {
+				return ae.preflightBatchMergeArgs(other, offset, groups)
+			}
+			return err
+		}
+	}
 	var needs [hashmap.UnitLimit]argumentChunkCapacity
 	needCount := 0
 	var progress [hashmap.UnitLimit]argumentTargetProgress
 	progressCount := 0
+	var fixedPlan distinctFixedPreflightPlan
 	for i, group := range groups {
 		if group == GroupNotMatched {
 			continue
@@ -954,12 +1498,52 @@ func (ae *aggExec) preflightBatchMergeArgs(
 			int(otherY) >= int(other.state[otherX].length) {
 			return mpool.ErrAllocationAccountInvariant
 		}
-		var upper [kAggArgPrefixSz]byte
-		binary.BigEndian.PutUint16(upper[:], y+1)
+		if ae.isDistinct && state.distinctFixedDeferred {
+			source := &other.state[otherX]
+			if distinctFixedKeyWidth(&other.aggInfo) != state.distinctKeyWidth {
+				return mpool.ErrAllocationAccountInvariant
+			}
+			if source.distinctFixedDeferred &&
+				source.distinctKeyWidth != state.distinctKeyWidth {
+				return mpool.ErrAllocationAccountInvariant
+			}
+			// BatchMerge will use the target fixed index for both fixed and
+			// legacy source states. Reserve that representation here rather than
+			// reserving the target's compatibility skiplist arena.
+			if err := fixedPlan.addN(
+				x, uint64(source.argCnt[otherY])); err != nil {
+				return err
+			}
+			continue
+		}
+		sourceState := &other.state[otherX]
 		var targetIter *arenaskl.Iterator
 		var targetKey []byte
 		var targetOK bool
-		err = other.state[otherX].iter(otherY, func(key []byte) error {
+		targetStarted := false
+		policyConversion := ae.isDistinct &&
+			distinctFloatArgument(&ae.aggInfo) &&
+			other.legacyDistinctFloatKeys && !ae.legacyDistinctFloatKeys
+		if ae.isDistinct {
+			if state == nil || state.argSkl == nil {
+				return mpool.ErrAllocationAccountInvariant
+			}
+			if sourceState.distinctFixedDeferred || policyConversion {
+				// Fixed-index iteration is newest-first, so it cannot share the
+				// ordered target cursor used by legacy skiplists.  A legacy to
+				// modern conversion also changes the byte ordering of FLOAT keys,
+				// so its normalized candidates cannot share that cursor either.
+				// Membership checks for these paths stay exact below.
+			} else {
+				if sourceState.argSkl == nil {
+					return mpool.ErrAllocationAccountInvariant
+				}
+				var upper [kAggArgPrefixSz]byte
+				binary.BigEndian.PutUint16(upper[:], y+1)
+				targetIter = state.argSkl.NewIter(nil, upper[:])
+			}
+		}
+		err = sourceState.iterWithValue(otherY, func(key, stored []byte) error {
 			if len(key) < kAggArgPrefixSz {
 				return mpool.ErrAllocationAccountInvariant
 			}
@@ -970,22 +1554,42 @@ func (ae *aggExec) preflightBatchMergeArgs(
 			copy(candidate, key)
 			binary.BigEndian.PutUint16(candidate[:kAggArgPrefixSz], y)
 			if ae.isDistinct {
-				if targetIter == nil {
-					targetIter = state.argSkl.NewIter(nil, upper[:])
-					targetOK, targetKey, _ = targetIter.SeekGE(candidate)
+				if err := normalizeDistinctKeyInPlace(
+					&ae.aggInfo, candidate,
+					other.legacyDistinctFloatKeys,
+					ae.legacyDistinctFloatKeys); err != nil {
+					return err
 				}
-				for targetOK && bytes.Compare(targetKey, candidate) < 0 {
-					targetOK, targetKey, _ = targetIter.Next()
-				}
-				if targetOK && bytes.Equal(targetKey, candidate) {
-					return nil
+				if sourceState.distinctFixedDeferred {
+					// Fixed-index iteration is reverse insertion order, so use
+					// exact target membership rather than an ordered cursor.
+					if state.argSkl.Contains(candidate) {
+						return nil
+					}
+				} else if !policyConversion {
+					if !targetStarted {
+						targetOK, targetKey, _ = targetIter.SeekGE(candidate)
+						targetStarted = true
+					} else if targetOK {
+						for targetOK && bytes.Compare(targetKey, candidate) < 0 {
+							targetOK, targetKey, _ = targetIter.Next()
+						}
+					}
+					if targetOK && bytes.Equal(targetKey, candidate) {
+						return nil
+					}
 				}
 				// A merge work unit can map several source groups into the same
 				// target group. The target skiplist is immutable until admission,
 				// so also suppress a value already supplied by an earlier source
 				// group in this unit. Rewriting only the two-byte group prefix lets
 				// each source skiplist answer that lookup without a temporary set.
-				for earlier := 0; earlier < i; earlier++ {
+				// During legacy-to-modern conversion the normalized key order is
+				// different from every source skiplist's order.  Comparing the
+				// unnormalized key against earlier source states would be wrong;
+				// conservatively retain those candidates and let the real merge
+				// deduplicate them after normalization.
+				for earlier := 0; earlier < i && !policyConversion; earlier++ {
 					if groups[earlier] != group {
 						continue
 					}
@@ -994,9 +1598,24 @@ func (ae *aggExec) preflightBatchMergeArgs(
 						int(earlierY) >= int(other.state[earlierX].length) {
 						return mpool.ErrAllocationAccountInvariant
 					}
+					earlierState := &other.state[earlierX]
+					if earlierState.distinctFixedDeferred {
+						_, value, ok := decodeDistinctFixedKey(
+							key, earlierState.distinctKeyWidth)
+						if !ok {
+							return mpool.ErrAllocationAccountInvariant
+						}
+						if earlierState.distinctIndex.lookup(earlierY, value) {
+							return nil
+						}
+						continue
+					}
+					if earlierState.argSkl == nil {
+						return mpool.ErrAllocationAccountInvariant
+					}
 					binary.BigEndian.PutUint16(
 						candidate[:kAggArgPrefixSz], earlierY)
-					if other.state[earlierX].argSkl.Contains(candidate) {
+					if earlierState.argSkl.Contains(candidate) {
 						return nil
 					}
 				}
@@ -1016,8 +1635,14 @@ func (ae *aggExec) preflightBatchMergeArgs(
 				)
 			}
 			valueSize := 0
+			if ae.isDistinct {
+				valueSize = len(distinctMergeRepresentative(
+					&ae.aggInfo, key, stored,
+					ae.legacyDistinctFloatKeys,
+					other.legacyDistinctFloatKeys))
+			}
 			if ae.preserveDistinctInputOrder {
-				valueSize = kAggArgOrdinalSz
+				valueSize = ae.distinctInputOrderValueSize()
 			}
 			return addArgumentChunkCapacityWithValue(
 				&needs, &needCount, x, candidate, valueSize)
@@ -1029,7 +1654,85 @@ func (ae *aggExec) preflightBatchMergeArgs(
 			return err
 		}
 	}
+	if err := fixedPlan.apply(ae); err != nil {
+		return err
+	}
 	return ae.applyArgumentChunkCapacity(&needs, needCount)
+}
+
+func (ae *aggExec) preflightFixedDistinctBatchMergeArgs(
+	other *aggExec,
+	offset int,
+	groups []uint64,
+) error {
+	// A merge work unit can map several source groups into one target group. The
+	// source-side fixed index gives an exact per-group count without rebuilding a
+	// temporary skiplist. Sum those counts per target chunk: this is an upper
+	// bound on new keys (source groups can overlap), so all index/log capacity is
+	// admitted before BatchMerge starts publishing keys. The merge itself does
+	// the single exact membership probe needed for each source key.
+	var targetChunks [distinctArgumentBatchSlots]int
+	var targetCounts [distinctArgumentBatchSlots]uint64
+	targetCount := 0
+	reserve := func(chunk int, extra uint64) error {
+		if extra == 0 {
+			return nil
+		}
+		for i := 0; i < targetCount; i++ {
+			if targetChunks[i] != chunk {
+				continue
+			}
+			if targetCounts[i] > math.MaxUint64-extra {
+				return mpool.ErrAllocationAllocatorLimit
+			}
+			targetCounts[i] += extra
+			state := ae.preflightStateAt(chunk)
+			if state == nil {
+				return mpool.ErrAllocationAccountInvariant
+			}
+			return state.distinctIndex.ensureCapacityFor(
+				ae.mp, ae.allocation, targetCounts[i])
+		}
+		if targetCount >= len(targetChunks) {
+			return mpool.ErrAllocationAccountInvalid
+		}
+		targetChunks[targetCount] = chunk
+		targetCounts[targetCount] = extra
+		targetCount++
+		state := ae.preflightStateAt(chunk)
+		if state == nil {
+			return mpool.ErrAllocationAccountInvariant
+		}
+		return state.distinctIndex.ensureCapacityFor(
+			ae.mp, ae.allocation, extra)
+	}
+	for i, group := range groups {
+		if group == GroupNotMatched {
+			continue
+		}
+		x, y, state, err := ae.validatePreflightTarget(group)
+		if err != nil {
+			return err
+		}
+		otherX, otherY := other.getXY(uint64(offset + i))
+		if otherX < 0 || otherX >= len(other.state) ||
+			int(otherY) >= int(other.state[otherX].length) {
+			return mpool.ErrAllocationAccountInvariant
+		}
+		if y >= uint16(len(state.argCnt)) ||
+			int(otherY) >= len(other.state[otherX].argCnt) {
+			return mpool.ErrAllocationAccountInvariant
+		}
+		if other.state[otherX].argCnt[otherY] >
+			math.MaxUint32-state.argCnt[y] {
+			return moerr.NewInternalErrorNoCtx(
+				"agg mergeArgs: too many distinct arguments")
+		}
+		if err := reserve(x, uint64(other.state[otherX].argCnt[otherY])); err != nil {
+			return err
+		}
+	}
+	return nil
 }
 
 type vectorAreaChunkCapacity struct {
@@ -2205,6 +2908,13 @@ func (exec *groupConcatExec) PreflightBatchFill(
 				payload += 5 + fieldSize
 			}
 		}
+		withSourceRow := !exec.distinct || exec.orderArgCnt > 0
+		if withSourceRow {
+			if payload > math.MaxInt-groupConcatSourcePayloadHeaderSize {
+				return mpool.ErrAllocationAllocatorLimit
+			}
+			payload += groupConcatSourcePayloadHeaderSize
+		}
 		headerSize := kAggArgPrefixSz
 		if !exec.aggInfo.isDistinct {
 			headerSize += kAggArgOrdinalSz
@@ -2225,6 +2935,14 @@ func (exec *groupConcatExec) PreflightBatchFill(
 				key[kAggArgPrefixSz:headerSize], ordinal)
 		}
 		keyOffset := headerSize
+		if withSourceRow {
+			copy(key[keyOffset:], groupConcatSourcePayloadMagic)
+			keyOffset += len(groupConcatSourcePayloadMagic)
+			key[keyOffset] = groupConcatSourcePayloadVersion
+			keyOffset++
+			binary.BigEndian.PutUint64(key[keyOffset:], 0)
+			keyOffset += 8
+		}
 		if exec.orderArgCnt != 0 {
 			binary.BigEndian.PutUint32(key[keyOffset:], uint32(concatPayloadSize))
 			keyOffset += 4
@@ -2304,7 +3022,7 @@ func (exec *groupConcatExec) PreflightBatchFill(
 		}
 		valueSize := 0
 		if exec.aggInfo.preserveDistinctInputOrder {
-			valueSize = kAggArgOrdinalSz
+			valueSize = exec.aggInfo.distinctInputOrderValueSize()
 		}
 		if err := addArgumentChunkCapacityWithValue(
 			&needs, &needCount, x, key, valueSize); err != nil {
@@ -2627,6 +3345,17 @@ func accountedJSONValueSize(
 	return jsonAggregateValueSize(vec, uint64(row))
 }
 
+func accountedJSONArrayValueSize(
+	vec *vector.Vector,
+	logicalRow int,
+) (int, error) {
+	row, err := preflightPhysicalRow(vec, logicalRow)
+	if err != nil {
+		return 0, err
+	}
+	return jsonArrayAggregateValueSize(vec, uint64(row))
+}
+
 func addJSONArgumentCapacity(
 	base *aggExec,
 	needs *[hashmap.UnitLimit]argumentChunkCapacity,
@@ -2689,7 +3418,7 @@ func (exec *jsonArrayAggExec) PreflightBatchFill(
 		if group == GroupNotMatched {
 			continue
 		}
-		valueSize, err := accountedJSONValueSize(vectors[0], offset+i)
+		valueSize, err := accountedJSONArrayValueSize(vectors[0], offset+i)
 		if err != nil {
 			return err
 		}
@@ -2706,7 +3435,7 @@ func (exec *jsonArrayAggExec) PreflightBatchFill(
 				if err != nil {
 					return nil, err
 				}
-				return appendJSONAggregateValue(dst, vectors[0], uint64(row))
+				return appendJSONArrayAggregateValue(dst, vectors[0], uint64(row))
 			})
 		if err != nil {
 			return err

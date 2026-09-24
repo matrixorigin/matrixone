@@ -130,15 +130,23 @@ func (n *Bitmap) Clone() *Bitmap {
 }
 
 func (n *Bitmap) Iterator() Iterator {
+	itr := n.IteratorValue()
+	return &itr
+}
+
+// IteratorValue returns a bitmap iterator by value for allocation-sensitive
+// callers. Iterator keeps its interface return type for compatibility, while
+// callers on hot paths can keep the iterator on their own stack.
+func (n *Bitmap) IteratorValue() BitmapIterator {
 	// When initialization, the itr.i is set to the first rightmost_one position.
 	itr := BitmapIterator{i: 0, bm: n}
 	if pos, has_next := itr.hasNext(0); has_next {
 		itr.i = pos
 		itr.has_next = true
-		return &itr
+		return itr
 	}
 	itr.has_next = false
-	return &itr
+	return itr
 }
 
 func rightmost_one_pos_64(word uint64) uint64 {

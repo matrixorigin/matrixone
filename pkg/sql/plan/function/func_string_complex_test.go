@@ -126,6 +126,26 @@ func Test_BuiltInConcat(t *testing.T) {
 	}
 }
 
+func Test_BuiltInConcatSingleArgument(t *testing.T) {
+	require.Equal(t, failedFunctionParametersWrong, builtInConcatCheck(nil, nil).status)
+	require.Equal(t, succeedMatched,
+		builtInConcatCheck(nil, []types.Type{types.T_varchar.ToType()}).status)
+
+	proc := testutil.NewProcess(t)
+	caseData := NewFunctionTestCase(
+		proc,
+		[]FunctionTestInput{
+			NewFunctionTestInput(types.T_varchar.ToType(),
+				[]string{"hello", "", "ignored"}, []bool{false, false, true}),
+		},
+		NewFunctionTestResult(types.T_varchar.ToType(), false,
+			[]string{"hello", "", ""}, []bool{false, false, true}),
+		builtInConcat,
+	)
+	succeed, info := caseData.Run()
+	require.True(t, succeed, info)
+}
+
 // Test_ConcatWs tests CONCAT_WS function (concat with separator)
 // This is a complex function with conditional logic for NULL handling
 func Test_ConcatWs(t *testing.T) {
@@ -361,6 +381,142 @@ func Test_SubStringWith3Args(t *testing.T) {
 		succeed, info := tcc.Run()
 		require.True(t, succeed, tc.info, info)
 	}
+}
+
+func TestSubStringBinaryWith3ArgsPreservesBytes(t *testing.T) {
+	proc := testutil.NewProcess(t)
+	inputType := types.NewWithCharset(types.T_varbinary, 512, 0, types.CharsetBinary)
+	resultType := types.NewWithCharset(types.T_varbinary, 3, 0, types.CharsetBinary)
+	raw := string([]byte{0xff, 0x00, 0x80, 0x01})
+
+	for _, test := range []struct {
+		name   string
+		start  int64
+		length int64
+		want   string
+	}{
+		{name: "from left", start: 1, length: 3, want: raw[:3]},
+		{name: "from right", start: -2, length: 2, want: raw[2:]},
+	} {
+		t.Run(test.name, func(t *testing.T) {
+			caseTest := NewFunctionTestCase(proc,
+				[]FunctionTestInput{
+					NewFunctionTestInput(inputType, []string{raw}, []bool{false}),
+					NewFunctionTestInput(types.T_int64.ToType(), []int64{test.start}, []bool{false}),
+					NewFunctionTestInput(types.T_int64.ToType(), []int64{test.length}, []bool{false}),
+				},
+				NewFunctionTestResult(resultType, false, []string{test.want}, []bool{false}),
+				SubStringBinaryWith3Args)
+			succeed, info := caseTest.Run()
+			require.True(t, succeed, info)
+		})
+	}
+}
+
+func TestSubStringBinaryWith2ArgsBoundaries(t *testing.T) {
+	proc := testutil.NewProcess(t)
+	inputType := types.NewWithCharset(types.T_varbinary, 512, 0, types.CharsetBinary)
+	resultType := types.NewWithCharset(types.T_varbinary, 512, 0, types.CharsetBinary)
+	raw := string([]byte{0xff, 0x00, 0x80, 0x01})
+
+	for _, test := range []struct {
+		name       string
+		start      int64
+		inputNull  bool
+		startNull  bool
+		want       string
+		resultNull bool
+	}{
+		{name: "from left", start: 2, want: raw[1:]},
+		{name: "from right", start: -2, want: raw[2:]},
+		{name: "zero start", start: 0},
+		{name: "past right", start: 5},
+		{name: "past left", start: -5},
+		{name: "null input", start: 1, inputNull: true, resultNull: true},
+		{name: "null start", start: 1, startNull: true, resultNull: true},
+	} {
+		t.Run(test.name, func(t *testing.T) {
+			caseTest := NewFunctionTestCase(proc,
+				[]FunctionTestInput{
+					NewFunctionTestInput(inputType, []string{raw}, []bool{test.inputNull}),
+					NewFunctionTestInput(types.T_int64.ToType(), []int64{test.start}, []bool{test.startNull}),
+				},
+				NewFunctionTestResult(resultType, false, []string{test.want}, []bool{test.resultNull}),
+				SubStringBinaryWith2Args)
+			succeed, info := caseTest.Run()
+			require.True(t, succeed, info)
+		})
+	}
+}
+
+func TestSubStringBinaryWith3ArgsBoundaries(t *testing.T) {
+	proc := testutil.NewProcess(t)
+	inputType := types.NewWithCharset(types.T_varbinary, 512, 0, types.CharsetBinary)
+	resultType := types.NewWithCharset(types.T_varbinary, 512, 0, types.CharsetBinary)
+	raw := string([]byte{0xff, 0x00, 0x80, 0x01})
+
+	for _, test := range []struct {
+		name       string
+		start      int64
+		length     int64
+		inputNull  bool
+		startNull  bool
+		lengthNull bool
+		want       string
+		resultNull bool
+	}{
+		{name: "longer than suffix", start: 2, length: 99, want: raw[1:]},
+		{name: "zero start", start: 0, length: 3},
+		{name: "past right", start: 5, length: 3},
+		{name: "past left", start: -5, length: 3},
+		{name: "nonpositive length", start: 1, length: 0},
+		{name: "null length", start: 1, length: 3, lengthNull: true, resultNull: true},
+	} {
+		t.Run(test.name, func(t *testing.T) {
+			caseTest := NewFunctionTestCase(proc,
+				[]FunctionTestInput{
+					NewFunctionTestInput(inputType, []string{raw}, []bool{test.inputNull}),
+					NewFunctionTestInput(types.T_int64.ToType(), []int64{test.start}, []bool{test.startNull}),
+					NewFunctionTestInput(types.T_int64.ToType(), []int64{test.length}, []bool{test.lengthNull}),
+				},
+				NewFunctionTestResult(resultType, false, []string{test.want}, []bool{test.resultNull}),
+				SubStringBinaryWith3Args)
+			succeed, info := caseTest.Run()
+			require.True(t, succeed, info)
+		})
+	}
+}
+
+func TestSubStringBinaryOverloadsResolveAndExecute(t *testing.T) {
+	proc := testutil.NewProcess(t)
+	mp := proc.Mp()
+	inputType := types.NewWithCharset(types.T_varbinary, 512, 0, types.CharsetBinary)
+	raw := string([]byte{0xff, 0x00, 0x80, 0x01})
+	input := newVectorByType(mp, inputType, []string{raw}, nil)
+	defer input.Free(mp)
+
+	start := newVectorByType(mp, types.T_int64.ToType(), []int64{2}, nil)
+	defer start.Free(mp)
+	length := newVectorByType(mp, types.T_int64.ToType(), []int64{2}, nil)
+	defer length.Free(mp)
+
+	twoArgs, err := GetFunctionByName(proc.Ctx, "substring", []types.Type{inputType, types.T_int64.ToType()})
+	require.NoError(t, err)
+	twoArgsResult, err := RunFunctionDirectly(proc, twoArgs.GetEncodedOverloadID(), []*vector.Vector{input, start}, 1)
+	require.NoError(t, err)
+	value, isNull := vector.GenerateFunctionStrParameter(twoArgsResult).GetStrValue(0)
+	require.False(t, isNull)
+	require.Equal(t, raw[1:], string(value))
+	twoArgsResult.Free(mp)
+
+	threeArgs, err := GetFunctionByName(proc.Ctx, "substring", []types.Type{inputType, types.T_int64.ToType(), types.T_int64.ToType()})
+	require.NoError(t, err)
+	threeArgsResult, err := RunFunctionDirectly(proc, threeArgs.GetEncodedOverloadID(), []*vector.Vector{input, start, length}, 1)
+	require.NoError(t, err)
+	value, isNull = vector.GenerateFunctionStrParameter(threeArgsResult).GetStrValue(0)
+	require.False(t, isNull)
+	require.Equal(t, raw[1:3], string(value))
+	threeArgsResult.Free(mp)
 }
 
 // Test_BuiltInDateDiff tests DATEDIFF function
@@ -905,10 +1061,10 @@ func Test_BuiltInCharCheck(t *testing.T) {
 		}
 	}
 
-	// numeric types (float/decimal): cast to int64
+	// numeric and boolean types (float/decimal/bool): cast to int64
 	{
 		got := builtInCharCheck(nil, []types.Type{
-			types.T_float64.ToType(), types.T_decimal128.ToType(),
+			types.T_float64.ToType(), types.T_decimal128.ToType(), types.T_bool.ToType(),
 		})
 		require.Equal(t, succeedWithCast, got.status)
 		for _, ft := range got.finalType {

@@ -36,8 +36,12 @@ func newFuture(releaseFunc func(f *Future)) *Future {
 type Future struct {
 	id   uint64
 	send RPCMessage
-	c    chan Message
-	errC chan error
+	// streamOwner is local-only send lifecycle state. It is deliberately kept
+	// out of RPCMessage so ordinary wire envelopes are not enlarged or coupled
+	// to a client-side stream object.
+	streamOwner *stream
+	c           chan Message
+	errC        chan error
 	// used to check error for sending message
 	writtenC chan error
 	waiting  atomic.Bool
@@ -75,6 +79,7 @@ func (f *Future) init(send RPCMessage) {
 	f.requestMetricObserved.Store(false)
 	f.requestMetrics = nil
 	f.send = send
+	f.streamOwner = nil
 	f.send.createAt = time.Now()
 	f.id = send.Message.GetID()
 	f.oneWay = send.oneWay
@@ -330,6 +335,7 @@ func (f *Future) reset() {
 	default:
 	}
 	f.send = RPCMessage{}
+	f.streamOwner = nil
 	f.writtenAt.Store(0)
 	f.sendRelease = nil
 	f.responseRelease = nil

@@ -46,6 +46,31 @@ func TestLocalETLFSCanonicalizesEmptyRoot(t *testing.T) {
 	requireDirFilesClosed(t, fs.dirFiles, func() { fs.Close(ctx) })
 }
 
+func TestLocalETLFSListExplicitHiddenEntries(t *testing.T) {
+	ctx := context.Background()
+	dir := t.TempDir()
+	require.NoError(t, os.WriteFile(filepath.Join(dir, "visible"), []byte("v"), 0600))
+	require.NoError(t, os.WriteFile(filepath.Join(dir, ".file"), []byte("hidden"), 0600))
+	require.NoError(t, os.Mkdir(filepath.Join(dir, ".dir"), 0700))
+	fs, err := NewLocalETLFS("etl", dir)
+	require.NoError(t, err)
+	t.Cleanup(func() { fs.Close(ctx) })
+	entries, err := SortedList(fs.List(ctx, ""))
+	require.NoError(t, err)
+	require.Equal(t, []DirEntry{{Name: "visible", Size: 1}}, entries)
+	entries, err = SortedList(fs.ListWithHidden(ctx, ""))
+	require.NoError(t, err)
+	require.Len(t, entries, 3)
+	require.Equal(t, ".dir", entries[0].Name)
+	require.True(t, entries[0].IsDir)
+	require.Equal(t, DirEntry{Name: ".file", Size: 6}, entries[1])
+	require.Equal(t, DirEntry{Name: "visible", Size: 1}, entries[2])
+	cancelled, cancel := context.WithCancel(ctx)
+	cancel()
+	_, err = SortedList(fs.ListWithHidden(cancelled, ""))
+	require.ErrorIs(t, err, context.Canceled)
+}
+
 func TestLocalETLFS(t *testing.T) {
 
 	t.Run("file service", func(t *testing.T) {

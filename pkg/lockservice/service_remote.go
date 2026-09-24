@@ -460,7 +460,13 @@ func (s *service) handleRemoteLock(
 		return
 	}
 
-	s.acquireTxnBindRef(txn, bind, &admission)
+	if err := s.acquireTxnBindRef(txn, bind, &admission); err != nil {
+		txn.Unlock()
+		s.bindChangeMu.RUnlock()
+		s.detachRejectedRemoteBind(bind)
+		_ = writeResponseWithDeadline(s.logger, cancel, resp, err, cs, defaultRPCWriteTimeout, logFields)
+		return
+	}
 	txnID := append([]byte(nil), req.Lock.TxnID...)
 	ctx, finishLockOp := txn.beginLockOpLocked(ctx)
 	s.bindChangeMu.RUnlock()
@@ -621,7 +627,13 @@ func (s *service) handleForwardLock(
 		return
 	}
 
-	s.acquireTxnBindRef(txn, bind, &admission)
+	if err := s.acquireTxnBindRef(txn, bind, &admission); err != nil {
+		txn.Unlock()
+		s.bindChangeMu.RUnlock()
+		s.detachRejectedRemoteBind(bind)
+		_ = writeResponseWithDeadline(s.logger, cancel, resp, err, cs, defaultRPCWriteTimeout, logFields)
+		return
+	}
 	txnID := append([]byte(nil), req.Lock.TxnID...)
 	ctx, finishLockOp := txn.beginLockOpLocked(ctx)
 	s.bindChangeMu.RUnlock()
@@ -739,6 +751,12 @@ func (s *service) handleGetActiveTxn(
 			return true
 		})
 	}
+	if resp.GetActiveTxn.Valid {
+		s.externalTxns.iter(func(txnID []byte) bool {
+			resp.GetActiveTxn.Txn = append(resp.GetActiveTxn.Txn, txnID)
+			return true
+		})
+	}
 	writeResponse(s.logger, cancel, resp, nil, cs)
 }
 
@@ -752,11 +770,14 @@ func (s *service) handleCheckActiveTxn(
 	if resp.CheckActiveTxn.Valid && s.unknownCommitResolver != nil {
 		// TxnIterFunc tracks frontend transaction operators. An unknown Commit
 		// can already have removed its operator while lockservice is still
-		// retaining it to finish a remote proxy ReplaceTo. Only that resolver-
-		// owned state must delay orphan cleanup. activeTxnHolder also contains
-		// ordinary lockservice holders, whose liveness must remain governed by
-		// TxnIterFunc.
+		// retaining it to finish a remote proxy ReplaceTo, so the resolver keeps
+		// that txn live until cleanup completes. Ordinary activeTxnHolder entries
+		// are not authoritative liveness; externally owned session locks are
+		// tracked separately below.
 		resp.CheckActiveTxn.Active = s.unknownCommitResolver.isPending(req.CheckActiveTxn.Txn)
+	}
+	if resp.CheckActiveTxn.Valid && !resp.CheckActiveTxn.Active {
+		resp.CheckActiveTxn.Active = s.externalTxns.contains(req.CheckActiveTxn.Txn)
 	}
 	if resp.CheckActiveTxn.Valid && !resp.CheckActiveTxn.Active && s.cfg.TxnIterFunc != nil {
 		s.cfg.TxnIterFunc(func(txnID []byte) bool {
@@ -1017,11 +1038,16 @@ func (s *service) getLocalLockTableWithContext(
 			return nil, ErrLockTableBindChanged
 		}
 
-		s.logger.Fatal("get local lock table, but found remote lock table, ip reused between two cns.",
+		// The request was routed to a replacement CN which reused another CN's
+		// endpoint while discovery still advertised the old UUID. This is a stale
+		// routing observation, not a local invariant violation: reject the request
+		// so the sender can refresh/fence its bind without terminating this CN.
+		s.logger.Warn("reject lock request routed to a different cn uuid",
 			zap.String("request", req.DebugString()),
 			zap.String("serviceID", s.serviceID),
 			zap.String("request-lock-table", req.LockTable.DebugString()),
 			zap.String("current-bind", bind.DebugString()))
+		return nil, ErrLockTableBindChanged
 	}
 
 	return l, nil
@@ -1163,6 +1189,9 @@ func (s *service) checkTxnTimeout(ctx context.Context) {
 }
 
 func (s *service) canUnlockLocalTxn(t []byte) (bool, timestamp.Timestamp) {
+	if s.externalTxns.contains(t) {
+		return false, timestamp.Timestamp{}
+	}
 	if s.cfg.TxnIterFunc == nil {
 		return false, timestamp.Timestamp{}
 	}

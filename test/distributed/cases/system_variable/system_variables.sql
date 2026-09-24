@@ -19,6 +19,8 @@ select @@server_id;
 
 -- auto_increment_increment
 
+set @saved_auto_increment_increment = @@session.auto_increment_increment;
+
 show variables like 'auto%';
 
 show variables like 'auto_increment_increment';
@@ -28,6 +30,7 @@ set auto_increment_increment = 1+1;
 show variables like 'auto_increment_increment';
 set auto_increment_increment = 2*3;
 show variables like 'auto_increment_increment';
+set auto_increment_increment = @saved_auto_increment_increment;
 
 -- init_connect
 show variables like 'init%';

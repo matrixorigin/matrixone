@@ -489,11 +489,54 @@ func getDataBranchMutationExecutor(
 	opts ...*BackgroundExecOption,
 ) (BackgroundExec, func(error) error, error) {
 	explicitTxn := ses.proc.GetTxnOperator().TxnOptions().ByBegin
-	bh, deferred, err := getBackExecutor(ctx, ses, opts...)
+	return getLineageOwnerMutationExecutor(
+		ctx, ses, featureLimited, explicitTxn, true, getBackExecutor, opts...,
+	)
+}
+
+type backgroundExecutorFactory func(
+	context.Context,
+	*Session,
+	...*BackgroundExecOption,
+) (BackgroundExec, func(error) error, error)
+
+func getCloneMutationExecutor(
+	ctx context.Context,
+	ses *Session,
+	useTxnHandler bool,
+	opts ...*BackgroundExecOption,
+) (BackgroundExec, func(error) error, error) {
+	if useTxnHandler {
+		return getLineageOwnerMutationExecutor(
+			ctx, ses, false,
+			ses.GetTxnHandler().OptionBitsIsSet(OPTION_BEGIN), false,
+			getBackExecutorWithTxnHandler, opts...,
+		)
+	}
+	return getLineageOwnerMutationExecutor(
+		ctx, ses, false,
+		ses.proc.GetTxnOperator().TxnOptions().ByBegin, false,
+		getBackExecutor, opts...,
+	)
+}
+
+func getLineageOwnerMutationExecutor(
+	ctx context.Context,
+	ses *Session,
+	featureLimited bool,
+	explicitTxn bool,
+	validateExplicitTxn bool,
+	factory backgroundExecutorFactory,
+	opts ...*BackgroundExecOption,
+) (BackgroundExec, func(error) error, error) {
+	bh, deferred, err := factory(ctx, ses, opts...)
 	if err != nil {
 		return nil, nil, err
 	}
 	if explicitTxn {
+		if !validateExplicitTxn {
+			return bh, deferred, nil
+		}
 		// Preserve DATA BRANCH's transactional SQL contract without letting a
 		// client-controlled transaction own the global row after this statement.
 		// Successful owner-catalog work is validated with fast-fail admission at
@@ -541,6 +584,10 @@ func dataBranchCreateTable(
 	); err != nil {
 		return
 	}
+	restoreReqCtx := installDataBranchCloneContext(
+		execCtx, tree.NormalCloneLevelTable, "",
+	)
+	defer restoreReqCtx()
 
 	defer func() {
 		if deferred != nil {
@@ -579,9 +626,6 @@ func dataBranchCreateTable(
 		ses.GetTxnCompileCtx().SetDatabase(oldDefault)
 	}()
 
-	execCtx.reqCtx = context.WithValue(execCtx.reqCtx, tree.CloneLevelCtxKey{}, tree.NormalCloneLevelTable)
-	execCtx.reqCtx = context.WithValue(execCtx.reqCtx, dataBranchCloneLockCtxKey{}, true)
-
 	if receipt, err = handleCloneTable(execCtx, ses, cloneStmt, bh, &cloneAccountResolution{
 		opAccountId: opAccountID,
 		toAccountId: targetAccountID,
@@ -614,6 +658,11 @@ func dataBranchCreateDatabase(
 		authStats statistic.StatsArray
 	)
 	stats.Reset()
+	if err = requireDataBranchDatabaseIdentity(
+		execCtx.reqCtx, currentProtocolVersion(ses.proc),
+	); err != nil {
+		return
+	}
 	if bh, deferred, err = getDataBranchMutationExecutor(
 		execCtx.reqCtx, ses, true, &BackgroundExecOption{
 			forcePessimisticRC:             true,
@@ -622,16 +671,16 @@ func dataBranchCreateDatabase(
 	); err != nil {
 		return
 	}
+	restoreReqCtx := installDataBranchCloneContext(
+		execCtx, tree.NormalCloneLevelDatabase, catalog.SystemDBTypeDataBranch,
+	)
+	defer restoreReqCtx()
 
 	defer func() {
 		if deferred != nil {
 			err = deferred(err)
 		}
 	}()
-	execCtx.reqCtx = context.WithValue(
-		execCtx.reqCtx, tree.CloneLevelCtxKey{}, tree.NormalCloneLevelDatabase,
-	)
-	execCtx.reqCtx = context.WithValue(execCtx.reqCtx, dataBranchCloneLockCtxKey{}, true)
 
 	if !skipDataBranchPrivilegeCheck(ses) {
 		if authStats, err = authenticateDataBranchCreateDatabase(execCtx.reqCtx, ses, stmt); err != nil {
@@ -678,6 +727,27 @@ func dataBranchCreateDatabase(
 	}
 
 	return
+}
+
+// installDataBranchCloneContext keeps clone-only values within one frontend
+// statement. ExecCtx spans every statement in a multi-statement COM_QUERY, so
+// mutating its request context without restoration can make an ordinary DDL
+// inherit DATA BRANCH identity or clone-lock ownership.
+func installDataBranchCloneContext(
+	execCtx *ExecCtx,
+	level tree.CloneLevelType,
+	databaseType string,
+) func() {
+	previous := execCtx.reqCtx
+	derived := context.WithValue(previous, tree.CloneLevelCtxKey{}, level)
+	derived = context.WithValue(derived, dataBranchCloneLockCtxKey{}, true)
+	if databaseType != "" {
+		derived = context.WithValue(derived, defines.DatTypKey{}, databaseType)
+	}
+	execCtx.reqCtx = derived
+	return func() {
+		execCtx.reqCtx = previous
+	}
 }
 
 func validateDataBranchCreateTxn(pessimistic bool) error {
@@ -847,7 +917,12 @@ func dataBranchDeleteDatabase(
 		return
 	}
 
-	if tableIDs, err = validateDataBranchDeleteDatabaseTarget(execCtx.reqCtx, ses, bh, dbName.String()); err != nil {
+	if err = lockDataBranchDeleteDatabaseTarget(execCtx.reqCtx, ses, bh, dbName.String()); err != nil {
+		return
+	}
+	if tableIDs, err = validateDataBranchDeleteDatabaseTarget(
+		execCtx.reqCtx, ses, bh, dbName.String(), currentProtocolVersion(ses.proc),
+	); err != nil {
 		return
 	}
 
@@ -888,25 +963,6 @@ func diffMergeAgency(
 		return err
 	}
 
-	// do not open another transaction,
-	// if this already executed within a transaction.
-	if bh, deferred, err = getDataBranchOperationExecutor(execCtx, ses); err != nil {
-		return
-	}
-
-	defer func() {
-		if deferred != nil {
-			err = deferred(err)
-		}
-	}()
-
-	var (
-		ctx    context.Context
-		cancel context.CancelFunc
-	)
-
-	ctx, cancel = context.WithCancel(execCtx.reqCtx)
-
 	var (
 		dagInfo   branchMetaInfo
 		tblStuff  tableStuff
@@ -917,10 +973,6 @@ func diffMergeAgency(
 		pickStmt  *tree.DataBranchPick
 	)
 
-	defer func() {
-		cancel()
-	}()
-
 	if diffStmt, ok = stmt.(*tree.DataBranchDiff); !ok {
 		if mergeStmt, ok = stmt.(*tree.DataBranchMerge); !ok {
 			if pickStmt, ok = stmt.(*tree.DataBranchPick); !ok {
@@ -928,6 +980,23 @@ func diffMergeAgency(
 			}
 		}
 	}
+
+	// DIFF, PICK, and MERGE all create and drop apply tables. Enter the
+	// lineage-owner lifecycle before resolving either endpoint, so their nested
+	// DDL follows the same lineage -> view-metadata -> object lock order as
+	// ordinary DROP, clone, and restore paths.
+	bh, deferred, err = getDataBranchOperationExecutor(execCtx, ses)
+	if err != nil {
+		return
+	}
+	defer func() {
+		if deferred != nil {
+			err = deferred(err)
+		}
+	}()
+
+	ctx, cancel := context.WithCancel(execCtx.reqCtx)
+	defer cancel()
 
 	if diffStmt != nil {
 		if diffStmt.OutputOpt != nil && len(diffStmt.OutputOpt.DirPath) != 0 {
@@ -1149,20 +1218,20 @@ func diffMergeAgency(
 // not advance the workspace statement while the other side still has open
 // write scopes.
 //
-// An explicit user transaction already has an outer frontend statement owner,
-// and getBackExecutor returns a derived shared-transaction executor for it.
-// Only the independent background transaction needs the boundary below.
+// The lineage-owner mutation executor acquires the lifecycle lock before
+// source resolution. An explicit user transaction already has an outer
+// frontend statement owner; only the independent background transaction needs
+// the boundary below.
 func getDataBranchOperationExecutor(
 	execCtx *ExecCtx,
 	ses *Session,
 ) (BackgroundExec, func(error) error, error) {
-	if ses.proc.GetTxnOperator().TxnOptions().ByBegin {
-		return getBackExecutor(execCtx.reqCtx, ses)
-	}
-
-	bh, finish, err := getBackExecutor(execCtx.reqCtx, ses)
+	bh, finish, err := getDataBranchMutationExecutor(execCtx.reqCtx, ses, false)
 	if err != nil {
 		return nil, nil, err
+	}
+	if ses.proc.GetTxnOperator().TxnOptions().ByBegin {
+		return bh, finish, nil
 	}
 
 	back := bh.(*backExec)

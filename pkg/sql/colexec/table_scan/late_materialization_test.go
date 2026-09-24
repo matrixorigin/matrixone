@@ -116,6 +116,7 @@ func lateTestCompare(t *testing.T, name string, pos int32, value int32) *pbplan.
 func TestConfigureLateMaterialization(t *testing.T) {
 	intType := types.T_int32.ToType()
 	shortVarchar := types.New(types.T_varchar, 36, 0)
+	blockSizedChar := types.New(types.T_char, 120, 0)
 	wideVarchar := types.New(types.T_varchar, 1024, 0)
 	textType := types.T_text.ToType()
 
@@ -154,6 +155,22 @@ func TestConfigureLateMaterialization(t *testing.T) {
 		require.Equal(t, []int{3}, scan.ctr.lateColumns)
 	})
 
+	t.Run("defers bounded output whose full block payload is large", func(t *testing.T) {
+		scan := &TableScan{
+			Attrs: []string{"filter_col", "small_value", "block_sized_value"},
+			Types: []pbplan.Type{
+				plan.MakePlan2Type(&intType),
+				plan.MakePlan2Type(&shortVarchar),
+				plan.MakePlan2Type(&blockSizedChar),
+			},
+			FilterExprs: []*pbplan.Expr{lateTestCol(0, intType)},
+			ctr:         container{allFilterExecutors: []colexec.ExpressionExecutor{nil}},
+		}
+		scan.configureLateMaterialization()
+		require.Equal(t, []int{0, 1}, scan.ctr.earlyColumns)
+		require.Equal(t, []int{2}, scan.ctr.lateColumns)
+	})
+
 	t.Run("unsupported reference stays eager", func(t *testing.T) {
 		scan := newScan(0)
 		scan.FilterExprs = []*pbplan.Expr{{Expr: &pbplan.Expr_Raw{Raw: &pbplan.RawColRef{}}}}
@@ -161,6 +178,14 @@ func TestConfigureLateMaterialization(t *testing.T) {
 		require.Empty(t, scan.ctr.earlyColumns)
 		require.Empty(t, scan.ctr.lateColumns)
 	})
+}
+
+func TestLateMaterializationCandidateUsesBlockPayload(t *testing.T) {
+	belowThreshold := types.New(types.T_varchar, 95, 0)
+	atThreshold := types.New(types.T_varchar, 96, 0)
+
+	require.False(t, isLateMaterializationCandidate(plan.MakePlan2Type(&belowThreshold)))
+	require.True(t, isLateMaterializationCandidate(plan.MakePlan2Type(&atThreshold)))
 }
 
 func TestLateMaterializationFilterPreservesOriginalSelections(t *testing.T) {
@@ -204,7 +229,7 @@ func TestLateMaterializationFilterPreservesOriginalSelections(t *testing.T) {
 func TestLateMaterializationFilterSkipsUnloadedCharColumns(t *testing.T) {
 	proc := testutil.NewProc(t)
 	intType := types.T_int32.ToType()
-	charType := types.New(types.T_char, lateMaterializationMinVarlenWidth, 0)
+	charType := types.New(types.T_char, 120, 0)
 	scan := &TableScan{
 		Attrs: []string{"filter_col", "late_char"},
 		Types: []pbplan.Type{

@@ -27,6 +27,64 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/txn/client"
 )
 
+// AutoIncrementOptions are the statement-scoped AUTO_INCREMENT controls.
+//
+// The allocator owns globally disjoint ranges of the underlying unit-step
+// sequence.  These options only select the values in that range which belong
+// to the current session's series; they must never mutate AutoColumn.Step or
+// any shared cache state.
+type AutoIncrementOptions struct {
+	Increment uint64
+	Offset    uint64
+}
+
+func (o AutoIncrementOptions) isDefault() bool {
+	return o.Increment == 1 && o.Offset == 1
+}
+
+// IsDefault reports whether the normalized options select the ordinary
+// unit-step series. It is exported for remote-protocol compatibility checks;
+// callers should normalize values before relying on the result.
+func (o AutoIncrementOptions) IsDefault() bool {
+	return o.isDefault()
+}
+
+// NormalizeAutoIncrementOptions applies the same safe defaults used by the
+// frontend variables.  A zero value can occur for old remote process payloads
+// and background processes which have no session resolver.  MySQL ignores an
+// offset greater than the increment, so use the default residue in that case.
+func NormalizeAutoIncrementOptions(increment, offset uint64) AutoIncrementOptions {
+	if increment == 0 {
+		increment = 1
+	}
+	if offset == 0 || offset > increment {
+		offset = 1
+	}
+	return AutoIncrementOptions{Increment: increment, Offset: offset}
+}
+
+type autoIncrementOptionsKey struct{}
+
+// WithAutoIncrementOptions attaches statement-scoped AUTO_INCREMENT
+// semantics to the execution context.  Keeping this state in context avoids
+// widening the public service interface and therefore keeps existing remote
+// and test implementations source-compatible.
+func WithAutoIncrementOptions(ctx context.Context, increment, offset uint64) context.Context {
+	if ctx == nil {
+		ctx = context.Background()
+	}
+	return context.WithValue(ctx, autoIncrementOptionsKey{}, NormalizeAutoIncrementOptions(increment, offset))
+}
+
+func AutoIncrementOptionsFromContext(ctx context.Context) AutoIncrementOptions {
+	if ctx != nil {
+		if options, ok := ctx.Value(autoIncrementOptionsKey{}).(AutoIncrementOptions); ok {
+			return NormalizeAutoIncrementOptions(options.Increment, options.Offset)
+		}
+	}
+	return NormalizeAutoIncrementOptions(1, 1)
+}
+
 // GetAutoIncrementService get increment service from process level runtime
 func GetAutoIncrementService(sid string) AutoIncrementService {
 	v, ok := runtime.ServiceRuntime(sid).GetGlobalVariables(runtime.AutoIncrementService)
@@ -123,7 +181,7 @@ type incrTableCache interface {
 	commit()
 	columns() []AutoColumn
 	insertAutoValues(ctx context.Context, tableID uint64, vecs []*vector.Vector, rows int, estimate int64) (uint64, error)
-	currentValue(ctx context.Context, tableID uint64, col string) (uint64, error)
+	currentValue(ctx context.Context, tableID uint64, col string, store IncrValueStore) (uint64, error)
 	getLastAllocateTS(ctx context.Context, colName string) (timestamp.Timestamp, error)
 	adjust(ctx context.Context, cols []AutoColumn) error
 	close() error
@@ -141,6 +199,8 @@ type valueAllocator interface {
 type IncrValueStore interface {
 	// GetColumns return auto columns of table.
 	GetColumns(ctx context.Context, tableID uint64, txnOp client.TxnOperator) ([]AutoColumn, error)
+	// GetColumnValue observes fresh offset/step without reserving IDs or reading table policy.
+	GetColumnValue(ctx context.Context, tableID uint64, colName string, txnOp client.TxnOperator) (uint64, uint64, error)
 	// Create add metadata records into catalog.AutoIncrTableName.
 	Create(ctx context.Context, tableID uint64, cols []AutoColumn, txnOp client.TxnOperator) error
 	// Allocate allocate new range for auto-increment column.
@@ -167,6 +227,8 @@ type AutoColumn struct {
 	ColIndex int
 	Offset   uint64
 	Step     uint64
+	// CacheSize is projected from the table's SchemaExtra, not stored in the allocator row.
+	CacheSize uint64
 }
 
 // ValidateAutoColumnOffset rejects allocator offsets that cannot be represented
@@ -226,11 +288,12 @@ func getAutoColumnsFromDef(def *plan.TableDef, include func(*plan.ColDef) bool) 
 	for i, col := range def.Cols {
 		if col.Typ.AutoIncr && include(col) {
 			cols = append(cols, AutoColumn{
-				ColName:  col.Name,
-				TableID:  def.TblId,
-				Step:     1,
-				Offset:   def.AutoIncrOffset,
-				ColIndex: i,
+				ColName:   col.Name,
+				TableID:   def.TblId,
+				Step:      1,
+				Offset:    def.AutoIncrOffset,
+				ColIndex:  i,
+				CacheSize: def.AutoIdCache,
 			})
 		}
 	}

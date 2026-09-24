@@ -199,43 +199,85 @@ func TestIssue26087ConcurrentDataBranchQuota(t *testing.T) {
 			terminalPaths := []struct {
 				name      string
 				statement string
+				wantRows  int
 			}{
-				{name: "commit", statement: "commit"},
-				{name: "replacement_begin", statement: "begin"},
+				{name: "commit", statement: "commit", wantRows: 1},
+				{name: "replacement_begin", statement: "begin", wantRows: 1},
+				{name: "rollback", statement: "rollback", wantRows: 0},
 			}
+			services := issue27487LockServices(c)
+			require.NotEmpty(t, services)
+			var snapshotTableID uint64
+			require.NoError(t, sysDB.QueryRowContext(ctx,
+				"select rel_id from mo_catalog.mo_tables where account_id=0 and reldatabase='mo_catalog' and relname='mo_feature_registry'",
+			).Scan(&snapshotTableID))
 			for i, terminalPath := range terminalPaths {
-				tableName := fmt.Sprintf("explicit_holder_%d", i)
-				snapshotName := fmt.Sprintf("issue_26087_holder_probe_%d", i)
-				require.NoError(t, execConn(conn1, "begin"))
-				require.NoError(t, execConn(conn1,
-					"data branch create table branch_quota_race."+tableName+" from branch_quota_race.src"))
-				// The explicit tenant transaction has already mutated owner catalogs
-				// but must not own the global lifecycle row between statements. A
-				// system owner writer therefore completes before every reachable
-				// terminal commit path validates the tenant transaction.
-				snapshotDone := make(chan error, 1)
-				go func() {
-					_, snapshotErr := sysDB.ExecContext(execCtx,
-						"create snapshot "+snapshotName+" for account "+accountName)
-					snapshotDone <- snapshotErr
+				func() {
+					tableName := fmt.Sprintf("explicit_holder_%d", i)
+					snapshotName := fmt.Sprintf("issue_26087_holder_probe_%d", i)
+					require.NoError(t, execConn(conn1, "begin"))
+					require.NoError(t, execConn(conn1,
+						"data branch create table branch_quota_race."+tableName+" from branch_quota_race.src"))
+					// DDL now retains SNAPSHOT before View through the entire transaction.
+					// Observe a real waiter before ending the holder: elapsed time alone
+					// cannot distinguish serialization from a snapshot that never started.
+					beforeSnapshot, _ := issue28317Waiters(services, snapshotTableID)
+					snapshotCtx, cancelSnapshot := context.WithCancel(execCtx)
+					snapshotDone := make(chan error, 1)
+					joined := false
+					defer func() {
+						cancelSnapshot()
+						cleanupCtx, cleanupCancel := context.WithTimeout(context.Background(), 10*time.Second)
+						defer cleanupCancel()
+						_, _ = conn1.ExecContext(cleanupCtx, "rollback")
+						if !joined {
+							select {
+							case <-snapshotDone:
+							case <-cleanupCtx.Done():
+								t.Error("snapshot cleanup did not return")
+							}
+						}
+						if _, err := sysDB.ExecContext(cleanupCtx, "drop snapshot if exists "+snapshotName); err != nil {
+							t.Errorf("snapshot cleanup: %v", err)
+						}
+					}()
+					go func() {
+						_, snapshotErr := sysDB.ExecContext(snapshotCtx,
+							"create snapshot "+snapshotName+" for account "+accountName)
+						snapshotDone <- snapshotErr
+					}()
+					require.Eventually(t, func() bool {
+						waiters, _ := issue28317Waiters(services, snapshotTableID)
+						return waiters > beforeSnapshot
+					}, 30*time.Second, 10*time.Millisecond, "snapshot did not reach the lifecycle gate")
+					terminalErr := execConn(conn1, terminalPath.statement)
+					require.NoError(t, terminalErr, terminalPath.name)
+					// A replacement BEGIN opened a new transaction; close it before
+					// checking committed state or performing cleanup DDL.
+					require.NoError(t, execConn(conn1, "rollback"))
+					select {
+					case snapshotErr := <-snapshotDone:
+						joined = true
+						require.NoError(t, snapshotErr, terminalPath.name)
+					case <-time.After(30 * time.Second):
+						t.Fatalf("snapshot did not resume after %s", terminalPath.name)
+					}
+					var explicitHolderCount int
+					require.NoError(t, conn1.QueryRowContext(execCtx,
+						"select count(*) from mo_catalog.mo_tables where reldatabase = 'branch_quota_race' and relname = '"+tableName+"'",
+					).Scan(&explicitHolderCount))
+					require.Equal(t, terminalPath.wantRows, explicitHolderCount, terminalPath.name)
+					if terminalPath.wantRows != 0 {
+						var value int
+						require.NoError(t, conn1.QueryRowContext(execCtx,
+							"select a from branch_quota_race."+tableName).Scan(&value))
+						require.Equal(t, 1, value)
+					}
+					execSQLRequire(t, ctx, sysDB, "drop snapshot "+snapshotName)
+					if terminalPath.wantRows != 0 {
+						require.NoError(t, execConn(conn1, "data branch delete table branch_quota_race."+tableName))
+					}
 				}()
-				select {
-				case snapshotErr := <-snapshotDone:
-					require.NoError(t, snapshotErr)
-				case <-time.After(5 * time.Second):
-					t.Fatalf("system snapshot waited for the open tenant transaction before %s", terminalPath.name)
-				}
-				terminalErr := execConn(conn1, terminalPath.statement)
-				require.Error(t, terminalErr,
-					"%s must validate and lose to the completed lifecycle writer", terminalPath.name)
-				require.NotContains(t, strings.ToLower(terminalErr.Error()), "deadlock")
-				require.NotContains(t, strings.ToLower(terminalErr.Error()), "lock wait timeout")
-				var explicitHolderCount int
-				require.NoError(t, conn1.QueryRowContext(execCtx,
-					"select count(*) from mo_catalog.mo_tables where reldatabase = 'branch_quota_race' and relname = '"+tableName+"'",
-				).Scan(&explicitHolderCount))
-				require.Zero(t, explicitHolderCount)
-				execSQLRequire(t, ctx, sysDB, "drop snapshot "+snapshotName)
 			}
 
 			createErrs := runConcurrent(

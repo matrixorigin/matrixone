@@ -106,6 +106,9 @@ const (
 // CN -> Flight and sidecar -> CN read resolver.
 type SiriusConfig struct {
 	Enabled bool `toml:"enabled"`
+	// Backend defaults to Flight during migration. Embedded selection remains
+	// fail-closed until the native backend and its build capability are present.
+	Backend string `toml:"backend"`
 	// BenchmarkNoGC enables the one-to-one CN/sidecar benchmark adapter. It
 	// must only be used together with TN GCCfg.DisableGC=true; normal Sirius
 	// startup keeps requiring durable GC-protected lease dependencies.
@@ -343,6 +346,9 @@ func (c *Config) Validate() error {
 	if c.UUID == "" {
 		panic("missing cn store UUID")
 	}
+	if err := validateCNServiceUUID(c.UUID); err != nil {
+		return err
+	}
 	if c.ListenAddress == "" {
 		c.ListenAddress = defaultListenAddress
 	}
@@ -514,6 +520,16 @@ func (c *Config) Validate() error {
 	return nil
 }
 
+func validateCNServiceUUID(serviceID string) error {
+	if serviceID == "" || serviceID == "." || serviceID == ".." || strings.ContainsAny(serviceID, `/\`) {
+		return moerr.NewBadConfigNoCtxf(
+			"CN service UUID %q must be a single path component",
+			serviceID,
+		)
+	}
+	return nil
+}
+
 func (c *SiriusConfig) validate() error {
 	if c == nil {
 		return nil
@@ -523,6 +539,9 @@ func (c *SiriusConfig) validate() error {
 	}
 	if !c.Enabled {
 		return nil
+	}
+	if err := c.validateBackend(); err != nil {
+		return err
 	}
 	if c.MaxBatchBytes == 0 {
 		c.MaxBatchBytes = 64 << 20
@@ -555,6 +574,19 @@ func (c *SiriusConfig) validate() error {
 		if setting.value == "" {
 			return moerr.NewBadConfigNoCtx("missing Sirius " + setting.name)
 		}
+	}
+	return nil
+}
+
+func (c *SiriusConfig) validateBackend() error {
+	switch c.Backend {
+	case "":
+		c.Backend = "flight"
+	case "flight":
+	case "embedded":
+		return moerr.NewBadConfigNoCtx("Sirius embedded backend is not available in this build")
+	default:
+		return moerr.NewBadConfigNoCtx("invalid Sirius backend: expected flight or embedded")
 	}
 	return nil
 }
@@ -796,6 +828,7 @@ type service struct {
 	appliedCommandIDs               map[logservice.ScheduleCommandIdentity]struct{}
 	lastCommandHash                 [32]byte
 	legacyDedupeArmed               bool
+	catalogMetadataParticipant      logservicepb.CatalogMetadataParticipant
 	viewMetadataAdmissionGeneration uint64
 	viewMetadataAdmissionMu         sync.Mutex
 	viewMetadataAdmissionMuWaiters  atomic.Int32
@@ -821,6 +854,7 @@ type service struct {
 	lifecycle           serviceLifecycleState
 	closeOnce           sync.Once
 	closeErr            error
+	closeComplete       bool
 
 	task struct {
 		sync.RWMutex

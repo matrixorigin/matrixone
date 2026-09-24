@@ -16,12 +16,158 @@ package process
 
 import (
 	"context"
+	"errors"
 	"testing"
 	"time"
 
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
 	"github.com/matrixorigin/matrixone/pkg/container/batch"
 )
+
+func TestPipelineSignalReceiverCancellationPreservesExecutionCause(t *testing.T) {
+	tests := []struct {
+		name      string
+		cause     error
+		wantError error
+	}{
+		{
+			name:      "execution failure before terminal publication",
+			cause:     moerr.NewDuplicateEntryNoCtx("1", "primary"),
+			wantError: moerr.NewDuplicateEntryNoCtx("1", "primary"),
+		},
+		{
+			name:  "graceful pipeline cancellation",
+			cause: nil,
+		},
+		{
+			name:      "joined execution failure and cancellation",
+			cause:     errors.Join(context.Canceled, moerr.NewDuplicateEntryNoCtx("2", "primary")),
+			wantError: moerr.NewDuplicateEntryNoCtx("2", "primary"),
+		},
+	}
+
+	for _, test := range tests {
+		t.Run(test.name, func(t *testing.T) {
+			ctx, cancel := context.WithCancelCause(context.Background())
+			cancel(test.cause)
+			receiver := InitPipelineSignalReceiver(ctx, []*WaitRegister{NewPipelineEdge(1, 1)})
+
+			got, err := receiver.GetNextBatch(nil)
+			if got != nil {
+				t.Fatal("canceled receiver returned a batch")
+			}
+			if test.wantError == nil {
+				if err != nil {
+					t.Fatalf("graceful cancellation returned error: %v", err)
+				}
+				return
+			}
+			var gotMoErr *moerr.Error
+			var wantMoErr *moerr.Error
+			if !errors.As(test.wantError, &wantMoErr) {
+				t.Fatalf("test expectation is not a MatrixOne error: %v", test.wantError)
+			}
+			if !errors.As(err, &gotMoErr) || gotMoErr.ErrorCode() != wantMoErr.ErrorCode() {
+				t.Fatalf("cancellation lost execution cause: got %v, want code %d", err, wantMoErr.ErrorCode())
+			}
+		})
+	}
+}
+
+func TestPipelineSignalReceiverCancellationPreservesDeadlineClass(t *testing.T) {
+	diagnostic := moerr.NewDuplicateEntryNoCtx("3", "primary")
+	ctx, cancel := context.WithDeadlineCause(
+		context.Background(), time.Now().Add(-time.Second), diagnostic)
+	defer cancel()
+	receiver := InitPipelineSignalReceiver(ctx, []*WaitRegister{NewPipelineEdge(1, 1)})
+
+	got, err := receiver.GetNextBatch(nil)
+	if got != nil {
+		t.Fatal("deadline-canceled receiver returned a batch")
+	}
+	if !errors.Is(err, context.DeadlineExceeded) {
+		t.Fatalf("deadline cancellation returned %v, want context deadline exceeded", err)
+	}
+	if errors.Is(err, diagnostic) {
+		t.Fatalf("deadline cancellation was replaced by diagnostic cause: %v", err)
+	}
+}
+
+func TestPipelineSignalReceiverCancellationPreservesDurableEdgeFailure(t *testing.T) {
+	for _, test := range []struct {
+		name  string
+		cause error
+	}{
+		{name: "plain context cancellation"},
+		{name: "query interrupted cancellation", cause: moerr.NewQueryInterrupted(context.Background())},
+	} {
+		t.Run(test.name, func(t *testing.T) {
+			ctx, cancel := context.WithCancelCause(context.Background())
+			cancel(test.cause)
+			edge := NewPipelineEdge(1, 1)
+			edge.Ch2 <- NewPipelineSignalToDirectly(batch.EmptyBatch, nil, nil)
+			duplicateErr := moerr.NewDuplicateEntryNoCtx("4", "primary")
+			if edge.SendError(duplicateErr) {
+				t.Fatal("error signal unexpectedly fit behind buffered data")
+			}
+			receiver := InitPipelineSignalReceiver(ctx, []*WaitRegister{edge})
+
+			if err := receiver.contextDoneError(); !errors.Is(err, duplicateErr) {
+				t.Fatalf("cancellation lost durable edge failure: got %v, want %v", err, duplicateErr)
+			}
+		})
+	}
+}
+
+func TestPipelineSignalReceiverDurableFailureSelectionIsOrderIndependent(t *testing.T) {
+	duplicateErr := moerr.NewDuplicateEntryNoCtx("5", "primary")
+	interruptedErr := moerr.NewQueryInterrupted(context.Background())
+
+	for _, test := range []struct {
+		name               string
+		errs               []error
+		wantSubstantiveErr bool
+	}{
+		{
+			name:               "cancellation before execution failure",
+			errs:               []error{interruptedErr, duplicateErr},
+			wantSubstantiveErr: true,
+		},
+		{
+			name:               "execution failure before cancellation",
+			errs:               []error{duplicateErr, interruptedErr},
+			wantSubstantiveErr: true,
+		},
+		{
+			name: "cancellation only",
+			errs: []error{interruptedErr, context.Canceled},
+		},
+	} {
+		t.Run(test.name, func(t *testing.T) {
+			ctx, cancel := context.WithCancel(context.Background())
+			cancel()
+
+			regs := make([]*WaitRegister, len(test.errs))
+			for i, terminalErr := range test.errs {
+				regs[i] = NewPipelineEdge(1, 1)
+				regs[i].Ch2 <- NewPipelineSignalToDirectly(batch.EmptyBatch, nil, nil)
+				if regs[i].SendError(terminalErr) {
+					t.Fatalf("error signal %d unexpectedly fit behind buffered data", i)
+				}
+			}
+
+			receiver := InitPipelineSignalReceiver(ctx, regs)
+			err := receiver.contextDoneError()
+			if test.wantSubstantiveErr {
+				if !errors.Is(err, duplicateErr) {
+					t.Fatalf("durable failure selection depended on edge order: got %v, want %v", err, duplicateErr)
+				}
+			} else if !IsPipelineCancellationError(err) {
+				t.Fatalf("cancellation-only edges returned non-cancellation error: %v", err)
+			}
+		})
+	}
+}
 
 func TestPipelineSignalReceiverWaitingEndUsesCleanupTimeout(t *testing.T) {
 	oldCleanupWaitTimeout := PipelineCleanupWaitTimeout

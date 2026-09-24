@@ -173,6 +173,19 @@ func TestObjectCopyCapabilityFallbacks(t *testing.T) {
 	require.Error(t, err)
 }
 
+func TestIsS3BackedFileServiceResolvesWrappers(t *testing.T) {
+	s3 := &S3FS{name: "archive"}
+	local := dummyFileService{name: "local"}
+	services, err := NewFileServices("local", local, s3)
+	require.NoError(t, err)
+
+	require.True(t, IsS3BackedFileService(services, "archive:input.arrow"))
+	require.True(t, IsS3BackedFileService(SubPath(s3, "tenant"), "input.arrow"))
+	require.False(t, IsS3BackedFileService(services, "local:input.arrow"))
+	require.False(t, IsS3BackedFileService(services, "missing:input.arrow"))
+	require.False(t, IsS3BackedFileService(nil, "archive:input.arrow"))
+}
+
 func TestObjectCopyRejectsIncompatibleEndpoints(t *testing.T) {
 	copied, err := (&AwsSDKv2{endpoint: "https://s3-b.example.com"}).CopyObject(
 		context.Background(), &AwsSDKv2{endpoint: "https://s3-a.example.com"}, "src", "dst",
@@ -1265,6 +1278,65 @@ func TestS3FSFullObjectDiskCacheFillDoesNotReturnWholeObjectDataWithCachedData(t
 	assert.Nil(t, vec.Entries[0].Data)
 	assert.Equal(t, int64(1), pcSet.FileService.S3.Get.Load())
 	vec.Release()
+}
+
+// The full-object default is intentional: #12198 lets later reads reuse one
+// disk-cache artifact. A bounded entry must opt in to range policy explicitly.
+func TestS3FSReadPolicyPreservesFullObjectDefault(t *testing.T) {
+	for _, tc := range []struct {
+		name   string
+		policy Policy
+		min    int64
+		max    *int64
+	}{
+		{name: "default full object", min: 0},
+		{name: "explicit range", policy: SkipFullFilePreloads, min: 123, max: ptrTo(int64(130))},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			ctx := context.Background()
+			fs, err := NewS3FS(
+				ctx,
+				ObjectStorageArguments{
+					Name: "s3", Endpoint: "disk", Bucket: t.TempDir(),
+					KeyPrefix: time.Now().Format("2006-01-02.15:04:05.000000"),
+				},
+				CacheConfig{
+					DiskPath: ptrTo(t.TempDir()), DiskCapacity: ptrTo[toml.ByteSize](1 << 20),
+				},
+				nil, false, false,
+			)
+			require.NoError(t, err)
+			t.Cleanup(func() { fs.Close(ctx) })
+
+			data := bytes.Repeat([]byte("abcd"), 1<<18)
+			require.NoError(t, fs.Write(ctx, IOVector{
+				FilePath: "foo/bar",
+				Entries:  []IOEntry{{Size: int64(len(data)), Data: data}},
+				Policy:   SkipDiskCache | SkipMemoryCache,
+			}))
+
+			recorder := &readRangeRecordingObjectStorage{ObjectStorage: fs.storage}
+			fs.storage = recorder
+			vec := &IOVector{
+				FilePath: "foo/bar",
+				Policy:   tc.policy,
+				Entries:  []IOEntry{{Offset: 123, Size: 7}},
+			}
+			t.Cleanup(vec.Release)
+			require.NoError(t, fs.Read(ctx, vec))
+			require.Equal(t, data[123:130], vec.Entries[0].Data)
+
+			read, ok := recorder.lastRead()
+			require.True(t, ok)
+			require.NotNil(t, read.min)
+			require.Equal(t, tc.min, *read.min)
+			if tc.max == nil {
+				require.Nil(t, read.max)
+			} else {
+				require.Equal(t, *tc.max, *read.max)
+			}
+		})
+	}
 }
 
 func TestS3FSRangeReadSkipsFullObjectDiskCacheUpdate(t *testing.T) {
@@ -2400,10 +2472,20 @@ func TestS3FSRangeFollowerDoesNotWaitForAsyncDiskFinalize(t *testing.T) {
 	require.True(t, fs.diskCache.isUpdating(diskPath))
 
 	unblock()
-	flushCtx, cancel := context.WithTimeout(ctx, time.Second)
+	// Flush waits for the async finalizer to publish the cache file.  Keep a
+	// generous bounded deadline here: the finalizer is deliberately blocked
+	// above, and a loaded CI worker may need more than one scheduler quantum
+	// after it is released.  The test still fails fast on a genuinely stuck
+	// finalizer while avoiding a false timeout caused by CI contention.
+	flushCtx, cancel := context.WithTimeout(ctx, diskCacheLifecycleTestTimeout)
 	defer cancel()
 	fs.FlushCache(flushCtx)
 	require.NoError(t, flushCtx.Err())
+	require.Eventually(t, func() bool {
+		return !fs.diskCache.isUpdating(diskPath)
+	}, diskCacheLifecycleTestTimeout, time.Millisecond,
+		"async range finalizer did not release its update reservation")
+	require.FileExists(t, diskPath)
 }
 
 func TestS3FSReadFullObjectToDiskCacheStreamingReturnsReaderError(t *testing.T) {

@@ -32,6 +32,7 @@ import (
 	mock_frontend "github.com/matrixorigin/matrixone/pkg/frontend/test"
 	"github.com/matrixorigin/matrixone/pkg/objectio"
 	"github.com/matrixorigin/matrixone/pkg/pb/api"
+	"github.com/matrixorigin/matrixone/pkg/pb/metadata"
 	pbplan "github.com/matrixorigin/matrixone/pkg/pb/plan"
 	txnpb "github.com/matrixorigin/matrixone/pkg/pb/txn"
 	"github.com/matrixorigin/matrixone/pkg/sql/colexec"
@@ -49,6 +50,203 @@ func TestValidateAutoIncrEpochAdvance(t *testing.T) {
 	require.NoError(t, validateAutoIncrEpochAdvance(math.MaxUint32-1, 1))
 	require.Error(t, validateAutoIncrEpochAdvance(math.MaxUint32, 1))
 	require.Error(t, validateAutoIncrEpochAdvance(math.MaxUint32-1, 2))
+}
+
+func TestWorkspaceCommitValidatesCreatedDatabaseCatalogWrites(t *testing.T) {
+	t.Run("matching production tuple is encoded", func(t *testing.T) {
+		txn := newCatalogCreateTxnForTest(t)
+		addActiveDatabaseCreateForTest(t, txn, 7, "db", 42)
+		appendCreateDatabaseTupleForTest(t, txn, 7, "db", 42, false)
+
+		reqs, err := buildCatalogCreateReqsForTest(t, txn)
+		require.NoError(t, err)
+		require.Len(t, reqs, 1)
+		cmd := decodePrecommitWriteCmdForTest(t, reqs[0])
+		require.Len(t, cmd.EntryList, 1)
+		entry := cmd.EntryList[0]
+		require.Equal(t, uint64(catalog.MO_CATALOG_ID), entry.DatabaseId)
+		require.Equal(t, uint64(catalog.MO_DATABASE_ID), entry.TableId)
+		bat, err := batch.ProtoBatchToBatch(entry.Bat)
+		require.NoError(t, err)
+		require.Equal(t, uint64(42), vector.GetFixedAtNoTypeCheck[uint64](bat.Vecs[catalog.MO_DATABASE_DAT_ID_IDX], 0))
+		require.Equal(t, "db", string(bat.Vecs[catalog.MO_DATABASE_DAT_NAME_IDX].GetBytesAt(0)))
+		require.Equal(t, uint32(7), vector.GetFixedAtNoTypeCheck[uint32](bat.Vecs[catalog.MO_DATABASE_ACCOUNT_ID_IDX], 0))
+	})
+
+	for _, tc := range []struct {
+		name         string
+		tupleAccount uint32
+		tupleName    string
+		tupleID      uint64
+		empty        bool
+	}{
+		{name: "empty tuple", tupleAccount: 7, tupleName: "db", tupleID: 42, empty: true},
+		{name: "wrong tenant", tupleAccount: 8, tupleName: "db", tupleID: 42},
+		{name: "wrong name", tupleAccount: 7, tupleName: "other", tupleID: 42},
+		{name: "wrong database id", tupleAccount: 7, tupleName: "db", tupleID: 43},
+	} {
+		t.Run(tc.name+" fails closed", func(t *testing.T) {
+			txn := newCatalogCreateTxnForTest(t)
+			addActiveDatabaseCreateForTest(t, txn, 7, "db", 42)
+			appendCreateDatabaseTupleForTest(t, txn, tc.tupleAccount, tc.tupleName, tc.tupleID, tc.empty)
+
+			reqs, err := buildCatalogCreateReqsForTest(t, txn)
+			require.Nil(t, reqs)
+			require.ErrorContains(t, err, "catalog insert is missing or inconsistent")
+		})
+	}
+
+	t.Run("nil catalog batch fails closed", func(t *testing.T) {
+		txn := newCatalogCreateTxnForTest(t)
+		addActiveDatabaseCreateForTest(t, txn, 7, "db", 42)
+		appendWorkspaceEntryForTest(txn, Entry{
+			typ: INSERT, databaseId: catalog.MO_CATALOG_ID, tableId: catalog.MO_DATABASE_ID,
+			databaseName: catalog.MO_CATALOG, tableName: catalog.MO_DATABASE,
+			note: noteForCreate(7, "db"), tnStore: catalogCreateTNStoreForTest(),
+		})
+
+		reqs, err := buildCatalogCreateReqsForTest(t, txn)
+		require.Nil(t, reqs)
+		require.ErrorContains(t, err, "catalog insert is missing")
+	})
+
+	t.Run("multiple databases are independently certified", func(t *testing.T) {
+		txn := newCatalogCreateTxnForTest(t)
+		addActiveDatabaseCreateForTest(t, txn, 7, "alpha", 41)
+		addActiveDatabaseCreateForTest(t, txn, 8, "beta", 42)
+		appendCreateDatabaseTupleForTest(t, txn, 7, "alpha", 41, false)
+		appendCreateDatabaseTupleForTest(t, txn, 8, "beta", 42, false)
+
+		reqs, err := buildCatalogCreateReqsForTest(t, txn)
+		require.NoError(t, err)
+		require.Len(t, reqs, 1)
+		require.Len(t, decodePrecommitWriteCmdForTest(t, reqs[0]).EntryList, 2)
+	})
+
+	t.Run("superseded create cannot certify recreated database id", func(t *testing.T) {
+		txn := newCatalogCreateTxnForTest(t)
+		addActiveDatabaseCreateForTest(t, txn, 7, "db", 41)
+		require.NoError(t, txn.workspace.addDatabaseOp(genDatabaseKey(7, "db"), DELETE, 41, nil))
+		addActiveDatabaseCreateForTest(t, txn, 7, "db", 42)
+		appendCreateDatabaseTupleForTest(t, txn, 7, "db", 41, false)
+
+		reqs, err := buildCatalogCreateReqsForTest(t, txn)
+		require.Nil(t, reqs)
+		require.ErrorContains(t, err, "id 42")
+	})
+
+	t.Run("create then drop is a valid net no-op", func(t *testing.T) {
+		txn := newCatalogCreateTxnForTest(t)
+		addActiveDatabaseCreateForTest(t, txn, 7, "db", 42)
+		require.NoError(t, txn.workspace.addDatabaseOp(genDatabaseKey(7, "db"), DELETE, 42, nil))
+		require.Empty(t, txn.pendingCreatedDatabaseWrites())
+	})
+
+	t.Run("statement rollback removes create and tuple together", func(t *testing.T) {
+		txn := newCatalogCreateTxnForTest(t)
+		addActiveDatabaseCreateForTest(t, txn, 7, "db", 42)
+		appendCreateDatabaseTupleForTest(t, txn, 7, "db", 42, false)
+
+		rollback, err := txn.workspace.rollbackCurrentAttempt()
+		require.NoError(t, err)
+		rollback.Close()
+		require.Empty(t, txn.pendingCreatedDatabaseWrites())
+		reqs, err := buildCatalogCreateReqsForTest(t, txn)
+		require.NoError(t, err)
+		require.Nil(t, reqs)
+	})
+}
+
+func newCatalogCreateTxnForTest(t *testing.T) *Transaction {
+	t.Helper()
+	proc := testutil.NewProc(t)
+	txn := &Transaction{proc: proc, workspace: newTxnWorkspace()}
+	txn.op = newTxnOperatorForTestWithWorkspace(t, txn)
+	txn.haveDDL.Store(true)
+	t.Cleanup(func() {
+		closeWorkspaceForTest(t, txn)
+		proc.Free()
+	})
+	return txn
+}
+
+func catalogCreateTNStoreForTest() DNStore {
+	return DNStore{
+		ServiceID:         "tn-test",
+		TxnServiceAddress: "tn-test-address",
+		Shards: []metadata.TNShard{{
+			TNShardRecord: metadata.TNShardRecord{ShardID: 1},
+			ReplicaID:     1,
+		}},
+	}
+}
+
+func addActiveDatabaseCreateForTest(t *testing.T, txn *Transaction, accountID uint32, name string, databaseID uint64) {
+	t.Helper()
+	key := genDatabaseKey(accountID, name)
+	db := &txnDatabase{accountId: accountID, databaseId: databaseID, databaseName: name}
+	require.NoError(t, txn.workspace.addDatabaseOp(key, INSERT, databaseID, db))
+}
+
+func appendCreateDatabaseTupleForTest(t *testing.T, txn *Transaction, tupleAccountID uint32, tupleName string, tupleDatabaseID uint64, empty bool) {
+	t.Helper()
+	packer := types.NewPacker()
+	defer packer.Close()
+	bat, err := catalog.GenCreateDatabaseTuple(
+		"create database "+tupleName, tupleAccountID, 1, 1, tupleName, tupleDatabaseID, "", txn.proc.Mp(), packer,
+	)
+	require.NoError(t, err)
+	if empty {
+		bat.SetRowCount(0)
+		appendWorkspaceEntryForTest(txn, Entry{
+			typ: INSERT, accountId: catalog.System_Account,
+			databaseId: catalog.MO_CATALOG_ID, tableId: catalog.MO_DATABASE_ID,
+			databaseName: catalog.MO_CATALOG, tableName: catalog.MO_DATABASE,
+			bat: bat, tnStore: catalogCreateTNStoreForTest(),
+		})
+		return
+	}
+	_, err = txn.WriteBatch(
+		INSERT, noteForCreate(uint64(tupleAccountID), tupleName), catalog.System_Account,
+		catalog.MO_CATALOG_ID, catalog.MO_DATABASE_ID, catalog.MO_CATALOG, catalog.MO_DATABASE,
+		bat, catalogCreateTNStoreForTest(),
+	)
+	require.NoError(t, err)
+}
+
+func buildCatalogCreateReqsForTest(t *testing.T, txn *Transaction) ([]txnpb.TxnRequest, error) {
+	t.Helper()
+	builder, err := txn.newWorkspaceCommitBuilder()
+	require.NoError(t, err)
+	defer builder.Close()
+	return builder.Build(context.Background())
+}
+
+func decodePrecommitWriteCmdForTest(t *testing.T, req txnpb.TxnRequest) *api.PrecommitWriteCmd {
+	t.Helper()
+	require.NotNil(t, req.CNRequest)
+	cmd := new(api.PrecommitWriteCmd)
+	require.NoError(t, types.Decode(req.CNRequest.Payload, cmd))
+	return cmd
+}
+
+func TestCommitRejectsReadOnlyWorkspaceWithActiveDatabaseCreate(t *testing.T) {
+	txn := newCatalogCreateTxnForTest(t)
+	addActiveDatabaseCreateForTest(t, txn, 7, "db", 42)
+	txn.readOnly.Store(true)
+
+	reqs, err := txn.Commit(context.Background())
+	require.Nil(t, reqs)
+	require.ErrorContains(t, err, "catalog insert is missing")
+}
+
+func TestWorkspaceCommitRejectsMissingDatabaseCreate(t *testing.T) {
+	txn := newCatalogCreateTxnForTest(t)
+	addActiveDatabaseCreateForTest(t, txn, 7, "db", 42)
+
+	reqs, err := buildCatalogCreateReqsForTest(t, txn)
+	require.Nil(t, reqs)
+	require.ErrorContains(t, err, "catalog insert is missing")
 }
 
 func TestTransactionAutoIncrEpochFenceCapabilityUsesTargetSnapshot(t *testing.T) {

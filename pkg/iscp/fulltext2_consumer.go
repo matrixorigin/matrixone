@@ -98,7 +98,12 @@ func RunFulltext2(c *IndexConsumer, ctx context.Context, errch chan error, r Dat
 						// statement ACROSS frames — so a burst of tiny frames costs ~totalChunks/maxInsertTuples
 						// RunSql round-trips in this one txn, not one INSERT per frame. chunk_ids stay
 						// contiguous in frame order, so recency is unchanged.
-						sqls, chunkID := fulltext2.TailFramesInsertSqls(w.cfg, startChunk, segs)
+						// The frames' rows record the version this flush applied, written in
+						// THIS transaction alongside the bytes they describe -- so an index's
+						// recorded coverage can never disagree with what it actually stores,
+						// which a watermark read from elsewhere cannot promise.
+						sqls, chunkID := fulltext2.TailFramesInsertSqlsAt(
+							sqlproc, w.cfg, startChunk, segs, r.GetToTS().Physical())
 						for _, s := range sqls {
 							res, e := sqlexec.RunSql(sqlproc, s)
 							if e != nil {
@@ -121,6 +126,10 @@ func RunFulltext2(c *IndexConsumer, ctx context.Context, errch chan error, r Dat
 					errch <- err
 					return
 				}
+				// A successful CDC flush only makes the new tail durable. Search-cache
+				// freshness is governed by the normal generation/stale/TTL lifecycle;
+				// CDC must not evict or refresh a warm read-only search object here.
+				// This also avoids making every ordinary tail flush contend with readers.
 				return
 			}
 

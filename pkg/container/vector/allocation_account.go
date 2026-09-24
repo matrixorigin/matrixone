@@ -312,7 +312,8 @@ func (v *Vector) hasBackingStorage() bool {
 // borrowed aliases; ordinary bitmap backing is Go-owned and remains GC-visible
 // after replacement. Accounted bitmap storage is explicit external storage.
 func (v *Vector) hasOwnedBackingStorage() bool {
-	return cap(v.data) != 0 && !v.cantFreeData ||
+	return v.dataLease != nil || v.areaLease != nil ||
+		cap(v.data) != 0 && !v.cantFreeData ||
 		cap(v.area) != 0 && !v.cantFreeArea ||
 		cap(v.prepareParamKinds) != 0 ||
 		cap(v.stringSources) != 0 ||
@@ -541,6 +542,11 @@ func (v *Vector) allocateBitmapGrowth(
 }
 
 func (v *Vector) freeBitmapStorage(mp *mpool.MPool) {
+	if v.nsp.HasBorrowedValidity() {
+		// Release the source view without materializing it. The bitmap may still
+		// carry the admitted MPool COW destination reserved before publication.
+		v.nsp.Reset()
+	}
 	for _, value := range []*bitmap.Bitmap{
 		v.nsp.GetBitmap(),
 		v.gsp.GetBitmap(),
@@ -611,6 +617,16 @@ func (v *Vector) growOwned(
 	size int,
 	data bool,
 ) ([]byte, error) {
+	if v.HasBorrowedBacking() {
+		if err := v.MaterializeOwned(mp); err != nil {
+			return nil, err
+		}
+		if data {
+			old = v.data
+		} else {
+			old = v.area
+		}
+	}
 	if size <= cap(old) {
 		return old[:size], nil
 	}

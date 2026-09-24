@@ -187,6 +187,8 @@ func (builder *QueryBuilder) applyIndicesForSortUsingHnsw(nodeID int32, vecCtx *
 		BindingTags:     []int32{tableFuncTag},
 		Children:        vectorSearchProviderChildren(vecCtx),
 		TblFuncExprList: buildHnswTableFuncArgs(tblCfgStr, hnswCtx.vecLitArg),
+		// Named-snapshot read TS for the TVF; DeepCopySnapshot(nil) is nil (#27927).
+		ScanSnapshot: DeepCopySnapshot(vecCtx.scanNode.ScanSnapshot),
 	}
 	tableFuncNodeID := builder.appendNode(tableFuncNode, ctx)
 

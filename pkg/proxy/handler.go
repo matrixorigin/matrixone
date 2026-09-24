@@ -223,6 +223,7 @@ func newProxyHandler(
 		cacheOpts = append(cacheOpts,
 			withMOCluster(mc),
 			withQueryClient(queryClient),
+			withCounterSet(cs),
 		)
 		if checker, ok := ru.(cacheReuseChecker); ok {
 			cacheOpts = append(cacheOpts, withCanReuseCN(checker.CanReuseCachedCN))

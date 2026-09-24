@@ -45,3 +45,26 @@ select json_value(json_array(1, 2, 3), '$[2]');
 select json_value('{"a":1,"b":2}', '$.*');
 select json_value('{"a":1,"b":2}', '$[*]');
 select json_value('{"a":1,"b":2}', '$**.a');
+
+-- object and array matches return canonical JSON text
+select json_value('{"x":[12],"o":{"k":1},"s":12}', '$.x');
+select json_value('{"x":[12],"o":{"k":1},"s":12}', '$.o');
+select json_value('{"x":[12],"o":{"k":1},"s":12}', '$.s');
+select json_value('[1,2,3]', '$');
+select json_value('{"a":"b"}', '$');
+select json_value('{}', '$');
+select json_value('[]', '$');
+select json_value('[{}]', '$[*]');
+
+-- stored generated columns and their indexes retain extracted composite values
+drop table if exists json_value_generated_idx;
+create table json_value_generated_idx (id int primary key, doc json not null, extracted varchar(64) as (json_value(doc, '$.x')) stored, index extracted_idx(extracted));
+insert into json_value_generated_idx(id, doc) values (1, '{"x":[12]}'), (2, '{"x":{"k":1}}'), (3, '{"x":"scalar"}');
+select id, extracted from json_value_generated_idx order by id;
+select id from json_value_generated_idx force index(extracted_idx) where extracted = '[12]';
+select id from json_value_generated_idx force index(extracted_idx) where extracted = '{"k": 1}';
+update json_value_generated_idx set doc = '{"x":[99]}' where id = 3;
+select id, extracted from json_value_generated_idx where id = 3;
+select id from json_value_generated_idx force index(extracted_idx) where extracted = 'scalar';
+select id from json_value_generated_idx force index(extracted_idx) where extracted = '[99]';
+drop table json_value_generated_idx;

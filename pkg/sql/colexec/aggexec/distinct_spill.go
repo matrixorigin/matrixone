@@ -41,6 +41,8 @@ func initBoundedDistinctWorkState(
 	length int32,
 	capacity int32,
 	allocation *AllocationAccount,
+	distinctKeyWidth int,
+	legacyDistinctFloatKeys bool,
 ) error {
 	if state == nil || mp == nil || length < 0 || capacity <= 0 ||
 		length > capacity || capacity > AggBatchSize {
@@ -62,6 +64,10 @@ func initBoundedDistinctWorkState(
 	state.length = length
 	state.capacity = capacity
 	state.allocation = allocation
+	state.distinctKeyWidth = distinctKeyWidth
+	state.distinctFixedDeferred = distinctKeyWidth > 0
+	state.legacyDistinctFloatKeys = legacyDistinctFloatKeys
+	state.distinctIndex.groupLimit = int(capacity)
 	state.argCnt = counts
 	state.argbuf = buffer
 	state.argSkl = arenaskl.NewSkiplist(arenaskl.NewArena(buffer), bytes.Compare)
@@ -115,14 +121,28 @@ func (exec *countColumnExec) DistinctArgumentStats() (
 			}
 			keys += uint64(count)
 		}
-		resident := uint64(cap(state.argbuf)) + uint64(cap(state.argScratch))
-		countBytes := uint64(cap(state.argCnt)) * uint64(4)
-		if resident > math.MaxUint64-countBytes ||
-			retainedBytes > math.MaxUint64-resident-countBytes {
+		argbufBytes := uint64(cap(state.argbuf))
+		scratchBytes := uint64(cap(state.argScratch))
+		countCapacity := uint64(cap(state.argCnt))
+		if countCapacity > math.MaxUint64/4 {
 			return 0, 0, moerr.NewInternalErrorNoCtx(
 				"exact distinct retained byte count overflow")
 		}
-		retainedBytes += resident + countBytes
+		countBytes := countCapacity * 4
+		indexBytes := state.distinctIndex.retainedBytes()
+		if countBytes > math.MaxUint64-indexBytes ||
+			argbufBytes > math.MaxUint64-indexBytes-countBytes ||
+			scratchBytes > math.MaxUint64-indexBytes-countBytes-argbufBytes {
+			return 0, 0, moerr.NewInternalErrorNoCtx(
+				"exact distinct retained byte count overflow")
+		}
+		resident := argbufBytes + scratchBytes
+		accounted := indexBytes + countBytes + resident
+		if retainedBytes > math.MaxUint64-accounted {
+			return 0, 0, moerr.NewInternalErrorNoCtx(
+				"exact distinct retained byte count overflow")
+		}
+		retainedBytes += accounted
 	}
 	return keys, retainedBytes, nil
 }
@@ -150,6 +170,17 @@ func (exec *countColumnExec) BeginArgumentDrain(
 func (d *countDistinctArgumentDrain) ForEach(
 	fn func(group int, payload []byte) error,
 ) error {
+	return d.ForEachWithRepresentative(func(
+		group int,
+		payload, _ []byte,
+	) error {
+		return fn(group, payload)
+	})
+}
+
+func (d *countDistinctArgumentDrain) ForEachWithRepresentative(
+	fn func(group int, payload, representative []byte) error,
+) error {
 	if d == nil || d.done || d.exec == nil || fn == nil {
 		return moerr.NewInternalErrorNoCtx("invalid exact distinct drain")
 	}
@@ -157,8 +188,19 @@ func (d *countDistinctArgumentDrain) ForEach(
 		state := &d.exec.state[chunk]
 		for row := 0; row < int(state.length); row++ {
 			group := chunk*AggBatchSize + row
-			if err := state.iter(uint16(row), func(key []byte) error {
-				return fn(group, aggPayloadFromKey(&d.exec.aggInfo, key))
+			if err := state.iterWithValue(uint16(row), func(
+				key, representative []byte,
+			) error {
+				// The bounded exact-count spill path hashes payloads again in
+				// Group.  It must receive the membership key, not a retained
+				// representative used by value-producing DISTINCT aggregates;
+				// otherwise canonical-equivalent values can be counted twice after
+				// crossing a spill boundary.
+				return fn(
+					group,
+					aggPayloadFromKey(&d.exec.aggInfo, key),
+					representative,
+				)
 			}); err != nil {
 				return err
 			}
@@ -194,6 +236,8 @@ func (d *countDistinctArgumentDrain) Commit() error {
 			state.length,
 			state.capacity,
 			d.replacement,
+			state.distinctKeyWidth,
+			d.exec.legacyDistinctFloatKeys,
 		); err != nil {
 			return err
 		}
@@ -219,6 +263,14 @@ func (exec *countColumnExec) InsertDistinctArgument(
 	group int,
 	payload []byte,
 ) error {
+	return exec.InsertDistinctArgumentWithRepresentative(group, payload, nil)
+}
+
+func (exec *countColumnExec) InsertDistinctArgumentWithRepresentative(
+	group int,
+	payload []byte,
+	representative []byte,
+) error {
 	if !exec.SupportsExactCountDistinctSpill() || group < 0 {
 		return moerr.NewInternalErrorNoCtx(
 			"invalid exact distinct argument insertion")
@@ -232,7 +284,8 @@ func (exec *countColumnExec) InsertDistinctArgument(
 	}
 	x, y := exec.getXY(uint64(group))
 	exec.state[x].boundedArgumentGrowth = true
-	return exec.state[x].fillArg(exec.mp, y, payload, true)
+	return exec.state[x].fillDistinctArgWithValue(
+		exec.mp, y, payload, representative)
 }
 
 func (exec *countColumnExec) RehomeDistinctArgumentState(
@@ -255,6 +308,7 @@ func (exec *countColumnExec) RehomeDistinctArgumentState(
 		var replacement aggState
 		if err := initBoundedDistinctWorkState(
 			&replacement, exec.mp, state.length, state.capacity, allocation,
+			state.distinctKeyWidth, exec.legacyDistinctFloatKeys,
 		); err != nil {
 			return err
 		}

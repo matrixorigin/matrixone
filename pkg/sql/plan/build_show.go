@@ -866,6 +866,11 @@ func buildShowIndex(stmt *tree.ShowIndex, ctx CompilerContext) (*Plan, error) {
 		return nil, err
 	}
 
+	subscription, err := ctx.GetSubscriptionMeta(dbName, snapshot)
+	if err != nil {
+		return nil, err
+	}
+
 	tblName := stmt.TableName.GetTableName()
 	obj, tableDef, err := ctx.Resolve(dbName, tblName, snapshot)
 	if err != nil {
@@ -878,16 +883,23 @@ func buildShowIndex(stmt *tree.ShowIndex, ctx CompilerContext) (*Plan, error) {
 	ddlType := plan.DataDefinition_SHOW_INDEX
 
 	if obj.PubInfo != nil {
-		sub := &SubscriptionMeta{
-			AccountId: obj.PubInfo.GetTenantId(),
+		if subscription == nil {
+			subscription = &SubscriptionMeta{
+				AccountId: obj.PubInfo.GetTenantId(),
+				DbName:    obj.SchemaName,
+				SubName:   dbName,
+			}
 		}
 		dbName = obj.SchemaName
-		ctx.SetQueryingSubscription(sub)
+		ctx.SetQueryingSubscription(subscription)
 		defer func() {
 			ctx.SetQueryingSubscription(nil)
 		}()
 	}
 
+	// Older mo_indexes rows leave algo empty for ordinary, unique, and primary
+	// indexes. SHOW INDEX follows MySQL and exposes those rows as BTREE rather
+	// than leaking the internal empty metadata representation.
 	sql := "select " +
 		"'%s' as `Table`, " +
 		"if(`idx`.`type` IN ('PRIMARY', 'UNIQUE'), 0, 1) as `Non_unique`, " +
@@ -898,7 +910,7 @@ func buildShowIndex(stmt *tree.ShowIndex, ctx CompilerContext) (*Plan, error) {
 		"'NULL' as `Sub_part`, " +
 		"'NULL' as `Packed`, " +
 		"if(`tcl`.`attnotnull` = 0, 'YES', '') as `Null`, " +
-		"`idx`.`algo` as 'Index_type', " +
+		"coalesce(nullif(`idx`.`algo`, ''), 'BTREE') as 'Index_type', " +
 		"'' as `Comment`, " +
 		"`idx`.`comment` as `Index_comment`, " +
 		"`idx`.`algo_params` as `Index_params`, " +

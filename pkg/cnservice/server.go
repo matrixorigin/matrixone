@@ -18,9 +18,11 @@ import (
 	"bytes"
 	"compress/gzip"
 	"context"
+	"crypto/sha256"
 	"encoding/hex"
 	"errors"
 	"fmt"
+	"path/filepath"
 	"sync"
 	"time"
 
@@ -55,6 +57,7 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/partitionservice"
 	"github.com/matrixorigin/matrixone/pkg/pb/metadata"
 	"github.com/matrixorigin/matrixone/pkg/pb/pipeline"
+	"github.com/matrixorigin/matrixone/pkg/pb/timestamp"
 	"github.com/matrixorigin/matrixone/pkg/pb/txn"
 	"github.com/matrixorigin/matrixone/pkg/queryservice"
 	qclient "github.com/matrixorigin/matrixone/pkg/queryservice/client"
@@ -84,6 +87,7 @@ const (
 	rssCacheAdmissionPressureTTL = 2 * time.Minute
 	rssCachePressureTargetOwner  = "cn-rss"
 	bootstrapRetryInterval       = 100 * time.Millisecond
+	txnTraceDirectoryKeyPrefix   = "cn-"
 )
 
 var (
@@ -449,6 +453,13 @@ func (s *service) Start() (err error) {
 		return err
 	}
 	s.viewMetadataCatalogFenceReady.Store(true)
+	// QueryService is an internal control-plane endpoint used by bootstrap
+	// protocol checks. It must be reachable while public admission is still
+	// closed, otherwise an active upgrade can wait for admission while the
+	// upgrade itself waits for protocol responses from the CNs.
+	if err = s.startUnlessViewMetadataGenerationRevoked(s.queryService.Start); err != nil {
+		return err
+	}
 	if err = s.waitForViewMetadataAdmission(); err != nil {
 		return err
 	}
@@ -460,9 +471,6 @@ func (s *service) Start() (err error) {
 
 	s.initSqlWriterFactory()
 
-	if err = s.startUnlessViewMetadataGenerationRevoked(s.queryService.Start); err != nil {
-		return err
-	}
 	if err = s.startFrontendUnlessViewMetadataGenerationRevoked(); err != nil {
 		return err
 	}
@@ -514,20 +522,17 @@ func (s *service) closeService() error {
 		// withdrawal below is the ownership handoff linearization point.
 		s.stopper.Stop()
 
-		s.closeErr = closeCNServiceSteps(
+		// A failed producer drain must not tear down its dependencies. Unknown
+		// local errors remain fail-stop; only remote withdrawal is diagnostic.
+		s.closeErr = drainCNServiceSteps(
 			// Query commands can reach frontend, task, engine, lock, shard,
 			// auto-increment, and transaction state. Stop and drain this remote
 			// ingress before clearing any of those dependencies.
 			s.closeQueryService,
 			s.stopFrontendSerialized,
-			s.closeSiriusRuntime,
 			s.closeBootstrapService,
-			// Frontend shutdown stops accepting interactive work, while stopTask
-			// drains scheduled ingestion statements. Only after both producers have
-			// stopped may the MongoDB pool disconnect clients still leased by a
-			// MongoScan operator.
+			// Stop scheduled statements as well as interactive frontend work.
 			s.stopTask,
-			s.closeMongoDBRuntime,
 			s.closePipelineAdmission,
 			s.server.Close,
 			// Pipeline handlers and the auto-increment cleanup worker can issue
@@ -535,7 +540,16 @@ func (s *service) closeService() error {
 			// dependencies, while keeping the trace consumer alive for final events.
 			s.waitPipelineHandlers,
 			s.closeIncrService,
-			s.withdrawViewMetadataAdmission,
+			// Cancel and join pipeline users before retiring execution runtimes;
+			// otherwise retirement can wait for the work we have not stopped yet.
+			s.closeSiriusRuntime,
+			s.closeMongoDBRuntime,
+		)
+		if s.closeErr != nil {
+			return
+		}
+		withdrawErr := s.withdrawViewMetadataAdmission()
+		localErr := closeCNServiceSteps(
 			s.stopRPCs,
 			s.closeTxnTraceService,
 			func() error {
@@ -563,8 +577,27 @@ func (s *service) closeService() error {
 				return nil
 			},
 		)
+		s.closeComplete = localErr == nil
+		s.closeErr = errors.Join(withdrawErr, localErr)
 	})
 	return s.closeErr
+}
+
+// CloseComplete certifies local teardown, not a successful remote generation
+// handoff. A withdrawal error remains observable through every Close call.
+func (s *service) CloseComplete() bool {
+	s.lifecycleMu.Lock()
+	defer s.lifecycleMu.Unlock()
+	return s.closeComplete
+}
+
+func drainCNServiceSteps(steps ...func() error) error {
+	for _, step := range steps {
+		if err := step(); err != nil {
+			return err
+		}
+	}
+	return nil
 }
 
 func (s *service) closePipelineAdmission() error {
@@ -674,17 +707,18 @@ func (s *service) SessionMgr() *queryservice.SessionManager {
 	return s.sessionMgr
 }
 
-func (s *service) CheckTenantUpgrade(_ context.Context, tenantID int64) error {
+func (s *service) CheckTenantUpgrade(ctx context.Context, tenantID int64) error {
 	s.bootstrapMu.RLock()
 	defer s.bootstrapMu.RUnlock()
 	if s.bootstrapService == nil {
 		return moerr.NewInvalidStateNoCtx("bootstrap service is closed")
 	}
-	finalVersion := s.bootstrapService.GetFinalVersion()
 	tenantFetchFunc := func() (int32, string, error) {
-		return int32(tenantID), finalVersion, nil
+		// Bootstrap reads the account's persisted version. The CN's final
+		// version does not describe accounts created by another, older CN.
+		return int32(tenantID), "", nil
 	}
-	ctx, cancel := context.WithTimeoutCause(context.Background(), time.Second*30, moerr.CauseCheckTenantUpgrade)
+	ctx, cancel := context.WithTimeoutCause(ctx, time.Second*30, moerr.CauseCheckTenantUpgrade)
 	defer cancel()
 	if _, err := s.bootstrapService.MaybeUpgradeTenant(ctx, tenantFetchFunc, nil); err != nil {
 		return moerr.AttachCause(ctx, err)
@@ -1102,8 +1136,6 @@ func (s *service) initShardService() {
 			shardservice.ReadBuildReader:              disttae.HandleShardingReadBuildReader,
 			shardservice.ReadPrimaryKeysMayBeModified: disttae.HandleShardingReadPrimaryKeysMayBeModified,
 			shardservice.ReadPrimaryKeysMayBeUpserted: disttae.HandleShardingReadPrimaryKeysMayBeUpserted,
-			shardservice.ReadMergeObjects:             disttae.HandleShardingReadMergeObjects,
-			shardservice.ReadVisibleObjectStats:       disttae.HandleShardingReadVisibleObjectStats,
 			shardservice.ReadClose:                    disttae.HandleShardingReadClose,
 			shardservice.ReadNext:                     disttae.HandleShardingReadNext,
 			shardservice.ReadCollectTombstones:        disttae.HandleShardingReadCollectTombstones,
@@ -1294,6 +1326,9 @@ func (s *service) initIncrService() {
 	store, err := incrservice.NewSQLStore(
 		s.sqlExecutor,
 		s.lockService,
+		func(ctx context.Context) (timestamp.Timestamp, error) {
+			return acquireIncrLogtailReadBarrier(ctx, s.storeEngine)
+		},
 	)
 	if err != nil {
 		panic(err)
@@ -1306,6 +1341,14 @@ func (s *service) initIncrService() {
 		runtime.AutoIncrementService,
 		s.incrservice)
 	incrservice.SetAutoIncrementServiceByID(s.cfg.UUID, s.incrservice)
+}
+
+func acquireIncrLogtailReadBarrier(ctx context.Context, eng any) (timestamp.Timestamp, error) {
+	barrier, ok := eng.(engine.LogtailReadBarrier)
+	if !ok {
+		return timestamp.Timestamp{}, moerr.NewInternalError(ctx, "AUTO_INCREMENT observation requires an engine logtail read barrier")
+	}
+	return barrier.AcquireLogtailReadBarrier(ctx)
 }
 
 func (s *service) bootstrap() error {
@@ -1403,10 +1446,31 @@ func handleBootstrapErr(ctx context.Context, err error) error {
 	return moerr.AttachCause(ctx, err)
 }
 
+func resolveTxnTraceDataPath(rootDir, serviceID string) (string, error) {
+	if err := validateCNServiceUUID(serviceID); err != nil {
+		return "", err
+	}
+	if rootDir == "" {
+		return "", nil
+	}
+	return filepath.Join(rootDir, txnTraceDirectoryKey(serviceID)), nil
+}
+
+func txnTraceDirectoryKey(serviceID string) string {
+	// A fixed-length lowercase hash keeps the directory component below common
+	// filesystem limits while remaining stable for the same CN service ID.
+	digest := sha256.Sum256([]byte(serviceID))
+	return txnTraceDirectoryKeyPrefix + hex.EncodeToString(digest[:])
+}
+
 func (s *service) initTxnTraceService() {
+	traceDataPath, err := resolveTxnTraceDataPath(s.options.traceDataPath, s.cfg.UUID)
+	if err != nil {
+		panic(err)
+	}
 	rt := runtime.ServiceRuntime(s.cfg.UUID)
 	ts, err := trace.NewService(
-		s.options.traceDataPath,
+		traceDataPath,
 		s.cfg.UUID,
 		s._txnClient,
 		rt.Clock(),

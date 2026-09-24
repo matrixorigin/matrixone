@@ -92,9 +92,28 @@ SELECT LENGTH(RANDOM_BYTES(1024)) AS len1024;
 
 # RANDOM_BYTES with NULL and invalid inputs
 SELECT RANDOM_BYTES(NULL) AS null_input;
+-- @regex("length value is out of range in 'random_bytes'",true)
 SELECT RANDOM_BYTES(0) AS zero_length;
+-- @regex("length value is out of range in 'random_bytes'",true)
 SELECT RANDOM_BYTES(-1) AS negative_length;
+-- @regex("length value is out of range in 'random_bytes'",true)
 SELECT RANDOM_BYTES(1025) AS too_large;
+
+# Out-of-range values must fail the complete statement, including column and
+# prepared-parameter execution, instead of producing nullable partial results.
+DROP TABLE IF EXISTS random_bytes_lengths_28225;
+CREATE TABLE random_bytes_lengths_28225(id INT PRIMARY KEY, len_val BIGINT);
+INSERT INTO random_bytes_lengths_28225 VALUES (1, 1), (2, 1024), (3, 0);
+-- @regex("length value is out of range in 'random_bytes'",true)
+SELECT id, len_val, LENGTH(RANDOM_BYTES(len_val)) AS random_length
+FROM random_bytes_lengths_28225 ORDER BY id;
+DROP TABLE random_bytes_lengths_28225;
+
+PREPARE random_bytes_28225 FROM 'SELECT LENGTH(RANDOM_BYTES(?)) AS random_length';
+SET @random_bytes_len_28225 = 1025;
+-- @regex("length value is out of range in 'random_bytes'",true)
+EXECUTE random_bytes_28225 USING @random_bytes_len_28225;
+DEALLOCATE PREPARE random_bytes_28225;
 
 # RANDOM_BYTES generates different values
 SELECT RANDOM_BYTES(16) != RANDOM_BYTES(16) AS different_values;

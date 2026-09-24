@@ -27,6 +27,26 @@ import (
 	"github.com/stretchr/testify/require"
 )
 
+func TestFunctionParamFrameGrowsAndPreservesWrappers(t *testing.T) {
+	mp := mpool.MustNewZeroNoFixed()
+	result := NewFunctionResultWrapper(types.T_int64.ToType(), mp)
+	defer result.Free()
+	input, err := NewConstFixed(types.T_int64.ToType(), int64(7), 1, mp)
+	require.NoError(t, err)
+	defer input.Free(mp)
+	result.UseOptFunctionParamFrame(1)
+	first := OptGetParamFromWrapper[int64](result, 0, input)
+	result.UseOptFunctionParamFrame(2)
+	require.Same(t, first, OptGetParamFromWrapper[int64](result, 0, input))
+	second := OptGetParamFromWrapper[int64](result, 1, input)
+	value, isNull := second.GetValue(0)
+	require.Equal(t, int64(7), value)
+	require.False(t, isNull)
+	result.UseOptFunctionParamFrame(1)
+	result.UseOptFunctionParamFrame(2)
+	require.Same(t, second, OptGetParamFromWrapper[int64](result, 1, input))
+}
+
 func TestAppendBytesWithWriterOwnsFinalAreaAndRollsBack(t *testing.T) {
 	mp := mpool.MustNewZeroNoFixed()
 	vec := NewVec(types.T_blob.ToType())

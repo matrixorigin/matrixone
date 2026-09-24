@@ -40,13 +40,11 @@ SELECT a, ROUND(a) FROM t1;
 DROP TABLE t1;
 
 #data type
--- @bvt:issue#2302
 CREATE TABLE t1(f1 DECIMAL(22,1));
 INSERT INTO t1 VALUES (0),(1);
 SELECT ROUND(f1, f1) FROM t1;
 SELECT ROUND(f1, f1) FROM t1 GROUP BY 1;
 DROP TABLE t1;
--- @bvt:issue
 
 #嵌套 
 #LEAST函数0.5MO暂时不支持

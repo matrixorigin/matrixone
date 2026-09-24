@@ -22,6 +22,7 @@ import (
 
 	"github.com/parquet-go/parquet-go"
 
+	"github.com/matrixorigin/matrixone/pkg/common/mpool"
 	"github.com/matrixorigin/matrixone/pkg/common/reuse"
 	"github.com/matrixorigin/matrixone/pkg/container/batch"
 	"github.com/matrixorigin/matrixone/pkg/container/vector"
@@ -69,6 +70,20 @@ type ExParamConst struct {
 	Idx                    int
 	ColumnListLen          int32 // load ...  (col1, col2 , col3), ColumnListLen is 3
 	CreateSql              string
+	// ArrowExecutionScope is positive authorization emitted only by compile.
+	// The zero value must fail closed before Arrow I/O.
+	ArrowExecutionScope        pipeline.ArrowExecutionScope
+	ArrowObjectIdentities      []*pipeline.ArrowObjectIdentity
+	ArrowRecordBatchShards     []*pipeline.ArrowRecordBatchShard
+	ArrowSchemaFingerprint     []byte
+	ArrowConversionPlanVersion uint32
+	// ArrowForceMaterialize is the compile-time rollout snapshot propagated to
+	// every local or remote External scope. It is not a per-batch heuristic.
+	ArrowForceMaterialize bool
+	// ArrowDistributedExecution records that this scope was created by Arrow
+	// fanout. It intentionally differs from Extern.Parallel: shard scopes clear
+	// the user request after planning but still require worker-side opt-in.
+	ArrowDistributedExecution bool
 
 	// letter case: origin
 	Attrs           []plan.ExternAttr
@@ -203,10 +218,11 @@ type container struct {
 }
 
 type External struct {
-	ctr        container
-	Es         *ExternalParam
-	reader     ExternalFileReader // unified file reader
-	fileOpened bool               // whether a file is currently active
+	ctr               container
+	Es                *ExternalParam
+	reader            ExternalFileReader // unified file reader
+	fileOpened        bool               // whether a file is currently active
+	allocationAccount *mpool.AllocationAccount
 
 	vm.OperatorBase
 	colexec.Projection
@@ -235,6 +251,36 @@ func (external External) TypeName() string {
 
 func NewArgument() *External {
 	return reuse.Alloc[External](nil)
+}
+
+func (external *External) SetAllocationAccount(account *mpool.AllocationAccount) error {
+	if account == nil || account.Handle() == 0 {
+		return mpool.ErrAllocationAccountInvalid
+	}
+	if external.allocationAccount != nil && external.allocationAccount != account {
+		return mpool.ErrAllocationAccountMismatch
+	}
+	external.allocationAccount = account
+	return nil
+}
+
+func (external *External) ActivatesAllocationAccountLifecycle() bool {
+	return external != nil && external.Es != nil &&
+		external.Es.ArrowExecutionScope == pipeline.ArrowExecutionScope_ArrowLoadData
+}
+
+func (external *External) ClearAllocationAccount(account *mpool.AllocationAccount) error {
+	if external.allocationAccount == nil {
+		return nil
+	}
+	if external.allocationAccount != account {
+		return mpool.ErrAllocationAccountMismatch
+	}
+	if external.reader != nil || external.fileOpened || external.ctr.buf != nil {
+		return mpool.ErrAllocationAccountInvariant
+	}
+	external.allocationAccount = nil
+	return nil
 }
 
 func (param *ExternalParam) addParquetProfile(stats process.ParquetProfileStats) {
@@ -495,8 +541,9 @@ type ParquetHandler struct {
 	icebergNullFill []bool
 
 	// for nested types support
-	hasNestedCols bool
-	rowReader     parquet.Rows
+	hasNestedCols    bool
+	nestedColIndices []int
+	rowReader        parquet.Rows
 
 	// virtual column support (hive partitions + __mo_filepath)
 	partitionColIndices            []int
@@ -506,12 +553,13 @@ type ParquetHandler struct {
 	hasPhysicalCol                 bool
 	rowCountOnly                   bool
 	currentRowGroup                int
-	rowCountRemaining              int
+	rowCountRemaining              int64
 }
 
 type columnMapper struct {
 	srcNull, dstNull   bool
 	maxDefinitionLevel byte
+	maxRepetitionLevel byte
 	allowRepetition    bool
 	listCanBeNull      bool
 	listNullLevel      byte
@@ -519,5 +567,7 @@ type columnMapper struct {
 	listElemCanBeNull  bool
 	listElemNullLevel  byte
 
-	mapper func(mp *columnMapper, page parquet.Page, proc *process.Process, vec *vector.Vector) error
+	mapper           func(mp *columnMapper, page parquet.Page, proc *process.Process, vec *vector.Vector) error
+	listValuesMapper func(mp *columnMapper, values []parquet.Value, numRows int, proc *process.Process, vec *vector.Vector) error
+	rowBuffer        *parquet.Buffer
 }

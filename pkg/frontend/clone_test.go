@@ -25,6 +25,7 @@ import (
 	"github.com/prashantv/gostub"
 	"github.com/stretchr/testify/require"
 
+	"github.com/matrixorigin/matrixone/pkg/catalog"
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
 	"github.com/matrixorigin/matrixone/pkg/defines"
 	"github.com/matrixorigin/matrixone/pkg/frontend/databranchutils"
@@ -606,17 +607,19 @@ func TestValidateTimestampDataBranchSourceAfterLockFailures(t *testing.T) {
 	), wantErr)
 }
 
-func TestTimestampDataBranchDatabaseRevalidatesEveryTableAfterAllLocks(t *testing.T) {
+func TestTimestampDataBranchDatabaseRevalidatesEveryLifecycleTableAfterAllLocks(t *testing.T) {
 	timestampSource := &plan.Snapshot{TS: &timestamp.Timestamp{PhysicalTime: 42}}
 	var catalogRows sync.RWMutex
 	catalogRows.Lock() // COPY ALTER holds one source row exclusively.
 
 	enteredLockPath := make(chan struct{})
 	allLocksHeld := make(chan struct{})
-	validated := make(chan string, 2)
+	validated := make(chan string, 3)
 	done := make(chan error, 1)
 	go func() {
 		// Database clone acquires all source locks before revalidating any table.
+		// The external row is part of this fence because view dependency sorting
+		// consults its catalog metadata after the timestamp advances.
 		close(enteredLockPath)
 		catalogRows.RLock()
 		close(allLocksHeld)
@@ -624,6 +627,7 @@ func TestTimestampDataBranchDatabaseRevalidatesEveryTableAfterAllLocks(t *testin
 		source := cloneDatabaseSource{srcTblInfos: []*tableInfo{
 			{dbName: "db", tblName: "t1"},
 			{dbName: "db", tblName: "v", typ: view},
+			{dbName: "db", tblName: "external", relKind: catalog.SystemExternalRel},
 			{dbName: "db", tblName: "t2"},
 		}}
 		done <- forEachCloneDatabaseSourceTable(source, func(table *tableInfo) error {
@@ -660,7 +664,7 @@ func TestTimestampDataBranchDatabaseRevalidatesEveryTableAfterAllLocks(t *testin
 		t.Fatal("database clone did not acquire all source locks")
 	}
 	require.NoError(t, <-done)
-	require.ElementsMatch(t, []string{"t1", "t2"}, []string{<-validated, <-validated})
+	require.ElementsMatch(t, []string{"t1", "external", "t2"}, []string{<-validated, <-validated, <-validated})
 }
 
 func TestTimestampDataBranchValidationLockCoversPublication(t *testing.T) {
@@ -1131,6 +1135,52 @@ func TestIsCloneDatabaseTargetLockRetry(t *testing.T) {
 	require.True(t, isCloneDatabaseTargetLockRetry(moerr.NewTxnNeedRetryNoCtx()))
 	require.True(t, isCloneDatabaseTargetLockRetry(moerr.NewTxnNeedRetryWithDefChangedNoCtx()))
 	require.False(t, isCloneDatabaseTargetLockRetry(errors.New("not retryable")))
+}
+
+func TestRestartOwnedCloneDatabaseTargetLockTxnReentersLifecycle(t *testing.T) {
+	gateSQL := databranchutils.LineageOwnerLifecycleLockSQL()
+	for _, test := range []struct {
+		name      string
+		failedSQL string
+		wantSQLs  []string
+	}{
+		{
+			name:     "success",
+			wantSQLs: []string{"rollback;", "begin;", gateSQL},
+		},
+		{
+			name:      "rollback failure",
+			failedSQL: "rollback;",
+			wantSQLs:  []string{"rollback;"},
+		},
+		{
+			name:      "begin failure",
+			failedSQL: "begin;",
+			wantSQLs:  []string{"rollback;", "begin;"},
+		},
+		{
+			name:      "lifecycle failure",
+			failedSQL: gateSQL,
+			wantSQLs:  []string{"rollback;", "begin;", gateSQL},
+		},
+	} {
+		t.Run(test.name, func(t *testing.T) {
+			bh := &backgroundExecTestWithHistory{}
+			bh.init()
+			wantErr := errors.New("restart failed")
+			if test.failedSQL != "" {
+				bh.sql2err[test.failedSQL] = wantErr
+			}
+
+			err := restartOwnedCloneDatabaseTargetLockTxn(context.Background(), bh)
+			if test.failedSQL == "" {
+				require.NoError(t, err)
+			} else {
+				require.ErrorIs(t, err, wantErr)
+			}
+			require.Equal(t, test.wantSQLs, bh.executedSqls)
+		})
+	}
 }
 
 func Test_prepareCloneViewSnapshot(t *testing.T) {

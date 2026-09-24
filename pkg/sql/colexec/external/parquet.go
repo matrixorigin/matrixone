@@ -462,17 +462,31 @@ func (h *ParquetHandler) prepare(param *ExternalParam) error {
 			continue
 		}
 		h.hasPhysicalCol = true
-		projectedColumns = append(projectedColumns, col)
+		// The row reader is only needed for nested columns.  Keeping scalar
+		// siblings out of the projected row group lets them stay on the
+		// vectorized page mapper when a LIST column is present.
+		if !col.Leaf() {
+			projectedColumns = append(projectedColumns, col)
+		}
 
 		physicalCol := col
 		var fn *columnMapper
 		if !col.Leaf() {
+			h.nestedColIndices = append(h.nestedColIndices, colIdx)
 			targetType := types.T(def.Typ.Id)
 			switch targetType {
 			case types.T_array_float32, types.T_array_float64,
 				types.T_array_bf16, types.T_array_float16,
 				types.T_array_int8, types.T_array_uint8:
-				physicalCol, fn = h.getNestedListMapper(col, def.Typ)
+				_, fn = h.getNestedListMapper(col, def.Typ)
+				if fn != nil && def.NotNull {
+					fn.dstNull = false
+				}
+				// Repeated values in V1 data pages may continue a logical row
+				// from the preceding page. Keep the logical LIST column here so
+				// parquet-go's row reader reconstructs that row before mapping.
+				physicalCol = col
+				h.hasNestedCols = true
 			default:
 				if !isNestedTargetTypeSupported(targetType) {
 					return moerr.NewInvalidInputf(param.Ctx,
@@ -521,16 +535,18 @@ func (h *ParquetHandler) prepare(param *ExternalParam) error {
 			return err
 		}
 		h.rowReader = projectedRowGroup.Rows()
-	} else {
-		for colIdx, col := range h.cols {
-			if col != nil && col.Leaf() {
-				h.pages[colIdx] = rowGroupChunks[col.Index()].Pages()
-				h.dataColIndices = append(h.dataColIndices, colIdx)
-				sourceKind := col.Type().Kind()
-				if types.T(param.Cols[colIdx].Typ.Id).ToType().IsVarlen() ||
-					sourceKind == parquet.ByteArray || sourceKind == parquet.FixedLenByteArray {
-					h.budgetColIndices = append(h.budgetColIndices, colIdx)
-				}
+	}
+	// Scalar leaf columns always use the page path, including when a nested
+	// column requires the row reader.  The hybrid path combines both readers
+	// at the same logical row offset.
+	for colIdx, col := range h.cols {
+		if col != nil && col.Leaf() {
+			h.pages[colIdx] = rowGroupChunks[col.Index()].Pages()
+			h.dataColIndices = append(h.dataColIndices, colIdx)
+			sourceKind := col.Type().Kind()
+			if types.T(param.Cols[colIdx].Typ.Id).ToType().IsVarlen() ||
+				sourceKind == parquet.ByteArray || sourceKind == parquet.FixedLenByteArray {
+				h.budgetColIndices = append(h.budgetColIndices, colIdx)
 			}
 		}
 	}
@@ -663,6 +679,27 @@ func icebergMappingName(mapping *pipeline.IcebergColumnMapping) string {
 	return mapping.ParquetPathHint
 }
 
+func configureParquetListMapper[T types.ArrayElement](
+	mp *columnMapper,
+	width int,
+	convert func(context.Context, parquet.Value) (T, error),
+) {
+	mp.mapper = func(mp *columnMapper, page parquet.Page, proc *process.Process, vec *vector.Vector) error {
+		return processParquetListToArray(proc.Ctx, mp, page, proc, vec, width,
+			func(v parquet.Value) (T, error) { return convert(proc.Ctx, v) })
+	}
+	mp.listValuesMapper = func(
+		mp *columnMapper,
+		values []parquet.Value,
+		numRows int,
+		proc *process.Process,
+		vec *vector.Vector,
+	) error {
+		return processParquetListValuesToArray(proc.Ctx, mp, values, numRows, proc, vec, width,
+			func(v parquet.Value) (T, error) { return convert(proc.Ctx, v) })
+	}
+}
+
 func (*ParquetHandler) getNestedListMapper(sc *parquet.Column, dt plan.Type) (*parquet.Column, *columnMapper) {
 	leaf, ok := parquetListElementLeaf(sc)
 	if !ok {
@@ -696,6 +733,7 @@ func (*ParquetHandler) getNestedListMapper(sc *parquet.Column, dt plan.Type) (*p
 		srcNull:            true,
 		dstNull:            !dt.NotNullable,
 		maxDefinitionLevel: maxDefinitionLevel,
+		maxRepetitionLevel: byte(leaf.MaxRepetitionLevel()),
 		allowRepetition:    true,
 		listCanBeNull:      sc.Optional(),
 		listElemCanBeNull:  elemCanBeNull,
@@ -716,34 +754,26 @@ func (*ParquetHandler) getNestedListMapper(sc *parquet.Column, dt plan.Type) (*p
 	case types.T_array_float32:
 		switch leaf.Type().Kind() {
 		case parquet.Float:
-			mp.mapper = func(mp *columnMapper, page parquet.Page, proc *process.Process, vec *vector.Vector) error {
-				return processParquetListToArray(proc.Ctx, mp, page, proc, vec, width, func(v parquet.Value) (float32, error) {
-					return v.Float(), nil
-				})
-			}
+			configureParquetListMapper(mp, width, func(_ context.Context, v parquet.Value) (float32, error) {
+				return v.Float(), nil
+			})
 		case parquet.Double:
-			mp.mapper = func(mp *columnMapper, page parquet.Page, proc *process.Process, vec *vector.Vector) error {
-				return processParquetListToArray(proc.Ctx, mp, page, proc, vec, width, func(v parquet.Value) (float32, error) {
-					return parquetFloat64ToFloat32(proc.Ctx, v.Double())
-				})
-			}
+			configureParquetListMapper(mp, width, func(ctx context.Context, v parquet.Value) (float32, error) {
+				return parquetFloat64ToFloat32(ctx, v.Double())
+			})
 		default:
 			return nil, nil
 		}
 	case types.T_array_float64:
 		switch leaf.Type().Kind() {
 		case parquet.Float:
-			mp.mapper = func(mp *columnMapper, page parquet.Page, proc *process.Process, vec *vector.Vector) error {
-				return processParquetListToArray(proc.Ctx, mp, page, proc, vec, width, func(v parquet.Value) (float64, error) {
-					return float64(v.Float()), nil
-				})
-			}
+			configureParquetListMapper(mp, width, func(_ context.Context, v parquet.Value) (float64, error) {
+				return float64(v.Float()), nil
+			})
 		case parquet.Double:
-			mp.mapper = func(mp *columnMapper, page parquet.Page, proc *process.Process, vec *vector.Vector) error {
-				return processParquetListToArray(proc.Ctx, mp, page, proc, vec, width, func(v parquet.Value) (float64, error) {
-					return v.Double(), nil
-				})
-			}
+			configureParquetListMapper(mp, width, func(_ context.Context, v parquet.Value) (float64, error) {
+				return v.Double(), nil
+			})
 		default:
 			return nil, nil
 		}
@@ -752,50 +782,55 @@ func (*ParquetHandler) getNestedListMapper(sc *parquet.Column, dt plan.Type) (*p
 		if leaf.Type().Kind() != parquet.Float {
 			return nil, nil
 		}
-		mp.mapper = func(mp *columnMapper, page parquet.Page, proc *process.Process, vec *vector.Vector) error {
-			return processParquetListToArray(proc.Ctx, mp, page, proc, vec, width, func(v parquet.Value) (types.BF16, error) {
-				return types.BF16FromFloat32(v.Float()), nil
-			})
-		}
+		configureParquetListMapper(mp, width, func(_ context.Context, v parquet.Value) (types.BF16, error) {
+			return types.BF16FromFloat32(v.Float()), nil
+		})
 	case types.T_array_float16:
 		if leaf.Type().Kind() != parquet.Float {
 			return nil, nil
 		}
-		mp.mapper = func(mp *columnMapper, page parquet.Page, proc *process.Process, vec *vector.Vector) error {
-			return processParquetListToArray(proc.Ctx, mp, page, proc, vec, width, func(v parquet.Value) (types.Float16, error) {
-				return types.Float16FromFloat32(v.Float()), nil
-			})
-		}
+		configureParquetListMapper(mp, width, func(_ context.Context, v parquet.Value) (types.Float16, error) {
+			return types.Float16FromFloat32(v.Float()), nil
+		})
 	case types.T_array_int8:
 		// int8/uint8 vectors are stored in parquet as INT32 leaves; load is strict
 		// (out-of-range values are rejected, mirroring the int8 string parse).
 		if leaf.Type().Kind() != parquet.Int32 {
 			return nil, nil
 		}
-		mp.mapper = func(mp *columnMapper, page parquet.Page, proc *process.Process, vec *vector.Vector) error {
-			return processParquetListToArray(proc.Ctx, mp, page, proc, vec, width, func(v parquet.Value) (int8, error) {
-				x := v.Int32()
-				if x < math.MinInt8 || x > math.MaxInt8 {
-					return 0, moerr.NewOutOfRangeNoCtxf("vecint8", "value %d out of range [-128,127]", x)
-				}
-				return int8(x), nil
-			})
-		}
+		configureParquetListMapper(mp, width, func(_ context.Context, v parquet.Value) (int8, error) {
+			x := v.Int32()
+			if x < math.MinInt8 || x > math.MaxInt8 {
+				return 0, moerr.NewOutOfRangeNoCtxf("vecint8", "value %d out of range [-128,127]", x)
+			}
+			return int8(x), nil
+		})
 	case types.T_array_uint8:
 		if leaf.Type().Kind() != parquet.Int32 {
 			return nil, nil
 		}
-		mp.mapper = func(mp *columnMapper, page parquet.Page, proc *process.Process, vec *vector.Vector) error {
-			return processParquetListToArray(proc.Ctx, mp, page, proc, vec, width, func(v parquet.Value) (uint8, error) {
-				x := v.Int32()
-				if x < 0 || x > math.MaxUint8 {
-					return 0, moerr.NewOutOfRangeNoCtxf("vecuint8", "value %d out of range [0,255]", x)
-				}
-				return uint8(x), nil
-			})
-		}
+		configureParquetListMapper(mp, width, func(_ context.Context, v parquet.Value) (uint8, error) {
+			x := v.Int32()
+			if x < 0 || x > math.MaxUint8 {
+				return 0, moerr.NewOutOfRangeNoCtxf("vecuint8", "value %d out of range [0,255]", x)
+			}
+			return uint8(x), nil
+		})
 	default:
 		return nil, nil
+	}
+	mapper := mp.mapper
+	expectedDataKind := parquetEncodingKind(leaf.Type().Kind())
+	mp.mapper = func(mp *columnMapper, page parquet.Page, proc *process.Process, vec *vector.Vector) error {
+		if page.Dictionary() == nil {
+			data := page.Data()
+			if data.Kind() != expectedDataKind {
+				return moerr.NewInvalidInputf(proc.Ctx,
+					"malformed parquet list page values with type %s, expected %s",
+					data.Kind(), expectedDataKind)
+			}
+		}
+		return mapper(mp, page, proc, vec)
 	}
 	return leaf, mp
 }
@@ -831,6 +866,9 @@ func parquetListElementLeaf(sc *parquet.Column) (*parquet.Column, bool) {
 }
 
 func (*ParquetHandler) getMapper(sc *parquet.Column, dt plan.Type) *columnMapper {
+	if sc == nil || sc.Type() == nil {
+		return nil
+	}
 	st := sc.Type()
 	if st.PhysicalType() == nil {
 		return nil
@@ -864,35 +902,27 @@ func (*ParquetHandler) getMapper(sc *parquet.Column, dt plan.Type) *columnMapper
 			break
 		}
 		mp.mapper = func(mp *columnMapper, page parquet.Page, proc *process.Process, vec *vector.Vector) error {
-			if page.Dictionary() != nil {
-				return moerr.NewNYIf(proc.Ctx, "indexed %s page", st)
-			}
-
-			// Fail early: if page has NULLs and destination doesn't allow them
-			if mp.srcNull && page.NumNulls() > 0 && !mp.dstNull {
-				return moerr.NewConstraintViolationf(proc.Ctx,
-					"cannot load NULL value into NOT NULL column")
-			}
-
-			p := make([]parquet.Value, page.NumValues())
-			n, err := page.Values().ReadValues(p)
-			if err != nil && !errors.Is(err, io.EOF) {
-				return moerr.ConvertGoError(proc.Ctx, err)
-			}
-			if n != int(page.NumValues()) {
-				return moerr.NewInternalError(proc.Ctx, "short read bool")
-			}
-			for _, v := range p {
-				if v.IsNull() {
-					err = vector.AppendFixed(vec, false, true, proc.Mp())
-				} else {
-					err = vector.AppendFixed(vec, v.Boolean(), false, proc.Mp())
-				}
+			if dict := page.Dictionary(); dict != nil {
+				nc, err := prepareNullCheck(proc.Ctx, mp, page)
 				if err != nil {
 					return err
 				}
+				data := page.Data()
+				if data.Kind() != encoding.Int32 {
+					return moerr.NewInvalidInputf(proc.Ctx,
+						"malformed BOOLEAN dictionary indexes with type %s", data.Kind())
+				}
+				indices := data.Int32()
+				if err := validateDictionaryIndicesCount(proc.Ctx, indices, nc.actualNonNulls); err != nil {
+					return err
+				}
+				return copyBoolDictPageToVec(mp, page, proc, vec, dict, indices, nc)
 			}
-			return nil
+			nc, err := prepareNullCheck(proc.Ctx, mp, page)
+			if err != nil {
+				return err
+			}
+			return copyPlainBoolPageToVec(page, proc, vec, nc)
 		}
 	case types.T_uint8:
 		if isParquetRoundedIntegerSource(st) {
@@ -1101,9 +1131,15 @@ func (*ParquetHandler) getMapper(sc *parquet.Column, dt plan.Type) *columnMapper
 			mp.mapper = func(mp *columnMapper, page parquet.Page, proc *process.Process, vec *vector.Vector) error {
 				data := page.Data()
 				if dict := page.Dictionary(); dict != nil {
-					dictData := dict.Page().Data()
+					dictData, err := parquetDictionaryValues(proc.Ctx, dict, encoding.Int32)
+					if err != nil {
+						return err
+					}
 					dictValues := dictData.Int32()
-					indices := data.Int32()
+					indices, err := parquetDictionaryIndexes(proc.Ctx, data)
+					if err != nil {
+						return err
+					}
 					return copyDictPageToVec(mp, page, proc, vec, len(dictValues), indices, func(idx int32) int32 {
 						return dictValues[int(idx)]
 					})
@@ -1347,9 +1383,15 @@ func (*ParquetHandler) getMapper(sc *parquet.Column, dt plan.Type) *columnMapper
 				mp.mapper = func(mp *columnMapper, page parquet.Page, proc *process.Process, vec *vector.Vector) error {
 					data := page.Data()
 					if dict := page.Dictionary(); dict != nil {
-						dictData := dict.Page().Data()
+						dictData, err := parquetDictionaryValues(proc.Ctx, dict, encoding.Double)
+						if err != nil {
+							return err
+						}
 						dictValues := dictData.Double()
-						indices := data.Int32()
+						indices, err := parquetDictionaryIndexes(proc.Ctx, data)
+						if err != nil {
+							return err
+						}
 						return copyDictPageToVec(mp, page, proc, vec, len(dictValues), indices, func(idx int32) float64 {
 							return dictValues[int(idx)]
 						})
@@ -1360,9 +1402,15 @@ func (*ParquetHandler) getMapper(sc *parquet.Column, dt plan.Type) *columnMapper
 				mp.mapper = func(mp *columnMapper, page parquet.Page, proc *process.Process, vec *vector.Vector) error {
 					data := page.Data()
 					if dict := page.Dictionary(); dict != nil {
-						dictData := dict.Page().Data()
+						dictData, err := parquetDictionaryValues(proc.Ctx, dict, encoding.Float)
+						if err != nil {
+							return err
+						}
 						dictValues := dictData.Float()
-						indices := data.Int32()
+						indices, err := parquetDictionaryIndexes(proc.Ctx, data)
+						if err != nil {
+							return err
+						}
 						return copyDictPageToVec(mp, page, proc, vec, len(dictValues), indices, func(idx int32) float64 {
 							return float64(dictValues[int(idx)])
 						})
@@ -1430,10 +1478,16 @@ func (*ParquetHandler) getMapper(sc *parquet.Column, dt plan.Type) *columnMapper
 					})
 				}
 
-				dictData := dict.Page().Data()
+				dictData, err := parquetDictionaryValues(proc.Ctx, dict, encoding.Int32)
+				if err != nil {
+					return err
+				}
 				bs, _ := dictData.Data()
 				dictDates := types.DecodeSlice[int32](bs)
-				indexes := data.Int32()
+				indexes, err := parquetDictionaryIndexes(proc.Ctx, data)
+				if err != nil {
+					return err
+				}
 				return copyDictPageToVec(mp, page, proc, vec, len(dictDates), indexes, func(idx int32) types.Date {
 					return types.DaysFromUnixEpochToDate(dictDates[int(idx)])
 				})
@@ -1499,13 +1553,19 @@ func (*ParquetHandler) getMapper(sc *parquet.Column, dt plan.Type) *columnMapper
 				switch {
 				case tsT.Unit.Nanos != nil:
 					if dict != nil {
-						dictData := dict.Page().Data()
+						dictData, err := parquetDictionaryValues(proc.Ctx, dict, encoding.Int64)
+						if err != nil {
+							return err
+						}
 						dictValues := dictData.Int64()
 						converted := make([]types.Timestamp, len(dictValues))
 						for i, v := range dictValues {
 							converted[i] = convert(v / 1000)
 						}
-						indexes := data.Int32()
+						indexes, err := parquetDictionaryIndexes(proc.Ctx, data)
+						if err != nil {
+							return err
+						}
 						return copyDictPageToVec(mp, page, proc, vec, len(converted), indexes, func(idx int32) types.Timestamp {
 							return converted[int(idx)]
 						})
@@ -1515,13 +1575,19 @@ func (*ParquetHandler) getMapper(sc *parquet.Column, dt plan.Type) *columnMapper
 					})
 				case tsT.Unit.Micros != nil:
 					if dict != nil {
-						dictData := dict.Page().Data()
+						dictData, err := parquetDictionaryValues(proc.Ctx, dict, encoding.Int64)
+						if err != nil {
+							return err
+						}
 						dictValues := dictData.Int64()
 						converted := make([]types.Timestamp, len(dictValues))
 						for i, v := range dictValues {
 							converted[i] = convert(v)
 						}
-						indexes := data.Int32()
+						indexes, err := parquetDictionaryIndexes(proc.Ctx, data)
+						if err != nil {
+							return err
+						}
 						return copyDictPageToVec(mp, page, proc, vec, len(converted), indexes, func(idx int32) types.Timestamp {
 							return converted[int(idx)]
 						})
@@ -1531,18 +1597,34 @@ func (*ParquetHandler) getMapper(sc *parquet.Column, dt plan.Type) *columnMapper
 					})
 				case tsT.Unit.Millis != nil:
 					if dict != nil {
-						dictData := dict.Page().Data()
+						dictData, err := parquetDictionaryValues(proc.Ctx, dict, encoding.Int64)
+						if err != nil {
+							return err
+						}
 						dictValues := dictData.Int64()
 						converted := make([]types.Timestamp, len(dictValues))
 						for i, v := range dictValues {
-							converted[i] = convert(v * 1000)
+							micros, err := parquetTimestampMillisToMicros(proc.Ctx, v)
+							if err != nil {
+								return err
+							}
+							converted[i] = convert(micros)
 						}
-						indexes := data.Int32()
+						indexes, err := parquetDictionaryIndexes(proc.Ctx, data)
+						if err != nil {
+							return err
+						}
 						return copyDictPageToVec(mp, page, proc, vec, len(converted), indexes, func(idx int32) types.Timestamp {
 							return converted[int(idx)]
 						})
 					}
-					return copyPageToVecMap(mp, page, proc, vec, data.Int64(), func(v int64) types.Timestamp {
+					rawValues := data.Int64()
+					for _, v := range rawValues {
+						if _, err := parquetTimestampMillisToMicros(proc.Ctx, v); err != nil {
+							return err
+						}
+					}
+					return copyPageToVecMap(mp, page, proc, vec, rawValues, func(v int64) types.Timestamp {
 						return convert(v * 1000)
 					})
 				default:
@@ -1584,10 +1666,16 @@ func (*ParquetHandler) getMapper(sc *parquet.Column, dt plan.Type) *columnMapper
 					})
 				}
 
-				dictData := dict.Page().Data()
+				dictData, err := parquetDictionaryValues(proc.Ctx, dict, encoding.Int32)
+				if err != nil {
+					return err
+				}
 				bs, _ := dictData.Data()
 				dictDates := types.DecodeSlice[int32](bs)
-				indexes := data.Int32()
+				indexes, err := parquetDictionaryIndexes(proc.Ctx, data)
+				if err != nil {
+					return err
+				}
 				return copyDictPageToVec(mp, page, proc, vec, len(dictDates), indexes, func(idx int32) types.Datetime {
 					return types.DaysFromUnixEpochToDate(dictDates[int(idx)]).ToDatetime()
 				})
@@ -1672,13 +1760,19 @@ func (*ParquetHandler) getMapper(sc *parquet.Column, dt plan.Type) *columnMapper
 				switch {
 				case timeT.Unit.Nanos != nil:
 					if dict != nil {
-						dictData := dict.Page().Data()
+						dictData, err := parquetDictionaryValues(proc.Ctx, dict, encoding.Int64)
+						if err != nil {
+							return err
+						}
 						dictValues := dictData.Int64()
 						converted := make([]types.Time, len(dictValues))
 						for i, v := range dictValues {
 							converted[i] = types.Time(v / 1000)
 						}
-						indexes := data.Int32()
+						indexes, err := parquetDictionaryIndexes(proc.Ctx, data)
+						if err != nil {
+							return err
+						}
 						return copyDictPageToVec(mp, page, proc, vec, len(converted), indexes, func(idx int32) types.Time {
 							return converted[int(idx)]
 						})
@@ -1688,10 +1782,16 @@ func (*ParquetHandler) getMapper(sc *parquet.Column, dt plan.Type) *columnMapper
 					})
 				case timeT.Unit.Micros != nil:
 					if dict != nil {
-						dictData := dict.Page().Data()
+						dictData, err := parquetDictionaryValues(proc.Ctx, dict, encoding.Int64)
+						if err != nil {
+							return err
+						}
 						bs, _ := dictData.Data()
 						dictTimes := types.DecodeSlice[types.Time](bs)
-						indexes := data.Int32()
+						indexes, err := parquetDictionaryIndexes(proc.Ctx, data)
+						if err != nil {
+							return err
+						}
 						return copyDictPageToVec(mp, page, proc, vec, len(dictTimes), indexes, func(idx int32) types.Time {
 							return dictTimes[int(idx)]
 						})
@@ -1700,13 +1800,19 @@ func (*ParquetHandler) getMapper(sc *parquet.Column, dt plan.Type) *columnMapper
 					return copyPageToVec(mp, page, proc, vec, types.DecodeSlice[types.Time](bs))
 				case timeT.Unit.Millis != nil:
 					if dict != nil {
-						dictData := dict.Page().Data()
+						dictData, err := parquetDictionaryValues(proc.Ctx, dict, encoding.Int32)
+						if err != nil {
+							return err
+						}
 						dictValues := dictData.Int32()
 						converted := make([]types.Time, len(dictValues))
 						for i, v := range dictValues {
 							converted[i] = types.Time(v) * 1000
 						}
-						indexes := data.Int32()
+						indexes, err := parquetDictionaryIndexes(proc.Ctx, data)
+						if err != nil {
+							return err
+						}
 						return copyDictPageToVec(mp, page, proc, vec, len(converted), indexes, func(idx int32) types.Time {
 							return converted[int(idx)]
 						})
@@ -1736,7 +1842,10 @@ func (*ParquetHandler) getMapper(sc *parquet.Column, dt plan.Type) *columnMapper
 			break
 		}
 		mp.mapper = func(mp *columnMapper, page parquet.Page, proc *process.Process, vec *vector.Vector) error {
-			numRows := int(page.NumRows())
+			numRows, err := parquetPageCount(proc.Ctx, "NumRows()", page.NumRows())
+			if err != nil {
+				return err
+			}
 			if numRows == 0 {
 				return nil
 			}
@@ -1747,27 +1856,31 @@ func (*ParquetHandler) getMapper(sc *parquet.Column, dt plan.Type) *columnMapper
 				return err
 			}
 
-			err = vec.PreExtend(numRows, proc.Mp())
-			if err != nil {
-				return err
-			}
-
 			var loader strLoader
 			var indices []int32
 			var cache []*types.Varlena
 			dict := page.Dictionary()
 			if dict == nil {
-				loader.init(page.Data())
+				if err := loader.initChecked(proc.Ctx, page.Data()); err != nil {
+					return err
+				}
 				// Validate string data count for non-dictionary mode
 				if err := validateStringDataCount(proc.Ctx, &loader, nc.actualNonNulls); err != nil {
 					return err
 				}
 			} else {
-				loader.init(dict.Page().Data())
+				if err := loader.initChecked(proc.Ctx, dict.Page().Data()); err != nil {
+					return err
+				}
 				data := page.Data()
-				indices = data.Int32()
+				indices, err = parquetDictionaryIndexes(proc.Ctx, data)
+				if err != nil {
+					return err
+				}
 				dictLen := int(dict.Len())
-				cache = make([]*types.Varlena, dictLen)
+				if err := validateStringDataCount(proc.Ctx, &loader, int64(dictLen)); err != nil {
+					return err
+				}
 
 				// Validate dictionary indices count matches expected non-null rows
 				if err := validateDictionaryIndicesCount(proc.Ctx, indices, nc.actualNonNulls); err != nil {
@@ -1778,12 +1891,22 @@ func (*ParquetHandler) getMapper(sc *parquet.Column, dt plan.Type) *columnMapper
 				if err := ensureDictionaryIndexes(proc.Ctx, dictLen, indices); err != nil {
 					return err
 				}
+				cache = make([]*types.Varlena, dictLen)
+			}
+
+			if err := vec.PreExtend(vec.Length()+numRows, proc.Mp()); err != nil {
+				return err
+			}
+			checkpoint := vec.MakeAppendCheckpoint()
+			rollback := func(err error) error {
+				vec.RollbackAppend(checkpoint, numRows)
+				return err
 			}
 			for i := 0; i < numRows; i++ {
 				if nc.isNull(i) {
 					err := vector.AppendBytes(vec, nil, true, proc.Mp())
 					if err != nil {
-						return err
+						return rollback(err)
 					}
 					continue
 				}
@@ -1792,7 +1915,7 @@ func (*ParquetHandler) getMapper(sc *parquet.Column, dt plan.Type) *columnMapper
 					data := loader.loadNext()
 					err := vector.AppendBytes(vec, data, false, proc.Mp())
 					if err != nil {
-						return err
+						return rollback(err)
 					}
 					continue
 				}
@@ -1803,7 +1926,7 @@ func (*ParquetHandler) getMapper(sc *parquet.Column, dt plan.Type) *columnMapper
 				if cache[idx] != nil {
 					err := vector.AppendFixed(vec, *cache[idx], false, proc.Mp())
 					if err != nil {
-						return err
+						return rollback(err)
 					}
 					continue
 				}
@@ -1814,7 +1937,7 @@ func (*ParquetHandler) getMapper(sc *parquet.Column, dt plan.Type) *columnMapper
 					va := vector.GetFixedAtNoTypeCheck[types.Varlena](vec, vec.Length()-1)
 					cache[idx] = &va
 				} else {
-					return err
+					return rollback(err)
 				}
 			}
 			return nil
@@ -1855,7 +1978,10 @@ func (*ParquetHandler) getMapper(sc *parquet.Column, dt plan.Type) *columnMapper
 				if err != nil {
 					return err
 				}
-				indexes := data.Int32()
+				indexes, err := parquetDictionaryIndexes(proc.Ctx, data)
+				if err != nil {
+					return err
+				}
 				return copyDictPageToVec(mp, page, proc, vec, len(dictValues), indexes, func(idx int32) types.Decimal64 {
 					return dictValues[int(idx)]
 				})
@@ -1914,7 +2040,10 @@ func (*ParquetHandler) getMapper(sc *parquet.Column, dt plan.Type) *columnMapper
 				if err != nil {
 					return err
 				}
-				indexes := data.Int32()
+				indexes, err := parquetDictionaryIndexes(proc.Ctx, data)
+				if err != nil {
+					return err
+				}
 				return copyDictPageToVec(mp, page, proc, vec, len(dictValues), indexes, func(idx int32) types.Decimal128 {
 					return dictValues[int(idx)]
 				})
@@ -1966,7 +2095,10 @@ func (*ParquetHandler) getMapper(sc *parquet.Column, dt plan.Type) *columnMapper
 				if err != nil {
 					return err
 				}
-				indexes := data.Int32()
+				indexes, err := parquetDictionaryIndexes(proc.Ctx, data)
+				if err != nil {
+					return err
+				}
 				return copyDictPageToVec(mp, page, proc, vec, len(dictValues), indexes, func(idx int32) types.Decimal256 {
 					return dictValues[int(idx)]
 				})
@@ -2112,6 +2244,19 @@ func (*ParquetHandler) getMapper(sc *parquet.Column, dt plan.Type) *columnMapper
 		}
 	}
 	if mp.mapper != nil {
+		mapper := mp.mapper
+		expectedDataKind := parquetEncodingKind(st.Kind())
+		mp.mapper = func(mp *columnMapper, page parquet.Page, proc *process.Process, vec *vector.Vector) error {
+			if page.Dictionary() == nil {
+				data := page.Data()
+				if data.Kind() != expectedDataKind {
+					return moerr.NewInvalidInputf(proc.Ctx,
+						"malformed parquet page values with type %s, expected %s",
+						data.Kind(), expectedDataKind)
+				}
+			}
+			return mapper(mp, page, proc, vec)
+		}
 		return mp
 	}
 	return nil
@@ -2138,21 +2283,45 @@ func (nc *nullCheckInfo) isNull(index int) bool {
 // prepareNullCheck prepares null check information outside of the loop.
 // It traverses DefinitionLevels to compute actual non-null count, not trusting NumNulls().
 func prepareNullCheck(ctx context.Context, mp *columnMapper, page parquet.Page) (nullCheckInfo, error) {
-	numRows := int(page.NumRows())
+	numRows, err := parquetPageCount(ctx, "NumRows()", page.NumRows())
+	if err != nil {
+		return nullCheckInfo{}, err
+	}
+	numNulls := page.NumNulls()
+	if numNulls < 0 {
+		return nullCheckInfo{}, moerr.NewInvalidInputf(ctx,
+			"malformed page: NumNulls() %d is negative", numNulls)
+	}
+	if numNulls > int64(numRows) {
+		return nullCheckInfo{}, moerr.NewInvalidInputf(ctx,
+			"malformed page: NumNulls() %d exceeds NumRows() %d", numNulls, numRows)
+	}
 
 	// Fast path: source doesn't allow null
 	if !mp.srcNull {
+		if numNulls != 0 {
+			return nullCheckInfo{}, moerr.NewInvalidInputf(ctx,
+				"malformed page: required source has %d NULLs", numNulls)
+		}
+		if err := validateParquetNoNullDefinitionLevels(ctx, page.DefinitionLevels(), numRows, mp.maxDefinitionLevel); err != nil {
+			return nullCheckInfo{}, err
+		}
 		return nullCheckInfo{
-			noNulls:        true,
-			actualNonNulls: int64(numRows),
+			noNulls:            true,
+			maxDefinitionLevel: mp.maxDefinitionLevel,
+			actualNonNulls:     int64(numRows),
 		}, nil
 	}
 
 	// Fast path: page has no null values
-	if page.NumNulls() == 0 {
+	if numNulls == 0 {
+		if err := validateParquetNoNullDefinitionLevels(ctx, page.DefinitionLevels(), numRows, mp.maxDefinitionLevel); err != nil {
+			return nullCheckInfo{}, err
+		}
 		return nullCheckInfo{
-			noNulls:        true,
-			actualNonNulls: int64(numRows),
+			noNulls:            true,
+			maxDefinitionLevel: mp.maxDefinitionLevel,
+			actualNonNulls:     int64(numRows),
 		}, nil
 	}
 
@@ -2173,14 +2342,19 @@ func prepareNullCheck(ctx context.Context, mp *columnMapper, page parquet.Page) 
 
 	// Traverse levels to compute actual non-null count, not trusting NumNulls()
 	var actualNonNulls int64
-	for _, level := range levels {
+	for i, level := range levels {
+		if level > mp.maxDefinitionLevel {
+			return nullCheckInfo{}, moerr.NewInvalidInputf(ctx,
+				"malformed page: definition level %d at row %d exceeds maximum %d",
+				level, i, mp.maxDefinitionLevel)
+		}
 		if level == mp.maxDefinitionLevel {
 			actualNonNulls++
 		}
 	}
 
 	// Consistency check with NumNulls() to detect corrupted pages
-	expectedNonNulls := int64(numRows) - page.NumNulls()
+	expectedNonNulls := int64(numRows) - numNulls
 	if actualNonNulls != expectedNonNulls {
 		return nullCheckInfo{}, moerr.NewInvalidInputf(ctx,
 			"malformed page: NumNulls() indicates %d non-nulls, but definition levels show %d",
@@ -2195,11 +2369,35 @@ func prepareNullCheck(ctx context.Context, mp *columnMapper, page parquet.Page) 
 	}, nil
 }
 
+func validateParquetNoNullDefinitionLevels(ctx context.Context, levels []byte, numRows int, maxDefinitionLevel byte) error {
+	if len(levels) == 0 {
+		if numRows > 0 && maxDefinitionLevel > 0 {
+			return moerr.NewInvalidInputf(ctx,
+				"malformed page: definition levels are empty for %d optional rows",
+				numRows)
+		}
+		return nil
+	}
+	if len(levels) != numRows {
+		return moerr.NewInvalidInputf(ctx,
+			"malformed page: definition levels length %d != numRows %d",
+			len(levels), numRows)
+	}
+	for i, level := range levels {
+		if level != maxDefinitionLevel {
+			return moerr.NewInvalidInputf(ctx,
+				"malformed page: definition level %d at row %d is not non-null level %d",
+				level, i, maxDefinitionLevel)
+		}
+	}
+	return nil
+}
+
 // validateStringDataCount validates that string data count matches expected non-null rows.
 func validateStringDataCount(ctx context.Context, loader *strLoader, expectedNonNulls int64) error {
 	var actualCount int64
 
-	if loader.size != 0 {
+	if loader.fixedLen {
 		// FixedLenByteArray
 		if loader.size <= 0 {
 			return moerr.NewInvalidInputf(ctx, "malformed page: invalid fixed length %d", loader.size)
@@ -2213,6 +2411,9 @@ func validateStringDataCount(ctx context.Context, loader *strLoader, expectedNon
 		actualCount = int64(len(loader.buf) / loader.size)
 	} else {
 		// ByteArray
+		if err := validateParquetByteArrayOffsets(ctx, loader.buf, loader.offsets); err != nil {
+			return err
+		}
 		if len(loader.offsets) == 0 {
 			actualCount = 0
 		} else {
@@ -2226,6 +2427,35 @@ func validateStringDataCount(ctx context.Context, loader *strLoader, expectedNon
 			expectedNonNulls, actualCount)
 	}
 
+	return nil
+}
+
+func validateParquetByteArrayOffsets(ctx context.Context, buf []byte, offsets []uint32) error {
+	if len(offsets) == 0 {
+		return nil
+	}
+	// Page slices may keep offsets relative to a shared backing buffer, so the
+	// first offset is not required to be zero.
+	previous := offsets[0]
+	if uint64(previous) > uint64(len(buf)) {
+		return moerr.NewInvalidInputf(ctx,
+			"malformed page: string offset %d at index 0 exceeds buffer length %d",
+			previous, len(buf))
+	}
+	for i := 1; i < len(offsets); i++ {
+		offset := offsets[i]
+		if uint64(offset) > uint64(len(buf)) {
+			return moerr.NewInvalidInputf(ctx,
+				"malformed page: string offset %d at index %d exceeds buffer length %d",
+				offset, i, len(buf))
+		}
+		if offset < previous {
+			return moerr.NewInvalidInputf(ctx,
+				"malformed page: string offset %d at index %d precedes previous offset %d",
+				offset, i, previous)
+		}
+		previous = offset
+	}
 	return nil
 }
 
@@ -2267,7 +2497,10 @@ func processStringToFixed[T any](
 	parseFunc func(data []byte) (T, error),
 	zeroVal T,
 ) error {
-	numRows := int(page.NumRows())
+	numRows, err := parquetPageCount(ctx, "NumRows()", page.NumRows())
+	if err != nil {
+		return err
+	}
 	if numRows == 0 {
 		return nil
 	}
@@ -2286,15 +2519,25 @@ func processStringToFixed[T any](
 	dict := page.Dictionary()
 
 	if dict == nil {
-		loader.init(page.Data())
+		if err := loader.initChecked(ctx, page.Data()); err != nil {
+			return err
+		}
 		// 1.3 Validate plain page data count
 		if err := validateStringDataCount(ctx, &loader, nc.actualNonNulls); err != nil {
 			return err
 		}
 	} else {
-		loader.init(dict.Page().Data())
+		if err := loader.initChecked(ctx, dict.Page().Data()); err != nil {
+			return err
+		}
+		if err := validateStringDataCount(ctx, &loader, int64(dict.Len())); err != nil {
+			return err
+		}
 		data := page.Data()
-		indices = data.Int32()
+		indices, err = parquetDictionaryIndexes(ctx, data)
+		if err != nil {
+			return err
+		}
 		// 1.4 Validate dictionary indices count
 		if err := validateDictionaryIndicesCount(ctx, indices, nc.actualNonNulls); err != nil {
 			return err
@@ -2308,11 +2551,16 @@ func processStringToFixed[T any](
 	// ========== Phase 2: Extend vector (only after validation passes) ==========
 
 	length := vec.Length()
-	if err := vec.PreExtend(numRows+length, proc.Mp()); err != nil {
+	if err := preExtendParquetFixedVector(vec, numRows+length, proc, !nc.noNulls); err != nil {
 		return err
 	}
+	checkpoint := vec.MakeAppendCheckpoint()
 	vec.SetLength(numRows + length)
 	ret := vector.MustFixedColWithTypeCheck[T](vec)
+	rollback := func(err error) error {
+		vec.RollbackAppend(checkpoint, numRows)
+		return err
+	}
 
 	// ========== Phase 3: Process data ==========
 
@@ -2339,7 +2587,7 @@ func processStringToFixed[T any](
 		// Parse and write
 		val, parseErr := parseFunc(data)
 		if parseErr != nil {
-			return wrapParseError(ctx, i, parseErr)
+			return rollback(wrapParseError(ctx, i, parseErr))
 		}
 		ret[i+length] = val
 	}
@@ -2354,7 +2602,10 @@ func processStringToJson(
 	proc *process.Process,
 	vec *vector.Vector,
 ) error {
-	numRows := int(page.NumRows())
+	numRows, err := parquetPageCount(ctx, "NumRows()", page.NumRows())
+	if err != nil {
+		return err
+	}
 	if numRows == 0 {
 		return nil
 	}
@@ -2368,14 +2619,24 @@ func processStringToJson(
 	var indices []int32
 	dict := page.Dictionary()
 	if dict == nil {
-		loader.init(page.Data())
+		if err := loader.initChecked(ctx, page.Data()); err != nil {
+			return err
+		}
 		if err := validateStringDataCount(ctx, &loader, nc.actualNonNulls); err != nil {
 			return err
 		}
 	} else {
-		loader.init(dict.Page().Data())
+		if err := loader.initChecked(ctx, dict.Page().Data()); err != nil {
+			return err
+		}
+		if err := validateStringDataCount(ctx, &loader, int64(dict.Len())); err != nil {
+			return err
+		}
 		data := page.Data()
-		indices = data.Int32()
+		indices, err = parquetDictionaryIndexes(ctx, data)
+		if err != nil {
+			return err
+		}
 		if err := validateDictionaryIndicesCount(ctx, indices, nc.actualNonNulls); err != nil {
 			return err
 		}
@@ -2387,10 +2648,15 @@ func processStringToJson(
 	if err := vec.PreExtend(vec.Length()+numRows, proc.Mp()); err != nil {
 		return err
 	}
+	checkpoint := vec.MakeAppendCheckpoint()
+	rollback := func(err error) error {
+		vec.RollbackAppend(checkpoint, numRows)
+		return err
+	}
 	for i := 0; i < numRows; i++ {
 		if nc.isNull(i) {
 			if err := vector.AppendBytes(vec, nil, true, proc.Mp()); err != nil {
-				return err
+				return rollback(err)
 			}
 			continue
 		}
@@ -2406,10 +2672,10 @@ func processStringToJson(
 
 		val, parseErr := types.ParseSliceToByteJson(bytes.TrimSpace(data))
 		if parseErr != nil {
-			return wrapParseError(ctx, i, parseErr)
+			return rollback(wrapParseError(ctx, i, parseErr))
 		}
 		if err := vector.AppendByteJson(vec, val, false, proc.Mp()); err != nil {
-			return err
+			return rollback(err)
 		}
 	}
 	return nil
@@ -2423,7 +2689,10 @@ func processStringToArray[T types.ArrayElement](
 	vec *vector.Vector,
 	width int,
 ) error {
-	numRows := int(page.NumRows())
+	numRows, err := parquetPageCount(ctx, "NumRows()", page.NumRows())
+	if err != nil {
+		return err
+	}
 	if numRows == 0 {
 		return nil
 	}
@@ -2440,14 +2709,24 @@ func processStringToArray[T types.ArrayElement](
 	var indices []int32
 	dict := page.Dictionary()
 	if dict == nil {
-		loader.init(page.Data())
+		if err := loader.initChecked(ctx, page.Data()); err != nil {
+			return err
+		}
 		if err := validateStringDataCount(ctx, &loader, nc.actualNonNulls); err != nil {
 			return err
 		}
 	} else {
-		loader.init(dict.Page().Data())
+		if err := loader.initChecked(ctx, dict.Page().Data()); err != nil {
+			return err
+		}
+		if err := validateStringDataCount(ctx, &loader, int64(dict.Len())); err != nil {
+			return err
+		}
 		data := page.Data()
-		indices = data.Int32()
+		indices, err = parquetDictionaryIndexes(ctx, data)
+		if err != nil {
+			return err
+		}
 		if err := validateDictionaryIndicesCount(ctx, indices, nc.actualNonNulls); err != nil {
 			return err
 		}
@@ -2459,10 +2738,15 @@ func processStringToArray[T types.ArrayElement](
 	if err := vec.PreExtend(vec.Length()+numRows, proc.Mp()); err != nil {
 		return err
 	}
+	checkpoint := vec.MakeAppendCheckpoint()
+	rollback := func(err error) error {
+		vec.RollbackAppend(checkpoint, numRows)
+		return err
+	}
 	for i := 0; i < numRows; i++ {
 		if nc.isNull(i) {
 			if err := vector.AppendArray[T](vec, nil, true, proc.Mp()); err != nil {
-				return err
+				return rollback(err)
 			}
 			continue
 		}
@@ -2478,13 +2762,13 @@ func processStringToArray[T types.ArrayElement](
 
 		val, parseErr := parseStringArrayValue[T](data)
 		if parseErr != nil {
-			return wrapParseError(ctx, i, parseErr)
+			return rollback(wrapParseError(ctx, i, parseErr))
 		}
 		if width != types.MaxArrayDimension && len(val) != width {
-			return moerr.NewArrayDefMismatchNoCtx(width, len(val))
+			return rollback(moerr.NewArrayDefMismatchNoCtx(width, len(val)))
 		}
 		if err := vector.AppendArray[T](vec, val, false, proc.Mp()); err != nil {
-			return err
+			return rollback(err)
 		}
 	}
 	return nil
@@ -2505,8 +2789,24 @@ func isEmptyArrayText(text string) bool {
 	return strings.TrimSpace(text[1:len(text)-1]) == ""
 }
 
+func parquetPageCount(ctx context.Context, name string, count int64) (int, error) {
+	if count < 0 {
+		return 0, moerr.NewInvalidInputf(ctx,
+			"malformed page: %s %d is negative", name, count)
+	}
+	n := int(count)
+	if int64(n) != count {
+		return 0, moerr.NewInvalidInputf(ctx,
+			"malformed page: %s %d does not fit in int", name, count)
+	}
+	return n, nil
+}
+
 func readParquetPageValues(ctx context.Context, page parquet.Page) ([]parquet.Value, error) {
-	n := int(page.NumRows())
+	n, err := parquetPageCount(ctx, "NumRows()", page.NumRows())
+	if err != nil {
+		return nil, err
+	}
 	values := make([]parquet.Value, n)
 	read, err := page.Values().ReadValues(values)
 	if err != nil && !errors.Is(err, io.EOF) {
@@ -2514,12 +2814,18 @@ func readParquetPageValues(ctx context.Context, page parquet.Page) ([]parquet.Va
 	}
 	if read != n {
 		return nil, moerr.NewInternalErrorf(ctx, "short read parquet values: got %d, expected %d", read, n)
+	}
+	if err := validateParquetValueKinds(ctx, page, values); err != nil {
+		return nil, err
 	}
 	return values, nil
 }
 
 func readParquetPageAllValues(ctx context.Context, page parquet.Page) ([]parquet.Value, error) {
-	n := int(page.NumValues())
+	n, err := parquetPageCount(ctx, "NumValues()", page.NumValues())
+	if err != nil {
+		return nil, err
+	}
 	values := make([]parquet.Value, n)
 	read, err := page.Values().ReadValues(values)
 	if err != nil && !errors.Is(err, io.EOF) {
@@ -2528,7 +2834,25 @@ func readParquetPageAllValues(ctx context.Context, page parquet.Page) ([]parquet
 	if read != n {
 		return nil, moerr.NewInternalErrorf(ctx, "short read parquet values: got %d, expected %d", read, n)
 	}
+	if err := validateParquetValueKinds(ctx, page, values); err != nil {
+		return nil, err
+	}
 	return values, nil
+}
+
+func validateParquetValueKinds(ctx context.Context, page parquet.Page, values []parquet.Value) error {
+	expected := page.Type().Kind()
+	for i, value := range values {
+		if value.IsNull() {
+			continue
+		}
+		if value.Kind() != expected {
+			return moerr.NewInvalidInputf(ctx,
+				"malformed parquet page: value kind %s at row %d, expected %s",
+				value.Kind(), i, expected)
+		}
+	}
+	return nil
 }
 
 func processParquetListToArray[T types.ArrayElement](
@@ -2540,11 +2864,30 @@ func processParquetListToArray[T types.ArrayElement](
 	width int,
 	convert func(parquet.Value) (T, error),
 ) error {
+	if err := validateParquetDictionaryPage(ctx, page, nil); err != nil {
+		return err
+	}
 	values, err := readParquetPageAllValues(ctx, page)
 	if err != nil {
 		return err
 	}
-	numRows := int(page.NumRows())
+	numRows, err := parquetPageCount(ctx, "NumRows()", page.NumRows())
+	if err != nil {
+		return err
+	}
+	return processParquetListValuesToArray(ctx, mp, values, numRows, proc, vec, width, convert)
+}
+
+func processParquetListValuesToArray[T types.ArrayElement](
+	ctx context.Context,
+	mp *columnMapper,
+	values []parquet.Value,
+	numRows int,
+	proc *process.Process,
+	vec *vector.Vector,
+	width int,
+	convert func(parquet.Value) (T, error),
+) error {
 	if numRows == 0 {
 		return nil
 	}
@@ -2555,6 +2898,11 @@ func processParquetListToArray[T types.ArrayElement](
 		return moerr.NewInvalidInputf(ctx, "malformed parquet list page: first repetition level is %d", values[0].RepetitionLevel())
 	}
 	if err := vec.PreExtend(vec.Length()+numRows, proc.Mp()); err != nil {
+		return err
+	}
+	checkpoint := vec.MakeAppendCheckpoint()
+	rollback := func(err error) error {
+		vec.RollbackAppend(checkpoint, numRows)
 		return err
 	}
 
@@ -2579,9 +2927,19 @@ func processParquetListToArray[T types.ArrayElement](
 	}
 
 	for i, v := range values {
+		if i%1024 == 0 {
+			if err := context.Cause(ctx); err != nil {
+				return rollback(err)
+			}
+		}
+		if mp.allowRepetition && v.RepetitionLevel() > int(mp.maxRepetitionLevel) {
+			return rollback(moerr.NewInvalidInputf(ctx,
+				"malformed parquet list page: repetition level %d exceeds maximum %d",
+				v.RepetitionLevel(), mp.maxRepetitionLevel))
+		}
 		if i > 0 && v.RepetitionLevel() == 0 {
 			if err := flushRow(); err != nil {
-				return err
+				return rollback(err)
 			}
 			row = row[:0]
 			rowNull = false
@@ -2589,46 +2947,57 @@ func processParquetListToArray[T types.ArrayElement](
 		}
 
 		definitionLevel := byte(v.DefinitionLevel())
+		if v.DefinitionLevel() < 0 || definitionLevel > mp.maxDefinitionLevel {
+			return rollback(moerr.NewInvalidInputf(ctx,
+				"parquet list definition level %d exceeds maximum %d",
+				v.DefinitionLevel(), mp.maxDefinitionLevel))
+		}
+		expectedNull := definitionLevel < mp.maxDefinitionLevel
+		if v.IsNull() != expectedNull {
+			return rollback(moerr.NewInvalidInputf(ctx,
+				"malformed parquet list page: definition level and value NULL status disagree at row %d",
+				i))
+		}
 		if mp.listCanBeNull && definitionLevel == mp.listNullLevel {
 			if len(row) != 0 || rowEmpty || v.RepetitionLevel() != 0 {
-				return moerr.NewInvalidInput(ctx, "malformed parquet list page: NULL row has repeated values")
+				return rollback(moerr.NewInvalidInput(ctx, "malformed parquet list page: NULL row has repeated values"))
 			}
 			if !mp.dstNull {
-				return moerr.NewConstraintViolationf(ctx, "cannot load NULL value into NOT NULL column")
+				return rollback(moerr.NewConstraintViolationf(ctx, "cannot load NULL value into NOT NULL column"))
 			}
 			rowNull = true
 			continue
 		}
 		if mp.listElemCanBeNull && definitionLevel == mp.listElemNullLevel {
-			return moerr.NewInvalidInput(ctx, "parquet list NULL elements are not supported for vector columns")
+			return rollback(moerr.NewInvalidInput(ctx, "parquet list NULL elements are not supported for vector columns"))
 		}
 		if definitionLevel == mp.listEmptyLevel {
 			if len(row) != 0 || rowNull || v.RepetitionLevel() != 0 {
-				return moerr.NewInvalidInput(ctx, "malformed parquet list page: empty row has repeated values")
+				return rollback(moerr.NewInvalidInput(ctx, "malformed parquet list page: empty row has repeated values"))
 			}
 			rowEmpty = true
 			continue
 		}
 		if definitionLevel != mp.maxDefinitionLevel {
-			return moerr.NewInvalidInputf(ctx,
+			return rollback(moerr.NewInvalidInputf(ctx,
 				"parquet list value cannot map to vector: definition level %d, expected %d",
-				definitionLevel, mp.maxDefinitionLevel)
+				definitionLevel, mp.maxDefinitionLevel))
 		}
 		if rowNull || rowEmpty {
-			return moerr.NewInvalidInput(ctx, "malformed parquet list page: NULL row has repeated values")
+			return rollback(moerr.NewInvalidInput(ctx, "malformed parquet list page: NULL row has repeated values"))
 		}
 
 		val, err := convert(v)
 		if err != nil {
-			return wrapParseError(ctx, rowCount, err)
+			return rollback(wrapParseError(ctx, rowCount, err))
 		}
 		row = append(row, val)
 	}
 	if err := flushRow(); err != nil {
-		return err
+		return rollback(err)
 	}
 	if rowCount != numRows {
-		return moerr.NewInvalidInputf(ctx, "malformed parquet list page: mapped %d rows, expected %d", rowCount, numRows)
+		return rollback(moerr.NewInvalidInputf(ctx, "malformed parquet list page: mapped %d rows, expected %d", rowCount, numRows))
 	}
 	return nil
 }
@@ -2642,6 +3011,13 @@ func processParquetValuesToFixed[T any](
 	zeroVal T,
 	convert func(parquet.Value) (T, error),
 ) error {
+	nc, err := prepareNullCheck(ctx, mp, page)
+	if err != nil {
+		return err
+	}
+	if err := validateParquetDictionaryPage(ctx, page, &nc.actualNonNulls); err != nil {
+		return err
+	}
 	values, err := readParquetPageValues(ctx, page)
 	if err != nil {
 		return err
@@ -2649,22 +3025,30 @@ func processParquetValuesToFixed[T any](
 	if err := vec.PreExtend(vec.Length()+len(values), proc.Mp()); err != nil {
 		return err
 	}
+	checkpoint := vec.MakeAppendCheckpoint()
+	rollback := func(err error) error {
+		vec.RollbackAppend(checkpoint, len(values))
+		return err
+	}
 	for i, v := range values {
-		if v.IsNull() {
+		if err := validateParquetValueNullness(ctx, nc, i, v); err != nil {
+			return rollback(err)
+		}
+		if parquetValueIsNull(nc, i) {
 			if !mp.dstNull {
-				return moerr.NewConstraintViolationf(ctx, "cannot load NULL value into NOT NULL column")
+				return rollback(moerr.NewConstraintViolationf(ctx, "cannot load NULL value into NOT NULL column"))
 			}
 			if err := vector.AppendFixed(vec, zeroVal, true, proc.Mp()); err != nil {
-				return err
+				return rollback(err)
 			}
 			continue
 		}
 		val, err := convert(v)
 		if err != nil {
-			return wrapParseError(ctx, i, err)
+			return rollback(wrapParseError(ctx, i, err))
 		}
 		if err := vector.AppendFixed(vec, val, false, proc.Mp()); err != nil {
-			return err
+			return rollback(err)
 		}
 	}
 	return nil
@@ -2678,6 +3062,13 @@ func processParquetValuesToBytes(
 	vec *vector.Vector,
 	convert func(parquet.Value) ([]byte, error),
 ) error {
+	nc, err := prepareNullCheck(ctx, mp, page)
+	if err != nil {
+		return err
+	}
+	if err := validateParquetDictionaryPage(ctx, page, &nc.actualNonNulls); err != nil {
+		return err
+	}
 	values, err := readParquetPageValues(ctx, page)
 	if err != nil {
 		return err
@@ -2685,22 +3076,30 @@ func processParquetValuesToBytes(
 	if err := vec.PreExtend(vec.Length()+len(values), proc.Mp()); err != nil {
 		return err
 	}
+	checkpoint := vec.MakeAppendCheckpoint()
+	rollback := func(err error) error {
+		vec.RollbackAppend(checkpoint, len(values))
+		return err
+	}
 	for i, v := range values {
-		if v.IsNull() {
+		if err := validateParquetValueNullness(ctx, nc, i, v); err != nil {
+			return rollback(err)
+		}
+		if parquetValueIsNull(nc, i) {
 			if !mp.dstNull {
-				return moerr.NewConstraintViolationf(ctx, "cannot load NULL value into NOT NULL column")
+				return rollback(moerr.NewConstraintViolationf(ctx, "cannot load NULL value into NOT NULL column"))
 			}
 			if err := vector.AppendBytes(vec, nil, true, proc.Mp()); err != nil {
-				return err
+				return rollback(err)
 			}
 			continue
 		}
 		val, err := convert(v)
 		if err != nil {
-			return wrapParseError(ctx, i, err)
+			return rollback(wrapParseError(ctx, i, err))
 		}
 		if err := vector.AppendBytes(vec, val, false, proc.Mp()); err != nil {
-			return err
+			return rollback(err)
 		}
 	}
 	return nil
@@ -2714,6 +3113,13 @@ func processParquetValuesToJson(
 	vec *vector.Vector,
 	convert func(parquet.Value) (bytejson.ByteJson, error),
 ) error {
+	nc, err := prepareNullCheck(ctx, mp, page)
+	if err != nil {
+		return err
+	}
+	if err := validateParquetDictionaryPage(ctx, page, &nc.actualNonNulls); err != nil {
+		return err
+	}
 	values, err := readParquetPageValues(ctx, page)
 	if err != nil {
 		return err
@@ -2721,23 +3127,75 @@ func processParquetValuesToJson(
 	if err := vec.PreExtend(vec.Length()+len(values), proc.Mp()); err != nil {
 		return err
 	}
+	checkpoint := vec.MakeAppendCheckpoint()
+	rollback := func(err error) error {
+		vec.RollbackAppend(checkpoint, len(values))
+		return err
+	}
 	for i, v := range values {
-		if v.IsNull() {
+		if err := validateParquetValueNullness(ctx, nc, i, v); err != nil {
+			return rollback(err)
+		}
+		if parquetValueIsNull(nc, i) {
 			if !mp.dstNull {
-				return moerr.NewConstraintViolationf(ctx, "cannot load NULL value into NOT NULL column")
+				return rollback(moerr.NewConstraintViolationf(ctx, "cannot load NULL value into NOT NULL column"))
 			}
 			if err := vector.AppendByteJson(vec, bytejson.ByteJson{}, true, proc.Mp()); err != nil {
-				return err
+				return rollback(err)
 			}
 			continue
 		}
 		val, err := convert(v)
 		if err != nil {
-			return wrapParseError(ctx, i, err)
+			return rollback(wrapParseError(ctx, i, err))
 		}
 		if err := vector.AppendByteJson(vec, val, false, proc.Mp()); err != nil {
+			return rollback(err)
+		}
+	}
+	return nil
+}
+
+func parquetValueIsNull(nc nullCheckInfo, row int) bool {
+	return !nc.noNulls && nc.levels[row] != nc.maxDefinitionLevel
+}
+
+func validateParquetDictionaryPage(ctx context.Context, page parquet.Page, expectedNonNulls *int64) error {
+	dict := page.Dictionary()
+	if dict == nil {
+		return nil
+	}
+	indexes, err := parquetDictionaryIndexes(ctx, page.Data())
+	if err != nil {
+		return err
+	}
+	if expectedNonNulls != nil {
+		if err := validateDictionaryIndicesCount(ctx, indexes, *expectedNonNulls); err != nil {
 			return err
 		}
+	}
+	return ensureDictionaryIndexes(ctx, dict.Len(), indexes)
+}
+
+func validateParquetValueNullness(ctx context.Context, nc nullCheckInfo, row int, value parquet.Value) error {
+	expectedDefinitionLevel := int(nc.maxDefinitionLevel)
+	if !nc.noNulls {
+		expectedDefinitionLevel = int(nc.levels[row])
+	}
+	if value.DefinitionLevel() != expectedDefinitionLevel {
+		return moerr.NewInvalidInputf(ctx,
+			"malformed parquet page: value definition level %d disagrees with page level %d at row %d",
+			value.DefinitionLevel(), expectedDefinitionLevel, row)
+	}
+	if value.RepetitionLevel() != 0 {
+		return moerr.NewInvalidInputf(ctx,
+			"malformed parquet page: scalar value repetition level %d at row %d",
+			value.RepetitionLevel(), row)
+	}
+	if value.IsNull() != parquetValueIsNull(nc, row) {
+		return moerr.NewInvalidInputf(ctx,
+			"malformed parquet page: value NULL status disagrees with definition level at row %d",
+			row)
 	}
 	return nil
 }
@@ -3268,6 +3726,11 @@ func parquetValueToFloat64(ctx context.Context, st parquet.Type, v parquet.Value
 		return types.Decimal256ToFloat64(dec, parquetDecimalScale(st)), nil
 	}
 	switch st.Kind() {
+	case parquet.Boolean:
+		if v.Boolean() {
+			return 1, nil
+		}
+		return 0, nil
 	case parquet.Int32, parquet.Int64:
 		if lt := st.LogicalType(); lt != nil && lt.Integer != nil && !lt.Integer.IsSigned {
 			val, err := parquetValueToUint64(ctx, st, v)
@@ -3409,9 +3872,17 @@ func parquetTimestampValueToMicros(ctx context.Context, v parquet.Value, lt *for
 	case lt.Timestamp.Unit.Micros != nil:
 		return v.Int64(), nil
 	case lt.Timestamp.Unit.Millis != nil:
-		return v.Int64() * 1000, nil
+		return parquetTimestampMillisToMicros(ctx, v.Int64())
 	}
 	return 0, moerr.NewInvalidInput(ctx, "missing parquet timestamp unit")
+}
+
+func parquetTimestampMillisToMicros(ctx context.Context, millis int64) (int64, error) {
+	if millis > math.MaxInt64/1000 || millis < math.MinInt64/1000 {
+		return 0, moerr.NewInvalidInputf(ctx,
+			"parquet timestamp %d milliseconds overflows microseconds", millis)
+	}
+	return millis * 1000, nil
 }
 
 func parquetSessionLocation(proc *process.Process) *time.Location {
@@ -3447,25 +3918,37 @@ func parquetValueToDecimal256(ctx context.Context, st parquet.Type, v parquet.Va
 }
 
 type strLoader struct {
-	buf     []byte
-	offsets []uint32
-	size    int
-	next    int
+	buf      []byte
+	offsets  []uint32
+	size     int
+	fixedLen bool
+	next     int
 }
 
 func (ld *strLoader) init(data encoding.Values) {
+	*ld = strLoader{}
 	switch data.Kind() {
 	case encoding.ByteArray:
 		ld.buf, ld.offsets = data.ByteArray()
 	case encoding.FixedLenByteArray:
 		ld.buf, ld.size = data.FixedLenByteArray()
+		ld.fixedLen = true
 	default:
 		panic("not supported kind " + data.Kind().String())
 	}
 }
 
+func (ld *strLoader) initChecked(ctx context.Context, data encoding.Values) error {
+	if data.Kind() != encoding.ByteArray && data.Kind() != encoding.FixedLenByteArray {
+		return moerr.NewInvalidInputf(ctx,
+			"malformed parquet string values with type %s", data.Kind())
+	}
+	ld.init(data)
+	return nil
+}
+
 func (ld *strLoader) loadNext() []byte {
-	if ld.size != 0 {
+	if ld.fixedLen {
 		start := int(ld.next) * ld.size
 		end := start + ld.size
 		ld.next++
@@ -3479,7 +3962,7 @@ func (ld *strLoader) loadNext() []byte {
 }
 
 func (ld *strLoader) loadAt(i int32) []byte {
-	if ld.size != 0 {
+	if ld.fixedLen {
 		start := int(i) * ld.size
 		end := start + ld.size
 		return ld.buf[start:end]
@@ -3494,26 +3977,48 @@ func copyPageToVec[T any](mp *columnMapper, page parquet.Page, proc *process.Pro
 	return copyPageToVecMap(mp, page, proc, vec, data, func(v T) T { return v })
 }
 
-func copyPageToVecMap[T, U any](mp *columnMapper, page parquet.Page, proc *process.Process, vec *vector.Vector, data []T, itee func(t T) U) error {
-	n := int(page.NumRows())
-
-	// Only skip NULL check if source doesn't allow null OR page has no nulls
-	noNulls := !mp.srcNull || page.NumNulls() == 0
-
-	// Fail early: if page has NULLs and destination doesn't allow them
-	if !noNulls && !mp.dstNull {
-		return moerr.NewConstraintViolationf(proc.Ctx,
-			"cannot load NULL value into NOT NULL column")
+func preExtendParquetFixedVector(
+	vec *vector.Vector,
+	rows int,
+	proc *process.Process,
+	needNulls bool,
+) error {
+	if err := vec.PreExtend(rows, proc.Mp()); err != nil {
+		return err
 	}
+	if needNulls {
+		return vec.PreExtendNulls(rows, proc.Mp())
+	}
+	return nil
+}
+
+func copyPageToVecMap[T, U any](mp *columnMapper, page parquet.Page, proc *process.Process, vec *vector.Vector, data []T, itee func(t T) U) error {
+	nc, err := prepareNullCheck(proc.Ctx, mp, page)
+	if err != nil {
+		return err
+	}
+	n, err := parquetPageCount(proc.Ctx, "NumRows()", page.NumRows())
+	if err != nil {
+		return err
+	}
+	noNulls := nc.noNulls
+	expectedDataCount := nc.actualNonNulls
+	if int64(len(data)) != expectedDataCount {
+		return moerr.NewInvalidInputf(proc.Ctx,
+			"malformed page: expected %d non-null values, but data contains %d",
+			expectedDataCount, len(data))
+	}
+	levels := nc.levels
 
 	length := vec.Length()
-	err := vec.PreExtend(n+length, proc.Mp())
-	if err != nil {
+	if err := preExtendParquetFixedVector(vec, n+length, proc, !noNulls); err != nil {
 		return err
 	}
 	vec.SetLength(n + length)
 	ret := vector.MustFixedColWithTypeCheck[U](vec)
-	levels := page.DefinitionLevels()
+	if !noNulls {
+		nulls.TryExpand(vec.GetNulls(), n+length)
+	}
 	j := 0
 	for i := 0; i < n; i++ {
 		if !noNulls && levels[i] != mp.maxDefinitionLevel {
@@ -3527,6 +4032,18 @@ func copyPageToVecMap[T, U any](mp *columnMapper, page parquet.Page, proc *proce
 }
 
 func ensureDictionaryIndexes(ctx context.Context, dictLen int, indexes []int32) error {
+	if dictLen < 0 {
+		return moerr.NewInvalidInputf(ctx, "parquet dictionary length %d is invalid", dictLen)
+	}
+	if dictLen >= 0 && uint64(dictLen) <= uint64(^uint32(0)) {
+		limit := uint32(dictLen)
+		for _, idx := range indexes {
+			if uint32(idx) >= limit {
+				return moerr.NewInvalidInputf(ctx, "parquet dictionary index %d out of range %d", idx, dictLen)
+			}
+		}
+		return nil
+	}
 	for _, idx := range indexes {
 		if idx < 0 || int(idx) >= dictLen {
 			return moerr.NewInvalidInputf(ctx, "parquet dictionary index %d out of range %d", idx, dictLen)
@@ -3535,11 +4052,212 @@ func ensureDictionaryIndexes(ctx context.Context, dictLen int, indexes []int32) 
 	return nil
 }
 
+func parquetDictionaryIndexes(ctx context.Context, data encoding.Values) ([]int32, error) {
+	if data.Kind() != encoding.Int32 {
+		return nil, moerr.NewInvalidInputf(ctx,
+			"malformed parquet dictionary indexes with type %s", data.Kind())
+	}
+	return data.Int32(), nil
+}
+
+func parquetDictionaryValues(
+	ctx context.Context,
+	dict parquet.Dictionary,
+	expected encoding.Kind,
+) (encoding.Values, error) {
+	data := dict.Page().Data()
+	if data.Kind() != expected {
+		return encoding.Values{}, moerr.NewInvalidInputf(ctx,
+			"malformed parquet dictionary values with type %s, expected %s",
+			data.Kind(), expected)
+	}
+	return data, nil
+}
+
 func copyDictPageToVec[T any](mp *columnMapper, page parquet.Page, proc *process.Process, vec *vector.Vector, dictLen int, indexes []int32, convert func(idx int32) T) error {
+	nc, err := prepareNullCheck(proc.Ctx, mp, page)
+	if err != nil {
+		return err
+	}
+	if err := validateDictionaryIndicesCount(proc.Ctx, indexes, nc.actualNonNulls); err != nil {
+		return err
+	}
 	if err := ensureDictionaryIndexes(proc.Ctx, dictLen, indexes); err != nil {
 		return err
 	}
+	if nc.noNulls {
+		n, err := parquetPageCount(proc.Ctx, "NumRows()", page.NumRows())
+		if err != nil {
+			return err
+		}
+		length := vec.Length()
+		if err := vec.PreExtend(n+length, proc.Mp()); err != nil {
+			return err
+		}
+		vec.SetLength(n + length)
+		ret := vector.MustFixedColWithTypeCheck[T](vec)
+		for i := 0; i < n; i++ {
+			ret[length+i] = convert(indexes[i])
+		}
+		return nil
+	}
 	return copyPageToVecMap(mp, page, proc, vec, indexes, convert)
+}
+
+func copyPlainBoolPageToVec(page parquet.Page, proc *process.Process, vec *vector.Vector, nc nullCheckInfo) error {
+	numRows64 := page.NumRows()
+	numValues64 := page.NumValues()
+	numRows, err := parquetPageCount(proc.Ctx, "NumRows()", numRows64)
+	if err != nil {
+		return err
+	}
+	numValues, err := parquetPageCount(proc.Ctx, "NumValues()", numValues64)
+	if err != nil {
+		return err
+	}
+	if numValues != numRows {
+		return moerr.NewInvalidInputf(proc.Ctx,
+			"malformed BOOLEAN page: NumValues() %d does not match NumRows() %d",
+			numValues64, numRows64)
+	}
+	n := numValues
+	length := vec.Length()
+	if err := preExtendParquetFixedVector(vec, n+length, proc, !nc.noNulls); err != nil {
+		return err
+	}
+	checkpoint := vec.MakeAppendCheckpoint()
+	vec.SetLength(n + length)
+	ret := vector.MustFixedColWithTypeCheck[bool](vec)
+	reader := page.Values()
+	rollback := func(err error) error {
+		vec.RollbackAppend(checkpoint, n)
+		return err
+	}
+	if !nc.noNulls {
+		nulls.TryExpand(vec.GetNulls(), n+length)
+	}
+
+	// Required BOOLEAN pages expose a typed reader. Decode directly into the
+	// vector to avoid constructing one parquet.Value per row and appending each
+	// row through the vector metadata path.
+	if nc.noNulls {
+		if booleanReader, ok := reader.(parquet.BooleanReader); ok {
+			read, err := booleanReader.ReadBooleans(ret[length : length+n])
+			if err != nil && !errors.Is(err, io.EOF) {
+				return rollback(moerr.ConvertGoError(proc.Ctx, err))
+			}
+			if read != n {
+				return rollback(moerr.NewInternalError(proc.Ctx, "short read bool"))
+			}
+			return nil
+		}
+	}
+
+	// Optional BOOLEAN pages need definition levels interleaved with the
+	// physical values. Read in bounded chunks so a large page does not require
+	// a temporary parquet.Value for every row.
+	const valueChunkSize = 256
+	var values [valueChunkSize]parquet.Value
+	readRows := 0
+	for readRows < n {
+		want := n - readRows
+		if want > len(values) {
+			want = len(values)
+		}
+		read, err := reader.ReadValues(values[:want])
+		if err != nil && !errors.Is(err, io.EOF) {
+			return rollback(moerr.ConvertGoError(proc.Ctx, err))
+		}
+		if read != want {
+			return rollback(moerr.NewInternalError(proc.Ctx, "short read bool"))
+		}
+		for i := 0; i < read; i++ {
+			v := values[i]
+			rowIndex := readRows + i
+			row := length + rowIndex
+			if err := validateParquetValueNullness(proc.Ctx, nc, rowIndex, v); err != nil {
+				return rollback(err)
+			}
+			isNull := v.IsNull()
+			if isNull {
+				if nc.noNulls {
+					return rollback(moerr.NewInvalidInput(proc.Ctx,
+						"malformed BOOLEAN page: reader returned NULL value"))
+				}
+				ret[row] = false
+				nulls.Add(vec.GetNulls(), uint64(row))
+			} else {
+				if v.Kind() != parquet.Boolean {
+					return rollback(moerr.NewInvalidInputf(proc.Ctx,
+						"malformed BOOLEAN page: reader returned %s value",
+						v.Kind()))
+				}
+				ret[row] = v.Boolean()
+			}
+		}
+		readRows += read
+	}
+	return nil
+}
+
+func copyBoolDictPageToVec(
+	mp *columnMapper,
+	page parquet.Page,
+	proc *process.Process,
+	vec *vector.Vector,
+	dict parquet.Dictionary,
+	indices []int32,
+	nc nullCheckInfo,
+) error {
+	if dict.Type().Kind() != parquet.Boolean {
+		return moerr.NewInvalidInputf(proc.Ctx,
+			"malformed BOOLEAN dictionary with type %s", dict.Type().Kind())
+	}
+	dictLen := dict.Len()
+	if dictLen < 0 || dictLen > 2 {
+		return moerr.NewInvalidInputf(proc.Ctx,
+			"malformed BOOLEAN dictionary with %d values", dictLen)
+	}
+	if err := ensureDictionaryIndexes(proc.Ctx, dictLen, indices); err != nil {
+		return err
+	}
+
+	var values [2]bool
+	for i := 0; i < dictLen; i++ {
+		values[i] = dict.Index(int32(i)).Boolean()
+	}
+
+	n, err := parquetPageCount(proc.Ctx, "NumRows()", page.NumRows())
+	if err != nil {
+		return err
+	}
+	length := vec.Length()
+	if err := preExtendParquetFixedVector(vec, n+length, proc, !nc.noNulls); err != nil {
+		return err
+	}
+	vec.SetLength(n + length)
+	ret := vector.MustFixedColWithTypeCheck[bool](vec)
+	if nc.noNulls {
+		for i := 0; i < n; i++ {
+			ret[i+length] = values[indices[i]]
+		}
+		return nil
+	}
+
+	nulls.TryExpand(vec.GetNulls(), n+length)
+	levels := nc.levels
+	maxDefinitionLevel := nc.maxDefinitionLevel
+	j := 0
+	for i := 0; i < n; i++ {
+		if levels[i] != maxDefinitionLevel {
+			ret[i+length] = false
+			nulls.Add(vec.GetNulls(), uint64(i+length))
+			continue
+		}
+		ret[i+length] = values[indices[j]]
+		j++
+	}
+	return nil
 }
 
 var (
@@ -3552,7 +4270,43 @@ var (
 	minInt256Big = new(big.Int).Neg(new(big.Int).Lsh(big.NewInt(1), 255))
 )
 
+func validateParquetValuesKind(ctx context.Context, kind parquet.Kind, data encoding.Values) error {
+	expected := parquetEncodingKind(kind)
+	if data.Kind() != expected {
+		return moerr.NewInvalidInputf(ctx,
+			"malformed parquet values with type %s, expected %s",
+			data.Kind(), expected)
+	}
+	return nil
+}
+
+func parquetEncodingKind(kind parquet.Kind) encoding.Kind {
+	switch kind {
+	case parquet.Boolean:
+		return encoding.Boolean
+	case parquet.Int32:
+		return encoding.Int32
+	case parquet.Int64:
+		return encoding.Int64
+	case parquet.Int96:
+		return encoding.Int96
+	case parquet.Float:
+		return encoding.Float
+	case parquet.Double:
+		return encoding.Double
+	case parquet.ByteArray:
+		return encoding.ByteArray
+	case parquet.FixedLenByteArray:
+		return encoding.FixedLenByteArray
+	default:
+		return encoding.Undefined
+	}
+}
+
 func decodeDecimal64Values(ctx context.Context, kind parquet.Kind, data encoding.Values) ([]types.Decimal64, error) {
+	if err := validateParquetValuesKind(ctx, kind, data); err != nil {
+		return nil, err
+	}
 	switch kind {
 	case parquet.Int32:
 		src := data.Int32()
@@ -3570,6 +4324,9 @@ func decodeDecimal64Values(ctx context.Context, kind parquet.Kind, data encoding
 		return dst, nil
 	case parquet.ByteArray:
 		buf, offsets := data.ByteArray()
+		if err := validateParquetByteArrayOffsets(ctx, buf, offsets); err != nil {
+			return nil, err
+		}
 		if len(offsets) == 0 {
 			return nil, nil
 		}
@@ -3606,6 +4363,9 @@ func decodeDecimal64Values(ctx context.Context, kind parquet.Kind, data encoding
 }
 
 func decodeDecimal128Values(ctx context.Context, kind parquet.Kind, data encoding.Values) ([]types.Decimal128, error) {
+	if err := validateParquetValuesKind(ctx, kind, data); err != nil {
+		return nil, err
+	}
 	switch kind {
 	case parquet.Int32:
 		src := data.Int32()
@@ -3623,6 +4383,9 @@ func decodeDecimal128Values(ctx context.Context, kind parquet.Kind, data encodin
 		return dst, nil
 	case parquet.ByteArray:
 		buf, offsets := data.ByteArray()
+		if err := validateParquetByteArrayOffsets(ctx, buf, offsets); err != nil {
+			return nil, err
+		}
 		if len(offsets) == 0 {
 			return nil, nil
 		}
@@ -3659,6 +4422,9 @@ func decodeDecimal128Values(ctx context.Context, kind parquet.Kind, data encodin
 }
 
 func decodeDecimal256Values(ctx context.Context, kind parquet.Kind, data encoding.Values) ([]types.Decimal256, error) {
+	if err := validateParquetValuesKind(ctx, kind, data); err != nil {
+		return nil, err
+	}
 	switch kind {
 	case parquet.Int32:
 		src := data.Int32()
@@ -3676,6 +4442,9 @@ func decodeDecimal256Values(ctx context.Context, kind parquet.Kind, data encodin
 		return dst, nil
 	case parquet.ByteArray:
 		buf, offsets := data.ByteArray()
+		if err := validateParquetByteArrayOffsets(ctx, buf, offsets); err != nil {
+			return nil, err
+		}
 		if len(offsets) == 0 {
 			return nil, nil
 		}
@@ -3843,7 +4612,11 @@ func (h *ParquetHandler) getData(bat *batch.Batch, param *ExternalParam, proc *p
 	if h.rowCountOnly {
 		err = h.getDataRowCountOnly(bat, param)
 	} else if h.hasNestedCols {
-		err = h.getDataByRow(bat, param, proc)
+		if len(h.dataColIndices) == 0 {
+			err = h.getDataByRow(bat, param, proc)
+		} else {
+			err = h.getDataByRowAndPage(bat, param, proc)
+		}
 	} else {
 		err = h.getDataByPage(bat, param, proc)
 	}
@@ -3881,20 +4654,34 @@ func (h *ParquetHandler) closePagesOnError(ctx context.Context, err error) error
 
 func (h *ParquetHandler) getDataRowCountOnly(bat *batch.Batch, param *ExternalParam) error {
 	batchLimit := int(h.batchCnt)
+	if batchLimit <= 0 {
+		bat.SetRowCount(0)
+		return nil
+	}
 	rowCount := 0
 
 	if h.rowCountRemaining > 0 {
-		rowCount = h.rowsToGeneratedByteBudget(min(h.rowCountRemaining, batchLimit), param)
-		h.rowCountRemaining -= rowCount
+		maxRows := min(h.rowCountRemaining, int64(batchLimit))
+		rowCount = h.rowsToGeneratedByteBudget(int(maxRows), param)
+		h.rowCountRemaining -= int64(rowCount)
 	} else {
 		if h.currentRowGroup >= len(h.rowGroups) {
 			bat.SetRowCount(0)
 			return nil
 		}
-		total := int(h.rowGroups[h.currentRowGroup].NumRows())
+		rowGroup := h.rowGroups[h.currentRowGroup]
+		if rowGroup == nil {
+			return moerr.NewInvalidInput(param.Ctx, "parquet row group is nil")
+		}
+		total := rowGroup.NumRows()
+		if total < 0 {
+			return moerr.NewInvalidInputf(param.Ctx,
+				"malformed parquet row group: NumRows() %d is negative", total)
+		}
 		h.currentRowGroup++
-		rowCount = h.rowsToGeneratedByteBudget(min(total, batchLimit), param)
-		h.rowCountRemaining = total - rowCount
+		maxRows := min(total, int64(batchLimit))
+		rowCount = h.rowsToGeneratedByteBudget(int(maxRows), param)
+		h.rowCountRemaining = total - int64(rowCount)
 	}
 
 	h.offset += int64(rowCount)
@@ -4002,11 +4789,18 @@ func (h *ParquetHandler) getDataByPage(bat *batch.Batch, param *ExternalParam, p
 				return err
 			}
 			if eof {
+				if err := validateParquetPageModeEOF(param.Ctx, h.offset+int64(length), h.rowGroupRows); err != nil {
+					return h.closePagesOnError(param.Ctx, err)
+				}
 				finish = true
 				available = 0
 				break
 			}
 			page := h.currentPage[colIdx]
+			if err := validateParquetPageRows(param.Ctx, page.NumRows(), h.pageOffset[colIdx],
+				h.offset+int64(length), h.rowGroupRows); err != nil {
+				return h.closePagesOnError(param.Ctx, err)
+			}
 			if len(page.RepetitionLevels()) != 0 && !h.mappers[colIdx].allowRepetition {
 				err := moerr.NewNYI(param.Ctx, "page has repetition")
 				return h.closePagesOnError(param.Ctx, err)
@@ -4062,6 +4856,62 @@ func (h *ParquetHandler) getDataByPage(bat *batch.Batch, param *ExternalParam, p
 	return nil
 }
 
+func validateParquetPageModeEOF(ctx context.Context, rowsRead, expectedRows int64) error {
+	if expectedRows < 0 {
+		return moerr.NewInvalidInputf(ctx,
+			"malformed parquet row group: NumRows() %d is negative", expectedRows)
+	}
+	if rowsRead != expectedRows {
+		return moerr.NewInvalidInputf(ctx,
+			"malformed parquet row group: page columns ended after %d rows, expected %d",
+			rowsRead, expectedRows)
+	}
+	return nil
+}
+
+func validateParquetRowModeEOF(ctx context.Context, rowsRead, expectedRows int64) error {
+	if expectedRows < 0 {
+		return moerr.NewInvalidInputf(ctx,
+			"malformed parquet row group: NumRows() %d is negative", expectedRows)
+	}
+	if rowsRead < 0 || rowsRead > expectedRows {
+		return moerr.NewInvalidInputf(ctx,
+			"malformed parquet row reader position %d for %d rows",
+			rowsRead, expectedRows)
+	}
+	if rowsRead != expectedRows {
+		return moerr.NewInvalidInputf(ctx,
+			"malformed parquet row reader ended after %d rows, expected %d",
+			rowsRead, expectedRows)
+	}
+	return nil
+}
+
+func validateParquetPageRows(ctx context.Context, pageRows, pageOffset, rowsRead, expectedRows int64) error {
+	if pageRows < 0 {
+		return moerr.NewInvalidInputf(ctx,
+			"malformed parquet page: NumRows() %d is negative", pageRows)
+	}
+	if pageOffset < 0 || pageOffset > pageRows {
+		return moerr.NewInvalidInputf(ctx,
+			"malformed parquet page offset %d for %d rows", pageOffset, pageRows)
+	}
+	if expectedRows < 0 {
+		return moerr.NewInvalidInputf(ctx,
+			"malformed parquet row group: NumRows() %d is negative", expectedRows)
+	}
+	if rowsRead < 0 || rowsRead > expectedRows {
+		return moerr.NewInvalidInputf(ctx,
+			"malformed parquet row position %d for %d rows", rowsRead, expectedRows)
+	}
+	if pageRows-pageOffset > expectedRows-rowsRead {
+		return moerr.NewInvalidInputf(ctx,
+			"malformed parquet page: %d rows remain after row %d, but row group has %d rows",
+			pageRows-pageOffset, rowsRead, expectedRows)
+	}
+	return nil
+}
+
 func (h *ParquetHandler) ensureCurrentPage(colIdx int, param *ExternalParam) (bool, error) {
 	for {
 		page := h.currentPage[colIdx]
@@ -4081,7 +4931,15 @@ func (h *ParquetHandler) ensureCurrentPage(colIdx int, param *ExternalParam) (bo
 			h.currentPage[colIdx] = page
 			h.pageOffset[colIdx] = 0
 		}
-		if h.pageOffset[colIdx] < page.NumRows() {
+		if page == nil {
+			return false, h.closePagesOnError(param.Ctx,
+				moerr.NewInvalidInput(param.Ctx, "parquet page reader returned a nil page without an error"))
+		}
+		numRows, err := parquetPageCount(param.Ctx, "NumRows()", page.NumRows())
+		if err != nil {
+			return false, h.closePagesOnError(param.Ctx, err)
+		}
+		if h.pageOffset[colIdx] < int64(numRows) {
 			return false, nil
 		}
 		h.currentPage[colIdx] = nil
@@ -4205,13 +5063,71 @@ func parquetDecodedPageSize(page parquet.Page) uint64 {
 	}
 	size := uint64(len(page.DefinitionLevels()) + len(page.RepetitionLevels()))
 	data := page.Data()
-	for _, idx := range data.Int32() {
-		if idx < 0 || int(idx) >= dict.Len() {
-			return addParquetBytes(size, uint64(max(page.Size(), 0)))
-		}
-		size = addParquetBytes(size, uint64(len(dict.Index(idx).Bytes())))
+	fallback := func() uint64 {
+		return addParquetBytes(size, uint64(max(page.Size(), 0)))
 	}
-	return size
+	if data.Kind() != encoding.Int32 {
+		return fallback()
+	}
+	dictData := dict.Page().Data()
+	switch dictData.Kind() {
+	case encoding.ByteArray:
+		buf, offsets := dictData.ByteArray()
+		for _, idx := range data.Int32() {
+			if idx < 0 || int(idx)+1 >= len(offsets) {
+				return fallback()
+			}
+			start, end := offsets[idx], offsets[idx+1]
+			if start > end || uint64(end) > uint64(len(buf)) {
+				return fallback()
+			}
+			size = addParquetBytes(size, uint64(end-start))
+		}
+		return size
+	case encoding.FixedLenByteArray:
+		buf, width := dictData.FixedLenByteArray()
+		if width <= 0 || len(buf)%width != 0 {
+			return fallback()
+		}
+		for _, idx := range data.Int32() {
+			if idx < 0 || int(idx) >= len(buf)/width {
+				return fallback()
+			}
+			size = addParquetBytes(size, uint64(width))
+		}
+		return size
+	}
+	indices := data.Int32()
+	dictLen := dict.Len()
+	if dictLen < 0 {
+		return fallback()
+	}
+	for _, idx := range indices {
+		if idx < 0 || int64(idx) >= int64(dictLen) {
+			return fallback()
+		}
+	}
+	var width uint64
+	switch dictData.Kind() {
+	case encoding.Boolean:
+		width = 1
+	case encoding.Int32, encoding.Float:
+		width = 4
+	case encoding.Int64, encoding.Double:
+		width = 8
+	case encoding.Int96:
+		width = 12
+	default:
+		for _, idx := range indices {
+			size = addParquetBytes(size, uint64(len(dict.Index(idx).Bytes())))
+		}
+		return size
+	}
+	count := uint64(len(indices))
+	if width != 0 && count > ^uint64(0)/width {
+		return ^uint64(0)
+	}
+	return addParquetBytes(size, count*width)
 }
 
 func nextParquetBatchRows(currentRows, maxRows, currentBytes int, budget uint64) int {
@@ -4458,7 +5374,7 @@ func (r *parquetRangeReadAheadReaderAt) ReadAt(p []byte, off int64) (n int, err 
 	requestSize := int64(len(p))
 	if off < 0 || off > r.fileSize || requestSize > r.fileSize-off ||
 		requestSize > parquetRangeReadAheadMaxRequest {
-		return r.reader.ReadAt(p, off)
+		return readParquetReaderAt(r.reader, p, off)
 	}
 
 	if off >= r.windowOffset {
@@ -4474,7 +5390,7 @@ func (r *parquetRangeReadAheadReaderAt) ReadAt(p []byte, off int64) (n int, err 
 		min(parquetRangeReadAheadMaxBytes, requestSize*parquetRangeReadAheadAmplification),
 	)
 	if fetchSize <= requestSize {
-		return r.reader.ReadAt(p, off)
+		return readParquetReaderAt(r.reader, p, off)
 	}
 	if int64(cap(r.window)) < fetchSize {
 		r.window = make([]byte, fetchSize)
@@ -4482,12 +5398,14 @@ func (r *parquetRangeReadAheadReaderAt) ReadAt(p []byte, off int64) (n int, err 
 		r.window = r.window[:fetchSize]
 	}
 
-	n, err = r.reader.ReadAt(r.window, off)
+	n, err = readParquetReaderAt(r.reader, r.window, off)
 	if err != nil && !errors.Is(err, io.EOF) {
+		copy(p, r.window[:min(n, len(p))])
 		r.window = r.window[:0]
 		return min(n, len(p)), err
 	}
 	if n < len(p) {
+		copy(p, r.window[:n])
 		r.window = r.window[:0]
 		if err == nil {
 			err = io.EOF
@@ -4500,7 +5418,27 @@ func (r *parquetRangeReadAheadReaderAt) ReadAt(p []byte, off int64) (n int, err 
 	return len(p), nil
 }
 
+func readParquetReaderAt(reader io.ReaderAt, p []byte, off int64) (int, error) {
+	n, err := reader.ReadAt(p, off)
+	if n < 0 || n > len(p) {
+		return 0, moerr.NewInternalErrorNoCtx("underlying parquet reader returned an invalid byte count")
+	}
+	return n, err
+}
+
 func (r *fsReaderAt) ReadAt(p []byte, off int64) (n int, err error) {
+	if len(p) == 0 {
+		return 0, nil
+	}
+	if off < 0 {
+		return 0, moerr.NewInternalError(r.ctx, "parquet reader received a negative offset")
+	}
+	if off > math.MaxInt64-int64(len(p)) {
+		return 0, moerr.NewInternalError(r.ctx, "parquet reader offset overflows int64")
+	}
+	if r.fs == nil {
+		return 0, moerr.NewInternalError(r.ctx, "parquet reader has no file service")
+	}
 	vec := fileservice.IOVector{
 		FilePath: r.readPath,
 		Policy:   fileservice.SkipFullFilePreloads,
@@ -4517,9 +5455,16 @@ func (r *fsReaderAt) ReadAt(p []byte, off int64) (n int, err error) {
 	if err != nil {
 		return 0, err
 	}
-	n = int(vec.Entries[0].Size)
+	readSize := vec.Entries[0].Size
+	if readSize < 0 || readSize > int64(len(p)) {
+		return 0, moerr.NewInternalError(r.ctx, "file service returned an invalid parquet read size")
+	}
+	n = int(readSize)
 	if n > 0 && r.param != nil {
 		r.param.addParquetProfile(process.ParquetProfileStats{BytesRead: int64(n)})
+	}
+	if n < len(p) {
+		return n, io.EOF
 	}
 	return n, nil
 }

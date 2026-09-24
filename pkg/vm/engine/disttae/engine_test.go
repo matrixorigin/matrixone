@@ -180,6 +180,7 @@ import (
 	"github.com/golang/mock/gomock"
 	"github.com/matrixorigin/matrixone/pkg/catalog"
 	"github.com/matrixorigin/matrixone/pkg/clusterservice"
+	"github.com/matrixorigin/matrixone/pkg/common/moerr"
 	moruntime "github.com/matrixorigin/matrixone/pkg/common/runtime"
 	"github.com/matrixorigin/matrixone/pkg/container/types"
 	"github.com/matrixorigin/matrixone/pkg/container/vector"
@@ -198,6 +199,17 @@ import (
 
 type engineNodesClusterClient struct {
 	details logpb.ClusterDetails
+}
+
+func TestDatabaseTreatsTransactionLocalDropAsNotFound(t *testing.T) {
+	ctx := defines.AttachAccountId(context.Background(), uint32(7))
+	txn := &Transaction{workspace: newTxnWorkspace()}
+	require.NoError(t, txn.workspace.addDatabaseOp(genDatabaseKey(7, "restore_db"), DELETE, 42, nil))
+	op := newTxnOperatorForTestWithWorkspace(t, txn)
+
+	db, err := (&Engine{}).Database(ctx, "restore_db", op)
+	require.Nil(t, db)
+	require.True(t, moerr.IsMoErrCode(err, moerr.OkExpectedEOB), "unexpected error: %v", err)
 }
 
 func (c *engineNodesClusterClient) GetClusterDetails(context.Context) (logpb.ClusterDetails, error) {

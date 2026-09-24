@@ -16,8 +16,14 @@ package cnservice
 
 import (
 	"context"
+	"crypto/sha256"
+	"encoding/hex"
 	"errors"
+	"fmt"
 	"net"
+	"os"
+	"path/filepath"
+	"strings"
 	"sync"
 	"sync/atomic"
 	"testing"
@@ -50,9 +56,11 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/pb/timestamp"
 	"github.com/matrixorigin/matrixone/pkg/queryservice"
 	qclient "github.com/matrixorigin/matrixone/pkg/queryservice/client"
+	"github.com/matrixorigin/matrixone/pkg/sql/compile"
 	"github.com/matrixorigin/matrixone/pkg/txn/client"
 	"github.com/matrixorigin/matrixone/pkg/txn/trace"
 	"github.com/matrixorigin/matrixone/pkg/udf"
+	"github.com/matrixorigin/matrixone/pkg/util"
 	"github.com/matrixorigin/matrixone/pkg/util/address"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine"
 )
@@ -92,6 +100,34 @@ func (s *listeningMOServer) Stop() error {
 type closeOnlyRPCServer struct {
 	closeErr error
 	onClose  func()
+}
+
+type closeOnlySiriusBackend struct {
+	compile.SiriusBackend
+	closeFn func() error
+}
+
+func (b closeOnlySiriusBackend) Close(context.Context) error { return b.closeFn() }
+
+func TestCloseSiriusRuntimeRetainsFailedOwner(t *testing.T) {
+	moruntime.RunTest(t.Name(), func(rt moruntime.Runtime) {
+		failure := errors.New("runtime cleanup failed")
+		var closeErr error = failure
+		owner := &compile.SiriusRuntime{Backend: closeOnlySiriusBackend{closeFn: func() error { return closeErr }}}
+		s := &service{cfg: &Config{UUID: t.Name()}, siriusRuntime: owner}
+		rt.SetGlobalVariables(compile.SiriusRuntimeKey, owner)
+		t.Cleanup(func() { rt.CompareAndDeleteGlobalVariables(compile.SiriusRuntimeKey, owner) })
+		require.ErrorIs(t, s.closeSiriusRuntime(), failure)
+		require.Same(t, owner, s.siriusRuntime)
+		published, ok := rt.GetGlobalVariables(compile.SiriusRuntimeKey)
+		require.True(t, ok)
+		require.Same(t, owner, published)
+		closeErr = nil
+		require.NoError(t, s.closeSiriusRuntime())
+		require.Nil(t, s.siriusRuntime)
+		_, ok = rt.GetGlobalVariables(compile.SiriusRuntimeKey)
+		require.False(t, ok)
+	})
 }
 
 func (s closeOnlyRPCServer) Start() error {
@@ -216,10 +252,11 @@ func TestServiceCloseDoesNotHangOnNeverReadyClusterAfterEarlyError(t *testing.T)
 			refreshErr := errors.New("hakeeper refresh failed")
 			hc := &testHAKClient{clusterErr: refreshErr}
 			moCluster := clusterservice.NewMOCluster(t.Name(), hc, time.Hour)
+			defer moCluster.Close()
 			ctrl := gomock.NewController(t)
 			defer ctrl.Finish()
 			ls := mock_lock.NewMockLockService(ctrl)
-			ls.EXPECT().Close().Return(nil).Times(2)
+			ls.EXPECT().Close().Times(0)
 			sv := &service{
 				cfg:                &Config{UUID: t.Name()},
 				logger:             zap.NewNop(),
@@ -241,12 +278,51 @@ func TestServiceCloseDoesNotHangOnNeverReadyClusterAfterEarlyError(t *testing.T)
 			select {
 			case err := <-done:
 				require.ErrorIs(t, err, frontendErr)
-				require.Equal(t, 1, hc.closed)
+				require.Equal(t, 0, hc.closed, "unknown producer failure must preserve dependencies")
+				require.False(t, sv.CloseComplete())
 			case <-time.After(time.Second):
 				t.Fatal("service.Close blocked on never-ready cluster")
 			}
 		},
 	)
+}
+
+func TestServiceCloseWithdrawalErrorIsLocallyComplete(t *testing.T) {
+	for _, localFailure := range []bool{false, true} {
+		t.Run(fmt.Sprintf("local-failure=%t", localFailure), func(t *testing.T) {
+			moruntime.RunTest(t.Name(), func(rt moruntime.Runtime) {
+				failure := errors.New("withdrawal failed")
+				hc := &failingWithdrawalHeartbeatClient{testHAKClient: &testHAKClient{}, err: failure}
+				mc := clusterservice.NewMOCluster(t.Name(), hc, time.Hour)
+				t.Cleanup(mc.Close)
+				ctrl := gomock.NewController(t)
+				ls := mock_lock.NewMockLockService(ctrl)
+				var tailErr error
+				if localFailure {
+					// A tail failure is not certified complete even when remote
+					// withdrawal failed too; both diagnostics must survive.
+					tailErr = errors.New("local tail failed")
+				}
+				ls.EXPECT().Close().Return(tailErr).Times(2)
+				sv := &service{
+					cfg: &Config{UUID: t.Name()}, logger: zap.NewNop(), config: util.NewConfigData(nil),
+					stopper:          stopper.NewStopper(t.Name()),
+					bootstrapService: &testBootService{}, mo: closeErrorMOServer{},
+					_hakeeperClient: hc, moCluster: mc, server: closeOnlyRPCServer{}, lockService: ls,
+					viewMetadataAdmissionGeneration: 1,
+				}
+				require.False(t, sv.CloseComplete())
+				require.ErrorIs(t, sv.Close(), failure)
+				if tailErr != nil {
+					require.ErrorIs(t, sv.Close(), tailErr)
+				}
+				require.Equal(t, !localFailure, sv.CloseComplete())
+				require.Equal(t, 1, hc.closed)
+				require.ErrorIs(t, sv.Close(), failure)
+				require.Equal(t, 1, hc.closed, "cached diagnostics must not replay teardown")
+			})
+		})
+	}
 }
 
 func TestMakeRSSCacheEvictorEvictsMemoryCacheOnly(t *testing.T) {
@@ -480,6 +556,7 @@ type testBootService struct {
 	bootstrapHook        func()
 	bootstrapUpgradeHook func(context.Context) error
 	maybeUpgrade         func()
+	maybeUpgradeFetch    func(func() (int32, string, error))
 }
 
 func (boot *testBootService) Bootstrap(ctx context.Context) error {
@@ -498,6 +575,9 @@ func (boot *testBootService) BootstrapUpgrade(ctx context.Context) error {
 }
 
 func (boot *testBootService) MaybeUpgradeTenant(ctx context.Context, tenantFetchFunc func() (int32, string, error), txnOp client.TxnOperator) (bool, error) {
+	if boot.maybeUpgradeFetch != nil {
+		boot.maybeUpgradeFetch(tenantFetchFunc)
+	}
 	if boot.maybeUpgrade != nil {
 		boot.maybeUpgrade()
 	}
@@ -733,6 +813,241 @@ func TestServiceCloseWaitsForTraceProducers(t *testing.T) {
 			}
 		},
 	)
+}
+
+func txnTraceTestDirectoryKey(serviceID string) string {
+	digest := sha256.Sum256([]byte(serviceID))
+	return "cn-" + hex.EncodeToString(digest[:])
+}
+
+func TestInitTxnTraceServiceAcceptsMaximumServiceID(t *testing.T) {
+	serviceID := strings.Repeat("é", 63) + "x"
+	require.Equal(t, 127, len(serviceID))
+	root := t.TempDir()
+	moruntime.SetupServiceBasedRuntime(serviceID, moruntime.DefaultRuntime())
+	cfg := &Config{UUID: serviceID}
+	cfg.Txn.Trace.BufferSize = 8
+	cfg.Txn.Trace.Enable = false
+	s := &service{cfg: cfg}
+	s.options.traceDataPath = root
+	t.Cleanup(func() {
+		require.NoError(t, s.closeTxnTraceService())
+	})
+
+	s.initTxnTraceService()
+
+	key := txnTraceTestDirectoryKey(serviceID)
+	require.Len(t, key, len("cn-")+sha256.Size*2)
+	require.LessOrEqual(t, len(key), 255)
+	require.DirExists(t, filepath.Join(root, key))
+}
+
+func TestInitTxnTraceServiceUsesCNOwnedDirectory(t *testing.T) {
+	for _, enable := range []bool{false, true} {
+		t.Run(fmt.Sprintf("enable=%t", enable), func(t *testing.T) {
+			root := t.TempDir()
+			ids := []string{"trace-dir-cn-1", "trace-dir-cn-2", "trace-dir-cn-3"}
+			services := make([]*service, 0, len(ids))
+			markers := make([]string, 0, len(ids))
+
+			newService := func(id string) *service {
+				moruntime.SetupServiceBasedRuntime(id, moruntime.DefaultRuntime())
+				cfg := &Config{UUID: id}
+				cfg.Txn.Trace.BufferSize = 8
+				cfg.Txn.Trace.Enable = enable
+				s := &service{cfg: cfg}
+				s.options.traceDataPath = root
+				t.Cleanup(func() {
+					require.NoError(t, s.closeTxnTraceService())
+				})
+				s.initTxnTraceService()
+				return s
+			}
+
+			for i, id := range ids {
+				s := newService(id)
+				services = append(services, s)
+				for _, marker := range markers {
+					require.FileExists(t, marker)
+				}
+
+				dir := filepath.Join(root, txnTraceTestDirectoryKey(id))
+				require.DirExists(t, dir)
+				marker := filepath.Join(dir, fmt.Sprintf("owner-%d", i))
+				require.NoError(t, os.WriteFile(marker, []byte(id), 0644))
+				markers = append(markers, marker)
+			}
+
+			require.NoError(t, services[1].closeTxnTraceService())
+			services[1] = newService(ids[1])
+			require.FileExists(t, markers[0])
+			require.NoFileExists(t, markers[1])
+			require.FileExists(t, markers[2])
+			require.DirExists(t, filepath.Join(root, txnTraceTestDirectoryKey(ids[1])))
+		})
+	}
+}
+
+func TestInitTxnTraceServiceUsesFilesystemDistinctDirectoryKeys(t *testing.T) {
+	testCases := []struct {
+		name string
+		ids  []string
+	}{
+		{
+			name: "case variants",
+			ids:  []string{"trace-dir-cn-alias", "TRACE-DIR-CN-ALIAS"},
+		},
+		{
+			name: "unicode normalization variants",
+			ids:  []string{"trace-dir-cn-caf\u00e9", "trace-dir-cn-cafe\u0301"},
+		},
+	}
+
+	for _, testCase := range testCases {
+		t.Run(testCase.name, func(t *testing.T) {
+			root := t.TempDir()
+			services := make([]*service, 0, len(testCase.ids))
+			paths := make([]string, 0, len(testCase.ids))
+			marker := ""
+
+			for i, id := range testCase.ids {
+				path, err := resolveTxnTraceDataPath(root, id)
+				require.NoError(t, err)
+				require.Equal(
+					t,
+					filepath.Join(root, txnTraceTestDirectoryKey(id)),
+					path,
+				)
+				paths = append(paths, path)
+
+				moruntime.SetupServiceBasedRuntime(id, moruntime.DefaultRuntime())
+				cfg := &Config{UUID: id}
+				cfg.Txn.Trace.BufferSize = 8
+				s := &service{cfg: cfg}
+				s.options.traceDataPath = root
+				s.initTxnTraceService()
+				services = append(services, s)
+
+				if i == 0 {
+					marker = filepath.Join(path, "owner")
+					require.NoError(t, os.WriteFile(marker, []byte(id), 0644))
+				} else {
+					require.FileExists(t, marker)
+				}
+			}
+			t.Cleanup(func() {
+				for _, s := range services {
+					require.NoError(t, s.closeTxnTraceService())
+				}
+			})
+
+			require.NotEqual(t, paths[0], paths[1])
+
+			require.NoError(t, services[1].closeTxnTraceService())
+			services = services[:1]
+			moruntime.SetupServiceBasedRuntime(testCase.ids[1], moruntime.DefaultRuntime())
+			cfg := &Config{UUID: testCase.ids[1]}
+			cfg.Txn.Trace.BufferSize = 8
+			s := &service{cfg: cfg}
+			s.options.traceDataPath = root
+			s.initTxnTraceService()
+			services = append(services, s)
+
+			require.FileExists(t, marker)
+			require.DirExists(t, paths[1])
+		})
+	}
+}
+
+func TestInitTxnTraceServiceFailurePreservesSiblingDirectory(t *testing.T) {
+	root := t.TempDir()
+
+	newService := func(id string) *service {
+		moruntime.SetupServiceBasedRuntime(id, moruntime.DefaultRuntime())
+		cfg := &Config{UUID: id}
+		cfg.Txn.Trace.BufferSize = 8
+		s := &service{cfg: cfg}
+		s.options.traceDataPath = root
+		t.Cleanup(func() {
+			require.NoError(t, s.closeTxnTraceService())
+		})
+		return s
+	}
+
+	first := newService("trace-dir-cn-a")
+	first.initTxnTraceService()
+	marker := filepath.Join(root, txnTraceTestDirectoryKey(first.cfg.UUID), "owner")
+	require.NoError(t, os.WriteFile(marker, []byte(first.cfg.UUID), 0644))
+
+	require.NoError(t, os.Chmod(root, 0555))
+	t.Cleanup(func() {
+		require.NoError(t, os.Chmod(root, 0755))
+	})
+	probe := filepath.Join(root, "permission-probe")
+	if err := os.WriteFile(probe, []byte("probe"), 0644); err == nil {
+		require.NoError(t, os.Remove(probe))
+		t.Skip("filesystem does not enforce read-only directory permissions")
+	}
+
+	second := newService("trace-dir-cn-b")
+	require.Panics(t, second.initTxnTraceService)
+	require.FileExists(t, marker)
+}
+
+func TestInitTxnTraceServiceRejectsUnsafeServiceID(t *testing.T) {
+	testCases := []struct {
+		name string
+		id   string
+	}{
+		{name: "empty", id: ""},
+		{name: "dot", id: "."},
+		{name: "parent", id: ".."},
+		{name: "trace root alias", id: "../trace"},
+		{name: "shared service directory", id: "../shared2"},
+		{name: "dotted child", id: "./cn"},
+		{name: "slash separator", id: "cn/child"},
+		{name: "backslash separator", id: `cn\child`},
+	}
+
+	for _, testCase := range testCases {
+		t.Run(testCase.name, func(t *testing.T) {
+			dataDir := t.TempDir()
+			traceRoot := filepath.Join(dataDir, "trace")
+			targetDir := filepath.Join(traceRoot, testCase.id)
+			targetMarker := filepath.Join(targetDir, "target-owner")
+			siblingMarker := filepath.Join(dataDir, "sibling", "owner")
+			require.NoError(t, os.MkdirAll(targetDir, 0755))
+			require.NoError(t, os.MkdirAll(filepath.Dir(siblingMarker), 0755))
+			require.NoError(t, os.WriteFile(targetMarker, []byte("target"), 0644))
+			require.NoError(t, os.WriteFile(siblingMarker, []byte("sibling"), 0644))
+
+			cfg := &Config{UUID: testCase.id}
+			if testCase.id == "" {
+				require.Panics(t, func() { _ = cfg.Validate() })
+			} else {
+				err := cfg.Validate()
+				require.Error(t, err)
+				require.True(t, moerr.IsMoErrCode(err, moerr.ErrBadConfig))
+			}
+			cfg.Txn.Trace.BufferSize = 8
+			s := &service{cfg: cfg}
+			s.options.traceDataPath = traceRoot
+
+			panicValue := func() (value any) {
+				defer func() {
+					value = recover()
+				}()
+				s.initTxnTraceService()
+				return nil
+			}()
+			require.NotNil(t, panicValue)
+			err, ok := panicValue.(error)
+			require.True(t, ok)
+			require.True(t, moerr.IsMoErrCode(err, moerr.ErrBadConfig))
+			require.FileExists(t, targetMarker)
+			require.FileExists(t, siblingMarker)
+		})
+	}
 }
 
 func TestServiceCloseDrainsAutoIncrementBeforeTxnClient(t *testing.T) {
@@ -1134,6 +1449,23 @@ func TestServiceCloseCancelsAdmittedPipeline(t *testing.T) {
 			server:             closeOnlyRPCServer{},
 			lockService:        ls,
 		}
+		// A deliberately wrong retirement order must fail without stranding the
+		// admitted handler, even when public Close has cached its failure.
+		t.Cleanup(func() {
+			_ = s.closePipelineAdmission()
+			_ = s.waitPipelineHandlers()
+			s.stopper.Stop()
+		})
+		var runtimeClosed bool
+		s.siriusRuntime = &compile.SiriusRuntime{Backend: closeOnlySiriusBackend{closeFn: func() error {
+			select {
+			case <-handlerExited:
+				runtimeClosed = true
+				return nil
+			default:
+				return errors.New("runtime retired before its pipeline user exited")
+			}
+		}}}
 		s.requestHandler = func(
 			ctx context.Context,
 			_ string,
@@ -1187,6 +1519,7 @@ func TestServiceCloseCancelsAdmittedPipeline(t *testing.T) {
 			t.Fatal("CN close returned before the canceled pipeline exited")
 		}
 		require.Equal(t, int32(1), cancelCount.Load())
+		require.True(t, runtimeClosed)
 	})
 }
 
@@ -1261,7 +1594,12 @@ func Test_tenant(t *testing.T) {
 	ctx, cancel := context.WithCancel(context.Background())
 	defer cancel()
 
-	boot := &testBootService{}
+	boot := &testBootService{maybeUpgradeFetch: func(fetch func() (int32, string, error)) {
+		tenantID, version, err := fetch()
+		require.NoError(t, err)
+		require.Equal(t, int32(3), tenantID)
+		require.Empty(t, version, "the serving CN's version must not stand in for the account's version")
+	}}
 
 	sv := &service{
 		bootstrapService: boot,

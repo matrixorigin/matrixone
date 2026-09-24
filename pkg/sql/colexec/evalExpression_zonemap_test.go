@@ -230,6 +230,61 @@ func TestFoldedNullableNotInExprNullsMiss(t *testing.T) {
 	requireBoolValue(t, result, 2, false, true)
 }
 
+func TestEvaluateFilterByZoneMapMathPrecision(t *testing.T) {
+	proc := testutil.NewProcess(t)
+	defer proc.Free()
+	meta := objectio.BuildMetaData(1, 2).GetBlockMeta(0)
+	value := float64(149)
+	valueZM := index.NewZM(types.T_float64, 0)
+	index.UpdateZM(valueZM, types.EncodeFloat64(&value))
+	value = -149
+	index.UpdateZM(valueZM, types.EncodeFloat64(&value))
+	meta.MustGetColumn(0).SetZoneMap(valueZM)
+	digitsZM := index.NewZM(types.T_int64, 0)
+	for _, d := range []int64{-2, -1, 0} {
+		index.UpdateZM(digitsZM, types.EncodeInt64(&d))
+	}
+	meta.MustGetColumn(1).SetZoneMap(digitsZM)
+	col := func(oid types.T, pos int32) *plan.Expr {
+		return &plan.Expr{Typ: plan.Type{Id: int32(oid)}, Expr: &plan.Expr_Col{Col: &plan.ColRef{ColPos: pos}}}
+	}
+	for _, tc := range []struct {
+		name      string
+		fn        string
+		op        string
+		threshold int64
+		digits    *plan.Expr
+		selected  bool
+	}{
+		{"dynamic keeps interior maximum", "round", ">", 149, col(types.T_int64, 1), true},
+		{"constant matching", "round", ">", 149, plan2.MakePlan2Int64ConstExprWithType(-1), true},
+		{"constant disjoint", "round", ">", 149, plan2.MakePlan2Int64ConstExprWithType(-2), false},
+		{"default precision", "round", ">", 149, nil, false},
+		{"truncate keeps negative minimum", "truncate", "<", -140, col(types.T_int64, 1), true},
+		{"truncate constant disjoint", "truncate", "<", -140, plan2.MakePlan2Int64ConstExprWithType(-2), false},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			args := []*plan.Expr{col(types.T_float64, 0)}
+			if tc.digits != nil {
+				args = append(args, tc.digits)
+			}
+			round, err := plan2.BindFuncExprImplByPlanExpr(proc.Ctx, tc.fn, args)
+			require.NoError(t, err)
+			expr, err := plan2.BindFuncExprImplByPlanExpr(proc.Ctx, tc.op, []*plan.Expr{round, plan2.MakePlan2Int64ConstExprWithType(tc.threshold)})
+			require.NoError(t, err)
+			zms, vecs := makeZoneMapEvalScratch(expr)
+			defer func() {
+				for _, v := range vecs {
+					if v != nil {
+						v.Free(proc.Mp())
+					}
+				}
+			}()
+			require.Equal(t, tc.selected, colexec.EvaluateFilterByZoneMap(proc.Ctx, proc, expr, meta, map[int]int{0: 0, 1: 1}, zms, vecs))
+		})
+	}
+}
+
 func TestEvaluateFilterByZoneMapStillPrunesFalseEquality(t *testing.T) {
 	proc := testutil.NewProcess(t)
 	ctx := proc.Ctx

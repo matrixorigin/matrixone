@@ -41,9 +41,15 @@ type RelationScanRequest struct {
 	// exact row filter/BatchTransform while retaining bounded Top-K compaction
 	// in the relation scanner.
 	PostFilterTopOnly bool
-	FilterHint        engine.FilterHint
-	PartitionCount    int32
-	PartitionIndex    int32
+	// FilterBeforeTopK asks capable readers to apply the exact row filter before
+	// storage vector Top-K. Readers without that capability fall back to the
+	// caller's local distance calculation and final Top-K compaction.
+	FilterBeforeTopK bool
+	// FilterHint.BF, when nonnil, transfers one owned reference to ScanRelation,
+	// which must release it on every return. BuildReaders borrows that reference.
+	FilterHint     engine.FilterHint
+	PartitionCount int32
+	PartitionIndex int32
 }
 
 type RelationScanExecutor interface {

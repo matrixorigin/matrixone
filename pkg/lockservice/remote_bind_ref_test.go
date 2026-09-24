@@ -17,13 +17,118 @@ package lockservice
 import (
 	"context"
 	"sync"
+	"sync/atomic"
 	"testing"
 	"time"
 
+	"github.com/matrixorigin/matrixone/pkg/common/moerr"
 	pb "github.com/matrixorigin/matrixone/pkg/pb/lock"
 	"github.com/matrixorigin/matrixone/pkg/pb/timestamp"
 	"github.com/stretchr/testify/require"
 )
+
+func TestInvalidatedRemoteBindRejectsNewTxnUntilOldCleanup(t *testing.T) {
+	runLockServiceTests(t, []string{"owner", "source"}, func(
+		alloc *lockTableAllocator,
+		services []*service,
+	) {
+		owner := services[0]
+		source := services[1]
+		ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
+		defer cancel()
+
+		const table = uint64(27708)
+		options := newTestRowExclusiveOptions()
+		bind := alloc.Get(
+			owner.serviceID,
+			options.Group,
+			table,
+			table,
+			options.Sharding,
+		)
+		source.tableGroups.set(
+			bind.Group,
+			bind.Table,
+			source.createLockTableByBind(bind),
+		)
+
+		oldTxnID := []byte("old-invalidated-bind")
+		oldTxn := source.activeTxnHolder.getActiveTxn(oldTxnID, true, "")
+		oldTxn.Lock()
+		require.True(t, oldTxn.lockTableBindTouched(bind))
+		oldTxn.Unlock()
+		source.acquireRemoteBindRef(bind)
+
+		source.remote.keeper.(*lockTableKeeper).invalidateRemoteBind(bind)
+		require.Nil(t, source.tableGroups.get(bind.Group, bind.Table))
+		oldTxn.Lock()
+		require.True(t, oldTxn.bindChanged)
+		oldTxn.Unlock()
+		source.mu.RLock()
+		oldRef := source.mu.remoteBindRefs[makeRemoteBindKey(bind)]
+		source.mu.RUnlock()
+		require.True(t, oldRef.invalidated)
+		require.Equal(t, uint64(1), oldRef.refs)
+		require.False(t, source.acquireRemoteBindRef(bind))
+		source.mu.RLock()
+		oldRef = source.mu.remoteBindRefs[makeRemoteBindKey(bind)]
+		source.mu.RUnlock()
+		require.Equal(t, uint64(1), oldRef.refs,
+			"the ref owner must reject direct acquisition of its tombstone")
+
+		republished, err := source.getLockTableWithCreate(
+			ctx,
+			bind.Group,
+			bind.Table,
+			newTestRows(1),
+			options.Sharding,
+		)
+		require.NoError(t, err)
+		require.Equal(t, bind, republished.getBind())
+
+		var remoteLockCalls atomic.Int64
+		owner.option.beforeRemoteLockBindCheck = func() {
+			remoteLockCalls.Add(1)
+		}
+		defer func() { owner.option.beforeRemoteLockBindCheck = nil }()
+
+		newTxnID := []byte("new-through-invalidated-bind")
+		_, err = source.Lock(ctx, table, newTestRows(1), newTxnID, options)
+		require.True(t, moerr.IsMoErrCode(err, moerr.ErrLockTableBindChanged))
+		require.Zero(t, remoteLockCalls.Load(),
+			"an invalidated generation must be rejected before its remote Lock RPC")
+
+		newTxn := source.activeTxnHolder.getActiveTxn(newTxnID, false, "")
+		require.NotNil(t, newTxn)
+		newTxn.Lock()
+		newHolder := newTxn.lockHolders[bind.Group]
+		if newHolder != nil {
+			_, touched := newHolder.tableBindIntents[bind.Table]
+			require.False(t, touched,
+				"failed admission must not retain cleanup ownership")
+		}
+		newTxn.Unlock()
+		source.mu.RLock()
+		oldRef = source.mu.remoteBindRefs[makeRemoteBindKey(bind)]
+		source.mu.RUnlock()
+		require.Equal(t, uint64(1), oldRef.refs,
+			"failed admission must not join the invalidated tombstone")
+
+		require.NoError(t, source.Unlock(ctx, oldTxnID, timestamp.Timestamp{}))
+		source.mu.RLock()
+		_, oldRefExists := source.mu.remoteBindRefs[makeRemoteBindKey(bind)]
+		source.mu.RUnlock()
+		require.False(t, oldRefExists)
+
+		_, err = source.Lock(ctx, table, newTestRows(1), newTxnID, options)
+		require.NoError(t, err)
+		require.Equal(t, int64(1), remoteLockCalls.Load(),
+			"cleanup of the old owner must allow a fresh lease for the same bind")
+		require.Equal(t, []pb.LockTable{bind}, source.collectRemoteLockBinds(nil))
+		require.NoError(t, source.Unlock(ctx, newTxnID, timestamp.Timestamp{}))
+		require.Empty(t, source.collectRemoteLockBinds(nil))
+	})
+}
 
 func TestRemoteBindRefFollowsTxnCleanup(t *testing.T) {
 	runLockServiceTests(t, []string{"owner", "source"}, func(_ *lockTableAllocator, services []*service) {

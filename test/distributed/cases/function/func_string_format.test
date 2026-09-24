@@ -307,3 +307,74 @@ SELECT FORMAT("12332.2", "2","it_CH");
 SELECT FORMAT("12332.2", "2","rm_CH");
 
 SELECT FORMAT("12332.2", "2","ro_RO");
+
+-- @case
+-- Numeric source domains keep their rounding contract while sharing scale and locale handling.
+SELECT FORMAT(CAST('1.25' AS DECIMAL(6,2)), 1);
+SELECT FORMAT(1.25, 1);
+SELECT FORMAT(1.25E0, 1);
+SELECT FORMAT('1.25', 1);
+SELECT FORMAT(CAST('-1.25' AS DECIMAL(6,2)), 1);
+SELECT FORMAT(-1.25E0, 1);
+SELECT FORMAT('1.35', 1);
+SELECT FORMAT('1.25000000000000001', 1);
+SELECT FORMAT('9007199254740993', 0);
+SELECT FORMAT('2.675', 2);
+SELECT FORMAT('0.545', 2);
+SELECT FORMAT('1.015', 2);
+SELECT FORMAT('0.00000000000000009', 16);
+SELECT FORMAT('-0.00000000000000009', 16);
+SELECT FORMAT(2.5E0, 0);
+SELECT FORMAT(CAST(18446744073709551615 AS UNSIGNED), 0);
+SELECT FORMAT(CAST('123456789.12' AS DECIMAL(20,2)), 2, 'en_IN');
+SELECT FORMAT(CAST('1.25' AS DECIMAL(6,2)), 1, 'DE_de');
+SELECT FORMAT('1.25', '', 'en_US');
+SELECT FORMAT('-', 2);
+SELECT FORMAT('1.2345', 100);
+SELECT FORMAT('1.5', 100);
+
+DROP TABLE IF EXISTS format_float_domain_28508;
+CREATE TABLE format_float_domain_28508(f FLOAT, d DOUBLE, scale INT);
+INSERT INTO format_float_domain_28508 VALUES (1.15, 1.15, 1), (2.675, 2.675, 2);
+SELECT FORMAT(f, scale), FORMAT(d, scale) FROM format_float_domain_28508 ORDER BY scale;
+DROP TABLE format_float_domain_28508;
+
+DROP TABLE IF EXISTS format_domain_28508;
+CREATE TABLE format_domain_28508(d DECIMAL(6,2), f DOUBLE, s VARCHAR(20), scale INT);
+INSERT INTO format_domain_28508 VALUES
+    (1.25, 1.25, '1.25', 1),
+    (1.35, 1.35, '1.35', 1),
+    (NULL, NULL, NULL, 1),
+    (2.50, 2.50, '2.50', 0);
+SELECT FORMAT(d, scale), FORMAT(f, scale), FORMAT(s, scale)
+FROM format_domain_28508 ORDER BY scale, d;
+DROP TABLE format_domain_28508;
+
+SET @format_decimal_28508 = '1.25';
+SET @format_float_28508 = '1.25';
+SET @format_text_28508 = '1.25';
+SET @format_scale_28508 = 1;
+PREPARE format_domain_stmt_28508 FROM
+    'SELECT FORMAT(CAST(? AS DECIMAL(6,2)), ?), FORMAT(CAST(? AS DOUBLE), ?), FORMAT(?, ?)';
+EXECUTE format_domain_stmt_28508 USING @format_decimal_28508, @format_scale_28508, @format_float_28508, @format_scale_28508, @format_text_28508, @format_scale_28508;
+SET @format_decimal_28508 = '1.35';
+SET @format_float_28508 = '2.675';
+SET @format_text_28508 = '9007199254740993';
+SET @format_scale_28508 = 2;
+EXECUTE format_domain_stmt_28508 USING @format_decimal_28508, @format_scale_28508, @format_float_28508, @format_scale_28508, @format_text_28508, @format_scale_28508;
+DEALLOCATE PREPARE format_domain_stmt_28508;
+
+-- Catalog expressions retain legacy rounding and string-vector compatibility.
+DROP TABLE IF EXISTS format_catalog_28508;
+CREATE TABLE format_catalog_28508(
+    a BIGINT,
+    d DECIMAL(6,1),
+    g VARCHAR(30) GENERATED ALWAYS AS (FORMAT(d, 0, 'en_US')) STORED,
+    v VARCHAR(30) DEFAULT (FORMAT(2.5, 0)),
+    CHECK (FORMAT(a, 0) = '1')
+);
+INSERT INTO format_catalog_28508(a, d) VALUES (1, 2.5);
+SELECT a, g, v, FORMAT(d, 0) AS direct_format FROM format_catalog_28508;
+UPDATE format_catalog_28508 SET d = 3.5 WHERE a = 1;
+SELECT a, g, v, FORMAT(d, 0) AS direct_format FROM format_catalog_28508;
+DROP TABLE format_catalog_28508;

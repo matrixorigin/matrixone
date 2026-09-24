@@ -68,13 +68,6 @@ type dmlTableInfo struct {
 	alias          map[string]int         // Mapping of table aliases to tableDefs array index,If there is no alias, replace it with the original name of the table
 }
 
-var constTextType plan.Type
-
-func init() {
-	typ := types.T_text.ToType()
-	constTextType = makePlan2Type(&typ)
-}
-
 func getAliasToName(ctx CompilerContext, expr tree.TableExpr, alias string, aliasMap map[string][2]string) {
 	switch t := expr.(type) {
 	case *tree.TableName:
@@ -193,27 +186,10 @@ func appendCheckConstraintPlanWithColLookupAndEligibility(
 		if err != nil {
 			return 0, err
 		}
-		if targetEligible != nil {
-			notEligible, err := BindFuncExprImplByPlanExpr(
-				builder.GetContext(),
-				"not",
-				[]*plan.Expr{DeepCopyExpr(targetEligible)},
-			)
-			if err != nil {
-				return 0, err
-			}
-			passExpr, err = BindFuncExprImplByPlanExpr(
-				builder.GetContext(),
-				"or",
-				[]*plan.Expr{notEligible, passExpr},
-			)
-			if err != nil {
-				return 0, err
-			}
-		}
-		if ignoreMode {
-			filterList = append(filterList, passExpr)
-			continue
+		passExpr, err = guardConstraintByEligibility(
+			builder.GetContext(), passExpr, targetEligible)
+		if err != nil {
+			return 0, err
 		}
 		errMsg := makePlan2StringConstExprWithType(
 			fmt.Sprintf("Check constraint '%s' is violated", check.Name),
@@ -240,6 +216,27 @@ func appendCheckConstraintPlanWithColLookupAndEligibility(
 		ProjectList:     getProjectionByLastNodeIfAvailable(builder, lastNodeID),
 		FilterIsBarrier: ignoreMode,
 	}, bindCtx), nil
+}
+
+// guardConstraintByEligibility makes a row outside a constraint's mutation
+// domain pass without weakening validation for eligible rows. DML operators
+// use this when their data flow must retain non-writing rows for accounting or
+// routing even though those rows must not be revalidated as updates.
+func guardConstraintByEligibility(
+	ctx context.Context,
+	constraintOK *plan.Expr,
+	targetEligible *plan.Expr,
+) (*plan.Expr, error) {
+	if targetEligible == nil {
+		return constraintOK, nil
+	}
+	notEligible, err := BindFuncExprImplByPlanExpr(
+		ctx, "not", []*plan.Expr{DeepCopyExpr(targetEligible)})
+	if err != nil {
+		return nil, err
+	}
+	return BindFuncExprImplByPlanExpr(
+		ctx, "or", []*plan.Expr{notEligible, constraintOK})
 }
 
 func requireCheckConstraintProtocol(ctx context.Context, proc *process.Process) error {
@@ -747,10 +744,12 @@ func initInsertStmt(builder *QueryBuilder, bindCtx *BindContext, stmt *tree.Inse
 		if isAllDefault && syntaxHasColumnNames {
 			return false, nil, nil, moerr.NewInvalidInput(builder.GetContext(), "insert values does not match the number of columns")
 		}
-		err = buildValueScan(isAllDefault, info, builder, bindCtx, tableDef, slt, insertColumns, colToIdx, stmt.OnDuplicateUpdate)
+		var valueScanColumns []string
+		valueScanColumns, err = buildValueScan(isAllDefault, info, builder, bindCtx, tableDef, slt, insertColumns, colToIdx, stmt.OnDuplicateUpdate)
 		if err != nil {
 			return false, nil, nil, err
 		}
+		insertColumns = valueScanColumns
 
 	case *tree.SelectClause, *tree.UnionClause:
 		astSlt = stmt.Rows
@@ -917,9 +916,17 @@ func initInsertStmt(builder *QueryBuilder, bindCtx *BindContext, stmt *tree.Inse
 			pkCols[name] = struct{}{}
 		}
 	}
-	for _, col := range tableDef.Cols {
+	columnExprs := make(map[int32]*plan.Expr, len(tableDef.Cols))
+	materializeCols := make(map[int32]bool, len(tableDef.Cols))
+	materializeOrder := make([]int32, 0, len(tableDef.Cols))
+	for colIdx, col := range tableDef.Cols {
 		if oldExpr, exists := insertColToExpr[col.Name]; exists {
 			projectList = append(projectList, oldExpr)
+			columnExprs[int32(colIdx)] = oldExpr
+			if exprHasLocalColumnRef(oldExpr) {
+				materializeCols[int32(colIdx)] = true
+				materializeOrder = append(materializeOrder, int32(colIdx))
+			}
 			// if col.Typ.AutoIncr {
 			// if _, ok := pkCols[col.Name]; ok {
 			// 	uniqueCheckOnAutoIncr, err = builder.compCtx.GetDbLevelConfig(dbName, "unique_check_on_autoincr")
@@ -932,7 +939,7 @@ func initInsertStmt(builder *QueryBuilder, bindCtx *BindContext, stmt *tree.Inse
 			// }
 			// }
 		} else {
-			defExpr, err := getDefaultExpr(builder.GetContext(), col)
+			defExpr, err := getDefaultExprForAssignment(builder.GetContext(), col, builder.compCtx.GetProcess(), builder.isInsertIgnore)
 			if err != nil {
 				return false, nil, nil, err
 			}
@@ -944,18 +951,34 @@ func initInsertStmt(builder *QueryBuilder, bindCtx *BindContext, stmt *tree.Inse
 			}
 
 			projectList = append(projectList, defExpr)
+			columnExprs[int32(colIdx)] = defExpr
+			if exprHasLocalColumnRef(defExpr) {
+				materializeCols[int32(colIdx)] = true
+				materializeOrder = append(materializeOrder, int32(colIdx))
+			}
 		}
 	}
 
 	// append ProjectNode
 	projectCtx := NewBindContext(builder, bindCtx)
 	lastTag := builder.genNewBindTag()
-	info.rootId = builder.appendNode(&plan.Node{
-		NodeType:    plan.Node_PROJECT,
-		ProjectList: projectList,
-		Children:    []int32{info.rootId},
-		BindingTags: []int32{lastTag},
-	}, projectCtx)
+	projectionPositions := make(map[int32]int32, len(projectList))
+	for i := range projectList {
+		projectionPositions[int32(i)] = int32(i)
+	}
+	info.rootId, lastTag, err = builder.appendMaterializedExprProjections(
+		projectCtx,
+		info.rootId,
+		lastTag,
+		projectList,
+		projectionPositions,
+		columnExprs,
+		materializeCols,
+		materializeOrder,
+	)
+	if err != nil {
+		return false, nil, nil, err
+	}
 
 	info.projectList = make([]*Expr, 0, len(projectList))
 	info.derivedTableId = info.rootId
@@ -977,11 +1000,8 @@ func initInsertStmt(builder *QueryBuilder, bindCtx *BindContext, stmt *tree.Inse
 	// insert into t1 values (1,1,3),(2,2,3) on duplicate key update a=a+1, b=b-2;
 	// rewrite to : select _t.*, t1.a, t1.b，t1.c, t1.row_id from
 	//				(select * from values (1,1,3),(2,2,3)) _t(a,b,c) left join t1 on _t.a=t1.a or _t.b=t1.b
-	if len(stmt.OnDuplicateUpdate) > 0 {
-		isIgnore := len(stmt.OnDuplicateUpdate) == 1 && stmt.OnDuplicateUpdate[0] == nil
-		if isIgnore {
-			stmt.OnDuplicateUpdate = nil
-		}
+	onDuplicateUpdate := stmt.GetOnDuplicateUpdate()
+	if len(onDuplicateUpdate) > 0 {
 
 		rightTableDef := CloneTableDefForPlan(tableDef, true)
 		rightObjRef := DeepCopyObjectRef(tableObjRef)
@@ -1016,7 +1036,7 @@ func initInsertStmt(builder *QueryBuilder, bindCtx *BindContext, stmt *tree.Inse
 
 			// get update cols
 			updateCols := make(map[string]tree.Expr)
-			for _, updateExpr := range stmt.OnDuplicateUpdate {
+			for _, updateExpr := range onDuplicateUpdate {
 				col := updateExpr.Names[0].ColName()
 				updateCols[col] = updateExpr.Expr
 				if _, ok := uniqueColNames[col]; ok {
@@ -1033,7 +1053,25 @@ func initInsertStmt(builder *QueryBuilder, bindCtx *BindContext, stmt *tree.Inse
 				idxs[i] = info.idx
 				if updateExpr, exists := updateCols[col.Name]; exists {
 					if _, ok := updateExpr.(*tree.DefaultVal); ok {
-						defExpr, err = getDefaultExpr(builder.GetContext(), col)
+						defExpr, err = getDefaultExprForAssignment(builder.GetContext(), col, builder.compCtx.GetProcess(), builder.isInsertIgnore)
+						if err != nil {
+							return false, nil, nil, err
+						}
+						rowValues := make(map[int32]*plan.Expr, len(tableDef.Cols))
+						for colIdx, rowCol := range tableDef.Cols {
+							if colIdx < len(rightTableDef.Cols) {
+								rowValues[int32(colIdx)] = &plan.Expr{
+									Typ: rowCol.Typ,
+									Expr: &plan.Expr_Col{Col: &plan.ColRef{
+										RelPos: rightTag,
+										ColPos: int32(colIdx),
+									}},
+								}
+							}
+						}
+						defExpr, err = expandDefaultExprWithColumnExprs(
+							builder.GetContext(), defExpr, rowValues,
+						)
 						if err != nil {
 							return false, nil, nil, err
 						}
@@ -1128,7 +1166,7 @@ func initInsertStmt(builder *QueryBuilder, bindCtx *BindContext, stmt *tree.Inse
 			info.rootId = newRootId
 			info.onDuplicateIdx = idxs
 			info.onDuplicateExpr = updateExprs
-			info.onDuplicateIsIgnore = isIgnore
+			info.onDuplicateIsIgnore = stmt.IsIgnore()
 
 			// append ProjectNode
 			info.rootId = builder.appendNode(&plan.Node{
@@ -1144,28 +1182,32 @@ func initInsertStmt(builder *QueryBuilder, bindCtx *BindContext, stmt *tree.Inse
 	return existAutoPkCol, insertWithoutUniqueKeyMap, ifInsertFromUniqueColMap, nil
 }
 
-func deleteToSelect(builder *QueryBuilder, bindCtx *BindContext, node *tree.Delete, haveConstraint bool, tblInfo *dmlTableInfo) (int32, error) {
+func deleteToSelect(builder *QueryBuilder, bindCtx *BindContext, node *tree.Delete, haveConstraint bool, tblInfo *dmlTableInfo) (int32, []map[string]int32, error) {
 	var selectList []tree.SelectExpr
 	fromTables := &tree.From{}
+	colName2Idx := make([]map[string]int32, len(tblInfo.tableDefs))
 
 	getResolveExpr := func(alias string) {
 		var ret *tree.UnresolvedName
+		defIdx := tblInfo.alias[alias]
+		colName2Idx[defIdx] = make(map[string]int32)
 		if haveConstraint {
-			defIdx := tblInfo.alias[alias]
 			for _, col := range tblInfo.tableDefs[defIdx].Cols {
+				colName2Idx[defIdx][col.Name] = int32(len(selectList))
 				ret = tree.NewUnresolvedName(tree.NewCStr(alias, bindCtx.lower), tree.NewCStr(col.Name, 1))
 				selectList = append(selectList, tree.SelectExpr{
 					Expr: ret,
 				})
 			}
 		} else {
-			defIdx := tblInfo.alias[alias]
+			colName2Idx[defIdx][catalog.Row_ID] = int32(len(selectList))
 			ret = tree.NewUnresolvedName(tree.NewCStr(alias, bindCtx.lower), tree.NewCStr(catalog.Row_ID, 1))
 			selectList = append(selectList, tree.SelectExpr{
 				Expr: ret,
 			})
 			pkName := getTablePriKeyName(tblInfo.tableDefs[defIdx].Pkey)
 			if pkName != "" {
+				colName2Idx[defIdx][pkName] = int32(len(selectList))
 				ret = tree.NewUnresolvedName(tree.NewCStr(alias, bindCtx.lower), tree.NewCStr(pkName, 1))
 				selectList = append(selectList, tree.SelectExpr{
 					Expr: ret,
@@ -1210,7 +1252,8 @@ func deleteToSelect(builder *QueryBuilder, bindCtx *BindContext, node *tree.Dele
 	// sql := ftCtx.String()
 	// fmt.Print(sql)
 
-	return builder.bindSelect(astSelect, bindCtx, false)
+	lastNodeID, err := builder.bindSelect(astSelect, bindCtx, false)
+	return lastNodeID, colName2Idx, err
 }
 
 func checkNotNull(ctx context.Context, expr *Expr, tableDef *TableDef, col *ColDef) error {
@@ -1254,8 +1297,8 @@ func useAssignmentStrictCast(targetType Type) bool {
 	switch targetType.Id {
 	case int32(types.T_char), int32(types.T_varchar), int32(types.T_date), int32(types.T_time), int32(types.T_datetime), int32(types.T_timestamp), int32(types.T_year):
 		return true
-	case int32(types.T_text):
-		return targetType.Width == types.MaxTinyTextLen
+	case int32(types.T_blob), int32(types.T_text):
+		return true
 	default:
 		return false
 	}
@@ -1264,7 +1307,8 @@ func useAssignmentStrictCast(targetType Type) bool {
 func useSqlModeStringAssignmentCast(targetType Type) bool {
 	return targetType.Id == int32(types.T_char) ||
 		targetType.Id == int32(types.T_varchar) ||
-		(targetType.Id == int32(types.T_text) && targetType.Width == types.MaxTinyTextLen)
+		targetType.Id == int32(types.T_blob) ||
+		targetType.Id == int32(types.T_text)
 }
 
 func useSqlModeAssignmentCast(targetType Type) bool {
@@ -1273,13 +1317,46 @@ func useSqlModeAssignmentCast(targetType Type) bool {
 		targetType.Id == int32(types.T_time)
 }
 
-// needsSameTypeAssignmentCast reports whether values with the same planner
-// type still need to cross an assignment cast. Legacy TINYTEXT columns and
-// MatrixOne's extended internal TIME representation can both carry values that
-// are invalid at a MySQL-compatible column boundary.
+// useIgnoreConversionAssignmentCast identifies conversions whose lexical
+// failure is adjusted by INSERT/UPDATE IGNORE. Keep this separate from
+// useSqlModeAssignmentCast: ordinary assignments to these types must retain
+// their existing cast/cast_strict selection, while the IGNORE runtime needs
+// the assignment-ignore mode to distinguish lexical failures from range and
+// execution errors.
+func useIgnoreConversionAssignmentCast(targetType Type) bool {
+	switch targetType.Id {
+	case int32(types.T_int8), int32(types.T_int16), int32(types.T_int32), int32(types.T_int64),
+		int32(types.T_uint8), int32(types.T_uint16), int32(types.T_uint32), int32(types.T_uint64),
+		int32(types.T_decimal64), int32(types.T_decimal128), int32(types.T_decimal256),
+		int32(types.T_date), int32(types.T_datetime), int32(types.T_timestamp):
+		return true
+	default:
+		return false
+	}
+}
+
+func assignmentCastProtocolSupported(proc *process.Process) bool {
+	if proc == nil {
+		return true
+	}
+	rt := moruntime.ServiceRuntime(proc.GetService())
+	if rt == nil {
+		return false
+	}
+	version, ok := rt.GetGlobalVariables(moruntime.MOProtocolVersion)
+	protocolVersion, valid := version.(int64)
+	return ok && valid && protocolVersion >= defines.MORPCVersion5
+}
+
+// needsSameTypeAssignmentCast 判断相同规划器类型是否仍需要赋值检查。
+// BLOB/TEXT 和扩展 TIME 可能携带超出目标列范围的值。
+// 固定维度向量的实际载荷长度也可能不符合其声明宽度。
+// 这些类型都不能仅根据元数据相等省略赋值检查。
 func needsSameTypeAssignmentCast(targetType Type) bool {
-	return (targetType.Id == int32(types.T_text) && targetType.Width == types.MaxTinyTextLen) ||
-		targetType.Id == int32(types.T_time)
+	return targetType.Id == int32(types.T_blob) ||
+		targetType.Id == int32(types.T_text) ||
+		targetType.Id == int32(types.T_time) ||
+		(types.T(targetType.Id).IsArrayRelate() && targetType.Width > 0 && targetType.Width != types.MaxArrayDimension)
 }
 
 func forceCastExpr2(ctx context.Context, expr *Expr, t2 types.Type, targetType *plan.Expr) (*Expr, error) {
@@ -1326,7 +1403,7 @@ func forceCastExpr2WithProcess(
 	// SQL-mode-sensitive assignments use the protocol-gated runtime assignment
 	// cast. Other temporal assignments retain cast_strict behavior, while the
 	// remaining conversions continue to use the generic cast.
-	funcName := assignmentCastFunctionName(targetType.Typ, isIgnore, proc)
+	funcName := assignmentCastFunctionNameForSource(expr, targetType.Typ, isIgnore, proc)
 	fGet, err := function.GetFunctionByName(ctx, funcName, []types.Type{t1, t2})
 	if err != nil {
 		return nil, err
@@ -1367,21 +1444,20 @@ func forceAssignmentCastExpr(ctx context.Context, expr *Expr, targetType Type) (
 }
 
 func assignmentCastFunctionName(targetType Type, isIgnore bool, proc *process.Process) string {
+	if isIgnore && useIgnoreConversionAssignmentCast(targetType) && assignmentCastProtocolSupported(proc) {
+		return "cast_ignore"
+	}
 	if !useSqlModeAssignmentCast(targetType) {
 		if useAssignmentStrictCast(targetType) {
 			return "cast_strict"
 		}
 		return "cast"
 	}
-	if proc != nil {
-		version, ok := moruntime.ServiceRuntime(proc.GetService()).GetGlobalVariables(moruntime.MOProtocolVersion)
-		protocolVersion, valid := version.(int64)
-		if !ok || !valid || protocolVersion < defines.MORPCVersion5 {
-			if isIgnore {
-				return "cast"
-			}
-			return "cast_strict"
+	if !assignmentCastProtocolSupported(proc) {
+		if isIgnore {
+			return "cast"
 		}
+		return "cast_strict"
 	}
 	if isIgnore {
 		return "cast_ignore"
@@ -1403,7 +1479,22 @@ func forceAssignmentCastExprWithProcess(
 	isIgnore bool,
 	proc *process.Process,
 ) (*Expr, error) {
-	return forceAssignmentCastExprWithName(ctx, expr, targetType, assignmentCastFunctionName(targetType, isIgnore, proc))
+	return forceAssignmentCastExprWithName(ctx, expr, targetType,
+		assignmentCastFunctionNameForSource(expr, targetType, isIgnore, proc))
+}
+
+func assignmentCastFunctionNameForSource(expr *Expr, targetType Type, isIgnore bool, proc *process.Process) string {
+	name := assignmentCastFunctionName(targetType, isIgnore, proc)
+	if types.T(targetType.Id).IsInteger() &&
+		(types.T(expr.Typ.Id).IsFloat() ||
+			(types.T(targetType.Id).IsUnsignedInt() && makeTypeByPlan2Expr(expr).IsDecimal()) ||
+			expr.GetP() != nil) && assignmentCastProtocolSupported(proc) {
+		name = "cast_assign"
+		if isIgnore {
+			name = "cast_ignore"
+		}
+	}
+	return name
 }
 
 func (builder *QueryBuilder) forceAssignmentCastExpr(expr *Expr, targetType Type, isIgnore bool) (*Expr, error) {
@@ -1427,12 +1518,33 @@ func (builder *QueryBuilder) forceProjectedAssignmentCastExpr(
 	if err != nil || rewritten {
 		return expr, err
 	}
+	if types.T(targetType.Id).IsInteger() && preparedExprContainsParam(sourceExpr) &&
+		makeTypeByPlan2Expr(expr).Eq(makeTypeByPlan2Type(targetType)) {
+		return forceCastExprWithNameAndAssignment(
+			builder.GetContext(), expr, targetType,
+			assignmentCastFunctionName(targetType, isIgnore, builder.compCtx.GetProcess()), true, true)
+	}
 	return builder.forceAssignmentCastExpr(expr, targetType, isIgnore)
 }
 
 func (builder *QueryBuilder) rewriteProjectedMySQLSpecialTypeDisplayCast(expr, sourceExpr *Expr, targetType Type) (*Expr, bool, error) {
 	if builder == nil || expr == nil || sourceExpr == nil {
 		return expr, false, nil
+	}
+	if makeTypeByPlan2Type(targetType).IsNumeric() && !isSetPlanType(&targetType) {
+		if col := expr.GetCol(); col != nil {
+			if nodeID, ok := builder.tag2NodeID[col.RelPos]; ok && nodeID >= 0 && int(nodeID) < len(builder.ctxByNode) {
+				if owner := builder.ctxByNode[nodeID]; owner != nil {
+					if typ := owner.mysqlSpecialCanonicalTypeForExpr(expr); isSetPlanType(typ) {
+						value, err := makeCanonicalSetValue(builder.GetContext(), expr, typ)
+						return value, false, err
+					}
+				}
+			}
+		}
+		if raw, ok := builder.materializeTransparentMySQLSpecialValue(expr); ok {
+			return raw, false, nil
+		}
 	}
 	if types.T(targetType.Id).IsInteger() && !isSetPlanType(&targetType) &&
 		builder.isProjectedDisplayValueExpr(expr, isSetDisplayValueExpr, true, nil) {
@@ -1512,15 +1624,151 @@ func (builder *QueryBuilder) isProjectedDisplayValueAtNode(
 		if len(node.Children) == 0 {
 			return false
 		}
+		hasDisplayValue := false
 		for _, childID := range node.Children {
-			if !builder.isProjectedDisplayValueAtNode(childID, colPos, isDisplayValue, requireAllSetInputs, visited) {
-				return false
+			if builder.isProjectedDisplayValueAtNode(childID, colPos, isDisplayValue, requireAllSetInputs, visited) {
+				hasDisplayValue = true
+				continue
 			}
+			// A NULL branch is neutral only for a SET proof that has at least
+			// one real SET display branch. Do not let an all-NULL expression or
+			// an unrelated integer assignment enter the SET materializer.
+			if requireAllSetInputs && builder.isProjectedNullValueAtNode(childID, colPos, nil) {
+				continue
+			}
+			return false
 		}
-		return true
+		return hasDisplayValue
 	}
 
 	return builder.isProjectedDisplayValueExpr(node.ProjectList[colPos], isDisplayValue, requireAllSetInputs, visited)
+}
+
+// isProjectedNullValueAtNode follows a projection boundary to prove that an
+// output column is a NULL literal. It is used only to admit a neutral NULL
+// branch alongside a separately proven SET display branch; an all-NULL set
+// operation must not acquire SET provenance by itself.
+func (builder *QueryBuilder) isProjectedNullValueAtNode(
+	nodeID, colPos int32,
+	visited map[[2]int32]struct{},
+) bool {
+	if nodeID < 0 || int(nodeID) >= len(builder.qry.Nodes) {
+		return false
+	}
+	key := [2]int32{nodeID, colPos}
+	if visited == nil {
+		visited = make(map[[2]int32]struct{})
+	}
+	if _, ok := visited[key]; ok {
+		return false
+	}
+	visited[key] = struct{}{}
+	defer delete(visited, key)
+
+	node := builder.qry.Nodes[nodeID]
+	if colPos < 0 || int(colPos) >= len(node.ProjectList) {
+		return false
+	}
+	expr := node.ProjectList[colPos]
+	if isNullLiteralExpr(expr) {
+		return true
+	}
+	col := expr.GetCol()
+	if col == nil {
+		return false
+	}
+	childNodeID, ok := builder.tag2NodeID[col.RelPos]
+	if !ok {
+		return false
+	}
+	return builder.isProjectedNullValueAtNode(childNodeID, col.ColPos, visited)
+}
+
+// materializeTransparentMySQLSpecialValue carries storage identity only through
+// row-preserving projections. Prove the relational path before changing any
+// projection: following tags alone can jump below an untagged DISTINCT or LIMIT.
+func (builder *QueryBuilder) materializeTransparentMySQLSpecialValue(expr *Expr) (*Expr, bool) {
+	if !builder.proveTransparentMySQLSpecialValue(expr, make(map[[2]int32]bool)) {
+		return nil, false
+	}
+	return builder.materializeTransparentMySQLSpecialValueImpl(expr), true
+}
+
+func (builder *QueryBuilder) proveTransparentMySQLSpecialValue(expr *Expr, visiting map[[2]int32]bool) bool {
+	if expr == nil {
+		return false
+	}
+	if _, ok := storedMySQLSpecialTypeExpr(expr); ok {
+		return true
+	}
+	col := expr.GetCol()
+	if col == nil {
+		return false
+	}
+	nodeID, ok := builder.tag2NodeID[col.RelPos]
+	if !ok || nodeID < 0 || int(nodeID) >= len(builder.qry.Nodes) {
+		return false
+	}
+	node := builder.qry.Nodes[nodeID]
+	key := [2]int32{nodeID, col.ColPos}
+	if visiting[key] || node.NodeType != plan.Node_PROJECT || col.ColPos < 0 || int(col.ColPos) >= len(node.ProjectList) {
+		return false
+	}
+	if int(nodeID) < len(builder.ctxByNode) {
+		owner := builder.ctxByNode[nodeID]
+		if owner != nil && (owner.isDistinct || len(owner.groups) != 0 || len(owner.aggregates) != 0) {
+			return false
+		}
+	}
+	if !builder.mysqlSpecialRowPreservingInput(nodeID, make(map[int32]bool)) {
+		return false
+	}
+	visiting[key] = true
+	defer delete(visiting, key)
+	return builder.proveTransparentMySQLSpecialValue(node.ProjectList[col.ColPos], visiting)
+}
+
+func (builder *QueryBuilder) mysqlSpecialRowPreservingInput(nodeID int32, visiting map[int32]bool) bool {
+	if nodeID < 0 || int(nodeID) >= len(builder.qry.Nodes) || visiting[nodeID] {
+		return false
+	}
+	node := builder.qry.Nodes[nodeID]
+	if node.Limit != nil || node.Offset != nil {
+		return false
+	}
+	switch node.NodeType {
+	case plan.Node_TABLE_SCAN, plan.Node_EXTERNAL_SCAN, plan.Node_VALUE_SCAN:
+		return true
+	case plan.Node_PROJECT, plan.Node_FILTER, plan.Node_SORT:
+		if len(node.Children) != 1 {
+			return false
+		}
+		visiting[nodeID] = true
+		defer delete(visiting, nodeID)
+		return builder.mysqlSpecialRowPreservingInput(node.Children[0], visiting)
+	default:
+		return false
+	}
+}
+
+func (builder *QueryBuilder) materializeTransparentMySQLSpecialValueImpl(expr *Expr) *Expr {
+	if raw, ok := storedMySQLSpecialTypeExpr(expr); ok {
+		return raw
+	}
+	col := expr.GetCol()
+	nodeID := builder.tag2NodeID[col.RelPos]
+	node := builder.qry.Nodes[nodeID]
+	key := [2]int32{nodeID, col.ColPos}
+	// Share SET slots already carried for casts/FIND_IN_SET. ENUM slots use the
+	// same position cache, retaining their type until the numeric consumer casts.
+	if pos, ok := builder.setBitmapByDisplayNode[key]; ok {
+		return GetColExpr(node.ProjectList[pos].Typ, col.RelPos, pos)
+	}
+	raw := builder.materializeTransparentMySQLSpecialValueImpl(node.ProjectList[col.ColPos])
+	pos := int32(len(node.ProjectList))
+	node.ProjectList = append(node.ProjectList, raw)
+	builder.setBitmapByDisplayNode[key] = pos
+	return GetColExpr(raw.Typ, col.RelPos, pos)
 }
 
 // materializeProjectedSetBitmap carries a proven SET bitmap through projection
@@ -1596,7 +1844,22 @@ func (builder *QueryBuilder) materializeProjectedSetBitmapAtNode(
 		return GetColExpr(bitmapType, outputTag, pos), true
 	}
 
-	bitmap, found := builder.materializeProjectedSetBitmap(node.ProjectList[colPos], visited)
+	displayExpr := node.ProjectList[colPos]
+	// A pure NULL UNION branch has no stored SET bitmap, but it must still
+	// contribute a nullable hidden bitmap column so that the set operation keeps
+	// NULL rows NULL while non-NULL branches retain their original bitmaps.
+	if isNullLiteralExpr(displayExpr) {
+		bitmap := &plan.Expr{
+			Typ:  plan.Type{Id: int32(types.T_uint64)},
+			Expr: &plan.Expr_Lit{Lit: &plan.Literal{Isnull: true}},
+		}
+		pos := int32(len(node.ProjectList))
+		node.ProjectList = append(node.ProjectList, bitmap)
+		builder.setBitmapByDisplayNode[key] = pos
+		return GetColExpr(bitmap.Typ, outputTag, pos), true
+	}
+
+	bitmap, found := builder.materializeProjectedSetBitmap(displayExpr, visited)
 	if !found {
 		return nil, false
 	}
@@ -1609,11 +1872,11 @@ func (builder *QueryBuilder) materializeProjectedSetBitmapAtNode(
 }
 
 func forceCastExprWithName(ctx context.Context, expr *Expr, targetType Type, funcName string) (*Expr, error) {
-	return forceCastExprWithNameAndAssignment(ctx, expr, targetType, funcName, false)
+	return forceCastExprWithNameAndAssignment(ctx, expr, targetType, funcName, false, false)
 }
 
 func forceAssignmentCastExprWithName(ctx context.Context, expr *Expr, targetType Type, funcName string) (*Expr, error) {
-	return forceCastExprWithNameAndAssignment(ctx, expr, targetType, funcName, true)
+	return forceCastExprWithNameAndAssignment(ctx, expr, targetType, funcName, true, false)
 }
 
 func forceCastExprWithNameAndAssignment(
@@ -1622,6 +1885,7 @@ func forceCastExprWithNameAndAssignment(
 	targetType Type,
 	funcName string,
 	isAssignment bool,
+	forceSameType bool,
 ) (*Expr, error) {
 	if targetType.Id == 0 {
 		return expr, nil
@@ -1639,7 +1903,7 @@ func forceCastExprWithNameAndAssignment(
 		return funcCastForTypedArrayType(ctx, expr, targetType)
 	}
 	t1, t2 := makeTypeByPlan2Expr(expr), makeTypeByPlan2Type(targetType)
-	if t1.Eq(t2) && !(isAssignment && needsSameTypeAssignmentCast(targetType)) {
+	if t1.Eq(t2) && !forceSameType && !(isAssignment && needsSameTypeAssignmentCast(targetType)) {
 		return expr, nil
 	}
 
@@ -1668,6 +1932,24 @@ func forceCastExprWithNameAndAssignment(
 func MakeInsertValueConstExpr(proc *process.Process, numVal *tree.NumVal, colType *types.Type, isIgnore bool) (*plan.Expr, error) {
 	if numVal.ValType == tree.P_null || numVal.ValType == tree.P_nulltext {
 		return makePlan2NullConstExprWithType(), nil
+	}
+	// Do not parse IGNORE string assignments to numeric/temporal columns while
+	// building the plan. The runtime assignment cast owns the adjustment and
+	// warning so INSERT ... VALUES, INSERT ... SELECT, UPDATE, and prepared
+	// executions share one contract and diagnostics are emitted per logical row.
+	if isIgnore && numVal.ValType == tree.P_char && useIgnoreConversionAssignmentCast(makePlan2Type(colType)) {
+		expr := MakePlan2StringConstExprWithType(numVal.String())
+		return forceAssignmentCastExprWithProcess(proc.Ctx, expr, makePlan2Type(colType), true, proc)
+	}
+	// Integer assignment must consume the literal's source type, not parse its
+	// spelling as an integer or truncate it in the VALUES fast path.
+	if colType.Oid.IsInteger() && (numVal.ValType == tree.P_decimal || numVal.ValType == tree.P_float64) {
+		binder := NewDefaultBinder(proc.Ctx, nil, nil, plan.Type{}, nil)
+		source, err := binder.BindExpr(numVal, 0, true)
+		if err != nil {
+			return nil, err
+		}
+		return forceAssignmentCastExprWithProcess(proc.Ctx, source, makePlan2Type(colType), isIgnore, proc)
 	}
 	switch colType.Oid {
 	case types.T_bool:
@@ -1853,8 +2135,9 @@ func buildValueScan(
 	updateColumns []string,
 	colToIdx map[string]int,
 	OnDuplicateUpdate tree.UpdateExprs,
-) error {
+) ([]string, error) {
 	var err error
+	effectiveColumns := append([]string(nil), updateColumns...)
 
 	proc := builder.compCtx.GetProcess()
 	lastTag := builder.genNewBindTag()
@@ -1862,6 +2145,7 @@ func buildValueScan(
 	rowsetData := &plan.RowsetData{
 		Cols: make([]*plan.ColData, colCount),
 	}
+	hasLocalDefaultRefs := false
 	for i := 0; i < colCount; i++ {
 		rowsetData.Cols[i] = new(plan.ColData)
 	}
@@ -1883,14 +2167,15 @@ func buildValueScan(
 		}
 		var defExpr *Expr
 		if isAllDefault {
-			defExpr, err := getDefaultExpr(builder.GetContext(), col)
+			defExpr, err := getDefaultExprForAssignment(builder.GetContext(), col, builder.compCtx.GetProcess(), builder.isInsertIgnore)
 			if err != nil {
-				return err
+				return nil, err
 			}
 			defExpr, err = builder.forceCastExpr2(defExpr, colTyp, targetTyp, builder.isInsertIgnore)
 			if err != nil {
-				return err
+				return nil, err
 			}
+			hasLocalDefaultRefs = hasLocalDefaultRefs || exprHasLocalColumnRef(defExpr)
 			rowsetData.Cols[i].Data = make([]*plan.RowsetExpr, len(slt.Rows))
 			for j := range slt.Rows {
 				rowsetData.Cols[i].Data[j] = &plan.RowsetExpr{
@@ -1898,15 +2183,20 @@ func buildValueScan(
 				}
 			}
 		} else {
-			binder := NewDefaultBinder(builder.GetContext(), nil, nil, col.Typ, nil)
+			sourceType := col.Typ
+			if types.T(col.Typ.Id).IsInteger() {
+				sourceType = plan.Type{}
+			}
+			binder := NewDefaultBinder(builder.GetContext(), nil, nil, sourceType, nil)
 			binder.builder = builder
 			for _, r := range slt.Rows {
 				if nv, ok := r[i].(*tree.NumVal); ok && builder.isInsertIgnore {
 					expr, handled, err := makeInsertIgnoreMySQLSpecialTypeConstExpr(builder.GetContext(), nv, col.Typ)
 					if err != nil {
-						return err
+						return nil, err
 					}
 					if handled {
+						hasLocalDefaultRefs = hasLocalDefaultRefs || exprHasLocalColumnRef(expr)
 						rowsetData.Cols[i].Data = append(rowsetData.Cols[i].Data, &plan.RowsetExpr{Expr: expr})
 						continue
 					}
@@ -1914,9 +2204,10 @@ func buildValueScan(
 				if nv, ok := r[i].(*tree.NumVal); ok && !isEnumOrSetPlanType(&col.Typ) && !isTypedArrayPlanType(&col.Typ) {
 					expr, err := MakeInsertValueConstExpr(proc, nv, &colTyp, builder.isInsertIgnore)
 					if err != nil {
-						return err
+						return nil, err
 					}
 					if expr != nil {
+						hasLocalDefaultRefs = hasLocalDefaultRefs || exprHasLocalColumnRef(expr)
 						rowsetData.Cols[i].Data = append(rowsetData.Cols[i].Data, &plan.RowsetExpr{
 							Expr: expr,
 						})
@@ -1925,36 +2216,37 @@ func buildValueScan(
 				}
 
 				if _, ok := r[i].(*tree.DefaultVal); ok {
-					defExpr, err = getDefaultExpr(builder.GetContext(), col)
+					defExpr, err = getDefaultExprForAssignment(builder.GetContext(), col, builder.compCtx.GetProcess(), builder.isInsertIgnore)
 					if err != nil {
-						return err
+						return nil, err
 					}
 				} else {
 					defExpr, err = binder.BindExpr(r[i], 0, true)
 					if err != nil {
-						return err
+						return nil, err
 					}
 					if isEnumPlanType(&col.Typ) {
 						defExpr, err = funcCastForEnumType(builder.GetContext(), defExpr, col.Typ)
 						if err != nil {
-							return err
+							return nil, err
 						}
 					} else if isSetPlanType(&col.Typ) {
 						defExpr, err = funcCastForSetType(builder.GetContext(), defExpr, col.Typ)
 						if err != nil {
-							return err
+							return nil, err
 						}
 					} else if isGeometryPlanType(&col.Typ) {
 						defExpr, err = funcCastForGeometryType(builder.GetContext(), defExpr, col.Typ)
 						if err != nil {
-							return err
+							return nil, err
 						}
 					}
 				}
 				defExpr, err = builder.forceCastExpr2(defExpr, colTyp, targetTyp, builder.isInsertIgnore)
 				if err != nil {
-					return err
+					return nil, err
 				}
+				hasLocalDefaultRefs = hasLocalDefaultRefs || exprHasLocalColumnRef(defExpr)
 				rowsetData.Cols[i].Data = append(rowsetData.Cols[i].Data, &plan.RowsetExpr{
 					Expr: defExpr,
 				})
@@ -1978,44 +2270,91 @@ func buildValueScan(
 		projectList[i] = expr
 	}
 
+	rowsetData.RowCount = int32(len(slt.Rows))
+	if hasLocalDefaultRefs {
+		effectiveColumns, err = valueScanColumnsWithDefaultDependencies(
+			builder.GetContext(), tableDef, effectiveColumns, rowsetData,
+		)
+		if err != nil {
+			return nil, err
+		}
+		for i := colCount; i < len(effectiveColumns); i++ {
+			colName := effectiveColumns[i]
+			colIdx, ok := tableDef.Name2ColIndex[colName]
+			if !ok {
+				for j, candidate := range tableDef.Cols {
+					if candidate != nil && strings.EqualFold(candidate.Name, colName) {
+						colIdx = int32(j)
+						ok = true
+						break
+					}
+				}
+			}
+			if !ok || colIdx < 0 || int(colIdx) >= len(tableDef.Cols) || tableDef.Cols[colIdx] == nil {
+				return nil, moerr.NewInvalidInputf(builder.GetContext(),
+					"insert column '%s' does not exist", colName)
+			}
+			col := tableDef.Cols[colIdx]
+			colTyp := makeTypeByPlan2Type(col.Typ)
+			targetTyp := &plan.Expr{Typ: col.Typ, Expr: &plan.Expr_T{T: &plan.TargetType{}}}
+			defExpr, err := getDefaultExprForAssignment(builder.GetContext(), col, builder.compCtx.GetProcess(), builder.isInsertIgnore)
+			if err != nil {
+				return nil, err
+			}
+			defExpr, err = builder.forceCastExpr2(defExpr, colTyp, targetTyp, builder.isInsertIgnore)
+			if err != nil {
+				return nil, err
+			}
+			data := make([]*plan.RowsetExpr, len(slt.Rows))
+			for row := range data {
+				data[row] = &plan.RowsetExpr{Expr: defExpr}
+			}
+			rowsetData.Cols = append(rowsetData.Cols, &plan.ColData{Data: data})
+			valueScanTableDef.Cols = append(valueScanTableDef.Cols, &plan.ColDef{
+				ColId: 0,
+				Name:  fmt.Sprintf("column_%d", len(valueScanTableDef.Cols)),
+				Typ:   col.Typ,
+			})
+			projectList = append(projectList, &plan.Expr{
+				Typ: col.Typ,
+				Expr: &plan.Expr_Col{Col: &plan.ColRef{
+					RelPos: lastTag,
+					ColPos: int32(len(projectList)),
+				}},
+			})
+		}
+		if err := expandDefaultExprsInValueScan(
+			builder.GetContext(), tableDef, effectiveColumns, rowsetData,
+		); err != nil {
+			return nil, err
+		}
+	}
+
 	onUpdateExprs := make([]*plan.Expr, 0)
-	if builder.isPrepareStatement && !(len(OnDuplicateUpdate) == 1 && OnDuplicateUpdate[0] == nil) {
-		for _, expr := range OnDuplicateUpdate {
-			var updateExpr *plan.Expr
-			col := tableDef.Cols[colToIdx[expr.Names[0].ColName()]]
-			if nv, ok := expr.Expr.(*tree.ParamExpr); ok {
-				updateExpr = &plan.Expr{
-					Typ: constTextType,
-					Expr: &plan.Expr_P{
-						P: &plan.ParamRef{
-							Pos: int32(nv.Offset),
-						},
-					},
-				}
-			} else if nv, ok := expr.Expr.(*tree.FuncExpr); ok {
-				if checkExprHasParamExpr(nv.Exprs) {
-					binder := NewDefaultBinder(builder.GetContext(), nil, nil, col.Typ, nil)
-					binder.builder = builder
-					binder.ctx = bindCtx
-					updateExpr, err = binder.BindExpr(nv, 0, true)
-					if err != nil {
-						return err
-					}
-				}
-			} else if nv, ok := expr.Expr.(*tree.BinaryExpr); ok {
-				if checkExprHasParamExpr([]tree.Expr{nv.Right}) {
-					binder := NewDefaultBinder(builder.GetContext(), nil, nil, col.Typ, nil)
-					binder.builder = builder
-					binder.ctx = bindCtx
-					updateExpr, err = binder.BindExpr(nv.Right, 0, true)
-					if err != nil {
-						return err
-					}
-				}
+	if builder.isPrepareStatement && len(OnDuplicateUpdate) > 0 {
+		// The no-key fallback does not execute the ODKU action, but its complete
+		// expression still has to be bound so every parameter marker is retained.
+		// Use the ODKU binder here because the fallback value scan has no FROM
+		// binding for target-table column references such as `id + ?`.
+		odkuBinder := NewOndupUpdateBinder(
+			builder.GetContext(), builder, bindCtx, 0, 0, tableDef,
+			tableDef.DbName, tableDef.Name, builder.compCtx.GetLowerCaseTableNames(),
+		)
+		for _, update := range OnDuplicateUpdate {
+			if update == nil || len(update.Names) == 0 || update.Names[0] == nil || update.Expr == nil || !checkExprHasParamExpr([]tree.Expr{update.Expr}) {
+				continue
 			}
-			if updateExpr != nil {
-				onUpdateExprs = append(onUpdateExprs, updateExpr)
+			col := tableDef.Cols[colToIdx[update.Names[0].ColName()]]
+			// The update action is intentionally discarded by the no-key
+			// fallback, but every marker in its RHS still belongs to the
+			// prepared statement. Bind the complete expression so a binary
+			// expression contributes parameters from both operands, in lexical
+			// order, rather than retaining only the right operand.
+			updateExpr, err := odkuBinder.BindAssignmentExpr(update.Expr, col.Typ)
+			if err != nil {
+				return nil, err
 			}
+			onUpdateExprs = append(onUpdateExprs, updateExpr)
 		}
 	}
 	rowsetData.RowCount = int32(len(slt.Rows))
@@ -2031,7 +2370,7 @@ func buildValueScan(
 
 	info.rootId = builder.appendNode(scanNode, bindCtx)
 	if err = builder.addBinding(info.rootId, tree.AliasClause{Alias: "_valuescan"}, bindCtx); err != nil {
-		return err
+		return nil, err
 	}
 
 	lastTag = builder.genNewBindTag()
@@ -2041,7 +2380,7 @@ func buildValueScan(
 		Children:    []int32{info.rootId},
 		BindingTags: []int32{lastTag},
 	}, bindCtx)
-	return nil
+	return effectiveColumns, nil
 }
 
 // if table have fk. then append join node & filter node
