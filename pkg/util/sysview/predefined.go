@@ -280,7 +280,7 @@ func informationSchemaSubscriptionColumnAuthorizationPredicate() string {
 }
 
 func informationSchemaCurrentColumnsDDL() string {
-	original := informationSchemaColumnsV58DDL()
+	original := InformationSchemaColumnsV58DDL()
 	prefix := "CREATE VIEW information_schema.COLUMNS AS " + informationSchemaMetadataVisibilityCTE()
 	branches := strings.SplitN(strings.TrimPrefix(original, prefix), " UNION ALL ", 2)
 	local := branches[0]
@@ -294,10 +294,11 @@ func informationSchemaCurrentColumnsDDL() string {
 	).Replace(viewRows)
 	userView := "mt.relkind = 'v' AND mt.reldatabase NOT IN ('mo_catalog','information_schema','mysql','system','system_metrics','mo_task','mo_debug')"
 	return prefix + local + " AND NOT (" + userView + ") UNION ALL " +
-		viewRows + " AND (" + userView + ") UNION ALL " + branches[1]
+		viewRows + " AND (" + userView + ") UNION ALL " + branches[1] + " UNION ALL " +
+		informationSchemaSubscriptionViewColumnsSelect(strings.TrimPrefix(InformationSchemaColumnsV41DDL, prefix))
 }
 
-func informationSchemaColumnsV58DDL() string {
+func InformationSchemaColumnsV58DDL() string {
 	return strings.NewReplacer(
 		"(case internal_column_character_set(mc.atttyp) WHEN 0 then 'utf8' WHEN 1 then 'utf8' WHEN 2 then 'binary' WHEN 3 then 'utf8' else NULL end) AS CHARACTER_SET_NAME,",
 		"(case internal_column_character_set(mc.atttyp) WHEN 0 then 'utf8' WHEN 1 then 'utf8mb4' WHEN 2 then 'binary' WHEN 3 then 'utf8mb4' else NULL end) AS CHARACTER_SET_NAME,",
@@ -345,6 +346,11 @@ func informationSchemaSubscriptionColumnsDDL() string {
 		"mt.rel_createsql", "mc.rel_createsql",
 		"mt.extra_info", "mc.extra_info",
 	).Replace(subscriptionSelect)
+	return "CREATE VIEW information_schema.COLUMNS AS " +
+		informationSchemaMetadataVisibilityCTE() + localSelect + " UNION ALL " + subscriptionSelect
+}
+
+func informationSchemaSubscriptionViewColumnsSelect(localSelect string) string {
 	subscriptionViewSelect := strings.NewReplacer(
 		informationSchemaColumnsLocalFromSQL(),
 		"from mo_subscription_tables() mt "+
@@ -356,9 +362,7 @@ func informationSchemaSubscriptionColumnsDDL() string {
 	).Replace(localSelect)
 	subscriptionViewSelect += " AND mt.relkind = 'v' AND (" +
 		informationSchemaSubscriptionViewAuthorizationPredicate() + ")"
-	return "CREATE VIEW information_schema.COLUMNS AS " +
-		informationSchemaMetadataVisibilityCTE() + localSelect + " UNION ALL " + subscriptionSelect +
-		" UNION ALL " + subscriptionViewSelect
+	return subscriptionViewSelect
 }
 
 // `information_schema` database

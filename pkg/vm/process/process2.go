@@ -16,6 +16,7 @@ package process
 
 import (
 	"context"
+	"maps"
 	"sync"
 	"time"
 
@@ -24,6 +25,7 @@ import (
 	"github.com/hayageek/threadsafe"
 
 	"github.com/matrixorigin/matrixone/pkg/common/mpool"
+	"github.com/matrixorigin/matrixone/pkg/container/types"
 	"github.com/matrixorigin/matrixone/pkg/defines"
 	"github.com/matrixorigin/matrixone/pkg/fileservice"
 	"github.com/matrixorigin/matrixone/pkg/incrservice"
@@ -103,6 +105,34 @@ func NewTopProcess(
 	}
 	proc.doPrepareForRunningWithoutPipeline()
 	return proc
+}
+
+// NewViewBindingProcess borrows the transaction and services but owns the mutable
+// process context used while binding a nested View. Unlike pipeline children it
+// must not share BaseProcess: SetContext on the child must not change the caller.
+// The caller owns Free on the returned process.
+func (proc *Process) NewViewBindingProcess(ctx context.Context) *Process {
+	child := NewTopProcess(ctx, proc.Base.mp, proc.Base.TxnClient, proc.Base.TxnOperator,
+		proc.Base.FileService, proc.Base.LockService, proc.Base.QueryClient,
+		proc.Base.Hakeeper, proc.Base.UdfService, proc.Base.Aicm, proc.Base.TaskService)
+	child.Base.SessionInfo = proc.Base.SessionInfo
+	child.Base.SessionInfo.QueryId = append([]string(nil), proc.Base.SessionInfo.QueryId...)
+	child.Base.SessionInfo.ResultColTypes = append([]types.Type(nil), proc.Base.SessionInfo.ResultColTypes...)
+	child.Base.SessionInfo.SeqCurValues = maps.Clone(proc.Base.SessionInfo.SeqCurValues)
+	child.Base.SessionInfo.SeqAddValues = maps.Clone(proc.Base.SessionInfo.SeqAddValues)
+	child.Base.SessionInfo.SeqDeleteKeys = append([]uint64(nil), proc.Base.SessionInfo.SeqDeleteKeys...)
+	child.Base.SessionInfo.SeqLastValue = append([]string(nil), proc.Base.SessionInfo.SeqLastValue...)
+	child.Base.IsFrontend = proc.Base.IsFrontend
+	child.Base.DivByZeroErrorMode = proc.Base.DivByZeroErrorMode
+	child.Base.resolveVariableFunc = proc.Base.resolveVariableFunc
+	child.Base.resolveVariableTypeFunc = proc.Base.resolveVariableTypeFunc
+	child.Base.resolveVariableIsBinFunc = proc.Base.resolveVariableIsBinFunc
+	child.Base.resolveVariableStringDomainFunc = proc.Base.resolveVariableStringDomainFunc
+	child.Base.resolveVariablePrepareParamKindFunc = proc.Base.resolveVariablePrepareParamKindFunc
+	child.Session = proc.Session
+	child.WarningSink = proc.WarningSink
+	child.CopyPlanSnapshotFrom(proc)
+	return child
 }
 
 // NewNoContextChildProc make a new child process without a context field.

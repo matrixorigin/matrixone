@@ -46,6 +46,11 @@ type compilerContext struct {
 	proc               *process.Process
 	statsCache         *plan.StatsCache
 	statsCacheVersions map[uint64]uint32
+	viewChild          bool
+	viewDelegate       plan.CompilerContext
+	viewSnapshot       *plan.Snapshot
+	viewSubscription   *plan.SubscriptionMeta
+	viewViews          []string
 
 	buildAlterView       bool
 	dbOfView, nameOfView string
@@ -60,9 +65,40 @@ func (c *compilerContext) NewViewDescriptionCompilerContext(
 ) (plan.CompilerContext, func(), error) {
 	child := &compilerContext{
 		ctx: ctx, defaultDB: c.defaultDB, engine: c.engine, proc: c.proc,
-		statsCache: c.statsCache, lower: c.lower,
+		statsCache: c.statsCache, lower: c.lower, viewChild: true,
 		buildAlterView: c.buildAlterView, dbOfView: c.dbOfView, nameOfView: c.nameOfView,
 		sql: c.sql,
+	}
+	if delegate := c.sessionCompilerContextValue(); delegate != nil {
+		provider, ok := delegate.(plan.ViewDescriptionContextProvider)
+		if !ok {
+			return nil, nil, moerr.NewInternalError(ctx, "session compiler context cannot isolate view binding")
+		}
+		isolated, cleanup, err := provider.NewViewDescriptionCompilerContext(ctx)
+		if err != nil {
+			return nil, nil, err
+		}
+		child.viewDelegate = isolated
+		if isolated.GetProcess() != nil && isolated.GetProcess() != c.proc {
+			child.proc = isolated.GetProcess()
+		} else if c.proc != nil {
+			// Other providers may isolate binding state without cloning the process.
+			// Keep the internal compiler context's process private as well.
+			child.proc = c.proc.NewViewBindingProcess(ctx)
+			previousCleanup := cleanup
+			cleanup = func() { previousCleanup(); child.proc.Free() }
+		}
+		if child.proc != nil {
+			child.proc.GetSessionInfo().CompilerContext = child
+		}
+		child.viewSnapshot = isolated.GetSnapshot()
+		child.viewSubscription = isolated.GetQueryingSubscription()
+		return child, cleanup, nil
+	}
+	if c.proc != nil {
+		child.proc = c.proc.NewViewBindingProcess(ctx)
+		child.proc.GetSessionInfo().CompilerContext = child
+		return child, child.proc.Free, nil
 	}
 	return child, func() {}, nil
 }
@@ -72,16 +108,20 @@ func (c *compilerContext) GetLowerCaseTableNames() int64 {
 }
 
 func (c *compilerContext) GetViews() []string {
-	return nil
+	return c.viewViews
 }
 
-func (c *compilerContext) SetViews(views []string) {}
+func (c *compilerContext) SetViews(views []string) { c.viewViews = views }
 
 func (c *compilerContext) GetSnapshot() *plan.Snapshot {
-	return nil
+	return c.viewSnapshot
 }
 
 func (c *compilerContext) SetSnapshot(snapshot *plan.Snapshot) {
+	c.viewSnapshot = snapshot
+	if c.viewDelegate != nil {
+		c.viewDelegate.SetSnapshot(snapshot)
+	}
 }
 
 func (c *compilerContext) InitExecuteStmtParam(execPlan *planpb.Execute) (*planpb.Plan, tree.Statement, error) {
@@ -141,12 +181,25 @@ func (c *compilerContext) CheckTimeStampValid(ts int64) (bool, error) {
 }
 
 func (c *compilerContext) SetQueryingSubscription(meta *plan.SubscriptionMeta) {
+	if c.viewChild {
+		c.viewSubscription = meta
+		if c.viewDelegate != nil {
+			c.viewDelegate.SetQueryingSubscription(meta)
+		}
+		return
+	}
 	if delegate := c.sessionCompilerContextValue(); delegate != nil {
 		delegate.SetQueryingSubscription(meta)
 	}
 }
 
 func (c *compilerContext) GetQueryingSubscription() *plan.SubscriptionMeta {
+	if c.viewChild {
+		if c.viewDelegate != nil {
+			return c.viewDelegate.GetQueryingSubscription()
+		}
+		return c.viewSubscription
+	}
 	if delegate := c.sessionCompilerContextValue(); delegate != nil {
 		return delegate.GetQueryingSubscription()
 	}
@@ -289,6 +342,9 @@ func (c *compilerContext) sessionCompilerContext() (plan.CompilerContext, error)
 }
 
 func (c *compilerContext) sessionCompilerContextValue() plan.CompilerContext {
+	if c.viewChild {
+		return c.viewDelegate
+	}
 	if delegate := getInternalExecutorCompilerContext(c.ctx); delegate != nil && delegate != c {
 		return delegate
 	}
@@ -386,17 +442,31 @@ func (c *compilerContext) GetUserName() string {
 }
 
 func (c *compilerContext) GetAccountId() (uint32, error) {
-	return defines.GetAccountId(c.proc.GetTopContext())
+	return defines.GetAccountId(c.GetContext())
 }
 
 func (c *compilerContext) GetAccountName() string {
 	return "sys"
 }
 func (c *compilerContext) GetContext() context.Context {
+	if c.viewChild {
+		return c.ctx
+	}
 	return c.proc.GetTopContext()
 }
 
 func (c *compilerContext) SetContext(ctx context.Context) {
+	if c.viewChild {
+		c.ctx = ctx
+		if c.proc != nil {
+			c.proc.ReplaceTopCtx(ctx)
+			c.proc.Ctx = ctx
+		}
+		if c.viewDelegate != nil {
+			c.viewDelegate.SetContext(ctx)
+		}
+		return
+	}
 	c.proc.ReplaceTopCtx(ctx)
 }
 
@@ -430,12 +500,22 @@ func (c *compilerContext) ResolveIndexTableByRef(ref *plan.ObjectRef, tblName st
 	return obj, def, err
 }
 
+func (c *compilerContext) resolveDelegate() plan.CompilerContext {
+	if c.viewChild {
+		return c.viewDelegate
+	}
+	if delegate := getInternalExecutorCompilerContext(c.ctx); delegate != nil && delegate != c {
+		return delegate
+	}
+	return nil
+}
+
 func (c *compilerContext) Resolve(dbName string, tableName string, snapshot *plan.Snapshot) (*plan.ObjectRef, *plan.TableDef, error) {
 	// CTAS follow-up compilation carries the original frontend compiler
 	// context. Delegate relation resolution as one operation so subscription,
 	// snapshot, tenant, and physical-account mapping cannot diverge between
 	// GetSubscriptionMeta and the actual catalog lookup.
-	if delegate := getInternalExecutorCompilerContext(c.ctx); delegate != nil && delegate != c {
+	if delegate := c.resolveDelegate(); delegate != nil {
 		return delegate.Resolve(dbName, tableName, snapshot)
 	}
 	// In order to be compatible with various GUI clients and BI tools, lower case db and table name if it's a mysql system table
@@ -527,7 +607,7 @@ func (c *compilerContext) ResolveVariable(varName string, isSystemVar bool, isGl
 	//
 	// Internal SQL with no attached frontend context keeps the nil default: it
 	// has no user session whose variables could apply.
-	if delegate := getInternalExecutorCompilerContext(c.ctx); delegate != nil && delegate != c {
+	if delegate := c.resolveDelegate(); delegate != nil {
 		return delegate.ResolveVariable(varName, isSystemVar, isGlobalVar)
 	}
 	return nil, nil

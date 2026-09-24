@@ -19,15 +19,19 @@ import (
 	"sync"
 	"testing"
 
+	"github.com/matrixorigin/matrixone/pkg/common/mpool"
 	planpb "github.com/matrixorigin/matrixone/pkg/pb/plan"
 	"github.com/matrixorigin/matrixone/pkg/pb/timestamp"
+	"github.com/matrixorigin/matrixone/pkg/vm/process"
 	"github.com/stretchr/testify/require"
 )
 
 func TestViewDescriptionCompilerContextIsIsolated(t *testing.T) {
 	parentCtx := context.WithValue(t.Context(), struct{}{}, "parent")
 	parent := InitTxnCompilerContext("parent_db")
-	parent.SetExecCtx(&ExecCtx{reqCtx: parentCtx})
+	proc := process.NewTopProcess(parentCtx, mpool.MustNewZero(), nil, nil, nil, nil, nil, nil, nil, nil, nil)
+	defer proc.Free()
+	parent.SetExecCtx(&ExecCtx{reqCtx: parentCtx, proc: proc})
 	parent.SetViews([]string{"parent_view"})
 	parent.SetSnapshot(&planpb.Snapshot{TS: &timestamp.Timestamp{PhysicalTime: 1}})
 	parent.SetQueryingSubscription(&planpb.SubscriptionMeta{SubName: "parent_subscription"})
@@ -35,6 +39,9 @@ func TestViewDescriptionCompilerContextIsIsolated(t *testing.T) {
 	require.NoError(t, err)
 	defer closeChild()
 	child := childValue.(*TxnCompilerContext)
+	require.NotSame(t, proc, child.GetProcess())
+	require.NotSame(t, proc.Base, child.GetProcess().Base)
+	require.Same(t, child, child.GetProcess().GetSessionInfo().CompilerContext)
 	childCtx := context.WithValue(t.Context(), struct{}{}, "child")
 	var wg sync.WaitGroup
 	wg.Add(2)
@@ -57,7 +64,9 @@ func TestViewDescriptionCompilerContextIsIsolated(t *testing.T) {
 		}
 	}()
 	wg.Wait()
+	require.Same(t, childCtx, child.GetProcess().GetTopContext())
 	require.Same(t, parentCtx, parent.GetContext())
+	require.Same(t, parentCtx, proc.GetTopContext())
 	require.Equal(t, []string{"parent_view"}, parent.GetViews())
 	require.Equal(t, int64(1), parent.GetSnapshot().TS.PhysicalTime)
 	require.Equal(t, "parent_subscription", parent.GetQueryingSubscription().SubName)

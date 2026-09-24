@@ -73,6 +73,7 @@ func resolvesUdfInCallerTxn(ctx context.Context) bool {
 type TxnCompilerContext struct {
 	dbName               string
 	buildAlterView       bool
+	viewBinding          bool
 	dbOfView, nameOfView string
 	sub                  *plan.SubscriptionMeta
 	snapshot             *plan2.Snapshot
@@ -97,8 +98,12 @@ func (tcc *TxnCompilerContext) NewViewDescriptionCompilerContext(
 	}
 	execCopy := *tcc.execCtx
 	execCopy.reqCtx = ctx
+	if execCopy.proc != nil {
+		execCopy.proc = execCopy.proc.NewViewBindingProcess(ctx)
+	}
 	child := InitTxnCompilerContext(tcc.dbName)
 	child.buildAlterView, child.dbOfView, child.nameOfView = tcc.buildAlterView, tcc.dbOfView, tcc.nameOfView
+	child.viewBinding = true
 	child.snapshot = plan2.DeepCopySnapshot(tcc.snapshot)
 	if tcc.sub != nil {
 		subCopy := *tcc.sub
@@ -106,7 +111,15 @@ func (tcc *TxnCompilerContext) NewViewDescriptionCompilerContext(
 	}
 	tcc.mu.Unlock()
 	child.SetExecCtx(&execCopy)
-	return child, child.Close, nil
+	if execCopy.proc != nil {
+		execCopy.proc.GetSessionInfo().CompilerContext = child
+	}
+	return child, func() {
+		child.Close()
+		if execCopy.proc != nil {
+			execCopy.proc.Free()
+		}
+	}, nil
 }
 
 func (tcc *TxnCompilerContext) Close() {
@@ -369,6 +382,10 @@ func (tcc *TxnCompilerContext) GetContext() context.Context {
 
 func (tcc *TxnCompilerContext) SetContext(ctx context.Context) {
 	tcc.execCtx.reqCtx = ctx
+	if tcc.viewBinding && tcc.execCtx.proc != nil {
+		tcc.execCtx.proc.ReplaceTopCtx(ctx)
+		tcc.execCtx.proc.Ctx = ctx
+	}
 }
 
 func (tcc *TxnCompilerContext) DatabaseExists(name string, snapshot *plan2.Snapshot) bool {

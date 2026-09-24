@@ -31,6 +31,7 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/sql/parsers/dialect"
 	"github.com/matrixorigin/matrixone/pkg/testutil"
 	"github.com/matrixorigin/matrixone/pkg/util/executor"
+	"github.com/matrixorigin/matrixone/pkg/vm/process"
 
 	mock_frontend "github.com/matrixorigin/matrixone/pkg/frontend/test"
 	"github.com/matrixorigin/matrixone/pkg/sql/plan"
@@ -196,7 +197,10 @@ type recordingSessionCompilerContext struct {
 	resolvedDatabase     string
 	resolvedTable        string
 	resolvedTableDef     *plan.TableDef
+	proc                 *process.Process
 }
+
+func (c *recordingSessionCompilerContext) GetProcess() *process.Process { return c.proc }
 
 func (c *recordingSessionCompilerContext) ResolveSnapshotWithSnapshotName(name string) (*plan.Snapshot, error) {
 	if name != "daily" {
@@ -273,6 +277,120 @@ func TestCompilerContextDelegatesSnapshotAndSubscriptionBinding(t *testing.T) {
 		require.Equal(t, skipMeta, indexRef.NotLockMeta)
 		require.Equal(t, "hidden_index", delegate.resolvedTable)
 	}
+}
+
+type isolatedViewTestDelegate struct {
+	*recordingSessionCompilerContext
+	child *recordingSessionCompilerContext
+	err   error
+}
+
+func (d *isolatedViewTestDelegate) NewViewDescriptionCompilerContext(
+	_ context.Context,
+) (plan.CompilerContext, func(), error) {
+	if d.err != nil {
+		return nil, nil, d.err
+	}
+	return d.child, func() {}, nil
+}
+
+func TestInternalExecutorViewChildDoesNotMutateParent(t *testing.T) {
+	proc := testutil.NewProcess(t)
+	original := proc.GetTopContext()
+	parentSubscription := &plan.SubscriptionMeta{Name: "parent"}
+	delegate := &isolatedViewTestDelegate{
+		recordingSessionCompilerContext: &recordingSessionCompilerContext{
+			MockCompilerContext:  plan.NewMockCompilerContext(false),
+			queryingSubscription: parentSubscription,
+		},
+		child: &recordingSessionCompilerContext{MockCompilerContext: plan.NewMockCompilerContext(false)},
+	}
+	parent := &compilerContext{proc: proc, ctx: attachInternalExecutorCompilerContext(original, delegate)}
+	childContext := context.WithValue(original, struct{}{}, "child")
+	binding, cleanup, err := parent.NewViewDescriptionCompilerContext(childContext)
+	require.NoError(t, err)
+	defer cleanup()
+	child := binding.(*compilerContext)
+	require.NotSame(t, proc, child.GetProcess())
+	require.NotSame(t, proc.Base, child.GetProcess().Base)
+	require.Same(t, child, child.GetProcess().GetSessionInfo().CompilerContext)
+	child.SetContext(context.WithValue(child.GetContext(), struct{}{}, "nested"))
+	childSubscription := &plan.SubscriptionMeta{Name: "publisher"}
+	child.SetQueryingSubscription(childSubscription)
+	require.Same(t, childSubscription, child.GetQueryingSubscription())
+	require.Same(t, childSubscription, delegate.child.GetQueryingSubscription())
+	require.Same(t, parentSubscription, delegate.GetQueryingSubscription())
+	require.Same(t, original, proc.GetTopContext())
+	require.Same(t, child.GetContext(), child.GetProcess().GetTopContext())
+	child.SetQueryingSubscription(nil)
+	require.Same(t, parentSubscription, delegate.GetQueryingSubscription())
+}
+
+func TestInternalExecutorViewChildUsesDelegateProcess(t *testing.T) {
+	proc := testutil.NewProcess(t)
+	original := proc.GetTopContext()
+	separate := proc.NewViewBindingProcess(original)
+	defer separate.Free()
+	delegate := &isolatedViewTestDelegate{
+		recordingSessionCompilerContext: &recordingSessionCompilerContext{MockCompilerContext: plan.NewMockCompilerContext(false)},
+		child: &recordingSessionCompilerContext{
+			MockCompilerContext: plan.NewMockCompilerContext(false), proc: separate,
+		},
+	}
+	parent := &compilerContext{proc: proc, ctx: attachInternalExecutorCompilerContext(original, delegate)}
+	binding, cleanup, err := parent.NewViewDescriptionCompilerContext(original)
+	require.NoError(t, err)
+	defer cleanup()
+	child := binding.(*compilerContext)
+	require.Same(t, separate, child.GetProcess())
+	child.SetContext(context.WithValue(original, struct{}{}, "nested"))
+	require.Same(t, original, proc.GetTopContext())
+	require.Same(t, child.GetContext(), separate.GetTopContext())
+}
+
+func TestInternalExecutorViewChildPropagatesDelegateFailure(t *testing.T) {
+	proc := testutil.NewProcess(t)
+	original := proc.GetTopContext()
+	delegate := &isolatedViewTestDelegate{
+		recordingSessionCompilerContext: &recordingSessionCompilerContext{MockCompilerContext: plan.NewMockCompilerContext(false)},
+		err:                             errors.New("cannot create child"),
+	}
+	parent := &compilerContext{proc: proc, ctx: attachInternalExecutorCompilerContext(original, delegate)}
+	binding, cleanup, err := parent.NewViewDescriptionCompilerContext(original)
+	require.ErrorContains(t, err, "cannot create child")
+	require.Nil(t, binding)
+	require.Nil(t, cleanup)
+	require.Same(t, original, proc.GetTopContext())
+}
+
+func TestInternalExecutorViewChildRejectsUnisolatedDelegate(t *testing.T) {
+	proc := testutil.NewProcess(t)
+	original := proc.GetTopContext()
+	delegate := &recordingSessionCompilerContext{MockCompilerContext: plan.NewMockCompilerContext(false)}
+	parent := &compilerContext{proc: proc, ctx: attachInternalExecutorCompilerContext(original, delegate)}
+	binding, cleanup, err := parent.NewViewDescriptionCompilerContext(original)
+	require.ErrorContains(t, err, "cannot isolate view binding")
+	require.Nil(t, binding)
+	require.Nil(t, cleanup)
+	require.Same(t, original, proc.GetTopContext())
+}
+
+func TestInternalExecutorViewChildWithoutDelegateIsIsolated(t *testing.T) {
+	proc := testutil.NewProcess(t)
+	original := proc.GetTopContext()
+	parent := &compilerContext{proc: proc, ctx: original}
+	binding, cleanup, err := parent.NewViewDescriptionCompilerContext(original)
+	require.NoError(t, err)
+	defer cleanup()
+	child := binding.(*compilerContext)
+	require.NotSame(t, proc.Base, child.GetProcess().Base)
+	child.SetContext(context.WithValue(original, struct{}{}, "child"))
+	child.SetQueryingSubscription(&plan.SubscriptionMeta{Name: "publisher"})
+	require.Equal(t, "publisher", child.GetQueryingSubscription().Name)
+	require.Same(t, child.GetContext(), child.GetProcess().GetTopContext())
+	require.Same(t, child.GetContext(), child.GetProcess().Ctx)
+	require.Same(t, original, proc.GetTopContext())
+	require.Nil(t, parent.GetQueryingSubscription())
 }
 
 func TestCompilerContext_Database(t *testing.T) {

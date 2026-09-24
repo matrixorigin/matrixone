@@ -289,8 +289,19 @@ func TestInitInformationSchemaSysTablesForProtocol(t *testing.T) {
 	}
 
 	latest := InitInformationSchemaSysTablesForProtocol(defines.MORPCVersion58)
-	assert.Equal(t, InitInformationSchemaSysTables, latest)
+	assert.Len(t, latest, len(InitInformationSchemaSysTables))
+	for _, ddl := range latest {
+		assertInformationSchemaInitSQLParses(t, ddl)
+	}
+	assert.Contains(t, latest, InformationSchemaColumnsV58DDL())
+	assert.NotContains(t, strings.Join(latest, "\n"), "mo_subscription_view_columns")
 	assert.Contains(t, strings.Join(latest, "\n"), "WHEN 3 then 'utf8mb4'")
+	for _, protocol := range []int64{defines.MORPCVersion58 + 1, defines.MORPCVersion94 - 1} {
+		assert.Contains(t, InitInformationSchemaSysTablesForProtocol(protocol), InformationSchemaColumnsV58DDL())
+		assert.NotContains(t, strings.Join(InitInformationSchemaSysTablesForProtocol(protocol), "\n"),
+			"mo_subscription_view_columns")
+	}
+	assert.Contains(t, InitInformationSchemaSysTablesForProtocol(defines.MORPCVersion94), InformationSchemaColumnsDDL)
 }
 
 func assertInformationSchemaInitSQLParses(t *testing.T, sql string) {
@@ -323,6 +334,9 @@ func TestHistoricalColumnsUpgradeDefinition(t *testing.T) {
 		"WHEN 0 then 'utf8_bin' WHEN 1 then 'utf8_bin' WHEN 2 then 'binary' else NULL end) AS COLLATION_NAME")
 	assert.NotContains(t, InformationSchemaColumnsV46UpgradeDDL, "WHEN 3 then")
 	assert.NotEqual(t, InformationSchemaColumnsDDL, InformationSchemaColumnsV46UpgradeDDL)
+	assert.NotContains(t, InformationSchemaColumnsV46UpgradeDDL, "mo_subscription_view_columns")
+	assert.NotContains(t, InformationSchemaColumnsV46DDL, "mo_subscription_view_columns")
+	assert.NotContains(t, InformationSchemaColumnsV58DDL(), "mo_subscription_view_columns")
 	// Mixed-cluster initialization remains distinct from replaying historical DDL.
 	assert.Contains(t, InformationSchemaColumnsV46DDL, "WHEN 3 then 'utf8'")
 	assert.Contains(t, InformationSchemaColumnsV46DDL, "WHEN 3 then 'utf8_bin'")

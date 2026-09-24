@@ -277,7 +277,8 @@ func TestUpgradeEntries(t *testing.T) {
 	columnsBinaryStrings := tenantUpgEntries[len(tenantUpgEntries)-2]
 	require.Equal(t, "COLUMNS", columnsBinaryStrings.TableName)
 	require.Equal(t, versions.MODIFY_VIEW, columnsBinaryStrings.UpgType)
-	require.Equal(t, sysview.InformationSchemaColumnsDDL, columnsBinaryStrings.UpgSql)
+	require.Equal(t, sysview.InformationSchemaColumnsV58DDL(), columnsBinaryStrings.UpgSql)
+	require.NotContains(t, columnsBinaryStrings.UpgSql, "mo_subscription_view_columns")
 	require.Equal(t, int64(defines.MORPCVersion58), columnsBinaryStrings.RequiredProtocolVersion)
 	characterSetsUTF8Maxlen := tenantUpgEntries[len(tenantUpgEntries)-1]
 	require.Equal(t, "CHARACTER_SETS", characterSetsUTF8Maxlen.TableName)

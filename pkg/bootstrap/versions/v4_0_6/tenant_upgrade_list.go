@@ -393,8 +393,8 @@ func upgradeInformationSchemaColumnsBinaryStrings() versions.UpgradeEntry {
 		TableName:               "COLUMNS",
 		UpgType:                 versions.MODIFY_VIEW,
 		PreSql:                  "DROP VIEW IF EXISTS information_schema.COLUMNS;",
-		UpgSql:                  sysview.InformationSchemaColumnsDDL,
-		CheckFunc:               checkViewDefinition("COLUMNS", sysview.InformationSchemaColumnsDDL),
+		UpgSql:                  sysview.InformationSchemaColumnsV58DDL(),
+		CheckFunc:               checkViewDefinition("COLUMNS", sysview.InformationSchemaColumnsV58DDL()),
 		RequiredProtocolVersion: defines.MORPCVersion58,
 	}
 }
