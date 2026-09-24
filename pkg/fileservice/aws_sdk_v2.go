@@ -720,6 +720,9 @@ func (a *AwsSDKv2) WriteMultipartParallel(
 				<-getParallelUploadSemaphore()
 				<-uploadSlots
 			}()
+			if options.beforePartUpload != nil {
+				options.beforePartUpload()
+			}
 			if ctxErr := ctx.Err(); ctxErr != nil {
 				setErr(ctxErr)
 				releasePartBuffer(job.part)

@@ -1183,6 +1183,47 @@ func TestCOSMultipartInitDoesNotRequireListPermission(t *testing.T) {
 	require.Equal(t, int32(1), state.initCalls.Load())
 }
 
+func TestAwsMultipartWorkerCancellationAborts(t *testing.T) {
+	server, state := newMockAWSServer(t, 0)
+	defer server.Close()
+	state.uploadID = "aws-worker-canceled"
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+	sdk := newTestAWSClient(t, server)
+
+	data := bytes.Repeat([]byte("r"), int(minMultipartPartSize+1))
+	size := int64(len(data))
+	err := sdk.WriteMultipartParallel(ctx, "object", bytes.NewReader(data), &size, &ParallelMultipartOption{
+		beforePartUpload: cancel,
+	})
+	require.ErrorIs(t, err, context.Canceled)
+	require.True(t, state.aborted.Load())
+	state.mu.Lock()
+	defer state.mu.Unlock()
+	require.Empty(t, state.completeBody)
+	require.Empty(t, state.parts)
+}
+
+func TestCOSMultipartWorkerCancellationAborts(t *testing.T) {
+	server, state := newMockCOSServer(t, 0)
+	defer server.Close()
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+	sdk := newTestCOSClient(t, server)
+
+	data := bytes.Repeat([]byte("r"), int(minMultipartPartSize+1))
+	size := int64(len(data))
+	err := sdk.WriteMultipartParallel(ctx, "object", bytes.NewReader(data), &size, &ParallelMultipartOption{
+		beforePartUpload: cancel,
+	})
+	require.ErrorIs(t, err, context.Canceled)
+	require.True(t, state.aborted.Load())
+	require.False(t, state.completed.Load())
+	state.mu.Lock()
+	defer state.mu.Unlock()
+	require.Empty(t, state.parts)
+}
+
 func TestAwsMultipartInitCancellationCleansOwnedUpload(t *testing.T) {
 	server, state := newMockAWSServer(t, 0)
 	defer server.Close()

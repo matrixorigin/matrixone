@@ -659,6 +659,9 @@ func (a *QCloudSDK) WriteMultipartParallel(
 				<-getParallelUploadSemaphore()
 				<-uploadSlots
 			}()
+			if options.beforePartUpload != nil {
+				options.beforePartUpload()
+			}
 			if ctxErr := ctx.Err(); ctxErr != nil {
 				setErr(ctxErr)
 				releasePartBuffer(job.part)
