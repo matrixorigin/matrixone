@@ -80,6 +80,12 @@ func (r *TableMetaReader) GetTxnInfo() string {
 }
 
 func (r *TableMetaReader) Close() error {
+	return r.CloseWithCleanup(r.ctx)
+}
+
+// CloseWithCleanup uses the current cleanup attempt's context. A retained
+// reader may outlive the request that created it.
+func (r *TableMetaReader) CloseWithCleanup(ctx context.Context) error {
 	var cleanupErrs []error
 	for _, writer := range []*colexec.CNS3Writer{
 		r.pendingDataWriter,
@@ -88,7 +94,7 @@ func (r *TableMetaReader) Close() error {
 		if writer == nil {
 			continue
 		}
-		if err := writer.CloseWithCleanup(r.ctx, true); err != nil {
+		if err := writer.CloseWithCleanup(ctx, true); err != nil {
 			cleanupErrs = append(cleanupErrs, err)
 		}
 	}
