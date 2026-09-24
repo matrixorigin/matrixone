@@ -3228,6 +3228,14 @@ func (txn *Transaction) Rollback(ctx context.Context) error {
 	txn.beginCatalogMutation()
 	defer txn.endCatalogMutation()
 	unpublishedCleanupErr := txn.CleanupUnpublishedS3Objects(ctx)
+	if unpublishedCleanupErr != nil {
+		// The workspace is retired below even when rollback reports an error.
+		// Transfer its remaining cleanup obligation to the CN before that point.
+		queueErr := colexec.MustGetServer(txn.engine.service).RetryUnpublishedS3Cleanup(
+			txn.CleanupUnpublishedS3Objects,
+		)
+		unpublishedCleanupErr = errors.Join(unpublishedCleanupErr, queueErr)
+	}
 	if !txn.ReadOnly() && len(txn.writes) > 0 {
 		logutil.Info(
 			"Transaction.Rollback",

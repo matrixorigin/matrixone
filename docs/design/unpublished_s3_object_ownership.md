@@ -42,7 +42,8 @@ Required invariants:
 5. Failed deletion retains the exact writer/name owner for a later in-process
    retry and returns a cleanup error; it is not interpreted as success. A
    remote mirror whose handler has exited transfers that retry obligation to
-   its CN server before the stream is removed.
+   its CN server before the stream is removed. A local transaction does the
+   same before terminal rollback retires its workspace.
 
 ## Ownership transitions
 
@@ -73,6 +74,12 @@ retries failed callbacks after the stream has exited; a successful callback
 releases the reference. The server joins the worker and makes a final bounded
 attempt before CN I/O dependencies close. Persistent failure remains visible
 as a CN-close error, not a silently successful cleanup.
+
+Terminal local rollback transfers a failed unpublished cleanup callback to
+that CN worker before `delTransaction`, because frontend rollback invalidates
+the transaction handle even when cleanup reports an error. A clone reader's
+retained callback uses the current retry-attempt context rather than the
+expired request context captured when the reader was created.
 
 ## Remote receipt protocol and ordering
 
@@ -108,9 +115,10 @@ ACK processing adds constant state, no receipt map, blocked ACK goroutines, or
 new wait barrier. Object-name ownership is **not** bounded by that credit
 window: it grows with the unpublished objects in a transaction and is released
 by registration or cleanup. S3 deletion outages can prolong writer retention.
-The CN retry queue holds one callback per failed stream and may retain its
-mirror workspace until deletion succeeds. Its memory therefore grows with
-concurrent failed cleanups during a storage outage; this is an explicit limit
+The CN retry queue holds one callback per failed stream or local rollback and
+may retain its mirror workspace or retired local transaction until deletion
+succeeds. Its memory therefore grows with concurrent failed cleanups during a
+storage outage; this is an explicit limit
 of the in-memory repair, not a fixed-capacity queue that could drop ownership.
 The single retry worker bounds retry concurrency.
 
@@ -160,6 +168,8 @@ passing them does not prove every mixed-version/cancel combination.
 
 Design review must explicitly decide whether the mixed-version fail-closed
 behavior and in-memory-only deletion retry are acceptable for this bug fix,
-and verify that no terminal path accepts ownership without all receipts.
+whether an unbounded outage backlog requires a separate durable-recovery or
+backpressure design before rollout, and verify that no terminal path accepts
+ownership without all receipts.
 Until an independent review links an exact document revision with a decision,
 the design gate identified in PR review remains open.

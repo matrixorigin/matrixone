@@ -64,7 +64,10 @@ func closeReaders(
 	for name, reader := range readers {
 		if err := reader.Close(); err != nil {
 			logutil.Warn("failed to close table clone reader", zap.String("reader", name), zap.Error(err))
-			if retainFailedCleanup && colexec.RetainUnpublishedS3Cleanup(proc, func(context.Context) error {
+			if retainFailedCleanup && colexec.RetainUnpublishedS3Cleanup(proc, func(ctx context.Context) error {
+				if retryable, ok := reader.(interface{ CloseWithCleanup(context.Context) error }); ok {
+					return retryable.CloseWithCleanup(ctx)
+				}
 				return reader.Close()
 			}) {
 				continue

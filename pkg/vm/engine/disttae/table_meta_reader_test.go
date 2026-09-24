@@ -134,6 +134,24 @@ func TestTableMetaReaderRetainsCloneObjectOwnershipUntilAccepted(t *testing.T) {
 	}
 }
 
+func TestTableMetaReaderCleanupUsesFreshAttemptContext(t *testing.T) {
+	proc := testutil.NewProc(t)
+	defer proc.Free()
+	baseFS, err := colexec.GetSharedFSFromProc(proc)
+	require.NoError(t, err)
+	writer, name := newCloneTombstoneObjectForTest(t, proc, baseFS)
+	expiredCtx, cancel := context.WithDeadline(context.Background(), time.Now().Add(-time.Second))
+	defer cancel()
+	reader := &TableMetaReader{ctx: expiredCtx, pendingTombstoneWriter: writer}
+
+	require.Error(t, reader.Close(), "the original request deadline prevents cleanup")
+	_, err = baseFS.StatFile(context.Background(), name)
+	require.NoError(t, err)
+	require.NoError(t, reader.CloseWithCleanup(context.Background()))
+	_, err = baseFS.StatFile(context.Background(), name)
+	require.True(t, moerr.IsMoErrCode(err, moerr.ErrFileNotFound))
+}
+
 type failOnceCloneDeleteFS struct {
 	fileservice.FileService
 	failErr error
