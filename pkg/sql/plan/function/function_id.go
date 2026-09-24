@@ -848,12 +848,13 @@ const (
 	JSON_STORAGE_SIZE = 579
 	JSON_STORAGE_FREE = 580
 
-	EXTRACTVALUE = 581
-	UPDATEXML    = 582
+	EXTRACTVALUE          = 581
+	UPDATEXML             = 582
+	STATEMENT_DIGEST_TEXT = 583
 
 	// FUNCTION_END_NUMBER is not a function, just a flag to record the max number of function.
 	// TODO: every one should put the new function id in front of this one if you want to make a new function.
-	FUNCTION_END_NUMBER = 583
+	FUNCTION_END_NUMBER = 584
 )
 
 // functionIdRegister is what function we have registered already.
@@ -1201,6 +1202,7 @@ var functionIdRegister = map[string]int32{
 	"hex":                            HEX,
 	"unhex":                          UNHEX,
 	"md5":                            MD5,
+	"statement_digest_text":          STATEMENT_DIGEST_TEXT,
 	"to_base64":                      TO_BASE64,
 	"from_base64":                    FROM_BASE64,
 	"vecf32_from_base64":             VECF32_FROM_BASE64,
@@ -1443,20 +1445,19 @@ var functionIdRegister = map[string]int32{
 	"lcase":                          LOWER,
 	"sha1":                           SHA1,
 	"sha":                            SHA1,
-
-	"summation":         SUMMATION,
-	"l1_norm":           L1_NORM,
-	"l2_norm":           L2_NORM,
-	"inner_product":     INNER_PRODUCT,
-	"cosine_similarity": COSINE_SIMILARITY,
-	"vector_dims":       VECTOR_DIMS,
-	"normalize_l2":      NORMALIZE_L2,
-	"l1_distance":       L1_DISTANCE,
-	"l2_distance":       L2_DISTANCE,
-	"l2_distance_xc":    L2_DISTANCE_XC,
-	"l2_distance_sq":    L2_DISTANCE_SQ,
-	"l2_distance_sq_xc": L2_DISTANCE_SQ_XC,
-	"cosine_distance":   COSINE_DISTANCE,
+	"summation":                      SUMMATION,
+	"l1_norm":                        L1_NORM,
+	"l2_norm":                        L2_NORM,
+	"inner_product":                  INNER_PRODUCT,
+	"cosine_similarity":              COSINE_SIMILARITY,
+	"vector_dims":                    VECTOR_DIMS,
+	"normalize_l2":                   NORMALIZE_L2,
+	"l1_distance":                    L1_DISTANCE,
+	"l2_distance":                    L2_DISTANCE,
+	"l2_distance_xc":                 L2_DISTANCE_XC,
+	"l2_distance_sq":                 L2_DISTANCE_SQ,
+	"l2_distance_sq_xc":              L2_DISTANCE_SQ_XC,
+	"cosine_distance":                COSINE_DISTANCE,
 
 	"python_user_defined_function": PYTHON_UDF,
 
