@@ -44,8 +44,8 @@ func init() {
 	moruntime.RegisterVectorIndexCacheKeyCounter(func(key string) int64 {
 		return Cache.CountKey(key)
 	})
-	moruntime.RegisterVectorIndexCacheEvictor(func(key string) int64 {
-		return Cache.EvictKey(key)
+	moruntime.RegisterVectorIndexCacheEvictor(func(ctx context.Context, key string) int64 {
+		return Cache.EvictKey(ctx, key)
 	})
 	moruntime.RegisterVectorIndexCacheKeyLister(func() []string {
 		return Cache.Keys()
@@ -840,9 +840,12 @@ func (c *VectorIndexCache) CountKey(key string) int64 {
 // the exact key -- not other versions or named-snapshot generations -- so the caller controls
 // precisely what is dropped. Backs the EvictVectorIndexCache mo_ctl. key=="" is a no-op returning 0
 // (refuse to flush the whole cache by accident).
-func (c *VectorIndexCache) EvictKey(key string) int64 {
+func (c *VectorIndexCache) EvictKey(ctx context.Context, key string) int64 {
 	if key == "" {
 		return 0
+	}
+	if ctx == nil {
+		ctx = context.Background()
 	}
 	// Capture the current occupant first: if we lose the claim to a concurrent evictor we can wait
 	// on THAT entry's teardown rather than returning before it finishes.
@@ -866,9 +869,19 @@ func (c *VectorIndexCache) EvictKey(key string) int64 {
 	// prior generation is still alive. Both waits are bounded: whoever removes an entry always follows
 	// with Destroy, which closes both signals; our own eviction, if any, already cleared its channel
 	// via finishEviction before evictEntry returned, so this never self-waits.
+	//
+	// ctx bounds these FOLLOWER waits only. The teardown this call may own already ran to
+	// completion inside evictEntry above (which never takes a context), so cancelling here never
+	// interrupts our own cleanup: if we owned the occupant's teardown its `destroyed` is already
+	// closed and awaitDestroyed returns immediately regardless of ctx; if a concurrent evictor owns
+	// it, ctx cancellation lets us abandon the wait while that owner's cleanup completes on its own.
+	// The removed count is fixed before any cancellable wait, so an early return still reports what
+	// THIS call actually removed.
 	if hadOccupant {
 		if algo, ok := occupant.(*VectorIndexSearch); ok {
-			_ = algo.awaitDestroyed(context.Background())
+			if err := algo.awaitDestroyed(ctx); err != nil {
+				return removed
+			}
 		}
 	}
 	// Wait on EVERY in-flight eviction of this cache key, not just one: several generations of the
@@ -885,7 +898,11 @@ func (c *VectorIndexCache) EvictKey(key string) int64 {
 		return true
 	})
 	for _, ch := range pending {
-		<-ch
+		select {
+		case <-ch:
+		case <-ctx.Done():
+			return removed
+		}
 	}
 	return removed
 }

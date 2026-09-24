@@ -15,11 +15,14 @@
 package runtime
 
 import (
+	"context"
 	"testing"
 	"time"
 
 	"github.com/stretchr/testify/require"
 )
+
+type gotEvictKeyProbe struct{}
 
 func TestVectorIndexHooks(t *testing.T) {
 	oldSetter, oldCounter, oldEvictor, oldLister := vectorIndexStaleCheckIntervalSetter, vectorIndexCacheKeyCounter, vectorIndexCacheEvictor, vectorIndexCacheKeyLister
@@ -36,7 +39,7 @@ func TestVectorIndexHooks(t *testing.T) {
 	n, ok := VectorIndexCacheCountKey("k")
 	require.False(t, ok)
 	require.Zero(t, n)
-	n, ok = EvictVectorIndexCache("k")
+	n, ok = EvictVectorIndexCache(context.Background(), "k")
 	require.False(t, ok)
 	require.Zero(t, n)
 	keys, ok := VectorIndexCacheKeys()
@@ -46,9 +49,10 @@ func TestVectorIndexHooks(t *testing.T) {
 	// Registered: wrappers dispatch to the registered funcs.
 	var gotDur time.Duration
 	var gotCountKey, gotEvictKey string
+	var gotEvictCtx context.Context
 	RegisterVectorIndexStaleCheckIntervalSetter(func(d time.Duration) { gotDur = d })
 	RegisterVectorIndexCacheKeyCounter(func(key string) int64 { gotCountKey = key; return 7 })
-	RegisterVectorIndexCacheEvictor(func(key string) int64 { gotEvictKey = key; return 3 })
+	RegisterVectorIndexCacheEvictor(func(ctx context.Context, key string) int64 { gotEvictCtx, gotEvictKey = ctx, key; return 3 })
 	RegisterVectorIndexCacheKeyLister(func() []string { return []string{"a", "b"} })
 
 	SetVectorIndexStaleCheckInterval(2 * time.Second)
@@ -59,10 +63,12 @@ func TestVectorIndexHooks(t *testing.T) {
 	require.Equal(t, int64(7), n)
 	require.Equal(t, "idx", gotCountKey)
 
-	n, ok = EvictVectorIndexCache("idx")
+	evictCtx := context.WithValue(context.Background(), gotEvictKeyProbe{}, "probe")
+	n, ok = EvictVectorIndexCache(evictCtx, "idx")
 	require.True(t, ok)
 	require.Equal(t, int64(3), n)
 	require.Equal(t, "idx", gotEvictKey)
+	require.Equal(t, "probe", gotEvictCtx.Value(gotEvictKeyProbe{}), "the caller's context is propagated to the evictor")
 
 	keys, ok = VectorIndexCacheKeys()
 	require.True(t, ok)

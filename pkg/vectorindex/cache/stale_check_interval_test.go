@@ -15,6 +15,7 @@
 package cache
 
 import (
+	"context"
 	"runtime"
 	"sync"
 	"sync/atomic"
@@ -266,19 +267,19 @@ func TestCountKey(t *testing.T) {
 func TestEvictKey(t *testing.T) {
 	c := NewVectorIndexCache()
 	require.False(t, c.started.Load(), "EvictKey must work before serve() is lazily started")
-	require.Equal(t, int64(0), c.EvictKey("idx"), "evicting an absent key removes nothing")
+	require.Equal(t, int64(0), c.EvictKey(context.Background(), "idx"), "evicting an absent key removes nothing")
 
 	e := newVectorIndexSearch(&countingSearch{})
 	e.Status.Store(STATUS_LOADED)
 	c.IndexMap.Store("idx", e)
-	require.Equal(t, int64(1), c.EvictKey("idx"), "evicts the cached entry and reports 1")
+	require.Equal(t, int64(1), c.EvictKey(context.Background(), "idx"), "evicts the cached entry and reports 1")
 	require.Equal(t, int64(0), c.CountKey("idx"), "entry is gone after evict")
 
 	// Empty key must not flush everything.
 	other := newVectorIndexSearch(&countingSearch{})
 	other.Status.Store(STATUS_LOADED)
 	c.IndexMap.Store("keep", other)
-	require.Equal(t, int64(0), c.EvictKey(""), "empty key is a no-op")
+	require.Equal(t, int64(0), c.EvictKey(context.Background(), ""), "empty key is a no-op")
 	require.Equal(t, int64(1), c.CountKey("keep"), "empty-key evict must not drop other entries")
 
 	// ivf family: only the EXACT "<index-table>:<version>" key evicts; the bare table name is a
@@ -286,9 +287,9 @@ func TestEvictKey(t *testing.T) {
 	ivf := newVectorIndexSearch(&countingSearch{})
 	ivf.Status.Store(STATUS_LOADED)
 	c.IndexMap.Store("tbl:7", ivf)
-	require.Equal(t, int64(0), c.EvictKey("tbl"), "bare table name must not evict an ivf :version key")
+	require.Equal(t, int64(0), c.EvictKey(context.Background(), "tbl"), "bare table name must not evict an ivf :version key")
 	require.Equal(t, int64(1), c.CountKey("tbl:7"), "the ivf entry survives a bare-name evict")
-	require.Equal(t, int64(1), c.EvictKey("tbl:7"), "exact ivf key evicts")
+	require.Equal(t, int64(1), c.EvictKey(context.Background(), "tbl:7"), "exact ivf key evicts")
 	require.Equal(t, int64(0), c.CountKey("tbl:7"), "entry is gone after exact evict")
 }
 
@@ -312,7 +313,7 @@ func TestEvictKeyConcurrentReportsSingleOwner(t *testing.T) {
 		go func() {
 			defer wg.Done()
 			start.Wait()
-			total.Add(c.EvictKey("idx"))
+			total.Add(c.EvictKey(context.Background(), "idx"))
 		}()
 	}
 	start.Done()

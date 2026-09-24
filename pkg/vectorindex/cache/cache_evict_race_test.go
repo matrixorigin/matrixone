@@ -15,6 +15,7 @@
 package cache
 
 import (
+	"context"
 	"testing"
 	"time"
 
@@ -50,12 +51,12 @@ func TestEvictKeyWaitsForInFlightEviction(t *testing.T) {
 
 	// A wins the eviction and blocks inside Destroy.
 	aReturned := make(chan int64, 1)
-	go func() { aReturned <- c.EvictKey(key) }()
+	go func() { aReturned <- c.EvictKey(context.Background(), key) }()
 	<-mock.started // A has removed the entry and is now inside Destroy (in-flight).
 
 	// B loses the claim (entry gone) and must block until A's teardown completes.
 	bReturned := make(chan int64, 1)
-	go func() { bReturned <- c.EvictKey(key) }()
+	go func() { bReturned <- c.EvictKey(context.Background(), key) }()
 
 	// B must NOT report completion while A's Destroy is still running.
 	select {
@@ -113,7 +114,7 @@ func TestEvictKeyWaitsForOlderGenerationUnderSameKey(t *testing.T) {
 	genA := &blockingDestroySearch{started: make(chan struct{}), release: make(chan struct{})}
 	c.IndexMap.Store(key, newVectorIndexSearch(genA))
 	aReturned := make(chan int64, 1)
-	go func() { aReturned <- c.EvictKey(key) }()
+	go func() { aReturned <- c.EvictKey(context.Background(), key) }()
 	<-genA.started
 
 	// Generation B: a reload lands under the SAME key, is evicted, and parks too (done_B in-flight
@@ -121,7 +122,7 @@ func TestEvictKeyWaitsForOlderGenerationUnderSameKey(t *testing.T) {
 	genB := &blockingDestroySearch{started: make(chan struct{}), release: make(chan struct{})}
 	c.IndexMap.Store(key, newVectorIndexSearch(genB))
 	bReturned := make(chan int64, 1)
-	go func() { bReturned <- c.EvictKey(key) }()
+	go func() { bReturned <- c.EvictKey(context.Background(), key) }()
 	<-genB.started
 
 	// B's own generation finishes tearing down first. This must NOT clear A's in-flight signal, and --
@@ -132,7 +133,7 @@ func TestEvictKeyWaitsForOlderGenerationUnderSameKey(t *testing.T) {
 
 	// A third EvictKey finds no map entry, but A is still tearing down: it too MUST wait, not report 0.
 	cReturned := make(chan int64, 1)
-	go func() { cReturned <- c.EvictKey(key) }()
+	go func() { cReturned <- c.EvictKey(context.Background(), key) }()
 
 	// Neither the success-path call (B, removed 1) nor the no-occupant call (C, removed 0) may return
 	// while generation A is still tearing down under the same key.
@@ -185,7 +186,7 @@ func TestEvictKeyWaitsForBlockedFailedLoadCleanup(t *testing.T) {
 	// EvictKey finds no occupant and no map entry, but the failed-load teardown is in flight; it
 	// must block on it, not report a premature completion.
 	evictDone := make(chan int64, 1)
-	go func() { evictDone <- c.EvictKey(key) }()
+	go func() { evictDone <- c.EvictKey(context.Background(), key) }()
 	select {
 	case <-evictDone:
 		t.Fatal("EvictKey returned before the blocked failed-load cleanup finished (barrier bypassed, #28985)")
@@ -207,4 +208,62 @@ func TestEvictKeyWaitsForBlockedFailedLoadCleanup(t *testing.T) {
 
 	require.Zero(t, c.CountKey(key))
 	require.False(t, c.hasInFlightEviction(key), "the in-flight failed-load registration must be cleared")
+}
+
+// TestEvictKeyFollowerCancelReturnsPromptly proves the Rev-2 cancellation contract (#28985): a
+// FOLLOWER EvictKey parked behind another teardown honors its caller's context. Evictor A wins the
+// key and parks inside Destroy (entry removed, teardown in flight). Follower B finds the entry gone
+// and waits on A's in-flight completion channel; cancelling B's context must let B return PROMPTLY
+// without waiting for A, and WITHOUT disturbing A -- A's cleanup completes on its own afterward.
+// Before the fix EvictKey drained the pending channels with an unconditional receive, so B could not
+// honor its deadline and the server handler stayed blocked until A finished.
+func TestEvictKeyFollowerCancelReturnsPromptly(t *testing.T) {
+	c := NewVectorIndexCache()
+	t.Cleanup(func() { c.Destroy() })
+
+	const key = "victim"
+	mock := &blockingDestroySearch{started: make(chan struct{}), release: make(chan struct{})}
+	c.IndexMap.Store(key, newVectorIndexSearch(mock))
+
+	// A wins the eviction and blocks inside Destroy (entry removed, done_A registered in-flight).
+	aReturned := make(chan int64, 1)
+	go func() { aReturned <- c.EvictKey(context.Background(), key) }()
+	<-mock.started
+
+	// B is a follower: the map entry is gone, so it waits on A's in-flight channel. Its context is
+	// cancellable.
+	ctx, cancel := context.WithCancel(context.Background())
+	bReturned := make(chan int64, 1)
+	go func() { bReturned <- c.EvictKey(ctx, key) }()
+
+	// B is blocked behind A (A is still parked in Destroy).
+	select {
+	case <-bReturned:
+		t.Fatal("follower returned before its context was cancelled -- it was not actually waiting")
+	case <-time.After(200 * time.Millisecond):
+		// correctly blocked on A's in-flight teardown
+	}
+
+	// Cancel B; it must return promptly even though A is still tearing down.
+	cancel()
+	select {
+	case got := <-bReturned:
+		require.Equal(t, int64(0), got, "cancelled follower removed nothing")
+	case <-time.After(5 * time.Second):
+		t.Fatal("cancelled follower did not return -- the follower wait is not cancellable")
+	}
+
+	// B's cancellation must NOT have interrupted the cleanup owner: A is still parked, not returned.
+	select {
+	case <-aReturned:
+		t.Fatal("owner's teardown returned though it was still blocked -- cancellation interrupted the cleanup owner")
+	case <-time.After(100 * time.Millisecond):
+		// A correctly still owns and is completing its own teardown
+	}
+
+	// Release A; its teardown completes and the key is fully gone.
+	close(mock.release)
+	require.Equal(t, int64(1), <-aReturned, "owner performed the eviction")
+	require.Zero(t, c.CountKey(key))
+	require.False(t, c.hasInFlightEviction(key), "the in-flight eviction registry entry must be cleared")
 }

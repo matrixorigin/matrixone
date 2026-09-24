@@ -80,7 +80,7 @@ func (s *queryService) handleGetVectorIndexCacheInfo() func(ctx context.Context,
 // reports how many were dropped (mo_ctl EvictVectorIndexCache).
 func (s *queryService) handleEvictVectorIndexCache() func(ctx context.Context, req *query.Request, resp *query.Response, _ *morpc.Buffer) error {
 	return func(ctx context.Context, req *query.Request, resp *query.Response, _ *morpc.Buffer) error {
-		n, _ := runtime.EvictVectorIndexCache(req.EvictVectorIndexCache.Key)
+		n, _ := runtime.EvictVectorIndexCache(ctx, req.EvictVectorIndexCache.Key)
 		resp.EvictVectorIndexCache = query.EvictVectorIndexCacheResponse{Evicted: n}
 		return nil
 	}
