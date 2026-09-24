@@ -462,11 +462,17 @@ func (h *ParquetHandler) prepare(param *ExternalParam) error {
 			continue
 		}
 		h.hasPhysicalCol = true
-		projectedColumns = append(projectedColumns, col)
+		// The row reader is only needed for nested columns.  Keeping scalar
+		// siblings out of the projected row group lets them stay on the
+		// vectorized page mapper when a LIST column is present.
+		if !col.Leaf() {
+			projectedColumns = append(projectedColumns, col)
+		}
 
 		physicalCol := col
 		var fn *columnMapper
 		if !col.Leaf() {
+			h.nestedColIndices = append(h.nestedColIndices, colIdx)
 			targetType := types.T(def.Typ.Id)
 			switch targetType {
 			case types.T_array_float32, types.T_array_float64,
@@ -529,16 +535,18 @@ func (h *ParquetHandler) prepare(param *ExternalParam) error {
 			return err
 		}
 		h.rowReader = projectedRowGroup.Rows()
-	} else {
-		for colIdx, col := range h.cols {
-			if col != nil && col.Leaf() {
-				h.pages[colIdx] = rowGroupChunks[col.Index()].Pages()
-				h.dataColIndices = append(h.dataColIndices, colIdx)
-				sourceKind := col.Type().Kind()
-				if types.T(param.Cols[colIdx].Typ.Id).ToType().IsVarlen() ||
-					sourceKind == parquet.ByteArray || sourceKind == parquet.FixedLenByteArray {
-					h.budgetColIndices = append(h.budgetColIndices, colIdx)
-				}
+	}
+	// Scalar leaf columns always use the page path, including when a nested
+	// column requires the row reader.  The hybrid path combines both readers
+	// at the same logical row offset.
+	for colIdx, col := range h.cols {
+		if col != nil && col.Leaf() {
+			h.pages[colIdx] = rowGroupChunks[col.Index()].Pages()
+			h.dataColIndices = append(h.dataColIndices, colIdx)
+			sourceKind := col.Type().Kind()
+			if types.T(param.Cols[colIdx].Typ.Id).ToType().IsVarlen() ||
+				sourceKind == parquet.ByteArray || sourceKind == parquet.FixedLenByteArray {
+				h.budgetColIndices = append(h.budgetColIndices, colIdx)
 			}
 		}
 	}
@@ -4604,7 +4612,11 @@ func (h *ParquetHandler) getData(bat *batch.Batch, param *ExternalParam, proc *p
 	if h.rowCountOnly {
 		err = h.getDataRowCountOnly(bat, param)
 	} else if h.hasNestedCols {
-		err = h.getDataByRow(bat, param, proc)
+		if len(h.dataColIndices) == 0 {
+			err = h.getDataByRow(bat, param, proc)
+		} else {
+			err = h.getDataByRowAndPage(bat, param, proc)
+		}
 	} else {
 		err = h.getDataByPage(bat, param, proc)
 	}

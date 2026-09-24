@@ -17,7 +17,6 @@ package brute_force
 import (
 	"context"
 	"fmt"
-	"math"
 	"runtime"
 
 	"github.com/matrixorigin/matrixone/pkg/common/concurrent"
@@ -72,18 +71,17 @@ func GetUsearchQuantizationFromType(v any) (usearch.Quantization, error) {
 
 // NewCpuBruteForceIndex builds a pure-Go brute-force index for any ArrayElement.
 // It dispatches by concrete element type and picks the distance result type R:
-// float64 for native float input, so nearest-centroid comparisons retain the
-// range of stable float64 reductions; float32 for narrow quantizations bf16/f16/
-// int8/uint8, whose native kernels compute in float32.
+// float64 only for float64 input, float32 for everything else (f32 + the narrow
+// quantizations bf16/f16/int8/uint8 — whose kernels the resolver casts to float32).
 func NewCpuBruteForceIndex[T types.ArrayElement](dataset [][]T,
 	dimension uint,
 	m metric.MetricType,
 	elemsz uint) (cache.VectorIndexSearchIf, error) {
 
-	// R = float64 for native float input; float32 for the narrow quantizations.
+	// R = element type for f32/f64; float32 for the narrow quantizations.
 	switch ds := any(dataset).(type) {
 	case [][]float32:
-		return newGoBruteForce[float32, float64](ds, dimension, m), nil
+		return newGoBruteForce[float32, float32](ds, dimension, m), nil
 	case [][]float64:
 		return newGoBruteForce[float64, float64](ds, dimension, m), nil
 	case [][]types.BF16:
@@ -289,9 +287,6 @@ func (idx *UsearchBruteForceIndex[T]) Search(proc *sqlexec.SqlProcess, _queries 
 	if limit > idx.Count {
 		limit = idx.Count
 	}
-	if idx.MoMetric == metric.Metric_CosineDistance {
-		return idx.searchCosine(proc, flatten, nQueries, limit, rt)
-	}
 
 	keys_ui64, distances_f32, err := usearch.ExactSearchUnsafe(
 		util.UnsafePointer(&((*idx.Dataset)[0])),
@@ -333,137 +328,6 @@ func (idx *UsearchBruteForceIndex[T]) Search(proc *sqlexec.SqlProcess, _queries 
 	runtime.KeepAlive(flatten)
 	runtime.KeepAlive(idx.Dataset)
 	return
-}
-
-// searchCosine computes the SQL cosine_distance directly instead of asking usearch to
-// score the vectors. usearch's cosine implementation can underflow on zero/subnormal
-// values, while this path must preserve the scalar metric contract (zero denominator
-// returns distance 1 and boundary values use the scalar implementation). It is used
-// only for the exact brute-force cosine fallback; non-cosine metrics retain the usearch
-// fast path.
-func cosineDistanceLess[T types.RealNumbers](candidate, current T) bool {
-	candidateNaN := math.IsNaN(float64(candidate))
-	currentNaN := math.IsNaN(float64(current))
-	return !candidateNaN && (currentNaN || candidate < current)
-}
-
-func (idx *UsearchBruteForceIndex[T]) searchCosine(
-	proc *sqlexec.SqlProcess,
-	flatten []T,
-	nQueries int,
-	limit uint,
-	rt vectorindex.RuntimeConfig,
-) (any, []float64, error) {
-	if limit == 0 || nQueries == 0 || idx.Count == 0 {
-		return []int64{}, []float64{}, nil
-	}
-	if idx.Dataset == nil {
-		return nil, nil, moerr.NewInternalErrorNoCtx("brute force dataset is nil")
-	}
-
-	limitInt := int(limit)
-	retKeys := make([]int64, nQueries*limitInt)
-	retDistances := make([]float64, nQueries*limitInt)
-	dimension := int(idx.Dimension)
-	dataset := *idx.Dataset
-
-	exec := concurrent.NewThreadPoolExecutor(int(rt.NThreads))
-	err := exec.Execute(
-		proc.GetContext(),
-		nQueries,
-		func(ctx context.Context, _, start, end int) error {
-			var heapKeysBuf []int64
-			var heapDistBuf []T
-			if limitInt > 1 {
-				heapKeysBuf = make([]int64, limitInt)
-				heapDistBuf = make([]T, limitInt)
-			}
-
-			for queryIndex := start; queryIndex < end; queryIndex++ {
-				if err := ctx.Err(); err != nil {
-					return err
-				}
-				queryStart := queryIndex * dimension
-				query := flatten[queryStart : queryStart+dimension]
-
-				if limitInt == 1 {
-					var bestDistance T
-					bestKey := -1
-					for row := 0; row < int(idx.Count); row++ {
-						if row%100 == 0 {
-							if err := ctx.Err(); err != nil {
-								return err
-							}
-						}
-						dataStart := row * dimension
-						distance, err := metric.CosineDistance(query, dataset[dataStart:dataStart+dimension])
-						if err != nil {
-							return err
-						}
-						// SQL ORDER BY places NaN after numeric values. Initialize from the
-						// first real row so an all-NaN dataset never fabricates key -1.
-						if bestKey < 0 || cosineDistanceLess(distance, bestDistance) {
-							bestDistance = distance
-							bestKey = row
-						}
-					}
-					retKeys[queryIndex] = int64(bestKey)
-					retDistances[queryIndex] = float64(bestDistance)
-					continue
-				}
-
-				h := vectorindex.NewFastMaxHeap[T, int64](limitInt, heapKeysBuf, heapDistBuf)
-				var nanKeys []int64
-				for row := 0; row < int(idx.Count); row++ {
-					if row%100 == 0 {
-						if err := ctx.Err(); err != nil {
-							return err
-						}
-					}
-					dataStart := row * dimension
-					distance, err := metric.CosineDistance(query, dataset[dataStart:dataStart+dimension])
-					if err != nil {
-						return err
-					}
-					if math.IsNaN(float64(distance)) {
-						// FastMaxHeap uses ordinary float comparisons, which cannot order
-						// NaN. Keep the real row identity and append these peers after all
-						// finite distances when the result is assembled.
-						if len(nanKeys) < limitInt {
-							nanKeys = append(nanKeys, int64(row))
-						}
-						continue
-					}
-					h.Push(int64(row), distance)
-				}
-
-				offset := queryIndex * limitInt
-				finiteCount := h.Len()
-				for resultIndex := finiteCount - 1; resultIndex >= 0; resultIndex-- {
-					key, distance, ok := h.Pop()
-					if !ok {
-						retKeys[offset+resultIndex] = -1
-						retDistances[offset+resultIndex] = 0
-						continue
-					}
-					retKeys[offset+resultIndex] = key
-					retDistances[offset+resultIndex] = float64(distance)
-				}
-				for nanIndex, key := range nanKeys {
-					resultIndex := finiteCount + nanIndex
-					if resultIndex >= limitInt {
-						break
-					}
-					retKeys[offset+resultIndex] = key
-					retDistances[offset+resultIndex] = math.NaN()
-				}
-			}
-			return nil
-		})
-	if err != nil {
-		return nil, nil, err
-	}
-	return retKeys, retDistances, nil
 }
 
 func (idx *UsearchBruteForceIndex[T]) Destroy() {
@@ -522,7 +386,7 @@ func (idx *GoBruteForceIndex[T, R]) SearchFloat32(proc *sqlexec.SqlProcess, _que
 	}
 
 	exec := concurrent.NewThreadPoolExecutor(int(nthreads))
-	return exec.Execute(
+	err = exec.Execute(
 		proc.GetContext(),
 		nqueries,
 		func(ctx context.Context, thread_id int, start, end int) error {
@@ -552,6 +416,12 @@ func (idx *GoBruteForceIndex[T, R]) SearchFloat32(proc *sqlexec.SqlProcess, _que
 							minIdx = j
 						}
 					}
+					if minIdx < 0 {
+						// No candidate was ever closer than MaxFloat: the dataset is empty, or
+						// every distance left the element domain. -1 is not a row index -- callers
+						// feed this straight into UnionOne -- so fail instead of returning it.
+						return moerr.NewInternalErrorNoCtx("brute force: no nearest centroid for query; every candidate distance is out of range")
+					}
 					outKeys[k] = int64(minIdx)
 					outDists[k] = float32(minDist)
 					continue
@@ -580,6 +450,15 @@ func (idx *GoBruteForceIndex[T, R]) SearchFloat32(proc *sqlexec.SqlProcess, _que
 			}
 			return nil
 		})
+	if err != nil {
+		return err
+	}
+	// No finite check here. A distance that left the element domain cannot win a min-comparison,
+	// so it never changes the ranking -- it matters only where one is handed back as a score, and
+	// that is the caller's boundary, not this one. Checking in one entry point but not the other
+	// made the same index validate or not depending on which was called. An
+	// all-candidates-out-of-domain query is still caught by the negative-index guard above.
+	return nil
 }
 
 func (idx *GoBruteForceIndex[T, R]) Search(proc *sqlexec.SqlProcess, _queries any, rt vectorindex.RuntimeConfig) (keys any, distances []float64, err error) {
@@ -636,6 +515,10 @@ func (idx *GoBruteForceIndex[T, R]) Search(proc *sqlexec.SqlProcess, _queries an
 							minDist = dist
 							minIdx = j
 						}
+					}
+					if minIdx < 0 {
+						// see SearchFloat32: -1 is not a row index
+						return moerr.NewInternalErrorNoCtx("brute force: no nearest centroid for query; every candidate distance is out of range")
 					}
 					retKeys64[k*limit] = int64(minIdx)
 					retDistances[k*limit] = float64(minDist)

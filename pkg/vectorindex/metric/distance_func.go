@@ -35,12 +35,11 @@ func L2Distance[T types.RealNumbers](v1, v2 []T) (T, error) {
 */
 
 func L2Distance[T types.RealNumbers](v1, v2 []T) (T, error) {
-	dist, err := L2DistanceSq(v1, v2)
+	sq, err := L2DistanceSq(v1, v2)
 	if err != nil {
-		return dist, err
+		return 0, err
 	}
-
-	return T(math.Sqrt(float64(dist))), nil
+	return L2FromSquared(sq)
 }
 
 /*
@@ -256,20 +255,36 @@ func CosineDistance[T types.RealNumbers](p, q []T) (T, error) {
 		i++
 	}
 
-	// The denominator is the product of the L2 norms (Euclidean lengths).
-	// We must cast to float64 to use the standard library's math.Sqrt.
+	// The denominator is the product of the L2 norms (Euclidean lengths). Each norm is
+	// square-rooted before multiplying so a representable cosine is not lost to an
+	// intermediate overflow of normP*normQ.
+	dot := float64(dotProduct)
 	denominator := math.Sqrt(float64(normV1Sq)) * math.Sqrt(float64(normV2Sq))
+	if !cosineNormsOK(float64(normV1Sq), float64(normV2Sq), smallestNormalOf[T]()) {
+		var normP, normQ float64
+		var ok bool
+		if dot, normP, normQ, ok = cosineRecomputeF64(p, q); !ok {
+			return T(0), moerr.NewInternalErrorNoCtx("cosine distance: vector magnitude overflows the float64 domain")
+		}
+		denominator = math.Sqrt(normP) * math.Sqrt(normQ)
+	}
 
 	// Handle the edge case of a zero-magnitude vector. If the denominator is zero,
 	// the cosine similarity is undefined. A distance of 1.0 is a common convention,
 	// implying the vectors are maximally dissimilar (orthogonal).
 	if denominator == 0 {
-		// This can happen if one or both vectors are all zeros.
+		// A zero denominator means a zero norm. If that vector really is all zeros it takes the
+		// documented convention; if BOTH vectors hold non-zero values the norms underflowed even
+		// in float64 (a float64 element near 1e-200), which has no computable cosine and is
+		// rejected rather than reported as maximally dissimilar.
+		if anyNonZero(p) && anyNonZero(q) {
+			return T(0), moerr.NewInternalErrorNoCtx("cosine distance: vector magnitude underflows the element domain")
+		}
 		return 1.0, nil
 	}
 
 	// Calculate cosine similarity.
-	similarity := float64(dotProduct) / denominator
+	similarity := dot / denominator
 
 	// handle precision issues. Clamp the cosine simliarity to the range [-1, 1].
 	if similarity > 1.0 {
@@ -335,17 +350,28 @@ func CosineSimilarity[T types.RealNumbers](p, q []T) (T, error) {
 		i++
 	}
 
-	// The denominator is the product of the L2 norms (Euclidean lengths).
-	// We must cast to float64 to use the standard library's math.Sqrt.
+	// Each norm is square-rooted before multiplying -- see CosineDistance.
+	dot := float64(dotProduct)
 	denominator := math.Sqrt(float64(normV1Sq)) * math.Sqrt(float64(normV2Sq))
+	if !cosineNormsOK(float64(normV1Sq), float64(normV2Sq), smallestNormalOf[T]()) {
+		var normP, normQ float64
+		var ok bool
+		if dot, normP, normQ, ok = cosineRecomputeF64(p, q); !ok {
+			return T(0), moerr.NewInternalErrorNoCtx("cosine similarity: vector magnitude overflows the float64 domain")
+		}
+		denominator = math.Sqrt(normP) * math.Sqrt(normQ)
+	}
 
 	if denominator == 0 {
-		// This can happen if one or both vectors are all zeros.
+		// See CosineDistance: an underflowed magnitude is distinct from a zero vector.
+		if anyNonZero(p) && anyNonZero(q) {
+			return T(0), moerr.NewInternalErrorNoCtx("cosine similarity: vector magnitude underflows the element domain")
+		}
 		return 0, moerr.NewInternalErrorNoCtx("cosine similarity: one of the vector is zero")
 	}
 
 	// Calculate cosine similarity.
-	similarity := float64(dotProduct) / denominator
+	similarity := dot / denominator
 
 	// handle precision issues. Clamp the cosine simliarity to the range [-1, 1].
 	if similarity > 1.0 {
@@ -408,10 +434,6 @@ func SphericalDistance[T types.RealNumbers](p, q []T) (T, error) {
 
 	//To scale the result to the range [0, 1], we divide by Pi.
 	return T(theta / math.Pi), nil
-}
-
-func NormalizeL2[T types.RealNumbers](v1 []T, normalized []T) error {
-	return StableNormalizeL2(v1, normalized)
 }
 
 func ScaleInPlace[T types.RealNumbers](v []T, scale T) {
