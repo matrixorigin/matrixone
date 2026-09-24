@@ -64,6 +64,21 @@ func (r *failAfterBytesReader) Read(p []byte) (int, error) {
 	return n, err
 }
 
+// eofSignalReader notifies a waiting worker when the producer reaches EOF.
+type eofSignalReader struct {
+	r       io.Reader
+	eof     chan struct{}
+	eofOnce sync.Once
+}
+
+func (r *eofSignalReader) Read(p []byte) (int, error) {
+	n, err := r.r.Read(p)
+	if errors.Is(err, io.EOF) {
+		r.eofOnce.Do(func() { close(r.eof) })
+	}
+	return n, err
+}
+
 type waitAfterBytesReader struct {
 	r         io.Reader
 	readSoFar int64
@@ -1191,10 +1206,15 @@ func TestAwsMultipartWorkerCancellationAborts(t *testing.T) {
 	defer cancel()
 	sdk := newTestAWSClient(t, server)
 
-	data := bytes.Repeat([]byte("r"), int(minMultipartPartSize+1))
+	data := bytes.Repeat([]byte("r"), int(minMultipartPartSize))
+	reader := &eofSignalReader{r: bytes.NewReader(data), eof: make(chan struct{})}
 	size := int64(len(data))
-	err := sdk.WriteMultipartParallel(ctx, "object", bytes.NewReader(data), &size, &ParallelMultipartOption{
-		beforePartUpload: cancel,
+	err := sdk.WriteMultipartParallel(ctx, "object", reader, &size, &ParallelMultipartOption{
+		PartSize: size,
+		beforePartUpload: func() {
+			<-reader.eof
+			cancel()
+		},
 	})
 	require.ErrorIs(t, err, context.Canceled)
 	require.True(t, state.aborted.Load())
@@ -1211,10 +1231,15 @@ func TestCOSMultipartWorkerCancellationAborts(t *testing.T) {
 	defer cancel()
 	sdk := newTestCOSClient(t, server)
 
-	data := bytes.Repeat([]byte("r"), int(minMultipartPartSize+1))
+	data := bytes.Repeat([]byte("r"), int(minMultipartPartSize))
+	reader := &eofSignalReader{r: bytes.NewReader(data), eof: make(chan struct{})}
 	size := int64(len(data))
-	err := sdk.WriteMultipartParallel(ctx, "object", bytes.NewReader(data), &size, &ParallelMultipartOption{
-		beforePartUpload: cancel,
+	err := sdk.WriteMultipartParallel(ctx, "object", reader, &size, &ParallelMultipartOption{
+		PartSize: size,
+		beforePartUpload: func() {
+			<-reader.eof
+			cancel()
+		},
 	})
 	require.ErrorIs(t, err, context.Canceled)
 	require.True(t, state.aborted.Load())
