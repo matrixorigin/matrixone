@@ -121,6 +121,24 @@ func TestOverFetchLimitExprMatchesGoFormula(t *testing.T) {
 	require.Nil(t, got)
 }
 
+func TestPreparedOverFetchKeepsUnsignedLimitDomain(t *testing.T) {
+	ctx := context.Background()
+	marker := &planpb.Expr{
+		Typ:  planpb.Type{Id: int32(types.T_uint64)},
+		Expr: &planpb.Expr_P{P: &planpb.ParamRef{Pos: 0}},
+	}
+	budget, err := BuildOverFetchLimitExpr(ctx, marker, false)
+	require.NoError(t, err)
+	rule := NewResetParamRefRule(ctx, []*planpb.Expr{makePlan2Uint64ConstExprWithType(2)})
+	rule.SetParamValues([]any{ParamValue{
+		Value: "2", SourceType: types.New(types.T_decimal128, 38, 0), HasSourceType: true,
+	}})
+	rebound, err := rule.ApplyExpr(budget)
+	require.NoError(t, err)
+	require.Equal(t, types.T_uint64, types.T(rebound.Typ.Id))
+	require.Equal(t, overfetch.PostFilterLimit(2), evalConstUint64(t, NewMockCompilerContext(true), rebound))
+}
+
 // TestOverFetchLimitExprSaturationBoundaries pins the two clamps in
 // overfetch.Limit separately, because the runtime expression reaches them by
 // different mechanisms and a change can break one while the other still works.

@@ -2681,8 +2681,12 @@ func (rule *ResetParamRefRule) applyExpr(e *plan.Expr) (*plan.Expr, error) {
 			// FIELD and the variadic extrema compare the complete runtime tuple;
 			// a SQL user variable's source domain must reach that comparison before
 			// any numeric-prefix or provisional cast can reinterpret it.
+			// A bare marker already typed by its consumer (for example the uint64
+			// LIMIT inside a generated vector-index overfetch budget) is not a
+			// provisional comparison operand; keep that consumer's domain.
 			variadicSource := false
 			if hasParamPos && !isExplicitPreparedCast(arg) &&
+				(implicitParamCast || types.T(arg.Typ.Id).IsMySQLString() || types.T(arg.Typ.Id) == types.T_any) &&
 				(functionName == "field" || functionName == "greatest" || functionName == "least") &&
 				paramPos < len(rule.paramValues) {
 				if param, ok := rule.paramValues[paramPos].(ParamValue); ok &&
