@@ -1273,6 +1273,8 @@ func TestRollbackRetriesUnpublishedS3CleanupAfterWorkspaceRemoval(t *testing.T) 
 	err = txn.Rollback(context.Background())
 	require.ErrorIs(t, err, deleteErr)
 	require.True(t, txn.removed, "terminal rollback must retire the workspace")
+	require.False(t, txn.HasUnpublishedS3ObjectOwners(), "the CN must own detached cleanup records")
+	require.Empty(t, txn.unpublishedS3Cleanup)
 	_, err = baseFS.StatFile(context.Background(), name)
 	require.NoError(t, err, "the first Delete failed")
 	require.Eventually(t, func() bool {
@@ -1280,6 +1282,20 @@ func TestRollbackRetriesUnpublishedS3CleanupAfterWorkspaceRemoval(t *testing.T) 
 		return moerr.IsMoErrCode(statErr, moerr.ErrFileNotFound)
 	}, 5*time.Second, 10*time.Millisecond)
 	require.False(t, owner.Pending())
+}
+
+func TestQueueUnpublishedCleanupRetainsRecordsWhenCNRejectsHandoff(t *testing.T) {
+	server := &colexec.Server{}
+	require.NoError(t, server.CloseUnpublishedS3Cleanup(context.Background()))
+	txn := &Transaction{}
+	calls := 0
+	txn.RetainUnpublishedS3Cleanup(func(context.Context) error {
+		calls++
+		return nil
+	})
+	require.Error(t, txn.QueueUnpublishedS3Cleanup(server))
+	require.NoError(t, txn.CleanupUnpublishedS3Objects(context.Background()))
+	require.Equal(t, 1, calls, "rejected handoff must keep the cleanup obligation")
 }
 
 func TestWorkspaceAppendAcceptsUnpublishedS3ObjectNames(t *testing.T) {

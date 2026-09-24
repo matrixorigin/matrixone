@@ -1515,6 +1515,46 @@ func (txn *Transaction) closeTransferFlow(
 	return err
 }
 
+// QueueUnpublishedS3Cleanup transfers terminal cleanup records instead of
+// retaining a bound transaction method. Fallback callbacks retain the resources
+// they still need; name-only owners do not retain the transaction or process.
+// Call only after execution has stopped; no further object registration occurs.
+func (txn *Transaction) QueueUnpublishedS3Cleanup(server *colexec.Server) error {
+	txn.unpublishedS3OwnersMu.Lock()
+	pending := txn.unpublishedS3Cleanup
+	for owner := range txn.unpublishedS3ObjectOwners {
+		pending = append(pending, owner.Cleanup)
+	}
+	txn.unpublishedS3Cleanup = nil
+	txn.unpublishedS3ObjectOwners = nil
+	txn.unpublishedS3ObjectOwnersByName = nil
+	txn.unpublishedS3OwnersMu.Unlock()
+	if len(pending) == 0 {
+		return nil
+	}
+	cleanup := func(ctx context.Context) error {
+		failed := pending[:0]
+		var errs []error
+		for _, task := range pending {
+			if err := task(ctx); err != nil {
+				failed = append(failed, task)
+				errs = append(errs, err)
+			}
+		}
+		clear(pending[len(failed):])
+		pending = failed
+		if len(pending) == 0 {
+			pending = nil
+		}
+		return errors.Join(errs...)
+	}
+	if err := server.RetryUnpublishedS3Cleanup(cleanup); err != nil {
+		txn.RetainUnpublishedS3Cleanup(cleanup)
+		return err
+	}
+	return nil
+}
+
 // CleanupUnpublishedS3Objects retries cleanup for objects that never crossed
 // the workspace-registration boundary. Detach the owners during I/O so no
 // file-service call runs while holding the transaction mutex; failed cleanup
@@ -3198,9 +3238,7 @@ func (txn *Transaction) Rollback(ctx context.Context) error {
 	if unpublishedCleanupErr != nil {
 		// The workspace is retired below even when rollback reports an error.
 		// Transfer its remaining cleanup obligation to the CN before that point.
-		queueErr := colexec.MustGetServer(txn.engine.service).RetryUnpublishedS3Cleanup(
-			txn.CleanupUnpublishedS3Objects,
-		)
+		queueErr := txn.QueueUnpublishedS3Cleanup(colexec.MustGetServer(txn.engine.service))
 		unpublishedCleanupErr = errors.Join(unpublishedCleanupErr, queueErr)
 	}
 	if !txn.ReadOnly() && len(txn.writes) > 0 {

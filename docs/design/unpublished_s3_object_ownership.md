@@ -68,14 +68,22 @@ callbacks for writers/flows whose immediate cleanup failed. It detaches the
 ledger while performing file-service I/O, then reattaches failed entries for
 the next lifecycle callback. The name index prevents duplicate owners from
 deleting an accepted object. Cleanup is independent of operator reuse. If the
-remote terminal cleanup fails, the handler registers that workspace's cleanup
-callback with the owning CN server before returning its error. One CN worker
+remote terminal cleanup fails, the handler detaches the workspace's cleanup
+records into a callback and registers it with the owning CN server before
+returning its error. The callback does not capture the transaction itself.
+One CN worker
 retries failed callbacks after the stream has exited; a successful callback
-releases the reference. The server joins the worker and makes a final bounded
-attempt before CN I/O dependencies close. Persistent failure remains visible
-as a CN-close error, not a silently successful cleanup.
+releases the reference, including the consumed slot in the queue backing array.
+The server stops transaction producers before closing cleanup admission, joins
+the worker, and retries tasks in rounds within one cleanup deadline before CN
+I/O dependencies close. Individual attempts have a thirty-second bound. A
+failed task does not prevent healthy tasks from being attempted in that round.
+If the total deadline expires, CN shutdown remains fail-stop and preserves its
+dependencies, but the cleanup worker resumes so later storage recovery can
+still delete the objects. The CN-close error remains visible; the existing
+one-shot service shutdown contract does not automatically resume its tail.
 
-Terminal local rollback transfers a failed unpublished cleanup callback to
+Terminal local rollback transfers detached unpublished cleanup records to
 that CN worker before `delTransaction`, because frontend rollback invalidates
 the transaction handle even when cleanup reports an error. A clone reader's
 retained callback uses the current retry-attempt context rather than the
@@ -115,10 +123,12 @@ ACK processing adds constant state, no receipt map, blocked ACK goroutines, or
 new wait barrier. Object-name ownership is **not** bounded by that credit
 window: it grows with the unpublished objects in a transaction and is released
 by registration or cleanup. S3 deletion outages can prolong writer retention.
-The CN retry queue holds one callback per failed stream or local rollback and
-may retain its mirror workspace or retired local transaction until deletion
-succeeds. Its memory therefore grows with concurrent failed cleanups during a
-storage outage; this is an explicit limit
+The CN retry queue holds one callback per failed stream or local rollback.
+Each callback owns the remaining name owners and fallback cleanup callbacks,
+not a bound method holding the entire transaction. Fallback writer cleanup can
+still retain writer buffers and references until deletion succeeds. Memory
+therefore grows with concurrent failed cleanups during a storage outage; this
+is an explicit limit
 of the in-memory repair, not a fixed-capacity queue that could drop ownership.
 The single retry worker bounds retry concurrency.
 
