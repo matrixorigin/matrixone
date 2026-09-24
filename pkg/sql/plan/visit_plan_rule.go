@@ -2063,6 +2063,9 @@ func (rule *ResetParamRefRule) refreshPreparedNumericSource(expr *plan.Expr) (*E
 			return nil, false, err
 		}
 		preserveReboundFunctionMetadata(fn, bound.GetF())
+		// Rebinding a child must not erase the enclosing expression's
+		// provenance (notably an IFNULL common-value boundary).
+		bound.PreparedNumeric = copyPreparedNumericMetadata(expr.PreparedNumeric)
 		return bound, true, nil
 	}
 	if list := expr.GetList(); list != nil {

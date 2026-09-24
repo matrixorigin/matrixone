@@ -220,6 +220,32 @@ func testBitIntegerPreparedParameters(t *testing.T, ctx context.Context, db *sql
 		require.NoError(t, conn.QueryRowContext(ctx, "execute hex_ifnull_common using @ifnull_value").Scan(&got))
 		require.Equal(t, "2", got)
 	})
+	t.Run("SQL EXECUTE IFNULL subquery common value", func(t *testing.T) {
+		conn, err := db.Conn(ctx)
+		require.NoError(t, err)
+		defer conn.Close()
+		_, err = conn.ExecContext(ctx, `set @ifnull_subquery_value=cast(2.5 as decimal(20,1))`)
+		require.NoError(t, err)
+		for _, tc := range []struct {
+			name, query, want string
+		}{
+			{"char", `select hex(char(ifnull((select ? from issue_25408_pagination.page order by id limit 1),1.5e0)))`, "02"},
+			{"make_set", `select make_set(ifnull((select ? from issue_25408_pagination.page order by id limit 1),1.5e0),"a","b","c")`, "b"},
+			{"export_set", `select export_set(ifnull((select ? from issue_25408_pagination.page order by id limit 1),1.5e0),"Y","N","",4)`, "NYNN"},
+		} {
+			t.Run(tc.name, func(t *testing.T) {
+				_, err := conn.ExecContext(ctx, "prepare ifnull_subquery from '"+tc.query+"'")
+				require.NoError(t, err)
+				defer func() {
+					_, err := conn.ExecContext(ctx, "deallocate prepare ifnull_subquery")
+					require.NoError(t, err)
+				}()
+				var got string
+				require.NoError(t, conn.QueryRowContext(ctx, "execute ifnull_subquery using @ifnull_subquery_value").Scan(&got))
+				require.Equal(t, tc.want, got)
+			})
+		}
+	})
 	t.Run("COM_STMT numeric and text coalesce", func(t *testing.T) {
 		conn, err := db.Conn(ctx)
 		require.NoError(t, err)
