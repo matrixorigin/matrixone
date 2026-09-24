@@ -2677,6 +2677,19 @@ func (rule *ResetParamRefRule) applyExpr(e *plan.Expr) (*plan.Expr, error) {
 				e, functionName, i, len(exprImpl.F.Args)) {
 				paramPos, hasParamPos = preparedResultParamPosition(arg, functionName)
 			}
+			// The prepare-time cast around a marker is only an overload hint.
+			// FIELD and the variadic extrema compare the complete runtime tuple;
+			// a SQL user variable's source domain must reach that comparison before
+			// any numeric-prefix or provisional cast can reinterpret it.
+			variadicSource := false
+			if hasParamPos && !isExplicitPreparedCast(arg) &&
+				(functionName == "field" || functionName == "greatest" || functionName == "least") &&
+				paramPos < len(rule.paramValues) {
+				if param, ok := rule.paramValues[paramPos].(ParamValue); ok &&
+					!param.IsBinaryProtocol && param.HasSourceType && param.SourceType.Oid != types.T_any {
+					variadicSource = true
+				}
+			}
 			var preparedInetNtoaSource *plan.Expr
 			var hasPreparedInetNtoaSource bool
 			if hasParamPos && functionName == "inet_ntoa" {
@@ -2726,7 +2739,7 @@ func (rule *ResetParamRefRule) applyExpr(e *plan.Expr) (*plan.Expr, error) {
 			}
 			prefixEligibleOccurrence := !(sharedControlParam &&
 				paramPos < len(rule.sqlExecuteStringBackedParams) && rule.sqlExecuteStringBackedParams[paramPos])
-			if hasParamPos && rule.numericPrefixParamPositions[paramPos] && prefixEligibleOccurrence {
+			if hasParamPos && rule.numericPrefixParamPositions[paramPos] && prefixEligibleOccurrence && !variadicSource {
 				numericPrefixArgs[i] = true
 				numericPrefixKinds[i] = rule.numericPrefixParamKinds[paramPos]
 			}
@@ -2780,6 +2793,27 @@ func (rule *ResetParamRefRule) applyExpr(e *plan.Expr) (*plan.Expr, error) {
 					if err != nil {
 						return nil, err
 					}
+				}
+			} else if variadicSource {
+				var sourceOK bool
+				rewrittenArg, sourceOK, err = rule.preparedRuntimeSourceExpr(paramPos, false)
+				if err != nil {
+					return nil, err
+				}
+				if !sourceOK {
+					return nil, moerr.NewInternalErrorNoCtx("missing prepared variadic source type")
+				}
+				needResetFunction = true
+				compareArgTypes = true
+				rule.specialized = true
+				if (functionName == "greatest" || functionName == "least") &&
+					preparedNumericCommonOperandType(types.T(rewrittenArg.Typ.Id)) &&
+					types.T(rewrittenArg.Typ.Id) != types.T_any {
+					// A numeric runtime marker also invalidates a peer literal's
+					// prepare-time TEXT envelope. Restore that peer only when the
+					// complete tuple has no actual string operand.
+					sqlExecuteNumericSourceDependent = true
+					sqlExecuteNumericSourceArgs[i] = true
 				}
 			} else if useSQLExecuteNumericSource {
 				sqlExecuteNumericSourceDependent = true
@@ -3088,9 +3122,21 @@ func (rule *ResetParamRefRule) applyExpr(e *plan.Expr) (*plan.Expr, error) {
 			rule.specialized = true
 			return explicit, nil
 		}
-		sqlExecuteNumericPeerDependent := sqlExecuteNumericNestedDependent ||
+		variadicStringBoundary := false
+		if functionName == "greatest" || functionName == "least" {
+			for i, arg := range boundArgs {
+				if arg == nil || !types.T(arg.Typ.Id).IsMySQLString() || sqlExecuteNumericSourceArgs[i] {
+					continue
+				}
+				if _, numericPeer := provisionalNumericPeerSource(originalArgs[i]); !numericPeer {
+					variadicStringBoundary = true
+					break
+				}
+			}
+		}
+		sqlExecuteNumericPeerDependent := !variadicStringBoundary && (sqlExecuteNumericNestedDependent ||
 			(sqlExecuteNumericSourceDependent &&
-				(functionName == "/" || preparedSQLExecuteNumericResultConsumer(functionName)))
+				(functionName == "/" || preparedSQLExecuteNumericResultConsumer(functionName))))
 		if numericPrefixDependent || sqlExecuteNumericPeerDependent {
 			var sqlExecuteResultType plan.Type
 			if sqlExecuteNumericPeerDependent {
