@@ -17,12 +17,14 @@ build with typecheck enabled (optional, default: disabled)
 TYPECHECK=1 docker-compose -f etc/launch-tae-compose/compose.yaml --profile launch-multi-cn up -d --build
 ```
 
-use default image
+start with default settings
 
 ```shell
-docker-compose -f etc/launch-tae-compose/compose.yaml --profile launch-multi-cn pull
 docker-compose -f etc/launch-tae-compose/compose.yaml --profile launch-multi-cn up -d
 ```
+
+MinIO and mc are built from pinned official release binaries with SHA-256
+verification. Their Compose services use linux/amd64 images.
 
 ## Check log
 
