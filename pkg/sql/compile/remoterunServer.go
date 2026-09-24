@@ -17,7 +17,6 @@ package compile
 import (
 	"bytes"
 	"context"
-	"encoding/json"
 	"errors"
 	"fmt"
 	"maps"
@@ -121,6 +120,9 @@ func CnServerMessageHandler(
 	if msg.GetCmd() == pipeline.Method_PipelineBatchAck {
 		return handlePipelineBatchAck(msg, cs)
 	}
+	if msg.GetCmd() == pipeline.Method_PipelineProtocolCheck {
+		return handlePipelineProtocolCheck(ctx, msg, cs, lockService.GetConfig().ServiceID, messageAcquirer)
+	}
 
 	// prepare the receiver structure, just for easy using the `send` method.
 	receiver, err := newMessageReceiverOnServer(ctx, serverAddress, msg,
@@ -204,6 +206,28 @@ func CnServerMessageHandler(
 		receiver.colexecServer.RemoveRelatedPipeline(receiver.clientSession, receiver.messageId)
 	}
 	return err
+}
+
+func handlePipelineProtocolCheck(
+	ctx context.Context,
+	request *pipeline.Message,
+	cs morpc.ClientSession,
+	serviceID string,
+	messageAcquirer func() morpc.Message,
+) error {
+	response, ok := messageAcquirer().(*pipeline.Message)
+	if !ok {
+		return moerr.NewInternalErrorNoCtx("pipeline protocol response has wrong type")
+	}
+	response.SetID(request.GetID())
+	response.SetMessageType(pipeline.Method_PipelineProtocolCheck)
+	response.SetSid(pipeline.Status_Last)
+	if runtime := moruntime.ServiceRuntime(serviceID); runtime != nil {
+		if value, ok := runtime.GetGlobalVariables(moruntime.MOProtocolVersion); ok {
+			response.ProtocolVersion, _ = value.(int64)
+		}
+	}
+	return cs.Write(ctx, response)
 }
 
 // waitUntilPipelineBatchFlowDrained preserves the ownership boundary between
@@ -789,6 +813,11 @@ func cancelScopeProcesses(scopes []*Scope, err error) {
 
 const (
 	maxMessageSizeToMoRpc = 64 * mpool.MB
+	// terminalMessageBodyOverhead leaves room for the Analyse field tag and
+	// its protobuf length varint. MORPC rejects bodies whose ProtoSize is at
+	// or above the configured limit, so the warning JSON is kept strictly
+	// below the conservative application body limit.
+	terminalMessageBodyOverhead = 7
 )
 
 // message receiver's cn information.
@@ -994,12 +1023,21 @@ func (receiver *messageReceiverOnServer) newCompile() (*Compile, error) {
 	proc.Base.Lim = pHelper.lim
 	proc.Base.SessionInfo = pHelper.sessionInfo
 	proc.Base.SessionInfo.StorageEngine = cnInfo.storeEngine
+	warningLimit := process.WarningDiagnosticLegacyRetentionLimit
+	if proc.Base.SessionInfo.MaxErrorCountSet {
+		warningLimit = proc.Base.SessionInfo.MaxErrorCount
+	}
+	warningBudget := process.WarningDiagnosticBudgetForProcess(proc)
+	receiver.warningSession = &remoteWarningCollector{
+		maxRetained:    warningLimit,
+		maxRetainedSet: true,
+		warningBudget:  warningBudget,
+	}
 	// A remote CN owns an independent input stream. Its local source-row
 	// cursor therefore cannot be used as a statement-global GROUP_CONCAT
 	// diagnostic ordinal; the v66 aggregate provenance trailer will carry this
 	// untrusted decision to the coordinator.
 	proc.SetGroupConcatSourceRowProvenanceTrusted(false)
-	receiver.warningSession = &remoteWarningCollector{}
 	proc.Session = receiver.warningSession
 	if pHelper.hasPlanSnapshotTS {
 		proc.SetPlanSnapshotTS(pHelper.planSnapshotTS)
@@ -1290,6 +1328,7 @@ func (receiver *messageReceiverOnServer) sendEndMessage() error {
 }
 
 func (receiver *messageReceiverOnServer) setTerminalAnalysis(message *pipeline.Message) error {
+	message.SetAnalysis(nil)
 	envelope := remoteTerminalEnvelope{
 		TerminalResourceVersion:   remoteTerminalResourceVersion,
 		StatementLastInsertID:     receiver.statementLastInsertID,
@@ -1308,16 +1347,44 @@ func (receiver *messageReceiverOnServer) setTerminalAnalysis(message *pipeline.M
 	if receiver.phyPlan != nil {
 		envelope.PhyPlan = *receiver.phyPlan
 	}
-	envelope.WarningDiagnostics = append(
-		envelope.WarningDiagnostics,
-		receiver.warningDiagnostics...,
+	envelope.WarningDiagnostics = receiver.warningDiagnostics
+	data, err := marshalRemoteTerminalEnvelope(
+		envelope,
+		terminalAnalysisByteBudget(receiver, message),
 	)
-	data, err := json.Marshal(envelope)
 	if err != nil {
 		return err
 	}
 	message.SetAnalysis(data)
 	return nil
+}
+
+// terminalAnalysisByteBudget returns the largest JSON payload that can be
+// attached to message while keeping its MORPC body below the limit configured
+// on the owning RPC server. maxMessageSize is also the application-level
+// payload limit used for remote result fragments; using the smaller of the two
+// keeps a terminal frame safe for the same connection settings. The context
+// carries the production codec limit; the package default remains the
+// compatibility fallback for receivers created outside an RPC server.
+func terminalAnalysisByteBudget(receiver *messageReceiverOnServer, message *pipeline.Message) int {
+	bodyLimit := morpc.GetMessageSize()
+	if receiver != nil {
+		if configured, ok := morpc.MaxMessageSizeFromContext(receiver.messageCtx); ok && configured < bodyLimit {
+			bodyLimit = configured
+		}
+		if receiver.maxMessageSize > 0 && receiver.maxMessageSize < bodyLimit {
+			bodyLimit = receiver.maxMessageSize
+		}
+	}
+	baseSize := 0
+	if message != nil {
+		baseSize = message.ProtoSize()
+	}
+	budget := bodyLimit - baseSize - terminalMessageBodyOverhead
+	if budget < 0 {
+		return 0
+	}
+	return budget
 }
 
 func generateProcessHelper(ctx context.Context, data []byte, cli client.TxnClient) (processHelper, error) {

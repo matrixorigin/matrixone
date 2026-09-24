@@ -1553,6 +1553,30 @@ func (builder *QueryBuilder) scanHasMatchedFullTextFilter(node *plan.Node) bool 
 	return len(wrapped) > 0
 }
 
+// antiMarkPreservesChild reports whether childIdx is the PRESERVED (driving) side of an ANTI or
+// MARK join -- the side whose rows pass through carrying their own columns (`A` in `A ANTI/MARK JOIN
+// B`), as opposed to the probe side `B` that only supplies the existence/mark check. A fulltext
+// MATCH on the preserved side is the outer query's WHERE filter on the driving relation and is safe
+// to drive; a MATCH on the probe side is part of the existence condition and must not be driven
+// (see applyFullTextFiltersForJoinChildren). swapJoinChildren physically swaps the two children when
+// IsRightJoin is set (keeping the JoinType), moving the preserved side from child 0 to child 1, so
+// the index is derived from IsRightJoin rather than hard-coded. MARK is never right-swapped today
+// (determineBuildAndProbeSide leaves its IsRightJoin false); the IsRightJoin branch keeps this
+// correct if that ever changes.
+func antiMarkPreservesChild(node *plan.Node, childIdx int) bool {
+	if node == nil || node.NodeType != plan.Node_JOIN {
+		return false
+	}
+	switch node.JoinType {
+	case plan.Node_ANTI, plan.Node_MARK:
+		if node.IsRightJoin {
+			return childIdx == 1
+		}
+		return childIdx == 0
+	}
+	return false
+}
+
 func (builder *QueryBuilder) applyFullTextFiltersForJoinChildren(nodeID int32, joinNode *plan.Node,
 	colRefCnt map[[2]int32]int, idxColMap map[[2]int32]*plan.Expr) (bool, error) {
 	// The per-child rewrite replaces a scan's `WHERE match` with an INNER join to the
@@ -1572,10 +1596,17 @@ func (builder *QueryBuilder) applyFullTextFiltersForJoinChildren(nodeID int32, j
 	//         match(A.x)` becomes `(A INNER JOIN A_ft) LEFT JOIN B`: A's matchers, null-extending B
 	//         where B is absent -- the row-preserving matcher with no partner is kept, not dropped.
 	//         This shape was unsupported and failed with 20105 (#20687).
-	//   - all other join types keep the conservative null-extending-only gate: ANTI/MARK/DEDUP
-	//     (filtering the anti/mark input is not a pure filter) and ASOF/ASOF_LEFT (filtering the
-	//     nearest-match input would change which row is "nearest") stay as before. FULL OUTER does
-	//     not exist in MO (its filters never reach a child scan), so it is not listed.
+	//   - ANTI/MARK: only the PRESERVED (driving) child is eligible, never the probe child. A
+	//     `docs WHERE match(...) [AND] NOT EXISTS/EXISTS(subquery on q)` flattens to
+	//     `docs ANTI/MARK JOIN q` with the outer WHERE MATCH on the preserved docs side. That MATCH
+	//     is a pure filter on the driving relation, independent of the existence check on q:
+	//     `(docs WHERE match) ANTI/MARK JOIN q` == `(docs ANTI/MARK JOIN q) filtered by match`, so
+	//     driving it (INNER join to the 1-row-per-pk fulltext result) is row-equivalent (#29079).
+	//     The PROBE child stays ineligible: filtering it changes null-aware ANTI (`NOT IN` with a
+	//     NULL probe) and three-valued MARK results, which is not a pure filter.
+	//   - DEDUP keeps the conservative null-extending-only gate, and ASOF/ASOF_LEFT too (filtering
+	//     the nearest-match input would change which row is "nearest"). FULL OUTER does not exist in
+	//     MO (its filters never reach a child scan), so it is not listed.
 	//
 	// Because both children of these outer joins are eligible, the rewrite is robust to
 	// determineBuildAndProbeSide + swapJoinChildren, which run BEFORE applyIndices and can physically
@@ -1590,6 +1621,8 @@ func (builder *QueryBuilder) applyFullTextFiltersForJoinChildren(nodeID int32, j
 		case plan.Node_INNER, plan.Node_SEMI,
 			plan.Node_LEFT, plan.Node_RIGHT, plan.Node_SINGLE:
 			return true
+		case plan.Node_ANTI, plan.Node_MARK:
+			return antiMarkPreservesChild(joinNode, i)
 		default:
 			return nodeNullExtendsChild(joinNode, i)
 		}

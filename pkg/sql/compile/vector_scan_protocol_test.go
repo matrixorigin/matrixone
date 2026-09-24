@@ -19,6 +19,9 @@ import (
 	"errors"
 	"testing"
 
+	"github.com/golang/mock/gomock"
+	"github.com/matrixorigin/matrixone/pkg/common/morpc"
+	mock_morpc "github.com/matrixorigin/matrixone/pkg/common/morpc/mock_morpc"
 	moruntime "github.com/matrixorigin/matrixone/pkg/common/runtime"
 	"github.com/matrixorigin/matrixone/pkg/defines"
 	"github.com/matrixorigin/matrixone/pkg/pb/pipeline"
@@ -26,6 +29,71 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/vm/engine"
 	"github.com/stretchr/testify/require"
 )
+
+func TestVectorScanProtocolCheckOnExecutionStream(t *testing.T) {
+	for _, tc := range []struct {
+		name    string
+		reply   *pipeline.Message
+		wantErr bool
+	}{
+		{name: "current receiver", reply: &pipeline.Message{Id: 0, Cmd: pipeline.Method_PipelineProtocolCheck,
+			Sid: pipeline.Status_Last, ProtocolVersion: defines.MORPCVersion95}},
+		{name: "replacement old receiver", reply: &pipeline.Message{Id: 0, Cmd: pipeline.Method_PipelineProtocolCheck,
+			Sid: pipeline.Status_Last, ProtocolVersion: defines.MORPCVersion94}, wantErr: true},
+		{name: "unrecognized method", reply: &pipeline.Message{Id: 0, Cmd: pipeline.Method_UnknownMethod,
+			Sid: pipeline.Status_Last, ProtocolVersion: defines.MORPCVersion95}, wantErr: true},
+		{name: "wrong stream", reply: &pipeline.Message{Id: 1, Cmd: pipeline.Method_PipelineProtocolCheck,
+			Sid: pipeline.Status_Last, ProtocolVersion: defines.MORPCVersion95}, wantErr: true},
+		{name: "closed stream", wantErr: true},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			stream := &fakeStreamSender{}
+			receiveCh := make(chan morpc.Message, 1)
+			if tc.reply != nil {
+				receiveCh <- tc.reply
+			} else {
+				close(receiveCh)
+			}
+			sender := &messageSenderOnClient{
+				ctx: context.Background(), streamSender: stream, receiveCh: receiveCh,
+			}
+			err := sender.confirmProtocolOnStream(defines.MORPCVersion95)
+			if tc.wantErr {
+				require.Error(t, err)
+			} else {
+				require.NoError(t, err)
+			}
+			require.Equal(t, 1, stream.sentCnt)
+			request := stream.sent[0].(*pipeline.Message)
+			require.Equal(t, pipeline.Method_PipelineProtocolCheck, request.GetCmd())
+			require.Equal(t, defines.MORPCVersion95, request.GetProtocolVersion())
+			require.Equal(t, stream.ID(), request.GetID())
+		})
+	}
+}
+
+func TestVectorScanProtocolCheckReportsReceivingInstanceVersion(t *testing.T) {
+	serviceID := t.Name()
+	moruntime.SetupServiceBasedRuntime(serviceID, moruntime.DefaultRuntime())
+	runtime := moruntime.ServiceRuntime(serviceID)
+	ctrl := gomock.NewController(t)
+	session := mock_morpc.NewMockClientSession(ctrl)
+	for _, version := range []int64{defines.MORPCVersion94, defines.MORPCVersion95} {
+		runtime.SetGlobalVariables(moruntime.MOProtocolVersion, version)
+		session.EXPECT().Write(gomock.Any(), gomock.Any()).DoAndReturn(
+			func(_ context.Context, message any) error {
+				response := message.(*pipeline.Message)
+				require.Equal(t, pipeline.Method_PipelineProtocolCheck, response.GetCmd())
+				require.Equal(t, uint64(17), response.GetID())
+				require.Equal(t, pipeline.Status_Last, response.GetSid())
+				require.Equal(t, version, response.GetProtocolVersion())
+				return nil
+			})
+		require.NoError(t, handlePipelineProtocolCheck(context.Background(),
+			&pipeline.Message{Id: 17, ProtocolVersion: defines.MORPCVersion95},
+			session, serviceID, func() morpc.Message { return &pipeline.Message{} }))
+	}
+}
 
 func TestVectorScanPlacementCapabilityFallback(t *testing.T) {
 	workers := engine.Nodes{{Id: "b", Addr: "b:6001"}, {Id: "a", Addr: "a:6001"}}
