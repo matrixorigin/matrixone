@@ -3575,6 +3575,7 @@ func TestNewCompileTxnReadViewForInternalSql(t *testing.T) {
 
 		c := NewCompile("test", "test", "select 1", "", "", nil, proc, nil, false, nil, time.Now())
 		require.Equal(t, readView, c.TxnReadView)
+		require.False(t, c.disableRetry)
 	})
 
 	t.Run("internal sub-sql must not advance the boundary", func(t *testing.T) {
@@ -3595,6 +3596,7 @@ func TestNewCompileTxnReadViewForInternalSql(t *testing.T) {
 
 		c := NewCompile("test", "test", "select 1", "", "", nil, proc, nil, false, nil, time.Now())
 		require.Equal(t, readView, c.TxnReadView)
+		require.True(t, c.disableRetry, "nested SQL cannot roll back its caller's statement")
 	})
 }
 

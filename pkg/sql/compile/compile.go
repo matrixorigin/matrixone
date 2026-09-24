@@ -151,7 +151,9 @@ func NewCompile(
 	c.isInternal = isInternal
 	c.cnLabel = cnLabel
 	c.startAt = startAt
-	c.disableRetry = false
+	// A Compile that does not own a workspace statement cannot roll it back
+	// to retry only its own SQL. The owner must retry the complete operation.
+	c.disableRetry = proc.IncrStatementDisabled()
 	c.retryTimes = 0
 	c.ncpu = system.GoMaxProcs()
 	c.lockMeta = NewLockMeta()
