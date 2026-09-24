@@ -246,7 +246,7 @@ func (h *ParquetHandler) openFile(param *ExternalParam, prefetchS3 bool) error {
 	}
 	var err error
 	h.file, err = parquet.OpenFile(r, fileSize, parquetLoadFileOptions(param)...)
-	return convertReaderError(param.Ctx, err)
+	return moerr.ConvertGoError(param.Ctx, err)
 }
 
 // parquetLoadFileOptions omits file-wide indexes in fanout scopes. They are
@@ -2810,7 +2810,7 @@ func readParquetPageValues(ctx context.Context, page parquet.Page) ([]parquet.Va
 	values := make([]parquet.Value, n)
 	read, err := page.Values().ReadValues(values)
 	if err != nil && !errors.Is(err, io.EOF) {
-		return nil, convertReaderError(ctx, err)
+		return nil, moerr.ConvertGoError(ctx, err)
 	}
 	if read != n {
 		return nil, moerr.NewInternalErrorf(ctx, "short read parquet values: got %d, expected %d", read, n)
@@ -2829,7 +2829,7 @@ func readParquetPageAllValues(ctx context.Context, page parquet.Page) ([]parquet
 	values := make([]parquet.Value, n)
 	read, err := page.Values().ReadValues(values)
 	if err != nil && !errors.Is(err, io.EOF) {
-		return nil, convertReaderError(ctx, err)
+		return nil, moerr.ConvertGoError(ctx, err)
 	}
 	if read != n {
 		return nil, moerr.NewInternalErrorf(ctx, "short read parquet values: got %d, expected %d", read, n)
@@ -4144,7 +4144,7 @@ func copyPlainBoolPageToVec(page parquet.Page, proc *process.Process, vec *vecto
 		if booleanReader, ok := reader.(parquet.BooleanReader); ok {
 			read, err := booleanReader.ReadBooleans(ret[length : length+n])
 			if err != nil && !errors.Is(err, io.EOF) {
-				return rollback(convertReaderError(proc.Ctx, err))
+				return rollback(moerr.ConvertGoError(proc.Ctx, err))
 			}
 			if read != n {
 				return rollback(moerr.NewInternalError(proc.Ctx, "short read bool"))
@@ -4166,7 +4166,7 @@ func copyPlainBoolPageToVec(page parquet.Page, proc *process.Process, vec *vecto
 		}
 		read, err := reader.ReadValues(values[:want])
 		if err != nil && !errors.Is(err, io.EOF) {
-			return rollback(convertReaderError(proc.Ctx, err))
+			return rollback(moerr.ConvertGoError(proc.Ctx, err))
 		}
 		if read != want {
 			return rollback(moerr.NewInternalError(proc.Ctx, "short read bool"))
@@ -4635,7 +4635,7 @@ func (h *ParquetHandler) closePages(ctx context.Context) error {
 	for i, pages := range h.pages {
 		if pages != nil {
 			if err := pages.Close(); err != nil && firstErr == nil {
-				firstErr = convertReaderError(ctx, err)
+				firstErr = moerr.ConvertGoError(ctx, err)
 			}
 		}
 		h.pages[i] = nil
@@ -4926,7 +4926,7 @@ func (h *ParquetHandler) ensureCurrentPage(colIdx int, param *ExternalParam) (bo
 			case errors.Is(err, io.EOF):
 				return true, nil
 			case err != nil:
-				return false, h.closePagesOnError(param.Ctx, convertReaderError(param.Ctx, err))
+				return false, h.closePagesOnError(param.Ctx, moerr.ConvertGoError(param.Ctx, err))
 			}
 			h.currentPage[colIdx] = page
 			h.pageOffset[colIdx] = 0

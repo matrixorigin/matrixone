@@ -16,8 +16,6 @@ package external
 
 import (
 	"context"
-	"fmt"
-	"io"
 	"os"
 	"path/filepath"
 	"testing"
@@ -26,20 +24,6 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/sql/parsers/tree"
 	"github.com/stretchr/testify/require"
 )
-
-func TestConvertReaderErrorKeepsCancellation(t *testing.T) {
-	ctx := context.Background()
-	for _, cause := range []error{context.Canceled, context.DeadlineExceeded} {
-		wrapped := fmt.Errorf("reading magic footer of parquet file: %w (read: 0)", cause)
-		got := convertReaderError(ctx, wrapped)
-		require.ErrorIs(t, got, cause)
-		require.False(t, moerr.IsMoErrCode(got, moerr.ErrInternal))
-	}
-	// Everything else is still converted as moerr.ConvertGoError does.
-	require.True(t, moerr.IsMoErrCode(convertReaderError(ctx, fmt.Errorf("bad footer")), moerr.ErrInternal))
-	require.True(t, moerr.IsMoErrCode(convertReaderError(ctx, io.EOF), moerr.ErrUnexpectedEOF))
-	require.NoError(t, convertReaderError(ctx, nil))
-}
 
 // A parquet shard canceled by a sibling's failure must report a cancellation
 // the scheduler can resolve to that failure (CI flake in load_data_parquet:
@@ -67,5 +51,5 @@ func TestParquetOpenFileCanceledBySibling(t *testing.T) {
 	err := h.openFile(param, false)
 	require.Error(t, err)
 	require.ErrorIs(t, err, context.Canceled, "got %v", err)
-	require.False(t, moerr.IsMoErrCode(err, moerr.ErrInternal), "got %v", err)
+	require.True(t, moerr.IsMoErrCode(err, moerr.ErrContextCanceled), "got %v", err)
 }

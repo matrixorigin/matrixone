@@ -141,7 +141,7 @@ func (h *ParquetHandler) getDataByRow(bat *batch.Batch, param *ExternalParam, pr
 
 	if h.offset > 0 {
 		if err := h.rowReader.SeekToRow(h.offset); err != nil {
-			return convertReaderError(param.Ctx, err)
+			return moerr.ConvertGoError(param.Ctx, err)
 		}
 	}
 
@@ -160,7 +160,7 @@ func (h *ParquetHandler) getDataByRow(bat *batch.Batch, param *ExternalParam, pr
 		toRead := nextParquetBatchRows(rowsRead, min(len(rowBuf), batchLimit-rowsRead), h.estimatedBatchSize(bat, rowsRead, param), param.maxBatchSize)
 		n, err := h.rowReader.ReadRows(rowBuf[:toRead])
 		if err != nil && !errors.Is(err, io.EOF) {
-			return convertReaderError(param.Ctx, err)
+			return moerr.ConvertGoError(param.Ctx, err)
 		}
 		if n < 0 || n > len(rowBuf) {
 			return moerr.NewInvalidInputf(param.Ctx,
@@ -252,7 +252,7 @@ func (h *ParquetHandler) getDataByRowAndPage(bat *batch.Batch, param *ExternalPa
 	batchLimit := int(h.batchCnt)
 	rowStart := h.offset
 	if err := h.rowReader.SeekToRow(rowStart); err != nil {
-		return convertReaderError(param.Ctx, err)
+		return moerr.ConvertGoError(param.Ctx, err)
 	}
 
 	// Keep row-reader lookahead bounded. If the byte budget accepts fewer rows
@@ -312,7 +312,7 @@ func (h *ParquetHandler) getDataByRowAndPage(bat *batch.Batch, param *ExternalPa
 
 		n, readErr := h.rowReader.ReadRows(rowBuf[:toRead])
 		if readErr != nil && !errors.Is(readErr, io.EOF) {
-			return convertReaderError(param.Ctx, readErr)
+			return moerr.ConvertGoError(param.Ctx, readErr)
 		}
 		if errors.Is(readErr, io.EOF) {
 			eof = true
@@ -378,7 +378,7 @@ func (h *ParquetHandler) getDataByRowAndPage(bat *batch.Batch, param *ExternalPa
 				// scalar page offsets.
 				if err := h.rowReader.SeekToRow(rowStart + int64(length+accepted)); err != nil {
 					rollbackRows(checkpoints, accepted)
-					return convertReaderError(param.Ctx, err)
+					return moerr.ConvertGoError(param.Ctx, err)
 				}
 				batchBoundary = true
 			}
@@ -540,7 +540,7 @@ func mapParquetRowLeafWithPageMapper(
 	}
 	localValue := value.Level(0, value.DefinitionLevel(), 0)
 	if _, err := mapper.rowBuffer.WriteRows([]parquet.Row{{localValue}}); err != nil {
-		return convertReaderError(proc.Ctx, err)
+		return moerr.ConvertGoError(proc.Ctx, err)
 	}
 	chunks := mapper.rowBuffer.ColumnChunks()
 	if len(chunks) != 1 {
@@ -551,7 +551,7 @@ func mapParquetRowLeafWithPageMapper(
 	page, err := pages.ReadPage()
 	if err != nil {
 		_ = pages.Close()
-		return convertReaderError(proc.Ctx, err)
+		return moerr.ConvertGoError(proc.Ctx, err)
 	}
 	mapErr := mapper.mapping(page, proc, vec)
 	closeErr := pages.Close()
@@ -559,7 +559,7 @@ func mapParquetRowLeafWithPageMapper(
 		return mapErr
 	}
 	if closeErr != nil {
-		return convertReaderError(proc.Ctx, closeErr)
+		return moerr.ConvertGoError(proc.Ctx, closeErr)
 	}
 	return nil
 }
