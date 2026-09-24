@@ -5352,6 +5352,42 @@ func PreparedPlanHasPaginationParams(preparePlan *Plan) bool {
 	return len(preparedPaginationParamPositions(preparePlan)) > 0
 }
 
+// PreparedPlanGenerateSeriesParameterInfo identifies temporal endpoint packet
+// positions and value-sensitive table-function plans. A temporal endpoint's
+// binary protocol type is needed to choose the result domain. String endpoint
+// fractions and the interval step can change DATETIME scale without changing
+// the packet type, so any parameterized series needs a fresh runtime compile.
+func PreparedPlanGenerateSeriesParameterInfo(preparePlan *Plan) (endpointPositions []int32, parameterized bool) {
+	if preparePlan == nil {
+		return nil, false
+	}
+	query := preparePlan.GetQuery()
+	if query == nil && preparePlan.GetDdl() != nil {
+		query = preparePlan.GetDdl().GetQuery()
+	}
+	if query == nil {
+		return nil, false
+	}
+	for _, node := range query.Nodes {
+		if node == nil || node.NodeType != plan.Node_FUNCTION_SCAN || node.TableDef == nil ||
+			node.TableDef.TblFunc == nil || node.TableDef.TblFunc.Name != "generate_series" {
+			continue
+		}
+		for i, arg := range node.TblFuncExprList {
+			position, found := preparedRuntimeSourceParamPosition(arg)
+			if !found || position < 0 {
+				continue
+			}
+			parameterized = true
+			if i < 2 {
+				endpointPositions = append(endpointPositions, int32(position))
+			}
+		}
+	}
+	slices.Sort(endpointPositions)
+	return slices.Compact(endpointPositions), parameterized
+}
+
 // PreparedPlanHasPercentileParams reports whether an aggregate percentile is
 // supplied by a prepared marker. The value is compiled into aggregate
 // configuration rather than read as a row argument, so a plan with such a

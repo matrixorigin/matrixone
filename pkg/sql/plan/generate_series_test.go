@@ -40,6 +40,24 @@ func TestGenerateSeriesDatetimeLiteralScale(t *testing.T) {
 	}
 }
 
+func TestPreparedGenerateSeriesParameterInfo(t *testing.T) {
+	prepared, err := runOneStmt(NewMockOptimizer(false), t,
+		"prepare series_info from 'select result from generate_series(?,?,?) g'")
+	require.NoError(t, err)
+	positions, parameterized := PreparedPlanGenerateSeriesParameterInfo(
+		prepared.GetDcl().GetPrepare().Plan)
+	require.True(t, parameterized)
+	require.Equal(t, []int32{0, 1}, positions)
+
+	prepared, err = runOneStmt(NewMockOptimizer(false), t,
+		"prepare series_step from 'select result from generate_series(''2020-01-01'',''2020-01-02'',?) g'")
+	require.NoError(t, err)
+	positions, parameterized = PreparedPlanGenerateSeriesParameterInfo(
+		prepared.GetDcl().GetPrepare().Plan)
+	require.True(t, parameterized)
+	require.Empty(t, positions)
+}
+
 func TestGenerateSeriesDatetimeScale(t *testing.T) {
 	columnExpr := func(typ types.Type) *planpb.Expr {
 		return &planpb.Expr{

@@ -16,13 +16,14 @@ package plan
 
 import (
 	"context"
-	"github.com/matrixorigin/matrixone/pkg/container/batch"
-	"github.com/matrixorigin/matrixone/pkg/container/types"
-	"github.com/matrixorigin/matrixone/pkg/sql/colexec"
-	"github.com/matrixorigin/matrixone/pkg/testutil"
 	"strings"
 	"testing"
 
+	"github.com/matrixorigin/matrixone/pkg/container/batch"
+	"github.com/matrixorigin/matrixone/pkg/container/types"
+	"github.com/matrixorigin/matrixone/pkg/sql/colexec"
+	"github.com/matrixorigin/matrixone/pkg/sql/parsers/dialect/mysql"
+	"github.com/matrixorigin/matrixone/pkg/testutil"
 	"github.com/stretchr/testify/require"
 )
 
@@ -95,12 +96,48 @@ func TestPreparedUnnestLargeJSON(t *testing.T) {
 			t.Fatal(err)
 		}
 		defer free()
-		got := vec.GetStringAt(0)
+		require.Equal(t, types.T_json, vec.GetType().Oid)
+		got := types.DecodeJson(vec.GetBytesAt(0)).String()
 		if got != input {
 			t.Errorf("prepared UNNEST input truncated: want %d bytes, got %d", len(input), len(got))
 		}
-		if _, err := types.ParseStringToByteJson(got); err != nil {
-			t.Errorf("converted JSON invalid after %d bytes: %T", len(got), err)
-		}
+	}
+}
+
+func TestPreparedSeriesCTASColumnOrderAndExplicitType(t *testing.T) {
+	for _, tc := range []struct {
+		name          string
+		sql           string
+		resultOrdinal int
+		wantWidth     int32
+		originalType  types.T
+	}{
+		{"inferred", "create table gs_inferred as select result from generate_series(?,?,?) g", 0, int32(types.MaxVarcharLen), types.T_int64},
+		{"target-only prefix", "create table gs_prefix (extra int default 1) as select result from generate_series(?,?,?) g", 1, int32(types.MaxVarcharLen), types.T_int64},
+		{"explicit override", "create table gs_explicit (result varchar(40)) as select result from generate_series(?,?,?) g", 0, 40, types.T_varchar},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			prepared, err := runOneStmt(NewMockOptimizer(false), t, "prepare gs_ctas from '"+tc.sql+"'")
+			require.NoError(t, err)
+			original := prepared.GetDcl().GetPrepare().Plan
+			values := []any{
+				ParamValue{Value: "2020-01-01", SourceType: types.T_text.ToType(), HasSourceType: true},
+				ParamValue{Value: "2020-01-03", SourceType: types.T_text.ToType(), HasSourceType: true},
+				ParamValue{Value: "1 day", SourceType: types.T_text.ToType(), HasSourceType: true},
+			}
+			filled, changed, err := FillValuesOfParamsInPlanWithSpecialization(context.Background(), original, values)
+			require.NoError(t, err)
+			require.True(t, changed)
+			stmt, err := mysql.ParseOne(context.Background(), tc.sql, 1)
+			require.NoError(t, err)
+			require.NoError(t, RefreshPreparedCTASInferredColumns(context.Background(), filled, original, stmt))
+			target := filled.GetDdl().GetCreateTable().TableDef.Cols[tc.resultOrdinal]
+			require.Equal(t, "result", target.Name)
+			require.Equal(t, types.T_varchar, types.T(target.Typ.Id))
+			require.Equal(t, tc.wantWidth, target.Typ.Width)
+			require.True(t, target.Default.NullAbility)
+			require.Equal(t, tc.originalType, types.T(original.GetDdl().GetCreateTable().TableDef.Cols[tc.resultOrdinal].Typ.Id),
+				"execution must not mutate the cached PREPARE target")
+		})
 	}
 }

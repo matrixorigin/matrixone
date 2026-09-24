@@ -327,6 +327,16 @@ func TestExecutorTemporaryDDLPolicyRetryAndPoolReuse(t *testing.T) {
 	require.Nil(t, released.preparedParamValues)
 	doCompileRelease(released)
 
+	// A prepared Compile is retained instead of entering the pool. Its terminal
+	// Release must still forget the current CTAS values before the next execute.
+	cached := NewCompile("cn", "test", "", "", "", nil, testutil.NewProcess(t), nil, false, nil, time.Now())
+	cached.SetIsPrepare(true)
+	cached.SetPreparedParamValues([]any{strings.Repeat("x", 70000)})
+	cached.Release()
+	require.Nil(t, cached.preparedParamValues)
+	cached.SetIsPrepare(false)
+	cached.Release()
+
 	// A separately initialized top-level compile must still take the client
 	// session-schema path after an executor generation has been cleared.
 	clientProc := testutil.NewProcess(t)

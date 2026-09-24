@@ -187,6 +187,9 @@ func (c *Compile) Release() {
 	if c == nil {
 		return
 	}
+	// Prepared Compiles can remain cached after Release. Semantic CTAS values
+	// belong to the completed execution, including its error and retry paths.
+	c.preparedParamValues = nil
 	if c.siriusRead != nil {
 		if err := c.siriusRead.finish(context.Background(), false); err != nil && c.proc != nil {
 			c.proc.Error(context.Background(), "failed to quiesce Sirius read during compile release", zap.Error(err))
@@ -276,6 +279,8 @@ func (c *Compile) FreezeResultMetadata() {
 }
 
 func (c *Compile) Reset(proc *process.Process, startAt time.Time, fill func(*batch.Batch, *perfcounter.CounterSet) error, sql string) error {
+	// A cached Compile must never expose the previous execution's CTAS values.
+	c.preparedParamValues = nil
 	// Reset only supports the TP topology admitted by prepare-time compilation.
 	// AP scan state and worker placement belong to one execution; updating the
 	// transaction offset cannot make them valid for another execution.
@@ -1445,6 +1450,9 @@ func (c *Compile) compileQuery(qry *plan.Query) ([]*Scope, error) {
 		return nil, err
 	}
 	if err = c.constrainIntegerArgumentWorkers(qry); err != nil {
+		return nil, err
+	}
+	if err = c.constrainPreparedPrecisionWorkers(qry); err != nil {
 		return nil, err
 	}
 	if err = c.constrainIPFunctionWorkers(qry); err != nil {

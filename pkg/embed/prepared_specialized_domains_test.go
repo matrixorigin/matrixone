@@ -23,6 +23,8 @@ import (
 	"testing"
 	"time"
 
+	"github.com/RoaringBitmap/roaring/v2"
+	"github.com/matrixorigin/matrixone/pkg/container/types"
 	"github.com/stretchr/testify/require"
 )
 
@@ -99,7 +101,7 @@ func TestPreparedSpecializedDomains(t *testing.T) {
 			exec(t, "execute gs_ctas using @a,@b,@s")
 			require.Equal(t, [][]string{{"5"}}, query(t, "select count(*) from gs_ctas_result"))
 			schema := func(table string) [][]string {
-				return query(t, "select data_type from information_schema.columns where table_schema='review29349' and table_name='"+table+"' and column_name='result'")
+				return query(t, "select data_type,is_nullable from information_schema.columns where table_schema='review29349' and table_name='"+table+"' and column_name='result'")
 			}
 			require.Equal(t, schema("gs_ctas_direct"), schema("gs_ctas_result"))
 		})
@@ -110,11 +112,19 @@ func TestPreparedSpecializedDomains(t *testing.T) {
 			exec(t, "set @a='2020-01-01',@b='2020-01-03',@s='1 day'")
 			exec(t, "execute gs_date_ctas using @a,@b,@s")
 			columnType := func(table string) [][]string {
-				return query(t, "select data_type from information_schema.columns where table_schema='review29349' and table_name='"+table+"' and column_name='result'")
+				return query(t, "select data_type,is_nullable from information_schema.columns where table_schema='review29349' and table_name='"+table+"' and column_name='result'")
 			}
 			require.Equal(t, columnType("gs_date_direct"), columnType("gs_date_prepared"))
 			require.Equal(t, query(t, "select result from gs_date_direct order by result"),
 				query(t, "select result from gs_date_prepared order by result"))
+		})
+		t.Run("series_ctas_target_only_default", func(t *testing.T) {
+			exec(t, "prepare gs_prefix from 'create table gs_prefix_result (extra int default 1) as select result from generate_series(?,?,?) g'")
+			defer conn.ExecContext(ctx, "deallocate prepare gs_prefix")
+			exec(t, "set @a=1,@b=3,@s=1")
+			exec(t, "execute gs_prefix using @a,@b,@s")
+			require.Equal(t, [][]string{{"1", "1"}, {"1", "2"}, {"1", "3"}},
+				query(t, "select extra,result from gs_prefix_result order by result"))
 		})
 		t.Run("series_ctas_explicit_column", func(t *testing.T) {
 			exec(t, "prepare gs_explicit from 'create table gs_explicit_result (result varchar(30)) as select result from generate_series(?,?,?) g'")
@@ -172,6 +182,38 @@ func TestPreparedSpecializedDomains(t *testing.T) {
 			exec(t, "set @step='1 day'")
 			require.Equal(t, want, query(t, "execute gs_fixed_step using @step"))
 		})
+		t.Run("series_binary_domain_and_scale_reuse", func(t *testing.T) {
+			stmt, err := conn.PrepareContext(ctx,
+				"select result from generate_series(?,?,?) g order by result")
+			require.NoError(t, err)
+			defer stmt.Close()
+			run := func(args ...any) (string, [][]string) {
+				rows, err := stmt.QueryContext(ctx, args...)
+				require.NoError(t, err)
+				defer rows.Close()
+				columns, err := rows.ColumnTypes()
+				require.NoError(t, err)
+				require.Len(t, columns, 1)
+				var values [][]string
+				for rows.Next() {
+					var value string
+					require.NoError(t, rows.Scan(&value))
+					values = append(values, []string{value})
+				}
+				require.NoError(t, rows.Err())
+				return columns[0].DatabaseTypeName(), values
+			}
+			wholeType, whole := run("2020-01-01 00:00:00", "2020-01-01 00:00:01", "1 second")
+			require.Equal(t, query(t,
+				"select result from generate_series('2020-01-01 00:00:00','2020-01-01 00:00:01','1 second') g order by result"), whole)
+			fractionalType, fractional := run("2020-01-01 00:00:00.123", "2020-01-01 00:00:01.123", "1 second")
+			require.Equal(t, wholeType, fractionalType)
+			require.Equal(t, query(t,
+				"select result from generate_series('2020-01-01 00:00:00.123','2020-01-01 00:00:01.123','1 second') g order by result"), fractional)
+			_, microseconds := run("2020-01-01 00:00:00", "2020-01-01 00:00:00.000002", "1 microsecond")
+			require.Equal(t, query(t,
+				"select result from generate_series('2020-01-01 00:00:00','2020-01-01 00:00:00.000002','1 microsecond') g order by result"), microseconds)
+		})
 		t.Run("unnest_large_json", func(t *testing.T) {
 			require.Equal(t, [][]string{{"1"}}, query(t, `select count(*) from unnest(cast(concat('["',repeat('x',70000),'"]') as json)) u`))
 			exec(t, "prepare u_large from 'select count(*) from unnest(?) u'")
@@ -190,18 +232,33 @@ func TestPreparedSpecializedDomains(t *testing.T) {
 			var n int
 			require.NoError(t, rows.Scan(&n))
 			require.Equal(t, 1, n)
+			require.False(t, rows.Next())
+			require.NoError(t, rows.Err())
+			require.NoError(t, rows.Close())
+			exec(t, "set @j='not json'")
+			badRows, err := conn.QueryContext(ctx, "execute u_large using @j")
+			if err == nil {
+				defer badRows.Close()
+				for badRows.Next() {
+				}
+				err = badRows.Err()
+			}
+			require.Error(t, err)
+			exec(t, `set @j=concat('["',repeat('x',70000),'"]')`)
+			require.Equal(t, [][]string{{"1"}}, query(t, "execute u_large using @j"))
 		})
 		t.Run("precision_binary_protocol_masks_recovery", func(t *testing.T) {
 			stmt, err := conn.PrepareContext(ctx, "select case when result=2 then ceil(123.456,?) else 0 end from generate_series(1,3) g order by result")
 			require.NoError(t, err)
 			defer stmt.Close()
-			for _, v := range []any{2.5, "2.5tail", nil, 2.0} {
+			runCase := func(v any) {
 				rows, err := stmt.QueryContext(ctx, v)
 				if v == nil {
 					require.ErrorContains(t, err, "not const")
-					continue
+					return
 				}
 				require.NoError(t, err)
+				defer rows.Close()
 				var got []string
 				for rows.Next() {
 					var s sql.NullString
@@ -213,8 +270,10 @@ func TestPreparedSpecializedDomains(t *testing.T) {
 					}
 				}
 				require.NoError(t, rows.Err())
-				require.NoError(t, rows.Close())
 				require.Equal(t, []string{"0.000", "123.460", "0.000"}, got)
+			}
+			for _, v := range []any{2.5, "2.5tail", nil, 2.0} {
+				runCase(v)
 			}
 		})
 		t.Run("binary_state_protocol_recovery", func(t *testing.T) {
@@ -238,6 +297,22 @@ func TestPreparedSpecializedDomains(t *testing.T) {
 					require.Equal(t, int64(3), n.Int64)
 				}
 			}
+		})
+		t.Run("large_bitmap_state_protocol", func(t *testing.T) {
+			state := roaring.New()
+			for i := uint32(0); i < 40001; i++ {
+				state.Add(i * 65537)
+			}
+			bitmap, err := state.ToBytes()
+			require.NoError(t, err)
+			require.Greater(t, len(bitmap), types.MaxVarBinaryLen)
+			stmt, err := conn.PrepareContext(ctx,
+				"select bitmap_count(bitmap_or_agg(?)) from (select 1) x")
+			require.NoError(t, err)
+			defer stmt.Close()
+			var count uint64
+			require.NoError(t, stmt.QueryRowContext(ctx, bitmap).Scan(&count))
+			require.Equal(t, uint64(40001), count)
 		})
 		t.Run("enum_set_aggregate", func(t *testing.T) {
 			exec(t, "create table special(e enum('20','3','z'),s set('x','y'))")

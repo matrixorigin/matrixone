@@ -34,7 +34,7 @@ func TestPreparedUnnestArgumentDomains(t *testing.T) {
 		}
 	}
 	require.Len(t, args, 3)
-	for i, want := range []types.T{types.T_text, types.T_varchar, types.T_bool} {
+	for i, want := range []types.T{types.T_json, types.T_varchar, types.T_bool} {
 		require.Equal(t, want, types.T(args[i].Typ.Id))
 		if i == 1 {
 			require.Equal(t, int32(types.MaxVarcharLen), args[i].Typ.Width)

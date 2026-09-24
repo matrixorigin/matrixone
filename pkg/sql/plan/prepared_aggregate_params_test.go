@@ -59,6 +59,7 @@ func TestPreparedBinaryStateMarkersUseVarbinaryDomain(t *testing.T) {
 			require.Len(t, fn.GetF().Args, 1)
 			arg := fn.GetF().Args[0]
 			require.Equal(t, int32(types.T_varbinary), arg.Typ.Id)
+			require.Zero(t, arg.Typ.Width, "opaque state cast must not impose the SQL VARBINARY width")
 			require.Equal(t, "cast", arg.GetF().GetFunc().GetObjName())
 			require.Equal(t, int32(types.T_text), arg.GetF().Args[0].Typ.Id)
 		})

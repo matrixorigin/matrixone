@@ -2312,7 +2312,18 @@ func (c *Compile) populateCreatedTable(qry *plan.CreateTable, isTemp bool, dbNam
 		if !numericPrefixPlan {
 			clear(numericPrefixPositions)
 		}
-		if params := c.proc.GetPrepareParams(); c.pn.IsPrepare && params != nil && params.Length() > 0 {
+		params := c.proc.GetPrepareParams()
+		transportCount := 0
+		if params != nil {
+			transportCount = params.Length()
+		}
+		if len(c.preparedParamValues) > 0 &&
+			(!c.pn.IsPrepare || transportCount != len(c.preparedParamValues)) {
+			return moerr.NewInternalErrorf(c.proc.Ctx,
+				"CTAS prepared parameter count mismatch: semantic=%d, transport=%d",
+				len(c.preparedParamValues), transportCount)
+		}
+		if c.pn.IsPrepare && params != nil && params.Length() > 0 {
 			values := make([]string, params.Length())
 			nulls := make([]bool, params.Length())
 			for i := range values {
@@ -2327,7 +2338,7 @@ func (c *Compile) populateCreatedTable(qry *plan.CreateTable, isTemp bool, dbNam
 				}
 			}
 			statementOption = statementOption.WithParamsAndNulls(values, nulls)
-			if len(c.preparedParamValues) == len(values) {
+			if len(c.preparedParamValues) > 0 {
 				semantic := make([]executor.ParamValue, len(values))
 				for i, value := range c.preparedParamValues {
 					param, ok := value.(plan2.ParamValue)

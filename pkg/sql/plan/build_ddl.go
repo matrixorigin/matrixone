@@ -1404,13 +1404,13 @@ func viewJoinCondWithExpandedStars(
 // RefreshPreparedCTASInferredColumns aligns columns inferred from AS SELECT
 // with the execute-time query. Explicit column definitions remain the user's
 // schema contract even when a parameter changes the source domain.
-func RefreshPreparedCTASInferredColumns(p, original *Plan, stmt tree.Statement) {
+func RefreshPreparedCTASInferredColumns(ctx context.Context, p, original *Plan, stmt tree.Statement) error {
 	ctas, ok := stmt.(*tree.CreateTable)
 	if !ok || !ctas.IsAsSelect || p == nil || original == nil || original.GetDdl() == nil ||
 		original.GetDdl().Query == nil || p.GetDdl() == nil ||
 		p.GetDdl().Query == nil || p.GetDdl().GetCreateTable() == nil ||
 		p.GetDdl().GetCreateTable().TableDef == nil {
-		return
+		return nil
 	}
 	explicit := make(map[string]struct{})
 	for _, item := range ctas.Defs {
@@ -1421,21 +1421,57 @@ func RefreshPreparedCTASInferredColumns(p, original *Plan, stmt tree.Statement) 
 	query := &Plan{Plan: &plan.Plan_Query{Query: p.GetDdl().Query}}
 	originalQuery := &Plan{Plan: &plan.Plan_Query{Query: original.GetDdl().Query}}
 	originalColumns := GetResultColumnsFromPlan(originalQuery)
-	for i, source := range GetResultColumnsFromPlan(query) {
-		if source == nil || i >= len(originalColumns) || originalColumns[i] == nil ||
-			reflect.DeepEqual(source.Typ, originalColumns[i].Typ) {
-			continue
-		}
-		if _, fixed := explicit[strings.ToLower(source.Name)]; fixed {
-			continue
-		}
-		for _, target := range p.GetDdl().GetCreateTable().TableDef.Cols {
-			if strings.EqualFold(target.Name, source.Name) {
-				target.Typ = source.Typ
+	runtimeColumns := GetResultColumnsFromPlan(query)
+	if len(originalColumns) != len(runtimeColumns) {
+		return moerr.NewInternalError(ctx, "prepared CTAS source column count changed")
+	}
+	// buildTableDefs places target-only explicit columns first and SELECT slots
+	// next, in output order. Physical hidden/system columns follow that block.
+	// Count the prefix from the original output rather than searching by name:
+	// a later physical column could happen to have the same name.
+	targetOnlyCount := 0
+	for name := range explicit {
+		found := false
+		for _, source := range originalColumns {
+			if source != nil && strings.EqualFold(name, source.Name) {
+				found = true
 				break
 			}
 		}
+		if !found {
+			targetOnlyCount++
+		}
 	}
+	targetColumns := p.GetDdl().GetCreateTable().TableDef.Cols
+	if len(targetColumns) < targetOnlyCount+len(originalColumns) {
+		return moerr.NewInternalError(ctx, "prepared CTAS source columns are missing from target")
+	}
+	for i, source := range runtimeColumns {
+		if source == nil || originalColumns[i] == nil ||
+			!strings.EqualFold(source.Name, originalColumns[i].Name) {
+			return moerr.NewInternalError(ctx, "prepared CTAS source column identity changed")
+		}
+		target := targetColumns[targetOnlyCount+i]
+		if target.Hidden || !strings.EqualFold(target.Name, originalColumns[i].Name) {
+			return moerr.NewInternalError(ctx, "prepared CTAS target column order changed")
+		}
+		if _, fixed := explicit[strings.ToLower(target.Name)]; fixed {
+			continue
+		}
+		if reflect.DeepEqual(source.Typ, originalColumns[i].Typ) {
+			continue
+		}
+		if source.Typ.NotNullable != originalColumns[i].Typ.NotNullable {
+			return moerr.NewNotSupportedf(ctx,
+				"prepared CTAS inferred column %q changed nullability", target.Name)
+		}
+		if target.Default != nil && (target.Default.Expr != nil || target.Default.OriginString != "") {
+			return moerr.NewNotSupportedf(ctx,
+				"prepared CTAS inferred column %q has a type-dependent default", target.Name)
+		}
+		target.Typ = source.Typ
+	}
+	return nil
 }
 
 func genAsSelectCols(

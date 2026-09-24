@@ -3805,6 +3805,10 @@ func (b *baseBinder) bindFuncExprImplByAstExpr(name string, astArgs []tree.Expr,
 				(name == "hll_cardinality" || name == "hll_merge_agg" || name == "bitmap_or_agg") {
 				if _, directParam := unwrapParenExpr(arg).(*tree.ParamExpr); directParam {
 					binaryType := types.T_varbinary.ToType()
+					// Opaque aggregate states can exceed the SQL VARBINARY(65535)
+					// width. This internal cast chooses the binary domain without
+					// imposing a value-length limit on the prepared parameter.
+					binaryType.Width = 0
 					expr, err = appendCastBeforeExpr(b.GetContext(), expr, makePlan2Type(&binaryType))
 					if err != nil {
 						return nil, err
