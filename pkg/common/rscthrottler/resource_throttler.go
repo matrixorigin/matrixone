@@ -92,9 +92,14 @@ type memThrottler struct {
 	rss   atomic.Int64
 	// cgroupUsage includes memory charged to the whole cgroup, including
 	// filesystem cache and kernel/socket memory. RSS alone is insufficient for
-	// a container limit: in the TPCC OOM case the process RSS fell while the
-	// cgroup continued climbing to its limit.
+	// a container limit: the final pre-OOM TPCC sample had a material cgroup
+	// charge outside the process RSS, leaving less headroom than RSS reported.
 	cgroupUsage atomic.Int64
+	// cgroupReservedBase is the reservation count observed with the latest
+	// cgroup usage sample. Reservations above this base were granted after the
+	// sample and therefore have to consume the sampled cgroup headroom even
+	// before their allocations become visible in memory.current.
+	cgroupReservedBase atomic.Int64
 	// rssReservedBase records the reserved bytes that were already reflected in
 	// the latest rss sample. S3 admission can then add only the delta above this
 	// base, avoiding the rss+reserved double-count that caused #24881 while
@@ -146,13 +151,14 @@ type memThrottler struct {
 
 func (m *memThrottler) String() string {
 	return fmt.Sprintf(
-		"{%s: limit=%s, total=%s, available=%s, cgroup=%s, cgroup-usage=%s, rss=%s, pinned=%s, pinnedRate=%f, limitRate=%f, isConstLimit=%v}",
+		"{%s: limit=%s, total=%s, available=%s, cgroup=%s, cgroup-usage=%s, cgroup-reserved-base=%s, rss=%s, pinned=%s, pinnedRate=%f, limitRate=%f, isConstLimit=%v}",
 		m.name,
 		common.HumanReadableBytes(int(m.limit.Load())),
 		common.HumanReadableBytes(int(m.total.Load())),
 		common.HumanReadableBytes(int(m.Available())),
 		common.HumanReadableBytes(int(m.cgroup.Load())),
 		common.HumanReadableBytes(int(m.cgroupUsage.Load())),
+		common.HumanReadableBytes(int(m.cgroupReservedBase.Load())),
 		common.HumanReadableBytes(int(m.rss.Load())),
 		common.HumanReadableBytes(int(m.reserved.Load())),
 		m.pinnedRate(),
@@ -271,14 +277,22 @@ func (m *memThrottler) refreshCgroupUsage() {
 	// may describe an unlimited host hierarchy and must not replace RSS.
 	if cgroupLimit == 0 || total == 0 || cgroupLimit >= total {
 		m.cgroupUsage.Store(0)
+		m.cgroupReservedBase.Store(0)
 		return
 	}
+	reservedBefore := max(0, m.reserved.Load())
 	usage, err := getCgroupMemoryUsage(os.Getpid())
 	if err != nil || usage < 0 {
 		m.cgroupUsage.Store(0)
+		m.cgroupReservedBase.Store(0)
 		return
 	}
+	reservedAfter := max(0, m.reserved.Load())
 	m.cgroupUsage.Store(usage)
+	// A concurrent acquire may be visible in only one of the two reservation
+	// reads. Use the smaller value so that such growth is charged against this
+	// sample instead of being incorrectly treated as already resident.
+	m.cgroupReservedBase.Store(min(reservedBefore, reservedAfter))
 }
 
 func (m *memThrottler) currentMemoryUsage() int64 {
@@ -311,10 +325,14 @@ func (m *memThrottler) cgroupAdmissionHeadroom() int64 {
 	return max(0, total-usage)
 }
 
-func (m *memThrottler) capAdmissionAvailable(available int64) int64 {
+func (m *memThrottler) capAdmissionAvailable(available, reserved int64) int64 {
 	available = max(0, available)
 	if headroom := m.cgroupAdmissionHeadroom(); headroom != math.MaxInt64 {
-		return min(available, headroom)
+		// The cgroup usage is a point-in-time sample. Charge all reservation
+		// growth since that sample so sequential and concurrent grants cannot
+		// each consume the same stale headroom.
+		growth := max(0, reserved-m.cgroupReservedBase.Load())
+		return min(available, max(0, headroom-growth))
 	}
 	return available
 }
@@ -494,13 +512,16 @@ func rssPressureCacheTarget(state rssPressureState) int64 {
 */
 
 func (m *memThrottler) Available() int64 {
+	return m.availableForReserved(max(0, m.reserved.Load()))
+}
+
+func (m *memThrottler) availableForReserved(reserved int64) int64 {
 	//avail := m.limit.Load() - m.rss.Load() - m.reserved.Load()
 
 	var (
-		avail    int64
-		limit    = m.limit.Load()
-		rss      = m.rss.Load()
-		reserved = m.reserved.Load()
+		avail int64
+		limit = m.limit.Load()
+		rss   = m.rss.Load()
 
 		actualMaxMemory = int64(m.actualTotalMemory.Load())
 	)
@@ -520,7 +541,7 @@ func (m *memThrottler) Available() int64 {
 			rss = m.rss.Load()
 		}
 
-		return m.capAdmissionAvailable(limit - rss - reserved)
+		return m.capAdmissionAvailable(limit-rss-reserved, reserved)
 	}
 
 	if actualMaxMemory-rss >= limit {
@@ -529,7 +550,7 @@ func (m *memThrottler) Available() int64 {
 		avail = actualMaxMemory - rss - reserved
 	}
 
-	return m.capAdmissionAvailable(avail)
+	return m.capAdmissionAvailable(avail, reserved)
 }
 
 func (m *memThrottler) PrintUsage() {
@@ -675,15 +696,18 @@ func WithAcquirePolicy(
 
 func defaultAcquirePolicy(m *memThrottler, ask int64) (int64, bool) {
 	for {
-		avail := m.Available()
-		if !m.options.allowOutOfMemoryAcquire && avail < ask {
-			return avail, false
-		}
-
 		currReserved := m.reserved.Load()
 		if currReserved < 0 {
 			currReserved = 0
 		}
+		// Compute availability from the same reservation value used by the CAS.
+		// A failed CAS retries the cgroup-growth calculation with the winning
+		// reservation, making the sampled headroom an atomic cumulative budget.
+		avail := m.availableForReserved(currReserved)
+		if !m.options.allowOutOfMemoryAcquire && avail < ask {
+			return avail, false
+		}
+
 		newReserved := currReserved + ask
 		if m.reserved.CompareAndSwap(currReserved, newReserved) {
 			return avail - ask, true
@@ -765,29 +789,29 @@ func cnFlushS3PhysicalAvailable(throttler *memThrottler, reserved int64) int64 {
 	if total <= 0 || total == math.MaxInt64 {
 		return math.MaxInt64
 	}
+	used := throttler.rss.Load() + cnFlushS3ProjectedPhysicalGrowth(throttler, reserved)
+
+	available := max(0, total-used)
+	if headroom := throttler.cgroupAdmissionHeadroom(); headroom != math.MaxInt64 {
+		// rssReservedBase is memory already represented by the RSS/cgroup
+		// samples. Only reservations beyond that coverage consume new physical
+		// cgroup headroom.
+		cgroupAvailable := max(0, throttler.rssReservedBase.Load()+headroom-reserved)
+		available = min(available, cgroupAvailable)
+	}
+	return available
+}
+
+func cnFlushS3ProjectedPhysicalGrowth(throttler *memThrottler, reserved int64) int64 {
 	base := throttler.rssReservedBase.Load()
 	liveBase := throttler.rssMpoolLiveBase.Load()
 	currentLive := mpool.GlobalStats().NumCurrBytes.Load()
 	covered := currentCNFlushS3RSSCovered(base, liveBase, reserved, currentLive)
-	used := throttler.rss.Load()
-	if delta := reserved - covered; delta > 0 {
-		used += delta
-	}
-
-	return throttler.capAdmissionAvailable(total - used)
+	return max(0, reserved-covered)
 }
 
 func cnFlushS3ProjectedPhysicalUsed(throttler *memThrottler, reserved int64) int64 {
-	base := throttler.rssReservedBase.Load()
-	liveBase := throttler.rssMpoolLiveBase.Load()
-	currentLive := mpool.GlobalStats().NumCurrBytes.Load()
-	covered := currentCNFlushS3RSSCovered(base, liveBase, reserved, currentLive)
-	used := throttler.rss.Load()
-	if delta := reserved - covered; delta > 0 {
-		used += delta
-	}
-
-	return used
+	return throttler.rss.Load() + cnFlushS3ProjectedPhysicalGrowth(throttler, reserved)
 }
 
 func (m *memThrottler) ShouldRefreshBeforeRelease() bool {
@@ -849,8 +873,15 @@ func acquireWithinRSSLimit(throttler *memThrottler, ask int64) (int64, bool) {
 
 		newReserved := reserved + ask
 		if !throttler.options.allowOutOfMemoryAcquire {
-			if headroom := throttler.cgroupAdmissionHeadroom(); headroom != math.MaxInt64 && ask > headroom {
-				return min(avail, headroom), false
+			if headroom := throttler.cgroupAdmissionHeadroom(); headroom != math.MaxInt64 {
+				// Compare the sampled cgroup headroom with cumulative projected
+				// physical growth, not the raw ask. Reservations still covered by
+				// the RSS sample or reusable S3 pages do not add cgroup charge.
+				projectedGrowth := cnFlushS3ProjectedPhysicalGrowth(throttler, newReserved)
+				if projectedGrowth > headroom {
+					cgroupAvailable := max(0, throttler.rssReservedBase.Load()+headroom-reserved)
+					return min(avail, cgroupAvailable), false
+				}
 			}
 		}
 		// Physical-memory backstop: the latest RSS sample already includes the
