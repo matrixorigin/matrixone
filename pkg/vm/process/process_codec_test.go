@@ -97,6 +97,8 @@ func newCodecTestProcess(t *testing.T) (*Process, client.TxnOperator) {
 		SqlMode:                             "STRICT_TRANS_TABLES",
 		AutoIncrementIncrement:              7,
 		AutoIncrementOffset:                 4,
+		MaxErrorCount:                       128,
+		MaxErrorCountSet:                    true,
 	}
 	sp := NewStmtProfile(uuid.MustParse("aaaaaaaa-aaaa-aaaa-aaaa-aaaaaaaaaaaa"), uuid.MustParse("bbbbbbbb-bbbb-bbbb-bbbb-bbbbbbbbbbbb"))
 	sp.SetTxnId([]byte("txn-profile-123456"))
@@ -154,6 +156,8 @@ func TestProcessCodecHelpers(t *testing.T) {
 			SqlMode:                             "STRICT_ALL_TABLES",
 			AutoIncrementIncrement:              7,
 			AutoIncrementOffset:                 4,
+			MaxErrorCount:                       128,
+			MaxErrorCountSet:                    true,
 		})
 		require.NoError(t, err)
 		require.Equal(t, "u", info.User)
@@ -164,11 +168,31 @@ func TestProcessCodecHelpers(t *testing.T) {
 		require.Equal(t, "STRICT_ALL_TABLES", info.SqlMode)
 		require.Equal(t, uint64(7), info.AutoIncrementIncrement)
 		require.Equal(t, uint64(4), info.AutoIncrementOffset)
+		require.Equal(t, 128, info.MaxErrorCount)
+		require.True(t, info.MaxErrorCountSet)
 		require.Equal(t, "UTC", info.TimeZone.String())
 
 		info, err = ConvertToProcessSessionInfo(pipeline.SessionInfo{TimeZone: []byte("bad")})
 		require.NoError(t, err)
 		require.Nil(t, info.TimeZone)
+		_, err = ConvertToProcessSessionInfo(pipeline.SessionInfo{
+			MaxErrorCount:    uint32(^uint16(0)) + 1,
+			MaxErrorCountSet: true,
+		})
+		require.Error(t, err)
+		zero, err := ConvertToProcessSessionInfo(pipeline.SessionInfo{
+			MaxErrorCountSet: true,
+		})
+		require.NoError(t, err)
+		require.Zero(t, zero.MaxErrorCount)
+		require.True(t, zero.MaxErrorCountSet)
+		max, err := ConvertToProcessSessionInfo(pipeline.SessionInfo{
+			MaxErrorCount:    uint32(^uint16(0)),
+			MaxErrorCountSet: true,
+		})
+		require.NoError(t, err)
+		require.Equal(t, int(^uint16(0)), max.MaxErrorCount)
+		require.True(t, max.MaxErrorCountSet)
 	})
 
 	t.Run("lock wait timeout resolution", func(t *testing.T) {
@@ -265,6 +289,8 @@ func TestBuildProcessInfoPreservesBackgroundSqlModeAcrossForwards(t *testing.T) 
 	first, err := proc.BuildProcessInfo("select 1")
 	require.NoError(t, err)
 	require.Equal(t, "STRICT_TRANS_TABLES", first.SessionInfo.SqlMode)
+	require.Equal(t, uint32(128), first.SessionInfo.MaxErrorCount)
+	require.True(t, first.SessionInfo.MaxErrorCountSet)
 
 	svc := NewCodecService(fakeCodecTxnClient{op: fakeCodecTxnOperator{}}, nil, nil, nil, nil, nil, nil, nil)
 	decoded, err := svc.Decode(defines.AttachAccountId(context.Background(), 42), first)
@@ -277,6 +303,42 @@ func TestBuildProcessInfoPreservesBackgroundSqlModeAcrossForwards(t *testing.T) 
 	second, err := decoded.BuildProcessInfo("select 1")
 	require.NoError(t, err)
 	require.Equal(t, "STRICT_TRANS_TABLES", second.SessionInfo.SqlMode)
+	require.Equal(t, uint32(128), second.SessionInfo.MaxErrorCount)
+	require.True(t, second.SessionInfo.MaxErrorCountSet)
+}
+
+func TestBuildProcessInfoUsesEffectiveWarningSinkAcrossForwards(t *testing.T) {
+	proc, _ := newCodecTestProcess(t)
+	proc.Base.SessionInfo.MaxErrorCount = WarningDiagnosticDefaultRetentionLimit
+	proc.Base.SessionInfo.MaxErrorCountSet = true
+	proc.WarningSink = &retentionWarningSession{limit: 2048}
+
+	first, err := proc.BuildProcessInfo("select 1")
+	require.NoError(t, err)
+	require.Equal(t, uint32(2048), first.SessionInfo.MaxErrorCount)
+	require.True(t, first.SessionInfo.MaxErrorCountSet)
+
+	// An explicit zero from the active attempt must survive serialization even
+	// when the reused Process still carries the normal SessionInfo default.
+	proc.WarningSink = &retentionWarningSession{limit: 0}
+	zero, err := proc.BuildProcessInfo("select 1")
+	require.NoError(t, err)
+	require.Zero(t, zero.SessionInfo.MaxErrorCount)
+	require.True(t, zero.SessionInfo.MaxErrorCountSet)
+
+	// Decode the effective snapshot and forward it again from a second CN. The
+	// second hop must use its current attempt sink, rather than resurrecting the
+	// NewTopProcess default of 1024.
+	proc.WarningSink = &retentionWarningSession{limit: 2048}
+	svc := NewCodecService(fakeCodecTxnClient{op: fakeCodecTxnOperator{}}, nil, nil, nil, nil, nil, nil, nil)
+	decoded, err := svc.Decode(defines.AttachAccountId(context.Background(), 42), first)
+	require.NoError(t, err)
+	defer decoded.Free()
+	decoded.WarningSink = &retentionWarningSession{limit: 2048}
+	second, err := decoded.BuildProcessInfo("select 1")
+	require.NoError(t, err)
+	require.Equal(t, uint32(2048), second.SessionInfo.MaxErrorCount)
+	require.True(t, second.SessionInfo.MaxErrorCountSet)
 }
 
 func TestPrepareParamMetadataForRemoteCompatibility(t *testing.T) {
@@ -607,6 +669,8 @@ func TestBuildProcessInfoAndMockProcessInfoWithPro(t *testing.T) {
 	require.True(t, info.SessionInfo.LockWaitTimeoutSet)
 	require.Equal(t, uint64(7), info.SessionInfo.AutoIncrementIncrement)
 	require.Equal(t, uint64(4), info.SessionInfo.AutoIncrementOffset)
+	require.Equal(t, uint32(128), info.SessionInfo.MaxErrorCount)
+	require.True(t, info.SessionInfo.MaxErrorCountSet)
 	require.Equal(t, pipeline.SessionLoggerInfo_Warn, info.SessionLogger.LogLevel)
 
 	// A rolling-upgrade receiver compiled before LockWaitTimeoutSet ignores the
@@ -756,6 +820,8 @@ func TestCodecServiceEncodeDecodeAndLookup(t *testing.T) {
 	require.Equal(t, info.SessionInfo.LockWaitTimeoutSet, decodedProc.Base.SessionInfo.LockWaitTimeoutSet)
 	require.Equal(t, info.SessionInfo.AutoIncrementIncrement, decodedProc.Base.SessionInfo.AutoIncrementIncrement)
 	require.Equal(t, info.SessionInfo.AutoIncrementOffset, decodedProc.Base.SessionInfo.AutoIncrementOffset)
+	require.Equal(t, info.SessionInfo.MaxErrorCount, uint32(decodedProc.Base.SessionInfo.MaxErrorCount))
+	require.Equal(t, info.SessionInfo.MaxErrorCountSet, decodedProc.Base.SessionInfo.MaxErrorCountSet)
 	require.NotNil(t, decodedProc.GetPrepareParams())
 	require.Equal(t, 2, decodedProc.GetPrepareParams().Length())
 	require.True(t, decodedProc.GetPrepareParams().GetNulls().Contains(1))

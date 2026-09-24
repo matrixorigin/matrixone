@@ -80,6 +80,32 @@ func (r *mockActiveRoutine) Restart() error {
 	return nil
 }
 
+type claimLossRoutine struct {
+	*mockActiveRoutine
+	destructive atomic.Int32
+	preserved   atomic.Int32
+	completed   chan struct{}
+	once        sync.Once
+}
+
+func (r *claimLossRoutine) signal() {
+	r.once.Do(func() { close(r.completed) })
+}
+
+func (r *claimLossRoutine) Cancel() error {
+	r.destructive.Add(1)
+	r.signal()
+	return nil
+}
+
+func (r *claimLossRoutine) CancelWithoutWatermarkCleanup() error {
+	r.preserved.Add(1)
+	r.signal()
+	return nil
+}
+
+var _ ClaimLossActiveRoutine = (*claimLossRoutine)(nil)
+
 type mockErrActiveRoutine struct {
 	pauseErr   error
 	resumeErr  error
@@ -684,82 +710,100 @@ func TestLifecyclePublishesClaimBeforeReplacementAndHeartbeat(t *testing.T) {
 }
 
 func TestStableCDCHeartbeatFailureRecoveryAndSupersession(t *testing.T) {
-	r, store := newDaemonHandleTestRunner(t)
-	hook := &serviceWithDaemonHook{TaskService: r.service}
-	r.service = hook
+	for _, code := range []task.TaskCode{task.TaskCode_InitCdcStableEpoch, task.TaskCode_InitCdcLosslessStart} {
+		t.Run(code.String(), func(t *testing.T) {
+			r, store := newDaemonHandleTestRunner(t)
+			t.Cleanup(r.stopper.Stop)
+			hook := &serviceWithDaemonHook{TaskService: r.service}
+			r.service = hook
 
-	claim := newDaemonTaskForTest(1, task.TaskStatus_Running, r.runnerID)
-	claim.Metadata.Executor = task.TaskCode_InitCdcStableEpoch
-	claim.LastRun = time.Now().Add(-time.Minute)
-	claim.LastHeartbeat = claim.LastRun
-	mustAddTestDaemonTask(t, store, 1, claim)
+			claim := newDaemonTaskForTest(1, task.TaskStatus_Running, r.runnerID)
+			claim.Metadata.Executor = code
+			claim.LastRun = time.Now().Add(-time.Minute)
+			claim.LastHeartbeat = claim.LastRun
+			mustAddTestDaemonTask(t, store, 1, claim)
 
-	routine := newMockActiveRoutine()
-	active := ActiveRoutine(routine)
-	local := &daemonTask{task: claim}
-	local.activeRoutine.Store(&active)
-	r.addDaemonTask(local)
+			routine := &claimLossRoutine{
+				mockActiveRoutine: newMockActiveRoutine(),
+				completed:         make(chan struct{}),
+			}
+			active := ActiveRoutine(routine)
+			local := &daemonTask{task: claim}
+			local.activeRoutine.Store(&active)
+			r.addDaemonTask(local)
 
-	// A transient storage/network error is not ownership loss. The local
-	// generation stays registered and a recovered heartbeat renews its lease.
-	hook.setHeartbeatErr(errors.New("temporary taskservice failure"))
-	r.doSendHeartbeat(context.Background())
-	select {
-	case <-routine.cancelC:
-		t.Fatal("transient heartbeat failure cancelled the current generation")
-	default:
+			// A transient storage/network error is not ownership loss. The local
+			// generation stays registered and a recovered heartbeat renews its lease.
+			hook.setHeartbeatErr(errors.New("temporary taskservice failure"))
+			r.doSendHeartbeat(context.Background())
+			select {
+			case <-routine.completed:
+				t.Fatal("transient heartbeat failure cancelled the current generation")
+			default:
+			}
+			require.True(t, r.exists(claim.ID))
+			require.False(t, local.claimLost.Load())
+
+			// The durable heartbeat is now stale while the original local executor is
+			// still healthy. If polling wins the race with the recovered heartbeat, the
+			// runner must not advance its own durable generation and strand both the old
+			// and replacement daemonTask objects.
+			candidates := r.startTasks(context.Background())
+			require.Len(t, candidates, 1)
+			selfTakeover := &daemonTask{task: candidates[0]}
+			started, err := r.startDaemonTask(context.Background(), selfTakeover, false)
+			require.NoError(t, err)
+			require.False(t, started)
+			stored := mustGetTestDaemonTask(t, store, 1, WithTaskIDCond(EQ, claim.ID))[0]
+			require.Equal(t, claim.LastRun, stored.LastRun)
+			published, ok := r.getDaemonTask(claim.ID)
+			require.True(t, ok)
+			require.Same(t, local, published)
+
+			hook.setHeartbeatErr(nil)
+			r.doSendHeartbeat(context.Background())
+			stored = mustGetTestDaemonTask(t, store, 1, WithTaskIDCond(EQ, claim.ID))[0]
+			require.True(t, stored.LastHeartbeat.After(claim.LastHeartbeat))
+			require.True(t, r.exists(claim.ID))
+
+			// A different durable generation makes the old heartbeat return
+			// ErrInvalidTask. The old entry is removed before cancellation so it cannot
+			// keep the replacement lease alive or prevent a later local takeover.
+			superseding := stored
+			superseding.TaskRunner = "r2"
+			superseding.LastRun = nextDaemonClaimTime(stored.LastRun, time.Now())
+			superseding.LastHeartbeat = time.Now()
+			mustUpdateTestDaemonTask(t, store, 1, []task.DaemonTask{superseding})
+			r.doSendHeartbeat(context.Background())
+			select {
+			case <-routine.completed:
+			case <-time.After(time.Second):
+				t.Fatal("superseded CDC generation was not cancelled")
+			}
+			require.False(t, r.exists(claim.ID))
+			require.True(t, local.claimLost.Load())
+			// The removed claim cannot dispatch another cancellation on a later tick.
+			r.doSendHeartbeat(context.Background())
+
+			// Once the replacement lease becomes stale, normal startup can claim it and
+			// publish a new local heartbeat owner for the same task ID.
+			superseding.LastHeartbeat = time.Now().Add(-r.options.heartbeatTimeout - time.Second)
+			mustUpdateTestDaemonTask(t, store, 1, []task.DaemonTask{superseding})
+			replacement := &daemonTask{task: superseding}
+			started, err = r.startDaemonTask(context.Background(), replacement, false)
+			require.NoError(t, err)
+			require.True(t, started)
+			published, ok = r.getDaemonTask(claim.ID)
+			require.True(t, ok)
+			require.Same(t, replacement, published)
+
+			// Join all scheduled callbacks before checking exact side-effect counts.
+			// This also catches a cancellation queued by the earlier transient error.
+			r.stopper.Stop()
+			require.EqualValues(t, 1, routine.preserved.Load())
+			require.Zero(t, routine.destructive.Load())
+		})
 	}
-	require.True(t, r.exists(claim.ID))
-
-	// The durable heartbeat is now stale while the original local executor is
-	// still healthy. If polling wins the race with the recovered heartbeat, the
-	// runner must not advance its own durable generation and strand both the old
-	// and replacement daemonTask objects.
-	candidates := r.startTasks(context.Background())
-	require.Len(t, candidates, 1)
-	selfTakeover := &daemonTask{task: candidates[0]}
-	started, err := r.startDaemonTask(context.Background(), selfTakeover, false)
-	require.NoError(t, err)
-	require.False(t, started)
-	stored := mustGetTestDaemonTask(t, store, 1, WithTaskIDCond(EQ, claim.ID))[0]
-	require.Equal(t, claim.LastRun, stored.LastRun)
-	published, ok := r.getDaemonTask(claim.ID)
-	require.True(t, ok)
-	require.Same(t, local, published)
-
-	hook.setHeartbeatErr(nil)
-	r.doSendHeartbeat(context.Background())
-	stored = mustGetTestDaemonTask(t, store, 1, WithTaskIDCond(EQ, claim.ID))[0]
-	require.True(t, stored.LastHeartbeat.After(claim.LastHeartbeat))
-	require.True(t, r.exists(claim.ID))
-
-	// A different durable generation makes the old heartbeat return
-	// ErrInvalidTask. The old entry is removed before cancellation so it cannot
-	// keep the replacement lease alive or prevent a later local takeover.
-	superseding := stored
-	superseding.TaskRunner = "r2"
-	superseding.LastRun = nextDaemonClaimTime(stored.LastRun, time.Now())
-	superseding.LastHeartbeat = time.Now()
-	mustUpdateTestDaemonTask(t, store, 1, []task.DaemonTask{superseding})
-	r.doSendHeartbeat(context.Background())
-	select {
-	case <-routine.cancelC:
-	case <-time.After(time.Second):
-		t.Fatal("superseded stable CDC generation was not cancelled")
-	}
-	require.False(t, r.exists(claim.ID))
-
-	// Once the replacement lease becomes stale, normal startup can claim it and
-	// publish a new local heartbeat owner for the same task ID.
-	superseding.LastHeartbeat = time.Now().Add(-r.options.heartbeatTimeout - time.Second)
-	mustUpdateTestDaemonTask(t, store, 1, []task.DaemonTask{superseding})
-	replacement := &daemonTask{task: superseding}
-	started, err = r.startDaemonTask(context.Background(), replacement, false)
-	require.NoError(t, err)
-	require.True(t, started)
-	published, ok = r.getDaemonTask(claim.ID)
-	require.True(t, ok)
-	require.Same(t, replacement, published)
 }
 
 func TestStartDaemonTaskSerializesLocalAdmission(t *testing.T) {

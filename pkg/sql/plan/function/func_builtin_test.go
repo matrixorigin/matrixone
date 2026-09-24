@@ -1977,6 +1977,44 @@ func TestSerialExtract(t *testing.T) {
 	}
 }
 
+func TestSerialExtractNegativeIndexReturnsError(t *testing.T) {
+	ps := types.NewPacker()
+	defer ps.Close()
+	ps.EncodeInt8(10)
+	ps.EncodeStringType([]byte("adam"))
+	serialized := convertByteSliceToString(ps.Bytes())
+	proc := testutil.NewProcess(t)
+
+	for _, tc := range []struct {
+		name     string
+		index    FunctionTestInput
+		result   types.Type
+		resultIn FunctionTestInput
+	}{
+		{"dynamic number", NewFunctionTestInput(types.T_int64.ToType(), []int64{-1}, nil), types.T_int8.ToType(), NewFunctionTestInput(types.T_int8.ToType(), []int8{0}, nil)},
+		{"constant number", NewFunctionTestConstInput(types.T_int64.ToType(), []int64{-1}, nil), types.T_int8.ToType(), NewFunctionTestInput(types.T_int8.ToType(), []int8{0}, nil)},
+		{"dynamic string", NewFunctionTestInput(types.T_int64.ToType(), []int64{-1}, nil), types.T_varchar.ToType(), NewFunctionTestInput(types.T_varchar.ToType(), []string{""}, nil)},
+		{"constant string", NewFunctionTestConstInput(types.T_int64.ToType(), []int64{-1}, nil), types.T_varchar.ToType(), NewFunctionTestInput(types.T_varchar.ToType(), []string{""}, nil)},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			fc := NewFunctionTestCase(proc, []FunctionTestInput{
+				NewFunctionTestInput(types.T_varchar.ToType(), []string{serialized}, nil),
+				tc.index, tc.resultIn,
+			}, NewFunctionTestResult(tc.result, true, nil, nil), builtInSerialExtract)
+			require.NoError(t, fc.result.PreExtendAndReset(fc.fnLength))
+			err := fc.fn(fc.parameters, fc.result, proc, fc.fnLength, nil)
+			require.ErrorContains(t, err, "index out of range")
+		})
+	}
+	valid := NewFunctionTestCase(proc, []FunctionTestInput{
+		NewFunctionTestInput(types.T_varchar.ToType(), []string{serialized}, nil),
+		NewFunctionTestInput(types.T_int64.ToType(), []int64{0}, nil),
+		NewFunctionTestInput(types.T_int8.ToType(), []int8{0}, nil),
+	}, NewFunctionTestResult(types.T_int8.ToType(), false, []int8{10}, nil), builtInSerialExtract)
+	ok, info := valid.Run()
+	require.True(t, ok, info)
+}
+
 func TestSerialExtractConstIndex(t *testing.T) {
 	ps := types.NewPacker()
 	defer ps.Close()
