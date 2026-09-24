@@ -132,6 +132,9 @@ func TestHexPreparedCoalesceRebindsNumericSourceDomain(t *testing.T) {
 		{"null", "select hex(coalesce(?, 2.5e0))", "2", ParamValue{Value: nil, SourceType: types.T_text.ToType(), HasSourceType: true}},
 		{"negative integer", "select hex(coalesce(?, 2.5e0))", "FFFFFFFFFFFFFFFE", ParamValue{Value: int64(-2), SourceType: types.T_int64.ToType(), HasSourceType: true}},
 		{"text peer", "select hex(coalesce(?, \"peer\"))", "312E35", ParamValue{Value: float64(1.5), SourceType: types.T_float64.ToType(), HasSourceType: true}},
+		{"ifnull common result", "select hex(ifnull(?,1.5e0))", "2", ParamValue{Value: float64(2.5), SourceType: types.T_float64.ToType(), HasSourceType: true}},
+		{"nested ifnull common result", "select hex(if(true,ifnull(?,1.5e0),0))", "2", ParamValue{Value: float64(2.5), SourceType: types.T_float64.ToType(), HasSourceType: true}},
+		{"ifnull decimal source", "select hex(ifnull(?,1.5e0))", "2", ParamValue{Value: "2.5", SourceType: types.New(types.T_decimal64, 20, 1), HasSourceType: true}},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			prepared, err := runOneStmt(NewMockOptimizer(false), t, "prepare stmt_hex_coalesce from '"+tc.sql+"'")

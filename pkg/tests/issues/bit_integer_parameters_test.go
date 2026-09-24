@@ -169,6 +169,57 @@ func testBitIntegerPreparedParameters(t *testing.T, ctx context.Context, db *sql
 			require.Equal(t, tc.want, got, tc.query)
 		}
 	})
+	t.Run("IFNULL common value across prepared consumers", func(t *testing.T) {
+		conn, err := db.Conn(ctx)
+		require.NoError(t, err)
+		defer conn.Close()
+		for _, tc := range []struct {
+			query, want string
+			input       any
+		}{
+			{`select hex(ifnull(?,1.5e0))`, "2", float64(2.5)},
+			{`select hex(if(true,ifnull(cast(2.5 as decimal(20,1)),1.5e0),0))`, "2", nil},
+			{`select hex(if(true,ifnull(?,1.5e0),0))`, "2", float64(2.5)},
+			{`select hex(ifnull(cast(? as decimal(20,1)),1.5e0))`, "2", "2.5"},
+			{`select hex(ifnull(?,1.5e0))`, "2", nil},
+			{`select hex(char(ifnull(?,1.5e0)))`, "02", float64(2.5)},
+			{`select make_set(ifnull(?,1.5e0),'a','b','c')`, "b", float64(2.5)},
+			{`select export_set(ifnull(?,1.5e0),'Y','N','',4)`, "NYNN", float64(2.5)},
+			{`select hex(char(ifnull(cast(2.5 as decimal(20,1)),1.5e0)))`, "02", nil},
+			{`select make_set(ifnull(cast(2.5 as decimal(20,1)),1.5e0),'a','b','c')`, "b", nil},
+			{`select export_set(ifnull(cast(2.5 as decimal(20,1)),1.5e0),'Y','N','',4)`, "NYNN", nil},
+		} {
+			t.Run(tc.query+fmt.Sprint(tc.input), func(t *testing.T) {
+				stmt, err := conn.PrepareContext(ctx, tc.query)
+				require.NoError(t, err)
+				defer stmt.Close()
+				var got string
+				if tc.input == nil && tc.query != `select hex(ifnull(?,1.5e0))` {
+					err = stmt.QueryRowContext(ctx).Scan(&got)
+				} else {
+					err = stmt.QueryRowContext(ctx, tc.input).Scan(&got)
+				}
+				require.NoError(t, err)
+				require.Equal(t, tc.want, got)
+			})
+		}
+	})
+	t.Run("SQL EXECUTE IFNULL decimal common value", func(t *testing.T) {
+		conn, err := db.Conn(ctx)
+		require.NoError(t, err)
+		defer conn.Close()
+		_, err = conn.ExecContext(ctx, `prepare hex_ifnull_common from 'select hex(ifnull(?,1.5e0))'`)
+		require.NoError(t, err)
+		defer func() {
+			_, err := conn.ExecContext(ctx, "deallocate prepare hex_ifnull_common")
+			require.NoError(t, err)
+		}()
+		_, err = conn.ExecContext(ctx, `set @ifnull_value=cast(2.5 as decimal(20,1))`)
+		require.NoError(t, err)
+		var got string
+		require.NoError(t, conn.QueryRowContext(ctx, "execute hex_ifnull_common using @ifnull_value").Scan(&got))
+		require.Equal(t, "2", got)
+	})
 	t.Run("COM_STMT numeric and text coalesce", func(t *testing.T) {
 		conn, err := db.Conn(ctx)
 		require.NoError(t, err)
@@ -270,5 +321,13 @@ func testBitIntegerPreparedParameters(t *testing.T, ctx context.Context, db *sql
 				require.Equal(t, tc.want, got)
 			})
 		}
+		ifnullStmt, err := rawDB.PrepareContext(ctx, `select hex(ifnull(?,1.5e0))`)
+		require.NoError(t, err)
+		defer ifnullStmt.Close()
+		captured.rewriteNext(defines.MYSQL_TYPE_NEWDECIMAL, []byte{3, '2', '.', '5'})
+		var got string
+		require.NoError(t, ifnullStmt.QueryRowContext(ctx, "placeholder").Scan(&got))
+		require.True(t, captured.wasRewritten())
+		require.Equal(t, "2", got)
 	})
 }
