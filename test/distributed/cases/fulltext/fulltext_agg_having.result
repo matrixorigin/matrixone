@@ -88,6 +88,15 @@ from wd group by cat having max(match(body) against('alpha')) > 0
 ➤ cat[4,32,0]  ¦  score[7,23,31]  ¦  rn[-5,64,0]  𝄀
 2  ¦  0.031008132  ¦  1  𝄀
 3  ¦  0.031008132  ¦  2
+select cat from (
+select cat, max(match(body) against('alpha')) score
+from wd group by cat order by cat offset 1
+) q where score > 0 order by cat;
+not supported: MATCH() AGAINST() function cannot be replaced by FULLTEXT INDEX and full table scan with fulltext search is not supported yet.
+select cat from wd group by cat
+having max(match(body) against('alpha')) > 0 order by cat offset 1;
+➤ cat[4,32,0]  𝄀
+3
 select id from docs group by id, body having max(match(body) against('alpha')) >= floor(1e-1) order by id;
 not supported: MATCH() AGAINST() function cannot be replaced by FULLTEXT INDEX and full table scan with fulltext search is not supported yet.
 create table rd(id int primary key, cat int, body text, digits int);

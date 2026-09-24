@@ -926,7 +926,10 @@ func isFullTextAggHavingBarrier(node *plan.Node) bool {
 	case plan.Node_WINDOW, plan.Node_TIME_WINDOW, plan.Node_FILL, plan.Node_PARTITION:
 		return true
 	}
-	return node.Limit != nil
+	// LIMIT and OFFSET both change which rows survive: a FILTER above either cannot be
+	// treated as the AGG's HAVING, because driving the index below drops each group's
+	// non-matching rows before the paginating node keeps/skips rows.
+	return node.Limit != nil || node.Offset != nil
 }
 
 func (builder *QueryBuilder) applyIndicesForProject(nodeID int32, projNode *plan.Node, colRefCnt map[[2]int32]int, idxColMap map[[2]int32]*plan.Expr) (int32, error) {

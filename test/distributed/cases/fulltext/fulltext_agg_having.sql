@@ -81,6 +81,21 @@ select cat, score, rn from (
   from wd group by cat having max(match(body) against('alpha')) > 0
 ) q order by cat;
 
+-- #29065 P1: OFFSET (even WITHOUT LIMIT) is a pagination barrier. An outer filter across an
+-- OFFSET-only subquery is NOT the AGG's HAVING: driving the index below the AGG drops the
+-- non-matching group BEFORE OFFSET skips rows. Correct is {cat2,cat3} (both match, none skipped
+-- by the outer level); driving would yield {cat3} (cat1 dropped by the index, then cat2 skipped).
+-- Refused (20105) rather than silently returning the wrong page.
+select cat from (
+  select cat, max(match(body) against('alpha')) score
+  from wd group by cat order by cat offset 1
+) q where score > 0 order by cat;
+
+-- Positive control: a REAL HAVING with OFFSET still drives -- HAVING runs before ORDER BY/OFFSET,
+-- so driving is result-preserving: matching {cat2,cat3} ordered, skip the first -> cat 3.
+select cat from wd group by cat
+having max(match(body) against('alpha')) > 0 order by cat offset 1;
+
 -- #29065 P1: a WRAPPED constant threshold must be EVALUATED, not have its wrapper input read.
 -- floor(1e-1) evaluates to 0, so `>= floor(1e-1)` is the always-true `>= 0`: it cannot prove
 -- membership, so it is REJECTED (20105), exactly like a bare `>= 0`. Reading the wrapper input (0.1)
