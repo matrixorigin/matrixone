@@ -21,6 +21,7 @@ import (
 
 	"github.com/matrixorigin/matrixone/pkg/container/types"
 	"github.com/matrixorigin/matrixone/pkg/pb/api"
+	"github.com/matrixorigin/matrixone/pkg/pb/timestamp"
 	"github.com/matrixorigin/matrixone/pkg/pb/txn"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/cmd_util"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/db/checkpoint"
@@ -28,6 +29,15 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/options"
 	"github.com/stretchr/testify/require"
 )
+
+type checkpointRunnerWithMax struct {
+	checkpoint.Runner
+	entry *checkpoint.CheckpointEntry
+}
+
+func (r *checkpointRunnerWithMax) MaxCheckpoint() *checkpoint.CheckpointEntry {
+	return r.entry
+}
 
 // TestHandleTTLChecker exercises the disk-cleaner TTL checker predicate built
 // by HandleDiskCleaner: a checkpoint within the TTL window is protected
@@ -158,6 +168,33 @@ func TestTableIDRangeIntersectsWindow(t *testing.T) {
 			require.Equal(t, tt.want, tableIDRangeIntersectsWindow(tt.start, tt.end, from, to))
 		})
 	}
+}
+
+func TestHandleGetChangedTableListCollectChangedUsesIndexWindow(t *testing.T) {
+	ctx := context.Background()
+	h := mockTAEHandle(ctx, t, &options.Options{})
+	defer func() { require.NoError(t, h.HandleClose(ctx)) }()
+
+	historyEnd := h.db.TxnMgr.Now()
+	historyStart := types.BuildTS(historyEnd.Physical()-time.Hour.Nanoseconds(), 0)
+	locations, err := logtail.MockTableIDBatch(ctx, historyStart, historyEnd, 64, 1, h.m, h.db.Runtime.Fs)
+	require.NoError(t, err)
+
+	entry := checkpoint.NewCheckpointEntry("", types.TS{}, historyEnd.Next(), checkpoint.ET_Global)
+	entry.SetTableIDLocation(locations)
+	h.db.BGCheckpointRunner = &checkpointRunnerWithMax{Runner: h.db.BGCheckpointRunner, entry: entry}
+
+	from := historyStart.Next().ToTimestamp()
+	to := historyEnd.ToTimestamp()
+	req := &cmd_util.GetChangedTableListReq{
+		Type: cmd_util.CollectChanged,
+		TS:   []*timestamp.Timestamp{&from, &to},
+	}
+	resp := &cmd_util.GetChangedTableListResp{}
+	_, err = h.HandleGetChangedTableList(ctx, txn.TxnMeta{}, req, resp)
+	require.NoError(t, err)
+	require.Equal(t, historyStart.ToTimestamp(), *resp.Oldest)
+	require.Contains(t, resp.TableIds, uint64(1000))
 }
 
 func TestHandleDiskCleaner_AddCheckerTTL(t *testing.T) {
