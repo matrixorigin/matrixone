@@ -39,6 +39,7 @@ import (
 	"github.com/tidwall/btree"
 
 	"github.com/matrixorigin/matrixone/pkg/catalog"
+	"github.com/matrixorigin/matrixone/pkg/clusterservice"
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
 	moruntime "github.com/matrixorigin/matrixone/pkg/common/runtime"
 	"github.com/matrixorigin/matrixone/pkg/config"
@@ -51,6 +52,7 @@ import (
 	mock_frontend "github.com/matrixorigin/matrixone/pkg/frontend/test"
 	"github.com/matrixorigin/matrixone/pkg/pb/metadata"
 	"github.com/matrixorigin/matrixone/pkg/pb/plan"
+	querypb "github.com/matrixorigin/matrixone/pkg/pb/query"
 	"github.com/matrixorigin/matrixone/pkg/pb/timestamp"
 	"github.com/matrixorigin/matrixone/pkg/pb/txn"
 	"github.com/matrixorigin/matrixone/pkg/queryservice"
@@ -503,8 +505,6 @@ func Test_createTablesInMoCatalogOfGeneralTenant(t *testing.T) {
 		_, _, err := createTablesInMoCatalogOfGeneralTenant(ctx, bh, finalVersion, ca)
 		convey.So(err, convey.ShouldBeNil)
 
-		err = createTablesInInformationSchemaOfGeneralTenant(ctx, bh, "")
-		convey.So(err, convey.ShouldBeNil)
 	})
 }
 
@@ -513,7 +513,7 @@ func TestMoRoleGrantHasGranteeLookupIndex(t *testing.T) {
 		"key idx_mo_role_grant_grantee_id(grantee_id)")
 }
 
-func Test_createTablesInInformationSchemaOfGeneralTenant_UsesProtocolAwareViews(t *testing.T) {
+func TestInitInformationSchemaSysTablesForProtocol_UsesProtocolAwareViews(t *testing.T) {
 	tests := []struct {
 		name                   string
 		protocol               int64
@@ -562,40 +562,345 @@ func Test_createTablesInInformationSchemaOfGeneralTenant_UsesProtocolAwareViews(
 
 	for _, test := range tests {
 		t.Run(test.name, func(t *testing.T) {
-			moruntime.RunTest("", func(rt moruntime.Runtime) {
-				oldProtocol, oldProtocolExists := rt.GetGlobalVariables(moruntime.MOProtocolVersion)
-				defer func() {
-					if oldProtocolExists {
-						rt.SetGlobalVariables(moruntime.MOProtocolVersion, oldProtocol)
-					} else {
-						rt.SetGlobalVariables(moruntime.MOProtocolVersion, defines.MORPCLatestVersion)
-					}
-				}()
-				rt.SetGlobalVariables(moruntime.MOProtocolVersion, test.protocol)
+			executed := sysview.InitInformationSchemaSysTablesForProtocol(test.protocol)
 
-				ctrl := gomock.NewController(t)
-				defer ctrl.Finish()
-
-				var executed []string
-				bh := mock_frontend.NewMockBackgroundExec(ctrl)
-				bh.EXPECT().ClearExecResultSet().AnyTimes()
-				bh.EXPECT().Exec(gomock.Any(), gomock.Any()).DoAndReturn(
-					func(_ context.Context, sql string) error {
-						executed = append(executed, sql)
-						return nil
-					}).AnyTimes()
-
-				require.NoError(t, createTablesInInformationSchemaOfGeneralTenant(context.Background(), bh, ""))
-
-				require.Equal(t, test.wantCheckFunction, containsSQLFragment(executed, "mo_check_constraints()"))
-				require.Equal(t, test.wantCurrentRoles, containsSQLFragment(executed, "mo_current_roles()"))
-				require.Equal(t, test.wantCompatibilityRoles,
-					containsSQLFragment(executed, "FROM mo_catalog.mo_role_grant rg"))
-				require.Equal(t, test.wantCanonicalViews,
-					containsSQL(executed, sysview.InformationSchemaTableConstraintsDDL))
-			})
+			require.Equal(t, test.wantCheckFunction, containsSQLFragment(executed, "mo_check_constraints()"))
+			require.Equal(t, test.wantCurrentRoles, containsSQLFragment(executed, "mo_current_roles()"))
+			require.Equal(t, test.wantCompatibilityRoles,
+				containsSQLFragment(executed, "FROM mo_catalog.mo_role_grant rg"))
+			require.Equal(t, test.wantCanonicalViews,
+				containsSQL(executed, sysview.InformationSchemaTableConstraintsDDL))
 		})
 	}
+
+	for _, protocol := range []int64{defines.MORPCVersion91, defines.MORPCVersion92, defines.MORPCVersion93} {
+		catalog := sysview.InitInformationSchemaSysTablesForProtocol(protocol)
+		joined := strings.Join(catalog, "\n")
+		require.Contains(t, catalog, sysview.InformationSchemaViewsLegacyDDL)
+		require.NotContains(t, joined, "mo_view_definition(")
+	}
+	current := sysview.InitInformationSchemaSysTablesForProtocol(defines.MORPCVersion94)
+	require.Contains(t, current, sysview.InformationSchemaViewsDDL)
+	require.NotContains(t, current, sysview.InformationSchemaViewsLegacyDDL)
+}
+
+type tenantInitializationProtocolCluster struct {
+	clusterservice.MOCluster
+	cns []metadata.CNService
+}
+
+func TestCreateTablesInformationSchemaPreservesKnownProtocolFallback(t *testing.T) {
+	rt := moruntime.ServiceRuntime("")
+	oldProtocol, hadProtocol := rt.GetGlobalVariables(moruntime.MOProtocolVersion)
+	t.Cleanup(func() {
+		if hadProtocol {
+			rt.SetGlobalVariables(moruntime.MOProtocolVersion, oldProtocol)
+		} else if current, ok := rt.GetGlobalVariables(moruntime.MOProtocolVersion); ok {
+			rt.CompareAndDeleteGlobalVariables(moruntime.MOProtocolVersion, current)
+		}
+	})
+	for _, test := range []struct {
+		name                   string
+		service                string
+		protocol               int64
+		wantTablesV41          bool
+		wantColumnsV41         bool
+		wantColumnsV46         bool
+		wantCurrentColumns     bool
+		wantCurrentRoles       bool
+		wantCompatibilityRoles bool
+	}{
+		{name: "protocol 15", protocol: defines.MORPCVersion15, wantTablesV41: true, wantColumnsV41: true, wantCompatibilityRoles: true},
+		{name: "protocol 41", protocol: defines.MORPCVersion41, wantTablesV41: true, wantColumnsV41: true, wantCurrentRoles: true},
+		{name: "protocol 46", protocol: defines.MORPCVersion46, wantColumnsV46: true, wantCurrentRoles: true},
+		{name: "protocol 57", protocol: defines.MORPCVersion57, wantColumnsV46: true, wantCurrentRoles: true},
+		{name: "protocol 58", protocol: defines.MORPCVersion58, wantCurrentColumns: true, wantCurrentRoles: true},
+		{name: "protocol 72", protocol: defines.MORPCVersion72, wantCurrentColumns: true, wantCurrentRoles: true},
+		// Without a process there is no all-CN proof, so even a v93 local
+		// runtime must use the safe predecessor VIEWS definition.
+		{name: "protocol 91 without process", protocol: defines.MORPCVersion91, wantCurrentColumns: true, wantCurrentRoles: true},
+		{name: "protocol 92 without process", protocol: defines.MORPCVersion92, wantCurrentColumns: true, wantCurrentRoles: true},
+		{name: "protocol 93 without process", protocol: defines.MORPCVersion93, wantCurrentColumns: true, wantCurrentRoles: true},
+		{name: "unknown runtime", service: "missing-pr27716-runtime", protocol: defines.MORPCVersion72, wantCurrentColumns: true, wantCurrentRoles: true},
+	} {
+		t.Run(test.name, func(t *testing.T) {
+			if test.service == "" {
+				rt.SetGlobalVariables(moruntime.MOProtocolVersion, test.protocol)
+			}
+
+			ctrl := gomock.NewController(t)
+			defer ctrl.Finish()
+			var executed []string
+			bh := mock_frontend.NewMockBackgroundExec(ctrl)
+			bh.EXPECT().ClearExecResultSet().AnyTimes()
+			bh.EXPECT().Exec(gomock.Any(), gomock.Any()).DoAndReturn(
+				func(_ context.Context, sql string) error {
+					executed = append(executed, sql)
+					return nil
+				}).AnyTimes()
+
+			err := createTablesInInformationSchemaOfGeneralTenant(
+				context.Background(), bh, test.service, nil)
+			require.NoError(t, err)
+			// Protocols below v94 also use the predecessor VIEWS definition; the
+			// historical role-visibility
+			// wrapper, so compare the VIEWS-specific contract rather than the
+			// whole SQL string.
+			require.True(t, containsSQLFragment(executed, "tbl.rel_createsql AS `VIEW_DEFINITION`"))
+			require.False(t, containsSQLFragment(executed, "mo_view_definition("))
+			tablesDDL := informationSchemaDDL(executed, "TABLES")
+			columnsDDL := informationSchemaDDL(executed, "COLUMNS")
+			require.NotEmpty(t, tablesDDL)
+			require.NotEmpty(t, columnsDDL)
+			if test.wantTablesV41 {
+				require.NotContains(t, tablesDDL, "UNION ALL")
+			} else {
+				require.Contains(t, tablesDDL, "UNION ALL")
+			}
+			if test.wantColumnsV41 {
+				require.NotContains(t, columnsDDL, "UNION ALL")
+			} else {
+				require.Contains(t, columnsDDL, "UNION ALL")
+			}
+			if test.wantColumnsV46 {
+				require.Contains(t, columnsDDL, "WHEN 3 then 'utf8' else NULL")
+				require.NotContains(t, columnsDDL, "WHEN 3 then 'utf8mb4' else NULL")
+			}
+			if test.wantCurrentColumns {
+				require.Contains(t, columnsDDL, "WHEN 3 then 'utf8mb4' else NULL")
+			}
+			if !test.wantColumnsV46 && !test.wantCurrentColumns {
+				require.Contains(t, columnsDDL, "WHEN 3 then 'utf8' else NULL")
+			}
+			require.Equal(t, test.wantCurrentRoles,
+				containsSQLFragment(executed, "mo_current_roles()"))
+			require.Equal(t, test.wantCompatibilityRoles,
+				containsSQLFragment(executed, "FROM mo_catalog.mo_role_grant rg"))
+		})
+	}
+}
+
+func TestProtocolVersionForTenantInitializationUsesLegacyForUnknownRuntime(t *testing.T) {
+	version, err := protocolVersionForTenantInitialization("missing-pr27716-runtime", nil)
+	require.NoError(t, err)
+	require.Equal(t, defines.MORPCVersion91, version)
+
+	rt := moruntime.ServiceRuntime("")
+	oldProtocol, hadProtocol := rt.GetGlobalVariables(moruntime.MOProtocolVersion)
+	t.Cleanup(func() {
+		if hadProtocol {
+			rt.SetGlobalVariables(moruntime.MOProtocolVersion, oldProtocol)
+		} else if current, ok := rt.GetGlobalVariables(moruntime.MOProtocolVersion); ok {
+			rt.CompareAndDeleteGlobalVariables(moruntime.MOProtocolVersion, current)
+		}
+	})
+	rt.SetGlobalVariables(moruntime.MOProtocolVersion, "invalid")
+	version, err = protocolVersionForTenantInitialization("", nil)
+	require.NoError(t, err)
+	require.Equal(t, defines.MORPCVersion91, version)
+
+	rt.SetGlobalVariables(moruntime.MOProtocolVersion, defines.MORPCVersion41)
+	version, err = protocolVersionForTenantInitialization("", nil)
+	require.NoError(t, err)
+	require.Equal(t, defines.MORPCVersion41, version)
+}
+
+func (c *tenantInitializationProtocolCluster) GetCNServiceWithoutWorkingState(
+	_ clusterservice.Selector,
+	apply func(metadata.CNService) bool,
+) {
+	for _, cn := range c.cns {
+		if !apply(cn) {
+			return
+		}
+	}
+}
+
+func TestCreateTablesInformationSchemaUsesCommonProtocolGate(t *testing.T) {
+	proc := testutil.NewProcess(t)
+	service := proc.GetService()
+	rt := moruntime.ServiceRuntime(service)
+	oldProtocol, hadProtocol := rt.GetGlobalVariables(moruntime.MOProtocolVersion)
+	oldCluster, hadCluster := rt.GetGlobalVariables(moruntime.ClusterService)
+	oldAuthoringFloor, hadAuthoringFloor := rt.GetGlobalVariables(
+		moruntime.PersistedExpressionProtocolAuthoringFloor)
+	cluster := &tenantInitializationProtocolCluster{cns: []metadata.CNService{
+		{ServiceID: "cn-v94", QueryAddress: "cn-v94-query", PipelineServiceAddress: "cn-v94-pipeline"},
+		{ServiceID: "cn-v93", QueryAddress: "cn-v93-query", PipelineServiceAddress: "cn-v93-pipeline"},
+	}}
+	t.Cleanup(func() {
+		if hadProtocol {
+			rt.SetGlobalVariables(moruntime.MOProtocolVersion, oldProtocol)
+		} else {
+			rt.CompareAndDeleteGlobalVariables(moruntime.MOProtocolVersion, defines.MORPCVersion94)
+		}
+		if hadAuthoringFloor {
+			rt.SetGlobalVariables(moruntime.PersistedExpressionProtocolAuthoringFloor, oldAuthoringFloor)
+		} else if current, ok := rt.GetGlobalVariables(moruntime.PersistedExpressionProtocolAuthoringFloor); ok {
+			rt.CompareAndDeleteGlobalVariables(moruntime.PersistedExpressionProtocolAuthoringFloor, current)
+		}
+		if hadCluster {
+			rt.SetGlobalVariables(moruntime.ClusterService, oldCluster)
+		} else {
+			rt.CompareAndDeleteGlobalVariables(moruntime.ClusterService, cluster)
+		}
+	})
+
+	queryClient := newMockQueryClient()
+	proc.Base.QueryClient = queryClient
+	rt.SetGlobalVariables(moruntime.ClusterService, cluster)
+	rt.SetGlobalVariables(moruntime.MOProtocolVersion, defines.MORPCVersion94)
+
+	setProtocolResponse := func(address string, version int64) {
+		queryClient.cnResponses[address] = &querypb.Response{
+			GetProtocolVersion: &querypb.GetProtocolVersionResponse{Version: version},
+		}
+	}
+
+	for _, test := range []struct {
+		name           string
+		responses      map[string]int64
+		sendErrors     map[string]error
+		authoringFloor int64
+		wantLatest     bool
+		wantLegacy     bool
+	}{
+		{
+			name: "mixed versions use legacy VIEWS",
+			responses: map[string]int64{
+				"cn-v94-query": defines.MORPCVersion94,
+				"cn-v93-query": defines.MORPCVersion93,
+			},
+			authoringFloor: defines.MORPCVersion93,
+			wantLegacy:     true,
+		},
+		{
+			name: "all CNs at v94 use current DDL",
+			responses: map[string]int64{
+				"cn-v94-query": defines.MORPCVersion94,
+				"cn-v93-query": defines.MORPCVersion94,
+			},
+			authoringFloor: defines.MORPCVersion94,
+			wantLatest:     true,
+		},
+		{
+			name: "unknown CN capability uses legacy VIEWS",
+			responses: map[string]int64{
+				"cn-v94-query": defines.MORPCVersion94,
+			},
+			authoringFloor: defines.MORPCVersion94,
+			wantLegacy:     true,
+		},
+		{
+			name: "RPC failure uses legacy VIEWS",
+			responses: map[string]int64{
+				"cn-v94-query": defines.MORPCVersion94,
+			},
+			sendErrors: map[string]error{
+				"cn-v94-query": context.Canceled,
+			},
+			authoringFloor: defines.MORPCVersion94,
+			wantLegacy:     true,
+		},
+		{
+			name: "local authoring admission pending uses legacy VIEWS",
+			responses: map[string]int64{
+				"cn-v94-query": defines.MORPCVersion94,
+				"cn-v93-query": defines.MORPCVersion94,
+			},
+			authoringFloor: defines.MORPCVersion93,
+			wantLegacy:     true,
+		},
+	} {
+		t.Run(test.name, func(t *testing.T) {
+			queryClient.cnResponses = make(map[string]*querypb.Response)
+			queryClient.sendError = make(map[string]error)
+			for address, version := range test.responses {
+				setProtocolResponse(address, version)
+			}
+			for address, err := range test.sendErrors {
+				queryClient.sendError[address] = err
+			}
+
+			ctrl := gomock.NewController(t)
+			defer ctrl.Finish()
+			var executed []string
+			bh := mock_frontend.NewMockBackgroundExec(ctrl)
+			bh.EXPECT().ClearExecResultSet().AnyTimes()
+			bh.EXPECT().Exec(gomock.Any(), gomock.Any()).DoAndReturn(
+				func(_ context.Context, sql string) error {
+					executed = append(executed, sql)
+					return nil
+				}).AnyTimes()
+
+			rt.SetGlobalVariables(moruntime.MOProtocolVersion, defines.MORPCVersion94)
+			rt.SetGlobalVariables(
+				moruntime.PersistedExpressionProtocolAuthoringFloor,
+				int64(test.authoringFloor))
+			err := createTablesInInformationSchemaOfGeneralTenant(
+				context.Background(), bh, service, proc)
+			require.NoError(t, err)
+			if test.wantLatest {
+				require.Contains(t, executed, sysview.InformationSchemaViewsDDL)
+				require.NotContains(t, executed, sysview.InformationSchemaViewsLegacyDDL)
+			}
+			if test.wantLegacy {
+				require.Contains(t, executed, sysview.InformationSchemaViewsLegacyDDL)
+				require.NotContains(t, executed, sysview.InformationSchemaViewsDDL)
+			}
+		})
+	}
+}
+
+func TestCreateTablesInformationSchemaUsesCallerContext(t *testing.T) {
+	proc := testutil.NewProcess(t)
+	procCtx, cancel := context.WithCancel(proc.Ctx)
+	proc.Ctx = procCtx
+	cancel()
+	service := proc.GetService()
+	rt := moruntime.ServiceRuntime(service)
+	oldProtocol, hadProtocol := rt.GetGlobalVariables(moruntime.MOProtocolVersion)
+	oldCluster, hadCluster := rt.GetGlobalVariables(moruntime.ClusterService)
+	cluster := &tenantInitializationProtocolCluster{cns: []metadata.CNService{
+		{ServiceID: "cn-v94", QueryAddress: "cn-v94-query", PipelineServiceAddress: "cn-v94-pipeline"},
+	}}
+	t.Cleanup(func() {
+		if hadProtocol {
+			rt.SetGlobalVariables(moruntime.MOProtocolVersion, oldProtocol)
+		} else {
+			rt.CompareAndDeleteGlobalVariables(moruntime.MOProtocolVersion, defines.MORPCVersion94)
+		}
+		if hadCluster {
+			rt.SetGlobalVariables(moruntime.ClusterService, oldCluster)
+		} else {
+			rt.CompareAndDeleteGlobalVariables(moruntime.ClusterService, cluster)
+		}
+	})
+
+	queryClient := newMockQueryClient()
+	queryClient.cnResponses["cn-v94-query"] = &querypb.Response{
+		GetProtocolVersion: &querypb.GetProtocolVersionResponse{Version: defines.MORPCVersion94},
+	}
+	proc.Base.QueryClient = queryClient
+	rt.SetGlobalVariables(moruntime.ClusterService, cluster)
+	rt.SetGlobalVariables(moruntime.MOProtocolVersion, defines.MORPCVersion94)
+
+	ctrl := gomock.NewController(t)
+	defer ctrl.Finish()
+	var executed []string
+	bh := mock_frontend.NewMockBackgroundExec(ctrl)
+	bh.EXPECT().ClearExecResultSet().AnyTimes()
+	bh.EXPECT().Exec(gomock.Any(), gomock.Any()).DoAndReturn(
+		func(_ context.Context, sql string) error {
+			executed = append(executed, sql)
+			return nil
+		}).AnyTimes()
+
+	err := createTablesInInformationSchemaOfGeneralTenant(
+		context.Background(), bh, service, proc)
+	require.NoError(t, err)
+	require.Contains(t, executed, sysview.InformationSchemaViewsDDL)
+	require.NotContains(t, executed, sysview.InformationSchemaViewsLegacyDDL)
 }
 
 func containsSQL(sqls []string, expected string) bool {
@@ -605,6 +910,16 @@ func containsSQL(sqls []string, expected string) bool {
 		}
 	}
 	return false
+}
+
+func informationSchemaDDL(sqls []string, view string) string {
+	prefix := "CREATE VIEW information_schema." + view + " AS"
+	for _, sql := range sqls {
+		if strings.HasPrefix(sql, prefix) {
+			return sql
+		}
+	}
+	return ""
 }
 
 func containsSQLFragment(sqls []string, fragment string) bool {

@@ -740,6 +740,8 @@ var predefinedFunids = map[int]int{
 	ONNX_RUN:                       556,
 	APPROX_PERCENTILE:              557,
 	MO_IS_LEGACY_TEMPORARY_TABLE:   558,
+	MO_VIEW_DEFINITION:             583,
+	MO_VIEW_CHECK_OPTION:           584,
 	MAX_BY:                         559,
 	MAX_BY_NON_NULL:                560,
 	CHECK_CONSTRAINT_ASSERT:        561,
@@ -766,7 +768,7 @@ var predefinedFunids = map[int]int{
 	// TODO: every one should put the new function id in front of this one if you want to make a new function.
 	EXTRACTVALUE:        581,
 	UPDATEXML:           582,
-	FUNCTION_END_NUMBER: 583,
+	FUNCTION_END_NUMBER: 585,
 }
 
 func Test_funids(t *testing.T) {

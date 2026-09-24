@@ -188,7 +188,15 @@ func TestStatisticsUpgradeOldWorkerCannotCompleteNewTask(t *testing.T) {
 
 				old := newServiceForTest("", &memLocker{},
 					clock.NewHLCClock(func() int64 { return 0 }, 0), nil, exec,
-					func(s *service) { s.handles = append(s.handles, v4_0_7.Handler) })
+					func(s *service) {
+						// The control case models a worker built before this change. Its
+						// v4.0.7 handler had no semantic VIEWS entry, so replace the
+						// current handler with an offset-only test double rather than
+						// accidentally exercising the new v94 gate.
+						legacyV407 := newTestVersionHandler(
+							"4.0.7", "4.0.6", versions.Yes, versions.Yes, 0)
+						s.handles = append(s.handles, legacyV407)
+					})
 				defer old.stopper.Stop()
 				// Both the worker admission code and this restored 4.0.7 handler are
 				// unchanged from the old binary; no new-worker-only offset check is used.
