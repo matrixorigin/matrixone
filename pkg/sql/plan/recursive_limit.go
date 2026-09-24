@@ -24,27 +24,34 @@ import (
 // recursiveCTEPrefixLimit bounds generation without removing rows needed by
 // recursive feedback. OFFSET is applied only by the final result consumer.
 func recursiveCTEPrefixLimit(ctx context.Context, limit, offset *planpb.Expr) (*planpb.Expr, error) {
+	return recursiveCTEPrefixLimitWithBinder(ctx, limit, offset, BindFuncExprImplByPlanExpr)
+}
+
+func recursiveCTEPrefixLimitWithBinder(
+	ctx context.Context, limit, offset *planpb.Expr,
+	bind func(context.Context, string, []*planpb.Expr) (*planpb.Expr, error),
+) (*planpb.Expr, error) {
 	if limit == nil || offset == nil {
 		return limit, nil
 	}
-	remaining, err := BindFuncExprImplByPlanExpr(ctx, "-", []*planpb.Expr{
+	remaining, err := bind(ctx, "-", []*planpb.Expr{
 		MakePlan2Uint64ConstExprWithType(math.MaxUint64), DeepCopyExpr(limit),
 	})
 	if err != nil {
 		return nil, err
 	}
-	extra, err := BindFuncExprImplByPlanExpr(ctx, "least", []*planpb.Expr{DeepCopyExpr(offset), remaining})
+	extra, err := bind(ctx, "least", []*planpb.Expr{DeepCopyExpr(offset), remaining})
 	if err != nil {
 		return nil, err
 	}
-	prefix, err := BindFuncExprImplByPlanExpr(ctx, "+", []*planpb.Expr{DeepCopyExpr(limit), extra})
+	prefix, err := bind(ctx, "+", []*planpb.Expr{DeepCopyExpr(limit), extra})
 	if err != nil {
 		return nil, err
 	}
 	zero := MakePlan2Uint64ConstExprWithType(0)
-	isZero, err := BindFuncExprImplByPlanExpr(ctx, "=", []*planpb.Expr{DeepCopyExpr(limit), zero})
+	isZero, err := bind(ctx, "=", []*planpb.Expr{DeepCopyExpr(limit), zero})
 	if err != nil {
 		return nil, err
 	}
-	return BindFuncExprImplByPlanExpr(ctx, "case", []*planpb.Expr{isZero, DeepCopyExpr(zero), prefix})
+	return bind(ctx, "case", []*planpb.Expr{isZero, DeepCopyExpr(zero), prefix})
 }

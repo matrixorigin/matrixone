@@ -16,6 +16,7 @@ package plan
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"math"
 	"testing"
@@ -61,6 +62,26 @@ func TestRecursiveCTEPrefixLimit(t *testing.T) {
 	got, err = recursiveCTEPrefixLimit(context.Background(), nil, limit)
 	require.NoError(t, err)
 	require.Nil(t, got)
+
+	// Failed expression binding must stop plan construction at the failing
+	// stage, rather than publishing a partially bound prefix expression.
+	bindErr := errors.New("bind failed")
+	for _, stage := range []string{"-", "least", "+", "=", "case"} {
+		t.Run("bind "+stage, func(t *testing.T) {
+			calls := 0
+			got, err := recursiveCTEPrefixLimitWithBinder(context.Background(), limit, limit,
+				func(ctx context.Context, name string, args []*planpb.Expr) (*planpb.Expr, error) {
+					calls++
+					if name == stage {
+						return nil, bindErr
+					}
+					return BindFuncExprImplByPlanExpr(ctx, name, args)
+				})
+			require.ErrorIs(t, err, bindErr)
+			require.Nil(t, got)
+			require.LessOrEqual(t, calls, 5)
+		})
+	}
 }
 
 func TestRecursiveCTEOffsetOutsideFeedback(t *testing.T) {
