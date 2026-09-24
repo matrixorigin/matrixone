@@ -3764,6 +3764,13 @@ func (s *Scope) TruncateTable(c *Compile) error {
 	}
 
 	if !isTemp && c.proc.GetTxnOperator().Txn().IsPessimistic() {
+		// DROP ACCOUNT takes the SNAPSHOT lifecycle lock before cleaning up
+		// cluster tables. Take the same row lock before the table locks to
+		// prevent an inverted lock order. Keep the later write barrier after
+		// snapshot advancement for lineage publication.
+		if err := c.lockDataBranchLineageOwnerLifecyclePessimistic(); err != nil {
+			return err
+		}
 		var err error
 		if e := lockMoTable(c, db, table, lock.LockMode_Exclusive); e != nil {
 			if !moerr.IsMoErrCode(e, moerr.ErrTxnNeedRetry) &&
