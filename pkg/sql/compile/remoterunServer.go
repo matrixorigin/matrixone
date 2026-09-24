@@ -272,6 +272,8 @@ func (receiver *messageReceiverOnServer) finalizeUnpublishedS3Objects(
 			if queueErr := workspace.QueueUnpublishedS3Cleanup(receiver.colexecServer); queueErr != nil {
 				return errors.Join(handlerErr, cleanupErr, queueErr)
 			}
+			logutil.Warn("remote unpublished S3 cleanup transferred to CN retry worker", zap.Error(cleanupErr))
+			return handlerErr
 		}
 		return errors.Join(handlerErr, cleanupErr)
 	}

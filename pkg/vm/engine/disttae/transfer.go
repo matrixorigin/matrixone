@@ -121,6 +121,18 @@ func transferTombstoneObjects(
 				logutil.Fatal("tombstone sinker tail size is not zero",
 					zap.Int("tail", len(tail)))
 			}
+			if len(slist) > 0 {
+				names := make([]string, 0, len(slist))
+				for i := range slist {
+					names = append(names, slist[i].ObjectName().String())
+				}
+				owner, ownerErr := colexec.NewUnpublishedS3ObjectOwnerForService(txn.engine.service, flow.fs, names...)
+				if ownerErr != nil {
+					return ownerErr
+				}
+				txn.RetainUnpublishedS3ObjectOwner(owner)
+				flow.ownerTransferred = true
+			}
 
 			bat := colexec.AllocCNS3ResultBat(true)
 			defer bat.Clean(txn.proc.Mp())
@@ -183,6 +195,10 @@ func (txn *Transaction) closeTransferFlowWithError(
 ) error {
 	cleanupErr := txn.closeTransferFlow(ctx, flow, failed)
 	if cleanupErr == nil {
+		return originalErr
+	}
+	if originalErr != nil {
+		logutil.Warn("tombstone transfer cleanup retained by transaction", zap.Error(cleanupErr))
 		return originalErr
 	}
 	return errors.Join(originalErr, cleanupErr)

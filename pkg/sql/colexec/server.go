@@ -22,6 +22,7 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/common/morpc"
 	"github.com/matrixorigin/matrixone/pkg/common/runtime"
 	"github.com/matrixorigin/matrixone/pkg/objectio"
+	metricv2 "github.com/matrixorigin/matrixone/pkg/util/metric/v2"
 	"github.com/matrixorigin/matrixone/pkg/vm/process"
 )
 
@@ -29,6 +30,8 @@ import (
 // Different CN services in the same process must always use different servers.
 func NewServer(serviceID string) *Server {
 	s := &Server{
+		unpublishedS3Admission: newUnpublishedS3Admission(defaultUnpublishedS3TicketLimit, serviceID),
+		unpublishedS3Cleanup:   unpublishedS3CleanupQueue{serviceID: serviceID},
 		uuidCsChanMap: UuidProcMap{
 			mp:      make(map[uuid.UUID]uuidProcMapItem, 1024),
 			waiters: make(map[uuid.UUID]*remoteReceiverWaitState, 1024),
@@ -38,6 +41,10 @@ func NewServer(serviceID string) *Server {
 			fromRpcClientToRelatedPipeline: make(map[rpcClientItem]runningPipelineInfo, 1024),
 			sessionCleanupWaiters:          make(map[morpc.ClientSession]struct{}, 128),
 		},
+	}
+	if serviceID != "" {
+		metricv2.UnpublishedS3PendingTasksGauge.WithLabelValues(serviceID).Set(0)
+		metricv2.UnpublishedS3OldestTaskAgeGauge.WithLabelValues(serviceID).Set(0)
 	}
 	rt := runtime.ServiceRuntime(serviceID)
 	if rt == nil {

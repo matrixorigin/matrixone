@@ -237,3 +237,31 @@ func TestSinkerDeletePersistedAfterAmbiguousSyncFailure(t *testing.T) {
 	_, err = baseFS.StatFile(ctx, fs.persisted)
 	require.True(t, moerr.IsMoErrCode(err, moerr.ErrFileNotFound))
 }
+
+func TestSinkerAdmissionRetainsAmbiguousSyncUntilDelete(t *testing.T) {
+	ctx := context.Background()
+	proc := testutil.NewProc(t)
+	baseFS, err := fileservice.NewMemoryFS("shared", fileservice.DisabledCacheConfig, nil)
+	require.NoError(t, err)
+	fs := &persistThenErrorFS{FileService: baseFS}
+	attrs, typs, seqnums := mockSchema(3, 2)
+	reserved := make(map[string]struct{})
+	sinker := NewSinker(2, attrs, typs, NewFSinkerImplFactory(seqnums, 2, true, false, 0), proc.Mp(), fs,
+		WithObjectSyncAdmission(func(name string) error {
+			if len(reserved) == 1 {
+				return errors.New("cleanup capacity exhausted")
+			}
+			reserved[name] = struct{}{}
+			return nil
+		}, func(name string) { delete(reserved, name) }),
+	)
+	t.Cleanup(func() { require.NoError(t, sinker.Close()) })
+	bat := containers.MockBatch(typs, 1000, 2, nil)
+	require.NoError(t, sinker.Write(ctx, containers.ToCNBatch(bat)))
+	require.ErrorContains(t, sinker.Sync(ctx), "injected post-persist sync failure")
+	require.Contains(t, reserved, fs.persisted, "reservation must precede persistence")
+	files, err := sinker.DeletePersisted(ctx)
+	require.NoError(t, err)
+	require.Equal(t, []string{fs.persisted}, files)
+	require.Empty(t, reserved, "successful deletion releases the ticket")
+}

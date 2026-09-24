@@ -21,6 +21,7 @@ import (
 
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
 	"github.com/matrixorigin/matrixone/pkg/logutil"
+	metricv2 "github.com/matrixorigin/matrixone/pkg/util/metric/v2"
 	"go.uber.org/zap"
 )
 
@@ -30,12 +31,14 @@ const unpublishedS3RetryInterval = time.Second
 // worker per CN retries the exact workspace cleanup callback until it succeeds
 // or the CN is closed. The queue is in-memory; process crashes need durable GC.
 type unpublishedS3CleanupQueue struct {
-	closeMu sync.Mutex
-	mu      sync.Mutex
-	pending []func(context.Context) error
-	stop    chan struct{}
-	done    chan struct{}
-	closing bool
+	closeMu      sync.Mutex
+	mu           sync.Mutex
+	pending      []func(context.Context) error
+	pendingSince []time.Time
+	serviceID    string
+	stop         chan struct{}
+	done         chan struct{}
+	closing      bool
 }
 
 func (srv *Server) RetryUnpublishedS3Cleanup(cleanup func(context.Context) error) error {
@@ -49,8 +52,28 @@ func (srv *Server) RetryUnpublishedS3Cleanup(cleanup func(context.Context) error
 		return moerr.NewInvalidStateNoCtx("CN is closing with unpublished S3 cleanup pending")
 	}
 	q.pending = append(q.pending, cleanup)
+	q.pendingSince = append(q.pendingSince, time.Now())
+	q.updateMetricsLocked()
 	q.startLocked()
 	return nil
+}
+
+func (q *unpublishedS3CleanupQueue) updateMetricsLocked() {
+	if q.serviceID == "" {
+		return
+	}
+	metricv2.UnpublishedS3PendingTasksGauge.WithLabelValues(q.serviceID).Set(float64(len(q.pending)))
+	oldestAge := 0.0
+	if len(q.pendingSince) != 0 {
+		oldest := q.pendingSince[0]
+		for _, since := range q.pendingSince[1:] {
+			if since.Before(oldest) {
+				oldest = since
+			}
+		}
+		oldestAge = time.Since(oldest).Seconds()
+	}
+	metricv2.UnpublishedS3OldestTaskAgeGauge.WithLabelValues(q.serviceID).Set(oldestAge)
 }
 
 func (q *unpublishedS3CleanupQueue) startLocked() {
@@ -65,16 +88,28 @@ func (q *unpublishedS3CleanupQueue) startLocked() {
 // not retain completed callbacks and their captured cleanup resources.
 func (q *unpublishedS3CleanupQueue) finishAttemptLocked(err error) {
 	if err != nil && len(q.pending) == 1 {
+		q.updateMetricsLocked()
 		return
+	}
+	var since time.Time
+	if len(q.pendingSince) != 0 {
+		since = q.pendingSince[0]
+		q.pendingSince[0] = time.Time{}
+		q.pendingSince = q.pendingSince[1:]
 	}
 	cleanup := q.pending[0]
 	q.pending[0] = nil
 	q.pending = q.pending[1:]
 	if err != nil {
 		q.pending = append(q.pending, cleanup)
+		if !since.IsZero() {
+			q.pendingSince = append(q.pendingSince, since)
+		}
 	} else if len(q.pending) == 0 {
 		q.pending = nil
+		q.pendingSince = nil
 	}
+	q.updateMetricsLocked()
 }
 
 func (q *unpublishedS3CleanupQueue) run(stop <-chan struct{}, done chan<- struct{}) {
@@ -88,6 +123,7 @@ func (q *unpublishedS3CleanupQueue) run(stop <-chan struct{}, done chan<- struct
 		case <-ticker.C:
 		}
 		q.mu.Lock()
+		q.updateMetricsLocked()
 		if len(q.pending) == 0 {
 			q.stop = nil
 			q.done = nil

@@ -54,6 +54,7 @@ type Server struct {
 
 	receivedRunningPipeline RunningPipelineMapForRemoteNode
 	unpublishedS3Cleanup    unpublishedS3CleanupQueue
+	unpublishedS3Admission  *unpublishedS3Admission
 }
 
 // RunningPipelineMapForRemoteNode

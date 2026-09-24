@@ -99,6 +99,13 @@ func (r *TableMetaReader) CloseWithCleanup(ctx context.Context) error {
 		}
 	}
 	if len(cleanupErrs) != 0 {
+		// Pending writers retain only file-service names after failed deletion.
+		// Release the reader's table/snapshot and request context now; the CN
+		// callback supplies a fresh context for the next cleanup attempt.
+		r.table = nil
+		r.pState = nil
+		r.ctx = context.Background()
+		r.state = endState
 		return errors.Join(cleanupErrs...)
 	}
 	r.pendingDataWriter = nil
