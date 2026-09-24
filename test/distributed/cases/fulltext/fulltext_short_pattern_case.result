@@ -1,0 +1,33 @@
+drop database if exists ft_case;
+create database ft_case;
+use ft_case;
+create table c (id int primary key, body varchar(64));
+create fulltext index fc on c (body);
+insert into c values (1,'high'),(2,'HI'),(3,'pineapple'),(4,'apple'),(5,'Abyss');
+select id from c where match(body) against('hi') order by id;
+➤ id[4,32,0]  𝄀
+1  𝄀
+2
+select id from c where match(body) against('ab') order by id;
+➤ id[4,32,0]  𝄀
+5
+select id from c where match(body) against('Hi') order by id;
+➤ id[4,32,0]  𝄀
+1  𝄀
+2
+select id from c where match(body) against('HI') order by id;
+➤ id[4,32,0]  𝄀
+1  𝄀
+2
+select id from c where match(body) against('Ab') order by id;
+➤ id[4,32,0]  𝄀
+5
+select id from c where match(body) against('AB') order by id;
+➤ id[4,32,0]  𝄀
+5
+select id from c where match(body) against('hig') order by id;
+➤ id[4,32,0]
+select id from c where match(body) against('HIGH') order by id;
+➤ id[4,32,0]  𝄀
+1
+drop database ft_case;

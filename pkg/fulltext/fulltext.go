@@ -923,9 +923,13 @@ func ParsePatternInNLMode(pattern string, parser string) ([]*Pattern, error) {
 
 	runeSlice := []rune(pattern)
 	ngram_size := 3
-	// if number of character is small than Ngram size = 3, do prefix search
+	// if number of character is small than Ngram size = 3, do prefix search.
+	// Lowercase it: indexed Latin tokens are stored lowercased (SimpleTokenizer.outputLatin) and the
+	// >=3-rune path folds case through the tokenizer, so without this a capitalized short pattern
+	// (e.g. `Hi`) prefix-searches `Hi` and misses the stored `hi`/`high` (#29296). Boolean mode
+	// already lowercases its whole pattern.
 	if len(runeSlice) < ngram_size {
-		return []*Pattern{{Text: pattern + "*", Operator: STAR}}, nil
+		return []*Pattern{{Text: strings.ToLower(pattern) + "*", Operator: STAR}}, nil
 	}
 
 	list := make([]*Pattern, 0, 32)
