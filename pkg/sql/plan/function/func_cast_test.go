@@ -100,6 +100,50 @@ func TestTemporalCastsHonorTimeTruncateFractional(t *testing.T) {
 	}
 }
 
+func TestTemporalCastsTruncateFractionalAcrossSources(t *testing.T) {
+	proc := testutil.NewProcess(t)
+	proc.GetSessionInfo().TimeZone = time.UTC
+	proc.SetResolveVariableFunc(func(name string, _, _ bool) (interface{}, error) {
+		require.Equal(t, "sql_mode", name)
+		return "TIME_TRUNCATE_FRACTIONAL", nil
+	})
+	dt := types.DatetimeFromClock(2024, 1, 2, 3, 4, 5, 987654)
+	ts, err := types.ParseTimestamp(time.UTC, "2024-01-02 03:04:05.987654", 6)
+	require.NoError(t, err)
+	wantDT := types.DatetimeFromClock(2024, 1, 2, 3, 4, 5, 987000)
+	wantTS, err := types.ParseTimestamp(time.UTC, "2024-01-02 03:04:05.987000", 3)
+	require.NoError(t, err)
+	wantTime := types.TimeFromClock(false, 3, 4, 5, 987000)
+
+	for _, tc := range []struct {
+		name  string
+		input FunctionTestInput
+		out   types.Type
+		value interface{}
+	}{
+		{name: "string to datetime", input: NewFunctionTestInput(types.T_varchar.ToType(), []string{"2024-01-02 03:04:05.987654"}, nil), out: types.T_datetime.ToTypeWithScale(3), value: []types.Datetime{wantDT}},
+		{name: "string to timestamp", input: NewFunctionTestInput(types.T_varchar.ToType(), []string{"2024-01-02 03:04:05.987654"}, nil), out: types.T_timestamp.ToTypeWithScale(3), value: []types.Timestamp{wantTS}},
+		{name: "datetime to timestamp", input: NewFunctionTestInput(types.T_datetime.ToTypeWithScale(6), []types.Datetime{dt}, nil), out: types.T_timestamp.ToTypeWithScale(3), value: []types.Timestamp{wantTS}},
+		{name: "timestamp to datetime", input: NewFunctionTestInput(types.T_timestamp.ToTypeWithScale(6), []types.Timestamp{ts}, nil), out: types.T_datetime.ToTypeWithScale(3), value: []types.Datetime{wantDT}},
+		{name: "time to time", input: NewFunctionTestInput(types.T_time.ToTypeWithScale(6), []types.Time{types.TimeFromClock(false, 3, 4, 5, 987654)}, nil), out: types.T_time.ToTypeWithScale(3), value: []types.Time{wantTime}},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			var empty interface{}
+			switch tc.out.Oid {
+			case types.T_datetime:
+				empty = []types.Datetime{}
+			case types.T_timestamp:
+				empty = []types.Timestamp{}
+			case types.T_time:
+				empty = []types.Time{}
+			}
+			caseTest := NewFunctionTestCase(proc, []FunctionTestInput{tc.input, NewFunctionTestInput(tc.out, empty, nil)}, NewFunctionTestResult(tc.out, false, tc.value, nil), NewCast)
+			succeed, info := caseTest.Run()
+			require.True(t, succeed, info)
+		})
+	}
+}
+
 func TestStringToFloatMatrixOneNativeRejectsIncompleteTokens(t *testing.T) {
 	proc := testutil.NewProcess(t)
 	proc.GetSessionInfo().MatrixOneNativeMode = true
