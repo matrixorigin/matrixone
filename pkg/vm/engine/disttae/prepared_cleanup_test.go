@@ -117,7 +117,7 @@ func TestPreparedInsertRollbackRetriesCleanupWithoutAnotherExecute(t *testing.T)
 	require.Empty(t, txn.unpublishedS3Cleanup)
 	pipeline.New(0, nil, arg).Cleanup(proc, true, true, err)
 	require.Len(t, txn.unpublishedS3Cleanup, 1, "Reset alone must transfer the failed writer")
-	require.Error(t, txn.Rollback(context.Background()))
+	require.NoError(t, txn.Rollback(context.Background()))
 	require.True(t, txn.removed)
 	require.Empty(t, txn.unpublishedS3Cleanup, "CN owns retry after rollback")
 	for _, name := range fs.names {

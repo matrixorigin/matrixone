@@ -61,6 +61,7 @@ func init() {
 	initExecutionResourceMetrics()
 	initHashBuildMetrics()
 	initArrowLoadMetrics()
+	initUnpublishedS3Metrics()
 
 	registry.MustRegister(HeartbeatHistogram)
 	registry.MustRegister(HeartbeatFailureCounter)

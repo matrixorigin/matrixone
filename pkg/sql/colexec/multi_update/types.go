@@ -244,10 +244,7 @@ func (update *MultiUpdate) Reset(proc *process.Process, pipelineFailed bool, err
 	}
 	if update.ctr.s3Writer != nil {
 		if resetErr := update.ctr.s3Writer.reset(proc, pipelineFailed); resetErr != nil {
-			writer := update.ctr.s3Writer
-			if update.retainPendingS3Writer(proc) {
-				writer.releaseBuffers(proc.Mp())
-			}
+			update.retainPendingS3Writer(proc)
 		}
 	}
 	update.ctr.s3AffectedRows = 0
@@ -286,7 +283,21 @@ func (update *MultiUpdate) Free(proc *process.Process, pipelineFailed bool, err 
 }
 
 func (update *MultiUpdate) retainPendingS3Writer(proc *process.Process) bool {
-	if colexec.RetainUnpublishedS3Cleanup(proc, update.ctr.s3Writer.cleanupUnpublishedS3Objects) {
+	writer := update.ctr.s3Writer
+	if writer == nil {
+		return false
+	}
+	task := writer.retryTask()
+	if task.empty() {
+		writer.releaseBuffers(proc.Mp())
+		update.ctr.s3Writer = nil
+		return true
+	}
+	if colexec.RetainUnpublishedS3Cleanup(proc, task.cleanup) {
+		writer.releaseBuffers(proc.Mp())
+		writer.syncedObjectOwners = nil
+		writer.failedWriters = nil
+		writer.insertSinkers = nil
 		update.ctr.s3Writer = nil
 		return true
 	}

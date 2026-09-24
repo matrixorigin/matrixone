@@ -62,6 +62,18 @@ func TestUnpublishedS3CleanupContextSharesOuterDeadline(t *testing.T) {
 	}
 }
 
+func TestTerminalUnpublishedS3CleanupContextSurvivesCanceledRequest(t *testing.T) {
+	request, cancelRequest := context.WithCancel(context.Background())
+	cancelRequest()
+	cleanup, cancelCleanup := TerminalUnpublishedS3CleanupContext(request)
+	defer cancelCleanup()
+	require.NoError(t, cleanup.Err())
+	deadline, ok := cleanup.Deadline()
+	require.True(t, ok)
+	require.Greater(t, time.Until(deadline), 0*time.Second)
+	require.LessOrEqual(t, time.Until(deadline), 10*time.Minute)
+}
+
 func (w *testUnpublishedS3CleanupWorkspace) RetainUnpublishedS3Cleanup(
 	cleanup func(context.Context) error,
 ) {
@@ -150,6 +162,8 @@ func TestCNS3WriterRetainsDetachedObjectOwnershipUntilHandoff(t *testing.T) {
 		err := writer.CloseWithCleanup(proc.Ctx, true)
 		require.ErrorIs(t, err, errInjectedDelete)
 		require.Len(t, writer.ownedPersistedNames, 1)
+		require.Nil(t, writer.sinker, "retry ownership must not retain sinker buffers")
+		require.Nil(t, writer.blockInfoBat, "retry ownership must not retain an mpool batch")
 		_, err = baseFS.StatFile(proc.Ctx, objectName)
 		require.NoError(t, err)
 
@@ -277,6 +291,7 @@ func TestCNS3DataWriterChunkedColumnProtocolGateIsLive(t *testing.T) {
 		}
 	})
 	moruntime.SetupServiceBasedRuntime(serviceID, rt)
+	NewServer(serviceID)
 
 	tableDef := &plan.TableDef{
 		Name: "wide_column",
@@ -363,6 +378,7 @@ func TestCNS3TombstoneWriterProtocolGate(t *testing.T) {
 	serviceID := fmt.Sprintf("chunked-tombstone-%s", t.Name())
 	rt := moruntime.DefaultRuntime()
 	moruntime.SetupServiceBasedRuntime(serviceID, rt)
+	NewServer(serviceID)
 
 	rt.SetGlobalVariables(moruntime.MOProtocolVersion, defines.MORPCVersion28)
 	legacy := NewCNS3TombstoneWriterForService(

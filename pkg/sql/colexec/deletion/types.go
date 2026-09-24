@@ -342,7 +342,8 @@ func (ctr *container) flush(proc *process.Process, analyzer process.Analyzer) (u
 			}
 			if cleanupErr := s3writer.CloseWithCleanup(proc.Ctx, true); cleanupErr != nil {
 				ctr.s3Writers = append(ctr.s3Writers, s3writer)
-				return errors.Join(cause, cleanupErr)
+				logutil.Warn("remote deletion cleanup retained for retry", zap.Error(cleanupErr))
+				return cause
 			}
 			s3writer = nil
 			return cause

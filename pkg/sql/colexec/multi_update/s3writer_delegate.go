@@ -246,7 +246,14 @@ func retainedS3InputCols(updateCtxs []*MultiUpdateCtx, action actionType) []int 
 // ensureInsertSinkers lazily creates persistent per-table insert sinkers
 // on first call. Requires proc for Mp() and fileservice.
 func (writer *s3WriterDelegate) ensureInsertSinkers(proc *process.Process) error {
-	if writer.insertSinkers[0] != nil {
+	need := false
+	for i, updateCtx := range writer.updateCtxs {
+		if len(updateCtx.InsertCols) != 0 && writer.insertSinkers[i] == nil {
+			need = true
+			break
+		}
+	}
+	if !need {
 		return nil
 	}
 	fs, err := colexec.GetSharedFSFromProc(proc)
@@ -254,7 +261,7 @@ func (writer *s3WriterDelegate) ensureInsertSinkers(proc *process.Process) error
 		return err
 	}
 	for i, updateCtx := range writer.updateCtxs {
-		if len(updateCtx.InsertCols) == 0 {
+		if len(updateCtx.InsertCols) == 0 || writer.insertSinkers[i] != nil {
 			continue
 		}
 		opts := []ioutil.SinkerOption{
@@ -697,9 +704,9 @@ func (writer *s3WriterDelegate) sortAndSyncOneTable(
 	}
 	counterSet := analyzer.GetOpCounterSet()
 	writeCtx := perfcounter.AttachS3RequestKey(proc.Ctx, counterSet)
-	synced := false
+	transferred := false
 	defer func() {
-		if !synced {
+		if !transferred {
 			writer.failedWriters = append(writer.failedWriters, s3Writer)
 			return
 		}
@@ -742,60 +749,31 @@ func (writer *s3WriterDelegate) sortAndSyncOneTable(
 		bats[i] = nil
 	}
 
-	var stats []objectio.ObjectStats
-	if stats, err = process.MeasureFilesystemWait(analyzer, func() ([]objectio.ObjectStats, error) {
+	if _, err = process.MeasureFilesystemWait(analyzer, func() ([]objectio.ObjectStats, error) {
 		return s3Writer.Sync(writeCtx)
 	}); err != nil {
 		return
 	}
-	synced = true
-	if err = writer.retainSyncedObjectNames(proc, fs, stats); err != nil {
-		return err
-	}
-
 	if blockInfoBat, err = s3Writer.FillBlockInfoBat(); err != nil {
 		return
 	}
 
 	if isTombstone {
-		return writer.fillDeleteBlockInfo(proc, idx, blockInfoBat, rowCount)
+		err = writer.fillDeleteBlockInfo(proc, idx, blockInfoBat, rowCount)
+	} else {
+		err = writer.fillInsertBlockInfo(proc, idx, blockInfoBat, rowCount)
 	}
-
-	return writer.fillInsertBlockInfo(proc, idx, blockInfoBat, rowCount)
-
-}
-
-func (writer *s3WriterDelegate) retainSyncedObjectNames(
-	proc *process.Process,
-	fs fileservice.FileService,
-	stats []objectio.ObjectStats,
-) error {
-	if len(stats) == 0 {
-		return nil
-	}
-	names := make([]string, 0, len(stats))
-	for i := range stats {
-		names = append(names, stats[i].ObjectName().String())
-	}
-	owner, err := colexec.NewUnpublishedS3ObjectOwner(fs, names...)
 	if err != nil {
-		return err
+		return
 	}
-	if owner == nil {
-		return nil
+	owner, transferErr := s3Writer.TransferPersistedObjectsOwner(proc)
+	if transferErr != nil {
+		return transferErr
 	}
-	writer.syncedObjectOwners = append(writer.syncedObjectOwners, owner)
-	txnOp := proc.GetTxnOperator()
-	if txnOp == nil || txnOp.GetWorkspace() == nil {
-		return moerr.NewInternalErrorNoCtx(
-			"transaction workspace is missing for unpublished S3 object ownership",
-		)
+	if owner != nil {
+		writer.syncedObjectOwners = append(writer.syncedObjectOwners, owner)
 	}
-	if !colexec.RetainUnpublishedS3ObjectOwner(proc, owner) {
-		return moerr.NewInternalErrorNoCtx(
-			"transaction workspace cannot retain unpublished S3 object ownership",
-		)
-	}
+	transferred = true
 	return nil
 }
 
@@ -860,16 +838,7 @@ func RetainOutputS3ObjectOwnership(proc *process.Process, output *batch.Batch) e
 	if err != nil {
 		return err
 	}
-	owner, err := colexec.NewUnpublishedS3ObjectOwner(fs, names...)
-	if err != nil {
-		return err
-	}
-	if !colexec.RetainUnpublishedS3ObjectOwner(proc, owner) {
-		return moerr.NewInternalErrorNoCtx(
-			"receiving transaction workspace cannot retain remote S3 object ownership",
-		)
-	}
-	return nil
+	return colexec.RetainReceivedUnpublishedS3ObjectNames(proc, fs, names...)
 }
 
 // finalizeSyncedObjects releases completed object names after the successful
@@ -1090,12 +1059,15 @@ func (writer *s3WriterDelegate) reset(proc *process.Process, pipelineFailed bool
 	// their buffer pools and arenas on the next append() call.  On the
 	// success path the sinkers were already flushed by
 	// flushTailAndWriteToOutput(), so Reset() is a no-op on the data side.
-	for _, s3w := range writer.insertSinkers {
+	for i, s3w := range writer.insertSinkers {
 		if s3w != nil {
 			if cleanupErr := s3w.ResetWithCleanup(proc.Ctx, pipelineFailed); cleanupErr != nil {
 				logutil.Warn("failed to clean multi-update insert S3 writer", zap.Error(cleanupErr))
 				cleanupErrs = append(cleanupErrs, cleanupErr)
 				continue
+			}
+			if !s3w.ReadyForWrites() {
+				writer.insertSinkers[i] = nil
 			}
 		}
 	}
@@ -1177,16 +1149,25 @@ func (writer *s3WriterDelegate) free(proc *process.Process, pipelineFailed bool)
 // releaseBuffers also serves Reset failures: detach the non-reusable delegate
 // without issuing another synchronous Delete before handing it to rollback.
 func (writer *s3WriterDelegate) releaseBuffers(mp *mpool.MPool) {
-	writer.cleanupMP = mp
+	for i, s3w := range writer.insertSinkers {
+		if s3w != nil && !s3w.PendingUnpublishedCleanup() {
+			_ = s3w.Close()
+			writer.insertSinkers[i] = nil
+		}
+	}
 	if writer.cleanupErr == nil {
 		writer.insertSinkers = nil
-		for _, fl := range writer.insertFreeLists {
-			if fl != nil {
-				fl.Close(mp)
-			}
-		}
-		writer.insertFreeLists = nil
 	}
+	// Every failed CNS3Writer has already detached its sinker. Retry ownership
+	// contains only names, so shared batch free lists and the session mpool can
+	// be released before the callback enters the transaction or CN queue.
+	for _, fl := range writer.insertFreeLists {
+		if fl != nil {
+			fl.Close(mp)
+		}
+	}
+	writer.insertFreeLists = nil
+	writer.cleanupMP = nil
 
 	for _, bat := range writer.insertBlockInfo {
 		if bat != nil {
@@ -1217,6 +1198,67 @@ func (writer *s3WriterDelegate) releaseBuffers(mp *mpool.MPool) {
 		writer.outputBat = nil
 	}
 	writer.buf.Reset()
+}
+
+type unpublishedS3RetryTask struct {
+	owners        []*colexec.UnpublishedS3ObjectOwner
+	failedWriters []*colexec.CNS3Writer
+	insertSinkers []*colexec.CNS3Writer
+}
+
+func (task *unpublishedS3RetryTask) empty() bool {
+	return len(task.owners) == 0 && len(task.failedWriters) == 0 && len(task.insertSinkers) == 0
+}
+
+func (writer *s3WriterDelegate) retryTask() *unpublishedS3RetryTask {
+	task := new(unpublishedS3RetryTask)
+	for _, owner := range writer.syncedObjectOwners {
+		if owner != nil && owner.Pending() {
+			task.owners = append(task.owners, owner)
+		}
+	}
+	for _, s3w := range writer.failedWriters {
+		if s3w != nil && s3w.PendingUnpublishedCleanup() {
+			task.failedWriters = append(task.failedWriters, s3w)
+		}
+	}
+	for _, s3w := range writer.insertSinkers {
+		if s3w != nil && s3w.PendingUnpublishedCleanup() {
+			task.insertSinkers = append(task.insertSinkers, s3w)
+		}
+	}
+	return task
+}
+
+func (task *unpublishedS3RetryTask) cleanup(ctx context.Context) error {
+	cleanupCtx, cancel := colexec.UnpublishedS3CleanupContext(ctx)
+	defer cancel()
+	var errs []error
+	pendingOwners := task.owners[:0]
+	for _, owner := range task.owners {
+		if err := owner.Cleanup(cleanupCtx); err != nil {
+			errs = append(errs, err)
+			pendingOwners = append(pendingOwners, owner)
+		}
+	}
+	for i := len(pendingOwners); i < len(task.owners); i++ {
+		task.owners[i] = nil
+	}
+	task.owners = pendingOwners
+	for _, writers := range []*[]*colexec.CNS3Writer{&task.failedWriters, &task.insertSinkers} {
+		pending := (*writers)[:0]
+		for _, s3w := range *writers {
+			if err := s3w.CloseWithCleanup(cleanupCtx, true); err != nil {
+				errs = append(errs, err)
+				pending = append(pending, s3w)
+			}
+		}
+		for i := len(pending); i < len(*writers); i++ {
+			(*writers)[i] = nil
+		}
+		*writers = pending
+	}
+	return errors.Join(errs...)
 }
 
 func (writer *s3WriterDelegate) cleanupUnpublishedS3Objects(ctx context.Context) error {
