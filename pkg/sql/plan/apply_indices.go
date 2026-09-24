@@ -230,8 +230,16 @@ func BuildOverFetchLimitExpr(ctx context.Context, limit *plan.Expr, filteredPost
 	// Clamping the ADDEND instead of guarding the sum keeps this branch-free for
 	// the same reason as above: least(k, MaxUint64-10) + 10 is at most MaxUint64
 	// by construction, so no evaluation order can overflow it.
+	// A prepared LIMIT's implicit uint64 cast may be replaced with the bound
+	// parameter's source domain when the variadic least() is rebound. Pin this
+	// generated arithmetic boundary to uint64, including for DECIMAL inputs.
+	unsignedLimit, err := appendSyntaxExplicitCastBeforeExpr(ctx, DeepCopyExpr(limit), plan.Type{
+		Id: int32(types.T_uint64), NotNullable: true})
+	if err != nil {
+		return nil, err
+	}
 	clampedK, err := BindFuncExprImplByPlanExpr(ctx, "least", []*plan.Expr{
-		DeepCopyExpr(limit),
+		unsignedLimit,
 		makePlan2Uint64ConstExprWithType(math.MaxUint64 - overfetch.MinExtraCandidates)})
 	if err != nil {
 		return nil, err
