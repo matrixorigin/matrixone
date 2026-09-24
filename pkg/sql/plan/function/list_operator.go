@@ -186,6 +186,69 @@ func isJSONBooleanComparison(left, right types.Type) bool {
 		left.Oid == types.T_bool && right.Oid == types.T_json
 }
 
+// alignDecimalComparisonTypes preserves integer capacity when comparisons need
+// one coefficient scale. Use the original exact domains: an intermediate cast
+// may have the physical type's default precision rather than the source's.
+func alignDecimalComparisonTypes(targets, inputs []types.Type) (bool, bool) {
+	target := targets[0]
+	aligned := true
+	for _, typ := range targets {
+		if typ.Oid != target.Oid || typ.Scale != target.Scale {
+			aligned = false
+		}
+	}
+	if aligned {
+		return false, true
+	}
+
+	sources := make([]types.Type, len(inputs))
+	for i, input := range inputs {
+		if targets[i].Oid.TypeLen() > target.Oid.TypeLen() {
+			target = targets[i]
+		}
+		if input.Oid.IsDecimal() || input.IsIntOrUint() {
+			sources[i] = input
+			if input.Oid.IsDecimal() && input.Width <= 0 {
+				sources[i].Width = input.Oid.ToType().Width
+			}
+		} else {
+			sources[i] = targets[i]
+		}
+	}
+	if !setSafeDecimalWidthAndScaleFromSource(&target, sources) {
+		return false, false
+	}
+	for i := range targets {
+		targets[i] = target
+	}
+	return true, true
+}
+
+func equalityTypeCheck(_ []overload, inputs []types.Type) checkResult {
+	if len(inputs) != 2 {
+		return newCheckResultWithFailure(failedFunctionParametersWrong)
+	}
+	if isJSONBooleanComparison(inputs[0], inputs[1]) {
+		return newCheckResultWithSuccess(0)
+	}
+	hasCast, left, right := comparisonTypeCastRule(inputs[0], inputs[1])
+	if !equalAndNotEqualOperatorSupports(left, right) {
+		return newCheckResultWithFailure(failedFunctionParametersWrong)
+	}
+	targets := []types.Type{left, right}
+	if left.Oid.IsDecimal() && right.Oid.IsDecimal() {
+		aligned, ok := alignDecimalComparisonTypes(targets, inputs)
+		if !ok {
+			return newCheckResultWithFailure(failedFunctionParametersWrong)
+		}
+		hasCast = hasCast || aligned
+	}
+	if hasCast {
+		return newCheckResultWithCast(0, targets)
+	}
+	return newCheckResultWithSuccess(0)
+}
+
 var supportedOperators = []FuncNew{
 	// operator `=`
 	// return true if a = b, return false if a != b, return null if one of a and b is null
@@ -193,40 +256,7 @@ var supportedOperators = []FuncNew{
 		functionId: EQUAL,
 		class:      plan.Function_STRICT | plan.Function_ZONEMAPPABLE,
 		layout:     COMPARISON_OPERATOR,
-		checkFn: func(overloads []overload, inputs []types.Type) checkResult {
-			if len(inputs) == 2 {
-				if isJSONBooleanComparison(inputs[0], inputs[1]) {
-					return newCheckResultWithSuccess(0)
-				}
-				has, t1, t2 := comparisonTypeCastRule(inputs[0], inputs[1])
-				if has {
-					if equalAndNotEqualOperatorSupports(t1, t2) {
-						if t1.Oid == t2.Oid && t1.Oid.IsDecimal() {
-							if t1.Scale > t2.Scale {
-								t2.Scale = t1.Scale
-							} else {
-								t1.Scale = t2.Scale
-							}
-						}
-						return newCheckResultWithCast(0, []types.Type{t1, t2})
-					}
-				} else {
-					if equalAndNotEqualOperatorSupports(inputs[0], inputs[1]) {
-						if inputs[0].Oid.IsDecimal() && inputs[0].Scale != inputs[1].Scale {
-							t1, t2 := inputs[0], inputs[1]
-							if t1.Scale > t2.Scale {
-								t2.Scale = t1.Scale
-							} else {
-								t1.Scale = t2.Scale
-							}
-							return newCheckResultWithCast(0, []types.Type{t1, t2})
-						}
-						return newCheckResultWithSuccess(0)
-					}
-				}
-			}
-			return newCheckResultWithFailure(failedFunctionParametersWrong)
-		},
+		checkFn:    equalityTypeCheck,
 
 		Overloads: []overload{
 			{
@@ -247,40 +277,7 @@ var supportedOperators = []FuncNew{
 		functionId: NULL_SAFE_EQUAL,
 		class:      plan.Function_PRODUCE_NO_NULL,
 		layout:     COMPARISON_OPERATOR,
-		checkFn: func(overloads []overload, inputs []types.Type) checkResult {
-			if len(inputs) == 2 {
-				if isJSONBooleanComparison(inputs[0], inputs[1]) {
-					return newCheckResultWithSuccess(0)
-				}
-				has, t1, t2 := comparisonTypeCastRule(inputs[0], inputs[1])
-				if has {
-					if equalAndNotEqualOperatorSupports(t1, t2) {
-						if t1.Oid == t2.Oid && t1.Oid.IsDecimal() {
-							if t1.Scale > t2.Scale {
-								t2.Scale = t1.Scale
-							} else {
-								t1.Scale = t2.Scale
-							}
-						}
-						return newCheckResultWithCast(0, []types.Type{t1, t2})
-					}
-				} else {
-					if equalAndNotEqualOperatorSupports(inputs[0], inputs[1]) {
-						if inputs[0].Oid.IsDecimal() && inputs[0].Scale != inputs[1].Scale {
-							t1, t2 := inputs[0], inputs[1]
-							if t1.Scale > t2.Scale {
-								t2.Scale = t1.Scale
-							} else {
-								t1.Scale = t2.Scale
-							}
-							return newCheckResultWithCast(0, []types.Type{t1, t2})
-						}
-						return newCheckResultWithSuccess(0)
-					}
-				}
-			}
-			return newCheckResultWithFailure(failedFunctionParametersWrong)
-		},
+		checkFn:    equalityTypeCheck,
 
 		Overloads: []overload{
 			{
