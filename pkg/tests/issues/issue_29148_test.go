@@ -42,6 +42,7 @@ func TestIssue29148PreparedRowRuleProtocolLifecycle(t *testing.T) {
 			dbName    = "issue29148_protocol_db"
 			tableName = "t"
 			roleName  = "issue29148_protocol_role"
+			emptyRole = "issue29148_empty_role"
 			userName  = "issue29148_protocol_user"
 			password  = "123456"
 		)
@@ -55,6 +56,7 @@ func TestIssue29148PreparedRowRuleProtocolLifecycle(t *testing.T) {
 			cleanupCtx, cleanupCancel := context.WithTimeout(context.Background(), 30*time.Second)
 			defer cleanupCancel()
 			execSQLMaybe(t, cleanupCtx, adminDB, "drop user if exists "+userName)
+			execSQLMaybe(t, cleanupCtx, adminDB, "drop role if exists "+emptyRole)
 			execSQLMaybe(t, cleanupCtx, adminDB, "drop role if exists "+roleName)
 			execSQLMaybe(t, cleanupCtx, adminDB, "drop database if exists "+dbName)
 		}()
@@ -68,14 +70,19 @@ func TestIssue29148PreparedRowRuleProtocolLifecycle(t *testing.T) {
 		execSQLRequire(t, ctx, adminDB,
 			"insert into "+dbName+"."+tableName+" values (1, 100, 1), (2, 200, 2)")
 		execSQLRequire(t, ctx, adminDB, "create role "+roleName)
+		execSQLRequire(t, ctx, adminDB, "create role "+emptyRole)
 		execSQLRequire(t, ctx, adminDB,
 			"alter role "+roleName+" add rule \"select id, amount from "+dbName+"."+tableName+" where tenant = 1\" on table "+dbName+"."+tableName)
 		execSQLRequire(t, ctx, adminDB,
 			"create user "+userName+" identified by '"+password+"' default role "+roleName)
 		execSQLRequire(t, ctx, adminDB, "grant "+roleName+" to "+userName)
+		execSQLRequire(t, ctx, adminDB, "grant "+emptyRole+" to "+userName)
 		execSQLRequire(t, ctx, adminDB, "grant connect on account * to "+roleName)
+		execSQLRequire(t, ctx, adminDB, "grant connect on account * to "+emptyRole)
 		execSQLRequire(t, ctx, adminDB,
 			"grant select on table "+dbName+"."+tableName+" to "+roleName)
+		execSQLRequire(t, ctx, adminDB,
+			"grant select on table "+dbName+"."+tableName+" to "+emptyRole)
 
 		userDB, err := sql.Open("mysql", fmt.Sprintf(
 			"%s:%s@tcp(127.0.0.1:%d)/?multiStatements=true&interpolateParams=false&maxAllowedPacket=1048576",
@@ -95,9 +102,11 @@ func TestIssue29148PreparedRowRuleProtocolLifecycle(t *testing.T) {
 		}
 		var id, amount int
 		execOnUser("set enable_remap_hint = 0")
-		execOnUser("set role " + roleName + "; prepare issue29148_disabled from 'select id, amount from " + dbName + "." + tableName + " order by id'")
+		execOnUser("set role " + roleName)
+		execOnUser("prepare issue29148_disabled from 'select id, amount from " + dbName + "." + tableName + " order by id'")
 		rows, err := userConn.QueryContext(ctx, "execute issue29148_disabled")
 		require.NoError(t, err)
+		defer rows.Close()
 		var disabledRows [][2]int
 		for rows.Next() {
 			var row [2]int
@@ -106,18 +115,59 @@ func TestIssue29148PreparedRowRuleProtocolLifecycle(t *testing.T) {
 		}
 		require.NoError(t, rows.Err())
 		require.NoError(t, rows.Close())
-		require.Equal(t, [][2]int{{1, 100}, {2, 200}}, disabledRows)
-		execOnUser("deallocate prepare issue29148_disabled")
+		require.Equal(t, [][2]int{{1, 100}}, disabledRows,
+			"mandatory role rules still filter rows when enable_remap_hint is off")
 
-		// The request snapshot is disabled, but an earlier statement enables
-		// rewriting before PREPARE publishes its handle. Publication must reject
-		// the stale policy even though the later PREPARE was successfully planned.
-		execOnUser("set enable_remap_hint = 1; set role " + roleName + "; prepare issue29148_disabled_snapshot from 'select id, amount from " + dbName + "." + tableName + " order by id'")
+		// Changing the optional rewrite switch removes prepared handles. Keep
+		// this one open and prove the client cannot execute it afterward.
+		execOnUser("set enable_remap_hint = 1")
+		_, err = userConn.ExecContext(ctx, "execute issue29148_disabled")
+		require.Error(t, err, "a handle removed by the switch change must not execute")
+
+		// This role has no row rules, so the request starts with a genuinely
+		// disabled policy snapshot. Enabling the switch before PREPARE in the same
+		// COM_QUERY must prevent that stale handle from executing in a later one.
+		execOnUser("set role " + emptyRole)
+		execOnUser("set enable_remap_hint = 0")
+		execOnUser("set enable_remap_hint = 1; prepare issue29148_disabled_snapshot from 'select id, amount from " + dbName + "." + tableName + " order by id'")
 		_, err = userConn.ExecContext(ctx, "execute issue29148_disabled_snapshot")
 		requireNeedReprepare(t, err)
 		execOnUser("deallocate prepare issue29148_disabled_snapshot")
 
+		// A role switch can activate mandatory rules while the captured request
+		// policy and optional switch are both disabled. Publication must inspect
+		// the current role before keeping that old snapshot on a prepared handle.
+		execOnUser("set enable_remap_hint = 0")
+		execOnUser("set role " + emptyRole)
+		execOnUser("prepare issue29148_empty_role_handle from 'select id, amount from " + dbName + "." + tableName + " order by id'")
+		execOnUser("set role " + emptyRole)
+		rows, err = userConn.QueryContext(ctx, "execute issue29148_empty_role_handle")
+		require.NoError(t, err)
+		defer rows.Close()
+		var emptyRoleRows [][2]int
+		for rows.Next() {
+			var row [2]int
+			require.NoError(t, rows.Scan(&row[0], &row[1]))
+			emptyRoleRows = append(emptyRoleRows, row)
+		}
+		require.NoError(t, rows.Err())
+		require.NoError(t, rows.Close())
+		require.Equal(t, [][2]int{{1, 100}, {2, 200}}, emptyRoleRows,
+			"a disabled handle remains valid across a role switch with no row rules")
+
+		execOnUser("set role " + roleName)
+		_, err = userConn.ExecContext(ctx, "execute issue29148_empty_role_handle")
+		requireNeedReprepare(t, err)
+		execOnUser("deallocate prepare issue29148_empty_role_handle")
+
+		execOnUser("set role " + emptyRole)
+		execOnUser("set role " + roleName + "; prepare issue29148_new_role_rule from 'select id, amount from " + dbName + "." + tableName + " order by id'")
+		_, err = userConn.ExecContext(ctx, "execute issue29148_new_role_rule")
+		requireNeedReprepare(t, err)
+		execOnUser("deallocate prepare issue29148_new_role_rule")
+
 		execOnUser("set enable_remap_hint = 1")
+		execOnUser("set role " + roleName)
 
 		// Load the original role policy into this session before the administrator
 		// changes it. The following SET ROLE and PREPARE are deliberately sent as
