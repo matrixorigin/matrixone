@@ -17,6 +17,14 @@ SELECT STR_TO_DATE('2024-54-0','%Y-%U-%w') IS NULL AS invalid_week,
 SELECT STR_TO_DATE('2024-12-31-060','%Y-%m-%d-%j') AS ordinal_overrides_date,
        STR_TO_DATE('2024-060-09-1','%Y-%j-%u-%w') AS week_overrides_ordinal,
        STR_TO_DATE('2024 060 12 AM','%Y %j %h %p') AS midnight_ordinal;
+-- MySQL counts a leading plus within numeric directive width and preserves
+-- parsed fields when the input ends before a repeated directive.
+SELECT STR_TO_DATE('+1st February 2024','%D %M %Y') AS plus_day,
+       STR_TO_DATE('2024 +60','%Y %j') AS plus_ordinal,
+       STR_TO_DATE('2024-+9-1','%Y-%u-%w') AS plus_week,
+       STR_TO_DATE('2024 060','%Y %j%j') AS repeated_ordinal;
+SELECT STR_TO_DATE('2024-09-Mondayé','%Y-%u-%W') IS NULL AS non_ascii_weekday_suffix,
+       STR_TO_DATE('2024-02-29 -01','%Y-%m-%d %j') IS NULL AS negative_ordinal;
 DROP DATABASE IF EXISTS issue_29331_str_to_date;
 CREATE DATABASE issue_29331_str_to_date;
 USE issue_29331_str_to_date;

@@ -178,7 +178,9 @@ func strToDate2(cctx context.Context, t *GeneralTime, date string, format string
 	}
 
 	if len(date) == 0 {
-		ctx[token] = 0
+		if _, parsed := ctx[token]; !parsed {
+			ctx[token] = 0
+		}
 		return true
 	}
 
