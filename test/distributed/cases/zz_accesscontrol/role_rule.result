@@ -330,7 +330,7 @@ select count(*) from mo_catalog.mo_user where user_name in ('test_rule_user','te
 select count(*) from mo_catalog.mo_role where role_name in ('test_rule_role','test_rule_role_multi_a','test_rule_role_multi_b','test_rule_role_multi_c','test_rule_role_multi_d','test_rule_role_inherit_a','test_rule_role_inherit_b','test_rule_role_validate','test_rule_role_unmergeable_a','test_rule_role_unmergeable_b','test_rule_role_alias_a','test_rule_role_alias_b','test_rule_role_where_a','test_rule_role_where_b','test_rule_role_dup_projection_a','test_rule_role_dup_projection_b','test_rule_role_expr_projection_a','test_rule_role_expr_projection_b','test_rule_role_legacy','test_rule_role_dependency');
 ➤ count(*)[-5,64,0]
 0
-select count(*) from mo_catalog.mo_role_rule where rule_name in ('db1.t1','db2.t2','db1.t_rename_legacy','db1.t_dup','db1.t_rename_rule_dependency');
+select count(*) from mo_catalog.mo_role_rule where rule_name in ('db1.t1','db2.t2','db1.t_rename_legacy','db1. t_rename_legacy','db1.t_dup','db1.t_rename_rule_dependency');
 ➤ count(*)[-5,64,0]
 0
 select count(*) from mo_catalog.mo_tables where reldatabase in ('db1','db2') and relname in ('t_rename_no_rule','t_rename_no_rule_after','t.with.dot','t.with.dot.after','t_rename_chain_ok_a','t_rename_chain_ok_a_after','t_rename_chain_ok_b','t_rename_chain_ok_b_after','t_rename_chain_guard','t_rename_chain_guard_after','t_rename_legacy','t_rename_legacy_after','t_rename_rule_dependency','t_rename_rule_allowlist','t_rename_rule_allowlist_old');
