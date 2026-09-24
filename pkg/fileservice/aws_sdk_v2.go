@@ -62,6 +62,8 @@ type AwsSDKv2 struct {
 	disableMultiDelete   atomic.Bool
 }
 
+const awsMultipartAbortTimeout = 30 * time.Second
+
 var _ objectStorageCopier = new(AwsSDKv2)
 var _ objectStorageIdentityReader = new(AwsSDKv2)
 
@@ -462,11 +464,7 @@ func (a *AwsSDKv2) Write(
 		defer func() {
 			// abort
 			if err != nil {
-				_, abortErr := a.client.AbortMultipartUpload(context.WithoutCancel(ctx), &s3.AbortMultipartUploadInput{
-					Bucket:   ptrTo(a.bucket),
-					Key:      ptrTo(key),
-					UploadId: output.UploadId,
-				})
+				abortErr := a.abortMultipartUpload(ctx, key, output.UploadId, awsMultipartAbortTimeout)
 				err = errors.Join(err, abortErr)
 			}
 		}()
@@ -570,6 +568,19 @@ func (a *AwsSDKv2) Write(
 	return
 }
 
+// abortMultipartUpload keeps cleanup alive after caller cancellation while
+// bounding the time a failed write can spend waiting for S3 to respond.
+func (a *AwsSDKv2) abortMultipartUpload(ctx context.Context, key string, uploadID *string, timeout time.Duration) error {
+	abortCtx, cancel := context.WithTimeout(context.WithoutCancel(ctx), timeout)
+	defer cancel()
+	_, err := a.client.AbortMultipartUpload(abortCtx, &s3.AbortMultipartUploadInput{
+		Bucket:   ptrTo(a.bucket),
+		Key:      ptrTo(key),
+		UploadId: uploadID,
+	})
+	return err
+}
+
 func (a *AwsSDKv2) SupportsParallelMultipart() bool {
 	return true
 }
@@ -667,11 +678,7 @@ func (a *AwsSDKv2) WriteMultipartParallel(
 
 	defer func() {
 		if err != nil {
-			_, abortErr := a.client.AbortMultipartUpload(context.WithoutCancel(parentCtx), &s3.AbortMultipartUploadInput{
-				Bucket:   ptrTo(a.bucket),
-				Key:      ptrTo(key),
-				UploadId: output.UploadId,
-			})
+			abortErr := a.abortMultipartUpload(parentCtx, key, output.UploadId, awsMultipartAbortTimeout)
 			err = errors.Join(err, abortErr)
 		}
 	}()
