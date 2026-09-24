@@ -682,6 +682,52 @@ func TestInsertFreeTransfersFailedCleanupToTransaction(t *testing.T) {
 	require.True(t, moerr.IsMoErrCode(err, moerr.ErrFileNotFound), "transaction retry should delete the object, got %v", err)
 }
 
+func TestPartitionInsertFreeKeepsFailedCleanupOwner(t *testing.T) {
+	for _, failDelete := range []bool{false, true} {
+		t.Run(fmt.Sprintf("failDelete=%v", failDelete), func(t *testing.T) {
+			proc := testutil.NewProc(t)
+			defer proc.Free()
+			baseFS, err := colexec.GetSharedFSFromProc(proc)
+			require.NoError(t, err)
+			deleteErr := errors.New("injected partition cleanup failure")
+			fs := &failOnceInsertDeleteFileService{FileService: baseFS}
+			if failDelete {
+				fs.failErr = deleteErr
+			}
+			writer := colexec.NewCNS3DataWriter(proc.Mp(), fs, testInsertS3TableDef(), 1, false)
+			bat := &batch.Batch{Attrs: []string{"a", "b"}, Vecs: []*vector.Vector{
+				testutil.MakeInt64Vector([]int64{1}, nil, proc.Mp()),
+				testutil.MakeVarcharVector([]string{"x"}, nil, proc.Mp()),
+			}}
+			bat.SetRowCount(1)
+			defer bat.Clean(proc.Mp())
+			require.NoError(t, writer.Write(proc.Ctx, bat))
+			blockInfo, err := writer.SyncAndFillBlockInfoBat(proc.Ctx)
+			require.NoError(t, err)
+			stats := objectio.ObjectStats(blockInfo.Vecs[1].GetBytesAt(0))
+			name := stats.ObjectName().String()
+			blockInfo.Clean(proc.Mp())
+
+			workspace := installInsertOwnershipWorkspace(t, proc)
+			arg := NewArgument()
+			arg.ctr.partitionS3Writers = []*colexec.CNS3Writer{nil, writer}
+			arg.Free(proc, true, deleteErr)
+			require.Nil(t, arg.ctr.partitionS3Writers)
+			arg.Release()
+			if failDelete {
+				require.Len(t, workspace.cleanups, 1)
+				_, err = baseFS.StatFile(proc.Ctx, name)
+				require.NoError(t, err, "failed deletion must preserve the object for retry")
+				require.NoError(t, workspace.cleanups[0](proc.Ctx))
+			} else {
+				require.Empty(t, workspace.cleanups)
+			}
+			_, err = baseFS.StatFile(proc.Ctx, name)
+			require.True(t, moerr.IsMoErrCode(err, moerr.ErrFileNotFound), "%v", err)
+		})
+	}
+}
+
 func TestInsertFlushS3WriterOnMemoryPressureRefreshesBeforeReleaseOnAppendError(t *testing.T) {
 	proc := testutil.NewProc(t)
 	defer proc.Free()

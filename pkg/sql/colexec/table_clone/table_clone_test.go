@@ -96,6 +96,23 @@ func TestTableCloneFreeTransfersReaderCleanupToTransaction(t *testing.T) {
 	require.Equal(t, 2, reader.calls)
 }
 
+func TestTableCloneReaderCloseRetriesWithoutWorkspace(t *testing.T) {
+	proc := testutil.NewProcess(t)
+	defer proc.Free()
+	closeErr := errors.New("injected clone reader close failure")
+	reader := &tableCloneCloseErrorReader{err: closeErr}
+	clone := NewTableClone()
+	clone.Ctx = &TableCloneCtx{}
+	clone.srcIdxReader = map[string]engine.Reader{"index": reader}
+
+	clone.Reset(proc, true, closeErr)
+	require.Same(t, reader, clone.srcIdxReader["index"], "Reset must keep failed reader cleanup")
+	clone.Free(proc, true, closeErr)
+	require.Empty(t, clone.srcIdxReader)
+	require.Equal(t, 2, reader.calls)
+	clone.Release()
+}
+
 type autoIncrementTestRelation struct {
 	engine.Relation
 	tableID  uint64
