@@ -35,9 +35,9 @@ func TestVectorScanPlacementCapabilityFallback(t *testing.T) {
 			node := vectorPlacementNode()
 			switch mode {
 			case "old worker":
-				client.version = defines.MORPCVersion93
+				client.version = defines.MORPCVersion94
 			case "old coordinator":
-				moruntime.ServiceRuntime(c.proc.GetService()).SetGlobalVariables(moruntime.MOProtocolVersion, defines.MORPCVersion93)
+				moruntime.ServiceRuntime(c.proc.GetService()).SetGlobalVariables(moruntime.MOProtocolVersion, defines.MORPCVersion94)
 			case "unknown worker":
 				client.customResponse = true
 			case "probe failure":
@@ -95,17 +95,17 @@ func TestVectorScanPartitionTransportAndRollback(t *testing.T) {
 	require.Equal(t, remote.NodeInfo.CNCNT, decoded.NodeInfo.CNCNT)
 
 	// The execution mapping stays frozen if the destination rolls back.
-	client.version = defines.MORPCVersion93
+	client.version = defines.MORPCVersion94
 	_, err = encodeRemoteScope(remote, c.proc)
 	require.ErrorContains(t, err, "remote destination")
 	require.Equal(t, "a", remote.NodeInfo.Id)
 	require.Zero(t, remote.NodeInfo.CNIDX)
 	require.Equal(t, client.calls, client.releases)
-	client.version = defines.MORPCVersion94
+	client.version = defines.MORPCVersion95
 	rt := moruntime.ServiceRuntime(c.proc.GetService())
-	rt.SetGlobalVariables(moruntime.MOProtocolVersion, defines.MORPCVersion93)
+	rt.SetGlobalVariables(moruntime.MOProtocolVersion, defines.MORPCVersion94)
 	_, err = decodeScope(data, c.proc, true, nil)
-	require.ErrorContains(t, err, "version 94")
+	require.ErrorContains(t, err, "version 95")
 	_, err = encodeRemoteScope(remote, c.proc)
 	require.ErrorContains(t, err, "remote destination")
 

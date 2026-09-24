@@ -5461,7 +5461,7 @@ func (c *Compile) compileVectorIndexScan(node *plan.Node) ([]*Scope, error) {
 				CNIDX: int32(i),
 			}
 		}
-		stable, err := remoteWorkersSupportProtocol(c.proc, nodes, defines.MORPCVersion94)
+		stable, err := remoteWorkersSupportProtocol(c.proc, nodes, defines.MORPCVersion95)
 		if err != nil {
 			return nil, err
 		}
