@@ -493,6 +493,53 @@ func TestPreparedJSONAggregateValueNeedsRuntimeSpecialization(t *testing.T) {
 	}
 }
 
+func TestPreparedJSONAggregateValueWithoutRuntimeMetadata(t *testing.T) {
+	for _, tc := range []struct {
+		sql string
+		fn  string
+	}{
+		{sql: "select json_arrayagg(?) from nation", fn: "json_arrayagg"},
+		{sql: "select json_objectagg(''k'', ?) from nation", fn: "json_objectagg"},
+	} {
+		t.Run(tc.fn, func(t *testing.T) {
+			prepared := buildPreparedAggregatePlan(t, tc.sql)
+			preparedAggregate := findPlanFunctionExpr(prepared.Plan, tc.fn)
+			require.NotNil(t, preparedAggregate)
+			preparedArg := preparedAggregate.GetF().Args
+			preparedType := preparedArg[len(preparedArg)-1].Typ.Id
+
+			// A caller without source-type metadata must keep the prepared
+			// marker domain, not infer a JSON atom from the text value.
+			filled, specialized, err := FillValuesOfParamsInPlanWithSpecialization(
+				context.Background(), prepared.Plan,
+				[]any{ParamValue{Value: "plain", RetainParamRef: true}})
+			require.NoError(t, err)
+			require.False(t, specialized, "unknown source type must not invalidate the cached compile")
+			aggregate := findPlanFunctionExpr(filled, tc.fn)
+			require.NotNil(t, aggregate)
+			args := aggregate.GetF().Args
+			require.Equal(t, preparedType, args[len(args)-1].Typ.Id)
+			require.NoError(t, RestorePreparedRuntimeParamRefs(context.Background(), filled))
+			require.True(t, preparedExprContainsParam(args[len(args)-1]))
+
+			// The fallback must not poison the cached template for a later
+			// execution that does supply a concrete source type.
+			filled, specialized, err = FillValuesOfParamsInPlanWithSpecialization(
+				context.Background(), prepared.Plan,
+				[]any{ParamValue{
+					Value: "123.4500", SourceType: types.New(types.T_decimal128, 20, 4),
+					HasSourceType: true, RetainParamRef: true,
+				}})
+			require.NoError(t, err)
+			require.True(t, specialized)
+			aggregate = findPlanFunctionExpr(filled, tc.fn)
+			require.NotNil(t, aggregate)
+			args = aggregate.GetF().Args
+			require.Equal(t, int32(types.T_decimal128), args[len(args)-1].Typ.Id)
+		})
+	}
+}
+
 func TestPreparedJSONAggregateKeepsExplicitAndKeyDomains(t *testing.T) {
 	for _, sql := range []string{
 		"select json_arrayagg(cast(? as decimal(20,4))) from nation",
