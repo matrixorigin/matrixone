@@ -20,6 +20,7 @@ import (
 	"errors"
 	"strings"
 	"sync"
+	"sync/atomic"
 	"testing"
 	"time"
 
@@ -37,6 +38,7 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/container/types"
 	"github.com/matrixorigin/matrixone/pkg/container/vector"
 	"github.com/matrixorigin/matrixone/pkg/defines"
+	"github.com/matrixorigin/matrixone/pkg/fileservice"
 	mock_frontend "github.com/matrixorigin/matrixone/pkg/frontend/test"
 	mock_lock "github.com/matrixorigin/matrixone/pkg/frontend/test/mock_lock"
 	"github.com/matrixorigin/matrixone/pkg/lockservice"
@@ -106,18 +108,80 @@ func TestResolveRemoteCompileMPoolCap(t *testing.T) {
 	require.Equal(t, int64(8*gib), cap)
 }
 
-func TestRetryUnpublishedS3CleanupDrainsRemoteWorkspace(t *testing.T) {
-	ctrl := gomock.NewController(t)
+type remoteCleanupFailOnceFS struct {
+	fileservice.FileService
+	mu        sync.Mutex
+	remaining int
+	err       error
+}
+
+func (fs *remoteCleanupFailOnceFS) Delete(ctx context.Context, names ...string) error {
+	fs.mu.Lock()
+	if fs.remaining > 0 {
+		fs.remaining--
+		fs.mu.Unlock()
+		return fs.err
+	}
+	fs.mu.Unlock()
+	return fs.FileService.Delete(ctx, names...)
+}
+
+type remoteOwnerCleanupWorkspace struct {
+	owner *colexec.UnpublishedS3ObjectOwner
+	calls atomic.Int32
+}
+
+func (w *remoteOwnerCleanupWorkspace) CleanupUnpublishedS3Objects(ctx context.Context) error {
+	w.calls.Add(1)
+	return w.owner.Cleanup(ctx)
+}
+
+func TestRemoteStreamExitRetriesFailedS3Cleanup(t *testing.T) {
 	proc := testutil.NewProcess(t)
 	defer proc.Free()
-	cleanupErr := errors.New("injected remote cleanup failure")
-	workspace := &remoteS3CleanupWorkspace{cleanupErr: cleanupErr}
-	txnOp := mock_frontend.NewMockTxnOperator(ctrl)
-	txnOp.EXPECT().GetWorkspace().Return(workspace).Times(1)
-	proc.Base.TxnOperator = txnOp
+	baseFS, err := colexec.GetSharedFSFromProc(proc)
+	require.NoError(t, err)
+	const objectName = "remote-stream-exit-retry-object"
+	require.NoError(t, baseFS.Write(proc.Ctx, fileservice.IOVector{
+		FilePath: objectName,
+		Entries:  []fileservice.IOEntry{{Size: 1, Data: []byte("x")}},
+		Policy:   fileservice.SkipAllCache,
+	}))
+	deleteErr := errors.New("temporary S3 delete failure")
+	fs := &remoteCleanupFailOnceFS{FileService: baseFS, remaining: 1, err: deleteErr}
+	owner, err := colexec.NewUnpublishedS3ObjectOwner(fs, objectName)
+	require.NoError(t, err)
+	workspace := &remoteOwnerCleanupWorkspace{owner: owner}
+	server := colexec.NewServer("")
+	t.Cleanup(func() { require.NoError(t, server.CloseUnpublishedS3Cleanup(context.Background())) })
+	session := &lifecycleTestSession{ctx: context.Background()}
+	lifecycle, err := registerPipelineStreamLifecycle(session, 409, newPipelineBatchFlow(1, 1024))
+	require.NoError(t, err)
+	defer lifecycle.remove()
+	receiver := &messageReceiverOnServer{
+		messageCtx:                    context.Background(),
+		colexecServer:                 server,
+		unpublishedS3CleanupWorkspace: workspace,
+	}
+	handlerErr := errors.New("remote insert failed after S3 spill")
+	err = receiver.finalizeUnpublishedS3Objects(handlerErr, lifecycle)
+	require.ErrorIs(t, err, handlerErr)
+	require.ErrorIs(t, err, deleteErr)
+	require.Equal(t, int32(1), workspace.calls.Load())
+	_, err = baseFS.StatFile(proc.Ctx, objectName)
+	require.NoError(t, err)
 
-	require.ErrorIs(t, retryUnpublishedS3Cleanup(proc), cleanupErr)
-	require.Equal(t, 1, workspace.calls)
+	// The stream and its mirror transaction leave the handler before the CN
+	// retry worker runs. No test call invokes workspace cleanup a second time.
+	lifecycle.remove()
+	_, registered := pipelineStreamLifecycles.Load(pipelineStreamLifecycleKey{session: session, id: 409})
+	require.False(t, registered)
+	require.Eventually(t, func() bool {
+		_, statErr := baseFS.StatFile(proc.Ctx, objectName)
+		return moerr.IsMoErrCode(statErr, moerr.ErrFileNotFound)
+	}, 5*time.Second, 10*time.Millisecond)
+	require.GreaterOrEqual(t, workspace.calls.Load(), int32(2))
+	require.False(t, owner.Pending())
 }
 
 func TestFinalizeRemoteS3OwnershipWaitsForBatchAcknowledgements(t *testing.T) {

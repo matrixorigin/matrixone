@@ -20,6 +20,7 @@ import (
 	"fmt"
 	"math"
 	"testing"
+	"time"
 
 	"github.com/golang/mock/gomock"
 	"github.com/matrixorigin/matrixone/pkg/catalog"
@@ -45,6 +46,20 @@ import (
 type testUnpublishedS3CleanupWorkspace struct {
 	client.Workspace
 	cleanups []func(context.Context) error
+}
+
+func TestUnpublishedS3CleanupContextSharesOuterDeadline(t *testing.T) {
+	outerDeadline := time.Now().Add(time.Minute)
+	outer, cancelOuter := context.WithDeadline(context.Background(), outerDeadline)
+	cancelOuter()
+	for range 4 {
+		inner, cancel := UnpublishedS3CleanupContext(outer)
+		deadline, ok := inner.Deadline()
+		require.True(t, ok)
+		require.Equal(t, outerDeadline, deadline)
+		require.NoError(t, inner.Err(), "request cancellation must not abort cleanup")
+		cancel()
+	}
 }
 
 func (w *testUnpublishedS3CleanupWorkspace) RetainUnpublishedS3Cleanup(

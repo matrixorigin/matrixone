@@ -21,7 +21,6 @@ import (
 	"fmt"
 	"slices"
 	"strings"
-	"time"
 
 	"github.com/matrixorigin/matrixone/pkg/catalog"
 	"github.com/matrixorigin/matrixone/pkg/common/hashmap"
@@ -890,9 +889,7 @@ func (writer *s3WriterDelegate) finalizeSyncedObjects(
 		writer.syncedObjectOwners = nil
 		return nil
 	}
-	cleanupCtx, cancel := context.WithTimeoutCause(
-		context.WithoutCancel(ctx), 10*time.Minute, moerr.CauseCleanUpUselessFiles,
-	)
+	cleanupCtx, cancel := colexec.UnpublishedS3CleanupContext(ctx)
 	defer cancel()
 	pendingOwners := make([]*colexec.UnpublishedS3ObjectOwner, 0, len(writer.syncedObjectOwners))
 	var errs []error
