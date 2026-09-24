@@ -651,6 +651,73 @@ func CreatePattern(pattern string, parser string) (*Pattern, error) {
 	return &Pattern{Text: pattern, Operator: operator, Children: p}, nil
 }
 
+// isAllCJK reports whether every rune is CJK-class (>= 0x7FF), the same boundary SimpleTokenizer.isLatin
+// uses to decide trigram tiling vs whole-word. A stem with any Latin rune is left to the plain
+// single-prefix star path.
+func isAllCJK(runes []rune) bool {
+	if len(runes) == 0 {
+		return false
+	}
+	for _, r := range runes {
+		if r < 0x7FF {
+			return false
+		}
+	}
+	return true
+}
+
+// cjkStarPhraseChildren tiles a CJK stem into non-overlapping trigrams as byte-positioned exact TEXT
+// terms, with the trailing piece -- a full trigram if the length is a clean multiple of 3, else the
+// 1-2 rune tail -- turned into a STAR (prefix_eq). The positions match SimpleTokenizer.outputCJK's
+// stored tokens (苹果香@0 ... 蕉@9), so SqlPhrase's positional JOIN pins the whole stem. Returns nil
+// for a stem <= one trigram or containing a Latin rune (handled by the plain prefix_eq star path).
+func cjkStarPhraseChildren(stem string) []*Pattern {
+	runes := []rune(stem)
+	if len(runes) <= 3 || !isAllCJK(runes) {
+		return nil
+	}
+	children := make([]*Pattern, 0, len(runes)/3+1)
+	for i := 0; i < len(runes); i += 3 {
+		end := i + 3
+		if end > len(runes) {
+			end = len(runes)
+		}
+		children = append(children, &Pattern{
+			Text:     string(runes[i:end]),
+			Operator: TEXT,
+			Position: int32(len(string(runes[:i]))),
+		})
+	}
+	last := children[len(children)-1]
+	last.Operator = STAR
+	last.Text += "*"
+	return children
+}
+
+// jiebaStarPhraseChildren segments a gojieba stem and turns the last word into a STAR (prefix). A
+// multi-word stem yields the positional phrase children; a single word returns nil (plain prefix).
+func jiebaStarPhraseChildren(stem string) ([]*Pattern, error) {
+	tok, err := tokenizer.SharedJiebaTokenizer(false)
+	if err != nil {
+		return nil, err
+	}
+	children := make([]*Pattern, 0, 8)
+	for t, err := range tok.Tokenize([]byte(stem)) {
+		if err != nil {
+			return nil, err
+		}
+		slen := t.TokenBytes[0]
+		children = append(children, &Pattern{Text: string(t.TokenBytes[1 : slen+1]), Operator: TEXT, Position: t.BytePos})
+	}
+	if len(children) <= 1 {
+		return nil, nil
+	}
+	last := children[len(children)-1]
+	last.Operator = STAR
+	last.Text += "*"
+	return children, nil
+}
+
 // ParsePhrase splits a quoted-phrase body into TEXT children for a PHRASE
 // node. With parser="gojieba" the phrase is segmented through jieba so the
 // children match how the index stores Chinese words; otherwise the legacy
