@@ -89,6 +89,26 @@ ok
 SHOW COUNT(*) WARNINGS;
 ➤ @@session.warning_count[-5,0,0]  𝄀
 0
+SET SESSION max_error_count = 2048;
+SELECT SUM(ExtractValue('<a>', '/a') IS NULL) AS malformed_rows FROM generate_series(1, 1100) g;
+➤ malformed_rows[-5,64,0]  𝄀
+1100
+SHOW COUNT(*) WARNINGS;
+➤ @@session.warning_count[-5,64,0]  𝄀
+1100
+SHOW WARNINGS LIMIT 1024, 1;
+➤ Level[12,0,0]  ¦  Code[5,0,0]  ¦  Message[12,0,0]  𝄀
+Warning  ¦  1525  ¦  Incorrect XML value: malformed XML fragment
+SET SESSION max_error_count = 0;
+SELECT SUM(ExtractValue('<a>', '/a') IS NULL) AS malformed_rows FROM generate_series(1, 3) g;
+➤ malformed_rows[-5,64,0]  𝄀
+3
+SHOW COUNT(*) WARNINGS;
+➤ @@session.warning_count[-5,64,0]  𝄀
+3
+SHOW WARNINGS;
+➤ Level[12,0,0]  ¦  Code[5,0,0]  ¦  Message[12,0,0]  𝄀
+SET SESSION max_error_count = 1024;
 DROP DATABASE IF EXISTS xml_functions_28306;
 CREATE DATABASE xml_functions_28306;
 CREATE TABLE xml_functions_28306.inputs(id INT PRIMARY KEY, doc TEXT, path VARCHAR(30));
