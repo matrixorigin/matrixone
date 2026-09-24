@@ -1179,6 +1179,7 @@ func (c *Compile) buildRetryCompile(rebuildPlan bool) (*Compile, error) {
 	var e error
 	runC := NewCompile(c.addr, c.db, c.sql, c.tenant, c.uid, c.e, c.proc, c.stmt, c.isInternal, c.cnLabel, c.startAt)
 	runC.groupConcatMaxLenFloor = c.groupConcatMaxLenFloor
+	runC.SetPreparedParamValues(c.preparedParamValues)
 	runC.inheritTemporaryDDLPolicy(c)
 	runC.inheritLoadUniqueIndexPromotion(c)
 	c.bindRetryPlanGeneration(runC, rebuildPlan)
