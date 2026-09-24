@@ -369,6 +369,7 @@ func estimateLoadRowsizeFromFirstLine(param *tree.ExternParam, inputSize int64, 
 		param.ScanType == tree.INLINE ||
 		param.Local ||
 		param.Format == tree.PARQUET ||
+		LoadFilepathHasGlob(param) ||
 		getCompressType(param, param.Filepath) != tree.NOCOMPRESS ||
 		(lineTerminator != "\n" && lineTerminator != "\r\n") ||
 		strings.HasPrefix(param.Filepath, "SHARED:/query_result/") {
@@ -456,6 +457,26 @@ func clampLoadRowsize(rowSize float64, inputSize int64) float64 {
 	return rowSize
 }
 
+// LoadFilepathHasGlob reports whether the LOAD source path is a shell pattern
+// that must be expanded with ReadDir instead of stat-ed verbatim.
+func LoadFilepathHasGlob(param *tree.ExternParam) bool {
+	return param != nil && strings.ContainsAny(strings.TrimSpace(param.Filepath), "*?[")
+}
+
+// LoadMayListFiles reports whether the LOAD source path must be resolved
+// through ReadDir.  Every remote format is listed, not just the columnar ones,
+// so the pattern itself is the only gate: INLINE data has no path and LOAD
+// LOCAL names a client-side file the server cannot list.
+//
+// checkFileExist collapses a pattern that matched exactly one file back to that
+// plain path, so downstream a still-glob Filepath means "more than one file".
+func LoadMayListFiles(param *tree.ExternParam) bool {
+	return param != nil &&
+		!param.Local &&
+		param.ScanType != tree.INLINE &&
+		LoadFilepathHasGlob(param)
+}
+
 func loadParquetMayListFiles(param *tree.ExternParam) bool {
 	return param != nil &&
 		param.Format == tree.PARQUET &&
@@ -530,7 +551,13 @@ func buildLoad(stmt *tree.Load, ctx CompilerContext, isPrepareStmt bool) (*Plan,
 
 	noCompress := getCompressType(stmt.Param, fileName) == tree.NOCOMPRESS
 	var offset int64 = 0
-	if stmt.Param.Tail.IgnoredLines > 0 && stmt.Param.Parallel && noCompress && !stmt.Param.Local {
+	// A pattern that survived checkFileExist matched more than one file, so the
+	// load fans out whole files and never splits one by byte offset.  The
+	// prescan exists only to seed that split: it would stamp one file's header
+	// length onto FileStartOff for every file and zero Tail.IgnoredLines, where
+	// the CSV reader instead re-applies IGNORE n LINES on each file it opens.
+	if stmt.Param.Tail.IgnoredLines > 0 && stmt.Param.Parallel && noCompress &&
+		!stmt.Param.Local && !LoadFilepathHasGlob(stmt.Param) {
 		offset, err = IgnoredLines(stmt.Param, ctx)
 		if err != nil {
 			return nil, err
@@ -705,7 +732,7 @@ func checkFileExist(param *tree.ExternParam, ctx CompilerContext) (string, error
 	}
 
 	param.Ctx = ctx.GetContext()
-	if loadParquetMayListFiles(param) {
+	if LoadMayListFiles(param) {
 		fileList, fileSize, err := ReadDir(param)
 		param.Ctx = nil
 		if err != nil {
@@ -713,6 +740,15 @@ func checkFileExist(param *tree.ExternParam, ctx CompilerContext) (string, error
 		}
 		if len(fileList) == 0 {
 			return "", moerr.NewInvalidInput(ctx.GetContext(), "the file does not exist in load flow")
+		}
+		if len(fileList) == 1 {
+			// One match is not a fanout.  Rewriting the pattern to the file it
+			// resolved to keeps the single-file paths (byte-offset split and its
+			// IGNORE-lines prescan) reachable, and makes "Filepath is still a
+			// glob" mean "at least two files" for every later decision.
+			param.Filepath = fileList[0]
+			param.FileSize = fileSize[0]
+			return param.Filepath, nil
 		}
 		param.FileSize = totalLoadFileSize(fileSize)
 		return param.Filepath, nil
@@ -823,21 +859,34 @@ func checkNullMap(stmt *tree.Load, Cols []*ColDef, ctx CompilerContext) error {
 }
 
 func getCompressType(param *tree.ExternParam, filepath string) string {
-	if param.CompressType != "" && param.CompressType != tree.AUTO {
-		return param.CompressType
+	return GetCompressType(param.CompressType, filepath)
+}
+
+// GetCompressType is the one place that decides how a load source is
+// compressed: an explicit compression option wins, otherwise the file name's
+// extension decides.  Planning (bind-time parallel and S3-write decisions) and
+// execution (choosing the decompressor) both call it, so they cannot disagree
+// about the same file.  The result is lower case.
+func GetCompressType(compressType string, filepath string) string {
+	if compressType != "" && !strings.EqualFold(compressType, tree.AUTO) {
+		return strings.ToLower(compressType)
 	}
-	index := strings.LastIndex(filepath, ".")
-	if index == -1 {
-		return tree.NOCOMPRESS
-	}
-	tail := string([]byte(filepath)[index+1:])
-	switch tail {
-	case "gz", "gzip":
+	filepath = strings.ToLower(filepath)
+	switch {
+	case strings.HasSuffix(filepath, ".tar.gz") || strings.HasSuffix(filepath, ".tar.gzip"):
+		return tree.TAR_GZ
+	case strings.HasSuffix(filepath, ".tar.bz2") || strings.HasSuffix(filepath, ".tar.bzip2"):
+		return tree.TAR_BZ2
+	case strings.HasSuffix(filepath, ".gz") || strings.HasSuffix(filepath, ".gzip"):
 		return tree.GZIP
-	case "bz2", "bzip2":
+	case strings.HasSuffix(filepath, ".bz2") || strings.HasSuffix(filepath, ".bzip2"):
 		return tree.BZIP2
-	case "lz4":
+	case strings.HasSuffix(filepath, ".lz4"):
 		return tree.LZ4
+	case strings.HasSuffix(filepath, ".zst") || strings.HasSuffix(filepath, ".zstd"):
+		return tree.ZSTD
+	case strings.HasSuffix(filepath, ".zip"):
+		return tree.ZIP
 	default:
 		return tree.NOCOMPRESS
 	}
