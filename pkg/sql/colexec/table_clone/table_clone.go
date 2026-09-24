@@ -107,8 +107,8 @@ func (tc *TableClone) Reset(proc *process.Process, pipelineFailed bool, err erro
 		tc.tombstoneObjBat.Clean(proc.Mp())
 	}
 
-	tc.srcReader = closeReaders(proc, tc.srcReader, false)
-	tc.srcIdxReader = closeReaders(proc, tc.srcIdxReader, false)
+	tc.srcReader = closeReaders(proc, tc.srcReader, true)
+	tc.srcIdxReader = closeReaders(proc, tc.srcIdxReader, true)
 
 	tc.srcRel = nil
 	tc.dstRel = nil

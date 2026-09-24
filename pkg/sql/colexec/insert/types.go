@@ -131,6 +131,8 @@ type InsertCtx struct {
 func (insert *Insert) Reset(proc *process.Process, pipelineFailed bool, err error) {
 	if closeErr := insert.closeS3Writers(proc, pipelineFailed); closeErr != nil {
 		logutil.Warn("failed to clean insert S3 writers", zap.Error(closeErr))
+		// Prepared executions skip Free: rollback must own failed cleanup now.
+		insert.retainPendingS3Writers(proc)
 	}
 	insert.releaseS3MemGrant()
 	// A non-nil extWriter here means the input stream never reached its clean

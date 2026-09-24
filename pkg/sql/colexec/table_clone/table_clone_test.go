@@ -109,6 +109,11 @@ func (r *tableCloneCloseErrorReader) Close() error {
 }
 
 func TestTableCloneFreeTransfersReaderCleanupToTransaction(t *testing.T) {
+	t.Run("Free", func(t *testing.T) { checkTableCloneCleanup(t, false) })
+	t.Run("prepared Reset", func(t *testing.T) { checkTableCloneCleanup(t, true) })
+}
+
+func checkTableCloneCleanup(t *testing.T, prepared bool) {
 	proc := testutil.NewProcess(t)
 	defer proc.Free()
 	ctrl := gomock.NewController(t)
@@ -121,7 +126,12 @@ func TestTableCloneFreeTransfersReaderCleanupToTransaction(t *testing.T) {
 	reader := &tableCloneCloseErrorReader{err: closeErr}
 	clone := NewTableClone()
 	clone.srcReader = map[string]engine.Reader{"source": reader}
-	clone.Free(proc, true, closeErr)
+	if prepared {
+		clone.Ctx = &TableCloneCtx{}
+		clone.Reset(proc, true, closeErr)
+	} else {
+		clone.Free(proc, true, closeErr)
+	}
 	require.Empty(t, clone.srcReader, "cleanup ownership should move before scope release")
 	require.Len(t, workspace.cleanups, 1)
 	clone.Release()

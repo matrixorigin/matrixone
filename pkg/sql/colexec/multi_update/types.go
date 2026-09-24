@@ -243,7 +243,12 @@ func (update *MultiUpdate) Reset(proc *process.Process, pipelineFailed bool, err
 		}
 	}
 	if update.ctr.s3Writer != nil {
-		update.ctr.s3Writer.reset(proc, pipelineFailed)
+		if resetErr := update.ctr.s3Writer.reset(proc, pipelineFailed); resetErr != nil {
+			writer := update.ctr.s3Writer
+			if update.retainPendingS3Writer(proc) {
+				writer.releaseBuffers(proc.Mp())
+			}
+		}
 	}
 	update.ctr.s3AffectedRows = 0
 	update.freeSeenTargetRows()
@@ -269,12 +274,7 @@ func (update *MultiUpdate) Free(proc *process.Process, pipelineFailed bool, err 
 	if update.ctr.s3Writer != nil {
 		if freeErr := update.ctr.s3Writer.free(proc, pipelineFailed); freeErr != nil {
 			logutil.Warn("failed to clean multi-update S3 writer delegate", zap.Error(freeErr))
-			if colexec.RetainUnpublishedS3Cleanup(
-				proc,
-				update.ctr.s3Writer.cleanupUnpublishedS3Objects,
-			) {
-				update.ctr.s3Writer = nil
-			}
+			update.retainPendingS3Writer(proc)
 		} else {
 			update.ctr.s3Writer = nil
 		}
@@ -283,6 +283,14 @@ func (update *MultiUpdate) Free(proc *process.Process, pipelineFailed bool, err 
 
 	update.ctr.updateCtxInfos = nil
 	update.ctr.sources = nil
+}
+
+func (update *MultiUpdate) retainPendingS3Writer(proc *process.Process) bool {
+	if colexec.RetainUnpublishedS3Cleanup(proc, update.ctr.s3Writer.cleanupUnpublishedS3Objects) {
+		update.ctr.s3Writer = nil
+		return true
+	}
+	return false
 }
 
 func (update *MultiUpdate) freeSeenTargetRows() {

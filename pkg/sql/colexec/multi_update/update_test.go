@@ -1084,6 +1084,11 @@ func (w *multiUpdateS3CleanupWorkspace) dropAcceptedOwners() {
 }
 
 func TestMultiUpdateFreeTransfersFailedCleanupWithBorrowedBuffer(t *testing.T) {
+	t.Run("Free", func(t *testing.T) { checkMultiUpdateFreeTransfersFailedCleanupWithBorrowedBuffer(t, false) })
+	t.Run("prepared Reset", func(t *testing.T) { checkMultiUpdateFreeTransfersFailedCleanupWithBorrowedBuffer(t, true) })
+}
+
+func checkMultiUpdateFreeTransfersFailedCleanupWithBorrowedBuffer(t *testing.T, prepared bool) {
 	_, ctrl, proc := prepareTestCtx(t, true)
 	defer proc.Free()
 	baseFS, err := colexec.GetSharedFSFromProc(proc)
@@ -1118,7 +1123,11 @@ func TestMultiUpdateFreeTransfersFailedCleanupWithBorrowedBuffer(t *testing.T) {
 	update := &MultiUpdate{}
 	update.ctr.s3Writer = delegate
 
-	update.Free(proc, true, deleteErr)
+	if prepared {
+		update.Reset(proc, true, deleteErr)
+	} else {
+		update.Free(proc, true, deleteErr)
+	}
 	require.Nil(t, update.ctr.s3Writer, "the transaction owns the delegate after operator release")
 	require.Len(t, workspace.cleanups, 1)
 	require.Same(t, freeList, delegate.insertFreeLists[0], "the retained sinker still borrows this buffer pool")
@@ -1237,6 +1246,11 @@ func TestMultiUpdateResetRetriesFailedSyncedObjectCleanup(t *testing.T) {
 }
 
 func TestPartitionMultiUpdateFreeTransfersFailedCleanup(t *testing.T) {
+	t.Run("Free", func(t *testing.T) { checkPartitionMultiUpdateFreeTransfersFailedCleanup(t, false) })
+	t.Run("prepared Reset", func(t *testing.T) { checkPartitionMultiUpdateFreeTransfersFailedCleanup(t, true) })
+}
+
+func checkPartitionMultiUpdateFreeTransfersFailedCleanup(t *testing.T, prepared bool) {
 	_, ctrl, proc := prepareTestCtx(t, true)
 	defer proc.Free()
 	baseFS, err := colexec.GetSharedFSFromProc(proc)
@@ -1272,7 +1286,11 @@ func TestPartitionMultiUpdateFreeTransfersFailedCleanup(t *testing.T) {
 		writers: map[uint64]*s3WriterDelegate{1: delegate},
 	}
 
-	op.Free(proc, true, deleteErr)
+	if prepared {
+		op.Reset(proc, true, deleteErr)
+	} else {
+		op.Free(proc, true, deleteErr)
+	}
 	require.Empty(t, op.writers, "transaction ownership must outlive the partition operator")
 	require.Len(t, workspace.cleanups, 1)
 	op.Release()

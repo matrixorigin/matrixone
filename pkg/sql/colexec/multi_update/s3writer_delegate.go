@@ -1169,7 +1169,16 @@ func (writer *s3WriterDelegate) free(proc *process.Process, pipelineFailed bool)
 			}
 		}
 	}
-	if len(cleanupErrs) == 0 {
+	writer.cleanupErr = errors.Join(cleanupErrs...)
+	writer.releaseBuffers(mp)
+	return writer.cleanupErr
+}
+
+// releaseBuffers also serves Reset failures: detach the non-reusable delegate
+// without issuing another synchronous Delete before handing it to rollback.
+func (writer *s3WriterDelegate) releaseBuffers(mp *mpool.MPool) {
+	writer.cleanupMP = mp
+	if writer.cleanupErr == nil {
 		writer.insertSinkers = nil
 		for _, fl := range writer.insertFreeLists {
 			if fl != nil {
@@ -1208,9 +1217,6 @@ func (writer *s3WriterDelegate) free(proc *process.Process, pipelineFailed bool)
 		writer.outputBat = nil
 	}
 	writer.buf.Reset()
-
-	writer.cleanupErr = errors.Join(cleanupErrs...)
-	return writer.cleanupErr
 }
 
 func (writer *s3WriterDelegate) cleanupUnpublishedS3Objects(ctx context.Context) error {

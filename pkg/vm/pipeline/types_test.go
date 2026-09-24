@@ -16,16 +16,111 @@ package pipeline
 
 import (
 	"context"
+	"errors"
 	"testing"
 	"time"
 
 	"github.com/matrixorigin/matrixone/pkg/common/mpool"
+	"github.com/matrixorigin/matrixone/pkg/container/batch"
+	"github.com/matrixorigin/matrixone/pkg/container/types"
+	"github.com/matrixorigin/matrixone/pkg/container/vector"
+	"github.com/matrixorigin/matrixone/pkg/fileservice"
+	"github.com/matrixorigin/matrixone/pkg/pb/plan"
 	"github.com/matrixorigin/matrixone/pkg/sql/colexec"
 	"github.com/matrixorigin/matrixone/pkg/sql/colexec/connector"
 	"github.com/matrixorigin/matrixone/pkg/sql/colexec/merge"
+	"github.com/matrixorigin/matrixone/pkg/testutil"
 	"github.com/matrixorigin/matrixone/pkg/vm"
 	"github.com/matrixorigin/matrixone/pkg/vm/process"
+	"github.com/stretchr/testify/require"
 )
+
+type deadlineDeleteFS struct {
+	fileservice.FileService
+	deadlines       []time.Time
+	recovered       bool
+	deadlineCeiling time.Time
+}
+
+func (fs *deadlineDeleteFS) Delete(ctx context.Context, names ...string) error {
+	if fs.recovered {
+		return fs.FileService.Delete(ctx, names...)
+	}
+	d, _ := ctx.Deadline()
+	fs.deadlines = append(fs.deadlines, d)
+	// Fail quickly if a regression reintroduces a ten-minute writer budget.
+	if d.After(fs.deadlineCeiling) {
+		return errors.New("writer restarted cleanup budget")
+	}
+	<-ctx.Done()
+	return ctx.Err()
+}
+
+type cleanupWritersOperator struct {
+	*colexec.MockOperator
+	writers []*colexec.CNS3Writer
+}
+
+func (op *cleanupWritersOperator) Reset(proc *process.Process, _ bool, _ error) {
+	for _, writer := range op.writers {
+		_ = writer.ResetWithCleanup(proc.Ctx, true)
+	}
+}
+
+func (op *cleanupWritersOperator) Free(proc *process.Process, _ bool, _ error) {
+	for _, writer := range op.writers {
+		_ = writer.CloseWithCleanup(proc.Ctx, true)
+	}
+}
+
+func TestPipelineCleanupSharesBudgetAcrossWritersAndFree(t *testing.T) {
+	old := process.PipelineCleanupTimeout
+	process.PipelineCleanupTimeout = 40 * time.Millisecond
+	t.Cleanup(func() { process.PipelineCleanupTimeout = old })
+	for _, rootOnly := range []bool{false, true} {
+		proc := testutil.NewProc(t)
+		proc.BuildPipelineContext(proc.Ctx)
+		_, hasDeadline := proc.Ctx.Deadline()
+		require.False(t, hasDeadline, "no request deadline may mask budget restarts")
+		baseFS, err := colexec.GetSharedFSFromProc(proc)
+		require.NoError(t, err)
+		fs := &deadlineDeleteFS{FileService: baseFS}
+		op := &cleanupWritersOperator{MockOperator: colexec.NewMockOperator()}
+		bat := &batch.Batch{Attrs: []string{"a"}, Vecs: []*vector.Vector{testutil.MakeInt64Vector([]int64{1}, nil, proc.Mp())}}
+		bat.SetRowCount(1)
+		for i := 0; i < 4; i++ {
+			writer := colexec.NewCNS3DataWriter(proc.Mp(), fs, &plan.TableDef{Pkey: &plan.PrimaryKeyDef{}, Cols: []*plan.ColDef{{Name: "a", Typ: plan.Type{Id: int32(types.T_int64)}}}}, 1, false)
+			require.NoError(t, writer.Write(proc.Ctx, bat))
+			info, err := writer.SyncAndFillBlockInfoBat(proc.Ctx)
+			require.NoError(t, err)
+			info.Clean(proc.Mp())
+			op.writers = append(op.writers, writer)
+		}
+		p := New(0, nil, op)
+		start := time.Now()
+		fs.deadlineCeiling = start.Add(time.Second)
+		if rootOnly {
+			p.CleanRootOperator(proc, true, false, context.Canceled)
+		} else {
+			p.Cleanup(proc, true, false, context.Canceled)
+		}
+		require.Less(t, time.Since(start), time.Second)
+		d, ok := process.PipelineCleanupDeadline(proc.Ctx)
+		require.True(t, ok)
+		require.NotEmpty(t, fs.deadlines)
+		for _, deadline := range fs.deadlines {
+			require.Equal(t, d, deadline, "Reset and Free must never restart the budget")
+		}
+		// Teardown leaves obligations intact. A new background attempt gets its
+		// own budget rather than inheriting the expired execution deadline.
+		fs.recovered = true
+		for _, writer := range op.writers {
+			require.NoError(t, writer.CloseWithCleanup(context.Background(), true))
+		}
+		bat.Clean(proc.Mp())
+		proc.Free()
+	}
+}
 
 type resetOrderOperator struct {
 	*colexec.MockOperator

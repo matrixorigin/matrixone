@@ -638,6 +638,11 @@ func TestInsertResetUsesPipelineOutcomeForSpilledObjectOwnership(t *testing.T) {
 }
 
 func TestInsertFreeTransfersFailedCleanupToTransaction(t *testing.T) {
+	t.Run("Free", func(t *testing.T) { checkInsertFreeTransfersFailedCleanupToTransaction(t, false) })
+	t.Run("prepared Reset", func(t *testing.T) { checkInsertFreeTransfersFailedCleanupToTransaction(t, true) })
+}
+
+func checkInsertFreeTransfersFailedCleanupToTransaction(t *testing.T, prepared bool) {
 	proc := testutil.NewProc(t)
 	defer proc.Free()
 	baseFS, err := colexec.GetSharedFSFromProc(proc)
@@ -670,7 +675,11 @@ func TestInsertFreeTransfersFailedCleanupToTransaction(t *testing.T) {
 
 	insert := NewArgument()
 	insert.ctr.s3Writer = writer
-	insert.Free(proc, true, deleteErr)
+	if prepared {
+		insert.Reset(proc, true, deleteErr)
+	} else {
+		insert.Free(proc, true, deleteErr)
+	}
 	require.Nil(t, insert.ctr.s3Writer)
 	require.Len(t, workspace.cleanups, 1, "transaction must take ownership before operator release")
 	insert.Release()

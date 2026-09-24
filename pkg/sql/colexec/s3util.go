@@ -218,6 +218,9 @@ func RetainUnpublishedS3Cleanup(
 func UnpublishedS3CleanupContext(ctx context.Context) (context.Context, context.CancelFunc) {
 	base := context.WithoutCancel(ctx)
 	deadline := time.Now().Add(10 * time.Minute)
+	if sharedDeadline, ok := process.PipelineCleanupDeadline(ctx); ok && sharedDeadline.Before(deadline) {
+		deadline = sharedDeadline
+	}
 	if parentDeadline, ok := ctx.Deadline(); ok && parentDeadline.Before(deadline) {
 		deadline = parentDeadline
 	}

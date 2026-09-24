@@ -139,14 +139,21 @@ The single retry worker bounds retry concurrency.
   cleanup; the coordinator's overlapping owner is reduced only if its local
   transaction actually appends the corresponding metadata. Cleanup retries are
   in-process, not a distributed durable handoff log.
-- The remote finalizer removes request cancellation once and starts one cleanup
-  deadline. Nested writer, MultiUpdate, and transfer cleanup preserve that
-  deadline instead of starting another ten-minute timer per writer. The CN
+- Pipeline teardown starts one execution-scoped cleanup deadline before Reset
+  or Free. All pipeline contexts share the budget without changing execution
+  cancellation; nested writer, MultiUpdate, transfer and remote finalizer
+  cleanup preserve it instead of starting another ten-minute timer per writer.
+  The first pipeline entering teardown starts the clock; later pipelines may
+  defer expired cleanup to the CN queue even if their own execution ran longer.
+  Prepared execution/query retry creates a fresh budget. Failed Reset transfers
+  cleanup to the workspace immediately, including Insert, Delete, MultiUpdate,
+  partition writers and clone readers, since prepared execution skips Free.
+  The CN
   retry worker uses a fresh bounded attempt after the handler exits. A failed
   S3 delete is returned and its in-memory owner stays queued; a process crash
   or persistent storage outage can still leave an orphan. Durable recovery is
-  a separate design and is not claimed here. Reset/Free attempts that run
-  before the remote finalizer are not yet charged to its later deadline.
+  a separate design and is not claimed here. The budget bounds context-aware
+  object deletion, not an uncooperative file service or arbitrary CPU teardown.
 - A new worker with an old coordinator sees an unmarked ACK and fails closed
   rather than releasing its owner. An old worker with a new coordinator still
   has its old pre-receipt gap; this PR cannot retrofit it. A mixed-version
