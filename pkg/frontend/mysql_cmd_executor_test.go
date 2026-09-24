@@ -257,6 +257,28 @@ func TestResetDiagnosticsForStatementLifecycle(t *testing.T) {
 	require.Equal(t, uint16(1001), ses.diagnosticsSnapshot().codes[0])
 }
 
+func TestStmtClosePreservesDiagnostics(t *testing.T) {
+	ses := &Session{errInfo: &errInfo{maxCnt: MoDefaultErrorCount}}
+	execCtx := &ExecCtx{}
+	input := &UserInput{}
+	ses.appendWarningDiagnostic(1259, "ZLIB: Input data corrupted")
+	ses.appendErrorDiagnostic(1000, "previous error")
+	ses.AppendWarningCount(3) // Totals may exceed the retained diagnostic records.
+	want := ses.diagnosticsSnapshot()
+
+	ses.SetCmd(COM_STMT_CLOSE)
+	resetDiagnosticsForStatement(ses, execCtx, input, &tree.Deallocate{})
+	require.Equal(t, want, ses.diagnosticsSnapshot())
+
+	// An explicit SQL DEALLOCATE is still a new client statement.
+	ses.SetCmd(COM_QUERY)
+	resetDiagnosticsForStatement(ses, execCtx, input, &tree.Deallocate{})
+	require.Zero(t, ses.diagnosticsSnapshot().length())
+	warnings, errors := ses.diagnosticsCounts()
+	require.Zero(t, warnings)
+	require.Zero(t, errors)
+}
+
 func TestShowErrorsFiltersWarningDiagnostics(t *testing.T) {
 	ses := &Session{
 		feSessionImpl: feSessionImpl{mrs: &MysqlResultSet{}},
@@ -2188,6 +2210,7 @@ func Test_mce(t *testing.T) {
 			UserID:        rootID,
 			DefaultRoleID: moAdminRoleID,
 		})
+		ses.ruleCache = map[string]string{}
 		proto.SetSession(ses)
 
 		sysVarStubs := gostub.StubFunc(&ExeSqlInBgSes, nil, nil)
@@ -3033,7 +3056,155 @@ func TestGetComputationWrapperUsesRequestRewriteSnapshot(t *testing.T) {
 	selectStmt, ok := cws[0].GetAst().(*tree.Select)
 	require.True(t, ok)
 	require.NotNil(t, selectStmt.RewriteOption)
-	require.Len(t, selectStmt.RewriteOption.Rewrites["src.t"], 1)
+	// Remap rewrites the outer table to dst.t, so the rewrite key must follow
+	// or the planner misses the role rule (issue #29161).
+	require.Len(t, selectStmt.RewriteOption.Rewrites["dst.t"], 1)
+	require.NotContains(t, selectStmt.RewriteOption.Rewrites, "src.t")
+}
+
+func TestExecRequestStmtPreparePreservesMandatoryRewritePolicy(t *testing.T) {
+	const inlineSQL = `/*+ {"rewrites":{"db.t":"select * from db.t where inline_visible = 1"}} */ ` +
+		"select * from db.t"
+	roleRules := map[string]string{"db.t": "select * from db.t where role_visible = 1"}
+	sessionRules := `{"rewrites":{"db.t":"select * from db.t where session_visible = 1"}}`
+	tests := []struct {
+		name              string
+		sessionEnabled    bool
+		roleRules         map[string]string
+		sessionRules      string
+		sql               string
+		wantPredicates    []string
+		wantPolicyEnabled bool
+	}{
+		{
+			name:              "mandatory only with switch off",
+			sessionEnabled:    false,
+			roleRules:         roleRules,
+			sql:               "select * from db.t",
+			wantPredicates:    []string{"role_visible = 1"},
+			wantPolicyEnabled: true,
+		},
+		{
+			name:              "role session and inline with switch on",
+			sessionEnabled:    true,
+			roleRules:         roleRules,
+			sessionRules:      sessionRules,
+			sql:               inlineSQL,
+			wantPredicates:    []string{"role_visible = 1", "session_visible = 1", "inline_visible = 1"},
+			wantPolicyEnabled: true,
+		},
+		{
+			name:              "role session and inline with switch off",
+			sessionEnabled:    false,
+			roleRules:         roleRules,
+			sessionRules:      sessionRules,
+			sql:               inlineSQL,
+			wantPredicates:    []string{"role_visible = 1"},
+			wantPolicyEnabled: true,
+		},
+		{
+			name:              "no role with switch off",
+			sessionEnabled:    false,
+			roleRules:         map[string]string{},
+			sessionRules:      sessionRules,
+			sql:               inlineSQL,
+			wantPredicates:    nil,
+			wantPolicyEnabled: false,
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			ctx := defines.AttachAccountId(context.Background(), sysAccountID)
+			ctrl := gomock.NewController(t)
+			ses := newTestSession(t, ctrl)
+			defer ses.Close()
+			ses.txnHandler = &TxnHandler{}
+			ses.rewriteEnabled.Store(tt.sessionEnabled)
+			ses.ruleCache = cloneRewriteMap(tt.roleRules)
+			if tt.sessionRules != "" {
+				require.NoError(t, ses.SetSessionSysVar(ctx, "remap_rewrites", tt.sessionRules))
+			}
+
+			var observedInput *UserInput
+			var observedRewriteSQL []string
+			originalGetComputationWrapper := GetComputationWrapper
+			stubs := gostub.Stub(&GetComputationWrapper, func(execCtx *ExecCtx, _ string, _ string,
+				eng engine.Engine, proc *process.Process, session *Session) ([]ComputationWrapper, error) {
+				observedInput = execCtx.input
+				cws, err := originalGetComputationWrapper(execCtx, "db", "root", eng, proc, session)
+				if err != nil {
+					return nil, err
+				}
+				defer func() {
+					for _, cw := range cws {
+						cw.Free()
+					}
+				}()
+				require.Len(t, cws, 1)
+				prepare, ok := cws[0].GetAst().(*tree.PrepareStmt)
+				require.True(t, ok, "native prepare must reach the binary prepare consumer")
+				selectStmt, ok := prepare.Stmt.(*tree.Select)
+				require.True(t, ok, "native prepare must preserve a typed SELECT")
+				if selectStmt.RewriteOption != nil {
+					for _, rewrite := range selectStmt.RewriteOption.Rewrites["db.t"] {
+						require.NotNil(t, rewrite)
+						rewrittenSelect, ok := rewrite.Stmt.(*tree.Select)
+						require.True(t, ok, "each rewrite layer must remain a typed SELECT")
+						observedRewriteSQL = append(observedRewriteSQL, tree.String(rewrittenSelect, dialect.MYSQL))
+					}
+				}
+				return nil, errors.New("stop after checking native prepare AST")
+			})
+			defer stubs.Reset()
+
+			execCtx := newTestExecCtx(ctx, ctrl)
+			execCtx.ses = ses
+			resp, err := ExecRequest(ses, execCtx, &Request{
+				cmd:  COM_STMT_PREPARE,
+				data: []byte(tt.sql),
+			})
+			require.NoError(t, err)
+			require.NotNil(t, resp)
+			require.Equal(t, ErrorResponse, resp.category)
+			require.NotNil(t, observedInput)
+			require.NotNil(t, observedInput.rewritePolicy)
+			require.True(t, observedInput.rewritePolicyMaterialized)
+			require.Equal(t, tt.wantPolicyEnabled, observedInput.rewritePolicy.enabled)
+			require.Equal(t, tt.sessionEnabled, observedInput.rewritePolicy.sessionEnabled)
+			require.Equal(t, tt.roleRules, observedInput.rewritePolicy.roleRules)
+			require.Len(t, observedRewriteSQL, len(tt.wantPredicates),
+				"materialized rewrite layers must reach the native prepare AST exactly once")
+			for i, predicate := range tt.wantPredicates {
+				require.Contains(t, observedRewriteSQL[i], predicate, "rewrite layer %d", i)
+			}
+		})
+	}
+}
+
+func TestExecRequestStmtPrepareFailsClosedOnInvalidMandatoryRuleWhenDisabled(t *testing.T) {
+	ctx := defines.AttachAccountId(context.Background(), sysAccountID)
+	ctrl := gomock.NewController(t)
+	ses := newTestSession(t, ctrl)
+	defer ses.Close()
+	ses.txnHandler = &TxnHandler{}
+	ses.rewriteEnabled.Store(false)
+	ses.ruleCache = map[string]string{
+		"db.t": "select * from db.t where",
+	}
+
+	execCtx := newTestExecCtx(ctx, ctrl)
+	execCtx.ses = ses
+	resp, err := ExecRequest(ses, execCtx, &Request{
+		cmd:  COM_STMT_PREPARE,
+		data: []byte("select * from db.t"),
+	})
+	require.NoError(t, err)
+	require.NotNil(t, resp)
+	require.Equal(t, ErrorResponse, resp.category)
+	prepared, getErr := ses.GetPrepareStmt(ctx, getPrepareStmtName(ses.GetLastStmtId()))
+	require.Error(t, getErr, "a rejected mandatory rewrite must not publish a prepared statement")
+	require.Nil(t, prepared)
 }
 
 func TestGetComputationWrapperRestoresStatementRemapOnPlanCacheHit(t *testing.T) {
@@ -8651,6 +8822,7 @@ func TestExecRequestStmtPrepareAcceptsExplainAndSetVariable(t *testing.T) {
 
 	ses := newTestSession(t, ctrl)
 	defer ses.Close()
+	ses.ruleCache = map[string]string{}
 	ses.GetResponser().MysqlRrWr().(*MysqlProtocolImpl).SetSession(ses)
 	ses.txnHandler = InitTxnHandler(ses.GetService(), nil, ctx, txnOperator)
 	require.True(t, ses.txnHandler.InActiveTxn())
@@ -8860,6 +9032,7 @@ func TestExecRequestStmtPrepareRejectsNonPrepareableAndEmptyPayloads(t *testing.
 
 	ses := newTestSession(t, ctrl)
 	defer ses.Close()
+	ses.ruleCache = map[string]string{}
 	ses.GetResponser().MysqlRrWr().(*MysqlProtocolImpl).SetSession(ses)
 	ses.txnHandler = &TxnHandler{}
 	execCtx := newTestExecCtx(ctx, ctrl)

@@ -263,6 +263,7 @@ func (c *Compile) Compile(
 		c.appendUnresolvedIndexHintMetaTables(queryPlan.GetQuery())
 		fault.TriggerFaultWithContext(c.proc.Ctx, unresolvedIndexHintPlanCompiledFault)
 	}
+	triggerStatementPlanCompiledFault(c.proc.Ctx, queryPlan)
 	// todo: this is redundant.
 	for _, s := range c.scopes {
 		if len(s.NodeInfo.Addr) == 0 {
@@ -276,6 +277,21 @@ func (c *Compile) Compile(
 const unresolvedFullTextPlanCompiledFault = "unresolved-fulltext-plan-compiled"
 
 const unresolvedIndexHintPlanCompiledFault = "unresolved-index-hint-plan-compiled"
+
+const createIndexPlanCompiledFault = "create-index-plan-compiled"
+
+// triggerStatementPlanCompiledFault exposes a deterministic boundary between
+// planning and pre-pipeline locking for cross-CN schema-change tests. Fault
+// injection is disabled in production, so ordinary compilation pays only the
+// enabled-state check.
+func triggerStatementPlanCompiledFault(ctx context.Context, queryPlan *plan.Plan) {
+	if !fault.Status() || queryPlan == nil {
+		return
+	}
+	if queryPlan.GetDdl().GetCreateIndex() != nil {
+		fault.TriggerFaultWithContext(ctx, createIndexPlanCompiledFault)
+	}
+}
 
 // selectMetaLockRequirement reports whether a SELECT must validate its table
 // definitions against mo_tables before execution. An unresolved fulltext

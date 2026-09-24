@@ -3503,6 +3503,14 @@ func (b *baseBinder) bindFullTextMatchExpr(astExpr *tree.FullTextMatchExpr, dept
 	if err != nil {
 		return nil, err
 	}
+	if name, ok := astExpr.Pattern.(*tree.UnresolvedName); ok {
+		// A search term is shared by the whole index scan. Only a lexical
+		// stored-procedure variable is safe here; an ordinary column would
+		// make the term depend on the current row.
+		if !isStoredProcedureFullTextPattern(b.GetContext(), name, pattern) {
+			return nil, moerr.NewInvalidInput(b.GetContext(), "AGAINST pattern must be a stored-procedure variable")
+		}
+	}
 	if pattern.Typ.Id != int32(types.T_varchar) {
 		varcharTyp := types.T_varchar.ToType()
 		pattern, err = makePlan2CastExpr(b.GetContext(), pattern, makePlan2Type(&varcharTyp))
@@ -3521,6 +3529,32 @@ func (b *baseBinder) bindFullTextMatchExpr(astExpr *tree.FullTextMatchExpr, dept
 	}
 
 	return BindFuncExprImplByPlanExpr(b.GetContext(), "fulltext_match", args)
+}
+
+func isStoredProcedureFullTextPattern(ctx context.Context, name *tree.UnresolvedName, pattern *plan.Expr) bool {
+	if ctx == nil || name.NumParts != 1 || ctx.Value(defines.InSp{}) != true {
+		return false
+	}
+	scopes, ok := ctx.Value(defines.VarScopeKey{}).(*[]map[string]interface{})
+	if !ok || scopes == nil {
+		return false
+	}
+	variableName := strings.ToLower(name.ColName())
+	found := false
+	for i := len(*scopes) - 1; i >= 0; i-- {
+		if _, found = (*scopes)[i][variableName]; found {
+			break
+		}
+	}
+	if !found {
+		return false
+	}
+	variable := pattern
+	if cast := variable.GetF(); cast != nil && cast.GetFunc() != nil && cast.GetFunc().GetObjName() == "cast" && len(cast.Args) > 0 {
+		variable = cast.Args[0]
+	}
+	ref := variable.GetV()
+	return ref != nil && !ref.System && !ref.Global && ref.Name == variableName
 }
 
 // coerceBoolNumericAggregateArg gives SUM/AVG over a BOOL argument the MySQL

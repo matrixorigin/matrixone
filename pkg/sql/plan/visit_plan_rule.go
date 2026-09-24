@@ -2455,10 +2455,10 @@ func (rule *ResetParamRefRule) preparedExecutionExprType(
 			!preparedFunctionStringDomainDependsOnRuntimeParam(expr) {
 			return preparedType, false, false, nil
 		}
+		functionName := strings.ToLower(exprImpl.F.Func.GetObjName())
 		argTypes := make([]types.Type, len(exprImpl.F.Args))
 		var stringDomainModes []planfunction.StringDomainCheckMode
-		stringOperands := preparedRegexpCompatibilityStringOperandCount(
-			strings.ToLower(exprImpl.F.Func.GetObjName()), len(exprImpl.F.Args))
+		stringOperands := preparedRegexpCompatibilityStringOperandCount(functionName, len(exprImpl.F.Args))
 		if stringOperands > 0 {
 			stringDomainModes = make([]planfunction.StringDomainCheckMode, len(exprImpl.F.Args))
 		}
@@ -2469,6 +2469,10 @@ func (rule *ResetParamRefRule) preparedExecutionExprType(
 			}
 			if currentType.Oid == types.T_any && !childDomainless {
 				currentType = makeTypeByPlan2Expr(arg)
+			}
+			if preparedType, ok := rule.preparedSQLExecuteTextFunctionParamType(functionName, arg); ok {
+				currentType = preparedType
+				childDomainless = false
 			}
 			argTypes[i] = currentType
 			if i < stringOperands {
@@ -2817,6 +2821,19 @@ func (rule *ResetParamRefRule) applyExpr(e *plan.Expr) (*plan.Expr, error) {
 				err = applyErr
 				if err != nil {
 					return nil, err
+				}
+			}
+			if preparedType, textContext := rule.preparedSQLExecuteTextFunctionParamType(
+				functionName, originalArgs[i]); textContext {
+				textArg, known, textErr := rule.preparedSQLExecuteTextFunctionArg(paramPos, preparedType)
+				if textErr != nil {
+					return nil, textErr
+				}
+				if known {
+					rewrittenArg = textArg
+					needResetFunction = true
+					compareArgTypes = true
+					rule.specialized = true
 				}
 			}
 			if geometrySRIDParamPos >= 0 && i == len(exprImpl.F.Args)-1 &&
@@ -4441,6 +4458,79 @@ func (rule *ResetParamRefRule) preparedRuntimeSourceExpr(pos int, preserveProtoc
 	setPreparedRuntimeStringDomain(source, domain)
 	rule.retainRuntimeParamRef(pos, source)
 	return source, true, nil
+}
+
+func preparedStringMarkerType(expr *plan.Expr) types.Type {
+	for expr != nil && isImplicitPreparedParamCast(expr) {
+		fn := expr.GetF()
+		if fn == nil || len(fn.Args) == 0 {
+			break
+		}
+		expr = fn.Args[0]
+	}
+	if expr == nil {
+		return types.T_text.ToType()
+	}
+	typ := makeTypeByPlan2Expr(expr)
+	if !typ.Oid.IsMySQLString() || types.StaticStringDomain(typ) == types.StringDomainBinary ||
+		(typ.Width <= 0 && typ.Oid != types.T_text) {
+		return types.T_text.ToType()
+	}
+	typ.Charset = types.CharsetUTF8
+	return typ
+}
+
+// preparedSQLExecuteTextFunctionParamType identifies only bare SQL EXECUTE
+// markers passed to SOUNDEX/QUOTE whose user-variable source is binary. MySQL
+// prepares these markers in a text context; preserve the payload and apply that
+// context at this consumer rather than changing the variable's domain globally.
+func (rule *ResetParamRefRule) preparedSQLExecuteTextFunctionParamType(
+	functionName string,
+	expr *plan.Expr,
+) (types.Type, bool) {
+	switch strings.ToLower(functionName) {
+	case "soundex", "quote":
+	default:
+		return types.Type{}, false
+	}
+	pos, ok := preparedParamPosition(expr)
+	if !ok || pos < 0 || pos >= len(rule.paramValues) {
+		return types.Type{}, false
+	}
+	param, ok := rule.paramValues[pos].(ParamValue)
+	if !ok || param.IsBinaryProtocol {
+		return types.Type{}, false
+	}
+	isBinarySource := param.IsBin || param.IsBinaryString ||
+		param.RuntimeStringDomain == types.RuntimeStringBinary ||
+		(param.HasSourceType && types.StaticStringDomain(param.SourceType) == types.StringDomainBinary)
+	if !isBinarySource {
+		return types.Type{}, false
+	}
+	return preparedStringMarkerType(expr), true
+}
+
+// preparedSQLExecuteTextFunctionArg performs a byte-preserving cast into the
+// marker's prepared text type. Unlike a global parameter-domain change, the
+// cast is local to the SOUNDEX/QUOTE occurrence and leaves explicit binary
+// casts and unrelated uses of the same SQL variable untouched.
+func (rule *ResetParamRefRule) preparedSQLExecuteTextFunctionArg(
+	pos int,
+	targetType types.Type,
+) (*plan.Expr, bool, error) {
+	source, ok, err := rule.preparedRuntimeSourceExpr(pos, false)
+	if err != nil || !ok {
+		return source, ok, err
+	}
+	if !targetType.Oid.IsMySQLString() || types.StaticStringDomain(targetType) == types.StringDomainBinary {
+		targetType = types.T_text.ToType()
+	}
+	targetType.Charset = types.CharsetUTF8
+	textExpr, err := makePlan2CastExpr(rule.ctx, source, makePlan2Type(&targetType))
+	if err != nil {
+		return nil, false, err
+	}
+	return textExpr, true, nil
 }
 
 func isBitwiseAggregatePrivateCast(expr *plan.Expr) bool {

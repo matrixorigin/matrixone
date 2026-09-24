@@ -853,6 +853,7 @@ func (mp *MysqlProtocolImpl) SendPrepareResponse(ctx context.Context, stmt *Prep
 	paramTypes := dcPrepare.Prepare.ParamTypes
 	numParams := len(paramTypes)
 	columns := getPreparedResultColumns(stmt, sessionTxnHaveDDL(mp.GetSession()))
+	directIntegerLengths := directIntegerResultLengths(stmt.PrepareStmt, columns)
 	numColumns := len(columns)
 
 	var data []byte
@@ -900,6 +901,7 @@ func (mp *MysqlProtocolImpl) SendPrepareResponse(ctx context.Context, stmt *Prep
 			if err != nil {
 				return err
 			}
+			applyDirectIntegerResultMetadata(column, directIntegerLengths, i)
 			colDefPacket, err := mp.SendColumnDefinitionPacket(ctx, column, cmd)
 			if err != nil {
 				return err
@@ -2450,7 +2452,7 @@ func (mp *MysqlProtocolImpl) makeColumnDefinition41Payload(column *MysqlColumn, 
 	return data[:pos]
 }
 
-func (mp *MysqlProtocolImpl) MakeColumnDefData(ctx context.Context, columns []*planPb.ColDef) ([][]byte, error) {
+func (mp *MysqlProtocolImpl) MakeColumnDefData(ctx context.Context, columns []*planPb.ColDef, directIntegerLengths ...uint32) ([][]byte, error) {
 	numColumns := len(columns)
 	colDefData := make([][]byte, 0, numColumns)
 	for i := 0; i < numColumns; i++ {
@@ -2458,6 +2460,7 @@ func (mp *MysqlProtocolImpl) MakeColumnDefData(ctx context.Context, columns []*p
 		if err != nil {
 			return nil, err
 		}
+		applyDirectIntegerResultMetadata(column, directIntegerLengths, i)
 		colDefPacket := mp.makeColumnDefinition41Payload(column, int(COM_STMT_PREPARE))
 		colDefData = append(colDefData, colDefPacket)
 	}

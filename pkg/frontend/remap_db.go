@@ -16,6 +16,7 @@ package frontend
 
 import (
 	"context"
+	"slices"
 
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
 	"github.com/matrixorigin/matrixone/pkg/sql/parsers"
@@ -23,6 +24,7 @@ import (
 )
 
 type remapDbContext struct {
+	ctx                 context.Context
 	databases           map[string]string
 	lowerCaseTableNames int64
 	remapUseDatabase    bool
@@ -39,11 +41,22 @@ type remapDbContext struct {
 	collectTableName     func(*tree.TableName)
 	collectProcedureName func(*tree.ProcedureName)
 	collectFunctionName  func(*tree.UnresolvedName)
+	// err, when non-nil, receives the first fail-closed remapping error (for
+	// example a rewrite-key collision under remapdb). Walkers keep going so
+	// later statements stay consistent, and applyRemapDb* returns the error
+	// before authorization/planning sees the statements.
+	err *error
 }
 
 func (remap remapDbContext) lookup(database string) (string, bool) {
 	target, ok := remap.databases[tree.NewCStr(database, remap.lowerCaseTableNames).Compare()]
 	return target, ok
+}
+
+func (remap remapDbContext) fail(err error) {
+	if remap.err != nil && err != nil && *remap.err == nil {
+		*remap.err = err
+	}
 }
 
 func (remap remapDbContext) withVisibleCTEs(ctes ...*tree.CTE) remapDbContext {
@@ -105,11 +118,14 @@ func applyRemapDb(
 	if err != nil {
 		return err
 	}
-	remapCtx := remapDbContext{databases: normalized, lowerCaseTableNames: lowerCaseTableNames}
+	var walkErr error
+	remapCtx := remapDbContext{
+		ctx: ctx, databases: normalized, lowerCaseTableNames: lowerCaseTableNames, err: &walkErr,
+	}
 	for _, stmt := range stmts {
 		remapDbInStmt(stmt, remapCtx)
 	}
-	return nil
+	return walkErr
 }
 
 func applyRemapDbByStatement(
@@ -126,9 +142,13 @@ func applyRemapDbByStatement(
 		if err != nil {
 			return err
 		}
+		var walkErr error
 		remapDbInStmt(stmt, remapDbContext{
-			databases: normalized, lowerCaseTableNames: lowerCaseTableNames,
+			ctx: ctx, databases: normalized, lowerCaseTableNames: lowerCaseTableNames, err: &walkErr,
 		})
+		if walkErr != nil {
+			return walkErr
+		}
 	}
 	return nil
 }
@@ -150,7 +170,8 @@ func remapCloneRoutineStatements(
 	}
 	unsupported := false
 	if !remapDbInStatements(stmts, remapDbContext{
-		databases: normalized, lowerCaseTableNames: lowerCaseTableNames, remapUseDatabase: true, unsupported: &unsupported,
+		ctx: ctx, databases: normalized, lowerCaseTableNames: lowerCaseTableNames,
+		remapUseDatabase: true, unsupported: &unsupported,
 	}) || unsupported {
 		return moerr.NewNotSupported(ctx,
 			"cloned SQL routine contains a statement whose database references cannot be safely remapped",
@@ -592,6 +613,63 @@ func remapDbInSelectExprs(exprs tree.SelectExprs, remap remapDbContext) {
 	}
 }
 
+// remapRewriteOption keeps a statement's rewrite policy aligned with remapdb.
+// The planner keys rewrites by the post-remap schema+table and expands the
+// rule body as the table's replacement, so both the map key and every rule
+// body must observe the same database as the outer query. A remap that would
+// land two distinct rewrite keys on one destination fails closed rather than
+// dropping one chain. Keys are planned before any body is mutated so a
+// collision leaves the option untouched.
+func remapRewriteOption(opt *tree.RewriteOption, remap remapDbContext) error {
+	if opt == nil || len(opt.Rewrites) == 0 {
+		return nil
+	}
+	keys := make([]string, 0, len(opt.Rewrites))
+	for key := range opt.Rewrites {
+		keys = append(keys, key)
+	}
+	slices.Sort(keys)
+	newKeys := make([]string, len(keys))
+	owner := make(map[string]string, len(opt.Rewrites))
+	for i, key := range keys {
+		newKey := key
+		if db, table, ok := parsers.SplitRewriteKey(key); ok {
+			if target, found := remap.lookup(db); found {
+				newKey = tree.NewCStr(target, remap.lowerCaseTableNames).Compare() +
+					"." + tree.NewCStr(table, remap.lowerCaseTableNames).Compare()
+			}
+		}
+		if prev, exists := owner[newKey]; exists && prev != key {
+			ctx := remap.ctx
+			if ctx == nil {
+				ctx = context.Background()
+			}
+			return moerr.NewInvalidInputf(ctx,
+				"remapdb rewrite key collision: %q and %q both resolve to %q", prev, key, newKey)
+		}
+		owner[newKey] = key
+		newKeys[i] = newKey
+	}
+	remapped := make(map[string][]*tree.Rewrite, len(opt.Rewrites))
+	for i, key := range keys {
+		chain := opt.Rewrites[key]
+		for _, rewrite := range chain {
+			if rewrite == nil {
+				continue
+			}
+			if target, ok := remap.lookup(rewrite.DbName); ok {
+				rewrite.DbName = target
+			}
+			if rewrite.Stmt != nil {
+				remapDbInStmt(rewrite.Stmt, remap)
+			}
+		}
+		remapped[newKeys[i]] = chain
+	}
+	opt.Rewrites = remapped
+	return nil
+}
+
 func remapDbInSelect(sel *tree.Select, remap remapDbContext) {
 	if sel == nil {
 		return
@@ -605,6 +683,11 @@ func remapDbInSelect(sel *tree.Select, remap remapDbContext) {
 	remapDbInTimeWindow(sel.TimeWindow, scoped)
 	remapDbInOrderBy(sel.OrderBy, scoped)
 	remapDbInLimit(sel.Limit, scoped)
+	// Role/session/inline rewrite keys and rule bodies must stay aligned with
+	// the remapped table references. The planner builds its lookup key from the
+	// post-remap schema+table, so a source-keyed rewrite would otherwise miss
+	// and silently drop row-level policy (issue #29161).
+	remap.fail(remapRewriteOption(sel.RewriteOption, remap))
 }
 
 func remapDbInSelectStatement(s tree.SelectStatement, remap remapDbContext) {
