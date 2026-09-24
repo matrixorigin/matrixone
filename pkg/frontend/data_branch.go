@@ -985,7 +985,7 @@ func diffMergeAgency(
 	// lineage-owner lifecycle before resolving either endpoint, so their nested
 	// DDL follows the same lineage -> view-metadata -> object lock order as
 	// ordinary DROP, clone, and restore paths.
-	bh, deferred, err = getDataBranchOperationExecutor(execCtx, ses)
+	bh, deferred, err = getDataBranchMutationExecutor(execCtx.reqCtx, ses, false)
 	if err != nil {
 		return
 	}
@@ -1209,53 +1209,6 @@ func diffMergeAgency(
 	}
 
 	return err
-}
-
-// getDataBranchOperationExecutor gives one logical workspace statement sole
-// ownership of an independent Data Branch transaction.  A diff/merge/pick
-// operation runs a producer and a consumer concurrently; both may execute SQL
-// through the same background transaction, so an individual nested SQL must
-// not advance the workspace statement while the other side still has open
-// write scopes.
-//
-// The lineage-owner mutation executor acquires the lifecycle lock before
-// source resolution. An explicit user transaction already has an outer
-// frontend statement owner; only the independent background transaction needs
-// the boundary below.
-func getDataBranchOperationExecutor(
-	execCtx *ExecCtx,
-	ses *Session,
-) (BackgroundExec, func(error) error, error) {
-	bh, finish, err := getDataBranchMutationExecutor(execCtx.reqCtx, ses, false)
-	if err != nil {
-		return nil, nil, err
-	}
-	if ses.proc.GetTxnOperator().TxnOptions().ByBegin {
-		return bh, finish, nil
-	}
-
-	back := bh.(*backExec)
-	txnOp := back.backSes.GetTxnHandler().GetTxn()
-	if txnOp == nil {
-		err = moerr.NewInternalError(execCtx.reqCtx, "data branch background transaction is not active")
-		return nil, nil, finish(err)
-	}
-
-	workspace := txnOp.GetWorkspace()
-	workspace.StartStatement()
-	if err = incrWorkspaceStatement(execCtx, txnOp); err != nil {
-		workspace.EndStatement()
-		return nil, nil, finish(err)
-	}
-	back.backSes.statementBoundaryManagedExternally = true
-
-	return bh, func(operationErr error) error {
-		// diffMergeAgency waits for both producer and consumer before invoking
-		// this closure, so no nested execution can observe the transition.
-		back.backSes.statementBoundaryManagedExternally = false
-		workspace.EndStatement()
-		return finish(operationErr)
-	}, nil
 }
 
 func prepareDataBranchWorker(

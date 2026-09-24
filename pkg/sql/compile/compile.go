@@ -506,6 +506,7 @@ func (c *Compile) clear() {
 	c.resultMetadataFrozen = false
 	c.planGenerationRebuilt = false
 	c.sequenceState = sequenceStatementState{}
+	c.TxnReadView = client.NoWorkspaceReadView()
 
 	c.execType = plan2.ExecTypeTP
 	c.cnList = c.cnList[:0]

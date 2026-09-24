@@ -121,9 +121,11 @@ func TestCompileClearResetsExecutionType(t *testing.T) {
 		execType:     plan2.ExecTypeAP_MULTICN,
 		MessageBoard: message.NewMessageBoard(),
 		affectRows:   new(atomic.Uint64),
+		TxnReadView:  client.NewWorkspaceReadView(11, 7, 23),
 	}
 	c.clear()
 	require.True(t, c.IsTpQuery())
+	require.True(t, c.TxnReadView.IsZero(), "a reused remote compile must not inherit another transaction's workspace view")
 }
 
 func TestCompileMongoDBQueryDiagnosticsAreRedacted(t *testing.T) {
