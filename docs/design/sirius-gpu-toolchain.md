@@ -38,13 +38,15 @@ prefix. The compiler prefix and CUDA target root are deliberately distinct.
 No producer or consumer exports or parses a second GPU manifest. The CPU path
 does not inspect Pixi.
 
-The Sirius SDK's existing link metadata records the Pixi prefix and lockfile
-identity without changing C ABI version 1. Its C consumer proves the Sirius
-link inputs. The MO bridge verifies its native provenance against that same
-prefix before linking and records the exact ELF dependency closure of both
-the SDK consumer and `libmo`; packaging rechecks source hashes and stages the
-closure, including `libcuvs_c.so`. Different sources for the same SONAME are
-rejected.
+The Sirius SDK's existing `link.json` records verified compiler paths, source
+revision, link inputs, and artifact hashes; it does not claim to record a Pixi
+lock identity. The MO bridge checks that those compilers belong to the active
+Sirius `mo` Pixi prefix and records that prefix and its lockfile digest in its
+own prepared provenance, without changing C ABI version 1. It records the
+actual ELF dependency closure of the SDK consumer and `libmo`; release builds
+also verify MO native provenance. Packaging rechecks source hashes and stages
+the closure, including `libcuvs_c.so`. Different sources for the same SONAME
+are rejected.
 
 The distributed binary uses relative runtime paths beside its packaged
 libraries. Driver libraries (`libcuda.so.1`, NVML) and linker stubs are never
@@ -59,9 +61,17 @@ Two toolchain prerequisites can proceed independently: the Sirius Pixi/SDK
 extension and MO's Pixi-only GPU build support. They share the activated
 prefix contract, not a new JSON schema. The CGo bridge PR integrates their
 merged revisions and owns combined packaging and the GPU coexistence test.
-Direct-TAE storage
-protection is deferred; embedded MO-reader input needs no new TAE or
-directory-lock code. No intermediate PR enables embedded execution by default.
+Direct-TAE storage protection is deferred; embedded MO-reader input needs no
+new TAE or directory-lock code. No intermediate PR enables embedded execution
+by default.
+
+The deleted `go_cuda-133_arch-x86_64.yaml` is not converted at upgrade time:
+`optools/gpu/pixi.toml` and its lock are the MO GPU-only source of truth. Sirius
+independently locks its `mo` profile. To upgrade cuVS, update the compatible
+CUDA/cuVS/RMM constraints and regenerate each affected Pixi lock; verify the
+MO GPU-only build and the combined build against Sirius's one activated `mo`
+prefix. The bridge rejects mixed prefixes, so differing standalone lockfiles
+cannot silently provide libraries to one combined binary.
 
 The rejected optional-provider design added a bespoke manifest exporter,
 resolver, and two copies of GPU package identity. A system CUDA/Conda fallback
@@ -74,8 +84,7 @@ link provenance.
 ## Validation and rollout
 
 - Contract tests cover missing/wrong Pixi activation, absent CUDA/cuVS inputs,
-  native lock/prefix invalidation, and CPU builds
-  without Pixi.
+  native lock/prefix invalidation, and CPU builds without Pixi.
 - Build CPU, MO-GPU-only, Sirius-only, and combined profiles. A build can
   succeed without GPU hardware; it is not evidence of GPU execution.
 - Test packaging after relocation, with the build environment removed from

@@ -87,8 +87,12 @@ func (minusAll *MinusAll) Call(proc *process.Process) (vm.CallResult, error) {
 
 func (minusAll *MinusAll) build(proc *process.Process, analyzer process.Analyzer) error {
 	ctr := &minusAll.ctr
+	child, err := vm.GetChild(minusAll, 1)
+	if err != nil {
+		return err
+	}
 	for {
-		input, err := vm.ChildrenCall(minusAll.GetChildren(1), proc, analyzer)
+		input, err := vm.ChildrenCall(child, proc, analyzer)
 		if err != nil {
 			return err
 		}
@@ -129,8 +133,12 @@ func (minusAll *MinusAll) build(proc *process.Process, analyzer process.Analyzer
 
 func (minusAll *MinusAll) probe(proc *process.Process, analyzer process.Analyzer, result *vm.CallResult) (bool, error) {
 	ctr := &minusAll.ctr
+	child, err := vm.GetChild(minusAll, 0)
+	if err != nil {
+		return false, err
+	}
 	for {
-		input, err := vm.ChildrenCall(minusAll.GetChildren(0), proc, analyzer)
+		input, err := vm.ChildrenCall(child, proc, analyzer)
 		if err != nil {
 			return false, err
 		}

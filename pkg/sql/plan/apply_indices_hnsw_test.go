@@ -843,9 +843,11 @@ func TestPrepareHnswIndexContext_DifferentDistanceFunctions(t *testing.T) {
 			shouldHaveOp: true,
 		},
 		{
+			// A normalized (non-degenerate) cosine query now uses the index; a zero/subnormal
+			// query vector is rejected at runtime in Search (TestHnswSearchCosineRejected), not here.
 			name:         "cosine_distance",
 			funcName:     "cosine_distance",
-			shouldHaveOp: false,
+			shouldHaveOp: true,
 		},
 		{
 			name:         "l1_distance",
@@ -884,45 +886,24 @@ func TestPrepareHnswIndexContext_DifferentDistanceFunctions(t *testing.T) {
 						"id":      1,
 					},
 					Cols: []*plan.ColDef{
-						{
-							Name: "vec_col",
-							Typ: plan.Type{
-								Id: int32(types.T_array_float32),
-							},
-						},
-						{
-							Name: "id",
-							Typ: plan.Type{
-								Id:    int32(types.T_int64),
-								Width: 64,
-							},
-						},
+						{Name: "vec_col", Typ: plan.Type{Id: int32(types.T_array_float32)}},
+						{Name: "id", Typ: plan.Type{Id: int32(types.T_int64), Width: 64}},
 					},
-					Pkey: &plan.PrimaryKeyDef{
-						PkeyColName: "id",
-					},
+					Pkey: &plan.PrimaryKeyDef{PkeyColName: "id"},
 				},
 			}
 
 			vecCtx := &vectorSortContext{
 				distFnExpr: &plan.Function{
-					Func: &ObjectRef{
-						ObjName: tc.funcName,
-					},
+					Func: &ObjectRef{ObjName: tc.funcName},
 					Args: []*plan.Expr{
 						{
-							Typ: plan.Type{Id: int32(types.T_array_float32)},
-							Expr: &plan.Expr_Col{
-								Col: &plan.ColRef{
-									ColPos: 0,
-								},
-							},
+							Typ:  plan.Type{Id: int32(types.T_array_float32)},
+							Expr: &plan.Expr_Col{Col: &plan.ColRef{ColPos: 0}},
 						},
 						{
-							Typ: plan.Type{Id: int32(types.T_array_float32)},
-							Expr: &plan.Expr_Lit{
-								Lit: &plan.Literal{},
-							},
+							Typ:  plan.Type{Id: int32(types.T_array_float32)},
+							Expr: &plan.Expr_Lit{Lit: &plan.Literal{}},
 						},
 					},
 				},

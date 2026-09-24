@@ -445,6 +445,7 @@ func estimateLoadRowsizeFromFirstLine(param *tree.ExternParam, inputSize int64, 
 		param.ScanType == tree.INLINE ||
 		param.Local ||
 		param.Format == tree.PARQUET || param.Format == tree.ARROW ||
+		LoadFilepathHasGlob(param) ||
 		getCompressType(param, param.Filepath) != tree.NOCOMPRESS ||
 		(lineTerminator != "\n" && lineTerminator != "\r\n") ||
 		strings.HasPrefix(param.Filepath, "SHARED:/query_result/") {
@@ -538,6 +539,26 @@ func loadColumnarMayListFiles(param *tree.ExternParam) bool {
 		strings.ContainsAny(strings.TrimSpace(param.Filepath), "*?[")
 }
 
+// LoadFilepathHasGlob reports whether the LOAD source path is a shell pattern
+// that must be expanded with ReadDir instead of stat-ed verbatim.
+func LoadFilepathHasGlob(param *tree.ExternParam) bool {
+	return param != nil && strings.ContainsAny(strings.TrimSpace(param.Filepath), "*?[")
+}
+
+// LoadMayListFiles reports whether the LOAD source path must be resolved
+// through ReadDir.  Every remote format is listed, not just the columnar ones,
+// so the pattern itself is the only gate: INLINE data has no path and LOAD
+// LOCAL names a client-side file the server cannot list.
+//
+// checkFileExist collapses a pattern that matched exactly one file back to that
+// plain path, so downstream a still-glob Filepath means "more than one file".
+func LoadMayListFiles(param *tree.ExternParam) bool {
+	return param != nil &&
+		!param.Local &&
+		param.ScanType != tree.INLINE &&
+		LoadFilepathHasGlob(param)
+}
+
 func loadParquetMayListFiles(param *tree.ExternParam) bool {
 	return param != nil && param.Format == tree.PARQUET && loadColumnarMayListFiles(param)
 }
@@ -611,7 +632,13 @@ func buildLoad(stmt *tree.Load, ctx CompilerContext, isPrepareStmt bool) (*Plan,
 
 	noCompress := getCompressType(stmt.Param, fileName) == tree.NOCOMPRESS
 	var offset int64 = 0
-	if stmt.Param.Tail.IgnoredLines > 0 && stmt.Param.Parallel && noCompress && !stmt.Param.Local {
+	// A pattern that survived checkFileExist matched more than one file, so the
+	// load fans out whole files and never splits one by byte offset.  The
+	// prescan exists only to seed that split: it would stamp one file's header
+	// length onto FileStartOff for every file and zero Tail.IgnoredLines, where
+	// the CSV reader instead re-applies IGNORE n LINES on each file it opens.
+	if stmt.Param.Tail.IgnoredLines > 0 && stmt.Param.Parallel && noCompress &&
+		!stmt.Param.Local && !LoadFilepathHasGlob(stmt.Param) {
 		offset, err = IgnoredLines(stmt.Param, ctx)
 		if err != nil {
 			return nil, err
@@ -876,7 +903,7 @@ func checkFileExist(param *tree.ExternParam, ctx CompilerContext) (string, error
 	}
 
 	param.Ctx = ctx.GetContext()
-	if loadColumnarMayListFiles(param) {
+	if LoadMayListFiles(param) {
 		fileList, fileSize, err := ReadDir(param)
 		param.Ctx = nil
 		if err != nil {
@@ -884,6 +911,15 @@ func checkFileExist(param *tree.ExternParam, ctx CompilerContext) (string, error
 		}
 		if len(fileList) == 0 {
 			return "", moerr.NewInvalidInput(ctx.GetContext(), "the file does not exist in load flow")
+		}
+		if len(fileList) == 1 {
+			// One match is not a fanout.  Rewriting the pattern to the file it
+			// resolved to keeps the single-file paths (byte-offset split and its
+			// IGNORE-lines prescan) reachable, and makes "Filepath is still a
+			// glob" mean "at least two files" for every later decision.
+			param.Filepath = fileList[0]
+			param.FileSize = fileSize[0]
+			return param.Filepath, nil
 		}
 		param.FileSize = totalLoadFileSize(fileSize)
 		return param.Filepath, nil

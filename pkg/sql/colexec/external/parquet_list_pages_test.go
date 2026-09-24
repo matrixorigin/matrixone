@@ -89,6 +89,12 @@ func TestParquetListVectorAcrossV1Pages(t *testing.T) {
 	empty, err := reader.Open(param, proc)
 	require.NoError(t, err)
 	require.False(t, empty)
+	// The LIST vector is decoded through the row reader, but scalar siblings
+	// must remain on the page-vectorized path. This is the regression guard for
+	// the wide-schema slowdown reported in #29229.
+	require.True(t, reader.h.hasNestedCols)
+	require.Equal(t, []int{0}, reader.h.dataColIndices)
+	require.Len(t, reader.h.rowReader.Schema().Columns(), 1)
 	defer reader.Close()
 
 	gotIDs := make([]int64, 0, 8)
@@ -162,7 +168,7 @@ func TestParquetListVectorRowModePreservesSiblingMappers(t *testing.T) {
 	}
 
 	var buf bytes.Buffer
-	writer := parquet.NewWriter(&buf, schema)
+	writer := parquet.NewWriter(&buf, schema, parquet.MaxRowsPerRowGroup(1))
 	_, err := writer.WriteRows([]parquet.Row{makeRow(0), makeRow(1)})
 	require.NoError(t, err)
 	require.NoError(t, writer.Close())
@@ -204,6 +210,11 @@ func TestParquetListVectorRowModePreservesSiblingMappers(t *testing.T) {
 	empty, err := reader.Open(param, proc)
 	require.NoError(t, err)
 	require.False(t, empty)
+	// The LIST vector is decoded through the row reader, but all scalar
+	// siblings must remain on the page-vectorized path.
+	require.True(t, reader.h.hasNestedCols)
+	require.Equal(t, []int{0, 2, 3, 4, 5, 6, 7}, reader.h.dataColIndices)
+	require.Len(t, reader.h.rowReader.Schema().Columns(), 1)
 	defer reader.Close()
 
 	bat := vectorBatch([]types.Type{
