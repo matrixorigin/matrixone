@@ -444,6 +444,70 @@ func TestPreparedNumericAggregateParameterIdentity(t *testing.T) {
 	require.NoError(t, err)
 }
 
+func TestPreparedJSONAggregateValueNeedsRuntimeSpecialization(t *testing.T) {
+	for _, test := range []struct {
+		sql  string
+		name string
+	}{
+		{"select json_arrayagg(?) from nation", "json_arrayagg"},
+		{"select json_objectagg(''k'', ?) from nation", "json_objectagg"},
+	} {
+		t.Run(test.name, func(t *testing.T) {
+			prepare := buildPreparedAggregatePlan(t, test.sql)
+			require.True(t, PreparedPlanNeedsRuntimeSpecialization(prepare.Plan))
+			for _, value := range []struct {
+				text   string
+				typ    types.Type
+				isNull bool
+			}{
+				{text: "123.4500", typ: types.New(types.T_decimal128, 20, 4)},
+				{text: `{"a":1}`, typ: types.T_json.ToType()},
+				{text: "plain", typ: types.T_text.ToType()},
+				{typ: types.New(types.T_decimal128, 20, 4), isNull: true},
+			} {
+				for _, binary := range []bool{false, true} {
+					param := ParamValue{IsBinaryProtocol: binary, RetainParamRef: true}
+					if !value.isNull {
+						param.Value = value.text
+					}
+					if binary {
+						param.RuntimeType, param.HasRuntimeType = value.typ, true
+					} else {
+						param.SourceType, param.HasSourceType = value.typ, true
+					}
+					filled, specialized, err := FillValuesOfParamsInPlanWithSpecialization(
+						context.Background(), prepare.Plan, []any{param})
+					require.NoError(t, err)
+					require.True(t, specialized)
+					aggregate := findPlanFunctionExpr(filled, test.name)
+					require.NotNil(t, aggregate)
+					if !value.isNull {
+						require.Equal(t, int32(value.typ.Oid), aggregate.GetF().Args[len(aggregate.GetF().Args)-1].Typ.Id)
+					}
+					require.NoError(t, RestorePreparedRuntimeParamRefs(context.Background(), filled))
+					require.True(t, preparedExprContainsParam(aggregate.GetF().Args[len(aggregate.GetF().Args)-1]),
+						"runtime cache must not retain the first EXECUTE value")
+				}
+			}
+		})
+	}
+}
+
+func TestPreparedJSONAggregateKeepsExplicitAndKeyDomains(t *testing.T) {
+	for _, sql := range []string{
+		"select json_arrayagg(cast(? as decimal(20,4))) from nation",
+		"select json_arrayagg(cast(? as json)) from nation",
+		"select json_objectagg(''k'', cast(? as decimal(20,4))) from nation",
+		"select json_objectagg(''k'', cast(? as json)) from nation",
+		"select json_objectagg(?, 1) from nation",
+	} {
+		t.Run(sql, func(t *testing.T) {
+			prepare := buildPreparedAggregatePlan(t, sql)
+			require.False(t, PreparedPlanNeedsRuntimeSpecialization(prepare.Plan))
+		})
+	}
+}
+
 func TestSQLPreparedNullRetainsBinarySourceTypeAndRuntimeDomain(t *testing.T) {
 	prepare := buildPreparedAggregatePlan(t, "select char_length(?) from nation")
 	filled, specialized, err := FillValuesOfParamsInPlanWithSpecialization(
