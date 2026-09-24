@@ -3929,8 +3929,8 @@ func TestAllocatorPublishRejectsStaleBindAfterNewAllocatorObserved(t *testing.T)
 			require.ErrorIs(t, err, ErrLockTableBindChanged)
 			require.Nil(t, lt)
 			require.Nil(t, l1.tableGroups.get(0, staleTable))
-			require.Equal(t, newAllocator.id, l1.lastAllocatorID)
-			require.Equal(t, newAllocator.version, l1.lastAllocatorVersion)
+			observedAllocator := l1.allocatorStateSnapshot()
+			require.Equal(t, newAllocator, observedAllocator)
 		},
 	)
 }
