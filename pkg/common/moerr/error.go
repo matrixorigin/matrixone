@@ -18,6 +18,7 @@ import (
 	"context"
 	"encoding"
 	"encoding/hex"
+	"errors"
 	"fmt"
 	"io"
 	"sync/atomic"
@@ -67,6 +68,11 @@ const (
 	ErrRemoteDispatchNotRegistered uint16 = 20106
 	ErrMPoolCapacity               uint16 = 20107
 	ErrQueryTimeout                uint16 = 20108
+	// ErrContextCanceled and ErrDeadlineExceeded are made only by
+	// ConvertGoError from a context cancellation or deadline; Error.Is keeps
+	// them matching context.Canceled and context.DeadlineExceeded.
+	ErrContextCanceled  uint16 = 20109
+	ErrDeadlineExceeded uint16 = 20110
 
 	// Group 2: numeric and functions
 	ErrDivByZero                   uint16 = 20200
@@ -445,6 +451,8 @@ var errorMsgRefer = map[uint16]moErrorMsgItem{
 	ErrRemoteDispatchNotRegistered: {ER_UNKNOWN_ERROR, []string{MySQLDefaultSqlState}, "remote dispatch receiver %s is not registered yet"},
 	ErrMPoolCapacity:               {ER_ENGINE_OUT_OF_MEMORY, []string{MySQLDefaultSqlState}, "mpool physical capacity exceeded: %s"},
 	ErrQueryTimeout:                {ER_QUERY_TIMEOUT, []string{MySQLDefaultSqlState}, "Query execution was interrupted, maximum statement execution time exceeded"},
+	ErrContextCanceled:             {ER_QUERY_INTERRUPTED, []string{"70100"}, "%s"},
+	ErrDeadlineExceeded:            {ER_UNKNOWN_ERROR, []string{MySQLDefaultSqlState}, "%s"},
 
 	// Group 2: numeric
 	ErrDivByZero:                   {ER_DIVISION_BY_ZERO, []string{"22012"}, "division by zero"},
@@ -764,6 +772,22 @@ func (e *Error) Error() string {
 	return e.Display()
 }
 
+// Is lets errors.Is see through ConvertGoError: an error it converted from a
+// cancellation or deadline still matches context.Canceled or
+// context.DeadlineExceeded, also after crossing RPC, because the code is what
+// is serialized.  Only the two codes ConvertGoError mints match, so errors
+// that never were context errors (a killed query, a statement timeout) are
+// unaffected.
+func (e *Error) Is(target error) bool {
+	switch e.code {
+	case ErrContextCanceled:
+		return target == context.Canceled //nolint:errorlint // matching the sentinel itself
+	case ErrDeadlineExceeded:
+		return target == context.DeadlineExceeded //nolint:errorlint // matching the sentinel itself
+	}
+	return false
+}
+
 func (e *Error) Detail() string {
 	return e.detail
 }
@@ -909,6 +933,20 @@ func ConvertGoError(ctx context.Context, err error) error {
 	if err == io.EOF || err == io.ErrUnexpectedEOF {
 		// if io.EOF reaches here, we believe it is not expected.
 		return NewUnexpectedEOF(ctx, err.Error())
+	}
+
+	// A cancellation or deadline, even wrapped by a library (e.g. "reading
+	// magic footer of parquet file: context canceled"), keeps its identity:
+	// callers recognise those with errors.Is (see Error.Is).  A pipeline
+	// stopped because a sibling failed must report the sibling's error, not
+	// its own cancellation; the frontend treats a canceled read-only
+	// transaction specially.  A deadline wins over a cancellation joined with
+	// it, so an independent timeout is not hidden.
+	if errors.Is(err, context.DeadlineExceeded) {
+		return newError(ctx, ErrDeadlineExceeded, err.Error())
+	}
+	if errors.Is(err, context.Canceled) {
+		return newError(ctx, ErrContextCanceled, err.Error())
 	}
 
 	return NewInternalErrorf(ctx, "convert go error to mo error %v", err)
