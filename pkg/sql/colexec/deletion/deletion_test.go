@@ -253,6 +253,11 @@ func (w *deletionS3CleanupWorkspace) RetainUnpublishedS3Cleanup(cleanup func(con
 }
 
 func TestRemoteDeleteFreeRetainsFailedWriterCleanup(t *testing.T) {
+	t.Run("Free", func(t *testing.T) { checkRemoteDeleteFreeRetainsFailedWriterCleanup(t, false) })
+	t.Run("prepared Reset", func(t *testing.T) { checkRemoteDeleteFreeRetainsFailedWriterCleanup(t, true) })
+}
+
+func checkRemoteDeleteFreeRetainsFailedWriterCleanup(t *testing.T, prepared bool) {
 	proc := testutil.NewProc(t)
 	defer proc.Free()
 	baseFS, err := colexec.GetSharedFSFromProc(proc)
@@ -268,7 +273,11 @@ func TestRemoteDeleteFreeRetainsFailedWriterCleanup(t *testing.T) {
 	txnOp.EXPECT().GetWorkspace().Return(workspace).AnyTimes()
 	proc.Base.TxnOperator = txnOp
 	arg := &Deletion{RemoteDelete: true, ctr: *ctr}
-	arg.Free(proc, true, deleteErr)
+	if prepared {
+		arg.Reset(proc, true, deleteErr)
+	} else {
+		arg.Free(proc, true, deleteErr)
+	}
 	require.Empty(t, arg.ctr.s3Writers)
 	require.Len(t, workspace.cleanups, 1, "transaction must own the failed cleanup")
 	_, err = baseFS.StatFile(proc.Ctx, name)

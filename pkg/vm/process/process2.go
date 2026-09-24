@@ -200,8 +200,8 @@ func (proc *Process) SaveToTopContext(key, value any) context.Context {
 //
 // Everyone should be careful to call this method.
 func (proc *Process) doPrepareForRunningWithoutPipeline() {
-	proc.Base.sqlContext.queryContext = proc.Base.sqlContext.outerContext
-	proc.Ctx = proc.Base.sqlContext.outerContext
+	proc.Base.sqlContext.queryContext = withCleanupBudget(proc.Base.sqlContext.outerContext)
+	proc.Ctx = proc.Base.sqlContext.queryContext
 }
 
 // GetQueryCtxFromProc returns the query context and its cancel function.
@@ -307,7 +307,7 @@ func (qbCtx *QueryBaseContext) DoSpecialCleanUp(isMergeCTE bool) bool {
 
 // BuildQueryCtx refreshes the query context and cancellation method after the outer context was ready to run the query.
 func (qbCtx *QueryBaseContext) BuildQueryCtx(parent context.Context) context.Context {
-	qbCtx.queryContext, qbCtx.queryCancel = context.WithCancel(parent)
+	qbCtx.queryContext, qbCtx.queryCancel = context.WithCancel(withCleanupBudget(parent))
 
 	qbCtx.Lock()
 	qbCtx.pipelineLoopBreak = false

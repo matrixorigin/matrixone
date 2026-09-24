@@ -233,9 +233,12 @@ func (receiver *messageReceiverOnServer) finalizeUnpublishedS3Objects(
 			"remote S3 ownership handoff requires batch acknowledgements for exported output",
 		)
 	}
-	cleanupCtx, cancel := context.WithTimeoutCause(
-		context.WithoutCancel(receiver.messageCtx), 10*time.Minute, moerr.CauseCleanUpUselessFiles,
-	)
+	baseCtx := receiver.unpublishedS3CleanupContext
+	if baseCtx == nil {
+		baseCtx = receiver.messageCtx
+	}
+	process.BeginPipelineCleanup(baseCtx)
+	cleanupCtx, cancel := colexec.UnpublishedS3CleanupContext(baseCtx)
 	cleanupErr := receiver.unpublishedS3CleanupWorkspace.CleanupUnpublishedS3Objects(cleanupCtx)
 	cancel()
 	if cleanupErr != nil {
@@ -507,6 +510,7 @@ func handlePipelineMessage(receiver *messageReceiverOnServer) (err error) {
 					receiver.groupConcatReportingIncomplete = receiver.warningSession.incompleteGroupConcatReporting()
 				}
 				receiver.statementLastInsertID = runCompile.proc.GetStatementLastInsertID()
+				receiver.unpublishedS3CleanupContext = runCompile.proc.Ctx
 				if len(runCompile.scopes) != 0 && runCompile.proc.GetTxnOperator() != nil {
 					workspace := runCompile.proc.GetTxnOperator().GetWorkspace()
 					receiver.unpublishedS3CleanupWorkspace, _ = workspace.(interface {
@@ -905,6 +909,7 @@ type messageReceiverOnServer struct {
 	requestedTeardownMode         pipeline.StreamTeardownMode
 	acceptedTeardownMode          pipeline.StreamTeardownMode
 	streamLifecycle               *pipelineStreamLifecycle
+	unpublishedS3CleanupContext   context.Context
 	unpublishedS3CleanupWorkspace interface {
 		CleanupUnpublishedS3Objects(context.Context) error
 		QueueUnpublishedS3Cleanup(*colexec.Server) error
