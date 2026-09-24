@@ -16,7 +16,6 @@ package process
 
 import (
 	"context"
-	"maps"
 	"sync"
 	"time"
 
@@ -25,7 +24,6 @@ import (
 	"github.com/hayageek/threadsafe"
 
 	"github.com/matrixorigin/matrixone/pkg/common/mpool"
-	"github.com/matrixorigin/matrixone/pkg/container/types"
 	"github.com/matrixorigin/matrixone/pkg/defines"
 	"github.com/matrixorigin/matrixone/pkg/fileservice"
 	"github.com/matrixorigin/matrixone/pkg/incrservice"
@@ -115,13 +113,22 @@ func (proc *Process) NewViewBindingProcess(ctx context.Context) *Process {
 	child := NewTopProcess(ctx, proc.Base.mp, proc.Base.TxnClient, proc.Base.TxnOperator,
 		proc.Base.FileService, proc.Base.LockService, proc.Base.QueryClient,
 		proc.Base.Hakeeper, proc.Base.UdfService, proc.Base.Aicm, proc.Base.TaskService)
-	child.Base.SessionInfo = proc.Base.SessionInfo
-	child.Base.SessionInfo.QueryId = append([]string(nil), proc.Base.SessionInfo.QueryId...)
-	child.Base.SessionInfo.ResultColTypes = append([]types.Type(nil), proc.Base.SessionInfo.ResultColTypes...)
-	child.Base.SessionInfo.SeqCurValues = maps.Clone(proc.Base.SessionInfo.SeqCurValues)
-	child.Base.SessionInfo.SeqAddValues = maps.Clone(proc.Base.SessionInfo.SeqAddValues)
-	child.Base.SessionInfo.SeqDeleteKeys = append([]uint64(nil), proc.Base.SessionInfo.SeqDeleteKeys...)
-	child.Base.SessionInfo.SeqLastValue = append([]string(nil), proc.Base.SessionInfo.SeqLastValue...)
+	// Only borrow identity and binding configuration, which remain immutable
+	// during a statement. The parent SessionInfo also contains result counters,
+	// sequence maps and output buffers that the executing pipeline mutates.
+	info := &proc.Base.SessionInfo
+	child.Base.SessionInfo = SessionInfo{
+		Account: info.Account, User: info.User, Host: info.Host, Role: info.Role,
+		ConnectionID: info.ConnectionID, Database: info.Database, Version: info.Version,
+		TimeZone: info.TimeZone, LockWaitTimeout: info.LockWaitTimeout,
+		LockWaitTimeoutSet: info.LockWaitTimeoutSet, MatrixOneNativeMode: info.MatrixOneNativeMode,
+		IsRestore: info.IsRestore, ExplicitZeroTemporalCastReturnsNull: info.ExplicitZeroTemporalCastReturnsNull,
+		SqlMode: info.SqlMode, AutoIncrementIncrement: info.AutoIncrementIncrement,
+		AutoIncrementOffset: info.AutoIncrementOffset, ApplySQLSelectLimit: info.ApplySQLSelectLimit,
+		CountUpdateChangedRows: info.CountUpdateChangedRows, StorageEngine: info.StorageEngine,
+		SqlHelper: info.SqlHelper, CompilerContext: info.CompilerContext,
+		LogLevel: info.LogLevel, SessionId: info.SessionId,
+	}
 	child.Base.IsFrontend = proc.Base.IsFrontend
 	child.Base.DivByZeroErrorMode = proc.Base.DivByZeroErrorMode
 	child.Base.resolveVariableFunc = proc.Base.resolveVariableFunc

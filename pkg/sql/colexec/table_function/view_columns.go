@@ -75,6 +75,9 @@ func (s *viewColumnsState) start(tf *TableFunction, proc *process.Process, nthRo
 		return err
 	}
 	defer closeCompiler()
+	if tf.ScanSnapshot != nil {
+		compiler.SetSnapshot(tf.ScanSnapshot)
+	}
 	var def *planpb.TableDef
 	if len(tf.ctr.argVecs) == 2 {
 		publisherArgs := vector.GenerateFunctionFixedTypeParameter[uint32](tf.ctr.argVecs[0])
@@ -91,7 +94,7 @@ func (s *viewColumnsState) start(tf *TableFunction, proc *process.Process, nthRo
 			compiler.SetQueryingSubscription(sub)
 		}
 	} else {
-		_, def, err = compiler.ResolveById(id, nil)
+		_, def, err = compiler.ResolveById(id, tf.ScanSnapshot)
 	}
 	if err != nil {
 		return err

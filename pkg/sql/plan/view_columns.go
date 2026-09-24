@@ -68,6 +68,7 @@ func (builder *QueryBuilder) buildViewColumns(tbl *tree.TableFunction, ctx *Bind
 	}
 	node := &planpb.Node{NodeType: planpb.Node_FUNCTION_SCAN, Stats: &planpb.Stats{},
 		TableDef:    &TableDef{TableType: "func_table", TblFunc: &planpb.TableFunction{Name: functionName, IsSingle: true}, Cols: defs},
-		BindingTags: []int32{builder.genNewBindTag()}, Children: children, TblFuncExprList: args}
+		BindingTags: []int32{builder.genNewBindTag()}, Children: children, TblFuncExprList: args,
+		ScanSnapshot: DeepCopySnapshot(ctx.snapshot)}
 	return builder.appendNode(node, ctx), nil
 }

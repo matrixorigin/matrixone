@@ -27,6 +27,7 @@ func TestNewViewBindingProcessOwnsContextAndSessionState(t *testing.T) {
 	parentCtx := defines.AttachAccountId(t.Context(), 10)
 	parent := NewTopProcess(parentCtx, mpool.MustNewZero(), nil, nil, nil, nil, nil, nil, nil, nil, nil)
 	defer parent.Free()
+	parent.GetSessionInfo().Account = "parent"
 	parent.GetSessionInfo().SeqCurValues = map[uint64]string{1: "parent"}
 	parent.GetSessionInfo().QueryId = []string{"parent"}
 
@@ -37,8 +38,11 @@ func TestNewViewBindingProcessOwnsContextAndSessionState(t *testing.T) {
 	require.Same(t, childCtx, child.GetTopContext())
 	require.Same(t, childCtx, child.Ctx)
 	child.ReplaceTopCtx(context.WithValue(childCtx, struct{}{}, "nested"))
-	child.GetSessionInfo().SeqCurValues[1] = "child"
-	child.GetSessionInfo().QueryId[0] = "child"
+	require.Equal(t, "parent", child.GetSessionInfo().Account)
+	require.Nil(t, child.GetSessionInfo().SeqCurValues)
+	require.Nil(t, child.GetSessionInfo().QueryId)
+	child.GetSessionInfo().SeqCurValues = map[uint64]string{1: "child"}
+	child.GetSessionInfo().QueryId = []string{"child"}
 	require.Same(t, parentCtx, parent.GetTopContext())
 	require.Equal(t, "parent", parent.GetSessionInfo().SeqCurValues[1])
 	require.Equal(t, "parent", parent.GetSessionInfo().QueryId[0])

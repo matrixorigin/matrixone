@@ -21,6 +21,7 @@ import (
 
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
 	"github.com/matrixorigin/matrixone/pkg/container/types"
+	"github.com/matrixorigin/matrixone/pkg/defines"
 	planpb "github.com/matrixorigin/matrixone/pkg/pb/plan"
 )
 
@@ -32,6 +33,20 @@ const MaxViewMetadataColumns = 4096
 func viewDescriptionRelation(
 	ctx CompilerContext, def *TableDef, accountID uint32, databaseName, viewName string,
 ) (string, error) {
+	if sub := ctx.GetQueryingSubscription(); sub != nil {
+		provider, ok := ctx.(ViewDescriptionContextProvider)
+		if !ok {
+			return "", moerr.NewNotSupported(ctx.GetContext(), "subscription View description requires an isolated binding context")
+		}
+		child, cleanup, err := provider.NewViewDescriptionCompilerContext(ctx.GetContext())
+		if err != nil {
+			return "", err
+		}
+		defer cleanup()
+		child.SetContext(defines.AttachAccountId(child.GetContext(), accountID))
+		child.SetQueryingSubscription(sub)
+		ctx = child
+	}
 	cols, err := DescribeViewColumns(ctx, def.ViewSql.View)
 	if err != nil {
 		return "", err

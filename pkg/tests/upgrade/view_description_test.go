@@ -88,6 +88,39 @@ func TestViewDescriptionPublicSQL(t *testing.T) {
 		var stored string
 		require.NoError(t, db.QueryRowContext(ctx, "select mo_show_visible_bin(atttyp,3) from mo_catalog.mo_columns where att_database='view_description_test' and att_relname='v' and attname='label'").Scan(&stored))
 		require.Equal(t, "VARCHAR(5)", stored)
+		// A prepared SHOW must not retain the VALUES rows produced by its first bind.
+		showConn, err := db.Conn(ctx)
+		require.NoError(t, err)
+		func() {
+			defer showConn.Close()
+			showStmt, err := showConn.PrepareContext(ctx, "show columns from view_description_test.v")
+			require.NoError(t, err)
+			defer showStmt.Close()
+			checkShow := func(want ...string) {
+				rows, err := showStmt.QueryContext(ctx)
+				require.NoError(t, err)
+				defer rows.Close()
+				var got []string
+				for rows.Next() {
+					var field, typ, nullable, key, defaultValue, extra, comment sql.NullString
+					require.NoError(t, rows.Scan(&field, &typ, &nullable, &key, &defaultValue, &extra, &comment))
+					got = append(got, field.String)
+				}
+				require.NoError(t, rows.Err())
+				require.Equal(t, want, got)
+			}
+			checkShow("label", "qty")
+			writer, err := db.Conn(ctx)
+			require.NoError(t, err)
+			defer writer.Close()
+			_, err = writer.ExecContext(ctx, "use view_description_test")
+			require.NoError(t, err)
+			_, err = writer.ExecContext(ctx, "alter view v as select qty as changed from src")
+			require.NoError(t, err)
+			checkShow("changed")
+			_, err = writer.ExecContext(ctx, "alter view v as select x as label, qty from src")
+			require.NoError(t, err)
+		}()
 		exec("create table view_description_test.unrelated_source (x int)")
 		exec("create view view_description_test.unrelated_view as select x from view_description_test.unrelated_source")
 		exec("drop table view_description_test.unrelated_source")
@@ -99,7 +132,13 @@ func TestViewDescriptionPublicSQL(t *testing.T) {
 		defer func() { require.NoError(t, prepared.Close()) }()
 		require.NoError(t, prepared.QueryRowContext(ctx).Scan(&width))
 		require.Equal(t, 60, width)
+		exec("create snapshot view_description_history for account")
+		defer exec("drop snapshot view_description_history")
 		exec("drop table view_description_test.src")
+		require.NoError(t, db.QueryRowContext(ctx,
+			"select character_maximum_length from information_schema.columns {snapshot = 'view_description_history'} "+
+				"where table_schema='view_description_test' and table_name='v' and column_name='label'").Scan(&width))
+		require.Equal(t, 60, width, "historical metadata must bind the historical source after it is dropped")
 		var invalidFields [7]sql.NullString
 		err = db.QueryRowContext(ctx, "desc view_description_test.v").Scan(
 			&invalidFields[0], &invalidFields[1], &invalidFields[2], &invalidFields[3],
@@ -207,6 +246,25 @@ func TestViewDescriptionSubscription(t *testing.T) {
 		require.NoError(t, err)
 		defer func() { _, err := subscriber.ExecContext(ctx, "drop database subscribed"); require.NoError(t, err) }()
 		exec("alter table view_description_pub.src modify column x varchar(60)")
+		var field, typ, nullable, key, defaultValue, extra, comment sql.NullString
+		require.NoError(t, subscriber.QueryRowContext(ctx, "desc subscribed.v").Scan(
+			&field, &typ, &nullable, &key, &defaultValue, &extra, &comment))
+		require.Equal(t, "x", field.String)
+		require.Equal(t, "VARCHAR(60)", typ.String)
+		// System View columns remain sourced from the catalog, not regenerated
+		// from the internal SQL used to populate the View.
+		rows, err := subscriber.QueryContext(ctx, "desc mo_catalog.mo_variables")
+		require.NoError(t, err)
+		func() {
+			defer rows.Close()
+			var found bool
+			for rows.Next() {
+				require.NoError(t, rows.Scan(&field, &typ, &nullable, &key, &defaultValue, &extra, &comment))
+				found = found || field.String == "configuration_id"
+			}
+			require.NoError(t, rows.Err())
+			require.True(t, found)
+		}()
 		exec("drop table view_description_pub.bad_src")
 		query := "select character_maximum_length from information_schema.columns where table_schema='subscribed' and table_name='v' and column_name='x'"
 		var width int
@@ -218,11 +276,14 @@ func TestViewDescriptionSubscription(t *testing.T) {
 		exec("alter table view_description_pub.src modify column x varchar(90)")
 		require.NoError(t, prepared.QueryRowContext(ctx).Scan(&width))
 		require.Equal(t, 90, width)
-		rows, err := subscriber.QueryContext(ctx, "select table_name from information_schema.columns where table_schema='subscribed'")
-		require.Error(t, err, "an authorized full subscription scan must report its invalid View")
-		if rows != nil {
-			require.NoError(t, rows.Close())
-		}
+		func() {
+			rows, err := subscriber.QueryContext(ctx, "select table_name from information_schema.columns where table_schema='subscribed'")
+			if rows != nil {
+				defer rows.Close()
+				require.NoError(t, rows.Err())
+			}
+			require.Error(t, err, "an authorized full subscription scan must report its invalid View")
+		}()
 
 		_, err = subscriber.ExecContext(ctx, "create role metadata_reader")
 		require.NoError(t, err)
