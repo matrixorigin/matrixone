@@ -246,7 +246,7 @@ func TestUpgradeEntries(t *testing.T) {
 		{name: "CHECK_CONSTRAINTS", ddl: sysview.InformationSchemaCheckConstraintsDDL},
 		{name: "VIEWS", ddl: sysview.InformationSchemaViewsDDL},
 		{name: "PARTITIONS", ddl: sysview.InformationSchemaPartitionsDDL},
-		{name: "SCHEMATA", ddl: sysview.InformationSchemaSchemataDDL},
+		{name: "SCHEMATA", ddl: sysview.InformationSchemaSchemataLegacyDDL},
 	}
 	for i, view := range metadataViews {
 		entry := tenantUpgEntries[22+i]
@@ -485,7 +485,7 @@ func TestInformationSchemaMetadataVisibilityUpgradeChecks(t *testing.T) {
 		{name: "CHECK_CONSTRAINTS", ddl: sysview.InformationSchemaCheckConstraintsDDL},
 		{name: "VIEWS", ddl: sysview.InformationSchemaViewsDDL},
 		{name: "PARTITIONS", ddl: sysview.InformationSchemaPartitionsDDL},
-		{name: "SCHEMATA", ddl: sysview.InformationSchemaSchemataDDL},
+		{name: "SCHEMATA", ddl: sysview.InformationSchemaSchemataLegacyDDL},
 	}
 	checkErr := errors.New("check metadata view definition failed")
 
@@ -1098,7 +1098,7 @@ func TestVersionHandleLifecycleWithNoLegacyDefinitions(t *testing.T) {
 			case "PARTITIONS":
 				return true, sysview.InformationSchemaPartitionsDDL, nil
 			case "SCHEMATA":
-				return true, sysview.InformationSchemaSchemataDDL, nil
+				return true, sysview.InformationSchemaSchemataLegacyDDL, nil
 			case "table_privileges":
 				return true, sysview.InformationSchemaTablePrivilegesDDL, nil
 			default:

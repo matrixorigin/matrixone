@@ -1390,6 +1390,9 @@ func (backSes *backSession) SetUserDefinedVar(name string, value interface{}, sq
 }
 
 func (backSes *backSession) GetSessionSysVar(name string) (interface{}, error) {
+	if value, handled, err := databaseDefaultSystemVariable(backSes, strings.ToLower(name)); handled {
+		return value, err
+	}
 	switch strings.ToLower(name) {
 	case "autocommit":
 		return true, nil

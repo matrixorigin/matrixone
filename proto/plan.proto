@@ -1879,11 +1879,13 @@ message CreateDatabase {
   string database = 2;
   SubscriptionOption subscription_option = 3;
   string sql = 4;
+  DatabaseDefaults defaults = 5;
 }
 
 message AlterDatabase {
   bool if_exists = 1;
   string database = 2;
+  DatabaseDefaults defaults = 3;
 }
 
 message DropDatabase {
@@ -1952,6 +1954,7 @@ message CreateTable {
 
   reserved 14;
   string RawSQL = 15;
+  DatabaseDefaults database_defaults = 16;
 }
 
 message AlterTableDrop {
@@ -2378,4 +2381,12 @@ message VectorIndexScanWork {
 message UnresolvedIndexHint {
   ObjectRef table = 1;
   string index_name = 2;
+}
+
+// A zero version represents a legacy database without a persisted default.
+message DatabaseDefaults {
+  uint64 database_id = 1;
+  string character_set = 2;
+  string collation = 3;
+  uint64 version = 4;
 }

@@ -288,7 +288,10 @@ func TestInitInformationSchemaSysTablesForProtocol(t *testing.T) {
 		})
 	}
 
-	latest := InitInformationSchemaSysTablesForProtocol(defines.MORPCVersion58)
+	legacyDefaults := InitInformationSchemaSysTablesForProtocol(defines.MORPCVersion94)
+	assert.Contains(t, legacyDefaults, InformationSchemaSchemataLegacyDDL)
+	assert.NotContains(t, strings.Join(legacyDefaults, "\n"), "mo_database_defaults")
+	latest := InitInformationSchemaSysTablesForProtocol(defines.MORPCVersion95)
 	assert.Equal(t, InitInformationSchemaSysTables, latest)
 	assert.Contains(t, strings.Join(latest, "\n"), "WHEN 3 then 'utf8mb4'")
 }
@@ -495,7 +498,7 @@ func TestInformationSchemaDefaultCollationsMatchCanonicalDefinitions(t *testing.
 			fmt.Sprintf("('%s','%s'", charset, defaultCollation))
 	}
 	assert.Contains(t, InformationSchemaSchemataDDL,
-		"'"+DefaultCollationForCharset("utf8mb4")+"' AS DEFAULT_COLLATION_NAME")
+		"coalesce(dd.collation_name, @@session.collation_server) AS DEFAULT_COLLATION_NAME")
 	assert.Contains(t, InformationSchemaTablesDDL,
 		"'"+DefaultCollationForCharset("utf8mb4")+"' AS TABLE_COLLATION")
 	assert.Contains(t, InformationSchemaViewsDDL,

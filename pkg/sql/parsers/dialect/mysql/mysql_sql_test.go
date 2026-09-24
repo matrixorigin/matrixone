@@ -6825,3 +6825,23 @@ func TestNonGeometrySRIDSyntaxRoundTrip(t *testing.T) {
 		})
 	}
 }
+
+func TestAlterDatabaseCollationSyntax(t *testing.T) {
+	for _, sql := range []string{
+		"alter database d character set utf8mb4 collate utf8mb4_bin",
+		"alter schema d default collate = utf8mb4_bin default character set = utf8mb4",
+		"alter database collate utf8mb4_bin",
+		"alter database d character set utf8mb4",
+	} {
+		t.Run(sql, func(t *testing.T) {
+			stmt, err := ParseOne(t.Context(), sql, 1)
+			require.NoError(t, err)
+			defer stmt.Free()
+			formatted := tree.String(stmt, dialect.MYSQL)
+			require.Contains(t, formatted, "alter database")
+			reparsed, err := ParseOne(t.Context(), formatted, 1)
+			require.NoError(t, err)
+			reparsed.Free()
+		})
+	}
+}

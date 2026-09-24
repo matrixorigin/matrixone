@@ -150,6 +150,7 @@ func (m *MockCompilerContext) ResolveVariable(varName string, isSystemVar, isGlo
 		vars["sql_mode"] = "ONLY_FULL_GROUP_BY"
 	}
 
+	vars["collation_server"] = "utf8mb4_general_ci"
 	vars["foreign_key_checks"] = int64(1)
 	vars["sort_spill_mem"] = int64(0)
 	vars["lower_case_table_names"] = int64(1)
@@ -470,6 +471,16 @@ func NewMockCompilerContext(isDml bool) *MockCompilerContext {
 			{catalog.Row_ID, types.T_Rowid, false, 16, 0},
 		},
 		pks: []int{0},
+	}
+	moSchema[catalog.MODatabaseDefaults] = &Schema{
+		cols: []col{
+			{"account_id", types.T_uint32, false, 0, 0},
+			{"database_id", types.T_uint64, false, 0, 0},
+			{"character_set", types.T_varchar, false, 64, 0},
+			{"collation_name", types.T_varchar, false, 64, 0},
+			{"version", types.T_uint64, false, 0, 0},
+			{catalog.Row_ID, types.T_Rowid, false, 16, 0},
+		}, pks: []int{0, 1},
 	}
 	moSchema["mo_tables"] = &Schema{
 		cols: []col{

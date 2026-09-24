@@ -3279,6 +3279,14 @@ func shouldRebuildPreparePlan(schemaChanged bool, p *plan.Plan) bool {
 	if schemaChanged || p == nil {
 		return schemaChanged
 	}
+	if ddl := p.GetDdl(); ddl != nil {
+		if create := ddl.GetCreateTable(); create != nil && create.DatabaseDefaults != nil {
+			return true
+		}
+		if ddl.GetAlterDatabase() != nil || ddl.GetCreateDatabase().GetDefaults() != nil {
+			return true
+		}
+	}
 	query := p.GetQuery()
 	return query != nil && (query.GetHasForeignKeyAction() ||
 		plan2.PreparedPlanDependsOnSubscriptionMetadata(p) ||

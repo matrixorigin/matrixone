@@ -80,7 +80,7 @@ func TestDoCheckUpgradeQueuesStatisticsRefresh(t *testing.T) {
 				}, &testTxnOperator{})
 				b := newServiceForTest("", &memLocker{},
 					clock.NewHLCClock(func() int64 { return 0 }, 0), nil, exec,
-					func(s *service) { s.initUpgrade() })
+					func(s *service) { initStatisticsUpgradeTestHandles(s) })
 				defer b.stopper.Stop()
 				require.Equal(t, final, b.getFinalVersionHandle().Metadata())
 				require.NoError(t, b.doCheckUpgrade(context.Background()))
@@ -202,7 +202,7 @@ func TestStatisticsUpgradeOldWorkerCannotCompleteNewTask(t *testing.T) {
 
 				current := newServiceForTest("", &memLocker{},
 					clock.NewHLCClock(func() int64 { return 0 }, 0), nil, exec,
-					func(s *service) { s.initUpgrade() })
+					func(s *service) { initStatisticsUpgradeTestHandles(s) })
 				defer current.stopper.Stop()
 				hasWork, err = current.newTenantUpgradePass(t.Context())()
 				require.NoError(t, err)
@@ -295,7 +295,7 @@ func TestStatisticsUpgradeCompensatesPostSnapshotTenantAfterRestart(t *testing.T
 
 		newCN := func() *service {
 			b := newServiceForTest("", &memLocker{}, clock.NewHLCClock(func() int64 { return 0 }, 0),
-				nil, exec, func(s *service) { s.initUpgrade() })
+				nil, exec, func(s *service) { initStatisticsUpgradeTestHandles(s) })
 			t.Cleanup(b.stopper.Stop)
 			return b
 		}
@@ -372,7 +372,7 @@ func TestMaybeUpgradeTenantDoesNotCacheUncommittedOrFailedChecks(t *testing.T) {
 					}
 				}, txnOp)
 				b := newServiceForTest("", &memLocker{}, clock.NewHLCClock(func() int64 { return 0 }, 0),
-					nil, exec, func(s *service) { s.initUpgrade() })
+					nil, exec, func(s *service) { initStatisticsUpgradeTestHandles(s) })
 				defer b.stopper.Stop()
 				for range 2 {
 					var txnOp client.TxnOperator
@@ -418,7 +418,7 @@ func TestMaybeUpgradeTenantRechecksVersionUnderLock(t *testing.T) {
 			}
 		})
 		b := newServiceForTest("", &memLocker{}, clock.NewHLCClock(func() int64 { return 0 }, 0),
-			nil, exec, func(s *service) { s.initUpgrade() })
+			nil, exec, func(s *service) { initStatisticsUpgradeTestHandles(s) })
 		defer b.stopper.Stop()
 		upgraded, err := b.MaybeUpgradeTenant(t.Context(),
 			func() (int32, string, error) { return 11, final.Version, nil }, nil)
@@ -446,7 +446,7 @@ func TestMaybeUpgradeTenantWaitHonorsCancellation(t *testing.T) {
 			}
 		})
 		b := newServiceForTest("", &memLocker{}, clock.NewHLCClock(func() int64 { return 0 }, 0),
-			nil, exec, func(s *service) { s.initUpgrade() })
+			nil, exec, func(s *service) { initStatisticsUpgradeTestHandles(s) })
 		defer b.stopper.Stop()
 		ctx, cancel := context.WithCancel(t.Context())
 		cancel()
@@ -488,7 +488,7 @@ func TestMaybeUpgradeTenantRejectsConcurrentAccountDeletion(t *testing.T) {
 						}
 					})}
 				b := newServiceForTest("", &memLocker{}, clock.NewHLCClock(func() int64 { return 0 }, 0),
-					nil, exec, func(s *service) { s.initUpgrade() })
+					nil, exec, func(s *service) { initStatisticsUpgradeTestHandles(s) })
 				defer b.stopper.Stop()
 				fetch := func() (int32, string, error) {
 					authenticated = true
@@ -543,4 +543,15 @@ func statisticsLatestVersionResult(t *testing.T, version versions.Version, state
 	require.NoError(t, executor.AppendFixedRows(res, 1, []uint32{version.VersionOffset}))
 	require.NoError(t, executor.AppendFixedRows(res, 2, []int32{state}))
 	return res.GetResult()
+}
+
+// Keep these historical migration fixtures pinned to their 4.0.8 target.
+func initStatisticsUpgradeTestHandles(s *service) {
+	s.initUpgrade()
+	for i, h := range s.handles {
+		if h.Metadata().Version == "4.0.8" {
+			s.handles = s.handles[:i+1]
+			return
+		}
+	}
 }

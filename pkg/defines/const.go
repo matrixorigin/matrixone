@@ -130,7 +130,8 @@ const (
 	MORPCVersion92     int64 = 92 // canonical scalar FLOAT HLL_ADD_AGG hash keys
 	MORPCVersion93     int64 = 93 // session LAST_INSERT_ID connection migration state
 	MORPCVersion94     int64 = 94 // lossless physical/logical NoFull CDC start watermark
-	MORPCLatestVersion       = MORPCVersion94
+	MORPCVersion95     int64 = 95 // persisted database charset/collation defaults
+	MORPCLatestVersion       = MORPCVersion95
 )
 
 // DefaultLockWaitTimeoutSeconds is shared by the frontend default and by

@@ -34,6 +34,7 @@ import (
 )
 
 type cloneDatabaseSource struct {
+	defaults           *plan.DatabaseDefaults
 	srcResolveDBName   string
 	srcPrivilegeDBName string
 	srcTblInfos        []*tableInfo
@@ -577,6 +578,20 @@ func collectCloneDatabaseSource(
 	}
 	if !sourceExists {
 		return source, moerr.NewBadDB(ctx, srcDBName)
+	}
+
+	sourceAccountID, sourceTS := accounts.opAccountId, int64(0)
+	if snapshot != nil {
+		if snapshot.Tenant != nil {
+			sourceAccountID = snapshot.Tenant.TenantID
+		}
+		if snapshot.TS != nil {
+			sourceTS = snapshot.TS.PhysicalTime
+		}
+	}
+	source.defaults, err = readDatabaseDefaultsForRestore(ctx, bh, srcDBName, sourceAccountID, sourceTS)
+	if err != nil {
+		return source, err
 	}
 
 	srcTblInfos, err := getTableInfos(ctx, ses.GetService(), bh, snapshot, srcDBName, "")

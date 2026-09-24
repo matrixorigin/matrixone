@@ -2081,6 +2081,9 @@ func doShowVariables(ses *Session, execCtx *ExecCtx, sv *tree.ShowVariables) err
 			}
 		} else {
 			if value, err = ses.GetSessionSysVar(name); err != nil {
+				if name == "collation_database" || name == "character_set_database" {
+					return err
+				}
 				continue
 			}
 		}
@@ -4661,6 +4664,11 @@ func authenticateUserCanExecuteStatement(reqCtx context.Context, ses *Session, s
 		return stats, nil
 	}
 	if ses.GetTenantInfo() != nil {
+		if _, ok := stmt.(*tree.AlterDatabase); ok {
+			// A persistent database-default change must recheck both the active role
+			// membership and its current privileges, including prepared execution.
+			ses.InvalidatePrivilegeCache()
+		}
 		ses.SetPrivilege(determinePrivilegeSetOfStatement(stmt))
 		if !canCreateMongoDBTableMapping(stmt, ses.GetTenantInfo()) {
 			// The privilege model has no external-connection USAGE object yet.

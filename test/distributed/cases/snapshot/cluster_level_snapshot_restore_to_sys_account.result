@@ -705,28 +705,54 @@ show create table ti1;
 Table    Create Table
 ti1    CREATE TABLE `ti1` (\n  `a` int NOT NULL,\n  `b` int DEFAULT NULL,\n  `c` int DEFAULT NULL,\n  CONSTRAINT `fi1` FOREIGN KEY (`b`) REFERENCES `ti2` (`a`) ON DELETE RESTRICT ON UPDATE RESTRICT\n)
 show create table ti1{snapshot = 'sp13'};
-Table    Create Table
-ti1    CREATE TABLE `ti1` (\n  `a` int NOT NULL,\n  `b` int DEFAULT NULL,\n  `c` int DEFAULT NULL\n)
+➤ Table[12,3,0]  ¦  Create Table[12,116,0]  𝄀
+ti1  ¦  CREATE TABLE `ti1` (
+  `a` int NOT NULL,
+  `b` int DEFAULT NULL,
+  `c` int DEFAULT NULL
+) COLLATE=utf8mb4_general_ci
 show create table tm1;
 Table    Create Table
 tm1    CREATE TABLE `tm1` (\n  `a` int NOT NULL,\n  `b` int DEFAULT NULL,\n  `c` int DEFAULT NULL,\n  CONSTRAINT `fm1` FOREIGN KEY (`b`) REFERENCES `tm2` (`a`) ON DELETE RESTRICT ON UPDATE RESTRICT\n)
 show create table tm1{snapshot = 'sp13'};
-Table    Create Table
-tm1    CREATE TABLE `tm1` (\n  `a` int NOT NULL,\n  `b` int DEFAULT NULL,\n  `c` int DEFAULT NULL\n)
+➤ Table[12,3,0]  ¦  Create Table[12,116,0]  𝄀
+tm1  ¦  CREATE TABLE `tm1` (
+  `a` int NOT NULL,
+  `b` int DEFAULT NULL,
+  `c` int DEFAULT NULL
+) COLLATE=utf8mb4_general_ci
 drop snapshot if exists sp14;
 create snapshot sp14 for cluster;
 show create table ti1 {snapshot = 'sp14'};
-Table    Create Table
-ti1    CREATE TABLE `ti1` (\n  `a` int NOT NULL,\n  `b` int DEFAULT NULL,\n  `c` int DEFAULT NULL,\n  CONSTRAINT `fi1` FOREIGN KEY (`b`) REFERENCES `ti2` (`a`) ON DELETE RESTRICT ON UPDATE RESTRICT\n)
+➤ Table[12,3,0]  ¦  Create Table[12,215,0]  𝄀
+ti1  ¦  CREATE TABLE `ti1` (
+  `a` int NOT NULL,
+  `b` int DEFAULT NULL,
+  `c` int DEFAULT NULL,
+  CONSTRAINT `fi1` FOREIGN KEY (`b`) REFERENCES `ti2` (`a`) ON DELETE RESTRICT ON UPDATE RESTRICT
+) COLLATE=utf8mb4_general_ci
 show create table tm1 {snapshot = 'sp13'};
-Table    Create Table
-tm1    CREATE TABLE `tm1` (\n  `a` int NOT NULL,\n  `b` int DEFAULT NULL,\n  `c` int DEFAULT NULL\n)
+➤ Table[12,3,0]  ¦  Create Table[12,116,0]  𝄀
+tm1  ¦  CREATE TABLE `tm1` (
+  `a` int NOT NULL,
+  `b` int DEFAULT NULL,
+  `c` int DEFAULT NULL
+) COLLATE=utf8mb4_general_ci
 show create table ti1 {snapshot = 'sp14'};
-Table    Create Table
-ti1    CREATE TABLE `ti1` (\n  `a` int NOT NULL,\n  `b` int DEFAULT NULL,\n  `c` int DEFAULT NULL,\n  CONSTRAINT `fi1` FOREIGN KEY (`b`) REFERENCES `ti2` (`a`) ON DELETE RESTRICT ON UPDATE RESTRICT\n)
+➤ Table[12,3,0]  ¦  Create Table[12,215,0]  𝄀
+ti1  ¦  CREATE TABLE `ti1` (
+  `a` int NOT NULL,
+  `b` int DEFAULT NULL,
+  `c` int DEFAULT NULL,
+  CONSTRAINT `fi1` FOREIGN KEY (`b`) REFERENCES `ti2` (`a`) ON DELETE RESTRICT ON UPDATE RESTRICT
+) COLLATE=utf8mb4_general_ci
 show create table tm1 {snapshot = 'sp13'};
-Table    Create Table
-tm1    CREATE TABLE `tm1` (\n  `a` int NOT NULL,\n  `b` int DEFAULT NULL,\n  `c` int DEFAULT NULL\n)
+➤ Table[12,3,0]  ¦  Create Table[12,116,0]  𝄀
+tm1  ¦  CREATE TABLE `tm1` (
+  `a` int NOT NULL,
+  `b` int DEFAULT NULL,
+  `c` int DEFAULT NULL
+) COLLATE=utf8mb4_general_ci
 alter table ti1 drop foreign key fi1;
 alter table tm1 drop foreign key fm1;
 truncate ti2;
@@ -734,17 +760,35 @@ truncate tm2;
 drop snapshot if exists sp15;
 create snapshot sp15 for cluster;
 show create table ti1 {snapshot = 'sp14'};
-Table    Create Table
-ti1    CREATE TABLE `ti1` (\n  `a` int NOT NULL,\n  `b` int DEFAULT NULL,\n  `c` int DEFAULT NULL,\n  CONSTRAINT `fi1` FOREIGN KEY (`b`) REFERENCES `ti2` (`a`) ON DELETE RESTRICT ON UPDATE RESTRICT\n)
+➤ Table[12,3,0]  ¦  Create Table[12,215,0]  𝄀
+ti1  ¦  CREATE TABLE `ti1` (
+  `a` int NOT NULL,
+  `b` int DEFAULT NULL,
+  `c` int DEFAULT NULL,
+  CONSTRAINT `fi1` FOREIGN KEY (`b`) REFERENCES `ti2` (`a`) ON DELETE RESTRICT ON UPDATE RESTRICT
+) COLLATE=utf8mb4_general_ci
 show create table tm1 {snapshot = 'sp15'};
-Table    Create Table
-tm1    CREATE TABLE `tm1` (\n  `a` int NOT NULL,\n  `b` int DEFAULT NULL,\n  `c` int DEFAULT NULL\n)
+➤ Table[12,3,0]  ¦  Create Table[12,116,0]  𝄀
+tm1  ¦  CREATE TABLE `tm1` (
+  `a` int NOT NULL,
+  `b` int DEFAULT NULL,
+  `c` int DEFAULT NULL
+) COLLATE=utf8mb4_general_ci
 show create table ti1 {snapshot = 'sp14'};
-Table    Create Table
-ti1    CREATE TABLE `ti1` (\n  `a` int NOT NULL,\n  `b` int DEFAULT NULL,\n  `c` int DEFAULT NULL,\n  CONSTRAINT `fi1` FOREIGN KEY (`b`) REFERENCES `ti2` (`a`) ON DELETE RESTRICT ON UPDATE RESTRICT\n)
+➤ Table[12,3,0]  ¦  Create Table[12,215,0]  𝄀
+ti1  ¦  CREATE TABLE `ti1` (
+  `a` int NOT NULL,
+  `b` int DEFAULT NULL,
+  `c` int DEFAULT NULL,
+  CONSTRAINT `fi1` FOREIGN KEY (`b`) REFERENCES `ti2` (`a`) ON DELETE RESTRICT ON UPDATE RESTRICT
+) COLLATE=utf8mb4_general_ci
 show create table tm1 {snapshot = 'sp15'};
-Table    Create Table
-tm1    CREATE TABLE `tm1` (\n  `a` int NOT NULL,\n  `b` int DEFAULT NULL,\n  `c` int DEFAULT NULL\n)
+➤ Table[12,3,0]  ¦  Create Table[12,116,0]  𝄀
+tm1  ¦  CREATE TABLE `tm1` (
+  `a` int NOT NULL,
+  `b` int DEFAULT NULL,
+  `c` int DEFAULT NULL
+) COLLATE=utf8mb4_general_ci
 select count(*) from ti1;
 count(*)
 2

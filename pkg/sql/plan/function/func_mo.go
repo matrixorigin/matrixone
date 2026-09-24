@@ -948,6 +948,7 @@ const (
 
 var (
 	predefinedTables = map[string]int8{
+		catalog.MODatabaseDefaults:    0,
 		"mo_database":                 0,
 		"mo_tables":                   0,
 		"mo_columns":                  0,

@@ -130,6 +130,18 @@ func (s *Scope) CreateDatabase(c *Compile) error {
 	if err := c.e.Create(ctx, dbName, c.proc.GetTxnOperator()); err != nil {
 		return err
 	}
+	if createDatabase.Defaults != nil {
+		if err := plan2.RequireDatabaseDefaults(ctx, c.proc.GetService()); err != nil {
+			return err
+		}
+		db, err := c.e.Database(ctx, dbName, c.proc.GetTxnOperator())
+		if err != nil {
+			return err
+		}
+		if err = c.insertDatabaseDefaults(db, createDatabase.Defaults, 1); err != nil {
+			return err
+		}
+	}
 	c.setAffectedRows(1)
 	return nil
 }
@@ -319,6 +331,11 @@ func (s *Scope) DropDatabase(c *Compile) error {
 		}
 	}
 
+	if !plan2.DatabaseDefaultsSystemDatabase(dbName) && plan2.DatabaseDefaultsEnabled(c.proc.GetService()) {
+		if err = c.deleteDatabaseDefaults(droppedDatabaseID); err != nil {
+			return err
+		}
+	}
 	err = c.e.Delete(c.proc.Ctx, dbName, c.proc.GetTxnOperator())
 	if err != nil {
 		return err
@@ -1661,6 +1678,10 @@ func (s *Scope) createTable(c *Compile, tableCreated func()) error {
 			return moerr.NewNoDB(c.proc.Ctx)
 		}
 		return convertDBEOB(c.proc.Ctx, err, dbName)
+	}
+
+	if err = c.validateDatabaseDefaults(dbSource, qry.DatabaseDefaults); err != nil {
+		return err
 	}
 
 	exists, err := dbSource.RelationExists(c.proc.Ctx, tblName, nil)

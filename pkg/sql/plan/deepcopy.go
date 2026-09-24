@@ -923,20 +923,9 @@ func DeepCopyDataDefinition(old *plan.DataDefinition) *plan.DataDefinition {
 
 	switch df := old.Definition.(type) {
 	case *plan.DataDefinition_CreateDatabase:
-		newDf.Definition = &plan.DataDefinition_CreateDatabase{
-			CreateDatabase: &plan.CreateDatabase{
-				IfNotExists: df.CreateDatabase.IfNotExists,
-				Database:    df.CreateDatabase.Database,
-			},
-		}
-
+		newDf.Definition = &plan.DataDefinition_CreateDatabase{CreateDatabase: proto.Clone(df.CreateDatabase).(*plan.CreateDatabase)}
 	case *plan.DataDefinition_AlterDatabase:
-		newDf.Definition = &plan.DataDefinition_AlterDatabase{
-			AlterDatabase: &plan.AlterDatabase{
-				IfExists: df.AlterDatabase.IfExists,
-				Database: df.AlterDatabase.Database,
-			},
-		}
+		newDf.Definition = &plan.DataDefinition_AlterDatabase{AlterDatabase: proto.Clone(df.AlterDatabase).(*plan.AlterDatabase)}
 
 	case *plan.DataDefinition_DropDatabase:
 		newDf.Definition = &plan.DataDefinition_DropDatabase{

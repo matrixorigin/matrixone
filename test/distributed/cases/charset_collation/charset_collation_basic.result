@@ -63,24 +63,24 @@ text    utf8mb4    65535    65535    4
 DROP TABLE charset_metadata_repro;
 DROP DATABASE IF EXISTS charset_test_utf8;
 CREATE DATABASE charset_test_utf8 CHARACTER SET utf8;
+invalid input: unsupported database character set 'utf8'
 SHOW CREATE DATABASE charset_test_utf8;
-Database    Create Database
-charset_test_utf8    CREATE DATABASE `charset_test_utf8`
+Unknown database charset_test_utf8
 DROP DATABASE IF EXISTS charset_test_utf8mb4;
 CREATE DATABASE charset_test_utf8mb4 CHARACTER SET utf8mb4;
 SHOW CREATE DATABASE charset_test_utf8mb4;
-Database    Create Database
-charset_test_utf8mb4    CREATE DATABASE `charset_test_utf8mb4`
+➤ Database[12,5000,0]  ¦  Create Database[12,133,0]  𝄀
+charset_test_utf8mb4  ¦  CREATE DATABASE `charset_test_utf8mb4` CHARACTER SET utf8mb4 COLLATE utf8mb4_general_ci
 DROP DATABASE IF EXISTS charset_test_utf8mb4_bin;
 CREATE DATABASE charset_test_utf8mb4_bin CHARACTER SET utf8mb4 COLLATE utf8mb4_bin;
 SHOW CREATE DATABASE charset_test_utf8mb4_bin;
-Database    Create Database
-charset_test_utf8mb4_bin    CREATE DATABASE `charset_test_utf8mb4_bin`
+➤ Database[12,5000,0]  ¦  Create Database[12,137,0]  𝄀
+charset_test_utf8mb4_bin  ¦  CREATE DATABASE `charset_test_utf8mb4_bin` CHARACTER SET utf8mb4 COLLATE utf8mb4_bin
 DROP DATABASE IF EXISTS charset_test_utf8mb4_general;
 CREATE DATABASE charset_test_utf8mb4_general CHARACTER SET utf8mb4 COLLATE utf8mb4_general_ci;
 SHOW CREATE DATABASE charset_test_utf8mb4_general;
-Database    Create Database
-charset_test_utf8mb4_general    CREATE DATABASE `charset_test_utf8mb4_general`
+➤ Database[12,5000,0]  ¦  Create Database[12,141,0]  𝄀
+charset_test_utf8mb4_general  ¦  CREATE DATABASE `charset_test_utf8mb4_general` CHARACTER SET utf8mb4 COLLATE utf8mb4_general_ci
 USE charset_test;
 CREATE TABLE t_default (
 id INT PRIMARY KEY,

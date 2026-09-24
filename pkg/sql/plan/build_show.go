@@ -23,6 +23,7 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/catalog"
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
 	"github.com/matrixorigin/matrixone/pkg/common/pubsub"
+	"github.com/matrixorigin/matrixone/pkg/common/sqlquote"
 	"github.com/matrixorigin/matrixone/pkg/container/types"
 	"github.com/matrixorigin/matrixone/pkg/defines"
 	"github.com/matrixorigin/matrixone/pkg/frontend/databranchutils"
@@ -76,6 +77,30 @@ func buildShowCreateDatabase(stmt *tree.ShowCreateDatabase,
 		//sql := fmt.Sprintf("SELECT md.datname as `Database` FROM %s.mo_database md WHERE md.datname = '%s'", MO_CATALOG_DB_NAME, stmt.Name)
 		sql := fmt.Sprintf("SELECT md.datname as `Database`,dat_createsql as `Create Database` FROM %s.mo_database %s md WHERE md.datname = '%s' and account_id=%d", MO_CATALOG_DB_NAME, snapshotSpec, stmt.Name, accountId)
 		return returnByRewriteSQL(ctx, sql, plan.DataDefinition_SHOW_CREATEDATABASE)
+	}
+
+	if DatabaseDefaultsEnabled(ctx.GetProcess().GetService()) && !DatabaseDefaultsSystemDatabase(name) {
+		accountID, err := ctx.GetAccountId()
+		if err != nil {
+			return nil, err
+		}
+		if snapshot != nil && snapshot.Tenant != nil {
+			accountID = snapshot.Tenant.TenantID
+		}
+		available, err := databaseDefaultsAvailableAtSnapshot(ctx, snapshot)
+		if err != nil {
+			return nil, err
+		}
+		if available {
+			fallback, err := databaseServerCollation(ctx)
+			if err != nil {
+				return nil, err
+			}
+			baseSQL := "CREATE DATABASE " + sqlquote.Ident(name) + " CHARACTER SET utf8mb4 COLLATE "
+			sql := fmt.Sprintf("SELECT md.datname AS `Database`, concat(%s, coalesce(dd.collation_name, %s)) AS `Create Database` FROM mo_catalog.mo_database %s md LEFT JOIN mo_catalog.mo_database_defaults %s dd ON dd.account_id = md.account_id AND dd.database_id = md.dat_id WHERE md.account_id = %d AND md.datname = %s",
+				sqlquote.String(baseSQL), sqlquote.String(fallback), snapshotSpec, snapshotSpec, accountID, sqlquote.String(name))
+			return returnByRewriteSQL(ctx, sql, plan.DataDefinition_SHOW_CREATEDATABASE)
+		}
 	}
 
 	sqlStr := "SELECT \"%s\" AS `Database`, \"%s\" AS `Create Database`"

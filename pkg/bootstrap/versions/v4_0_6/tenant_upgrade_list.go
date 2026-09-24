@@ -59,7 +59,7 @@ var tenantUpgEntries = []versions.UpgradeEntry{
 	upgradeInformationSchemaMetadataVisibilityCheckConstraints(),
 	upgradeInformationSchemaMetadataVisibilityView("VIEWS", sysview.InformationSchemaViewsDDL),
 	upgradeInformationSchemaMetadataVisibilityView("PARTITIONS", sysview.InformationSchemaPartitionsDDL),
-	upgradeInformationSchemaMetadataVisibilityView("SCHEMATA", sysview.InformationSchemaSchemataDDL),
+	upgradeInformationSchemaMetadataVisibilityView("SCHEMATA", sysview.InformationSchemaSchemataLegacyDDL),
 	upgradeInformationSchemaTablePrivileges(),
 	addIcebergCatalogIDAllocatorIndex(),
 	upgradeInformationSchemaColumnsBinaryStrings(),

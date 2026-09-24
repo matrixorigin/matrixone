@@ -20,6 +20,7 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/catalog"
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
 	"github.com/matrixorigin/matrixone/pkg/defines"
+	"github.com/matrixorigin/matrixone/pkg/pb/plan"
 )
 
 func dataBranchDatabaseIdentitySupported(protocolVersion int64) bool {
@@ -45,6 +46,7 @@ func dataBranchDatabaseIdentityActive(databaseType string, protocolVersion int64
 type logicalRestoreDatabaseDefinition struct {
 	createSQL    string
 	databaseType string
+	defaults     *plan.DatabaseDefaults
 }
 
 type logicalRestoreDatabaseDefinitionLoader func(string) (logicalRestoreDatabaseDefinition, error)
@@ -68,6 +70,10 @@ func prepareLogicalRestoreDatabase(
 	definition logicalRestoreDatabaseDefinition,
 	protocolVersion int64,
 ) (context.Context, error) {
+	if definition.defaults != nil && definition.defaults.Version != 0 && protocolVersion < defines.MORPCVersion95 {
+		return nil, moerr.NewNotSupportedf(ctx, "restoring database defaults for '%s' requires MORPC protocol version %d", dbName, defines.MORPCVersion95)
+	}
+
 	if definition.databaseType != catalog.SystemDBTypeDataBranch {
 		return ctx, nil
 	}
@@ -92,7 +98,7 @@ func preflightLogicalRestoreDatabases(
 	protocolVersion int64,
 	load logicalRestoreDatabaseDefinitionLoader,
 ) error {
-	if dataBranchDatabaseIdentitySupported(protocolVersion) {
+	if protocolVersion >= defines.MORPCVersion95 {
 		return nil
 	}
 	for _, dbName := range dbNames {
