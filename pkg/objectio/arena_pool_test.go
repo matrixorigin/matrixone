@@ -69,14 +69,17 @@ func TestArenaFreedAfterIdleTTL(t *testing.T) {
 	withArenaIdleTTL(t, 50*time.Millisecond)
 	base := arenaMPool.CurrNB()
 
-	arenas := make([]*WriteArena, 5)
+	// Stay within the pool's capacity (4 slots at GOMAXPROCS <= 2) so every
+	// returned arena is parked; freeing past the cap is TestArenaPoolCountCap.
+	n := min(5, arenaPools[ArenaLarge].maxCount)
+	arenas := make([]*WriteArena, n)
 	for i := range arenas {
 		arenas[i] = GetArena(ArenaLarge)
 	}
 	for _, a := range arenas {
 		PutArena(a)
 	}
-	require.Equal(t, 5, parkedCount(ArenaLarge))
+	require.Equal(t, n, parkedCount(ArenaLarge))
 	require.Greater(t, arenaMPool.CurrNB(), base)
 
 	require.Eventually(t, func() bool {
@@ -92,7 +95,8 @@ func TestArenaBurstReleasedWhileStillActive(t *testing.T) {
 	withArenaIdleTTL(t, ttl)
 	base := arenaMPool.CurrNB()
 
-	burst := make([]*WriteArena, 8)
+	// Within capacity, so perArena below divides by what is actually parked.
+	burst := make([]*WriteArena, min(8, arenaPools[ArenaLarge].maxCount))
 	for i := range burst {
 		burst[i] = GetArena(ArenaLarge)
 	}
