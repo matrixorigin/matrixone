@@ -1957,6 +1957,34 @@ func newEmptyReaders(count int) []engine.Reader {
 	return readers
 }
 
+// normalizeScanReaders assigns every relation reader to exactly one scan
+// pipeline. An underfilled scan still needs one reader per pipeline, while an
+// overfilled scan must merge surplus readers without dropping any of them.
+func normalizeScanReaders(readers []engine.Reader, parallelism int) []engine.Reader {
+	if len(readers) == parallelism {
+		return readers
+	}
+	normalized := make([]engine.Reader, parallelism)
+	base, extra := len(readers)/parallelism, len(readers)%parallelism
+	next := 0
+	for i := range normalized {
+		count := base
+		if i < extra {
+			count++
+		}
+		switch count {
+		case 0:
+			normalized[i] = new(readutil.EmptyReader)
+		case 1:
+			normalized[i] = readers[next]
+		default:
+			normalized[i] = readutil.NewMergeReader(readers[next : next+count])
+		}
+		next += count
+	}
+	return normalized
+}
+
 func (s *Scope) readerContext(c *Compile) context.Context {
 	// Reader construction belongs to the source scope's pipeline. Using the
 	// compile/root context here leaves ParallelRun's child context unaware of a
@@ -1974,6 +2002,9 @@ func (s *Scope) readerContext(c *Compile) context.Context {
 }
 
 func (s *Scope) buildReaders(c *Compile) (readers []engine.Reader, err error) {
+	if s.NodeInfo.Mcpu <= 0 {
+		return nil, moerr.NewInternalErrorNoCtx("scan reader parallelism must be positive")
+	}
 	// StarCount-only path: aggOptimize already called rel.StarCount() and set PartialResults.
 	// Return EmptyReaders so no data flows; MergeGroup will use PartialResults only.
 	if s.StarCountOnly {
@@ -2146,15 +2177,9 @@ func (s *Scope) buildReaders(c *Compile) (readers []engine.Reader, err error) {
 	// just for quick GC.
 	s.NodeInfo.Data = nil
 
-	//for partition table.
-	if len(readers) != s.NodeInfo.Mcpu {
-		newReaders := make([]engine.Reader, 0, s.NodeInfo.Mcpu)
-		step := len(readers) / s.NodeInfo.Mcpu
-		for i := 0; i < len(readers); i += step {
-			newReaders = append(newReaders, readutil.NewMergeReader(readers[i:i+step]))
-		}
-		readers = newReaders
-	}
+	// Partitioned relations may return a different number of readers than the
+	// number of scan pipelines. Keep the mapping exact in either direction.
+	readers = normalizeScanReaders(readers, s.NodeInfo.Mcpu)
 	return
 }
 

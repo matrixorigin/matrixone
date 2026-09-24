@@ -2901,6 +2901,39 @@ type mockRelationForMembershipFilter struct {
 	readers           []engine.Reader
 }
 
+type closeTrackingScanReader struct {
+	engine.Reader
+	closes int
+}
+
+func (r *closeTrackingScanReader) Close() error {
+	r.closes++
+	return nil
+}
+
+func TestNormalizeScanReadersPreservesExactOwnership(t *testing.T) {
+	for _, parallelism := range []int{1, 2, 3} {
+		for _, count := range []int{0, 1, 2, 3, 5} {
+			t.Run(fmt.Sprintf("parallelism=%d/readers=%d", parallelism, count), func(t *testing.T) {
+				original := make([]*closeTrackingScanReader, count)
+				readers := make([]engine.Reader, count)
+				for i := range original {
+					original[i] = new(closeTrackingScanReader)
+					readers[i] = original[i]
+				}
+				normalized := normalizeScanReaders(readers, parallelism)
+				require.Len(t, normalized, parallelism)
+				for _, reader := range normalized {
+					require.NoError(t, reader.Close())
+				}
+				for _, reader := range original {
+					require.Equal(t, 1, reader.closes)
+				}
+			})
+		}
+	}
+}
+
 func (m *mockRelationForMembershipFilter) BuildReaders(
 	ctx context.Context,
 	proc any,
@@ -2976,8 +3009,9 @@ func TestBuildReadersRuntimeFilterDropKeepsWorkspaceReaders(t *testing.T) {
 
 	readers, err := scope.buildReaders(c)
 	require.NoError(t, err)
-	require.Len(t, readers, 1)
+	require.Len(t, readers, 2)
 	require.Same(t, workspaceReader, readers[0])
+	require.IsType(t, &readutil.EmptyReader{}, readers[1])
 	require.Equal(t, 1, relation.buildReadersCalls)
 }
 
