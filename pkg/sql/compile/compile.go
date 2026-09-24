@@ -2292,6 +2292,7 @@ func (c *Compile) compilePlanScopeWithUnionAllDemand(
 		}
 		ss = c.ensureCoordinatorOnlyFunctions(node, ss)
 		ss = c.compileProjection(node, ss)
+		ss = c.compileSort(node, ss)
 		return ss, nil
 	case plan.Node_RECURSIVE_SCAN:
 		c.setAnalyzeCurrent(ss, int(curNodeIdx))
@@ -2351,6 +2352,11 @@ func (c *Compile) firstStepToCompile(qry *plan.Query) int {
 
 func (c *Compile) canUseLiteralLimitZeroFastPath(node *plan.Node) bool {
 	if node == nil || node.Limit == nil || c.ownsFoundRows(node) {
+		return false
+	}
+	// Recursive receivers are part of a feedback loop. Even an empty result
+	// must retain them so loop cleanup can drain inputs and notify producers.
+	if node.NodeType == plan.Node_RECURSIVE_CTE {
 		return false
 	}
 	cExpr, ok := node.Limit.Expr.(*plan.Expr_Lit)
