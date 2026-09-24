@@ -1251,6 +1251,37 @@ func TestTransactionRetriesUnpublishedS3CleanupOwners(t *testing.T) {
 	require.Equal(t, 2, attempts)
 }
 
+func TestRollbackRetriesUnpublishedS3CleanupAfterWorkspaceRemoval(t *testing.T) {
+	server := colexec.NewServer("")
+	t.Cleanup(func() { require.NoError(t, server.CloseUnpublishedS3Cleanup(context.Background())) })
+	txn := newTransactionWithActivePKTableForTest(t, "pk")
+	defer txn.proc.Free()
+	baseFS, err := colexec.GetSharedFSFromProc(txn.proc)
+	require.NoError(t, err)
+	const name = "rollback-unpublished-retry-object"
+	require.NoError(t, baseFS.Write(context.Background(), fileservice.IOVector{
+		FilePath: name,
+		Entries:  []fileservice.IOEntry{{Size: 1, Data: []byte("x")}},
+		Policy:   fileservice.SkipAllCache,
+	}))
+	deleteErr := moerr.NewInternalErrorNoCtx("temporary S3 delete failure")
+	fs := &failOnceCloneDeleteFS{FileService: baseFS, failErr: deleteErr}
+	owner, err := colexec.NewUnpublishedS3ObjectOwner(fs, name)
+	require.NoError(t, err)
+	txn.RetainUnpublishedS3ObjectOwner(owner)
+
+	err = txn.Rollback(context.Background())
+	require.ErrorIs(t, err, deleteErr)
+	require.True(t, txn.removed, "terminal rollback must retire the workspace")
+	_, err = baseFS.StatFile(context.Background(), name)
+	require.NoError(t, err, "the first Delete failed")
+	require.Eventually(t, func() bool {
+		_, statErr := baseFS.StatFile(context.Background(), name)
+		return moerr.IsMoErrCode(statErr, moerr.ErrFileNotFound)
+	}, 5*time.Second, 10*time.Millisecond)
+	require.False(t, owner.Pending())
+}
+
 func TestWorkspaceAppendAcceptsUnpublishedS3ObjectNames(t *testing.T) {
 	proc := testutil.NewProc(t)
 	defer proc.Free()

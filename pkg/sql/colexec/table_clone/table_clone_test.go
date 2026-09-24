@@ -66,6 +66,40 @@ type tableCloneCloseErrorReader struct {
 	err   error
 }
 
+type tableCloneContextCleanupReader struct {
+	engine.Reader
+	closeErr error
+	seenCtx  context.Context
+}
+
+func (r *tableCloneContextCleanupReader) Close() error { return r.closeErr }
+
+func (r *tableCloneContextCleanupReader) CloseWithCleanup(ctx context.Context) error {
+	r.seenCtx = ctx
+	return ctx.Err()
+}
+
+func TestTableCloneRetryForwardsCleanupAttemptContext(t *testing.T) {
+	proc := testutil.NewProcess(t)
+	defer proc.Free()
+	ctrl := gomock.NewController(t)
+	txnOp := mock_frontend.NewMockTxnOperator(ctrl)
+	workspace := &tableCloneS3CleanupWorkspace{}
+	txnOp.EXPECT().GetWorkspace().Return(workspace).AnyTimes()
+	proc.Base.TxnOperator = txnOp
+
+	reader := &tableCloneContextCleanupReader{closeErr: errors.New("initial close failed")}
+	clone := NewTableClone()
+	clone.srcReader = map[string]engine.Reader{"source": reader}
+	clone.Free(proc, true, reader.closeErr)
+	require.Len(t, workspace.cleanups, 1)
+	clone.Release()
+
+	attemptCtx := context.WithValue(context.Background(), struct{}{}, "retry")
+	require.NoError(t, workspace.cleanups[0](attemptCtx))
+	require.Same(t, attemptCtx, reader.seenCtx)
+}
+
 func (r *tableCloneCloseErrorReader) Close() error {
 	r.calls++
 	if r.calls == 1 {
