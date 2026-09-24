@@ -616,18 +616,23 @@ func (l *LocalETLFS) NewWriter(ctx context.Context, filePath string) (io.WriteCl
 	if err != nil {
 		return nil, err
 	}
-	defer func() {
-		if err != nil {
-			_ = f.Close()
-			_ = os.Remove(f.Name())
-		}
-	}()
 
 	return &writeCloser{
 		w: f,
 		closeFunc: func() error {
+			open, owned := true, true
+			defer func() {
+				if open {
+					_ = f.Close()
+				}
+				if owned {
+					_ = os.Remove(f.Name())
+				}
+			}()
 			// close
-			if err := f.Close(); err != nil {
+			err := f.Close()
+			open = false
+			if err != nil {
 				return err
 			}
 			// ensure parent dir
@@ -639,6 +644,8 @@ func (l *LocalETLFS) NewWriter(ctx context.Context, filePath string) (io.WriteCl
 			if err := os.Rename(f.Name(), nativePath); err != nil {
 				return err
 			}
+			// Rename transfers ownership to the destination, even if sync fails.
+			owned = false
 			// sync parent dir
 			if err := l.syncDir(parentDir); err != nil {
 				return err
