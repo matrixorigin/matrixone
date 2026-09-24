@@ -1,12 +1,11 @@
 # PR #28523: String-Math Numeric Coercion
 
-- Status: APPROVED
-- Design revision: 18
 - Issue: [#28487](https://github.com/matrixorigin/matrixone/issues/28487)
 - Pull request: [#28523](https://github.com/matrixorigin/matrixone/pull/28523)
 
-Revision 18 defines the contract for consistent string-math conversion,
-prepared-parameter ownership, and binary-literal provenance.
+This issue is handled through the PR's normal code review and CI. Per
+maintainer direction, a separate design-approval artifact is not required;
+this note records the current behavior contract and validation only.
 
 ## Problem and scope
 
