@@ -6,6 +6,20 @@ The shared Function Catalog design owns identity, revision and security semantic
 SQL and Python designs own their language contracts. This summary does not replace
 those contracts.
 
+## Owner-approved stage scope
+
+On 2026-09-24, feature owner `iamlinjunhong` approved this PR for testing and
+development-stage acceptance. The user guide and SQL examples are recorded in
+[issue #28132](https://github.com/matrixorigin/matrixone/issues/28132#issuecomment-5748253137).
+This PR does not claim production rollout, sandbox isolation, protection for
+untrusted Python, or authenticated/TLS Flight transport. Those remain separate
+production acceptance gates. Python stays disabled in generic launch and requires
+explicit opt-in in the test/development configurations.
+
+This stage decision is the feature owner's authorization for the current PR
+scope; it is not a claim that Architecture, Security, SQL/Planner, Runtime,
+Catalog, or Operator owners have approved the future production design.
+
 ## Execution and identity
 
 CREATE/REPLACE validates Python syntax and the handler contract before publishing
