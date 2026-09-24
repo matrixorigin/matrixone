@@ -21,6 +21,7 @@ import (
 	"testing"
 
 	"github.com/matrixorigin/matrixone/pkg/container/types"
+	"github.com/matrixorigin/matrixone/pkg/container/vector"
 	"github.com/matrixorigin/matrixone/pkg/testutil"
 	"github.com/stretchr/testify/require"
 )
@@ -212,6 +213,46 @@ func TestIntegerArgumentRealEvaluation(t *testing.T) {
 	u, err := checkedIntegerArgument[uint64](realIntegerArgument(math.Nextafter(0x1p64, 0), false), proc)
 	require.NoError(t, err)
 	require.Equal(t, uint64(18446744073709549568), u)
+}
+
+func TestPrivateIntegerArgumentCastPreservesScalarDomain(t *testing.T) {
+	proc := testutil.NewProcess(t)
+	result := vector.NewFunctionResultWrapper(types.T_int64.ToType(), proc.Mp())
+	defer result.Free()
+	target, err := vector.NewConstFixed(types.T_int64.ToType(), int64(0), 3, proc.Mp())
+	require.NoError(t, err)
+	defer target.Free(proc.Mp())
+	scalar, err := vector.NewConstFixed(types.T_float64.ToType(), 2.5, 3, proc.Mp())
+	require.NoError(t, err)
+	defer scalar.Free(proc.Mp())
+	flat := newVectorByType(proc.Mp(), types.T_float64.ToType(), []float64{2.5, 2.5, 2.5}, nil)
+	defer flat.Free(proc.Mp())
+	for _, tc := range []struct {
+		name    string
+		source  *vector.Vector
+		mask    *FunctionSelectList
+		length  int
+		isConst bool
+	}{
+		{"scalar three rows", scalar, nil, 3, true},
+		{"flat equal values", flat, nil, 3, false},
+		{"scalar partial selection", scalar, &FunctionSelectList{AnyNull: true, SelectList: []bool{true, false, true}}, 3, false},
+		{"scalar zero rows", scalar, nil, 0, false},
+		{"scalar reused", scalar, nil, 3, true},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			require.NoError(t, result.PreExtendAndReset(tc.length))
+			require.NoError(t, NewIntegerArgumentCast([]*vector.Vector{tc.source, target}, result, proc, tc.length, tc.mask))
+			got := result.GetResultVector()
+			require.Equal(t, tc.isConst, got.IsConst())
+			require.Equal(t, tc.length, got.Length())
+			if tc.length > 0 && tc.mask == nil {
+				for i := 0; i < tc.length; i++ {
+					require.Equal(t, int64(2), vector.GetFixedAtNoTypeCheck[int64](got, i))
+				}
+			}
+		})
+	}
 }
 
 func TestIntegerArgumentExactDomains(t *testing.T) {

@@ -24,6 +24,50 @@ import (
 	"github.com/stretchr/testify/require"
 )
 
+func TestParseDecimalRejectsBothPrecisionEndpoints(t *testing.T) {
+	for _, test := range []struct {
+		name     string
+		parse    func(string) error
+		boundary string
+		overflow string
+	}{
+		{
+			name: "decimal64",
+			parse: func(value string) error {
+				_, err := ParseDecimal64(value, 5, 2)
+				return err
+			},
+			boundary: "999.99",
+			overflow: "1000.00",
+		},
+		{
+			name: "decimal128",
+			parse: func(value string) error {
+				_, err := ParseDecimal128(value, 19, 2)
+				return err
+			},
+			boundary: "99999999999999999.99",
+			overflow: "100000000000000000.00",
+		},
+		{
+			name: "decimal256",
+			parse: func(value string) error {
+				_, err := ParseDecimal256(value, 40, 2)
+				return err
+			},
+			boundary: "99999999999999999999999999999999999999.99",
+			overflow: "100000000000000000000000000000000000000.00",
+		},
+	} {
+		t.Run(test.name, func(t *testing.T) {
+			require.NoError(t, test.parse(test.boundary))
+			require.NoError(t, test.parse("-"+test.boundary))
+			require.Error(t, test.parse(test.overflow))
+			require.Error(t, test.parse("-"+test.overflow))
+		})
+	}
+}
+
 func TestParse64(t *testing.T) {
 	x, y := ParseDecimal64("99999.99999999999999999999999999999999", 12, 6)
 	if y != nil || x != 100000000000 {

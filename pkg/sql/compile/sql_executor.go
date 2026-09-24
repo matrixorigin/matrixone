@@ -552,6 +552,10 @@ func (exec *txnExecutor) Exec(
 		if err != nil {
 			return executor.Result{}, err
 		}
+		pn, err = specializeInternalPreparedPlan(exec.ctx, pn, statementOption.PreparedParamValues())
+		if err != nil {
+			return executor.Result{}, err
+		}
 	}
 
 	c := exec.newCompile(proc, stmts[0], sql, receiveAt)
@@ -580,7 +584,7 @@ func (exec *txnExecutor) Exec(
 			if err != nil {
 				return pn, err
 			}
-			return pn, nil
+			return specializeInternalPreparedPlan(ctx, pn, statementOption.PreparedParamValues())
 		})
 	} else {
 		c.SetBuildPlanFunc(func(ctx context.Context) (*plan.Plan, error) {
@@ -708,6 +712,30 @@ func publishInternalExecutorStreamResult(
 		result.Close()
 		return execCtx.Err()
 	}
+}
+
+// The internal executor reparses CTAS population SQL. Apply the same prepared
+// specialization used by the frontend after each plan build, including retry
+// rebuilds, so parameter source domains survive that reparse.
+func specializeInternalPreparedPlan(
+	ctx context.Context, pn *plan.Plan, values []executor.ParamValue,
+) (*plan.Plan, error) {
+	if len(values) == 0 {
+		return pn, nil
+	}
+	params := make([]any, len(values))
+	for i := range values {
+		params[i] = values[i]
+	}
+	specialized, changed, err := plan.FillValuesOfParamsInPlanWithSpecializationPreservingDMLWrites(
+		ctx, pn, params)
+	if err != nil {
+		return nil, err
+	}
+	if changed {
+		return specialized, nil
+	}
+	return pn, nil
 }
 
 func (exec *txnExecutor) LockTable(table string) error {

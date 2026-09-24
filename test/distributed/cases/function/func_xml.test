@@ -44,12 +44,26 @@ SELECT ExtractValue(NULL, '[');
 SELECT UpdateXML('<a/>', '[', NULL);
 SELECT ExtractValue('<a>', '[');
 SELECT ExtractValue('<a/>', 'sum(/a)');
-SELECT UpdateXML('<a>x</a>', '/a/text()', 'Q');
-SELECT UpdateXML('<a>x<b>y</b></a>', '/a//text()', 'Q');
+SELECT UpdateXML('<a>x</a>', '/a/text()', 'Q') AS root_text;
+SELECT UpdateXML('<a>x<b>y</b></a>', '/a//text()', 'Q') AS multiple_text;
+SELECT UpdateXML('<a><b>x</b></a>', '/a/b/text()', 'Q') AS nested_text;
+SELECT UpdateXML('<a><b>x</b><b>y</b></a>', '/a/b/text()', 'Q') AS multiple_nodes;
 SELECT ExtractValue('<a/>', '/:a');
 SELECT ExtractValue('<a/>', '/a:b:c');
 SELECT IF(FALSE, ExtractValue('<a>', '['), 'ok') AS masked;
 SHOW COUNT(*) WARNINGS;
+
+-- XML warning producers must use the same statement capacity and budget as
+-- other row-level functions. The offset probe catches the old 1024 fallback.
+SET SESSION max_error_count = 2048;
+SELECT SUM(ExtractValue('<a>', '/a') IS NULL) AS malformed_rows FROM generate_series(1, 1100) g;
+SHOW COUNT(*) WARNINGS;
+SHOW WARNINGS LIMIT 1024, 1;
+SET SESSION max_error_count = 0;
+SELECT SUM(ExtractValue('<a>', '/a') IS NULL) AS malformed_rows FROM generate_series(1, 3) g;
+SHOW COUNT(*) WARNINGS;
+SHOW WARNINGS;
+SET SESSION max_error_count = 1024;
 
 DROP DATABASE IF EXISTS xml_functions_28306;
 CREATE DATABASE xml_functions_28306;
