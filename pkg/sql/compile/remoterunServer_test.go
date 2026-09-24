@@ -63,6 +63,10 @@ type remoteS3CleanupWorkspace struct {
 	owners        []*colexec.UnpublishedS3ObjectOwner
 }
 
+func (w *remoteS3CleanupWorkspace) QueueUnpublishedS3Cleanup(server *colexec.Server) error {
+	return server.RetryUnpublishedS3Cleanup(w.CleanupUnpublishedS3Objects)
+}
+
 func (w *remoteS3CleanupWorkspace) CleanupUnpublishedS3Objects(context.Context) error {
 	w.calls++
 	w.events = append(w.events, "cleanup")
@@ -129,6 +133,10 @@ func (fs *remoteCleanupFailOnceFS) Delete(ctx context.Context, names ...string) 
 type remoteOwnerCleanupWorkspace struct {
 	owner *colexec.UnpublishedS3ObjectOwner
 	calls atomic.Int32
+}
+
+func (w *remoteOwnerCleanupWorkspace) QueueUnpublishedS3Cleanup(server *colexec.Server) error {
+	return server.RetryUnpublishedS3Cleanup(w.CleanupUnpublishedS3Objects)
 }
 
 func (w *remoteOwnerCleanupWorkspace) CleanupUnpublishedS3Objects(ctx context.Context) error {

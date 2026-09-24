@@ -266,7 +266,7 @@ func (receiver *messageReceiverOnServer) finalizeUnpublishedS3Objects(
 	if cleanupErr != nil {
 		if receiver.colexecServer != nil {
 			workspace := receiver.unpublishedS3CleanupWorkspace
-			if queueErr := receiver.colexecServer.RetryUnpublishedS3Cleanup(workspace.CleanupUnpublishedS3Objects); queueErr != nil {
+			if queueErr := workspace.QueueUnpublishedS3Cleanup(receiver.colexecServer); queueErr != nil {
 				return errors.Join(handlerErr, cleanupErr, queueErr)
 			}
 		}
@@ -536,6 +536,7 @@ func handlePipelineMessage(receiver *messageReceiverOnServer) (err error) {
 					workspace := runCompile.proc.GetTxnOperator().GetWorkspace()
 					receiver.unpublishedS3CleanupWorkspace, _ = workspace.(interface {
 						CleanupUnpublishedS3Objects(context.Context) error
+						QueueUnpublishedS3Cleanup(*colexec.Server) error
 					})
 					receiver.unpublishedS3ObjectOwners, _ = workspace.(colexec.UnpublishedS3ObjectOwnershipWorkspace)
 				}
@@ -931,6 +932,7 @@ type messageReceiverOnServer struct {
 	streamLifecycle               *pipelineStreamLifecycle
 	unpublishedS3CleanupWorkspace interface {
 		CleanupUnpublishedS3Objects(context.Context) error
+		QueueUnpublishedS3Cleanup(*colexec.Server) error
 	}
 	unpublishedS3ObjectOwners colexec.UnpublishedS3ObjectOwnershipWorkspace
 
