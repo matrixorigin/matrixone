@@ -151,36 +151,29 @@ func NewCompile(
 	c.isInternal = isInternal
 	c.cnLabel = cnLabel
 	c.startAt = startAt
-	c.disableRetry = false
+	// A Compile that does not own a workspace statement cannot roll it back
+	// to retry only its own SQL. The owner must retry the complete operation.
+	c.disableRetry = proc.IncrStatementDisabled()
 	c.retryTimes = 0
 	c.ncpu = system.GoMaxProcs()
 	c.lockMeta = NewLockMeta()
-	// TODO: The action of updating the WriteOffset logic should be executed in the `func (c *Compile) Run(_ uint64)` method.
-	// However, considering that the delay ranges are not completed yet, the UpdateSnapshotWriteOffset() and
-	// the assignment of `Compile.TxnOffset` should be moved into the `func (c *Compile) Run(_ uint64)` method in the later stage.
-	c.TxnOffset = txnOffsetOfCompile(c.proc)
+	c.TxnReadView = txnReadViewOfCompile(c.proc)
 	return c
 }
 
-// txnOffsetOfCompile returns the workspace write offset a new compile reads
-// with. Compiling a user statement advances the statement boundary of the
-// workspace and reads with it. An internal sub-sql of the current statement
-// (DisableIncrStatement, marked on the process) instead captures the current
-// end of the workspace — it reads everything its caller has written so far,
-// but it opens no statement, so it must not advance the shared boundary:
-// moving the boundary mid-statement breaks the positional visibility of the
-// caller's workspace entries (issue #25557).
-func txnOffsetOfCompile(proc *process.Process) int {
+// txnReadViewOfCompile captures the workspace visibility for a new compile.
+// User statements publish a stable boundary. Internal sub-SQL reads the
+// current attempt without publishing a new boundary.
+func txnReadViewOfCompile(proc *process.Process) client.WorkspaceReadView {
 	op := proc.GetTxnOperator()
 	if op == nil {
-		return 0
+		return client.NoWorkspaceReadView()
 	}
 	ws := op.GetWorkspace()
 	if proc.IncrStatementDisabled() {
-		return int(ws.WriteOffset())
+		return ws.CurrentReadView()
 	}
-	ws.UpdateSnapshotWriteOffset()
-	return ws.GetSnapshotWriteOffset()
+	return ws.PublishReadView()
 }
 
 func (c *Compile) Release() {
@@ -338,13 +331,12 @@ func (c *Compile) Reset(proc *process.Process, startAt time.Time, fill func(*bat
 		f.reset()
 	}
 	c.startAt = startAt
-	c.TxnOffset = txnOffsetOfCompile(c.proc)
+	c.TxnReadView = txnReadViewOfCompile(c.proc)
 	if c.proc.GetTxnOperator() != nil {
-		// all scopes should update the txn offset, or the reader will receive a 0 txnOffset,
-		// that cause a dml statement can not see the previous statements' operations.
+		// All scopes must use the statement's immutable workspace view.
 		if len(c.scopes) > 0 {
 			for i := range c.scopes {
-				UpdateScopeTxnOffset(c.scopes[i], c.TxnOffset)
+				UpdateScopeTxnReadView(c.scopes[i], c.TxnReadView)
 			}
 		}
 	}
@@ -444,16 +436,16 @@ func supportsStableStringShuffleHash(service string) bool {
 	return ok && valid && protocolVersion >= defines.MORPCVersion33
 }
 
-func UpdateScopeTxnOffset(scope *Scope, txnOffset int) {
-	scope.TxnOffset = txnOffset
+func UpdateScopeTxnReadView(scope *Scope, readView client.WorkspaceReadView) {
+	scope.TxnReadView = readView
 	_ = vm.HandleAllOp(scope.RootOp, func(_ vm.Operator, op vm.Operator) error {
 		if applyOp, ok := op.(*apply.Apply); ok {
-			applyOp.TxnOffset = txnOffset
+			applyOp.TxnReadView = readView
 		}
 		return nil
 	})
 	for i := range scope.PreScopes {
-		UpdateScopeTxnOffset(scope.PreScopes[i], txnOffset)
+		UpdateScopeTxnReadView(scope.PreScopes[i], readView)
 	}
 }
 
@@ -516,6 +508,7 @@ func (c *Compile) clear() {
 	c.resultMetadataFrozen = false
 	c.planGenerationRebuilt = false
 	c.sequenceState = sequenceStatementState{}
+	c.TxnReadView = client.NoWorkspaceReadView()
 
 	c.execType = plan2.ExecTypeTP
 	c.cnList = c.cnList[:0]
@@ -5430,7 +5423,7 @@ func (c *Compile) compileTableScan(node *plan.Node) ([]*Scope, error) {
 func (c *Compile) compileTableScanWithNode(node *plan.Node, engNode engine.Node, firstFlag bool) (*Scope, error) {
 	s := newScope(Remote)
 	s.NodeInfo = engNode
-	s.TxnOffset = c.TxnOffset
+	s.TxnReadView = c.TxnReadView
 	s.DataSource = &Source{
 		node: node,
 	}
@@ -5481,7 +5474,7 @@ func (c *Compile) compileVectorIndexScan(node *plan.Node) ([]*Scope, error) {
 		}
 		s := newScope(Remote)
 		s.NodeInfo = nodes[i]
-		s.TxnOffset = c.TxnOffset
+		s.TxnReadView = c.TxnReadView
 		s.DataSource = &Source{
 			node:                    nodeCopy,
 			vectorIndexScanTemplate: plan2.DeepCopyVectorIndexScan(nodeCopy.VectorIndexScan),
@@ -5682,6 +5675,7 @@ func (c *Compile) compileTableScanDataSource(s *Scope) error {
 	if err != nil {
 		return err
 	}
+	s.TxnReadView = client.WorkspaceReadViewForOperator(txnOp, c.TxnReadView)
 
 	//-----------------------------------------------------------------------------------------------------
 
@@ -7214,7 +7208,7 @@ func (c *Compile) compileApply(node, right *plan.Node, rs []*Scope) []*Scope {
 	case plan.Node_CROSSAPPLY:
 		for i := range rs {
 			op := constructApply(node, right, apply.CROSS, c.proc)
-			op.TxnOffset = c.TxnOffset
+			op.TxnReadView = c.TxnReadView
 			if op.TableFunction != nil && op.TableFunction.IsSingle {
 				rs[i].NodeInfo.Mcpu = 1
 			}
@@ -7224,7 +7218,7 @@ func (c *Compile) compileApply(node, right *plan.Node, rs []*Scope) []*Scope {
 	case plan.Node_OUTERAPPLY:
 		for i := range rs {
 			op := constructApply(node, right, apply.OUTER, c.proc)
-			op.TxnOffset = c.TxnOffset
+			op.TxnReadView = c.TxnReadView
 			op.SetIdx(c.anal.curNodeIdx)
 			rs[i].setRootOperator(op)
 		}
@@ -10180,6 +10174,7 @@ func collectTombstones(
 	var err error
 	//var relData engine.RelData
 	var tombstone engine.Tombstoner
+	txnOp := c.proc.GetTxnOperator()
 
 	//-----------------------------------------------------------------------------------------------------
 	ctx := c.proc.GetTopContext()
@@ -10188,8 +10183,10 @@ func collectTombstones(
 		snapTS := c.proc.GetTxnOperator().Txn().SnapshotTS
 		if !node.ScanSnapshot.TS.Equal(zeroTS) && node.ScanSnapshot.TS.Less(snapTS) {
 			if c.proc.GetCloneTxnOperator() == nil {
-				txnOp := c.proc.GetTxnOperator().CloneSnapshotOp(*node.ScanSnapshot.TS)
+				txnOp = c.proc.GetTxnOperator().CloneSnapshotOp(*node.ScanSnapshot.TS)
 				c.proc.SetCloneTxnOperator(txnOp)
+			} else {
+				txnOp = c.proc.GetCloneTxnOperator()
 			}
 
 			if node.ScanSnapshot.Tenant != nil {
@@ -10208,9 +10205,13 @@ func collectTombstones(
 	if util.TableIsLoggingTable(node.ObjRef.SchemaName, node.ObjRef.ObjName) {
 		ctx = defines.AttachAccountId(ctx, catalog.System_Account)
 	}
-	logCatalogSnapshotScan("compile.collect-tombstones", node, ctx, c.proc.GetCloneTxnOperator())
+	logCatalogSnapshotScan("compile.collect-tombstones", node, ctx, txnOp)
 
-	tombstone, err = rel.CollectTombstones(ctx, c.TxnOffset, policy)
+	tombstone, err = rel.CollectTombstones(
+		ctx,
+		client.WorkspaceReadViewForOperator(txnOp, c.TxnReadView),
+		policy,
+	)
 	if err != nil {
 		return nil, err
 	}
@@ -10253,6 +10254,7 @@ func logCatalogSnapshotScan(tag string, node *plan.Node, ctx context.Context, tx
 
 func (c *Compile) expandRanges(
 	node *plan.Node, rel engine.Relation, db engine.Database, ctx context.Context,
+	readView client.WorkspaceReadView,
 	blockFilterList []*plan.Expr, policy engine.DataCollectPolicy, rsp *engine.RangesShuffleParam) (engine.RelData, error) {
 
 	preAllocBlocks := 2
@@ -10274,7 +10276,7 @@ func (c *Compile) expandRanges(
 	rangesParam := engine.RangesParam{
 		BlockFilters:       blockFilterList,
 		PreAllocBlocks:     preAllocBlocks,
-		TxnOffset:          c.TxnOffset,
+		TxnReadView:        readView,
 		Policy:             policy,
 		Rsp:                rsp,
 		DontSupportRelData: false,
@@ -10297,7 +10299,10 @@ func (c *Compile) expandRanges(
 	return relData, nil
 }
 
-func (c *Compile) handleDbRelContext(node *plan.Node, onRemoteCN bool) (engine.Relation, engine.Database, context.Context, error) {
+func (c *Compile) handleDbRelContext(
+	node *plan.Node,
+	onRemoteCN bool,
+) (engine.Relation, engine.Database, context.Context, client.WorkspaceReadView, error) {
 	var err error
 	var db engine.Database
 	var rel engine.Relation
@@ -10345,14 +10350,14 @@ func (c *Compile) handleDbRelContext(node *plan.Node, onRemoteCN bool) (engine.R
 
 	db, err = c.e.Database(ctx, node.ObjRef.SchemaName, txnOp)
 	if err != nil {
-		return nil, nil, nil, err
+		return nil, nil, nil, client.NoWorkspaceReadView(), err
 	}
 	rel, err = db.Relation(ctx, node.TableDef.Name, c.proc)
 	if err != nil {
-		return nil, nil, nil, err
+		return nil, nil, nil, client.NoWorkspaceReadView(), err
 	}
 
-	return rel, db, ctx, nil
+	return rel, db, ctx, client.WorkspaceReadViewForOperator(txnOp, c.TxnReadView), nil
 }
 
 func checkAggOptimize(node *plan.Node) ([]any, []types.T, map[int]int) {
@@ -11030,7 +11035,7 @@ func (c *Compile) compileTableClone(
 
 	s1 = newScope(TableClone)
 	s1.NodeInfo = node
-	s1.TxnOffset = c.TxnOffset
+	s1.TxnReadView = c.TxnReadView
 	s1.Plan = pn
 
 	s1.Proc = c.proc.NewNoContextChildProc(0)

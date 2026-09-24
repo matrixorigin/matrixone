@@ -310,6 +310,17 @@ func (w *CNS3Writer) Sync(ctx context.Context) (stats []objectio.ObjectStats, er
 	return
 }
 
+// AbortUnpublished deletes objects persisted (or ambiguously persisted) by
+// this writer before their ownership is transferred to a transaction. The
+// returned names remain available to the caller on deletion failure, and the
+// writer must not be closed until that ownership has been handed off.
+func (w *CNS3Writer) AbortUnpublished(ctx context.Context) ([]string, error) {
+	if w.sinker == nil {
+		return nil, nil
+	}
+	return w.sinker.DeletePersisted(ctx)
+}
+
 func (w *CNS3Writer) SyncAndFillBlockInfoBat(ctx context.Context) (*batch.Batch, error) {
 	stats, _, err := w.sinker.SyncAndTakeResults(ctx)
 	if err != nil {
@@ -338,9 +349,7 @@ func (w *CNS3Writer) Close() (err error) {
 	var mp *mpool.MPool
 	if w.sinker != nil {
 		mp = w.sinker.GetMPool()
-		if err = w.sinker.Close(); err != nil {
-			return
-		}
+		err = w.sinker.Close()
 		w.sinker = nil
 	}
 

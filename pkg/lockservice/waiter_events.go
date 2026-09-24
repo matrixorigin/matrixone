@@ -456,9 +456,10 @@ func (mw *waiterEvents) checkOrphan(v checkOrphan) {
 			return nil
 		}
 
-		for _, v := range lock.holders.txns {
+		lock.holders.iter(func(v pb.WaitTxn) bool {
 			holders = append(holders, v)
-		}
+			return true
+		})
 		return holders
 	}()
 	if len(holders) == 0 {

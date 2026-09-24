@@ -20,6 +20,7 @@ package search
 
 import (
 	"github.com/matrixorigin/matrixone/pkg/pb/plan"
+	"github.com/matrixorigin/matrixone/pkg/txn/client"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine"
 	"github.com/matrixorigin/matrixone/pkg/vm/process"
 )
@@ -29,7 +30,7 @@ import (
 type ScanIdentity struct {
 	PhysicalAccountID *uint32
 	Snapshot          *plan.Snapshot
-	TxnOffset         int
+	TxnReadView       client.WorkspaceReadView
 	PartitionCount    int32
 	PartitionIndex    int32
 }

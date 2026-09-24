@@ -382,7 +382,7 @@ func checkCloneDatabaseTarget(
 	targetCtx := defines.AttachAccountId(ctx, accountID)
 	for attempts := 0; ; attempts++ {
 		if err := lockCloneDatabaseTarget(targetCtx, ses, bh, accountID, databaseName); err != nil {
-			if attempts == 0 && isCloneDatabaseTargetLockRetry(err) {
+			if attempts == 0 && isBackgroundTxnRetryError(err) {
 				retried, retryErr := restartCloneDatabaseTargetLockTxn(targetCtx, bh)
 				if retryErr != nil {
 					return false, retryErr
@@ -397,7 +397,7 @@ func checkCloneDatabaseTarget(
 	}
 }
 
-func isCloneDatabaseTargetLockRetry(err error) bool {
+func isBackgroundTxnRetryError(err error) bool {
 	return moerr.IsMoErrCode(err, moerr.ErrTxnNeedRetry) ||
 		moerr.IsMoErrCode(err, moerr.ErrTxnNeedRetryWithDefChanged)
 }

@@ -26,6 +26,7 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/container/types"
 	"github.com/matrixorigin/matrixone/pkg/objectio"
 	"github.com/matrixorigin/matrixone/pkg/pb/shard"
+	"github.com/matrixorigin/matrixone/pkg/txn/client"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
@@ -83,7 +84,7 @@ func TestTxnTableDelegateRejectsDelegatedSnapshotReads(t *testing.T) {
 		t.Fatal("delegated snapshot must not enumerate the origin relation")
 		return nil
 	}), "delegated snapshot")
-	_, err = table.HasSnapshotTombstones(context.Background(), 0, types.TS{})
+	_, err = table.HasSnapshotTombstones(context.Background(), client.NoWorkspaceReadView(), types.TS{})
 	require.ErrorContains(t, err, "delegated snapshot")
 
 	table.shard.policy = shard.Policy_Partition

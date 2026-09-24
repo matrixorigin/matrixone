@@ -25,6 +25,7 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/objectio"
 	planpb "github.com/matrixorigin/matrixone/pkg/pb/plan"
 	"github.com/matrixorigin/matrixone/pkg/sql/plan/substrait"
+	"github.com/matrixorigin/matrixone/pkg/txn/client"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine"
 	"github.com/stretchr/testify/require"
 )
@@ -102,6 +103,7 @@ type snapshotRelationStub struct {
 	visits          int
 	starCalls       int
 	tombstoneChecks int
+	readView        client.WorkspaceReadView
 	nonLocal        bool
 	hasTombstones   bool
 }
@@ -112,8 +114,9 @@ func (s *snapshotRelationStub) CanVisitSnapshotLocally() (bool, error) {
 	return !s.nonLocal, nil
 }
 
-func (s *snapshotRelationStub) HasSnapshotTombstones(context.Context, int, types.TS) (bool, error) {
+func (s *snapshotRelationStub) HasSnapshotTombstones(_ context.Context, readView client.WorkspaceReadView, _ types.TS) (bool, error) {
 	s.tombstoneChecks++
+	s.readView = readView
 	return s.hasTombstones, nil
 }
 
@@ -136,7 +139,8 @@ func TestSnapshotProviderRejectsDelegatedAndDeletedSnapshotsBeforeEnumeration(t 
 	def := testTableDef()
 	read := testRead(t, def)
 	relation := &snapshotRelationStub{def: def, stats: []objectio.ObjectStats{objectStats(t, 1)}, visible: 1, nonLocal: true}
-	provider := &SnapshotProvider{MPool: mpool.MustNewZero(), DataDir: "shared", Relations: map[uint64]engine.Relation{42: relation}}
+	readView := client.NewWorkspaceReadView(7, 8, 9)
+	provider := &SnapshotProvider{MPool: mpool.MustNewZero(), DataDir: "shared", Relations: map[uint64]engine.Relation{42: relation}, ReadView: readView}
 
 	facts, err := provider.PrepareSnapshotRead(context.Background(), read, make([]byte, types.TxnTsSize))
 	require.NoError(t, err)
@@ -151,6 +155,7 @@ func TestSnapshotProviderRejectsDelegatedAndDeletedSnapshotsBeforeEnumeration(t 
 	require.NoError(t, err)
 	require.True(t, facts.VisibleTombstones)
 	require.Equal(t, 1, relation.tombstoneChecks)
+	require.Equal(t, readView, relation.readView)
 	require.Zero(t, relation.visits)
 	require.Zero(t, relation.starCalls)
 }

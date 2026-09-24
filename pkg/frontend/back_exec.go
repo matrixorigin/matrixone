@@ -393,6 +393,7 @@ func doComQueryInBack(
 		pu.UdfService,
 		getAicm(service),
 		getPu(backSes.GetService()).GetTaskService())
+	proc.SetIncrStatementDisabled(backSes.statementBoundaryManagedExternally)
 	proc.Base.Id = backSes.getNextProcessId()
 	proc.Base.Lim.Size = pu.SV.ProcessLimitationSize
 	proc.Base.Lim.SpillSize = pu.SV.ProcessLimitationSpillSize
@@ -1039,13 +1040,16 @@ func getResultSet(ctx context.Context, bh BackgroundExec) ([]ExecResult, error) 
 
 type backSession struct {
 	feSessionImpl
-	parentBackSession                 *backSession
-	effectiveMatrixOneNativeMode      bool
-	hasEffectiveMatrixOneNativeMode   bool
-	forcePessimisticRC                bool
-	cloneSnapshotUsesBackgroundTxn    bool
-	cancelTxnCreateWithRequest        bool
-	lineageOwnerLifecycleWritePending bool
+	parentBackSession               *backSession
+	effectiveMatrixOneNativeMode    bool
+	hasEffectiveMatrixOneNativeMode bool
+	forcePessimisticRC              bool
+	// A Data Branch operation owns one workspace statement across concurrent
+	// internal SQL. Nested background SQL must not advance or retry that owner.
+	statementBoundaryManagedExternally bool
+	cloneSnapshotUsesBackgroundTxn     bool
+	cancelTxnCreateWithRequest         bool
+	lineageOwnerLifecycleWritePending  bool
 	// lastAffectedRows carries the previous statement's ROW_COUNT() value into
 	// the next process created by this background executor.
 	lastAffectedRows int64

@@ -1361,9 +1361,8 @@ func TestScope_CreateTable(t *testing.T) {
 	}
 
 	s := &Scope{
-		Magic:     CreateTable,
-		Plan:      cplan,
-		TxnOffset: 0,
+		Magic: CreateTable,
+		Plan:  cplan,
 	}
 
 	sql := `create table dept(
@@ -1737,9 +1736,8 @@ func TestScope_CreateView(t *testing.T) {
 	}
 
 	s := &Scope{
-		Magic:     CreateView,
-		Plan:      cplan,
-		TxnOffset: 0,
+		Magic: CreateView,
+		Plan:  cplan,
 	}
 
 	convey.Convey("create table FaultTolerance1", t, func() {
@@ -1841,9 +1839,8 @@ func TestScope_CreateTableIfNotExistsAsSelectWhenTableExists(t *testing.T) {
 	}
 
 	s := &Scope{
-		Magic:     CreateTable,
-		Plan:      cplan,
-		TxnOffset: 0,
+		Magic: CreateTable,
+		Plan:  cplan,
 	}
 
 	proc := testutil.NewProcess(t)
@@ -2227,9 +2224,8 @@ func TestScope_Database(t *testing.T) {
 	}
 
 	s := &Scope{
-		Magic:     DropDatabase,
-		Plan:      cplan,
-		TxnOffset: 0,
+		Magic: DropDatabase,
+		Plan:  cplan,
 	}
 
 	sql := `create database test;`
@@ -2574,9 +2570,8 @@ func TestDropDatabase_SnapshotAdvance(t *testing.T) {
 		},
 	}
 	s := &Scope{
-		Magic:     DropDatabase,
-		Plan:      cplan,
-		TxnOffset: 0,
+		Magic: DropDatabase,
+		Plan:  cplan,
 	}
 
 	origSnapshotTS := timestamp.Timestamp{PhysicalTime: 100}

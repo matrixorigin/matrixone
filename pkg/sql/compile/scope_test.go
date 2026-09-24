@@ -35,13 +35,12 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/common/buffer"
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
 	"github.com/matrixorigin/matrixone/pkg/common/morpc"
-	"github.com/matrixorigin/matrixone/pkg/common/mpool"
 	"github.com/matrixorigin/matrixone/pkg/common/runtime"
 	"github.com/matrixorigin/matrixone/pkg/container/batch"
 	"github.com/matrixorigin/matrixone/pkg/container/types"
 	"github.com/matrixorigin/matrixone/pkg/container/vector"
 	"github.com/matrixorigin/matrixone/pkg/defines"
-	"github.com/matrixorigin/matrixone/pkg/objectio"
+	mock_frontend "github.com/matrixorigin/matrixone/pkg/frontend/test"
 	"github.com/matrixorigin/matrixone/pkg/pb/pipeline"
 	"github.com/matrixorigin/matrixone/pkg/pb/plan"
 	"github.com/matrixorigin/matrixone/pkg/perfcounter"
@@ -69,8 +68,10 @@ import (
 	plan2 "github.com/matrixorigin/matrixone/pkg/sql/plan"
 	"github.com/matrixorigin/matrixone/pkg/sql/plan/function"
 	"github.com/matrixorigin/matrixone/pkg/testutil"
+	"github.com/matrixorigin/matrixone/pkg/txn/client"
 	"github.com/matrixorigin/matrixone/pkg/vm"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine"
+	"github.com/matrixorigin/matrixone/pkg/vm/engine/readutil"
 	"github.com/matrixorigin/matrixone/pkg/vm/message"
 	"github.com/matrixorigin/matrixone/pkg/vm/process"
 	"github.com/stretchr/testify/require"
@@ -602,6 +603,22 @@ func TestScopeSerialization2(t *testing.T) {
 	checkScopeRoot(t, scope)
 }
 
+func TestRemoteScopeDoesNotInheritCoordinatorWorkspaceReadView(t *testing.T) {
+	testCompile := NewMockCompile(t)
+	sourceScope := generateScopeWithRootOperator(
+		testCompile.proc,
+		[]vm.OpType{vm.TableScan, vm.Projection})
+	sourceScope.TxnReadView = client.NewWorkspaceReadView(11, 7, 23)
+
+	scopeData, err := encodeScope(sourceScope)
+	require.NoError(t, err)
+
+	remoteScope, err := decodeScope(scopeData, testCompile.proc, true, nil)
+	require.NoError(t, err)
+	require.True(t, remoteScope.TxnReadView.IsZero(),
+		"a remote CN must not use another CN's workspace-local read view")
+}
+
 func TestDecodeRemoteScopePreservesRemoteRunContextDuringPipelineInit(t *testing.T) {
 	testCompile := NewMockCompile(t)
 	testCompile.counterSet = &perfcounter.CounterSet{}
@@ -627,6 +644,10 @@ func generateScopeCases(t *testing.T, testCases []string) []*Scope {
 		proc.Base.SessionInfo.Buf = buffer.New()
 		ctrl := gomock.NewController(t)
 		txnCli, txnOp := newTestTxnClientAndOp(ctrl)
+		// These cases compile ordinary table scans on the statement owner. The
+		// read-view resolver must distinguish them from historical snapshot
+		// operators, which own an isolated workspace view.
+		txnOp.(*mock_frontend.MockTxnOperator).EXPECT().IsSnapOp().Return(false).AnyTimes()
 		proc.Base.TxnClient = txnCli
 		proc.Base.TxnOperator = txnOp
 		e := newStubEngine()
@@ -2875,7 +2896,42 @@ func TestScopeGetRelDataError(t *testing.T) {
 // mockRelation is a mock Relation that captures the FilterHint passed to BuildReaders
 type mockRelationForMembershipFilter struct {
 	engine.Relation
-	capturedHint engine.FilterHint
+	capturedHint      engine.FilterHint
+	buildReadersCalls int
+	readers           []engine.Reader
+}
+
+type closeTrackingScanReader struct {
+	engine.Reader
+	closes int
+}
+
+func (r *closeTrackingScanReader) Close() error {
+	r.closes++
+	return nil
+}
+
+func TestNormalizeScanReadersPreservesExactOwnership(t *testing.T) {
+	for _, parallelism := range []int{1, 2, 3} {
+		for _, count := range []int{0, 1, 2, 3, 5} {
+			t.Run(fmt.Sprintf("parallelism=%d/readers=%d", parallelism, count), func(t *testing.T) {
+				original := make([]*closeTrackingScanReader, count)
+				readers := make([]engine.Reader, count)
+				for i := range original {
+					original[i] = new(closeTrackingScanReader)
+					readers[i] = original[i]
+				}
+				normalized := normalizeScanReaders(readers, parallelism)
+				require.Len(t, normalized, parallelism)
+				for _, reader := range normalized {
+					require.NoError(t, reader.Close())
+				}
+				for _, reader := range original {
+					require.Equal(t, 1, reader.closes)
+				}
+			})
+		}
+	}
 }
 
 func (m *mockRelationForMembershipFilter) BuildReaders(
@@ -2884,73 +2940,89 @@ func (m *mockRelationForMembershipFilter) BuildReaders(
 	expr *plan.Expr,
 	relData engine.RelData,
 	num int,
-	txnOffset int,
+	readView client.WorkspaceReadView,
 	orderBy bool,
 	policy engine.TombstoneApplyPolicy,
 	filterHint engine.FilterHint,
 ) ([]engine.Reader, error) {
+	m.buildReadersCalls++
 	m.capturedHint = filterHint
-	return []engine.Reader{}, nil
-}
-
-type mockReaderForParallelOrderBy struct {
-	orderByCalls int
-	orderBy      []*plan.OrderBySpec
-}
-
-func (m *mockReaderForParallelOrderBy) Close() error {
-	return nil
-}
-
-func (m *mockReaderForParallelOrderBy) Read(context.Context, []string, *plan.Expr, *mpool.MPool, *batch.Batch) (bool, error) {
-	return true, nil
-}
-
-func (m *mockReaderForParallelOrderBy) SetOrderBy(orderBy []*plan.OrderBySpec) {
-	m.orderByCalls++
-	m.orderBy = orderBy
-}
-
-func (m *mockReaderForParallelOrderBy) GetOrderBy() []*plan.OrderBySpec {
-	return m.orderBy
-}
-
-func (m *mockReaderForParallelOrderBy) SetIndexParam(*plan.IndexReaderParam) {}
-
-func (m *mockReaderForParallelOrderBy) SetFilterZM(objectio.ZoneMap) {}
-
-type mockRelationForParallelOrderBy struct {
-	engine.Relation
-	readers []engine.Reader
-}
-
-func (m *mockRelationForParallelOrderBy) BuildReaders(
-	context.Context,
-	any,
-	*plan.Expr,
-	engine.RelData,
-	int,
-	int,
-	bool,
-	engine.TombstoneApplyPolicy,
-	engine.FilterHint,
-) ([]engine.Reader, error) {
 	return m.readers, nil
 }
 
-func TestBuildScanParallelRunSetsOrderByOnParallelReaders(t *testing.T) {
+func (m *mockRelationForMembershipFilter) Ranges(
+	context.Context,
+	engine.RangesParam,
+) (engine.RelData, error) {
+	return readutil.BuildEmptyRelData(), nil
+}
+
+func TestBuildReadersStaticFalseReturnsEmptyReaders(t *testing.T) {
+	c := NewMockCompile(t)
+	relation := &mockRelationForMembershipFilter{}
+	scope := &Scope{
+		Proc: c.proc,
+		DataSource: &Source{
+			Rel:                relation,
+			FilterList:         []*plan.Expr{plan2.MakeFalseExpr()},
+			RuntimeFilterSpecs: []*plan.RuntimeFilterSpec{},
+		},
+		NodeInfo: engine.Node{Mcpu: 2},
+	}
+
+	readers, err := scope.buildReaders(c)
+	require.NoError(t, err)
+	require.Len(t, readers, 2)
+	for _, reader := range readers {
+		require.IsType(t, &readutil.EmptyReader{}, reader)
+	}
+	require.Zero(t, relation.buildReadersCalls)
+}
+
+func TestBuildReadersRuntimeFilterDropKeepsWorkspaceReaders(t *testing.T) {
+	proc := testutil.NewProcess(t)
+	board := message.NewMessageBoard()
+	defer board.Reset()
+	proc.SetMessageBoard(board)
+	spec := plan2.MakeRuntimeFilter(
+		101, false, 1,
+		plan2.GetColExpr(plan.Type{Id: int32(types.T_int64)}, 1, 0),
+		false,
+	)
+	workspaceReader := new(readutil.EmptyReader)
+	relation := &mockRelationForMembershipFilter{
+		readers: []engine.Reader{workspaceReader},
+	}
+	scope := &Scope{
+		Proc: proc,
+		DataSource: &Source{
+			Rel:                relation,
+			RuntimeFilterSpecs: []*plan.RuntimeFilterSpec{spec},
+		},
+		NodeInfo: engine.Node{Mcpu: 2},
+	}
+	c := &Compile{proc: proc}
+	message.SendMessage(message.RuntimeFilterMessage{
+		Tag: spec.Tag,
+		Typ: message.RuntimeFilter_DROP,
+	}, board)
+
+	readers, err := scope.buildReaders(c)
+	require.NoError(t, err)
+	require.Len(t, readers, 2)
+	require.Same(t, workspaceReader, readers[0])
+	require.IsType(t, &readutil.EmptyReader{}, readers[1])
+	require.Equal(t, 1, relation.buildReadersCalls)
+}
+
+func TestBuildScanParallelRunUsesEmptyReadersForFalseFilter(t *testing.T) {
 	c := NewMockCompile(t)
 	scope := generateScopeWithRootOperator(c.proc, []vm.OpType{vm.Projection})
-
-	orderBy := []*plan.OrderBySpec{{Flag: plan.OrderBySpec_DESC}}
-	reader1 := &mockReaderForParallelOrderBy{}
-	reader2 := &mockReaderForParallelOrderBy{}
-
+	relation := &mockRelationForMembershipFilter{}
 	scope.DataSource = &Source{
-		Rel:                &mockRelationForParallelOrderBy{readers: []engine.Reader{reader1, reader2}},
+		Rel:                relation,
 		FilterList:         []*plan.Expr{plan2.MakeFalseExpr()},
-		FilterExpr:         nil,
-		OrderBy:            orderBy,
+		OrderBy:            []*plan.OrderBySpec{{Flag: plan.OrderBySpec_DESC}},
 		RuntimeFilterSpecs: []*plan.RuntimeFilterSpec{},
 	}
 	scope.NodeInfo = engine.Node{Mcpu: 2}
@@ -2959,11 +3031,10 @@ func TestBuildScanParallelRunSetsOrderByOnParallelReaders(t *testing.T) {
 	require.NoError(t, err)
 	require.NotNil(t, mergeScope)
 	require.Len(t, mergeScope.PreScopes, 2)
-
-	for _, reader := range []*mockReaderForParallelOrderBy{reader1, reader2} {
-		require.Equal(t, 1, reader.orderByCalls)
-		require.Equal(t, orderBy, reader.orderBy)
+	for _, preScope := range mergeScope.PreScopes {
+		require.IsType(t, &readutil.EmptyReader{}, preScope.DataSource.R)
 	}
+	require.Zero(t, relation.buildReadersCalls)
 }
 
 func TestRuntimeFilterResultKeepsItsOriginatingSpec(t *testing.T) {

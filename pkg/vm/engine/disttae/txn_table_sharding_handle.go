@@ -30,6 +30,7 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/pb/plan"
 	"github.com/matrixorigin/matrixone/pkg/pb/shard"
 	"github.com/matrixorigin/matrixone/pkg/pb/timestamp"
+	"github.com/matrixorigin/matrixone/pkg/txn/client"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/readutil"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/tasks"
@@ -256,7 +257,7 @@ func HandleShardingReadRanges(
 	rangesParam := engine.RangesParam{
 		BlockFilters:   param.RangesParam.Exprs,
 		PreAllocBlocks: int(param.RangesParam.PreAllocSize),
-		TxnOffset:      int(param.RangesParam.TxnOffset),
+		TxnReadView:    client.NoWorkspaceReadView(),
 		Policy:         engine.DataCollectPolicy(param.RangesParam.DataCollectPolicy),
 	}
 	ranges, err := tbl.doRanges(ctx, rangesParam)
@@ -307,7 +308,7 @@ func HandleShardingReadBuildReader(
 
 	ds, err := tbl.buildLocalDataSource(
 		ctx,
-		0,
+		client.NoWorkspaceReadView(),
 		relData,
 		engine.TombstoneApplyPolicy(param.ReaderBuildParam.TombstoneApplyPolicy),
 		engine.ShardingRemoteDataSource,
@@ -478,7 +479,7 @@ func HandleShardingReadCollectTombstones(
 
 	tombstones, err := tbl.CollectTombstones(
 		ctx,
-		0,
+		client.NoWorkspaceReadView(),
 		engine.TombstoneCollectPolicy(param.CollectTombstonesParam.CollectPolicy),
 	)
 	if err != nil {

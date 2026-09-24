@@ -3534,9 +3534,8 @@ func TestScope_AlterTableInplace(t *testing.T) {
 	}
 
 	s := &Scope{
-		Magic:     AlterTable,
-		Plan:      cplan,
-		TxnOffset: 0,
+		Magic: AlterTable,
+		Plan:  cplan,
 	}
 
 	sql := `alter table dept add index idx(dname)`
@@ -3958,9 +3957,8 @@ func TestScope_AlterTableCopy(t *testing.T) {
 	}
 
 	s := &Scope{
-		Magic:     AlterTable,
-		Plan:      cplan,
-		TxnOffset: 0,
+		Magic: AlterTable,
+		Plan:  cplan,
 	}
 
 	sql := `alter table dept add index idx(dname)`

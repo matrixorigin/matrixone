@@ -18,7 +18,6 @@ import (
 	"context"
 	"testing"
 
-	"github.com/matrixorigin/matrixone/pkg/container/batch"
 	"github.com/matrixorigin/matrixone/pkg/container/types"
 	"github.com/matrixorigin/matrixone/pkg/pb/timestamp"
 	"github.com/matrixorigin/matrixone/pkg/testutil"
@@ -32,10 +31,10 @@ import (
 func failClosedTxnTable(t *testing.T) *txnTable {
 	t.Helper()
 	proc := testutil.NewProc(t)
-	txn := &Transaction{engine: &Engine{fs: proc.GetFileService()}}
-	bat := batch.NewWithSize(1)
-	bat.SetRowCount(1)
-	txn.writes = []Entry{{tableId: 42, bat: bat}}
+	txn := &Transaction{engine: &Engine{fs: proc.GetFileService()}, workspace: newTxnWorkspace()}
+	bat := newInt64BatchForTest(t, proc, []string{"pk"}, []int64{1})
+	appendWorkspaceEntryForTest(txn, Entry{tableId: 42, bat: bat})
+	t.Cleanup(func() { closeWorkspaceForTest(t, txn) })
 	op := newTxnOperatorForTestWithWorkspace(t, txn)
 	tbl := &txnTable{tableId: 42, db: &txnDatabase{op: op}}
 	tbl.proc.Store(proc)
@@ -58,7 +57,7 @@ func newViewPathTxnTable(t *testing.T) (*txnTable, *process.Process) {
 		fs:         proc.GetFileService(),
 		partitions: make(map[[2]uint64]*logtailreplay.Partition),
 	}
-	txn := &Transaction{engine: eng}
+	txn := &Transaction{engine: eng, workspace: newTxnWorkspace()}
 	op := newTxnOperatorForTestWithWorkspace(t, txn)
 	op.EXPECT().SnapshotTS().Return(timestamp.Timestamp{PhysicalTime: 100}).AnyTimes()
 	txn.op = op
@@ -76,6 +75,16 @@ func TestSourceCommitTSEmptyPartitionState(t *testing.T) {
 	tbl.proc.Store(proc)
 	_, err := tbl.SourceCommitTS(context.Background(), types.TS{})
 	require.NoError(t, err)
+}
+
+func TestSourceCommitTSFailsClosedOnWorkspaceObjectDelete(t *testing.T) {
+	tbl, proc := newViewPathTxnTable(t)
+	tbl.proc.Store(proc)
+	objectID := types.NewObjectid()
+	blockID := types.NewBlockidWithObjectID(&objectID, 1)
+	tbl.getTxn().workspace.appendObjectDelete(0, 10, 42, blockID, []int64{1})
+	_, err := tbl.SourceCommitTS(context.Background(), types.TS{})
+	require.ErrorContains(t, err, "transaction-local writes")
 }
 
 // SourceCommitTSAt needs a process for its file service and mpool; with none it

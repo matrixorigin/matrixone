@@ -1132,9 +1132,9 @@ func TestLockCloneDatabaseTargetRequiresBackgroundExecutor(t *testing.T) {
 }
 
 func TestIsCloneDatabaseTargetLockRetry(t *testing.T) {
-	require.True(t, isCloneDatabaseTargetLockRetry(moerr.NewTxnNeedRetryNoCtx()))
-	require.True(t, isCloneDatabaseTargetLockRetry(moerr.NewTxnNeedRetryWithDefChangedNoCtx()))
-	require.False(t, isCloneDatabaseTargetLockRetry(errors.New("not retryable")))
+	require.True(t, isBackgroundTxnRetryError(moerr.NewTxnNeedRetryNoCtx()))
+	require.True(t, isBackgroundTxnRetryError(moerr.NewTxnNeedRetryWithDefChangedNoCtx()))
+	require.False(t, isBackgroundTxnRetryError(errors.New("not retryable")))
 }
 
 func TestRestartOwnedCloneDatabaseTargetLockTxnReentersLifecycle(t *testing.T) {

@@ -457,10 +457,10 @@ func (c *Compile) Run(_ uint64) (queryResult *util2.RunResult, err error) {
 
 	// track the entire execution lifecycle and release memory after it ends.
 	var sequence = uint64(0)
-	var writeOffset = uint64(0)
+	var writeMark client.WorkspaceWriteMark
 	if txnOperator != nil {
 		sequence = txnOperator.NextSequence()
-		writeOffset = uint64(txnOperator.GetWorkspace().GetSnapshotWriteOffset())
+		writeMark = txnOperator.GetWorkspace().BeginWriteAttempt()
 		txnOperator.GetWorkspace().IncrSQLCount()
 	}
 
@@ -804,6 +804,13 @@ func (c *Compile) Run(_ uint64) (queryResult *util2.RunResult, err error) {
 			attemptOpen = false
 			return nil, err
 		}
+		// RollbackLastStatement closes the failed attempt, and
+		// IncrStatementID opens a new physical attempt for the retry.  A write
+		// mark is owned by exactly one of those attempts, so the retry must not
+		// carry the failed attempt's mark into Adjust.
+		if txnOperator != nil {
+			writeMark = txnOperator.GetWorkspace().BeginWriteAttempt()
+		}
 		runC = nextRunC
 		warnings.bindScopes(runC.scopes)
 		runC.executionGeneration = c.executionGeneration
@@ -843,7 +850,7 @@ func (c *Compile) Run(_ uint64) (queryResult *util2.RunResult, err error) {
 		)
 	}
 	if txnOperator != nil {
-		err = txnOperator.GetWorkspace().Adjust(writeOffset)
+		err = txnOperator.GetWorkspace().Adjust(writeMark)
 		if err != nil {
 			err = joinAllocationLifecycleErrors(err, finishAllocationAttempt())
 			err = abortSinkAttempt(err)

@@ -63,11 +63,11 @@ func TestTxnTableDeleteObjectStatsUsesAuthorizedTableName(t *testing.T) {
 	for _, skipTransfer := range []bool{false, true} {
 		t.Run(fmt.Sprintf("skip-transfer=%v", skipTransfer), func(t *testing.T) {
 			txn := newTransactionWithActivePKTableForTest(t, "pk")
+			defer closeWorkspaceForTest(t, txn)
 			txn.tnStores = []DNStore{{}}
-			txn.cn_flushed_s3_tombstone_object_stats_list = new(sync.Map)
 			txn.op.(*mock_frontend.MockTxnOperator).EXPECT().IsSnapOp().Return(false).AnyTimes()
 
-			tbl := txn.tableOps.existAndActive(genTableKey(1, "tbl", 7, "db"))
+			tbl := txn.workspace.activeTable(genTableKey(1, "tbl", 7, "db"))
 			require.NotNil(t, tbl)
 			tbl.tableId = catalog.MO_COLUMNS_ID
 			tbl.tableName = catalog.MO_COLUMNS
@@ -86,21 +86,25 @@ func TestTxnTableDeleteObjectStatsUsesAuthorizedTableName(t *testing.T) {
 				ctx = context.WithValue(ctx, defines.SkipTransferKey{}, true)
 			}
 			require.NoError(t, tbl.Delete(ctx, bat, ""))
-			require.Len(t, txn.writes, 1)
-			require.Equal(t, catalog.MO_COLUMNS_UPDATE, txn.writes[0].tableName)
-			require.Equal(t, skipTransfer, txn.writes[0].skipTransfer)
+			entries, err := txn.workspace.commitEntries()
+			require.NoError(t, err)
+			defer entries.Close()
+			require.Len(t, entries.entries, 1)
+			entry := entries.entries[0]
+			require.Equal(t, catalog.MO_COLUMNS_UPDATE, entry.tableName)
+			require.Equal(t, skipTransfer, entry.skipTransfer)
 
-			protoBat, err := batch.BatchToProtoBatch(txn.writes[0].bat)
+			protoBat, err := batch.BatchToProtoBatch(entry.bat)
 			require.NoError(t, err)
 			req, remaining, err := catalog.ParseEntryList([]*api.Entry{{
 				EntryType:  api.Entry_Delete,
 				DatabaseId: catalog.MO_CATALOG_ID,
 				TableId:    catalog.MO_COLUMNS_ID,
-				TableName:  txn.writes[0].tableName,
+				TableName:  entry.tableName,
 				Bat:        protoBat,
 			}})
 			require.NoError(t, err)
-			require.Equal(t, txn.writes[0].tableName, req.(*api.Entry).TableName)
+			require.Equal(t, entry.tableName, req.(*api.Entry).TableName)
 			require.Empty(t, remaining)
 			_, _, err = catalog.ParseEntryList([]*api.Entry{{
 				EntryType:  api.Entry_Delete,
@@ -110,7 +114,6 @@ func TestTxnTableDeleteObjectStatsUsesAuthorizedTableName(t *testing.T) {
 				Bat:        protoBat,
 			}})
 			require.ErrorContains(t, err, "bad write format")
-			txn.writes[0].bat.Clean(txn.proc.Mp())
 		})
 	}
 }
@@ -155,6 +158,26 @@ func newTxnTableForTest() *txnTable {
 		eng:        engine,
 	}
 	return table
+}
+
+func TestTxnTableCurrentWorkspaceReadViewUsesOwningSnapshotWorkspace(t *testing.T) {
+	baseTable := newTxnTableForTest()
+	baseTxn := baseTable.getTxn()
+	baseTxn.workspace = newTxnWorkspace()
+
+	snapshotOp := baseTable.db.op.CloneSnapshotOp(timestamp.Timestamp{})
+	require.True(t, snapshotOp.IsSnapOp())
+	snapshotTxn := snapshotOp.GetWorkspace().(*Transaction)
+	snapshotTable := &txnTable{db: &txnDatabase{op: snapshotOp}}
+
+	baseView := baseTable.currentWorkspaceReadView()
+	snapshotView := snapshotTable.currentWorkspaceReadView()
+	require.Equal(t, baseTxn.workspace.id, baseView.WorkspaceID())
+	require.Equal(t, snapshotTxn.workspace.id, snapshotView.WorkspaceID())
+	require.NotEqual(t, baseView.WorkspaceID(), snapshotView.WorkspaceID())
+
+	require.NoError(t, baseTxn.workspace.close(nil))
+	require.NoError(t, snapshotTxn.workspace.close(nil))
 }
 
 func TestTxnTableGetTableDefKeepsTemporarySessionStateContextual(t *testing.T) {
@@ -202,12 +225,11 @@ func newResetTxnForTest(t *testing.T, eng *Engine) (client.TxnOperator, *Transac
 	proc := testutil.NewProc(t)
 	t.Cleanup(proc.Free)
 	txn := &Transaction{
-		op:          op,
-		proc:        proc,
-		engine:      eng,
-		tableCache:  new(sync.Map),
-		tableOps:    newTableOps(),
-		databaseOps: newDbOps(),
+		op:         op,
+		proc:       proc,
+		engine:     eng,
+		tableCache: new(sync.Map),
+		workspace:  newTxnWorkspace(),
 	}
 	op.AddWorkspace(txn)
 	return op, txn
@@ -340,7 +362,7 @@ func TestReusableRelationHandleResetFromCatalogCacheMiss(t *testing.T) {
 	key := genTableKey(7, "t", 10, "db")
 	_, cached := newTxn.tableCache.Load(key)
 	require.False(t, cached)
-	require.Nil(t, newTxn.tableOps.existAndActive(key))
+	require.Nil(t, newTxn.workspace.activeTable(key))
 	insertCatalogTableForResetTest(t, eng, newTxn, 7, 10, 84, "db", "t")
 
 	require.NoError(t, handle.Reset(newOp))
@@ -386,7 +408,7 @@ func TestReusableRelationHandleResetRejectsDeletedTable(t *testing.T) {
 
 	newOp, newTxn := newResetTxnForTest(t, oldCanonical.eng.(*Engine))
 	key := genTableKey(0, "t", 10, "db")
-	newTxn.tableOps.addDeleteTable(key, 0, oldCanonical.tableId)
+	require.NoError(t, newTxn.workspace.addTableOp(key, DELETE, oldCanonical.tableId, nil))
 	// A txn-local DROP must win even if a stale canonical relation is cached.
 	newTxn.tableCache.Store(key, &txnTableDelegate{origin: oldCanonical})
 

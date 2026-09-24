@@ -225,7 +225,7 @@ func (h *snapshotAdvanceHarness) writePersistedDeletes(deletes *batch.Batch) {
 	))
 	require.NoError(h.t, ws.IncrStatementID(h.ctx, false))
 	ws.EndStatement()
-	ws.UpdateSnapshotWriteOffset()
+	ws.PublishReadView()
 }
 
 func (h *snapshotAdvanceHarness) countRows(
@@ -271,7 +271,7 @@ func (h *snapshotAdvanceHarness) transferAtStatementBoundary() {
 	forceTransferCtx := context.WithValue(h.ctx, disttae.UT_ForceTransCheck{}, "yes")
 	require.NoError(h.t, ws.IncrStatementID(forceTransferCtx, false))
 	ws.EndStatement()
-	ws.UpdateSnapshotWriteOffset()
+	ws.PublishReadView()
 }
 
 func Test_RCSnapshotAdvancePreservesUncommittedDeletes(t *testing.T) {

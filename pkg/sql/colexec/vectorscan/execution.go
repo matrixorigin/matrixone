@@ -26,6 +26,7 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/pb/timestamp"
 	"github.com/matrixorigin/matrixone/pkg/sql/colexec"
 	plan2 "github.com/matrixorigin/matrixone/pkg/sql/plan"
+	"github.com/matrixorigin/matrixone/pkg/txn/client"
 	"github.com/matrixorigin/matrixone/pkg/vectorindex/overfetch"
 	"github.com/matrixorigin/matrixone/pkg/vm/process"
 )
@@ -198,12 +199,12 @@ func (b *Execution) Close() {
 func Identity(
 	spec *plan.VectorIndexScan,
 	currentSnapshot timestamp.Timestamp,
-	txnOffset int,
+	readView client.WorkspaceReadView,
 	partitionCount int32,
 	partitionIndex int32,
 ) (searchplugin.ScanIdentity, error) {
 	identity := searchplugin.ScanIdentity{
-		TxnOffset:      txnOffset,
+		TxnReadView:    readView,
 		PartitionCount: partitionCount,
 		PartitionIndex: partitionIndex,
 	}

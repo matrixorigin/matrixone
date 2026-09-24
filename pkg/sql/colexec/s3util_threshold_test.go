@@ -15,11 +15,14 @@
 package colexec
 
 import (
+	"context"
+	"errors"
 	"fmt"
 	"math"
 	"testing"
 
 	"github.com/matrixorigin/matrixone/pkg/catalog"
+	"github.com/matrixorigin/matrixone/pkg/common/moerr"
 	"github.com/matrixorigin/matrixone/pkg/common/mpool"
 	moruntime "github.com/matrixorigin/matrixone/pkg/common/runtime"
 	"github.com/matrixorigin/matrixone/pkg/compress"
@@ -33,6 +36,54 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/testutil"
 	"github.com/stretchr/testify/require"
 )
+
+type spillWriterPostPersistFailureFS struct {
+	fileservice.FileService
+	writes []string
+}
+
+func (fs *spillWriterPostPersistFailureFS) Write(
+	ctx context.Context, vector fileservice.IOVector,
+) error {
+	if err := fs.FileService.Write(ctx, vector); err != nil {
+		return err
+	}
+	fs.writes = append(fs.writes, vector.FilePath)
+	if len(fs.writes) == 2 {
+		return errors.New("injected post-persist write failure")
+	}
+	return nil
+}
+
+func TestCNS3WriterAbortUnpublishedAfterLaterWriteFailure(t *testing.T) {
+	proc := testutil.NewProc(t)
+	defer proc.Free()
+	baseline := proc.Mp().CurrNB()
+	baseFS, err := fileservice.NewMemoryFS(
+		defines.SharedFileServiceName, fileservice.DisabledCacheConfig, nil)
+	require.NoError(t, err)
+	fs := &spillWriterPostPersistFailureFS{FileService: baseFS}
+	writer := NewCNS3DataWriter(proc.Mp(), fs, testCNS3WriterTableDef(), 1, false)
+	bat := batch.NewWithSize(2)
+	bat.Attrs = []string{"a", "b"}
+	bat.Vecs[0] = testutil.MakeInt64Vector([]int64{1}, nil, proc.Mp())
+	bat.Vecs[1] = testutil.MakeVarcharVector([]string{"value"}, nil, proc.Mp())
+	bat.SetRowCount(1)
+
+	require.NoError(t, writer.Write(proc.Ctx, bat))
+	require.ErrorContains(t, writer.Write(proc.Ctx, bat), "post-persist write failure")
+	require.Len(t, fs.writes, 2)
+	names, err := writer.AbortUnpublished(context.Background())
+	require.NoError(t, err)
+	require.ElementsMatch(t, fs.writes, names)
+	for _, name := range names {
+		_, err := baseFS.StatFile(proc.Ctx, name)
+		require.True(t, moerr.IsMoErrCode(err, moerr.ErrFileNotFound))
+	}
+	require.NoError(t, writer.Close())
+	bat.Clean(proc.Mp())
+	require.Equal(t, baseline, proc.Mp().CurrNB())
+}
 
 func TestCNS3DataWriterMemoryThresholdAndSyncAndFillBlockInfoBat(t *testing.T) {
 	proc := testutil.NewProc(t)

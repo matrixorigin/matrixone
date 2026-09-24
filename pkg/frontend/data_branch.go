@@ -948,7 +948,36 @@ func dataBranchDeleteDatabase(
 	return nil
 }
 
+// PICK and MERGE are atomic background transactions. A nested SQL cannot
+// safely retry by rolling back the shared workspace statement; on an RC
+// retry request, roll back that whole transaction and start the operation
+// again. DIFF can stream output or write files, so it is not replayed here.
 func diffMergeAgency(
+	ses *Session,
+	execCtx *ExecCtx,
+	stmt tree.Statement,
+) error {
+	if ses.proc.GetTxnOperator().TxnOptions().ByBegin {
+		return diffMergeAgencyAttempt(ses, execCtx, stmt)
+	}
+	switch stmt.(type) {
+	case *tree.DataBranchPick, *tree.DataBranchMerge:
+	default:
+		return diffMergeAgencyAttempt(ses, execCtx, stmt)
+	}
+
+	const maxAttempts = 3
+	var err error
+	for attempt := 0; attempt < maxAttempts; attempt++ {
+		err = diffMergeAgencyAttempt(ses, execCtx, stmt)
+		if !isBackgroundTxnRetryError(err) || execCtx.reqCtx.Err() != nil {
+			return err
+		}
+	}
+	return err
+}
+
+func diffMergeAgencyAttempt(
 	ses *Session,
 	execCtx *ExecCtx,
 	stmt tree.Statement,
@@ -985,7 +1014,7 @@ func diffMergeAgency(
 	// lineage-owner lifecycle before resolving either endpoint, so their nested
 	// DDL follows the same lineage -> view-metadata -> object lock order as
 	// ordinary DROP, clone, and restore paths.
-	bh, deferred, err = getDataBranchMutationExecutor(execCtx.reqCtx, ses, false)
+	bh, deferred, err = getDataBranchOperationExecutor(execCtx, ses)
 	if err != nil {
 		return
 	}
@@ -1209,6 +1238,45 @@ func diffMergeAgency(
 	}
 
 	return err
+}
+
+// getDataBranchOperationExecutor makes the independent background transaction
+// the sole owner of one workspace statement. DIFF, PICK, and MERGE can execute
+// internal SQL concurrently, so no nested SQL may advance this boundary.
+// An explicit user transaction already has its outer frontend statement owner.
+func getDataBranchOperationExecutor(
+	execCtx *ExecCtx,
+	ses *Session,
+) (BackgroundExec, func(error) error, error) {
+	bh, finish, err := getDataBranchMutationExecutor(execCtx.reqCtx, ses, false)
+	if err != nil {
+		return nil, nil, err
+	}
+	if ses.proc.GetTxnOperator().TxnOptions().ByBegin {
+		return bh, finish, nil
+	}
+
+	back := bh.(*backExec)
+	txnOp := back.backSes.GetTxnHandler().GetTxn()
+	if txnOp == nil {
+		err = moerr.NewInternalError(execCtx.reqCtx, "data branch background transaction is not active")
+		return nil, nil, finish(err)
+	}
+
+	workspace := txnOp.GetWorkspace()
+	workspace.StartStatement()
+	if err = incrWorkspaceStatement(execCtx, txnOp); err != nil {
+		workspace.EndStatement()
+		return nil, nil, finish(err)
+	}
+	back.backSes.statementBoundaryManagedExternally = true
+
+	return bh, func(operationErr error) error {
+		// The producer and consumer have both finished before this closure runs.
+		back.backSes.statementBoundaryManagedExternally = false
+		workspace.EndStatement()
+		return finish(operationErr)
+	}, nil
 }
 
 func prepareDataBranchWorker(

@@ -472,7 +472,7 @@ func (exec *txnExecutor) Exec(
 	}
 	// A DisableIncrStatement execution runs on the caller's transaction
 	// without opening a statement, so its compile must not advance the
-	// workspace snapshot write offset (the statement boundary).
+	// published workspace read view (the statement boundary).
 	proc.SetIncrStatementDisabled(exec.opts.DisableIncrStatement())
 	proc.SetResolveVariableFunc(exec.opts.ResolveVariableFunc())
 
@@ -560,7 +560,6 @@ func (exec *txnExecutor) Exec(
 	c.disableDropAutoIncrement = statementOption.DisableDropIncrStatement()
 	c.skipDataBranchReclaim = statementOption.SkipDataBranchReclaim()
 	c.keepAutoIncrement = statementOption.KeepAutoIncrement()
-	c.disableRetry = exec.opts.DisableIncrStatement()
 	c.ignorePublish = statementOption.IgnorePublish()
 	c.ignoreCheckExperimental = statementOption.IgnoreCheckExperimental()
 	c.disableLock = statementOption.DisableLock()

@@ -995,6 +995,41 @@ func (mr *MockRunSQLAdmissionOperatorMockRecorder) TryEnterRunSqlWithTokenAndSQL
 	return mr.mock.ctrl.RecordCallWithMethodType(mr.mock, "TryEnterRunSqlWithTokenAndSQL", reflect.TypeOf((*MockRunSQLAdmissionOperator)(nil).TryEnterRunSqlWithTokenAndSQL), cancel, sql)
 }
 
+// MockAutoIncrEpochFenceCommitter is a mock of AutoIncrEpochFenceCommitter interface.
+type MockAutoIncrEpochFenceCommitter struct {
+	ctrl     *gomock.Controller
+	recorder *MockAutoIncrEpochFenceCommitterMockRecorder
+}
+
+// MockAutoIncrEpochFenceCommitterMockRecorder is the mock recorder for MockAutoIncrEpochFenceCommitter.
+type MockAutoIncrEpochFenceCommitterMockRecorder struct {
+	mock *MockAutoIncrEpochFenceCommitter
+}
+
+// NewMockAutoIncrEpochFenceCommitter creates a new mock instance.
+func NewMockAutoIncrEpochFenceCommitter(ctrl *gomock.Controller) *MockAutoIncrEpochFenceCommitter {
+	mock := &MockAutoIncrEpochFenceCommitter{ctrl: ctrl}
+	mock.recorder = &MockAutoIncrEpochFenceCommitterMockRecorder{mock}
+	return mock
+}
+
+// EXPECT returns an object that allows the caller to indicate expected use.
+func (m *MockAutoIncrEpochFenceCommitter) EXPECT() *MockAutoIncrEpochFenceCommitterMockRecorder {
+	return m.recorder
+}
+
+// RequireAutoIncrEpochFenceCommit mocks base method.
+func (m *MockAutoIncrEpochFenceCommitter) RequireAutoIncrEpochFenceCommit() {
+	m.ctrl.T.Helper()
+	m.ctrl.Call(m, "RequireAutoIncrEpochFenceCommit")
+}
+
+// RequireAutoIncrEpochFenceCommit indicates an expected call of RequireAutoIncrEpochFenceCommit.
+func (mr *MockAutoIncrEpochFenceCommitterMockRecorder) RequireAutoIncrEpochFenceCommit() *gomock.Call {
+	mr.mock.ctrl.T.Helper()
+	return mr.mock.ctrl.RecordCallWithMethodType(mr.mock, "RequireAutoIncrEpochFenceCommit", reflect.TypeOf((*MockAutoIncrEpochFenceCommitter)(nil).RequireAutoIncrEpochFenceCommit))
+}
+
 // MockTxnIDGenerator is a mock of TxnIDGenerator interface.
 type MockTxnIDGenerator struct {
 	ctrl     *gomock.Controller
@@ -1132,17 +1167,17 @@ func (m *MockWorkspace) EXPECT() *MockWorkspaceMockRecorder {
 }
 
 // Adjust mocks base method.
-func (m *MockWorkspace) Adjust(writeOffset uint64) error {
+func (m *MockWorkspace) Adjust(mark client.WorkspaceWriteMark) error {
 	m.ctrl.T.Helper()
-	ret := m.ctrl.Call(m, "Adjust", writeOffset)
+	ret := m.ctrl.Call(m, "Adjust", mark)
 	ret0, _ := ret[0].(error)
 	return ret0
 }
 
 // Adjust indicates an expected call of Adjust.
-func (mr *MockWorkspaceMockRecorder) Adjust(writeOffset interface{}) *gomock.Call {
+func (mr *MockWorkspaceMockRecorder) Adjust(mark interface{}) *gomock.Call {
 	mr.mock.ctrl.T.Helper()
-	return mr.mock.ctrl.RecordCallWithMethodType(mr.mock, "Adjust", reflect.TypeOf((*MockWorkspace)(nil).Adjust), writeOffset)
+	return mr.mock.ctrl.RecordCallWithMethodType(mr.mock, "Adjust", reflect.TypeOf((*MockWorkspace)(nil).Adjust), mark)
 }
 
 // AdvanceSnapshot mocks base method.
@@ -1157,6 +1192,20 @@ func (m *MockWorkspace) AdvanceSnapshot(ctx context.Context, ts timestamp.Timest
 func (mr *MockWorkspaceMockRecorder) AdvanceSnapshot(ctx, ts interface{}) *gomock.Call {
 	mr.mock.ctrl.T.Helper()
 	return mr.mock.ctrl.RecordCallWithMethodType(mr.mock, "AdvanceSnapshot", reflect.TypeOf((*MockWorkspace)(nil).AdvanceSnapshot), ctx, ts)
+}
+
+// BeginWriteAttempt mocks base method.
+func (m *MockWorkspace) BeginWriteAttempt() client.WorkspaceWriteMark {
+	m.ctrl.T.Helper()
+	ret := m.ctrl.Call(m, "BeginWriteAttempt")
+	ret0, _ := ret[0].(client.WorkspaceWriteMark)
+	return ret0
+}
+
+// BeginWriteAttempt indicates an expected call of BeginWriteAttempt.
+func (mr *MockWorkspaceMockRecorder) BeginWriteAttempt() *gomock.Call {
+	mr.mock.ctrl.T.Helper()
+	return mr.mock.ctrl.RecordCallWithMethodType(mr.mock, "BeginWriteAttempt", reflect.TypeOf((*MockWorkspace)(nil).BeginWriteAttempt))
 }
 
 // BindTxnOp mocks base method.
@@ -1198,6 +1247,20 @@ func (m *MockWorkspace) Commit(ctx context.Context) ([]txn.TxnRequest, error) {
 func (mr *MockWorkspaceMockRecorder) Commit(ctx interface{}) *gomock.Call {
 	mr.mock.ctrl.T.Helper()
 	return mr.mock.ctrl.RecordCallWithMethodType(mr.mock, "Commit", reflect.TypeOf((*MockWorkspace)(nil).Commit), ctx)
+}
+
+// CurrentReadView mocks base method.
+func (m *MockWorkspace) CurrentReadView() client.WorkspaceReadView {
+	m.ctrl.T.Helper()
+	ret := m.ctrl.Call(m, "CurrentReadView")
+	ret0, _ := ret[0].(client.WorkspaceReadView)
+	return ret0
+}
+
+// CurrentReadView indicates an expected call of CurrentReadView.
+func (mr *MockWorkspaceMockRecorder) CurrentReadView() *gomock.Call {
+	mr.mock.ctrl.T.Helper()
+	return mr.mock.ctrl.RecordCallWithMethodType(mr.mock, "CurrentReadView", reflect.TypeOf((*MockWorkspace)(nil).CurrentReadView))
 }
 
 // EndStatement mocks base method.
@@ -1278,20 +1341,6 @@ func (mr *MockWorkspaceMockRecorder) GetSQLCount() *gomock.Call {
 	return mr.mock.ctrl.RecordCallWithMethodType(mr.mock, "GetSQLCount", reflect.TypeOf((*MockWorkspace)(nil).GetSQLCount))
 }
 
-// GetSnapshotWriteOffset mocks base method.
-func (m *MockWorkspace) GetSnapshotWriteOffset() int {
-	m.ctrl.T.Helper()
-	ret := m.ctrl.Call(m, "GetSnapshotWriteOffset")
-	ret0, _ := ret[0].(int)
-	return ret0
-}
-
-// GetSnapshotWriteOffset indicates an expected call of GetSnapshotWriteOffset.
-func (mr *MockWorkspaceMockRecorder) GetSnapshotWriteOffset() *gomock.Call {
-	mr.mock.ctrl.T.Helper()
-	return mr.mock.ctrl.RecordCallWithMethodType(mr.mock, "GetSnapshotWriteOffset", reflect.TypeOf((*MockWorkspace)(nil).GetSnapshotWriteOffset))
-}
-
 // GetSyncProtectionJobID mocks base method.
 func (m *MockWorkspace) GetSyncProtectionJobID() string {
 	m.ctrl.T.Helper()
@@ -1358,6 +1407,20 @@ func (m *MockWorkspace) PPString() string {
 func (mr *MockWorkspaceMockRecorder) PPString() *gomock.Call {
 	mr.mock.ctrl.T.Helper()
 	return mr.mock.ctrl.RecordCallWithMethodType(mr.mock, "PPString", reflect.TypeOf((*MockWorkspace)(nil).PPString))
+}
+
+// PublishReadView mocks base method.
+func (m *MockWorkspace) PublishReadView() client.WorkspaceReadView {
+	m.ctrl.T.Helper()
+	ret := m.ctrl.Call(m, "PublishReadView")
+	ret0, _ := ret[0].(client.WorkspaceReadView)
+	return ret0
+}
+
+// PublishReadView indicates an expected call of PublishReadView.
+func (mr *MockWorkspaceMockRecorder) PublishReadView() *gomock.Call {
+	mr.mock.ctrl.T.Helper()
+	return mr.mock.ctrl.RecordCallWithMethodType(mr.mock, "PublishReadView", reflect.TypeOf((*MockWorkspace)(nil).PublishReadView))
 }
 
 // Readonly mocks base method.
@@ -1472,30 +1535,4 @@ func (m *MockWorkspace) StartStatement() {
 func (mr *MockWorkspaceMockRecorder) StartStatement() *gomock.Call {
 	mr.mock.ctrl.T.Helper()
 	return mr.mock.ctrl.RecordCallWithMethodType(mr.mock, "StartStatement", reflect.TypeOf((*MockWorkspace)(nil).StartStatement))
-}
-
-// UpdateSnapshotWriteOffset mocks base method.
-func (m *MockWorkspace) UpdateSnapshotWriteOffset() {
-	m.ctrl.T.Helper()
-	m.ctrl.Call(m, "UpdateSnapshotWriteOffset")
-}
-
-// UpdateSnapshotWriteOffset indicates an expected call of UpdateSnapshotWriteOffset.
-func (mr *MockWorkspaceMockRecorder) UpdateSnapshotWriteOffset() *gomock.Call {
-	mr.mock.ctrl.T.Helper()
-	return mr.mock.ctrl.RecordCallWithMethodType(mr.mock, "UpdateSnapshotWriteOffset", reflect.TypeOf((*MockWorkspace)(nil).UpdateSnapshotWriteOffset))
-}
-
-// WriteOffset mocks base method.
-func (m *MockWorkspace) WriteOffset() uint64 {
-	m.ctrl.T.Helper()
-	ret := m.ctrl.Call(m, "WriteOffset")
-	ret0, _ := ret[0].(uint64)
-	return ret0
-}
-
-// WriteOffset indicates an expected call of WriteOffset.
-func (mr *MockWorkspaceMockRecorder) WriteOffset() *gomock.Call {
-	mr.mock.ctrl.T.Helper()
-	return mr.mock.ctrl.RecordCallWithMethodType(mr.mock, "WriteOffset", reflect.TypeOf((*MockWorkspace)(nil).WriteOffset))
 }

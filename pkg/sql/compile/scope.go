@@ -56,6 +56,7 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/sql/colexec/window"
 	plan2 "github.com/matrixorigin/matrixone/pkg/sql/plan"
 	"github.com/matrixorigin/matrixone/pkg/sql/util"
+	"github.com/matrixorigin/matrixone/pkg/txn/client"
 	metricv2 "github.com/matrixorigin/matrixone/pkg/util/metric/v2"
 	"github.com/matrixorigin/matrixone/pkg/util/trace/impl/motrace/statistic"
 	"github.com/matrixorigin/matrixone/pkg/vm"
@@ -1144,10 +1145,11 @@ func buildScanParallelRun(s *Scope, c *Compile) (*Scope, error) {
 }
 
 func (s *Scope) getRelData(c *Compile, blockExprList []*plan.Expr) error {
-	rel, db, ctx, err := c.handleDbRelContext(s.DataSource.node, s.IsRemote)
+	rel, db, ctx, readView, err := c.handleDbRelContext(s.DataSource.node, s.IsRemote)
 	if err != nil {
 		return err
 	}
+	s.TxnReadView = readView
 
 	if s.NodeInfo.CNCNT == 1 {
 		rsp := &engine.RangesShuffleParam{
@@ -1161,6 +1163,7 @@ func (s *Scope) getRelData(c *Compile, blockExprList []*plan.Expr) error {
 			rel,
 			db,
 			ctx,
+			readView,
 			blockExprList,
 			engine.Policy_CollectAllData,
 			rsp)
@@ -1205,6 +1208,7 @@ func (s *Scope) getRelData(c *Compile, blockExprList []*plan.Expr) error {
 			rel,
 			db,
 			ctx,
+			readView,
 			blockExprList,
 			policyForLocal,
 			rsp,
@@ -1219,6 +1223,7 @@ func (s *Scope) getRelData(c *Compile, blockExprList []*plan.Expr) error {
 		rel,
 		db,
 		ctx,
+		readView,
 		blockExprList,
 		policyForRemote,
 		rsp,
@@ -1441,7 +1446,7 @@ func newParallelScope(s *Scope) (*Scope, []*Scope) {
 		parallelScopes[i].NodeInfo = s.NodeInfo
 		parallelScopes[i].NodeInfo.Mcpu = 1
 		parallelScopes[i].Proc = rs.Proc.NewContextChildProc(0)
-		parallelScopes[i].TxnOffset = s.TxnOffset
+		parallelScopes[i].TxnReadView = s.TxnReadView
 		parallelScopes[i].setRootOperator(dupOperatorRecursivelyWithContext(s.RootOp, i, s.NodeInfo.Mcpu, dupCtx))
 	}
 
@@ -1501,7 +1506,7 @@ func newOrderedTopParallelScope(s *Scope) (*Scope, []*Scope, bool) {
 	gather.NodeInfo = s.NodeInfo
 	gather.NodeInfo.Mcpu = 1
 	gather.Proc = s.Proc.NewContextChildProc(workerCount)
-	gather.TxnOffset = s.TxnOffset
+	gather.TxnReadView = s.TxnReadView
 
 	workers := make([]*Scope, workerCount)
 	dupCtx := newOperatorDupContext()
@@ -1513,7 +1518,7 @@ func newOrderedTopParallelScope(s *Scope) (*Scope, []*Scope, bool) {
 		worker.NodeInfo = s.NodeInfo
 		worker.NodeInfo.Mcpu = 1
 		worker.Proc = gather.Proc.NewContextChildProc(0)
-		worker.TxnOffset = s.TxnOffset
+		worker.TxnReadView = s.TxnReadView
 		workerRoot := dupOperatorRecursivelyWithContext(
 			sourceRoot, i, workerCount, dupCtx)
 		conn := connector.NewArgument().WithReg(reg)
@@ -1944,6 +1949,42 @@ func findMergeGroup(op vm.Operator) *group.MergeGroup {
 	return findMergeGroup(base.GetChildren(0))
 }
 
+func newEmptyReaders(count int) []engine.Reader {
+	readers := make([]engine.Reader, count)
+	for i := range readers {
+		readers[i] = new(readutil.EmptyReader)
+	}
+	return readers
+}
+
+// normalizeScanReaders assigns every relation reader to exactly one scan
+// pipeline. An underfilled scan still needs one reader per pipeline, while an
+// overfilled scan must merge surplus readers without dropping any of them.
+func normalizeScanReaders(readers []engine.Reader, parallelism int) []engine.Reader {
+	if len(readers) == parallelism {
+		return readers
+	}
+	normalized := make([]engine.Reader, parallelism)
+	base, extra := len(readers)/parallelism, len(readers)%parallelism
+	next := 0
+	for i := range normalized {
+		count := base
+		if i < extra {
+			count++
+		}
+		switch count {
+		case 0:
+			normalized[i] = new(readutil.EmptyReader)
+		case 1:
+			normalized[i] = readers[next]
+		default:
+			normalized[i] = readutil.NewMergeReader(readers[next : next+count])
+		}
+		next += count
+	}
+	return normalized
+}
+
 func (s *Scope) readerContext(c *Compile) context.Context {
 	// Reader construction belongs to the source scope's pipeline. Using the
 	// compile/root context here leaves ParallelRun's child context unaware of a
@@ -1961,37 +2002,38 @@ func (s *Scope) readerContext(c *Compile) context.Context {
 }
 
 func (s *Scope) buildReaders(c *Compile) (readers []engine.Reader, err error) {
+	if s.NodeInfo.Mcpu <= 0 {
+		return nil, moerr.NewInternalErrorNoCtx("scan reader parallelism must be positive")
+	}
 	// StarCount-only path: aggOptimize already called rel.StarCount() and set PartialResults.
 	// Return EmptyReaders so no data flows; MergeGroup will use PartialResults only.
 	if s.StarCountOnly {
-		readers = make([]engine.Reader, s.NodeInfo.Mcpu)
-		for i := range readers {
-			readers[i] = new(readutil.EmptyReader)
-		}
-		return readers, nil
+		return newEmptyReaders(s.NodeInfo.Mcpu), nil
 	}
 
 	// receive runtime filter and optimize the datasource.
 	var runtimeFilterList []receivedRuntimeFilter
 	var blockFilterList []*plan.Expr
-	var emptyScan bool
-	runtimeFilterList, emptyScan, err = s.waitForRuntimeFilters(c)
+	var runtimeFilterDrop bool
+	runtimeFilterList, runtimeFilterDrop, err = s.waitForRuntimeFilters(c)
 	if err != nil {
 		return
 	}
 	if s.DataSource.node != nil && s.DataSource.node.NodeType == plan.Node_VECTOR_INDEX_SCAN {
-		if emptyScan {
+		if runtimeFilterDrop {
 			return emptyVectorScanReaders(s.NodeInfo.Mcpu), nil
 		}
 		return s.buildVectorIndexReaders(runtimeFilterList)
 	}
 	for i := range s.DataSource.FilterList {
 		if plan2.IsFalseExpr(s.DataSource.FilterList[i]) {
-			emptyScan = true
-			break
+			return newEmptyReaders(s.NodeInfo.Mcpu), nil
 		}
 	}
-	if !emptyScan {
+	// DROP lets us skip persisted range expansion, but a secondary-index runtime
+	// filter may not cover transaction-workspace or committed in-memory rows.
+	// Keep building relation readers so those rows remain visible to the scan.
+	if !runtimeFilterDrop {
 		blockFilterList, err = s.handleRuntimeFilters(c, runtimeFilterList)
 		if err != nil {
 			return
@@ -2017,17 +2059,7 @@ func (s *Scope) buildReaders(c *Compile) (readers []engine.Reader, err error) {
 		if s.DataSource.AccountId != nil {
 			ctx = defines.AttachAccountId(ctx, uint32(s.DataSource.AccountId.GetTenantId()))
 		}
-		hint := engine.FilterHint{}
-		if tableDef := s.DataSource.TableDef; tableDef != nil {
-			switch {
-			case catalog.IsFullTextIndexTableType(tableDef.TableType, tableDef.Name):
-				hint.MembershipFilterBytes = s.DataSource.MembershipFilterBytes
-				if len(hint.MembershipFilterBytes) == 0 {
-					hint.MembershipFilterBytes, _ = c.proc.Ctx.Value(
-						defines.FulltextMembershipFilter{}).([]byte)
-				}
-			}
-		}
+		hint := s.readerFilterHint(c, s.DataSource.TableDef)
 
 		readers, err = c.e.BuildBlockReaders(
 			ctx,
@@ -2060,19 +2092,11 @@ func (s *Scope) buildReaders(c *Compile) (readers []engine.Reader, err error) {
 		crs := new(perfcounter.CounterSet)
 		newCtx := perfcounter.AttachS3RequestKey(ctx, crs)
 
-		hint := engine.FilterHint{}
-		// Pass runtime membership filter bytes to reader via FilterHint (for fulltext index table).
-		if n := s.DataSource.node; n != nil && n.TableDef != nil &&
-			catalog.IsFullTextIndexTableType(n.TableDef.TableType, n.TableDef.Name) {
-			if s.IsRemote {
-				hint.MembershipFilterBytes = s.DataSource.MembershipFilterBytes
-			}
-			if len(hint.MembershipFilterBytes) == 0 {
-				if bf, ok := c.proc.Ctx.Value(defines.FulltextMembershipFilter{}).([]byte); ok {
-					hint.MembershipFilterBytes = bf
-				}
-			}
+		var tableDef *plan.TableDef
+		if s.DataSource.node != nil {
+			tableDef = s.DataSource.node.TableDef
 		}
+		hint := s.readerFilterHint(c, tableDef)
 
 		readers, err = s.DataSource.Rel.BuildReaders(
 			newCtx,
@@ -2080,7 +2104,7 @@ func (s *Scope) buildReaders(c *Compile) (readers []engine.Reader, err error) {
 			s.DataSource.FilterExpr,
 			s.NodeInfo.Data,
 			s.NodeInfo.Mcpu,
-			s.TxnOffset,
+			s.TxnReadView,
 			len(s.DataSource.OrderBy) > 0,
 			engine.Policy_CheckAll,
 			hint,
@@ -2102,34 +2126,15 @@ func (s *Scope) buildReaders(c *Compile) (readers []engine.Reader, err error) {
 	// Should get relation first to generate Reader.
 	// FIXME:: s.NodeInfo.Rel == nil, partition table? -- this is an old comment, I just do a copy here.
 	default:
-		// This cannot modify the c.proc.Ctx here, but I don't know why.
-		// Maybe there are some account related things stores in the context (using the context.WithValue),
-		// and modify action will change the account.
-		ctx := s.readerContext(c)
-
-		if util.TableIsClusterTable(s.DataSource.TableDef.GetTableType()) {
-			ctx = defines.AttachAccountId(ctx, catalog.System_Account)
-		}
-
 		// todo:
 		//  these following codes were very likely to `compile.go:compileTableScanDataSource `.
 		//  I kept the old codes here without any modify. I don't know if there is one `GetRelation(txn, scanNode, scheme, table)`
-		{
-			n := s.DataSource.node
-			if n.ScanSnapshot != nil && n.ScanSnapshot.TS != nil {
-				if !n.ScanSnapshot.TS.Equal(timestamp.Timestamp{LogicalTime: 0, PhysicalTime: 0}) &&
-					n.ScanSnapshot.TS.Less(c.proc.GetTxnOperator().Txn().SnapshotTS) {
-					if c.proc.GetCloneTxnOperator() == nil {
-						txnOp := c.proc.GetTxnOperator().CloneSnapshotOp(*n.ScanSnapshot.TS)
-						c.proc.SetCloneTxnOperator(txnOp)
-					}
-
-					if n.ScanSnapshot.Tenant != nil {
-						ctx = context.WithValue(ctx, defines.TenantIDKey{}, n.ScanSnapshot.Tenant.TenantID)
-					}
-				}
-			}
+		txnOp, ctx, resolveErr := c.getCompileTableScanDataSourceTxn(s)
+		if resolveErr != nil {
+			err = resolveErr
+			return
 		}
+		s.TxnReadView = client.WorkspaceReadViewForOperator(txnOp, c.TxnReadView)
 
 		var mainRds []engine.Reader
 
@@ -2137,16 +2142,11 @@ func (s *Scope) buildReaders(c *Compile) (readers []engine.Reader, err error) {
 		crs := new(perfcounter.CounterSet)
 		newCtx := perfcounter.AttachS3RequestKey(ctx, crs)
 
-		hint := engine.FilterHint{}
-		// Pass runtime membership filter bytes to reader via FilterHint (for fulltext index table).
-		if n := s.DataSource.node; n != nil && n.TableDef != nil &&
-			catalog.IsFullTextIndexTableType(n.TableDef.TableType, n.TableDef.Name) {
-			if bfVal := c.proc.Ctx.Value(defines.FulltextMembershipFilter{}); bfVal != nil {
-				if bf, ok := bfVal.([]byte); ok && len(bf) > 0 {
-					hint.MembershipFilterBytes = bf
-				}
-			}
+		var tableDef *plan.TableDef
+		if s.DataSource.node != nil {
+			tableDef = s.DataSource.node.TableDef
 		}
+		hint := s.readerFilterHint(c, tableDef)
 
 		mainRds, err = s.DataSource.Rel.BuildReaders(
 			newCtx,
@@ -2154,7 +2154,7 @@ func (s *Scope) buildReaders(c *Compile) (readers []engine.Reader, err error) {
 			s.DataSource.FilterExpr,
 			s.NodeInfo.Data,
 			s.NodeInfo.Mcpu,
-			s.TxnOffset,
+			s.TxnReadView,
 			len(s.DataSource.OrderBy) > 0,
 			engine.Policy_CheckAll,
 			hint,
@@ -2177,16 +2177,41 @@ func (s *Scope) buildReaders(c *Compile) (readers []engine.Reader, err error) {
 	// just for quick GC.
 	s.NodeInfo.Data = nil
 
-	//for partition table.
-	if len(readers) != s.NodeInfo.Mcpu {
-		newReaders := make([]engine.Reader, 0, s.NodeInfo.Mcpu)
-		step := len(readers) / s.NodeInfo.Mcpu
-		for i := 0; i < len(readers); i += step {
-			newReaders = append(newReaders, readutil.NewMergeReader(readers[i:i+step]))
-		}
-		readers = newReaders
-	}
+	// Partitioned relations may return a different number of readers than the
+	// number of scan pipelines. Keep the mapping exact in either direction.
+	readers = normalizeScanReaders(readers, s.NodeInfo.Mcpu)
 	return
+}
+
+// readerFilterHint centralizes membership-filter propagation without changing
+// the source precedence of the existing reader paths. IVF readers accept the
+// scan-owned filter everywhere. Fulltext readers accept it only on remote scans;
+// local readers continue to consume the filter carried by the process context.
+func (s *Scope) readerFilterHint(c *Compile, tableDef *plan.TableDef) engine.FilterHint {
+	hint := engine.FilterHint{}
+	if tableDef == nil {
+		return hint
+	}
+
+	switch {
+	case tableDef.TableType == catalog.SystemSI_IVFFLAT_TblType_Entries:
+		if len(s.DataSource.MembershipFilterBytes) > 0 {
+			hint.MembershipFilterBytes = s.DataSource.MembershipFilterBytes
+			return hint
+		}
+		if membershipFilter, ok := c.proc.Ctx.Value(defines.IvfMembershipFilter{}).([]byte); ok {
+			hint.MembershipFilterBytes = membershipFilter
+		}
+	case catalog.IsFullTextIndexTableType(tableDef.TableType, tableDef.Name):
+		if s.IsRemote && len(s.DataSource.MembershipFilterBytes) > 0 {
+			hint.MembershipFilterBytes = s.DataSource.MembershipFilterBytes
+			return hint
+		}
+		if membershipFilter, ok := c.proc.Ctx.Value(defines.FulltextMembershipFilter{}).([]byte); ok {
+			hint.MembershipFilterBytes = membershipFilter
+		}
+	}
+	return hint
 }
 
 func (s *Scope) buildVectorIndexReaders(runtimeFilters []receivedRuntimeFilter) ([]engine.Reader, error) {
@@ -2211,7 +2236,7 @@ func (s *Scope) buildVectorIndexReaders(runtimeFilters []receivedRuntimeFilter) 
 	}
 	identity, err := vectorscan.Identity(
 		spec, currentSnapshot,
-		s.TxnOffset, s.NodeInfo.CNCNT, s.NodeInfo.CNIDX)
+		s.TxnReadView, s.NodeInfo.CNCNT, s.NodeInfo.CNIDX)
 	if err != nil {
 		return nil, err
 	}
