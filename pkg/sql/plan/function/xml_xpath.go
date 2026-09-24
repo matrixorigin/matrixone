@@ -134,7 +134,9 @@ func (p *xmlPathParser) number() (int, bool) {
 	return n, err == nil && n > 0
 }
 func (p *xmlPathParser) decimal() (float64, bool) {
-	p.space()
+	for p.pos < len(p.s) && (xmlSpace(p.s[p.pos]) || p.s[p.pos] == '\v' || p.s[p.pos] == '\f') {
+		p.pos++
+	}
 	start := p.pos
 	if p.pos < len(p.s) && (p.s[p.pos] == '+' || p.s[p.pos] == '-') {
 		p.pos++
@@ -769,6 +771,17 @@ func xmlNumericString(value float64) string {
 		result := strconv.FormatFloat(value, 'e', -1, 64)
 		parts := strings.SplitN(result, "e", 2)
 		exponent, _ := strconv.Atoi(parts[1])
+		if abs >= 1e15 {
+			digits := 0
+			for i := range len(parts[0]) {
+				if parts[0][i] >= '0' && parts[0][i] <= '9' {
+					digits++
+				}
+			}
+			if digits > exponent+1 {
+				return strconv.FormatFloat(value, 'f', -1, 64)
+			}
+		}
 		return parts[0] + "e" + strconv.Itoa(exponent)
 	}
 	return strconv.FormatFloat(value, 'f', -1, 64)

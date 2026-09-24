@@ -9,6 +9,8 @@ ExtractValue('<a><b/><b/></a>', 'count(/a/b)') AS count_nodes;
 SELECT ExtractValue('<a><b>1</b><b>2</b></a>', 'sum(/a/b)') AS sum_nodes,
 ExtractValue('<a><b>1</b><b>2</b></a>', 'count(/a/b)=2') AS count_equals,
 ExtractValue('<a><b>1</b><b>2</b></a>', '/a/b[position()=last()]') AS last_child;
+SELECT ExtractValue('<a>1000000000000000.1</a>', 'sum(/a)') AS large_fraction,
+ExtractValue(CONCAT('<a>', CHAR(11), '2</a>'), 'sum(/a)') AS numeric_whitespace;
 SELECT ExtractValue('<a>x<b>y</b>z</a>', '/a') AS direct_text,
 ExtractValue('<a>x<b>y</b>z</a>', '/a/text()') AS explicit_text,
 ExtractValue('<a>x<b>y</b>z</a>', '/a|/a/b') AS union_text;

@@ -1,8 +1,11 @@
 # Bounded MySQL XML functions — issue #28306
 
-Revision 2, parent-approved scope and limits (2026-09-21). Independent design:
+Revision 3, issue #29329 numeric compatibility follow-up (2026-09-24).
+Independent revision 3 design review: GPT-6 Astra, medium, PASS after the
+fragment-validator boundary was included. Implementation PR: #29362.
+Revision 2 parent-approved scope and limits (2026-09-21). Independent design:
 gpt-6-astra, medium, session `01a0c0d3-1fd5-7c23-baab-6ed3431f7052`.
-Implementation PR: pending parent publication. Base: `b2f178defd7c`.
+Revision 2 base: `b2f178defd7c`.
 
 ## Contract and scope
 
@@ -25,6 +28,19 @@ or general scalar expressions. UpdateXML returns NULL for these scalar targets.
 XPath decimal and out-of-range integer literals are explicitly unsupported;
 XML text consumed by `sum()` has its own numeric conversion. Integer-literal
 comparisons preserve precision rather than rounding through binary floats.
+Numeric conversion for `sum()` accepts MySQL's ASCII leading whitespace,
+including vertical tab and form feed, and then a numeric prefix. It stays
+separate from XPath grammar whitespace. Shortest-round-trip rendering uses
+fixed notation for magnitudes from `1e-15` to below `1e15`, and also when a
+large value's significant digits extend beyond its decimal point; otherwise
+it uses scientific notation without a `+` or leading exponent zeroes. This
+keeps large fractional values such as `1000000000000000.1` distinct from
+exact large values such as `1e15`. Non-finite sum results remain explicit
+errors under this bounded subset.
+The fragment validator admits vertical tab and form feed in element text and
+attribute values so the numeric converter can observe them. Other disallowed
+control bytes, including NUL, keep their existing malformed-XML result; this
+does not redefine the broader XML input contract.
 Terminal text() is supported for extraction as a real terminal child-text
 selector: `/P/text()` selects P's direct text records, while `/P//text()`
 selects direct text records of P and of element descendants; `//text()` starts
@@ -113,6 +129,25 @@ Warning delivery reuses current transport. No storage/catalog migration.
 R2 public result/error/metadata closure; bounded untrusted parsing requires abuse
 and cancellation tests. No shared-state/race or distributed-protocol change.
 Cost is bounded by input, record and work admission; no throughput claim.
+
+## Revision 3 design decision and evidence
+
+MySQL 8.0.44 in an isolated, network-disabled container returned
+`1000000000000000.1` for `sum(/a)` on that element text, while the current
+formatter returns `1.0000000000000001e15`. For `1e15`, both use `1e15`.
+MySQL returned `2` for `sum(/a)` when the element text starts with vertical
+tab or form feed followed by `2`; the current fragment validator rejects both
+bytes before numeric conversion. MySQL also returned `4` for
+`<a><b>1<c>2</c>3</b></a>` with `sum(/a/b)`, and `1` for text `1x`; these
+confirm the existing direct-text and numeric-prefix decisions.
+
+Keep one scalar evaluator and its existing per-row work budget. Admit vertical
+tab and form feed through fragment validation, repair numeric text whitespace
+admission and number rendering; leave XPath token whitespace and
+position/predicate parsing unchanged. Add focused numeric
+boundary cases to the existing oracle table and public function test, plus
+one small SQL BVT result. Existing process, storage and wire contracts do
+not change. The fallback is reverting the targeted fix commit.
 
 ## Validation / acceptance
 

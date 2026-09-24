@@ -43,6 +43,17 @@ func TestXMLExtractionOracle(t *testing.T) {
 		{`<a/>`, `0002`, `2`},
 		{`<a>1e20</a>`, `sum(/a)`, `1e20`},
 		{`<a>1e-20</a>`, `sum(/a)`, `1e-20`},
+		{`<a>1000000000000000.1</a>`, `sum(/a)`, `1000000000000000.1`},
+		{`<a>-1000000000000000.1</a>`, `sum(/a)`, `-1000000000000000.1`},
+		{`<a>1e15</a>`, `sum(/a)`, `1e15`},
+		{`<a>1e-15</a>`, `sum(/a)`, `0.000000000000001`},
+		{`<a>1e-16</a>`, `sum(/a)`, `1e-16`},
+		{"<a>\v2</a>", `sum(/a)`, `2`},
+		{"<a>\f2</a>", `sum(/a)`, `2`},
+		{"<a k=\"\v2\"/>", `sum(/a/@k)`, `2`},
+		{"<a k=\"\f2\"/>", `sum(/a/@k)`, `2`},
+		{"<a>\v2</a>", `/a`, "\v2"},
+		{"<a k=\"\f2\"/>", `/a/@k`, "\f2"},
 		{`<a><b>1<c>2</c>3</b></a>`, `sum(/a/b)`, `4`},
 		{`<a/>`, `sum(/a/b)`, `0`},
 		{`<a>x<b>y</b>z</a>`, `/a`, `x z`},
@@ -164,6 +175,24 @@ func TestXMLScalarPublicEntrypoints(t *testing.T) {
 	}
 }
 
+func TestXMLNumericBoundariesPublicEntrypoints(t *testing.T) {
+	proc := testutil.NewProcess(t)
+	defer proc.Free()
+	for _, tc := range []struct{ xml, want string }{
+		{`<a>1000000000000000.1</a>`, `1000000000000000.1`},
+		{"<a>\v2</a>", `2`},
+	} {
+		t.Run(tc.xml, func(t *testing.T) {
+			fc := NewFunctionTestCase(proc, []FunctionTestInput{
+				NewFunctionTestInput(types.T_varchar.ToType(), []string{tc.xml}, nil),
+				NewFunctionTestConstInput(types.T_varchar.ToType(), []string{`sum(/a)`}, nil),
+			}, NewFunctionTestResult(types.T_varchar.ToType(), false, []string{tc.want}, nil), ExtractValue)
+			ok, info := fc.Run()
+			require.True(t, ok, info)
+		})
+	}
+}
+
 func TestXMLUpdateOracle(t *testing.T) {
 	proc := testutil.NewProcess(t)
 	defer proc.Free()
@@ -172,6 +201,7 @@ func TestXMLUpdateOracle(t *testing.T) {
 		{`<a><b>1</b><b>2</b></a>`, `/a/b`, `<c/>`, `<a><b>1</b><b>2</b></a>`},
 		{`<a><b>1</b></a>`, `/a/c`, `<c/>`, `<a><b>1</b></a>`},
 		{`<a><b>1</b><b>2</b></a>`, `/a/b[position()=last()]`, `<c/>`, `<a><b>1</b><c/></a>`},
+		{"<a>\v2<b/></a>", `/a/b`, `<c/>`, "<a>\v2<c/></a>"},
 		{`<a k="7"><b/></a>`, `/a/@k`, `z`, `<a z><b/></a>`},
 		{`<a />`, `/a`, `not xml`, `not xml`},
 		{`<a/>`, `/`, `raw`, `raw`},
@@ -242,6 +272,10 @@ func TestXMLUpdateTextTargets(t *testing.T) {
 }
 
 func TestXMLMalformedAndUnsupported(t *testing.T) {
+	for _, s := range []string{"/a[\v]", "/a[\f]"} {
+		_, err := compileXMLXPath(context.Background(), s)
+		require.Error(t, err)
+	}
 	for _, s := range []string{`<a>`, `<a></b>`, `<a/><b`, `<a x='1' x='2'/>`, `<a x=1/>`, `<a x='<'>`, `<!DOCTYPE a><a/>`, `<a>\x00</a>`} {
 		if s == `<a>\x00</a>` {
 			s = "<a>\x00</a>"
@@ -346,6 +380,14 @@ func TestXMLVectorWarningsMasksAndReuse(t *testing.T) {
 	require.Equal(t, "1", result.GetResultVector().GetStringAt(0))
 	require.NoError(t, result.PreExtendAndReset(0))
 	require.NoError(t, ExtractValue([]*vector.Vector{docs, path}, result, proc, 0, nil))
+	badNUL, err := vector.NewConstBytes(types.T_varchar.ToType(), []byte("<a>\x002</a>"), 1, proc.Mp())
+	require.NoError(t, err)
+	defer badNUL.Free(proc.Mp())
+	require.NoError(t, result.PreExtendAndReset(1))
+	require.NoError(t, ExtractValue([]*vector.Vector{badNUL, path}, result, proc, 1, nil))
+	require.True(t, result.GetResultVector().IsNull(0))
+	require.Equal(t, uint64(2), sink.total)
+	require.Equal(t, uint16(1525), sink.records[1].code)
 }
 
 func TestXMLWarningRetentionUsesProcessLimits(t *testing.T) {
