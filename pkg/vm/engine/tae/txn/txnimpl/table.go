@@ -1429,11 +1429,13 @@ func (tbl *txnTable) DedupSnapByPK(
 	r := trace.StartRegion(ctx, "DedupSnapByPK")
 	defer r.End()
 	candidates, err := tbl.getBaseTable(isTombstone).getRowsByPK(ctx, keys)
+	if candidates != nil {
+		defer candidates.Close()
+	}
 	if err != nil {
 		logutil.Errorf("getRowsByPK failed, %v", err)
 		return
 	}
-	defer candidates.Close()
 	from, to := types.TS{}, tbl.store.txn.GetStartTS()
 	if !isTombstone && candidates.HasCandidate() {
 		err = tbl.findDeletesForCandidates(ctx, candidates, from, to)

@@ -15703,6 +15703,14 @@ func TestGetByFilterAfterMergeKeepsTheNewAppend(t *testing.T) {
 
 	require.NoError(t, mergeTxn.Commit(ctx))
 
+	readTxn, readRel := tae.GetRelation()
+	id, row, err := readRel.GetByFilter(ctx, handle.NewEQFilter(pk))
+	require.NoError(t, err)
+	value, _, err := readRel.GetValue(id, row, 2, false)
+	require.NoError(t, err)
+	require.Equal(t, int32(42), value)
+	require.NoError(t, readTxn.Commit(ctx))
+
 	insertTxn, insertRel := tae.GetRelation()
 	err = insertRel.Append(ctx, bat)
 	if err == nil {

@@ -59,6 +59,11 @@ type dedupErrorObjectData struct {
 	err error
 }
 
+type dedupConflictObjectData struct {
+	data.Object
+	rowID types.Rowid
+}
+
 type containsObjectData struct {
 	data.Object
 	contains func(containers.Vector) error
@@ -85,6 +90,20 @@ func (data *dedupErrorObjectData) GetDuplicatedRows(
 	*mpool.MPool,
 ) error {
 	return data.err
+}
+
+func (data *dedupConflictObjectData) GetDuplicatedRows(
+	_ context.Context,
+	_ txnif.TxnReader,
+	_ containers.Vector,
+	_ index.ZM,
+	_ types.TS,
+	_ types.TS,
+	rowIDs containers.Vector,
+	_ *mpool.MPool,
+) error {
+	rowIDs.Update(0, data.rowID, false)
+	return moerr.NewTxnWWConflictNoCtx(0, "")
 }
 
 func TestIncrementalGetRowsByPKReleasesResultOnError(t *testing.T) {
@@ -211,6 +230,48 @@ func TestFindDeletesForCandidatesRetainsPartialFilteringOnWW(t *testing.T) {
 	defer merged.Close()
 	require.False(t, merged.IsNull(0))
 	require.Equal(t, nonAppendableID, vector.GetFixedAtNoTypeCheck[types.Rowid](merged.GetDownstreamVector(), 0))
+}
+
+func TestDedupSnapByPKClosesCandidatesOnWWConflict(t *testing.T) {
+	defer testutils.AfterTest(t)()
+
+	schema := catalog.MockSchemaAll(3, 2)
+	entry := catalog.MockStaloneTableEntry(1, schema)
+	pool := containers.NewVectorPool(t.Name(), 8)
+	defer pool.Destory()
+	txn := txnbase.MockTxnReaderWithStartTS(types.BuildTS(100, 0))
+	tbl := &txnTable{
+		entry: entry,
+		store: &txnStore{
+			txn: txn,
+			rt:  dbutils.NewRuntime(dbutils.WithRuntimeSmallPool(pool)),
+		},
+	}
+	tbl.dataTable = newBaseTable(schema, false, tbl)
+
+	objectID := objectio.NewObjectid()
+	stats := objectio.NewObjectStatsWithObjectID(&objectID, false, false, false)
+	require.NoError(t, objectio.SetObjectStatsRowCnt(stats, 1))
+	rowID := types.NewRowIDWithObjectIDBlkNumAndRowID(objectID, 0, 0)
+	object := catalog.MockObjectEntry(
+		entry,
+		stats,
+		false,
+		func(*catalog.ObjectEntry) data.Object {
+			return &dedupConflictObjectData{rowID: rowID}
+		},
+		types.BuildTS(1, 0),
+	)
+	entry.AddEntryLocked(object)
+
+	keys := containers.MakeVector(types.T_int64.ToType(), common.DefaultAllocator)
+	defer keys.Close()
+	keys.Append(int64(1), false)
+
+	err := tbl.DedupSnapByPK(context.Background(), keys, false)
+	require.True(t, moerr.IsMoErrCode(err, moerr.ErrTxnWWConflict), err)
+	used, _ := pool.Used(false)
+	require.Zero(t, used)
 }
 
 func newPreparingEpochTestTxn(t *testing.T, id string, start, prepare types.TS) *txnbase.Txn {
