@@ -252,6 +252,18 @@ func TestMakeDateDecimalAndBoundaryInputs(t *testing.T) {
 	tc := NewFunctionTestCase(proc, []FunctionTestInput{inputYear, inputDay, NewFunctionTestInput(types.T_date.ToType(), []types.Date{}, nil)}, NewFunctionTestResult(types.T_date.ToType(), false, expected, []bool{false, false, false, true}), MakeDate)
 	succeed, info := tc.Run()
 	require.True(t, succeed, info)
+
+	// Exercise masked rows and the non-rational/invalid input paths as well.
+	inputYear = NewFunctionTestInput(types.T_varchar.ToType(), []string{"abc", "24.5", "99", "100"}, nil)
+	inputDay = NewFunctionTestInput(types.T_varchar.ToType(), []string{"1", "0", "1", "1"}, nil)
+	tc = NewFunctionTestCase(proc,
+		[]FunctionTestInput{inputYear, inputDay, NewFunctionTestInput(types.T_date.ToType(), []types.Date{}, nil)},
+		NewFunctionTestResult(types.T_date.ToType(), false,
+			[]types.Date{types.ZeroDate, types.ZeroDate, types.DateFromCalendar(1999, 1, 1), types.DateFromCalendar(100, 1, 1)},
+			[]bool{true, true, false, false}), MakeDate).
+		WithSelectList(&FunctionSelectList{AnyNull: true, SelectList: []bool{true, false, false, false}})
+	succeed, info = tc.Run()
+	require.True(t, succeed, info)
 }
 
 func TestTimestampTemporalResultPaths(t *testing.T) {
@@ -353,6 +365,45 @@ func TestTemporalDatetimeResultBranches(t *testing.T) {
 	require.Equal(t, types.DatetimeFromClock(2024, 1, 2, 11, 4, 5, 123456), convertedValue)
 	require.True(t, convertResult.GetResultVector().IsNull(1))
 	require.True(t, convertResult.GetResultVector().IsNull(2))
+}
+
+func TestTimestampAddSubTimeDatetimeResultBranches(t *testing.T) {
+	proc := testutil.NewProcess(t)
+	proc.GetSessionInfo().TimeZone = time.UTC
+	ts, err := types.ParseTimestamp(time.UTC, "2024-01-02 03:04:05.123456", 6)
+	require.NoError(t, err)
+	timestamps := vector.NewVec(types.T_timestamp.ToTypeWithScale(6))
+	times := vector.NewVec(types.T_varchar.ToType())
+	require.NoError(t, vector.AppendFixedList(timestamps,
+		[]types.Timestamp{ts, ts, types.ZeroTimestamp, ts},
+		[]bool{false, true, false, false}, proc.Mp()))
+	require.NoError(t, vector.AppendStringList(times,
+		[]string{"01:02:03.000001", "01:02:03", "01:02:03", "not-a-time"}, nil, proc.Mp()))
+	t.Cleanup(func() {
+		timestamps.Free(proc.Mp())
+		times.Free(proc.Mp())
+	})
+
+	selectList := &FunctionSelectList{AnyNull: true, SelectList: []bool{false, true, false, false}}
+	for _, tc := range []struct {
+		name string
+		fn   func([]*vector.Vector, vector.FunctionResultWrapper, *process.Process, int, *FunctionSelectList) error
+	}{
+		{name: "add", fn: AddTime},
+		{name: "sub", fn: SubTime},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			result := vector.NewFunctionResultWrapper(types.T_datetime.ToTypeWithScale(6), proc.Mp())
+			defer result.Free()
+			require.NoError(t, result.PreExtendAndReset(4))
+			require.NoError(t, tc.fn([]*vector.Vector{timestamps, times}, result, proc, 4, selectList))
+			out := result.GetResultVector()
+			require.False(t, out.IsNull(0))
+			require.True(t, out.IsNull(1), "masked rows must be NULL")
+			require.True(t, out.IsNull(2), "zero timestamps must be NULL")
+			require.True(t, out.IsNull(3), "invalid time text must be NULL")
+		})
+	}
 }
 
 func TestDateFormatUsesTemporalLocaleForGenericPatterns(t *testing.T) {
