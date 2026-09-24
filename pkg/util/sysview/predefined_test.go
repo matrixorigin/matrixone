@@ -320,6 +320,16 @@ func TestInformationSchemaStatisticsDDL_RestrictsCatalogJoins(t *testing.T) {
 	assert.True(t, strings.Contains(InformationSchemaStatisticsDDL, "`tbl`.`account_id` = current_account_id()"))
 }
 
+func TestInformationSchemaColumnsDDL_PreservesCatalogNameWidth(t *testing.T) {
+	// Both generated View branches must match the legacy catalog-backed
+	// branches; otherwise UNION promotes the public result to varchar(5000).
+	assert.Equal(t, 2, strings.Count(InformationSchemaColumnsDDL,
+		"cast(mt.reldatabase as varchar(256)) as TABLE_SCHEMA,"))
+	assert.Equal(t, 2, strings.Count(InformationSchemaColumnsDDL,
+		"cast(mt.relname as varchar(256)) AS TABLE_NAME,"))
+	assert.NotContains(t, InformationSchemaColumnsV58DDL(), "cast(mt.reldatabase as varchar(256))")
+}
+
 func TestInformationSchemaColumnsDDL_UsesConnectorCompatibleDataType(t *testing.T) {
 	assert.Contains(t, InformationSchemaColumnsDDL, "lower(case when length(mc.attr_enum) > 0 then")
 	assert.Contains(t, InformationSchemaColumnsDDL, "case when upper(mo_show_visible_bin(mc.atttyp,2)) = 'BOOL' then 'TINYINT'")

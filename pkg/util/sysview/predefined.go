@@ -292,6 +292,7 @@ func informationSchemaCurrentColumnsDDL() string {
 		"mc.account_id", "mt.account_id",
 		"mk.key_priority", "0",
 	).Replace(viewRows)
+	viewRows = castViewColumnNames(viewRows)
 	userView := "mt.relkind = 'v' AND mt.reldatabase NOT IN ('mo_catalog','information_schema','mysql','system','system_metrics','mo_task','mo_debug')"
 	return prefix + local + " AND NOT (" + userView + ") UNION ALL " +
 		viewRows + " AND (" + userView + ") UNION ALL " + branches[1] + " UNION ALL " +
@@ -350,6 +351,15 @@ func informationSchemaSubscriptionColumnsDDL() string {
 		informationSchemaMetadataVisibilityCTE() + localSelect + " UNION ALL " + subscriptionSelect
 }
 
+// The catalog name columns are varchar(256); without these casts the wider
+// mo_tables names promote the public I_S.COLUMNS UNION output to varchar(5000).
+func castViewColumnNames(selectSQL string) string {
+	return strings.NewReplacer(
+		"mt.reldatabase as TABLE_SCHEMA,", "cast(mt.reldatabase as varchar(256)) as TABLE_SCHEMA,",
+		"mt.relname AS TABLE_NAME,", "cast(mt.relname as varchar(256)) AS TABLE_NAME,",
+	).Replace(selectSQL)
+}
+
 func informationSchemaSubscriptionViewColumnsSelect(localSelect string) string {
 	subscriptionViewSelect := strings.NewReplacer(
 		informationSchemaColumnsLocalFromSQL(),
@@ -360,6 +370,7 @@ func informationSchemaSubscriptionViewColumnsSelect(localSelect string) string {
 		"mc.account_id", "mt.account_id",
 		"mk.key_priority", "0",
 	).Replace(localSelect)
+	subscriptionViewSelect = castViewColumnNames(subscriptionViewSelect)
 	subscriptionViewSelect += " AND mt.relkind = 'v' AND (" +
 		informationSchemaSubscriptionViewAuthorizationPredicate() + ")"
 	return subscriptionViewSelect

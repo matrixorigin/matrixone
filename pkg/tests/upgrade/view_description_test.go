@@ -96,20 +96,25 @@ func TestViewDescriptionPublicSQL(t *testing.T) {
 			showStmt, err := showConn.PrepareContext(ctx, "show columns from view_description_test.v")
 			require.NoError(t, err)
 			defer showStmt.Close()
-			checkShow := func(want ...string) {
+			checkShow := func(want ...string) string {
 				rows, err := showStmt.QueryContext(ctx)
 				require.NoError(t, err)
 				defer rows.Close()
 				var got []string
+				var firstType string
 				for rows.Next() {
 					var field, typ, nullable, key, defaultValue, extra, comment sql.NullString
 					require.NoError(t, rows.Scan(&field, &typ, &nullable, &key, &defaultValue, &extra, &comment))
 					got = append(got, field.String)
+					if len(got) == 1 {
+						firstType = typ.String
+					}
 				}
 				require.NoError(t, rows.Err())
 				require.Equal(t, want, got)
+				return firstType
 			}
-			checkShow("label", "qty")
+			require.Equal(t, "VARCHAR(60)", checkShow("label", "qty"))
 			writer, err := db.Conn(ctx)
 			require.NoError(t, err)
 			defer writer.Close()
@@ -120,6 +125,41 @@ func TestViewDescriptionPublicSQL(t *testing.T) {
 			checkShow("changed")
 			_, err = writer.ExecContext(ctx, "alter view v as select x as label, qty from src")
 			require.NoError(t, err)
+			_, err = writer.ExecContext(ctx, "create view nested as select label from v")
+			require.NoError(t, err)
+			nestedStmt, err := showConn.PrepareContext(ctx, "show columns from view_description_test.nested")
+			require.NoError(t, err)
+			defer nestedStmt.Close()
+			checkNested := func(want string) {
+				rows, err := nestedStmt.QueryContext(ctx)
+				require.NoError(t, err)
+				defer rows.Close()
+				require.True(t, rows.Next())
+				var field, typ, nullable, key, defaultValue, extra, comment sql.NullString
+				require.NoError(t, rows.Scan(&field, &typ, &nullable, &key, &defaultValue, &extra, &comment))
+				require.Equal(t, "label", field.String)
+				require.Equal(t, want, typ.String)
+				require.False(t, rows.Next())
+				require.NoError(t, rows.Err())
+			}
+			checkNested("VARCHAR(60)")
+			_, err = writer.ExecContext(ctx, "alter table src modify column x varchar(70)")
+			require.NoError(t, err)
+			require.Equal(t, "VARCHAR(70)", checkShow("label", "qty"))
+			checkNested("VARCHAR(70)")
+			_, err = writer.ExecContext(ctx, "drop table src")
+			require.NoError(t, err)
+			func() {
+				rows, queryErr := showStmt.QueryContext(ctx)
+				if rows != nil {
+					defer rows.Close()
+					require.NoError(t, rows.Err())
+				}
+				require.Error(t, queryErr, "prepared SHOW must reject a View whose source was dropped")
+			}()
+			_, err = writer.ExecContext(ctx, "create table src (x varchar(60), qty bigint not null default 9)")
+			require.NoError(t, err)
+			require.Equal(t, "VARCHAR(60)", checkShow("label", "qty"))
 		}()
 		exec("create table view_description_test.unrelated_source (x int)")
 		exec("create view view_description_test.unrelated_view as select x from view_description_test.unrelated_source")
@@ -251,6 +291,22 @@ func TestViewDescriptionSubscription(t *testing.T) {
 			&field, &typ, &nullable, &key, &defaultValue, &extra, &comment))
 		require.Equal(t, "x", field.String)
 		require.Equal(t, "VARCHAR(60)", typ.String)
+		showStmt, err := subscriber.PrepareContext(ctx, "show columns from subscribed.v")
+		require.NoError(t, err)
+		defer showStmt.Close()
+		checkSubscribedShow := func(want string) {
+			rows, err := showStmt.QueryContext(ctx)
+			require.NoError(t, err)
+			defer rows.Close()
+			require.True(t, rows.Next())
+			require.NoError(t, rows.Scan(&field, &typ, &nullable, &key, &defaultValue, &extra, &comment))
+			require.Equal(t, "x", field.String)
+			require.Equal(t, want, typ.String)
+			require.False(t, rows.Next())
+			require.NoError(t, rows.Err())
+		}
+		checkSubscribedShow("VARCHAR(60)")
+		checkSubscribedShow("VARCHAR(60)")
 		// System View columns remain sourced from the catalog, not regenerated
 		// from the internal SQL used to populate the View.
 		rows, err := subscriber.QueryContext(ctx, "desc mo_catalog.mo_variables")
@@ -274,6 +330,7 @@ func TestViewDescriptionSubscription(t *testing.T) {
 		require.NoError(t, err)
 		defer prepared.Close()
 		exec("alter table view_description_pub.src modify column x varchar(90)")
+		checkSubscribedShow("VARCHAR(90)")
 		require.NoError(t, prepared.QueryRowContext(ctx).Scan(&width))
 		require.Equal(t, 90, width)
 		func() {

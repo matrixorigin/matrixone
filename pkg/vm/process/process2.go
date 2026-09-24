@@ -17,6 +17,7 @@ package process
 import (
 	"context"
 	"sync"
+	"sync/atomic"
 	"time"
 
 	"github.com/matrixorigin/matrixone/pkg/taskservice"
@@ -130,7 +131,7 @@ func (proc *Process) NewViewBindingProcess(ctx context.Context) *Process {
 		LogLevel: info.LogLevel, SessionId: info.SessionId,
 	}
 	child.Base.IsFrontend = proc.Base.IsFrontend
-	child.Base.DivByZeroErrorMode = proc.Base.DivByZeroErrorMode
+	child.Base.DivByZeroErrorMode = atomic.LoadInt32(&proc.Base.DivByZeroErrorMode)
 	child.Base.resolveVariableFunc = proc.Base.resolveVariableFunc
 	child.Base.resolveVariableTypeFunc = proc.Base.resolveVariableTypeFunc
 	child.Base.resolveVariableIsBinFunc = proc.Base.resolveVariableIsBinFunc

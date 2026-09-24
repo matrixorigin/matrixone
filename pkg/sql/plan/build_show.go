@@ -671,15 +671,15 @@ func buildShowColumns(stmt *tree.ShowColumns, ctx CompilerContext) (*Plan, error
 		sql = fmt.Sprintf(sql, keyStr, MO_CATALOG_DB_NAME, MO_CATALOG_DB_NAME, dbName, tblName)
 	}
 
-	var viewDependency *ObjectRef
+	var viewDependencies []*ObjectRef
 	if tableDef.ViewSql != nil && tableDef.ViewSql.View != "" &&
 		!slices.Contains(catalog.SystemDatabases, strings.ToLower(dbName)) {
-		columns, err := viewDescriptionRelation(ctx, tableDef, accountId, dbName, tblName)
+		columns, dependencies, err := viewDescriptionRelation(ctx, tableDef, accountId, dbName, tblName)
 		if err != nil {
 			return nil, err
 		}
 		sql = strings.Replace(sql, "FROM "+MO_CATALOG_DB_NAME+".mo_columns col", "FROM "+columns+" col", 1)
-		viewDependency = prepareSchemaRefWithSnapshot(obj, tableDef, nil)
+		viewDependencies = appendPrepareSchemas(dependencies, prepareSchemaRefWithSnapshot(obj, tableDef, nil))
 	}
 
 	var result *Plan
@@ -695,10 +695,8 @@ func buildShowColumns(stmt *tree.ShowColumns, ctx CompilerContext) (*Plan, error
 	if err != nil {
 		return nil, err
 	}
-	if viewDependency != nil {
-		result.GetQuery().CatalogDependencies = appendPrepareSchemas(
-			result.GetQuery().CatalogDependencies, viewDependency)
-	}
+	result.GetQuery().CatalogDependencies = appendPrepareSchemas(
+		result.GetQuery().CatalogDependencies, viewDependencies...)
 	return result, nil
 }
 

@@ -16,12 +16,32 @@ package process
 
 import (
 	"context"
+	"sync/atomic"
 	"testing"
 
 	"github.com/matrixorigin/matrixone/pkg/common/mpool"
 	"github.com/matrixorigin/matrixone/pkg/defines"
 	"github.com/stretchr/testify/require"
 )
+
+func TestNewViewBindingProcessReadsDivByZeroModeAtomically(t *testing.T) {
+	parent := NewTopProcess(t.Context(), mpool.MustNewZero(), nil, nil, nil, nil, nil, nil, nil, nil, nil)
+	defer parent.Free()
+	done := make(chan struct{})
+	go func() {
+		defer close(done)
+		for i := range 1000 {
+			atomic.StoreInt32(&parent.Base.DivByZeroErrorMode, int32(i%2))
+		}
+	}()
+	for range 1000 {
+		child := parent.NewViewBindingProcess(t.Context())
+		mode := atomic.LoadInt32(&child.Base.DivByZeroErrorMode)
+		require.Contains(t, []int32{-1, 0, 1}, mode)
+		child.Free()
+	}
+	<-done
+}
 
 func TestNewViewBindingProcessOwnsContextAndSessionState(t *testing.T) {
 	parentCtx := defines.AttachAccountId(t.Context(), 10)
