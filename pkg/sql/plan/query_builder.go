@@ -4193,46 +4193,73 @@ func (builder *QueryBuilder) buildUnionWithResultLen(
 		}
 
 		if len(tmpArgsType) > 0 {
-			fGet, err := function.GetFunctionByName(builder.GetContext(), "coalesce", tmpArgsType)
-			if err != nil {
-				return 0, moerr.NewParseErrorf(builder.GetContext(), "the %d column cann't cast to a same type", columnIdx)
-			}
-			argsCastType, _ := fGet.ShouldDoImplicitTypeCast()
-
-			if len(argsCastType) > 0 && int(argsCastType[0].Oid) == int(types.T_datetime) {
-				for i := 0; i < len(argsCastType); i++ {
-					argsCastType[i].Scale = 0
-				}
-			}
 			var targetType plan.Type
 			var targetArgType types.Type
-			if len(argsCastType) == 0 {
-				targetArgType = tmpArgsType[0]
-				// if string union string, different length may cause error.
-				if targetArgType.Oid == types.T_varchar || targetArgType.Oid == types.T_char {
-					for _, typ := range tmpArgsType {
-						if targetArgType.Width < typ.Width {
-							targetArgType.Width = typ.Width
-						}
+			if pureCharType, ok := setOperationPureCharCommonType(tmpArgsType); ok {
+				targetArgType = pureCharType
+			} else {
+				fGet, err := function.GetFunctionByName(builder.GetContext(), "coalesce", tmpArgsType)
+				if err != nil {
+					return 0, moerr.NewParseErrorf(builder.GetContext(), "the %d column cann't cast to a same type", columnIdx)
+				}
+				argsCastType, _ := fGet.ShouldDoImplicitTypeCast()
+
+				if len(argsCastType) > 0 && int(argsCastType[0].Oid) == int(types.T_datetime) {
+					for i := 0; i < len(argsCastType); i++ {
+						argsCastType[i].Scale = 0
 					}
 				}
-			} else {
-				targetArgType = argsCastType[0]
+				if len(argsCastType) == 0 {
+					targetArgType = tmpArgsType[0]
+					// if string union string, different length may cause error.
+					if targetArgType.Oid == types.T_varchar || targetArgType.Oid == types.T_char {
+						for _, typ := range tmpArgsType {
+							if targetArgType.Width < typ.Width {
+								targetArgType.Width = typ.Width
+							}
+						}
+					}
+				} else {
+					targetArgType = argsCastType[0]
+				}
 			}
-			if targetArgType.Oid == types.T_varchar || targetArgType.Oid == types.T_text {
-				hasChar, hasVariableString, hasPromotedChar := false, false, false
+			allCharInputs := len(tmpArgsType) > 0
+			for _, typ := range tmpArgsType {
+				if typ.Oid != types.T_char {
+					allCharInputs = false
+					break
+				}
+			}
+			if allCharInputs &&
+				(targetArgType.Oid == types.T_varchar || targetArgType.Oid == types.T_text) {
+				// The common-type resolver may promote CHAR-only inputs to
+				// VARCHAR for ordinary value-selecting functions. A set operation
+				// must retain the fixed-width CHAR contract so PAD_CHAR_TO_FULL_LENGTH
+				// pads the visible representative to the common width as well as
+				// comparing the branches in the right equality domain.
+				for _, typ := range tmpArgsType {
+					if typ.Width > targetArgType.Width {
+						targetArgType.Width = typ.Width
+					}
+				}
+				targetArgType.Oid = types.T_char
+			}
+			if targetArgType.Oid == types.T_char ||
+				targetArgType.Oid == types.T_varchar || targetArgType.Oid == types.T_text {
+				hasChar, hasPromotedChar := false, false
 				for _, typ := range tmpArgsType {
 					switch typ.Oid {
 					case types.T_char:
 						hasChar = true
-					case types.T_varchar, types.T_text:
-						hasVariableString = true
 					}
 				}
 				for branchIdx := range setBranchPadSpaceProvenance {
 					hasPromotedChar = hasPromotedChar || setBranchPadSpaceProvenance[branchIdx][columnIdx]
 				}
-				setOperationKeyRequired[columnIdx] = hasPromotedChar || hasChar && hasVariableString
+				// CHAR equality is PAD SPACE even when every branch remains CHAR.
+				// Keep its physical equality key separate from the visible row so
+				// legacy H8/group hashing cannot compare representation-only padding.
+				setOperationKeyRequired[columnIdx] = hasPromotedChar || hasChar
 			}
 
 			preserveGroupingBinary := distinct && groupingOrderResolve != nil &&
@@ -4255,9 +4282,19 @@ func (builder *QueryBuilder) buildUnionWithResultLen(
 			}
 			targetType = makePlan2Type(&targetArgType)
 
+			preparedDeferredColumn := false
+			if builder.isPrepareStatement {
+				for _, tmpID := range nodes {
+					if preparedNodeOutputContainsParam(builder.qry, tmpID, int32(columnIdx), make(map[[2]int32]struct{})) {
+						preparedDeferredColumn = true
+						break
+					}
+				}
+			}
 			for idx, tmpID := range nodes {
 				if !argsType[idx].Eq(targetArgType) {
 					node := builder.qry.Nodes[tmpID]
+					source := node.ProjectList[columnIdx]
 					if argsType[idx].Oid == types.T_any || setBranchPureNull[idx][columnIdx] {
 						node.ProjectList[columnIdx].Typ = targetType
 					} else if targetArgType.Oid == types.T_char {
@@ -4272,6 +4309,23 @@ func (builder *QueryBuilder) buildUnionWithResultLen(
 						if err != nil {
 							return 0, err
 						}
+					}
+					if preparedDeferredColumn && targetArgType.Oid.IsMySQLString() &&
+						preparedNumericCommonOperandType(argsType[idx].Oid) {
+						attachPreparedRuntimeParamSource(node.ProjectList[columnIdx], DeepCopyExpr(source))
+						metadata := ensurePreparedNumericMetadata(node.ProjectList[columnIdx])
+						metadata.ProvisionalResultPeer = true
+						metadata.ProvisionalResultPeerTypeId = source.Typ.Id
+						metadata.ProvisionalResultPeerWidth = source.Typ.Width
+						metadata.ProvisionalResultPeerScale = source.Typ.Scale
+					}
+				}
+				if preparedDeferredColumn && preparedExprContainsParam(builder.qry.Nodes[tmpID].ProjectList[columnIdx]) {
+					metadata := ensurePreparedNumericMetadata(builder.qry.Nodes[tmpID].ProjectList[columnIdx])
+					metadata.Fallback = true
+					metadata.ParamPos = -1
+					if pos, ok := firstPlanParamPosition(builder.qry.Nodes[tmpID].ProjectList[columnIdx]); ok {
+						metadata.ParamPos = pos
 					}
 				}
 			}
@@ -4322,7 +4376,7 @@ func (builder *QueryBuilder) buildUnionWithResultLen(
 		var keyList []*plan.Expr
 		var err error
 		switch nodeType {
-		case plan.Node_UNION, plan.Node_INTERSECT, plan.Node_INTERSECT_ALL, plan.Node_MINUS:
+		case plan.Node_UNION, plan.Node_INTERSECT, plan.Node_INTERSECT_ALL, plan.Node_MINUS, plan.Node_MINUS_ALL:
 			keyList, err = getSetOperationKeyList(projectList)
 			if err != nil {
 				return 0, err
@@ -9938,7 +9992,8 @@ func (builder *QueryBuilder) bindValues(
 			Name:  colName,
 		}
 
-		notNullable := true
+		columnExprs := make([]*plan.Expr, rowCount)
+		pureNulls := make([]bool, rowCount)
 		for j := 0; j < rowCount; j++ {
 			var planExpr *plan.Expr
 			if i < len(ctx.numericProjectionTypes) &&
@@ -9952,12 +10007,15 @@ func (builder *QueryBuilder) bindValues(
 				return
 			}
 
-			// A VALUES column is NOT NULL only when every row proves it.
-			// Copying the last row's flag makes grouping and null filters drop
-			// earlier NULLs even though the value vector still contains them.
-			notNullable = notNullable && planExpr.Typ.NotNullable
-			tableDef.Cols[i].Typ = planExpr.Typ
-			tableDef.Cols[i].Typ.NotNullable = notNullable
+			columnExprs[j] = planExpr
+			pureNulls[j] = isNullAstExpr(unwrapParenExpr(valuesClause.Rows[j][i]))
+		}
+
+		tableDef.Cols[i].Typ, err = builder.coerceValuesColumnToCommonType(columnExprs, pureNulls, i)
+		if err != nil {
+			return
+		}
+		for _, planExpr := range columnExprs {
 			rowSetData.Cols[i].Data = append(rowSetData.Cols[i].Data, &plan.RowsetExpr{
 				Expr: planExpr,
 			})
@@ -9975,6 +10033,125 @@ func (builder *QueryBuilder) bindValues(
 
 	err = builder.addBinding(nodeID, tree.AliasClause{Alias: "_valuescan"}, ctx)
 	return
+}
+
+// coerceValuesColumnToCommonType makes one VALUES column independent of row
+// order. VALUE_SCAN materializes one vector per column, so every row expression
+// must use the same complete type, including DECIMAL width and scale.
+func (builder *QueryBuilder) coerceValuesColumnToCommonType(
+	exprs []*plan.Expr,
+	pureNulls []bool,
+	columnIdx int,
+) (plan.Type, error) {
+	hasDecimal := false
+	hasPadSpace := false
+	allPureNull := len(exprs) > 0
+	for i, expr := range exprs {
+		pureNull := i < len(pureNulls) && pureNulls[i]
+		allPureNull = allPureNull && pureNull
+		if pureNull || expr == nil {
+			continue
+		}
+		hasDecimal = hasDecimal || types.T(expr.Typ.Id).IsDecimal()
+		hasPadSpace = hasPadSpace || types.T(expr.Typ.Id) == types.T_char || hasPadSpaceStringProvenance(expr)
+	}
+
+	commonInputs := make([]types.Type, 0, len(exprs))
+	for i, expr := range exprs {
+		if expr == nil || i < len(pureNulls) && pureNulls[i] {
+			continue
+		}
+		typ := makeTypeByPlan2Expr(expr)
+		if typ.Oid == types.T_any {
+			continue
+		}
+		if hasDecimal {
+			if exact, ok := setOperationIntegerLiteralDecimalType(expr); ok {
+				typ = exact
+			}
+		}
+		commonInputs = append(commonInputs, typ)
+	}
+
+	var commonType types.Type
+	switch {
+	case len(commonInputs) > 0:
+		if pureCharType, ok := setOperationPureCharCommonType(commonInputs); ok {
+			commonType = pureCharType
+		} else {
+			resolved, err := function.GetFunctionByName(builder.GetContext(), "coalesce", commonInputs)
+			if err != nil {
+				return plan.Type{}, moerr.NewParseErrorf(
+					builder.GetContext(), "the %d column cann't cast to a same type", columnIdx)
+			}
+			castTypes, _ := resolved.ShouldDoImplicitTypeCast()
+			if len(castTypes) > 0 {
+				commonType = castTypes[0]
+			} else {
+				commonType = commonInputs[0]
+				if commonType.Oid == types.T_varchar || commonType.Oid == types.T_char {
+					for _, typ := range commonInputs[1:] {
+						if typ.Width > commonType.Width {
+							commonType.Width = typ.Width
+						}
+					}
+				}
+			}
+		}
+	case allPureNull:
+		commonType = types.T_text.ToType()
+	default:
+		// Keep unresolved parameter-only columns in their existing domain. The
+		// prepared-plan specialization pass will assign their runtime type.
+		for i, expr := range exprs {
+			if expr != nil && !(i < len(pureNulls) && pureNulls[i]) {
+				commonType = makeTypeByPlan2Expr(expr)
+				break
+			}
+		}
+	}
+
+	commonPlanType := makePlan2Type(&commonType)
+	// Physical types do not carry CHAR-derived comparison provenance. Retain
+	// it on the column so comparisons and DISTINCT use the PAD SPACE domain.
+	if commonType.Oid == types.T_varchar || commonType.Oid == types.T_text {
+		commonPlanType.PadSpace = hasPadSpace
+	}
+	commonPlanType.NotNullable = len(exprs) > 0
+	for i, expr := range exprs {
+		pureNull := i < len(pureNulls) && pureNulls[i]
+		if expr == nil || pureNull || !expr.Typ.NotNullable {
+			commonPlanType.NotNullable = false
+		}
+	}
+
+	for i, expr := range exprs {
+		if expr == nil {
+			continue
+		}
+		pureNull := i < len(pureNulls) && pureNulls[i]
+		sourceType := makeTypeByPlan2Expr(expr)
+		if pureNull || sourceType.Oid == types.T_any {
+			expr.Typ = commonPlanType
+			expr.Typ.NotNullable = false
+			continue
+		}
+		if sourceType.Eq(commonType) {
+			continue
+		}
+
+		var err error
+		if commonType.Oid == types.T_char {
+			exprs[i], err = appendSetOperationCastBeforeExpr(builder.GetContext(), expr, commonPlanType)
+		} else {
+			exprs[i], err = appendCastBeforeExpr(builder.GetContext(), expr, commonPlanType)
+		}
+		if err != nil {
+			return plan.Type{}, err
+		}
+	}
+
+	return commonPlanType, nil
 }
 
 func (builder *QueryBuilder) appendWhereNode(
