@@ -57,6 +57,32 @@ func TestTopNVectorAppliesDistanceRangeBeforeHeap(t *testing.T) {
 	require.Equal(t, uint64(5), top.Stats.VectorRowsScored)
 }
 
+// TestTopNVectorL1BoundComparesInPublicFloat32Domain pins the #29040 storage-domain fix: for non-L2
+// metrics the storage gate is the FINAL predicate (no bound widening, no exact post-filter), so it
+// must compare in the same float32 domain the public scalar distance exposes. For vecf64 L1
+// [1.00000001] vs [0], the public l1_distance rounds to 1, so `<= 1` is TRUE and row 0 must be kept;
+// a raw float64 comparison (1.00000001 > 1) would drop it.
+func TestTopNVectorL1BoundComparesInPublicFloat32Domain(t *testing.T) {
+	mp := mpool.MustNewZero()
+	defer mpool.DeleteMPool(mp)
+	entries := vector.NewVec(types.New(types.T_array_float64, 1, 0))
+	defer entries.Free(mp)
+	require.NoError(t, vector.AppendArray(entries, []float64{1.00000001}, false, mp))
+
+	top := &IndexReaderTopOp{
+		Typ:            types.T_array_float64,
+		MetricType:     metric.Metric_L1Distance,
+		NumVec:         types.ArrayToBytes([]float64{0}),
+		Limit:          10,
+		UpperBoundType: plan.BoundType_INCLUSIVE,
+		UpperBound:     1,
+	}
+	rows, distances, err := TopNVector(context.Background(), nil, entries, top)
+	require.NoError(t, err)
+	require.Equal(t, []int64{0}, rows, "row whose public l1_distance (1) satisfies `<= 1` must be kept")
+	require.Equal(t, []float64{1}, distances, "the gate/heap distance is in the public float32 domain")
+}
+
 func TestTopNVectorNaNRangeSelectsNothing(t *testing.T) {
 	mp := mpool.MustNewZero()
 	defer mpool.DeleteMPool(mp)

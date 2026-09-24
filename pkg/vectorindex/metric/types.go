@@ -218,9 +218,10 @@ func MaxFloat[T types.RealNumbers]() T {
 }
 
 // DistanceTransformHnsw converts a raw usearch distance to the value MO's SQL distance
-// function named by the QUERY returns, so an index-served score and a brute-force score
-// are the same number. Every conversion is monotonic and the caller applies it after the
-// result heap is ordered, so ranking is unaffected.
+// function named by the QUERY returns, so an index-served score and the scalar distance
+// agree in the float32 domain both live in (see RoundDistanceToElemDomain for why that is
+// float32-domain agreement, not bitwise equality). Every conversion is monotonic and the
+// caller applies it after the result heap is ordered, so ranking is unaffected.
 //
 // usearch is the only backend needing this HERE: the Go CPU kernels already return MO's
 // convention (InnerProduct returns -a·b), and cuVS output is negated inside cgo/cuvs
@@ -236,18 +237,85 @@ func MaxFloat[T types.RealNumbers]() T {
 func DistanceTransformHnsw(dist float64, origMetricType MetricType, metricType usearch.Metric) float64 {
 	if origMetricType == Metric_L2Distance && metricType == usearch.L2sq {
 		// metric is l2sq but origin is l2_distance
-		return math.Sqrt(dist)
+		return RoundDistanceToElemDomain(math.Sqrt(dist))
 	}
 	if metricType == usearch.InnerProduct {
-		return dist - 1
+		return RoundDistanceToElemDomain(dist - 1)
 	}
-	return dist
+	return RoundDistanceToElemDomain(dist)
 }
 
 func DistanceTransformIvfflat(dist float64, origMetricType, metricType MetricType) float64 {
 	if origMetricType == Metric_L2Distance && metricType == Metric_L2sqDistance {
 		// metric is l2sq but origin is l2_distance
-		return math.Sqrt(dist)
+		return RoundDistanceToElemDomain(math.Sqrt(dist))
 	}
-	return dist
+	if origMetricType == Metric_L2sqDistance {
+		// l2_distance_sq is the one distance NOT rounded here, because its scalar twin is not
+		// rounded either: moarray.L2DistanceSq returns the raw float64 square on purpose, since
+		// IVF reuses l2_distance_sq as its own squared intermediate. Rounding only this side
+		// splits them -- a vecf64 [3.1] gives raw 9.6100000000000012 vs float32 9.6099996566772461,
+		// so `l2_distance_sq(v,'[0]') < 9.61` matched under an ivfflat index and not without it.
+		return dist
+	}
+	return RoundDistanceToElemDomain(dist)
+}
+
+// RoundDistanceToElemDomain rounds a distance into the float32 domain MO's vector distance functions
+// use. usearch/cuvs return distances in float32 (usearch.h: typedef float usearch_distance_t), and
+// the scalar l2_distance / l2_distance_sq / inner_product / cosine_distance likewise deliver a
+// float32-precision value for every supported base type (float32 and the narrow bf16/f16/int8/uint8,
+// computed via float32; cuvs has no float64 vectors at all). Standardizing every path on this one
+// domain brings an index-served distance and the scalar one into the same precision, so they agree
+// in the float32 domain and neither a projected value nor a pushed range predicate carries a
+// float64 tail the other lacks (#29040 / #29050). It is a trivial float32 round-trip -- the
+// compiler inlines it, so there is no per-row cost.
+//
+// This is float32-domain agreement, NOT bitwise equality. The two paths can still differ by up to
+// one float32 ULP at an exact boundary: usearch accumulates in float32 SIMD whose order varies by
+// CPU/kernel (see vector_index_optype_matrix's round() note), and for a float64 base usearch returns
+// the squared distance already rounded to float32 -- so the index rounds the square before this sqrt
+// while the scalar rounds after. Guaranteeing bitwise equality would require recomputing the served
+// distance from the source vectors (ANN for candidate selection + exact scalar re-rank), which this
+// does not do.
+func RoundDistanceToElemDomain(dist float64) float64 {
+	return float64(float32(dist))
+}
+
+// smallestNormalFloat32 is the smallest positive normal (non-subnormal) float32. Below it, usearch's
+// float32 cosine norm underflows and the score leaves MO's cosine_distance contract.
+const smallestNormalFloat32 = 1.1754943508222875e-38
+
+// CosineVectorL2Norm returns the exact float64 L2 norm of a cosine vector and whether it is usable on
+// the HNSW/usearch cosine index. ok is false when the squared norm underflows the float32 domain
+// usearch computes cosine in -- a zero or subnormal-magnitude vector -- which usearch cannot score to
+// MO's cosine_distance, and HNSW ranks candidates before any output transform. HNSW cosine assumes
+// caller-normalized vectors, so the caller rejects an unusable vector fail-fast (it does NOT modify
+// the vector); the returned norm is for the diagnostic message. Computed once per search on the query
+// vector, not per row (#29082).
+func CosineVectorL2Norm[T types.RealNumbers](v []T) (norm float64, ok bool) {
+	var sumSq float64
+	for _, x := range v {
+		d := float64(x)
+		sumSq += d * d
+	}
+	return math.Sqrt(sumSq), float32(sumSq) >= smallestNormalFloat32
+}
+
+// HasFloat64DistanceOverflow reports whether an index search must fail fast because a float64 base
+// produced a distance the float32 domain cannot represent. Index distances are float32
+// (usearch_distance_t is float32; cuvs is float32-only), so only a float64 base can hold a finite
+// value whose distance overflows and saturates to +/-Inf -- serving that would silently corrupt the
+// value, Top-K order, and any outer predicate (#29040 / #29050). Returns false immediately for any
+// non-float64 base (the common path), so the Inf scan runs only for float64.
+func HasFloat64DistanceOverflow[T types.RealNumbers](distances []float64) bool {
+	if _, ok := any(*new(T)).(float64); !ok {
+		return false
+	}
+	for _, d := range distances {
+		if math.IsInf(d, 0) {
+			return true
+		}
+	}
+	return false
 }
