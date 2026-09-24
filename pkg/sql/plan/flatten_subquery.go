@@ -445,6 +445,14 @@ func (builder *QueryBuilder) flattenSubqueryWithConsumer(
 				"wrapped correlated scalar projection cannot be safely decorrelated")
 		}
 	}
+	// A local CTE owns its aggregate in a separate binding context. Preserve
+	// its original ungrouped shape and selected output before predicate pullup
+	// adds the inner correlation key to the aggregate's GROUP BY.
+	var wrappedAgg *scalarAggregateProjectionPath
+	var wrappedAggCandidate bool
+	if subquery.Typ == plan.SubqueryRef_SCALAR && len(subCtx.aggregates) == 0 {
+		wrappedAgg, wrappedAggCandidate = builder.traceScalarAggregateProjection(subID)
+	}
 
 	subID, preds, err := builder.pullupCorrelatedPredicates(subID, subCtx, subquery.Typ, true)
 	if err != nil {
@@ -455,8 +463,18 @@ func (builder *QueryBuilder) flattenSubqueryWithConsumer(
 	// pullupThroughAgg forces inner expressions into GROUP BY, producing
 	// multiple rows per outer row and breaking SINGLE JOIN semantics.
 	// Fix: bypass the inner AGG, use LEFT JOIN, and re-aggregate on top.
-	if subquery.Typ == plan.SubqueryRef_SCALAR && len(subCtx.aggregates) > 0 && builder.findNonEqPred(preds) {
-		return builder.flattenScalarSubqueryWithNonEqAgg(nodeID, subID, subCtx, preds, ctx)
+	if subquery.Typ == plan.SubqueryRef_SCALAR {
+		nonEq := builder.findNonEqPred(preds)
+		if nonEq && len(subCtx.aggregates) > 0 {
+			return builder.flattenScalarSubqueryWithNonEqAgg(nodeID, subID, subCtx, preds, ctx, nil)
+		}
+		if nonEq && wrappedAggCandidate {
+			if wrappedAgg == nil {
+				return 0, nil, moerr.NewNYI(builder.GetContext(),
+					"non-equality correlated aggregate behind a non-transparent projection")
+			}
+			return builder.flattenScalarSubqueryWithNonEqAgg(nodeID, subID, subCtx, preds, ctx, wrappedAgg)
+		}
 	}
 
 	filterPreds, joinPreds := decreaseDepthAndDispatch(preds)
@@ -489,6 +507,14 @@ func (builder *QueryBuilder) flattenSubqueryWithConsumer(
 		// Preserve the legacy COUNT fallback for plan shapes that cannot use the
 		// more precise empty-input projection reconstruction below.
 		if len(joinPreds) > 0 && builder.findAggrCount(subCtx.aggregates) {
+			rewriteCount = true
+		}
+		// A transparent local CTE owns its COUNT in a separate binding
+		// context. The equality JOIN is already scalar; restore COUNT's
+		// zero-on-empty result without imposing range reaggregation's outer
+		// row-identity and single-binding restrictions.
+		if len(joinPreds) > 0 && wrappedAgg != nil &&
+			builder.findAggrCount([]*plan.Expr{wrappedAgg.aggNode.AggList[wrappedAgg.aggregatePos]}) {
 			rewriteCount = true
 		}
 
@@ -1907,6 +1933,227 @@ func containsNonEqComparison(expr *plan.Expr) bool {
 	return false
 }
 
+// scalarAggregateProjectionPath identifies a scalar output that passes only
+// through projections to an ungrouped aggregate. The output position is
+// resolved before correlation pullup appends grouping keys and projections.
+type scalarAggregateProjectionPath struct {
+	aggNode      *plan.Node
+	projects     []*plan.Node // outermost first
+	aggregatePos int32
+}
+
+type scalarReaggAlias struct {
+	ref      [2]int32
+	groupPos int32
+}
+
+type scalarOuterOutput struct {
+	ref     [2]int32
+	typ     plan.Type
+	aliases [][2]int32
+}
+
+// scalarProjectionAliases records only pure column forwarding through a
+// PROJECT chain. Later projection cleanup may use any of these column tags
+// for the same value.
+func (builder *QueryBuilder) scalarProjectionAliases(childID int32, expr *plan.Expr) [][2]int32 {
+	var aliases [][2]int32
+	for i := 0; i < len(builder.qry.Nodes); i++ {
+		col := expr.GetCol()
+		if col == nil || childID < 0 || int(childID) >= len(builder.qry.Nodes) {
+			break
+		}
+		child := builder.qry.Nodes[childID]
+		switch child.NodeType {
+		case plan.Node_PROJECT:
+			if len(child.BindingTags) != 1 || col.RelPos != child.BindingTags[0] ||
+				col.ColPos < 0 || int(col.ColPos) >= len(child.ProjectList) || len(child.Children) != 1 {
+				return aliases
+			}
+			aliases = append(aliases, [2]int32{col.RelPos, col.ColPos})
+			expr = child.ProjectList[col.ColPos]
+			childID = child.Children[0]
+		case plan.Node_AGG:
+			if len(child.BindingTags) >= 2 &&
+				((col.RelPos == child.BindingTags[0] && col.ColPos >= 0 && int(col.ColPos) < len(child.GroupBy)) ||
+					(col.RelPos == child.BindingTags[1] && col.ColPos >= 0 && int(col.ColPos) < len(child.AggList))) {
+				aliases = append(aliases, [2]int32{col.RelPos, col.ColPos})
+			}
+			return aliases
+		default:
+			return aliases
+		}
+	}
+	return aliases
+}
+
+// collectScalarOuterOutputs walks only output boundaries. Descending through
+// an AGG or PROJECT would admit columns that the next JOIN cannot read.
+func (builder *QueryBuilder) collectScalarOuterOutputs(nodeID, outerTag, baseCols int32, ctx *BindContext) ([]scalarOuterOutput, bool) {
+	var outputs []scalarOuterOutput
+	seen := make(map[[2]int32]bool)
+	neededByProjection := make(map[[2]int32]int)
+	for _, expr := range ctx.projects {
+		increaseRefCnt(expr, 1, neededByProjection)
+	}
+	for _, expr := range ctx.results {
+		increaseRefCnt(expr, 1, neededByProjection)
+	}
+	add := func(ref [2]int32, typ plan.Type, aliases ...[2]int32) {
+		if !seen[ref] {
+			seen[ref] = true
+			outputs = append(outputs, scalarOuterOutput{ref: ref, typ: typ, aliases: aliases})
+		}
+	}
+	var visit func(int32) bool
+	visit = func(id int32) bool {
+		if id < 0 || int(id) >= len(builder.qry.Nodes) {
+			return false
+		}
+		node := builder.qry.Nodes[id]
+		switch node.NodeType {
+		case plan.Node_TABLE_SCAN, plan.Node_MATERIAL_SCAN:
+			if len(node.BindingTags) != 1 || node.TableDef == nil {
+				return false
+			}
+			for i, col := range node.TableDef.Cols {
+				add([2]int32{node.BindingTags[0], int32(i)}, col.Typ)
+			}
+			return true
+		case plan.Node_PROJECT:
+			if len(node.BindingTags) != 1 || len(node.Children) != 1 {
+				return false
+			}
+			for i, expr := range node.ProjectList {
+				add([2]int32{node.BindingTags[0], int32(i)}, expr.Typ,
+					builder.scalarProjectionAliases(node.Children[0], expr)...)
+			}
+			return true
+		case plan.Node_AGG:
+			if len(node.BindingTags) < 2 {
+				return false
+			}
+			groupCount := len(node.GroupBy)
+			if aliases, synthetic := builder.scalarReaggAliases[id]; synthetic {
+				if node.BindingTags[0] != outerTag || groupCount < int(baseCols) {
+					return false
+				}
+				groupCount = int(baseCols)
+				for i := 0; i < groupCount; i++ {
+					add([2]int32{outerTag, int32(i)}, node.GroupBy[i].Typ)
+				}
+				for _, alias := range aliases {
+					if alias.groupPos < 0 || int(alias.groupPos) >= len(node.GroupBy) {
+						return false
+					}
+					add(alias.ref, node.GroupBy[alias.groupPos].Typ)
+				}
+			} else {
+				for i, expr := range node.GroupBy {
+					add([2]int32{node.BindingTags[0], int32(i)}, expr.Typ)
+				}
+			}
+			for i, expr := range node.AggList {
+				add([2]int32{node.BindingTags[1], int32(i)}, expr.Typ)
+			}
+			return true
+		case plan.Node_JOIN:
+			if len(node.Children) != 2 || !visit(node.Children[0]) {
+				return false
+			}
+			switch node.JoinType {
+			case plan.Node_LEFT, plan.Node_SINGLE, plan.Node_INNER:
+				return visit(node.Children[1])
+			case plan.Node_SEMI, plan.Node_ANTI:
+				return true
+			case plan.Node_MARK:
+				if len(node.BindingTags) != 1 {
+					return false
+				}
+				marker := [2]int32{node.BindingTags[0], 0}
+				if neededByProjection[marker] > 0 {
+					add(marker, plan.Type{Id: int32(types.T_bool)})
+				}
+				return true
+			default:
+				return false
+			}
+		case plan.Node_FILTER, plan.Node_SORT:
+			return len(node.Children) == 1 && visit(node.Children[0])
+		default:
+			return false
+		}
+	}
+	if !visit(nodeID) {
+		return nil, false
+	}
+	for i := int32(0); i < baseCols; i++ {
+		if !seen[[2]int32{outerTag, i}] {
+			return nil, false
+		}
+	}
+	return outputs, true
+}
+
+func (builder *QueryBuilder) traceScalarAggregateProjection(subID int32) (*scalarAggregateProjectionPath, bool) {
+	// A non-transparent unary wrapper can still hide an aggregate. Return the
+	// candidate bit so the non-equality path rejects it instead of producing
+	// one scalar row for every artificial correlation group.
+	candidate := builder.findAggNodeBelow(subID) != nil
+	if !candidate {
+		return nil, false
+	}
+	path := &scalarAggregateProjectionPath{}
+	outputPos := int32(0)
+	for {
+		node := builder.qry.Nodes[subID]
+		if node.NodeType == plan.Node_AGG {
+			if len(node.GroupBy) != 0 || len(node.Children) != 1 || len(node.BindingTags) < 2 ||
+				outputPos < 0 || int(outputPos) >= len(node.AggList) {
+				return nil, true
+			}
+			path.aggNode = node
+			path.aggregatePos = outputPos
+			return path, true
+		}
+		if node.NodeType != plan.Node_PROJECT || len(node.Children) != 1 ||
+			len(node.BindingTags) != 1 || node.Limit != nil || node.Offset != nil ||
+			len(node.OrderBy) != 0 || node.RankOption != nil ||
+			outputPos < 0 || int(outputPos) >= len(node.ProjectList) {
+			return nil, true
+		}
+		child := builder.qry.Nodes[node.Children[0]]
+		selected := node.ProjectList[outputPos].GetCol()
+		if selected == nil || selected.ColPos < 0 ||
+			(child.NodeType == plan.Node_AGG && (len(child.BindingTags) < 2 || selected.RelPos != child.BindingTags[1])) ||
+			(child.NodeType == plan.Node_PROJECT && (len(child.BindingTags) != 1 || selected.RelPos != child.BindingTags[0])) {
+			return nil, true
+		}
+		path.projects = append(path.projects, node)
+		outputPos = selected.ColPos
+		subID = node.Children[0]
+	}
+}
+
+// A raw inner column becomes NULL on the unmatched side of a LEFT JOIN, so
+// these aggregates see the same empty input they saw before decorrelation.
+// COUNT(*) is handled separately by counting the reachable inner Row_ID.
+func scalarWrappedAggregateArgIsNullOnNoMatch(agg *plan.Expr) bool {
+	f := agg.GetF()
+	if f == nil || f.Func == nil {
+		return false
+	}
+	if f.Func.ObjName == "starcount" {
+		return true
+	}
+	switch f.Func.ObjName {
+	case "min", "max", "sum", "count", "avg":
+		return len(f.Args) == 1 && f.Args[0].GetCol() != nil
+	default:
+		return false
+	}
+}
+
 // flattenScalarSubqueryWithNonEqAgg handles scalar subqueries that have
 // aggregation with non-equality correlated predicates.
 //
@@ -1921,9 +2168,13 @@ func containsNonEqComparison(expr *plan.Expr) bool {
 // producing the correct result.
 func (builder *QueryBuilder) flattenScalarSubqueryWithNonEqAgg(
 	nodeID, subID int32, subCtx *BindContext, preds []*plan.Expr, ctx *BindContext,
+	wrappedAgg *scalarAggregateProjectionPath,
 ) (int32, *plan.Expr, error) {
 	// Find the AGG node in the subquery plan
 	aggNode := builder.findAggNodeBelow(subID)
+	if wrappedAgg != nil {
+		aggNode = wrappedAgg.aggNode
+	}
 	if aggNode == nil {
 		return 0, nil, moerr.NewNYIf(builder.GetContext(),
 			"aggregation with non equal predicate in scalar subquery will be supported in future version")
@@ -1943,12 +2194,13 @@ func (builder *QueryBuilder) flattenScalarSubqueryWithNonEqAgg(
 	// inspect aggNode.GroupBy here.  Instead, use subCtx.groups, which holds
 	// only the GROUP BY explicitly written by the user and is not mutated by
 	// the pullup.
-	if len(aggNode.BindingTags) == 0 || len(aggNode.Children) != 1 || len(subCtx.groups) > 0 {
+	if len(aggNode.BindingTags) == 0 || len(aggNode.Children) != 1 ||
+		(wrappedAgg == nil && len(subCtx.groups) > 0) {
 		return 0, nil, moerr.NewNYIf(builder.GetContext(),
 			"aggregation with non equal predicate in scalar subquery will be supported in future version")
 	}
 	subRoot := builder.qry.Nodes[subID]
-	if subRoot != aggNode {
+	if wrappedAgg == nil && subRoot != aggNode {
 		if subRoot.NodeType != plan.Node_PROJECT ||
 			len(subRoot.Children) != 1 ||
 			builder.qry.Nodes[subRoot.Children[0]] != aggNode ||
@@ -1971,11 +2223,15 @@ func (builder *QueryBuilder) flattenScalarSubqueryWithNonEqAgg(
 	// pullupThroughProj may have rewritten predicates to reference the
 	// PROJECT tag.  Unwind PROJECT first, then AGG, so that predicates
 	// end up referencing columns from the scan below AGG.
-	projNode := subRoot
-	if projNode.NodeType == plan.Node_PROJECT && len(projNode.BindingTags) > 0 {
-		projTag := projNode.BindingTags[0]
+	if wrappedAgg != nil {
+		for _, projNode := range wrappedAgg.projects {
+			for i, pred := range preds {
+				preds[i] = replaceGroupTagRefs(pred, projNode.BindingTags[0], projNode.ProjectList)
+			}
+		}
+	} else if subRoot.NodeType == plan.Node_PROJECT && len(subRoot.BindingTags) > 0 {
 		for i, pred := range preds {
-			preds[i] = replaceGroupTagRefs(pred, projTag, projNode.ProjectList)
+			preds[i] = replaceGroupTagRefs(pred, subRoot.BindingTags[0], subRoot.ProjectList)
 		}
 	}
 
@@ -2018,11 +2274,38 @@ func (builder *QueryBuilder) flattenScalarSubqueryWithNonEqAgg(
 		return 0, nil, moerr.NewNYIf(builder.GetContext(),
 			"aggregation with non equal predicate in scalar subquery on derived tables will be supported in future version")
 	}
+	outerOutputs, ok := builder.collectScalarOuterOutputs(nodeID, outerBinding.tag, int32(len(outerBinding.cols)), ctx)
+	if !ok {
+		return 0, nil, moerr.NewNYI(builder.GetContext(),
+			"correlated aggregate on an outer input without preserved row columns")
+	}
 	outerGroupBy := make([]*plan.Expr, 0, len(outerBinding.cols))
 	for i := range outerBinding.cols {
 		outerGroupBy = append(outerGroupBy, &plan.Expr{
 			Typ:  *outerBinding.types[i],
 			Expr: &plan.Expr_Col{Col: &plan.ColRef{RelPos: outerBinding.tag, ColPos: int32(i)}},
+		})
+	}
+	passthrough := make([]scalarReaggAlias, 0, len(outerOutputs))
+	aliased := make(map[[2]int32]bool)
+	for _, output := range outerOutputs {
+		if output.ref[0] == outerBinding.tag && output.ref[1] < int32(len(outerBinding.cols)) {
+			continue
+		}
+		groupPos := int32(len(outerGroupBy))
+		passthrough = append(passthrough, scalarReaggAlias{ref: output.ref, groupPos: groupPos})
+		aliased[output.ref] = true
+		for _, alias := range output.aliases {
+			if !aliased[alias] {
+				passthrough = append(passthrough, scalarReaggAlias{ref: alias, groupPos: groupPos})
+				aliased[alias] = true
+			}
+		}
+		outerGroupBy = append(outerGroupBy, &plan.Expr{
+			Typ: output.typ,
+			Expr: &plan.Expr_Col{Col: &plan.ColRef{
+				RelPos: output.ref[0], ColPos: output.ref[1],
+			}},
 		})
 	}
 	// Reuse the outer binding tag as groupTag so outer column refs
@@ -2031,9 +2314,17 @@ func (builder *QueryBuilder) flattenScalarSubqueryWithNonEqAgg(
 
 	// Build the aggregate expressions — deep copy so we don't mutate the
 	// original AGG node.
-	aggExprs := make([]*plan.Expr, len(aggNode.AggList))
-	for i, agg := range aggNode.AggList {
-		aggExprs[i] = DeepCopyExpr(agg)
+	selectedAggPos := int32(0)
+	if wrappedAgg != nil {
+		selectedAggPos = wrappedAgg.aggregatePos
+	}
+	if int(selectedAggPos) >= len(aggNode.AggList) {
+		return 0, nil, moerr.NewNYI(builder.GetContext(), "correlated aggregate output is unavailable")
+	}
+	aggExprs := []*plan.Expr{DeepCopyExpr(aggNode.AggList[selectedAggPos])}
+	if wrappedAgg != nil && !scalarWrappedAggregateArgIsNullOnNoMatch(aggExprs[0]) {
+		return 0, nil, moerr.NewNYI(builder.GetContext(),
+			"non-equality correlated aggregate argument cannot be safely evaluated on an unmatched row")
 	}
 
 	// LEFT JOIN produces a NULL row for non-matching outer rows.
@@ -2055,7 +2346,7 @@ func (builder *QueryBuilder) flattenScalarSubqueryWithNonEqAgg(
 		}
 	}
 	if hasStarCount {
-		markerCol := builder.findRowIDColRef(innerID)
+		markerCol := builder.findReachableRowIDColRef(innerID)
 		if markerCol == nil {
 			return 0, nil, moerr.NewNYIf(builder.GetContext(),
 				"count(*) with non equal predicate in scalar subquery on this inner shape will be supported in future version")
@@ -2097,6 +2388,10 @@ func (builder *QueryBuilder) flattenScalarSubqueryWithNonEqAgg(
 		BindingTags: []int32{reuseGroupTag, newAggTag},
 		SpillMem:    builder.aggSpillMem,
 	}, ctx)
+	if builder.scalarReaggAliases == nil {
+		builder.scalarReaggAliases = make(map[int32][]scalarReaggAlias)
+	}
+	builder.scalarReaggAliases[nodeID] = passthrough
 
 	retExpr := &plan.Expr{
 		Typ:  subCtx.results[0].Typ,
