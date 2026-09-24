@@ -289,6 +289,92 @@ func TestTimestampTemporalResultPaths(t *testing.T) {
 	require.Equal(t, types.DatetimeFromClock(2024, 1, 2, 11, 4, 5, 123456), convertedValue)
 }
 
+func TestTemporalDatetimeResultBranches(t *testing.T) {
+	proc := testutil.NewProcess(t)
+	proc.GetSessionInfo().TimeZone = time.UTC
+	ts, err := types.ParseTimestamp(time.UTC, "2024-01-02 03:04:05.123456", 6)
+	require.NoError(t, err)
+
+	timestampVec := vector.NewVec(types.T_timestamp.ToTypeWithScale(6))
+	intervalVec := vector.NewVec(types.T_int64.ToType())
+	unitVec, err := vector.NewConstFixed(types.T_int64.ToType(), int64(types.Day), 3, proc.Mp())
+	require.NoError(t, err)
+	require.NoError(t, vector.AppendFixedList(timestampVec, []types.Timestamp{ts, ts, ts}, []bool{false, true, false}, proc.Mp()))
+	require.NoError(t, vector.AppendFixedList(intervalVec, []int64{1, 1, math.MaxInt64}, nil, proc.Mp()))
+	result := vector.NewFunctionResultWrapper(types.T_datetime.ToTypeWithScale(6), proc.Mp())
+	t.Cleanup(func() {
+		timestampVec.Free(proc.Mp())
+		intervalVec.Free(proc.Mp())
+		unitVec.Free(proc.Mp())
+		result.Free()
+	})
+
+	require.NoError(t, result.PreExtendAndReset(3))
+	require.NoError(t, TimestampAdd([]*vector.Vector{timestampVec, intervalVec, unitVec}, result, proc, 3, nil))
+	resultVec := result.GetResultVector()
+	require.False(t, resultVec.IsNull(0))
+	require.True(t, resultVec.IsNull(1))
+	require.True(t, resultVec.IsNull(2))
+	got := vector.GenerateFunctionFixedTypeParameter[types.Datetime](resultVec)
+	value, isNull := got.GetValue(0)
+	require.False(t, isNull)
+	require.Equal(t, types.DatetimeFromClock(2024, 1, 3, 3, 4, 5, 123456), value)
+
+	require.NoError(t, result.PreExtendAndReset(3))
+	require.NoError(t, TimestampSub([]*vector.Vector{timestampVec, intervalVec, unitVec}, result, proc, 3, nil))
+	resultVec = result.GetResultVector()
+	require.False(t, resultVec.IsNull(0))
+	require.True(t, resultVec.IsNull(1))
+	require.True(t, resultVec.IsNull(2))
+	got = vector.GenerateFunctionFixedTypeParameter[types.Datetime](resultVec)
+	value, isNull = got.GetValue(0)
+	require.False(t, isNull)
+	require.Equal(t, types.DatetimeFromClock(2024, 1, 1, 3, 4, 5, 123456), value)
+
+	dateVec := vector.NewVec(types.T_datetime.ToTypeWithScale(6))
+	fromVec := vector.NewVec(types.T_varchar.ToType())
+	toVec := vector.NewVec(types.T_varchar.ToType())
+	require.NoError(t, vector.AppendFixedList(dateVec,
+		[]types.Datetime{types.DatetimeFromClock(2024, 1, 2, 3, 4, 5, 123456), types.ZeroDatetime, types.DatetimeFromClock(2024, 1, 2, 3, 4, 5, 123456)}, nil, proc.Mp()))
+	require.NoError(t, vector.AppendStringList(fromVec, []string{"UTC", "UTC", "not-a-timezone"}, nil, proc.Mp()))
+	require.NoError(t, vector.AppendStringList(toVec, []string{"+08:00", "+08:00", "+08:00"}, nil, proc.Mp()))
+	convertResult := vector.NewFunctionResultWrapper(types.T_datetime.ToTypeWithScale(6), proc.Mp())
+	t.Cleanup(func() {
+		dateVec.Free(proc.Mp())
+		fromVec.Free(proc.Mp())
+		toVec.Free(proc.Mp())
+		convertResult.Free()
+	})
+	require.NoError(t, convertResult.PreExtendAndReset(3))
+	require.NoError(t, ConvertTz([]*vector.Vector{dateVec, fromVec, toVec}, convertResult, proc, 3, nil))
+	converted := vector.GenerateFunctionFixedTypeParameter[types.Datetime](convertResult.GetResultVector())
+	convertedValue, isNull := converted.GetValue(0)
+	require.False(t, isNull)
+	require.Equal(t, types.DatetimeFromClock(2024, 1, 2, 11, 4, 5, 123456), convertedValue)
+	require.True(t, convertResult.GetResultVector().IsNull(1))
+	require.True(t, convertResult.GetResultVector().IsNull(2))
+}
+
+func TestDateFormatUsesTemporalLocaleForGenericPatterns(t *testing.T) {
+	proc := testutil.NewProcess(t)
+	proc.SetResolveVariableFunc(func(name string, _, _ bool) (interface{}, error) {
+		if name == "lc_time_names" {
+			return "fr_FR", nil
+		}
+		return "", nil
+	})
+	datetime := types.DatetimeFromClock(2024, 12, 25, 1, 2, 3, 0)
+	caseTest := NewFunctionTestCase(proc,
+		[]FunctionTestInput{
+			NewFunctionTestInput(types.T_datetime.ToType(), []types.Datetime{datetime}, nil),
+			NewFunctionTestConstInput(types.T_varchar.ToType(), []string{"%M %W"}, nil),
+		},
+		NewFunctionTestResult(types.T_varchar.ToType(), false, []string{"décembre mercredi"}, nil),
+		DateFormat)
+	succeeded, info := caseTest.Run()
+	require.True(t, succeeded, info)
+}
+
 func TestTimestampWindowBoundaryLordHoweFold(t *testing.T) {
 	zone, err := time.LoadLocation("Australia/Lord_Howe")
 	require.NoError(t, err)
