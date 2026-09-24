@@ -4102,13 +4102,6 @@ func builtInFromDays(parameters []*vector.Vector, result vector.FunctionResultWr
 		// So FROM_DAYS(N) should reverse this:
 		// DateTimeDiff(intervalUnitDAY, DatetimeEpoch, date) = N - ADZeroDays
 		// date = DatetimeEpoch + (N - ADZeroDays) days
-		// Values before 0001-01-01 use the non-NULL zero-date sentinel.
-		if dayNumber < ADZeroDays {
-			if err := rs.Append(types.ZeroDate, false); err != nil {
-				return err
-			}
-			continue
-		}
 		daysToAdd := dayNumber - ADZeroDays
 		dt, success := types.DatetimeEpoch.AddInterval(daysToAdd, types.Day, types.DateTimeType)
 		if !success {
