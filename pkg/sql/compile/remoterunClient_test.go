@@ -260,6 +260,11 @@ func remoteS3TestOutput(t *testing.T, proc *process.Process, kind remoteS3Output
 }
 
 func TestRemoteS3ReceiveTakeoverBeforeAck(t *testing.T) {
+	oldRuntime := runtime.ServiceRuntime("")
+	runtime.SetupServiceBasedRuntime("", runtime.DefaultRuntime())
+	server := colexec.NewServer("")
+	t.Cleanup(func() { runtime.SetupServiceBasedRuntime("", oldRuntime) })
+
 	for _, path := range []string{"connector", "dispatch", "no-output"} {
 		for _, kind := range []remoteS3Output{remoteS3MultiUpdate, remoteS3Insert, remoteS3Delete} {
 			for _, failTakeover := range []bool{false, true} {
@@ -318,6 +323,7 @@ func TestRemoteS3ReceiveTakeoverBeforeAck(t *testing.T) {
 							require.True(t, msg.(*pipeline.Message).GetBatchAckS3OwnershipRetained())
 							require.Len(t, workspace.owners, 1)
 							require.Equal(t, []string{name}, workspace.owners[0].Names())
+							require.Equal(t, 1, server.UnpublishedS3AdmissionStats().Used)
 							require.Len(t, reg.Ch2, 1, "forward precedes ACK")
 							signal := <-reg.Ch2
 							forwarded, err := signal.Action()
@@ -343,15 +349,18 @@ func TestRemoteS3ReceiveTakeoverBeforeAck(t *testing.T) {
 						require.ErrorContains(t, err, "no-output stream")
 						require.Empty(t, workspace.owners)
 						require.Equal(t, uint64(1), sender.pendingBatchAck)
+						require.Zero(t, server.UnpublishedS3AdmissionStats().Used)
 					} else if failTakeover {
 						require.ErrorContains(t, err, "cannot retain")
 						require.Empty(t, reg.Ch2)
 						require.Equal(t, uint64(1), sender.pendingBatchAck)
+						require.Zero(t, server.UnpublishedS3AdmissionStats().Used)
 					} else {
 						require.True(t, moerr.IsMoErrCode(err, moerr.ErrStreamClosed))
 						require.Zero(t, sender.pendingBatchAck)
 						workspace.owners[0].Accept(name)
 						require.False(t, workspace.owners[0].Pending())
+						require.Zero(t, server.UnpublishedS3AdmissionStats().Used)
 					}
 				})
 			}
