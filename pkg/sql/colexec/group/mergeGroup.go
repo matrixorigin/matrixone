@@ -71,6 +71,7 @@ func (mergeGroup *MergeGroup) Prepare(proc *process.Process) error {
 	// key policy even when the incoming peer is below v79.
 	mergeGroup.ctr.legacyDistinctFloatKeys = false
 	mergeGroup.ctr.timeZone = proc.Base.SessionInfo.TimeZone
+	mergeGroup.ctr.jsonAggOpaqueProtocolVersion = jsonAggregateOpaqueProtocolVersion(proc)
 	mergeGroup.ctr.groupByTypes = nil
 	mergeGroup.ctr.keyNullable = false
 	mergeGroup.ctr.legacyH8CharSemantics = false

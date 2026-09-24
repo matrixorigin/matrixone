@@ -26,6 +26,7 @@ import (
 
 	"github.com/google/uuid"
 	"github.com/matrixorigin/matrixone/pkg/common/mpool"
+	moruntime "github.com/matrixorigin/matrixone/pkg/common/runtime"
 	"github.com/matrixorigin/matrixone/pkg/sql/colexec"
 	"github.com/matrixorigin/matrixone/pkg/sql/colexec/aggexec"
 
@@ -537,6 +538,8 @@ func (ctr *container) newAggregateExecutor(
 		return nil, err
 	}
 	aggexec.ConfigureGroupConcatTimeZone(exec, proc.Base.SessionInfo.TimeZone)
+	aggexec.ConfigureJSONAggregateOpaqueProtocol(
+		exec, jsonAggregateOpaqueProtocolVersion(proc))
 	succeeded := false
 	defer func() {
 		if !succeeded {
@@ -574,6 +577,25 @@ func (ctr *container) newAggregateExecutor(
 	}
 	succeeded = true
 	return exec, nil
+}
+
+func jsonAggregateOpaqueProtocolVersion(proc *process.Process) int64 {
+	if proc == nil {
+		return 0
+	}
+	rt := moruntime.ServiceRuntime(proc.GetService())
+	if rt == nil {
+		return 0
+	}
+	value, ok := rt.GetGlobalVariables(moruntime.MOProtocolVersion)
+	if !ok {
+		return 0
+	}
+	version, ok := value.(int64)
+	if !ok {
+		return 0
+	}
+	return version
 }
 
 func (ctr *container) processAggregateFuncRange(

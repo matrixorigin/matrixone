@@ -129,7 +129,8 @@ const (
 	MORPCVersion91     int64 = 91 // canonical CHAR and JSON HLL_ADD_AGG hash keys
 	MORPCVersion92     int64 = 92 // canonical scalar FLOAT HLL_ADD_AGG hash keys
 	MORPCVersion93     int64 = 93 // session LAST_INSERT_ID connection migration state
-	MORPCLatestVersion       = MORPCVersion93
+	MORPCVersion94     int64 = 94 // JSON aggregate opaque value execution
+	MORPCLatestVersion       = MORPCVersion94
 )
 
 // DefaultLockWaitTimeoutSeconds is shared by the frontend default and by

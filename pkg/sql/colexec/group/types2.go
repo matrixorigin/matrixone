@@ -285,8 +285,9 @@ type container struct {
 	// legacyDistinctFloatKeys is frozen before aggregate groups are admitted.
 	// Pre-v79 remote producers keep the compatibility FLOAT key policy, which
 	// preserves every non-zero bit pattern in the fixed index and wire output.
-	legacyDistinctFloatKeys bool
-	timeZone                *time.Location
+	legacyDistinctFloatKeys      bool
+	timeZone                     *time.Location
+	jsonAggOpaqueProtocolVersion int64
 
 	// spill, agglist to load spilled data.
 	spillMem        int64

@@ -22,6 +22,7 @@ import (
 
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
 	"github.com/matrixorigin/matrixone/pkg/common/mpool"
+	moruntime "github.com/matrixorigin/matrixone/pkg/common/runtime"
 	"github.com/matrixorigin/matrixone/pkg/container/batch"
 	"github.com/matrixorigin/matrixone/pkg/container/types"
 	"github.com/matrixorigin/matrixone/pkg/container/vector"
@@ -565,6 +566,8 @@ func makeAggExecutors(timeWin *TimeWin, proc *process.Process, growFirstGroup bo
 			return nil, err
 		}
 		aggexec.ConfigureGroupConcatTimeZone(aggs[i], proc.Base.SessionInfo.TimeZone)
+		aggexec.ConfigureJSONAggregateOpaqueProtocol(
+			aggs[i], jsonAggregateOpaqueProtocolVersion(proc))
 		if config := expression.GetExtraInformation(); config != nil {
 			if err = aggs[i].SetExtraInformation(config, 0); err != nil {
 				return nil, err
@@ -577,6 +580,25 @@ func makeAggExecutors(timeWin *TimeWin, proc *process.Process, growFirstGroup bo
 		}
 	}
 	return aggs, nil
+}
+
+func jsonAggregateOpaqueProtocolVersion(proc *process.Process) int64 {
+	if proc == nil {
+		return 0
+	}
+	rt := moruntime.ServiceRuntime(proc.GetService())
+	if rt == nil {
+		return 0
+	}
+	value, ok := rt.GetGlobalVariables(moruntime.MOProtocolVersion)
+	if !ok {
+		return 0
+	}
+	version, ok := value.(int64)
+	if !ok {
+		return 0
+	}
+	return version
 }
 
 func newTsExpr(typ plan.Type, ctx context.Context) (*plan.Expr, error) {

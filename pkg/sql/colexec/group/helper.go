@@ -1896,6 +1896,8 @@ func (ctr *container) makeAggListWithAllocation(
 			}
 		}
 		aggexec.ConfigureGroupConcatTimeZone(aggList[i], ctr.timeZone)
+		aggexec.ConfigureJSONAggregateOpaqueProtocol(
+			aggList[i], ctr.jsonAggOpaqueProtocolVersion)
 		// Preserve the mode used to construct this list. A merge partial's wire
 		// header may be the first authoritative mode before ctr.mtyp is published;
 		// deriving this from ctr.mtyp would configure a grouped median as H0.
@@ -1925,6 +1927,25 @@ func (ctr *container) makeAggListWithAllocation(
 func hllFloatZeroStateSupported(aggID int64) bool {
 	return aggID == aggexec.AggIdOfApproxCount ||
 		aggID == aggexec.AggIdOfApproxCountDistinct
+}
+
+func jsonAggregateOpaqueProtocolVersion(proc *process.Process) int64 {
+	if proc == nil {
+		return 0
+	}
+	rt := moruntime.ServiceRuntime(proc.GetService())
+	if rt == nil {
+		return 0
+	}
+	value, ok := rt.GetGlobalVariables(moruntime.MOProtocolVersion)
+	if !ok {
+		return 0
+	}
+	version, ok := value.(int64)
+	if !ok {
+		return 0
+	}
+	return version
 }
 
 func hllVectorStateSupported(
