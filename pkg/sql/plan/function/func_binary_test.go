@@ -261,7 +261,7 @@ func TestMakeDateDecimalAndBoundaryInputs(t *testing.T) {
 		NewFunctionTestResult(types.T_date.ToType(), false,
 			[]types.Date{types.ZeroDate, types.ZeroDate, types.DateFromCalendar(1999, 1, 1), types.DateFromCalendar(100, 1, 1)},
 			[]bool{true, true, false, false}), MakeDate).
-		WithSelectList(&FunctionSelectList{AnyNull: true, SelectList: []bool{true, false, false, false}})
+		WithSelectList(&FunctionSelectList{AnyNull: true, SelectList: []bool{false, true, true, true}})
 	succeed, info = tc.Run()
 	require.True(t, succeed, info)
 }
