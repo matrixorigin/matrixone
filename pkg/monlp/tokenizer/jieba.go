@@ -162,6 +162,14 @@ func truncateUTF8(bs []byte, maxLen int) []byte {
 	return bs[:n]
 }
 
+// TruncateToken caps bs at the stored-token byte limit (MAX_TOKEN_SIZE) on a UTF-8 boundary — the
+// same cap the tokenizers apply when indexing (SimpleTokenizer.outputLatin and the jieba emit path).
+// A query token built OUTSIDE the tokenizers (fulltext2's ngramPhraseSlots) must apply it too, or a
+// word longer than the cap looks up the raw string and misses the truncated stored token (#29276).
+func TruncateToken(bs []byte) []byte {
+	return truncateUTF8(bs, MAX_TOKEN_SIZE)
+}
+
 func (t *JiebaTokenizer) Tokenize(input []byte) iter.Seq2[Token, error] {
 	return func(yield func(Token, error) bool) {
 		if t.jieba == nil || len(input) == 0 {
