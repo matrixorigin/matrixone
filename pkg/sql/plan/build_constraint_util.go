@@ -2195,6 +2195,18 @@ func buildValueScan(
 			binder := NewDefaultBinder(builder.GetContext(), nil, nil, sourceType, nil)
 			binder.builder = builder
 			for _, r := range slt.Rows {
+				// Keep legacy implicit TIMESTAMP NULL semantics consistent with
+				// the main INSERT value-scan path. This must run before the
+				// literal fast path, which otherwise materializes a NULL value.
+				if isNullAstExpr(r[i]) && isLegacyImplicitTimestampColumn(builder.compCtx, col) {
+					defExpr, err = getDefaultExpr(builder.GetContext(), col)
+					if err != nil {
+						return nil, err
+					}
+					hasLocalDefaultRefs = hasLocalDefaultRefs || exprHasLocalColumnRef(defExpr)
+					rowsetData.Cols[i].Data = append(rowsetData.Cols[i].Data, &plan.RowsetExpr{Expr: defExpr})
+					continue
+				}
 				if nv, ok := r[i].(*tree.NumVal); ok && builder.isInsertIgnore {
 					expr, handled, err := makeInsertIgnoreMySQLSpecialTypeConstExpr(builder.GetContext(), nv, col.Typ)
 					if err != nil {

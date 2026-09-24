@@ -5466,6 +5466,19 @@ func (builder *QueryBuilder) buildValueScan(
 				funcBinder = defaultFuncBinder
 			}
 			for _, r := range stmt.Rows {
+				// With explicit_defaults_for_timestamp=OFF, an explicit NULL
+				// assignment to the legacy implicit TIMESTAMP column has the same
+				// semantics as DEFAULT. Handle it before the literal fast path,
+				// which otherwise materializes a NULL expression and lets the
+				// NOT NULL assignment cast reject it.
+				if isNullAstExpr(r[i]) && isLegacyImplicitTimestampColumn(builder.compCtx, col) {
+					defExpr, err = getDefaultExpr(builder.GetContext(), col)
+					if err != nil {
+						return 0, nil, err
+					}
+					appendValueExpr(i, defExpr)
+					continue
+				}
 				if nv, ok := r[i].(*tree.NumVal); ok && builder.isInsertIgnore {
 					expr, handled, err := makeInsertIgnoreMySQLSpecialTypeConstExpr(builder.GetContext(), nv, col.Typ)
 					if err != nil {
@@ -5489,15 +5502,6 @@ func (builder *QueryBuilder) buildValueScan(
 
 				if _, ok := r[i].(*tree.DefaultVal); ok {
 					defExpr, err = getDefaultExprForAssignment(builder.GetContext(), col, builder.compCtx.GetProcess(), builder.isInsertIgnore)
-					if err != nil {
-						return 0, nil, err
-					}
-				} else if isNullAstExpr(r[i]) && isLegacyImplicitTimestampColumn(builder.compCtx, col) {
-					// With explicit_defaults_for_timestamp=OFF, an explicit NULL
-					// assignment to the legacy implicit TIMESTAMP column has the same
-					// semantics as DEFAULT: evaluate CURRENT_TIMESTAMP rather than
-					// letting the NOT NULL assignment cast reject it.
-					defExpr, err = getDefaultExpr(builder.GetContext(), col)
 					if err != nil {
 						return 0, nil, err
 					}
