@@ -58,6 +58,77 @@ func TestBooleanCJKTrailingStarKeepsWholeStem(t *testing.T) {
 	}
 }
 
+// #29274 P2: a trailing `*` on a stem that MIXES CJK and a Latin tail (苹果香蕉hell*) built the
+// final Latin slot as an EXACT term (hell), but the index stores the whole Latin token (hello), so
+// matchPhrase never found it and the query returned nothing. The head trigrams stay exact-positional
+// (the divergent-CJK doc must still be excluded) while the FINAL Latin token prefix-matches.
+func TestBooleanCJKLatinTrailingStarPrefix(t *testing.T) {
+	docs := []Doc{
+		{int64(1), []byte("苹果香蕉hello")},      // head + Latin tail hello
+		{int64(2), []byte("苹果香瓜hello")},      // divergent CJK head (香瓜), same tail
+		{int64(3), []byte("苹果香蕉world")},      // same head, different Latin tail
+		{int64(4), []byte("苹果香蕉help")},       // tail shares hel but not hell
+		{int64(5), []byte("苹果香蕉helloworld")}, // longer Latin token, prefix hell
+	}
+	for _, parser := range []string{"", ParserDefault, ParserNgram} {
+		t.Run("parser="+parser, func(t *testing.T) {
+			seg, err := BuildSegmentFromDocsParser("zh", int32(types.T_int64), docs, parser)
+			require.NoError(t, err)
+			idx := NewIndex([]*Segment{seg}, nil)
+
+			// Positive: the final Latin token prefix-matches (hello / helloworld) while the CJK head
+			// pins 苹果香蕉 positionally. Was empty before the fix.
+			require.ElementsMatch(t, []any{int64(1), int64(5)}, boolIDs(t, idx, parser, "苹果香蕉hell*"),
+				"mixed CJK/Latin trailing * must prefix-match the final Latin token (#29274 P2)")
+			require.ElementsMatch(t, []any{int64(1), int64(5)}, boolIDs(t, idx, parser, "+苹果香蕉hell*"))
+
+			// Divergent-stem negative control: the head 苹果香瓜 diverges, so the positional trigram
+			// 果香蕉 is absent and doc 2 must NOT be returned even though its tail (hello) prefix-matches.
+			require.NotContains(t, boolIDs(t, idx, parser, "苹果香蕉hell*"), int64(2),
+				"the exact CJK-head phrase constraint must still exclude the divergent stem")
+			// The same Latin prefix on the DIVERGENT head selects only doc 2 (head still enforced).
+			require.ElementsMatch(t, []any{int64(2)}, boolIDs(t, idx, parser, "苹果香瓜hell*"))
+
+			// The final-token prefix is a real prefix, not presence-anywhere:
+			require.ElementsMatch(t, []any{int64(3)}, boolIDs(t, idx, parser, "苹果香蕉wor*"))
+			require.ElementsMatch(t, []any{int64(4)}, boolIDs(t, idx, parser, "苹果香蕉help*"),
+				"help* matches help but not hello")
+			require.Empty(t, boolIDs(t, idx, parser, "苹果香蕉xyz*"),
+				"a final Latin prefix present in no document matches nothing")
+
+			// Contrast: the UNSTARRED exact phrase looks up the whole final token, so it matches only
+			// the doc whose token is exactly hello (doc 1), not the longer helloworld (doc 5).
+			require.ElementsMatch(t, []any{int64(1)}, nlIDs(t, idx, parser, "苹果香蕉hello"))
+		})
+	}
+}
+
+// TestBooleanCJKLatinStarMarksOnlyFinalLatinSlot pins the slot shape the fix produces: for a mixed
+// stem the LAST slot is a prefix and the head trigrams stay exact; an all-CJK stem keeps every slot
+// exact (so it stays on the fast exact-phrase path).
+func TestBooleanCJKLatinStarMarksOnlyFinalLatinSlot(t *testing.T) {
+	c, ok, err := rawToClauseParser(rawClause{text: "苹果香蕉hell", star: true}, ParserNgram)
+	require.NoError(t, err)
+	require.True(t, ok)
+	require.Equal(t, clausePhrase, c.kind)
+	require.Greater(t, len(c.phrase), 1)
+	last := c.phrase[len(c.phrase)-1]
+	require.True(t, last.star, "the final Latin slot must be a prefix")
+	require.False(t, hasCJK(last.term), "the final slot is the Latin tail")
+	for _, sl := range c.phrase[:len(c.phrase)-1] {
+		require.False(t, sl.star, "head trigrams stay exact-positional")
+	}
+
+	// All-CJK stem: no slot is starred (keeps the fast exact-phrase path).
+	c, ok, err = rawToClauseParser(rawClause{text: "苹果香蕉", star: true}, ParserNgram)
+	require.NoError(t, err)
+	require.True(t, ok)
+	require.Equal(t, clausePhrase, c.kind)
+	for _, sl := range c.phrase {
+		require.False(t, sl.star, "an all-CJK starred stem stays exact on every slot")
+	}
+}
+
 // TestBooleanGojiebaTrailingStarKeepsWholeStem: gojieba has the same class of bug via word
 // segmentation -- `苹果香蕉*` -> words [苹果, 香蕉] kept only 苹果 and prefix-matched it, returning
 // every 苹果* doc. A MULTI-word stem must require all words (phrase); a single-word stem keeps its

@@ -689,7 +689,20 @@ func rawToClauseParser(rc rawClause, parser string) (clause, bool, error) {
 		// expands it via prefixTerms), so ngram takes the phrase path uniformly. Non-CJK stays a
 		// plain first-token prefix.
 		if hasCJK(rc.text) && (parser != ParserGojieba || len(terms) > 1) {
-			return phraseClause(rc.text, parser, w)
+			c, ok, err := phraseClause(rc.text, parser, w)
+			if !ok || err != nil {
+				return c, ok, err
+			}
+			// A trailing * makes the FINAL token a prefix, not an exact term. The CJK trigrams
+			// that pin the head stay exact (the phrase already allows trailing content, so an
+			// all-CJK stem like 苹果香蕉* keeps its fast exact path), but when the stem ends in a
+			// Latin run the stored final token can be LONGER than the queried stem
+			// (苹果香蕉hell* vs the indexed 苹果香蕉hello): keeping that slot exact looks up hell,
+			// which the index never stored, so it must prefix-match instead (#29274 P2).
+			if last := &c.phrase[len(c.phrase)-1]; !hasCJK(last.term) {
+				last.star = true
+			}
+			return c, true, nil
 		}
 		return clause{kind: clausePrefix, terms: terms[:1], weight: w}, true, nil
 	case len(terms) == 1:

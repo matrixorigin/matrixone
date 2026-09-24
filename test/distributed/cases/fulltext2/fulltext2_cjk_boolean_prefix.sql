@@ -26,6 +26,28 @@ select id from ft where match(body) against('苹果香*' in boolean mode) order 
 -- token prefixed by 苹果, including 红苹果甜's 苹果甜. Expect 1,2,3,4.
 select id from ft where match(body) against('苹果*' in boolean mode) order by id;
 
+-- #29274 P2: a stem MIXING CJK + a Latin tail. The head trigrams stay exact-positional, but the
+-- FINAL Latin token must prefix-match the stored token (which can be longer than the stem). Before
+-- the fix `苹果香蕉hell*` looked up the exact term hell, which the index never stored, and returned
+-- nothing.
+create table ftm(id int primary key, body varchar(200));
+insert into ftm values
+  (1,'苹果香蕉hello'),(2,'苹果香瓜hello'),(3,'苹果香蕉world'),(4,'苹果香蕉help'),(5,'苹果香蕉helloworld');
+create fulltext2 index fim on ftm(body) with parser ngram;
+-- positive: the Latin tail prefix-matches hello/helloworld while the CJK head pins 苹果香蕉. Expect 1,5.
+select id from ftm where match(body) against('苹果香蕉hell*' in boolean mode) order by id;
+select id from ftm where match(body) against('+苹果香蕉hell*' in boolean mode) order by id;
+-- divergent CJK head (香瓜) is still excluded even though its tail prefix-matches: same prefix on the
+-- divergent head selects only doc 2.
+select id from ftm where match(body) against('苹果香瓜hell*' in boolean mode) order by id;
+-- the tail is a real prefix, not presence-anywhere: help* matches help (4), not hello.
+select id from ftm where match(body) against('苹果香蕉help*' in boolean mode) order by id;
+-- a final Latin prefix present in no document matches nothing.
+select id from ftm where match(body) against('苹果香蕉xyz*' in boolean mode) order by id;
+-- contrast: the unstarred exact phrase looks up the whole token, so it matches only doc 1 (hello),
+-- not the longer helloworld (5).
+select id from ftm where match(body) against('苹果香蕉hello') order by id;
+
 -- gojieba: same class of bug via word segmentation. 苹果香蕉 -> words [苹果, 香蕉]; a trailing * kept
 -- only 苹果 and matched every 苹果* doc. A multi-word stem must require all words; a single-word stem
 -- keeps its word prefix.
