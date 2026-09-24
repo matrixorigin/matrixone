@@ -4781,8 +4781,10 @@ func bindFuncExprAndConstFoldInternal(
 		}
 		fnArgs[1] = arg1
 
-		lit1 := arg1.GetLit()
-		if arg1.Typ.Id == int32(types.T_any) || lit1 == nil {
+		// DECIMAL256 constants can remain executable casts because scalar
+		// Literal has no DECIMAL256 representation. Check constancy rather
+		// than requiring one particular folded representation.
+		if arg1.Typ.Id == int32(types.T_any) || !rule.IsConstant(arg1, false) {
 			return nil, moerr.NewInvalidInput(ctx, "2nd argument of in_range must be constant")
 		}
 
@@ -4792,8 +4794,7 @@ func bindFuncExprAndConstFoldInternal(
 		}
 		fnArgs[2] = arg2
 
-		lit2 := arg2.GetLit()
-		if arg2.Typ.Id == int32(types.T_any) || lit2 == nil {
+		if arg2.Typ.Id == int32(types.T_any) || !rule.IsConstant(arg2, false) {
 			return nil, moerr.NewInvalidInput(ctx, "3rd argument of in_range must be constant")
 		}
 

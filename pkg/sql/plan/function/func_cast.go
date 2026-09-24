@@ -1247,12 +1247,11 @@ func castToDecimal256(proc *process.Process, from *vector.Vector, toType types.T
 		return decimal128ToDecimal256(s, rs, length, selectList)
 	case types.T_decimal256:
 		s := vector.GenerateFunctionFixedTypeParameter[types.Decimal256](from)
-		if s.GetType().Scale == toType.Scale && s.GetType().Width >= toType.Width {
+		if s.GetType().Scale == toType.Scale && s.GetType().Width <= toType.Width {
 			if err := rs.DupFromParameter(s, length); err != nil {
 				return err
 			}
-			v := rs.GetResultVector()
-			v.SetType(toType)
+			rs.GetResultVector().SetType(toType)
 			return nil
 		}
 		return decimal256ToDecimal256(s, rs, length, selectList)
@@ -2360,12 +2359,14 @@ func decimal64ToOthers(proc *process.Process,
 		return decimal64ToUnsigned(ctx, source, rs, 64, length, selectList)
 	case types.T_decimal64:
 		rs := vector.MustFunctionResult[types.Decimal64](result)
-		if source.GetType().Scale == toType.Scale && source.GetType().Width >= toType.Width {
+		// Reusing the physical values is safe only when the target preserves
+		// the source domain. A narrower precision must validate every value;
+		// merely relabeling it can manufacture an out-of-range DECIMAL.
+		if source.GetType().Scale == toType.Scale && source.GetType().Width <= toType.Width {
 			if err := rs.DupFromParameter(source, length); err != nil {
 				return err
 			}
-			v := rs.GetResultVector()
-			v.SetType(toType)
+			rs.GetResultVector().SetType(toType)
 			return nil
 		}
 		return decimal64ToDecimal64(source, rs, length, selectList)
@@ -2437,12 +2438,14 @@ func decimal128ToOthers(proc *process.Process,
 		return decimal128ToDecimal64(ctx, source, rs, length, selectList)
 	case types.T_decimal128:
 		rs := vector.MustFunctionResult[types.Decimal128](result)
-		if source.GetType().Scale == toType.Scale && source.GetType().Width >= toType.Width {
+		// Widening precision with an unchanged scale preserves the value
+		// domain. Narrowing must use the checked conversion below. Keep the
+		// source vector metadata immutable because it may have other consumers.
+		if source.GetType().Scale == toType.Scale && source.GetType().Width <= toType.Width {
 			if err := rs.DupFromParameter(source, length); err != nil {
 				return err
 			}
-			v := source.GetSourceVector()
-			v.SetType(toType)
+			rs.GetResultVector().SetType(toType)
 			return nil
 		}
 		return decimal128ToDecimal128(source, rs, length, selectList)
@@ -2532,12 +2535,11 @@ func decimal256ToOthersWithContext(
 		return decimal256ToDecimal128(source, rs, length, selectList)
 	case types.T_decimal256:
 		rs := vector.MustFunctionResult[types.Decimal256](result)
-		if source.GetType().Scale == toType.Scale && source.GetType().Width >= toType.Width {
+		if source.GetType().Scale == toType.Scale && source.GetType().Width <= toType.Width {
 			if err := rs.DupFromParameter(source, length); err != nil {
 				return err
 			}
-			v := rs.GetResultVector()
-			v.SetType(toType)
+			rs.GetResultVector().SetType(toType)
 			return nil
 		}
 		return decimal256ToDecimal256(source, rs, length, selectList)
@@ -5880,23 +5882,15 @@ func decimal64ToDecimal64(
 				return err
 			}
 		} else {
-			if totype.Width < fromtype.Width {
-				dec := v.Format(fromtype.Scale)
-				result, err := types.ParseDecimal64(dec, totype.Width, totype.Scale)
-				if err != nil {
-					return err
-				}
-				if err = to.Append(result, false); err != nil {
-					return err
-				}
-			} else {
-				result, err := v.Scale(totype.Scale - fromtype.Scale)
-				if err != nil {
-					return err
-				}
-				if err = to.Append(result, false); err != nil {
-					return err
-				}
+			// Every conversion that reaches this path can reduce the target
+			// domain through precision or scale. Parse against the complete
+			// target definition instead of validating width alone.
+			result, err := types.ParseDecimal64(v.Format(fromtype.Scale), totype.Width, totype.Scale)
+			if err != nil {
+				return err
+			}
+			if err = to.Append(result, false); err != nil {
+				return err
 			}
 		}
 	}
@@ -5919,14 +5913,12 @@ func decimal64ToDecimal128Array(
 
 			result := fromdec
 			var err error
-			if totype.Width < fromtype.Width {
+			if totype.Width < fromtype.Width || totype.Scale != fromtype.Scale {
 				result, err = types.ParseDecimal128(
 					fromdec.Format(fromtype.Scale),
 					totype.Width,
 					totype.Scale,
 				)
-			} else if totype.Scale != fromtype.Scale {
-				result, err = fromdec.Scale(totype.Scale - fromtype.Scale)
 			}
 			if err != nil {
 				return err
@@ -5939,7 +5931,7 @@ func decimal64ToDecimal128Array(
 			return nil
 		}
 
-		if totype.Width < fromtype.Width {
+		if totype.Width < fromtype.Width || totype.Scale != fromtype.Scale {
 			for i := 0; i < length; i++ {
 				fromdec := types.Decimal128{B0_63: uint64(v[i]), B64_127: 0}
 				if v[i].Sign() {
@@ -6021,7 +6013,7 @@ func decimal64ToDecimal128Array(
 					if v.Sign() {
 						fromdec.B64_127 = ^fromdec.B64_127
 					}
-					if totype.Width < fromtype.Width {
+					if totype.Width < fromtype.Width || totype.Scale != fromtype.Scale {
 						dec := fromdec.Format(fromtype.Scale)
 						result, err := types.ParseDecimal128(dec, totype.Width, totype.Scale)
 						if err != nil {
@@ -6031,17 +6023,7 @@ func decimal64ToDecimal128Array(
 							return err
 						}
 					} else {
-						if totype.Scale == fromtype.Scale {
-							to.AppendMustValue(fromdec)
-						} else {
-							result, err := fromdec.Scale(totype.Scale - fromtype.Scale)
-							if err != nil {
-								return err
-							}
-							if err = to.Append(result, false); err != nil {
-								return err
-							}
-						}
+						to.AppendMustValue(fromdec)
 					}
 				}
 			}
@@ -6071,7 +6053,7 @@ func decimal64ToDecimal256Array(
 			fromdec.B64_127 = ^fromdec.B64_127
 		}
 		result := types.Decimal256FromDecimal128(fromdec)
-		if totype.Width < fromtype.Width {
+		if totype.Width < fromtype.Width || totype.Scale != fromtype.Scale {
 			dec := result.Format(fromtype.Scale)
 			parsed, err := types.ParseDecimal256(dec, totype.Width, totype.Scale)
 			if err != nil {
@@ -6080,14 +6062,8 @@ func decimal64ToDecimal256Array(
 			if err := to.Append(parsed, false); err != nil {
 				return err
 			}
-		} else {
-			scaled, err := result.Scale(totype.Scale - fromtype.Scale)
-			if err != nil {
-				return err
-			}
-			if err := to.Append(scaled, false); err != nil {
-				return err
-			}
+		} else if err := to.Append(result, false); err != nil {
+			return err
 		}
 	}
 	return nil
@@ -6111,8 +6087,11 @@ func decimal128ToDecimal64(
 				return err
 			}
 		} else {
-			dec := v.Format(fromtype.Scale)
-			result, err := types.ParseDecimal64(dec, totype.Width, totype.Scale)
+			dec, scale := v.Format(fromtype.Scale), totype.Scale
+			if totype.Scale < fromtype.Scale {
+				dec, scale = roundDecimalCoefficient(v.Format(0), fromtype.Scale-totype.Scale), 0
+			}
+			result, err := types.ParseDecimal64(dec, totype.Width, scale)
 			if err != nil {
 				return err
 			}
@@ -6122,6 +6101,24 @@ func decimal128ToDecimal64(
 		}
 	}
 	return nil
+}
+
+// roundDecimalCoefficient divides the exact unscaled coefficient only once.
+// Formatting a fractional Decimal128 before rounding can round a discarded
+// digit while extracting it, and then ParseDecimal128 rounds it a second time.
+func roundDecimalCoefficient(coefficient string, scaleDifference int32) string {
+	value, _ := new(big.Int).SetString(coefficient, 10)
+	negative := value.Sign() < 0
+	value.Abs(value)
+	divisor := new(big.Int).Exp(big.NewInt(10), big.NewInt(int64(scaleDifference)), nil)
+	quotient, remainder := new(big.Int).QuoRem(value, divisor, new(big.Int))
+	if remainder.Mul(remainder, big.NewInt(2)).Cmp(divisor) >= 0 {
+		quotient.Add(quotient, big.NewInt(1))
+	}
+	if negative {
+		quotient.Neg(quotient)
+	}
+	return quotient.String()
 }
 
 func decimal128ToDecimal128(
@@ -6139,23 +6136,19 @@ func decimal128ToDecimal128(
 				return err
 			}
 		} else {
-			if totype.Width < fromtype.Width {
-				dec := v.Format(fromtype.Scale)
-				result, err := types.ParseDecimal128(dec, totype.Width, totype.Scale)
-				if err != nil {
-					return err
-				}
-				if err = to.Append(result, false); err != nil {
-					return err
-				}
+			var result types.Decimal128
+			var err error
+			if totype.Scale < fromtype.Scale {
+				result, err = types.ParseDecimal128(
+					roundDecimalCoefficient(v.Format(0), fromtype.Scale-totype.Scale), totype.Width, 0)
 			} else {
-				result, err := v.Scale(totype.Scale - fromtype.Scale)
-				if err != nil {
-					return err
-				}
-				if err = to.Append(result, false); err != nil {
-					return err
-				}
+				result, err = types.ParseDecimal128(v.Format(fromtype.Scale), totype.Width, totype.Scale)
+			}
+			if err != nil {
+				return err
+			}
+			if err = to.Append(result, false); err != nil {
+				return err
 			}
 		}
 	}
@@ -6179,23 +6172,20 @@ func decimal128ToDecimal256(
 			continue
 		}
 		result := types.Decimal256FromDecimal128(v)
-		if totype.Width < fromtype.Width {
-			dec := result.Format(fromtype.Scale)
-			parsed, err := types.ParseDecimal256(dec, totype.Width, totype.Scale)
+		if totype.Width < fromtype.Width || totype.Scale != fromtype.Scale {
+			dec, scale := result.Format(fromtype.Scale), totype.Scale
+			if totype.Scale < fromtype.Scale {
+				dec, scale = roundDecimalCoefficient(result.Format(0), fromtype.Scale-totype.Scale), 0
+			}
+			parsed, err := types.ParseDecimal256(dec, totype.Width, scale)
 			if err != nil {
 				return err
 			}
 			if err := to.Append(parsed, false); err != nil {
 				return err
 			}
-		} else {
-			scaled, err := result.Scale(totype.Scale - fromtype.Scale)
-			if err != nil {
-				return err
-			}
-			if err := to.Append(scaled, false); err != nil {
-				return err
-			}
+		} else if err := to.Append(result, false); err != nil {
+			return err
 		}
 	}
 	return nil
@@ -6217,8 +6207,11 @@ func decimal256ToDecimal64(
 			}
 			continue
 		}
-		dec := v.Format(fromtype.Scale)
-		result, err := types.ParseDecimal64(dec, totype.Width, totype.Scale)
+		dec, scale := v.Format(fromtype.Scale), totype.Scale
+		if totype.Scale < fromtype.Scale {
+			dec, scale = roundDecimalCoefficient(v.Format(0), fromtype.Scale-totype.Scale), 0
+		}
+		result, err := types.ParseDecimal64(dec, totype.Width, scale)
 		if err != nil {
 			return err
 		}
@@ -6245,8 +6238,11 @@ func decimal256ToDecimal128(
 			}
 			continue
 		}
-		dec := v.Format(fromtype.Scale)
-		result, err := types.ParseDecimal128(dec, totype.Width, totype.Scale)
+		dec, scale := v.Format(fromtype.Scale), totype.Scale
+		if totype.Scale < fromtype.Scale {
+			dec, scale = roundDecimalCoefficient(v.Format(0), fromtype.Scale-totype.Scale), 0
+		}
+		result, err := types.ParseDecimal128(dec, totype.Width, scale)
 		if err != nil {
 			return err
 		}
@@ -6273,23 +6269,19 @@ func decimal256ToDecimal256(
 			}
 			continue
 		}
-		if totype.Width < fromtype.Width {
-			dec := v.Format(fromtype.Scale)
-			result, err := types.ParseDecimal256(dec, totype.Width, totype.Scale)
-			if err != nil {
-				return err
-			}
-			if err := to.Append(result, false); err != nil {
-				return err
-			}
+		var result types.Decimal256
+		var err error
+		if totype.Scale < fromtype.Scale {
+			result, err = types.ParseDecimal256(
+				roundDecimalCoefficient(v.Format(0), fromtype.Scale-totype.Scale), totype.Width, 0)
 		} else {
-			result, err := v.Scale(totype.Scale - fromtype.Scale)
-			if err != nil {
-				return err
-			}
-			if err := to.Append(result, false); err != nil {
-				return err
-			}
+			result, err = types.ParseDecimal256(v.Format(fromtype.Scale), totype.Width, totype.Scale)
+		}
+		if err != nil {
+			return err
+		}
+		if err := to.Append(result, false); err != nil {
+			return err
 		}
 	}
 	return nil
