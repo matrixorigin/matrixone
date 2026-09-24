@@ -292,7 +292,8 @@ type Engine struct {
 
 	packerPool *fileservice.Pool[*types.Packer]
 
-	gcPool *ants.Pool
+	gcPool                *ants.Pool
+	workspaceSpillCleanup workspaceSpillCleanupOwner
 
 	// XXX related to cn push model
 	pClient PushClient

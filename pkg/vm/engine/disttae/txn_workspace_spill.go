@@ -16,6 +16,8 @@ package disttae
 
 import (
 	"context"
+	"errors"
+	"time"
 
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
 	"github.com/matrixorigin/matrixone/pkg/container/batch"
@@ -155,7 +157,7 @@ type workspaceSpillGroupKey struct {
 
 type stagedWorkspaceSpill struct {
 	objects []workspaceSpillObject
-	stats   []objectio.ObjectStats
+	cleanup []workspaceSpillCleanupTarget
 }
 
 type workspaceSpillGroup struct {
@@ -240,14 +242,12 @@ func (txn *Transaction) dumpWorkspaceMutationsLocked(
 	staged, stageErr := txn.stageWorkspaceSpill(ctx, fs, typ, tables, attempt)
 	txn.Lock()
 	if stageErr != nil {
-		txn.cleanStagedWorkspaceSpillLocked(staged)
-		return 0, stageErr
+		return 0, errors.Join(stageErr, txn.cleanStagedWorkspaceSpillLocked(ctx, staged))
 	}
 
 	_, err = txn.workspace.commitSpill(attempt, staged.objects)
 	if err != nil {
-		txn.cleanStagedWorkspaceSpillLocked(staged)
-		return 0, err
+		return 0, errors.Join(err, txn.cleanStagedWorkspaceSpillLocked(ctx, staged))
 	}
 
 	for idx := range staged.objects {
@@ -296,12 +296,16 @@ func (txn *Transaction) stageWorkspaceSpill(
 		}
 		object, stats, hasRows, stageErr := txn.stageWorkspaceSpillGroup(
 			ctx, fs, typ, table, group.key, group.sources)
-		staged.stats = append(staged.stats, stats...)
 		if stageErr != nil {
 			return staged, stageErr
 		}
 		if hasRows {
 			staged.objects = append(staged.objects, object)
+			for _, stat := range stats {
+				staged.cleanup = append(staged.cleanup, workspaceSpillCleanupTarget{
+					name: stat.ObjectName().String(), fs: fs,
+				})
+			}
 		}
 	}
 	return staged, nil
@@ -372,10 +376,26 @@ func (txn *Transaction) stageWorkspaceSpillGroup(
 	writerClosed := false
 	defer func() {
 		if !writerClosed {
-			closeErr := writer.Close()
-			if err == nil {
-				err = closeErr
+			if err != nil {
+				// Abort before Close: Close discards the sinker's ownership
+				// snapshot, including commit-ambiguous Sync names.
+				cleanupCtx, cancel := context.WithTimeout(
+					context.WithoutCancel(ctx), 30*time.Second)
+				files, abortErr := writer.AbortUnpublished(cleanupCtx)
+				cancel()
+				if abortErr != nil {
+					targets := make([]workspaceSpillCleanupTarget, 0, len(files))
+					for _, name := range files {
+						targets = append(targets, workspaceSpillCleanupTarget{
+							name: name, fs: fs,
+						})
+					}
+					err = errors.Join(err, abortErr,
+						txn.engine.cleanupUnpublishedWorkspaceSpill(ctx, targets))
+				}
 			}
+			closeErr := writer.Close()
+			err = errors.Join(err, closeErr)
 		}
 	}()
 
@@ -435,11 +455,21 @@ func (txn *Transaction) stageWorkspaceSpillGroup(
 	if err != nil {
 		return object, stats, false, err
 	}
-	if err = writer.Close(); err != nil {
-		ownedBlockInfo.Clean(txn.proc.GetMPool())
-		return object, stats, false, err
-	}
+	closeErr := writer.Close()
 	writerClosed = true
+	if closeErr != nil {
+		ownedBlockInfo.Clean(txn.proc.GetMPool())
+		// Close may have discarded the sinker's names, but the successful
+		// Sync stats still identify every object that must be aborted.
+		targets := make([]workspaceSpillCleanupTarget, 0, len(stats))
+		for _, stat := range stats {
+			targets = append(targets, workspaceSpillCleanupTarget{
+				name: stat.ObjectName().String(), fs: fs,
+			})
+		}
+		return object, stats, false, errors.Join(closeErr,
+			txn.engine.cleanupUnpublishedWorkspaceSpill(ctx, targets))
+	}
 
 	source := sources[0]
 	entry := source.entry
@@ -473,18 +503,22 @@ func (txn *Transaction) publishSpilledObjectLocked(entry *Entry) {
 	}
 }
 
-// cleanStagedWorkspaceSpillLocked releases unpublished metadata and schedules
-// every known remote object for GC. It preserves the caller's lock contract.
-func (txn *Transaction) cleanStagedWorkspaceSpillLocked(staged stagedWorkspaceSpill) {
+// cleanStagedWorkspaceSpillLocked releases unpublished metadata and deletes
+// every staged object without holding the transaction lock. The engine retains
+// failed deletions until a later retry can finish them.
+func (txn *Transaction) cleanStagedWorkspaceSpillLocked(
+	ctx context.Context, staged stagedWorkspaceSpill,
+) error {
 	for idx := range staged.objects {
 		if staged.objects[idx].entry.bat != nil {
 			staged.objects[idx].entry.bat.Clean(txn.proc.GetMPool())
 		}
 	}
-	if len(staged.stats) == 0 {
-		return
+	if len(staged.cleanup) == 0 {
+		return nil
 	}
 	txn.Unlock()
-	_ = txn.GCObjsByStats(staged.stats...)
+	err := txn.engine.cleanupUnpublishedWorkspaceSpill(ctx, staged.cleanup)
 	txn.Lock()
+	return err
 }

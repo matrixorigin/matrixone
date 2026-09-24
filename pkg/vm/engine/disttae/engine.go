@@ -213,6 +213,13 @@ func New(
 }
 
 func (e *Engine) Close() error {
+	cleanupCtx, cancel := context.WithTimeout(
+		context.Background(), workspaceSpillCleanupTimeout)
+	cleanupErr := e.workspaceSpillCleanup.retry(cleanupCtx)
+	cancel()
+	if cleanupErr != nil {
+		return cleanupErr
+	}
 	if e.gcPool != nil {
 		_ = e.gcPool.ReleaseTimeout(time.Second * 3)
 	}

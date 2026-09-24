@@ -37,7 +37,8 @@ Payload lease。
   StatementID 只负责 attempt rollback/visibility；同一普通 Compile 内即使顺序打开多个 write scope
   或执行内部 SQL（例如先产生用户表对象写，再写入 `mo_tables` 元数据），仍继承同一 epoch 并统一
   遵守 catalog 优先和 mutation type 降序。内部 SQL 只捕获当前 ReadView，不得推进 epoch；write
-  scope 只按 LIFO 校验执行所有权，不参与提交排序。
+  scope 按 owner/attempt 校验执行所有权，允许同一普通 Compile 的活跃 scope 乱序关闭；
+  scope 不参与提交排序。
 - 正常推进 Statement 边界前必须关闭该 Attempt 的全部 write scope；否则边界发布失败，且
   mutation transition、RC boundary 和 payload 状态均不得变化。rollback/retry 按 Attempt
   整体废弃未完成 scope，新 Attempt 不继承旧 scope。
@@ -192,7 +193,7 @@ spill 使用三阶段协议：
 1. 锁内选择 mutation、pin payload、登记 spill generation；
 2. 锁外执行文件 IO；
 3. 锁内校验 generation 和 mutation 仍有效，原子发布 Object payload；失败则撤销状态并清理
-   未发布对象。
+   未发布对象。失败的物理删除必须保留对象名及可重试 owner，不能让 writer `Close` 丢弃对象名。
 
 任何阶段都不得在 Workspace 全局锁内执行远程 IO。
 
@@ -244,7 +245,8 @@ Workspace 的逻辑状态与物理 Payload 分层加锁：
 | 表级 current/history membership | TableOverlay | 无 | 同一 Workspace 临界区内发布/退休/边界回收 |
 | 表级读取结果 | 无 | statement-scoped EntrySet | EntrySet `Close` |
 | Payload generation | PayloadStore | generation lease / EntrySet | lease `Close` 后才可 reclaim |
-| spill source 与未发布对象 | Workspace mutation + PayloadStore generation | `workspaceSpillAttempt` | 原子 publish 或 abort 后 `Close` |
+| spill source | Workspace mutation + PayloadStore generation | `workspaceSpillAttempt` | 原子 publish 或 abort 后 lease `Close` |
+| 未发布 spill 对象 | 已发布后为 Workspace mutation；发布前无稳态 owner | `CNS3Writer` → `stagedWorkspaceSpill`，删除失败时为 Engine cleanup owner | 成功发布或锁外删除；删除失败保留对象名并重试 |
 | attempt rollback mutation、回调和 LOAD 文件 | StatementJournal | `workspaceRollback` | 锁外 GC、`RunActions`、文件清理与 `Close` |
 | commit 输入 | Workspace active 索引 + PayloadStore | `workspaceCommitBuilder` | Build 返回后 `Close` |
 
