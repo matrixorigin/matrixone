@@ -16,6 +16,7 @@ package process
 
 import (
 	"context"
+	"sync"
 	"testing"
 
 	"github.com/matrixorigin/matrixone/pkg/common/mpool"
@@ -27,6 +28,34 @@ import (
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 )
+
+func TestCleanupBudgetSurvivesCancellationButNotPreparedReuse(t *testing.T) {
+	proc := NewTopProcess(context.Background(), mpool.MustNewZero(), nil, nil, nil, nil, nil, nil, nil, nil, nil)
+	defer proc.Free()
+	ctx := proc.Base.GetContextBase().BuildQueryCtx(proc.GetTopContext())
+	proc.BuildPipelineContext(ctx)
+	_, ok := PipelineCleanupDeadline(ctx)
+	require.False(t, ok, "execution time must not consume teardown time")
+	var wg sync.WaitGroup
+	for i := 0; i < 8; i++ {
+		wg.Add(1)
+		go func() { defer wg.Done(); BeginPipelineCleanup(proc.Ctx) }()
+	}
+	wg.Wait()
+	d, ok := PipelineCleanupDeadline(ctx)
+	require.True(t, ok)
+	proc.Cancel(context.Canceled)
+	BeginPipelineCleanup(proc.Ctx)
+	d2, ok := PipelineCleanupDeadline(context.WithoutCancel(proc.Ctx))
+	require.True(t, ok)
+	require.Equal(t, d, d2)
+	proc.ResetQueryContext()
+	ctx = proc.Base.GetContextBase().BuildQueryCtx(proc.GetTopContext())
+	_, ok = PipelineCleanupDeadline(ctx)
+	require.False(t, ok, "a later EXECUTE must not inherit the old deadline")
+	_, ok = PipelineCleanupDeadline(context.Background())
+	require.False(t, ok, "CN retries use an independent attempt budget")
+}
 
 type childProcessSession struct{}
 

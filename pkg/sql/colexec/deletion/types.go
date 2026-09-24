@@ -167,6 +167,7 @@ func (deletion *Deletion) Reset(proc *process.Process, pipelineFailed bool, err 
 	ctr.s3Writers, cleanupErr = closeS3Writers(proc.Ctx, ctr.s3Writers, pipelineFailed)
 	if cleanupErr != nil {
 		logutil.Warn("failed to clean remote delete S3 writers", zap.Error(cleanupErr))
+		deletion.retainPendingS3Writers(proc)
 	}
 	if deletion.RemoteDelete {
 		for k := range ctr.blockId_bitmap {

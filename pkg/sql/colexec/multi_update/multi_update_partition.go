@@ -546,6 +546,7 @@ func (op *PartitionMultiUpdate) Reset(
 	op.raw.resetMultiUpdateCtxs()
 	if cleanupErr := op.freePartitionWriters(proc, pipelineFailed); cleanupErr != nil {
 		logutil.Warn("failed to clean partition multi-update writers", zap.Error(cleanupErr))
+		op.retainPendingPartitionWriters(proc)
 	}
 	op.s3AffectedRows = 0
 	for _, target := range op.targets {

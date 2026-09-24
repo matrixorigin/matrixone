@@ -55,22 +55,40 @@ import (
 
 type remoteS3CleanupWorkspace struct {
 	client.Workspace
-	cleanupErr    error
-	calls         int
-	pendingOwners bool
-	accepted      bool
-	events        []string
-	owners        []*colexec.UnpublishedS3ObjectOwner
+	cleanupErr      error
+	calls           int
+	pendingOwners   bool
+	accepted        bool
+	events          []string
+	owners          []*colexec.UnpublishedS3ObjectOwner
+	cleanupDeadline time.Time
 }
 
 func (w *remoteS3CleanupWorkspace) QueueUnpublishedS3Cleanup(server *colexec.Server) error {
 	return server.RetryUnpublishedS3Cleanup(w.CleanupUnpublishedS3Objects)
 }
 
-func (w *remoteS3CleanupWorkspace) CleanupUnpublishedS3Objects(context.Context) error {
+func (w *remoteS3CleanupWorkspace) CleanupUnpublishedS3Objects(ctx context.Context) error {
+	w.cleanupDeadline, _ = ctx.Deadline()
 	w.calls++
 	w.events = append(w.events, "cleanup")
 	return w.cleanupErr
+}
+
+func TestRemoteFinalizerPreservesPipelineCleanupBudget(t *testing.T) {
+	proc := testutil.NewProc(t)
+	defer proc.Free()
+	process.BeginPipelineCleanup(proc.Ctx)
+	deadline, ok := process.PipelineCleanupDeadline(proc.Ctx)
+	require.True(t, ok)
+	workspace := &remoteS3CleanupWorkspace{}
+	receiver := &messageReceiverOnServer{
+		messageCtx:                    context.Background(),
+		unpublishedS3CleanupContext:   proc.Ctx,
+		unpublishedS3CleanupWorkspace: workspace,
+	}
+	require.NoError(t, receiver.finalizeUnpublishedS3Objects(nil, nil))
+	require.Equal(t, deadline, workspace.cleanupDeadline)
 }
 
 func (w *remoteS3CleanupWorkspace) HasUnpublishedS3ObjectOwners() bool {
