@@ -4,7 +4,10 @@ Issue: [#29257](https://github.com/matrixorigin/matrixone/issues/29257).
 Implementation: [#29290](https://github.com/matrixorigin/matrixone/pull/29290).
 Status: **bounded-admission revision reviewed by an independent GPT-6 medium
 agent at commit `4014befc34f726913260d4677a22bae370ae7387`: PASS, 0 design
-blockers. Implementation validation and final review are in progress.**
+blockers. Lightweight retry-shell revision reviewed at
+`1107d213cf0fdcb53ede12064442ccfc655bc2fb`: PASS, 0 design blockers.
+Implementation tests and independent code review passed locally; deployment
+alerts remain a rollout condition.**
 
 This document records the design embodied by an already-open implementation PR.
 It is retrospective and does not establish that the earlier commits passed a
@@ -197,7 +200,7 @@ implementation deviation requires another design review.
 
 ## Proposed revision: bounded in-process cleanup debt
 
-**Status: implementation under validation.** The ticket ledger, pre-`Sync`
+**Status: implemented and validated locally.** The ticket ledger, pre-`Sync`
 admission, name-only retry state, and primary-error preservation are now in the
 PR worktree. This revision supersedes the earlier unbounded-queue limit,
 heavy-writer fallback, and cleanup-error reporting; other ownership and
@@ -282,11 +285,16 @@ upgrade. A capability/version gate at scheduling time is preferable if mixed
 versions must continue serving all writes; that is a separate compatibility
 decision and must be implemented and validated before making that promise.
 
-Current and high-water ticket use and failed reservation counts are recorded by
-the ledger. Export them with pending cleanup names/tasks, retry age, and Delete
-failures per CN before production rollout. Alert before the admission ceiling
-and on sustained cleanup debt. Do not log individual object names in a
-high-cardinality metric. During a storage outage, the system trades
+The PR exports `mo_unpublished_s3_tickets{state="used|high_water"}` and
+`mo_unpublished_s3_admission_failures_total` by CN service. It also exports
+`mo_unpublished_s3_pending_cleanup_tasks`,
+`mo_unpublished_s3_oldest_cleanup_age_seconds`, and a process-level
+`mo_unpublished_s3_delete_failures_total`. The used-ticket gauge is an upper
+bound on pending cleanup names, including objects in flight before metadata
+acceptance. Configure alerts before rollout at 80% of 65,536 tickets for five
+minutes, on any sustained nonzero oldest cleanup age above five minutes, and
+on Delete failure growth. Object names are never metric labels. During a
+storage outage, the system trades
 write availability for bounded memory and retained ownership; successful
 cleanup releases tickets and automatically resumes uploads.
 
