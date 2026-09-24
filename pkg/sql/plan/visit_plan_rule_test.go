@@ -100,6 +100,39 @@ func TestHexPreparedArgumentUsesSQLExecuteSourceType(t *testing.T) {
 	require.Equal(t, int32(0), unchangedOverload, "execute-time rebinding must not mutate the prepared plan")
 }
 
+func TestPreparedGroupedIfnullSourceDomain(t *testing.T) {
+	prepared, err := runOneStmt(NewMockOptimizer(false), t,
+		`prepare grouped_source from 'select hex(char(ifnull((select ? group by 1 limit 1),1.5e0)))'`)
+	require.NoError(t, err)
+	bound, _, err := FillValuesOfParamsInPlanWithSpecialization(context.Background(), prepared.GetDcl().GetPrepare().Plan, []any{
+		ParamValue{Value: float64(1.5), SourceType: types.T_float64.ToType(), HasSourceType: true},
+	})
+	require.NoError(t, err)
+	charExpr := findPlanFunctionExpr(bound, "char")
+	require.NotNil(t, charExpr)
+	commonValue := charExpr.GetF().Args[0].GetF().Args[0]
+	require.True(t, commonValue.GetPreparedNumeric().GetIfnullCommonValue())
+	require.Equal(t, int32(types.T_float64), commonValue.Typ.Id)
+}
+
+func TestPreparedAggregateIntegerSourceDomain(t *testing.T) {
+	prepared, err := runOneStmt(NewMockOptimizer(false), t,
+		`prepare aggregate_source from 'select make_set((select max(?)),"a","b")'`)
+	require.NoError(t, err)
+	original := prepared.GetDcl().GetPrepare().Plan
+	bound, _, err := FillValuesOfParamsInPlanWithSpecialization(context.Background(), original, []any{
+		ParamValue{Value: float64(1.5), SourceType: types.T_float64.ToType(), HasSourceType: true},
+	})
+	require.NoError(t, err)
+	consumer := findPlanFunctionExpr(bound, "make_set")
+	require.NotNil(t, consumer)
+	cast := consumer.GetF().Args[0].GetF()
+	require.NotNil(t, cast)
+	_, overload := planfunction.DecodeOverloadID(cast.Func.Obj)
+	require.NotEqual(t, planfunction.TextIntegerBitsCastOverload, overload)
+	require.Equal(t, int32(types.T_float64), cast.Args[0].Typ.Id)
+}
+
 func TestHexIfNullPreservesCommonNumericValue(t *testing.T) {
 	for _, tc := range []struct {
 		name, sql, want string

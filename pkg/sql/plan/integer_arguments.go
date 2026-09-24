@@ -199,6 +199,18 @@ func (rule *ResetParamRefRule) rebindIntegerArgumentCast(expr *Expr) (*Expr, err
 	if err != nil {
 		return nil, err
 	}
+	_, overload := function.DecodeOverloadID(expr.GetF().Func.Obj)
+	if overload == function.TextIntegerBitsCastOverload && types.T(rewritten.Typ.Id) != types.T_any &&
+		!types.T(rewritten.Typ.Id).IsMySQLString() {
+		// CAST7 accepts only text. An aggregate can expose a provisional TEXT
+		// input at PREPARE and a numeric source at EXECUTE; choose the numeric
+		// integer conversion instead of retaining the text-only overload.
+		bound, err := appendIntegerArgument(rule.ctx, rewritten, types.T(expr.Typ.Id), false)
+		if err == nil {
+			rule.specialized = true
+		}
+		return bound, err
+	}
 	bound := DeepCopyExpr(expr)
 	bound.GetF().Args[0] = rewritten
 	bound.Typ.NotNullable = rewritten.Typ.NotNullable

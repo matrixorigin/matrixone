@@ -246,6 +246,59 @@ func testBitIntegerPreparedParameters(t *testing.T, ctx context.Context, db *sql
 			})
 		}
 	})
+	t.Run("SQL EXECUTE aggregate source domain", func(t *testing.T) {
+		conn, err := db.Conn(ctx)
+		require.NoError(t, err)
+		defer conn.Close()
+		_, err = conn.ExecContext(ctx, `set @aggregate_value=1.5e0`)
+		require.NoError(t, err)
+		for _, tc := range []struct {
+			query, want, wantText string
+		}{
+			{`select make_set((select max(?) from issue_25408_pagination.page),"a","b")`, "b", "a"},
+			{`select make_set((select min(?) from issue_25408_pagination.page),"a","b")`, "b", "a"},
+			{`select hex(char((select max(?) from issue_25408_pagination.page)))`, "02", "01"},
+			{`select export_set((select min(?) from issue_25408_pagination.page),"Y","N","",4)`, "NYNN", "YNNN"},
+		} {
+			t.Run(tc.query, func(t *testing.T) {
+				_, err := conn.ExecContext(ctx, "prepare aggregate_source from '"+tc.query+"'")
+				require.NoError(t, err)
+				defer func() {
+					_, err := conn.ExecContext(ctx, "deallocate prepare aggregate_source")
+					require.NoError(t, err)
+				}()
+				var got string
+				require.NoError(t, conn.QueryRowContext(ctx, "execute aggregate_source using @aggregate_value").Scan(&got))
+				require.Equal(t, tc.want, got)
+				_, err = conn.ExecContext(ctx, `set @aggregate_value="1.5"`)
+				require.NoError(t, err)
+				require.NoError(t, conn.QueryRowContext(ctx, "execute aggregate_source using @aggregate_value").Scan(&got))
+				require.Equal(t, tc.wantText, got)
+				_, err = conn.ExecContext(ctx, `set @aggregate_value=1.5e0`)
+				require.NoError(t, err)
+			})
+		}
+	})
+	t.Run("SQL EXECUTE IFNULL grouped subquery common value", func(t *testing.T) {
+		conn, err := db.Conn(ctx)
+		require.NoError(t, err)
+		defer conn.Close()
+		_, err = conn.ExecContext(ctx, `set @grouped_value=1.5e0`)
+		require.NoError(t, err)
+		_, err = conn.ExecContext(ctx, `prepare grouped_ifnull from 'select hex(char(ifnull((select ? from issue_25408_pagination.page group by 1 limit 1),1.5e0)))'`)
+		require.NoError(t, err)
+		defer func() {
+			_, err := conn.ExecContext(ctx, "deallocate prepare grouped_ifnull")
+			require.NoError(t, err)
+		}()
+		var got string
+		require.NoError(t, conn.QueryRowContext(ctx, "execute grouped_ifnull using @grouped_value").Scan(&got))
+		require.Equal(t, "02", got)
+		_, err = conn.ExecContext(ctx, `set @grouped_value="1.5"`)
+		require.NoError(t, err)
+		require.NoError(t, conn.QueryRowContext(ctx, "execute grouped_ifnull using @grouped_value").Scan(&got))
+		require.Equal(t, "01", got)
+	})
 	t.Run("COM_STMT numeric and text coalesce", func(t *testing.T) {
 		conn, err := db.Conn(ctx)
 		require.NoError(t, err)

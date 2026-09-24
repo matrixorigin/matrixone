@@ -7331,6 +7331,34 @@ func refreshPreparedPlanProjectionExprType(
 			changed = changed || argChanged
 		}
 
+		// A grouped subquery may acquire its numeric domain only after the
+		// projection refresh. Reconcile IFNULL's common value from those
+		// refreshed sources rather than retaining PREPARE's TEXT envelopes.
+		if expr.GetPreparedNumeric().GetIfnullCommonValue() && types.T(expr.Typ.Id).IsMySQLString() &&
+			len(exprImpl.F.Args) == 3 {
+			args := DeepCopyExprList(exprImpl.F.Args)
+			for _, i := range []int{1, 2} {
+				args[i] = stripIntegerSelectionReconciliation(args[i])
+				if args[i].GetPreparedNumeric().GetProvisionalResultPeer() {
+					var err error
+					args[i], err = restorePreparedResultPeer(ctx, args[i])
+					if err != nil {
+						return false, err
+					}
+				}
+			}
+			bound, err := BindFuncExprImplByPlanExpr(ctx, functionName, args)
+			if err != nil {
+				return false, err
+			}
+			if !types.T(bound.Typ.Id).IsMySQLString() {
+				preserveReboundFunctionMetadata(exprImpl.F, bound.GetF())
+				expr.Typ = bound.Typ
+				expr.Expr = bound.Expr
+				return true, nil
+			}
+		}
+
 		argsChanged := false
 		for i, arg := range exprImpl.F.Args {
 			if arg != nil && !reflect.DeepEqual(arg.Typ, originalArgTypes[i]) {
@@ -7338,8 +7366,15 @@ func refreshPreparedPlanProjectionExprType(
 				break
 			}
 		}
-		if (!argsChanged && !bitwiseAggregateSourceChanged) || exprImpl.F.Func == nil || functionName == "" ||
-			isExplicitPreparedCast(expr) {
+		staleTextIntegerCast := false
+		if isIntegerArgumentCast(expr) && len(exprImpl.F.Args) == 2 && exprImpl.F.Func != nil {
+			_, overload := function.DecodeOverloadID(exprImpl.F.Func.Obj)
+			staleTextIntegerCast = overload == function.TextIntegerBitsCastOverload &&
+				types.T(exprImpl.F.Args[0].Typ.Id) != types.T_any &&
+				!types.T(exprImpl.F.Args[0].Typ.Id).IsMySQLString()
+		}
+		if (!argsChanged && !bitwiseAggregateSourceChanged && !staleTextIntegerCast) ||
+			exprImpl.F.Func == nil || functionName == "" || (isExplicitPreparedCast(expr) && !staleTextIntegerCast) {
 			return changed, nil
 		}
 
@@ -7352,13 +7387,17 @@ func refreshPreparedPlanProjectionExprType(
 			// their native byte-oriented path.
 			rebindArgs[0] = DeepCopyExpr(rebindArgs[0].GetF().Args[0])
 		}
-		rebound, err := bindPreparedFuncExprImplByPlanExpr(
-			ctx,
-			expr,
-			functionName,
-			rebindArgs,
-			nil,
-		)
+		var rebound *plan.Expr
+		var err error
+		if staleTextIntegerCast {
+			// A projected aggregate can change from provisional TEXT to a
+			// numeric domain after its producer has been specialized. CAST7
+			// is text-only; select the numeric integer conversion here.
+			rebound, err = appendIntegerArgument(ctx, rebindArgs[0], types.T(expr.Typ.Id), false)
+		}
+		if rebound == nil && err == nil {
+			rebound, err = bindPreparedFuncExprImplByPlanExpr(ctx, expr, functionName, rebindArgs, nil)
+		}
 		if err != nil {
 			return false, err
 		}
@@ -7370,7 +7409,7 @@ func refreshPreparedPlanProjectionExprType(
 		}
 		expr.Typ = rebound.Typ
 		expr.Expr = rebound.Expr
-		return changed || !reflect.DeepEqual(expr.Typ, originalType) || argsChanged, nil
+		return changed || !reflect.DeepEqual(expr.Typ, originalType) || argsChanged || staleTextIntegerCast, nil
 
 	case *plan.Expr_List:
 		if exprImpl.List == nil {
