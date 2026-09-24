@@ -435,22 +435,34 @@ func (a *AwsSDKv2) Write(
 	defer wrapSizeMismatchErr(&err)
 
 	if sizeHint == nil {
+		if err := ctx.Err(); err != nil {
+			return err
+		}
+		content, readErr := io.ReadAll(io.LimitReader(r, 64*(1<<20)))
+		if readErr != nil {
+			return readErr
+		}
+		if len(content) == 0 {
+			size := int64(0)
+			return a.Write(ctx, key, bytes.NewReader(nil), &size, expire)
+		}
+
 		// multipart
-		output, err := DoWithRetryContext(ctx, "create multipart upload", func() (*s3.CreateMultipartUploadOutput, error) {
+		output, createErr := DoWithRetryContext(ctx, "create multipart upload", func() (*s3.CreateMultipartUploadOutput, error) {
 			return a.client.CreateMultipartUpload(ctx, &s3.CreateMultipartUploadInput{
 				Bucket:  ptrTo(a.bucket),
 				Key:     ptrTo(key),
 				Expires: expire,
 			})
 		}, maxRetryAttemps, IsRetryableError)
-		if err != nil {
-			return err
+		if createErr != nil {
+			return createErr
 		}
 
 		defer func() {
 			// abort
 			if err != nil {
-				_, abortErr := a.client.AbortMultipartUpload(ctx, &s3.AbortMultipartUploadInput{
+				_, abortErr := a.client.AbortMultipartUpload(context.WithoutCancel(ctx), &s3.AbortMultipartUploadInput{
 					Bucket:   ptrTo(a.bucket),
 					Key:      ptrTo(key),
 					UploadId: output.UploadId,
@@ -462,16 +474,8 @@ func (a *AwsSDKv2) Write(
 		// upload
 		num := int32(1)
 		completed := new(types.CompletedMultipartUpload)
-		for {
-			reader := io.LimitReader(r, 64*(1<<20))
-			content, err := io.ReadAll(reader)
-			if err != nil {
-				return err
-			}
-			if len(content) == 0 {
-				break
-			}
-			uploadOutput, err := DoWithRetryContext(ctx, "upload part", func() (*s3.UploadPartOutput, error) {
+		for len(content) > 0 {
+			uploadOutput, uploadErr := DoWithRetryContext(ctx, "upload part", func() (*s3.UploadPartOutput, error) {
 				recordS3PutRequest(ctx, a.perfCounterSets...)
 				return a.client.UploadPart(ctx, &s3.UploadPartInput{
 					Bucket:     ptrTo(a.bucket),
@@ -481,8 +485,8 @@ func (a *AwsSDKv2) Write(
 					Body:       bytes.NewReader(content),
 				})
 			}, maxRetryAttemps, IsRetryableError)
-			if err != nil {
-				return err
+			if uploadErr != nil {
+				return uploadErr
 			}
 			recordS3AcceptedBytes(ctx, int64(len(content)), a.perfCounterSets...)
 			completed.Parts = append(completed.Parts, types.CompletedPart{
@@ -490,10 +494,10 @@ func (a *AwsSDKv2) Write(
 				PartNumber: ptrTo(num),
 			})
 			num++
-		}
-		if num == 1 {
-			// no content
-			return nil
+			content, err = io.ReadAll(io.LimitReader(r, 64*(1<<20)))
+			if err != nil {
+				return err
+			}
 		}
 
 		// complete
