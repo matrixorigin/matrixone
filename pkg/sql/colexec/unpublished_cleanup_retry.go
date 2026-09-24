@@ -30,6 +30,7 @@ const unpublishedS3RetryInterval = time.Second
 // worker per CN retries the exact workspace cleanup callback until it succeeds
 // or the CN is closed. The queue is in-memory; process crashes need durable GC.
 type unpublishedS3CleanupQueue struct {
+	closeMu sync.Mutex
 	mu      sync.Mutex
 	pending []func(context.Context) error
 	stop    chan struct{}
@@ -48,12 +49,32 @@ func (srv *Server) RetryUnpublishedS3Cleanup(cleanup func(context.Context) error
 		return moerr.NewInvalidStateNoCtx("CN is closing with unpublished S3 cleanup pending")
 	}
 	q.pending = append(q.pending, cleanup)
+	q.startLocked()
+	return nil
+}
+
+func (q *unpublishedS3CleanupQueue) startLocked() {
 	if q.stop == nil {
 		q.stop = make(chan struct{})
 		q.done = make(chan struct{})
 		go q.run(q.stop, q.done)
 	}
-	return nil
+}
+
+// Clear the consumed slot before advancing the slice: the backing array must
+// not retain completed callbacks and their captured cleanup resources.
+func (q *unpublishedS3CleanupQueue) finishAttemptLocked(err error) {
+	if err != nil && len(q.pending) == 1 {
+		return
+	}
+	cleanup := q.pending[0]
+	q.pending[0] = nil
+	q.pending = q.pending[1:]
+	if err != nil {
+		q.pending = append(q.pending, cleanup)
+	} else if len(q.pending) == 0 {
+		q.pending = nil
+	}
 }
 
 func (q *unpublishedS3CleanupQueue) run(stop <-chan struct{}, done chan<- struct{}) {
@@ -80,11 +101,7 @@ func (q *unpublishedS3CleanupQueue) run(stop <-chan struct{}, done chan<- struct
 		err := cleanup(attemptCtx)
 		cancel()
 		q.mu.Lock()
-		if err == nil {
-			q.pending = q.pending[1:]
-		} else if len(q.pending) > 1 {
-			q.pending = append(q.pending[1:], cleanup)
-		}
+		q.finishAttemptLocked(err)
 		q.mu.Unlock()
 		if err != nil {
 			logutil.Warn("remote unpublished S3 cleanup will be retried", zap.Error(err))
@@ -93,13 +110,18 @@ func (q *unpublishedS3CleanupQueue) run(stop <-chan struct{}, done chan<- struct
 }
 
 // CloseUnpublishedS3Cleanup joins the retry worker before CN file-service
-// dependencies are closed. It makes one last bounded pass and reports any
-// unresolved task rather than silently dropping ownership on shutdown.
+// dependencies are closed. Failed tasks rotate within one bounded deadline.
+// On timeout the CN keeps its dependencies alive (fail-stop), so resume the
+// worker to keep those tasks retryable if storage subsequently recovers.
 func (srv *Server) CloseUnpublishedS3Cleanup(ctx context.Context) error {
 	if srv == nil {
 		return nil
 	}
 	q := &srv.unpublishedS3Cleanup
+	q.closeMu.Lock()
+	defer q.closeMu.Unlock()
+	cleanupCtx, cancel := UnpublishedS3CleanupContext(ctx)
+	defer cancel()
 	q.mu.Lock()
 	q.closing = true
 	stop, done := q.stop, q.done
@@ -113,27 +135,46 @@ func (srv *Server) CloseUnpublishedS3Cleanup(ctx context.Context) error {
 		<-done
 	}
 
-	cleanupCtx, cancel := UnpublishedS3CleanupContext(ctx)
-	defer cancel()
 	var lastErr error
 	for {
 		q.mu.Lock()
-		if len(q.pending) == 0 {
+		remaining := len(q.pending)
+		if remaining == 0 {
 			q.mu.Unlock()
 			return nil
 		}
-		cleanup := q.pending[0]
-		q.mu.Unlock()
-		if err := cleanup(cleanupCtx); err != nil {
-			lastErr = err
-			break
+		if cleanupCtx.Err() != nil {
+			q.startLocked()
+			q.mu.Unlock()
+			return moerr.NewInternalErrorNoCtxf("%d unpublished S3 cleanup tasks remain at CN shutdown: %v (deadline: %v)", remaining, lastErr, cleanupCtx.Err())
 		}
-		q.mu.Lock()
-		q.pending = q.pending[1:]
 		q.mu.Unlock()
+		for range remaining {
+			if cleanupCtx.Err() != nil {
+				break
+			}
+			q.mu.Lock()
+			cleanup := q.pending[0]
+			q.mu.Unlock()
+			attemptCtx, attemptCancel := context.WithTimeout(cleanupCtx, 30*time.Second)
+			err := cleanup(attemptCtx)
+			attemptCancel()
+			q.mu.Lock()
+			q.finishAttemptLocked(err)
+			remainingTasks := len(q.pending)
+			q.mu.Unlock()
+			if err != nil {
+				lastErr = err
+			}
+			if remainingTasks == 0 {
+				return nil
+			}
+		}
+		timer := time.NewTimer(unpublishedS3RetryInterval)
+		select {
+		case <-cleanupCtx.Done():
+		case <-timer.C:
+		}
+		timer.Stop()
 	}
-	q.mu.Lock()
-	remaining := len(q.pending)
-	q.mu.Unlock()
-	return moerr.NewInternalErrorNoCtxf("%d unpublished S3 cleanup tasks remain at CN shutdown: %v", remaining, lastErr)
 }
