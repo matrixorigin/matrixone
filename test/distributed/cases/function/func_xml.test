@@ -51,6 +51,18 @@ SELECT ExtractValue('<a/>', '/a:b:c');
 SELECT IF(FALSE, ExtractValue('<a>', '['), 'ok') AS masked;
 SHOW COUNT(*) WARNINGS;
 
+-- XML warning producers must use the same statement capacity and budget as
+-- other row-level functions. The offset probe catches the old 1024 fallback.
+SET SESSION max_error_count = 2048;
+SELECT SUM(ExtractValue('<a>', '/a') IS NULL) AS malformed_rows FROM generate_series(1, 1100) g;
+SHOW COUNT(*) WARNINGS;
+SHOW WARNINGS LIMIT 1024, 1;
+SET SESSION max_error_count = 0;
+SELECT SUM(ExtractValue('<a>', '/a') IS NULL) AS malformed_rows FROM generate_series(1, 3) g;
+SHOW COUNT(*) WARNINGS;
+SHOW WARNINGS;
+SET SESSION max_error_count = 1024;
+
 DROP DATABASE IF EXISTS xml_functions_28306;
 CREATE DATABASE xml_functions_28306;
 CREATE TABLE xml_functions_28306.inputs(id INT PRIMARY KEY, doc TEXT, path VARCHAR(30));
