@@ -5867,6 +5867,16 @@ func decimal128ToFloat[T constraints.Float](
 	return nil
 }
 
+// canWidenDecimalScale proves that increasing the coefficient's scale cannot
+// exceed either the declared precision or the physical DECIMAL representation.
+// Scale reduction can carry into the integer part, so it stays on the checked path.
+func canWidenDecimalScale(from, to types.Type) bool {
+	return from.Oid == to.Oid && from.Width > 0 && from.Width <= from.Oid.ToType().Width &&
+		from.Scale >= 0 && from.Scale <= from.Width && to.Scale > from.Scale &&
+		to.Width > 0 && to.Width <= to.Oid.ToType().Width && to.Scale <= to.Width &&
+		to.Width-to.Scale >= from.Width-from.Scale
+}
+
 func decimal64ToDecimal64(
 	from vector.FunctionParameterWrapper[types.Decimal64],
 	to *vector.FunctionResult[types.Decimal64], length int, selectList *FunctionSelectList) error {
@@ -5882,10 +5892,13 @@ func decimal64ToDecimal64(
 				return err
 			}
 		} else {
-			// Every conversion that reaches this path can reduce the target
-			// domain through precision or scale. Parse against the complete
-			// target definition instead of validating width alone.
-			result, err := types.ParseDecimal64(v.Format(fromtype.Scale), totype.Width, totype.Scale)
+			var result types.Decimal64
+			var err error
+			if canWidenDecimalScale(fromtype, totype) {
+				result, err = v.Scale(totype.Scale - fromtype.Scale)
+			} else {
+				result, err = types.ParseDecimal64(v.Format(fromtype.Scale), totype.Width, totype.Scale)
+			}
 			if err != nil {
 				return err
 			}
@@ -6138,7 +6151,9 @@ func decimal128ToDecimal128(
 		} else {
 			var result types.Decimal128
 			var err error
-			if totype.Scale < fromtype.Scale {
+			if canWidenDecimalScale(fromtype, totype) {
+				result, err = v.Scale(totype.Scale - fromtype.Scale)
+			} else if totype.Scale < fromtype.Scale {
 				result, err = types.ParseDecimal128(
 					roundDecimalCoefficient(v.Format(0), fromtype.Scale-totype.Scale), totype.Width, 0)
 			} else {
@@ -6271,7 +6286,9 @@ func decimal256ToDecimal256(
 		}
 		var result types.Decimal256
 		var err error
-		if totype.Scale < fromtype.Scale {
+		if canWidenDecimalScale(fromtype, totype) {
+			result, err = v.Scale(totype.Scale - fromtype.Scale)
+		} else if totype.Scale < fromtype.Scale {
 			result, err = types.ParseDecimal256(
 				roundDecimalCoefficient(v.Format(0), fromtype.Scale-totype.Scale), totype.Width, 0)
 		} else {

@@ -156,6 +156,89 @@ func TestDecimalCastChecksScaleGrowthAgainstTargetPrecision(t *testing.T) {
 	require.True(t, succeed, info)
 }
 
+func TestDecimalCastSafeScaleGrowth(t *testing.T) {
+	proc := testutil.NewProcess(t)
+	for _, tc := range []struct {
+		name   string
+		source types.Type
+		target types.Type
+		values any
+		want   any
+	}{
+		{"decimal64", types.New(types.T_decimal64, 12, 2), types.New(types.T_decimal64, 14, 4),
+			[]types.Decimal64{1234, types.Decimal64(1234).Minus(), 0, 0},
+			[]types.Decimal64{123400, types.Decimal64(123400).Minus(), 0, 0}},
+		{"decimal128", types.New(types.T_decimal128, 20, 2), types.New(types.T_decimal128, 22, 4),
+			[]types.Decimal128{{B0_63: 1234}, (types.Decimal128{B0_63: 1234}).Minus(), {}, {}},
+			[]types.Decimal128{{B0_63: 123400}, (types.Decimal128{B0_63: 123400}).Minus(), {}, {}}},
+		{"decimal256", types.New(types.T_decimal256, 40, 2), types.New(types.T_decimal256, 42, 4),
+			[]types.Decimal256{{B0_63: 1234}, (types.Decimal256{B0_63: 1234}).Minus(), {}, {}},
+			[]types.Decimal256{{B0_63: 123400}, (types.Decimal256{B0_63: 123400}).Minus(), {}, {}}},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			testCase := NewFunctionTestCase(proc, []FunctionTestInput{
+				NewFunctionTestInput(tc.source, tc.values, []bool{false, false, false, true}),
+				NewFunctionTestInput(tc.target, tc.want, nil),
+			}, NewFunctionTestResult(tc.target, false, tc.want, []bool{false, false, false, true}), NewCast)
+			succeed, info := testCase.Run()
+			require.True(t, succeed, info)
+		})
+	}
+	for _, tc := range []struct {
+		from, to types.Type
+		want     bool
+	}{
+		{types.New(types.T_decimal64, 12, 2), types.New(types.T_decimal64, 14, 4), true},
+		{types.New(types.T_decimal64, 12, 2), types.New(types.T_decimal64, 13, 4), false},
+		{types.New(types.T_decimal128, 38, 36), types.New(types.T_decimal128, 38, 38), false},
+		{types.New(types.T_decimal128, 20, 4), types.New(types.T_decimal128, 22, 2), false},
+		{types.New(types.T_decimal256, 76, 0), types.New(types.T_decimal256, 76, 1), false},
+		{types.New(types.T_decimal64, 0, 2), types.New(types.T_decimal64, 14, 4), false},
+		{types.New(types.T_decimal64, 12, 2), types.New(types.T_decimal64, 19, 4), false},
+	} {
+		require.Equal(t, tc.want, canWidenDecimalScale(tc.from, tc.to), "%v -> %v", tc.from, tc.to)
+	}
+}
+
+func BenchmarkDecimalSafeScaleGrowth(b *testing.B) {
+	proc := testutil.NewProcess(b)
+	values64 := make([]types.Decimal64, 256)
+	values128 := make([]types.Decimal128, 256)
+	values256 := make([]types.Decimal256, 256)
+	for i := range values64 {
+		values64[i] = 1234
+		values128[i] = types.Decimal128{B0_63: 1234}
+		values256[i] = types.Decimal256{B0_63: 1234}
+	}
+	for _, tc := range []struct {
+		name   string
+		source types.Type
+		target types.Type
+		values any
+	}{
+		{"decimal64", types.New(types.T_decimal64, 12, 2), types.New(types.T_decimal64, 14, 4), values64},
+		{"decimal128", types.New(types.T_decimal128, 20, 2), types.New(types.T_decimal128, 22, 4), values128},
+		{"decimal256", types.New(types.T_decimal256, 40, 2), types.New(types.T_decimal256, 42, 4), values256},
+	} {
+		b.Run(tc.name, func(b *testing.B) {
+			fc := NewFunctionTestCase(proc, []FunctionTestInput{
+				NewFunctionTestInput(tc.source, tc.values, nil),
+				NewFunctionTestInput(tc.target, tc.values, nil),
+			}, NewFunctionTestResult(tc.target, false, nil, nil), NewCast)
+			b.ReportAllocs()
+			b.ResetTimer()
+			for i := 0; i < b.N; i++ {
+				if err := fc.result.PreExtendAndReset(fc.fnLength); err != nil {
+					b.Fatal(err)
+				}
+				if _, err := fc.DebugRun(); err != nil {
+					b.Fatal(err)
+				}
+			}
+		})
+	}
+}
+
 func TestDecimalScaleReductionRoundsOnce(t *testing.T) {
 	proc := testutil.NewProcess(t)
 	for _, tc := range []struct {
