@@ -1,10 +1,11 @@
 # Python UDF implementation and rollout scope
 
 This describes the implemented, owner-authorized external Python adapter and its
-PR acceptance boundary. It does not approve a production tenant-isolation model.
-The shared Function Catalog design owns identity, revision and security semantics;
-SQL and Python designs own their language contracts. This summary does not replace
-those contracts.
+PR acceptance boundary. The relevant current-stage Catalog, SQL/planner,
+migration/restore, Python ABI, Flight, and resource contracts are consolidated
+in the [versioned current-stage design](python_udf_current_stage.md). Broader
+long-term designs continue to inform future work; this page does not approve a
+production tenant-isolation model.
 
 ## Owner-approved stage scope
 
