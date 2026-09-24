@@ -303,7 +303,7 @@ type ParallelMultipartOption struct {
 	Concurrency int
 	// Expire sets object expiration.
 	Expire *time.Time
-	// beforePartUpload runs after a worker owns its slots, before checking cancellation.
-	// It is used by package tests to synchronize cancellation at that boundary.
+	// beforePartUpload is a test-only hook; do not set it in production.
+	// It runs after a worker owns its slots, before checking cancellation.
 	beforePartUpload func()
 }

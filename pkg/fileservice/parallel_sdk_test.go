@@ -1230,7 +1230,7 @@ func TestAwsMultipartInitCancellationCleansOwnedUpload(t *testing.T) {
 	state.uploadID = "aws-uid-canceled"
 	ctx, cancel := context.WithCancel(context.Background())
 	defer cancel()
-	sdk := newTestAWSClientWithTransport(t, server, &cosMultipartInitCancelAfterResponseTransport{
+	sdk := newTestAWSClientWithTransport(t, server, &multipartInitCancelAfterResponseTransport{
 		base:   server.Client().Transport,
 		cancel: cancel,
 	})
@@ -1250,7 +1250,7 @@ func TestCOSMultipartInitCancellationCleansOwnedUpload(t *testing.T) {
 	defer server.Close()
 	state.uploadID = "cos-uid-canceled"
 	ctx, cancel := context.WithCancel(context.Background())
-	transport := &cosMultipartInitCancelAfterResponseTransport{
+	transport := &multipartInitCancelAfterResponseTransport{
 		base:   server.Client().Transport,
 		cancel: cancel,
 	}
@@ -1447,7 +1447,7 @@ type denyMultipartListTransport struct {
 	listCalls atomic.Int32
 }
 
-type cosMultipartInitCancelAfterResponseTransport struct {
+type multipartInitCancelAfterResponseTransport struct {
 	base   http.RoundTripper
 	cancel context.CancelFunc
 }
@@ -1491,7 +1491,7 @@ func (t *cosMultipartInitInvalidSuccessBodyTransport) RoundTrip(req *http.Reques
 	return resp, nil
 }
 
-func (t *cosMultipartInitCancelAfterResponseTransport) RoundTrip(req *http.Request) (*http.Response, error) {
+func (t *multipartInitCancelAfterResponseTransport) RoundTrip(req *http.Request) (*http.Response, error) {
 	resp, err := t.base.RoundTrip(req)
 	if err != nil {
 		return nil, err
