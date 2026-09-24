@@ -25,6 +25,7 @@ import (
 	"os"
 	"testing"
 
+	"github.com/klauspost/compress/zstd"
 	"github.com/matrixorigin/matrixone/pkg/sql/parsers/tree"
 	"github.com/pierrec/lz4/v4"
 	"github.com/stretchr/testify/require"
@@ -42,6 +43,8 @@ func TestGetCompressType(t *testing.T) {
 		{"", "a.csv.bzip2", tree.BZIP2},
 		{"", "a.csv.lz4", tree.LZ4},
 		{"", "a.csv.LZ4", tree.LZ4},
+		{"", "a.csv.zst", tree.ZSTD},
+		{"", "a.csv.ZSTD", tree.ZSTD},
 		{"", "a.tar.gz", tree.TAR_GZ},
 		{"", "a.TAR.GZ", tree.TAR_GZ},
 		{"", "a.tar.bz2", tree.TAR_BZ2},
@@ -98,6 +101,12 @@ func compressWith(t *testing.T, kind string, payload []byte) []byte {
 		require.NoError(t, err)
 		require.NoError(t, tw.Close())
 		require.NoError(t, gz.Close())
+	case tree.ZSTD:
+		w, err := zstd.NewWriter(&buf)
+		require.NoError(t, err)
+		_, err = w.Write(payload)
+		require.NoError(t, err)
+		require.NoError(t, w.Close())
 	case tree.NOCOMPRESS:
 		buf.Write(payload)
 	default:
@@ -111,7 +120,7 @@ func compressWith(t *testing.T, kind string, payload []byte) []byte {
 // decoders' Close left the file or object stream open until a finalizer ran.
 func TestUnCompressReaderClosesSource(t *testing.T) {
 	payload := bytes.Repeat([]byte("1,alpha,2026-09-23\n"), 1000)
-	for _, kind := range []string{tree.NOCOMPRESS, tree.GZIP, tree.FLATE, tree.ZLIB, tree.LZ4, tree.TAR_GZ} {
+	for _, kind := range []string{tree.NOCOMPRESS, tree.GZIP, tree.FLATE, tree.ZLIB, tree.LZ4, tree.ZSTD, tree.TAR_GZ} {
 		src := &closeCounter{Reader: bytes.NewReader(compressWith(t, kind, payload))}
 		r, err := getUnCompressReader(context.Background(), kind, "", src)
 		require.NoError(t, err, kind)
@@ -151,4 +160,25 @@ func TestUnCompressReaderErrorLeavesSourceOpen(t *testing.T) {
 	_, err = getUnCompressReader(context.Background(), tree.LZW, "", src)
 	require.Error(t, err)
 	require.Zero(t, src.closes)
+}
+
+// The zstd CLI writes a large input as several frames; they decode as one
+// stream.
+func TestZstdConcatenatedFrames(t *testing.T) {
+	var buf bytes.Buffer
+	for _, part := range []string{"1,a\n", "2,b\n", "3,c\n"} {
+		w, err := zstd.NewWriter(&buf)
+		require.NoError(t, err)
+		_, err = w.Write([]byte(part))
+		require.NoError(t, err)
+		require.NoError(t, w.Close())
+	}
+	src := &closeCounter{Reader: &buf}
+	r, err := getUnCompressReader(context.Background(), "", "x.csv.zst", src)
+	require.NoError(t, err)
+	got, err := io.ReadAll(r)
+	require.NoError(t, err)
+	require.Equal(t, "1,a\n2,b\n3,c\n", string(got))
+	require.NoError(t, r.Close())
+	require.Equal(t, 1, src.closes)
 }

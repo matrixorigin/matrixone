@@ -1104,6 +1104,8 @@ func GetCompressType(compressType string, filepath string) string {
 		return tree.BZIP2
 	case strings.HasSuffix(filepath, ".lz4"):
 		return tree.LZ4
+	case strings.HasSuffix(filepath, ".zst") || strings.HasSuffix(filepath, ".zstd"):
+		return tree.ZSTD
 	default:
 		return tree.NOCOMPRESS
 	}

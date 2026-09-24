@@ -209,6 +209,7 @@ const (
 	LZW        = "lzw"
 	ZLIB       = "zlib"
 	LZ4        = "lz4"
+	ZSTD       = "zstd"
 	TAR_GZ     = "tar.gz"
 	TAR_BZ2    = "tar.bz2"
 )

@@ -28,6 +28,7 @@ import (
 	"math"
 	"strings"
 
+	"github.com/klauspost/compress/zstd"
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
 	"github.com/matrixorigin/matrixone/pkg/fileservice"
 	"github.com/matrixorigin/matrixone/pkg/sql/parsers/tree"
@@ -175,6 +176,15 @@ func getUnCompressReader(ctx context.Context, compType string, filepath string, 
 		return decompressed(zl, zl.Close, r), nil
 	case tree.LZ4:
 		return decompressed(lz4.NewReader(r), nil, r), nil
+	case tree.ZSTD:
+		// One decoding goroutine per reader, like lz4's default: a parallel
+		// load already runs one reader per file, and the default would start
+		// GOMAXPROCS decoders for each of them.  Close stops the decoder.
+		zd, err := zstd.NewReader(r, zstd.WithDecoderConcurrency(1))
+		if err != nil {
+			return nil, err
+		}
+		return decompressed(zd, func() error { zd.Close(); return nil }, r), nil
 	case tree.LZW:
 		return nil, moerr.NewInternalErrorf(ctx, "the compress type '%s' is not support now", compType)
 	case tree.TAR_GZ:
