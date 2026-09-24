@@ -33,6 +33,18 @@ func TestXMLExtractionOracle(t *testing.T) {
 		{`<a><b>1</b><b>2</b></a>`, `/a/b`, `1 2`},
 		{`<a id="7"/>`, `/a/@id`, `7`},
 		{`<a><b/><b/></a>`, `count(/a/b)`, `2`},
+		{`<a><b>1</b><b>2</b></a>`, `sum(/a/b)`, `3`},
+		{`<a><b>1</b><b>2</b></a>`, `count(/a/b)=2`, `1`},
+		{`<a><b>1</b><b>2</b></a>`, `count(/a/b)!=2`, `0`},
+		{`<a><b>1</b><b>2</b></a>`, `sum(/a/b)>2`, `1`},
+		{`<a><b>1</b><b>2</b></a>`, `sum(/a/b)=count(/a/b)`, `0`},
+		{`<a/>`, `9007199254740993=9007199254740992`, `0`},
+		{`<a/>`, `9007199254740993`, `9007199254740993`},
+		{`<a/>`, `0002`, `2`},
+		{`<a>1e20</a>`, `sum(/a)`, `1e20`},
+		{`<a>1e-20</a>`, `sum(/a)`, `1e-20`},
+		{`<a><b>1<c>2</c>3</b></a>`, `sum(/a/b)`, `4`},
+		{`<a/>`, `sum(/a/b)`, `0`},
 		{`<a>x<b>y</b>z</a>`, `/a`, `x z`},
 		{`<a>x<b>y</b>z</a>`, `/a/text()`, `x z`},
 		{`<a>x<b>y</b>z</a>`, `//text()`, `x y z`},
@@ -59,6 +71,9 @@ func TestXMLExtractionOracle(t *testing.T) {
 		{`<a p:id="7"/>`, `/a/@p:id`, `7`},
 		{`<a><b>1</b><b>2</b></a><a><b>3</b><b>4</b></a>`, `/a/b[1]`, `1 3`},
 		{`<a><b>1</b><b>2</b></a><a><b>3</b></a>`, `//b[last()]`, `2 3`},
+		{`<a><b>1</b><b>2</b></a>`, `/a/b[position()=last()]`, `2`},
+		{`<a><b>1</b><b>2</b><b>3</b></a>`, `/a/b[position()<last()]`, `1 2`},
+		{`<a><b>1</b><b>2</b></a><a><b>3</b><b>4</b></a>`, `/a/b[position()=last()]`, `2 4`},
 		{`<a><b k="X">yes</b><b>no</b></a>`, `/a/b[@k="x"]`, `yes`},
 		{`<a><b k="x">1</b><b k="y">2</b></a>`, `a/b[@k][position()=2]`, `2`},
 		{`<a><b k="x">1</b><b k="y">2</b></a>`, `a/b[@k][1][@k='x']`, `1`},
@@ -126,6 +141,29 @@ func TestXMLRegistration(t *testing.T) {
 	}
 }
 
+func TestXMLScalarPublicEntrypoints(t *testing.T) {
+	proc := testutil.NewProcess(t)
+	defer proc.Free()
+	for _, tc := range []struct{ path, want string }{
+		{`sum(/a/b)`, `3`},
+		{`count(/a/b)=2`, `1`},
+		{`sum(/a/b)>=4`, `0`},
+		{`9007199254740993=9007199254740992`, `0`},
+		{`9007199254740993`, `9007199254740993`},
+		{`sum(/a/b)=3`, `1`},
+		{`/a/b[position()=last()]`, `2`},
+	} {
+		t.Run(tc.path, func(t *testing.T) {
+			fc := NewFunctionTestCase(proc, []FunctionTestInput{
+				NewFunctionTestInput(types.T_varchar.ToType(), []string{`<a><b>1</b><b>2</b></a>`}, nil),
+				NewFunctionTestConstInput(types.T_varchar.ToType(), []string{tc.path}, nil),
+			}, NewFunctionTestResult(types.T_varchar.ToType(), false, []string{tc.want}, nil), ExtractValue)
+			ok, info := fc.Run()
+			require.True(t, ok, info)
+		})
+	}
+}
+
 func TestXMLUpdateOracle(t *testing.T) {
 	proc := testutil.NewProcess(t)
 	defer proc.Free()
@@ -133,6 +171,7 @@ func TestXMLUpdateOracle(t *testing.T) {
 		{`<a><b>1</b></a>`, `/a/b`, `<c>2</c>`, `<a><c>2</c></a>`},
 		{`<a><b>1</b><b>2</b></a>`, `/a/b`, `<c/>`, `<a><b>1</b><b>2</b></a>`},
 		{`<a><b>1</b></a>`, `/a/c`, `<c/>`, `<a><b>1</b></a>`},
+		{`<a><b>1</b><b>2</b></a>`, `/a/b[position()=last()]`, `<c/>`, `<a><b>1</b><c/></a>`},
 		{`<a k="7"><b/></a>`, `/a/@k`, `z`, `<a z><b/></a>`},
 		{`<a />`, `/a`, `not xml`, `not xml`},
 		{`<a/>`, `/`, `raw`, `raw`},
@@ -210,7 +249,7 @@ func TestXMLMalformedAndUnsupported(t *testing.T) {
 		_, err := parseXMLFragment(context.Background(), s)
 		require.ErrorIs(t, err, errXMLMalformed, s)
 	}
-	for _, s := range []string{"", "[", "/a[", "//", "/a/", "/a[0]", "/a[-1]", "/a/ancestor::b", "sum(/a)", "1+2", "true()", "$x", "count(/a/text())", "count(//text())", "count(/a|/a//text())", "/a[text()='x']", "/a/@", "/:a", "/a:", "/a:b:c", "/a::b", "/p:1a", "/p:-a", "/a/@:k", "/a/@k:", "/a/@p:k:q", "/a[@:k]", "/a[@p:k:q='v']", "/a[:b='v']", "/a[p:b:c='v']", "/*:a", "/p:*", "/a/@p:*", "/a[@p:*='v']", "/a/text()[1]"} {
+	for _, s := range []string{"", "[", "/a[", "//", "/a/", "/a[0]", "/a[-1]", "/a/ancestor::b", "sum()", "sum(/a", "sum (/a)", "sum(/a/text())", "count(/a)=/a", "count(/a)=2e0", "count(/a)=+2", "count(/a)=2.5", ".5", "2.5", "9223372036854775808>0", "-9223372036854775808", "-9223372036854775808<0", "1.234567890123456789", "/a[position()=]", "/a[position()=+1]", "/a[position()=2e0]", "/a[position()=2.5]", "/a[position()>-9223372036854775808]", "1+2", "true()", "$x", "count(/a/text())", "count(//text())", "count(/a|/a//text())", "/a[text()='x']", "/a/@", "/:a", "/a:", "/a:b:c", "/a::b", "/p:1a", "/p:-a", "/a/@:k", "/a/@k:", "/a/@p:k:q", "/a[@:k]", "/a[@p:k:q='v']", "/a[:b='v']", "/a[p:b:c='v']", "/*:a", "/p:*", "/a/@p:*", "/a[@p:*='v']", "/a/text()[1]"} {
 		_, err := compileXMLXPath(context.Background(), s)
 		require.Error(t, err, s)
 	}

@@ -16,6 +16,15 @@ Support absolute/relative paths, `/`, `//`, lexical qualified names, wildcard,
 attributes, self/parent, sequential predicates (positive positions, last(),
 position()=integer, attribute existence/equality, direct-child literal equality),
 node-set union with document-order deduplication, and top-level count(path).
+Issue #29329 extends the same bounded evaluator with top-level sum(path),
+numeric comparisons of count/sum/integers in `[-9223372036854775807, 9223372036854775807]`, and positional comparisons such as
+`[position()=last()]` (per parent). `sum()` converts each selected element's
+direct text records or selected attribute's value to numbers; an empty match
+returns `0`. It does not add arbitrary arithmetic, XPath node-set comparisons,
+or general scalar expressions. UpdateXML returns NULL for these scalar targets.
+XPath decimal and out-of-range integer literals are explicitly unsupported;
+XML text consumed by `sum()` has its own numeric conversion. Integer-literal
+comparisons preserve precision rather than rounding through binary floats.
 Terminal text() is supported for extraction as a real terminal child-text
 selector: `/P/text()` selects P's direct text records, while `/P//text()`
 selects direct text records of P and of element descendants; `//text()` starts
@@ -52,7 +61,7 @@ network or host port, then removed exactly that container. Oracle observations:
 - A single update target is replaced using raw spans; replacement need not be
   valid XML. No/multiple matches return original bytes. `/` returns replacement.
   Attribute replacement includes its name/equals/quotes (`<a k="7">` -> `<a z>`).
-  A scalar count target yields NULL. Other scalar targets remain unsupported.
+  A scalar count/sum/comparison target yields NULL. Other scalar targets remain unsupported.
 - Nonconstant column XPath is rejected, including one-row columns. Prepared
   parameters work and must be recompiled from each execution's current value.
 

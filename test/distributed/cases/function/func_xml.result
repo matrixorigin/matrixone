@@ -3,6 +3,11 @@ ExtractValue('<a id="7"/>', '/a/@id') AS attr,
 ExtractValue('<a><b/><b/></a>', 'count(/a/b)') AS count_nodes;
 ➤ multi[-1,536870911,0]  ¦  attr[-1,536870911,0]  ¦  count_nodes[-1,536870911,0]  𝄀
 1 2  ¦  7  ¦  2
+SELECT ExtractValue('<a><b>1</b><b>2</b></a>', 'sum(/a/b)') AS sum_nodes,
+ExtractValue('<a><b>1</b><b>2</b></a>', 'count(/a/b)=2') AS count_equals,
+ExtractValue('<a><b>1</b><b>2</b></a>', '/a/b[position()=last()]') AS last_child;
+➤ sum_nodes[-1,536870911,0]  ¦  count_equals[-1,536870911,0]  ¦  last_child[-1,536870911,0]  𝄀
+3  ¦  1  ¦  2
 SELECT ExtractValue('<a>x<b>y</b>z</a>', '/a') AS direct_text,
 ExtractValue('<a>x<b>y</b>z</a>', '/a/text()') AS explicit_text,
 ExtractValue('<a>x<b>y</b>z</a>', '/a|/a/b') AS union_text;
@@ -73,7 +78,7 @@ SELECT UpdateXML('<a/>', '[', NULL);
 not supported: XPATH syntax error or unsupported XPath feature
 SELECT ExtractValue('<a>', '[');
 not supported: XPATH syntax error or unsupported XPath feature
-SELECT ExtractValue('<a/>', 'sum(/a)');
+SELECT ExtractValue('<a/>', 'sum()');
 not supported: XPATH syntax error or unsupported XPath feature
 SELECT UpdateXML('<a>x</a>', '/a/text()', 'Q') AS root_text;
 ➤ root_text[-1,536870911,0]  𝄀

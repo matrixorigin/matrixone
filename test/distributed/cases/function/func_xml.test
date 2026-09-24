@@ -6,6 +6,9 @@
 SELECT ExtractValue('<a><b>1</b><b>2</b></a>', '/a/b') AS multi,
 ExtractValue('<a id="7"/>', '/a/@id') AS attr,
 ExtractValue('<a><b/><b/></a>', 'count(/a/b)') AS count_nodes;
+SELECT ExtractValue('<a><b>1</b><b>2</b></a>', 'sum(/a/b)') AS sum_nodes,
+ExtractValue('<a><b>1</b><b>2</b></a>', 'count(/a/b)=2') AS count_equals,
+ExtractValue('<a><b>1</b><b>2</b></a>', '/a/b[position()=last()]') AS last_child;
 SELECT ExtractValue('<a>x<b>y</b>z</a>', '/a') AS direct_text,
 ExtractValue('<a>x<b>y</b>z</a>', '/a/text()') AS explicit_text,
 ExtractValue('<a>x<b>y</b>z</a>', '/a|/a/b') AS union_text;
@@ -43,7 +46,7 @@ UpdateXML('<a/>', '/a', NULL) IS NULL AS null_replacement;
 SELECT ExtractValue(NULL, '[');
 SELECT UpdateXML('<a/>', '[', NULL);
 SELECT ExtractValue('<a>', '[');
-SELECT ExtractValue('<a/>', 'sum(/a)');
+SELECT ExtractValue('<a/>', 'sum()');
 SELECT UpdateXML('<a>x</a>', '/a/text()', 'Q') AS root_text;
 SELECT UpdateXML('<a>x<b>y</b></a>', '/a//text()', 'Q') AS multiple_text;
 SELECT UpdateXML('<a><b>x</b></a>', '/a/b/text()', 'Q') AS nested_text;
