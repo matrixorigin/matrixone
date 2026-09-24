@@ -16,19 +16,19 @@ package compile
 
 import (
 	"context"
-	"errors"
 	"time"
 
 	"github.com/matrixorigin/matrixone/pkg/clusterservice"
+	"github.com/matrixorigin/matrixone/pkg/common/moerr"
 	"github.com/matrixorigin/matrixone/pkg/pb/metadata"
 	querypb "github.com/matrixorigin/matrixone/pkg/pb/query"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine"
 	"github.com/matrixorigin/matrixone/pkg/vm/process"
 )
 
-// Constructing an moerr with a query context reports it immediately, even when
-// the probe succeeds. A timeout cause must have no such side effect.
-var errRemoteCapabilityProbeTimeout = errors.New("remote capability probe timed out")
+// A timeout cause must not report an error when a probe succeeds.
+var errRemoteCapabilityProbeTimeout = moerr.NewInternalError(
+	moerr.NoReportContext(), "remote capability probe timed out")
 
 // Probe the selected workers as well as the coordinator's rollout gate.
 // Capabilities are not cached across executions or sender checks.
