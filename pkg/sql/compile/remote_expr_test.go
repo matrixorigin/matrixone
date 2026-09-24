@@ -226,6 +226,56 @@ func TestRemoteSecToTimeConversionWarningsRemainBounded(t *testing.T) {
 	require.Len(t, initiatingSession.warnings, 3)
 }
 
+func TestRemoteWarningCollectorConfiguredRetentionPrefixAndZero(t *testing.T) {
+	for _, tc := range []struct {
+		name  string
+		limit int
+		want  int
+	}{
+		{name: "zero", limit: 0, want: 0},
+		{name: "prefix", limit: 3, want: 3},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			collector := &remoteWarningCollector{
+				maxRetained:    tc.limit,
+				maxRetainedSet: true,
+			}
+			collector.AppendWarningBatch(5,
+				[]uint16{1, 2, 3, 4, 5},
+				[]string{"one", "two", "three", "four", "five"})
+			total, warnings := collector.SnapshotWarnings()
+			require.Equal(t, uint64(5), total)
+			require.Len(t, warnings, tc.want)
+			for i := range warnings {
+				require.Equal(t, uint16(i+1), warnings[i].Code)
+			}
+		})
+	}
+}
+
+func TestRemoteWarningCollectorRespectsProcessNarrowedBudget(t *testing.T) {
+	proc := &process.Process{Base: &process.BaseProcess{
+		Lim: process.Limitation{Size: 1024},
+	}}
+	collector := &remoteWarningCollector{
+		maxRetained:    int(^uint16(0)),
+		maxRetainedSet: true,
+		warningBudget:  process.WarningDiagnosticBudgetForProcess(proc),
+	}
+	proc.Session = collector
+
+	longMessage := strings.Repeat("x", 2000)
+	collector.AppendWarningDiagnostic(1000, longMessage)
+	collector.AppendWarningDiagnostic(1001, "later")
+
+	require.Equal(t, uint64(1024), collector.warningBudget.Limit())
+	require.Equal(t, uint64(2), collector.warningCount)
+	require.Empty(t, collector.warnings)
+	require.LessOrEqual(t, collector.warningChargeBytes, uint64(1024))
+	collector.closeWarnings(false)
+	require.Zero(t, collector.warningBudget.Used())
+}
+
 func TestRemoteNumericCastWarningCountIsIndependentOfBatching(t *testing.T) {
 	buildCast := func(proc *process.Process) *plan.Expr {
 		proc.Session = &remoteWarningSession{}
@@ -440,6 +490,42 @@ func TestRemoteWarningCollectorBoundsRetention(t *testing.T) {
 	require.Less(t, len(data), 1024)
 }
 
+func TestRemoteWarningCollectorLegacyPayloadFallsBackTo64(t *testing.T) {
+	collector := &remoteWarningCollector{}
+	for i := 0; i < remoteWarningRetentionLimit+1; i++ {
+		collector.AppendWarningDiagnostic(1292, "legacy")
+	}
+	total, retained := collector.SnapshotWarnings()
+	require.Equal(t, uint64(remoteWarningRetentionLimit+1), total)
+	require.Len(t, retained, remoteWarningRetentionLimit)
+}
+
+func TestRemoteTerminalEnvelopeByteBudgetCapsMaxCapacity(t *testing.T) {
+	const total = 65535
+	message := strings.Repeat("x", process.WarningDiagnosticMaxMessageBytes)
+	warnings := make([]remoteWarningDiagnostic, total)
+	for i := range warnings {
+		warnings[i] = remoteWarningDiagnostic{Code: uint16(i), Message: message}
+	}
+
+	data, err := marshalRemoteTerminalEnvelope(remoteTerminalEnvelope{
+		WarningCount:       total,
+		WarningDiagnostics: warnings,
+	}, 64*1024)
+	require.NoError(t, err)
+	require.LessOrEqual(t, len(data), 64*1024)
+
+	var envelope remoteTerminalEnvelope
+	require.NoError(t, json.Unmarshal(data, &envelope))
+	require.Equal(t, uint64(total), envelope.WarningCount)
+	require.NotEmpty(t, envelope.WarningDiagnostics)
+	require.Less(t, len(envelope.WarningDiagnostics), total)
+	for i, warning := range envelope.WarningDiagnostics {
+		require.Equal(t, uint16(i), warning.Code)
+		require.Equal(t, message, warning.Message)
+	}
+}
+
 func TestRemoteWarningCollectorMergesDescendantCountsAndRecords(t *testing.T) {
 	collector := &remoteWarningCollector{maxRetained: 2}
 	collector.AppendWarningBatch(100, []uint16{1, 2, 3}, []string{"a", "b", "c"})
@@ -468,6 +554,57 @@ func TestRemoteWarningCollectorBoundsMessageBytes(t *testing.T) {
 	require.Len(t, retained, 1)
 	require.LessOrEqual(t, len(retained[0].Message), process.WarningDiagnosticMaxMessageBytes)
 	require.Contains(t, retained[0].Message, "truncated")
+}
+
+func TestRemoteWarningCollectorMaxErrorCountUsesStatementBudget(t *testing.T) {
+	collector := &remoteWarningCollector{
+		maxRetained:    int(^uint16(0)),
+		maxRetainedSet: true,
+		warningBudget:  process.NewWarningDiagnosticBudget(process.WarningDiagnosticMaxBytes),
+	}
+	longMessage := strings.Repeat("x", process.WarningDiagnosticMaxMessageBytes*2)
+	for i := 0; i < int(^uint16(0)); i++ {
+		collector.AppendWarningDiagnostic(1292, longMessage)
+	}
+
+	total, retained := collector.SnapshotWarnings()
+	require.Equal(t, uint64(^uint16(0)), total)
+	require.NotEmpty(t, retained)
+	require.Less(t, len(retained), int(^uint16(0)))
+	require.LessOrEqual(t, collector.warningBytes, process.WarningDiagnosticMaxBytes)
+	require.LessOrEqual(t, collector.warningChargeBytes, uint64(process.WarningDiagnosticMaxBytes))
+	require.LessOrEqual(t, collector.warningBudget.Used(), uint64(process.WarningDiagnosticMaxBytes))
+	collector.closeWarnings(false)
+	require.Zero(t, collector.warningBudget.Used())
+}
+
+func TestRemoteWarningCollectorRejectsUnderchargedSameBudgetTransfer(t *testing.T) {
+	messages := []string{"first remote warning", "later remote warning"}
+	firstCharge := process.WarningDiagnosticRecordBytes(messages[0])
+	accounted := firstCharge + process.WarningDiagnosticRecordBytes(messages[1])
+	sourceCharge := accounted - 1
+	otherCharge := uint64(7)
+	budget := process.NewWarningDiagnosticBudget(otherCharge + sourceCharge)
+	require.True(t, budget.Reserve(otherCharge))
+	require.True(t, budget.Reserve(sourceCharge))
+	collector := &remoteWarningCollector{
+		maxRetained:    1,
+		maxRetainedSet: true,
+		warningBudget:  budget,
+	}
+
+	require.True(t, process.AppendWarningBatchToSinkOwned(
+		collector, 2, []uint16{1292, 1292}, messages, budget, sourceCharge))
+	total, retained := collector.SnapshotWarnings()
+	require.Equal(t, uint64(2), total)
+	require.Len(t, retained, 1)
+	require.Equal(t, messages[0], retained[0].Message)
+	require.Equal(t, otherCharge+firstCharge, budget.Used())
+
+	collector.closeWarnings(false)
+	require.Equal(t, otherCharge, budget.Used())
+	budget.Release(otherCharge)
+	require.Zero(t, budget.Used())
 }
 
 func TestRemoteWarningCollectorDoesNotRetainMoreRecordsThanTotal(t *testing.T) {

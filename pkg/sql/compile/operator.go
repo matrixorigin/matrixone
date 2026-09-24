@@ -2178,6 +2178,9 @@ func evaluateAggregateConfigString(proc *process.Process, expr *plan.Expr) (stri
 		return "", err
 	}
 	defer free()
+	if vec.Length() == 0 || vec.IsConstNull() || vec.IsNull(0) {
+		return "", nil
+	}
 	return vec.GetStringAt(0), nil
 }
 
