@@ -244,7 +244,38 @@ func TestRemoteDeleteFlushTransfersOwnershipBeforeReset(t *testing.T) {
 
 type deletionS3CleanupWorkspace struct {
 	client.Workspace
-	owners []*colexec.UnpublishedS3ObjectOwner
+	owners   []*colexec.UnpublishedS3ObjectOwner
+	cleanups []func(context.Context) error
+}
+
+func (w *deletionS3CleanupWorkspace) RetainUnpublishedS3Cleanup(cleanup func(context.Context) error) {
+	w.cleanups = append(w.cleanups, cleanup)
+}
+
+func TestRemoteDeleteFreeRetainsFailedWriterCleanup(t *testing.T) {
+	proc := testutil.NewProc(t)
+	defer proc.Free()
+	baseFS, err := colexec.GetSharedFSFromProc(proc)
+	require.NoError(t, err)
+	deleteErr := errors.New("injected remote delete cleanup failure")
+	fs := &failOnceDeleteFileService{FileService: baseFS, failErr: deleteErr, failCount: 2}
+	proc.Base.FileService = fs
+	ctr, name := flushTombstoneObjectForTest(t, proc, true)
+	require.Len(t, ctr.s3Writers, 1, "failed producer handoff must keep the writer")
+
+	workspace := &deletionS3CleanupWorkspace{}
+	txnOp := mock_frontend.NewMockTxnOperator(gomock.NewController(t))
+	txnOp.EXPECT().GetWorkspace().Return(workspace).AnyTimes()
+	proc.Base.TxnOperator = txnOp
+	arg := &Deletion{RemoteDelete: true, ctr: *ctr}
+	arg.Free(proc, true, deleteErr)
+	require.Empty(t, arg.ctr.s3Writers)
+	require.Len(t, workspace.cleanups, 1, "transaction must own the failed cleanup")
+	_, err = baseFS.StatFile(proc.Ctx, name)
+	require.NoError(t, err)
+	require.NoError(t, workspace.cleanups[0](proc.Ctx))
+	_, err = baseFS.StatFile(proc.Ctx, name)
+	require.True(t, moerr.IsMoErrCode(err, moerr.ErrFileNotFound), "%v", err)
 }
 
 func TestRemoteDeleteWorkspaceRetriesCleanupAfterProducerReuse(t *testing.T) {
