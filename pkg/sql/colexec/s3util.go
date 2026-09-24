@@ -212,6 +212,18 @@ func RetainUnpublishedS3Cleanup(
 	return true
 }
 
+// UnpublishedS3CleanupContext ignores request cancellation while preserving an
+// existing cleanup deadline. Nested writer cleanup must not restart the outer
+// finalizer's budget for each object or writer.
+func UnpublishedS3CleanupContext(ctx context.Context) (context.Context, context.CancelFunc) {
+	base := context.WithoutCancel(ctx)
+	deadline := time.Now().Add(10 * time.Minute)
+	if parentDeadline, ok := ctx.Deadline(); ok && parentDeadline.Before(deadline) {
+		deadline = parentDeadline
+	}
+	return context.WithDeadlineCause(base, deadline, moerr.CauseCleanUpUselessFiles)
+}
+
 func (w *CNS3Writer) String() string {
 	buf := bytes.NewBuffer(nil)
 	buf.WriteString(fmt.Sprintf("Sinker: %s\n", w.sinker.String()))
@@ -538,9 +550,7 @@ func (w *CNS3Writer) DeletePersisted(ctx context.Context) error {
 		return nil
 	}
 	w.cleanupPending = true
-	cleanupCtx, cancel := context.WithTimeoutCause(
-		context.WithoutCancel(ctx), 10*time.Minute, moerr.CauseCleanUpUselessFiles,
-	)
+	cleanupCtx, cancel := UnpublishedS3CleanupContext(ctx)
 	defer cancel()
 
 	if w.sinker != nil {
