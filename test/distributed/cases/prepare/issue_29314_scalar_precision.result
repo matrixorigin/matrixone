@@ -1,0 +1,65 @@
+select ceil(123.456, 2.5), floor(123.456, 2.5);
+➤ ceil(123.456, 2.5)[3,6,3]  ¦  floor(123.456, 2.5)[3,6,3]  𝄀
+123.456  ¦  123.456
+prepare issue_29314_p from 'select ceil(123.456, ?), floor(123.456, ?)';
+set @issue_29314_d = 2;
+execute issue_29314_p using @issue_29314_d, @issue_29314_d;
+➤ ceil(123.456, ?)[3,6,3]  ¦  floor(123.456, ?)[3,6,3]  𝄀
+123.460  ¦  123.450
+set @issue_29314_d = 2.5;
+execute issue_29314_p using @issue_29314_d, @issue_29314_d;
+➤ ceil(123.456, ?)[3,6,3]  ¦  floor(123.456, ?)[3,6,3]  𝄀
+123.456  ¦  123.456
+set @issue_29314_d = 2.5e0;
+execute issue_29314_p using @issue_29314_d, @issue_29314_d;
+➤ ceil(123.456, ?)[3,6,3]  ¦  floor(123.456, ?)[3,6,3]  𝄀
+123.460  ¦  123.450
+set @issue_29314_d = '2.5tail';
+execute issue_29314_p using @issue_29314_d, @issue_29314_d;
+➤ ceil(123.456, ?)[3,6,3]  ¦  floor(123.456, ?)[3,6,3]  𝄀
+123.460  ¦  123.450
+set @issue_29314_d = 2;
+execute issue_29314_p using @issue_29314_d, @issue_29314_d;
+➤ ceil(123.456, ?)[3,6,3]  ¦  floor(123.456, ?)[3,6,3]  𝄀
+123.460  ¦  123.450
+deallocate prepare issue_29314_p;
+drop table if exists issue_29314_values;
+create table issue_29314_values (v decimal(8,3));
+insert into issue_29314_values values (123.456), (-7.891), (0.005);
+prepare issue_29314_rows from 'select v, ceil(v, ?), floor(v, ?) from issue_29314_values order by v';
+set @issue_29314_d = 2.5;
+execute issue_29314_rows using @issue_29314_d, @issue_29314_d;
+➤ v[3,8,3]  ¦  ceil(v, ?)[3,8,3]  ¦  floor(v, ?)[3,8,3]  𝄀
+-7.891  ¦  -7.891  ¦  -7.891  𝄀
+0.005  ¦  0.005  ¦  0.005  𝄀
+123.456  ¦  123.456  ¦  123.456
+set @issue_29314_d = 2.5e0;
+execute issue_29314_rows using @issue_29314_d, @issue_29314_d;
+➤ v[3,8,3]  ¦  ceil(v, ?)[3,8,3]  ¦  floor(v, ?)[3,8,3]  𝄀
+-7.891  ¦  -7.890  ¦  -7.900  𝄀
+0.005  ¦  0.010  ¦  0.000  𝄀
+123.456  ¦  123.460  ¦  123.450
+prepare issue_29314_mask_first from 'select v, case when v=123.456 then ceil(v, ?) else 0 end from issue_29314_values order by v';
+set @issue_29314_d = 2.5;
+execute issue_29314_mask_first using @issue_29314_d;
+➤ v[3,8,3]  ¦  case when v = 123.456 then ceil(v, ?) else 0 end[3,8,3]  𝄀
+-7.891  ¦  0.000  𝄀
+0.005  ¦  0.000  𝄀
+123.456  ¦  123.456
+prepare issue_29314_mask_later from 'select v, case when v=-7.891 then floor(v, ?) else 0 end from issue_29314_values order by v';
+execute issue_29314_mask_later using @issue_29314_d;
+➤ v[3,8,3]  ¦  case when v = -7.891 then floor(v, ?) else 0 end[3,8,3]  𝄀
+-7.891  ¦  -7.891  𝄀
+0.005  ¦  0.000  𝄀
+123.456  ¦  0.000
+prepare issue_29314_mask_none from 'select v, case when v=999 then ceil(v, ?) else 0 end from issue_29314_values order by v';
+execute issue_29314_mask_none using @issue_29314_d;
+➤ v[3,8,3]  ¦  case when v = 999 then ceil(v, ?) else 0 end[3,8,3]  𝄀
+-7.891  ¦  0.000  𝄀
+0.005  ¦  0.000  𝄀
+123.456  ¦  0.000
+deallocate prepare issue_29314_mask_none;
+deallocate prepare issue_29314_mask_later;
+deallocate prepare issue_29314_mask_first;
+deallocate prepare issue_29314_rows;
+drop table issue_29314_values;
