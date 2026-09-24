@@ -35,6 +35,7 @@ func TestDecimalComparisonPreservesIntegralCapacity(t *testing.T) {
 		{"integer domain", types.T_int64.ToType(), types.New(types.T_decimal64, 6, 5), types.New(types.T_decimal128, 24, 5)},
 		{"maximum precision", types.New(types.T_decimal256, 75, 0), types.New(types.T_decimal256, 76, 1), types.New(types.T_decimal256, 76, 1)},
 		{"unspecified precision", types.New(types.T_decimal64, 0, 0), types.New(types.T_decimal64, 18, 1), types.New(types.T_decimal128, 19, 1)},
+		{"high precision overlapping values", types.New(types.T_decimal256, 65, 0), types.New(types.T_decimal256, 65, 30), types.New(types.T_decimal256, 76, 30)},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			for _, op := range []string{"=", "<=>", "in_range"} {
@@ -68,7 +69,7 @@ func TestDecimalComparisonAlignmentControls(t *testing.T) {
 			wantError bool
 		}{
 			{"same scale", []types.Type{types.New(types.T_decimal64, 6, 4), types.New(types.T_decimal64, 5, 4)}, false},
-			{"unrepresentable domain", []types.Type{types.New(types.T_decimal256, 76, 0), types.New(types.T_decimal256, 76, 1)}, true},
+			{"bounded physical domain", []types.Type{types.New(types.T_decimal256, 76, 0), types.New(types.T_decimal256, 76, 1)}, false},
 		} {
 			t.Run(op+"/"+tc.name, func(t *testing.T) {
 				args := append([]types.Type{}, tc.args...)
@@ -82,7 +83,12 @@ func TestDecimalComparisonAlignmentControls(t *testing.T) {
 				}
 				require.NoError(t, err)
 				targets, cast := resolved.ShouldDoImplicitTypeCast()
-				if cast {
+				if tc.name == "bounded physical domain" {
+					require.True(t, cast)
+					for _, target := range targets[:2] {
+						require.Equal(t, types.New(types.T_decimal256, 76, 1), target)
+					}
+				} else if cast {
 					require.Equal(t, args, targets)
 				}
 			})

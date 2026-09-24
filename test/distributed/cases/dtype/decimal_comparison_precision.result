@@ -71,6 +71,21 @@ IN_RANGE(c, 9999999999999999999999999999999999999.9,
 99999999999999999999999999999999999999, 0) FROM wide_pairs;
 ➤ IN_RANGE(a, 99999999999999999.9, 999999999999999999, 0)[-7,1,0]  ¦  IN_RANGE(c, 9999999999999999999999999999999999999.9, 99999999999999999999999999999999999999, 0)[-7,1,0]  𝄀
 1  ¦  1
+SELECT CAST(1 AS DECIMAL(65,0)) = CAST(1 AS DECIMAL(65,30)),
+CAST(1 AS DECIMAL(65,0)) <=> CAST(1 AS DECIMAL(65,30));
+➤ cast(1 as decimal(65)) = cast(1 as decimal(65, 30))[-7,1,0]  ¦  cast(1 as decimal(65)) <=> cast(1 as decimal(65, 30))[-7,1,0]  𝄀
+1  ¦  1
+SELECT CAST(2 AS DECIMAL(65,0)) = CAST(1 AS DECIMAL(65,30)),
+CAST(-1 AS DECIMAL(65,0)) <=> CAST(1 AS DECIMAL(65,30));
+➤ cast(2 as decimal(65)) = cast(1 as decimal(65, 30))[-7,1,0]  ¦  cast(-1 as decimal(65)) <=> cast(1 as decimal(65, 30))[-7,1,0]  𝄀
+0  ¦  0
+CREATE TABLE high_precision_pairs (a DECIMAL(65,0), b DECIMAL(65,30));
+INSERT INTO high_precision_pairs VALUES (1, 1), (2, 1), (-1, 1);
+SELECT a = b, a <=> b FROM high_precision_pairs ORDER BY a;
+➤ a = b[-7,1,0]  ¦  a <=> b[-7,1,0]  𝄀
+0  ¦  0  𝄀
+1  ¦  1  𝄀
+0  ¦  0
 SELECT CAST(a AS DECIMAL(5,5)) FROM scale_pairs WHERE id = 1;
 ➤ cast(a as decimal(5, 5))[3,5,5]  𝄀
 0.99999

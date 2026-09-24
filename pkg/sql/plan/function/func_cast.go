@@ -6087,8 +6087,11 @@ func decimal128ToDecimal64(
 				return err
 			}
 		} else {
-			dec := v.Format(fromtype.Scale)
-			result, err := types.ParseDecimal64(dec, totype.Width, totype.Scale)
+			dec, scale := v.Format(fromtype.Scale), totype.Scale
+			if totype.Scale < fromtype.Scale {
+				dec, scale = roundDecimalCoefficient(v.Format(0), fromtype.Scale-totype.Scale), 0
+			}
+			result, err := types.ParseDecimal64(dec, totype.Width, scale)
 			if err != nil {
 				return err
 			}
@@ -6098,6 +6101,24 @@ func decimal128ToDecimal64(
 		}
 	}
 	return nil
+}
+
+// roundDecimalCoefficient divides the exact unscaled coefficient only once.
+// Formatting a fractional Decimal128 before rounding can round a discarded
+// digit while extracting it, and then ParseDecimal128 rounds it a second time.
+func roundDecimalCoefficient(coefficient string, scaleDifference int32) string {
+	value, _ := new(big.Int).SetString(coefficient, 10)
+	negative := value.Sign() < 0
+	value.Abs(value)
+	divisor := new(big.Int).Exp(big.NewInt(10), big.NewInt(int64(scaleDifference)), nil)
+	quotient, remainder := new(big.Int).QuoRem(value, divisor, new(big.Int))
+	if remainder.Mul(remainder, big.NewInt(2)).Cmp(divisor) >= 0 {
+		quotient.Add(quotient, big.NewInt(1))
+	}
+	if negative {
+		quotient.Neg(quotient)
+	}
+	return quotient.String()
 }
 
 func decimal128ToDecimal128(
@@ -6115,7 +6136,14 @@ func decimal128ToDecimal128(
 				return err
 			}
 		} else {
-			result, err := types.ParseDecimal128(v.Format(fromtype.Scale), totype.Width, totype.Scale)
+			var result types.Decimal128
+			var err error
+			if totype.Scale < fromtype.Scale {
+				result, err = types.ParseDecimal128(
+					roundDecimalCoefficient(v.Format(0), fromtype.Scale-totype.Scale), totype.Width, 0)
+			} else {
+				result, err = types.ParseDecimal128(v.Format(fromtype.Scale), totype.Width, totype.Scale)
+			}
 			if err != nil {
 				return err
 			}
@@ -6145,8 +6173,11 @@ func decimal128ToDecimal256(
 		}
 		result := types.Decimal256FromDecimal128(v)
 		if totype.Width < fromtype.Width || totype.Scale != fromtype.Scale {
-			dec := result.Format(fromtype.Scale)
-			parsed, err := types.ParseDecimal256(dec, totype.Width, totype.Scale)
+			dec, scale := result.Format(fromtype.Scale), totype.Scale
+			if totype.Scale < fromtype.Scale {
+				dec, scale = roundDecimalCoefficient(result.Format(0), fromtype.Scale-totype.Scale), 0
+			}
+			parsed, err := types.ParseDecimal256(dec, totype.Width, scale)
 			if err != nil {
 				return err
 			}
@@ -6176,8 +6207,11 @@ func decimal256ToDecimal64(
 			}
 			continue
 		}
-		dec := v.Format(fromtype.Scale)
-		result, err := types.ParseDecimal64(dec, totype.Width, totype.Scale)
+		dec, scale := v.Format(fromtype.Scale), totype.Scale
+		if totype.Scale < fromtype.Scale {
+			dec, scale = roundDecimalCoefficient(v.Format(0), fromtype.Scale-totype.Scale), 0
+		}
+		result, err := types.ParseDecimal64(dec, totype.Width, scale)
 		if err != nil {
 			return err
 		}
@@ -6204,8 +6238,11 @@ func decimal256ToDecimal128(
 			}
 			continue
 		}
-		dec := v.Format(fromtype.Scale)
-		result, err := types.ParseDecimal128(dec, totype.Width, totype.Scale)
+		dec, scale := v.Format(fromtype.Scale), totype.Scale
+		if totype.Scale < fromtype.Scale {
+			dec, scale = roundDecimalCoefficient(v.Format(0), fromtype.Scale-totype.Scale), 0
+		}
+		result, err := types.ParseDecimal128(dec, totype.Width, scale)
 		if err != nil {
 			return err
 		}
@@ -6232,7 +6269,14 @@ func decimal256ToDecimal256(
 			}
 			continue
 		}
-		result, err := types.ParseDecimal256(v.Format(fromtype.Scale), totype.Width, totype.Scale)
+		var result types.Decimal256
+		var err error
+		if totype.Scale < fromtype.Scale {
+			result, err = types.ParseDecimal256(
+				roundDecimalCoefficient(v.Format(0), fromtype.Scale-totype.Scale), totype.Width, 0)
+		} else {
+			result, err = types.ParseDecimal256(v.Format(fromtype.Scale), totype.Width, totype.Scale)
+		}
 		if err != nil {
 			return err
 		}

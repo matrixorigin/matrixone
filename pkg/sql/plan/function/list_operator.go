@@ -216,7 +216,18 @@ func alignDecimalComparisonTypes(targets, inputs []types.Type) (bool, bool) {
 		}
 	}
 	if !setSafeDecimalWidthAndScaleFromSource(&target, sources) {
-		return false, false
+		// DECIMAL256's declared domains can need more than 76 digits when
+		// combined, yet values inside the physical comparison domain are
+		// still comparable. Keep the largest representable common scale and
+		// let the checked cast reject only values that actually overflow.
+		if target.Oid != types.T_decimal256 {
+			return false, false
+		}
+		maxScale := int32(0)
+		for _, source := range sources {
+			maxScale = max(maxScale, source.Scale)
+		}
+		target = types.New(types.T_decimal256, types.T_decimal256.ToType().Width, maxScale)
 	}
 	for i := range targets {
 		targets[i] = target
