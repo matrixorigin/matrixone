@@ -26,15 +26,17 @@ import (
 // path (ngramPhraseSlots -> NL / quoted boolean / BM25) looked up the raw, untruncated word and
 // missed the stored token. The query token must be truncated the same way the index truncates.
 func TestLongTokenTruncationLookup(t *testing.T) {
-	b26 := strings.Repeat("b", 26)  // stored as 23 b
-	a23 := strings.Repeat("a", 23)  // stored whole
-	ya12 := strings.Repeat("я", 12) // 24 bytes -> stored as 11 я (22 bytes); я is Latin-class (<0x7FF)
+	b26 := strings.Repeat("b", 26)         // stored as 23 b
+	a23 := strings.Repeat("a", 23)         // stored whole
+	ya12 := strings.Repeat("я", 12)        // 24 bytes -> stored as 11 я (22 bytes); я is Latin-class (<0x7FF)
+	aya12 := "a" + strings.Repeat("я", 12) // 25 bytes -> stored a+10я (21); mixed-width boundary (#29276)
 	docs := []Doc{
 		{int64(1), []byte(b26)},
 		{int64(2), []byte(a23)},
 		{int64(3), []byte("hello " + b26)},
 		{int64(4), []byte("short")},
 		{int64(5), []byte(ya12)},
+		{int64(6), []byte(aya12)},
 	}
 	seg := buildSeg(t, "cap", 0, docs)
 	idx := NewIndex([]*Segment{seg}, nil)
@@ -61,6 +63,14 @@ func TestLongTokenTruncationLookup(t *testing.T) {
 			// Cyrillic 12 я (24 bytes) stored as 11 я -> the query must truncate to 11 too.
 			require.ElementsMatch(t, []any{int64(5)}, nlIDs(t, idx, parser, ya12),
 				"a long 2-byte-rune word must be looked up as the truncated stored token")
+			// Mixed-width run a+12я (25 bytes): outputLatin over-truncates to a+10я (21), NOT the clean
+			// a+11я (23). NL / quoted boolean / BM25 must reproduce that exactly, hitting only doc 6.
+			require.ElementsMatch(t, []any{int64(6)}, nlIDs(t, idx, parser, aya12),
+				"mixed-width run must truncate like outputLatin (a+10я), not the clean UTF-8 boundary")
+			require.ElementsMatch(t, []any{int64(6)}, boolIDs(t, idx, parser, `"`+aya12+`"`),
+				"quoted boolean must reproduce the mixed-width stored token")
+			require.ElementsMatch(t, []any{int64(6)}, bm25(aya12, parser),
+				"BM25 must reproduce the mixed-width stored token")
 
 			// Controls that already worked.
 			require.ElementsMatch(t, []any{int64(2)}, nlIDs(t, idx, parser, a23),
@@ -82,7 +92,12 @@ func TestNgramPhraseSlotsLatinMatchesStoredToken(t *testing.T) {
 		strings.Repeat("x", 22), // under the cap
 		strings.Repeat("я", 12), // 24 bytes, 2-byte runes -> backs up to 22
 		strings.Repeat("é", 13), // 26 bytes, 2-byte runes -> backs up to 22
-		"MixedCASEword",         // lowercasing, under the cap
+		// Mixed-width: a leading ASCII byte shifts the 2-byte runes so the cap lands one byte PAST a
+		// complete rune. outputLatin still drops that rune (a+12я 25B -> a+10я 21B, not the clean 23B);
+		// the query truncation must match byte-for-byte (#29276).
+		"a" + strings.Repeat("я", 12), // 25 bytes -> stored a+10я (21)
+		"a" + strings.Repeat("é", 13), // 27 bytes -> stored a+10é (21)
+		"MixedCASEword",               // lowercasing, under the cap
 	} {
 		terms, err := tokenizeToTerms([]byte(run), tok)
 		require.NoError(t, err)

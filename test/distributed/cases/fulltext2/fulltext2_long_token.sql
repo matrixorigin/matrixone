@@ -12,7 +12,8 @@ insert into ft values
   (1, 'bbbbbbbbbbbbbbbbbbbbbbbbbb'),
   (2, 'aaaaaaaaaaaaaaaaaaaaaaa'),
   (3, 'hello bbbbbbbbbbbbbbbbbbbbbbbbbb'),
-  (4, 'short');
+  (4, 'short'),
+  (5, 'aяяяяяяяяяяяя');
 create fulltext2 index fi on ft(body) with parser ngram;
 
 -- 26 b's are stored as the first 23. NL / BM25 / quoted-boolean must find docs 1 and 3.
@@ -21,6 +22,13 @@ select id from ft where match(body) against('bbbbbbbbbbbbbbbbbbbbbbbbbb' in bm25
 select id from ft where match(body) against('"bbbbbbbbbbbbbbbbbbbbbbbbbb"' in boolean mode) order by id;
 -- multi-run: the long run truncates, hello stays a hit -> doc 3.
 select id from ft where match(body) against('hello bbbbbbbbbbbbbbbbbbbbbbbbbb') order by id;
+
+-- mixed-width run: a + 12 Cyrillic я (25 bytes) is stored truncated to a + 10 я (21 bytes) on the
+-- tokenizer's byte boundary, not the clean 23-byte UTF-8 boundary. NL / BM25 / quoted-boolean must
+-- reproduce that exact truncation and find doc 5 (#29276).
+select id from ft where match(body) against('aяяяяяяяяяяяя') order by id;
+select id from ft where match(body) against('aяяяяяяяяяяяя' in bm25 mode) order by id;
+select id from ft where match(body) against('"aяяяяяяяяяяяя"' in boolean mode) order by id;
 
 -- Controls (already worked): unquoted boolean truncates via the tokenizer; the exact 23-byte token hits.
 select id from ft where match(body) against('bbbbbbbbbbbbbbbbbbbbbbbbbb' in boolean mode) order by id;
