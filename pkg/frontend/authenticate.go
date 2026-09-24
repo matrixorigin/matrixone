@@ -1570,6 +1570,8 @@ const (
 
 	deleteRoleFromMoRolePrivsFormat = `delete from mo_catalog.mo_role_privs where role_id = %d;`
 
+	deleteRoleFromMoRoleRuleFormat = `delete from mo_catalog.mo_role_rule where role_id = %d;`
+
 	// grant ownership on database
 	grantOwnershipOnDatabaseFormat = "grant ownership on database `%s` to `%s`;"
 
@@ -2239,6 +2241,7 @@ func getSqlForCheckViewMetaWithSnapshot(
 
 func getSqlForDeleteRole(roleId int64) []string {
 	return []string{
+		fmt.Sprintf(deleteRoleFromMoRoleRuleFormat, roleId),
 		fmt.Sprintf(deleteRoleFromMoRoleFormat, roleId),
 		fmt.Sprintf(deleteRoleFromMoUserGrantFormat, roleId),
 		fmt.Sprintf(deleteRoleFromMoRoleGrantFormat, roleId, roleId),
@@ -4726,15 +4729,23 @@ func doDropRole(ctx context.Context, ses *Session, dr *tree.DropRole) (err error
 		return err
 	}
 
-	bh := ses.GetBackgroundExec(ctx)
+	bh := ses.GetBackgroundExec(ctx, &BackgroundExecOption{forcePessimisticRC: true})
 	defer bh.Close()
 
 	// put it into the single transaction
 	err = bh.Exec(ctx, "begin;")
 	defer func() {
 		err = finishTxn(ctx, bh, err)
+		if err == nil {
+			ses.ruleCacheMu.Lock()
+			ses.ruleCache = nil
+			ses.ruleCacheMu.Unlock()
+		}
 	}()
 	if err != nil {
+		return err
+	}
+	if err = lockRoleRuleLifecycleInBackground(ctx, bh); err != nil {
 		return err
 	}
 
@@ -4756,10 +4767,11 @@ func doDropRole(ctx context.Context, ses *Session, dr *tree.DropRole) (err error
 			}
 		}
 
-		// step2 : delete mo_role
-		// step3 : delete mo_user_grant
-		// step4 : delete mo_role_grant
-		// step5 : delete mo_role_privs
+		// step2 : delete role rewrite rules
+		// step3 : delete mo_role
+		// step4 : delete mo_user_grant
+		// step5 : delete mo_role_grant
+		// step6 : delete mo_role_privs
 		if vr == nil {
 			continue
 		}

@@ -11,6 +11,7 @@ drop user if exists test_rule_user_where;
 drop user if exists test_rule_user_dup_projection;
 drop user if exists test_rule_user_expr_projection;
 drop user if exists test_rule_user_legacy;
+drop user if exists test_rule_user_dependency;
 drop role if exists test_rule_role;
 drop role if exists test_rule_role_multi_a;
 drop role if exists test_rule_role_multi_b;
@@ -30,6 +31,7 @@ drop role if exists test_rule_role_dup_projection_b;
 drop role if exists test_rule_role_expr_projection_a;
 drop role if exists test_rule_role_expr_projection_b;
 drop role if exists test_rule_role_legacy;
+drop role if exists test_rule_role_dependency;
 drop database if exists db1;
 drop database if exists db2;
 create database db1;
@@ -125,11 +127,34 @@ grant select on table db1.t_rename_legacy to test_rule_role_legacy;
 set enable_remap_hint = 1;
 select * from db1.t_rename_legacy order by a;
 -- @session
+
 alter table db1.t_rename_legacy rename to db1.t_rename_legacy_after;
 rename table db1.t_rename_legacy to db1.t_rename_legacy_after;
 -- @session:id=11&user=sys:test_rule_user_legacy:test_rule_role_legacy&password=123456
 set enable_remap_hint = 1;
 select * from db1.t_rename_legacy order by a;
+-- @session
+
+-- 11b. A rule's joined allowlist relation cannot be renamed out from under it
+create table db1.t_rename_rule_dependency(id int primary key, tenant_id int);
+insert into db1.t_rename_rule_dependency values (1,1),(2,2);
+create table db1.t_rename_rule_allowlist(tenant_id int);
+insert into db1.t_rename_rule_allowlist values (1);
+create role test_rule_role_dependency;
+alter role test_rule_role_dependency add rule "select target.id, target.tenant_id from db1.t_rename_rule_dependency as target join db1.t_rename_rule_allowlist as access_list on target.tenant_id = access_list.tenant_id" on table db1.t_rename_rule_dependency;
+create user test_rule_user_dependency identified by '123456' default role test_rule_role_dependency;
+grant connect on account * to test_rule_role_dependency;
+grant select on table db1.t_rename_rule_dependency to test_rule_role_dependency;
+grant select on table db1.t_rename_rule_allowlist to test_rule_role_dependency;
+-- @session:id=12&user=sys:test_rule_user_dependency:test_rule_role_dependency&password=123456
+set enable_remap_hint = 1;
+select id, tenant_id from db1.t_rename_rule_dependency order by id;
+-- @session
+alter table db1.t_rename_rule_allowlist rename to db1.t_rename_rule_allowlist_old;
+rename table db1.t_rename_rule_allowlist to db1.t_rename_rule_allowlist_old;
+-- @session:id=12&user=sys:test_rule_user_dependency:test_rule_role_dependency&password=123456
+set enable_remap_hint = 1;
+select id, tenant_id from db1.t_rename_rule_dependency order by id;
 -- @session
 
 -- 12. SET SECONDARY ROLE ALL merges select * rewrite rules from all active roles
@@ -289,6 +314,7 @@ drop user if exists test_rule_user_where;
 drop user if exists test_rule_user_dup_projection;
 drop user if exists test_rule_user_expr_projection;
 drop user if exists test_rule_user_legacy;
+drop user if exists test_rule_user_dependency;
 drop role if exists test_rule_role;
 drop role if exists test_rule_role_multi_a;
 drop role if exists test_rule_role_multi_b;
@@ -308,6 +334,12 @@ drop role if exists test_rule_role_dup_projection_b;
 drop role if exists test_rule_role_expr_projection_a;
 drop role if exists test_rule_role_expr_projection_b;
 drop role if exists test_rule_role_legacy;
+drop role if exists test_rule_role_dependency;
 drop database if exists db1;
 drop database if exists db2;
+select count(*) from mo_catalog.mo_user where user_name in ('test_rule_user','test_rule_user_show','test_rule_user_multi','test_rule_user_multi_diff','test_rule_user_inherit','test_rule_user_unmergeable','test_rule_user_alias','test_rule_user_where','test_rule_user_dup_projection','test_rule_user_expr_projection','test_rule_user_legacy','test_rule_user_dependency');
+select count(*) from mo_catalog.mo_role where role_name in ('test_rule_role','test_rule_role_multi_a','test_rule_role_multi_b','test_rule_role_multi_c','test_rule_role_multi_d','test_rule_role_inherit_a','test_rule_role_inherit_b','test_rule_role_validate','test_rule_role_unmergeable_a','test_rule_role_unmergeable_b','test_rule_role_alias_a','test_rule_role_alias_b','test_rule_role_where_a','test_rule_role_where_b','test_rule_role_dup_projection_a','test_rule_role_dup_projection_b','test_rule_role_expr_projection_a','test_rule_role_expr_projection_b','test_rule_role_legacy','test_rule_role_dependency');
+select count(*) from mo_catalog.mo_role_rule where rule_name in ('db1.t1','db2.t2','db1.t_rename_legacy','db1.t_dup','db1.t_rename_rule_dependency');
+select count(*) from mo_catalog.mo_tables where reldatabase in ('db1','db2') and relname in ('t_rename_no_rule','t_rename_no_rule_after','t.with.dot','t.with.dot.after','t_rename_chain_ok_a','t_rename_chain_ok_a_after','t_rename_chain_ok_b','t_rename_chain_ok_b_after','t_rename_chain_guard','t_rename_chain_guard_after','t_rename_legacy','t_rename_legacy_after','t_rename_rule_dependency','t_rename_rule_allowlist','t_rename_rule_allowlist_old');
+select count(*) from mo_catalog.mo_database where datname in ('db1','db2');
 set global enable_privilege_cache = on;
