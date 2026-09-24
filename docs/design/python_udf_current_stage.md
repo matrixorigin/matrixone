@@ -5,7 +5,7 @@
 | Design revision | `python-udf-current-stage-r1-2026-09-24` |
 | Applies to | MatrixOne PR #29152, test/development-stage Python UDF |
 | Implementation baseline reviewed | `9847da80d6c7096cb0460e46a5cf710e9714af3a` |
-| Approval | Feature owner `iamlinjunhong` approved this exact revision for the current test/development stage on 2026-09-24. The traceable PR approval record is linked from the PR discussion for this revision. |
+| Approval | Feature owner `iamlinjunhong` approved this exact revision for the current test/development stage on 2026-09-24 in [PR comment](https://github.com/matrixorigin/matrixone/pull/29152#issuecomment-5809313638). |
 | Not covered | Production tenant isolation, sandbox, Operator rollout, or cross-version rollback/restore |
 
 This is the approved governing contract for the current PR stage. It consolidates
