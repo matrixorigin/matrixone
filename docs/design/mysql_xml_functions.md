@@ -35,8 +35,9 @@ fixed notation for magnitudes from `1e-15` to below `1e15`, and also when a
 large value's significant digits extend beyond its decimal point; otherwise
 it uses scientific notation without a `+` or leading exponent zeroes. This
 keeps large fractional values such as `1000000000000000.1` distinct from
-exact large values such as `1e15`. Non-finite sum results remain explicit
-errors under this bounded subset.
+exact large values such as `1e15`. An out-of-range numeric text prefix
+contributes `0` (as observed for `1e309` in MySQL); non-finite accumulated
+sum results remain explicit errors under this bounded subset.
 The fragment validator admits vertical tab and form feed in element text and
 attribute values so the numeric converter can observe them. Other disallowed
 control bytes, including NUL, keep their existing malformed-XML result; this
@@ -46,11 +47,12 @@ selector: `/P/text()` selects P's direct text records, while `/P//text()`
 selects direct text records of P and of element descendants; `//text()` starts
 at the synthetic document node. The existing text-record model is preserved,
 so emitted nonempty records are space-joined without recursively forming an
-XPath string value. Text-bearing `count()` paths and all UpdateXML text()
-targets remain explicitly unsupported. UpdateXML supports element, attribute
-and document-root replacement. Other axes, variables, arbitrary arithmetic and
-scalar functions are explicitly unsupported. Invalid/unsupported XPath is an
-error, not NULL.
+XPath string value. Text-bearing `count()` paths remain explicitly unsupported.
+UpdateXML maps a terminal `text()` target to its current XPath context and
+replaces it only when that context is unique. It also supports element,
+attribute and document-root replacement. Other axes, variables, arbitrary
+arithmetic and scalar functions are explicitly unsupported. Invalid or
+unsupported XPath is an error, not NULL.
 
 Parent obtained the reference using an isolated MySQL 8.0.45 container with no
 network or host port, then removed exactly that container. Oracle observations:

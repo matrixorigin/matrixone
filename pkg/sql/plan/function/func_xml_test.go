@@ -27,6 +27,16 @@ import (
 	"github.com/stretchr/testify/require"
 )
 
+func cleanupXMLFunctionTestCase(t *testing.T, fc *FunctionTestCase) {
+	t.Helper()
+	t.Cleanup(func() {
+		for _, input := range fc.parameters {
+			input.Free(fc.proc.Mp())
+		}
+		fc.result.Free()
+	})
+}
+
 func TestXMLExtractionOracle(t *testing.T) {
 	for _, tc := range []struct{ xml, path, want string }{
 		{`<a><b>1</b></a>`, `/a/b`, `1`},
@@ -155,38 +165,24 @@ func TestXMLRegistration(t *testing.T) {
 func TestXMLScalarPublicEntrypoints(t *testing.T) {
 	proc := testutil.NewProcess(t)
 	defer proc.Free()
-	for _, tc := range []struct{ path, want string }{
-		{`sum(/a/b)`, `3`},
-		{`count(/a/b)=2`, `1`},
-		{`sum(/a/b)>=4`, `0`},
-		{`9007199254740993=9007199254740992`, `0`},
-		{`9007199254740993`, `9007199254740993`},
-		{`sum(/a/b)=3`, `1`},
-		{`/a/b[position()=last()]`, `2`},
+	const twoChildren = `<a><b>1</b><b>2</b></a>`
+	for _, tc := range []struct{ xml, path, want string }{
+		{twoChildren, `sum(/a/b)`, `3`},
+		{twoChildren, `count(/a/b)=2`, `1`},
+		{twoChildren, `sum(/a/b)>=4`, `0`},
+		{twoChildren, `9007199254740993=9007199254740992`, `0`},
+		{twoChildren, `9007199254740993`, `9007199254740993`},
+		{twoChildren, `sum(/a/b)=3`, `1`},
+		{twoChildren, `/a/b[position()=last()]`, `2`},
+		{`<a>1000000000000000.1</a>`, `sum(/a)`, `1000000000000000.1`},
+		{"<a>\v2</a>", `sum(/a)`, `2`},
 	} {
-		t.Run(tc.path, func(t *testing.T) {
-			fc := NewFunctionTestCase(proc, []FunctionTestInput{
-				NewFunctionTestInput(types.T_varchar.ToType(), []string{`<a><b>1</b><b>2</b></a>`}, nil),
-				NewFunctionTestConstInput(types.T_varchar.ToType(), []string{tc.path}, nil),
-			}, NewFunctionTestResult(types.T_varchar.ToType(), false, []string{tc.want}, nil), ExtractValue)
-			ok, info := fc.Run()
-			require.True(t, ok, info)
-		})
-	}
-}
-
-func TestXMLNumericBoundariesPublicEntrypoints(t *testing.T) {
-	proc := testutil.NewProcess(t)
-	defer proc.Free()
-	for _, tc := range []struct{ xml, want string }{
-		{`<a>1000000000000000.1</a>`, `1000000000000000.1`},
-		{"<a>\v2</a>", `2`},
-	} {
-		t.Run(tc.xml, func(t *testing.T) {
+		t.Run(tc.path+"/"+tc.xml, func(t *testing.T) {
 			fc := NewFunctionTestCase(proc, []FunctionTestInput{
 				NewFunctionTestInput(types.T_varchar.ToType(), []string{tc.xml}, nil),
-				NewFunctionTestConstInput(types.T_varchar.ToType(), []string{`sum(/a)`}, nil),
+				NewFunctionTestConstInput(types.T_varchar.ToType(), []string{tc.path}, nil),
 			}, NewFunctionTestResult(types.T_varchar.ToType(), false, []string{tc.want}, nil), ExtractValue)
+			cleanupXMLFunctionTestCase(t, &fc)
 			ok, info := fc.Run()
 			require.True(t, ok, info)
 		})
@@ -219,6 +215,7 @@ func TestXMLUpdateOracle(t *testing.T) {
 				NewFunctionTestConstInput(types.T_varchar.ToType(), []string{tc.path}, nil),
 				NewFunctionTestInput(types.T_varchar.ToType(), []string{tc.replacement}, nil),
 			}, NewFunctionTestResult(types.T_varchar.ToType(), false, []string{tc.want}, nil), UpdateXML)
+			cleanupXMLFunctionTestCase(t, &fc)
 			ok, info := fc.Run()
 			require.True(t, ok, info)
 		})
@@ -227,7 +224,7 @@ func TestXMLUpdateOracle(t *testing.T) {
 
 func TestXMLUpdateTextTargets(t *testing.T) {
 	proc := testutil.NewProcess(t)
-	defer proc.Free()
+	t.Cleanup(proc.Free)
 	for _, tc := range []struct {
 		name, xml, path, want string
 	}{
@@ -252,6 +249,7 @@ func TestXMLUpdateTextTargets(t *testing.T) {
 				NewFunctionTestConstInput(types.T_varchar.ToType(), []string{tc.path}, nil),
 				NewFunctionTestInput(types.T_varchar.ToType(), []string{"q"}, nil),
 			}, NewFunctionTestResult(types.T_varchar.ToType(), false, []string{tc.want}, nil), UpdateXML)
+			cleanupXMLFunctionTestCase(t, &fc)
 			ok, info := fc.Run()
 			require.True(t, ok, info)
 		})
