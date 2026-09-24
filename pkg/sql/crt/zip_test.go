@@ -17,6 +17,7 @@ package crt
 import (
 	"archive/zip"
 	"bytes"
+	"compress/flate"
 	"context"
 	"encoding/binary"
 	"hash/crc32"
@@ -191,4 +192,56 @@ func TestZipZip64LocalHeader(t *testing.T) {
 	got, _, err := readZip(buf.Bytes())
 	require.NoError(t, err)
 	require.Equal(t, payload, got)
+}
+
+// buildRawDeflateZip writes one deflate entry with its sizes and CRC in the
+// local header and no data descriptor, as Info-ZIP writes to a seekable file.
+func buildRawDeflateZip(t *testing.T, name string, payload []byte) []byte {
+	var comp bytes.Buffer
+	fw, err := flate.NewWriter(&comp, flate.DefaultCompression)
+	require.NoError(t, err)
+	_, err = fw.Write(payload)
+	require.NoError(t, err)
+	require.NoError(t, fw.Close())
+
+	var buf bytes.Buffer
+	zw := zip.NewWriter(&buf)
+	w, err := zw.CreateRaw(&zip.FileHeader{
+		Name:               name,
+		Method:             zip.Deflate,
+		CRC32:              crc32.ChecksumIEEE(payload),
+		CompressedSize64:   uint64(comp.Len()),
+		UncompressedSize64: uint64(len(payload)),
+	})
+	require.NoError(t, err)
+	_, err = w.Write(comp.Bytes())
+	require.NoError(t, err)
+	require.NoError(t, zw.Close())
+	return buf.Bytes()
+}
+
+// The compressed size is verified too, from the header or the data
+// descriptor: a deflate stream that ends cleanly must still have consumed
+// exactly the recorded compressed bytes.
+func TestZipCompressedSizeVerified(t *testing.T) {
+	payload := bytes.Repeat([]byte("5,echo,2026-09-23\n"), 200)
+
+	archive := buildRawDeflateZip(t, "a.csv", payload)
+	got, _, err := readZip(archive)
+	require.NoError(t, err)
+	require.Equal(t, payload, got)
+
+	// Header compressed size (offset 18) off by one.
+	bad := bytes.Clone(archive)
+	binary.LittleEndian.PutUint32(bad[18:], binary.LittleEndian.Uint32(bad[18:])+1)
+	_, _, err = readZip(bad)
+	require.ErrorContains(t, err, "corrupt")
+
+	// Descriptor compressed size (after signature and CRC) off by one.
+	streamed := buildZip(t, zipEntry{name: "a.csv", data: payload, method: zip.Deflate})
+	d := bytes.Index(streamed, []byte{0x50, 0x4b, 0x07, 0x08})
+	require.Positive(t, d)
+	binary.LittleEndian.PutUint32(streamed[d+8:], binary.LittleEndian.Uint32(streamed[d+8:])+1)
+	_, _, err = readZip(streamed)
+	require.ErrorContains(t, err, "corrupt")
 }

@@ -39,8 +39,8 @@ import (
 // A stored entry must carry its size in the local header, which is what zip
 // tools write for a seekable output; a stored entry written as a stream (size
 // only in the trailing data descriptor) cannot be delimited and is rejected.
-// The entry's CRC-32 and size are verified at the end, from the header or the
-// data descriptor.
+// The entry's CRC-32, uncompressed size and compressed size are verified at
+// the end, from the header or the data descriptor.
 
 const (
 	zipLocalHeaderSig   = 0x04034b50
@@ -193,10 +193,12 @@ func openZipEntry(ctx context.Context, br *bufio.Reader, h *zipLocalHeader) (io.
 	var (
 		data         io.Reader
 		closeDecoder func() error
+		counted      *compressedCounter
 	)
 	switch h.method {
 	case zipMethodDeflate:
-		fl := flate.NewReader(br)
+		counted = &compressedCounter{br: br}
+		fl := flate.NewReader(counted)
 		data, closeDecoder = fl, fl.Close
 	case zipMethodStore:
 		if h.hasDescriptor() {
@@ -208,18 +210,41 @@ func openZipEntry(ctx context.Context, br *bufio.Reader, h *zipLocalHeader) (io.
 		return nil, nil, moerr.NewInvalidInputf(ctx,
 			"zip entry '%s' uses compression method %d; only store and deflate are supported", h.name, h.method)
 	}
-	return &zipEntryReader{ctx: ctx, br: br, h: h, data: data, crc: crc32.NewIEEE()}, closeDecoder, nil
+	return &zipEntryReader{ctx: ctx, br: br, h: h, data: data, counted: counted, crc: crc32.NewIEEE()}, closeDecoder, nil
+}
+
+// compressedCounter counts the compressed bytes a decoder consumes.  It is an
+// io.ByteReader, so flate still reads exactly the entry's compressed bytes and
+// no more.
+type compressedCounter struct {
+	br *bufio.Reader
+	n  uint64
+}
+
+func (c *compressedCounter) Read(p []byte) (int, error) {
+	n, err := c.br.Read(p)
+	c.n += uint64(n)
+	return n, err
+}
+
+func (c *compressedCounter) ReadByte() (byte, error) {
+	b, err := c.br.ReadByte()
+	if err == nil {
+		c.n++
+	}
+	return b, err
 }
 
 // zipEntryReader verifies the entry's CRC-32 and size when its data ends.
 type zipEntryReader struct {
-	ctx  context.Context
-	br   *bufio.Reader
-	h    *zipLocalHeader
-	data io.Reader
-	crc  hash.Hash32
-	n    uint64
-	err  error
+	ctx     context.Context
+	br      *bufio.Reader
+	h       *zipLocalHeader
+	data    io.Reader
+	counted *compressedCounter // compressed bytes consumed; nil when stored
+	crc     hash.Hash32
+	n       uint64 // uncompressed bytes produced
+	err     error
 }
 
 func (z *zipEntryReader) Read(p []byte) (int, error) {
@@ -244,20 +269,25 @@ func (z *zipEntryReader) Read(p []byte) (int, error) {
 }
 
 func (z *zipEntryReader) verify() error {
-	wantCRC, wantSize := z.h.crc32, z.h.uncompressedSize
+	compressed := z.n // a stored entry's compressed bytes are its bytes
+	if z.counted != nil {
+		compressed = z.counted.n
+	}
+	wantCRC, wantSize, wantCompressed := z.h.crc32, z.h.uncompressedSize, z.h.compressedSize
 	if z.h.hasDescriptor() {
 		// A writer streaming an entry of 4GB or more may use the 8-byte
 		// descriptor without a zip64 extra in the local header.
-		d, err := readZipDescriptor(z.ctx, z.br, z.h.zip64 || z.n >= zipMaxUint32)
+		zip64 := z.h.zip64 || z.n >= zipMaxUint32 || compressed >= zipMaxUint32
+		d, err := readZipDescriptor(z.ctx, z.br, zip64)
 		if err != nil {
 			return err
 		}
-		wantCRC, wantSize = d.crc32, d.uncompressedSize
+		wantCRC, wantSize, wantCompressed = d.crc32, d.uncompressedSize, d.compressedSize
 	}
 	if z.h.method == zipMethodStore && z.n != z.h.compressedSize {
 		return zipTruncated(z.ctx, io.ErrUnexpectedEOF)
 	}
-	if z.crc.Sum32() != wantCRC || z.n != wantSize {
+	if z.crc.Sum32() != wantCRC || z.n != wantSize || compressed != wantCompressed {
 		return moerr.NewInvalidInputf(z.ctx, "zip entry '%s' is corrupt: checksum or size mismatch", z.h.name)
 	}
 	return nil
@@ -265,6 +295,7 @@ func (z *zipEntryReader) verify() error {
 
 type zipDescriptor struct {
 	crc32            uint32
+	compressedSize   uint64
 	uncompressedSize uint64
 }
 
@@ -292,8 +323,10 @@ func readZipDescriptor(ctx context.Context, br *bufio.Reader, zip64 bool) (zipDe
 		return d, zipTruncated(ctx, err)
 	}
 	if zip64 {
+		d.compressedSize = binary.LittleEndian.Uint64(sizes)
 		d.uncompressedSize = binary.LittleEndian.Uint64(sizes[8:])
 	} else {
+		d.compressedSize = uint64(binary.LittleEndian.Uint32(sizes))
 		d.uncompressedSize = uint64(binary.LittleEndian.Uint32(sizes[4:]))
 	}
 	return d, nil
