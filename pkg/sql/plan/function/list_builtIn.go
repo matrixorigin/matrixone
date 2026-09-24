@@ -8555,7 +8555,8 @@ var supportedMathBuiltIns = []FuncNew{
 		class:      plan.Function_STRICT,
 		layout:     STANDARD_FUNCTION,
 		// Format non-string scalars as SQL strings, but preserve every
-		// historical varlen input (including JSON and vectors) and its domain.
+		// historical varlen input (including JSON and vectors) and its domain;
+		// the executor serializes JSON values before hashing their bytes.
 		checkFn: crc32TypeMatch,
 
 		Overloads: []overload{
