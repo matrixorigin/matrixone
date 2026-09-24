@@ -1,0 +1,71 @@
+drop database if exists load_zz;
+create database load_zz;
+use load_zz;
+create table t(id int, name varchar(20));
+load data infile {'filepath'='$resources/load_data/zipzstd/rows_zst.csv.zst'} into table t fields terminated by ',' lines terminated by '\n' ignore 1 lines;
+select id, name from t order by id;
+➤ id[4,32,0]  ¦  name[12,20,0]  𝄀
+1  ¦  alpha  𝄀
+2  ¦  bravo  𝄀
+3  ¦  charlie
+delete from t;
+load data infile {'filepath'='$resources/load_data/zipzstd/rows_zst.csv.zst', 'compression'='zstd'} into table t fields terminated by ',' lines terminated by '\n' ignore 1 lines;
+select count(*), sum(id) from t;
+➤ count(*)[-5,64,0]  ¦  sum(id)[-5,64,0]  𝄀
+3  ¦  6
+delete from t;
+load data infile {'filepath'='$resources/load_data/zipzstd/rows_zip.csv.zip'} into table t fields terminated by ',' lines terminated by '\n' ignore 1 lines;
+select id, name from t order by id;
+➤ id[4,32,0]  ¦  name[12,20,0]  𝄀
+11  ¦  kilo  𝄀
+12  ¦  lima  𝄀
+13  ¦  mike
+delete from t;
+load data infile {'filepath'='$resources/load_data/zipzstd/stored.zip', 'compression'='zip'} into table t fields terminated by ',' lines terminated by '\n' ignore 1 lines;
+select id, name from t order by id;
+➤ id[4,32,0]  ¦  name[12,20,0]  𝄀
+41  ¦  quebec  𝄀
+42  ¦  romeo
+delete from t;
+load data infile {'filepath'='$resources/load_data/zipzstd/two.zip'} into table t fields terminated by ',' lines terminated by '\n' ignore 1 lines;
+select id, name from t order by id;
+➤ id[4,32,0]  ¦  name[12,20,0]  𝄀
+21  ¦  uniform  𝄀
+22  ¦  victor
+delete from t;
+load data local infile {'filepath'='$resources/load_data/zipzstd/rows_zip.csv.zip'} into table t fields terminated by ',' lines terminated by '\n' ignore 1 lines;
+load data local infile {'filepath'='$resources/load_data/zipzstd/rows_zst.csv.zst'} into table t fields terminated by ',' lines terminated by '\n' ignore 1 lines;
+select count(*), sum(id) from t;
+➤ count(*)[-5,64,0]  ¦  sum(id)[-5,64,0]  𝄀
+6  ¦  42
+delete from t;
+load data infile {'filepath'='$resources/load_data/zipzstd/mix/m_*'} into table t fields terminated by ',' lines terminated by '\n' ignore 1 lines parallel 'true';
+select id, name from t order by id;
+➤ id[4,32,0]  ¦  name[12,20,0]  𝄀
+51  ¦  xray  𝄀
+52  ¦  yankee  𝄀
+53  ¦  zulu  𝄀
+54  ¦  echo
+delete from t;
+load data infile {'filepath'='$resources/load_data/zipzstd/mix/m_3.csv', 'compression'='zip'} into table t fields terminated by ',' lines terminated by '\n' ignore 1 lines;
+invalid input: not a zip archive
+select count(*) from t;
+➤ count(*)[-5,64,0]  𝄀
+0
+create external table ext_zst(id int, name varchar(20)) infile{'filepath'='$resources/load_data/zipzstd/rows_zst.csv.zst'} fields terminated by ',' lines terminated by '\n' ignore 1 lines;
+select id, name from ext_zst order by id;
+➤ id[4,32,0]  ¦  name[12,20,0]  𝄀
+1  ¦  alpha  𝄀
+2  ¦  bravo  𝄀
+3  ¦  charlie
+create external table ext_zip(id int, name varchar(20)) infile{'filepath'='$resources/load_data/zipzstd/rows_zip.csv.zip'} fields terminated by ',' lines terminated by '\n' ignore 1 lines;
+select id, name from ext_zip order by id;
+➤ id[4,32,0]  ¦  name[12,20,0]  𝄀
+11  ¦  kilo  𝄀
+12  ¦  lima  𝄀
+13  ¦  mike
+create external table ext_mix(id int, name varchar(20)) infile{'filepath'='$resources/load_data/zipzstd/mix/m_*'} fields terminated by ',' lines terminated by '\n' ignore 1 lines;
+select count(*), sum(id) from ext_mix;
+➤ count(*)[-5,64,0]  ¦  sum(id)[-5,64,0]  𝄀
+4  ¦  210
+drop database load_zz;
