@@ -238,8 +238,8 @@ update mysql_compat_temporal_zero_dml
     where id = 13;
 select id, d, dt, ts from mysql_compat_temporal_zero_dml where id = 13;
 
--- Either strict mode or NO_ZERO_DATE alone must continue to allow zero values
--- produced by expressions that reach MultiUpdate.
+-- Strict mode alone allows zero values. NO_ZERO_DATE alone leaves direct
+-- assignment policy unchanged but makes zero-valued expression CASTs NULL.
 truncate table mysql_compat_temporal_zero_dml;
 set sql_mode = 'STRICT_TRANS_TABLES';
 insert into mysql_compat_temporal_zero_dml
@@ -251,6 +251,13 @@ select id, d, dt, ts from mysql_compat_temporal_zero_dml;
 
 truncate table mysql_compat_temporal_zero_dml;
 set sql_mode = 'NO_ZERO_DATE';
+select cast('0000-00-00' as date) is null as cast_string_null,
+       cast(from_days(0) as date) is null as cast_typed_null,
+       date(from_days(0)) is null as date_typed_null,
+       year('0000-00-00') is null as year_string_null,
+       month('0000-00-00') is null as month_string_null,
+       day('0000-00-00') is null as day_string_null,
+       year(from_days(0)) as typed_sentinel_year;
 insert into mysql_compat_temporal_zero_dml
     select 30,
            cast('0000-00-00' as date),
@@ -267,7 +274,27 @@ set sql_mode = 'STRICT_TRANS_TABLES,NO_ZERO_DATE';
 execute temporal_zero_cast;
 set sql_mode = 'STRICT_TRANS_TABLES';
 execute temporal_zero_cast;
+set sql_mode = 'NO_ZERO_DATE';
+execute temporal_zero_cast;
+set sql_mode = 'STRICT_TRANS_TABLES';
+execute temporal_zero_cast;
 deallocate prepare temporal_zero_cast;
+
+prepare temporal_zero_extract from
+    'select date(''0000-00-00'') is null as date_null,
+            year(''0000-00-00'') is null as year_null,
+            month(''0000-00-00'') is null as month_null,
+            day(''0000-00-00'') is null as day_null,
+            quarter(''0000-00-00'') is null as quarter_null,
+            cast(from_days(0) as date) is null as typed_cast_null,
+            date(from_days(0)) is null as typed_date_null,
+            year(from_days(0)) as sentinel_year';
+execute temporal_zero_extract;
+set sql_mode = 'NO_ZERO_DATE';
+execute temporal_zero_extract;
+set sql_mode = 'STRICT_TRANS_TABLES';
+execute temporal_zero_extract;
+deallocate prepare temporal_zero_extract;
 
 prepare temporal_timestamp_cast from 'select cast(''1970-01-01 08:00:01'' as timestamp)';
 execute temporal_timestamp_cast;

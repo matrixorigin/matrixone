@@ -323,9 +323,16 @@ func TestPreparedConstantFoldKeepsSqlModeDependentTemporalCast(t *testing.T) {
 		types.New(types.T_timestamp, 0, 6),
 	} {
 		t.Run(targetType.Oid.String(), func(t *testing.T) {
-			expr := makeConstantCastExpr(t, "cast", stringType, targetType, "2024-01-02 03:04:05")
+			expr := makeConstantCastExpr(t, "cast", stringType, targetType, "0000-00-00 00:00:00")
 			folded := NewConstantFold(true).constantFold(expr, proc)
 			require.NotNil(t, folded.GetF())
+			valid := makeConstantCastExpr(t, "cast", stringType, targetType, "2024-01-02 03:04:05")
+			validFolded := NewConstantFold(true).constantFold(valid, proc)
+			if targetType.Oid == types.T_timestamp {
+				require.NotNil(t, validFolded.GetF()) // session time_zone changes at EXECUTE
+			} else {
+				require.NotNil(t, validFolded.GetLit())
+			}
 		})
 	}
 }

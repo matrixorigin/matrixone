@@ -49,6 +49,9 @@ func TestPersistedDecimalLiteralUsesDedicatedEpochInMixedOwner(t *testing.T) {
 			Obj: function.EncodeOverloadID(function.ST_DISTANCE, 4),
 		}}},
 	}
+	temporalExpr := &planpb.Expr{Typ: planpb.Type{Id: int32(types.T_int64)}, Expr: &planpb.Expr_F{F: &planpb.Function{
+		Func: &planpb.ObjectRef{Obj: function.EncodeOverloadID(function.EXTRACT, 0)},
+	}}}
 	for _, tc := range []struct {
 		name  string
 		exprs []*planpb.Expr
@@ -58,6 +61,8 @@ func TestPersistedDecimalLiteralUsesDedicatedEpochInMixedOwner(t *testing.T) {
 		{"spatial only", []*planpb.Expr{spatialExpr}, defines.MORPCVersion90},
 		{"decimal then spatial", []*planpb.Expr{decimalExpr, spatialExpr}, defines.MORPCVersion90},
 		{"spatial then decimal", []*planpb.Expr{spatialExpr, decimalExpr}, defines.MORPCVersion90},
+		{"temporal result", []*planpb.Expr{temporalExpr}, defines.MORPCVersion97},
+		{"temporal then spatial", []*planpb.Expr{temporalExpr, spatialExpr}, defines.MORPCVersion97},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			owner := &planpb.TableDef{}
@@ -69,6 +74,10 @@ func TestPersistedDecimalLiteralUsesDedicatedEpochInMixedOwner(t *testing.T) {
 			require.Equal(t, tc.want, required, "mixed contracts take the maximum independently of order")
 		})
 	}
+	legacyTemporal := DeepCopyExpr(temporalExpr)
+	legacyTemporal.Typ.Id = int32(types.T_varchar)
+	_, err = RequiredPersistedExpressionProtocolVersion(legacyTemporal)
+	require.ErrorContains(t, err, "legacy temporal")
 }
 
 func TestPersistedDecimalDivisionRequiresV97(t *testing.T) {

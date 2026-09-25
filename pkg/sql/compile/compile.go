@@ -1458,6 +1458,9 @@ func (c *Compile) compileQuery(qry *plan.Query) ([]*Scope, error) {
 	if err = c.constrainDecimalDivisionWorkers(qry); err != nil {
 		return nil, err
 	}
+	if err = c.constrainTemporalResultWorkers(qry); err != nil {
+		return nil, err
+	}
 	if err = c.constrainIPFunctionWorkers(qry); err != nil {
 		return nil, err
 	}

@@ -37,6 +37,36 @@ set @date_value = '2024-%f-02-29', @date_format = '%Y-%%f-%m-%d';
 execute dynamic_date using @date_value, @date_format;
 deallocate prepare dynamic_date;
 
+-- A day directive paired with a clock denotes a duration. MatrixOne's TIME
+-- endpoint is 838:59:59; values beyond that endpoint remain SQL NULL.
+select str_to_date('1 12:34:56', '%d %H:%i:%s') as duration_day,
+       str_to_date('34 22:59:59', '%d %H:%i:%s') as duration_max,
+       str_to_date('35 00:00:00', '%d %H:%i:%s') as duration_overflow;
+
+-- Direct markers retain TIME(6) metadata through repeated execution, even
+-- if the next value looks like a DATETIME or cannot be parsed.
+prepare dynamic_time from 'select addtime(?, ?) as added, subtime(?, ?) as subtracted';
+set @first = '12:34:56', @second = '1:02:03';
+execute dynamic_time using @first, @second, @first, @second;
+set @first = '2024-02-29 12:34:56';
+execute dynamic_time using @first, @second, @first, @second;
+set @first = 'invalid';
+execute dynamic_time using @first, @second, @first, @second;
+deallocate prepare dynamic_time;
+
+select timediff('12:00:00.1', '11:00:00.0') as literal_fsp,
+       timediff('12:00:00.123456', '11:00:00') as full_fsp;
+select timediff('838:59:59', '-00:00:01') as positive_clip,
+       timediff('-838:59:59', '00:00:01') as negative_clip,
+       addtime('2000000000:00:00', '2000000000:00:00') as add_overflow,
+       subtime('2000000000:00:00', '-2000000000:00:00') as sub_overflow;
+prepare dynamic_timediff from 'select timediff(?, ?) as dynamic_fsp';
+set @first = '12:00:00.123456', @second = '11:00:00';
+execute dynamic_timediff using @first, @second;
+set @first = '12:00:00.1';
+execute dynamic_timediff using @first, @second;
+deallocate prepare dynamic_timediff;
+
 set sql_mode = '';
 select cast('12:99:00' as time) as invalid_minute, cast('12:34:99' as time) as invalid_second,
        cast('12:34:56tail' as time) as valid_prefix;

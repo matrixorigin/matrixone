@@ -327,6 +327,7 @@ const (
 	planTimeTypeID                   int32 = 51
 	planDatetimeTypeID               int32 = 52
 	planTimestampTypeID              int32 = 53
+	planInt64TypeID                  int32 = 23
 	planAnyTypeID                    int32 = 0
 	maxVarcharWidth                  int32 = 65535
 )
@@ -390,7 +391,9 @@ type RemoteExpressionFeatures struct {
 	PreparedPrecisionScalar           bool
 	DecimalDivisionSemantics          bool
 	// SpecialIntegerConsumers requires v98 independently of private CASTs.
-	SpecialIntegerConsumers bool
+	SpecialIntegerConsumers       bool
+	TemporalResultContracts       bool
+	LegacyTemporalResultContracts bool
 }
 
 func (features RemoteExpressionFeatures) Any() bool {
@@ -413,7 +416,9 @@ func (features RemoteExpressionFeatures) Any() bool {
 		features.SpatialDistanceSemantics ||
 		features.PreparedPrecisionScalar ||
 		features.SpecialIntegerConsumers ||
-		features.DecimalDivisionSemantics
+		features.DecimalDivisionSemantics ||
+		features.TemporalResultContracts ||
+		features.LegacyTemporalResultContracts
 }
 
 func hasPrivateIntegerPrecisionCast(expr *Expr) bool {
@@ -854,6 +859,22 @@ func RequiredRemoteExpressionFeatures(owner any) (features RemoteExpressionFeatu
 				if id == 13 && overload == 0 &&
 					(current.Typ.Id == 32 || current.Typ.Id == 33 || current.Typ.Id == 34) {
 					features.DecimalDivisionSemantics = true
+				}
+				// EXTRACT and string-first ADDTIME/SUBTIME retain their overload
+				// numbers but changed physical result vectors in v98. Observe
+				// both result shapes so incoming legacy plans fail before execution.
+				if id == 208 && overload >= 0 && overload <= 4 {
+					features.TemporalResultContracts = true
+					if current.Typ.Id != planInt64TypeID {
+						features.LegacyTemporalResultContracts = true
+					}
+				}
+				if (id == 41 || id == 378) && len(fn.Args) == 2 && fn.Args[0] != nil &&
+					isPlanMySQLStringType(fn.Args[0].Typ.Id) {
+					features.TemporalResultContracts = true
+					if current.Typ.Id == planDatetimeTypeID {
+						features.LegacyTemporalResultContracts = true
+					}
 				}
 				if (id == 72 || id == 103) && len(fn.Args) == 2 &&
 					hasPrivateIntegerPrecisionCast(fn.Args[1]) {

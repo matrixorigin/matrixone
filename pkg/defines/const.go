@@ -135,7 +135,8 @@ const (
 	MORPCVersion97     int64 = 97 // decimal division result semantics across CNs
 	MORPCVersion98     int64 = 98 // canonical FORMAT precision and MAKEDATE/MAKETIME integer signatures
 	MORPCVersion99     int64 = 99 // owner-atomic writer-fair row-lock admission
-	MORPCLatestVersion       = MORPCVersion99
+	MORPCVersion100    int64 = 100 // temporal expression, interval, and WEEK contracts
+	MORPCLatestVersion       = MORPCVersion100
 )
 
 // DefaultLockWaitTimeoutSeconds is shared by the frontend default and by
