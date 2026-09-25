@@ -2160,11 +2160,14 @@ func (rule *ResetParamRefRule) ApplyExpr(e *plan.Expr) (*plan.Expr, error) {
 	var err error
 	_, source := rule.integerSourceRoots[e]
 	if positions, predicate := rule.integerPredicateRoots[e]; predicate {
-		source = false
+		// All markers participating in this separate comparison must have a
+		// numeric execution domain. One numeric result cannot coerce a TEXT
+		// comparison peer into an integer value source.
+		source = len(positions) > 0
 		for pos := range positions {
-			if pos >= 0 && int(pos) < len(rule.paramValues) &&
-				PreparedParamValueHasNumericRuntime(rule.paramValues[pos]) {
-				source = true
+			if pos < 0 || int(pos) >= len(rule.paramValues) ||
+				!PreparedParamValueHasNumericRuntime(rule.paramValues[pos]) {
+				source = false
 				break
 			}
 		}
