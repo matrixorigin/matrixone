@@ -21,6 +21,7 @@ import (
 	"strings"
 
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
+	"github.com/matrixorigin/matrixone/pkg/logutil"
 	"github.com/matrixorigin/matrixone/pkg/monlp/tokenizer"
 	"github.com/matrixorigin/matrixone/pkg/sql/parsers/tree"
 	"github.com/matrixorigin/matrixone/pkg/vm/process"
@@ -839,6 +840,10 @@ func ParsePatternInBooleanMode(pattern string, parser string) ([]*Pattern, error
 				p, err := CreatePattern(term, parser)
 				if err != nil {
 					return nil, err
+				}
+				// A trailing bare `*` flushes as a STAR (prefix) term; anything else is an exact leaf.
+				if p.Operator == STAR {
+					logutil.Debugf("fulltext boolean: flushed trailing single-rune wildcard %q", p.Text)
 				}
 				tokens = append(tokens, p)
 			}
