@@ -298,7 +298,11 @@ func (opts *CDCCreateTaskOptions) ValidateAndFill(
 	if sourcePattern {
 		extraOpts[cdc.CDCTaskExtraOptions_SourcePatternProtocol] = cdc.CDCSourcePatternProtocolV1
 	}
-	extraOpts[cdc.CDCTaskExtraOptions_GenerationProtocol] = cdc.CDCGenerationAwareProtocolV1
+	if currentProtocolVersion(ses.proc) < defines.MORPCVersion97 {
+		return moerr.NewNotSupportedf(ctx,
+			"CDC target identity requires all CNs to support protocol version %d", defines.MORPCVersion97)
+	}
+	extraOpts[cdc.CDCTaskExtraOptions_GenerationProtocol] = cdc.CDCGenerationAwareProtocolV2
 	if err = validateStableInitialSnapshotProtocol(
 		ctx, true, currentProtocolVersion(ses.proc)); err != nil {
 		return

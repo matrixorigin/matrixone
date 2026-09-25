@@ -142,6 +142,17 @@ func (t *CDCDao) CreateTask(
 		ctx context.Context,
 		tx taskservice.SqlExecutor,
 	) (ret int, err error) {
+		// The protocol version can advance before this catalog upgrade commits.
+		// Check the exact columns in the task-creation transaction.
+		columns, queryErr := tx.QueryContext(ctx,
+			"SELECT pending_source_table_id, target_identity FROM mo_catalog.mo_cdc_watermark LIMIT 0")
+		if queryErr != nil {
+			return 0, moerr.NewNotSupportedf(ctx,
+				"CDC target identity catalog columns are not available: %v", queryErr)
+		}
+		if err = columns.Close(); err != nil {
+			return 0, err
+		}
 		var (
 			insertSql    string
 			rowsAffected int64

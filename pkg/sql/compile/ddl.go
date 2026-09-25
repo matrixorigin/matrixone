@@ -777,15 +777,23 @@ func (s *Scope) alterTableInplace(c *Compile, cleanup *alterAutoIncrementResetCl
 			return err
 		}
 
-		// 1. lock origin table metadata in catalog
-		if err = lockMoTable(c, dbName, tblName, lock.LockMode_Exclusive); err != nil {
-			if !moerr.IsMoErrCode(err, moerr.ErrTxnNeedRetry) &&
-				!moerr.IsMoErrCode(err, moerr.ErrTxnNeedRetryWithDefChanged) {
-				return err
+		// A rename changes both name-to-ID mappings. Lock them in the same
+		// order for opposing rename attempts and CDC identity guards.
+		metadataNames := []string{tblName}
+		for _, action := range qry.Actions {
+			if rename := action.GetAlterName(); rename != nil && rename.NewName != "" && rename.NewName != tblName {
+				metadataNames = append(metadataNames, rename.NewName)
 			}
-			// The changes recorded in the data dictionary table imply a change in the structure of the corresponding entity table,
-			// therefore it is necessary to rebuild the logical plan and redirect err to ErrTxnNeedRetryWithDefChanged
-			retryErr = moerr.NewTxnNeedRetryWithDefChanged(c.proc.Ctx)
+		}
+		sort.Strings(metadataNames)
+		for _, name := range metadataNames {
+			if err = lockMoTable(c, dbName, name, lock.LockMode_Exclusive); err != nil {
+				if !moerr.IsMoErrCode(err, moerr.ErrTxnNeedRetry) &&
+					!moerr.IsMoErrCode(err, moerr.ErrTxnNeedRetryWithDefChanged) {
+					return err
+				}
+				retryErr = moerr.NewTxnNeedRetryWithDefChanged(c.proc.Ctx)
+			}
 		}
 
 		// 2. lock origin table

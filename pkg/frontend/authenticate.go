@@ -12211,6 +12211,9 @@ func doInterpretCall(
 	callerAffectedRows int64,
 	affectedRows *int64,
 ) ([]ExecResult, error) {
+	if result, ok, err := executeCDCTargetGuardCall(ctx, ses, call); ok || err != nil {
+		return result, err
+	}
 	if parsed, ok, err := parseIcebergBuiltinCall(ctx, call); ok || err != nil {
 		if err != nil {
 			return nil, err

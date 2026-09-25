@@ -976,6 +976,45 @@ func (b cdcSQLBuilder) GetWatermarkOwnerProgressSQL(key *WatermarkKey) string {
 	)
 }
 
+func (b cdcSQLBuilder) GetWatermarkTargetStateSQL(key *WatermarkKey) string {
+	return fmt.Sprintf(
+		"SELECT owner_generation, source_table_id, pending_source_table_id, target_identity FROM `mo_catalog`.`mo_cdc_watermark` WHERE account_id = %d AND task_id = '%s' AND db_name = '%s' AND table_name = '%s'",
+		key.AccountId, escapeSQLString(key.TaskId), escapeSQLString(key.DBName), escapeSQLString(key.TableName),
+	)
+}
+
+func (b cdcSQLBuilder) SetWatermarkPendingSQL(key *WatermarkKey, ownerGeneration, sourceGeneration uint64, preIdentity string) string {
+	return fmt.Sprintf(
+		"UPDATE `mo_catalog`.`mo_cdc_watermark` AS w "+
+			"INNER JOIN (SELECT account_id, task_id FROM `mo_catalog`.`mo_cdc_task` "+
+			"WHERE account_id = %d AND task_id = '%s' FOR UPDATE) AS t "+
+			"ON t.account_id = w.account_id AND t.task_id = w.task_id "+
+			"SET w.pending_source_table_id = %d, w.target_identity = '%s' "+
+			"WHERE w.account_id = %d AND w.task_id = '%s' AND w.db_name = '%s' AND w.table_name = '%s' "+
+			"AND w.owner_generation = %d AND w.source_table_id = 0 AND w.pending_source_table_id IS NULL AND w.target_identity IS NULL",
+		key.AccountId, escapeSQLString(key.TaskId), sourceGeneration, escapeSQLString(preIdentity),
+		key.AccountId, escapeSQLString(key.TaskId), escapeSQLString(key.DBName), escapeSQLString(key.TableName), ownerGeneration,
+	)
+}
+
+func (b cdcSQLBuilder) AcknowledgeTargetIdentitySQL(
+	key *WatermarkKey, ownerGeneration, sourceGeneration uint64,
+	preIdentity, newIdentity string, watermark types.TS,
+) string {
+	return fmt.Sprintf(
+		"UPDATE `mo_catalog`.`mo_cdc_watermark` AS w "+
+			"INNER JOIN (SELECT account_id, task_id FROM `mo_catalog`.`mo_cdc_task` "+
+			"WHERE account_id = %d AND task_id = '%s' FOR UPDATE) AS t "+
+			"ON t.account_id = w.account_id AND t.task_id = w.task_id "+
+			"SET w.source_table_id = %d, w.watermark = '%s', w.target_identity = '%s', w.pending_source_table_id = NULL "+
+			"WHERE w.account_id = %d AND w.task_id = '%s' AND w.db_name = '%s' AND w.table_name = '%s' "+
+			"AND w.owner_generation = %d AND w.source_table_id = 0 AND w.pending_source_table_id = %d AND w.target_identity = '%s'",
+		key.AccountId, escapeSQLString(key.TaskId), sourceGeneration, watermark.ToString(), escapeSQLString(newIdentity),
+		key.AccountId, escapeSQLString(key.TaskId), escapeSQLString(key.DBName), escapeSQLString(key.TableName),
+		ownerGeneration, sourceGeneration, escapeSQLString(preIdentity),
+	)
+}
+
 func (b cdcSQLBuilder) DeleteOrphanWatermarkSQL() string {
 	return "DELETE w FROM `mo_catalog`.`mo_cdc_watermark` AS w " +
 		"LEFT JOIN `mo_catalog`.`mo_cdc_task` AS t " +

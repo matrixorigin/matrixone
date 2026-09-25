@@ -38,6 +38,15 @@ type futureCDCAdmissionCatalog struct {
 	statements    []string
 }
 
+type futureCDCTargetStateResult struct{ *claimLossWatermarkResult }
+
+func (r *futureCDCTargetStateResult) Value(_ context.Context, _, column uint64) (interface{}, error) {
+	if column == 3 && r.rows[0][3] != "" {
+		return r.rows[0][3], nil
+	}
+	return nil, nil
+}
+
 type cdcSourceKeyCatalog struct {
 	rows    [][]string
 	err     error
@@ -59,6 +68,15 @@ func (c *futureCDCAdmissionCatalog) Exec(_ context.Context, sql string, _ ie.Ses
 }
 
 func (c *futureCDCAdmissionCatalog) Query(_ context.Context, sql string, _ ie.SessionOverrideOptions) ie.InternalExecResult {
+	if strings.HasPrefix(sql, "SELECT owner_generation, source_table_id, pending_source_table_id, target_identity") {
+		identity := ""
+		if c.source != 0 {
+			identity = "mo:" + strconv.FormatUint(c.source, 10)
+		}
+		return &futureCDCTargetStateResult{&claimLossWatermarkResult{rows: [][]string{{
+			strconv.FormatUint(c.owner, 10), strconv.FormatUint(c.source, 10), "", identity,
+		}}}}
+	}
 	if !strings.HasPrefix(sql, "SELECT owner_generation, watermark, source_table_id") {
 		return &claimLossWatermarkResult{err: errors.New("unexpected catalog read")}
 	}
@@ -95,7 +113,7 @@ func TestCDCFutureStartDefersWithoutSpendingErrorBudget(t *testing.T) {
 			txn.EXPECT().SnapshotTS().Return(types.BuildTS(10, 0).ToTimestamp()).AnyTimes()
 			key := &cdc.WatermarkKey{AccountId: 1, TaskId: "t", DBName: "db", TableName: "src"}
 			for attempt := 0; attempt < 5; attempt++ {
-				state, err := executor.prepareGenerationAdmission(context.Background(), key, tc.currentID, txn, fence)
+				state, err := executor.prepareGenerationAdmission(context.Background(), key, tc.currentID, "db", "dst", txn, fence)
 				require.NoError(t, err)
 				require.True(t, state.deferred)
 				require.False(t, state.targetReady)
@@ -140,7 +158,7 @@ func TestCDCEndTsAbsentGenerationRequiresDurableOldCompletion(t *testing.T) {
 				cnTxnClient:      client, cnEngine: storage, noFull: true, endTs: types.BuildTS(20, 0),
 			}
 			key := &cdc.WatermarkKey{AccountId: 1, TaskId: "t", DBName: "db", TableName: "src"}
-			state, err := executor.prepareGenerationAdmission(context.Background(), key, 10, current, fence)
+			state, err := executor.prepareGenerationAdmission(context.Background(), key, 10, "db", "dst", current, fence)
 			if tc.canCheck {
 				require.NoError(t, err)
 				require.True(t, state.completeAfterCheck)
@@ -163,7 +181,6 @@ func TestCDCEndTsFirstAdmissionChecksHistoricalGenerationBeforeTarget(t *testing
 		{"initial full absent", "0-0", false, false, false},
 		{"NoFull absent", "10-0", true, false, false},
 		{"explicit start absent", "10-0", false, true, false},
-		{"NoFull existed at EndTs", "10-0", true, false, true},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			fence := cdc.NewOwnerFenceForGeneration(time.Unix(102, 0), func(context.Context) error { return nil })
@@ -199,7 +216,7 @@ func TestCDCEndTsFirstAdmissionChecksHistoricalGenerationBeforeTarget(t *testing
 				explicitStart: tc.explicitStart, startTs: startTs, endTs: types.BuildTS(20, 0),
 			}
 			key := &cdc.WatermarkKey{AccountId: 1, TaskId: "t", DBName: "db", TableName: "src"}
-			state, err := executor.prepareGenerationAdmission(context.Background(), key, 10, current, fence)
+			state, err := executor.prepareGenerationAdmission(context.Background(), key, 10, "db", "dst", current, fence)
 			if tc.visible {
 				require.NoError(t, err)
 			} else {

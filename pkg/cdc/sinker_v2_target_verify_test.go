@@ -17,14 +17,36 @@ package cdc
 import (
 	"context"
 	"database/sql"
+	"database/sql/driver"
 	"regexp"
 	"testing"
 
 	"github.com/DATA-DOG/go-sqlmock"
+	gomysql "github.com/go-sql-driver/mysql"
+	"github.com/matrixorigin/matrixone/pkg/common/moerr"
 	"github.com/matrixorigin/matrixone/pkg/container/types"
 	"github.com/matrixorigin/matrixone/pkg/pb/plan"
 	"github.com/stretchr/testify/require"
 )
+
+func TestCDCTargetGuardSQLRetryClassification(t *testing.T) {
+	for _, tc := range []struct {
+		name      string
+		err       error
+		retryable bool
+	}{
+		{"bad connection", driver.ErrBadConn, true},
+		{"lost MySQL connection", &gomysql.MySQLError{Number: 2013}, true},
+		{"MO RC definition changed over SQL wire", &gomysql.MySQLError{Number: moerr.ErrTxnNeedRetryWithDefChanged}, true},
+		{"missing SELECT privilege", &gomysql.MySQLError{Number: 1142}, false},
+		{"cancelled", context.Canceled, false},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			classified := classifyCDCTargetSQLError(tc.err)
+			require.Equal(t, tc.retryable, IsRetryableConnectionError(classified))
+		})
+	}
+}
 
 func TestVerifyCDCTargetTableStructure(t *testing.T) {
 	const columnsSQL = "SELECT column_name, column_type, collation_name, numeric_scale FROM information_schema.columns WHERE table_schema = ? AND table_name = ? ORDER BY ordinal_position"

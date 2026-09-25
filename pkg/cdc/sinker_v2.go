@@ -157,7 +157,8 @@ func createMysqlSinker2(
 	maxSqlLength uint64,
 	sendSqlTimeout string,
 	ownerFence *OwnerFence,
-) (Sinker, error) {
+) (_ Sinker, resultErr error) {
+	defer func() { resultErr = classifyCDCTargetSQLError(resultErr) }()
 	// 1. Determine if we need to record transactions for debugging
 	var doRecord bool
 	if tableDef != nil {
@@ -213,6 +214,32 @@ func createMysqlSinker2(
 			return nil, err
 		}
 	}
+	if sinkUri.SinkTyp == CDCSinkType_MO &&
+		(dbTblInfo.targetIdentityAck != nil || dbTblInfo.TargetIdentity != "") {
+		probeTx, beginErr := executor.targetLockConn.BeginTx(ctx, nil)
+		if beginErr != nil {
+			executor.Close()
+			return nil, beginErr
+		}
+		_, probeErr := probeTx.ExecContext(ctx, "CALL mo_cdc_target_guard_capability()")
+		rollbackErr := probeTx.Rollback()
+		if probeErr != nil {
+			executor.Close()
+			return nil, probeErr
+		}
+		if rollbackErr != nil {
+			executor.Close()
+			return nil, rollbackErr
+		}
+	} else if sinkUri.SinkTyp == CDCSinkType_MySQL &&
+		(dbTblInfo.targetIdentityAck != nil || dbTblInfo.TargetIdentity != "") {
+		if err = checkMySQLTargetIdentityCapability(ctx, executor.targetLockConn,
+			dbTblInfo.SinkDbName, dbTblInfo.SinkTblName,
+			dbTblInfo.TargetPreIdentity == absentCDCTargetIdentity); err != nil {
+			executor.Close()
+			return nil, err
+		}
+	}
 
 	// Helper function to add padding
 	addPadding := func(sql string) []byte {
@@ -220,12 +247,16 @@ func createMysqlSinker2(
 		return []byte(padding + sql)
 	}
 
-	// CREATE DATABASE
-	createDbSQL := fmt.Sprintf("CREATE DATABASE IF NOT EXISTS %s", quoteSQLIdentifier(dbTblInfo.SinkDbName))
-	err = executor.ExecSQL(ctx, ar, addPadding(createDbSQL), false)
-	if err != nil {
-		executor.Close()
-		return nil, err
+	// Only a first admission that observed an absent target may create its
+	// database. Resume must not mutate a replacement before identity checking.
+	if dbTblInfo.TargetPreIdentity == "" && dbTblInfo.TargetIdentity == "" ||
+		dbTblInfo.TargetPreIdentity == absentCDCTargetIdentity {
+		createDbSQL := fmt.Sprintf("CREATE DATABASE IF NOT EXISTS %s", quoteSQLIdentifier(dbTblInfo.SinkDbName))
+		err = executor.ExecSQL(ctx, ar, addPadding(createDbSQL), false)
+		if err != nil {
+			executor.Close()
+			return nil, err
+		}
 	}
 
 	// USE DATABASE
@@ -239,11 +270,33 @@ func createMysqlSinker2(
 	// A durable generation acknowledgement owns target state. A detector hint
 	// must not drop a target that already belongs to this generation.
 	if dbTblInfo.targetReady {
-		if err = verifyCDCTargetTable(ctx, executor, dbTblInfo, tableDef, sinkUri.SinkTyp); err != nil {
+		if dbTblInfo.TargetIdentity != "" {
+			guardTx, beginErr := executor.targetLockConn.BeginTx(ctx, nil)
+			if beginErr != nil {
+				executor.Close()
+				return nil, beginErr
+			}
+			actual, guardErr := guardedCDCTargetIdentity(ctx, guardTx, sinkUri.SinkTyp, dbTblInfo.SinkDbName, dbTblInfo.SinkTblName)
+			if guardErr == nil && actual != dbTblInfo.TargetIdentity {
+				guardErr = moerr.NewInternalErrorf(ctx, "CDC target %s.%s was replaced; explicit rebuild is required", dbTblInfo.SinkDbName, dbTblInfo.SinkTblName)
+			}
+			if guardErr == nil {
+				guardErr = verifyCDCTargetTableWithQuery(ctx, guardTx, dbTblInfo, tableDef, sinkUri.SinkTyp)
+			}
+			rollbackErr := guardTx.Rollback()
+			if guardErr != nil {
+				executor.Close()
+				return nil, guardErr
+			}
+			if rollbackErr != nil {
+				executor.Close()
+				return nil, rollbackErr
+			}
+		} else if err = verifyCDCTargetTable(ctx, executor, dbTblInfo, tableDef, sinkUri.SinkTyp); err != nil {
 			executor.Close()
 			return nil, err
 		}
-	} else if dbTblInfo.IdChanged {
+	} else if dbTblInfo.IdChanged && dbTblInfo.TargetPreIdentity == "" {
 		dropTableSQL := fmt.Sprintf("DROP TABLE IF EXISTS %s", quoteSQLIdentifier(dbTblInfo.SinkTblName))
 		err = executor.ExecSQL(ctx, ar, addPadding(dropTableSQL), false)
 		if err != nil {
@@ -276,22 +329,52 @@ func createMysqlSinker2(
 			executor.Close()
 			return nil, err
 		}
-		createSql = strings.Replace(createSql, "CREATE TABLE", "CREATE TABLE IF NOT EXISTS", 1)
+		if dbTblInfo.TargetPreIdentity != absentCDCTargetIdentity {
+			createSql = strings.Replace(createSql, "CREATE TABLE", "CREATE TABLE IF NOT EXISTS", 1)
+		}
 	}
 
 	if !dbTblInfo.targetReady {
-		err = executor.ExecSQL(ctx, ar, addPadding(createSql), false)
-		if err != nil {
-			executor.Close()
-			return nil, err
+		if dbTblInfo.TargetPreIdentity == "" || dbTblInfo.TargetPreIdentity == absentCDCTargetIdentity {
+			err = executor.ExecSQL(ctx, ar, addPadding(createSql), false)
+			if err != nil {
+				executor.Close()
+				return nil, err
+			}
 		}
-		if ownerFence != nil {
+		if ownerFence != nil && dbTblInfo.targetIdentityAck == nil {
 			if err = verifyCDCTargetTable(ctx, executor, dbTblInfo, tableDef, sinkUri.SinkTyp); err != nil {
 				executor.Close()
 				return nil, err
 			}
 		}
-		if dbTblInfo.targetInitAck != nil {
+		if dbTblInfo.targetIdentityAck != nil {
+			guardTx, beginErr := executor.targetLockConn.BeginTx(ctx, nil)
+			if beginErr != nil {
+				executor.Close()
+				return nil, beginErr
+			}
+			actual, guardErr := guardedCDCTargetIdentity(ctx, guardTx, sinkUri.SinkTyp, dbTblInfo.SinkDbName, dbTblInfo.SinkTblName)
+			if guardErr == nil && dbTblInfo.TargetPreIdentity != absentCDCTargetIdentity && actual != dbTblInfo.TargetPreIdentity {
+				guardErr = moerr.NewInternalErrorf(ctx, "CDC target %s.%s changed before first acknowledgement; explicit recovery is required", dbTblInfo.SinkDbName, dbTblInfo.SinkTblName)
+			}
+			if guardErr == nil {
+				guardErr = verifyCDCTargetTableWithQuery(ctx, guardTx, dbTblInfo, tableDef, sinkUri.SinkTyp)
+			}
+			if guardErr == nil {
+				guardErr = dbTblInfo.targetIdentityAck(ctx, actual)
+			}
+			if guardErr == nil {
+				guardErr = guardTx.Commit()
+			} else {
+				_ = guardTx.Rollback()
+			}
+			if guardErr != nil {
+				executor.Close()
+				return nil, guardErr
+			}
+			dbTblInfo.TargetIdentity = actual
+		} else if dbTblInfo.targetInitAck != nil {
 			if err = dbTblInfo.targetInitAck(ctx); err != nil {
 				executor.Close()
 				return nil, err
@@ -331,6 +414,7 @@ func createMysqlSinker2(
 	if ownerFence != nil {
 		sinker.watermarkGeneration = dbTblInfo.SourceTblId
 	}
+	sinker.dbTblInfo.TargetSinkType = sinkUri.SinkTyp
 
 	// Note: Run() will be started by the caller (e.g., cdc_executor.go)
 	// This maintains compatibility with the old mysqlSinker pattern
@@ -356,6 +440,18 @@ func verifyCDCTargetTable(
 	if executor.targetLockConn == nil {
 		return moerr.NewInternalError(ctx, "CDC target verification requires the target lock")
 	}
+	return verifyCDCTargetTableWithQuery(ctx, executor.targetLockConn, info, tableDef, sinkType)
+}
+
+func verifyCDCTargetTableWithQuery(
+	ctx context.Context,
+	queryer interface {
+		QueryContext(context.Context, string, ...any) (*sql.Rows, error)
+	},
+	info *DbTableInfo,
+	tableDef *plan.TableDef,
+	sinkType string,
+) error {
 	if tableDef == nil || tableDef.Pkey == nil || len(tableDef.Pkey.Names) == 0 {
 		return moerr.NewInternalError(ctx, "CDC target verification requires source table metadata and a primary key")
 	}
@@ -371,7 +467,7 @@ func verifyCDCTargetTable(
 		visible = append(visible, col)
 		origin[col.Name] = col.GetOriginCaseName()
 	}
-	rows, err := executor.targetLockConn.QueryContext(ctx,
+	rows, err := queryer.QueryContext(ctx,
 		"SELECT column_name, column_type, collation_name, numeric_scale FROM information_schema.columns "+
 			"WHERE table_schema = ? AND table_name = ? ORDER BY ordinal_position",
 		info.SinkDbName, info.SinkTblName)
@@ -415,7 +511,7 @@ func verifyCDCTargetTable(
 			info.SinkDbName, info.SinkTblName, columnCount, len(visible))
 	}
 
-	indexRows, err := executor.targetLockConn.QueryContext(ctx,
+	indexRows, err := queryer.QueryContext(ctx,
 		"SELECT index_name, non_unique, seq_in_index, column_name, sub_part FROM information_schema.statistics "+
 			"WHERE table_schema = ? AND table_name = ? ORDER BY index_name, seq_in_index",
 		info.SinkDbName, info.SinkTblName)
@@ -514,7 +610,8 @@ func retryableCDCTargetMetadataError(err error) error {
 func VerifyOwnedTarget(
 	ctx context.Context, sinkUri UriInfo, accountID uint64, taskID string,
 	info *DbTableInfo, tableDef *plan.TableDef, fence *OwnerFence, timeout string,
-) error {
+) (resultErr error) {
+	defer func() { resultErr = classifyCDCTargetSQLError(resultErr) }()
 	if fence == nil {
 		return moerr.NewInternalError(ctx, "CDC target verification requires an owner fence")
 	}
@@ -528,7 +625,26 @@ func VerifyOwnedTarget(
 	if err = executor.AcquireTargetLock(ctx, identity, fence.Check, fence.Check); err != nil {
 		return err
 	}
-	if err = verifyCDCTargetTable(ctx, executor, info, tableDef, sinkUri.SinkTyp); err != nil {
+	if info.TargetIdentity != "" {
+		guardTx, beginErr := executor.targetLockConn.BeginTx(ctx, nil)
+		if beginErr != nil {
+			return beginErr
+		}
+		actual, guardErr := guardedCDCTargetIdentity(ctx, guardTx, sinkUri.SinkTyp, info.SinkDbName, info.SinkTblName)
+		if guardErr == nil && actual != info.TargetIdentity {
+			guardErr = moerr.NewInternalErrorf(ctx, "CDC target %s.%s was replaced; explicit rebuild is required", info.SinkDbName, info.SinkTblName)
+		}
+		if guardErr == nil {
+			guardErr = verifyCDCTargetTableWithQuery(ctx, guardTx, info, tableDef, sinkUri.SinkTyp)
+		}
+		rollbackErr := guardTx.Rollback()
+		if guardErr != nil {
+			return guardErr
+		}
+		if rollbackErr != nil {
+			return rollbackErr
+		}
+	} else if err = verifyCDCTargetTable(ctx, executor, info, tableDef, sinkUri.SinkTyp); err != nil {
 		return err
 	}
 	if err = fence.Check(ctx); err != nil {
@@ -760,7 +876,8 @@ func (s *mysqlSinker2) processCommand(ctx context.Context, cmd *Command) {
 }
 
 // handleBegin handles BEGIN transaction command
-func (s *mysqlSinker2) handleBegin(ctx context.Context) error {
+func (s *mysqlSinker2) handleBegin(ctx context.Context) (resultErr error) {
+	defer func() { resultErr = classifyCDCTargetSQLError(resultErr) }()
 	// Check current state
 	currentState := s.txnState.Load()
 	if currentState != v2TxnStateIdle {
@@ -790,6 +907,17 @@ func (s *mysqlSinker2) handleBegin(ctx context.Context) error {
 			zap.String("table", s.dbTblInfo.String()),
 			zap.Error(err))
 		return err
+	}
+	if s.dbTblInfo.TargetIdentity != "" {
+		actual, err := guardedCDCTargetIdentity(ctx, s.executor.tx,
+			s.dbTblInfo.TargetSinkType, s.dbTblInfo.SinkDbName, s.dbTblInfo.SinkTblName)
+		if err == nil && actual != s.dbTblInfo.TargetIdentity {
+			err = moerr.NewInternalErrorf(ctx, "CDC target %s.%s was replaced; explicit rebuild is required", s.dbTblInfo.SinkDbName, s.dbTblInfo.SinkTblName)
+		}
+		if err != nil {
+			_ = s.executor.RollbackTx(ctx)
+			return err
+		}
 	}
 
 	// Update state

@@ -4871,6 +4871,33 @@ func authenticateUserCanExecuteStatement(reqCtx context.Context, ses *Session, s
 		if ses.getRoutine() != nil && ses.getRoutine().isExpired() && !ses.GetPrivilege().canExecInPasswordExpired {
 			return stats, moerr.NewInternalError(reqCtx, "password has expired, please change the password")
 		}
+		if call, isCall := stmt.(*tree.CallStmt); isCall {
+			if isCDCTargetGuardCapabilityCall(call) {
+				return stats, nil
+			}
+			dbName, tableName, isGuard, parseErr := parseCDCTargetGuardCall(reqCtx, call)
+			if parseErr != nil {
+				return stats, parseErr
+			}
+			if isGuard {
+				guardPriv := &privilege{kind: privilegeKindGeneral, objType: objectTypeTable}
+				tips := privilegeTipsArray{{typ: PrivilegeTypeInsert, objType: objectTypeTable,
+					databaseName: dbName, tableName: tableName}}
+				if !checkProtectedDatabaseWriteByPrivilegeTips(reqCtx, ses, tips) {
+					return stats, moerr.NewInternalError(reqCtx, "do not have privilege to execute the statement")
+				}
+				convertPrivilegeTipsToPrivilege(guardPriv, tips)
+				allowed, delta, authErr := determineUserHasPrivilegeSet(reqCtx, ses, guardPriv)
+				stats.Add(&delta)
+				if authErr != nil {
+					return stats, authErr
+				}
+				if !allowed {
+					return stats, moerr.NewInternalError(reqCtx, "do not have privilege to execute the statement")
+				}
+				return stats, nil
+			}
+		}
 
 		havePrivilege, delta, err := authenticateUserCanExecuteStatementWithObjectTypeAccountAndDatabase(reqCtx, ses, stmt)
 		if err != nil {

@@ -703,11 +703,47 @@ func requiresPessimisticObjectLifecycleTxn(
 		// parsing. Classify every target before admission so temp-only statements
 		// do not inherit the persistent catalog protocol.
 		return len(capturePersistentDropTableTargets(ses, st, defaultDatabase)) > 0
+	case *tree.CreateDatabase, *tree.CreateSequence:
+		return true
+	case *tree.CreateTable:
+		return !st.Temporary
+	case *tree.TruncateTable:
+		if st.Name == nil {
+			return false
+		}
+		return isPersistentLifecycleTable(ses, st.Name, defaultDatabase)
+	case *tree.AlterTable:
+		return isPersistentLifecycleTable(ses, st.Table, defaultDatabase)
+	case *tree.RenameTable:
+		for _, alter := range st.AlterTables {
+			if alter != nil && isPersistentLifecycleTable(ses, alter.Table, defaultDatabase) {
+				return true
+			}
+		}
+		return false
 	case *tree.CreateView:
 		return st.Replace
 	default:
 		return false
 	}
+}
+
+func isPersistentLifecycleTable(ses FeSession, name *tree.TableName, defaultDatabase string) bool {
+	if name == nil {
+		return false
+	}
+	if ses == nil {
+		return true
+	}
+	dbName := string(name.SchemaName)
+	if dbName == "" {
+		dbName = defaultDatabase
+		if dbName == "" {
+			dbName = ses.GetDatabaseName()
+		}
+	}
+	_, temporary := ses.GetTempTable(dbName, string(name.ObjectName))
+	return !temporary
 }
 
 // createTxnOpUnsafe creates a new txn operator using TxnClient. Should not be called outside txn.

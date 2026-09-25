@@ -24,13 +24,13 @@ import (
 	"testing"
 	"time"
 
-	"github.com/matrixorigin/matrixone/pkg/catalog"
+	"github.com/go-sql-driver/mysql"
 	"github.com/matrixorigin/matrixone/pkg/cdc"
 	"github.com/matrixorigin/matrixone/pkg/container/types"
-	"github.com/matrixorigin/matrixone/pkg/defines"
 	"github.com/matrixorigin/matrixone/pkg/frontend"
+	"github.com/matrixorigin/matrixone/pkg/pb/metadata"
 	"github.com/matrixorigin/matrixone/pkg/pb/plan"
-	ie "github.com/matrixorigin/matrixone/pkg/util/internalExecutor"
+	"github.com/matrixorigin/matrixone/pkg/pb/txn"
 	"github.com/stretchr/testify/require"
 )
 
@@ -108,6 +108,104 @@ func TestCDCTargetGenerationVerificationOnMO(t *testing.T) {
 			})
 		}
 	})
+}
+
+func TestCDCTenantCatalogGuardBlocksOtherCNDrop(t *testing.T) {
+	RunBaseClusterTests(t, func(cluster Cluster) {
+		ports := make([]int, 2)
+		for i := range ports {
+			cn, err := cluster.GetCNService(i)
+			require.NoError(t, err)
+			ports[i] = int(cn.GetServiceConfig().CN.Frontend.Port)
+		}
+		ctx, cancel := context.WithTimeout(t.Context(), 2*time.Minute)
+		defer cancel()
+		root, err := sql.Open("mysql", fmt.Sprintf("dump:111@tcp(127.0.0.1:%d)/", ports[0]))
+		require.NoError(t, err)
+		defer root.Close()
+		require.NoError(t, execSQL(ctx, root, "CREATE ACCOUNT cdc_guard_probe ADMIN_NAME 'admin' IDENTIFIED BY '111'"))
+		defer func() {
+			cleanupCtx, cleanupCancel := context.WithTimeout(context.Background(), 30*time.Second)
+			defer cleanupCancel()
+			_, _ = root.ExecContext(cleanupCtx, "DROP ACCOUNT IF EXISTS cdc_guard_probe")
+		}()
+		connect := func(port int) *sql.DB {
+			db, openErr := sql.Open("mysql", fmt.Sprintf("cdc_guard_probe#admin:111@tcp(127.0.0.1:%d)/", port))
+			require.NoError(t, openErr)
+			return db
+		}
+		first, second := connect(ports[0]), connect(ports[1])
+		defer first.Close()
+		defer second.Close()
+		require.NoError(t, execSQL(ctx, first, "CREATE DATABASE cdc_guard_db"))
+		require.NoError(t, execSQL(ctx, first, "CREATE TABLE cdc_guard_db.t (id INT PRIMARY KEY)"))
+		require.NoError(t, execSQL(ctx, first, "CREATE DATABASE cdc_guard_other"))
+		require.NoError(t, execSQL(ctx, first, "CREATE ROLE cdc_guard_writer"))
+		require.NoError(t, execSQL(ctx, first, "CREATE USER cdc_guard_writer_user IDENTIFIED BY '111' DEFAULT ROLE cdc_guard_writer"))
+		require.NoError(t, execSQL(ctx, first, "GRANT CONNECT ON ACCOUNT * TO cdc_guard_writer"))
+		require.NoError(t, execSQL(ctx, first, "GRANT INSERT ON TABLE cdc_guard_db.t TO cdc_guard_writer"))
+		require.NoError(t, execSQL(ctx, first, "GRANT cdc_guard_writer TO cdc_guard_writer_user"))
+		writer, err := sql.Open("mysql", fmt.Sprintf("cdc_guard_probe#cdc_guard_writer_user#cdc_guard_writer:111@tcp(127.0.0.1:%d)/", ports[0]))
+		require.NoError(t, err)
+		defer writer.Close()
+		writerTx, err := writer.BeginTx(ctx, nil)
+		require.NoError(t, err)
+		_, err = writerTx.ExecContext(ctx, "CALL mo_cdc_target_guard_capability()")
+		require.NoError(t, err)
+		var writerID uint64
+		require.NoError(t, writerTx.QueryRowContext(ctx, "CALL mo_cdc_target_identity('cdc_guard_db', 't')").Scan(&writerID))
+		require.NotZero(t, writerID)
+		require.NoError(t, writerTx.Rollback())
+		require.NoError(t, execSQL(ctx, first, "CREATE ROLE cdc_guard_other_role"))
+		require.NoError(t, execSQL(ctx, first, "CREATE USER cdc_guard_other_user IDENTIFIED BY '111' DEFAULT ROLE cdc_guard_other_role"))
+		require.NoError(t, execSQL(ctx, first, "GRANT CONNECT ON ACCOUNT * TO cdc_guard_other_role"))
+		require.NoError(t, execSQL(ctx, first, "GRANT CREATE VIEW ON DATABASE cdc_guard_other TO cdc_guard_other_role"))
+		require.NoError(t, execSQL(ctx, first, "GRANT cdc_guard_other_role TO cdc_guard_other_user"))
+		other, err := sql.Open("mysql", fmt.Sprintf("cdc_guard_probe#cdc_guard_other_user#cdc_guard_other_role:111@tcp(127.0.0.1:%d)/", ports[0]))
+		require.NoError(t, err)
+		defer other.Close()
+		otherTx, err := other.BeginTx(ctx, nil)
+		require.NoError(t, err)
+		var otherID uint64
+		err = otherTx.QueryRowContext(ctx, "CALL mo_cdc_target_identity('cdc_guard_db', 't')").Scan(&otherID)
+		require.ErrorContains(t, err, "do not have privilege")
+		require.NoError(t, otherTx.Rollback())
+		var autocommitID uint64
+		err = first.QueryRowContext(ctx, "CALL mo_cdc_target_identity('cdc_guard_db', 't')").Scan(&autocommitID)
+		require.ErrorContains(t, err, "requires an explicit transaction")
+		_, err = first.ExecContext(ctx, "CALL mo_cdc_target_guard_capability()")
+		require.ErrorContains(t, err, "requires an explicit transaction")
+		tx, err := first.BeginTx(ctx, nil)
+		require.NoError(t, err)
+		defer tx.Rollback()
+		var tableID uint64
+		err = tx.QueryRowContext(ctx, "CALL mo_cdc_target_identity('cdc_guard_db', 't')").Scan(&tableID)
+		require.NoError(t, err)
+		require.NotZero(t, tableID)
+		ddlConn, err := second.Conn(ctx)
+		require.NoError(t, err)
+		defer ddlConn.Close()
+		_, err = ddlConn.ExecContext(ctx, "SET lock_wait_timeout = 1")
+		require.NoError(t, err)
+		dropDone := make(chan error, 1)
+		go func() { _, dropErr := ddlConn.ExecContext(ctx, "DROP TABLE cdc_guard_db.t"); dropDone <- dropErr }()
+		select {
+		case dropErr := <-dropDone:
+			var sqlErr *mysql.MySQLError
+			require.ErrorAs(t, dropErr, &sqlErr)
+			require.Equal(t, uint16(1205), sqlErr.Number)
+		case <-ctx.Done():
+			t.Fatal(ctx.Err())
+		}
+		require.NoError(t, tx.Rollback())
+		_, err = ddlConn.ExecContext(ctx, "DROP TABLE cdc_guard_db.t")
+		require.NoError(t, err)
+	})
+}
+
+func execSQL(ctx context.Context, db *sql.DB, query string) error {
+	_, err := db.ExecContext(ctx, query)
+	return err
 }
 
 func TestCDCEndTsWildcardLateTableOnMO(t *testing.T) {
@@ -220,7 +318,7 @@ func TestCDCGenerationReplacementOnMO(t *testing.T) {
 		root, err := sql.Open("mysql", fmt.Sprintf("dump:111@tcp(127.0.0.1:%d)/", port))
 		require.NoError(t, err)
 		defer root.Close()
-		ctx, cancel := context.WithTimeout(t.Context(), 3*time.Minute)
+		ctx, cancel := context.WithTimeout(t.Context(), 5*time.Minute)
 		defer cancel()
 		_, err = root.ExecContext(ctx, "DROP ACCOUNT IF EXISTS cdc_generation_probe")
 		require.NoError(t, err)
@@ -266,8 +364,8 @@ func TestCDCGenerationReplacementOnMO(t *testing.T) {
 		_, err = account.ExecContext(ctx, fmt.Sprintf("CREATE CDC cdc_generation_task '%s' 'matrixone' '%s' 'cdc_generation_src:cdc_generation_dst' {'Level'='database'}", uri, uri))
 		require.NoError(t, err)
 		createdTask = true
-		readRows := func() []int {
-			rows, readErr := account.QueryContext(ctx, "SELECT id FROM cdc_generation_dst.t ORDER BY id")
+		readRows := func(target string) []int {
+			rows, readErr := account.QueryContext(ctx, "SELECT id FROM "+target+".t ORDER BY id")
 			if readErr != nil {
 				return nil
 			}
@@ -295,7 +393,7 @@ func TestCDCGenerationReplacementOnMO(t *testing.T) {
 					"AND w.table_name = 't'").Scan(&generation, &watermark)
 			return generation, watermark, err
 		}
-		require.Eventually(t, func() bool { return reflect.DeepEqual(readRows(), []int{1, 2}) }, 90*time.Second, 250*time.Millisecond)
+		require.Eventually(t, func() bool { return reflect.DeepEqual(readRows("cdc_generation_dst"), []int{1, 2}) }, 90*time.Second, 250*time.Millisecond)
 		var oldGeneration uint64
 		require.Eventually(t, func() bool {
 			generation, watermark, readErr := readProgress()
@@ -310,25 +408,19 @@ func TestCDCGenerationReplacementOnMO(t *testing.T) {
 				"SELECT state FROM mo_catalog.mo_cdc_task WHERE task_name = 'cdc_generation_task'").Scan(&state) == nil &&
 				state == cdc.CDCState_Paused
 		}, 30*time.Second, 250*time.Millisecond)
-		var accountID uint64
-		var taskID string
+		var targetIdentity string
+		var pending sql.NullInt64
 		require.NoError(t, root.QueryRowContext(ctx,
-			"SELECT account_id, task_id FROM mo_catalog.mo_cdc_task WHERE task_name = 'cdc_generation_task'").Scan(&accountID, &taskID))
-		// Exercise the recovery boundary where an old generation checkpoint is
-		// later than the new table's snapshot epoch. The replacement must replay
-		// from its own epoch, never from this retired watermark.
-		futureTS := types.BuildTS(4_000_000_000_000_000_000, 0)
-		futureWatermark := futureTS.ToString()
-		catalogExecutor := frontend.NewInternalExecutor(cn.GetServiceConfig().CN.UUID)
-		err = catalogExecutor.Exec(defines.AttachAccountId(ctx, catalog.System_Account),
-			fmt.Sprintf("UPDATE mo_catalog.mo_cdc_watermark SET watermark = '%s' "+
-				"WHERE account_id = %d AND task_id = '%s' AND db_name = 'cdc_generation_src' AND table_name = 't'",
-				futureWatermark, accountID, taskID), ie.SessionOverrideOptions{})
-		require.NoError(t, err)
-		injectedGeneration, injectedWatermark, readErr := readProgress()
-		require.NoError(t, readErr)
-		require.Equal(t, oldGeneration, injectedGeneration)
-		require.Equal(t, futureWatermark, injectedWatermark)
+			"SELECT w.target_identity, w.pending_source_table_id FROM mo_catalog.mo_cdc_watermark AS w "+
+				"JOIN mo_catalog.mo_cdc_task AS t ON t.account_id = w.account_id AND t.task_id = w.task_id "+
+				"WHERE t.task_name = 'cdc_generation_task' AND w.db_name = 'cdc_generation_src' AND w.table_name = 't'").Scan(&targetIdentity, &pending))
+		require.True(t, strings.HasPrefix(targetIdentity, "mo:"))
+		require.False(t, pending.Valid)
+		var oldEpochs int
+		require.NoError(t, root.QueryRowContext(ctx,
+			"SELECT COUNT(*) FROM mo_catalog.mo_cdc_snapshot AS s "+
+				"JOIN mo_catalog.mo_cdc_task AS t ON t.account_id = s.account_id AND t.task_id = s.task_id "+
+				"WHERE t.task_name = 'cdc_generation_task' AND s.db_name = 'cdc_generation_src' AND s.table_name = 't'").Scan(&oldEpochs))
 		_, err = account.ExecContext(ctx, "DROP TABLE cdc_generation_src.t")
 		require.NoError(t, err)
 		_, err = account.ExecContext(ctx, "CREATE TABLE cdc_generation_src.t (id INT PRIMARY KEY, v INT)")
@@ -337,15 +429,229 @@ func TestCDCGenerationReplacementOnMO(t *testing.T) {
 		require.NoError(t, err)
 		_, err = account.ExecContext(ctx, "RESUME CDC TASK cdc_generation_task")
 		require.NoError(t, err)
-		require.Eventually(t, func() bool { return reflect.DeepEqual(readRows(), []int{3, 4}) }, 90*time.Second, 250*time.Millisecond)
 		require.Eventually(t, func() bool {
-			generation, watermark, readErr := readProgress()
-			return readErr == nil && generation > oldGeneration && watermark != "" &&
-				watermark != "0-0" && watermark != futureWatermark
-		}, 30*time.Second, 250*time.Millisecond)
-		_, recoveredWatermark, readErr := readProgress()
+			var state string
+			return root.QueryRowContext(ctx,
+				"SELECT state FROM mo_catalog.mo_cdc_task WHERE task_name = 'cdc_generation_task'").Scan(&state) == nil &&
+				state == cdc.CDCState_Failed
+		}, 90*time.Second, 250*time.Millisecond)
+		var taskError string
+		require.NoError(t, root.QueryRowContext(ctx,
+			"SELECT err_msg FROM mo_catalog.mo_cdc_task WHERE task_name = 'cdc_generation_task'").Scan(&taskError))
+		require.Contains(t, taskError, "permanent table error")
+		var tableError string
+		require.NoError(t, root.QueryRowContext(ctx,
+			"SELECT w.err_msg FROM mo_catalog.mo_cdc_watermark AS w "+
+				"JOIN mo_catalog.mo_cdc_task AS t ON t.account_id = w.account_id AND t.task_id = w.task_id "+
+				"WHERE t.task_name = 'cdc_generation_task' AND w.db_name = 'cdc_generation_src' AND w.table_name = 't'").Scan(&tableError))
+		require.Contains(t, tableError, "explicit target rebuild")
+		require.Equal(t, []int{1, 2}, readRows("cdc_generation_dst"))
+		generation, _, readErr := readProgress()
 		require.NoError(t, readErr)
-		recoveredTS := types.StringToTS(recoveredWatermark)
-		require.True(t, recoveredTS.LT(&futureTS))
+		require.Equal(t, oldGeneration, generation)
+		var currentIdentity string
+		var currentPending sql.NullInt64
+		require.NoError(t, root.QueryRowContext(ctx,
+			"SELECT w.target_identity, w.pending_source_table_id FROM mo_catalog.mo_cdc_watermark AS w "+
+				"JOIN mo_catalog.mo_cdc_task AS t ON t.account_id = w.account_id AND t.task_id = w.task_id "+
+				"WHERE t.task_name = 'cdc_generation_task' AND w.db_name = 'cdc_generation_src' AND w.table_name = 't'").Scan(&currentIdentity, &currentPending))
+		require.Equal(t, targetIdentity, currentIdentity)
+		require.False(t, currentPending.Valid)
+		var newEpochs int
+		require.NoError(t, root.QueryRowContext(ctx,
+			"SELECT COUNT(*) FROM mo_catalog.mo_cdc_snapshot AS s "+
+				"JOIN mo_catalog.mo_cdc_task AS t ON t.account_id = s.account_id AND t.task_id = s.task_id "+
+				"WHERE t.task_name = 'cdc_generation_task' AND s.db_name = 'cdc_generation_src' AND s.table_name = 't'").Scan(&newEpochs))
+		require.Equal(t, oldEpochs, newEpochs)
+
+		// A replacement with the same schema must not inherit acknowledged progress.
+		_, err = account.ExecContext(ctx, fmt.Sprintf("CREATE CDC cdc_generation_target_task '%s' 'matrixone' '%s' 'cdc_generation_src:cdc_generation_dst2' {'Level'='database'}", uri, uri))
+		require.NoError(t, err)
+		defer func() {
+			cleanupCtx, cleanupCancel := context.WithTimeout(context.Background(), 30*time.Second)
+			defer cleanupCancel()
+			if _, cleanupErr := account.ExecContext(cleanupCtx, "DROP CDC TASK cdc_generation_target_task"); cleanupErr != nil {
+				t.Errorf("drop target replacement CDC task: %v", cleanupErr)
+			}
+		}()
+		require.Eventually(t, func() bool { return reflect.DeepEqual(readRows("cdc_generation_dst2"), []int{3, 4}) }, 90*time.Second, 250*time.Millisecond)
+		_, err = account.ExecContext(ctx, "PAUSE CDC TASK cdc_generation_target_task")
+		require.NoError(t, err)
+		require.Eventually(t, func() bool {
+			var state string
+			return root.QueryRowContext(ctx,
+				"SELECT state FROM mo_catalog.mo_cdc_task WHERE task_name = 'cdc_generation_target_task'").Scan(&state) == nil &&
+				state == cdc.CDCState_Paused
+		}, 30*time.Second, 250*time.Millisecond)
+		var replacementIdentity string
+		require.NoError(t, root.QueryRowContext(ctx,
+			"SELECT w.target_identity FROM mo_catalog.mo_cdc_watermark AS w "+
+				"JOIN mo_catalog.mo_cdc_task AS t ON t.account_id = w.account_id AND t.task_id = w.task_id "+
+				"WHERE t.task_name = 'cdc_generation_target_task' AND w.db_name = 'cdc_generation_src' AND w.table_name = 't'").Scan(&replacementIdentity))
+		require.True(t, strings.HasPrefix(replacementIdentity, "mo:"))
+		_, err = account.ExecContext(ctx, "DROP TABLE cdc_generation_dst2.t")
+		require.NoError(t, err)
+		_, err = account.ExecContext(ctx, "CREATE TABLE cdc_generation_dst2.t (id INT PRIMARY KEY, v INT)")
+		require.NoError(t, err)
+		_, err = account.ExecContext(ctx, "INSERT INTO cdc_generation_dst2.t VALUES (3,30)")
+		require.NoError(t, err)
+		_, err = account.ExecContext(ctx, "INSERT INTO cdc_generation_src.t VALUES (5,50)")
+		require.NoError(t, err)
+		_, err = account.ExecContext(ctx, "RESUME CDC TASK cdc_generation_target_task")
+		require.NoError(t, err)
+		require.Eventually(t, func() bool {
+			var state string
+			return root.QueryRowContext(ctx,
+				"SELECT state FROM mo_catalog.mo_cdc_task WHERE task_name = 'cdc_generation_target_task'").Scan(&state) == nil &&
+				state == cdc.CDCState_Failed
+		}, 90*time.Second, 250*time.Millisecond)
+		require.Equal(t, []int{3}, readRows("cdc_generation_dst2"))
+		var replacementError, persistedIdentity string
+		require.NoError(t, root.QueryRowContext(ctx,
+			"SELECT w.err_msg, w.target_identity FROM mo_catalog.mo_cdc_watermark AS w "+
+				"JOIN mo_catalog.mo_cdc_task AS t ON t.account_id = w.account_id AND t.task_id = w.task_id "+
+				"WHERE t.task_name = 'cdc_generation_target_task' AND w.db_name = 'cdc_generation_src' AND w.table_name = 't'").Scan(&replacementError, &persistedIdentity))
+		require.Contains(t, replacementError, "was replaced; explicit rebuild")
+		require.Equal(t, replacementIdentity, persistedIdentity)
 	})
+}
+
+func TestCDCFirstAckHoldsSourceGenerationAcrossCN(t *testing.T) {
+	RunBaseClusterTests(t, func(cluster Cluster) {
+		ports := make([]int, 2)
+		for i := range ports {
+			cn, err := cluster.GetCNService(i)
+			require.NoError(t, err)
+			ports[i] = int(cn.GetServiceConfig().CN.Frontend.Port)
+		}
+		ctx, cancel := context.WithTimeout(t.Context(), 3*time.Minute)
+		defer cancel()
+		root, err := sql.Open("mysql", fmt.Sprintf("dump:111@tcp(127.0.0.1:%d)/", ports[0]))
+		require.NoError(t, err)
+		defer root.Close()
+		require.NoError(t, execSQL(ctx, root, "CREATE ACCOUNT cdc_ack_guard ADMIN_NAME 'admin' IDENTIFIED BY '111'"))
+		defer func() {
+			cleanupCtx, cleanupCancel := context.WithTimeout(context.Background(), 30*time.Second)
+			defer cleanupCancel()
+			_, _ = root.ExecContext(cleanupCtx, "DROP ACCOUNT IF EXISTS cdc_ack_guard")
+		}()
+		connect := func(port int) *sql.DB {
+			db, openErr := sql.Open("mysql", fmt.Sprintf("cdc_ack_guard#admin:111@tcp(127.0.0.1:%d)/", port))
+			require.NoError(t, openErr)
+			return db
+		}
+		first, second := connect(ports[0]), connect(ports[1])
+		defer first.Close()
+		defer second.Close()
+		require.NoError(t, execSQL(ctx, first, "CREATE DATABASE cdc_ack_src"))
+		require.NoError(t, execSQL(ctx, first, "CREATE TABLE cdc_ack_src.t (id INT PRIMARY KEY)"))
+		require.NoError(t, execSQL(ctx, first, "INSERT INTO cdc_ack_src.t VALUES (1)"))
+		require.NoError(t, execSQL(ctx, first, "CREATE PITR cdc_ack_pitr FOR DATABASE cdc_ack_src RANGE 2 'h'"))
+		defer func() {
+			cleanupCtx, cleanupCancel := context.WithTimeout(context.Background(), 30*time.Second)
+			defer cleanupCancel()
+			_, _ = first.ExecContext(cleanupCtx, "DROP CDC TASK cdc_ack_task")
+			_, _ = first.ExecContext(cleanupCtx, "DROP PITR cdc_ack_pitr")
+		}()
+		entered, release := make(chan struct{}), make(chan struct{})
+		var once, released sync.Once
+		releaseAck := func() { released.Do(func() { close(release) }) }
+		restore := frontend.SetCDCSourceGuardHookForTest(func() {
+			once.Do(func() {
+				close(entered)
+				<-release
+			})
+		})
+		defer restore()
+		defer releaseAck()
+		uri := fmt.Sprintf("mysql://cdc_ack_guard#admin:111@127.0.0.1:%d", ports[0])
+		_, err = first.ExecContext(ctx, fmt.Sprintf(
+			"CREATE CDC cdc_ack_task '%s' 'matrixone' '%s' 'cdc_ack_src:cdc_ack_dst' {'Level'='database'}", uri, uri))
+		require.NoError(t, err)
+		select {
+		case <-entered:
+		case <-time.After(60 * time.Second):
+			t.Fatal("first target ACK did not reach the source guard")
+		}
+		ddlConn, err := second.Conn(ctx)
+		require.NoError(t, err)
+		defer ddlConn.Close()
+		_, err = ddlConn.ExecContext(ctx, "SET lock_wait_timeout = 1")
+		require.NoError(t, err)
+		_, err = ddlConn.ExecContext(ctx, "DROP TABLE cdc_ack_src.t")
+		var sqlErr *mysql.MySQLError
+		require.ErrorAs(t, err, &sqlErr)
+		require.Equal(t, uint16(1205), sqlErr.Number)
+		releaseAck()
+		require.Eventually(t, func() bool {
+			var id int
+			return first.QueryRowContext(ctx, "SELECT id FROM cdc_ack_dst.t").Scan(&id) == nil && id == 1
+		}, 90*time.Second, 250*time.Millisecond)
+		var generation uint64
+		var identity string
+		var pending sql.NullInt64
+		require.NoError(t, root.QueryRowContext(ctx,
+			"SELECT w.source_table_id, w.target_identity, w.pending_source_table_id "+
+				"FROM mo_catalog.mo_cdc_watermark AS w JOIN mo_catalog.mo_cdc_task AS t "+
+				"ON t.account_id = w.account_id AND t.task_id = w.task_id "+
+				"WHERE t.task_name = 'cdc_ack_task' AND w.db_name = 'cdc_ack_src' AND w.table_name = 't'").Scan(&generation, &identity, &pending))
+		require.NotZero(t, generation)
+		require.True(t, strings.HasPrefix(identity, "mo:"))
+		require.False(t, pending.Valid)
+	})
+}
+
+func TestCDCTargetGuardRejectsOptimisticModeBeforeTargetCreate(t *testing.T) {
+	require.NoError(t, CloseBaseClusterTests())
+	require.NoError(t, CloseSingleCNBaseClusterTests())
+	cluster, err := NewCluster(WithTesting(), WithCNCount(2), WithPreStart(func(svc ServiceOperator) {
+		if svc.ServiceType() == metadata.ServiceType_CN {
+			svc.Adjust(func(cfg *ServiceConfig) {
+				cfg.CN.Txn.Mode = txn.TxnMode_Optimistic.String()
+				cfg.CN.Txn.Isolation = txn.TxnIsolation_SI.String()
+			})
+		}
+	}))
+	require.NoError(t, err)
+	defer cluster.Close()
+	require.NoError(t, cluster.Start())
+	cn, err := cluster.GetCNService(0)
+	require.NoError(t, err)
+	port := cn.GetServiceConfig().CN.Frontend.Port
+	ctx, cancel := context.WithTimeout(t.Context(), 2*time.Minute)
+	defer cancel()
+	db, err := sql.Open("mysql", fmt.Sprintf("dump:111@tcp(127.0.0.1:%d)/", port))
+	require.NoError(t, err)
+	defer db.Close()
+	_, err = db.ExecContext(ctx, "CREATE DATABASE cdc_optimistic_probe")
+	require.NoError(t, err)
+	defer func() {
+		cleanupCtx, cleanupCancel := context.WithTimeout(context.Background(), 30*time.Second)
+		defer cleanupCancel()
+		_, _ = db.ExecContext(cleanupCtx, "DROP DATABASE IF EXISTS cdc_optimistic_probe")
+	}()
+	probeTx, err := db.BeginTx(ctx, nil)
+	require.NoError(t, err)
+	_, err = probeTx.ExecContext(ctx, "CALL mo_cdc_target_guard_capability()")
+	require.ErrorContains(t, err, "requires a pessimistic read committed transaction")
+	require.NoError(t, probeTx.Rollback())
+	var tableCount int
+	require.NoError(t, db.QueryRowContext(ctx,
+		"SELECT COUNT(*) FROM mo_catalog.mo_tables WHERE reldatabase = 'cdc_optimistic_probe' AND relname = 't'").Scan(&tableCount))
+	require.Zero(t, tableCount)
+	_, err = db.ExecContext(ctx, "CREATE TABLE cdc_optimistic_probe.t (id INT PRIMARY KEY, v INT)")
+	require.NoError(t, err)
+	_, err = db.ExecContext(ctx, "ALTER TABLE cdc_optimistic_probe.t ADD COLUMN extra INT")
+	require.NoError(t, err)
+	_, err = db.ExecContext(ctx, "TRUNCATE TABLE cdc_optimistic_probe.t")
+	require.NoError(t, err)
+	_, err = db.ExecContext(ctx, "RENAME TABLE cdc_optimistic_probe.t TO cdc_optimistic_probe.renamed")
+	require.NoError(t, err)
+	activeTx, err := db.BeginTx(ctx, nil)
+	require.NoError(t, err)
+	_, err = activeTx.ExecContext(ctx, "CREATE TABLE cdc_optimistic_probe.rejected (id INT PRIMARY KEY)")
+	require.ErrorContains(t, err, "require an existing pessimistic RC transaction")
+	require.NoError(t, activeTx.Rollback())
+	_, err = db.ExecContext(ctx, "DROP TABLE cdc_optimistic_probe.renamed")
+	require.NoError(t, err)
 }

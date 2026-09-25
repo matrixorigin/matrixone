@@ -1635,6 +1635,91 @@ func (u *CDCWatermarkUpdater) ClaimWatermarkOwner(
 	return watermark, generation, nil
 }
 
+type WatermarkTargetState struct {
+	SourceGeneration  uint64
+	PendingGeneration uint64
+	HasPending        bool
+	Identity          string
+	HasIdentity       bool
+}
+
+func (u *CDCWatermarkUpdater) GetWatermarkTargetState(ctx context.Context, key *WatermarkKey, fence *OwnerFence) (WatermarkTargetState, error) {
+	var state WatermarkTargetState
+	if fence == nil {
+		return state, moerr.NewInternalError(ctx, "CDC target state has no owner fence")
+	}
+	if err := fence.Check(ctx); err != nil {
+		return state, err
+	}
+	readCtx, cancel := context.WithTimeoutCause(ctx, snapshotEpochPersistenceTimeout, moerr.CauseWatermarkRead)
+	defer cancel()
+	readCtx = defines.AttachAccountId(readCtx, catalog.System_Account)
+	res := u.ie.Query(readCtx, CDCSQLBuilder.GetWatermarkTargetStateSQL(key), ie.SessionOverrideOptions{})
+	if err := res.Error(); err != nil {
+		return state, classifySnapshotEpochBackendError(err)
+	}
+	if res.RowCount() != 1 {
+		return state, NewRetryableSnapshotEpochError(moerr.NewInternalErrorf(ctx, "CDC target state row is missing for %s", key.String()))
+	}
+	owner, err := res.GetUint64(readCtx, 0, 0)
+	if err != nil {
+		return state, err
+	}
+	if owner != fence.GenerationToken() {
+		return state, &OwnerFenceLostError{err: moerr.NewInvalidTask(ctx, "CDC target state owner was superseded", fence.GenerationToken())}
+	}
+	state.SourceGeneration, err = res.GetUint64(readCtx, 0, 1)
+	if err != nil {
+		return state, err
+	}
+	pending, err := res.Value(readCtx, 0, 2)
+	if err != nil {
+		return state, err
+	}
+	if pending != nil {
+		state.PendingGeneration, err = res.GetUint64(readCtx, 0, 2)
+		if err != nil {
+			return state, err
+		}
+		state.HasPending = true
+	}
+	identity, err := res.Value(readCtx, 0, 3)
+	if err != nil {
+		return state, err
+	}
+	if identity != nil {
+		state.Identity, err = res.GetString(readCtx, 0, 3)
+		if err != nil {
+			return state, err
+		}
+		state.HasIdentity = true
+	}
+	return state, fence.Check(ctx)
+}
+
+func (u *CDCWatermarkUpdater) SetWatermarkPending(ctx context.Context, key *WatermarkKey, fence *OwnerFence, generation uint64, preIdentity string) error {
+	if generation == 0 || preIdentity == "" || fence == nil {
+		return moerr.NewInternalError(ctx, "invalid CDC pending target identity")
+	}
+	if err := fence.Check(ctx); err != nil {
+		return err
+	}
+	writeCtx, cancel := context.WithTimeoutCause(ctx, snapshotEpochPersistenceTimeout, moerr.CauseWatermarkUpdate)
+	defer cancel()
+	writeCtx = defines.AttachAccountId(writeCtx, catalog.System_Account)
+	if err := u.ie.Exec(writeCtx, CDCSQLBuilder.SetWatermarkPendingSQL(key, fence.GenerationToken(), generation, preIdentity), ie.SessionOverrideOptions{}); err != nil {
+		return classifySnapshotEpochBackendError(err)
+	}
+	state, err := u.GetWatermarkTargetState(ctx, key, fence)
+	if err != nil {
+		return err
+	}
+	if state.SourceGeneration != 0 || !state.HasPending || state.PendingGeneration != generation || !state.HasIdentity || state.Identity != preIdentity {
+		return moerr.NewInternalErrorf(ctx, "CDC pending target identity changed for %s; explicit recovery is required", key.String())
+	}
+	return nil
+}
+
 // AcknowledgeTargetGeneration is called while the sink still owns its target
 // DDL lock. It advances the durable generation and installs its replay point
 // together, before any reader for the new generation can publish.
@@ -1670,6 +1755,45 @@ func (u *CDCWatermarkUpdater) AcknowledgeTargetGeneration(
 			"CDC target generation acknowledgement for %s was not durable (wanted %d/%s, got %d/%s)",
 			key.String(), sourceGeneration, replayPoint.ToString(), generation, actual.ToString()))
 	}
+	return u.finishTargetAcknowledgement(ctx, key, fence, actual, generation)
+}
+
+func (u *CDCWatermarkUpdater) AcknowledgeTargetIdentity(
+	ctx context.Context, key *WatermarkKey, fence *OwnerFence,
+	sourceGeneration uint64, preIdentity, newIdentity string, replayPoint types.TS,
+) error {
+	if fence == nil || sourceGeneration == 0 || preIdentity == "" || newIdentity == "" {
+		return moerr.NewInternalError(ctx, "invalid CDC target identity acknowledgement")
+	}
+	if err := fence.Check(ctx); err != nil {
+		return err
+	}
+	ackCtx, cancel := context.WithTimeoutCause(ctx, snapshotEpochPersistenceTimeout, moerr.CauseWatermarkUpdate)
+	defer cancel()
+	ackCtx = defines.AttachAccountId(ackCtx, catalog.System_Account)
+	if err := u.ie.Exec(ackCtx, CDCSQLBuilder.AcknowledgeTargetIdentitySQL(
+		key, fence.GenerationToken(), sourceGeneration, preIdentity, newIdentity, replayPoint),
+		ie.SessionOverrideOptions{}); err != nil {
+		return classifySnapshotEpochBackendError(err)
+	}
+	actual, generation, err := u.ClaimWatermarkOwner(ctx, key, fence)
+	if err != nil {
+		return err
+	}
+	state, err := u.GetWatermarkTargetState(ctx, key, fence)
+	if err != nil {
+		return err
+	}
+	if generation != sourceGeneration || !actual.Equal(&replayPoint) || state.HasPending || !state.HasIdentity || state.Identity != newIdentity {
+		return NewRetryableSnapshotEpochError(moerr.NewInternalErrorf(ctx,
+			"CDC target identity acknowledgement for %s was not durable", key.String()))
+	}
+	return u.finishTargetAcknowledgement(ctx, key, fence, actual, generation)
+}
+
+func (u *CDCWatermarkUpdater) finishTargetAcknowledgement(
+	ctx context.Context, key *WatermarkKey, fence *OwnerFence, actual types.TS, generation uint64,
+) error {
 	u.Lock()
 	if active := u.activeWatermarkFence[*key]; active != fence {
 		u.Unlock()

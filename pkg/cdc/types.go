@@ -137,9 +137,8 @@ func newRetryableTargetLockError(err error) error {
 	return &RetryableTargetLockError{err: err}
 }
 
-// RetryableConnectionError identifies a failed external SQL connection attempt
-// after configuration was parsed successfully. Rebuilding a CDC pipeline may
-// succeed once the target or network recovers, and no target effect has begun.
+// RetryableConnectionError identifies a transient target SQL connection error.
+// A retry rechecks durable admission state before any further target write.
 type RetryableConnectionError struct{ err error }
 
 func (e *RetryableConnectionError) Error() string { return e.err.Error() }
@@ -290,6 +289,7 @@ const (
 	CDCSourcePatternProtocolV1                = "source-pattern-v1"
 	CDCTaskExtraOptions_GenerationProtocol    = "_GenerationProtocol"
 	CDCGenerationAwareProtocolV1              = "generation-aware-v1"
+	CDCGenerationAwareProtocolV2              = "generation-aware-v2"
 )
 
 var CDCRequestOptions = []string{
@@ -598,6 +598,12 @@ type DbTableInfo struct {
 	// generation-aware reader can be published.
 	targetInitAck func(context.Context) error
 	targetReady   bool
+	// TargetIdentity is the durable identity from the acknowledged watermark.
+	// Empty is reserved for legacy callers that do not use the v2 protocol.
+	TargetIdentity    string
+	TargetPreIdentity string
+	TargetSinkType    string
+	targetIdentityAck func(context.Context, string) error
 }
 
 func (info *DbTableInfo) SetOwnerFence(fence *OwnerFence) {
@@ -611,6 +617,19 @@ func (info *DbTableInfo) OwnerFence() *OwnerFence {
 func (info *DbTableInfo) SetTargetAdmission(ready bool, ack func(context.Context) error) {
 	info.targetReady = ready
 	info.targetInitAck = ack
+}
+
+func (info *DbTableInfo) SetTargetIdentityAdmission(ready bool, preIdentity, acknowledgedIdentity string, ack func(context.Context, string) error) {
+	info.targetReady = ready
+	info.TargetPreIdentity = preIdentity
+	info.TargetIdentity = acknowledgedIdentity
+	info.targetIdentityAck = ack
+}
+
+func (info *DbTableInfo) ClearTargetAdmissionCallbacks() {
+	info.targetReady = false
+	info.targetInitAck = nil
+	info.targetIdentityAck = nil
 }
 
 func (info DbTableInfo) String() string {
