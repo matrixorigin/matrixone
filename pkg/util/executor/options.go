@@ -41,9 +41,10 @@ type ParamValue struct {
 	PrepareParamKind vector.PrepareParamKind
 	// SourceType is the logical type of a SQL EXECUTE USING user variable. It
 	// is deliberately separate from RuntimeType: SQL parameters are transported
-	// through a text vector, and their source type is used only after an
-	// arithmetic consumer establishes a numeric domain. Comparisons keep their
-	// existing common-type and numeric-prefix contracts.
+	// through a text vector. Selected functions with runtime-domain-sensitive
+	// semantics (including FIELD and variadic extrema) restore this type on the
+	// execute-time plan copy; ordinary comparisons retain their established
+	// common-type and numeric-prefix contracts.
 	SourceType          types.Type
 	HasSourceType       bool
 	RuntimeStringDomain types.RuntimeStringDomain
