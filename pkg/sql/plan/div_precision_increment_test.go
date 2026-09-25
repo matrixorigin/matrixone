@@ -27,7 +27,9 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/defines"
 	planpb "github.com/matrixorigin/matrixone/pkg/pb/plan"
 	"github.com/matrixorigin/matrixone/pkg/sql/colexec"
+	"github.com/matrixorigin/matrixone/pkg/sql/parsers/dialect"
 	"github.com/matrixorigin/matrixone/pkg/sql/parsers/dialect/mysql"
+	"github.com/matrixorigin/matrixone/pkg/sql/parsers/tree"
 	"github.com/matrixorigin/matrixone/pkg/sql/plan/function"
 	"github.com/matrixorigin/matrixone/pkg/testutil"
 	"github.com/matrixorigin/matrixone/pkg/vm/process"
@@ -155,6 +157,9 @@ func TestDDLDivisionBindersUseSessionPrecision(t *testing.T) {
 			var restored planpb.TableDef
 			require.NoError(t, proto.Unmarshal(encoded, &restored))
 			require.Len(t, restored.Checks, 1)
+			sensitive, err := AnalyzeTableDumpBindings(ctx, &restored, &restored)
+			require.NoError(t, err)
+			require.True(t, sensitive)
 			for _, expr := range []*planpb.Expr{restored.Cols[2].GeneratedCol.Expr, restored.Checks[0].Check} {
 				division := findDivision(expr)
 				require.NotNil(t, division)
@@ -162,6 +167,93 @@ func TestDDLDivisionBindersUseSessionPrecision(t *testing.T) {
 			}
 		})
 	}
+
+	t.Run("mixed persisted bindings", func(t *testing.T) {
+		mixedDDL := "create table t(a decimal(10,2), b decimal(10,2), " +
+			"q decimal(30,12) default (a/b), " +
+			"r decimal(30,12) generated always as (a/b) stored)"
+		mixedStmt, parseErr := mysql.ParseOne(t.Context(), mixedDDL, 1)
+		require.NoError(t, parseErr)
+		defer mixedStmt.Free()
+		at := func(increment int64) *planpb.TableDef {
+			p, buildErr := BuildPlan(divPrecisionCompilerContext{
+				CompilerContext: compiler, increment: increment,
+			}, mixedStmt, false)
+			require.NoError(t, buildErr)
+			return p.GetDdl().GetCreateTable().GetTableDef()
+		}
+		source := DeepCopyTableDef(at(4), true)
+		source.Cols[2].Default = at(10).Cols[2].Default
+		target := at(4)
+		sensitive, analyzeErr := AnalyzeTableDumpBindings(compiler, source, source)
+		require.NoError(t, analyzeErr)
+		require.True(t, sensitive)
+		sensitive, analyzeErr = AnalyzeTableDumpBindings(compiler, target, source)
+		require.NoError(t, analyzeErr)
+		require.True(t, sensitive)
+		sensitive, analyzeErr = AnalyzeTableDumpBindings(compiler, target, nil)
+		require.NoError(t, analyzeErr)
+		require.True(t, sensitive)
+		t.Run("tampered bound tree", func(t *testing.T) {
+			tampered := DeepCopyTableDef(source, true)
+			tampered.Cols[2].Default.Expr = &planpb.Expr{
+				Typ: planpb.Type{Id: int32(types.T_decimal128), Width: 30, Scale: 12},
+				Expr: &planpb.Expr_Lit{Lit: &planpb.Literal{
+					Value: &planpb.Literal_I64Val{I64Val: 1},
+				}},
+			}
+			_, analyzeErr := AnalyzeTableDumpBindings(compiler, target, tampered)
+			require.ErrorContains(t, analyzeErr, "cannot verify bound default expression")
+		})
+		t.Run("reversed mixed bindings", func(t *testing.T) {
+			reversed := DeepCopyTableDef(at(10), true)
+			reversed.Cols[2].Default = at(4).Cols[2].Default
+			_, analyzeErr := AnalyzeTableDumpBindings(compiler, at(0), reversed)
+			require.NoError(t, analyzeErr)
+		})
+	})
+	t.Run("nested and folded division", func(t *testing.T) {
+		stmt, parseErr := mysql.ParseOne(t.Context(),
+			"create table t(a decimal(10,2), b decimal(10,2), "+
+				"q decimal(30,12) default ((a/b)/3), "+
+				"r decimal(30,12) default (cast(1 as decimal(10,2))/cast(3 as decimal(10,2))))", 1)
+		require.NoError(t, parseErr)
+		defer stmt.Free()
+		built, buildErr := BuildPlan(divPrecisionCompilerContext{
+			CompilerContext: compiler, increment: 10,
+		}, stmt, false)
+		require.NoError(t, buildErr)
+		definition := built.GetDdl().GetCreateTable().GetTableDef()
+		nested := DeepCopyTableDef(definition, true)
+		nested.Cols[3].Default = nil
+		sensitive, analyzeErr := AnalyzeTableDumpBindings(compiler, nested, nested)
+		require.NoError(t, analyzeErr)
+		require.True(t, sensitive)
+		folded := DeepCopyTableDef(definition, true)
+		folded.Cols[2].Default = nil
+		sensitive, analyzeErr = AnalyzeTableDumpBindings(compiler, folded, folded)
+		require.NoError(t, analyzeErr)
+		require.True(t, sensitive)
+	})
+	t.Run("parser mode profiles", func(t *testing.T) {
+		origin := `(a / b > 0) and ('x\\y' || 'z') = 'x\\yz'`
+		formatted := make(map[string]string)
+		for _, mode := range []string{"", "NO_BACKSLASH_ESCAPES", "PIPES_AS_CONCAT", "NO_BACKSLASH_ESCAPES,PIPES_AS_CONCAT"} {
+			stmt, ast, visitor, parseErr := parseTableDumpExpression(t.Context(), origin, mode)
+			require.NoError(t, parseErr, mode)
+			require.True(t, visitor.hasDivision, mode)
+			formatted[mode] = tree.String(ast, dialect.MYSQL)
+			stmt.Free()
+		}
+		require.NotEqual(t, formatted[""], formatted["PIPES_AS_CONCAT"])
+		require.NotEqual(t, formatted[""], formatted["NO_BACKSLASH_ESCAPES"])
+	})
+	t.Run("division on update is not accepted by SQL grammar", func(t *testing.T) {
+		_, parseErr := mysql.ParseOne(t.Context(),
+			"create table t(a decimal(10,2), b decimal(10,2), "+
+				"q decimal(30,12) on update (a/b))", 1)
+		require.Error(t, parseErr)
+	})
 }
 
 func TestPreparedDivisionSpecializationUsesPrecisionIncrementContext(t *testing.T) {

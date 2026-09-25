@@ -49,6 +49,7 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/stage"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine"
 	"github.com/matrixorigin/matrixone/pkg/vm/process"
+	"google.golang.org/protobuf/encoding/protowire"
 )
 
 type testTableDumpObjectCopier struct {
@@ -1389,6 +1390,10 @@ func TestDecodeTableDumpManifestUnknownAndMalformedFields(t *testing.T) {
 		{name: "truncated-relation", data: `{"relations":[{"role":"main"`},
 		{name: "truncated-objects", data: `{"relations":[{"objects":[`},
 		{name: "truncated-auto-increment", data: `{"relations":[{"auto_increment":[`},
+		{name: "duplicate-version", data: `{"version":1,"version":2}`},
+		{name: "duplicate-relation-field", data: `{"relations":[{"role":"main","role":"index"}]}`},
+		{name: "duplicate-object-field", data: `{"relations":[{"objects":[{"name":"a","name":"b"}]}]}`},
+		{name: "duplicate-unknown-field", data: `{"unknown":{"value":1,"value":2}}`},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			_, err := decodeTableDumpManifest([]byte(tc.data))
@@ -1667,6 +1672,56 @@ func TestInstallTableDumpObjectsCancelsWorkers(t *testing.T) {
 	cancel()
 	require.ErrorIs(t, <-resultCh, context.Canceled)
 	require.Positive(t, tracked.Load(), "ambiguous partial copies must be tracked for rollback")
+}
+
+func TestTableDumpRestoredExpressionsDoesNotMutateTarget(t *testing.T) {
+	boundLiteral := func(value int64) *plan.Expr {
+		return &plan.Expr{
+			Typ: plan.Type{Id: int32(types.T_int64)},
+			Expr: &plan.Expr_Lit{Lit: &plan.Literal{
+				Value: &plan.Literal_I64Val{I64Val: value},
+			}},
+		}
+	}
+	target := &plan.TableDef{Cols: []*plan.ColDef{{
+		Name: "q", Typ: plan.Type{Id: int32(types.T_int64)},
+		Default: &plan.Default{OriginString: "a / b", NullAbility: true, Expr: boundLiteral(4)},
+	}}}
+	source := sqlplan.DeepCopyTableDef(target, true)
+	source.Cols[0].Default.Expr = boundLiteral(10)
+	payload, digest, err := tableDumpBoundExpressions(source)
+	require.NoError(t, err)
+	restored, changed, err := tableDumpRestoredExpressions(target, payload, digest)
+	require.NoError(t, err)
+	require.True(t, changed)
+	require.Equal(t, int64(4), target.Cols[0].Default.Expr.GetLit().GetI64Val())
+	require.Equal(t, int64(10), restored.Cols[0].Default.Expr.GetLit().GetI64Val())
+	require.NotSame(t, target.Cols[0], restored.Cols[0])
+}
+
+func TestTableDumpBoundPayloadRejectsExpansionBeforeUnmarshal(t *testing.T) {
+	var columns []byte
+	for range 16_385 {
+		columns = protowire.AppendTag(columns, 4, protowire.BytesType)
+		columns = protowire.AppendBytes(columns, nil)
+	}
+	require.ErrorContains(t, preflightTableDumpBoundPayload(columns), "too many columns")
+
+	var expr []byte
+	for range 65 {
+		var function []byte
+		function = protowire.AppendTag(function, 2, protowire.BytesType)
+		function = protowire.AppendBytes(function, expr)
+		expr = protowire.AppendTag(nil, 7, protowire.BytesType)
+		expr = protowire.AppendBytes(expr, function)
+	}
+	declaration := protowire.AppendTag(nil, 1, protowire.BytesType)
+	declaration = protowire.AppendBytes(declaration, expr)
+	column := protowire.AppendTag(nil, 7, protowire.BytesType)
+	column = protowire.AppendBytes(column, declaration)
+	table := protowire.AppendTag(nil, 4, protowire.BytesType)
+	table = protowire.AppendBytes(table, column)
+	require.ErrorContains(t, preflightTableDumpBoundPayload(table), "nesting exceeds limit")
 }
 
 func TestTableSchemaHashIgnoresIdentity(t *testing.T) {
