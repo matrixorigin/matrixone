@@ -128,7 +128,7 @@ func RequiredPersistedExpressionProtocolVersion(owner any) (int64, error) {
 		requiredVersion = defines.MORPCVersion98
 	}
 	if (features.TemporalResultContracts || features.NormalizedIntervalUnits ||
-		features.TypedNumericIntervalOverloads || features.WeekSessionDefault) &&
+		features.WeekSessionDefault) &&
 		requiredVersion < defines.MORPCVersion100 {
 		requiredVersion = defines.MORPCVersion100
 	}

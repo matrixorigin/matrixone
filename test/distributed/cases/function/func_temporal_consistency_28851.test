@@ -233,6 +233,22 @@ select date_add(cast('2024-01-01 00:00:00' as datetime(6)), interval cast(344101
          cast('2022-11-28 17:37:53.168451' as datetime(6)) as negative_literal_tie;
 drop table temporal_scalar_ties;
 
+-- DOUBLE scalar intervals use the same binary rounding for columns and
+-- literals; DECIMAL ties above intentionally round from exact decimal text.
+create table temporal_scalar_double(n double);
+insert into temporal_scalar_double values (34410126.8315485e0), (-34410126.8315485e0);
+select date_add(cast('2024-01-01 00:00:00' as datetime(6)), interval n second) =
+         cast('2025-02-02 06:22:06.831548' as datetime(6)) as positive_double_column
+from temporal_scalar_double where n > 0;
+select date_add(cast('2024-01-01 00:00:00' as datetime(6)), interval n second) =
+         cast('2022-11-28 17:37:53.168452' as datetime(6)) as negative_double_column
+from temporal_scalar_double where n < 0;
+select date_add(cast('2024-01-01 00:00:00' as datetime(6)), interval 34410126.8315485e0 second) =
+         cast('2025-02-02 06:22:06.831548' as datetime(6)) as positive_double_literal,
+       date_add(cast('2024-01-01 00:00:00' as datetime(6)), interval -34410126.8315485e0 second) =
+         cast('2022-11-28 17:37:53.168452' as datetime(6)) as negative_double_literal;
+drop table temporal_scalar_double;
+
 -- Numeric exponent formatting must never enter the compound field grammar.
 -- Text intervals retain that grammar, including its unusual singleton rules.
 select date_add(time '12:00:00', interval cast(1e-14 as double) second_microsecond) = cast('12:00:00' as time(6)) as tiny_float_us,

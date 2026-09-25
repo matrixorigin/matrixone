@@ -88,6 +88,8 @@ func ToIntervalMicrosecond(ivecs []*vector.Vector, result vector.FunctionResultW
 				return "", false
 			}
 			return strconv.FormatFloat(float64(v), 'f', -1, 32), true
+		}, func(v float32, unit types.IntervalType) (int64, bool, bool) {
+			return roundedScalarFloatInterval(float64(v), unit)
 		})
 	case types.T_float64:
 		return toTypedInterval[float64](ivecs, result, length, func(v float64, _ int32) (string, bool) {
@@ -95,15 +97,15 @@ func ToIntervalMicrosecond(ivecs []*vector.Vector, result vector.FunctionResultW
 				return "", false
 			}
 			return strconv.FormatFloat(v, 'f', -1, 64), true
-		})
+		}, roundedScalarFloatInterval)
 	case types.T_decimal64:
 		return toTypedInterval[types.Decimal64](ivecs, result, length, func(v types.Decimal64, scale int32) (string, bool) {
 			return canonicalIntervalDecimal(v.Format(scale), scale), true
-		})
+		}, nil)
 	case types.T_decimal128:
 		return toTypedInterval[types.Decimal128](ivecs, result, length, func(v types.Decimal128, scale int32) (string, bool) {
 			return canonicalIntervalDecimal(v.Format(scale), scale), true
-		})
+		}, nil)
 	}
 	return toInterval(ivecs, result, length, true)
 }
@@ -119,9 +121,33 @@ func canonicalIntervalDecimal(s string, scale int32) string {
 	return s
 }
 
+// Scalar floating intervals use the same binary floating-point multiplication
+// and rounding as literal binding. Compound units retain their field grammar.
+func roundedScalarFloatInterval(value float64, unit types.IntervalType) (int64, bool, bool) {
+	var multiplier int64
+	switch unit {
+	case types.Second:
+		multiplier = types.MicroSecsPerSec
+	case types.Minute:
+		multiplier = types.MicroSecsPerSec * types.SecsPerMinute
+	case types.Hour:
+		multiplier = types.MicroSecsPerSec * types.SecsPerHour
+	case types.Day:
+		multiplier = types.MicroSecsPerSec * types.SecsPerDay
+	default:
+		return 0, false, false
+	}
+	rounded := math.Round(value * float64(multiplier))
+	if math.IsNaN(rounded) || rounded >= float64(math.MaxInt64) || rounded < float64(math.MinInt64) {
+		return 0, false, true
+	}
+	return int64(rounded), true, true
+}
+
 func toTypedInterval[T types.FixedSizeTExceptStrType](
 	ivecs []*vector.Vector, result vector.FunctionResultWrapper, length int,
 	format func(T, int32) (string, bool),
+	scalarFloat func(T, types.IntervalType) (int64, bool, bool),
 ) error {
 	values := vector.GenerateFunctionFixedTypeParameter[T](ivecs[0])
 	units := vector.GenerateFunctionFixedTypeParameter[int64](ivecs[1])
@@ -135,6 +161,14 @@ func toTypedInterval[T types.FixedSizeTExceptStrType](
 				return err
 			}
 			continue
+		}
+		if scalarFloat != nil {
+			if microseconds, valid, handled := scalarFloat(value, types.IntervalType(unit)); handled {
+				if err := rs.Append(microseconds, !valid); err != nil {
+					return err
+				}
+				continue
+			}
 		}
 		text, valid := format(value, scale)
 		if !valid {

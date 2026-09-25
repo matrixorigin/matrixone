@@ -72,10 +72,10 @@ func TestPersistedDecimalLiteralUsesDedicatedEpochInMixedOwner(t *testing.T) {
 		{"spatial then decimal", []*planpb.Expr{spatialExpr, decimalExpr}, defines.MORPCVersion90},
 		{"temporal result", []*planpb.Expr{temporalExpr}, defines.MORPCVersion97},
 		{"temporal then spatial", []*planpb.Expr{temporalExpr, spatialExpr}, defines.MORPCVersion97},
-		{"normalized interval", []*planpb.Expr{intervalExpr}, defines.MORPCVersion98},
-		{"typed numeric interval overload", []*planpb.Expr{typedIntervalExpr}, defines.MORPCVersion99},
-		{"week session default", []*planpb.Expr{weekExpr}, defines.MORPCVersion98},
-		{"temporal then interval", []*planpb.Expr{temporalExpr, intervalExpr}, defines.MORPCVersion98},
+		{"normalized interval", []*planpb.Expr{intervalExpr}, defines.MORPCVersion97},
+		{"typed numeric interval overload", []*planpb.Expr{typedIntervalExpr}, defines.MORPCVersion97},
+		{"week session default", []*planpb.Expr{weekExpr}, defines.MORPCVersion97},
+		{"temporal then interval", []*planpb.Expr{temporalExpr, intervalExpr}, defines.MORPCVersion97},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			owner := &planpb.TableDef{}

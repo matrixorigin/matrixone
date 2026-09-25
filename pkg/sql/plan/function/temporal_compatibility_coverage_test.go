@@ -306,6 +306,19 @@ func TestDynamicIntervalUnitContract(t *testing.T) {
 	require.True(t, ok, info)
 }
 
+func TestScalarDoubleIntervalMatchesLiteralRounding(t *testing.T) {
+	proc := newTmpProcess(t)
+	inputs := []FunctionTestInput{
+		NewFunctionTestInput(types.T_float64.ToType(), []float64{34410126.8315485, -34410126.8315485}, nil),
+		NewFunctionTestConstInput(types.T_int64.ToType(), []int64{int64(types.Second)}, nil),
+	}
+	want := NewFunctionTestResult(types.T_int64.ToType(), false,
+		[]int64{34410126831548, -34410126831548}, nil)
+	caseDef := NewFunctionTestCase(proc, inputs, want, ToIntervalMicrosecond)
+	ok, info := caseDef.Run()
+	require.True(t, ok, info)
+}
+
 var temporalExtractBenchmarkSink int64
 
 func BenchmarkTemporalNumericExtract(b *testing.B) {
