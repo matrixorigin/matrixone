@@ -2202,10 +2202,7 @@ var supportedOperators = []FuncNew{
 						// for legacy direct execution, which bypasses binding casts.
 						if result.Oid == types.T_decimal256 &&
 							parameters[0].Oid != types.T_decimal256 && parameters[1].Oid != types.T_decimal256 {
-							result.Oid = types.T_decimal128
-							if result.Width > 38 {
-								result.Width = 38
-							}
+							result = types.New(types.T_decimal128, min(result.Width, int32(38)), result.Scale)
 						}
 						return result
 					}
