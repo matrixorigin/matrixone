@@ -777,15 +777,23 @@ func (s *Scope) alterTableInplace(c *Compile, cleanup *alterAutoIncrementResetCl
 			return err
 		}
 
-		// 1. lock origin table metadata in catalog
-		if err = lockMoTable(c, dbName, tblName, lock.LockMode_Exclusive); err != nil {
-			if !moerr.IsMoErrCode(err, moerr.ErrTxnNeedRetry) &&
-				!moerr.IsMoErrCode(err, moerr.ErrTxnNeedRetryWithDefChanged) {
-				return err
+		// A rename changes both name-to-ID mappings. Lock them in the same
+		// order for opposing rename attempts and CDC identity guards.
+		metadataNames := []string{tblName}
+		for _, action := range qry.Actions {
+			if rename := action.GetAlterName(); rename != nil && rename.NewName != "" && rename.NewName != tblName {
+				metadataNames = append(metadataNames, rename.NewName)
 			}
-			// The changes recorded in the data dictionary table imply a change in the structure of the corresponding entity table,
-			// therefore it is necessary to rebuild the logical plan and redirect err to ErrTxnNeedRetryWithDefChanged
-			retryErr = moerr.NewTxnNeedRetryWithDefChanged(c.proc.Ctx)
+		}
+		sort.Strings(metadataNames)
+		for _, name := range metadataNames {
+			if err = lockMoTable(c, dbName, name, lock.LockMode_Exclusive); err != nil {
+				if !moerr.IsMoErrCode(err, moerr.ErrTxnNeedRetry) &&
+					!moerr.IsMoErrCode(err, moerr.ErrTxnNeedRetryWithDefChanged) {
+					return err
+				}
+				retryErr = moerr.NewTxnNeedRetryWithDefChanged(c.proc.Ctx)
+			}
 		}
 
 		// 2. lock origin table
@@ -6609,6 +6617,8 @@ const (
 func (opts *CDCCreateTaskOptions) BuildTaskMetadata() task.TaskMetadata {
 	executor := task.TaskCode_InitCdc
 	switch {
+	case cdc.UsesSourcePatternProtocol(opts.ExtraOpts):
+		executor = task.TaskCode_InitCdcSourcePatternV1
 	case opts.NoFull && cdc.UsesLosslessNoFullStart(opts.ExtraOpts):
 		executor = task.TaskCode_InitCdcLosslessStart
 	case !opts.NoFull && cdc.UsesStableEpochInitialSnapshot(opts.ExtraOpts):
@@ -6796,6 +6806,7 @@ type CDCCreateTaskOptions struct {
 	TaskId              string
 	UserInfo            *CDCUserInfo
 	Exclude             string
+	ExcludePattern      string
 	StartTs             string
 	EndTs               string
 	MaxSqlLength        int64
@@ -6843,6 +6854,12 @@ func (opts *CDCCreateTaskOptions) ValidateAndFill(
 		key := planCDC.Option[i]
 		value := planCDC.Option[i+1]
 		tmpOpts[key] = value
+	}
+	// Make the raw exclude expression available to level validation, which runs
+	// before the option switch reaches the Exclude case.
+	if exclude := tmpOpts[cdc.CDCRequestOptions_Exclude]; exclude != "" {
+		opts.Exclude = exclude
+		opts.ExcludePattern = exclude
 	}
 
 	// extract source uri and check connection
@@ -6998,13 +7015,20 @@ func (opts *CDCCreateTaskOptions) ValidateAndFill(
 	if opts.NoFull && opts.startTsFromSnapshot {
 		extraOpts[cdc.CDCTaskExtraOptions_InitialSnapshotProtocol] = cdc.CDCInitialSnapshotProtocolNoFullHLC
 	}
+	// Every new task uses generation-aware catalog state, including atomic full
+	// and explicit-start tasks that do not carry the split-snapshot marker.
 	if !opts.NoFull {
 		cdc.FinalizeInitialSnapshotOptions(extraOpts)
-		_, stable := extraOpts[cdc.CDCTaskExtraOptions_InitialSnapshotProtocol]
-		if err = validateStableInitialSnapshotCompileProtocol(ctx, c, stable); err != nil {
-			return
-		}
-	} else if opts.startTsFromSnapshot {
+	}
+	sourcePattern := cdc.RequiresSourcePatternProtocol(opts.PitrTables)
+	if sourcePattern {
+		extraOpts[cdc.CDCTaskExtraOptions_SourcePatternProtocol] = cdc.CDCSourcePatternProtocolV1
+	}
+	extraOpts[cdc.CDCTaskExtraOptions_GenerationProtocol] = cdc.CDCGenerationAwareProtocolV1
+	if err = validateStableInitialSnapshotCompileProtocol(ctx, c, true); err != nil {
+		return
+	}
+	if opts.startTsFromSnapshot {
 		if err = validateLosslessNoFullStartCompileProtocol(ctx, c); err != nil {
 			return
 		}
@@ -7085,10 +7109,13 @@ func (opts *CDCCreateTaskOptions) handleLevel(
 	); err != nil {
 		return
 	}
+	if err = cdc.NormalizeCDCSourcePatternCase(patterTupples, c.getLower()); err != nil {
+		return
+	}
 
 	// ensure PITR checks run with the target tenant account id
 	ctx = defines.AttachAccountId(ctx, opts.UserInfo.AccountId)
-	if err = c.checkPitrGranularity(ctx, patterTupples); err != nil {
+	if err = c.checkPitrGranularity(ctx, patterTupples, opts.ExcludePattern); err != nil {
 		return
 	}
 
@@ -7148,8 +7175,124 @@ func transformIntoHours(freq string) int64 {
 func (c *Compile) checkPitrGranularity(
 	ctx context.Context,
 	pts *cdc.PatternTuples,
+	exclude string,
 	minLength ...int64,
 ) error {
+	accountId, err := defines.GetAccountId(ctx)
+	if err != nil {
+		return err
+	}
+	// Validate concrete CDC sources before persisting the task. The sink needs
+	// a user-visible primary key for UPDATE/DELETE identity; the engine-only
+	// fake key used by no-PK tables is deliberately not accepted.
+	for _, pt := range pts.Pts {
+		if pt == nil {
+			continue
+		}
+		if pt.Source.Database == cdc.CDCPitrGranularity_All || pt.Source.Table == cdc.CDCPitrGranularity_All {
+			// Use the runtime scanner's catalog predicate, then apply Exclude and
+			// the foreign-key rule to real names. In particular, do not match a
+			// regexp against the synthetic "db.*" tuple.
+			res, err := c.runSqlWithResultAndOptions(
+				cdc.CollectCDCSourceCandidateSQL(accountId, pt.Source.Database, pt.Source.Table, pts.SourceCaseMode),
+				int32(catalog.System_Account), executor.StatementOption{}.WithDisableLog())
+			if err != nil {
+				return err
+			}
+			var validationErr error
+			res.ReadRows(func(rows int, cols []*vector.Vector) bool {
+				for i := 0; i < rows; i++ {
+					dbName := cols[3].GetStringAt(i)
+					tableName := cols[1].GetStringAt(i)
+					if !cdc.CDCSourceNameMatches(dbName, pt.Source.Database, pts.SourceCaseMode) ||
+						!cdc.CDCSourceNameMatches(tableName, pt.Source.Table, pts.SourceCaseMode) {
+						continue
+					}
+					if exclude != "" {
+						matched, matchErr := regexp.MatchString(exclude, dbName+"."+tableName)
+						if matchErr != nil {
+							validationErr = matchErr
+							return false
+						}
+						if matched {
+							continue
+						}
+					}
+					hasForeignKey, decodeErr := cdc.TableHasForeignKeyConstraint(cols[6].GetBytesAt(i))
+					if decodeErr != nil {
+						validationErr = decodeErr
+						return false
+					}
+					if hasForeignKey {
+						continue
+					}
+					if !vector.MustFixedColNoTypeCheck[bool](cols[7])[i] {
+						validationErr = moerr.NewInternalErrorf(ctx, "CDC source scope %s contains table %s.%s without a primary key", pt.Source, dbName, tableName)
+						return false
+					}
+				}
+				return true
+			})
+			res.Close()
+			if validationErr != nil {
+				return validationErr
+			}
+			// The shared candidate query retains every runtime table and returns its
+			// user-primary-key status. That avoids N+1 catalog queries while both
+			// admission and runtime can fail closed for a no-PK table.
+			continue
+		}
+		res, err := c.runSqlWithResultAndOptions(
+			cdc.CollectCDCSourceCandidateSQL(accountId, pt.Source.Database, pt.Source.Table, pts.SourceCaseMode),
+			int32(catalog.System_Account), executor.StatementOption{}.WithDisableLog())
+		if err != nil {
+			return err
+		}
+		valid := false
+		var validationErr error
+		res.ReadRows(func(rows int, cols []*vector.Vector) bool {
+			for i := 0; i < rows; i++ {
+				if !cdc.CDCSourceNameMatches(cols[3].GetStringAt(i), pt.Source.Database, pts.SourceCaseMode) ||
+					!cdc.CDCSourceNameMatches(cols[1].GetStringAt(i), pt.Source.Table, pts.SourceCaseMode) {
+					continue
+				}
+				dbName := cols[3].GetStringAt(i)
+				tableName := cols[1].GetStringAt(i)
+				if exclude != "" {
+					matched, matchErr := regexp.MatchString(exclude, dbName+"."+tableName)
+					if matchErr != nil {
+						validationErr = matchErr
+						return false
+					}
+					if matched {
+						valid = true
+						continue
+					}
+				}
+				hasForeignKey, decodeErr := cdc.TableHasForeignKeyConstraint(cols[6].GetBytesAt(i))
+				if decodeErr != nil {
+					validationErr = decodeErr
+					return false
+				}
+				if hasForeignKey {
+					valid = true
+					continue
+				}
+				if !vector.MustFixedColNoTypeCheck[bool](cols[7])[i] {
+					return true
+				}
+				valid = true
+			}
+			return true
+		})
+		res.Close()
+		if validationErr != nil {
+			return validationErr
+		}
+		if !valid {
+			return moerr.NewInternalErrorf(ctx, "source table %s has no primary key; CDC does not support tables without a user-visible primary key", pt.Source)
+		}
+	}
 	var minPitrLen int64 = 2
 	if len(minLength) > 1 {
 		return moerr.NewInternalErrorf(ctx, "only one length parameter allowed")
@@ -7157,11 +7300,6 @@ func (c *Compile) checkPitrGranularity(
 	if len(minLength) > 0 {
 		minPitrLen = max(minLength[0]+1, minPitrLen)
 	}
-	accountId, err := defines.GetAccountId(ctx)
-	if err != nil {
-		return err
-	}
-
 	sqlCluster := fmt.Sprintf(`SELECT pitr_length,pitr_unit FROM %s.%s WHERE level='cluster' AND account_id = %d`,
 		catalog.MO_CATALOG, catalog.MO_PITR, accountId)
 	if res, err := c.runSqlWithResultAndOptions(sqlCluster, int32(catalog.System_Account), executor.StatementOption{}.WithDisableLog()); err == nil {
@@ -7304,8 +7442,11 @@ func (opts *CDCCreateTaskOptions) handleFrequency(
 	); err != nil {
 		return
 	}
+	if err = cdc.NormalizeCDCSourcePatternCase(patterTupples, c.getLower()); err != nil {
+		return
+	}
 
-	if err = c.checkPitrGranularity(ctx, patterTupples, normalized); err != nil {
+	if err = c.checkPitrGranularity(ctx, patterTupples, opts.ExcludePattern, normalized); err != nil {
 		return err
 	}
 	return nil

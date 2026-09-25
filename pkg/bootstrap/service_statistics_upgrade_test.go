@@ -25,6 +25,7 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/bootstrap/versions/v4_0_6"
 	"github.com/matrixorigin/matrixone/pkg/bootstrap/versions/v4_0_7"
 	"github.com/matrixorigin/matrixone/pkg/bootstrap/versions/v4_0_8"
+	"github.com/matrixorigin/matrixone/pkg/bootstrap/versions/v4_0_9"
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
 	"github.com/matrixorigin/matrixone/pkg/common/mpool"
 	"github.com/matrixorigin/matrixone/pkg/common/runtime"
@@ -38,8 +39,17 @@ import (
 	"github.com/stretchr/testify/require"
 )
 
+// These tests exercise the 4.0.8 tenant migration against its own writer
+// version. Later cluster-only upgrades do not change that migration contract.
+func initUpgradeThroughStatistics(s *service) {
+	s.initUpgrade()
+	for len(s.handles) > 0 && versions.Compare(s.handles[len(s.handles)-1].Metadata().Version, "4.0.8") > 0 {
+		s.handles = s.handles[:len(s.handles)-1]
+	}
+}
+
 func TestDoCheckUpgradeQueuesStatisticsRefresh(t *testing.T) {
-	final := v4_0_8.Handler.Metadata()
+	final := v4_0_9.Handler.Metadata()
 	require.Greater(t, versions.Compare(final.Version, "4.0.7"), 0)
 	for _, test := range []struct {
 		name    string
@@ -51,7 +61,8 @@ func TestDoCheckUpgradeQueuesStatisticsRefresh(t *testing.T) {
 		{name: "4.0.6", version: "4.0.6", offset: v4_0_6.Handler.Metadata().VersionOffset, upgrade: true, via407: true},
 		{name: "old_4.0.7", version: "4.0.7", upgrade: true},
 		{name: "4.0.7_offset_1", version: "4.0.7", offset: 1, upgrade: true},
-		{name: "current_4.0.8", version: final.Version, offset: final.VersionOffset},
+		{name: "current_4.0.8", version: "4.0.8", offset: v4_0_8.Handler.Metadata().VersionOffset, upgrade: true},
+		{name: "current_4.0.9", version: final.Version, offset: final.VersionOffset},
 	} {
 		t.Run(test.name, func(t *testing.T) {
 			runtime.RunTest("", func(runtime.Runtime) {
@@ -86,6 +97,9 @@ func TestDoCheckUpgradeQueuesStatisticsRefresh(t *testing.T) {
 				require.NoError(t, b.doCheckUpgrade(context.Background()))
 				if test.upgrade {
 					hops := []versions.Version{final}
+					if test.version != "4.0.8" {
+						hops = append([]versions.Version{v4_0_8.Handler.Metadata()}, hops...)
+					}
 					if test.via407 {
 						hops = append([]versions.Version{v4_0_7.Handler.Metadata()}, hops...)
 					}
@@ -202,7 +216,7 @@ func TestStatisticsUpgradeOldWorkerCannotCompleteNewTask(t *testing.T) {
 
 				current := newServiceForTest("", &memLocker{},
 					clock.NewHLCClock(func() int64 { return 0 }, 0), nil, exec,
-					func(s *service) { s.initUpgrade() })
+					initUpgradeThroughStatistics)
 				defer current.stopper.Stop()
 				hasWork, err = current.newTenantUpgradePass(t.Context())()
 				require.NoError(t, err)
@@ -295,7 +309,7 @@ func TestStatisticsUpgradeCompensatesPostSnapshotTenantAfterRestart(t *testing.T
 
 		newCN := func() *service {
 			b := newServiceForTest("", &memLocker{}, clock.NewHLCClock(func() int64 { return 0 }, 0),
-				nil, exec, func(s *service) { s.initUpgrade() })
+				nil, exec, initUpgradeThroughStatistics)
 			t.Cleanup(b.stopper.Stop)
 			return b
 		}
@@ -372,7 +386,7 @@ func TestMaybeUpgradeTenantDoesNotCacheUncommittedOrFailedChecks(t *testing.T) {
 					}
 				}, txnOp)
 				b := newServiceForTest("", &memLocker{}, clock.NewHLCClock(func() int64 { return 0 }, 0),
-					nil, exec, func(s *service) { s.initUpgrade() })
+					nil, exec, initUpgradeThroughStatistics)
 				defer b.stopper.Stop()
 				for range 2 {
 					var txnOp client.TxnOperator
@@ -418,7 +432,7 @@ func TestMaybeUpgradeTenantRechecksVersionUnderLock(t *testing.T) {
 			}
 		})
 		b := newServiceForTest("", &memLocker{}, clock.NewHLCClock(func() int64 { return 0 }, 0),
-			nil, exec, func(s *service) { s.initUpgrade() })
+			nil, exec, initUpgradeThroughStatistics)
 		defer b.stopper.Stop()
 		upgraded, err := b.MaybeUpgradeTenant(t.Context(),
 			func() (int32, string, error) { return 11, final.Version, nil }, nil)
@@ -446,7 +460,7 @@ func TestMaybeUpgradeTenantWaitHonorsCancellation(t *testing.T) {
 			}
 		})
 		b := newServiceForTest("", &memLocker{}, clock.NewHLCClock(func() int64 { return 0 }, 0),
-			nil, exec, func(s *service) { s.initUpgrade() })
+			nil, exec, initUpgradeThroughStatistics)
 		defer b.stopper.Stop()
 		ctx, cancel := context.WithCancel(t.Context())
 		cancel()
@@ -488,7 +502,7 @@ func TestMaybeUpgradeTenantRejectsConcurrentAccountDeletion(t *testing.T) {
 						}
 					})}
 				b := newServiceForTest("", &memLocker{}, clock.NewHLCClock(func() int64 { return 0 }, 0),
-					nil, exec, func(s *service) { s.initUpgrade() })
+					nil, exec, initUpgradeThroughStatistics)
 				defer b.stopper.Stop()
 				fetch := func() (int32, string, error) {
 					authenticated = true

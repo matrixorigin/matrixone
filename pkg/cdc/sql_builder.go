@@ -16,6 +16,7 @@ package cdc
 
 import (
 	"fmt"
+	"strconv"
 	"time"
 
 	"github.com/matrixorigin/matrixone/pkg/catalog"
@@ -350,7 +351,19 @@ const (
 		" tbl.reldatabase, " +
 		" tbl.rel_createsql, " +
 		" tbl.account_id, " +
-		" tbl.`constraint` " +
+		" tbl.`constraint`, " +
+		// Keep unsupported tables visible to the scanner. The boolean lets both
+		// admission and an already-running task reject a missing user key instead
+		// of silently omitting the table from discovery.
+		" EXISTS (SELECT 1 FROM `mo_catalog`.`mo_columns` pk " +
+		"WHERE pk." + catalog.SystemColAttr_AccID + " = tbl." + catalog.SystemRelAttr_AccID + " " +
+		// Use catalog IDs rather than display names. DDL can preserve identifier
+		// case while catalog lookup is keyed by IDs; matching names made a real
+		// PRIMARY KEY source look keyless on the CREATE CDC path.
+		"AND pk." + catalog.SystemColAttr_DBID + " = tbl." + catalog.SystemRelAttr_DBID + " " +
+		"AND pk." + catalog.SystemColAttr_RelID + " = tbl." + catalog.SystemRelAttr_ID + " " +
+		"AND pk." + catalog.SystemColAttr_ConstraintType + " = 'p' " +
+		"AND pk." + catalog.SystemColAttr_Name + " <> '" + catalog.FakePrimaryKeyColName + "') AS has_user_pk " +
 		"FROM `mo_catalog`.`mo_tables` tbl " +
 		"WHERE " +
 		" tbl.account_id IN (%s) " +
@@ -930,6 +943,29 @@ func (b cdcSQLBuilder) ClaimWatermarkOwnerSQL(key *WatermarkKey, ownerGeneration
 	)
 }
 
+// AcknowledgeTargetGenerationSQL records the generation only after target DDL
+// has committed. The owner and prior generation predicates make the update
+// idempotent across takeover and reject a late old reader/admission.
+func (b cdcSQLBuilder) AcknowledgeTargetGenerationSQL(
+	key *WatermarkKey,
+	ownerGeneration, previousGeneration, sourceGeneration uint64,
+	watermark types.TS,
+) string {
+	return fmt.Sprintf(
+		"UPDATE `mo_catalog`.`mo_cdc_watermark` AS w "+
+			"INNER JOIN (SELECT account_id, task_id FROM `mo_catalog`.`mo_cdc_task` "+
+			"WHERE account_id = %d AND task_id = '%s' FOR UPDATE) AS t "+
+			"ON t.account_id = w.account_id AND t.task_id = w.task_id "+
+			"SET w.source_table_id = %d, w.watermark = '%s' "+
+			"WHERE w.account_id = %d AND w.task_id = '%s' AND w.db_name = '%s' "+
+			"AND w.table_name = '%s' AND w.owner_generation = %d AND w.source_table_id = %d",
+		key.AccountId, escapeSQLString(key.TaskId), sourceGeneration,
+		watermark.ToString(), key.AccountId, escapeSQLString(key.TaskId),
+		escapeSQLString(key.DBName), escapeSQLString(key.TableName),
+		ownerGeneration, previousGeneration,
+	)
+}
+
 func (b cdcSQLBuilder) GetWatermarkOwnerProgressSQL(key *WatermarkKey) string {
 	return fmt.Sprintf(
 		"SELECT owner_generation, watermark, source_table_id FROM `mo_catalog`.`mo_cdc_watermark` WHERE account_id = %d AND task_id = '%s' AND db_name = '%s' AND table_name = '%s'",
@@ -937,6 +973,45 @@ func (b cdcSQLBuilder) GetWatermarkOwnerProgressSQL(key *WatermarkKey) string {
 		escapeSQLString(key.TaskId),
 		escapeSQLString(key.DBName),
 		escapeSQLString(key.TableName),
+	)
+}
+
+func (b cdcSQLBuilder) GetWatermarkTargetStateSQL(key *WatermarkKey) string {
+	return fmt.Sprintf(
+		"SELECT owner_generation, source_table_id, pending_source_table_id, target_identity FROM `mo_catalog`.`mo_cdc_watermark` WHERE account_id = %d AND task_id = '%s' AND db_name = '%s' AND table_name = '%s'",
+		key.AccountId, escapeSQLString(key.TaskId), escapeSQLString(key.DBName), escapeSQLString(key.TableName),
+	)
+}
+
+func (b cdcSQLBuilder) SetWatermarkPendingSQL(key *WatermarkKey, ownerGeneration, sourceGeneration uint64, preIdentity string) string {
+	return fmt.Sprintf(
+		"UPDATE `mo_catalog`.`mo_cdc_watermark` AS w "+
+			"INNER JOIN (SELECT account_id, task_id FROM `mo_catalog`.`mo_cdc_task` "+
+			"WHERE account_id = %d AND task_id = '%s' FOR UPDATE) AS t "+
+			"ON t.account_id = w.account_id AND t.task_id = w.task_id "+
+			"SET w.pending_source_table_id = %d, w.target_identity = '%s' "+
+			"WHERE w.account_id = %d AND w.task_id = '%s' AND w.db_name = '%s' AND w.table_name = '%s' "+
+			"AND w.owner_generation = %d AND w.source_table_id = 0 AND w.pending_source_table_id IS NULL AND w.target_identity IS NULL",
+		key.AccountId, escapeSQLString(key.TaskId), sourceGeneration, escapeSQLString(preIdentity),
+		key.AccountId, escapeSQLString(key.TaskId), escapeSQLString(key.DBName), escapeSQLString(key.TableName), ownerGeneration,
+	)
+}
+
+func (b cdcSQLBuilder) AcknowledgeTargetIdentitySQL(
+	key *WatermarkKey, ownerGeneration, sourceGeneration uint64,
+	preIdentity, newIdentity string, watermark types.TS,
+) string {
+	return fmt.Sprintf(
+		"UPDATE `mo_catalog`.`mo_cdc_watermark` AS w "+
+			"INNER JOIN (SELECT account_id, task_id FROM `mo_catalog`.`mo_cdc_task` "+
+			"WHERE account_id = %d AND task_id = '%s' FOR UPDATE) AS t "+
+			"ON t.account_id = w.account_id AND t.task_id = w.task_id "+
+			"SET w.source_table_id = %d, w.watermark = '%s', w.target_identity = '%s', w.pending_source_table_id = NULL "+
+			"WHERE w.account_id = %d AND w.task_id = '%s' AND w.db_name = '%s' AND w.table_name = '%s' "+
+			"AND w.owner_generation = %d AND w.source_table_id = 0 AND w.pending_source_table_id = %d AND w.target_identity = '%s'",
+		key.AccountId, escapeSQLString(key.TaskId), sourceGeneration, watermark.ToString(), escapeSQLString(newIdentity),
+		key.AccountId, escapeSQLString(key.TaskId), escapeSQLString(key.DBName), escapeSQLString(key.TableName),
+		ownerGeneration, sourceGeneration, escapeSQLString(preIdentity),
 	)
 }
 
@@ -1268,6 +1343,18 @@ func (b cdcSQLBuilder) ISCPLogSelectByTableSQL(
 // Table Info SQL
 // ------------------------------------------------------------------------------------------------
 func (b cdcSQLBuilder) CollectTableInfoSQL(accountIDs string, dbNames string, tableNames string) string {
+	return b.collectTableInfoSQL(accountIDs, dbNames, tableNames, false)
+}
+
+// CollectTableInfoSQLCaseInsensitive returns the same scanner candidate set,
+// but compares requested database/table names case-insensitively. The shared
+// detector uses this superset because it serves tasks with different persisted
+// lower_case_table_names modes; task-local matching remains authoritative.
+func (b cdcSQLBuilder) CollectTableInfoSQLCaseInsensitive(accountIDs string, dbNames string, tableNames string) string {
+	return b.collectTableInfoSQL(accountIDs, dbNames, tableNames, true)
+}
+
+func (b cdcSQLBuilder) collectTableInfoSQL(accountIDs string, dbNames string, tableNames string, caseInsensitive bool) string {
 	return fmt.Sprintf(
 		CDCSQLTemplates[CDCCollectTableInfoSqlTemplate_Idx].SQL,
 		accountIDs,
@@ -1275,17 +1362,58 @@ func (b cdcSQLBuilder) CollectTableInfoSQL(accountIDs string, dbNames string, ta
 			if dbNames == "*" {
 				return ""
 			}
+			if caseInsensitive {
+				return " AND lower(tbl.reldatabase) IN (" + dbNames + ") "
+			}
 			return " AND tbl.reldatabase IN (" + dbNames + ") "
 		}(),
 		func() string {
 			if tableNames == "*" {
 				return ""
 			}
+			if caseInsensitive {
+				return " AND lower(tbl.relname) IN (" + tableNames + ") "
+			}
 			return " AND tbl.relname IN (" + tableNames + ") "
 		}(),
 		catalog.SystemOrdinaryRel,
 		AddSingleQuotesJoin(catalog.SystemDatabases),
 	)
+}
+
+// CollectCDCSourceCandidateSQL returns the runtime scanner candidate set with
+// an explicit user-primary-key status. Do not filter no-PK tables here: CREATE
+// CDC must reject them and an active task must observe a later PK loss.
+func CollectCDCSourceCandidateSQL(accountID uint32, dbName, tableName string, sourceCaseMode ...int64) string {
+	caseInsensitive := len(sourceCaseMode) > 0 && sourceCaseMode[0] == 2
+	dbNames := "*"
+	if dbName != CDCPitrGranularity_All {
+		if caseInsensitive {
+			if CDCSourceNameNeedsCatalogSuperset(dbName, sourceCaseMode[0]) {
+				dbName = CDCPitrGranularity_All
+			} else {
+				dbName = CDCSourceIdentifierKey(dbName, sourceCaseMode[0])
+			}
+		}
+		if dbName != CDCPitrGranularity_All {
+			dbNames = AddSingleQuotesJoin([]string{dbName})
+		}
+	}
+	tableNames := "*"
+	if tableName != CDCPitrGranularity_All {
+		if caseInsensitive {
+			if CDCSourceNameNeedsCatalogSuperset(tableName, sourceCaseMode[0]) {
+				tableName = CDCPitrGranularity_All
+			} else {
+				tableName = CDCSourceIdentifierKey(tableName, sourceCaseMode[0])
+			}
+		}
+		if tableName != CDCPitrGranularity_All {
+			tableNames = AddSingleQuotesJoin([]string{tableName})
+		}
+	}
+	return CDCSQLBuilder.collectTableInfoSQL(
+		strconv.FormatUint(uint64(accountID), 10), dbNames, tableNames, caseInsensitive)
 }
 
 func (b cdcSQLBuilder) GetTableIDSQL(

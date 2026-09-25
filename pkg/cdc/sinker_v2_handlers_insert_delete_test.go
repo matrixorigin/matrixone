@@ -499,7 +499,7 @@ func TestHandleInsertDeleteBatch_Comprehensive(t *testing.T) {
 		require.Equal(t, watermark, sinker.watermarkUpdater.cacheCommitted[key])
 		require.Equal(t, []string{
 			"/* [100-0, 200-0) */ DELETE FROM `test_db`.`test` WHERE `id` IN ((2));",
-			"/* [100-0, 200-0) */ INSERT INTO `test_db`.`test` VALUES (1,'test') ON DUPLICATE KEY UPDATE `id`=VALUES(`id`),`name`=VALUES(`name`);",
+			"/* [100-0, 200-0) */ INSERT INTO `test_db`.`test` (`id`,`name`) VALUES (1,'test') ON DUPLICATE KEY UPDATE `id`=VALUES(`id`),`name`=VALUES(`name`);",
 		}, sinker.executor.debugTxnRecorder.txnSQL)
 
 		mock.ExpectRollback()
@@ -573,7 +573,7 @@ func TestHandleInsertDeleteBatch_Comprehensive(t *testing.T) {
 	t.Run("Success_MultipleSQLStatements", func(t *testing.T) {
 		tableDef := createStandardTableDef()
 		// Use small maxSQLSize to force multiple SQL statements
-		sinker, db, mock := createSinkerWithTableDef(t, tableDef, 160) // Small limit that still fits one upsert row
+		sinker, db, mock := createSinkerWithTableDef(t, tableDef, 180) // Exactly three named-column upsert rows
 		defer db.Close()
 
 		// Create batch with multiple rows
@@ -598,8 +598,8 @@ func TestHandleInsertDeleteBatch_Comprehensive(t *testing.T) {
 		require.NoError(t, err)
 		require.NoError(t, mock.ExpectationsWereMet())
 		require.Equal(t, []string{
-			"/* [100-0, 200-0) */ INSERT INTO `test_db`.`test` VALUES (1,'test'),(2,'test'),(3,'test') ON DUPLICATE KEY UPDATE `id`=VALUES(`id`),`name`=VALUES(`name`);",
-			"/* [100-0, 200-0) */ INSERT INTO `test_db`.`test` VALUES (4,'test'),(5,'test') ON DUPLICATE KEY UPDATE `id`=VALUES(`id`),`name`=VALUES(`name`);",
+			"/* [100-0, 200-0) */ INSERT INTO `test_db`.`test` (`id`,`name`) VALUES (1,'test'),(2,'test'),(3,'test') ON DUPLICATE KEY UPDATE `id`=VALUES(`id`),`name`=VALUES(`name`);",
+			"/* [100-0, 200-0) */ INSERT INTO `test_db`.`test` (`id`,`name`) VALUES (4,'test'),(5,'test') ON DUPLICATE KEY UPDATE `id`=VALUES(`id`),`name`=VALUES(`name`);",
 		}, sinker.executor.debugTxnRecorder.txnSQL)
 	})
 
@@ -624,7 +624,7 @@ func TestHandleInsertDeleteBatch_Comprehensive(t *testing.T) {
 		assert.NoError(t, mock.ExpectationsWereMet())
 		require.Equal(t, []string{
 			"/* [100-0, 200-0) */ DELETE FROM `test_db`.`test` WHERE `id` IN ((2));",
-			"/* [100-0, 200-0) */ INSERT INTO `test_db`.`test` VALUES (1,'test') ON DUPLICATE KEY UPDATE `id`=VALUES(`id`),`name`=VALUES(`name`);",
+			"/* [100-0, 200-0) */ INSERT INTO `test_db`.`test` (`id`,`name`) VALUES (1,'test') ON DUPLICATE KEY UPDATE `id`=VALUES(`id`),`name`=VALUES(`name`);",
 		}, sinker.executor.debugTxnRecorder.txnSQL)
 	})
 }

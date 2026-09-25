@@ -190,6 +190,36 @@ type TblMap map[string]*DbTableInfo
 
 type TableCallback func(map[uint32]TblMap) error
 
+// cloneTableSnapshot copies only the subscribed account. Each callback gets
+// independent descriptors while unrelated tenants add no fan-out cost.
+func cloneTableSnapshot(src TblMap) TblMap {
+	if src == nil {
+		return nil
+	}
+	dst := make(TblMap, len(src))
+	for key, info := range src {
+		if info != nil {
+			dst[key] = info.Clone()
+		}
+	}
+	return dst
+}
+
+func reconcileTableSnapshotMarkers(current, next map[uint32]TblMap) {
+	for accountID, tables := range next {
+		currentTables := current[accountID]
+		for key, info := range tables {
+			currentInfo, ok := currentTables[key]
+			if !ok || currentInfo == nil || info == nil {
+				continue
+			}
+			if currentInfo.SourceTblId == info.SourceTblId {
+				info.IdChanged = currentInfo.IdChanged
+			}
+		}
+	}
+}
+
 type TableIterationState struct {
 	CreateAt time.Time
 	EndAt    time.Time
@@ -323,17 +353,29 @@ type TableDetector struct {
 	scanTableFn func() error
 
 	// to make sure there is at most only one handleNewTables running, so the truncate info will not be lost
-	handling        bool
-	lastMp          map[uint32]TblMap
-	mu              sync.Mutex
-	cdcStateManager *CDCStateManager
-	cleanupPeriod   time.Duration
-	cleanupWarn     time.Duration
-	nowFn           func() time.Time
+	handling bool
+	lastMp   map[uint32]TblMap
+	// markerAcks are collected while callbacks are running.  A callback may
+	// acknowledge a generation marker before a later subscriber fails; keep the
+	// published marker intact until the whole callback fan-out succeeds so the
+	// failed subscriber observes it again on retry.
+	processingCallbacks bool
+	markerAcks          map[tableMarker]struct{}
+	mu                  sync.Mutex
+	cdcStateManager     *CDCStateManager
+	cleanupPeriod       time.Duration
+	cleanupWarn         time.Duration
+	nowFn               func() time.Time
 
 	loopRunning atomic.Bool
 	loopSeq     atomic.Uint64
 	currentLoop uint64
+}
+
+type tableMarker struct {
+	accountID     uint32
+	key           string
+	sourceTableID uint64
 }
 
 // RegisterIfAbsent registers the task only if it has not been registered before.
@@ -384,6 +426,73 @@ func (s *TableDetector) IsTaskRegistered(id string) bool {
 	defer s.mu.Unlock()
 	_, exists := s.Callbacks[id]
 	return exists
+}
+
+// ClearTableIdChanged clears the one-shot generation transition marker after a
+// pipeline has consumed it. The detector publishes table metadata snapshots to
+// callbacks, so replace the stored descriptor under the detector lock rather
+// than mutating a callback-owned pointer concurrently with the next scan.
+func (s *TableDetector) ClearTableIdChanged(accountID uint32, key string, sourceTableID uint64) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	marker := tableMarker{accountID: accountID, key: key, sourceTableID: sourceTableID}
+	if s.processingCallbacks {
+		if !s.markerIsCurrentLocked(marker) {
+			return
+		}
+		if s.markerAcks == nil {
+			s.markerAcks = make(map[tableMarker]struct{})
+		}
+		s.markerAcks[marker] = struct{}{}
+		return
+	}
+	s.clearTableIdChangedLocked(marker)
+}
+
+func (s *TableDetector) clearTableIdChangedLocked(marker tableMarker) {
+	clear := func(mp map[uint32]TblMap) {
+		if mp == nil || mp[marker.accountID] == nil {
+			return
+		}
+		info, ok := mp[marker.accountID][marker.key]
+		if !ok || info == nil || info.SourceTblId != marker.sourceTableID || !info.IdChanged {
+			return
+		}
+		updated := info.Clone()
+		updated.IdChanged = false
+		mp[marker.accountID][marker.key] = updated
+	}
+	clear(s.Mp)
+	clear(s.lastMp)
+}
+
+func (s *TableDetector) markerIsCurrentLocked(marker tableMarker) bool {
+	current := s.Mp
+	if current == nil {
+		current = s.lastMp
+	}
+	info := current[marker.accountID][marker.key]
+	return info != nil && info.SourceTblId == marker.sourceTableID && info.IdChanged
+}
+
+// pruneMarkerAcksLocked drops acknowledgements that can no longer be applied
+// to the detector's current published generation. A retry may span scans, so
+// retaining acknowledgements by source ID without this check would grow with
+// table recreation while another subscriber remains unhealthy.
+func (s *TableDetector) pruneMarkerAcksLocked() {
+	if len(s.markerAcks) == 0 {
+		return
+	}
+	current := s.Mp
+	if current == nil {
+		current = s.lastMp
+	}
+	for marker := range s.markerAcks {
+		info := current[marker.accountID][marker.key]
+		if info == nil || info.SourceTblId != marker.sourceTableID || !info.IdChanged {
+			delete(s.markerAcks, marker)
+		}
+	}
 }
 
 func (s *TableDetector) UnRegister(id string) {
@@ -606,10 +715,30 @@ func (s *TableDetector) processCallback(ctx context.Context, tables map[uint32]T
 		s.mu.Unlock()
 		return
 	}
+	s.pruneMarkerAcksLocked()
 	s.handling = true
-	callbacks := make([]TableCallback, 0, len(s.Callbacks))
-	for _, cb := range s.Callbacks {
-		callbacks = append(callbacks, cb)
+	s.processingCallbacks = true
+	// Keep acknowledgements from an earlier failed fan-out. A callback may have
+	// consumed one table successfully before returning an aggregate error; on
+	// retry its existing-reader path need not call ClearTableIdChanged again.
+	if s.markerAcks == nil {
+		s.markerAcks = make(map[tableMarker]struct{})
+	}
+	// Snapshot under the detector lock. ClearTableIdChanged replaces entries
+	// in the published map under the same lock; cloning outside it would race
+	// with that map write even though each subscriber receives its own copy.
+	type subscriber struct {
+		callback TableCallback
+		account  uint32
+	}
+	callbacks := make([]subscriber, 0, len(s.Callbacks))
+	tablesSnapshot := make(map[uint32]TblMap, len(s.SubscribedAccountIds))
+	for id, cb := range s.Callbacks {
+		account := s.CallBackAccountId[id]
+		if _, copied := tablesSnapshot[account]; !copied {
+			tablesSnapshot[account] = cloneTableSnapshot(tables[account])
+		}
+		callbacks = append(callbacks, subscriber{cb, account})
 	}
 	s.mu.Unlock()
 
@@ -631,7 +760,14 @@ func (s *TableDetector) processCallback(ctx context.Context, tables map[uint32]T
 			logutil.Warn("cdc.table_detector.callback_failed", zap.Error(err))
 		} else {
 			logutil.Debug("cdc.table_detector.callback_success")
+			for marker := range s.markerAcks {
+				s.clearTableIdChangedLocked(marker)
+			}
 			s.lastMp = nil
+		}
+		s.processingCallbacks = false
+		if err == nil {
+			s.markerAcks = nil
 		}
 		s.handling = false
 		s.mu.Unlock()
@@ -641,8 +777,11 @@ func (s *TableDetector) processCallback(ctx context.Context, tables map[uint32]T
 		}
 	}()
 
-	for _, cb := range callbacks {
-		if cbErr := cb(tables); cbErr != nil {
+	for _, subscriber := range callbacks {
+		view := map[uint32]TblMap{
+			subscriber.account: cloneTableSnapshot(tablesSnapshot[subscriber.account]),
+		}
+		if cbErr := subscriber.callback(view); cbErr != nil {
 			err = cbErr
 		}
 	}
@@ -764,7 +903,14 @@ func (s *TableDetector) scanTable() error {
 			dbNames = "*"
 			break
 		}
-		dbNamesSlice = append(dbNamesSlice, dbName)
+		if CDCSourceNameNeedsCatalogSuperset(dbName, 2) {
+			dbNames = "*"
+			break
+		}
+		// The detector serves tasks with different persisted case modes. Scan a
+		// case-insensitive candidate superset; each task applies its own mode in
+		// matchAnyPattern before it can create a pipeline.
+		dbNamesSlice = append(dbNamesSlice, CDCSourceIdentifierKey(dbName, 2))
 	}
 	if dbNames != "*" {
 		dbNames = AddSingleQuotesJoin(dbNamesSlice)
@@ -775,7 +921,11 @@ func (s *TableDetector) scanTable() error {
 			tableNames = "*"
 			break
 		}
-		tableNamesSlice = append(tableNamesSlice, tableName)
+		if CDCSourceNameNeedsCatalogSuperset(tableName, 2) {
+			tableNames = "*"
+			break
+		}
+		tableNamesSlice = append(tableNamesSlice, CDCSourceIdentifierKey(tableName, 2))
 	}
 	if tableNames != "*" {
 		tableNames = AddSingleQuotesJoin(tableNamesSlice)
@@ -784,7 +934,7 @@ func (s *TableDetector) scanTable() error {
 
 	result, err := s.exec.Exec(
 		ctx,
-		CDCSQLBuilder.CollectTableInfoSQL(accountIds, dbNames, tableNames),
+		CDCSQLBuilder.CollectTableInfoSQLCaseInsensitive(accountIds, dbNames, tableNames),
 		executor.Options{}.WithStatementOption(executor.StatementOption{}.WithDisableLog()),
 	)
 	if err != nil {
@@ -801,7 +951,15 @@ func (s *TableDetector) scanTable() error {
 			dbName := cols[3].GetStringAt(i)
 			createSql := cols[4].GetStringAt(i)
 			accountId := vector.MustFixedColWithTypeCheck[uint32](cols[5])[i]
-			hasForeignKey, decodeErr := tableHasForeignKeyConstraint(cols[6].GetBytesAt(i))
+			// Older unit fixtures may not include the appended status column. The
+			// production query always does; retain the fixture compatibility while
+			// marking only authoritative scanner metadata as checked.
+			primaryKeyChecked := len(cols) > 7
+			hasUserPrimaryKey := true
+			if primaryKeyChecked {
+				hasUserPrimaryKey = vector.MustFixedColNoTypeCheck[bool](cols[7])[i]
+			}
+			hasForeignKey, decodeErr := TableHasForeignKeyConstraint(cols[6].GetBytesAt(i))
 			if decodeErr != nil {
 				scanErr = decodeErr
 				logutil.Warn(
@@ -825,24 +983,36 @@ func (s *TableDetector) scanTable() error {
 
 			key := GenDbTblKey(dbName, tblName)
 
+			// The callback may clear one-shot metadata while a scan is building
+			// its next snapshot. Protect the shared map lookup and clone with the
+			// same mutex used by publication/cleanup.
+			s.mu.Lock()
 			oldInfo, exists := s.Mp[accountId][key]
+			if exists {
+				oldInfo = oldInfo.Clone()
+			}
+			s.mu.Unlock()
 			newInfo := &DbTableInfo{
-				SourceDbId:      dbId,
-				SourceDbName:    dbName,
-				SourceTblId:     tblId,
-				SourceTblName:   tblName,
-				SourceCreateSql: createSql,
+				SourceDbId:        dbId,
+				SourceDbName:      dbName,
+				SourceTblId:       tblId,
+				SourceTblName:     tblName,
+				SourceCreateSql:   createSql,
+				PrimaryKeyChecked: primaryKeyChecked,
+				HasUserPrimaryKey: hasUserPrimaryKey,
 			}
 			if !exists {
 				mp[accountId][key] = newInfo
 			} else {
 				idChanged := oldInfo.OnlyDiffinTblId(newInfo)
-				updatedInfo := oldInfo.Clone()
+				updatedInfo := oldInfo
 				updatedInfo.SourceDbId = dbId
 				updatedInfo.SourceDbName = dbName
 				updatedInfo.SourceTblId = tblId
 				updatedInfo.SourceTblName = tblName
 				updatedInfo.SourceCreateSql = createSql
+				updatedInfo.PrimaryKeyChecked = primaryKeyChecked
+				updatedInfo.HasUserPrimaryKey = hasUserPrimaryKey
 				updatedInfo.IdChanged = updatedInfo.IdChanged || idChanged
 				mp[accountId][key] = updatedInfo
 			}
@@ -853,14 +1023,21 @@ func (s *TableDetector) scanTable() error {
 		return scanErr
 	}
 
-	// replace the old table map
+	// Publish the new scan while reconciling one-shot markers consumed by a
+	// callback during the SQL scan. A callback may clear IdChanged after this
+	// scan cloned the old descriptor; blindly replacing Mp would resurrect the
+	// marker and cause a later pipeline recreation to reset the target again.
 	s.mu.Lock()
+	reconcileTableSnapshotMarkers(s.Mp, mp)
 	s.Mp = mp
 	s.mu.Unlock()
 	return nil
 }
 
-func tableHasForeignKeyConstraint(data []byte) (hasForeignKey bool, err error) {
+// TableHasForeignKeyConstraint decodes the persisted constraint metadata used
+// by the runtime table scanner. CREATE CDC admission uses the same check so it
+// does not reject foreign-key children that the scanner will never consume.
+func TableHasForeignKeyConstraint(data []byte) (hasForeignKey bool, err error) {
 	if len(data) == 0 {
 		return false, nil
 	}

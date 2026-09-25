@@ -116,7 +116,7 @@ func (u *CDCWatermarkUpdater) GetOrCreateInitialSnapshotEpochState(
 	candidate types.TS,
 ) (InitialSnapshotEpochState, error) {
 	return u.getOrCreateInitialSnapshotEpochState(
-		ctx, key, sourceTableID, candidate, types.TS{}, 0, false)
+		ctx, key, sourceTableID, candidate, types.TS{}, 0, false, nil)
 }
 
 // GetOrCreateInitialSnapshotEpochStateForProgress refuses to manufacture an
@@ -132,7 +132,21 @@ func (u *CDCWatermarkUpdater) GetOrCreateInitialSnapshotEpochStateForProgress(
 	watermarkGeneration uint64,
 ) (InitialSnapshotEpochState, error) {
 	return u.getOrCreateInitialSnapshotEpochState(
-		ctx, key, sourceTableID, candidate, watermark, watermarkGeneration, true)
+		ctx, key, sourceTableID, candidate, watermark, watermarkGeneration, true, nil)
+}
+
+func (u *CDCWatermarkUpdater) GetOrCreateInitialSnapshotEpochStateForProgressOwned(
+	ctx context.Context, key *WatermarkKey, sourceTableID uint64, candidate, watermark types.TS,
+	watermarkGeneration uint64, fence *OwnerFence,
+) (InitialSnapshotEpochState, error) {
+	if fence == nil {
+		return InitialSnapshotEpochState{}, moerr.NewInternalError(ctx, "CDC snapshot epoch requires an owner fence")
+	}
+	if err := fence.Check(ctx); err != nil {
+		return InitialSnapshotEpochState{}, err
+	}
+	return u.getOrCreateInitialSnapshotEpochState(
+		ctx, key, sourceTableID, candidate, watermark, watermarkGeneration, true, fence)
 }
 
 func (u *CDCWatermarkUpdater) getOrCreateInitialSnapshotEpochState(
@@ -143,6 +157,7 @@ func (u *CDCWatermarkUpdater) getOrCreateInitialSnapshotEpochState(
 	watermark types.TS,
 	watermarkGeneration uint64,
 	validateProgress bool,
+	fence *OwnerFence,
 ) (InitialSnapshotEpochState, error) {
 	if sourceTableID == 0 || candidate.IsEmpty() || !candidate.Valid() {
 		return InitialSnapshotEpochState{}, moerr.NewInternalErrorf(
@@ -198,9 +213,13 @@ func (u *CDCWatermarkUpdater) getOrCreateInitialSnapshotEpochState(
 
 	// The no-op duplicate update plus the primary key makes concurrent
 	// claim/restart attempts for this generation converge on one epoch.
+	insertSQL := CDCSQLBuilder.InsertSnapshotEpochSQL(key, sourceTableID, candidate)
+	if fence != nil {
+		insertSQL = CDCSQLBuilder.InsertSnapshotEpochOwnedSQL(key, sourceTableID, candidate, fence.GenerationToken())
+	}
 	if err := u.ie.Exec(
 		persistCtx,
-		CDCSQLBuilder.InsertSnapshotEpochSQL(key, sourceTableID, candidate),
+		insertSQL,
 		ie.SessionOverrideOptions{},
 	); err != nil {
 		// The INSERT result can be ambiguous. Resolve a committed-but-lost
@@ -338,6 +357,18 @@ func (u *CDCWatermarkUpdater) readInitialSnapshotEpoch(
 	return epoch, true, nil
 }
 
+// GetInitialSnapshotEpoch reads an existing retry anchor without creating a
+// replacement. Admission uses this after target generation is acknowledged:
+// inventing a later epoch over a partially rebuilt target would retain rows
+// deleted between snapshots.
+func (u *CDCWatermarkUpdater) GetInitialSnapshotEpoch(
+	ctx context.Context,
+	key *WatermarkKey,
+	sourceTableID uint64,
+) (types.TS, bool, error) {
+	return u.readInitialSnapshotEpoch(ctx, key, sourceTableID)
+}
+
 func parseInitialSnapshotEpoch(value string) (types.TS, error) {
 	physicalText, logicalText, ok := strings.Cut(value, "-")
 	if !ok || physicalText == "" || logicalText == "" {
@@ -364,6 +395,25 @@ func (b cdcSQLBuilder) GetHighestOtherSnapshotGenerationSQL(key *WatermarkKey, s
 
 func (b cdcSQLBuilder) InsertSnapshotEpochSQL(key *WatermarkKey, sourceTableID uint64, epoch types.TS) string {
 	return fmt.Sprintf("INSERT INTO `mo_catalog`.`mo_cdc_snapshot` (account_id, task_id, db_name, table_name, source_table_id, snapshot_epoch) VALUES (%d, '%s', '%s', '%s', %d, '%s') ON DUPLICATE KEY UPDATE snapshot_epoch = snapshot_epoch", key.AccountId, escapeSQLString(key.TaskId), escapeSQLString(key.DBName), escapeSQLString(key.TableName), sourceTableID, epoch.ToString())
+}
+
+func (b cdcSQLBuilder) InsertSnapshotEpochOwnedSQL(
+	key *WatermarkKey, sourceTableID uint64, epoch types.TS, ownerGeneration uint64,
+) string {
+	return fmt.Sprintf(
+		"INSERT INTO `mo_catalog`.`mo_cdc_snapshot` "+
+			"(account_id, task_id, db_name, table_name, source_table_id, snapshot_epoch) "+
+			"SELECT w.account_id, w.task_id, w.db_name, w.table_name, %d, '%s' "+
+			"FROM `mo_catalog`.`mo_cdc_watermark` AS w "+
+			"INNER JOIN (SELECT account_id, task_id FROM `mo_catalog`.`mo_cdc_task` "+
+			"WHERE account_id = %d AND task_id = '%s' FOR UPDATE) AS t "+
+			"ON t.account_id = w.account_id AND t.task_id = w.task_id "+
+			"WHERE w.account_id = %d AND w.task_id = '%s' AND w.db_name = '%s' "+
+			"AND w.table_name = '%s' AND w.owner_generation = %d AND w.source_table_id < %d "+
+			"ON DUPLICATE KEY UPDATE snapshot_epoch = snapshot_epoch",
+		sourceTableID, epoch.ToString(), key.AccountId, escapeSQLString(key.TaskId),
+		key.AccountId, escapeSQLString(key.TaskId),
+		escapeSQLString(key.DBName), escapeSQLString(key.TableName), ownerGeneration, sourceTableID)
 }
 
 func (b cdcSQLBuilder) DeleteSnapshotEpochGenerationsBeforeSQL(

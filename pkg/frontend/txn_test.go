@@ -2358,11 +2358,18 @@ func TestRequiresPessimisticObjectLifecycleTxn(t *testing.T) {
 		&tree.CreateView{Replace: true},
 		&tree.DataBranchDeleteTable{},
 		&tree.DataBranchDeleteDatabase{},
+		&tree.CreateDatabase{},
+		&tree.CreateSequence{},
+		&tree.CreateTable{Table: *persistent},
+		&tree.TruncateTable{Name: persistent},
+		&tree.AlterTable{Table: persistent},
+		&tree.RenameTable{AlterTables: []*tree.AlterTable{{Table: persistent}}},
 	} {
 		require.True(t, requiresPessimisticObjectLifecycleTxn(nil, stmt, ""))
 	}
 	require.False(t, requiresPessimisticObjectLifecycleTxn(nil, &tree.CreateView{}, ""))
 	require.False(t, requiresPessimisticObjectLifecycleTxn(nil, &tree.DropTable{Temporary: true}, ""))
+	require.False(t, requiresPessimisticObjectLifecycleTxn(nil, &tree.CreateTable{Temporary: true}, ""))
 	require.False(t, requiresPessimisticObjectLifecycleTxn(nil, &tree.Select{}, ""))
 
 	ses := &Session{tempTables: make(map[string]string), tempTablesRev: make(map[string]string)}
@@ -2373,6 +2380,8 @@ func TestRequiresPessimisticObjectLifecycleTxn(t *testing.T) {
 	require.False(t, requiresPessimisticObjectLifecycleTxn(ses, &tree.DropTable{
 		Names: tree.TableNames{alias},
 	}, ""))
+	require.False(t, requiresPessimisticObjectLifecycleTxn(ses, &tree.TruncateTable{Name: alias}, ""))
+	require.False(t, requiresPessimisticObjectLifecycleTxn(ses, &tree.AlterTable{Table: alias}, ""))
 	require.True(t, requiresPessimisticObjectLifecycleTxn(ses, &tree.DropTable{
 		Names: tree.TableNames{alias, persistent},
 	}, ""))

@@ -17,6 +17,7 @@ package cdc
 import (
 	"bytes"
 	"context"
+	"encoding/base64"
 	"encoding/hex"
 	"encoding/json"
 	"errors"
@@ -25,6 +26,7 @@ import (
 	"sync"
 	"sync/atomic"
 	"time"
+	"unicode/utf8"
 
 	"github.com/google/uuid"
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
@@ -34,6 +36,7 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/container/vector"
 	"github.com/matrixorigin/matrixone/pkg/defines"
 	"github.com/matrixorigin/matrixone/pkg/logutil"
+	"github.com/matrixorigin/matrixone/pkg/sql/parsers/tree"
 	v2 "github.com/matrixorigin/matrixone/pkg/util/metric/v2"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/readutil"
 	"github.com/tidwall/btree"
@@ -134,9 +137,8 @@ func newRetryableTargetLockError(err error) error {
 	return &RetryableTargetLockError{err: err}
 }
 
-// RetryableConnectionError identifies a failed external SQL connection attempt
-// after configuration was parsed successfully. Rebuilding a CDC pipeline may
-// succeed once the target or network recovers, and no target effect has begun.
+// RetryableConnectionError identifies a transient target SQL connection error.
+// A retry rechecks durable admission state before any further target write.
 type RetryableConnectionError struct{ err error }
 
 func (e *RetryableConnectionError) Error() string { return e.err.Error() }
@@ -280,6 +282,14 @@ const (
 	CDCTaskExtraOptions_InitialSnapshotProtocol = "_InitialSnapshotProtocol"
 	CDCInitialSnapshotProtocolStableEpoch       = "stable-epoch-v1"
 	CDCInitialSnapshotProtocolNoFullHLC         = "no-full-hlc-v1"
+	// CDCTaskExtraOptions_SourcePatternProtocol marks tasks whose persisted
+	// source patterns require the new lossless identifier representation or
+	// source-case metadata. Legacy runners must not claim these tasks.
+	CDCTaskExtraOptions_SourcePatternProtocol = "_SourcePatternProtocol"
+	CDCSourcePatternProtocolV1                = "source-pattern-v1"
+	CDCTaskExtraOptions_GenerationProtocol    = "_GenerationProtocol"
+	CDCGenerationAwareProtocolV1              = "generation-aware-v1"
+	CDCGenerationAwareProtocolV2              = "generation-aware-v2"
 )
 
 var CDCRequestOptions = []string{
@@ -319,19 +329,19 @@ func FinalizeInitialSnapshotOptions(extraOpts map[string]any) {
 
 // ValidateStableInitialSnapshotProtocol is the common creation barrier for all
 // frontend and compiler entry points. The stable executor depends on catalog
-// fields installed only after the cluster-wide protocol reaches v48.
+// fields and reliable target collation metadata installed after protocol v58.
 func ValidateStableInitialSnapshotProtocol(
 	ctx context.Context,
 	stable bool,
 	protocolVersion int64,
 ) error {
-	if !stable || protocolVersion >= defines.MORPCVersion48 {
+	if !stable || protocolVersion >= defines.MORPCVersion58 {
 		return nil
 	}
 	return moerr.NewNotSupportedf(
 		ctx,
 		"bounded CDC initial snapshots require all CNs to support protocol version %d",
-		defines.MORPCVersion48,
+		defines.MORPCVersion58,
 	)
 }
 
@@ -361,6 +371,44 @@ func UsesStableEpochInitialSnapshot(extraOptsJSON string) bool {
 	}
 	protocol, _ := extraOpts[CDCTaskExtraOptions_InitialSnapshotProtocol].(string)
 	return protocol == CDCInitialSnapshotProtocolStableEpoch
+}
+
+// RequiresSourcePatternProtocol reports whether persisted pattern data cannot
+// be interpreted correctly by legacy CDC runners. Mode 2 needs the
+// source_case_mode field, while invalid UTF-8 in source or sink identifiers
+// needs the auxiliary byte fields.
+func RequiresSourcePatternProtocol(patternsJSON string) bool {
+	var patterns PatternTuples
+	if err := JsonDecode(patternsJSON, &patterns); err != nil {
+		// Creation validates and encodes this value first. If a caller reaches
+		// this helper with an undecodable value, fail closed onto the capable
+		// executor instead of allowing a legacy reader to silently reinterpret it.
+		return true
+	}
+	if patterns.SourceCaseMode == 2 {
+		return true
+	}
+	for _, tuple := range patterns.Pts {
+		if tuple == nil {
+			continue
+		}
+		if !utf8.ValidString(tuple.Source.Database) ||
+			!utf8.ValidString(tuple.Source.Table) ||
+			!utf8.ValidString(tuple.Sink.Database) ||
+			!utf8.ValidString(tuple.Sink.Table) {
+			return true
+		}
+	}
+	return false
+}
+
+func UsesSourcePatternProtocol(extraOptsJSON string) bool {
+	extraOpts := make(map[string]any)
+	if err := json.Unmarshal([]byte(extraOptsJSON), &extraOpts); err != nil {
+		return false
+	}
+	protocol, _ := extraOpts[CDCTaskExtraOptions_SourcePatternProtocol].(string)
+	return protocol == CDCSourcePatternProtocolV1
 }
 
 type TaskId = uuid.UUID
@@ -531,6 +579,12 @@ type DbTableInfo struct {
 	SourceTblId     uint64
 	SourceTblName   string
 	SourceCreateSql string
+	// PrimaryKeyChecked is true only for metadata returned by TableDetector.
+	// It preserves compatibility with manually constructed table descriptions
+	// while allowing a running wildcard task to fail closed if a user key is
+	// dropped after startup.
+	PrimaryKeyChecked bool
+	HasUserPrimaryKey bool
 
 	SinkDbName  string
 	SinkTblName string
@@ -540,6 +594,16 @@ type DbTableInfo struct {
 	// ownerFence is execution-local and deliberately excluded from Clone and
 	// all persisted table metadata. It protects target initialization DDL.
 	ownerFence *OwnerFence
+	// targetInitAck runs while the sink owns the target DDL lock, before a
+	// generation-aware reader can be published.
+	targetInitAck func(context.Context) error
+	targetReady   bool
+	// TargetIdentity is the durable identity from the acknowledged watermark.
+	// Empty is reserved for legacy callers that do not use the v2 protocol.
+	TargetIdentity    string
+	TargetPreIdentity string
+	TargetSinkType    string
+	targetIdentityAck func(context.Context, string) error
 }
 
 func (info *DbTableInfo) SetOwnerFence(fence *OwnerFence) {
@@ -548,6 +612,24 @@ func (info *DbTableInfo) SetOwnerFence(fence *OwnerFence) {
 
 func (info *DbTableInfo) OwnerFence() *OwnerFence {
 	return info.ownerFence
+}
+
+func (info *DbTableInfo) SetTargetAdmission(ready bool, ack func(context.Context) error) {
+	info.targetReady = ready
+	info.targetInitAck = ack
+}
+
+func (info *DbTableInfo) SetTargetIdentityAdmission(ready bool, preIdentity, acknowledgedIdentity string, ack func(context.Context, string) error) {
+	info.targetReady = ready
+	info.TargetPreIdentity = preIdentity
+	info.TargetIdentity = acknowledgedIdentity
+	info.targetIdentityAck = ack
+}
+
+func (info *DbTableInfo) ClearTargetAdmissionCallbacks() {
+	info.targetReady = false
+	info.targetInitAck = nil
+	info.targetIdentityAck = nil
 }
 
 func (info DbTableInfo) String() string {
@@ -564,14 +646,16 @@ func (info DbTableInfo) String() string {
 
 func (info DbTableInfo) Clone() *DbTableInfo {
 	return &DbTableInfo{
-		SourceDbId:      info.SourceDbId,
-		SourceDbName:    info.SourceDbName,
-		SourceTblId:     info.SourceTblId,
-		SourceTblName:   info.SourceTblName,
-		SourceCreateSql: info.SourceCreateSql,
-		SinkDbName:      info.SinkDbName,
-		SinkTblName:     info.SinkTblName,
-		IdChanged:       info.IdChanged,
+		SourceDbId:        info.SourceDbId,
+		SourceDbName:      info.SourceDbName,
+		SourceTblId:       info.SourceTblId,
+		SourceTblName:     info.SourceTblName,
+		SourceCreateSql:   info.SourceCreateSql,
+		PrimaryKeyChecked: info.PrimaryKeyChecked,
+		HasUserPrimaryKey: info.HasUserPrimaryKey,
+		SinkDbName:        info.SinkDbName,
+		SinkTblName:       info.SinkTblName,
+		IdChanged:         info.IdChanged,
 	}
 }
 
@@ -791,6 +875,64 @@ type PatternTable struct {
 	Table    string `json:"table"`
 }
 
+// MarshalJSON keeps invalid UTF-8 identifier bytes round-trippable. Go's
+// encoding/json replaces invalid string bytes with U+FFFD, but MatrixOne can
+// receive identifiers encoded by a supported single-byte client charset. CDC
+// persists source patterns and later uses their original bytes to match catalog
+// entries, so those bytes must not be normalized by the persistence format.
+func (table PatternTable) MarshalJSON() ([]byte, error) {
+	type encodedPatternTable struct {
+		Database      string `json:"database"`
+		Table         string `json:"table"`
+		DatabaseBytes string `json:"database_bytes,omitempty"`
+		TableBytes    string `json:"table_bytes,omitempty"`
+	}
+
+	encoded := encodedPatternTable{Database: table.Database, Table: table.Table}
+	if !utf8.ValidString(table.Database) {
+		encoded.Database = ""
+		encoded.DatabaseBytes = base64.StdEncoding.EncodeToString([]byte(table.Database))
+	}
+	if !utf8.ValidString(table.Table) {
+		encoded.Table = ""
+		encoded.TableBytes = base64.StdEncoding.EncodeToString([]byte(table.Table))
+	}
+	return json.Marshal(encoded)
+}
+
+// UnmarshalJSON accepts the historical string-only representation and restores
+// the lossless byte fields emitted by MarshalJSON when present.
+func (table *PatternTable) UnmarshalJSON(data []byte) error {
+	type encodedPatternTable struct {
+		Database      string `json:"database"`
+		Table         string `json:"table"`
+		DatabaseBytes string `json:"database_bytes,omitempty"`
+		TableBytes    string `json:"table_bytes,omitempty"`
+	}
+
+	var encoded encodedPatternTable
+	if err := json.Unmarshal(data, &encoded); err != nil {
+		return err
+	}
+	if encoded.DatabaseBytes != "" {
+		bytes, err := base64.StdEncoding.DecodeString(encoded.DatabaseBytes)
+		if err != nil {
+			return moerr.NewInternalErrorNoCtxf("decode CDC source database bytes: %v", err)
+		}
+		encoded.Database = string(bytes)
+	}
+	if encoded.TableBytes != "" {
+		bytes, err := base64.StdEncoding.DecodeString(encoded.TableBytes)
+		if err != nil {
+			return moerr.NewInternalErrorNoCtxf("decode CDC source table bytes: %v", err)
+		}
+		encoded.Table = string(bytes)
+	}
+	table.Database = encoded.Database
+	table.Table = encoded.Table
+	return nil
+}
+
 func (table PatternTable) String() string {
 	return fmt.Sprintf("%s.%s", table.Database, table.Table)
 }
@@ -810,12 +952,85 @@ func (tuple *PatternTuple) String() string {
 }
 
 type PatternTuples struct {
-	Pts      []*PatternTuple `json:"pts"`
-	Reserved string          `json:"reserved"`
+	Pts            []*PatternTuple `json:"pts"`
+	Reserved       string          `json:"reserved"`
+	SourceCaseMode int64           `json:"source_case_mode,omitempty"`
 }
 
 func (pts *PatternTuples) Append(pt *PatternTuple) {
 	pts.Pts = append(pts.Pts, pt)
+}
+
+// NormalizeCDCSourcePatternCase applies MatrixOne's source-side identifier
+// policy before a CDC task persists or validates its source patterns. Mode 1
+// stores source identifiers in lowercase; mode 2 retains execution spelling
+// while still treating source identities case-insensitively for duplicate
+// detection. Sink identifiers intentionally retain the user's spelling because
+// their server can use a different case policy.
+func NormalizeCDCSourcePatternCase(pts *PatternTuples, lowerCaseTableNames int64) error {
+	if pts == nil {
+		return nil
+	}
+	pts.SourceCaseMode = lowerCaseTableNames
+	seen := make(map[string]struct{}, len(pts.Pts))
+	for _, pt := range pts.Pts {
+		if pt == nil {
+			continue
+		}
+		if lowerCaseTableNames == 1 && pt.Source.Database != CDCPitrGranularity_All {
+			pt.Source.Database = CDCSourceIdentifierKey(pt.Source.Database, lowerCaseTableNames)
+		}
+		if lowerCaseTableNames == 1 && pt.Source.Table != CDCPitrGranularity_All {
+			pt.Source.Table = CDCSourceIdentifierKey(pt.Source.Table, lowerCaseTableNames)
+		}
+		keyDB, keyTable := pt.Source.Database, pt.Source.Table
+		if lowerCaseTableNames != 0 {
+			if keyDB != CDCPitrGranularity_All {
+				keyDB = CDCSourceIdentifierKey(keyDB, lowerCaseTableNames)
+			}
+			if keyTable != CDCPitrGranularity_All {
+				keyTable = CDCSourceIdentifierKey(keyTable, lowerCaseTableNames)
+			}
+		}
+		key := GenDbTblKey(keyDB, keyTable)
+		if _, ok := seen[key]; ok {
+			return moerr.NewInternalErrorNoCtxf("one db/table: %s can't be used as multi sources in a cdc task", key)
+		}
+		seen[key] = struct{}{}
+	}
+	return nil
+}
+
+// CDCSourceIdentifierKey returns the source-server identifier key used by
+// parser/catalog mode 1 and mode 2. Keep CDC source matching on this helper:
+// strings.EqualFold has a wider Unicode equivalence relation than MatrixOne's
+// identifier policy (for example, Greek sigma forms).
+func CDCSourceIdentifierKey(name string, lowerCaseTableNames int64) string {
+	return tree.NewCStr(name, lowerCaseTableNames).Compare()
+}
+
+// CDCSourceNameMatches applies the persisted source identifier policy to a
+// catalog name. Keep all CDC admission and scanner consumers on this helper so
+// a catalog candidate superset cannot become a source merely because it shares
+// a different Unicode case-folding relation.
+func CDCSourceNameMatches(name, pattern string, lowerCaseTableNames int64) bool {
+	if pattern == CDCPitrGranularity_All {
+		return true
+	}
+	if lowerCaseTableNames == 2 {
+		return CDCSourceIdentifierKey(name, lowerCaseTableNames) ==
+			CDCSourceIdentifierKey(pattern, lowerCaseTableNames)
+	}
+	return name == pattern
+}
+
+// CDCSourceNameNeedsCatalogSuperset reports whether SQL lower() cannot safely
+// prefilter this mode-2 identifier. The parser preserves malformed UTF-8 bytes
+// from supported single-byte client encodings, whereas SQL lower() replaces
+// those bytes. Such names must be matched locally after an unfiltered catalog
+// scan.
+func CDCSourceNameNeedsCatalogSuperset(name string, lowerCaseTableNames int64) bool {
+	return lowerCaseTableNames == 2 && !utf8.ValidString(name)
 }
 
 func (pts *PatternTuples) String() string {

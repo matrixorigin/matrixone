@@ -25,7 +25,7 @@ import (
 	"github.com/stretchr/testify/require"
 )
 
-func TestTaskDescriptorIncludesLosslessCDCCode(t *testing.T) {
+func TestTaskDescriptorIncludesCDCProtocolCodes(t *testing.T) {
 	zr, err := gzip.NewReader(bytes.NewReader(proto.FileDescriptor("task.proto")))
 	require.NoError(t, err)
 	raw, err := io.ReadAll(zr)
@@ -33,18 +33,19 @@ func TestTaskDescriptorIncludesLosslessCDCCode(t *testing.T) {
 	require.NoError(t, zr.Close())
 	var fd descriptor.FileDescriptorProto
 	require.NoError(t, proto.Unmarshal(raw, &fd))
+	want := map[string]int32{"InitCdcLosslessStart": 15, "InitCdcSourcePatternV1": 16}
 	for _, enum := range fd.EnumType {
 		if enum.GetName() != "TaskCode" {
 			continue
 		}
 		for _, value := range enum.Value {
-			if value.GetName() == "InitCdcLosslessStart" {
-				require.Equal(t, int32(15), value.GetNumber())
-				return
+			if number, ok := want[value.GetName()]; ok {
+				require.Equal(t, number, value.GetNumber())
+				delete(want, value.GetName())
 			}
 		}
 	}
-	t.Fatal("task descriptor is missing InitCdcLosslessStart=15")
+	require.Empty(t, want)
 }
 
 func TestDetailsType(t *testing.T) {

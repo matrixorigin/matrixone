@@ -230,6 +230,20 @@ func TestSendResponseServerShutdown(t *testing.T) {
 		t.Fatalf("expected SQLSTATE %s, got %s", DefaultMySQLState, state)
 	}
 
+	// CDC target guards classify this exact wire code as a whole-transaction retry.
+	rawConn.data = nil
+	if err = mp.SendResponse(serverCtx,
+		NewGeneralErrorResponse(COM_QUERY, 0, moerr.NewTxnNeedRetryWithDefChangedNoCtx())); err != nil {
+		t.Fatal(err)
+	}
+	packets = splitProtocolPackets(t, rawConn.data)
+	if len(packets) != 1 {
+		t.Fatalf("expected one retry error packet, got %d", len(packets))
+	}
+	if code := binary.LittleEndian.Uint16(packets[0][1:]); code != moerr.ErrTxnNeedRetryWithDefChanged {
+		t.Fatalf("expected retry code %d, got %d", moerr.ErrTxnNeedRetryWithDefChanged, code)
+	}
+
 	// Once the service context is canceled, the same execution error denotes a
 	// connection interruption and must use MySQL's shutdown SQLSTATE.
 	rawConn.data = nil
