@@ -9067,9 +9067,21 @@ func (c *Compile) compileMultiUpdate(node *plan.Node, ss []*Scope) ([]*Scope, er
 	// Determine whether to Write S3
 	toWriteS3 := node.Stats.GetOutcnt()*float64(SingleLineSizeEstimate) >
 		float64(DistributedThreshold) || c.anal.qry.LoadWriteS3
+	partitioned := c.proc.GetPartitionService().Enabled() && hasPartitionedUpdateTarget(node.UpdateCtxList)
 
 	currentFirstFlag := c.anal.isFirst
 	if toWriteS3 {
+		if partitioned {
+			// PartitionMultiUpdate has no remote instruction codec. Keep its
+			// writer on this CN and send only the source pipeline over MORPC.
+			// Group shuffle buckets first so each remote source is standalone.
+			ss = c.groupShuffleBucketsByCNIfNeeded(ss)
+			for i, source := range ss {
+				if !source.ipAddrMatch(c.addr) {
+					ss[i] = c.newMergeScope([]*Scope{source})
+				}
+			}
+		}
 		if len(ss) == 1 && ss[0].NodeInfo.Mcpu == 1 {
 			mcpu := c.getParallelSizeForExternalScan(node, c.ncpu)
 			if mcpu > 1 {
@@ -9124,6 +9136,11 @@ func (c *Compile) compileMultiUpdate(node *plan.Node, ss []*Scope) ([]*Scope, er
 		rs.setRootOperator(multiUpdateArg)
 		ss = []*Scope{rs}
 	} else {
+		if partitioned && len(ss) == 1 && !ss[0].ipAddrMatch(c.addr) {
+			// The TP path below otherwise attaches an unencodable partition
+			// writer directly to a single remote source.
+			ss = []*Scope{c.newMergeScope(ss)}
+		}
 		// The operator below is attached to ss[0] alone, so more than one input
 		// pipeline must be merged first or the others' rows are dropped.  A TP
 		// query normally builds a single scope, but a multi-file LOAD fanout
