@@ -72,11 +72,12 @@ var cdcTestAdmissionHook struct {
 // cdcTestCancelHook is a process-local barrier for lifecycle integration tests.
 // It is intentionally inert in production and lets a test hold a runner's
 // cancellation after local readers have stopped but before the cancellation
-// path returns to taskservice. This makes claim handoff and delayed cleanup
-// ordering observable without scheduler sleeps.
+// path returns to taskservice. It reports whether both callback and reader
+// drains completed within their bounds, so tests do not sample progress while
+// an old producer is still running.
 var cdcTestCancelHook struct {
 	sync.RWMutex
-	fn func()
+	fn func(producersStopped bool)
 }
 
 // cdcTestCancelCompletionHook is a process-local completion observer for
@@ -115,8 +116,9 @@ func runCDCTestAdmissionHook() {
 
 // SetCDCTestCancelHookForTest installs a process-local cancellation barrier and
 // returns a restore function. The hook runs outside the mutex and may block
-// only when the caller is deliberately controlling a test phase.
-func SetCDCTestCancelHookForTest(hook func()) (restore func()) {
+// only when the caller is deliberately controlling a test phase. A false
+// producersStopped means a bounded cancellation wait timed out.
+func SetCDCTestCancelHookForTest(hook func(producersStopped bool)) (restore func()) {
 	cdcTestCancelHook.Lock()
 	previous := cdcTestCancelHook.fn
 	cdcTestCancelHook.fn = hook
@@ -128,12 +130,12 @@ func SetCDCTestCancelHookForTest(hook func()) (restore func()) {
 	}
 }
 
-func runCDCTestCancelHook() {
+func runCDCTestCancelHook(producersStopped bool) {
 	cdcTestCancelHook.RLock()
 	hook := cdcTestCancelHook.fn
 	cdcTestCancelHook.RUnlock()
 	if hook != nil {
-		hook()
+		hook(producersStopped)
 	}
 }
 
@@ -1773,7 +1775,7 @@ func (exec *CDCTaskExecutor) cancel(deleteWatermarks bool) (err error) {
 	// Let lifecycle tests hold the runner-selected cleanup after local work has
 	// stopped. Claim takeover can then advance the durable owner/checkpoint while
 	// the old generation is still unwinding.
-	runCDCTestCancelHook()
+	runCDCTestCancelHook(callbacksDrained && readersStopped)
 	// let Start() go, including the no-reader path where there is no
 	// completion channel to wait on.
 	select {
