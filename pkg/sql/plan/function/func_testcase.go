@@ -212,6 +212,7 @@ func (fc *FunctionTestCase) Run() (succeed bool, errInfo string) {
 	// check the value
 	col := fc.expected.wanted
 	vExpected := newVectorByType(fc.proc.Mp(), fc.expected.typ, col, expectedNsp)
+	defer vExpected.Free(fc.proc.Mp())
 	var i uint64
 	switch v.GetType().Oid {
 	case types.T_bool:

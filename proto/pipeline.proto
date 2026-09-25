@@ -36,6 +36,8 @@ enum Method {
   PipelineStreamFinish = 5;
   PipelineStreamFinishAck = 6;
   PipelineBatchAck = 7;
+  // Admission on the execution stream before sending a vector partition-zero pipeline.
+  PipelineProtocolCheck = 8;
 }
 
 // StreamTeardownMode negotiates whether a completed logical pipeline stream can
@@ -73,6 +75,8 @@ message Message {
   uint64 accepted_batch_credit_bytes = 16;
   uint64 batch_sequence = 17;
   uint64 batch_ack_sequence = 18;
+  // Request: minimum required version. Response: actual receiver version.
+  int64 protocol_version = 19;
 }
 
 message Connector {

@@ -602,6 +602,11 @@ message MigrateConnFromResponse {
   // Distinguishes an empty snapshot from an older CN that cannot report
   // temporary-table state.
   bool TempTableStateExported = 17;
+  // True only when the exporting CN verified that no prepared statement owns
+  // an active server cursor, whose result and offset cannot be migrated.
+  // Field 18 is occupied by LastInsertID in the main branch; use a new field
+  // number so both migration capabilities remain wire-compatible.
+  bool PreparedStmtCursorsChecked = 20;
   // LastInsertID is the session-visible value returned by LAST_INSERT_ID().
   uint64 LastInsertID = 18;
   // True when LastInsertID was captured by a source that understands this
