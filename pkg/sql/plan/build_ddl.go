@@ -1807,12 +1807,28 @@ func buildCTASDefaultFromOrigin(
 	}, nil
 }
 
-// Rebinding closes type overrides as well as SQL replay: merely updating a
-// ColRef's position/type cannot update its enclosing function overload. Check
-// the final physical order too, since LIKE and dump reconstruct that order.
+// A copied CTAS default is already bound. Rebind it only if a target type
+// change makes that expression stale: rebinding an unchanged division under a
+// different session precision would change the inherited default's value.
+// The position/name check also verifies the final physical column order.
 func finalizeCTASDefaults(ctx CompilerContext, cols []*ColDef) error {
 	for _, col := range cols {
 		if col.Default == nil || !exprHasLocalColumnRef(col.Default.Expr) {
+			continue
+		}
+		if ctasBoundDefaultMatchesTarget(col, cols) {
+			// CTAS persists a new schema even when it reuses a source binding.
+			// Keep the same authoring admission checks as the rebind path.
+			if err := preservePersistedFormatCompatibility(ctx.GetContext(), col.Default.Expr); err != nil {
+				return err
+			}
+			if err := RequirePersistedIPFunctionProtocolForAuthoring(ctx.GetContext(), ctx.GetProcess(), col.Default.Expr); err != nil {
+				return err
+			}
+			if err := requireExpressionDefaultProtocol(ctx.GetProcess()); err != nil {
+				return err
+			}
+			updateCTASDefaultNullability(col.Default.Expr, cols)
 			continue
 		}
 		bound, err := buildCTASDefaultFromOrigin(ctx, col.Typ,
@@ -1823,6 +1839,81 @@ func finalizeCTASDefaults(ctx CompilerContext, cols []*ColDef) error {
 		col.Default = bound
 	}
 	return validateDefaultColumnDependencies(ctx.GetContext(), cols)
+}
+
+func ctasSameDefaultType(bound, target plan.Type) bool {
+	// Table is catalog lineage, not part of an expression's value domain.
+	// Bound defaults commonly have Table="" while resolved source columns
+	// carry the source table name. Nullability is reconciled separately.
+	return bound.Id == target.Id && bound.Width == target.Width &&
+		bound.Scale == target.Scale && bound.AutoIncr == target.AutoIncr &&
+		bound.Enumvalues == target.Enumvalues && bound.Charset == target.Charset &&
+		bound.PadSpace == target.PadSpace
+}
+
+func ctasBoundDefaultMatchesTarget(col *ColDef, cols []*ColDef) bool {
+	if !ctasSameDefaultType(col.Default.Expr.Typ, col.Typ) {
+		return false
+	}
+	var matches func(*plan.Expr) bool
+	matches = func(expr *plan.Expr) bool {
+		if expr == nil {
+			return true
+		}
+		if ref := expr.GetCol(); ref != nil && ref.RelPos == 0 {
+			pos := int(ref.ColPos)
+			return pos >= 0 && pos < len(cols) && cols[pos] != nil &&
+				strings.EqualFold(ref.Name, cols[pos].Name) &&
+				ctasSameDefaultType(expr.Typ, cols[pos].Typ)
+		}
+		if f := expr.GetF(); f != nil {
+			for _, arg := range f.Args {
+				if !matches(arg) {
+					return false
+				}
+			}
+		}
+		if list := expr.GetList(); list != nil {
+			for _, item := range list.List {
+				if !matches(item) {
+					return false
+				}
+			}
+		}
+		return true
+	}
+	return matches(col.Default.Expr)
+}
+
+// A newly nullable operand can invalidate an ancestor's non-null annotation.
+// Mark those ancestors nullable conservatively, without changing the copied
+// function overload or its result precision. Tightening nullability needs no
+// ancestor update because an existing nullable annotation remains safe.
+func updateCTASDefaultNullability(expr *plan.Expr, cols []*ColDef) bool {
+	if expr == nil {
+		return false
+	}
+	if ref := expr.GetCol(); ref != nil && ref.RelPos == 0 {
+		target := cols[ref.ColPos].Typ.NotNullable
+		becameNullable := expr.Typ.NotNullable && !target
+		expr.Typ.NotNullable = target
+		return becameNullable
+	}
+	becameNullable := false
+	if f := expr.GetF(); f != nil {
+		for _, arg := range f.Args {
+			becameNullable = updateCTASDefaultNullability(arg, cols) || becameNullable
+		}
+	}
+	if list := expr.GetList(); list != nil {
+		for _, item := range list.List {
+			becameNullable = updateCTASDefaultNullability(item, cols) || becameNullable
+		}
+	}
+	if becameNullable {
+		expr.Typ.NotNullable = false
+	}
+	return becameNullable
 }
 
 func ctasViewTypeDefaultOrigin(typ plan.Type) (string, bool) {

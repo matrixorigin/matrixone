@@ -34,9 +34,10 @@ reviewed head. Focused frontend setting/cache tests passed. Broad generated
 column, CHECK and LIKE BVT runs ignored metadata; they do not establish strict
 metadata coverage. This inventory does not assert that all CI jobs are green.
 
-There are 72 numbered entries: 45 existing coverage/evidence entries, 17 new
+There are 74 numbered entries: 45 existing coverage/evidence entries, 19 new
 executable CTAS cases, and 10 explicit remaining gaps. These are case counts,
-not defect counts. The new probe ran twice with identical results and left no
+not defect counts. The first 17 probes ran twice with identical results; the
+expanded 19-case probe ran on the same reviewed production binary and left no
 probe databases behind. It is manual and adds no automatic CI runtime.
 
 Locators below are relative to the repository root. A named Go test identifies
@@ -116,7 +117,7 @@ python3 test/manual/issue28594/run_ctas_precision.py \
 ```
 
 The runner creates a unique database, drops it in `finally`, checks that all
-17 result IDs appear exactly once, compares both the SQL predicate and the
+19 result IDs appear exactly once, compares both the SQL predicate and the
 formatted value, and exits nonzero on failure. It does not convert a known
 failure into a pass. Add client-specific options such as `--skip-ssl` when
 required by the installed client. An SQL error aborts the probe and reports an
@@ -125,7 +126,8 @@ execution error rather than claiming partial success.
 Oracles are literal decimal values obtained by rounding 1/3, 2/3 and 4/3 once
 to the source or intentionally rebound scale. Each SQL comment identifies the
 independent semantic dimension. Source precision is 10 and target precision 4
-unless specified. The reviewed binary yields **8 PASS / 9 FAIL**:
+unless specified. The pre-fix `3903e9cbf5` production binary yields
+**9 PASS / 10 FAIL**:
 
 | ID | Dimension | Expected behavior | Observed status |
 | --- | --- | --- | --- |
@@ -146,8 +148,10 @@ unless specified. The reviewed binary yields **8 PASS / 9 FAIL**:
 | C15 | NULL operand | Result stays NULL | PASS |
 | C16 | COPY ALTER control | Existing row-reference default retains source precision | PASS |
 | C17 | Source reused after all copies | CTAS never mutates the source's bound default | PASS |
+| C18 | Non-null operand becomes nullable | New non-NULL row retains the inherited 12-place precision | FAIL |
+| C19 | Newly nullable operand is NULL | Inherited default evaluates to NULL | PASS |
 
-The nine failures are one confirmed defect: `finalizeCTASDefaults` reparses
+The ten failures are one confirmed defect: `finalizeCTASDefaults` reparses
 every inherited default containing a local column reference under the current
 session setting. A typical expected value `0.666666666667` becomes
 `0.666667000000`. Constant defaults and existing copied values bypass this
@@ -156,11 +160,26 @@ See [the submitted review](https://github.com/matrixorigin/matrixone/pull/29241#
 [`observed-3903e9.tsv`](observed-3903e9.tsv) records the actual results; it is
 evidence, not a golden consumed by the runner.
 
-Repair direction: retain/remap a copied bound default when its operand and
-assignment types remain compatible; rebind actual type overrides and explicit
-new defaults. Preserve dependency validation. Once fixed, promote the distinct
-CTAS cases to the existing planner UT / expression-default BVT; do not change
-these expected values to the current incorrect output.
+The repair retains the copied binding when the final operand and assignment
+types have the same value semantics. It rebinds actual type overrides and
+keeps explicitly authored target defaults. Type `Table` is catalog lineage,
+so it does not trigger rebinding; this difference between mock types and real
+catalog types caused an initial false green in the planner UT. The test now
+injects the lineage marker and proved a pre-fix failure. The repair also
+updates nullable type annotations, checks the final reference names/positions,
+revalidates dependencies, and retains protocol authoring admission for the
+new table.
+
+On the final rebuilt service, the expanded probe passed **19/19 twice** with
+identical output and no database residue. The distinct inheritance, alias,
+nullability change, type-override and authored-default contracts are now in the
+planner UT and the strict `issue_28594_div_precision.test` BVT. That BVT passed
+**140/140 twice**
+on one service with zero failures, ignored or abnormal statements. The existing
+`expression_default_column_reference.sql` BVT passed **107/107** with its
+historical metadata comparison disabled; it still checked result values and
+errors. These local results do not replace pending CI or the separate topology
+and restart gaps below.
 
 ## Remaining cases to close
 

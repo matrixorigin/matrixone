@@ -43,7 +43,7 @@ def main():
     try:
         sql = Path(__file__).with_name("ctas_precision.sql").read_text()
         output = execute(f"use {database};\n{sql}")
-        expected_ids = {f"C{i:02d}" for i in range(1, 18)}
+        expected_ids = {f"C{i:02d}" for i in range(1, 20)}
         seen = set()
         failed = []
         print("case\texpected\tactual\tmatches")

@@ -66,6 +66,53 @@ insert into ddl_default values (default);
 select q from ddl_default;
 ➤ q[3,30,12]  𝄀
 0.333333333333
+create table ctas_precision_src (
+a decimal(10,2), b decimal(10,2),
+q decimal(30,12) default (a / b),
+d decimal(30,12) default (1.00 / 3.00)
+);
+insert into ctas_precision_src(a,b) values (1,3);
+set session div_precision_increment = 4;
+create table ctas_precision_dst as select * from ctas_precision_src;
+insert into ctas_precision_dst(a,b) values (2,3);
+select a, q, d from ctas_precision_dst order by a;
+➤ a[3,10,2]  ¦  q[3,30,12]  ¦  d[3,30,12]  𝄀
+1.00  ¦  0.333333333333  ¦  0.333333333333  𝄀
+2.00  ¦  0.666666666667  ¦  0.333333333333
+create table ctas_precision_alias as select a as x,b as y,q from ctas_precision_src;
+insert into ctas_precision_alias(x,y) values (2,3);
+select x, q from ctas_precision_alias where x = 2;
+➤ x[3,10,2]  ¦  q[3,30,12]  𝄀
+2.00  ¦  0.666666666667
+create table ctas_precision_rebind(a decimal(12,3)) as select a,b,q from ctas_precision_src;
+insert into ctas_precision_rebind(a,b) values (2,3);
+select a, q from ctas_precision_rebind where a = 2;
+➤ a[3,12,3]  ¦  q[3,30,12]  𝄀
+2.000  ¦  0.666666700000
+create table ctas_precision_authored (
+a decimal(10,2), b decimal(10,2),
+q decimal(30,12) default (a / b)
+) as select a,b,q from ctas_precision_src;
+insert into ctas_precision_authored(a,b) values (2,3);
+select a, q from ctas_precision_authored where a = 2;
+➤ a[3,10,2]  ¦  q[3,30,12]  𝄀
+2.00  ¦  0.666667000000
+set session div_precision_increment = 10;
+create table ctas_precision_nonnull_src (
+a decimal(10,2) not null, b decimal(10,2) not null,
+q decimal(30,12) default (a / b)
+);
+set session div_precision_increment = 4;
+create table ctas_precision_nullable(a decimal(10,2) null)
+as select a,b,q from ctas_precision_nonnull_src;
+insert into ctas_precision_nullable(a,b) values (2,3),(null,3);
+select q from ctas_precision_nullable where a = 2;
+➤ q[3,30,12]  𝄀
+0.666666666667
+select q is null as q_is_null from ctas_precision_nullable where a is null;
+➤ q_is_null[-7,1,0]  𝄀
+1
+set session div_precision_increment = 10;
 create table ddl_replay (
 a decimal(10,2), b decimal(10,2),
 q decimal(30,12) generated always as (a / b) stored,

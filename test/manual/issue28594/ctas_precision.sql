@@ -91,3 +91,17 @@ select 'C16', '0.666666666667', cast(q as char), q = 0.666666666667 from src whe
 -- C17: source metadata must not be changed by any CTAS above.
 insert into src(a,b) values (4,3);
 select 'C17', '1.333333333333', cast(q as char), q = 1.333333333333 from src where a = 4;
+
+-- C18/C19: making a formerly non-null operand nullable keeps bound numeric
+-- precision and must also update nullable expression metadata.
+set session div_precision_increment = 10;
+create table nonnull_src (
+    a decimal(10,2) not null, b decimal(10,2) not null,
+    q decimal(30,12) default (a / b)
+);
+set session div_precision_increment = 4;
+create table relaxed_copy(a decimal(10,2) null) as select a,b,q from nonnull_src;
+insert into relaxed_copy(a,b) values (2,3);
+select 'C18', '0.666666666667', cast(q as char), q = 0.666666666667 from relaxed_copy where a = 2;
+insert into relaxed_copy(a,b) values (null,3);
+select 'C19', 'NULL', ifnull(cast(q as char),'NULL'), q is null from relaxed_copy where a is null;
