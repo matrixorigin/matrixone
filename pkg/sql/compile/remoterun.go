@@ -2297,15 +2297,9 @@ func validateRemoteExpressionPipelineProtocol(
 	if features.PreparedPrecisionScalar && (!hasProtocolVersion || protocolVersion < defines.MORPCVersion95) {
 		return moerr.NewNotSupportedNoCtx("prepared scalar precision requires MORPC protocol version 95")
 	}
-	if features.TemporalResultContracts && (!hasProtocolVersion || protocolVersion < defines.MORPCVersion97) {
-		return moerr.NewNotSupportedNoCtx("temporal result contracts require MORPC protocol version 97")
-	}
-	if (features.NormalizedIntervalUnits || features.WeekSessionDefault) &&
-		(!hasProtocolVersion || protocolVersion < defines.MORPCVersion98) {
-		return moerr.NewNotSupportedNoCtx("normalized interval units and WEEK session snapshot require MORPC protocol version 98")
-	}
-	if features.TypedNumericIntervalOverloads && (!hasProtocolVersion || protocolVersion < defines.MORPCVersion99) {
-		return moerr.NewNotSupportedNoCtx("typed numeric interval overloads require MORPC protocol version 99")
+	if (features.TemporalResultContracts || features.NormalizedIntervalUnits || features.WeekSessionDefault) &&
+		(!hasProtocolVersion || protocolVersion < defines.MORPCVersion97) {
+		return moerr.NewNotSupportedNoCtx("temporal expression contracts require MORPC protocol version 97")
 	}
 	if features.NumericPrefix &&
 		(!hasProtocolVersion || protocolVersion < defines.MORPCVersion30) {

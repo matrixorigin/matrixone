@@ -393,7 +393,6 @@ type RemoteExpressionFeatures struct {
 	TemporalResultContracts           bool
 	LegacyTemporalResultContracts     bool
 	NormalizedIntervalUnits           bool
-	TypedNumericIntervalOverloads     bool
 	LegacyIntervalUnits               bool
 	WeekSessionDefault                bool
 }
@@ -421,7 +420,6 @@ func (features RemoteExpressionFeatures) Any() bool {
 		features.TemporalResultContracts ||
 		features.LegacyTemporalResultContracts ||
 		features.NormalizedIntervalUnits ||
-		features.TypedNumericIntervalOverloads ||
 		features.LegacyIntervalUnits ||
 		features.WeekSessionDefault
 }
@@ -867,9 +865,6 @@ func RequiredRemoteExpressionFeatures(owner any) (features RemoteExpressionFeatu
 				}
 				if id == 583 { // TO_INTERVAL_MICROSECOND
 					features.NormalizedIntervalUnits = true
-					if overload >= 3 && overload <= 6 {
-						features.TypedNumericIntervalOverloads = true
-					}
 				}
 				if id == 216 && (overload == 0 || overload == 1) { // one-arg WEEK
 					features.WeekSessionDefault = true

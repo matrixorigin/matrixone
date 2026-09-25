@@ -124,11 +124,9 @@ func RequiredPersistedExpressionProtocolVersion(owner any) (int64, error) {
 	if features.DecimalDivisionSemantics && requiredVersion < defines.MORPCVersion97 {
 		requiredVersion = defines.MORPCVersion97
 	}
-	if (features.TemporalResultContracts || features.NormalizedIntervalUnits || features.WeekSessionDefault) && requiredVersion < defines.MORPCVersion98 {
+	if (features.TemporalResultContracts || features.NormalizedIntervalUnits || features.WeekSessionDefault || features.TypedNumericIntervalOverloads) &&
+		requiredVersion < defines.MORPCVersion98 {
 		requiredVersion = defines.MORPCVersion98
-	}
-	if features.TypedNumericIntervalOverloads && requiredVersion < defines.MORPCVersion99 {
-		requiredVersion = defines.MORPCVersion99
 	}
 	return requiredVersion, nil
 }

@@ -24,8 +24,8 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/vm/process"
 )
 
-// Temporal expression contracts include the v97 result layout, v98 interval
-// units/session defaults, and v99 typed numeric interval overloads.
+// The final temporal result, interval, and WEEK contracts share one release
+// boundary relative to the v96 baseline.
 func (c *Compile) constrainTemporalResultWorkers(qry *plan.Query) error {
 	features, err := plan.RequiredRemoteExpressionFeatures(qry)
 	if err != nil {
@@ -51,13 +51,7 @@ func (c *Compile) constrainTemporalResultWorkers(qry *plan.Query) error {
 }
 
 func temporalExpressionProtocolVersion(features plan.RemoteExpressionFeatures) int64 {
-	if features.TypedNumericIntervalOverloads {
-		return defines.MORPCVersion99
-	}
-	if features.NormalizedIntervalUnits || features.WeekSessionDefault {
-		return defines.MORPCVersion98
-	}
-	if features.TemporalResultContracts {
+	if features.TemporalResultContracts || features.NormalizedIntervalUnits || features.WeekSessionDefault {
 		return defines.MORPCVersion97
 	}
 	return 0

@@ -311,6 +311,25 @@ cast('2022-11-28 17:37:53.168451' as datetime(6)) as negative_literal_tie;
 ➤ positive_literal_tie[-7,1,0]  ¦  negative_literal_tie[-7,1,0]  𝄀
 1  ¦  1
 drop table temporal_scalar_ties;
+create table temporal_scalar_double(n double);
+insert into temporal_scalar_double values (34410126.8315485e0), (-34410126.8315485e0);
+select date_add(cast('2024-01-01 00:00:00' as datetime(6)), interval n second) =
+cast('2025-02-02 06:22:06.831548' as datetime(6)) as positive_double_column
+from temporal_scalar_double where n > 0;
+➤ positive_double_column[-7,1,0]  𝄀
+1
+select date_add(cast('2024-01-01 00:00:00' as datetime(6)), interval n second) =
+cast('2022-11-28 17:37:53.168452' as datetime(6)) as negative_double_column
+from temporal_scalar_double where n < 0;
+➤ negative_double_column[-7,1,0]  𝄀
+1
+select date_add(cast('2024-01-01 00:00:00' as datetime(6)), interval 34410126.8315485e0 second) =
+cast('2025-02-02 06:22:06.831548' as datetime(6)) as positive_double_literal,
+date_add(cast('2024-01-01 00:00:00' as datetime(6)), interval -34410126.8315485e0 second) =
+cast('2022-11-28 17:37:53.168452' as datetime(6)) as negative_double_literal;
+➤ positive_double_literal[-7,1,0]  ¦  negative_double_literal[-7,1,0]  𝄀
+1  ¦  1
+drop table temporal_scalar_double;
 select date_add(time '12:00:00', interval cast(1e-14 as double) second_microsecond) = cast('12:00:00' as time(6)) as tiny_float_us,
 date_add(time '12:00:00', interval cast(0.00000000000001 as decimal(38,14)) second_microsecond) = cast('12:00:00' as time(6)) as tiny_decimal_us,
 date_add(time '12:00:00', interval cast(1e-14 as double) hour_minute) = cast('12:01:00' as time(6)) as tiny_float_hm,

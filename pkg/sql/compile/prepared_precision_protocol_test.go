@@ -109,9 +109,9 @@ func TestTemporalUnitAndWeekProtocolAdmission(t *testing.T) {
 	require.NoError(t, err)
 	require.True(t, features.NormalizedIntervalUnits)
 	require.True(t, features.WeekSessionDefault)
-	require.Equal(t, defines.MORPCVersion98, temporalExpressionProtocolVersion(features))
+	require.Equal(t, defines.MORPCVersion97, temporalExpressionProtocolVersion(features))
 	qry := &planpb.Query{Nodes: []*planpb.Node{{ProjectList: []*planpb.Expr{unitExpr, weekExpr}}}, Steps: []int32{0}}
-	client.version = defines.MORPCVersion97
+	client.version = defines.MORPCVersion96
 	c.execType = plan2.ExecTypeAP_MULTICN
 	c.cnList = engine.Nodes{{Id: "old-worker", Addr: "remote:6001", Mcpu: 4}}
 	require.NoError(t, c.constrainTemporalResultWorkers(qry))
@@ -121,9 +121,9 @@ func TestTemporalUnitAndWeekProtocolAdmission(t *testing.T) {
 	c.proc.Base.SessionInfo.DefaultWeekFormatSet = true
 	p := &pipeline.Pipeline{InstructionList: []*pipeline.Instruction{{ProjectList: []*planpb.Expr{unitExpr, weekExpr}}}}
 	rt := moruntime.ServiceRuntime(c.proc.GetService())
+	rt.SetGlobalVariables(moruntime.MOProtocolVersion, defines.MORPCVersion96)
+	require.ErrorContains(t, validateRemoteExpressionPipelineProtocol(c.proc, p), "version 97")
 	rt.SetGlobalVariables(moruntime.MOProtocolVersion, defines.MORPCVersion97)
-	require.ErrorContains(t, validateRemoteExpressionPipelineProtocol(c.proc, p), "version 98")
-	rt.SetGlobalVariables(moruntime.MOProtocolVersion, defines.MORPCVersion98)
 	require.NoError(t, validateRemoteExpressionPipelineProtocol(c.proc, p))
 	c.proc.Base.SessionInfo.DefaultWeekFormatSet = false
 	require.ErrorContains(t, validateRemoteExpressionPipelineProtocol(c.proc, p), "session snapshot")
@@ -140,7 +140,7 @@ func TestTemporalUnitAndWeekProtocolAdmission(t *testing.T) {
 	require.ErrorContains(t, c.constrainTemporalResultWorkers(qry), "legacy interval")
 }
 
-func TestTypedNumericIntervalRequiresNewRemoteOverload(t *testing.T) {
+func TestTypedNumericIntervalRequiresTemporalProtocol(t *testing.T) {
 	c, client := expressionProtocolTestCompile(t)
 	expr := &planpb.Expr{Typ: planpb.Type{Id: int32(types.T_int64)}, Expr: &planpb.Expr_F{F: &planpb.Function{
 		Func: &planpb.ObjectRef{Obj: function.EncodeOverloadID(function.TO_INTERVAL_MICROSECOND, 5)},
@@ -151,21 +151,21 @@ func TestTypedNumericIntervalRequiresNewRemoteOverload(t *testing.T) {
 	}}}
 	features, err := planpb.RequiredRemoteExpressionFeatures(expr)
 	require.NoError(t, err)
-	require.True(t, features.TypedNumericIntervalOverloads)
-	require.Equal(t, defines.MORPCVersion99, temporalExpressionProtocolVersion(features))
+	require.True(t, features.NormalizedIntervalUnits)
+	require.Equal(t, defines.MORPCVersion97, temporalExpressionProtocolVersion(features))
 
 	qry := &planpb.Query{Nodes: []*planpb.Node{{ProjectList: []*planpb.Expr{expr}}}, Steps: []int32{0}}
-	client.version = defines.MORPCVersion98
+	client.version = defines.MORPCVersion96
 	c.execType = plan2.ExecTypeAP_MULTICN
-	c.cnList = engine.Nodes{{Id: "old-v98-worker", Addr: "remote:6001", Mcpu: 4}}
+	c.cnList = engine.Nodes{{Id: "old-worker", Addr: "remote:6001", Mcpu: 4}}
 	require.NoError(t, c.constrainTemporalResultWorkers(qry))
 	require.Equal(t, plan2.ExecTypeAP_ONECN, c.execType)
 
 	p := &pipeline.Pipeline{InstructionList: []*pipeline.Instruction{{ProjectList: []*planpb.Expr{expr}}}}
 	rt := moruntime.ServiceRuntime(c.proc.GetService())
-	rt.SetGlobalVariables(moruntime.MOProtocolVersion, defines.MORPCVersion98)
-	require.ErrorContains(t, validateRemoteExpressionPipelineProtocol(c.proc, p), "version 99")
-	rt.SetGlobalVariables(moruntime.MOProtocolVersion, defines.MORPCVersion99)
+	rt.SetGlobalVariables(moruntime.MOProtocolVersion, defines.MORPCVersion96)
+	require.ErrorContains(t, validateRemoteExpressionPipelineProtocol(c.proc, p), "version 97")
+	rt.SetGlobalVariables(moruntime.MOProtocolVersion, defines.MORPCVersion97)
 	require.NoError(t, validateRemoteExpressionPipelineProtocol(c.proc, p))
 }
 
