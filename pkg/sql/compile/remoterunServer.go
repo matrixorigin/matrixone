@@ -120,6 +120,9 @@ func CnServerMessageHandler(
 	if msg.GetCmd() == pipeline.Method_PipelineBatchAck {
 		return handlePipelineBatchAck(msg, cs)
 	}
+	if msg.GetCmd() == pipeline.Method_PipelineProtocolCheck {
+		return handlePipelineProtocolCheck(ctx, msg, cs, lockService.GetConfig().ServiceID, messageAcquirer)
+	}
 
 	// prepare the receiver structure, just for easy using the `send` method.
 	receiver, err := newMessageReceiverOnServer(ctx, serverAddress, msg,
@@ -203,6 +206,28 @@ func CnServerMessageHandler(
 		receiver.colexecServer.RemoveRelatedPipeline(receiver.clientSession, receiver.messageId)
 	}
 	return err
+}
+
+func handlePipelineProtocolCheck(
+	ctx context.Context,
+	request *pipeline.Message,
+	cs morpc.ClientSession,
+	serviceID string,
+	messageAcquirer func() morpc.Message,
+) error {
+	response, ok := messageAcquirer().(*pipeline.Message)
+	if !ok {
+		return moerr.NewInternalErrorNoCtx("pipeline protocol response has wrong type")
+	}
+	response.SetID(request.GetID())
+	response.SetMessageType(pipeline.Method_PipelineProtocolCheck)
+	response.SetSid(pipeline.Status_Last)
+	if runtime := moruntime.ServiceRuntime(serviceID); runtime != nil {
+		if value, ok := runtime.GetGlobalVariables(moruntime.MOProtocolVersion); ok {
+			response.ProtocolVersion, _ = value.(int64)
+		}
+	}
+	return cs.Write(ctx, response)
 }
 
 // waitUntilPipelineBatchFlowDrained preserves the ownership boundary between

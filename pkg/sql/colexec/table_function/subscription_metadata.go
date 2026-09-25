@@ -813,8 +813,7 @@ func buildSubscriptionColumnsQuery(candidate subscriptionCandidate, tableNames [
 		"ON mk.table_id = mc.att_relname_id AND mk.column_name = mc.attname " +
 		"WHERE mc.account_id = current_account_id() AND mc.att_database = " +
 		sqlquote.String(candidate.sourceDatabase) +
-		subscriptionTablePredicate("mc.att_relname", tableNames) +
-		" AND NOT (mt.relkind = 'v' AND mt.reldatabase NOT IN ('mo_catalog','information_schema','mysql','system','system_metrics','mo_task','mo_debug'))"
+		subscriptionTablePredicate("mc.att_relname", tableNames)
 	return ordinary
 }
 

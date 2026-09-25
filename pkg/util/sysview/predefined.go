@@ -295,7 +295,8 @@ func informationSchemaCurrentColumnsDDL() string {
 	viewRows = castViewColumnNames(viewRows)
 	userView := "mt.relkind = 'v' AND mt.reldatabase NOT IN ('mo_catalog','information_schema','mysql','system','system_metrics','mo_task','mo_debug')"
 	return prefix + local + " AND NOT (" + userView + ") UNION ALL " +
-		viewRows + " AND (" + userView + ") UNION ALL " + branches[1] + " UNION ALL " +
+		viewRows + " AND (" + userView + ") UNION ALL " + branches[1] +
+		" AND NOT (mc.relkind = 'v' AND mc.att_database NOT IN ('mo_catalog','information_schema','mysql','system','system_metrics','mo_task','mo_debug')) UNION ALL " +
 		informationSchemaSubscriptionViewColumnsSelect(strings.TrimPrefix(InformationSchemaColumnsV41DDL, prefix))
 }
 

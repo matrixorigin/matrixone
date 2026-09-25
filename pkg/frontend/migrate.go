@@ -44,6 +44,9 @@ type migrateController struct {
 	// prove a reset reached the request-only admission wait before changing the
 	// request or its context.
 	requestWaitHook func()
+	// operationWaitHook is test-only. It marks the admission wait while an
+	// in-flight request still owns the session being exported.
+	operationWaitHook func()
 	// tryBeginOperationHook is test-only. Production leaves it nil; tests use
 	// it to pause a failed optimistic admission attempt.
 	tryBeginOperationHook func()
@@ -106,7 +109,12 @@ func (mc *migrateController) beginOperationWithContext(ctx context.Context) (con
 
 	mc.Lock()
 	defer mc.Unlock()
+	waitNotified := false
 	for (mc.inProgress || mc.requestInProgress) && !mc.closed && ctx.Err() == nil {
+		if !waitNotified && mc.operationWaitHook != nil {
+			waitNotified = true
+			mc.operationWaitHook()
+		}
 		mc.cond.Wait()
 	}
 	return mc.startOperationLocked(ctx)

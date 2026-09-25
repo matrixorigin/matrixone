@@ -21,6 +21,7 @@ import (
 	"testing"
 
 	"github.com/stretchr/testify/assert"
+	"github.com/stretchr/testify/require"
 
 	"github.com/matrixorigin/matrixone/pkg/catalog"
 	"github.com/matrixorigin/matrixone/pkg/defines"
@@ -296,12 +297,12 @@ func TestInitInformationSchemaSysTablesForProtocol(t *testing.T) {
 	assert.Contains(t, latest, InformationSchemaColumnsV58DDL())
 	assert.NotContains(t, strings.Join(latest, "\n"), "mo_subscription_view_columns")
 	assert.Contains(t, strings.Join(latest, "\n"), "WHEN 3 then 'utf8mb4'")
-	for _, protocol := range []int64{defines.MORPCVersion58 + 1, defines.MORPCVersion94, defines.MORPCVersion95} {
+	for _, protocol := range []int64{defines.MORPCVersion58 + 1, defines.MORPCVersion94, defines.MORPCVersion95, defines.MORPCVersion96} {
 		assert.Contains(t, InitInformationSchemaSysTablesForProtocol(protocol), InformationSchemaColumnsV58DDL())
 		assert.NotContains(t, strings.Join(InitInformationSchemaSysTablesForProtocol(protocol), "\n"),
 			"mo_subscription_view_columns")
 	}
-	assert.Contains(t, InitInformationSchemaSysTablesForProtocol(defines.MORPCVersion96), InformationSchemaColumnsDDL)
+	assert.Contains(t, InitInformationSchemaSysTablesForProtocol(defines.MORPCVersion97), InformationSchemaColumnsDDL)
 }
 
 func assertInformationSchemaInitSQLParses(t *testing.T, sql string) {
@@ -318,6 +319,22 @@ func TestInformationSchemaStatisticsDDL_RestrictsCatalogJoins(t *testing.T) {
 	assert.True(t, strings.Contains(InformationSchemaStatisticsDDL, "`tcl`.`att_database` = `tbl`.`reldatabase`"))
 	assert.True(t, strings.Contains(InformationSchemaStatisticsDDL, "`tcl`.`att_relname` = `tbl`.`relname`"))
 	assert.True(t, strings.Contains(InformationSchemaStatisticsDDL, "`tbl`.`account_id` = current_account_id()"))
+}
+
+func TestInformationSchemaColumnsDDL_MixedVersionSubscriptionViews(t *testing.T) {
+	// A V97 CN must still supply persisted subscription View columns to a V58
+	// COLUMNS definition until the tenant migration installs the new definition.
+	legacy := InformationSchemaColumnsV58DDL()
+	require.Contains(t, legacy, "from mo_subscription_columns() mc")
+	require.NotContains(t, legacy, "mo_subscription_view_columns")
+	require.NotContains(t, legacy, "AND NOT (mc.relkind = 'v'")
+
+	current := InformationSchemaColumnsDDL
+	require.Contains(t, current, "from mo_subscription_columns() mc")
+	require.Contains(t, current, "AND NOT (mc.relkind = 'v' AND mc.att_database NOT IN")
+	require.Contains(t, current, "mo_subscription_view_columns(mt.publisher_account_id, mt.rel_id)")
+	require.NotContains(t, InitInformationSchemaSysTablesForProtocol(defines.MORPCVersion96), current)
+	require.Contains(t, InitInformationSchemaSysTablesForProtocol(defines.MORPCVersion97), current)
 }
 
 func TestInformationSchemaColumnsDDL_PreservesCatalogNameWidth(t *testing.T) {

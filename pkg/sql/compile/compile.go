@@ -5476,6 +5476,23 @@ func (c *Compile) compileVectorIndexScan(node *plan.Node) ([]*Scope, error) {
 				CNIDX: int32(i),
 			}
 		}
+		stable, err := remoteWorkersSupportProtocol(c.proc, nodes, defines.MORPCVersion96)
+		if err != nil {
+			return nil, err
+		}
+		if stable {
+			// Keep the query's coordinator-first list intact for other scans.
+			// Object owners depend only on the selected identities, not ingress.
+			slices.SortFunc(nodes, func(a, b engine.Node) int {
+				if n := cmp.Compare(a.Id, b.Id); n != 0 {
+					return n
+				}
+				return cmp.Compare(a.Addr, b.Addr)
+			})
+			for i := range nodes {
+				nodes[i].CNIDX = int32(i)
+			}
+		}
 	} else {
 		local := getEngineNode(c)
 		parallelism, err := c.vectorIndexScanParallelism(node, local.Mcpu)

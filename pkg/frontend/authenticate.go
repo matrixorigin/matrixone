@@ -11016,7 +11016,7 @@ func createTablesInInformationSchemaOfGeneralTenant(ctx context.Context, bh Back
 
 	var err error
 	protocol := protocolVersionForTenantInitialization(service)
-	if protocol >= defines.MORPCVersion96 {
+	if protocol >= defines.MORPCVersion97 {
 		// A new CN can already speak 96 while an older CN still serves the
 		// cluster. Do not persist a View using a function that peer cannot plan.
 		if err := requireCommonViewColumnsProtocol(ctx, bh); err != nil {
@@ -11051,13 +11051,13 @@ func requireCommonViewColumnsProtocol(ctx context.Context, bh BackgroundExec) er
 		return err
 	}
 	if len(results) == 0 || results[0].GetRowCount() == 0 {
-		return versions.CheckProtocolVersionResponse("", defines.MORPCVersion96)
+		return versions.CheckProtocolVersionResponse("", defines.MORPCVersion97)
 	}
 	encoded, err := results[0].GetString(ctx, 0, 0)
 	if err != nil {
 		return err
 	}
-	return versions.CheckProtocolVersionResponse(encoded, defines.MORPCVersion96)
+	return versions.CheckProtocolVersionResponse(encoded, defines.MORPCVersion97)
 }
 
 func protocolVersionForTenantInitialization(service string) int64 {

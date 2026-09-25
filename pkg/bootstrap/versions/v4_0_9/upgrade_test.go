@@ -40,7 +40,7 @@ func TestColumnsUpgradeMetadata(t *testing.T) {
 	require.Equal(t, "4.0.8", m.MinUpgradeVersion)
 	require.Equal(t, versions.Yes, m.UpgradeTenant)
 	require.Equal(t, versions.No, m.UpgradeCluster)
-	require.Equal(t, defines.MORPCVersion96, m.RequiredProtocolVersion)
+	require.Equal(t, defines.MORPCVersion97, m.RequiredProtocolVersion)
 	require.Equal(t, uint32(1), m.VersionOffset)
 }
 

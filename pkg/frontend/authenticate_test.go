@@ -606,10 +606,10 @@ func Test_createTablesInInformationSchemaOfGeneralTenant_UsesProtocolAwareViews(
 	}
 }
 
-func TestCreateTenantInformationSchemaWaitsForAllProtocol96Peers(t *testing.T) {
+func TestCreateTenantInformationSchemaWaitsForAllProtocol97Peers(t *testing.T) {
 	moruntime.RunTest("", func(rt moruntime.Runtime) {
 		previous, exists := rt.GetGlobalVariables(moruntime.MOProtocolVersion)
-		rt.SetGlobalVariables(moruntime.MOProtocolVersion, defines.MORPCVersion96)
+		rt.SetGlobalVariables(moruntime.MOProtocolVersion, defines.MORPCVersion97)
 		defer func() {
 			if exists {
 				rt.SetGlobalVariables(moruntime.MOProtocolVersion, previous)
@@ -623,7 +623,7 @@ func TestCreateTenantInformationSchemaWaitsForAllProtocol96Peers(t *testing.T) {
 		}{
 			{name: "mixed", response: `{"result":"cn-a:96,cn-b:95"}`, wantError: true},
 			{name: "missing response", wantError: true},
-			{name: "all ready", response: `{"result":"cn-a:96,cn-b:96"}`},
+			{name: "all ready", response: `{"result":"cn-a:97,cn-b:97"}`},
 		} {
 			t.Run(tc.name, func(t *testing.T) {
 				ctrl := gomock.NewController(t)
@@ -641,7 +641,7 @@ func TestCreateTenantInformationSchemaWaitsForAllProtocol96Peers(t *testing.T) {
 				bh.EXPECT().GetExecResultSet().Return([]interface{}{newMrsForCheckTenant(rows)}).AnyTimes()
 				err := createTablesInInformationSchemaOfGeneralTenant(t.Context(), bh, "")
 				if tc.wantError {
-					require.ErrorContains(t, err, "protocol version 96")
+					require.ErrorContains(t, err, "protocol version 97")
 					require.Equal(t, []string{"SELECT mo_ctl('cn', 'GetProtocolVersion', '')"}, executed)
 				} else {
 					require.NoError(t, err)
@@ -649,7 +649,7 @@ func TestCreateTenantInformationSchemaWaitsForAllProtocol96Peers(t *testing.T) {
 				}
 			})
 		}
-		for _, protocol := range []int64{defines.MORPCVersion94, defines.MORPCVersion95} {
+		for _, protocol := range []int64{defines.MORPCVersion94, defines.MORPCVersion95, defines.MORPCVersion96} {
 			t.Run(fmt.Sprintf("CN%d uses legacy definition", protocol), func(t *testing.T) {
 				rt.SetGlobalVariables(moruntime.MOProtocolVersion, protocol)
 				ctrl := gomock.NewController(t)

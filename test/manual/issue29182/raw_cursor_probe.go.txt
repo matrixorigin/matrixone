@@ -1,0 +1,371 @@
+// Manual two-CN cursor-drain probe for both MySQL EOF capability modes.
+// Copy this file to a .go path before running it; see README.md.
+// See README.md for the isolated cluster and SQL-address prerequisites.
+package main
+
+import (
+	"crypto/sha1"
+	"database/sql"
+	"encoding/binary"
+	"errors"
+	"flag"
+	"fmt"
+	"io"
+	"net"
+	"strings"
+	"time"
+
+	_ "github.com/go-sql-driver/mysql"
+)
+
+const (
+	probeRows           = 5000
+	cursorExists        = 0x40
+	lastRowSent         = 0x80
+	clientDeprecateEOF  = 0x01000000
+	clientProtocol41    = 0x00000200
+	clientSecureAuth    = 0x00008000
+	clientPluginAuth    = 0x00080000
+	clientMultiResults  = 0x00020000
+	clientPSMultiResult = 0x00040000
+)
+
+type cursorWire struct{ net.Conn }
+
+func (w cursorWire) read() ([]byte, error) {
+	header := make([]byte, 4)
+	if _, err := io.ReadFull(w.Conn, header); err != nil {
+		return nil, err
+	}
+	length := int(header[0]) | int(header[1])<<8 | int(header[2])<<16
+	data := make([]byte, length)
+	_, err := io.ReadFull(w.Conn, data)
+	return data, err
+}
+
+func (w cursorWire) write(sequence byte, data []byte) error {
+	header := []byte{byte(len(data)), byte(len(data) >> 8), byte(len(data) >> 16), sequence}
+	for _, part := range [][]byte{header, data} {
+		for len(part) > 0 {
+			n, err := w.Conn.Write(part)
+			if err != nil {
+				return err
+			}
+			part = part[n:]
+		}
+	}
+	return nil
+}
+
+func (w cursorWire) command(code byte, payload []byte) error {
+	return w.write(0, append([]byte{code}, payload...))
+}
+
+func nativeToken(salt []byte, password string) []byte {
+	stage1 := sha1.Sum([]byte(password))
+	stage2 := sha1.Sum(stage1[:])
+	hash := sha1.New()
+	_, _ = hash.Write(salt)
+	_, _ = hash.Write(stage2[:])
+	token := hash.Sum(nil)
+	for i := range token {
+		token[i] ^= stage1[i]
+	}
+	return token
+}
+
+func (w cursorWire) login(deprecateEOF bool) error {
+	handshake, err := w.read()
+	if err != nil {
+		return err
+	}
+	if len(handshake) < 50 || handshake[0] != 10 {
+		return fmt.Errorf("unexpected MySQL handshake")
+	}
+	versionEnd := -1
+	for i := 1; i < len(handshake); i++ {
+		if handshake[i] == 0 {
+			versionEnd = i
+			break
+		}
+	}
+	if versionEnd < 0 || versionEnd+47 > len(handshake) {
+		return fmt.Errorf("malformed MySQL handshake")
+	}
+	pos := versionEnd + 1 + 4
+	salt := append([]byte(nil), handshake[pos:pos+8]...)
+	pos += 8 + 1 + 2 + 1 + 2 + 2 + 1 + 10
+	salt = append(salt, handshake[pos:pos+12]...)
+	capabilities := uint32(clientProtocol41 | clientSecureAuth | clientPluginAuth |
+		clientMultiResults | clientPSMultiResult)
+	if deprecateEOF {
+		capabilities |= clientDeprecateEOF
+	}
+	response := make([]byte, 4+4+1+23)
+	binary.LittleEndian.PutUint32(response, capabilities)
+	binary.LittleEndian.PutUint32(response[4:], 1<<24)
+	response[8] = 45 // utf8mb4_general_ci
+	response = append(response, "dump"...)
+	token := nativeToken(salt, "111")
+	response = append(response, 0, byte(len(token)))
+	response = append(response, token...)
+	response = append(response, "mysql_native_password\x00"...)
+	if err := w.write(1, response); err != nil {
+		return err
+	}
+	auth, err := w.read()
+	if err != nil {
+		return err
+	}
+	if len(auth) > 0 && auth[0] == 0xfe {
+		pluginEnd := -1
+		for i := 1; i < len(auth); i++ {
+			if auth[i] == 0 {
+				pluginEnd = i
+				break
+			}
+		}
+		if pluginEnd < 0 || string(auth[1:pluginEnd]) != "mysql_native_password" {
+			return fmt.Errorf("unsupported auth switch: %q", auth)
+		}
+		switchSalt := auth[pluginEnd+1:]
+		if len(switchSalt) > 0 && switchSalt[len(switchSalt)-1] == 0 {
+			switchSalt = switchSalt[:len(switchSalt)-1]
+		}
+		if err := w.write(3, nativeToken(switchSalt, "111")); err != nil {
+			return err
+		}
+		auth, err = w.read()
+		if err != nil {
+			return err
+		}
+	}
+	if len(auth) == 0 || auth[0] != 0 {
+		return fmt.Errorf("login failed: %q", auth)
+	}
+	return nil
+}
+
+func (w cursorWire) prepare(query string, deprecateEOF bool) (uint32, error) {
+	if err := w.command(0x16, []byte(query)); err != nil {
+		return 0, err
+	}
+	response, err := w.read()
+	if err != nil {
+		return 0, err
+	}
+	if len(response) < 12 || response[0] != 0 {
+		return 0, fmt.Errorf("prepare failed: %q", response)
+	}
+	id := binary.LittleEndian.Uint32(response[1:5])
+	columns := binary.LittleEndian.Uint16(response[5:7])
+	params := binary.LittleEndian.Uint16(response[7:9])
+	if columns != 1 || params != 0 {
+		return 0, fmt.Errorf("unexpected prepare metadata: columns=%d params=%d", columns, params)
+	}
+	if _, err := w.read(); err != nil { // one column definition
+		return 0, err
+	}
+	if !deprecateEOF {
+		if _, err := w.read(); err != nil { // metadata EOF
+			return 0, err
+		}
+	}
+	return id, nil
+}
+
+func eofStatus(data []byte) (uint16, error) {
+	if len(data) < 5 || data[0] != 0xfe || len(data) >= 9 {
+		return 0, fmt.Errorf("expected FETCH EOF/OK, got %x", data)
+	}
+	return binary.LittleEndian.Uint16(data[3:5]), nil
+}
+
+func (w cursorWire) executeCursor(id uint32) error {
+	payload := make([]byte, 9)
+	binary.LittleEndian.PutUint32(payload, id)
+	payload[4] = 1 // CURSOR_TYPE_READ_ONLY
+	binary.LittleEndian.PutUint32(payload[5:], 1)
+	if err := w.command(0x17, payload); err != nil {
+		return err
+	}
+	count, err := w.read()
+	if err != nil {
+		return err
+	}
+	if len(count) != 1 || count[0] != 1 {
+		return fmt.Errorf("unexpected cursor column count: %x", count)
+	}
+	if _, err := w.read(); err != nil { // column definition
+		return err
+	}
+	// A cursor EXECUTE has no row stream. Its sole EOF/OK follows the column
+	// definition and already carries CURSOR_EXISTS, even in legacy EOF mode.
+	end, err := w.read()
+	if err != nil {
+		return err
+	}
+	status, err := eofStatus(end)
+	if err != nil {
+		return err
+	}
+	if status&cursorExists == 0 {
+		return fmt.Errorf("cursor execute lacks CURSOR_EXISTS: %x", status)
+	}
+	return nil
+}
+
+func (w cursorWire) fetch(id uint32, size uint32) ([]uint64, uint16, error) {
+	payload := make([]byte, 8)
+	binary.LittleEndian.PutUint32(payload, id)
+	binary.LittleEndian.PutUint32(payload[4:], size)
+	if err := w.command(0x1c, payload); err != nil {
+		return nil, 0, err
+	}
+	var values []uint64
+	for {
+		data, err := w.read()
+		if err != nil {
+			return nil, 0, err
+		}
+		if len(data) > 0 && data[0] == 0xfe && len(data) < 9 {
+			status, err := eofStatus(data)
+			return values, status, err
+		}
+		if len(data) != 10 || data[0] != 0 || data[1] != 0 {
+			return nil, 0, fmt.Errorf("unexpected binary cursor row: %x", data)
+		}
+		values = append(values, binary.LittleEndian.Uint64(data[2:]))
+	}
+}
+
+func workState(admin *sql.DB, cn string, state int) error {
+	var result string
+	err := admin.QueryRow("select mo_ctl('cn', 'WORKSTATE', ?)", fmt.Sprintf("%s:%d", cn, state)).Scan(&result)
+	if err == nil {
+		fmt.Printf("CN %s work state %d: %s\n", cn, state, strings.TrimSpace(result))
+	}
+	return err
+}
+
+func runMode(admin *sql.DB, proxyAddr, cn1, cn2 string, deprecateEOF bool) (retErr error) {
+	mode := "legacy EOF"
+	if deprecateEOF {
+		mode = "deprecated EOF"
+	}
+	table := fmt.Sprintf("issue_29182.raw_cursor_%d", time.Now().UnixNano())
+	if _, err := admin.Exec("create database if not exists issue_29182"); err != nil {
+		return err
+	}
+	if _, err := admin.Exec("create table " + table + " (id bigint primary key)"); err != nil {
+		return err
+	}
+	defer func() {
+		retErr = errors.Join(retErr, workState(admin, cn1, 1), workState(admin, cn2, 1))
+		_, err := admin.Exec("drop table " + table)
+		retErr = errors.Join(retErr, err)
+		fmt.Printf("%s: restored CN states and dropped %s\n", mode, table)
+	}()
+	for start := 1; start <= probeRows; start += 500 {
+		var insert strings.Builder
+		insert.WriteString("insert into " + table + " values ")
+		for id := start; id < start+500; id++ {
+			if id > start {
+				insert.WriteByte(',')
+			}
+			fmt.Fprintf(&insert, "(%d)", id)
+		}
+		if _, err := admin.Exec(insert.String()); err != nil {
+			return err
+		}
+	}
+	if err := workState(admin, cn1, 2); err != nil {
+		return err
+	}
+	time.Sleep(16 * time.Second)
+	conn, err := net.DialTimeout("tcp", proxyAddr, 10*time.Second)
+	if err != nil {
+		return err
+	}
+	defer conn.Close()
+	if err := conn.SetDeadline(time.Now().Add(3 * time.Minute)); err != nil {
+		return err
+	}
+	w := cursorWire{Conn: conn}
+	if err := w.login(deprecateEOF); err != nil {
+		return err
+	}
+	fmt.Printf("%s: Proxy login succeeded\n", mode)
+	id, err := w.prepare("select id from "+table+" order by id", deprecateEOF)
+	if err != nil {
+		return err
+	}
+	fmt.Printf("%s: prepared statement %d\n", mode, id)
+	defer w.command(0x19, []byte{byte(id), byte(id >> 8), byte(id >> 16), byte(id >> 24)})
+	if err := w.executeCursor(id); err != nil {
+		return err
+	}
+	fmt.Printf("%s: server cursor opened\n", mode)
+	first, status, err := w.fetch(id, 13)
+	if err != nil {
+		return err
+	}
+	if len(first) != 13 || status&cursorExists == 0 {
+		return fmt.Errorf("%s: first FETCH failed: rows=%d status=%x", mode, len(first), status)
+	}
+	if err := workState(admin, cn1, 1); err != nil {
+		return err
+	}
+	if err := workState(admin, cn2, 2); err != nil {
+		return err
+	}
+	time.Sleep(16 * time.Second)
+	next := uint64(1)
+	for {
+		for _, value := range first {
+			if value != next {
+				return fmt.Errorf("%s: lost, duplicate or reordered row: got %d want %d", mode, value, next)
+			}
+			next++
+		}
+		if status&lastRowSent != 0 {
+			break
+		}
+		first, status, err = w.fetch(id, 13)
+		if err != nil {
+			return err
+		}
+	}
+	if next != probeRows+1 {
+		return fmt.Errorf("%s: received %d rows, want %d", mode, next-1, probeRows)
+	}
+	fmt.Printf("%s: ordered cursor rows=%d; no loss or duplication\n", mode, next-1)
+	time.Sleep(16 * time.Second)
+	if err := w.command(0x0e, nil); err != nil { // COM_PING on the same socket
+		return err
+	}
+	pong, err := w.read()
+	if err != nil || len(pong) == 0 || pong[0] != 0 {
+		return fmt.Errorf("%s: same-connection PING failed: %x: %w", mode, pong, err)
+	}
+	fmt.Printf("%s: same-connection PING succeeded after cursor disposal\n", mode)
+	return nil
+}
+
+func main() {
+	proxyAddr := flag.String("proxy", "127.0.0.1:6001", "Proxy SQL address")
+	cn1Addr := flag.String("cn1", "127.0.0.1:16001", "CN1 SQL address")
+	cn1 := flag.String("cn1-id", "dd1dccb4-4d3c-41f8-b482-5251dc7a41bf", "CN1 UUID")
+	cn2 := flag.String("cn2-id", "dd2dccb4-4d3c-41f8-b482-5251dc7a41be", "CN2 UUID")
+	flag.Parse()
+	admin, err := sql.Open("mysql", "dump:111@tcp("+*cn1Addr+")/")
+	if err != nil {
+		panic(err)
+	}
+	defer admin.Close()
+	for _, deprecateEOF := range []bool{false, true} {
+		if err := runMode(admin, *proxyAddr, *cn1, *cn2, deprecateEOF); err != nil {
+			panic(err)
+		}
+	}
+}

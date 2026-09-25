@@ -22,7 +22,12 @@ import (
 	"testing"
 	"time"
 
+	"github.com/matrixorigin/matrixone/pkg/bootstrap/versions"
+	"github.com/matrixorigin/matrixone/pkg/catalog"
 	"github.com/matrixorigin/matrixone/pkg/embed"
+	"github.com/matrixorigin/matrixone/pkg/tests/testutils"
+	"github.com/matrixorigin/matrixone/pkg/util/executor"
+	"github.com/matrixorigin/matrixone/pkg/util/sysview"
 	"github.com/stretchr/testify/require"
 )
 
@@ -343,6 +348,37 @@ func TestViewDescriptionSubscription(t *testing.T) {
 		_, err = subscriber.ExecContext(ctx, "create database subscribed from sys publication view_description_publication")
 		require.NoError(t, err)
 		defer func() { _, err := subscriber.ExecContext(ctx, "drop database subscribed"); require.NoError(t, err) }()
+		// Simulate a tenant whose V58 COLUMNS definition has not yet been migrated,
+		// while all SQL and table functions execute on this newer CN.
+		var tenantID uint32
+		require.NoError(t, sys.QueryRowContext(ctx,
+			"select account_id from mo_catalog.mo_account where account_name='view_description_sub'").Scan(&tenantID))
+		sqlExecutor := testutils.GetSQLExecutor(cn)
+		replaceColumns := func(ctx context.Context, ddl string) error {
+			return sqlExecutor.ExecTxn(ctx, func(txn executor.TxnExecutor) error {
+				for _, statement := range []string{"drop view if exists information_schema.COLUMNS", ddl} {
+					res, execErr := txn.Exec(statement, versions.UpgradeStatementOption(tenantID))
+					if execErr != nil {
+						return execErr
+					}
+					res.Close()
+				}
+				return nil
+			}, executor.Options{}.WithDatabase(catalog.MO_CATALOG).
+				WithAccountID(tenantID).WithWaitCommittedLogApplied())
+		}
+		defer func() {
+			restoreCtx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
+			defer cancel()
+			require.NoError(t, replaceColumns(restoreCtx, sysview.InformationSchemaColumnsDDL))
+		}()
+		require.NoError(t, replaceColumns(ctx, sysview.InformationSchemaColumnsV58DDL()))
+		var legacyColumn string
+		require.NoError(t, subscriber.QueryRowContext(ctx,
+			"select column_name from information_schema.columns where table_schema='subscribed' and table_name='v'").Scan(&legacyColumn))
+		require.Equal(t, "x", legacyColumn)
+		require.NoError(t, replaceColumns(ctx, sysview.InformationSchemaColumnsDDL))
+
 		exec("alter table view_description_pub.src modify column x varchar(60)")
 		var field, typ, nullable, key, defaultValue, extra, comment sql.NullString
 		require.NoError(t, subscriber.QueryRowContext(ctx, "desc subscribed.v").Scan(
