@@ -100,6 +100,7 @@ type StatementOption struct {
 	ignoreCheckExperimental  bool
 	params                   []string
 	paramNulls               []bool
+	preparedParamValues      []ParamValue
 	alterCopyOpt             *plan.AlterCopyOpt
 	disableDropAutoIncrement bool
 	skipDataBranchReclaim    bool

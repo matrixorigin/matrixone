@@ -2312,7 +2312,18 @@ func (c *Compile) populateCreatedTable(qry *plan.CreateTable, isTemp bool, dbNam
 		if !numericPrefixPlan {
 			clear(numericPrefixPositions)
 		}
-		if params := c.proc.GetPrepareParams(); c.pn.IsPrepare && params != nil && params.Length() > 0 {
+		params := c.proc.GetPrepareParams()
+		transportCount := 0
+		if params != nil {
+			transportCount = params.Length()
+		}
+		if len(c.preparedParamValues) > 0 &&
+			(!c.pn.IsPrepare || transportCount != len(c.preparedParamValues)) {
+			return moerr.NewInternalErrorf(c.proc.Ctx,
+				"CTAS prepared parameter count mismatch: semantic=%d, transport=%d",
+				len(c.preparedParamValues), transportCount)
+		}
+		if c.pn.IsPrepare && params != nil && params.Length() > 0 {
 			values := make([]string, params.Length())
 			nulls := make([]bool, params.Length())
 			for i := range values {
@@ -2327,6 +2338,21 @@ func (c *Compile) populateCreatedTable(qry *plan.CreateTable, isTemp bool, dbNam
 				}
 			}
 			statementOption = statementOption.WithParamsAndNulls(values, nulls)
+			if len(c.preparedParamValues) > 0 {
+				semantic := make([]executor.ParamValue, len(values))
+				for i, value := range c.preparedParamValues {
+					param, ok := value.(plan2.ParamValue)
+					if !ok {
+						return moerr.NewInternalErrorf(c.proc.Ctx,
+							"CTAS prepared parameter %d has no semantic value", i)
+					}
+					if numericPrefixPositions[i] && !nulls[i] {
+						param.Value = values[i]
+					}
+					semantic[i] = param
+				}
+				statementOption = statementOption.WithPreparedParamValues(semantic)
+			}
 		}
 		res, err := func() (executor.Result, error) {
 			oldCtx := c.proc.Ctx
@@ -3738,6 +3764,13 @@ func (s *Scope) TruncateTable(c *Compile) error {
 	}
 
 	if !isTemp && c.proc.GetTxnOperator().Txn().IsPessimistic() {
+		// DROP ACCOUNT takes the SNAPSHOT lifecycle lock before cleaning up
+		// cluster tables. Take the same row lock before the table locks to
+		// prevent an inverted lock order. Keep the later write barrier after
+		// snapshot advancement for lineage publication.
+		if err := c.lockDataBranchLineageOwnerLifecyclePessimistic(); err != nil {
+			return err
+		}
 		var err error
 		if e := lockMoTable(c, db, table, lock.LockMode_Exclusive); e != nil {
 			if !moerr.IsMoErrCode(e, moerr.ErrTxnNeedRetry) &&

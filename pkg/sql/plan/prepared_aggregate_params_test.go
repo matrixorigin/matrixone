@@ -39,6 +39,33 @@ func buildPreparedAggregatePlan(t *testing.T, sql string) *planpb.Prepare {
 	return prepare
 }
 
+func TestPreparedBinaryStateMarkersUseVarbinaryDomain(t *testing.T) {
+	for _, sql := range []string{
+		"select hll_cardinality(?)",
+		"select hll_merge_agg(?) from nation",
+		"select bitmap_or_agg(?) from nation",
+	} {
+		t.Run(sql, func(t *testing.T) {
+			prepare := buildPreparedAggregatePlan(t, sql)
+			require.Equal(t, []int32{0}, preparedParamPositions(prepare))
+			name := "hll_cardinality"
+			if sql == "select hll_merge_agg(?) from nation" {
+				name = "hll_merge_agg"
+			} else if sql == "select bitmap_or_agg(?) from nation" {
+				name = "bitmap_or_agg"
+			}
+			fn := findPlanFunctionExpr(prepare.Plan, name)
+			require.NotNil(t, fn)
+			require.Len(t, fn.GetF().Args, 1)
+			arg := fn.GetF().Args[0]
+			require.Equal(t, int32(types.T_varbinary), arg.Typ.Id)
+			require.Zero(t, arg.Typ.Width, "opaque state cast must not impose the SQL VARBINARY width")
+			require.Equal(t, "cast", arg.GetF().GetFunc().GetObjName())
+			require.Equal(t, int32(types.T_text), arg.GetF().Args[0].Typ.Id)
+		})
+	}
+}
+
 func TestPreparedPercentileParameters(t *testing.T) {
 	for _, sql := range []string{
 		"select approx_percentile(n_nationkey, ?) from nation",

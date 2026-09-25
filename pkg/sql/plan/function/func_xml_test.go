@@ -23,6 +23,7 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/container/vector"
 	"github.com/matrixorigin/matrixone/pkg/pb/plan"
 	"github.com/matrixorigin/matrixone/pkg/testutil"
+	"github.com/matrixorigin/matrixone/pkg/vm/process"
 	"github.com/stretchr/testify/require"
 )
 
@@ -155,27 +156,39 @@ func TestXMLUpdateOracle(t *testing.T) {
 	}
 }
 
-func TestXMLUpdateTextUnsupported(t *testing.T) {
+func TestXMLUpdateTextTargets(t *testing.T) {
 	proc := testutil.NewProcess(t)
 	defer proc.Free()
-	for _, path := range []string{"/a/text()", "//text()", "/a//text()", "/a|/a//text()"} {
-		doc, err := vector.NewConstBytes(types.T_varchar.ToType(), []byte(`<a>x<b>y</b></a>`), 1, proc.Mp())
-		xpath, xpathErr := vector.NewConstBytes(types.T_varchar.ToType(), []byte(path), 1, proc.Mp())
-		replacement, replacementErr := vector.NewConstBytes(types.T_varchar.ToType(), []byte("z"), 1, proc.Mp())
-		require.NoError(t, err)
-		t.Cleanup(func() { doc.Free(proc.Mp()) })
-		require.NoError(t, xpathErr)
-		t.Cleanup(func() { xpath.Free(proc.Mp()) })
-		require.NoError(t, replacementErr)
-		t.Cleanup(func() { replacement.Free(proc.Mp()) })
-		result := vector.NewFunctionResultWrapper(types.T_varchar.ToType(), proc.Mp())
-		t.Cleanup(result.Free)
-		require.NoError(t, result.PreExtendAndReset(1))
-		err = UpdateXML([]*vector.Vector{doc, xpath, replacement}, result, proc, 1, nil)
-		require.ErrorContains(t, err, "UpdateXML text() target is unsupported", path)
+	for _, tc := range []struct {
+		name, xml, path, want string
+	}{
+		{"root", `<a>x</a>`, "/a/text()", "q"},
+		{"nested", `<a><b>x</b></a>`, "/a/b/text()", `<a>q</a>`},
+		{"empty element", `<a/>`, "/a/text()", "q"},
+		{"split text", `<a>x<b/>z</a>`, "/a/text()", "q"},
+		{"CDATA", `<a><![CDATA[x]]></a>`, "/a/text()", "q"},
+		{"two targets", `<a><b>x</b><b>y</b></a>`, "/a/b/text()", `<a><b>x</b><b>y</b></a>`},
+		{"missing", `<a/>`, "/missing/text()", `<a/>`},
+		{"union dedup", `<a>x</a>`, "/a/text()|/a", "q"},
+		{"union two targets", `<a><b>x</b></a>`, "/a/text()|/a/b/text()", `<a><b>x</b></a>`},
+		{"descendant single", `<a>x</a>`, "/a//text()", "q"},
+		{"descendant multiple", `<a>x<b>y</b></a>`, "/a//text()", `<a>x<b>y</b></a>`},
+		{"document and element", `<a>x</a>`, "//text()", `<a>x</a>`},
+		{"document only", `plain`, "//text()", "q"},
+		{"attribute context", `<a k="7"/>`, "/a/@k/text()", `<a q/>`},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			fc := NewFunctionTestCase(proc, []FunctionTestInput{
+				NewFunctionTestInput(types.T_varchar.ToType(), []string{tc.xml}, nil),
+				NewFunctionTestConstInput(types.T_varchar.ToType(), []string{tc.path}, nil),
+				NewFunctionTestInput(types.T_varchar.ToType(), []string{"q"}, nil),
+			}, NewFunctionTestResult(types.T_varchar.ToType(), false, []string{tc.want}, nil), UpdateXML)
+			ok, info := fc.Run()
+			require.True(t, ok, info)
+		})
 	}
 	doc := vector.NewConstNull(types.T_varchar.ToType(), 1, proc.Mp())
-	xpath, err := vector.NewConstBytes(types.T_varchar.ToType(), []byte("/a|/a//text()"), 1, proc.Mp())
+	xpath, err := vector.NewConstBytes(types.T_varchar.ToType(), []byte("/a/text()"), 1, proc.Mp())
 	replacement := vector.NewConstNull(types.T_varchar.ToType(), 1, proc.Mp())
 	require.NoError(t, err)
 	t.Cleanup(func() { doc.Free(proc.Mp()) })
@@ -185,7 +198,8 @@ func TestXMLUpdateTextUnsupported(t *testing.T) {
 	t.Cleanup(result.Free)
 	require.NoError(t, result.PreExtendAndReset(1))
 	err = UpdateXML([]*vector.Vector{doc, xpath, replacement}, result, proc, 1, nil)
-	require.ErrorContains(t, err, "UpdateXML text() target is unsupported")
+	require.NoError(t, err)
+	require.True(t, result.GetResultVector().IsNull(0))
 }
 
 func TestXMLMalformedAndUnsupported(t *testing.T) {
@@ -293,6 +307,67 @@ func TestXMLVectorWarningsMasksAndReuse(t *testing.T) {
 	require.Equal(t, "1", result.GetResultVector().GetStringAt(0))
 	require.NoError(t, result.PreExtendAndReset(0))
 	require.NoError(t, ExtractValue([]*vector.Vector{docs, path}, result, proc, 0, nil))
+}
+
+func TestXMLWarningRetentionUsesProcessLimits(t *testing.T) {
+	for _, tc := range []struct {
+		name            string
+		update          bool
+		maxErrorCount   int
+		queryLimit      int64
+		rowCount        int
+		wantRecordCount int
+	}{
+		{name: "extract capacity above default", maxErrorCount: 2048, rowCount: 1100, wantRecordCount: 1100},
+		{name: "extract explicit zero", maxErrorCount: 0, rowCount: 3, wantRecordCount: 0},
+		{
+			name:            "update shared budget",
+			update:          true,
+			maxErrorCount:   2048,
+			queryLimit:      int64(process.WarningDiagnosticRecordBytes("Incorrect XML value: malformed XML fragment")),
+			rowCount:        2,
+			wantRecordCount: 1,
+		},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			proc := testutil.NewProcess(t)
+			defer proc.Free()
+			proc.Base.SessionInfo.MaxErrorCount = tc.maxErrorCount
+			proc.Base.SessionInfo.MaxErrorCountSet = true
+			warnings := &uncompressWarningSink{}
+			proc.WarningSink = warnings
+
+			doc, err := vector.NewConstBytes(types.T_varchar.ToType(), []byte("<a>"), tc.rowCount, proc.Mp())
+			require.NoError(t, err)
+			defer doc.Free(proc.Mp())
+			path, err := vector.NewConstBytes(types.T_varchar.ToType(), []byte("/a"), tc.rowCount, proc.Mp())
+			require.NoError(t, err)
+			defer path.Free(proc.Mp())
+			parameters := []*vector.Vector{doc, path}
+			if tc.update {
+				replacement, replacementErr := vector.NewConstBytes(types.T_varchar.ToType(), []byte("<b/>"), tc.rowCount, proc.Mp())
+				require.NoError(t, replacementErr)
+				defer replacement.Free(proc.Mp())
+				parameters = append(parameters, replacement)
+			}
+			result := vector.NewFunctionResultWrapper(types.T_varchar.ToType(), proc.Mp())
+			defer result.Free()
+			require.NoError(t, result.PreExtendAndReset(tc.rowCount))
+			if tc.queryLimit > 0 {
+				proc.Base.Lim.Size = tc.queryLimit
+			}
+
+			var callErr error
+			if tc.update {
+				callErr = UpdateXML(parameters, result, proc, tc.rowCount, nil)
+			} else {
+				callErr = ExtractValue(parameters, result, proc, tc.rowCount, nil)
+			}
+			require.NoError(t, callErr)
+			require.Equal(t, uint64(tc.rowCount), warnings.total)
+			require.Len(t, warnings.records, tc.wantRecordCount)
+		})
+	}
 }
 
 func TestXMLXPathPrecedesNullDocument(t *testing.T) {
