@@ -761,6 +761,7 @@ func TestAcquirePolicyForCNFlushS3(t *testing.T) {
 		throttler.rssMpoolLiveBase.Store(currentLive)
 		throttler.reserved.Store(8)
 
+		require.Equal(t, int64(0), cnFlushS3PhysicalAvailable(throttler, 8))
 		left, ok := AcquirePolicyForCNFlushS3(throttler, 1)
 		require.False(t, ok)
 		require.Equal(t, int64(0), left)
