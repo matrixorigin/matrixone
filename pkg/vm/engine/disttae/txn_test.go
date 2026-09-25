@@ -1253,7 +1253,13 @@ func TestTransactionRetriesUnpublishedS3CleanupOwners(t *testing.T) {
 
 func TestRollbackRetriesUnpublishedS3CleanupAfterWorkspaceRemoval(t *testing.T) {
 	server := colexec.NewServer("")
-	t.Cleanup(func() { require.NoError(t, server.CloseUnpublishedS3Cleanup(context.Background())) })
+	retryStarted := make(chan struct{})
+	retryRelease := make(chan struct{})
+	var releaseOnce sync.Once
+	t.Cleanup(func() {
+		releaseOnce.Do(func() { close(retryRelease) })
+		require.NoError(t, server.CloseUnpublishedS3Cleanup(context.Background()))
+	})
 	txn := newTransactionWithActivePKTableForTest(t, "pk")
 	defer txn.proc.Free()
 	baseFS, err := colexec.GetSharedFSFromProc(txn.proc)
@@ -1265,7 +1271,10 @@ func TestRollbackRetriesUnpublishedS3CleanupAfterWorkspaceRemoval(t *testing.T) 
 		Policy:   fileservice.SkipAllCache,
 	}))
 	deleteErr := moerr.NewInternalErrorNoCtx("temporary S3 delete failure")
-	fs := &failOnceCloneDeleteFS{FileService: baseFS, failErr: deleteErr}
+	fs := &failOnceCloneDeleteFS{
+		FileService: baseFS, failErr: deleteErr,
+		retryStarted: retryStarted, retryRelease: retryRelease,
+	}
 	owner, err := colexec.NewUnpublishedS3ObjectOwner(fs, name)
 	require.NoError(t, err)
 	txn.RetainUnpublishedS3ObjectOwner(owner)
@@ -1275,8 +1284,14 @@ func TestRollbackRetriesUnpublishedS3CleanupAfterWorkspaceRemoval(t *testing.T) 
 	require.True(t, txn.removed, "terminal rollback must retire the workspace")
 	require.False(t, txn.HasUnpublishedS3ObjectOwners(), "the CN must own detached cleanup records")
 	require.Empty(t, txn.unpublishedS3Cleanup)
+	select {
+	case <-retryStarted:
+	case <-time.After(5 * time.Second):
+		t.Fatal("CN retry worker did not attempt the detached cleanup")
+	}
 	_, err = baseFS.StatFile(context.Background(), name)
-	require.NoError(t, err, "the first Delete failed")
+	require.NoError(t, err, "the first Delete failed and the retry is blocked")
+	releaseOnce.Do(func() { close(retryRelease) })
 	require.Eventually(t, func() bool {
 		_, statErr := baseFS.StatFile(context.Background(), name)
 		return moerr.IsMoErrCode(statErr, moerr.ErrFileNotFound)

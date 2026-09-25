@@ -132,9 +132,12 @@ func TestResolveRemoteCompileMPoolCap(t *testing.T) {
 
 type remoteCleanupFailOnceFS struct {
 	fileservice.FileService
-	mu        sync.Mutex
-	remaining int
-	err       error
+	mu           sync.Mutex
+	remaining    int
+	err          error
+	retryOnce    sync.Once
+	retryStarted chan struct{}
+	retryRelease <-chan struct{}
 }
 
 func (fs *remoteCleanupFailOnceFS) Delete(ctx context.Context, names ...string) error {
@@ -145,6 +148,12 @@ func (fs *remoteCleanupFailOnceFS) Delete(ctx context.Context, names ...string) 
 		return fs.err
 	}
 	fs.mu.Unlock()
+	if fs.retryStarted != nil {
+		fs.retryOnce.Do(func() {
+			close(fs.retryStarted)
+			<-fs.retryRelease
+		})
+	}
 	return fs.FileService.Delete(ctx, names...)
 }
 
@@ -174,12 +183,21 @@ func TestRemoteStreamExitRetriesFailedS3Cleanup(t *testing.T) {
 		Policy:   fileservice.SkipAllCache,
 	}))
 	deleteErr := errors.New("temporary S3 delete failure")
-	fs := &remoteCleanupFailOnceFS{FileService: baseFS, remaining: 1, err: deleteErr}
+	retryStarted := make(chan struct{})
+	retryRelease := make(chan struct{})
+	var releaseOnce sync.Once
+	fs := &remoteCleanupFailOnceFS{
+		FileService: baseFS, remaining: 1, err: deleteErr,
+		retryStarted: retryStarted, retryRelease: retryRelease,
+	}
 	owner, err := colexec.NewUnpublishedS3ObjectOwner(fs, objectName)
 	require.NoError(t, err)
 	workspace := &remoteOwnerCleanupWorkspace{owner: owner}
 	server := colexec.NewServer("")
-	t.Cleanup(func() { require.NoError(t, server.CloseUnpublishedS3Cleanup(context.Background())) })
+	t.Cleanup(func() {
+		releaseOnce.Do(func() { close(retryRelease) })
+		require.NoError(t, server.CloseUnpublishedS3Cleanup(context.Background()))
+	})
 	session := &lifecycleTestSession{ctx: context.Background()}
 	lifecycle, err := registerPipelineStreamLifecycle(session, 409, newPipelineBatchFlow(1, 1024))
 	require.NoError(t, err)
@@ -197,15 +215,21 @@ func TestRemoteStreamExitRetriesFailedS3Cleanup(t *testing.T) {
 	decoded, ok := rpcMessage.TryToGetMoErr()
 	require.True(t, ok)
 	require.True(t, moerr.IsMoErrCode(decoded, moerr.ErrDuplicateEntry), "%v", decoded)
-	require.Equal(t, int32(1), workspace.calls.Load())
+	select {
+	case <-retryStarted:
+	case <-time.After(5 * time.Second):
+		t.Fatal("CN retry worker did not attempt the transferred cleanup")
+	}
+	require.Equal(t, int32(2), workspace.calls.Load())
 	_, err = baseFS.StatFile(proc.Ctx, objectName)
-	require.NoError(t, err)
+	require.NoError(t, err, "the first Delete failed and the retry is blocked")
 
-	// The stream and its mirror transaction leave the handler before the CN
-	// retry worker runs. No test call invokes workspace cleanup a second time.
+	// The stream and its mirror transaction leave the handler while the CN
+	// retry holds the remaining owner. No test call retries cleanup directly.
 	lifecycle.remove()
 	_, registered := pipelineStreamLifecycles.Load(pipelineStreamLifecycleKey{session: session, id: 409})
 	require.False(t, registered)
+	releaseOnce.Do(func() { close(retryRelease) })
 	require.Eventually(t, func() bool {
 		_, statErr := baseFS.StatFile(proc.Ctx, objectName)
 		return moerr.IsMoErrCode(statErr, moerr.ErrFileNotFound)
