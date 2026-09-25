@@ -111,7 +111,7 @@ func TestNewCDCStatementBuilder_ValidationAndStrategy(t *testing.T) {
 		}
 		builder, err := NewCDCStatementBuilder("库`名", "order", def, 1024, false)
 		require.NoError(t, err)
-		require.Equal(t, "INSERT INTO `库``名`.`order` VALUES ", string(builder.insertStem))
+		require.Equal(t, "INSERT INTO `库``名`.`order` (`select`,`a``b````c`) VALUES ", string(builder.insertStem))
 		require.Equal(t, " ON DUPLICATE KEY UPDATE `select`=VALUES(`select`),`a``b````c`=VALUES(`a``b````c`);", string(builder.insertSuffix))
 		require.Equal(t, "DELETE FROM `库``名`.`order` WHERE `select` IN (", string(builder.deleteStem))
 	})
@@ -132,10 +132,10 @@ func TestNewCDCStatementBuilder_ValidationAndStrategy(t *testing.T) {
 			builder, err := NewCDCStatementBuilder("db", "users", def, 1024, true)
 			require.NoError(t, err)
 			if tc.replace {
-				require.Equal(t, "REPLACE INTO `db`.`users` VALUES ", string(builder.insertStem))
+				require.Equal(t, "REPLACE INTO `db`.`users` (`id`,`name`) VALUES ", string(builder.insertStem))
 				require.Equal(t, ";", string(builder.insertSuffix))
 			} else {
-				require.Equal(t, "INSERT INTO `db`.`users` VALUES ", string(builder.insertStem))
+				require.Equal(t, "INSERT INTO `db`.`users` (`id`,`name`) VALUES ", string(builder.insertStem))
 				require.Contains(t, string(builder.insertSuffix), "ON DUPLICATE KEY UPDATE")
 			}
 		})
@@ -203,7 +203,7 @@ func TestCDCStatementBuilder_InsertExactSQLAndOwnership(t *testing.T) {
 	sqls, err := builder.BuildInsertSQL(context.Background(), bat, builderFromTS, builderToTS)
 	require.NoError(t, err)
 	require.Len(t, sqls, 1)
-	require.Equal(t, "/* [100-0, 200-0) */ INSERT INTO `test_db`.`users` VALUES (1,'Alice'),(2,'') ON DUPLICATE KEY UPDATE `id`=VALUES(`id`),`name`=VALUES(`name`);", unpaddedSQL(sqls[0]))
+	require.Equal(t, "/* [100-0, 200-0) */ INSERT INTO `test_db`.`users` (`id`,`name`) VALUES (1,'Alice'),(2,'') ON DUPLICATE KEY UPDATE `id`=VALUES(`id`),`name`=VALUES(`name`);", unpaddedSQL(sqls[0]))
 	require.Less(t, cap(sqls[0]), 1024, "capacity must follow payload, not an unused uint64 limit")
 
 	before := append([]byte(nil), sqls[0]...)
@@ -318,7 +318,7 @@ func testInsertBoundsAndPostFlush(t *testing.T, useReplace bool) {
 				if useReplace {
 					verb, suffix = "REPLACE", ";"
 				}
-				require.Equal(t, fmt.Sprintf("/* [100-0, 200-0) */ %s INTO `db`.`t` VALUES (%d,'%s')%s", verb, tc.ids[i], tc.names[i], suffix), unpaddedSQL(sql))
+				require.Equal(t, fmt.Sprintf("/* [100-0, 200-0) */ %s INTO `db`.`t` (`id`,`name`) VALUES (%d,'%s')%s", verb, tc.ids[i], tc.names[i], suffix), unpaddedSQL(sql))
 			}
 			first := append([]byte(nil), sqls[0]...)
 			sqls[1][v2SQLBufReserved] = 'X'
@@ -459,7 +459,7 @@ func TestCDCStatementBuilder_AtomicInsertOrderAndDedup(t *testing.T) {
 	require.NoError(t, err)
 	require.Len(t, sqls, 1)
 	require.Equal(t, 1, atomic.DuplicateRows())
-	require.Equal(t, "/* [1-0, 4-0) */ INSERT INTO `db`.`t` VALUES (1,'test'),(2,'test'),(3,'test') ON DUPLICATE KEY UPDATE `id`=VALUES(`id`),`name`=VALUES(`name`);", unpaddedSQL(sqls[0]))
+	require.Equal(t, "/* [1-0, 4-0) */ INSERT INTO `db`.`t` (`id`,`name`) VALUES (1,'test'),(2,'test'),(3,'test') ON DUPLICATE KEY UPDATE `id`=VALUES(`id`),`name`=VALUES(`name`);", unpaddedSQL(sqls[0]))
 }
 
 func TestCDCStatementBuilder_EmptyInputs(t *testing.T) {

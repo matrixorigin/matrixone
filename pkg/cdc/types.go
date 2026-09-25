@@ -288,6 +288,8 @@ const (
 	// source-case metadata. Legacy runners must not claim these tasks.
 	CDCTaskExtraOptions_SourcePatternProtocol = "_SourcePatternProtocol"
 	CDCSourcePatternProtocolV1                = "source-pattern-v1"
+	CDCTaskExtraOptions_GenerationProtocol    = "_GenerationProtocol"
+	CDCGenerationAwareProtocolV1              = "generation-aware-v1"
 )
 
 var CDCRequestOptions = []string{
@@ -327,19 +329,19 @@ func FinalizeInitialSnapshotOptions(extraOpts map[string]any) {
 
 // ValidateStableInitialSnapshotProtocol is the common creation barrier for all
 // frontend and compiler entry points. The stable executor depends on catalog
-// fields installed only after the cluster-wide protocol reaches v48.
+// fields and reliable target collation metadata installed after protocol v58.
 func ValidateStableInitialSnapshotProtocol(
 	ctx context.Context,
 	stable bool,
 	protocolVersion int64,
 ) error {
-	if !stable || protocolVersion >= defines.MORPCVersion48 {
+	if !stable || protocolVersion >= defines.MORPCVersion58 {
 		return nil
 	}
 	return moerr.NewNotSupportedf(
 		ctx,
 		"bounded CDC initial snapshots require all CNs to support protocol version %d",
-		defines.MORPCVersion48,
+		defines.MORPCVersion58,
 	)
 }
 
@@ -592,6 +594,10 @@ type DbTableInfo struct {
 	// ownerFence is execution-local and deliberately excluded from Clone and
 	// all persisted table metadata. It protects target initialization DDL.
 	ownerFence *OwnerFence
+	// targetInitAck runs while the sink owns the target DDL lock, before a
+	// generation-aware reader can be published.
+	targetInitAck func(context.Context) error
+	targetReady   bool
 }
 
 func (info *DbTableInfo) SetOwnerFence(fence *OwnerFence) {
@@ -600,6 +606,11 @@ func (info *DbTableInfo) SetOwnerFence(fence *OwnerFence) {
 
 func (info *DbTableInfo) OwnerFence() *OwnerFence {
 	return info.ownerFence
+}
+
+func (info *DbTableInfo) SetTargetAdmission(ready bool, ack func(context.Context) error) {
+	info.targetReady = ready
+	info.targetInitAck = ack
 }
 
 func (info DbTableInfo) String() string {

@@ -190,22 +190,17 @@ type TblMap map[string]*DbTableInfo
 
 type TableCallback func(map[uint32]TblMap) error
 
-// cloneTableSnapshot gives each subscriber an immutable view of a scan. The
-// detector retains ownership of its maps and may consume one-shot generation
-// markers while another subscriber is still processing its callback.
-func cloneTableSnapshot(src map[uint32]TblMap) map[uint32]TblMap {
+// cloneTableSnapshot copies only the subscribed account. Each callback gets
+// independent descriptors while unrelated tenants add no fan-out cost.
+func cloneTableSnapshot(src TblMap) TblMap {
 	if src == nil {
 		return nil
 	}
-	dst := make(map[uint32]TblMap, len(src))
-	for accountID, tables := range src {
-		clonedTables := make(TblMap, len(tables))
-		for key, info := range tables {
-			if info != nil {
-				clonedTables[key] = info.Clone()
-			}
+	dst := make(TblMap, len(src))
+	for key, info := range src {
+		if info != nil {
+			dst[key] = info.Clone()
 		}
-		dst[accountID] = clonedTables
 	}
 	return dst
 }
@@ -732,10 +727,18 @@ func (s *TableDetector) processCallback(ctx context.Context, tables map[uint32]T
 	// Snapshot under the detector lock. ClearTableIdChanged replaces entries
 	// in the published map under the same lock; cloning outside it would race
 	// with that map write even though each subscriber receives its own copy.
-	tablesSnapshot := cloneTableSnapshot(tables)
-	callbacks := make([]TableCallback, 0, len(s.Callbacks))
-	for _, cb := range s.Callbacks {
-		callbacks = append(callbacks, cb)
+	type subscriber struct {
+		callback TableCallback
+		account  uint32
+	}
+	callbacks := make([]subscriber, 0, len(s.Callbacks))
+	tablesSnapshot := make(map[uint32]TblMap, len(s.SubscribedAccountIds))
+	for id, cb := range s.Callbacks {
+		account := s.CallBackAccountId[id]
+		if _, copied := tablesSnapshot[account]; !copied {
+			tablesSnapshot[account] = cloneTableSnapshot(tables[account])
+		}
+		callbacks = append(callbacks, subscriber{cb, account})
 	}
 	s.mu.Unlock()
 
@@ -774,8 +777,11 @@ func (s *TableDetector) processCallback(ctx context.Context, tables map[uint32]T
 		}
 	}()
 
-	for _, cb := range callbacks {
-		if cbErr := cb(cloneTableSnapshot(tablesSnapshot)); cbErr != nil {
+	for _, subscriber := range callbacks {
+		view := map[uint32]TblMap{
+			subscriber.account: cloneTableSnapshot(tablesSnapshot[subscriber.account]),
+		}
+		if cbErr := subscriber.callback(view); cbErr != nil {
 			err = cbErr
 		}
 	}

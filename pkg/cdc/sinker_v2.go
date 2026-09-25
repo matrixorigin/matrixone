@@ -16,7 +16,10 @@ package cdc
 
 import (
 	"context"
+	"database/sql"
+	"errors"
 	"fmt"
+	"regexp"
 	"strings"
 	"sync"
 	"sync/atomic"
@@ -233,8 +236,14 @@ func createMysqlSinker2(
 		return nil, err
 	}
 
-	// DROP TABLE if table ID changed (truncate scenario)
-	if dbTblInfo.IdChanged {
+	// A durable generation acknowledgement owns target state. A detector hint
+	// must not drop a target that already belongs to this generation.
+	if dbTblInfo.targetReady {
+		if err = verifyCDCTargetTable(ctx, executor, dbTblInfo, tableDef, sinkUri.SinkTyp); err != nil {
+			executor.Close()
+			return nil, err
+		}
+	} else if dbTblInfo.IdChanged {
 		dropTableSQL := fmt.Sprintf("DROP TABLE IF EXISTS %s", quoteSQLIdentifier(dbTblInfo.SinkTblName))
 		err = executor.ExecSQL(ctx, ar, addPadding(dropTableSQL), false)
 		if err != nil {
@@ -270,10 +279,24 @@ func createMysqlSinker2(
 		createSql = strings.Replace(createSql, "CREATE TABLE", "CREATE TABLE IF NOT EXISTS", 1)
 	}
 
-	err = executor.ExecSQL(ctx, ar, addPadding(createSql), false)
-	if err != nil {
-		executor.Close()
-		return nil, err
+	if !dbTblInfo.targetReady {
+		err = executor.ExecSQL(ctx, ar, addPadding(createSql), false)
+		if err != nil {
+			executor.Close()
+			return nil, err
+		}
+		if ownerFence != nil {
+			if err = verifyCDCTargetTable(ctx, executor, dbTblInfo, tableDef, sinkUri.SinkTyp); err != nil {
+				executor.Close()
+				return nil, err
+			}
+		}
+		if dbTblInfo.targetInitAck != nil {
+			if err = dbTblInfo.targetInitAck(ctx); err != nil {
+				executor.Close()
+				return nil, err
+			}
+		}
 	}
 	if targetOwnerFence != nil {
 		if err = executor.ReleaseTargetLock(); err != nil {
@@ -321,6 +344,244 @@ func createMysqlSinker2(
 	)
 
 	return sinker, nil
+}
+
+func verifyCDCTargetTable(
+	ctx context.Context,
+	executor *Executor,
+	info *DbTableInfo,
+	tableDef *plan.TableDef,
+	sinkType string,
+) error {
+	if executor.targetLockConn == nil {
+		return moerr.NewInternalError(ctx, "CDC target verification requires the target lock")
+	}
+	if tableDef == nil || tableDef.Pkey == nil || len(tableDef.Pkey.Names) == 0 {
+		return moerr.NewInternalError(ctx, "CDC target verification requires source table metadata and a primary key")
+	}
+	visible := make([]*plan.ColDef, 0, len(tableDef.Cols))
+	origin := make(map[string]string, len(tableDef.Cols))
+	for _, col := range tableDef.Cols {
+		if col == nil {
+			return moerr.NewInternalError(ctx, "CDC source has a nil column")
+		}
+		if _, internal := catalog.InternalColumns[col.Name]; internal || col.Hidden {
+			continue
+		}
+		visible = append(visible, col)
+		origin[col.Name] = col.GetOriginCaseName()
+	}
+	rows, err := executor.targetLockConn.QueryContext(ctx,
+		"SELECT column_name, column_type, collation_name FROM information_schema.columns "+
+			"WHERE table_schema = ? AND table_name = ? ORDER BY ordinal_position",
+		info.SinkDbName, info.SinkTblName)
+	if err != nil {
+		return retryableCDCTargetMetadataError(err)
+	}
+	columnCount := 0
+	for rows.Next() {
+		var name, typ string
+		var collation sql.NullString
+		if err = rows.Scan(&name, &typ, &collation); err != nil {
+			break
+		}
+		if columnCount >= len(visible) || name != visible[columnCount].GetOriginCaseName() ||
+			!cdcTargetColumnTypeMatches(visible[columnCount].Typ, typ, sinkType) {
+			err = moerr.NewInternalErrorf(ctx, "CDC target %s.%s column %d differs from source generation %d",
+				info.SinkDbName, info.SinkTblName, columnCount+1, info.SourceTblId)
+			break
+		}
+		if expected := expectedCDCTargetCollation(visible[columnCount].Typ); expected != "" &&
+			(!collation.Valid || !strings.EqualFold(collation.String, expected)) {
+			err = moerr.NewInternalErrorf(ctx, "CDC target %s.%s column %d collation differs from source generation %d",
+				info.SinkDbName, info.SinkTblName, columnCount+1, info.SourceTblId)
+			break
+		}
+		columnCount++
+	}
+	if err == nil {
+		err = retryableCDCTargetMetadataError(rows.Err())
+	}
+	closeErr := rows.Close() //nolint:sqlclosecheck // Check the close error before the next metadata query.
+	if err != nil {
+		return err
+	}
+	if closeErr != nil {
+		return retryableCDCTargetMetadataError(closeErr)
+	}
+	if columnCount != len(visible) {
+		return moerr.NewInternalErrorf(ctx, "CDC target %s.%s has %d columns; expected %d",
+			info.SinkDbName, info.SinkTblName, columnCount, len(visible))
+	}
+
+	indexRows, err := executor.targetLockConn.QueryContext(ctx,
+		"SELECT index_name, non_unique, seq_in_index, column_name, sub_part FROM information_schema.statistics "+
+			"WHERE table_schema = ? AND table_name = ? ORDER BY index_name, seq_in_index",
+		info.SinkDbName, info.SinkTblName)
+	if err != nil {
+		return retryableCDCTargetMetadataError(err)
+	}
+	actualPrimary := []string(nil)
+	actualUnique := make(map[string][]string)
+	for indexRows.Next() {
+		var name, column string
+		var nonUnique, sequence int64
+		var prefix sql.NullInt64
+		if err = indexRows.Scan(&name, &nonUnique, &sequence, &column, &prefix); err != nil {
+			break
+		}
+		if nonUnique != 0 {
+			continue
+		}
+		if prefix.Valid {
+			err = moerr.NewInternalErrorf(ctx, "CDC target %s.%s has a prefix unique key", info.SinkDbName, info.SinkTblName)
+			break
+		}
+		if strings.EqualFold(name, "PRIMARY") {
+			if sequence != int64(len(actualPrimary)+1) {
+				err = moerr.NewInternalError(ctx, "CDC target primary key order is invalid")
+				break
+			}
+			actualPrimary = append(actualPrimary, column)
+		} else {
+			parts := actualUnique[name]
+			if sequence != int64(len(parts)+1) {
+				err = moerr.NewInternalError(ctx, "CDC target unique key order is invalid")
+				break
+			}
+			actualUnique[name] = append(parts, column)
+		}
+	}
+	if err == nil {
+		err = retryableCDCTargetMetadataError(indexRows.Err())
+	}
+	closeErr = indexRows.Close() //nolint:sqlclosecheck // Check the close error before accepting the target.
+	if err != nil {
+		return err
+	}
+	if closeErr != nil {
+		return retryableCDCTargetMetadataError(closeErr)
+	}
+	expectedPrimary := make([]string, 0, len(tableDef.Pkey.Names))
+	for _, name := range tableDef.Pkey.Names {
+		expectedPrimary = append(expectedPrimary, origin[name])
+	}
+	if strings.Join(actualPrimary, "\x00") != strings.Join(expectedPrimary, "\x00") {
+		return moerr.NewInternalErrorf(ctx, "CDC target %s.%s primary key differs from source generation %d",
+			info.SinkDbName, info.SinkTblName, info.SourceTblId)
+	}
+	expectedUnique := make(map[string]int)
+	for _, index := range tableDef.Indexes {
+		if index == nil || !index.Unique {
+			continue
+		}
+		parts := make([]string, 0, len(index.Parts))
+		for _, name := range index.Parts {
+			if catalog.IsAlias(name) {
+				continue
+			}
+			parts = append(parts, origin[name])
+		}
+		expectedUnique[strings.Join(parts, "\x00")]++
+	}
+	for _, parts := range actualUnique {
+		key := strings.Join(parts, "\x00")
+		if expectedUnique[key] == 0 {
+			return moerr.NewInternalErrorf(ctx, "CDC target %s.%s has an unexpected unique key",
+				info.SinkDbName, info.SinkTblName)
+		}
+		expectedUnique[key]--
+	}
+	for _, missing := range expectedUnique {
+		if missing != 0 {
+			return moerr.NewInternalErrorf(ctx, "CDC target %s.%s is missing a source unique key",
+				info.SinkDbName, info.SinkTblName)
+		}
+	}
+	return nil
+}
+
+func retryableCDCTargetMetadataError(err error) error {
+	if err == nil || errors.Is(err, context.Canceled) {
+		return err
+	}
+	return NewRetryableSnapshotEpochError(err)
+}
+
+// VerifyOwnedTarget checks a completed historical generation without issuing
+// target DDL. The target lock excludes a concurrent claimant's reset.
+func VerifyOwnedTarget(
+	ctx context.Context, sinkUri UriInfo, accountID uint64, taskID string,
+	info *DbTableInfo, tableDef *plan.TableDef, fence *OwnerFence, timeout string,
+) error {
+	if fence == nil {
+		return moerr.NewInternalError(ctx, "CDC target verification requires an owner fence")
+	}
+	executor, err := NewExecutor(ctx, sinkUri.User, sinkUri.Password, sinkUri.Ip, sinkUri.Port,
+		CDCDefaultRetryTimes, CDCDefaultRetryDuration, timeout, false)
+	if err != nil {
+		return err
+	}
+	defer executor.Close()
+	identity := fmt.Sprintf("%d\x00%s\x00%s\x00%s", accountID, taskID, info.SinkDbName, info.SinkTblName)
+	if err = executor.AcquireTargetLock(ctx, identity, fence.Check, fence.Check); err != nil {
+		return err
+	}
+	if err = verifyCDCTargetTable(ctx, executor, info, tableDef, sinkUri.SinkTyp); err != nil {
+		return err
+	}
+	if err = fence.Check(ctx); err != nil {
+		return err
+	}
+	return executor.ReleaseTargetLock()
+}
+
+var (
+	cdcIntegerDisplayWidth = regexp.MustCompile(`(tinyint|smallint|mediumint|bigint|int)(unsigned)?\([0-9]+\)`)
+	cdcScalarZeroWidth     = regexp.MustCompile(`(float|double|date|datetime|timestamp|time|bool|json)\(0\)`)
+)
+
+func normalizeCDCTargetColumnType(raw string) string {
+	if at := strings.IndexByte(raw, '('); at >= 0 && strings.ContainsAny(raw[at:], "'\"") {
+		// ENUM/SET values are data. Folding spaces or aliases inside quoted
+		// elements could admit a different target domain.
+		return strings.ToLower(strings.TrimSpace(raw[:at])) + raw[at:]
+	}
+	typ := strings.ToLower(strings.Join(strings.Fields(raw), ""))
+	if strings.HasPrefix(typ, "integer") {
+		typ = "int" + strings.TrimPrefix(typ, "integer")
+	}
+	typ = cdcScalarZeroWidth.ReplaceAllString(typ, "$1")
+	if typ == "boolean" {
+		return "bool"
+	}
+	return cdcIntegerDisplayWidth.ReplaceAllString(typ, "$1$2")
+}
+
+func cdcTargetColumnTypeMatches(source plan.Type, target, sinkType string) bool {
+	want := normalizeCDCTargetColumnType(plan2.FormatColType(source))
+	got := normalizeCDCTargetColumnType(target)
+	if want == got {
+		return true
+	}
+	return types.T(source.Id) == types.T_bool && sinkType == CDCSinkType_MySQL &&
+		strings.EqualFold(strings.TrimSpace(target), "tinyint(1)")
+}
+
+func expectedCDCTargetCollation(typ plan.Type) string {
+	switch types.T(typ.Id) {
+	case types.T_char, types.T_varchar, types.T_text:
+		switch typ.Charset {
+		case uint32(types.CharsetLegacy), uint32(types.CharsetUTF8MB4Bin):
+			return "utf8mb4_bin"
+		case uint32(types.CharsetUTF8):
+			return "utf8mb4_general_ci"
+		case uint32(types.CharsetBinary):
+			return "binary"
+		}
+		return "unsupported source collation"
+	}
+	return ""
 }
 
 // NewMysqlSinker2 creates a new improved MySQL sinker

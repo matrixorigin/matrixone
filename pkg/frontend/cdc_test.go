@@ -962,11 +962,13 @@ func TestValidateStableInitialSnapshotProtocol(t *testing.T) {
 	require.NoError(t, validateStableInitialSnapshotProtocol(
 		context.Background(), false, defines.MORPCVersion46))
 	require.NoError(t, validateStableInitialSnapshotProtocol(
-		context.Background(), true, defines.MORPCVersion48))
+		context.Background(), true, defines.MORPCVersion58))
 	err := validateStableInitialSnapshotProtocol(
-		context.Background(), true, defines.MORPCVersion47)
+		context.Background(), true, defines.MORPCVersion57)
 	require.Error(t, err)
 	require.True(t, moerr.IsMoErrCode(err, moerr.ErrNotSupported))
+	require.Error(t, validateStableInitialSnapshotProtocol(
+		context.Background(), true, defines.MORPCVersion48))
 }
 
 func TestValidateLosslessNoFullStartProtocolBoundary(t *testing.T) {
@@ -5422,7 +5424,7 @@ func TestCdcTask_RestartFromFailedUpdatesFailedMetrics(t *testing.T) {
 	require.Equal(t, failedBefore, readFrontendGaugeValue(t, failedGauge))
 }
 
-func TestCdcTask_RestartClearsPermanentTableErrorAndRecovers(t *testing.T) {
+func TestCdcTask_RestartKeepsAmbiguousLegacyTaskFailed(t *testing.T) {
 	ctrl := gomock.NewController(t)
 	defer ctrl.Finish()
 
@@ -5473,9 +5475,7 @@ func TestCdcTask_RestartClearsPermanentTableErrorAndRecovers(t *testing.T) {
 		})
 	defer stubSinker.Reset()
 
-	u, _ := cdc.InitCDCWatermarkUpdaterForTest(t)
-	u.Start()
-	defer u.Stop()
+	u := cdc.NewCDCWatermarkUpdater(t.Name(), &claimLossWatermarkCatalog{deleted: true})
 
 	tableMap := map[uint32]cdc.TblMap{
 		0: {
@@ -5536,12 +5536,13 @@ func TestCdcTask_RestartClearsPermanentTableErrorAndRecovers(t *testing.T) {
 		return err
 	}
 
-	require.NoError(t, cdcTask.Restart())
-	require.NoError(t, <-restartDone)
+	require.Error(t, cdcTask.Restart())
+	require.Error(t, <-restartDone)
+	require.Equal(t, StateFailed, cdcTask.stateMachine.State())
 	require.True(t, executor.tableErrorsAreCleared())
 
 	sqls := executor.capturedExecSQLs()
-	require.Len(t, sqls, 3)
+	require.GreaterOrEqual(t, len(sqls), 3)
 	require.Contains(t, sqls[0], "SET state = 'failed'")
 	// The retry explicitly reopens the failure state before it clears table
 	// errors, so a prior timed-out/retried restart cannot remain admitted as
@@ -5550,6 +5551,7 @@ func TestCdcTask_RestartClearsPermanentTableErrorAndRecovers(t *testing.T) {
 	require.Contains(t, sqls[1], "AND state = 'failed'")
 	require.Contains(t, sqls[2], "UPDATE `mo_catalog`.`mo_cdc_watermark` SET err_msg = ''")
 	require.Contains(t, sqls[2], "task-1")
+	require.Contains(t, strings.Join(sqls, "\n"), "legacy CDC target generation is unknown")
 
 	cdcTask.activeRoutine.CloseCancel()
 	if val, ok := cdcTask.runningReaders.Load("db1.tb1"); ok {
@@ -6306,144 +6308,30 @@ func (m mockSinker) Close() {
 
 func (m mockSinker) ClearError() {}
 
-func TestCdcTask_addExecPipelineForTable(t *testing.T) {
-	u, _ := cdc.InitCDCWatermarkUpdaterForTest(t)
-	u.Start()
-	defer u.Stop()
-	cdcTask := &CDCTaskExecutor{
-		activeRoutine:    cdc.NewCdcActiveRoutine(), // Required for reader.Run()
-		watermarkUpdater: u,
-		startTs:          types.BuildTS(100, 1),
-		runningReaders:   &sync.Map{},
-		noFull:           true,
-		additionalConfig: map[string]interface{}{
-			cdc.CDCTaskExtraOptions_MaxSqlLength:         float64(cdc.CDCDefaultTaskExtra_MaxSQLLen),
-			cdc.CDCTaskExtraOptions_SendSqlTimeout:       cdc.CDCDefaultSendSqlTimeout,
-			cdc.CDCTaskExtraOptions_InitSnapshotSplitTxn: cdc.CDCDefaultTaskExtra_InitSnapshotSplitTxn,
-			cdc.CDCTaskExtraOptions_Frequency:            "",
-		},
+func TestLegacyCDCAdmissionRequiresGeneration(t *testing.T) {
+	catalog := &claimLossWatermarkCatalog{deleted: true}
+	updater := cdc.NewCDCWatermarkUpdater(t.Name(), catalog)
+	taskExecutor := &CDCTaskExecutor{
 		spec: &task.CreateCdcDetails{
+			TaskId: "legacy-task", TaskName: "legacy-task",
 			Accounts: []*task.Account{{Id: 0}},
 		},
-	}
-
-	info := &cdc.DbTableInfo{
-		SourceDbId:      0,
-		SourceDbName:    "",
-		SourceTblId:     0,
-		SourceTblName:   "",
-		SourceCreateSql: "",
-		SinkDbName:      "",
-		SinkTblName:     "",
-	}
-
-	ctrl := gomock.NewController(t)
-	defer ctrl.Finish()
-	txnOperator := mock_frontend.NewMockTxnOperator(ctrl)
-	txnOperator.EXPECT().SnapshotTS().Return(timestamp.Timestamp{}).AnyTimes()
-
-	// Stub GetTxnOp to prevent nil pointer in TableChangeStream.Run()
-	stubGetTxnOp := gostub.Stub(&cdc.GetTxnOp, func(_ context.Context, _ engine.Engine, _ client.TxnClient, _ string) (client.TxnOperator, error) {
-		return nil, nil
-	})
-	defer stubGetTxnOp.Reset()
-
-	stubFinishTxnOp := gostub.Stub(&cdc.FinishTxnOp, func(ctx context.Context, inputErr error, txnOp client.TxnOperator, cnEngine engine.Engine) {})
-	defer stubFinishTxnOp.Reset()
-
-	stubGetTxn := gostub.Stub(&cdc.GetTxn, func(ctx context.Context, cnEngine engine.Engine, txnOp client.TxnOperator) error {
-		return nil
-	})
-	defer stubGetTxn.Reset()
-
-	stubGetTableDef := gostub.Stub(&cdc.GetTableDef, func(context.Context, client.TxnOperator, engine.Engine, uint64) (*plan.TableDef, error) {
-		// Return a valid tableDef to prevent panic in NewTableChangeStream
-		return &plan.TableDef{
-			Cols: []*plan.ColDef{
-				{Name: "id"},
-				{Name: "ts"},
-			},
-			Pkey: &plan.PrimaryKeyDef{
-				Names: []string{"id"},
-			},
-			Name2ColIndex: map[string]int32{
-				"id": 0,
-				"ts": 1,
-			},
-		}, nil
-	})
-	defer stubGetTableDef.Reset()
-
-	stubSinker := gostub.Stub(
-		&cdc.NewSinker,
-		func(
-			context.Context,
-			cdc.UriInfo,
-			uint64,
-			string,
-			*cdc.DbTableInfo,
-			*cdc.CDCWatermarkUpdater,
-			*plan.TableDef,
-			int,
-			time.Duration,
-			*cdc.ActiveRoutine,
-			uint64,
-			string,
-		) (cdc.Sinker, error) {
-			return &mockSinker{}, nil
-		})
-	defer stubSinker.Reset()
-
-	// Don't stub NewTableChangeStream - let it create a real reader
-	// The real reader needs proper initialization which the mocks above don't provide
-	// So the reader will be created but Run() might fail - which is OK for this test
-	// The test just checks that addExecPipelineForTable returns without error
-
-	ctx, cancel := context.WithCancel(context.Background())
-	defer cancel()
-
-	assert.NoError(t, cdcTask.addExecPipelineForTable(ctx, info, txnOperator, nil))
-
-	// Get the created reader from runningReaders and wait for it to complete
-	// This ensures the goroutine finishes before test cleanup
-	key := cdc.GenDbTblKey(info.SourceDbName, info.SourceTblName)
-	if val, ok := cdcTask.runningReaders.Load(key); ok {
-		if reader, ok := val.(cdc.ChangeReader); ok {
-			// Cancel the context to stop the reader
-			cancel()
-			// Wait for the reader goroutine to finish
-			reader.Wait()
-		}
-	}
-
-	// Legacy NoFull rows must consult durable progress before creating a reader.
-	// The test executor intentionally lacks the newer source_table_id column,
-	// so the progress probe returns an error before any pipeline is admitted.
-	legacyTask := &CDCTaskExecutor{
+		ie:               &captureCDCExecutor{},
+		watermarkUpdater: updater,
 		activeRoutine:    cdc.NewCdcActiveRoutine(),
-		watermarkUpdater: u,
 		runningReaders:   &sync.Map{},
+		stateMachine:     NewExecutorStateMachine(),
+		startTs:          types.BuildTS(100, 1),
 		noFull:           true,
-		additionalConfig: cdcTask.additionalConfig,
-		spec: &task.CreateCdcDetails{
-			Accounts: []*task.Account{{Id: 0}},
-		},
 	}
-	require.Error(t, legacyTask.addExecPipelineForTable(ctx, info, txnOperator, nil))
-}
-
-func TestEffectiveCDCStartTSUsesLegacyDurableProgress(t *testing.T) {
-	durableProgress := types.BuildTS(100, 5)
-	admission := types.BuildTS(200, 1)
-
-	assert.Equal(t, durableProgress, effectiveCDCStartTS(types.TS{}, durableProgress, true))
-	assert.Equal(t, admission, effectiveCDCStartTS(admission, durableProgress, false))
-	assert.Equal(t, types.TS{}, effectiveCDCStartTS(types.TS{}, types.TS{}, true))
-	assert.Equal(t, durableProgress, legacyNoFullStartTS(durableProgress, true, admission))
-	assert.Equal(t, admission, legacyNoFullStartTS(types.TS{}, false, admission),
-		"a legacy table discovered after upgrade starts at its admission snapshot")
-	assert.Equal(t, admission, legacyNoFullStartTS(types.TS{}, true, admission),
-		"an empty legacy watermark must not become an empty reader boundary")
+	info := &cdc.DbTableInfo{SourceDbName: "db", SourceTblName: "t", SourceTblId: 42}
+	require.NoError(t, taskExecutor.stateMachine.Transition(TransitionStart))
+	require.NoError(t, taskExecutor.stateMachine.Transition(TransitionStartSuccess))
+	err := taskExecutor.addExecPipelineForTable(context.Background(), info, nil, nil)
+	require.ErrorContains(t, err, "legacy CDC target generation is unknown")
+	require.Equal(t, StateFailed, taskExecutor.stateMachine.State())
+	_, hasReader := taskExecutor.runningReaders.Load("db.t")
+	require.False(t, hasReader)
 }
 
 func TestCdcTask_checkPitr(t *testing.T) {

@@ -1033,10 +1033,12 @@ func TestValidateStableInitialSnapshotProtocol(t *testing.T) {
 	require.NoError(t, ValidateStableInitialSnapshotProtocol(
 		context.Background(), false, defines.MORPCVersion47))
 	require.NoError(t, ValidateStableInitialSnapshotProtocol(
-		context.Background(), true, defines.MORPCVersion48))
+		context.Background(), true, defines.MORPCVersion58))
 	err := ValidateStableInitialSnapshotProtocol(
-		context.Background(), true, defines.MORPCVersion47)
-	require.ErrorContains(t, err, "protocol version 48")
+		context.Background(), true, defines.MORPCVersion57)
+	require.ErrorContains(t, err, "protocol version 58")
+	require.Error(t, ValidateStableInitialSnapshotProtocol(
+		context.Background(), true, defines.MORPCVersion48))
 }
 
 func TestValidateLosslessNoFullStartProtocolBoundary(t *testing.T) {

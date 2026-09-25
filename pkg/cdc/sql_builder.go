@@ -943,6 +943,29 @@ func (b cdcSQLBuilder) ClaimWatermarkOwnerSQL(key *WatermarkKey, ownerGeneration
 	)
 }
 
+// AcknowledgeTargetGenerationSQL records the generation only after target DDL
+// has committed. The owner and prior generation predicates make the update
+// idempotent across takeover and reject a late old reader/admission.
+func (b cdcSQLBuilder) AcknowledgeTargetGenerationSQL(
+	key *WatermarkKey,
+	ownerGeneration, previousGeneration, sourceGeneration uint64,
+	watermark types.TS,
+) string {
+	return fmt.Sprintf(
+		"UPDATE `mo_catalog`.`mo_cdc_watermark` AS w "+
+			"INNER JOIN (SELECT account_id, task_id FROM `mo_catalog`.`mo_cdc_task` "+
+			"WHERE account_id = %d AND task_id = '%s' FOR UPDATE) AS t "+
+			"ON t.account_id = w.account_id AND t.task_id = w.task_id "+
+			"SET w.source_table_id = %d, w.watermark = '%s' "+
+			"WHERE w.account_id = %d AND w.task_id = '%s' AND w.db_name = '%s' "+
+			"AND w.table_name = '%s' AND w.owner_generation = %d AND w.source_table_id = %d",
+		key.AccountId, escapeSQLString(key.TaskId), sourceGeneration,
+		watermark.ToString(), key.AccountId, escapeSQLString(key.TaskId),
+		escapeSQLString(key.DBName), escapeSQLString(key.TableName),
+		ownerGeneration, previousGeneration,
+	)
+}
+
 func (b cdcSQLBuilder) GetWatermarkOwnerProgressSQL(key *WatermarkKey) string {
 	return fmt.Sprintf(
 		"SELECT owner_generation, watermark, source_table_id FROM `mo_catalog`.`mo_cdc_watermark` WHERE account_id = %d AND task_id = '%s' AND db_name = '%s' AND table_name = '%s'",

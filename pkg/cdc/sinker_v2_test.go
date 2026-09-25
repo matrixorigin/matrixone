@@ -1224,7 +1224,7 @@ func TestCreateMysqlSinker2(t *testing.T) {
 		require.Equal(t, "DROP TABLE IF EXISTS `sink``table`", sinker.executor.debugTxnRecorder.txnSQL[2])
 		require.Contains(t, sinker.executor.debugTxnRecorder.txnSQL[3], "CREATE TABLE IF NOT EXISTS `sink``db`.`sink``table`")
 		require.Contains(t, sinker.executor.debugTxnRecorder.txnSQL[3], "UNIQUE KEY `uk``name` (`name``col`)")
-		require.Equal(t, "REPLACE INTO `sink``db`.`sink``table` VALUES ", string(sinker.builder.insertStem))
+		require.Equal(t, "REPLACE INTO `sink``db`.`sink``table` (`id``pk`,`name``col`) VALUES ", string(sinker.builder.insertStem))
 	})
 
 	t.Run("NewExecutorFails", func(t *testing.T) {

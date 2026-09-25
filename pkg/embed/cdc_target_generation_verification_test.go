@@ -1,0 +1,186 @@
+// Copyright 2026 Matrix Origin
+//
+// Licensed under the Apache License, Version 2.0 (the "License");
+// you may not use this file except in compliance with the License.
+// You may obtain a copy of the License at
+//
+//     http://www.apache.org/licenses/LICENSE-2.0
+//
+// Unless required by applicable law or agreed to in writing, software
+// distributed under the License is distributed on an "AS IS" BASIS,
+// WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+// See the License for the specific language governing permissions and
+// limitations under the License.
+
+package embed
+
+import (
+	"context"
+	"database/sql"
+	"fmt"
+	"reflect"
+	"testing"
+	"time"
+
+	"github.com/matrixorigin/matrixone/pkg/catalog"
+	"github.com/matrixorigin/matrixone/pkg/cdc"
+	"github.com/matrixorigin/matrixone/pkg/container/types"
+	"github.com/matrixorigin/matrixone/pkg/defines"
+	"github.com/matrixorigin/matrixone/pkg/frontend"
+	"github.com/matrixorigin/matrixone/pkg/pb/plan"
+	ie "github.com/matrixorigin/matrixone/pkg/util/internalExecutor"
+	"github.com/stretchr/testify/require"
+)
+
+func TestCDCTargetGenerationVerificationOnMO(t *testing.T) {
+	RunSingleCNBaseClusterTests(t, func(cluster Cluster) {
+		cn, err := cluster.GetCNService(0)
+		require.NoError(t, err)
+		port := cn.GetServiceConfig().CN.Frontend.Port
+		db, err := sql.Open("mysql", fmt.Sprintf("dump:111@tcp(127.0.0.1:%d)/", port))
+		require.NoError(t, err)
+		defer db.Close()
+		ctx, cancel := context.WithTimeout(t.Context(), 2*time.Minute)
+		defer cancel()
+		conn, err := db.Conn(ctx)
+		require.NoError(t, err)
+		defer conn.Close()
+		_, err = conn.ExecContext(ctx, "CREATE DATABASE IF NOT EXISTS cdc_generation_verify")
+		require.NoError(t, err)
+		defer func() {
+			cleanupCtx, cleanupCancel := context.WithTimeout(context.Background(), 10*time.Second)
+			defer cleanupCancel()
+			_, _ = conn.ExecContext(cleanupCtx, "DROP DATABASE IF EXISTS cdc_generation_verify")
+		}()
+		_, err = conn.ExecContext(ctx, "CREATE TABLE cdc_generation_verify.good (id INT PRIMARY KEY, v VARCHAR(20) COLLATE utf8mb4_bin, UNIQUE KEY uk_v(v))")
+		require.NoError(t, err)
+		_, err = conn.ExecContext(ctx, "CREATE TABLE cdc_generation_verify.bad (id INT PRIMARY KEY, v VARCHAR(20) COLLATE utf8mb4_general_ci, UNIQUE KEY uk_v(v))")
+		require.NoError(t, err)
+
+		source := &plan.TableDef{
+			Cols: []*plan.ColDef{
+				{Name: "id", Typ: plan.Type{Id: int32(types.T_int32)}},
+				{Name: "v", Typ: plan.Type{Id: int32(types.T_varchar), Width: 20, Charset: uint32(types.CharsetUTF8MB4Bin)}},
+			},
+			Pkey:    &plan.PrimaryKeyDef{Names: []string{"id"}},
+			Indexes: []*plan.IndexDef{{IndexName: "uk_v", Parts: []string{"v"}, Unique: true}},
+		}
+		sink := cdc.UriInfo{SinkTyp: cdc.CDCSinkType_MO, User: "dump", Password: "111", Ip: "127.0.0.1", Port: int(port)}
+		fence := cdc.NewOwnerFenceForGeneration(time.UnixMicro(1), func(context.Context) error { return nil })
+		good := &cdc.DbTableInfo{SinkDbName: "cdc_generation_verify", SinkTblName: "good", SourceTblId: 42}
+		require.NoError(t, cdc.VerifyOwnedTarget(ctx, sink, 0, "verify", good, source, fence, cdc.CDCDefaultSendSqlTimeout))
+		bad := &cdc.DbTableInfo{SinkDbName: "cdc_generation_verify", SinkTblName: "bad", SourceTblId: 42}
+		require.ErrorContains(t, cdc.VerifyOwnedTarget(ctx, sink, 0, "verify", bad, source, fence, cdc.CDCDefaultSendSqlTimeout), "collation differs")
+	})
+}
+
+func TestCDCGenerationReplacementOnMO(t *testing.T) {
+	RunSingleCNBaseClusterTests(t, func(cluster Cluster) {
+		cn, err := cluster.GetCNService(0)
+		require.NoError(t, err)
+		port := cn.GetServiceConfig().CN.Frontend.Port
+		root, err := sql.Open("mysql", fmt.Sprintf("dump:111@tcp(127.0.0.1:%d)/", port))
+		require.NoError(t, err)
+		defer root.Close()
+		ctx, cancel := context.WithTimeout(t.Context(), 3*time.Minute)
+		defer cancel()
+		_, err = root.ExecContext(ctx, "CREATE ACCOUNT IF NOT EXISTS cdc_generation_probe ADMIN_NAME 'admin' IDENTIFIED BY '111'")
+		require.NoError(t, err)
+		defer func() {
+			cleanupCtx, cleanupCancel := context.WithTimeout(context.Background(), 10*time.Second)
+			defer cleanupCancel()
+			_, _ = root.ExecContext(cleanupCtx, "DROP ACCOUNT IF EXISTS cdc_generation_probe")
+		}()
+		account, err := sql.Open("mysql", fmt.Sprintf("cdc_generation_probe#admin:111@tcp(127.0.0.1:%d)/", port))
+		require.NoError(t, err)
+		defer account.Close()
+		_, err = account.ExecContext(ctx, "CREATE DATABASE cdc_generation_src")
+		require.NoError(t, err)
+		defer func() {
+			cleanupCtx, cleanupCancel := context.WithTimeout(context.Background(), 10*time.Second)
+			defer cleanupCancel()
+			_, _ = account.ExecContext(cleanupCtx, "DROP CDC TASK IF EXISTS cdc_generation_task")
+			_, _ = account.ExecContext(cleanupCtx, "DROP PITR IF EXISTS cdc_generation_pitr")
+		}()
+		_, err = account.ExecContext(ctx, "CREATE TABLE cdc_generation_src.t (id INT PRIMARY KEY, v INT)")
+		require.NoError(t, err)
+		_, err = account.ExecContext(ctx, "INSERT INTO cdc_generation_src.t VALUES (1,10),(2,20)")
+		require.NoError(t, err)
+		_, err = account.ExecContext(ctx, "CREATE PITR cdc_generation_pitr FOR DATABASE cdc_generation_src RANGE 2 'h'")
+		require.NoError(t, err)
+		uri := fmt.Sprintf("mysql://cdc_generation_probe#admin:111@127.0.0.1:%d", port)
+		_, err = account.ExecContext(ctx, fmt.Sprintf("CREATE CDC cdc_generation_task '%s' 'matrixone' '%s' 'cdc_generation_src:cdc_generation_dst' {'Level'='database'}", uri, uri))
+		require.NoError(t, err)
+		readRows := func() []int {
+			rows, readErr := account.QueryContext(ctx, "SELECT id FROM cdc_generation_dst.t ORDER BY id")
+			if readErr != nil {
+				return nil
+			}
+			defer rows.Close()
+			var ids []int
+			for rows.Next() {
+				var id int
+				if rows.Scan(&id) != nil {
+					return nil
+				}
+				ids = append(ids, id)
+			}
+			if rows.Err() != nil {
+				return nil
+			}
+			return ids
+		}
+		readProgress := func() (uint64, string, error) {
+			var generation uint64
+			var watermark string
+			err := root.QueryRowContext(ctx,
+				"SELECT w.source_table_id, w.watermark FROM mo_catalog.mo_cdc_watermark AS w "+
+					"JOIN mo_catalog.mo_cdc_task AS t ON t.account_id = w.account_id AND t.task_id = w.task_id "+
+					"WHERE t.task_name = 'cdc_generation_task' AND w.db_name = 'cdc_generation_src' "+
+					"AND w.table_name = 't'").Scan(&generation, &watermark)
+			return generation, watermark, err
+		}
+		require.Eventually(t, func() bool { return reflect.DeepEqual(readRows(), []int{1, 2}) }, 90*time.Second, 250*time.Millisecond)
+		var oldGeneration uint64
+		require.Eventually(t, func() bool {
+			generation, watermark, readErr := readProgress()
+			oldGeneration = generation
+			return readErr == nil && generation > 0 && watermark != "" && watermark != "0-0"
+		}, 30*time.Second, 250*time.Millisecond)
+		_, err = account.ExecContext(ctx, "PAUSE CDC TASK cdc_generation_task")
+		require.NoError(t, err)
+		require.Eventually(t, func() bool {
+			var state string
+			return root.QueryRowContext(ctx,
+				"SELECT state FROM mo_catalog.mo_cdc_task WHERE task_name = 'cdc_generation_task'").Scan(&state) == nil &&
+				state == cdc.CDCState_Paused
+		}, 30*time.Second, 250*time.Millisecond)
+		var accountID uint64
+		var taskID string
+		require.NoError(t, root.QueryRowContext(ctx,
+			"SELECT account_id, task_id FROM mo_catalog.mo_cdc_task WHERE task_name = 'cdc_generation_task'").Scan(&accountID, &taskID))
+		// Exercise the recovery boundary where an old generation checkpoint is
+		// later than the new table's snapshot epoch. The replacement must replay
+		// from its own epoch, never from this retired watermark.
+		futureWatermark := types.BuildTS(4_000_000_000_000_000_000, 0).ToString()
+		catalogExecutor := frontend.NewInternalExecutor(cn.GetServiceConfig().CN.UUID)
+		err = catalogExecutor.Exec(defines.AttachAccountId(ctx, catalog.System_Account),
+			fmt.Sprintf("UPDATE mo_catalog.mo_cdc_watermark SET watermark = '%s' "+
+				"WHERE account_id = %d AND task_id = '%s' AND db_name = 'cdc_generation_src' AND table_name = 't'",
+				futureWatermark, accountID, taskID), ie.SessionOverrideOptions{})
+		require.NoError(t, err)
+		_, err = account.ExecContext(ctx, "DROP TABLE cdc_generation_src.t")
+		require.NoError(t, err)
+		_, err = account.ExecContext(ctx, "CREATE TABLE cdc_generation_src.t (id INT PRIMARY KEY, v INT)")
+		require.NoError(t, err)
+		_, err = account.ExecContext(ctx, "INSERT INTO cdc_generation_src.t VALUES (3,30),(4,40)")
+		require.NoError(t, err)
+		_, err = account.ExecContext(ctx, "RESUME CDC TASK cdc_generation_task")
+		require.NoError(t, err)
+		require.Eventually(t, func() bool { return reflect.DeepEqual(readRows(), []int{3, 4}) }, 90*time.Second, 250*time.Millisecond)
+		require.Eventually(t, func() bool {
+			generation, watermark, readErr := readProgress()
+			return readErr == nil && generation > oldGeneration && watermark != "" && watermark != "0-0"
+		}, 30*time.Second, 250*time.Millisecond)
+	})
+}

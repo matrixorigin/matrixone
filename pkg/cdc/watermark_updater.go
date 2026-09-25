@@ -1635,6 +1635,59 @@ func (u *CDCWatermarkUpdater) ClaimWatermarkOwner(
 	return watermark, generation, nil
 }
 
+// AcknowledgeTargetGeneration is called while the sink still owns its target
+// DDL lock. It advances the durable generation and installs its replay point
+// together, before any reader for the new generation can publish.
+func (u *CDCWatermarkUpdater) AcknowledgeTargetGeneration(
+	ctx context.Context,
+	key *WatermarkKey,
+	fence *OwnerFence,
+	previousGeneration, sourceGeneration uint64,
+	replayPoint types.TS,
+) error {
+	if sourceGeneration == 0 || previousGeneration >= sourceGeneration || fence == nil {
+		return moerr.NewInternalErrorf(ctx, "invalid CDC target generation transition %d -> %d for %s",
+			previousGeneration, sourceGeneration, key.String())
+	}
+	if err := fence.Check(ctx); err != nil {
+		return err
+	}
+	ackCtx, cancel := context.WithTimeoutCause(ctx, snapshotEpochPersistenceTimeout, moerr.CauseWatermarkUpdate)
+	defer cancel()
+	ackCtx = defines.AttachAccountId(ackCtx, catalog.System_Account)
+	if err := u.ie.Exec(ackCtx,
+		CDCSQLBuilder.AcknowledgeTargetGenerationSQL(
+			key, fence.GenerationToken(), previousGeneration, sourceGeneration, replayPoint),
+		ie.SessionOverrideOptions{}); err != nil {
+		return classifySnapshotEpochBackendError(err)
+	}
+	actual, generation, err := u.ClaimWatermarkOwner(ctx, key, fence)
+	if err != nil {
+		return err
+	}
+	if generation != sourceGeneration || !actual.Equal(&replayPoint) {
+		return NewRetryableSnapshotEpochError(moerr.NewInternalErrorf(ctx,
+			"CDC target generation acknowledgement for %s was not durable (wanted %d/%s, got %d/%s)",
+			key.String(), sourceGeneration, replayPoint.ToString(), generation, actual.ToString()))
+	}
+	u.Lock()
+	if active := u.activeWatermarkFence[*key]; active != fence {
+		u.Unlock()
+		return &OwnerFenceLostError{err: moerr.NewInvalidTask(ctx, "CDC target generation owner was superseded locally", fence.GenerationToken())}
+	}
+	delete(u.cacheUncommitted, *key)
+	delete(u.cacheUncommittedGeneration, *key)
+	delete(u.cacheUncommittedFence, *key)
+	delete(u.cacheCommitting, *key)
+	delete(u.cacheCommittingGeneration, *key)
+	delete(u.cacheCommittingFence, *key)
+	delete(u.readKeysBuffer, *key)
+	u.cacheCommitted[*key] = actual
+	u.cacheCommittedGeneration[*key] = generation
+	u.Unlock()
+	return fence.Check(ctx)
+}
+
 func parseWatermarkTS(value string) (types.TS, error) {
 	physicalString, logicalString, ok := strings.Cut(value, "-")
 	if !ok || physicalString == "" || logicalString == "" || strings.Contains(logicalString, "-") {

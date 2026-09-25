@@ -493,13 +493,17 @@ func TestValidateStableInitialSnapshotCompileProtocol(t *testing.T) {
 		}
 	}()
 
-	rt.SetGlobalVariables(moruntime.MOProtocolVersion, defines.MORPCVersion47)
+	rt.SetGlobalVariables(moruntime.MOProtocolVersion, defines.MORPCVersion57)
 	require.ErrorContains(t, validateStableInitialSnapshotCompileProtocol(
-		context.Background(), c, true), "protocol version 48")
+		context.Background(), c, true), "protocol version 58")
 	require.NoError(t, validateStableInitialSnapshotCompileProtocol(
 		context.Background(), c, false))
 
 	rt.SetGlobalVariables(moruntime.MOProtocolVersion, defines.MORPCVersion48)
+	require.ErrorContains(t, validateStableInitialSnapshotCompileProtocol(
+		context.Background(), c, true), "protocol version 58")
+
+	rt.SetGlobalVariables(moruntime.MOProtocolVersion, defines.MORPCVersion58)
 	require.NoError(t, validateStableInitialSnapshotCompileProtocol(
 		context.Background(), c, true))
 

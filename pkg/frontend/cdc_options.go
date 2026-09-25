@@ -284,29 +284,24 @@ func (opts *CDCCreateTaskOptions) ValidateAndFill(
 	if _, ok := extraOpts[cdc.CDCTaskExtraOptions_MaxSqlLength]; !ok {
 		extraOpts[cdc.CDCTaskExtraOptions_MaxSqlLength] = cdc.CDCDefaultTaskExtra_MaxSQLLen
 	}
-	// Only full snapshots need the stable-epoch capability fence. NoFull tasks
-	// with an automatically persisted HLC start also require the new executor
-	// capability; older executors cannot parse the lossless timestamp format.
+	// NoFull tasks with an automatically persisted HLC start also require the
+	// lossless timestamp capability; all new tasks use the generation gate below.
 	if opts.NoFull && opts.StartTs != "" && opts.startTsFromSnapshot {
 		extraOpts[cdc.CDCTaskExtraOptions_InitialSnapshotProtocol] = cdc.CDCInitialSnapshotProtocolNoFullHLC
 	}
-	// Full snapshots use the stable-epoch capability fence. Source patterns
-	// that need lossless bytes or mode-2 case metadata use the same executor
-	// fence even for NoFull tasks; legacy readers would silently drop fields.
-	stable := false
+	// Every new task uses generation-aware catalog state, including atomic full
+	// and explicit-start tasks that do not carry the split-snapshot marker.
 	if !opts.NoFull {
 		cdc.FinalizeInitialSnapshotOptions(extraOpts)
-		_, stable = extraOpts[cdc.CDCTaskExtraOptions_InitialSnapshotProtocol]
 	}
 	sourcePattern := cdc.RequiresSourcePatternProtocol(opts.PitrTables)
 	if sourcePattern {
 		extraOpts[cdc.CDCTaskExtraOptions_SourcePatternProtocol] = cdc.CDCSourcePatternProtocolV1
 	}
-	if stable || sourcePattern {
-		if err = validateStableInitialSnapshotProtocol(
-			ctx, true, currentProtocolVersion(ses.proc)); err != nil {
-			return
-		}
+	extraOpts[cdc.CDCTaskExtraOptions_GenerationProtocol] = cdc.CDCGenerationAwareProtocolV1
+	if err = validateStableInitialSnapshotProtocol(
+		ctx, true, currentProtocolVersion(ses.proc)); err != nil {
+		return
 	}
 	if opts.startTsFromSnapshot {
 		if err = validateLosslessNoFullStartProtocol(ctx, currentProtocolVersion(ses.proc)); err != nil {
