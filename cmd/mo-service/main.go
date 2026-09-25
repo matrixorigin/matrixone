@@ -52,7 +52,7 @@ import (
 	qclient "github.com/matrixorigin/matrixone/pkg/queryservice/client"
 	"github.com/matrixorigin/matrixone/pkg/sql/compile"
 	"github.com/matrixorigin/matrixone/pkg/tnservice"
-	"github.com/matrixorigin/matrixone/pkg/udf/pythonservice"
+	"github.com/matrixorigin/matrixone/pkg/udf/python"
 	"github.com/matrixorigin/matrixone/pkg/util/debug/goroutine"
 	"github.com/matrixorigin/matrixone/pkg/util/export"
 	"github.com/matrixorigin/matrixone/pkg/util/export/table"
@@ -300,7 +300,7 @@ func startService(
 	case metadata.ServiceType_LOG:
 		return startLogService(cfg, stopper, fs, shutdownC)
 	case metadata.ServiceType_PYTHON_UDF:
-		return startPythonUdfService(cfg, stopper)
+		return startPythonUdfWorker(cfg, stopper)
 	default:
 		panic("unknown service type")
 	}
@@ -738,8 +738,8 @@ func waitProxyFileServiceRetry(ctx context.Context, delay time.Duration) error {
 	}
 }
 
-// startPythonUdfService starts the python udf service.
-func startPythonUdfService(cfg *Config, stopper *stopper.Stopper) error {
+// startPythonUdfWorker starts the Python UDF worker.
+func startPythonUdfWorker(cfg *Config, stopper *stopper.Stopper) error {
 	if err := waitClusterCondition(cfg.mustGetServiceUUID(), cfg.HAKeeperClient, waitHAKeeperRunning); err != nil {
 		return err
 	}
@@ -752,22 +752,39 @@ func startPythonUdfService(cfg *Config, stopper *stopper.Stopper) error {
 			finish(err)
 		})
 	}
-	err := stopper.RunNamedTask("python-udf-service", func(ctx context.Context) {
+	err := stopper.RunNamedTask("python-udf-worker", func(ctx context.Context) {
 		var closeErr error
 		defer func() { finishTask(closeErr) }()
 		roleCtx, cancelRole := serviceLifecycle.roleContext(ctx, serviceRolePython)
 		defer cancelRole()
-		s, err := pythonservice.NewService(cfg.PythonUdfServerConfig)
+		s, err := python.NewSupervisor(cfg.PythonUdfWorkerConfig)
 		if err != nil {
 			panic(err)
 		}
 		if err := s.Start(); err != nil {
 			panic(err)
 		}
-		<-roleCtx.Done()
-		if err := s.Close(); err != nil {
-			closeErr = err
-			logutil.GetGlobalLogger().Error("failed to close python udf service", zap.Error(err))
+		workerDone := s.Done()
+		select {
+		case <-roleCtx.Done():
+			if err := s.Close(); err != nil {
+				closeErr = err
+				logutil.GetGlobalLogger().Error("failed to close Python UDF worker", zap.Error(err))
+			}
+		case <-workerDone:
+			// A worker exit while the role is still running leaves CN with a
+			// configured but unusable Python runtime. Surface it as a fatal
+			// service event so the existing lifecycle supervisor drains CN
+			// before the worker dependency and does not accept partial service
+			// availability. A zero exit is still unexpected here.
+			if roleCtx.Err() == nil {
+				workerErr := s.Err()
+				if workerErr == nil {
+					workerErr = errors.New("process exited without an error")
+				}
+				closeErr = fmt.Errorf("python UDF worker exited unexpectedly: %w", workerErr)
+				serviceLifecycle.notifyFatal(closeErr)
+			}
 		}
 	})
 	if err != nil {

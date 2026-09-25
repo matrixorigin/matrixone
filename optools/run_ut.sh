@@ -135,6 +135,58 @@ CGO_CFLAGS="-I${BUILD_WKSP}/cgo -I${THIRDPARTIES_INSTALL_DIR}/include"
 CGO_LDFLAGS="-Wl,-rpath,${THIRDPARTIES_INSTALL_DIR}/lib:${BUILD_WKSP}/cgo -L${THIRDPARTIES_INSTALL_DIR}/lib -L${BUILD_WKSP}/cgo -lmo -lusearch_c -lm"
 LD_LIBRARY_PATH="${THIRDPARTIES_INSTALL_DIR}/lib:${BUILD_WKSP}/cgo"
 
+PYTHON_UDF_DEPS_DIR=""
+
+function cleanup_python_udf_dependencies(){
+    if [[ -n "${PYTHON_UDF_DEPS_DIR}" ]]; then
+        rm -rf -- "${PYTHON_UDF_DEPS_DIR}"
+        PYTHON_UDF_DEPS_DIR=""
+    fi
+}
+
+# UT starts the real Python UDF worker from the host's python3 executable.
+# Keep the fallback dependency installation outside the worktree and clean it
+# up even when the run exits through one of the script's signal handlers.
+trap cleanup_python_udf_dependencies EXIT
+
+function prepare_python_udf_dependencies(){
+    local python3_bin
+    python3_bin=$(command -v python3 || true)
+    if [[ -z "${python3_bin}" ]]; then
+        logger "ERR" "python3 is required for Python UDF UTs"
+        return 1
+    fi
+
+    if "${python3_bin}" -c 'import pyarrow' >/dev/null 2>&1; then
+        logger "INF" "Python UDF UT dependencies are already available"
+        return 0
+    fi
+
+    if ! "${python3_bin}" -m pip --version >/dev/null 2>&1; then
+        logger "ERR" "python3 cannot import pyarrow and its pip module is unavailable"
+        return 1
+    fi
+
+    PYTHON_UDF_DEPS_DIR=$(mktemp -d "${TMPDIR:-/tmp}/matrixone-ut-python.XXXXXX") || {
+        logger "ERR" "failed to create the temporary Python UDF dependency directory"
+        return 1
+    }
+    if ! "${python3_bin}" -m pip install \
+        --isolated --disable-pip-version-check --no-input --no-cache-dir \
+        --only-binary=:all: --target "${PYTHON_UDF_DEPS_DIR}" \
+        -r "${BUILD_WKSP}/pkg/udf/python/worker/requirements.txt"; then
+        logger "ERR" "failed to install Python UDF UT dependencies"
+        return 1
+    fi
+
+    export PYTHONPATH="${PYTHON_UDF_DEPS_DIR}${PYTHONPATH:+:${PYTHONPATH}}"
+    if ! "${python3_bin}" -c 'import pyarrow' >/dev/null 2>&1; then
+        logger "ERR" "Python UDF dependency bootstrap completed but pyarrow is still unavailable"
+        return 1
+    fi
+    logger "INF" "Python UDF UT dependencies installed in ${PYTHON_UDF_DEPS_DIR}"
+}
+
 if [[ -n "${MO_CL_CUDA:-}" ]] ; then
     if [[ ${MO_CL_CUDA} == "1" ]] ; then
          if [[ -z "${CONDA_PREFIX:-}" ]] ; then
@@ -2168,6 +2220,23 @@ function run_tests(){
         return 0
     fi
     mark_ut_stage "routing" "validate shard and package partition" finish 0
+
+    # The Python UDF package belongs to the light stage. Split shards execute
+    # only their selected stage groups; preparing a repository-relative
+    # requirements file in a synthetic heavy-plan harness is both unnecessary
+    # and invalid because that harness intentionally contains no pkg tree.
+    if should_run_ut_stage light; then
+        mark_ut_stage "prepare" "prepare Python UDF dependencies" start
+        prepare_python_udf_dependencies
+        local python_udf_dependency_status=$?
+        mark_ut_stage "prepare" "prepare Python UDF dependencies" finish "${python_udf_dependency_status}"
+        if (( python_udf_dependency_status != 0 )); then
+            UT_TEST_STATUS=1
+            return 0
+        fi
+    else
+        logger "INF" "Skip Python UDF dependency preparation for UT_SHARD=${UT_SHARD}"
+    fi
 
     mark_ut_stage "prepare" "clean go test cache" start
     logger "INF" "Clean go test cache"

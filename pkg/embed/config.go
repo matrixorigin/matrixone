@@ -40,7 +40,7 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/perfcounter"
 	"github.com/matrixorigin/matrixone/pkg/proxy"
 	"github.com/matrixorigin/matrixone/pkg/tnservice"
-	"github.com/matrixorigin/matrixone/pkg/udf/pythonservice"
+	"github.com/matrixorigin/matrixone/pkg/udf/python"
 	"github.com/matrixorigin/matrixone/pkg/util"
 	"github.com/matrixorigin/matrixone/pkg/util/debug/goroutine"
 	tomlutil "github.com/matrixorigin/matrixone/pkg/util/toml"
@@ -94,8 +94,8 @@ type ServiceConfig struct {
 	CN cnservice.Config `toml:"cn"`
 	// ProxyConfig is the config of proxy.
 	ProxyConfig proxy.Config `toml:"proxy"`
-	// PythonUdfServerConfig is the config of python udf server
-	PythonUdfServerConfig pythonservice.Config `toml:"python-udf-server"`
+	// PythonUdfWorkerConfig is the config of the Python UDF worker.
+	PythonUdfWorkerConfig python.Config `toml:"python-udf-worker"`
 	// Observability parameters for the metric/trace
 	Observability config.ObservabilityParameters `toml:"observability"`
 

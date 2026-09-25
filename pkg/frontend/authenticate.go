@@ -30,6 +30,8 @@ import (
 	"sync/atomic"
 	"time"
 
+	"github.com/matrixorigin/matrixone/pkg/util/errutil"
+
 	"github.com/tidwall/btree"
 	"golang.org/x/sync/errgroup"
 
@@ -66,6 +68,8 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/stage"
 	"github.com/matrixorigin/matrixone/pkg/stage/stageutil"
 	"github.com/matrixorigin/matrixone/pkg/taskservice"
+	"github.com/matrixorigin/matrixone/pkg/udf"
+	pythonudf "github.com/matrixorigin/matrixone/pkg/udf/python"
 	"github.com/matrixorigin/matrixone/pkg/util/metric/mometric"
 	v2 "github.com/matrixorigin/matrixone/pkg/util/metric/v2"
 	"github.com/matrixorigin/matrixone/pkg/util/sysview"
@@ -933,6 +937,7 @@ var (
 		"mo_role_grant":               0,
 		"mo_role_privs":               0,
 		"mo_user_defined_function":    0,
+		"mo_function_revisions":       0,
 		"mo_stored_procedure":         0,
 		"mo_mysql_compatibility_mode": 0,
 		"mo_stages":                   0,
@@ -974,6 +979,7 @@ var (
 		"mo_role_grant":                 0,
 		"mo_role_privs":                 0,
 		"mo_user_defined_function":      0,
+		"mo_function_revisions":         0,
 		"mo_stored_procedure":           0,
 		"mo_mysql_compatibility_mode":   0,
 		catalog.MOAutoIncrTable:         0,
@@ -1035,6 +1041,7 @@ var (
 		MoCatalogMoRoleGrantDDL,
 		MoCatalogMoRolePrivsDDL,
 		MoCatalogMoUserDefinedFunctionDDL,
+		MoCatalogMoFunctionRevisionDDL,
 		MoCatalogMoMysqlCompatibilityModeDDL,
 		MoCatalogMoSnapshotsDDL,
 		MoCatalogMoPubsDDL,
@@ -1087,6 +1094,7 @@ var (
 		`drop table if exists mo_catalog.mo_role_grant;`,
 		`drop table if exists mo_catalog.mo_role_privs;`,
 		`drop table if exists mo_catalog.mo_user_defined_function;`,
+		`drop table if exists mo_catalog.mo_function_revisions;`,
 		`drop table if exists mo_catalog.mo_stored_procedure;`,
 		`drop table if exists mo_catalog.mo_stages;`,
 		`drop view if exists mo_catalog.mo_sessions;`,
@@ -1136,6 +1144,34 @@ var (
 		comment) values ('%s','%s', '%s', '%s','%s', '%s');`
 
 	initMoUserDefinedFunctionFormat = `insert into mo_catalog.mo_user_defined_function(
+			name,
+			owner,
+			args,
+			arg_types,
+			canonical_input_descriptor,
+			return_descriptor,
+			signature_key_schema_version,
+			signature_fingerprint,
+			retType,
+			body,
+			language,
+			db,
+			definer,
+			modified_time,
+			created_time,
+			type,
+			security_type,
+			comment,
+			character_set_client,
+			collation_connection,
+			database_collation,
+			sql_mode) values ("%s",%d,'%s','%s',"%s","%s",%d,"%s","%s","%s","%s","%s","%s","%s","%s","%s","%s","%s","%s","%s","%s","%s");`
+
+	// SQL UDF creation keeps the pre-Python catalog write shape. During a
+	// rolling upgrade an ordinary SQL writer may still target a catalog that
+	// has not received the Python identity columns. Python creation is gated on
+	// the current catalog contract and uses initMoUserDefinedFunctionFormat.
+	initMoUserDefinedFunctionSQLFormat = `insert into mo_catalog.mo_user_defined_function(
 			name,
 			owner,
 			args,
@@ -1553,7 +1589,22 @@ const (
 
 	checkUdfWithDb = `select function_id,body from mo_catalog.mo_user_defined_function where db = "%s" order by function_id;`
 
-	checkUdfExistence = `select function_id from mo_catalog.mo_user_defined_function where name = "%s" and db = "%s" and arg_types = %s order by function_id;`
+	// SQL keeps this query on columns that existed before the Python identity
+	// fields. That lets ordinary SQL UDF creation continue during a rolling
+	// catalog upgrade while the Python path uses the current exact-descriptor
+	// query below after its readiness gate succeeds.
+	checkUdfExistence       = `select function_id, args, language, arg_types from mo_catalog.mo_user_defined_function where name = "%s" and db = "%s" order by function_id;`
+	checkPythonUdfExistence = `select function_id, args, language, arg_types, canonical_input_descriptor from mo_catalog.mo_user_defined_function where name = "%s" and db = "%s" order by function_id;`
+
+	// These schema probes are the write gate for the current Python catalog
+	// contract. They deliberately reference every column used by the Python
+	// writer. COUNT keeps one result row even when the catalog is empty; a
+	// literal LIMIT 0 is optimized away by BackgroundExec and does not expose a
+	// result-set schema. A frontend in a rolling upgrade must reject Python
+	// publication before it creates or changes a routine when the tenant has
+	// not reached this schema.
+	pythonUdfCatalogIdentitySchemaCheck = `select count(active_revision), count(namespace_version), count(canonical_input_descriptor), count(return_descriptor), count(signature_key_schema_version), count(signature_fingerprint) from mo_catalog.mo_user_defined_function;`
+	functionRevisionCatalogSchemaCheck  = `select count(function_id), count(revision), count(namespace_version), count(name), count(args), count(arg_types), count(rettype), count(body), count(language), count(definition_schema_version), count(abi_contract), count(adapter_version), count(artifact_digest), count(environment_digest), count(sdk_version), count(null_policy), count(volatility), count(definition_fingerprint), count(created_time), count(security_type) from mo_catalog.mo_function_revisions;`
 
 	checkStoredProcedureArgs = `select proc_id, args from mo_catalog.mo_stored_procedure where name = "%s" and db = "%s" order by proc_id;`
 
@@ -1597,7 +1648,8 @@ const (
 	deleteUserFromMoUserGrantFormat = `delete from mo_catalog.mo_user_grant where user_id = %d;`
 
 	// delete user defined function from mo_user_defined_function
-	deleteUserDefinedFunctionFormat = `delete from mo_catalog.mo_user_defined_function where function_id = %d;`
+	deleteUserDefinedFunctionFormat          = `delete from mo_catalog.mo_user_defined_function where function_id = %d;`
+	deleteUserDefinedFunctionRevisionsFormat = `delete from mo_catalog.mo_function_revisions where function_id = %d;`
 
 	// delete stored procedure from mo_user_defined_function
 	deleteStoredProcedureFormat = `delete from mo_catalog.mo_stored_procedure where proc_id = %d;`
@@ -1675,6 +1727,24 @@ var (
 		catalog.MO_TABLES_LOGICAL_ID_INDEX_TABLE_NAME: 1,
 	}
 )
+
+// deleteUserDefinedFunctionRevisionsIfPresent removes the immutable Python
+// revisions belonging to a function identity. The revision table was added by
+// the current catalog upgrade and is not part of the legacy SQL UDF contract.
+// A mixed-version tenant must therefore still be able to drop an ordinary SQL
+// UDF while that table is absent. Once the table exists, every error other than
+// the explicit missing-table condition is returned so a failed revision
+// cleanup cannot be hidden by deleting the identity row.
+func deleteUserDefinedFunctionRevisionsIfPresent(ctx context.Context, bh BackgroundExec, functionID int64) error {
+	err := bh.Exec(ctx, fmt.Sprintf(deleteUserDefinedFunctionRevisionsFormat, functionID))
+	if err == nil {
+		return nil
+	}
+	if moerr.IsMoErrCode(err, moerr.ErrNoSuchTable) || strings.Contains(strings.ToLower(err.Error()), "no such table") {
+		return nil
+	}
+	return err
+}
 
 func init() {
 	tables := make([]string, 0)
@@ -4917,7 +4987,6 @@ type rmPkg func(path string) error
 func doDropFunction(ctx context.Context, ses *Session, df *tree.DropFunction, rm rmPkg) (err error) {
 	var sql string
 	var argstr string
-	var bodyStr string
 	var checkDatabase string
 	var dbName string
 	var dbExists bool
@@ -4988,10 +5057,6 @@ func doDropFunction(ctx context.Context, ses *Session, df *tree.DropFunction, rm
 			if err != nil {
 				return err
 			}
-			bodyStr, err = erArray[0].GetString(ctx, i, 2)
-			if err != nil {
-				return err
-			}
 			argList := make([]*function.Arg, 0)
 			json.Unmarshal([]byte(argstr), &argList)
 			if len(argList) == len(df.Args) {
@@ -5006,6 +5071,20 @@ func doDropFunction(ctx context.Context, ses *Session, df *tree.DropFunction, rm
 				if !match {
 					continue
 				}
+				// The historical args column intentionally stores only logical
+				// type names.  A current Python body carries the exact Arrow
+				// descriptors, so use those descriptors when selecting an
+				// overload for DROP.  Otherwise two DECIMAL or bounded string
+				// overloads would be indistinguishable and DROP could remove the
+				// wrong immutable identity.  A non-current body is left on the
+				// logical path so an old demo can still be explicitly removed.
+				body, err := erArray[0].GetString(ctx, i, 2)
+				if err != nil {
+					return err
+				}
+				if !pythonDropSignatureMatches(df.Args, body) {
+					continue
+				}
 				handleArgMatch := func() (rtnErr error) {
 					sql = fmt.Sprintf(deleteUserDefinedFunctionFormat, funcId)
 
@@ -5013,11 +5092,10 @@ func doDropFunction(ctx context.Context, ses *Session, df *tree.DropFunction, rm
 					if rtnErr != nil {
 						return rtnErr
 					}
-					u := &function.NonSqlUdfBody{}
-					if json.Unmarshal([]byte(bodyStr), u) == nil && u.Import {
-						rm(u.Body)
+					rtnErr = deleteUserDefinedFunctionRevisionsIfPresent(ctx, bh, funcId)
+					if rtnErr != nil {
+						return rtnErr
 					}
-
 					return rtnErr
 				}
 				err = handleArgMatch()
@@ -5038,9 +5116,38 @@ func doDropFunction(ctx context.Context, ses *Session, df *tree.DropFunction, rm
 	return moerr.NewNoUDFNoCtx(string(df.Name.Name.ObjectName))
 }
 
+// pythonDropSignatureMatches recognizes the current Python catalog body and
+// compares its exact Arrow input descriptors with a DROP declaration.  A
+// body that is not the current Python contract returns true so the caller can
+// retain the historical logical matching needed to explicitly remove an old
+// demo definition; such a body is never admitted for execution.
+func pythonDropSignatureMatches(args tree.FunctionArgs, rawBody string) bool {
+	body, err := function.DecodePythonRoutineBody(rawBody)
+	if err != nil {
+		return true
+	}
+	if len(body.ArgTypes) != len(args) {
+		return false
+	}
+	for index, arg := range args {
+		argDecl, ok := arg.(*tree.FunctionArgDecl)
+		if !ok || argDecl == nil {
+			return false
+		}
+		typ, err := plan2.GetFunctionTypeFromAst(argDecl.Type)
+		if err != nil {
+			return false
+		}
+		descriptor, err := function.NewPythonTypeDescriptor(typ)
+		if err != nil || descriptor != body.ArgTypes[index] {
+			return false
+		}
+	}
+	return true
+}
+
 func doDropFunctionWithDB(ctx context.Context, ses *Session, stmt tree.Statement, rm rmPkg) (err error) {
 	var sql string
-	var bodyStr string
 	var funcId int64
 	var erArray []ExecResult
 	var dbName string
@@ -5081,11 +5188,6 @@ func doDropFunctionWithDB(ctx context.Context, ses *Session, stmt tree.Statement
 			if err != nil {
 				return err
 			}
-			bodyStr, err = erArray[0].GetString(ctx, i, 1)
-			if err != nil {
-				return err
-			}
-
 			handleArgMatch := func() (rtnErr error) {
 				sql = fmt.Sprintf(deleteUserDefinedFunctionFormat, funcId)
 
@@ -5093,10 +5195,9 @@ func doDropFunctionWithDB(ctx context.Context, ses *Session, stmt tree.Statement
 				if rtnErr != nil {
 					return rtnErr
 				}
-
-				u := &function.NonSqlUdfBody{}
-				if json.Unmarshal([]byte(bodyStr), u) == nil && u.Import {
-					rm(u.Body)
+				rtnErr = deleteUserDefinedFunctionRevisionsIfPresent(ctx, bh, funcId)
+				if rtnErr != nil {
+					return rtnErr
 				}
 
 				return rtnErr
@@ -11504,17 +11605,182 @@ func Upload(ses FeSession, execCtx *ExecCtx, localPath string, storageDir string
 	return ioVector.FilePath, nil
 }
 
+func ensurePythonUdfCatalogReady(ctx context.Context, bh BackgroundExec) error {
+	probes := []struct {
+		query        string
+		expectedCols uint64
+	}{
+		{query: pythonUdfCatalogIdentitySchemaCheck, expectedCols: 6},
+		{query: functionRevisionCatalogSchemaCheck, expectedCols: 20},
+	}
+	for _, probe := range probes {
+		query := probe.query
+		bh.ClearExecResultSet()
+		if err := bh.Exec(ctx, query); err != nil {
+			return moerr.NewNotSupportedNoCtxf(
+				"Python UDF catalog contract is not ready; upgrade the tenant before creating or replacing Python UDFs: %v",
+				err,
+			)
+		}
+		results, err := getResultSet(ctx, bh)
+		if err != nil {
+			return moerr.NewNotSupportedNoCtxf(
+				"Python UDF catalog contract is not ready; catalog probe returned an invalid result: %v",
+				err,
+			)
+		}
+		result, resultErr := exactlyOneCatalogRow(ctx, results, "Python UDF catalog schema probe")
+		if resultErr != nil {
+			return moerr.NewNotSupportedNoCtxf(
+				"Python UDF catalog contract is not ready; catalog probe returned an invalid shape: %v",
+				resultErr,
+			)
+		}
+		if result.GetColumnCount() != probe.expectedCols {
+			return moerr.NewNotSupportedNoCtxf(
+				"Python UDF catalog contract is not ready; catalog probe returned %d columns, expected %d",
+				result.GetColumnCount(), probe.expectedCols,
+			)
+		}
+	}
+	return nil
+}
+
+// functionRevisionCatalogAvailable reports whether the current shared
+// revision table can be used by the SQL UDF writer. Ordinary SQL UDFs remain
+// writable during a rolling upgrade before v4_0_7 reaches every tenant; once
+// the table is present, revision publication is part of the same caller-owned
+// transaction as the legacy compatibility row.
+func functionRevisionCatalogAvailable(ctx context.Context, bh BackgroundExec) (bool, error) {
+	bh.ClearExecResultSet()
+	if err := bh.Exec(ctx, functionRevisionCatalogSchemaCheck); err != nil {
+		if isMissingCatalogObjectError(err) {
+			return false, nil
+		}
+		return false, err
+	}
+	// The aggregate probe must return one row. Anything else indicates a broken
+	// executor/result contract and must reach the caller; only an explicitly
+	// missing catalog object is a supported rolling-upgrade path.
+	results, err := getResultSet(ctx, bh)
+	if err != nil {
+		return false, err
+	}
+	if _, err := exactlyOneCatalogRow(ctx, results, "function revision catalog schema probe"); err != nil {
+		return false, err
+	}
+	return true, nil
+}
+
+func isMissingCatalogObjectError(err error) bool {
+	if err == nil {
+		return false
+	}
+	message := strings.ToLower(err.Error())
+	return moerr.IsMoErrCode(err, moerr.ErrNoSuchTable) ||
+		strings.Contains(message, "no such table") ||
+		strings.Contains(message, "table does not exist") ||
+		strings.Contains(message, "unknown column")
+}
+
+func ensurePythonUdfRuntimeReady(ctx context.Context, ses *Session) error {
+	pu := getPuIfPresent(ses.GetService())
+	if pu == nil || pu.UdfService == nil {
+		return moerr.NewNotSupportedNoCtx("Python UDF feature is disabled")
+	}
+	readiness, ok := pu.UdfService.(udf.RuntimeReadiness)
+	if !ok {
+		return moerr.NewNotSupportedNoCtx("Python UDF runtime does not expose the current contract")
+	}
+	if _, ok := pu.UdfService.(udf.RuntimeDefinitionValidator); !ok {
+		return moerr.NewNotSupportedNoCtx("Python UDF runtime does not expose definition validation")
+	}
+	return readiness.CheckLanguageReady(ctx, udf.LanguagePython)
+}
+
+// validatePythonUdfDefinitionAtCreate runs after the immutable artifact has
+// been published and before the Catalog transaction writes the new identity
+// or revision. The source is transient input to the validator; the Gateway
+// resolves the same account-scoped digest before sending it to the worker.
+func validatePythonUdfDefinitionAtCreate(
+	ctx context.Context,
+	ses *Session,
+	tenant *TenantInfo,
+	body function.PythonRoutineBody,
+) error {
+	pu := getPuIfPresent(ses.GetService())
+	if pu == nil || pu.UdfService == nil {
+		return moerr.NewNotSupportedNoCtx("Python UDF feature is disabled")
+	}
+	validator, ok := pu.UdfService.(udf.RuntimeDefinitionValidator)
+	if !ok {
+		return moerr.NewNotSupportedNoCtx("Python UDF runtime does not expose definition validation")
+	}
+	if tenant == nil {
+		return moerr.NewInvalidInputNoCtx("Python UDF definition validation requires an account")
+	}
+	if err := body.Validate(); err != nil {
+		return moerr.NewInvalidInputNoCtxf("Python UDF definition rejected before publication: %v", err)
+	}
+	definitionFingerprint, err := function.PythonRoutineBodyFingerprint(body)
+	if err != nil {
+		return moerr.NewInvalidInputNoCtxf("Python UDF definition fingerprint cannot be computed: %v", err)
+	}
+	args := make([]types.Type, len(body.ArgTypes))
+	for index, descriptor := range body.ArgTypes {
+		args[index] = descriptor.Type()
+	}
+	return validator.ValidateDefinition(ctx, &udf.RoutineDefinition{
+		Language:                udf.LanguagePython,
+		AccountID:               uint64(tenant.GetTenantID()),
+		Handler:                 body.Handler,
+		Source:                  body.Source,
+		Args:                    args,
+		ReturnType:              body.ReturnType.Type(),
+		Mode:                    body.Mode,
+		NullPolicy:              body.NullPolicy,
+		ABIContract:             body.ABIContract,
+		AdapterVersion:          body.AdapterVersion,
+		SDKVersion:              body.SDKVersion,
+		DefinitionSchemaVersion: body.DefinitionSchemaVersion,
+		ArtifactDigest:          body.ArtifactDigest,
+		EnvironmentDigest:       body.EnvironmentDigest,
+		DefinitionFingerprint:   definitionFingerprint,
+	})
+}
+
+// canonicalPythonInputDescriptor is the shared overload key used by the
+// catalog lookup and by the immutable revision metadata. Keeping this
+// conversion at the create boundary prevents the logical SQL OID list from
+// accidentally being used to match width/scale-sensitive Python signatures.
+func canonicalPythonInputDescriptor(
+	args []function.PythonTypeDescriptor,
+	returnType *function.PythonTypeDescriptor,
+) (string, error) {
+	inputDescriptor, _, _, err := function.PythonSignatureMetadata(args, returnType)
+	return inputDescriptor, err
+}
+
 func InitFunction(ses *Session, execCtx *ExecCtx, tenant *TenantInfo, cf *tree.CreateFunction) (err error) {
+	isPython := strings.EqualFold(cf.Language, string(tree.PYTHON))
 	var retTypeStr string
 	var dbName string
 	var dbExists bool
 	var checkExistence string
 	var argsJson []byte
-	var argsCondition string
+	var logicalArgTypes string
+	var exactArgTypes string
 	var fmtctx *tree.FmtCtx
 	var argList []*function.Arg
 	var typeList []string
 	var erArray []ExecResult
+	var pythonArgTypes []function.PythonTypeDescriptor
+	var pythonReturnType *function.PythonTypeDescriptor
+	if isPython {
+		if err := ensurePythonUdfRuntimeReady(execCtx.reqCtx, ses); err != nil {
+			return err
+		}
+	}
 
 	// a database must be selected or specified as qualifier when create a function
 	if cf.Name.HasNoNameQualifier() {
@@ -11524,6 +11790,149 @@ func InitFunction(ses *Session, execCtx *ExecCtx, tenant *TenantInfo, cf *tree.C
 		dbName = ses.GetDatabaseName()
 	} else {
 		dbName = string(cf.Name.Name.SchemaName)
+	}
+
+	// Parse the complete typed definition before opening the Catalog
+	// transaction. Python validation performs a network round trip to the
+	// worker; holding the database lock while waiting would make a slow or
+	// unavailable worker block unrelated DDL. The later transaction still
+	// locks and rechecks the exact identity before publication.
+	fmtctx = tree.NewFmtCtx(dialect.MYSQL, tree.WithQuoteString(true))
+	retTypeStr, err = plan2.GetFunctionTypeStrFromAst(cf.ReturnType.Type)
+	if err != nil {
+		return err
+	}
+	if isPython {
+		returnType, typeErr := plan2.GetFunctionTypeFromAst(cf.ReturnType.Type)
+		if typeErr != nil {
+			return typeErr
+		}
+		descriptor, typeErr := function.NewPythonTypeDescriptor(returnType)
+		if typeErr != nil {
+			return typeErr
+		}
+		pythonReturnType = &descriptor
+		pythonArgTypes = make([]function.PythonTypeDescriptor, len(cf.Args))
+	}
+
+	// build argmap and marshal as json
+	argList = make([]*function.Arg, len(cf.Args))
+	typeList = make([]string, len(cf.Args))
+	for i := 0; i < len(cf.Args); i++ {
+		argList[i] = &function.Arg{}
+		argList[i].Name = cf.Args[i].GetName(fmtctx)
+		fmtctx.Reset()
+		typ, err := plan2.GetFunctionArgTypeStrFromAst(cf.Args[i])
+		if err != nil {
+			return err
+		}
+		argList[i].Type = typ
+		typeList[i] = typ
+		if isPython {
+			argType, typeErr := plan2.GetFunctionTypeFromAst(cf.Args[i].(*tree.FunctionArgDecl).Type)
+			if typeErr != nil {
+				return typeErr
+			}
+			descriptor, typeErr := function.NewPythonTypeDescriptor(argType)
+			if typeErr != nil {
+				return typeErr
+			}
+			pythonArgTypes[i] = descriptor
+		}
+	}
+	argsJson, err = json.Marshal(argList)
+	if err != nil {
+		return err
+	}
+
+	argTypes, err := userDefinedFunctionArgumentTypes(typeList)
+	if err != nil {
+		return err
+	}
+	logicalArgTypes = argTypes
+	if isPython {
+		exactArgTypes, err = canonicalPythonInputDescriptor(pythonArgTypes, pythonReturnType)
+		if err != nil {
+			return err
+		}
+	}
+
+	var body string
+	if !isPython {
+		body = cf.Body
+	} else {
+		if cf.Import {
+			return moerr.NewNotSupportedNoCtx("Python artifact import requires the immutable artifact catalog")
+		}
+		mode := cf.Mode
+		if mode == "" {
+			mode = "SCALAR"
+		}
+		nullPolicy := cf.NullPolicy
+		if nullPolicy == "" {
+			nullPolicy = udf.NullCallHandler
+		}
+		environmentDigest, digestErr := udf.PythonEnvironmentDigest()
+		if digestErr != nil {
+			return moerr.NewInvalidInputNoCtxf("Python UDF environment is not available: %v", digestErr)
+		}
+
+		nb := function.PythonRoutineBody{
+			DefinitionSchemaVersion: udf.PythonDefinitionSchemaVersion,
+			Handler:                 cf.Handler,
+			Source:                  cf.Body,
+			Mode:                    mode,
+			NullPolicy:              nullPolicy,
+			ABIContract:             udf.PythonABIContract,
+			AdapterVersion:          udf.PythonAdapterVersion,
+			ArtifactDigest:          udf.PythonInlineArtifactDigest(cf.Handler, cf.Body),
+			EnvironmentDigest:       environmentDigest,
+			SDKVersion:              udf.PythonSDKVersion,
+			ArgTypes:                pythonArgTypes,
+			ReturnType:              pythonReturnType,
+		}
+		var byt []byte
+		byt, err = json.Marshal(nb)
+		if err != nil {
+			return err
+		}
+		// Keep raw JSON here; SQL-level escaping is applied below.
+		// Using strconv.Quote here would preserve backslashes before JSON quotes
+		// in storage and break json.Unmarshal when invoking python UDFs.
+		body = string(byt)
+
+		// Publish and validate the exact immutable artifact before opening the
+		// Catalog transaction. A failed CREATE/REPLACE therefore cannot expose
+		// a revision whose source the current worker has not accepted, while a
+		// failed replacement leaves its previous active revision untouched.
+		artifactStore, storeErr := pythonudf.NewFileArtifactStore(
+			getPu(ses.GetService()).FileService,
+			pythonudf.DefaultMaxArtifactBytes,
+		)
+		if storeErr != nil {
+			return storeErr
+		}
+		if _, err = artifactStore.Publish(
+			execCtx.reqCtx,
+			uint64(tenant.GetTenantID()),
+			cf.Handler,
+			cf.Body,
+		); err != nil {
+			return err
+		}
+		if err = validatePythonUdfDefinitionAtCreate(execCtx.reqCtx, ses, tenant, nb); err != nil {
+			return err
+		}
+	}
+	definition := userDefinedFunctionDefinition{
+		name:     string(cf.Name.Name.ObjectName),
+		args:     string(argsJson),
+		argTypes: argTypes,
+		retType:  retTypeStr,
+		body:     body,
+		lang:     cf.Language,
+		sqlMode:  sessionSQLModeForParser(ses),
+		dbName:   dbName,
 	}
 
 	// Exact function signatures need an exclusion boundary in every deployment
@@ -11541,6 +11950,11 @@ func InitFunction(ses *Session, execCtx *ExecCtx, tenant *TenantInfo, cf *tree.C
 	defer func() {
 		err = finishTxn(execCtx.reqCtx, bh, err)
 	}()
+	if isPython {
+		if err = ensurePythonUdfCatalogReady(execCtx.reqCtx, bh); err != nil {
+			return err
+		}
+	}
 
 	// Lock and authenticate the target database before the exact-signature
 	// read. The lock stays held through persistence and commit.
@@ -11552,110 +11966,35 @@ func InitFunction(ses *Session, execCtx *ExecCtx, tenant *TenantInfo, cf *tree.C
 		return moerr.NewBadDB(execCtx.reqCtx, dbName)
 	}
 
-	// format return type
-	fmtctx = tree.NewFmtCtx(dialect.MYSQL, tree.WithQuoteString(true))
-	retTypeStr, err = plan2.GetFunctionTypeStrFromAst(cf.ReturnType.Type)
-	if err != nil {
-		return err
-	}
-
-	// build argmap and marshal as json
-	argList = make([]*function.Arg, len(cf.Args))
-	typeList = make([]string, len(cf.Args))
-	for i := 0; i < len(cf.Args); i++ {
-		argList[i] = &function.Arg{}
-		argList[i].Name = cf.Args[i].GetName(fmtctx)
-		fmtctx.Reset()
-		typ, err := plan2.GetFunctionArgTypeStrFromAst(cf.Args[i])
-		if err != nil {
-			return err
-		}
-		argList[i].Type = typ
-		typeList[i] = typ
-	}
-	argsJson, err = json.Marshal(argList)
-	if err != nil {
-		return err
-	}
-
-	argTypes, err := userDefinedFunctionArgumentTypes(typeList)
-	if err != nil {
-		return err
-	}
-	argsCondition = fmt.Sprintf("'%s'", argTypes)
-
-	// validate duplicate function declaration
+	// Validate duplicate function declaration under the same lock used for
+	// persistence. Python source validation above is intentionally outside this
+	// transaction, but identity/revision publication remains linearized here.
 	bh.ClearExecResultSet()
-	checkExistence = fmt.Sprintf(checkUdfExistence, string(cf.Name.Name.ObjectName), dbName, argsCondition)
+	if isPython {
+		checkExistence = fmt.Sprintf(checkPythonUdfExistence, string(cf.Name.Name.ObjectName), dbName)
+	} else {
+		checkExistence = fmt.Sprintf(checkUdfExistence, string(cf.Name.Name.ObjectName), dbName)
+	}
 	err = bh.Exec(execCtx.reqCtx, checkExistence)
 	if err != nil {
 		return err
 	}
-
 	erArray, err = getResultSet(execCtx.reqCtx, bh)
 	if err != nil {
 		return err
 	}
-
-	if execResultArrayHasData(erArray) && !cf.Replace {
+	matchedIDs, err := matchUserDefinedFunctionCandidates(execCtx.reqCtx, erArray, string(cf.Language), logicalArgTypes, exactArgTypes)
+	if err != nil {
+		return err
+	}
+	if len(matchedIDs) > 1 {
+		return moerr.NewInvalidInputNoCtxf("function %s has multiple catalog identities for the same signature", string(cf.Name.Name.ObjectName))
+	}
+	if len(matchedIDs) == 1 && !cf.Replace {
 		return moerr.NewUDFAlreadyExistsNoCtx(string(cf.Name.Name.ObjectName))
 	}
-	var body string
-	if cf.Language == string(tree.SQL) {
-		body = cf.Body
-	} else {
-		if cf.Import {
-			// check
-			if cf.Language == string(tree.PYTHON) {
-				if !strings.HasSuffix(cf.Body, ".py") &&
-					!strings.HasSuffix(cf.Body, ".whl") {
-					return moerr.NewInvalidInput(execCtx.reqCtx, "file '"+cf.Body+"', only support '*.py', '*.whl'")
-				}
-				if strings.HasSuffix(cf.Body, ".whl") {
-					dotIdx := strings.LastIndex(cf.Handler, ".")
-					if dotIdx < 1 {
-						return moerr.NewInvalidInput(execCtx.reqCtx, "handler '"+cf.Handler+"', when you import a *.whl, the handler should be in the format of '<file or module name>.<function name>'")
-					}
-				}
-			}
-			// upload
-			storageDir := string(cf.Name.Name.ObjectName) + "_" + strings.Join(typeList, "-") + "_"
-			cf.Body, err = Upload(ses, execCtx, cf.Body, storageDir)
-			if err != nil {
-				return err
-			}
-		}
-
-		nb := function.NonSqlUdfBody{
-			Handler: cf.Handler,
-			Import:  cf.Import,
-			Body:    cf.Body,
-		}
-		var byt []byte
-		byt, err = json.Marshal(nb)
-		if err != nil {
-			return err
-		}
-		// Keep raw JSON here; SQL-level escaping is applied below.
-		// Using strconv.Quote here would preserve backslashes before JSON quotes
-		// in storage and break json.Unmarshal when invoking python UDFs.
-		body = string(byt)
-	}
-	definition := userDefinedFunctionDefinition{
-		name:     string(cf.Name.Name.ObjectName),
-		args:     string(argsJson),
-		argTypes: argTypes,
-		retType:  retTypeStr,
-		body:     body,
-		lang:     cf.Language,
-		sqlMode:  sessionSQLModeForParser(ses),
-		dbName:   dbName,
-	}
-	if execResultArrayHasData(erArray) { // replace
-		id, err := erArray[0].GetInt64(execCtx.reqCtx, 0, 0)
-		if err != nil {
-			return err
-		}
+	if len(matchedIDs) == 1 { // replace
+		id := matchedIDs[0]
 		return persistUserDefinedFunction(
 			execCtx.reqCtx, bh, tenant, ses.GetTenantInfo().GetDefaultRoleID(), definition, &id,
 		)
@@ -11697,20 +12036,26 @@ func escapeSQLStringForDoubleQuotes(s string) string {
 // userDefinedFunctionDefinition is the function metadata kept outside
 // mo_tables. Callers control the transaction that persists it.
 type userDefinedFunctionDefinition struct {
-	name     string
-	args     string
-	argTypes string
-	retType  string
-	body     string
-	lang     string
-	sqlMode  string
-	dbName   string
+	name                      string
+	args                      string
+	argTypes                  string
+	canonicalInputDescriptor  string
+	returnDescriptor          string
+	signatureKeySchemaVersion int
+	signatureFingerprint      string
+	retType                   string
+	body                      string
+	lang                      string
+	sqlMode                   string
+	dbName                    string
 }
 
-// userDefinedFunctionArgumentTypes is the canonical identity of a function
-// overload. Argument names do not participate in function resolution, while
-// their ordered types do. Keep the zero-argument identity empty to match the
-// legacy json_extract(args, '$[*].type') IS NULL representation.
+// userDefinedFunctionArgumentTypes is the historical logical signature key
+// shared by ordinary SQL routines and by the compatibility columns of the
+// current Python catalog. Python's exact width/scale identity is stored in
+// canonical_input_descriptor; this helper deliberately remains limited to
+// ordered logical type names. Keep the zero-argument value empty to match the
+// historical json_extract(args, '$[*].type') IS NULL representation.
 func userDefinedFunctionArgumentTypes(argumentTypes []string) (string, error) {
 	if len(argumentTypes) == 0 {
 		return "", nil
@@ -11751,6 +12096,165 @@ func userDefinedFunctionArgumentTypesFromJSON(args string) (string, error) {
 	return userDefinedFunctionArgumentTypes(types)
 }
 
+// matchUserDefinedFunctionCandidates compares the current declaration with
+// every same-name routine in the namespace. SQL retains its historical
+// logical arg_types key; current Python rows additionally carry the exact
+// canonical descriptor. Looking at the full candidate set is necessary now
+// that Python width/scale overloads may share one logical OID sequence.
+func matchUserDefinedFunctionCandidates(
+	ctx context.Context,
+	results []ExecResult,
+	language, logicalArgTypes, exactArgTypes string,
+) ([]int64, error) {
+	result, err := candidateCatalogResultSet(results, "function catalog candidate lookup")
+	if err != nil {
+		return nil, err
+	}
+	if result == nil {
+		return nil, nil
+	}
+	if result.GetRowCount() == 0 {
+		return nil, nil
+	}
+	columnCount := result.GetColumnCount()
+	if columnCount < 4 {
+		return nil, moerr.NewInvalidInputNoCtx("UNSUPPORTED_ROUTINE_VERSION: malformed function catalog candidate")
+	}
+	matched := make([]int64, 0, 1)
+	for row := uint64(0); row < result.GetRowCount(); row++ {
+		functionID, err := result.GetInt64(ctx, row, 0)
+		if err != nil {
+			return nil, err
+		}
+		args, err := result.GetString(ctx, row, 1)
+		if err != nil {
+			return nil, err
+		}
+		existingLanguage, err := result.GetString(ctx, row, 2)
+		if err != nil {
+			return nil, err
+		}
+		storedArgTypes, err := result.GetString(ctx, row, 3)
+		if err != nil {
+			return nil, err
+		}
+		existingLogical := storedArgTypes
+		if parsed, parseErr := userDefinedFunctionArgumentTypesFromJSON(args); parseErr == nil {
+			existingLogical = parsed
+		} else if existingLogical == "" {
+			return nil, moerr.NewInvalidInputNoCtxf(
+				"UNSUPPORTED_ROUTINE_VERSION: function %d has malformed argument metadata: %v", functionID, parseErr,
+			)
+		}
+
+		isMatch := false
+		if strings.EqualFold(language, string(tree.PYTHON)) {
+			existingCanonical := ""
+			if columnCount >= 5 {
+				existingCanonical, err = result.GetString(ctx, row, 4)
+				if err != nil {
+					return nil, err
+				}
+			}
+			if strings.EqualFold(existingLanguage, string(tree.PYTHON)) {
+				if columnCount < 5 || existingCanonical == "" {
+					return nil, moerr.NewInvalidInputNoCtxf(
+						"UNSUPPORTED_ROUTINE_VERSION: Python function %d has no exact input descriptor",
+						functionID,
+					)
+				}
+				isMatch = existingCanonical == exactArgTypes
+			} else {
+				// SQL and Python share the historical logical namespace. The
+				// exact descriptor is only authoritative for a Python row.
+				isMatch = existingLogical == logicalArgTypes
+			}
+		} else {
+			// SQL and any unknown language still use the shared logical
+			// namespace until their own canonical descriptor contract is
+			// published.
+			isMatch = existingLogical == logicalArgTypes
+		}
+		if isMatch {
+			matched = append(matched, functionID)
+		}
+	}
+	return matched, nil
+}
+
+func normalizePythonFunctionDefinition(definition userDefinedFunctionDefinition) (userDefinedFunctionDefinition, error) {
+	body, err := function.DecodePythonRoutineBody(definition.body)
+	if err != nil {
+		return userDefinedFunctionDefinition{}, moerr.NewInvalidInputNoCtxf(
+			"UNSUPPORTED_ROUTINE_VERSION: Python definition rejected before publication: %v", err,
+		)
+	}
+	canonicalInput, returnDescriptor, signatureFingerprint, err := function.PythonSignatureMetadata(body.ArgTypes, body.ReturnType)
+	if err != nil {
+		return userDefinedFunctionDefinition{}, moerr.NewInvalidInputNoCtxf(
+			"UNSUPPORTED_ROUTINE_VERSION: Python signature rejected before publication: %v", err,
+		)
+	}
+	if definition.canonicalInputDescriptor != "" && definition.canonicalInputDescriptor != canonicalInput {
+		return userDefinedFunctionDefinition{}, moerr.NewInvalidInputNoCtx("UNSUPPORTED_ROUTINE_VERSION: Python input descriptor does not match its definition")
+	}
+	if definition.returnDescriptor != "" && definition.returnDescriptor != returnDescriptor {
+		return userDefinedFunctionDefinition{}, moerr.NewInvalidInputNoCtx("UNSUPPORTED_ROUTINE_VERSION: Python return descriptor does not match its definition")
+	}
+	if definition.signatureKeySchemaVersion != 0 && definition.signatureKeySchemaVersion != udf.PythonSignatureKeySchemaVersion {
+		return userDefinedFunctionDefinition{}, moerr.NewInvalidInputNoCtxf(
+			"UNSUPPORTED_ROUTINE_VERSION: Python signature key schema %d is not supported", definition.signatureKeySchemaVersion,
+		)
+	}
+	if definition.signatureFingerprint != "" && definition.signatureFingerprint != signatureFingerprint {
+		return userDefinedFunctionDefinition{}, moerr.NewInvalidInputNoCtx("UNSUPPORTED_ROUTINE_VERSION: Python signature fingerprint does not match its definition")
+	}
+	definition.canonicalInputDescriptor = canonicalInput
+	definition.returnDescriptor = returnDescriptor
+	definition.signatureKeySchemaVersion = udf.PythonSignatureKeySchemaVersion
+	definition.signatureFingerprint = signatureFingerprint
+	// The base catalog keeps the historical logical signature columns while the
+	// immutable revision keeps the exact Python descriptors.  Both are
+	// execution authority: accepting a caller-supplied args/retType pair that
+	// disagrees with the typed body would publish an identity whose shared
+	// overload key and immutable revision describe different functions.  That
+	// malformed row would only be discovered on a later read or plan bind.
+	logicalArgTypes, err := userDefinedFunctionArgumentTypesFromJSON(definition.args)
+	if err != nil {
+		return userDefinedFunctionDefinition{}, moerr.NewInvalidInputNoCtxf(
+			"UNSUPPORTED_ROUTINE_VERSION: Python logical argument metadata is invalid: %v", err,
+		)
+	}
+	expectedLogicalTypes := make([]string, len(body.ArgTypes))
+	for index, descriptor := range body.ArgTypes {
+		expectedLogicalTypes[index] = function.PythonCatalogTypeName(descriptor.Type())
+	}
+	expectedLogicalArgTypes, err := userDefinedFunctionArgumentTypes(expectedLogicalTypes)
+	if err != nil {
+		return userDefinedFunctionDefinition{}, moerr.NewInvalidInputNoCtxf(
+			"UNSUPPORTED_ROUTINE_VERSION: Python typed argument metadata is invalid: %v", err,
+		)
+	}
+	if logicalArgTypes != expectedLogicalArgTypes {
+		return userDefinedFunctionDefinition{}, moerr.NewInvalidInputNoCtxf(
+			"UNSUPPORTED_ROUTINE_VERSION: Python catalog arguments %q do not match the typed body %q",
+			logicalArgTypes, expectedLogicalArgTypes,
+		)
+	}
+	if !routineRevisionReturnTypeMatches(definition.retType, body.ReturnType.Type().Oid) {
+		return userDefinedFunctionDefinition{}, moerr.NewInvalidInputNoCtxf(
+			"UNSUPPORTED_ROUTINE_VERSION: Python catalog return type %q does not match the typed body %q",
+			definition.retType, body.ReturnType.Type().Oid.String(),
+		)
+	}
+	// Keep arg_types canonicalized from the typed body. The exact Python
+	// descriptor belongs in canonical_input_descriptor and in the immutable
+	// revision row; the shared logical key is derived from the same source so
+	// SQL readers and Python readers cannot drift.
+	definition.argTypes = expectedLogicalArgTypes
+	return definition, nil
+}
+
 // persistUserDefinedFunction writes function metadata into the caller-owned
 // transaction. A non-nil functionID replaces that existing definition.
 func persistUserDefinedFunction(
@@ -11761,22 +12265,423 @@ func persistUserDefinedFunction(
 	definition userDefinedFunctionDefinition,
 	functionID *int64,
 ) error {
-	body := escapeSQLStringForDoubleQuotes(definition.body)
 	sqlMode := plan2.EscapeFormat(definition.sqlMode)
+	securityType := "DEFINER"
+	if strings.EqualFold(definition.lang, string(tree.PYTHON)) {
+		// Python handlers run with the caller's execution frame in the current
+		// contract.  They cannot declare DEFINER semantics; keeping this value
+		// in the shared catalog makes the security decision visible to readers
+		// and prevents a Python row from inheriting the SQL UDF default.
+		securityType = "INVOKER"
+	}
+	var revisionCatalogReady bool
+	if !strings.EqualFold(definition.lang, string(tree.PYTHON)) {
+		var err error
+		revisionCatalogReady, err = functionRevisionCatalogAvailable(ctx, bh)
+		if err != nil {
+			return err
+		}
+	}
 	if functionID != nil {
-		return bh.Exec(ctx, fmt.Sprintf(updateMoUserDefinedFunctionFormat,
+		previousLanguage, err := readUserDefinedFunctionLanguage(ctx, bh, *functionID)
+		if err != nil {
+			return err
+		}
+		if previousLanguage == "" || !strings.EqualFold(previousLanguage, definition.lang) {
+			return moerr.NewInvalidInputNoCtxf(
+				"UNSUPPORTED_ROUTINE_VERSION: function identity %d cannot change language from %q to %q; use DROP and CREATE",
+				*functionID, previousLanguage, definition.lang,
+			)
+		}
+		var previousRevision, previousNamespace uint64
+		if strings.EqualFold(definition.lang, string(tree.PYTHON)) {
+			// Validate the current head and definition before touching the legacy
+			// compatibility row. A historical Python demo has no immutable
+			// revision and must be rejected without partially rewriting its body.
+			var readErr error
+			previousRevision, previousNamespace, readErr = readPythonRevisionHead(ctx, bh, *functionID)
+			if readErr != nil {
+				return readErr
+			}
+			if previousRevision == 0 || previousNamespace == 0 {
+				return moerr.NewInvalidInputNoCtx("UNSUPPORTED_ROUTINE_VERSION: legacy Python definition requires DROP and CREATE")
+			}
+			candidate, err := function.DecodePythonRoutineBody(definition.body)
+			if err != nil {
+				return moerr.NewInvalidInputNoCtxf("UNSUPPORTED_ROUTINE_VERSION: Python definition rejected before publication: %v", err)
+			}
+			previousBody, err := readPythonRevisionBody(ctx, bh, *functionID, previousRevision, previousNamespace)
+			if err != nil {
+				return err
+			}
+			previous, err := function.DecodePythonRoutineBody(previousBody)
+			if err != nil {
+				return moerr.NewInvalidInputNoCtxf("UNSUPPORTED_ROUTINE_VERSION: current Python revision %d is invalid: %v", previousRevision, err)
+			}
+			if !samePythonRoutineSignature(previous, candidate) {
+				return moerr.NewInvalidInputNoCtxf(
+					"UNSUPPORTED_ROUTINE_VERSION: Python REPLACE cannot change input or return descriptor; use DROP and CREATE",
+				)
+			}
+			// Compare the immutable candidate signature with the active revision
+			// before validating the compatibility columns. A REPLACE that changes
+			// the descriptor must report the stable identity error even when its
+			// caller-supplied logical args/return fields are stale; otherwise the
+			// same invalid operation produces a different error depending on which
+			// catalog projection is checked first. No catalog write has happened
+			// at this point.
+			definition, err = normalizePythonFunctionDefinition(definition)
+			if err != nil {
+				return err
+			}
+		} else if revisionCatalogReady {
+			var readErr error
+			previousRevision, previousNamespace, readErr = readFunctionRevisionHead(ctx, bh, *functionID)
+			if readErr != nil {
+				return readErr
+			}
+			previousReturnType, returnErr := readUserDefinedFunctionReturnType(ctx, bh, *functionID)
+			if returnErr != nil {
+				return returnErr
+			}
+			if !strings.EqualFold(previousReturnType, definition.retType) {
+				return moerr.NewInvalidInputNoCtxf(
+					"SQL REPLACE cannot change return type from %q to %q; use DROP and CREATE",
+					previousReturnType, definition.retType,
+				)
+			}
+		}
+		body := escapeSQLStringForDoubleQuotes(definition.body)
+		if err := bh.Exec(ctx, fmt.Sprintf(updateMoUserDefinedFunctionFormat,
 			ownerRoleID,
 			definition.args,
 			definition.argTypes, definition.retType, body, definition.lang,
-			tenant.GetUser(), types.CurrentTimestamp().String2(time.UTC, 0), "FUNCTION", "DEFINER", "", "utf8mb4", "utf8mb4_0900_ai_ci", "utf8mb4_0900_ai_ci", sqlMode,
-			int32(*functionID)))
+			tenant.GetUser(), types.CurrentTimestamp().String2(time.UTC, 0), "FUNCTION", securityType, "", "utf8mb4", "utf8mb4_0900_ai_ci", "utf8mb4_0900_ai_ci", sqlMode,
+			int32(*functionID))); err != nil {
+			return err
+		}
+		if strings.EqualFold(definition.lang, string(tree.PYTHON)) {
+			nextRevision := previousRevision + 1
+			nextNamespace := previousNamespace + 1
+			if err := insertPythonRevision(ctx, bh, definition, *functionID, nextRevision, nextNamespace); err != nil {
+				return err
+			}
+			return activateFunctionRevision(ctx, bh, *functionID, nextRevision, nextNamespace)
+		}
+		if !revisionCatalogReady {
+			return nil
+		}
+		nextRevision := previousRevision + 1
+		nextNamespace := previousNamespace + 1
+		if previousRevision == 0 || previousNamespace == 0 {
+			nextRevision = 1
+			nextNamespace = 1
+		}
+		if err := insertSQLRevision(ctx, bh, definition, *functionID, nextRevision, nextNamespace); err != nil {
+			return err
+		}
+		return activateFunctionRevision(ctx, bh, *functionID, nextRevision, nextNamespace)
 	}
-	return bh.Exec(ctx, fmt.Sprintf(initMoUserDefinedFunctionFormat,
-		definition.name,
-		ownerRoleID,
-		definition.args,
-		definition.argTypes, definition.retType, body, definition.lang, definition.dbName,
-		tenant.GetUser(), types.CurrentTimestamp().String2(time.UTC, 0), types.CurrentTimestamp().String2(time.UTC, 0), "FUNCTION", "DEFINER", "", "utf8mb4", "utf8mb4_0900_ai_ci", "utf8mb4_0900_ai_ci", sqlMode))
+	if strings.EqualFold(definition.lang, string(tree.PYTHON)) {
+		// A current Python definition must be valid before the base catalog row
+		// is created. The caller owns the transaction, but rejecting before the
+		// first write also keeps direct/background writers from leaving a
+		// partially published identity when validation fails.
+		var err error
+		definition, err = normalizePythonFunctionDefinition(definition)
+		if err != nil {
+			return err
+		}
+	}
+	body := escapeSQLStringForDoubleQuotes(definition.body)
+	created := types.CurrentTimestamp().String2(time.UTC, 0)
+	var insertSQL string
+	if strings.EqualFold(definition.lang, string(tree.PYTHON)) {
+		canonicalInputDescriptor := escapeSQLStringForDoubleQuotes(definition.canonicalInputDescriptor)
+		returnDescriptor := escapeSQLStringForDoubleQuotes(definition.returnDescriptor)
+		insertSQL = fmt.Sprintf(initMoUserDefinedFunctionFormat,
+			definition.name,
+			ownerRoleID,
+			definition.args,
+			definition.argTypes, canonicalInputDescriptor, returnDescriptor, definition.signatureKeySchemaVersion,
+			definition.signatureFingerprint, definition.retType, body, definition.lang, definition.dbName,
+			tenant.GetUser(), created, created, "FUNCTION", securityType, "", "utf8mb4", "utf8mb4_0900_ai_ci", "utf8mb4_0900_ai_ci", sqlMode)
+	} else {
+		// Keep ordinary SQL UDF creation independent of the Python catalog
+		// columns until the rolling upgrade has reached every writer.
+		insertSQL = fmt.Sprintf(initMoUserDefinedFunctionSQLFormat,
+			definition.name,
+			ownerRoleID,
+			definition.args,
+			definition.argTypes, definition.retType, body, definition.lang, definition.dbName,
+			tenant.GetUser(), created, created, "FUNCTION", "DEFINER", "", "utf8mb4", "utf8mb4_0900_ai_ci", "utf8mb4_0900_ai_ci", sqlMode)
+	}
+	if err := bh.Exec(ctx, insertSQL); err != nil {
+		return err
+	}
+	if strings.EqualFold(definition.lang, string(tree.PYTHON)) {
+		functionIDValue, err := findPersistedFunctionID(ctx, bh, definition)
+		if err != nil {
+			return err
+		}
+		if err := insertPythonRevision(ctx, bh, definition, functionIDValue, 1, 1); err != nil {
+			return err
+		}
+		return activateFunctionRevision(ctx, bh, functionIDValue, 1, 1)
+	}
+	if !revisionCatalogReady {
+		return nil
+	}
+	functionIDValue, err := findPersistedSQLFunctionID(ctx, bh, definition)
+	if err != nil {
+		return err
+	}
+	if err := insertSQLRevision(ctx, bh, definition, functionIDValue, 1, 1); err != nil {
+		return err
+	}
+	return activateFunctionRevision(ctx, bh, functionIDValue, 1, 1)
+}
+
+func readUserDefinedFunctionLanguage(ctx context.Context, bh BackgroundExec, functionID int64) (string, error) {
+	bh.ClearExecResultSet()
+	if err := bh.Exec(ctx, fmt.Sprintf(
+		"select language from mo_catalog.mo_user_defined_function where function_id = %d;",
+		functionID,
+	)); err != nil {
+		return "", err
+	}
+	rows, err := getResultSet(ctx, bh)
+	if err != nil {
+		return "", err
+	}
+	row, err := exactlyOneCatalogRow(ctx, rows, fmt.Sprintf("function identity %d while replacing", functionID))
+	if err != nil {
+		return "", err
+	}
+	language, err := row.GetString(ctx, 0, 0)
+	if err != nil {
+		return "", err
+	}
+	return language, nil
+}
+
+func readUserDefinedFunctionReturnType(ctx context.Context, bh BackgroundExec, functionID int64) (string, error) {
+	bh.ClearExecResultSet()
+	if err := bh.Exec(ctx, fmt.Sprintf(
+		"select rettype from mo_catalog.mo_user_defined_function where function_id = %d;",
+		functionID,
+	)); err != nil {
+		return "", err
+	}
+	rows, err := getResultSet(ctx, bh)
+	if err != nil {
+		return "", err
+	}
+	row, err := exactlyOneCatalogRow(ctx, rows, fmt.Sprintf("function identity %d while checking its return type", functionID))
+	if err != nil {
+		return "", err
+	}
+	return row.GetString(ctx, 0, 0)
+}
+
+func readPythonRevisionBody(ctx context.Context, bh BackgroundExec, functionID int64, revision, namespace uint64) (string, error) {
+	bh.ClearExecResultSet()
+	if err := bh.Exec(ctx, fmt.Sprintf(
+		"select body from mo_catalog.mo_function_revisions where function_id = %d and revision = %d and namespace_version = %d;",
+		functionID, revision, namespace,
+	)); err != nil {
+		return "", errutil.Wrapf(err, "UNSUPPORTED_ROUTINE_VERSION: Python revision %d is unavailable", revision)
+	}
+	rows, err := getResultSet(ctx, bh)
+	if err != nil {
+		return "", err
+	}
+	row, err := exactlyOneCatalogRow(ctx, rows, fmt.Sprintf("UNSUPPORTED_ROUTINE_VERSION: Python revision %d", revision))
+	if err != nil {
+		return "", err
+	}
+	body, err := row.GetString(ctx, 0, 0)
+	if err != nil {
+		return "", err
+	}
+	return body, nil
+}
+
+func samePythonRoutineSignature(left, right function.PythonRoutineBody) bool {
+	if len(left.ArgTypes) != len(right.ArgTypes) {
+		return false
+	}
+	for index := range left.ArgTypes {
+		if left.ArgTypes[index] != right.ArgTypes[index] {
+			return false
+		}
+	}
+	return left.ReturnType != nil && right.ReturnType != nil && *left.ReturnType == *right.ReturnType
+}
+
+func readPythonRevisionHead(ctx context.Context, bh BackgroundExec, functionID int64) (uint64, uint64, error) {
+	bh.ClearExecResultSet()
+	if err := bh.Exec(ctx, fmt.Sprintf(
+		"select active_revision, namespace_version from mo_catalog.mo_user_defined_function where function_id = %d;",
+		functionID,
+	)); err != nil {
+		return 0, 0, err
+	}
+	rows, err := getResultSet(ctx, bh)
+	if err != nil {
+		return 0, 0, err
+	}
+	row, err := exactlyOneCatalogRow(ctx, rows, fmt.Sprintf("function identity %d while publishing Python revision", functionID))
+	if err != nil {
+		return 0, 0, err
+	}
+	revision, err := row.GetInt64(ctx, 0, 0)
+	if err != nil {
+		return 0, 0, err
+	}
+	namespace, err := row.GetInt64(ctx, 0, 1)
+	if err != nil {
+		return 0, 0, err
+	}
+	if revision < 0 || namespace < 0 {
+		return 0, 0, moerr.NewInvalidInputNoCtxf("function identity %d has invalid Python revision head", functionID)
+	}
+	return uint64(revision), uint64(namespace), nil
+}
+
+func findPersistedFunctionID(ctx context.Context, bh BackgroundExec, definition userDefinedFunctionDefinition) (int64, error) {
+	bh.ClearExecResultSet()
+	query := fmt.Sprintf(
+		`select function_id from mo_catalog.mo_user_defined_function where name = "%s" and db = "%s" and canonical_input_descriptor = "%s" and language = '%s' order by function_id desc limit 1;`,
+		escapeSQLStringForDoubleQuotes(definition.name),
+		escapeSQLStringForDoubleQuotes(definition.dbName),
+		escapeSQLStringForDoubleQuotes(definition.canonicalInputDescriptor),
+		escapeSQLStringForDoubleQuotes(definition.lang),
+	)
+	if err := bh.Exec(ctx, query); err != nil {
+		return 0, err
+	}
+	rows, err := getResultSet(ctx, bh)
+	if err != nil {
+		return 0, err
+	}
+	row, err := exactlyOneCatalogRow(ctx, rows, "Python function identity after creation")
+	if err != nil {
+		return 0, err
+	}
+	return row.GetInt64(ctx, 0, 0)
+}
+
+func findPersistedSQLFunctionID(ctx context.Context, bh BackgroundExec, definition userDefinedFunctionDefinition) (int64, error) {
+	bh.ClearExecResultSet()
+	query := fmt.Sprintf(
+		`select function_id from mo_catalog.mo_user_defined_function where name = "%s" and db = "%s" and arg_types = %s and language = '%s' order by function_id desc limit 1;`,
+		escapeSQLStringForDoubleQuotes(definition.name),
+		escapeSQLStringForDoubleQuotes(definition.dbName),
+		quoteSQLStringLiteral(definition.argTypes),
+		escapeSQLStringForDoubleQuotes(definition.lang),
+	)
+	if err := bh.Exec(ctx, query); err != nil {
+		return 0, err
+	}
+	rows, err := getResultSet(ctx, bh)
+	if err != nil {
+		return 0, err
+	}
+	row, err := exactlyOneCatalogRow(ctx, rows, "SQL function identity after creation")
+	if err != nil {
+		return 0, err
+	}
+	return row.GetInt64(ctx, 0, 0)
+}
+
+func insertPythonRevision(ctx context.Context, bh BackgroundExec, definition userDefinedFunctionDefinition, functionID int64, revision, namespace uint64) error {
+	body, err := function.DecodePythonRoutineBody(definition.body)
+	if err != nil {
+		return moerr.NewInvalidInputNoCtxf("UNSUPPORTED_ROUTINE_VERSION: Python definition rejected before publication: %v", err)
+	}
+	fingerprint, err := function.PythonRoutineFingerprint(definition.body)
+	if err != nil {
+		return err
+	}
+	canonicalInput, _, _, err := function.PythonSignatureMetadata(body.ArgTypes, body.ReturnType)
+	if err != nil {
+		return moerr.NewInvalidInputNoCtxf("UNSUPPORTED_ROUTINE_VERSION: Python signature rejected before publication: %v", err)
+	}
+	if definition.canonicalInputDescriptor != "" && definition.canonicalInputDescriptor != canonicalInput {
+		return moerr.NewInvalidInputNoCtx("UNSUPPORTED_ROUTINE_VERSION: Python input descriptor does not match its definition")
+	}
+	quote := func(value string) string { return escapeSQLStringForDoubleQuotes(value) }
+	created := types.CurrentTimestamp().String2(time.UTC, 0)
+	sql := fmt.Sprintf(`insert into mo_catalog.mo_function_revisions(
+		function_id, revision, namespace_version, name, args, arg_types, rettype, body,
+		language, definition_schema_version, abi_contract, adapter_version,
+		artifact_digest, environment_digest, sdk_version, null_policy, volatility,
+		definition_fingerprint, created_time, security_type) values (
+		%d, %d, %d, "%s", "%s", "%s", "%s", "%s", "%s", %d, "%s", "%s", "%s", "%s", "%s", "%s", "VOLATILE", "%s", "%s", "INVOKER");`,
+		functionID, revision, namespace, quote(definition.name), quote(definition.args), quote(canonicalInput),
+		quote(definition.retType), quote(definition.body), quote(definition.lang), body.DefinitionSchemaVersion,
+		quote(body.ABIContract), quote(body.AdapterVersion), quote(body.ArtifactDigest), quote(body.EnvironmentDigest),
+		quote(body.SDKVersion), quote(body.NullPolicy), quote(fingerprint), created,
+	)
+	return bh.Exec(ctx, sql)
+}
+
+func insertSQLRevision(ctx context.Context, bh BackgroundExec, definition userDefinedFunctionDefinition, functionID int64, revision, namespace uint64) error {
+	fingerprint, err := function.SQLRoutineFingerprint(definition.body, definition.argTypes, definition.retType)
+	if err != nil {
+		return moerr.NewInvalidInputNoCtxf("SQL definition rejected before publication: %v", err)
+	}
+	quote := func(value string) string { return escapeSQLStringForDoubleQuotes(value) }
+	created := types.CurrentTimestamp().String2(time.UTC, 0)
+	sql := fmt.Sprintf(`insert into mo_catalog.mo_function_revisions(
+		function_id, revision, namespace_version, name, args, arg_types, rettype, body,
+		language, definition_schema_version, abi_contract, adapter_version,
+		artifact_digest, environment_digest, sdk_version, null_policy, volatility,
+		definition_fingerprint, created_time, security_type) values (
+		%d, %d, %d, "%s", "%s", "%s", "%s", "%s", "%s", %d, "", "", "", "", "", "%s", "VOLATILE", "%s", "%s", "DEFINER");`,
+		functionID, revision, namespace, quote(definition.name), quote(definition.args),
+		quote(definition.argTypes), quote(definition.retType), quote(definition.body), quote(definition.lang),
+		udf.SQLDefinitionSchemaVersion, quote(udf.NullCallHandler), quote(fingerprint), created,
+	)
+	return bh.Exec(ctx, sql)
+}
+
+func readFunctionRevisionHead(ctx context.Context, bh BackgroundExec, functionID int64) (uint64, uint64, error) {
+	bh.ClearExecResultSet()
+	if err := bh.Exec(ctx, fmt.Sprintf(
+		"select active_revision, namespace_version from mo_catalog.mo_user_defined_function where function_id = %d;",
+		functionID,
+	)); err != nil {
+		return 0, 0, err
+	}
+	rows, err := getResultSet(ctx, bh)
+	if err != nil {
+		return 0, 0, err
+	}
+	row, err := exactlyOneCatalogRow(ctx, rows, fmt.Sprintf("function identity %d while publishing a revision", functionID))
+	if err != nil {
+		return 0, 0, err
+	}
+	revision, err := row.GetInt64(ctx, 0, 0)
+	if err != nil {
+		return 0, 0, err
+	}
+	namespace, err := row.GetInt64(ctx, 0, 1)
+	if err != nil {
+		return 0, 0, err
+	}
+	if revision < 0 || namespace < 0 {
+		return 0, 0, moerr.NewInvalidInputNoCtxf("function identity %d has an invalid revision head", functionID)
+	}
+	return uint64(revision), uint64(namespace), nil
+}
+
+func activateFunctionRevision(ctx context.Context, bh BackgroundExec, functionID int64, revision, namespace uint64) error {
+	return bh.Exec(ctx, fmt.Sprintf(
+		"update mo_catalog.mo_user_defined_function set active_revision = %d, namespace_version = %d where function_id = %d;",
+		revision, namespace, functionID,
+	))
 }
 
 // storedProcedureDefinition is the procedure metadata kept outside mo_tables.

@@ -47,6 +47,7 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/sql/plan/function/ctl"
 	"github.com/matrixorigin/matrixone/pkg/taskservice"
 	"github.com/matrixorigin/matrixone/pkg/txn/client"
+	"github.com/matrixorigin/matrixone/pkg/udf"
 	"github.com/matrixorigin/matrixone/pkg/util/fault"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/disttae"
@@ -178,6 +179,7 @@ func (s *service) initQueryCommandHandler() {
 	s.addQueryCommandHandler(query.CmdMethod_ISCPDrainConsumer, s.handleISCPDrainConsumer)
 	s.addQueryCommandHandler(query.CmdMethod_IcebergCacheInvalidate, s.handleIcebergCacheInvalidate)
 	s.addQueryCommandHandler(query.CmdMethod_MongoDBClientRetire, s.handleMongoDBClientRetire)
+	s.addQueryCommandHandler(query.CmdMethod_GetPythonUdfStatus, s.handleGetPythonUdfStatus)
 }
 
 func (s *service) addQueryCommandHandler(
@@ -667,6 +669,50 @@ func (s *service) handleGetPipelineInfo(ctx context.Context, req *query.Request,
 	count := s.pipelines.counter.Load()
 	resp.GetPipelineInfoResponse = &query.GetPipelineInfoResponse{
 		Count: count,
+	}
+	return nil
+}
+
+// handleGetPythonUdfStatus exposes the CN-local runtime state to the Operator.
+// The runtime provider owns the capability handshake and returns only a
+// bounded summary; this handler never accepts source or creates invocation
+// state. Returning a status payload for a disabled or mismatched runtime lets
+// the Operator fail closed for Python while ordinary CN query traffic remains
+// available.
+func (s *service) handleGetPythonUdfStatus(ctx context.Context, _ *query.Request, resp *query.Response, _ *morpc.Buffer) error {
+	status := udf.RuntimeStatusSnapshot{
+		Language:   udf.LanguagePython,
+		ErrorClass: udf.RuntimeStatusUnavailable,
+		Reason:     udf.RuntimeStatusReasonStatusUnavailable,
+	}
+	if provider, ok := s.udfService.(udf.RuntimeStatusProvider); ok {
+		status = provider.StatusSnapshot(ctx, udf.LanguagePython)
+	}
+	resp.GetPythonUdfStatus = query.GetPythonUdfStatusResponse{
+		CNUUID:                     s.metadata.UUID,
+		Language:                   status.Language,
+		Enabled:                    status.Enabled,
+		AllowUnisolated:            status.AllowUnisolated,
+		Ready:                      status.Ready,
+		ErrorClass:                 status.ErrorClass,
+		Reason:                     status.Reason,
+		ProtocolVersion:            status.ProtocolVersion,
+		ABIContract:                status.ABIContract,
+		AdapterVersion:             status.AdapterVersion,
+		SDKVersion:                 status.SDKVersion,
+		DefinitionSchemaVersion:    status.DefinitionSchemaVersion,
+		PlanContractVersion:        status.PlanContractVersion,
+		TypeDescriptorContract:     status.TypeDescriptorContract,
+		TimezoneDatabaseVersion:    status.TimezoneDatabaseVersion,
+		WindowBatches:              status.WindowBatches,
+		CumulativeAck:              status.CumulativeAck,
+		MaxExecutionFrameBytes:     status.MaxExecutionFrameBytes,
+		MaxHandlerProcesses:        status.MaxHandlerProcesses,
+		MaxAccountHandlerProcesses: status.MaxAccountHandlerProcesses,
+		MaxOwnerHandlerProcesses:   status.MaxOwnerHandlerProcesses,
+		LeaseEpoch:                 status.LeaseEpoch,
+		Modes:                      append([]string(nil), status.Modes...),
+		NullPolicies:               append([]string(nil), status.NullPolicies...),
 	}
 	return nil
 }

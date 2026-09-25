@@ -45,6 +45,11 @@ MatrixOne's trusted main-branch cache warmer keeps the Maven repository and
 wrapper distribution available to PR CI. Pull-request jobs restore that cache
 read-only; they never publish dependencies resolved from an untrusted head.
 
+The compose BVT starts one Python UDF worker per CN. The worker image is shared
+by both services, while the worker processes, addresses, and failure domains
+remain separate (`cn-0` uses `python-udf-worker-cn0`, and `cn-1` uses
+`python-udf-worker-cn1`).
+
 ## Check log
 
 ```shell

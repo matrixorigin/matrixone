@@ -269,6 +269,7 @@ mo_database  𝄀
 mo_feature_limit  𝄀
 mo_feature_registry  𝄀
 mo_foreign_keys  𝄀
+mo_function_revisions  𝄀
 mo_iceberg_catalogs  𝄀
 mo_iceberg_maintenance_jobs  𝄀
 mo_iceberg_orphan_files  𝄀
@@ -315,7 +316,7 @@ mo_view_dependencies  𝄀
 mo_view_refresh
 show table_number from mo_catalog;
 ➤ Number of tables in mo_catalog[-5,64,0]  𝄀
-59
+61
 show column_number from mo_database;
 ➤ Number of columns in mo_database[-5,64,0]  𝄀
 9

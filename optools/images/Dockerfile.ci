@@ -65,6 +65,13 @@ COPY --from=builder /go/pkg/mod /go/pkg/mod
 
 FROM ${RUNTIME_IMAGE}
 
+# Python UDF admission compares the system IANA database with the worker.
+# Keep every runtime assembly path aligned with optools/images/Dockerfile
+# and pkg/udf/python/worker/Dockerfile, including shared-build artifacts.
+RUN apt-get update \
+    && DEBIAN_FRONTEND=noninteractive apt-get install -y --no-install-recommends tzdata \
+    && rm -rf /var/lib/apt/lists/*
+
 COPY --from=builder /go/src/github.com/matrixorigin/matrixone/mo-service /mo-service
 COPY --from=builder /go/src/github.com/matrixorigin/matrixone/etc /etc
 COPY --from=builder /go/src/github.com/matrixorigin/matrixone/thirdparties/install/lib/*.so /usr/local/lib

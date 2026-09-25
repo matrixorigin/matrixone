@@ -56,7 +56,7 @@ func NewTopProcess(
 	fileService fileservice.FileService,
 	lockService lockservice.LockService,
 	queryClient qclient.QueryClient, HAKeeper logservice.CNHAKeeperClient,
-	udfService udf.Service,
+	udfService udf.Runtime,
 	autoIncrease *defines.AutoIncrCacheManager,
 	taskService taskservice.TaskService) *Process {
 

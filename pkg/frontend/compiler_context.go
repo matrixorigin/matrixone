@@ -26,6 +26,9 @@ import (
 	"sync"
 	"time"
 
+	"github.com/matrixorigin/matrixone/pkg/udf/udferr"
+	"github.com/matrixorigin/matrixone/pkg/util/errutil"
+
 	"go.uber.org/zap"
 
 	"github.com/matrixorigin/matrixone/pkg/catalog"
@@ -43,6 +46,7 @@ import (
 	plan2 "github.com/matrixorigin/matrixone/pkg/sql/plan"
 	"github.com/matrixorigin/matrixone/pkg/sql/plan/function"
 	"github.com/matrixorigin/matrixone/pkg/sql/util"
+	"github.com/matrixorigin/matrixone/pkg/udf"
 	v2 "github.com/matrixorigin/matrixone/pkg/util/metric/v2"
 	"github.com/matrixorigin/matrixone/pkg/util/trace/impl/motrace/statistic"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine"
@@ -830,6 +834,7 @@ func (tcc *TxnCompilerContext) ResolveUdf(name string, args []*plan.Expr) (udf *
 		}
 	}
 
+	defer pinRoutineCatalogReads(bh)()
 	queryCtx, sql := udfCatalogLookup(ctx, tcc.GetSnapshot(), name, tcc.DefaultDatabase())
 	bh.ClearExecResultSet()
 	err = bh.Exec(queryCtx, sql)
@@ -841,15 +846,25 @@ func (tcc *TxnCompilerContext) ResolveUdf(name string, args []*plan.Expr) (udf *
 	if err != nil {
 		return nil, err
 	}
+	if len(erArray) > 1 || (len(erArray) == 1 && erArray[0] == nil) {
+		return nil, udferr.Newf("UNSUPPORTED_ROUTINE_VERSION: UDF %s lookup returned %d result sets, expected one or an empty candidate result", name, len(erArray))
+	}
 
 	if execResultArrayHasData(erArray) {
 		fromList := make([]types.Type, len(args))
 		for i, arg := range args {
-			fromList[i] = types.Type{
-				Oid:   types.T(arg.Typ.Id),
-				Width: arg.Typ.Width,
-				Scale: arg.Typ.Scale,
-			}
+			// Reconstruct the complete SQL type instead of filling only the
+			// plan-visible fields.  Type.Eq includes the physical size, which is
+			// not serialized in plan.Type but is required for exact Python ABI
+			// matching.  In particular, a vector type built with Size == 0 is
+			// rejected against the declared VECF32/VECF64 descriptor because its
+			// fixed child width is no longer comparable.
+			fromList[i] = types.NewWithCharset(
+				types.T(arg.Typ.Id),
+				arg.Typ.Width,
+				arg.Typ.Scale,
+				uint8(arg.Typ.Charset),
+			)
 
 			argTypeStr += strings.ToLower(fromList[i].String())
 			if i+1 != len(args) {
@@ -866,38 +881,75 @@ func (tcc *TxnCompilerContext) ResolveUdf(name string, args []*plan.Expr) (udf *
 		matchedList := make([]*MatchUdf, 0)
 
 		for i := uint64(0); i < erArray[0].GetRowCount(); i++ {
-			argstr, err = erArray[0].GetString(ctx, i, 0)
+			functionID, getErr := erArray[0].GetInt64(ctx, i, 0)
+			if getErr != nil {
+				return nil, getErr
+			}
+			argstr, err = erArray[0].GetString(ctx, i, 1)
 			if err != nil {
 				return nil, err
 			}
 			udf = &function.Udf{}
-			udf.Body, err = erArray[0].GetString(ctx, i, 1)
+			udf.Body, err = erArray[0].GetString(ctx, i, 2)
 			if err != nil {
 				return nil, err
 			}
-			udf.Language, err = erArray[0].GetString(ctx, i, 2)
+			udf.Language, err = erArray[0].GetString(ctx, i, 3)
 			if err != nil {
 				return nil, err
 			}
-			udf.RetType, err = erArray[0].GetString(ctx, i, 3)
+			udf.RetType, err = erArray[0].GetString(ctx, i, 4)
 			if err != nil {
 				return nil, err
 			}
-			udf.Db, err = erArray[0].GetString(ctx, i, 4)
+			udf.Db, err = erArray[0].GetString(ctx, i, 5)
 			if err != nil {
 				return nil, err
 			}
-			udf.ModifiedTime, err = erArray[0].GetString(ctx, i, 5)
+			udf.ModifiedTime, err = erArray[0].GetString(ctx, i, 6)
 			if err != nil {
 				return nil, err
 			}
 			udf.ModifiedTime = strings.ReplaceAll(udf.ModifiedTime, " ", "_")
 			udf.ModifiedTime = strings.ReplaceAll(udf.ModifiedTime, ":", "-")
-			mode, getErr := erArray[0].GetString(ctx, i, 6)
+			mode, getErr := erArray[0].GetString(ctx, i, 7)
 			if getErr != nil {
 				return nil, getErr
 			}
 			udf.SQLMode = &mode
+			udf.FunctionID = functionID
+			if udf.Language == string(tree.PYTHON) {
+				revision, revisionErr := readPythonRevision(queryCtx, bh, functionID, tcc.GetSnapshot())
+				if revisionErr != nil {
+					return nil, revisionErr
+				}
+				argstr = revision.Args
+				udf.Body = revision.Body
+				udf.Language = revision.Language
+				udf.RetType = revision.RetType
+				udf.Revision = revision.Revision
+				udf.NamespaceVersion = revision.NamespaceVersion
+			} else if udf.Language == string(tree.SQL) {
+				revision, found, revisionErr := readSQLRevision(queryCtx, bh, functionID, tcc.GetSnapshot())
+				if revisionErr != nil {
+					return nil, revisionErr
+				}
+				if found {
+					argstr = revision.Args
+					udf.Body = revision.Body
+					udf.Language = revision.Language
+					udf.RetType = revision.RetType
+					udf.Revision = revision.Revision
+					udf.NamespaceVersion = revision.NamespaceVersion
+					udf.DefinitionFingerprint = revision.DefinitionFingerprint
+					udf.SemanticDefinitionSchemaVersion = int(revision.DefinitionSchema)
+					udf.Volatility = revision.Volatility
+					udf.NullPolicy = revision.NullPolicy
+				}
+			}
+			if err = udf.LoadPythonTypeContract(); err != nil {
+				return nil, err
+			}
 			// arg type check
 			argList := make([]*function.Arg, 0)
 			err = json.Unmarshal([]byte(argstr), &argList)
@@ -907,10 +959,23 @@ func (tcc *TxnCompilerContext) ResolveUdf(name string, args []*plan.Expr) (udf *
 			if len(argList) != len(args) { // mismatch
 				continue
 			}
+			udf.Args = argList
+			if err = udf.ValidatePythonTypeContract(); err != nil {
+				return nil, err
+			}
+			if err = udf.ValidatePythonCatalogSignature(); err != nil {
+				return nil, err
+			}
 
 			toList := make([]types.T, len(args))
+			pythonTargetTypes := make([]types.Type, 0)
+			if udf.Language == string(tree.PYTHON) {
+				pythonTargetTypes = udf.GetArgsType()
+			}
 			for j := range argList {
-				if fromList[j].IsDecimal() && argList[j].Type == "decimal" {
+				if len(pythonTargetTypes) != 0 {
+					toList[j] = pythonTargetTypes[j].Oid
+				} else if fromList[j].IsDecimal() && argList[j].Type == "decimal" {
 					toList[j] = fromList[j].Oid
 				} else {
 					toList[j] = types.Types[argList[j].Type]
@@ -918,11 +983,13 @@ func (tcc *TxnCompilerContext) ResolveUdf(name string, args []*plan.Expr) (udf *
 			}
 
 			canCast, cost := function.UdfArgTypeMatch(fromList, toList)
+			if len(pythonTargetTypes) != 0 {
+				canCast, cost = function.PythonUdfArgTypeMatch(fromList, pythonTargetTypes)
+			}
 			if !canCast { // mismatch
 				continue
 			}
 
-			udf.Args = argList
 			matchedList = append(matchedList, &MatchUdf{
 				Udf:      udf,
 				Cost:     cost,
@@ -946,7 +1013,36 @@ func (tcc *TxnCompilerContext) ResolveUdf(name string, args []*plan.Expr) (udf *
 		}
 
 		if matchNum == 1 {
-			matchedList[0].Udf.ArgsType = function.UdfArgTypeCast(fromList, matchedList[0].TypeList)
+			if strings.EqualFold(matchedList[0].Udf.Language, string(tree.PYTHON)) {
+				matchedList[0].Udf.ArgsType = function.PythonUdfArgTypeCast(fromList, matchedList[0].Udf.GetArgsType())
+				if len(matchedList[0].Udf.ArgsType) != len(fromList) {
+					return nil, udferr.Newf("python udf: argument descriptor count changed during resolution")
+				}
+			} else {
+				matchedList[0].Udf.ArgsType = function.UdfArgTypeCast(fromList, matchedList[0].TypeList)
+			}
+			if matchedList[0].Udf.Revision != 0 {
+				accountID, accountErr := tcc.GetAccountId()
+				if accountErr != nil {
+					return nil, accountErr
+				}
+				accountID = routineCatalogAccountID(accountID, tcc.GetSnapshot())
+				databaseID, databaseErr := routineCatalogDatabaseID(queryCtx, bh, matchedList[0].Udf.Db, accountID, tcc.GetSnapshot())
+				if databaseErr != nil {
+					return nil, errutil.Wrapf(databaseErr, "python routine database identity")
+				}
+				matchedList[0].Udf.AccountID = uint64(accountID)
+				matchedList[0].Udf.DatabaseID = databaseID
+				namespaces, namespaceErr := readRoutineNamespaces(queryCtx, bh, []uint64{uint64(matchedList[0].Udf.FunctionID)}, tcc.GetSnapshot())
+				if namespaceErr != nil && !errors.Is(namespaceErr, errRoutineNamespaceBudget) {
+					return nil, namespaceErr
+				}
+				matchedList[0].Udf.NamespaceFingerprint = namespaces[uint64(matchedList[0].Udf.FunctionID)]
+				if namespaceErr == nil && matchedList[0].Udf.NamespaceFingerprint == "" {
+					return nil, udferr.Newf("UNSUPPORTED_ROUTINE_VERSION: missing routine namespace")
+				}
+
+			}
 			return matchedList[0].Udf, err
 		}
 
@@ -976,11 +1072,405 @@ func udfCatalogLookup(
 		}
 	}
 	return ctx, fmt.Sprintf(
-		`select args, body, language, rettype, db, modified_time, sql_mode from %s where name = "%s" and db = "%s";`,
+		`select function_id, args, body, language, rettype, db, modified_time, sql_mode from %s where name = "%s" and db = "%s";`,
 		catalogTable,
 		name,
 		database,
 	)
+}
+
+// exactlyOneCatalogResultSet is for catalog reads that must be interpreted
+// atomically. A BackgroundExec result array is a transport shape, not a
+// guarantee that a single SELECT produced one result set. Treating the first
+// result set as authoritative would let a split or malformed reader hide
+// catalog corruption from the planner/cache validator.
+func exactlyOneCatalogResultSet(ctx context.Context, rows []ExecResult, label string) (ExecResult, error) {
+	if len(rows) != 1 || rows[0] == nil {
+		return nil, udferr.Newf("UNSUPPORTED_ROUTINE_VERSION: %s returned %d result sets, expected exactly one", label, len(rows))
+	}
+	return rows[0], nil
+}
+
+// candidateCatalogResultSet is used only for a name/signature lookup. The
+// execution engine represents a SELECT with no matching rows as an empty
+// result-set slice, and that is the normal state before the first CREATE.
+// Multiple result sets or a nil result remain malformed and fail closed.
+func candidateCatalogResultSet(rows []ExecResult, label string) (ExecResult, error) {
+	if len(rows) == 0 {
+		return nil, nil
+	}
+	return exactlyOneCatalogResultSet(context.Background(), rows, label)
+}
+
+// exactlyOneCatalogRow is for identity and revision point reads. A catalog
+// query with a function_id/revision predicate is expected to return one
+// logical row in one result set. Treating the first row as authoritative
+// would turn duplicate or split result sets caused by corruption, restore, or
+// a malformed reader into an arbitrary executable contract.
+func exactlyOneCatalogRow(ctx context.Context, rows []ExecResult, label string) (ExecResult, error) {
+	result, err := exactlyOneCatalogResultSet(ctx, rows, label)
+	if err != nil {
+		return nil, err
+	}
+	rowCount := result.GetRowCount()
+	if rowCount != 1 {
+		return nil, udferr.Newf("UNSUPPORTED_ROUTINE_VERSION: %s returned %d rows, expected exactly one", label, rowCount)
+	}
+	return result, nil
+}
+
+type pythonRevisionCatalogRow struct {
+	Args                      string
+	ArgTypes                  string
+	Body                      string
+	Language                  string
+	RetType                   string
+	Revision                  uint64
+	NamespaceVersion          uint64
+	CanonicalInputDescriptor  string
+	ReturnDescriptor          string
+	SignatureKeySchemaVersion int64
+	SignatureFingerprint      string
+	DefinitionSchema          int64
+	ABIContract               string
+	AdapterVersion            string
+	SDKVersion                string
+	NullPolicy                string
+	Volatility                string
+	DefinitionFingerprint     string
+	ArtifactDigest            string
+	EnvironmentDigest         string
+	SecurityType              string
+}
+
+type sqlRevisionCatalogRow struct {
+	Args                  string
+	ArgTypes              string
+	Body                  string
+	Language              string
+	RetType               string
+	Revision              uint64
+	NamespaceVersion      uint64
+	DefinitionSchema      int64
+	DefinitionFingerprint string
+	Volatility            string
+	NullPolicy            string
+	SecurityType          string
+}
+
+// readSQLRevision resolves the current shared revision head without making a
+// legacy SQL row look current. A missing v4_0_7 table/column is reported as
+// found=false so ordinary SQL remains available during a rolling upgrade;
+// once a head is published, every missing or malformed revision is a hard
+// catalog error.
+func readSQLRevision(
+	ctx context.Context,
+	bh BackgroundExec,
+	functionID int64,
+	snapshot *plan2.Snapshot,
+) (sqlRevisionCatalogRow, bool, error) {
+	baseTable := "mo_catalog.mo_user_defined_function"
+	revisionTable := "mo_catalog.mo_function_revisions"
+	if snapshot != nil && snapshot.TS != nil {
+		suffix := fmt.Sprintf(" {MO_TS = %d}", snapshot.TS.PhysicalTime)
+		baseTable += suffix
+		revisionTable += suffix
+	}
+
+	bh.ClearExecResultSet()
+	if err := bh.Exec(ctx, fmt.Sprintf(
+		"select active_revision, namespace_version, security_type from %s where function_id = %d;",
+		baseTable, functionID,
+	)); err != nil {
+		if isMissingCatalogObjectError(err) {
+			return sqlRevisionCatalogRow{}, false, nil
+		}
+		return sqlRevisionCatalogRow{}, false, errutil.Wrapf(err, "UNSUPPORTED_ROUTINE_VERSION: SQL function %d revision head is unavailable", functionID)
+	}
+	rows, err := getResultSet(ctx, bh)
+	if err != nil {
+		return sqlRevisionCatalogRow{}, false, err
+	}
+	row, err := exactlyOneCatalogRow(ctx, rows, fmt.Sprintf("SQL function %d revision head", functionID))
+	if err != nil {
+		return sqlRevisionCatalogRow{}, false, err
+	}
+	activeRevision, err := row.GetInt64(ctx, 0, 0)
+	if err != nil {
+		return sqlRevisionCatalogRow{}, false, err
+	}
+	namespaceVersion, err := row.GetInt64(ctx, 0, 1)
+	if err != nil {
+		return sqlRevisionCatalogRow{}, false, err
+	}
+	baseSecurityType, err := row.GetString(ctx, 0, 2)
+	if err != nil {
+		return sqlRevisionCatalogRow{}, false, err
+	}
+	if activeRevision == 0 && namespaceVersion == 0 {
+		return sqlRevisionCatalogRow{}, false, nil
+	}
+	if activeRevision <= 0 || namespaceVersion <= 0 {
+		return sqlRevisionCatalogRow{}, false, udferr.Newf("UNSUPPORTED_ROUTINE_VERSION: SQL function %d has an invalid revision head", functionID)
+	}
+
+	bh.ClearExecResultSet()
+	if err := bh.Exec(ctx, fmt.Sprintf(
+		"select revision, args, arg_types, body, rettype, language, "+
+			"definition_schema_version, definition_fingerprint, volatility, null_policy, security_type "+
+			"from %s where function_id = %d and revision = %d and namespace_version = %d;",
+		revisionTable, functionID, activeRevision, namespaceVersion,
+	)); err != nil {
+		if isMissingCatalogObjectError(err) {
+			return sqlRevisionCatalogRow{}, false, errutil.Wrapf(err, "UNSUPPORTED_ROUTINE_VERSION: SQL function %d revision table is unavailable", functionID)
+		}
+		return sqlRevisionCatalogRow{}, false, errutil.Wrapf(err, "UNSUPPORTED_ROUTINE_VERSION: SQL function %d revision is unavailable", functionID)
+	}
+	rows, err = getResultSet(ctx, bh)
+	if err != nil {
+		return sqlRevisionCatalogRow{}, false, err
+	}
+	row, err = exactlyOneCatalogRow(ctx, rows, fmt.Sprintf("SQL function %d active revision", functionID))
+	if err != nil {
+		return sqlRevisionCatalogRow{}, false, err
+	}
+	getString := func(column uint64) (string, error) { return row.GetString(ctx, 0, column) }
+	revisionValue, err := row.GetInt64(ctx, 0, 0)
+	if err != nil {
+		return sqlRevisionCatalogRow{}, false, err
+	}
+	args, err := getString(1)
+	if err != nil {
+		return sqlRevisionCatalogRow{}, false, err
+	}
+	argTypes, err := getString(2)
+	if err != nil {
+		return sqlRevisionCatalogRow{}, false, err
+	}
+	body, err := getString(3)
+	if err != nil {
+		return sqlRevisionCatalogRow{}, false, err
+	}
+	retType, err := getString(4)
+	if err != nil {
+		return sqlRevisionCatalogRow{}, false, err
+	}
+	language, err := getString(5)
+	if err != nil {
+		return sqlRevisionCatalogRow{}, false, err
+	}
+	definitionSchema, err := row.GetInt64(ctx, 0, 6)
+	if err != nil {
+		return sqlRevisionCatalogRow{}, false, err
+	}
+	fingerprint, err := getString(7)
+	if err != nil {
+		return sqlRevisionCatalogRow{}, false, err
+	}
+	volatility, err := getString(8)
+	if err != nil {
+		return sqlRevisionCatalogRow{}, false, err
+	}
+	nullPolicy, err := getString(9)
+	if err != nil {
+		return sqlRevisionCatalogRow{}, false, err
+	}
+	securityType, err := getString(10)
+	if err != nil {
+		return sqlRevisionCatalogRow{}, false, err
+	}
+	if revisionValue <= 0 || uint64(revisionValue) != uint64(activeRevision) ||
+		language != string(tree.SQL) ||
+		definitionSchema != udf.SQLDefinitionSchemaVersion ||
+		volatility != "VOLATILE" || nullPolicy != udf.NullCallHandler ||
+		!strings.EqualFold(securityType, "DEFINER") ||
+		!strings.EqualFold(baseSecurityType, securityType) {
+		return sqlRevisionCatalogRow{}, false, udferr.Newf("UNSUPPORTED_ROUTINE_VERSION: SQL function %d revision contract is not supported", functionID)
+	}
+	logicalArgTypes, err := userDefinedFunctionArgumentTypesFromJSON(args)
+	if err != nil || logicalArgTypes != argTypes {
+		return sqlRevisionCatalogRow{}, false, udferr.Newf("UNSUPPORTED_ROUTINE_VERSION: SQL function %d revision argument metadata is invalid", functionID)
+	}
+	expectedFingerprint, err := function.SQLRoutineFingerprint(body, argTypes, retType)
+	if err != nil || fingerprint == "" || fingerprint != expectedFingerprint {
+		return sqlRevisionCatalogRow{}, false, udferr.Newf("UNSUPPORTED_ROUTINE_VERSION: SQL function %d revision fingerprint mismatch", functionID)
+	}
+	return sqlRevisionCatalogRow{
+		Args: args, ArgTypes: argTypes, Body: body, Language: language, RetType: retType,
+		Revision: uint64(revisionValue), NamespaceVersion: uint64(namespaceVersion),
+		DefinitionSchema: definitionSchema, DefinitionFingerprint: fingerprint,
+		Volatility: volatility, NullPolicy: nullPolicy, SecurityType: securityType,
+	}, true, nil
+}
+
+func readPythonRevision(ctx context.Context, bh BackgroundExec, functionID int64, snapshot *plan2.Snapshot) (pythonRevisionCatalogRow, error) {
+	bh.ClearExecResultSet()
+	query := pythonRevisionCatalogSQL(snapshot, functionID)
+	if err := bh.Exec(ctx, query); err != nil {
+		return pythonRevisionCatalogRow{}, errutil.Wrapf(err, "UNSUPPORTED_ROUTINE_VERSION: Python catalog revision is unavailable")
+	}
+	rows, err := getResultSet(ctx, bh)
+	if err != nil {
+		return pythonRevisionCatalogRow{}, err
+	}
+	row, err := exactlyOneCatalogRow(ctx, rows, fmt.Sprintf("Python function %d active revision", functionID))
+	if err != nil {
+		return pythonRevisionCatalogRow{}, err
+	}
+	activeRevision, err := row.GetInt64(ctx, 0, 0)
+	if err != nil {
+		return pythonRevisionCatalogRow{}, err
+	}
+	namespaceVersion, err := row.GetInt64(ctx, 0, 1)
+	if err != nil {
+		return pythonRevisionCatalogRow{}, err
+	}
+	revision, err := row.GetInt64(ctx, 0, 2)
+	if err != nil {
+		return pythonRevisionCatalogRow{}, err
+	}
+	if activeRevision <= 0 || namespaceVersion <= 0 || revision != activeRevision {
+		return pythonRevisionCatalogRow{}, udferr.Newf("UNSUPPORTED_ROUTINE_VERSION: Python function %d has an invalid revision head", functionID)
+	}
+	getString := func(column uint64) (string, error) { return row.GetString(ctx, 0, column) }
+	canonicalInput, err := getString(3)
+	if err != nil {
+		return pythonRevisionCatalogRow{}, err
+	}
+	returnDescriptor, err := getString(4)
+	if err != nil {
+		return pythonRevisionCatalogRow{}, err
+	}
+	signatureKeySchemaVersion, err := row.GetInt64(ctx, 0, 5)
+	if err != nil {
+		return pythonRevisionCatalogRow{}, err
+	}
+	signatureFingerprint, err := getString(6)
+	if err != nil {
+		return pythonRevisionCatalogRow{}, err
+	}
+	args, err := getString(7)
+	if err != nil {
+		return pythonRevisionCatalogRow{}, err
+	}
+	argTypes, err := getString(8)
+	if err != nil {
+		return pythonRevisionCatalogRow{}, err
+	}
+	body, err := getString(9)
+	if err != nil {
+		return pythonRevisionCatalogRow{}, err
+	}
+	language, err := getString(10)
+	if err != nil {
+		return pythonRevisionCatalogRow{}, err
+	}
+	retType, err := getString(11)
+	if err != nil {
+		return pythonRevisionCatalogRow{}, err
+	}
+	definitionSchema, err := row.GetInt64(ctx, 0, 12)
+	if err != nil {
+		return pythonRevisionCatalogRow{}, err
+	}
+	abi, err := getString(13)
+	if err != nil {
+		return pythonRevisionCatalogRow{}, err
+	}
+	adapter, err := getString(14)
+	if err != nil {
+		return pythonRevisionCatalogRow{}, err
+	}
+	sdk, err := getString(15)
+	if err != nil {
+		return pythonRevisionCatalogRow{}, err
+	}
+	nullPolicy, err := getString(16)
+	if err != nil {
+		return pythonRevisionCatalogRow{}, err
+	}
+	volatility, err := getString(17)
+	if err != nil {
+		return pythonRevisionCatalogRow{}, err
+	}
+	fingerprint, err := getString(18)
+	if err != nil {
+		return pythonRevisionCatalogRow{}, err
+	}
+	artifact, err := getString(19)
+	if err != nil {
+		return pythonRevisionCatalogRow{}, err
+	}
+	environment, err := getString(20)
+	if err != nil {
+		return pythonRevisionCatalogRow{}, err
+	}
+	securityType, err := getString(21)
+	if err != nil {
+		return pythonRevisionCatalogRow{}, err
+	}
+	baseSecurityType, err := getString(22)
+	if err != nil {
+		return pythonRevisionCatalogRow{}, err
+	}
+	if language != string(tree.PYTHON) || definitionSchema != udf.PythonDefinitionSchemaVersion || abi != udf.PythonABIContract || adapter != udf.PythonAdapterVersion || sdk != udf.PythonSDKVersion || volatility != "VOLATILE" || !strings.EqualFold(securityType, "INVOKER") || !strings.EqualFold(baseSecurityType, securityType) {
+		return pythonRevisionCatalogRow{}, udferr.Newf("UNSUPPORTED_ROUTINE_VERSION: Python function %d revision contract is not supported", functionID)
+	}
+	bodyDefinition, err := function.DecodePythonRoutineBody(body)
+	if err != nil {
+		return pythonRevisionCatalogRow{}, errutil.Wrapf(err, "UNSUPPORTED_ROUTINE_VERSION: Python function %d revision body is invalid", functionID)
+	}
+	if bodyDefinition.ABIContract != abi || bodyDefinition.AdapterVersion != adapter || bodyDefinition.SDKVersion != sdk || bodyDefinition.NullPolicy != nullPolicy || bodyDefinition.ArtifactDigest != artifact || bodyDefinition.EnvironmentDigest != environment {
+		return pythonRevisionCatalogRow{}, udferr.Newf("UNSUPPORTED_ROUTINE_VERSION: Python function %d revision metadata does not match its definition", functionID)
+	}
+	actualFingerprint, err := function.PythonRoutineFingerprint(body)
+	if err != nil {
+		return pythonRevisionCatalogRow{}, errutil.Wrapf(err, "UNSUPPORTED_ROUTINE_VERSION: Python function %d revision fingerprint cannot be computed", functionID)
+	}
+	if fingerprint == "" || fingerprint != actualFingerprint {
+		return pythonRevisionCatalogRow{}, udferr.Newf("UNSUPPORTED_ROUTINE_VERSION: Python function %d revision fingerprint mismatch", functionID)
+	}
+	expectedInput, expectedReturn, expectedSignature, err := function.PythonSignatureMetadata(bodyDefinition.ArgTypes, bodyDefinition.ReturnType)
+	if err != nil {
+		return pythonRevisionCatalogRow{}, errutil.Wrapf(err, "UNSUPPORTED_ROUTINE_VERSION: Python function %d signature cannot be computed", functionID)
+	}
+	if signatureKeySchemaVersion != udf.PythonSignatureKeySchemaVersion ||
+		canonicalInput != expectedInput || returnDescriptor != expectedReturn || signatureFingerprint != expectedSignature {
+		return pythonRevisionCatalogRow{}, udferr.Newf("UNSUPPORTED_ROUTINE_VERSION: Python function %d identity descriptor metadata mismatch", functionID)
+	}
+	if argTypes != expectedInput {
+		return pythonRevisionCatalogRow{}, udferr.Newf("UNSUPPORTED_ROUTINE_VERSION: Python function %d revision argument descriptor mismatch", functionID)
+	}
+	return pythonRevisionCatalogRow{
+		Args: args, ArgTypes: argTypes, Body: body, Language: language, RetType: retType,
+		Revision: uint64(revision), NamespaceVersion: uint64(namespaceVersion),
+		CanonicalInputDescriptor: canonicalInput, ReturnDescriptor: returnDescriptor,
+		SignatureKeySchemaVersion: signatureKeySchemaVersion, SignatureFingerprint: signatureFingerprint,
+		DefinitionSchema: definitionSchema, ABIContract: abi, AdapterVersion: adapter,
+		SDKVersion: sdk, NullPolicy: nullPolicy, Volatility: volatility, DefinitionFingerprint: fingerprint,
+		ArtifactDigest: artifact, EnvironmentDigest: environment, SecurityType: securityType,
+	}, nil
+}
+
+func pythonRevisionCatalogSQL(snapshot *plan2.Snapshot, functionID int64) string {
+	userFunctionTable := "mo_catalog.mo_user_defined_function"
+	revisionTable := "mo_catalog.mo_function_revisions"
+	if snapshot != nil && snapshot.TS != nil {
+		userFunctionTable += fmt.Sprintf(" {MO_TS = %d}", snapshot.TS.PhysicalTime)
+		revisionTable += fmt.Sprintf(" {MO_TS = %d}", snapshot.TS.PhysicalTime)
+	}
+	return fmt.Sprintf(`select f.active_revision, f.namespace_version, r.revision,
+		f.canonical_input_descriptor, f.return_descriptor,
+		f.signature_key_schema_version, f.signature_fingerprint,
+		r.args, r.arg_types, r.body, r.language, r.rettype, r.definition_schema_version,
+		r.abi_contract, r.adapter_version, r.sdk_version, r.null_policy, r.volatility,
+		r.definition_fingerprint, r.artifact_digest, r.environment_digest,
+		r.security_type, f.security_type
+		from %s f
+		join %s r
+			on r.function_id = f.function_id and r.revision = f.active_revision
+			and r.namespace_version = f.namespace_version
+		where f.function_id = %d;`, userFunctionTable, revisionTable, functionID)
 }
 
 func (tcc *TxnCompilerContext) ResolveVariable(varName string, isSystemVar, isGlobalVar bool) (varValue interface{}, err error) {

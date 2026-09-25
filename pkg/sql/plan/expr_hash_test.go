@@ -67,6 +67,42 @@ func TestExprStructuralHashDistinguishesObjectRef(t *testing.T) {
 	require.True(t, exprStructuralEqual(a, c))
 }
 
+func TestExprStructuralHashIncludesRoutineIdentity(t *testing.T) {
+	call := func(revision uint64) *planpb.RoutineCall {
+		return &planpb.RoutineCall{
+			ContractVersion: 1,
+			FunctionRef: &planpb.FunctionRef{
+				FunctionId:       17,
+				Revision:         revision,
+				NamespaceVersion: 1,
+				AccountId:        9,
+				DatabaseId:       11,
+			},
+			Language:   "python",
+			Volatility: "VOLATILE",
+			NullPolicy: "CALLED_ON_NULL_INPUT",
+			ReturnType: planpb.Type{Id: int32(types.T_int64)},
+		}
+	}
+	mk := func(revision uint64) *planpb.Expr {
+		return &planpb.Expr{
+			Typ: planpb.Type{Id: int32(types.T_int64)},
+			Expr: &planpb.Expr_F{F: &planpb.Function{
+				Func:        &planpb.ObjectRef{ObjName: "python_user_defined_function", Obj: 1},
+				RoutineCall: call(revision),
+			}},
+		}
+	}
+
+	a := mk(1)
+	b := mk(2)
+	c := mk(1)
+	require.NotEqual(t, exprStructuralHash(a), exprStructuralHash(b))
+	require.False(t, exprStructuralEqual(a, b))
+	require.Equal(t, exprStructuralHash(a), exprStructuralHash(c))
+	require.True(t, exprStructuralEqual(a, c))
+}
+
 func TestExprStructuralIdentityIncludesNegativeAuxID(t *testing.T) {
 	a := int64Lit(1)
 	a.AuxId = -1

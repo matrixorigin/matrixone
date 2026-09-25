@@ -66,3 +66,10 @@ enable-write = true
 enable-delete = true
 enable-dml = true
 enable-maintenance = true
+
+[cn.python-udf-client]
+enabled = true
+allow-unisolated = true
+server-address = "python-udf-worker-cn1:50051"
+max-invocation-rows = 1048576
+max-invocation-result-bytes = 268435456

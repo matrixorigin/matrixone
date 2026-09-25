@@ -1,0 +1,78 @@
+-- Small, exact boundary values for every scalar numeric family supported by
+-- the Python Arrow adapter.
+drop database if exists udf_python_numeric_bvt;
+create database udf_python_numeric_bvt;
+use udf_python_numeric_bvt;
+
+create function python_bvt_tinyint (x tinyint) returns tinyint language python as 'def python_bvt_tinyint(ctx, x): return x' handler 'python_bvt_tinyint';
+create function python_bvt_smallint (x smallint) returns smallint language python as 'def python_bvt_smallint(ctx, x): return x' handler 'python_bvt_smallint';
+create function python_bvt_int (x int) returns int language python as 'def python_bvt_int(ctx, x): return x' handler 'python_bvt_int';
+create function python_bvt_bigint (x bigint) returns bigint language python as 'def python_bvt_bigint(ctx, x): return x' handler 'python_bvt_bigint';
+create function python_bvt_tinyuint (x tinyint unsigned) returns tinyint unsigned language python as 'def python_bvt_tinyuint(ctx, x): return x' handler 'python_bvt_tinyuint';
+create function python_bvt_smalluint (x smallint unsigned) returns smallint unsigned language python as 'def python_bvt_smalluint(ctx, x): return x' handler 'python_bvt_smalluint';
+create function python_bvt_uint (x int unsigned) returns int unsigned language python as 'def python_bvt_uint(ctx, x): return x' handler 'python_bvt_uint';
+create function python_bvt_biguint (x bigint unsigned) returns bigint unsigned language python as 'def python_bvt_biguint(ctx, x): return x' handler 'python_bvt_biguint';
+create function python_bvt_float (x float) returns float language python as 'def python_bvt_float(ctx, x): return x' handler 'python_bvt_float';
+create function python_bvt_double (x double) returns double language python as 'def python_bvt_double(ctx, x): return x' handler 'python_bvt_double';
+create function python_bvt_bool (x bool) returns bool language python as 'def python_bvt_bool(ctx, x): return x' handler 'python_bvt_bool';
+create function python_bvt_decimal64 (x decimal(18,6)) returns decimal(18,6) language python as 'def python_bvt_decimal64(ctx, x): return x' handler 'python_bvt_decimal64';
+create function python_bvt_decimal128 (x decimal(38,10)) returns decimal(38,10) language python as 'def python_bvt_decimal128(ctx, x): return x' handler 'python_bvt_decimal128';
+create function python_bvt_decimal_rescale (x decimal(18,6)) returns decimal(18,6) language python as 'def python_bvt_decimal_rescale(ctx, x): return x' handler 'python_bvt_decimal_rescale';
+
+create table numeric_values (
+    tiny_v tinyint,
+    small_v smallint,
+    int_v int,
+    big_v bigint,
+    tiny_u tinyint unsigned,
+    small_u smallint unsigned,
+    int_u int unsigned,
+    big_u bigint unsigned,
+    float_v float,
+    double_v double,
+    bool_v bool,
+    decimal64_v decimal(18,6),
+    decimal128_v decimal(38,10)
+);
+insert into numeric_values values
+    (-128, -32768, -2147483648, -9223372036854775808,
+     0, 0, 0, 0, -0.0, -0.0, false, -0.000001, -9999999999999999999999999999.9999999999),
+    (127, 32767, 2147483647, 9223372036854775807,
+     255, 65535, 4294967295, 18446744073709551615, 3.25, 1.0, true, 999999999999.999999, 9999999999999999999999999999.9999999999),
+    (null, null, null, null, null, null, null, null, null, null, null, null, null);
+
+select python_bvt_tinyint(tiny_v) as tiny_v,
+       python_bvt_smallint(small_v) as small_v,
+       python_bvt_int(int_v) as int_v,
+       python_bvt_bigint(big_v) as big_v,
+       python_bvt_tinyuint(tiny_u) as tiny_u,
+       python_bvt_smalluint(small_u) as small_u,
+       python_bvt_uint(int_u) as int_u,
+       python_bvt_biguint(big_u) as big_u,
+       python_bvt_float(float_v) as float_v,
+       python_bvt_double(double_v) as double_v,
+       python_bvt_bool(bool_v) as bool_v,
+       python_bvt_decimal64(decimal64_v) as decimal64_v,
+       python_bvt_decimal128(decimal128_v) as decimal128_v
+from numeric_values order by big_v is null, big_v;
+
+-- The planner must normalize DECIMAL(18,2) to the declared scale before the
+-- Arrow encoder sees the coefficient; 1.23 must remain 1.230000.
+select python_bvt_decimal_rescale(cast('1.23' as decimal(18,2))) as decimal_rescaled;
+
+drop function python_bvt_tinyint(tinyint);
+drop function python_bvt_smallint(smallint);
+drop function python_bvt_int(int);
+drop function python_bvt_bigint(bigint);
+drop function python_bvt_tinyuint(tinyint unsigned);
+drop function python_bvt_smalluint(smallint unsigned);
+drop function python_bvt_uint(int unsigned);
+drop function python_bvt_biguint(bigint unsigned);
+drop function python_bvt_float(float);
+drop function python_bvt_double(double);
+drop function python_bvt_bool(bool);
+drop function python_bvt_decimal64(decimal(18,6));
+drop function python_bvt_decimal128(decimal(38,10));
+drop function python_bvt_decimal_rescale(decimal(18,6));
+drop table numeric_values;
+drop database udf_python_numeric_bvt;

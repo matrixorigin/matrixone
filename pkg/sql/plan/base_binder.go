@@ -4322,8 +4322,24 @@ func bindFuncExprImplUdf(
 		return nil, moerr.NewNotSupportedf(b.GetContext(), "function '%s'", name)
 	}
 
-	switch udf.Language {
-	case string(tree.SQL):
+	switch strings.ToLower(udf.Language) {
+	case strings.ToLower(string(tree.SQL)):
+		// A current SQL revision enters the common dependency envelope before
+		// its compatibility lowering expands the body. Legacy rows have no
+		// revision and retain the old path until an explicit replacement
+		// publishes a current shared revision.
+		if b.builder != nil && udf.Revision != 0 {
+			routineCall, err := udf.GetRoutineCall()
+			if err != nil {
+				return nil, moerr.NewInvalidInputf(b.GetContext(), "SQL routine is not executable: %v", err)
+			}
+			if err := b.builder.assignRoutineCallsite(routineCall); err != nil {
+				return nil, moerr.NewInvalidInputf(b.GetContext(), "%v", err)
+			}
+			if err := b.builder.recordRoutinePlanDependency(routineCall); err != nil {
+				return nil, moerr.NewInvalidInputf(b.GetContext(), "%v", err)
+			}
+		}
 		parserSQLMode := "PIPES_AS_CONCAT"
 		if udf.SQLMode != nil {
 			parserSQLMode = *udf.SQLMode
@@ -4368,7 +4384,7 @@ func bindFuncExprImplUdf(
 			}
 		}
 		return expr, nil
-	case string(tree.PYTHON):
+	case strings.ToLower(string(tree.PYTHON)):
 		expr, err := b.bindPythonUdf(udf, astArgs, depth)
 		if err != nil {
 			return nil, err
@@ -4550,31 +4566,60 @@ func correlateSQLUdfArgument(arg *plan.Expr, depth int32) (*plan.Expr, bool) {
 }
 
 func (b *baseBinder) bindPythonUdf(udf *function.Udf, astArgs []tree.Expr, depth int32) (*plan.Expr, error) {
-	args := make([]*Expr, 2*len(astArgs)+2)
-
-	// python udf self info and query context
-	args[0] = udf.GetPlanExpr()
-
-	// bind ast function's args
+	if len(astArgs) != len(udf.GetArgsType()) {
+		return nil, moerr.NewInvalidInputf(b.GetContext(), "Python routine %s expects %d arguments, got %d", udf.Db, len(udf.GetArgsType()), len(astArgs))
+	}
+	args := make([]*Expr, len(astArgs))
 	for idx, arg := range astArgs {
 		expr, err := b.impl.BindExpr(arg, depth, false)
 		if err != nil {
 			return nil, err
 		}
-		args[idx+1] = expr
+		required := udf.GetArgsType()[idx]
+		actual := makeTypeByPlan2Expr(expr)
+		if !actual.Eq(required) {
+			canCast, _ := function.PythonUdfArgTypeMatch([]types.Type{actual}, []types.Type{required})
+			if !canCast {
+				return nil, moerr.NewInvalidInputf(b.GetContext(), "Python routine argument %d has type %s, expected %s", idx+1, actual.String(), required.String())
+			}
+			expr, err = appendCastBeforeExpr(b.GetContext(), expr, makePlan2Type(&required))
+			if err != nil {
+				return nil, err
+			}
+		}
+		args[idx] = expr
 	}
-
-	// function args
-	fArgTypes := udf.GetArgsPlanType()
-	for i, t := range fArgTypes {
-		args[len(astArgs)+i+1] = &Expr{Typ: *t}
+	// Execution identity is intentionally absent from the persisted plan. A
+	// prepared plan can be executed many times; the physical evaluator creates
+	// a fresh statement fence from the current process/query identity.
+	routineCall, err := udf.GetRoutineCall()
+	if err != nil {
+		// RETURNING has its own semantic prohibition for external routines.
+		// Preserve that deterministic SQL diagnostic even when a test or a
+		// partially upgraded catalog supplies a Python descriptor without the
+		// executable identity that the normal path requires.
+		if b.builder != nil && b.builder.bindingReturningProjection &&
+			strings.Contains(err.Error(), "stable catalog identity") {
+			return nil, returningNotSupported(b.builder, "external UDF in RETURNING expression")
+		}
+		return nil, moerr.NewInvalidInputf(b.GetContext(), "Python routine is not executable: %v", err)
 	}
-
-	// function ret
-	fRetType := udf.GetRetPlanType()
-	args[2*len(astArgs)+1] = &Expr{Typ: *fRetType}
-
-	return BindFuncExprImplByPlanExpr(b.GetContext(), "python_user_defined_function", args)
+	if b.builder != nil {
+		if err := b.builder.assignRoutineCallsite(routineCall); err != nil {
+			return nil, moerr.NewInvalidInputf(b.GetContext(), "%v", err)
+		}
+		if err := b.builder.recordRoutinePlanDependency(routineCall); err != nil {
+			return nil, moerr.NewInvalidInputf(b.GetContext(), "%v", err)
+		}
+	}
+	return &plan.Expr{
+		Typ: *udf.GetRetPlanType(),
+		Expr: &plan.Expr_F{F: &plan.Function{
+			Func:        &plan.ObjectRef{Obj: function.EncodeOverloadID(function.PYTHON_UDF, 0), ObjName: "python_user_defined_function"},
+			Args:        args,
+			RoutineCall: routineCall,
+		}},
+	}, nil
 }
 
 func isFindInSetName(name string) bool {

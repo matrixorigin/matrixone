@@ -25,12 +25,14 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/catalog"
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
 	"github.com/matrixorigin/matrixone/pkg/defines"
+	"github.com/matrixorigin/matrixone/pkg/fileservice"
 	"github.com/matrixorigin/matrixone/pkg/pb/plan"
 	"github.com/matrixorigin/matrixone/pkg/sql/parsers"
 	"github.com/matrixorigin/matrixone/pkg/sql/parsers/dialect"
 	"github.com/matrixorigin/matrixone/pkg/sql/parsers/dialect/mysql"
 	"github.com/matrixorigin/matrixone/pkg/sql/parsers/tree"
 	"github.com/matrixorigin/matrixone/pkg/sql/plan/function"
+	pythonudf "github.com/matrixorigin/matrixone/pkg/udf/python"
 )
 
 type cloneDatabaseSource struct {
@@ -659,13 +661,34 @@ func validateCloneUserDefinedFunctions(functions []userDefinedFunctionDefinition
 			continue
 		}
 
-		var body function.NonSqlUdfBody
-		if json.Unmarshal([]byte(definition.body), &body) == nil && body.Import {
+		var raw map[string]json.RawMessage
+		if json.Unmarshal([]byte(definition.body), &raw) != nil {
+			return moerr.NewNotSupportedNoCtxf(
+				"CREATE DATABASE CLONE with malformed %s function %s is not supported",
+				definition.lang,
+				definition.name,
+			)
+		}
+		var importedBody bool
+		if value, ok := raw["import"]; ok {
+			_ = json.Unmarshal(value, &importedBody)
+		}
+		if importedBody {
 			return moerr.NewNotSupportedNoCtxf(
 				"CREATE DATABASE CLONE with imported %s function %s is not supported: imported UDF packages are not snapshot-versioned",
 				definition.lang,
 				definition.name,
 			)
+		}
+		if strings.EqualFold(definition.lang, string(tree.PYTHON)) {
+			if _, err := function.DecodePythonRoutineBody(definition.body); err != nil {
+				return moerr.NewNotSupportedNoCtxf(
+					"CREATE DATABASE CLONE with unsupported %s function %s is not supported: %v",
+					definition.lang,
+					definition.name,
+					err,
+				)
+			}
 		}
 	}
 	return nil
@@ -766,11 +789,35 @@ func restoreCloneDatabaseUserDefinedFunctions(
 	tenant *TenantInfo,
 	functions []userDefinedFunctionDefinition,
 	dbName string,
+	artifactFileServices ...fileservice.FileService,
 ) error {
-	for _, function := range functions {
-		function.dbName = dbName
+	var artifactStore *pythonudf.FileArtifactStore
+	if len(artifactFileServices) > 0 && artifactFileServices[0] != nil {
+		var err error
+		artifactStore, err = pythonudf.NewFileArtifactStore(
+			artifactFileServices[0],
+			pythonudf.DefaultMaxArtifactBytes,
+		)
+		if err != nil {
+			return err
+		}
+	}
+	for _, definition := range functions {
+		definition.dbName = dbName
+		if strings.EqualFold(definition.lang, string(tree.PYTHON)) {
+			if artifactStore == nil {
+				return moerr.NewNotSupportedNoCtx("Python artifact store is required to clone a current Python routine")
+			}
+			body, err := function.DecodePythonRoutineBody(definition.body)
+			if err != nil {
+				return moerr.NewInvalidInputNoCtxf("UNSUPPORTED_ROUTINE_VERSION: Python clone source is invalid: %v", err)
+			}
+			if _, err := artifactStore.Publish(ctx, uint64(tenant.GetTenantID()), body.Handler, body.Source); err != nil {
+				return err
+			}
+		}
 		if err := persistUserDefinedFunction(
-			ctx, bh, tenant, tenant.GetDefaultRoleID(), function, nil,
+			ctx, bh, tenant, tenant.GetDefaultRoleID(), definition, nil,
 		); err != nil {
 			return err
 		}

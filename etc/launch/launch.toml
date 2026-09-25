@@ -9,4 +9,3 @@ tnservices = [
 cnservices = [
     "./etc/launch/cn.toml"
 ]
-

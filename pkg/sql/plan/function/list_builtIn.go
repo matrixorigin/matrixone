@@ -16233,15 +16233,19 @@ var supportedOthersBuiltIns = []FuncNew{
 	// function `python_user_defined_function`
 	{
 		functionId: PYTHON_UDF,
-		class:      plan.Function_INTERNAL | plan.Function_STRICT,
+		class:      plan.Function_INTERNAL,
 		layout:     STANDARD_FUNCTION,
 		checkFn:    checkPythonUdf,
 		Overloads: []overload{
 			{
 				overloadId: 0,
 				retType:    pythonUdfRetType,
+				// A Python routine is user code.  It may observe invocation
+				// context or maintain process-local state, so planning must never
+				// execute it once and broadcast the result to all rows.
+				volatile: true,
 				newOp: func() executeLogicOfOverload {
-					return runPythonUdf
+					return rejectPythonJSONPlan
 				},
 			},
 		},

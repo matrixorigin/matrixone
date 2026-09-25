@@ -253,6 +253,8 @@ message Function {
   // overload while optimizers still distinguish it from an implicit cast.
   // Older CNs safely ignore this unknown field and execute the legacy overload.
   bool syntax_explicit_cast = 5;
+  // Typed routine metadata. Ordinary builtin Function values leave this nil.
+  RoutineCall routine_call = 6;
 }
 
 // PreparedNumericMetadata is sparse planner provenance for a numeric overload
@@ -1709,6 +1711,12 @@ message Query {
   // execution so a committed concurrent CREATE INDEX can rebuild the plan;
   // without a definition change, it returns the original key-not-found error.
   repeated UnresolvedIndexHint unresolved_index_hints = 16;
+
+  // Exact routine revisions captured while binding this statement.  The
+  // expression tree carries the call-site implementation, while this bounded
+  // envelope lets prepared and ordinary plan-cache reuse validate the shared
+  // catalog namespace without walking or reinterpreting user source.
+  repeated RoutinePlanDependency routine_dependencies = 17;
 }
 
 message TransationControl {
@@ -2378,4 +2386,90 @@ message VectorIndexScanWork {
 message UnresolvedIndexHint {
   ObjectRef table = 1;
   string index_name = 2;
+}
+
+// FunctionRef is the exact catalog identity carried by an executable plan.
+// A zero revision is invalid for external routines; the planner validates the
+// complete call before a fragment is dispatched.
+message FunctionRef {
+  uint64 function_id = 1;
+  uint64 revision = 2;
+  uint64 namespace_version = 3;
+  // Function identity is tenant/database scoped. These fields prevent a
+  // plan fragment from being interpreted in a different catalog namespace.
+  uint64 account_id = 4;
+  uint64 database_id = 5;
+}
+
+message SqlRoutineImplementation {
+  bytes definition_fingerprint = 1;
+  int32 semantic_definition_schema_version = 2;
+}
+
+message PythonRoutineImplementation {
+  string handler = 1;
+  // Source is retained only so an old serialized demo plan can be identified
+  // and rejected. A current executable plan must carry the immutable artifact
+  // digest and resolve the artifact through the runtime artifact store.
+  string source = 2 [deprecated = true];
+  string abi_contract = 3;
+  string adapter_version = 4;
+  string artifact_digest = 5;
+  string environment_digest = 6;
+  string sdk_version = 7;
+  int32 definition_schema_version = 8;
+  string mode = 9;
+  string null_policy = 10;
+  string definition_fingerprint = 11;
+}
+
+// RoutineCall is the common typed call envelope for SQL and external
+// language routines. Function.Args remains the normal expression argument
+// list so existing expression traversal and CASE/selection ownership stay
+// intact; this field carries only immutable routine identity and semantics.
+message RoutineCall {
+  int32 contract_version = 1;
+  FunctionRef function_ref = 2;
+  string language = 3;
+  repeated Type argument_types = 4;
+  Type return_type = 5 [(gogoproto.nullable) = false];
+  string volatility = 6;
+  string null_policy = 7;
+  oneof implementation {
+    SqlRoutineImplementation sql = 8;
+    PythonRoutineImplementation python = 9;
+  }
+  // Reserved from the current executable contract. Statement identity,
+  // session values, and group fences are created at execution time; keeping
+  // them in a prepared plan would allow stale state to cross executions.
+  map<string, string> context = 10 [deprecated = true];
+  // These fields are the common semantic contract. They must survive SQL
+  // lowering and expression/plan cloning; the optimizer may only move a
+  // routine call when the attached contract permits it.
+  string callsite_id = 11;
+  bool may_error = 12;
+  string security_mode = 13;
+  bool leakproof = 14;
+  // State fingerprint of the complete overload namespace at binding snapshot.
+  // Separate from the selected immutable FunctionRef; missing means no reuse.
+  string namespace_fingerprint = 15;
+}
+
+// RoutinePlanDependency is the shared cache/prepared-plan validation envelope
+// for a resolved routine closure.  FunctionRef is the executable identity;
+// the integrity fields prove that the implementation attached to the plan is
+// the same immutable revision that the resolver admitted.
+message RoutinePlanDependency {
+  FunctionRef function_ref = 1;
+  string language = 2;
+  int32 contract_version = 3;
+  string definition_fingerprint = 4;
+  string artifact_digest = 5;
+  string environment_digest = 6;
+  string volatility = 7;
+  string null_policy = 8;
+  bool may_error = 9;
+  string security_mode = 10;
+  bool leakproof = 11;
+  string namespace_fingerprint = 12;
 }

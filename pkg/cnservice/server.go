@@ -71,7 +71,6 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/txn/rpc"
 	"github.com/matrixorigin/matrixone/pkg/txn/trace"
 	"github.com/matrixorigin/matrixone/pkg/udf"
-	"github.com/matrixorigin/matrixone/pkg/udf/pythonservice"
 	"github.com/matrixorigin/matrixone/pkg/util/address"
 	"github.com/matrixorigin/matrixone/pkg/util/executor"
 	v2 "github.com/matrixorigin/matrixone/pkg/util/metric/v2"
@@ -179,7 +178,7 @@ func NewService(
 		lockService lockservice.LockService,
 		queryClient qclient.QueryClient,
 		hakeeper logservice.CNHAKeeperClient,
-		udfService udf.Service,
+		udfService udf.Runtime,
 		cli client.TxnClient,
 		aicm *defines.AutoIncrCacheManager,
 		messageAcquirer func() morpc.Message) error {
@@ -239,20 +238,14 @@ func NewService(
 		MaxSize:        pu.SV.AutoIncrCacheSize,
 	}
 
-	// init UdfService
-	var udfServices []udf.Service
-	// add python client to handle python udf
-	if srv.cfg.PythonUdfClient.ServerAddress != "" {
-		var pc *pythonservice.Client
-		pc, err = pythonservice.NewClient(srv.cfg.PythonUdfClient)
-		if err != nil {
-			panic(err)
-		}
-		udfServices = append(udfServices, pc)
-	}
-	srv.udfService, err = udf.NewService(udfServices...)
+	// init UdfService. Python is an opt-in feature and its transport or
+	// artifact dependencies must not turn an otherwise usable CN into a
+	// process-wide crash loop. buildCNRuntime keeps the language gate visible
+	// to CREATE/EXECUTE while ordinary SQL continues with the runtime in an
+	// explicit UNAVAILABLE state.
+	srv.udfService, err = buildCNRuntime(srv.cfg.PythonUdfClient, srv.fileService, srv.logger)
 	if err != nil {
-		panic(err)
+		return nil, err
 	}
 
 	srv.CNMemoryThrottler = rscthrottler.NewMemThrottler(
@@ -783,6 +776,9 @@ func (s *service) stopRPCs() error {
 	}
 	if s.queryClient != nil {
 		err = errors.Join(err, s.queryClient.Close())
+	}
+	if closer, ok := s.udfService.(udf.RuntimeCloser); ok {
+		err = errors.Join(err, closer.Close())
 	}
 	if s.timestampWaiter != nil {
 		s.timestampWaiter.Close()

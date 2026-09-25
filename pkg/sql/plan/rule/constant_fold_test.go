@@ -71,6 +71,29 @@ func TestConstantFoldRuleRetainsStandaloneInterval(t *testing.T) {
 	require.Same(t, expr, NewConstantFold(false).constantFold(expr, testutil.NewProcess(t)))
 }
 
+func TestConstantFoldRuleNeverExecutesTypedRoutineCall(t *testing.T) {
+	expr := &plan.Expr{
+		Typ: plan.Type{Id: int32(types.T_int64)},
+		Expr: &plan.Expr_F{F: &plan.Function{
+			Func: &plan.ObjectRef{
+				Obj:     function.EncodeOverloadID(function.PYTHON_UDF, 0),
+				ObjName: "python_user_defined_function",
+			},
+			Args: []*plan.Expr{{
+				Typ:  plan.Type{Id: int32(types.T_int64)},
+				Expr: &plan.Expr_Lit{Lit: &plan.Literal{Value: &plan.Literal_I64Val{I64Val: 1}}},
+			}},
+			RoutineCall: &plan.RoutineCall{
+				FunctionRef: &plan.FunctionRef{FunctionId: 1, DatabaseId: 1, Revision: 1, NamespaceVersion: 1},
+				Language:    "PYTHON",
+			},
+		}},
+	}
+
+	require.False(t, IsConstant(expr, false))
+	require.Same(t, expr, NewConstantFold(false).constantFold(expr, testutil.NewProcess(t)))
+}
+
 func TestGetConstantValue2PreservesAndValidatesLiteralStringSource(t *testing.T) {
 	proc := testutil.NewProcess(t)
 	vec := vector.NewVec(types.T_varchar.ToType())

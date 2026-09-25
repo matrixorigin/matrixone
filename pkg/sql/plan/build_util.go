@@ -128,6 +128,17 @@ func GetFunctionArgTypeStrFromAst(arg tree.FunctionArg) (string, error) {
 	return GetFunctionTypeStrFromAst(argDecl.Type)
 }
 
+// GetFunctionTypeFromAst retains the full type attributes needed by external
+// routine ABIs. GetFunctionTypeStrFromAst intentionally returns only the
+// logical catalog name for legacy UDF overload identity.
+func GetFunctionTypeFromAst(typRef tree.ResolvableTypeReference) (types.Type, error) {
+	typ, err := getTypeFromAst(moerr.Context(), typRef)
+	if err != nil {
+		return types.Type{}, err
+	}
+	return types.NewWithCharset(types.T(typ.Id), typ.Width, typ.Scale, uint8(typ.Charset)), nil
+}
+
 func GetFunctionTypeStrFromAst(typRef tree.ResolvableTypeReference) (string, error) {
 	typ, err := getTypeFromAst(moerr.Context(), typRef)
 	if err != nil {

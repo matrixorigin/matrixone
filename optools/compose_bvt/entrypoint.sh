@@ -6,7 +6,11 @@ SECONDS=0
 
 # mv log to mount path
 function packLog() {
-    mv /mo-tester/report /test/
+    if [[ -e /mo-tester/report ]]; then
+        mv /mo-tester/report /test/
+    else
+        echo "mo-tester did not produce a report; preserving the original test status" >&2
+    fi
 
     duration=$SECONDS
     echo "$(($duration / 60)) minutes and $(($duration % 60)) seconds elapsed."

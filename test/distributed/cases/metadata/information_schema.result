@@ -38,6 +38,7 @@ def    mo_catalog    mo_database    BASE TABLE    Tae
 def    mo_catalog    mo_feature_limit    BASE TABLE    Tae
 def    mo_catalog    mo_feature_registry    BASE TABLE    Tae
 def    mo_catalog    mo_foreign_keys    BASE TABLE    Tae
+def    mo_catalog    mo_function_revisions    BASE TABLE    Tae
 def    mo_catalog    mo_iceberg_catalogs    BASE TABLE    Tae
 def    mo_catalog    mo_iceberg_maintenance_jobs    BASE TABLE    Tae
 def    mo_catalog    mo_iceberg_orphan_files    BASE TABLE    Tae

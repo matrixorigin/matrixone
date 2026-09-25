@@ -215,6 +215,12 @@ func (r *ConstantFold) constantFold(expr *plan.Expr, proc *process.Process) *pla
 
 		return expr
 	}
+	// A typed RoutineCall is an execute-time boundary. Even a zero-argument
+	// call with only literal metadata must reach ExternalRoutineEval so that
+	// volatility, row cardinality, and the captured revision remain intact.
+	if fn.RoutineCall != nil {
+		return expr
+	}
 	overloadID := fn.Func.GetObj()
 	if r.isPrepared && IsNullIntegerArgumentCast(expr) {
 		return expr
@@ -948,6 +954,9 @@ func IsConstant(e *plan.Expr, varAndParamIsConst bool) bool {
 	case *plan.Expr_Lit, *plan.Expr_T, *plan.Expr_Vec:
 		return true
 	case *plan.Expr_F:
+		if ef.F == nil || ef.F.RoutineCall != nil {
+			return false
+		}
 		// CASE expressions should always be evaluated at runtime to preserve
 		// branch semantics; treat them as non-constant.
 		if fid, _ := function.DecodeOverloadID(ef.F.Func.GetObj()); fid == function.CASE {
