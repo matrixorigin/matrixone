@@ -34,6 +34,27 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/vm/process"
 )
 
+func TestBuiltInFromDaysBoundaryAndOverflow(t *testing.T) {
+	proc := testutil.NewProcess(t)
+	days := []int64{
+		math.MinInt64, -1, 0, 1, 365, 366, 367,
+		3652424, 3652425, 2251799813685614, math.MaxInt64, 0,
+	}
+	inputNulls := []bool{false, false, false, false, false, false, false, false, false, false, false, true}
+	want := []types.Date{
+		types.ZeroDate, types.ZeroDate, types.ZeroDate, types.ZeroDate, types.ZeroDate,
+		types.DateFromCalendar(1, 1, 1), types.DateFromCalendar(1, 1, 2),
+		types.DateFromCalendar(types.MaxDateYear, 12, 31), 0, 0, 0, 0,
+	}
+	wantNulls := []bool{false, false, false, false, false, false, false, false, true, true, true, true}
+	fcTC := NewFunctionTestCase(proc,
+		[]FunctionTestInput{NewFunctionTestInput(types.T_int64.ToType(), days, inputNulls)},
+		NewFunctionTestResult(types.T_date.ToType(), false, want, wantNulls),
+		builtInFromDays)
+	ok, info := fcTC.Run()
+	require.True(t, ok, info)
+}
+
 func Test_BuiltIn_CurrentSessionInfo(t *testing.T) {
 	proc := testutil.NewProcess(t)
 	proc.Ctx = defines.AttachAccountId(proc.Ctx, 246)

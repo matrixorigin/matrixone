@@ -4047,6 +4047,9 @@ const SecondsIn24Hours = 86400
 // The number of days in the year 0000 AD
 const ADZeroDays = 366
 
+// The largest day number whose result fits MatrixOne's DATE calendar.
+var maxFromDays = int64(types.DateFromCalendar(types.MaxDateYear, 12, 31)) + ADZeroDays
+
 const (
 	intervalUnitYEAR      = "YEAR"
 	intervalUnitQUARTER   = "QUARTER"
@@ -4093,6 +4096,21 @@ func builtInFromDays(parameters []*vector.Vector, result vector.FunctionResultWr
 	for i := uint64(0); i < uint64(length); i++ {
 		dayNumber, isNull := dayParams.GetValue(i)
 		if isNull {
+			if err := rs.Append(types.Date(0), true); err != nil {
+				return err
+			}
+			continue
+		}
+		// Pre-year-1 values have a defined zero-date result. Keep the upper
+		// overflow separate so neither the subtraction nor AddInterval's
+		// day-to-microsecond multiplication can wrap.
+		if dayNumber < ADZeroDays {
+			if err := rs.Append(types.ZeroDate, false); err != nil {
+				return err
+			}
+			continue
+		}
+		if dayNumber > maxFromDays {
 			if err := rs.Append(types.Date(0), true); err != nil {
 				return err
 			}
