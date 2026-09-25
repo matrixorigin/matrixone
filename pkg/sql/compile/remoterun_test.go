@@ -645,6 +645,14 @@ func TestRemoteRunOperatorCodecRoundTrip(t *testing.T) {
 		require.True(t, restored.(*group.Group).DynamicGrouping)
 	})
 
+	t.Run("SortRollupIsCoordinatorOnly", func(t *testing.T) {
+		original := group.NewArgument()
+		original.SortRollup = true
+		defer original.Release()
+		_, _, err := convertToPipelineInstruction(original, nil, &scopeContext{}, 1)
+		require.ErrorContains(t, err, "sort rollup cannot be serialized")
+	})
+
 	t.Run("GroupingSetProjectionMetadata", func(t *testing.T) {
 		original := projection.NewArgument()
 		original.ProjectList = []*planpb.Expr{plan.MakePlan2Int64ConstExprWithType(1)}

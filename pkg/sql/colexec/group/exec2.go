@@ -155,6 +155,14 @@ func (group *Group) Prepare(proc *process.Process) (err error) {
 	if err = group.prepareGroupAndAggArg(proc); err != nil {
 		return err
 	}
+	if group.SortRollup {
+		if group.DynamicGrouping || hasInactiveGroupingColumn(group.GroupingFlag) {
+			return moerr.NewInternalErrorNoCtx("sort rollup does not support dynamic grouping metadata")
+		}
+		if err = group.prepareSortRollup(proc); err != nil {
+			return err
+		}
+	}
 
 	if err = group.PrepareProjectionWithAllocation(
 		proc, group.ctr.expressionAllocation); err != nil {
@@ -370,6 +378,9 @@ func (group *Group) Call(
 	defer func() {
 		callErr = hashbuild.TerminalBudgetErrorForOperator(proc.Ctx, "group", callErr)
 	}()
+	if group.SortRollup {
+		return group.callSortRollup(proc)
+	}
 	var err error
 
 	var isCancel bool

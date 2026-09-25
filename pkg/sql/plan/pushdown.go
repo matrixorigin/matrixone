@@ -303,6 +303,14 @@ func (builder *QueryBuilder) pushdownFilters(nodeID int32, filters []*plan.Expr,
 
 	switch node.NodeType {
 	case plan.Node_AGG:
+		// Sort ROLLUP materializes one ordered stream and synthesizes subtotal
+		// rows after the input has been consumed. A predicate from above the
+		// aggregate must remain above that boundary; pushing it into the child
+		// would filter the input before the grand total is produced.
+		if IsSortRollupOption(node.ExtraOptions) {
+			node.FilterList = append(node.FilterList, filters...)
+			return originalNodeID, nil
+		}
 		// Legacy positional aggregates have no global binding tags. Keep filters
 		// above them because tag-based replacement cannot address their outputs.
 		if len(node.BindingTags) < 2 {

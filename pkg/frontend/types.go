@@ -1875,6 +1875,7 @@ func (ses *Session) SetSessionSysVar(ctx context.Context, name string, val inter
 	oldNoUnsignedSubtraction := false
 	oldParserFlags := mysql.SQLModeFlags(0)
 	oldIgnoreSpace := false
+	oldRollupAlgorithm := ""
 	if name == "sql_mode" {
 		oldMatrixOneNative = ses.sqlModeHasMatrixOneNative()
 		oldOnlyFullGroupBy = ses.sqlModeHasOnlyFullGroupBy()
@@ -1883,6 +1884,10 @@ func (ses *Session) SetSessionSysVar(ctx context.Context, name string, val inter
 		oldNoUnsignedSubtraction = ses.sqlModeHasNoUnsignedSubtraction()
 		oldParserFlags = ses.sqlModeParserFlags()
 		oldIgnoreSpace = ses.sqlModeHasIgnoreSpace()
+	} else if name == "rollup_algorithm" {
+		if old, getErr := ses.GetSessionSysVar(name); getErr == nil {
+			oldRollupAlgorithm, _ = old.(string)
+		}
 	}
 
 	def, ok := gSysVarsDefs[name]
@@ -1946,6 +1951,12 @@ func (ses *Session) SetSessionSysVar(ctx context.Context, name string, val inter
 	}
 	if err == nil && name == "sql_mode" {
 		ses.updateSqlModeCaches(oldMatrixOneNative, oldOnlyFullGroupBy, oldBoolSumAvg, oldHighNotPrecedence, oldNoUnsignedSubtraction, oldParserFlags, oldIgnoreSpace, val)
+	}
+	if err == nil && name == "rollup_algorithm" {
+		if newValue, ok := val.(string); ok && oldRollupAlgorithm != newValue {
+			ses.cleanCache()
+			ses.markPreparedPlansForRollupAlgorithmChange()
+		}
 	}
 	if err == nil && setTxnIsolation {
 		if txnHandler := ses.GetTxnHandler(); txnHandler != nil {

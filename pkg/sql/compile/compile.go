@@ -2001,6 +2001,22 @@ func (c *Compile) compilePlanScopeWithUnionAllDemand(
 
 		c.setAnalyzeCurrent(ss, int(curNodeIdx))
 		ss = c.ensureCoordinatorOnlyFunctions(node, ss)
+		if plan2.IsSortRollupOption(node.ExtraOptions) {
+			// The child SORT performs the global k-way merge when the input is
+			// distributed, so the ordered rollup aggregate must run once on the
+			// resulting coordinator scope. A second aggregate stage would destroy
+			// the prefix-boundary invariant.
+			if len(ss) != 1 || ss[0].HasPartialResults {
+				return nil, moerr.NewInternalErrorNoCtx(
+					"sort rollup requires one non-partial ordered input scope")
+			}
+			if !c.scopesRunOnCoordinator(ss) {
+				ss = []*Scope{c.newMergeScope(ss)}
+			}
+			ss = c.compileTPGroup(node, ss, nodes)
+			ss = c.compileSort(node, c.compileProjection(node, c.compileRestrict(node, ss)))
+			return ss, nil
+		}
 		if c.canCompileShuffleGroup(node) {
 			ss = c.compileSort(node, c.compileProjection(node, c.compileRestrict(node, c.compileShuffleGroup(node, ss, nodes))))
 			return ss, nil
