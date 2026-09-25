@@ -1241,6 +1241,49 @@ func (expr *FunctionExpressionExecutor) isImplicitCast() bool {
 	return overload == 0
 }
 
+// A prepared numeric parameter can pass through a runtime CAST before the
+// private integer-argument conversion. CAST may materialize a flat vector
+// even though its input is a scalar. Only follow CASTs here: an arbitrary
+// function of a scalar need not itself have scalar semantics.
+func scalarIntegerArgumentSource(executor ExpressionExecutor) bool {
+	switch source := executor.(type) {
+	case *memoExpressionExecutor:
+		return scalarIntegerArgumentSource(source.state.executor)
+	case *FixedVectorExpressionExecutor:
+		return source.resultVector.IsConst()
+	case *ParamExpressionExecutor, *VarExpressionExecutor:
+		return true
+	case *FunctionExpressionExecutor:
+		return source.fid == function.CAST && len(source.parameterExecutor) > 0 &&
+			scalarIntegerArgumentSource(source.parameterExecutor[0])
+	default:
+		return false
+	}
+}
+
+func (expr *FunctionExpressionExecutor) hasScalarIntegerArgumentSource() bool {
+	if expr.fid != function.CAST || len(expr.parameterExecutor) == 0 {
+		return false
+	}
+	_, overload := function.DecodeOverloadID(expr.overloadID)
+	if overload != function.IntegerArgumentCastOverload && overload != function.TruncatedIntegerArgumentCastOverload {
+		return false
+	}
+	return scalarIntegerArgumentSource(expr.parameterExecutor[0])
+}
+
+func (expr *FunctionExpressionExecutor) preserveIntegerArgumentScalar(rowCount int, selectList []bool) {
+	if rowCount == 0 || !expr.hasScalarIntegerArgumentSource() {
+		return
+	}
+	for row := 0; row < rowCount && selectList != nil; row++ {
+		if !selectList[row] {
+			return
+		}
+	}
+	expr.resultVector.GetResultVector().ToConst()
+}
+
 func applyTransparentStringSource(
 	result *vector.Vector,
 	source *vector.Vector,
@@ -1492,6 +1535,20 @@ func (expr *FunctionExpressionExecutor) evalSelectedRows(
 	result.SetType(runtimeType)
 	result.SetIsBin(runtimeIsBin)
 	result.ResetWithSameType()
+	if selectedCount > 0 && expr.hasScalarIntegerArgumentSource() {
+		// The compact result was evaluated only for selected rows. A scalar
+		// source gives every selected row the same converted value; publish the
+		// first selected value through our owned result wrapper before widening
+		// its logical length. In particular row zero may have been skipped.
+		// Skipped rows are not evaluated or observed by the masked parent.
+		if err := result.UnionOne(selectedResult, 0, proc.Mp()); err != nil {
+			return nil, err
+		}
+		result.ToConst()
+		result.SetLength(rowCount)
+		result.SetPrepareParamKind(runtimePrepareParamKind)
+		return result, nil
+	}
 	if expr.selectedNullResult == nil {
 		var err error
 		expr.selectedNullResult, err = newExpressionConstNull(
@@ -1622,6 +1679,7 @@ func (expr *FunctionExpressionExecutor) Eval(proc *process.Process, batches []*b
 		expr.parameterResults, expr.resultVector, proc, rowCount, &expr.selectList); err != nil {
 		return nil, err
 	}
+	expr.preserveIntegerArgumentScalar(rowCount, selectList)
 	if expr.isImplicitCast() && len(expr.parameterResults) > 0 {
 		if err := applyTransparentStringSource(
 			expr.resultVector.GetResultVector(), expr.parameterResults[0], rowCount, proc.Mp()); err != nil {

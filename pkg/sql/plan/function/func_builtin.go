@@ -3923,7 +3923,7 @@ func serialExtractExceptStrings[T types.Number | bool | types.Date | types.Datet
 			return err
 		}
 
-		if int(v2) >= len(tuple) {
+		if v2 < 0 || v2 >= int64(len(tuple)) {
 			return moerr.NewInternalError(proc.Ctx, "index out of range")
 		}
 
@@ -4002,7 +4002,7 @@ func serialExtractForString(p1 vector.FunctionParameterWrapper[types.Varlena],
 			return err
 		}
 
-		if int(v2) >= len(tuple) {
+		if v2 < 0 || v2 >= int64(len(tuple)) {
 			return moerr.NewInternalError(proc.Ctx, "index out of range")
 		}
 

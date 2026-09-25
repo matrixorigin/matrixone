@@ -787,6 +787,10 @@ message SessionInfo {
   // IANA identity preserves historical and DST rules. Empty means the legacy
   // time_zone bytes describe a fixed-offset location.
   string time_zone_name = 17;
+  // Statement-scoped diagnostic retention capacity. The explicit-set bit
+  // distinguishes a configured zero from an absent field on older CNs.
+  uint32 max_error_count = 18;
+  bool max_error_count_set = 19;
 }
 
 message SessionLoggerInfo {
