@@ -265,6 +265,38 @@ set enable_vector_auto_mode_by_default = 0;
 -- Test 6.3: Back to default (post)
 select id from t_phase6 where filter_col = 1 order by l2_distance(vec, '[0,0,0]') limit 1;
 
+-- =============================================================================
+-- Phase 7: BIT primary-key membership and AUTO correctness retry
+-- Only the five most distant rows match. POST's nearest candidates are filtered
+-- out, so AUTO must retry with PRE and apply the runtime BIT-key membership set.
+-- =============================================================================
+drop table if exists t_bit_pk_retry;
+create table t_bit_pk_retry(id bit(16) primary key, selected int, vec vecf32(2));
+insert into t_bit_pk_retry
+select cast(result as bit(16)), if(result > 195, 1, 0),
+       cast(concat('[', result / 1000, ',0]') as vecf32(2))
+from generate_series(1, 200) g;
+create index idx_bit_pk_retry using ivfflat on t_bit_pk_retry(vec) lists=1 op_type 'vector_l2_ops';
+set probe_limit = 1;
+
+-- FORCE is the complete-result control. PRE and AUTO should return these same keys.
+select cast(id as unsigned) from t_bit_pk_retry where selected = 1
+order by l2_distance(vec, '[0,0]') limit 10 by rank with option 'mode=force';
+
+-- POST intentionally returns no rows because its nearest candidates do not match.
+select cast(id as unsigned) from t_bit_pk_retry where selected = 1
+order by l2_distance(vec, '[0,0]') limit 10 by rank with option 'mode=post';
+
+select cast(id as unsigned) from t_bit_pk_retry where selected = 1
+order by l2_distance(vec, '[0,0]') limit 10 by rank with option 'mode=pre';
+select cast(id as unsigned) from t_bit_pk_retry where selected = 1
+order by l2_distance(vec, '[0,0]') limit 10 by rank with option 'mode=auto';
+
+-- No INCLUDE columns means include mode falls back to PRE and shares the same predicate.
+select cast(id as unsigned) from t_bit_pk_retry where selected = 1
+order by l2_distance(vec, '[0,0]') limit 10 by rank with option 'mode=include';
+drop table t_bit_pk_retry;
+
 set probe_limit = 5;
 drop table t_phase6;
 drop database test_retry;

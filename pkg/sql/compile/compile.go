@@ -187,6 +187,9 @@ func (c *Compile) Release() {
 	if c == nil {
 		return
 	}
+	// Prepared Compiles can remain cached after Release. Semantic CTAS values
+	// belong to the completed execution, including its error and retry paths.
+	c.preparedParamValues = nil
 	if c.siriusRead != nil {
 		if err := c.siriusRead.finish(context.Background(), false); err != nil && c.proc != nil {
 			c.proc.Error(context.Background(), "failed to quiesce Sirius read during compile release", zap.Error(err))
@@ -276,6 +279,8 @@ func (c *Compile) FreezeResultMetadata() {
 }
 
 func (c *Compile) Reset(proc *process.Process, startAt time.Time, fill func(*batch.Batch, *perfcounter.CounterSet) error, sql string) error {
+	// A cached Compile must never expose the previous execution's CTAS values.
+	c.preparedParamValues = nil
 	// Reset only supports the TP topology admitted by prepare-time compilation.
 	// AP scan state and worker placement belong to one execution; updating the
 	// transaction offset cannot make them valid for another execution.
@@ -487,6 +492,7 @@ func (c *Compile) clear() {
 	c.scopes = c.scopes[:0]
 	c.pn = nil
 	c.fill = nil
+	c.preparedParamValues = nil
 	c.resultSink = nil
 	c.executionGeneration = 0
 	c.retryTimes = 0
@@ -1446,6 +1452,9 @@ func (c *Compile) compileQuery(qry *plan.Query) ([]*Scope, error) {
 	if err = c.constrainIntegerArgumentWorkers(qry); err != nil {
 		return nil, err
 	}
+	if err = c.constrainPreparedPrecisionWorkers(qry); err != nil {
+		return nil, err
+	}
 	if err = c.constrainIPFunctionWorkers(qry); err != nil {
 		return nil, err
 	}
@@ -2292,6 +2301,7 @@ func (c *Compile) compilePlanScopeWithUnionAllDemand(
 		}
 		ss = c.ensureCoordinatorOnlyFunctions(node, ss)
 		ss = c.compileProjection(node, ss)
+		ss = c.compileSort(node, ss)
 		return ss, nil
 	case plan.Node_RECURSIVE_SCAN:
 		c.setAnalyzeCurrent(ss, int(curNodeIdx))
@@ -2351,6 +2361,11 @@ func (c *Compile) firstStepToCompile(qry *plan.Query) int {
 
 func (c *Compile) canUseLiteralLimitZeroFastPath(node *plan.Node) bool {
 	if node == nil || node.Limit == nil || c.ownsFoundRows(node) {
+		return false
+	}
+	// Recursive receivers are part of a feedback loop. Even an empty result
+	// must retain them so loop cleanup can drain inputs and notify producers.
+	if node.NodeType == plan.Node_RECURSIVE_CTE {
 		return false
 	}
 	cExpr, ok := node.Limit.Expr.(*plan.Expr_Lit)
@@ -10898,6 +10913,12 @@ func (c *Compile) fatalLog(retry int, err error) {
 
 func (c *Compile) SetOriginSQL(sql string) {
 	c.originSQL = sqlmongodb.RedactSQLForDiagnostics(sql)
+}
+
+func (c *Compile) SetPreparedParamValues(values []any) {
+	// A compile can be pooled, and parameter values may retain large payloads.
+	// Copy only the current execution's values and release the old backing array.
+	c.preparedParamValues = append([]any(nil), values...)
 }
 
 // SetResourceAttemptOwnerEligible marks this Compile as the top-level
