@@ -1022,6 +1022,7 @@ func (node *FuncExpr) Format(ctx *FmtCtx) {
 	}
 	isConvertUsing := !node.IsGeneric && strings.EqualFold(funcName, "convert") && len(node.Exprs) == 2
 	isExtract := !node.IsGeneric && strings.EqualFold(funcName, "extract") && len(node.Exprs) == 2
+	isPosition := !node.IsGeneric && strings.EqualFold(funcName, "position") && len(node.Exprs) == 2
 	isListAgg := !node.IsGeneric && strings.EqualFold(funcName, "listagg")
 	isGroupConcat := !node.IsGeneric && (strings.EqualFold(funcName, "group_concat") ||
 		strings.EqualFold(node.Func.FunctionReference.(*UnresolvedName).ColName(), "group_concat"))
@@ -1036,6 +1037,10 @@ func (node *FuncExpr) Format(ctx *FmtCtx) {
 	} else if isExtract {
 		node.Exprs[0].Format(ctx)
 		ctx.WriteString(" from ")
+		node.Exprs[1].Format(ctx)
+	} else if isPosition {
+		node.Exprs[0].Format(ctx)
+		ctx.WriteString(" in ")
 		node.Exprs[1].Format(ctx)
 	} else if isListAgg && len(node.Exprs) == 2 {
 		node.Exprs[0].Format(ctx)
@@ -1239,11 +1244,11 @@ func trimExprsFormat(ctx *FmtCtx, exprs Exprs) {
 		ctx.WriteString(" from ")
 		exprs[3].Format(ctx)
 	case "2":
-		exprs[1].Format(ctx)
+		ctx.WriteString(exprs[1].(*NumVal).String())
 		ctx.WriteString(" from ")
 		exprs[3].Format(ctx)
 	case "3":
-		exprs[1].Format(ctx)
+		ctx.WriteString(exprs[1].(*NumVal).String())
 		ctx.WriteString(" ")
 		exprs[2].Format(ctx)
 		ctx.WriteString(" from ")
@@ -2221,7 +2226,8 @@ func (node *FullTextMatchExpr) Format(ctx *FmtCtx) {
 	ctx.WriteString(") ")
 	ctx.WriteString("AGAINST (")
 	// Post-#24796 the pattern is an Expr: a *NumVal (search_pattern: STRING) for a
-	// literal, or a *ParamExpr (VALUE_ARG) for a prepared '?'. For the string case
+	// literal, a *ParamExpr (VALUE_ARG) for a prepared '?', or an
+	// *UnresolvedName for a stored-procedure variable. For the string case
 	// (the common one) emit it as a single-quoted, escaped SQL string literal
 	// UNCONDITIONALLY — do NOT route it through NumVal.Format / ctx.WriteValue, which
 	// only quotes when the FmtCtx opts in (quoteString/singleQuoteString). The default

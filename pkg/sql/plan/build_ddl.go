@@ -1401,6 +1401,79 @@ func viewJoinCondWithExpandedStars(
 	return &stableCond, rewritten
 }
 
+// RefreshPreparedCTASInferredColumns aligns columns inferred from AS SELECT
+// with the execute-time query. Explicit column definitions remain the user's
+// schema contract even when a parameter changes the source domain.
+func RefreshPreparedCTASInferredColumns(ctx context.Context, p, original *Plan, stmt tree.Statement) error {
+	ctas, ok := stmt.(*tree.CreateTable)
+	if !ok || !ctas.IsAsSelect || p == nil || original == nil || original.GetDdl() == nil ||
+		original.GetDdl().Query == nil || p.GetDdl() == nil ||
+		p.GetDdl().Query == nil || p.GetDdl().GetCreateTable() == nil ||
+		p.GetDdl().GetCreateTable().TableDef == nil {
+		return nil
+	}
+	explicit := make(map[string]struct{})
+	for _, item := range ctas.Defs {
+		if col, ok := item.(*tree.ColumnTableDef); ok && col.Name != nil {
+			explicit[strings.ToLower(col.Name.ColName())] = struct{}{}
+		}
+	}
+	query := &Plan{Plan: &plan.Plan_Query{Query: p.GetDdl().Query}}
+	originalQuery := &Plan{Plan: &plan.Plan_Query{Query: original.GetDdl().Query}}
+	originalColumns := GetResultColumnsFromPlan(originalQuery)
+	runtimeColumns := GetResultColumnsFromPlan(query)
+	if len(originalColumns) != len(runtimeColumns) {
+		return moerr.NewInternalError(ctx, "prepared CTAS source column count changed")
+	}
+	// buildTableDefs places target-only explicit columns first and SELECT slots
+	// next, in output order. Physical hidden/system columns follow that block.
+	// Count the prefix from the original output rather than searching by name:
+	// a later physical column could happen to have the same name.
+	targetOnlyCount := 0
+	for name := range explicit {
+		found := false
+		for _, source := range originalColumns {
+			if source != nil && strings.EqualFold(name, source.Name) {
+				found = true
+				break
+			}
+		}
+		if !found {
+			targetOnlyCount++
+		}
+	}
+	targetColumns := p.GetDdl().GetCreateTable().TableDef.Cols
+	if len(targetColumns) < targetOnlyCount+len(originalColumns) {
+		return moerr.NewInternalError(ctx, "prepared CTAS source columns are missing from target")
+	}
+	for i, source := range runtimeColumns {
+		if source == nil || originalColumns[i] == nil ||
+			!strings.EqualFold(source.Name, originalColumns[i].Name) {
+			return moerr.NewInternalError(ctx, "prepared CTAS source column identity changed")
+		}
+		target := targetColumns[targetOnlyCount+i]
+		if target.Hidden || !strings.EqualFold(target.Name, originalColumns[i].Name) {
+			return moerr.NewInternalError(ctx, "prepared CTAS target column order changed")
+		}
+		if _, fixed := explicit[strings.ToLower(target.Name)]; fixed {
+			continue
+		}
+		if reflect.DeepEqual(source.Typ, originalColumns[i].Typ) {
+			continue
+		}
+		if source.Typ.NotNullable != originalColumns[i].Typ.NotNullable {
+			return moerr.NewNotSupportedf(ctx,
+				"prepared CTAS inferred column %q changed nullability", target.Name)
+		}
+		if target.Default != nil && (target.Default.Expr != nil || target.Default.OriginString != "") {
+			return moerr.NewNotSupportedf(ctx,
+				"prepared CTAS inferred column %q has a type-dependent default", target.Name)
+		}
+		target.Typ = source.Typ
+	}
+	return nil
+}
+
 func genAsSelectCols(
 	ctx CompilerContext,
 	stmt *tree.Select,
@@ -7579,22 +7652,20 @@ func constructAddedPartitionDefs(
 // external table writable, plus the column restrictions writability implies.
 // No-op for read-only external tables (option absent). tableDef may be nil when
 // only the param-level options need checking.
-// effectiveWriteCompression mirrors crt.GetCompressType's decision (inlined to
-// avoid the plan<-crt import cycle): an explicit non-auto compression wins,
-// otherwise the type is auto-detected from any of the given file paths'
-// suffixes. Returns the effective type and whether it is compressed.
+// effectiveWriteCompression applies GetCompressType, the detector the read
+// path uses, over several paths: an explicit non-auto compression wins,
+// otherwise the first path whose name implies compression decides. Returns the
+// effective type and whether it is compressed. Sharing the detector keeps
+// write validation from accepting a pattern the read path would decompress.
 func effectiveWriteCompression(comp string, paths ...string) (string, bool) {
-	comp = strings.ToLower(strings.TrimSpace(comp))
-	if comp != "" && comp != tree.AUTO {
-		return comp, comp != tree.NOCOMPRESS
+	comp = strings.TrimSpace(comp)
+	if comp != "" && !strings.EqualFold(comp, tree.AUTO) {
+		eff := GetCompressType(comp, "")
+		return eff, eff != tree.NOCOMPRESS
 	}
-	suffixes := []string{".tar.gz", ".tar.gzip", ".tar.bz2", ".tar.bzip2", ".gz", ".gzip", ".bz2", ".bzip2", ".lz4"}
 	for _, p := range paths {
-		p = strings.ToLower(p)
-		for _, suf := range suffixes {
-			if strings.HasSuffix(p, suf) {
-				return strings.TrimPrefix(suf, "."), true
-			}
+		if eff := GetCompressType("", p); eff != tree.NOCOMPRESS {
+			return eff, true
 		}
 	}
 	return tree.NOCOMPRESS, false

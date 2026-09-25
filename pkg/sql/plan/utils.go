@@ -47,6 +47,7 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/sql/util"
 	"github.com/matrixorigin/matrixone/pkg/stage"
 	"github.com/matrixorigin/matrixone/pkg/stage/stageutil"
+	"github.com/matrixorigin/matrixone/pkg/util/executor"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/common"
 	"github.com/matrixorigin/matrixone/pkg/vm/process"
 	"go.uber.org/zap"
@@ -1124,6 +1125,12 @@ func preparedNodeOutputContainsParam(
 	}
 	visited[key] = struct{}{}
 	node := query.Nodes[nodeID]
+	if node != nil && node.NodeType == plan.Node_FUNCTION_SCAN && colPos == 0 &&
+		node.TableDef != nil && node.TableDef.TblFunc != nil &&
+		node.TableDef.TblFunc.Name == "generate_series" &&
+		len(node.TblFuncExprList) > 0 && node.TblFuncExprList[0].GetP() != nil {
+		return true
+	}
 	if node == nil || int(colPos) >= len(node.ProjectList) || node.ProjectList[colPos] == nil {
 		return false
 	}
@@ -1595,7 +1602,7 @@ func getUnionSelects(ctx context.Context, stmt *tree.UnionClause, selects *[]tre
 		}
 	case tree.EXCEPT, tree.UT_MINUS:
 		if stmt.All {
-			return moerr.NewNYI(ctx, "EXCEPT/MINUS ALL clause")
+			*unionTypes = append(*unionTypes, plan.Node_MINUS_ALL)
 		} else {
 			*unionTypes = append(*unionTypes, plan.Node_MINUS)
 		}
@@ -4539,7 +4546,17 @@ func (rule *preparedRuntimeTextComparisonScanRule) paramTypeIsText(position int)
 		rule.runtimeParamTypes[position].Oid.IsMySQLString()
 }
 
-func (rule *preparedRuntimeSpecializationScanRule) MatchNode(_ *Node) bool {
+func (rule *preparedRuntimeSpecializationScanRule) MatchNode(node *Node) bool {
+	if node.NodeType == plan.Node_FUNCTION_SCAN && node.TableDef != nil &&
+		node.TableDef.TblFunc != nil && node.TableDef.TblFunc.Name == "generate_series" &&
+		len(node.TblFuncExprList) > 0 {
+		for _, arg := range node.TblFuncExprList {
+			if _, ok := preparedRuntimeSourceParamPosition(arg); ok {
+				rule.needs = true
+				break
+			}
+		}
+	}
 	return false
 }
 
@@ -4880,6 +4897,11 @@ func preparedExprRequiresRuntimeSpecialization(functionName string, expr *plan.E
 }
 
 func preparedExprRequiresRuntimeSpecializationAt(functionName string, argIndex int, expr *plan.Expr) bool {
+	// JSON_OBJECTAGG keys are deliberately normalized to VARCHAR at prepare
+	// time; only its value can change the JSON atom type at execution.
+	if functionName == "json_objectagg" && argIndex == 0 {
+		return false
+	}
 	// Only CONV's first operand changes the executor domain. The base operands
 	// are numeric controls and do not justify copying/rebinding the plan.
 	if functionName == "bin" || functionName == "conv" {
@@ -5000,7 +5022,8 @@ func preparedRuntimeSpecializationFunction(name string) bool {
 	// the type of its first argument, so a binary parameter can change the
 	// result-column type from the prepare-time placeholder domain.
 	switch name {
-	case "bin", "char", "conv", "ntile", "sleep",
+	case "bin", "char", "conv", "field", "ntile", "sleep",
+		"json_arrayagg", "json_objectagg",
 		"date_add", "date_sub", "adddate", "subdate", "timestampadd", "timestampdiff",
 		"ord", "char_length", "character_length",
 		"left", "right", "substring", "substr", "mid", "reverse",
@@ -5209,6 +5232,102 @@ func fillValuesOfParamsInPlanWithSpecializationSelected(
 	return copied, false, nil
 }
 
+// specializePreparedGenerateSeries fixes the FUNCTION_SCAN schema and argument
+// domain together. A prepared endpoint is TEXT only because of its transport;
+// the cached PREPARE plan cannot choose between integer and temporal series.
+func specializePreparedGenerateSeries(ctx context.Context, plan0 *Plan, values []any) (bool, error) {
+	query := plan0.GetQuery()
+	if query == nil {
+		return false, nil
+	}
+	changed := false
+	for _, node := range query.Nodes {
+		if node == nil || node.NodeType != plan.Node_FUNCTION_SCAN || node.TableDef == nil ||
+			node.TableDef.TblFunc == nil || node.TableDef.TblFunc.Name != "generate_series" ||
+			len(node.TblFuncExprList) == 0 || len(node.TableDef.Cols) == 0 {
+			continue
+		}
+		first := unwrapPreparedImplicitCast(node.TblFuncExprList[0], true)
+		marker := first.GetP()
+		parameterized := marker != nil
+		for _, arg := range node.TblFuncExprList[1:] {
+			parameterized = parameterized || unwrapPreparedImplicitCast(arg, true).GetP() != nil
+		}
+		if !parameterized {
+			continue
+		}
+		source := makeTypeByPlan2Expr(first)
+		if marker != nil {
+			if marker.Pos < 0 || int(marker.Pos) >= len(values) {
+				continue
+			}
+			param, ok := values[marker.Pos].(ParamValue)
+			if !ok {
+				continue
+			}
+			source = types.T_text.ToType()
+			if param.HasRuntimeType {
+				source = param.RuntimeType
+			} else if param.HasSourceType {
+				source = param.SourceType
+			}
+		}
+		numeric := source.Oid.IsInteger()
+		bound := append([]*plan.Expr(nil), node.TblFuncExprList...)
+		datetimeType := types.T_datetime.ToTypeWithScale(generateSeriesDatetimeScale(bound, values))
+		endpointCount := min(len(bound), 2)
+		for i := 0; i < endpointCount; i++ {
+			original := unwrapPreparedImplicitCast(bound[i], true)
+			if numeric {
+				if original.GetP() == nil {
+					continue
+				}
+				target := types.T_int64.ToType()
+				casted, err := appendCastBeforeExpr(ctx, original, makePlan2Type(&target))
+				if err != nil {
+					return false, err
+				}
+				bound[i] = casted
+				continue
+			}
+			if types.T(bound[i].Typ.Id) == types.T_datetime && bound[i].Typ.Scale == datetimeType.Scale {
+				continue
+			}
+			casted, err := appendCastBeforeExpr(ctx, original, makePlan2Type(&datetimeType))
+			if err != nil {
+				return false, err
+			}
+			bound[i] = casted
+		}
+		if len(bound) > 2 && unwrapPreparedImplicitCast(bound[2], true).GetP() != nil {
+			target := types.T_varchar.ToType()
+			if numeric {
+				target = types.T_int64.ToType()
+			}
+			casted, err := appendCastBeforeExpr(ctx, unwrapPreparedImplicitCast(bound[2], true), makePlan2Type(&target))
+			if err != nil {
+				return false, err
+			}
+			bound[2] = casted
+		}
+		node.TblFuncExprList = bound
+		resultType := types.T_varchar.ToType()
+		if numeric {
+			resultType = types.T_int64.ToType()
+		} else if source.Oid.IsDateRelate() {
+			resultType = datetimeType
+		}
+		node.TableDef.Cols[0].Typ = makePlan2Type(&resultType)
+		for _, projected := range node.ProjectList {
+			if col := projected.GetCol(); col != nil && col.ColPos == 0 {
+				projected.Typ = makePlan2Type(&resultType)
+			}
+		}
+		changed = true
+	}
+	return changed, nil
+}
+
 // ValidatePreparedPaginationParams validates parameter markers used by LIMIT
 // and OFFSET before the values are converted through the generic expression
 // cast path. MySQL accepts NULL and Boolean user variables here, but rejects
@@ -5237,6 +5356,42 @@ func ValidatePreparedPaginationParams(ctx context.Context, preparePlan *Plan, pa
 // compile from an earlier execution.
 func PreparedPlanHasPaginationParams(preparePlan *Plan) bool {
 	return len(preparedPaginationParamPositions(preparePlan)) > 0
+}
+
+// PreparedPlanGenerateSeriesParameterInfo identifies temporal endpoint packet
+// positions and value-sensitive table-function plans. A temporal endpoint's
+// binary protocol type is needed to choose the result domain. String endpoint
+// fractions and the interval step can change DATETIME scale without changing
+// the packet type, so any parameterized series needs a fresh runtime compile.
+func PreparedPlanGenerateSeriesParameterInfo(preparePlan *Plan) (endpointPositions []int32, parameterized bool) {
+	if preparePlan == nil {
+		return nil, false
+	}
+	query := preparePlan.GetQuery()
+	if query == nil && preparePlan.GetDdl() != nil {
+		query = preparePlan.GetDdl().GetQuery()
+	}
+	if query == nil {
+		return nil, false
+	}
+	for _, node := range query.Nodes {
+		if node == nil || node.NodeType != plan.Node_FUNCTION_SCAN || node.TableDef == nil ||
+			node.TableDef.TblFunc == nil || node.TableDef.TblFunc.Name != "generate_series" {
+			continue
+		}
+		for i, arg := range node.TblFuncExprList {
+			position, found := preparedRuntimeSourceParamPosition(arg)
+			if !found || position < 0 {
+				continue
+			}
+			parameterized = true
+			if i < 2 {
+				endpointPositions = append(endpointPositions, int32(position))
+			}
+		}
+	}
+	slices.Sort(endpointPositions)
+	return slices.Compact(endpointPositions), parameterized
 }
 
 // PreparedPlanHasPercentileParams reports whether an aggregate percentile is
@@ -5674,59 +5829,7 @@ func validatePreparedPaginationValue(value any) (valid bool, negative bool) {
 	}
 }
 
-type ParamValue struct {
-	Value any
-	IsBin bool
-	// IsBinaryString is the legacy binary-domain metadata retained for
-	// compatibility with callers that have not adopted RuntimeStringDomain.
-	IsBinaryString bool
-	// IsBinaryProtocol records that the value came from COM_STMT_EXECUTE.
-	// It is intentionally separate from IsBin: a VAR_STRING parameter is a
-	// binary-protocol value without being a binary string literal.
-	IsBinaryProtocol bool
-	PrepareParamKind vector.PrepareParamKind
-	// SourceType is the logical type of a SQL EXECUTE USING user variable. It
-	// is deliberately separate from RuntimeType: SQL parameters are transported
-	// through a text vector, and their source type is used only after an
-	// arithmetic consumer establishes a numeric domain. Comparisons keep their
-	// existing common-type and numeric-prefix contracts.
-	SourceType          types.Type
-	HasSourceType       bool
-	RuntimeStringDomain types.RuntimeStringDomain
-	// RuntimeType is the type advertised by the binary-protocol parameter
-	// binding.  Prepared plans deliberately keep parameter markers as TEXT
-	// while they are cached, so the execute-time copy can use this optional
-	// type to rebind overloaded functions and result metadata without mutating
-	// the cached plan.
-	RuntimeType    types.Type
-	HasRuntimeType bool
-	// InetNtoaSourceType carries a SQL EXECUTE user's assignment-time domain
-	// only for INET_NTOA. It must not participate in generic parameter
-	// coercion: a DATE/TIME/JSON user variable is still a text transport value
-	// for unrelated arithmetic and comparisons.
-	InetNtoaSourceType    types.Type
-	HasInetNtoaSourceType bool
-	// DirectResultType is the wire-visible DECIMAL domain parsed from the same
-	// binary-protocol lexeme as RuntimeType. RuntimeType keeps the normalized
-	// numeric-prefix domain used by common-type consumers; a direct result keeps
-	// the visible scale when representable and otherwise uses the normalized
-	// domain for lexemes whose only excess digits are removable trailing zeroes.
-	DirectResultType    types.Type
-	HasDirectResultType bool
-	// MaterializedValue is a bounded canonical DECIMAL lexeme produced by the
-	// protocol scanner. Typed literal construction uses it instead of reparsing
-	// the potentially max-packet-sized raw Value.
-	MaterializedValue string
-	// RetainParamRef records that a specialized query plan will be cached and
-	// therefore must retain this parameter as runtime provenance even when the
-	// parameter itself is unrelated to numeric-prefix specialization.
-	RetainParamRef bool
-	// EnableNumericPrefix records that the deployment-wide protocol version can
-	// execute planner-injected MySQL numeric-prefix casts.  Keep the negotiated
-	// capability on each value so execute-time plan specialization does not need
-	// to guess a service identity from context.Context.
-	EnableNumericPrefix bool
-}
+type ParamValue = executor.ParamValue
 
 // PreparedParamValueHasNumericRuntime reports whether the prepared value owns
 // an explicit numeric runtime domain without inferring one from text.
@@ -6876,11 +6979,14 @@ func replaceParamValsWithSelection(
 	originalSetOperationTypes := snapshotPreparedSetOperationOutputTypes(plan0.GetQuery())
 	originalSetOperationInputTypes := snapshotPreparedSetOperationInputTypes(
 		plan0.GetQuery(), originalSetOperationTypes)
+	seriesSpecialized, err := specializePreparedGenerateSeries(ctx, plan0, paramVals)
+	if err != nil {
+		return false, err
+	}
 	directResultPositions := PreparedPlanDirectResultParamPositions(plan0)
 	params := make([]*Expr, len(paramVals))
 	sqlExecuteNumericParams := make([]*Expr, len(paramVals))
 	sqlExecuteStringBackedParams := make([]bool, len(paramVals))
-	var err error
 	for i, val := range paramVals {
 		if selected != nil && (i >= len(selected) || !selected[i]) {
 			continue
@@ -7114,7 +7220,7 @@ func replaceParamValsWithSelection(
 	// its execute-time type through transparent projection/sort/distinct nodes
 	// so the final visible ColDef agrees with the rewritten source expression.
 	directResultSpecialized := propagatePreparedDirectResultTypes(plan0, paramVals)
-	return paramRule.specialized || projectionSpecialized || directResultSpecialized, nil
+	return paramRule.specialized || projectionSpecialized || directResultSpecialized || seriesSpecialized, nil
 }
 
 func propagatePreparedDirectResultTypes(plan0 *Plan, paramVals []any) bool {
@@ -8126,7 +8232,7 @@ func refreshPreparedSetOperationPhysicalKeys(
 	childProjectLists [][]*plan.Expr,
 ) error {
 	switch node.NodeType {
-	case plan.Node_UNION, plan.Node_INTERSECT, plan.Node_INTERSECT_ALL, plan.Node_MINUS:
+	case plan.Node_UNION, plan.Node_INTERSECT, plan.Node_INTERSECT_ALL, plan.Node_MINUS, plan.Node_MINUS_ALL:
 	default:
 		return nil
 	}

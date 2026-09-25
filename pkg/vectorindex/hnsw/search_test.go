@@ -33,6 +33,7 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/util/executor"
 	"github.com/matrixorigin/matrixone/pkg/vectorindex"
 	"github.com/matrixorigin/matrixone/pkg/vectorindex/cache"
+	"github.com/matrixorigin/matrixone/pkg/vectorindex/metric"
 	"github.com/matrixorigin/matrixone/pkg/vectorindex/sqlexec"
 	"github.com/matrixorigin/matrixone/pkg/vm/process"
 	"github.com/stretchr/testify/require"
@@ -139,6 +140,40 @@ func TestHnswSearchFloat32(t *testing.T) {
 	}
 }
 
+func TestHnswSearchFloat64Overflow(t *testing.T) {
+	m := mpool.MustNewZero()
+	proc := testutil.NewProcessWithMPool(t, "", m)
+	sqlproc := sqlexec.NewSqlProcess(proc)
+
+	idxcfg := vectorindex.IndexConfig{Type: "hnsw", Usearch: usearch.DefaultConfig(3)}
+	idxcfg.Usearch.Metric = usearch.L2sq
+	idxcfg.Usearch.Quantization = usearch.F64
+	tblcfg := vectorindex.IndexTableConfig{}
+
+	s := NewHnswSearch[float64](idxcfg, tblcfg)
+
+	idx, err := usearch.NewIndex(idxcfg.Usearch)
+	require.NoError(t, err)
+	defer idx.Destroy()
+	require.NoError(t, idx.Reserve(1))
+
+	model := &HnswModel[float64]{Id: "abc-0", Index: idx}
+	require.NoError(t, model.Add(0, []float64{0, 0, 0}))
+	s.Indexes = []*HnswModel[float64]{model}
+
+	// A finite float64 query whose squared L2 distance (1e40) overflows float32; usearch
+	// returns the distance as float32 (+Inf), so Search must fail fast rather than serve the
+	// saturated score (#29040 / #29050).
+	rt := vectorindex.RuntimeConfig{Limit: 4, OrigFuncName: metric.DistFn_L2Distance}
+	_, _, err = s.Search(sqlproc, []float64{1e20, 0, 0}, rt)
+	require.Error(t, err)
+
+	// A small-magnitude float64 query stays finite -- no false reject.
+	_, dists, err := s.Search(sqlproc, []float64{1, 0, 0}, rt)
+	require.NoError(t, err)
+	require.NotEmpty(t, dists)
+}
+
 func TestHnswSearchFloat32_BadQueryType(t *testing.T) {
 	m := mpool.MustNewZero()
 	proc := testutil.NewProcessWithMPool(t, "", m)
@@ -165,11 +200,29 @@ func TestHnswSearchCosineRejected(t *testing.T) {
 	idxcfg.Usearch.Metric = usearch.Cosine
 	s := NewHnswSearch[float32](idxcfg, vectorindex.IndexTableConfig{})
 
-	_, _, err := s.Search(sqlproc, []float32{1e-20, 1e-20, 1e-20}, vectorindex.RuntimeConfig{
+	// A zero or subnormal (float32-squared-norm-underflowing) cosine query cannot be scored on the
+	// index to the SQL contract; it is rejected fail-fast, not silently rewritten (#29082).
+	_, _, err := s.Search(sqlproc, []float32{0, 0, 0}, vectorindex.RuntimeConfig{
 		Limit:        1,
 		OrigFuncName: "cosine_distance",
 	})
-	require.ErrorContains(t, err, "hnsw cosine search is disabled")
+	require.ErrorContains(t, err, "normalized")
+
+	_, _, err = s.Search(sqlproc, []float32{1e-20, 1e-20, 1e-20}, vectorindex.RuntimeConfig{
+		Limit:        1,
+		OrigFuncName: "cosine_distance",
+	})
+	require.ErrorContains(t, err, "normalized")
+
+	// A normalized cosine query is NOT rejected: it proceeds to the index; with no loaded index
+	// files it simply returns an empty result.
+	keys, dists, err := s.Search(sqlproc, []float32{1, 0, 0}, vectorindex.RuntimeConfig{
+		Limit:        1,
+		OrigFuncName: "cosine_distance",
+	})
+	require.NoError(t, err)
+	require.Empty(t, keys)
+	require.Empty(t, dists)
 }
 
 func TestBoundedHnswSearchLimits(t *testing.T) {

@@ -3467,6 +3467,15 @@ func (b *baseBinder) bindPreparedNumericFuncExpr(
 			b.observePersistedExpressionProtocol,
 		)
 	}
+	if isPreparedNumericAggregate(name, len(astArgs)) {
+		hasParam, err := b.hasPreparedNumericParamExprs(astArgs, depth)
+		if err != nil {
+			return nil, err
+		}
+		if !hasParam {
+			return b.bindFuncExprImplByAstExpr(name, astArgs, depth)
+		}
+	}
 
 	// Binding can normalize the parsed CAST node in place. Snapshot the user's
 	// explicit numeric boundary before that mutation so ABS/SIGN keep an
@@ -3476,6 +3485,14 @@ func (b *baseBinder) bindPreparedNumericFuncExpr(
 	arg, err := b.bindNumericExprWithContext(astArgs[0], depth, target)
 	if err != nil {
 		return nil, err
+	}
+	if isPreparedNumericAggregate(name, len(astArgs)) {
+		rewritten, err := b.useStoredMySQLSpecialTypesForNumericContractWithProvenance(
+			b.GetContext(), name, []*plan.Expr{arg})
+		if err != nil {
+			return nil, err
+		}
+		arg = rewritten[0]
 	}
 	if (strings.EqualFold(name, "abs") && !hasExplicitFloatCast) ||
 		(strings.EqualFold(name, "sign") && !hasExplicitNumericCast) {
@@ -3521,6 +3538,14 @@ func (b *baseBinder) bindFullTextMatchExpr(astExpr *tree.FullTextMatchExpr, dept
 	if err != nil {
 		return nil, err
 	}
+	if name, ok := astExpr.Pattern.(*tree.UnresolvedName); ok {
+		// A search term is shared by the whole index scan. Only a lexical
+		// stored-procedure variable is safe here; an ordinary column would
+		// make the term depend on the current row.
+		if !isStoredProcedureFullTextPattern(b.GetContext(), name, pattern) {
+			return nil, moerr.NewInvalidInput(b.GetContext(), "AGAINST pattern must be a stored-procedure variable")
+		}
+	}
 	if pattern.Typ.Id != int32(types.T_varchar) {
 		varcharTyp := types.T_varchar.ToType()
 		pattern, err = makePlan2CastExpr(b.GetContext(), pattern, makePlan2Type(&varcharTyp))
@@ -3539,6 +3564,32 @@ func (b *baseBinder) bindFullTextMatchExpr(astExpr *tree.FullTextMatchExpr, dept
 	}
 
 	return BindFuncExprImplByPlanExpr(b.GetContext(), "fulltext_match", args)
+}
+
+func isStoredProcedureFullTextPattern(ctx context.Context, name *tree.UnresolvedName, pattern *plan.Expr) bool {
+	if ctx == nil || name.NumParts != 1 || ctx.Value(defines.InSp{}) != true {
+		return false
+	}
+	scopes, ok := ctx.Value(defines.VarScopeKey{}).(*[]map[string]interface{})
+	if !ok || scopes == nil {
+		return false
+	}
+	variableName := strings.ToLower(name.ColName())
+	found := false
+	for i := len(*scopes) - 1; i >= 0; i-- {
+		if _, found = (*scopes)[i][variableName]; found {
+			break
+		}
+	}
+	if !found {
+		return false
+	}
+	variable := pattern
+	if cast := variable.GetF(); cast != nil && cast.GetFunc() != nil && cast.GetFunc().GetObjName() == "cast" && len(cast.Args) > 0 {
+		variable = cast.Args[0]
+	}
+	ref := variable.GetV()
+	return ref != nil && !ref.System && !ref.Global && ref.Name == variableName
 }
 
 // coerceBoolNumericAggregateArg gives SUM/AVG over a BOOL argument the MySQL
@@ -3749,6 +3800,20 @@ func (b *baseBinder) bindFuncExprImplByAstExpr(name string, astArgs []tree.Expr,
 			b.numericSubqueryTarget = subqueryTarget
 			if err != nil {
 				return nil, err
+			}
+			if b.builder != nil && b.builder.isPrepareStatement && len(astArgs) == 1 && idx == 0 &&
+				(name == "hll_cardinality" || name == "hll_merge_agg" || name == "bitmap_or_agg") {
+				if _, directParam := unwrapParenExpr(arg).(*tree.ParamExpr); directParam {
+					binaryType := types.T_varbinary.ToType()
+					// Opaque aggregate states can exceed the SQL VARBINARY(65535)
+					// width. This internal cast chooses the binary domain without
+					// imposing a value-length limit on the prepared parameter.
+					binaryType.Width = 0
+					expr, err = appendCastBeforeExpr(b.GetContext(), expr, makePlan2Type(&binaryType))
+					if err != nil {
+						return nil, err
+					}
+				}
 			}
 			if b.builder != nil && b.builder.isPrepareStatement && name == "bit_count" &&
 				len(astArgs) == 1 {
@@ -4747,8 +4812,10 @@ func bindFuncExprAndConstFoldInternal(
 		}
 		fnArgs[1] = arg1
 
-		lit1 := arg1.GetLit()
-		if arg1.Typ.Id == int32(types.T_any) || lit1 == nil {
+		// DECIMAL256 constants can remain executable casts because scalar
+		// Literal has no DECIMAL256 representation. Check constancy rather
+		// than requiring one particular folded representation.
+		if arg1.Typ.Id == int32(types.T_any) || !rule.IsConstant(arg1, false) {
 			return nil, moerr.NewInvalidInput(ctx, "2nd argument of in_range must be constant")
 		}
 
@@ -4758,8 +4825,7 @@ func bindFuncExprAndConstFoldInternal(
 		}
 		fnArgs[2] = arg2
 
-		lit2 := arg2.GetLit()
-		if arg2.Typ.Id == int32(types.T_any) || lit2 == nil {
+		if arg2.Typ.Id == int32(types.T_any) || !rule.IsConstant(arg2, false) {
 			return nil, moerr.NewInvalidInput(ctx, "3rd argument of in_range must be constant")
 		}
 

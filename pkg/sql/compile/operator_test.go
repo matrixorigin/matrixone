@@ -39,6 +39,7 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/sql/colexec/loopjoin"
 	"github.com/matrixorigin/matrixone/pkg/sql/colexec/mergeorder"
 	"github.com/matrixorigin/matrixone/pkg/sql/colexec/mergetop"
+	"github.com/matrixorigin/matrixone/pkg/sql/colexec/minusall"
 	"github.com/matrixorigin/matrixone/pkg/sql/colexec/multi_update"
 	"github.com/matrixorigin/matrixone/pkg/sql/colexec/order"
 	"github.com/matrixorigin/matrixone/pkg/sql/colexec/partition"
@@ -784,6 +785,16 @@ func TestDupSetOperatorPreservesPhysicalEqualityKeys(t *testing.T) {
 	require.Equal(t, source.KeyExprs, duplicated.KeyExprs)
 }
 
+func TestDupMinusAllPreservesPhysicalEqualityKeys(t *testing.T) {
+	source := minusall.NewArgument()
+	defer source.Release()
+	source.KeyExprs = []*plan.Expr{plan2.MakePlan2Int64ConstExprWithType(9)}
+
+	duplicated := dupOperator(source, 0, 1).(*minusall.MinusAll)
+	defer duplicated.Release()
+	require.Equal(t, source.KeyExprs, duplicated.KeyExprs)
+}
+
 func TestDupOperatorMergeTop(t *testing.T) {
 	op := mergetop.NewArgument()
 	op.Limit = plan2.MakePlan2Int64ConstExprWithType(10)
@@ -1307,6 +1318,23 @@ func TestConstructAggregateConfigCoversLegacyConfigurationFailures(t *testing.T)
 		require.Error(t, err, name)
 	}
 
+}
+
+func TestGroupConcatNullSeparatorConfig(t *testing.T) {
+	proc := testutil.NewProcessWithMPool(t, "", mpool.MustNewZero())
+	defer proc.Free()
+	proc.SetResolveVariableFunc(func(string, bool, bool) (interface{}, error) {
+		return int64(1024), nil
+	})
+	value := &plan.Expr{Typ: plan.Type{Id: int32(types.T_varchar)}}
+	f := &plan.Function{
+		Func: &plan.ObjectRef{ObjName: plan2.NameGroupConcat},
+		Args: []*plan.Expr{value, plan2.MakePlan2NullTextConstExprWithType("NULL")},
+	}
+	args, config, err := constructAggregateConfigWithError(f, proc)
+	require.NoError(t, err)
+	require.Len(t, args, 1)
+	require.Equal(t, aggexec.EncodeGroupConcatConfig("", 1024), config)
 }
 
 func TestConstructAggregateConfigPreservesOtherSpecialConfigs(t *testing.T) {

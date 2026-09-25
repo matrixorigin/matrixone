@@ -390,6 +390,13 @@ type PrepareStmt struct {
 	// runtime integer/decimal domain may require overload rebinding without
 	// rescanning the full plan for every EXECUTE.
 	numericOverloadParamPositions []int32
+	// temporalRuntimeParamPositions combines numeric-function and prepared
+	// GENERATE_SERIES endpoint positions. Only these markers retain a temporal
+	// COM_STMT_EXECUTE packet domain instead of generic text transport.
+	temporalRuntimeParamPositions []int32
+	// A parameterized GENERATE_SERIES can derive DATETIME scale from text
+	// values or an interval step, even when protocol parameter types are stable.
+	parameterizedGenerateSeries bool
 	// bitCountOverloadParamPositions owns BIT_COUNT's asymmetric prepared
 	// contract. Each marker starts with the binary-string default; after an
 	// actual numeric value reparses the statement, later text/BLOB values keep
@@ -1953,7 +1960,6 @@ func (ses *Session) SetSessionSysVar(ctx context.Context, name string, val inter
 			ses.rewriteEnabled.Store(on)
 		}
 	}
-
 	// A prepared statement bakes in the rewrite/remap state captured at PREPARE
 	// time (the injected hint and the remapdb applied to its AST). Changing that
 	// state must invalidate the cached prepared statements, otherwise a later
@@ -2192,7 +2198,7 @@ type MysqlWriter interface {
 }
 
 type MysqlHelper interface {
-	MakeColumnDefData(context.Context, []*plan.ColDef) ([][]byte, error)
+	MakeColumnDefData(context.Context, []*plan.ColDef, ...uint32) ([][]byte, error)
 }
 
 type MysqlRrWr interface {

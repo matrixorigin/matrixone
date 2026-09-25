@@ -4463,7 +4463,7 @@ func (builder *QueryBuilder) buildUnionWithResultLen(
 		var keyList []*plan.Expr
 		var err error
 		switch nodeType {
-		case plan.Node_UNION, plan.Node_INTERSECT, plan.Node_INTERSECT_ALL, plan.Node_MINUS:
+		case plan.Node_UNION, plan.Node_INTERSECT, plan.Node_INTERSECT_ALL, plan.Node_MINUS, plan.Node_MINUS_ALL:
 			keyList, err = getSetOperationKeyList(projectList)
 			if err != nil {
 				return 0, err
@@ -5344,10 +5344,9 @@ func (builder *QueryBuilder) bindRecursiveCte(
 	nodeID = appendCTEScanNode(builder, ctx, initSourceStep, initCtx.sinkTag)
 	builder.qry.Nodes[nodeID].RecursiveUnionDistinct = distinct
 	setMaterializedProjectionNullability(builder.qry.Nodes[nodeID], recursiveNotNullable)
-	if limitExpr != nil || offsetExpr != nil {
-		node := builder.qry.Nodes[nodeID]
-		node.Limit = limitExpr
-		node.Offset = offsetExpr
+	builder.qry.Nodes[nodeID].Limit, err = recursiveCTEPrefixLimit(builder.GetContext(), limitExpr, offsetExpr)
+	if err != nil {
+		return 0, err
 	}
 	//4.1 make recursive parts as the source step of the CTE Scan Node besides initSourceStep of initial statement
 	for i := 0; i < len(recursiveSteps); i++ {
@@ -5375,6 +5374,9 @@ func (builder *QueryBuilder) bindRecursiveCte(
 	//5.1 add Sink Scan Node as the scan node of the recursive cte
 	sourceStep := builder.appendStep(unionAllLastNodeID)
 	nodeID = appendSinkScanNodeWithTag(builder, ctx, sourceStep, initCtx.sinkTag)
+	// Skipped result rows must still reach the recursive member through the
+	// shared sink. Apply OFFSET only on this non-feedback consumer.
+	builder.qry.Nodes[nodeID].Offset = offsetExpr
 	return
 }
 

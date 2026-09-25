@@ -6,6 +6,11 @@
 SELECT ExtractValue('<a><b>1</b><b>2</b></a>', '/a/b') AS multi,
 ExtractValue('<a id="7"/>', '/a/@id') AS attr,
 ExtractValue('<a><b/><b/></a>', 'count(/a/b)') AS count_nodes;
+SELECT ExtractValue('<a><b>1</b><b>2</b></a>', 'sum(/a/b)') AS sum_nodes,
+ExtractValue('<a><b>1</b><b>2</b></a>', 'count(/a/b)=2') AS count_equals,
+ExtractValue('<a><b>1</b><b>2</b></a>', '/a/b[position()=last()]') AS last_child;
+SELECT ExtractValue('<a>1000000000000000.1</a>', 'sum(/a)') AS large_fraction,
+ExtractValue(CONCAT('<a>', CHAR(11), '2</a>'), 'sum(/a)') AS numeric_whitespace;
 SELECT ExtractValue('<a>x<b>y</b>z</a>', '/a') AS direct_text,
 ExtractValue('<a>x<b>y</b>z</a>', '/a/text()') AS explicit_text,
 ExtractValue('<a>x<b>y</b>z</a>', '/a|/a/b') AS union_text;
@@ -18,6 +23,14 @@ ExtractValue('<a>x<![CDATA[y]]><!--c-->z</a>', '/a') AS segments,
 ExtractValue('<p:a>x</p:a>', '/p:a') AS lexical_prefix;
 SELECT ExtractValue('<a><b>1</b><b>2</b></a><a><b>3</b><b>4</b></a>', '/a/b[1]') AS per_parent,
 ExtractValue('<a><b k="X">yes</b></a>', '/a/b[@k="x"]') AS predicate;
+SELECT ExtractValue('<r><a><b>1</b><b>2</b></a><a><b>3</b><b>4</b></a></r>', '/r/a/b[position()=last()]') = '' AS whole_step_last,
+ExtractValue('<r><a><b>1</b><b>2</b></a><a><b>3</b><b>4</b></a></r>', '/r/a/b[1][position()=last()]') AS filtered_last,
+ExtractValue('<a>1.234567890123456e-6</a>', 'sum(/a)') AS scientific_sum;
+SELECT ExtractValue('<a><a><b>1</b></a></a>', 'count(//a//b)') AS overlapping_count,
+ExtractValue('<a><a><b>1</b></a></a>', 'sum(//a//b)') AS overlapping_sum,
+ExtractValue('<a><a><b>1</b></a></a>', 'sum(//a//b|//a//b)') AS union_sum;
+SELECT ExtractValue('<r><a><a><b>1</b></a></a><a><b>2</b></a></r>', '//a/*[1][position()=last()]') AS ordered_predicate,
+ExtractValue('<r><a><a><b>1</b></a></a><a><b>2</b></a></r>', '//a//b[1][2]') AS second_occurrence;
 SELECT ExtractValue('<a>x<b>y</b>z</a>', '//text()') AS all_text,
 ExtractValue('<a>x<b>y</b>z</a>', '/a//text()') AS descendants,
 ExtractValue('<a>x<b>y</b>z</a>', '/a/text()') AS direct_text;
@@ -27,6 +40,10 @@ ExtractValue('<p:a p:id="7"><p:b>x</p:b></p:a>', '/p:a[@p:id="7"][p:b="x"]/@p:id
 SELECT UpdateXML('<a><b>1</b></a>', '/a/b', '<c>2</c>') AS replaced,
 UpdateXML('<a><b>1</b><b>2</b></a>', '/a/b', '<c/>') AS multiple_unchanged,
 UpdateXML('<a/>', '/missing', '<c/>') AS missing_unchanged;
+SELECT UpdateXML('<r><a><b>1</b><b>2</b></a><a><b>3</b><b>4</b></a></r>', '/r/a/b[1][position()=last()]', '<c/>') AS filtered_update;
+SELECT UpdateXML('<a><a><b>1</b></a></a>', '//a//b', '<c/>') AS overlapping_unchanged,
+UpdateXML('<a><a><b>1</b></a></a>', '//a//b|//a//b', '<c/>') AS union_single;
+SELECT UpdateXML('<r><a><a><b>1</b></a></a><a><b>2</b></a></r>', '//a/*[1][position()=last()]', '<c/>') AS ordered_update;
 SELECT UpdateXML('<a k="7"><b/></a>', '/a/@k', 'z') AS attribute_span,
 UpdateXML('<a />', '/a', 'not xml') AS raw_replacement,
 UpdateXML('<a/>', '/', 'raw') AS document_replacement,
@@ -43,13 +60,27 @@ UpdateXML('<a/>', '/a', NULL) IS NULL AS null_replacement;
 SELECT ExtractValue(NULL, '[');
 SELECT UpdateXML('<a/>', '[', NULL);
 SELECT ExtractValue('<a>', '[');
-SELECT ExtractValue('<a/>', 'sum(/a)');
-SELECT UpdateXML('<a>x</a>', '/a/text()', 'Q');
-SELECT UpdateXML('<a>x<b>y</b></a>', '/a//text()', 'Q');
+SELECT ExtractValue('<a/>', 'sum()');
+SELECT UpdateXML('<a>x</a>', '/a/text()', 'Q') AS root_text;
+SELECT UpdateXML('<a>x<b>y</b></a>', '/a//text()', 'Q') AS multiple_text;
+SELECT UpdateXML('<a><b>x</b></a>', '/a/b/text()', 'Q') AS nested_text;
+SELECT UpdateXML('<a><b>x</b><b>y</b></a>', '/a/b/text()', 'Q') AS multiple_nodes;
 SELECT ExtractValue('<a/>', '/:a');
 SELECT ExtractValue('<a/>', '/a:b:c');
 SELECT IF(FALSE, ExtractValue('<a>', '['), 'ok') AS masked;
 SHOW COUNT(*) WARNINGS;
+
+-- XML warning producers must use the same statement capacity and budget as
+-- other row-level functions. The offset probe catches the old 1024 fallback.
+SET SESSION max_error_count = 2048;
+SELECT SUM(ExtractValue('<a>', '/a') IS NULL) AS malformed_rows FROM generate_series(1, 1100) g;
+SHOW COUNT(*) WARNINGS;
+SHOW WARNINGS LIMIT 1024, 1;
+SET SESSION max_error_count = 0;
+SELECT SUM(ExtractValue('<a>', '/a') IS NULL) AS malformed_rows FROM generate_series(1, 3) g;
+SHOW COUNT(*) WARNINGS;
+SHOW WARNINGS;
+SET SESSION max_error_count = 1024;
 
 DROP DATABASE IF EXISTS xml_functions_28306;
 CREATE DATABASE xml_functions_28306;

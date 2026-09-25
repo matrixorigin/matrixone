@@ -15,6 +15,7 @@
 package moarray
 
 import (
+	"math"
 	"reflect"
 	"testing"
 
@@ -681,7 +682,7 @@ func TestL2Norm(t *testing.T) {
 		{
 			name: "Test1 - float32",
 			args: args{argF32: []float32{1, 2, 3}},
-			want: 3.741657386773941,
+			want: 3.741657257080078,
 		},
 		{
 			name: "Test2 - float64",
@@ -888,12 +889,14 @@ func TestL2Distance(t *testing.T) {
 		{
 			name: "Test1 - float32",
 			args: args{argLeftF32: []float32{1, 2, 3}, argRightF32: []float32{10, 20, 30}},
-			want: 33.67491648096547,
+			want: 33.6749153137207,
 		},
 		{
 			name: "Test2 - float64",
 			args: args{argLeftF64: []float64{1, 2, 3}, argRightF64: []float64{10, 20, 30}},
-			want: 33.67491648096547,
+			// Vector distances are a float32 domain (#29040 / #29050), so a float64 base rounds to the
+			// same value as float32 -- not the old exact-f64 33.67491648096547.
+			want: 33.6749153137207,
 		},
 	}
 	for _, tt := range tests {
@@ -912,6 +915,31 @@ func TestL2Distance(t *testing.T) {
 
 		})
 	}
+}
+
+func TestL2DistanceSq(t *testing.T) {
+	// diffs 9,18,27 -> 81+324+729 = 1134 (exact in float32).
+	gotF32, err := L2DistanceSq[float32]([]float32{1, 2, 3}, []float32{10, 20, 30})
+	require.NoError(t, err)
+	require.Equal(t, 1134.0, gotF32)
+
+	// #29040: L2DistanceSq returns the RAW float64 square and must NOT round into the float32 domain.
+	// IVF uses it as its internal squared intermediate and then does sqrt + round ONCE. Rounding the
+	// square here would make IVF compute float32(sqrt(float32(sq))) while the scalar l2_distance is
+	// float32(sqrt(sq)) -- a boundary mismatch. Use [1.00000006,0,0] vs 0: the raw square is not
+	// float32-representable, and IVF's L2 (sqrt+round of the raw square) must equal the scalar L2.
+	v1, v2 := []float64{1.00000006, 0, 0}, []float64{0, 0, 0}
+	sq, err := L2DistanceSq[float64](v1, v2)
+	require.NoError(t, err)
+	require.NotEqual(t, float64(float32(sq)), sq, "the squared distance must be raw float64, not float32-rounded")
+	scalarL2, err := L2Distance[float64](v1, v2)
+	require.NoError(t, err)
+	require.Equal(t, scalarL2, float64(float32(math.Sqrt(sq))),
+		"IVF path float32(sqrt(rawSq)) must equal the scalar l2_distance (no double-rounding)")
+
+	// Dimension mismatch is rejected.
+	_, err = L2DistanceSq[float32]([]float32{1, 2}, []float32{1, 2, 3})
+	require.Error(t, err)
 }
 
 func TestCosineDistance(t *testing.T) {
@@ -1028,4 +1056,82 @@ func TestScalarOp(t *testing.T) {
 
 		})
 	}
+}
+
+// TestVectorVectorArithmeticRejectsOverflow guards #29085: vector-vector +,-,*,/ must reject a
+// result that overflows the element type instead of returning/persisting Infinity, matching the
+// check ScalarOp already applies to vector-scalar arithmetic.
+func TestVectorVectorArithmeticRejectsOverflow(t *testing.T) {
+	const wantErr = "vector contains infinity values"
+
+	// Each op, both element types, with finite inputs whose result overflows the type.
+	t.Run("f32 add", func(t *testing.T) {
+		_, err := Add[float32]([]float32{3e38, 3e38}, []float32{3e38, 3e38})
+		require.ErrorContains(t, err, wantErr)
+	})
+	t.Run("f32 subtract", func(t *testing.T) {
+		_, err := Subtract[float32]([]float32{3e38, 3e38}, []float32{-3e38, -3e38})
+		require.ErrorContains(t, err, wantErr)
+	})
+	t.Run("f32 multiply", func(t *testing.T) {
+		_, err := Multiply[float32]([]float32{2e19, 2e19}, []float32{2e19, 2e19})
+		require.ErrorContains(t, err, wantErr)
+	})
+	t.Run("f32 divide", func(t *testing.T) {
+		_, err := Divide[float32]([]float32{3e38, 3e38}, []float32{1e-1, 1e-1})
+		require.ErrorContains(t, err, wantErr)
+	})
+	t.Run("f64 add", func(t *testing.T) {
+		_, err := Add[float64]([]float64{1e308, 1e308}, []float64{1e308, 1e308})
+		require.ErrorContains(t, err, wantErr)
+	})
+	t.Run("f64 subtract", func(t *testing.T) {
+		_, err := Subtract[float64]([]float64{1e308, 1e308}, []float64{-1e308, -1e308})
+		require.ErrorContains(t, err, wantErr)
+	})
+	t.Run("f64 multiply", func(t *testing.T) {
+		_, err := Multiply[float64]([]float64{2e200, 2e200}, []float64{2e200, 2e200})
+		require.ErrorContains(t, err, wantErr)
+	})
+	t.Run("f64 divide", func(t *testing.T) {
+		_, err := Divide[float64]([]float64{1e308, 1e308}, []float64{1e-308, 1e-308})
+		require.ErrorContains(t, err, wantErr)
+	})
+
+	// Finite results are unaffected (no false positives).
+	t.Run("f32 finite control", func(t *testing.T) {
+		got, err := Add[float32]([]float32{1, 2, 3}, []float32{3, 4, 5})
+		require.NoError(t, err)
+		require.Equal(t, []float32{4, 6, 8}, got)
+	})
+	t.Run("f64 finite control", func(t *testing.T) {
+		got, err := Multiply[float64]([]float64{2, 3}, []float64{4, 5})
+		require.NoError(t, err)
+		require.Equal(t, []float64{8, 15}, got)
+	})
+
+	// A NaN produced from a non-finite input (Inf-Inf) is also rejected -- the x-x!=0 finite
+	// test catches it, whereas a plain math.IsInf check would let it through.
+	t.Run("f32 nan from inf inputs", func(t *testing.T) {
+		inf := float32(math.Inf(1))
+		_, err := Subtract[float32]([]float32{inf, inf}, []float32{inf, inf})
+		require.ErrorContains(t, err, wantErr)
+	})
+	t.Run("f64 nan from inf inputs", func(t *testing.T) {
+		inf := math.Inf(1)
+		_, err := Divide[float64]([]float64{inf, inf}, []float64{inf, inf})
+		require.ErrorContains(t, err, wantErr)
+	})
+
+	// The overflow check does not mask the pre-existing div-by-zero and dimension guards.
+	t.Run("divide by zero still rejected", func(t *testing.T) {
+		_, err := Divide[float64]([]float64{1, 2}, []float64{1, 0})
+		require.Error(t, err)
+		require.NotContains(t, err.Error(), wantErr)
+	})
+	t.Run("dimension mismatch still rejected", func(t *testing.T) {
+		_, err := Add[float32]([]float32{1, 2, 3}, []float32{1, 2})
+		require.Error(t, err)
+		require.NotContains(t, err.Error(), wantErr)
+	})
 }

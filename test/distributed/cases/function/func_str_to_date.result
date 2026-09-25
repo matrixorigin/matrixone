@@ -180,7 +180,7 @@ str_to_date(00/00/0000, %m/%d/%Y)
 null
 SELECT str_to_date('200442 Monday', '%X%V %W');
 str_to_date(200442 Monday, %X%V %W)
-null
+2004-10-18
 select str_to_date(concat_ws(' ','15-01-2001'), ' 2:59:58.999');
 str_to_date(concat_ws( , 15-01-2001),  2:59:58.999)
 null
@@ -267,7 +267,7 @@ to_date(00/00/0000, %m/%d/%Y)
 null
 SELECT to_date('200442 Monday', '%X%V %W');
 to_date(200442 Monday, %X%V %W)
-null
+2004-10-18
 select to_date(concat_ws(' ','15-01-2001'), ' 2:59:58.999');
 to_date(concat_ws( , 15-01-2001),  2:59:58.999)
 null

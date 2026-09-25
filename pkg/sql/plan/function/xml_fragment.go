@@ -128,7 +128,7 @@ func parseXMLFragment(ctx context.Context, source string) (*xmlFragment, error) 
 			nextCheck = i + 4096
 		}
 		r, n := utf8.DecodeRuneInString(source[i:])
-		if (r == utf8.RuneError && n == 1) || (r < 32 && r != 9 && r != 10 && r != 13) || r == 0xfffe || r == 0xffff {
+		if (r == utf8.RuneError && n == 1) || (r < 32 && r != 9 && r != 10 && r != 11 && r != 12 && r != 13) || r == 0xfffe || r == 0xffff {
 			return nil, errXMLMalformed
 		}
 		i += n

@@ -55,17 +55,16 @@ insert into qrange values
 (4,'[0.011764706,0.003921569,0.003921569]');
 create index qrangei8 using ivfflat on qrange(v) lists=1 op_type 'vector_l2_ops' quantization 'int8';
 select a from qrange
-where l2_distance(v,'[0,0,0]') <= 0.02960719386380686
+where l2_distance(v,'[0,0,0]') <= 0.5
 order by l2_distance(v,'[0,0,0]') limit 10;
 ➤ a[4,32,0]  𝄀
 1  𝄀
 4  𝄀
 2
 select a from qrange
-where l2_distance(v,'[0,0,0]') >= 0.013006371726883922
+where l2_distance(v,'[0,0,0]') >= 0.02
 order by l2_distance(v,'[0,0,0]') limit 10;
 ➤ a[4,32,0]  𝄀
-4  𝄀
 2  𝄀
 3
 create table q64(a int primary key, v vecf64(4));

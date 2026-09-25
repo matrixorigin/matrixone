@@ -58,6 +58,7 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/sql/colexec/mergerecursive"
 	"github.com/matrixorigin/matrixone/pkg/sql/colexec/mergetop"
 	"github.com/matrixorigin/matrixone/pkg/sql/colexec/minus"
+	"github.com/matrixorigin/matrixone/pkg/sql/colexec/minusall"
 	"github.com/matrixorigin/matrixone/pkg/sql/colexec/mongoscan"
 	"github.com/matrixorigin/matrixone/pkg/sql/colexec/multi_update"
 	"github.com/matrixorigin/matrixone/pkg/sql/colexec/offset"
@@ -112,8 +113,15 @@ func encodeScope(s *Scope) ([]byte, error) {
 }
 
 func encodeRemoteScope(s *Scope, proc *process.Process) ([]byte, error) {
+	return encodeRemoteScopeWithVectorProtocol(s, proc, nil)
+}
+
+func encodeRemoteScopeWithVectorProtocol(s *Scope, proc *process.Process, requiresBoundProtocol *bool) ([]byte, error) {
 	p, err := fillPipeline(s)
 	if err != nil {
+		return nil, err
+	}
+	if err = validateVectorPartitionDestinationWithResult(proc, p, requiresBoundProtocol); err != nil {
 		return nil, err
 	}
 	if err = validateGroupingTransportDestinations(proc, p); err != nil {
@@ -141,6 +149,11 @@ func encodeRemoteScope(s *Scope, proc *process.Process) ([]byte, error) {
 	}
 	if features.IntegerParameterCoercion {
 		if err = validateIntegerArgumentDestination(proc, p); err != nil {
+			return nil, err
+		}
+	}
+	if features.PreparedPrecisionScalar {
+		if err = validatePreparedPrecisionDestination(proc, p); err != nil {
 			return nil, err
 		}
 	}
@@ -279,6 +292,9 @@ func decodeScope(data []byte, proc *process.Process, isRemote bool, eng engine.E
 		return nil, err
 	}
 	if isRemote {
+		if err = validateRemoteVectorPartitionProtocol(proc, p); err != nil {
+			return nil, err
+		}
 		if err = validateRemoteStringProvenancePipelineProtocol(proc, p); err != nil {
 			return nil, err
 		}
@@ -689,8 +705,37 @@ func fillInstructionsForScope(s *Scope, ctx *scopeContext, p *pipeline.Pipeline,
 		if err != nil {
 			return err
 		}
+		switch ins.OpType() {
+		case vm.Minus, vm.MinusAll, vm.Intersect, vm.IntersectAll:
+			if err := s.restoreBinarySetChildren(ins); err != nil {
+				ins.Release()
+				return err
+			}
+			continue
+		}
 		s.doSetRootOperator(ins)
 	}
+	return nil
+}
+
+// restoreBinarySetChildren reverses the fixed post-order wire shape emitted by
+// both set-operation compiler paths: left merge, right merge, binary operator.
+// The legacy decoder otherwise rebuilds instructions as a unary chain. This
+// also applies to a distinct or intersect ancestor of a nested MINUS ALL.
+func (s *Scope) restoreBinarySetChildren(op vm.Operator) error {
+	right := s.RootOp
+	if right == nil || right.OpType() != vm.Merge || right.GetOperatorBase().NumChildren() != 1 {
+		return moerr.NewInternalErrorNoCtxf("invalid remote binary set operator %v right input", op.OpType())
+	}
+	left := right.GetOperatorBase().GetChildren(0)
+	if left == nil || left.OpType() != vm.Merge || left.GetOperatorBase().NumChildren() != 0 {
+		return moerr.NewInternalErrorNoCtxf("invalid remote binary set operator %v left input", op.OpType())
+	}
+	right.GetOperatorBase().SetChild(nil, 0)
+	right.GetOperatorBase().ResetChildren()
+	op.AppendChild(left)
+	op.AppendChild(right)
+	s.RootOp = op
 	return nil
 }
 
@@ -968,6 +1013,8 @@ func convertToPipelineInstruction(op vm.Operator, proc *process.Process, ctx *sc
 	case *intersect.Intersect:
 		in.SetOp = &pipeline.SetOp{KeyExprs: t.KeyExprs}
 	case *minus.Minus:
+		in.SetOp = &pipeline.SetOp{KeyExprs: t.KeyExprs}
+	case *minusall.MinusAll:
 		in.SetOp = &pipeline.SetOp{KeyExprs: t.KeyExprs}
 	case *intersectall.IntersectAll:
 		in.SetOp = &pipeline.SetOp{KeyExprs: t.KeyExprs}
@@ -1623,6 +1670,12 @@ func convertToVmOperator(opr *pipeline.Instruction, ctx *scopeContext, eng engin
 			arg.KeyExprs = setOp.GetKeyExprs()
 		}
 		op = arg
+	case vm.MinusAll:
+		arg := minusall.NewArgument()
+		if setOp := opr.GetSetOp(); setOp != nil {
+			arg.KeyExprs = setOp.GetKeyExprs()
+		}
+		op = arg
 	case vm.Connector:
 		t := opr.GetConnect()
 		op = connector.NewArgument().
@@ -2220,6 +2273,9 @@ func validateRemoteExpressionPipelineProtocol(
 	}
 	if features.IntegerParameterCoercion && (!hasProtocolVersion || protocolVersion < defines.MORPCVersion85) {
 		return moerr.NewNotSupportedNoCtx("integer parameter coercion requires MORPC protocol version 85")
+	}
+	if features.PreparedPrecisionScalar && (!hasProtocolVersion || protocolVersion < defines.MORPCVersion95) {
+		return moerr.NewNotSupportedNoCtx("prepared scalar precision requires MORPC protocol version 95")
 	}
 	if features.NumericPrefix &&
 		(!hasProtocolVersion || protocolVersion < defines.MORPCVersion30) {

@@ -993,6 +993,21 @@ func TestTableChangeStream_StaleRead_NoRetryWithStartTs(t *testing.T) {
 	require.Equal(t, 0, h.Sinker().ResetCountSnapshot(), "sinker reset should not occur on fatal stale read")
 }
 
+func TestTableChangeStream_NoFullStaleReadDoesNotAdvanceDurableStart(t *testing.T) {
+	startTs := types.BuildTS(100, 5)
+	h := newTableStreamHarness(t, withHarnessNoFull(true), withHarnessStartTs(startTs))
+	defer h.Close()
+	h.SetGetSnapshotTS(func(client.TxnOperator) timestamp.Timestamp {
+		return timestamp.Timestamp{PhysicalTime: 200, LogicalTime: 10}
+	})
+
+	h.SetCollectError(moerr.NewErrStaleReadNoCtx("db1", "t1"))
+	err := h.RunStream(h.NewActiveRoutine())
+	require.Error(t, err)
+	require.Contains(t, err.Error(), "cannot recover")
+	require.False(t, h.Stream().GetRetryable())
+}
+
 func TestTableChangeStream_StaleReadRetry_WatermarkUpdateFailure(t *testing.T) {
 	ctx, cancel := context.WithTimeoutCause(context.Background(), 2*time.Second, moerr.CauseFinishTxnOp)
 	defer cancel()
@@ -2663,6 +2678,109 @@ func TestTableChangeStream_WaitsForStableEpochVisibility(t *testing.T) {
 	require.NoError(t, h.Stream().processOneRound(h.Context(), h.NewActiveRoutine()))
 	assert.Empty(t, h.CollectCallsSnapshot())
 	assert.Zero(t, updater.updateCalls.Load())
+}
+
+func TestTableChangeStreamPreservesLogicalStartBoundary(t *testing.T) {
+	start := types.BuildTS(100, 5)
+	updater := newWatermarkUpdaterStub()
+	h := newTableStreamHarness(t,
+		withHarnessNoFull(true),
+		withHarnessStartTs(start),
+		withHarnessWatermarkUpdater(updater, nil),
+	)
+	h.Stream().start.Done() // invoke processOneRound directly
+	require.NoError(t, updater.RemoveCachedWM(h.Context(), h.Stream().watermarkKey, WatermarkCleanupAll))
+	_, err := updater.GetOrAddCommitted(h.Context(), h.Stream().watermarkKey, &start)
+	require.NoError(t, err)
+	h.SetGetSnapshotTS(func(client.TxnOperator) timestamp.Timestamp {
+		return timestamp.Timestamp{PhysicalTime: 200, LogicalTime: 10}
+	})
+	h.SetCollectFactory(func(fromTs, toTs types.TS) (engine.ChangesHandle, error) {
+		require.Equal(t, start, fromTs)
+		require.Equal(t, types.BuildTS(200, 10), toTs)
+		return newImmediateChangesHandle(nil), nil
+	})
+
+	require.NoError(t, h.Stream().processOneRound(h.Context(), h.NewActiveRoutine()))
+	calls := h.CollectCallsSnapshot()
+	require.Len(t, calls, 1)
+	require.Equal(t, start, calls[0].from)
+}
+
+// TestTableChangeStreamNoFullAdmissionBoundaryLifecycle models the public CDC
+// lifecycle at the reader boundary: CREATE CDC has already returned and a row
+// committed while executor admission is blocked must not be replayed from the
+// activation timestamp, while a row committed after admission is delivered.
+// The harness keeps the ordering deterministic with an admission gate instead
+// of relying on a scheduler sleep.
+func TestTableChangeStreamNoFullAdmissionBoundaryLifecycle(t *testing.T) {
+	start := types.BuildTS(100, 5)
+	snapshot := types.BuildTS(200, 10)
+	updater := newWatermarkUpdaterStub()
+	h := newTableStreamHarness(t,
+		withHarnessNoFull(true),
+		withHarnessStartTs(start),
+		withHarnessFrequency(time.Millisecond),
+		withHarnessWatermarkUpdater(updater, nil),
+	)
+	// The harness seeds a zero watermark for custom updaters. Replace it with
+	// the durable CREATE boundary before starting the executor.
+	require.NoError(t, updater.RemoveCachedWM(h.Context(), h.Stream().watermarkKey, WatermarkCleanupAll))
+	_, err := updater.GetOrAddCommitted(h.Context(), h.Stream().watermarkKey, &start)
+	require.NoError(t, err)
+
+	admissionEntered := make(chan struct{})
+	releaseAdmission := make(chan struct{})
+	var admissionOnce sync.Once
+	h.SetTryEnterRunSql(func(ctx context.Context, _ client.TxnOperator, _ string) (func(), error) {
+		admissionOnce.Do(func() { close(admissionEntered) })
+		select {
+		case <-releaseAdmission:
+			return func() {}, nil
+		case <-ctx.Done():
+			return func() {}, ctx.Err()
+		}
+	})
+	h.SetGetSnapshotTS(func(client.TxnOperator) timestamp.Timestamp {
+		return timestamp.Timestamp{PhysicalTime: snapshot.Physical(), LogicalTime: snapshot.Logical()}
+	})
+	// The source has a pre-CREATE row (id=1) and a post-admission row (id=2).
+	// CollectChanges is the reader boundary, so returning only id=2 proves the
+	// [start, snapshot] range starts at the persisted logical HLC boundary.
+	h.SetCollectFactory(func(fromTs, toTs types.TS) (engine.ChangesHandle, error) {
+		require.Equal(t, start, fromTs)
+		require.Equal(t, snapshot, toTs)
+		return newImmediateChangesHandle([]changeBatch{{
+			insert: createTestBatch(t, h.MP(), toTs, []int32{2}),
+		}}), nil
+	})
+
+	ar := h.NewActiveRoutine()
+	errCh, stop := h.RunStreamAsync(ar)
+	select {
+	case <-admissionEntered:
+	case <-time.After(time.Second):
+		stop()
+		t.Fatal("CDC executor did not reach admission gate")
+	}
+	// This represents the CREATE-returned / executor-not-yet-admitted window.
+	// The pre-boundary row is intentionally never returned by CollectChanges.
+	close(releaseAdmission)
+	require.Eventually(t, func() bool {
+		return len(h.CollectCallsSnapshot()) == 1 &&
+			h.Stream().progressTracker.totalRowsProcessed.Load() == 1
+	}, time.Second, time.Millisecond)
+	stop()
+	select {
+	case <-errCh:
+	case <-time.After(time.Second):
+		t.Fatal("CDC lifecycle reader did not stop")
+	}
+
+	calls := h.CollectCallsSnapshot()
+	require.Len(t, calls, 1)
+	require.Equal(t, start, calls[0].from)
+	require.Equal(t, uint64(1), h.Stream().progressTracker.totalRowsProcessed.Load())
 }
 
 func TestTableChangeStream_StableSnapshotStaleReadFailsClosed(t *testing.T) {

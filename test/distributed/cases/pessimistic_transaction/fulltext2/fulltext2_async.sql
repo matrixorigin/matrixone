@@ -92,6 +92,26 @@ select id from json_null_cdc where match(left_doc, right_doc) against('null' in 
 
 -- left value -> SQL NULL: the right sibling remains searchable.
 drop table json_null_cdc;
+
+-- A non-empty generation must eventually refresh WITHOUT rebuilding the index
+-- or invalidating it from CDC. Keep MATCH hot while waiting: sliding TTL alone
+-- cannot satisfy this assertion; the ordinary pull-based stale sweep must work.
+-- Default cadence is four 150s ticks plus the next eviction tick (~750s).
+-- This bounded wait checks a result, not a fixed sleep or immediate visibility.
+create table warm_refresh (id bigint primary key, body text);
+insert into warm_refresh values (1, 'refreshmarker baseline'), (2, 'unrelated control');
+create fulltext2 index ft_refresh on warm_refresh(body);
+select id from warm_refresh where match(body) against('refreshmarker' in boolean mode) order by id;
+set @warm_storage = (select index_table_name from mo_catalog.mo_indexes where name = 'ft_refresh' and algo = 'fulltext2' and algo_table_type = 'ftv2_index' and table_id in (select rel_id from mo_catalog.mo_tables where reldatabase = database() and relname = 'warm_refresh') limit 1);
+insert into warm_refresh values (101, 'refreshmarker committed');
+set @warm_tail_sql = concat('select count(*) > 0 as tail_ready from `', database(), '`.`', @warm_storage, '` where index_id = ''cdc_tail'' and tag = 1');
+prepare warm_tail from @warm_tail_sql;
+-- @wait_expect(2, 120)
+execute warm_tail;
+deallocate prepare warm_tail;
+-- @wait_expect(2, 900)
+select id from warm_refresh where match(body) against('refreshmarker' in boolean mode) order by id;
+drop table warm_refresh;
 create table json_null_cdc(id bigint primary key, left_doc json, right_doc json);
 create fulltext2 index ftv on json_null_cdc(left_doc, right_doc) with parser json_value;
 set @json_ft2_index = (

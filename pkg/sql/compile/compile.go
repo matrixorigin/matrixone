@@ -76,6 +76,7 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/sql/colexec/mergedelete"
 	"github.com/matrixorigin/matrixone/pkg/sql/colexec/mergerecursive"
 	"github.com/matrixorigin/matrixone/pkg/sql/colexec/minus"
+	"github.com/matrixorigin/matrixone/pkg/sql/colexec/minusall"
 	"github.com/matrixorigin/matrixone/pkg/sql/colexec/mongoscan"
 	"github.com/matrixorigin/matrixone/pkg/sql/colexec/multi_update"
 	"github.com/matrixorigin/matrixone/pkg/sql/colexec/output"
@@ -186,6 +187,9 @@ func (c *Compile) Release() {
 	if c == nil {
 		return
 	}
+	// Prepared Compiles can remain cached after Release. Semantic CTAS values
+	// belong to the completed execution, including its error and retry paths.
+	c.preparedParamValues = nil
 	if c.siriusRead != nil {
 		if err := c.siriusRead.finish(context.Background(), false); err != nil && c.proc != nil {
 			c.proc.Error(context.Background(), "failed to quiesce Sirius read during compile release", zap.Error(err))
@@ -275,6 +279,8 @@ func (c *Compile) FreezeResultMetadata() {
 }
 
 func (c *Compile) Reset(proc *process.Process, startAt time.Time, fill func(*batch.Batch, *perfcounter.CounterSet) error, sql string) error {
+	// A cached Compile must never expose the previous execution's CTAS values.
+	c.preparedParamValues = nil
 	// Reset only supports the TP topology admitted by prepare-time compilation.
 	// AP scan state and worker placement belong to one execution; updating the
 	// transaction offset cannot make them valid for another execution.
@@ -486,6 +492,7 @@ func (c *Compile) clear() {
 	c.scopes = c.scopes[:0]
 	c.pn = nil
 	c.fill = nil
+	c.preparedParamValues = nil
 	c.resultSink = nil
 	c.executionGeneration = 0
 	c.retryTimes = 0
@@ -854,6 +861,15 @@ func (c *Compile) IsTpQuery() bool {
 }
 
 func (c *Compile) IsSingleScope(ss []*Scope) bool {
+	// Callers act on a true answer by keeping ss[0] and discarding the rest
+	// (compileSinkNode is the clearest), so answering true for a list that holds
+	// more than one scope silently drops those pipelines' rows.  A TP query
+	// normally builds exactly one scope, so rejecting longer lists only narrows
+	// the answer where the premise was already false -- a multi-file LOAD fanout
+	// can hand a TP-classified plan one scope per file shard.
+	if len(ss) > 1 {
+		return false
+	}
 	if c.IsTpQuery() {
 		return true
 	}
@@ -1434,6 +1450,9 @@ func (c *Compile) compileQuery(qry *plan.Query) ([]*Scope, error) {
 		return nil, err
 	}
 	if err = c.constrainIntegerArgumentWorkers(qry); err != nil {
+		return nil, err
+	}
+	if err = c.constrainPreparedPrecisionWorkers(qry); err != nil {
 		return nil, err
 	}
 	if err = c.constrainIPFunctionWorkers(qry); err != nil {
@@ -2093,7 +2112,7 @@ func (c *Compile) compilePlanScopeWithUnionAllDemand(
 		ss = c.ensureCoordinatorOnlyFunctions(node, ss)
 		ss = c.compileSort(node, ss)
 		return ss, nil
-	case plan.Node_MINUS, plan.Node_INTERSECT, plan.Node_INTERSECT_ALL:
+	case plan.Node_MINUS, plan.Node_MINUS_ALL, plan.Node_INTERSECT, plan.Node_INTERSECT_ALL:
 		left, err = c.compilePlanScope(step, node.Children[0], nodes)
 		if err != nil {
 			return nil, err
@@ -2282,6 +2301,7 @@ func (c *Compile) compilePlanScopeWithUnionAllDemand(
 		}
 		ss = c.ensureCoordinatorOnlyFunctions(node, ss)
 		ss = c.compileProjection(node, ss)
+		ss = c.compileSort(node, ss)
 		return ss, nil
 	case plan.Node_RECURSIVE_SCAN:
 		c.setAnalyzeCurrent(ss, int(curNodeIdx))
@@ -2341,6 +2361,11 @@ func (c *Compile) firstStepToCompile(qry *plan.Query) int {
 
 func (c *Compile) canUseLiteralLimitZeroFastPath(node *plan.Node) bool {
 	if node == nil || node.Limit == nil || c.ownsFoundRows(node) {
+		return false
+	}
+	// Recursive receivers are part of a feedback loop. Even an empty result
+	// must retain them so loop cleanup can drain inputs and notify producers.
+	if node.NodeType == plan.Node_RECURSIVE_CTE {
 		return false
 	}
 	cExpr, ok := node.Limit.Expr.(*plan.Expr_Lit)
@@ -2641,8 +2666,10 @@ func (c *Compile) getExternalFileListAndSize(node *plan.Node, param *tree.Extern
 			return nil, nil, err
 		}
 	case int32(plan.ExternType_LOAD):
-		if (param.Format == tree.PARQUET || param.Format == tree.ARROW) &&
-			strings.ContainsAny(strings.TrimSpace(param.Filepath), "*?[") {
+		// Same predicate bind time used to resolve the source, so the file set
+		// here matches the one param.FileSize was summed over.  A pattern that
+		// matched a single file was already rewritten to that file's path.
+		if plan2.LoadMayListFiles(param) {
 			fileList, fileSize, err = plan2.ReadDir(param)
 			if err != nil {
 				return nil, nil, err
@@ -3008,6 +3035,9 @@ func (c *Compile) compileExternScanWithPlanNodeIDAndIsolation(
 		if len(fileList) > 1 {
 			return c.compileExternScanParquetLoadFileFanout(node, param, fileList, fileSize, strictSqlMode)
 		}
+	}
+	if multiFileFanoutEligible(param, len(fileList)) {
+		return c.compileExternScanMultiFileFanout(node, param, fileList, fileSize, strictSqlMode)
 	}
 
 	readParallel, writeParallel := c.getReadWriteParallelFlag(param, fileList)
@@ -3973,6 +4003,48 @@ func (c *Compile) compileExternScanParquetLoadFileFanout(node *plan.Node, param 
 	return c.compileExternScanWholeFileFanout(node, param, fileList, fileSize, strictSqlMode, true)
 }
 
+func (c *Compile) compileExternScanMultiFileFanout(node *plan.Node, param *tree.ExternParam, fileList []string, fileSize []int64, strictSqlMode bool) ([]*Scope, error) {
+	return c.compileExternScanWholeFileFanout(node, param, fileList, fileSize, strictSqlMode, false)
+}
+
+// multiFileFanoutEligible states the rule for parallelising a row-oriented
+// external file read: more than one file means whole files are distributed to
+// threads, one shard per scope, each file read start to finish by a single
+// reader.  The byte-offset read split then belongs to the single-file case,
+// where it is the only parallelism available.
+//
+// Whole files are also the only shape a compressed source can take, and they
+// keep the per-file contracts an offset split cannot honour: IGNORE n LINES
+// applies to every file, not just the first.
+//
+// The columnar formats are excluded in both roles.  Parquet splits and
+// redistributes row groups and arrow does the same with record batches, each on
+// its own path above, and that behaviour is deliberately left alone.  Hive
+// partitioning is likewise decided earlier: it always fans out whole files.
+//
+// A LOAD honours its explicit `parallel` opt-out.  The gate reads
+// ParallelLoadRequested as well as Parallel because file count, not byte count,
+// is the unit of parallelism here, while bind time clears Parallel for inputs
+// under LoadParallelMinSize (128MB) -- which most many-small-files loads are.
+// An external table scan has no such option, so file count alone decides.
+func multiFileFanoutEligible(param *tree.ExternParam, fileCount int) bool {
+	if param == nil || fileCount <= 1 ||
+		param.Format == tree.PARQUET || param.Format == tree.ARROW {
+		return false
+	}
+	switch param.ExternType {
+	case int32(plan.ExternType_LOAD):
+		// Same "the user asked for parallel" test constructExternal uses for
+		// LoadEmptyNumericAsZero: Parallel alone is not enough, because bind
+		// clears it by size after recording the request.
+		return param.Parallel || param.ParallelLoadRequested
+	case int32(plan.ExternType_EXTERNAL_TB):
+		return true
+	default:
+		return false
+	}
+}
+
 func (c *Compile) compileExternScanWholeFileFanout(node *plan.Node, param *tree.ExternParam, fileList []string, fileSize []int64, strictSqlMode bool, parquetWholeFileFanout bool, arrowRuntime ...*arrowCompileRuntime) ([]*Scope, error) {
 	nodes := c.getHiveFileFanoutNodes(param, len(fileList))
 	shards := splitHiveFileShards(fileList, fileSize, nodes)
@@ -3995,6 +4067,13 @@ func (c *Compile) compileExternScanWholeFileFanout(node *plan.Node, param *tree.
 		shardParam.Parallel = false
 
 		remote := param.ScanType == tree.S3 && len(stageNodes) > 0
+		var remoteCreateSql string
+		if remote {
+			var err error
+			if remoteCreateSql, err = resolvedExternParamJSON(shardParam); err != nil {
+				return nil, err
+			}
+		}
 		scope := c.constructScopeForExternalNode(shard.node, remote)
 		scope.NodeInfo.Mcpu = 1
 		scope.IsLoad = true
@@ -4006,6 +4085,9 @@ func (c *Compile) compileExternScanWholeFileFanout(node *plan.Node, param *tree.
 			c.arrowExecutionScope(node, shardParam),
 			arrowRuntime...,
 		)
+		if remote {
+			op.Es.CreateSql = remoteCreateSql
+		}
 		op.Es.ParquetWholeFileFanout = parquetWholeFileFanout
 		// Whole-file Arrow fanout also clears Extern.Parallel above. Keep the
 		// execution-side authorization signal independent of that user request.
@@ -4016,6 +4098,70 @@ func (c *Compile) compileExternScanWholeFileFanout(node *plan.Node, param *tree.
 	}
 	c.anal.isFirst = false
 	return ss, nil
+}
+
+// resolvedExternParamJSON serializes a compile-time normalized external param
+// for a shard that may run on another CN.  The remote codec carries only
+// CreateSql, which for an external table is the stored DDL: it lacks the
+// ExternType taken from the plan (so the reader would apply LOAD's exact
+// column-count rule) and any stage-resolved S3 settings.
+//
+// The receiver rebuilds S3Param from Option with InitS3Param, and CNs of every
+// version do so, so the resolved settings are written back into Option in the
+// keys InitS3Param reads.  That keeps the payload readable by a CN from before
+// this change during a rolling upgrade: no new field is needed.  Fields that
+// are process-local or unused by the reader are dropped; the receiver installs
+// its own FileService.
+func resolvedExternParamJSON(param *tree.ExternParam) (string, error) {
+	resolved := *param
+	resolved.FileService = nil
+	resolved.Ctx = nil
+	if resolved.Tail != nil {
+		tail := *resolved.Tail
+		tail.ColumnList = nil
+		tail.Assignments = nil
+		resolved.Tail = &tail
+	}
+	if resolved.ScanType == tree.S3 && resolved.S3Param != nil {
+		resolved.Option = s3ParamOptions(resolved.Option, resolved.S3Param)
+	}
+	b, err := json.Marshal(&resolved)
+	if err != nil {
+		return "", err
+	}
+	return string(b), nil
+}
+
+// s3ParamOptions returns option with its S3 location and credential keys
+// replaced by the values in s3, the inverse of the corresponding InitS3Param
+// cases.  Other keys (hive partitioning, format, compression, ...) are kept.
+// "filepath" is dropped too: the serialized Filepath is already resolved, and a
+// stage-backed source's option would not name it.
+func s3ParamOptions(option []string, s3 *tree.S3Parameter) []string {
+	out := make([]string, 0, len(option)+16)
+	for i := 0; i+1 < len(option); i += 2 {
+		switch strings.ToLower(option[i]) {
+		case "endpoint", "region", "access_key_id", "secret_access_key",
+			"bucket", "provider", "role_arn", "external_id", "filepath":
+			continue
+		}
+		out = append(out, option[i], option[i+1])
+	}
+	for _, kv := range [...][2]string{
+		{"endpoint", s3.Endpoint},
+		{"region", s3.Region},
+		{"access_key_id", s3.APIKey},
+		{"secret_access_key", s3.APISecret},
+		{"bucket", s3.Bucket},
+		{"provider", s3.Provider},
+		{"role_arn", s3.RoleArn},
+		{"external_id", s3.ExternalId},
+	} {
+		if kv[1] != "" {
+			out = append(out, kv[0], kv[1])
+		}
+	}
+	return out
 }
 
 func (c *Compile) compileExternScanIcebergFileFanout(
@@ -4325,16 +4471,28 @@ func (c *Compile) parquetLoadFileFanoutDOP(param *tree.ExternParam) int {
 			if mcpu <= 0 {
 				mcpu = 1
 			}
-			dop += min(mcpu, external.S3ParallelMaxnum)
+			dop += c.capFanoutByMaxDop(min(mcpu, external.S3ParallelMaxnum))
 		}
 		if dop > 0 {
 			return dop
 		}
 	}
 	if c.ncpu > 0 {
-		return c.ncpu
+		return c.capFanoutByMaxDop(c.ncpu)
 	}
 	return 1
+}
+
+// capFanoutByMaxDop applies the query's max_dop to the number of readers a
+// file fanout places on one CN.  It is the same per-CN cap compileQuery hands
+// CalcQueryDOP; the fanouts size their scopes from c.ncpu and worker Mcpu
+// directly, so without it a multi-file scan would open more concurrent readers
+// than the session allows.
+func (c *Compile) capFanoutByMaxDop(mcpu int) int {
+	if maxDop := c.pn.GetQuery().GetMaxDop(); maxDop > 0 && int64(mcpu) > maxDop {
+		return int(maxDop)
+	}
+	return mcpu
 }
 
 func (c *Compile) getHiveFileFanoutNodes(param *tree.ExternParam, fileCount int) []engine.Node {
@@ -4352,6 +4510,7 @@ func (c *Compile) getHiveFileFanoutNodes(param *tree.ExternParam, fileCount int)
 			if mcpu > external.S3ParallelMaxnum {
 				mcpu = external.S3ParallelMaxnum
 			}
+			mcpu = c.capFanoutByMaxDop(mcpu)
 			for i := 0; i < mcpu && len(nodes) < fileCount; i++ {
 				n := node
 				n.Mcpu = 1
@@ -4370,6 +4529,7 @@ func (c *Compile) getHiveFileFanoutNodes(param *tree.ExternParam, fileCount int)
 	if mcpu <= 0 {
 		mcpu = 1
 	}
+	mcpu = c.capFanoutByMaxDop(mcpu)
 	if mcpu > fileCount {
 		mcpu = fileCount
 	}
@@ -4895,6 +5055,11 @@ func (c *Compile) compileExternScanParallelReadWrite(node *plan.Node, param *tre
 	if param.Format == tree.PARQUET {
 		return nil, moerr.NewInternalError(c.proc.Ctx, "parquet load cannot use byte-offset parallel read")
 	}
+	// Splitting a file by byte offset is reserved for the single-file case;
+	// multiple files are distributed whole by multiFileFanoutEligible above.
+	if len(fileList) > 1 {
+		return nil, moerr.NewInternalError(c.proc.Ctx, "byte-offset parallel read is reserved for a single file")
+	}
 	visibleCols := make([]*plan.ColDef, 0)
 	if param.Strict {
 		for _, col := range node.TableDef.Cols {
@@ -5309,6 +5474,23 @@ func (c *Compile) compileVectorIndexScan(node *plan.Node) ([]*Scope, error) {
 				Mcpu:  1,
 				CNCNT: int32(len(c.cnList)),
 				CNIDX: int32(i),
+			}
+		}
+		stable, err := remoteWorkersSupportProtocol(c.proc, nodes, defines.MORPCVersion96)
+		if err != nil {
+			return nil, err
+		}
+		if stable {
+			// Keep the query's coordinator-first list intact for other scans.
+			// Object owners depend only on the selected identities, not ingress.
+			slices.SortFunc(nodes, func(a, b engine.Node) int {
+				if n := cmp.Compare(a.Id, b.Id); n != 0 {
+					return n
+				}
+				return cmp.Compare(a.Addr, b.Addr)
+			})
+			for i := range nodes {
+				nodes[i].CNIDX = int32(i)
 			}
 		}
 	} else {
@@ -6077,6 +6259,12 @@ func (c *Compile) compileTpMinusAndIntersect(node *plan.Node, left []*Scope, rig
 		arg.SetAnalyzeControl(c.anal.curNodeIdx, currentFirstFlag)
 		rs[0].setRootOperator(arg)
 		arg.AppendChild(merge1)
+	case plan.Node_MINUS_ALL:
+		arg := minusall.NewArgument()
+		arg.KeyExprs = node.PhysicalEqualityKeyList
+		arg.SetAnalyzeControl(c.anal.curNodeIdx, currentFirstFlag)
+		rs[0].setRootOperator(arg)
+		arg.AppendChild(merge1)
 	case plan.Node_INTERSECT:
 		arg := intersect.NewArgument()
 		arg.KeyExprs = node.PhysicalEqualityKeyList
@@ -6095,6 +6283,17 @@ func (c *Compile) compileTpMinusAndIntersect(node *plan.Node, left []*Scope, rig
 }
 
 func (c *Compile) compileMinusAndIntersect(node *plan.Node, left []*Scope, right []*Scope, nodeType plan.Node_NodeType) []*Scope {
+	if nodeType == plan.Node_MINUS_ALL {
+		// Multiplicity subtraction needs one owner of every occurrence from both
+		// inputs. The existing parallel set-op path broadcasts rows to workers;
+		// using it here would multiply the result cardinality.
+		return c.compileTpMinusAndIntersect(
+			node,
+			[]*Scope{c.newMergeScope(left)},
+			[]*Scope{c.newMergeScope(right)},
+			nodeType,
+		)
+	}
 	if c.IsSingleScope(left) && c.IsSingleScope(right) {
 		return c.compileTpMinusAndIntersect(node, left, right, nodeType)
 	}
@@ -8942,7 +9141,12 @@ func (c *Compile) compileMultiUpdate(node *plan.Node, ss []*Scope) ([]*Scope, er
 		rs.setRootOperator(multiUpdateArg)
 		ss = []*Scope{rs}
 	} else {
-		if !c.IsTpQuery() {
+		// The operator below is attached to ss[0] alone, so more than one input
+		// pipeline must be merged first or the others' rows are dropped.  A TP
+		// query normally builds a single scope, but a multi-file LOAD fanout
+		// hands this one scope per file shard, TP-classified or not -- the
+		// WriteS3 branch above already merges on the same len(ss) > 1 test.
+		if !c.IsTpQuery() || len(ss) > 1 {
 			// keep a cross-CN shuffle dispatch in the same send unit as all its local buckets (issue #24919).
 			ss = c.groupShuffleBucketsByCNIfNeeded(ss)
 			rs := c.newMergeScope(ss)
@@ -9088,7 +9292,11 @@ func (c *Compile) compileLock(node *plan.Node, ss []*Scope) ([]*Scope, error) {
 	}
 
 	currentFirstFlag := c.anal.isFirst
-	if !c.IsTpQuery() || len(c.pn.GetQuery().Steps) > 1 { // todo: don't support dml with multi steps for now
+	// The lock operator below is attached to ss[0] alone, so every input
+	// pipeline must be merged into it first or the others' rows reach the
+	// writer unlocked -- a multi-file LOAD fanout hands a TP-classified plan one
+	// scope per file shard, the same case compileMultiUpdate merges on.
+	if !c.IsTpQuery() || len(ss) > 1 || len(c.pn.GetQuery().Steps) > 1 { // todo: don't support dml with multi steps for now
 		rs := c.newMergeScope(ss)
 		ss = []*Scope{rs}
 	}
@@ -10722,6 +10930,12 @@ func (c *Compile) fatalLog(retry int, err error) {
 
 func (c *Compile) SetOriginSQL(sql string) {
 	c.originSQL = sqlmongodb.RedactSQLForDiagnostics(sql)
+}
+
+func (c *Compile) SetPreparedParamValues(values []any) {
+	// A compile can be pooled, and parameter values may retain large payloads.
+	// Copy only the current execution's values and release the old backing array.
+	c.preparedParamValues = append([]any(nil), values...)
 }
 
 // SetResourceAttemptOwnerEligible marks this Compile as the top-level

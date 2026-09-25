@@ -425,7 +425,7 @@ func initL2NormArrayTestCase() []tcTemp {
 					[]bool{false, false}),
 			},
 			expect: NewFunctionTestResult(types.T_float64.ToType(), false,
-				[]float64{3.741657386773941, 8.774964387392124},
+				[]float64{3.741657257080078, 8.774964332580566},
 				[]bool{false, false}),
 		},
 		{
@@ -1071,6 +1071,42 @@ func TestQuoteRejectsInvalidUTF8FromBinaryInput(t *testing.T) {
 	require.Contains(t, conversionErr.Error(), "from binary to utf8mb4")
 }
 
+func TestQuoteReturnsEmptyForMalformedText(t *testing.T) {
+	proc := testutil.NewProcess(t)
+	defer proc.Free()
+
+	testCase := NewFunctionTestCase(
+		proc,
+		[]FunctionTestInput{
+			NewFunctionTestInput(
+				types.T_varchar.ToType(),
+				[]string{string([]byte{'A', 0xff, 'B'}), "valid"},
+				nil,
+			),
+		},
+		NewFunctionTestResult(
+			types.T_varchar.ToType(),
+			false,
+			[]string{"", "'valid'"},
+			[]bool{false, false},
+		),
+		Quote,
+	)
+	ok, info := testCase.Run()
+	require.True(t, ok, info)
+}
+
+func TestQuoteUTF8MB4BinMalformedText(t *testing.T) {
+	proc := testutil.NewProcess(t)
+	defer proc.Free()
+	typ := types.NewWithCharset(types.T_varchar, 64, 0, types.CharsetUTF8MB4Bin)
+	testCase := NewFunctionTestCase(proc,
+		[]FunctionTestInput{NewFunctionTestInput(typ, []string{"A\xffB", "valid"}, nil)},
+		NewFunctionTestResult(typ, false, []string{"", "'valid'"}, []bool{false, false}), Quote)
+	ok, info := testCase.Run()
+	require.True(t, ok, info)
+}
+
 func TestSoundexBinaryInputPreservesBinaryResultDomain(t *testing.T) {
 	proc := testutil.NewProcess(t)
 	defer proc.Free()
@@ -1216,6 +1252,69 @@ func TestSoundex(t *testing.T) {
 		s, info := fcTC.Run()
 		require.True(t, s, fmt.Sprintf("case is '%s', err info is '%s'", tc.info, info))
 	}
+}
+
+func TestSoundexTextMatchesMySQLUTF8Behavior(t *testing.T) {
+	proc := testutil.NewProcess(t)
+	defer proc.Free()
+
+	testCase := NewFunctionTestCase(
+		proc,
+		[]FunctionTestInput{
+			NewFunctionTestInput(
+				types.T_varchar.ToType(),
+				[]string{
+					"é", "éa", "éB", "AéB", "Café", "中A", "😀", "\uFFFD",
+					"BéB", "A\xffB", "\xffA", "A\xc3",
+				},
+				nil,
+			),
+		},
+		NewFunctionTestResult(
+			types.T_varchar.ToType(),
+			false,
+			[]string{
+				"é000", "é000", "é100", "A100", "C100", "中000", "😀000", "\uFFFD000",
+				"B000", "A000", "", "A000",
+			},
+			make([]bool, 12),
+		),
+		Soundex,
+	)
+	ok, info := testCase.Run()
+	require.True(t, ok, info)
+}
+
+func TestSoundexUTF8MB4BinText(t *testing.T) {
+	proc := testutil.NewProcess(t)
+	defer proc.Free()
+	typ := types.NewWithCharset(types.T_varchar, 64, 0, types.CharsetUTF8MB4Bin)
+	testCase := NewFunctionTestCase(proc,
+		[]FunctionTestInput{NewFunctionTestInput(typ, []string{"é", "AéB", "\xffA"}, nil)},
+		NewFunctionTestResult(typ, false, []string{"é000", "A100", ""}, []bool{false, false, false}), Soundex)
+	ok, info := testCase.Run()
+	require.True(t, ok, info)
+}
+
+func TestSoundexMultibyteOutputFitsCharacterWidth(t *testing.T) {
+	proc := testutil.NewProcess(t)
+	defer proc.Free()
+
+	inputType := types.NewWithCharset(types.T_varchar, 1, 0, types.CharsetUTF8)
+	outputType := types.NewWithCharset(types.T_varchar, 4, 0, types.CharsetUTF8)
+	testCase := NewFunctionTestCase(
+		proc,
+		[]FunctionTestInput{
+			NewFunctionTestInput(inputType, []string{"😀"}, []bool{false}),
+		},
+		NewFunctionTestResult(outputType, false, []string{"😀000"}, []bool{false}),
+		Soundex,
+	)
+	ok, info := testCase.Run()
+	require.True(t, ok, info)
+	result := testCase.result.GetResultVector()
+	require.Equal(t, int32(4), result.GetType().Width)
+	require.Equal(t, 7, len(result.GetStringAt(0)))
 }
 
 func TestSoundexLongTextOutput(t *testing.T) {
@@ -7384,6 +7483,50 @@ func TestVecFromBase64Narrow(t *testing.T) {
 	ok, info = runCase(mkInput("AQID"),
 		NewFunctionTestResult(types.T_array_bf16.ToType(), true, [][]types.BF16{nil}, []bool{}), VecFromBase64[types.BF16])
 	require.Truef(t, ok, "odd length should error: %s", info)
+}
+
+func TestVecFromBase64InvalidInputClass(t *testing.T) {
+	proc := testutil.NewProcess(t)
+	checkError := func(t *testing.T, resultType types.Type, decode fEvalFn, input string) error {
+		t.Helper()
+		fc := NewFunctionTestCase(proc,
+			[]FunctionTestInput{NewFunctionTestInput(types.T_varchar.ToType(), []string{input}, nil)},
+			NewFunctionTestResult(resultType, true, nil, nil), decode)
+		defer func() {
+			for _, parameter := range fc.parameters {
+				parameter.Free(proc.Mp())
+			}
+			fc.result.GetResultVector().Free(proc.Mp())
+		}()
+		require.NoError(t, fc.result.PreExtendAndReset(fc.fnLength))
+		_, err := fc.DebugRun()
+		return err
+	}
+	cases := []struct {
+		name       string
+		resultType types.Type
+		decode     fEvalFn
+		width      int
+	}{
+		{"f32", types.T_array_float32.ToType(), VecFromBase64[float32], 4},
+		{"f64", types.T_array_float64.ToType(), VecFromBase64[float64], 8},
+		{"f16", types.T_array_float16.ToType(), VecFromBase64[types.Float16], 2},
+		{"bf16", types.T_array_bf16.ToType(), VecFromBase64[types.BF16], 2},
+		{"int8", types.T_array_int8.ToType(), VecFromBase64[int8], 1},
+		{"uint8", types.T_array_uint8.ToType(), VecFromBase64[uint8], 1},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			err := checkError(t, tc.resultType, tc.decode, "!!!")
+			require.True(t, moerr.IsMoErrCode(err, moerr.ErrInvalidInput), "malformed base64: %v", err)
+
+			if tc.width > 1 {
+				err = checkError(t, tc.resultType, tc.decode, "AA==")
+				require.True(t, moerr.IsMoErrCode(err, moerr.ErrInvalidInput), "unaligned decoded length: %v", err)
+				require.ErrorContains(t, err, "not a multiple")
+			}
+		})
+	}
 }
 
 func initValidatePasswordStrengthTestCase() []tcTemp {

@@ -70,6 +70,7 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/sql/colexec/mergerecursive"
 	"github.com/matrixorigin/matrixone/pkg/sql/colexec/mergetop"
 	"github.com/matrixorigin/matrixone/pkg/sql/colexec/minus"
+	"github.com/matrixorigin/matrixone/pkg/sql/colexec/minusall"
 	"github.com/matrixorigin/matrixone/pkg/sql/colexec/mongoscan"
 	"github.com/matrixorigin/matrixone/pkg/sql/colexec/multi_update"
 	"github.com/matrixorigin/matrixone/pkg/sql/colexec/offset"
@@ -384,6 +385,12 @@ func dupOperatorWithContext(sourceOp vm.Operator, index int, maxParallel int, du
 	case vm.Minus: // 2
 		t := sourceOp.(*minus.Minus)
 		op := minus.NewArgument()
+		op.KeyExprs = t.KeyExprs
+		op.SetInfo(&info)
+		return op
+	case vm.MinusAll:
+		t := sourceOp.(*minusall.MinusAll)
+		op := minusall.NewArgument()
 		op.KeyExprs = t.KeyExprs
 		op.SetInfo(&info)
 		return op
@@ -2171,6 +2178,9 @@ func evaluateAggregateConfigString(proc *process.Process, expr *plan.Expr) (stri
 		return "", err
 	}
 	defer free()
+	if vec.Length() == 0 || vec.IsConstNull() || vec.IsNull(0) {
+		return "", nil
+	}
 	return vec.GetStringAt(0), nil
 }
 
