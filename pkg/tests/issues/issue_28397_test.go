@@ -117,5 +117,94 @@ func TestIssue28397FieldKeepsExactNumericComparison(t *testing.T) {
 		}
 		require.NoError(t, rows.Err())
 		require.Equal(t, []int64{2, 2, 2}, got)
+
+		t.Run("issue 29378 prepared fixed decimal peers", func(t *testing.T) {
+			const first = "cast(9007199254740992 as decimal(20,0))"
+			const second = "cast(9007199254740993 as decimal(20,0))"
+			_, err := conn.ExecContext(ctx, "prepare field_fixed from 'select field(?, "+first+", "+second+")'")
+			require.NoError(t, err)
+			defer func() {
+				_, _ = conn.ExecContext(context.Background(), "deallocate prepare field_fixed")
+			}()
+			for _, tc := range []struct {
+				name, source string
+				want         int64
+			}{
+				{"distinct exact decimal", second, 2},
+				{"matching exact decimal", first, 1},
+				{"string comparison", "'9007199254740993'", 1},
+				{"explicit real comparison", "cast(9007199254740993 as double)", 1},
+				{"null search", "null", 0},
+				{"exact decimal after reuse", second, 2},
+			} {
+				t.Run(tc.name, func(t *testing.T) {
+					_, err := conn.ExecContext(ctx, "set @field_search = "+tc.source)
+					require.NoError(t, err)
+					var direct, prepared int64
+					require.NoError(t, conn.QueryRowContext(ctx,
+						"select field("+tc.source+", "+first+", "+second+")").Scan(&direct))
+					require.NoError(t, conn.QueryRowContext(ctx,
+						"execute field_fixed using @field_search").Scan(&prepared))
+					require.Equal(t, tc.want, direct)
+					require.Equal(t, direct, prepared)
+				})
+			}
+
+			_, err = conn.ExecContext(ctx, "prepare field_candidate from 'select field("+second+", ?)'")
+			require.NoError(t, err)
+			defer func() {
+				_, _ = conn.ExecContext(context.Background(), "deallocate prepare field_candidate")
+			}()
+			for _, tc := range []struct {
+				source string
+				want   int64
+			}{{first, 0}, {second, 1}} {
+				_, err = conn.ExecContext(ctx, "set @field_candidate = "+tc.source)
+				require.NoError(t, err)
+				var prepared int64
+				require.NoError(t, conn.QueryRowContext(ctx,
+					"execute field_candidate using @field_candidate").Scan(&prepared))
+				require.Equal(t, tc.want, prepared)
+			}
+
+			for _, tc := range []struct {
+				name, source, peers string
+				want                int64
+			}{
+				{"integer literal peer", second, "9007199254740992", 0},
+				{"scaled decimal peer", "cast(1.0000000000000001 as decimal(20,16))",
+					"cast(1.0000000000000000 as decimal(20,16))", 0},
+				{"mixed string peer", second, first + `, "x"`, 1},
+			} {
+				t.Run(tc.name, func(t *testing.T) {
+					_, err := conn.ExecContext(ctx, "prepare field_boundary from 'select field(?, "+tc.peers+")'")
+					require.NoError(t, err)
+					defer func() {
+						_, _ = conn.ExecContext(context.Background(), "deallocate prepare field_boundary")
+					}()
+					_, err = conn.ExecContext(ctx, "set @field_search = "+tc.source)
+					require.NoError(t, err)
+					var direct, prepared int64
+					require.NoError(t, conn.QueryRowContext(ctx,
+						"select field("+tc.source+", "+tc.peers+")").Scan(&direct))
+					require.NoError(t, conn.QueryRowContext(ctx,
+						"execute field_boundary using @field_search").Scan(&prepared))
+					require.Equal(t, tc.want, direct)
+					require.Equal(t, direct, prepared)
+				})
+			}
+
+			_, err = conn.ExecContext(ctx, "prepare field_columns from 'select field(?, candidate1, candidate2) from field_decimal where search = 9007199254740993'")
+			require.NoError(t, err)
+			defer func() {
+				_, _ = conn.ExecContext(context.Background(), "deallocate prepare field_columns")
+			}()
+			_, err = conn.ExecContext(ctx, "set @field_search = "+second)
+			require.NoError(t, err)
+			var fromColumns int64
+			require.NoError(t, conn.QueryRowContext(ctx,
+				"execute field_columns using @field_search").Scan(&fromColumns))
+			require.Equal(t, int64(2), fromColumns)
+		})
 	})
 }

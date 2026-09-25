@@ -45,6 +45,15 @@ EXECUTE p_field USING @needle, @first, @second, @text, @nil;
 ➤ FIELD(?, ?, ?, ?, ?)[-5,64,0]  𝄀
 2
 DEALLOCATE PREPARE p_field;
+SELECT FIELD(CAST(9007199254740993 AS DECIMAL(20,0)), CAST(9007199254740992 AS DECIMAL(20,0)));
+➤ FIELD(cast(9007199254740993 as decimal(20)), cast(9007199254740992 as decimal(20)))[-5,64,0]  𝄀
+0
+PREPARE p_field_fixed FROM 'SELECT FIELD(?, CAST(9007199254740992 AS DECIMAL(20,0)))';
+SET @field_exact = CAST(9007199254740993 AS DECIMAL(20,0));
+EXECUTE p_field_fixed USING @field_exact;
+➤ FIELD(?, cast(9007199254740992 as decimal(20)))[-5,64,0]  𝄀
+0
+DEALLOCATE PREPARE p_field_fixed;
 SELECT FIELD(x'0062', x'61', x'0062'), FIELD(x'0062', x'62'), FIELD(x'41', x'61');
 ➤ FIELD(0x0062, 0x61, 0x0062)[-5,64,0]  ¦  FIELD(0x0062, 0x62)[-5,64,0]  ¦  FIELD(0x41, 0x61)[-5,64,0]  𝄀
 2  ¦  0  ¦  1

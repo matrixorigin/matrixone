@@ -31,6 +31,13 @@ SET @needle = 2.0;
 EXECUTE p_field USING @needle, @first, @second, @text, @nil;
 DEALLOCATE PREPARE p_field;
 
+-- A fixed DECIMAL candidate must keep its exact source type after PREPARE (#29378).
+SELECT FIELD(CAST(9007199254740993 AS DECIMAL(20,0)), CAST(9007199254740992 AS DECIMAL(20,0)));
+PREPARE p_field_fixed FROM 'SELECT FIELD(?, CAST(9007199254740992 AS DECIMAL(20,0)))';
+SET @field_exact = CAST(9007199254740993 AS DECIMAL(20,0));
+EXECUTE p_field_fixed USING @field_exact;
+DEALLOCATE PREPARE p_field_fixed;
+
 SELECT FIELD(x'0062', x'61', x'0062'), FIELD(x'0062', x'62'), FIELD(x'41', x'61');
 PREPARE p_binary FROM 'SELECT FIELD(?, ?, ?), FIELD(?, ?), FIELD(?, ?)';
 SET @binary = x'0062', @binary_first = x'61', @binary_second = x'0062';

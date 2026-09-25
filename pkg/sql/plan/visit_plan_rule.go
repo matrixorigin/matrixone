@@ -2867,7 +2867,7 @@ func (rule *ResetParamRefRule) applyExpr(e *plan.Expr) (*plan.Expr, error) {
 				needResetFunction = true
 				compareArgTypes = true
 				rule.specialized = true
-				if (functionName == "greatest" || functionName == "least") &&
+				if (functionName == "greatest" || functionName == "least" || functionName == "field") &&
 					preparedNumericCommonOperandType(types.T(rewrittenArg.Typ.Id)) &&
 					types.T(rewrittenArg.Typ.Id) != types.T_any {
 					// A numeric runtime marker also invalidates a peer literal's
@@ -3197,7 +3197,7 @@ func (rule *ResetParamRefRule) applyExpr(e *plan.Expr) (*plan.Expr, error) {
 		}
 		sqlExecuteNumericPeerDependent := !variadicStringBoundary && (sqlExecuteNumericNestedDependent ||
 			(sqlExecuteNumericSourceDependent &&
-				(functionName == "/" || preparedSQLExecuteNumericResultConsumer(functionName))))
+				(functionName == "/" || functionName == "field" || preparedSQLExecuteNumericResultConsumer(functionName))))
 		if numericPrefixDependent || sqlExecuteNumericPeerDependent {
 			var sqlExecuteResultType plan.Type
 			if sqlExecuteNumericPeerDependent {
