@@ -489,9 +489,10 @@ type ResetParamRefRule struct {
 	// provisional prepare-time coercions and bind against the runtime domain.
 	numericPrefixDependent map[*plan.Expr]bool
 	// sqlExecuteNumericDependent tracks expressions whose numeric result domain
-	// was selected from a SQL EXECUTE user variable's source type. Unlike a
-	// direct marker, a dependent child must propagate through enclosing numeric
-	// consumers so their provisional prepare-time envelopes are rebound too.
+	// was selected from an execute-time source, including deferred numeric
+	// fallbacks. Unlike a direct marker, a dependent child must propagate
+	// through enclosing numeric consumers so their provisional prepare-time
+	// envelopes are rebound too.
 	sqlExecuteNumericDependent  map[*plan.Expr]bool
 	serializedDecimalParamTypes map[*plan.Expr]types.Type
 	// preparedPlan locates existing numeric scalar-subquery fallback sources.
@@ -2747,7 +2748,9 @@ func (rule *ResetParamRefRule) applyExpr(e *plan.Expr) (*plan.Expr, error) {
 				(functionName == "field" || functionName == "greatest" || functionName == "least") &&
 				paramPos < len(rule.paramValues) {
 				if param, ok := rule.paramValues[paramPos].(ParamValue); ok &&
-					!param.IsBinaryProtocol && param.HasSourceType && param.SourceType.Oid != types.T_any {
+					((!param.IsBinaryProtocol && param.HasSourceType && param.SourceType.Oid != types.T_any) ||
+						(functionName == "field" && param.IsBinaryProtocol && param.HasRuntimeType &&
+							param.RuntimeType.Oid != types.T_any && preparedNumericCommonOperandType(param.RuntimeType.Oid))) {
 					variadicSource = true
 				}
 			}
@@ -3051,7 +3054,7 @@ func (rule *ResetParamRefRule) applyExpr(e *plan.Expr) (*plan.Expr, error) {
 			if rule.isSQLExecuteNumericDependent(rewrittenArg) &&
 				((functionName == "cast" && !isExplicitPreparedCast(e)) ||
 					isPreparedNumericComparisonContext(functionName) ||
-					isPreparedCommonValueFunction(functionName) ||
+					isPreparedCommonValueFunction(functionName) || functionName == "field" ||
 					preparedFunctionArgUsesSQLExecuteNumericSource(e, functionName, i, len(exprImpl.F.Args))) {
 				sqlExecuteNumericSourceDependent = true
 				sqlExecuteNumericNestedDependent = true
@@ -3306,6 +3309,9 @@ func (rule *ResetParamRefRule) applyExpr(e *plan.Expr) (*plan.Expr, error) {
 					}
 					preserveReboundFunctionMetadata(exprImpl.F, rewritten.GetF())
 					rule.specialized = true
+					if makeTypeByPlan2Expr(rewritten).IsNumeric() {
+						rule.markSQLExecuteNumericDependent(e, rewritten)
+					}
 					return rewritten, nil
 				}
 			}
@@ -3330,6 +3336,9 @@ func (rule *ResetParamRefRule) applyExpr(e *plan.Expr) (*plan.Expr, error) {
 					}
 					preserveReboundFunctionMetadata(exprImpl.F, rewritten.GetF())
 					rule.specialized = true
+					if makeTypeByPlan2Expr(rewritten).IsNumeric() {
+						rule.markSQLExecuteNumericDependent(e, rewritten)
+					}
 					return rewritten, nil
 				}
 			}

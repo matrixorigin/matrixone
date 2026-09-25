@@ -67,6 +67,78 @@ func TestPreparedVariadicRuntimeSourceDomains(t *testing.T) {
 			want: []types.T{types.T_decimal128, types.T_decimal128},
 		},
 		{
+			name: "field nested abs decimal with fixed exact candidate",
+			sql:  "prepare p from 'select field(abs(?), cast(9007199254740992 as decimal(20,0)))'", fn: "field",
+			values: []ParamValue{{
+				Value: "9007199254740993", SourceType: types.New(types.T_decimal128, 20, 0),
+				HasSourceType: true, PrepareParamKind: vector.PrepareParamDecimal,
+			}},
+			want: []types.T{types.T_decimal128, types.T_decimal128},
+		},
+		{
+			name: "field fixed exact needle with nested abs decimal candidate",
+			sql:  "prepare p from 'select field(cast(9007199254740993 as decimal(20,0)), abs(?))'", fn: "field",
+			values: []ParamValue{{
+				Value: "9007199254740992", SourceType: types.New(types.T_decimal128, 20, 0),
+				HasSourceType: true, PrepareParamKind: vector.PrepareParamDecimal,
+			}},
+			want: []types.T{types.T_decimal128, types.T_decimal128},
+		},
+		{
+			name: "field nested coalesce decimal with fixed exact candidate",
+			sql:  "prepare p from 'select field(coalesce(?, cast(0 as decimal(20,0))), cast(9007199254740992 as decimal(20,0)))'", fn: "field",
+			values: []ParamValue{{
+				Value: "9007199254740993", SourceType: types.New(types.T_decimal128, 20, 0),
+				HasSourceType: true, PrepareParamKind: vector.PrepareParamDecimal,
+			}},
+			want: []types.T{types.T_decimal128, types.T_decimal128},
+		},
+		{
+			name: "field nested if decimal with fixed exact candidate",
+			sql:  "prepare p from 'select field(if(true, ?, cast(0 as decimal(20,0))), cast(9007199254740992 as decimal(20,0)))'", fn: "field",
+			values: []ParamValue{{
+				Value: "9007199254740993", SourceType: types.New(types.T_decimal128, 20, 0),
+				HasSourceType: true, PrepareParamKind: vector.PrepareParamDecimal,
+			}},
+			want: []types.T{types.T_decimal128, types.T_decimal128},
+		},
+		{
+			name: "field nested decimal with fixed string boundary",
+			sql:  "prepare p from 'select field(abs(?), \"9007199254740992\")'", fn: "field",
+			values: []ParamValue{{
+				Value: "9007199254740993", SourceType: types.New(types.T_decimal128, 20, 0),
+				HasSourceType: true, PrepareParamKind: vector.PrepareParamDecimal,
+			}},
+			want: []types.T{types.T_float64, types.T_float64},
+		},
+		{
+			name: "field binary protocol numeric with fixed exact candidate",
+			sql:  "prepare p from 'select field(?, cast(9007199254740992 as decimal(20,0)))'", fn: "field",
+			values: []ParamValue{{
+				Value: "9007199254740993", RuntimeType: types.T_uint64.ToType(),
+				HasRuntimeType: true, IsBinaryProtocol: true,
+			}},
+			want: []types.T{types.T_decimal128, types.T_decimal128},
+		},
+		{
+			name: "field binary protocol nested abs with fixed exact candidate",
+			sql:  "prepare p from 'select field(abs(?), cast(9007199254740992 as decimal(20,0)))'", fn: "field",
+			values: []ParamValue{{
+				Value: "9007199254740993", RuntimeType: types.T_uint64.ToType(),
+				HasRuntimeType: true, IsBinaryProtocol: true,
+			}},
+			want: []types.T{types.T_decimal128, types.T_decimal128},
+		},
+		{
+			name: "field binary protocol text preserves approximate comparison",
+			sql:  "prepare p from 'select field(?, cast(9007199254740992 as decimal(20,0)))'", fn: "field",
+			values: []ParamValue{{
+				Value: "9007199254740993", RuntimeType: types.T_varchar.ToType(),
+				HasRuntimeType: true, IsBinaryProtocol: true,
+			}},
+			want: []types.T{types.T_float64, types.T_float64},
+		},
+		{
 			name: "field decimal with fixed real boundary",
 			sql:  "prepare p from 'select field(?, cast(9007199254740992 as double))'", fn: "field",
 			values: []ParamValue{{

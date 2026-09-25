@@ -38,6 +38,16 @@ SET @field_exact = CAST(9007199254740993 AS DECIMAL(20,0));
 EXECUTE p_field_fixed USING @field_exact;
 DEALLOCATE PREPARE p_field_fixed;
 
+-- Numeric results nested inside FIELD must also restore a fixed DECIMAL peer.
+SELECT FIELD(ABS(CAST(9007199254740993 AS DECIMAL(20,0))), CAST(9007199254740992 AS DECIMAL(20,0))),
+       FIELD(CAST(9007199254740993 AS DECIMAL(20,0)), ABS(CAST(9007199254740992 AS DECIMAL(20,0))));
+PREPARE p_field_nested FROM 'SELECT FIELD(ABS(?), CAST(9007199254740992 AS DECIMAL(20,0))),
+                                    FIELD(CAST(9007199254740993 AS DECIMAL(20,0)), ABS(?))';
+SET @field_exact = CAST(9007199254740993 AS DECIMAL(20,0));
+SET @field_other = CAST(9007199254740992 AS DECIMAL(20,0));
+EXECUTE p_field_nested USING @field_exact, @field_other;
+DEALLOCATE PREPARE p_field_nested;
+
 SELECT FIELD(x'0062', x'61', x'0062'), FIELD(x'0062', x'62'), FIELD(x'41', x'61');
 PREPARE p_binary FROM 'SELECT FIELD(?, ?, ?), FIELD(?, ?), FIELD(?, ?)';
 SET @binary = x'0062', @binary_first = x'61', @binary_second = x'0062';

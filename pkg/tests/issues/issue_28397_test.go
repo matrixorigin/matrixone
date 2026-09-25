@@ -18,6 +18,7 @@ import (
 	"context"
 	"database/sql"
 	"fmt"
+	"strings"
 	"testing"
 	"time"
 
@@ -205,6 +206,99 @@ func TestIssue28397FieldKeepsExactNumericComparison(t *testing.T) {
 			require.NoError(t, conn.QueryRowContext(ctx,
 				"execute field_columns using @field_search").Scan(&fromColumns))
 			require.Equal(t, int64(2), fromColumns)
+		})
+
+		t.Run("issue 29378 nested and binary prepared peers", func(t *testing.T) {
+			const first = "cast(9007199254740992 as decimal(20,0))"
+			const second = "cast(9007199254740993 as decimal(20,0))"
+			type fieldSource struct {
+				source string
+				want   int64
+			}
+			for _, tc := range []struct {
+				name, expr string
+				values     []fieldSource
+			}{
+				{
+					name: "nested abs and source reuse", expr: "field(abs(?), " + first + ")",
+					values: []fieldSource{{second, 0}, {"cast(9007199254740993 as double)", 1}, {second, 0}},
+				},
+				{
+					name: "nested coalesce", expr: "field(coalesce(?, cast(0 as decimal(20,0))), " + first + ")",
+					values: []fieldSource{{second, 0}},
+				},
+				{
+					name: "nested if", expr: "field(if(true, ?, cast(0 as decimal(20,0))), " + first + ")",
+					values: []fieldSource{{second, 0}},
+				},
+				{
+					name: "nested candidate", expr: "field(" + second + ", abs(?))",
+					values: []fieldSource{{first, 0}},
+				},
+				{
+					name: "explicit real marker", expr: "field(abs(cast(? as double)), " + first + ")",
+					values: []fieldSource{{second, 1}},
+				},
+				{
+					name: "explicit real peer", expr: "field(abs(?), cast(9007199254740992 as double))",
+					values: []fieldSource{{second, 1}},
+				},
+			} {
+				t.Run(tc.name, func(t *testing.T) {
+					_, err := conn.ExecContext(ctx, "prepare field_nested from 'select "+tc.expr+"'")
+					require.NoError(t, err)
+					defer func() {
+						cleanupCtx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+						defer cancel()
+						_, cleanupErr := conn.ExecContext(cleanupCtx, "deallocate prepare field_nested")
+						require.NoError(t, cleanupErr)
+					}()
+					for _, value := range tc.values {
+						_, err := conn.ExecContext(ctx, "set @field_nested_value = "+value.source)
+						require.NoError(t, err)
+						var direct, prepared int64
+						require.NoError(t, conn.QueryRowContext(ctx,
+							"select "+strings.Replace(tc.expr, "?", value.source, 1)).Scan(&direct))
+						require.NoError(t, conn.QueryRowContext(ctx,
+							"execute field_nested using @field_nested_value").Scan(&prepared))
+						require.Equal(t, value.want, direct)
+						require.Equal(t, direct, prepared)
+					}
+				})
+			}
+
+			stmt, err := conn.PrepareContext(ctx, "select field(?, "+first+")")
+			require.NoError(t, err)
+			defer func() { require.NoError(t, stmt.Close()) }()
+			for _, value := range []struct {
+				name  string
+				param any
+				want  int64
+			}{
+				{"distinct unsigned", uint64(9007199254740993), 0},
+				{"matching unsigned", uint64(9007199254740992), 1},
+				{"numeric text keeps approximate domain", "9007199254740993", 1},
+				{"null search", nil, 0},
+				{"unsigned after reuse", uint64(9007199254740993), 0},
+			} {
+				t.Run(value.name, func(t *testing.T) {
+					var got int64
+					require.NoError(t, stmt.QueryRowContext(ctx, value.param).Scan(&got))
+					require.Equal(t, value.want, got)
+				})
+			}
+
+			nested, err := conn.PrepareContext(ctx, "select field(abs(?), "+first+")")
+			require.NoError(t, err)
+			defer func() { require.NoError(t, nested.Close()) }()
+			for _, value := range []struct {
+				param uint64
+				want  int64
+			}{{9007199254740993, 0}, {9007199254740992, 1}, {9007199254740993, 0}} {
+				var got int64
+				require.NoError(t, nested.QueryRowContext(ctx, value.param).Scan(&got))
+				require.Equal(t, value.want, got, "param=%d", value.param)
+			}
 		})
 	})
 }
