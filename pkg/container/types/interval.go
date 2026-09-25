@@ -136,11 +136,12 @@ func parseInts(s string, isxxxMicrosecond bool, typeMaxLength int) ([]int64, err
 				ret = append(ret, int64(c-rune('0')))
 				numLength++
 			} else {
-				ret[cur] = 10*ret[cur] + int64(c-rune('0'))
-				numLength++
-				if ret[cur] < 0 {
+				digit := int64(c - rune('0'))
+				if ret[cur] > (math.MaxInt64-digit)/10 {
 					return nil, moerr.NewInvalidInputNoCtxf("invalid time interval value '%s'", s)
 				}
+				ret[cur] = 10*ret[cur] + digit
+				numLength++
 			}
 		} else {
 			if cur >= 0 {
@@ -204,8 +205,18 @@ func conv(a []int64, mul []int64, rt IntervalType) (int64, IntervalType, error) 
 	var curMul int64 = 1
 
 	for i := len(a) - 1; i >= 0; i-- {
-		curMul = curMul * mul[i]
-		ret += int64(a[i]) * curMul
+		if mul[i] <= 0 || curMul > math.MaxInt64/mul[i] {
+			return 0, IntervalTypeInvalid, moerr.NewInvalidInputNoCtxf("interval type, bad value '%d'", a[i])
+		}
+		curMul *= mul[i]
+		if a[i] > math.MaxInt64/curMul || a[i] < math.MinInt64/curMul {
+			return 0, IntervalTypeInvalid, moerr.NewInvalidInputNoCtxf("interval type, bad value '%d'", a[i])
+		}
+		term := a[i] * curMul
+		if (term > 0 && ret > math.MaxInt64-term) || (term < 0 && ret < math.MinInt64-term) {
+			return 0, IntervalTypeInvalid, moerr.NewInvalidInputNoCtxf("interval type, bad value '%d'", a[i])
+		}
+		ret += term
 	}
 	if largerThanZero && ret < 0 {
 		return 0, IntervalTypeInvalid, moerr.NewInvalidInputNoCtxf("interval type, bad value '%d'", ret)

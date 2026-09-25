@@ -27,6 +27,16 @@ execute dynamic_seconds using @interval_value;
 ➤ prepared_us[-5,64,0]  𝄀
 null
 deallocate prepare dynamic_seconds;
+select date_add('2024-01-01 00:00:00', interval '213503982.334602' day) as positive_overflow,
+date_add('2024-01-01 00:00:00', interval '-213503982.334602' day) as negative_overflow;
+➤ positive_overflow[12,65535,0]  ¦  negative_overflow[12,65535,0]  𝄀
+null  ¦  null
+insert into interval_text values ('213503982.334602'), ('-213503982.334602');
+select v, date_add('2024-01-01 00:00:00', interval v day) as overflow_date
+from interval_text where v in ('213503982.334602', '-213503982.334602') order by v;
+➤ v[12,20,0]  ¦  overflow_date[12,65535,0]  𝄀
+-213503982.334602  ¦  null  𝄀
+213503982.334602  ¦  null
 select str_to_date('2024-09-4', '%x-%v-%w') as literal_week_date;
 ➤ literal_week_date[91,10,0]  𝄀
 2024-02-29
