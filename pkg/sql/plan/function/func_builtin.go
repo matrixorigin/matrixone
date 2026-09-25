@@ -96,19 +96,28 @@ func ToInterval(ivecs []*vector.Vector, result vector.FunctionResultWrapper, _ *
 			}
 			continue
 		}
-		// Dynamic composite SECOND intervals have a single result type for the
-		// whole vector. Use microseconds so rows with fractional seconds do not
-		// mix units with rows containing only whole seconds.
-		if normalizedType == types.Second {
+		// The binder fixes one unit for all rows. Scale whole values to the
+		// microsecond unit used by fractional values of these interval types.
+		if normalizedType != types.MicroSecond {
+			multiplier := int64(0)
 			switch intervalType {
-			case types.Minute_Second, types.Hour_Second, types.Day_Second:
-				if number > math.MaxInt64/types.MicroSecsPerSec || number < math.MinInt64/types.MicroSecsPerSec {
+			case types.Second, types.Minute_Second, types.Hour_Second, types.Day_Second:
+				multiplier = types.MicroSecsPerSec
+			case types.Minute:
+				multiplier = types.SecsPerMinute * types.MicroSecsPerSec
+			case types.Hour:
+				multiplier = types.SecsPerHour * types.MicroSecsPerSec
+			case types.Day:
+				multiplier = types.SecsPerDay * types.MicroSecsPerSec
+			}
+			if multiplier != 0 {
+				if number > math.MaxInt64/multiplier || number < math.MinInt64/multiplier {
 					if err := rs.Append(0, true); err != nil {
 						return err
 					}
 					continue
 				}
-				number *= types.MicroSecsPerSec
+				number *= multiplier
 			}
 		}
 		if err := rs.Append(number, false); err != nil {

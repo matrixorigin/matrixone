@@ -297,6 +297,12 @@ func matchDateWithToken(t *GeneralTime, date string, token string, ctx map[strin
 	if parse, ok := dateFormatParserTable[token]; ok {
 		return parse(t, date, ctx)
 	}
+	if token == "%%" {
+		if strings.HasPrefix(date, "%") {
+			return date[1:], true
+		}
+		return date, false
+	}
 
 	if strings.HasPrefix(date, token) {
 		return date[len(token):], true

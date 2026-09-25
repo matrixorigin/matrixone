@@ -425,7 +425,7 @@ func TestResetDateFunctionArgsDoesNotFoldVarcharColumn(t *testing.T) {
 		"to_interval can return NULL for an invalid non-NULL VARCHAR value")
 
 	intervalType := extractInt64Value(args[2])
-	require.Equal(t, int64(types.Second), intervalType)
+	require.Equal(t, int64(types.MicroSecond), intervalType)
 }
 
 func TestResetDateFunctionArgsDoesNotFoldCharColumn(t *testing.T) {

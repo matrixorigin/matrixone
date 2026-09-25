@@ -8846,19 +8846,23 @@ func strToTime(
 	return nil
 }
 
-// parseTimePrefix finds the longest valid TIME prefix in a malformed string.
-// ParseTime owns the accepted lexical forms; this helper only trims trailing
-// content and retries, matching MySQL's non-strict coercion behavior.
+// parseTimePrefix recovers a valid TIME followed by non-time text. Never trim
+// inside a numeric field: an invalid minute/second must not become valid by
+// dropping digits from its end.
 func parseTimePrefix(value string, scale int32) (types.Time, bool) {
 	value = strings.TrimSpace(value)
-	for end := len(value) - 1; end > 0; end-- {
-		candidate := strings.TrimSpace(value[:end])
-		if candidate == "" {
+	for i := 0; i < len(value); i++ {
+		switch value[i] {
+		case '0', '1', '2', '3', '4', '5', '6', '7', '8', '9', ':', '.', '-', '+', ' ':
 			continue
 		}
-		if parsed, err := types.ParseTime(candidate, scale); err == nil {
-			return parsed, true
+		candidate := strings.TrimRight(value[:i], " .:+-")
+		if candidate != "" {
+			if parsed, err := types.ParseTime(candidate, scale); err == nil {
+				return parsed, true
+			}
 		}
+		break
 	}
 	return 0, false
 }

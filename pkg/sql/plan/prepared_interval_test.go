@@ -31,15 +31,15 @@ func TestPreparedIntervalMarkerRebindsInternalDateFunction(t *testing.T) {
 		expectedUnit types.IntervalType
 		normalized   bool
 	}{
-		{name: "integer", unit: "second", value: ParamValue{Value: "3", SourceType: types.T_int64.ToType(), HasSourceType: true}, expectedUnit: types.Second},
-		{name: "negative integer", unit: "second", value: ParamValue{Value: "-3", SourceType: types.T_int64.ToType(), HasSourceType: true}, expectedUnit: types.Second},
-		{name: "NULL integer", unit: "second", value: ParamValue{SourceType: types.T_int64.ToType(), HasSourceType: true}, expectedUnit: types.Second},
-		{name: "valid string", unit: "second", value: ParamValue{Value: "3", SourceType: types.T_varchar.ToType(), HasSourceType: true}, expectedUnit: types.Second, normalized: true},
-		{name: "invalid string", unit: "second", value: ParamValue{Value: "not-an-interval", SourceType: types.T_varchar.ToType(), HasSourceType: true}, expectedUnit: types.Second, normalized: true},
+		{name: "integer", unit: "second", value: ParamValue{Value: "3", SourceType: types.T_int64.ToType(), HasSourceType: true}, expectedUnit: types.MicroSecond},
+		{name: "negative integer", unit: "second", value: ParamValue{Value: "-3", SourceType: types.T_int64.ToType(), HasSourceType: true}, expectedUnit: types.MicroSecond},
+		{name: "NULL integer", unit: "second", value: ParamValue{SourceType: types.T_int64.ToType(), HasSourceType: true}, expectedUnit: types.MicroSecond},
+		{name: "valid string", unit: "second", value: ParamValue{Value: "3", SourceType: types.T_varchar.ToType(), HasSourceType: true}, expectedUnit: types.MicroSecond, normalized: true},
+		{name: "invalid string", unit: "second", value: ParamValue{Value: "not-an-interval", SourceType: types.T_varchar.ToType(), HasSourceType: true}, expectedUnit: types.MicroSecond, normalized: true},
 		{name: "DAY_SECOND string", unit: "day_second", value: ParamValue{Value: "1 02:03:04", SourceType: types.T_varchar.ToType(), HasSourceType: true}, expectedUnit: types.MicroSecond, normalized: true},
 		{name: "YEAR_MONTH string", unit: "year_month", value: ParamValue{Value: "1-2", SourceType: types.T_varchar.ToType(), HasSourceType: true}, expectedUnit: types.Month, normalized: true},
-		{name: "binary integer", unit: "second", value: ParamValue{Value: "3", RuntimeType: types.T_int64.ToType(), HasRuntimeType: true, IsBinaryProtocol: true}, expectedUnit: types.Second},
-		{name: "binary string", unit: "second", value: ParamValue{Value: "3", RuntimeType: types.T_text.ToType(), HasRuntimeType: true, IsBinaryProtocol: true}, expectedUnit: types.Second, normalized: true},
+		{name: "binary integer", unit: "second", value: ParamValue{Value: "3", RuntimeType: types.T_int64.ToType(), HasRuntimeType: true, IsBinaryProtocol: true}, expectedUnit: types.MicroSecond},
+		{name: "binary string", unit: "second", value: ParamValue{Value: "3", RuntimeType: types.T_text.ToType(), HasRuntimeType: true, IsBinaryProtocol: true}, expectedUnit: types.MicroSecond, normalized: true},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			for _, name := range []string{"date_add", "date_sub"} {

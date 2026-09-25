@@ -145,6 +145,8 @@ func TestTemporalCompatibilityHelperDomains(t *testing.T) {
 		{"%Y-%m-%d %H:%i:%s.%f", true, true, 6},
 		{"%W, %M %d, %Y", false, true, 0},
 		{"%r", true, false, 0},
+		{"%x-%v-%w", false, true, 0},
+		{"%Y-%%f-%m-%d", false, true, 0},
 	} {
 		t.Run(tc.format, func(t *testing.T) {
 			isTime, isDate, scale := dynamicStrToDateFormatType(tc.format)

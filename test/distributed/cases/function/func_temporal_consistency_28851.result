@@ -1,0 +1,49 @@
+drop database if exists temporal_consistency_28851;
+create database temporal_consistency_28851;
+use temporal_consistency_28851;
+create table interval_text(v varchar(20));
+insert into interval_text values ('1'), ('1.5'), ('-1.5'), (null);
+select v,
+timestampdiff(microsecond, '2024-01-01 00:00:00', date_add('2024-01-01 00:00:00', interval v second)) as second_us,
+timestampdiff(microsecond, '2024-01-01 00:00:00', date_add('2024-01-01 00:00:00', interval v minute)) as minute_us,
+timestampdiff(microsecond, '2024-01-01 00:00:00', date_add('2024-01-01 00:00:00', interval v hour)) as hour_us,
+timestampdiff(microsecond, '2024-01-01 00:00:00', date_add('2024-01-01 00:00:00', interval v day)) as day_us
+from interval_text order by v;
+➤ v[12,20,0]  ¦  second_us[-5,64,0]  ¦  minute_us[-5,64,0]  ¦  hour_us[-5,64,0]  ¦  day_us[-5,64,0]  𝄀
+null  ¦  null  ¦  null  ¦  null  ¦  null  𝄀
+-1.5  ¦  -1500000  ¦  -90000000  ¦  -5400000000  ¦  -129600000000  𝄀
+1  ¦  1000000  ¦  60000000  ¦  3600000000  ¦  86400000000  𝄀
+1.5  ¦  1500000  ¦  90000000  ¦  5400000000  ¦  129600000000
+select timestampdiff(microsecond, '2024-01-01 00:00:00', date_add('2024-01-01 00:00:00', interval '1.5' second)) as literal_us;
+➤ literal_us[-5,64,0]  𝄀
+1500000
+prepare dynamic_seconds from 'select timestampdiff(microsecond, ''2024-01-01 00:00:00'', date_add(''2024-01-01 00:00:00'', interval ? second)) as prepared_us';
+set @interval_value = '1.5';
+execute dynamic_seconds using @interval_value;
+➤ prepared_us[-5,64,0]  𝄀
+1500000
+set @interval_value = null;
+execute dynamic_seconds using @interval_value;
+➤ prepared_us[-5,64,0]  𝄀
+null
+deallocate prepare dynamic_seconds;
+select str_to_date('2024-09-4', '%x-%v-%w') as literal_week_date;
+➤ literal_week_date[91,10,0]  𝄀
+2024-02-29
+prepare dynamic_date from 'select str_to_date(?, ?) as prepared_date';
+set @date_value = '2024-09-4', @date_format = '%x-%v-%w';
+execute dynamic_date using @date_value, @date_format;
+➤ prepared_date[12,29,0]  𝄀
+2024-02-29
+set @date_value = '2024-%f-02-29', @date_format = '%Y-%%f-%m-%d';
+execute dynamic_date using @date_value, @date_format;
+➤ prepared_date[12,29,0]  𝄀
+2024-02-29
+deallocate prepare dynamic_date;
+set sql_mode = '';
+select cast('12:99:00' as time) as invalid_minute, cast('12:34:99' as time) as invalid_second,
+cast('12:34:56tail' as time) as valid_prefix;
+➤ invalid_minute[92,10,0]  ¦  invalid_second[92,10,0]  ¦  valid_prefix[92,10,0]  𝄀
+null  ¦  null  ¦  12:34:56
+set sql_mode = 'STRICT_TRANS_TABLES';
+drop database temporal_consistency_28851;
