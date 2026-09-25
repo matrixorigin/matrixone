@@ -170,6 +170,29 @@ func TestTimeIntervalOriginalUnitBindingMatrix(t *testing.T) {
 	}
 }
 
+func TestTimeNumericDecimalCompoundCanonicalSpelling(t *testing.T) {
+	ctx := context.Background()
+	timeExpr := &planpb.Expr{Typ: planpb.Type{Id: int32(types.T_time)}, Expr: &planpb.Expr_Col{Col: &planpb.ColRef{ColPos: 0}}}
+	for _, unit := range []string{"second_microsecond", "minute_microsecond", "minute_second", "hour_microsecond", "hour_second", "hour_minute"} {
+		for _, scale := range []int32{0, 7} {
+			value := &planpb.Expr{Typ: planpb.Type{Id: int32(types.T_decimal64), Width: 12, Scale: scale}, Expr: &planpb.Expr_Col{Col: &planpb.ColRef{ColPos: 1}}}
+			interval := &planpb.Expr{Expr: &planpb.Expr_List{List: &planpb.ExprList{List: []*planpb.Expr{value, makePlan2StringConstExprWithType(unit)}}}}
+			args, err := resetDateFunctionArgs(ctx, timeExpr, interval)
+			require.NoError(t, err, unit)
+			require.Len(t, args, 3)
+			normalizer := args[1].GetF()
+			require.NotNil(t, normalizer, unit)
+			source := normalizer.Args[0]
+			if scale == 7 {
+				require.Equal(t, "trim", source.GetF().Func.ObjName, unit)
+				require.Equal(t, "trim", source.GetF().Args[2].GetF().Func.ObjName, unit)
+			} else {
+				require.NotEqual(t, "trim", source.GetF().Func.ObjName, unit)
+			}
+		}
+	}
+}
+
 func TestTimeCalendarIntervalRejectedAcrossSyntaxes(t *testing.T) {
 	for _, tc := range []struct {
 		name    string

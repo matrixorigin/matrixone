@@ -112,82 +112,54 @@ func IntervalTypeOf(s string) (IntervalType, error) {
 	return IntervalTypeMax, moerr.NewInvalidInputNoCtxf("invalid interval type '%s'", s)
 }
 
-// parseInts parse integer from string s.   This is used to handle interval values,
-// when interval type is Second_MicroSecond Minute_MicroSecond Hour_MicroSecond Day_MicroSecond
-// we should set second parameter true, other set false
-// the example: when the s is "1:1"
-// when we use Second_MicroSecond(...), we should parse to 1 second and 100000 microsecond.
-// when we use Minute_Second(...), we just parse to 1 minute and 1 second.
-// so we use method to solve this: we count the length of the num, use 1e(6 - length) * ret[len(ret) - 1]
-// for example: when the s is "1:001"
-// the last number length is 3, so the last number should be 1e(6 - 3) * 1 = 1000
-// so there are a few strange things.
-//  1. Only takes 0-9, may have leading 0, still means decimal instead oct.
-//  2. 1-1 is parsed out as 1, 1 '-' is delim, so is '+', '.' etc.
-//  3. we will not support int32 overflow.
-func parseInts(s string, isxxxMicrosecond bool, typeMaxLength int) ([]int64, error) {
-	ret := make([]int64, 0)
-	numLength := 0
-	cur := -1
-	for _, c := range s {
-		if c >= rune('0') && c <= rune('9') {
-			if cur < 0 {
-				cur = len(ret)
-				ret = append(ret, int64(c-rune('0')))
-				numLength++
-			} else {
-				digit := int64(c - rune('0'))
-				if ret[cur] > (math.MaxInt64-digit)/10 {
-					return nil, moerr.NewInvalidInputNoCtxf("invalid time interval value '%s'", s)
+type intervalNumberField struct{ start, end int }
+
+// Interval fields have at most five positions, plus one fractional field.
+// Keep spans rather than accumulating every token into int64: a long final
+// fraction is valid even when its decimal digits cannot fit into an integer.
+func splitIntervalNumberFields(s string, maxFields int) ([6]intervalNumberField, int, error) {
+	var fields [6]intervalNumberField
+	count := 0
+	inDigits := false
+	for i := 0; i < len(s); i++ {
+		if s[i] >= '0' && s[i] <= '9' {
+			if !inDigits {
+				if count == maxFields {
+					return fields, 0, moerr.NewInvalidInputNoCtxf("invalid time interval value '%s'", s)
 				}
-				ret[cur] = 10*ret[cur] + digit
-				numLength++
+				fields[count].start = i
+				count++
+				inDigits = true
 			}
+			fields[count-1].end = i + 1
 		} else {
-			if cur >= 0 {
-				cur = -1
-				numLength = 0
-			}
+			inDigits = false
 		}
 	}
-	if isxxxMicrosecond {
-		// For microsecond types, the last number represents fractional seconds
-		// If we have fewer values than expected, we need to handle the fractional part
-		if len(ret) > 0 && len(ret) < typeMaxLength {
-			// The last value is a fractional part (e.g., "1.02" -> [1, 2] where 2 means 0.02)
-			// We need to convert it to microseconds and pad missing values with 0
-			lastIdx := len(ret) - 1
-			lastNumLength := 0
-			// Count digits in the last number by finding the last number in the string
-			for i := len(s) - 1; i >= 0; i-- {
-				if s[i] >= '0' && s[i] <= '9' {
-					lastNumLength++
-				} else if lastNumLength > 0 {
-					break
-				}
-			}
-			// Convert fractional part to microseconds (e.g., 2 -> 20000 for 0.02 seconds)
-			if lastNumLength > 0 {
-				ret[lastIdx] *= int64(math.Pow10(6 - lastNumLength))
-			}
-		} else if len(ret) == typeMaxLength {
-			ret[len(ret)-1] *= int64(math.Pow10(6 - numLength))
-		}
+	return fields, count, nil
+}
+
+func intervalFieldValue(s string, field intervalNumberField) (int64, error) {
+	value, err := strconv.ParseInt(s[field.start:field.end], 10, 64)
+	if err != nil {
+		return 0, moerr.NewInvalidInputNoCtxf("invalid time interval value '%s'", s)
 	}
-	// parse "-1:1"
-	for _, c := range s {
-		if c == ' ' {
-			continue
-		} else if c == '-' {
-			for i := range ret {
-				ret[i] = -ret[i]
-			}
-			break
-		} else {
-			break
-		}
+	return value, nil
+}
+
+// Multiply a decimal fraction by the final microsecond unit using long
+// multiplication. The carry after the first digit is the integer part; its
+// remainder is the first discarded decimal digit for half-away rounding.
+func scaledIntervalFraction(s string, field intervalNumberField, multiplier int64) int64 {
+	var carry, remainder int64
+	for i := field.end - 1; i >= field.start; i-- {
+		product := int64(s[i]-'0')*multiplier + carry
+		carry, remainder = product/10, product%10
 	}
-	return ret, nil
+	if remainder >= 5 {
+		carry++
+	}
+	return carry
 }
 
 func conv(a []int64, mul []int64, rt IntervalType) (int64, IntervalType, error) {
@@ -228,64 +200,89 @@ func conv(a []int64, mul []int64, rt IntervalType) (int64, IntervalType, error) 
 }
 
 func NormalizeInterval(s string, it IntervalType) (ret int64, rettype IntervalType, err error) {
-	vals, err := parseInts(s, isxxxMicrosecondType(it), typeMaxLength(it))
+	s = strings.TrimSpace(s)
+	maxLen := typeMaxLength(it)
+	fields, count, err := splitIntervalNumberFields(s, maxLen+1)
 	if err != nil {
-		return
+		return 0, IntervalTypeInvalid, err
 	}
-	// Composite SECOND intervals accept a fractional seconds component even
-	// when the unit name does not include MICROSECOND. Fold that component into
-	// the seconds field before converting, avoiding a jagged conv input.
-	if !isxxxMicrosecondType(it) && strings.Contains(s, ".") {
-		maxLen := typeMaxLength(it)
-		if (it == Second || it == Minute || it == Hour || it == Day ||
-			it == Minute_Second || it == Hour_Second || it == Day_Second) && len(vals) == maxLen+1 {
-			fracText := s[strings.LastIndexByte(s, '.')+1:]
-			fracDigits := len(fracText)
-			if fracDigits > 6 {
-				fracDigits = 6
+	invalid := func() (int64, IntervalType, error) {
+		return 0, IntervalTypeInvalid, moerr.NewInvalidInputNoCtxf("invalid time interval value '%s'", s)
+	}
+	negative := strings.HasPrefix(s, "-")
+	microsecondFields := isxxxMicrosecondType(it)
+	multiplier := int64(0)
+	if !microsecondFields {
+		switch it {
+		case Second, Minute_Second, Hour_Second, Day_Second:
+			multiplier = MicroSecsPerSec
+		case Minute:
+			multiplier = MicroSecsPerSec * SecsPerMinute
+		case Hour:
+			multiplier = MicroSecsPerSec * SecsPerHour
+		case Day:
+			multiplier = MicroSecsPerSec * SecsPerDay
+		}
+	}
+
+	prefixCount := count
+	var fractional int64
+	hasFraction := false
+	if microsecondFields {
+		if count > maxLen {
+			return invalid()
+		}
+		if count > 0 {
+			prefixCount--
+			fractional = scaledIntervalFraction(s, fields[count-1], MicroSecsPerSec)
+			hasFraction = true
+		}
+	} else if count == maxLen+1 && multiplier != 0 {
+		dot := strings.LastIndexByte(s, '.')
+		if dot < 0 || fields[count-1].start != dot+1 || fields[count-1].end != len(s) {
+			return invalid()
+		}
+		prefixCount--
+		fractional = scaledIntervalFraction(s, fields[count-1], multiplier)
+		hasFraction = true
+	} else if count > maxLen {
+		return invalid()
+	}
+
+	vals := make([]int64, 0, maxLen)
+	for i := 0; i < prefixCount; i++ {
+		field, fieldErr := intervalFieldValue(s, fields[i])
+		if fieldErr != nil {
+			return 0, IntervalTypeInvalid, fieldErr
+		}
+		vals = append(vals, field)
+	}
+	if hasFraction {
+		if microsecondFields {
+			vals = append(vals, fractional)
+		} else if maxLen == 1 {
+			whole := vals[0]
+			if whole > (math.MaxInt64-fractional)/multiplier {
+				return invalid()
 			}
-			frac, parseErr := strconv.ParseInt(fracText[:fracDigits], 10, 64)
-			if parseErr != nil {
-				return 0, IntervalTypeInvalid, moerr.NewInvalidInputNoCtxf("invalid time interval value '%s'", s)
+			value := whole*multiplier + fractional
+			if negative {
+				value = -value
 			}
-			for i := fracDigits; i < 6; i++ {
-				frac *= 10
+			return value, MicroSecond, nil
+		} else {
+			last := len(vals) - 1
+			if vals[last] > (math.MaxInt64-fractional)/MicroSecsPerSec {
+				return invalid()
 			}
-			sign := int64(1)
-			if vals[len(vals)-2] < 0 || strings.HasPrefix(strings.TrimSpace(s), "-") {
-				sign = -1
-			}
-			whole := vals[len(vals)-2]
-			if whole < 0 {
-				if whole == math.MinInt64 {
-					return 0, IntervalTypeInvalid, moerr.NewInvalidInputNoCtxf("invalid time interval value '%s'", s)
-				}
-				whole = -whole
-			}
-			if whole > (math.MaxInt64-frac)/MicroSecsPerSec {
-				return 0, IntervalTypeInvalid, moerr.NewInvalidInputNoCtxf("invalid time interval value '%s'", s)
-			}
-			vals = vals[:len(vals)-1]
-			vals[len(vals)-1] = sign * (whole*MicroSecsPerSec + frac)
-			switch it {
-			case Second, Minute, Hour, Day:
-				multiplier := int64(1)
-				switch it {
-				case Minute:
-					multiplier = SecsPerMinute
-				case Hour:
-					multiplier = SecsPerHour
-				case Day:
-					multiplier = SecsPerDay
-				}
-				return conv([]int64{vals[len(vals)-1]}, []int64{multiplier}, MicroSecond)
-			case Minute_Second:
-				return conv(vals, []int64{60 * MicroSecsPerSec, 1}, MicroSecond)
-			case Hour_Second:
-				return conv(vals, []int64{60, 60 * MicroSecsPerSec, 1}, MicroSecond)
-			case Day_Second:
-				return conv(vals, []int64{24, 60, 60 * MicroSecsPerSec, 1}, MicroSecond)
-			}
+			vals[last] = vals[last]*MicroSecsPerSec + fractional
+		}
+	}
+	// As in the existing interval grammar, a leading minus negates every field.
+	// Keep the lexical sign separately so -0.0000005 can round to -1 microsecond.
+	if negative {
+		for i := range vals {
+			vals[i] = -vals[i]
 		}
 	}
 
@@ -295,7 +292,7 @@ func NormalizeInterval(s string, it IntervalType) (ret int64, rettype IntervalTy
 	//   If we have 2 values, the first is the second-to-last unit (e.g., second for day_microsecond),
 	//   and the last is the microsecond part.
 	// - For other types, pad from the left (missing higher-order units default to 0)
-	typeMaxLen := typeMaxLength(it)
+	typeMaxLen := maxLen
 	if len(vals) < typeMaxLen && typeMaxLen > 1 {
 		padded := make([]int64, typeMaxLen)
 		if isxxxMicrosecondType(it) {
@@ -331,13 +328,21 @@ func NormalizeInterval(s string, it IntervalType) (ret int64, rettype IntervalTy
 		ret, rettype, err = conv(vals, []int64{60, 1000000, 1}, MicroSecond)
 
 	case Minute_Second:
-		ret, rettype, err = conv(vals, []int64{60, 1}, Second)
+		if hasFraction {
+			ret, rettype, err = conv(vals, []int64{60 * MicroSecsPerSec, 1}, MicroSecond)
+		} else {
+			ret, rettype, err = conv(vals, []int64{60, 1}, Second)
+		}
 
 	case Hour_MicroSecond:
 		ret, rettype, err = conv(vals, []int64{60, 60, 1000000, 1}, MicroSecond)
 
 	case Hour_Second:
-		ret, rettype, err = conv(vals, []int64{60, 60, 1}, Second)
+		if hasFraction {
+			ret, rettype, err = conv(vals, []int64{60, 60 * MicroSecsPerSec, 1}, MicroSecond)
+		} else {
+			ret, rettype, err = conv(vals, []int64{60, 60, 1}, Second)
+		}
 
 	case Hour_Minute:
 		ret, rettype, err = conv(vals, []int64{60, 1}, Minute)
@@ -346,7 +351,11 @@ func NormalizeInterval(s string, it IntervalType) (ret int64, rettype IntervalTy
 		ret, rettype, err = conv(vals, []int64{24, 60, 60, 1000000, 1}, MicroSecond)
 
 	case Day_Second:
-		ret, rettype, err = conv(vals, []int64{24, 60, 60, 1}, Second)
+		if hasFraction {
+			ret, rettype, err = conv(vals, []int64{24, 60, 60 * MicroSecsPerSec, 1}, MicroSecond)
+		} else {
+			ret, rettype, err = conv(vals, []int64{24, 60, 60, 1}, Second)
+		}
 
 	case Day_Minute:
 		ret, rettype, err = conv(vals, []int64{24, 60, 1}, Minute)

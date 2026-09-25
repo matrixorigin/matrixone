@@ -10078,11 +10078,22 @@ func resetDateFunctionArgs(ctx context.Context, dateExpr *Expr, intervalExpr *Ex
 				int32(types.T_uint8), int32(types.T_uint16), int32(types.T_uint32), int32(types.T_uint64),
 				int32(types.T_float32), int32(types.T_float64), int32(types.T_decimal64), int32(types.T_decimal128),
 				int32(types.T_any):
+				// A DECIMAL's declared scale is formatting, not part of its
+				// numeric value. Compound VARCHAR intervals, in contrast, use
+				// field width as grammar. Keep that distinction at this boundary.
+				trimDecimalScale := (firstExpr.Typ.Id == int32(types.T_decimal64) ||
+					firstExpr.Typ.Id == int32(types.T_decimal128)) && firstExpr.Typ.Scale > 0
 				firstExpr, err = appendCastBeforeExpr(ctx, firstExpr, plan.Type{
 					Id: int32(types.T_varchar), Width: types.MaxVarcharLen,
 				})
 				if err != nil {
 					return nil, err
+				}
+				if trimDecimalScale {
+					firstExpr, err = trimCompoundDecimalScale(ctx, firstExpr)
+					if err != nil {
+						return nil, err
+					}
 				}
 			}
 		}
@@ -10241,6 +10252,21 @@ func resetDateFunctionArgs(ctx context.Context, dateExpr *Expr, intervalExpr *Ex
 		numberExpr,
 		makePlan2Int64ConstExprWithType(int64(intervalType)),
 	}, nil
+}
+
+func trimCompoundDecimalScale(ctx context.Context, expr *Expr) (*Expr, error) {
+	for _, suffix := range []string{"0", "."} {
+		var err error
+		expr, err = BindFuncExprImplByPlanExpr(ctx, "trim", []*Expr{
+			makePlan2StringConstExprWithType("trailing"),
+			makePlan2StringConstExprWithType(suffix),
+			expr,
+		})
+		if err != nil {
+			return nil, err
+		}
+	}
+	return expr, nil
 }
 
 // bindStringIntervalExpr keeps VARCHAR/CHAR/TEXT interval semantics identical for

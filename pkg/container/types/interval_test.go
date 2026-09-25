@@ -16,6 +16,7 @@ package types
 
 import (
 	"math"
+	"math/big"
 	"testing"
 
 	"github.com/stretchr/testify/require"
@@ -241,6 +242,14 @@ func TestNormalizeIntervalCompositeSecondsWithFraction(t *testing.T) {
 		{"hour_second", Hour_Second, "1:02:03.500000", (3723 * MicroSecsPerSec) + 500000},
 		{"day_second", Day_Second, "1 02:03:04.500000", (93784 * MicroSecsPerSec) + 500000},
 		{"negative_day_second", Day_Second, "-1 02:03:04.500000", -((93784 * MicroSecsPerSec) + 500000)},
+		{"second_microsecond_seven_digits", Second_MicroSecond, "1.5000000", 1500000},
+		{"second_microsecond_scale_38", Second_MicroSecond, "1.50000000000000000000000000000000000000", 1500000},
+		{"second_microsecond_trailing_space", Second_MicroSecond, "1.5 ", 1500000},
+		{"second_microsecond_round_tie", Second_MicroSecond, "1.1234565", 1123457},
+		{"negative_second_microsecond_round_tie", Second_MicroSecond, "-1.1234565", -1123457},
+		{"second_microsecond_carry", Second_MicroSecond, "1.9999999", 2000000},
+		{"hour_second_trailing_space", Hour_Second, "1:02:03.4 ", 3723400000},
+		{"hour_second_round_tie", Hour_Second, "1:02:03.1234565", 3723123457},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			got, typ, err := NormalizeInterval(tc.text, tc.unit)
@@ -261,6 +270,18 @@ func TestNormalizeIntervalSimpleSecondsWithFraction(t *testing.T) {
 		{Minute, "1.5", 90000000},
 		{Hour, "1.5", 5400000000},
 		{Day, "1.5", 129600000000},
+		{Hour, "0.0000009", 3240},
+		{Hour, "-0.0000009", -3240},
+		{Minute, "0.0000005", 30},
+		{Day, "0.0000005", 43200},
+		{Second, "0.0000004", 0},
+		{Second, "0.0000005", 1},
+		{Second, "-0.0000005", -1},
+		{Second, "0.0000006", 1},
+		{Hour, " 1.5 ", 5400000000},
+		{Hour, "0.0000000002", 1},
+		{Hour, "0.0000000001", 0},
+		{Hour, "0000000000000000000000000000000000000001.5", 5400000000},
 	} {
 		got, typ, err := NormalizeInterval(tc.text, tc.unit)
 		require.NoError(t, err)
@@ -269,7 +290,78 @@ func TestNormalizeIntervalSimpleSecondsWithFraction(t *testing.T) {
 	}
 }
 
+// Use exact rational arithmetic as an oracle for the final microsecond value.
+// This is independent of the production digit-by-digit conversion.
+func TestNormalizeIntervalFractionPrecisionAgainstRational(t *testing.T) {
+	fractions := []string{
+		"0", "1", "4", "5", "9", "0000004", "0000005", "0000009",
+		"1234564", "1234565", "9999999", "0000000001", "0000000002",
+		"50000000000000000000000000000000000000",
+	}
+	for _, unit := range []struct {
+		typeOf     IntervalType
+		multiplier int64
+	}{
+		{Second, MicroSecsPerSec},
+		{Minute, MicroSecsPerSec * SecsPerMinute},
+		{Hour, MicroSecsPerSec * SecsPerHour},
+		{Day, MicroSecsPerSec * SecsPerDay},
+	} {
+		for _, fraction := range fractions {
+			for _, sign := range []string{"", "-"} {
+				input := sign + "0." + fraction
+				rational, ok := new(big.Rat).SetString(input)
+				require.True(t, ok)
+				rational.Mul(rational, new(big.Rat).SetInt64(unit.multiplier))
+				value, remainder := new(big.Int).QuoRem(
+					new(big.Int).Abs(rational.Num()), rational.Denom(), new(big.Int))
+				if new(big.Int).Lsh(remainder, 1).Cmp(rational.Denom()) >= 0 {
+					value.Add(value, big.NewInt(1))
+				}
+				if rational.Sign() < 0 {
+					value.Neg(value)
+				}
+				require.True(t, value.IsInt64())
+				got, gotUnit, err := NormalizeInterval(input, unit.typeOf)
+				require.NoError(t, err, input)
+				require.Equal(t, MicroSecond, gotUnit, input)
+				require.Equal(t, value.Int64(), got, "%s %s", input, unit.typeOf)
+			}
+		}
+	}
+}
+
+var benchmarkIntervalResult int64
+
+func BenchmarkNormalizeIntervalInputClasses(b *testing.B) {
+	for _, tc := range []struct {
+		name  string
+		value string
+		unit  IntervalType
+	}{
+		{"integer", "1", Hour},
+		{"ordinary_fraction", "1.5", Hour},
+		{"seven_digits", "0.0000009", Hour},
+		{"long_fraction", "0.50000000000000000000000000000000000000", Hour},
+		{"compound", "1:02:03.5", Hour_Second},
+	} {
+		b.Run(tc.name, func(b *testing.B) {
+			b.ReportAllocs()
+			for i := 0; i < b.N; i++ {
+				value, _, err := NormalizeInterval(tc.value, tc.unit)
+				if err != nil {
+					b.Fatal(err)
+				}
+				benchmarkIntervalResult = value
+			}
+		})
+	}
+}
+
 func TestNormalizeIntervalRejectsArithmeticWrap(t *testing.T) {
+	_, _, err := NormalizeInterval("1.1234567junk", Second)
+	require.Error(t, err, "fractional suffix junk must not be silently ignored")
+
 	value, unit, err := NormalizeInterval("106751991.167300", Day)
 	require.NoError(t, err)
 	require.Equal(t, MicroSecond, unit)

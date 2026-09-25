@@ -50,6 +50,15 @@ func TestCalendarCandidateCompactDurationBoundary(t *testing.T) {
 		{"2024.2.29", true},
 		{"2024@2@29", true},
 		{"1234.5", false},
+		{"1-1-1", true},
+		{"24-2-29", true},
+		{"123-2-3", true},
+		{"24/2/29", true},
+		{"24.2.29", true},
+		{"24@2@29", true},
+		{"24-2-30", true},   // Invalid calendar spellings must not fall back to TIME.
+		{"10:11:12", false}, // An ordinary clock wins over a two-digit year.
+		{"12:99:00", false}, // An invalid clock must not become a calendar.
 	} {
 		t.Run(tc.input, func(t *testing.T) {
 			require.Equal(t, tc.calendar, IsCalendarStringCandidate(tc.input))

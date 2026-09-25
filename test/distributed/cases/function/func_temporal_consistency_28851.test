@@ -163,6 +163,44 @@ select date_add(cast('12:00:00' as time), interval n second_microsecond) =
 from temporal_compound_units where n = 1;
 drop table temporal_compound_units;
 
+-- Short separated years retain MatrixOne's calendar precedence. Colon clocks
+-- and calendar values in the duration-only operand remain separate controls.
+select addtime('24-2-29', '00:00:01') = '2024-02-29 00:00:01' as short_year_calendar,
+       addtime('10:11:12', '00:00:01') = '10:11:13' as colon_clock,
+       addtime('00:00:01', '24-2-29') is null as calendar_duration_rejected,
+       addtime('24-2-30', '00:00:01') is null as invalid_short_calendar;
+select timediff('24-2-29', '24-2-28') = cast('24:00:00' as time) as short_year_difference;
+
+-- Fractional intervals round after converting their original unit to final
+-- microseconds. Whitespace and decimal scale do not change an exact value.
+select date_add(time '12:00:00', interval '0.0000009' hour) = cast('12:00:00.003240' as time(6)) as tiny_hour,
+       date_add(time '12:00:00', interval '-0.0000009' hour) = cast('11:59:59.996760' as time(6)) as negative_tiny_hour,
+       date_add(time '12:00:00', interval '0.0000005' minute) = cast('12:00:00.000030' as time(6)) as tiny_minute;
+select date_add(time '12:00:00', interval '1:02:03.4 ' hour_second) = cast('13:02:03.4' as time(6)) as padded_hour_second,
+       date_add(time '12:00:00', interval '1.5 ' second_microsecond) = cast('12:00:01.5' as time(6)) as padded_second_microsecond,
+       date_add(time '12:00:00', interval '1.9999999' second_microsecond) = cast('12:00:02' as time(6)) as rounded_second;
+create table temporal_decimal_intervals(n decimal(12,7));
+insert into temporal_decimal_intervals values (1.5000000), (-1.5000000);
+select date_add(time '12:00:00', interval n second_microsecond) = cast('12:00:01.5' as time(6)) as positive_decimal
+from temporal_decimal_intervals where n > 0;
+select date_add(time '12:00:00', interval n second_microsecond) = cast('11:59:58.5' as time(6)) as negative_decimal
+from temporal_decimal_intervals where n < 0;
+-- DECIMAL scale padding is formatting; VARCHAR field width remains grammar.
+select date_add(time '12:00:00', interval n minute_second) = cast('12:01:05' as time(6)) as numeric_minute_second,
+       date_add(time '12:00:00', interval n hour_second) = cast('12:01:05' as time(6)) as numeric_hour_second,
+       date_add(time '12:00:00', interval n hour_minute) = cast('13:05:00' as time(6)) as numeric_hour_minute
+from temporal_decimal_intervals where n > 0;
+select date_add(time '12:00:00', interval n minute_second) = cast('11:58:55' as time(6)) as negative_minute_second,
+       date_add(time '12:00:00', interval n hour_minute) = cast('10:55:00' as time(6)) as negative_hour_minute
+from temporal_decimal_intervals where n < 0;
+select timestampdiff(second, '2024-01-01 00:00:00',
+       date_add('2024-01-01 00:00:00', interval '1.5000000' minute_second)) = 5000060 as string_width_control;
+select date_add(time '12:00:00', interval cast(1.0000000 as decimal(12,7)) second_microsecond) =
+         date_add(time '12:00:00', interval 1 second_microsecond) as decimal_integer_microsecond,
+       date_add(time '12:00:00', interval cast(1.0000000 as decimal(12,7)) minute_second) =
+         date_add(time '12:00:00', interval 1 minute_second) as decimal_integer_minute_second;
+drop table temporal_decimal_intervals;
+
 create table week_dates(d date);
 insert into week_dates values ('2021-01-01');
 set default_week_format = 3;
