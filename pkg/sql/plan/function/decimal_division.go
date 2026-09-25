@@ -74,7 +74,7 @@ func exactDivisionOperandType(source, effective types.Type) (precision, scale in
 		return integerDecimalDigits(source.Oid), 0, true
 	case source.Oid == types.T_bit:
 		return integerDecimalDigits(source.Oid), 0, true
-	case source.Oid == types.T_any && effective.Oid.IsDecimal():
+	case (source.Oid == types.T_any || source.Oid.IsDateRelate()) && effective.Oid.IsDecimal():
 		precision = effective.Width
 		if precision <= 0 {
 			precision = decimalStorageWidth(effective.Oid)

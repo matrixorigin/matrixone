@@ -110,6 +110,38 @@ func TestDivisionSQLBoundaries(t *testing.T) {
 		wantError bool
 	}{
 		{
+			name: "promoted negative divisor", increment: 4,
+			sql: "select cast('18446744073709551616' as decimal(38,0)) / " +
+				"cast('-18446744073709551616' as decimal(20,0))",
+			width: 42, scale: 4, want: "-1.0000",
+		},
+		{
+			name: "maximum inline divisor", increment: 4,
+			sql: "select cast('18446744073709551615' as decimal(38,0)) / " +
+				"cast('18446744073709551615' as decimal(20,0))",
+			width: 42, scale: 4, want: "1.0000",
+		},
+		{
+			name: "time numerator increment zero", increment: 0,
+			sql:   "select cast('00:00:01.000' as time(3)) / cast(3 as decimal(10,0))",
+			width: 18, scale: 3, want: "0.333",
+		},
+		{
+			name: "time numerator increment ten", increment: 10,
+			sql:   "select cast('00:00:01.000' as time(3)) / cast(3 as decimal(10,0))",
+			width: 28, scale: 13, want: "0.3333333333333",
+		},
+		{
+			name: "time numerator promoted", increment: 30,
+			sql:   "select cast('00:00:01.000' as time(3)) / cast(3 as decimal(10,0))",
+			width: 48, scale: 30, want: "0.333333333333333333333333333333",
+		},
+		{
+			name: "time divisor increment ten", increment: 10,
+			sql:   "select cast(1 as decimal(10,2)) / cast('00:00:03' as time)",
+			width: 20, scale: 12, want: "0.333333333333",
+		},
+		{
 			name:      "shifted numerator",
 			increment: 30,
 			sql: "select cast('3" + strings.Repeat("0", 46) + "' as decimal(47,0)) / " +

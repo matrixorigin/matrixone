@@ -2787,6 +2787,75 @@ func TestD256DivViaD128PreservesWideQuotient(t *testing.T) {
 	require.Error(t, err)
 }
 
+func TestD256DivViaD128NegativePowerOfTwoDivisor(t *testing.T) {
+	const numerator = "18446744073709551616"
+	for _, tc := range []struct {
+		divisor     string
+		quotient    string
+		intQuotient int64
+	}{
+		{"-18446744073709551615", "-1.0000", -1},
+		{"-18446744073709551616", "-1.0000", -1},
+		{"-18446744073709551617", "-1.0000", 0},
+	} {
+		x, err := types.ParseDecimal256(numerator, 65, 0)
+		require.NoError(t, err)
+		y, err := types.ParseDecimal256(tc.divisor, 65, 0)
+		require.NoError(t, err)
+		for _, shape := range []struct {
+			name        string
+			left, right []types.Decimal256
+		}{
+			{"vector/vector", []types.Decimal256{x, x}, []types.Decimal256{y, y}},
+			{"constant/vector", []types.Decimal256{x}, []types.Decimal256{y, y}},
+			{"vector/constant", []types.Decimal256{x, x}, []types.Decimal256{y}},
+		} {
+			t.Run(tc.divisor+"/"+shape.name, func(t *testing.T) {
+				result := make([]types.Decimal256, 2)
+				require.NoError(t, d256DivAtScale(shape.left, shape.right, result, 0, 0, 4, nulls.NewWithSize(2), true))
+				for _, got := range result {
+					require.Equal(t, tc.quotient, got.Format(4))
+				}
+				integers := make([]int64, 2)
+				require.NoError(t, d256IntDiv(shape.left, shape.right, integers, 0, 0, nulls.NewWithSize(2), true))
+				require.Equal(t, []int64{tc.intQuotient, tc.intQuotient}, integers)
+			})
+		}
+	}
+}
+
+func TestDecimalDivisionMaxUint64Rounding(t *testing.T) {
+	const divisor = "18446744073709551615"
+	for _, tc := range []struct {
+		numerator string
+		want      string
+	}{
+		{"0", "0"},
+		{"1", "0"},
+		{"9223372036854775807", "0"},
+		{"9223372036854775808", "1"},
+		{divisor, "1"},
+		{"18446744073709551616", "1"},
+	} {
+		for _, negative := range []bool{false, true} {
+			xText, yText, want := tc.numerator, divisor, tc.want
+			if negative {
+				yText = "-" + yText
+				if want != "0" {
+					want = "-" + want
+				}
+			}
+			x, err := types.ParseDecimal128(xText, 38, 0)
+			require.NoError(t, err)
+			y, err := types.ParseDecimal128(yText, 38, 0)
+			require.NoError(t, err)
+			got := make([]types.Decimal128, 1)
+			require.NoError(t, d128DivAtScale([]types.Decimal128{x}, []types.Decimal128{y}, got, 0, 0, 0, nulls.NewWithSize(1), true))
+			require.Equal(t, want, got[0].Format(0), "numerator=%s divisor=%s", xText, yText)
+		}
+	}
+}
+
 func TestD256DivViaD128AvoidsIntermediateScaleOverflow(t *testing.T) {
 	left, err := types.ParseDecimal256("100000000000000000000", 38, 0)
 	require.NoError(t, err)

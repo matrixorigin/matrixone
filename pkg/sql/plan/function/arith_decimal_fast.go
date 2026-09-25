@@ -1150,7 +1150,7 @@ func d128DivInline(x types.Decimal128, absY64 uint64, signy uint64,
 	zHi, rem = bits.Div64(0, zHi, absY64)
 	zLo, rem = bits.Div64(rem, zLo, absY64)
 	// Branchless round half-up: round = 1 iff rem >= ceil(absY64/2).
-	_, borrow := bits.Sub64(rem, (absY64+1)>>1, 0)
+	_, borrow := bits.Sub64(rem, (absY64>>1)+(absY64&1), 0)
 	round := 1 - borrow
 	zLo, c2 := bits.Add64(zLo, round, 0)
 	zHi += c2
@@ -1549,15 +1549,16 @@ func d128AllFitInt64(vs []types.Decimal128, n int) bool {
 // excluding the degenerate {B0_63=0, B64_127=^0} = -2^64 whose abs is 2^64 > uint64 max.
 func d128AllAbsFit64(vs []types.Decimal128, n int) bool {
 	for i := 0; i < n; i++ {
-		h := vs[i].B64_127
-		if h+1 > 1 {
-			return false // h is neither 0 nor ^0
-		}
-		if h>>63 != 0 && vs[i].B0_63 == 0 {
-			return false // -2^64: abs doesn't fit
+		if !d128AbsFits64(vs[i]) {
+			return false
 		}
 	}
 	return true
+}
+
+func d128AbsFits64(v types.Decimal128) bool {
+	return v.B64_127 == 0 ||
+		(v.B64_127 == ^uint64(0) && v.B0_63 != 0)
 }
 
 // d128ModSameScale handles same-scale D128 modulo with inline 128-bit mod.
@@ -3281,6 +3282,16 @@ func d256AllFitD128(vs []types.Decimal256) bool {
 	return overflow == 0
 }
 
+// The caller has already proved every value is a sign-extended D128.
+func d256NarrowAllAbsFit64(vs []types.Decimal256) bool {
+	for _, v := range vs {
+		if !d128AbsFits64(types.Decimal128{B0_63: v.B0_63, B64_127: v.B64_127}) {
+			return false
+		}
+	}
+	return true
+}
+
 func d256Div(v1, v2, rs []types.Decimal256, scale1, scale2 int32, rsnull *nulls.Nulls, shouldError bool) error {
 	return d256DivAtScale(v1, v2, rs, scale1, scale2, legacyDecimalDivisionScale(scale1), rsnull, shouldError)
 }
@@ -3475,17 +3486,8 @@ func d256DivViaD128(v1, v2 []types.Decimal256, rs []types.Decimal256, scaleAdj i
 		scaleFactor = types.Pow10[scaleAdj]
 	}
 
-	// Branchless prescan: check if all D256 divisors (narrowed to D128) fit in 64 bits.
-	d256DivFit64 := func(vs []types.Decimal256) bool {
-		var acc uint64
-		for i := range vs {
-			acc |= vs[i].B64_127 + 1
-		}
-		return acc <= 1
-	}
-
 	if len1 == len2 {
-		if canInline && d256DivFit64(v2) {
+		if canInline && d256NarrowAllAbsFit64(v2) {
 			for i := 0; i < len1; i++ {
 				if hasNull && bmp.Contains(uint64(i)) {
 					continue
@@ -3528,7 +3530,7 @@ func d256DivViaD128(v1, v2 []types.Decimal256, rs []types.Decimal256, scaleAdj i
 		}
 	} else if len1 == 1 {
 		x := d256toD128(v1[0])
-		if canInline && d256DivFit64(v2) {
+		if canInline && d256NarrowAllAbsFit64(v2) {
 			for i := 0; i < len2; i++ {
 				if hasNull && bmp.Contains(uint64(i)) {
 					continue
@@ -4100,15 +4102,6 @@ func d256IntDivViaD128(v1, v2 []types.Decimal256, rs []int64, scale, scaleAdj in
 		scaleFactor = types.Pow10[scaleAdj]
 	}
 
-	// Branchless prescan: check if all D256 divisors (narrowed to D128) fit in 64 bits.
-	d256DivFit64 := func(vs []types.Decimal256, n int) bool {
-		var acc uint64
-		for i := 0; i < n; i++ {
-			acc |= vs[i].B64_127 + 1
-		}
-		return acc <= 1
-	}
-
 	divOneFallback := func(x, y types.Decimal128, dst *int64, idx uint64) error {
 		var divResult types.Decimal128
 		if err := d128IntDivOne(x, y, &divResult, scaleAdj, rsnull, idx, shouldError, scale1, scale2); err != nil {
@@ -4120,7 +4113,7 @@ func d256IntDivViaD128(v1, v2 []types.Decimal256, rs []int64, scale, scaleAdj in
 	}
 
 	if len1 == len2 {
-		if canInline && d256DivFit64(v2, len2) {
+		if canInline && d256NarrowAllAbsFit64(v2) {
 			for i := 0; i < len1; i++ {
 				if hasNull && bmp.Contains(uint64(i)) {
 					continue
@@ -4167,7 +4160,7 @@ func d256IntDivViaD128(v1, v2 []types.Decimal256, rs []int64, scale, scaleAdj in
 		}
 	} else if len1 == 1 {
 		x := d256toD128(v1[0])
-		if canInline && d256DivFit64(v2, len2) {
+		if canInline && d256NarrowAllAbsFit64(v2) {
 			for i := 0; i < len2; i++ {
 				if hasNull && bmp.Contains(uint64(i)) {
 					continue

@@ -95,4 +95,34 @@ execute div_precision_stmt;
 0.333333333333333333333333333333
 deallocate prepare div_precision_stmt;
 set session div_precision_increment = 4;
+select cast('18446744073709551616' as decimal(38,0)) /
+cast('-18446744073709551616' as decimal(20,0)) as q;
+➤ q[3,42,4]  𝄀
+-1.0000
+select cast('18446744073709551615' as decimal(38,0)) /
+cast('18446744073709551615' as decimal(20,0)) as q;
+➤ q[3,42,4]  𝄀
+1.0000
+set session div_precision_increment = 0;
+select cast('00:00:01.000' as time(3)) / cast(3 as decimal(10,0)) as q;
+➤ q[3,18,3]  𝄀
+0.333
+set session div_precision_increment = 10;
+select cast('00:00:01.000' as time(3)) / cast(3 as decimal(10,0)) as q;
+➤ q[3,28,13]  𝄀
+0.3333333333333
+select cast(1 as decimal(10,2)) / cast('00:00:03' as time) as q;
+➤ q[3,20,12]  𝄀
+0.333333333333
+prepare temporal_div_stmt from
+'select cast(''00:00:01.000'' as time(3)) / cast(3 as decimal(10,0)) as q';
+execute temporal_div_stmt;
+➤ q[3,28,13]  𝄀
+0.3333333333333
+set session div_precision_increment = 30;
+execute temporal_div_stmt;
+➤ q[3,48,30]  𝄀
+0.333333333333333333333333333333
+deallocate prepare temporal_div_stmt;
+set session div_precision_increment = 4;
 drop database issue_28594_div_precision;
