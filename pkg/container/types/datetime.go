@@ -105,6 +105,25 @@ func (dt Datetime) String2(scale int32) string {
 // separators; this keeps compact TIME fractions such as 1234.5 as durations.
 // Compact dates and datetimes have exactly eight and fourteen digits.
 func IsCalendarStringCandidate(s string) bool {
+	// Short separated years are accepted by ParseDateCast. The ordinary
+	// hh:mm:ss spelling is also accepted there as a two-digit year, but is
+	// a duration in temporal arithmetic. Recognize the date structure
+	// without validating it so an invalid date cannot fall back to TIME.
+	for yearLen := 1; yearLen <= 3 && yearLen+3 < len(s); yearLen++ {
+		if !isAllDigit(s[:yearLen]) || !isDateDelimiter(s[yearLen]) {
+			continue
+		}
+		for monthLen := 1; monthLen <= 2; monthLen++ {
+			second := yearLen + 1 + monthLen
+			if second >= len(s) {
+				break
+			}
+			if isAllDigit(s[yearLen+1:second]) && isDateDelimiter(s[second]) &&
+				!(s[yearLen] == ':' && s[second] == ':') {
+				return true
+			}
+		}
+	}
 	if len(s) >= 5 && isAllDigit(s[:4]) && isDateDelimiter(s[4]) {
 		for second := 6; second <= 7 && second < len(s); second++ {
 			if isAllDigit(s[5:second]) && isDateDelimiter(s[second]) {

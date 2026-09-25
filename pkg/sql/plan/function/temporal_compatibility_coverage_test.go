@@ -699,6 +699,33 @@ func TestTemporalCompatibilityAdditionalHelperBranches(t *testing.T) {
 func TestTemporalCompatibilityCompactOperandMatrix(t *testing.T) {
 	for _, tc := range []struct {
 		input string
+		want  string
+	}{
+		{"1-1-1", "0001-01-01 00:00:00"},
+		{"24-2-29", "2024-02-29 00:00:00"},
+		{"123-2-3", "0123-02-03 00:00:00"},
+		{"69-1-1", "2069-01-01 00:00:00"},
+		{"70-1-1", "1970-01-01 00:00:00"},
+		{"24/2/29", "2024-02-29 00:00:00"},
+	} {
+		t.Run("short-calendar/"+tc.input, func(t *testing.T) {
+			dt, _, kind, err := parseTemporalString(tc.input, 6)
+			require.NoError(t, err)
+			require.Equal(t, temporalStringDateTime, kind)
+			require.Equal(t, tc.want, dt.String2(0))
+			_, err = parseTimeOperand(tc.input, 6)
+			require.Error(t, err)
+		})
+	}
+	for _, clock := range []string{"10:11:12", "01:02:03"} {
+		t.Run("clock/"+clock, func(t *testing.T) {
+			_, _, kind, err := parseTemporalString(clock, 6)
+			require.NoError(t, err)
+			require.Equal(t, temporalStringTime, kind)
+		})
+	}
+	for _, tc := range []struct {
+		input string
 		kind  temporalStringKind
 		want  types.Time
 	}{
@@ -735,7 +762,7 @@ func TestTemporalCompatibilityCompactOperandMatrix(t *testing.T) {
 		})
 	}
 	for _, input := range []string{
-		"20240230", "00000000001234", "2024-2-30 12:34:56",
+		"20240230", "00000000001234", "2024-2-30 12:34:56", "24-2-30",
 		"00001234.bad", "00001299", "00008360",
 	} {
 		t.Run("invalid/"+input, func(t *testing.T) {
