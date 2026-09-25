@@ -323,8 +323,13 @@ var RecordStatement = func(ctx context.Context, ses *Session, proc *process.Proc
 	stm.User = tenant.GetUser()
 	stm.Host = ses.respr.GetStr(PEER)
 	stm.Database = ses.respr.GetStr(DBNAME)
-	stm.StatementFingerprint = "" // fixme= (Reserved)
-	stm.StatementTag = ""         // fixme= (Reserved)
+	if fingerprint, ok := cw.(interface {
+		getStatementFingerprint() string
+		statementFingerprintWasAttempted() bool
+	}); ok && fingerprint.statementFingerprintWasAttempted() {
+		stm.StatementFingerprint = fingerprint.getStatementFingerprint()
+	}
+	stm.StatementTag = "" // fixme= (Reserved)
 	stm.SqlSourceType = sqlType
 	stm.RequestAt = requestAt
 	stm.StatementType = getStatementType(statement).GetStatementType()
@@ -2821,6 +2826,10 @@ func createPrepareStmtInSession(
 	originSQL string,
 	stmt tree.Statement,
 	saveStmt tree.Statement) (*PrepareStmt, error) {
+	// Keep the template fingerprint separate from the AST: planning and later
+	// prepared execution are allowed to mutate or reuse the tree.
+	statementFingerprint, statementFingerprintAttempted :=
+		formatStatementFingerprint(execCtx.reqCtx, saveStmt)
 	// A preceding statement may have run nested/background SQL and left the
 	// compiler context pointing at a temporary ExecCtx that has already been
 	// closed. PREPARE plans synchronously against the current request context.
@@ -2900,23 +2909,25 @@ func createPrepareStmtInSession(
 	fixedIntegerParamPositions, hasPaginationParams, hasLagLeadParams :=
 		preparedFixedIntegerParamPositions(prepareControl.Plan)
 	prepareStmt := &PrepareStmt{
-		groupConcatMaxLenFloor: groupConcatFloor,
-		Name:                   preparePlan.GetDcl().GetPrepare().GetName(),
-		Sql:                    originSQL,
-		compile:                comp,
-		PreparePlan:            preparePlan,
-		PrepareStmt:            saveStmt,
-		NativeMode:             owner.sqlModeHasMatrixOneNative(),
-		OnlyFullGroupBy:        owner.sqlModeHasOnlyFullGroupBy(),
-		BoolSumAvg:             owner.sqlModeHasEnableBoolSumAvg(),
-		NoUnsignedSubtraction:  owner.sqlModeHasNoUnsignedSubtraction(),
-		sqlModeFlagsSet:        true,
-		remapDb:                maps.Clone(execCtx.remapDb),
-		defaultDatabase:        executionSes.GetTxnCompileCtx().GetDatabase(),
-		tempTableVersion:       owner.GetTempTableVersion(),
-		ddlVersion:             owner.getDDLVersion(),
-		cloneSQL:               cloneSQL,
-		protocolVersion:        protocolVersion,
+		groupConcatMaxLenFloor:        groupConcatFloor,
+		Name:                          preparePlan.GetDcl().GetPrepare().GetName(),
+		Sql:                           originSQL,
+		statementFingerprint:          statementFingerprint,
+		statementFingerprintAttempted: statementFingerprintAttempted,
+		compile:                       comp,
+		PreparePlan:                   preparePlan,
+		PrepareStmt:                   saveStmt,
+		NativeMode:                    owner.sqlModeHasMatrixOneNative(),
+		OnlyFullGroupBy:               owner.sqlModeHasOnlyFullGroupBy(),
+		BoolSumAvg:                    owner.sqlModeHasEnableBoolSumAvg(),
+		NoUnsignedSubtraction:         owner.sqlModeHasNoUnsignedSubtraction(),
+		sqlModeFlagsSet:               true,
+		remapDb:                       maps.Clone(execCtx.remapDb),
+		defaultDatabase:               executionSes.GetTxnCompileCtx().GetDatabase(),
+		tempTableVersion:              owner.GetTempTableVersion(),
+		ddlVersion:                    owner.getDDLVersion(),
+		cloneSQL:                      cloneSQL,
+		protocolVersion:               protocolVersion,
 		numericOverloadParamPositions: plan2.PreparedPlanNumericFallbackParamPositions(
 			prepareControl.Plan),
 		bitCountOverloadParamPositions: plan2.PreparedPlanBitCountFallbackParamPositions(
@@ -4151,6 +4162,22 @@ func cachedPlanForInput(ses *Session, input *UserInput) *cachedPlan {
 		return nil
 	}
 	cached := ses.getCachedPlan(input.getHash())
+	if cached != nil && motrace.GetTracerProvider().IsEnable() {
+		// A cache entry created with tracing disabled lacks an admission-time
+		// fingerprint. Its AST may already have been mutated by planning, so
+		// reparse instead of deriving a late value from that AST.
+		if len(cached.statementFingerprints) != len(cached.stmts) ||
+			len(cached.statementFingerprintAttempted) != len(cached.stmts) {
+			ses.removeCachedPlan(input.getHash())
+			return nil
+		}
+		for _, attempted := range cached.statementFingerprintAttempted {
+			if !attempted {
+				ses.removeCachedPlan(input.getHash())
+				return nil
+			}
+		}
+	}
 	// SELECT ... INTO @var changes the type of a session variable as part of
 	// execution.  A cached SELECT-INTO plan can therefore never be reused: it
 	// may have been bound against the variable's pre-assignment type, and the
@@ -4198,6 +4225,13 @@ var GetComputationWrapper = func(execCtx *ExecCtx, db string, user string, eng e
 			tcw.stmtBorrowed = true
 		}
 		tcw.SetRemapDb(execCtx.input.remapDb)
+		if prepared, getErr := ses.GetPrepareStmt(execCtx.reqCtx, execCtx.input.stmtName); getErr == nil {
+			tcw.setStatementFingerprint(prepared.statementFingerprint, prepared.statementFingerprintAttempted)
+		} else {
+			// A failed prepared lookup is not a fingerprint of the EXECUTE
+			// command's text; keep telemetry explicitly absent.
+			tcw.setStatementFingerprint("", true)
+		}
 		cws = append(cws, tcw)
 		return cws, nil
 	} else if cached := cachedPlanForInput(ses, execCtx.input); cached != nil {
@@ -4230,6 +4264,7 @@ var GetComputationWrapper = func(execCtx *ExecCtx, db string, user string, eng e
 			tcw.setPlanSnapshotTS(cached.planSnapshotTS[i])
 			tcw.planGenerationReused = true
 			tcw.protocolVersion = cached.protocolVersion
+			tcw.setStatementFingerprint(cached.statementFingerprints[i], cached.statementFingerprintAttempted[i])
 			tcw.SetRemapDb(statementRemaps[i])
 			tcw.SetSchedulingSQL(statementSchedulingSQL[i])
 			cws = append(cws, tcw)
@@ -4364,6 +4399,16 @@ var GetComputationWrapper = func(execCtx *ExecCtx, db string, user string, eng e
 		tcw.SetSchedulingSQL(statementSchedulingSQL[i])
 		if len(statementRemaps) == len(stmts) {
 			tcw.SetRemapDb(statementRemaps[i])
+		}
+		if execute, ok := stmt.(*tree.Execute); ok {
+			if prepared, getErr := ses.GetPrepareStmt(execCtx.reqCtx, string(execute.Name)); getErr == nil {
+				tcw.setStatementFingerprint(prepared.statementFingerprint, prepared.statementFingerprintAttempted)
+			} else {
+				tcw.setStatementFingerprint("", true)
+			}
+		} else if motrace.GetTracerProvider().IsEnable() {
+			fingerprint, attempted := formatStatementFingerprint(execCtx.reqCtx, stmt)
+			tcw.setStatementFingerprint(fingerprint, attempted)
 		}
 		cws = append(cws, tcw)
 	}
@@ -5136,6 +5181,36 @@ func effectiveStatementForTxn(
 	}
 }
 
+// refreshPreparedStatementFingerprint resolves a prepared EXECUTE fingerprint
+// at the statement-generation boundary. GetComputationWrapper builds every
+// wrapper in a multi-statement request before any of them execute, so an
+// earlier PREPARE, replacement, or DEALLOCATE in the same request can make the
+// wrapper's initial snapshot stale by the time it is recorded.
+func refreshPreparedStatementFingerprint(ctx context.Context, ses FeSession, cw ComputationWrapper) {
+	txnCW, ok := cw.(*TxnComputationWrapper)
+	if !ok {
+		return
+	}
+	binaryExecute, prepareName := txnCW.BinaryExecute()
+	if !binaryExecute {
+		execute, ok := txnCW.GetAst().(*tree.Execute)
+		if !ok {
+			return
+		}
+		prepareName = string(execute.Name)
+	}
+	prepared, err := ses.GetPrepareStmt(ctx, prepareName)
+	if err != nil || prepared == nil {
+		// Do not let an early wrapper snapshot survive a failed runtime lookup.
+		txnCW.setStatementFingerprint("", true)
+		return
+	}
+	txnCW.setStatementFingerprint(
+		prepared.statementFingerprint,
+		prepared.statementFingerprintAttempted,
+	)
+}
+
 func executeStmtWithWorkspace(ses FeSession,
 	statsArr *statistic.StatsArray,
 	execCtx *ExecCtx,
@@ -5409,6 +5484,14 @@ func rebuildStaleCachedStatements(ses FeSession, execCtx *ExecCtx) (err error) {
 	}
 	for i, cw := range execCtx.cws {
 		cw.ResetPlanAndStmt(stmts[i])
+		if motrace.GetTracerProvider().IsEnable() {
+			if fingerprint, ok := cw.(interface {
+				setStatementFingerprint(string, bool)
+			}); ok {
+				value, attempted := formatStatementFingerprint(execCtx.reqCtx, stmts[i])
+				fingerprint.setStatementFingerprint(value, attempted)
+			}
+		}
 		// ResetPlanAndStmt now owns the replacement AST. Keep the deferred
 		// cleanup responsible only for statements that were not transferred.
 		stmts[i] = nil
@@ -5994,6 +6077,7 @@ func doComQuery(ses *Session, execCtx *ExecCtx, input *UserInput) (retErr error)
 		// capacity comes from the immutable statement context above.
 		refreshStatementScopedSessionInfo(ses, proc)
 		removePrepareStmtForReplacement(ses, stmt)
+		refreshPreparedStatementFingerprint(execCtx.reqCtx, ses, cw)
 		var err2 error
 		execCtx.reqCtx, err2 = RecordStatement(execCtx.reqCtx, ses, proc, cw, beginInstant, currentSQLRecord, sqlType, singleStatement)
 		if err2 != nil {
@@ -6160,18 +6244,25 @@ func doComQuery(ses *Session, execCtx *ExecCtx, input *UserInput) (retErr error)
 
 	plans := make([]*plan.Plan, len(cws))
 	stmts := make([]tree.Statement, len(cws))
+	statementFingerprints := make([]string, len(cws))
+	statementFingerprintAttempted := make([]bool, len(cws))
 	for i, cw := range cws {
 		if checkNodeCanCache(cw.Plan()) {
 			plans[i] = cw.Plan()
 			stmts[i] = cw.GetAst()
+			if tcw, ok := cw.(*TxnComputationWrapper); ok {
+				statementFingerprints[i] = tcw.getStatementFingerprint()
+				statementFingerprintAttempted[i] = tcw.statementFingerprintWasAttempted()
+			}
 		} else {
 			return nil
 		}
 		cw.Clear()
 	}
 	Cached = true
-	ses.cachePlanWithSnapshotsAndStatsVersions(
-		cacheKey, stmts, plans, planSnapshotTS, planStatsVersions, cacheProtocolVersion)
+	ses.cachePlanWithSnapshotsAndStatsVersionsAndFingerprints(
+		cacheKey, stmts, plans, planSnapshotTS, planStatsVersions,
+		statementFingerprints, statementFingerprintAttempted, cacheProtocolVersion)
 
 	return nil
 }

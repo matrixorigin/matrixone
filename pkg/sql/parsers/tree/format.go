@@ -17,6 +17,7 @@ package tree
 import (
 	"fmt"
 	"strings"
+	"unicode/utf8"
 
 	"github.com/matrixorigin/matrixone/pkg/sql/parsers/dialect"
 )
@@ -40,10 +41,18 @@ type FmtCtx struct {
 	// NO_BACKSLASH_ESCAPES.
 	modeIndependentStringLiterals bool
 	paramExprOffset               bool
+	canonicalUserVariableNames    bool
 	detectDateTimeFormat          bool
 	sawDateTimeFormat             bool
 	stringLiteralPositions        *[]StringLiteralPosition
+	maxOutputBytes                int
+	outputLimitExceeded           bool
 }
+
+// formatOutputLimitAbort unwinds an AST traversal when a bounded formatter
+// would emit more than its configured output limit. It is recovered only by
+// FmtCtx.FormatNode; ordinary formatter contexts never raise it.
+type formatOutputLimitAbort struct{}
 
 // StringLiteralPosition identifies the bytes occupied by one string literal
 // in the formatted output. Positions are recorded only when requested by the
@@ -121,6 +130,16 @@ func WithParamExprOffset() FmtCtxOption {
 	})
 }
 
+// WithCanonicalUserVariableNames lowercases user-defined variable names
+// while formatting. MatrixOne resolves those names case-insensitively; this
+// option lets semantic-key callers use the same identity without changing the
+// AST or the default SQL rendering.
+func WithCanonicalUserVariableNames() FmtCtxOption {
+	return FmtCtxOption(func(ctx *FmtCtx) {
+		ctx.canonicalUserVariableNames = true
+	})
+}
+
 // WithDateTimeFormatDetection asks the formatter to report whether the
 // expression tree contains a DATE_FORMAT or TIME_FORMAT call. Detection is
 // performed by the formatter itself, so nested expressions and subqueries use
@@ -138,6 +157,106 @@ func WithStringLiteralPositions(positions *[]StringLiteralPosition) FmtCtxOption
 	return FmtCtxOption(func(ctx *FmtCtx) {
 		ctx.stringLiteralPositions = positions
 	})
+}
+
+// WithMaxOutputBytes bounds formatted output. If a write would exceed the
+// limit, formatting is aborted; callers must use FmtCtx.FormatNode to recover
+// that internal abort and observe OutputLimitExceeded. A non-positive limit
+// leaves formatting unbounded, preserving the default behavior.
+func WithMaxOutputBytes(maxBytes int) FmtCtxOption {
+	return FmtCtxOption(func(ctx *FmtCtx) {
+		ctx.maxOutputBytes = maxBytes
+	})
+}
+
+// OutputLimitExceeded reports whether a write attempted to grow the formatted
+// output beyond the configured maximum.
+func (ctx *FmtCtx) OutputLimitExceeded() bool {
+	return ctx.outputLimitExceeded
+}
+
+// FormatNode formats node and reports whether formatting completed. When an
+// output limit is configured, the first write beyond it stops the whole AST
+// traversal instead of continuing to visit nodes whose output will be
+// discarded. Panics unrelated to the output limit are propagated unchanged.
+func (ctx *FmtCtx) FormatNode(node NodeFormatter) (complete bool) {
+	complete = true
+	defer func() {
+		if recovered := recover(); recovered != nil {
+			if _, ok := recovered.(formatOutputLimitAbort); ok {
+				complete = false
+				return
+			}
+			panic(recovered)
+		}
+	}()
+	if node != nil {
+		node.Format(ctx)
+	}
+	return !ctx.outputLimitExceeded
+}
+
+func (ctx *FmtCtx) limitedWriteLength(n int) int {
+	if ctx.maxOutputBytes <= 0 {
+		return n
+	}
+	remaining := ctx.maxOutputBytes - ctx.Len()
+	if remaining < 0 {
+		remaining = 0
+	}
+	if n > remaining {
+		ctx.outputLimitExceeded = true
+		panic(formatOutputLimitAbort{})
+	}
+	return n
+}
+
+// Override the promoted strings.Builder writes so callers that opt into an
+// output limit cannot allocate an arbitrarily large formatting buffer.
+func (ctx *FmtCtx) Write(p []byte) (int, error) {
+	n := ctx.limitedWriteLength(len(p))
+	return ctx.Builder.Write(p[:n])
+}
+
+func (ctx *FmtCtx) WriteString(s string) (int, error) {
+	n := ctx.limitedWriteLength(len(s))
+	return ctx.Builder.WriteString(s[:n])
+}
+
+func (ctx *FmtCtx) WriteByte(b byte) error {
+	if ctx.limitedWriteLength(1) == 0 {
+		return nil
+	}
+	return ctx.Builder.WriteByte(b)
+}
+
+func (ctx *FmtCtx) WriteRune(r rune) (int, error) {
+	width := utf8.RuneLen(r)
+	if width < 0 {
+		width = utf8.RuneLen(utf8.RuneError)
+	}
+	if ctx.limitedWriteLength(width) < width {
+		return 0, nil
+	}
+	return ctx.Builder.WriteRune(r)
+}
+
+func (ctx *FmtCtx) Grow(n int) {
+	if ctx.maxOutputBytes > 0 {
+		remaining := ctx.maxOutputBytes - ctx.Len()
+		if remaining < 0 {
+			remaining = 0
+		}
+		if n > remaining {
+			n = remaining
+		}
+	}
+	ctx.Builder.Grow(n)
+}
+
+func (ctx *FmtCtx) Reset() {
+	ctx.Builder.Reset()
+	ctx.outputLimitExceeded = false
 }
 
 // HasDateTimeFormatFunction reports whether formatting visited a
@@ -230,12 +349,20 @@ func (ctx *FmtCtx) WriteValue(t P_TYPE, v string) (int, error) {
 		}
 	} else if ctx.singleQuoteString && (t == P_char || t == P_ScoreBinary) {
 		if t == P_ScoreBinary {
-			n, err = ctx.WriteString(fmt.Sprintf("_binary '%s'", strings.ReplaceAll(v, "'", "''")))
-		} else {
-			n, err = ctx.WriteString(fmt.Sprintf("'%s'", strings.ReplaceAll(v, "'", "''")))
+			_, err = ctx.WriteString("_binary ")
+		}
+		if err == nil {
+			err = ctx.WriteByte('\'')
+		}
+		if err == nil {
+			ctx.writeDoubled(v, '\'')
+			err = ctx.WriteByte('\'')
 		}
 	} else {
 		n, err = ctx.WriteString(v)
+	}
+	if ctx.singleQuoteString && (t == P_char || t == P_ScoreBinary) && err == nil {
+		n = ctx.Len() - start
 	}
 	if err == nil && (t == P_char || t == P_ScoreBinary) && ctx.stringLiteralPositions != nil {
 		*ctx.stringLiteralPositions = append(*ctx.stringLiteralPositions, StringLiteralPosition{
@@ -244,6 +371,96 @@ func (ctx *FmtCtx) WriteValue(t P_TYPE, v string) (int, error) {
 		})
 	}
 	return n, err
+}
+
+// writeFormattedStringValue streams the same escaping as FormatString followed
+// by WriteValue. It is used only by bounded formatting, where materializing an
+// escaped copy before the output limit is checked would defeat the bound.
+func (ctx *FmtCtx) writeFormattedStringValue(t P_TYPE, value string) {
+	start := ctx.Len()
+	quoteLiteral := ctx.singleQuoteString && (t == P_char || t == P_ScoreBinary)
+	if quoteLiteral && t == P_ScoreBinary {
+		ctx.WriteString("_binary ")
+	}
+	if quoteLiteral {
+		ctx.WriteByte('\'')
+	}
+	ctx.writeFormattedString(value, quoteLiteral)
+	if quoteLiteral {
+		ctx.WriteByte('\'')
+	}
+	if (t == P_char || t == P_ScoreBinary) && ctx.stringLiteralPositions != nil {
+		*ctx.stringLiteralPositions = append(*ctx.stringLiteralPositions, StringLiteralPosition{
+			Start: start,
+			End:   ctx.Len(),
+		})
+	}
+}
+
+// writeFormattedString mirrors FormatString without allocating its expanded
+// result. quoteLiteral applies the SQL single-quote doubling done by WriteValue.
+func (ctx *FmtCtx) writeFormattedString(value string, quoteLiteral bool) {
+	writeRune := func(r rune) {
+		if quoteLiteral && r == '\'' {
+			ctx.WriteByte('\'')
+		}
+		ctx.WriteRune(r)
+	}
+	for i, r := range value {
+		switch r {
+		case '\n':
+			ctx.WriteString(`\n`)
+		case '\x00':
+			ctx.WriteString(`\0`)
+		case '\r':
+			ctx.WriteString(`\r`)
+		case '\\':
+			if i+1 < len(value) && (value[i+1] == '_' || value[i+1] == '%') {
+				writeRune('\\')
+				continue
+			}
+			ctx.WriteString(`\\`)
+		case '\b':
+			ctx.WriteString(`\b`)
+		case '\x1a':
+			ctx.WriteString(`\Z`)
+		case '\t':
+			ctx.WriteString(`\t`)
+		default:
+			writeRune(r)
+		}
+	}
+}
+
+// writeDoubled writes value while doubling each occurrence of quote. It writes
+// substrings directly to the context so bounded formatting does not first
+// allocate a second copy of a potentially large literal or identifier.
+func (ctx *FmtCtx) writeDoubled(value string, quote byte) {
+	for from := 0; from < len(value); {
+		to := len(value)
+		if ctx.maxOutputBytes > 0 {
+			remaining := ctx.maxOutputBytes - ctx.Len()
+			if remaining < 0 {
+				remaining = 0
+			}
+			// Inspect no more input bytes than can fit plus one. If no quote is
+			// found in that prefix, WriteString will abort before copying it.
+			if remaining < to-from-1 {
+				to = from + remaining + 1
+			}
+		}
+		rel := strings.IndexByte(value[from:to], quote)
+		if rel < 0 {
+			ctx.WriteString(value[from:to])
+			from = to
+			continue
+		}
+		at := from + rel
+		ctx.WriteString(value[from:at])
+		ctx.WriteByte(quote)
+		ctx.WriteByte(quote)
+		from = at + 1
+	}
 }
 
 func (ctx *FmtCtx) WriteStringQuote(v string) (int, error) {

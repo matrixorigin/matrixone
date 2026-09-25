@@ -83,7 +83,12 @@ type TxnComputationWrapper struct {
 	// to the AST pool. The zero value intentionally means owned so ordinary
 	// wrappers preserve their existing lifecycle.
 	stmtBorrowed bool
-	uuid         uuid.UUID
+	// statementFingerprint is captured from the admitted AST before planning.
+	// An empty value is a legitimate best-effort absence; attempted distinguishes
+	// that from an AST admitted while statement tracing was disabled.
+	statementFingerprint          string
+	statementFingerprintAttempted bool
+	uuid                          uuid.UUID
 	//holds values of params in the PREPARE
 	paramVals []any
 	// runtimeDirectResultSpecialization records that this execution specialized
@@ -218,6 +223,8 @@ func (cwft *TxnComputationWrapper) ResetPlanAndStmt(stmt tree.Statement) {
 	cwft.cachedPlanSQL = ""
 	cwft.cachedPlanIndex = 0
 	cwft.cachedPlanGeneration = nil
+	cwft.statementFingerprint = ""
+	cwft.statementFingerprintAttempted = false
 	cwft.freeStmt()
 	cwft.stmt = stmt
 	cwft.stmtBorrowed = false
@@ -225,6 +232,19 @@ func (cwft *TxnComputationWrapper) ResetPlanAndStmt(stmt tree.Statement) {
 
 func (cwft *TxnComputationWrapper) GetAst() tree.Statement {
 	return cwft.stmt
+}
+
+func (cwft *TxnComputationWrapper) setStatementFingerprint(fingerprint string, attempted bool) {
+	cwft.statementFingerprint = fingerprint
+	cwft.statementFingerprintAttempted = attempted
+}
+
+func (cwft *TxnComputationWrapper) getStatementFingerprint() string {
+	return cwft.statementFingerprint
+}
+
+func (cwft *TxnComputationWrapper) statementFingerprintWasAttempted() bool {
+	return cwft.statementFingerprintAttempted
 }
 
 func (cwft *TxnComputationWrapper) Free() {
@@ -258,6 +278,8 @@ func (cwft *TxnComputationWrapper) Clear() {
 	cwft.hasPreparedSchedulingSQLMode = false
 	cwft.preparedSchedulingSQL = ""
 	cwft.optimizerStatsVersions = nil
+	cwft.statementFingerprint = ""
+	cwft.statementFingerprintAttempted = false
 	cwft.planSnapshotTS = timestamp.Timestamp{}
 	cwft.hasPlanSnapshotTS = false
 	cwft.planGenerationReused = false

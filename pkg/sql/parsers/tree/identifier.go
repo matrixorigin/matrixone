@@ -14,8 +14,6 @@
 
 package tree
 
-import "strings"
-
 // IdentifierName is referenced in the expression
 type IdentifierName interface {
 	Expr
@@ -49,7 +47,7 @@ func (node *IdentifierList) Format(ctx *FmtCtx) {
 func (ctx *FmtCtx) WriteIdentifier(identifier Identifier) {
 	if ctx.quoteIdentifier {
 		ctx.WriteByte('`')
-		ctx.WriteString(strings.ReplaceAll(string(identifier), "`", "``"))
+		ctx.writeDoubled(string(identifier), '`')
 		ctx.WriteByte('`')
 		return
 	}
