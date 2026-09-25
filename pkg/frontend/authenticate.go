@@ -9207,13 +9207,14 @@ func authenticateUserCanExecuteStatementWithObjectTypeDatabaseAndTable(ctx conte
 	}
 
 	priv := determinePrivilegeSetOfStatement(stmt)
+	// Only the sys account moadmin role may run mo_ctrl / fault_inject, wherever it appears in the
+	// plan. Check it BEFORE the object-type branch: a statement can carry the call in an expression
+	// with no table object (e.g. SELECT 1 WHERE mo_ctl(...) IS NOT NULL), which would otherwise skip
+	// this gate entirely.
+	if hasMoCtrl(p) && !verifyAccountCanExecMoCtrl(ses.GetTenantInfo()) {
+		return false, stats, moerr.NewInternalError(ctx, "do not have privilege to execute the statement")
+	}
 	if priv.objectType() == objectTypeTable {
-		// only sys account, moadmin role can exec mo_ctrl
-		if hasMoCtrl(p) {
-			if !verifyAccountCanExecMoCtrl(ses.GetTenantInfo()) {
-				return false, stats, moerr.NewInternalError(ctx, "do not have privilege to execute the statement")
-			}
-		}
 		if isTargetSysWhiteList(p) && verifyAccountCanExecMoCtrl(ses.GetTenantInfo()) {
 			return true, stats, nil
 		}
