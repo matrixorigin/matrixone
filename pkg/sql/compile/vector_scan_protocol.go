@@ -49,11 +49,11 @@ func validateRemoteVectorPartitionProtocol(proc *process.Process, p *pipeline.Pi
 	}
 	if proc != nil {
 		version, known := remoteMORPCProtocolVersion(proc.GetService())
-		if known && version >= defines.MORPCVersion95 {
+		if known && version >= defines.MORPCVersion96 {
 			return nil
 		}
 	}
-	return moerr.NewNotSupportedNoCtx("remote vector partition zero requires MORPC protocol version 95")
+	return moerr.NewNotSupportedNoCtx("remote vector partition zero requires MORPC protocol version 96")
 }
 
 func validateVectorPartitionDestination(proc *process.Process, p *pipeline.Pipeline) error {
@@ -64,7 +64,7 @@ func validateVectorPartitionDestination(proc *process.Process, p *pipeline.Pipel
 	// a merge. Re-probe before sending: compilation may predate a rollback.
 	if p.Node != nil {
 		supported, err := remoteWorkersSupportProtocol(proc,
-			engine.Nodes{{Id: p.Node.Id, Addr: p.Node.Addr}}, defines.MORPCVersion95)
+			engine.Nodes{{Id: p.Node.Id, Addr: p.Node.Addr}}, defines.MORPCVersion96)
 		if err != nil {
 			return err
 		}
@@ -72,5 +72,5 @@ func validateVectorPartitionDestination(proc *process.Process, p *pipeline.Pipel
 			return nil
 		}
 	}
-	return moerr.NewNotSupportedNoCtx("remote destination does not support vector partition zero (MORPC version 95)")
+	return moerr.NewNotSupportedNoCtx("remote destination does not support vector partition zero (MORPC version 96)")
 }

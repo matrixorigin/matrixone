@@ -37,13 +37,13 @@ func TestVectorScanProtocolCheckOnExecutionStream(t *testing.T) {
 		wantErr bool
 	}{
 		{name: "current receiver", reply: &pipeline.Message{Id: 0, Cmd: pipeline.Method_PipelineProtocolCheck,
-			Sid: pipeline.Status_Last, ProtocolVersion: defines.MORPCVersion95}},
-		{name: "replacement old receiver", reply: &pipeline.Message{Id: 0, Cmd: pipeline.Method_PipelineProtocolCheck,
-			Sid: pipeline.Status_Last, ProtocolVersion: defines.MORPCVersion94}, wantErr: true},
+			Sid: pipeline.Status_Last, ProtocolVersion: defines.MORPCVersion96}},
+		{name: "replacement version 95 receiver", reply: &pipeline.Message{Id: 0, Cmd: pipeline.Method_PipelineProtocolCheck,
+			Sid: pipeline.Status_Last, ProtocolVersion: defines.MORPCVersion95}, wantErr: true},
 		{name: "unrecognized method", reply: &pipeline.Message{Id: 0, Cmd: pipeline.Method_UnknownMethod,
-			Sid: pipeline.Status_Last, ProtocolVersion: defines.MORPCVersion95}, wantErr: true},
+			Sid: pipeline.Status_Last, ProtocolVersion: defines.MORPCVersion96}, wantErr: true},
 		{name: "wrong stream", reply: &pipeline.Message{Id: 1, Cmd: pipeline.Method_PipelineProtocolCheck,
-			Sid: pipeline.Status_Last, ProtocolVersion: defines.MORPCVersion95}, wantErr: true},
+			Sid: pipeline.Status_Last, ProtocolVersion: defines.MORPCVersion96}, wantErr: true},
 		{name: "closed stream", wantErr: true},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
@@ -57,7 +57,7 @@ func TestVectorScanProtocolCheckOnExecutionStream(t *testing.T) {
 			sender := &messageSenderOnClient{
 				ctx: context.Background(), streamSender: stream, receiveCh: receiveCh,
 			}
-			err := sender.confirmProtocolOnStream(defines.MORPCVersion95)
+			err := sender.confirmProtocolOnStream(defines.MORPCVersion96)
 			if tc.wantErr {
 				require.Error(t, err)
 			} else {
@@ -66,7 +66,7 @@ func TestVectorScanProtocolCheckOnExecutionStream(t *testing.T) {
 			require.Equal(t, 1, stream.sentCnt)
 			request := stream.sent[0].(*pipeline.Message)
 			require.Equal(t, pipeline.Method_PipelineProtocolCheck, request.GetCmd())
-			require.Equal(t, defines.MORPCVersion95, request.GetProtocolVersion())
+			require.Equal(t, defines.MORPCVersion96, request.GetProtocolVersion())
 			require.Equal(t, stream.ID(), request.GetID())
 		})
 	}
@@ -78,7 +78,7 @@ func TestVectorScanProtocolCheckReportsReceivingInstanceVersion(t *testing.T) {
 	runtime := moruntime.ServiceRuntime(serviceID)
 	ctrl := gomock.NewController(t)
 	session := mock_morpc.NewMockClientSession(ctrl)
-	for _, version := range []int64{defines.MORPCVersion94, defines.MORPCVersion95} {
+	for _, version := range []int64{defines.MORPCVersion95, defines.MORPCVersion96} {
 		runtime.SetGlobalVariables(moruntime.MOProtocolVersion, version)
 		session.EXPECT().Write(gomock.Any(), gomock.Any()).DoAndReturn(
 			func(_ context.Context, message any) error {
@@ -90,7 +90,7 @@ func TestVectorScanProtocolCheckReportsReceivingInstanceVersion(t *testing.T) {
 				return nil
 			})
 		require.NoError(t, handlePipelineProtocolCheck(context.Background(),
-			&pipeline.Message{Id: 17, ProtocolVersion: defines.MORPCVersion95},
+			&pipeline.Message{Id: 17, ProtocolVersion: defines.MORPCVersion96},
 			session, serviceID, func() morpc.Message { return &pipeline.Message{} }))
 	}
 }
@@ -103,9 +103,9 @@ func TestVectorScanPlacementCapabilityFallback(t *testing.T) {
 			node := vectorPlacementNode()
 			switch mode {
 			case "old worker":
-				client.version = defines.MORPCVersion94
+				client.version = defines.MORPCVersion95
 			case "old coordinator":
-				moruntime.ServiceRuntime(c.proc.GetService()).SetGlobalVariables(moruntime.MOProtocolVersion, defines.MORPCVersion94)
+				moruntime.ServiceRuntime(c.proc.GetService()).SetGlobalVariables(moruntime.MOProtocolVersion, defines.MORPCVersion95)
 			case "unknown worker":
 				client.customResponse = true
 			case "probe failure":
@@ -163,17 +163,17 @@ func TestVectorScanPartitionTransportAndRollback(t *testing.T) {
 	require.Equal(t, remote.NodeInfo.CNCNT, decoded.NodeInfo.CNCNT)
 
 	// The execution mapping stays frozen if the destination rolls back.
-	client.version = defines.MORPCVersion94
+	client.version = defines.MORPCVersion95
 	_, err = encodeRemoteScope(remote, c.proc)
 	require.ErrorContains(t, err, "remote destination")
 	require.Equal(t, "a", remote.NodeInfo.Id)
 	require.Zero(t, remote.NodeInfo.CNIDX)
 	require.Equal(t, client.calls, client.releases)
-	client.version = defines.MORPCVersion95
+	client.version = defines.MORPCVersion96
 	rt := moruntime.ServiceRuntime(c.proc.GetService())
-	rt.SetGlobalVariables(moruntime.MOProtocolVersion, defines.MORPCVersion94)
+	rt.SetGlobalVariables(moruntime.MOProtocolVersion, defines.MORPCVersion95)
 	_, err = decodeScope(data, c.proc, true, nil)
-	require.ErrorContains(t, err, "version 95")
+	require.ErrorContains(t, err, "version 96")
 	_, err = encodeRemoteScope(remote, c.proc)
 	require.ErrorContains(t, err, "remote destination")
 

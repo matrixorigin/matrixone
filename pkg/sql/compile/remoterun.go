@@ -148,6 +148,11 @@ func encodeRemoteScope(s *Scope, proc *process.Process) ([]byte, error) {
 			return nil, err
 		}
 	}
+	if features.PreparedPrecisionScalar {
+		if err = validatePreparedPrecisionDestination(proc, p); err != nil {
+			return nil, err
+		}
+	}
 	if features.IPFunctionSemantics || features.TOBase64ResultContracts || features.IPFunctionResultContracts ||
 		features.ExpressionResultMetadataContracts {
 		if err = validateIPFunctionDestination(proc, p); err != nil {
@@ -2264,6 +2269,9 @@ func validateRemoteExpressionPipelineProtocol(
 	}
 	if features.IntegerParameterCoercion && (!hasProtocolVersion || protocolVersion < defines.MORPCVersion85) {
 		return moerr.NewNotSupportedNoCtx("integer parameter coercion requires MORPC protocol version 85")
+	}
+	if features.PreparedPrecisionScalar && (!hasProtocolVersion || protocolVersion < defines.MORPCVersion95) {
+		return moerr.NewNotSupportedNoCtx("prepared scalar precision requires MORPC protocol version 95")
 	}
 	if features.NumericPrefix &&
 		(!hasProtocolVersion || protocolVersion < defines.MORPCVersion30) {

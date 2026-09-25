@@ -82,9 +82,14 @@ func executeXMLFunction(parameters []*vector.Vector, result vector.FunctionResul
 				return err
 			}
 			if update {
-				for _, p := range program.paths {
+				// MySQL resolves a terminal text() to its current XPath context
+				// when choosing the source span to replace.
+				for i := range program.paths {
+					p := &program.paths[i]
 					if p.terminalText() {
-						return moerr.NewNotSupported(proc.Ctx, "UpdateXML text() target is unsupported")
+						step := &p.steps[len(p.steps)-1]
+						step.text = false
+						step.axis = 's'
 					}
 				}
 			}

@@ -127,7 +127,7 @@ func (s *Scope) remoteRun(c *Compile) (sender *messageSenderOnClient, err error)
 	// that stale callback instead of publishing it into the new attempt.
 	sender.warningSink = s.Proc.GetWarningSink()
 	if requiresBoundProtocol {
-		if err = sender.confirmProtocolOnStream(defines.MORPCVersion95); err != nil {
+		if err = sender.confirmProtocolOnStream(defines.MORPCVersion96); err != nil {
 			return sender, err
 		}
 	}
