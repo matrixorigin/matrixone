@@ -268,6 +268,16 @@ remains unavailable, later CN uploads remain backpressured. Admission must not
 wait while holding a workspace, sinker, or batch-flow lock; a nonblocking
 reservation failure avoids a capacity/deletion deadlock.
 
+For a name-only retry owner, successful bounded Delete batches retire their
+names and tickets even if a later batch in the same attempt fails or times out.
+An uncertain batch remains wholly owned; its response cannot prove which keys
+were deleted. The next attempt starts with the remaining names. This makes
+cleanup progress monotonic when each individual batch can complete within the
+attempt budget, without changing TN sinker cleanup's full-snapshot contract.
+The single CN retry worker may continue immediately after a successful task;
+failed attempts retain their delay and rotate behind other work. Updating queue
+metrics must not scan the whole backlog on every enqueue or completion.
+
 This does not make ownership durable. A CN process crash can still lose its
 in-memory ledger and leave an object behind. The issue acceptance for this PR
 therefore covers live-CN rollback/stream/teardown failures, not process-crash
@@ -345,3 +355,10 @@ directions behave as documented. Benchmarks must report retained bytes per
 ticket and a repeated-spill hot-path cost. The existing package, race, and
 multi-CN CI evidence is reusable only for behavior whose implementation and
 test inputs have not changed.
+
+The progress refinement also requires a deterministic multi-batch failure
+followed by recovery for workspace owners, writer shells, and transfer flows;
+an ambiguous failed batch must retain its ticket. Queue tests must show prompt
+drain after successful callbacks, rotation and bounded retries after failures,
+and unchanged ownership during close. Recheck S3 handoff and transaction
+consumers because their admission release points share the same ledger.

@@ -17,6 +17,7 @@ package colexec
 import (
 	"context"
 	"errors"
+	"sync"
 	"sync/atomic"
 	"testing"
 	"time"
@@ -31,12 +32,57 @@ func TestUnpublishedS3RetryQueueMetrics(t *testing.T) {
 	serviceID := t.Name()
 	moruntime.SetupServiceBasedRuntime(serviceID, moruntime.DefaultRuntime())
 	server := NewServer(serviceID)
-	require.NoError(t, server.RetryUnpublishedS3Cleanup(func(context.Context) error { return nil }))
+	entered := make(chan struct{})
+	release := make(chan struct{})
+	var releaseOnce sync.Once
+	t.Cleanup(func() {
+		releaseOnce.Do(func() { close(release) })
+		require.NoError(t, server.CloseUnpublishedS3Cleanup(context.Background()))
+	})
+	require.NoError(t, server.RetryUnpublishedS3Cleanup(func(context.Context) error {
+		close(entered)
+		<-release
+		return nil
+	}))
+	<-entered
 	require.Equal(t, float64(1), promtestutil.ToFloat64(
 		metricv2.UnpublishedS3PendingTasksGauge.WithLabelValues(serviceID)))
+	releaseOnce.Do(func() { close(release) })
 	require.NoError(t, server.CloseUnpublishedS3Cleanup(context.Background()))
 	require.Zero(t, promtestutil.ToFloat64(
 		metricv2.UnpublishedS3PendingTasksGauge.WithLabelValues(serviceID)))
+}
+
+func TestUnpublishedS3OldestRetryAgeSurvivesRotation(t *testing.T) {
+	serviceID := t.Name()
+	q := &unpublishedS3CleanupQueue{
+		serviceID: serviceID,
+		pending: []func(context.Context) error{
+			func(context.Context) error { return nil },
+			func(context.Context) error { return nil },
+		},
+		pendingSince: []time.Time{
+			time.Now().Add(-2 * time.Minute),
+			time.Now().Add(-time.Minute),
+		},
+	}
+	q.mu.Lock()
+	q.updateMetricsLocked()
+	q.finishAttemptLocked(errors.New("temporary failure"))
+	q.lastAgeSample = time.Time{}
+	q.updateMetricsLocked()
+	q.mu.Unlock()
+
+	age := promtestutil.ToFloat64(metricv2.UnpublishedS3OldestTaskAgeGauge.WithLabelValues(serviceID))
+	require.GreaterOrEqual(t, age, float64(120), "failure rotation must keep the original enqueue age")
+	require.Less(t, age, float64(130))
+
+	q.mu.Lock()
+	q.finishAttemptLocked(nil)
+	q.finishAttemptLocked(nil)
+	q.mu.Unlock()
+	require.Zero(t, promtestutil.ToFloat64(
+		metricv2.UnpublishedS3OldestTaskAgeGauge.WithLabelValues(serviceID)))
 }
 
 func TestServerCloseDrainsUnpublishedS3Retry(t *testing.T) {
@@ -86,14 +132,24 @@ func TestServerCloseReportsUnresolvedS3Cleanup(t *testing.T) {
 func TestServerCloseRetriesFailureWithoutBlockingOtherTasks(t *testing.T) {
 	server := &Server{}
 	server.unpublishedS3Cleanup.pending = make([]func(context.Context) error, 0, 8)
+	firstEntered := make(chan struct{})
+	allowFirstFailure := make(chan struct{})
+	var releaseOnce sync.Once
+	t.Cleanup(func() {
+		releaseOnce.Do(func() { close(allowFirstFailure) })
+		require.NoError(t, server.CloseUnpublishedS3Cleanup(context.Background()))
+	})
 	var order []int
 	require.NoError(t, server.RetryUnpublishedS3Cleanup(func(context.Context) error {
 		order = append(order, 1)
 		if len(order) == 1 {
+			close(firstEntered)
+			<-allowFirstFailure
 			return errors.New("temporary failure")
 		}
 		return nil
 	}))
+	<-firstEntered
 	require.NoError(t, server.RetryUnpublishedS3Cleanup(func(context.Context) error {
 		order = append(order, 2)
 		return nil
@@ -101,6 +157,7 @@ func TestServerCloseRetriesFailureWithoutBlockingOtherTasks(t *testing.T) {
 	server.unpublishedS3Cleanup.mu.Lock()
 	backing := server.unpublishedS3Cleanup.pending[:8]
 	server.unpublishedS3Cleanup.mu.Unlock()
+	releaseOnce.Do(func() { close(allowFirstFailure) })
 	require.NoError(t, server.CloseUnpublishedS3Cleanup(context.Background()))
 	require.Equal(t, []int{1, 2, 1}, order)
 	for _, callback := range backing {
@@ -146,5 +203,92 @@ func TestServerRetriesAndRotatesFailedS3Cleanup(t *testing.T) {
 	require.NoError(t, server.CloseUnpublishedS3Cleanup(context.Background()))
 	for _, callback := range backing {
 		require.Nil(t, callback)
+	}
+}
+
+func TestUnpublishedS3RetryConcurrentEnqueueAndClose(t *testing.T) {
+	server := NewServer("")
+	entered := make(chan struct{})
+	release := make(chan struct{})
+	var executed atomic.Int32
+	require.NoError(t, server.RetryUnpublishedS3Cleanup(func(context.Context) error {
+		close(entered)
+		<-release
+		executed.Add(1)
+		return nil
+	}))
+	<-entered
+
+	const competitors = 32
+	var accepted atomic.Int32
+	var wg sync.WaitGroup
+	for range competitors {
+		wg.Add(1)
+		go func() {
+			defer wg.Done()
+			if err := server.RetryUnpublishedS3Cleanup(func(context.Context) error {
+				executed.Add(1)
+				return nil
+			}); err == nil {
+				accepted.Add(1)
+			}
+		}()
+	}
+	closeResult := make(chan error, 1)
+	go func() {
+		closeResult <- server.CloseUnpublishedS3Cleanup(context.Background())
+	}()
+	wg.Wait()
+	close(release)
+	select {
+	case err := <-closeResult:
+		require.NoError(t, err)
+	case <-time.After(5 * time.Second):
+		t.Fatal("CN close did not join accepted cleanup tasks")
+	}
+	require.Equal(t, 1+accepted.Load(), executed.Load())
+	require.Error(t, server.RetryUnpublishedS3Cleanup(func(context.Context) error { return nil }))
+}
+
+// Measures the normal worker after a previously blocked cleanup succeeds.
+// Run with -benchtime=1x so the number of queued tasks stays explicit.
+func BenchmarkUnpublishedS3RetrySuccessfulDrain(b *testing.B) {
+	const taskCount = 8
+	for range b.N {
+		b.StopTimer()
+		server := NewServer("")
+		started := make(chan struct{})
+		release := make(chan struct{})
+		done := make(chan struct{})
+		var completed atomic.Int32
+		finish := func() {
+			if completed.Add(1) == taskCount {
+				close(done)
+			}
+		}
+		if err := server.RetryUnpublishedS3Cleanup(func(context.Context) error {
+			close(started)
+			<-release
+			finish()
+			return nil
+		}); err != nil {
+			b.Fatal(err)
+		}
+		<-started
+		for range taskCount - 1 {
+			if err := server.RetryUnpublishedS3Cleanup(func(context.Context) error {
+				finish()
+				return nil
+			}); err != nil {
+				b.Fatal(err)
+			}
+		}
+		b.StartTimer()
+		close(release)
+		<-done
+		b.StopTimer()
+		if err := server.CloseUnpublishedS3Cleanup(context.Background()); err != nil {
+			b.Fatal(err)
+		}
 	}
 }
