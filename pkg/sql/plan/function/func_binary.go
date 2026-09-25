@@ -5788,6 +5788,20 @@ func fieldCheck(overloads []overload, inputs []types.Type) checkResult {
 	if len(inputs) < 2 {
 		return newCheckResultWithFailure(failedFunctionParametersWrong)
 	}
+	// Binary SQL variables use the same byte-preserving, case-insensitive
+	// string comparison as text variables. Without this family check, mixed
+	// BINARY/VARBINARY/BLOB inputs fall through to DOUBLE and distinct byte
+	// sequences with nonnumeric prefixes compare equal.
+	allStrings := true
+	for _, input := range inputs {
+		if input.Oid != types.T_any && !input.Oid.IsMySQLString() {
+			allStrings = false
+			break
+		}
+	}
+	if allStrings {
+		return newCheckResultWithSuccess(0)
+	}
 	returnType := [...]types.T{
 		types.T_varchar, types.T_char,
 		types.T_int8, types.T_int16, types.T_int32, types.T_int64,
