@@ -173,6 +173,18 @@ var GetTableDetector = func(cnUUID string) *TableDetector {
 	return detector
 }
 
+// ResetTableDetectorForTest replaces the process-local detector after an
+// embedded CN has been stopped and recreated. Production has one detector per
+// CN process; SQL integration tests start several CN lifecycles in one Go
+// process, so retaining the old SQL executor would make scans query a closed
+// runtime.
+func ResetTableDetectorForTest(cnUUID string) {
+	if detector != nil {
+		detector.Close()
+	}
+	detector = newTableDetector(getSqlExecutor(cnUUID))
+}
+
 // TblMap key is dbName.tableName, e.g. db1.t1
 type TblMap map[string]*DbTableInfo
 
@@ -562,6 +574,30 @@ func (s *TableDetector) scanAndProcess(ctx context.Context) {
 	s.mu.Unlock()
 
 	go s.processCallback(ctx, mp)
+}
+
+// RunTableDetectorScanForTest performs one real catalog scan and callback
+// synchronously.  SQL integration tests use this only to remove the polling
+// interval from their admission ordering; the scan, table matching, and CDC
+// pipeline callback remain the production implementations.
+func RunTableDetectorScanForTest(cnUUID string) error {
+	detector := GetTableDetector(cnUUID)
+	if err := detector.scanTable(); err != nil {
+		return err
+	}
+	detector.mu.Lock()
+	tables := detector.Mp
+	callbackCount := len(detector.Callbacks)
+	subscriptionCount := len(detector.SubscribedDbNames)
+	detector.mu.Unlock()
+	if len(tables) == 0 {
+		return moerr.NewInternalErrorNoCtxf(
+			"CDC test detector scan found no tables (callbacks=%d subscribed-databases=%d)",
+			callbackCount, subscriptionCount,
+		)
+	}
+	detector.processCallback(context.Background(), tables)
+	return nil
 }
 
 func (s *TableDetector) processCallback(ctx context.Context, tables map[uint32]TblMap) {

@@ -1890,7 +1890,7 @@ func doShowErrors(ses *Session, execCtx *ExecCtx) error {
 
 	info := ses.diagnosticsSnapshot()
 	var skipped, added uint64
-	for i := info.length() - 1; i >= 0; i-- {
+	for i := 0; i < info.length(); i++ {
 		level := "Error"
 		if i < len(info.levels) && info.levels[i] != "" {
 			level = info.levels[i]
@@ -2015,8 +2015,12 @@ func resetDiagnosticsForStatement(ses *Session, execCtx *ExecCtx, input *UserInp
 		}
 	}
 	if isTopLevelClientStatement(ses, execCtx, input) && !isDiagnosticsStatement(stmt) {
-		ses.resetDiagnostics()
+		limit := ses.beginWarningDiagnostics()
+		execCtx.reqCtx = process.ContextWithWarningRetentionLimit(execCtx.reqCtx, limit)
 		beginJSONMergeWarningStatement(ses, execCtx, input, stmt)
+		if execCtx.proc != nil {
+			execCtx.proc.ReplaceTopCtx(execCtx.reqCtx)
+		}
 	}
 }
 
@@ -2936,6 +2940,7 @@ func createPrepareStmtInSession(
 	}
 	prepareStmt.refreshNumericPrefixConsumer(
 		prepareControl.Plan, len(prepareControl.ParamTypes))
+	prepareStmt.refreshGenerateSeriesParamMetadata(prepareControl.Plan)
 	prepareStmt.refreshGeometrySRIDParamPositions(prepareControl.Plan)
 	prepareStmt.directResultParamPositions = plan2.PreparedPlanDirectResultParamPositions(prepareControl.Plan)
 	prepareStmt.directResultParamPositionsSet = true
@@ -4396,10 +4401,33 @@ func refreshStatementScopedSessionInfo(ses FeSession, proc *process.Process) {
 	if proc == nil || proc.Base == nil {
 		return
 	}
+	limit, ok := process.WarningRetentionLimitFromContext(proc.GetTopContext())
+	if !ok {
+		limit, ok = resolveSessionWarningRetentionLimit(ses)
+	}
+	if ok {
+		proc.Base.SessionInfo.MaxErrorCount = limit
+		proc.Base.SessionInfo.MaxErrorCountSet = true
+	}
 	proc.Base.SessionInfo.AutoIncrementIncrement = resolvePositiveSessionUint64(
 		ses, "auto_increment_increment", proc.Base.SessionInfo.AutoIncrementIncrement)
 	proc.Base.SessionInfo.AutoIncrementOffset = resolvePositiveSessionUint64(
 		ses, "auto_increment_offset", proc.Base.SessionInfo.AutoIncrementOffset)
+}
+
+func resolveSessionWarningRetentionLimit(ses FeSession) (int, bool) {
+	if ses == nil {
+		return process.WarningDiagnosticDefaultRetentionLimit, true
+	}
+	value, err := ses.GetSessionSysVar("max_error_count")
+	if err != nil {
+		return process.WarningDiagnosticDefaultRetentionLimit, true
+	}
+	limit, ok := sessionWarningRetentionLimit(value)
+	if !ok {
+		return process.WarningDiagnosticDefaultRetentionLimit, true
+	}
+	return limit, true
 }
 
 func resolvePositiveSessionUint64(ses FeSession, name string, previous uint64) uint64 {
@@ -5777,9 +5805,11 @@ func doComQuery(ses *Session, execCtx *ExecCtx, input *UserInput) (retErr error)
 
 	ParseDuration := time.Since(beginInstant)
 	recordParseError := func(errorInput *UserInput, parseErr error) error {
-		if isTopLevelClientStatement(ses, execCtx, errorInput) {
-			ses.resetDiagnostics()
-		}
+		// There is no AST on this path, but it is still a statement boundary:
+		// capture the limit in the request context so any later error handling
+		// or internal work observes the same generation. The helper itself keeps
+		// internal and diagnostic inputs outside the client boundary.
+		resetDiagnosticsForStatement(ses, execCtx, errorInput, nil)
 		statsInfo.ParseStage.ParseDuration = time.Since(beginInstant)
 		diagnosticErr := redactStatementErrorForLogging(parseErr, errorInput.getSql())
 		var recordErr error
@@ -5949,15 +5979,20 @@ func doComQuery(ses *Session, execCtx *ExecCtx, input *UserInput) (retErr error)
 		// packet, so clear it before executing each statement while leaving the
 		// session-visible LAST_INSERT_ID state in LastInsertID untouched.
 		proc.SetStatementLastInsertID(0)
-		// SET statements in the same COM_QUERY execute after the wrappers were
-		// planned.  Refresh the runtime snapshot immediately before each
-		// statement so the remote PRE_INSERT path observes the session values
-		// established by earlier statements in the request.
-		refreshStatementScopedSessionInfo(ses, proc)
 		if isTopLevelClientStatement(ses, execCtx, currentInput) {
 			execCtx.captureDiagnosticCountsSnapshot(ses)
 		}
+		// Freeze the diagnostic capacity before executing the statement.  In a
+		// multi-assignment SET, a later RHS may execute an internal SELECT after
+		// an earlier assignment has changed max_error_count; the context snapshot
+		// must keep that nested execution on the capacity chosen at this boundary.
 		resetDiagnosticsForStatement(ses, execCtx, currentInput, diagnosticStmt)
+		// SET statements in the same COM_QUERY execute after the wrappers were
+		// planned.  Refresh the runtime snapshot immediately before each
+		// statement so the remote PRE_INSERT path observes the session values
+		// established by earlier statements in the request.  The diagnostic
+		// capacity comes from the immutable statement context above.
+		refreshStatementScopedSessionInfo(ses, proc)
 		removePrepareStmtForReplacement(ses, stmt)
 		var err2 error
 		execCtx.reqCtx, err2 = RecordStatement(execCtx.reqCtx, ses, proc, cw, beginInstant, currentSQLRecord, sqlType, singleStatement)
@@ -6343,7 +6378,7 @@ func ExecRequest(ses *Session, execCtx *ExecCtx, req *Request) (resp *Response, 
 		// SQL mode current for each staged statement.
 		rewritePolicy, rewriteErr := captureRewritePolicy(execCtx.reqCtx, ses)
 		if rewriteErr != nil {
-			ses.resetDiagnostics()
+			ses.beginWarningDiagnostics()
 			markRowCountFailed(ses, ses.GetProc())
 			resp = NewGeneralErrorResponse(COM_QUERY, ses.GetTxnHandler().GetServerStatus(), rewriteErr)
 			return resp, nil
@@ -6404,7 +6439,7 @@ func ExecRequest(ses *Session, execCtx *ExecCtx, req *Request) (resp *Response, 
 					execCtx.reqCtx, sql, sessionSQLModeForParser(ses))
 			}
 			if rewriteErr != nil {
-				ses.resetDiagnostics()
+				ses.beginWarningDiagnostics()
 				markRowCountFailed(ses, ses.GetProc())
 				resp = NewGeneralErrorResponse(COM_STMT_PREPARE, ses.GetTxnHandler().GetServerStatus(), rewriteErr)
 				return resp, nil
@@ -6414,7 +6449,7 @@ func ExecRequest(ses *Session, execCtx *ExecCtx, req *Request) (resp *Response, 
 			}
 		}
 		if err = validateNativePrepareJSONHints(execCtx.reqCtx, sql, parserLowerCaseTableNames(ses)); err != nil {
-			ses.resetDiagnostics()
+			ses.beginWarningDiagnostics()
 			markRowCountFailed(ses, ses.GetProc())
 			resp = NewGeneralErrorResponse(COM_STMT_PREPARE, ses.GetTxnHandler().GetServerStatus(), err)
 			return resp, nil
@@ -6448,7 +6483,7 @@ func ExecRequest(ses *Session, execCtx *ExecCtx, req *Request) (resp *Response, 
 		var prepareStmt *PrepareStmt
 		sql, prepareStmt, err = parseStmtExecute(execCtx.reqCtx, ses, req.GetData().([]byte))
 		if err != nil {
-			ses.resetDiagnostics()
+			ses.beginWarningDiagnostics()
 			if prepareStmt != nil {
 				prepareStmt.closeCursor()
 				prepareStmt.clearBinaryParamState(ses.GetProc())
@@ -6465,6 +6500,7 @@ func ExecRequest(ses *Session, execCtx *ExecCtx, req *Request) (resp *Response, 
 		prepareStmt.closeCursor()
 		if cursorRequested {
 			if _, ok := prepareStmt.PrepareStmt.(*tree.Select); !ok {
+				ses.beginWarningDiagnostics()
 				prepareStmt.clearBinaryParamState(ses.GetProc())
 				markRowCountFailed(ses, ses.GetProc())
 				return NewGeneralErrorResponse(COM_STMT_EXECUTE, ses.GetTxnHandler().GetServerStatus(),
