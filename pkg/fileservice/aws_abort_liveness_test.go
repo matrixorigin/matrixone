@@ -41,9 +41,14 @@ type awsAbortContextObservation struct {
 type awsAbortObservingTransport struct {
 	base     http.RoundTripper
 	observed chan awsAbortContextObservation
+	cancel   context.CancelFunc
 }
 
 func (t *awsAbortObservingTransport) RoundTrip(r *http.Request) (*http.Response, error) {
+	if r.Method == http.MethodPut && r.URL.Query().Has("partNumber") {
+		t.cancel()
+		return nil, context.Canceled
+	}
 	if r.Method == http.MethodDelete && r.URL.Query().Has("uploadId") {
 		deadline, ok := r.Context().Deadline()
 		t.observed <- awsAbortContextObservation{
@@ -90,9 +95,6 @@ func TestAWSMultipartAbortContextAndErrors(t *testing.T) {
 					case r.Method == http.MethodPost && r.URL.Query().Has("uploads"):
 						w.Header().Set("Content-Type", "application/xml")
 						_, _ = io.WriteString(w, `<CreateMultipartUploadResult><UploadId>owned-upload</UploadId></CreateMultipartUploadResult>`)
-					case r.Method == http.MethodPut && r.URL.Query().Has("partNumber"):
-						cancel()
-						w.WriteHeader(http.StatusForbidden)
 					case r.Method == http.MethodDelete && r.URL.Query().Get("uploadId") == "owned-upload":
 						abortCount.Add(1)
 						if abortFails {
@@ -107,7 +109,7 @@ func TestAWSMultipartAbortContextAndErrors(t *testing.T) {
 					}
 				}))
 				defer server.Close()
-				probe := &awsAbortObservingTransport{base: server.Client().Transport, observed: make(chan awsAbortContextObservation, 1)}
+				probe := &awsAbortObservingTransport{base: server.Client().Transport, observed: make(chan awsAbortContextObservation, 1), cancel: cancel}
 				sdk := newTestAWSClientWithTransport(t, server, probe)
 				err := awsCanceledMultipartWrite(ctx, sdk, parallel)
 				require.ErrorIs(t, err, context.Canceled)
