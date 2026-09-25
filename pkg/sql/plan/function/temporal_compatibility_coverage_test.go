@@ -692,3 +692,137 @@ func TestTemporalCompatibilityAdditionalHelperBranches(t *testing.T) {
 	require.NoError(t, err)
 	require.Equal(t, types.MySQLTimeMaxForScale(6), got)
 }
+
+// The eight-digit overlap is decided by an accepted calendar parse, not by
+// width alone. These exact values intentionally retain MatrixOne's compact
+// calendar precedence even where MySQL's ADDTIME treats the text as a TIME.
+func TestTemporalCompatibilityCompactOperandMatrix(t *testing.T) {
+	for _, tc := range []struct {
+		input string
+		kind  temporalStringKind
+		want  types.Time
+	}{
+		{"1234", temporalStringTime, types.TimeFromClock(false, 0, 12, 34, 0)},
+		{"0001234", temporalStringTime, types.TimeFromClock(false, 0, 12, 34, 0)},
+		{"00001234", temporalStringTime, types.TimeFromClock(false, 0, 12, 34, 0)},
+		{"00001234.5", temporalStringTime, types.TimeFromClock(false, 0, 12, 34, 500000)},
+		{"00001234.123456", temporalStringTime, types.TimeFromClock(false, 0, 12, 34, 123456)},
+		{"00000000.5", temporalStringTime, types.TimeFromClock(false, 0, 0, 0, 500000)},
+		{"00010101.5", temporalStringTime, types.TimeFromClock(false, 1, 1, 1, 500000)},
+		{"00000101", temporalStringTime, types.TimeFromClock(false, 0, 1, 1, 0)},
+		{"08385959", temporalStringTime, types.TimeFromClock(false, 838, 59, 59, 0)},
+		{"00000123456", temporalStringTime, types.TimeFromClock(false, 12, 34, 56, 0)},
+		{"-00001234", temporalStringTime, types.TimeFromClock(true, 0, 12, 34, 0)},
+		{"00010101", temporalStringDateTime, 0},
+		{"00000000", temporalStringDateTime, 0},
+		{"20240229", temporalStringDateTime, 0},
+		{"2024.2.29", temporalStringDateTime, 0},
+		{"20240229123456.123456", temporalStringDateTime, 0},
+	} {
+		t.Run(tc.input, func(t *testing.T) {
+			_, got, kind, err := parseTemporalString(tc.input, 6)
+			require.NoError(t, err)
+			require.Equal(t, tc.kind, kind)
+			if kind == temporalStringTime {
+				require.Equal(t, tc.want, got)
+				duration, err := parseTimeOperand(tc.input, 6)
+				require.NoError(t, err)
+				require.Equal(t, tc.want, duration)
+			} else {
+				_, err = parseTimeOperand(tc.input, 6)
+				require.Error(t, err)
+			}
+		})
+	}
+	for _, input := range []string{
+		"20240230", "00000000001234", "2024-2-30 12:34:56",
+		"00001234.bad", "00001299", "00008360",
+	} {
+		t.Run("invalid/"+input, func(t *testing.T) {
+			_, _, kind, err := parseTemporalString(input, 6)
+			require.Error(t, err)
+			require.Equal(t, temporalStringInvalid, kind)
+			_, err = parseTimeOperand(input, 6)
+			require.Error(t, err)
+		})
+	}
+}
+
+// A zero calendar does not imply a zero clock. Exercise every EXTRACT field
+// family against its exact numeric value, including the day-prefixed clocks.
+func TestTemporalCompatibilityZeroCalendarClockMatrix(t *testing.T) {
+	clock := "0000-00-00 12:34:56.123456"
+	for _, tc := range []struct {
+		unit string
+		want int64
+	}{
+		{"year", 0}, {"month", 0}, {"day", 0}, {"quarter", 0},
+		{"week", 0}, {"year_month", 0},
+		{"hour", 12}, {"minute", 34}, {"second", 56}, {"microsecond", 123456},
+		{"second_microsecond", 56123456}, {"minute_microsecond", 3456123456},
+		{"minute_second", 3456}, {"hour_microsecond", 123456123456},
+		{"hour_second", 123456}, {"hour_minute", 1234},
+		{"day_microsecond", 123456123456}, {"day_second", 123456},
+		{"day_minute", 1234}, {"day_hour", 12},
+	} {
+		t.Run(tc.unit, func(t *testing.T) {
+			got, err := extractNumericFromVarchar(tc.unit, clock, 6)
+			require.NoError(t, err)
+			require.Equal(t, tc.want, got)
+			for _, zero := range []string{"0000-00-00", "0000-00-00 00:00:00.000000"} {
+				got, err = extractNumericFromVarchar(tc.unit, zero, 6)
+				require.NoError(t, err)
+				require.Zero(t, got)
+			}
+		})
+	}
+	for _, value := range []string{
+		"0000-00-00 24:00:00", "0000-00-00 12:60:00",
+		"0000-00-00 12:34:60", "0000-00-00 12:34:56.bad",
+		"0000-00-00 12:34:56tail",
+	} {
+		_, err := extractNumericFromVarchar("hour", value, 6)
+		require.Error(t, err, value)
+	}
+	got, err := extractNumericFromVarchar("second", "0000-00-00 12:34:56.9999999", 6)
+	require.NoError(t, err)
+	require.Equal(t, int64(57), got)
+	for _, unit := range []string{"hour", "second_microsecond", "day_second"} {
+		got, err := extractNumericFromVarchar(unit, "0000-00-00 12.34.56.123456", 6)
+		require.NoError(t, err)
+		switch unit {
+		case "hour":
+			require.Equal(t, int64(12), got)
+		case "second_microsecond":
+			require.Equal(t, int64(56123456), got)
+		case "day_second":
+			require.Equal(t, int64(123456), got)
+		}
+	}
+	for _, tc := range []struct {
+		clock string
+		want  int64
+	}{
+		{"12.34", 0},
+		{"12:34.56", 56000000},
+		{"12.34.56.123456", 56123456},
+	} {
+		got, err := extractNumericFromVarchar("second_microsecond", "0000-00-00 "+tc.clock, 6)
+		require.NoError(t, err, tc.clock)
+		require.Equal(t, tc.want, got, tc.clock)
+	}
+
+	for _, tc := range []struct {
+		unit string
+		want int64
+	}{
+		{"year", 2024}, {"month", 2}, {"day", 29}, {"year_month", 202402},
+		{"hour", 12}, {"second_microsecond", 56123456},
+		{"day_hour", 2912}, {"day_minute", 291234},
+		{"day_second", 29123456}, {"day_microsecond", 29123456123456},
+	} {
+		got, err := extractNumericFromVarchar(tc.unit, "2024-02-29 12:34:56.123456", 6)
+		require.NoError(t, err, tc.unit)
+		require.Equal(t, tc.want, got, tc.unit)
+	}
+}

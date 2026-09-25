@@ -8769,8 +8769,44 @@ func extractNumericFromVarchar(unit string, value string, scale int32) (int64, e
 		return 0, nil
 	}
 	if parts, ok := parseDateExtractParts(value); ok && parts.year == 0 && parts.month == 0 && parts.day == 0 {
-		// MySQL's extractor functions expose zero-date fields as numeric zero
-		// instead of rejecting the sentinel as a complete DATETIME.
+		// A zero calendar has zero date fields, but it may still have a clock.
+		// Parse only the clock: ParseTime on the full spelling attempts to
+		// construct a DATETIME, which cannot represent a zero calendar.
+		if extractUnitPrefersTime(unit) || strings.HasPrefix(unit, "day_") {
+			trimmed := strings.TrimSpace(value)
+			if separator := strings.IndexAny(trimmed, " T"); separator >= 0 {
+				clockText := strings.TrimSpace(trimmed[separator+1:])
+				// Date component parsing validated this clock using the date
+				// grammar. Normalize its first two field separators before TIME
+				// parsing: a dot in 12:34.56 is seconds, not a fraction.
+				if strings.IndexByte(clockText, ' ') >= 0 {
+					clockText = strings.ReplaceAll(clockText, " ", "")
+				}
+				fields := 0
+				var canonical []byte
+				for i := 0; i < len(clockText) && fields < 2; i++ {
+					ch := clockText[i]
+					if ch >= '0' && ch <= '9' {
+						continue
+					}
+					if ch != ':' {
+						if canonical == nil {
+							canonical = []byte(clockText)
+						}
+						canonical[i] = ':'
+					}
+					fields++
+				}
+				if canonical != nil {
+					clockText = string(canonical)
+				}
+				clock, err := types.ParseTime(clockText, scale)
+				if err != nil {
+					return 0, err
+				}
+				return extractNumericFromTime(unit, clock)
+			}
+		}
 		return 0, nil
 	}
 	if extractUnitPrefersTime(unit) {

@@ -102,12 +102,16 @@ insert into temporal_strings values
 ('2024@2@29', '01:00:00'),
 ('20240229120000.123456', '01:00:00'),
 ('00000123456', '01:00:00'),
+('00001234', '01:00:00'),
+('00001234.5', '01:00:00'),
 ('1234.5', '01:00:00'),
 ('12:00:00', '01:00:00');
 select v, addtime(v, duration) as added, subtime(v, duration) as subtracted
 from temporal_strings order by v;
 ➤ v[12,40,0]  ¦  added[12,29,0]  ¦  subtracted[12,29,0]  𝄀
 00000123456  ¦  13:34:56  ¦  11:34:56  𝄀
+00001234  ¦  01:12:34  ¦  -00:47:26  𝄀
+00001234.5  ¦  01:12:34.500000  ¦  -00:47:25.500000  𝄀
 1234.5  ¦  01:12:34.500000  ¦  -00:47:25.500000  𝄀
 12:00:00  ¦  13:00:00  ¦  11:00:00  𝄀
 2024-2-29 00:00:00  ¦  2024-02-29 01:00:00  ¦  2024-02-28 23:00:00  𝄀
@@ -115,24 +119,107 @@ from temporal_strings order by v;
 20240229120000.123456  ¦  2024-02-29 13:00:00.123456  ¦  2024-02-29 11:00:00.123456  𝄀
 2024@2@29  ¦  2024-02-29 01:00:00  ¦  2024-02-28 23:00:00
 select addtime('00:00:01', v) as compact_duration_operand
-from temporal_strings where v in ('00000123456', '1234.5') order by v;
+from temporal_strings where v in ('00000123456', '00001234', '00001234.5', '1234.5') order by v;
 ➤ compact_duration_operand[12,29,0]  𝄀
 12:34:57  𝄀
+00:12:35  𝄀
+00:12:35.500000  𝄀
 00:12:35.500000
 select addtime('12:00:00', '2024-2-29 01:00:00') is null as calendar_duration_rejected,
 timediff('2024-2-29 00:00:00', '2024-2-28 00:00:00') as leap_day_difference;
 ➤ calendar_duration_rejected[-7,1,0]  ¦  leap_day_difference[92,10,0]  𝄀
 1  ¦  24:00:00
+select addtime('20240230', '00:00:01') is null as invalid_compact_calendar,
+addtime('00010101', '00:00:01') is not null as valid_low_year_calendar;
+➤ invalid_compact_calendar[-7,1,0]  ¦  valid_low_year_calendar[-7,1,0]  𝄀
+1  ¦  1
+select addtime('00000000.5', '00:00:01') = cast('00:00:01.5' as time(6)) as zero_padded_fraction,
+addtime('00010101.5', '00:00:01') = cast('01:01:02.5' as time(6)) as low_year_fraction;
+➤ zero_padded_fraction[-7,1,0]  ¦  low_year_fraction[-7,1,0]  𝄀
+1  ¦  1
 select extract(hour_second from cast('01:02:03' as time)) as hs_value,
 extract(minute_second from cast('01:02:03' as time)) as ms_value,
 extract(hour_microsecond from cast('01:02:03.000004' as time(6))) as hms_value,
 extract(hour_second from cast('-00:02:03' as time)) as negative_hs_value;
 ➤ hs_value[-5,64,0]  ¦  ms_value[-5,64,0]  ¦  hms_value[-5,64,0]  ¦  negative_hs_value[-5,64,0]  𝄀
 10203  ¦  203  ¦  10203000004  ¦  -203
+set sql_mode = '';
+create table temporal_extract_zero(v varchar(40));
+insert into temporal_extract_zero values
+('0000-00-00 12:34:56.123456'),
+('0000-00-00 00:00:00.000000'),
+('2024-02-29 12:34:56.123456'),
+(null);
+select hour(v) = extract(hour from v) as same_hour,
+extract(second_microsecond from v) = 56123456 as second_us,
+extract(day_microsecond from v) = 123456123456 as day_us
+from temporal_extract_zero where v = '0000-00-00 12:34:56.123456';
+➤ same_hour[-7,1,0]  ¦  second_us[-7,1,0]  ¦  day_us[-7,1,0]  𝄀
+1  ¦  1  ¦  1
+select extract(hour from v) = 0 as zero_hour,
+extract(day_microsecond from v) = 0 as zero_day_us
+from temporal_extract_zero where v = '0000-00-00 00:00:00.000000';
+➤ zero_hour[-7,1,0]  ¦  zero_day_us[-7,1,0]  𝄀
+1  ¦  1
+select extract(day_microsecond from v) = 29123456123456 as ordinary_day_us
+from temporal_extract_zero where v = '2024-02-29 12:34:56.123456';
+➤ ordinary_day_us[-7,1,0]  𝄀
+1
+select hour('0000-00-00 12.34.56.123456') = extract(hour from '0000-00-00 12.34.56.123456') as relaxed_hour,
+extract(second_microsecond from '0000-00-00 12.34.56.123456') = 56123456 as relaxed_second_us,
+extract(second_microsecond from '0000-00-00 12:34.56') = 56000000 as mixed_second_us,
+extract(second_microsecond from '0000-00-00 12.34') = 0 as absent_second;
+➤ relaxed_hour[-7,1,0]  ¦  relaxed_second_us[-7,1,0]  ¦  mixed_second_us[-7,1,0]  ¦  absent_second[-7,1,0]  𝄀
+1  ¦  1  ¦  1  ¦  1
+drop table temporal_extract_zero;
+set sql_mode = 'STRICT_TRANS_TABLES';
 select date_add(cast('838:59:59' as time), interval 1 second) is null as add_overflow,
 date_sub(cast('838:59:59' as time), interval -1 second) is null as sub_overflow;
 ➤ add_overflow[-7,1,0]  ¦  sub_overflow[-7,1,0]  𝄀
 1  ¦  1
+select date_add(cast('12:00:00' as time), interval '1' day);
+invalid argument time interval unit, bad value DAY
+select date_sub(cast('12:00:00' as time), interval 1 day);
+invalid argument time interval unit, bad value DAY
+select date_add(cast('12:00:00' as time), interval v day)
+from interval_text where v = '1';
+invalid argument time interval unit, bad value DAY
+select date_sub(cast('12:00:00' as time), interval v day_second)
+from interval_text where v = '1';
+invalid argument time interval unit, bad value DAY_SECOND
+prepare unsupported_time_day from 'select date_add(cast(''12:00:00'' as time), interval ? day)';
+invalid argument time interval unit, bad value DAY
+select date_add(cast('12:00:00' as time), interval v hour) = cast('13:00:00' as time) as allowed_hour
+from interval_text where v = '1';
+➤ allowed_hour[-7,1,0]  𝄀
+1
+create table temporal_compound_units(v varchar(20), n int);
+insert into temporal_compound_units values ('1', 1), ('10203', 10203);
+select date_add(cast('12:00:00' as time), interval n hour_second) = cast('12:00:01' as time) as numeric_one,
+date_sub(cast('12:00:00' as time), interval n hour_second) = cast('11:59:59' as time) as numeric_sub,
+date_add(cast('12:00:00' as time), interval v hour_second) = cast('12:00:01' as time) as string_one
+from temporal_compound_units where n = 1;
+➤ numeric_one[-7,1,0]  ¦  numeric_sub[-7,1,0]  ¦  string_one[-7,1,0]  𝄀
+1  ¦  1  ¦  1
+select date_add(cast('12:00:00' as time), interval n hour_second) = cast('14:50:03' as time) as numeric_10203,
+date_add(cast('12:00:00' as time), interval v hour_second) = cast('14:50:03' as time) as string_10203
+from temporal_compound_units where n = 10203;
+➤ numeric_10203[-7,1,0]  ¦  string_10203[-7,1,0]  𝄀
+1  ¦  1
+select date_add(cast('12:00:00' as time), interval n second_microsecond) =
+cast('12:00:00.1' as time(6)) as second_us,
+date_add(cast('12:00:00' as time), interval n minute_microsecond) =
+cast('12:00:00.1' as time(6)) as minute_us,
+date_add(cast('12:00:00' as time), interval n minute_second) =
+cast('12:00:01' as time(6)) as cmp_ms,
+date_add(cast('12:00:00' as time), interval n hour_microsecond) =
+cast('12:00:00.1' as time(6)) as hour_us,
+date_add(cast('12:00:00' as time), interval n hour_minute) =
+cast('12:01:00' as time(6)) as cmp_hm
+from temporal_compound_units where n = 1;
+➤ second_us[-7,1,0]  ¦  minute_us[-7,1,0]  ¦  cmp_ms[-7,1,0]  ¦  hour_us[-7,1,0]  ¦  cmp_hm[-7,1,0]  𝄀
+1  ¦  1  ¦  1  ¦  1  ¦  1
+drop table temporal_compound_units;
 create table week_dates(d date);
 insert into week_dates values ('2021-01-01');
 set default_week_format = 3;

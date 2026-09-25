@@ -10055,6 +10055,38 @@ func resetDateFunctionArgs(ctx context.Context, dateExpr *Expr, intervalExpr *Ex
 	if err != nil {
 		return nil, err
 	}
+	if dateExpr.Typ.Id == int32(types.T_time) {
+		// Check the SQL unit before a string or marker can be normalized to
+		// MICROSECOND. Calendar units have no stable TIME result semantics.
+		switch intervalType {
+		case types.MicroSecond, types.Second, types.Minute, types.Hour,
+			types.Second_MicroSecond, types.Minute_MicroSecond,
+			types.Minute_Second, types.Hour_MicroSecond,
+			types.Hour_Second, types.Hour_Minute:
+		default:
+			return nil, moerr.NewInvalidArg(ctx, "time interval unit", intervalType)
+		}
+
+		// Numeric compound intervals must use the same text grammar and
+		// normalized execution unit as their string and marker equivalents.
+		switch intervalType {
+		case types.Second_MicroSecond, types.Minute_MicroSecond,
+			types.Minute_Second, types.Hour_MicroSecond,
+			types.Hour_Second, types.Hour_Minute:
+			switch firstExpr.Typ.Id {
+			case int32(types.T_int8), int32(types.T_int16), int32(types.T_int32), int32(types.T_int64),
+				int32(types.T_uint8), int32(types.T_uint16), int32(types.T_uint32), int32(types.T_uint64),
+				int32(types.T_float32), int32(types.T_float64), int32(types.T_decimal64), int32(types.T_decimal128),
+				int32(types.T_any):
+				firstExpr, err = appendCastBeforeExpr(ctx, firstExpr, plan.Type{
+					Id: int32(types.T_varchar), Width: types.MaxVarcharLen,
+				})
+				if err != nil {
+					return nil, err
+				}
+			}
+		}
+	}
 
 	if numberExpr, returnType, handled, err := bindStringIntervalExpr(ctx, firstExpr, intervalType); err != nil {
 		return nil, err
