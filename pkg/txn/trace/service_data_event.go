@@ -295,7 +295,11 @@ func (s *service) ClearTableFilters() error {
 }
 
 func (s *service) RefreshTableFilters() error {
-	ctx, cancel := context.WithTimeoutCause(context.Background(), 30*time.Second, moerr.CauseRefreshTableFilters)
+	return s.refreshTableFilters(context.Background())
+}
+
+func (s *service) refreshTableFilters(ctx context.Context) error {
+	ctx, cancel := context.WithTimeoutCause(ctx, 30*time.Second, moerr.CauseRefreshTableFilters)
 	defer cancel()
 
 	var filters []EntryFilter

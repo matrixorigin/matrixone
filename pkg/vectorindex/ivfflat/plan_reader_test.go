@@ -103,10 +103,7 @@ func TestGetVersionUsesTypedRelationScan(t *testing.T) {
 	require.Len(t, scanner.requests, 1)
 }
 
-func TestRelationScanPolicyAssignsInMemoryRowsOnlyToPartitionZero(t *testing.T) {
-	require.True(t, ownsInMemoryPartition(1, 0))
-	require.True(t, ownsInMemoryPartition(2, 0))
-	require.False(t, ownsInMemoryPartition(2, 1))
+func TestRelationScanPolicyAssignsInMemoryRowsOnlyToCoordinator(t *testing.T) {
 	require.Equal(t, engine.DataCollectPolicy(engine.Policy_CollectAllData), relationScanPolicy(1, false))
 	require.Equal(t, engine.DataCollectPolicy(engine.Policy_CollectAllData), relationScanPolicy(2, true))
 	require.Equal(t, engine.DataCollectPolicy(engine.Policy_CollectCommittedPersistedData), relationScanPolicy(2, false))
@@ -2552,6 +2549,7 @@ func TestNewPlanReaderOwnsItsExecutionState(t *testing.T) {
 	}, searchplugin.Request{Identity: searchplugin.ScanIdentity{
 		PartitionCount: 2,
 		PartitionIndex: 1,
+		IsRemote:       true,
 	}})
 	require.NoError(t, err)
 	r := reader.(*planReader)
@@ -2593,6 +2591,39 @@ func TestNewPlanReaderOwnsItsExecutionState(t *testing.T) {
 	snapshotPlanReader := snapshotReader.(*planReader)
 	require.Equal(t, uint32(3), *snapshotPlanReader.scanner.accountID)
 	require.Equal(t, int64(8), snapshotPlanReader.scanner.snapshot.TS.PhysicalTime)
+}
+
+func TestNewPlanReaderExecutionRouteOwnsMemory(t *testing.T) {
+	ctrl := gomock.NewController(t)
+	proc := testutil.NewProc(t)
+	t.Cleanup(proc.Free)
+	proc.Base.TxnOperator = mock_frontend.NewMockTxnOperator(ctrl)
+	proc.Base.SessionInfo.StorageEngine = mock_frontend.NewMockEngine(ctrl)
+	for _, tc := range []struct {
+		name         string
+		count, index int32
+		remote, owns bool
+	}{
+		{"local nonzero", 2, 1, false, true},
+		{"remote zero", 2, 0, true, false},
+		{"legacy local", 2, 0, false, true},
+		{"legacy remote", 2, 1, true, false},
+		{"single", 1, 0, false, true},
+		{"replicated", 1, 0, true, true},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			reader, err := NewPlanReader(proc, &plan.VectorIndexScan{
+				Index: &plan.IndexDef{}, SourceTable: &plan.ObjectRef{},
+			}, searchplugin.Request{Identity: searchplugin.ScanIdentity{
+				PartitionCount: tc.count, PartitionIndex: tc.index, IsRemote: tc.remote,
+			}})
+			require.NoError(t, err)
+			t.Cleanup(func() { require.NoError(t, reader.Close()) })
+			scanner := reader.(*planReader).scanner
+			require.Equal(t, tc.owns, scanner.ownsInMemory)
+			require.Equal(t, tc.index, scanner.partitionIndex)
+		})
+	}
 }
 
 // Centroid IDs reach ivfCentroidPrefixFilter ranked by distance to the query, not
