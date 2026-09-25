@@ -16,7 +16,9 @@ package moerr
 
 import (
 	"context"
+	"errors"
 	"fmt"
+	"io"
 	"testing"
 
 	"github.com/matrixorigin/matrixone/pkg/util/errutil"
@@ -543,4 +545,59 @@ func TestNewErrCastWidthExceeded(t *testing.T) {
 	require.Equal(t,
 		"Can't cast 'abcd' to VARCHAR type. Src length 4 is larger than Dest length 3",
 		err.Error())
+}
+
+// ConvertGoError keeps a cancellation or deadline recognisable: errors.Is still
+// matches the context sentinel, also after an RPC round trip, while the result
+// stays a *moerr.Error for the RPC encoders.
+func TestConvertGoErrorKeepsContextIdentity(t *testing.T) {
+	ctx := context.Background()
+	for _, tc := range []struct {
+		cause, other error
+		code         uint16
+		mysqlCode    uint16
+	}{
+		{context.Canceled, context.DeadlineExceeded, ErrContextCanceled, ER_QUERY_INTERRUPTED},
+		{context.DeadlineExceeded, context.Canceled, ErrDeadlineExceeded, ER_UNKNOWN_ERROR},
+	} {
+		for _, in := range []error{
+			tc.cause,
+			fmt.Errorf("reading magic footer of parquet file: %w (read: 0)", tc.cause),
+		} {
+			got := ConvertGoError(ctx, in)
+			me, ok := got.(*Error)
+			require.True(t, ok, "RPC encoders type-assert *moerr.Error")
+			require.Equal(t, tc.code, me.ErrorCode())
+			require.Equal(t, tc.mysqlCode, me.MySQLCode())
+			require.Equal(t, in.Error(), me.Error(), "the original text is kept")
+			require.ErrorIs(t, got, tc.cause)
+			require.NotErrorIs(t, got, tc.other)
+
+			// RPC serializes the code: identity survives the round trip.
+			data, err := me.MarshalBinary()
+			require.NoError(t, err)
+			var decoded Error
+			require.NoError(t, decoded.UnmarshalBinary(data))
+			require.ErrorIs(t, &decoded, tc.cause)
+		}
+	}
+
+	// A deadline joined with a cancellation is not hidden by it.
+	joined := errors.Join(context.Canceled, context.DeadlineExceeded)
+	require.True(t, IsMoErrCode(ConvertGoError(ctx, joined), ErrDeadlineExceeded))
+
+	// Only errors converted from context errors match: a killed query or a
+	// statement timeout built directly keeps its existing errors.Is behaviour.
+	require.NotErrorIs(t, NewQueryInterrupted(ctx), context.Canceled)
+	require.NotErrorIs(t, NewQueryTimeout(ctx), context.DeadlineExceeded)
+	require.NotErrorIs(t, NewInternalErrorNoCtx("context canceled"), context.Canceled)
+	// Identity comparison of moerr values is unchanged.
+	qi := NewQueryInterrupted(ctx)
+	require.ErrorIs(t, qi, qi)
+
+	// Other errors convert as before.
+	plain := ConvertGoError(ctx, fmt.Errorf("disk on fire"))
+	require.True(t, IsMoErrCode(plain, ErrInternal))
+	require.True(t, IsMoErrCode(ConvertGoError(ctx, io.EOF), ErrUnexpectedEOF))
+	require.Nil(t, ConvertGoError(ctx, nil))
 }

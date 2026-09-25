@@ -1320,6 +1320,23 @@ func TestConstructAggregateConfigCoversLegacyConfigurationFailures(t *testing.T)
 
 }
 
+func TestGroupConcatNullSeparatorConfig(t *testing.T) {
+	proc := testutil.NewProcessWithMPool(t, "", mpool.MustNewZero())
+	defer proc.Free()
+	proc.SetResolveVariableFunc(func(string, bool, bool) (interface{}, error) {
+		return int64(1024), nil
+	})
+	value := &plan.Expr{Typ: plan.Type{Id: int32(types.T_varchar)}}
+	f := &plan.Function{
+		Func: &plan.ObjectRef{ObjName: plan2.NameGroupConcat},
+		Args: []*plan.Expr{value, plan2.MakePlan2NullTextConstExprWithType("NULL")},
+	}
+	args, config, err := constructAggregateConfigWithError(f, proc)
+	require.NoError(t, err)
+	require.Len(t, args, 1)
+	require.Equal(t, aggexec.EncodeGroupConcatConfig("", 1024), config)
+}
+
 func TestConstructAggregateConfigPreservesOtherSpecialConfigs(t *testing.T) {
 	proc := testutil.NewProcessWithMPool(t, "", mpool.MustNewZero())
 	defer proc.Free()

@@ -38,3 +38,11 @@ func TestExtractToDateReturnTypePrecision(t *testing.T) {
 	require.Equal(t, types.T_date, tp)
 	require.Equal(t, 0, fsp)
 }
+
+func TestExtractToDateReturnTypeDerivedDateDirectives(t *testing.T) {
+	for _, format := range []string{"%Y %j", "%x-%v-%w", "%X-%V-%a", "%Y-%U-%W", "%D %M %Y"} {
+		tp, fsp := ExtractToDateReturnType(format)
+		require.Equal(t, types.T_date, tp, format)
+		require.Zero(t, fsp, format)
+	}
+}

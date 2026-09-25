@@ -7485,6 +7485,50 @@ func TestVecFromBase64Narrow(t *testing.T) {
 	require.Truef(t, ok, "odd length should error: %s", info)
 }
 
+func TestVecFromBase64InvalidInputClass(t *testing.T) {
+	proc := testutil.NewProcess(t)
+	checkError := func(t *testing.T, resultType types.Type, decode fEvalFn, input string) error {
+		t.Helper()
+		fc := NewFunctionTestCase(proc,
+			[]FunctionTestInput{NewFunctionTestInput(types.T_varchar.ToType(), []string{input}, nil)},
+			NewFunctionTestResult(resultType, true, nil, nil), decode)
+		defer func() {
+			for _, parameter := range fc.parameters {
+				parameter.Free(proc.Mp())
+			}
+			fc.result.GetResultVector().Free(proc.Mp())
+		}()
+		require.NoError(t, fc.result.PreExtendAndReset(fc.fnLength))
+		_, err := fc.DebugRun()
+		return err
+	}
+	cases := []struct {
+		name       string
+		resultType types.Type
+		decode     fEvalFn
+		width      int
+	}{
+		{"f32", types.T_array_float32.ToType(), VecFromBase64[float32], 4},
+		{"f64", types.T_array_float64.ToType(), VecFromBase64[float64], 8},
+		{"f16", types.T_array_float16.ToType(), VecFromBase64[types.Float16], 2},
+		{"bf16", types.T_array_bf16.ToType(), VecFromBase64[types.BF16], 2},
+		{"int8", types.T_array_int8.ToType(), VecFromBase64[int8], 1},
+		{"uint8", types.T_array_uint8.ToType(), VecFromBase64[uint8], 1},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			err := checkError(t, tc.resultType, tc.decode, "!!!")
+			require.True(t, moerr.IsMoErrCode(err, moerr.ErrInvalidInput), "malformed base64: %v", err)
+
+			if tc.width > 1 {
+				err = checkError(t, tc.resultType, tc.decode, "AA==")
+				require.True(t, moerr.IsMoErrCode(err, moerr.ErrInvalidInput), "unaligned decoded length: %v", err)
+				require.ErrorContains(t, err, "not a multiple")
+			}
+		})
+	}
+}
+
 func initValidatePasswordStrengthTestCase() []tcTemp {
 	return []tcTemp{
 		{
