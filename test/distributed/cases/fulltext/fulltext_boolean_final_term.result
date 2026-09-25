@@ -1,0 +1,25 @@
+drop database if exists ft_bfinal;
+create database ft_bfinal;
+use ft_bfinal;
+create table src (id bigint primary key, body varchar(200));
+create fulltext index ft on src (body);
+insert into src values (1,'香蕉'),(2,'其他'),(3,'apple pie'),(4,'a cat');
+select id from src where match(body) against('蕉' in boolean mode) order by id;
+➤ id[-5,64,0]  𝄀
+1
+select id from src where match(body) against('nope 蕉' in boolean mode) order by id;
+➤ id[-5,64,0]  𝄀
+1
+select id from src where match(body) against('+蕉' in boolean mode) order by id;
+➤ id[-5,64,0]  𝄀
+1
+select id from src where match(body) against('apple a' in boolean mode) order by id;
+➤ id[-5,64,0]  𝄀
+3  𝄀
+4
+select id from src where match(body) against('apple pie' in boolean mode) order by id;
+➤ id[-5,64,0]  𝄀
+3
+select id from src where match(body) against('nope xy' in boolean mode) order by id;
+➤ id[-5,64,0]
+drop database ft_bfinal;
