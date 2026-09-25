@@ -446,7 +446,11 @@ func replaceColumnsForExpr(expr *plan.Expr, projMap map[[2]int32]*plan.Expr) *pl
 		}
 		mapID := [2]int32{ne.Col.RelPos, ne.Col.ColPos}
 		if projExpr, ok := projMap[mapID]; ok {
-			return DeepCopyExpr(projExpr)
+			inlined := DeepCopyExpr(projExpr)
+			if isIntegerSelector(inlined) {
+				ensurePreparedNumericMetadata(inlined).ProjectedCommonValue = true
+			}
+			return inlined
 		}
 
 	case *plan.Expr_F:

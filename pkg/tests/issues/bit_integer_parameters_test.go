@@ -286,6 +286,85 @@ func testBitIntegerPreparedParameters(t *testing.T, ctx context.Context, db *sql
 			})
 		}
 	})
+	t.Run("derived selector preserves common result", func(t *testing.T) {
+		conn, err := db.Conn(ctx)
+		require.NoError(t, err)
+		defer conn.Close()
+		for _, tc := range []struct {
+			name, direct, prepared string
+		}{
+			{"if", `select hex(x) from (select if(true,2.5,1.5e0) as x) d`,
+				`select hex(x) from (select if(true,?,?) as x) d`},
+			{"case", `select hex(x) from (select case when true then 2.5 else 1.5e0 end as x) d`,
+				`select hex(x) from (select case when true then ? else ? end as x) d`},
+		} {
+			t.Run(tc.name, func(t *testing.T) {
+				var direct string
+				require.NoError(t, conn.QueryRowContext(ctx, tc.direct).Scan(&direct))
+				require.Equal(t, "2", direct)
+				_, err := conn.ExecContext(ctx, "prepare derived_selector from '"+tc.prepared+"'")
+				require.NoError(t, err)
+				defer func() {
+					_, err := conn.ExecContext(ctx, "deallocate prepare derived_selector")
+					require.NoError(t, err)
+				}()
+				_, err = conn.ExecContext(ctx, "set @selector_a=2.5,@selector_b=1.5e0")
+				require.NoError(t, err)
+				var got string
+				require.NoError(t, conn.QueryRowContext(ctx,
+					"execute derived_selector using @selector_a,@selector_b").Scan(&got))
+				require.Equal(t, direct, got)
+			})
+		}
+	})
+	t.Run("NULLIF predicate remains outside integer source", func(t *testing.T) {
+		conn, err := db.Conn(ctx)
+		require.NoError(t, err)
+		defer conn.Close()
+		_, err = conn.ExecContext(ctx, `prepare nullif_source from 'select hex(nullif(?,?))'`)
+		require.NoError(t, err)
+		defer func() {
+			_, err := conn.ExecContext(ctx, "deallocate prepare nullif_source")
+			require.NoError(t, err)
+		}()
+		for _, tc := range []struct {
+			first, second string
+			want          sql.NullString
+		}{
+			{`"1.5"`, "null", sql.NullString{String: "312E35", Valid: true}},
+			{`"1.5"`, `"2.5"`, sql.NullString{String: "312E35", Valid: true}},
+			{`"1.5"`, `"1.5"`, sql.NullString{}},
+			{"null", `"1.5"`, sql.NullString{}},
+		} {
+			_, err = conn.ExecContext(ctx, "set @nullif_a="+tc.first+",@nullif_b="+tc.second)
+			require.NoError(t, err)
+			var got sql.NullString
+			require.NoError(t, conn.QueryRowContext(ctx,
+				"execute nullif_source using @nullif_a,@nullif_b").Scan(&got))
+			require.Equal(t, tc.want, got)
+		}
+	})
+	t.Run("COM_STMT NULLIF comparison source", func(t *testing.T) {
+		conn, err := db.Conn(ctx)
+		require.NoError(t, err)
+		defer conn.Close()
+		stmt, err := conn.PrepareContext(ctx, `select hex(nullif(?,?))`)
+		require.NoError(t, err)
+		defer stmt.Close()
+		for _, tc := range []struct {
+			first, second any
+			want          sql.NullString
+		}{
+			{"1.5", nil, sql.NullString{String: "312E35", Valid: true}},
+			{"1.5", "2.5", sql.NullString{String: "312E35", Valid: true}},
+			{"1.5", "1.5", sql.NullString{}},
+			{nil, "1.5", sql.NullString{}},
+		} {
+			var got sql.NullString
+			require.NoError(t, stmt.QueryRowContext(ctx, tc.first, tc.second).Scan(&got))
+			require.Equal(t, tc.want, got)
+		}
+	})
 	t.Run("SQL EXECUTE aggregate signed range", func(t *testing.T) {
 		conn, err := db.Conn(ctx)
 		require.NoError(t, err)

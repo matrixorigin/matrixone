@@ -282,6 +282,9 @@ message PreparedNumericMetadata {
   // IFNULL is lowered to CASE, but its reconciled common value remains a
   // value-producing boundary for source-dependent integer consumers.
   bool ifnull_common_value = 12;
+  // A selector inlined from a projected column owns its reconciled result
+  // domain; integer consumers must not reinterpret its individual arms.
+  bool projected_common_value = 13;
 }
 
 message Expr {

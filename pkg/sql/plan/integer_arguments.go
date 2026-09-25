@@ -329,7 +329,8 @@ func (rule *ResetParamRefRule) integerArgumentLogicalSource(source *Expr) (*Expr
 			}
 		}
 		bound, err := BindFuncExprImplByPlanExpr(rule.ctx, fn.Func.ObjName, args)
-		if err == nil && source.GetPreparedNumeric().GetIfnullCommonValue() {
+		if err == nil && (source.GetPreparedNumeric().GetIfnullCommonValue() ||
+			source.GetPreparedNumeric().GetProjectedCommonValue()) {
 			bound.PreparedNumeric = copyPreparedNumericMetadata(source.PreparedNumeric)
 		}
 		if err == nil {
@@ -455,7 +456,8 @@ func appendSourceDependentIntegerArgument(ctx context.Context, source *Expr, nam
 	bitSources := function.IntegerArgumentUsesBitSources(name, position)
 	fn := source.GetF()
 	_, numericSelector := function.IntegerArgumentTargetForSource(name, position, types.T(source.Typ.Id), false)
-	if (bitSources || numericSelector) && fn != nil && fn.Func != nil && !source.GetPreparedNumeric().GetIfnullCommonValue() &&
+	if (bitSources || numericSelector) && fn != nil && fn.Func != nil &&
+		!source.GetPreparedNumeric().GetIfnullCommonValue() && !source.GetPreparedNumeric().GetProjectedCommonValue() &&
 		(fn.Func.ObjName == "case" || fn.Func.ObjName == "if" || fn.Func.ObjName == "iff") {
 		args := append([]*Expr(nil), fn.Args...)
 		for i, arg := range args {
@@ -593,7 +595,8 @@ func (rule *ResetParamRefRule) restoreIntegerSelectorSources(
 			arg = stripIntegerSelectionReconciliation(arg)
 			if arg.GetPreparedNumeric().GetProvisionalResultPeer() {
 				arg, err = restorePreparedResultPeer(rule.ctx, arg)
-			} else if isIntegerSelector(arg) && !arg.GetPreparedNumeric().GetIfnullCommonValue() {
+			} else if isIntegerSelector(arg) && !arg.GetPreparedNumeric().GetIfnullCommonValue() &&
+				!arg.GetPreparedNumeric().GetProjectedCommonValue() {
 				exactArgs[i], probeArgs[i], err = rule.restoreIntegerSelectorSources(arg, name, position)
 				if err == nil {
 					continue
@@ -632,7 +635,7 @@ func (rule *ResetParamRefRule) sourceDependentIntegerRuntimeSource(source *Expr,
 			return rule.sourceDependentIntegerRuntimeSource(fn.Args[0], name, position)
 		}
 	}
-	if source.GetPreparedNumeric().GetIfnullCommonValue() {
+	if source.GetPreparedNumeric().GetIfnullCommonValue() || source.GetPreparedNumeric().GetProjectedCommonValue() {
 		// Rebuild the CASE from execution-time operands, then convert its
 		// reconciled value. Its arms are not independent integer sources.
 		return rule.integerArgumentLogicalSource(source)
@@ -672,7 +675,8 @@ func bindRestoredIntegerSelector(
 			continue
 		}
 		var err error
-		if isIntegerSelector(arg) && !arg.GetPreparedNumeric().GetIfnullCommonValue() {
+		if isIntegerSelector(arg) && !arg.GetPreparedNumeric().GetIfnullCommonValue() &&
+			!arg.GetPreparedNumeric().GetProjectedCommonValue() {
 			args[i], err = bindRestoredIntegerSelector(ctx, arg, name, position, bitSources)
 		} else {
 			args[i], err = appendSourceDependentIntegerArgument(ctx, arg, name, position)

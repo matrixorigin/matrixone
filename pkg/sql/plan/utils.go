@@ -1180,7 +1180,7 @@ func collectPreparedIntegerArgumentParamPositions(
 		// even when flattening replaced its marker with a ColRef.
 		sources[expr] = struct{}{}
 	}
-	_ = plan.VisitExprTree(expr, func(nested *plan.Expr) error {
+	visitPreparedIntegerValueExpr(expr, func(nested *plan.Expr) {
 		if sources != nil && (nested.GetP() != nil || nested.GetF() != nil || nested.GetW() != nil) {
 			// Every expression on this selected-value path belongs to the integer
 			// source contract. Flattening may have replaced its marker with a
@@ -1189,11 +1189,11 @@ func collectPreparedIntegerArgumentParamPositions(
 		}
 		col := nested.GetCol()
 		if col == nil || col.ColPos < 0 {
-			return nil
+			return
 		}
 		node := query.Nodes[nodeID]
 		if node == nil {
-			return nil
+			return
 		}
 		// Aggregate and window outputs refer to local value producers, not
 		// ordinary child projections. Resolve those producers before walking
@@ -1219,7 +1219,7 @@ func collectPreparedIntegerArgumentParamPositions(
 				visited[key] = struct{}{}
 				collectPreparedIntegerArgumentParamPositions(query, nodeID, producer, positions, visited, sources)
 			}
-			return nil
+			return
 		}
 		// AGG emits grouping columns as negative-relation ColRefs. Their value
 		// lineage is the corresponding GROUP BY expression on this node, not a
@@ -1234,7 +1234,7 @@ func collectPreparedIntegerArgumentParamPositions(
 				collectPreparedIntegerArgumentParamPositions(
 					query, nodeID, node.GroupBy[col.ColPos], positions, visited, sources)
 			}
-			return nil
+			return
 		}
 		// A set output represents the same ordinal in every branch. RelPos=0
 		// is an output encoding, not proof that only the left input contributes.
@@ -1276,8 +1276,107 @@ func collectPreparedIntegerArgumentParamPositions(
 			collectPreparedIntegerArgumentParamPositions(
 				query, childID, child.ProjectList[col.ColPos], positions, visited, sources)
 		}
-		return nil
 	})
+}
+
+// Visit only value-producing descendants of an integer source. CASE/IF
+// conditions choose a result but do not supply its integer domain. Only a
+// NULLIF comparison with a static numeric peer keeps its independent numeric
+// rebinding; comparing two markers must not mark either predicate as a source.
+func visitPreparedIntegerValueExpr(expr *plan.Expr, visit func(*plan.Expr)) {
+	if expr == nil {
+		return
+	}
+	visit(expr)
+	if lit := expr.GetLit(); lit != nil {
+		visitPreparedIntegerValueExpr(lit.Src, visit)
+	}
+	if fn := expr.GetF(); fn != nil {
+		for i, arg := range fn.Args {
+			if isIntegerSelector(expr) {
+				if fn.Func.ObjName == "case" && i%2 == 0 && i != len(fn.Args)-1 {
+					// A numeric literal in NULLIF's comparison established an
+					// independent numeric predicate domain at PREPARE. Keep its
+					// execution-time rebinding without admitting a marker-only
+					// comparison (NULLIF(?,?)) as an integer value source.
+					if len(fn.Args) != 3 || !preparedNullValueExpr(fn.Args[1]) ||
+						!preparedComparisonHasNumericLiteral(arg) ||
+						!preparedComparisonUsesResultMarker(arg, fn.Args[2]) {
+						continue
+					}
+				}
+				if fn.Func.ObjName != "case" && i == 0 {
+					continue
+				}
+			}
+			visitPreparedIntegerValueExpr(arg, visit)
+		}
+	}
+	if list := expr.GetList(); list != nil {
+		for _, item := range list.List {
+			visitPreparedIntegerValueExpr(item, visit)
+		}
+	}
+	if sub := expr.GetSub(); sub != nil {
+		visitPreparedIntegerValueExpr(sub.Child, visit)
+	}
+	if window := expr.GetW(); window != nil {
+		visitPreparedIntegerValueExpr(window.WindowFunc, visit)
+		for _, item := range window.PartitionBy {
+			visitPreparedIntegerValueExpr(item, visit)
+		}
+		for _, order := range window.OrderBy {
+			if order != nil {
+				visitPreparedIntegerValueExpr(order.Expr, visit)
+			}
+		}
+		if window.Frame != nil {
+			if window.Frame.Start != nil {
+				visitPreparedIntegerValueExpr(window.Frame.Start.Val, visit)
+			}
+			if window.Frame.End != nil {
+				visitPreparedIntegerValueExpr(window.Frame.End.Val, visit)
+			}
+		}
+	}
+}
+
+func preparedComparisonHasNumericLiteral(expr *plan.Expr) bool {
+	fn := expr.GetF()
+	if fn == nil || fn.Func == nil || fn.Func.ObjName != "=" || len(fn.Args) != 2 {
+		return false
+	}
+	for _, arg := range fn.Args {
+		if lit := arg.GetLit(); lit != nil && !lit.Isnull {
+			typ := types.T(arg.Typ.Id)
+			if typ.IsInteger() || typ.IsFloat() || typ.IsDecimal() {
+				return true
+			}
+		}
+	}
+	return false
+}
+
+func preparedNullValueExpr(expr *plan.Expr) bool {
+	if expr.GetLit().GetIsnull() {
+		return true
+	}
+	fn := expr.GetF()
+	return fn != nil && fn.Func != nil && fn.Func.ObjName == "cast" && len(fn.Args) == 2 &&
+		preparedNullValueExpr(fn.Args[0])
+}
+
+func preparedComparisonUsesResultMarker(comparison, result *plan.Expr) bool {
+	resultPositions := preparedNumericValueParamPositions(result)
+	if len(resultPositions) == 0 {
+		return false
+	}
+	for position := range preparedNumericValueParamPositions(comparison) {
+		if _, ok := resultPositions[position]; ok {
+			return true
+		}
+	}
+	return false
 }
 
 // PreparedPlanBitCountFallbackParamPositions returns unresolved BIT_COUNT
@@ -1455,6 +1554,7 @@ func copyPreparedNumericMetadata(metadata *plan.PreparedNumericMetadata) *plan.P
 		ProvisionalResultPeerScale:  metadata.ProvisionalResultPeerScale,
 		StringDomainSource:          DeepCopyExpr(metadata.StringDomainSource),
 		IfnullCommonValue:           metadata.IfnullCommonValue,
+		ProjectedCommonValue:        metadata.ProjectedCommonValue,
 	}
 }
 
@@ -7440,7 +7540,8 @@ func refreshPreparedPlanProjectionExprType(
 		// A grouped subquery may acquire its numeric domain only after the
 		// projection refresh. Reconcile IFNULL's common value from those
 		// refreshed sources rather than retaining PREPARE's TEXT envelopes.
-		if expr.GetPreparedNumeric().GetIfnullCommonValue() && types.T(expr.Typ.Id).IsMySQLString() &&
+		if (expr.GetPreparedNumeric().GetIfnullCommonValue() || expr.GetPreparedNumeric().GetProjectedCommonValue()) &&
+			types.T(expr.Typ.Id).IsMySQLString() &&
 			len(exprImpl.F.Args) == 3 {
 			args := DeepCopyExprList(exprImpl.F.Args)
 			for _, i := range []int{1, 2} {
