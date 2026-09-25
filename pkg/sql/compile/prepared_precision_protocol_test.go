@@ -140,6 +140,35 @@ func TestTemporalUnitAndWeekProtocolAdmission(t *testing.T) {
 	require.ErrorContains(t, c.constrainTemporalResultWorkers(qry), "legacy interval")
 }
 
+func TestTypedNumericIntervalRequiresNewRemoteOverload(t *testing.T) {
+	c, client := expressionProtocolTestCompile(t)
+	expr := &planpb.Expr{Typ: planpb.Type{Id: int32(types.T_int64)}, Expr: &planpb.Expr_F{F: &planpb.Function{
+		Func: &planpb.ObjectRef{Obj: function.EncodeOverloadID(function.TO_INTERVAL_MICROSECOND, 5)},
+		Args: []*planpb.Expr{
+			{Typ: planpb.Type{Id: int32(types.T_decimal64)}, Expr: &planpb.Expr_Col{Col: &planpb.ColRef{ColPos: 0}}},
+			{Typ: planpb.Type{Id: int32(types.T_int64)}, Expr: &planpb.Expr_Col{Col: &planpb.ColRef{ColPos: 1}}},
+		},
+	}}}
+	features, err := planpb.RequiredRemoteExpressionFeatures(expr)
+	require.NoError(t, err)
+	require.True(t, features.TypedNumericIntervalOverloads)
+	require.Equal(t, defines.MORPCVersion99, temporalExpressionProtocolVersion(features))
+
+	qry := &planpb.Query{Nodes: []*planpb.Node{{ProjectList: []*planpb.Expr{expr}}}, Steps: []int32{0}}
+	client.version = defines.MORPCVersion98
+	c.execType = plan2.ExecTypeAP_MULTICN
+	c.cnList = engine.Nodes{{Id: "old-v98-worker", Addr: "remote:6001", Mcpu: 4}}
+	require.NoError(t, c.constrainTemporalResultWorkers(qry))
+	require.Equal(t, plan2.ExecTypeAP_ONECN, c.execType)
+
+	p := &pipeline.Pipeline{InstructionList: []*pipeline.Instruction{{ProjectList: []*planpb.Expr{expr}}}}
+	rt := moruntime.ServiceRuntime(c.proc.GetService())
+	rt.SetGlobalVariables(moruntime.MOProtocolVersion, defines.MORPCVersion98)
+	require.ErrorContains(t, validateRemoteExpressionPipelineProtocol(c.proc, p), "version 99")
+	rt.SetGlobalVariables(moruntime.MOProtocolVersion, defines.MORPCVersion99)
+	require.NoError(t, validateRemoteExpressionPipelineProtocol(c.proc, p))
+}
+
 func TestTemporalResultProtocolPlacementAndReceive(t *testing.T) {
 	c, client := expressionProtocolTestCompile(t)
 	expr := temporalResultProtocolExpr(function.ADDTIME, types.T_varchar, types.T_varchar)

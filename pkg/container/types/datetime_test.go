@@ -59,6 +59,15 @@ func TestCalendarCandidateCompactDurationBoundary(t *testing.T) {
 		{"24-2-30", true},   // Invalid calendar spellings must not fall back to TIME.
 		{"10:11:12", false}, // An ordinary clock wins over a two-digit year.
 		{"12:99:00", false}, // An invalid clock must not become a calendar.
+		{"12:34.56", false}, // One-colon fractional clocks are still durations.
+		{"01:02.03", false},
+		{"1:2.3", false},
+		{"123:45.6", false},
+		{"12:99.56", false},   // Validate a malformed clock as TIME; do not reinterpret it as a date.
+		{"1234:56:07", false}, // Four-digit hours can cancel back into the SQL TIME range.
+		{"1234:56.7", false},
+		{"2024:02:29", false}, // Whole colon clocks take precedence at every hour width.
+		{"24:2-29", true},     // Mixed punctuation is not a whole clock.
 	} {
 		t.Run(tc.input, func(t *testing.T) {
 			require.Equal(t, tc.calendar, IsCalendarStringCandidate(tc.input))

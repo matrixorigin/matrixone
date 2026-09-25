@@ -229,6 +229,19 @@ addtime('24-2-30', '00:00:01') is null as invalid_short_calendar;
 select timediff('24-2-29', '24-2-28') = cast('24:00:00' as time) as short_year_difference;
 ➤ short_year_difference[-7,1,0]  𝄀
 1
+select addtime('12:34.56', '00:00:01') = '12:34:01.560000' as short_fraction_clock,
+addtime('01:02.03', '00:00:01') = '01:02:01.030000' as date_shaped_clock,
+addtime('00:00:01', '12:34.56') = '12:34:01.560000' as duration_operand,
+subtime('12:34.56', '00:00:01') = '12:33:59.560000' as subtract_clock,
+timediff('12:34.56', '12:34:00.00') = cast('00:00:00.56' as time(6)) as clock_difference;
+➤ short_fraction_clock[-7,1,0]  ¦  date_shaped_clock[-7,1,0]  ¦  duration_operand[-7,1,0]  ¦  subtract_clock[-7,1,0]  ¦  clock_difference[-7,1,0]  𝄀
+1  ¦  1  ¦  1  ¦  1  ¦  1
+select addtime('1234:00:00', '-500:00:00') = '734:00:00' as wide_clock_cancel,
+addtime('1234:00:00', '-500:00:00') = addtime('51 10:00:00', '-500:00:00') as day_clock_equivalent,
+addtime('24-2-29', '00:00:01') = '2024-02-29 00:00:01' as calendar_control,
+addtime('24-2-30', '00:00:01') is null as invalid_calendar_control;
+➤ wide_clock_cancel[-7,1,0]  ¦  day_clock_equivalent[-7,1,0]  ¦  calendar_control[-7,1,0]  ¦  invalid_calendar_control[-7,1,0]  𝄀
+1  ¦  1  ¦  1  ¦  1
 select date_add(time '12:00:00', interval '0.0000009' hour) = cast('12:00:00.003240' as time(6)) as tiny_hour,
 date_add(time '12:00:00', interval '-0.0000009' hour) = cast('11:59:59.996760' as time(6)) as negative_tiny_hour,
 date_add(time '12:00:00', interval '0.0000005' minute) = cast('12:00:00.000030' as time(6)) as tiny_minute;
@@ -260,6 +273,14 @@ date_add(time '12:00:00', interval n hour_minute) = cast('10:55:00' as time(6)) 
 from temporal_decimal_intervals where n < 0;
 ➤ negative_minute_second[-7,1,0]  ¦  negative_hour_minute[-7,1,0]  𝄀
 1  ¦  1
+select date_add(time '12:00:00', interval n hour) = cast('13:30:00' as time(6)) as positive_scalar_hour
+from temporal_decimal_intervals where n > 0;
+➤ positive_scalar_hour[-7,1,0]  𝄀
+1
+select date_add(time '12:00:00', interval n hour) = cast('10:30:00' as time(6)) as negative_scalar_hour
+from temporal_decimal_intervals where n < 0;
+➤ negative_scalar_hour[-7,1,0]  𝄀
+1
 select timestampdiff(second, '2024-01-01 00:00:00',
 date_add('2024-01-01 00:00:00', interval '1.5000000' minute_second)) = 5000060 as string_width_control;
 ➤ string_width_control[-7,1,0]  𝄀
@@ -271,6 +292,48 @@ date_add(time '12:00:00', interval 1 minute_second) as decimal_integer_minute_se
 ➤ decimal_integer_microsecond[-7,1,0]  ¦  decimal_integer_minute_second[-7,1,0]  𝄀
 1  ¦  1
 drop table temporal_decimal_intervals;
+create table temporal_scalar_ties(n decimal(18,7));
+insert into temporal_scalar_ties values (34410126.8315485), (-34410126.8315485);
+select date_add(cast('2024-01-01 00:00:00' as datetime(6)), interval n second) =
+cast('2025-02-02 06:22:06.831549' as datetime(6)) as positive_column_tie
+from temporal_scalar_ties where n > 0;
+➤ positive_column_tie[-7,1,0]  𝄀
+1
+select date_add(cast('2024-01-01 00:00:00' as datetime(6)), interval n second) =
+cast('2022-11-28 17:37:53.168451' as datetime(6)) as negative_column_tie
+from temporal_scalar_ties where n < 0;
+➤ negative_column_tie[-7,1,0]  𝄀
+1
+select date_add(cast('2024-01-01 00:00:00' as datetime(6)), interval cast(34410126.8315485 as decimal(18,7)) second) =
+cast('2025-02-02 06:22:06.831549' as datetime(6)) as positive_literal_tie,
+date_add(cast('2024-01-01 00:00:00' as datetime(6)), interval cast(-34410126.8315485 as decimal(18,7)) second) =
+cast('2022-11-28 17:37:53.168451' as datetime(6)) as negative_literal_tie;
+➤ positive_literal_tie[-7,1,0]  ¦  negative_literal_tie[-7,1,0]  𝄀
+1  ¦  1
+drop table temporal_scalar_ties;
+select date_add(time '12:00:00', interval cast(1e-14 as double) second_microsecond) = cast('12:00:00' as time(6)) as tiny_float_us,
+date_add(time '12:00:00', interval cast(0.00000000000001 as decimal(38,14)) second_microsecond) = cast('12:00:00' as time(6)) as tiny_decimal_us,
+date_add(time '12:00:00', interval cast(1e-14 as double) hour_minute) = cast('12:01:00' as time(6)) as tiny_float_hm,
+date_add(time '12:00:00', interval cast(1000000000000000 as double) hour_second) is null as huge_float_hs,
+date_add(time '12:00:00', interval cast(1000000000000000 as double) second_microsecond) = cast('12:00:00.1' as time(6)) as huge_float_us,
+date_add(time '12:00:00', interval '1E-14' second_microsecond) = cast('12:00:01.14' as time(6)) as legacy_text_fields;
+➤ tiny_float_us[-7,1,0]  ¦  tiny_decimal_us[-7,1,0]  ¦  tiny_float_hm[-7,1,0]  ¦  huge_float_hs[-7,1,0]  ¦  huge_float_us[-7,1,0]  ¦  legacy_text_fields[-7,1,0]  𝄀
+1  ¦  1  ¦  1  ¦  1  ¦  1  ¦  1
+create table temporal_numeric_repr(f double, d decimal(38,14));
+insert into temporal_numeric_repr values (1e-14, 0.00000000000001), (1.5, 1.50000000000000), (1000000000000000, 1000000000000000), (null, null);
+select date_add(time '12:00:00', interval f second_microsecond) = date_add(time '12:00:00', interval d second_microsecond) as equivalent_numeric_us,
+date_add(time '12:00:00', interval f hour_second) = date_add(time '12:00:00', interval d hour_second) as equivalent_numeric_hs
+from temporal_numeric_repr where f < 2 order by f;
+➤ equivalent_numeric_us[-7,1,0]  ¦  equivalent_numeric_hs[-7,1,0]  𝄀
+1  ¦  1  𝄀
+1  ¦  1
+select date_add(time '12:00:00', interval f hour_second) is null as float_overflow,
+date_add(time '12:00:00', interval d hour_second) is null as decimal_overflow,
+date_add(time '12:00:00', interval f second_microsecond) = date_add(time '12:00:00', interval d second_microsecond) as singleton_fraction
+from temporal_numeric_repr where f > 100000000000000;
+➤ float_overflow[-7,1,0]  ¦  decimal_overflow[-7,1,0]  ¦  singleton_fraction[-7,1,0]  𝄀
+1  ¦  1  ¦  1
+drop table temporal_numeric_repr;
 create table week_dates(d date);
 insert into week_dates values ('2021-01-01');
 set default_week_format = 3;

@@ -717,11 +717,20 @@ func TestTemporalCompatibilityCompactOperandMatrix(t *testing.T) {
 			require.Error(t, err)
 		})
 	}
-	for _, clock := range []string{"10:11:12", "01:02:03"} {
+	for _, clock := range []string{
+		"10:11:12", "01:02:03", "12:34.56", "01:02.03",
+		"1234:56:07", "1234:56.7", "2024:02:29",
+	} {
 		t.Run("clock/"+clock, func(t *testing.T) {
-			_, _, kind, err := parseTemporalString(clock, 6)
+			_, got, kind, err := parseTemporalString(clock, 6)
 			require.NoError(t, err)
 			require.Equal(t, temporalStringTime, kind)
+			want, err := types.ParseTime(clock, 6)
+			require.NoError(t, err)
+			require.Equal(t, want, got)
+			operand, err := parseTimeOperand(clock, 6)
+			require.NoError(t, err)
+			require.Equal(t, want, operand)
 		})
 	}
 	for _, tc := range []struct {
@@ -763,7 +772,7 @@ func TestTemporalCompatibilityCompactOperandMatrix(t *testing.T) {
 	}
 	for _, input := range []string{
 		"20240230", "00000000001234", "2024-2-30 12:34:56", "24-2-30",
-		"00001234.bad", "00001299", "00008360",
+		"00001234.bad", "00001299", "00008360", "12:99.56",
 	} {
 		t.Run("invalid/"+input, func(t *testing.T) {
 			_, _, kind, err := parseTemporalString(input, 6)

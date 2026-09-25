@@ -174,21 +174,50 @@ func TestTimeNumericDecimalCompoundCanonicalSpelling(t *testing.T) {
 	ctx := context.Background()
 	timeExpr := &planpb.Expr{Typ: planpb.Type{Id: int32(types.T_time)}, Expr: &planpb.Expr_Col{Col: &planpb.ColRef{ColPos: 0}}}
 	for _, unit := range []string{"second_microsecond", "minute_microsecond", "minute_second", "hour_microsecond", "hour_second", "hour_minute"} {
-		for _, scale := range []int32{0, 7} {
-			value := &planpb.Expr{Typ: planpb.Type{Id: int32(types.T_decimal64), Width: 12, Scale: scale}, Expr: &planpb.Expr_Col{Col: &planpb.ColRef{ColPos: 1}}}
+		for _, sourceType := range []planpb.Type{
+			{Id: int32(types.T_decimal64), Width: 12, Scale: 0},
+			{Id: int32(types.T_decimal64), Width: 12, Scale: 7},
+			{Id: int32(types.T_decimal128), Width: 30, Scale: 14},
+			{Id: int32(types.T_float32)},
+			{Id: int32(types.T_float64)},
+		} {
+			value := &planpb.Expr{Typ: sourceType, Expr: &planpb.Expr_Col{Col: &planpb.ColRef{ColPos: 1}}}
 			interval := &planpb.Expr{Expr: &planpb.Expr_List{List: &planpb.ExprList{List: []*planpb.Expr{value, makePlan2StringConstExprWithType(unit)}}}}
 			args, err := resetDateFunctionArgs(ctx, timeExpr, interval)
 			require.NoError(t, err, unit)
 			require.Len(t, args, 3)
 			normalizer := args[1].GetF()
 			require.NotNil(t, normalizer, unit)
-			source := normalizer.Args[0]
-			if scale == 7 {
-				require.Equal(t, "trim", source.GetF().Func.ObjName, unit)
-				require.Equal(t, "trim", source.GetF().Args[2].GetF().Func.ObjName, unit)
-			} else {
-				require.NotEqual(t, "trim", source.GetF().Func.ObjName, unit)
-			}
+			require.Equal(t, "to_interval_microsecond", normalizer.Func.ObjName, unit)
+			require.Equal(t, sourceType.Id, normalizer.Args[0].Typ.Id, unit)
+			require.Equal(t, sourceType.Scale, normalizer.Args[0].Typ.Scale, unit)
+		}
+	}
+}
+
+func TestScalarNumericColumnPreservesFractionalUnit(t *testing.T) {
+	ctx := context.Background()
+	for _, unit := range []string{"second", "minute", "hour", "day"} {
+		firstType := types.T_time
+		if unit == "day" {
+			firstType = types.T_datetime
+		}
+		first := &planpb.Expr{Typ: planpb.Type{Id: int32(firstType)}, Expr: &planpb.Expr_Col{Col: &planpb.ColRef{ColPos: 0}}}
+		for _, sourceType := range []planpb.Type{
+			{Id: int32(types.T_decimal64), Width: 12, Scale: 7},
+			{Id: int32(types.T_decimal128), Width: 30, Scale: 14},
+			{Id: int32(types.T_float32)},
+			{Id: int32(types.T_float64)},
+		} {
+			value := &planpb.Expr{Typ: sourceType, Expr: &planpb.Expr_Col{Col: &planpb.ColRef{ColPos: 1}}}
+			interval := &planpb.Expr{Expr: &planpb.Expr_List{List: &planpb.ExprList{List: []*planpb.Expr{value, makePlan2StringConstExprWithType(unit)}}}}
+			args, err := resetDateFunctionArgs(ctx, first, interval)
+			require.NoError(t, err, unit)
+			require.Equal(t, int64(types.MicroSecond), args[2].GetLit().GetI64Val(), unit)
+			normalizer := args[1].GetF()
+			require.NotNil(t, normalizer, unit)
+			require.Equal(t, "to_interval_microsecond", normalizer.Func.ObjName, unit)
+			require.Equal(t, sourceType.Id, normalizer.Args[0].Typ.Id, unit)
 		}
 	}
 }

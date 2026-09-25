@@ -105,10 +105,16 @@ func (dt Datetime) String2(scale int32) string {
 // separators; this keeps compact TIME fractions such as 1234.5 as durations.
 // Compact dates and datetimes have exactly eight and fourteen digits.
 func IsCalendarStringCandidate(s string) bool {
+	// A complete colon clock is a duration even when its fields also look
+	// like a separated date. Decide the family before validating the fields:
+	// an invalid minute must not be reinterpreted as a calendar month.
+	if isWholeColonClock(s) {
+		return false
+	}
 	// Short separated years are accepted by ParseDateCast. The ordinary
-	// hh:mm:ss spelling is also accepted there as a two-digit year, but is
-	// a duration in temporal arithmetic. Recognize the date structure
-	// without validating it so an invalid date cannot fall back to TIME.
+	// clock spelling is also accepted there as a short year. Recognize the
+	// remaining date structure without validating it so an invalid date
+	// cannot fall back to TIME.
 	for yearLen := 1; yearLen <= 3 && yearLen+3 < len(s); yearLen++ {
 		if !isAllDigit(s[:yearLen]) || !isDateDelimiter(s[yearLen]) {
 			continue
@@ -118,8 +124,7 @@ func IsCalendarStringCandidate(s string) bool {
 			if second >= len(s) {
 				break
 			}
-			if isAllDigit(s[yearLen+1:second]) && isDateDelimiter(s[second]) &&
-				!(s[yearLen] == ':' && s[second] == ':') {
+			if isAllDigit(s[yearLen+1:second]) && isDateDelimiter(s[second]) {
 				return true
 			}
 		}
@@ -146,6 +151,43 @@ func IsCalendarStringCandidate(s string) bool {
 		return err == nil
 	}
 	return true
+}
+
+// isWholeColonClock recognizes only a complete H:MM[:SS][.fraction] shape.
+// ParseTime remains responsible for the actual field and range checks.
+func isWholeColonClock(s string) bool {
+	i := 0
+	for i < len(s) && s[i] >= '0' && s[i] <= '9' {
+		i++
+	}
+	if i == 0 || i == len(s) || s[i] != ':' {
+		return false
+	}
+	i++
+	start := i
+	for i < len(s) && s[i] >= '0' && s[i] <= '9' {
+		i++
+	}
+	if i == start {
+		return false
+	}
+	if i < len(s) && s[i] == ':' {
+		i++
+		start = i
+		for i < len(s) && s[i] >= '0' && s[i] <= '9' {
+			i++
+		}
+		if i == start {
+			return false
+		}
+	}
+	if i < len(s) && s[i] == '.' {
+		i++
+		for i < len(s) && s[i] >= '0' && s[i] <= '9' {
+			i++
+		}
+	}
+	return i == len(s)
 }
 
 // ParseDatetime will parse a string to be a Datetime

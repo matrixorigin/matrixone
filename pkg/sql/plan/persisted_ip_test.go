@@ -55,6 +55,9 @@ func TestPersistedDecimalLiteralUsesDedicatedEpochInMixedOwner(t *testing.T) {
 	intervalExpr := &planpb.Expr{Typ: planpb.Type{Id: int32(types.T_int64)}, Expr: &planpb.Expr_F{F: &planpb.Function{
 		Func: &planpb.ObjectRef{Obj: function.EncodeOverloadID(function.TO_INTERVAL_MICROSECOND, 0)},
 	}}}
+	typedIntervalExpr := &planpb.Expr{Typ: planpb.Type{Id: int32(types.T_int64)}, Expr: &planpb.Expr_F{F: &planpb.Function{
+		Func: &planpb.ObjectRef{Obj: function.EncodeOverloadID(function.TO_INTERVAL_MICROSECOND, 5)},
+	}}}
 	weekExpr := &planpb.Expr{Typ: planpb.Type{Id: int32(types.T_uint8)}, Expr: &planpb.Expr_F{F: &planpb.Function{
 		Func: &planpb.ObjectRef{Obj: function.EncodeOverloadID(function.WEEK, 0)},
 	}}}
@@ -70,6 +73,7 @@ func TestPersistedDecimalLiteralUsesDedicatedEpochInMixedOwner(t *testing.T) {
 		{"temporal result", []*planpb.Expr{temporalExpr}, defines.MORPCVersion97},
 		{"temporal then spatial", []*planpb.Expr{temporalExpr, spatialExpr}, defines.MORPCVersion97},
 		{"normalized interval", []*planpb.Expr{intervalExpr}, defines.MORPCVersion98},
+		{"typed numeric interval overload", []*planpb.Expr{typedIntervalExpr}, defines.MORPCVersion99},
 		{"week session default", []*planpb.Expr{weekExpr}, defines.MORPCVersion98},
 		{"temporal then interval", []*planpb.Expr{temporalExpr, intervalExpr}, defines.MORPCVersion98},
 	} {
