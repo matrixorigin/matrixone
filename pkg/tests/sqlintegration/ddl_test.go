@@ -1144,6 +1144,18 @@ func TestCDCNoFullPublicTakeoverLifecycle(t *testing.T) {
 				checkpointB, generationAfterB, found, readErr = readWatermark()
 				return readErr == nil && found && generationAfterB > generationA && checkpointB.GE(&row3Snapshot)
 			}, 30*time.Second, 200*time.Millisecond)
+			// B is still live. Force the delayed A cleanup to race with a real
+			// later B checkpoint, rather than treating this sample as final.
+			var advancedCheckpointB types.TS
+			require.Eventually(t, func() bool {
+				got, generation, exists, readErr := readWatermark()
+				if readErr != nil || !exists || generation != generationAfterB || !got.GT(&checkpointB) {
+					return false
+				}
+				advancedCheckpointB = got
+				return true
+			}, 30*time.Second, 200*time.Millisecond,
+				"CN B did not advance its durable checkpoint before A's delayed cleanup")
 
 			// Let A's delayed runner cleanup return only after B has committed W,
 			// and join the actual cancellation completion rather than merely
@@ -1157,7 +1169,7 @@ func TestCDCNoFullPublicTakeoverLifecycle(t *testing.T) {
 			}
 			require.Eventually(t, func() bool {
 				got, generation, found, readErr := readWatermark()
-				return readErr == nil && found && generation == generationAfterB && got == checkpointB
+				return readErr == nil && found && generation == generationAfterB && got.GE(&advancedCheckpointB)
 			}, 30*time.Second, 200*time.Millisecond)
 
 			// Add a fresh CN C after A has fully returned. Transfer the durable
@@ -1236,7 +1248,7 @@ func TestCDCNoFullPublicTakeoverLifecycle(t *testing.T) {
 			require.True(t, found)
 			require.Equal(t, generationAfterB, finalGeneration,
 				"B's final checkpoint must retain its owner generation before C claims")
-			require.True(t, freshStart.GE(&checkpointB),
+			require.True(t, freshStart.GE(&advancedCheckpointB),
 				"fresh reader must not observe a checkpoint older than B's durable progress")
 			waitWatermarkVisible(sqlExec, freshStart, finalGeneration, "C")
 			captureFresh.Store(true)
