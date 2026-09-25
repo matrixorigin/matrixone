@@ -437,6 +437,27 @@ func transactionIsolationDefaultValue(
 	return normalized, err
 }
 
+func transactionReadOnlyDefaultValue(
+	ctx context.Context,
+	ses *Session,
+	scope tree.TransactionScope,
+) (interface{}, error) {
+	switch scope {
+	case tree.TransactionScopeSession:
+		// SESSION/LOCAL DEFAULT inherits the account-global value, just like
+		// MySQL's transaction characteristics. It must not use the static
+		// declaration default when SET GLOBAL has changed the account value.
+		return ses.GetGlobalSysVar(transactionReadOnlySystemVariable)
+	case tree.TransactionScopeGlobal:
+		return gSysVarsDefs[transactionReadOnlySystemVariable].Default, nil
+	case tree.TransactionScopeNext:
+		return nil, moerr.NewNotSupported(ctx,
+			"transaction access mode is only supported for SESSION scope")
+	default:
+		return nil, moerr.NewInvalidInputf(ctx, "unsupported transaction scope %d", scope)
+	}
+}
+
 func (th *TxnHandler) setSessionTxnIsolation(isolation pbtxn.TxnIsolation) {
 	th.mu.Lock()
 	defer th.mu.Unlock()
@@ -1174,6 +1195,22 @@ func transactionIsolationAssignmentScope(
 	return assign.TxnScope, true
 }
 
+// transactionReadOnlyAssignmentScope returns the transaction-characteristic
+// scope carried by a transaction_read_only/tx_read_only assignment. The
+// legacy Global flag wins for programmatically constructed ASTs, matching the
+// isolation-variable helper above.
+func transactionReadOnlyAssignmentScope(
+	assign *tree.VarAssignmentExpr,
+) (tree.TransactionScope, bool) {
+	if assign == nil || !assign.System || !isTransactionReadOnlySystemVariable(assign.Name) {
+		return 0, false
+	}
+	if assign.Global {
+		return tree.TransactionScopeGlobal, true
+	}
+	return assign.TxnScope, true
+}
+
 // statementContainsTransactionCharacteristic identifies statements with any
 // transaction-characteristic assignment. Treat the whole SET statement as
 // preserving an already active user transaction even when it also contains
@@ -1187,6 +1224,9 @@ func statementContainsTransactionCharacteristic(stmt tree.Statement) bool {
 	case *tree.SetVar:
 		for _, assign := range st.Assignments {
 			if _, ok := transactionIsolationAssignmentScope(assign); ok {
+				return true
+			}
+			if _, ok := transactionReadOnlyAssignmentScope(assign); ok {
 				return true
 			}
 		}

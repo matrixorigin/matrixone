@@ -140,6 +140,15 @@ func GetCDCWatermarkUpdater(
 	return updater
 }
 
+// ResetCDCWatermarkUpdaterForTest releases the process-local updater after an
+// embedded test cluster has closed, before another cluster creates CDC tasks.
+// Callers must ensure no CDC executor can still use the old updater.
+func ResetCDCWatermarkUpdaterForTest() {
+	if updater := cdcWatermarkUpdater.Swap(nil); updater != nil {
+		updater.Stop()
+	}
+}
+
 type WatermarkKey struct {
 	AccountId uint64
 	TaskId    string
