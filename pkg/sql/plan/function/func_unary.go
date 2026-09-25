@@ -10719,21 +10719,17 @@ func normalizeWeekMode(mode int64) int {
 	return int(mode)
 }
 
-func weekModeAt(modes vector.FunctionParameterWrapper[int64], row uint64) (int, bool) {
+func weekModeAt(modes vector.FunctionParameterWrapper[int64], row uint64) int {
 	if modes == nil {
-		return 0, false
+		return 0
 	}
-	// Preserve the historical behavior for a literal NULL mode: the old
-	// scalar path treated it as the omitted mode (mode 0).  Nulls in a
-	// row-dependent mode vector remain row-local NULLs below.
-	if modes.GetSourceVector().IsConstNull() {
-		return 0, false
-	}
+	// An explicit NULL mode uses mode 0 regardless of whether it is a
+	// literal or a row-dependent expression.
 	mode, null := modes.GetValue(row)
 	if null {
-		return 0, true
+		return 0
 	}
-	return normalizeWeekMode(mode), false
+	return normalizeWeekMode(mode)
 }
 
 // getDefaultWeekFormatMode reads the session default at execution time so a
@@ -10794,12 +10790,12 @@ func DateToWeek(ivecs []*vector.Vector, result vector.FunctionResultWrapper, pro
 			continue
 		}
 
-		mode, modeNull := weekModeAt(modes, i)
+		mode := weekModeAt(modes, i)
 		if modes == nil {
 			mode = defaultMode
 		}
 		date, null := dates.GetValue(i)
-		if null || modeNull || date == types.ZeroDate {
+		if null || date == types.ZeroDate {
 			if err := rs.Append(0, true); err != nil {
 				return err
 			}
@@ -10838,12 +10834,12 @@ func DatetimeToWeek(ivecs []*vector.Vector, result vector.FunctionResultWrapper,
 			continue
 		}
 
-		mode, modeNull := weekModeAt(modes, i)
+		mode := weekModeAt(modes, i)
 		if modes == nil {
 			mode = defaultMode
 		}
 		dt, null := datetimes.GetValue(i)
-		if null || modeNull || dt == types.ZeroDatetime {
+		if null || dt == types.ZeroDatetime {
 			if err := rs.Append(0, true); err != nil {
 				return err
 			}

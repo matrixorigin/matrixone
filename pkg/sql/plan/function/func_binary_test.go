@@ -12784,7 +12784,7 @@ func TestYearWeekUsesPerRowMode(t *testing.T) {
 			NewFunctionTestInput(types.T_int64.ToType(), modes, []bool{false, true, false}),
 		},
 		NewFunctionTestResult(types.T_int64.ToType(), false,
-			[]int64{wanted[0], 0, wanted[2]}, []bool{false, true, false}),
+			[]int64{wanted[0], 200801, wanted[2]}, nil),
 		YearWeekDate)
 	ok, info = nullModeCase.Run()
 	require.True(t, ok, info)

@@ -9441,7 +9441,7 @@ func TestWeekUsesPerRowMode(t *testing.T) {
 			NewFunctionTestInput(types.T_int64.ToType(), []int64{0, 1, 2}, []bool{false, true, false}),
 		},
 		NewFunctionTestResult(types.T_uint8.ToType(), false,
-			[]uint8{wanted[0], 0, wanted[2]}, []bool{false, true, false}),
+			[]uint8{wanted[0], 1, wanted[2]}, nil),
 		DateToWeek)
 	ok, info = caseWithNullMode.Run()
 	require.True(t, ok, info)

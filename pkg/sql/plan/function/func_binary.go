@@ -8249,9 +8249,9 @@ func YearWeekDate(ivecs []*vector.Vector, result vector.FunctionResultWrapper, p
 			continue
 		}
 
-		mode, modeNull := weekModeAt(modes, i)
+		mode := weekModeAt(modes, i)
 		date, null := dates.GetValue(i)
-		if null || modeNull || date == types.ZeroDate {
+		if null || date == types.ZeroDate {
 			if err := rs.Append(0, true); err != nil {
 				return err
 			}
@@ -8285,9 +8285,9 @@ func YearWeekDatetime(ivecs []*vector.Vector, result vector.FunctionResultWrappe
 			continue
 		}
 
-		mode, modeNull := weekModeAt(modes, i)
+		mode := weekModeAt(modes, i)
 		dt, null := datetimes.GetValue(i)
-		if null || modeNull || dt == types.ZeroDatetime {
+		if null || dt == types.ZeroDatetime {
 			if err := rs.Append(0, true); err != nil {
 				return err
 			}
@@ -8326,9 +8326,9 @@ func YearWeekTimestamp(ivecs []*vector.Vector, result vector.FunctionResultWrapp
 			continue
 		}
 
-		mode, modeNull := weekModeAt(modes, i)
+		mode := weekModeAt(modes, i)
 		ts, null := timestamps.GetValue(i)
-		if null || modeNull || ts == types.ZeroTimestamp {
+		if null || ts == types.ZeroTimestamp {
 			if err := rs.Append(0, true); err != nil {
 				return err
 			}
@@ -8366,9 +8366,9 @@ func YearWeekString(ivecs []*vector.Vector, result vector.FunctionResultWrapper,
 			continue
 		}
 
-		mode, modeNull := weekModeAt(modes, i)
+		mode := weekModeAt(modes, i)
 		dateStr, null := dateParam.GetStrValue(i)
-		if null || modeNull {
+		if null {
 			if err := rs.Append(0, true); err != nil {
 				return err
 			}
