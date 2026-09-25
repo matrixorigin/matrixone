@@ -340,6 +340,7 @@ func newPreparedExecuteEnvForSQLWithCompilerContext(
 		preparePlan.GetDcl().GetPrepare().Plan,
 		len(preparePlan.GetDcl().GetPrepare().ParamTypes),
 	)
+	prepareStmt.refreshGenerateSeriesParamMetadata(preparePlan.GetDcl().GetPrepare().Plan)
 	require.NoError(t, ses.SetPrepareStmt(ctx, stmtName, prepareStmt))
 
 	cw := InitTxnComputationWrapper(ses, stmts[0], proc)
@@ -2197,6 +2198,71 @@ func TestPreparedParamValuesScopesTemporalRuntimeToConsumer(t *testing.T) {
 	require.False(t, numericParam.HasInetNtoaSourceType)
 	require.True(t, numericParam.HasRuntimeType)
 	require.Equal(t, types.T_date.ToType(), numericParam.RuntimeType)
+}
+
+func TestCOMStmtGenerateSeriesDatePacketKeepsResultDomain(t *testing.T) {
+	const query = "select result from generate_series(?, '2024-01-03', '1 day') g"
+	ses, prepareStmt, cw, execCtx := newPreparedExecuteEnvForSQL(t, 29369, query)
+	proto, _, scratchPrepare := newBinaryPrepareProtocolTestCase(t, query)
+	defer func() {
+		cw.proc.SetPrepareParams(nil)
+		prepareStmt.Close()
+		scratchPrepare.Close()
+	}()
+	require.Equal(t, []int32{0}, prepareStmt.temporalRuntimeParamPositions)
+	require.True(t, prepareStmt.parameterizedGenerateSeries)
+	require.NoError(t, proto.ParseExecuteData(
+		execCtx.reqCtx, cw.proc, prepareStmt,
+		buildDateExecutePacketForParams([]defines.MysqlType{defines.MYSQL_TYPE_DATE}, 2024, 1, 1), 0))
+	_, runtimePlan, executionStmt, _, owned, err := initExecuteStmtParam(
+		execCtx, ses, cw, nil, prepareStmt.Name)
+	require.NoError(t, err)
+	if owned && executionStmt != nil {
+		defer executionStmt.Free()
+	}
+	require.Len(t, cw.paramVals, 1)
+	param := cw.paramVals[0].(plan2.ParamValue)
+	require.True(t, param.HasRuntimeType)
+	require.Equal(t, types.T_date, param.RuntimeType.Oid)
+	columns := plan2.GetResultColumnsFromPlan(runtimePlan)
+	require.Len(t, columns, 1)
+	require.Equal(t, int32(types.T_datetime), columns[0].Typ.Id)
+}
+
+func TestCOMStmtGenerateSeriesDatetimePacketKeepsFractionalScale(t *testing.T) {
+	const query = "select result from generate_series(?, '2024-01-01 00:00:01', '1 second') g"
+	ses, prepareStmt, cw, execCtx := newPreparedExecuteEnvForSQL(t, 29370, query)
+	proto, _, scratchPrepare := newBinaryPrepareProtocolTestCase(t, query)
+	defer func() {
+		cw.proc.SetPrepareParams(nil)
+		prepareStmt.Close()
+		scratchPrepare.Close()
+	}()
+	require.Equal(t, []int32{0}, prepareStmt.temporalRuntimeParamPositions)
+
+	packet := make([]byte, 21)
+	copy(packet, []byte{0, 1, 0, 0, 0, 0, 1, byte(defines.MYSQL_TYPE_DATETIME), 0})
+	packet[9] = 11
+	binary.LittleEndian.PutUint16(packet[10:12], 2024)
+	packet[12] = 1
+	packet[13] = 1
+	binary.LittleEndian.PutUint32(packet[17:21], 654321)
+	require.NoError(t, proto.ParseExecuteData(execCtx.reqCtx, cw.proc, prepareStmt, packet, 0))
+	_, runtimePlan, executionStmt, _, owned, err := initExecuteStmtParam(
+		execCtx, ses, cw, nil, prepareStmt.Name)
+	require.NoError(t, err)
+	if owned && executionStmt != nil {
+		defer executionStmt.Free()
+	}
+	require.Len(t, cw.paramVals, 1)
+	param := cw.paramVals[0].(plan2.ParamValue)
+	require.True(t, param.HasRuntimeType)
+	require.Equal(t, types.T_datetime, param.RuntimeType.Oid)
+	require.Equal(t, int32(6), param.RuntimeType.Scale)
+	columns := plan2.GetResultColumnsFromPlan(runtimePlan)
+	require.Len(t, columns, 1)
+	require.Equal(t, int32(types.T_datetime), columns[0].Typ.Id)
+	require.Equal(t, int32(6), columns[0].Typ.Scale)
 }
 
 func TestCOMStmtInetNtoaPreservesTemporalScale(t *testing.T) {

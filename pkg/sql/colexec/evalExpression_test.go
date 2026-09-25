@@ -16,6 +16,7 @@ package colexec
 
 import (
 	"fmt"
+	"math"
 	"testing"
 
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
@@ -1089,6 +1090,82 @@ func TestPreparedNumericLiteralsMaterializeWithTheirRuntimeTypes(t *testing.T) {
 	require.NoError(t, err)
 	require.Equal(t, types.T_year, yearVec.GetType().Oid)
 	require.Equal(t, types.MoYear(2026), vector.GetFixedAtNoTypeCheck[types.MoYear](yearVec, 0))
+}
+
+func TestPrivateIntegerArgumentScalarSourceClassification(t *testing.T) {
+	proc := testutil.NewProcess(t)
+	scalar, err := vector.NewConstFixed(types.T_float64.ToType(), 2.5, 3, proc.Mp())
+	require.NoError(t, err)
+	defer scalar.Free(proc.Mp())
+	flat := vector.NewVec(types.T_float64.ToType())
+	require.NoError(t, vector.AppendFixed(flat, 2.5, false, proc.Mp()))
+	defer flat.Free(proc.Mp())
+	scalarExecutor := NewFixedVectorExpressionExecutor(proc.Mp(), false, scalar)
+	flatExecutor := NewFixedVectorExpressionExecutor(proc.Mp(), false, flat)
+	// These are classification-only executors; their vectors are owned above.
+	cast := &FunctionExpressionExecutor{
+		functionInformationForEval: functionInformationForEval{fid: function.CAST},
+		parameterExecutor:          []ExpressionExecutor{scalarExecutor},
+	}
+	require.True(t, scalarIntegerArgumentSource(cast))
+	require.False(t, scalarIntegerArgumentSource(flatExecutor))
+	require.False(t, scalarIntegerArgumentSource(&FunctionExpressionExecutor{
+		functionInformationForEval: functionInformationForEval{fid: function.PLUS},
+		parameterExecutor:          []ExpressionExecutor{scalarExecutor},
+	}))
+	require.False(t, scalarIntegerArgumentSource(&FunctionExpressionExecutor{
+		functionInformationForEval: functionInformationForEval{fid: function.CAST},
+		parameterExecutor:          []ExpressionExecutor{&ColumnExpressionExecutor{}},
+	}))
+}
+
+func TestPrivateIntegerArgumentScalarAcrossSelectedRows(t *testing.T) {
+	proc := testutil.NewProcess(t)
+	value := any(float64(2.5))
+	proc.SetResolveVariableFunc(func(string, bool, bool) (any, error) { return value, nil })
+	variable := &plan.Expr{
+		Typ:  plan.Type{Id: int32(types.T_float64)},
+		Expr: &plan.Expr_V{V: &plan.VarRef{Name: "precision"}},
+	}
+	precision := &plan.Expr{
+		Typ: plan.Type{Id: int32(types.T_int64)},
+		Expr: &plan.Expr_F{F: &plan.Function{
+			Func: &plan.ObjectRef{Obj: function.EncodeOverloadID(function.CAST, function.IntegerArgumentCastOverload), ObjName: "cast"},
+			Args: []*plan.Expr{variable, {
+				Typ:  plan.Type{Id: int32(types.T_int64)},
+				Expr: &plan.Expr_T{T: &plan.TargetType{}},
+			}},
+		}},
+	}
+	executor, err := NewExpressionExecutor(proc, precision)
+	require.NoError(t, err)
+	defer executor.Free()
+	bat := batch.New(nil)
+	bat.SetRowCount(3)
+	for _, mask := range [][]bool{{true, false, false}, {false, true, false}} {
+		got, err := executor.Eval(proc, []*batch.Batch{bat}, mask)
+		require.NoError(t, err)
+		require.True(t, got.IsConst())
+		require.Equal(t, 3, got.Length())
+		for row, selected := range mask {
+			if selected {
+				require.Equal(t, int64(2), vector.GetFixedAtNoTypeCheck[int64](got, row))
+			}
+		}
+	}
+	got, err := executor.Eval(proc, []*batch.Batch{bat}, []bool{false, false, false})
+	require.NoError(t, err)
+	for row := 0; row < 3; row++ {
+		require.True(t, got.IsNull(uint64(row)))
+	}
+	value = math.Inf(1)
+	_, err = executor.Eval(proc, []*batch.Batch{bat}, []bool{false, true, false})
+	require.Error(t, err)
+	value = float64(2.5)
+	got, err = executor.Eval(proc, []*batch.Batch{bat}, []bool{false, true, false})
+	require.NoError(t, err)
+	require.True(t, got.IsConst())
+	require.Equal(t, int64(2), vector.GetFixedAtNoTypeCheck[int64](got, 1))
 }
 
 func TestFlowControlPreservesPreparedParamKindOnPartialSelection(t *testing.T) {
