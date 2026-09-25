@@ -26,6 +26,11 @@ ExtractValue('<a><b k="X">yes</b></a>', '/a/b[@k="x"]') AS predicate;
 SELECT ExtractValue('<r><a><b>1</b><b>2</b></a><a><b>3</b><b>4</b></a></r>', '/r/a/b[position()=last()]') = '' AS whole_step_last,
 ExtractValue('<r><a><b>1</b><b>2</b></a><a><b>3</b><b>4</b></a></r>', '/r/a/b[1][position()=last()]') AS filtered_last,
 ExtractValue('<a>1.234567890123456e-6</a>', 'sum(/a)') AS scientific_sum;
+SELECT ExtractValue('<a><a><b>1</b></a></a>', 'count(//a//b)') AS overlapping_count,
+ExtractValue('<a><a><b>1</b></a></a>', 'sum(//a//b)') AS overlapping_sum,
+ExtractValue('<a><a><b>1</b></a></a>', 'sum(//a//b|//a//b)') AS union_sum;
+SELECT ExtractValue('<r><a><a><b>1</b></a></a><a><b>2</b></a></r>', '//a/*[1][position()=last()]') AS ordered_predicate,
+ExtractValue('<r><a><a><b>1</b></a></a><a><b>2</b></a></r>', '//a//b[1][2]') AS second_occurrence;
 SELECT ExtractValue('<a>x<b>y</b>z</a>', '//text()') AS all_text,
 ExtractValue('<a>x<b>y</b>z</a>', '/a//text()') AS descendants,
 ExtractValue('<a>x<b>y</b>z</a>', '/a/text()') AS direct_text;
@@ -36,6 +41,9 @@ SELECT UpdateXML('<a><b>1</b></a>', '/a/b', '<c>2</c>') AS replaced,
 UpdateXML('<a><b>1</b><b>2</b></a>', '/a/b', '<c/>') AS multiple_unchanged,
 UpdateXML('<a/>', '/missing', '<c/>') AS missing_unchanged;
 SELECT UpdateXML('<r><a><b>1</b><b>2</b></a><a><b>3</b><b>4</b></a></r>', '/r/a/b[1][position()=last()]', '<c/>') AS filtered_update;
+SELECT UpdateXML('<a><a><b>1</b></a></a>', '//a//b', '<c/>') AS overlapping_unchanged,
+UpdateXML('<a><a><b>1</b></a></a>', '//a//b|//a//b', '<c/>') AS union_single;
+SELECT UpdateXML('<r><a><a><b>1</b></a></a><a><b>2</b></a></r>', '//a/*[1][position()=last()]', '<c/>') AS ordered_update;
 SELECT UpdateXML('<a k="7"><b/></a>', '/a/@k', 'z') AS attribute_span,
 UpdateXML('<a />', '/a', 'not xml') AS raw_replacement,
 UpdateXML('<a/>', '/', 'raw') AS document_replacement,

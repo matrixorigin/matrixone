@@ -1,5 +1,6 @@
 # Bounded MySQL XML functions — issue #28306
 
+Revision 4, issue #29329 overlapping-context correctness follow-up (2026-09-25).
 Revision 3, issue #29329 numeric compatibility follow-up (2026-09-24).
 Independent revision 3 design review: GPT-6 Astra, medium, PASS after the
 fragment-validator boundary was included. Implementation PR: #29362.
@@ -21,7 +22,7 @@ position()=integer, attribute existence/equality, direct-child literal equality)
 node-set union with document-order deduplication, and top-level count(path).
 Issue #29329 extends the same bounded evaluator with top-level sum(path),
 numeric comparisons of count/sum/integers in `[-9223372036854775807, 9223372036854775807]`, and positional comparisons such as
-`[position()=last()]` (per parent). `sum()` converts each selected element's
+`[position()=last()]`. `sum()` converts each selected element's
 direct text records or selected attribute's value to numbers; an empty match
 returns `0`. It does not add arbitrary arithmetic, XPath node-set comparisons,
 or general scalar expressions. UpdateXML returns NULL for these scalar targets.
@@ -67,7 +68,9 @@ network or host port, then removed exactly that container. Oracle observations:
   CDATA delimiters are stripped. Prefixes match lexically, declared or not.
 - Attribute/child literal predicates compare case-insensitively (Unicode simple
   case folding is this subset's declared comparison; no full SQL collation claim).
-  Positions apply per parent: /a/b[1] across two a elements returns both first b's.
+  Initial positions apply per parent: /a/b[1] across two a elements returns
+  both first b's. `last()` sees the whole step's candidate stream, and each
+  following predicate renumbers survivors in encounter order.
 - Qualified XPath names are lexical only: an optional nonempty prefix and local
   name separated by one colon. Namespace declarations are not resolved; malformed
   QNames such as `/:a`, `/a:`, and `/a:b:c` are rejected as invalid XPath.
@@ -150,6 +153,40 @@ position/predicate parsing unchanged. Add focused numeric
 boundary cases to the existing oracle table and public function test, plus
 one small SQL BVT result. Existing process, storage and wire contracts do
 not change. The fallback is reverting the targeted fix commit.
+
+## Revision 4: overlapping descendant contexts
+
+Independent MySQL 8.0.44 checks for issue #29329 exposed two failures in the
+same owner, the intermediate XPath step result. For
+`<a><a><b>1</b></a></a>`, `count(//a//b)` and `sum(//a//b)` both return `2`:
+the inner `b` occurs once under each `a` context. The explicit union
+`sum(//a//b|//a//b)` returns `1`. For
+`<r><a><a><b>1</b></a></a><a><b>2</b></a></r>`, the `//a` context encounter
+order is outer, sibling, inner; `//a/*[1][position()=last()]` selects `b=1`.
+The current evaluator rebuilds each step in node-ID order and discards repeated
+occurrences before the next step, selecting `b=2` and undercounting aggregates.
+
+Keep an ordered, duplicate-preserving occurrence stream within each individual
+path. A step enumerates the current context stream in order; `//` expands each
+context through descendant-or-self in its existing bounded tree walk. Child,
+attribute, self and text axes append matching occurrences in encounter order.
+Parent-axis `..` retains its existing document-order unique-node behavior for
+that step. Positional predicates retain per-parent initial positions, whole-step
+`last()` cardinality, and sequential renumbering of surviving occurrences.
+Only an explicit union deduplicates the numeric result stream. Ordinary
+`ExtractValue` continues to emit each text/attribute node once in document
+order; `UpdateXML` uses the raw occurrence count and replaces only a unique
+match, preserving raw byte spans. No public syntax, warnings or metadata change.
+
+Each appended occurrence consumes the existing per-row work and scratch budget.
+The 1,000,000-operation and 32 MiB scratch limits cap overlapping expansion;
+no retained state, concurrency, IO or unbounded queue is introduced. Keep the
+single-context, non-descendant predicate path in place and avoid a full-node
+scan after every step. Add focused nested-plus-sibling, overlapping aggregate,
+explicit-union, parent-axis and UpdateXML oracles to the current UT/BVT cases;
+compare supported expressions against the independent MySQL result set and
+measure the common 1,000-sibling path before/after. This is a semantic repair of
+the existing bounded subset. Reverting this follow-up restores revision 3.
 
 ## Validation / acceptance
 

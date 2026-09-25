@@ -48,6 +48,14 @@ func TestXMLExtractionOracle(t *testing.T) {
 		{`<a><b>1</b><b>2</b></a>`, `count(/a/b)!=2`, `0`},
 		{`<a><b>1</b><b>2</b></a>`, `sum(/a/b)>2`, `1`},
 		{`<a><b>1</b><b>2</b></a>`, `sum(/a/b)=count(/a/b)`, `0`},
+		{`<a><a><b>1</b></a></a>`, `count(//a//b)`, `2`},
+		{`<a><a><b>1</b></a></a>`, `sum(//a//b)`, `2`},
+		{`<a><a><b>1</b></a></a>`, `sum(//a//b|//a//b)`, `1`},
+		{`<a><a><b>1</b></a></a>`, `//a//b`, `1`},
+		{`<r><a><a><b>1</b></a></a><a><b>2</b></a></r>`, `//a/*[1][position()=last()]`, `1`},
+		{`<r><a><a><b>1</b></a></a><a><b>2</b></a></r>`, `//a//b[1][2]`, `2`},
+		{`<r><a><a><b>1</b></a></a><a><b>2</b></a></r>`, `count(//a/..)`, `2`},
+		{`<r><a><a><b>1</b></a></a><a><b>2</b></a></r>`, `count(//a//..)`, `4`},
 		{`<a/>`, `9007199254740993=9007199254740992`, `0`},
 		{`<a/>`, `9007199254740993`, `9007199254740993`},
 		{`<a/>`, `0002`, `2`},
@@ -210,6 +218,9 @@ func TestXMLUpdateOracle(t *testing.T) {
 		{`<a><b>1</b><b>2</b></a>`, `/a/b[position()=last()]`, `<c/>`, `<a><b>1</b><c/></a>`},
 		{`<r><a><b>1</b><b>2</b></a><a><b>3</b><b>4</b></a></r>`, `/r/a/b[position()=last()]`, `<c/>`, `<r><a><b>1</b><b>2</b></a><a><b>3</b><b>4</b></a></r>`},
 		{`<r><a><b>1</b><b>2</b></a><a><b>3</b><b>4</b></a></r>`, `/r/a/b[1][position()=last()]`, `<c/>`, `<r><a><b>1</b><b>2</b></a><a><c/><b>4</b></a></r>`},
+		{`<a><a><b>1</b></a></a>`, `//a//b`, `<c/>`, `<a><a><b>1</b></a></a>`},
+		{`<a><a><b>1</b></a></a>`, `//a//b|//a//b`, `<c/>`, `<a><a><c/></a></a>`},
+		{`<r><a><a><b>1</b></a></a><a><b>2</b></a></r>`, `//a/*[1][position()=last()]`, `<c/>`, `<r><a><a><c/></a></a><a><b>2</b></a></r>`},
 		{"<a>\v2<b/></a>", `/a/b`, `<c/>`, "<a>\v2<c/></a>"},
 		{`<a k="7"><b/></a>`, `/a/@k`, `z`, `<a z><b/></a>`},
 		{`<a />`, `/a`, `not xml`, `not xml`},
@@ -336,6 +347,18 @@ func TestXMLRepeatedPredicatesConsumeWork(t *testing.T) {
 	p, err := compileXMLXPath(context.Background(), "//b"+strings.Repeat("[position()>=1]", 1000))
 	require.NoError(t, err)
 	d, err := parseXMLFragment(context.Background(), strings.Repeat("<a><b/></a>", 30000))
+	require.NoError(t, err)
+	_, err = d.evaluate(p)
+	require.ErrorContains(t, err, "resource limit")
+	require.Equal(t, xmlWorkLimit, d.budget.work)
+}
+
+func TestXMLOverlappingContextsConsumeWork(t *testing.T) {
+	// Descendant axes can multiply occurrences even when the document is small.
+	// The per-row work limit must stop that expansion before it can grow freely.
+	p, err := compileXMLXPath(context.Background(), `//a//a//a//a//b`)
+	require.NoError(t, err)
+	d, err := parseXMLFragment(context.Background(), strings.Repeat(`<a>`, 64)+`<b/>`+strings.Repeat(`</a>`, 64))
 	require.NoError(t, err)
 	_, err = d.evaluate(p)
 	require.ErrorContains(t, err, "resource limit")

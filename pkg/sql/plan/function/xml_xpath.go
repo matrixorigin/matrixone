@@ -648,16 +648,19 @@ func (d *xmlFragment) evaluate(p *xmlXPath) ([]int, error) {
 }
 
 func (d *xmlFragment) evaluatePaths(paths []xmlPath) ([]int, error) {
-	if err := d.budget.spend(1, 2*len(d.nodes)); err != nil {
-		return nil, err
-	}
-	selected := make([]bool, len(d.nodes))
-	seen := make([]bool, len(d.nodes))
+	var selected []bool
 	for _, path := range paths {
 		current := []int{0}
 		for _, step := range path.steps {
-			clear(seen)
+			var next []int
 			var records []xmlCandidate
+			var seen []bool
+			if step.axis == 'p' {
+				if err := d.budget.spend(1, len(d.nodes)); err != nil {
+					return nil, err
+				}
+				seen = make([]bool, len(d.nodes))
+			}
 			singleGroup := len(current) == 1 && !step.descendant
 			for _, id := range current {
 				apply := func(parent int) error {
@@ -672,8 +675,15 @@ func (d *xmlFragment) evaluatePaths(paths []xmlPath) ([]int, error) {
 						}
 					}
 					for i, c := range candidates {
-						if len(step.predicates) == 0 || singleGroup || step.axis == 'p' {
+						if step.axis == 'p' {
 							seen[c] = true
+							continue
+						}
+						if len(step.predicates) == 0 || singleGroup {
+							next, err = d.appendCandidate(next, c)
+							if err != nil {
+								return err
+							}
 							continue
 						}
 						// The child and attribute axes number matching siblings per
@@ -724,28 +734,48 @@ func (d *xmlFragment) evaluatePaths(paths []xmlPath) ([]int, error) {
 						records = append(records, xmlCandidate{id, len(records) + 1})
 					}
 				}
-				clear(seen)
 				filtered, err := d.filterCandidates(records, step.predicates)
 				if err != nil {
 					return nil, err
 				}
+				if step.axis == 'p' {
+					clear(seen)
+				}
 				for _, candidate := range filtered {
-					seen[candidate.id] = true
-				}
-			}
-			current = nil
-			for id, ok := range seen {
-				if err := d.budget.spend(1, 0); err != nil {
-					return nil, err
-				}
-				if ok {
-					var err error
-					current, err = d.appendCandidate(current, id)
+					if step.axis == 'p' {
+						seen[candidate.id] = true
+						continue
+					}
+					next, err = d.appendCandidate(next, candidate.id)
 					if err != nil {
 						return nil, err
 					}
 				}
 			}
+			if step.axis == 'p' {
+				for id, ok := range seen {
+					if err := d.budget.spend(1, 0); err != nil {
+						return nil, err
+					}
+					if ok {
+						var err error
+						next, err = d.appendCandidate(next, id)
+						if err != nil {
+							return nil, err
+						}
+					}
+				}
+			}
+			current = next
+		}
+		if len(paths) == 1 {
+			return current, nil
+		}
+		if selected == nil {
+			if err := d.budget.spend(1, len(d.nodes)); err != nil {
+				return nil, err
+			}
+			selected = make([]bool, len(d.nodes))
 		}
 		for _, id := range current {
 			selected[id] = true
