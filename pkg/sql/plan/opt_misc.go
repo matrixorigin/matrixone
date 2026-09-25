@@ -446,7 +446,11 @@ func replaceColumnsForExpr(expr *plan.Expr, projMap map[[2]int32]*plan.Expr) *pl
 		}
 		mapID := [2]int32{ne.Col.RelPos, ne.Col.ColPos}
 		if projExpr, ok := projMap[mapID]; ok {
-			return DeepCopyExpr(projExpr)
+			inlined := DeepCopyExpr(projExpr)
+			if isIntegerSelector(inlined) || projectedExplicitFloatValue(inlined) {
+				ensurePreparedNumericMetadata(inlined).ProjectedCommonValue = true
+			}
+			return inlined
 		}
 
 	case *plan.Expr_F:
@@ -490,6 +494,18 @@ func replaceColumnsForExpr(expr *plan.Expr, projMap map[[2]int32]*plan.Expr) *pl
 		}
 	}
 	return expr
+}
+
+// A projected explicit CAST has already established the column's DOUBLE
+// domain. Inlining it must not turn that value boundary into a consumer's
+// direct CAST, whose integer conversion deliberately truncates.
+func projectedExplicitFloatValue(expr *plan.Expr) bool {
+	fn := expr.GetF()
+	if fn == nil || fn.Func == nil || fn.Func.ObjName != "cast" || !types.T(expr.Typ.Id).IsFloat() {
+		return false
+	}
+	_, overload := function.DecodeOverloadID(fn.Func.Obj)
+	return fn.SyntaxExplicitCast || overload == 1
 }
 
 func (builder *QueryBuilder) swapJoinChildren(nodeID int32) {

@@ -4130,6 +4130,9 @@ func TestCOMStmtCharRuntimeCacheSeparatesEffectiveIntegerDomains(t *testing.T) {
 		t.Run(scenario.name, func(t *testing.T) {
 			ses, prepareStmt, cw, execCtx := newPreparedExecuteEnvForSQL(
 				t, uint32(230+i), "select char(?)")
+			prepareStmt.numericOverloadParamPositions = plan2.PreparedPlanNumericFallbackParamPositions(
+				prepareStmt.PreparePlan.GetDcl().GetPrepare().Plan)
+			require.Equal(t, []int32{0}, prepareStmt.numericOverloadParamPositions)
 			defer func() {
 				cw.proc.SetPrepareParams(nil)
 				prepareStmt.Close()
@@ -4144,8 +4147,8 @@ func TestCOMStmtCharRuntimeCacheSeparatesEffectiveIntegerDomains(t *testing.T) {
 				require.NoError(t, vector.AppendBytes(params, []byte(value), false, cw.proc.Mp()))
 				prepareStmt.params = params
 				// VAR_STRING is the real COM_STMT text shape: it has no numeric
-				// PrepareParamKind or RuntimeType, so CHAR must classify the value
-				// from the payload itself.
+				// PrepareParamKind or RuntimeType. CHAR keeps it as text and
+				// evaluates its signed/unsigned prefix through private CAST7.
 				prepareStmt.ParamTypes = []byte{byte(defines.MYSQL_TYPE_VAR_STRING), 0}
 			}
 			evaluate := func(runtimePlan *plan.Plan) []byte {

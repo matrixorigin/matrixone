@@ -104,6 +104,9 @@ func (b *baseBinder) bindIntegerSourceAst(ast tree.Expr, depth int32, target typ
 	if err != nil {
 		return nil, err
 	}
+	if function.IntegerArgumentSourceDependent(name, position) {
+		return appendSourceDependentIntegerArgument(b.GetContext(), source, name, position)
+	}
 	return appendIntegerArgument(b.GetContext(), source, target, false)
 }
 
@@ -131,7 +134,8 @@ func stripIntegerSelectionReconciliation(expr *Expr) *Expr {
 	}
 	_, id := function.DecodeOverloadID(fn.Func.Obj)
 	target := types.T(expr.Typ.Id)
-	if id != 0 || (!target.IsFloat() && !target.IsMySQLString()) {
+	integerWidening := target.IsDecimal() && types.T(fn.Args[0].Typ.Id).IsInteger()
+	if id != 0 || (!target.IsFloat() && !target.IsMySQLString() && !integerWidening) {
 		return expr
 	}
 	// Remove only the selecting parent's approximate/text envelope. A nested
@@ -169,7 +173,8 @@ func appendIntegerArgument(ctx context.Context, expr *Expr, target types.T, sele
 func integerSourceCastOverload(expr *Expr) int32 {
 	fn := expr.GetF()
 	overload := function.IntegerArgumentCastOverload
-	if types.T(expr.Typ.Id).IsFloat() && fn != nil && fn.Func != nil && fn.Func.ObjName == "cast" {
+	if types.T(expr.Typ.Id).IsFloat() && fn != nil && fn.Func != nil && fn.Func.ObjName == "cast" &&
+		!expr.GetPreparedNumeric().GetProjectedCommonValue() {
 		_, sourceOverload := function.DecodeOverloadID(fn.Func.Obj)
 		if fn.SyntaxExplicitCast || sourceOverload == 1 {
 			overload = function.TruncatedIntegerArgumentCastOverload
@@ -194,6 +199,19 @@ func (rule *ResetParamRefRule) rebindIntegerArgumentCast(expr *Expr) (*Expr, err
 	rewritten, err := rule.integerArgumentRuntimeSource(expr.GetF().Args[0])
 	if err != nil {
 		return nil, err
+	}
+	_, overload := function.DecodeOverloadID(expr.GetF().Func.Obj)
+	if overload == function.TextIntegerBitsCastOverload && types.T(rewritten.Typ.Id) != types.T_any &&
+		!types.T(rewritten.Typ.Id).IsMySQLString() {
+		// CAST7 accepts only text. An aggregate can expose a provisional TEXT
+		// input at PREPARE and a numeric source at EXECUTE; choose the numeric
+		// integer conversion instead of retaining the text-only overload.
+		target := function.IntegerBitSourceTarget(types.T(rewritten.Typ.Id), rewritten.GetLit().GetIsBin())
+		bound, err := appendIntegerArgument(rule.ctx, rewritten, target, false)
+		if err == nil {
+			rule.specialized = true
+		}
+		return bound, err
 	}
 	bound := DeepCopyExpr(expr)
 	bound.GetF().Args[0] = rewritten
@@ -227,6 +245,9 @@ func (rule *ResetParamRefRule) integerArgumentLogicalSource(source *Expr) (*Expr
 	}
 	if isIntegerArgumentCast(source) {
 		return rule.rebindIntegerArgumentCast(source)
+	}
+	if hasSourceDependentIntegerArguments(source) {
+		return rule.rebindSourceDependentIntegerArguments(source)
 	}
 	if marker := source.GetP(); marker != nil {
 		if value, ok, err := rule.preparedRuntimeSourceExpr(int(marker.Pos), true); err != nil || ok {
@@ -309,6 +330,10 @@ func (rule *ResetParamRefRule) integerArgumentLogicalSource(source *Expr) (*Expr
 			}
 		}
 		bound, err := BindFuncExprImplByPlanExpr(rule.ctx, fn.Func.ObjName, args)
+		if err == nil && (source.GetPreparedNumeric().GetIfnullCommonValue() ||
+			source.GetPreparedNumeric().GetProjectedCommonValue()) {
+			bound.PreparedNumeric = copyPreparedNumericMetadata(source.PreparedNumeric)
+		}
 		if err == nil {
 			preserveReboundFunctionMetadata(fn, bound.GetF())
 		}
@@ -383,13 +408,20 @@ func bindIntegerFunctionArguments(ctx context.Context, name string, args []*Expr
 			continue // Leave absent-argument diagnostics to the owning validator.
 		}
 		target, ok := function.IntegerArgumentTarget(name, i)
-		if !ok {
+		dependent := function.IntegerArgumentSourceDependent(name, i)
+		if !ok && !dependent {
 			continue
 		}
 		if raw, direct := storedMySQLSpecialTypeExpr(arg); direct {
 			arg = raw
 		}
-		bound, err := appendIntegerArgument(ctx, arg, target, true)
+		var bound *Expr
+		var err error
+		if dependent {
+			bound, err = appendSourceDependentIntegerArgument(ctx, arg, name, i)
+		} else {
+			bound, err = appendIntegerArgument(ctx, arg, target, true)
+		}
 		if err != nil {
 			return nil, err
 		}
@@ -400,7 +432,7 @@ func bindIntegerFunctionArguments(ctx context.Context, name string, args []*Expr
 				return nil, err
 			}
 		}
-		if bound == arg {
+		if bound == args[i] {
 			continue
 		}
 		if result == nil {
@@ -412,4 +444,247 @@ func bindIntegerFunctionArguments(ctx context.Context, name string, args []*Expr
 		return args, nil
 	}
 	return result, nil
+}
+
+// Source-dependent roles choose their domain before any physical bit adapter.
+// Numeric selectors also preserve each branch's exact source; a numeric-only
+// role retains ordinary reconciliation when the selector produces strings or
+// arrays rather than an integer domain.
+func appendSourceDependentIntegerArgument(ctx context.Context, source *Expr, name string, position int) (*Expr, error) {
+	if raw, ok := storedMySQLSpecialTypeExpr(source); ok {
+		source = raw
+	}
+	bitSources := function.IntegerArgumentUsesBitSources(name, position)
+	fn := source.GetF()
+	_, numericSelector := function.IntegerArgumentTargetForSource(name, position, types.T(source.Typ.Id), false)
+	if (bitSources || numericSelector) && fn != nil && fn.Func != nil &&
+		!source.GetPreparedNumeric().GetIfnullCommonValue() && !source.GetPreparedNumeric().GetProjectedCommonValue() &&
+		(fn.Func.ObjName == "case" || fn.Func.ObjName == "if" || fn.Func.ObjName == "iff") {
+		args := append([]*Expr(nil), fn.Args...)
+		for i, arg := range args {
+			if i%2 == 1 || i == len(args)-1 {
+				var err error
+				args[i], err = appendSourceDependentIntegerArgument(ctx, stripIntegerSelectionReconciliation(arg), name, position)
+				if err != nil {
+					return nil, err
+				}
+			}
+		}
+		return bindIntegerSelector(ctx, args, true)
+	}
+	target, applies := function.IntegerArgumentTargetForSource(name, position, types.T(source.Typ.Id), source.GetLit().GetIsBin())
+	if !applies {
+		return source, nil
+	}
+	if bitSources && types.T(source.Typ.Id).IsMySQLString() {
+		typ := target.ToType()
+		return appendCastBeforeExprWithOverload(ctx, source, makePlan2Type(&typ), function.TextIntegerBitsCastOverload)
+	}
+	return appendIntegerArgument(ctx, source, target, false)
+}
+
+// Include unconverted numeric-only arguments (notably HEX(?)) in the cached
+// prepared-source inventory as well as the private conversions themselves.
+func integerArgumentSources(expr *Expr) []*Expr {
+	if isIntegerArgumentCast(expr) {
+		return expr.GetF().Args[:1]
+	}
+	fn := expr.GetF()
+	if fn == nil || fn.Func == nil {
+		return nil
+	}
+	var sources []*Expr
+	for i, arg := range fn.Args {
+		if sourceDependentIntegerArgumentNeedsRebind(fn.Func.ObjName, i, arg) {
+			sources = append(sources, arg)
+		}
+	}
+	return sources
+}
+
+func sourceDependentIntegerArgumentNeedsRebind(name string, position int, arg *Expr) bool {
+	if !function.IntegerArgumentSourceDependent(name, position) {
+		return false
+	}
+	if function.IntegerArgumentUsesBitSources(name, position) {
+		return true
+	}
+	if _, direct := preparedParamPosition(arg); direct {
+		return true
+	}
+	if isIntegerSelector(stripIntegerSelectionReconciliation(arg)) {
+		return true
+	}
+	// Only a numeric peer makes COALESCE's PREPARE-time text domain
+	// provisional. A binary/text peer owns the string result, including its
+	// fixed-width padding, and must not be reconstructed here.
+	if fn := arg.GetF(); fn != nil && fn.Func != nil && fn.Func.ObjName == "coalesce" && preparedExprContainsParam(arg) {
+		for _, peer := range fn.Args {
+			if preparedExprContainsParam(peer) {
+				continue
+			}
+			if metadata := peer.GetPreparedNumeric(); metadata.GetProvisionalResultPeer() {
+				if types.T(metadata.GetProvisionalResultPeerTypeId()).ToType().IsNumeric() {
+					return true
+				}
+			} else if makeTypeByPlan2Expr(stripIntegerSelectionReconciliation(peer)).IsNumeric() {
+				return true
+			}
+		}
+	}
+	_, numeric := function.IntegerArgumentTargetForSource(name, position, types.T(arg.Typ.Id), false)
+	return numeric
+}
+
+func hasSourceDependentIntegerArguments(expr *Expr) bool {
+	fn := expr.GetF()
+	if fn == nil || fn.Func == nil {
+		return false
+	}
+	for i, arg := range fn.Args {
+		if sourceDependentIntegerArgumentNeedsRebind(fn.Func.ObjName, i, arg) {
+			return true
+		}
+	}
+	return false
+}
+
+func (rule *ResetParamRefRule) rebindSourceDependentIntegerArguments(expr *Expr) (*Expr, error) {
+	fn := expr.GetF()
+	args := make([]*Expr, len(fn.Args))
+	for i, arg := range fn.Args {
+		var err error
+		if function.IntegerArgumentSourceDependent(fn.Func.ObjName, i) {
+			args[i], err = rule.sourceDependentIntegerRuntimeSource(arg, fn.Func.ObjName, i)
+		} else {
+			args[i], err = rule.ApplyExpr(arg)
+		}
+		if err != nil {
+			return nil, err
+		}
+	}
+	bound, err := BindFuncExprImplByPlanExpr(rule.ctx, fn.Func.ObjName, args)
+	if err == nil {
+		preserveReboundFunctionMetadata(fn, bound.GetF())
+		rule.specialized = true
+	}
+	return bound, err
+}
+
+func isIntegerSelector(expr *Expr) bool {
+	fn := expr.GetF()
+	return fn != nil && fn.Func != nil && (fn.Func.ObjName == "case" || fn.Func.ObjName == "if" || fn.Func.ObjName == "iff")
+}
+
+// restoreIntegerSelectorSources returns two independent trees. exact keeps
+// every branch's source domain for integer conversion; ordinary is allowed to
+// reconcile branches and is used only to classify the selector's final domain.
+// In particular, ordinary may become DOUBLE without contaminating DECIMAL or
+// UINT64 values in exact, and nested selectors remain unconverted until the
+// outermost selector domain is known.
+func (rule *ResetParamRefRule) restoreIntegerSelectorSources(
+	source *Expr, name string, position int,
+) (exact *Expr, ordinary *Expr, err error) {
+	fn := source.GetF()
+	exactArgs := make([]*Expr, len(fn.Args))
+	probeArgs := make([]*Expr, len(fn.Args))
+	for i, arg := range fn.Args {
+		if i%2 != 1 && i != len(fn.Args)-1 {
+			exactArgs[i], err = rule.ApplyExpr(arg)
+			probeArgs[i] = exactArgs[i]
+		} else {
+			arg = stripIntegerSelectionReconciliation(arg)
+			if arg.GetPreparedNumeric().GetProvisionalResultPeer() {
+				arg, err = restorePreparedResultPeer(rule.ctx, arg)
+			} else if isIntegerSelector(arg) && !arg.GetPreparedNumeric().GetIfnullCommonValue() &&
+				!arg.GetPreparedNumeric().GetProjectedCommonValue() {
+				exactArgs[i], probeArgs[i], err = rule.restoreIntegerSelectorSources(arg, name, position)
+				if err == nil {
+					continue
+				}
+			} else {
+				arg, err = rule.sourceDependentIntegerRuntimeSource(arg, name, position)
+			}
+			exactArgs[i] = arg
+			probeArgs[i] = arg
+		}
+		if err != nil {
+			return nil, nil, err
+		}
+	}
+	exact = DeepCopyExpr(source)
+	exact.GetF().Args = exactArgs
+	ordinary, err = BindFuncExprImplByPlanExpr(rule.ctx, "case", probeArgs)
+	return exact, ordinary, err
+}
+
+// Discard only this role's provisional private conversion and integer bit
+// adapters. Explicit casts and nested value-producing functions remain owners
+// of their result domains. Selector branches are rebound independently before
+// signed/unsigned reconciliation so no unchecked REAL/DECIMAL reaches CAST1.
+func (rule *ResetParamRefRule) sourceDependentIntegerRuntimeSource(source *Expr, name string, position int) (*Expr, error) {
+	bitSources := function.IntegerArgumentUsesBitSources(name, position)
+	original := source
+	// PREPARE may reconcile a selector containing an untyped marker to VARCHAR.
+	// That envelope is provisional for a source-dependent consumer: expose the
+	// selector before deciding its runtime domain. User-written CAST remains a
+	// value boundary because stripIntegerSelectionReconciliation preserves it.
+	source = stripIntegerSelectionReconciliation(source)
+	if fn := source.GetF(); fn != nil && fn.Func != nil && fn.Func.ObjName == "cast" && !fn.SyntaxExplicitCast && len(fn.Args) == 2 {
+		_, id := function.DecodeOverloadID(fn.Func.Obj)
+		if function.IsIntegerArgumentCastOverload(id) || (id == 1 && types.T(fn.Args[0].Typ.Id) == types.T_int64 && types.T(source.Typ.Id) == types.T_uint64) {
+			return rule.sourceDependentIntegerRuntimeSource(fn.Args[0], name, position)
+		}
+	}
+	if source.GetPreparedNumeric().GetIfnullCommonValue() || source.GetPreparedNumeric().GetProjectedCommonValue() {
+		// Rebuild the CASE from execution-time operands, then convert its
+		// reconciled value. Its arms are not independent integer sources.
+		return rule.integerArgumentLogicalSource(source)
+	}
+	if isIntegerSelector(source) {
+		exact, ordinary, err := rule.restoreIntegerSelectorSources(source, name, position)
+		if err != nil {
+			return nil, err
+		}
+		if !bitSources {
+			if _, numeric := function.IntegerArgumentTargetForSource(name, position, types.T(ordinary.Typ.Id), false); !numeric {
+				return ordinary, nil
+			}
+		}
+		return bindRestoredIntegerSelector(rule.ctx, exact, name, position, bitSources)
+	}
+	if !bitSources {
+		runtimeType, _, _, err := rule.preparedExecutionExprType(source)
+		if err != nil {
+			return nil, err
+		}
+		if _, numeric := function.IntegerArgumentTargetForSource(name, position, runtimeType.Oid, false); !numeric {
+			return rule.ApplyExpr(original)
+		}
+	}
+	return rule.integerArgumentRuntimeSource(source)
+}
+
+func bindRestoredIntegerSelector(
+	ctx context.Context, source *Expr, name string, position int, bitSources bool,
+) (*Expr, error) {
+	fn := source.GetF()
+	args := make([]*Expr, len(fn.Args))
+	for i, arg := range fn.Args {
+		if i%2 != 1 && i != len(fn.Args)-1 {
+			args[i] = arg
+			continue
+		}
+		var err error
+		if isIntegerSelector(arg) && !arg.GetPreparedNumeric().GetIfnullCommonValue() &&
+			!arg.GetPreparedNumeric().GetProjectedCommonValue() {
+			args[i], err = bindRestoredIntegerSelector(ctx, arg, name, position, bitSources)
+		} else {
+			args[i], err = appendSourceDependentIntegerArgument(ctx, arg, name, position)
+		}
+		if err != nil {
+			return nil, err
+		}
+	}
+	return bindIntegerSelector(ctx, args, bitSources)
 }

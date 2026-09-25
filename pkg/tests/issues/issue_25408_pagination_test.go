@@ -202,6 +202,10 @@ func TestIssue25408PreparedPaginationParameters(t *testing.T) {
 		execSQLRequire(t, ctx, db, "create table "+dbName+".page(id int)")
 		execSQLRequire(t, ctx, db, "insert into "+dbName+".page values (1),(2),(3)")
 
+		t.Run("bit integer parameter domains", func(t *testing.T) {
+			testBitIntegerPreparedParameters(t, ctx, db, cn.GetServiceConfig().CN.Frontend.Port)
+		})
+
 		t.Run("integer source domains across protocols and writes", func(t *testing.T) {
 			conn, connErr := db.Conn(ctx)
 			require.NoError(t, connErr)

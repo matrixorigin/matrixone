@@ -1080,9 +1080,9 @@ func PreparedPlanNumericFallbackParamPositions(preparePlan *Plan) []int32 {
 		_ = plan.VisitExpressionsInOwner(node, func(expr *plan.Expr) error {
 			fn := expr.GetF()
 			_ = plan.VisitExprTree(expr, func(nested *plan.Expr) error {
-				if isIntegerArgumentCast(nested) {
+				for _, source := range integerArgumentSources(nested) {
 					collectPreparedIntegerArgumentParamPositions(
-						query, int32(nodeID), nested.GetF().Args[0], positions,
+						query, int32(nodeID), source, positions,
 						make(map[[2]int32]struct{}), nil)
 				}
 				return nil
@@ -1180,7 +1180,7 @@ func collectPreparedIntegerArgumentParamPositions(
 		// even when flattening replaced its marker with a ColRef.
 		sources[expr] = struct{}{}
 	}
-	_ = plan.VisitExprTree(expr, func(nested *plan.Expr) error {
+	visitPreparedIntegerValueExpr(expr, func(nested *plan.Expr) {
 		if sources != nil && (nested.GetP() != nil || nested.GetF() != nil || nested.GetW() != nil) {
 			// Every expression on this selected-value path belongs to the integer
 			// source contract. Flattening may have replaced its marker with a
@@ -1189,11 +1189,11 @@ func collectPreparedIntegerArgumentParamPositions(
 		}
 		col := nested.GetCol()
 		if col == nil || col.ColPos < 0 {
-			return nil
+			return
 		}
 		node := query.Nodes[nodeID]
 		if node == nil {
-			return nil
+			return
 		}
 		// Aggregate and window outputs refer to local value producers, not
 		// ordinary child projections. Resolve those producers before walking
@@ -1219,7 +1219,7 @@ func collectPreparedIntegerArgumentParamPositions(
 				visited[key] = struct{}{}
 				collectPreparedIntegerArgumentParamPositions(query, nodeID, producer, positions, visited, sources)
 			}
-			return nil
+			return
 		}
 		// AGG emits grouping columns as negative-relation ColRefs. Their value
 		// lineage is the corresponding GROUP BY expression on this node, not a
@@ -1234,7 +1234,7 @@ func collectPreparedIntegerArgumentParamPositions(
 				collectPreparedIntegerArgumentParamPositions(
 					query, nodeID, node.GroupBy[col.ColPos], positions, visited, sources)
 			}
-			return nil
+			return
 		}
 		// A set output represents the same ordinal in every branch. RelPos=0
 		// is an output encoding, not proof that only the left input contributes.
@@ -1276,8 +1276,94 @@ func collectPreparedIntegerArgumentParamPositions(
 			collectPreparedIntegerArgumentParamPositions(
 				query, childID, child.ProjectList[col.ColPos], positions, visited, sources)
 		}
-		return nil
 	})
+}
+
+// Visit only value-producing descendants of an integer source. CASE/IF
+// conditions choose a result but do not supply its integer domain. A NULLIF
+// comparison's marker must not acquire its result's integer conversion.
+func visitPreparedIntegerValueExpr(expr *plan.Expr, visit func(*plan.Expr)) {
+	if expr == nil {
+		return
+	}
+	visit(expr)
+	if lit := expr.GetLit(); lit != nil {
+		visitPreparedIntegerValueExpr(lit.Src, visit)
+	}
+	if fn := expr.GetF(); fn != nil {
+		for i, arg := range fn.Args {
+			if isIntegerSelector(expr) {
+				if fn.Func.ObjName == "case" && i%2 == 0 && i != len(fn.Args)-1 {
+					continue
+				}
+				if fn.Func.ObjName != "case" && i == 0 {
+					continue
+				}
+			}
+			visitPreparedIntegerValueExpr(arg, visit)
+		}
+	}
+	if list := expr.GetList(); list != nil {
+		for _, item := range list.List {
+			visitPreparedIntegerValueExpr(item, visit)
+		}
+	}
+	if sub := expr.GetSub(); sub != nil {
+		visitPreparedIntegerValueExpr(sub.Child, visit)
+	}
+	if window := expr.GetW(); window != nil {
+		visitPreparedIntegerValueExpr(window.WindowFunc, visit)
+		for _, item := range window.PartitionBy {
+			visitPreparedIntegerValueExpr(item, visit)
+		}
+		for _, order := range window.OrderBy {
+			if order != nil {
+				visitPreparedIntegerValueExpr(order.Expr, visit)
+			}
+		}
+		if window.Frame != nil {
+			if window.Frame.Start != nil {
+				visitPreparedIntegerValueExpr(window.Frame.Start.Val, visit)
+			}
+			if window.Frame.End != nil {
+				visitPreparedIntegerValueExpr(window.Frame.End.Val, visit)
+			}
+		}
+	}
+}
+
+func preparedComparisonHasNumericLiteral(expr *plan.Expr) bool {
+	fn := expr.GetF()
+	if fn == nil || fn.Func == nil || fn.Func.ObjName != "=" || len(fn.Args) != 2 {
+		return false
+	}
+	for _, arg := range fn.Args {
+		if lit := arg.GetLit(); lit != nil && !lit.Isnull {
+			typ := types.T(arg.Typ.Id)
+			if typ.IsInteger() || typ.IsFloat() || typ.IsDecimal() {
+				return true
+			}
+		}
+	}
+	return false
+}
+
+func preparedNullValueExpr(expr *plan.Expr) bool {
+	if expr.GetLit().GetIsnull() {
+		return true
+	}
+	fn := expr.GetF()
+	return fn != nil && fn.Func != nil && fn.Func.ObjName == "cast" && len(fn.Args) == 2 &&
+		preparedNullValueExpr(fn.Args[0])
+}
+
+func preparedComparisonUsesResultMarker(positions map[int32]struct{}, result *plan.Expr) bool {
+	for position := range preparedNumericValueParamPositions(result) {
+		if _, ok := positions[position]; ok {
+			return true
+		}
+	}
+	return false
 }
 
 // PreparedPlanBitCountFallbackParamPositions returns unresolved BIT_COUNT
@@ -1454,6 +1540,8 @@ func copyPreparedNumericMetadata(metadata *plan.PreparedNumericMetadata) *plan.P
 		ProvisionalResultPeerWidth:  metadata.ProvisionalResultPeerWidth,
 		ProvisionalResultPeerScale:  metadata.ProvisionalResultPeerScale,
 		StringDomainSource:          DeepCopyExpr(metadata.StringDomainSource),
+		IfnullCommonValue:           metadata.IfnullCommonValue,
+		ProjectedCommonValue:        metadata.ProjectedCommonValue,
 	}
 }
 
@@ -7436,6 +7524,35 @@ func refreshPreparedPlanProjectionExprType(
 			changed = changed || argChanged
 		}
 
+		// A grouped subquery may acquire its numeric domain only after the
+		// projection refresh. Reconcile IFNULL's common value from those
+		// refreshed sources rather than retaining PREPARE's TEXT envelopes.
+		if (expr.GetPreparedNumeric().GetIfnullCommonValue() || expr.GetPreparedNumeric().GetProjectedCommonValue()) &&
+			types.T(expr.Typ.Id).IsMySQLString() &&
+			len(exprImpl.F.Args) == 3 {
+			args := DeepCopyExprList(exprImpl.F.Args)
+			for _, i := range []int{1, 2} {
+				args[i] = stripIntegerSelectionReconciliation(args[i])
+				if args[i].GetPreparedNumeric().GetProvisionalResultPeer() {
+					var err error
+					args[i], err = restorePreparedResultPeer(ctx, args[i])
+					if err != nil {
+						return false, err
+					}
+				}
+			}
+			bound, err := BindFuncExprImplByPlanExpr(ctx, functionName, args)
+			if err != nil {
+				return false, err
+			}
+			if !types.T(bound.Typ.Id).IsMySQLString() {
+				preserveReboundFunctionMetadata(exprImpl.F, bound.GetF())
+				expr.Typ = bound.Typ
+				expr.Expr = bound.Expr
+				return true, nil
+			}
+		}
+
 		argsChanged := false
 		for i, arg := range exprImpl.F.Args {
 			if arg != nil && !reflect.DeepEqual(arg.Typ, originalArgTypes[i]) {
@@ -7443,8 +7560,15 @@ func refreshPreparedPlanProjectionExprType(
 				break
 			}
 		}
-		if (!argsChanged && !bitwiseAggregateSourceChanged) || exprImpl.F.Func == nil || functionName == "" ||
-			isExplicitPreparedCast(expr) {
+		staleTextIntegerCast := false
+		if isIntegerArgumentCast(expr) && len(exprImpl.F.Args) == 2 && exprImpl.F.Func != nil {
+			_, overload := function.DecodeOverloadID(exprImpl.F.Func.Obj)
+			staleTextIntegerCast = overload == function.TextIntegerBitsCastOverload &&
+				types.T(exprImpl.F.Args[0].Typ.Id) != types.T_any &&
+				!types.T(exprImpl.F.Args[0].Typ.Id).IsMySQLString()
+		}
+		if (!argsChanged && !bitwiseAggregateSourceChanged && !staleTextIntegerCast) ||
+			exprImpl.F.Func == nil || functionName == "" || (isExplicitPreparedCast(expr) && !staleTextIntegerCast) {
 			return changed, nil
 		}
 
@@ -7457,13 +7581,18 @@ func refreshPreparedPlanProjectionExprType(
 			// their native byte-oriented path.
 			rebindArgs[0] = DeepCopyExpr(rebindArgs[0].GetF().Args[0])
 		}
-		rebound, err := bindPreparedFuncExprImplByPlanExpr(
-			ctx,
-			expr,
-			functionName,
-			rebindArgs,
-			nil,
-		)
+		var rebound *plan.Expr
+		var err error
+		if staleTextIntegerCast {
+			// A projected aggregate can change from provisional TEXT to a
+			// numeric domain after its producer has been specialized. CAST7
+			// is text-only; select the numeric integer conversion here.
+			target := function.IntegerBitSourceTarget(types.T(rebindArgs[0].Typ.Id), rebindArgs[0].GetLit().GetIsBin())
+			rebound, err = appendIntegerArgument(ctx, rebindArgs[0], target, false)
+		}
+		if rebound == nil && err == nil {
+			rebound, err = bindPreparedFuncExprImplByPlanExpr(ctx, expr, functionName, rebindArgs, nil)
+		}
 		if err != nil {
 			return false, err
 		}
@@ -7475,7 +7604,7 @@ func refreshPreparedPlanProjectionExprType(
 		}
 		expr.Typ = rebound.Typ
 		expr.Expr = rebound.Expr
-		return changed || !reflect.DeepEqual(expr.Typ, originalType) || argsChanged, nil
+		return changed || !reflect.DeepEqual(expr.Typ, originalType) || argsChanged || staleTextIntegerCast, nil
 
 	case *plan.Expr_List:
 		if exprImpl.List == nil {
