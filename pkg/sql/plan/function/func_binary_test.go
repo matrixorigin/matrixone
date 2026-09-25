@@ -201,6 +201,231 @@ func TestTimestampWindowBoundaryGuardsAndArithmetic(t *testing.T) {
 	})
 }
 
+func TestTemporalConversionHelpers(t *testing.T) {
+	for _, tc := range []struct {
+		input string
+		want  *time.Location
+	}{
+		{input: "+14:00", want: time.FixedZone("+14:00", 14*60*60)},
+		{input: "-13:59", want: time.FixedZone("-13:59", -(13*60+59)*60)},
+		{input: "+05:30", want: time.FixedZone("+05:30", (5*60+30)*60)},
+	} {
+		got := convertTimezone(tc.input)
+		require.NotNil(t, got)
+		_, gotOffset := time.Now().In(got).Zone()
+		_, wantOffset := time.Now().In(tc.want).Zone()
+		require.Equal(t, wantOffset, gotOffset)
+	}
+	for _, input := range []string{"+14:01", "-14:00", "+05:60", "bad"} {
+		require.Nil(t, convertTimezone(input), input)
+	}
+
+	for _, tc := range []struct {
+		input string
+		want  int64
+		ok    bool
+	}{
+		{input: "1.5", want: 2, ok: true},
+		{input: "-1.5", want: -2, ok: true},
+		{input: "2.49", want: 2, ok: true},
+		{input: " 7 ", want: 7, ok: true},
+		{input: "not-a-number", ok: false},
+	} {
+		got, ok := makeDateRoundedInteger(tc.input)
+		require.Equal(t, tc.ok, ok, tc.input)
+		if ok {
+			require.Equal(t, tc.want, got, tc.input)
+		}
+	}
+}
+
+func TestMakeDateDecimalAndBoundaryInputs(t *testing.T) {
+	proc := testutil.NewProcess(t)
+	inputYear := NewFunctionTestInput(types.T_varchar.ToType(), []string{"24.5", "69", "70", "0"}, nil)
+	inputDay := NewFunctionTestInput(types.T_varchar.ToType(), []string{"32", "1", "1", "0"}, nil)
+	expected := []types.Date{
+		types.DateFromCalendar(2025, 2, 1),
+		types.DateFromCalendar(2069, 1, 1),
+		types.DateFromCalendar(1970, 1, 1),
+		types.ZeroDate,
+	}
+	tc := NewFunctionTestCase(proc, []FunctionTestInput{inputYear, inputDay, NewFunctionTestInput(types.T_date.ToType(), []types.Date{}, nil)}, NewFunctionTestResult(types.T_date.ToType(), false, expected, []bool{false, false, false, true}), MakeDate)
+	succeed, info := tc.Run()
+	require.True(t, succeed, info)
+
+	// Exercise masked rows and the non-rational/invalid input paths as well.
+	inputYear = NewFunctionTestInput(types.T_varchar.ToType(), []string{"abc", "24.5", "99", "100"}, nil)
+	inputDay = NewFunctionTestInput(types.T_varchar.ToType(), []string{"1", "0", "1", "1"}, nil)
+	tc = NewFunctionTestCase(proc,
+		[]FunctionTestInput{inputYear, inputDay, NewFunctionTestInput(types.T_date.ToType(), []types.Date{}, nil)},
+		NewFunctionTestResult(types.T_date.ToType(), false,
+			[]types.Date{types.ZeroDate, types.ZeroDate, types.DateFromCalendar(1999, 1, 1), types.DateFromCalendar(100, 1, 1)},
+			[]bool{true, true, false, false}), MakeDate).
+		WithSelectList(&FunctionSelectList{AnyNull: true, SelectList: []bool{false, true, true, true}})
+	succeed, info = tc.Run()
+	require.True(t, succeed, info)
+}
+
+func TestTimestampTemporalResultPaths(t *testing.T) {
+	proc := testutil.NewProcess(t)
+	proc.GetSessionInfo().TimeZone = time.UTC
+	ts, err := types.ParseTimestamp(time.UTC, "2024-01-02 03:04:05.123456", 6)
+	require.NoError(t, err)
+	unit, err := vector.NewConstBytes(types.T_varchar.ToType(), []byte("MICROSECOND"), 1, proc.Mp())
+	require.NoError(t, err)
+	interval, err := vector.NewConstFixed(types.T_int64.ToType(), int64(1), 1, proc.Mp())
+	require.NoError(t, err)
+	timestamp, err := vector.NewConstFixed(types.T_timestamp.ToTypeWithScale(6), ts, 1, proc.Mp())
+	require.NoError(t, err)
+	resultType := types.T_datetime.ToTypeWithScale(6)
+	result := vector.NewFunctionResultWrapper(resultType, proc.Mp())
+	require.NoError(t, result.PreExtendAndReset(1))
+	require.NoError(t, TimestampAddTimestamp([]*vector.Vector{unit, interval, timestamp}, result, proc, 1, nil))
+	got := vector.GenerateFunctionFixedTypeParameter[types.Datetime](result.GetResultVector())
+	value, isNull := got.GetValue(0)
+	require.False(t, isNull)
+	require.Equal(t, types.DatetimeFromClock(2024, 1, 2, 3, 4, 5, 123457), value)
+
+	date, err := vector.NewConstFixed(types.T_datetime.ToTypeWithScale(6), types.DatetimeFromClock(2024, 1, 2, 3, 4, 5, 123456), 1, proc.Mp())
+	require.NoError(t, err)
+	from, err := vector.NewConstBytes(types.T_varchar.ToType(), []byte("UTC"), 1, proc.Mp())
+	require.NoError(t, err)
+	to, err := vector.NewConstBytes(types.T_varchar.ToType(), []byte("+08:00"), 1, proc.Mp())
+	require.NoError(t, err)
+	convertResult := vector.NewFunctionResultWrapper(resultType, proc.Mp())
+	require.NoError(t, convertResult.PreExtendAndReset(1))
+	require.NoError(t, ConvertTz([]*vector.Vector{date, from, to}, convertResult, proc, 1, nil))
+	converted := vector.GenerateFunctionFixedTypeParameter[types.Datetime](convertResult.GetResultVector())
+	convertedValue, isNull := converted.GetValue(0)
+	require.False(t, isNull)
+	require.Equal(t, types.DatetimeFromClock(2024, 1, 2, 11, 4, 5, 123456), convertedValue)
+}
+
+func TestTemporalDatetimeResultBranches(t *testing.T) {
+	proc := testutil.NewProcess(t)
+	proc.GetSessionInfo().TimeZone = time.UTC
+	ts, err := types.ParseTimestamp(time.UTC, "2024-01-02 03:04:05.123456", 6)
+	require.NoError(t, err)
+
+	timestampVec := vector.NewVec(types.T_timestamp.ToTypeWithScale(6))
+	intervalVec := vector.NewVec(types.T_int64.ToType())
+	unitVec, err := vector.NewConstFixed(types.T_int64.ToType(), int64(types.Day), 3, proc.Mp())
+	require.NoError(t, err)
+	require.NoError(t, vector.AppendFixedList(timestampVec, []types.Timestamp{ts, ts, ts}, []bool{false, true, false}, proc.Mp()))
+	require.NoError(t, vector.AppendFixedList(intervalVec, []int64{1, 1, math.MaxInt64}, nil, proc.Mp()))
+	result := vector.NewFunctionResultWrapper(types.T_datetime.ToTypeWithScale(6), proc.Mp())
+	t.Cleanup(func() {
+		timestampVec.Free(proc.Mp())
+		intervalVec.Free(proc.Mp())
+		unitVec.Free(proc.Mp())
+		result.Free()
+	})
+
+	require.NoError(t, result.PreExtendAndReset(3))
+	require.NoError(t, TimestampAdd([]*vector.Vector{timestampVec, intervalVec, unitVec}, result, proc, 3, nil))
+	resultVec := result.GetResultVector()
+	require.False(t, resultVec.IsNull(0))
+	require.True(t, resultVec.IsNull(1))
+	require.True(t, resultVec.IsNull(2))
+	got := vector.GenerateFunctionFixedTypeParameter[types.Datetime](resultVec)
+	value, isNull := got.GetValue(0)
+	require.False(t, isNull)
+	require.Equal(t, types.DatetimeFromClock(2024, 1, 3, 3, 4, 5, 123456), value)
+
+	require.NoError(t, result.PreExtendAndReset(3))
+	require.NoError(t, TimestampSub([]*vector.Vector{timestampVec, intervalVec, unitVec}, result, proc, 3, nil))
+	resultVec = result.GetResultVector()
+	require.False(t, resultVec.IsNull(0))
+	require.True(t, resultVec.IsNull(1))
+	require.True(t, resultVec.IsNull(2))
+	got = vector.GenerateFunctionFixedTypeParameter[types.Datetime](resultVec)
+	value, isNull = got.GetValue(0)
+	require.False(t, isNull)
+	require.Equal(t, types.DatetimeFromClock(2024, 1, 1, 3, 4, 5, 123456), value)
+
+	dateVec := vector.NewVec(types.T_datetime.ToTypeWithScale(6))
+	fromVec := vector.NewVec(types.T_varchar.ToType())
+	toVec := vector.NewVec(types.T_varchar.ToType())
+	require.NoError(t, vector.AppendFixedList(dateVec,
+		[]types.Datetime{types.DatetimeFromClock(2024, 1, 2, 3, 4, 5, 123456), types.ZeroDatetime, types.DatetimeFromClock(2024, 1, 2, 3, 4, 5, 123456)}, nil, proc.Mp()))
+	require.NoError(t, vector.AppendStringList(fromVec, []string{"UTC", "UTC", "not-a-timezone"}, nil, proc.Mp()))
+	require.NoError(t, vector.AppendStringList(toVec, []string{"+08:00", "+08:00", "+08:00"}, nil, proc.Mp()))
+	convertResult := vector.NewFunctionResultWrapper(types.T_datetime.ToTypeWithScale(6), proc.Mp())
+	t.Cleanup(func() {
+		dateVec.Free(proc.Mp())
+		fromVec.Free(proc.Mp())
+		toVec.Free(proc.Mp())
+		convertResult.Free()
+	})
+	require.NoError(t, convertResult.PreExtendAndReset(3))
+	require.NoError(t, ConvertTz([]*vector.Vector{dateVec, fromVec, toVec}, convertResult, proc, 3, nil))
+	converted := vector.GenerateFunctionFixedTypeParameter[types.Datetime](convertResult.GetResultVector())
+	convertedValue, isNull := converted.GetValue(0)
+	require.False(t, isNull)
+	require.Equal(t, types.DatetimeFromClock(2024, 1, 2, 11, 4, 5, 123456), convertedValue)
+	require.True(t, convertResult.GetResultVector().IsNull(1))
+	require.True(t, convertResult.GetResultVector().IsNull(2))
+}
+
+func TestTimestampAddSubTimeDatetimeResultBranches(t *testing.T) {
+	proc := testutil.NewProcess(t)
+	proc.GetSessionInfo().TimeZone = time.UTC
+	ts, err := types.ParseTimestamp(time.UTC, "2024-01-02 03:04:05.123456", 6)
+	require.NoError(t, err)
+	timestamps := vector.NewVec(types.T_timestamp.ToTypeWithScale(6))
+	times := vector.NewVec(types.T_varchar.ToType())
+	require.NoError(t, vector.AppendFixedList(timestamps,
+		[]types.Timestamp{ts, ts, types.ZeroTimestamp, ts},
+		[]bool{false, true, false, false}, proc.Mp()))
+	require.NoError(t, vector.AppendStringList(times,
+		[]string{"01:02:03.000001", "01:02:03", "01:02:03", "not-a-time"}, nil, proc.Mp()))
+	t.Cleanup(func() {
+		timestamps.Free(proc.Mp())
+		times.Free(proc.Mp())
+	})
+
+	selectList := &FunctionSelectList{AnyNull: true, SelectList: []bool{false, true, false, false}}
+	for _, tc := range []struct {
+		name string
+		fn   func([]*vector.Vector, vector.FunctionResultWrapper, *process.Process, int, *FunctionSelectList) error
+	}{
+		{name: "add", fn: AddTime},
+		{name: "sub", fn: SubTime},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			result := vector.NewFunctionResultWrapper(types.T_datetime.ToTypeWithScale(6), proc.Mp())
+			defer result.Free()
+			require.NoError(t, result.PreExtendAndReset(4))
+			require.NoError(t, tc.fn([]*vector.Vector{timestamps, times}, result, proc, 4, selectList))
+			out := result.GetResultVector()
+			require.False(t, out.IsNull(0))
+			require.True(t, out.IsNull(1), "masked rows must be NULL")
+			require.True(t, out.IsNull(2), "zero timestamps must be NULL")
+			require.True(t, out.IsNull(3), "invalid time text must be NULL")
+		})
+	}
+}
+
+func TestDateFormatUsesTemporalLocaleForGenericPatterns(t *testing.T) {
+	proc := testutil.NewProcess(t)
+	proc.SetResolveVariableFunc(func(name string, _, _ bool) (interface{}, error) {
+		if name == "lc_time_names" {
+			return "fr_FR", nil
+		}
+		return "", nil
+	})
+	datetime := types.DatetimeFromClock(2024, 12, 25, 1, 2, 3, 0)
+	caseTest := NewFunctionTestCase(proc,
+		[]FunctionTestInput{
+			NewFunctionTestInput(types.T_datetime.ToType(), []types.Datetime{datetime}, nil),
+			NewFunctionTestConstInput(types.T_varchar.ToType(), []string{"%M %W"}, nil),
+		},
+		NewFunctionTestResult(types.T_varchar.ToType(), false, []string{"décembre mercredi"}, nil),
+		DateFormat)
+	succeeded, info := caseTest.Run()
+	require.True(t, succeeded, info)
+}
+
 func TestTimestampWindowBoundaryLordHoweFold(t *testing.T) {
 	zone, err := time.LoadLocation("Australia/Lord_Howe")
 	require.NoError(t, err)
@@ -2180,7 +2405,7 @@ func TestTimestampAddRetType(t *testing.T) {
 		require.NotNil(t, matchedOverload, "Should find matching overload for TIMESTAMP input")
 
 		retType := matchedOverload.retType(parameters)
-		require.Equal(t, types.T_timestamp, retType.Oid)
+		require.Equal(t, types.T_datetime, retType.Oid)
 		require.Equal(t, int32(0), retType.Scale, "retType preserves the input FSP")
 	})
 }
@@ -2330,6 +2555,22 @@ func initDateAddTestCase() []tcTemp {
 				[]bool{false}),
 		},
 	}
+}
+
+func TestDoTimeAddRejectsMySQLRangeOverflow(t *testing.T) {
+	max := types.MySQLTimeMax
+
+	got, err := doTimeAdd(max, 1, types.Second)
+	require.Error(t, err)
+	require.Zero(t, got)
+
+	got, err = doTimeAdd(-max, -1, types.Second)
+	require.Error(t, err)
+	require.Zero(t, got)
+
+	got, err = doTimeAdd(max, 0, types.Second)
+	require.NoError(t, err)
+	require.Equal(t, max, got)
 }
 
 func TestDateAdd(t *testing.T) {

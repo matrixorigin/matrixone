@@ -620,21 +620,21 @@ func TestUnixTimestampTypedTimestampDecimalNulls(t *testing.T) {
 	require.True(t, succeed, info)
 }
 
-func TestUnixTimestampNoArgReturnsCurrentSecond(t *testing.T) {
+func TestUnixTimestampNoArgReturnsCurrentMicrosecond(t *testing.T) {
 	proc := testutil.NewProcess(t)
-	result := vector.NewFunctionResultWrapper(types.T_int64.ToType(), proc.Mp())
+	proc.Base.UnixTime = 1704067200123456000
+	result := vector.NewFunctionResultWrapper(types.New(types.T_decimal128, 38, 6), proc.Mp())
 	defer result.Free()
 	require.NoError(t, result.PreExtendAndReset(1))
 
-	before := time.Now().Unix()
 	require.NoError(t, builtInUnixTimestamp(nil, result, proc, 1, nil))
-	after := time.Now().Unix()
 
 	vec := result.GetResultVector()
 	require.False(t, vec.IsNull(0))
-	got := vector.MustFixedColNoTypeCheck[int64](vec)[0]
-	require.GreaterOrEqual(t, got, before)
-	require.LessOrEqual(t, got, after)
+	got := vector.MustFixedColNoTypeCheck[types.Decimal128](vec)[0]
+	want, err := types.ParseDecimal128("1704067200.123456", 38, 6)
+	require.NoError(t, err)
+	require.Equal(t, want, got)
 }
 
 func TestZeroTemporalIntervalAndDayNumberFunctionsReturnNull(t *testing.T) {
@@ -797,6 +797,40 @@ func TestCompleteDateFunctionsReturnNullForZeroTemporal(t *testing.T) {
 		t.Run(tc.name, func(t *testing.T) {
 			fcTC := NewFunctionTestCase(proc, []FunctionTestInput{tc.input}, tc.expect, tc.fn)
 			succeed, info := fcTC.Run()
+			require.True(t, succeed, info)
+		})
+	}
+}
+
+func TestDateNameFunctionsHonorLocale(t *testing.T) {
+	proc := testutil.NewProcess(t)
+	proc.GetSessionInfo().TimeZone = time.UTC
+	proc.SetResolveVariableFunc(func(name string, _, _ bool) (interface{}, error) {
+		if name == "lc_time_names" {
+			return "fr_FR", nil
+		}
+		return "", nil
+	})
+	date := types.DateFromCalendar(2024, 12, 25)
+	datetime := types.DatetimeFromClock(2024, 12, 25, 1, 2, 3, 0)
+	ts, err := types.ParseTimestamp(time.UTC, "2024-12-25 01:02:03", 0)
+	require.NoError(t, err)
+	for _, tc := range []struct {
+		name  string
+		input FunctionTestInput
+		fn    fEvalFn
+		want  string
+	}{
+		{name: "date day", input: NewFunctionTestInput(types.T_date.ToType(), []types.Date{date}, nil), fn: DateToDayName, want: "mercredi"},
+		{name: "datetime day", input: NewFunctionTestInput(types.T_datetime.ToType(), []types.Datetime{datetime}, nil), fn: DatetimeToDayName, want: "mercredi"},
+		{name: "timestamp day", input: NewFunctionTestInput(types.T_timestamp.ToType(), []types.Timestamp{ts}, nil), fn: TimestampToDayName, want: "mercredi"},
+		{name: "date month", input: NewFunctionTestInput(types.T_date.ToType(), []types.Date{date}, nil), fn: DateToMonthName, want: "décembre"},
+		{name: "datetime month", input: NewFunctionTestInput(types.T_datetime.ToType(), []types.Datetime{datetime}, nil), fn: DatetimeToMonthName, want: "décembre"},
+		{name: "timestamp month", input: NewFunctionTestInput(types.T_timestamp.ToType(), []types.Timestamp{ts}, nil), fn: TimestampToMonthName, want: "décembre"},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			caseTest := NewFunctionTestCase(proc, []FunctionTestInput{tc.input}, NewFunctionTestResult(types.T_varchar.ToType(), false, []string{tc.want}, nil), tc.fn)
+			succeed, info := caseTest.Run()
 			require.True(t, succeed, info)
 		})
 	}

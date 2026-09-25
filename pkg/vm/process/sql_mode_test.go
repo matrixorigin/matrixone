@@ -74,6 +74,33 @@ func TestIsPadCharToFullLengthMode(t *testing.T) {
 	}
 }
 
+func TestTimeTruncateFractionalMode(t *testing.T) {
+	for _, tc := range []struct {
+		mode any
+		want bool
+	}{
+		{mode: "TIME_TRUNCATE_FRACTIONAL", want: true},
+		{mode: "STRICT_TRANS_TABLES, time_truncate_fractional ", want: true},
+		{mode: "TIME_TRUNCATE_FRACTIONAL_EXTRA", want: false},
+		{mode: "", want: false},
+		{mode: 1, want: false},
+	} {
+		require.Equal(t, tc.want, IsTimeTruncateFractionalMode(tc.mode))
+	}
+
+	enabled, err := ResolveTimeTruncateFractional(nil)
+	require.NoError(t, err)
+	require.False(t, enabled)
+	proc := &Process{Base: &BaseProcess{SessionInfo: SessionInfo{SqlMode: "TIME_TRUNCATE_FRACTIONAL"}}}
+	enabled, err = ResolveTimeTruncateFractional(proc)
+	require.NoError(t, err)
+	require.True(t, enabled)
+	proc.SetResolveVariableFunc(func(string, bool, bool) (any, error) { return "", nil })
+	enabled, err = ResolveTimeTruncateFractional(proc)
+	require.NoError(t, err)
+	require.False(t, enabled)
+}
+
 func TestResolvePadCharToFullLength(t *testing.T) {
 	t.Run("nil process", func(t *testing.T) {
 		enabled, err := ResolvePadCharToFullLength(nil)

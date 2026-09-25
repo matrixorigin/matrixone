@@ -502,10 +502,17 @@ func (exec *groupConcatExec) clearTruncationWarnings() {
 // TIMESTAMP rendering. Process session information already carries this value
 // across CN boundaries, so finalization never depends on a worker's local zone.
 func ConfigureGroupConcatTimeZone(agg AggFuncExec, location *time.Location) {
+	if location == nil {
+		location = time.UTC
+	}
 	if exec, ok := agg.(*groupConcatExec); ok {
-		if location == nil {
-			location = time.UTC
-		}
+		exec.timeZone = location
+		return
+	}
+	switch exec := agg.(type) {
+	case *jsonArrayAggExec:
+		exec.timeZone = location
+	case *jsonObjectAggExec:
 		exec.timeZone = location
 	}
 }

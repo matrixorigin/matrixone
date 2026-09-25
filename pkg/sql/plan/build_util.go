@@ -650,6 +650,93 @@ func buildDefaultExpr(col *tree.ColumnTableDef, typ plan.Type, proc *process.Pro
 	return buildDefaultExprWithColumns(col, typ, proc, nil)
 }
 
+func legacyImplicitTimestampDefaults(ctx CompilerContext) bool {
+	if ctx == nil {
+		return false
+	}
+	value, err := ctx.ResolveVariable("explicit_defaults_for_timestamp", true, false)
+	if err != nil {
+		return false
+	}
+	switch value := value.(type) {
+	case int:
+		return value == 0
+	case int8:
+		return value == 0
+	case int32:
+		return value == 0
+	case int64:
+		return value == 0
+	case uint:
+		return value == 0
+	case uint8:
+		return value == 0
+	case uint32:
+		return value == 0
+	case uint64:
+		return value == 0
+	case bool:
+		return !value
+	default:
+		return false
+	}
+}
+
+func hasExplicitNullableAttribute(col *tree.ColumnTableDef) bool {
+	for _, attr := range col.Attributes {
+		if nullAttr, ok := attr.(*tree.AttributeNull); ok && nullAttr.Is {
+			return true
+		}
+	}
+	return false
+}
+
+func hasExplicitDefaultAttribute(col *tree.ColumnTableDef) bool {
+	for _, attr := range col.Attributes {
+		if defaultAttr, ok := attr.(*tree.AttributeDefault); ok && defaultAttr.Expr != nil {
+			return true
+		}
+	}
+	return false
+}
+
+func currentTimestampAST() tree.Expr {
+	return &tree.FuncExpr{
+		Func: tree.FuncName2ResolvableFunctionReference(tree.NewUnresolvedColName("current_timestamp")),
+	}
+}
+
+func buildImplicitCurrentTimestampExpr(typ plan.Type, proc *process.Process) (*plan.Expr, error) {
+	ast := currentTimestampAST()
+	binder := NewDefaultBinder(proc.Ctx, nil, nil, typ, nil)
+	bound, err := binder.BindExpr(ast, 0, false)
+	if err != nil {
+		return nil, err
+	}
+	return makePlan2AssignmentCastExpr(proc.Ctx, bound, typ)
+}
+
+func buildImplicitCurrentTimestampDefault(typ plan.Type, proc *process.Process) (*plan.Default, error) {
+	expr, err := buildImplicitCurrentTimestampExpr(typ, proc)
+	if err != nil {
+		return nil, err
+	}
+	return &plan.Default{NullAbility: false, Expr: expr, OriginString: "CURRENT_TIMESTAMP()"}, nil
+}
+
+// isLegacyImplicitTimestampColumn identifies the column shape synthesized for
+// the first TIMESTAMP column when explicit_defaults_for_timestamp is OFF.
+// MySQL treats an explicit NULL assignment to this legacy column as a request
+// for its implicit current-timestamp value.
+func isLegacyImplicitTimestampColumn(ctx CompilerContext, col *plan.ColDef) bool {
+	return legacyImplicitTimestampDefaults(ctx) && col != nil &&
+		types.T(col.Typ.Id) == types.T_timestamp &&
+		col.Default != nil && col.Default.Expr != nil &&
+		col.Default.OriginString == "CURRENT_TIMESTAMP()" &&
+		col.OnUpdate != nil && col.OnUpdate.Expr != nil &&
+		col.OnUpdate.OriginString == "CURRENT_TIMESTAMP()"
+}
+
 // buildDefaultExprWithColumns is the scoped form of buildDefaultExpr.  The
 // unscoped form remains for call sites that bind an expression which is not a
 // table-row default (for example internal compatibility expressions).

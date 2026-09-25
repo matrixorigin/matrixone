@@ -1436,7 +1436,7 @@ func TestBuildPlan_DatetimeTimestampComparisonIsZonemappable(t *testing.T) {
 	require.Len(t, filterArgs, 2)
 	require.NotNil(t, filterArgs[0].GetCol())
 	require.Equal(t, int32(types.T_datetime), filterArgs[0].Typ.Id)
-	require.Equal(t, int32(types.T_timestamp), filterArgs[1].Typ.Id)
+	require.Equal(t, int32(types.T_datetime), filterArgs[1].Typ.Id)
 	require.True(t, ExprIsZonemappable(compilerCtx.GetContext(), scan.FilterList[0]))
 }
 

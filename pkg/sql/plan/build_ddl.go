@@ -343,6 +343,17 @@ func genViewTableDef(
 				typ = sourceType
 			}
 		}
+		// Temporal expression types use Scale for their SQL FSP. View columns
+		// are persisted directly from the projection metadata, so keep Width in
+		// sync for the SHOW/DESC path just as CTAS does below.
+		if typ.Scale > 0 {
+			switch types.T(typ.Id) {
+			case types.T_time, types.T_datetime, types.T_timestamp:
+				if typ.Width < typ.Scale {
+					typ.Width = typ.Scale
+				}
+			}
+		}
 		defaultDef := &plan.Default{NullAbility: !expr.Typ.NotNullable}
 		if idx < len(outputColumnProvenance) {
 			provenance := outputColumnProvenance[idx]
@@ -1515,6 +1526,17 @@ func genAsSelectCols(
 			if isEnumOrSetPlanType(&provenance.Source.Metadata.Typ) {
 				typ = provenance.Source.Metadata.Typ
 				typ.NotNullable = expr.Typ.NotNullable
+			}
+		}
+		// Temporal expression types use Scale for their SQL FSP, while older
+		// planner paths may leave Width at zero. Materialized CTAS metadata and
+		// SHOW CREATE render the suffix from Width, so keep both fields aligned.
+		if typ.Scale > 0 {
+			switch types.T(typ.Id) {
+			case types.T_time, types.T_datetime, types.T_timestamp:
+				if typ.Width < typ.Scale {
+					typ.Width = typ.Scale
+				}
 			}
 		}
 		// CTAS creates a new table from the query result.  A source column's
@@ -3264,6 +3286,7 @@ func buildTableDefs(stmt *tree.CreateTable, ctx CompilerContext, createTable *pl
 	}
 
 	genColIdx := 0 // tracks the current column's position in allColDefs
+	legacyTimestampDefaultApplied := false
 	for _, item := range stmt.Defs {
 		switch def := item.(type) {
 		case *tree.ColumnTableDef:
@@ -3398,17 +3421,42 @@ func buildTableDefs(stmt *tree.CreateTable, ctx CompilerContext, createTable *pl
 					OriginString: "",
 				}
 			} else {
-				defaultValue, err = buildDefaultExprWithColumns(def, colType, ctx.GetProcess(), allColDefs)
-				if err != nil {
-					return err
+				legacyImplicit := !legacyTimestampDefaultApplied &&
+					types.T(colType.Id) == types.T_timestamp &&
+					!hasExplicitNullableAttribute(def) &&
+					!hasExplicitDefaultAttribute(def) &&
+					legacyImplicitTimestampDefaults(ctx)
+				if legacyImplicit {
+					defaultValue, err = buildImplicitCurrentTimestampDefault(colType, ctx.GetProcess())
+					if err != nil {
+						return err
+					}
+					implicitExpr, implicitErr := buildImplicitCurrentTimestampExpr(colType, ctx.GetProcess())
+					if implicitErr != nil {
+						return implicitErr
+					}
+					onUpdateExpr = &plan.OnUpdate{Expr: implicitExpr, OriginString: "CURRENT_TIMESTAMP()"}
+					legacyTimestampDefaultApplied = true
+				} else {
+					defaultValue, err = buildDefaultExprWithColumns(def, colType, ctx.GetProcess(), allColDefs)
+					if err != nil {
+						return err
+					}
 				}
+				// With explicit_defaults_for_timestamp=OFF, MySQL gives the
+				// first unconstrained TIMESTAMP column an implicit current-time
+				// default and ON UPDATE expression. Keep explicit NULL columns
+				// out of this legacy rule.
 				if auto_incr && defaultValue.Expr != nil {
 					return moerr.NewInvalidInputf(ctx.GetContext(), "invalid default value for '%s'", colNameOrigin)
 				}
 
-				onUpdateExpr, err = buildOnUpdate(def, colType, ctx.GetProcess())
-				if err != nil {
-					return err
+				explicitOnUpdate, updateErr := buildOnUpdate(def, colType, ctx.GetProcess())
+				if updateErr != nil {
+					return updateErr
+				}
+				if explicitOnUpdate != nil {
+					onUpdateExpr = explicitOnUpdate
 				}
 			}
 

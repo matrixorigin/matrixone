@@ -6246,8 +6246,26 @@ func doComQuery(ses *Session, execCtx *ExecCtx, input *UserInput) (retErr error)
 			}
 		}
 
-		// update UnixTime for new query, which is used for now() / CURRENT_TIMESTAMP
+		// Update UnixTime for the new query, which is used for NOW() /
+		// CURRENT_TIMESTAMP. MySQL's session timestamp override freezes these
+		// expressions for deterministic replay; zero restores the wall clock.
 		proc.Base.UnixTime = time.Now().UnixNano()
+		if override, overrideErr := ses.GetSessionSysVar("timestamp"); overrideErr == nil {
+			var seconds float64
+			switch value := override.(type) {
+			case float64:
+				seconds = value
+			case float32:
+				seconds = float64(value)
+			case int64:
+				seconds = float64(value)
+			case uint64:
+				seconds = float64(value)
+			}
+			if seconds > 0 {
+				proc.Base.UnixTime = int64(seconds * float64(time.Second))
+			}
+		}
 		if ses.proc != nil {
 			ses.proc.Base.UnixTime = proc.Base.UnixTime
 		}
