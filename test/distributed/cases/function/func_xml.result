@@ -32,6 +32,11 @@ SELECT ExtractValue('<a><b>1</b><b>2</b></a><a><b>3</b><b>4</b></a>', '/a/b[1]')
 ExtractValue('<a><b k="X">yes</b></a>', '/a/b[@k="x"]') AS predicate;
 ➤ per_parent[-1,536870911,0]  ¦  predicate[-1,536870911,0]  𝄀
 1 3  ¦  yes
+SELECT ExtractValue('<r><a><b>1</b><b>2</b></a><a><b>3</b><b>4</b></a></r>', '/r/a/b[position()=last()]') = '' AS whole_step_last,
+ExtractValue('<r><a><b>1</b><b>2</b></a><a><b>3</b><b>4</b></a></r>', '/r/a/b[1][position()=last()]') AS filtered_last,
+ExtractValue('<a>1.234567890123456e-6</a>', 'sum(/a)') AS scientific_sum;
+➤ whole_step_last[-7,1,0]  ¦  filtered_last[-1,536870911,0]  ¦  scientific_sum[-1,536870911,0]  𝄀
+1  ¦  3  ¦  1.234567890123456e-6
 SELECT ExtractValue('<a>x<b>y</b>z</a>', '//text()') AS all_text,
 ExtractValue('<a>x<b>y</b>z</a>', '/a//text()') AS descendants,
 ExtractValue('<a>x<b>y</b>z</a>', '/a/text()') AS direct_text;
@@ -47,6 +52,9 @@ UpdateXML('<a><b>1</b><b>2</b></a>', '/a/b', '<c/>') AS multiple_unchanged,
 UpdateXML('<a/>', '/missing', '<c/>') AS missing_unchanged;
 ➤ replaced[-1,536870911,0]  ¦  multiple_unchanged[-1,536870911,0]  ¦  missing_unchanged[-1,536870911,0]  𝄀
 <a><c>2</c></a>  ¦  <a><b>1</b><b>2</b></a>  ¦  <a/>
+SELECT UpdateXML('<r><a><b>1</b><b>2</b></a><a><b>3</b><b>4</b></a></r>', '/r/a/b[1][position()=last()]', '<c/>') AS filtered_update;
+➤ filtered_update[-1,536870911,0]  𝄀
+<r><a><b>1</b><b>2</b></a><a><c/><b>4</b></a></r>
 SELECT UpdateXML('<a k="7"><b/></a>', '/a/@k', 'z') AS attribute_span,
 UpdateXML('<a />', '/a', 'not xml') AS raw_replacement,
 UpdateXML('<a/>', '/', 'raw') AS document_replacement,

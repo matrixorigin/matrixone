@@ -573,52 +573,74 @@ func (d *xmlFragment) candidates(id int, s xmlStep) ([]int, error) {
 	if err != nil {
 		return nil, err
 	}
-	for _, p := range s.predicates {
-		if len(out) == 0 {
+	return out, nil
+}
+
+type xmlCandidate struct {
+	id, position int
+}
+
+func (d *xmlFragment) candidateMatches(id, position, size int, p xmlPredicate) (bool, error) {
+	switch {
+	case p.position == -1:
+		return position == size, nil
+	case p.position != 0:
+		return position == p.position, nil
+	case p.posCompare != nil:
+		return xmlCompare(p.posCompare.left.at(position, size), p.posCompare.right.at(position, size), p.posCompare.op), nil
+	default:
+		return d.predicateMatches(id, p)
+	}
+}
+
+// With one axis candidate group, its positions are already the slice indices.
+func (d *xmlFragment) filterSingleCandidates(candidates []int, predicates []xmlPredicate) ([]int, error) {
+	for _, p := range predicates {
+		if len(candidates) == 0 {
 			break
 		}
-		if err := d.budget.spend(1, 0); err != nil {
-			return nil, err
-		}
-		if p.position != 0 {
-			i := p.position - 1
-			if p.position == -1 {
-				i = len(out) - 1
+		size := len(candidates)
+		filtered := candidates[:0]
+		for i, id := range candidates {
+			if err := d.budget.spend(1, 0); err != nil {
+				return nil, err
 			}
-			if i < 0 || i >= len(out) {
-				out = out[:0]
-			} else {
-				out = out[i : i+1]
-			}
-			continue
-		}
-		if p.posCompare != nil {
-			filtered := out[:0]
-			size := len(out)
-			for i, c := range out {
-				if err := d.budget.spend(1, 0); err != nil {
-					return nil, err
-				}
-				if xmlCompare(p.posCompare.left.at(i+1, size), p.posCompare.right.at(i+1, size), p.posCompare.op) {
-					filtered = append(filtered, c)
-				}
-			}
-			out = filtered
-			continue
-		}
-		filtered := out[:0]
-		for _, c := range out {
-			ok, err := d.predicateMatches(c, p)
+			match, err := d.candidateMatches(id, i+1, size, p)
 			if err != nil {
 				return nil, err
 			}
-			if ok {
-				filtered = append(filtered, c)
+			if match {
+				filtered = append(filtered, id)
 			}
 		}
-		out = filtered
+		candidates = filtered
 	}
-	return out, nil
+	return candidates, nil
+}
+
+func (d *xmlFragment) filterCandidates(candidates []xmlCandidate, predicates []xmlPredicate) ([]xmlCandidate, error) {
+	for _, p := range predicates {
+		if len(candidates) == 0 {
+			break
+		}
+		size := len(candidates)
+		filtered := candidates[:0]
+		for _, candidate := range candidates {
+			if err := d.budget.spend(1, 0); err != nil {
+				return nil, err
+			}
+			match, err := d.candidateMatches(candidate.id, candidate.position, size, p)
+			if err != nil {
+				return nil, err
+			}
+			if match {
+				candidate.position = len(filtered) + 1
+				filtered = append(filtered, candidate)
+			}
+		}
+		candidates = filtered
+	}
+	return candidates, nil
 }
 
 func (d *xmlFragment) evaluate(p *xmlXPath) ([]int, error) {
@@ -635,14 +657,31 @@ func (d *xmlFragment) evaluatePaths(paths []xmlPath) ([]int, error) {
 		current := []int{0}
 		for _, step := range path.steps {
 			clear(seen)
+			var records []xmlCandidate
+			singleGroup := len(current) == 1 && !step.descendant
 			for _, id := range current {
 				apply := func(parent int) error {
 					candidates, err := d.candidates(parent, step)
 					if err != nil {
 						return err
 					}
-					for _, c := range candidates {
-						seen[c] = true
+					if singleGroup && len(step.predicates) > 0 {
+						candidates, err = d.filterSingleCandidates(candidates, step.predicates)
+						if err != nil {
+							return err
+						}
+					}
+					for i, c := range candidates {
+						if len(step.predicates) == 0 || singleGroup || step.axis == 'p' {
+							seen[c] = true
+							continue
+						}
+						// The child and attribute axes number matching siblings per
+						// parent. Predicates then see the whole step's candidate set.
+						if err := d.budget.spend(1, 32); err != nil {
+							return err
+						}
+						records = append(records, xmlCandidate{c, i + 1})
 					}
 					return nil
 				}
@@ -670,6 +709,28 @@ func (d *xmlFragment) evaluatePaths(paths []xmlPath) ([]int, error) {
 					if err := apply(parent); err != nil {
 						return nil, err
 					}
+				}
+			}
+			if len(step.predicates) > 0 && !singleGroup {
+				if step.axis == 'p' {
+					// The parent axis has a unique, document-ordered input set.
+					for id, ok := range seen {
+						if !ok {
+							continue
+						}
+						if err := d.budget.spend(1, 32); err != nil {
+							return nil, err
+						}
+						records = append(records, xmlCandidate{id, len(records) + 1})
+					}
+				}
+				clear(seen)
+				filtered, err := d.filterCandidates(records, step.predicates)
+				if err != nil {
+					return nil, err
+				}
+				for _, candidate := range filtered {
+					seen[candidate.id] = true
 				}
 			}
 			current = nil
@@ -767,24 +828,8 @@ func xmlNumericString(value float64) string {
 	if value == 0 {
 		return "0"
 	}
-	if abs := math.Abs(value); abs >= 1e15 || abs < 1e-15 {
-		result := strconv.FormatFloat(value, 'e', -1, 64)
-		parts := strings.SplitN(result, "e", 2)
-		exponent, _ := strconv.Atoi(parts[1])
-		if abs >= 1e15 {
-			digits := 0
-			for i := range len(parts[0]) {
-				if parts[0][i] >= '0' && parts[0][i] <= '9' {
-					digits++
-				}
-			}
-			if digits > exponent+1 {
-				return strconv.FormatFloat(value, 'f', -1, 64)
-			}
-		}
-		return parts[0] + "e" + strconv.Itoa(exponent)
-	}
-	return strconv.FormatFloat(value, 'f', -1, 64)
+	var buf [mysqlFloat64MaxStringLength]byte
+	return string(appendMySQLNumericFloat(buf[:0], value, 64))
 }
 
 func (d *xmlFragment) extract(p *xmlXPath, ids []int) (string, error) {
@@ -826,6 +871,9 @@ func (d *xmlFragment) extract(p *xmlXPath, ids []int) (string, error) {
 		}
 		if p.left.kind == 'n' {
 			return strconv.FormatInt(p.left.integer, 10), nil
+		}
+		if p.left.kind == 'c' {
+			return strconv.Itoa(len(ids)), nil
 		}
 		if left == 0 {
 			return "0", nil

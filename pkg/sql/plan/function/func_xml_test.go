@@ -58,6 +58,10 @@ func TestXMLExtractionOracle(t *testing.T) {
 		{`<a>1e15</a>`, `sum(/a)`, `1e15`},
 		{`<a>1e-15</a>`, `sum(/a)`, `0.000000000000001`},
 		{`<a>1e-16</a>`, `sum(/a)`, `1e-16`},
+		// MySQL's DOUBLE result width changes both notation and last digits.
+		{`<a>1.234567890123456e-6</a>`, `sum(/a)`, `1.234567890123456e-6`},
+		{`<a>2.2250738585072014e-308</a>`, `sum(/a)`, `2.225073858507201e-308`},
+		{`<a>1.7976931348623157e308</a>`, `sum(/a)`, `1.7976931348623157e308`},
 		{"<a>\v2</a>", `sum(/a)`, `2`},
 		{"<a>\f2</a>", `sum(/a)`, `2`},
 		{"<a k=\"\v2\"/>", `sum(/a/@k)`, `2`},
@@ -91,10 +95,17 @@ func TestXMLExtractionOracle(t *testing.T) {
 		{`<p:a xmlns:p="u">x</p:a>`, `/p:a`, `x`},
 		{`<a p:id="7"/>`, `/a/@p:id`, `7`},
 		{`<a><b>1</b><b>2</b></a><a><b>3</b><b>4</b></a>`, `/a/b[1]`, `1 3`},
-		{`<a><b>1</b><b>2</b></a><a><b>3</b></a>`, `//b[last()]`, `2 3`},
+		{`<a><b>1</b><b>2</b></a><a><b>3</b></a>`, `//b[last()]`, ``},
 		{`<a><b>1</b><b>2</b></a>`, `/a/b[position()=last()]`, `2`},
 		{`<a><b>1</b><b>2</b><b>3</b></a>`, `/a/b[position()<last()]`, `1 2`},
-		{`<a><b>1</b><b>2</b></a><a><b>3</b><b>4</b></a>`, `/a/b[position()=last()]`, `2 4`},
+		{`<a><b>1</b><b>2</b></a><a><b>3</b><b>4</b></a>`, `/a/b[position()=last()]`, ``},
+		// Axis positions start per parent; last() sees the whole step's input.
+		{`<r><a><b>1</b><b>2</b></a><a><b>3</b><b>4</b></a></r>`, `/r/a/b[last()]`, ``},
+		{`<r><a><b>1</b><b>2</b></a><a><b>3</b><b>4</b></a></r>`, `/r/a/b[1][position()=last()]`, `3`},
+		{`<r><a><b>1</b><b>2</b></a><a><b>3</b><b>4</b></a></r>`, `/r/a/b[position()!=last()][position()=last()]`, `4`},
+		{`<r><a><b k="x">1</b><b>2</b></a><a><b k="y">3</b><b>4</b></a></r>`, `/r/a/b[@k][position()=last()]`, `3`},
+		{`<r><a><b k="x">1</b><b>2</b></a><a><b k="y">3</b><b>4</b></a></r>`, `/r/a/b[@k][position()=2]`, `3`},
+		{`<r><a><b>1</b><a><b>2</b></a></a><a><b>3</b></a></r>`, `count(//a//b[position()=last()])`, `0`},
 		{`<a><b k="X">yes</b><b>no</b></a>`, `/a/b[@k="x"]`, `yes`},
 		{`<a><b k="x">1</b><b k="y">2</b></a>`, `a/b[@k][position()=2]`, `2`},
 		{`<a><b k="x">1</b><b k="y">2</b></a>`, `a/b[@k][1][@k='x']`, `1`},
@@ -197,6 +208,8 @@ func TestXMLUpdateOracle(t *testing.T) {
 		{`<a><b>1</b><b>2</b></a>`, `/a/b`, `<c/>`, `<a><b>1</b><b>2</b></a>`},
 		{`<a><b>1</b></a>`, `/a/c`, `<c/>`, `<a><b>1</b></a>`},
 		{`<a><b>1</b><b>2</b></a>`, `/a/b[position()=last()]`, `<c/>`, `<a><b>1</b><c/></a>`},
+		{`<r><a><b>1</b><b>2</b></a><a><b>3</b><b>4</b></a></r>`, `/r/a/b[position()=last()]`, `<c/>`, `<r><a><b>1</b><b>2</b></a><a><b>3</b><b>4</b></a></r>`},
+		{`<r><a><b>1</b><b>2</b></a><a><b>3</b><b>4</b></a></r>`, `/r/a/b[1][position()=last()]`, `<c/>`, `<r><a><b>1</b><b>2</b></a><a><c/><b>4</b></a></r>`},
 		{"<a>\v2<b/></a>", `/a/b`, `<c/>`, "<a>\v2<c/></a>"},
 		{`<a k="7"><b/></a>`, `/a/@k`, `z`, `<a z><b/></a>`},
 		{`<a />`, `/a`, `not xml`, `not xml`},
@@ -318,9 +331,9 @@ func TestXMLLimitsAndCancellation(t *testing.T) {
 }
 
 func TestXMLRepeatedPredicatesConsumeWork(t *testing.T) {
-	// Both inputs fit all admission limits, but positional predicates must
-	// consume work too: this would otherwise execute 30 million iterations.
-	p, err := compileXMLXPath(context.Background(), "//b"+strings.Repeat("[1]", 1000))
+	// Every filter retains the candidate set, so the bounded evaluator must
+	// stop before 30 million predicate checks.
+	p, err := compileXMLXPath(context.Background(), "//b"+strings.Repeat("[position()>=1]", 1000))
 	require.NoError(t, err)
 	d, err := parseXMLFragment(context.Background(), strings.Repeat("<a><b/></a>", 30000))
 	require.NoError(t, err)
