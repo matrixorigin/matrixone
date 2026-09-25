@@ -226,7 +226,7 @@ test/development correctness and backpressure, not hostile-code containment.
 | SQL expression placement and result semantics | `pkg/sql/colexec/external_routine_eval.go`; `test/distributed/cases/udf_python/relational_positions.sql`, `dml_positions.sql`, `vector_mode.sql` | Physical evaluator and ordinary BVT cases present. |
 | Current-contract restore | `pkg/frontend/clone_database_source.go`; `pkg/frontend/snapshot_catalog_restore.go`; `snapshot_restore.sql` | Same-contract account restore case present; cross-version restore not verified. |
 | Flight state, ACK, cancellation, resource limits | `pkg/udf/python/gateway_test.go`, `gateway_admission_test.go`, `capability_lifecycle_test.go`, `gateway_integration_test.go`, `pkg/udf/python/worker/test_worker.py`, `test_watchdog.py` | Unit, process, and real Flight cases present; this design does not substitute for implementation/lifecycle review. |
-| Exact-head CI | PR #29152 validation reported shared build, Linux UT, SCA, coverage, and active multi-CN BVT passed | Upgrade-compatibility checks skipped; no downgrade evidence. |
+| Historical CI at the reviewed implementation baseline | PR #29152 baseline `9847da80d6c7096cb0460e46a5cf710e9714af3a`; [MatrixOne ALL CI run 35953275189](https://github.com/matrixorigin/matrixone/actions/runs/35953275189) passed | Exact-head run 35988821412 is tracked separately; its UT coverage producer failed, so it is not passing coverage evidence. Upgrade-compatibility checks skipped; no downgrade evidence. |
 
 The reviewed change is not declared production-ready. Artifact GC/total-storage
 quota, cross-version migration rollback/restore, authenticated transport, and
