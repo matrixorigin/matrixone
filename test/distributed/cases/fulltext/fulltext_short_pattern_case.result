@@ -30,4 +30,22 @@ select id from c where match(body) against('hig') order by id;
 select id from c where match(body) against('HIGH') order by id;
 ➤ id[4,32,0]  𝄀
 1
+create table u (id int primary key, body varchar(64));
+create fulltext index fu on u (body);
+insert into u values (1,'Ａ'),(2,'ａ'),(3,'ẞ'),(4,'other');
+select id from u where match(body) against('Ａ') order by id;
+➤ id[4,32,0]  𝄀
+1
+select id from u where match(body) against('ẞ') order by id;
+➤ id[4,32,0]  𝄀
+3
+create table j (id int primary key, body json);
+create fulltext index fj on j (body) with parser json_value;
+insert into j values (1,'{"w":"Hi"}'),(2,'{"w":"hi"}'),(3,'{"w":"other"}');
+select id from j where match(body) against('Hi') order by id;
+➤ id[4,32,0]  𝄀
+1
+select id from j where match(body) against('hi') order by id;
+➤ id[4,32,0]  𝄀
+2
 drop database ft_case;
