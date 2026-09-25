@@ -10242,7 +10242,7 @@ func bindStringIntervalExpr(ctx context.Context, expr *Expr, intervalType types.
 		types.Minute_Second, types.Hour_Second, types.Day_Second:
 		normalizedType = types.MicroSecond
 	}
-	numberExpr, err := BindFuncExprImplByPlanExpr(ctx, "to_interval", []*Expr{
+	numberExpr, err := BindFuncExprImplByPlanExpr(ctx, "to_interval_microsecond", []*Expr{
 		expr,
 		makePlan2Int64ConstExprWithType(int64(intervalType)),
 	})

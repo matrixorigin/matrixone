@@ -282,7 +282,10 @@ func TestProcessCodecHelpers(t *testing.T) {
 func TestBuildProcessInfoPreservesBackgroundSqlModeAcrossForwards(t *testing.T) {
 	proc, _ := newCodecTestProcess(t)
 	proc.Base.IsFrontend = false
-	proc.SetResolveVariableFunc(func(string, bool, bool) (interface{}, error) {
+	proc.SetResolveVariableFunc(func(name string, _, _ bool) (interface{}, error) {
+		if name == "default_week_format" {
+			return int64(0), nil
+		}
 		return "", nil
 	})
 
@@ -305,6 +308,47 @@ func TestBuildProcessInfoPreservesBackgroundSqlModeAcrossForwards(t *testing.T) 
 	require.Equal(t, "STRICT_TRANS_TABLES", second.SessionInfo.SqlMode)
 	require.Equal(t, uint32(128), second.SessionInfo.MaxErrorCount)
 	require.True(t, second.SessionInfo.MaxErrorCountSet)
+}
+
+func TestBuildProcessInfoPreservesWeekModePerExecution(t *testing.T) {
+	proc, _ := newCodecTestProcess(t)
+	mode := int64(3)
+	proc.SetResolveVariableFunc(func(name string, _, _ bool) (interface{}, error) {
+		if name == "default_week_format" {
+			return mode, nil
+		}
+		return nil, nil
+	})
+	first, err := proc.BuildProcessInfo("select week(d)")
+	require.NoError(t, err)
+	require.Equal(t, uint32(3), first.SessionInfo.DefaultWeekFormat)
+	require.True(t, first.SessionInfo.DefaultWeekFormatSet)
+	wire, err := first.Marshal()
+	require.NoError(t, err)
+	var received pipeline.ProcessInfo
+	require.NoError(t, received.Unmarshal(wire))
+	svc := NewCodecService(fakeCodecTxnClient{op: fakeCodecTxnOperator{}}, nil, nil, nil, nil, nil, nil, nil)
+	remote, err := svc.Decode(defines.AttachAccountId(context.Background(), 42), received)
+	require.NoError(t, err)
+	defer remote.Free()
+	got, present, err := ResolveDefaultWeekFormatMode(remote)
+	require.NoError(t, err)
+	require.True(t, present)
+	require.Equal(t, 3, got)
+	forwarded, err := remote.BuildProcessInfo("select week(d)")
+	require.NoError(t, err)
+	require.Equal(t, first.SessionInfo.DefaultWeekFormat, forwarded.SessionInfo.DefaultWeekFormat)
+	require.True(t, forwarded.SessionInfo.DefaultWeekFormatSet)
+
+	mode = 0 // A new prepared execution reads the new session value.
+	second, err := proc.BuildProcessInfo("select week(d)")
+	require.NoError(t, err)
+	require.Equal(t, uint32(0), second.SessionInfo.DefaultWeekFormat)
+	require.True(t, second.SessionInfo.DefaultWeekFormatSet)
+	missing := &Process{Base: &BaseProcess{SessionInfo: SessionInfo{}}}
+	_, present, err = ResolveDefaultWeekFormatMode(missing)
+	require.NoError(t, err)
+	require.False(t, present)
 }
 
 func TestBuildProcessInfoUsesEffectiveWarningSinkAcrossForwards(t *testing.T) {

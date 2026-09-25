@@ -1540,16 +1540,42 @@ func doDateAdd(start types.Date, diff int64, iTyp types.IntervalType) (types.Dat
 	}
 }
 
-func doTimeAdd(start types.Time, diff int64, iTyp types.IntervalType) (types.Time, error) {
-	err := types.JudgeIntervalNumOverflow(diff, iTyp)
-	if err != nil {
-		return 0, err
+func doTimeAdd(start types.Time, diff int64, iTyp types.IntervalType) (types.Time, bool, error) {
+	return doTimeInterval(start, diff, iTyp, false)
+}
+
+// doTimeInterval keeps DATE_ADD and DATE_SUB's TIME range policy in one place.
+// A range overflow is a per-row NULL/warning outcome; an unsupported unit is
+// still an execution error.
+func doTimeInterval(start types.Time, diff int64, unit types.IntervalType, subtract bool) (types.Time, bool, error) {
+	factor := int64(1)
+	switch unit {
+	case types.MicroSecond:
+	case types.Second:
+		factor = types.MicroSecsPerSec
+	case types.Minute:
+		factor = types.MicroSecsPerSec * types.SecsPerMinute
+	case types.Hour:
+		factor = types.MicroSecsPerSec * types.SecsPerHour
+	default:
+		return 0, false, moerr.NewInvalidArgNoCtx("time interval unit", unit)
 	}
-	t, success := start.AddInterval(diff, iTyp)
-	if success && types.IsMySQLTime(t) {
-		return t, nil
+	if types.JudgeIntervalNumOverflow(diff, unit) != nil ||
+		diff > math.MaxInt64/factor || diff < math.MinInt64/factor {
+		return 0, true, nil
 	}
-	return 0, moerr.NewOutOfRangeNoCtx("time", "")
+	delta := diff * factor
+	if subtract {
+		if delta == math.MinInt64 {
+			return 0, true, nil
+		}
+		delta = -delta
+	}
+	sum, ok := safeTimestampWindowSum(int64(start), delta)
+	if !ok || !types.IsMySQLTime(types.Time(sum)) {
+		return 0, true, nil
+	}
+	return types.Time(sum), false, nil
 }
 
 // datetimeOverflowMaxError is a special error to indicate maximum datetime overflow (should return NULL)
@@ -2672,15 +2698,16 @@ func TimeAdd(ivecs []*vector.Vector, result vector.FunctionResultWrapper, proc *
 			nullsVec.Add(i)
 			continue
 		}
-		raw, err := doTimeAdd(v1, v2, iTyp)
+		raw, overflow, err := doTimeAdd(v1, v2, iTyp)
 		if err != nil {
 			return err
 		}
-		clamped := types.ClampMySQLTimeForScale(raw, scale)
-		if clamped != raw {
-			appendTimeRangeWarning(proc, raw, scale)
+		if overflow {
+			nullsVec.Add(i)
+			appendTimeIntervalOverflowWarning(proc)
+			continue
 		}
-		values[i] = clamped
+		values[i] = raw
 	}
 	return nil
 }
@@ -4373,12 +4400,12 @@ const (
 
 func parseTemporalString(s string, scale int32) (types.Datetime, types.Time, temporalStringKind, error) {
 	s = strings.TrimSpace(s)
-	dateLike := len(s) >= 8 && (s[4] == '-' || s[4] == '/' || s[4] == ':') && s[7] == s[4]
-	compactDateLike := len(s) >= 8 && isAllDigits(s)
-	if dateLike || compactDateLike {
-		if dt, err := parseDatetimeNoPanic(s, scale); err == nil {
-			return dt, 0, temporalStringDateTime, nil
+	if types.IsCalendarStringCandidate(s) {
+		dt, err := parseDatetimeNoPanic(s, scale)
+		if err != nil {
+			return 0, 0, temporalStringInvalid, err
 		}
+		return dt, 0, temporalStringDateTime, nil
 	}
 	if tm, err := types.ParseTime(s, scale); err == nil {
 		return 0, tm, temporalStringTime, nil
@@ -4403,7 +4430,7 @@ func parseTimeOperand(s string, scale int32) (types.Time, error) {
 	// The second ADDTIME/SUBTIME operand is a duration, not a calendar
 	// value. ParseTime intentionally accepts datetime spellings, so fence
 	// those here before delegating to the shared parser.
-	if len(s) >= 8 && (s[4] == '-' || s[4] == '/' || s[4] == ':') && s[7] == s[4] {
+	if types.IsCalendarStringCandidate(s) {
 		return 0, moerr.NewInvalidInputNoCtxf("invalid time value %s", s)
 	}
 	return types.ParseTime(s, scale)
@@ -4421,6 +4448,16 @@ func appendTimeRangeWarning(proc *process.Process, value types.Time, scale int32
 	if appender, ok := proc.GetWarningSink().(warningDiagnosticAppender); ok {
 		appender.AppendWarningDiagnostic(moerr.ER_TRUNCATED_WRONG_VALUE,
 			fmt.Sprintf("Truncated incorrect time value: '%s'", value.String2(scale)))
+	}
+}
+
+func appendTimeIntervalOverflowWarning(proc *process.Process) {
+	if proc == nil {
+		return
+	}
+	if appender, ok := proc.GetWarningSink().(warningDiagnosticAppender); ok {
+		appender.AppendWarningDiagnostic(moerr.ER_DATETIME_FUNCTION_OVERFLOW,
+			"Datetime function: time field overflow")
 	}
 }
 
@@ -5522,19 +5559,8 @@ func doDateSub(start types.Date, diff int64, iTyp types.IntervalType) (types.Dat
 	}
 }
 
-func doTimeSub(start types.Time, diff int64, iTyp types.IntervalType) (types.Time, error) {
-	err := types.JudgeIntervalNumOverflow(diff, iTyp)
-	if err != nil {
-		return 0, err
-	}
-	t, success := start.AddInterval(-diff, iTyp)
-	if success {
-		return t, nil
-	}
-	if diff > 0 {
-		return -types.MySQLTimeMaxForScale(6), nil
-	}
-	return types.MySQLTimeMaxForScale(6), nil
+func doTimeSub(start types.Time, diff int64, iTyp types.IntervalType) (types.Time, bool, error) {
+	return doTimeInterval(start, diff, iTyp, true)
 }
 
 func doDatetimeSub(start types.Datetime, diff int64, iTyp types.IntervalType) (types.Datetime, error) {
@@ -5995,15 +6021,16 @@ func TimeSub(ivecs []*vector.Vector, result vector.FunctionResultWrapper, proc *
 			nullsVec.Add(i)
 			continue
 		}
-		raw, err := doTimeSub(v1, v2, iTyp)
+		raw, overflow, err := doTimeSub(v1, v2, iTyp)
 		if err != nil {
 			return err
 		}
-		clamped := types.ClampMySQLTimeForScale(raw, scale)
-		if clamped != raw {
-			appendTimeRangeWarning(proc, raw, scale)
+		if overflow {
+			nullsVec.Add(i)
+			appendTimeIntervalOverflowWarning(proc)
+			continue
 		}
-		values[i] = clamped
+		values[i] = raw
 	}
 	return nil
 }
@@ -8286,29 +8313,6 @@ func ExtractFromDatetime(ivecs []*vector.Vector, result vector.FunctionResultWra
 	return nil
 }
 
-var validDatetimeUnit = map[string]struct{}{
-	"microsecond":        {},
-	"second":             {},
-	"minute":             {},
-	"hour":               {},
-	"day":                {},
-	"week":               {},
-	"month":              {},
-	"quarter":            {},
-	"year":               {},
-	"second_microsecond": {},
-	"minute_microsecond": {},
-	"minute_second":      {},
-	"hour_microsecond":   {},
-	"hour_second":        {},
-	"hour_minute":        {},
-	"day_microsecond":    {},
-	"day_second":         {},
-	"day_minute":         {},
-	"day_hour":           {},
-	"year_month":         {},
-}
-
 // YearWeekDate: YEARWEEK(date, mode) - Returns year and week for a date as YYYYWW format.
 // If mode is not provided, defaults to 0.
 func YearWeekDate(ivecs []*vector.Vector, result vector.FunctionResultWrapper, proc *process.Process, length int, selectList *FunctionSelectList) error {
@@ -8498,79 +8502,38 @@ func YearWeekString(ivecs []*vector.Vector, result vector.FunctionResultWrapper,
 	return nil
 }
 
-const extractMinuteDigits = "000102030405060708091011121314151617181920212223242526272829303132333435363738394041424344454647484950515253545556575859"
-
-func formatExtractMinute(minute int) string {
-	if minute >= 0 && minute < 60 {
-		start := minute * 2
-		return extractMinuteDigits[start : start+2]
-	}
-	return fmt.Sprintf("%02d", minute)
-}
-
-func extractFromDatetime(unit string, d types.Datetime) (string, error) {
-	if _, ok := validDatetimeUnit[unit]; !ok {
-		return "", moerr.NewInternalErrorNoCtx("invalid unit")
-	}
-	var value string
-	switch unit {
-	case "microsecond":
-		value = fmt.Sprintf("%d", int(d.MicroSec()))
-	case "second":
-		value = fmt.Sprintf("%02d", int(d.Sec()))
-	case "minute":
-		value = fmt.Sprintf("%02d", int(d.Minute()))
-	case "hour":
-		value = fmt.Sprintf("%02d", int(d.Hour()))
-	case "day":
-		value = fmt.Sprintf("%02d", int(d.ToDate().Day()))
-	case "week":
-		if d == types.ZeroDatetime {
-			value = "00"
-		} else {
-			value = fmt.Sprintf("%02d", int(d.ToDate().Week(0)))
-		}
-	case "month":
-		value = fmt.Sprintf("%02d", int(d.ToDate().Month()))
-	case "quarter":
-		value = fmt.Sprintf("%d", int(d.ToDate().Quarter()))
-	case "year":
-		value = fmt.Sprintf("%04d", int(d.ToDate().Year()))
-	case "second_microsecond":
-		value = d.SecondMicrosecondStr()
-	case "minute_microsecond":
-		value = d.MinuteMicrosecondStr()
-	case "minute_second":
-		value = d.MinuteSecondStr()
-	case "hour_microsecond":
-		value = d.HourMicrosecondStr()
-	case "hour_second":
-		value = d.HourSecondStr()
-	case "hour_minute":
-		value = d.HourMinuteStr()
-	case "day_microsecond":
-		value = d.DayMicrosecondStr()
-	case "day_second":
-		value = d.DaySecondStr()
-	case "day_minute":
-		value = d.DayMinuteStr()
-	case "day_hour":
-		value = d.DayHourStr()
-	case "year_month":
-		value = d.ToDate().YearMonthStr()
-	}
-	return value, nil
-}
-
 // extractNumericFromDatetime is the numeric EXTRACT contract.  Composite
 // fields retain their compact decimal representation while the scalar fields
 // are returned as signed integers instead of formatted VARCHAR values.
 func extractNumericFromDatetime(unit string, d types.Datetime) (int64, error) {
-	value, err := extractFromDatetime(unit, d)
-	if err != nil {
-		return 0, err
+	switch unit {
+	case "microsecond":
+		return d.MicroSec(), nil
+	case "second":
+		return int64(d.Sec()), nil
+	case "minute":
+		return int64(d.Minute()), nil
+	case "hour":
+		return int64(d.Hour()), nil
+	case "day":
+		return int64(d.ToDate().Day()), nil
+	case "week":
+		if d == types.ZeroDatetime {
+			return 0, nil
+		}
+		return int64(d.ToDate().Week(0)), nil
+	case "month":
+		return int64(d.ToDate().Month()), nil
+	case "quarter":
+		return int64(d.ToDate().Quarter()), nil
+	case "year":
+		return int64(d.Year()), nil
+	case "year_month":
+		return int64(d.Year())*100 + int64(d.ToDate().Month()), nil
+	default:
+		return extractNumericClock(unit, int64(d.ToDate().Day()), int64(d.Hour()),
+			int64(d.Minute()), int64(d.Sec()), d.MicroSec())
 	}
-	return parseExtractNumeric(value)
 }
 
 func ExtractFromTime(ivecs []*vector.Vector, result vector.FunctionResultWrapper, proc *process.Process, length int, selectList *FunctionSelectList) (err error) {
@@ -8615,83 +8578,79 @@ func ExtractFromTime(ivecs []*vector.Vector, result vector.FunctionResultWrapper
 	return nil
 }
 
-var validTimeUnit = map[string]struct{}{
-	"microsecond":        {},
-	"second":             {},
-	"minute":             {},
-	"hour":               {},
-	"second_microsecond": {},
-	"minute_microsecond": {},
-	"minute_second":      {},
-	"hour_microsecond":   {},
-	"hour_second":        {},
-	"hour_minute":        {},
-	"day_microsecond":    {},
-	"day_second":         {},
-	"day_minute":         {},
-	"day_hour":           {},
-}
-
-func extractFromTime(unit string, t types.Time) (string, error) {
-	if _, ok := validTimeUnit[unit]; !ok {
-		return "", moerr.NewInternalErrorNoCtx("invalid unit")
+func extractNumericFromTime(unit string, t types.Time) (int64, error) {
+	negative := t < 0
+	magnitude := uint64(t)
+	if negative {
+		magnitude = uint64(^int64(t)) + 1 // also works for MinInt64
 	}
-	var value string
+	seconds := magnitude / uint64(types.MicroSecsPerSec)
+	hour := int64(seconds / uint64(types.SecsPerHour))
+	minute := int64(seconds / uint64(types.SecsPerMinute) % 60)
+	second := int64(seconds % 60)
+	micro := int64(magnitude % uint64(types.MicroSecsPerSec))
+	var value int64
+	var err error
 	switch unit {
 	case "microsecond":
-		value = fmt.Sprintf("%d", int(t.MicroSec()))
+		value = micro
 	case "second":
-		value = fmt.Sprintf("%02d", int(t.Sec()))
+		value = second
 	case "minute":
-		value = fmt.Sprintf("%02d", int(t.Minute()))
+		value = minute
 	case "hour", "day_hour":
-		value = fmt.Sprintf("%02d", int(t.Hour()))
-	case "second_microsecond":
-		microSec := fmt.Sprintf("%0*d", 6, int(t.MicroSec()))
-		value = fmt.Sprintf("%2d%s", int(t.Sec()), microSec)
-	case "minute_microsecond":
-		microSec := fmt.Sprintf("%0*d", 6, int(t.MicroSec()))
-		value = fmt.Sprintf("%2d%2d%s", int(t.Minute()), int(t.Sec()), microSec)
-	case "minute_second":
-		value = fmt.Sprintf("%2d%2d", int(t.Minute()), int(t.Sec()))
-	case "hour_microsecond", "day_microsecond":
-		microSec := fmt.Sprintf("%0*d", 6, int(t.MicroSec()))
-		value = fmt.Sprintf("%2d%2d%2d%s", int(t.Hour()), int(t.Minute()), int(t.Sec()), microSec)
-	case "hour_second", "day_second":
-		value = fmt.Sprintf("%2d%2d%2d", int(t.Hour()), int(t.Minute()), int(t.Sec()))
-	case "hour_minute", "day_minute":
-		value = fmt.Sprintf("%2d%2d", int(t.Hour()), int(t.Minute()))
-	}
-	return value, nil
-}
-
-func extractNumericFromTime(unit string, t types.Time) (int64, error) {
-	value, err := extractFromTime(unit, t)
-	if err != nil {
-		return 0, err
-	}
-	return parseExtractNumeric(value)
-}
-
-func parseExtractNumeric(value string) (int64, error) {
-	negative := strings.HasPrefix(strings.TrimSpace(value), "-")
-	var digits []byte
-	for i := 0; i < len(value); i++ {
-		if value[i] >= '0' && value[i] <= '9' {
-			digits = append(digits, value[i])
-		}
-	}
-	if len(digits) == 0 {
-		return 0, nil
-	}
-	n, err := strconv.ParseInt(string(digits), 10, 64)
-	if err != nil {
-		return 0, err
+		value = hour
+	default:
+		value, err = extractNumericClock(unit, 0, hour, minute, second, micro)
 	}
 	if negative {
-		return -n, nil
+		value = -value
 	}
-	return n, nil
+	return value, err
+}
+
+func extractNumericClock(unit string, day, hour, minute, second, micro int64) (int64, error) {
+	var parts [4]int64
+	var count int
+	var microseconds bool
+	switch unit {
+	case "second_microsecond":
+		parts, count, microseconds = [4]int64{second}, 1, true
+	case "minute_microsecond":
+		parts, count, microseconds = [4]int64{minute, second}, 2, true
+	case "minute_second":
+		parts, count = [4]int64{minute, second}, 2
+	case "hour_microsecond":
+		parts, count, microseconds = [4]int64{hour, minute, second}, 3, true
+	case "hour_second":
+		parts, count = [4]int64{hour, minute, second}, 3
+	case "hour_minute":
+		parts, count = [4]int64{hour, minute}, 2
+	case "day_microsecond":
+		parts, count, microseconds = [4]int64{day, hour, minute, second}, 4, true
+	case "day_second":
+		parts, count = [4]int64{day, hour, minute, second}, 4
+	case "day_minute":
+		parts, count = [4]int64{day, hour, minute}, 3
+	case "day_hour":
+		parts, count = [4]int64{day, hour}, 2
+	default:
+		return 0, moerr.NewInternalErrorNoCtx("invalid unit")
+	}
+	value := parts[0]
+	for _, part := range parts[1:count] {
+		if value > (math.MaxInt64-part)/100 {
+			return 0, moerr.NewOutOfRangeNoCtx("extract", unit)
+		}
+		value = value*100 + part
+	}
+	if microseconds {
+		if value > (math.MaxInt64-micro)/types.MicroSecsPerSec {
+			return 0, moerr.NewOutOfRangeNoCtx("extract", unit)
+		}
+		value = value*types.MicroSecsPerSec + micro
+	}
+	return value, nil
 }
 
 func ExtractFromTimestamp(ivecs []*vector.Vector, result vector.FunctionResultWrapper, proc *process.Process, length int, selectList *FunctionSelectList) (err error) {

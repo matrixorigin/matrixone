@@ -13419,6 +13419,17 @@ var supportedControlBuiltIns = []FuncNew{
 }
 
 var supportedOthersBuiltIns = []FuncNew{
+	{
+		functionId: TO_INTERVAL_MICROSECOND,
+		class:      plan.Function_STRICT,
+		layout:     STANDARD_FUNCTION,
+		checkFn:    fixedTypeMatch,
+		Overloads: []overload{
+			{overloadId: 0, args: []types.T{types.T_varchar, types.T_int64}, retType: func([]types.Type) types.Type { return types.T_int64.ToType() }, newOp: func() executeLogicOfOverload { return ToIntervalMicrosecond }},
+			{overloadId: 1, args: []types.T{types.T_char, types.T_int64}, retType: func([]types.Type) types.Type { return types.T_int64.ToType() }, newOp: func() executeLogicOfOverload { return ToIntervalMicrosecond }},
+			{overloadId: 2, args: []types.T{types.T_text, types.T_int64}, retType: func([]types.Type) types.Type { return types.T_int64.ToType() }, newOp: func() executeLogicOfOverload { return ToIntervalMicrosecond }},
+		},
+	},
 	// Internal helper used by the interval binder for dynamic string values.
 	{
 		functionId: TO_INTERVAL,

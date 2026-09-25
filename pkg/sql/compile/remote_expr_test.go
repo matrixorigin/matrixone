@@ -1507,6 +1507,9 @@ func newResolveVariableProcess(t *testing.T, sqlMode string) *process.Process {
 		if name == "sql_mode" {
 			return sqlMode, nil
 		}
+		if name == "default_week_format" {
+			return int64(0), nil
+		}
 		return nil, moerr.NewInternalErrorNoCtx("variable not found")
 	})
 	return proc

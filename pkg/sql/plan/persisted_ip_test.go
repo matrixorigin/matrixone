@@ -52,6 +52,12 @@ func TestPersistedDecimalLiteralUsesDedicatedEpochInMixedOwner(t *testing.T) {
 	temporalExpr := &planpb.Expr{Typ: planpb.Type{Id: int32(types.T_int64)}, Expr: &planpb.Expr_F{F: &planpb.Function{
 		Func: &planpb.ObjectRef{Obj: function.EncodeOverloadID(function.EXTRACT, 0)},
 	}}}
+	intervalExpr := &planpb.Expr{Typ: planpb.Type{Id: int32(types.T_int64)}, Expr: &planpb.Expr_F{F: &planpb.Function{
+		Func: &planpb.ObjectRef{Obj: function.EncodeOverloadID(function.TO_INTERVAL_MICROSECOND, 0)},
+	}}}
+	weekExpr := &planpb.Expr{Typ: planpb.Type{Id: int32(types.T_uint8)}, Expr: &planpb.Expr_F{F: &planpb.Function{
+		Func: &planpb.ObjectRef{Obj: function.EncodeOverloadID(function.WEEK, 0)},
+	}}}
 	for _, tc := range []struct {
 		name  string
 		exprs []*planpb.Expr
@@ -63,6 +69,9 @@ func TestPersistedDecimalLiteralUsesDedicatedEpochInMixedOwner(t *testing.T) {
 		{"spatial then decimal", []*planpb.Expr{spatialExpr, decimalExpr}, defines.MORPCVersion90},
 		{"temporal result", []*planpb.Expr{temporalExpr}, defines.MORPCVersion97},
 		{"temporal then spatial", []*planpb.Expr{temporalExpr, spatialExpr}, defines.MORPCVersion97},
+		{"normalized interval", []*planpb.Expr{intervalExpr}, defines.MORPCVersion98},
+		{"week session default", []*planpb.Expr{weekExpr}, defines.MORPCVersion98},
+		{"temporal then interval", []*planpb.Expr{temporalExpr, intervalExpr}, defines.MORPCVersion98},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			owner := &planpb.TableDef{}
@@ -330,6 +339,11 @@ func TestPersistedDecimalLiteralMarkerSurvivesDeepCopyAndListFold(t *testing.T) 
 			require.True(t, decoded.GetVec().GetDecimalLiteralRequiresV82())
 		})
 	}
+	legacyExpr := &planpb.Expr{Typ: planpb.Type{Id: int32(types.T_int64)}, Expr: &planpb.Expr_F{F: &planpb.Function{
+		Func: &planpb.ObjectRef{Obj: function.EncodeOverloadID(function.TO_INTERVAL, 0)},
+	}}}
+	_, err = RequiredPersistedExpressionProtocolVersion(legacyExpr)
+	require.ErrorContains(t, err, "legacy interval")
 }
 
 func TestPersistedDecimalLiteralMarkerSurvivesConstantFold(t *testing.T) {

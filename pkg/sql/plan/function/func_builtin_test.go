@@ -719,7 +719,7 @@ func TestToIntervalNormalizesDynamicStrings(t *testing.T) {
 				NewFunctionTestResult(types.T_int64.ToType(), false,
 					[]int64{tc.whole, tc.whole + tc.whole/2, -tc.whole - tc.whole/2, 0, 0},
 					[]bool{false, false, false, true, true}),
-				ToInterval)
+				ToIntervalMicrosecond)
 			ok, info := caseDef.Run()
 			require.True(t, ok, info)
 		})
@@ -732,7 +732,7 @@ func TestToIntervalNormalizesDynamicStrings(t *testing.T) {
 				NewFunctionTestConstInput(types.T_int64.ToType(), []int64{int64(types.Day_Second)}, []bool{false}),
 			},
 			NewFunctionTestResult(types.T_int64.ToType(), false, []int64{93784 * types.MicroSecsPerSec, 0}, []bool{false, true}),
-			ToInterval,
+			ToIntervalMicrosecond,
 		)
 		ok, info := tc.Run()
 		require.True(t, ok, info)
@@ -745,7 +745,7 @@ func TestToIntervalNormalizesDynamicStrings(t *testing.T) {
 				NewFunctionTestConstInput(types.T_int64.ToType(), []int64{int64(types.Year_Month)}, []bool{false}),
 			},
 			NewFunctionTestResult(types.T_int64.ToType(), false, []int64{14, 0}, []bool{false, true}),
-			ToInterval,
+			ToIntervalMicrosecond,
 		)
 		ok, info := tc.Run()
 		require.True(t, ok, info)

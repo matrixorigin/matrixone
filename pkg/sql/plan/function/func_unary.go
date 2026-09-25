@@ -10868,35 +10868,8 @@ func weekModeAt(modes vector.FunctionParameterWrapper[int64], row uint64) int {
 // getDefaultWeekFormatMode reads the session default at execution time so a
 // prepared one-argument WEEK call observes a later SET default_week_format.
 func getDefaultWeekFormatMode(proc *process.Process) (int, error) {
-	if proc == nil || proc.GetResolveVariableFunc() == nil {
-		return 0, nil
-	}
-	value, err := proc.GetResolveVariableFunc()("default_week_format", true, false)
-	if err != nil {
-		return 0, err
-	}
-	if value == nil {
-		return 0, nil
-	}
-	var mode int64
-	switch v := value.(type) {
-	case int64:
-		mode = v
-	case int32:
-		mode = int64(v)
-	case int:
-		mode = int64(v)
-	case uint64:
-		mode = int64(v)
-	case uint32:
-		mode = int64(v)
-	case uint:
-		mode = int64(v)
-	default:
-		return 0, moerr.NewInternalError(proc.Ctx,
-			fmt.Sprintf("session variable default_week_format has unexpected type %T", value))
-	}
-	return normalizeWeekMode(mode), nil
+	mode, _, err := process.ResolveDefaultWeekFormatMode(proc)
+	return mode, err
 }
 
 func DateToWeek(ivecs []*vector.Vector, result vector.FunctionResultWrapper, proc *process.Process, length int, selectList *FunctionSelectList) error {

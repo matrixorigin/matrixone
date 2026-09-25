@@ -73,9 +73,18 @@ func builtInDateDiff(parameters []*vector.Vector, result vector.FunctionResultWr
 	return nil
 }
 
-// ToInterval normalizes dynamic string interval values per row. Invalid values
-// become NULL, matching DATE_ADD/DATE_SUB invalid-interval behavior.
+// ToInterval retains the legacy whole-unit contract for already-bound plans.
 func ToInterval(ivecs []*vector.Vector, result vector.FunctionResultWrapper, _ *process.Process, length int, selectList *FunctionSelectList) error {
+	return toInterval(ivecs, result, length, false)
+}
+
+// ToIntervalMicrosecond has a distinct execution identity because its results
+// are paired with a MICROSECOND outer unit in new DATE_ADD/DATE_SUB plans.
+func ToIntervalMicrosecond(ivecs []*vector.Vector, result vector.FunctionResultWrapper, _ *process.Process, length int, selectList *FunctionSelectList) error {
+	return toInterval(ivecs, result, length, true)
+}
+
+func toInterval(ivecs []*vector.Vector, result vector.FunctionResultWrapper, length int, normalizeMicroseconds bool) error {
 	values := vector.GenerateFunctionStrParameter(ivecs[0])
 	units := vector.GenerateFunctionFixedTypeParameter[int64](ivecs[1])
 	rs := vector.MustFunctionResult[int64](result)
@@ -98,7 +107,7 @@ func ToInterval(ivecs []*vector.Vector, result vector.FunctionResultWrapper, _ *
 		}
 		// The binder fixes one unit for all rows. Scale whole values to the
 		// microsecond unit used by fractional values of these interval types.
-		if normalizedType != types.MicroSecond {
+		if normalizeMicroseconds && normalizedType != types.MicroSecond {
 			multiplier := int64(0)
 			switch intervalType {
 			case types.Second, types.Minute_Second, types.Hour_Second, types.Day_Second:

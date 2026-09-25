@@ -1397,3 +1397,19 @@ func TestDate(t *testing.T) {
 	require.NoError(t, err)
 	require.Equal(t, 1, r.Length())
 }
+
+func TestPreparedDynamicIntervalHasVersionedUnit(t *testing.T) {
+	p, err := runOneStmt(NewMockOptimizer(false), t,
+		"prepare interval_units from select date_add('2026-01-01', interval ? second)")
+	require.NoError(t, err)
+	preparedPlan := p.GetDcl().GetPrepare().GetPlan()
+	require.NotNil(t, findPlanFunctionExpr(preparedPlan, "to_interval_microsecond"))
+	require.Nil(t, findPlanFunctionExpr(preparedPlan, "to_interval"))
+	dateAdd := findPlanFunctionExpr(preparedPlan, "date_add")
+	require.NotNil(t, dateAdd)
+	require.Equal(t, int64(types.MicroSecond), dateAdd.GetF().Args[2].GetLit().GetI64Val())
+	features, err := plan.RequiredRemoteExpressionFeatures(preparedPlan)
+	require.NoError(t, err)
+	require.True(t, features.NormalizedIntervalUnits)
+	require.False(t, features.LegacyIntervalUnits)
+}

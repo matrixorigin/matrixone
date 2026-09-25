@@ -162,8 +162,8 @@ func encodeRemoteScopeWithVectorProtocol(s *Scope, proc *process.Process, requir
 			return nil, err
 		}
 	}
-	if features.TemporalResultContracts {
-		if err = validateTemporalResultDestination(proc, p); err != nil {
+	if required := temporalExpressionProtocolVersion(features); required != 0 {
+		if err = validateTemporalResultDestination(proc, p, required); err != nil {
 			return nil, err
 		}
 	}
@@ -2280,6 +2280,13 @@ func validateRemoteExpressionPipelineProtocol(
 	if features.LegacyTemporalResultContracts {
 		return moerr.NewNotSupportedNoCtx("legacy temporal result vector contract is incompatible with this CN")
 	}
+	if features.LegacyIntervalUnits {
+		return moerr.NewNotSupportedNoCtx("legacy interval unit contract requires rebinding")
+	}
+	if features.WeekSessionDefault && (proc == nil ||
+		(proc.GetResolveVariableFunc() == nil && !proc.GetSessionInfo().DefaultWeekFormatSet)) {
+		return moerr.NewNotSupportedNoCtx("remote WEEK requires a default_week_format session snapshot")
+	}
 	protocolVersion, hasProtocolVersion := int64(0), false
 	if proc != nil {
 		protocolVersion, hasProtocolVersion = remoteMORPCProtocolVersion(proc.GetService())
@@ -2292,6 +2299,10 @@ func validateRemoteExpressionPipelineProtocol(
 	}
 	if features.TemporalResultContracts && (!hasProtocolVersion || protocolVersion < defines.MORPCVersion97) {
 		return moerr.NewNotSupportedNoCtx("temporal result contracts require MORPC protocol version 97")
+	}
+	if (features.NormalizedIntervalUnits || features.WeekSessionDefault) &&
+		(!hasProtocolVersion || protocolVersion < defines.MORPCVersion98) {
+		return moerr.NewNotSupportedNoCtx("normalized interval units and WEEK session snapshot require MORPC protocol version 98")
 	}
 	if features.NumericPrefix &&
 		(!hasProtocolVersion || protocolVersion < defines.MORPCVersion30) {

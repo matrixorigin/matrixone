@@ -15,7 +15,6 @@
 package function
 
 import (
-	"fmt"
 	"math"
 	"testing"
 	"time"
@@ -24,23 +23,6 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/container/vector"
 	"github.com/matrixorigin/matrixone/pkg/testutil"
 )
-
-func TestFormatExtractMinute(t *testing.T) {
-	for minute := -100; minute <= 100; minute++ {
-		got := formatExtractMinute(minute)
-		want := fmt.Sprintf("%02d", minute)
-		if got != want {
-			t.Fatalf("formatExtractMinute(%d) = %q, want %q", minute, got, want)
-		}
-	}
-	for _, minute := range []int{math.MinInt64, math.MaxInt64} {
-		got := formatExtractMinute(minute)
-		want := fmt.Sprintf("%02d", minute)
-		if got != want {
-			t.Fatalf("formatExtractMinute(%d) = %q, want %q", minute, got, want)
-		}
-	}
-}
 
 func TestExtractMinuteDatetimeVector(t *testing.T) {
 	proc := testutil.NewProcess(t)

@@ -182,6 +182,12 @@ func (proc *Process) BuildProcessInfo(
 			MaxErrorCount:          uint32(maxErrorCount),
 			MaxErrorCountSet:       maxErrorCountSet,
 		}
+		weekMode, weekModeSet, err := ResolveDefaultWeekFormatMode(proc)
+		if err != nil {
+			return procInfo, err
+		}
+		procInfo.SessionInfo.DefaultWeekFormat = uint32(weekMode)
+		procInfo.SessionInfo.DefaultWeekFormatSet = weekModeSet
 		nullifyZeroTemporal, err := ResolveExplicitZeroTemporalCastReturnsNull(proc)
 		if err != nil {
 			return procInfo, err
@@ -485,6 +491,8 @@ func ConvertToProcessSessionInfo(
 		MatrixOneNativeMode:                 sei.MatrixoneNativeMode,
 		ExplicitZeroTemporalCastReturnsNull: sei.ExplicitZeroTemporalCastReturnsNull,
 		SqlMode:                             sei.SqlMode,
+		DefaultWeekFormat:                   uint8(sei.DefaultWeekFormat),
+		DefaultWeekFormatSet:                sei.DefaultWeekFormatSet,
 		AutoIncrementIncrement:              sei.AutoIncrementIncrement,
 		AutoIncrementOffset:                 sei.AutoIncrementOffset,
 		MaxErrorCount:                       int(sei.MaxErrorCount),
