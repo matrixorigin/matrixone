@@ -1,10 +1,10 @@
 # Issue #29226：跨协调 CN 的 IVF 扫描对象归属设计
 
-- 状态：待设计评审；本文不代表设计已批准
-- 版本：2026-09-25，v3（MORPC 96，避让上游 prepared scalar precision 的 95）
+- 状态：设计评审已通过；实现仍需独立评审
+- 版本：2026-09-25，v4（记录设计评审决议与编码阶段的能力标记传递）
 - 负责 issue：[matrixorigin/matrixone#29226](https://github.com/matrixorigin/matrixone/issues/29226)
 - 实现 PR：[matrixorigin/matrixone#29319](https://github.com/matrixorigin/matrixone/pull/29319)
-- 评审记录：以本文件的 Git 修订和 PR 上明确的设计审批决定为准；在审批前不得把实现视为已获批准
+- 评审记录：[XuPeng-SH 对 v3 修订 `5cd1a359d7` 的设计决议：PASS](https://github.com/matrixorigin/matrixone/pull/29319#pullrequestreview-5314085804)；该决议不代表实现已获批准
 
 ## 问题、目标和边界
 
@@ -23,7 +23,7 @@
 
 编译器只在多 CN、只读工作区、非强制单 CN、非必需 membership 的向量扫描上考虑稳定布局。它检查本地服务的 `MOProtocolVersion`，再向选中的每个非本地 CN 发 `GetProtocolVersion`。服务身份和 pipeline 地址必须与当前集群目录匹配；缺失、未知、RPC 失败或超时都视为能力不足，保留原有“协调 CN 在前”的分布式布局。父 context 取消直接返回取消错误。一次探测共用 5 秒上限，每个响应都释放；探测结果不跨执行缓存。
 
-稳定布局允许远端执行分片零。发送端在编码远端 scope 前，检查包括子 pipeline 在内的整个树，并针对实际目的 CN 再次探测。但 QueryService 的能力 RPC 与实际 Pipeline stream 是两个连接；探测完成后若旧实例接管同一地址，仅凭再次探测仍可能把远端零分片发送给旧二进制。因此发送端在实际 Pipeline stream 上、发送任何 scope 数据前发送新增的 `PipelineProtocolCheck` 消息，要求 MORPC 96。接收此消息的实例在同一 stream 回传其本地协议版本；只有 stream ID、消息类型、终态和版本均匹配才发送 pipeline。旧实例不认识此消息，或新实例将门槛降到 95，均不能确认而失败；连接断开不会把既有 stream 悄悄转交替换实例。此检查对旧布局、远端非零分片不增加握手。接收端在解码后、执行前递归检查本地协议版本，处理握手之后的本地门槛回退。`IsRemote` 取决于执行路由，不能用分片零推断。版本 94 已由无损 NoFull CDC 启动水位语义占用；版本 95 已由 prepared scalar precision 占用，两者均不得作为 IVF 能力证据。
+稳定布局允许远端执行分片零。发送端在编码远端 scope 前，检查包括子 pipeline 在内的整个树，并针对实际目的 CN 再次探测。该扫描在已构造的编码 pipeline 上同时产生是否需要执行连接握手的标记；普通远端查询不重复解析完整的序列化 pipeline。但 QueryService 的能力 RPC 与实际 Pipeline stream 是两个连接；探测完成后若旧实例接管同一地址，仅凭再次探测仍可能把远端零分片发送给旧二进制。因此发送端在实际 Pipeline stream 上、发送任何 scope 数据前发送新增的 `PipelineProtocolCheck` 消息，要求 MORPC 96。接收此消息的实例在同一 stream 回传其本地协议版本；只有 stream ID、消息类型、终态和版本均匹配才发送 pipeline。旧实例不认识此消息，或新实例将门槛降到 95，均不能确认而失败；连接断开不会把既有 stream 悄悄转交替换实例。此检查对旧布局、远端非零分片不增加握手。接收端在解码后、执行前递归检查本地协议版本，处理握手之后的本地门槛回退。`IsRemote` 取决于执行路由，不能用分片零推断。版本 94 已由无损 NoFull CDC 启动水位语义占用；版本 95 已由 prepared scalar precision 占用，两者均不得作为 IVF 能力证据。
 
 MORPC 96 是本变更的部署能力门槛，而非新的持久化编码。执行前握手新增 `PipelineProtocolCheck` 方法和临时 `protocol_version` 消息字段；扫描对象路由仍复用已有 pipeline 节点的 `CNCNT/CNIDX`、`ScanIdentity` 和查询能力 RPC。若部署回退到 95 或更低，新的查询选择旧布局；已经编译好的稳定布局在发送/接收保护处失败而不产生不完整结果。重启、备份恢复和已有索引对象无需迁移，因为对象数据及其 ObjectID 未改变。滚动升级要先让所有参与 CN 支持 96，再提升服务本地协议门槛；滚动回退先降低门槛，停用稳定布局。
 
@@ -51,4 +51,4 @@ MORPC 96 是本变更的部署能力门槛，而非新的持久化编码。执�
 - 端到端：两个真实嵌入式 CN 的 MySQL 查询，从两入口运行 `Vector Index Scan`，验证 peer 执行、落盘与内存数据、提交和回滚后的完整有序结果。原有 IVF BVT 与 SCA 通过。
 - 规模验收：在实际索引规模和明确 CN 缓存预算下，分别记录固定入口/交替入口的缓存命中、对象存储 I/O、解码、QPS/延迟和每 CN 内存。小样本本地对照不能证明生产规模收益；该项完成前不宣称性能提升倍数。
 
-提议的决议是：接受成员集合变化时重分片；按“全部参与 CN 支持 96 后启用，回退前先关闭门槛”的顺序部署；能力下降时显式拒绝既有稳定布局的执行。这些取舍已在上文说明，不留下实施阶段再决定的策略问题。本文仍处于待评审状态，只有评审者在版本化修订上明确批准后才算设计通过。
+已批准的设计决议是：接受成员集合变化时重分片；按“全部参与 CN 支持 96 后启用，回退前先关闭门槛”的顺序部署；能力下降时显式拒绝既有稳定布局的执行。规模验收仍用于任何性能收益声明；实现代码和 CI 另行评审。

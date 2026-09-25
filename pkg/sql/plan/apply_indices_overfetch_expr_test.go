@@ -121,6 +121,40 @@ func TestOverFetchLimitExprMatchesGoFormula(t *testing.T) {
 	require.Nil(t, got)
 }
 
+func TestPreparedOverFetchKeepsUnsignedLimitDomain(t *testing.T) {
+	ctx := context.Background()
+	astLimit := parseLimit(t, "SELECT 1 LIMIT ?")
+	builder, bindCtx := genBuilderAndCtx()
+	builder.isPrepareStatement = true
+	limit, err := NewLimitBinder(builder, bindCtx, false).BindExpr(astLimit.Count, 0, true)
+	require.NoError(t, err)
+	require.Equal(t, types.T_uint64, types.T(limit.Typ.Id))
+	require.NotNil(t, limit.GetF(), "a prepared LIMIT must retain its binder cast")
+	paramPos := limit.GetF().Args[0].GetP().Pos
+	require.GreaterOrEqual(t, paramPos, int32(0))
+	budget, err := BuildOverFetchLimitExpr(ctx, limit, false)
+	require.NoError(t, err)
+	for _, sourceType := range []types.Type{
+		types.T_int64.ToType(),
+		types.New(types.T_decimal128, 38, 0),
+	} {
+		t.Run(sourceType.Oid.String(), func(t *testing.T) {
+			params := make([]*planpb.Expr, paramPos+1)
+			params[paramPos] = makePlan2Uint64ConstExprWithType(2)
+			values := make([]any, paramPos+1)
+			values[paramPos] = ParamValue{
+				Value: "2", SourceType: sourceType, HasSourceType: true,
+			}
+			rule := NewResetParamRefRule(ctx, params)
+			rule.SetParamValues(values)
+			rebound, err := rule.ApplyExpr(DeepCopyExpr(budget))
+			require.NoError(t, err)
+			require.Equal(t, types.T_uint64, types.T(rebound.Typ.Id))
+			require.Equal(t, overfetch.PostFilterLimit(2), evalConstUint64(t, NewMockCompilerContext(true), rebound))
+		})
+	}
+}
+
 // TestOverFetchLimitExprSaturationBoundaries pins the two clamps in
 // overfetch.Limit separately, because the runtime expression reaches them by
 // different mechanisms and a change can break one while the other still works.

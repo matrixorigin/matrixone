@@ -18,8 +18,10 @@ import (
 	"context"
 	"errors"
 	"testing"
+	"time"
 
 	"github.com/golang/mock/gomock"
+	"github.com/google/uuid"
 	"github.com/matrixorigin/matrixone/pkg/common/morpc"
 	mock_morpc "github.com/matrixorigin/matrixone/pkg/common/morpc/mock_morpc"
 	moruntime "github.com/matrixorigin/matrixone/pkg/common/runtime"
@@ -153,8 +155,20 @@ func TestVectorScanPartitionTransportAndRollback(t *testing.T) {
 	remote := scopes[0]
 	require.Equal(t, "a", remote.NodeInfo.Id)
 	require.Zero(t, remote.NodeInfo.CNIDX)
-	data, err := encodeRemoteScope(remote, c.proc)
+	requiresBoundProtocol := false
+	data, err := encodeRemoteScopeWithVectorProtocol(remote, c.proc, &requiresBoundProtocol)
 	require.NoError(t, err)
+	require.True(t, requiresBoundProtocol, "the encoded remote partition-zero pipeline needs a bound handshake")
+	c.proc.Base.TxnOperator = fakeTxnOperator{}
+	c.proc.Base.SessionInfo.TimeZone = time.UTC
+	c.proc.Ctx = defines.AttachAccountId(context.Background(), 0)
+	remote.Proc.Base.TxnOperator = fakeTxnOperator{}
+	remote.Proc.Base.SessionInfo.TimeZone = time.UTC
+	remote.Proc.Ctx = defines.AttachAccountId(context.Background(), 0)
+	requiresBoundProtocol = false
+	_, _, _, _, err = prepareRemoteRunSendingDataWithVectorProtocol("", remote, c.proc, nil, uuid.Nil, &requiresBoundProtocol)
+	require.NoError(t, err)
+	require.True(t, requiresBoundProtocol, "remoteRun must receive the post-folded pipeline's protocol requirement")
 	decoded, err := decodeScope(data, c.proc, true, nil)
 	require.NoError(t, err)
 	t.Cleanup(decoded.release)
@@ -183,8 +197,13 @@ func TestVectorScanPartitionTransportAndRollback(t *testing.T) {
 	t.Cleanup(local.release)
 	require.False(t, local.IsRemote)
 	remote.NodeInfo.CNIDX = 1
-	legacy, err := encodeRemoteScope(remote, c.proc)
+	legacy, err := encodeRemoteScopeWithVectorProtocol(remote, c.proc, &requiresBoundProtocol)
 	require.NoError(t, err)
+	require.False(t, requiresBoundProtocol, "the legacy nonzero partition needs no bound handshake")
+	requiresBoundProtocol = true
+	_, _, _, _, err = prepareRemoteRunSendingDataWithVectorProtocol("", remote, c.proc, nil, uuid.Nil, &requiresBoundProtocol)
+	require.NoError(t, err)
+	require.False(t, requiresBoundProtocol, "remoteRun must skip the handshake for a nonzero partition")
 	oldLayout, err := decodeScope(legacy, c.proc, true, nil)
 	require.NoError(t, err)
 	t.Cleanup(oldLayout.release)
@@ -203,7 +222,9 @@ func TestVectorScanPartitionProtocolNestedScopes(t *testing.T) {
 		Children: []*pipeline.Pipeline{nil, {Children: []*pipeline.Pipeline{leaf}}},
 	}
 	require.True(t, hasRemoteVectorPartitionZero(root))
-	require.NoError(t, validateVectorPartitionDestination(c.proc, root))
+	requiresBoundProtocol := false
+	require.NoError(t, validateVectorPartitionDestinationWithResult(c.proc, root, &requiresBoundProtocol))
+	require.True(t, requiresBoundProtocol, "nested partition zero needs the execution-stream handshake")
 	require.NoError(t, validateRemoteVectorPartitionProtocol(c.proc, root))
 	ctx, cancel := context.WithCancel(c.proc.Ctx)
 	cancel()
@@ -217,6 +238,7 @@ func TestVectorScanPartitionProtocolNestedScopes(t *testing.T) {
 	require.NoError(t, validateRemoteVectorPartitionProtocol(nil, root))
 	leaf.Node.CnCnt = 2
 	leaf.DataSource.Node.NodeType = plan.Node_TABLE_SCAN
-	require.NoError(t, validateVectorPartitionDestination(nil, root))
+	require.NoError(t, validateVectorPartitionDestinationWithResult(nil, root, &requiresBoundProtocol))
+	require.False(t, requiresBoundProtocol, "ordinary nested scans do not need the handshake")
 	require.NoError(t, validateRemoteVectorPartitionProtocol(nil, nil))
 }

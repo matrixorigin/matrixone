@@ -748,6 +748,20 @@ func TestRuntimeMembershipLowersToTypedSourcePkPredicate(t *testing.T) {
 	_, err = ivfRuntimeMembershipExpr(proc.Ctx, []byte("not-a-vector"),
 		ivfColExpr(2, plan.Type{Id: int32(types.T_int32)}))
 	require.Error(t, err)
+
+	bitKeys := vector.NewVec(types.New(types.T_bit, 64, 0))
+	defer bitKeys.Free(mp)
+	require.NoError(t, vector.AppendFixedList(bitKeys, []uint64{uint64(1) << 63, ^uint64(0)}, nil, mp))
+	bitData, err := bitKeys.MarshalBinary()
+	require.NoError(t, err)
+	bitExpr, err := ivfRuntimeMembershipExpr(proc.Ctx, bitData,
+		ivfColExpr(2, plan.Type{Id: int32(types.T_bit)}))
+	require.NoError(t, err)
+	require.Equal(t, function.InFunctionName, bitExpr.GetF().Func.ObjName)
+	require.Equal(t, int32(types.T_bit), bitExpr.GetF().Args[0].Typ.Id)
+	require.Equal(t, int32(types.T_bit), bitExpr.GetF().Args[1].Typ.Id)
+	require.Equal(t, 2, int(bitExpr.GetF().Args[1].GetVec().Len))
+	require.Equal(t, bitData, bitExpr.GetF().Args[1].GetVec().Data)
 }
 
 func TestPlanReaderSortsAndBoundsCandidates(t *testing.T) {

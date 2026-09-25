@@ -57,7 +57,15 @@ func validateRemoteVectorPartitionProtocol(proc *process.Process, p *pipeline.Pi
 }
 
 func validateVectorPartitionDestination(proc *process.Process, p *pipeline.Pipeline) error {
-	if !hasRemoteVectorPartitionZero(p) {
+	return validateVectorPartitionDestinationWithResult(proc, p, nil)
+}
+
+func validateVectorPartitionDestinationWithResult(proc *process.Process, p *pipeline.Pipeline, requiresBoundProtocol *bool) error {
+	required := hasRemoteVectorPartitionZero(p)
+	if requiresBoundProtocol != nil {
+		*requiresBoundProtocol = required
+	}
+	if !required {
 		return nil
 	}
 	// Use the actual transport destination, including for scans nested below

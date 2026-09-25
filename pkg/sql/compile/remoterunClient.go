@@ -84,21 +84,18 @@ func (s *Scope) remoteRun(c *Compile) (sender *messageSenderOnClient, err error)
 	var scopeEncodeData, processEncodeData []byte
 	var withoutOutput, folded bool
 	remoteFragmentCounts, remoteExecutionID := remoteExecutionTopology(c, s)
-	scopeEncodeData, withoutOutput, processEncodeData, folded, err = prepareRemoteRunSendingData(
+	var requiresBoundProtocol bool
+	scopeEncodeData, withoutOutput, processEncodeData, folded, err = prepareRemoteRunSendingDataWithVectorProtocol(
 		c.sql,
 		s,
 		c.proc,
 		remoteFragmentCounts,
 		remoteExecutionID,
+		&requiresBoundProtocol,
 	)
 	if err != nil {
 		return nil, err
 	}
-	var remotePipeline pipeline.Pipeline
-	if err = remotePipeline.Unmarshal(scopeEncodeData); err != nil {
-		return nil, err
-	}
-	requiresBoundProtocol := hasRemoteVectorPartitionZero(&remotePipeline)
 	if folded {
 		getLogger(s.Proc.GetService()).
 			Debug("fold variable expressions before remote run",
@@ -254,6 +251,17 @@ func prepareRemoteRunSendingData(
 	remoteFragmentCounts map[string]uint32,
 	remoteExecutionID uuid.UUID,
 ) (scopeData []byte, withoutOutput bool, processData []byte, folded bool, err error) {
+	return prepareRemoteRunSendingDataWithVectorProtocol(sqlStr, s, proc, remoteFragmentCounts, remoteExecutionID, nil)
+}
+
+func prepareRemoteRunSendingDataWithVectorProtocol(
+	sqlStr string,
+	s *Scope,
+	proc *process.Process,
+	remoteFragmentCounts map[string]uint32,
+	remoteExecutionID uuid.UUID,
+	requiresBoundProtocol *bool,
+) (scopeData []byte, withoutOutput bool, processData []byte, folded bool, err error) {
 	// The output dispatch executes on the initiating CN and is stripped from
 	// the encoded scope below. Validate its consumers before losing that edge.
 	if queryNeedsGroupingTransport(s.Plan.GetQuery()) {
@@ -281,7 +289,7 @@ func prepareRemoteRunSendingData(
 	}
 
 	// Encode the ScopeList which need to be sent.
-	if scopeData, err = encodeRemoteScope(encodedScope, proc); err != nil {
+	if scopeData, err = encodeRemoteScopeWithVectorProtocol(encodedScope, proc, requiresBoundProtocol); err != nil {
 		return nil, false, nil, false, err
 	}
 
