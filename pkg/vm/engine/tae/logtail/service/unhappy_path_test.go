@@ -237,6 +237,7 @@ func TestAbandonedSubscriptionPullReleasesLateCallback(t *testing.T) {
 		t.Run(phase, func(t *testing.T) {
 			entered := make(chan struct{})
 			release := make(chan struct{})
+			releasePull := sync.OnceFunc(func() { close(release) })
 			var closed atomic.Int32
 			logtailer := &controlledLogtailer{
 				tableFn: func(_ context.Context, table api.TableID, _, to timestamp.Timestamp) (logtail.TableLogtail, func(), error) {
@@ -259,7 +260,9 @@ func TestAbandonedSubscriptionPullReleasesLateCallback(t *testing.T) {
 				from.PhysicalTime = 1
 			}
 			errCh := make(chan error, 1)
+			finished := make(chan struct{})
 			go func() {
+				defer close(finished)
 				_, err := server.getSubLogtailPhase(server.rootCtx, subscription{
 					timeout:    10 * time.Second,
 					tableID:    id,
@@ -269,13 +272,22 @@ func TestAbandonedSubscriptionPullReleasesLateCallback(t *testing.T) {
 				}, from, timestamp.Timestamp{PhysicalTime: 2})
 				errCh <- err
 			}()
+			// Run before session/server cleanup even if an assertion stops the test.
+			t.Cleanup(func() {
+				releasePull()
+				select {
+				case <-finished:
+				case <-time.After(2 * time.Second):
+					t.Error("abandoned pull goroutine did not exit")
+				}
+			})
 			select {
 			case <-entered:
 			case <-time.After(10 * time.Second):
 				t.Fatal("subscription pull did not start")
 			}
 			session.PostClean()
-			close(release)
+			releasePull()
 			select {
 			case err := <-errCh:
 				require.ErrorIs(t, err, context.Canceled)
