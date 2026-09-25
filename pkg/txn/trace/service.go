@@ -286,7 +286,15 @@ func (s *service) handleEvent(
 	eventC chan event) {
 	ticker := time.NewTicker(s.options.flushDuration)
 	defer ticker.Stop()
+	s.handleEventWithTicks(ctx, columns, tableName, eventC, ticker.C)
+}
 
+func (s *service) handleEventWithTicks(
+	ctx context.Context,
+	columns int,
+	tableName string,
+	eventC chan event,
+	ticks <-chan time.Time) {
 	var w *csv.Writer
 	var f *os.File
 	defer func() {
@@ -322,11 +330,11 @@ func (s *service) handleEvent(
 		return n
 	}
 
-	flush := func() {
+	flush := func() bool {
 		defer buf.reset()
 
 		if sum == 0 {
-			return
+			return true
 		}
 
 		w.Flush()
@@ -341,6 +349,7 @@ func (s *service) handleEvent(
 				zap.String("table", tableName),
 				zap.Error(err))
 		}
+		f = nil
 
 		select {
 		case s.loadC <- loadAction{
@@ -351,10 +360,14 @@ func (s *service) handleEvent(
 			table: tableName,
 		}:
 		case <-ctx.Done():
-			return
+			return false
 		}
 		sum = 0
+		if ctx.Err() != nil {
+			return false
+		}
 		open()
+		return true
 	}
 
 	open()
@@ -362,9 +375,11 @@ func (s *service) handleEvent(
 		select {
 		case <-ctx.Done():
 			return
-		case <-ticker.C:
+		case <-ticks:
 			if s.atomic.flushEnabled.Load() {
-				flush()
+				if !flush() {
+					return
+				}
 			}
 		case e := <-eventC:
 			if e.buffer != nil {
@@ -379,7 +394,9 @@ func (s *service) handleEvent(
 				sum += bytes()
 				if sum > s.options.flushBytes &&
 					s.atomic.flushEnabled.Load() {
-					flush()
+					if !flush() {
+						return
+					}
 				}
 			}
 		}
