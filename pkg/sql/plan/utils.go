@@ -4897,6 +4897,11 @@ func preparedExprRequiresRuntimeSpecialization(functionName string, expr *plan.E
 }
 
 func preparedExprRequiresRuntimeSpecializationAt(functionName string, argIndex int, expr *plan.Expr) bool {
+	// JSON_OBJECTAGG keys are deliberately normalized to VARCHAR at prepare
+	// time; only its value can change the JSON atom type at execution.
+	if functionName == "json_objectagg" && argIndex == 0 {
+		return false
+	}
 	// Only CONV's first operand changes the executor domain. The base operands
 	// are numeric controls and do not justify copying/rebinding the plan.
 	if functionName == "bin" || functionName == "conv" {
@@ -5018,6 +5023,7 @@ func preparedRuntimeSpecializationFunction(name string) bool {
 	// result-column type from the prepare-time placeholder domain.
 	switch name {
 	case "bin", "char", "conv", "ntile", "sleep",
+		"json_arrayagg", "json_objectagg",
 		"date_add", "date_sub", "adddate", "subdate", "timestampadd", "timestampdiff",
 		"ord", "char_length", "character_length",
 		"left", "right", "substring", "substr", "mid", "reverse",
