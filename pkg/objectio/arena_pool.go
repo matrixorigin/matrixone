@@ -17,7 +17,6 @@ package objectio
 import (
 	"runtime"
 	"sync"
-	"sync/atomic"
 	"time"
 )
 
@@ -41,23 +40,37 @@ const (
 	arenaLargeInit = 32 * 1024 * 1024 // 32 MB
 )
 
-// arenaNode is a linked-list node for the GC-immune WriteArena free list.
-type arenaNode struct {
-	arena *WriteArena
-	next  *arenaNode
+// arenaIdleTTL is how long a returned arena may stay parked unused before its
+// off-heap buffers are freed.  A steady workload takes arenas back well within
+// it, so the arenas it cycles stay warm; the extra arenas a burst leaves behind
+// (e.g. one per writer of a wide parallel load, each grown up to arenaMaxSize)
+// are released once the burst is over, whether or not other work continues.
+// A variable so tests can shorten it.
+var arenaIdleTTL = time.Minute
+
+type parkedArena struct {
+	arena    *WriteArena
+	parkedAt time.Time
 }
 
-// arenaFreeList is a lock-free stack of WriteArena instances.
+// arenaFreeList holds returned arenas for reuse.  It is a stack: GetArena
+// takes the most recently parked arena, so the arenas a workload keeps using
+// stay on top and the idle ones sink to the bottom, oldest first, where the
+// reaper frees them after arenaIdleTTL.  Get and Put run once per object write
+// cycle, not per row, so a mutex is cheap here.
 type arenaFreeList struct {
-	head     atomic.Pointer[arenaNode]
-	count    atomic.Int32
-	maxCount int32
+	mu       sync.Mutex
+	parked   []parkedArena // ordered by parkedAt, oldest first
+	maxCount int
+	// reaper is the armed reap timer, or nil.  It is armed only while
+	// arenas are parked, so an empty pool costs nothing.
+	reaper *time.Timer
 }
 
 var arenaPools [2]arenaFreeList
 
 func init() {
-	procs := int32(runtime.GOMAXPROCS(0))
+	procs := runtime.GOMAXPROCS(0)
 	half := procs / 2
 	if half < 1 {
 		half = 1
@@ -65,41 +78,43 @@ func init() {
 	// ArenaSmall: serves flush workers only (GOMAXPROCS/2 goroutines).
 	arenaPools[ArenaSmall].maxCount = half
 	// ArenaLarge: serves TN merge workers, CN S3 writers, and sinker tasks.
-	// Use 2×GOMAXPROCS slots to absorb bursty concurrent demand.
+	// Use 2×GOMAXPROCS slots to absorb bursty concurrent demand; slots that
+	// the burst leaves idle are released after arenaIdleTTL.
 	arenaPools[ArenaLarge].maxCount = procs * 2
 	if arenaPools[ArenaLarge].maxCount < 4 {
 		arenaPools[ArenaLarge].maxCount = 4
 	}
 }
 
-// GetArena pops a WriteArena from the requested tier's free list, or
-// creates a pre-warmed arena when the list is empty.
+// GetArena takes the most recently parked arena of the requested tier, or
+// creates a pre-warmed arena when none is parked.
 func GetArena(tier int) *WriteArena {
 	pool := &arenaPools[tier]
-	for {
-		head := pool.head.Load()
-		if head == nil {
-			var initSize, limit int
-			if tier == ArenaSmall {
-				initSize = arenaSmallInit
-				limit = arenaSmallMax
-			} else {
-				initSize = arenaLargeInit
-				limit = arenaMaxSize
-			}
-			a := NewArena(initSize)
-			a.sizeLimit = limit
-			return a
-		}
-		if pool.head.CompareAndSwap(head, head.next) {
-			pool.count.Add(-1)
-			return head.arena
-		}
+	pool.mu.Lock()
+	if n := len(pool.parked); n > 0 {
+		a := pool.parked[n-1].arena
+		pool.parked[n-1] = parkedArena{}
+		pool.parked = pool.parked[:n-1]
+		pool.mu.Unlock()
+		return a
 	}
+	pool.mu.Unlock()
+
+	var initSize, limit int
+	if tier == ArenaSmall {
+		initSize = arenaSmallInit
+		limit = arenaSmallMax
+	} else {
+		initSize = arenaLargeInit
+		limit = arenaMaxSize
+	}
+	a := NewArena(initSize)
+	a.sizeLimit = limit
+	return a
 }
 
-// PutArena pushes a WriteArena back into its tier's free list,
-// auto-routing based on sizeLimit.
+// PutArena parks a WriteArena in its tier's free list, auto-routing based on
+// sizeLimit.  A full list frees the arena instead.
 func PutArena(a *WriteArena) {
 	if a == nil {
 		return
@@ -109,73 +124,43 @@ func PutArena(a *WriteArena) {
 		tier = ArenaLarge
 	}
 	pool := &arenaPools[tier]
-	// Optimistically claim a slot before pushing: increment first, then
-	// check.  This avoids the TOCTOU race where N goroutines each read
-	// count < maxCount and all push, exceeding the soft cap.
-	if pool.count.Add(1) > pool.maxCount {
-		pool.count.Add(-1)
+	pool.mu.Lock()
+	if len(pool.parked) >= pool.maxCount {
+		pool.mu.Unlock()
 		a.FreeBuffers()
 		return
 	}
-	node := &arenaNode{arena: a}
-	for {
-		oldHead := pool.head.Load()
-		node.next = oldHead
-		if pool.head.CompareAndSwap(oldHead, node) {
-			return
-		}
+	pool.parked = append(pool.parked, parkedArena{arena: a, parkedAt: time.Now()})
+	if pool.reaper == nil {
+		pool.reaper = time.AfterFunc(arenaIdleTTL, pool.reap)
 	}
+	pool.mu.Unlock()
 }
 
-// arenaDrainDelay is how long to wait after the last checkpoint before
-// draining the arena pools.  Using 2x the default incremental checkpoint
-// interval (5 minutes) ensures the timer is always reset during active
-// operation, so pools stay warm.  Draining only happens during genuine
-// idle periods.
-const arenaDrainDelay = 10 * time.Minute
-
-var (
-	arenaDrainMu    sync.Mutex
-	arenaDrainTimer *time.Timer
-)
-
-// ScheduleArenaDrain debounces arena pool draining.  Each call resets the
-// timer to arenaDrainDelay from now.  During steady-state checkpointing,
-// the timer never fires and pools stay warm.  Once activity ceases, the
-// timer fires and RSS is reclaimed.
-func ScheduleArenaDrain() {
-	arenaDrainMu.Lock()
-	defer arenaDrainMu.Unlock()
-	if arenaDrainTimer != nil {
-		arenaDrainTimer.Stop()
+// reap frees the arenas that have been parked for arenaIdleTTL and re-arms
+// itself for the oldest remaining one, if any.
+func (pool *arenaFreeList) reap() {
+	now := time.Now()
+	pool.mu.Lock()
+	expired := 0
+	for expired < len(pool.parked) && now.Sub(pool.parked[expired].parkedAt) >= arenaIdleTTL {
+		expired++
 	}
-	arenaDrainTimer = time.AfterFunc(arenaDrainDelay, drainArenaPools)
-}
+	var freed []parkedArena
+	if expired > 0 {
+		freed = append(freed, pool.parked[:expired]...)
+		n := copy(pool.parked, pool.parked[expired:])
+		clear(pool.parked[n:]) // drop references past the new length
+		pool.parked = pool.parked[:n]
+	}
+	if len(pool.parked) > 0 {
+		pool.reaper = time.AfterFunc(arenaIdleTTL-now.Sub(pool.parked[0].parkedAt), pool.reap)
+	} else {
+		pool.reaper = nil
+	}
+	pool.mu.Unlock()
 
-// drainArenaPools empties both arena free lists, freeing the off-heap
-// backing buffers.  Called by the debounce timer when merge and flush
-// have been idle for arenaDrainDelay.
-func drainArenaPools() {
-	for i := range arenaPools {
-		pool := &arenaPools[i]
-		for {
-			head := pool.head.Load()
-			if head == nil {
-				break
-			}
-			if pool.head.CompareAndSwap(head, nil) {
-				// Count and free exactly the nodes we grabbed.
-				// Use Add(-n) rather than Store(0) so concurrent
-				// PutArena calls that incremented count after the CAS
-				// are not silently erased.
-				var n int32
-				for node := head; node != nil; node = node.next {
-					node.arena.FreeBuffers()
-					n++
-				}
-				pool.count.Add(-n)
-				break
-			}
-		}
+	for _, p := range freed {
+		p.arena.FreeBuffers()
 	}
 }
