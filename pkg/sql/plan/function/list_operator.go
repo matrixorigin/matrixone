@@ -1324,6 +1324,16 @@ var supportedOperators = []FuncNew{
 					return newOpOperatorFixedIn[types.Enum]().operatorIn
 				},
 			},
+			{
+				overloadId: 102,
+				args:       []types.T{types.T_bit, types.T_bit},
+				retType: func(parameters []types.Type) types.Type {
+					return types.T_bool.ToType()
+				},
+				newOp: func() executeLogicOfOverload {
+					return newOpOperatorFixedIn[uint64]().operatorIn
+				},
+			},
 		},
 	},
 
@@ -1876,6 +1886,16 @@ var supportedOperators = []FuncNew{
 			// 		return newOpOperatorStrIn().operatorNotIn
 			// 	},
 			// },
+			{
+				overloadId: 102,
+				args:       []types.T{types.T_bit, types.T_bit},
+				retType: func(parameters []types.Type) types.Type {
+					return types.T_bool.ToType()
+				},
+				newOp: func() executeLogicOfOverload {
+					return newOpOperatorFixedIn[uint64]().operatorNotIn
+				},
+			},
 		},
 	},
 
