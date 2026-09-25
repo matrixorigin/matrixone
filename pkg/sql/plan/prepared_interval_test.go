@@ -52,7 +52,7 @@ func TestPreparedIntervalMarkerRebindsInternalDateFunction(t *testing.T) {
 					dateFunction := findPlanFunctionExpr(preparedPlan, name)
 					require.NotNil(t, dateFunction, preparedPlan.String())
 					require.Len(t, dateFunction.GetF().GetArgs(), 3, dateFunction.String())
-					require.NotNil(t, findPlanFunctionExpr(preparedPlan, "to_interval"), preparedPlan.String())
+					require.NotNil(t, findPlanFunctionExpr(preparedPlan, "to_interval_microsecond"), preparedPlan.String())
 
 					filled, _, err := FillValuesOfParamsInPlanWithSpecialization(
 						ctx,
@@ -66,7 +66,7 @@ func TestPreparedIntervalMarkerRebindsInternalDateFunction(t *testing.T) {
 					require.Equal(t, int32(types.T_int64), dateFunction.GetF().GetArgs()[1].Typ.Id, dateFunction.String())
 					require.Equal(t, int64(tc.expectedUnit), dateFunction.GetF().GetArgs()[2].GetLit().GetI64Val(), dateFunction.String())
 					if tc.normalized {
-						require.NotNil(t, findPlanFunctionExpr(filled, "to_interval"), filled.String())
+						require.NotNil(t, findPlanFunctionExpr(filled, "to_interval_microsecond"), filled.String())
 					}
 				})
 			}

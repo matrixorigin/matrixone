@@ -21,6 +21,7 @@ import (
 	"testing"
 	"time"
 
+	"github.com/matrixorigin/matrixone/pkg/common/moerr"
 	"github.com/matrixorigin/matrixone/pkg/container/types"
 	"github.com/stretchr/testify/require"
 )
@@ -163,20 +164,48 @@ func TestTemporalCompatibilityHelperDomains(t *testing.T) {
 	for _, unit := range []string{
 		"microsecond", "second", "minute", "hour", "day", "week", "month", "quarter", "year",
 		"second_microsecond", "minute_microsecond", "minute_second", "hour_microsecond", "hour_second", "hour_minute",
+		"day_microsecond", "day_second", "day_minute", "day_hour", "year_month",
 	} {
 		t.Run("datetime/"+unit, func(t *testing.T) {
-			value, err := extractFromDatetime(unit, dt)
+			value, err := extractNumericFromDatetime(unit, dt)
 			require.NoError(t, err)
-			require.NotEmpty(t, value)
+			if want, ok := map[string]int64{
+				"year": 2024, "month": 2, "day": 29, "hour": 12,
+				"minute_second": 3456, "hour_second": 123456,
+				"day_second": 29123456, "day_microsecond": 29123456123456,
+				"year_month": 202402,
+			}[unit]; ok {
+				require.Equal(t, want, value)
+			}
 		})
-		if unit == "day" || unit == "week" || unit == "month" || unit == "quarter" || unit == "year" {
+		if unit == "day" || unit == "week" || unit == "month" || unit == "quarter" || unit == "year" || unit == "year_month" {
 			continue
 		}
 		t.Run("time/"+unit, func(t *testing.T) {
-			value, err := extractFromTime(unit, tm)
+			value, err := extractNumericFromTime(unit, tm)
 			require.NoError(t, err)
-			require.NotEmpty(t, value)
+			if want, ok := map[string]int64{
+				"hour_second": 123456, "minute_second": 3456,
+				"day_microsecond": 123456123456, "day_hour": 12,
+			}[unit]; ok {
+				require.Equal(t, want, value)
+			}
 		})
+	}
+	for _, tc := range []struct {
+		value types.Time
+		unit  string
+		want  int64
+	}{
+		{types.TimeFromClock(false, 1, 2, 3, 4), "hour_second", 10203},
+		{types.TimeFromClock(false, 1, 2, 3, 4), "minute_second", 203},
+		{types.TimeFromClock(false, 1, 2, 3, 4), "hour_microsecond", 10203000004},
+		{types.TimeFromClock(true, 0, 2, 3, 0), "hour_second", -203},
+		{types.TimeFromClock(true, 0, 0, 0, 4), "second_microsecond", -4},
+	} {
+		got, err := extractNumericFromTime(tc.unit, tc.value)
+		require.NoError(t, err)
+		require.Equal(t, tc.want, got)
 	}
 
 	for _, format := range []string{"%d/%m/%Y", "%Y%m%d", "%Y", "%Y-%m-%d", "%Y-%m-%d %H:%i:%s", "%Y/%m/%d", "%Y/%m/%d %H:%i:%s"} {
@@ -193,10 +222,119 @@ func TestTemporalCompatibilityHelperDomains(t *testing.T) {
 	for _, unit := range []string{"microsecond", "second", "minute", "hour", "day", "week", "month", "quarter", "year"} {
 		require.Equal(t, unit == "microsecond" || unit == "second" || unit == "minute" || unit == "hour", extractUnitPrefersTime(unit))
 	}
-	_, err = doTimeAdd(tm, 1, types.Second)
+	_, overflow, err := doTimeAdd(tm, 1, types.Second)
 	require.NoError(t, err)
-	_, err = doTimeAdd(tm, int64(types.MaxHourInTime+1), types.Hour)
-	require.Error(t, err)
+	require.False(t, overflow)
+	_, overflow, err = doTimeAdd(tm, int64(types.MaxHourInTime+1), types.Hour)
+	require.NoError(t, err)
+	require.True(t, overflow)
+}
+
+func TestTimeIntervalOverflowContract(t *testing.T) {
+	max := types.TimeFromClock(false, 838, 59, 59, 0)
+	for _, tc := range []struct {
+		name string
+		fn   fEvalFn
+		diff int64
+	}{
+		{"date_add", TimeAdd, 1},
+		{"date_sub_negative", TimeSub, -1},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			proc := newTmpProcess(t)
+			warnings := &numericWarningSession{}
+			proc.WarningSink = warnings
+			input := NewFunctionTestInput(types.T_time.ToType(), []types.Time{max - types.Time(types.MicroSecsPerSec), max, types.TimeFromClock(false, 12, 0, 0, 0)}, nil)
+			interval := NewFunctionTestInput(types.T_int64.ToType(), []int64{tc.diff, tc.diff, tc.diff}, nil)
+			unit := NewFunctionTestConstInput(types.T_int64.ToType(), []int64{int64(types.Second)}, nil)
+			want := NewFunctionTestResult(types.T_time.ToType(), false,
+				[]types.Time{max, 0, types.TimeFromClock(false, 12, 0, 1, 0)},
+				[]bool{false, true, false})
+			caseDef := NewFunctionTestCase(proc, []FunctionTestInput{input, interval, unit}, want, tc.fn)
+			ok, info := caseDef.Run()
+			require.True(t, ok, info)
+			require.Equal(t, []numericWarning{{code: moerr.ER_DATETIME_FUNCTION_OVERFLOW, msg: "Datetime function: time field overflow"}}, warnings.warnings)
+		})
+	}
+	for _, tc := range []struct {
+		start    types.Time
+		diff     int64
+		subtract bool
+		overflow bool
+	}{
+		{0, math.MinInt64, true, true},
+		{0, math.MinInt64, false, true},
+		{-max, 1, true, true},
+		{-max, -1, false, true},
+		{max, -1, true, true},
+		{max, 0, false, false},
+	} {
+		_, overflow, err := doTimeInterval(tc.start, tc.diff, types.MicroSecond, tc.subtract)
+		require.NoError(t, err)
+		require.Equal(t, tc.overflow, overflow, "%+v", tc)
+	}
+}
+
+func TestDynamicIntervalUnitContract(t *testing.T) {
+	proc := newTmpProcess(t)
+	for _, tc := range []struct {
+		unit types.IntervalType
+		want int64
+	}{
+		{types.Second, types.MicroSecsPerSec},
+		{types.Minute, types.MicroSecsPerSec * types.SecsPerMinute},
+		{types.Hour, types.MicroSecsPerSec * types.SecsPerHour},
+		{types.Day, types.MicroSecsPerSec * types.SecsPerDay},
+	} {
+		inputs := []FunctionTestInput{
+			NewFunctionTestInput(types.T_varchar.ToType(), []string{"1", "bad"}, nil),
+			NewFunctionTestConstInput(types.T_int64.ToType(), []int64{int64(tc.unit)}, nil),
+		}
+		want := NewFunctionTestResult(types.T_int64.ToType(), false,
+			[]int64{tc.want, 0}, []bool{false, true})
+		caseDef := NewFunctionTestCase(proc, inputs, want, ToIntervalMicrosecond)
+		ok, info := caseDef.Run()
+		require.True(t, ok, "unit=%v: %s", tc.unit, info)
+	}
+	legacy := []FunctionTestInput{
+		NewFunctionTestInput(types.T_varchar.ToType(), []string{"1"}, nil),
+		NewFunctionTestConstInput(types.T_int64.ToType(), []int64{int64(types.Second)}, nil),
+	}
+	legacyCase := NewFunctionTestCase(proc, legacy,
+		NewFunctionTestResult(types.T_int64.ToType(), false, []int64{1}, nil), ToInterval)
+	ok, info := legacyCase.Run()
+	require.True(t, ok, info)
+}
+
+var temporalExtractBenchmarkSink int64
+
+func BenchmarkTemporalNumericExtract(b *testing.B) {
+	dates := make([]types.Date, 4096)
+	times := make([]types.Time, 4096)
+	for i := range dates {
+		dates[i] = types.DateFromCalendar(2000, 1, 1) + types.Date(i*37)
+		times[i] = types.TimeFromClock(i%2 == 0, uint64(i%839), uint8(i%60), uint8((i*7)%60), uint32(i%1000000))
+	}
+	b.Run("date_year", func(b *testing.B) {
+		b.ReportAllocs()
+		for i := 0; i < b.N; i++ {
+			v, err := extractNumericFromDatetime("year", dates[i&4095].ToDatetime())
+			if err != nil {
+				b.Fatal(err)
+			}
+			temporalExtractBenchmarkSink = v
+		}
+	})
+	b.Run("time_hour_microsecond", func(b *testing.B) {
+		b.ReportAllocs()
+		for i := 0; i < b.N; i++ {
+			v, err := extractNumericFromTime("hour_microsecond", times[i&4095])
+			if err != nil {
+				b.Fatal(err)
+			}
+			temporalExtractBenchmarkSink = v
+		}
+	})
 }
 
 func TestTemporalCompatibilityPeriodAndUnixDomains(t *testing.T) {
@@ -284,11 +422,12 @@ func TestTemporalCompatibilityErrorAndBoundaryHelpers(t *testing.T) {
 	require.Error(t, err)
 	_, err = doDatetimeSub(dt, math.MaxInt64, types.Day)
 	require.Error(t, err)
-	_, err = doTimeSub(tm, math.MaxInt64, types.Second)
-	require.Error(t, err)
-	clamped, err := doTimeSub(types.TimeFromClock(false, 0, 0, 0, 0), int64(types.MaxHourInTime+1), types.Hour)
+	_, overflow, err := doTimeSub(tm, math.MaxInt64, types.Second)
 	require.NoError(t, err)
-	require.Equal(t, -types.MySQLTimeMaxForScale(6), clamped)
+	require.True(t, overflow)
+	_, overflow, err = doTimeSub(types.TimeFromClock(false, 0, 0, 0, 0), int64(types.MaxHourInTime+1), types.Hour)
+	require.NoError(t, err)
+	require.True(t, overflow)
 
 	// These parsers deliberately distinguish calendar strings from durations.
 	_, _, kind, err := parseTemporalString("12:34:56", 6)
@@ -297,6 +436,28 @@ func TestTemporalCompatibilityErrorAndBoundaryHelpers(t *testing.T) {
 	_, _, kind, err = parseTemporalString("2024-02-29 12:34:56", 6)
 	require.NoError(t, err)
 	require.Equal(t, temporalStringDateTime, kind)
+	for _, input := range []string{"2024-2-29 12:34:56", "20240229123456.123456", "2024.2.29", "2024@2@29"} {
+		_, _, kind, err = parseTemporalString(input, 6)
+		require.NoError(t, err)
+		require.Equal(t, temporalStringDateTime, kind)
+		_, err = parseTimeOperand(input, 6)
+		require.Error(t, err)
+	}
+	_, _, kind, err = parseTemporalString("2024-2-30 12:34:56", 6)
+	require.Error(t, err)
+	require.Equal(t, temporalStringInvalid, kind)
+	_, duration, kind, err := parseTemporalString("00000123456", 6)
+	require.NoError(t, err)
+	require.Equal(t, temporalStringTime, kind)
+	require.Equal(t, types.TimeFromClock(false, 12, 34, 56, 0), duration)
+	_, err = parseTimeOperand("00000123456", 6)
+	require.NoError(t, err)
+	_, duration, kind, err = parseTemporalString("1234.5", 6)
+	require.NoError(t, err)
+	require.Equal(t, temporalStringTime, kind)
+	require.Equal(t, types.TimeFromClock(false, 0, 12, 34, 500000), duration)
+	_, err = parseTimeOperand("1234.5", 6)
+	require.NoError(t, err)
 	_, err = parseTimeOperand("2024-02-29", 6)
 	require.Error(t, err)
 	_, err = parseTimeOperand("bad", 6)

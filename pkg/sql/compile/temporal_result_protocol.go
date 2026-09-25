@@ -24,17 +24,24 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/vm/process"
 )
 
-// These overload IDs kept their numbers while their physical result vectors
-// changed. Keep affected work local until every selected worker supports them.
+// Temporal expression contracts include the v97 result layout and the v98
+// interval-unit and session-default dependencies.
 func (c *Compile) constrainTemporalResultWorkers(qry *plan.Query) error {
+	features, err := plan.RequiredRemoteExpressionFeatures(qry)
+	if err != nil {
+		return err
+	}
+	if features.LegacyIntervalUnits {
+		return moerr.NewNotSupportedNoCtx("legacy interval unit contract requires rebinding")
+	}
 	if c.execType != plan2.ExecTypeAP_MULTICN {
 		return nil
 	}
-	features, err := plan.RequiredRemoteExpressionFeatures(qry)
-	if err != nil || !features.TemporalResultContracts {
-		return err
+	required := temporalExpressionProtocolVersion(features)
+	if required == 0 {
+		return nil
 	}
-	supported, err := remoteWorkersSupportProtocol(c.proc, c.cnList, defines.MORPCVersion97)
+	supported, err := remoteWorkersSupportProtocol(c.proc, c.cnList, required)
 	if err != nil || supported {
 		return err
 	}
@@ -43,17 +50,27 @@ func (c *Compile) constrainTemporalResultWorkers(qry *plan.Query) error {
 	return err
 }
 
-func validateTemporalResultDestination(proc *process.Process, p *pipeline.Pipeline) error {
+func temporalExpressionProtocolVersion(features plan.RemoteExpressionFeatures) int64 {
+	if features.NormalizedIntervalUnits || features.WeekSessionDefault {
+		return defines.MORPCVersion98
+	}
+	if features.TemporalResultContracts {
+		return defines.MORPCVersion97
+	}
+	return 0
+}
+
+func validateTemporalResultDestination(proc *process.Process, p *pipeline.Pipeline, required int64) error {
 	if p == nil || p.Node == nil {
 		return moerr.NewNotSupportedNoCtx("temporal result contracts require a versioned remote destination")
 	}
 	supported, err := remoteWorkersSupportProtocol(proc,
-		engine.Nodes{{Id: p.Node.Id, Addr: p.Node.Addr}}, defines.MORPCVersion97)
+		engine.Nodes{{Id: p.Node.Id, Addr: p.Node.Addr}}, required)
 	if err != nil {
 		return err
 	}
 	if !supported {
-		return moerr.NewNotSupportedNoCtx("remote destination does not support temporal result contracts (MORPC version 97)")
+		return moerr.NewNotSupportedNoCtxf("remote destination does not support temporal result contracts (MORPC version %d)", required)
 	}
 	return nil
 }

@@ -92,6 +92,54 @@ func temporalResultProtocolExpr(id int32, firstType, resultType types.T) *planpb
 	}}}
 }
 
+func TestTemporalUnitAndWeekProtocolAdmission(t *testing.T) {
+	c, client := expressionProtocolTestCompile(t)
+	unitExpr := &planpb.Expr{Typ: planpb.Type{Id: int32(types.T_int64)}, Expr: &planpb.Expr_F{F: &planpb.Function{
+		Func: &planpb.ObjectRef{Obj: function.EncodeOverloadID(function.TO_INTERVAL_MICROSECOND, 0)},
+		Args: []*planpb.Expr{
+			{Typ: planpb.Type{Id: int32(types.T_varchar)}, Expr: &planpb.Expr_Col{Col: &planpb.ColRef{ColPos: 0}}},
+			{Typ: planpb.Type{Id: int32(types.T_int64)}, Expr: &planpb.Expr_Col{Col: &planpb.ColRef{ColPos: 1}}},
+		},
+	}}}
+	weekExpr := &planpb.Expr{Typ: planpb.Type{Id: int32(types.T_uint8)}, Expr: &planpb.Expr_F{F: &planpb.Function{
+		Func: &planpb.ObjectRef{Obj: function.EncodeOverloadID(function.WEEK, 0)},
+		Args: []*planpb.Expr{{Typ: planpb.Type{Id: int32(types.T_date)}, Expr: &planpb.Expr_Col{Col: &planpb.ColRef{ColPos: 0}}}},
+	}}}
+	features, err := planpb.RequiredRemoteExpressionFeatures([]*planpb.Expr{unitExpr, weekExpr})
+	require.NoError(t, err)
+	require.True(t, features.NormalizedIntervalUnits)
+	require.True(t, features.WeekSessionDefault)
+	require.Equal(t, defines.MORPCVersion98, temporalExpressionProtocolVersion(features))
+	qry := &planpb.Query{Nodes: []*planpb.Node{{ProjectList: []*planpb.Expr{unitExpr, weekExpr}}}, Steps: []int32{0}}
+	client.version = defines.MORPCVersion97
+	c.execType = plan2.ExecTypeAP_MULTICN
+	c.cnList = engine.Nodes{{Id: "old-worker", Addr: "remote:6001", Mcpu: 4}}
+	require.NoError(t, c.constrainTemporalResultWorkers(qry))
+	require.Equal(t, plan2.ExecTypeAP_ONECN, c.execType)
+
+	c.proc.Base.SessionInfo.DefaultWeekFormat = 3
+	c.proc.Base.SessionInfo.DefaultWeekFormatSet = true
+	p := &pipeline.Pipeline{InstructionList: []*pipeline.Instruction{{ProjectList: []*planpb.Expr{unitExpr, weekExpr}}}}
+	rt := moruntime.ServiceRuntime(c.proc.GetService())
+	rt.SetGlobalVariables(moruntime.MOProtocolVersion, defines.MORPCVersion97)
+	require.ErrorContains(t, validateRemoteExpressionPipelineProtocol(c.proc, p), "version 98")
+	rt.SetGlobalVariables(moruntime.MOProtocolVersion, defines.MORPCVersion98)
+	require.NoError(t, validateRemoteExpressionPipelineProtocol(c.proc, p))
+	c.proc.Base.SessionInfo.DefaultWeekFormatSet = false
+	require.ErrorContains(t, validateRemoteExpressionPipelineProtocol(c.proc, p), "session snapshot")
+	c.proc.Base.SessionInfo.DefaultWeekFormatSet = true
+	legacy := *unitExpr
+	legacyFn := *unitExpr.GetF()
+	legacyRef := *legacyFn.Func
+	legacyRef.Obj = function.EncodeOverloadID(function.TO_INTERVAL, 0)
+	legacyFn.Func = &legacyRef
+	legacy.Expr = &planpb.Expr_F{F: &legacyFn}
+	p.InstructionList[0].ProjectList = []*planpb.Expr{&legacy}
+	require.ErrorContains(t, validateRemoteExpressionPipelineProtocol(c.proc, p), "legacy interval")
+	qry.Nodes[0].ProjectList = []*planpb.Expr{&legacy}
+	require.ErrorContains(t, c.constrainTemporalResultWorkers(qry), "legacy interval")
+}
+
 func TestTemporalResultProtocolPlacementAndReceive(t *testing.T) {
 	c, client := expressionProtocolTestCompile(t)
 	expr := temporalResultProtocolExpr(function.ADDTIME, types.T_varchar, types.T_varchar)

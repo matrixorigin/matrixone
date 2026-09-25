@@ -99,6 +99,26 @@ func (dt Datetime) String2(scale int32) string {
 	return fmt.Sprintf("%04d-%02d-%02d %02d:%02d:%02d", y, m, d, hour, minute, sec)
 }
 
+// IsCalendarStringCandidate distinguishes supported calendar spellings from
+// compact TIME values before callers choose a temporal parser. The separated
+// date grammar shares ParseDateCast's delimiter set and requires both date
+// separators; this keeps compact TIME fractions such as 1234.5 as durations.
+// Compact dates and datetimes have exactly eight and fourteen digits.
+func IsCalendarStringCandidate(s string) bool {
+	if len(s) >= 5 && isAllDigit(s[:4]) && isDateDelimiter(s[4]) {
+		for second := 6; second <= 7 && second < len(s); second++ {
+			if isAllDigit(s[5:second]) && isDateDelimiter(s[second]) {
+				return true
+			}
+		}
+	}
+	whole := s
+	if dot := strings.IndexByte(s, '.'); dot >= 0 {
+		whole = s[:dot]
+	}
+	return (len(whole) == 8 || len(whole) == 14) && isAllDigit(whole)
+}
+
 // ParseDatetime will parse a string to be a Datetime
 // Support Format:
 // 1. all the Date value

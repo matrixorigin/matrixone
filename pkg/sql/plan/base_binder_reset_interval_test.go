@@ -488,7 +488,7 @@ func TestResetIntervalFunctionArgsNonLiteral(t *testing.T) {
 	normalizeExpr := args4[0].GetF()
 	require.NotNil(t, normalizeExpr)
 	require.NotNil(t, normalizeExpr.Func)
-	require.Equal(t, "to_interval", normalizeExpr.Func.GetObjName())
+	require.Equal(t, "to_interval_microsecond", normalizeExpr.Func.GetObjName())
 	require.Equal(t, colRefVarcharExpr, normalizeExpr.Args[0])
 	require.Equal(t, int64(types.Second), extractInt64FromExpr(normalizeExpr.Args[1]))
 }

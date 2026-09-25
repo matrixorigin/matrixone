@@ -848,18 +848,20 @@ const (
 	JSON_STORAGE_SIZE = 579
 	JSON_STORAGE_FREE = 580
 
-	EXTRACTVALUE = 581
-	UPDATEXML    = 582
+	EXTRACTVALUE            = 581
+	UPDATEXML               = 582
+	TO_INTERVAL_MICROSECOND = 583
 
 	// FUNCTION_END_NUMBER is not a function, just a flag to record the max number of function.
 	// TODO: every one should put the new function id in front of this one if you want to make a new function.
-	FUNCTION_END_NUMBER = 583
+	FUNCTION_END_NUMBER = 584
 )
 
 // functionIdRegister is what function we have registered already.
 var functionIdRegister = map[string]int32{
-	"extractvalue": EXTRACTVALUE,
-	"updatexml":    UPDATEXML,
+	"to_interval_microsecond": TO_INTERVAL_MICROSECOND,
+	"extractvalue":            EXTRACTVALUE,
+	"updatexml":               UPDATEXML,
 	// operators
 	"=":            EQUAL,
 	"<=>":          NULL_SAFE_EQUAL,

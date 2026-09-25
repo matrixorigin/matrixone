@@ -95,4 +95,52 @@ cast('12:34:56tail' as time) as valid_prefix;
 ➤ invalid_minute[92,10,0]  ¦  invalid_second[92,10,0]  ¦  valid_prefix[92,10,0]  𝄀
 null  ¦  null  ¦  12:34:56
 set sql_mode = 'STRICT_TRANS_TABLES';
+create table temporal_strings(v varchar(40), duration varchar(40));
+insert into temporal_strings values
+('2024-2-29 00:00:00', '01:00:00'),
+('2024.2.29', '01:00:00'),
+('2024@2@29', '01:00:00'),
+('20240229120000.123456', '01:00:00'),
+('00000123456', '01:00:00'),
+('1234.5', '01:00:00'),
+('12:00:00', '01:00:00');
+select v, addtime(v, duration) as added, subtime(v, duration) as subtracted
+from temporal_strings order by v;
+➤ v[12,40,0]  ¦  added[12,29,0]  ¦  subtracted[12,29,0]  𝄀
+00000123456  ¦  13:34:56  ¦  11:34:56  𝄀
+1234.5  ¦  01:12:34.500000  ¦  -00:47:25.500000  𝄀
+12:00:00  ¦  13:00:00  ¦  11:00:00  𝄀
+2024-2-29 00:00:00  ¦  2024-02-29 01:00:00  ¦  2024-02-28 23:00:00  𝄀
+2024.2.29  ¦  2024-02-29 01:00:00.000000  ¦  2024-02-28 23:00:00.000000  𝄀
+20240229120000.123456  ¦  2024-02-29 13:00:00.123456  ¦  2024-02-29 11:00:00.123456  𝄀
+2024@2@29  ¦  2024-02-29 01:00:00  ¦  2024-02-28 23:00:00
+select addtime('00:00:01', v) as compact_duration_operand
+from temporal_strings where v in ('00000123456', '1234.5') order by v;
+➤ compact_duration_operand[12,29,0]  𝄀
+12:34:57  𝄀
+00:12:35.500000
+select addtime('12:00:00', '2024-2-29 01:00:00') is null as calendar_duration_rejected,
+timediff('2024-2-29 00:00:00', '2024-2-28 00:00:00') as leap_day_difference;
+➤ calendar_duration_rejected[-7,1,0]  ¦  leap_day_difference[92,10,0]  𝄀
+1  ¦  24:00:00
+select extract(hour_second from cast('01:02:03' as time)) as hs_value,
+extract(minute_second from cast('01:02:03' as time)) as ms_value,
+extract(hour_microsecond from cast('01:02:03.000004' as time(6))) as hms_value,
+extract(hour_second from cast('-00:02:03' as time)) as negative_hs_value;
+➤ hs_value[-5,64,0]  ¦  ms_value[-5,64,0]  ¦  hms_value[-5,64,0]  ¦  negative_hs_value[-5,64,0]  𝄀
+10203  ¦  203  ¦  10203000004  ¦  -203
+select date_add(cast('838:59:59' as time), interval 1 second) is null as add_overflow,
+date_sub(cast('838:59:59' as time), interval -1 second) is null as sub_overflow;
+➤ add_overflow[-7,1,0]  ¦  sub_overflow[-7,1,0]  𝄀
+1  ¦  1
+create table week_dates(d date);
+insert into week_dates values ('2021-01-01');
+set default_week_format = 3;
+select week(d) as session_week, week(d, 0) as explicit_week, yearweek(d) as year_week from week_dates;
+➤ session_week[-6,8,0]  ¦  explicit_week[-6,8,0]  ¦  year_week[-5,64,0]  𝄀
+53  ¦  0  ¦  202052
+set default_week_format = 0;
+select week(d) as session_week from week_dates;
+➤ session_week[-6,8,0]  𝄀
+0
 drop database temporal_consistency_28851;
