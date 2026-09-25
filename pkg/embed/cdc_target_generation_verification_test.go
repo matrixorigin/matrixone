@@ -19,6 +19,8 @@ import (
 	"database/sql"
 	"fmt"
 	"reflect"
+	"strings"
+	"sync"
 	"testing"
 	"time"
 
@@ -75,6 +77,108 @@ func TestCDCTargetGenerationVerificationOnMO(t *testing.T) {
 		require.NoError(t, cdc.VerifyOwnedTarget(ctx, sink, 0, "verify", good, source, fence, cdc.CDCDefaultSendSqlTimeout))
 		bad := &cdc.DbTableInfo{SinkDbName: "cdc_generation_verify", SinkTblName: "bad", SourceTblId: 42}
 		require.ErrorContains(t, cdc.VerifyOwnedTarget(ctx, sink, 0, "verify", bad, source, fence, cdc.CDCDefaultSendSqlTimeout), "collation differs")
+	})
+}
+
+func TestCDCEndTsWildcardLateTableOnMO(t *testing.T) {
+	RunSingleCNBaseClusterTests(t, func(cluster Cluster) {
+		cn, err := cluster.GetCNService(0)
+		require.NoError(t, err)
+		port := cn.GetServiceConfig().CN.Frontend.Port
+		root, err := sql.Open("mysql", fmt.Sprintf("dump:111@tcp(127.0.0.1:%d)/", port))
+		require.NoError(t, err)
+		defer root.Close()
+		ctx, cancel := context.WithTimeout(t.Context(), 3*time.Minute)
+		defer cancel()
+		_, err = root.ExecContext(ctx, "CREATE ACCOUNT cdc_end_probe ADMIN_NAME 'admin' IDENTIFIED BY '111'")
+		require.NoError(t, err)
+		defer func() {
+			cleanupCtx, cleanupCancel := context.WithTimeout(context.Background(), 30*time.Second)
+			defer cleanupCancel()
+			if _, cleanupErr := root.ExecContext(cleanupCtx, "DROP ACCOUNT IF EXISTS cdc_end_probe"); cleanupErr != nil {
+				t.Errorf("drop CDC EndTs account: %v", cleanupErr)
+			}
+		}()
+		account, err := sql.Open("mysql", fmt.Sprintf("cdc_end_probe#admin:111@tcp(127.0.0.1:%d)/", port))
+		require.NoError(t, err)
+		defer account.Close()
+		_, err = account.ExecContext(ctx, "CREATE DATABASE cdc_end_src")
+		require.NoError(t, err)
+		_, err = account.ExecContext(ctx, "CREATE TABLE cdc_end_src.early (id INT PRIMARY KEY)")
+		require.NoError(t, err)
+		_, err = account.ExecContext(ctx, "INSERT INTO cdc_end_src.early VALUES (1)")
+		require.NoError(t, err)
+		_, err = account.ExecContext(ctx, "CREATE PITR cdc_end_pitr FOR DATABASE cdc_end_src RANGE 2 'h'")
+		require.NoError(t, err)
+		defer func() {
+			cleanupCtx, cleanupCancel := context.WithTimeout(context.Background(), 30*time.Second)
+			defer cleanupCancel()
+			if _, cleanupErr := account.ExecContext(cleanupCtx, "DROP PITR cdc_end_pitr"); cleanupErr != nil {
+				t.Errorf("drop CDC EndTs PITR: %v", cleanupErr)
+			}
+		}()
+
+		entered, release := make(chan struct{}), make(chan struct{})
+		var once, released sync.Once
+		releaseAdmission := func() { released.Do(func() { close(release) }) }
+		restore := frontend.SetCDCTestAdmissionHookForTest(func() {
+			once.Do(func() {
+				close(entered)
+				<-release
+			})
+		})
+		defer restore()
+		defer releaseAdmission()
+		endTime := time.Now().UTC().Add(10 * time.Second).Truncate(time.Second)
+		uri := fmt.Sprintf("mysql://cdc_end_probe#admin:111@127.0.0.1:%d", port)
+		_, err = account.ExecContext(ctx, fmt.Sprintf(
+			"CREATE CDC cdc_end_task '%s' 'matrixone' '%s' 'cdc_end_src:cdc_end_dst' {'Level'='database','EndTs'='%s'}",
+			uri, uri, endTime.Format("2006-01-02T15:04:05Z")))
+		require.NoError(t, err)
+		defer func() {
+			releaseAdmission()
+			cleanupCtx, cleanupCancel := context.WithTimeout(context.Background(), 30*time.Second)
+			defer cleanupCancel()
+			if _, cleanupErr := account.ExecContext(cleanupCtx, "DROP CDC TASK cdc_end_task"); cleanupErr != nil {
+				t.Errorf("drop CDC EndTs task: %v", cleanupErr)
+			}
+		}()
+		select {
+		case <-entered:
+		case <-time.After(30 * time.Second):
+			t.Fatal("CDC initial table admission did not start")
+		}
+		if wait := time.Until(endTime.Add(250 * time.Millisecond)); wait > 0 {
+			select {
+			case <-time.After(wait):
+			case <-ctx.Done():
+				t.Fatal(ctx.Err())
+			}
+		}
+		_, err = account.ExecContext(ctx, "CREATE TABLE cdc_end_src.late (id INT PRIMARY KEY)")
+		require.NoError(t, err)
+		releaseAdmission()
+		require.Eventually(t, func() bool {
+			var id int
+			return account.QueryRowContext(ctx, "SELECT id FROM cdc_end_dst.early").Scan(&id) == nil && id == 1
+		}, 90*time.Second, 250*time.Millisecond)
+		require.Eventually(t, func() bool {
+			var diagnostic string
+			err := root.QueryRowContext(ctx,
+				"SELECT w.err_msg FROM mo_catalog.mo_cdc_watermark AS w "+
+					"JOIN mo_catalog.mo_cdc_task AS t ON t.account_id = w.account_id AND t.task_id = w.task_id "+
+					"WHERE t.task_name = 'cdc_end_task' AND w.db_name = 'cdc_end_src' AND w.table_name = 'late'").Scan(&diagnostic)
+			return err == nil && strings.Contains(diagnostic, "was absent at EndTs")
+		}, 90*time.Second, 250*time.Millisecond)
+		var targetCount, epochCount int
+		require.NoError(t, account.QueryRowContext(ctx,
+			"SELECT COUNT(*) FROM mo_catalog.mo_tables WHERE reldatabase = 'cdc_end_dst' AND relname = 'late'").Scan(&targetCount))
+		require.Zero(t, targetCount)
+		require.NoError(t, root.QueryRowContext(ctx,
+			"SELECT COUNT(*) FROM mo_catalog.mo_cdc_snapshot AS s "+
+				"JOIN mo_catalog.mo_cdc_task AS t ON t.account_id = s.account_id AND t.task_id = s.task_id "+
+				"WHERE t.task_name = 'cdc_end_task' AND s.db_name = 'cdc_end_src' AND s.table_name = 'late'").Scan(&epochCount))
+		require.Zero(t, epochCount)
 	})
 }
 

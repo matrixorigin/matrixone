@@ -124,6 +124,7 @@ func TestCDCEndTsAbsentGenerationRequiresDurableOldCompletion(t *testing.T) {
 			current := frontendmock.NewMockTxnOperator(ctrl)
 			current.EXPECT().SnapshotTS().Return(types.BuildTS(30, 0).ToTimestamp()).AnyTimes()
 			historical := frontendmock.NewMockTxnOperator(ctrl)
+			historical.EXPECT().SnapshotTS().Return(types.BuildTS(20, 0).ToTimestamp())
 			historical.EXPECT().Rollback(gomock.Any()).Return(nil)
 			client := frontendmock.NewMockTxnClient(ctrl)
 			client.EXPECT().New(gomock.Any(), gomock.Any(), gomock.Any()).Return(historical, nil)
@@ -145,6 +146,66 @@ func TestCDCEndTsAbsentGenerationRequiresDurableOldCompletion(t *testing.T) {
 				require.ErrorContains(t, err, "prior durable progress")
 				require.False(t, state.completeAfterCheck)
 			}
+			for _, sql := range catalog.statements {
+				require.NotContains(t, sql, "mo_cdc_snapshot")
+			}
+		})
+	}
+}
+
+func TestCDCEndTsFirstAdmissionChecksHistoricalGenerationBeforeTarget(t *testing.T) {
+	for _, tc := range []struct {
+		name, watermark                string
+		noFull, explicitStart, visible bool
+	}{
+		{"initial full absent", "0-0", false, false, false},
+		{"NoFull absent", "10-0", true, false, false},
+		{"explicit start absent", "10-0", false, true, false},
+		{"NoFull existed at EndTs", "10-0", true, false, true},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			fence := cdc.NewOwnerFenceForGeneration(time.Unix(102, 0), func(context.Context) error { return nil })
+			catalog := &futureCDCAdmissionCatalog{
+				owner: fence.GenerationToken(), watermark: tc.watermark,
+			}
+			ctrl := gomock.NewController(t)
+			current := frontendmock.NewMockTxnOperator(ctrl)
+			current.EXPECT().SnapshotTS().Return(types.BuildTS(30, 0).ToTimestamp()).AnyTimes()
+			historical := frontendmock.NewMockTxnOperator(ctrl)
+			historical.EXPECT().SnapshotTS().Return(types.BuildTS(20, 0).ToTimestamp())
+			historical.EXPECT().Rollback(gomock.Any()).Return(nil)
+			client := frontendmock.NewMockTxnClient(ctrl)
+			client.EXPECT().New(gomock.Any(), gomock.Any(), gomock.Any()).Return(historical, nil)
+			storage := frontendmock.NewMockEngine(ctrl)
+			storage.EXPECT().New(gomock.Any(), historical).Return(nil)
+			if tc.visible {
+				relation := frontendmock.NewMockRelation(ctrl)
+				relation.EXPECT().GetTableID(gomock.Any()).Return(uint64(10))
+				storage.EXPECT().GetRelationById(gomock.Any(), historical, uint64(10)).Return("db", "src", relation, nil)
+			} else {
+				storage.EXPECT().GetRelationById(gomock.Any(), historical, uint64(10)).Return(
+					"", "", nil, moerr.NewNoSuchTablef(context.Background(), "can not find table by id 10: accountId: 1"))
+			}
+			storage.EXPECT().Hints().Return(engine.Hints{CommitOrRollbackTimeout: time.Second})
+			startTs := types.BuildTS(10, 0)
+			if !tc.noFull && !tc.explicitStart {
+				startTs = types.TS{}
+			}
+			executor := &CDCTaskExecutor{
+				watermarkUpdater: cdc.NewCDCWatermarkUpdater(t.Name(), catalog),
+				cnTxnClient:      client, cnEngine: storage, noFull: tc.noFull,
+				explicitStart: tc.explicitStart, startTs: startTs, endTs: types.BuildTS(20, 0),
+			}
+			key := &cdc.WatermarkKey{AccountId: 1, TaskId: "t", DBName: "db", TableName: "src"}
+			state, err := executor.prepareGenerationAdmission(context.Background(), key, 10, current, fence)
+			if tc.visible {
+				require.NoError(t, err)
+			} else {
+				require.ErrorContains(t, err, "was absent at EndTs")
+				require.ErrorContains(t, err, "first admission cannot prove an empty target")
+			}
+			require.False(t, state.targetReady)
+			require.False(t, state.complete)
 			for _, sql := range catalog.statements {
 				require.NotContains(t, sql, "mo_cdc_snapshot")
 			}

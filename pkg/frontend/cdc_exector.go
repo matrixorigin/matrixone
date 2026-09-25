@@ -863,6 +863,20 @@ func (exec *CDCTaskExecutor) prepareGenerationAdmission(
 	state.targetReady = false
 	state.resetTarget = generation > 0
 	state.admissionWatermark = watermark
+	currentSnapshot := types.TimestampToTS(txnOp.SnapshotTS())
+	if generation == 0 && !exec.endTs.IsEmpty() && currentSnapshot.GT(&exec.endTs) {
+		visible, visibilityErr := exec.sourceGenerationVisibleAt(ctx, sourceTableID, exec.endTs)
+		if visibilityErr != nil {
+			return state, moerr.NewInternalErrorf(ctx,
+				"CDC cannot establish whether source generation %d existed at EndTs %s for %s: %v",
+				sourceTableID, exec.endTs.ToString(), key.String(), visibilityErr)
+		}
+		if !visible {
+			return state, moerr.NewInternalErrorf(ctx,
+				"CDC source generation %d was absent at EndTs %s on %s; first admission cannot prove an empty target, explicit recovery is required",
+				sourceTableID, exec.endTs.ToString(), key.String())
+		}
+	}
 	if state.resetTarget {
 		state.admissionWatermark = types.TS{}
 		state.recovery = true
@@ -874,8 +888,7 @@ func (exec *CDCTaskExecutor) prepareGenerationAdmission(
 	if !state.resetTarget && !initialFull {
 		return state, nil
 	}
-	candidate := capInitialSnapshotEpoch(types.TimestampToTS(txnOp.SnapshotTS()), exec.endTs)
-	currentSnapshot := types.TimestampToTS(txnOp.SnapshotTS())
+	candidate := capInitialSnapshotEpoch(currentSnapshot, exec.endTs)
 	if state.resetTarget && !exec.endTs.IsEmpty() && currentSnapshot.GT(&exec.endTs) {
 		visible, visibilityErr := exec.sourceGenerationVisibleAt(ctx, sourceTableID, candidate)
 		if visibilityErr != nil {
@@ -915,6 +928,7 @@ func (exec *CDCTaskExecutor) sourceGenerationVisibleAt(
 	ctx context.Context, sourceTableID uint64, snapshot types.TS,
 ) (bool, error) {
 	op, err := exec.cnTxnClient.New(ctx, types.TS{}.ToTimestamp(),
+		client.WithSkipPushClientReady(),
 		client.WithSnapshotTS(snapshot.ToTimestamp()),
 		client.WithTxnCreateBy(0, "", "cdc-source-generation-visibility", 0))
 	if err != nil {
@@ -925,6 +939,10 @@ func (exec *CDCTaskExecutor) sourceGenerationVisibleAt(
 		defer cancel()
 		_ = op.Rollback(rollbackCtx)
 	}()
+	if actual := types.TimestampToTS(op.SnapshotTS()); !actual.Equal(&snapshot) {
+		return false, moerr.NewInternalErrorf(ctx,
+			"CDC historical source snapshot changed from %s to %s", snapshot.ToString(), actual.ToString())
+	}
 	if err = exec.cnEngine.New(ctx, op); err != nil {
 		return false, err
 	}
@@ -950,6 +968,7 @@ func (exec *CDCTaskExecutor) sourceTableDefAt(
 	ctx context.Context, sourceTableID uint64, snapshot types.TS,
 ) (*plan.TableDef, error) {
 	op, err := exec.cnTxnClient.New(ctx, types.TS{}.ToTimestamp(),
+		client.WithSkipPushClientReady(),
 		client.WithSnapshotTS(snapshot.ToTimestamp()),
 		client.WithTxnCreateBy(0, "", "cdc-prior-target-verification", 0))
 	if err != nil {
@@ -960,6 +979,10 @@ func (exec *CDCTaskExecutor) sourceTableDefAt(
 		defer cancel()
 		_ = op.Rollback(rollbackCtx)
 	}()
+	if actual := types.TimestampToTS(op.SnapshotTS()); !actual.Equal(&snapshot) {
+		return nil, moerr.NewInternalErrorf(ctx,
+			"CDC historical source snapshot changed from %s to %s", snapshot.ToString(), actual.ToString())
+	}
 	if err = exec.cnEngine.New(ctx, op); err != nil {
 		return nil, err
 	}
