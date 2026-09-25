@@ -1,4 +1,4 @@
-// Copyright 2023 Matrix Origin
+// Copyright 2023-2026 Matrix Origin
 //
 // Licensed under the Apache License, Version 2.0 (the "License");
 // you may not use this file except in compliance with the License.
@@ -79,6 +79,18 @@ type lockTableAllocator struct {
 		services   map[string]*serviceBinds
 		lockTables map[uint32]map[uint64]pb.LockTable
 	}
+	// retiredServices is a fail-closed tombstone for service identities whose
+	// bind object was removed. A missing bind alone is not evidence that a CN
+	// drained safely: it may also mean that keepalive validation lost contact
+	// with a live service. Entries belong to exact service instances, never
+	// to a UUID shared by successive process incarnations.
+	retiredServices map[string]bool
+	// A safe tombstone is usable by the instance-bound protocol only for the
+	// exact drain attempt that was accepted before the bind was removed.
+	retiredDrainAttempts map[string]string
+	// Retirements are needed only across a short lost-response retry window.
+	// Expiry discards proof; it never turns an unknown instance into a safe one.
+	retiredAt map[string]time.Time
 
 	// for test
 	options struct {
@@ -126,6 +138,9 @@ func NewLockTableAllocator(
 	}
 	la.mu.lockTables = make(map[uint32]map[uint64]pb.LockTable)
 	la.mu.services = make(map[string]*serviceBinds)
+	la.retiredServices = make(map[string]bool)
+	la.retiredDrainAttempts = make(map[string]string)
+	la.retiredAt = make(map[string]time.Time)
 
 	for _, opt := range opts {
 		opt(la)
@@ -154,20 +169,31 @@ func (l *lockTableAllocator) Get(
 	if binds == nil {
 		binds = l.registerService(serviceID)
 	}
+	if binds == nil {
+		return pb.LockTable{}
+	}
 	l.markServicePresent(serviceID)
 	return l.registerBind(binds, group, tableID, originTableID, sharding)
 }
 
 func (l *lockTableAllocator) KeepLockTableBind(serviceID string) bool {
-	b := l.getServiceBinds(serviceID)
+	_, active := l.keepLockTableBind(serviceID)
+	return active
+}
+
+func (l *lockTableAllocator) keepLockTableBind(serviceID string) (*serviceBinds, bool) {
+	l.mu.RLock()
+	b := l.mu.services[serviceID]
 	if b == nil {
-		return false
+		l.mu.RUnlock()
+		return nil, false
 	}
 	active := b.active()
+	l.mu.RUnlock()
 	if active {
 		l.markServicePresent(serviceID)
 	}
-	return active
+	return b, active
 }
 
 func (l *lockTableAllocator) AddCannotCommit(values []pb.OrphanTxn) [][]byte {
@@ -396,12 +422,12 @@ func (l *lockTableAllocator) GetVersion() uint64 {
 	return l.version
 }
 
-func (l *lockTableAllocator) setRestartService(serviceID string) {
+func (l *lockTableAllocator) setRestartService(serviceID string) bool {
 	b := l.getServiceBindsWithoutPrefix(serviceID)
 	if b == nil {
 		l.logger.Error("not found restart lock service",
 			zap.String("serviceID", serviceID))
-		return
+		return false
 	}
 	logServiceStatus(
 		l.logger,
@@ -409,7 +435,98 @@ func (l *lockTableAllocator) setRestartService(serviceID string) {
 		serviceID,
 		b.getStatus(),
 	)
-	b.setStatus(pb.Status_ServiceLockWaiting)
+	b.requestRestart()
+	return true
+}
+
+// beginDrain does not resolve UUID aliases. A successful response proves that
+// this allocator observed the exact CN incarnation and recorded this attempt.
+func (l *lockTableAllocator) beginDrain(req pb.BeginDrainRequest) pb.BeginDrainResponse {
+	resp := pb.BeginDrainResponse{
+		ServiceID: req.ServiceID, AttemptID: req.AttemptID,
+		AllocatorID: l.allocatorID, AllocatorVersion: l.version,
+	}
+	if !isExactDrainServiceID(req.ServiceID) || req.AttemptID == "" {
+		return resp
+	}
+	l.mu.Lock()
+	defer l.mu.Unlock()
+	b := l.mu.services[req.ServiceID]
+	if b == nil {
+		// The first BeginDrain response may have been lost. A completed,
+		// exact retirement remains idempotent for its accepted attempt;
+		// an unsafe or unknown retirement is never a new admission.
+		resp.OK = l.retiredServices[req.ServiceID] &&
+			l.retiredDrainAttempts[req.ServiceID] == req.AttemptID
+		if _, retired := l.retiredServices[req.ServiceID]; retired {
+			return resp
+		}
+		// A CN that has never requested GetBind has no allocator bind yet.
+		// Create a pending, non-admitting bind, but do not accept the drain
+		// until this exact instance sends a fresh normal-state heartbeat.
+		b = newServiceBinds(req.ServiceID,
+			l.logger.With(zap.String("lockservice", req.ServiceID)), l.logger)
+		b.drainAttemptID = req.AttemptID
+		b.drainAwaitingHeartbeat = true
+		b.status = pb.Status_ServiceLockWaiting
+		l.mu.services[req.ServiceID] = b
+		return resp
+	}
+	b.Lock()
+	defer b.Unlock()
+	if b.drainAttemptID != "" {
+		// The normal drain disables new binds before publishing completion.
+		// It must not revoke the already accepted attempt on an RPC retry.
+		resp.OK = !b.drainAwaitingHeartbeat && b.drainAttemptID == req.AttemptID
+		return resp
+	}
+	if b.disabled {
+		return resp
+	}
+	// A legacy drain already in progress has no attempt proof. It cannot
+	// be adopted by the v2 protocol after the fact.
+	if b.status != pb.Status_ServiceLockEnable {
+		return resp
+	}
+	b.drainAttemptID = req.AttemptID
+	logStatusChange(b.skipLogger, b.status, pb.Status_ServiceLockWaiting)
+	b.status = pb.Status_ServiceLockWaiting
+	resp.OK = true
+	return resp
+}
+
+func (l *lockTableAllocator) queryDrain(req pb.QueryDrainRequest) pb.QueryDrainResponse {
+	resp := pb.QueryDrainResponse{
+		ServiceID: req.ServiceID, AttemptID: req.AttemptID,
+		AllocatorID: l.allocatorID, AllocatorVersion: l.version,
+	}
+	if !isExactDrainServiceID(req.ServiceID) || req.AttemptID == "" ||
+		req.AllocatorID != l.allocatorID || req.AllocatorVersion != l.version {
+		return resp
+	}
+	l.mu.RLock()
+	defer l.mu.RUnlock()
+	if b := l.mu.services[req.ServiceID]; b != nil {
+		b.RLock()
+		// A normal ServiceUnLockSucc heartbeat disables the bind before it
+		// advances to CanRestart. The terminal phase and accepted attempt,
+		// not the disabled flag, are the safety proof for this live bind.
+		resp.Safe = !b.drainAwaitingHeartbeat && b.drainAttemptID == req.AttemptID &&
+			b.status == pb.Status_ServiceCanRestart
+		b.RUnlock()
+		return resp
+	}
+	resp.Safe = l.retiredServices[req.ServiceID] &&
+		l.retiredDrainAttempts[req.ServiceID] == req.AttemptID
+	return resp
+}
+
+func isExactDrainServiceID(id string) bool {
+	if len(id) <= 19 {
+		return false
+	}
+	version, err := strconv.ParseInt(id[:19], 10, 64)
+	return err == nil && version > 0
 }
 
 func (l *lockTableAllocator) remainTxnInService(serviceID string) int32 {
@@ -452,11 +569,30 @@ func (l *lockTableAllocator) validLockTable(group uint32, table uint64) bool {
 }
 
 func (l *lockTableAllocator) canRestartService(serviceID string) bool {
-	b := l.getServiceBindsWithoutPrefix(serviceID)
+	l.mu.RLock()
+	defer l.mu.RUnlock()
+	b := l.findRestartServiceLocked(serviceID)
 	if b == nil {
-		l.logger.Error("not found restart lock service",
-			zap.String("serviceID", serviceID))
-		return true
+		for id := range l.mu.services {
+			if serviceID == getUUIDFromServiceIdentifier(id) {
+				// An ambiguous live alias is never resolved by a historical
+				// tombstone, including one from a legacy unprefixed instance.
+				return false
+			}
+		}
+		// Retirement evidence belongs to the exact service instance only.
+		// A UUID alias must never inherit another incarnation's evidence.
+		safe, known := l.retiredServices[serviceID]
+		if !known {
+			// A missing bind does not prove that the allocator never had a
+			// dependency; it can also mean that state observation was lost.  The
+			// caller must obtain an explicit safe-retirement record instead of
+			// treating one lookup miss as permission to restart.
+			l.logger.Warn("restart lock service state is unknown",
+				zap.String("serviceID", serviceID))
+			return false
+		}
+		return safe
 	}
 	logServiceStatus(
 		l.logger,
@@ -472,10 +608,38 @@ func (l *lockTableAllocator) disableTableBinds(b *serviceBinds) {
 	defer l.mu.Unlock()
 	b.Lock()
 	defer b.Unlock()
-	l.disableTableBindsLocked(b)
+	l.disableTableBindsLocked(b, b.status == pb.Status_ServiceCanRestart)
 }
 
-func (l *lockTableAllocator) disableTableBindsLocked(b *serviceBinds) {
+func (l *lockTableAllocator) disableTableBindsLocked(
+	b *serviceBinds,
+	safeRetirement bool,
+) {
+	if l.mu.services[b.serviceID] != b {
+		return
+	}
+	serviceID := b.serviceID
+	if l.retiredServices == nil {
+		l.retiredServices = make(map[string]bool)
+	}
+	if l.retiredDrainAttempts == nil {
+		l.retiredDrainAttempts = make(map[string]string)
+	}
+	if l.retiredAt == nil {
+		l.retiredAt = make(map[string]time.Time)
+	}
+	// An unsafe retirement must dominate an older positive tombstone.  A
+	// missing bind after a failed/ambiguous validation is never proof of safe
+	// restart, even if a previous incarnation drained successfully.
+	if previous, ok := l.retiredServices[serviceID]; !ok || previous {
+		l.retiredServices[serviceID] = safeRetirement
+	}
+	if safeRetirement && l.retiredServices[serviceID] && b.drainAttemptID != "" {
+		l.retiredDrainAttempts[serviceID] = b.drainAttemptID
+	} else {
+		delete(l.retiredDrainAttempts, serviceID)
+	}
+	l.retiredAt[serviceID] = time.Now()
 	// we can't just delete the LockTable's effectiveness binding directly, we
 	// need to keep the binding version.
 	for g, tables := range b.groupTables {
@@ -527,7 +691,7 @@ func (l *lockTableAllocator) disableTableBindsAtGeneration(
 		return false
 	}
 	b.disableLocked()
-	l.disableTableBindsLocked(b)
+	l.disableTableBindsLocked(b, b.status == pb.Status_ServiceCanRestart)
 	return true
 }
 
@@ -574,13 +738,24 @@ func (l *lockTableAllocator) getServiceBinds(serviceID string) *serviceBinds {
 func (l *lockTableAllocator) getServiceBindsWithoutPrefix(serviceID string) *serviceBinds {
 	l.mu.RLock()
 	defer l.mu.RUnlock()
+	return l.findRestartServiceLocked(serviceID)
+}
+
+func (l *lockTableAllocator) findRestartServiceLocked(serviceID string) *serviceBinds {
+	if exact := l.mu.services[serviceID]; exact != nil {
+		return exact
+	}
+	var match *serviceBinds
 	for k, v := range l.mu.services {
 		id := getUUIDFromServiceIdentifier(k)
 		if serviceID == id {
-			return v
+			if match != nil {
+				return nil
+			}
+			match = v
 		}
 	}
-	return nil
+	return match
 }
 
 type timedOutServiceBinds struct {
@@ -624,11 +799,23 @@ func (l *lockTableAllocator) registerService(
 ) *serviceBinds {
 	l.mu.Lock()
 	defer l.mu.Unlock()
+	// A completed drain is an irreversible promise to the caller. A late
+	// GetBind for that same incarnation must not resurrect it after QueryDrain
+	// has returned safe. Unsafe timeout retirement can still recover normally.
+	if l.retiredServices[serviceID] {
+		return nil
+	}
 
 	b, ok := l.mu.services[serviceID]
 	if ok {
+		delete(l.retiredServices, serviceID)
+		delete(l.retiredDrainAttempts, serviceID)
+		delete(l.retiredAt, serviceID)
 		return b
 	}
+	delete(l.retiredServices, serviceID)
+	delete(l.retiredDrainAttempts, serviceID)
+	delete(l.retiredAt, serviceID)
 	b = newServiceBinds(
 		serviceID,
 		l.logger.With(zap.String("lockservice", serviceID)),
@@ -646,6 +833,13 @@ func (l *lockTableAllocator) registerBind(
 	sharding pb.Sharding) pb.LockTable {
 	l.mu.Lock()
 	defer l.mu.Unlock()
+	// GetBind's admission check and Get are separate calls. A drain or
+	// retirement may have won between them; never return even an existing
+	// binding through that stale request.
+	if l.mu.services[binds.serviceID] != binds ||
+		!binds.isStatus(pb.Status_ServiceLockEnable) {
+		return pb.LockTable{}
+	}
 
 	if old, ok := l.getLockTablesLocked(group)[tableID]; ok {
 		return l.tryRebindLocked(binds, group, old, tableID)
@@ -874,6 +1068,7 @@ func (l *lockTableAllocator) cleanCommitStateOnce(
 	if ctx.Err() != nil {
 		return
 	}
+	l.cleanRetiredServices(time.Now(), removeDisconnectDuration)
 	snapshots := make(map[string]commitCleanupSnapshot)
 	activeTxnMap := make(map[string]map[string]struct{})
 
@@ -1007,6 +1202,22 @@ func (l *lockTableAllocator) cleanCommitStateOnce(
 	l.ctlMu.Unlock()
 }
 
+func (l *lockTableAllocator) cleanRetiredServices(now time.Time, retention time.Duration) {
+	if retention <= 0 {
+		return
+	}
+	l.mu.Lock()
+	defer l.mu.Unlock()
+	for serviceID, retiredAt := range l.retiredAt {
+		if now.Sub(retiredAt) < retention {
+			continue
+		}
+		delete(l.retiredAt, serviceID)
+		delete(l.retiredServices, serviceID)
+		delete(l.retiredDrainAttempts, serviceID)
+	}
+}
+
 type commitCleanupSnapshot struct {
 	ctl           *commitCtl
 	generation    uint64
@@ -1107,10 +1318,12 @@ type serviceBinds struct {
 	lastKeepaliveTime time.Time
 	// keepaliveGeneration orders positive liveness evidence against an
 	// asynchronous validation that may later try to disable this service.
-	keepaliveGeneration uint64
-	disabled            bool
-	status              pb.Status
-	txnIDs              [][]byte
+	keepaliveGeneration    uint64
+	disabled               bool
+	status                 pb.Status
+	drainAttemptID         string
+	drainAwaitingHeartbeat bool
+	txnIDs                 [][]byte
 }
 
 func newServiceBinds(
@@ -1154,8 +1367,26 @@ func (b *serviceBinds) getStatus() pb.Status {
 func (b *serviceBinds) setStatus(status pb.Status) {
 	b.Lock()
 	defer b.Unlock()
+	// Drain phases are monotonic for this bind object. A delayed heartbeat
+	// from the same instance cannot undo an already observed completion.
+	if status < b.status || status > pb.Status_ServiceCanRestart {
+		return
+	}
 	logStatusChange(b.skipLogger, b.status, status)
 	b.status = status
+}
+
+// requestRestart is idempotent. A duplicate drain request must not move a
+// service that has already proved safe back to Waiting and thereby create a
+// state regression during a reconcile retry.
+func (b *serviceBinds) requestRestart() {
+	b.Lock()
+	defer b.Unlock()
+	if b.status != pb.Status_ServiceLockEnable {
+		return
+	}
+	logStatusChange(b.skipLogger, b.status, pb.Status_ServiceLockWaiting)
+	b.status = pb.Status_ServiceLockWaiting
 }
 
 func (b *serviceBinds) active() bool {
@@ -1170,12 +1401,27 @@ func (b *serviceBinds) active() bool {
 	return true
 }
 
+func (b *serviceBinds) confirmPendingDrainHeartbeat(status pb.Status) bool {
+	b.Lock()
+	defer b.Unlock()
+	if !b.drainAwaitingHeartbeat {
+		return true
+	}
+	// A stale drain phase from before an allocator restart is not proof
+	// that this new attempt reached the current CN incarnation.
+	if status != pb.Status_ServiceLockEnable {
+		return false
+	}
+	b.drainAwaitingHeartbeat = false
+	return true
+}
+
 func (b *serviceBinds) bind(
 	group uint32,
 	tableID uint64) bool {
 	b.Lock()
 	defer b.Unlock()
-	if b.disabled {
+	if b.disabled || b.status != pb.Status_ServiceLockEnable {
 		return false
 	}
 	b.getTablesLocked(group)[tableID] = struct{}{}
@@ -1253,6 +1499,8 @@ func (l *lockTableAllocator) initHandler() {
 		pb.Method_SetRestartService,
 		l.handleSetRestartService,
 	)
+	l.server.RegisterMethodHandler(pb.Method_BeginDrain, l.handleBeginDrain)
+	l.server.RegisterMethodHandler(pb.Method_QueryDrain, l.handleQueryDrain)
 
 	l.server.RegisterMethodHandler(
 		pb.Method_RemainTxnInService,
@@ -1304,13 +1552,19 @@ func (l *lockTableAllocator) handleKeepLockTableBind(
 	cs morpc.ClientSession) {
 	resp.KeepLockTableBind.AllocatorID = l.allocatorID
 	resp.KeepLockTableBind.AllocatorVersion = l.version
-	resp.KeepLockTableBind.OK = l.KeepLockTableBind(req.KeepLockTableBind.ServiceID)
+	b, active := l.keepLockTableBind(req.KeepLockTableBind.ServiceID)
+	resp.KeepLockTableBind.OK = active
 	if !resp.KeepLockTableBind.OK {
 		// resp.KeepLockTableBind.Status = pb.Status_ServiceCanRestart
 		writeResponse(l.logger, cancel, resp, nil, cs)
 		return
 	}
-	b := l.getServiceBinds(req.KeepLockTableBind.ServiceID)
+	if b == nil || !b.confirmPendingDrainHeartbeat(req.KeepLockTableBind.Status) {
+		// A pending drain may only accept a fresh normal-state heartbeat.
+		resp.KeepLockTableBind.OK = false
+		writeResponse(l.logger, cancel, resp, nil, cs)
+		return
+	}
 	if b.isStatus(pb.Status_ServiceLockEnable) {
 		if req.KeepLockTableBind.Status != pb.Status_ServiceLockEnable {
 			l.logger.Error("tn has abnormal lock service status",
@@ -1324,9 +1578,7 @@ func (l *lockTableAllocator) handleKeepLockTableBind(
 	b.setTxnIds(req.KeepLockTableBind.TxnIDs)
 	switch req.KeepLockTableBind.Status {
 	case pb.Status_ServiceLockEnable:
-		if b.isStatus(pb.Status_ServiceLockWaiting) {
-			resp.KeepLockTableBind.Status = pb.Status_ServiceLockWaiting
-		}
+		resp.KeepLockTableBind.Status = b.getStatus()
 	case pb.Status_ServiceUnLockSucc:
 		b.disable()
 		l.disableTableBindsWithoutDelete(b)
@@ -1334,7 +1586,7 @@ func (l *lockTableAllocator) handleKeepLockTableBind(
 		resp.KeepLockTableBind.Status = pb.Status_ServiceCanRestart
 	default:
 		b.setStatus(req.KeepLockTableBind.Status)
-		resp.KeepLockTableBind.Status = req.KeepLockTableBind.Status
+		resp.KeepLockTableBind.Status = b.getStatus()
 	}
 	l.disableGroupTables(req.KeepLockTableBind.LockTables, b)
 	writeResponse(l.logger, cancel, resp, nil, cs)
@@ -1346,8 +1598,10 @@ func (l *lockTableAllocator) handleSetRestartService(
 	req *pb.Request,
 	resp *pb.Response,
 	cs morpc.ClientSession) {
-	l.setRestartService(req.SetRestartService.ServiceID)
-	resp.SetRestartService.OK = true
+	// A missing bind is an unknown retirement state, not a successful drain
+	// request.  Keep the existing response field and fail closed so the
+	// Operator cannot advance to CanRestart on a stale positive observation.
+	resp.SetRestartService.OK = l.setRestartService(req.SetRestartService.ServiceID)
 	writeResponse(l.logger, cancel, resp, nil, cs)
 }
 
@@ -1358,6 +1612,26 @@ func (l *lockTableAllocator) handleCanRestartService(
 	resp *pb.Response,
 	cs morpc.ClientSession) {
 	resp.CanRestartService.OK = l.canRestartService(req.CanRestartService.ServiceID)
+	writeResponse(l.logger, cancel, resp, nil, cs)
+}
+
+func (l *lockTableAllocator) handleBeginDrain(
+	ctx context.Context,
+	cancel context.CancelFunc,
+	req *pb.Request,
+	resp *pb.Response,
+	cs morpc.ClientSession) {
+	resp.BeginDrain = l.beginDrain(req.BeginDrain)
+	writeResponse(l.logger, cancel, resp, nil, cs)
+}
+
+func (l *lockTableAllocator) handleQueryDrain(
+	ctx context.Context,
+	cancel context.CancelFunc,
+	req *pb.Request,
+	resp *pb.Response,
+	cs morpc.ClientSession) {
+	resp.QueryDrain = l.queryDrain(req.QueryDrain)
 	writeResponse(l.logger, cancel, resp, nil, cs)
 }
 
@@ -1873,6 +2147,9 @@ func (l *lockTableAllocator) cleanCtlLocked(
 func (l *lockTableAllocator) canGetBind(serviceID string) bool {
 	l.mu.RLock()
 	defer l.mu.RUnlock()
+	if l.retiredServices[serviceID] {
+		return false
+	}
 
 	b := l.mu.services[serviceID]
 	if b != nil &&
