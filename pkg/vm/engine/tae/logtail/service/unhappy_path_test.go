@@ -153,6 +153,85 @@ func TestSubscriptionPullCancelsWhenSessionCloses(t *testing.T) {
 	require.Equal(t, TableNotFound, session.Unregister(id))
 }
 
+// A slow catalog pull can outlive the CN's subscription attempt. Reconnecting
+// creates a new transport while the old pull still owns a TN worker slot.
+// The controlled collector stands in for the oversized-logtail flush wait;
+// no large catalog or wall-clock timeout is needed to exercise that ordering.
+func TestDisconnectedCatalogPullReleasesWorkerForReconnect(t *testing.T) {
+	oldEntered := make(chan struct{})
+	oldExited := make(chan struct{})
+	releaseOld := make(chan struct{})
+	defer close(releaseOld) // Also unblock an old implementation if an assertion fails.
+	newEntered := make(chan struct{})
+	var calls atomic.Int32
+	logtailer := &controlledLogtailer{
+		tableFn: func(ctx context.Context, table api.TableID, _, to timestamp.Timestamp) (logtail.TableLogtail, func(), error) {
+			call := calls.Add(1)
+			if call == 1 {
+				close(oldEntered)
+				defer close(oldExited)
+				select {
+				case <-ctx.Done():
+					return logtail.TableLogtail{}, nil, ctx.Err()
+				case <-releaseOld:
+					return mockLogtail(table, to), nil, nil
+				}
+			}
+			if call == 2 {
+				close(newEntered)
+			}
+			return mockLogtail(table, to), nil, nil
+		},
+	}
+	server := newUnitLogtailServerWithStart(t, logtailer, false) // One pull worker slot.
+	server.cfg.ResponseSendTimeout = 10 * time.Second
+	require.NoError(t, server.Start())
+	bootstrapped := make(chan struct{})
+	require.NoError(t, logtailer.notify(
+		timestamp.Timestamp{}, timestamp.Timestamp{}, func() { close(bootstrapped) },
+	))
+	select {
+	case <-bootstrapped:
+	case <-time.After(10 * time.Second):
+		t.Fatal("logtail sender did not consume the bootstrap event")
+	}
+	table := mockTable(1, 2, 0) // mo_catalog.mo_tables.
+	req := &logtail.SubscribeRequest{Table: &table}
+
+	oldTransport := newCaptureSession()
+	oldStream := newCaptureStream(oldTransport)
+	oldSession, err := server.getSession(oldStream)
+	require.NoError(t, err)
+	require.NoError(t, server.onSubscription(t.Context(), oldStream, req))
+	select {
+	case <-oldEntered:
+	case <-time.After(10 * time.Second):
+		t.Fatal("old catalog pull did not reach the controlled flush wait")
+	}
+	require.Len(t, server.pullWorkerPool, 1)
+
+	newTransport := newCaptureSession()
+	newStream := newCaptureStream(newTransport)
+	newSession, err := server.getSession(newStream)
+	require.NoError(t, err)
+	require.NoError(t, server.onSubscription(t.Context(), newStream, req))
+	oldTransport.cancel() // CN abandons the old attempt and reconnects.
+
+	select {
+	case <-oldExited:
+	case <-time.After(2 * time.Second):
+		t.Fatal("abandoned catalog pull retained the only TN worker slot")
+	}
+	select {
+	case <-newEntered:
+	case <-time.After(2 * time.Second):
+		t.Fatal("new connection could not start its catalog pull")
+	}
+	require.NotNil(t, receiveCapturedLogtailResponse(t, newTransport).GetSubscribeResponse())
+	require.Zero(t, oldSession.Active())
+	require.Equal(t, 1, newSession.Active())
+}
+
 func TestAbandonedSubscriptionPullReleasesLateCallback(t *testing.T) {
 	for _, phase := range []string{"phase1", "phase2"} {
 		t.Run(phase, func(t *testing.T) {
