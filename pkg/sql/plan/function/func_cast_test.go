@@ -433,6 +433,16 @@ func TestYearAssignmentCastHonorsSQLMode(t *testing.T) {
 	}
 }
 
+func TestParseTimePrefixPreservesInvalidFields(t *testing.T) {
+	for _, value := range []string{"12:99:00", "12:99:00tail", "12:34:99", "12:34:99tail", "12:34:56:99"} {
+		_, ok := parseTimePrefix(value, 0)
+		require.False(t, ok, value)
+	}
+	parsed, ok := parseTimePrefix("12:34:56tail", 0)
+	require.True(t, ok)
+	require.Equal(t, "12:34:56", parsed.String())
+}
+
 func TestTimeAssignmentCastHonorsMySQLRange(t *testing.T) {
 	timeType := types.T_time.ToTypeWithScale(6)
 	max := types.MySQLTimeMax

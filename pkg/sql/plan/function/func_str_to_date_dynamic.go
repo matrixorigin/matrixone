@@ -68,19 +68,10 @@ func builtInStrToDateDynamic(parameters []*vector.Vector, result vector.Function
 }
 
 func dynamicStrToDateFormatType(format string) (isTime, isDate bool, scale int) {
-	for i := 0; i+1 < len(format); i++ {
-		if format[i] != '%' {
-			continue
-		}
-		switch format[i+1] {
-		case 'h', 'H', 'i', 'I', 's', 'S', 'k', 'l', 'f', 'r', 'T':
-			isTime = true
-			if format[i+1] == 'f' {
-				scale = strToDateMaxFsp
-			}
-		case 'y', 'Y', 'm', 'M', 'c', 'b', 'D', 'd', 'e':
-			isDate = true
-		}
+	var hasMicroseconds bool
+	isTime, isDate, hasMicroseconds = types.ClassifyStrToDateFormat(format)
+	if hasMicroseconds {
+		scale = strToDateMaxFsp
 	}
 	return
 }

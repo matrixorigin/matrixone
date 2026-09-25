@@ -10174,16 +10174,17 @@ func bindStringIntervalExpr(ctx context.Context, expr *Expr, intervalType types.
 		return makePlan2Int64ConstExprWithType(number), normalizedType, true, nil
 	}
 
-	// The normalized unit depends only on the SQL interval unit, not on a row.
+	// A dynamic expression needs one result unit for every row. Fractional
+	// values of these units normalize to microseconds, so whole values must
+	// use that same unit too.
 	_, normalizedType, err := types.NormalizeInterval("0", intervalType)
 	if err != nil {
 		return nil, types.IntervalTypeInvalid, false, err
 	}
-	if normalizedType == types.Second {
-		switch intervalType {
-		case types.Minute_Second, types.Hour_Second, types.Day_Second:
-			normalizedType = types.MicroSecond
-		}
+	switch intervalType {
+	case types.Second, types.Minute, types.Hour, types.Day,
+		types.Minute_Second, types.Hour_Second, types.Day_Second:
+		normalizedType = types.MicroSecond
 	}
 	numberExpr, err := BindFuncExprImplByPlanExpr(ctx, "to_interval", []*Expr{
 		expr,

@@ -14,11 +14,7 @@
 
 package plan
 
-import (
-	"unicode"
-
-	"github.com/matrixorigin/matrixone/pkg/container/types"
-)
+import "github.com/matrixorigin/matrixone/pkg/container/types"
 
 // From old function code, and they were only used by plan.
 
@@ -28,7 +24,7 @@ const (
 )
 
 func ExtractToDateReturnType(format string) (tp types.T, fsp int) {
-	isTime, isDate := getTimeFormatType(format)
+	isTime, isDate, hasMicroseconds := types.ClassifyStrToDateFormat(format)
 	if isTime && !isDate {
 		tp = types.T_time
 	} else if !isTime && isDate {
@@ -36,82 +32,8 @@ func ExtractToDateReturnType(format string) (tp types.T, fsp int) {
 	} else {
 		tp = types.T_datetime
 	}
-	if containsMicrosecondFormat(format) {
+	if hasMicroseconds {
 		fsp = MaxFsp
 	}
 	return tp, fsp
-}
-
-func containsMicrosecondFormat(format string) bool {
-	format = trimWhiteSpace(format)
-	var token string
-	var succ bool
-	for {
-		token, format, succ = nextFormatToken(format)
-		if len(token) == 0 || !succ {
-			return false
-		}
-		if token == "%f" {
-			return true
-		}
-	}
-}
-
-// getTimeFormatType checks the type(Time, Date or Datetime) of a format string.
-func getTimeFormatType(format string) (isTime, isDate bool) {
-	format = trimWhiteSpace(format)
-	var token string
-	var succ bool
-	for {
-		token, format, succ = nextFormatToken(format)
-		if len(token) == 0 {
-			break
-		}
-		if !succ {
-			isTime, isDate = false, false
-			break
-		}
-		if len(token) >= 2 && token[0] == '%' {
-			switch token[1] {
-			case 'h', 'H', 'i', 'I', 's', 'S', 'k', 'l', 'f', 'r', 'T':
-				isTime = true
-			case 'y', 'Y', 'm', 'M', 'c', 'b', 'D', 'd', 'e', 'j', 'a', 'W', 'w', 'U', 'u', 'V', 'v', 'X', 'x':
-				isDate = true
-			}
-		}
-		if isTime && isDate {
-			break
-		}
-	}
-	return
-}
-
-func trimWhiteSpace(input string) string {
-	for i, c := range input {
-		if !unicode.IsSpace(c) {
-			return input[i:]
-		}
-	}
-	return ""
-}
-
-func nextFormatToken(format string) (token string, remain string, success bool) {
-	if len(format) == 0 {
-		return "", "", true
-	}
-
-	// Just one character.
-	if len(format) == 1 {
-		if format[0] == '%' {
-			return "", "", false
-		}
-		return format, "", true
-	}
-
-	// More than one character.
-	if format[0] == '%' {
-		return format[:2], format[2:], true
-	}
-
-	return format[:1], format[1:], true
 }

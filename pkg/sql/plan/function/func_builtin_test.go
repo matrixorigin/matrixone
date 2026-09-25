@@ -701,6 +701,29 @@ func TestToIntervalStringTypesRegistered(t *testing.T) {
 
 func TestToIntervalNormalizesDynamicStrings(t *testing.T) {
 	proc := testutil.NewProcess(t)
+	for _, tc := range []struct {
+		unit  types.IntervalType
+		whole int64
+	}{
+		{types.Second, types.MicroSecsPerSec},
+		{types.Minute, types.SecsPerMinute * types.MicroSecsPerSec},
+		{types.Hour, types.SecsPerHour * types.MicroSecsPerSec},
+		{types.Day, types.SecsPerDay * types.MicroSecsPerSec},
+	} {
+		t.Run(tc.unit.String(), func(t *testing.T) {
+			caseDef := NewFunctionTestCase(proc,
+				[]FunctionTestInput{
+					NewFunctionTestInput(types.T_varchar.ToType(), []string{"1", "1.5", "-1.5", "9223372036854775807", ""}, []bool{false, false, false, false, true}),
+					NewFunctionTestConstInput(types.T_int64.ToType(), []int64{int64(tc.unit)}, nil),
+				},
+				NewFunctionTestResult(types.T_int64.ToType(), false,
+					[]int64{tc.whole, tc.whole + tc.whole/2, -tc.whole - tc.whole/2, 0, 0},
+					[]bool{false, false, false, true, true}),
+				ToInterval)
+			ok, info := caseDef.Run()
+			require.True(t, ok, info)
+		})
+	}
 
 	t.Run("day_second and NULL", func(t *testing.T) {
 		tc := NewFunctionTestCase(proc,
