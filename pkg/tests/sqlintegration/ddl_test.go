@@ -752,6 +752,17 @@ func TestCDCNoFullPublicLifecycle(t *testing.T) {
 // is held.  B must consume the existing checkpoint and A must not erase or
 // regress B's owner generation after its delayed cleanup returns.
 func TestCDCNoFullPublicTakeoverLifecycle(t *testing.T) {
+	// This scenario adds CNs to the shared fixture. Give each run a fresh
+	// generation, including the updater's internal executor bound to CN A.
+	require.NoError(t, embed.CloseSingleCNBaseClusterTests())
+	cdc.ResetCDCWatermarkUpdaterForTest()
+	t.Cleanup(func() {
+		if err := embed.CloseSingleCNBaseClusterTests(); err != nil {
+			t.Errorf("close CDC takeover fixture: %v", err)
+			return
+		}
+		cdc.ResetCDCWatermarkUpdaterForTest()
+	})
 	runSQLIntegration(t,
 		func(c embed.Cluster) {
 			ctx, cancel := context.WithTimeout(context.Background(), 240*time.Second)
@@ -797,10 +808,9 @@ func TestCDCNoFullPublicTakeoverLifecycle(t *testing.T) {
 					phase.Store(3)
 				case 4:
 					freshEnteredOnce.Do(func() { close(freshEntered) })
-					// C's admission is deliberately held until B's runner-selected
-					// cancellation has returned. This freezes the surviving B
-					// checkpoint before C initializes its first reader.
-					<-bCancelDone
+					// The test releases C only after observing B's cancellation
+					// and sampling its checkpoint. The same release unblocks C
+					// if an assertion fails before then.
 					<-freshRelease
 					phase.Store(5)
 				}
@@ -1145,7 +1155,7 @@ func TestCDCNoFullPublicTakeoverLifecycle(t *testing.T) {
 			// running claim to C so a new executor/reader, rather than B's existing
 			// reader, proves recovery from B's post-takeover checkpoint.
 			phase.Store(4)
-			require.NoError(t, c.StartNewCNService(2))
+			require.NoError(t, c.StartNewCNService(1))
 			cnC, err := c.GetCNService(2)
 			require.NoError(t, err)
 			if w, ok := any(c).(interface {
@@ -1162,6 +1172,17 @@ func TestCDCNoFullPublicTakeoverLifecycle(t *testing.T) {
 			// enough for the test/UT watchdog to fire before the replacement reader
 			// reaches its admission barrier.
 			var freshScanDone chan error
+			defer func() {
+				if freshScanDone == nil {
+					return
+				}
+				releaseFresh()
+				select {
+				case <-freshScanDone:
+				case <-time.After(30 * time.Second):
+					t.Error("CN C detector scan did not finish during cleanup")
+				}
+			}()
 			for attempts := 0; ; attempts++ {
 				freshScanDone = make(chan error, 1)
 				go func(done chan error) { done <- cdc.RunTableDetectorScanForTest(cnC.ServiceID()) }(freshScanDone)
@@ -1169,6 +1190,7 @@ func TestCDCNoFullPublicTakeoverLifecycle(t *testing.T) {
 				case <-freshEntered:
 					goto freshAdmissionEntered
 				case scanErr := <-freshScanDone:
+					freshScanDone = nil
 					if scanErr != nil && attempts%10 == 0 {
 						t.Logf("CN C detector scan retry %d: %v", attempts, scanErr)
 					}
@@ -1200,7 +1222,13 @@ func TestCDCNoFullPublicTakeoverLifecycle(t *testing.T) {
 				"fresh reader must not observe a checkpoint older than B's durable progress")
 			captureFresh.Store(true)
 			releaseFresh()
-			require.NoError(t, <-freshScanDone)
+			select {
+			case scanErr := <-freshScanDone:
+				freshScanDone = nil
+				require.NoError(t, scanErr)
+			case <-ctx.Done():
+				t.Fatal("CN C detector scan did not finish after admission")
+			}
 			select {
 			case actualStart := <-freshBoundary:
 				require.Equal(t, freshStart, actualStart,
