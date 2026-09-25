@@ -30,9 +30,10 @@ import (
 )
 
 func (s *service) writeToMO(
+	parent context.Context,
 	e loadAction,
 ) error {
-	ctx, cancel := context.WithTimeoutCause(context.Background(), time.Minute, moerr.CauseWriteToMO)
+	ctx, cancel := context.WithTimeoutCause(parent, time.Minute, moerr.CauseWriteToMO)
 	defer cancel()
 	err := s.executor.ExecTxn(
 		ctx,
@@ -51,6 +52,7 @@ func (s *service) writeToMO(
 }
 
 func (s *service) writeToS3(
+	parent context.Context,
 	e loadAction,
 ) error {
 	f, err := os.Open(e.file)
@@ -75,7 +77,7 @@ func (s *service) writeToS3(
 			},
 		},
 	}
-	ctx, cancel := context.WithTimeoutCause(context.TODO(), time.Minute, moerr.CauseWriteToS3)
+	ctx, cancel := context.WithTimeoutCause(parent, time.Minute, moerr.CauseWriteToS3)
 	defer cancel()
 
 	s.logger.Info("write trace to s3",

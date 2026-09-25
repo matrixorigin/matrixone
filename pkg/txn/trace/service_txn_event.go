@@ -876,7 +876,11 @@ func (s *service) ClearTxnFilters() error {
 }
 
 func (s *service) RefreshTxnFilters() error {
-	ctx, cancel := context.WithTimeoutCause(context.Background(), 30*time.Second, moerr.CauseRefreshTxnFilters)
+	return s.refreshTxnFilters(context.Background())
+}
+
+func (s *service) refreshTxnFilters(ctx context.Context) error {
+	ctx, cancel := context.WithTimeoutCause(ctx, 30*time.Second, moerr.CauseRefreshTxnFilters)
 	defer cancel()
 
 	var filters []TxnFilter
@@ -970,15 +974,16 @@ func (s *service) handleTxnError(
 		case <-ctx.Done():
 			return
 		case sql := <-s.txnErrorC:
-			s.doAddTxnError(sql)
+			s.doAddTxnError(ctx, sql)
 		}
 	}
 }
 
 func (s *service) doAddTxnError(
+	parent context.Context,
 	sql string,
 ) {
-	ctx, cancel := context.WithTimeoutCause(context.Background(), time.Minute, moerr.CauseDoAddTxnError)
+	ctx, cancel := context.WithTimeoutCause(parent, time.Minute, moerr.CauseDoAddTxnError)
 	defer cancel()
 
 	now, _ := s.clock.Now()
@@ -999,6 +1004,9 @@ func (s *service) doAddTxnError(
 			WithWaitCommittedLogApplied().
 			WithDisableTrace())
 	if err != nil {
+		if parent.Err() != nil {
+			return
+		}
 		err = moerr.AttachCause(ctx, err)
 		s.logger.Error("exec txn error trace failed",
 			zap.String("sql", sql),
