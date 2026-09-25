@@ -746,34 +746,6 @@ func (exec *CDCTaskExecutor) currentDaemonClaimFence() *cdc.OwnerFence {
 	return exec.claimFence
 }
 
-func classifyStableSnapshotRestart(
-	watermark types.TS,
-	watermarkGeneration uint64,
-	sourceTableID uint64,
-	state cdc.InitialSnapshotEpochState,
-) (incomplete, resetTarget, metadataMissing, generationAhead bool) {
-	hasProgress := !watermark.IsEmpty()
-	generationAhead = watermarkGeneration > sourceTableID || state.HasNewerGeneration
-	sameGeneration := watermarkGeneration == sourceTableID
-	// A same-generation watermark cannot exist before its immutable epoch. A
-	// non-empty generation-zero watermark with no retired epoch is likewise not
-	// attributable to this stable protocol and must fail closed.
-	metadataMissing = state.Created && hasProgress &&
-		(sameGeneration || (watermarkGeneration == 0 && !state.HasOtherGeneration))
-	incomplete = !sameGeneration || watermark.LT(&state.Epoch)
-	resetTarget = incomplete && (state.HasOtherGeneration ||
-		(hasProgress && watermarkGeneration > 0 && watermarkGeneration < sourceTableID))
-	return
-}
-
-func shouldCompactStableSnapshotEpochs(
-	targetWillReset bool,
-	incomplete bool,
-	hasOtherGeneration bool,
-) bool {
-	return targetWillReset || (!incomplete && hasOtherGeneration)
-}
-
 func capInitialSnapshotEpoch(candidate, end types.TS) types.TS {
 	if !end.IsEmpty() && candidate.GT(&end) {
 		return end
@@ -3422,12 +3394,17 @@ func (exec *CDCTaskExecutor) matchesSourceName(name, pattern string) bool {
 
 type cdcSourceKey struct{ db, table string }
 
+type cdcSourceKeyNames struct {
+	first, other cdcSourceKey
+	hasOther     bool
+}
+
 // The index belongs to one callback. A restart can admit many tables, but a
 // task's watermark names need only be read once for that batch.
 type cdcSourceKeyIndex struct {
 	loaded bool
 	err    error
-	byFold map[cdcSourceKey][]cdcSourceKey
+	byFold map[cdcSourceKey]cdcSourceKeyNames
 }
 
 func (index *cdcSourceKeyIndex) add(key *cdc.WatermarkKey) {
@@ -3436,12 +3413,13 @@ func (index *cdcSourceKeyIndex) add(key *cdc.WatermarkKey) {
 		cdc.CDCSourceIdentifierKey(raw.db, 2),
 		cdc.CDCSourceIdentifierKey(raw.table, 2),
 	}
-	for _, prior := range index.byFold[fold] {
-		if prior == raw {
-			return
-		}
+	names, found := index.byFold[fold]
+	if !found {
+		names.first = raw
+	} else if raw != names.first && !names.hasOther {
+		names.other, names.hasOther = raw, true
 	}
-	index.byFold[fold] = append(index.byFold[fold], raw)
+	index.byFold[fold] = names
 }
 
 // A mode-2 rename can change only the stored spelling of a source name. The
@@ -3455,7 +3433,7 @@ func (exec *CDCTaskExecutor) rejectAmbiguousSourceKey(
 	}
 	if !index.loaded {
 		index.loaded = true
-		index.byFold = make(map[cdcSourceKey][]cdcSourceKey)
+		index.byFold = make(map[cdcSourceKey]cdcSourceKeyNames)
 		readCtx := defines.AttachAccountId(ctx, catalog.System_Account)
 		res := exec.ie.Query(readCtx,
 			cdc.CDCSQLBuilder.GetTaskWatermarksSQL(key.AccountId, key.TaskId), ie.SessionOverrideOptions{})
@@ -3481,12 +3459,18 @@ func (exec *CDCTaskExecutor) rejectAmbiguousSourceKey(
 	}
 	want := cdcSourceKey{cdc.CDCSourceIdentifierKey(key.DBName, 2),
 		cdc.CDCSourceIdentifierKey(key.TableName, 2)}
-	for _, prior := range index.byFold[want] {
-		if prior.db != key.DBName || prior.table != key.TableName {
-			return true, moerr.NewInternalErrorf(ctx,
-				"CDC source %s.%s has ambiguous watermark keys %s.%s and %s.%s after a case-only rename; explicit recovery is required",
-				key.DBName, key.TableName, prior.db, prior.table, key.DBName, key.TableName)
-		}
+	names, found := index.byFold[want]
+	if !found {
+		return false, nil
+	}
+	prior := names.first
+	if prior.db == key.DBName && prior.table == key.TableName && names.hasOther {
+		prior = names.other
+	}
+	if prior.db != key.DBName || prior.table != key.TableName {
+		return true, moerr.NewInternalErrorf(ctx,
+			"CDC source %s.%s has ambiguous watermark keys %s.%s and %s.%s after a case-only rename; explicit recovery is required",
+			key.DBName, key.TableName, prior.db, prior.table, key.DBName, key.TableName)
 	}
 	return false, nil
 }

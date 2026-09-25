@@ -565,16 +565,20 @@ func normalizeCDCTargetColumnType(raw string) string {
 func cdcTargetColumnTypeMatches(source plan.Type, target, sinkType string, numericScale sql.NullInt64) bool {
 	want := normalizeCDCTargetColumnType(plan2.FormatColType(source))
 	got := normalizeCDCTargetColumnType(target)
-	if sinkType == CDCSinkType_MO && source.Width > 0 && source.Scale >= 0 &&
+	if sinkType == CDCSinkType_MO && source.Width > 0 &&
 		(types.T(source.Id) == types.T_float32 || types.T(source.Id) == types.T_float64) {
 		// MO's COLUMN_TYPE prints FLOAT(M) and DOUBLE(M) without D. The
-		// independent NUMERIC_SCALE field retains D, so verify both fields.
+		// independent NUMERIC_SCALE field distinguishes omitted D from an
+		// explicit scale, including D=0.
 		name := "float"
 		if types.T(source.Id) == types.T_float64 {
 			name = "double"
 		}
-		return numericScale.Valid && numericScale.Int64 == int64(source.Scale) &&
-			got == fmt.Sprintf("%s(%d)", name, source.Width)
+		if got != fmt.Sprintf("%s(%d)", name, source.Width) {
+			return false
+		}
+		return source.Scale < 0 && !numericScale.Valid ||
+			source.Scale >= 0 && numericScale.Valid && numericScale.Int64 == int64(source.Scale)
 	}
 	if want == got {
 		return true

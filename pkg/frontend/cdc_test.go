@@ -843,119 +843,11 @@ func TestDaemonClaimFenceRejectsRetiredLocalGeneration(t *testing.T) {
 		"the same fence must advance from startup request authority to Running")
 }
 
-func TestClassifyStableSnapshotRestart(t *testing.T) {
-	epoch := types.BuildTS(200, 1)
-	tests := []struct {
-		name            string
-		watermark       types.TS
-		watermarkGen    uint64
-		sourceTableID   uint64
-		state           cdc.InitialSnapshotEpochState
-		incomplete      bool
-		resetTarget     bool
-		metadataMissing bool
-		generationAhead bool
-	}{
-		{
-			name:          "same generation partial snapshot",
-			watermark:     types.BuildTS(100, 1),
-			watermarkGen:  11,
-			sourceTableID: 11,
-			state:         cdc.InitialSnapshotEpochState{Epoch: epoch},
-			incomplete:    true,
-		},
-		{
-			name:          "recreated table before first completed snapshot",
-			watermark:     types.BuildTS(100, 1),
-			watermarkGen:  10,
-			sourceTableID: 11,
-			state: cdc.InitialSnapshotEpochState{
-				Epoch: epoch, HasOtherGeneration: true, Created: true,
-			},
-			incomplete: true, resetTarget: true,
-		},
-		{
-			name:          "recreated generation already complete",
-			watermark:     types.BuildTS(300, 1),
-			watermarkGen:  11,
-			sourceTableID: 11,
-			state: cdc.InitialSnapshotEpochState{
-				Epoch: epoch, HasOtherGeneration: true,
-			},
-		},
-		{
-			name:            "nonempty watermark with newly reconstructed metadata",
-			watermark:       types.BuildTS(300, 1),
-			watermarkGen:    11,
-			sourceTableID:   11,
-			state:           cdc.InitialSnapshotEpochState{Epoch: epoch, Created: true},
-			metadataMissing: true,
-		},
-		{
-			name:          "retired epoch already compacted",
-			watermark:     types.BuildTS(300, 1),
-			watermarkGen:  10,
-			sourceTableID: 11,
-			state:         cdc.InitialSnapshotEpochState{Epoch: epoch, Created: true},
-			incomplete:    true,
-			resetTarget:   true,
-		},
-		{
-			name:            "stale detector cannot move generation backwards",
-			watermark:       types.BuildTS(300, 1),
-			watermarkGen:    12,
-			sourceTableID:   11,
-			state:           cdc.InitialSnapshotEpochState{Epoch: epoch},
-			incomplete:      true,
-			generationAhead: true,
-		},
-		{
-			name:          "future epoch also proves stale detector",
-			watermark:     types.BuildTS(300, 1),
-			watermarkGen:  11,
-			sourceTableID: 11,
-			state: cdc.InitialSnapshotEpochState{
-				Epoch: epoch, HasOtherGeneration: true, HasNewerGeneration: true,
-			},
-			generationAhead: true,
-		},
-		{
-			name:          "brand new task",
-			watermarkGen:  0,
-			sourceTableID: 11,
-			state:         cdc.InitialSnapshotEpochState{Epoch: epoch, Created: true},
-			incomplete:    true,
-		},
-	}
-
-	for _, tt := range tests {
-		t.Run(tt.name, func(t *testing.T) {
-			incomplete, resetTarget, metadataMissing, generationAhead := classifyStableSnapshotRestart(
-				tt.watermark, tt.watermarkGen, tt.sourceTableID, tt.state)
-			require.Equal(t, tt.incomplete, incomplete)
-			require.Equal(t, tt.resetTarget, resetTarget)
-			require.Equal(t, tt.metadataMissing, metadataMissing)
-			require.Equal(t, tt.generationAhead, generationAhead)
-		})
-	}
-}
-
 func TestCapInitialSnapshotEpoch(t *testing.T) {
 	candidate := types.BuildTS(200, 1)
 	require.Equal(t, candidate, capInitialSnapshotEpoch(candidate, types.TS{}))
 	require.Equal(t, candidate, capInitialSnapshotEpoch(candidate, types.BuildTS(300, 1)))
 	require.Equal(t, types.BuildTS(100, 1), capInitialSnapshotEpoch(candidate, types.BuildTS(100, 1)))
-}
-
-func TestShouldCompactStableSnapshotEpochs(t *testing.T) {
-	require.True(t, shouldCompactStableSnapshotEpochs(true, true, true),
-		"capture target-reset cleanup before NewSinker clears IdChanged")
-	require.True(t, shouldCompactStableSnapshotEpochs(false, false, true),
-		"a completed current generation repairs cleanup interrupted by a crash")
-	require.False(t, shouldCompactStableSnapshotEpochs(false, true, true),
-		"an incomplete generation must retain its predecessor until target reset succeeds")
-	require.False(t, shouldCompactStableSnapshotEpochs(false, false, false),
-		"the steady state has nothing to compact")
 }
 
 func TestValidateStableInitialSnapshotProtocol(t *testing.T) {

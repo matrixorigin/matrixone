@@ -247,7 +247,7 @@ func TestCDCMode2CaseOnlyRenameBlocksNewWatermarkKey(t *testing.T) {
 }
 
 func TestCDCMode2SourceKeyIndexReadsOnceAndTracksNewKeys(t *testing.T) {
-	catalog := &cdcSourceKeyCatalog{rows: [][]string{{"db", "existing"}}}
+	catalog := &cdcSourceKeyCatalog{rows: [][]string{{"db", "existing"}, {"DB", "EXISTING"}}}
 	exec := &CDCTaskExecutor{ie: catalog, tables: cdc.PatternTuples{SourceCaseMode: 2}}
 	index := &cdcSourceKeyIndex{}
 	ctx := context.Background()
@@ -259,8 +259,12 @@ func TestCDCMode2SourceKeyIndexReadsOnceAndTracksNewKeys(t *testing.T) {
 		index.add(key) // The callback inserted this watermark after the initial read.
 	}
 	require.Equal(t, 1, catalog.queries)
+	ambiguous, err := exec.rejectAmbiguousSourceKey(ctx,
+		&cdc.WatermarkKey{DBName: "db", TableName: "existing"}, index)
+	require.True(t, ambiguous, "the first raw spelling must still see the second alias")
+	require.ErrorContains(t, err, "case-only rename")
 	alias := &cdc.WatermarkKey{DBName: "DB", TableName: "FIRST"}
-	ambiguous, err := exec.rejectAmbiguousSourceKey(ctx, alias, index)
+	ambiguous, err = exec.rejectAmbiguousSourceKey(ctx, alias, index)
 	require.True(t, ambiguous)
 	require.ErrorContains(t, err, "case-only rename")
 	require.Equal(t, 1, catalog.queries)

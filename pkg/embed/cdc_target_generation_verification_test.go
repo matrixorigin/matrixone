@@ -83,6 +83,8 @@ func TestCDCTargetGenerationVerificationOnMO(t *testing.T) {
 			wantError bool
 		}{
 			{"year_type", "YEAR", plan.Type{Id: int32(types.T_year), Width: 4}, false},
+			{"float_width_only", "FLOAT(5)", plan.Type{Id: int32(types.T_float32), Width: 5, Scale: -1}, false},
+			{"double_width_only", "DOUBLE(6)", plan.Type{Id: int32(types.T_float64), Width: 6, Scale: -1}, false},
 			{"float_scale", "FLOAT(5,2)", plan.Type{Id: int32(types.T_float32), Width: 5, Scale: 2}, false},
 			{"double_scale", "DOUBLE(6,5)", plan.Type{Id: int32(types.T_float64), Width: 6, Scale: 5}, false},
 			{"wrong_float_scale", "FLOAT(5,3)", plan.Type{Id: int32(types.T_float32), Width: 5, Scale: 2}, true},
