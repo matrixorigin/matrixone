@@ -1324,6 +1324,142 @@ func handleCmdFieldList(ses FeSession, execCtx *ExecCtx, icfl *InternalCmdFieldL
 	return err
 }
 
+// staticSetExprValue recognizes only literal SET expressions. Keeping this
+// deliberately small lets transaction-characteristic preflight validate
+// obvious failures without evaluating user variables, parameters, subqueries,
+// or functions ahead of their original order.
+func staticSetExprValue(expr tree.Expr) (value interface{}, static bool, isDefault bool) {
+	switch v := expr.(type) {
+	case *tree.DefaultVal:
+		return nil, true, true
+	case *tree.NumVal:
+		switch v.ValType {
+		case tree.P_bool:
+			return v.Bool(), true, false
+		case tree.P_int64:
+			value, _ = v.Int64()
+			return value, true, false
+		case tree.P_uint64:
+			value, _ = v.Uint64()
+			return value, true, false
+		case tree.P_float64:
+			value, _ = v.Float64()
+			return value, true, false
+		case tree.P_null:
+			return nil, true, false
+		case tree.P_char:
+			return v.String(), true, false
+		default:
+			return nil, false, false
+		}
+	default:
+		return nil, false, false
+	}
+}
+
+func transactionReadOnlyBooleanValue(expr tree.Expr) (int64, bool) {
+	value, ok := expr.(*tree.NumVal)
+	if !ok || value.ValType != tree.P_bool {
+		return 0, false
+	}
+	if value.Bool() {
+		return 1, true
+	}
+	return 0, true
+}
+
+// validateTransactionAssignmentScopes rejects unsupported transaction
+// characteristic scopes before any assignment in the SET list is applied.
+// In particular, an unqualified @@transaction_read_only must not silently
+// become a SESSION assignment.
+func validateTransactionAssignmentScopes(
+	ctx context.Context,
+	sv *tree.SetVar,
+) error {
+	for _, assign := range sv.Assignments {
+		if scope, ok := transactionIsolationAssignmentScope(assign); ok {
+			switch scope {
+			case tree.TransactionScopeNext, tree.TransactionScopeSession, tree.TransactionScopeGlobal:
+			default:
+				return moerr.NewInvalidInputf(ctx, "unsupported transaction scope %d", scope)
+			}
+		}
+		if scope, ok := transactionReadOnlyAssignmentScope(assign); ok {
+			switch scope {
+			case tree.TransactionScopeSession, tree.TransactionScopeGlobal:
+			case tree.TransactionScopeNext:
+				return moerr.NewNotSupported(ctx,
+					"transaction access mode is only supported for SESSION scope")
+			default:
+				return moerr.NewInvalidInputf(ctx, "unsupported transaction scope %d", scope)
+			}
+		}
+	}
+	return nil
+}
+
+// validateStaticTransactionAssignments is a bounded atomicity guard. It
+// prevalidates a leading run of literal/DEFAULT assignments so a mixed SET
+// cannot first change read-only state and then fail on an obviously unsupported
+// isolation level. Unrelated literal assignments remain part of that prefix;
+// the first dynamic expression ends preflight, preserving expression
+// evaluation order for the wider SET language instead of attempting general
+// SET atomicity here.
+func validateStaticTransactionAssignments(
+	ctx context.Context,
+	ses *Session,
+	sv *tree.SetVar,
+	activeTxnAtStart bool,
+) error {
+	for _, assign := range sv.Assignments {
+		value, static, isDefault := staticSetExprValue(assign.Value)
+		if !static {
+			return nil
+		}
+
+		isolationScope, isolation := transactionIsolationAssignmentScope(assign)
+		readOnlyScope, readOnly := transactionReadOnlyAssignmentScope(assign)
+		if !isolation && !readOnly {
+			continue
+		}
+		if (isolation && isolationScope == tree.TransactionScopeGlobal) ||
+			(readOnly && readOnlyScope == tree.TransactionScopeGlobal) {
+			if err := doCheckRole(ctx, ses); err != nil {
+				return err
+			}
+		}
+		if isDefault {
+			if isolation && isolationScope == tree.TransactionScopeNext && activeTxnAtStart {
+				return moerr.NewCantChangeTxCharacteristics(ctx)
+			}
+			continue
+		}
+		if readOnly {
+			if normalized, ok := transactionReadOnlyBooleanValue(assign.Value); ok {
+				value = normalized
+			}
+		}
+		def, ok := gSysVarsDefs[assign.Name]
+		if !ok {
+			return moerr.NewInternalErrorf(ctx,
+				"transaction system variable %q is not registered", assign.Name)
+		}
+		converted, err := def.GetType().Convert(value)
+		if err != nil {
+			return err
+		}
+		if isolation {
+			if _, err = txnIsolationFromSystemValue(ctx, converted); err != nil {
+				return err
+			}
+			if isolationScope == tree.TransactionScopeNext && activeTxnAtStart {
+				return moerr.NewCantChangeTxCharacteristics(ctx)
+			}
+		}
+	}
+	return nil
+}
+
 func doSetVar(
 	ses *Session,
 	execCtx *ExecCtx,
@@ -1337,6 +1473,19 @@ func doSetVar(
 				return moerr.NewNotSupported(execCtx.reqCtx,
 					"prepared multi-assignment SET supports user variables only")
 			}
+		}
+	}
+	if err := validateTransactionAssignmentScopes(execCtx.reqCtx, sv); err != nil {
+		return err
+	}
+	if !preparedExpression {
+		if err := validateStaticTransactionAssignments(
+			execCtx.reqCtx,
+			ses,
+			sv,
+			execCtx.txnOpt.activeTxnAtStartKnown && execCtx.txnOpt.activeTxnAtStart,
+		); err != nil {
+			return err
 		}
 	}
 
@@ -1416,15 +1565,26 @@ func doSetVar(
 		}
 
 		if systemVar, exists := gSysVarsDefs[assign.Name]; exists {
-			if isDefault, isBool := value.(bool); isBool && isDefault {
+			_, isDefault := assign.Value.(*tree.DefaultVal)
+			if isDefault {
 				if scope, isTxnIsolation := transactionIsolationAssignmentScope(assign); isTxnIsolation {
 					value, evalErr = transactionIsolationDefaultValue(
 						execCtx.reqCtx, ses, scope)
 					if evalErr != nil {
 						return evaluatedAssignment{}, evalErr
 					}
+				} else if scope, isTxnReadOnly := transactionReadOnlyAssignmentScope(assign); isTxnReadOnly {
+					value, evalErr = transactionReadOnlyDefaultValue(
+						execCtx.reqCtx, ses, scope)
+					if evalErr != nil {
+						return evaluatedAssignment{}, evalErr
+					}
 				} else {
 					value = systemVar.Default
+				}
+			} else if _, isTxnReadOnly := transactionReadOnlyAssignmentScope(assign); isTxnReadOnly {
+				if boolValue, isBool := transactionReadOnlyBooleanValue(assign.Value); isBool {
+					value = boolValue
 				}
 			}
 		}
@@ -1575,6 +1735,19 @@ func doSetVar(
 				ses.markMigrationSystemVarReplayable(
 					migrationNextTxnIsolationKey, !preparedExpression && sql != "" && execCtx.singleStatementQuery)
 				return nil
+			case tree.TransactionScopeSession:
+				return setVarFunc(true, false, name, value, sql)
+			case tree.TransactionScopeGlobal:
+				return setVarFunc(true, true, name, value, sql)
+			default:
+				return moerr.NewInvalidInputf(execCtx.reqCtx,
+					"unsupported transaction scope %d", scope)
+			}
+		} else if scope, isTxnReadOnly := transactionReadOnlyAssignmentScope(assign); isTxnReadOnly {
+			switch scope {
+			case tree.TransactionScopeNext:
+				return moerr.NewNotSupported(execCtx.reqCtx,
+					"transaction access mode is only supported for SESSION scope")
 			case tree.TransactionScopeSession:
 				return setVarFunc(true, false, name, value, sql)
 			case tree.TransactionScopeGlobal:
@@ -1764,42 +1937,61 @@ func handleSetTransaction(ses *Session, execCtx *ExecCtx, stmt *tree.SetTransact
 		}
 	}
 
+	var accessMode string
+	var readOnly int64
 	if accessCharacteristic != nil {
-		var accessMode string
 		switch accessCharacteristic.Access {
 		case tree.ACCESS_MODE_READ_ONLY:
 			accessMode = "READ ONLY"
+			readOnly = 1
 		case tree.ACCESS_MODE_READ_WRITE:
 			accessMode = "READ WRITE"
 		default:
 			return moerr.NewInvalidInputf(execCtx.reqCtx,
 				"unsupported transaction access mode %d", accessCharacteristic.Access)
 		}
-		return moerr.NewNotSupported(execCtx.reqCtx,
-			"transaction access mode "+accessMode+" is not supported")
-	}
-	if isolationCharacteristic == nil {
-		return moerr.NewInvalidInput(execCtx.reqCtx,
-			"transaction characteristic list must not be empty")
+		if stmt.Scope != tree.TransactionScopeSession {
+			return moerr.NewNotSupported(execCtx.reqCtx,
+				"transaction access mode "+accessMode+" is only supported for SESSION scope")
+		}
 	}
 
 	var value string
 	var isolation pbtxn.TxnIsolation
-	switch isolationCharacteristic.Isolation {
-	case tree.ISOLATION_LEVEL_REPEATABLE_READ:
-		value = "REPEATABLE-READ"
-		isolation = pbtxn.TxnIsolation_SI
-	case tree.ISOLATION_LEVEL_READ_COMMITTED:
-		value = "READ-COMMITTED"
-		isolation = pbtxn.TxnIsolation_RC
-	case tree.ISOLATION_LEVEL_READ_UNCOMMITTED:
-		return moerr.NewNotSupported(execCtx.reqCtx,
-			"transaction isolation level READ-UNCOMMITTED is not supported")
-	case tree.ISOLATION_LEVEL_SERIALIZABLE:
-		return moerr.NewNotSupported(execCtx.reqCtx,
-			"transaction isolation level SERIALIZABLE is not supported")
-	default:
-		return moerr.NewInvalidInputf(execCtx.reqCtx, "unsupported transaction isolation level %d", isolationCharacteristic.Isolation)
+	if isolationCharacteristic != nil {
+		switch isolationCharacteristic.Isolation {
+		case tree.ISOLATION_LEVEL_REPEATABLE_READ:
+			value = "REPEATABLE-READ"
+			isolation = pbtxn.TxnIsolation_SI
+		case tree.ISOLATION_LEVEL_READ_COMMITTED:
+			value = "READ-COMMITTED"
+			isolation = pbtxn.TxnIsolation_RC
+		case tree.ISOLATION_LEVEL_READ_UNCOMMITTED:
+			return moerr.NewNotSupported(execCtx.reqCtx,
+				"transaction isolation level READ-UNCOMMITTED is not supported")
+		case tree.ISOLATION_LEVEL_SERIALIZABLE:
+			return moerr.NewNotSupported(execCtx.reqCtx,
+				"transaction isolation level SERIALIZABLE is not supported")
+		default:
+			return moerr.NewInvalidInputf(execCtx.reqCtx, "unsupported transaction isolation level %d", isolationCharacteristic.Isolation)
+		}
+	}
+
+	if accessCharacteristic != nil {
+		// Connector/J uses SET SESSION TRANSACTION READ ONLY/READ WRITE for
+		// Connection.setReadOnly. Keep both MySQL spellings synchronized so
+		// frameworks that inspect either variable observe the negotiated mode.
+		if err := ses.SetSessionSysVar(
+			execCtx.reqCtx, transactionReadOnlySystemVariable, readOnly); err != nil {
+			return err
+		}
+	}
+	if isolationCharacteristic == nil {
+		if accessCharacteristic == nil {
+			return moerr.NewInvalidInput(execCtx.reqCtx,
+				"transaction characteristic list must not be empty")
+		}
+		return nil
 	}
 
 	switch stmt.Scope {
