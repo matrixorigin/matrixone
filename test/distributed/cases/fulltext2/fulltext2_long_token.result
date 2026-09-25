@@ -1,0 +1,48 @@
+drop database if exists ft2_longtok;
+create database ft2_longtok;
+use ft2_longtok;
+set experimental_fulltext2_index = 1;
+create table ft(id int primary key, body varchar(200));
+insert into ft values
+(1, 'bbbbbbbbbbbbbbbbbbbbbbbbbb'),
+(2, 'aaaaaaaaaaaaaaaaaaaaaaa'),
+(3, 'hello bbbbbbbbbbbbbbbbbbbbbbbbbb'),
+(4, 'short'),
+(5, 'aяяяяяяяяяяяя');
+create fulltext2 index fi on ft(body) with parser ngram;
+select id from ft where match(body) against('bbbbbbbbbbbbbbbbbbbbbbbbbb') order by id;
+➤ id[4,32,0]  𝄀
+1  𝄀
+3
+select id from ft where match(body) against('bbbbbbbbbbbbbbbbbbbbbbbbbb' in bm25 mode) order by id;
+➤ id[4,32,0]  𝄀
+1  𝄀
+3
+select id from ft where match(body) against('"bbbbbbbbbbbbbbbbbbbbbbbbbb"' in boolean mode) order by id;
+➤ id[4,32,0]  𝄀
+1  𝄀
+3
+select id from ft where match(body) against('hello bbbbbbbbbbbbbbbbbbbbbbbbbb') order by id;
+➤ id[4,32,0]  𝄀
+3
+select id from ft where match(body) against('aяяяяяяяяяяяя') order by id;
+➤ id[4,32,0]  𝄀
+5
+select id from ft where match(body) against('aяяяяяяяяяяяя' in bm25 mode) order by id;
+➤ id[4,32,0]  𝄀
+5
+select id from ft where match(body) against('"aяяяяяяяяяяяя"' in boolean mode) order by id;
+➤ id[4,32,0]  𝄀
+5
+select id from ft where match(body) against('bbbbbbbbbbbbbbbbbbbbbbbbbb' in boolean mode) order by id;
+➤ id[4,32,0]  𝄀
+1  𝄀
+3
+select id from ft where match(body) against('+bbbbbbbbbbbbbbbbbbbbbbbbbb' in boolean mode) order by id;
+➤ id[4,32,0]  𝄀
+1  𝄀
+3
+select id from ft where match(body) against('aaaaaaaaaaaaaaaaaaaaaaa') order by id;
+➤ id[4,32,0]  𝄀
+2
+drop database ft2_longtok;
