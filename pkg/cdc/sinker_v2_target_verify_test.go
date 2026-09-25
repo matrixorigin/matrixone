@@ -16,6 +16,7 @@ package cdc
 
 import (
 	"context"
+	"database/sql"
 	"regexp"
 	"testing"
 
@@ -26,7 +27,7 @@ import (
 )
 
 func TestVerifyCDCTargetTableStructure(t *testing.T) {
-	const columnsSQL = "SELECT column_name, column_type, collation_name FROM information_schema.columns WHERE table_schema = ? AND table_name = ? ORDER BY ordinal_position"
+	const columnsSQL = "SELECT column_name, column_type, collation_name, numeric_scale FROM information_schema.columns WHERE table_schema = ? AND table_name = ? ORDER BY ordinal_position"
 	const indexesSQL = "SELECT index_name, non_unique, seq_in_index, column_name, sub_part FROM information_schema.statistics WHERE table_schema = ? AND table_name = ? ORDER BY index_name, seq_in_index"
 	type column struct{ name, typ string }
 	type index struct {
@@ -51,6 +52,9 @@ func TestVerifyCDCTargetTableStructure(t *testing.T) {
 		{"extra unique index", []column{{"id", "int"}, {"v", "varchar(20)"}}, []index{{"PRIMARY", "id", 0, 1, nil}, {"uk_v", "v", 0, 1, nil}}, false, "unexpected unique key"},
 		{"missing unique index", []column{{"id", "int"}, {"v", "varchar(20)"}}, []index{{"PRIMARY", "id", 0, 1, nil}}, true, "missing a source unique key"},
 		{"prefix unique index", []column{{"id", "int"}, {"v", "varchar(20)"}}, []index{{"PRIMARY", "id", 0, 1, nil}, {"uk_v", "v", 0, 1, int64(4)}}, true, "prefix unique key"},
+		{"valid year display width", []column{{"id", "int"}, {"v", "year(4)"}}, []index{{"PRIMARY", "id", 0, 1, nil}}, false, ""},
+		{"valid MO float scale", []column{{"id", "int"}, {"v", "float(5)"}}, []index{{"PRIMARY", "id", 0, 1, nil}}, false, ""},
+		{"different MO float scale", []column{{"id", "int"}, {"v", "float(5)"}}, nil, false, "column 2"},
 	}
 	for _, tc := range tests {
 		t.Run(tc.name, func(t *testing.T) {
@@ -68,22 +72,36 @@ func TestVerifyCDCTargetTableStructure(t *testing.T) {
 				},
 				Pkey: &plan.PrimaryKeyDef{Names: []string{"id"}},
 			}
+			switch tc.name {
+			case "valid year display width":
+				def.Cols[1].Typ = plan.Type{Id: int32(types.T_year), Width: 4}
+			case "valid MO float scale", "different MO float scale":
+				def.Cols[1].Typ = plan.Type{Id: int32(types.T_float32), Width: 5, Scale: 2}
+			}
 			if tc.unique {
 				def.Indexes = []*plan.IndexDef{{IndexName: "uk_v", Parts: []string{"v"}, Unique: true}}
 			}
-			columnRows := sqlmock.NewRows([]string{"column_name", "column_type", "collation_name"})
+			columnRows := sqlmock.NewRows([]string{"column_name", "column_type", "collation_name", "numeric_scale"})
 			for _, col := range tc.columns {
 				var collation any
+				var numericScale any
+				if tc.name == "valid MO float scale" {
+					numericScale = int64(2)
+				} else if tc.name == "different MO float scale" {
+					numericScale = int64(3)
+				}
 				if col.name == "v" {
 					collation = "utf8mb4_bin"
 					if tc.name == "changed text collation" {
 						collation = "utf8mb4_general_ci"
 					}
 				}
-				columnRows.AddRow(col.name, col.typ, collation)
+				columnRows.AddRow(col.name, col.typ, collation, numericScale)
 			}
 			mock.ExpectQuery(regexp.QuoteMeta(columnsSQL)).WithArgs("dst", "t").WillReturnRows(columnRows)
-			if len(tc.columns) == 2 && tc.columns[0].name == "id" && tc.columns[1].typ == "varchar(20)" && tc.name != "changed text collation" {
+			if len(tc.columns) == 2 && tc.columns[0].name == "id" &&
+				(tc.columns[1].typ == "varchar(20)" && tc.name != "changed text collation" ||
+					tc.name == "valid year display width" || tc.name == "valid MO float scale") {
 				indexRows := sqlmock.NewRows([]string{"index_name", "non_unique", "seq_in_index", "column_name", "sub_part"})
 				for _, idx := range tc.indexes {
 					indexRows.AddRow(idx.name, idx.nonUnique, idx.sequence, idx.column, idx.prefix)
@@ -126,7 +144,7 @@ func TestNormalizeCDCTargetColumnTypeFromMOAndMySQL(t *testing.T) {
 	require.NotEqual(t, normalizeCDCTargetColumnType("decimal(16,6)"), normalizeCDCTargetColumnType("decimal(8,2)"))
 	require.NotEqual(t, normalizeCDCTargetColumnType("ENUM('a b')"), normalizeCDCTargetColumnType("ENUM('ab')"))
 	require.NotEqual(t, normalizeCDCTargetColumnType("ENUM('integer')"), normalizeCDCTargetColumnType("ENUM('int')"))
-	require.False(t, cdcTargetColumnTypeMatches(plan.Type{Id: int32(types.T_int8)}, "BOOL(0)", CDCSinkType_MO))
-	require.True(t, cdcTargetColumnTypeMatches(plan.Type{Id: int32(types.T_bool)}, "tinyint(1)", CDCSinkType_MySQL))
-	require.False(t, cdcTargetColumnTypeMatches(plan.Type{Id: int32(types.T_bool)}, "tinyint(1)", CDCSinkType_MO))
+	require.False(t, cdcTargetColumnTypeMatches(plan.Type{Id: int32(types.T_int8)}, "BOOL(0)", CDCSinkType_MO, sql.NullInt64{}))
+	require.True(t, cdcTargetColumnTypeMatches(plan.Type{Id: int32(types.T_bool)}, "tinyint(1)", CDCSinkType_MySQL, sql.NullInt64{}))
+	require.False(t, cdcTargetColumnTypeMatches(plan.Type{Id: int32(types.T_bool)}, "tinyint(1)", CDCSinkType_MO, sql.NullInt64{}))
 }

@@ -77,6 +77,34 @@ func TestCDCTargetGenerationVerificationOnMO(t *testing.T) {
 		require.NoError(t, cdc.VerifyOwnedTarget(ctx, sink, 0, "verify", good, source, fence, cdc.CDCDefaultSendSqlTimeout))
 		bad := &cdc.DbTableInfo{SinkDbName: "cdc_generation_verify", SinkTblName: "bad", SourceTblId: 42}
 		require.ErrorContains(t, cdc.VerifyOwnedTarget(ctx, sink, 0, "verify", bad, source, fence, cdc.CDCDefaultSendSqlTimeout), "collation differs")
+		for _, tc := range []struct {
+			name, ddl string
+			typ       plan.Type
+			wantError bool
+		}{
+			{"year_type", "YEAR", plan.Type{Id: int32(types.T_year), Width: 4}, false},
+			{"float_scale", "FLOAT(5,2)", plan.Type{Id: int32(types.T_float32), Width: 5, Scale: 2}, false},
+			{"double_scale", "DOUBLE(6,5)", plan.Type{Id: int32(types.T_float64), Width: 6, Scale: 5}, false},
+			{"wrong_float_scale", "FLOAT(5,3)", plan.Type{Id: int32(types.T_float32), Width: 5, Scale: 2}, true},
+		} {
+			t.Run(tc.name, func(t *testing.T) {
+				_, createErr := conn.ExecContext(ctx, fmt.Sprintf(
+					"CREATE TABLE cdc_generation_verify.%s (id INT PRIMARY KEY, v %s)", tc.name, tc.ddl))
+				require.NoError(t, createErr)
+				typedSource := &plan.TableDef{Cols: []*plan.ColDef{
+					{Name: "id", Typ: plan.Type{Id: int32(types.T_int32)}},
+					{Name: "v", Typ: tc.typ},
+				}, Pkey: &plan.PrimaryKeyDef{Names: []string{"id"}}}
+				info := &cdc.DbTableInfo{SinkDbName: "cdc_generation_verify", SinkTblName: tc.name, SourceTblId: 42}
+				verifyErr := cdc.VerifyOwnedTarget(ctx, sink, 0, "verify", info,
+					typedSource, fence, cdc.CDCDefaultSendSqlTimeout)
+				if tc.wantError {
+					require.ErrorContains(t, verifyErr, "column 2 differs")
+				} else {
+					require.NoError(t, verifyErr)
+				}
+			})
+		}
 	})
 }
 

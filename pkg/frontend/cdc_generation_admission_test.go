@@ -39,14 +39,16 @@ type futureCDCAdmissionCatalog struct {
 }
 
 type cdcSourceKeyCatalog struct {
-	rows [][]string
-	err  error
+	rows    [][]string
+	err     error
+	queries int
 }
 
 func (*cdcSourceKeyCatalog) Exec(context.Context, string, ie.SessionOverrideOptions) error {
 	return nil
 }
 func (c *cdcSourceKeyCatalog) Query(context.Context, string, ie.SessionOverrideOptions) ie.InternalExecResult {
+	c.queries++
 	return &claimLossWatermarkResult{rows: c.rows, err: c.err}
 }
 func (*cdcSourceKeyCatalog) ApplySessionOverride(ie.SessionOverrideOptions) {}
@@ -231,7 +233,7 @@ func TestCDCMode2CaseOnlyRenameBlocksNewWatermarkKey(t *testing.T) {
 				ie:     &cdcSourceKeyCatalog{rows: tc.rows, err: tc.queryErr},
 				tables: cdc.PatternTuples{SourceCaseMode: 2},
 			}
-			ambiguous, err := exec.rejectAmbiguousSourceKey(context.Background(), key)
+			ambiguous, err := exec.rejectAmbiguousSourceKey(context.Background(), key, &cdcSourceKeyIndex{})
 			require.Equal(t, tc.ambiguous, ambiguous)
 			if tc.ambiguous {
 				require.ErrorContains(t, err, "case-only rename")
@@ -242,4 +244,24 @@ func TestCDCMode2CaseOnlyRenameBlocksNewWatermarkKey(t *testing.T) {
 			}
 		})
 	}
+}
+
+func TestCDCMode2SourceKeyIndexReadsOnceAndTracksNewKeys(t *testing.T) {
+	catalog := &cdcSourceKeyCatalog{rows: [][]string{{"db", "existing"}}}
+	exec := &CDCTaskExecutor{ie: catalog, tables: cdc.PatternTuples{SourceCaseMode: 2}}
+	index := &cdcSourceKeyIndex{}
+	ctx := context.Background()
+	for _, name := range []string{"first", "second", "third"} {
+		key := &cdc.WatermarkKey{DBName: "db", TableName: name}
+		ambiguous, err := exec.rejectAmbiguousSourceKey(ctx, key, index)
+		require.NoError(t, err)
+		require.False(t, ambiguous)
+		index.add(key) // The callback inserted this watermark after the initial read.
+	}
+	require.Equal(t, 1, catalog.queries)
+	alias := &cdc.WatermarkKey{DBName: "DB", TableName: "FIRST"}
+	ambiguous, err := exec.rejectAmbiguousSourceKey(ctx, alias, index)
+	require.True(t, ambiguous)
+	require.ErrorContains(t, err, "case-only rename")
+	require.Equal(t, 1, catalog.queries)
 }

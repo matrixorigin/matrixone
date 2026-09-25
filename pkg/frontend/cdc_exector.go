@@ -3014,6 +3014,7 @@ func (exec *CDCTaskExecutor) handleNewTablesForGeneration(
 	successCount := 0
 	accountTbls := allAccountTbls[accountId]
 	exec.stopReadersMissingFromScan(accountTbls)
+	sourceKeys := &cdcSourceKeyIndex{}
 
 	for key, info := range accountTbls {
 		if exec.exclude != nil && exec.exclude.MatchString(key) {
@@ -3116,7 +3117,7 @@ func (exec *CDCTaskExecutor) handleNewTablesForGeneration(
 			pipelineOwnerFence = exec.currentDaemonClaimFence()
 		}
 		if err = exec.addExecPipelineForTable(
-			ctx, newTableInfo, txnOp, pipelineOwnerFence); err != nil {
+			ctx, newTableInfo, txnOp, pipelineOwnerFence, sourceKeys); err != nil {
 			logutil.Error(
 				"cdc.frontend.task.add_exec_pipeline_failed",
 				zap.String("task-name", exec.spec.TaskName),
@@ -3419,36 +3420,72 @@ func (exec *CDCTaskExecutor) matchesSourceName(name, pattern string) bool {
 	return cdc.CDCSourceNameMatches(name, pattern, exec.tables.SourceCaseMode)
 }
 
+type cdcSourceKey struct{ db, table string }
+
+// The index belongs to one callback. A restart can admit many tables, but a
+// task's watermark names need only be read once for that batch.
+type cdcSourceKeyIndex struct {
+	loaded bool
+	err    error
+	byFold map[cdcSourceKey][]cdcSourceKey
+}
+
+func (index *cdcSourceKeyIndex) add(key *cdc.WatermarkKey) {
+	raw := cdcSourceKey{key.DBName, key.TableName}
+	fold := cdcSourceKey{
+		cdc.CDCSourceIdentifierKey(raw.db, 2),
+		cdc.CDCSourceIdentifierKey(raw.table, 2),
+	}
+	for _, prior := range index.byFold[fold] {
+		if prior == raw {
+			return
+		}
+	}
+	index.byFold[fold] = append(index.byFold[fold], raw)
+}
+
 // A mode-2 rename can change only the stored spelling of a source name. The
 // watermark key is still case preserving, so admitting that spelling as a new
 // key would leave the old reader and target generation unaccounted for.
-func (exec *CDCTaskExecutor) rejectAmbiguousSourceKey(ctx context.Context, key *cdc.WatermarkKey) (bool, error) {
+func (exec *CDCTaskExecutor) rejectAmbiguousSourceKey(
+	ctx context.Context, key *cdc.WatermarkKey, index *cdcSourceKeyIndex,
+) (bool, error) {
 	if exec.tables.SourceCaseMode != 2 {
 		return false, nil
 	}
-	readCtx := defines.AttachAccountId(ctx, catalog.System_Account)
-	res := exec.ie.Query(readCtx,
-		cdc.CDCSQLBuilder.GetTaskWatermarksSQL(key.AccountId, key.TaskId), ie.SessionOverrideOptions{})
-	if err := res.Error(); err != nil {
-		return false, err
+	if !index.loaded {
+		index.loaded = true
+		index.byFold = make(map[cdcSourceKey][]cdcSourceKey)
+		readCtx := defines.AttachAccountId(ctx, catalog.System_Account)
+		res := exec.ie.Query(readCtx,
+			cdc.CDCSQLBuilder.GetTaskWatermarksSQL(key.AccountId, key.TaskId), ie.SessionOverrideOptions{})
+		if index.err = res.Error(); index.err != nil {
+			return false, index.err
+		}
+		for row := uint64(0); row < res.RowCount(); row++ {
+			db, err := res.GetString(readCtx, row, 0)
+			if err != nil {
+				index.err = err
+				return false, err
+			}
+			table, err := res.GetString(readCtx, row, 1)
+			if err != nil {
+				index.err = err
+				return false, err
+			}
+			index.add(&cdc.WatermarkKey{DBName: db, TableName: table})
+		}
 	}
-	wantDB := cdc.CDCSourceIdentifierKey(key.DBName, 2)
-	wantTable := cdc.CDCSourceIdentifierKey(key.TableName, 2)
-	for row := uint64(0); row < res.RowCount(); row++ {
-		db, err := res.GetString(readCtx, row, 0)
-		if err != nil {
-			return false, err
-		}
-		table, err := res.GetString(readCtx, row, 1)
-		if err != nil {
-			return false, err
-		}
-		if (db != key.DBName || table != key.TableName) &&
-			cdc.CDCSourceIdentifierKey(db, 2) == wantDB &&
-			cdc.CDCSourceIdentifierKey(table, 2) == wantTable {
+	if index.err != nil {
+		return false, index.err
+	}
+	want := cdcSourceKey{cdc.CDCSourceIdentifierKey(key.DBName, 2),
+		cdc.CDCSourceIdentifierKey(key.TableName, 2)}
+	for _, prior := range index.byFold[want] {
+		if prior.db != key.DBName || prior.table != key.TableName {
 			return true, moerr.NewInternalErrorf(ctx,
 				"CDC source %s.%s has ambiguous watermark keys %s.%s and %s.%s after a case-only rename; explicit recovery is required",
-				key.DBName, key.TableName, db, table, key.DBName, key.TableName)
+				key.DBName, key.TableName, prior.db, prior.table, key.DBName, key.TableName)
 		}
 	}
 	return false, nil
@@ -3460,6 +3497,7 @@ func (exec *CDCTaskExecutor) addExecPipelineForTable(
 	info *cdc.DbTableInfo,
 	txnOp client.TxnOperator,
 	ownerFence *cdc.OwnerFence,
+	sourceKeys *cdcSourceKeyIndex,
 ) (err error) {
 	// Test-only admission fence. The public SQL regression drives a real
 	// detector scan while this callback is held, preserving CREATE-returned
@@ -3485,11 +3523,8 @@ func (exec *CDCTaskExecutor) addExecPipelineForTable(
 		DBName:    info.SourceDbName,
 		TableName: info.SourceTblName,
 	}
-	if ambiguous, keyErr := exec.rejectAmbiguousSourceKey(ctx, &watermarkKey); keyErr != nil {
-		if ambiguous {
-			return exec.failTaskForPermanentTableError(ctx, info, keyErr.Error())
-		}
-		return keyErr
+	if sourceKeys == nil {
+		sourceKeys = &cdcSourceKeyIndex{}
 	}
 	if !exec.generationAware {
 		_, legacyGeneration, found, readErr := exec.watermarkUpdater.GetWatermarkProgressIfExists(ctx, &watermarkKey)
@@ -3502,9 +3537,8 @@ func (exec *CDCTaskExecutor) addExecPipelineForTable(
 		}
 	}
 	if exec.noFull && watermark.IsEmpty() {
-		// A stable-protocol marker without its lossless start_ts is a malformed
-		// catalog row. Do not silently replace the activation boundary with a
-		// later executor snapshot.
+		// A missing durable start is malformed; a later snapshot is not a
+		// valid replacement for the task's admission boundary.
 		return moerr.NewInternalErrorNoCtx("CDC NoFull task has a stable protocol marker without a durable start timestamp")
 	}
 	if ownerFence == nil {
@@ -3519,6 +3553,17 @@ func (exec *CDCTaskExecutor) addExecPipelineForTable(
 				return ownerFence.Check(ctx)
 			}
 		}
+	}
+	if ambiguous, keyErr := exec.rejectAmbiguousSourceKey(ctx, &watermarkKey, sourceKeys); keyErr != nil {
+		if ambiguous {
+			return exec.failTaskForPermanentTableError(ctx, info, keyErr.Error())
+		}
+		return keyErr
+	}
+	if exec.tables.SourceCaseMode == 2 {
+		// An uncertain catalog result may already have committed this key. Keep
+		// the remaining admissions in this callback conservative.
+		sourceKeys.add(&watermarkKey)
 	}
 	if watermark, err = exec.watermarkUpdater.GetOrAddCommitted(
 		ctx,

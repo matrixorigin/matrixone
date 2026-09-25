@@ -372,7 +372,7 @@ func verifyCDCTargetTable(
 		origin[col.Name] = col.GetOriginCaseName()
 	}
 	rows, err := executor.targetLockConn.QueryContext(ctx,
-		"SELECT column_name, column_type, collation_name FROM information_schema.columns "+
+		"SELECT column_name, column_type, collation_name, numeric_scale FROM information_schema.columns "+
 			"WHERE table_schema = ? AND table_name = ? ORDER BY ordinal_position",
 		info.SinkDbName, info.SinkTblName)
 	if err != nil {
@@ -382,11 +382,12 @@ func verifyCDCTargetTable(
 	for rows.Next() {
 		var name, typ string
 		var collation sql.NullString
-		if err = rows.Scan(&name, &typ, &collation); err != nil {
+		var numericScale sql.NullInt64
+		if err = rows.Scan(&name, &typ, &collation, &numericScale); err != nil {
 			break
 		}
 		if columnCount >= len(visible) || name != visible[columnCount].GetOriginCaseName() ||
-			!cdcTargetColumnTypeMatches(visible[columnCount].Typ, typ, sinkType) {
+			!cdcTargetColumnTypeMatches(visible[columnCount].Typ, typ, sinkType, numericScale) {
 			err = moerr.NewInternalErrorf(ctx, "CDC target %s.%s column %d differs from source generation %d",
 				info.SinkDbName, info.SinkTblName, columnCount+1, info.SourceTblId)
 			break
@@ -538,7 +539,7 @@ func VerifyOwnedTarget(
 
 var (
 	cdcIntegerDisplayWidth = regexp.MustCompile(`(tinyint|smallint|mediumint|bigint|int)(unsigned)?\([0-9]+\)`)
-	cdcScalarZeroWidth     = regexp.MustCompile(`(float|double|date|datetime|timestamp|time|bool|json)\(0\)`)
+	cdcScalarZeroWidth     = regexp.MustCompile(`(float|double|date|datetime|timestamp|time|bool|json|uuid|datalink)\(0\)`)
 )
 
 func normalizeCDCTargetColumnType(raw string) string {
@@ -552,15 +553,29 @@ func normalizeCDCTargetColumnType(raw string) string {
 		typ = "int" + strings.TrimPrefix(typ, "integer")
 	}
 	typ = cdcScalarZeroWidth.ReplaceAllString(typ, "$1")
+	if typ == "year(4)" {
+		return "year"
+	}
 	if typ == "boolean" {
 		return "bool"
 	}
 	return cdcIntegerDisplayWidth.ReplaceAllString(typ, "$1$2")
 }
 
-func cdcTargetColumnTypeMatches(source plan.Type, target, sinkType string) bool {
+func cdcTargetColumnTypeMatches(source plan.Type, target, sinkType string, numericScale sql.NullInt64) bool {
 	want := normalizeCDCTargetColumnType(plan2.FormatColType(source))
 	got := normalizeCDCTargetColumnType(target)
+	if sinkType == CDCSinkType_MO && source.Width > 0 && source.Scale >= 0 &&
+		(types.T(source.Id) == types.T_float32 || types.T(source.Id) == types.T_float64) {
+		// MO's COLUMN_TYPE prints FLOAT(M) and DOUBLE(M) without D. The
+		// independent NUMERIC_SCALE field retains D, so verify both fields.
+		name := "float"
+		if types.T(source.Id) == types.T_float64 {
+			name = "double"
+		}
+		return numericScale.Valid && numericScale.Int64 == int64(source.Scale) &&
+			got == fmt.Sprintf("%s(%d)", name, source.Width)
+	}
 	if want == got {
 		return true
 	}

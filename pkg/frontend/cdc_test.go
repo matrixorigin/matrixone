@@ -6327,7 +6327,7 @@ func TestLegacyCDCAdmissionRequiresGeneration(t *testing.T) {
 	info := &cdc.DbTableInfo{SourceDbName: "db", SourceTblName: "t", SourceTblId: 42}
 	require.NoError(t, taskExecutor.stateMachine.Transition(TransitionStart))
 	require.NoError(t, taskExecutor.stateMachine.Transition(TransitionStartSuccess))
-	err := taskExecutor.addExecPipelineForTable(context.Background(), info, nil, nil)
+	err := taskExecutor.addExecPipelineForTable(context.Background(), info, nil, nil, nil)
 	require.ErrorContains(t, err, "legacy CDC target generation is unknown")
 	require.Equal(t, StateFailed, taskExecutor.stateMachine.State())
 	_, hasReader := taskExecutor.runningReaders.Load("db.t")
