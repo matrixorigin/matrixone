@@ -1706,6 +1706,12 @@ func TestTableDumpBoundPayloadRejectsExpansionBeforeUnmarshal(t *testing.T) {
 		columns = protowire.AppendBytes(columns, nil)
 	}
 	require.ErrorContains(t, preflightTableDumpBoundPayload(columns), "too many columns")
+	producer := &plan.TableDef{Cols: make([]*plan.ColDef, 16_385)}
+	for i := range producer.Cols {
+		producer.Cols[i] = &plan.ColDef{}
+	}
+	_, _, err := tableDumpBoundExpressions(producer)
+	require.ErrorContains(t, err, "too many columns")
 
 	var expr []byte
 	for range 65 {
