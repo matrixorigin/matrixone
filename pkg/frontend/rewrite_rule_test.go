@@ -791,6 +791,21 @@ func TestRewritePolicySnapshotUsesCurrentSQLModeAndFrozenEnablement(t *testing.T
 	}
 }
 
+func TestDisabledRewritePolicySnapshotCapturesGeneration(t *testing.T) {
+	ctx := context.Background()
+	ctrl := gomock.NewController(t)
+	ses := newTestSession(t, ctrl)
+	ses.rewriteEnabled.Store(false)
+	ses.ruleCache = map[string]string{}
+	ses.bumpRewritePolicyGeneration()
+
+	policy, err := captureRewritePolicy(ctx, ses)
+	require.NoError(t, err)
+	require.True(t, policy.captured)
+	require.False(t, policy.enabled)
+	require.Equal(t, uint64(1), policy.generation)
+}
+
 func TestRewriteSQLFromMaterializedPolicy(t *testing.T) {
 	ctx := context.Background()
 	outer := `/*+ {"rewrites":{"src.t":["select * from src.t where role_keep = 1","select * from src.t where session_keep = 1"]},"remapdb":{"src":"session_db"}} */ prepare s from 'select 1'`

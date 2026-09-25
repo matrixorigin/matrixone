@@ -836,6 +836,34 @@ func TestMigrateConnectionFromRejectsPendingPreparedLongData(t *testing.T) {
 	require.Equal(t, prepared.Name, resp.PrepareStmts[0].Name)
 }
 
+func TestMigrateConnectionFromRejectsInvalidatedRewritePreparedStmt(t *testing.T) {
+	ctrl := gomock.NewController(t)
+	ses := newTestSession(t, ctrl)
+	ses.rewriteEnabled.Store(true)
+	prepared := &PrepareStmt{
+		Name: GetPrepareStmtName(41),
+		Sql:  "select 1",
+	}
+	require.NoError(t, ses.SetPrepareStmt(context.Background(), prepared.Name, prepared))
+	ses.SetLastStmtID(41)
+	ses.InvalidatePrivilegeCache()
+
+	rt := &Routine{mc: newMigrateController()}
+	rt.setSession(ses)
+	err := rt.migrateConnectionFrom(&query.MigrateConnFromResponse{})
+	require.Error(t, err)
+	require.True(t, moerr.IsMoErrCode(err, moerr.OkExpectedNotSafeToStartTransfer))
+
+	// The client must explicitly close the invalidated handle before migration;
+	// the next binary PREPARE must not reuse its statement ID.
+	require.True(t, ses.RemovePrepareStmt(prepared.Name))
+	resp := &query.MigrateConnFromResponse{}
+	require.NoError(t, rt.migrateConnectionFrom(resp))
+	require.Empty(t, resp.PrepareStmts)
+	require.Equal(t, uint32(41), ses.GetLastStmtId())
+	require.Equal(t, uint32(42), ses.GenNewStmtId())
+}
+
 func TestMigrateConnectionFromExportsEvaluatedUserVariables(t *testing.T) {
 	ctrl := gomock.NewController(t)
 	defer ctrl.Finish()

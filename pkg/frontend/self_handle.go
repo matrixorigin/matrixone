@@ -540,6 +540,7 @@ func execInFrontend(ses *Session, execCtx *ExecCtx) (stats statistic.StatsArray,
 			if err = handleGrantRole(ses, execCtx, &st.GrantRole); err != nil {
 				return
 			}
+			ses.refreshRewritePolicyAndValidatePrepared(execCtx.reqCtx)
 		case tree.GrantTypePrivilege:
 			if err = handleGrantPrivilege(ses, execCtx, &st.GrantPrivilege); err != nil {
 				return
@@ -554,6 +555,7 @@ func execInFrontend(ses *Session, execCtx *ExecCtx) (stats statistic.StatsArray,
 			if err = handleRevokeRole(ses, execCtx, &st.RevokeRole); err != nil {
 				return
 			}
+			ses.refreshRewritePolicyAndValidatePrepared(execCtx.reqCtx)
 		case tree.RevokeTypePrivilege:
 			if err = handleRevokePrivilege(ses, execCtx, &st.RevokePrivilege); err != nil {
 				return

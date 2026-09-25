@@ -2052,6 +2052,134 @@ func TestRemoveAllPrepareStmts(t *testing.T) {
 	assert.Equal(t, 0, len(ses.prepareStmts))
 }
 
+func TestInvalidatePrivilegeCacheInvalidatesRewritePreparedStatements(t *testing.T) {
+	ctx := context.Background()
+	oldStmt := &PrepareStmt{Name: "old"}
+	ses := &Session{
+		cache:        &privilegeCache{},
+		prepareStmts: map[string]*PrepareStmt{"old": oldStmt},
+	}
+	ses.rewriteEnabled.Store(true)
+
+	ses.InvalidatePrivilegeCache()
+
+	_, err := ses.GetPrepareStmt(ctx, "old")
+	require.Error(t, err)
+	require.True(t, moerr.IsMoErrCode(err, moerr.ErrNeedReprepare))
+	require.Equal(t, moerr.ER_NEED_REPREPARE, err.(*moerr.Error).MySQLCode())
+	require.Empty(t, ses.GetPrepareStmts())
+
+	// Explicit cleanup remains available for an invalidated handle.
+	got, err := ses.getPrepareStmtAllowInvalidated(ctx, "old")
+	require.NoError(t, err)
+	require.Same(t, oldStmt, got)
+
+	// A fresh PREPARE replaces the invalidated handle and is executable.
+	newStmt := &PrepareStmt{Name: "old"}
+	require.NoError(t, ses.SetPrepareStmt(ctx, "old", newStmt))
+	got, err = ses.GetPrepareStmt(ctx, "old")
+	require.NoError(t, err)
+	require.Same(t, newStmt, got)
+}
+
+func TestInvalidatePrivilegeCacheInvalidatesMandatoryRoleRulePreparedStatements(t *testing.T) {
+	stmt := &PrepareStmt{
+		Name:                  "role_rule",
+		rewritePolicyCaptured: true,
+		rewritePolicyEnabled:  true,
+	}
+	ses := &Session{
+		cache:        &privilegeCache{},
+		ruleCache:    map[string]string{"db.t": "select * from db.t where tenant = 1"},
+		prepareStmts: map[string]*PrepareStmt{"role_rule": stmt},
+	}
+	// Mandatory role rules remain active when the optional rewrite switch is
+	// disabled.
+	ses.rewriteEnabled.Store(false)
+
+	ses.InvalidatePrivilegeCache()
+
+	require.True(t, stmt.rewritePolicyInvalidated.Load())
+}
+
+func TestInvalidatePrivilegeCachePreservesPreparedStatementsWithoutRewrite(t *testing.T) {
+	ctx := context.Background()
+	stmt := &PrepareStmt{Name: "stmt"}
+	ses := &Session{
+		cache:        &privilegeCache{},
+		prepareStmts: map[string]*PrepareStmt{"stmt": stmt},
+	}
+
+	ses.InvalidatePrivilegeCache()
+
+	got, err := ses.GetPrepareStmt(ctx, "stmt")
+	require.NoError(t, err)
+	require.Same(t, stmt, got)
+}
+
+func TestSetPrepareStmtRejectsStaleRewritePolicyGeneration(t *testing.T) {
+	ctx := context.Background()
+	for _, testCase := range []struct {
+		name            string
+		capturedEnabled bool
+		currentEnabled  bool
+		currentRoleRule bool
+		invalidated     bool
+	}{
+		{name: "enabled to enabled", capturedEnabled: true, currentEnabled: true, invalidated: true},
+		{name: "enabled to disabled", capturedEnabled: true, currentEnabled: false, invalidated: true},
+		{name: "disabled to enabled", capturedEnabled: false, currentEnabled: true, invalidated: true},
+		{name: "disabled to disabled", capturedEnabled: false, currentEnabled: false},
+		{name: "disabled to mandatory role rule", capturedEnabled: false, currentRoleRule: true, invalidated: true},
+	} {
+		t.Run(testCase.name, func(t *testing.T) {
+			ses := &Session{
+				cache:                   &privilegeCache{},
+				ruleCache:               map[string]string{},
+				prepareStmts:            make(map[string]*PrepareStmt),
+				rewritePolicyGeneration: 1,
+			}
+			if testCase.currentRoleRule {
+				ses.ruleCache["db.t"] = "select * from db.t where tenant = 1"
+			}
+			ses.rewriteEnabled.Store(testCase.currentEnabled)
+			stale := &PrepareStmt{
+				Name:                    "stale",
+				rewritePolicyCaptured:   true,
+				rewritePolicyEnabled:    testCase.capturedEnabled,
+				rewritePolicyGeneration: 0,
+			}
+			require.NoError(t, ses.SetPrepareStmt(ctx, stale.Name, stale))
+			require.Equal(t, testCase.invalidated, stale.rewritePolicyInvalidated.Load())
+			got, err := ses.GetPrepareStmt(ctx, stale.Name)
+			if testCase.invalidated {
+				require.Error(t, err)
+				require.True(t, moerr.IsMoErrCode(err, moerr.ErrNeedReprepare))
+				return
+			}
+			require.NoError(t, err)
+			require.Same(t, stale, got)
+		})
+	}
+
+	ses := &Session{
+		cache:                   &privilegeCache{},
+		prepareStmts:            make(map[string]*PrepareStmt),
+		rewritePolicyGeneration: 1,
+	}
+	ses.rewriteEnabled.Store(true)
+	fresh := &PrepareStmt{
+		Name:                    "fresh",
+		rewritePolicyCaptured:   true,
+		rewritePolicyEnabled:    true,
+		rewritePolicyGeneration: 1,
+	}
+	require.NoError(t, ses.SetPrepareStmt(ctx, fresh.Name, fresh))
+	got, err := ses.GetPrepareStmt(ctx, fresh.Name)
+	require.NoError(t, err)
+	require.Same(t, fresh, got)
+}
+
 func TestPrepareStmtNamesAreCaseInsensitive(t *testing.T) {
 	ctx := context.Background()
 	ses := &Session{prepareStmts: make(map[string]*PrepareStmt)}

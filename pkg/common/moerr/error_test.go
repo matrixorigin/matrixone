@@ -144,6 +144,12 @@ func TestNew_MyErrorCode(t *testing.T) {
 		"Unknown prepared statement handler (stmt1) given to DEALLOCATE PREPARE",
 		err.Error(),
 	)
+
+	err = NewNeedReprepare(context.TODO())
+	require.Equal(t, ErrNeedReprepare, err.ErrorCode())
+	require.Equal(t, ER_NEED_REPREPARE, err.MySQLCode())
+	require.Equal(t, MySQLDefaultSqlState, err.SqlState())
+	require.Equal(t, "Prepared statement needs to be re-prepared", err.Error())
 }
 
 func TestWrongArgumentsMySQLError(t *testing.T) {

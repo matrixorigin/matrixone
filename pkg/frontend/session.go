@@ -259,7 +259,11 @@ type Session struct {
 
 	cache       *privilegeCache
 	ruleCache   map[string]string // rewrite rule cache, nil means not loaded
-	ruleCacheMu sync.RWMutex      // protects ruleCache
+	ruleCacheMu sync.RWMutex      // protects ruleCache and rewritePolicyGeneration
+	// rewritePolicyGeneration changes whenever session policy state is
+	// invalidated. Prepared statements capture this generation at publication
+	// time so a request-frozen policy cannot be registered after a refresh.
+	rewritePolicyGeneration uint64
 
 	// foreignConns caches connections to foreign data sources (Elasticsearch,
 	// external SQL databases) opened by esql_tvf_connect / sql_tvf_connect and
@@ -2527,9 +2531,80 @@ func (ses *Session) InvalidatePrivilegeCache() {
 	defer ses.mu.Unlock()
 	ses.cache.invalidate()
 
-	// Clear rule cache with proper locking
+	// Clearing role-rule policy also invalidates every prepared handle that may
+	// contain the previous policy in its AST or plan. Keep the handles alive so
+	// an active owner can finish its normal cleanup; execution will fail closed
+	// until the client explicitly prepares a new statement.
+	ses.invalidateRewriteRuleCacheLocked()
+}
+
+func (ses *Session) invalidateRewriteRuleCache() {
+	ses.mu.Lock()
+	defer ses.mu.Unlock()
+	ses.invalidateRewriteRuleCacheLocked()
+	// ALTER ROLE ... ADD/DROP RULE changes the policy definition itself. The
+	// session cache may be unloaded or may describe the old role state, so every
+	// existing handle must be discarded from execution until explicitly prepared
+	// again.
+	ses.invalidateAllPreparedRewriteStatementsLocked()
+}
+
+func (ses *Session) invalidateRewriteRuleCacheLocked() {
+	// Clear the rule cache and advance its generation together. A PREPARE that
+	// captured the previous request policy is rejected when it is registered
+	// after this point, even if the invalidation happened earlier in the same
+	// multi-statement request.
 	ses.ruleCacheMu.Lock()
+	roleRulesActive := len(ses.ruleCache) > 0
 	ses.ruleCache = nil
+	ses.rewritePolicyGeneration++
+	ses.ruleCacheMu.Unlock()
+
+	optionalRewriteEnabled := ses.rewriteEnabled.Load()
+	for _, stmt := range ses.prepareStmts {
+		// A disabled optional rewrite switch does not disable mandatory role
+		// rules. Use the policy captured by each handle to invalidate statements
+		// that still contain a role-rule rewrite.
+		if stmt != nil && (optionalRewriteEnabled || roleRulesActive || stmt.rewritePolicyEnabled) {
+			stmt.invalidateRewritePolicy()
+		}
+	}
+}
+
+func (ses *Session) invalidateAllPreparedRewriteStatementsLocked() {
+	for _, stmt := range ses.prepareStmts {
+		if stmt != nil {
+			stmt.invalidateRewritePolicy()
+		}
+	}
+}
+
+func (ses *Session) validatePreparedStatementsAfterRewritePolicyRefresh(
+	policy *rewritePolicySnapshot,
+	refreshErr error,
+) {
+	ses.mu.Lock()
+	defer ses.mu.Unlock()
+
+	ses.ruleCacheMu.RLock()
+	currentGeneration := ses.rewritePolicyGeneration
+	currentPolicyEnabled := ses.rewriteEnabled.Load() || len(ses.ruleCache) > 0
+	ses.ruleCacheMu.RUnlock()
+
+	if refreshErr != nil || policy == nil || policy.enabled || currentPolicyEnabled ||
+		policy.generation != currentGeneration {
+		ses.invalidateAllPreparedRewriteStatementsLocked()
+	}
+}
+
+func (ses *Session) refreshRewritePolicyAndValidatePrepared(ctx context.Context) {
+	policy, err := captureRewritePolicy(ctx, ses)
+	ses.validatePreparedStatementsAfterRewritePolicyRefresh(policy, err)
+}
+
+func (ses *Session) bumpRewritePolicyGeneration() {
+	ses.ruleCacheMu.Lock()
+	ses.rewritePolicyGeneration++
 	ses.ruleCacheMu.Unlock()
 }
 
@@ -2897,6 +2972,30 @@ func (ses *Session) GetTenantName() string {
 
 func (ses *Session) SetPrepareStmt(ctx context.Context, name string, prepareStmt *PrepareStmt) error {
 	name = strings.ToLower(name)
+	refreshedPolicy := false
+	refreshedPolicyGeneration := uint64(0)
+	refreshedPolicyEnabled := false
+	if prepareStmt != nil && prepareStmt.rewritePolicyCaptured {
+		ses.ruleCacheMu.RLock()
+		currentGeneration := ses.rewritePolicyGeneration
+		cacheUnloaded := ses.ruleCache == nil
+		currentPolicyEnabled := ses.rewriteEnabled.Load() || len(ses.ruleCache) > 0
+		ses.ruleCacheMu.RUnlock()
+		if prepareStmt.rewritePolicyGeneration != currentGeneration &&
+			!prepareStmt.rewritePolicyEnabled && !currentPolicyEnabled && cacheUnloaded {
+			// SET ROLE clears the cache before the new role's rules have been
+			// loaded. If the request snapshot was disabled, refresh only to learn
+			// whether the current role now has mandatory rules; an empty cache
+			// preserves the harmless disabled-to-disabled case.
+			policy, err := captureRewritePolicy(ctx, ses)
+			if err != nil {
+				return err
+			}
+			refreshedPolicy = true
+			refreshedPolicyGeneration = policy.generation
+			refreshedPolicyEnabled = policy.enabled
+		}
+	}
 	ses.mu.Lock()
 	defer ses.mu.Unlock()
 	if stmt, ok := ses.prepareStmts[name]; !ok {
@@ -2910,6 +3009,25 @@ func (ses *Session) SetPrepareStmt(ctx context.Context, name string, prepareStmt
 
 	if prepareStmt != nil && prepareStmt.proc == nil {
 		prepareStmt.proc = ses.proc
+	}
+	if prepareStmt != nil && prepareStmt.rewritePolicyCaptured {
+		ses.ruleCacheMu.RLock()
+		currentGeneration := ses.rewritePolicyGeneration
+		cacheUnloaded := ses.ruleCache == nil
+		currentPolicyEnabled := ses.rewriteEnabled.Load() || len(ses.ruleCache) > 0
+		ses.ruleCacheMu.RUnlock()
+		if prepareStmt.rewritePolicyGeneration != currentGeneration {
+			invalidate := prepareStmt.rewritePolicyEnabled || currentPolicyEnabled
+			if !invalidate && cacheUnloaded {
+				// A policy refresh that no longer matches the generation at the
+				// publication boundary cannot prove the new role has no rules.
+				invalidate = !refreshedPolicy || refreshedPolicyGeneration != currentGeneration ||
+					refreshedPolicyEnabled
+			}
+			if invalidate {
+				prepareStmt.invalidateRewritePolicy()
+			}
+		}
 	}
 	ses.prepareStmts[name] = prepareStmt
 
@@ -2928,10 +3046,20 @@ func (ses *Session) getMaxPrepareStmtCountLocked() uint64 {
 }
 
 func (ses *Session) GetPrepareStmt(ctx context.Context, name string) (*PrepareStmt, error) {
+	return ses.getPrepareStmt(ctx, name, false)
+}
+
+func (ses *Session) getPrepareStmt(ctx context.Context, name string, allowInvalidated bool) (*PrepareStmt, error) {
 	normalizedName := strings.ToLower(name)
 	ses.mu.Lock()
 	defer ses.mu.Unlock()
 	if prepareStmt, ok := ses.prepareStmts[normalizedName]; ok {
+		if !allowInvalidated {
+			if err := prepareStmt.checkRewritePolicy(ctx); err != nil {
+				ses.Errorf(ctx, "prepared statement '%s' needs to be re-prepared", name)
+				return prepareStmt, err
+			}
+		}
 		return prepareStmt, nil
 	}
 	var connID uint32
@@ -2942,14 +3070,34 @@ func (ses *Session) GetPrepareStmt(ctx context.Context, name string) (*PrepareSt
 	return nil, moerr.NewInvalidStatef(ctx, "prepared statement '%s' does not exist", name)
 }
 
+func (ses *Session) getPrepareStmtAllowInvalidated(ctx context.Context, name string) (*PrepareStmt, error) {
+	return ses.getPrepareStmt(ctx, name, true)
+}
+
 func (ses *Session) GetPrepareStmts() []*PrepareStmt {
 	ses.mu.Lock()
 	defer ses.mu.Unlock()
 	ret := make([]*PrepareStmt, 0, len(ses.prepareStmts))
 	for _, st := range ses.prepareStmts {
+		if st != nil && st.rewritePolicyInvalidated.Load() {
+			continue
+		}
 		ret = append(ret, st)
 	}
 	return ret
+}
+
+func (ses *Session) getPrepareStmtsForMigration() ([]*PrepareStmt, bool) {
+	ses.mu.Lock()
+	defer ses.mu.Unlock()
+	ret := make([]*PrepareStmt, 0, len(ses.prepareStmts))
+	for _, stmt := range ses.prepareStmts {
+		if stmt != nil && stmt.rewritePolicyInvalidated.Load() {
+			return nil, true
+		}
+		ret = append(ret, stmt)
+	}
+	return ret, false
 }
 
 func (ses *Session) RemovePrepareStmt(name string) bool {

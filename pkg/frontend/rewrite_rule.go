@@ -65,6 +65,8 @@ type rewriteHintPayload struct {
 type rewritePolicySnapshot struct {
 	enabled             bool
 	sessionEnabled      bool
+	captured            bool
+	generation          uint64
 	roleRules           map[string]string
 	sessionRules        map[string]string
 	sessionRemapDb      map[string]string
@@ -127,6 +129,7 @@ func captureRewritePolicy(ctx context.Context, ses *Session) (*rewritePolicySnap
 	sessionEnabled := ses.rewriteEnabled.Load()
 	policy := &rewritePolicySnapshot{
 		sessionEnabled:      sessionEnabled,
+		captured:            true,
 		lowerCaseTableNames: parserLowerCaseTableNames(ses),
 	}
 
@@ -134,6 +137,7 @@ func captureRewritePolicy(ctx context.Context, ses *Session) (*rewritePolicySnap
 	// optional enable_remap_hint switch is off, so a session SET cannot
 	// bypass the role-rule rewrite path (issue #29142).
 	ses.ruleCacheMu.RLock()
+	policy.generation = ses.rewritePolicyGeneration
 	cacheLoaded := ses.ruleCache != nil
 	if cacheLoaded {
 		policy.roleRules = cloneRewriteMap(ses.ruleCache)
@@ -148,6 +152,10 @@ func captureRewritePolicy(ctx context.Context, ses *Session) (*rewritePolicySnap
 		}
 
 		ses.ruleCacheMu.Lock()
+		if ses.rewritePolicyGeneration != policy.generation {
+			ses.ruleCacheMu.Unlock()
+			return nil, moerr.NewInvalidState(ctx, "rewrite policy changed while loading")
+		}
 		if ses.ruleCache == nil {
 			ses.ruleCache = rules
 		}
@@ -1347,13 +1355,11 @@ func handleAlterRoleAddRule(ses *Session, execCtx *ExecCtx, stmt *tree.AlterRole
 		return err
 	}
 
-	// Invalidate current session's rule cache after successful rule modification
-	// Note: This only affects the current session. Other sessions using the same role
-	// will need to reconnect or execute SET ROLE to refresh their cache.
+	// Invalidate the current session's rule cache and any prepared statements
+	// that captured the previous rewrite policy. Other sessions using the same
+	// role still need to reconnect or execute SET ROLE to refresh their cache.
 	// TODO: Implement cross-session cache invalidation for better consistency.
-	ses.ruleCacheMu.Lock()
-	ses.ruleCache = nil
-	ses.ruleCacheMu.Unlock()
+	ses.invalidateRewriteRuleCache()
 
 	return err
 }
@@ -1416,13 +1422,11 @@ func handleAlterRoleDropRule(ses *Session, execCtx *ExecCtx, stmt *tree.AlterRol
 		return err
 	}
 
-	// Invalidate current session's rule cache after successful rule modification
-	// Note: This only affects the current session. Other sessions using the same role
-	// will need to reconnect or execute SET ROLE to refresh their cache.
+	// Invalidate the current session's rule cache and any prepared statements
+	// that captured the previous rewrite policy. Other sessions using the same
+	// role still need to reconnect or execute SET ROLE to refresh their cache.
 	// TODO: Implement cross-session cache invalidation for better consistency.
-	ses.ruleCacheMu.Lock()
-	ses.ruleCache = nil
-	ses.ruleCacheMu.Unlock()
+	ses.invalidateRewriteRuleCache()
 
 	return err
 }

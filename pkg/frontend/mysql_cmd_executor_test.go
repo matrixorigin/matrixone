@@ -3476,7 +3476,6 @@ func TestGetComputationWrapperKeepsRemapPerStatement(t *testing.T) {
 			}
 		})
 	}
-
 }
 
 func TestGetComputationWrapperUsesRequestRewriteSnapshot(t *testing.T) {
@@ -5122,6 +5121,53 @@ func TestExecuteStmtFetchAdvancesAndClosesCursor(t *testing.T) {
 	require.Zero(t, ses.preparedCursorBytes.Load())
 }
 
+func TestExecuteStmtFetchRejectsInvalidatedPreparedStatement(t *testing.T) {
+	writer := &testMysqlWriter{writeEOFOrOKFunc: func(uint16, uint16) error { return nil }}
+	ses := &Session{
+		feSessionImpl: feSessionImpl{
+			respr:      NewMysqlResp(writer),
+			txnHandler: &TxnHandler{},
+		},
+		prepareStmts: make(map[string]*PrepareStmt),
+	}
+	stmt := &PrepareStmt{
+		Name: getPrepareStmtName(274),
+		cursor: &preparedStmtCursor{
+			result: &MysqlResultSet{Data: [][]interface{}{{int64(1)}}},
+			owner:  ses,
+			bytes:  1,
+		},
+	}
+	ses.preparedCursorBytes.Store(1)
+	ses.prepareStmts[strings.ToLower(stmt.Name)] = stmt
+	stmt.invalidateRewritePolicy()
+
+	data := make([]byte, 8)
+	binary.LittleEndian.PutUint32(data[0:4], 274)
+	binary.LittleEndian.PutUint32(data[4:8], 1)
+	resp, err := executeStmtFetch(context.Background(), ses, data)
+	require.NoError(t, err)
+	require.NotNil(t, resp)
+	require.Equal(t, ErrorResponse, resp.category)
+	require.True(t, moerr.IsMoErrCode(resp.GetData().(error), moerr.ErrNeedReprepare))
+	require.Nil(t, stmt.cursor)
+	require.Zero(t, ses.preparedCursorBytes.Load())
+}
+
+func TestParseStmtExecuteRejectsInvalidatedPreparedStatement(t *testing.T) {
+	stmtID := uint32(275)
+	stmt := &PrepareStmt{Name: getPrepareStmtName(stmtID)}
+	ses := &Session{prepareStmts: map[string]*PrepareStmt{strings.ToLower(stmt.Name): stmt}}
+	stmt.invalidateRewritePolicy()
+
+	data := make([]byte, 4)
+	binary.LittleEndian.PutUint32(data, stmtID)
+	_, got, err := parseStmtExecute(context.Background(), ses, data)
+	require.Error(t, err)
+	require.Same(t, stmt, got)
+	require.True(t, moerr.IsMoErrCode(err, moerr.ErrNeedReprepare))
+}
+
 func TestExecuteStmtFetchEmptyCursorClosesOnFirstFetch(t *testing.T) {
 	var status uint16
 	writer := &testMysqlWriter{writeEOFOrOKFunc: func(_, got uint16) error {
@@ -5372,6 +5418,7 @@ func TestEstimatePreparedCursorMaterializedBytesArrayAndDecimalFamilies(t *testi
 			require.GreaterOrEqual(t, estimated, uint64(len(tc.text)+32))
 		})
 	}
+
 }
 
 func TestPreparedCursorDecimal256MaterializationBoundAndRollback(t *testing.T) {
@@ -9615,6 +9662,37 @@ func TestExecRequestStmtSendLongDataRowCount(t *testing.T) {
 			require.Equal(t, int64(7), ses.GetProc().GetAffectedRows())
 		})
 	}
+
+	invalidatedID := uint32(3)
+	invalidated := &PrepareStmt{
+		Name:                getPrepareStmtName(invalidatedID),
+		getFromSendLongData: make(map[int]struct{}),
+	}
+	invalidated.invalidateRewritePolicy()
+	require.NoError(t, ses.SetPrepareStmt(ctx, invalidated.Name, invalidated))
+
+	setRowCount(ses, ses.GetProc(), 7)
+	invalidatedPayload := make([]byte, 6)
+	binary.LittleEndian.PutUint32(invalidatedPayload, invalidatedID)
+	binary.LittleEndian.PutUint16(invalidatedPayload[4:], 0)
+	invalidatedPayload = append(invalidatedPayload, "discarded long data"...)
+	resp, err = ExecRequest(ses, execCtx, &Request{
+		cmd:  COM_STMT_SEND_LONG_DATA,
+		data: invalidatedPayload,
+	})
+	require.NoError(t, err)
+	require.Nil(t, resp, "invalidated long-data commands have no response packet")
+	require.Equal(t, int64(7), ses.GetLastAffectedRows())
+	require.Equal(t, int64(7), ses.GetProc().GetAffectedRows())
+	require.Empty(t, invalidated.getFromSendLongData)
+
+	executePayload := make([]byte, 4)
+	binary.LittleEndian.PutUint32(executePayload, invalidatedID)
+	resp, err = ExecRequest(ses, execCtx, &Request{cmd: COM_STMT_EXECUTE, data: executePayload})
+	require.NoError(t, err)
+	require.NotNil(t, resp)
+	require.Equal(t, ErrorResponse, resp.category)
+	require.True(t, moerr.IsMoErrCode(resp.GetData().(error), moerr.ErrNeedReprepare))
 }
 
 func TestExecRequestStmtSendLongDataDefersFailureUntilExecute(t *testing.T) {

@@ -349,6 +349,17 @@ type PrepareStmt struct {
 	// needsRebuild is set when execution-time retry discovers that the cached
 	// prepared plan generation is stale before frontend metadata catches up.
 	needsRebuild bool
+	// rewritePolicyInvalidated is monotonic for the lifetime of this prepared
+	// handle. Role-rule policy is materialized into PrepareStmt and its plan;
+	// once that policy snapshot is invalid, rebuilding the retained AST would
+	// otherwise execute the old row predicate again. A new PREPARE creates a
+	// new handle with a fresh policy snapshot.
+	rewritePolicyInvalidated atomic.Bool
+	// rewritePolicyGeneration identifies the session policy snapshot used to
+	// build this handle. It is checked while the handle is published.
+	rewritePolicyGeneration uint64
+	rewritePolicyCaptured   bool
+	rewritePolicyEnabled    bool
 	// compileNeedsRebuild remembers that this statement had an eligible cached
 	// topology before it was invalidated, even after that topology is released.
 	compileNeedsRebuild bool
@@ -906,6 +917,19 @@ func (prepareStmt *PrepareStmt) Close() {
 	prepareStmt.directResultParamPositionsSet = false
 	prepareStmt.remapDb = nil
 	prepareStmt.getFromSendLongData = nil
+}
+
+func (prepareStmt *PrepareStmt) invalidateRewritePolicy() {
+	if prepareStmt != nil {
+		prepareStmt.rewritePolicyInvalidated.Store(true)
+	}
+}
+
+func (prepareStmt *PrepareStmt) checkRewritePolicy(ctx context.Context) error {
+	if prepareStmt != nil && prepareStmt.rewritePolicyInvalidated.Load() {
+		return moerr.NewNeedReprepare(ctx)
+	}
+	return nil
 }
 
 // invalidateCachedCompile detaches and returns the old cached topology. The
@@ -1965,6 +1989,7 @@ func (ses *Session) SetSessionSysVar(ctx context.Context, name string, val inter
 	// state must invalidate the cached prepared statements, otherwise a later
 	// EXECUTE would run with a stale remap. Drop them so they re-prepare.
 	if err == nil && (name == "remap_rewrites" || name == "enable_remap_hint") {
+		ses.bumpRewritePolicyGeneration()
 		ses.RemoveAllPrepareStmts()
 	}
 	if err == nil {
