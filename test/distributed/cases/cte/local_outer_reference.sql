@@ -95,6 +95,43 @@ set @page_id=1;
 execute local_cte_stmt using @page_id;
 deallocate prepare local_cte_stmt;
 
+-- A window must restart for each outer identity, even for repeated parameters.
+select p.id,
+       (with q(n) as (select p.parent_id)
+        select row_number() over (order by n) from q) as rn
+from pages p where p.id in (2, 5) order by p.id;
+select p.id,
+       (with q(n) as (select p.parent_id from pages a where a.id in (2, 5))
+        select max(rn) from (select row_number() over (order by n) as rn from q) w) as max_rn
+from pages p where p.id in (2, 5) order by p.id;
+
+-- HAVING drops a nonempty scalar aggregate row; missing input still yields COUNT=0.
+select p.id,
+       (with q(n) as (select p.parent_id)
+        select count(*) from q having count(*)=0) as filtered_count
+from pages p where p.id in (2, 5) order by p.id;
+select p.id,
+       (with q(n) as (select p.parent_id from pages a where a.id=p.id and a.active=0)
+        select count(*) from q having count(*)=0) as filtered_count
+from pages p where p.id in (2, 5) order by p.id;
+
+-- Both UNION ALL arms export the same hidden identity column, not a visible column.
+select p.id from pages p where exists (
+  with q(n) as (select p.parent_id)
+  select n from q union all select n from q
+) and p.id in (2, 5) order by p.id;
+
+-- A UNION ALL scalar still observes both rows, not an extra visible identity column.
+select (with q(n) as (select p.parent_id)
+        select n from q union all select n from q)
+from pages p where p.id=2;
+
+-- A branch without a replay identity is rejected rather than mismatching schemas.
+select p.id from pages p where exists (
+  with q(n) as (select p.parent_id)
+  select n from q union all select 7
+) and p.id=2;
+
 -- Empty outer input starts no parameter partitions.
 select p.id,
        (with recursive r(n) as (

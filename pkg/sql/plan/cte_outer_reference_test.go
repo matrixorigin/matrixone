@@ -72,6 +72,22 @@ func TestLocalCTEOuterReferencesExecutablePlan(t *testing.T) {
 			) select count(*) from r) from tpch.nation p`,
 		},
 		{
+			name: "consumer window per outer row",
+			sql: `select (with q(n) as (select p.n_regionkey)
+				select row_number() over (order by n) from q) from tpch.nation p`,
+		},
+		{
+			name: "count having consumer",
+			sql: `select (with q(n) as (select p.n_regionkey)
+				select count(*) from q having count(*)=0) from tpch.nation p`,
+		},
+		{
+			name: "union all consumer",
+			sql: `select p.n_nationkey from tpch.nation p where exists (
+				with q(n) as (select p.n_regionkey)
+				select n from q union all select n from q)`,
+		},
+		{
 			name: "multiple consumers",
 			sql: `select (with q(n) as (select p.n_regionkey)
 				select a.n+b.n from q a join q b on a.n=b.n) from tpch.nation p`,
@@ -168,19 +184,16 @@ func TestLocalCTEOuterReferencesRejectUnsafeDomains(t *testing.T) {
 		sql  string
 	}{
 		{
-			name: "consumer window",
-			sql: `select (with q(n) as (select p.n_regionkey)
-				select row_number() over (order by n) from q) from tpch.nation p`,
+			name: "non scalar count having",
+			sql: `select p.n_nationkey from tpch.nation p where exists (
+				with q(n) as (select p.n_regionkey)
+				select count(*) from q having count(*)=0)`,
 		},
 		{
-			name: "consumer having",
-			sql: `select (with q(n) as (select p.n_regionkey)
-				select count(*) from q having count(*)=0) from tpch.nation p`,
-		},
-		{
-			name: "consumer union all",
-			sql: `select (with q(n) as (select p.n_regionkey)
-				select n from q union all select n from q) from tpch.nation p`,
+			name: "one union arm has no identity",
+			sql: `select p.n_nationkey from tpch.nation p where exists (
+				with q(n) as (select p.n_regionkey)
+				select n from q union all select 7)`,
 		},
 		{
 			name: "outer join multiplicity",

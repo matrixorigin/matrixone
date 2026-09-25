@@ -391,6 +391,16 @@ func (builder *QueryBuilder) flattenSubqueryWithConsumer(
 	if err != nil {
 		return 0, nil, err
 	}
+	if subquery.Typ != plan.SubqueryRef_SCALAR && builder.hasCorrelatedLocalCTEHaving(subID) {
+		return 0, nil, moerr.NewNYI(builder.GetContext(), "correlated local CTE: non-scalar HAVING")
+	}
+	var localCTEHaving *plan.Expr
+	if subquery.Typ == plan.SubqueryRef_SCALAR {
+		localCTEHaving, err = builder.detachCorrelatedCountHaving(subID, subCtx)
+		if err != nil {
+			return 0, nil, err
+		}
+	}
 	var scalarMatch *plan.Expr
 	var scalarOuterResult *plan.Expr
 	var scalarExistential bool
@@ -633,6 +643,18 @@ func (builder *QueryBuilder) flattenSubqueryWithConsumer(
 					},
 				},
 				Typ: makePlan2Type(&returnType),
+			}
+		}
+		if localCTEHaving != nil {
+			condition, ok := replaceCountHavingResult(localCTEHaving, subCtx.aggregateTag, retExpr)
+			if !ok {
+				return 0, nil, moerr.NewNYI(builder.GetContext(), "correlated COUNT HAVING result expression")
+			}
+			retExpr, err = BindFuncExprImplByPlanExpr(builder.GetContext(), "case", []*plan.Expr{
+				condition, retExpr, makePlan2NullConstExprWithType(),
+			})
+			if err != nil {
+				return 0, nil, err
 			}
 		}
 		return nodeID, retExpr, nil
@@ -2239,6 +2261,134 @@ func replaceGroupTagRefs(expr *plan.Expr, groupTag int32, groupBy []*plan.Expr) 
 	return expr
 }
 
+// Defer a scalar COUNT HAVING predicate until after the missing-group COUNT
+// fallback. Applying it inside AGG loses the distinction between a filtered
+// aggregate row and an empty aggregate group.
+func (builder *QueryBuilder) correlatedLocalCTEInBranch(root int32) bool {
+	var visit func(int32) bool
+	visit = func(id int32) bool {
+		n := builder.qry.Nodes[id]
+		if builder.localCTERoots[id] || (n.NodeType == plan.Node_FILTER && len(n.Children) == 1 &&
+			builder.localCTERoots[n.Children[0]]) {
+			for _, e := range localCTENodeExprs(n) {
+				if hasCorrCol(e) {
+					return true
+				}
+			}
+		}
+		for _, child := range n.Children {
+			if visit(child) {
+				return true
+			}
+		}
+		return false
+	}
+	return visit(root)
+}
+
+func (builder *QueryBuilder) hasCorrelatedLocalCTEHaving(root int32) bool {
+	id := root
+	for {
+		n := builder.qry.Nodes[id]
+		var agg *plan.Node
+		if n.NodeType == plan.Node_AGG {
+			agg = n
+		} else if n.NodeType == plan.Node_FILTER && len(n.Children) == 1 &&
+			builder.qry.Nodes[n.Children[0]].NodeType == plan.Node_AGG {
+			agg = builder.qry.Nodes[n.Children[0]]
+		}
+		if agg != nil && len(n.FilterList) > 0 && len(agg.Children) == 1 &&
+			builder.correlatedLocalCTEInBranch(agg.Children[0]) {
+			return true
+		}
+		if len(n.Children) != 1 {
+			return false
+		}
+		id = n.Children[0]
+	}
+}
+
+func (builder *QueryBuilder) detachCorrelatedCountHaving(root int32, ctx *BindContext) (*plan.Expr, error) {
+	id := root
+	for {
+		n := builder.qry.Nodes[id]
+		var agg *plan.Node
+		if n.NodeType == plan.Node_AGG {
+			agg = n
+		} else if n.NodeType == plan.Node_FILTER && len(n.Children) == 1 &&
+			builder.qry.Nodes[n.Children[0]].NodeType == plan.Node_AGG {
+			agg = builder.qry.Nodes[n.Children[0]]
+		}
+		if agg != nil && len(n.FilterList) != 0 &&
+			len(agg.Children) == 1 && builder.correlatedLocalCTEInBranch(agg.Children[0]) {
+			if len(n.FilterList) != 1 || len(agg.GroupBy) != 0 || len(agg.AggList) != 1 ||
+				agg.AggList[0].GetF() == nil || agg.AggList[0].GetF().Func == nil ||
+				(agg.AggList[0].GetF().Func.ObjName != "count" && agg.AggList[0].GetF().Func.ObjName != "starcount") ||
+				len(ctx.results) != 1 || builder.qry.Nodes[root].NodeType != plan.Node_PROJECT ||
+				builder.qry.Nodes[root].ProjectList[0].GetCol() == nil {
+				return nil, moerr.NewNYI(builder.GetContext(), "correlated COUNT HAVING projection")
+			}
+			having := n.FilterList[0]
+			n.FilterList = nil
+			return having, nil
+		}
+		if len(n.Children) != 1 {
+			return nil, nil
+		}
+		id = n.Children[0]
+	}
+}
+
+func replaceCountHavingResult(expr *plan.Expr, aggregateTag int32, result *plan.Expr) (*plan.Expr, bool) {
+	if col := expr.GetCol(); col != nil {
+		if col.RelPos != aggregateTag || col.ColPos != 0 {
+			return nil, false
+		}
+		return DeepCopyExpr(result), true
+	}
+	copy := DeepCopyExpr(expr)
+	if f := copy.GetF(); f != nil {
+		for i, arg := range f.Args {
+			var ok bool
+			f.Args[i], ok = replaceCountHavingResult(arg, aggregateTag, result)
+			if !ok {
+				return nil, false
+			}
+		}
+		return copy, true
+	}
+	_, isConst := copy.Expr.(*plan.Expr_Lit)
+	return copy, isConst
+}
+
+func correlatedIdentityOuterKey(expr *plan.Expr) (*plan.CorrColRef, bool) {
+	f := expr.GetF()
+	if f == nil || f.Func == nil || f.Func.ObjName != "=" || len(f.Args) != 2 {
+		return nil, false
+	}
+	if c := f.Args[0].GetCorr(); c != nil && c.Depth == 1 && f.Args[1].GetCol() != nil {
+		return c, true
+	}
+	if c := f.Args[1].GetCorr(); c != nil && c.Depth == 1 && f.Args[0].GetCol() != nil {
+		return c, true
+	}
+	return nil, false
+}
+
+func correlatedWindowIdentityKey(expr *plan.Expr) (*plan.Expr, bool) {
+	f := expr.GetF()
+	if f == nil || f.Func == nil || f.Func.ObjName != "=" || len(f.Args) != 2 {
+		return nil, false
+	}
+	if f.Args[0].GetCorr() != nil && f.Args[0].GetCorr().Depth == 1 && f.Args[1].GetCol() != nil {
+		return f.Args[1], true
+	}
+	if f.Args[1].GetCorr() != nil && f.Args[1].GetCorr().Depth == 1 && f.Args[0].GetCol() != nil {
+		return f.Args[0], true
+	}
+	return nil, false
+}
+
 func (builder *QueryBuilder) pullupCorrelatedPredicates(
 	nodeID int32,
 	ctx *BindContext,
@@ -2276,6 +2426,68 @@ func (builder *QueryBuilder) pullupCorrelatedPredicates(
 		for _, pred := range preds {
 			builder.pullupThroughProj(ctx, node, projectTag, pred)
 		}
+
+	case plan.Node_WINDOW:
+		// A window is evaluated independently for every correlated input
+		// row. The partition operator, as well as the window specification,
+		// must receive the identity key so the physical input is grouped.
+		for _, pred := range preds {
+			innerKey, ok := correlatedWindowIdentityKey(pred)
+			if !ok {
+				// Other correlated predicates retain the existing pull-up path.
+				continue
+			}
+			for _, spec := range node.WinSpecList {
+				if w := spec.GetW(); w != nil {
+					w.PartitionBy = append(w.PartitionBy, DeepCopyExpr(innerKey))
+				}
+			}
+			if child := builder.qry.Nodes[node.Children[0]]; child.NodeType == plan.Node_PARTITION {
+				child.OrderBy = append(child.OrderBy, &plan.OrderBySpec{Expr: DeepCopyExpr(innerKey), Flag: plan.OrderBySpec_INTERNAL})
+			} else {
+				partition := builder.appendNode(&plan.Node{
+					NodeType: plan.Node_PARTITION, Children: []int32{node.Children[0]},
+					OrderBy:     []*plan.OrderBySpec{{Expr: DeepCopyExpr(innerKey), Flag: plan.OrderBySpec_INTERNAL}},
+					BindingTags: node.BindingTags,
+				}, ctx)
+				node.Children[0] = partition
+			}
+		}
+
+	case plan.Node_UNION_ALL:
+		left := builder.qry.Nodes[node.Children[0]]
+		right := builder.qry.Nodes[node.Children[1]]
+		pos := int32(len(node.ProjectList))
+		if len(left.ProjectList) == int(pos) && len(right.ProjectList) == int(pos) {
+			break
+		}
+		// The two arms must export the same hidden identity slot as well as
+		// their user columns. Collapse their matching correlation predicates
+		// into a single predicate on the union's new output slot.
+		if len(node.Children) != 2 || len(preds) != 2 || len(node.BindingTags) != 1 {
+			return 0, nil, moerr.NewNYI(builder.GetContext(), "correlated local CTE: UNION ALL without matching row identities")
+		}
+		leftKey, leftOK := correlatedWindowIdentityKey(preds[0])
+		rightKey, rightOK := correlatedWindowIdentityKey(preds[1])
+		leftCorr, leftCorrOK := correlatedIdentityOuterKey(preds[0])
+		rightCorr, rightCorrOK := correlatedIdentityOuterKey(preds[1])
+		if !leftOK || !rightOK || !leftCorrOK || !rightCorrOK ||
+			leftCorr.RelPos != rightCorr.RelPos || leftCorr.ColPos != rightCorr.ColPos ||
+			leftKey.GetCol() == nil || rightKey.GetCol() == nil ||
+			int(leftKey.GetCol().ColPos) != int(pos) || int(rightKey.GetCol().ColPos) != int(pos) ||
+			len(left.ProjectList) != int(pos)+1 || len(right.ProjectList) != int(pos)+1 ||
+			!isSameColumnType(leftKey.Typ, rightKey.Typ) {
+			return 0, nil, moerr.NewNYI(builder.GetContext(), "correlated local CTE: UNION ALL branch identities differ")
+		}
+		node.ProjectList = append(node.ProjectList, GetColExpr(leftKey.Typ, left.BindingTags[0], pos))
+		key := GetColExpr(leftKey.Typ, node.BindingTags[0], pos)
+		pred := DeepCopyExpr(preds[0])
+		for _, arg := range pred.GetF().Args {
+			if arg.GetCol() != nil {
+				*arg = *key
+			}
+		}
+		preds = []*plan.Expr{pred}
 
 	case plan.Node_FILTER:
 		var newFilterList []*plan.Expr

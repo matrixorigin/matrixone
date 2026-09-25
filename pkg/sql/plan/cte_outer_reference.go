@@ -104,13 +104,13 @@ func (d *localCTEDomain) admitConsumer(root int32) error {
 		}
 		n := d.builder.qry.Nodes[id]
 		switch n.NodeType {
-		case plan.Node_WINDOW, plan.Node_PARTITION:
-			return d.unsupported("consumer window needs per-outer-row partitioning")
-		case plan.Node_UNION, plan.Node_UNION_ALL, plan.Node_INTERSECT, plan.Node_INTERSECT_ALL,
+		case plan.Node_UNION, plan.Node_INTERSECT, plan.Node_INTERSECT_ALL,
 			plan.Node_MINUS, plan.Node_MINUS_ALL:
 			return d.unsupported("consumer set operation needs per-outer-row output schema")
 		case plan.Node_AGG:
-			if filtered {
+			if (filtered || len(n.FilterList) > 0) && (len(n.AggList) != 1 || len(n.GroupBy) != 0 ||
+				n.AggList[0].GetF() == nil || n.AggList[0].GetF().Func == nil ||
+				(n.AggList[0].GetF().Func.ObjName != "count" && n.AggList[0].GetF().Func.ObjName != "starcount")) {
 				return d.unsupported("consumer HAVING needs per-outer-row empty-group semantics")
 			}
 		case plan.Node_FILTER:
