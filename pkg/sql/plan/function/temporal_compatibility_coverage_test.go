@@ -32,7 +32,25 @@ import (
 func TestTemporalCompatibilityExecutionMatrix(t *testing.T) {
 	proc := newTmpProcess(t)
 
-	t.Run("dynamic str_to_date domains", func(t *testing.T) {
+	t.Run("str_to_date duration days", func(t *testing.T) {
+		input := NewFunctionTestInput(types.T_varchar.ToType(), []string{
+			"1 12:34:56", "31 12:34:56", "32 12:34:56", "34 22:59:59", "35 12:34:56", "99 23:59:59", "1 12:34:56.123456", "bad",
+		}, nil)
+		format := NewFunctionTestInput(types.T_varchar.ToType(), []string{
+			"%d %H:%i:%s", "%e %H:%i:%s", "%d %H:%i:%s", "%d %H:%i:%s", "%d %H:%i:%s", "%d %H:%i:%s", "%d %H:%i:%s.%f", "%d %H:%i:%s",
+		}, nil)
+		want := NewFunctionTestResult(types.T_time.ToTypeWithScale(6), false,
+			[]types.Time{
+				types.TimeFromClock(false, 36, 34, 56, 0), types.TimeFromClock(false, 756, 34, 56, 0),
+				types.TimeFromClock(false, 780, 34, 56, 0), types.TimeFromClock(false, 838, 59, 59, 0),
+				0, 0, types.TimeFromClock(false, 36, 34, 56, 123456), 0,
+			}, []bool{false, false, false, false, true, true, false, true})
+		caseDef := NewFunctionTestCase(proc, []FunctionTestInput{input, format}, want, builtInStrToTime)
+		ok, info := caseDef.Run()
+		require.True(t, ok, info)
+	})
+
+	t.Run("dynamic str_to_date keeps datetime domain", func(t *testing.T) {
 		input := NewFunctionTestInput(types.T_varchar.ToType(), []string{
 			"12:34:56.123456", "2024-02-29", "2024-02-29 12:34:56.123456",
 			"bad", "2024-02-29", "12:34:56",
@@ -41,10 +59,14 @@ func TestTemporalCompatibilityExecutionMatrix(t *testing.T) {
 			"%H:%i:%s.%f", "%Y-%m-%d", "%Y-%m-%d %H:%i:%s.%f",
 			"%Y-%m-%d", "%Y-%m-%d", "%Y-%m-%d",
 		}, nil)
-		want := NewFunctionTestResult(types.New(types.T_varchar, 29, 6), false,
-			[]string{"12:34:56.123456", "2024-02-29", "2024-02-29 12:34:56.123456", "", "", ""},
-			[]bool{false, false, false, true, true, true})
-		caseDef := NewFunctionTestCase(proc, []FunctionTestInput{input, format}, want, builtInStrToDateDynamic)
+		midnight, err := types.ParseDatetime("2024-02-29 00:00:00", 6)
+		require.NoError(t, err)
+		full, err := types.ParseDatetime("2024-02-29 12:34:56.123456", 6)
+		require.NoError(t, err)
+		want := NewFunctionTestResult(types.New(types.T_datetime, 0, 6), false,
+			[]types.Datetime{0, midnight, full, 0, 0, 0},
+			[]bool{true, false, false, true, true, true})
+		caseDef := NewFunctionTestCase(proc, []FunctionTestInput{input, format}, want, builtInStrToDatetime)
 		ok, info := caseDef.Run()
 		require.True(t, ok, info)
 	})
@@ -135,27 +157,6 @@ func TestTemporalCompatibilityExecutionMatrix(t *testing.T) {
 }
 
 func TestTemporalCompatibilityHelperDomains(t *testing.T) {
-	for _, tc := range []struct {
-		format         string
-		isTime, isDate bool
-		scale          int
-	}{
-		{"%H:%i:%s.%f", true, false, 6},
-		{"%Y-%m-%d", false, true, 0},
-		{"%Y-%m-%d %H:%i:%s.%f", true, true, 6},
-		{"%W, %M %d, %Y", false, true, 0},
-		{"%r", true, false, 0},
-		{"%x-%v-%w", false, true, 0},
-		{"%Y-%%f-%m-%d", false, true, 0},
-	} {
-		t.Run(tc.format, func(t *testing.T) {
-			isTime, isDate, scale := dynamicStrToDateFormatType(tc.format)
-			require.Equal(t, tc.isTime, isTime)
-			require.Equal(t, tc.isDate, isDate)
-			require.Equal(t, tc.scale, scale)
-		})
-	}
-
 	dt, err := types.ParseDatetime("2024-02-29 12:34:56.123456", 6)
 	require.NoError(t, err)
 	tm := types.TimeFromClock(false, 12, 34, 56, 123456)
@@ -340,7 +341,20 @@ func TestTemporalCompatibilityErrorAndBoundaryHelpers(t *testing.T) {
 	require.Equal(t, -types.MySQLTimeFunctionMaxForScale(6), signedMySQLTimeFunctionMax(true))
 	diff, err := timeDiff(types.TimeFromClock(false, 838, 59, 59, 0), -tm)
 	require.NoError(t, err)
-	require.Equal(t, types.Time(int64(types.TimeFromClock(false, 838, 59, 59, 0))-int64(-tm)), diff)
+	require.Equal(t, types.MySQLTimeMaxForScale(6), diff)
+	for _, tc := range []struct {
+		first, second types.Time
+		subtract      bool
+		want          types.Time
+	}{
+		{types.TimeFromClock(false, 2_000_000_000, 0, 0, 0), types.TimeFromClock(false, 2_000_000_000, 0, 0, 0), false, types.MySQLTimeMaxForScale(6)},
+		{types.TimeFromClock(false, 2_000_000_000, 0, 0, 0), types.TimeFromClock(true, 2_000_000_000, 0, 0, 0), true, types.MySQLTimeMaxForScale(6)},
+		{types.TimeFromClock(true, 2_000_000_000, 0, 0, 0), types.TimeFromClock(true, 2_000_000_000, 0, 0, 0), false, -types.MySQLTimeMaxForScale(6)},
+	} {
+		got, _, truncated := timeArithmeticResult(tc.first, tc.second, tc.subtract, 6)
+		require.True(t, truncated, "first=%d second=%d subtract=%t got=%d", tc.first, tc.second, tc.subtract, got)
+		require.Equal(t, tc.want, got)
+	}
 }
 
 func TestTemporalCompatibilitySelectListAndNullBranches(t *testing.T) {

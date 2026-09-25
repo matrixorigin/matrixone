@@ -24,32 +24,33 @@ import (
 // The strict predicates share token interpretation, but require different flags.
 func TestStrictSQLModePredicates(t *testing.T) {
 	for _, tc := range []struct {
-		name                       string
-		mode                       any
-		strict, zeroDate, division bool
+		name                                           string
+		mode                                           any
+		strict, zeroDate, division, expressionZeroDate bool
 	}{
-		{"traditional", "TRADITIONAL", true, true, true},
-		{"traditional combined", "ERROR_FOR_DIVISION_BY_ZERO, traditional ,TRADITIONAL", true, true, true},
-		{"strict trans", "STRICT_TRANS_TABLES", true, false, false},
-		{"strict all", "STRICT_ALL_TABLES", true, false, false},
-		{"division trans", "STRICT_TRANS_TABLES,ERROR_FOR_DIVISION_BY_ZERO", true, false, true},
-		{"division all", " error_for_division_by_zero , strict_all_tables ", true, false, true},
-		{"date trans", "NO_ZERO_DATE,STRICT_TRANS_TABLES", true, true, false},
-		{"date all", "STRICT_ALL_TABLES,NO_ZERO_DATE", true, true, false},
-		{"all explicit", "STRICT_ALL_TABLES,NO_ZERO_DATE,ERROR_FOR_DIVISION_BY_ZERO", true, true, true},
-		{"no strict", "ERROR_FOR_DIVISION_BY_ZERO,NO_ZERO_DATE", false, false, false},
-		{"traditional exact token", "TRADITIONAL_EXTRA", false, false, false},
-		{"strict exact token", "NOT_STRICT_TRANS_TABLES,NO_ZERO_DATE,ERROR_FOR_DIVISION_BY_ZERO", false, false, false},
-		{"component exact tokens", "STRICT_ALL_TABLES,NO_ZERO_DATE_EXTRA,ERROR_FOR_DIVISION_BY_ZERO_EXTRA", true, false, false},
-		{"unrelated", "ANSI,NO_ZERO_IN_DATE", false, false, false},
-		{"empty tokens", " , , ", false, false, false},
-		{"nil", nil, false, false, false},
-		{"non string", 1, false, false, false},
+		{"traditional", "TRADITIONAL", true, true, true, true},
+		{"traditional combined", "ERROR_FOR_DIVISION_BY_ZERO, traditional ,TRADITIONAL", true, true, true, true},
+		{"strict trans", "STRICT_TRANS_TABLES", true, false, false, false},
+		{"strict all", "STRICT_ALL_TABLES", true, false, false, false},
+		{"division trans", "STRICT_TRANS_TABLES,ERROR_FOR_DIVISION_BY_ZERO", true, false, true, false},
+		{"division all", " error_for_division_by_zero , strict_all_tables ", true, false, true, false},
+		{"date trans", "NO_ZERO_DATE,STRICT_TRANS_TABLES", true, true, false, true},
+		{"date all", "STRICT_ALL_TABLES,NO_ZERO_DATE", true, true, false, true},
+		{"all explicit", "STRICT_ALL_TABLES,NO_ZERO_DATE,ERROR_FOR_DIVISION_BY_ZERO", true, true, true, true},
+		{"no strict", "ERROR_FOR_DIVISION_BY_ZERO,NO_ZERO_DATE", false, false, false, true},
+		{"traditional exact token", "TRADITIONAL_EXTRA", false, false, false, false},
+		{"strict exact token", "NOT_STRICT_TRANS_TABLES,NO_ZERO_DATE,ERROR_FOR_DIVISION_BY_ZERO", false, false, false, true},
+		{"component exact tokens", "STRICT_ALL_TABLES,NO_ZERO_DATE_EXTRA,ERROR_FOR_DIVISION_BY_ZERO_EXTRA", true, false, false, false},
+		{"unrelated", "ANSI,NO_ZERO_IN_DATE", false, false, false, false},
+		{"empty tokens", " , , ", false, false, false, false},
+		{"nil", nil, false, false, false, false},
+		{"non string", 1, false, false, false, false},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			require.Equal(t, tc.strict, IsStrictMode(tc.mode))
 			require.Equal(t, tc.zeroDate, IsStrictNoZeroDateMode(tc.mode))
 			require.Equal(t, tc.division, IsStrictDivisionByZeroMode(tc.mode))
+			require.Equal(t, tc.expressionZeroDate, IsNoZeroDateMode(tc.mode))
 		})
 	}
 }

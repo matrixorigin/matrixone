@@ -76,11 +76,11 @@ func TestTemporalBindingUsesPrivatePreparedProvenance(t *testing.T) {
 		t.Run(name+" dynamic", func(t *testing.T) {
 			bound, err := BindFuncExprImplByPlanExpr(ctx, name, []*planpb.Expr{DeepCopyExpr(value), DeepCopyExpr(formatParam)})
 			require.NoError(t, err)
-			require.Equal(t, int32(types.T_varchar), bound.Typ.Id)
+			require.Equal(t, int32(types.T_datetime), bound.Typ.Id)
 			require.Equal(t, int32(6), bound.Typ.Scale)
 			require.Len(t, bound.GetF().Args, 3)
 			_, overload := function.DecodeOverloadID(bound.GetF().Func.Obj)
-			require.Equal(t, int32(3), overload)
+			require.Equal(t, int32(0), overload)
 			original := DeepCopyExpr(bound)
 
 			for _, format := range []string{"%Y-%m-%d", "%H:%i:%s", "%Y-%m-%d %H:%i:%s.%f"} {
@@ -92,21 +92,21 @@ func TestTemporalBindingUsesPrivatePreparedProvenance(t *testing.T) {
 					nil,
 				)
 				require.NoError(t, err)
-				require.Equal(t, int32(types.T_varchar), rebound.Typ.Id)
+				require.Equal(t, int32(types.T_datetime), rebound.Typ.Id)
 				require.Equal(t, int32(6), rebound.Typ.Scale)
 				require.Len(t, rebound.GetF().Args, 3)
 				_, reboundOverload := function.DecodeOverloadID(rebound.GetF().Func.Obj)
-				require.Equal(t, int32(3), reboundOverload)
+				require.Equal(t, int32(0), reboundOverload)
 			}
 
 			rule := NewResetParamRefRule(ctx, []*planpb.Expr{makePlan2StringConstExprWithType("%Y-%m-%d")})
 			rewritten, err := rule.ApplyExpr(DeepCopyExpr(bound))
 			require.NoError(t, err)
-			require.Equal(t, int32(types.T_varchar), rewritten.Typ.Id)
+			require.Equal(t, int32(types.T_datetime), rewritten.Typ.Id)
 			require.Equal(t, int32(6), rewritten.Typ.Scale)
 			require.Len(t, rewritten.GetF().Args, 3)
 			_, reboundOverload := function.DecodeOverloadID(rewritten.GetF().Func.Obj)
-			require.Equal(t, int32(3), reboundOverload)
+			require.Equal(t, int32(0), reboundOverload)
 			require.True(t, proto.Equal(original, bound), "prepared rebinding must not mutate the cached bound expression")
 		})
 
@@ -166,7 +166,7 @@ func TestTemporalBindingUsesPrivatePreparedProvenance(t *testing.T) {
 	preparedPlan := prepared.GetDcl().GetPrepare().Plan
 	preparedExpr := findPlanFunctionExpr(preparedPlan, "str_to_date")
 	require.NotNil(t, preparedExpr)
-	require.Equal(t, int32(types.T_varchar), preparedExpr.Typ.Id)
+	require.Equal(t, int32(types.T_datetime), preparedExpr.Typ.Id)
 	require.Equal(t, int32(6), preparedExpr.Typ.Scale)
 	require.Len(t, preparedExpr.GetF().Args, 3)
 	preparedPlanCopy := DeepCopyPlan(preparedPlan)
@@ -195,15 +195,62 @@ func TestTemporalBindingUsesPrivatePreparedProvenance(t *testing.T) {
 			require.NoError(t, err)
 			filledExpr := findPlanFunctionExpr(filled, "str_to_date")
 			require.NotNil(t, filledExpr)
-			require.Equal(t, int32(types.T_varchar), filledExpr.Typ.Id)
+			require.Equal(t, int32(types.T_datetime), filledExpr.Typ.Id)
 			require.Equal(t, int32(6), filledExpr.Typ.Scale)
 			require.Len(t, filledExpr.GetF().Args, 3)
 			_, overload := function.DecodeOverloadID(filledExpr.GetF().Func.Obj)
-			require.Equal(t, int32(3), overload)
+			require.Equal(t, int32(0), overload)
 			require.True(t, proto.Equal(preparedPlanCopy, preparedPlan),
 				"parameter filling must not mutate the cached prepared plan")
 		})
 	}
+}
+
+func TestPreparedTimeArithmeticMarkerKeepsTimeMetadata(t *testing.T) {
+	ctx := context.Background()
+	first := &planpb.Expr{Typ: planpb.Type{Id: int32(types.T_text)}, Expr: &planpb.Expr_P{P: &planpb.ParamRef{Pos: 0}}}
+	second := makePlan2StringConstExprWithType("01:02:03")
+	for _, name := range []string{"addtime", "subtime"} {
+		bound, err := BindFuncExprImplByPlanExpr(ctx, name, []*planpb.Expr{DeepCopyExpr(first), DeepCopyExpr(second)})
+		require.NoError(t, err)
+		require.Equal(t, int32(types.T_time), bound.Typ.Id)
+		require.Equal(t, int32(6), bound.Typ.Scale)
+		rebound, err := bindPreparedFuncExprImplByPlanExpr(ctx, bound, name,
+			[]*planpb.Expr{makePlan2StringConstExprWithType("2024-02-29 12:34:56"), DeepCopyExpr(second)}, nil)
+		require.NoError(t, err)
+		require.Equal(t, int32(types.T_time), rebound.Typ.Id)
+		require.Equal(t, int32(6), rebound.Typ.Scale)
+	}
+}
+
+func TestTimeDiffStringLiteralPrecision(t *testing.T) {
+	ctx := context.Background()
+	for _, tc := range []struct {
+		left, right string
+		want        int32
+	}{
+		{"12:00:00.1", "11:00:00.0", 1},
+		{"12:00:00.123456", "11:00:00", 6},
+		{"bad", "11:00:00", 6},
+	} {
+		bound, err := BindFuncExprImplByPlanExpr(ctx, "timediff", []*planpb.Expr{
+			makePlan2StringConstExprWithType(tc.left), makePlan2StringConstExprWithType(tc.right),
+		})
+		require.NoError(t, err)
+		require.Equal(t, int32(types.T_time), bound.Typ.Id)
+		require.Equal(t, tc.want, bound.Typ.Scale)
+	}
+	marker := &planpb.Expr{Typ: planpb.Type{Id: int32(types.T_text)}, Expr: &planpb.Expr_P{P: &planpb.ParamRef{Pos: 0}}}
+	bound, err := BindFuncExprImplByPlanExpr(ctx, "timediff", []*planpb.Expr{
+		DeepCopyExpr(marker), makePlan2StringConstExprWithType("11:00:00"),
+	})
+	require.NoError(t, err)
+	require.Equal(t, int32(6), bound.Typ.Scale)
+	rebound, err := bindPreparedFuncExprImplByPlanExpr(ctx, bound, "timediff", []*planpb.Expr{
+		makePlan2StringConstExprWithType("12:00:00.1"), makePlan2StringConstExprWithType("11:00:00"),
+	}, nil)
+	require.NoError(t, err)
+	require.Equal(t, int32(6), rebound.Typ.Scale)
 }
 
 func TestPreparedBitCountDefaultsToBinaryAndSpecializesNumericValues(t *testing.T) {

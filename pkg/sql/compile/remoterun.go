@@ -162,6 +162,11 @@ func encodeRemoteScopeWithVectorProtocol(s *Scope, proc *process.Process, requir
 			return nil, err
 		}
 	}
+	if features.TemporalResultContracts {
+		if err = validateTemporalResultDestination(proc, p); err != nil {
+			return nil, err
+		}
+	}
 	if features.IPFunctionSemantics || features.TOBase64ResultContracts || features.IPFunctionResultContracts ||
 		features.ExpressionResultMetadataContracts {
 		if err = validateIPFunctionDestination(proc, p); err != nil {
@@ -2272,6 +2277,9 @@ func validateRemoteExpressionPipelineProtocol(
 	if !features.Any() {
 		return nil
 	}
+	if features.LegacyTemporalResultContracts {
+		return moerr.NewNotSupportedNoCtx("legacy temporal result vector contract is incompatible with this CN")
+	}
 	protocolVersion, hasProtocolVersion := int64(0), false
 	if proc != nil {
 		protocolVersion, hasProtocolVersion = remoteMORPCProtocolVersion(proc.GetService())
@@ -2281,6 +2289,9 @@ func validateRemoteExpressionPipelineProtocol(
 	}
 	if features.PreparedPrecisionScalar && (!hasProtocolVersion || protocolVersion < defines.MORPCVersion95) {
 		return moerr.NewNotSupportedNoCtx("prepared scalar precision requires MORPC protocol version 95")
+	}
+	if features.TemporalResultContracts && (!hasProtocolVersion || protocolVersion < defines.MORPCVersion97) {
+		return moerr.NewNotSupportedNoCtx("temporal result contracts require MORPC protocol version 97")
 	}
 	if features.NumericPrefix &&
 		(!hasProtocolVersion || protocolVersion < defines.MORPCVersion30) {

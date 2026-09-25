@@ -518,10 +518,10 @@ func isAMOrPM(_ *GeneralTime, input string, ctx map[string]int) (string, bool) {
 	return input[2:], true
 }
 
-// Day of the month, numeric (0..31)
+// Two-digit day; TIME formats can use it as a duration in days.
 func dayOfMonthNumeric(t *GeneralTime, input string, _ map[string]int) (string, bool) {
-	v, step := parseNDigits(input, 2) // 0..31
-	if step <= 0 || v > 31 {
+	v, step := parseNDigits(input, 2)
+	if step <= 0 || v > 99 {
 		return input, false
 	}
 	t.setDay(uint8(v))

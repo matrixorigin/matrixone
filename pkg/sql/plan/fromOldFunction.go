@@ -27,10 +27,10 @@ func ExtractToDateReturnType(format string) (tp types.T, fsp int) {
 	isTime, isDate, hasMicroseconds := types.ClassifyStrToDateFormat(format)
 	if isTime && !isDate {
 		tp = types.T_time
-	} else if !isTime && isDate {
-		tp = types.T_date
-	} else {
+	} else if isTime && isDate {
 		tp = types.T_datetime
+	} else {
+		tp = types.T_date
 	}
 	if hasMicroseconds {
 		fsp = MaxFsp

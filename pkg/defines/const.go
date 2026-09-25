@@ -133,7 +133,8 @@ const (
 	MORPCVersion95     int64 = 95 // prepared scalar precision execution across CNs
 	MORPCVersion96     int64 = 96 // coordinator-independent vector scan object partitions
 	MORPCVersion97     int64 = 97 // decimal division result semantics across CNs
-	MORPCLatestVersion       = MORPCVersion97
+	MORPCVersion98     int64 = 98 // temporal expression, interval, and WEEK contracts
+	MORPCLatestVersion       = MORPCVersion98
 )
 
 // DefaultLockWaitTimeoutSeconds is shared by the frontend default and by

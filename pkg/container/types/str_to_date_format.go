@@ -30,7 +30,9 @@ func ClassifyStrToDateFormat(format string) (isTime, isDate, hasMicroseconds boo
 			isTime = true
 		case 'f':
 			isTime, hasMicroseconds = true, true
-		case 'y', 'Y', 'm', 'M', 'c', 'b', 'D', 'd', 'e', 'j',
+		// Day fields can count elapsed days when paired only with a clock.
+		case 'D', 'd', 'e':
+		case 'y', 'Y', 'm', 'M', 'c', 'b', 'j',
 			'a', 'W', 'w', 'U', 'u', 'V', 'v', 'X', 'x':
 			isDate = true
 		}

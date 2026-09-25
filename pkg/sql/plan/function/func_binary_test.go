@@ -5539,22 +5539,22 @@ func initTimeDiffInDatetimeTestCase() []tcTemp {
 	// Test case 3
 	t31, _ := types.ParseDatetime("2012-12-12 22:22:22", 6)
 	t32, _ := types.ParseDatetime("2000-12-12 11:11:11", 6)
-	r3, _ := types.ParseTime("105203:11:11", 0)
+	r3, _ := types.ParseTime("838:59:59", 0)
 
 	// Test case 4
 	t41, _ := types.ParseDatetime("2000-12-12 11:11:11", 6)
 	t42, _ := types.ParseDatetime("2012-12-12 22:22:22", 6)
-	r4, _ := types.ParseTime("-105203:11:11", 0)
+	r4, _ := types.ParseTime("-838:59:59", 0)
 
 	// Test case 5
 	t51, _ := types.ParseDatetime("2012-12-12 22:22:22", 6)
 	t52, _ := types.ParseDatetime("2012-10-10 11:11:11", 6)
-	r5, _ := types.ParseTime("1523:11:11", 0)
+	r5, _ := types.ParseTime("838:59:59", 0)
 
 	// Test case 6
 	t61, _ := types.ParseDatetime("2012-10-10 11:11:11", 6)
 	t62, _ := types.ParseDatetime("2012-12-12 22:22:22", 6)
-	r6, _ := types.ParseTime("-1523:11:11", 0)
+	r6, _ := types.ParseTime("-838:59:59", 0)
 
 	// Test case 7
 	t71, _ := types.ParseDatetime("2012-12-12 22:22:22", 6)

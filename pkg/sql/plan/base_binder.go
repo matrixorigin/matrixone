@@ -6320,7 +6320,7 @@ func bindFuncExprImplByPlanExpr(
 		} else {
 			// Lower dynamic formats to the legacy three-argument overload. This
 			// keeps serialized plans executable by older CNs during rolling upgrades.
-			args = append(args, makePlan2DateConstNullExprWithScale(types.T_varchar, 6))
+			args = append(args, makePlan2DateConstNullExprWithScale(types.T_datetime, 6))
 		}
 	case "unix_timestamp":
 		if len(args) == 1 {
@@ -6842,6 +6842,33 @@ func bindFuncExprImplByPlanExpr(
 					return nil, moerr.NewInvalidInput(ctx, name+" function have invalid input args type")
 				}
 			}
+		}
+		if len(argsType) == 2 && types.T(argsType[0].Oid).IsMySQLString() && types.T(argsType[1].Oid).IsMySQLString() {
+			// String columns and markers can carry any supported fraction. Only
+			// validated literals can narrow the declared TIME precision.
+			sourceArgs := args
+			if originalBoundExpr != nil && originalBoundExpr.GetF() != nil && len(originalBoundExpr.GetF().Args) == 2 {
+				sourceArgs = originalBoundExpr.GetF().Args
+			}
+			fsp := int32(0)
+			for _, arg := range sourceArgs {
+				literalFSP, ok := timediffLiteralFSP(arg)
+				if !ok {
+					fsp = 6
+					break
+				}
+				fsp = max(fsp, literalFSP)
+			}
+			returnType.Scale = fsp
+		}
+
+	case "addtime", "subtime":
+		// A direct prepared parameter has TIME(6) result metadata in MySQL.
+		// Keep the string overload and its physical argument: an implicit cast
+		// would reject invalid values before the function can return NULL.
+		if len(args) == 2 && (args[0].GetP() != nil ||
+			(originalBoundExpr != nil && originalBoundExpr.Typ.Id == int32(types.T_time))) {
+			returnType = types.New(types.T_time, 0, 6)
 		}
 
 	case "maketime":
@@ -7874,6 +7901,28 @@ func timestampPairLiteralFSP(expr *Expr, datetime bool) (int32, bool) {
 	return int32(digits), true
 }
 
+func timediffLiteralFSP(expr *Expr) (int32, bool) {
+	literal := expr.GetLit()
+	if literal == nil || literal.Isnull {
+		return 0, false
+	}
+	value, ok := literal.GetValue().(*plan.Literal_Sval)
+	if !ok {
+		return 0, false
+	}
+	if dot := strings.IndexByte(value.Sval, '.'); dot >= 0 {
+		for i := dot + 1; i < len(value.Sval); i++ {
+			if value.Sval[i] < '0' || value.Sval[i] > '9' {
+				return 0, false
+			}
+		}
+	}
+	if fsp, ok := timestampPairLiteralFSP(expr, false); ok {
+		return fsp, true
+	}
+	return timestampPairLiteralFSP(expr, true)
+}
+
 func timestampAddUnitFromPlanExpr(expr *Expr) (types.IntervalType, bool) {
 	literal := expr.GetLit()
 	if literal == nil || literal.Isnull {
@@ -7928,7 +7977,7 @@ func preparedStrToDateArgs(original *Expr, name string, args []*Expr) bool {
 		return false
 	}
 	switch types.T(fn.Args[2].Typ.Id) {
-	case types.T_date, types.T_datetime, types.T_time, types.T_varchar:
+	case types.T_date, types.T_datetime, types.T_time:
 		return true
 	}
 	return false
@@ -9431,7 +9480,14 @@ func appendExplicitCastBeforeExpr(ctx context.Context, expr *Expr, toType Type) 
 // CNs ignore that field and continue to execute overload 0, while new planners
 // can distinguish this user-written CAST from implicit reconciliation casts.
 func appendSyntaxExplicitCastBeforeExpr(ctx context.Context, expr *Expr, toType Type) (*Expr, error) {
-	cast, err := appendCastBeforeExprWithOverload(ctx, expr, toType, 0)
+	overload := int32(0)
+	if types.T(toType.Id) == types.T_date &&
+		(types.T(expr.Typ.Id) == types.T_date || types.T(expr.Typ.Id) == types.T_datetime) {
+		// The typed zero-date sentinel needs the expression CAST policy. The
+		// existing explicit overload keeps it distinct from assignment casts.
+		overload = 1
+	}
+	cast, err := appendCastBeforeExprWithOverload(ctx, expr, toType, overload)
 	if err != nil {
 		return nil, err
 	}

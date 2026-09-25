@@ -11296,16 +11296,6 @@ var supportedDateAndTimeBuiltIns = []FuncNew{
 					return builtInStrToTime
 				},
 			},
-			{
-				overloadId: 3,
-				args:       []types.T{types.T_varchar, types.T_varchar, types.T_varchar},
-				retType: func(parameters []types.Type) types.Type {
-					return types.New(types.T_varchar, 29, normalizeStrToDateScale(parameters[2].Scale))
-				},
-				newOp: func() executeLogicOfOverload {
-					return builtInStrToDateDynamic
-				},
-			},
 		},
 	},
 
@@ -11432,7 +11422,8 @@ var supportedDateAndTimeBuiltIns = []FuncNew{
 				overloadId: 0,
 				args:       []types.T{types.T_time, types.T_time},
 				retType: func(parameters []types.Type) types.Type {
-					return parameters[0]
+					scale := max(parameters[0].Scale, parameters[1].Scale)
+					return types.T_time.ToTypeWithScale(scale)
 				},
 				newOp: func() executeLogicOfOverload {
 					return TimeDiff[types.Time]
@@ -11442,9 +11433,7 @@ var supportedDateAndTimeBuiltIns = []FuncNew{
 				overloadId: 1,
 				args:       []types.T{types.T_datetime, types.T_datetime},
 				retType: func(parameters []types.Type) types.Type {
-					t := types.T_time.ToType()
-					t.Scale = parameters[0].Scale
-					return t
+					return types.T_time.ToTypeWithScale(max(parameters[0].Scale, parameters[1].Scale))
 				},
 				newOp: func() executeLogicOfOverload {
 					return TimeDiff[types.Datetime]

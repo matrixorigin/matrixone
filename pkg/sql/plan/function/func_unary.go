@@ -1107,15 +1107,41 @@ func UtcDate(_ []*vector.Vector, result vector.FunctionResultWrapper, proc *proc
 }
 
 func DateToDate(ivecs []*vector.Vector, result vector.FunctionResultWrapper, proc *process.Process, length int, selectList *FunctionSelectList) error {
-	return opUnaryFixedToFixed[types.Date, types.Date](ivecs, result, proc, length, func(v types.Date) types.Date {
-		return v
+	modeChecked, rejectZero := false, false
+	var modeErr error
+	err := opUnaryFixedToFixedWithNullCheck[types.Date, types.Date](ivecs, result, length, func(v types.Date) (types.Date, bool) {
+		if v == types.ZeroDate {
+			if !modeChecked {
+				rejectZero, modeErr = process.ResolveExplicitZeroTemporalCastReturnsNull(proc)
+				modeChecked = true
+			}
+			return v, rejectZero || modeErr != nil
+		}
+		return v, false
 	}, selectList)
+	if modeErr != nil {
+		return modeErr
+	}
+	return err
 }
 
 func DatetimeToDate(ivecs []*vector.Vector, result vector.FunctionResultWrapper, proc *process.Process, length int, selectList *FunctionSelectList) error {
-	return opUnaryFixedToFixed[types.Datetime, types.Date](ivecs, result, proc, length, func(v types.Datetime) types.Date {
-		return v.ToDate()
+	modeChecked, rejectZero := false, false
+	var modeErr error
+	err := opUnaryFixedToFixedWithNullCheck[types.Datetime, types.Date](ivecs, result, length, func(v types.Datetime) (types.Date, bool) {
+		if v == types.ZeroDatetime {
+			if !modeChecked {
+				rejectZero, modeErr = process.ResolveExplicitZeroTemporalCastReturnsNull(proc)
+				modeChecked = true
+			}
+			return v.ToDate(), rejectZero || modeErr != nil
+		}
+		return v.ToDate(), false
 	}, selectList)
+	if modeErr != nil {
+		return modeErr
+	}
+	return err
 }
 
 func TimeToDate(ivecs []*vector.Vector, result vector.FunctionResultWrapper, proc *process.Process, length int, selectList *FunctionSelectList) error {
@@ -1126,13 +1152,47 @@ func TimeToDate(ivecs []*vector.Vector, result vector.FunctionResultWrapper, pro
 
 // DateStringToDate can still speed up if vec is const. but we will do the constant fold. so it does not matter.
 func DateStringToDate(ivecs []*vector.Vector, result vector.FunctionResultWrapper, proc *process.Process, length int, selectList *FunctionSelectList) error {
-	return opUnaryBytesToFixedWithErrorCheck[types.Date](ivecs, result, proc, length, func(v []byte) (types.Date, error) {
-		d, e := types.ParseDatetime(functionUtil.QuickBytesToStr(v), 6)
-		if e != nil {
-			return 0, moerr.NewOutOfRangeNoCtxf("date", "'%s'", v)
+	source := vector.GenerateFunctionStrParameter(ivecs[0])
+	rs := vector.MustFunctionResult[types.Date](result)
+	modeChecked, rejectZero := false, false
+	for i := uint64(0); i < uint64(length); i++ {
+		if functionRowSkipped(selectList, i) {
+			if err := rs.Append(0, true); err != nil {
+				return err
+			}
+			continue
 		}
-		return d.ToDate(), nil
-	}, selectList)
+		value, null := source.GetStrValue(i)
+		if null {
+			if err := rs.Append(0, true); err != nil {
+				return err
+			}
+			continue
+		}
+		parsed, err := types.ParseDatetime(functionUtil.QuickBytesToStr(value), 6)
+		if err != nil {
+			return moerr.NewOutOfRangeNoCtxf("date", "'%s'", value)
+		}
+		if parsed == types.ZeroDatetime {
+			if !modeChecked {
+				rejectZero, err = process.ResolveExplicitZeroTemporalCastReturnsNull(proc)
+				if err != nil {
+					return err
+				}
+				modeChecked = true
+			}
+			if rejectZero {
+				if err := rs.Append(0, true); err != nil {
+					return err
+				}
+				continue
+			}
+		}
+		if err := rs.Append(parsed.ToDate(), false); err != nil {
+			return err
+		}
+	}
+	return nil
 }
 
 func DateToDay(ivecs []*vector.Vector, result vector.FunctionResultWrapper, proc *process.Process, length int, selectList *FunctionSelectList) error {
@@ -1196,9 +1256,10 @@ func parseDateExtractParts(value string) (dateExtractParts, bool) {
 	return parts, true
 }
 
-func dateStringToFixedWithNullOnError[T types.FixedSizeTExceptStrType](ivecs []*vector.Vector, result vector.FunctionResultWrapper, _ *process.Process, length int, selectList *FunctionSelectList, fn func(dateExtractParts) (T, bool)) error {
+func dateStringToFixedWithNullOnError[T types.FixedSizeTExceptStrType](ivecs []*vector.Vector, result vector.FunctionResultWrapper, proc *process.Process, length int, selectList *FunctionSelectList, fn func(dateExtractParts) (T, bool)) error {
 	source := vector.GenerateFunctionStrParameter(ivecs[0])
 	rs := vector.MustFunctionResult[T](result)
+	modeChecked, rejectZero := false, false
 	for i := uint64(0); i < uint64(length); i++ {
 		if selectList != nil && (selectList.IgnoreAllRow() ||
 			(!selectList.ShouldEvalAllRow() && selectList.Contains(i))) {
@@ -1220,6 +1281,22 @@ func dateStringToFixedWithNullOnError[T types.FixedSizeTExceptStrType](ivecs []*
 				return err
 			}
 			continue
+		}
+		if parts.year == 0 && parts.month == 0 && parts.day == 0 {
+			if !modeChecked {
+				var err error
+				rejectZero, err = process.ResolveExplicitZeroTemporalCastReturnsNull(proc)
+				if err != nil {
+					return err
+				}
+				modeChecked = true
+			}
+			if rejectZero {
+				if err := rs.Append(*new(T), true); err != nil {
+					return err
+				}
+				continue
+			}
 		}
 		valueToAppend, valid := fn(parts)
 		if err := rs.Append(valueToAppend, !valid); err != nil {
@@ -10664,7 +10741,14 @@ func DateStringToMonth(ivecs []*vector.Vector, result vector.FunctionResultWrapp
 
 	ivec := vector.GenerateFunctionStrParameter(ivecs[0])
 	rs := vector.MustFunctionResult[uint8](result)
+	modeChecked, rejectZero := false, false
 	for i := uint64(0); i < uint64(length); i++ {
+		if functionRowSkipped(selectList, i) {
+			if err := rs.Append(0, true); err != nil {
+				return err
+			}
+			continue
+		}
 		v, null := ivec.GetStrValue(i)
 		if null {
 			if err := rs.Append(0, true); err != nil {
@@ -10677,6 +10761,21 @@ func DateStringToMonth(ivecs []*vector.Vector, result vector.FunctionResultWrapp
 					return err
 				}
 			} else {
+				if d == types.ZeroDate {
+					if !modeChecked {
+						rejectZero, e = process.ResolveExplicitZeroTemporalCastReturnsNull(proc)
+						if e != nil {
+							return e
+						}
+						modeChecked = true
+					}
+					if rejectZero {
+						if err := rs.Append(0, true); err != nil {
+							return err
+						}
+						continue
+					}
+				}
 				if err := rs.Append(d.Month(), false); err != nil {
 					return err
 				}
@@ -10699,13 +10798,47 @@ func DatetimeToYear(ivecs []*vector.Vector, result vector.FunctionResultWrapper,
 }
 
 func DateStringToYear(ivecs []*vector.Vector, result vector.FunctionResultWrapper, proc *process.Process, length int, selectList *FunctionSelectList) error {
-	return opUnaryStrToFixedWithErrorCheck[int64](ivecs, result, proc, length, func(v string) (int64, error) {
-		d, e := types.ParseDateCast(v)
-		if e != nil {
-			return 0, e
+	source := vector.GenerateFunctionStrParameter(ivecs[0])
+	rs := vector.MustFunctionResult[int64](result)
+	modeChecked, rejectZero := false, false
+	for i := uint64(0); i < uint64(length); i++ {
+		if functionRowSkipped(selectList, i) {
+			if err := rs.Append(0, true); err != nil {
+				return err
+			}
+			continue
 		}
-		return int64(d.Year()), nil
-	}, selectList)
+		value, null := source.GetStrValue(i)
+		if null {
+			if err := rs.Append(0, true); err != nil {
+				return err
+			}
+			continue
+		}
+		parsed, err := types.ParseDateCast(functionUtil.QuickBytesToStr(value))
+		if err != nil {
+			return err
+		}
+		if parsed == types.ZeroDate {
+			if !modeChecked {
+				rejectZero, err = process.ResolveExplicitZeroTemporalCastReturnsNull(proc)
+				if err != nil {
+					return err
+				}
+				modeChecked = true
+			}
+			if rejectZero {
+				if err := rs.Append(0, true); err != nil {
+					return err
+				}
+				continue
+			}
+		}
+		if err := rs.Append(int64(parsed.Year()), false); err != nil {
+			return err
+		}
+	}
+	return nil
 }
 
 // normalizeWeekMode applies the same modulo-eight normalization used by the

@@ -43,13 +43,52 @@ select str_to_date('2024-09-4', '%x-%v-%w') as literal_week_date;
 prepare dynamic_date from 'select str_to_date(?, ?) as prepared_date';
 set @date_value = '2024-09-4', @date_format = '%x-%v-%w';
 execute dynamic_date using @date_value, @date_format;
-➤ prepared_date[12,29,0]  𝄀
-2024-02-29
+➤ prepared_date[93,26,0]  𝄀
+2024-02-29 00:00:00
 set @date_value = '2024-%f-02-29', @date_format = '%Y-%%f-%m-%d';
 execute dynamic_date using @date_value, @date_format;
-➤ prepared_date[12,29,0]  𝄀
-2024-02-29
+➤ prepared_date[93,26,0]  𝄀
+2024-02-29 00:00:00
 deallocate prepare dynamic_date;
+select str_to_date('1 12:34:56', '%d %H:%i:%s') as duration_day,
+str_to_date('34 22:59:59', '%d %H:%i:%s') as duration_max,
+str_to_date('35 00:00:00', '%d %H:%i:%s') as duration_overflow;
+➤ duration_day[92,10,0]  ¦  duration_max[92,10,0]  ¦  duration_overflow[92,10,0]  𝄀
+36:34:56  ¦  838:59:59  ¦  null
+prepare dynamic_time from 'select addtime(?, ?) as added, subtime(?, ?) as subtracted';
+set @first = '12:34:56', @second = '1:02:03';
+execute dynamic_time using @first, @second, @first, @second;
+➤ added[92,17,0]  ¦  subtracted[92,17,0]  𝄀
+13:36:59  ¦  11:32:53
+set @first = '2024-02-29 12:34:56';
+execute dynamic_time using @first, @second, @first, @second;
+➤ added[92,17,0]  ¦  subtracted[92,17,0]  𝄀
+13:36:59  ¦  11:32:53
+set @first = 'invalid';
+execute dynamic_time using @first, @second, @first, @second;
+➤ added[92,17,0]  ¦  subtracted[92,17,0]  𝄀
+null  ¦  null
+deallocate prepare dynamic_time;
+select timediff('12:00:00.1', '11:00:00.0') as literal_fsp,
+timediff('12:00:00.123456', '11:00:00') as full_fsp;
+➤ literal_fsp[92,12,0]  ¦  full_fsp[92,17,0]  𝄀
+01:00:00.100000000  ¦  01:00:00.123456000
+select timediff('838:59:59', '-00:00:01') as positive_clip,
+timediff('-838:59:59', '00:00:01') as negative_clip,
+addtime('2000000000:00:00', '2000000000:00:00') as add_overflow,
+subtime('2000000000:00:00', '-2000000000:00:00') as sub_overflow;
+➤ positive_clip[92,10,0]  ¦  negative_clip[92,10,0]  ¦  add_overflow[12,29,0]  ¦  sub_overflow[12,29,0]  𝄀
+838:59:59  ¦  -838:59:59  ¦  838:59:59  ¦  838:59:59
+prepare dynamic_timediff from 'select timediff(?, ?) as dynamic_fsp';
+set @first = '12:00:00.123456', @second = '11:00:00';
+execute dynamic_timediff using @first, @second;
+➤ dynamic_fsp[92,17,0]  𝄀
+01:00:00.123456000
+set @first = '12:00:00.1';
+execute dynamic_timediff using @first, @second;
+➤ dynamic_fsp[92,17,0]  𝄀
+01:00:00.100000000
+deallocate prepare dynamic_timediff;
 set sql_mode = '';
 select cast('12:99:00' as time) as invalid_minute, cast('12:34:99' as time) as invalid_second,
 cast('12:34:56tail' as time) as valid_prefix;

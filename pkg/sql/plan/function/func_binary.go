@@ -4166,6 +4166,9 @@ func AddTime(ivecs []*vector.Vector, result vector.FunctionResultWrapper, proc *
 	case types.T_timestamp:
 		return addTimeToTimestamp(ivecs, result, proc, length, selectList)
 	case types.T_char, types.T_varchar, types.T_text:
+		if result.GetResultVector().GetType().Oid == types.T_time {
+			return addTimeToTime(ivecs, result, proc, length, selectList)
+		}
 		// Try to parse as datetime first, then time
 		return addTimeToString(ivecs, result, proc, length, selectList)
 	default:
@@ -4174,17 +4177,23 @@ func AddTime(ivecs []*vector.Vector, result vector.FunctionResultWrapper, proc *
 }
 
 func addTimeToTime(ivecs []*vector.Vector, result vector.FunctionResultWrapper, proc *process.Process, length int, selectList *FunctionSelectList) error {
-	times1 := vector.GenerateFunctionFixedTypeParameter[types.Time](ivecs[0])
+	stringInput := ivecs[0].GetType().Oid != types.T_time
+	var times1 vector.FunctionParameterWrapper[types.Time]
+	var string1 vector.FunctionParameterWrapper[types.Varlena]
+	if stringInput {
+		string1 = vector.GenerateFunctionStrParameter(ivecs[0])
+	} else {
+		times1 = vector.GenerateFunctionFixedTypeParameter[types.Time](ivecs[0])
+	}
 	time2Param := vector.GenerateFunctionStrParameter(ivecs[1])
 	rs := vector.MustFunctionResult[types.Time](result)
 
 	// Determine scale from input
-	scale := int32(ivecs[0].GetType().Scale)
+	scale := int32(rs.GetType().Scale)
 	if scale2 := int32(ivecs[1].GetType().Scale); scale2 > scale {
 		scale = scale2
 	}
 	rs.TempSetType(types.New(types.T_time, 0, scale))
-
 	for i := uint64(0); i < uint64(length); i++ {
 		if selectList != nil && selectList.Contains(i) {
 			if err := rs.Append(types.Time(0), true); err != nil {
@@ -4193,7 +4202,22 @@ func addTimeToTime(ivecs []*vector.Vector, result vector.FunctionResultWrapper, 
 			continue
 		}
 
-		time1, null1 := times1.GetValue(i)
+		var time1 types.Time
+		var null1 bool
+		if stringInput {
+			var raw []byte
+			raw, null1 = string1.GetStrValue(i)
+			if !null1 {
+				var parseErr error
+				time1, parseErr = types.ParseTime(functionUtil.QuickBytesToStr(raw), scale)
+				if parseErr != nil {
+					appendInvalidTimeWarning(proc, functionUtil.QuickBytesToStr(raw))
+					null1 = true
+				}
+			}
+		} else {
+			time1, null1 = times1.GetValue(i)
+		}
 		time2Str, null2 := time2Param.GetStrValue(i)
 
 		if null1 || null2 {
@@ -4214,9 +4238,8 @@ func addTimeToTime(ivecs []*vector.Vector, result vector.FunctionResultWrapper, 
 
 		// Duration functions publish the MySQL TIME endpoint rather than the
 		// wider internal duration range used by interval arithmetic.
-		rawTime := types.Time(int64(time1) + int64(time2))
-		resultTime := types.ClampMySQLTimeForScale(rawTime, scale)
-		if resultTime != rawTime {
+		resultTime, rawTime, truncated := timeArithmeticResult(time1, time2, false, scale)
+		if truncated {
 			appendTimeRangeWarning(proc, rawTime, scale)
 		}
 
@@ -4401,6 +4424,37 @@ func appendTimeRangeWarning(proc *process.Process, value types.Time, scale int32
 	}
 }
 
+func timeArithmeticResult(first, second types.Time, subtract bool, scale int32) (result, raw types.Time, truncated bool) {
+	right := int64(second)
+	if subtract {
+		if right == math.MinInt64 {
+			return types.MySQLTimeMaxForScale(scale), types.Time(math.MaxInt64), true
+		}
+		right = -right
+	}
+	sum, ok := safeTimestampWindowSum(int64(first), right)
+	if !ok {
+		if right > 0 {
+			sum = math.MaxInt64
+		} else {
+			sum = math.MinInt64
+		}
+	}
+	raw = types.Time(sum)
+	result = types.ClampMySQLTimeForScale(raw, scale)
+	return result, raw, !ok || result != raw
+}
+
+func appendInvalidTimeWarning(proc *process.Process, value string) {
+	if proc == nil {
+		return
+	}
+	if appender, ok := proc.GetWarningSink().(warningDiagnosticAppender); ok {
+		appender.AppendWarningDiagnostic(moerr.ER_TRUNCATED_WRONG_VALUE,
+			fmt.Sprintf("Truncated incorrect time value: '%s'", value))
+	}
+}
+
 func validDatetimeResult(value types.Datetime) bool {
 	return value >= types.DatetimeEpoch && value <= types.DatetimeFromClock(types.MaxDatetimeYear, 12, 31, 23, 59, 59, 999999)
 }
@@ -4411,7 +4465,7 @@ func addTimeToString(ivecs []*vector.Vector, result vector.FunctionResultWrapper
 	rs := vector.MustFunctionResult[types.Varlena](result)
 
 	scale := int32(6)
-	rs.TempSetType(types.New(types.T_varchar, 0, scale))
+	rs.TempSetType(types.New(types.T_varchar, rs.GetType().Width, scale))
 	for i := uint64(0); i < uint64(length); i++ {
 		if selectList != nil && selectList.Contains(i) {
 			if err := rs.AppendBytes(nil, true); err != nil {
@@ -4446,11 +4500,11 @@ func addTimeToString(ivecs []*vector.Vector, result vector.FunctionResultWrapper
 			outputScale = scale
 		}
 		if kind == temporalStringTime {
-			rawTime := types.Time(int64(time1) + int64(time2))
-			if types.ClampMySQLTimeForScale(rawTime, outputScale) != rawTime {
+			resultTime, rawTime, truncated := timeArithmeticResult(time1, time2, false, outputScale)
+			if truncated {
 				appendTimeRangeWarning(proc, rawTime, outputScale)
 			}
-			if err := appendStringTimeResult(rs, rawTime, outputScale); err != nil {
+			if err := appendStringTimeResult(rs, resultTime, outputScale); err != nil {
 				return err
 			}
 			continue
@@ -4484,6 +4538,9 @@ func SubTime(ivecs []*vector.Vector, result vector.FunctionResultWrapper, proc *
 	case types.T_timestamp:
 		return subTimeFromTimestamp(ivecs, result, proc, length, selectList)
 	case types.T_char, types.T_varchar, types.T_text:
+		if result.GetResultVector().GetType().Oid == types.T_time {
+			return subTimeFromTime(ivecs, result, proc, length, selectList)
+		}
 		// Try to parse as datetime first, then time
 		return subTimeFromString(ivecs, result, proc, length, selectList)
 	default:
@@ -4492,12 +4549,19 @@ func SubTime(ivecs []*vector.Vector, result vector.FunctionResultWrapper, proc *
 }
 
 func subTimeFromTime(ivecs []*vector.Vector, result vector.FunctionResultWrapper, proc *process.Process, length int, selectList *FunctionSelectList) error {
-	times1 := vector.GenerateFunctionFixedTypeParameter[types.Time](ivecs[0])
+	stringInput := ivecs[0].GetType().Oid != types.T_time
+	var times1 vector.FunctionParameterWrapper[types.Time]
+	var string1 vector.FunctionParameterWrapper[types.Varlena]
+	if stringInput {
+		string1 = vector.GenerateFunctionStrParameter(ivecs[0])
+	} else {
+		times1 = vector.GenerateFunctionFixedTypeParameter[types.Time](ivecs[0])
+	}
 	time2Param := vector.GenerateFunctionStrParameter(ivecs[1])
 	rs := vector.MustFunctionResult[types.Time](result)
 
 	// Determine scale from input
-	scale := int32(ivecs[0].GetType().Scale)
+	scale := int32(rs.GetType().Scale)
 	if scale2 := int32(ivecs[1].GetType().Scale); scale2 > scale {
 		scale = scale2
 	}
@@ -4511,7 +4575,22 @@ func subTimeFromTime(ivecs []*vector.Vector, result vector.FunctionResultWrapper
 			continue
 		}
 
-		time1, null1 := times1.GetValue(i)
+		var time1 types.Time
+		var null1 bool
+		if stringInput {
+			var raw []byte
+			raw, null1 = string1.GetStrValue(i)
+			if !null1 {
+				var parseErr error
+				time1, parseErr = types.ParseTime(functionUtil.QuickBytesToStr(raw), scale)
+				if parseErr != nil {
+					appendInvalidTimeWarning(proc, functionUtil.QuickBytesToStr(raw))
+					null1 = true
+				}
+			}
+		} else {
+			time1, null1 = times1.GetValue(i)
+		}
 		time2Str, null2 := time2Param.GetStrValue(i)
 
 		if null1 || null2 {
@@ -4532,9 +4611,8 @@ func subTimeFromTime(ivecs []*vector.Vector, result vector.FunctionResultWrapper
 
 		// Duration functions publish the MySQL TIME endpoint rather than the
 		// wider internal duration range used by interval arithmetic.
-		rawTime := types.Time(int64(time1) - int64(time2))
-		resultTime := types.ClampMySQLTimeForScale(rawTime, scale)
-		if resultTime != rawTime {
+		resultTime, rawTime, truncated := timeArithmeticResult(time1, time2, true, scale)
+		if truncated {
 			appendTimeRangeWarning(proc, rawTime, scale)
 		}
 
@@ -4652,7 +4730,7 @@ func subTimeFromString(ivecs []*vector.Vector, result vector.FunctionResultWrapp
 	rs := vector.MustFunctionResult[types.Varlena](result)
 
 	scale := int32(6)
-	rs.TempSetType(types.New(types.T_varchar, 0, scale))
+	rs.TempSetType(types.New(types.T_varchar, rs.GetType().Width, scale))
 	for i := uint64(0); i < uint64(length); i++ {
 		if selectList != nil && selectList.Contains(i) {
 			if err := rs.AppendBytes(nil, true); err != nil {
@@ -4687,11 +4765,11 @@ func subTimeFromString(ivecs []*vector.Vector, result vector.FunctionResultWrapp
 			outputScale = scale
 		}
 		if kind == temporalStringTime {
-			rawTime := types.Time(int64(time1) - int64(time2))
-			if types.ClampMySQLTimeForScale(rawTime, outputScale) != rawTime {
+			resultTime, rawTime, truncated := timeArithmeticResult(time1, time2, true, outputScale)
+			if truncated {
 				appendTimeRangeWarning(proc, rawTime, outputScale)
 			}
-			if err := appendStringTimeResult(rs, rawTime, outputScale); err != nil {
+			if err := appendStringTimeResult(rs, resultTime, outputScale); err != nil {
 				return err
 			}
 			continue
@@ -8984,7 +9062,17 @@ func TimeDiff[T types.Time | types.Datetime](ivecs []*vector.Vector, result vect
 	if _, isDatetime := any(*new(T)).(types.Datetime); isDatetime {
 		return timeDiffDatetime(ivecs, result, proc, length, selectList)
 	}
-	return opBinaryFixedFixedToFixedWithErrorCheck[T, T, types.Time](ivecs, result, proc, length, timeDiff[T], selectList)
+	return opBinaryFixedFixedToFixedWithErrorCheck[T, T, types.Time](ivecs, result, proc, length,
+		func(v1, v2 T) (types.Time, error) {
+			diff, err := timeDiff(v1, v2)
+			if err == nil {
+				raw := types.Time(int64(v1 - v2))
+				if diff != raw {
+					appendTimeRangeWarning(proc, raw, result.GetResultVector().GetType().Scale)
+				}
+			}
+			return diff, err
+		}, selectList)
 }
 
 func timeDiffDatetime(ivecs []*vector.Vector, result vector.FunctionResultWrapper, proc *process.Process, length int, selectList *FunctionSelectList) error {
@@ -9044,13 +9132,7 @@ func timeDiff[T types.Time | types.Datetime](v1, v2 T) (types.Time, error) {
 		}
 	}
 
-	// same sign don't need to check overflow
-	tt := types.Time(tmpTime)
-	hour, _, _, _, isNeg := tt.ClockFormat()
-	if !types.ValidTime(uint64(hour), 0, 0) {
-		return signedMySQLTimeFunctionMax(isNeg), nil
-	}
-	return tt, nil
+	return types.ClampMySQLTimeForScale(types.Time(tmpTime), 6), nil
 }
 
 func signedMySQLTimeFunctionMax(negative bool) types.Time {
@@ -9068,7 +9150,6 @@ func TimeDiffString(ivecs []*vector.Vector, result vector.FunctionResultWrapper,
 	rs := vector.MustFunctionResult[types.Time](result)
 
 	scale := int32(6) // Use max scale for string inputs
-	rs.TempSetType(types.New(types.T_time, 0, scale))
 
 	for i := uint64(0); i < uint64(length); i++ {
 		if selectList != nil && selectList.Contains(i) {

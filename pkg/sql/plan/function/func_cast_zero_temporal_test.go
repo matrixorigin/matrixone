@@ -198,10 +198,10 @@ func TestExplicitCastZeroTemporalStringsHonorStrictNoZeroDate(t *testing.T) {
 			},
 		},
 		{
-			name:     "no zero date without strict keeps sentinel",
+			name:     "no zero date without strict nulls expression",
 			input:    "0000-00-00 00:00:00",
 			target:   types.T_datetime.ToType(),
-			wantNull: false,
+			wantNull: true,
 			configure: func(proc *process.Process) {
 				proc.SetResolveVariableFunc(func(string, bool, bool) (interface{}, error) {
 					return "NO_ZERO_DATE", nil

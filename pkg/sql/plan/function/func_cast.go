@@ -1017,6 +1017,14 @@ func newCast(parameters []*vector.Vector, result vector.FunctionResultWrapper, p
 	// Cast Parameter1 as Type Parameter2
 	fromType := parameters[0].GetType()
 	toType := parameters[1].GetType()
+	if mode == castModeExplicit && toType.Oid == types.T_date {
+		switch fromType.Oid {
+		case types.T_date:
+			return DateToDate(parameters, result, proc, length, selectList)
+		case types.T_datetime:
+			return DatetimeToDate(parameters, result, proc, length, selectList)
+		}
+	}
 	from := parameters[0]
 	if mode.isAssignment() && toType.Oid.IsInteger() {
 		switch fromType.Oid {
