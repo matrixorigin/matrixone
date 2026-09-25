@@ -1,0 +1,89 @@
+drop database if exists ft2_cjk_star;
+create database ft2_cjk_star;
+use ft2_cjk_star;
+set experimental_fulltext2_index = 1;
+create table ft(id int primary key, body varchar(200));
+insert into ft values (1,'苹果香蕉'),(2,'苹果香瓜'),(3,'苹果香蕉西瓜'),(4,'红苹果甜');
+create fulltext2 index fi on ft(body) with parser ngram;
+select id from ft where match(body) against('苹果香蕉*' in boolean mode) order by id;
+➤ id[4,32,0]  𝄀
+1  𝄀
+3
+select id from ft where match(body) against('+苹果香蕉*' in boolean mode) order by id;
+➤ id[4,32,0]  𝄀
+1  𝄀
+3
+select id from ft where match(body) against('+苹果香蕉' in boolean mode) order by id;
+➤ id[4,32,0]  𝄀
+1  𝄀
+3
+select id from ft where match(body) against('苹果香蕉') order by id;
+➤ id[4,32,0]  𝄀
+1  𝄀
+3
+select id from ft where match(body) against('苹果香*' in boolean mode) order by id;
+➤ id[4,32,0]  𝄀
+1  𝄀
+2  𝄀
+3
+select id from ft where match(body) against('苹果*' in boolean mode) order by id;
+➤ id[4,32,0]  𝄀
+1  𝄀
+2  𝄀
+3  𝄀
+4
+create table ftm(id int primary key, body varchar(200));
+insert into ftm values
+(1,'苹果香蕉hello'),(2,'苹果香瓜hello'),(3,'苹果香蕉world'),(4,'苹果香蕉help'),(5,'苹果香蕉helloworld');
+create fulltext2 index fim on ftm(body) with parser ngram;
+select id from ftm where match(body) against('苹果香蕉hell*' in boolean mode) order by id;
+➤ id[4,32,0]  𝄀
+1  𝄀
+5
+select id from ftm where match(body) against('+苹果香蕉hell*' in boolean mode) order by id;
+➤ id[4,32,0]  𝄀
+1  𝄀
+5
+select id from ftm where match(body) against('苹果香瓜hell*' in boolean mode) order by id;
+➤ id[4,32,0]  𝄀
+2
+select id from ftm where match(body) against('苹果香蕉help*' in boolean mode) order by id;
+➤ id[4,32,0]  𝄀
+4
+select id from ftm where match(body) against('苹果香蕉xyz*' in boolean mode) order by id;
+➤ id[4,32,0]
+select id from ftm where match(body) against('苹果香蕉hello') order by id;
+➤ id[4,32,0]  𝄀
+1
+create table ftg(id int primary key, body varchar(200));
+insert into ftg values (1,'苹果香蕉'),(2,'苹果香瓜'),(3,'苹果香蕉西瓜'),(4,'红苹果甜');
+create fulltext2 index fig on ftg(body) with parser gojieba;
+select id from ftg where match(body) against('苹果香蕉*' in boolean mode) order by id;
+➤ id[4,32,0]  𝄀
+1  𝄀
+3
+select id from ftg where match(body) against('+苹果香蕉*' in boolean mode) order by id;
+➤ id[4,32,0]  𝄀
+1  𝄀
+3
+select id from ftg where match(body) against('+苹果香蕉' in boolean mode) order by id;
+➤ id[4,32,0]  𝄀
+1  𝄀
+3
+select id from ftg where match(body) against('苹果*' in boolean mode) order by id;
+➤ id[4,32,0]  𝄀
+1  𝄀
+2  𝄀
+3  𝄀
+4
+select id from ftg where match(body) against('苹果香*' in boolean mode) order by id;
+➤ id[4,32,0]  𝄀
+1  𝄀
+2  𝄀
+3
+select id from ftg where match(body) against('+苹果香*' in boolean mode) order by id;
+➤ id[4,32,0]  𝄀
+1  𝄀
+2  𝄀
+3
+drop database ft2_cjk_star;
