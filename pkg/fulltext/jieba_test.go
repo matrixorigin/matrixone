@@ -50,6 +50,77 @@ func TestParsePatternInNLModeNgramUnchanged(t *testing.T) {
 	assert.Equal(t, STAR, ps[0].Operator)
 }
 
+// #29296: a < 3-rune NL pattern must be lowercased before the STAR prefix, so a capitalized short
+// pattern looks up the lowercased stored token instead of prefix-searching the raw string.
+func TestParsePatternInNLModeShortLowercases(t *testing.T) {
+	for _, c := range []struct{ in, want string }{
+		{"hi", "hi*"}, // already lowercase (control)
+		{"Hi", "hi*"},
+		{"HI", "hi*"},
+		{"Ab", "ab*"},
+		{"AB", "ab*"},
+	} {
+		for _, parser := range []string{"", "ngram", "default"} {
+			ps, err := ParsePatternInNLMode(c.in, parser)
+			require.Nil(t, err, "%q parser=%q", c.in, parser)
+			require.Len(t, ps, 1, "%q parser=%q", c.in, parser)
+			assert.Equal(t, c.want, ps[0].Text, "%q parser=%q", c.in, parser)
+			assert.Equal(t, STAR, ps[0].Operator, "%q parser=%q", c.in, parser)
+		}
+	}
+
+	// A 3-rune pattern stays an exact token (the short-prefix rule does not apply) and is
+	// tokenized (already lowercased there); this fix only touches the < 3-rune branch.
+	ps, err := ParsePatternInNLMode("hig", "")
+	require.Nil(t, err)
+	require.Len(t, ps, 1)
+	assert.Equal(t, "hig", ps[0].Text)
+	assert.Equal(t, TEXT, ps[0].Operator)
+}
+
+// #29296 (regression): the short-prefix case fold must match SimpleTokenizer, which folds ONLY
+// Latin-class runes (<0x7FF, outputLatin) and preserves wider runes verbatim (outputCJK). Blanket
+// strings.ToLower folded fullwidth/CJK capitals like `Ａ`/`ẞ`, so the prefix looked up a token the
+// index never stored and missed the original row.
+func TestParsePatternInNLModeShortMatchesTokenizerFolding(t *testing.T) {
+	for _, c := range []struct{ in, want string }{
+		// <0x7FF cased runes DO fold (they route through outputLatin).
+		{"À", "à*"},   // Latin-1 (U+00C0)
+		{"Α", "α*"},   // Greek (U+0391)
+		{"Àb", "àb*"}, // mixed short run still folds each <0x7FF rune
+		// >=0x7FF runes are preserved verbatim (outputCJK), NOT folded.
+		{"Ａ", "Ａ*"}, // fullwidth A (U+FF21)
+		{"ẞ", "ẞ*"}, // capital sharp S (U+1E9E)
+		{"中", "中*"}, // CJK (control: already caseless, must stay)
+	} {
+		for _, parser := range []string{"", "ngram", "default", "json"} {
+			ps, err := ParsePatternInNLMode(c.in, parser)
+			require.Nil(t, err, "%q parser=%q", c.in, parser)
+			require.Len(t, ps, 1, "%q parser=%q", c.in, parser)
+			assert.Equal(t, c.want, ps[0].Text, "%q parser=%q", c.in, parser)
+			assert.Equal(t, STAR, ps[0].Operator, "%q parser=%q", c.in, parser)
+		}
+	}
+}
+
+// #29296 (regression): json_value stores ByteJson.TokenizeValue output verbatim (no case folding),
+// so its short query prefix must preserve case exactly. Blanket lowercasing turned even an ASCII `Hi`
+// into `hi*`, matching the wrong stored value.
+func TestParsePatternInNLModeShortJSONValuePreservesCase(t *testing.T) {
+	for _, c := range []struct{ in, want string }{
+		{"Hi", "Hi*"},
+		{"HI", "HI*"},
+		{"hi", "hi*"}, // already lowercase (control)
+		{"ẞ", "ẞ*"},
+	} {
+		ps, err := ParsePatternInNLMode(c.in, "json_value")
+		require.Nil(t, err, c.in)
+		require.Len(t, ps, 1, c.in)
+		assert.Equal(t, c.want, ps[0].Text, c.in)
+		assert.Equal(t, STAR, ps[0].Operator, c.in)
+	}
+}
+
 func TestParsePatternRoutesByParser(t *testing.T) {
 	// gojieba: "苹果香蕉" segments cleanly into two TEXT tokens.
 	ps, err := ParsePattern("苹果香蕉", int64(tree.FULLTEXT_NL), "gojieba")

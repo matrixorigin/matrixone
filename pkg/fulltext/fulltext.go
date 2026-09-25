@@ -19,6 +19,7 @@ import (
 	"fmt"
 	"math"
 	"strings"
+	"unicode"
 
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
 	"github.com/matrixorigin/matrixone/pkg/monlp/tokenizer"
@@ -915,6 +916,33 @@ func parsePatternInNLModeJieba(pattern string) ([]*Pattern, error) {
 	return list, nil
 }
 
+// normalizeShortPattern lowercases a short (<3-rune) query prefix the SAME way the selected index
+// parser normalizes stored tokens, so the prefix_eq matches what was indexed (#29296):
+//   - json_value stores ByteJson.TokenizeValue output verbatim (no case folding) -> preserve as-is.
+//   - SimpleTokenizer (default/ngram/json) folds ONLY Latin-class runes (<0x7FF, via outputLatin) and
+//     preserves wider runes verbatim (outputCJK), so a fullwidth/CJK capital like `Ａ` or `ẞ` must not
+//     be folded (that would prefix-search a token the index never stored).
+//
+// Blanket strings.ToLower is wrong for both: it folds `Ａ`/`ẞ` (which the ngram index stores cased)
+// and folds every json_value character (which is stored uncased).
+func normalizeShortPattern(pattern, parser string) string {
+	if parser == "json_value" {
+		return pattern
+	}
+	var b strings.Builder
+	b.Grow(len(pattern))
+	for _, r := range pattern {
+		// 0x7FF is SimpleTokenizer.isLatin's boundary: <0x7FF routes to outputLatin (lowercased),
+		// >=0x7FF to outputCJK (preserved).
+		if r < 0x7FF {
+			b.WriteRune(unicode.ToLower(r))
+		} else {
+			b.WriteRune(r)
+		}
+	}
+	return b.String()
+}
+
 // Parse search string in natural language mode
 func ParsePatternInNLMode(pattern string, parser string) ([]*Pattern, error) {
 	if parser == "gojieba" {
@@ -923,9 +951,13 @@ func ParsePatternInNLMode(pattern string, parser string) ([]*Pattern, error) {
 
 	runeSlice := []rune(pattern)
 	ngram_size := 3
-	// if number of character is small than Ngram size = 3, do prefix search
+	// if number of character is small than Ngram size = 3, do prefix search.
+	// Normalize case to match how the selected parser stored its tokens (SimpleTokenizer folds only
+	// Latin runes; json_value preserves case), so a capitalized short pattern (e.g. `Hi`) looks up the
+	// stored token instead of prefix-searching the raw string (#29296). Boolean mode already
+	// lowercases its whole pattern.
 	if len(runeSlice) < ngram_size {
-		return []*Pattern{{Text: pattern + "*", Operator: STAR}}, nil
+		return []*Pattern{{Text: normalizeShortPattern(pattern, parser) + "*", Operator: STAR}}, nil
 	}
 
 	list := make([]*Pattern, 0, 32)
