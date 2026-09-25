@@ -16,11 +16,17 @@ package plan
 
 import (
 	"context"
+	"strings"
 	"testing"
 
 	"github.com/matrixorigin/matrixone/pkg/container/types"
+	"github.com/matrixorigin/matrixone/pkg/container/vector"
 	planpb "github.com/matrixorigin/matrixone/pkg/pb/plan"
+	"github.com/matrixorigin/matrixone/pkg/sql/colexec"
+	"github.com/matrixorigin/matrixone/pkg/sql/parsers/dialect/mysql"
 	"github.com/matrixorigin/matrixone/pkg/sql/plan/function"
+	"github.com/matrixorigin/matrixone/pkg/testutil"
+	"github.com/matrixorigin/matrixone/pkg/vm/process"
 	"github.com/stretchr/testify/require"
 )
 
@@ -91,4 +97,81 @@ func TestPreparedDivisionSpecializationUsesPrecisionIncrementContext(t *testing.
 	division := findPlanFunctionExpr(bound, "/")
 	require.NotNil(t, division)
 	require.Equal(t, types.New(types.T_decimal128, 20, 12), makeTypeByPlan2Expr(division))
+}
+
+func TestDivisionSQLBoundaries(t *testing.T) {
+	for _, test := range []struct {
+		name      string
+		increment int64
+		sql       string
+		width     int32
+		scale     int32
+		want      string
+		wantError bool
+	}{
+		{
+			name:      "shifted numerator",
+			increment: 30,
+			sql: "select cast('3" + strings.Repeat("0", 46) + "' as decimal(47,0)) / " +
+				"cast('1" + strings.Repeat("0", 46) + "' as decimal(47,0))",
+			width: 65, scale: 30, want: "3." + strings.Repeat("0", 30),
+		},
+		{
+			name:      "divisor alignment",
+			increment: 30,
+			sql: "select cast('28" + strings.Repeat("0", 45) + "' as decimal(47,0)) / " +
+				"cast('1" + strings.Repeat("0", 46) + "' as decimal(47,0))",
+			width: 65, scale: 30, want: "2.8" + strings.Repeat("0", 29),
+		},
+		{
+			name:      "highest valid precision",
+			increment: 0,
+			sql: "select cast('" + strings.Repeat("9", 38) + "' as decimal(38,0)) / " +
+				"cast('0." + strings.Repeat("0", 26) + "1' as decimal(38,27))",
+			width: 65, scale: 0, want: strings.Repeat("9", 38) + strings.Repeat("0", 27),
+		},
+		{
+			name:      "declared precision overflow",
+			increment: 0,
+			sql: "select cast('1" + strings.Repeat("0", 37) + "' as decimal(38,0)) / " +
+				"cast('0." + strings.Repeat("0", 29) + "1' as decimal(38,30))",
+			wantError: true,
+		},
+		{
+			name:      "high input scale",
+			increment: 0,
+			sql:       "select cast('0.1' as decimal(38,37)) / cast('2' as decimal(1,0))",
+			width:     38, scale: 30, want: "0.05" + strings.Repeat("0", 28),
+		},
+	} {
+		t.Run(test.name, func(t *testing.T) {
+			proc := testutil.NewProcess(t)
+			mock := NewMockCompilerContext(true)
+			mock.GetProcessFunc = func() *process.Process { return proc }
+			ctx := divPrecisionCompilerContext{CompilerContext: mock, increment: test.increment}
+			statement, err := mysql.ParseOne(t.Context(), test.sql, 1)
+			require.NoError(t, err)
+			defer statement.Free()
+			plan, err := BuildPlan(ctx, statement, false)
+			require.NoError(t, err)
+			query := plan.GetQuery()
+			expr := query.Nodes[query.Steps[len(query.Steps)-1]].ProjectList[0]
+			result, free, err := colexec.GetReadonlyResultFromNoColumnExpression(proc, expr)
+			if free != nil {
+				defer free()
+			}
+			if test.wantError {
+				require.Error(t, err)
+				return
+			}
+			require.NoError(t, err)
+			require.Equal(t, test.width, result.GetType().Width)
+			require.Equal(t, test.scale, result.GetType().Scale)
+			if result.GetType().Oid == types.T_decimal128 {
+				require.Equal(t, test.want, vector.MustFixedColWithTypeCheck[types.Decimal128](result)[0].Format(test.scale))
+			} else {
+				require.Equal(t, test.want, vector.MustFixedColWithTypeCheck[types.Decimal256](result)[0].Format(test.scale))
+			}
+		})
+	}
 }

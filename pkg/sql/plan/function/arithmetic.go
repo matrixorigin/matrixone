@@ -593,7 +593,7 @@ func divFn(parameters []*vector.Vector, result vector.FunctionResultWrapper, pro
 	case types.T_decimal256:
 		shouldError := checkDivisionByZeroBehavior(proc, selectList)
 		resultScale := result.GetResultVector().GetType().Scale
-		return decimalBatchArith[types.Decimal256, types.Decimal256](parameters, result, proc, length, d256DivKernelAtScale(shouldError, resultScale), selectList)
+		return decimal256BatchArith(parameters, result, proc, length, d256DivKernelAtScale(shouldError, resultScale), selectList)
 	case types.T_array_float32:
 		return opBinaryBytesBytesToBytesWithErrorCheck(parameters, result, proc, length, divFnArray[float32], selectList)
 	case types.T_array_float64:

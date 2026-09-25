@@ -1007,10 +1007,22 @@ func d128DivOne(x, y types.Decimal128, dst *types.Decimal128, scaleAdj int32, rs
 		originalX, originalY := x, y
 		signX := d128Abs(&x)
 		signY := d128Abs(&y)
+		// Scaling the divisor preserves a single round-half-up at the final
+		// quotient. Most scale reductions fit D128 and need no big.Int work.
+		scaledY := y
+		if x.B64_127>>63 == 0 && d128MulPow10(&scaledY, -scaleAdj) {
+			result, err := x.Div128(scaledY)
+			if err != nil {
+				return err
+			}
+			d128Negate(&result, signX^signY)
+			*dst = result
+			return nil
+		}
 		x256 := types.Decimal256{B0_63: x.B0_63, B64_127: x.B64_127}
 		y256 := types.Decimal256{B0_63: y.B0_63, B64_127: y.B64_127}
 		var result types.Decimal256
-		if err := d256DivBig(x256, y256, scaleAdj, signX != signY, &result); err != nil {
+		if err := d256DivAdjusted(x256, y256, scaleAdj, signX != signY, &result); err != nil {
 			return moerr.NewInvalidInputNoCtxf("Decimal128 Div overflow: %s/%s", originalX.Format(scale1), originalY.Format(scale2))
 		}
 		signExtension := ^uint64(0) * (result.B64_127 >> 63)
@@ -1031,14 +1043,12 @@ func d128DivOne(x, y types.Decimal128, dst *types.Decimal128, scaleAdj int32, rs
 		// Overflow in scale: fall back to D256 division.
 		x2 := types.Decimal256{B0_63: x.B0_63, B64_127: x.B64_127}
 		y2 := types.Decimal256{B0_63: y.B0_63, B64_127: y.B64_127}
-		if !d256MulPow10(&x2, scaleAdj) {
+		var result types.Decimal256
+		if err := d256DivAdjusted(x2, y2, scaleAdj, false, &result); err != nil ||
+			result.B192_255 != 0 || result.B128_191 != 0 || result.B64_127>>63 != 0 {
 			return moerr.NewInvalidInputNoCtxf("Decimal128 Div overflow: %s/%s", x.Format(scale1), y.Format(scale2))
 		}
-		x2, divErr := x2.Div256(y2)
-		if divErr != nil || x2.B192_255 != 0 || x2.B128_191 != 0 || x2.B64_127>>63 != 0 {
-			return moerr.NewInvalidInputNoCtxf("Decimal128 Div overflow: %s/%s", x.Format(scale1), y.Format(scale2))
-		}
-		z = types.Decimal128{B0_63: x2.B0_63, B64_127: x2.B64_127}
+		z = types.Decimal128{B0_63: result.B0_63, B64_127: result.B64_127}
 		d128Negate(&z, neg)
 		*dst = z
 		return nil
@@ -1072,7 +1082,7 @@ func d128DivOneToD256(x, y types.Decimal128, dst *types.Decimal256, scaleAdj int
 		signY := d128Abs(&y)
 		x256 := types.Decimal256{B0_63: x.B0_63, B64_127: x.B64_127}
 		y256 := types.Decimal256{B0_63: y.B0_63, B64_127: y.B64_127}
-		if err := d256DivBig(x256, y256, scaleAdj, signX != signY, dst); err != nil {
+		if err := d256DivAdjusted(x256, y256, scaleAdj, signX != signY, dst); err != nil {
 			return moerr.NewInvalidInputNoCtxf("Decimal256 Div overflow: %s/%s", originalX.Format(scale1), originalY.Format(scale2))
 		}
 		return nil
@@ -1105,19 +1115,9 @@ func d128DivOneToD256(x, y types.Decimal128, dst *types.Decimal256, scaleAdj int
 	signY := d128Abs(&y)
 	x256 := types.Decimal256{B0_63: x.B0_63, B64_127: x.B64_127}
 	y256 := types.Decimal256{B0_63: y.B0_63, B64_127: y.B64_127}
-	unscaledX256 := x256
-	if !d256MulPow10(&x256, scaleAdj) {
-		if err := d256DivBig(unscaledX256, y256, scaleAdj, signX != signY, dst); err == nil {
-			return nil
-		}
+	if err := d256DivAdjusted(x256, y256, scaleAdj, signX != signY, dst); err != nil {
 		return moerr.NewInvalidInputNoCtxf("Decimal256 Div overflow: %s/%s", x.Format(scale1), y.Format(scale2))
 	}
-	result, err := x256.Div256(y256)
-	if err != nil {
-		return moerr.NewInvalidInputNoCtxf("Decimal256 Div overflow: %s/%s", x.Format(scale1), y.Format(scale2))
-	}
-	d256Negate(&result, signX^signY)
-	*dst = result
 	return nil
 }
 
@@ -3312,27 +3312,9 @@ func d256DivAtScale(v1, v2, rs []types.Decimal256, scale1, scale2, resultScale i
 		if signB {
 			b = b.Minus()
 		}
-		if scaleAdj < 0 {
-			if err := d256DivBig(a, b, scaleAdj, signA != signB, dst); err != nil {
-				return moerr.NewInvalidInputNoCtxf("Decimal256 Div overflow: %s/%s", originalA.Format(scale1), originalB.Format(scale2))
-			}
-			return nil
-		}
-		scaled, err := a.Scale(scaleAdj)
-		if err != nil {
-			if err = d256DivBig(a, b, scaleAdj, signA != signB, dst); err == nil {
-				return nil
-			}
+		if err := d256DivAdjusted(a, b, scaleAdj, signA != signB, dst); err != nil {
 			return moerr.NewInvalidInputNoCtxf("Decimal256 Div overflow: %s/%s", originalA.Format(scale1), originalB.Format(scale2))
 		}
-		quotient, err := scaled.Div256(b)
-		if err != nil {
-			return moerr.NewInvalidInputNoCtxf("Decimal256 Div overflow: %s/%s", originalA.Format(scale1), originalB.Format(scale2))
-		}
-		if signA != signB {
-			quotient = quotient.Minus()
-		}
-		*dst = quotient
 		return nil
 	}
 
@@ -3388,6 +3370,32 @@ func d256DivAtScale(v1, v2, rs []types.Decimal256, scale1, scale2, resultScale i
 		}
 	}
 	return nil
+}
+
+// d256DivAdjusted divides unsigned magnitudes with one final half-up rounding.
+// Div256 doubles the numerator and shifts the divisor using signed comparisons.
+// Keeping the scaled numerator below 2^253 leaves headroom for both operations;
+// values outside that domain use the bounded wide fallback.
+func d256DivAdjusted(a, b types.Decimal256, scaleAdj int32, negative bool, dst *types.Decimal256) error {
+	scaledA, scaledB := a, b
+	fits := true
+	if scaleAdj > 0 {
+		fits = d256MulPow10(&scaledA, scaleAdj)
+	} else if scaleAdj < 0 {
+		fits = d256MulPow10(&scaledB, -scaleAdj)
+	}
+	if fits && scaledA.B192_255>>61 == 0 && scaledB.B192_255>>63 == 0 {
+		quotient, err := scaledA.Div256(scaledB)
+		if err != nil {
+			return err
+		}
+		if negative {
+			quotient = quotient.Minus()
+		}
+		*dst = quotient
+		return nil
+	}
+	return d256DivBig(a, b, scaleAdj, negative, dst)
 }
 
 // d256DivBig computes a rounded quotient without materializing an overflowing
