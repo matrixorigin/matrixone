@@ -736,6 +736,7 @@ func TestAcquirePolicyForCNFlushS3(t *testing.T) {
 		throttler.limit.Store(90)
 		throttler.rss.Store(95)
 		throttler.cgroupUsage.Store(95)
+		throttler.cgroupReservedBase.Store(60)
 		throttler.rssReservedBase.Store(60)
 		throttler.rssMpoolLiveBase.Store(currentLive + 60)
 
@@ -743,6 +744,27 @@ func TestAcquirePolicyForCNFlushS3(t *testing.T) {
 		require.True(t, ok)
 		require.Equal(t, int64(84), left)
 		require.Equal(t, int64(6), throttler.reserved.Load())
+	})
+
+	t.Run("cgroup guard charges reservations added between cgroup and rss samples", func(t *testing.T) {
+		throttler := &memThrottler{limitRate: 0.90}
+		currentLive := mpool.GlobalStats().NumCurrBytes.Load()
+		throttler.actualTotalMemory.Store(100)
+		throttler.limit.Store(90)
+		throttler.rss.Store(70)
+		throttler.cgroupUsage.Store(95)
+		// The cgroup sample saw only three reserved bytes. Five more bytes were
+		// granted before the later RSS sample, so rssReservedBase includes them
+		// even though they have already consumed all sampled cgroup headroom.
+		throttler.cgroupReservedBase.Store(3)
+		throttler.rssReservedBase.Store(8)
+		throttler.rssMpoolLiveBase.Store(currentLive)
+		throttler.reserved.Store(8)
+
+		left, ok := AcquirePolicyForCNFlushS3(throttler, 1)
+		require.False(t, ok)
+		require.Equal(t, int64(0), left)
+		require.Equal(t, int64(8), throttler.reserved.Load())
 	})
 
 	t.Run("concurrent s3 grants share one sampled cgroup budget", func(t *testing.T) {

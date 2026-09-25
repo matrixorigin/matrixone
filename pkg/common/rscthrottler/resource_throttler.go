@@ -793,10 +793,11 @@ func cnFlushS3PhysicalAvailable(throttler *memThrottler, reserved int64) int64 {
 
 	available := max(0, total-used)
 	if headroom := throttler.cgroupAdmissionHeadroom(); headroom != math.MaxInt64 {
-		// rssReservedBase is memory already represented by the RSS/cgroup
-		// samples. Only reservations beyond that coverage consume new physical
-		// cgroup headroom.
-		cgroupAvailable := max(0, throttler.rssReservedBase.Load()+headroom-reserved)
+		// The cgroup sample is taken before the RSS sample. Only reservations
+		// observed with the cgroup sample are known to be included in its usage;
+		// a later rssReservedBase may include grants that already consumed this
+		// stale cgroup headroom.
+		cgroupAvailable := max(0, throttler.cgroupReservedBase.Load()+headroom-reserved)
 		available = min(available, cgroupAvailable)
 	}
 	return available
@@ -808,6 +809,13 @@ func cnFlushS3ProjectedPhysicalGrowth(throttler *memThrottler, reserved int64) i
 	currentLive := mpool.GlobalStats().NumCurrBytes.Load()
 	covered := currentCNFlushS3RSSCovered(base, liveBase, reserved, currentLive)
 	return max(0, reserved-covered)
+}
+
+func cnFlushS3ProjectedCgroupGrowth(throttler *memThrottler, reserved int64) int64 {
+	// Unlike RSS accounting, cgroup accounting cannot use rssReservedBase:
+	// refreshCgroupUsage runs first, so reservations admitted between the two
+	// samples may be reflected by RSS without being reflected by cgroupUsage.
+	return max(0, reserved-throttler.cgroupReservedBase.Load())
 }
 
 func cnFlushS3ProjectedPhysicalUsed(throttler *memThrottler, reserved int64) int64 {
@@ -874,12 +882,12 @@ func acquireWithinRSSLimit(throttler *memThrottler, ask int64) (int64, bool) {
 		newReserved := reserved + ask
 		if !throttler.options.allowOutOfMemoryAcquire {
 			if headroom := throttler.cgroupAdmissionHeadroom(); headroom != math.MaxInt64 {
-				// Compare the sampled cgroup headroom with cumulative projected
-				// physical growth, not the raw ask. Reservations still covered by
-				// the RSS sample or reusable S3 pages do not add cgroup charge.
-				projectedGrowth := cnFlushS3ProjectedPhysicalGrowth(throttler, newReserved)
+				// Charge cumulative reservation growth from the cgroup-aligned
+				// reservation base. The later RSS sample has its own base and must
+				// not retroactively enlarge the cgroup sample's coverage.
+				projectedGrowth := cnFlushS3ProjectedCgroupGrowth(throttler, newReserved)
 				if projectedGrowth > headroom {
-					cgroupAvailable := max(0, throttler.rssReservedBase.Load()+headroom-reserved)
+					cgroupAvailable := max(0, throttler.cgroupReservedBase.Load()+headroom-reserved)
 					return min(avail, cgroupAvailable), false
 				}
 			}
