@@ -45,12 +45,16 @@ func TestCDCTargetGenerationVerificationOnMO(t *testing.T) {
 		conn, err := db.Conn(ctx)
 		require.NoError(t, err)
 		defer conn.Close()
-		_, err = conn.ExecContext(ctx, "CREATE DATABASE IF NOT EXISTS cdc_generation_verify")
+		_, err = conn.ExecContext(ctx, "DROP DATABASE IF EXISTS cdc_generation_verify")
+		require.NoError(t, err)
+		_, err = conn.ExecContext(ctx, "CREATE DATABASE cdc_generation_verify")
 		require.NoError(t, err)
 		defer func() {
-			cleanupCtx, cleanupCancel := context.WithTimeout(context.Background(), 10*time.Second)
+			cleanupCtx, cleanupCancel := context.WithTimeout(context.Background(), 30*time.Second)
 			defer cleanupCancel()
-			_, _ = conn.ExecContext(cleanupCtx, "DROP DATABASE IF EXISTS cdc_generation_verify")
+			if _, cleanupErr := conn.ExecContext(cleanupCtx, "DROP DATABASE IF EXISTS cdc_generation_verify"); cleanupErr != nil {
+				t.Errorf("drop CDC target verification database: %v", cleanupErr)
+			}
 		}()
 		_, err = conn.ExecContext(ctx, "CREATE TABLE cdc_generation_verify.good (id INT PRIMARY KEY, v VARCHAR(20) COLLATE utf8mb4_bin, UNIQUE KEY uk_v(v))")
 		require.NoError(t, err)
@@ -84,23 +88,38 @@ func TestCDCGenerationReplacementOnMO(t *testing.T) {
 		defer root.Close()
 		ctx, cancel := context.WithTimeout(t.Context(), 3*time.Minute)
 		defer cancel()
+		_, err = root.ExecContext(ctx, "DROP ACCOUNT IF EXISTS cdc_generation_probe")
+		require.NoError(t, err)
 		_, err = root.ExecContext(ctx, "CREATE ACCOUNT IF NOT EXISTS cdc_generation_probe ADMIN_NAME 'admin' IDENTIFIED BY '111'")
 		require.NoError(t, err)
 		defer func() {
-			cleanupCtx, cleanupCancel := context.WithTimeout(context.Background(), 10*time.Second)
+			cleanupCtx, cleanupCancel := context.WithTimeout(context.Background(), 30*time.Second)
 			defer cleanupCancel()
-			_, _ = root.ExecContext(cleanupCtx, "DROP ACCOUNT IF EXISTS cdc_generation_probe")
+			if _, cleanupErr := root.ExecContext(cleanupCtx, "DROP ACCOUNT IF EXISTS cdc_generation_probe"); cleanupErr != nil {
+				t.Errorf("drop CDC test account: %v", cleanupErr)
+			}
 		}()
 		account, err := sql.Open("mysql", fmt.Sprintf("cdc_generation_probe#admin:111@tcp(127.0.0.1:%d)/", port))
 		require.NoError(t, err)
 		defer account.Close()
 		_, err = account.ExecContext(ctx, "CREATE DATABASE cdc_generation_src")
 		require.NoError(t, err)
+		createdPitr, createdTask := false, false
 		defer func() {
-			cleanupCtx, cleanupCancel := context.WithTimeout(context.Background(), 10*time.Second)
-			defer cleanupCancel()
-			_, _ = account.ExecContext(cleanupCtx, "DROP CDC TASK IF EXISTS cdc_generation_task")
-			_, _ = account.ExecContext(cleanupCtx, "DROP PITR IF EXISTS cdc_generation_pitr")
+			if createdTask {
+				cleanupCtx, cleanupCancel := context.WithTimeout(context.Background(), 30*time.Second)
+				if _, cleanupErr := account.ExecContext(cleanupCtx, "DROP CDC TASK cdc_generation_task"); cleanupErr != nil {
+					t.Errorf("drop CDC test task: %v", cleanupErr)
+				}
+				cleanupCancel()
+			}
+			if createdPitr {
+				cleanupCtx, cleanupCancel := context.WithTimeout(context.Background(), 30*time.Second)
+				if _, cleanupErr := account.ExecContext(cleanupCtx, "DROP PITR cdc_generation_pitr"); cleanupErr != nil {
+					t.Errorf("drop CDC test PITR: %v", cleanupErr)
+				}
+				cleanupCancel()
+			}
 		}()
 		_, err = account.ExecContext(ctx, "CREATE TABLE cdc_generation_src.t (id INT PRIMARY KEY, v INT)")
 		require.NoError(t, err)
@@ -108,9 +127,11 @@ func TestCDCGenerationReplacementOnMO(t *testing.T) {
 		require.NoError(t, err)
 		_, err = account.ExecContext(ctx, "CREATE PITR cdc_generation_pitr FOR DATABASE cdc_generation_src RANGE 2 'h'")
 		require.NoError(t, err)
+		createdPitr = true
 		uri := fmt.Sprintf("mysql://cdc_generation_probe#admin:111@127.0.0.1:%d", port)
 		_, err = account.ExecContext(ctx, fmt.Sprintf("CREATE CDC cdc_generation_task '%s' 'matrixone' '%s' 'cdc_generation_src:cdc_generation_dst' {'Level'='database'}", uri, uri))
 		require.NoError(t, err)
+		createdTask = true
 		readRows := func() []int {
 			rows, readErr := account.QueryContext(ctx, "SELECT id FROM cdc_generation_dst.t ORDER BY id")
 			if readErr != nil {
@@ -162,13 +183,18 @@ func TestCDCGenerationReplacementOnMO(t *testing.T) {
 		// Exercise the recovery boundary where an old generation checkpoint is
 		// later than the new table's snapshot epoch. The replacement must replay
 		// from its own epoch, never from this retired watermark.
-		futureWatermark := types.BuildTS(4_000_000_000_000_000_000, 0).ToString()
+		futureTS := types.BuildTS(4_000_000_000_000_000_000, 0)
+		futureWatermark := futureTS.ToString()
 		catalogExecutor := frontend.NewInternalExecutor(cn.GetServiceConfig().CN.UUID)
 		err = catalogExecutor.Exec(defines.AttachAccountId(ctx, catalog.System_Account),
 			fmt.Sprintf("UPDATE mo_catalog.mo_cdc_watermark SET watermark = '%s' "+
 				"WHERE account_id = %d AND task_id = '%s' AND db_name = 'cdc_generation_src' AND table_name = 't'",
 				futureWatermark, accountID, taskID), ie.SessionOverrideOptions{})
 		require.NoError(t, err)
+		injectedGeneration, injectedWatermark, readErr := readProgress()
+		require.NoError(t, readErr)
+		require.Equal(t, oldGeneration, injectedGeneration)
+		require.Equal(t, futureWatermark, injectedWatermark)
 		_, err = account.ExecContext(ctx, "DROP TABLE cdc_generation_src.t")
 		require.NoError(t, err)
 		_, err = account.ExecContext(ctx, "CREATE TABLE cdc_generation_src.t (id INT PRIMARY KEY, v INT)")
@@ -180,7 +206,12 @@ func TestCDCGenerationReplacementOnMO(t *testing.T) {
 		require.Eventually(t, func() bool { return reflect.DeepEqual(readRows(), []int{3, 4}) }, 90*time.Second, 250*time.Millisecond)
 		require.Eventually(t, func() bool {
 			generation, watermark, readErr := readProgress()
-			return readErr == nil && generation > oldGeneration && watermark != "" && watermark != "0-0"
+			return readErr == nil && generation > oldGeneration && watermark != "" &&
+				watermark != "0-0" && watermark != futureWatermark
 		}, 30*time.Second, 250*time.Millisecond)
+		_, recoveredWatermark, readErr := readProgress()
+		require.NoError(t, readErr)
+		recoveredTS := types.StringToTS(recoveredWatermark)
+		require.True(t, recoveredTS.LT(&futureTS))
 	})
 }
