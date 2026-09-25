@@ -97,6 +97,9 @@ func TestCDCMySQL8TargetIdentityBVT(t *testing.T) {
 				}
 				ids = append(ids, id)
 			}
+			if rows.Err() != nil {
+				return nil
+			}
 			return ids
 		}
 		require.Eventually(t, func() bool { return reflect.DeepEqual(readRows(), []int{1, 2}) }, 90*time.Second, 250*time.Millisecond)

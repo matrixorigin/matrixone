@@ -150,6 +150,13 @@ func (t *CDCDao) CreateTask(
 			return 0, moerr.NewNotSupportedf(ctx,
 				"CDC target identity catalog columns are not available: %v", queryErr)
 		}
+		defer columns.Close()
+		for columns.Next() {
+			return 0, moerr.NewInternalError(ctx, "CDC target identity catalog probe unexpectedly returned a row")
+		}
+		if err = columns.Err(); err != nil {
+			return 0, err
+		}
 		if err = columns.Close(); err != nil {
 			return 0, err
 		}

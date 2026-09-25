@@ -70,18 +70,18 @@ func checkMySQLTargetIdentityCapability(ctx context.Context, conn *sql.Conn, db,
 	if err != nil {
 		return moerr.NewNotSupportedf(ctx, "CDC target InnoDB table identity is unavailable (PROCESS privilege required): %v", err)
 	}
+	defer func() {
+		if closeErr := rows.Close(); err == nil {
+			err = closeErr
+		}
+	}()
 	for rows.Next() {
 		var id uint64
 		if err = rows.Scan(&id); err != nil {
-			_ = rows.Close()
 			return err
 		}
 	}
-	if err = rows.Err(); err != nil {
-		_ = rows.Close()
-		return err
-	}
-	return rows.Close()
+	return rows.Err()
 }
 
 func ObserveTargetIdentity(ctx context.Context, uri UriInfo, db, table, timeout string) (identity string, err error) {
@@ -141,14 +141,14 @@ func guardedCDCTargetIdentity(ctx context.Context, tx *sql.Tx, sinkType, db, tab
 		if !mysqlInnoDBIdentityName.MatchString(db) || !mysqlInnoDBIdentityName.MatchString(table) {
 			return "", moerr.NewNotSupported(ctx, "CDC target identity requires unambiguous MySQL InnoDB identifier encoding")
 		}
-		rows, err := tx.QueryContext(ctx, "SELECT 1 FROM "+quoteSQLIdentifier(db)+"."+quoteSQLIdentifier(table)+" LIMIT 0")
-		if err != nil {
+		var ignored int
+		if err = tx.QueryRowContext(ctx, "SELECT 1 FROM "+quoteSQLIdentifier(db)+"."+quoteSQLIdentifier(table)+" LIMIT 0").Scan(&ignored); err != sql.ErrNoRows {
+			if err == nil {
+				return "", moerr.NewInternalError(ctx, "CDC empty target lock query returned a row")
+			}
 			return "", err
 		}
-		if err = rows.Close(); err != nil {
-			return "", err
-		}
-		rows, err = tx.QueryContext(ctx,
+		rows, err := tx.QueryContext(ctx,
 			"SELECT @@server_uuid, TABLE_ID FROM information_schema.INNODB_TABLES WHERE NAME = ?",
 			db+"/"+table)
 		if err != nil {
