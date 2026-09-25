@@ -19,6 +19,7 @@ import (
 	"fmt"
 	"testing"
 
+	"github.com/gogo/protobuf/proto"
 	"github.com/matrixorigin/matrixone/pkg/container/batch"
 	"github.com/matrixorigin/matrixone/pkg/container/types"
 	"github.com/matrixorigin/matrixone/pkg/container/vector"
@@ -226,6 +227,34 @@ func TestIntegerArgumentPreparedRuntimeCandidates(t *testing.T) {
 			prepared, err := runOneStmt(NewMockOptimizer(false), t, "prepare integer_source from '"+tc.query+"'")
 			require.NoError(t, err)
 			require.Equal(t, tc.positions, PreparedPlanNumericFallbackParamPositions(prepared.GetDcl().GetPrepare().Plan))
+		})
+	}
+}
+
+func TestPreparedCeilPrecisionScalarRuntime(t *testing.T) {
+	ctx := context.Background()
+	proc := testutil.NewProcess(t)
+	prepare := buildPreparedAggregatePlan(t, "select ceil(123.456, ?)")
+	original := DeepCopyPlan(prepare.Plan)
+	for _, tc := range []struct {
+		name  string
+		value ParamValue
+	}{
+		{"decimal", ParamValue{Value: "2.5", SourceType: types.New(types.T_decimal64, 2, 1), HasSourceType: true}},
+		{"double", ParamValue{Value: 2.5, SourceType: types.T_float64.ToType(), HasSourceType: true}},
+		{"text", ParamValue{Value: "2.5tail", SourceType: types.T_varchar.ToType(), HasSourceType: true}},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			filled, err := FillValuesOfParamsInPlan(ctx, prepare.Plan, []any{tc.value})
+			require.NoError(t, err)
+			fn := findPlanFunctionExpr(filled, "ceil")
+			require.NotNil(t, fn)
+			require.True(t, isIntegerArgumentCast(fn.GetF().Args[1]))
+			result, free, err := colexec.GetReadonlyResultFromExpression(proc, fn, []*batch.Batch{batch.EmptyForConstFoldBatch})
+			require.NoError(t, err)
+			defer free()
+			require.NotNil(t, result)
+			require.True(t, proto.Equal(original, prepare.Plan), "execution specialization must leave the template unchanged")
 		})
 	}
 }

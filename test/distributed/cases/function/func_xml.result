@@ -75,10 +75,18 @@ SELECT ExtractValue('<a>', '[');
 not supported: XPATH syntax error or unsupported XPath feature
 SELECT ExtractValue('<a/>', 'sum(/a)');
 not supported: XPATH syntax error or unsupported XPath feature
-SELECT UpdateXML('<a>x</a>', '/a/text()', 'Q');
-not supported: UpdateXML text() target is unsupported
-SELECT UpdateXML('<a>x<b>y</b></a>', '/a//text()', 'Q');
-not supported: UpdateXML text() target is unsupported
+SELECT UpdateXML('<a>x</a>', '/a/text()', 'Q') AS root_text;
+➤ root_text[-1,536870911,0]  𝄀
+Q
+SELECT UpdateXML('<a>x<b>y</b></a>', '/a//text()', 'Q') AS multiple_text;
+➤ multiple_text[-1,536870911,0]  𝄀
+<a>x<b>y</b></a>
+SELECT UpdateXML('<a><b>x</b></a>', '/a/b/text()', 'Q') AS nested_text;
+➤ nested_text[-1,536870911,0]  𝄀
+<a>Q</a>
+SELECT UpdateXML('<a><b>x</b><b>y</b></a>', '/a/b/text()', 'Q') AS multiple_nodes;
+➤ multiple_nodes[-1,536870911,0]  𝄀
+<a><b>x</b><b>y</b></a>
 SELECT ExtractValue('<a/>', '/:a');
 not supported: XPATH syntax error or unsupported XPath feature
 SELECT ExtractValue('<a/>', '/a:b:c');
@@ -94,7 +102,7 @@ SELECT SUM(ExtractValue('<a>', '/a') IS NULL) AS malformed_rows FROM generate_se
 ➤ malformed_rows[-5,64,0]  𝄀
 1100
 SHOW COUNT(*) WARNINGS;
-➤ @@session.warning_count[-5,64,0]  𝄀
+➤ @@session.warning_count[-5,0,0]  𝄀
 1100
 SHOW WARNINGS LIMIT 1024, 1;
 ➤ Level[12,0,0]  ¦  Code[5,0,0]  ¦  Message[12,0,0]  𝄀
@@ -104,10 +112,10 @@ SELECT SUM(ExtractValue('<a>', '/a') IS NULL) AS malformed_rows FROM generate_se
 ➤ malformed_rows[-5,64,0]  𝄀
 3
 SHOW COUNT(*) WARNINGS;
-➤ @@session.warning_count[-5,64,0]  𝄀
+➤ @@session.warning_count[-5,0,0]  𝄀
 3
 SHOW WARNINGS;
-➤ Level[12,0,0]  ¦  Code[5,0,0]  ¦  Message[12,0,0]  𝄀
+➤ Level[12,0,0]  ¦  Code[5,0,0]  ¦  Message[12,0,0]
 SET SESSION max_error_count = 1024;
 DROP DATABASE IF EXISTS xml_functions_28306;
 CREATE DATABASE xml_functions_28306;
