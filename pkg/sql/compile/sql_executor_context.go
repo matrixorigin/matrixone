@@ -513,10 +513,15 @@ func (c *compilerContext) ResolveVariable(varName string, isSystemVar bool, isGl
 	// silently compiles the replay under different rules than the statement
 	// the user ran.
 	//
-	// Internal SQL with no attached frontend context keeps the nil default: it
-	// has no user session whose variables could apply.
+	// Internal SQL may instead carry the session resolver on its process, as
+	// ALTER TABLE does when it compiles the replacement table definition.
 	if delegate := getInternalExecutorCompilerContext(c.ctx); delegate != nil && delegate != c {
 		return delegate.ResolveVariable(varName, isSystemVar, isGlobalVar)
+	}
+	if c.proc != nil {
+		if resolve := c.proc.GetResolveVariableFunc(); resolve != nil {
+			return resolve(varName, isSystemVar, isGlobalVar)
+		}
 	}
 	return nil, nil
 }

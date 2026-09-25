@@ -16,11 +16,15 @@ package plan
 
 import (
 	"context"
+	"fmt"
 	"strings"
 	"testing"
 
+	"github.com/gogo/protobuf/proto"
+	moruntime "github.com/matrixorigin/matrixone/pkg/common/runtime"
 	"github.com/matrixorigin/matrixone/pkg/container/types"
 	"github.com/matrixorigin/matrixone/pkg/container/vector"
+	"github.com/matrixorigin/matrixone/pkg/defines"
 	planpb "github.com/matrixorigin/matrixone/pkg/pb/plan"
 	"github.com/matrixorigin/matrixone/pkg/sql/colexec"
 	"github.com/matrixorigin/matrixone/pkg/sql/parsers/dialect/mysql"
@@ -73,6 +77,89 @@ func TestQueryBuilderCarriesDivPrecisionIncrementIntoBinding(t *testing.T) {
 				builder.GetContext(), "/", []*Expr{newColumn(0), newColumn(1)})
 			require.NoError(t, err)
 			require.Equal(t, test.want, makeTypeByPlan2Expr(expr))
+		})
+	}
+}
+
+func TestDDLDivisionBindersUseSessionPrecision(t *testing.T) {
+	compiler := NewMockCompilerContext(false)
+	// The mock has no internal SQL executor for FK reverse lookups. An existing
+	// table entry keeps that unrelated catalog query out of this binding test.
+	compiler.tables["t"] = &planpb.TableDef{Name: "t"}
+	proc := compiler.GetProcess()
+	rt := moruntime.ServiceRuntime(proc.GetService())
+	oldVersion, hadVersion := rt.GetGlobalVariables(moruntime.MOProtocolVersion)
+	oldFloor, hadFloor := rt.GetGlobalVariables(moruntime.PersistedExpressionProtocolAuthoringFloor)
+	t.Cleanup(func() {
+		if hadVersion {
+			rt.SetGlobalVariables(moruntime.MOProtocolVersion, oldVersion)
+		} else {
+			rt.SetGlobalVariables(moruntime.MOProtocolVersion, defines.MORPCLatestVersion)
+		}
+		if hadFloor {
+			rt.SetGlobalVariables(moruntime.PersistedExpressionProtocolAuthoringFloor, oldFloor)
+		} else if current, ok := rt.GetGlobalVariables(moruntime.PersistedExpressionProtocolAuthoringFloor); ok {
+			rt.CompareAndDeleteGlobalVariables(moruntime.PersistedExpressionProtocolAuthoringFloor, current)
+		}
+	})
+	rt.SetGlobalVariables(moruntime.MOProtocolVersion, defines.MORPCVersion97)
+	rt.SetGlobalVariables(moruntime.PersistedExpressionProtocolAuthoringFloor, defines.MORPCVersion97)
+	const ddl = "create table t(a decimal(10,2), b decimal(10,2), " +
+		"q decimal(30,12) generated always as (a/b) stored, " +
+		"check(a/b > 0.3333333))"
+	stmt, err := mysql.ParseOne(t.Context(), ddl, 1)
+	require.NoError(t, err)
+	defer stmt.Free()
+	ctx := divPrecisionCompilerContext{CompilerContext: compiler, increment: 10}
+	rt.SetGlobalVariables(moruntime.PersistedExpressionProtocolAuthoringFloor, defines.MORPCVersion96)
+	_, err = BuildPlan(ctx, stmt, false)
+	require.ErrorContains(t, err, "protocol version 97")
+	rt.SetGlobalVariables(moruntime.PersistedExpressionProtocolAuthoringFloor, defines.MORPCVersion97)
+
+	findDivision := func(expr *planpb.Expr) *planpb.Expr {
+		var visit func(*planpb.Expr) *planpb.Expr
+		visit = func(e *planpb.Expr) *planpb.Expr {
+			if f := e.GetF(); f != nil {
+				fid, _ := function.DecodeOverloadID(f.Func.Obj)
+				if fid == function.DIV {
+					return e
+				}
+				for _, arg := range f.Args {
+					if div := visit(arg); div != nil {
+						return div
+					}
+				}
+			}
+			return nil
+		}
+		return visit(expr)
+	}
+
+	for _, tc := range []struct {
+		increment int64
+		want      types.Type
+	}{
+		{0, types.New(types.T_decimal128, 12, 2)},
+		{4, types.New(types.T_decimal128, 16, 6)},
+		{10, types.New(types.T_decimal128, 22, 12)},
+		{30, types.New(types.T_decimal256, 42, 30)},
+	} {
+		t.Run(fmt.Sprintf("increment_%d", tc.increment), func(t *testing.T) {
+			ctx := divPrecisionCompilerContext{CompilerContext: compiler, increment: tc.increment}
+			built, err := BuildPlan(ctx, stmt, false)
+			require.NoError(t, err)
+			table := built.GetDdl().GetCreateTable().GetTableDef()
+			require.NotNil(t, table)
+			encoded, err := proto.Marshal(table)
+			require.NoError(t, err)
+			var restored planpb.TableDef
+			require.NoError(t, proto.Unmarshal(encoded, &restored))
+			require.Len(t, restored.Checks, 1)
+			for _, expr := range []*planpb.Expr{restored.Cols[2].GeneratedCol.Expr, restored.Checks[0].Check} {
+				division := findDivision(expr)
+				require.NotNil(t, division)
+				require.Equal(t, tc.want, makeTypeByPlan2Expr(division))
+			}
 		})
 	}
 }

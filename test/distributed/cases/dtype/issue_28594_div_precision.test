@@ -25,6 +25,82 @@ show create table result_4;
 set session div_precision_increment = 10;
 select a / b as q from operands;
 
+-- DDL expressions must bind with the same session precision as SELECT.
+create table ddl_precision (
+    a decimal(10,2), b decimal(10,2),
+    q decimal(30,12) generated always as (a / b) stored,
+    check (a / b > 0.3333333)
+);
+insert into ddl_precision(a,b) values (1,3);
+select q, a / b as direct_q from ddl_precision;
+-- @regex("constraint violation",true)
+insert into ddl_precision(a,b) values (0,3);
+select count(*) as accepted_rows from ddl_precision;
+set session div_precision_increment = 4;
+select q, a / b as direct_q from ddl_precision;
+set session div_precision_increment = 10;
+update ddl_precision set a = 2;
+select q, a / b as direct_q from ddl_precision;
+
+alter table operands add column q_generated decimal(30,12) generated always as (a / b) stored;
+select q_generated, a / b as direct_q from operands;
+insert into operands(a,b) values (2,3);
+select a, q_generated, a / b as direct_q from operands order by a;
+delete from operands where a = 2;
+
+create table ddl_default (q decimal(30,12) default (1.00 / 3.00));
+insert into ddl_default values (default);
+select q from ddl_default;
+
+-- Existing bound expressions survive SQL reconstruction under another setting.
+create table ddl_replay (
+    a decimal(10,2), b decimal(10,2),
+    q decimal(30,12) generated always as (a / b) stored,
+    d decimal(30,12) default (1.00 / 3.00),
+    check (a / b > 0.3333333)
+);
+insert into ddl_replay(a,b) values (1,3);
+set session div_precision_increment = 4;
+alter table ddl_replay add column note int first;
+select q, d from ddl_replay;
+insert into ddl_replay(a,b) values (2,3);
+select a, q, d from ddl_replay order by a;
+alter table ddl_replay add column r decimal(30,12) generated always as (a / b) stored;
+select q, r from ddl_replay order by a;
+create table ddl_replay_like like ddl_replay;
+insert into ddl_replay_like(a,b) values (1,3);
+select q, r, d from ddl_replay_like;
+
+-- Changing a referenced type is a new binding event under the current value.
+set session div_precision_increment = 10;
+create table ddl_rebind (
+    a decimal(10,2), b decimal(10,2),
+    q decimal(30,12) generated always as (a / b) stored
+);
+insert into ddl_rebind(a,b) values (1,3);
+set session div_precision_increment = 4;
+alter table ddl_rebind modify column a decimal(12,2);
+select q from ddl_rebind;
+
+-- The COPY ALTER remap must use visible column positions even when its
+-- internal table has hidden columns and the user changes column order.
+set session div_precision_increment = 10;
+create table ddl_reorder (
+    a decimal(10,2), b decimal(10,2),
+    q decimal(30,12) generated always as (a / b) stored,
+    check (a / b > 0.3333333)
+);
+insert into ddl_reorder(a,b) values (1,3);
+set session div_precision_increment = 4;
+alter table ddl_reorder add column x int, modify column a decimal(10,2) after x;
+select q, a / b as direct_q from ddl_reorder;
+insert into ddl_reorder(a,b) values (1,3);
+-- @regex("constraint violation",true)
+insert into ddl_reorder(a,b) values (0,3);
+select count(*) as accepted_rows from ddl_reorder;
+insert into ddl_reorder(a,b) values (2,3);
+select a, q, a / b as direct_q from ddl_reorder order by a;
+
 set session div_precision_increment = 30;
 select a / b as q from operands;
 create table result_30 as select a / b as q from operands;

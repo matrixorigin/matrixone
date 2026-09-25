@@ -75,6 +75,22 @@ func NewSnapshotNotFoundError(ctx context.Context, snapshotName string) error {
 	return moerr.NewInvalidInputf(ctx, "snapshot '%s' not found", snapshotName)
 }
 
+func resolveDivPrecisionIncrement(ctx CompilerContext) int32 {
+	value, err := ctx.ResolveVariable("div_precision_increment", true, false)
+	if err == nil {
+		if increment, ok := value.(int64); ok {
+			return int32(increment)
+		}
+	}
+	return function.DefaultDivPrecisionIncrement
+}
+
+// DDL expression binders are independent of QueryBuilder. Bind persisted
+// expressions with the same statement setting as ordinary SELECT expressions.
+func ddlExpressionContext(ctx CompilerContext, base context.Context) context.Context {
+	return function.WithDivPrecisionIncrement(base, resolveDivPrecisionIncrement(ctx))
+}
+
 func NewQueryBuilder(queryType plan.Query_StatementType, ctx CompilerContext, isPrepareStatement bool, skipStats bool) *QueryBuilder {
 	//
 	// There is a class of variables that controls SQL behavior.  To add such a variable, first
@@ -98,7 +114,7 @@ func NewQueryBuilder(queryType plan.Query_StatementType, ctx CompilerContext, is
 	var mysqlFullGroupByCompat bool
 	var boolSumAvgCompat bool
 	var noUnsignedSubtraction bool
-	divPrecisionIncrement := function.DefaultDivPrecisionIncrement
+	divPrecisionIncrement := resolveDivPrecisionIncrement(ctx)
 
 	mode, err := ctx.ResolveVariable("sql_mode", true, false)
 	if err == nil {
@@ -110,13 +126,6 @@ func NewQueryBuilder(queryType plan.Query_StatementType, ctx CompilerContext, is
 			noUnsignedSubtraction = mysql.HasSQLMode(modeStr, mysql.SQLModeNoUnsignedSubtraction)
 		}
 	}
-	divPrecisionIncrementValue, err := ctx.ResolveVariable("div_precision_increment", true, false)
-	if err == nil {
-		if increment, ok := divPrecisionIncrementValue.(int64); ok {
-			divPrecisionIncrement = int32(increment)
-		}
-	}
-
 	var aggSpillMem int64
 	aggSpillMemInt, err := ctx.ResolveVariable("agg_spill_mem", true, false)
 	if err == nil {

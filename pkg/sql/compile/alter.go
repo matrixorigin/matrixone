@@ -1352,7 +1352,16 @@ func (s *Scope) alterTableCopy(c *Compile, cleanup *alterAutoIncrementResetClean
 	// those relationships are reconciled after the source relation is replaced.
 	// Get logicalId from tableDef and pass it when creating the temporary table.
 	createTmpOpts := alterCopyCreateOptions(qry)
-	err = c.runSqlWithOptions(qry.CreateTmpTableSql, createTmpOpts)
+	err = func() error {
+		originalCtx := c.proc.Ctx
+		baseCtx := originalCtx
+		if baseCtx == nil {
+			baseCtx = c.proc.GetTopContext()
+		}
+		c.proc.Ctx = plan2.WithPersistedDDLReplay(baseCtx, qry.TableDef, qry.CopyTableDef)
+		defer func() { c.proc.Ctx = originalCtx }()
+		return c.runSqlWithOptions(qry.CreateTmpTableSql, createTmpOpts)
+	}()
 	if err != nil {
 		c.proc.Error(c.proc.Ctx, "Create copy table for alter table",
 			zap.String("databaseName", dbName),

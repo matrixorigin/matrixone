@@ -222,14 +222,14 @@ func TestPersistedDecimalLiteralTargetTypedDefaultAdmission(t *testing.T) {
 	for _, floor := range []int64{defines.MORPCVersion81, defines.MORPCVersion83} {
 		rt.SetGlobalVariables(moruntime.PersistedExpressionProtocolFloor, floor)
 		rt.SetGlobalVariables(moruntime.PersistedExpressionProtocolAuthoringFloor, floor)
-		_, err = buildDefaultExpr(col, typ, proc)
+		_, err = buildDefaultExpr(proc.Ctx, col, typ, proc)
 		require.ErrorContains(t, err, "protocol version 89")
 	}
 
 	rt.SetGlobalVariables(moruntime.MOProtocolVersion, defines.MORPCLatestVersion)
 	rt.SetGlobalVariables(moruntime.PersistedExpressionProtocolFloor, int64(defines.MORPCVersion89))
 	rt.SetGlobalVariables(moruntime.PersistedExpressionProtocolAuthoringFloor, int64(defines.MORPCVersion89))
-	defaultExpr, err := buildDefaultExpr(col, typ, proc)
+	defaultExpr, err := buildDefaultExpr(proc.Ctx, col, typ, proc)
 	require.NoError(t, err)
 	require.NotNil(t, defaultExpr)
 	require.Equal(t, int64(defines.MORPCVersion89), func() int64 {
@@ -256,7 +256,7 @@ func TestPersistedDecimalLiteralTargetTypedDefaultAdmission(t *testing.T) {
 	timeTyp := planpb.Type{Id: int32(types.T_time), Scale: 3}
 	rt.SetGlobalVariables(moruntime.PersistedExpressionProtocolFloor, int64(defines.MORPCVersion81))
 	rt.SetGlobalVariables(moruntime.PersistedExpressionProtocolAuthoringFloor, int64(defines.MORPCVersion81))
-	timeDefault, err := buildDefaultExpr(timeCol, timeTyp, proc)
+	timeDefault, err := buildDefaultExpr(proc.Ctx, timeCol, timeTyp, proc)
 	require.NoError(t, err)
 	require.NotNil(t, timeDefault)
 	timeVersion, err := RequiredPersistedExpressionProtocolVersion(timeDefault)
@@ -559,18 +559,18 @@ func TestPersistedIPFunctionProtocolAdmissionForCatalogBuilders(t *testing.T) {
 	} {
 		rt.SetGlobalVariables(moruntime.MOProtocolVersion, version)
 		t.Run(fmt.Sprintf("v%d", version), func(t *testing.T) {
-			_, err := buildDefaultExprWithColumns(defaultCol,
+			_, err := buildDefaultExprWithColumns(proc.Ctx, defaultCol,
 				planpb.Type{Id: int32(types.T_varchar), Width: 32}, proc, columns)
 			checkAdmissionResult(t, version, err, defines.MORPCVersion72)
 
-			_, err = buildDefaultExprWithColumns(numericDefaultCol,
+			_, err = buildDefaultExprWithColumns(proc.Ctx, numericDefaultCol,
 				planpb.Type{Id: int32(types.T_varchar), Width: 32}, proc, columns)
 			checkAdmissionResult(t, version, err, defines.MORPCVersion72)
 
-			_, err = buildOnUpdate(onUpdateCol, planpb.Type{Id: int32(types.T_varchar), Width: 32}, proc)
+			_, err = buildOnUpdate(proc.Ctx, onUpdateCol, planpb.Type{Id: int32(types.T_varchar), Width: 32}, proc)
 			checkAdmissionResult(t, version, err, defines.MORPCVersion72)
 
-			_, err = buildGeneratedExpr(generatedCol,
+			_, err = buildGeneratedExpr(proc.Ctx, generatedCol,
 				planpb.Type{Id: int32(types.T_varchar), Width: 32}, columns, proc)
 			checkAdmissionResult(t, version, err, defines.MORPCVersion72)
 
