@@ -18,6 +18,7 @@ import (
 	"cmp"
 	"context"
 	"encoding/hex"
+	"errors"
 	"fmt"
 	"math"
 	"runtime"
@@ -139,6 +140,46 @@ func (txn *Transaction) unaccountWorkspaceEntryLocked(entry *Entry) {
 func (txn *Transaction) appendWorkspaceEntryLocked(entry Entry) {
 	txn.accountWorkspaceEntryLocked(&entry)
 	txn.writes = append(txn.writes, entry)
+	txn.unpublishedS3OwnersMu.Lock()
+	if len(txn.unpublishedS3ObjectOwnersByName) != 0 {
+		txn.acceptUnpublishedS3ObjectNamesLocked(unpublishedS3ObjectNames(entry))
+	}
+	txn.unpublishedS3OwnersMu.Unlock()
+}
+
+func unpublishedS3ObjectNames(entry Entry) []string {
+	if entry.bat == nil || len(entry.bat.Attrs) == 0 {
+		return nil
+	}
+
+	var statsVec *vector.Vector
+	switch {
+	case entry.typ == INSERT && len(entry.bat.Attrs) > 1 &&
+		entry.bat.Attrs[0] == catalog.BlockMeta_BlockInfo &&
+		entry.bat.Attrs[1] == catalog.ObjectMeta_ObjectStats:
+		statsVec = entry.bat.Vecs[1]
+	case entry.typ == DELETE && entry.bat.Attrs[0] == catalog.ObjectMeta_ObjectStats:
+		statsVec = entry.bat.Vecs[0]
+	}
+	if statsVec == nil {
+		return nil
+	}
+
+	names := make([]string, 0, statsVec.Length())
+	seen := make(map[string]struct{}, statsVec.Length())
+	for i := 0; i < statsVec.Length(); i++ {
+		stats := objectio.ObjectStats(statsVec.GetBytesAt(i))
+		name := stats.ObjectName().String()
+		if name == "" {
+			continue
+		}
+		if _, ok := seen[name]; ok {
+			continue
+		}
+		seen[name] = struct{}{}
+		names = append(names, name)
+	}
+	return names
 }
 
 func (txn *Transaction) releaseWorkspaceEntryBatchLocked(idx int) {
@@ -1140,7 +1181,10 @@ func (txn *Transaction) dumpInsertBatchLocked(
 
 	defer func() {
 		if s3Writer != nil {
-			s3Writer.Close()
+			if closeErr := s3Writer.CloseWithCleanup(ctx, true); closeErr != nil {
+				logutil.Warn("failed to clean unpublished insert object", zap.Error(closeErr))
+				txn.retainUnpublishedS3Writer(s3Writer)
+			}
 		}
 	}()
 
@@ -1191,9 +1235,11 @@ func (txn *Transaction) dumpInsertBatchLocked(
 			return err
 		}
 
-		s3Writer.Close()
-
+		writer := s3Writer
 		s3Writer = nil
+		if err = writer.Close(); err != nil {
+			return err
+		}
 	}
 
 	return nil
@@ -1283,7 +1329,10 @@ func (txn *Transaction) dumpDeleteBatchLocked(
 
 	defer func() {
 		if s3Writer != nil {
-			s3Writer.Close()
+			if closeErr := s3Writer.CloseWithCleanup(ctx, true); closeErr != nil {
+				logutil.Warn("failed to clean unpublished delete object", zap.Error(closeErr))
+				txn.retainUnpublishedS3Writer(s3Writer)
+			}
 		}
 	}()
 
@@ -1335,12 +1384,219 @@ func (txn *Transaction) dumpDeleteBatchLocked(
 			return err
 		}
 
-		if err = s3Writer.Close(); err != nil {
+		writer := s3Writer
+		s3Writer = nil
+		if err = writer.Close(); err != nil {
 			return err
 		}
 	}
 
 	return nil
+}
+
+func (txn *Transaction) retainUnpublishedS3Writer(writer *colexec.CNS3Writer) {
+	if writer == nil {
+		return
+	}
+	txn.RetainUnpublishedS3Cleanup(func(ctx context.Context) error {
+		return writer.CloseWithCleanup(ctx, true)
+	})
+}
+
+func (txn *Transaction) retainUnpublishedTransferFlow(flow *TransferFlow) {
+	if flow == nil || (flow.sinker == nil && len(flow.pendingNames) == 0) {
+		return
+	}
+	txn.RetainUnpublishedS3Cleanup(func(ctx context.Context) error {
+		return flow.CloseWithCleanup(ctx, true)
+	})
+}
+
+// RetainUnpublishedS3Cleanup transfers an unpublished object's retry owner to
+// the transaction workspace before an execution-local owner is released.
+func (txn *Transaction) RetainUnpublishedS3Cleanup(cleanup func(context.Context) error) {
+	if cleanup == nil {
+		return
+	}
+	txn.unpublishedS3OwnersMu.Lock()
+	txn.unpublishedS3Cleanup = append(txn.unpublishedS3Cleanup, cleanup)
+	txn.unpublishedS3OwnersMu.Unlock()
+}
+
+// RetainUnpublishedS3ObjectOwner keeps the names of synced objects in the
+// workspace until their corresponding entries are appended or the statement
+// is aborted. Unlike a generic cleanup callback, this owner can be reduced as
+// individual objects cross the registration boundary.
+func (txn *Transaction) RetainUnpublishedS3ObjectOwner(
+	owner *colexec.UnpublishedS3ObjectOwner,
+) {
+	if owner == nil || !owner.Pending() {
+		return
+	}
+	txn.unpublishedS3OwnersMu.Lock()
+	txn.retainUnpublishedS3ObjectOwnerLocked(owner)
+	txn.unpublishedS3OwnersMu.Unlock()
+}
+
+func (txn *Transaction) retainUnpublishedS3ObjectOwnerLocked(
+	owner *colexec.UnpublishedS3ObjectOwner,
+) {
+	if txn.unpublishedS3ObjectOwners == nil {
+		txn.unpublishedS3ObjectOwners = make(map[*colexec.UnpublishedS3ObjectOwner]struct{})
+	}
+	if txn.unpublishedS3ObjectOwnersByName == nil {
+		txn.unpublishedS3ObjectOwnersByName = make(map[string]*colexec.UnpublishedS3ObjectOwner)
+	}
+	if _, exists := txn.unpublishedS3ObjectOwners[owner]; exists {
+		return
+	}
+	for _, name := range owner.Names() {
+		if _, exists := txn.unpublishedS3ObjectOwnersByName[name]; exists {
+			// The first owner remains responsible until this name is registered.
+			// Keeping a second owner would delete an accepted object on rollback.
+			owner.Accept(name)
+			continue
+		}
+		txn.unpublishedS3ObjectOwnersByName[name] = owner
+	}
+	if owner.Pending() {
+		txn.unpublishedS3ObjectOwners[owner] = struct{}{}
+	}
+}
+
+func (txn *Transaction) AcceptUnpublishedS3ObjectNames(names ...string) {
+	txn.unpublishedS3OwnersMu.Lock()
+	defer txn.unpublishedS3OwnersMu.Unlock()
+	txn.acceptUnpublishedS3ObjectNamesLocked(names)
+}
+
+func (txn *Transaction) acceptUnpublishedS3ObjectNamesLocked(names []string) {
+	for _, name := range names {
+		owner := txn.unpublishedS3ObjectOwnersByName[name]
+		if owner == nil {
+			continue
+		}
+		owner.Accept(name)
+		delete(txn.unpublishedS3ObjectOwnersByName, name)
+		if !owner.Pending() {
+			delete(txn.unpublishedS3ObjectOwners, owner)
+		}
+	}
+}
+
+func (txn *Transaction) HasUnpublishedS3ObjectOwners() bool {
+	txn.unpublishedS3OwnersMu.Lock()
+	defer txn.unpublishedS3OwnersMu.Unlock()
+	return len(txn.unpublishedS3ObjectOwners) != 0
+}
+
+// AcceptAllUnpublishedS3ObjectOwners is used on a remote executor only after
+// the coordinator has acknowledged receipt of every output batch and taken
+// cleanup ownership into its own workspace.
+func (txn *Transaction) AcceptAllUnpublishedS3ObjectOwners() {
+	txn.unpublishedS3OwnersMu.Lock()
+	for owner := range txn.unpublishedS3ObjectOwners {
+		owner.AcceptAll()
+	}
+	txn.unpublishedS3ObjectOwners = nil
+	txn.unpublishedS3ObjectOwnersByName = nil
+	txn.unpublishedS3OwnersMu.Unlock()
+}
+
+func (txn *Transaction) closeTransferFlow(
+	ctx context.Context,
+	flow *TransferFlow,
+	failed bool,
+) error {
+	err := flow.CloseWithCleanup(ctx, failed)
+	if flow.sinker != nil || len(flow.pendingNames) != 0 {
+		txn.retainUnpublishedTransferFlow(flow)
+	}
+	return err
+}
+
+// QueueUnpublishedS3Cleanup transfers terminal cleanup records instead of
+// retaining a bound transaction method. Fallback callbacks retain the resources
+// they still need; name-only owners do not retain the transaction or process.
+// Call only after execution has stopped; no further object registration occurs.
+func (txn *Transaction) QueueUnpublishedS3Cleanup(server *colexec.Server) error {
+	txn.unpublishedS3OwnersMu.Lock()
+	pending := txn.unpublishedS3Cleanup
+	for owner := range txn.unpublishedS3ObjectOwners {
+		pending = append(pending, owner.Cleanup)
+	}
+	txn.unpublishedS3Cleanup = nil
+	txn.unpublishedS3ObjectOwners = nil
+	txn.unpublishedS3ObjectOwnersByName = nil
+	txn.unpublishedS3OwnersMu.Unlock()
+	if len(pending) == 0 {
+		return nil
+	}
+	cleanup := func(ctx context.Context) error {
+		failed := pending[:0]
+		var errs []error
+		for _, task := range pending {
+			if err := task(ctx); err != nil {
+				failed = append(failed, task)
+				errs = append(errs, err)
+			}
+		}
+		clear(pending[len(failed):])
+		pending = failed
+		if len(pending) == 0 {
+			pending = nil
+		}
+		return errors.Join(errs...)
+	}
+	if err := server.RetryUnpublishedS3Cleanup(cleanup); err != nil {
+		txn.RetainUnpublishedS3Cleanup(cleanup)
+		return err
+	}
+	return nil
+}
+
+// CleanupUnpublishedS3Objects retries cleanup for objects that never crossed
+// the workspace-registration boundary. Detach the owners during I/O so no
+// file-service call runs while holding the transaction mutex; failed cleanup
+// keeps the exact owner on the transaction for the next lifecycle callback.
+func (txn *Transaction) CleanupUnpublishedS3Objects(ctx context.Context) error {
+	txn.unpublishedS3OwnersMu.Lock()
+	cleanups := txn.unpublishedS3Cleanup
+	txn.unpublishedS3Cleanup = nil
+	owners := make([]*colexec.UnpublishedS3ObjectOwner, 0, len(txn.unpublishedS3ObjectOwners))
+	for owner := range txn.unpublishedS3ObjectOwners {
+		owners = append(owners, owner)
+	}
+	txn.unpublishedS3ObjectOwners = nil
+	txn.unpublishedS3ObjectOwnersByName = nil
+	txn.unpublishedS3OwnersMu.Unlock()
+
+	var (
+		pending       []func(context.Context) error
+		pendingOwners []*colexec.UnpublishedS3ObjectOwner
+		errs          []error
+	)
+	for _, cleanup := range cleanups {
+		if err := cleanup(ctx); err != nil {
+			pending = append(pending, cleanup)
+			errs = append(errs, err)
+		}
+	}
+	for _, owner := range owners {
+		if err := owner.Cleanup(ctx); err != nil {
+			pendingOwners = append(pendingOwners, owner)
+			errs = append(errs, err)
+		}
+	}
+	if len(pending) != 0 || len(pendingOwners) != 0 {
+		txn.unpublishedS3OwnersMu.Lock()
+		txn.unpublishedS3Cleanup = append(txn.unpublishedS3Cleanup, pending...)
+		for _, owner := range pendingOwners {
+			txn.retainUnpublishedS3ObjectOwnerLocked(owner)
+		}
+		txn.unpublishedS3OwnersMu.Unlock()
+	}
+	return errors.Join(errs...)
 }
 
 // resolveDumpTablesLocked resolves the engine.Relation of every table whose
@@ -2368,8 +2624,17 @@ func (txn *Transaction) compactDeletionOnObjsLocked(ctx context.Context) error {
 		tbl.ensureSeqnumsAndTypesExpectRowid()
 		locker.Unlock()
 
-		bat, fileName, err := tbl.rewriteObjectByDeletion(ctx, stats, objBlkDeletion[*objId])
+		bat, fileName, s3Writer, err := tbl.rewriteObjectByDeletion(ctx, stats, objBlkDeletion[*objId])
 		if err != nil {
+			if bat != nil {
+				bat.Clean(txn.proc.Mp())
+			}
+			if s3Writer != nil {
+				if cleanupErr := s3Writer.CloseWithCleanup(ctx, true); cleanupErr != nil {
+					logutil.Warn("failed to clean rewritten object", zap.Error(cleanupErr))
+					txn.retainUnpublishedS3Writer(s3Writer)
+				}
+			}
 			panicWhenFailed(err, "rewrite object by deletion failed")
 		}
 
@@ -2388,11 +2653,18 @@ func (txn *Transaction) compactDeletionOnObjsLocked(ctx context.Context) error {
 			tbKey.autoIncrEpoch,
 			tbKey.autoIncrEpochKnown,
 		); err != nil {
+			if cleanupErr := s3Writer.CloseWithCleanup(ctx, true); cleanupErr != nil {
+				logutil.Warn("failed to clean rewritten object after registration failure", zap.Error(cleanupErr))
+				txn.retainUnpublishedS3Writer(s3Writer)
+			}
 			bat.Clean(txn.proc.Mp())
 			panicWhenFailed(err, "write txn file failed")
 		}
 
 		bat.Clean(txn.proc.Mp())
+		if closeErr := s3Writer.Close(); closeErr != nil {
+			panicWhenFailed(closeErr, "close rewritten object writer failed")
+		}
 	}
 
 	dirtyObject := make([]objectio.ObjectStats, 0, 1)
@@ -2684,6 +2956,16 @@ func (txn *Transaction) getCachedTableByKey(
 }
 
 func (txn *Transaction) Commit(ctx context.Context) (reqs []txn.TxnRequest, err error) {
+	cleanupCtx, cancelCleanup := colexec.TerminalUnpublishedS3CleanupContext(ctx)
+	cleanupErr := txn.CleanupUnpublishedS3Objects(cleanupCtx)
+	cancelCleanup()
+	if cleanupErr != nil {
+		if queueErr := txn.QueueUnpublishedS3Cleanup(colexec.MustGetServer(txn.engine.service)); queueErr != nil {
+			return nil, errors.Join(cleanupErr, queueErr)
+		}
+		logutil.Warn("commit unpublished S3 cleanup transferred to CN retry worker", zap.Error(cleanupErr))
+	}
+
 	common.DoIfDebugEnabled(func() {
 		logutil.Debug(
 			"Transaction.Commit",
@@ -2958,6 +3240,18 @@ func skipTransfer(ctx context.Context, txn *Transaction) bool {
 }
 
 func (txn *Transaction) Rollback(ctx context.Context) error {
+	cleanupCtx, cancelCleanup := colexec.TerminalUnpublishedS3CleanupContext(ctx)
+	unpublishedCleanupErr := txn.CleanupUnpublishedS3Objects(cleanupCtx)
+	cancelCleanup()
+	if unpublishedCleanupErr != nil {
+		// The workspace is retired below even when rollback reports an error.
+		// Transfer its remaining cleanup obligation to the CN before that point.
+		queueErr := txn.QueueUnpublishedS3Cleanup(colexec.MustGetServer(txn.engine.service))
+		if queueErr == nil {
+			logutil.Warn("rollback unpublished S3 cleanup transferred to CN retry worker", zap.Error(unpublishedCleanupErr))
+		}
+		unpublishedCleanupErr = queueErr
+	}
 	if !txn.ReadOnly() && len(txn.writes) > 0 {
 		logutil.Info(
 			"Transaction.Rollback",
@@ -2979,7 +3273,7 @@ func (txn *Transaction) Rollback(ctx context.Context) error {
 		}
 	}
 	txn.delTransaction()
-	return loadCleanupErr
+	return errors.Join(unpublishedCleanupErr, loadCleanupErr)
 }
 
 func (txn *Transaction) delTransaction() {

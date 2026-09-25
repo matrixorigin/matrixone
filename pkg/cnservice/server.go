@@ -544,6 +544,8 @@ func (s *service) closeService() error {
 			// otherwise retirement can wait for the work we have not stopped yet.
 			s.closeSiriusRuntime,
 			s.closeMongoDBRuntime,
+			// All transaction producers must stop before cleanup admission closes.
+			func() error { return s.colexecServer.CloseUnpublishedS3Cleanup(context.Background()) },
 		)
 		if s.closeErr != nil {
 			return
@@ -860,14 +862,7 @@ func (s *service) handleRequest(
 		}
 	}
 
-	// start a goroutine to handle one received message.
-	owned = false
-	cancelOwned = false
-	go func() {
-		defer release()
-		if value.Cancel != nil {
-			defer value.Cancel()
-		}
+	invoke := func() {
 		s.pipelines.counter.Add(1)
 		defer s.pipelines.counter.Add(-1)
 
@@ -885,6 +880,24 @@ func (s *service) handleRequest(
 			s._txnClient,
 			s.aicm,
 			s.acquireMessage)
+	}
+	// The connection read loop calls handleRequest in wire order. Ownership
+	// receipts are per batch, so ACKs must not be processed out of order by
+	// separate handler goroutines.
+	if msg.GetCmd() == pipeline.Method_PipelineBatchAck {
+		invoke()
+		return nil
+	}
+
+	// start a goroutine to handle one received message.
+	owned = false
+	cancelOwned = false
+	go func() {
+		defer release()
+		if value.Cancel != nil {
+			defer value.Cancel()
+		}
+		invoke()
 	}()
 	return nil
 }

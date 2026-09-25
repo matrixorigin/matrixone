@@ -16,6 +16,7 @@ package disttae
 
 import (
 	"context"
+	"errors"
 
 	"github.com/matrixorigin/matrixone/pkg/common/mpool"
 	"github.com/matrixorigin/matrixone/pkg/container/batch"
@@ -25,6 +26,7 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/objectio"
 	"github.com/matrixorigin/matrixone/pkg/objectio/ioutil"
 	"github.com/matrixorigin/matrixone/pkg/objectio/mergeutil"
+	"github.com/matrixorigin/matrixone/pkg/sql/colexec"
 	plan2 "github.com/matrixorigin/matrixone/pkg/sql/plan"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/readutil"
@@ -199,6 +201,10 @@ type TransferFlow struct {
 	buffer            *containers.OneSchemaBatchBuffer
 	staged            *batch.Batch
 	sinker            *ioutil.Sinker
+	cleanupPending    bool
+	ownerTransferred  bool
+	pendingNames      []string
+	serviceID         string
 	mp                *mpool.MPool
 	fs                fileservice.FileService
 
@@ -222,15 +228,22 @@ func (flow *TransferFlow) fillDefaults() {
 		)
 	}
 	if flow.sinker == nil {
+		opts := []ioutil.SinkerOption{
+			ioutil.WithBuffer(flow.buffer, false),
+			ioutil.WithMemorySizeThreshold(mpool.MB * 16),
+			ioutil.WithTailSizeCap(0),
+		}
+		if flow.table != nil {
+			flow.serviceID = flow.table.getTxn().engine.service
+			opts = append(opts, colexec.UnpublishedS3AdmissionOption(flow.serviceID))
+		}
 		flow.sinker = ioutil.NewTombstoneSinker(
 			flow.hiddenSelection,
 			pkType,
 			flow.mp,
 			flow.fs,
-			ioutil.WithBuffer(flow.buffer, false),
-			ioutil.WithMemorySizeThreshold(mpool.MB*16),
-			ioutil.WithTailSizeCap(0),
-			//readutil.WithAllMergeSorted(),
+			opts...,
+		//readutil.WithAllMergeSorted(),
 		)
 	}
 
@@ -359,24 +372,75 @@ func (flow *TransferFlow) GetResult() ([]objectio.ObjectStats, []*batch.Batch) {
 }
 
 func (flow *TransferFlow) Close() error {
+	return flow.CloseWithCleanup(context.Background(), false)
+}
+
+// CloseWithCleanup discards persisted objects if the flow failed before its
+// result metadata was registered on the transaction. A failed delete retains
+// only object names and the file service for the next attempt.
+func (flow *TransferFlow) CloseWithCleanup(ctx context.Context, failed bool) error {
+	var (
+		errs []error
+	)
+	if (failed || flow.cleanupPending) && flow.sinker != nil && !flow.ownerTransferred {
+		if names, err := cleanupUnpublishedTransferSinker(ctx, flow.sinker); err != nil {
+			errs = append(errs, err)
+			flow.pendingNames = append(flow.pendingNames, names...)
+			flow.cleanupPending = true
+		} else {
+			flow.cleanupPending = false
+		}
+	}
+	if flow.sinker == nil && len(flow.pendingNames) > 0 {
+		cleanupCtx, cancel := colexec.UnpublishedS3CleanupContext(ctx)
+		completed, remaining, err := ioutil.DeleteUnpublishedObjectsWithProgress(
+			cleanupCtx, flow.fs, flow.pendingNames...)
+		cancel()
+		for _, name := range completed {
+			colexec.ReleaseUnpublishedS3Name(flow.serviceID, name)
+		}
+		flow.pendingNames = remaining
+		if err != nil {
+			errs = append(errs, err)
+		} else {
+			flow.cleanupPending = false
+		}
+	}
 	if flow.sourcer != nil {
-		flow.sourcer.Close()
+		if err := flow.sourcer.Close(); err != nil {
+			errs = append(errs, err)
+		}
 		flow.sourcer = nil
-	}
-	if flow.sinker != nil {
-		flow.sinker.Close()
-		flow.sinker = nil
-	}
-	if flow.buffer != nil {
-		flow.buffer.Close(flow.mp)
-		flow.buffer = nil
 	}
 	if flow.staged != nil {
 		flow.staged.Clean(flow.mp)
 		flow.staged = nil
 	}
-	flow.mp = nil
+	if flow.sinker != nil {
+		if err := flow.sinker.Close(); err != nil {
+			errs = append(errs, err)
+		}
+		flow.sinker = nil
+	}
+	if flow.sinker == nil {
+		if flow.buffer != nil {
+			flow.buffer.Close(flow.mp)
+			flow.buffer = nil
+		}
+		flow.mp = nil
+	}
 	flow.table = nil
+	flow.newDataObjects = nil
+	flow.isObjectDeletedFn = nil
+	if len(flow.pendingNames) == 0 {
+		flow.fs = nil
+	}
 	flow.transferred.objDetails = nil
-	return nil
+	return errors.Join(errs...)
+}
+
+func cleanupUnpublishedTransferSinker(ctx context.Context, sinker *ioutil.Sinker) ([]string, error) {
+	cleanupCtx, cancel := colexec.UnpublishedS3CleanupContext(ctx)
+	defer cancel()
+	return sinker.DeletePersisted(cleanupCtx)
 }

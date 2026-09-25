@@ -30,6 +30,7 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/container/batch"
 	"github.com/matrixorigin/matrixone/pkg/container/types"
 	"github.com/matrixorigin/matrixone/pkg/container/vector"
+	"github.com/matrixorigin/matrixone/pkg/fileservice"
 	mock_frontend "github.com/matrixorigin/matrixone/pkg/frontend/test"
 	"github.com/matrixorigin/matrixone/pkg/objectio"
 	"github.com/matrixorigin/matrixone/pkg/pb/api"
@@ -1155,6 +1156,281 @@ func TestIssue25589DumpInsertRestoresWorkspaceAccounting(t *testing.T) {
 	for i := range txn.writes {
 		txn.releaseWorkspaceEntryBatchLocked(i)
 	}
+}
+
+func TestIssue29257DumpRegistrationFailureDeletesUnpublishedObjects(t *testing.T) {
+	for _, tc := range []struct {
+		name string
+		typ  int
+	}{
+		{name: "insert", typ: INSERT},
+		{name: "delete", typ: DELETE},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			colexec.NewServer("")
+			txn := newTransactionWithActivePKTableForTest(t, "pk")
+			defer txn.proc.Free()
+			txn.op = &unsupportedAutoIncrEpochTxnOperator{TxnOperator: txn.op}
+			tbl := txn.tableOps.existAndActive(genTableKey(1, "tbl", 7, "db"))
+			require.NotNil(t, tbl)
+			tbl.tableDef.Cols[0].Typ = pbplan.Type{Id: int32(types.T_int64)}
+			txn.tnStores = []DNStore{{}}
+			txn.batchSelectList = make(map[*batch.Batch][]int64)
+			txn.tablesInVain = make(map[uint64]int)
+			txn.deletedBlocks = &deletedBlocks{offsets: make(map[types.Blockid][]int64)}
+			txn.cnObjsSummary = make(map[types.Objectid]Summary)
+			txn.currentRowId.SetSegment(colexec.TxnWorkspaceSegment)
+
+			var bat *batch.Batch
+			if tc.typ == INSERT {
+				bat = newInsertBatchWithRowIDForTest(t, txn.proc, []int64{1, 2, 3})
+			} else {
+				bat = newDeleteBatchForTest(t, txn.proc, []int64{1, 2, 3})
+			}
+			txn.appendWorkspaceEntryLocked(Entry{
+				typ:                tc.typ,
+				accountId:          1,
+				databaseId:         7,
+				tableId:            42,
+				databaseName:       "db",
+				tableName:          "tbl",
+				bat:                bat,
+				autoIncrEpoch:      1,
+				autoIncrEpochKnown: true,
+			})
+
+			baseFS, err := colexec.GetSharedFSFromProc(txn.proc)
+			require.NoError(t, err)
+			fs := &recordingObjectFileService{
+				FileService:     baseFS,
+				failDeleteCount: 1,
+				deleteErr:       moerr.NewInternalErrorNoCtx("injected cleanup failure"),
+			}
+			txn.Lock()
+			if tc.typ == INSERT {
+				var pkCount int
+				err = txn.dumpInsertBatchLocked(context.Background(), fs, 0, &pkCount)
+			} else {
+				err = txn.dumpDeleteBatchLocked(context.Background(), fs, 0)
+			}
+			txn.Unlock()
+			require.True(t, moerr.IsMoErrCode(err, moerr.ErrNotSupported), "registration should reject unsupported epoch fence: %v", err)
+			txn.unpublishedS3OwnersMu.Lock()
+			pendingWriterCount := len(txn.unpublishedS3Cleanup)
+			txn.unpublishedS3OwnersMu.Unlock()
+			require.Equal(t, 1, pendingWriterCount, "failed immediate cleanup must remain transaction-owned")
+			require.NoError(t, txn.CleanupUnpublishedS3Objects(context.Background()))
+
+			written, deleted := fs.paths()
+			require.NotEmpty(t, written)
+			require.NotEmpty(t, deleted, "failed workspace registration must delete the uploaded object")
+			for _, name := range written {
+				_, statErr := baseFS.StatFile(context.Background(), name)
+				require.True(t, moerr.IsMoErrCode(statErr, moerr.ErrFileNotFound), "unpublished file %q leaked: %v", name, statErr)
+			}
+		})
+	}
+}
+
+func TestTransactionRetriesUnpublishedS3CleanupOwners(t *testing.T) {
+	txn := &Transaction{}
+	cleanupErr := moerr.NewInternalErrorNoCtx("injected cleanup failure")
+	attempts := 0
+	txn.RetainUnpublishedS3Cleanup(func(context.Context) error {
+		attempts++
+		if attempts == 1 {
+			return cleanupErr
+		}
+		return nil
+	})
+
+	require.ErrorIs(t, txn.CleanupUnpublishedS3Objects(context.Background()), cleanupErr)
+	require.Len(t, txn.unpublishedS3Cleanup, 1, "failed cleanup must preserve its retry owner")
+	require.NoError(t, txn.CleanupUnpublishedS3Objects(context.Background()))
+	require.Empty(t, txn.unpublishedS3Cleanup)
+	require.Equal(t, 2, attempts)
+}
+
+func TestRollbackRetriesUnpublishedS3CleanupAfterWorkspaceRemoval(t *testing.T) {
+	server := colexec.NewServer("")
+	retryStarted := make(chan struct{})
+	retryRelease := make(chan struct{})
+	var releaseOnce sync.Once
+	t.Cleanup(func() {
+		releaseOnce.Do(func() { close(retryRelease) })
+		require.NoError(t, server.CloseUnpublishedS3Cleanup(context.Background()))
+	})
+	txn := newTransactionWithActivePKTableForTest(t, "pk")
+	defer txn.proc.Free()
+	baseFS, err := colexec.GetSharedFSFromProc(txn.proc)
+	require.NoError(t, err)
+	const name = "rollback-unpublished-retry-object"
+	require.NoError(t, baseFS.Write(context.Background(), fileservice.IOVector{
+		FilePath: name,
+		Entries:  []fileservice.IOEntry{{Size: 1, Data: []byte("x")}},
+		Policy:   fileservice.SkipAllCache,
+	}))
+	deleteErr := moerr.NewInternalErrorNoCtx("temporary S3 delete failure")
+	fs := &failOnceCloneDeleteFS{
+		FileService: baseFS, failErr: deleteErr,
+		retryStarted: retryStarted, retryRelease: retryRelease,
+	}
+	owner, err := colexec.NewUnpublishedS3ObjectOwner(fs, name)
+	require.NoError(t, err)
+	txn.RetainUnpublishedS3ObjectOwner(owner)
+
+	err = txn.Rollback(context.Background())
+	require.NoError(t, err, "CN retry ownership should not turn rollback into a failure")
+	require.True(t, txn.removed, "terminal rollback must retire the workspace")
+	require.False(t, txn.HasUnpublishedS3ObjectOwners(), "the CN must own detached cleanup records")
+	require.Empty(t, txn.unpublishedS3Cleanup)
+	select {
+	case <-retryStarted:
+	case <-time.After(5 * time.Second):
+		t.Fatal("CN retry worker did not attempt the detached cleanup")
+	}
+	_, err = baseFS.StatFile(context.Background(), name)
+	require.NoError(t, err, "the first Delete failed and the retry is blocked")
+	releaseOnce.Do(func() { close(retryRelease) })
+	require.Eventually(t, func() bool {
+		_, statErr := baseFS.StatFile(context.Background(), name)
+		return moerr.IsMoErrCode(statErr, moerr.ErrFileNotFound)
+	}, 5*time.Second, 10*time.Millisecond)
+	require.False(t, owner.Pending())
+}
+
+func TestQueueUnpublishedCleanupRetainsRecordsWhenCNRejectsHandoff(t *testing.T) {
+	server := &colexec.Server{}
+	require.NoError(t, server.CloseUnpublishedS3Cleanup(context.Background()))
+	txn := &Transaction{}
+	calls := 0
+	txn.RetainUnpublishedS3Cleanup(func(context.Context) error {
+		calls++
+		return nil
+	})
+	require.Error(t, txn.QueueUnpublishedS3Cleanup(server))
+	require.NoError(t, txn.CleanupUnpublishedS3Objects(context.Background()))
+	require.Equal(t, 1, calls, "rejected handoff must keep the cleanup obligation")
+}
+
+func TestWorkspaceAppendAcceptsUnpublishedS3ObjectNames(t *testing.T) {
+	proc := testutil.NewProc(t)
+	defer proc.Free()
+	fs, err := colexec.GetSharedFSFromProc(proc)
+	require.NoError(t, err)
+
+	stats := objectio.NewObjectStatsWithObjectID(
+		objectio.NewObjectidWithSegmentIDAndNum(objectio.NewSegmentid(), 7),
+		false,
+		false,
+		true,
+	)
+	owner, err := colexec.NewUnpublishedS3ObjectOwner(fs, stats.ObjectName().String())
+	require.NoError(t, err)
+	txn := &Transaction{}
+	txn.RetainUnpublishedS3ObjectOwner(owner)
+	require.True(t, txn.HasUnpublishedS3ObjectOwners())
+
+	bat := batch.NewWithSize(2)
+	bat.Attrs = []string{catalog.BlockMeta_BlockInfo, catalog.ObjectMeta_ObjectStats}
+	bat.Vecs[0] = vector.NewVec(types.T_text.ToType())
+	bat.Vecs[1] = vector.NewVec(types.T_binary.ToType())
+	require.NoError(t, vector.AppendBytes(bat.Vecs[1], stats.Marshal(), false, proc.Mp()))
+	bat.SetRowCount(1)
+	defer bat.Clean(proc.Mp())
+
+	// Producer completion alone is not acceptance. The workspace retires the
+	// owner only after the metadata-bearing Entry has actually been appended.
+	require.True(t, owner.Pending())
+	txn.appendWorkspaceEntryLocked(Entry{
+		typ:      INSERT,
+		fileName: stats.ObjectLocation().String(),
+		bat:      bat,
+	})
+	require.Len(t, txn.writes, 1)
+	require.False(t, owner.Pending())
+	require.False(t, txn.HasUnpublishedS3ObjectOwners())
+
+	deleteStats := objectio.NewObjectStatsWithObjectID(
+		objectio.NewObjectidWithSegmentIDAndNum(objectio.NewSegmentid(), 8),
+		false,
+		false,
+		true,
+	)
+	deleteOwner, err := colexec.NewUnpublishedS3ObjectOwner(fs, deleteStats.ObjectName().String())
+	require.NoError(t, err)
+	txn.RetainUnpublishedS3ObjectOwner(deleteOwner)
+	deleteBat := batch.NewWithSize(1)
+	deleteBat.Attrs = []string{catalog.ObjectMeta_ObjectStats}
+	deleteBat.Vecs[0] = vector.NewVec(types.T_binary.ToType())
+	require.NoError(t, vector.AppendBytes(deleteBat.Vecs[0], deleteStats.Marshal(), false, proc.Mp()))
+	deleteBat.SetRowCount(1)
+	defer deleteBat.Clean(proc.Mp())
+	txn.appendWorkspaceEntryLocked(Entry{
+		typ: DELETE,
+		bat: deleteBat,
+	})
+	require.False(t, deleteOwner.Pending(), "DELETE metadata must cross the same registration boundary")
+	require.NoError(t, txn.CleanupUnpublishedS3Objects(context.Background()))
+}
+
+func TestRetainUnpublishedS3ObjectOwnerDeduplicatesNames(t *testing.T) {
+	proc := testutil.NewProc(t)
+	defer proc.Free()
+	fs, err := colexec.GetSharedFSFromProc(proc)
+	require.NoError(t, err)
+
+	first, err := colexec.NewUnpublishedS3ObjectOwner(fs, "shared")
+	require.NoError(t, err)
+	second, err := colexec.NewUnpublishedS3ObjectOwner(fs, "shared", "other")
+	require.NoError(t, err)
+	txn := &Transaction{}
+	txn.RetainUnpublishedS3ObjectOwner(first)
+	txn.RetainUnpublishedS3ObjectOwner(second)
+
+	require.Equal(t, first, txn.unpublishedS3ObjectOwnersByName["shared"])
+	require.Equal(t, second, txn.unpublishedS3ObjectOwnersByName["other"])
+	require.Equal(t, []string{"other"}, second.Names())
+	txn.AcceptUnpublishedS3ObjectNames("shared")
+	require.False(t, first.Pending())
+	require.True(t, second.Pending())
+	txn.AcceptUnpublishedS3ObjectNames("other")
+	require.False(t, txn.HasUnpublishedS3ObjectOwners())
+}
+
+type recordingObjectFileService struct {
+	fileservice.FileService
+	mu              sync.Mutex
+	written         []string
+	deleted         []string
+	failDeleteCount int
+	deleteErr       error
+}
+
+func (fs *recordingObjectFileService) Write(ctx context.Context, vector fileservice.IOVector) error {
+	fs.mu.Lock()
+	fs.written = append(fs.written, vector.FilePath)
+	fs.mu.Unlock()
+	return fs.FileService.Write(ctx, vector)
+}
+
+func (fs *recordingObjectFileService) Delete(ctx context.Context, names ...string) error {
+	fs.mu.Lock()
+	fs.deleted = append(fs.deleted, names...)
+	if fs.failDeleteCount > 0 {
+		fs.failDeleteCount--
+		err := fs.deleteErr
+		fs.mu.Unlock()
+		return err
+	}
+	fs.mu.Unlock()
+	return fs.FileService.Delete(ctx, names...)
+}
+
+func (fs *recordingObjectFileService) paths() (written, deleted []string) {
+	fs.mu.Lock()
+	defer fs.mu.Unlock()
+	return append([]string(nil), fs.written...), append([]string(nil), fs.deleted...)
 }
 
 func TestIssue25589SoftDeleteObjectUsesWorkspaceAccounting(t *testing.T) {

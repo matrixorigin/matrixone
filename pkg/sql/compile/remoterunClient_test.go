@@ -15,7 +15,9 @@
 package compile
 
 import (
+	"bytes"
 	"context"
+	"fmt"
 	"sync/atomic"
 	"testing"
 	"time"
@@ -32,20 +34,339 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/common/morpc/mock_morpc"
 	"github.com/matrixorigin/matrixone/pkg/common/mpool"
 	"github.com/matrixorigin/matrixone/pkg/common/runtime"
+	"github.com/matrixorigin/matrixone/pkg/container/batch"
+	"github.com/matrixorigin/matrixone/pkg/container/types"
+	"github.com/matrixorigin/matrixone/pkg/container/vector"
 	"github.com/matrixorigin/matrixone/pkg/defines"
+	"github.com/matrixorigin/matrixone/pkg/fileservice"
+	mock_frontend "github.com/matrixorigin/matrixone/pkg/frontend/test"
+	"github.com/matrixorigin/matrixone/pkg/objectio"
 	"github.com/matrixorigin/matrixone/pkg/pb/pipeline"
 	"github.com/matrixorigin/matrixone/pkg/pb/plan"
 	"github.com/matrixorigin/matrixone/pkg/sql/colexec"
 	"github.com/matrixorigin/matrixone/pkg/sql/colexec/connector"
+	"github.com/matrixorigin/matrixone/pkg/sql/colexec/deletion"
 	"github.com/matrixorigin/matrixone/pkg/sql/colexec/dispatch"
+	"github.com/matrixorigin/matrixone/pkg/sql/colexec/insert"
+	"github.com/matrixorigin/matrixone/pkg/sql/colexec/merge"
+	"github.com/matrixorigin/matrixone/pkg/sql/colexec/mergeblock"
+	"github.com/matrixorigin/matrixone/pkg/sql/colexec/mergedelete"
+	"github.com/matrixorigin/matrixone/pkg/sql/colexec/multi_update"
 	"github.com/matrixorigin/matrixone/pkg/sql/colexec/value_scan"
 	"github.com/matrixorigin/matrixone/pkg/testutil"
 	"github.com/matrixorigin/matrixone/pkg/util/fault"
+	"github.com/matrixorigin/matrixone/pkg/vm"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine"
 	"github.com/matrixorigin/matrixone/pkg/vm/process"
 )
 
 var _ cnclient.PipelineClient = new(testPipelineClient)
+
+func TestScopeS3Output(t *testing.T) {
+	update := multi_update.NewArgument()
+	update.Action = multi_update.UpdateWriteS3
+	update.IsRemote = true
+	connectorOp := connector.NewArgument()
+	connectorOp.AppendChild(update)
+
+	require.Equal(t, remoteS3MultiUpdate, scopeS3Output(&Scope{RootOp: connectorOp}))
+	update.IsRemote = false
+	require.Equal(t, remoteS3MultiUpdate, scopeS3Output(&Scope{RootOp: connectorOp}))
+	update.IsRemote = true
+	update.Action = multi_update.UpdateFlushS3Info
+	require.Equal(t, remoteS3None, scopeS3Output(&Scope{RootOp: connectorOp}))
+	update.Action = multi_update.UpdateWriteS3
+	group := &Scope{RootOp: merge.NewArgument(), PreScopes: []*Scope{{RootOp: connectorOp}}}
+	require.Equal(t, remoteS3MultiUpdate, scopeS3Output(group))
+	group.RootOp = nil
+	require.Equal(t, remoteS3MultiUpdate, scopeS3Output(group))
+	group.RootOp = dispatch.NewArgument()
+	require.Equal(t, remoteS3MultiUpdate, scopeS3Output(group))
+	// Consumers are a boundary even when a grouped PreScope still contains a producer.
+	for _, consumer := range []vm.Operator{&multi_update.MultiUpdate{Action: multi_update.UpdateFlushS3Info}, &mergeblock.MergeBlock{}, &mergedelete.MergeDelete{}} {
+		consumer.GetOperatorBase().AppendChild(update)
+		group.RootOp = consumer
+		require.Equal(t, remoteS3None, scopeS3Output(group))
+		wrapper := &connector.Connector{}
+		wrapper.AppendChild(consumer)
+		group.RootOp = wrapper
+		require.Equal(t, remoteS3None, scopeS3Output(group))
+	}
+	for _, tc := range []struct {
+		op   vm.Operator
+		kind remoteS3Output
+	}{
+		{&insert.Insert{ToWriteS3: true}, remoteS3Insert},
+		{&insert.Insert{}, remoteS3None},
+		{&deletion.Deletion{RemoteDelete: true}, remoteS3Delete},
+		{&deletion.Deletion{}, remoteS3None},
+	} {
+		require.Equal(t, tc.kind, scopeS3Output(&Scope{RootOp: tc.op}))
+	}
+
+	connectorOp.Release()
+	update.Release()
+}
+
+func TestRemoteS3MetadataNames(t *testing.T) {
+	proc := testutil.NewProcess(t)
+	defer proc.Free()
+	out, name := remoteS3TestOutput(t, proc, remoteS3Insert)
+	defer out.Clean(proc.Mp())
+	names, err := remoteS3MetadataNames(out)
+	require.NoError(t, err)
+	require.Equal(t, []string{name}, names)
+	// Real producer layout: two block records but only one object-stats record.
+	multiBlock := colexec.AllocCNS3ResultBat(false)
+	defer multiBlock.Clean(proc.Mp())
+	multiStats := objectio.ObjectStats(append([]byte(nil), out.Vecs[1].GetBytesAt(0)...))
+	require.NoError(t, objectio.SetObjectStatsBlkCnt(&multiStats, 2))
+	require.NoError(t, objectio.SetObjectStatsRowCnt(&multiStats, 8193))
+	require.NoError(t, colexec.ExpandObjectStatsToBatch(proc.Mp(), false, multiBlock, true, multiStats))
+	require.Equal(t, 2, multiBlock.RowCount())
+	require.Equal(t, 1, multiBlock.Vecs[1].Length())
+	names, err = remoteS3MetadataNames(multiBlock)
+	require.NoError(t, err)
+	require.NotEmpty(t, names)
+	for _, parsed := range names {
+		require.Equal(t, name, parsed)
+	}
+	for _, vec := range multiBlock.Vecs {
+		vec.CleanOnlyData()
+	}
+	_, err = remoteS3MetadataNames(multiBlock)
+	require.ErrorContains(t, err, "no object names")
+
+	// Legacy mixed output: a negative table index carries serialized raw data,
+	// while block-info rows carry names even without an object-stats column.
+	legacy := batch.NewWithSize(2)
+	defer legacy.Clean(proc.Mp())
+	legacy.Attrs = []string{catalog.BlockMeta_TableIdx_Insert, catalog.BlockMeta_BlockInfo}
+	legacy.Vecs[0] = vector.NewVec(types.T_int16.ToType())
+	legacy.Vecs[1] = vector.NewVec(types.T_text.ToType())
+	require.NoError(t, vector.AppendFixed(legacy.Vecs[0], int16(-1), false, proc.Mp()))
+	require.NoError(t, vector.AppendBytes(legacy.Vecs[1], []byte("raw batch, not block info"), false, proc.Mp()))
+	legacy.SetRowCount(1)
+	names, err = remoteS3MetadataNames(legacy)
+	require.NoError(t, err)
+	require.Empty(t, names)
+	require.NoError(t, vector.SetFixedAtNoTypeCheck(legacy.Vecs[0], 0, int16(0)))
+	_, err = remoteS3MetadataNames(legacy)
+	require.ErrorContains(t, err, "invalid remote S3 block info")
+	require.NoError(t, vector.SetFixedAtNoTypeCheck(legacy.Vecs[0], 0, int16(-1)))
+	stats := objectio.ObjectStats(out.Vecs[1].GetBytesAt(0))
+	block := &objectio.BlockInfo{}
+	block.SetMetaLocation(objectio.BuildLocation(stats.ObjectName(), objectio.Extent{}, 1, 0))
+	require.NoError(t, vector.AppendFixed(legacy.Vecs[0], int16(0), false, proc.Mp()))
+	require.NoError(t, vector.AppendBytes(legacy.Vecs[1], objectio.EncodeBlockInfo(block), false, proc.Mp()))
+	legacy.SetRowCount(2)
+	names, err = remoteS3MetadataNames(legacy)
+	require.NoError(t, err)
+	require.Equal(t, []string{name}, names)
+	// Stats are packed by object, not aligned with the legacy table-index rows.
+	legacy.Attrs = append(legacy.Attrs, catalog.ObjectMeta_ObjectStats)
+	legacy.Vecs = append(legacy.Vecs, vector.NewVec(types.T_binary.ToType()))
+	require.NoError(t, vector.AppendBytes(legacy.Vecs[2], stats[:], false, proc.Mp()))
+	names, err = remoteS3MetadataNames(legacy)
+	require.NoError(t, err)
+	require.Equal(t, []string{name, name}, names)
+
+	malformed := colexec.AllocCNS3ResultBat(true)
+	defer malformed.Clean(proc.Mp())
+	require.NoError(t, vector.AppendBytes(malformed.Vecs[0], []byte("short"), false, proc.Mp()))
+	malformed.SetRowCount(1)
+	_, err = remoteS3MetadataNames(malformed)
+	require.ErrorContains(t, err, "invalid remote S3 object stats")
+}
+
+func TestRemoteS3DeleteIgnoresRawRowsAndRejectsMalformedMetadata(t *testing.T) {
+	proc := testutil.NewProcess(t)
+	defer proc.Free()
+	out, _ := remoteS3TestOutput(t, proc, remoteS3Delete)
+	defer out.Clean(proc.Mp())
+	out.Vecs[1].CleanOnlyData()
+	require.NoError(t, vector.AppendBytes(out.Vecs[1], []byte("not a nested metadata batch"), false, proc.Mp()))
+	require.NoError(t, vector.SetFixedAtNoTypeCheck(out.Vecs[2], 0, int8(deletion.FlushDeltaLoc+1)))
+	require.NoError(t, retainRemoteS3Output(proc, remoteS3Delete, out))
+	require.NoError(t, vector.SetFixedAtNoTypeCheck(out.Vecs[2], 0, int8(deletion.FlushDeltaLoc)))
+	require.Error(t, retainRemoteS3Output(proc, remoteS3Delete, out))
+}
+
+func TestRemoteS3RejectsMissingNamesBeforeAck(t *testing.T) {
+	proc := testutil.NewProcess(t)
+	defer proc.Free()
+	out := colexec.AllocCNS3ResultBat(false)
+	out.SetRowCount(1)
+	data, err := out.MarshalBinaryForPipeline(&bytes.Buffer{}, true, true)
+	require.NoError(t, err)
+	out.Clean(proc.Mp())
+	responses := make(chan morpc.Message, 1)
+	responses <- &pipeline.Message{Cmd: pipeline.Method_BatchMessage, Sid: pipeline.Status_Last, Data: data, BatchSequence: 1}
+	close(responses)
+	// No Send expectation: malformed metadata must never be acknowledged.
+	stream := mock_morpc.NewMockStream(gomock.NewController(t))
+	sender := &messageSenderOnClient{ctx: proc.Ctx, mp: proc.Mp(), receiveCh: responses, streamSender: stream}
+	reg := process.NewPipelineEdge(1, 0)
+	op := connector.NewArgument()
+	defer op.Release()
+	op.Reg = reg
+	op.AppendChild(&insert.Insert{ToWriteS3: true})
+	err = receiveMessageFromCnServerIfConnector(&Scope{Proc: proc, RootOp: op}, sender)
+	require.ErrorContains(t, err, "no object names")
+	require.Empty(t, reg.Ch2)
+	require.Equal(t, uint64(1), sender.pendingBatchAck)
+}
+
+func remoteS3TestOutput(t *testing.T, proc *process.Process, kind remoteS3Output) (*batch.Batch, string) {
+	t.Helper()
+	id := types.Uuid{1, 2, 3}
+	name := objectio.BuildObjectName(&id, 1)
+	stats := objectio.NewObjectStats()
+	require.NoError(t, objectio.SetObjectStatsObjectName(stats, name))
+	metadata := colexec.AllocCNS3ResultBat(kind != remoteS3Insert)
+	statsCol := 0
+	if kind == remoteS3Insert {
+		statsCol = 1
+		require.NoError(t, vector.AppendBytes(metadata.Vecs[0], nil, false, proc.Mp()))
+	}
+	require.NoError(t, vector.AppendBytes(metadata.Vecs[statsCol], stats[:], false, proc.Mp()))
+	metadata.SetRowCount(1)
+	if kind == remoteS3Insert {
+		return metadata, name.String()
+	}
+	data, err := metadata.MarshalBinary()
+	require.NoError(t, err)
+	metadata.Clean(proc.Mp())
+	out := batch.NewWithSize(5)
+	for i := range out.Vecs {
+		out.Vecs[i] = vector.NewVec(types.T_text.ToType())
+	}
+	if kind == remoteS3Delete {
+		out.Vecs[2] = vector.NewVec(types.T_int8.ToType())
+		require.NoError(t, vector.AppendFixed(out.Vecs[2], int8(deletion.FlushDeltaLoc), false, proc.Mp()))
+		require.NoError(t, vector.AppendBytes(out.Vecs[1], data, false, proc.Mp()))
+	} else {
+		out.Vecs[0] = vector.NewVec(types.T_uint8.ToType())
+		require.NoError(t, vector.AppendFixed(out.Vecs[0], uint8(1), false, proc.Mp())) // actionDelete
+		require.NoError(t, vector.AppendBytes(out.Vecs[4], data, false, proc.Mp()))
+	}
+	for _, vec := range out.Vecs {
+		if vec.Length() == 0 {
+			require.NoError(t, vector.AppendBytes(vec, nil, false, proc.Mp()))
+		}
+	}
+	out.SetRowCount(1)
+	return out, name.String()
+}
+
+func TestRemoteS3ReceiveTakeoverBeforeAck(t *testing.T) {
+	oldRuntime := runtime.ServiceRuntime("")
+	runtime.SetupServiceBasedRuntime("", runtime.DefaultRuntime())
+	server := colexec.NewServer("")
+	t.Cleanup(func() { runtime.SetupServiceBasedRuntime("", oldRuntime) })
+
+	for _, path := range []string{"connector", "dispatch", "no-output"} {
+		for _, kind := range []remoteS3Output{remoteS3MultiUpdate, remoteS3Insert, remoteS3Delete} {
+			for _, failTakeover := range []bool{false, true} {
+				t.Run(fmt.Sprintf("%s/%d/fail=%t", path, kind, failTakeover), func(t *testing.T) {
+					ctrl := gomock.NewController(t)
+					fs, err := fileservice.NewMemoryFS(defines.SharedFileServiceName, fileservice.CacheConfig{}, nil)
+					require.NoError(t, err)
+					proc := testutil.NewProcess(t, testutil.WithFileService(fs))
+					defer proc.Free()
+					workspace := &remoteS3CleanupWorkspace{}
+					if !failTakeover {
+						txn := mock_frontend.NewMockTxnOperator(ctrl)
+						txn.EXPECT().GetWorkspace().Return(workspace).AnyTimes()
+						proc.Base.TxnOperator = txn
+					} else {
+						proc.Base.TxnOperator = nil
+					}
+					out, name := remoteS3TestOutput(t, proc, kind)
+					data, err := out.MarshalBinaryForPipeline(&bytes.Buffer{}, true, true)
+					require.NoError(t, err)
+					out.Clean(proc.Mp())
+					responses := make(chan morpc.Message, 2)
+					responses <- &pipeline.Message{Cmd: pipeline.Method_BatchMessage, Sid: pipeline.Status_Last, Data: data, BatchSequence: 1}
+					close(responses)
+					stream := mock_morpc.NewMockStream(ctrl)
+					reg := process.NewPipelineEdge(2, 0)
+					var root vm.Operator
+					var producer vm.Operator
+					switch kind {
+					case remoteS3MultiUpdate:
+						producer = &multi_update.MultiUpdate{Action: multi_update.UpdateWriteS3}
+					case remoteS3Insert:
+						producer = &insert.Insert{ToWriteS3: true}
+					case remoteS3Delete:
+						producer = &deletion.Deletion{RemoteDelete: true}
+					}
+					root = producer
+					if path == "connector" {
+						op := connector.NewArgument()
+						op.Reg = reg
+						op.AppendChild(producer)
+						root = op
+						defer op.Release()
+					} else if path == "dispatch" {
+						op := dispatch.NewArgument()
+						op.FuncId = dispatch.SendToAllLocalFunc
+						op.LocalRegs = []*process.WaitRegister{reg}
+						op.AppendChild(producer)
+						root = op
+						defer func() { op.Reset(proc, true, nil); op.Free(proc, true, nil); op.Release() }()
+					}
+					if path != "no-output" && !failTakeover {
+						stream.EXPECT().ID().Return(uint64(7))
+						stream.EXPECT().Send(gomock.Any(), gomock.Any()).DoAndReturn(func(_ context.Context, msg morpc.Message) error {
+							require.Equal(t, pipeline.Method_PipelineBatchAck, msg.(*pipeline.Message).Cmd)
+							require.True(t, msg.(*pipeline.Message).GetBatchAckS3OwnershipRetained())
+							require.Len(t, workspace.owners, 1)
+							require.Equal(t, []string{name}, workspace.owners[0].Names())
+							require.Equal(t, 1, server.UnpublishedS3AdmissionStats().Used)
+							require.Len(t, reg.Ch2, 1, "forward precedes ACK")
+							signal := <-reg.Ch2
+							forwarded, err := signal.Action()
+							require.NoError(t, err)
+							require.Equal(t, 1, forwarded.RowCount())
+							if path == "connector" {
+								forwarded.Clean(proc.Mp())
+							}
+							return nil
+						})
+					}
+					sender := &messageSenderOnClient{ctx: proc.Ctx, mp: proc.Mp(), receiveCh: responses, streamSender: stream}
+					scope := &Scope{Proc: proc, RootOp: root}
+					switch path {
+					case "connector":
+						err = receiveMessageFromCnServerIfConnector(scope, sender)
+					case "dispatch":
+						err = receiveMessageFromCnServerIfDispatch(scope, sender)
+					default:
+						err = receiveMessageFromCnServerIfOnlyRun(scope, sender)
+					}
+					if path == "no-output" {
+						require.ErrorContains(t, err, "no-output stream")
+						require.Empty(t, workspace.owners)
+						require.Equal(t, uint64(1), sender.pendingBatchAck)
+						require.Zero(t, server.UnpublishedS3AdmissionStats().Used)
+					} else if failTakeover {
+						require.ErrorContains(t, err, "cannot retain")
+						require.Empty(t, reg.Ch2)
+						require.Equal(t, uint64(1), sender.pendingBatchAck)
+						require.Zero(t, server.UnpublishedS3AdmissionStats().Used)
+					} else {
+						require.True(t, moerr.IsMoErrCode(err, moerr.ErrStreamClosed))
+						require.Zero(t, sender.pendingBatchAck)
+						workspace.owners[0].Accept(name)
+						require.False(t, workspace.owners[0].Pending())
+						require.Zero(t, server.UnpublishedS3AdmissionStats().Used)
+					}
+				})
+			}
+		}
+	}
+}
 
 type testPipelineClient struct {
 	genStream func(context.Context, string) (morpc.Stream, error)

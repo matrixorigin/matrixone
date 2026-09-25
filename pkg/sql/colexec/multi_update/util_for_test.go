@@ -35,6 +35,7 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/fileservice"
 	mock_frontend "github.com/matrixorigin/matrixone/pkg/frontend/test"
 	pbPlan "github.com/matrixorigin/matrixone/pkg/pb/plan"
+	"github.com/matrixorigin/matrixone/pkg/pb/txn"
 	"github.com/matrixorigin/matrixone/pkg/perfcounter"
 	"github.com/matrixorigin/matrixone/pkg/sql/colexec"
 	"github.com/matrixorigin/matrixone/pkg/sql/plan"
@@ -213,6 +214,8 @@ func prepareTestCtx(t *testing.T, withFs bool) (context.Context, *gomock.Control
 	txnOperator := mock_frontend.NewMockTxnOperator(ctrl)
 	txnOperator.EXPECT().Commit(gomock.Any()).Return(nil).AnyTimes()
 	txnOperator.EXPECT().Rollback(ctx).Return(nil).AnyTimes()
+	txnOperator.EXPECT().Txn().Return(txn.TxnMeta{}).AnyTimes()
+	txnOperator.EXPECT().GetWorkspace().Return(&multiUpdateS3CleanupWorkspace{}).AnyTimes()
 
 	txnClient := mock_frontend.NewMockTxnClient(ctrl)
 	txnClient.EXPECT().New(gomock.Any(), gomock.Any()).Return(txnOperator, nil).AnyTimes()
@@ -253,6 +256,7 @@ func prepareTestCtx(t *testing.T, withFs bool) (context.Context, *gomock.Control
 	})
 
 	proc.Base.TxnClient = txnClient
+	proc.Base.TxnOperator = txnOperator
 	proc.Ctx = ctx
 
 	_ = colexec.NewServer(proc.GetService())

@@ -419,6 +419,7 @@ func (s *Scope) Run(c *Compile) (err error) {
 }
 
 func (s *Scope) FreeOperator(c *Compile) {
+	process.BeginPipelineCleanup(c.proc.Ctx)
 	for _, scope := range s.PreScopes {
 		scope.FreeOperator(c)
 	}

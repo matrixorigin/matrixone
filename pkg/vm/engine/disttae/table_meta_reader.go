@@ -16,6 +16,7 @@ package disttae
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"slices"
 
@@ -53,6 +54,7 @@ const (
 )
 
 type TableMetaReader struct {
+	ctx       context.Context
 	table     *txnTable
 	fs        fileservice.FileService
 	snapshot  types.TS
@@ -60,6 +62,9 @@ type TableMetaReader struct {
 	state     int
 	//tblDef   *plan.TableDef
 	pState *logtailreplay.PartitionState
+
+	pendingDataWriter      *colexec.CNS3Writer
+	pendingTombstoneWriter *colexec.CNS3Writer
 
 	immutableOnly bool
 	maxObjects    int
@@ -75,11 +80,63 @@ func (r *TableMetaReader) GetTxnInfo() string {
 }
 
 func (r *TableMetaReader) Close() error {
+	return r.CloseWithCleanup(r.ctx)
+}
+
+// CloseWithCleanup uses the current cleanup attempt's context. A retained
+// reader may outlive the request that created it.
+func (r *TableMetaReader) CloseWithCleanup(ctx context.Context) error {
+	var cleanupErrs []error
+	for _, writer := range []*colexec.CNS3Writer{
+		r.pendingDataWriter,
+		r.pendingTombstoneWriter,
+	} {
+		if writer == nil {
+			continue
+		}
+		if err := writer.CloseWithCleanup(ctx, true); err != nil {
+			cleanupErrs = append(cleanupErrs, err)
+		}
+	}
+	if len(cleanupErrs) != 0 {
+		// Pending writers retain only file-service names after failed deletion.
+		// Release the reader's table/snapshot and request context now; the CN
+		// callback supplies a fresh context for the next cleanup attempt.
+		r.table = nil
+		r.pState = nil
+		r.ctx = context.Background()
+		r.state = endState
+		return errors.Join(cleanupErrs...)
+	}
+	r.pendingDataWriter = nil
+	r.pendingTombstoneWriter = nil
 	//r.tblDef = nil
 	r.table = nil
 	r.pState = nil
 	r.state = endState
 	return nil
+}
+
+// AcceptDataObjects releases source-reader ownership after the destination
+// transaction has accepted the data metadata.
+func (r *TableMetaReader) AcceptDataObjects() error {
+	if r.pendingDataWriter == nil {
+		return nil
+	}
+	writer := r.pendingDataWriter
+	r.pendingDataWriter = nil
+	return writer.Close()
+}
+
+// AcceptTombstoneObjects releases source-reader ownership after the
+// destination transaction has accepted the tombstone metadata.
+func (r *TableMetaReader) AcceptTombstoneObjects() error {
+	if r.pendingTombstoneWriter == nil {
+		return nil
+	}
+	writer := r.pendingTombstoneWriter
+	r.pendingTombstoneWriter = nil
+	return writer.Close()
 }
 
 func (r *TableMetaReader) addCloneSharedFile(
@@ -157,6 +214,7 @@ func newTableMetaReader(
 	}
 
 	return &TableMetaReader{
+		ctx:       ctx,
 		fs:        fs,
 		snapshot:  snapshot,
 		txnOffset: txnOffset,
@@ -450,11 +508,11 @@ func (r *TableMetaReader) collectDataOfAObjsAndInMem(
 	s3Writer = colexec.NewCNS3DataWriterForService(
 		r.table.getTxn().proc.GetService(), mp, r.fs, r.table.tableDef, -1, false,
 	)
+	r.pendingDataWriter = s3Writer
 	defer func() {
 		if dataReader != nil {
 			dataReader.Close()
 		}
-		s3Writer.Close()
 	}()
 
 	source, err := NewLocalDataSource(
@@ -517,13 +575,12 @@ func (r *TableMetaReader) collectTombstoneOfAObjsAndInMem(
 	s3Writer = colexec.NewCNS3TombstoneWriterForService(
 		r.table.getTxn().proc.GetService(), mp, r.fs, colTypes[1], -1,
 	)
+	r.pendingTombstoneWriter = s3Writer
 
 	defer func() {
 		if iter != nil {
 			iter.Close()
 		}
-		s3Writer.Close()
-
 		if tombstoneReader != nil {
 			tombstoneReader.Close()
 		}

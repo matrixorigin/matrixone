@@ -17,21 +17,26 @@ package insert
 import (
 	"context"
 	"errors"
+	"fmt"
 	goruntime "runtime"
 	"testing"
 	"time"
 
 	"github.com/golang/mock/gomock"
 	"github.com/matrixorigin/matrixone/pkg/catalog"
+	"github.com/matrixorigin/matrixone/pkg/common/moerr"
 	"github.com/matrixorigin/matrixone/pkg/common/runtime"
 	"github.com/matrixorigin/matrixone/pkg/container/batch"
 	"github.com/matrixorigin/matrixone/pkg/container/types"
 	"github.com/matrixorigin/matrixone/pkg/container/vector"
+	"github.com/matrixorigin/matrixone/pkg/fileservice"
 	mock_frontend "github.com/matrixorigin/matrixone/pkg/frontend/test"
+	"github.com/matrixorigin/matrixone/pkg/objectio"
 	"github.com/matrixorigin/matrixone/pkg/objectio/ioutil"
 	"github.com/matrixorigin/matrixone/pkg/pb/plan"
 	"github.com/matrixorigin/matrixone/pkg/sql/colexec"
 	"github.com/matrixorigin/matrixone/pkg/testutil"
+	"github.com/matrixorigin/matrixone/pkg/txn/client"
 	"github.com/matrixorigin/matrixone/pkg/vm"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine"
 	"github.com/matrixorigin/matrixone/pkg/vm/process"
@@ -42,6 +47,62 @@ type relationHandleFactory struct {
 	engine.Relation
 	handle         engine.Relation
 	newHandleCalls int
+}
+
+type insertS3CleanupWorkspace struct {
+	client.Workspace
+	cleanups []func(context.Context) error
+	owners   []*colexec.UnpublishedS3ObjectOwner
+}
+
+func (w *insertS3CleanupWorkspace) RetainUnpublishedS3ObjectOwner(owner *colexec.UnpublishedS3ObjectOwner) {
+	w.owners = append(w.owners, owner)
+}
+func (w *insertS3CleanupWorkspace) AcceptUnpublishedS3ObjectNames(names ...string) {
+	for _, owner := range w.owners {
+		owner.Accept(names...)
+	}
+}
+func (w *insertS3CleanupWorkspace) HasUnpublishedS3ObjectOwners() bool {
+	for _, owner := range w.owners {
+		if owner.Pending() {
+			return true
+		}
+	}
+	return false
+}
+func (w *insertS3CleanupWorkspace) AcceptAllUnpublishedS3ObjectOwners() {
+	for _, owner := range w.owners {
+		owner.AcceptAll()
+	}
+}
+func installInsertOwnershipWorkspace(t *testing.T, proc *process.Process) *insertS3CleanupWorkspace {
+	t.Helper()
+	w := &insertS3CleanupWorkspace{}
+	txnOp := mock_frontend.NewMockTxnOperator(gomock.NewController(t))
+	txnOp.EXPECT().GetWorkspace().Return(w).AnyTimes()
+	proc.Base.TxnOperator = txnOp
+	return w
+}
+
+func (w *insertS3CleanupWorkspace) RetainUnpublishedS3Cleanup(
+	cleanup func(context.Context) error,
+) {
+	w.cleanups = append(w.cleanups, cleanup)
+}
+
+type failOnceInsertDeleteFileService struct {
+	fileservice.FileService
+	failErr error
+}
+
+func (fs *failOnceInsertDeleteFileService) Delete(ctx context.Context, paths ...string) error {
+	if fs.failErr != nil {
+		err := fs.failErr
+		fs.failErr = nil
+		return err
+	}
+	return fs.FileService.Delete(ctx, paths...)
 }
 
 func (f *relationHandleFactory) NewRelationHandle() engine.Relation {
@@ -408,6 +469,7 @@ func TestInsertPrepareToWriteS3WithPipelineFlush(t *testing.T) {
 func TestInsertFlushS3WriterOnMemoryPressureAppendsBlockInfo(t *testing.T) {
 	proc := testutil.NewProc(t)
 	defer proc.Free()
+	installInsertOwnershipWorkspace(t, proc)
 
 	fs, err := colexec.GetSharedFSFromProc(proc)
 	require.NoError(t, err)
@@ -446,6 +508,233 @@ func TestInsertFlushS3WriterOnMemoryPressureAppendsBlockInfo(t *testing.T) {
 	require.Equal(t, []string{"force-refresh", "release"}, throttler.ops)
 	require.NotNil(t, insert.ctr.buf)
 	require.Greater(t, insert.ctr.buf.RowCount(), 0)
+}
+
+func TestInsertProducerTransfersPersistedOwnership(t *testing.T) {
+	for _, pressure := range []bool{false, true} {
+		for _, missingWorkspace := range []string{"present", "missing", "retry"} {
+			t.Run(fmt.Sprintf("pressure=%v/missingWorkspace=%v", pressure, missingWorkspace), func(t *testing.T) {
+				proc := testutil.NewProc(t)
+				defer proc.Free()
+				var workspace *insertS3CleanupWorkspace
+				if missingWorkspace == "present" {
+					workspace = installInsertOwnershipWorkspace(t, proc)
+				}
+				fs, err := colexec.GetSharedFSFromProc(proc)
+				require.NoError(t, err)
+				arg := &Insert{ctr: container{s3Writer: colexec.NewCNS3DataWriter(proc.Mp(), fs, testInsertS3TableDef(), 1, false)}}
+				arg.initBufForS3()
+				defer arg.Free(proc, true, nil)
+				input := &batch.Batch{Attrs: []string{"a", "b"}, Vecs: []*vector.Vector{
+					testutil.MakeInt64Vector([]int64{1}, nil, proc.Mp()),
+					testutil.MakeVarcharVector([]string{"x"}, nil, proc.Mp()),
+				}}
+				input.SetRowCount(1)
+				defer input.Clean(proc.Mp())
+				analyzer := process.NewAnalyzer(0, false, false, "insert-owner")
+				var names []string
+				for i := 0; i < 2; i++ {
+					require.NoError(t, arg.ctr.s3Writer.Write(proc.Ctx, input))
+					if pressure {
+						err = arg.flushS3WriterOnMemoryPressure(proc, analyzer)
+					} else {
+						result := vm.CallResult{Batch: arg.ctr.buf}
+						err = flushTailBatch(proc, arg.ctr.s3Writer, &result, analyzer)
+						arg.ctr.buf = result.Batch
+					}
+					// Each flush appends exactly one new object; old results must not replay.
+					require.Equal(t, i+1, arg.ctr.buf.Vecs[1].Length())
+					stats := objectio.ObjectStats(arg.ctr.buf.Vecs[1].GetBytesAt(i))
+					names = append(names, stats.ObjectName().String())
+					if missingWorkspace != "present" {
+						require.Error(t, err)
+						_, statErr := fs.StatFile(proc.Ctx, names[0])
+						require.NoError(t, statErr, "failed retention must leave writer ownership intact")
+						if missingWorkspace == "retry" {
+							workspace = installInsertOwnershipWorkspace(t, proc)
+							require.NoError(t, arg.ctr.s3Writer.TransferPersistedObjects(proc))
+							require.Equal(t, names, workspace.owners[0].Names())
+							workspace.AcceptUnpublishedS3ObjectNames(names...)
+							arg.Reset(proc, true, nil)
+							require.Nil(t, arg.ctr.s3Writer, "successful retry clears pending-cleanup state")
+							require.NoError(t, workspace.owners[0].Cleanup(proc.Ctx))
+							_, statErr = fs.StatFile(proc.Ctx, names[0])
+							require.NoError(t, statErr)
+							return
+						}
+						// Even a success-shaped teardown must retry this failed handoff.
+						arg.Reset(proc, false, nil)
+						_, statErr = fs.StatFile(proc.Ctx, names[0])
+						require.True(t, moerr.IsMoErrCode(statErr, moerr.ErrFileNotFound), "%v", statErr)
+						return
+					}
+					require.NoError(t, err)
+					require.Equal(t, []string{names[i]}, workspace.owners[i].Names())
+				}
+				require.NotEqual(t, names[0], names[1])
+				workspace.AcceptUnpublishedS3ObjectNames(names[0])
+				arg.Reset(proc, false, nil)
+				arg.Free(proc, true, errors.New("consumer failed after first registration"))
+				for _, name := range names {
+					_, err = fs.StatFile(proc.Ctx, name)
+					require.NoError(t, err)
+				}
+				for _, owner := range workspace.owners {
+					require.NoError(t, owner.Cleanup(proc.Ctx))
+				}
+				_, err = fs.StatFile(proc.Ctx, names[0])
+				require.NoError(t, err, "accepted object must survive both cleanup paths")
+				_, err = fs.StatFile(proc.Ctx, names[1])
+				require.True(t, moerr.IsMoErrCode(err, moerr.ErrFileNotFound), "%v", err)
+			})
+		}
+	}
+}
+
+func TestInsertResetUsesPipelineOutcomeForSpilledObjectOwnership(t *testing.T) {
+	for _, tc := range []struct {
+		name         string
+		pipelineFail bool
+	}{
+		{name: "failed pipeline deletes unaccepted object", pipelineFail: true},
+		{name: "successful pipeline preserves transferred object", pipelineFail: false},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			proc := testutil.NewProc(t)
+			defer proc.Free()
+
+			fs, err := colexec.GetSharedFSFromProc(proc)
+			require.NoError(t, err)
+			writer := colexec.NewCNS3DataWriter(proc.Mp(), fs, testInsertS3TableDef(), 1, false)
+			bat := &batch.Batch{
+				Attrs: []string{"a", "b"},
+				Vecs: []*vector.Vector{
+					testutil.MakeInt64Vector([]int64{1}, nil, proc.Mp()),
+					testutil.MakeVarcharVector([]string{"x"}, nil, proc.Mp()),
+				},
+			}
+			bat.SetRowCount(1)
+			defer bat.Clean(proc.Mp())
+			require.NoError(t, writer.Write(proc.Ctx, bat))
+			blockInfo, err := writer.SyncAndFillBlockInfoBat(proc.Ctx)
+			require.NoError(t, err)
+			require.Equal(t, 1, blockInfo.Vecs[1].Length())
+			data, area := vector.MustVarlenaRawData(blockInfo.Vecs[1])
+			stats := objectio.ObjectStats(data[0].GetByteSlice(area))
+			objectName := stats.ObjectName().String()
+
+			insert := &Insert{ctr: container{s3Writer: writer}}
+			insert.Reset(proc, tc.pipelineFail, errors.New("test pipeline outcome"))
+			require.Nil(t, insert.ctr.s3Writer)
+			_, err = fs.StatFile(proc.Ctx, objectName)
+			if tc.pipelineFail {
+				require.True(t, moerr.IsMoErrCode(err, moerr.ErrFileNotFound), "failed pipeline should delete object, got %v", err)
+			} else {
+				require.NoError(t, err, "successful pipeline must preserve transferred object")
+			}
+			insert.Free(proc, false, nil)
+		})
+	}
+}
+
+func TestInsertFreeTransfersFailedCleanupToTransaction(t *testing.T) {
+	t.Run("Free", func(t *testing.T) { checkInsertFreeTransfersFailedCleanupToTransaction(t, false) })
+	t.Run("prepared Reset", func(t *testing.T) { checkInsertFreeTransfersFailedCleanupToTransaction(t, true) })
+}
+
+func checkInsertFreeTransfersFailedCleanupToTransaction(t *testing.T, prepared bool) {
+	proc := testutil.NewProc(t)
+	defer proc.Free()
+	baseFS, err := colexec.GetSharedFSFromProc(proc)
+	require.NoError(t, err)
+	deleteErr := errors.New("injected insert cleanup failure")
+	fs := &failOnceInsertDeleteFileService{FileService: baseFS, failErr: deleteErr}
+	writer := colexec.NewCNS3DataWriter(proc.Mp(), fs, testInsertS3TableDef(), 1, false)
+	bat := &batch.Batch{
+		Attrs: []string{"a", "b"},
+		Vecs: []*vector.Vector{
+			testutil.MakeInt64Vector([]int64{1}, nil, proc.Mp()),
+			testutil.MakeVarcharVector([]string{"x"}, nil, proc.Mp()),
+		},
+	}
+	bat.SetRowCount(1)
+	defer bat.Clean(proc.Mp())
+	require.NoError(t, writer.Write(proc.Ctx, bat))
+	blockInfo, err := writer.SyncAndFillBlockInfoBat(proc.Ctx)
+	require.NoError(t, err)
+	data, area := vector.MustVarlenaRawData(blockInfo.Vecs[1])
+	stats := objectio.ObjectStats(data[0].GetByteSlice(area))
+	objectName := stats.ObjectName().String()
+	blockInfo.Clean(proc.Mp())
+
+	ctrl := gomock.NewController(t)
+	txnOp := mock_frontend.NewMockTxnOperator(ctrl)
+	workspace := &insertS3CleanupWorkspace{}
+	txnOp.EXPECT().GetWorkspace().Return(workspace).AnyTimes()
+	proc.Base.TxnOperator = txnOp
+
+	insert := NewArgument()
+	insert.ctr.s3Writer = writer
+	if prepared {
+		insert.Reset(proc, true, deleteErr)
+	} else {
+		insert.Free(proc, true, deleteErr)
+	}
+	require.Nil(t, insert.ctr.s3Writer)
+	require.Len(t, workspace.cleanups, 1, "transaction must take ownership before operator release")
+	insert.Release()
+
+	_, err = baseFS.StatFile(proc.Ctx, objectName)
+	require.NoError(t, err, "failed immediate deletion should keep the object for retry")
+	require.NoError(t, workspace.cleanups[0](proc.Ctx))
+	_, err = baseFS.StatFile(proc.Ctx, objectName)
+	require.True(t, moerr.IsMoErrCode(err, moerr.ErrFileNotFound), "transaction retry should delete the object, got %v", err)
+}
+
+func TestPartitionInsertFreeKeepsFailedCleanupOwner(t *testing.T) {
+	for _, failDelete := range []bool{false, true} {
+		t.Run(fmt.Sprintf("failDelete=%v", failDelete), func(t *testing.T) {
+			proc := testutil.NewProc(t)
+			defer proc.Free()
+			baseFS, err := colexec.GetSharedFSFromProc(proc)
+			require.NoError(t, err)
+			deleteErr := errors.New("injected partition cleanup failure")
+			fs := &failOnceInsertDeleteFileService{FileService: baseFS}
+			if failDelete {
+				fs.failErr = deleteErr
+			}
+			writer := colexec.NewCNS3DataWriter(proc.Mp(), fs, testInsertS3TableDef(), 1, false)
+			bat := &batch.Batch{Attrs: []string{"a", "b"}, Vecs: []*vector.Vector{
+				testutil.MakeInt64Vector([]int64{1}, nil, proc.Mp()),
+				testutil.MakeVarcharVector([]string{"x"}, nil, proc.Mp()),
+			}}
+			bat.SetRowCount(1)
+			defer bat.Clean(proc.Mp())
+			require.NoError(t, writer.Write(proc.Ctx, bat))
+			blockInfo, err := writer.SyncAndFillBlockInfoBat(proc.Ctx)
+			require.NoError(t, err)
+			stats := objectio.ObjectStats(blockInfo.Vecs[1].GetBytesAt(0))
+			name := stats.ObjectName().String()
+			blockInfo.Clean(proc.Mp())
+
+			workspace := installInsertOwnershipWorkspace(t, proc)
+			arg := NewArgument()
+			arg.ctr.partitionS3Writers = []*colexec.CNS3Writer{nil, writer}
+			arg.Free(proc, true, deleteErr)
+			require.Nil(t, arg.ctr.partitionS3Writers)
+			arg.Release()
+			if failDelete {
+				require.Len(t, workspace.cleanups, 1)
+				_, err = baseFS.StatFile(proc.Ctx, name)
+				require.NoError(t, err, "failed deletion must preserve the object for retry")
+				require.NoError(t, workspace.cleanups[0](proc.Ctx))
+			} else {
+				require.Empty(t, workspace.cleanups)
+			}
+			_, err = baseFS.StatFile(proc.Ctx, name)
+			require.True(t, moerr.IsMoErrCode(err, moerr.ErrFileNotFound), "%v", err)
+		})
+	}
 }
 
 func TestInsertFlushS3WriterOnMemoryPressureRefreshesBeforeReleaseOnAppendError(t *testing.T) {
@@ -493,6 +782,7 @@ func TestInsertFlushS3WriterOnMemoryPressureRefreshesBeforeReleaseOnAppendError(
 func TestInsertS3FinalFlushRefreshesBeforeReleaseOnSuccess(t *testing.T) {
 	proc := testutil.NewProc(t)
 	defer proc.Free()
+	installInsertOwnershipWorkspace(t, proc)
 
 	fs, err := colexec.GetSharedFSFromProc(proc)
 	require.NoError(t, err)

@@ -37,10 +37,12 @@ type pipelineBatchFlow struct {
 	maxBytes uint64
 	nextSeq  uint64
 	ackedSeq uint64
-	bytes    uint64
-	pending  map[uint64]uint64
-	changed  chan struct{}
-	abortErr error
+	// Contiguous per-batch ownership receipts, independent of cumulative credits.
+	ownershipAckedSeq uint64
+	bytes             uint64
+	pending           map[uint64]uint64
+	changed           chan struct{}
+	abortErr          error
 	// stoppedByReceiver distinguishes an internal StopSending from query or
 	// connection cancellation at the terminal-response drain boundary.
 	stoppedByReceiver bool
@@ -165,6 +167,10 @@ func (f *pipelineBatchFlow) rollback(seq uint64) {
 }
 
 func (f *pipelineBatchFlow) acknowledge(seq uint64) error {
+	return f.acknowledgeOwnership(seq, false)
+}
+
+func (f *pipelineBatchFlow) acknowledgeOwnership(seq uint64, retained bool) error {
 	if f == nil || seq == 0 {
 		return nil
 	}
@@ -179,6 +185,9 @@ func (f *pipelineBatchFlow) acknowledge(seq uint64) error {
 	if seq > f.nextSeq {
 		return moerr.NewInvalidStateNoCtxf(
 			"pipeline batch ACK %d is ahead of sent sequence %d", seq, f.nextSeq)
+	}
+	if retained && seq == f.ownershipAckedSeq+1 {
+		f.ownershipAckedSeq = seq
 	}
 	for current := f.ackedSeq + 1; current <= seq; current++ {
 		if size, ok := f.pending[current]; ok {
@@ -254,7 +263,7 @@ func handlePipelineBatchAck(message *pipeline.Message, cs morpc.ClientSession) e
 		_ = cs.Close()
 		return moerr.NewInvalidStateNoCtx("pipeline batch ACK was not negotiated")
 	}
-	if err := lifecycle.batchFlow.acknowledge(message.GetBatchAckSequence()); err != nil {
+	if err := lifecycle.batchFlow.acknowledgeOwnership(message.GetBatchAckSequence(), message.GetBatchAckS3OwnershipRetained()); err != nil {
 		_ = cs.Close()
 		return err
 	}

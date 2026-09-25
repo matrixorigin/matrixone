@@ -15,6 +15,8 @@
 package deletion
 
 import (
+	"context"
+	"errors"
 	"slices"
 
 	"github.com/matrixorigin/matrixone/pkg/catalog"
@@ -25,6 +27,7 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/container/types"
 	"github.com/matrixorigin/matrixone/pkg/container/vector"
 	"github.com/matrixorigin/matrixone/pkg/fileservice"
+	"github.com/matrixorigin/matrixone/pkg/logutil"
 	"github.com/matrixorigin/matrixone/pkg/objectio"
 	"github.com/matrixorigin/matrixone/pkg/perfcounter"
 	"github.com/matrixorigin/matrixone/pkg/sql/colexec"
@@ -33,6 +36,7 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/vm/engine"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/options"
 	"github.com/matrixorigin/matrixone/pkg/vm/process"
+	"go.uber.org/zap"
 )
 
 var _ vm.Operator = new(Deletion)
@@ -69,6 +73,8 @@ type container struct {
 	blockId_bitmap                       map[types.Blockid]*nulls.Nulls
 	partitionId_blockId_rowIdBatch       map[int]map[types.Blockid]*batch.Batch // PartitionId -> blockId -> RowIdBatch
 	partitionId_tombstoneObjectStatsBats map[int][]*batch.Batch                 // PartitionId -> tombstone object stats
+	fs                                   fileservice.FileService
+	s3Writers                            []*colexec.CNS3Writer
 	// don't flush cn block rowId and rawBatch
 	// we just do compaction for cn block in the
 	// future
@@ -136,6 +142,10 @@ func NewArgument() *Deletion {
 
 func (deletion *Deletion) Release() {
 	if deletion != nil {
+		if len(deletion.ctr.s3Writers) != 0 ||
+			len(deletion.ctr.partitionId_tombstoneObjectStatsBats) != 0 {
+			return
+		}
 		reuse.Free[Deletion](deletion, nil)
 	}
 }
@@ -153,6 +163,12 @@ type DeleteCtx struct {
 func (deletion *Deletion) Reset(proc *process.Process, pipelineFailed bool, err error) {
 	ctr := &deletion.ctr
 	ctr.state = vm.Build
+	var cleanupErr error
+	ctr.s3Writers, cleanupErr = closeS3Writers(proc.Ctx, ctr.s3Writers, pipelineFailed)
+	if cleanupErr != nil {
+		logutil.Warn("failed to clean remote delete S3 writers", zap.Error(cleanupErr))
+		deletion.retainPendingS3Writers(proc)
+	}
 	if deletion.RemoteDelete {
 		for k := range ctr.blockId_bitmap {
 			delete(ctr.blockId_bitmap, k)
@@ -167,14 +183,7 @@ func (deletion *Deletion) Reset(proc *process.Process, pipelineFailed bool, err 
 			delete(ctr.partitionId_blockId_rowIdBatch, pidx)
 		}
 
-		for pIdx, bats := range ctr.partitionId_tombstoneObjectStatsBats {
-			for _, bat := range bats {
-				if bat != nil {
-					bat.Clean(proc.GetMPool())
-				}
-			}
-			delete(ctr.partitionId_tombstoneObjectStatsBats, pIdx)
-		}
+		ctr.cleanTombstoneStats(proc.GetMPool())
 
 		for blkid := range ctr.blockId_type {
 			delete(ctr.blockId_type, blkid)
@@ -196,11 +205,20 @@ func (deletion *Deletion) Reset(proc *process.Process, pipelineFailed bool, err 
 // delete from t1 using t1 join t2 on t1.a = t2.a;
 func (deletion *Deletion) Free(proc *process.Process, pipelineFailed bool, err error) {
 	ctr := &deletion.ctr
+	var cleanupErr error
+	ctr.s3Writers, cleanupErr = closeS3Writers(proc.Ctx, ctr.s3Writers, pipelineFailed)
+	if cleanupErr != nil {
+		logutil.Warn("failed to clean remote delete S3 writers", zap.Error(cleanupErr))
+		deletion.retainPendingS3Writers(proc)
+	}
 	if deletion.RemoteDelete {
+		ctr.cleanTombstoneStats(proc.GetMPool())
 		deletion.SegmentMap = nil
 		ctr.blockId_bitmap = nil
 		ctr.partitionId_blockId_rowIdBatch = nil
-		ctr.partitionId_tombstoneObjectStatsBats = nil
+		if len(ctr.partitionId_tombstoneObjectStatsBats) == 0 {
+			ctr.partitionId_tombstoneObjectStatsBats = nil
+		}
 		ctr.blockId_type = nil
 		ctr.pool = nil
 	}
@@ -211,6 +229,65 @@ func (deletion *Deletion) Free(proc *process.Process, pipelineFailed bool, err e
 	}
 
 	ctr.source = nil
+}
+
+func closeS3Writers(
+	ctx context.Context,
+	writers []*colexec.CNS3Writer,
+	pipelineFailed bool,
+) ([]*colexec.CNS3Writer, error) {
+	pending := make([]*colexec.CNS3Writer, 0, len(writers))
+	var cleanupErrs []error
+	for _, writer := range writers {
+		if writer == nil {
+			continue
+		}
+		if err := writer.CloseWithCleanup(ctx, pipelineFailed); err != nil {
+			pending = append(pending, writer)
+			cleanupErrs = append(cleanupErrs, err)
+		}
+	}
+	return pending, errors.Join(cleanupErrs...)
+}
+
+func (deletion *Deletion) retainPendingS3Writers(proc *process.Process) {
+	pending := make([]*colexec.CNS3Writer, 0, len(deletion.ctr.s3Writers))
+	for _, writer := range deletion.ctr.s3Writers {
+		if writer == nil {
+			continue
+		}
+		if colexec.RetainUnpublishedS3Cleanup(proc, func(ctx context.Context) error {
+			return writer.CloseWithCleanup(ctx, true)
+		}) {
+			continue
+		}
+		pending = append(pending, writer)
+	}
+	deletion.ctr.s3Writers = pending
+}
+
+func (ctr *container) cleanTombstoneStats(mp *mpool.MPool) {
+	for pIdx, bats := range ctr.partitionId_tombstoneObjectStatsBats {
+		for _, bat := range bats {
+			if bat != nil {
+				bat.Clean(mp)
+			}
+		}
+		delete(ctr.partitionId_tombstoneObjectStatsBats, pIdx)
+	}
+}
+
+func (deletion *Deletion) retryPendingS3Cleanup(proc *process.Process) error {
+	var cleanupErrs []error
+	var err error
+	deletion.ctr.s3Writers, err = closeS3Writers(proc.Ctx, deletion.ctr.s3Writers, false)
+	if err != nil {
+		cleanupErrs = append(cleanupErrs, err)
+	}
+	if deletion.RemoteDelete {
+		deletion.ctr.cleanTombstoneStats(proc.GetMPool())
+	}
+	return errors.Join(cleanupErrs...)
 }
 
 func (deletion *Deletion) ExecProjection(proc *process.Process, input *batch.Batch) (*batch.Batch, error) {
@@ -241,6 +318,7 @@ func (ctr *container) flush(proc *process.Process, analyzer process.Analyzer) (u
 	if err != nil {
 		return 0, err
 	}
+	ctr.fs = fs
 
 	resSize := uint32(0)
 	for pidx, blockId_rowIdBatch := range ctr.partitionId_blockId_rowIdBatch {
@@ -258,12 +336,18 @@ func (ctr *container) flush(proc *process.Process, analyzer process.Analyzer) (u
 			statsList []objectio.ObjectStats
 			s3writer  *colexec.CNS3Writer
 		)
-
-		defer func() {
-			if s3writer != nil {
-				s3writer.Close()
+		abortWriter := func(cause error) error {
+			if s3writer == nil {
+				return cause
 			}
-		}()
+			if cleanupErr := s3writer.CloseWithCleanup(proc.Ctx, true); cleanupErr != nil {
+				ctr.s3Writers = append(ctr.s3Writers, s3writer)
+				logutil.Warn("remote deletion cleanup retained for retry", zap.Error(cleanupErr))
+				return cause
+			}
+			s3writer = nil
+			return cause
+		}
 
 		slices.SortFunc(blkids, func(a, b types.Blockid) int {
 			return a.Compare(&b)
@@ -277,7 +361,7 @@ func (ctr *container) flush(proc *process.Process, analyzer process.Analyzer) (u
 			}
 
 			if err = s3writer.Write(proc.Ctx, bat); err != nil {
-				return 0, err
+				return 0, abortWriter(err)
 			}
 
 			resSize += uint32(bat.Size())
@@ -295,7 +379,7 @@ func (ctr *container) flush(proc *process.Process, analyzer process.Analyzer) (u
 		if statsList, err = process.MeasureFilesystemWait(analyzer, func() ([]objectio.ObjectStats, error) {
 			return s3writer.Sync(newCtx)
 		}); err != nil {
-			return 0, err
+			return 0, abortWriter(err)
 		}
 
 		for _, stats := range statsList {
@@ -303,13 +387,22 @@ func (ctr *container) flush(proc *process.Process, analyzer process.Analyzer) (u
 			bat.SetVector(0, vector.NewVec(types.T_text.ToType()))
 			if err = vector.AppendBytes(
 				bat.GetVector(0), stats.Marshal(), false, proc.GetMPool()); err != nil {
-				return 0, err
+				bat.Clean(proc.GetMPool())
+				return 0, abortWriter(err)
 			}
 
 			bat.SetRowCount(bat.Vecs[0].Length())
 			ctr.partitionId_tombstoneObjectStatsBats[pidx] =
 				append(ctr.partitionId_tombstoneObjectStatsBats[pidx], bat)
 		}
+		if err = s3writer.TransferPersistedObjects(proc); err != nil {
+			return 0, abortWriter(err)
+		}
+		if err = s3writer.Close(); err != nil {
+			ctr.s3Writers = append(ctr.s3Writers, s3writer)
+			return 0, err
+		}
+		s3writer = nil
 	}
 	return resSize, nil
 }

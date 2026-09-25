@@ -73,6 +73,9 @@ message Message {
   uint64 accepted_batch_credit_bytes = 16;
   uint64 batch_sequence = 17;
   uint64 batch_ack_sequence = 18;
+  // ACK only: the receiving workspace retained cleanup ownership for this
+  // batch's S3 objects. This receipt is not cumulative like batch credits.
+  bool batch_ack_s3_ownership_retained = 19;
 }
 
 message Connector {

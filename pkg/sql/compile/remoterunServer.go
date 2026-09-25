@@ -167,6 +167,7 @@ func CnServerMessageHandler(
 					zap.Uint64("outstanding-bytes", bytes))
 			})
 	}
+	handlerErr = receiver.finalizeUnpublishedS3Objects(handlerErr, lifecycle)
 	responseSent := false
 	if receiver.messageTyp != pipeline.Method_StopSending {
 		// stop message only close a running pipeline, there is no need to reply the finished-message.
@@ -203,6 +204,55 @@ func CnServerMessageHandler(
 		receiver.colexecServer.RemoveRelatedPipeline(receiver.clientSession, receiver.messageId)
 	}
 	return err
+}
+
+func (receiver *messageReceiverOnServer) finalizeUnpublishedS3Objects(
+	handlerErr error,
+	lifecycle *pipelineStreamLifecycle,
+) error {
+	if receiver.unpublishedS3CleanupWorkspace == nil {
+		return handlerErr
+	}
+	flowAccepted := false
+	if handlerErr == nil && !receiver.needNotReply && lifecycle != nil && lifecycle.batchFlow != nil {
+		flow := lifecycle.batchFlow
+		flow.mu.Lock()
+		// An empty/no-output stream is not evidence of a coordinator takeover.
+		// Only actual acknowledged output can release the worker's lease.
+		flowAccepted = flow.nextSeq > 0 && flow.ownershipAckedSeq == flow.nextSeq && len(flow.pending) == 0 &&
+			flow.abortErr == nil && !flow.stoppedByReceiver
+		flow.mu.Unlock()
+	}
+	if flowAccepted && receiver.unpublishedS3ObjectOwners != nil {
+		receiver.unpublishedS3ObjectOwners.AcceptAllUnpublishedS3ObjectOwners()
+	} else if handlerErr == nil && receiver.unpublishedS3ObjectOwners != nil &&
+		receiver.unpublishedS3ObjectOwners.HasUnpublishedS3ObjectOwners() {
+		// Without an ACK-capable stream the worker cannot prove the coordinator
+		// retained ownership before accepting its own cleanup lease.
+		handlerErr = moerr.NewNotSupportedNoCtx(
+			"remote S3 ownership handoff requires batch acknowledgements for exported output",
+		)
+	}
+	baseCtx := receiver.unpublishedS3CleanupContext
+	if baseCtx == nil {
+		baseCtx = receiver.messageCtx
+	}
+	process.BeginPipelineCleanup(baseCtx)
+	cleanupCtx, cancel := colexec.UnpublishedS3CleanupContext(baseCtx)
+	cleanupErr := receiver.unpublishedS3CleanupWorkspace.CleanupUnpublishedS3Objects(cleanupCtx)
+	cancel()
+	if cleanupErr != nil {
+		if receiver.colexecServer != nil {
+			workspace := receiver.unpublishedS3CleanupWorkspace
+			if queueErr := workspace.QueueUnpublishedS3Cleanup(receiver.colexecServer); queueErr != nil {
+				return errors.Join(handlerErr, cleanupErr, queueErr)
+			}
+			logutil.Warn("remote unpublished S3 cleanup transferred to CN retry worker", zap.Error(cleanupErr))
+			return handlerErr
+		}
+		return errors.Join(handlerErr, cleanupErr)
+	}
+	return handlerErr
 }
 
 // waitUntilPipelineBatchFlowDrained preserves the ownership boundary between
@@ -462,6 +512,15 @@ func handlePipelineMessage(receiver *messageReceiverOnServer) (err error) {
 					receiver.groupConcatReportingIncomplete = receiver.warningSession.incompleteGroupConcatReporting()
 				}
 				receiver.statementLastInsertID = runCompile.proc.GetStatementLastInsertID()
+				receiver.unpublishedS3CleanupContext = runCompile.proc.Ctx
+				if len(runCompile.scopes) != 0 && runCompile.proc.GetTxnOperator() != nil {
+					workspace := runCompile.proc.GetTxnOperator().GetWorkspace()
+					receiver.unpublishedS3CleanupWorkspace, _ = workspace.(interface {
+						CleanupUnpublishedS3Objects(context.Context) error
+						QueueUnpublishedS3Cleanup(*colexec.Server) error
+					})
+					receiver.unpublishedS3ObjectOwners, _ = workspace.(colexec.UnpublishedS3ObjectOwnershipWorkspace)
+				}
 				runCompile.clear()
 				return nil
 			}))
@@ -849,9 +908,15 @@ type messageReceiverOnServer struct {
 
 	needNotReply bool
 
-	requestedTeardownMode pipeline.StreamTeardownMode
-	acceptedTeardownMode  pipeline.StreamTeardownMode
-	streamLifecycle       *pipelineStreamLifecycle
+	requestedTeardownMode         pipeline.StreamTeardownMode
+	acceptedTeardownMode          pipeline.StreamTeardownMode
+	streamLifecycle               *pipelineStreamLifecycle
+	unpublishedS3CleanupContext   context.Context
+	unpublishedS3CleanupWorkspace interface {
+		CleanupUnpublishedS3Objects(context.Context) error
+		QueueUnpublishedS3Cleanup(*colexec.Server) error
+	}
+	unpublishedS3ObjectOwners colexec.UnpublishedS3ObjectOwnershipWorkspace
 
 	colexecServer *colexec.Server
 

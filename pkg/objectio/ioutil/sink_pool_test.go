@@ -16,6 +16,7 @@ package ioutil
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"sync"
 	"sync/atomic"
@@ -148,6 +149,67 @@ func (m *mockFileSinker) Close() error {
 func mockFactory(sinkErr, syncErr error) FileSinkerFactory {
 	return func(mp *mpool.MPool, fs fileservice.FileService) FileSinker {
 		return &mockFileSinker{sinkErr: sinkErr, syncErr: syncErr}
+	}
+}
+
+func TestAdmittedFileSinkerReservesBeforeSync(t *testing.T) {
+	base := &mockFileSinker{activeName: "object", syncStart: make(chan struct{})}
+	admitted := &admittedFileSinker{
+		FileSinker: base,
+		reserve: func(name string) error {
+			require.Equal(t, "object", name)
+			return errors.New("cleanup capacity exhausted")
+		},
+	}
+	_, err := admitted.Sync(context.Background())
+	require.ErrorContains(t, err, "cleanup capacity exhausted")
+	select {
+	case <-base.syncStart:
+		t.Fatal("Sync ran despite failed pre-upload admission")
+	default:
+	}
+}
+
+func TestSinkerRejectedAdmissionDoesNotCreateCleanupDebt(t *testing.T) {
+	for _, pipeline := range []bool{false, true} {
+		t.Run(fmt.Sprintf("pipeline=%t", pipeline), func(t *testing.T) {
+			proc := testutil.NewProc(t)
+			fs, err := fileservice.NewMemoryFS("shared", fileservice.DisabledCacheConfig, nil)
+			require.NoError(t, err)
+			attrs, typs, _ := mockSchema(3, -1)
+			base := &mockFileSinker{activeName: "not-written", syncStart: make(chan struct{})}
+			admissionErr := errors.New("cleanup capacity exhausted")
+			opts := []SinkerOption{
+				WithMemorySizeThreshold(1),
+				WithObjectSyncAdmission(func(name string) error {
+					if name != "not-written" {
+						return fmt.Errorf("unexpected object name %q", name)
+					}
+					return admissionErr
+				}, func(string) {}),
+			}
+			if pipeline {
+				opts = append(opts, WithPipelineFlush())
+			}
+			sinker := NewSinker(-1, attrs, typs,
+				func(*mpool.MPool, fileservice.FileService) FileSinker { return base },
+				proc.Mp(), fs, opts...)
+			bat := containers.MockBatch(typs, 8192, -1, nil)
+			err = sinker.Write(context.Background(), containers.ToCNBatch(bat))
+			if err == nil {
+				err = sinker.Sync(context.Background())
+			}
+			require.ErrorIs(t, err, admissionErr)
+			files, cleanupErr := sinker.DeletePersisted(context.Background())
+			require.NoError(t, cleanupErr)
+			require.Empty(t, files, "a rejected upload must not enter cleanup debt")
+			select {
+			case <-base.syncStart:
+				t.Fatal("file Sync started despite rejected admission")
+			default:
+			}
+			_ = sinker.Close()
+		})
 	}
 }
 

@@ -56,6 +56,7 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/pb/timestamp"
 	"github.com/matrixorigin/matrixone/pkg/queryservice"
 	qclient "github.com/matrixorigin/matrixone/pkg/queryservice/client"
+	"github.com/matrixorigin/matrixone/pkg/sql/colexec"
 	"github.com/matrixorigin/matrixone/pkg/sql/compile"
 	"github.com/matrixorigin/matrixone/pkg/txn/client"
 	"github.com/matrixorigin/matrixone/pkg/txn/trace"
@@ -323,6 +324,42 @@ func TestServiceCloseWithdrawalErrorIsLocallyComplete(t *testing.T) {
 			})
 		})
 	}
+}
+
+func TestServiceCloseCompletesAfterTransientS3CleanupFailure(t *testing.T) {
+	moruntime.RunTest(t.Name(), func(rt moruntime.Runtime) {
+		withdrawalErr := errors.New("withdrawal failed")
+		hc := &failingWithdrawalHeartbeatClient{testHAKClient: &testHAKClient{}, err: withdrawalErr}
+		mc := clusterservice.NewMOCluster(t.Name(), hc, time.Hour)
+		t.Cleanup(mc.Close)
+		ctrl := gomock.NewController(t)
+		ls := mock_lock.NewMockLockService(ctrl)
+		ls.EXPECT().Close().Return(nil).Times(2)
+		executor := colexec.NewServer(t.Name())
+		var attempts atomic.Int32
+		cleanup := func(context.Context) error {
+			if attempts.Add(1) == 1 {
+				return errors.New("temporary Delete failure")
+			}
+			return nil
+		}
+		sv := &service{
+			cfg: &Config{UUID: t.Name()}, logger: zap.NewNop(), config: util.NewConfigData(nil),
+			stopper: stopper.NewStopper(t.Name()), bootstrapService: &testBootService{},
+			mo: closeErrorMOServer{}, _hakeeperClient: hc, moCluster: mc,
+			server: closeOnlyRPCServer{}, lockService: ls, colexecServer: executor,
+			incrservice: closeOnlyIncrService{onClose: func() {
+				require.NoError(t, executor.RetryUnpublishedS3Cleanup(cleanup))
+			}},
+			viewMetadataAdmissionGeneration: 1,
+		}
+		// Remote withdrawal is diagnostic; it must not hide whether local
+		// teardown advanced past the recovered S3 cleanup and closed its tail.
+		require.ErrorIs(t, sv.Close(), withdrawalErr)
+		require.True(t, sv.CloseComplete())
+		require.Equal(t, int32(2), attempts.Load())
+		require.Equal(t, 1, hc.closed)
+	})
 }
 
 func TestMakeRSSCacheEvictorEvictsMemoryCacheOnly(t *testing.T) {
@@ -1539,6 +1576,55 @@ func TestPipelineAdmissionRejectCancelsRequestOnce(t *testing.T) {
 	require.Error(t, err)
 	require.True(t, moerr.IsMoErrCode(err, moerr.ErrServiceUnavailable))
 	require.Equal(t, int32(1), cancelCount.Load())
+}
+
+func TestPipelineBatchAckRunsBeforeIngressReturns(t *testing.T) {
+	started := make(chan struct{})
+	releaseHandler := make(chan struct{})
+	var releaseOnce sync.Once
+	t.Cleanup(func() { releaseOnce.Do(func() { close(releaseHandler) }) })
+	var cancelCount atomic.Int32
+	s := &service{cfg: &Config{}}
+	s.requestHandler = func(
+		_ context.Context,
+		_ string,
+		_ morpc.Message,
+		_ morpc.ClientSession,
+		_ engine.Engine,
+		_ fileservice.FileService,
+		_ lockservice.LockService,
+		_ qclient.QueryClient,
+		_ logservice.CNHAKeeperClient,
+		_ udf.Service,
+		_ client.TxnClient,
+		_ *defines.AutoIncrCacheManager,
+		_ func() morpc.Message,
+	) error {
+		close(started)
+		<-releaseHandler
+		return nil
+	}
+	returned := make(chan error, 1)
+	go func() {
+		returned <- s.handleRequest(context.Background(), morpc.RPCMessage{
+			Message: &pipeline.Message{Cmd: pipeline.Method_PipelineBatchAck, Sid: pipeline.Status_Last},
+			Cancel:  func() { cancelCount.Add(1) },
+		}, 0, nil)
+	}()
+	select {
+	case <-started:
+	case <-time.After(time.Second):
+		t.Fatal("ACK handler did not start")
+	}
+	select {
+	case <-returned:
+		t.Fatal("ingress returned before ACK processing completed")
+	case <-time.After(50 * time.Millisecond):
+	}
+	releaseOnce.Do(func() { close(releaseHandler) })
+	require.NoError(t, <-returned)
+	require.Equal(t, int32(1), cancelCount.Load())
+	require.Zero(t, s.pipelines.counter.Load())
 }
 
 func TestHandleRequestPropagatesConfiguredRPCMaxMessageSize(t *testing.T) {
