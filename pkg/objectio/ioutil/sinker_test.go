@@ -206,6 +206,43 @@ type persistThenErrorFS struct {
 	persisted string
 }
 
+type failSecondUnpublishedDeleteBatchFS struct {
+	fileservice.FileService
+	batchSizes []int
+}
+
+func (fs *failSecondUnpublishedDeleteBatchFS) Delete(_ context.Context, names ...string) error {
+	fs.batchSizes = append(fs.batchSizes, len(names))
+	if len(fs.batchSizes) == 2 {
+		return errors.New("second Delete batch failed")
+	}
+	return nil
+}
+
+func TestDeleteUnpublishedObjectsReportsOnlyConfirmedBatches(t *testing.T) {
+	names := make([]string, 1001)
+	for i := range names {
+		names[i] = fmt.Sprintf("unpublished-%d", i)
+	}
+	fs := &failSecondUnpublishedDeleteBatchFS{}
+	completed, remaining, err := DeleteUnpublishedObjectsWithProgress(
+		context.Background(), fs, append(names, "", names[0])...)
+	require.ErrorContains(t, err, "second Delete batch failed")
+	require.Len(t, completed, 1000)
+	require.Len(t, remaining, 1)
+	require.Equal(t, []int{1000, 1}, fs.batchSizes)
+	retried, stillPending, err := DeleteUnpublishedObjectsWithProgress(context.Background(), fs, remaining...)
+	require.NoError(t, err)
+	require.Len(t, retried, 1)
+	require.Empty(t, stillPending)
+	require.Equal(t, []int{1000, 1, 1}, fs.batchSizes)
+
+	legacyFS := &failSecondUnpublishedDeleteBatchFS{}
+	count, err := DeleteUnpublishedObjects(context.Background(), legacyFS, names...)
+	require.ErrorContains(t, err, "second Delete batch failed")
+	require.Equal(t, len(names), count, "the existing cleanup count keeps its full-snapshot contract")
+}
+
 func (fs *persistThenErrorFS) Write(ctx context.Context, vector fileservice.IOVector) error {
 	if err := fs.FileService.Write(ctx, vector); err != nil {
 		return err

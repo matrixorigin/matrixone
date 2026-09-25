@@ -16,11 +16,13 @@ package colexec
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"runtime"
 	"sync"
 	"testing"
 
+	"github.com/matrixorigin/matrixone/pkg/common/moerr"
 	moruntime "github.com/matrixorigin/matrixone/pkg/common/runtime"
 	"github.com/matrixorigin/matrixone/pkg/fileservice"
 	metricv2 "github.com/matrixorigin/matrixone/pkg/util/metric/v2"
@@ -112,6 +114,121 @@ func TestUnpublishedS3OwnerRetainsTicketUntilDelete(t *testing.T) {
 	require.NoError(t, owner.Cleanup(context.Background()))
 	require.Zero(t, a.count())
 	require.NoError(t, a.reserveUpload("next"))
+}
+
+type failSecondDeleteBatchFS struct {
+	fileservice.FileService
+	batchSizes []int
+	batchNames [][]string
+}
+
+func (fs *failSecondDeleteBatchFS) Delete(ctx context.Context, names ...string) error {
+	fs.batchSizes = append(fs.batchSizes, len(names))
+	fs.batchNames = append(fs.batchNames, append([]string(nil), names...))
+	if len(fs.batchSizes) == 2 {
+		return errors.New("second batch unavailable")
+	}
+	if fs.FileService != nil {
+		return fs.FileService.Delete(ctx, names...)
+	}
+	return nil
+}
+
+func TestUnpublishedS3OwnerReleasesCompletedDeleteBatches(t *testing.T) {
+	const objectCount = 1001
+	admission := newUnpublishedS3Admission(objectCount)
+	baseFS, err := fileservice.NewMemoryFS("shared", fileservice.DisabledCacheConfig, nil)
+	require.NoError(t, err)
+	names := make([]string, objectCount)
+	for i := range names {
+		names[i] = fmt.Sprintf("unpublished-%d", i)
+		require.NoError(t, admission.reserveUpload(names[i]))
+		require.NoError(t, baseFS.Write(context.Background(), fileservice.IOVector{
+			FilePath: names[i],
+			Entries:  []fileservice.IOEntry{{Size: 1, Data: []byte("x")}},
+		}))
+	}
+	fs := &failSecondDeleteBatchFS{FileService: baseFS}
+	owner, err := newUnpublishedS3ObjectOwner(fs, admission, names, names...)
+	require.NoError(t, err)
+	require.Error(t, admission.reserveUpload("new-upload"), "full admission must reject before another upload")
+
+	require.ErrorContains(t, owner.Cleanup(context.Background()), "second batch unavailable")
+	require.Equal(t, 1, admission.count(), "the completed batch no longer needs cleanup tickets")
+	require.Equal(t, []int{1000, 1}, fs.batchSizes)
+	_, err = baseFS.StatFile(context.Background(), fs.batchNames[0][0])
+	require.True(t, moerr.IsMoErrCode(err, moerr.ErrFileNotFound), "a confirmed batch must be physically absent: %v", err)
+	_, err = baseFS.StatFile(context.Background(), fs.batchNames[1][0])
+	require.NoError(t, err, "the unconfirmed batch must remain available for retry")
+	require.True(t, owner.Pending(), "the failed batch keeps its cleanup owner")
+	require.NoError(t, admission.reserveUpload("new-upload"),
+		"confirmed deletion must reopen only its released capacity")
+	require.Equal(t, 2, admission.count())
+	admission.release("new-upload")
+
+	require.NoError(t, owner.Cleanup(context.Background()))
+	require.Zero(t, admission.count())
+	require.Equal(t, []int{1000, 1, 1}, fs.batchSizes, "retry only the unconfirmed object")
+	_, err = baseFS.StatFile(context.Background(), fs.batchNames[1][0])
+	require.True(t, moerr.IsMoErrCode(err, moerr.ErrFileNotFound), "the retried object must be physically absent: %v", err)
+	require.False(t, owner.Pending())
+}
+
+func TestUnpublishedS3WriterRetryReleasesCompletedDeleteBatches(t *testing.T) {
+	const objectCount = 1001
+	serviceID := t.Name()
+	moruntime.SetupServiceBasedRuntime(serviceID, moruntime.DefaultRuntime())
+	server := NewServer(serviceID)
+	names := make([]string, objectCount)
+	for i := range names {
+		names[i] = fmt.Sprintf("writer-unpublished-%d", i)
+		require.NoError(t, server.reserveUnpublishedS3Upload(names[i]))
+	}
+	fs := &failSecondDeleteBatchFS{}
+	writer := &CNS3Writer{
+		fs: fs, serviceID: serviceID, cleanupPending: true,
+		ownedPersistedNames: names,
+	}
+
+	require.ErrorContains(t, writer.CloseWithCleanup(context.Background(), true), "second batch unavailable")
+	require.Equal(t, 1, server.UnpublishedS3AdmissionStats().Used)
+	require.Len(t, writer.ownedPersistedNames, 1)
+	require.True(t, writer.PendingUnpublishedCleanup())
+	require.Nil(t, writer.sinker, "the retry shell must not retain its sinker")
+
+	require.NoError(t, writer.CloseWithCleanup(context.Background(), true))
+	require.Zero(t, server.UnpublishedS3AdmissionStats().Used)
+	require.False(t, writer.PendingUnpublishedCleanup())
+	require.Equal(t, []int{1000, 1, 1}, fs.batchSizes)
+}
+
+type ambiguousDeleteBatchFS struct {
+	fileservice.FileService
+	deleteCalls int
+}
+
+func (fs *ambiguousDeleteBatchFS) Delete(_ context.Context, _ ...string) error {
+	fs.deleteCalls++
+	if fs.deleteCalls == 1 {
+		return errors.New("response lost after physical deletion")
+	}
+	return nil
+}
+
+func TestUnpublishedS3OwnerKeepsAmbiguousDeleteBatchCharged(t *testing.T) {
+	admission := newUnpublishedS3Admission(1)
+	require.NoError(t, admission.reserveUpload("unpublished-object"))
+	fs := &ambiguousDeleteBatchFS{}
+	owner, err := newUnpublishedS3ObjectOwner(fs, admission,
+		[]string{"unpublished-object"}, "unpublished-object")
+	require.NoError(t, err)
+
+	require.ErrorContains(t, owner.Cleanup(context.Background()), "response lost")
+	require.Equal(t, 1, admission.count())
+	require.True(t, owner.Pending())
+	require.NoError(t, owner.Cleanup(context.Background()))
+	require.Zero(t, admission.count())
+	require.Equal(t, 2, fs.deleteCalls)
 }
 
 func TestUnpublishedS3AdmissionRejectsUnboundedNames(t *testing.T) {

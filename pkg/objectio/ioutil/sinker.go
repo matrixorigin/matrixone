@@ -543,8 +543,33 @@ func DeleteUnpublishedObjects(
 	fs fileservice.FileService,
 	files ...string,
 ) (int, error) {
+	unique, _, err := deleteUnpublishedObjectBatches(ctx, fs, files)
+	return len(unique), err
+}
+
+// DeleteUnpublishedObjectsWithProgress reports only names in fully confirmed
+// Delete batches. A failed batch can have partial effects, so it and every
+// unattempted batch remain owned. The remaining slice does not retain the
+// backing array of completed names after the caller stores it for retry.
+func DeleteUnpublishedObjectsWithProgress(
+	ctx context.Context,
+	fs fileservice.FileService,
+	files ...string,
+) (completed, remaining []string, err error) {
+	unique, completedCount, err := deleteUnpublishedObjectBatches(ctx, fs, files)
+	if err != nil {
+		return unique[:completedCount], append([]string(nil), unique[completedCount:]...), err
+	}
+	return unique, nil, nil
+}
+
+func deleteUnpublishedObjectBatches(
+	ctx context.Context,
+	fs fileservice.FileService,
+	files []string,
+) (unique []string, completed int, err error) {
 	seen := make(map[string]struct{}, len(files))
-	unique := make([]string, 0, len(files))
+	unique = make([]string, 0, len(files))
 	for _, file := range files {
 		if file == "" {
 			continue
@@ -564,14 +589,14 @@ func DeleteUnpublishedObjects(
 		cancel()
 		if err != nil && !moerr.IsMoErrCode(err, moerr.ErrFileNotFound) {
 			metricv2.UnpublishedS3DeleteFailuresCounter.Inc()
-			return len(unique), errors.Join(
+			return unique, start, errors.Join(
 				moerr.NewInternalErrorf(
 					ctx, "delete unpublished objects [%d:%d]", start, end),
 				err,
 			)
 		}
 	}
-	return len(unique), nil
+	return unique, len(unique), nil
 }
 
 // DeletePersisted deletes every object that this sinker has persisted, or may

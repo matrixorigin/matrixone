@@ -197,14 +197,12 @@ func (owner *UnpublishedS3ObjectOwner) Cleanup(ctx context.Context) error {
 	for name := range owner.names {
 		names = append(names, name)
 	}
-	if _, err := ioutil.DeleteUnpublishedObjects(ctx, owner.fs, names...); err != nil {
-		return err
-	}
-	clear(owner.names)
-	for name := range owner.charged {
+	completed, _, err := ioutil.DeleteUnpublishedObjectsWithProgress(ctx, owner.fs, names...)
+	for _, name := range completed {
+		delete(owner.names, name)
 		owner.release(name)
 	}
-	return nil
+	return err
 }
 
 type UnpublishedS3ObjectOwnershipWorkspace interface {
@@ -741,7 +739,15 @@ func (w *CNS3Writer) DeletePersisted(ctx context.Context) error {
 		w.cleanupPending = false
 		return nil
 	}
-	if _, err := ioutil.DeleteUnpublishedObjects(cleanupCtx, w.fs, w.ownedPersistedNames...); err != nil {
+	completed, remaining, err := ioutil.DeleteUnpublishedObjectsWithProgress(
+		cleanupCtx, w.fs, w.ownedPersistedNames...)
+	if admission != nil {
+		for _, name := range completed {
+			admission.release(name)
+		}
+	}
+	w.ownedPersistedNames = remaining
+	if err != nil {
 		// Detached results are the only remaining ownership. Do not let a
 		// failed Delete keep the sinker, output batch, or session mpool alive.
 		if w.sinker != nil {
@@ -754,12 +760,6 @@ func (w *CNS3Writer) DeletePersisted(ctx context.Context) error {
 		}
 		return err
 	}
-	if admission != nil {
-		for _, name := range w.ownedPersistedNames {
-			admission.release(name)
-		}
-	}
-	w.ownedPersistedNames = nil
 	w.cleanupPending = false
 	return nil
 }
