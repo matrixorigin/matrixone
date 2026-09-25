@@ -860,6 +860,15 @@ func TestEmbeddedPrebuiltFailureKeepsReportJSONOnly(t *testing.T) {
 		t.Run("parallel="+parallel, func(t *testing.T) {
 			script := embeddedSetup + `
 function logger() { printf '%s\n' "$*"; }
+	# Keep both active-package group-alive probes false, then force the real
+	# watchdog cleanup wait through its bounded force-stop branch. The diagnostic
+	# must remain in UT_STDERR; a missing redirection contaminates UT_REPORT.
+force_group_probe_count=0
+function ut_process_group_alive() {
+ force_group_probe_count=$((force_group_probe_count + 1))
+	 if (( force_group_probe_count >= 3 && force_group_probe_count <= 23 )); then return 0; fi
+ return 1
+}
 start_embedded_prebuild "$scope" 1
 status=0
 run_embedded_tests "$scope" 2 > "$CASE_DIR/outer-log" || status=$?
@@ -867,6 +876,7 @@ run_embedded_tests "$scope" 2 > "$CASE_DIR/outer-log" || status=$?
 cat "$UT_REPORT"
 
 grep -q 'prebuilt embedded package example/b failed' "$UT_STDERR" || exit 92
+grep -q 'UT cancellation: force stopping process group' "$UT_STDERR" || exit 93
 `
 			out, err := scheduleHarnessWithMockTransform(t, script, embeddedGoMock, nil,
 				"MODE=test-failure", "UT_PREBUILD_EMBEDDED=1", "UT_HARD_TIMEOUT=", "UT_EMBEDDED_PACKAGE_PARALLEL="+parallel)
