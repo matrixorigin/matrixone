@@ -75,7 +75,7 @@ func getTimeFormatType(format string) (isTime, isDate bool) {
 			switch token[1] {
 			case 'h', 'H', 'i', 'I', 's', 'S', 'k', 'l', 'f', 'r', 'T':
 				isTime = true
-			case 'y', 'Y', 'm', 'M', 'c', 'b', 'D', 'd', 'e':
+			case 'y', 'Y', 'm', 'M', 'c', 'b', 'D', 'd', 'e', 'j', 'a', 'W', 'w', 'U', 'u', 'V', 'v', 'X', 'x':
 				isDate = true
 			}
 		}
