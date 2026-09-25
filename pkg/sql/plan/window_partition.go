@@ -16,6 +16,7 @@ package plan
 
 import (
 	"math"
+	"strings"
 
 	"github.com/matrixorigin/matrixone/pkg/container/types"
 	planpb "github.com/matrixorigin/matrixone/pkg/pb/plan"
@@ -24,13 +25,14 @@ import (
 )
 
 const (
-	// windowHashPartitionAutoEnabled is deliberately fail-closed until the
-	// real-Window acceptance matrix has established the resource and latency
-	// contract for the blocking HASH implementation. SORT remains the wire-zero
-	// value and the only planner-selected algorithm meanwhile.
-	windowHashPartitionAutoEnabled = false
-	windowHashEntryOverhead        = 32
-	windowVarlenKeyWidth           = 128
+	windowPartitionAlgorithmVariable = "window_partition_algorithm"
+
+	windowPartitionAlgorithmCost windowPartitionAlgorithm = iota
+	windowPartitionAlgorithmSort
+	windowPartitionAlgorithmHash
+
+	windowHashEntryOverhead = 32
+	windowVarlenKeyWidth    = 128
 	// Each hash group crosses the Window boundary and maintains one equality
 	// state per key. Scale this conservative cost by key count so a near-unique
 	// composite key cannot look cheaper than the local sort just because the
@@ -38,25 +40,87 @@ const (
 	windowHashGroupWork = 32
 )
 
+type windowPartitionAlgorithm uint8
+
+// resolveWindowPartitionAlgorithm defaults conservatively to SORT for
+// lightweight compiler contexts that predate the session variable or return an
+// invalid value. COST remains an explicit opt-in until the default-enable
+// design gate has independent approval.
+func resolveWindowPartitionAlgorithm(ctx CompilerContext) windowPartitionAlgorithm {
+	if ctx == nil {
+		return windowPartitionAlgorithmSort
+	}
+	value, err := ctx.ResolveVariable(windowPartitionAlgorithmVariable, true, false)
+	if err != nil {
+		return windowPartitionAlgorithmSort
+	}
+	mode, ok := value.(string)
+	if !ok {
+		return windowPartitionAlgorithmSort
+	}
+	switch strings.ToLower(mode) {
+	case "cost":
+		return windowPartitionAlgorithmCost
+	case "sort":
+		return windowPartitionAlgorithmSort
+	case "hash":
+		return windowPartitionAlgorithmHash
+	default:
+		return windowPartitionAlgorithmSort
+	}
+}
+
 // determineWindowPartitionAlgorithms makes the planner's final physical
 // choice after statistics and access paths have settled. Only a PARTITION
 // directly owned by a Window is eligible; other PARTITION uses retain SORT.
 func (builder *QueryBuilder) determineWindowPartitionAlgorithms(nodeID int32) {
-	node := builder.qry.Nodes[nodeID]
-	for _, childID := range node.Children {
-		builder.determineWindowPartitionAlgorithms(childID)
-	}
-	if !windowHashPartitionAutoEnabled || node.NodeType != planpb.Node_WINDOW || len(node.Children) != 1 {
-		return
-	}
-	selectWindowHashPartition(builder, node)
+	algorithm := resolveWindowPartitionAlgorithm(builder.compCtx)
+	builder.determineWindowPartitionAlgorithmsWithMode(nodeID, algorithm)
 }
 
-// selectWindowHashPartition applies the admission contract after the caller has
-// established that experimental automatic selection is enabled. Keeping the
-// contract separate lets its fail-closed boundaries be verified without
-// changing the feature gate.
+func (builder *QueryBuilder) determineWindowPartitionAlgorithmsWithMode(
+	nodeID int32,
+	algorithm windowPartitionAlgorithm,
+) {
+	node := builder.qry.Nodes[nodeID]
+	for _, childID := range node.Children {
+		builder.determineWindowPartitionAlgorithmsWithMode(childID, algorithm)
+	}
+	if node.NodeType != planpb.Node_WINDOW || len(node.Children) != 1 {
+		return
+	}
+	if algorithm == windowPartitionAlgorithmSort {
+		forceWindowSortPartition(builder, node)
+		return
+	}
+	selectWindowHashPartitionWithMode(builder, node, algorithm)
+}
+
+func forceWindowSortPartition(builder *QueryBuilder, node *planpb.Node) {
+	if node.NodeType != planpb.Node_WINDOW || len(node.Children) != 1 {
+		return
+	}
+	partitionNode := builder.qry.Nodes[node.Children[0]]
+	if partitionNode.NodeType != planpb.Node_PARTITION || partitionNode.Limit != nil {
+		return
+	}
+	partitionNode.PartitionAlgorithm = planpb.Node_PARTITION_ALGORITHM_SORT
+	partitionNode.SpillMem = 0
+}
+
+// selectWindowHashPartition applies the admission contract after the planner's
+// final statistics and access paths are available. Explicit HASH can override
+// only the relative-work decision; unsafe input remains on the existing SORT
+// path.
 func selectWindowHashPartition(builder *QueryBuilder, node *planpb.Node) bool {
+	return selectWindowHashPartitionWithMode(builder, node, windowPartitionAlgorithmCost)
+}
+
+func selectWindowHashPartitionWithMode(
+	builder *QueryBuilder,
+	node *planpb.Node,
+	algorithm windowPartitionAlgorithm,
+) bool {
 	if node.NodeType != planpb.Node_WINDOW || len(node.Children) != 1 {
 		return false
 	}
@@ -65,12 +129,16 @@ func selectWindowHashPartition(builder *QueryBuilder, node *planpb.Node) bool {
 		len(partitionNode.Children) != 1 || len(partitionNode.OrderBy) == 0 {
 		return false
 	}
+	partitionNode.PartitionAlgorithm = planpb.Node_PARTITION_ALGORITHM_SORT
+	partitionNode.SpillMem = 0
 
 	child := builder.qry.Nodes[partitionNode.Children[0]]
-	if child.Stats == nil || !finitePositiveWindowStat(child.Stats.Outcnt) {
+	if child.Stats == nil || !finitePositiveWindowStat(child.Stats.Outcnt) ||
+		!finitePositiveWindowStat(child.Stats.Rowsize) {
 		return false
 	}
 	n := child.Stats.Outcnt
+	rowSize := child.Stats.Rowsize
 	if n < float64(colexec.DefaultBatchSize) {
 		return false
 	}
@@ -104,7 +172,9 @@ func selectWindowHashPartition(builder *QueryBuilder, node *planpb.Node) bool {
 
 	threshold := builder.aggSpillMem
 	resolvedThreshold := colexec.ResolveSpillThreshold(threshold)
-	if shouldUseWindowHashPartition(n, groupCount, keyWidth, len(partitionNode.OrderBy), threshold, resolvedThreshold) {
+	useHash := algorithm == windowPartitionAlgorithmHash
+	if (useHash && windowHashPartitionMemoryFits(n, groupCount, keyWidth, rowSize, resolvedThreshold)) ||
+		(!useHash && shouldUseWindowHashPartition(n, groupCount, keyWidth, len(partitionNode.OrderBy), rowSize, threshold, resolvedThreshold)) {
 		partitionNode.PartitionAlgorithm = planpb.Node_PARTITION_ALGORITHM_HASH
 		partitionNode.SpillMem = threshold
 		return true
@@ -136,11 +206,11 @@ func windowPartitionKeyWidth(expr *planpb.Expr) (int, bool) {
 
 func shouldUseWindowHashPartition(
 	n, groupCount float64,
-	keyWidth, keyCount int,
+	keyWidth, keyCount int, rowSize float64,
 	configuredThreshold, resolvedThreshold int64,
 ) bool {
 	if !finitePositiveWindowStat(n) || !finitePositiveWindowStat(groupCount) || groupCount > n ||
-		keyWidth <= 0 || keyCount <= 0 || resolvedThreshold <= 0 {
+		keyWidth <= 0 || keyCount <= 0 || !finitePositiveWindowStat(rowSize) || resolvedThreshold <= 0 {
 		return false
 	}
 	if n < float64(colexec.DefaultBatchSize) {
@@ -157,6 +227,21 @@ func shouldUseWindowHashPartition(
 	if hashWork >= sortWork {
 		return false
 	}
+	return windowHashPartitionMemoryFits(n, groupCount, keyWidth, rowSize, resolvedThreshold)
+}
+
+func windowHashPartitionMemoryFits(
+	n, groupCount float64,
+	keyWidth int,
+	rowSize float64,
+	resolvedThreshold int64,
+) bool {
+	if !finitePositiveWindowStat(n) || !finitePositiveWindowStat(groupCount) || groupCount > n ||
+		keyWidth <= 0 || !finitePositiveWindowStat(rowSize) || resolvedThreshold <= 0 {
+		return false
+	}
 	hashAux := 16*n + groupCount*float64(keyWidth+windowHashEntryOverhead)
-	return !math.IsInf(hashAux, 0) && !math.IsNaN(hashAux) && hashAux <= float64(resolvedThreshold)
+	retained := n * rowSize
+	total := hashAux + retained
+	return !math.IsInf(total, 0) && !math.IsNaN(total) && total <= float64(resolvedThreshold)
 }
