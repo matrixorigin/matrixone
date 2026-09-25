@@ -5022,7 +5022,7 @@ func preparedRuntimeSpecializationFunction(name string) bool {
 	// the type of its first argument, so a binary parameter can change the
 	// result-column type from the prepare-time placeholder domain.
 	switch name {
-	case "bin", "char", "conv", "ntile", "sleep",
+	case "bin", "char", "conv", "field", "ntile", "sleep",
 		"json_arrayagg", "json_objectagg",
 		"date_add", "date_sub", "adddate", "subdate", "timestampadd", "timestampdiff",
 		"ord", "char_length", "character_length",
