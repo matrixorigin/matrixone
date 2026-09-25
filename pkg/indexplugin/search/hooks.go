@@ -32,6 +32,9 @@ type ScanIdentity struct {
 	TxnOffset         int
 	PartitionCount    int32
 	PartitionIndex    int32
+	// IsRemote identifies the execution route, independently of the object
+	// partition ordinal. Only the coordinator collects distributed in-memory rows.
+	IsRemote bool
 }
 
 // Request contains the fully bound state for one vector-search execution.

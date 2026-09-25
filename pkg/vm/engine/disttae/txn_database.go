@@ -701,8 +701,13 @@ func (db *txnDatabase) getTableItem(
 		// A session-owned definition may have committed after this data snapshot.
 		// Only the schema is made visible; txn row/object timestamps stay unchanged.
 		if defines.IsTempTableName(name) {
-			latest := cache.TableItem{Name: name, DatabaseId: db.databaseId, AccountId: accountID, Ts: types.MaxTs().ToTimestamp()}
-			if c.GetTable(&latest) && latest.Kind == catalog.SystemTemporaryTable {
+			latest := cache.TableItem{
+				Name: name, DatabaseId: db.databaseId, DatabaseName: db.databaseName,
+				AccountId: accountID, Ts: types.MaxTs().ToTimestamp(),
+			}
+			if c.GetTable(&latest) && isSessionTemporaryCatalogItem(
+				c, &latest, accountID, db.databaseId, db.databaseName,
+			) {
 				return &latest, nil
 			}
 		}
