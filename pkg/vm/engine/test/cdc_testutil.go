@@ -21,6 +21,7 @@ import (
 	"testing"
 	"time"
 
+	"github.com/matrixorigin/matrixone/pkg/catalog"
 	moruntime "github.com/matrixorigin/matrixone/pkg/common/runtime"
 	"github.com/matrixorigin/matrixone/pkg/container/batch"
 	"github.com/matrixorigin/matrixone/pkg/container/types"
@@ -227,7 +228,8 @@ func mock_mo_indexes(
 	if err = txn.Commit(ctx); err != nil {
 		return err
 	}
-	return err
+	// CREATE DATABASE now persists defaults in this tenant catalog table.
+	return exec_sql(de, ctx, catalog.MoDatabaseDefaultsDDL)
 }
 func mock_mo_foreign_keys(
 	de *testutil.TestDisttaeEngine,

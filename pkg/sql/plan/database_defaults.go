@@ -41,7 +41,7 @@ func DatabaseDefaultsEnabled(service string) bool {
 		return false
 	}
 	version, ok := v.(int64)
-	return ok && version >= defines.MORPCVersion95
+	return ok && version >= defines.MORPCVersion96
 }
 
 func DatabaseDefaultsSystemDatabase(name string) bool {
@@ -54,7 +54,7 @@ func DatabaseDefaultsSystemDatabase(name string) bool {
 
 func RequireDatabaseDefaults(ctx context.Context, service string) error {
 	if !DatabaseDefaultsEnabled(service) {
-		return moerr.NewNotSupportedf(ctx, "database charset/collation defaults require cluster protocol version %d", defines.MORPCVersion95)
+		return moerr.NewNotSupportedf(ctx, "database charset/collation defaults require cluster protocol version %d", defines.MORPCVersion96)
 	}
 	return nil
 }

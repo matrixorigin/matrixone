@@ -3467,6 +3467,15 @@ func (b *baseBinder) bindPreparedNumericFuncExpr(
 			b.observePersistedExpressionProtocol,
 		)
 	}
+	if isPreparedNumericAggregate(name, len(astArgs)) {
+		hasParam, err := b.hasPreparedNumericParamExprs(astArgs, depth)
+		if err != nil {
+			return nil, err
+		}
+		if !hasParam {
+			return b.bindFuncExprImplByAstExpr(name, astArgs, depth)
+		}
+	}
 
 	// Binding can normalize the parsed CAST node in place. Snapshot the user's
 	// explicit numeric boundary before that mutation so ABS/SIGN keep an
@@ -3476,6 +3485,14 @@ func (b *baseBinder) bindPreparedNumericFuncExpr(
 	arg, err := b.bindNumericExprWithContext(astArgs[0], depth, target)
 	if err != nil {
 		return nil, err
+	}
+	if isPreparedNumericAggregate(name, len(astArgs)) {
+		rewritten, err := b.useStoredMySQLSpecialTypesForNumericContractWithProvenance(
+			b.GetContext(), name, []*plan.Expr{arg})
+		if err != nil {
+			return nil, err
+		}
+		arg = rewritten[0]
 	}
 	if (strings.EqualFold(name, "abs") && !hasExplicitFloatCast) ||
 		(strings.EqualFold(name, "sign") && !hasExplicitNumericCast) {
@@ -3783,6 +3800,20 @@ func (b *baseBinder) bindFuncExprImplByAstExpr(name string, astArgs []tree.Expr,
 			b.numericSubqueryTarget = subqueryTarget
 			if err != nil {
 				return nil, err
+			}
+			if b.builder != nil && b.builder.isPrepareStatement && len(astArgs) == 1 && idx == 0 &&
+				(name == "hll_cardinality" || name == "hll_merge_agg" || name == "bitmap_or_agg") {
+				if _, directParam := unwrapParenExpr(arg).(*tree.ParamExpr); directParam {
+					binaryType := types.T_varbinary.ToType()
+					// Opaque aggregate states can exceed the SQL VARBINARY(65535)
+					// width. This internal cast chooses the binary domain without
+					// imposing a value-length limit on the prepared parameter.
+					binaryType.Width = 0
+					expr, err = appendCastBeforeExpr(b.GetContext(), expr, makePlan2Type(&binaryType))
+					if err != nil {
+						return nil, err
+					}
+				}
 			}
 			if b.builder != nil && b.builder.isPrepareStatement && name == "bit_count" &&
 				len(astArgs) == 1 {

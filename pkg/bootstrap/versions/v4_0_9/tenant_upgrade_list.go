@@ -28,7 +28,7 @@ var tenantUpgEntries = []versions.UpgradeEntry{
 		TableName:               catalog.MODatabaseDefaults,
 		UpgType:                 versions.CREATE_NEW_TABLE,
 		UpgSql:                  catalog.MoDatabaseDefaultsDDL,
-		RequiredProtocolVersion: defines.MORPCVersion95,
+		RequiredProtocolVersion: defines.MORPCVersion96,
 		CheckFunc: func(txn executor.TxnExecutor, accountID uint32) (bool, error) {
 			return versions.CheckTableDefinition(txn, accountID, catalog.MO_CATALOG, catalog.MODatabaseDefaults)
 		},
@@ -39,7 +39,7 @@ var tenantUpgEntries = []versions.UpgradeEntry{
 		UpgType:                 versions.MODIFY_VIEW,
 		UpgSql:                  sysview.InformationSchemaSchemataDDL,
 		PreSql:                  "DROP VIEW IF EXISTS information_schema.SCHEMATA;",
-		RequiredProtocolVersion: defines.MORPCVersion95,
+		RequiredProtocolVersion: defines.MORPCVersion96,
 		CheckFunc: func(txn executor.TxnExecutor, accountID uint32) (bool, error) {
 			exists, definition, err := versions.CheckViewDefinition(txn, accountID, sysview.InformationDBConst, "SCHEMATA")
 			if err == nil && !exists {

@@ -37,7 +37,7 @@ func TestDatabaseDefaultsUpgrade(t *testing.T) {
 	metadata := Handler.Metadata()
 	require.Equal(t, "4.0.9", metadata.Version)
 	require.Equal(t, "4.0.8", metadata.MinUpgradeVersion)
-	require.Equal(t, defines.MORPCVersion95, metadata.RequiredProtocolVersion)
+	require.Equal(t, defines.MORPCVersion96, metadata.RequiredProtocolVersion)
 	require.Equal(t, versions.Yes, metadata.UpgradeTenant)
 	require.Equal(t, uint32(2), metadata.VersionOffset)
 	injected := errors.New("catalog unavailable")
@@ -85,9 +85,9 @@ func TestDatabaseDefaultsUpgrade(t *testing.T) {
 						return strResult(viewDefinition), nil
 					case sql == "SELECT mo_ctl('cn', 'GetProtocolVersion', '')":
 						if tc.oldProtocol {
-							return strResult(`{"method":"GETPROTOCOLVERSION","result":"cn-a:95;cn-b:94"}`), nil
+							return strResult(`{"method":"GETPROTOCOLVERSION","result":"cn-a:96;cn-b:95"}`), nil
 						}
-						return strResult(`{"method":"GETPROTOCOLVERSION","result":"cn-a:95;cn-b:95"}`), nil
+						return strResult(`{"method":"GETPROTOCOLVERSION","result":"cn-a:96;cn-b:96"}`), nil
 					case sql == catalog.MoDatabaseDefaultsDDL:
 						if tc.fail == "create" {
 							return executor.Result{}, injected
@@ -111,7 +111,7 @@ func TestDatabaseDefaultsUpgrade(t *testing.T) {
 				require.Error(t, Handler.HandleCreateFrameworkDeps(txnExec))
 				err := Handler.HandleTenantUpgrade(t.Context(), 7, txnExec)
 				if tc.oldProtocol {
-					require.ErrorContains(t, err, "version 94")
+					require.ErrorContains(t, err, "version 95")
 					require.Empty(t, writes)
 				} else if tc.fail != "" {
 					require.ErrorIs(t, err, injected)

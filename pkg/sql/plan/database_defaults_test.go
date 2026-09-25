@@ -131,7 +131,7 @@ func TestDecodeDatabaseDefaults(t *testing.T) {
 }
 
 func TestDatabaseDefaultsPublicDDLPlans(t *testing.T) {
-	databaseDefaultsProtocol(t, defines.MORPCVersion95)
+	databaseDefaultsProtocol(t, defines.MORPCVersion96)
 	for _, tc := range []struct{ sql, db, collation string }{
 		{"alter database target character set utf8mb4 collate utf8mb4_bin", "target", "utf8mb4_bin"},
 		{"alter schema collate utf8mb4_bin", "tpch", "utf8mb4_bin"},
@@ -176,13 +176,13 @@ func TestDatabaseDefaultsPublicDDLPlans(t *testing.T) {
 			require.NoError(t, err)
 			_, err = BuildPlan(NewMockCompilerContext(false), stmt, false)
 			stmt.Free()
-			require.ErrorContains(t, err, "protocol version 95")
+			require.ErrorContains(t, err, "protocol version 96")
 		}
 	})
 }
 
 func TestCreateTableInheritsDatabaseDefaults(t *testing.T) {
-	databaseDefaultsProtocol(t, defines.MORPCVersion95)
+	databaseDefaultsProtocol(t, defines.MORPCVersion96)
 	for _, tc := range []struct {
 		sql       string
 		want      uint32
@@ -251,7 +251,7 @@ func TestCreateTableInheritsDatabaseDefaults(t *testing.T) {
 }
 
 func TestDatabaseDefaultsPreserveReplayedTableCollation(t *testing.T) {
-	databaseDefaultsProtocol(t, defines.MORPCVersion95)
+	databaseDefaultsProtocol(t, defines.MORPCVersion96)
 	for _, replay := range []bool{false, true} {
 		t.Run(map[bool]string{false: "show after alter database", true: "like into different database"}[replay], func(t *testing.T) {
 			mock := NewMockOptimizer(false)

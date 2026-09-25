@@ -61,3 +61,11 @@
 - 本地验证平台为 macOS arm64；GitHub CI 状态与本地代码结论分开报告。PR 使用 draft，CI 由正常流程运行。
 
 完整原始日志、覆盖率 profile、隔离启动配置和验收脚本保留在工作树的 `CLAUDE_*` 文件中；这些运行产物和 TODO 不进入提交。
+
+## 2026-09-25 冲突与 CI 修复
+
+- PR head `2a0ce98fbf` 已快进同步，并合并 `mo/main` 的新提交。主线的 prepared precision 占用 MORPC 95，因此本功能改为 MORPC 96，4.0.9 升级和所有数据库默认值门槛同步调整。
+- 失败 UT 日志显示 engine/ISCP/CCPR 测试的 catalog 夹具缺少 `mo_database_defaults`；在共享的 `mock_mo_indexes` 夹具后创建该表，保留生产路径对表缺失报错的行为。
+- 旧升级测试原先固定假设最新版本为 4.0.8；调整其模拟/期望至 4.0.9。重跑 `TestDatabaseDefaultsUpgrade`、`TestDatabaseDefaults`（frontend/plan/compile）、`TestSessionTenantUpgradeCancellationReleasesCNConsumer`、`TestV408LoginRepairsTenantCreatedAfterUpgradeSnapshot`，均已通过。`TestInitSql|TestISCPExecutor6` 已通过。
+- 两个 Compose BVT job 在执行 SQL 前，Docker 拉取 `minio/createbuckets` 镜像返回 `unauthorized`，不是 SQL 断言失败；需在新 head 上重跑确认。旧 UT coverage 汇总随 UT 失败。扩大 engine 测试仍在执行。
+- 扩大重跑 `TestISCP|TestUpdateJobSpec|TestCheckLeaseFailed|TestCancelIteration1|TestCCPR`，以及 CCPR 三个具体回归用例，均通过；对应日志为本地忽略文件 `CLAUDE_ci_repair_engine_broad_test2.log`、`CLAUDE_ci_repair_ccpr_test2.log`。合并后的测试未包含完整 Linux UT/覆盖率和 Docker BVT，须以新 head CI 判定。

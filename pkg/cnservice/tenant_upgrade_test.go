@@ -68,7 +68,7 @@ func (e *cancellationUpgradeExecutor) ExecTxn(
 		case "select create_version from mo_account where account_id = 11":
 			version := "4.0.7"
 			if e.current.Load() {
-				version = "4.0.8"
+				version = "4.0.9"
 			}
 			return e.result(version), nil
 		case "select version, version_offset, state from mo_version order by create_at desc limit 1":
@@ -110,9 +110,9 @@ func TestSessionTenantUpgradeCancellationReleasesCNConsumer(t *testing.T) {
 			result: func(kind string) executor.Result {
 				switch kind {
 				case "cluster":
-					return tenantUpgradeSQLResult(t, "4.0.8", uint32(1), int32(versions.StateCreated))
+					return tenantUpgradeSQLResult(t, "4.0.9", uint32(1), int32(versions.StateCreated))
 				case "route":
-					return tenantUpgradeSQLResult(t, uint64(100), "4.0.7", "4.0.8", "4.0.8", uint32(1),
+					return tenantUpgradeSQLResult(t, uint64(100), "4.0.7", "4.0.9", "4.0.9", uint32(1),
 						int32(versions.StateCreated), int32(0), int32(versions.No), int32(versions.Yes), int32(1), int32(0))
 				default:
 					return tenantUpgradeSQLResult(t, kind)

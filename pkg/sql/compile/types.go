@@ -290,6 +290,9 @@ type Compile struct {
 	siriusRead *siriusReadOwner
 
 	pn *plan.Plan
+	// Semantic values for a prepared CTAS follow-up INSERT. SQL text transport
+	// alone cannot recover the source type of each original parameter.
+	preparedParamValues []any
 
 	execType plan2.ExecType
 

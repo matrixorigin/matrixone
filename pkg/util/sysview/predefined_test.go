@@ -291,7 +291,7 @@ func TestInitInformationSchemaSysTablesForProtocol(t *testing.T) {
 	legacyDefaults := InitInformationSchemaSysTablesForProtocol(defines.MORPCVersion94)
 	assert.Contains(t, legacyDefaults, InformationSchemaSchemataLegacyDDL)
 	assert.NotContains(t, strings.Join(legacyDefaults, "\n"), "mo_database_defaults")
-	latest := InitInformationSchemaSysTablesForProtocol(defines.MORPCVersion95)
+	latest := InitInformationSchemaSysTablesForProtocol(defines.MORPCVersion96)
 	assert.Equal(t, InitInformationSchemaSysTables, latest)
 	assert.Contains(t, strings.Join(latest, "\n"), "WHEN 3 then 'utf8mb4'")
 }
