@@ -12937,6 +12937,14 @@ func (bt *backgroundExecTest) ExecRestore(ctx context.Context, s string, from ui
 
 func (bt *backgroundExecTest) GetExecResultSet() []interface{} {
 	result, ok := bt.sql2result[bt.currentSql]
+	// Legacy fixture databases have no persisted charset/collation row.
+	// Tests of the new metadata contract provide explicit results/errors.
+	if !ok && strings.HasPrefix(bt.currentSql, "select dd.character_set, dd.collation_name from mo_catalog.mo_database") {
+		return []interface{}{defaultsRestoreRows(nil)}
+	}
+	if !ok && strings.HasPrefix(bt.currentSql, "select relname from mo_catalog.mo_tables") && strings.HasSuffix(bt.currentSql, "relname = 'mo_database_defaults'") {
+		return []interface{}{newMrsForSqlForShowDatabases(nil)}
+	}
 	if !ok &&
 		strings.HasPrefix(bt.currentSql, "select granted_id,with_grant_option from mo_catalog.mo_role_grant where grantee_id = ") {
 		return []interface{}{newMrsForInheritedRoleIdOfRoleId([][]interface{}{})}

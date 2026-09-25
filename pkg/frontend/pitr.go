@@ -1506,7 +1506,7 @@ func restoreToDatabaseOrTableWithPitr(
 
 		return
 	} else {
-		createDbSql = createDatabaseIfNotExistsSQL(dbName)
+		createDbSql = appendDatabaseDefaultsSQL(createDatabaseIfNotExistsSQL(dbName), definition.defaults)
 		// create db
 		getLogger(sid).Info(fmt.Sprintf("[%s] start to create db: %v, create db sql: %s", pitrName, dbName, createDbSql))
 		if err = bh.Exec(ctx, createDbSql); err != nil {
@@ -2550,7 +2550,12 @@ func getCreateDatabaseSqlInPitr(ctx context.Context,
 	if len(colsList) == 0 || len(colsList[0]) == 0 {
 		return logicalRestoreDatabaseDefinition{}, moerr.NewBadDB(ctx, dbName)
 	}
-	return newLogicalRestoreDatabaseDefinition(ctx, dbName, colsList[0])
+	definition, err := newLogicalRestoreDatabaseDefinition(ctx, dbName, colsList[0])
+	if err != nil {
+		return logicalRestoreDatabaseDefinition{}, err
+	}
+	definition.defaults, err = readDatabaseDefaultsForRestore(ctx, bh, dbName, accountId, ts)
+	return definition, err
 }
 
 // createPubByPitr create pub after the database is created by pitr

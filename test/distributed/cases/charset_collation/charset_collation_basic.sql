@@ -49,6 +49,7 @@ WHERE c.table_schema = 'charset_test'
 ORDER BY c.ordinal_position;
 DROP TABLE charset_metadata_repro;
 
+-- Only utf8mb4 database defaults are supported; utf8 is rejected.
 -- Create database with explicit charset
 DROP DATABASE IF EXISTS charset_test_utf8;
 CREATE DATABASE charset_test_utf8 CHARACTER SET utf8;

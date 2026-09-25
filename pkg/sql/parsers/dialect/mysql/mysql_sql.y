@@ -658,7 +658,7 @@ func makeWindowSpec(refName *tree.CStr, partitionBy tree.Exprs, orderBy tree.Ord
 %type <statement> show_table_num_stmt show_column_num_stmt show_table_values_stmt show_table_size_stmt
 %type <statement> show_variables_stmt show_status_stmt show_index_stmt
 %type <statement> show_servers_stmt show_logservice_replicas_stmt show_logservice_stores_stmt show_logservice_settings_stmt
-%type <statement> alter_account_stmt alter_user_stmt alter_view_stmt update_stmt use_stmt update_no_with_stmt alter_database_config_stmt alter_table_stmt alter_role_stmt rename_stmt alter_iceberg_catalog_stmt alter_mongodb_connection_stmt
+%type <statement> alter_account_stmt alter_user_stmt alter_view_stmt update_stmt use_stmt update_no_with_stmt alter_database_config_stmt alter_table_stmt alter_role_stmt rename_stmt alter_iceberg_catalog_stmt alter_mongodb_connection_stmt alter_database_defaults_stmt
 %type <merge> merge_no_with_stmt
 %type <mergeClauses> merge_when_list
 %type <mergeClause> merge_when_clause
@@ -867,8 +867,8 @@ func makeWindowSpec(refName *tree.CStr, partitionBy tree.Exprs, orderBy tree.Ord
 %type <expr> datetime_scale_opt datetime_scale
 %type <tuple> tuple_expression
 %type <comparisonOp> comparison_operator and_or_some
-%type <createOption> create_option
-%type <createOptions> create_option_list_opt create_option_list
+%type <createOption> create_option database_default_option
+%type <createOptions> create_option_list_opt create_option_list database_default_options
 %type <ifNotExists> not_exists_opt
 %type <defaultOptional> default_opt
 %type <sourceOptional> replace_opt
@@ -3885,6 +3885,7 @@ alter_stmt:
     alter_user_stmt
 |   alter_account_stmt
 |   alter_database_config_stmt
+|   alter_database_defaults_stmt
 |   alter_view_stmt
 |   alter_table_stmt
 |   alter_publication_stmt
@@ -4621,8 +4622,46 @@ alter_account_stmt:
         )
     }
 
+alter_database_defaults_stmt:
+    ALTER database_or_schema db_name database_default_options
+    {
+        $$ = &tree.AlterDatabase{Name: tree.Identifier($3), Options: $4}
+    }
+|   ALTER database_or_schema database_default_options
+    {
+        $$ = &tree.AlterDatabase{Options: $3}
+    }
+
+database_default_options:
+    database_default_option
+    {
+        $$ = []tree.CreateOption{$1}
+    }
+|   database_default_options database_default_option
+    {
+        $$ = append($1, $2)
+    }
+
+database_default_option:
+    CHARACTER SET equal_opt charset_name
+    {
+        $$ = tree.NewCreateOptionCharset(false, $4)
+    }
+|   DEFAULT CHARACTER SET equal_opt charset_name
+    {
+        $$ = tree.NewCreateOptionCharset(true, $5)
+    }
+|   COLLATE equal_opt collate_name
+    {
+        $$ = tree.NewCreateOptionCollate(false, $3)
+    }
+|   DEFAULT COLLATE equal_opt collate_name
+    {
+        $$ = tree.NewCreateOptionCollate(true, $4)
+    }
+
 alter_database_config_stmt:
-    ALTER DATABASE db_name SET MYSQL_COMPATIBILITY_MODE '=' STRING
+    ALTER database_or_schema db_name SET MYSQL_COMPATIBILITY_MODE '=' STRING
     {
         var accountName = ""
         var dbName = $3
@@ -4637,7 +4676,7 @@ alter_database_config_stmt:
             updateConfig,
         )
     }
-|   ALTER DATABASE db_name SET UNIQUE_CHECK_ON_AUTOINCR '=' STRING
+|   ALTER database_or_schema db_name SET UNIQUE_CHECK_ON_AUTOINCR '=' STRING
     {
         var accountName = ""
         var dbName = $3

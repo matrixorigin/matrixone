@@ -1,0 +1,175 @@
+drop database if exists defaults_a;
+drop database if exists defaults_b;
+drop database if exists defaults_clone;
+drop snapshot if exists defaults_snapshot;
+drop user if exists defaults_user;
+drop role if exists defaults_role;
+alter database defaults_missing collate utf8mb4_bin;
+Unknown database defaults_missing
+create database defaults_a;
+create database defaults_b;
+use defaults_a;
+create table old_values(v varchar(8));
+insert into old_values values ('a'),('b'),('c'),('E'),('C'),('D');
+select min(v), max(v) from old_values;
+➤ min(v)[12,8,0]  ¦  max(v)[12,8,0]  𝄀
+a  ¦  E
+alter database defaults_b character set utf8mb4 collate utf8mb4_bin;
+select schema_name, default_character_set_name, default_collation_name
+from information_schema.schemata where schema_name in ('defaults_a','defaults_b') order by schema_name;
+➤ schema_name[12,5000,0]  ¦  default_character_set_name[12,64,0]  ¦  default_collation_name[-1,16383,0]  𝄀
+defaults_a  ¦  utf8mb4  ¦  utf8mb4_general_ci  𝄀
+defaults_b  ¦  utf8mb4  ¦  utf8mb4_bin
+create table defaults_b.binary_values(v varchar(8));
+insert into defaults_b.binary_values select v from old_values;
+select collation(v), min(v), max(v) from defaults_b.binary_values group by collation(v);
+➤ collation(v)[12,65535,0]  ¦  min(v)[12,8,0]  ¦  max(v)[12,8,0]  𝄀
+utf8mb4_bin  ¦  C  ¦  c
+show create database defaults_b;
+➤ Database[12,5000,0]  ¦  Create Database[12,123,0]  𝄀
+defaults_b  ¦  CREATE DATABASE `defaults_b` CHARACTER SET utf8mb4 COLLATE utf8mb4_bin
+show create table defaults_b.binary_values;
+➤ Table[12,13,0]  ¦  Create Table[12,102,0]  𝄀
+binary_values  ¦  CREATE TABLE `binary_values` (
+  `v` varchar(8) COLLATE utf8mb4_bin DEFAULT NULL
+) COLLATE=utf8mb4_bin
+select @@collation_database, @@collation_server;
+➤ @@collation_database[-1,16383,0]  ¦  @@collation_server[-1,16383,0]  𝄀
+utf8mb4_general_ci  ¦  utf8mb4_general_ci
+use defaults_b;
+select @@character_set_database, @@collation_database, @@collation_server;
+➤ @@character_set_database[-1,16383,0]  ¦  @@collation_database[-1,16383,0]  ¦  @@collation_server[-1,16383,0]  𝄀
+utf8mb4  ¦  utf8mb4_bin  ¦  utf8mb4_general_ci
+show variables like 'collation_database';
+➤ Variable_name[12,0,0]  ¦  Value[12,0,0]  𝄀
+collation_database  ¦  utf8mb4_bin
+use defaults_b;
+create table cross_session(v varchar(8));
+insert into cross_session values ('a'),('B');
+select collation(v), min(v), max(v) from cross_session group by collation(v);
+➤ collation(v)[12,65535,0]  ¦  min(v)[12,8,0]  ¦  max(v)[12,8,0]  𝄀
+utf8mb4_bin  ¦  B  ¦  a
+create table explicit_table(v varchar(8)) collate utf8mb4_general_ci;
+create table explicit_column(v varchar(8) collate utf8mb4_general_ci);
+create table copied_table like defaults_a.old_values;
+create table selected_table as select v from defaults_a.old_values;
+create temporary table temporary_values(v varchar(8));
+insert into temporary_values values ('a'),('B');
+select collation(v),min(v),max(v) from temporary_values group by collation(v);
+➤ collation(v)[12,65535,0]  ¦  min(v)[12,8,0]  ¦  max(v)[12,8,0]  𝄀
+utf8mb4_bin  ¦  B  ¦  a
+drop table temporary_values;
+alter table defaults_a.old_values add column added varchar(8);
+select table_schema,table_name,column_name,collation_name from information_schema.columns
+where table_schema in ('defaults_a','defaults_b') and column_name in ('v','added') order by table_schema,table_name,column_name;
+➤ table_schema[12,256,0]  ¦  table_name[12,256,0]  ¦  column_name[12,256,0]  ¦  collation_name[12,18,0]  𝄀
+defaults_a  ¦  old_values  ¦  added  ¦  utf8mb4_general_ci  𝄀
+defaults_a  ¦  old_values  ¦  v  ¦  utf8mb4_general_ci  𝄀
+defaults_b  ¦  binary_values  ¦  v  ¦  utf8mb4_bin  𝄀
+defaults_b  ¦  copied_table  ¦  v  ¦  utf8mb4_general_ci  𝄀
+defaults_b  ¦  cross_session  ¦  v  ¦  utf8mb4_bin  𝄀
+defaults_b  ¦  explicit_column  ¦  v  ¦  utf8mb4_general_ci  𝄀
+defaults_b  ¦  explicit_table  ¦  v  ¦  utf8mb4_general_ci  𝄀
+defaults_b  ¦  selected_table  ¦  v  ¦  utf8mb4_general_ci
+select min(v),max(v) from defaults_a.old_values;
+➤ min(v)[12,8,0]  ¦  max(v)[12,8,0]  𝄀
+a  ¦  E
+begin;
+alter schema default collate = utf8mb4_general_ci;
+select @@collation_database;
+➤ @@collation_database[-1,16383,0]  𝄀
+utf8mb4_general_ci
+create table inside_rollback(v varchar(8));
+select collation_name from information_schema.columns where table_schema='defaults_b' and table_name='inside_rollback' and column_name='v';
+➤ collation_name[12,18,0]  𝄀
+utf8mb4_general_ci
+rollback;
+select @@collation_database;
+➤ @@collation_database[-1,16383,0]  𝄀
+utf8mb4_bin
+begin;
+alter database defaults_b character set utf8mb4;
+commit;
+select @@collation_database;
+➤ @@collation_database[-1,16383,0]  𝄀
+utf8mb4_general_ci
+alter database defaults_b collate utf8mb4_bin;
+alter database defaults_b collate utf8mb4_bin;
+prepare defaults_create from 'create table defaults_b.prepared_values(v varchar(8))';
+alter database defaults_b collate utf8mb4_general_ci;
+execute defaults_create;
+deallocate prepare defaults_create;
+select collation_name from information_schema.columns where table_schema='defaults_b' and table_name='prepared_values' and column_name='v';
+➤ collation_name[12,18,0]  𝄀
+utf8mb4_general_ci
+prepare defaults_alter from 'alter database defaults_b collate utf8mb4_bin';
+execute defaults_alter;
+deallocate prepare defaults_alter;
+select @@collation_database;
+➤ @@collation_database[-1,16383,0]  𝄀
+utf8mb4_bin
+alter database defaults_b character set latin1;
+invalid input: unsupported database character set 'latin1'
+alter database defaults_b collate utf8mb4_0900_ai_ci;
+invalid input: unsupported database collation 'utf8mb4_0900_ai_ci'
+alter database defaults_b collate utf8mb4_bin collate utf8mb4_general_ci;
+invalid input: conflicting database collations
+alter database mo_catalog collate utf8mb4_bin;
+internal error: do not have privilege to execute the statement
+select @@collation_database;
+➤ @@collation_database[-1,16383,0]  𝄀
+utf8mb4_bin
+create role defaults_role;
+create user defaults_user identified by '111' default role defaults_role;
+grant connect on account * to defaults_role;
+alter database defaults_b collate utf8mb4_general_ci;
+internal error: do not have privilege to execute the statement
+grant all on database defaults_b to defaults_role;
+use defaults_b;
+alter database collate utf8mb4_general_ci;
+prepare denied_after_revoke from 'alter database defaults_b collate utf8mb4_bin';
+revoke all on database defaults_b from defaults_role;
+execute denied_after_revoke;
+internal error: do not have privilege to execute the statement
+deallocate prepare denied_after_revoke;
+select @@collation_database;
+➤ @@collation_database[-1,16383,0]  𝄀
+utf8mb4_general_ci
+drop user defaults_user;
+drop role defaults_role;
+alter database defaults_b collate utf8mb4_bin;
+create snapshot defaults_snapshot for database defaults_b;
+alter database defaults_b collate utf8mb4_general_ci;
+create database defaults_clone clone defaults_b {snapshot='defaults_snapshot'};
+create table defaults_clone.after_clone(v varchar(8));
+select collation_name from information_schema.columns where table_schema='defaults_clone' and table_name='after_clone' and column_name='v';
+➤ collation_name[12,18,0]  𝄀
+utf8mb4_bin
+restore table defaults_b.binary_values {snapshot='defaults_snapshot'};
+select @@collation_database;
+➤ @@collation_database[-1,16383,0]  𝄀
+utf8mb4_general_ci
+restore database defaults_b {snapshot='defaults_snapshot'};
+use defaults_b;
+select @@collation_database;
+➤ @@collation_database[-1,16383,0]  𝄀
+utf8mb4_bin
+create table after_restore(v varchar(8));
+insert into after_restore values ('a'),('B');
+select min(v),max(v) from after_restore;
+➤ min(v)[12,8,0]  ¦  max(v)[12,8,0]  𝄀
+B  ¦  a
+drop snapshot defaults_snapshot;
+drop database defaults_clone;
+drop database defaults_b;
+create database defaults_b;
+use defaults_b;
+select @@collation_database;
+➤ @@collation_database[-1,16383,0]  𝄀
+utf8mb4_general_ci
+create table after_recreate(v varchar(8));
+select collation_name from information_schema.columns where table_schema='defaults_b' and table_name='after_recreate' and column_name='v';
+➤ collation_name[12,18,0]  𝄀
+utf8mb4_general_ci
+drop database defaults_b;
+drop database defaults_a;

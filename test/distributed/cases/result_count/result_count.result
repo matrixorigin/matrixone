@@ -49,8 +49,8 @@ t1
 v1
 v2
 show create database db1;
-Database    Create Database
-db1    CREATE DATABASE `db1`
+➤ Database[12,5000,0]  ¦  Create Database[12,116,0]  𝄀
+db1  ¦  CREATE DATABASE `db1` CHARACTER SET utf8mb4 COLLATE utf8mb4_general_ci
 show create view v1;
 ➤ View[12,1,0]  ¦  Create View[12,51,0]  ¦  character_set_client[12,5,0]  ¦  collation_connection[12,13,0]  𝄀
 v1  ¦  create view `v1` as select `t1`.`a` as `a`, `t1`.`b` as `b` from `t1`  ¦  utf8mb4  ¦  utf8mb4_general_ci

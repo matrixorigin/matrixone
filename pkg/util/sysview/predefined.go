@@ -445,7 +445,7 @@ var (
 		"IS_GRANTABLE varchar(3) NOT NULL DEFAULT ''" +
 		")"
 
-	InformationSchemaSchemataDDL = "CREATE VIEW information_schema.SCHEMATA AS " +
+	InformationSchemaSchemataLegacyDDL = "CREATE VIEW information_schema.SCHEMATA AS " +
 		informationSchemaMetadataVisibilityCTE() + "SELECT " +
 		"'def' AS CATALOG_NAME," +
 		"datname AS SCHEMA_NAME," +
@@ -454,6 +454,16 @@ var (
 		"cast(NULL as char(0)) AS SQL_PATH," +
 		"cast('NO' as varchar(3)) AS DEFAULT_ENCRYPTION " +
 		"FROM __mo_visible_databases"
+
+	InformationSchemaSchemataDDL = "CREATE VIEW information_schema.SCHEMATA AS " +
+		informationSchemaMetadataVisibilityCTE() + "SELECT " +
+		"'def' AS CATALOG_NAME, db.datname AS SCHEMA_NAME," +
+		"coalesce(dd.character_set, 'utf8mb4') AS DEFAULT_CHARACTER_SET_NAME," +
+		"coalesce(dd.collation_name, @@session.collation_server) AS DEFAULT_COLLATION_NAME," +
+		"cast(NULL as char(0)) AS SQL_PATH," +
+		"cast('NO' as varchar(3)) AS DEFAULT_ENCRYPTION " +
+		"FROM __mo_visible_databases db LEFT JOIN mo_catalog.mo_database_defaults dd " +
+		"ON dd.account_id = db.account_id AND dd.database_id = db.dat_id"
 
 	InformationSchemaCharacterSetsDDL = "CREATE TABLE information_schema.CHARACTER_SETS (" +
 		"CHARACTER_SET_NAME varchar(64)," +

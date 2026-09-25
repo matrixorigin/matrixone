@@ -674,7 +674,7 @@ func requiresPessimisticObjectLifecycleTxn(
 	defaultDatabase string,
 ) bool {
 	switch st := stmt.(type) {
-	case *tree.DropDatabase, *tree.DropView, *tree.DropSequence, *tree.AlterView,
+	case *tree.AlterDatabase, *tree.DropDatabase, *tree.DropView, *tree.DropSequence, *tree.AlterView,
 		*tree.AlterSequence, *tree.DataBranchDeleteTable, *tree.DataBranchDeleteDatabase:
 		return true
 	case *tree.DropTable:

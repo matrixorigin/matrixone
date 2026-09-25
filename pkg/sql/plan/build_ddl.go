@@ -3218,7 +3218,16 @@ func buildTableDefs(stmt *tree.CreateTable, ctx CompilerContext, createTable *pl
 		enforced   bool
 	}
 	pendingChecks := make([]pendingCheckDef, 0)
-	tableCharset, err := tableDefaultCharset(ctx, stmt.Options)
+	defaults, err := tableDatabaseDefaults(ctx, createTable.Database, stmt.Options)
+	if err != nil {
+		return err
+	}
+	createTable.DatabaseDefaults = defaults
+	tableOptions := stmt.Options
+	if defaults != nil && defaults.Version != 0 {
+		tableOptions = []tree.TableOption{&tree.TableOptionCollate{Collate: defaults.Collation}}
+	}
+	tableCharset, err := tableDefaultCharset(ctx, tableOptions)
 	if err != nil {
 		return err
 	}
@@ -5622,6 +5631,20 @@ func buildCreateDatabase(stmt *tree.CreateDatabase, ctx CompilerContext) (*Plan,
 		}
 	}
 	createDB.Sql = stmt.Sql
+	if !DatabaseDefaultsSystemDatabase(createDB.Database) && createDB.SubscriptionOption == nil {
+		if DatabaseDefaultsEnabled(ctx.GetProcess().GetService()) {
+			fallback, err := databaseServerCollation(ctx)
+			if err != nil {
+				return nil, err
+			}
+			createDB.Defaults, err = NormalizeDatabaseDefaults(ctx.GetContext(), stmt.CreateOptions, fallback)
+			if err != nil {
+				return nil, err
+			}
+		} else if len(stmt.CreateOptions) > 0 {
+			return nil, RequireDatabaseDefaults(ctx.GetContext(), ctx.GetProcess().GetService())
+		}
+	}
 
 	return &Plan{
 		Plan: &plan.Plan_Ddl{

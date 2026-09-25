@@ -622,7 +622,26 @@ func constructCreateTableSQL(
 	}
 	createStr += ")"
 	if tableDef.TableType != catalog.SystemExternalRel {
-		createStr += tableCharsetForShowCreate(ctx, displayTableCharset)
+		// Replayed definitions (LIKE, rebuilds and historical restore) must not
+		// inherit a different target database default. Ordinary SHOW can omit
+		// general_ci only when the current database would actually supply it.
+		charsetContext := ctx
+		if useDbName || IsSnapshotValid(snapshot) {
+			charsetContext = nil
+		} else if charsetContext != nil && displayTableCharset == uint32(types.CharsetUTF8) {
+			database := schemaName
+			if database == "" {
+				database = ctx.DefaultDatabase()
+			}
+			defaults, err := GetDatabaseDefaults(ctx, database, snapshot)
+			if err != nil {
+				return "", nil, err
+			}
+			if defaults != nil && defaults.Version != 0 && defaults.Collation != "utf8mb4_general_ci" {
+				charsetContext = nil
+			}
+		}
+		createStr += tableCharsetForShowCreate(charsetContext, displayTableCharset)
 	}
 
 	var comment string

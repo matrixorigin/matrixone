@@ -60,7 +60,7 @@ func IsDDL(stmt tree.Statement) bool {
 	switch stmt.(type) {
 	case *tree.CreateTable, *tree.DropTable,
 		*tree.CreateView, *tree.DropView, *tree.AlterView, *tree.AlterTable, *tree.RenameTable,
-		*tree.CreateDatabase, *tree.DropDatabase, *tree.CreateSequence, *tree.DropSequence,
+		*tree.CreateDatabase, *tree.AlterDatabase, *tree.DropDatabase, *tree.CreateSequence, *tree.DropSequence,
 		*tree.CreateIndex, *tree.DropIndex, *tree.TruncateTable,
 		*tree.CreateIcebergCatalog, *tree.AlterIcebergCatalog, *tree.DropIcebergCatalog:
 		return true
@@ -227,7 +227,7 @@ func statementCanBeExecutedInUncommittedTransaction(
 		//	return false, nil
 		//}
 		return true, nil
-	case *tree.CreateDatabase, *tree.DropDatabase:
+	case *tree.CreateDatabase, *tree.AlterDatabase, *tree.DropDatabase:
 		return true, nil
 	case *tree.CreateSequence: //Case1, Case3 above
 		return ses.IsBackgroundSession() || !ses.GetTxnHandler().OptionBitsIsSet(OPTION_BEGIN), nil

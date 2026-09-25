@@ -118,6 +118,6 @@ func TestPreflightLogicalRestoreDatabases(t *testing.T) {
 	require.Equal(t, []string{"ordinary", "branch_db"}, loaded)
 
 	loaded = nil
-	require.NoError(t, preflightLogicalRestoreDatabases(ctx, dbNames, defines.MORPCVersion75, load))
+	require.NoError(t, preflightLogicalRestoreDatabases(ctx, dbNames, defines.MORPCVersion96, load))
 	require.Empty(t, loaded)
 }

@@ -687,6 +687,8 @@ func BuildPlan(ctx CompilerContext, stmt tree.Statement, isPrepareStmt bool) (*P
 		return buildRollbackTransaction(stmt, ctx)
 	case *tree.CreateDatabase:
 		return buildCreateDatabase(stmt, ctx)
+	case *tree.AlterDatabase:
+		return buildAlterDatabase(stmt, ctx)
 	case *tree.DropDatabase:
 		return buildDropDatabase(stmt, ctx)
 	case *tree.CreateTable:

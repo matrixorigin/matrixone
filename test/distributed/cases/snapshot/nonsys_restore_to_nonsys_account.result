@@ -623,17 +623,35 @@ alter table tm1 add constraint fm1 foreign key (b) references tm2(a);
 drop snapshot if exists sp14;
 create snapshot sp14 for account acc01;
 show create table ti1 {snapshot = 'sp14'};
-Table    Create Table
-ti1    CREATE TABLE `ti1` (\n  `a` int NOT NULL,\n  `b` int DEFAULT NULL,\n  `c` int DEFAULT NULL,\n  CONSTRAINT `fi1` FOREIGN KEY (`b`) REFERENCES `ti2` (`a`) ON DELETE RESTRICT ON UPDATE RESTRICT\n)
+➤ Table[12,3,0]  ¦  Create Table[12,215,0]  𝄀
+ti1  ¦  CREATE TABLE `ti1` (
+  `a` int NOT NULL,
+  `b` int DEFAULT NULL,
+  `c` int DEFAULT NULL,
+  CONSTRAINT `fi1` FOREIGN KEY (`b`) REFERENCES `ti2` (`a`) ON DELETE RESTRICT ON UPDATE RESTRICT
+) COLLATE=utf8mb4_general_ci
 show create table tm1 {snapshot = 'sp13'};
-Table    Create Table
-tm1    CREATE TABLE `tm1` (\n  `a` int NOT NULL,\n  `b` int DEFAULT NULL,\n  `c` int DEFAULT NULL\n)
+➤ Table[12,3,0]  ¦  Create Table[12,116,0]  𝄀
+tm1  ¦  CREATE TABLE `tm1` (
+  `a` int NOT NULL,
+  `b` int DEFAULT NULL,
+  `c` int DEFAULT NULL
+) COLLATE=utf8mb4_general_ci
 show create table ti1 {snapshot = 'sp14'};
-Table    Create Table
-ti1    CREATE TABLE `ti1` (\n  `a` int NOT NULL,\n  `b` int DEFAULT NULL,\n  `c` int DEFAULT NULL,\n  CONSTRAINT `fi1` FOREIGN KEY (`b`) REFERENCES `ti2` (`a`) ON DELETE RESTRICT ON UPDATE RESTRICT\n)
+➤ Table[12,3,0]  ¦  Create Table[12,215,0]  𝄀
+ti1  ¦  CREATE TABLE `ti1` (
+  `a` int NOT NULL,
+  `b` int DEFAULT NULL,
+  `c` int DEFAULT NULL,
+  CONSTRAINT `fi1` FOREIGN KEY (`b`) REFERENCES `ti2` (`a`) ON DELETE RESTRICT ON UPDATE RESTRICT
+) COLLATE=utf8mb4_general_ci
 show create table tm1 {snapshot = 'sp13'};
-Table    Create Table
-tm1    CREATE TABLE `tm1` (\n  `a` int NOT NULL,\n  `b` int DEFAULT NULL,\n  `c` int DEFAULT NULL\n)
+➤ Table[12,3,0]  ¦  Create Table[12,116,0]  𝄀
+tm1  ¦  CREATE TABLE `tm1` (
+  `a` int NOT NULL,
+  `b` int DEFAULT NULL,
+  `c` int DEFAULT NULL
+) COLLATE=utf8mb4_general_ci
 alter table ti1 drop foreign key fi1;
 alter table tm1 drop foreign key fm1;
 truncate ti1;
@@ -641,17 +659,35 @@ truncate tm1;
 drop snapshot if exists sp15;
 create snapshot sp15 for account acc01;
 show create table ti1 {snapshot = 'sp14'};
-Table    Create Table
-ti1    CREATE TABLE `ti1` (\n  `a` int NOT NULL,\n  `b` int DEFAULT NULL,\n  `c` int DEFAULT NULL,\n  CONSTRAINT `fi1` FOREIGN KEY (`b`) REFERENCES `ti2` (`a`) ON DELETE RESTRICT ON UPDATE RESTRICT\n)
+➤ Table[12,3,0]  ¦  Create Table[12,215,0]  𝄀
+ti1  ¦  CREATE TABLE `ti1` (
+  `a` int NOT NULL,
+  `b` int DEFAULT NULL,
+  `c` int DEFAULT NULL,
+  CONSTRAINT `fi1` FOREIGN KEY (`b`) REFERENCES `ti2` (`a`) ON DELETE RESTRICT ON UPDATE RESTRICT
+) COLLATE=utf8mb4_general_ci
 show create table tm1 {snapshot = 'sp15'};
-Table    Create Table
-tm1    CREATE TABLE `tm1` (\n  `a` int NOT NULL,\n  `b` int DEFAULT NULL,\n  `c` int DEFAULT NULL\n)
+➤ Table[12,3,0]  ¦  Create Table[12,116,0]  𝄀
+tm1  ¦  CREATE TABLE `tm1` (
+  `a` int NOT NULL,
+  `b` int DEFAULT NULL,
+  `c` int DEFAULT NULL
+) COLLATE=utf8mb4_general_ci
 show create table ti1 {snapshot = 'sp14'};
-Table    Create Table
-ti1    CREATE TABLE `ti1` (\n  `a` int NOT NULL,\n  `b` int DEFAULT NULL,\n  `c` int DEFAULT NULL,\n  CONSTRAINT `fi1` FOREIGN KEY (`b`) REFERENCES `ti2` (`a`) ON DELETE RESTRICT ON UPDATE RESTRICT\n)
+➤ Table[12,3,0]  ¦  Create Table[12,215,0]  𝄀
+ti1  ¦  CREATE TABLE `ti1` (
+  `a` int NOT NULL,
+  `b` int DEFAULT NULL,
+  `c` int DEFAULT NULL,
+  CONSTRAINT `fi1` FOREIGN KEY (`b`) REFERENCES `ti2` (`a`) ON DELETE RESTRICT ON UPDATE RESTRICT
+) COLLATE=utf8mb4_general_ci
 show create table tm1 {snapshot = 'sp15'};
-Table    Create Table
-tm1    CREATE TABLE `tm1` (\n  `a` int NOT NULL,\n  `b` int DEFAULT NULL,\n  `c` int DEFAULT NULL\n)
+➤ Table[12,3,0]  ¦  Create Table[12,116,0]  𝄀
+tm1  ¦  CREATE TABLE `tm1` (
+  `a` int NOT NULL,
+  `b` int DEFAULT NULL,
+  `c` int DEFAULT NULL
+) COLLATE=utf8mb4_general_ci
 select count(*) from ti1;
 count(*)
 0
@@ -854,8 +890,12 @@ show create table table02;
 Table    Create Table
 table02    CREATE TABLE `table02` (\n  `newC` int DEFAULT NULL,\n  `col1` int DEFAULT NULL,\n  `col2` enum('a','b','c') DEFAULT NULL,\n  UNIQUE KEY `col1` (`col1`)\n)
 show create table table02 {snapshot = 'sp14'};
-Table    Create Table
-table02    CREATE TABLE `table02` (\n  `col1` int DEFAULT NULL,\n  `col2` enum('a','b','c') DEFAULT NULL,\n  UNIQUE KEY `col1` (`col1`)\n)
+➤ Table[12,7,0]  ¦  Create Table[12,150,0]  𝄀
+table02  ¦  CREATE TABLE `table02` (
+  `col1` int DEFAULT NULL,
+  `col2` enum('a','b','c') DEFAULT NULL,
+  UNIQUE KEY `col1` (`col1`)
+) COLLATE=utf8mb4_general_ci
 drop database db08;
 restore database db07{snapshot="sp14"};
 restore database db08{snapshot="sp14"};
@@ -874,8 +914,11 @@ Tables_in_db07
 table01
 table02
 show create table table01 {snapshot = 'sp14'};
-Table    Create Table
-table01    CREATE TABLE `table01` (\n  `col1` int DEFAULT NULL,\n  `col2` enum('a','b','c') DEFAULT NULL\n)
+➤ Table[12,7,0]  ¦  Create Table[12,120,0]  𝄀
+table01  ¦  CREATE TABLE `table01` (
+  `col1` int DEFAULT NULL,
+  `col2` enum('a','b','c') DEFAULT NULL
+) COLLATE=utf8mb4_general_ci
 show create table table01;
 Table    Create Table
 table01    CREATE TABLE `table01` (\n  `col1` int DEFAULT NULL,\n  `col2` enum('a','b','c') DEFAULT NULL\n)
@@ -904,8 +947,11 @@ Tables_in_db07
 table01
 table02
 show create table table01 {snapshot = 'sp14'};
-Table    Create Table
-table01    CREATE TABLE `table01` (\n  `col1` int DEFAULT NULL,\n  `col2` enum('a','b','c') DEFAULT NULL\n)
+➤ Table[12,7,0]  ¦  Create Table[12,120,0]  𝄀
+table01  ¦  CREATE TABLE `table01` (
+  `col1` int DEFAULT NULL,
+  `col2` enum('a','b','c') DEFAULT NULL
+) COLLATE=utf8mb4_general_ci
 show create table table01;
 Table    Create Table
 table01    CREATE TABLE `table01` (\n  `col1` int DEFAULT NULL,\n  `col2` enum('a','b','c') DEFAULT NULL\n)

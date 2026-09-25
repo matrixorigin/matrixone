@@ -105,13 +105,15 @@ var (
 	// can be copied verbatim. Tables containing object IDs must opt into an
 	// owner rebuild instead of relying on incidental physical-ID equality.
 	systemCatalogRestorePolicies = map[string]systemCatalogRestorePolicy{
-		"mo_database":         systemCatalogRestoreSkip,
-		"mo_tables":           systemCatalogRestoreSkip,
-		"mo_columns":          systemCatalogRestoreSkip,
-		"mo_table_partitions": systemCatalogRestoreSkip,
-		"mo_foreign_keys":     systemCatalogRestoreSkip,
-		"mo_indexes":          systemCatalogRestoreSkip,
-		"mo_account":          systemCatalogRestoreSkip,
+		// Database DDL recreates defaults with the target database ID.
+		catalog.MODatabaseDefaults: systemCatalogRestoreSkip,
+		"mo_database":              systemCatalogRestoreSkip,
+		"mo_tables":                systemCatalogRestoreSkip,
+		"mo_columns":               systemCatalogRestoreSkip,
+		"mo_table_partitions":      systemCatalogRestoreSkip,
+		"mo_foreign_keys":          systemCatalogRestoreSkip,
+		"mo_indexes":               systemCatalogRestoreSkip,
+		"mo_account":               systemCatalogRestoreSkip,
 
 		catalog.MOVersionTable:       systemCatalogRestoreSkip,
 		catalog.MOUpgradeTable:       systemCatalogRestoreSkip,
@@ -1506,7 +1508,7 @@ func restoreToDatabaseOrTable(
 
 		return
 	} else {
-		createDbSql = createDatabaseIfNotExistsSQL(dbName)
+		createDbSql = appendDatabaseDefaultsSQL(createDatabaseIfNotExistsSQL(dbName), definition.defaults)
 		// create db
 		getLogger(sid).Debug(fmt.Sprintf("[%s] start to create db: %v, create db sql: %s", snapshotName, dbName, createDbSql))
 		if err = bh.Exec(toCtx, createDbSql); err != nil {
@@ -2867,7 +2869,12 @@ func getCreateDatabaseSql(ctx context.Context,
 	if len(colsList) == 0 || len(colsList[0]) == 0 {
 		return logicalRestoreDatabaseDefinition{}, moerr.NewBadDB(ctx, dbName)
 	}
-	return newLogicalRestoreDatabaseDefinition(ctx, dbName, colsList[0])
+	definition, err := newLogicalRestoreDatabaseDefinition(ctx, dbName, colsList[0])
+	if err != nil {
+		return logicalRestoreDatabaseDefinition{}, err
+	}
+	definition.defaults, err = readDatabaseDefaultsForRestore(ctx, bh, dbName, accountId, snapshotTs)
+	return definition, err
 }
 
 func getTableInfo(
