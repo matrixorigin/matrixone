@@ -105,11 +105,11 @@ cast('18446744073709551615' as decimal(20,0)) as q;
 1.0000
 set session div_precision_increment = 0;
 select cast('00:00:01.000' as time(3)) / cast(3 as decimal(10,0)) as q;
-➤ q[3,18,3]  𝄀
+➤ q[3,17,3]  𝄀
 0.333
 set session div_precision_increment = 10;
 select cast('00:00:01.000' as time(3)) / cast(3 as decimal(10,0)) as q;
-➤ q[3,28,13]  𝄀
+➤ q[3,27,13]  𝄀
 0.3333333333333
 select cast(1 as decimal(10,2)) / cast('00:00:03' as time) as q;
 ➤ q[3,20,12]  𝄀
@@ -117,12 +117,42 @@ select cast(1 as decimal(10,2)) / cast('00:00:03' as time) as q;
 prepare temporal_div_stmt from
 'select cast(''00:00:01.000'' as time(3)) / cast(3 as decimal(10,0)) as q';
 execute temporal_div_stmt;
-➤ q[3,28,13]  𝄀
+➤ q[3,27,13]  𝄀
 0.3333333333333
 set session div_precision_increment = 30;
 execute temporal_div_stmt;
-➤ q[3,48,30]  𝄀
+➤ q[3,47,30]  𝄀
 0.333333333333333333333333333333
 deallocate prepare temporal_div_stmt;
+set session div_precision_increment = 4;
+select cast('2020-01-01 23:59:59.999999' as datetime(6)) / 10 as q;
+➤ q[3,24,10]  𝄀
+2020010123595.9999999000
+create table temporal_result as
+select cast('2020-01-01 23:59:59.999999' as datetime(6)) / 10 as q;
+show create table temporal_result;
+➤ Table[12,15,0]  ¦  Create Table[12,68,0]  𝄀
+temporal_result  ¦  CREATE TABLE `temporal_result` (
+  `q` decimal(24,10) DEFAULT NULL
+)
+select cast('2562047787:59:59.999999' as time(6)) / cast(1 as signed) as q;
+➤ q[3,24,10]  𝄀
+25620477875959.9999990000
+select cast(1 as signed) / cast('2562047787:59:59.999999' as time(6)) as q;
+➤ q[3,29,4]  𝄀
+0.0000
+select cast('2020-01-01 23:59:59.999999' as timestamp(6)) / 10 as q;
+➤ q[3,24,10]  𝄀
+2020010123595.9999999000
+set session div_precision_increment = 30;
+select cast('2020-01-01 23:59:59.999999' as datetime(6)) / 10 as q;
+➤ q[3,50,30]  𝄀
+2020010123595.999999900000000000000000000000
+select cast('2020-01-01' as date) / cast(2 as decimal(10,0)) as q;
+➤ q[3,38,30]  𝄀
+10100050.500000000000000000000000000000
+select cast(2020 as year) / cast(2 as decimal(10,0)) as q;
+➤ q[3,34,30]  𝄀
+1010.000000000000000000000000000000
 set session div_precision_increment = 4;
 drop database issue_28594_div_precision;

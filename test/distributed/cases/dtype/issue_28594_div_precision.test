@@ -85,4 +85,16 @@ execute temporal_div_stmt;
 deallocate prepare temporal_div_stmt;
 
 set session div_precision_increment = 4;
+select cast('2020-01-01 23:59:59.999999' as datetime(6)) / 10 as q;
+create table temporal_result as
+    select cast('2020-01-01 23:59:59.999999' as datetime(6)) / 10 as q;
+show create table temporal_result;
+select cast('2562047787:59:59.999999' as time(6)) / cast(1 as signed) as q;
+select cast(1 as signed) / cast('2562047787:59:59.999999' as time(6)) as q;
+select cast('2020-01-01 23:59:59.999999' as timestamp(6)) / 10 as q;
+set session div_precision_increment = 30;
+select cast('2020-01-01 23:59:59.999999' as datetime(6)) / 10 as q;
+select cast('2020-01-01' as date) / cast(2 as decimal(10,0)) as q;
+select cast(2020 as year) / cast(2 as decimal(10,0)) as q;
+set session div_precision_increment = 4;
 drop database issue_28594_div_precision;

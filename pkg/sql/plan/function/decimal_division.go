@@ -74,7 +74,20 @@ func exactDivisionOperandType(source, effective types.Type) (precision, scale in
 		return integerDecimalDigits(source.Oid), 0, true
 	case source.Oid == types.T_bit:
 		return integerDecimalDigits(source.Oid), 0, true
-	case (source.Oid == types.T_any || source.Oid.IsDateRelate()) && effective.Oid.IsDecimal():
+	case source.Oid.IsDateRelate() && effective.Oid.IsDecimal():
+		// Temporal decimals contain packed calendar fields, not an arbitrary
+		// value spanning the storage width of the implicit decimal cast.
+		switch source.Oid {
+		case types.T_date:
+			return 8, 0, true
+		case types.T_year:
+			return 4, 0, true
+		case types.T_time, types.T_datetime, types.T_timestamp:
+			scale = max32(source.Scale, 0)
+			return 14 + scale, scale, true
+		}
+		return 0, 0, false
+	case source.Oid == types.T_any && effective.Oid.IsDecimal():
 		precision = effective.Width
 		if precision <= 0 {
 			precision = decimalStorageWidth(effective.Oid)
@@ -145,6 +158,23 @@ func (fr *FuncGetResult) applyDivPrecisionIncrement(ctx context.Context, origina
 		return
 	}
 	fr.retType = result
+
+	// The full packed TIME value can exceed Decimal64 when it has five or
+	// six fractional digits. The other operand may also exceed that range.
+	// Keep the narrower result when possible, but cast both operands to a
+	// representation that can hold their declared precision.
+	if result.Oid == types.T_decimal128 &&
+		effective[0].Oid == types.T_decimal64 && effective[1].Oid == types.T_decimal64 {
+		leftPrecision, leftScale, _ := exactDivisionOperandType(original[0], effective[0])
+		rightPrecision, rightScale, _ := exactDivisionOperandType(original[1], effective[1])
+		if leftPrecision > 18 || rightPrecision > 18 {
+			fr.needCast = true
+			fr.targetTypes = []types.Type{
+				types.New(types.T_decimal128, leftPrecision, leftScale),
+				types.New(types.T_decimal128, rightPrecision, rightScale),
+			}
+		}
+	}
 
 	if result.Oid == types.T_decimal256 &&
 		(effective[0].Oid != types.T_decimal256 || effective[1].Oid != types.T_decimal256) {

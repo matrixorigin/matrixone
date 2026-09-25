@@ -124,17 +124,77 @@ func TestDivisionSQLBoundaries(t *testing.T) {
 		{
 			name: "time numerator increment zero", increment: 0,
 			sql:   "select cast('00:00:01.000' as time(3)) / cast(3 as decimal(10,0))",
-			width: 18, scale: 3, want: "0.333",
+			width: 17, scale: 3, want: "0.333",
 		},
 		{
 			name: "time numerator increment ten", increment: 10,
 			sql:   "select cast('00:00:01.000' as time(3)) / cast(3 as decimal(10,0))",
-			width: 28, scale: 13, want: "0.3333333333333",
+			width: 27, scale: 13, want: "0.3333333333333",
 		},
 		{
 			name: "time numerator promoted", increment: 30,
 			sql:   "select cast('00:00:01.000' as time(3)) / cast(3 as decimal(10,0))",
-			width: 48, scale: 30, want: "0.333333333333333333333333333333",
+			width: 47, scale: 30, want: "0.333333333333333333333333333333",
+		},
+		{
+			name: "datetime six digit default", increment: 4,
+			sql:   "select cast('2020-01-01 23:59:59.999999' as datetime(6)) / 10",
+			width: 24, scale: 10, want: "2020010123595.9999999000",
+		},
+		{
+			name: "datetime six digit wide", increment: 30,
+			sql:   "select cast('2020-01-01 23:59:59.999999' as datetime(6)) / 10",
+			width: 50, scale: 30, want: "2020010123595.9999999" + strings.Repeat("0", 23),
+		},
+		{
+			name: "time six digit maximum", increment: 4,
+			sql:   "select cast('2562047787:59:59.999999' as time(6)) / cast(1 as signed)",
+			width: 24, scale: 10, want: "25620477875959.9999990000",
+		},
+		{
+			name: "time six digit decimal64 divisor", increment: 4,
+			sql:   "select cast('2562047787:59:59.999999' as time(6)) / cast(1 as decimal(10,0))",
+			width: 24, scale: 10, want: "25620477875959.9999990000",
+		},
+		{
+			name: "time six digit decimal128 divisor", increment: 4,
+			sql:   "select cast('2562047787:59:59.999999' as time(6)) / cast(1 as decimal(20,0))",
+			width: 24, scale: 10, want: "25620477875959.9999990000",
+		},
+		{
+			name: "time six digit reversed", increment: 4,
+			sql:   "select cast(1 as signed) / cast('2562047787:59:59.999999' as time(6))",
+			width: 29, scale: 4, want: "0.0000",
+		},
+		{
+			name: "time six digit negative maximum", increment: 4,
+			sql:   "select cast('-2562047787:59:59.999999' as time(6)) / cast(1 as signed)",
+			width: 24, scale: 10, want: "-25620477875959.9999990000",
+		},
+		{
+			name: "date with decimal divisor", increment: 4,
+			sql:   "select cast('2020-01-01' as date) / cast(2 as decimal(10,0))",
+			width: 12, scale: 4, want: "10100050.5000",
+		},
+		{
+			name: "year with decimal divisor", increment: 4,
+			sql:   "select cast(2020 as year) / cast(2 as decimal(10,0))",
+			width: 8, scale: 4, want: "1010.0000",
+		},
+		{
+			name: "date stays decimal128 at increment thirty", increment: 30,
+			sql:   "select cast('2020-01-01' as date) / cast(2 as decimal(10,0))",
+			width: 38, scale: 30, want: "10100050.5" + strings.Repeat("0", 29),
+		},
+		{
+			name: "year stays decimal128 at increment thirty", increment: 30,
+			sql:   "select cast(2020 as year) / cast(2 as decimal(10,0))",
+			width: 34, scale: 30, want: "1010." + strings.Repeat("0", 30),
+		},
+		{
+			name: "timestamp six digit", increment: 4,
+			sql:   "select cast('2020-01-01 23:59:59.999999' as timestamp(6)) / 10",
+			width: 24, scale: 10, want: "2020010123595.9999999000",
 		},
 		{
 			name: "time divisor increment ten", increment: 10,

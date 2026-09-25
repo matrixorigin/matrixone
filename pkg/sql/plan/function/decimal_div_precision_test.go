@@ -17,6 +17,7 @@ package function
 import (
 	"context"
 	"math/big"
+	"strconv"
 	"strings"
 	"testing"
 
@@ -95,6 +96,52 @@ func TestDecimalDivisionTypeUsesPrecisionIncrement(t *testing.T) {
 	)
 	require.NoError(t, err)
 	require.Equal(t, types.T_float64.ToType(), resolved.GetReturnType())
+}
+
+func TestTemporalDivisionUsesPackedPrecision(t *testing.T) {
+	integer := types.T_int64.ToType()
+	for _, test := range []struct {
+		name   string
+		left   types.Type
+		right  types.Type
+		widths [4]int32 // Increments 0, 4, 10, 30.
+		scales [4]int32
+	}{
+		{"date", types.T_date.ToType(), types.New(types.T_decimal64, 10, 0), [4]int32{8, 12, 18, 38}, [4]int32{0, 4, 10, 30}},
+		{"year", types.T_year.ToType(), types.New(types.T_decimal64, 10, 0), [4]int32{4, 8, 14, 34}, [4]int32{0, 4, 10, 30}},
+		{"datetime(0)", types.New(types.T_datetime, 0, 0), integer, [4]int32{14, 18, 24, 44}, [4]int32{0, 4, 10, 30}},
+		{"datetime(6)", types.New(types.T_datetime, 0, 6), integer, [4]int32{20, 24, 30, 50}, [4]int32{6, 10, 16, 30}},
+		{"timestamp(6)", types.New(types.T_timestamp, 0, 6), integer, [4]int32{20, 24, 30, 50}, [4]int32{6, 10, 16, 30}},
+		{"time(3)", types.New(types.T_time, 0, 3), integer, [4]int32{17, 21, 27, 47}, [4]int32{3, 7, 13, 30}},
+		{"time(6)", types.New(types.T_time, 0, 6), integer, [4]int32{20, 24, 30, 50}, [4]int32{6, 10, 16, 30}},
+		{"reversed time(3)", integer, types.New(types.T_time, 0, 3), [4]int32{22, 26, 32, 52}, [4]int32{0, 4, 10, 30}},
+	} {
+		for i, increment := range []int32{0, 4, 10, 30} {
+			t.Run(test.name+"/increment="+strconv.Itoa(int(increment)), func(t *testing.T) {
+				resolved, err := GetFunctionByName(
+					WithDivPrecisionIncrement(context.Background(), increment),
+					"/", []types.Type{test.left, test.right})
+				require.NoError(t, err)
+				oid := types.T_decimal128
+				if test.widths[i] > 38 {
+					oid = types.T_decimal256
+				}
+				require.Equal(t, types.New(oid, test.widths[i], test.scales[i]), resolved.GetReturnType())
+			})
+		}
+	}
+
+	// TIME(6) and BIGINT can each exceed Decimal64's 18-digit capacity.
+	resolved, err := GetFunctionByName(context.Background(), "/",
+		[]types.Type{types.New(types.T_time, 0, 6), integer})
+	require.NoError(t, err)
+	require.Equal(t, types.New(types.T_decimal128, 24, 10), resolved.GetReturnType())
+	casts, needed := resolved.ShouldDoImplicitTypeCast()
+	require.True(t, needed)
+	require.Equal(t, []types.Type{
+		types.New(types.T_decimal128, 20, 6),
+		types.New(types.T_decimal128, 19, 0),
+	}, casts)
 }
 
 func TestDecimalDivisionExecutionUsesBoundResultScale(t *testing.T) {
