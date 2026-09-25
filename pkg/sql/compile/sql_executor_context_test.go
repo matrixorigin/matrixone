@@ -25,6 +25,7 @@ import (
 
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
 	"github.com/matrixorigin/matrixone/pkg/common/mpool"
+	"github.com/matrixorigin/matrixone/pkg/defines"
 	"github.com/matrixorigin/matrixone/pkg/pb/timestamp"
 	"github.com/matrixorigin/matrixone/pkg/pb/txn"
 	"github.com/matrixorigin/matrixone/pkg/sql/parsers"
@@ -390,6 +391,31 @@ func TestInternalExecutorViewChildWithoutDelegateIsIsolated(t *testing.T) {
 	require.Same(t, child.GetContext(), child.GetProcess().GetTopContext())
 	require.Same(t, child.GetContext(), child.GetProcess().Ctx)
 	require.Same(t, original, proc.GetTopContext())
+	require.Nil(t, parent.GetQueryingSubscription())
+}
+
+func TestInternalExecutorSubscriptionViewWithoutFrontendDelegate(t *testing.T) {
+	ctrl := gomock.NewController(t)
+	proc := testutil.NewProcessWithMPool(t, "", mpool.MustNewZero())
+	relation := mock_frontend.NewMockRelation(ctrl)
+	relation.EXPECT().GetTableDef(gomock.Any()).Return(&plan.TableDef{Name: "v"})
+	relation.EXPECT().GetTableID(gomock.Any()).Return(uint64(42))
+	database := mock_frontend.NewMockDatabase(ctrl)
+	database.EXPECT().Relation(gomock.Any(), "v", nil).Return(relation, nil)
+	eng := mock_frontend.NewMockEngine(ctrl)
+	eng.EXPECT().GetNameById(gomock.Any(), nil, uint64(42)).Return("db", "v", nil)
+	eng.EXPECT().Database(gomock.Any(), "db", nil).Return(database, nil)
+
+	parent := &compilerContext{proc: proc, engine: eng, ctx: proc.GetTopContext()}
+	binding, cleanup, err := parent.NewViewDescriptionCompilerContext(proc.GetTopContext())
+	require.NoError(t, err)
+	defer cleanup()
+	child := binding.(*compilerContext)
+	child.SetContext(defines.AttachAccountId(child.GetContext(), 23))
+	obj, def, err := child.ResolveSubscriptionTableById(42, &plan.SubscriptionMeta{AccountId: 23})
+	require.NoError(t, err)
+	require.Equal(t, "v", obj.ObjName)
+	require.Equal(t, "v", def.Name)
 	require.Nil(t, parent.GetQueryingSubscription())
 }
 

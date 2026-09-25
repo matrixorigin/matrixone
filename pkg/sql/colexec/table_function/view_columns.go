@@ -34,7 +34,8 @@ const maxViewDescriptionsPerScan = 65536
 // definition has become invalid. Other errors may indicate protocol, resource,
 // permission, cancellation or compiler failures and must remain fatal.
 func skippableViewDescriptionError(err error) bool {
-	return moerr.IsMoErrCode(err, moerr.ErrNoSuchTable) ||
+	return moerr.IsMoErrCode(err, moerr.ErrNoDB) ||
+		moerr.IsMoErrCode(err, moerr.ErrNoSuchTable) ||
 		moerr.IsMoErrCode(err, moerr.ErrBadFieldError) ||
 		moerr.IsMoErrCode(err, moerr.ErrBadDB)
 }

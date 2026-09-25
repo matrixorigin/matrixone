@@ -138,11 +138,12 @@ func (c *compilerContext) CheckSubscriptionValid(subName, accName string, pubNam
 }
 
 func (c *compilerContext) ResolveSubscriptionTableById(tableId uint64, pubmeta *plan.SubscriptionMeta) (*plan.ObjectRef, *plan.TableDef, error) {
-	delegate, err := c.sessionCompilerContext()
-	if err != nil {
-		return nil, nil, err
+	if delegate := c.sessionCompilerContextValue(); delegate != nil {
+		return delegate.ResolveSubscriptionTableById(tableId, pubmeta)
 	}
-	return delegate.ResolveSubscriptionTableById(tableId, pubmeta)
+	// Metadata scans from an internal executor have no frontend session. The
+	// caller binds this isolated child to the publisher account before lookup.
+	return c.ResolveById(tableId, c.GetSnapshot())
 }
 
 func (c *compilerContext) IsPublishing(dbName string) (bool, error) {

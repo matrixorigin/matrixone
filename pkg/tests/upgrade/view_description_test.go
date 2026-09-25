@@ -230,6 +230,16 @@ func TestViewDescriptionPublicSQL(t *testing.T) {
 		exec("create database view_description_source_db")
 		exec("create table view_description_source_db.src (x int)")
 		exec("create view view_description_test.missing_db_view as select x from view_description_source_db.src")
+		sourceConn, err := db.Conn(ctx)
+		require.NoError(t, err)
+		func() {
+			defer sourceConn.Close()
+			_, err := sourceConn.ExecContext(ctx, "use view_description_source_db")
+			require.NoError(t, err)
+			_, err = sourceConn.ExecContext(ctx,
+				"create view view_description_test.missing_default_db_view as select x from src")
+			require.NoError(t, err)
+		}()
 		exec("drop database view_description_source_db")
 		missingConn, err := db.Conn(ctx)
 		require.NoError(t, err)
@@ -238,7 +248,7 @@ func TestViewDescriptionPublicSQL(t *testing.T) {
 			func() {
 				rows, err := missingConn.QueryContext(ctx,
 					"select column_name from information_schema.columns "+
-						"where table_schema='view_description_test' and table_name='missing_db_view'")
+						"where table_schema='view_description_test' and table_name in ('missing_db_view','missing_default_db_view')")
 				require.NoError(t, err)
 				defer rows.Close()
 				require.False(t, rows.Next())
@@ -378,7 +388,6 @@ func TestViewDescriptionSubscription(t *testing.T) {
 			"select column_name from information_schema.columns where table_schema='subscribed' and table_name='v'").Scan(&legacyColumn))
 		require.Equal(t, "x", legacyColumn)
 		require.NoError(t, replaceColumns(ctx, sysview.InformationSchemaColumnsDDL))
-
 		exec("alter table view_description_pub.src modify column x varchar(60)")
 		var field, typ, nullable, key, defaultValue, extra, comment sql.NullString
 		require.NoError(t, subscriber.QueryRowContext(ctx, "desc subscribed.v").Scan(

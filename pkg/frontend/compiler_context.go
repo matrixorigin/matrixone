@@ -664,6 +664,10 @@ func (tcc *TxnCompilerContext) ResolveById(tableId uint64, snapshot *plan2.Snaps
 
 func (tcc *TxnCompilerContext) ResolveSubscriptionTableById(tableId uint64, subMeta *plan.SubscriptionMeta) (*plan2.ObjectRef, *plan2.TableDef, error) {
 	txn := tcc.GetTxnHandler().GetTxn()
+	snapshot := tcc.GetSnapshot()
+	if plan2.IsSnapshotValid(snapshot) && snapshot.TS.Less(txn.Txn().SnapshotTS) {
+		txn = txn.CloneSnapshotOp(*snapshot.TS)
+	}
 
 	pubContext := tcc.execCtx.reqCtx
 	if subMeta != nil {
@@ -684,7 +688,7 @@ func (tcc *TxnCompilerContext) ResolveSubscriptionTableById(tableId uint64, subM
 		Obj:        returnTableID,
 	}
 	tableDef := plan2.CloneTableDefForPlan(table.GetTableDef(pubContext), true)
-	if err := tcc.recoverLegacyTinyText(pubContext, dbName, tableDef, subMeta, nil); err != nil {
+	if err := tcc.recoverLegacyTinyText(pubContext, dbName, tableDef, subMeta, snapshot); err != nil {
 		return nil, nil, err
 	}
 	return obj, tableDef, nil

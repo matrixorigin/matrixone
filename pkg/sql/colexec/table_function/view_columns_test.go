@@ -25,6 +25,7 @@ import (
 func TestSkippableViewDescriptionError(t *testing.T) {
 	ctx := t.Context()
 	for _, err := range []error{
+		moerr.NewNoDB(ctx),
 		moerr.NewNoSuchTable(ctx, "db", "source"),
 		moerr.NewBadFieldError(ctx, "missing", "field list"),
 		moerr.NewBadDB(ctx, "source_db"),

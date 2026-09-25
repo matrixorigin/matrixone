@@ -8333,6 +8333,11 @@ func (builder *QueryBuilder) bindSelectClause(
 	if selectList, err = appendSelectList(builder, ctx, selectList, clause.Exprs...); err != nil {
 		return
 	}
+	if capture, metadataBinding := builder.compCtx.(viewDependencyScope); metadataBinding {
+		if err = capture.chargeViewColumns(len(selectList)); err != nil {
+			return
+		}
+	}
 	if len(selectList) == 0 {
 		err = moerr.NewParseError(builder.GetContext(), "No tables used")
 		return
@@ -11727,7 +11732,9 @@ func (builder *QueryBuilder) bindView(
 	defer builder.compCtx.SetContext(previousWarningContext)
 
 	if capture, ok := builder.compCtx.(viewDependencyScope); ok {
-		capture.enterNestedView()
+		if err := capture.enterNestedView(); err != nil {
+			return 0, err
+		}
 		defer capture.leaveNestedView()
 	}
 	if isSubscriptionStatistics {
