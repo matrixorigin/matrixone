@@ -720,7 +720,11 @@ func TestLifecyclePublishesClaimBeforeReplacementAndHeartbeat(t *testing.T) {
 }
 
 func TestStableCDCHeartbeatFailureRecoveryAndSupersession(t *testing.T) {
-	for _, code := range []task.TaskCode{task.TaskCode_InitCdcStableEpoch, task.TaskCode_InitCdcLosslessStart} {
+	for _, code := range []task.TaskCode{
+		task.TaskCode_InitCdcStableEpoch,
+		task.TaskCode_InitCdcLosslessStart,
+		task.TaskCode_InitCdcSourcePatternV1,
+	} {
 		t.Run(code.String(), func(t *testing.T) {
 			r, store := newDaemonHandleTestRunner(t)
 			t.Cleanup(r.stopper.Stop)
@@ -1600,7 +1604,7 @@ func TestStableEpochCDCTaskRejectsLegacyRunnerBeforeClaim(t *testing.T) {
 	legacyCandidates := legacyRunner.startTasks(context.Background())
 	require.Len(t, legacyCandidates, 1)
 	_, err := legacyRunner.newDaemonTask(legacyCandidates[0])
-	require.ErrorContains(t, err, "executor with code 15 not exists")
+	require.ErrorContains(t, err, "executor with code 16 not exists")
 
 	legacyRunner.dispatchTaskHandle(context.Background())
 	require.Zero(t, len(legacyRunner.pendingTaskHandle))

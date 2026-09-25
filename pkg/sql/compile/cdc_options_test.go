@@ -472,6 +472,12 @@ func TestCDCCreateTaskOptionsSourcePatternCode(t *testing.T) {
 		TaskId: "no-full-pattern", NoFull: true, ExtraOpts: patternOpts,
 	}).BuildTaskMetadata()
 	require.Equal(t, task.TaskCode_InitCdcSourcePatternV1, noFullPattern.Executor)
+	combined := fmt.Sprintf(`{"%s":"%s","%s":"%s"}`,
+		cdc.CDCTaskExtraOptions_SourcePatternProtocol, cdc.CDCSourcePatternProtocolV1,
+		cdc.CDCTaskExtraOptions_InitialSnapshotProtocol, cdc.CDCInitialSnapshotProtocolNoFullHLC)
+	require.Equal(t, task.TaskCode_InitCdcSourcePatternV1, (&CDCCreateTaskOptions{
+		TaskId: "no-full-pattern-lossless", NoFull: true, ExtraOpts: combined,
+	}).BuildTaskMetadata().Executor)
 }
 
 func TestValidateStableInitialSnapshotCompileProtocol(t *testing.T) {

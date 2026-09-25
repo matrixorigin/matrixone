@@ -7023,7 +7023,8 @@ func (opts *CDCCreateTaskOptions) ValidateAndFill(
 		if err = validateStableInitialSnapshotCompileProtocol(ctx, c, true); err != nil {
 			return
 		}
-	} else if opts.startTsFromSnapshot {
+	}
+	if opts.startTsFromSnapshot {
 		if err = validateLosslessNoFullStartCompileProtocol(ctx, c); err != nil {
 			return
 		}

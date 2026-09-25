@@ -44,10 +44,10 @@ type CDCUserInfo struct {
 }
 
 type CDCCreateTaskOptions struct {
-	TaskName            string
-	TaskId              string
-	UserInfo            *CDCUserInfo
-	Exclude             string
+	TaskName string
+	TaskId   string
+	UserInfo *CDCUserInfo
+	Exclude  string
 	// ExcludePattern is the raw regexp. Exclude is escaped for persistence.
 	ExcludePattern      string
 	StartTs             string
@@ -307,7 +307,8 @@ func (opts *CDCCreateTaskOptions) ValidateAndFill(
 			ctx, true, currentProtocolVersion(ses.proc)); err != nil {
 			return
 		}
-	} else if opts.startTsFromSnapshot {
+	}
+	if opts.startTsFromSnapshot {
 		if err = validateLosslessNoFullStartProtocol(ctx, currentProtocolVersion(ses.proc)); err != nil {
 			return
 		}
