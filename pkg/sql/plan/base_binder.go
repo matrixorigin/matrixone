@@ -10067,33 +10067,28 @@ func resetDateFunctionArgs(ctx context.Context, dateExpr *Expr, intervalExpr *Ex
 			return nil, moerr.NewInvalidArg(ctx, "time interval unit", intervalType)
 		}
 
-		// Numeric compound intervals must use the same text grammar and
-		// normalized execution unit as their string and marker equivalents.
+		// Preserve numeric source types for compound field parsing. Strings
+		// retain their field-width grammar; both paths use the same outer unit.
 		switch intervalType {
 		case types.Second_MicroSecond, types.Minute_MicroSecond,
 			types.Minute_Second, types.Hour_MicroSecond,
 			types.Hour_Second, types.Hour_Minute:
 			switch firstExpr.Typ.Id {
+			case int32(types.T_float32), int32(types.T_float64),
+				int32(types.T_decimal64), int32(types.T_decimal128):
+				numberExpr, returnType, err := bindTypedNumericIntervalExpr(ctx, firstExpr, intervalType)
+				if err != nil {
+					return nil, err
+				}
+				return []*Expr{dateExpr, numberExpr, makePlan2Int64ConstExprWithType(int64(returnType))}, nil
 			case int32(types.T_int8), int32(types.T_int16), int32(types.T_int32), int32(types.T_int64),
 				int32(types.T_uint8), int32(types.T_uint16), int32(types.T_uint32), int32(types.T_uint64),
-				int32(types.T_float32), int32(types.T_float64), int32(types.T_decimal64), int32(types.T_decimal128),
 				int32(types.T_any):
-				// A DECIMAL's declared scale is formatting, not part of its
-				// numeric value. Compound VARCHAR intervals, in contrast, use
-				// field width as grammar. Keep that distinction at this boundary.
-				trimDecimalScale := (firstExpr.Typ.Id == int32(types.T_decimal64) ||
-					firstExpr.Typ.Id == int32(types.T_decimal128)) && firstExpr.Typ.Scale > 0
 				firstExpr, err = appendCastBeforeExpr(ctx, firstExpr, plan.Type{
 					Id: int32(types.T_varchar), Width: types.MaxVarcharLen,
 				})
 				if err != nil {
 					return nil, err
-				}
-				if trimDecimalScale {
-					firstExpr, err = trimCompoundDecimalScale(ctx, firstExpr)
-					if err != nil {
-						return nil, err
-					}
 				}
 			}
 		}
@@ -10175,6 +10170,16 @@ func resetDateFunctionArgs(ctx context.Context, dateExpr *Expr, intervalExpr *Ex
 		}
 	}
 
+	// Nonconstant numeric scalar intervals must retain their fractional unit
+	// until final microsecond conversion, just as literal values already do.
+	if isTimeUnit && isDecimalOrFloat && lit == nil {
+		numberExpr, returnType, err := bindTypedNumericIntervalExpr(ctx, firstExpr, intervalType)
+		if err != nil {
+			return nil, err
+		}
+		return []*Expr{dateExpr, numberExpr, makePlan2Int64ConstExprWithType(int64(returnType))}, nil
+	}
+
 	if isTimeUnit && isDecimalOrFloat && lit != nil {
 		// Extract the value from the literal and convert to microseconds
 		var floatVal float64
@@ -10254,19 +10259,20 @@ func resetDateFunctionArgs(ctx context.Context, dateExpr *Expr, intervalExpr *Ex
 	}, nil
 }
 
-func trimCompoundDecimalScale(ctx context.Context, expr *Expr) (*Expr, error) {
-	for _, suffix := range []string{"0", "."} {
-		var err error
-		expr, err = BindFuncExprImplByPlanExpr(ctx, "trim", []*Expr{
-			makePlan2StringConstExprWithType("trailing"),
-			makePlan2StringConstExprWithType(suffix),
-			expr,
-		})
-		if err != nil {
-			return nil, err
-		}
+func bindTypedNumericIntervalExpr(ctx context.Context, expr *Expr, intervalType types.IntervalType) (*Expr, types.IntervalType, error) {
+	_, normalizedType, err := types.NormalizeInterval("0", intervalType)
+	if err != nil {
+		return nil, types.IntervalTypeInvalid, err
 	}
-	return expr, nil
+	switch intervalType {
+	case types.Second, types.Minute, types.Hour, types.Day,
+		types.Minute_Second, types.Hour_Second, types.Day_Second:
+		normalizedType = types.MicroSecond
+	}
+	numberExpr, err := BindFuncExprImplByPlanExpr(ctx, "to_interval_microsecond", []*Expr{
+		expr, makePlan2Int64ConstExprWithType(int64(intervalType)),
+	})
+	return numberExpr, normalizedType, err
 }
 
 // bindStringIntervalExpr keeps VARCHAR/CHAR/TEXT interval semantics identical for

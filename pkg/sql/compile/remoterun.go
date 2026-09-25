@@ -2304,6 +2304,9 @@ func validateRemoteExpressionPipelineProtocol(
 		(!hasProtocolVersion || protocolVersion < defines.MORPCVersion98) {
 		return moerr.NewNotSupportedNoCtx("normalized interval units and WEEK session snapshot require MORPC protocol version 98")
 	}
+	if features.TypedNumericIntervalOverloads && (!hasProtocolVersion || protocolVersion < defines.MORPCVersion99) {
+		return moerr.NewNotSupportedNoCtx("typed numeric interval overloads require MORPC protocol version 99")
+	}
 	if features.NumericPrefix &&
 		(!hasProtocolVersion || protocolVersion < defines.MORPCVersion30) {
 		return moerr.NewNotSupportedNoCtx(

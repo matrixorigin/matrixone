@@ -81,7 +81,73 @@ func ToInterval(ivecs []*vector.Vector, result vector.FunctionResultWrapper, _ *
 // ToIntervalMicrosecond has a distinct execution identity because its results
 // are paired with a MICROSECOND outer unit in new DATE_ADD/DATE_SUB plans.
 func ToIntervalMicrosecond(ivecs []*vector.Vector, result vector.FunctionResultWrapper, _ *process.Process, length int, selectList *FunctionSelectList) error {
+	switch ivecs[0].GetType().Oid {
+	case types.T_float32:
+		return toTypedInterval[float32](ivecs, result, length, func(v float32, _ int32) (string, bool) {
+			if math.IsNaN(float64(v)) || math.IsInf(float64(v), 0) {
+				return "", false
+			}
+			return strconv.FormatFloat(float64(v), 'f', -1, 32), true
+		})
+	case types.T_float64:
+		return toTypedInterval[float64](ivecs, result, length, func(v float64, _ int32) (string, bool) {
+			if math.IsNaN(v) || math.IsInf(v, 0) {
+				return "", false
+			}
+			return strconv.FormatFloat(v, 'f', -1, 64), true
+		})
+	case types.T_decimal64:
+		return toTypedInterval[types.Decimal64](ivecs, result, length, func(v types.Decimal64, scale int32) (string, bool) {
+			return canonicalIntervalDecimal(v.Format(scale), scale), true
+		})
+	case types.T_decimal128:
+		return toTypedInterval[types.Decimal128](ivecs, result, length, func(v types.Decimal128, scale int32) (string, bool) {
+			return canonicalIntervalDecimal(v.Format(scale), scale), true
+		})
+	}
 	return toInterval(ivecs, result, length, true)
+}
+
+// Numeric compound fields use a value's shortest fixed-point spelling. A
+// DECIMAL's declared scale must not become extra fields, while the existing
+// VARCHAR field-width grammar remains unchanged.
+func canonicalIntervalDecimal(s string, scale int32) string {
+	if scale > 0 {
+		s = strings.TrimRight(s, "0")
+		s = strings.TrimSuffix(s, ".")
+	}
+	return s
+}
+
+func toTypedInterval[T types.FixedSizeTExceptStrType](
+	ivecs []*vector.Vector, result vector.FunctionResultWrapper, length int,
+	format func(T, int32) (string, bool),
+) error {
+	values := vector.GenerateFunctionFixedTypeParameter[T](ivecs[0])
+	units := vector.GenerateFunctionFixedTypeParameter[int64](ivecs[1])
+	rs := vector.MustFunctionResult[int64](result)
+	scale := ivecs[0].GetType().Scale
+	for i := uint64(0); i < uint64(length); i++ {
+		value, valueNull := values.GetValue(i)
+		unit, unitNull := units.GetValue(i)
+		if valueNull || unitNull {
+			if err := rs.Append(0, true); err != nil {
+				return err
+			}
+			continue
+		}
+		text, valid := format(value, scale)
+		if !valid {
+			if err := rs.Append(0, true); err != nil {
+				return err
+			}
+			continue
+		}
+		if err := appendNormalizedInterval(rs, text, types.IntervalType(unit), true); err != nil {
+			return err
+		}
+	}
+	return nil
 }
 
 func toInterval(ivecs []*vector.Vector, result vector.FunctionResultWrapper, length int, normalizeMicroseconds bool) error {
@@ -97,43 +163,40 @@ func toInterval(ivecs []*vector.Vector, result vector.FunctionResultWrapper, len
 			}
 			continue
 		}
-		intervalType := types.IntervalType(unit)
-		number, normalizedType, err := types.NormalizeInterval(string(value), intervalType)
-		if err != nil {
-			if err := rs.Append(0, true); err != nil {
-				return err
-			}
-			continue
-		}
-		// The binder fixes one unit for all rows. Scale whole values to the
-		// microsecond unit used by fractional values of these interval types.
-		if normalizeMicroseconds && normalizedType != types.MicroSecond {
-			multiplier := int64(0)
-			switch intervalType {
-			case types.Second, types.Minute_Second, types.Hour_Second, types.Day_Second:
-				multiplier = types.MicroSecsPerSec
-			case types.Minute:
-				multiplier = types.SecsPerMinute * types.MicroSecsPerSec
-			case types.Hour:
-				multiplier = types.SecsPerHour * types.MicroSecsPerSec
-			case types.Day:
-				multiplier = types.SecsPerDay * types.MicroSecsPerSec
-			}
-			if multiplier != 0 {
-				if number > math.MaxInt64/multiplier || number < math.MinInt64/multiplier {
-					if err := rs.Append(0, true); err != nil {
-						return err
-					}
-					continue
-				}
-				number *= multiplier
-			}
-		}
-		if err := rs.Append(number, false); err != nil {
+		if err := appendNormalizedInterval(rs, string(value), types.IntervalType(unit), normalizeMicroseconds); err != nil {
 			return err
 		}
 	}
 	return nil
+}
+
+func appendNormalizedInterval(rs *vector.FunctionResult[int64], text string, intervalType types.IntervalType, normalizeMicroseconds bool) error {
+	number, normalizedType, err := types.NormalizeInterval(text, intervalType)
+	if err != nil {
+		return rs.Append(0, true)
+	}
+	// The binder fixes one unit for all rows. Scale whole values to the
+	// microsecond unit used by fractional values of these interval types.
+	if normalizeMicroseconds && normalizedType != types.MicroSecond {
+		multiplier := int64(0)
+		switch intervalType {
+		case types.Second, types.Minute_Second, types.Hour_Second, types.Day_Second:
+			multiplier = types.MicroSecsPerSec
+		case types.Minute:
+			multiplier = types.SecsPerMinute * types.MicroSecsPerSec
+		case types.Hour:
+			multiplier = types.SecsPerHour * types.MicroSecsPerSec
+		case types.Day:
+			multiplier = types.SecsPerDay * types.MicroSecsPerSec
+		}
+		if multiplier != 0 {
+			if number > math.MaxInt64/multiplier || number < math.MinInt64/multiplier {
+				return rs.Append(0, true)
+			}
+			number *= multiplier
+		}
+	}
+	return rs.Append(number, false)
 }
 
 func builtInCurrentTimestamp(ivecs []*vector.Vector, result vector.FunctionResultWrapper, proc *process.Process, length int, selectList *FunctionSelectList) error {

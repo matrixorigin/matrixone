@@ -13428,6 +13428,10 @@ var supportedOthersBuiltIns = []FuncNew{
 			{overloadId: 0, args: []types.T{types.T_varchar, types.T_int64}, retType: func([]types.Type) types.Type { return types.T_int64.ToType() }, newOp: func() executeLogicOfOverload { return ToIntervalMicrosecond }},
 			{overloadId: 1, args: []types.T{types.T_char, types.T_int64}, retType: func([]types.Type) types.Type { return types.T_int64.ToType() }, newOp: func() executeLogicOfOverload { return ToIntervalMicrosecond }},
 			{overloadId: 2, args: []types.T{types.T_text, types.T_int64}, retType: func([]types.Type) types.Type { return types.T_int64.ToType() }, newOp: func() executeLogicOfOverload { return ToIntervalMicrosecond }},
+			{overloadId: 3, args: []types.T{types.T_float32, types.T_int64}, retType: func([]types.Type) types.Type { return types.T_int64.ToType() }, newOp: func() executeLogicOfOverload { return ToIntervalMicrosecond }},
+			{overloadId: 4, args: []types.T{types.T_float64, types.T_int64}, retType: func([]types.Type) types.Type { return types.T_int64.ToType() }, newOp: func() executeLogicOfOverload { return ToIntervalMicrosecond }},
+			{overloadId: 5, args: []types.T{types.T_decimal64, types.T_int64}, retType: func([]types.Type) types.Type { return types.T_int64.ToType() }, newOp: func() executeLogicOfOverload { return ToIntervalMicrosecond }},
+			{overloadId: 6, args: []types.T{types.T_decimal128, types.T_int64}, retType: func([]types.Type) types.Type { return types.T_int64.ToType() }, newOp: func() executeLogicOfOverload { return ToIntervalMicrosecond }},
 		},
 	},
 	// Internal helper used by the interval binder for dynamic string values.
