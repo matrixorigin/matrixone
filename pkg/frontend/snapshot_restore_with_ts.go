@@ -191,6 +191,9 @@ func getTableInfosFromTS(ctx context.Context,
 					},
 				)
 			}
+			if sql, ok := materializedViewCreateSQL(tblInfo); ok {
+				return sql, nil
+			}
 			return getCreateTableSqlFromTS(newCtx, bh, tblInfo.dbName, tblInfo.tblName, ts, from, to)
 		},
 	)
@@ -507,7 +510,10 @@ func restoreDatabaseFromTS(
 		}
 
 		// skip view
-		if tblInfo.typ == view {
+		if isMaterializedViewState(tblInfo) {
+			continue
+		}
+		if isViewLike(tblInfo) {
 			viewMap[key] = tblInfo
 			continue
 		}

@@ -106,7 +106,7 @@ func NewQueryBuilder(queryType plan.Query_StatementType, ctx CompilerContext, is
 			mysqlCompatible = !onlyFullGroupBy
 			mysqlFullGroupByCompat = onlyFullGroupBy && !mysql.HasMatrixOneNativeSQLMode(modeStr)
 			boolSumAvgCompat = mysql.HasEnableBoolSumAvgSQLMode(modeStr)
-			noUnsignedSubtraction = mysql.HasSQLMode(modeStr, mysql.SQLModeNoUnsignedSubtraction)
+			noUnsignedSubtraction = mysql.HasSQLMode(modeStr, "NO_UNSIGNED_SUBTRACTION")
 		}
 	}
 
@@ -609,10 +609,8 @@ func setOperationOutputType(
 
 // setOperationPureCharCommonType keeps a set operation made exclusively from
 // CHAR expressions in the fixed-width CHAR domain. The conditional-expression
-// resolver intentionally promotes CHAR with VARCHAR/TEXT to a variable string,
-// but that rule is not valid for set-operation row materialization: changing
-// CHAR to VARCHAR loses the common PAD SPACE representation and lets equal
-// values with different declared widths survive DISTINCT operations.
+// resolver may promote CHAR with VARCHAR/TEXT to a variable string, but that
+// rule is not valid for set-operation row materialization.
 func setOperationPureCharCommonType(source []types.Type) (types.Type, bool) {
 	if len(source) == 0 {
 		return types.Type{}, false
@@ -5401,14 +5399,6 @@ func (bc *BindContext) bindingRecurStmt() bool {
 	return bc.cteState.cteBindType == CteBindTypeRecurStmt
 }
 
-// bindingRecurQueryBlock reports whether the current context owns the
-// recursive query block itself. Nested SELECT contexts inherit the recursive
-// CTE state, but own an independent query block.
-func (bc *BindContext) bindingRecurQueryBlock() bool {
-	return bc.bindingRecurStmt() &&
-		bc.queryBlockOwner == bc.cteState.recursiveRefQueryBlock
-}
-
 func (builder *QueryBuilder) bindCte(
 	ctx *BindContext,
 	stmt tree.NodeFormatter,
@@ -5993,7 +5983,7 @@ func (builder *QueryBuilder) bindSelect(stmt *tree.Select, ctx *BindContext, isR
 	// materialize scalar subqueries into that input before fixing the group-key
 	// layout. Projection, alias, and ordinal references already point at the
 	// corresponding group position and do not need to be rebound.
-	if !ctx.sampleFunc.hasSampleFunc && !ctx.bindingRecurQueryBlock() {
+	if !ctx.sampleFunc.hasSampleFunc && !ctx.bindingRecurStmt() {
 		for i, group := range ctx.groups {
 			if nodeID, ctx.groups[i], err = builder.flattenSubqueries(nodeID, group, ctx); err != nil {
 				return
@@ -6094,7 +6084,7 @@ func (builder *QueryBuilder) bindSelect(stmt *tree.Select, ctx *BindContext, isR
 			}
 		}
 	}
-	if len(ctx.groups) > 0 || ctx.isDistinct || boundCountExpr != nil || boundOffsetExpr != nil {
+	if len(ctx.groups) > 0 || ctx.isDistinct {
 		for i := 0; i < resultLen; i++ {
 			if typ := mysqlSpecialTypeFromProvenance(ctx.outputColumnProvenanceForProject(int32(i))); typ != nil {
 				ctx.setMySQLSpecialCanonicalType(int32(i), typ)
@@ -7306,7 +7296,7 @@ func (state *rollupWindowRewriteState) addGroupingSourceNames(groupingSets []tre
 		}
 	}
 	for _, groupExpr := range fullGroupingSet {
-		walkGroupingSetOrderByExpr(groupExpr, func(expr tree.Expr) bool {
+		walkASTExpressions(groupExpr, func(expr tree.Expr) bool {
 			if _, subquery := expr.(*tree.Subquery); subquery {
 				return false
 			}
@@ -7937,7 +7927,7 @@ func rewriteRollupWindowExpr(expr tree.Expr, state *rollupWindowRewriteState) (t
 
 func (state *rollupWindowRewriteState) orderExprNeedsOuterAlias(expr tree.Expr) bool {
 	needsOuter := false
-	walkGroupingSetOrderByExpr(expr, func(candidate tree.Expr) bool {
+	walkASTExpressions(expr, func(candidate tree.Expr) bool {
 		if _, subquery := candidate.(*tree.Subquery); subquery {
 			return false
 		}
@@ -8000,7 +7990,7 @@ func queryBlockHasPendingAggregate(selectList tree.SelectExprs, having *tree.Whe
 
 func exprHasPendingAggregate(astExpr tree.Expr) bool {
 	found := false
-	walkGroupingSetOrderByExpr(astExpr, func(expr tree.Expr) bool {
+	walkASTExpressions(astExpr, func(expr tree.Expr) bool {
 		switch e := expr.(type) {
 		case *tree.Subquery:
 			return false
@@ -8154,7 +8144,7 @@ func resolveRollupWindowOrderSourceProbes(
 	}
 
 	for _, order := range orderBy {
-		walkGroupingSetOrderByExpr(order.Expr, func(expr tree.Expr) bool {
+		walkASTExpressions(order.Expr, func(expr tree.Expr) bool {
 			name, ok := expr.(*tree.UnresolvedName)
 			if !ok || name.Star || name.NumParts != 1 {
 				return true
@@ -8312,8 +8302,6 @@ func (builder *QueryBuilder) bindSelectClause(
 	}
 
 	// build FROM clause
-	ctx.fullGroupByInputReady = false
-	ctx.fullGroupByProof = nil
 	if nodeID, err = builder.buildFrom(clause.From.Tables, ctx, isRoot); err != nil {
 		return
 	}
@@ -8433,8 +8421,6 @@ func (builder *QueryBuilder) bindSelectClause(
 		queryBlockHasPendingAggregate(selectList, clause.Having, astOrderBy)
 
 	// bind HAVING clause
-	ctx.fullGroupByInputNode = nodeID
-	ctx.fullGroupByInputReady = true
 	havingBinder = NewHavingBinder(builder, ctx)
 	if clause.Having != nil {
 		boundHavingList, err = builder.bindHaving(ctx, clause.Having, havingBinder)
@@ -9543,7 +9529,7 @@ func groupingSetOrderCanBindAboveUnion(selectList tree.SelectExprs, astExpr tree
 	}
 
 	canBind := true
-	walkGroupingSetOrderByExpr(astExpr, func(expr tree.Expr) bool {
+	walkASTExpressions(astExpr, func(expr tree.Expr) bool {
 		if _, subquery := expr.(*tree.Subquery); subquery {
 			canBind = false
 			return false
@@ -9568,7 +9554,7 @@ func groupingSetOrderCanBindAboveUnion(selectList tree.SelectExprs, astExpr tree
 func groupingSetOrderExprEqual(left, right tree.Expr) bool {
 	normalizeIdentifiers := func(expr tree.Expr) tree.Expr {
 		normalized := cloneTreeExpr(expr)
-		walkGroupingSetOrderByExpr(normalized, func(node tree.Expr) bool {
+		walkASTExpressions(normalized, func(node tree.Expr) bool {
 			name, ok := node.(*tree.UnresolvedName)
 			if !ok {
 				return true
@@ -9817,7 +9803,7 @@ func cloneTreeStructFields(dst, src reflect.Value, visited map[treeClonePointer]
 
 func containsGroupingFunction(astExpr tree.Expr) bool {
 	found := false
-	walkGroupingSetOrderByExpr(unwrapParenExpr(astExpr), func(expr tree.Expr) bool {
+	walkASTExpressions(unwrapParenExpr(astExpr), func(expr tree.Expr) bool {
 		switch typedExpr := expr.(type) {
 		case *tree.FuncExpr:
 			if typedExpr.FuncName != nil && typedExpr.FuncName.Compare() == "grouping" {
@@ -9834,7 +9820,9 @@ func containsGroupingFunction(astExpr tree.Expr) bool {
 
 var groupingOrderFuncExprType = reflect.TypeOf(tree.FuncExpr{})
 
-func walkGroupingSetOrderByExpr(astExpr tree.Expr, visit func(tree.Expr) bool) {
+// walkASTExpressions visits expression-bearing AST fields, including clauses
+// outside a projection. Func naming metadata is not an executable expression.
+func walkASTExpressions(root tree.NodeFormatter, visit func(tree.Expr) bool) {
 	visited := make(map[uintptr]struct{})
 	var walk func(reflect.Value)
 	walk = func(value reflect.Value) {
@@ -9886,7 +9874,7 @@ func walkGroupingSetOrderByExpr(astExpr tree.Expr, visit func(tree.Expr) bool) {
 			}
 		}
 	}
-	walk(reflect.ValueOf(astExpr))
+	walk(reflect.ValueOf(root))
 }
 
 func (builder *QueryBuilder) bindOrderBy(
@@ -9957,11 +9945,6 @@ func (builder *QueryBuilder) rewriteMySQLSpecialOrderByExpr(ctx *BindContext, ex
 	}
 
 	projectExpr := ctx.projects[col.ColPos]
-	if storageType := ctx.mysqlSpecialOrderTypeForProject(col.ColPos); ctx.isDistinct && isSetPlanType(storageType) {
-		// Sort the surviving visible value after DISTINCT; adding raw identity
-		// to its input projection would change the equality tuple.
-		return makeCanonicalSetValue(builder.GetContext(), expr, storageType)
-	}
 	var orderKeyExpr *plan.Expr
 	if isEnumOrSetDisplayValueExpr(projectExpr) {
 		fn := projectExpr.GetF()
@@ -9974,7 +9957,7 @@ func (builder *QueryBuilder) rewriteMySQLSpecialOrderByExpr(ctx *BindContext, ex
 		orderKeyExpr = DeepCopyExpr(fn.Args[1])
 	} else if storageType := ctx.mysqlSpecialOrderTypeForProject(col.ColPos); storageType != nil {
 		var err error
-		orderKeyExpr, err = builder.mysqlSpecialOrderKey(ctx, projectExpr, storageType)
+		orderKeyExpr, err = makeMySQLSpecialOrderKey(builder.GetContext(), projectExpr, storageType)
 		if err != nil {
 			return nil, err
 		}
@@ -10341,7 +10324,7 @@ func (builder *QueryBuilder) appendAggNode(
 	boundHavingList []*plan.Expr,
 	rollupFilter bool,
 ) (newNodeID int32, postTimeWindowHavingList []*plan.Expr, err error) {
-	if ctx.bindingRecurQueryBlock() {
+	if ctx.bindingRecurStmt() {
 		err = moerr.NewInternalError(builder.GetContext(), "not support aggregate function recursive cte")
 		return
 	}
@@ -10559,7 +10542,6 @@ func (builder *QueryBuilder) appendWindowNode(
 			WinSpecList: []*Expr{w},
 			WindowIdx:   int32(i),
 			BindingTags: []int32{ctx.windowTag},
-			SpillMem:    builder.sortSpillMem,
 		}, ctx)
 		builder.userWindowNodes[nodeID] = struct{}{}
 	}
@@ -11161,7 +11143,7 @@ func qualifyGroupingSetHiddenOrderExpr(
 
 	qualified := cloneTreeExpr(astExpr)
 	var bindErr error
-	walkGroupingSetOrderByExpr(qualified, func(expr tree.Expr) bool {
+	walkASTExpressions(qualified, func(expr tree.Expr) bool {
 		function, ok := expr.(*tree.FuncExpr)
 		if !ok || function.FuncName == nil || function.FuncName.Compare() != "grouping" {
 			return true
@@ -11179,7 +11161,7 @@ func qualifyGroupingSetHiddenOrderExpr(
 	}
 
 	fallbackNames := make(map[string]struct{})
-	walkGroupingSetOrderByExpr(qualified, func(expr tree.Expr) bool {
+	walkASTExpressions(qualified, func(expr tree.Expr) bool {
 		if _, subquery := expr.(*tree.Subquery); subquery {
 			return false
 		}
@@ -11610,17 +11592,6 @@ func (builder *QueryBuilder) bindView(
 	if err != nil {
 		return 0, err
 	}
-	if viewData.RequiredProtocolVersion != nil {
-		if *viewData.RequiredProtocolVersion < 0 {
-			return 0, moerr.NewInvalidInput(
-				builder.GetContext(), "invalid persisted view protocol version")
-		}
-		if err = RequirePersistedProtocolVersion(
-			builder.GetContext(), builder.compCtx.GetProcess(),
-			*viewData.RequiredProtocolVersion); err != nil {
-			return 0, err
-		}
-	}
 
 	parserSQLMode := legacyViewParserSQLMode
 	if viewData.SQLMode != nil {
@@ -11721,10 +11692,6 @@ func (builder *QueryBuilder) bindView(
 	defer func() {
 		builder.isForUpdate = savedIsForUpdate
 	}()
-	previousWarningContext := builder.compCtx.GetContext()
-	builder.compCtx.SetContext(WithJSONMergeWarningOrigin(
-		previousWarningContext, JSONMergeWarningStoredView))
-	defer builder.compCtx.SetContext(previousWarningContext)
 
 	if capture, ok := builder.compCtx.(viewDependencyScope); ok {
 		capture.enterNestedView()
@@ -11735,18 +11702,8 @@ func (builder *QueryBuilder) bindView(
 		builder.compCtx.SetQueryingSubscription(metadataSubscription.Meta)
 		defer builder.compCtx.SetQueryingSubscription(previousSubscription)
 	}
-	viewNodeStart := len(builder.qry.Nodes)
 	nodeID, err = builder.bindSelect(viewStmt.AsSource, viewCtx, false)
 	if err != nil {
-		return
-	}
-	// Views written before the protocol marker was introduced are still
-	// rebound from SQL. Recheck the finalized plan before exposing it to the
-	// outer query; the cluster admission floor protects older CN binaries, and
-	// this local check protects a capable reader with a stale catalog marker.
-	if err = RequirePersistedIPFunctionProtocol(
-		builder.GetContext(), builder.compCtx.GetProcess(),
-		builder.qry.Nodes[viewNodeStart:]); err != nil {
 		return
 	}
 	nodeID, err = builder.appendMySQLSpecialTypeBoundary(
@@ -12252,6 +12209,9 @@ func (builder *QueryBuilder) buildTable(stmt tree.TableExpr, ctx *BindContext, t
 			if err != nil {
 				return 0, err
 			}
+			if err = ValidateMaterializedViewSources(builder.compCtx, tableDef); err != nil {
+				return 0, err
+			}
 
 			nodeID = builder.appendNode(&plan.Node{
 				NodeType:     plan.Node_TABLE_SCAN,
@@ -12277,6 +12237,9 @@ func (builder *QueryBuilder) buildTable(stmt tree.TableExpr, ctx *BindContext, t
 			err = ValidateSnapshotScope(snapshot, schema, table, tableDef.DbId, SnapshotTableID(tableDef))
 		}
 		if err != nil {
+			return 0, err
+		}
+		if err = ValidateMaterializedViewSources(builder.compCtx, tableDef); err != nil {
 			return 0, err
 		}
 
@@ -12789,15 +12752,6 @@ func (builder *QueryBuilder) addBinding(nodeID int32, alias tree.AliasClause, ct
 	if slices.Contains(scanNodes, node.NodeType) {
 		if (node.NodeType == plan.Node_VALUE_SCAN || node.NodeType == plan.Node_SINK_SCAN || node.NodeType == plan.Node_RECURSIVE_SCAN) && node.TableDef == nil {
 			return nil
-		}
-		if node.TableDef != nil {
-			// Defaults, generated columns, CHECK and ON UPDATE expressions are
-			// evaluated locally when a persisted TableDef is rebound. Keep this
-			// final read boundary in addition to the writer-side DDL checks.
-			if err := RequirePersistedIPFunctionProtocol(
-				builder.GetContext(), builder.compCtx.GetProcess(), node.TableDef); err != nil {
-				return err
-			}
 		}
 		if len(alias.Cols) > len(node.TableDef.Cols) {
 			return moerr.NewSyntaxErrorf(builder.GetContext(), "table %q has %d columns available but %d columns specified", alias.Alias, len(node.TableDef.Cols), len(alias.Cols))

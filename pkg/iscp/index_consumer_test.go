@@ -126,6 +126,7 @@ type MockRetriever struct {
 	deleteBatch     *AtomicBatch
 	noMoreData      bool
 	dtype           int8
+	sourceTableID   uint64
 	updateWatermark func(context.Context, string, client.TxnOperator) error
 }
 
@@ -133,7 +134,7 @@ func (r *MockRetriever) Next() *ISCPData {
 	logutil.Infof("TxRetriever Next()")
 	if !r.noMoreData {
 		r.noMoreData = true
-		d := &ISCPData{insertBatch: r.insertBatch, deleteBatch: r.deleteBatch, noMoreData: false, err: nil}
+		d := &ISCPData{SourceTableID: r.sourceTableID, insertBatch: r.insertBatch, deleteBatch: r.deleteBatch, noMoreData: false, err: nil}
 		d.Set(0) // never close
 		return d
 	}

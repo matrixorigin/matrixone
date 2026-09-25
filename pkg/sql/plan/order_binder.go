@@ -273,7 +273,7 @@ func qualifyOrderExpression(
 	}
 	if protectGroupingArgs {
 		var bindErr error
-		walkGroupingSetOrderByExpr(qualified, func(expr tree.Expr) bool {
+		walkASTExpressions(qualified, func(expr tree.Expr) bool {
 			function, ok := expr.(*tree.FuncExpr)
 			if !ok || function.FuncName == nil || function.FuncName.Compare() != "grouping" {
 				return true
@@ -292,7 +292,7 @@ func qualifyOrderExpression(
 	}
 
 	fallbackNames := make(map[string]struct{})
-	walkGroupingSetOrderByExpr(qualified, func(expr tree.Expr) bool {
+	walkASTExpressions(qualified, func(expr tree.Expr) bool {
 		if _, subquery := expr.(*tree.Subquery); subquery {
 			return false
 		}

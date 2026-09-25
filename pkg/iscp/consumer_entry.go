@@ -68,16 +68,14 @@ func NewJobEntryWithStatus(
 		jobName:            jobName,
 		jobID:              jobID,
 		jobSpec:            &jobSpec.TriggerSpec,
+		sourceTables:       append([]TableInfo(nil), jobSpec.ConsumerInfo.SourceTableInfos()...),
 		watermark:          watermark,
 		persistedWatermark: watermark,
 		state:              state,
 		stage:              stage,
 		dropAt:             dropAt,
 		currentLSN:         currentLSN,
-		// Only the trigger spec is retained, so the consumer class is recorded
-		// here: it selects the watermark flush threshold below, and it is the
-		// one thing about the consumer this entry still needs to know.
-		isIndexJob: jobSpec.ConsumerInfo.ConsumerType == int8(ConsumerType_IndexSync),
+		consumerType:       ConsumerType(jobSpec.ConsumerInfo.ConsumerType),
 	}
 	return jobEntry
 }
@@ -90,11 +88,26 @@ func (jobEntry *JobEntry) update(
 	state int8,
 	dropAt types.Timestamp,
 ) error {
+	applyMetadata := func() {
+		jobEntry.jobSpec = &jobSpec.TriggerSpec
+		jobEntry.consumerType = ConsumerType(jobSpec.ConsumerInfo.ConsumerType)
+		jobEntry.sourceTables = append([]TableInfo(nil), jobSpec.ConsumerInfo.SourceTableInfos()...)
+		jobEntry.dropAt = dropAt
+	}
 	if jobEntry.state == ISCPJobState_Error {
 		// Lifecycle progress is terminal, but drop/recreate log records still need
 		// to update the metadata used by GC and generation management.
-		jobEntry.jobSpec = &jobSpec.TriggerSpec
-		jobEntry.dropAt = dropAt
+		applyMetadata()
+		return nil
+	}
+	// Running/Pending is an admission state, not durable progress.  A job
+	// that is still Completed in this executor generation has no worker that
+	// can be represented by an incoming in-flight catalog row.  Keep it
+	// schedulable; otherwise a transient task-runner lookup failure can
+	// repeatedly demote the job and strand its initial snapshot.
+	if jobEntry.state == ISCPJobState_Completed &&
+		(state == ISCPJobState_Pending || state == ISCPJobState_Running) {
+		applyMetadata()
 		return nil
 	}
 	nextStage := max(jobEntry.stage, jobStatus.Stage)
@@ -111,8 +124,7 @@ func (jobEntry *JobEntry) update(
 			// needed (and job_state != Error would reject it). Accept the terminal
 			// version without moving the last known-good watermark backwards.
 			if state == ISCPJobState_Error {
-				jobEntry.jobSpec = &jobSpec.TriggerSpec
-				jobEntry.dropAt = dropAt
+				applyMetadata()
 				jobEntry.stage = nextStage
 				jobEntry.currentLSN = jobStatus.LSN
 				jobEntry.state = ISCPJobState_Error
@@ -142,8 +154,7 @@ func (jobEntry *JobEntry) update(
 			}
 			// Preserve the last known-good watermark. Only the LSN and terminal
 			// state advance to reflect the durable fence.
-			jobEntry.jobSpec = &jobSpec.TriggerSpec
-			jobEntry.dropAt = dropAt
+			applyMetadata()
 			jobEntry.stage = nextStage
 			jobEntry.currentLSN = jobStatus.LSN
 			jobEntry.state = ISCPJobState_Error
@@ -155,8 +166,7 @@ func (jobEntry *JobEntry) update(
 		jobEntry.state = state
 	}
 	// Job metadata and Stage can change without a progress/state transition.
-	jobEntry.jobSpec = &jobSpec.TriggerSpec
-	jobEntry.dropAt = dropAt
+	applyMetadata()
 	jobEntry.stage = nextStage
 	return nil
 }
@@ -207,7 +217,7 @@ func (jobEntry *JobEntry) UpdateWatermark(
 // whether the index may back a mandatory filter, so a stale persisted value
 // costs query plans, not just restart work.
 func (jobEntry *JobEntry) flushThreshold(general time.Duration) time.Duration {
-	if !jobEntry.isIndexJob || jobEntry.tableInfo == nil ||
+	if jobEntry.consumerType != ConsumerType_IndexSync || jobEntry.tableInfo == nil ||
 		jobEntry.tableInfo.exec == nil || jobEntry.tableInfo.exec.option == nil {
 		return general
 	}
