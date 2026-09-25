@@ -133,7 +133,7 @@ type service struct {
 
 	options struct {
 		fs            fileservice.FileService
-		writeFunc     func(loadAction) error
+		writeFunc     func(context.Context, loadAction) error
 		flushDuration time.Duration
 		flushBytes    int
 		bufferSize    int
@@ -289,6 +289,11 @@ func (s *service) handleEvent(
 
 	var w *csv.Writer
 	var f *os.File
+	defer func() {
+		if f != nil {
+			_ = f.Close()
+		}
+	}()
 	records := make([]string, columns)
 	current := ""
 	sum := 0
@@ -337,12 +342,16 @@ func (s *service) handleEvent(
 				zap.Error(err))
 		}
 
-		s.loadC <- loadAction{
+		select {
+		case s.loadC <- loadAction{
 			sql: fmt.Sprintf("load data infile '%s' into table %s fields terminated by ','",
 				current,
 				tableName),
 			file:  current,
 			table: tableName,
+		}:
+		case <-ctx.Done():
+			return
 		}
 		sum = 0
 		open()
@@ -390,11 +399,18 @@ func (s *service) handleLoad(ctx context.Context) {
 				default:
 				}
 
-				if err := s.options.writeFunc(e); err != nil {
+				if err := s.options.writeFunc(ctx, e); err != nil {
+					if ctx.Err() != nil {
+						return
+					}
 					s.logger.Error("load trace data to table failed, retry later",
 						zap.String("file", e.file),
 						zap.Error(err))
-					time.Sleep(time.Second * 5)
+					select {
+					case <-ctx.Done():
+						return
+					case <-time.After(time.Second * 5):
+					}
 					continue
 				}
 
@@ -412,9 +428,12 @@ func (s *service) handleLoad(ctx context.Context) {
 func (s *service) watch(ctx context.Context) {
 	ticker := time.NewTicker(time.Second * 10)
 	defer ticker.Stop()
+	s.watchWithTicks(ctx, ticker.C)
+}
 
+func (s *service) watchWithTicks(ctx context.Context, ticks <-chan time.Time) {
 	fetch := func() ([]string, []string, error) {
-		ctx, cancel := context.WithTimeoutCause(context.Background(), time.Minute*5, moerr.CauseWatch)
+		ctx, cancel := context.WithTimeoutCause(ctx, time.Minute*5, moerr.CauseWatch)
 		defer cancel()
 		var features []string
 		var states []string
@@ -446,13 +465,16 @@ func (s *service) watch(ctx context.Context) {
 		select {
 		case <-ctx.Done():
 			return
-		case <-ticker.C:
+		case <-ticks:
 			if !s.atomic.flushEnabled.Load() {
 				continue
 			}
 
 			features, states, err := fetch()
 			if err != nil {
+				if ctx.Err() != nil {
+					return
+				}
 				s.logger.Error("failed to fetch trace state",
 					zap.Error(err))
 				continue
@@ -479,17 +501,17 @@ func (s *service) watch(ctx context.Context) {
 			}
 
 			if needRefresh {
-				if err := s.RefreshTableFilters(); err != nil {
+				if err := s.refreshTableFilters(ctx); err != nil {
 					s.logger.Error("failed to refresh table filters",
 						zap.Error(err))
 				}
 
-				if err := s.RefreshTxnFilters(); err != nil {
+				if err := s.refreshTxnFilters(ctx); err != nil {
 					s.logger.Error("failed to refresh txn filters",
 						zap.Error(err))
 				}
 
-				if err := s.RefreshStatementFilters(); err != nil {
+				if err := s.refreshStatementFilters(ctx); err != nil {
 					s.logger.Error("failed to refresh statement filters",
 						zap.Error(err))
 				}
