@@ -25,6 +25,38 @@ import (
 
 var dayInMonth []int = []int{31, 28, 31, 30, 31, 30, 31, 31, 30, 31, 30, 31}
 
+// Calendar precedence is intentional for a successfully parsed compact date.
+// Padding a TIME to eight digits must not make an impossible calendar date.
+func TestCalendarCandidateCompactDurationBoundary(t *testing.T) {
+	for _, tc := range []struct {
+		input    string
+		calendar bool
+	}{
+		{"1234", false},
+		{"0001234", false},
+		{"00001234", false},
+		{"00001234.5", false},
+		{"00001234.123456", false},
+		{"00000000.5", false},
+		{"00010101.5", false},
+		{"00000101", false}, // zero-year DATE cannot be represented, but 00:01:01 can.
+		{"08385959", false}, // impossible calendar month, valid bounded TIME.
+		{"00010101", true},  // year 0001 is a valid compact DATE in MatrixOne.
+		{"00000000", true},  // established zero-date sentinel.
+		{"20240229", true},
+		{"20240230", true},       // invalid unambiguous calendar must not become TIME.
+		{"00000000001234", true}, // 14-digit datetime grammar retains precedence.
+		{"20240229123456.123456", true},
+		{"2024.2.29", true},
+		{"2024@2@29", true},
+		{"1234.5", false},
+	} {
+		t.Run(tc.input, func(t *testing.T) {
+			require.Equal(t, tc.calendar, IsCalendarStringCandidate(tc.input))
+		})
+	}
+}
+
 func TestDate(t *testing.T) {
 	fmt.Println(DateFromCalendar(1215, 6, 15).Calendar(true))
 	fmt.Println(DateFromCalendar(1776, 7, 4).Calendar(true))

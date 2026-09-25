@@ -116,7 +116,17 @@ func IsCalendarStringCandidate(s string) bool {
 	if dot := strings.IndexByte(s, '.'); dot >= 0 {
 		whole = s[:dot]
 	}
-	return (len(whole) == 8 || len(whole) == 14) && isAllDigit(whole)
+	if (len(whole) != 8 && len(whole) != 14) || !isAllDigit(whole) {
+		return false
+	}
+	if len(whole) == 8 && whole[0] == '0' {
+		// Eight digits can be a compact DATE or a zero-padded TIME. Keep
+		// accepted compact dates (including the zero-date sentinel) as dates;
+		// an impossible leading-zero calendar belongs to the TIME grammar.
+		_, err := ParseDateCast(s)
+		return err == nil
+	}
+	return true
 }
 
 // ParseDatetime will parse a string to be a Datetime
