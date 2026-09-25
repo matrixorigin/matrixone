@@ -9240,9 +9240,9 @@ func isBase64Space(b byte) bool {
 	return b == ' ' || (b >= '\t' && b <= '\r') || b == 0xa0
 }
 
-// VecFromBase64 decodes a base64-encoded string into a vector (vecf32 or vecf64).
+// VecFromBase64 decodes a base64-encoded string into a vector of T elements.
 // The base64 payload must be the raw little-endian bytes of the vector elements,
-// as produced by to_base64(vecf32_col) or to_base64(vecf64_col).
+// as produced by to_base64 on a vector value.
 func VecFromBase64[T types.ArrayElement](parameters []*vector.Vector, result vector.FunctionResultWrapper, proc *process.Process, length int, selectList *FunctionSelectList) error {
 	source := vector.GenerateFunctionStrParameter(parameters[0])
 	rs := vector.MustFunctionResult[types.Varlena](result)
@@ -9294,11 +9294,11 @@ func VecFromBase64[T types.ArrayElement](parameters []*vector.Vector, result vec
 		}
 		n, err := base64.StdEncoding.Decode(buf, data)
 		if err != nil {
-			return moerr.NewInternalErrorNoCtx("vec_from_base64: invalid base64 input")
+			return moerr.NewInvalidInputNoCtx("vec_from_base64: invalid base64 input")
 		}
 
 		if n%elemSize != 0 {
-			return moerr.NewInternalErrorNoCtxf("vec_from_base64: decoded length %d is not a multiple of %d bytes", n, elemSize)
+			return moerr.NewInvalidInputNoCtxf("vec_from_base64: decoded length %d is not a multiple of %d bytes", n, elemSize)
 		}
 
 		if err = rs.AppendBytes(buf[:n], false); err != nil {
@@ -9524,6 +9524,8 @@ func Uncompress(parameters []*vector.Vector, result vector.FunctionResultWrapper
 	source := vector.GenerateFunctionStrParameter(parameters[0])
 	rs := vector.MustFunctionResult[types.Varlena](result)
 	var warnings process.WarningAccumulator
+	warnings.SetWarningRetentionForProcess(proc)
+	defer warnings.Reset()
 
 	rowCount := uint64(length)
 	for i := uint64(0); i < rowCount; i++ {
@@ -9930,6 +9932,8 @@ func uncompressedLengthResult[Tr types.FixedSizeTExceptStrType](parameters []*ve
 	source := vector.GenerateFunctionStrParameter(parameters[0])
 	rs := vector.MustFunctionResult[Tr](result)
 	var warnings process.WarningAccumulator
+	warnings.SetWarningRetentionForProcess(proc)
+	defer warnings.Reset()
 
 	rowCount := uint64(length)
 	for i := uint64(0); i < rowCount; i++ {

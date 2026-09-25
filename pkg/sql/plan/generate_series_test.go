@@ -40,6 +40,24 @@ func TestGenerateSeriesDatetimeLiteralScale(t *testing.T) {
 	}
 }
 
+func TestPreparedGenerateSeriesParameterInfo(t *testing.T) {
+	prepared, err := runOneStmt(NewMockOptimizer(false), t,
+		"prepare series_info from 'select result from generate_series(?,?,?) g'")
+	require.NoError(t, err)
+	positions, parameterized := PreparedPlanGenerateSeriesParameterInfo(
+		prepared.GetDcl().GetPrepare().Plan)
+	require.True(t, parameterized)
+	require.Equal(t, []int32{0, 1}, positions)
+
+	prepared, err = runOneStmt(NewMockOptimizer(false), t,
+		"prepare series_step from 'select result from generate_series(''2020-01-01'',''2020-01-02'',?) g'")
+	require.NoError(t, err)
+	positions, parameterized = PreparedPlanGenerateSeriesParameterInfo(
+		prepared.GetDcl().GetPrepare().Plan)
+	require.True(t, parameterized)
+	require.Empty(t, positions)
+}
+
 func TestGenerateSeriesDatetimeScale(t *testing.T) {
 	columnExpr := func(typ types.Type) *planpb.Expr {
 		return &planpb.Expr{
@@ -112,6 +130,25 @@ func TestBindGenerateSeriesArgs(t *testing.T) {
 		require.Equal(t, types.T_int64, typ.Oid)
 	})
 
+	t.Run("numeric first argument casts later placeholders", func(t *testing.T) {
+		markerType := types.T_text.ToType()
+		exprs := []*planpb.Expr{
+			MakePlan2Int64ConstExprWithType(1),
+			{Typ: makePlan2Type(&markerType), Expr: &planpb.Expr_P{P: &planpb.ParamRef{Pos: 0}}},
+			{Typ: makePlan2Type(&markerType), Expr: &planpb.Expr_P{P: &planpb.ParamRef{Pos: 1}}},
+		}
+		bound, typ, err := bindGenerateSeriesArgs(context.Background(), exprs)
+		require.NoError(t, err)
+		require.Equal(t, types.T_int64, typ.Oid)
+		require.Same(t, exprs[0], bound[0])
+		for i := 1; i < len(bound); i++ {
+			require.Equal(t, types.T_int64, types.T(bound[i].Typ.Id))
+			require.Equal(t, "cast", bound[i].GetF().GetFunc().GetObjName())
+			require.NotNil(t, bound[i].GetF().Args[0].GetP())
+			require.Same(t, exprs[i], bound[i].GetF().Args[0])
+		}
+	})
+
 	t.Run("string endpoints are cast without modifying input", func(t *testing.T) {
 		exprs := []*planpb.Expr{
 			MakePlan2StringConstExprWithType("2020-02-29 23:59:59.124356"),
@@ -147,6 +184,136 @@ func TestBindGenerateSeriesArgs(t *testing.T) {
 		require.Same(t, exprs[1], bound[1])
 		require.Equal(t, "cast", bound[0].GetF().GetFunc().GetObjName())
 	})
+
+	t.Run("temporal first argument casts step placeholder", func(t *testing.T) {
+		startType := types.T_datetime.ToType()
+		markerType := types.T_text.ToType()
+		exprs := []*planpb.Expr{
+			columnExpr(startType, 0),
+			MakePlan2StringConstExprWithType("2020-01-03 00:00:00"),
+			{Typ: makePlan2Type(&markerType), Expr: &planpb.Expr_P{P: &planpb.ParamRef{Pos: 0}}},
+		}
+		bound, typ, err := bindGenerateSeriesArgs(context.Background(), exprs)
+		require.NoError(t, err)
+		require.Equal(t, types.T_datetime, typ.Oid)
+		require.Equal(t, types.T_varchar, types.T(bound[2].Typ.Id))
+		require.Equal(t, "cast", bound[2].GetF().GetFunc().GetObjName())
+		require.Same(t, exprs[2], bound[2].GetF().Args[0])
+	})
+}
+
+func TestPreparedGenerateSeriesEndpointDomain(t *testing.T) {
+	prepared, err := runOneStmt(NewMockOptimizer(false), t,
+		"prepare gs from 'select min(result), max(result) from generate_series(?,?,?) g'")
+	require.NoError(t, err)
+	original := prepared.GetDcl().GetPrepare().Plan
+	require.True(t, PreparedPlanNeedsRuntimeSpecialization(original))
+	findScan := func(p *planpb.Plan) *planpb.Node {
+		for _, node := range p.GetQuery().Nodes {
+			if node.NodeType == planpb.Node_FUNCTION_SCAN && node.TableDef.GetTblFunc().GetName() == "generate_series" {
+				return node
+			}
+		}
+		t.Fatal("generate_series scan not found")
+		return nil
+	}
+	require.Equal(t, types.T_int64, types.T(findScan(original).TableDef.Cols[0].Typ.Id))
+	values := []any{
+		ParamValue{Value: int64(1), SourceType: types.T_int64.ToType(), HasSourceType: true},
+		ParamValue{Value: int64(9), SourceType: types.T_int64.ToType(), HasSourceType: true},
+		ParamValue{Value: int64(2), SourceType: types.T_int64.ToType(), HasSourceType: true},
+	}
+	bound, changed, err := FillValuesOfParamsInPlanWithSpecialization(context.Background(), original, values)
+	require.NoError(t, err)
+	require.True(t, changed)
+	scan := findScan(bound)
+	require.Equal(t, types.T_int64, types.T(scan.TableDef.Cols[0].Typ.Id))
+	for _, arg := range scan.TblFuncExprList {
+		require.Equal(t, types.T_int64, types.T(arg.Typ.Id))
+	}
+	columns := GetResultColumnsFromPlan(bound)
+	require.Len(t, columns, 2)
+	require.Equal(t, types.T_int64, types.T(columns[0].Typ.Id))
+	require.Equal(t, types.T_int64, types.T(columns[1].Typ.Id))
+	require.Equal(t, types.T_int64, types.T(findScan(original).TableDef.Cols[0].Typ.Id))
+
+	temporal := []any{
+		ParamValue{Value: "2020-01-01 00:00:00", SourceType: types.T_text.ToType(), HasSourceType: true},
+		ParamValue{Value: "2020-01-03 00:00:00", SourceType: types.T_text.ToType(), HasSourceType: true},
+		ParamValue{Value: "1 day", SourceType: types.T_text.ToType(), HasSourceType: true},
+	}
+	datePlan, changed, err := FillValuesOfParamsInPlanWithSpecialization(context.Background(), original, temporal)
+	require.NoError(t, err)
+	require.True(t, changed)
+	dateScan := findScan(datePlan)
+	require.Equal(t, types.T_varchar, types.T(dateScan.TableDef.Cols[0].Typ.Id))
+	for _, arg := range dateScan.TblFuncExprList[:2] {
+		require.Equal(t, types.T_datetime, types.T(arg.Typ.Id))
+	}
+	require.Equal(t, types.T_varchar, types.T(dateScan.TblFuncExprList[2].Typ.Id))
+	for _, column := range GetResultColumnsFromPlan(datePlan) {
+		require.Equal(t, types.T_varchar, types.T(column.Typ.Id))
+	}
+
+	binary := []any{
+		ParamValue{Value: "1", RuntimeType: types.T_int64.ToType(), HasRuntimeType: true, IsBinaryProtocol: true},
+		ParamValue{Value: "9", RuntimeType: types.T_int64.ToType(), HasRuntimeType: true, IsBinaryProtocol: true},
+		ParamValue{Value: "2", RuntimeType: types.T_int64.ToType(), HasRuntimeType: true, IsBinaryProtocol: true},
+	}
+	binaryPlan, changed, err := FillValuesOfParamsInPlanWithSpecialization(context.Background(), original, binary)
+	require.NoError(t, err)
+	require.True(t, changed)
+	require.Equal(t, types.T_int64, types.T(findScan(binaryPlan).TableDef.Cols[0].Typ.Id))
+
+	unsigned := []any{
+		ParamValue{Value: uint64(1), SourceType: types.T_uint64.ToType(), HasSourceType: true},
+		ParamValue{Value: uint64(9), SourceType: types.T_uint64.ToType(), HasSourceType: true},
+		ParamValue{Value: uint64(2), SourceType: types.T_uint64.ToType(), HasSourceType: true},
+	}
+	unsignedPlan, changed, err := FillValuesOfParamsInPlanWithSpecialization(context.Background(), original, unsigned)
+	require.NoError(t, err)
+	require.True(t, changed)
+	unsignedScan := findScan(unsignedPlan)
+	require.Equal(t, types.T_int64, types.T(unsignedScan.TableDef.Cols[0].Typ.Id))
+	for _, arg := range unsignedScan.TblFuncExprList {
+		require.Equal(t, types.T_int64, types.T(arg.Typ.Id))
+	}
+
+	typedTemporal := []any{
+		ParamValue{Value: "2020-01-01 00:00:00", RuntimeType: types.T_datetime.ToType(), HasRuntimeType: true, IsBinaryProtocol: true},
+		ParamValue{Value: "2020-01-03 00:00:00", RuntimeType: types.T_datetime.ToType(), HasRuntimeType: true, IsBinaryProtocol: true},
+		ParamValue{Value: "1 day", RuntimeType: types.T_varchar.ToType(), HasRuntimeType: true, IsBinaryProtocol: true},
+	}
+	typedTemporalPlan, changed, err := FillValuesOfParamsInPlanWithSpecialization(context.Background(), original, typedTemporal)
+	require.NoError(t, err)
+	require.True(t, changed)
+	typedTemporalScan := findScan(typedTemporalPlan)
+	require.Equal(t, types.T_datetime, types.T(typedTemporalScan.TableDef.Cols[0].Typ.Id))
+	for _, column := range GetResultColumnsFromPlan(typedTemporalPlan) {
+		require.Equal(t, types.T_datetime, types.T(column.Typ.Id))
+	}
+}
+
+func TestPreparedGenerateSeriesMixedTemporalEndpoint(t *testing.T) {
+	prepared, err := runOneStmt(NewMockOptimizer(false), t,
+		"prepare gs_mixed from 'select result from generate_series(?,''2020-01-03 00:00:00'',''1 day'') g'")
+	require.NoError(t, err)
+	original := prepared.GetDcl().GetPrepare().Plan
+	bound, changed, err := FillValuesOfParamsInPlanWithSpecialization(context.Background(), original,
+		[]any{ParamValue{Value: "2020-01-01 00:00:00", SourceType: types.T_text.ToType(), HasSourceType: true}})
+	require.NoError(t, err)
+	require.True(t, changed)
+	for _, node := range bound.GetQuery().Nodes {
+		if node.NodeType != planpb.Node_FUNCTION_SCAN || node.TableDef.GetTblFunc().GetName() != "generate_series" {
+			continue
+		}
+		for _, arg := range node.TblFuncExprList[:2] {
+			require.Equal(t, types.T_datetime, types.T(arg.Typ.Id))
+		}
+		require.Equal(t, types.T_varchar, types.T(node.TableDef.Cols[0].Typ.Id))
+		return
+	}
+	t.Fatal("generate_series scan not found")
 }
 
 func TestBuildGenerateSeriesOwnsStableResultSchema(t *testing.T) {

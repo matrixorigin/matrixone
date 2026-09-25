@@ -1120,18 +1120,21 @@ func (l *LocalFS) NewWriter(ctx context.Context, filePath string) (io.WriteClose
 	if err != nil {
 		return nil, err
 	}
-	defer func() {
-		if err != nil {
-			_ = f.Close()
-			_ = os.Remove(f.Name())
-		}
-	}()
 
 	fileWithChecksum, put := l.newChecksumOSFile(ctx, f)
 
 	return &writeCloser{
 		w: fileWithChecksum,
 		closeFunc: func() error {
+			open, owned := true, true
+			defer func() {
+				if open {
+					_ = f.Close()
+				}
+				if owned {
+					_ = os.Remove(f.Name())
+				}
+			}()
 			// put
 			defer put.Put()
 			// sync
@@ -1140,19 +1143,22 @@ func (l *LocalFS) NewWriter(ctx context.Context, filePath string) (io.WriteClose
 			}
 			fadviseDontNeed(f, 0, 0)
 			// close
-			if err := f.Close(); err != nil {
+			err := f.Close()
+			open = false
+			if err != nil {
 				return err
 			}
 			// ensure parent dir
 			parentDir, _ := filepath.Split(nativePath)
-			err = l.ensureDir(parentDir)
-			if err != nil {
+			if err := l.ensureDir(parentDir); err != nil {
 				return err
 			}
 			// move
 			if err := os.Rename(f.Name(), nativePath); err != nil {
 				return err
 			}
+			// Rename transfers ownership to the destination, even if sync fails.
+			owned = false
 			// sync parent dir
 			if err := l.syncDir(parentDir); err != nil {
 				return err

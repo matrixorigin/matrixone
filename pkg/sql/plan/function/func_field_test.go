@@ -35,6 +35,8 @@ func TestFieldExactTypeResolution(t *testing.T) {
 		{"mixed integer", []types.Type{types.T_uint64.ToType(), types.T_int64.ToType()}, 13, types.T_any},
 		{"float control", []types.Type{types.T_float64.ToType(), types.New(types.T_decimal128, 38, 0)}, 10, types.T_float64},
 		{"string control", []types.Type{types.T_varchar.ToType(), types.New(types.T_decimal128, 38, 0)}, 10, types.T_float64},
+		{"binary strings", []types.Type{types.T_varbinary.ToType(), types.T_binary.ToType()}, 0, types.T_any},
+		{"mixed string families", []types.Type{types.T_text.ToType(), types.T_blob.ToType()}, 0, types.T_any},
 		{"bit", []types.Type{types.T_bit.ToType(), types.T_bit.ToType()}, 8, types.T_any},
 	} {
 		t.Run(tc.name, func(t *testing.T) {

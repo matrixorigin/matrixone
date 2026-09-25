@@ -42,6 +42,7 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/common/mpool"
 	moruntime "github.com/matrixorigin/matrixone/pkg/common/runtime"
 	"github.com/matrixorigin/matrixone/pkg/defines"
+	"github.com/matrixorigin/matrixone/pkg/frontend/databranchutils"
 	mock_frontend "github.com/matrixorigin/matrixone/pkg/frontend/test"
 	mock_lock "github.com/matrixorigin/matrixone/pkg/frontend/test/mock_lock"
 	icebergmodel "github.com/matrixorigin/matrixone/pkg/iceberg/model"
@@ -2402,6 +2403,19 @@ func TestCheckSysMoCatalogPitrResult(t *testing.T) {
 		assert.Equal(t, "d", unit)
 	})
 
+	t.Run("update needed with catalog tinyint length", func(t *testing.T) {
+		v1 := vector.NewVec(types.T_uint8.ToType())
+		_ = vector.AppendFixed(v1, uint8(5), false, mp)
+		v2 := vector.NewVec(types.T_varchar.ToType())
+		_ = vector.AppendBytes(v2, []byte("d"), false, mp)
+		needInsert, needUpdate, length, unit, err := CheckSysMoCatalogPitrResult(ctx, []*vector.Vector{v1, v2}, 10, "d")
+		assert.NoError(t, err)
+		assert.False(t, needInsert)
+		assert.True(t, needUpdate)
+		assert.Equal(t, uint64(10), length)
+		assert.Equal(t, "d", unit)
+	})
+
 	t.Run("no update needed", func(t *testing.T) {
 		v1 := vector.NewVec(types.T_uint64.ToType())
 		_ = vector.AppendFixed(v1, uint64(20), false, mp)
@@ -3240,6 +3254,225 @@ func TestAlterTemporaryTableRejectsRecreatedRelation(t *testing.T) {
 	}
 }
 
+func TestTruncateLocksLifecycleBeforeTable(t *testing.T) {
+	ctrl := gomock.NewController(t)
+	proc := testutil.NewProcess(t)
+	proc.Base.SessionInfo.Buf = buffer.New()
+	proc.Ctx = defines.AttachAccountId(context.Background(), catalog.System_Account)
+	proc.ReplaceTopCtx(proc.Ctx)
+	txnClient, txnOp := newTestTxnClientAndOpWithPessimistic(ctrl)
+	proc.Base.TxnClient = txnClient
+	proc.Base.TxnOperator = txnOp
+
+	eng := newStubEngine()
+	db := newStubDatabase("test")
+	db.rels["t"] = newStubRelation("t")
+	eng.dbs["test"] = db
+
+	var order []string
+	stop := errors.New("stop after lineage barrier")
+	exec := &recordingInternalSQLExecutor{mocker: func(sql string) (executor.Result, error) {
+		if sql == databranchutils.LineageOwnerLifecyclePessimisticLockSQL() {
+			order = append(order, "lifecycle")
+			return executor.Result{}, nil
+		}
+		require.Equal(t, databranchutils.LineageOwnerLifecycleLockSQL(), sql)
+		order = append(order, "barrier")
+		return executor.Result{}, stop
+	}}
+	rt := moruntime.ServiceRuntime(proc.GetService())
+	previous, hadPrevious := rt.GetGlobalVariables(moruntime.InternalSQLExecutor)
+	rt.SetGlobalVariables(moruntime.InternalSQLExecutor, exec)
+	t.Cleanup(func() {
+		if hadPrevious {
+			rt.SetGlobalVariables(moruntime.InternalSQLExecutor, previous)
+		} else {
+			rt.CompareAndDeleteGlobalVariables(moruntime.InternalSQLExecutor, exec)
+		}
+	})
+
+	stub := gostub.Stub(&lockMoTable, func(_ *Compile, _, _ string, _ lock.LockMode) error {
+		order = append(order, "table")
+		return nil
+	})
+	defer stub.Reset()
+	storageStub := gostub.Stub(&lockTable, func(_ context.Context, _ engine.Engine, _ *process.Process, _ engine.Relation, _ string, _ bool) error {
+		order = append(order, "storage")
+		return nil
+	})
+	defer storageStub.Reset()
+
+	c := NewCompile("test", "test", "truncate table t", "", "", eng, proc, nil, false, nil, time.Now())
+	defer c.Release()
+	s := &Scope{Plan: &plan2.Plan{Plan: &plan2.Plan_Ddl{Ddl: &plan2.DataDefinition{
+		Definition: &plan2.DataDefinition_TruncateTable{TruncateTable: &plan2.TruncateTable{
+			Database: "test", Table: "t", TableId: 1,
+		}},
+	}}}}
+	require.ErrorIs(t, s.TruncateTable(c), stop)
+	require.Equal(t, []string{"lifecycle", "table", "storage", "barrier"}, order)
+}
+
+func TestAlterCopyAndTruncateSerializeBeforeTableLocks(t *testing.T) {
+	ctx, cancel := context.WithTimeout(t.Context(), 10*time.Second)
+	ctrl := gomock.NewController(t)
+	eng := newStubEngine()
+	db := newStubDatabase("test")
+	db.rels["t"] = newStubRelation("t")
+	eng.dbs["test"] = db
+
+	newCompile := func(sql string) *Compile {
+		proc := testutil.NewProcess(t)
+		proc.Base.SessionInfo.Buf = buffer.New()
+		proc.Ctx = defines.AttachAccountId(ctx, catalog.System_Account)
+		proc.ReplaceTopCtx(proc.Ctx)
+		txnClient, txnOp := newTestTxnClientAndOpWithPessimistic(ctrl)
+		proc.Base.TxnClient = txnClient
+		proc.Base.TxnOperator = txnOp
+		return NewCompile("test", "test", sql, "", "", eng, proc, nil, false, nil, time.Now())
+	}
+	alterCompile := newCompile("alter table t add column a int")
+	defer alterCompile.Release()
+	truncateCompile := newCompile("truncate table t")
+	defer truncateCompile.Release()
+
+	var mu sync.Mutex
+	var order []string
+	record := func(event string) {
+		mu.Lock()
+		order = append(order, event)
+		mu.Unlock()
+	}
+	alterHasGate := make(chan struct{})
+	resumeAlter := make(chan struct{})
+	var resumeOnce sync.Once
+	resume := func() { resumeOnce.Do(func() { close(resumeAlter) }) }
+	truncateRequestsGate := make(chan struct{})
+	alterFinished := make(chan struct{})
+	var gateCalls atomic.Int32
+	stop := errors.New("stop after table lock")
+	exec := &recordingInternalSQLExecutor{mocker: func(sql string) (executor.Result, error) {
+		if sql != databranchutils.LineageOwnerLifecyclePessimisticLockSQL() {
+			return executor.Result{}, fmt.Errorf("unexpected lifecycle SQL: %s", sql)
+		}
+		switch gateCalls.Add(1) {
+		case 1:
+			record("alter gate")
+			close(alterHasGate)
+			select {
+			case <-resumeAlter:
+				return executor.Result{}, nil
+			case <-ctx.Done():
+				return executor.Result{}, ctx.Err()
+			}
+		case 2:
+			close(truncateRequestsGate)
+			// The first transaction holds the gate through its table lock.
+			select {
+			case <-alterFinished:
+				record("truncate gate")
+				return executor.Result{}, nil
+			case <-ctx.Done():
+				return executor.Result{}, ctx.Err()
+			}
+		default:
+			return executor.Result{}, errors.New("unexpected lifecycle lock")
+		}
+	}}
+	rt := moruntime.ServiceRuntime(alterCompile.proc.GetService())
+	previous, hadPrevious := rt.GetGlobalVariables(moruntime.InternalSQLExecutor)
+	rt.SetGlobalVariables(moruntime.InternalSQLExecutor, exec)
+	t.Cleanup(func() {
+		if hadPrevious {
+			rt.SetGlobalVariables(moruntime.InternalSQLExecutor, previous)
+		} else {
+			rt.CompareAndDeleteGlobalVariables(moruntime.InternalSQLExecutor, exec)
+		}
+	})
+	lockDBStub := gostub.Stub(&lockMoDatabase, func(_ *Compile, _ string, _ lock.LockMode) error {
+		record("alter database")
+		return nil
+	})
+	defer lockDBStub.Reset()
+	lockTableStub := gostub.Stub(&lockMoTable, func(c *Compile, _, _ string, _ lock.LockMode) error {
+		if c == alterCompile {
+			record("alter table")
+		} else if c == truncateCompile {
+			record("truncate table")
+		} else {
+			return errors.New("unexpected compile")
+		}
+		return stop
+	})
+	defer lockTableStub.Reset()
+
+	alterScope := &Scope{Plan: &plan2.Plan{Plan: &plan2.Plan_Ddl{Ddl: &plan2.DataDefinition{
+		Definition: &plan2.DataDefinition_AlterTable{AlterTable: &plan2.AlterTable{
+			Database: "test", TableDef: &plan2.TableDef{Name: "t"},
+		}},
+	}}}}
+	truncateScope := &Scope{Plan: &plan2.Plan{Plan: &plan2.Plan_Ddl{Ddl: &plan2.DataDefinition{
+		Definition: &plan2.DataDefinition_TruncateTable{TruncateTable: &plan2.TruncateTable{
+			Database: "test", Table: "t", TableId: 1,
+		}},
+	}}}}
+	var workers sync.WaitGroup
+	defer func() {
+		cancel()
+		resume()
+		workers.Wait()
+	}()
+	alterResult := make(chan error, 1)
+	workers.Add(1)
+	go func() {
+		defer workers.Done()
+		defer close(alterFinished)
+		alterResult <- alterScope.AlterTableCopy(alterCompile)
+	}()
+	select {
+	case <-alterHasGate:
+	case err := <-alterResult:
+		require.FailNow(t, "ALTER reached a table lock before the lifecycle gate", "%v", err)
+	case <-ctx.Done():
+		require.NoError(t, ctx.Err())
+	}
+
+	truncateResult := make(chan error, 1)
+	workers.Add(1)
+	go func() {
+		defer workers.Done()
+		truncateResult <- truncateScope.TruncateTable(truncateCompile)
+	}()
+	select {
+	case <-truncateRequestsGate:
+	case err := <-truncateResult:
+		resume()
+		require.FailNow(t, "TRUNCATE reached a table lock before the lifecycle gate", "%v", err)
+	case <-ctx.Done():
+		resume()
+		require.NoError(t, ctx.Err())
+	}
+	resume()
+	select {
+	case err := <-alterResult:
+		require.ErrorIs(t, err, stop)
+	case <-ctx.Done():
+		require.NoError(t, ctx.Err())
+	}
+	select {
+	case err := <-truncateResult:
+		require.ErrorIs(t, err, stop)
+	case <-ctx.Done():
+		require.NoError(t, ctx.Err())
+	}
+	mu.Lock()
+	got := append([]string(nil), order...)
+	mu.Unlock()
+	require.Equal(t, []string{
+		"alter gate", "alter database", "alter table", "truncate gate", "truncate table",
+	}, got)
+}
+
 func TestTruncateTemporaryTableRejectsStaleRelation(t *testing.T) {
 	tests := []struct {
 		name         string
@@ -3292,6 +3525,7 @@ func TestTruncateTemporaryTableRejectsStaleRelation(t *testing.T) {
 }
 
 type recordingInternalSQLExecutor struct {
+	mu       sync.Mutex
 	mocker   func(string) (executor.Result, error)
 	contexts []context.Context
 	sqls     []string
@@ -3302,8 +3536,10 @@ func (e *recordingInternalSQLExecutor) Exec(
 	sql string,
 	_ executor.Options,
 ) (executor.Result, error) {
+	e.mu.Lock()
 	e.contexts = append(e.contexts, ctx)
 	e.sqls = append(e.sqls, sql)
+	e.mu.Unlock()
 	return e.mocker(sql)
 }
 
