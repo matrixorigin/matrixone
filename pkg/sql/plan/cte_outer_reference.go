@@ -56,6 +56,12 @@ func (builder *QueryBuilder) parameterizeLocalCTEs(outerID, subID int32, ctx *Bi
 				}
 			}
 			if needsDomain {
+				// These consumers require their own per-identity rewrite. Letting
+				// the generic predicate pull-up cross them merges outer rows or
+				// leaves hidden columns out of the set-operation schema.
+				if err := d.admitConsumer(subID); err != nil {
+					return err
+				}
 				if err := d.admit(); err != nil {
 					return err
 				}
@@ -85,6 +91,45 @@ func (builder *QueryBuilder) parameterizeLocalCTEs(outerID, subID int32, ctx *Bi
 		return id
 	}
 	return lower(subID), nil
+}
+
+// Inspect only the path from the subquery root to this CTE. A HAVING filter
+// above an aggregate removes the scalar row, unlike a missing aggregate group;
+// the COUNT fallback cannot distinguish the two after decorrelation.
+func (d *localCTEDomain) admitConsumer(root int32) error {
+	var visit func(int32, bool) error
+	visit = func(id int32, filtered bool) error {
+		if id < 0 || int(id) >= len(d.builder.qry.Nodes) {
+			return nil
+		}
+		n := d.builder.qry.Nodes[id]
+		switch n.NodeType {
+		case plan.Node_WINDOW, plan.Node_PARTITION:
+			return d.unsupported("consumer window needs per-outer-row partitioning")
+		case plan.Node_UNION, plan.Node_UNION_ALL, plan.Node_INTERSECT, plan.Node_INTERSECT_ALL,
+			plan.Node_MINUS, plan.Node_MINUS_ALL:
+			return d.unsupported("consumer set operation needs per-outer-row output schema")
+		case plan.Node_AGG:
+			if filtered {
+				return d.unsupported("consumer HAVING needs per-outer-row empty-group semantics")
+			}
+		case plan.Node_FILTER:
+			filtered = true
+		}
+		if d.builder.localCTERoots[id] && id != root && id != d.outerID {
+			return nil
+		}
+		for _, child := range n.Children {
+			if d.nodes[child] {
+				continue
+			}
+			if err := visit(child, filtered); err != nil {
+				return err
+			}
+		}
+		return nil
+	}
+	return visit(root, false)
 }
 
 func (d *localCTEDomain) collect(id int32) {

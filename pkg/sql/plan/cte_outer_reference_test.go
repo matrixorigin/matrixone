@@ -168,6 +168,21 @@ func TestLocalCTEOuterReferencesRejectUnsafeDomains(t *testing.T) {
 		sql  string
 	}{
 		{
+			name: "consumer window",
+			sql: `select (with q(n) as (select p.n_regionkey)
+				select row_number() over (order by n) from q) from tpch.nation p`,
+		},
+		{
+			name: "consumer having",
+			sql: `select (with q(n) as (select p.n_regionkey)
+				select count(*) from q having count(*)=0) from tpch.nation p`,
+		},
+		{
+			name: "consumer union all",
+			sql: `select (with q(n) as (select p.n_regionkey)
+				select n from q union all select n from q) from tpch.nation p`,
+		},
+		{
 			name: "outer join multiplicity",
 			sql: `select (with q(n) as (select p.n_regionkey) select n from q)
 				from tpch.nation p join tpch.nation a on a.n_regionkey=p.n_regionkey`,
