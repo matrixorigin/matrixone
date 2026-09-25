@@ -76,4 +76,14 @@ select id from ftg where match(body) against('苹果*' in boolean mode) order by
 2  𝄀
 3  𝄀
 4
+select id from ftg where match(body) against('苹果香*' in boolean mode) order by id;
+➤ id[4,32,0]  𝄀
+1  𝄀
+2  𝄀
+3
+select id from ftg where match(body) against('+苹果香*' in boolean mode) order by id;
+➤ id[4,32,0]  𝄀
+1  𝄀
+2  𝄀
+3
 drop database ft2_cjk_star;

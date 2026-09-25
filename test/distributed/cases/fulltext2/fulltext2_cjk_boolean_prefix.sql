@@ -62,4 +62,11 @@ select id from ftg where match(body) against('+苹果香蕉' in boolean mode) or
 -- single-word stem keeps its word prefix: expect 1,2,3,4.
 select id from ftg where match(body) against('苹果*' in boolean mode) order by id;
 
+-- gojieba review regression: the FINAL slot can be a PARTIAL Chinese word the * cut. 苹果香* segments
+-- to 苹果 + 香, but docs stored 苹果 + 香蕉/香瓜; the final CJK word must prefix-match (not stay exact)
+-- while the head 苹果 stays positional. Was EMPTY on the head. Expect 1,2,3 (香蕉 and 香瓜 both prefix
+-- 香); doc 4 (红苹果甜) is excluded because 苹果 is not the first word.
+select id from ftg where match(body) against('苹果香*' in boolean mode) order by id;
+select id from ftg where match(body) against('+苹果香*' in boolean mode) order by id;
+
 drop database ft2_cjk_star;

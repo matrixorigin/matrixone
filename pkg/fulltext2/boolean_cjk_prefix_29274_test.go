@@ -154,6 +154,51 @@ func TestBooleanGojiebaTrailingStarKeepsWholeStem(t *testing.T) {
 	require.ElementsMatch(t, []any{int64(1), int64(2), int64(3), int64(4)}, boolIDs(t, idx, ParserGojieba, "苹果*"))
 }
 
+// #29274 (review): under gojieba the FINAL slot can be a PARTIAL Chinese dictionary word that the *
+// cut. `苹果香*` segments to 苹果@0 + 香@6, but the document 苹果香蕉 stored 苹果@0 + 香蕉@6; leaving 香
+// exact drops the row. The final gojieba word must prefix-match even when CJK, while the head words
+// stay positionally exact (a divergent head must still be excluded).
+func TestBooleanGojiebaPartialFinalCJKWordPrefix(t *testing.T) {
+	requireJieba(t)
+	docs := []Doc{
+		{int64(1), []byte("苹果香蕉")},   // partial final word 香 -> stored 香蕉
+		{int64(2), []byte("苹果甜瓜")},   // same head, divergent tail
+		{int64(3), []byte("苹果香蕉西瓜")}, // partial final word + trailing content
+		{int64(4), []byte("橙子香蕉")},   // divergent head, matching tail
+	}
+	seg, err := BuildSegmentFromDocsParser("zh", int32(types.T_int64), docs, ParserGojieba)
+	require.NoError(t, err)
+	idx := NewIndex([]*Segment{seg}, nil)
+
+	// Positive: the partial final word 香 prefix-matches 香蕉; the head 苹果 pins position. Was empty.
+	require.ElementsMatch(t, []any{int64(1), int64(3)}, boolIDs(t, idx, ParserGojieba, "苹果香*"),
+		"gojieba trailing * must prefix-match the final PARTIAL CJK word (#29274)")
+	require.ElementsMatch(t, []any{int64(1), int64(3)}, boolIDs(t, idx, ParserGojieba, "+苹果香*"))
+	// Divergent-tail (甜瓜) and divergent-head (橙子) rows are excluded by the positional head + prefix tail.
+	got := boolIDs(t, idx, ParserGojieba, "苹果香*")
+	require.NotContains(t, got, int64(2), "divergent tail must not match")
+	require.NotContains(t, got, int64(4), "divergent head must not match even though its tail matches")
+}
+
+// #29274 (review perf): a stem that decomposes to a SINGLE ngram slot (one complete trigram 苹果香*,
+// or a sub-trigram run 中*) must stay a cheap clausePrefix (doc-id/tf lookup), NOT a one-slot
+// positional phrase -- matchPhrase would decode every position of a hot prefix. Multi-slot stems keep
+// the phrase.
+func TestBooleanCJKSingleSlotStaysPrefix(t *testing.T) {
+	for _, stem := range []string{"苹果香", "中", "中文"} {
+		c, ok, err := rawToClauseParser(rawClause{text: stem, star: true}, ParserNgram)
+		require.NoError(t, err, stem)
+		require.True(t, ok, stem)
+		require.Equal(t, clausePrefix, c.kind, "single-slot stem %q must stay a prefix, not a phrase", stem)
+	}
+	// A multi-slot stem still becomes the positional phrase (the over-match fix).
+	c, ok, err := rawToClauseParser(rawClause{text: "苹果香蕉", star: true}, ParserNgram)
+	require.NoError(t, err)
+	require.True(t, ok)
+	require.Equal(t, clausePhrase, c.kind)
+	require.Greater(t, len(c.phrase), 1)
+}
+
 // TestRawToClauseParserEdgeCases drives rawToClauseParser directly (it is unexported and some
 // branches are unreachable from a well-formed AGAINST() string) over the operand shapes and empty
 // inputs it must classify, including the `*`-with/without-CJK split this fix hinges on.

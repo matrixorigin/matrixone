@@ -693,13 +693,22 @@ func rawToClauseParser(rc rawClause, parser string) (clause, bool, error) {
 			if !ok || err != nil {
 				return c, ok, err
 			}
-			// A trailing * makes the FINAL token a prefix, not an exact term. The CJK trigrams
-			// that pin the head stay exact (the phrase already allows trailing content, so an
-			// all-CJK stem like 苹果香蕉* keeps its fast exact path), but when the stem ends in a
-			// Latin run the stored final token can be LONGER than the queried stem
-			// (苹果香蕉hell* vs the indexed 苹果香蕉hello): keeping that slot exact looks up hell,
-			// which the index never stored, so it must prefix-match instead (#29274 P2).
-			if last := &c.phrase[len(c.phrase)-1]; !hasCJK(last.term) {
+			// A single-slot ngram decomposition is one complete trigram (e.g. 苹果香*) or a sub-trigram
+			// run (中*): there is no second slot to over-match, so the positional phrase adds nothing but
+			// makes matchPhrase decode every position of a hot prefix. Keep the cheap prefix evaluation
+			// (doc-id/tf, no position decode) as before (#29274 perf). gojieba never lands here for a
+			// single word -- len(terms)==1 skips this whole branch.
+			if len(c.phrase) == 1 {
+				return clause{kind: clausePrefix, terms: terms[:1], weight: w}, true, nil
+			}
+			// A trailing * makes the FINAL token a prefix, not an exact term:
+			//   - gojieba: the last dictionary word is a PARTIAL the * cut (苹果香* -> 苹果@0, 香@6, where
+			//     the doc stored 香蕉), so it must prefix-match even when CJK.
+			//   - ngram: the CJK trigrams that pin the head stay exact (the phrase already allows trailing
+			//     content), but a Latin tail's stored token can be LONGER than the stem (苹果香蕉hell* vs
+			//     the indexed 苹果香蕉hello), so only that Latin slot prefix-matches.
+			last := &c.phrase[len(c.phrase)-1]
+			if parser == ParserGojieba || !hasCJK(last.term) {
 				last.star = true
 			}
 			return c, true, nil
