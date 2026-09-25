@@ -836,6 +836,102 @@ func TestMigrateConnectionFromRejectsPendingPreparedLongData(t *testing.T) {
 	require.Equal(t, prepared.Name, resp.PrepareStmts[0].Name)
 }
 
+func TestMigrateConnectionFromRejectsActivePreparedCursors(t *testing.T) {
+	ctrl := gomock.NewController(t)
+	ses := newTestSession(t, ctrl)
+	first := &PrepareStmt{
+		Name: GetPrepareStmtName(41),
+		Sql:  "select 1",
+		// An empty result is still fetchable until FETCH closes its cursor.
+		cursor: &preparedStmtCursor{result: &MysqlResultSet{}},
+	}
+	second := &PrepareStmt{
+		Name: GetPrepareStmtName(42),
+		Sql:  "select 2",
+		cursor: &preparedStmtCursor{
+			result: &MysqlResultSet{Data: [][]interface{}{{int64(1)}, {int64(2)}}},
+			offset: 1,
+		},
+	}
+	require.NoError(t, ses.SetPrepareStmt(context.Background(), first.Name, first))
+	require.NoError(t, ses.SetPrepareStmt(context.Background(), second.Name, second))
+	rt := &Routine{mc: newMigrateController()}
+	rt.setSession(ses)
+
+	for _, active := range []*PrepareStmt{first, second} {
+		resp := &query.MigrateConnFromResponse{}
+		err := rt.migrateConnectionFrom(resp)
+		require.True(t, moerr.IsMoErrCode(err, moerr.OkExpectedNotSafeToStartTransfer))
+		require.False(t, resp.PreparedStmtCursorsChecked)
+		require.Empty(t, resp.PrepareStmts)
+		require.NotNil(t, active.cursor, "rejected migration must preserve the source cursor")
+		active.closeCursor()
+	}
+
+	resp := &query.MigrateConnFromResponse{}
+	require.NoError(t, rt.migrateConnectionFrom(resp))
+	require.True(t, resp.PreparedStmtCursorsChecked)
+	require.Len(t, resp.PrepareStmts, 2)
+}
+
+func TestMigrateConnectionFromWaitsForCursorCloseRequest(t *testing.T) {
+	ctrl := gomock.NewController(t)
+	ses := newTestSession(t, ctrl)
+	const cursorBytes = 128
+	require.True(t, ses.tryReservePreparedCursorBytes(cursorBytes, cursorBytes))
+	stmt := &PrepareStmt{
+		Name: GetPrepareStmtName(41),
+		Sql:  "select 1",
+		cursor: &preparedStmtCursor{
+			result: &MysqlResultSet{Data: [][]interface{}{{int64(1)}}},
+			owner:  ses,
+			bytes:  cursorBytes,
+		},
+	}
+	require.NoError(t, ses.SetPrepareStmt(context.Background(), stmt.Name, stmt))
+	rt := &Routine{mc: newMigrateController()}
+	rt.setSession(ses)
+
+	// A FETCH or CLOSE owns the routine until it has released the cursor.
+	// Export must not inspect that mutable state before request completion.
+	require.True(t, rt.mc.tryBeginRequest())
+	var finishRequest sync.Once
+	defer finishRequest.Do(rt.mc.endRequest)
+	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+	defer cancel()
+	waitingForRequest := make(chan struct{})
+	rt.mc.operationWaitHook = func() { close(waitingForRequest) }
+	done := make(chan error, 1)
+	resp := &query.MigrateConnFromResponse{}
+	go func() {
+		done <- rt.migrateConnectionFromActionWithContext(
+			ctx, query.MigrateConnFromAction_MigrateConnFromExport, resp)
+	}()
+	select {
+	case <-waitingForRequest:
+	case <-ctx.Done():
+		t.Fatal("export never reached the request admission wait")
+	}
+	select {
+	case err := <-done:
+		t.Fatalf("export finished while the cursor-close request owned the routine: %v", err)
+	default:
+	}
+	stmt.closeCursor()
+	stmt.closeCursor() // Repeated cleanup must not release the reservation twice.
+	releasedBytes := ses.preparedCursorBytes.Load()
+	finishRequest.Do(rt.mc.endRequest)
+	require.Zero(t, releasedBytes)
+	select {
+	case err := <-done:
+		require.NoError(t, err)
+	case <-ctx.Done():
+		t.Fatal("export did not resume after cursor cleanup")
+	}
+	require.True(t, resp.PreparedStmtCursorsChecked)
+	require.Len(t, resp.PrepareStmts, 1)
+}
+
 func TestMigrateConnectionFromExportsEvaluatedUserVariables(t *testing.T) {
 	ctrl := gomock.NewController(t)
 	defer ctrl.Finish()

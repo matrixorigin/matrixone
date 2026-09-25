@@ -458,9 +458,16 @@ func TestEffectiveWriteCompression(t *testing.T) {
 	require.False(t, yes)
 
 	// auto-detect from suffix on any of the paths
-	for _, suf := range []string{".gz", ".gzip", ".bz2", ".bzip2", ".lz4", ".tar.gz", ".tar.bz2"} {
-		_, yes := effectiveWriteCompression("", "plain.csv", "out"+suf)
+	for suf, want := range map[string]string{
+		".gz": "gzip", ".gzip": "gzip", ".bz2": "bzip2", ".bzip2": "bzip2",
+		".lz4": "lz4", ".tar.gz": "tar.gz", ".tar.bz2": "tar.bz2",
+		".zst": "zstd", ".zstd": "zstd", ".zip": "zip", ".CSV.ZST": "zstd",
+	} {
+		eff, yes := effectiveWriteCompression("", "plain.csv", "out"+suf)
 		require.True(t, yes, suf)
+		require.Equal(t, want, eff, suf)
+		// Write validation and the read path must agree on every suffix.
+		require.Equal(t, GetCompressType("", "out"+suf), eff, suf)
 	}
 
 	// auto keyword falls through to suffix detection

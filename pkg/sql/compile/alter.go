@@ -281,6 +281,16 @@ func (c *Compile) lockDataBranchLineageOwnerLifecycle() error {
 	})
 }
 
+// lockDataBranchLineageOwnerLifecyclePessimistic takes the lifecycle row lock
+// before acquiring table locks. The later write barrier remains after any RC
+// snapshot advancement so lineage publication uses the refreshed snapshot.
+func (c *Compile) lockDataBranchLineageOwnerLifecyclePessimistic() error {
+	return c.runSqlWithAccountId(
+		databranchutils.LineageOwnerLifecyclePessimisticLockSQL(),
+		int32(catalog.System_Account),
+	)
+}
+
 func (c *Compile) prepareAlterDataBranchLineage(
 	oldTableID uint64,
 	databaseName, tableName string,
@@ -1164,6 +1174,13 @@ func (s *Scope) alterTableCopy(c *Compile, cleanup *alterAutoIncrementResetClean
 	}()
 	if lineageTxnOp.Txn().IsPessimistic() {
 		var retryErr error
+		if !isTemp {
+			// TRUNCATE, DROP TABLE, and DROP ACCOUNT enter this lifecycle
+			// before locking table metadata. Use the same order for COPY ALTER.
+			if err = c.lockDataBranchLineageOwnerLifecyclePessimistic(); err != nil {
+				return err
+			}
+		}
 		// 0. lock origin database metadata in catalog
 		if err = lockMoDatabase(c, dbName, lock.LockMode_Shared); err != nil {
 			return err

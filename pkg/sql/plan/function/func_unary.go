@@ -273,11 +273,18 @@ func NormalizeL2Array[T types.ArrayElement](parameters []*vector.Vector, result 
 			} else {
 				outArrayF32 = outArrayF32[:len(inArrayF32)]
 			}
-			_ = moarray.NormalizeL2(inArrayF32, outArrayF32)
-			_ = rs.AppendBytes(types.ArrayToBytes[float32](outArrayF32), false)
+			err := moarray.NormalizeL2(inArrayF32, outArrayF32)
+			if err == nil {
+				err = rs.AppendBytes(types.ArrayToBytes[float32](outArrayF32), false)
+			}
 
 			*outArrayF32Ptr = outArrayF32
 			arrayF32Pool.Put(outArrayF32Ptr)
+			if err != nil {
+				// NormalizeL2 leaves normalized untouched when it fails, and the buffer above is
+				// pooled and not zeroed -- appending it would emit an earlier row's vector.
+				return err
+			}
 		case types.T_array_float64:
 			inArrayF64 = types.BytesToArray[float64](data)
 
@@ -289,23 +296,37 @@ func NormalizeL2Array[T types.ArrayElement](parameters []*vector.Vector, result 
 			} else {
 				outArrayF64 = outArrayF64[:len(inArrayF64)]
 			}
-			_ = moarray.NormalizeL2(inArrayF64, outArrayF64)
-			_ = rs.AppendBytes(types.ArrayToBytes[float64](outArrayF64), false)
+			err := moarray.NormalizeL2(inArrayF64, outArrayF64)
+			if err == nil {
+				err = rs.AppendBytes(types.ArrayToBytes[float64](outArrayF64), false)
+			}
 
 			*outArrayF64Ptr = outArrayF64
 			arrayF64Pool.Put(outArrayF64Ptr)
+			if err != nil {
+				// See the float32 case: the pooled buffer holds an earlier row on failure.
+				return err
+			}
 		case types.T_array_bf16:
-			_ = appendNormalizedNarrowArray[types.BF16](rs, data)
+			if err := appendNormalizedNarrowArray[types.BF16](rs, data); err != nil {
+				return err
+			}
 		case types.T_array_float16:
-			_ = appendNormalizedNarrowArray[types.Float16](rs, data)
+			if err := appendNormalizedNarrowArray[types.Float16](rs, data); err != nil {
+				return err
+			}
 		case types.T_array_int8:
 			// A normalized vector is a unit vector, which cannot be represented in
 			// an integer element type (components round to 0/±1 and the norm is no
 			// longer 1), so int8/uint8 normalize_l2 widens the result to vecf32.
 			// The overload's retType is T_array_float32 to match (see list_builtIn).
-			_ = appendNormalizedIntArrayAsFloat32[int8](rs, data)
+			if err := appendNormalizedIntArrayAsFloat32[int8](rs, data); err != nil {
+				return err
+			}
 		case types.T_array_uint8:
-			_ = appendNormalizedIntArrayAsFloat32[uint8](rs, data)
+			if err := appendNormalizedIntArrayAsFloat32[uint8](rs, data); err != nil {
+				return err
+			}
 		}
 
 	}
@@ -320,7 +341,9 @@ func NormalizeL2Array[T types.ArrayElement](parameters []*vector.Vector, result 
 func appendNormalizedNarrowArray[T types.ArrayElement](rs *vector.FunctionResult[types.Varlena], data []byte) error {
 	in := types.ToFloat32Array[T](types.BytesToArray[T](data))
 	out := make([]float32, len(in))
-	_ = moarray.NormalizeL2(in, out)
+	if err := moarray.NormalizeL2(in, out); err != nil {
+		return err
+	}
 	return rs.AppendBytes(types.ArrayToBytes[T](types.FromFloat32Array[T](out)), false)
 }
 
@@ -333,7 +356,9 @@ func appendNormalizedNarrowArray[T types.ArrayElement](rs *vector.FunctionResult
 func appendNormalizedIntArrayAsFloat32[T types.ArrayElement](rs *vector.FunctionResult[types.Varlena], data []byte) error {
 	in := types.ToFloat32Array[T](types.BytesToArray[T](data))
 	out := make([]float32, len(in))
-	_ = moarray.NormalizeL2(in, out)
+	if err := moarray.NormalizeL2(in, out); err != nil {
+		return err
+	}
 	return rs.AppendBytes(types.ArrayToBytes[float32](out), false)
 }
 
@@ -9215,9 +9240,9 @@ func isBase64Space(b byte) bool {
 	return b == ' ' || (b >= '\t' && b <= '\r') || b == 0xa0
 }
 
-// VecFromBase64 decodes a base64-encoded string into a vector (vecf32 or vecf64).
+// VecFromBase64 decodes a base64-encoded string into a vector of T elements.
 // The base64 payload must be the raw little-endian bytes of the vector elements,
-// as produced by to_base64(vecf32_col) or to_base64(vecf64_col).
+// as produced by to_base64 on a vector value.
 func VecFromBase64[T types.ArrayElement](parameters []*vector.Vector, result vector.FunctionResultWrapper, proc *process.Process, length int, selectList *FunctionSelectList) error {
 	source := vector.GenerateFunctionStrParameter(parameters[0])
 	rs := vector.MustFunctionResult[types.Varlena](result)
@@ -9269,11 +9294,11 @@ func VecFromBase64[T types.ArrayElement](parameters []*vector.Vector, result vec
 		}
 		n, err := base64.StdEncoding.Decode(buf, data)
 		if err != nil {
-			return moerr.NewInternalErrorNoCtx("vec_from_base64: invalid base64 input")
+			return moerr.NewInvalidInputNoCtx("vec_from_base64: invalid base64 input")
 		}
 
 		if n%elemSize != 0 {
-			return moerr.NewInternalErrorNoCtxf("vec_from_base64: decoded length %d is not a multiple of %d bytes", n, elemSize)
+			return moerr.NewInvalidInputNoCtxf("vec_from_base64: decoded length %d is not a multiple of %d bytes", n, elemSize)
 		}
 
 		if err = rs.AppendBytes(buf[:n], false); err != nil {
@@ -9499,6 +9524,8 @@ func Uncompress(parameters []*vector.Vector, result vector.FunctionResultWrapper
 	source := vector.GenerateFunctionStrParameter(parameters[0])
 	rs := vector.MustFunctionResult[types.Varlena](result)
 	var warnings process.WarningAccumulator
+	warnings.SetWarningRetentionForProcess(proc)
+	defer warnings.Reset()
 
 	rowCount := uint64(length)
 	for i := uint64(0); i < rowCount; i++ {
@@ -9905,6 +9932,8 @@ func uncompressedLengthResult[Tr types.FixedSizeTExceptStrType](parameters []*ve
 	source := vector.GenerateFunctionStrParameter(parameters[0])
 	rs := vector.MustFunctionResult[Tr](result)
 	var warnings process.WarningAccumulator
+	warnings.SetWarningRetentionForProcess(proc)
+	defer warnings.Reset()
 
 	rowCount := uint64(length)
 	for i := uint64(0); i < rowCount; i++ {
