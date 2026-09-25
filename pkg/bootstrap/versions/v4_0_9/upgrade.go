@@ -38,7 +38,7 @@ var Handler = &versionHandle{
 		UpgradeCluster:          versions.No,
 		UpgradeTenant:           versions.Yes,
 		VersionOffset:           uint32(len(tenantUpgEntries)),
-		RequiredProtocolVersion: defines.MORPCVersion95,
+		RequiredProtocolVersion: defines.MORPCVersion96,
 	},
 }
 

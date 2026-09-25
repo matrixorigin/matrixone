@@ -178,16 +178,119 @@ var dateFormatParserTable = map[string]dateFormatParser{
 	"%.": skipAllPunct,          // Skip all punctation characters
 	"%@": skipAllAlpha,          // Skip all alpha characters
 	"%y": yearNumericTwoDigits,  // Year, numeric (two digits)
-	// "%a": abbreviatedWeekday,         // Abbreviated weekday name (Sun..Sat)
-	// "%D": dayOfMonthWithSuffix,       // Day of the month with English suffix (0th, 1st, 2nd, 3rd)
-	// "%U": weekMode0,                  // Week (00..53), where Sunday is the first day of the week; WEEK() mode 0
-	// "%u": weekMode1,                  // Week (00..53), where Monday is the first day of the week; WEEK() mode 1
-	// "%V": weekMode2,                  // Week (01..53), where Sunday is the first day of the week; WEEK() mode 2; used with %X
-	// "%v": weekMode3,                  // Week (01..53), where Monday is the first day of the week; WEEK() mode 3; used with %x
-	// "%W": weekdayName,                // Weekday name (Sunday..Saturday)
-	// "%w": dayOfWeek,                  // Day of the week (0=Sunday..6=Saturday)
-	// "%X": yearOfWeek,                 // Year for the week where Sunday is the first day of the week, numeric, four digits; used with %V
-	// "%x": yearOfWeek,                 // Year for the week, where Monday is the first day of the week, numeric, four digits; used with %v
+	"%a": abbreviatedWeekday,
+	"%D": dayOfMonthWithSuffix,
+	"%U": parseWeek(0),
+	"%u": parseWeek(1),
+	"%V": parseWeek(2),
+	"%v": parseWeek(3),
+	"%W": fullWeekday,
+	"%w": numericWeekday,
+	"%X": parseWeekYear(2),
+	"%x": parseWeekYear(3),
+}
+
+var weekdayNames = [...]string{"Sunday", "Monday", "Tuesday", "Wednesday", "Thursday", "Friday", "Saturday"}
+
+func dayOfMonthWithSuffix(t *GeneralTime, input string, ctx map[string]int) (string, bool) {
+	day, n := parsePositiveDateDigits(input, 2)
+	if n == 0 {
+		return input, false
+	}
+	t.setDay(uint8(day))
+	remaining := input[n:]
+	// MySQL consumes at most two suffix bytes without checking their spelling.
+	if len(remaining) > 2 {
+		return remaining[2:], true
+	}
+	return "", true
+}
+
+func parseWeek(mode int) dateFormatParser {
+	return func(_ *GeneralTime, input string, ctx map[string]int) (string, bool) {
+		week, n := parsePositiveDateDigits(input, 2)
+		if n == 0 || week > 53 || (mode >= 2 && week == 0) {
+			return input, false
+		}
+		ctx["week"] = week
+		ctx["week_mode"] = mode
+		return input[n:], true
+	}
+}
+
+func parseWeekYear(mode int) dateFormatParser {
+	return func(_ *GeneralTime, input string, ctx map[string]int) (string, bool) {
+		year, n := parsePositiveDateDigits(input, 4)
+		if n == 0 {
+			return input, false
+		}
+		ctx["week_year"] = year
+		ctx["week_year_mode"] = mode
+		return input[n:], true
+	}
+}
+
+func abbreviatedWeekday(_ *GeneralTime, input string, ctx map[string]int) (string, bool) {
+	return parseWeekdayName(input, ctx, true)
+}
+
+func fullWeekday(_ *GeneralTime, input string, ctx map[string]int) (string, bool) {
+	return parseWeekdayName(input, ctx, false)
+}
+
+func parseWeekdayName(input string, ctx map[string]int, abbreviated bool) (string, bool) {
+	n := 0
+	// MySQL's check_word classifies input bytes with its Latin1 charset.
+	// A UTF-8 leading byte may therefore extend the word and make it invalid.
+	for n < len(input) && mysqlLatin1Alpha(input[n]) {
+		n++
+	}
+	if n == 0 {
+		return input, false
+	}
+	word := input[:n]
+	match := -1
+	for i, name := range weekdayNames {
+		if abbreviated {
+			name = name[:3]
+		}
+		if strings.EqualFold(word, name) {
+			ctx["weekday"] = i
+			return input[n:], true
+		}
+		if len(word) < len(name) && strings.EqualFold(word, name[:len(word)]) {
+			if match >= 0 {
+				return input, false
+			}
+			match = i
+		}
+	}
+	if match < 0 {
+		return input, false
+	}
+	ctx["weekday"] = match
+	return input[n:], true
+}
+
+func mysqlLatin1Alpha(c byte) bool {
+	if c >= 'A' && c <= 'Z' || c >= 'a' && c <= 'z' ||
+		c >= 0xc0 && c <= 0xd6 || c >= 0xd8 && c <= 0xf6 || c >= 0xf8 {
+		return true
+	}
+	switch c {
+	case 0x83, 0x8a, 0x8c, 0x8e, 0x9a, 0x9c, 0x9e, 0x9f:
+		return true
+	}
+	return false
+}
+
+func numericWeekday(_ *GeneralTime, input string, ctx map[string]int) (string, bool) {
+	weekday, n := parseNDigits(input, 1)
+	if n == 0 || weekday > 6 {
+		return input, false
+	}
+	ctx["weekday"] = weekday
+	return input[n:], true
 }
 
 func matchDateWithToken(t *GeneralTime, date string, token string, ctx map[string]int) (remain string, succ bool) {
@@ -215,6 +318,19 @@ func parseNDigits(input string, limit int) (number int, step int) {
 		num = num*10 + uint64(input[step]-'0')
 	}
 	return int(num), step
+}
+
+// MySQL accepts a leading plus in numeric date directives, and counts that
+// byte against the directive width. A minus is rejected by its date parser.
+func parsePositiveDateDigits(input string, limit int) (number int, step int) {
+	if len(input) > 0 && input[0] == '+' {
+		number, step = parseNDigits(input[1:], limit-1)
+		if step > 0 {
+			step++
+		}
+		return number, step
+	}
+	return parseNDigits(input, limit)
 }
 
 // Seconds (00..59)
@@ -477,9 +593,9 @@ func adjustYear(y int) int {
 // Day of year (001..366)
 func dayOfYearNumeric(_ *GeneralTime, input string, ctx map[string]int) (string, bool) {
 	// MySQL declares that "%j" should be "Day of year (001..366)". But actually,
-	// it accepts a number that is up to three digits, which range is [1, 999].
-	v, step := parseNDigits(input, 3)
-	if step <= 0 || v == 0 {
+	// it accepts up to three digits. Zero leaves a previously parsed date intact.
+	v, step := parsePositiveDateDigits(input, 3)
+	if step <= 0 {
 		return input, false
 	}
 	ctx["%j"] = v
