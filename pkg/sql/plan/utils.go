@@ -1280,9 +1280,8 @@ func collectPreparedIntegerArgumentParamPositions(
 }
 
 // Visit only value-producing descendants of an integer source. CASE/IF
-// conditions choose a result but do not supply its integer domain. Only a
-// NULLIF comparison with a static numeric peer keeps its independent numeric
-// rebinding; comparing two markers must not mark either predicate as a source.
+// conditions choose a result but do not supply its integer domain. A NULLIF
+// comparison's marker must not acquire its result's integer conversion.
 func visitPreparedIntegerValueExpr(expr *plan.Expr, visit func(*plan.Expr)) {
 	if expr == nil {
 		return
@@ -1295,15 +1294,7 @@ func visitPreparedIntegerValueExpr(expr *plan.Expr, visit func(*plan.Expr)) {
 		for i, arg := range fn.Args {
 			if isIntegerSelector(expr) {
 				if fn.Func.ObjName == "case" && i%2 == 0 && i != len(fn.Args)-1 {
-					// A numeric literal in NULLIF's comparison established an
-					// independent numeric predicate domain at PREPARE. Keep its
-					// execution-time rebinding without admitting a marker-only
-					// comparison (NULLIF(?,?)) as an integer value source.
-					if len(fn.Args) != 3 || !preparedNullValueExpr(fn.Args[1]) ||
-						!preparedComparisonHasNumericLiteral(arg) ||
-						!preparedComparisonUsesResultMarker(arg, fn.Args[2]) {
-						continue
-					}
+					continue
 				}
 				if fn.Func.ObjName != "case" && i == 0 {
 					continue
@@ -1366,13 +1357,9 @@ func preparedNullValueExpr(expr *plan.Expr) bool {
 		preparedNullValueExpr(fn.Args[0])
 }
 
-func preparedComparisonUsesResultMarker(comparison, result *plan.Expr) bool {
-	resultPositions := preparedNumericValueParamPositions(result)
-	if len(resultPositions) == 0 {
-		return false
-	}
-	for position := range preparedNumericValueParamPositions(comparison) {
-		if _, ok := resultPositions[position]; ok {
+func preparedComparisonUsesResultMarker(positions map[int32]struct{}, result *plan.Expr) bool {
+	for position := range preparedNumericValueParamPositions(result) {
+		if _, ok := positions[position]; ok {
 			return true
 		}
 	}

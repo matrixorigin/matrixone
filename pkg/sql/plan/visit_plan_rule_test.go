@@ -100,6 +100,31 @@ func TestHexPreparedArgumentUsesSQLExecuteSourceType(t *testing.T) {
 	require.Equal(t, int32(0), unchangedOverload, "execute-time rebinding must not mutate the prepared plan")
 }
 
+func TestPreparedProjectedExplicitCastDomain(t *testing.T) {
+	prepared, err := runOneStmt(NewMockOptimizer(false), t,
+		`prepare projected_cast from 'select hex(x) from (select cast(? as double) x) d'`)
+	require.NoError(t, err)
+	original := prepared.GetDcl().GetPrepare().Plan
+	originalSource := findPlanFunctionExpr(original, "hex").GetF().Args[0].GetF().Args[0]
+	require.True(t, originalSource.GetPreparedNumeric().GetProjectedCommonValue())
+	bound, _, err := FillValuesOfParamsInPlanWithSpecialization(context.Background(), original, []any{
+		ParamValue{Value: float64(1.5), SourceType: types.T_float64.ToType(), HasSourceType: true},
+	})
+	require.NoError(t, err)
+	hexExpr := findPlanFunctionExpr(bound, "hex")
+	require.NotNil(t, hexExpr)
+	boundSource := hexExpr.GetF().Args[0].GetF().Args[0]
+	require.True(t, boundSource.GetPreparedNumeric().GetProjectedCommonValue())
+	require.Equal(t, int32(types.T_float64), boundSource.Typ.Id)
+	proc := testutil.NewProcess(t)
+	executor, err := colexec.NewExpressionExecutor(proc, hexExpr)
+	require.NoError(t, err)
+	defer executor.Free()
+	result, err := executor.Eval(proc, []*batch.Batch{batch.EmptyForConstFoldBatch}, nil)
+	require.NoError(t, err)
+	require.Equal(t, "2", string(result.GetBytesAt(0)))
+}
+
 func TestPreparedDerivedSelectorCommonDomain(t *testing.T) {
 	prepared, err := runOneStmt(NewMockOptimizer(false), t,
 		`prepare derived_selector from 'select hex(x) from (select if(true,?,?) as x) d'`)
@@ -921,15 +946,15 @@ func TestCollectPrepareViewSchemasKeepsLogicalSubscriptions(t *testing.T) {
 	}
 	ctx.resolve = func(databaseName, tableName string, _ *Snapshot) (*ObjectRef, *TableDef, error) {
 		return &ObjectRef{
-			SchemaName:       "publisher_db",
-			ObjName:          tableName,
-			Obj:              20,
-			SubscriptionName: databaseName,
-			PubInfo:          &planpb.PubInfo{TenantId: 11},
-		}, &TableDef{
-			DbName: "publisher_db", Name: tableName,
-			DbId: 10, TblId: 20, Version: 30,
-		}, nil
+				SchemaName:       "publisher_db",
+				ObjName:          tableName,
+				Obj:              20,
+				SubscriptionName: databaseName,
+				PubInfo:          &planpb.PubInfo{TenantId: 11},
+			}, &TableDef{
+				DbName: "publisher_db", Name: tableName,
+				DbId: 10, TblId: 20, Version: 30,
+			}, nil
 	}
 
 	schemas, err := collectPrepareViewSchemas(ctx)

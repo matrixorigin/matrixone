@@ -317,6 +317,83 @@ func testBitIntegerPreparedParameters(t *testing.T, ctx context.Context, db *sql
 			})
 		}
 	})
+	t.Run("projected explicit cast keeps numeric producer domain", func(t *testing.T) {
+		conn, err := db.Conn(ctx)
+		require.NoError(t, err)
+		defer conn.Close()
+		for _, tc := range []struct {
+			name, sql, prepared, want string
+		}{
+			{"hex", `select hex(x) from (select cast(1.5e0 as double) x) d`,
+				`select hex(x) from (select cast(? as double) x) d`, "2"},
+			{"char", `select hex(char(x)) from (select cast(1.5e0 as double) x) d`,
+				`select hex(char(x)) from (select cast(? as double) x) d`, "02"},
+		} {
+			t.Run(tc.name, func(t *testing.T) {
+				var direct string
+				require.NoError(t, conn.QueryRowContext(ctx, tc.sql).Scan(&direct))
+				require.Equal(t, tc.want, direct)
+				_, err := conn.ExecContext(ctx, "prepare projected_cast from '"+tc.prepared+"'")
+				require.NoError(t, err)
+				defer func() {
+					_, err := conn.ExecContext(ctx, "deallocate prepare projected_cast")
+					require.NoError(t, err)
+				}()
+				_, err = conn.ExecContext(ctx, "set @cast_source=1.5e0")
+				require.NoError(t, err)
+				var got string
+				require.NoError(t, conn.QueryRowContext(ctx, "execute projected_cast using @cast_source").Scan(&got))
+				require.Equal(t, direct, got)
+				stmt, err := conn.PrepareContext(ctx, tc.prepared)
+				require.NoError(t, err)
+				defer stmt.Close()
+				for _, source := range []any{float64(1.5), "1.5"} {
+					require.NoError(t, stmt.QueryRowContext(ctx, source).Scan(&got))
+					require.Equal(t, direct, got)
+				}
+			})
+		}
+	})
+	t.Run("direct explicit cast keeps consumer truncation", func(t *testing.T) {
+		conn, err := db.Conn(ctx)
+		require.NoError(t, err)
+		defer conn.Close()
+		var direct string
+		require.NoError(t, conn.QueryRowContext(ctx, `select hex(cast(1.5e0 as double))`).Scan(&direct))
+		require.Equal(t, "1", direct)
+		stmt, err := conn.PrepareContext(ctx, `select hex(cast(? as double))`)
+		require.NoError(t, err)
+		defer stmt.Close()
+		var got string
+		require.NoError(t, stmt.QueryRowContext(ctx, float64(1.5)).Scan(&got))
+		require.Equal(t, direct, got)
+	})
+	t.Run("COM_STMT NULLIF numeric comparison stays a predicate", func(t *testing.T) {
+		conn, err := db.Conn(ctx)
+		require.NoError(t, err)
+		defer conn.Close()
+		var direct string
+		require.NoError(t, conn.QueryRowContext(ctx,
+			`select make_set(nullif('abc',1.5),'a','b')`).Scan(&direct))
+		require.Empty(t, direct)
+		stmt, err := conn.PrepareContext(ctx, `select make_set(nullif(?,1.5),'a','b')`)
+		require.NoError(t, err)
+		defer stmt.Close()
+		var got string
+		require.NoError(t, stmt.QueryRowContext(ctx, "abc").Scan(&got))
+		require.Equal(t, direct, got)
+		_, err = conn.ExecContext(ctx, `prepare nullif_numeric from 'select make_set(nullif(?,1.5),"a","b")'`)
+		require.NoError(t, err)
+		defer func() {
+			_, err := conn.ExecContext(ctx, "deallocate prepare nullif_numeric")
+			require.NoError(t, err)
+		}()
+		_, err = conn.ExecContext(ctx, `set @nullif_numeric="abc"`)
+		require.NoError(t, err)
+		require.NoError(t, conn.QueryRowContext(ctx,
+			"execute nullif_numeric using @nullif_numeric").Scan(&got))
+		require.Equal(t, direct, got)
+	})
 	t.Run("NULLIF predicate remains outside integer source", func(t *testing.T) {
 		conn, err := db.Conn(ctx)
 		require.NoError(t, err)

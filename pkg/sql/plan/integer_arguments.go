@@ -173,7 +173,8 @@ func appendIntegerArgument(ctx context.Context, expr *Expr, target types.T, sele
 func integerSourceCastOverload(expr *Expr) int32 {
 	fn := expr.GetF()
 	overload := function.IntegerArgumentCastOverload
-	if types.T(expr.Typ.Id).IsFloat() && fn != nil && fn.Func != nil && fn.Func.ObjName == "cast" {
+	if types.T(expr.Typ.Id).IsFloat() && fn != nil && fn.Func != nil && fn.Func.ObjName == "cast" &&
+		!expr.GetPreparedNumeric().GetProjectedCommonValue() {
 		_, sourceOverload := function.DecodeOverloadID(fn.Func.Obj)
 		if fn.SyntaxExplicitCast || sourceOverload == 1 {
 			overload = function.TruncatedIntegerArgumentCastOverload
