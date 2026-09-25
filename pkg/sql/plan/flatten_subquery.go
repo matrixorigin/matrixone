@@ -2325,8 +2325,11 @@ func (builder *QueryBuilder) detachCorrelatedCountHaving(root int32, ctx *BindCo
 				agg.AggList[0].GetF() == nil || agg.AggList[0].GetF().Func == nil ||
 				(agg.AggList[0].GetF().Func.ObjName != "count" && agg.AggList[0].GetF().Func.ObjName != "starcount") ||
 				len(ctx.results) != 1 || builder.qry.Nodes[root].NodeType != plan.Node_PROJECT ||
-				builder.qry.Nodes[root].ProjectList[0].GetCol() == nil {
-				return nil, moerr.NewNYI(builder.GetContext(), "correlated COUNT HAVING projection")
+				len(builder.qry.Nodes[root].ProjectList) != 1 ||
+				builder.qry.Nodes[root].ProjectList[0].GetCol() == nil ||
+				builder.qry.Nodes[root].ProjectList[0].GetCol().RelPos != ctx.aggregateTag ||
+				builder.qry.Nodes[root].ProjectList[0].GetCol().ColPos != 0 {
+				return nil, moerr.NewNYI(builder.GetContext(), "correlated local CTE: COUNT HAVING projection is not the aggregate result")
 			}
 			having := n.FilterList[0]
 			n.FilterList = nil

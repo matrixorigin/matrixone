@@ -93,22 +93,37 @@ func (builder *QueryBuilder) parameterizeLocalCTEs(outerID, subID int32, ctx *Bi
 	return lower(subID), nil
 }
 
-// Inspect only the path from the subquery root to this CTE. A HAVING filter
-// above an aggregate removes the scalar row, unlike a missing aggregate group;
-// the COUNT fallback cannot distinguish the two after decorrelation.
+// Inspect every path from the subquery root to this CTE. Moving HAVING
+// through pagination or a branching/outer join boundary is not equivalent to
+// evaluating the original subquery separately for each outer identity.
 func (d *localCTEDomain) admitConsumer(root int32) error {
-	var visit func(int32, bool) error
-	visit = func(id int32, filtered bool) error {
+	var visit func(id int32, filtered, paginated, branched, having bool) error
+	visit = func(id int32, filtered, paginated, branched, having bool) error {
 		if id < 0 || int(id) >= len(d.builder.qry.Nodes) {
 			return nil
 		}
 		n := d.builder.qry.Nodes[id]
+		paginated = paginated || n.Limit != nil || n.Offset != nil
 		switch n.NodeType {
 		case plan.Node_UNION, plan.Node_INTERSECT, plan.Node_INTERSECT_ALL,
 			plan.Node_MINUS, plan.Node_MINUS_ALL:
 			return d.unsupported("consumer set operation needs per-outer-row output schema")
+		case plan.Node_UNION_ALL:
+			branched = true
+		case plan.Node_JOIN:
+			if n.JoinType != plan.Node_INNER {
+				return d.unsupported("consumer outer join cannot pull up an identity predicate")
+			}
+			if having {
+				return d.unsupported("consumer HAVING across join branches")
+			}
+			branched = true
 		case plan.Node_AGG:
-			if (filtered || len(n.FilterList) > 0) && (len(n.AggList) != 1 || len(n.GroupBy) != 0 ||
+			having = filtered || len(n.FilterList) > 0
+			if having && (paginated || branched) {
+				return d.unsupported("consumer HAVING across pagination or branches")
+			}
+			if having && (len(n.AggList) != 1 || len(n.GroupBy) != 0 ||
 				n.AggList[0].GetF() == nil || n.AggList[0].GetF().Func == nil ||
 				(n.AggList[0].GetF().Func.ObjName != "count" && n.AggList[0].GetF().Func.ObjName != "starcount")) {
 				return d.unsupported("consumer HAVING needs per-outer-row empty-group semantics")
@@ -123,13 +138,13 @@ func (d *localCTEDomain) admitConsumer(root int32) error {
 			if d.nodes[child] {
 				continue
 			}
-			if err := visit(child, filtered); err != nil {
+			if err := visit(child, filtered, paginated, branched, having); err != nil {
 				return err
 			}
 		}
 		return nil
 	}
-	return visit(root, false)
+	return visit(root, false, false, false, false)
 }
 
 func (d *localCTEDomain) collect(id int32) {

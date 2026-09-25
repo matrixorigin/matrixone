@@ -132,6 +132,29 @@ select p.id from pages p where exists (
   select n from q union all select 7
 ) and p.id=2;
 
+-- HAVING cannot move past pagination or split across set-operation branches.
+select p.id, (with q(n) as (select p.parent_id)
+              select count(*) from q having count(*)=0 limit 0) as c
+from pages p where p.id=2;
+select p.id, (with q(n) as (select p.parent_id)
+              select count(*) from q having count(*)=0 limit 1 offset 1) as c
+from pages p where p.id=2;
+select p.id from pages p where exists (
+  with q(n) as (select p.parent_id from pages a where a.id=-1)
+  select count(*) from q having count(*)=0
+  union all select count(*) from q having count(*)=0
+) and p.id=2;
+
+-- A consumer LEFT JOIN must retain its unmatched left rows.
+select p.id, (with q(n) as (select p.parent_id)
+              select count(*) from pages a left join q on a.id=q.n) as c
+from pages p where p.id=2;
+
+-- The projected window slot cannot be substituted with the COUNT HAVING result.
+select p.id, (with q(n) as (select p.parent_id)
+              select row_number() over (order by count(*)) from q having count(*)=1) as rn
+from pages p where p.id=2;
+
 -- Empty outer input starts no parameter partitions.
 select p.id,
        (with recursive r(n) as (

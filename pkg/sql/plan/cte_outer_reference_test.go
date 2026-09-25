@@ -184,6 +184,34 @@ func TestLocalCTEOuterReferencesRejectUnsafeDomains(t *testing.T) {
 		sql  string
 	}{
 		{
+			name: "having with limit zero",
+			sql: `select (with q(n) as (select p.n_regionkey)
+				select count(*) from q having count(*)=0 limit 0) from tpch.nation p`,
+		},
+		{
+			name: "having with offset",
+			sql: `select (with q(n) as (select p.n_regionkey)
+				select count(*) from q having count(*)=0 limit 1 offset 1) from tpch.nation p`,
+		},
+		{
+			name: "having in union branches",
+			sql: `select p.n_nationkey from tpch.nation p where exists (
+				with q(n) as (select p.n_regionkey from tpch.nation a where a.n_nationkey=-1)
+				select count(*) from q having count(*)=0
+				union all select count(*) from q having count(*)=0)`,
+		},
+		{
+			name: "outer join consumer preserves left rows",
+			sql: `select (with q(n) as (select p.n_regionkey)
+				select count(*) from tpch.nation a left join q on a.n_regionkey=q.n)
+				from tpch.nation p`,
+		},
+		{
+			name: "having result is not count",
+			sql: `select (with q(n) as (select p.n_regionkey)
+				select row_number() over (order by count(*)) from q having count(*)=1) from tpch.nation p`,
+		},
+		{
 			name: "non scalar count having",
 			sql: `select p.n_nationkey from tpch.nation p where exists (
 				with q(n) as (select p.n_regionkey)
