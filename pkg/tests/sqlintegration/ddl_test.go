@@ -782,7 +782,7 @@ func TestCDCNoFullPublicTakeoverLifecycle(t *testing.T) {
 			secondRelease := make(chan struct{})
 			freshEntered := make(chan struct{})
 			freshRelease := make(chan struct{})
-			cancelEntered := make(chan bool, 1)
+			cancelEntered := make(chan bool, 2)
 			cancelRelease := make(chan struct{})
 			cancelCompleted := make(chan error, 1)
 			bCancelDone := make(chan struct{})
@@ -790,7 +790,7 @@ func TestCDCNoFullPublicTakeoverLifecycle(t *testing.T) {
 			var bCancelErrMu sync.Mutex
 			var cancelCompletionCount atomic.Int32
 			var phase atomic.Int32
-			var firstEnteredOnce, secondEnteredOnce, freshEnteredOnce, cancelEnteredOnce sync.Once
+			var firstEnteredOnce, secondEnteredOnce, freshEnteredOnce sync.Once
 			var firstReleaseOnce, secondReleaseOnce, freshReleaseOnce, cancelReleaseOnce sync.Once
 			releaseFirst := func() { firstReleaseOnce.Do(func() { close(firstRelease) }) }
 			releaseSecond := func() { secondReleaseOnce.Do(func() { close(secondRelease) }) }
@@ -817,7 +817,10 @@ func TestCDCNoFullPublicTakeoverLifecycle(t *testing.T) {
 			})
 			defer restoreAdmission()
 			restoreCancel := frontend.SetCDCTestCancelHookForTest(func(producersStopped bool) {
-				cancelEnteredOnce.Do(func() { cancelEntered <- producersStopped })
+				select {
+				case cancelEntered <- producersStopped:
+				default:
+				}
 				<-cancelRelease
 			})
 			defer restoreCancel()
@@ -926,6 +929,29 @@ func TestCDCNoFullPublicTakeoverLifecycle(t *testing.T) {
 			}
 			readWatermark := func() (types.TS, uint64, bool, error) {
 				return readWatermarkFrom(ctx, sqlExec)
+			}
+			flushWatermarks := func(cnID string) {
+				t.Helper()
+				flushCtx, flushCancel := context.WithTimeout(ctx, 30*time.Second)
+				defer flushCancel()
+				require.NoError(t, cdc.GetCDCWatermarkUpdater(cnID, nil).ForceFlush(flushCtx))
+			}
+			waitWatermarkVisible := func(reader executor.SQLExecutor, expected types.TS, generation uint64, cn string) {
+				t.Helper()
+				pollCtx, pollCancel := context.WithTimeout(ctx, 30*time.Second)
+				defer pollCancel()
+				for {
+					got, owner, exists, readErr := readWatermarkFrom(pollCtx, reader)
+					if readErr == nil && exists && owner == generation && got == expected {
+						return
+					}
+					select {
+					case <-pollCtx.Done():
+						t.Fatalf("CN %s did not observe final checkpoint before claiming ownership: checkpoint=%s generation=%d found=%t err=%v: %v",
+							cn, got.ToString(), owner, exists, readErr, pollCtx.Err())
+					case <-time.After(200 * time.Millisecond):
+					}
+				}
 			}
 			readTaskStart := func() (types.TS, error) {
 				res, queryErr := sqlExec.Exec(ctx,
@@ -1059,10 +1085,7 @@ func TestCDCNoFullPublicTakeoverLifecycle(t *testing.T) {
 			// All A producers have stopped. Drain the updater before sampling:
 			// an earlier flush can pass its owner check but commit after the
 			// cancellation hook, changing the durable checkpoint underneath us.
-			flushCtx, flushCancel := context.WithTimeout(ctx, 30*time.Second)
-			flushErr := cdc.GetCDCWatermarkUpdater(cnA.ServiceID(), nil).ForceFlush(flushCtx)
-			flushCancel()
-			require.NoError(t, flushErr)
+			flushWatermarks(cnA.ServiceID())
 			// Read A's final checkpoint through A: B's catalog view can still be
 			// behind A's commits when its task service observes the new claim.
 			checkpointA, generationA, found, err = readWatermarkFrom(ctx, cnAExec)
@@ -1081,22 +1104,8 @@ func TestCDCNoFullPublicTakeoverLifecycle(t *testing.T) {
 			// The admission barrier runs before B's owner claim. Wait for B to
 			// observe A's final committed row before comparing them; a single
 			// cross-CN catalog read may still return an older visible version.
-			visibilityCtx, visibilityCancel := context.WithTimeout(ctx, 30*time.Second)
-			var checkpointBeforeB types.TS
-			var generationBeforeB uint64
-			for {
-				checkpointBeforeB, generationBeforeB, found, err = readWatermarkFrom(visibilityCtx, sqlExec)
-				if err == nil && found && generationBeforeB == generationA && checkpointBeforeB == checkpointA {
-					break
-				}
-				select {
-				case <-visibilityCtx.Done():
-					visibilityCancel()
-					t.Fatalf("CN B did not observe A's final checkpoint before claiming ownership: checkpoint=%s generation=%d found=%t err=%v", checkpointBeforeB.ToString(), generationBeforeB, found, err)
-				case <-time.After(200 * time.Millisecond):
-				}
-			}
-			visibilityCancel()
+			waitWatermarkVisible(sqlExec, checkpointA, generationA, "B")
+			checkpointBeforeB := checkpointA
 			mustExec(dbName, "insert into "+tableName+" values (3, 'after_takeover')")
 			// Capture a real source transaction snapshot that demonstrably sees
 			// the post-takeover row.  B's durable checkpoint must reach this
@@ -1211,15 +1220,25 @@ func TestCDCNoFullPublicTakeoverLifecycle(t *testing.T) {
 			case <-ctx.Done():
 				t.Fatal("CN B cancellation did not complete before C admission")
 			}
-			freshStart, _, found, err := readWatermark()
+			select {
+			case producersStopped := <-cancelEntered:
+				require.True(t, producersStopped, "CN B must stop callbacks and readers before checkpoint sampling")
+			case <-ctx.Done():
+				t.Fatal("CN B did not stop its producers before C admission")
+			}
+			// B's cancellation schedules cache eviction asynchronously. Drain any
+			// earlier B write before sampling the durable row for C.
+			flushWatermarks(cnB.ServiceID())
+			// The updater writes through A's internal executor. Read the final
+			// committed tuple there, then wait for C's catalog view to catch up.
+			freshStart, finalGeneration, found, err := readWatermarkFrom(ctx, cnAExec)
 			require.NoError(t, err)
 			require.True(t, found)
-			// B may have one final asynchronous watermark flush in flight when
-			// its cancellation completion is published. Re-read the durable row
-			// at C's admission boundary and use that value as the recovery oracle;
-			// it must never move backwards from the checkpoint B had committed.
+			require.Equal(t, generationAfterB, finalGeneration,
+				"B's final checkpoint must retain its owner generation before C claims")
 			require.True(t, freshStart.GE(&checkpointB),
 				"fresh reader must not observe a checkpoint older than B's durable progress")
+			waitWatermarkVisible(sqlExec, freshStart, finalGeneration, "C")
 			captureFresh.Store(true)
 			releaseFresh()
 			select {
