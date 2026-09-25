@@ -268,3 +268,26 @@ func TestNormalizeIntervalSimpleSecondsWithFraction(t *testing.T) {
 		require.Equal(t, tc.want, got)
 	}
 }
+
+func TestNormalizeIntervalRejectsArithmeticWrap(t *testing.T) {
+	value, unit, err := NormalizeInterval("106751991.167300", Day)
+	require.NoError(t, err)
+	require.Equal(t, MicroSecond, unit)
+	require.Equal(t, int64(9223372036854720000), value)
+
+	for _, tc := range []struct {
+		value string
+		unit  IntervalType
+	}{
+		{"106751991.167301", Day},
+		{"213503982.334602", Day},
+		{"-213503982.334602", Day},
+		{"307445734561.825861", Minute},
+		{"5124095576.030432", Hour},
+		{"106751992 00:00:00.000001", Day_Second},
+		{"18446744073709551617", Second},
+	} {
+		_, _, err := NormalizeInterval(tc.value, tc.unit)
+		require.Error(t, err, "%s %s", tc.value, tc.unit)
+	}
+}
