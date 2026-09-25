@@ -52,6 +52,18 @@ func TestRejectNonFiniteVectorElems(t *testing.T) {
 	require.NoError(t, rejectNonFiniteVectorElems([]uint8{0, 255}))
 }
 
+// TestRejectNonFiniteVectorElemsF16NoAlloc guards the #29084 P2 optimization: the F16/BF16 finite
+// check must widen each element in place (e.ToFloat32()) rather than materializing a whole []float32
+// per row (types.ToFloat32Array), which added 4*dimension bytes/row on batch CAST / VEC*_FROM_BASE64.
+func TestRejectNonFiniteVectorElemsF16NoAlloc(t *testing.T) {
+	f16 := types.FromFloat32Array[types.Float16](make([]float32, 1536))
+	bf16 := types.FromFloat32Array[types.BF16](make([]float32, 1536))
+	require.Zero(t, testing.AllocsPerRun(100, func() { _ = rejectNonFiniteVectorElems(f16) }),
+		"F16 finite check must not allocate a widened slice (#29084)")
+	require.Zero(t, testing.AllocsPerRun(100, func() { _ = rejectNonFiniteVectorElems(bf16) }),
+		"BF16 finite check must not allocate a widened slice (#29084)")
+}
+
 // TestCastArrayNarrowingRejectsNonFinite guards #29084 bypass 1: a vector-to-vector CAST that
 // narrows a finite source to +/-Inf must be rejected, not persist Infinity. Mirrors the direct text
 // cast, which already rejects the same value.

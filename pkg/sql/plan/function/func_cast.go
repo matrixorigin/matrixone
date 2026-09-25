@@ -9374,13 +9374,17 @@ func rejectNonFiniteVectorElems[T types.ArrayElement](out []T) error {
 			}
 		}
 	case []types.Float16:
-		for _, x := range types.ToFloat32Array(v) {
+		// Widen each element in place rather than materializing a whole []float32
+		// (types.ToFloat32Array allocates 4*dimension bytes per row on batch decode) (#29084).
+		for _, e := range v {
+			x := e.ToFloat32()
 			if x-x != 0 {
 				return fail(float64(x))
 			}
 		}
 	case []types.BF16:
-		for _, x := range types.ToFloat32Array(v) {
+		for _, e := range v {
+			x := e.ToFloat32()
 			if x-x != 0 {
 				return fail(float64(x))
 			}
