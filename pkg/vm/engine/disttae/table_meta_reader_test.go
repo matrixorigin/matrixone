@@ -154,14 +154,21 @@ func TestTableMetaReaderCleanupUsesFreshAttemptContext(t *testing.T) {
 
 type failOnceCloneDeleteFS struct {
 	fileservice.FileService
-	failErr error
-	failed  bool
+	failErr      error
+	failed       bool
+	retryStarted chan struct{}
+	retryRelease <-chan struct{}
 }
 
 func (fs *failOnceCloneDeleteFS) Delete(ctx context.Context, names ...string) error {
 	if !fs.failed {
 		fs.failed = true
 		return fs.failErr
+	}
+	if fs.retryStarted != nil {
+		close(fs.retryStarted)
+		<-fs.retryRelease
+		fs.retryStarted = nil
 	}
 	return fs.FileService.Delete(ctx, names...)
 }
