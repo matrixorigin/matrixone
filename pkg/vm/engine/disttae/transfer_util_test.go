@@ -170,6 +170,42 @@ func TestTransferFlowRetainsUnpublishedSinkerForCleanupRetry(t *testing.T) {
 	require.True(t, moerr.IsMoErrCode(err, moerr.ErrFileNotFound), "unpublished object should be deleted, got %v", err)
 }
 
+type failSecondTransferDeleteBatchFS struct {
+	fileservice.FileService
+	batchSizes []int
+}
+
+func (fs *failSecondTransferDeleteBatchFS) Delete(_ context.Context, names ...string) error {
+	fs.batchSizes = append(fs.batchSizes, len(names))
+	if len(fs.batchSizes) == 2 {
+		return errors.New("second transfer batch unavailable")
+	}
+	return nil
+}
+
+func TestTransferFlowRetryKeepsOnlyUnconfirmedDeleteBatch(t *testing.T) {
+	const objectCount = 1001
+	names := make([]string, objectCount)
+	for i := range names {
+		names[i] = fmt.Sprintf("transfer-unpublished-%d", i)
+	}
+	fs := &failSecondTransferDeleteBatchFS{}
+	flow := &TransferFlow{fs: fs, pendingNames: names, cleanupPending: true}
+
+	require.ErrorContains(t, flow.CloseWithCleanup(context.Background(), true), "second transfer batch unavailable")
+	require.Len(t, flow.pendingNames, 1)
+	require.Equal(t, []int{1000, 1}, fs.batchSizes)
+	require.Nil(t, flow.sinker)
+	require.Nil(t, flow.mp)
+	require.True(t, flow.cleanupPending)
+
+	require.NoError(t, flow.CloseWithCleanup(context.Background(), true))
+	require.Empty(t, flow.pendingNames)
+	require.Nil(t, flow.fs)
+	require.False(t, flow.cleanupPending)
+	require.Equal(t, []int{1000, 1, 1}, fs.batchSizes)
+}
+
 func TestTransferFlowCleanupPreservesOriginalSQLError(t *testing.T) {
 	proc := testutil.NewProc(t)
 	defer proc.Free()

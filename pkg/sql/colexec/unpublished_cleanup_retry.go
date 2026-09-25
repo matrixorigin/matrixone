@@ -31,14 +31,15 @@ const unpublishedS3RetryInterval = time.Second
 // worker per CN retries the exact workspace cleanup callback until it succeeds
 // or the CN is closed. The queue is in-memory; process crashes need durable GC.
 type unpublishedS3CleanupQueue struct {
-	closeMu      sync.Mutex
-	mu           sync.Mutex
-	pending      []func(context.Context) error
-	pendingSince []time.Time
-	serviceID    string
-	stop         chan struct{}
-	done         chan struct{}
-	closing      bool
+	closeMu       sync.Mutex
+	mu            sync.Mutex
+	pending       []func(context.Context) error
+	pendingSince  []time.Time
+	lastAgeSample time.Time
+	serviceID     string
+	stop          chan struct{}
+	done          chan struct{}
+	closing       bool
 }
 
 func (srv *Server) RetryUnpublishedS3Cleanup(cleanup func(context.Context) error) error {
@@ -63,17 +64,23 @@ func (q *unpublishedS3CleanupQueue) updateMetricsLocked() {
 		return
 	}
 	metricv2.UnpublishedS3PendingTasksGauge.WithLabelValues(q.serviceID).Set(float64(len(q.pending)))
-	oldestAge := 0.0
-	if len(q.pendingSince) != 0 {
-		oldest := q.pendingSince[0]
-		for _, since := range q.pendingSince[1:] {
-			if since.Before(oldest) {
-				oldest = since
-			}
-		}
-		oldestAge = time.Since(oldest).Seconds()
+	if len(q.pendingSince) == 0 {
+		q.lastAgeSample = time.Time{}
+		metricv2.UnpublishedS3OldestTaskAgeGauge.WithLabelValues(q.serviceID).Set(0)
+		return
 	}
-	metricv2.UnpublishedS3OldestTaskAgeGauge.WithLabelValues(q.serviceID).Set(oldestAge)
+	now := time.Now()
+	if !q.lastAgeSample.IsZero() && now.Sub(q.lastAgeSample) < unpublishedS3RetryInterval {
+		return
+	}
+	oldest := q.pendingSince[0]
+	for _, since := range q.pendingSince[1:] {
+		if since.Before(oldest) {
+			oldest = since
+		}
+	}
+	q.lastAgeSample = now
+	metricv2.UnpublishedS3OldestTaskAgeGauge.WithLabelValues(q.serviceID).Set(now.Sub(oldest).Seconds())
 }
 
 func (q *unpublishedS3CleanupQueue) startLocked() {
@@ -114,13 +121,21 @@ func (q *unpublishedS3CleanupQueue) finishAttemptLocked(err error) {
 
 func (q *unpublishedS3CleanupQueue) run(stop <-chan struct{}, done chan<- struct{}) {
 	defer close(done)
-	ticker := time.NewTicker(unpublishedS3RetryInterval)
-	defer ticker.Stop()
+	retryAfterFailure := false
 	for {
+		if retryAfterFailure {
+			timer := time.NewTimer(unpublishedS3RetryInterval)
+			select {
+			case <-stop:
+				timer.Stop()
+				return
+			case <-timer.C:
+			}
+		}
 		select {
 		case <-stop:
 			return
-		case <-ticker.C:
+		default:
 		}
 		q.mu.Lock()
 		q.updateMetricsLocked()
@@ -142,6 +157,7 @@ func (q *unpublishedS3CleanupQueue) run(stop <-chan struct{}, done chan<- struct
 		if err != nil {
 			logutil.Warn("remote unpublished S3 cleanup will be retried", zap.Error(err))
 		}
+		retryAfterFailure = err != nil
 	}
 }
 

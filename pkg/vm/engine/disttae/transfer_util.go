@@ -393,15 +393,16 @@ func (flow *TransferFlow) CloseWithCleanup(ctx context.Context, failed bool) err
 	}
 	if flow.sinker == nil && len(flow.pendingNames) > 0 {
 		cleanupCtx, cancel := colexec.UnpublishedS3CleanupContext(ctx)
-		_, err := ioutil.DeleteUnpublishedObjects(cleanupCtx, flow.fs, flow.pendingNames...)
+		completed, remaining, err := ioutil.DeleteUnpublishedObjectsWithProgress(
+			cleanupCtx, flow.fs, flow.pendingNames...)
 		cancel()
+		for _, name := range completed {
+			colexec.ReleaseUnpublishedS3Name(flow.serviceID, name)
+		}
+		flow.pendingNames = remaining
 		if err != nil {
 			errs = append(errs, err)
 		} else {
-			for _, name := range flow.pendingNames {
-				colexec.ReleaseUnpublishedS3Name(flow.serviceID, name)
-			}
-			flow.pendingNames = nil
 			flow.cleanupPending = false
 		}
 	}
