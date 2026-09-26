@@ -9301,6 +9301,13 @@ func VecFromBase64[T types.ArrayElement](parameters []*vector.Vector, result vec
 			return moerr.NewInvalidInputNoCtxf("vec_from_base64: decoded length %d is not a multiple of %d bytes", n, elemSize)
 		}
 
+		// The payload is raw IEEE-754 bytes, so a NaN/Inf bit pattern would otherwise decode straight
+		// into a vector column, bypassing the finite check the text cast and direct insert enforce
+		// (#29084). Reject non-finite decoded elements before storing.
+		if err = rejectNonFiniteVectorElems(types.BytesToArray[T](buf[:n])); err != nil {
+			return err
+		}
+
 		if err = rs.AppendBytes(buf[:n], false); err != nil {
 			return err
 		}
