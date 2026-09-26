@@ -142,22 +142,27 @@ func PreparedPlanHasJoinParameterDiagnostic(p *plan.Plan) bool {
 }
 
 func containsStatementParameterDiagnostic(expr *plan.Expr) bool {
+	return containsStatementDiagnostic(expr, false)
+}
+
+func containsStatementDiagnostic(expr *plan.Expr, materialized bool) bool {
 	if expr == nil {
 		return false
 	}
-	if function.MayDiagnoseStatementParameter(expr) {
+	if (materialized && function.MayDiagnoseStatementConstant(expr)) ||
+		(!materialized && function.MayDiagnoseStatementParameter(expr)) {
 		return true
 	}
 	if fn := expr.GetF(); fn != nil {
 		for _, arg := range fn.Args {
-			if containsStatementParameterDiagnostic(arg) {
+			if containsStatementDiagnostic(arg, materialized) {
 				return true
 			}
 		}
 	}
 	if list := expr.GetList(); list != nil {
 		for _, item := range list.List {
-			if containsStatementParameterDiagnostic(item) {
+			if containsStatementDiagnostic(item, materialized) {
 				return true
 			}
 		}
@@ -173,67 +178,40 @@ func ProbePreparedJoinParameterDiagnostics(proc *process.Process, p *plan.Plan) 
 	if proc == nil || proc.Base == nil || p == nil || p.GetQuery() == nil {
 		return false, nil
 	}
-	rule := &preparedJoinParameterProbeRule{proc: proc, seen: make(map[*plan.Expr]struct{})}
-	rules := []VisitPlanRule{rule}
-	query := p.GetQuery()
-	visitor := NewVisitPlan(p, rules)
-	visitor.isUpdatePlan = query.StmtType == plan.Query_UPDATE
-	roots := make([]int32, len(query.Nodes))
-	var err error
-	for i, node := range query.Nodes {
-		roots[i] = int32(i)
-		// Probe every node in the cached generation, including subquery and
-		// auxiliary nodes outside the primary Steps traversal. The scoped
-		// replan may otherwise relax a diagnostic it never proved safe.
-		err = visitor.exploreNode(proc.Ctx, rule, node, int32(i))
-		if err != nil {
-			break
+	// The scoped optimizer flag only relaxes JOIN ON and filter pushdown.
+	// Projection, grouping, and ordering keep their execution owners; a
+	// diagnostic there must not disable an unrelated selective JOIN plan.
+	// Visit all nodes, including auxiliary/subquery nodes outside Steps, since
+	// those predicates can still be changed by the scoped replan.
+	for _, node := range p.GetQuery().Nodes {
+		for _, exprs := range [...][]*plan.Expr{node.OnList, node.FilterList, node.BlockFilterList} {
+			for _, expr := range exprs {
+				safe, err := probeJoinParameterExpression(proc, expr)
+				if !safe || err != nil {
+					return safe, err
+				}
+			}
+		}
+		if scan := node.VectorIndexScan; scan != nil {
+			for _, expr := range scan.PreFilters {
+				safe, err := probeJoinParameterExpression(proc, expr)
+				if !safe || err != nil {
+					return safe, err
+				}
+			}
 		}
 	}
-	if err == nil {
-		err = visitMissingNodeExprs(query, roots, rules)
-	}
-	if errors.Is(err, errUnsafePreparedJoinParameter) {
-		return false, nil
-	}
-	return err == nil, err
-}
-
-var errUnsafePreparedJoinParameter = errors.New("prepared JOIN parameter can diagnose")
-
-type preparedJoinParameterProbeRule struct {
-	proc *process.Process
-	seen map[*plan.Expr]struct{}
-}
-
-func (*preparedJoinParameterProbeRule) MatchNode(*plan.Node) bool { return false }
-func (*preparedJoinParameterProbeRule) IsApplyExpr() bool         { return true }
-func (*preparedJoinParameterProbeRule) ApplyNode(*plan.Node) error {
-	return nil
-}
-func (r *preparedJoinParameterProbeRule) ApplyExpr(expr *plan.Expr) (*plan.Expr, error) {
-	if expr == nil || !containsStatementParameterDiagnostic(expr) {
-		return expr, nil
-	}
-	if _, ok := r.seen[expr]; ok {
-		return expr, nil
-	}
-	r.seen[expr] = struct{}{}
-	safe, err := probeJoinParameterExpression(r.proc, expr)
-	if err != nil {
-		return expr, err
-	}
-	if !safe {
-		return expr, errUnsafePreparedJoinParameter
-	}
-	return expr, nil
+	return true, nil
 }
 
 func probeJoinParameterExpression(proc *process.Process, expr *plan.Expr) (bool, error) {
-	if expr == nil || !containsStatementParameterDiagnostic(expr) {
+	if expr == nil || !containsStatementDiagnostic(expr, true) {
 		return true, nil
 	}
-	if function.IsStatementConstantInput(expr) && function.ContainsParameter(expr) {
+	// Runtime specialization can replace a ParamRef with a literal. Probe the
+	// resulting maximal constant expression as well as the original parameter
+	// expression; checking only ContainsParameter would silently miss it.
+	if function.IsStatementConstantInput(expr) && !function.ContainsRowScopedConversion(expr) {
 		_, free, warned, err := rule.EvaluateConstantExpression(proc, expr, batch.EmptyForConstFoldBatch)
 		if free != nil {
 			free()

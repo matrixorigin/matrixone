@@ -23,8 +23,14 @@ import (
 // conversion whose EXECUTE-time value cannot be probed while planning. Keep
 // row-scoped conversions out of the statement diagnostic owner.
 func MayDiagnoseStatementParameter(expr *plan.Expr) bool {
+	return MayDiagnoseStatementConstant(expr) && ContainsParameter(expr)
+}
+
+// MayDiagnoseStatementConstant also recognizes the literal expression left
+// after a prepared parameter is materialized for this execution.
+func MayDiagnoseStatementConstant(expr *plan.Expr) bool {
 	if expr == nil || !IsStatementConstantInput(expr) ||
-		ContainsRowScopedConversion(expr) || !ContainsParameter(expr) {
+		ContainsRowScopedConversion(expr) {
 		return false
 	}
 	fn := expr.GetF()
@@ -94,7 +100,7 @@ func IsStatementConstantInput(expr *plan.Expr) bool {
 			return false
 		}
 		f, ok := GetFunctionByIdWithoutError(fn.Func.GetObj())
-		if !ok || f.CannotFold() || f.IsRealTimeRelated() {
+		if !ok || f.CannotFold() || f.IsRealTimeRelated() || f.IsAgg() || f.IsWin() {
 			return false
 		}
 		for _, arg := range fn.Args {

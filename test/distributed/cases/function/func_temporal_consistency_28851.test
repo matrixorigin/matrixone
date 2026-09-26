@@ -543,6 +543,39 @@ set @temporal_join_value = 839;
 execute temporal_join_where using @temporal_join_value;
 show warnings;
 deallocate prepare temporal_join_where;
+-- A second marker must not undo this execution's safe JOIN proof. Reuse the
+-- handle across a warning, NULL and a changed selective key.
+prepare temporal_join_two_markers from 'select count(*) from temporal_join_pk_left a join temporal_join_pk_right b on a.k=b.k and a.v=time(?) where a.k=?';
+set @temporal_join_value = '00:00:00';
+set @temporal_join_key = 1;
+execute temporal_join_two_markers using @temporal_join_value, @temporal_join_key;
+show count(*) warnings;
+set @temporal_join_value = '900:00:00';
+execute temporal_join_two_markers using @temporal_join_value, @temporal_join_key;
+show count(*) warnings;
+set @temporal_join_value = null;
+execute temporal_join_two_markers using @temporal_join_value, @temporal_join_key;
+show count(*) warnings;
+set @temporal_join_value = '00:00:00';
+set @temporal_join_key = 2;
+execute temporal_join_two_markers using @temporal_join_value, @temporal_join_key;
+show count(*) warnings;
+deallocate prepare temporal_join_two_markers;
+-- A warning in an unrelated projection keeps its own owner and must not
+-- prevent the valid JOIN marker from regaining a selective execution plan.
+set @temporal_28851_projection_sql_mode = @@sql_mode;
+set sql_mode = '';
+prepare temporal_join_projection from 'select time(?), count(*) from temporal_join_pk_left a join temporal_join_pk_right b on a.k=b.k and a.v=time(?) where a.k=?';
+set @temporal_join_projection = '900:00:00';
+set @temporal_join_value = '00:00:00';
+set @temporal_join_key = 1;
+execute temporal_join_projection using @temporal_join_projection, @temporal_join_value, @temporal_join_key;
+show count(*) warnings;
+set @temporal_join_projection = '00:00:00';
+execute temporal_join_projection using @temporal_join_projection, @temporal_join_value, @temporal_join_key;
+show count(*) warnings;
+deallocate prepare temporal_join_projection;
+set sql_mode = @temporal_28851_projection_sql_mode;
 prepare temporal_join_elimination from 'select a.k from temporal_join_pk_left a left join temporal_join_pk_right b on a.k=b.k and a.v<time(?) order by a.k';
 set @temporal_join_value = '900:00:00';
 execute temporal_join_elimination using @temporal_join_value;
