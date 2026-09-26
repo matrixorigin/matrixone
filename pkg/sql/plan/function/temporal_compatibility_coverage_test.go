@@ -1095,3 +1095,68 @@ func TestTimestampArithmeticUtcLowerBound(t *testing.T) {
 		require.Equal(t, datetimeOverflowMaxError, err)
 	}
 }
+
+func TestTimePublicNumericBoundary(t *testing.T) {
+	maxTime := types.MySQLTimeMax
+	for _, tc := range []struct {
+		name   string
+		input  FunctionTestInput
+		fn     fEvalFn
+		values []types.Time
+	}{
+		{
+			name:   "integer",
+			input:  NewFunctionTestInput(types.T_int64.ToType(), []int64{8385959, 9000000, -9000000}, nil),
+			fn:     Int64ToTime,
+			values: []types.Time{maxTime, maxTime, -maxTime},
+		},
+		{
+			name: "decimal",
+			input: func() FunctionTestInput {
+				positive, err := types.ParseDecimal128("9000000.0", 10, 1)
+				require.NoError(t, err)
+				negative, err := types.ParseDecimal128("-9000000.0", 10, 1)
+				require.NoError(t, err)
+				return NewFunctionTestInput(types.New(types.T_decimal128, 10, 1), []types.Decimal128{positive, negative}, nil)
+			}(),
+			fn:     Decimal128ToTime,
+			values: []types.Time{maxTime, -maxTime},
+		},
+		{
+			name: "wide decimal",
+			input: func() FunctionTestInput {
+				positive, err := types.ParseDecimal256("9000000.0", 65, 1)
+				require.NoError(t, err)
+				negative, err := types.ParseDecimal256("-9000000.0", 65, 1)
+				require.NoError(t, err)
+				return NewFunctionTestInput(types.New(types.T_decimal256, 65, 1), []types.Decimal256{positive, negative}, nil)
+			}(),
+			fn:     Decimal256ToTime,
+			values: []types.Time{maxTime, -maxTime},
+		},
+		{
+			name:   "typed",
+			input:  NewFunctionTestInput(types.T_time.ToType(), []types.Time{maxTime, types.TimeFromClock(false, 900, 0, 0, 0)}, nil),
+			fn:     TimeToTime,
+			values: []types.Time{maxTime, maxTime},
+		},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			proc := newTmpProcess(t)
+			warnings := &numericWarningSession{}
+			proc.WarningSink = warnings
+			c := NewFunctionTestCase(proc, []FunctionTestInput{tc.input},
+				NewFunctionTestResult(types.T_time.ToType(), false, tc.values, nil), tc.fn)
+			ok, info := c.Run()
+			require.True(t, ok, info)
+			wantWarnings := 1
+			if tc.name != "typed" {
+				wantWarnings = 2
+			}
+			require.Len(t, warnings.warnings, wantWarnings)
+			for _, warning := range warnings.warnings {
+				require.Equal(t, uint16(moerr.ER_TRUNCATED_WRONG_VALUE), warning.code)
+			}
+		})
+	}
+}

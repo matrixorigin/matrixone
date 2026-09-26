@@ -918,12 +918,24 @@ func RequiredRemoteExpressionFeatures(owner any) (features RemoteExpressionFeatu
 					features.TemporalResultContracts = true
 				}
 
-				// The shared temporal text parser also executes beneath a CAST.
-				// Preserve its physical ABI, but never send the new grammar or
-				// range policy to a released worker through that stable identity.
-				if id == 21 && isPlanTemporalType(current.Typ.Id) && len(fn.Args) > 0 &&
-					fn.Args[0] != nil && isPlanStringType(fn.Args[0].Typ.Id) {
-					features.TemporalResultContracts = true
+				// CAST keeps its physical identity. The changed TIME conversion
+				// includes numeric inputs; the other temporal conversions use the
+				// shared text parser. SQL HEX/BIT literals also changed numeric
+				// coercion, independent of a temporal target.
+				if id == 21 && len(fn.Args) > 0 && fn.Args[0] != nil {
+					source := fn.Args[0]
+					if isPlanTemporalType(current.Typ.Id) &&
+						(isPlanStringType(source.Typ.Id) ||
+							(current.Typ.Id == planTimeTypeID && isPlanNumericType(source.Typ.Id))) {
+						features.TemporalResultContracts = true
+					}
+					if isPlanNumericType(current.Typ.Id) {
+						if lit := source.GetLit(); lit != nil &&
+							(lit.LiteralForm == StringLiteralForm_STRING_LITERAL_HEX ||
+								lit.LiteralForm == StringLiteralForm_STRING_LITERAL_BIT) {
+							features.TemporalResultContracts = true
+						}
+					}
 				}
 
 				if (id == 72 || id == 103) && len(fn.Args) == 2 &&

@@ -142,6 +142,7 @@ func (hashJoin *HashJoin) Prepare(proc *process.Process) (err error) {
 			proc,
 			probeConditions,
 			hashJoin.allocationAccount,
+			hashJoin.OwnsConstantFilterDiagnostics,
 		)
 		if err != nil {
 			return err
@@ -154,6 +155,7 @@ func (hashJoin *HashJoin) Prepare(proc *process.Process) (err error) {
 				proc,
 				[]*plan.Expr{hashJoin.NonEqCond},
 				hashJoin.allocationAccount,
+				hashJoin.OwnsConstantFilterDiagnostics,
 			)
 			if err != nil {
 				for _, exec := range eqCondExecs {

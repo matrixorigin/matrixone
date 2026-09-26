@@ -53,7 +53,7 @@ func (c *Compile) constrainTemporalResultWorkers(qry *plan.Query) error {
 
 func temporalExpressionProtocolVersion(features plan.RemoteExpressionFeatures) int64 {
 	if features.TemporalResultContracts || features.NormalizedIntervalUnits || features.WeekSessionDefault {
-		return defines.MORPCVersion97
+		return defines.MORPCVersion98
 	}
 	return 0
 }

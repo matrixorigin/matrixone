@@ -11467,7 +11467,7 @@ var supportedDateAndTimeBuiltIns = []FuncNew{
 				overloadId: 0,
 				args:       []types.T{types.T_time},
 				retType: func(parameters []types.Type) types.Type {
-					return types.T_time.ToType()
+					return types.T_time.ToTypeWithScale(parameters[0].Scale)
 				},
 				newOp: func() executeLogicOfOverload {
 					return TimeToTime
@@ -11507,7 +11507,7 @@ var supportedDateAndTimeBuiltIns = []FuncNew{
 				overloadId: 4,
 				args:       []types.T{types.T_decimal128},
 				retType: func(parameters []types.Type) types.Type {
-					return types.T_time.ToType()
+					return types.T_time.ToTypeWithScale(min(max(parameters[0].Scale, 0), 6))
 				},
 				newOp: func() executeLogicOfOverload {
 					return Decimal128ToTime
@@ -11517,7 +11517,7 @@ var supportedDateAndTimeBuiltIns = []FuncNew{
 				overloadId: 5,
 				args:       []types.T{types.T_varchar},
 				retType: func(parameters []types.Type) types.Type {
-					return types.T_time.ToType()
+					return types.T_time.ToTypeWithScale(6)
 				},
 				newOp: func() executeLogicOfOverload {
 					return DateStringToTime
@@ -11527,7 +11527,7 @@ var supportedDateAndTimeBuiltIns = []FuncNew{
 				overloadId: 6,
 				args:       []types.T{types.T_char},
 				retType: func(parameters []types.Type) types.Type {
-					return types.T_time.ToType()
+					return types.T_time.ToTypeWithScale(6)
 				},
 				newOp: func() executeLogicOfOverload {
 					return DateStringToTime
@@ -11537,7 +11537,7 @@ var supportedDateAndTimeBuiltIns = []FuncNew{
 				overloadId: 7,
 				args:       []types.T{types.T_text},
 				retType: func(parameters []types.Type) types.Type {
-					return types.T_time.ToType()
+					return types.T_time.ToTypeWithScale(6)
 				},
 				newOp: func() executeLogicOfOverload {
 					return DateStringToTime
@@ -11547,7 +11547,7 @@ var supportedDateAndTimeBuiltIns = []FuncNew{
 				overloadId: 8,
 				args:       []types.T{types.T_blob},
 				retType: func(parameters []types.Type) types.Type {
-					return types.T_time.ToType()
+					return types.T_time.ToTypeWithScale(6)
 				},
 				newOp: func() executeLogicOfOverload {
 					return DateStringToTime
@@ -11561,6 +11561,16 @@ var supportedDateAndTimeBuiltIns = []FuncNew{
 				},
 				newOp: func() executeLogicOfOverload {
 					return TimestampToTime
+				},
+			},
+			{
+				overloadId: 10,
+				args:       []types.T{types.T_decimal256},
+				retType: func(parameters []types.Type) types.Type {
+					return types.T_time.ToTypeWithScale(min(max(parameters[0].Scale, 0), 6))
+				},
+				newOp: func() executeLogicOfOverload {
+					return Decimal256ToTime
 				},
 			},
 		},

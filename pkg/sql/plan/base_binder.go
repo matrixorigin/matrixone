@@ -6877,6 +6877,33 @@ func bindFuncExprImplByPlanExpr(
 			returnType.Scale = fsp
 		}
 
+	case "time":
+		if len(args) == 1 {
+			source := args[0]
+			if originalBoundExpr != nil && originalBoundExpr.Typ.Id == int32(types.T_time) {
+				// A prepared handle keeps its bound result precision across
+				// executions even when the current argument is re-materialized.
+				returnType.Scale = originalBoundExpr.Typ.Scale
+			} else if source.GetP() != nil || argsType[0].Oid == types.T_any {
+				returnType.Scale = 6
+			} else if types.T(argsType[0].Oid).IsMySQLString() {
+				// The value of a string column or marker is unknown at bind time.
+				// A validated literal can advertise its exact fractional width.
+				returnType.Scale = 6
+				if literal := source.GetLit(); literal != nil && !literal.Isnull {
+					if text, ok := literal.GetValue().(*plan.Literal_Sval); ok && strings.TrimSpace(text.Sval) == "" {
+						returnType.Scale = 0
+					} else if fsp, ok := timestampPairLiteralFSP(source, false); ok {
+						returnType.Scale = fsp
+					}
+				}
+			}
+			// CTAS and view DDL use Width when materializing temporal FSP.
+			// Keep it aligned with the result's Scale so fractional values do
+			// not become TIME(0) columns with hidden microseconds.
+			returnType.Width = returnType.Scale
+		}
+
 	case "addtime", "subtime":
 		// A direct prepared parameter has TIME(6) result metadata in MySQL.
 		// Keep the string overload and its physical argument: an implicit cast

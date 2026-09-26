@@ -276,6 +276,11 @@ func increaseNodeTagCnt(node *plan.Node, inc int, tagCnt map[int32]int) {
 
 const maxVectorIndexTopPushdownLimit = uint64(^uint(0) >> 1)
 
+func (builder *QueryBuilder) filterPushdownBarrier(expr *plan.Expr) bool {
+	return ContainsVolatileFunction(expr) ||
+		ContainsStatementInvariantFilterDiagnostic(builder.compCtx.GetProcess(), expr)
+}
+
 func (builder *QueryBuilder) pushdownFilters(nodeID int32, filters []*plan.Expr, separateNonEquiConds bool) (int32, []*plan.Expr) {
 	originalNodeID := nodeID
 	if builder.checkPlanningCanceled() != nil {
@@ -312,7 +317,7 @@ func (builder *QueryBuilder) pushdownFilters(nodeID int32, filters []*plan.Expr,
 		aggregateTag := node.BindingTags[1]
 
 		for _, filter := range filters {
-			if ContainsVolatileFunction(filter) {
+			if builder.filterPushdownBarrier(filter) {
 				node.FilterList = append(node.FilterList, filter)
 				continue
 			}
@@ -347,7 +352,7 @@ func (builder *QueryBuilder) pushdownFilters(nodeID int32, filters []*plan.Expr,
 		sampleTag := node.BindingTags[1]
 
 		for _, filter := range filters {
-			if ContainsVolatileFunction(filter) {
+			if builder.filterPushdownBarrier(filter) {
 				node.FilterList = append(node.FilterList, filter)
 			} else if !containsTag(filter, sampleTag) {
 				canPushdown = append(canPushdown, replaceColRefs(filter, groupTag, node.GroupBy))
@@ -390,7 +395,7 @@ func (builder *QueryBuilder) pushdownFilters(nodeID int32, filters []*plan.Expr,
 		}
 
 		for _, filter := range filters {
-			if ContainsVolatileFunction(filter) {
+			if builder.filterPushdownBarrier(filter) {
 				node.FilterList = append(node.FilterList, filter)
 			} else if containsTag(filter, windowTag) {
 				node.FilterList = append(node.FilterList, filter)
@@ -417,7 +422,7 @@ func (builder *QueryBuilder) pushdownFilters(nodeID int32, filters []*plan.Expr,
 		windowTag := node.BindingTags[0]
 
 		for _, filter := range filters {
-			if ContainsVolatileFunction(filter) {
+			if builder.filterPushdownBarrier(filter) {
 				node.FilterList = append(node.FilterList, filter)
 			} else if !containsTag(filter, windowTag) {
 				canPushdown = append(canPushdown, replaceColRefs(filter, windowTag, node.WinSpecList))
@@ -608,7 +613,7 @@ func (builder *QueryBuilder) pushdownFilters(nodeID int32, filters []*plan.Expr,
 				conj := splitPlanConjunction(applyDistributivity(
 					builder.GetContext(), cond, !builder.subqueryPredicatePlanningDisabled()))
 				for _, conjElem := range conj {
-					if ContainsVolatileFunction(conjElem) {
+					if builder.filterPushdownBarrier(conjElem) {
 						newOnList = append(newOnList, conjElem)
 						continue
 					}
@@ -652,7 +657,7 @@ func (builder *QueryBuilder) pushdownFilters(nodeID int32, filters []*plan.Expr,
 				cantPushdown = append(cantPushdown, filter)
 				continue
 			}
-			if ContainsVolatileFunction(filter) {
+			if builder.filterPushdownBarrier(filter) {
 				cantPushdown = append(cantPushdown, filter)
 				continue
 			}
@@ -784,7 +789,7 @@ func (builder *QueryBuilder) pushdownFilters(nodeID int32, filters []*plan.Expr,
 
 				for _, cond := range node.OnList {
 					joinSide := getJoinSideForPushdown(cond, leftTags, rightTags, markTag)
-					if joinSide == JoinSideRight && !ContainsVolatileFunction(cond) {
+					if joinSide == JoinSideRight && !builder.filterPushdownBarrier(cond) {
 						rightPushdown = append(rightPushdown, cond)
 					} else {
 						newOnList = append(newOnList, cond)
@@ -819,7 +824,7 @@ func (builder *QueryBuilder) pushdownFilters(nodeID int32, filters []*plan.Expr,
 		if builder.qry.Nodes[node.Children[1]].NodeType == plan.Node_FUNCTION_SCAN {
 
 			for _, filter := range filters {
-				if ContainsVolatileFunction(filter) {
+				if builder.filterPushdownBarrier(filter) {
 					continue
 				}
 				down := false
@@ -886,7 +891,7 @@ func (builder *QueryBuilder) pushdownFilters(nodeID int32, filters []*plan.Expr,
 		var canPushDownRight []*plan.Expr
 
 		for _, filter := range filters {
-			if ContainsVolatileFunction(filter) {
+			if builder.filterPushdownBarrier(filter) {
 				cantPushdown = append(cantPushdown, filter)
 				continue
 			}
@@ -982,7 +987,7 @@ func (builder *QueryBuilder) pushdownFilters(nodeID int32, filters []*plan.Expr,
 
 	case plan.Node_APPLY:
 		for _, filter := range filters {
-			if ContainsVolatileFunction(filter) {
+			if builder.filterPushdownBarrier(filter) {
 				cantPushdown = append(cantPushdown, filter)
 			} else {
 				canPushdown = append(canPushdown, filter)

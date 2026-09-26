@@ -70,12 +70,12 @@ func TestPersistedDecimalLiteralUsesDedicatedEpochInMixedOwner(t *testing.T) {
 		{"spatial only", []*planpb.Expr{spatialExpr}, defines.MORPCVersion90},
 		{"decimal then spatial", []*planpb.Expr{decimalExpr, spatialExpr}, defines.MORPCVersion90},
 		{"spatial then decimal", []*planpb.Expr{spatialExpr, decimalExpr}, defines.MORPCVersion90},
-		{"temporal result", []*planpb.Expr{temporalExpr}, defines.MORPCVersion97},
-		{"temporal then spatial", []*planpb.Expr{temporalExpr, spatialExpr}, defines.MORPCVersion97},
-		{"normalized interval", []*planpb.Expr{intervalExpr}, defines.MORPCVersion97},
-		{"typed numeric interval overload", []*planpb.Expr{typedIntervalExpr}, defines.MORPCVersion97},
-		{"week session default", []*planpb.Expr{weekExpr}, defines.MORPCVersion97},
-		{"temporal then interval", []*planpb.Expr{temporalExpr, intervalExpr}, defines.MORPCVersion97},
+		{"temporal result", []*planpb.Expr{temporalExpr}, defines.MORPCVersion98},
+		{"temporal then spatial", []*planpb.Expr{temporalExpr, spatialExpr}, defines.MORPCVersion98},
+		{"normalized interval", []*planpb.Expr{intervalExpr}, defines.MORPCVersion98},
+		{"typed numeric interval overload", []*planpb.Expr{typedIntervalExpr}, defines.MORPCVersion98},
+		{"week session default", []*planpb.Expr{weekExpr}, defines.MORPCVersion98},
+		{"temporal then interval", []*planpb.Expr{temporalExpr, intervalExpr}, defines.MORPCVersion98},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			owner := &planpb.TableDef{}
@@ -768,10 +768,13 @@ func TestPersistedMixedTemporalViewProtocolAdmission(t *testing.T) {
 	for _, createSQL := range []string{
 		"create view v_mixed_temporal as select if(1 = 1, cast('2024-01-02 12:34:56.123456' as timestamp(6)), cast('2024-01-02 12:34:56.123' as datetime(3))) as value",
 		"create view v_stable_temporal as select date_sub(now(), interval 10 minute) as value",
+		"create view v_numeric_time as select cast(900 as time) as value",
+		"create view v_hex_numeric as select cast(X'' as signed) as value",
+		"create view v_bit_numeric as select cast(b'0' as double) as value",
 	} {
 		t.Run(createSQL, func(t *testing.T) {
 			build := func(authoringFloor int64) (*Plan, error) {
-				rt.SetGlobalVariables(moruntime.MOProtocolVersion, defines.MORPCVersion97)
+				rt.SetGlobalVariables(moruntime.MOProtocolVersion, defines.MORPCVersion98)
 				rt.SetGlobalVariables(moruntime.PersistedExpressionProtocolAuthoringFloor, authoringFloor)
 				stmt, err := parsers.ParseOne(t.Context(), dialect.MYSQL, createSQL, 1)
 				if err != nil {
@@ -782,17 +785,17 @@ func TestPersistedMixedTemporalViewProtocolAdmission(t *testing.T) {
 			}
 
 			_, err := build(0)
-			require.ErrorContains(t, err, "protocol version 97")
+			require.ErrorContains(t, err, "protocol version 98")
 			_, err = build(defines.MORPCVersion96)
-			require.ErrorContains(t, err, "protocol version 97")
+			require.ErrorContains(t, err, "protocol version 98")
 
-			created, err := build(defines.MORPCVersion97)
+			created, err := build(defines.MORPCVersion98)
 			require.NoError(t, err)
 			var viewData ViewData
 			require.NoError(t, json.Unmarshal(
 				[]byte(created.GetDdl().GetCreateView().GetTableDef().GetViewSql().GetView()), &viewData))
 			require.NotNil(t, viewData.RequiredProtocolVersion)
-			require.Equal(t, int64(defines.MORPCVersion97), *viewData.RequiredProtocolVersion)
+			require.Equal(t, int64(defines.MORPCVersion98), *viewData.RequiredProtocolVersion)
 		})
 	}
 }

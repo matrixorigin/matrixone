@@ -219,11 +219,12 @@ type HashJoin struct {
 	JoinType    plan.Node_JoinType
 	IsRightJoin bool
 
-	ResultCols []colexec.ResultPos
-	LeftTypes  []types.Type
-	RightTypes []types.Type
-	NonEqCond  *plan.Expr
-	EqConds    [][]*plan.Expr
+	ResultCols                    []colexec.ResultPos
+	LeftTypes                     []types.Type
+	RightTypes                    []types.Type
+	NonEqCond                     *plan.Expr
+	EqConds                       [][]*plan.Expr
+	OwnsConstantFilterDiagnostics bool
 
 	Mailbox *BitmapMailbox
 	NumCPU  uint64

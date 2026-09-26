@@ -119,7 +119,7 @@ func TestTemporalUnitAndWeekProtocolAdmission(t *testing.T) {
 	require.NoError(t, err)
 	require.True(t, features.NormalizedIntervalUnits)
 	require.True(t, features.WeekSessionDefault)
-	require.Equal(t, defines.MORPCVersion97, temporalExpressionProtocolVersion(features))
+	require.Equal(t, defines.MORPCVersion98, temporalExpressionProtocolVersion(features))
 	qry := &planpb.Query{Nodes: []*planpb.Node{{ProjectList: []*planpb.Expr{unitExpr, weekExpr}}}, Steps: []int32{0}}
 	client.version = defines.MORPCVersion96
 	c.execType = plan2.ExecTypeAP_MULTICN
@@ -132,8 +132,8 @@ func TestTemporalUnitAndWeekProtocolAdmission(t *testing.T) {
 	p := &pipeline.Pipeline{InstructionList: []*pipeline.Instruction{{ProjectList: []*planpb.Expr{unitExpr, weekExpr}}}}
 	rt := moruntime.ServiceRuntime(c.proc.GetService())
 	rt.SetGlobalVariables(moruntime.MOProtocolVersion, defines.MORPCVersion96)
-	require.ErrorContains(t, validateRemoteExpressionPipelineProtocol(c.proc, p), "version 97")
-	rt.SetGlobalVariables(moruntime.MOProtocolVersion, defines.MORPCVersion97)
+	require.ErrorContains(t, validateRemoteExpressionPipelineProtocol(c.proc, p), "version 98")
+	rt.SetGlobalVariables(moruntime.MOProtocolVersion, defines.MORPCVersion98)
 	require.NoError(t, validateRemoteExpressionPipelineProtocol(c.proc, p))
 	c.proc.Base.SessionInfo.DefaultWeekFormatSet = false
 	require.ErrorContains(t, validateRemoteExpressionPipelineProtocol(c.proc, p), "session snapshot")
@@ -162,7 +162,7 @@ func TestTypedNumericIntervalRequiresTemporalProtocol(t *testing.T) {
 	features, err := planpb.RequiredRemoteExpressionFeatures(expr)
 	require.NoError(t, err)
 	require.True(t, features.NormalizedIntervalUnits)
-	require.Equal(t, defines.MORPCVersion97, temporalExpressionProtocolVersion(features))
+	require.Equal(t, defines.MORPCVersion98, temporalExpressionProtocolVersion(features))
 
 	qry := &planpb.Query{Nodes: []*planpb.Node{{ProjectList: []*planpb.Expr{expr}}}, Steps: []int32{0}}
 	client.version = defines.MORPCVersion96
@@ -174,8 +174,8 @@ func TestTypedNumericIntervalRequiresTemporalProtocol(t *testing.T) {
 	p := &pipeline.Pipeline{InstructionList: []*pipeline.Instruction{{ProjectList: []*planpb.Expr{expr}}}}
 	rt := moruntime.ServiceRuntime(c.proc.GetService())
 	rt.SetGlobalVariables(moruntime.MOProtocolVersion, defines.MORPCVersion96)
-	require.ErrorContains(t, validateRemoteExpressionPipelineProtocol(c.proc, p), "version 97")
-	rt.SetGlobalVariables(moruntime.MOProtocolVersion, defines.MORPCVersion97)
+	require.ErrorContains(t, validateRemoteExpressionPipelineProtocol(c.proc, p), "version 98")
+	rt.SetGlobalVariables(moruntime.MOProtocolVersion, defines.MORPCVersion98)
 	require.NoError(t, validateRemoteExpressionPipelineProtocol(c.proc, p))
 }
 
@@ -194,7 +194,7 @@ func TestRawTimeIntervalOverloadsRequireV97(t *testing.T) {
 			features, err := planpb.RequiredRemoteExpressionFeatures(expr)
 			require.NoError(t, err)
 			require.True(t, features.NormalizedIntervalUnits)
-			require.Equal(t, defines.MORPCVersion97, temporalExpressionProtocolVersion(features))
+			require.Equal(t, defines.MORPCVersion98, temporalExpressionProtocolVersion(features))
 			qry := &planpb.Query{Nodes: []*planpb.Node{{ProjectList: []*planpb.Expr{expr}}}, Steps: []int32{0}}
 			client.version = defines.MORPCVersion96
 			c.execType = plan2.ExecTypeAP_MULTICN
@@ -205,7 +205,7 @@ func TestRawTimeIntervalOverloadsRequireV97(t *testing.T) {
 	}
 }
 
-func TestRawDayFieldOverloadRequiresV97(t *testing.T) {
+func TestRawDayFieldOverloadRequiresV98(t *testing.T) {
 	c, client := expressionProtocolTestCompile(t)
 	for _, id := range []int32{function.DAY, function.YEAR, function.MONTH} {
 		expr := &planpb.Expr{Typ: planpb.Type{Id: int32(types.T_uint8)}, Expr: &planpb.Expr_F{F: &planpb.Function{
@@ -215,7 +215,7 @@ func TestRawDayFieldOverloadRequiresV97(t *testing.T) {
 		features, err := planpb.RequiredRemoteExpressionFeatures(expr)
 		require.NoError(t, err)
 		require.True(t, features.TemporalResultContracts)
-		require.Equal(t, defines.MORPCVersion97, temporalExpressionProtocolVersion(features))
+		require.Equal(t, defines.MORPCVersion98, temporalExpressionProtocolVersion(features))
 		qry := &planpb.Query{Nodes: []*planpb.Node{{ProjectList: []*planpb.Expr{expr}}}, Steps: []int32{0}}
 		c.execType = plan2.ExecTypeAP_MULTICN
 		c.cnList = engine.Nodes{{Id: "old-worker", Addr: "remote:6001", Mcpu: 4}}
@@ -227,7 +227,7 @@ func TestRawDayFieldOverloadRequiresV97(t *testing.T) {
 		scope := &Scope{Magic: Remote, Proc: c.proc, NodeInfo: engine.Node{Id: "old-worker", Addr: "remote:6001"}, RootOp: op}
 		_, err = encodeRemoteScope(scope, c.proc)
 		require.ErrorContains(t, err, "temporal result contracts")
-		client.version = defines.MORPCVersion97
+		client.version = defines.MORPCVersion98
 		_, err = encodeRemoteScope(scope, c.proc)
 		require.NoError(t, err)
 		op.Release()
@@ -292,13 +292,13 @@ func TestRelease42TemporalProtocolBoundary(t *testing.T) {
 			scope := &Scope{Magic: Remote, Proc: c.proc, NodeInfo: engine.Node{Id: "old-worker", Addr: "remote:6001"}, RootOp: op}
 			// 4.2.0/4.2.1 use 9, 4.2.2..4.2.4 use 10. Also retain the direct
 			// protocol-boundary negative control without calling it a release.
-			for _, version := range []int64{9, 10, defines.MORPCVersion96, defines.MORPCVersion97} {
+			for _, version := range []int64{9, 10, defines.MORPCVersion96, defines.MORPCVersion97, defines.MORPCVersion98} {
 				client.version = version
 				rt := moruntime.ServiceRuntime(c.proc.GetService())
 				rt.SetGlobalVariables(moruntime.MOProtocolVersion, version)
 				pipeline := &pipeline.Pipeline{InstructionList: []*pipeline.Instruction{{ProjectList: []*planpb.Expr{expr}}}}
 				receiveErr := validateRemoteExpressionPipelineProtocol(c.proc, pipeline)
-				if version < defines.MORPCVersion97 {
+				if version < defines.MORPCVersion98 {
 					require.Error(t, receiveErr)
 				} else {
 					require.NoError(t, receiveErr)
@@ -307,7 +307,7 @@ func TestRelease42TemporalProtocolBoundary(t *testing.T) {
 				c.cnList = engine.Nodes{{Id: "old-worker", Addr: "remote:6001", Mcpu: 4}}
 				require.NoError(t, c.constrainTemporalResultWorkers(qry))
 				_, err := encodeRemoteScope(scope, c.proc)
-				if version < defines.MORPCVersion97 {
+				if version < defines.MORPCVersion98 {
 					require.Equal(t, plan2.ExecTypeAP_ONECN, c.execType)
 					require.ErrorContains(t, err, "temporal")
 				} else {
@@ -317,7 +317,7 @@ func TestRelease42TemporalProtocolBoundary(t *testing.T) {
 			}
 			floor, err := plan2.RequiredPersistedExpressionProtocolVersion(expr)
 			require.NoError(t, err)
-			require.Equal(t, defines.MORPCVersion97, floor)
+			require.Equal(t, defines.MORPCVersion98, floor)
 		})
 	}
 	// Previously serialized physical types are still valid on a new reader.
@@ -369,7 +369,7 @@ func TestTemporalResultProtocolPlacementAndReceive(t *testing.T) {
 	require.Equal(t, plan2.ExecTypeAP_ONECN, c.execType)
 	_, err = encodeRemoteScope(scope, c.proc)
 	require.ErrorContains(t, err, "temporal result contracts")
-	client.version = defines.MORPCVersion97
+	client.version = defines.MORPCVersion98
 	c.execType = plan2.ExecTypeAP_MULTICN
 	c.cnList = engine.Nodes{{Id: "old-worker", Addr: "remote:6001", Mcpu: 4}}
 	require.NoError(t, c.constrainTemporalResultWorkers(qry))
@@ -384,8 +384,8 @@ func TestTemporalResultProtocolPlacementAndReceive(t *testing.T) {
 	p := &pipeline.Pipeline{InstructionList: []*pipeline.Instruction{{ProjectList: []*planpb.Expr{expr}}}}
 	rt := moruntime.ServiceRuntime(c.proc.GetService())
 	rt.SetGlobalVariables(moruntime.MOProtocolVersion, defines.MORPCVersion96)
-	require.ErrorContains(t, validateRemoteExpressionPipelineProtocol(c.proc, p), "version 97")
-	rt.SetGlobalVariables(moruntime.MOProtocolVersion, defines.MORPCVersion97)
+	require.ErrorContains(t, validateRemoteExpressionPipelineProtocol(c.proc, p), "version 98")
+	rt.SetGlobalVariables(moruntime.MOProtocolVersion, defines.MORPCVersion98)
 	require.NoError(t, validateRemoteExpressionPipelineProtocol(c.proc, p))
 	for _, legacy := range []*planpb.Expr{
 		temporalResultProtocolExpr(function.EXTRACT, types.T_varchar, types.T_varchar),

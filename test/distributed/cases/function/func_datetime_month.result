@@ -12,7 +12,7 @@ SELECT MONTH("12415141412-12-21") as month;
 null
 SELECT MONTH("0000-00-00") as month;
 ➤ month[-6,8,0]  𝄀
-0
+null
 SELECT MONTH("2049-14-34") as month;
 ➤ month[-6,8,0]  𝄀
 null

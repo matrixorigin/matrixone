@@ -183,6 +183,7 @@ func (hb *HashmapBuilder) Prepare(
 	dedupDeleteMarkerColIdx int32,
 	dedupDeleteKeepColIdxList []int32,
 	proc *process.Process,
+	foldOwnedConstantCasts ...bool,
 ) error {
 	if len(hb.executors) == 0 {
 		needDupVec := false
@@ -201,6 +202,7 @@ func (hb *HashmapBuilder) Prepare(
 			keyCols,
 			hb.mapAllocationAccount,
 			hb.recoveryCapacityClass,
+			foldOwnedConstantCasts...,
 		)
 		if err != nil {
 			return err

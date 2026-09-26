@@ -1,3 +1,4 @@
+set @temporal_28851_saved_sql_mode = @@sql_mode;
 drop database if exists temporal_consistency_28851;
 create database temporal_consistency_28851;
 use temporal_consistency_28851;
@@ -572,4 +573,63 @@ select id, date_add(s, interval 0 second), addtime(s,'00:00:00') from temporal_c
 5  ¦  null  ¦  null  𝄀
 6  ¦  null  ¦  null
 drop table temporal_calendar_spelling_28851;
+select time(9000000) as positive_numeric, time(-9000000) as negative_numeric,
+time(cast(9000000.0 as decimal(10,1))) as positive_decimal,
+time(cast(-9000000.0 as decimal(10,1))) as negative_decimal,
+time(cast(9000000.0 as decimal(65,1))) as positive_wide_decimal,
+time(cast(9000000 as double)) as positive_float;
+➤ positive_numeric[92,10,0]  ¦  negative_numeric[92,10,0]  ¦  positive_decimal[92,12,0]  ¦  negative_decimal[92,12,0]  ¦  positive_wide_decimal[92,12,0]  ¦  positive_float[92,10,0]  𝄀
+838:59:59  ¦  -838:59:59  ¦  838:59:59  ¦  -838:59:59  ¦  838:59:59  ¦  838:59:59
+show warnings;
+➤ Level[12,0,0]  ¦  Code[5,0,0]  ¦  Message[12,0,0]  𝄀
+Warning  ¦  1292  ¦  Truncated incorrect time value: '900:00:00'  𝄀
+Warning  ¦  1292  ¦  Truncated incorrect time value: '-900:00:00'  𝄀
+Warning  ¦  1292  ¦  Truncated incorrect time value: '900:00:00.0'  𝄀
+Warning  ¦  1292  ¦  Truncated incorrect time value: '-900:00:00.0'  𝄀
+Warning  ¦  1292  ¦  Truncated incorrect time value: '900:00:00.0'  𝄀
+Warning  ¦  1292  ¦  Truncated incorrect time value: '900:00:00'
+select time(cast('00:00:00.123456' as time(6))) as typed_fsp,
+microsecond(time(cast('00:00:00.123456' as time(6)))) as typed_us,
+time(cast(123.123456 as decimal(12,6))) as decimal_fsp,
+microsecond(time(cast(123.123456 as decimal(12,6)))) as decimal_us,
+time(cast(123.1234567 as decimal(65,7))) as wide_decimal_fsp,
+microsecond(time(cast(123.1234567 as decimal(65,7)))) as wide_decimal_us,
+time('00:00:00.1234') as literal_fsp;
+➤ typed_fsp[92,17,0]  ¦  typed_us[-5,64,0]  ¦  decimal_fsp[92,17,0]  ¦  decimal_us[-5,64,0]  ¦  wide_decimal_fsp[92,17,0]  ¦  wide_decimal_us[-5,64,0]  ¦  literal_fsp[92,15,0]  𝄀
+00:00:00.123456000  ¦  123456  ¦  00:01:23.123456000  ¦  123456  ¦  00:01:23.123457000  ¦  123457  ¦  00:00:00.123400000
+create table time_fsp_materialized_28851 as
+select time(cast('00:00:00.123456' as time(6))) as typed_time,
+time(cast(123.1234567 as decimal(65,7))) as wide_decimal_time,
+time('00:00:00.1234') as literal_time;
+select column_name, column_type, datetime_precision from information_schema.columns
+where table_schema = database() and table_name = 'time_fsp_materialized_28851'
+order by ordinal_position;
+➤ column_name[12,256,0]  ¦  column_type[12,65535,0]  ¦  datetime_precision[-5,64,0]  𝄀
+typed_time  ¦  TIME(6)  ¦  6  𝄀
+wide_decimal_time  ¦  TIME(6)  ¦  6  𝄀
+literal_time  ¦  TIME(4)  ¦  4
+select microsecond(typed_time), microsecond(wide_decimal_time), microsecond(literal_time)
+from time_fsp_materialized_28851;
+➤ microsecond(typed_time)[-5,64,0]  ¦  microsecond(wide_decimal_time)[-5,64,0]  ¦  microsecond(literal_time)[-5,64,0]  𝄀
+123456  ¦  123457  ¦  123400
+drop table time_fsp_materialized_28851;
+create table time_fsp_sources_28851 (s varchar(30));
+insert into time_fsp_sources_28851 values ('00:00:00.123456'), ('00:00:01');
+select s, time(s) as dynamic_fsp, microsecond(time(s)) as dynamic_us
+from time_fsp_sources_28851 order by s;
+➤ s[12,30,0]  ¦  dynamic_fsp[92,17,0]  ¦  dynamic_us[-5,64,0]  𝄀
+00:00:00.123456  ¦  00:00:00.123456000  ¦  123456  𝄀
+00:00:01  ¦  00:00:01  ¦  0
+prepare time_fsp_marker_28851 from 'select time(?) as marker_fsp, microsecond(time(?)) as marker_us';
+set @time_fsp_value_28851 = '00:00:00.123456';
+execute time_fsp_marker_28851 using @time_fsp_value_28851, @time_fsp_value_28851;
+➤ marker_fsp[92,17,0]  ¦  marker_us[-5,64,0]  𝄀
+00:00:00.123456000  ¦  123456
+set @time_fsp_value_28851 = '00:00:01';
+execute time_fsp_marker_28851 using @time_fsp_value_28851, @time_fsp_value_28851;
+➤ marker_fsp[92,17,0]  ¦  marker_us[-5,64,0]  𝄀
+00:00:01  ¦  0
+deallocate prepare time_fsp_marker_28851;
+drop table time_fsp_sources_28851;
+set sql_mode = @temporal_28851_saved_sql_mode;
 drop database temporal_consistency_28851;

@@ -107,6 +107,7 @@ func (hashBuild *HashBuild) Prepare(proc *process.Process) (err error) {
 		hashBuild.DedupDeleteMarkerColIdx,
 		hashBuild.DedupDeleteKeepColIdxList,
 		proc,
+		hashBuild.OwnsConstantFilterDiagnostics,
 	)
 	return TerminalBudgetError(proc.Ctx, err)
 }

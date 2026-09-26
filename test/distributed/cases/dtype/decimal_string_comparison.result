@@ -181,8 +181,62 @@ SELECT id FROM token_values WHERE d = CONCAT('1e2', 'suffix') ORDER BY id;
 SHOW WARNINGS;
 ➤ Level[12,0,0]  ¦  Code[5,0,0]  ¦  Message[12,0,0]  𝄀
 Warning  ¦  1292  ¦  Truncated incorrect DOUBLE value: '1e2suffix'
+SELECT id FROM token_values WHERE d = CONCAT('1e2', 'suffix') OR d = CONCAT('1e3', 'suffix') ORDER BY id;
+➤ id[4,32,0]  𝄀
+2
+SHOW COUNT(*) WARNINGS;
+➤ @@session.warning_count[-5,0,0]  𝄀
+2
+SELECT id FROM token_values WHERE d = CONCAT('1e3', 'suffix') ORDER BY id;
+➤ id[4,32,0]
+SHOW COUNT(*) WARNINGS;
+➤ @@session.warning_count[-5,0,0]  𝄀
+1
+SELECT COUNT(*) FROM token_values a JOIN token_values b ON a.d = b.d
+WHERE a.d = CONCAT('1e2', 'suffix');
+➤ COUNT(*)[-5,64,0]  𝄀
+1
+SHOW COUNT(*) WARNINGS;
+➤ @@session.warning_count[-5,0,0]  𝄀
+1
+SELECT COUNT(*) FROM (SELECT d FROM token_values UNION ALL SELECT d FROM token_values) u
+WHERE d = CONCAT('1e2', 'suffix');
+➤ COUNT(*)[-5,64,0]  𝄀
+2
+SHOW COUNT(*) WARNINGS;
+➤ @@session.warning_count[-5,0,0]  𝄀
+1
+SELECT COUNT(*) FROM token_values WHERE d = CASE WHEN TRUE THEN '1e2suffix' ELSE '2suffix' END;
+➤ COUNT(*)[-5,64,0]  𝄀
+1
+SHOW COUNT(*) WARNINGS;
+➤ @@session.warning_count[-5,0,0]  𝄀
+1
+SELECT COUNT(*) FROM token_values a JOIN token_values b
+ON a.d = b.d AND a.d = CASE WHEN TRUE THEN '1e2suffix' ELSE '2suffix' END;
+➤ COUNT(*)[-5,64,0]  𝄀
+1
+SHOW COUNT(*) WARNINGS;
+➤ @@session.warning_count[-5,0,0]  𝄀
+1
+SELECT CAST('12suffix' AS DOUBLE) FROM token_values;
+➤ cast(12suffix as double)[8,53,31]  𝄀
+12.0  𝄀
+12.0
+SHOW COUNT(*) WARNINGS;
+➤ @@session.warning_count[-5,0,0]  𝄀
+2
 SELECT id FROM token_values WHERE d = CONCAT('0x', '10foo') ORDER BY id;
 invalid input: "10foo" is invalid numeric string
+CREATE TABLE adjusted_values (d DOUBLE);
+INSERT IGNORE INTO adjusted_values SELECT '12suffix' FROM token_values;
+SHOW COUNT(*) WARNINGS;
+➤ @@session.warning_count[-5,0,0]  𝄀
+2
+SELECT COUNT(*), MIN(d), MAX(d) FROM adjusted_values;
+➤ COUNT(*)[-5,64,0]  ¦  MIN(d)[8,53,31]  ¦  MAX(d)[8,53,31]  𝄀
+2  ¦  12.0  ¦  12.0
+DROP TABLE adjusted_values;
 SET @decimal_string_old_sql_mode = @@session.sql_mode;
 SET SESSION sql_mode = 'MATRIXONE_NATIVE';
 SELECT id FROM token_values WHERE d = CONCAT('0x', '10') ORDER BY id;
@@ -195,4 +249,10 @@ SELECT @@session.sql_mode = @decimal_string_old_sql_mode AS sql_mode_restored;
 ➤ sql_mode_restored[-7,1,0]  𝄀
 1
 SET @decimal_string_old_sql_mode = NULL;
+DELETE FROM token_values;
+SELECT id FROM token_values WHERE d = CONCAT('1e2', 'suffix') ORDER BY id;
+➤ id[4,32,0]
+SHOW COUNT(*) WARNINGS;
+➤ @@session.warning_count[-5,0,0]  𝄀
+0
 DROP DATABASE decimal_string_comparison;

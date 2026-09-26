@@ -5409,7 +5409,7 @@ func initToTimeCase() []tcTemp {
 					[]bool{false}),
 			},
 			expect: NewFunctionTestResult(types.T_time.ToType(), false,
-				[]types.Time{types.TimeFromClock(false, 2022121211, 22, 33, 0)},
+				[]types.Time{types.MySQLTimeMax},
 				[]bool{false}),
 		},
 		{
@@ -5420,7 +5420,7 @@ func initToTimeCase() []tcTemp {
 					[]string{"2022-01-01 16:22:44.1235"},
 					[]bool{false}),
 			},
-			expect: NewFunctionTestResult(types.T_time.ToType(), false,
+			expect: NewFunctionTestResult(types.T_time.ToTypeWithScale(4), false,
 				[]types.Time{types.TimeFromClock(false, 16, 22, 44, 123500)},
 				[]bool{false}),
 		},

@@ -18,7 +18,7 @@ select extract(SECOND FROM "1999-01-02 10:11:12");
 12
 select extract(MONTH FROM "2001-02-00");
 ➤ extract(month from 2001-02-00)[-5,64,0]  𝄀
-null
+2
 select extract(HOUR FROM "2023-11-08 15:00");
 ➤ extract(hour from 2023-11-08 15:00)[-5,64,0]  𝄀
 15
@@ -114,7 +114,7 @@ create table t1 (d date, dt datetime, t timestamp, c char(10));
 insert ignore into t1 values ("0000-00-00", "0000-00-00", "0000-00-00", "0000-00-00");
 select extract(MONTH FROM "0000-00-00"),extract(MONTH FROM d),extract(MONTH FROM dt),extract(MONTH FROM t),extract(MONTH FROM c) from t1;
 ➤ extract(month from 0000-00-00)[-5,64,0]  ¦  extract(month from d)[-5,64,0]  ¦  extract(month from dt)[-5,64,0]  ¦  extract(month from t)[-5,64,0]  ¦  extract(month from c)[-5,64,0]  𝄀
-0  ¦  0  ¦  0  ¦  0  ¦  0
+null  ¦  0  ¦  0  ¦  0  ¦  null
 drop table t1;
 CREATE TABLE t1 (i1 INT,d1 DATETIME);
 INSERT INTO t1 values(1, "2023-04-23 08:23:21");

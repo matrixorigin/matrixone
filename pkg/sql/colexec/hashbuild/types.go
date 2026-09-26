@@ -280,19 +280,20 @@ func (b *spillFileBundle) accountedFiles() []*message.SpillFile {
 }
 
 type HashBuild struct {
-	ctr               container
-	NeedHashMap       bool
-	HashOnPK          bool
-	NeedBatches       bool
-	NeedAllocateSels  bool
-	TrackNullKeys     bool
-	IsShuffle         bool
-	Conditions        []*plan.Expr
-	JoinMapTag        int32
-	JoinMapRefCnt     int32
-	ShuffleIdx        int32
-	RuntimeFilterSpec *plan.RuntimeFilterSpec
-	SpillThreshold    int64
+	ctr                           container
+	NeedHashMap                   bool
+	HashOnPK                      bool
+	NeedBatches                   bool
+	NeedAllocateSels              bool
+	TrackNullKeys                 bool
+	IsShuffle                     bool
+	Conditions                    []*plan.Expr
+	OwnsConstantFilterDiagnostics bool
+	JoinMapTag                    int32
+	JoinMapRefCnt                 int32
+	ShuffleIdx                    int32
+	RuntimeFilterSpec             *plan.RuntimeFilterSpec
+	SpillThreshold                int64
 
 	IsDedup                   bool
 	DedupBuildKeepLast        bool
