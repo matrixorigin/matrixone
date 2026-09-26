@@ -57,13 +57,20 @@ func getPreparePlan(ctx CompilerContext, stmt tree.Statement) (*Plan, *Query, er
 	case *tree.SetVar:
 		return buildSetVariablesWithQuery(stmt, ctx, true)
 	case *tree.ShowPublications:
-		// The frontend only accepts literal patterns. In particular, do not
-		// advertise a zero-parameter prepared statement for LIKE ?.
 		if stmt.Like != nil {
-			pattern, ok := stmt.Like.Right.(*tree.NumVal)
-			if !ok || pattern.Kind() != tree.Str {
+			switch pattern := stmt.Like.Right.(type) {
+			case *tree.ParamExpr:
+				if pattern.Offset != 1 {
+					return nil, nil, moerr.NewInvalidInput(ctx.GetContext(), "SHOW PUBLICATIONS requires one LIKE parameter")
+				}
+			case *tree.NumVal:
+				if pattern.Kind() != tree.Str {
+					return nil, nil, moerr.NewNotSupported(ctx.GetContext(),
+						"prepared SHOW PUBLICATIONS requires a string literal or parameter marker LIKE pattern")
+				}
+			default:
 				return nil, nil, moerr.NewNotSupported(ctx.GetContext(),
-					"prepared SHOW PUBLICATIONS requires a string literal LIKE pattern")
+					"prepared SHOW PUBLICATIONS requires a string literal or parameter marker LIKE pattern")
 			}
 		}
 		return &Plan{}, nil, nil
@@ -146,6 +153,12 @@ func buildPrepare(stmt tree.Prepare, ctx CompilerContext) (*Plan, error) {
 		return nil, err
 	} else if dataBranchParamTypes != nil {
 		paramTypes = dataBranchParamTypes
+	}
+	// Frontend SHOW has no query plan for resetPreparePlan to inspect.
+	if show, ok := preparedStmt.(*tree.ShowPublications); ok && show.Like != nil {
+		if _, parameterized := show.Like.Right.(*tree.ParamExpr); parameterized {
+			paramTypes = []int32{int32(types.T_varchar)}
+		}
 	}
 	viewSchemas, err := collectPrepareViewSchemas(ctx)
 	if err != nil {

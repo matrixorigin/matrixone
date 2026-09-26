@@ -14,8 +14,25 @@ execute pub_create;
 prepare pub_create_if from 'create publication if not exists prepared_management_pub database prepared_management_db table t2 account all';
 
 -- SHOW statements must return real rows, including after repeated execution.
--- Parameter markers in publication statements are not supported.
 prepare pub_pattern from 'show publications like ?';
+set @pub_filter = 'prepared_management%';
+-- @ignore:5,6
+execute pub_pattern using @pub_filter;
+-- A bare marker must not reuse bindings from the previous EXECUTE.
+show publications like ?;
+set @pub_filter = 'no_matching_publication%';
+execute pub_pattern using @pub_filter;
+-- Invalid bindings must leave the handle usable.
+execute pub_pattern;
+set @pub_filter = 42;
+execute pub_pattern using @pub_filter;
+set @pub_filter = null;
+execute pub_pattern using @pub_filter;
+set @pub_filter = 'x'' OR 1=1 -- ';
+execute pub_pattern using @pub_filter;
+set @pub_filter = 'prepared_management_pub';
+-- @ignore:5,6
+execute pub_pattern using @pub_filter;
 prepare pub_show from 'show publications like ''prepared_management_pub''';
 prepare pub_ddl from 'show create publication prepared_management_pub';
 prepare pub_coverage from 'show publication coverage prepared_management_pub';
@@ -44,11 +61,16 @@ execute pub_coverage;
 -- @session:id=1&user=prepared_management_reader:admin&password=111
 prepare reader_coverage from 'show publication coverage prepared_management_pub';
 execute reader_coverage;
+prepare reader_pattern from 'show publications like ?';
+set @reader_filter = 'prepared_management%';
+execute reader_pattern using @reader_filter;
 -- @session
 alter publication prepared_management_pub account sys;
 -- @session:id=1&user=prepared_management_reader:admin&password=111
 execute reader_coverage;
 deallocate prepare reader_coverage;
+execute reader_pattern using @reader_filter;
+deallocate prepare reader_pattern;
 -- @session
 
 -- PREPARE must not drop the publication; missing-object errors must not break reuse.
@@ -59,9 +81,12 @@ execute pub_drop;
 execute pub_alter;
 execute pub_coverage;
 execute pub_show;
+execute pub_pattern using @pub_filter;
 prepare pub_drop_if from 'drop publication if exists prepared_management_pub';
 execute pub_drop_if;
 execute pub_create;
+-- @ignore:5,6
+execute pub_pattern using @pub_filter;
 execute pub_coverage;
 execute pub_drop_if;
 execute pub_drop_if;
@@ -73,6 +98,7 @@ deallocate prepare pub_create;
 deallocate prepare pub_create_if;
 deallocate prepare pub_alter;
 deallocate prepare pub_show;
+deallocate prepare pub_pattern;
 deallocate prepare pub_ddl;
 deallocate prepare pub_coverage;
 deallocate prepare pub_drop;
