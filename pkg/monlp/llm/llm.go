@@ -22,8 +22,9 @@ import (
 )
 
 const (
-	MockServer   = ""
-	OllamaServer = "ollama"
+	MockServer    = ""
+	OllamaServer  = "ollama"
+	OrcaRouterSvr = OrcaRouterServer
 
 	MockEchoModel = "echo"
 
@@ -49,6 +50,8 @@ func NewLLMClient(server string, addr string, model string, options string) (LLM
 		return NewMockClient(model, options)
 	case OllamaServer:
 		return NewOllamaClient(addr, model, options)
+	case OrcaRouterSvr:
+		return NewOrcaRouterClient(addr, model, options)
 	default:
 		return nil, moerr.NewInvalidInputf(context.TODO(), "invalid server: %s", server)
 	}
