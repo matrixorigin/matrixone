@@ -444,6 +444,7 @@ func (builder *QueryBuilder) flattenSubqueryWithConsumer(
 	var scalarExistential bool
 	var scalarPerOuterOrderKey *plan.Expr
 	var scalarProjectionStatus scalarProjectionNormalization
+	var err error
 
 	// Strip unnecessary subqueries which have no FROM clause
 	subNode := builder.qry.Nodes[subID]
@@ -511,6 +512,14 @@ func (builder *QueryBuilder) flattenSubqueryWithConsumer(
 		}
 	}
 
+	var correlatedHaving []*plan.Expr
+	if subquery.Typ == plan.SubqueryRef_SCALAR && subquery.Child != nil {
+		correlatedHaving, err = builder.takeCorrelatedScalarAggregateHaving(subID, subCtx)
+		if err != nil {
+			return 0, nil, err
+		}
+	}
+
 	subID, preds, err := builder.pullupCorrelatedPredicates(subID, subCtx, subquery.Typ, true)
 	if err != nil {
 		return 0, nil, err
@@ -521,10 +530,23 @@ func (builder *QueryBuilder) flattenSubqueryWithConsumer(
 	// multiple rows per outer row and breaking SINGLE JOIN semantics.
 	// Fix: bypass the inner AGG, use LEFT JOIN, and re-aggregate on top.
 	if subquery.Typ == plan.SubqueryRef_SCALAR && len(subCtx.aggregates) > 0 && builder.findNonEqPred(preds) {
+		if len(correlatedHaving) > 0 {
+			return 0, nil, moerr.NewNYI(builder.GetContext(),
+				"correlated scalar HAVING with non-equality input predicates cannot be safely decorrelated")
+		}
 		return builder.flattenScalarSubqueryWithNonEqAgg(nodeID, subID, subCtx, preds, ctx, subquery)
 	}
 
 	filterPreds, joinPreds := decreaseDepthAndDispatch(preds)
+	if len(correlatedHaving) > 0 {
+		if len(filterPreds) > 0 {
+			return 0, nil, moerr.NewNYI(builder.GetContext(),
+				"correlated scalar HAVING with deep input predicates cannot be safely decorrelated")
+		}
+		if len(joinPreds) == 0 {
+			joinPreds = append(joinPreds, constTrue)
+		}
+	}
 	if subquery.Typ == plan.SubqueryRef_SCALAR && len(subCtx.aggregates) > 0 {
 		builder.pushdownScalarAggregateKeys(subID, joinPreds, ctx)
 	}
@@ -611,9 +633,13 @@ func (builder *QueryBuilder) flattenSubqueryWithConsumer(
 		}
 
 		subID, postJoinProjections, finalizeProjection, err :=
-			builder.prepareCorrelatedScalarAggregatePostJoinProjection(subID, subCtx, joinPreds, subquery.Child != nil)
+			builder.prepareCorrelatedScalarAggregatePostJoinProjection(subID, subCtx, joinPreds, correlatedHaving, subquery.Child != nil)
 		if err != nil {
 			return nodeID, nil, err
+		}
+		if len(correlatedHaving) > 0 && !finalizeProjection {
+			return 0, nil, moerr.NewNYI(builder.GetContext(),
+				"correlated scalar HAVING cannot be safely reconstructed after the join")
 		}
 		if scalarProjectionStatus == scalarProjectionAggregatePending && !finalizeProjection {
 			return 0, nil, moerr.NewNYI(builder.GetContext(),
@@ -1357,6 +1383,71 @@ func (builder *QueryBuilder) generateRowComparisonWithProjects(
 	}
 }
 
+// takeCorrelatedScalarAggregateHaving keeps HAVING out of pre-aggregate join
+// predicates. Once one HAVING conjunct is correlated, all conjuncts must move:
+// a filter below the LEFT JOIN could remove a real aggregate row and cause its
+// COUNT to be incorrectly restored as zero after null extension.
+func (builder *QueryBuilder) takeCorrelatedScalarAggregateHaving(
+	subID int32, subCtx *BindContext,
+) ([]*plan.Expr, error) {
+	if len(subCtx.aggregates) == 0 {
+		return nil, nil
+	}
+	for nodeID := subID; ; {
+		node := builder.qry.Nodes[nodeID]
+		if node.NodeType == plan.Node_FILTER {
+			correlated := false
+			for _, cond := range node.FilterList {
+				correlated = correlated || hasCorrCol(cond)
+			}
+			if !correlated {
+				if len(node.Children) != 1 {
+					return nil, nil
+				}
+				nodeID = node.Children[0]
+				continue
+			}
+			if len(node.Children) != 1 {
+				return nil, moerr.NewNYI(builder.GetContext(),
+					"correlated scalar HAVING shape cannot be safely decorrelated")
+			}
+			agg := builder.qry.Nodes[node.Children[0]]
+			if agg.NodeType != plan.Node_AGG || len(agg.BindingTags) < 2 ||
+				agg.BindingTags[1] != subCtx.aggregateTag {
+				return nil, moerr.NewNYI(builder.GetContext(),
+					"correlated scalar HAVING shape cannot be safely decorrelated")
+			}
+			root := builder.qry.Nodes[subID]
+			if !subCtx.hasSingleRow || len(subCtx.groups) != 0 || len(subCtx.results) == 0 ||
+				root.NodeType != plan.Node_PROJECT || len(root.Children) != 1 || root.Children[0] != nodeID ||
+				len(root.BindingTags) != 1 || len(root.ProjectList) < len(subCtx.results) ||
+				root.Limit != nil || root.Offset != nil || root.RankOption != nil || len(root.OrderBy) != 0 ||
+				node.Limit != nil || node.Offset != nil || node.RankOption != nil || len(node.OrderBy) != 0 ||
+				len(agg.AggList) != len(subCtx.aggregates) {
+				return nil, moerr.NewNYI(builder.GetContext(),
+					"correlated scalar HAVING shape cannot be safely decorrelated")
+			}
+			for _, cond := range node.FilterList {
+				if containsVolatileFunction(cond) {
+					return nil, moerr.NewNYI(builder.GetContext(),
+						"volatile correlated scalar HAVING cannot be safely decorrelated")
+				}
+				if hasCorrCol(cond) && !allCorrColsAtDepthOne(cond) {
+					return nil, moerr.NewNYI(builder.GetContext(),
+						"deep correlated scalar HAVING cannot be safely decorrelated")
+				}
+			}
+			having := node.FilterList
+			node.FilterList = nil
+			return having, nil
+		}
+		if node.NodeType == plan.Node_AGG || len(node.Children) != 1 {
+			return nil, nil
+		}
+		nodeID = node.Children[0]
+	}
+}
+
 // prepareCorrelatedScalarAggregatePostJoinProjection moves the scalar final
 // expression above the LEFT JOIN used to decorrelate an implicit single-group
 // aggregate. pullupThroughAgg groups the inner input by the correlation key, so
@@ -1376,6 +1467,7 @@ func (builder *QueryBuilder) prepareCorrelatedScalarAggregatePostJoinProjection(
 	subID int32,
 	subCtx *BindContext,
 	joinPreds []*plan.Expr,
+	movedHaving []*plan.Expr,
 	directRowComparison bool,
 ) (int32, []*plan.Expr, bool, error) {
 	if !subCtx.hasSingleRow || len(subCtx.groups) != 0 || len(subCtx.aggregates) == 0 || len(joinPreds) == 0 {
@@ -1411,13 +1503,13 @@ func (builder *QueryBuilder) prepareCorrelatedScalarAggregatePostJoinProjection(
 	}
 
 	aggID := root.Children[0]
-	var having []*plan.Expr
+	having := movedHaving
 	if child := builder.qry.Nodes[aggID]; child.NodeType == plan.Node_FILTER {
 		if len(child.Children) != 1 || child.Limit != nil || child.Offset != nil || child.RankOption != nil ||
 			len(child.OrderBy) != 0 {
 			return subID, nil, false, nil
 		}
-		having = child.FilterList
+		having = append(having, child.FilterList...)
 		aggID = child.Children[0]
 	}
 

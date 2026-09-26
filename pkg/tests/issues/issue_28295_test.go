@@ -149,6 +149,97 @@ func TestIssue28295RowConstructorScalarSubquery(t *testing.T) {
 		assertBool(`select (0,null) <=>
 			(select count(*),sum(v) from scalar_inner i where i.k=o.k having count(*)=0)
 			from scalar_outer o where o.k=2`, sql.NullBool{Bool: true, Valid: true})
+		_, err = conn.ExecContext(ctx, "create table having_outer(k int)")
+		require.NoError(t, err)
+		_, err = conn.ExecContext(ctx, "insert into having_outer values (0),(1),(2)")
+		require.NoError(t, err)
+		assertHavingRows := func(query string, oracle func(int) string) {
+			t.Helper()
+			rows, queryErr := conn.QueryContext(ctx, query)
+			require.NoError(t, queryErr, query)
+			var got []sql.NullBool
+			for rows.Next() {
+				var value sql.NullBool
+				require.NoError(t, rows.Scan(&value), query)
+				got = append(got, value)
+			}
+			require.NoError(t, rows.Err(), query)
+			require.NoError(t, rows.Close())
+			var want []sql.NullBool
+			for key := 0; key <= 2; key++ {
+				var value sql.NullBool
+				require.NoError(t, conn.QueryRowContext(ctx, oracle(key)).Scan(&value))
+				want = append(want, value)
+			}
+			require.Equal(t, want, got, query)
+		}
+		assertHavingRows(`select (0,null) <=> (select count(*),sum(i.v)
+			from scalar_inner i where i.k=o.k having o.k=1)
+			from having_outer o order by o.k`, func(key int) string {
+			return fmt.Sprintf(`select (0,null) <=> (select count(*),sum(i.v)
+				from scalar_inner i where i.k=%d having %d=1)`, key, key)
+		})
+		for _, op := range []string{"=", "<>", "<", "<=", ">", ">=", "<=>"} {
+			assertHavingRows(fmt.Sprintf(`select (0,null) %s (select count(*),sum(i.v)
+				from scalar_inner i where i.k=o.k having count(*)<=o.k)
+				from having_outer o order by o.k`, op), func(key int) string {
+				return fmt.Sprintf(`select (0,null) %s (select count(*),sum(i.v)
+					from scalar_inner i where i.k=%d having count(*)<=%d)`, op, key, key)
+			})
+		}
+		assertHavingRows(`select (null,null) <=> (select count(*),sum(i.v)
+			from scalar_inner i where i.k=1 having count(*)<>1 and count(*)=o.k)
+			from having_outer o order by o.k`, func(key int) string {
+			return fmt.Sprintf(`select (null,null) <=> (select count(*),sum(i.v)
+				from scalar_inner i where i.k=1 having count(*)<>1 and count(*)=%d)`, key)
+		})
+		assertHavingRows(`select (null,null) <=> (select count(*),sum(i.v)
+			from scalar_inner i where i.k=1 having o.k=1)
+			from having_outer o order by o.k`, func(key int) string {
+			return fmt.Sprintf(`select (null,null) <=> (select count(*),sum(i.v)
+				from scalar_inner i where i.k=1 having %d=1)`, key)
+		})
+		assertBool(`select (select count(*),sum(i.v) from scalar_inner i
+			where i.k=o.k having o.k=1) <=> (null,null)
+			from having_outer o where o.k=0`, sql.NullBool{Bool: true, Valid: true})
+		_, err = conn.ExecContext(ctx, "insert into having_outer values (null),(1)")
+		require.NoError(t, err)
+		assertBool(`select (null,null) <=> (select count(*),sum(i.v)
+			from scalar_inner i where i.k=o.k having count(*)=o.k)
+			from having_outer o where o.k is null`, sql.NullBool{Bool: true, Valid: true})
+		var repeatedMatches int
+		require.NoError(t, conn.QueryRowContext(ctx, `select count(*) from having_outer o
+			where (1,10) <=> (select count(*),sum(i.v) from scalar_inner i
+				where i.k=o.k having count(*)=o.k)`).Scan(&repeatedMatches))
+		require.Equal(t, 2, repeatedMatches)
+		preparedHaving, err := conn.PrepareContext(ctx, `select (0,null) <=>
+			(select count(*),sum(i.v) from scalar_inner i where i.k=o.k
+				having count(*)<=? and o.k>=0)
+			from having_outer o where o.k=? limit 1`)
+		require.NoError(t, err)
+		for _, tc := range []struct {
+			threshold int
+			key       int
+			want      bool
+		}{{0, 0, true}, {0, 1, false}, {0, 2, true}, {-1, 0, false}, {0, 0, true}} {
+			var got sql.NullBool
+			require.NoError(t, preparedHaving.QueryRowContext(ctx, tc.threshold, tc.key).Scan(&got))
+			require.Equal(t, sql.NullBool{Bool: tc.want, Valid: true}, got)
+		}
+		require.NoError(t, preparedHaving.Close())
+		require.ErrorContains(t, drainQueryError(ctx, conn, `select (0,null) <=>
+			(select count(*),sum(i.v) from scalar_inner i where i.k<o.k having count(*)=o.k)
+			from having_outer o`), "not yet implemented")
+		require.ErrorContains(t, drainQueryError(ctx, conn, `select (0,null) <=>
+			(select count(*),sum(i.v) from scalar_inner i where i.k=o.k
+				group by i.k having count(*)=o.k)
+			from having_outer o`), "not yet implemented")
+		require.ErrorContains(t, drainQueryError(ctx, conn, `select (0,null) <=>
+			(select count(*),sum(i.v) from scalar_inner i where i.k=o.k
+				having count(*)<=o.k and (select max(v) from scalar_inner where k=1)>0)
+			from having_outer o`), "not yet implemented")
+		assertBool("select (1,10) <=> (select count(*),sum(i.v) from scalar_inner i where i.k=1)",
+			sql.NullBool{Bool: true, Valid: true})
 		_, err = conn.ExecContext(ctx, "create sequence row_scalar_guard_seq")
 		require.NoError(t, err)
 		require.ErrorContains(t, drainQueryError(ctx, conn,
