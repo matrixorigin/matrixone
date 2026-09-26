@@ -42,18 +42,35 @@ primary-key value is therefore part of hidden-index identity even when the
 tokenizer reads only the text parts.
 
 The optional `DMLMaintenanceNoOpHook` returns a complete, conservative set of
-stored base-table columns. SQL NULL-safe equality (`<=>`) for every returned
-column must imply byte-for-byte-equivalent hidden-index input between the old
-row image and the final ODKU row image. A hook must include row identity/doc
-identity whenever that value is an input. It must return `supported=false` if
-type comparison, external content, generated state, or any other dependency
-can invalidate that implication.
+stored base-table columns. For hook-supported `VARCHAR` and `TEXT` values, the
+planner casts both old and final expressions to unbounded binary types before
+using NULL-safe equality (`<=>`). This makes the proof depend on the complete
+stored payload, including trailing spaces and embedded NUL bytes, rather than
+on a SQL collation's equality relation. The returned set must include row
+identity/doc identity whenever that value is an input. A hook must return
+`supported=false` if type comparison, external content, generated state, or any
+other dependency can invalidate that implication.
 
 The FULLTEXT implementation therefore requires a resolvable
 `TableDef.Pkey.PkeyColName`, returns that primary-key column first, and then
 returns each distinct resolvable FULLTEXT part. It supports only `VARCHAR` and
 `TEXT` parts. CHAR, JSON, DATALINK, missing columns, missing primary-key
 metadata, and empty definitions fail closed to the rebuild path.
+
+### R4 stored-value identity revision
+
+The R4 implementation keeps the existing ODKU plan shape and transaction
+ownership. It changes only the proof expression for hook-supported text: the
+old and final values are converted to `VARBINARY`/`BLOB` with their native
+maximum widths, then compared with `<=>`. Non-text columns retain their typed
+comparison. This is deliberately narrower than changing SQL collation
+semantics; the latter belongs to the separate #28164 comparison-identity
+series. The regression BVT exercises real ODKU updates for VARCHAR and TEXT,
+case/space changes, NUL and bounded long values, mixed batches, NULL
+transitions, multiple FULLTEXT indexes, and rollback. Its result file must be
+generated from the exact service head; until that run is available, the SQL
+evidence is recorded as `NOT_RUN`/`BLOCKED_ENVIRONMENT` rather than a product
+PASS.
 
 ### ODKU row and primary-key preconditions
 
