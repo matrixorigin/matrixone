@@ -692,6 +692,9 @@ func (builder *QueryBuilder) copyNode(ctx *BindContext, nodeId int32) int32 {
 	if _, protected := builder.existentialGateProjects[nodeId]; protected {
 		builder.existentialGateProjects[newNodeId] = struct{}{}
 	}
+	if aliases, ok := builder.scalarReaggAliases[nodeId]; ok {
+		builder.scalarReaggAliases[newNodeId] = append([]scalarReaggAlias(nil), aliases...)
+	}
 	return newNodeId
 }
 
@@ -1796,6 +1799,12 @@ func (builder *QueryBuilder) remapAllColRefsForConsumer(
 		groupTag := node.BindingTags[0]
 		aggregateTag := node.BindingTags[1]
 		groupSize := int32(len(node.GroupBy))
+		// Child remapping consumes input references. Snapshot demand for
+		// passthrough aliases before their GROUP BY inputs are remapped.
+		aliasDemand := make(map[[2]int32]bool)
+		for _, alias := range builder.scalarReaggAliases[nodeID] {
+			aliasDemand[alias.ref] = colRefCnt[alias.ref] > 0
+		}
 
 		// HAVING is evaluated inside the aggregate node, so its output refs are
 		// consumers even when the outer projection does not expose them.
@@ -1888,6 +1897,13 @@ func (builder *QueryBuilder) remapAllColRefsForConsumer(
 
 		remapInfo.tip = "GroupBy"
 		childProjList := builder.qry.Nodes[node.Children[0]].ProjectList
+		var aliasesByGroup map[int32][][2]int32
+		if aliases := builder.scalarReaggAliases[nodeID]; len(aliases) > 0 {
+			aliasesByGroup = make(map[int32][][2]int32, len(aliases))
+			for _, alias := range aliases {
+				aliasesByGroup[alias.groupPos] = append(aliasesByGroup[alias.groupPos], alias.ref)
+			}
+		}
 		for idx, expr := range node.GroupBy {
 			increaseRefCnt(expr, -1, colRefCnt)
 			remapInfo.srcExprIdx = idx
@@ -1898,11 +1914,26 @@ func (builder *QueryBuilder) remapAllColRefsForConsumer(
 			refreshExprNullabilityFromInputs(expr, childProjList)
 
 			globalRef := [2]int32{groupTag, int32(idx)}
-			if colRefCnt[globalRef] == 0 {
+			aliases := aliasesByGroup[int32(idx)]
+			canonicalRef := globalRef
+			for _, aliasRef := range aliases {
+				if aliasDemand[aliasRef] {
+					canonicalRef = aliasRef
+					break
+				}
+			}
+			if colRefCnt[globalRef] == 0 && canonicalRef == globalRef {
 				continue
 			}
 
-			remapping.addColRef(globalRef)
+			// The alias is the original output identity of a previously
+			// computed scalar. Use it as the canonical output when demanded so
+			// an enclosing JOIN carries it through its own column pruning.
+			remapping.addColRef(canonicalRef)
+			remapping.globalToLocal[globalRef] = remapping.globalToLocal[canonicalRef]
+			for _, aliasRef := range aliases {
+				remapping.globalToLocal[aliasRef] = remapping.globalToLocal[canonicalRef]
+			}
 
 			node.ProjectList = append(node.ProjectList, &plan.Expr{
 				Typ: groupingFlagOutputType(expr.Typ, node.GroupingFlag, int32(idx)),
@@ -1910,7 +1941,7 @@ func (builder *QueryBuilder) remapAllColRefsForConsumer(
 					Col: &ColRef{
 						RelPos: -1,
 						ColPos: int32(idx),
-						Name:   builder.nameByColRef[globalRef],
+						Name:   builder.nameByColRef[canonicalRef],
 					},
 				},
 			})
