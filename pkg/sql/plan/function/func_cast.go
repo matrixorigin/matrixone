@@ -6669,9 +6669,6 @@ func strToSignedWithProc[T constraints.Signed](
 			if isBinary {
 				var r int64
 				var num uint64
-				if len(v) == 0 {
-					return moerr.NewInvalidArg(ctx, "cast to int", v)
-				}
 				if len(v) > 8 {
 					return moerr.NewOutOfRange(ctx, "int", "")
 				}
@@ -6885,6 +6882,9 @@ func parseStringToFloatWithBitSize(s string, bitSize int, mode SQLCompatibilityM
 func parseBytesToFloat(value []byte, isBinary bool, bitSize int, mode SQLCompatibilityMode) (float64, error) {
 	if !isBinary {
 		return parseStringToFloatWithBitSize(convertByteSliceToString(value), bitSize, mode)
+	}
+	if len(value) == 0 {
+		return 0, nil
 	}
 
 	encoded := hex.EncodeToString(value)
@@ -7597,7 +7597,11 @@ func strToUnsignedWithProc[T constraints.Unsigned](
 			if isBinary {
 				s := hex.EncodeToString(v)
 				res = &s
-				val, tErr = strconv.ParseUint(s, 16, 64)
+				if len(v) == 0 {
+					val, tErr = 0, nil
+				} else {
+					val, tErr = strconv.ParseUint(s, 16, 64)
+				}
 			} else {
 				s := strings.TrimSpace(convertByteSliceToString(v))
 				res = &s

@@ -275,6 +275,54 @@ func TestTimeIntervalOverflowContract(t *testing.T) {
 	}
 }
 
+func TestRawTimeIntervalDistinguishesNullInvalidAndOverflow(t *testing.T) {
+	proc := newTmpProcess(t)
+	warnings := &numericWarningSession{}
+	proc.WarningSink = warnings
+	noon := types.TimeFromClock(false, 12, 0, 0, 0)
+	max := types.TimeFromClock(false, 838, 59, 59, 0)
+	inputs := []FunctionTestInput{
+		NewFunctionTestInput(types.T_time.ToType(), []types.Time{noon, 0, noon, noon, max},
+			[]bool{false, true, false, false, false}),
+		NewFunctionTestInput(types.T_varchar.ToType(),
+			[]string{"10000000000000.0", "10000000000000.0", "bad", "1.5", "1.5"}, nil),
+		NewFunctionTestConstInput(types.T_int64.ToType(), []int64{int64(types.Second)}, nil),
+	}
+	want := NewFunctionTestResult(types.T_time.ToTypeWithScale(6), false,
+		[]types.Time{0, 0, 0, types.TimeFromClock(false, 12, 0, 1, 500000), 0},
+		[]bool{true, true, true, false, true})
+	caseDef := NewFunctionTestCase(proc, inputs, want, TimeAddRaw)
+	ok, info := caseDef.Run()
+	require.True(t, ok, info)
+	require.Equal(t, []numericWarning{
+		{code: moerr.ER_DATETIME_FUNCTION_OVERFLOW, msg: "Datetime function: time field overflow"},
+		{code: moerr.ER_DATETIME_FUNCTION_OVERFLOW, msg: "Datetime function: time field overflow"},
+	}, warnings.warnings)
+}
+
+func TestRawNumericMicrosecondRoundingAndBounds(t *testing.T) {
+	for _, tc := range []struct {
+		text  string
+		value int64
+		state timeIntervalState
+	}{
+		{"1.5", 2, timeIntervalValid},
+		{"-1.5", -2, timeIntervalValid},
+		{"0.49", 0, timeIntervalValid},
+		{"-0.5", -1, timeIntervalValid},
+		{"9223372036854775807.4", math.MaxInt64, timeIntervalValid},
+		{"9223372036854775807.5", 0, timeIntervalOverflow},
+		{"-9223372036854775808.4", math.MinInt64, timeIntervalValid},
+		{"-9223372036854775808.5", 0, timeIntervalOverflow},
+	} {
+		got := roundedRawMicroseconds(tc.text)
+		require.Equal(t, tc.state, got.state, tc.text)
+		if tc.state == timeIntervalValid {
+			require.Equal(t, tc.value, got.value, tc.text)
+		}
+	}
+}
+
 func TestDynamicIntervalUnitContract(t *testing.T) {
 	proc := newTmpProcess(t)
 	for _, tc := range []struct {

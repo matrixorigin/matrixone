@@ -2712,6 +2712,78 @@ func TimeAdd(ivecs []*vector.Vector, result vector.FunctionResultWrapper, proc *
 	return nil
 }
 
+// New DATE_ADD/TIME bindings keep the interval's source type until this
+// consumer sees both operands. An overflow warning is only due for an
+// evaluated row whose temporal operand is non-NULL.
+func TimeAddRaw(ivecs []*vector.Vector, result vector.FunctionResultWrapper, proc *process.Process, length int, selectList *FunctionSelectList) error {
+	return timeIntervalRaw(ivecs, result, proc, length, selectList, false)
+}
+
+func TimeSubRaw(ivecs []*vector.Vector, result vector.FunctionResultWrapper, proc *process.Process, length int, selectList *FunctionSelectList) error {
+	return timeIntervalRaw(ivecs, result, proc, length, selectList, true)
+}
+
+func timeIntervalRaw(ivecs []*vector.Vector, result vector.FunctionResultWrapper, proc *process.Process, length int, selectList *FunctionSelectList, subtract bool) error {
+	unitValue, _ := vector.GenerateFunctionFixedTypeParameter[int64](ivecs[2]).GetValue(0)
+	unit := types.IntervalType(unitValue)
+	scale := ivecs[0].GetType().Scale
+	if unit != types.Hour_Minute && scale < 6 {
+		scale = 6
+	}
+	rs := vector.MustFunctionResult[types.Time](result)
+	rs.TempSetType(types.New(types.T_time, scale, scale))
+	result.UseOptFunctionParamFrame(1)
+	base := vector.OptGetParamFromWrapper[types.Time](rs, 0, ivecs[0])
+	getInterval, err := rawTimeIntervalGetter(ivecs[1], unit)
+	if err != nil {
+		return err
+	}
+	values := vector.MustFixedColNoTypeCheck[types.Time](rs.GetResultVector())
+	nullsVec := rs.GetResultVector().GetNulls()
+	if selectList != nil && selectList.IgnoreAllRow() {
+		nulls.AddRange(nullsVec, 0, uint64(length))
+		return nil
+	}
+	for i := uint64(0); i < uint64(length); i++ {
+		if selectList != nil && !selectList.ShouldEvalAllRow() && selectList.Contains(i) {
+			nullsVec.Add(i)
+			continue
+		}
+		start, nullBase := base.GetValue(i)
+		if nullBase {
+			nullsVec.Add(i)
+			continue
+		}
+		interval := getInterval(i)
+		switch interval.state {
+		case timeIntervalNull, timeIntervalInvalid:
+			nullsVec.Add(i)
+			continue
+		case timeIntervalOverflow:
+			nullsVec.Add(i)
+			appendTimeIntervalOverflowWarning(proc)
+			continue
+		}
+		var value types.Time
+		var overflow bool
+		if subtract {
+			value, overflow, err = doTimeSub(start, interval.value, interval.unit)
+		} else {
+			value, overflow, err = doTimeAdd(start, interval.value, interval.unit)
+		}
+		if err != nil {
+			return err
+		}
+		if overflow {
+			nullsVec.Add(i)
+			appendTimeIntervalOverflowWarning(proc)
+			continue
+		}
+		values[i] = value
+	}
+	return nil
+}
+
 // TimestampAddDate: TIMESTAMPADD(unit, interval, date)
 // Parameters: ivecs[0] = unit (string), ivecs[1] = interval (int64), ivecs[2] = date (Date)
 // MySQL behavior: Returns DATE for date units (DAY, WEEK, MONTH, QUARTER, YEAR)
@@ -8770,42 +8842,12 @@ func extractNumericFromVarchar(unit string, value string, scale int32) (int64, e
 	}
 	if parts, ok := parseDateExtractParts(value); ok && parts.year == 0 && parts.month == 0 && parts.day == 0 {
 		// A zero calendar has zero date fields, but it may still have a clock.
-		// Parse only the clock: ParseTime on the full spelling attempts to
-		// construct a DATETIME, which cannot represent a zero calendar.
 		if extractUnitPrefersTime(unit) || strings.HasPrefix(unit, "day_") {
-			trimmed := strings.TrimSpace(value)
-			if separator := strings.IndexAny(trimmed, " T"); separator >= 0 {
-				clockText := strings.TrimSpace(trimmed[separator+1:])
-				// Date component parsing validated this clock using the date
-				// grammar. Normalize its first two field separators before TIME
-				// parsing: a dot in 12:34.56 is seconds, not a fraction.
-				if strings.IndexByte(clockText, ' ') >= 0 {
-					clockText = strings.ReplaceAll(clockText, " ", "")
-				}
-				fields := 0
-				var canonical []byte
-				for i := 0; i < len(clockText) && fields < 2; i++ {
-					ch := clockText[i]
-					if ch >= '0' && ch <= '9' {
-						continue
-					}
-					if ch != ':' {
-						if canonical == nil {
-							canonical = []byte(clockText)
-						}
-						canonical[i] = ':'
-					}
-					fields++
-				}
-				if canonical != nil {
-					clockText = string(canonical)
-				}
-				clock, err := types.ParseTime(clockText, scale)
-				if err != nil {
-					return 0, err
-				}
-				return extractNumericFromTime(unit, clock)
+			clock, valid := zeroCalendarClockForExtract(value, scale)
+			if !valid {
+				return 0, moerr.NewInvalidInputNoCtxf("invalid zero-calendar clock %q", value)
 			}
+			return extractNumericFromTime(unit, clock)
 		}
 		return 0, nil
 	}

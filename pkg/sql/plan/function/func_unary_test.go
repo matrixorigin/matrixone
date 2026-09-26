@@ -13450,6 +13450,62 @@ func TestDateStringExtractorsYearZeroAndLegacyDelimiters(t *testing.T) {
 	}
 }
 
+func TestDateStringRawFieldsOnPartialZeroDates(t *testing.T) {
+	proc := testutil.NewProcess(t)
+	input := []FunctionTestInput{NewFunctionTestInput(types.T_varchar.ToType(),
+		[]string{"2024-00-15", "2024-02-00", "0000-00-00", "2024-02-30"}, nil)}
+	for _, tc := range []struct {
+		name string
+		fn   fEvalFn
+		want FunctionTestResult
+	}{
+		{"year", DateStringToYear, NewFunctionTestResult(types.T_int64.ToType(), false,
+			[]int64{2024, 2024, 0, 0}, []bool{false, false, false, true})},
+		{"month", DateStringToMonth, NewFunctionTestResult(types.T_uint8.ToType(), false,
+			[]uint8{0, 2, 0, 0}, []bool{false, false, false, true})},
+		{"day and dayofmonth", DateStringToDay, NewFunctionTestResult(types.T_uint8.ToType(), false,
+			[]uint8{15, 0, 0, 0}, []bool{false, false, false, true})},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			caseDef := NewFunctionTestCase(proc, input, tc.want, tc.fn)
+			ok, info := caseDef.Run()
+			require.True(t, ok, info)
+		})
+	}
+}
+
+func TestZeroCalendarClockCarrySharedByUnaryAndExtract(t *testing.T) {
+	proc := testutil.NewProcess(t)
+	values := []string{"0000-00-00 23:59:59.9999994", "0000-00-00 23:59:59.9999995", "0000-00-00 23:59:59.9999999"}
+	input := []FunctionTestInput{NewFunctionTestInput(types.T_varchar.ToType(), values, nil)}
+	for _, tc := range []struct {
+		name string
+		fn   fEvalFn
+		want FunctionTestResult
+	}{
+		{"hour", StringToHour, NewFunctionTestResult(types.T_uint32.ToType(), false, []uint32{23, 24, 24}, nil)},
+		{"minute", StringToMinute, NewFunctionTestResult(types.T_uint8.ToType(), false, []uint8{59, 0, 0}, nil)},
+		{"second", StringToSecond, NewFunctionTestResult(types.T_uint8.ToType(), false, []uint8{59, 0, 0}, nil)},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			caseDef := NewFunctionTestCase(proc, input, tc.want, tc.fn)
+			ok, info := caseDef.Run()
+			require.True(t, ok, info)
+		})
+	}
+	for _, value := range values {
+		clock, ok := zeroCalendarClockForExtract(value, 6)
+		require.True(t, ok)
+		extracted, err := extractNumericFromTime("hour", clock)
+		require.NoError(t, err)
+		if value == values[0] {
+			require.Equal(t, int64(23), extracted)
+		} else {
+			require.Equal(t, int64(24), extracted)
+		}
+	}
+}
+
 func TestStringTimeExtractSuffixTokenOwnership(t *testing.T) {
 	testCases := []struct {
 		input string

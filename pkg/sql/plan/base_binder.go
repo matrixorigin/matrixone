@@ -6014,6 +6014,21 @@ func bindFuncExprImplByPlanExpr(
 	case "date_add", "date_sub":
 		if preparedDateFunctionArgs(originalBoundExpr, name, args) {
 			args[2] = DeepCopyExpr(originalBoundExpr.GetF().Args[2])
+			if args[0].Typ.Id == int32(types.T_time) && types.T(args[1].Typ.Id).IsInteger() {
+				unit, _ := dateFunctionUnitFromPlanExpr(args[2])
+				if isTimeCompoundIntervalUnit(unit) {
+					// An integer COM_STMT_EXECUTE value is a compact compound
+					// spelling. Rebinding directly to the old INT64 overload
+					// would pass MINUTE_SECOND to arithmetic, which only accepts
+					// normalized units. Keep this source on the raw path.
+					args[1], err = appendCastBeforeExpr(ctx, args[1], plan.Type{
+						Id: int32(types.T_varchar), Width: types.MaxVarcharLen,
+					})
+					if err != nil {
+						return nil, err
+					}
+				}
+			}
 			break
 		}
 		// rewrite date_add/date_sub function
@@ -6979,7 +6994,9 @@ func bindFuncExprImplByPlanExpr(
 			switch inputType.Oid {
 			case types.T_datetime, types.T_timestamp, types.T_time:
 				returnType.Oid, returnType.Scale, returnType.Width = inputType.Oid, inputType.Scale, inputType.Width
-				if unit, known := dateFunctionUnitFromPlanExpr(args[2]); !known || unit == types.MicroSecond {
+				unit, known := dateFunctionUnitFromPlanExpr(args[2])
+				if !known || unit == types.MicroSecond ||
+					(inputType.Oid == types.T_time && argsType[1].Oid != types.T_int64 && unit != types.Hour_Minute) {
 					if returnType.Scale < 6 {
 						returnType.Scale = 6
 					}
@@ -7959,6 +7976,17 @@ func preparedDateFunctionArgs(original *Expr, name string, args []*Expr) bool {
 	}
 	_, ok := dateFunctionUnitFromPlanExpr(fn.Args[2])
 	return ok
+}
+
+func isTimeCompoundIntervalUnit(unit types.IntervalType) bool {
+	switch unit {
+	case types.Second_MicroSecond, types.Minute_MicroSecond,
+		types.Minute_Second, types.Hour_MicroSecond,
+		types.Hour_Second, types.Hour_Minute:
+		return true
+	default:
+		return false
+	}
 }
 
 func preparedStrToDateArgs(original *Expr, name string, args []*Expr) bool {
@@ -10067,20 +10095,14 @@ func resetDateFunctionArgs(ctx context.Context, dateExpr *Expr, intervalExpr *Ex
 			return nil, moerr.NewInvalidArg(ctx, "time interval unit", intervalType)
 		}
 
-		// Preserve numeric source types for compound field parsing. Strings
-		// retain their field-width grammar; both paths use the same outer unit.
+		// Integers use their canonical digit spelling in compound fields.
+		// Other values retain their actual source type for row-wise TIME
+		// normalization, where NULL and overflow diagnostics are distinguishable.
 		switch intervalType {
 		case types.Second_MicroSecond, types.Minute_MicroSecond,
 			types.Minute_Second, types.Hour_MicroSecond,
 			types.Hour_Second, types.Hour_Minute:
 			switch firstExpr.Typ.Id {
-			case int32(types.T_float32), int32(types.T_float64),
-				int32(types.T_decimal64), int32(types.T_decimal128):
-				numberExpr, returnType, err := bindTypedNumericIntervalExpr(ctx, firstExpr, intervalType)
-				if err != nil {
-					return nil, err
-				}
-				return []*Expr{dateExpr, numberExpr, makePlan2Int64ConstExprWithType(int64(returnType))}, nil
 			case int32(types.T_int8), int32(types.T_int16), int32(types.T_int32), int32(types.T_int64),
 				int32(types.T_uint8), int32(types.T_uint16), int32(types.T_uint32), int32(types.T_uint64),
 				int32(types.T_any):
@@ -10090,6 +10112,26 @@ func resetDateFunctionArgs(ctx context.Context, dateExpr *Expr, intervalExpr *Ex
 				if err != nil {
 					return nil, err
 				}
+			}
+		}
+		switch types.T(firstExpr.Typ.Id) {
+		case types.T_char, types.T_varchar, types.T_text,
+			types.T_float32, types.T_float64,
+			types.T_decimal64, types.T_decimal128, types.T_decimal256:
+			return []*Expr{dateExpr, firstExpr, makePlan2Int64ConstExprWithType(int64(intervalType))}, nil
+		}
+	}
+	// DAY can carry a fractional day for these source types. Choose the
+	// result family from the static signature, including whole-valued rows;
+	// neither the spelling of a literal nor a row value may change metadata.
+	if dateExpr.Typ.Id == int32(types.T_date) && intervalType == types.Day {
+		switch types.T(firstExpr.Typ.Id) {
+		case types.T_float32, types.T_float64,
+			types.T_decimal64, types.T_decimal128, types.T_decimal256,
+			types.T_char, types.T_varchar, types.T_text, types.T_any:
+			dateExpr, err = appendCastBeforeExpr(ctx, dateExpr, plan.Type{Id: int32(types.T_datetime), Scale: 6})
+			if err != nil {
+				return nil, err
 			}
 		}
 	}
@@ -10134,117 +10176,83 @@ func resetDateFunctionArgs(ctx context.Context, dateExpr *Expr, intervalExpr *Ex
 			}
 		}
 	}
+	// Compound numeric fields have the same grammar for every supported
+	// temporal result family. The old fallthrough cast to INT64 discarded the
+	// compound unit and interpreted values such as 1.5 HOUR_SECOND as 2us.
+	switch intervalType {
+	case types.Second_MicroSecond, types.Minute_MicroSecond, types.Minute_Second,
+		types.Hour_MicroSecond, types.Hour_Second, types.Hour_Minute,
+		types.Day_MicroSecond, types.Day_Second, types.Day_Minute, types.Day_Hour,
+		types.Year_Month:
+		switch types.T(firstExpr.Typ.Id) {
+		case types.T_float32, types.T_float64,
+			types.T_decimal64, types.T_decimal128, types.T_decimal256:
+			numberExpr, returnType, err := bindTypedNumericIntervalExpr(ctx, firstExpr, intervalType)
+			if err != nil {
+				return nil, err
+			}
+			return []*Expr{dateExpr, numberExpr, makePlan2Int64ConstExprWithType(int64(returnType))}, nil
+		case types.T_int8, types.T_int16, types.T_int32, types.T_int64,
+			types.T_uint8, types.T_uint16, types.T_uint32, types.T_uint64:
+			stringExpr, err := appendCastBeforeExpr(ctx, firstExpr, plan.Type{
+				Id: int32(types.T_varchar), Width: types.MaxVarcharLen,
+			})
+			if err != nil {
+				return nil, err
+			}
+			numberExpr, returnType, _, err := bindStringIntervalExpr(ctx, stringExpr, intervalType)
+			if err != nil {
+				return nil, err
+			}
+			return []*Expr{dateExpr, numberExpr, makePlan2Int64ConstExprWithType(int64(returnType))}, nil
+		}
+	}
 
-	// For time units (SECOND, MINUTE, HOUR, DAY), we need to handle decimal/float values
-	// by converting them to microseconds. Check if firstExpr is a literal with decimal/float type.
+	// A CAST must contribute its evaluated value. Safe constant decimal
+	// expressions retain exact bind-time folding; overflow is deferred so an
+	// unselected CASE branch cannot fail while binding.
 	isTimeUnit := intervalType == types.Second || intervalType == types.Minute ||
 		intervalType == types.Hour || intervalType == types.Day
-	if isTimeUnit {
-		if finalValue, _, handled, err := normalizeDecimalIntervalValue(firstExpr, intervalType); err != nil {
-			return nil, err
-		} else if handled {
-			return []*Expr{
-				dateExpr,
-				makeDecimalIntervalValueExpr(firstExpr, finalValue),
-				makePlan2Int64ConstExprWithType(int64(types.MicroSecond)),
-			}, nil
-		}
-	}
 	isDecimalOrFloat := firstExpr.Typ.Id == int32(types.T_decimal64) ||
 		firstExpr.Typ.Id == int32(types.T_decimal128) ||
+		firstExpr.Typ.Id == int32(types.T_decimal256) ||
 		firstExpr.Typ.Id == int32(types.T_float32) ||
 		firstExpr.Typ.Id == int32(types.T_float64)
-
-	// Try to get literal value, either directly or from a cast function
-	var lit *plan.Literal
-	var innerExpr *plan.Expr
-	if firstExpr.GetLit() != nil {
-		lit = firstExpr.GetLit()
-		innerExpr = firstExpr
-	} else if funcExpr, ok := firstExpr.Expr.(*plan.Expr_F); ok && funcExpr.F != nil &&
-		funcExpr.F.Func != nil && funcExpr.F.Func.GetObjName() == "cast" {
-		// Check if it's a cast function with a literal argument
-		if len(funcExpr.F.Args) > 0 && funcExpr.F.Args[0].GetLit() != nil {
-			lit = funcExpr.F.Args[0].GetLit()
-			innerExpr = firstExpr
+	if isTimeUnit {
+		// Exact constant DECIMAL normalization preserves the established plan
+		// representation and protocol marker. An unrepresentable value must
+		// reach execution so an inactive CASE arm cannot fail during binding.
+		if finalValue, _, handled, err := normalizeDecimalIntervalValue(firstExpr, intervalType); err == nil && handled {
+			return []*Expr{dateExpr, makeDecimalIntervalValueExpr(firstExpr, finalValue),
+				makePlan2Int64ConstExprWithType(int64(types.MicroSecond))}, nil
+		}
+		// Only a genuine FLOAT literal may be folded. Unwrapping a CAST's
+		// child changes the value and is the source of the old -1.5 -> -15s bug.
+		if lit := firstExpr.GetLit(); lit != nil {
+			var value float64
+			var ok bool
+			switch v := lit.Value.(type) {
+			case *plan.Literal_Dval:
+				value, ok = v.Dval, true
+			case *plan.Literal_Fval:
+				value, ok = float64(v.Fval), true
+			}
+			if ok {
+				multiplier, _ := intervalMicrosecondMultiplier(intervalType)
+				microseconds := math.Round(value * float64(multiplier))
+				if microseconds >= math.MinInt64 && microseconds < float64(math.MaxInt64) {
+					return []*Expr{dateExpr, makeDecimalIntervalValueExpr(firstExpr, int64(microseconds)),
+						makePlan2Int64ConstExprWithType(int64(types.MicroSecond))}, nil
+				}
+			}
 		}
 	}
-
-	// Nonconstant numeric scalar intervals must retain their fractional unit
-	// until final microsecond conversion, just as literal values already do.
-	if isTimeUnit && isDecimalOrFloat && lit == nil {
+	if isTimeUnit && isDecimalOrFloat {
 		numberExpr, returnType, err := bindTypedNumericIntervalExpr(ctx, firstExpr, intervalType)
 		if err != nil {
 			return nil, err
 		}
 		return []*Expr{dateExpr, numberExpr, makePlan2Int64ConstExprWithType(int64(returnType))}, nil
-	}
-
-	if isTimeUnit && isDecimalOrFloat && lit != nil {
-		// Extract the value from the literal and convert to microseconds
-		var floatVal float64
-		var hasValue bool
-
-		if !lit.Isnull {
-			if dval, ok := lit.Value.(*plan.Literal_Dval); ok {
-				floatVal = dval.Dval
-				hasValue = true
-			} else if fval, ok := lit.Value.(*plan.Literal_Fval); ok {
-				floatVal = float64(fval.Fval)
-				hasValue = true
-			} else if d64val, ok := lit.Value.(*plan.Literal_Decimal64Val); ok {
-				d64 := types.Decimal64(d64val.Decimal64Val.A)
-				scale := innerExpr.Typ.Scale
-				if scale < 0 {
-					scale = 0
-				}
-				floatVal = types.Decimal64ToFloat64(d64, scale)
-				hasValue = true
-			} else if d128val, ok := lit.Value.(*plan.Literal_Decimal128Val); ok {
-				d128 := types.Decimal128{B0_63: uint64(d128val.Decimal128Val.A), B64_127: uint64(d128val.Decimal128Val.B)}
-				scale := innerExpr.Typ.Scale
-				if scale < 0 {
-					scale = 0
-				}
-				floatVal = types.Decimal128ToFloat64(d128, scale)
-				hasValue = true
-			} else if sval, ok := lit.Value.(*plan.Literal_Sval); ok {
-				// Handle string literal (from cast function's first argument)
-				// Try to parse as decimal128 to get the float value
-				d128, scale, err := types.Parse128(sval.Sval)
-				if err == nil {
-					floatVal = types.Decimal128ToFloat64(d128, scale)
-					hasValue = true
-				}
-			}
-		}
-
-		if hasValue {
-			// Convert to microseconds based on interval type
-			var finalValue int64
-			switch intervalType {
-			case types.Second:
-				// Use math.Round to handle floating point precision issues (e.g., 1.000009 * 1000000 = 1000008.9999999999)
-				finalValue = int64(math.Round(floatVal * float64(types.MicroSecsPerSec)))
-			case types.Minute:
-				// Use math.Round to handle floating point precision issues
-				finalValue = int64(math.Round(floatVal * float64(types.MicroSecsPerSec*types.SecsPerMinute)))
-			case types.Hour:
-				// Use math.Round to handle floating point precision issues
-				finalValue = int64(math.Round(floatVal * float64(types.MicroSecsPerSec*types.SecsPerHour)))
-			case types.Day:
-				// Use math.Round to handle floating point precision issues
-				finalValue = int64(math.Round(floatVal * float64(types.MicroSecsPerSec*types.SecsPerDay)))
-			default:
-				finalValue = int64(floatVal)
-			}
-			return []*Expr{
-				dateExpr,
-				makeDecimalIntervalValueExpr(firstExpr, finalValue),
-				// Use MicroSecond type since we've converted to microseconds
-				makePlan2Int64ConstExprWithType(int64(types.MicroSecond)),
-			}, nil
-		}
 	}
 
 	numberExpr, err := appendCastBeforeExpr(ctx, firstExpr, plan.Type{Id: int32(types.T_int64)})

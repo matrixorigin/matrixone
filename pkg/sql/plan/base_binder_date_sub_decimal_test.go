@@ -405,18 +405,12 @@ func TestResetDateFunctionArgsDoesNotFoldLiteralFirstDynamicFunction(t *testing.
 }
 
 func TestResetDateFunctionArgsExactDecimalHalfMicrosecond(t *testing.T) {
-	for _, tc := range []struct {
-		text string
-		want int64
-	}{
-		{"34410126.8315485", 34410126831549},
-		{"-34410126.8315485", -34410126831549},
-	} {
-		t.Run(tc.text, func(t *testing.T) {
+	for _, text := range []string{"34410126.8315485", "-34410126.8315485"} {
+		t.Run(text, func(t *testing.T) {
 			for _, width := range []int32{18, 38} {
 				var literal *plan.Expr
 				if width == 18 {
-					value, err := types.ParseDecimal64(tc.text, width, 7)
+					value, err := types.ParseDecimal64(text, width, 7)
 					require.NoError(t, err)
 					literal = &plan.Expr{
 						Typ: plan.Type{Id: int32(types.T_decimal64), Width: width, Scale: 7},
@@ -425,7 +419,7 @@ func TestResetDateFunctionArgsExactDecimalHalfMicrosecond(t *testing.T) {
 						}}},
 					}
 				} else {
-					value, err := types.ParseDecimal128(tc.text, width, 7)
+					value, err := types.ParseDecimal128(text, width, 7)
 					require.NoError(t, err)
 					literal = &plan.Expr{
 						Typ: plan.Type{Id: int32(types.T_decimal128), Width: width, Scale: 7},
@@ -436,7 +430,11 @@ func TestResetDateFunctionArgsExactDecimalHalfMicrosecond(t *testing.T) {
 				}
 				args, err := resetDateFunctionArgs(context.Background(), makeDatetimeConst("2024-01-01 00:00:00"), makeIntervalExpr(literal, "SECOND"))
 				require.NoError(t, err)
-				require.Equal(t, tc.want, extractInt64Value(args[1]))
+				want := int64(34410126831549)
+				if text[0] == '-' {
+					want = -want
+				}
+				require.Equal(t, want, extractInt64Value(args[1]), "decimal ties round exactly at binding")
 				require.Equal(t, int64(types.MicroSecond), extractInt64Value(args[2]))
 			}
 		})

@@ -290,6 +290,11 @@ func ParseDatetime(s string, scale int32) (Datetime, error) {
 			}
 			dateStr := s[:dtSepIdx]
 			timeStr := s[dtSepIdx+1:]
+			// A long time suffix does not imply that the date prefix is long
+			// enough to contain year, separator, month, separator and day.
+			if len(dateStr) < 8 {
+				return -1, moerr.NewInvalidInputNoCtxf("invalid datetime value %s", s)
+			}
 
 			// Parse date: find second occurrence of dateSep
 			p2 := 5 + strings.IndexByte(dateStr[5:], dateSep)
