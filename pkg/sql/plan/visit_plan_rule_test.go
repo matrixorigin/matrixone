@@ -59,7 +59,7 @@ func TestHexPreparedArgumentUsesSQLExecuteSourceType(t *testing.T) {
 			name: "decimal", param: ParamValue{
 				Value: "15.5", SourceType: types.New(types.T_decimal64, 3, 1), HasSourceType: true,
 			},
-			overloadID: 8, argType: types.T_decimal64, want: "10",
+			overloadID: 2, argType: types.T_int64, want: "10",
 		},
 		{
 			name: "bool", param: ParamValue{
@@ -98,6 +98,157 @@ func TestHexPreparedArgumentUsesSQLExecuteSourceType(t *testing.T) {
 	_, unchangedOverload := planfunction.DecodeOverloadID(
 		findPlanFunctionExpr(preparedPlan, "hex").GetF().GetFunc().GetObj())
 	require.Equal(t, int32(0), unchangedOverload, "execute-time rebinding must not mutate the prepared plan")
+}
+
+func TestPreparedProjectedExplicitCastDomain(t *testing.T) {
+	prepared, err := runOneStmt(NewMockOptimizer(false), t,
+		`prepare projected_cast from 'select hex(x) from (select cast(? as double) x) d'`)
+	require.NoError(t, err)
+	original := prepared.GetDcl().GetPrepare().Plan
+	originalSource := findPlanFunctionExpr(original, "hex").GetF().Args[0].GetF().Args[0]
+	require.True(t, originalSource.GetPreparedNumeric().GetProjectedCommonValue())
+	bound, _, err := FillValuesOfParamsInPlanWithSpecialization(context.Background(), original, []any{
+		ParamValue{Value: float64(1.5), SourceType: types.T_float64.ToType(), HasSourceType: true},
+	})
+	require.NoError(t, err)
+	hexExpr := findPlanFunctionExpr(bound, "hex")
+	require.NotNil(t, hexExpr)
+	boundSource := hexExpr.GetF().Args[0].GetF().Args[0]
+	require.True(t, boundSource.GetPreparedNumeric().GetProjectedCommonValue())
+	require.Equal(t, int32(types.T_float64), boundSource.Typ.Id)
+	proc := testutil.NewProcess(t)
+	executor, err := colexec.NewExpressionExecutor(proc, hexExpr)
+	require.NoError(t, err)
+	defer executor.Free()
+	result, err := executor.Eval(proc, []*batch.Batch{batch.EmptyForConstFoldBatch}, nil)
+	require.NoError(t, err)
+	require.Equal(t, "2", string(result.GetBytesAt(0)))
+}
+
+func TestPreparedDerivedSelectorCommonDomain(t *testing.T) {
+	prepared, err := runOneStmt(NewMockOptimizer(false), t,
+		`prepare derived_selector from 'select hex(x) from (select if(true,?,?) as x) d'`)
+	require.NoError(t, err)
+	original := prepared.GetDcl().GetPrepare().Plan
+	bound, _, err := FillValuesOfParamsInPlanWithSpecialization(context.Background(), original, []any{
+		ParamValue{Value: "2.5", SourceType: types.New(types.T_decimal64, 2, 1), HasSourceType: true},
+		ParamValue{Value: float64(1.5), SourceType: types.T_float64.ToType(), HasSourceType: true},
+	})
+	require.NoError(t, err)
+	hexExpr := findPlanFunctionExpr(bound, "hex")
+	require.NotNil(t, hexExpr)
+	commonValue := hexExpr.GetF().Args[0].GetF().Args[0]
+	require.True(t, commonValue.GetPreparedNumeric().GetProjectedCommonValue())
+	require.Equal(t, int32(types.T_float64), commonValue.Typ.Id)
+	proc := testutil.NewProcess(t)
+	executor, err := colexec.NewExpressionExecutor(proc, hexExpr)
+	require.NoError(t, err)
+	defer executor.Free()
+	result, err := executor.Eval(proc, []*batch.Batch{batch.EmptyForConstFoldBatch}, nil)
+	require.NoError(t, err)
+	require.Equal(t, "2", string(result.GetBytesAt(0)))
+}
+
+func TestPreparedGroupedIfnullSourceDomain(t *testing.T) {
+	prepared, err := runOneStmt(NewMockOptimizer(false), t,
+		`prepare grouped_source from 'select hex(char(ifnull((select ? group by 1 limit 1),1.5e0)))'`)
+	require.NoError(t, err)
+	bound, _, err := FillValuesOfParamsInPlanWithSpecialization(context.Background(), prepared.GetDcl().GetPrepare().Plan, []any{
+		ParamValue{Value: float64(1.5), SourceType: types.T_float64.ToType(), HasSourceType: true},
+	})
+	require.NoError(t, err)
+	charExpr := findPlanFunctionExpr(bound, "char")
+	require.NotNil(t, charExpr)
+	commonValue := charExpr.GetF().Args[0].GetF().Args[0]
+	require.True(t, commonValue.GetPreparedNumeric().GetIfnullCommonValue())
+	require.Equal(t, int32(types.T_float64), commonValue.Typ.Id)
+}
+
+func TestPreparedAggregateIntegerSourceDomain(t *testing.T) {
+	prepared, err := runOneStmt(NewMockOptimizer(false), t,
+		`prepare aggregate_source from 'select make_set((select max(?)),"a","b")'`)
+	require.NoError(t, err)
+	original := prepared.GetDcl().GetPrepare().Plan
+	for _, tc := range []struct {
+		name   string
+		param  ParamValue
+		source types.T
+		target types.T
+	}{
+		{"real", ParamValue{Value: float64(1.5), SourceType: types.T_float64.ToType(), HasSourceType: true}, types.T_float64, types.T_int64},
+		{"signed", ParamValue{Value: int64(-2), SourceType: types.T_int64.ToType(), HasSourceType: true}, types.T_int64, types.T_int64},
+		{"decimal beyond signed", ParamValue{Value: "9223372036854775808", SourceType: types.New(types.T_decimal128, 20, 0), HasSourceType: true}, types.T_decimal128, types.T_int64},
+		{"unsigned", ParamValue{Value: uint64(^uint64(0)), SourceType: types.T_uint64.ToType(), HasSourceType: true}, types.T_uint64, types.T_uint64},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			bound, _, err := FillValuesOfParamsInPlanWithSpecialization(context.Background(), original, []any{tc.param})
+			require.NoError(t, err)
+			consumer := findPlanFunctionExpr(bound, "make_set")
+			require.NotNil(t, consumer)
+			arg := consumer.GetF().Args[0]
+			require.Equal(t, int32(tc.target), arg.Typ.Id)
+			if cast := arg.GetF(); cast != nil {
+				_, overload := planfunction.DecodeOverloadID(cast.Func.Obj)
+				require.NotEqual(t, planfunction.TextIntegerBitsCastOverload, overload)
+				require.Equal(t, int32(tc.source), cast.Args[0].Typ.Id)
+			}
+		})
+	}
+}
+
+func TestHexIfNullPreservesCommonNumericValue(t *testing.T) {
+	for _, tc := range []struct {
+		name, sql, want string
+	}{
+		{"ifnull", "select hex(ifnull(cast(2.5 as decimal(20,1)),1.5e0))", "2"},
+		{"case selector", "select hex(case when true then cast(2.5 as decimal(20,1)) else 1.5e0 end)", "3"},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			bound, err := runOneStmt(NewMockOptimizer(false), t, tc.sql)
+			require.NoError(t, err)
+			hexExpr := findPlanFunctionExpr(bound, "hex")
+			require.NotNil(t, hexExpr)
+			proc := testutil.NewProcess(t)
+			executor, err := colexec.NewExpressionExecutor(proc, hexExpr)
+			require.NoError(t, err)
+			defer executor.Free()
+			out, err := executor.Eval(proc, []*batch.Batch{batch.EmptyForConstFoldBatch}, nil)
+			require.NoError(t, err)
+			require.Equal(t, tc.want, string(out.GetBytesAt(0)))
+		})
+	}
+}
+
+func TestHexPreparedCoalesceRebindsNumericSourceDomain(t *testing.T) {
+	for _, tc := range []struct {
+		name, sql, want string
+		param           ParamValue
+	}{
+		{"real", "select hex(coalesce(?, 2.5e0))", "2", ParamValue{Value: float64(1.5), SourceType: types.T_float64.ToType(), HasSourceType: true}},
+		{"null", "select hex(coalesce(?, 2.5e0))", "2", ParamValue{Value: nil, SourceType: types.T_text.ToType(), HasSourceType: true}},
+		{"negative integer", "select hex(coalesce(?, 2.5e0))", "FFFFFFFFFFFFFFFE", ParamValue{Value: int64(-2), SourceType: types.T_int64.ToType(), HasSourceType: true}},
+		{"text peer", "select hex(coalesce(?, \"peer\"))", "312E35", ParamValue{Value: float64(1.5), SourceType: types.T_float64.ToType(), HasSourceType: true}},
+		{"ifnull common result", "select hex(ifnull(?,1.5e0))", "2", ParamValue{Value: float64(2.5), SourceType: types.T_float64.ToType(), HasSourceType: true}},
+		{"nested ifnull common result", "select hex(if(true,ifnull(?,1.5e0),0))", "2", ParamValue{Value: float64(2.5), SourceType: types.T_float64.ToType(), HasSourceType: true}},
+		{"ifnull decimal source", "select hex(ifnull(?,1.5e0))", "2", ParamValue{Value: "2.5", SourceType: types.New(types.T_decimal64, 20, 1), HasSourceType: true}},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			prepared, err := runOneStmt(NewMockOptimizer(false), t, "prepare stmt_hex_coalesce from '"+tc.sql+"'")
+			require.NoError(t, err)
+			filled, _, err := FillValuesOfParamsInPlanWithSpecialization(context.Background(),
+				prepared.GetDcl().GetPrepare().Plan, []any{tc.param})
+			require.NoError(t, err)
+			hexExpr := findPlanFunctionExpr(filled, "hex")
+			require.NotNil(t, hexExpr)
+			proc := testutil.NewProcess(t)
+			executor, err := colexec.NewExpressionExecutor(proc, hexExpr)
+			require.NoError(t, err)
+			defer executor.Free()
+			out, err := executor.Eval(proc, []*batch.Batch{batch.EmptyForConstFoldBatch}, nil)
+			require.NoError(t, err)
+			require.Equal(t, tc.want, string(out.GetBytesAt(0)))
+		})
+	}
 }
 
 func TestInetNtoaPreparedArgumentUsesSQLExecuteSourceType(t *testing.T) {

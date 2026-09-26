@@ -3432,9 +3432,9 @@ func containsExplicitFloatCastInSelect(stmt tree.SelectStatement) bool {
 
 // bindPreparedNumericFuncExpr gives prepared numeric function arguments the
 // same static context as prepared arithmetic. SUM/AVG use the inferred numeric
-// domain, NTILE requires an integer domain, CHAR uses an integer domain only
-// for arguments that contain a prepared marker. ParamRef remains TEXT for
-// transport and an explicit cast materializes the computation type.
+// domain and NTILE requires an integer domain. Parameter-owned integer roles
+// instead preserve their source domain through the shared binding path.
+// ParamRef remains TEXT for transport.
 // Non-parameter expressions stay on their original binding path, so ordinary
 // string inputs continue to use their function-specific string semantics.
 func (b *baseBinder) bindPreparedNumericFuncExpr(
@@ -3446,26 +3446,8 @@ func (b *baseBinder) bindPreparedNumericFuncExpr(
 	if b.builder == nil || !b.builder.isPrepareStatement || !ok {
 		return b.bindFuncExprImplByAstExpr(name, astArgs, depth)
 	}
-	if strings.EqualFold(name, "char") {
-		args := make([]*plan.Expr, len(astArgs))
-		for i, astArg := range astArgs {
-			hasPreparedParam, err := b.hasPreparedNumericParamExprs([]tree.Expr{astArg}, depth)
-			if err != nil {
-				return nil, err
-			}
-			if hasPreparedParam {
-				args[i], err = b.bindNumericExprWithContext(astArg, depth, target)
-			} else {
-				args[i], err = b.impl.BindExpr(astArg, depth, false)
-			}
-			if err != nil {
-				return nil, err
-			}
-		}
-		return bindBoundFuncExprAndConstFoldWithObserver(
-			b.GetContext(), b.builder.compCtx.GetProcess(), name, args,
-			b.observePersistedExpressionProtocol,
-		)
+	if function.IntegerArgumentSourceDependent(name, 0) {
+		return b.bindFuncExprImplByAstExpr(name, astArgs, depth)
 	}
 	if isPreparedNumericAggregate(name, len(astArgs)) {
 		hasParam, err := b.hasPreparedNumericParamExprs(astArgs, depth)
@@ -3791,6 +3773,21 @@ func (b *baseBinder) bindFuncExprImplByAstExpr(name string, astArgs []tree.Expr,
 				b.numericParamType = nil
 				b.numericSubqueryTarget = nil
 				expr, err = b.bindIntegerArgumentAst(arg, depth, target)
+			} else if function.IntegerArgumentSourceDependent(name, idx) {
+				b.numericParamType = nil
+				b.numericSubqueryTarget = nil
+				if function.IntegerArgumentUsesBitSources(name, idx) {
+					expr, err = b.bindIntegerSourceAst(arg, depth, types.T_int64, name, idx)
+				} else {
+					// A numeric-only role retains ordinary string/array selectors.
+					previous := b.integerArgumentSourceContext
+					b.integerArgumentSourceContext = true
+					expr, err = b.impl.BindExpr(arg, depth, false)
+					b.integerArgumentSourceContext = previous
+					if err == nil {
+						expr, err = b.integerArgumentStorageSource(expr)
+					}
+				}
 			} else {
 				expr, err = b.impl.BindExpr(arg, depth, false)
 			}
@@ -4041,6 +4038,7 @@ func (b *baseBinder) bindFuncExprImplByAstExpr(name string, astArgs []tree.Expr,
 			}
 			if isIfNull {
 				e.Typ.NotNullable = args[1].Typ.NotNullable || args[2].Typ.NotNullable
+				ensurePreparedNumericMetadata(e).IfnullCommonValue = true
 			}
 			markPreparedResultCastsProvisional(
 				b.GetContext(), name, astArgs, preparedPeerSources, e, preparedNumericProvenance)
@@ -4064,6 +4062,7 @@ func (b *baseBinder) bindFuncExprImplByAstExpr(name string, astArgs []tree.Expr,
 		if err == nil {
 			if isIfNull {
 				builtinExpr.Typ.NotNullable = args[1].Typ.NotNullable || args[2].Typ.NotNullable
+				ensurePreparedNumericMetadata(builtinExpr).IfnullCommonValue = true
 			}
 			return builtinExpr, nil
 		}
@@ -5811,28 +5810,6 @@ func BindFuncExprImplByPlanExpr(ctx context.Context, name string, args []*Expr) 
 	return bindFuncExprImplByPlanExpr(ctx, name, args, true, nil, nil, false)
 }
 
-func hexExplicitRealCastOverload(name string, args []*Expr) (int32, bool) {
-	if name != "hex" || len(args) != 1 || args[0] == nil {
-		return 0, false
-	}
-	cast := args[0].GetF()
-	if cast == nil || cast.GetFunc().GetObjName() != "cast" {
-		return 0, false
-	}
-	_, castOverload := function.DecodeOverloadID(cast.GetFunc().GetObj())
-	if castOverload == 0 && !cast.GetSyntaxExplicitCast() {
-		return 0, false
-	}
-	switch types.T(args[0].Typ.Id) {
-	case types.T_float32:
-		return function.HexExplicitFloat32Overload, true
-	case types.T_float64:
-		return function.HexExplicitFloat64Overload, true
-	default:
-		return 0, false
-	}
-}
-
 func bindPreparedFuncExprImplByPlanExpr(
 	ctx context.Context,
 	originalBoundExpr *Expr,
@@ -6609,12 +6586,6 @@ func bindFuncExprImplByPlanExpr(
 		return nil, err
 	}
 
-	if overloadID, ok := hexExplicitRealCastOverload(name, args); ok {
-		fGet, err = function.GetFunctionByNameWithOverload(ctx, name, argsType, overloadID)
-		if err != nil {
-			return nil, err
-		}
-	}
 	funcID = fGet.GetEncodedOverloadID()
 	returnType = fGet.GetReturnType()
 	argsCastType, _ = fGet.ShouldDoImplicitTypeCast()

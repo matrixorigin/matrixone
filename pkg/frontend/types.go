@@ -1796,8 +1796,8 @@ func (ses *Session) SetGlobalSysVar(ctx context.Context, name string, val interf
 	// save to table first
 	canonicalName := canonicalSystemVariableName(name)
 	persistNames := []string{canonicalName}
-	if isTransactionIsolationSystemVariable(name) {
-		persistNames = append(persistNames, transactionIsolationSystemVariableAlias)
+	if alias := transactionSystemVariableAlias(name); alias != "" {
+		persistNames = append(persistNames, alias)
 	}
 	if err = doSetGlobalSystemVariables(ctx, ses, persistNames, val); err != nil {
 		return

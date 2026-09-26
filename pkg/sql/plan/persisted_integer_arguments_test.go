@@ -36,6 +36,7 @@ func TestPersistedIntegerArgumentGeneratedAndCheck(t *testing.T) {
 	proc := testutil.NewProcess(t)
 	for _, tc := range []struct {
 		name, sqlType, argument string
+		callTemplate            string
 		decimal                 bool
 		want                    []string
 		overflow                bool
@@ -45,9 +46,16 @@ func TestPersistedIntegerArgumentGeneratedAndCheck(t *testing.T) {
 		{name: "selected source", sqlType: "double", argument: "case when a<2 then cast(a as double) else a end", want: []string{"a", "a.b"}},
 		{name: "exact decimal", sqlType: "decimal(38,1)", argument: "a", decimal: true, want: []string{"a.b", "a.b.c"}},
 		{name: "overflow remains error", sqlType: "decimal(38,1)", argument: "a", decimal: true, overflow: true},
+		{name: "bit real column", sqlType: "double", argument: "a", callTemplate: "export_set(%s,'Y','N','',4)", want: []string{"NYNN", "NYNN"}},
+		{name: "bit exact decimal", sqlType: "decimal(38,1)", argument: "a", callTemplate: "export_set(%s,'Y','N','',4)", decimal: true, want: []string{"NYNN", "YYNN"}},
+		{name: "bit overflow", sqlType: "decimal(38,1)", argument: "a", callTemplate: "export_set(%s,'Y','N','',4)", decimal: true, overflow: true},
+		{name: "hex explicit real", sqlType: "double", argument: "cast(a as double)", callTemplate: "hex(%s)", want: []string{"1", "2"}},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			call := "substring_index('a.b.c.d','.'," + tc.argument + ")"
+			if tc.callTemplate != "" {
+				call = fmt.Sprintf(tc.callTemplate, tc.argument)
+			}
 			stmt, err := parsers.ParseOne(t.Context(), dialect.MYSQL, fmt.Sprintf("create table t(a %s,g varchar(64) generated always as (%s) stored,check(length(%s)>=0))", tc.sqlType, call, call), 1)
 			require.NoError(t, err)
 			defer stmt.Free()
@@ -60,6 +68,9 @@ func TestPersistedIntegerArgumentGeneratedAndCheck(t *testing.T) {
 			var loaded planpb.TableDef
 			require.NoError(t, proto.Unmarshal(wire, &loaded))
 			require.Len(t, loaded.Checks, 1)
+			features, err := planpb.RequiredRemoteExpressionFeatures(&loaded)
+			require.NoError(t, err)
+			require.True(t, features.IntegerParameterCoercion)
 			var generated *planpb.GeneratedCol
 			for _, col := range loaded.Cols {
 				if col.Name == "g" {

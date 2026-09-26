@@ -36,7 +36,7 @@ func TestIssue28454To28456CharPreparedBinding(t *testing.T) {
 	charExpr := findPlanFunctionExpr(prepared.GetDcl().GetPrepare().Plan, "char")
 	require.NotNil(t, charExpr)
 	require.Len(t, charExpr.GetF().Args, 1)
-	require.True(t, PreparedPlanNeedsRuntimeSpecialization(prepared.GetDcl().GetPrepare().Plan))
+	require.Equal(t, []int32{0}, PreparedPlanNumericFallbackParamPositions(prepared.GetDcl().GetPrepare().Plan))
 	for _, tc := range []struct {
 		name             string
 		param            ParamValue
@@ -55,7 +55,8 @@ func TestIssue28454To28456CharPreparedBinding(t *testing.T) {
 			param: ParamValue{
 				Value: "65.5", SourceType: types.T_varchar.ToType(), HasSourceType: true,
 			},
-			wantChild: types.T_decimal64,
+			wantChild:        types.T_varchar,
+			wantStringSource: true,
 		},
 		{
 			name: "string suffix source",
@@ -80,32 +81,24 @@ func TestIssue28454To28456CharPreparedBinding(t *testing.T) {
 			filledChar := findPlanFunctionExpr(filled, "char")
 			require.NotNil(t, filledChar)
 			require.True(t, specialized, "CHAR must be rebound for source domain %v", tc.param.SourceType)
+			target := types.T_int64
+			conversionID := function.IntegerArgumentCastOverload
 			if tc.wantStringSource {
-				stringArg := filledChar.GetF().Args[0]
-				require.Equal(t, tc.wantChild, types.T(stringArg.Typ.Id))
-				stringLiteral := stringArg.GetLit()
-				if stringLiteral == nil && stringArg.GetF() != nil && len(stringArg.GetF().Args) > 0 {
-					stringLiteral = stringArg.GetF().Args[0].GetLit()
-				}
-				require.NotNil(t, stringLiteral, filledChar.String())
-				require.Equal(t, "65.5xyz", stringLiteral.GetSval(), filledChar.String())
-				return
+				target = types.T_uint64
+				conversionID = function.TextIntegerBitsCastOverload
 			}
-			require.Equal(t, types.T_int64, types.T(filledChar.GetF().Args[0].Typ.Id))
+			require.Equal(t, target, types.T(filledChar.GetF().Args[0].Typ.Id))
 			cast := filledChar.GetF().Args[0].GetF()
 			require.NotNil(t, cast)
 			require.Equal(t, "cast", cast.GetFunc().GetObjName())
 			require.Len(t, cast.Args, 2)
+			_, id := function.DecodeOverloadID(cast.Func.Obj)
+			require.Equal(t, conversionID, id)
 			child := cast.Args[0]
-			if tc.wantChild == types.T_varchar {
-				// SQL string variables use the approximate numeric-prefix source
-				// before CHAR's numeric rounding cast.
-				require.NotNil(t, child.GetF())
-				require.Equal(t, "cast", child.GetF().GetFunc().GetObjName())
-				require.Equal(t, types.T_float64, types.T(child.Typ.Id))
-				child = child.GetF().Args[0]
-			}
 			require.Equal(t, tc.wantChild, types.T(child.Typ.Id), filledChar.String())
+			if tc.wantStringSource {
+				require.Equal(t, tc.param.Value, child.GetLit().GetSval())
+			}
 		})
 	}
 
@@ -121,7 +114,9 @@ func TestIssue28454To28456CharPreparedBinding(t *testing.T) {
 	filledChar := findPlanFunctionExpr(filled, "char")
 	require.NotNil(t, filledChar)
 	stringArg := filledChar.GetF().Args[0]
-	require.Equal(t, types.T_varchar, types.T(stringArg.Typ.Id))
+	require.Equal(t, types.T_uint64, types.T(stringArg.Typ.Id))
+	_, conversionID := function.DecodeOverloadID(stringArg.GetF().Func.Obj)
+	require.Equal(t, function.TextIntegerBitsCastOverload, conversionID)
 	stringLiteral := stringArg.GetLit()
 	if stringLiteral == nil && stringArg.GetF() != nil && len(stringArg.GetF().Args) > 0 {
 		stringLiteral = stringArg.GetF().Args[0].GetLit()
@@ -148,13 +143,12 @@ func TestIssue28454CharPreparedCOMStmtTextKeepsStringSemantics(t *testing.T) {
 	preparePlan := prepared.GetDcl().GetPrepare().Plan
 
 	for _, tc := range []struct {
-		name             string
-		value            string
-		hasRuntimeType   bool
-		wantStringSource bool
+		name           string
+		value          string
+		hasRuntimeType bool
 	}{
-		{name: "no numeric prefix", value: "abc", wantStringSource: true},
-		{name: "numeric suffix", value: "65.5xyz", wantStringSource: true},
+		{name: "no numeric prefix", value: "abc"},
+		{name: "numeric suffix", value: "65.5xyz"},
 		{name: "complete decimal", value: "65.5"},
 		{name: "complete exponent", value: "64.5e0"},
 		{name: "complete decimal with text metadata", value: "65.5", hasRuntimeType: true},
@@ -174,21 +168,14 @@ func TestIssue28454CharPreparedCOMStmtTextKeepsStringSemantics(t *testing.T) {
 			charExpr := findPlanFunctionExpr(filled, "char")
 			require.NotNil(t, charExpr)
 			arg := charExpr.GetF().Args[0]
-			if tc.wantStringSource {
-				require.Equal(t, types.T_varchar, types.T(arg.Typ.Id), charExpr.String())
-				literal := arg.GetLit()
-				if literal == nil && arg.GetF() != nil && len(arg.GetF().Args) > 0 {
-					literal = arg.GetF().Args[0].GetLit()
-				}
-				require.NotNil(t, literal, charExpr.String())
-				require.Equal(t, tc.value, literal.GetSval())
-				return
-			}
-			require.Equal(t, types.T_int64, types.T(arg.Typ.Id), charExpr.String())
+			require.Equal(t, types.T_uint64, types.T(arg.Typ.Id), charExpr.String())
 			cast := arg.GetF()
 			require.NotNil(t, cast, charExpr.String())
 			require.Len(t, cast.Args, 2, charExpr.String())
-			require.True(t, types.T(cast.Args[0].Typ.Id).IsDecimal(), charExpr.String())
+			_, id := function.DecodeOverloadID(cast.Func.Obj)
+			require.Equal(t, function.TextIntegerBitsCastOverload, id)
+			require.True(t, types.T(cast.Args[0].Typ.Id).IsMySQLString(), charExpr.String())
+			require.Equal(t, tc.value, cast.Args[0].GetLit().GetSval(), "numeric-looking protocol text must not become DECIMAL")
 		})
 	}
 }

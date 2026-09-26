@@ -21,6 +21,7 @@ import (
 	"strings"
 
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
+	"github.com/matrixorigin/matrixone/pkg/logutil"
 	"github.com/matrixorigin/matrixone/pkg/monlp/tokenizer"
 	"github.com/matrixorigin/matrixone/pkg/sql/parsers/tree"
 	"github.com/matrixorigin/matrixone/pkg/vm/process"
@@ -830,6 +831,21 @@ func ParsePatternInBooleanMode(pattern string, parser string) ([]*Pattern, error
 
 				// open bracket found and find next close bracket
 				bracket += 1
+			} else if i == len(runeSlice)-1 {
+				// A one-rune term in final position after a space both starts and ends on this rune,
+				// so it never reaches the !isspace branch that flushes a multi-rune final term on its
+				// last rune. Flush it here so a trailing single-rune OR term (text `a`, CJK `蕉`, or a
+				// bare `*`) is not silently dropped (#29288).
+				term := string(runeSlice[offset : end+1])
+				p, err := CreatePattern(term, parser)
+				if err != nil {
+					return nil, err
+				}
+				// A trailing bare `*` flushes as a STAR (prefix) term; anything else is an exact leaf.
+				if p.Operator == STAR {
+					logutil.Debugf("fulltext boolean: flushed trailing single-rune wildcard %q", p.Text)
+				}
+				tokens = append(tokens, p)
 			}
 		}
 
