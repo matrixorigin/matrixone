@@ -461,6 +461,13 @@ func (builder *QueryBuilder) flattenSubqueryWithConsumer(
 		}
 	}
 
+	// Pagination can delete the one aggregate result row even when COUNT
+	// would otherwise produce zero. Capture this before pagination is
+	// rewritten into a per-correlation-key window/filter.
+	countRowDiscarded := false
+	if subquery.Typ == plan.SubqueryRef_SCALAR && builder.findAggrCount(subCtx.aggregates) {
+		countRowDiscarded = builder.scalarCountRowDiscardedByPagination(subID)
+	}
 	subID, preds, err := builder.pullupCorrelatedPredicates(subID, subCtx, subquery.Typ, true)
 	if err != nil {
 		return 0, nil, err
@@ -471,6 +478,9 @@ func (builder *QueryBuilder) flattenSubqueryWithConsumer(
 	// multiple rows per outer row and breaking SINGLE JOIN semantics.
 	// Fix: bypass the inner AGG, use LEFT JOIN, and re-aggregate on top.
 	if subquery.Typ == plan.SubqueryRef_SCALAR && len(subCtx.aggregates) > 0 && builder.findNonEqPred(preds) {
+		if localCTEHaving != nil {
+			return 0, nil, moerr.NewNYI(builder.GetContext(), "correlated COUNT HAVING with non-equality predicate")
+		}
 		return builder.flattenScalarSubqueryWithNonEqAgg(nodeID, subID, subCtx, preds, ctx)
 	}
 
@@ -500,21 +510,15 @@ func (builder *QueryBuilder) flattenSubqueryWithConsumer(
 	switch subquery.Typ {
 	case plan.SubqueryRef_SCALAR:
 		var rewriteCount bool
-
 		// Preserve the legacy COUNT fallback for plan shapes that cannot use the
 		// more precise empty-input projection reconstruction below.
-		if len(joinPreds) > 0 && len(subCtx.groups) == 0 && len(subCtx.results) == 1 &&
+		if len(joinPreds) > 0 && !countRowDiscarded && len(subCtx.groups) == 0 && len(subCtx.results) == 1 &&
 			builder.findAggrCount(subCtx.aggregates) {
-			// Only the original ungrouped COUNT result owns the empty-input
-			// zero. A grouped COUNT has no result row on empty input, and a
-			// window/other projection must never inherit COUNT's fallback.
-			if col := subCtx.results[0].GetCol(); col != nil &&
-				col.RelPos == subCtx.aggregateTag && col.ColPos >= 0 &&
-				int(col.ColPos) < len(subCtx.aggregates) {
-				f := subCtx.aggregates[col.ColPos].GetF()
-				rewriteCount = f != nil && f.Func != nil &&
-					(f.Func.ObjName == "count" || f.Func.ObjName == "starcount")
-			}
+			// An implicit single-group COUNT produces zero on empty input.
+			// Follow identity projections through ordering/duplicate wrappers;
+			// inspecting only the top tag loses valid COUNT results. Explicit
+			// GROUP BY and window results must not inherit the fallback.
+			rewriteCount = builder.directScalarCountResult(subID, subCtx.results[0], subCtx.aggregateTag)
 		}
 
 		if scalarExistential {
@@ -561,8 +565,12 @@ func (builder *QueryBuilder) flattenSubqueryWithConsumer(
 			joinType = plan.Node_LEFT
 		}
 
-		postJoinProjection, finalizeProjection, err :=
-			builder.prepareCorrelatedScalarAggregatePostJoinProjection(subID, subCtx, joinPreds)
+		var postJoinProjection *plan.Expr
+		var finalizeProjection bool
+		if !countRowDiscarded {
+			postJoinProjection, finalizeProjection, err =
+				builder.prepareCorrelatedScalarAggregatePostJoinProjection(subID, subCtx, joinPreds)
+		}
 		if err != nil {
 			return nodeID, nil, err
 		}
@@ -656,7 +664,21 @@ func (builder *QueryBuilder) flattenSubqueryWithConsumer(
 			}
 		}
 		if localCTEHaving != nil {
-			condition, ok := replaceCountHavingResult(localCTEHaving, subCtx.aggregateTag, retExpr)
+			havingCount := retExpr
+			if finalizeProjection {
+				if len(subCtx.aggregates) != 1 || subCtx.aggregates[0].GetF() == nil ||
+					subCtx.aggregates[0].GetF().Func == nil {
+					return 0, nil, moerr.NewNYI(builder.GetContext(), "correlated COUNT HAVING aggregate projection")
+				}
+				rawCount := GetColExpr(subCtx.aggregates[0].Typ, subCtx.topTag(), 0)
+				rawCount.Typ.NotNullable = false
+				havingCount, err = builder.restoreAggregateEmptyResult(
+					rawCount, subCtx.aggregates[0], subCtx.aggregates[0].GetF().Func.ObjName)
+				if err != nil {
+					return 0, nil, err
+				}
+			}
+			condition, ok := replaceCountHavingResult(localCTEHaving, subCtx.aggregateTag, havingCount)
 			if !ok {
 				return 0, nil, moerr.NewNYI(builder.GetContext(), "correlated COUNT HAVING result expression")
 			}
@@ -1182,6 +1204,65 @@ func (builder *QueryBuilder) prepareCorrelatedScalarAggregatePostJoinProjection(
 	}
 
 	project := builder.qry.Nodes[subID]
+	// ORDER BY/DISTINCT may add a final pass-through projection above the
+	// original aggregate projection. Move that projection's expression above
+	// the join too, while retaining its raw COUNT as the right-hand result.
+	if project.NodeType == plan.Node_PROJECT && len(project.BindingTags) == 1 && len(project.Children) == 1 &&
+		len(project.ProjectList) > 0 && project.Limit == nil && project.Offset == nil {
+		childID := project.Children[0]
+	wrapLoop:
+		for {
+			child := builder.qry.Nodes[childID]
+			if len(child.Children) != 1 || child.Limit != nil || child.Offset != nil {
+				break
+			}
+			switch child.NodeType {
+			case plan.Node_SORT, plan.Node_DISTINCT, plan.Node_PARTITION:
+			case plan.Node_WINDOW:
+				// Only the internal ROW_NUMBER carrier of correlated LIMIT is
+				// transparent here; a user window can change the scalar result.
+				if len(child.WinSpecList) != 1 || child.WinSpecList[0].GetW() == nil ||
+					child.WinSpecList[0].GetW().Name != "row_number" || len(child.FilterList) != 1 {
+					break wrapLoop
+				}
+			default:
+				break wrapLoop
+			}
+			childID = child.Children[0]
+		}
+		inner := builder.qry.Nodes[childID]
+		if inner.NodeType == plan.Node_PROJECT && inner != project && len(inner.Children) == 1 &&
+			len(inner.BindingTags) == 1 && len(inner.ProjectList) > 0 &&
+			inner.Limit == nil && inner.Offset == nil {
+			agg := builder.qry.Nodes[inner.Children[0]]
+			if agg.NodeType != plan.Node_AGG {
+				return nil, false, nil
+			}
+			outerCol := project.ProjectList[0].GetCol()
+			if len(agg.AggList) == 1 && len(subCtx.aggregates) == 1 && len(agg.BindingTags) > 1 &&
+				agg.BindingTags[1] == subCtx.aggregateTag && outerCol != nil &&
+				outerCol.RelPos == inner.BindingTags[0] && outerCol.ColPos == 0 {
+				fn := agg.AggList[0].GetF()
+				if fn != nil && fn.Func != nil {
+					projected := GetColExpr(agg.AggList[0].Typ, project.BindingTags[0], 0)
+					projected.Typ.NotNullable = false
+					restored, err := builder.restoreAggregateEmptyResult(projected, agg.AggList[0], fn.Func.ObjName)
+					if err != nil {
+						return nil, false, err
+					}
+					postJoin, ok := replaceAggregateRefsForPostJoin(
+						DeepCopyExpr(inner.ProjectList[0]), subCtx.aggregateTag, []*plan.Expr{restored})
+					if ok {
+						postJoin, stillCorrelated := decreaseDepth(postJoin)
+						if !stillCorrelated {
+							inner.ProjectList[0] = GetColExpr(agg.AggList[0].Typ, subCtx.aggregateTag, 0)
+							return postJoin, true, nil
+						}
+					}
+				}
+			}
+		}
+	}
 	if project.NodeType == plan.Node_AGG {
 		if len(project.BindingTags) < 2 || project.BindingTags[1] != subCtx.aggregateTag ||
 			len(project.AggList) != 1 || len(subCtx.aggregates) != 1 || len(subCtx.results) != 1 {
@@ -1338,6 +1419,73 @@ func replaceAggregateRefsForPostJoin(
 		return nil, false
 	default:
 		return expr, true
+	}
+}
+
+// scalarCountRowDiscardedByPagination checks the original scalar plan,
+// before its LIMIT/OFFSET nodes are rewritten into a per-key window.
+func (builder *QueryBuilder) scalarCountRowDiscardedByPagination(root int32) bool {
+	for {
+		n := builder.qry.Nodes[root]
+		if n.Limit != nil {
+			lit := n.Limit.GetLit()
+			if lit == nil || lit.GetU64Val() == 0 {
+				return true
+			}
+		}
+		if n.Offset != nil {
+			lit := n.Offset.GetLit()
+			if lit == nil || lit.GetU64Val() != 0 {
+				return true
+			}
+		}
+		if n.NodeType == plan.Node_AGG || len(n.Children) != 1 {
+			return false
+		}
+		root = n.Children[0]
+	}
+}
+
+// directScalarCountResult proves that a scalar output is a direct COUNT slot,
+// even when ORDER BY or DISTINCT inserts pass-through projections. The proof
+// stops at operators that can change the result expression or cardinality.
+func (builder *QueryBuilder) directScalarCountResult(root int32, result *plan.Expr, aggregateTag int32) bool {
+	for {
+		n := builder.qry.Nodes[root]
+		if n.NodeType == plan.Node_AGG {
+			col := result.GetCol()
+			if col == nil || col.RelPos != aggregateTag || col.ColPos < 0 ||
+				int(col.ColPos) >= len(n.AggList) {
+				return false
+			}
+			f := n.AggList[col.ColPos].GetF()
+			return f != nil && f.Func != nil &&
+				(f.Func.ObjName == "count" || f.Func.ObjName == "starcount")
+		}
+		if len(n.Children) != 1 {
+			return false
+		}
+		switch n.NodeType {
+		case plan.Node_PROJECT:
+			if col := result.GetCol(); col != nil && len(n.BindingTags) == 1 &&
+				col.RelPos == n.BindingTags[0] {
+				if col.ColPos < 0 || int(col.ColPos) >= len(n.ProjectList) {
+					return false
+				}
+				result = n.ProjectList[col.ColPos]
+			}
+		case plan.Node_SORT, plan.Node_DISTINCT, plan.Node_FILTER, plan.Node_PARTITION:
+		case plan.Node_WINDOW:
+			// A window can be a physical carrier for per-key LIMIT, but its
+			// own output is not an aggregate result.
+			if col := result.GetCol(); col != nil && len(n.BindingTags) > 0 &&
+				col.RelPos == n.BindingTags[0] && col.ColPos == n.GetWindowIdx() {
+				return false
+			}
+		default:
+			return false
+		}
+		root = n.Children[0]
 	}
 }
 
@@ -2318,8 +2466,64 @@ func (builder *QueryBuilder) hasCorrelatedLocalCTEHaving(root int32) bool {
 	}
 }
 
+func (builder *QueryBuilder) hasCorrelatedConsumerInput(root int32) bool {
+	if builder.correlatedLocalCTEInBranch(root) {
+		return true
+	}
+	var visit func(int32) bool
+	visit = func(id int32) bool {
+		n := builder.qry.Nodes[id]
+		for _, expr := range localCTENodeExprs(n) {
+			if hasCorrCol(expr) {
+				return true
+			}
+		}
+		for _, child := range n.Children {
+			if visit(child) {
+				return true
+			}
+		}
+		return false
+	}
+	return visit(root)
+}
+
+// Prove the scalar expression depends only on this COUNT and constants.
+// Transparent ORDER BY/DISTINCT projections may change its visible tag.
+func (builder *QueryBuilder) scalarCountHavingProjection(root int32, result *plan.Expr, aggregateTag int32) bool {
+	for {
+		n := builder.qry.Nodes[root]
+		if n.NodeType == plan.Node_AGG {
+			if len(n.AggList) != 1 || len(n.BindingTags) < 2 || n.BindingTags[1] != aggregateTag {
+				return false
+			}
+			_, ok := replaceAggregateRefsForPostJoin(DeepCopyExpr(result), aggregateTag,
+				[]*plan.Expr{GetColExpr(n.AggList[0].Typ, aggregateTag, 0)})
+			return ok
+		}
+		if len(n.Children) != 1 {
+			return false
+		}
+		switch n.NodeType {
+		case plan.Node_PROJECT:
+			if col := result.GetCol(); col != nil && len(n.BindingTags) == 1 &&
+				col.RelPos == n.BindingTags[0] {
+				if col.ColPos < 0 || int(col.ColPos) >= len(n.ProjectList) {
+					return false
+				}
+				result = n.ProjectList[col.ColPos]
+			}
+		case plan.Node_SORT, plan.Node_DISTINCT, plan.Node_FILTER:
+		default:
+			return false
+		}
+		root = n.Children[0]
+	}
+}
+
 func (builder *QueryBuilder) detachCorrelatedCountHaving(root int32, ctx *BindContext) (*plan.Expr, error) {
 	id := root
+	parentID := int32(-1)
 	for {
 		n := builder.qry.Nodes[id]
 		var agg *plan.Node
@@ -2330,24 +2534,28 @@ func (builder *QueryBuilder) detachCorrelatedCountHaving(root int32, ctx *BindCo
 			agg = builder.qry.Nodes[n.Children[0]]
 		}
 		if agg != nil && len(n.FilterList) != 0 &&
-			len(agg.Children) == 1 && builder.correlatedLocalCTEInBranch(agg.Children[0]) {
-			if len(n.FilterList) != 1 || len(agg.GroupBy) != 0 || len(agg.AggList) != 1 ||
-				agg.AggList[0].GetF() == nil || agg.AggList[0].GetF().Func == nil ||
-				(agg.AggList[0].GetF().Func.ObjName != "count" && agg.AggList[0].GetF().Func.ObjName != "starcount") ||
-				len(ctx.results) != 1 || builder.qry.Nodes[root].NodeType != plan.Node_PROJECT ||
-				len(builder.qry.Nodes[root].ProjectList) != 1 ||
-				builder.qry.Nodes[root].ProjectList[0].GetCol() == nil ||
-				builder.qry.Nodes[root].ProjectList[0].GetCol().RelPos != ctx.aggregateTag ||
-				builder.qry.Nodes[root].ProjectList[0].GetCol().ColPos != 0 {
+			len(agg.Children) == 1 && builder.hasCorrelatedConsumerInput(agg.Children[0]) {
+			if len(agg.AggList) != 1 || agg.AggList[0].GetF() == nil ||
+				agg.AggList[0].GetF().Func == nil ||
+				(agg.AggList[0].GetF().Func.ObjName != "count" && agg.AggList[0].GetF().Func.ObjName != "starcount") {
+				// Leave other aggregate HAVING paths on their existing route.
+				return nil, nil
+			}
+			if len(n.FilterList) != 1 || len(agg.GroupBy) != 0 || len(ctx.results) != 1 ||
+				!builder.scalarCountHavingProjection(root, ctx.results[0], ctx.aggregateTag) {
 				return nil, moerr.NewNYI(builder.GetContext(), "correlated local CTE: COUNT HAVING projection is not the aggregate result")
 			}
 			having := n.FilterList[0]
 			n.FilterList = nil
+			if n.NodeType == plan.Node_FILTER && parentID >= 0 {
+				builder.qry.Nodes[parentID].Children[0] = n.Children[0]
+			}
 			return having, nil
 		}
 		if len(n.Children) != 1 {
 			return nil, nil
 		}
+		parentID = id
 		id = n.Children[0]
 	}
 }

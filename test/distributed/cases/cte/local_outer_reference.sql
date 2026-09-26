@@ -214,6 +214,48 @@ select p.id, (with q(n) as (select p.parent_id)
               select count(*) from q join pages b on n=b.id and n=p.id) as c
 from pages p where p.id=2;
 
+-- ORDER BY and DISTINCT wrappers cannot turn an ungrouped COUNT empty input into NULL.
+select p.id, (select count(*) from pages a
+              where a.id=p.id and a.id<2 order by count(*)) as c
+from pages p where p.id in (1, 2) order by p.id;
+select p.id, (with q(n) as (select p.parent_id from pages a where a.id=p.id and a.id<2)
+              select count(*) from q order by count(*)) as c
+from pages p where p.id in (1, 2) order by p.id;
+select p.id from pages p where (
+  with q(n) as (select p.parent_id from pages a where a.id=p.id and a.id<2)
+  select count(*) from q order by count(*)
+)=0 and p.id in (1, 2) order by p.id;
+select p.id, (with q(n) as (select p.parent_id from pages a where a.id=p.id and a.id<2)
+              select distinct count(*) from q) as c
+from pages p where p.id in (1, 2) order by p.id;
+select p.id, (with q(n) as (select p.parent_id)
+              select distinct count(*)+1 from q) as c
+from pages p where p.id in (2, 5) order by p.id;
+select p.id, (select count(*)+1 from pages a
+              where a.id=p.id and a.id<2 order by count(*)) as c
+from pages p where p.id in (1, 2) order by p.id;
+select p.id, (with q(n) as (select p.parent_id from pages a where a.id=p.id and a.id<2)
+              select count(*)+1 from q order by count(*)) as c
+from pages p where p.id in (1, 2) order by p.id;
+select p.id, (select count(*)+1 from pages a
+              where a.id=p.id and a.id<2 order by count(*) limit 1) as c
+from pages p where p.id in (1, 2) order by p.id;
+select p.id, (select count(*)+1 from pages a
+              where a.id=p.id and a.id<2 order by count(*) limit 0) as c
+from pages p where p.id in (1, 2) order by p.id;
+select p.id, (select count(*)+1 from pages a
+              where a.id=p.id and a.id<2 order by count(*) limit 1 offset 1) as c
+from pages p where p.id in (1, 2) order by p.id;
+select p.id, (select count(*) from pages a where a.id=p.id and a.id<2
+              having count(*)=0 order by count(*)) as c
+from pages p where p.id in (1, 2) order by p.id;
+select p.id, (select count(*)+1 from pages a where a.id=p.id and a.id<2
+              having count(*)=0 order by count(*) limit 1) as c
+from pages p where p.id in (1, 2) order by p.id;
+select p.id, (with q(n) as (select p.parent_id from pages a where a.id=p.id and a.id<2)
+              select count(*)+1 from q having count(*)=0 order by count(*)) as c
+from pages p where p.id in (1, 2) order by p.id;
+
 -- Empty outer input starts no parameter partitions.
 select p.id,
        (with recursive r(n) as (

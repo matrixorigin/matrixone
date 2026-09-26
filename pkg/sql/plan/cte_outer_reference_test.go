@@ -32,6 +32,24 @@ func TestLocalCTEOuterReferencesExecutablePlan(t *testing.T) {
 		sql  string
 	}{
 		{
+			name: "ordinary count order limit one",
+			sql: `select p.n_nationkey, (select count(*) from tpch.nation a
+				where a.n_nationkey=p.n_nationkey and a.n_nationkey<2 order by count(*) limit 1)
+				from tpch.nation p`,
+		},
+		{
+			name: "ordinary count order wrapper",
+			sql: `select p.n_nationkey, (select count(*) from tpch.nation a
+				where a.n_nationkey=p.n_nationkey and a.n_nationkey<2 order by count(*))
+				from tpch.nation p`,
+		},
+		{
+			name: "local count order wrapper",
+			sql: `select p.n_nationkey, (with q(n) as (select p.n_regionkey from tpch.nation a
+				where a.n_nationkey=p.n_nationkey and a.n_nationkey<2)
+				select count(*) from q order by count(*)) from tpch.nation p`,
+		},
+		{
 			name: "ordinary scalar control",
 			sql:  `select p.n_nationkey, (select p.n_regionkey) from tpch.nation p`,
 		},
