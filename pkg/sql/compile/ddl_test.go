@@ -2210,6 +2210,212 @@ func TestLockDroppedRelation(t *testing.T) {
 	}
 }
 
+func TestLockAlterForeignKeyParentTable(t *testing.T) {
+	storageErr := errors.New("storage lock failed")
+	for _, testCase := range []struct {
+		name          string
+		databaseErr   error
+		parentPresent bool
+		wantErr       error
+		wantLocks     int
+	}{
+		{name: "database lookup fails", databaseErr: assert.AnError, wantErr: assert.AnError},
+		{name: "parent relation is missing", wantErr: moerr.NewNoSuchTableNoCtx("parent_db", "parent")},
+		{name: "parent storage lock is returned", parentPresent: true, wantErr: storageErr, wantLocks: 1},
+	} {
+		t.Run(testCase.name, func(t *testing.T) {
+			eng := newStubEngine()
+			eng.dbErr = testCase.databaseErr
+			if testCase.databaseErr == nil {
+				db := newStubDatabase("parent_db")
+				if testCase.parentPresent {
+					db.rels["parent"] = newStubRelation("parent")
+				}
+				eng.dbs["parent_db"] = db
+			}
+			proc := testutil.NewProcess(t)
+			c := &Compile{proc: proc, e: eng}
+			locks := 0
+			storageStub := gostub.Stub(&lockTableForSnapshotRefresh,
+				func(
+					ctx context.Context,
+					gotEngine engine.Engine,
+					gotProc *process.Process,
+					rel engine.Relation,
+					dbName string,
+					changeDef bool,
+				) error {
+					require.Equal(t, proc.Ctx, ctx)
+					require.Same(t, eng, gotEngine)
+					require.Same(t, proc, gotProc)
+					require.Same(t, eng.dbs["parent_db"].rels["parent"], rel)
+					require.Equal(t, "parent_db", dbName)
+					require.True(t, changeDef)
+					locks++
+					return storageErr
+				})
+			defer storageStub.Reset()
+
+			err := lockAlterForeignKeyParentTable(c, "parent_db", "parent")
+			if testCase.wantErr != nil {
+				if testCase.parentPresent || testCase.databaseErr != nil {
+					require.ErrorIs(t, err, testCase.wantErr)
+				} else {
+					require.True(t, moerr.IsMoErrCode(err, moerr.ErrNoSuchTable), "%v", err)
+				}
+			} else {
+				require.NoError(t, err)
+			}
+			require.Equal(t, testCase.wantLocks, locks)
+		})
+	}
+}
+
+func TestAlterTableAddsForeignKey(t *testing.T) {
+	require.False(t, alterTableAddsForeignKey(nil))
+	require.False(t, alterTableAddsForeignKey([]*plan2.AlterTable_Action{
+		nil,
+		{Action: &plan2.AlterTable_Action_Drop{Drop: &plan2.AlterTableDrop{}}},
+	}))
+	require.True(t, alterTableAddsForeignKey([]*plan2.AlterTable_Action{
+		{Action: &plan2.AlterTable_Action_AddFk{AddFk: &plan2.AlterTableAddFk{}}},
+	}))
+}
+
+func TestDoLockTableForSnapshotRefresh(t *testing.T) {
+	t.Run("primary key lookup fails", func(t *testing.T) {
+		ctrl := gomock.NewController(t)
+		rel := mock_frontend.NewMockRelation(ctrl)
+		rel.EXPECT().GetTableID(gomock.Any()).Return(uint64(10))
+		rel.EXPECT().GetPrimaryKeys(gomock.Any()).Return(nil, assert.AnError)
+
+		err := doLockTableForSnapshotRefresh(t.Context(), nil, testutil.NewProcess(t), rel, true)
+		require.ErrorIs(t, err, assert.AnError)
+	})
+
+	t.Run("invalid primary key count panics", func(t *testing.T) {
+		ctrl := gomock.NewController(t)
+		rel := mock_frontend.NewMockRelation(ctrl)
+		rel.EXPECT().GetTableID(gomock.Any()).Return(uint64(10))
+		rel.EXPECT().GetPrimaryKeys(gomock.Any()).Return(nil, nil)
+
+		require.Panics(t, func() {
+			_ = doLockTableForSnapshotRefresh(t.Context(), nil, testutil.NewProcess(t), rel, true)
+		})
+	})
+
+	t.Run("optimistic transaction needs no physical lock", func(t *testing.T) {
+		ctrl := gomock.NewController(t)
+		_, txnOp := newTestTxnClientAndOp(ctrl)
+		proc := testutil.NewProcess(t)
+		proc.Base.TxnOperator = txnOp
+		rel := mock_frontend.NewMockRelation(ctrl)
+		rel.EXPECT().GetTableID(gomock.Any()).Return(uint64(10))
+		rel.EXPECT().GetPrimaryKeys(gomock.Any()).Return([]*engine.Attribute{{
+			Type: types.T_int32.ToType(),
+		}}, nil)
+
+		require.NoError(t, doLockTableForSnapshotRefresh(t.Context(), nil, proc, rel, true))
+	})
+}
+
+func TestAlterTableAddForeignKeyLocksDistinctParentData(t *testing.T) {
+	ctrl := gomock.NewController(t)
+	proc := testutil.NewProcess(t)
+	proc.Base.SessionInfo.Buf = buffer.New()
+	txnClient, txnOp := newTestTxnClientAndOpWithPessimistic(ctrl)
+	proc.Base.TxnClient = txnClient
+	proc.Base.TxnOperator = txnOp
+
+	child := mock_frontend.NewMockRelation(ctrl)
+	parentOne := mock_frontend.NewMockRelation(ctrl)
+	parentTwo := mock_frontend.NewMockRelation(ctrl)
+	child.EXPECT().GetTableID(gomock.Any()).Return(uint64(10)).AnyTimes()
+	child.EXPECT().GetExtraInfo().Return(&api.SchemaExtra{}).AnyTimes()
+
+	childDB := mock_frontend.NewMockDatabase(ctrl)
+	childDB.EXPECT().GetDatabaseId(gomock.Any()).Return("1").AnyTimes()
+	childDB.EXPECT().Relation(gomock.Any(), "child", gomock.Any()).Return(child, nil).AnyTimes()
+	childDB.EXPECT().Relation(gomock.Any(), "parent_one", gomock.Any()).Return(parentOne, nil).Times(1)
+	parentDB := mock_frontend.NewMockDatabase(ctrl)
+	parentDB.EXPECT().Relation(gomock.Any(), "parent_two", gomock.Any()).Return(parentTwo, nil).Times(1)
+
+	eng := mock_frontend.NewMockEngine(ctrl)
+	eng.EXPECT().Database(gomock.Any(), "child_db", gomock.Any()).Return(childDB, nil).AnyTimes()
+	eng.EXPECT().Database(gomock.Any(), "parent_db", gomock.Any()).Return(parentDB, nil).Times(1)
+
+	getConstraintDef := gostub.Stub(&GetConstraintDef,
+		func(context.Context, engine.Relation) (*engine.ConstraintDef, error) {
+			return &engine.ConstraintDef{}, nil
+		})
+	defer getConstraintDef.Reset()
+	lockDatabaseStub := gostub.Stub(&lockMoDatabase,
+		func(*Compile, string, lock.LockMode) error { return nil })
+	defer lockDatabaseStub.Reset()
+
+	var catalogLocks []string
+	lockCatalogStub := gostub.Stub(&lockMoTable,
+		func(_ *Compile, dbName, tableName string, mode lock.LockMode) error {
+			require.Equal(t, lock.LockMode_Exclusive, mode)
+			catalogLocks = append(catalogLocks, dbName+"."+tableName)
+			return nil
+		})
+	defer lockCatalogStub.Reset()
+
+	var storageLocks []engine.Relation
+	lockStorageStub := gostub.Stub(&lockTableForSnapshotRefresh,
+		func(
+			_ context.Context,
+			_ engine.Engine,
+			_ *process.Process,
+			rel engine.Relation,
+			_ string,
+			changeDef bool,
+		) error {
+			require.True(t, changeDef)
+			storageLocks = append(storageLocks, rel)
+			if rel == parentTwo {
+				return moerr.NewTxnNeedRetryNoCtx()
+			}
+			return nil
+		})
+	defer lockStorageStub.Reset()
+
+	addFK := func(name, dbName, tableName string, parentID uint64) *plan2.AlterTable_Action {
+		return &plan2.AlterTable_Action{Action: &plan2.AlterTable_Action_AddFk{
+			AddFk: &plan2.AlterTableAddFk{
+				DbName: dbName, TableName: tableName,
+				Fkey: &plan2.ForeignKeyDef{Name: name, ForeignTbl: parentID},
+			},
+		}}
+	}
+	alter := &plan2.AlterTable{
+		Database: "child_db",
+		TableDef: &plan2.TableDef{TblId: 10, Name: "child"},
+		Actions: []*plan2.AlterTable_Action{
+			addFK("fk_self", "child_db", "child", 0),
+			addFK("fk_forward", "child_db", "missing_parent", 0),
+			addFK("fk_one", "child_db", "parent_one", 20),
+			addFK("fk_one_again", "child_db", "parent_one", 20),
+			addFK("fk_two", "parent_db", "parent_two", 30),
+		},
+	}
+	s := &Scope{Plan: &plan2.Plan{Plan: &plan2.Plan_Ddl{Ddl: &plan2.DataDefinition{
+		Definition: &plan2.DataDefinition_AlterTable{AlterTable: alter},
+	}}}}
+	c := NewCompile("test", "child_db", "alter table child add foreign key", "", "", eng, proc, nil, false, nil, time.Now())
+
+	err := s.AlterTableInplace(c)
+	require.True(t, moerr.IsMoErrCode(err, moerr.ErrTxnNeedRetryWithDefChanged), "%v", err)
+	require.Equal(t, []string{
+		"child_db.child",
+		"child_db.missing_parent",
+		"child_db.parent_one",
+		"parent_db.parent_two",
+	}, catalogLocks)
+	require.Equal(t, []engine.Relation{child, parentOne, parentTwo}, storageLocks)
+}
+
 func TestScope_Database(t *testing.T) {
 	dropDbDef := &plan2.DropDatabase{
 		IfExists: false,
