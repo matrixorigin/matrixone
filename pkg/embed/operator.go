@@ -80,6 +80,7 @@ const (
 	testingHAKeeperRunningTimeout = 5 * time.Minute
 	defaultAnyShardReadyTimeout   = 30 * time.Second
 	testingAnyShardReadyTimeout   = 5 * time.Minute
+	clusterConditionCheckInterval = 100 * time.Millisecond
 )
 
 func newService(
@@ -515,6 +516,7 @@ func (op *operator) waitHAKeeperRunning(
 	client logservice.CNHAKeeperClient,
 ) error {
 	// wait HAKeeper running
+	lastLogTime := time.Now().Add(-time.Second)
 	for {
 		state, err := client.GetClusterState(ctx)
 		if errors.Is(err, context.DeadlineExceeded) {
@@ -523,8 +525,11 @@ func (op *operator) waitHAKeeperRunning(
 		if moerr.IsMoErrCode(err, moerr.ErrNoHAKeeper) ||
 			state.State != logpb.HAKeeperRunning {
 			// not ready
-			op.reset.logger.Info("hakeeper not ready, retry")
-			if err := waitStartupRetry(ctx, op.cfg.HAKeeperRunningRetryInterval.Duration); err != nil {
+			if time.Since(lastLogTime) >= time.Second {
+				op.reset.logger.Info("hakeeper not ready, retry")
+				lastLogTime = time.Now()
+			}
+			if err := waitStartupRetry(ctx, op.clusterConditionCheckInterval()); err != nil {
 				return err
 			}
 			continue
@@ -538,6 +543,10 @@ func (op *operator) hakeeperRunningTimeout() time.Duration {
 		return testingHAKeeperRunningTimeout
 	}
 	return defaultHAKeeperRunningTimeout
+}
+
+func (op *operator) clusterConditionCheckInterval() time.Duration {
+	return clusterConditionCheckInterval
 }
 
 func (op *operator) waitAnyShardReadyLocked(client logservice.CNHAKeeperClient) error {
@@ -559,6 +568,7 @@ func (op *operator) anyShardReadyTimeout() time.Duration {
 
 func (op *operator) waitAnyShardReady(ctx context.Context, client logservice.CNHAKeeperClient) error {
 	// wait shard ready
+	lastLogTime := time.Now().Add(-time.Second)
 	for {
 		if ok, err := func() (bool, error) {
 			details, err := client.GetClusterDetails(ctx)
@@ -582,7 +592,10 @@ func (op *operator) waitAnyShardReady(ctx context.Context, client logservice.CNH
 					return true, nil
 				}
 			}
-			op.reset.logger.Info("shard not ready")
+			if time.Since(lastLogTime) >= time.Second {
+				op.reset.logger.Info("shard not ready")
+				lastLogTime = time.Now()
+			}
 			return false, nil
 		}(); err != nil {
 			return err
@@ -590,7 +603,7 @@ func (op *operator) waitAnyShardReady(ctx context.Context, client logservice.CNH
 			op.reset.logger.Info("shard ready")
 			return nil
 		}
-		if err := waitStartupRetry(ctx, op.cfg.TNShardReadyRetryInterval.Duration); err != nil {
+		if err := waitStartupRetry(ctx, op.clusterConditionCheckInterval()); err != nil {
 			return err
 		}
 	}
