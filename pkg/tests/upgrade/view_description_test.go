@@ -24,6 +24,7 @@ import (
 
 	"github.com/matrixorigin/matrixone/pkg/bootstrap/versions"
 	"github.com/matrixorigin/matrixone/pkg/catalog"
+	"github.com/matrixorigin/matrixone/pkg/container/vector"
 	"github.com/matrixorigin/matrixone/pkg/embed"
 	"github.com/matrixorigin/matrixone/pkg/tests/testutils"
 	"github.com/matrixorigin/matrixone/pkg/util/executor"
@@ -344,6 +345,59 @@ func TestViewDescriptionTwoCN(t *testing.T) {
 	var width int
 	require.NoError(t, second.QueryRowContext(ctx, "select character_maximum_length from information_schema.columns where table_schema='view_description_two_cn' and table_name='v'").Scan(&width))
 	require.Equal(t, 60, width)
+}
+
+func TestViewDescriptionUdfDatabaseContext(t *testing.T) {
+	embed.RunSingleCNBaseClusterTests(t, func(cluster embed.Cluster) {
+		ctx, cancel := context.WithTimeout(context.Background(), 90*time.Second)
+		defer cancel()
+		cn, err := cluster.GetCNService(0)
+		require.NoError(t, err)
+		db := openViewDescriptionDB(t, cn.GetServiceConfig().CN.Frontend.Port, "dump:111")
+		_, err = db.ExecContext(ctx, "create database view_description_udf")
+		require.NoError(t, err)
+		defer func() {
+			_, dropErr := db.ExecContext(ctx, "drop database view_description_udf")
+			require.NoError(t, dropErr)
+		}()
+		definition, err := db.Conn(ctx)
+		require.NoError(t, err)
+		defer definition.Close()
+		_, err = definition.ExecContext(ctx, "use view_description_udf")
+		require.NoError(t, err)
+		_, err = definition.ExecContext(ctx, "create function f_answer() returns int language sql as '42'")
+		require.NoError(t, err)
+		_, err = definition.ExecContext(ctx, "create view v as select f_answer() as answer")
+		require.NoError(t, err)
+
+		query := "select count(*) from information_schema.columns where table_schema='view_description_udf' and table_name='v'"
+		var count int
+		require.NoError(t, definition.QueryRowContext(ctx, query).Scan(&count))
+		require.Equal(t, 1, count, "the View's own default database must keep working")
+		_, err = definition.ExecContext(ctx, "use mo_catalog")
+		require.NoError(t, err)
+		require.NoError(t, definition.QueryRowContext(ctx, query).Scan(&count))
+		require.Equal(t, 1, count, "another caller database must not change View UDF binding")
+		require.NoError(t, db.QueryRowContext(ctx, query).Scan(&count))
+		require.Equal(t, 1, count, "a caller without a default database must also resolve the View UDF")
+
+		for _, callerDatabase := range []string{"view_description_udf", catalog.MO_CATALOG, ""} {
+			result, execErr := testutils.GetSQLExecutor(cn).Exec(ctx, query,
+				executor.Options{}.WithDatabase(callerDatabase).WithAccountID(0))
+			require.NoError(t, execErr, "internal executor without frontend delegate: database %q", callerDatabase)
+			func() {
+				defer result.Close()
+				var found bool
+				result.ReadRows(func(n int, cols []*vector.Vector) bool {
+					require.Equal(t, 1, n)
+					require.Equal(t, int64(1), executor.GetFixedRows[int64](cols[0])[0])
+					found = true
+					return true
+				})
+				require.True(t, found)
+			}()
+		}
+	})
 }
 
 func TestViewDescriptionSubscription(t *testing.T) {

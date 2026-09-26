@@ -828,7 +828,15 @@ func (tcc *TxnCompilerContext) ResolveIndexTableByRef(
 	return obj, tableDef, nil
 }
 
-func (tcc *TxnCompilerContext) ResolveUdf(name string, args []*plan.Expr) (udf *function.Udf, err error) {
+func (tcc *TxnCompilerContext) ResolveUdf(name string, args []*plan.Expr) (*function.Udf, error) {
+	return tcc.resolveUdfInDatabase(name, args, tcc.DefaultDatabase())
+}
+
+func (tcc *TxnCompilerContext) ResolveViewUdf(name string, args []*plan.Expr, database string) (*function.Udf, error) {
+	return tcc.resolveUdfInDatabase(name, args, database)
+}
+
+func (tcc *TxnCompilerContext) resolveUdfInDatabase(name string, args []*plan.Expr, database string) (udf *function.Udf, err error) {
 	var matchNum int
 	var argstr string
 	var argTypeStr string
@@ -875,7 +883,14 @@ func (tcc *TxnCompilerContext) ResolveUdf(name string, args []*plan.Expr) (udf *
 		}
 	}
 
-	queryCtx, sql := udfCatalogLookup(ctx, tcc.GetSnapshot(), name, tcc.DefaultDatabase())
+	snapshot := tcc.GetSnapshot()
+	if sub := tcc.GetQueryingSubscription(); sub != nil && snapshot != nil {
+		// The subscriber owns the snapshot name; publisher UDFs live in the
+		// publisher catalog at that historical timestamp.
+		snapshot = plan2.DeepCopySnapshot(snapshot)
+		snapshot.Tenant = &plan.SnapshotTenant{TenantID: uint32(sub.AccountId)}
+	}
+	queryCtx, sql := udfCatalogLookup(ctx, snapshot, name, database)
 	bh.ClearExecResultSet()
 	err = bh.Exec(queryCtx, sql)
 	if err != nil {

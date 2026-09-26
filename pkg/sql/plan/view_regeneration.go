@@ -22,6 +22,7 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/sql/parsers"
 	"github.com/matrixorigin/matrixone/pkg/sql/parsers/dialect"
 	"github.com/matrixorigin/matrixone/pkg/sql/parsers/tree"
+	"github.com/matrixorigin/matrixone/pkg/sql/plan/function"
 )
 
 // RegeneratedViewDefinition is produced by exactly the same schema generator
@@ -88,6 +89,20 @@ func (c *viewRegenerationContext) CheckViewDatabase(name string, snapshot *Snaps
 		return false, nil
 	}
 	return false, err
+}
+
+// ViewUdfResolver resolves unqualified functions in the persisted View's
+// definition database without changing the caller's session/default database.
+// The binding context is isolated by the View description provider.
+type ViewUdfResolver interface {
+	ResolveViewUdf(name string, args []*Expr, database string) (*function.Udf, error)
+}
+
+func (c *viewRegenerationContext) ResolveUdf(name string, args []*Expr) (*function.Udf, error) {
+	if resolver, ok := c.CompilerContext.(ViewUdfResolver); ok {
+		return resolver.ResolveViewUdf(name, args, c.defaultDatabase)
+	}
+	return c.CompilerContext.ResolveUdf(name, args)
 }
 
 func (c *viewRegenerationContext) DefaultDatabase() string { return c.defaultDatabase }

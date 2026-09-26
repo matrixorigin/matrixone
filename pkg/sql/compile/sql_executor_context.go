@@ -16,13 +16,19 @@ package compile
 
 import (
 	"context"
+	"encoding/json"
+	"fmt"
 	"slices"
 	"strconv"
 	"strings"
 	"sync"
 	"time"
 
+	"github.com/matrixorigin/matrixone/pkg/catalog"
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
+	"github.com/matrixorigin/matrixone/pkg/common/sqlquote"
+	"github.com/matrixorigin/matrixone/pkg/container/types"
+	"github.com/matrixorigin/matrixone/pkg/container/vector"
 	"github.com/matrixorigin/matrixone/pkg/defines"
 	planpb "github.com/matrixorigin/matrixone/pkg/pb/plan"
 	pb "github.com/matrixorigin/matrixone/pkg/pb/statsinfo"
@@ -32,6 +38,7 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/sql/plan"
 	"github.com/matrixorigin/matrixone/pkg/sql/plan/function"
 	"github.com/matrixorigin/matrixone/pkg/util/trace/impl/motrace/statistic"
+	"github.com/matrixorigin/matrixone/pkg/vectorindex/sqlexec"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine"
 	"github.com/matrixorigin/matrixone/pkg/vm/process"
 )
@@ -207,8 +214,92 @@ func (c *compilerContext) GetQueryingSubscription() *plan.SubscriptionMeta {
 	return nil
 }
 
-func (c *compilerContext) ResolveUdf(name string, ast []*plan.Expr) (*function.Udf, error) {
+func (c *compilerContext) ResolveUdf(name string, args []*plan.Expr) (*function.Udf, error) {
+	if c.viewChild {
+		return c.ResolveViewUdf(name, args, c.DefaultDatabase())
+	}
 	panic("not supported in internal sql executor")
+}
+
+func (c *compilerContext) ResolveViewUdf(name string, args []*plan.Expr, database string) (*function.Udf, error) {
+	if c.viewDelegate != nil {
+		if resolver, ok := c.viewDelegate.(plan.ViewUdfResolver); ok {
+			return resolver.ResolveViewUdf(name, args, database)
+		}
+		return c.viewDelegate.ResolveUdf(name, args)
+	}
+	if !c.viewChild || c.proc == nil {
+		return nil, moerr.NewNotSupported(c.GetContext(), "View UDF resolution requires an isolated compiler context")
+	}
+	if err := c.GetContext().Err(); err != nil {
+		return nil, err
+	}
+	sp := sqlexec.NewSqlProcess(c.proc)
+	sp.DatabaseOverride = catalog.MO_CATALOG
+	sp.ApplyScanSnapshot(c.GetSnapshot())
+	if sub := c.GetQueryingSubscription(); sub != nil {
+		sp.WithExecutionIdentity(uint32(sub.AccountId), catalog.MO_CATALOG)
+	}
+	query := fmt.Sprintf("select args, body, language, rettype, db, cast(modified_time as varchar(64)), sql_mode "+
+		"from mo_catalog.mo_user_defined_function where name = %s and db = %s",
+		sqlquote.String(name), sqlquote.String(database))
+	result, err := sqlexec.RunSql(sp, query)
+	if err != nil {
+		return nil, err
+	}
+	defer result.Close()
+	from := make([]types.Type, len(args))
+	for i, arg := range args {
+		from[i] = types.Type{Oid: types.T(arg.Typ.Id), Width: arg.Typ.Width, Scale: arg.Typ.Scale}
+	}
+	var best *function.Udf
+	bestCost := int(^uint(0) >> 1)
+	matches := 0
+	var decodeErr error
+	result.ReadRows(func(n int, cols []*vector.Vector) bool {
+		for i := 0; i < n; i++ {
+			udf := &function.Udf{
+				Body: cols[1].GetStringAt(i), Language: cols[2].GetStringAt(i),
+				RetType: cols[3].GetStringAt(i), Db: cols[4].GetStringAt(i),
+				ModifiedTime: strings.NewReplacer(" ", "_", ":", "-").Replace(cols[5].GetStringAt(i)),
+			}
+			mode := cols[6].GetStringAt(i)
+			udf.SQLMode = &mode
+			if decodeErr = json.Unmarshal([]byte(types.DecodeJson(cols[0].GetBytesAt(i)).String()), &udf.Args); decodeErr != nil {
+				return false
+			}
+			if len(udf.Args) != len(from) {
+				continue
+			}
+			to := make([]types.T, len(from))
+			for j, arg := range udf.Args {
+				if from[j].IsDecimal() && arg.Type == "decimal" {
+					to[j] = from[j].Oid
+				} else {
+					to[j] = types.Types[arg.Type]
+				}
+			}
+			if ok, cost := function.UdfArgTypeMatch(from, to); ok {
+				if cost < bestCost {
+					best, bestCost, matches = udf, cost, 1
+					best.ArgsType = function.UdfArgTypeCast(from, to)
+				} else if cost == bestCost {
+					matches++
+				}
+			}
+		}
+		return true
+	})
+	if decodeErr != nil {
+		return nil, decodeErr
+	}
+	if matches > 1 {
+		return nil, moerr.NewInvalidInputf(c.GetContext(), "call to %s is ambiguous", name)
+	}
+	if best == nil {
+		return nil, moerr.NewNotSupportedf(c.GetContext(), "function or operator '%s'", name)
+	}
+	return best, nil
 }
 
 func (c *compilerContext) ResolveAccountIds(accountNames []string) ([]uint32, error) {
