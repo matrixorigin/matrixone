@@ -1486,7 +1486,7 @@ func TestCNCompletesSystemViewsAfterAdmissionBeforeIngress(t *testing.T) {
 			s.sqlExecutor = exec
 			snapshot := *s.viewMetadataAdmission.Load()
 			snapshot.Ready = false
-			snapshot.PersistedExpressionRequiredProtocolVersion = 97
+			snapshot.PersistedExpressionRequiredProtocolVersion = uint64(defines.MORPCVersion98)
 			snapshot.CatalogFencedEpoch = 5
 			s.viewMetadataAdmission.Store(&snapshot)
 			t.Cleanup(func() { _ = s.Close() })
