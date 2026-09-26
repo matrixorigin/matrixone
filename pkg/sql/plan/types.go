@@ -484,6 +484,7 @@ type QueryBuilder struct {
 	// window, PREPARE) reads the same decision.
 	boolSumAvgCompat      bool
 	noUnsignedSubtraction bool
+	divPrecisionIncrement int32
 	isForUpdate           bool // if it's a query plan for update
 	isRestore             bool
 	isRestoreByTs         bool

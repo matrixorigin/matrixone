@@ -795,6 +795,36 @@ func TestGetSqlForGetDbIdAndType(t *testing.T) {
 	}
 }
 
+func TestShowPublicationsEmptyResultMetadata(t *testing.T) {
+	ctrl := gomock.NewController(t)
+	pu := config.NewParameterUnit(&config.FrontendParameters{}, nil, nil, nil)
+	pu.SV.SetDefaultValues()
+	setPu("", pu)
+	ctx := context.WithValue(t.Context(), config.ParameterUnitKey, pu)
+	ctx = defines.AttachAccount(ctx, sysAccountID, rootID, moAdminRoleID)
+	ses := newSes(nil, ctrl)
+	ses.tenant = &TenantInfo{Tenant: sysAccountName, TenantID: sysAccountID}
+
+	bh := mock_frontend.NewMockBackgroundExec(ctrl)
+	stub := gostub.StubFunc(&NewBackgroundExec, bh)
+	t.Cleanup(stub.Reset)
+	bh.EXPECT().Close()
+	bh.EXPECT().ClearExecResultSet().Times(2)
+	bh.EXPECT().Exec(gomock.Any(), gomock.Any()).Return(nil).Times(2)
+	result := mock_frontend.NewMockExecResult(ctrl)
+	result.EXPECT().GetRowCount().Return(uint64(0)).AnyTimes()
+	bh.EXPECT().GetExecResultSet().Return([]interface{}{result}).Times(2)
+
+	require.NoError(t, doShowPublications(ctx, ses, &tree.ShowPublications{}))
+	require.Empty(t, ses.mrs.Data)
+	require.Len(t, ses.mrs.Columns, 8)
+	for i, name := range []string{"publication", "database", "tables", "sub_account", "subscribed_accounts", "create_time", "update_time", "comments"} {
+		require.Equal(t, name, ses.mrs.Columns[i].Name())
+	}
+	require.Equal(t, defines.MYSQL_TYPE_BLOB, ses.mrs.Columns[2].ColumnType())
+	require.Equal(t, defines.MYSQL_TYPE_TIMESTAMP, ses.mrs.Columns[5].ColumnType())
+}
+
 func Test_doShowSubscriptions(t *testing.T) {
 	convey.Convey("do show subscriptions", t, func() {
 		ctrl := gomock.NewController(t)

@@ -1,0 +1,93 @@
+drop publication if exists prepared_management_pub;
+drop database if exists prepared_management_db;
+drop account if exists prepared_management_reader;
+create account prepared_management_reader admin_name = 'admin' identified by '111';
+create database prepared_management_db;
+create table prepared_management_db.t1 (a int);
+create table prepared_management_db.t2 (a int);
+prepare pub_create from 'create publication prepared_management_pub database prepared_management_db table t1 account all comment ''initial comment''';
+show publications like 'prepared_management_pub';
+➤ publication[12,-1,0]  ¦  database[12,-1,0]  ¦  tables[-1,21845,0]  ¦  sub_account[-1,21845,0]  ¦  subscribed_accounts[-1,21845,0]  ¦  create_time[93,19,0]  ¦  update_time[93,19,0]  ¦  comments[-1,21845,0]
+execute pub_create;
+execute pub_create;
+Duplicate entry '(0,prepared_management_pub)' for key '(account_id,pub_name)'
+prepare pub_create_if from 'create publication if not exists prepared_management_pub database prepared_management_db table t2 account all';
+prepare pub_pattern from 'show publications like ?';
+not supported: prepared SHOW PUBLICATIONS requires a string literal LIKE pattern
+prepare pub_show from 'show publications like ''prepared_management_pub''';
+prepare pub_ddl from 'show create publication prepared_management_pub';
+prepare pub_coverage from 'show publication coverage prepared_management_pub';
+execute pub_show;
+➤ publication[12,-1,0]  ¦  database[12,-1,0]  ¦  tables[-1,21845,0]  ¦  sub_account[-1,21845,0]  ¦  subscribed_accounts[-1,21845,0]  ¦  create_time[93,19,0]  ¦  update_time[93,19,0]  ¦  comments[-1,21845,0]  𝄀
+prepared_management_pub  ¦  prepared_management_db  ¦  t1  ¦  *  ¦    ¦  2026-09-26 13:28:37  ¦  null  ¦  initial comment
+execute pub_ddl;
+➤ Publication[12,64,0]  ¦  Create Publication[-1,16383,0]  𝄀
+prepared_management_pub  ¦  CREATE PUBLICATION prepared_management_pub DATABASE prepared_management_db TABLE t1 ACCOUNT all
+execute pub_coverage;
+➤ Database[12,-1,0]  ¦  Table[12,-1,0]  𝄀
+prepared_management_db  ¦  t1
+prepare pub_alter from 'alter publication prepared_management_pub database prepared_management_db table t2 comment ''prepared update''';
+execute pub_coverage;
+➤ Database[12,-1,0]  ¦  Table[12,-1,0]  𝄀
+prepared_management_db  ¦  t1
+execute pub_alter;
+execute pub_alter;
+set @publication_saved_result = @@save_query_result;
+set save_query_result = on;
+execute pub_show;
+➤ publication[12,-1,0]  ¦  database[12,-1,0]  ¦  tables[-1,21845,0]  ¦  sub_account[-1,21845,0]  ¦  subscribed_accounts[-1,21845,0]  ¦  create_time[93,19,0]  ¦  update_time[93,19,0]  ¦  comments[-1,21845,0]  𝄀
+prepared_management_pub  ¦  prepared_management_db  ¦  t2  ¦  *  ¦    ¦  2026-09-26 13:28:37  ¦  2026-09-26 13:28:37  ¦  prepared update
+select * from result_scan(last_query_id()) as saved;
+➤ publication[12,-1,0]  ¦  database[12,-1,0]  ¦  tables[-1,21845,0]  ¦  sub_account[-1,21845,0]  ¦  subscribed_accounts[-1,21845,0]  ¦  create_time[93,19,0]  ¦  update_time[93,19,0]  ¦  comments[-1,21845,0]  𝄀
+prepared_management_pub  ¦  prepared_management_db  ¦  t2  ¦  *  ¦    ¦  2026-09-26 13:28:37  ¦  2026-09-26 13:28:37  ¦  prepared update
+set save_query_result = @publication_saved_result;
+execute pub_ddl;
+➤ Publication[12,64,0]  ¦  Create Publication[-1,16383,0]  𝄀
+prepared_management_pub  ¦  CREATE PUBLICATION prepared_management_pub DATABASE prepared_management_db TABLE t2 ACCOUNT all
+execute pub_coverage;
+➤ Database[12,-1,0]  ¦  Table[12,-1,0]  𝄀
+prepared_management_db  ¦  t2
+prepare reader_coverage from 'show publication coverage prepared_management_pub';
+execute reader_coverage;
+➤ Database[12,-1,0]  ¦  Table[12,-1,0]  𝄀
+prepared_management_db  ¦  t2
+alter publication prepared_management_pub account sys;
+execute reader_coverage;
+internal error: account 'prepared_management_reader' is not allowed to access publication 'prepared_management_pub'
+deallocate prepare reader_coverage;
+prepare pub_drop from 'drop publication prepared_management_pub';
+execute pub_coverage;
+➤ Database[12,-1,0]  ¦  Table[12,-1,0]  𝄀
+prepared_management_db  ¦  t2
+execute pub_drop;
+execute pub_drop;
+internal error: publication 'prepared_management_pub' does not exist
+execute pub_alter;
+internal error: publication 'prepared_management_pub' does not exist
+execute pub_coverage;
+internal error: publication 'prepared_management_pub' does not exist
+execute pub_show;
+➤ publication[12,-1,0]  ¦  database[12,-1,0]  ¦  tables[-1,21845,0]  ¦  sub_account[-1,21845,0]  ¦  subscribed_accounts[-1,21845,0]  ¦  create_time[93,19,0]  ¦  update_time[93,19,0]  ¦  comments[-1,21845,0]
+prepare pub_drop_if from 'drop publication if exists prepared_management_pub';
+execute pub_drop_if;
+execute pub_create;
+execute pub_coverage;
+➤ Database[12,-1,0]  ¦  Table[12,-1,0]  𝄀
+prepared_management_db  ¦  t1
+execute pub_drop_if;
+execute pub_drop_if;
+execute pub_create_if;
+execute pub_coverage;
+➤ Database[12,-1,0]  ¦  Table[12,-1,0]  𝄀
+prepared_management_db  ¦  t2
+execute pub_drop_if;
+deallocate prepare pub_create;
+deallocate prepare pub_create_if;
+deallocate prepare pub_alter;
+deallocate prepare pub_show;
+deallocate prepare pub_ddl;
+deallocate prepare pub_coverage;
+deallocate prepare pub_drop;
+deallocate prepare pub_drop_if;
+drop database prepared_management_db;
+drop account prepared_management_reader;

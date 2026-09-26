@@ -292,7 +292,7 @@ func TestDecimal256ArithmeticTypeResolution(t *testing.T) {
 	divType := resolvedReturnType(t, DIV, []types.Type{dec4, dec2})
 	require.Equal(t, types.T_decimal256, divType.Oid)
 	require.Equal(t, int32(65), divType.Width)
-	require.Equal(t, int32(10), divType.Scale)
+	require.Equal(t, int32(8), divType.Scale)
 
 	require.True(t, hasOverload(UNARY_PLUS, types.T_decimal256))
 	require.True(t, hasOverload(UNARY_MINUS, types.T_decimal256))

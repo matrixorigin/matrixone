@@ -71,6 +71,56 @@ func TestPersistedDecimalLiteralUsesDedicatedEpochInMixedOwner(t *testing.T) {
 	}
 }
 
+func TestPersistedDecimalDivisionRequiresV97(t *testing.T) {
+	division := &planpb.Expr{Typ: planpb.Type{Id: int32(types.T_decimal128), Width: 16, Scale: 6},
+		Expr: &planpb.Expr_F{F: &planpb.Function{Func: &planpb.ObjectRef{
+			Obj: function.EncodeOverloadID(function.DIV, 0),
+		}}}}
+	owner := &planpb.TableDef{Cols: []*planpb.ColDef{{Default: &planpb.Default{Expr: division}}}}
+	required, err := RequiredPersistedExpressionProtocolVersion(owner)
+	require.NoError(t, err)
+	require.Equal(t, defines.MORPCVersion97, required)
+}
+
+func TestPersistedDecimalDivisionViewAdmissionBeforeFold(t *testing.T) {
+	ctx := NewMockCompilerContext(false)
+	proc := ctx.GetProcess()
+	rt := moruntime.ServiceRuntime(proc.GetService())
+	oldProtocol, hadProtocol := rt.GetGlobalVariables(moruntime.MOProtocolVersion)
+	oldFloor, hadFloor := rt.GetGlobalVariables(moruntime.PersistedExpressionProtocolAuthoringFloor)
+	t.Cleanup(func() {
+		if hadProtocol {
+			rt.SetGlobalVariables(moruntime.MOProtocolVersion, oldProtocol)
+		} else {
+			rt.SetGlobalVariables(moruntime.MOProtocolVersion, defines.MORPCLatestVersion)
+		}
+		if hadFloor {
+			rt.SetGlobalVariables(moruntime.PersistedExpressionProtocolAuthoringFloor, oldFloor)
+		} else if current, ok := rt.GetGlobalVariables(moruntime.PersistedExpressionProtocolAuthoringFloor); ok {
+			rt.CompareAndDeleteGlobalVariables(moruntime.PersistedExpressionProtocolAuthoringFloor, current)
+		}
+	})
+	const createSQL = "create view v_decimal_division as select 1.00 / 3.00 as quotient"
+	build := func(floor int64) (*Plan, error) {
+		rt.SetGlobalVariables(moruntime.MOProtocolVersion, defines.MORPCVersion97)
+		rt.SetGlobalVariables(moruntime.PersistedExpressionProtocolAuthoringFloor, floor)
+		stmt, err := parsers.ParseOne(t.Context(), dialect.MYSQL, createSQL, 1)
+		if err != nil {
+			return nil, err
+		}
+		defer stmt.Free()
+		return BuildPlan(&rootSQLCompilerContext{MockCompilerContext: ctx, rootSQL: createSQL}, stmt, false)
+	}
+	_, err := build(defines.MORPCVersion96)
+	require.ErrorContains(t, err, "protocol version 97")
+	created, err := build(defines.MORPCVersion97)
+	require.NoError(t, err)
+	var viewData ViewData
+	require.NoError(t, json.Unmarshal([]byte(created.GetDdl().GetCreateView().GetTableDef().GetViewSql().GetView()), &viewData))
+	require.NotNil(t, viewData.RequiredProtocolVersion)
+	require.Equal(t, defines.MORPCVersion97, *viewData.RequiredProtocolVersion)
+}
+
 func TestPersistedDecimalLiteralProtocolAdmission(t *testing.T) {
 	proc := testutil.NewProcess(t)
 	rt := moruntime.ServiceRuntime(proc.GetService())
@@ -172,14 +222,14 @@ func TestPersistedDecimalLiteralTargetTypedDefaultAdmission(t *testing.T) {
 	for _, floor := range []int64{defines.MORPCVersion81, defines.MORPCVersion83} {
 		rt.SetGlobalVariables(moruntime.PersistedExpressionProtocolFloor, floor)
 		rt.SetGlobalVariables(moruntime.PersistedExpressionProtocolAuthoringFloor, floor)
-		_, err = buildDefaultExpr(col, typ, proc)
+		_, err = buildDefaultExpr(proc.Ctx, col, typ, proc)
 		require.ErrorContains(t, err, "protocol version 89")
 	}
 
 	rt.SetGlobalVariables(moruntime.MOProtocolVersion, defines.MORPCLatestVersion)
 	rt.SetGlobalVariables(moruntime.PersistedExpressionProtocolFloor, int64(defines.MORPCVersion89))
 	rt.SetGlobalVariables(moruntime.PersistedExpressionProtocolAuthoringFloor, int64(defines.MORPCVersion89))
-	defaultExpr, err := buildDefaultExpr(col, typ, proc)
+	defaultExpr, err := buildDefaultExpr(proc.Ctx, col, typ, proc)
 	require.NoError(t, err)
 	require.NotNil(t, defaultExpr)
 	require.Equal(t, int64(defines.MORPCVersion89), func() int64 {
@@ -206,7 +256,7 @@ func TestPersistedDecimalLiteralTargetTypedDefaultAdmission(t *testing.T) {
 	timeTyp := planpb.Type{Id: int32(types.T_time), Scale: 3}
 	rt.SetGlobalVariables(moruntime.PersistedExpressionProtocolFloor, int64(defines.MORPCVersion81))
 	rt.SetGlobalVariables(moruntime.PersistedExpressionProtocolAuthoringFloor, int64(defines.MORPCVersion81))
-	timeDefault, err := buildDefaultExpr(timeCol, timeTyp, proc)
+	timeDefault, err := buildDefaultExpr(proc.Ctx, timeCol, timeTyp, proc)
 	require.NoError(t, err)
 	require.NotNil(t, timeDefault)
 	timeVersion, err := RequiredPersistedExpressionProtocolVersion(timeDefault)
@@ -509,18 +559,18 @@ func TestPersistedIPFunctionProtocolAdmissionForCatalogBuilders(t *testing.T) {
 	} {
 		rt.SetGlobalVariables(moruntime.MOProtocolVersion, version)
 		t.Run(fmt.Sprintf("v%d", version), func(t *testing.T) {
-			_, err := buildDefaultExprWithColumns(defaultCol,
+			_, err := buildDefaultExprWithColumns(proc.Ctx, defaultCol,
 				planpb.Type{Id: int32(types.T_varchar), Width: 32}, proc, columns)
 			checkAdmissionResult(t, version, err, defines.MORPCVersion72)
 
-			_, err = buildDefaultExprWithColumns(numericDefaultCol,
+			_, err = buildDefaultExprWithColumns(proc.Ctx, numericDefaultCol,
 				planpb.Type{Id: int32(types.T_varchar), Width: 32}, proc, columns)
 			checkAdmissionResult(t, version, err, defines.MORPCVersion72)
 
-			_, err = buildOnUpdate(onUpdateCol, planpb.Type{Id: int32(types.T_varchar), Width: 32}, proc)
+			_, err = buildOnUpdate(proc.Ctx, onUpdateCol, planpb.Type{Id: int32(types.T_varchar), Width: 32}, proc)
 			checkAdmissionResult(t, version, err, defines.MORPCVersion72)
 
-			_, err = buildGeneratedExpr(generatedCol,
+			_, err = buildGeneratedExpr(proc.Ctx, generatedCol,
 				planpb.Type{Id: int32(types.T_varchar), Width: 32}, columns, proc)
 			checkAdmissionResult(t, version, err, defines.MORPCVersion72)
 

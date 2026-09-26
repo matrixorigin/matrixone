@@ -522,6 +522,25 @@ func TestSessionSQLModePresenceChangeClearsPlanCache(t *testing.T) {
 	require.Equal(t, 1, stmt.freed)
 }
 
+func TestSessionDivPrecisionIncrementChangeClearsPlanCache(t *testing.T) {
+	ctx := defines.AttachAccountId(context.Background(), catalog.System_Account)
+	setPu("", config.NewParameterUnit(&config.FrontendParameters{}, nil, nil, nil))
+
+	ses := NewSession(ctx, "", &testMysqlWriter{}, nil)
+	require.NoError(t, ses.SetSessionSysVar(ctx, "div_precision_increment", int64(4)))
+	stmt := &trackedStatement{}
+	ses.cachePlan("select decimal_a / decimal_b", []tree.Statement{stmt}, []*plan.Plan{{}})
+	require.True(t, ses.isCached("select decimal_a / decimal_b"))
+
+	require.NoError(t, ses.SetSessionSysVar(ctx, "DIV_PRECISION_INCREMENT", int64(4)))
+	require.True(t, ses.isCached("select decimal_a / decimal_b"))
+	require.Zero(t, stmt.freed)
+
+	require.NoError(t, ses.SetSessionSysVar(ctx, "div_precision_increment", int64(10)))
+	require.False(t, ses.isCached("select decimal_a / decimal_b"))
+	require.Equal(t, 1, stmt.freed)
+}
+
 func TestSessionProtocolVersionChangeInvalidatesPlanCache(t *testing.T) {
 	ctx := defines.AttachAccountId(context.Background(), catalog.System_Account)
 	setPu("", config.NewParameterUnit(&config.FrontendParameters{}, nil, nil, nil))

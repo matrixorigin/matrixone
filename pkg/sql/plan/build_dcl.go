@@ -56,7 +56,20 @@ func getPreparePlan(ctx CompilerContext, stmt tree.Statement) (*Plan, *Query, er
 		}, nil, nil
 	case *tree.SetVar:
 		return buildSetVariablesWithQuery(stmt, ctx, true)
+	case *tree.ShowPublications:
+		// The frontend only accepts literal patterns. In particular, do not
+		// advertise a zero-parameter prepared statement for LIKE ?.
+		if stmt.Like != nil {
+			pattern, ok := stmt.Like.Right.(*tree.NumVal)
+			if !ok || pattern.Kind() != tree.Str {
+				return nil, nil, moerr.NewNotSupported(ctx.GetContext(),
+					"prepared SHOW PUBLICATIONS requires a string literal LIKE pattern")
+			}
+		}
+		return &Plan{}, nil, nil
 	case *tree.AnalyzeStmt,
+		*tree.CreatePublication, *tree.AlterPublication, *tree.DropPublication,
+		*tree.ShowPublicationCoverage,
 		*tree.DataBranchCreateTable, *tree.DataBranchCreateDatabase,
 		*tree.DataBranchDiff, *tree.DataBranchMerge, *tree.DataBranchPick,
 		*tree.DataBranchDeleteTable, *tree.DataBranchDeleteDatabase:
