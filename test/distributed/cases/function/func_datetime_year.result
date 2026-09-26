@@ -12,7 +12,7 @@ SELECT YEAR("12415141412-12-21") as year;
 null
 SELECT YEAR("0000-00-00") as year;
 ➤ year[-5,64,0]  𝄀
-null
+0
 SELECT YEAR("2049-14-34") as year;
 ➤ year[-5,64,0]  𝄀
 null
