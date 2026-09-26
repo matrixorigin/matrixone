@@ -15,6 +15,8 @@
 package plan
 
 import (
+	"context"
+	"fmt"
 	"testing"
 
 	"github.com/matrixorigin/matrixone/pkg/catalog"
@@ -23,6 +25,48 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/sql/plan/function"
 	"github.com/stretchr/testify/require"
 )
+
+func TestScalarJoinProjectionIsNullableBeforeComparisonBinding(t *testing.T) {
+	sourceType := planpb.Type{Id: int32(types.T_decimal64), Width: 10, Scale: 2, NotNullable: true}
+	ctx := &BindContext{
+		projectTag: 42,
+		results:    []*planpb.Expr{GetColExpr(sourceType, 7, 0)},
+	}
+	projects, err := (&QueryBuilder{}).finalizeCorrelatedScalarProjections(ctx, nil, nil, nil)
+	require.NoError(t, err)
+	require.Len(t, projects, 1)
+	require.NotNil(t, projects[0].GetCol())
+	require.False(t, projects[0].Typ.NotNullable)
+	require.True(t, ctx.results[0].Typ.NotNullable, "source declaration must remain unchanged")
+}
+
+func BenchmarkFlattenSubqueriesWithoutSubquery(b *testing.B) {
+	for _, depth := range []int{32, 128, 512, 1024} {
+		b.Run(fmt.Sprintf("depth_%d", depth), func(b *testing.B) {
+			typ := planpb.Type{Id: int32(types.T_int64)}
+			abs, err := function.GetFunctionByName(context.Background(), "abs", []types.Type{types.T_int64.ToType()})
+			if err != nil {
+				b.Fatal(err)
+			}
+			expr := GetColExpr(typ, 1, 0)
+			for range depth {
+				expr = &planpb.Expr{Typ: typ, Expr: &planpb.Expr_F{F: &planpb.Function{
+					Func: &planpb.ObjectRef{Obj: abs.GetEncodedOverloadID(), ObjName: "abs"},
+					Args: []*planpb.Expr{expr},
+				}}}
+			}
+			builder := &QueryBuilder{}
+			ctx := &BindContext{}
+			b.ReportAllocs()
+			b.ResetTimer()
+			for b.Loop() {
+				if _, _, err := builder.flattenSubqueries(0, expr, ctx); err != nil {
+					b.Fatal(err)
+				}
+			}
+		})
+	}
+}
 
 func TestScalarAggregateSubqueryRefreshesConsumerNullability(t *testing.T) {
 	logicPlan, err := runOneStmt(NewMockOptimizer(false), t, `
@@ -222,6 +266,9 @@ func TestRowConstructorNonEqAggregateMasksDistinctLiteral(t *testing.T) {
 			require.False(t, markerTest.Args[0].Typ.NotNullable)
 			if f.Func.ObjName == "count" {
 				require.NotZero(t, uint64(f.Func.Obj)&function.Distinct)
+				require.True(t, agg.Typ.NotNullable)
+			} else if f.Func.ObjName == "sum" {
+				require.False(t, agg.Typ.NotNullable)
 			}
 			masked++
 		}

@@ -308,15 +308,24 @@ func (builder *QueryBuilder) flattenSubqueriesWithConsumer(
 	nodeID int32, expr *plan.Expr, ctx *BindContext,
 	nullResultRejected bool, consumer existentialConsumer,
 ) (int32, *plan.Expr, error) {
+	nodeID, expr, _, err := builder.flattenSubqueriesWithConsumerAndChange(nodeID, expr, ctx, nullResultRejected, consumer)
+	return nodeID, expr, err
+}
+
+func (builder *QueryBuilder) flattenSubqueriesWithConsumerAndChange(
+	nodeID int32, expr *plan.Expr, ctx *BindContext,
+	nullResultRejected bool, consumer existentialConsumer,
+) (int32, *plan.Expr, bool, error) {
 	memoID := expr.AuxId
 	if memoID < 0 && ctx != nil && ctx.flattenedVolatileExprs != nil {
 		if flattened, ok := ctx.flattenedVolatileExprs[memoID]; ok {
 			copy := DeepCopyExpr(flattened)
 			copy.AuxId = memoID
-			return nodeID, copy, nil
+			return nodeID, copy, true, nil
 		}
 	}
 	var err error
+	affected := false
 	// Flattening a scalar subquery can replace the Expr_Sub node with a
 	// projected ColRef. Preserve its sparse prepared-expression provenance so
 	// execute-time numeric and string-domain rebinding can still recover the
@@ -330,10 +339,6 @@ func (builder *QueryBuilder) flattenSubqueriesWithConsumer(
 		// its SQL data type but can lose its NOT NULL guarantee.  Refresh every
 		// enclosing consumer bottom-up so its result nullability still matches
 		// the arguments that will reach execution.
-		containsSubquery := false
-		for _, arg := range exprImpl.F.Args {
-			containsSubquery = containsSubquery || hasSubquery(arg)
-		}
 		preserveIfNullContract := isIfNullCase(exprImpl.F)
 		if consumer == existentialNegatedFilter && len(builder.pendingExistentials) != 0 {
 			// The caller admits only the direct NOT(EXISTS) WHERE conjunct.
@@ -341,6 +346,7 @@ func (builder *QueryBuilder) flattenSubqueriesWithConsumer(
 			if sc := builder.ctxByNode[sub.NodeId]; sc != nil && builder.pendingExistentials[sc.existentialBlock] != nil {
 				sub.Typ = plan.SubqueryRef_NOT_EXISTS
 				nodeID, expr, err = builder.flattenSubqueryWithConsumer(nodeID, &sub, ctx, nullResultRejected, consumer)
+				affected = true
 				break
 			}
 			// Without a pending region, retain the legacy recursion and
@@ -348,15 +354,18 @@ func (builder *QueryBuilder) flattenSubqueriesWithConsumer(
 		}
 		childNullResultRejected := nullResultRejected && nullPropagatesThroughDeepScalarConsumer(exprImpl.F.Func)
 		for i, arg := range exprImpl.F.Args {
-			nodeID, exprImpl.F.Args[i], err = builder.flattenSubqueriesWithContext(nodeID, arg, ctx, childNullResultRejected)
+			var childAffected bool
+			nodeID, exprImpl.F.Args[i], childAffected, err = builder.flattenSubqueriesWithConsumerAndChange(
+				nodeID, arg, ctx, childNullResultRejected, existentialIneligible)
 			if err != nil {
-				return 0, nil, err
+				return 0, nil, false, err
 			}
+			affected = affected || childAffected
 		}
-		if containsSubquery && exprImpl.F.Func != nil {
+		if affected && exprImpl.F.Func != nil {
 			if preserveIfNullContract {
 				if !isIfNullCase(exprImpl.F) {
-					return 0, nil, moerr.NewInternalError(builder.GetContext(),
+					return 0, nil, false, moerr.NewInternalError(builder.GetContext(),
 						"IFNULL expression changed shape while flattening subquery")
 				}
 				expr.Typ.NotNullable = exprImpl.F.Args[1].Typ.NotNullable || exprImpl.F.Args[2].Typ.NotNullable
@@ -371,14 +380,18 @@ func (builder *QueryBuilder) flattenSubqueriesWithConsumer(
 			// unequal field can decide the result before a later NULL field.
 			// Flatten a nested scalar without inheriting the enclosing
 			// predicate's null-rejection optimization.
-			nodeID, exprImpl.List.List[i], err = builder.flattenSubqueriesWithContext(nodeID, item, ctx, false)
+			var childAffected bool
+			nodeID, exprImpl.List.List[i], childAffected, err = builder.flattenSubqueriesWithConsumerAndChange(
+				nodeID, item, ctx, false, existentialIneligible)
 			if err != nil {
-				return 0, nil, err
+				return 0, nil, false, err
 			}
+			affected = affected || childAffected
 		}
 
 	case *plan.Expr_Sub:
 		nodeID, expr, err = builder.flattenSubqueryWithConsumer(nodeID, exprImpl.Sub, ctx, nullResultRejected, consumer)
+		affected = true
 	}
 	if err == nil && memoID < 0 && ctx != nil {
 		if preparedNumeric != nil {
@@ -394,7 +407,7 @@ func (builder *QueryBuilder) flattenSubqueriesWithConsumer(
 		expr.PreparedNumeric = copyPreparedNumericMetadata(preparedNumeric)
 	}
 
-	return nodeID, expr, err
+	return nodeID, expr, affected, err
 }
 
 func (builder *QueryBuilder) flattenSubquery(
@@ -682,6 +695,7 @@ func (builder *QueryBuilder) flattenSubqueryWithConsumer(
 					},
 				},
 			}
+			retExpr.Typ.NotNullable = false // the scalar join can have no matching row
 		}
 		if len(scalarOuterResults) > 0 && scalarOuterResults[0] != nil {
 			retExpr, err = BindFuncExprImplByPlanExpr(builder.GetContext(), "case", []*plan.Expr{
@@ -1018,6 +1032,7 @@ func (builder *QueryBuilder) finalizeCorrelatedScalarProjections(
 	for i := range projects {
 		if i >= len(outerResults) || outerResults[i] == nil {
 			projects[i] = getProjectExpr(i, ctx, false)
+			projects[i].Typ.NotNullable = false // the scalar join can have no matching row
 			continue
 		}
 		match := sharedMatch
@@ -2377,6 +2392,7 @@ func (builder *QueryBuilder) flattenScalarSubqueryWithNonEqAgg(
 			f.Args = []*plan.Expr{DeepCopyExpr(markerCol)}
 			retType := fGet.GetReturnType()
 			agg.Typ = makePlan2Type(&retType)
+			agg.Typ.NotNullable = true
 			continue
 		}
 		switch fid {
@@ -2416,6 +2432,9 @@ func (builder *QueryBuilder) flattenScalarSubqueryWithNonEqAgg(
 			masked.Typ.NotNullable = false
 			f.Args[i] = masked
 		}
+		// The synthetic unmatched row is masked to NULL. COUNT still yields
+		// zero, while the other admitted aggregates can return NULL.
+		agg.Typ.NotNullable = fid == function.COUNT
 	}
 
 	// LEFT JOIN outer with inner scan, all predicates as join conditions
@@ -2439,21 +2458,22 @@ func (builder *QueryBuilder) flattenScalarSubqueryWithNonEqAgg(
 	}, ctx)
 	if subquery.Child != nil {
 		projects := make([]*plan.Expr, len(subCtx.results))
-		for i, result := range subCtx.results {
+		for i := range subCtx.results {
 			aggregatePos := int32(i)
 			if subRoot != aggNode {
 				aggregatePos = subRoot.ProjectList[i].GetCol().ColPos
 			}
-			projects[i] = GetColExpr(result.Typ, newAggTag, aggregatePos)
+			projects[i] = GetColExpr(aggExprs[aggregatePos].Typ, newAggTag, aggregatePos)
 		}
 		retExpr, err := builder.generateRowComparisonWithProjects(subquery.Op, subquery.Child, projects, true)
 		return nodeID, retExpr, err
 	}
 
-	retExpr := &plan.Expr{
-		Typ:  subCtx.results[0].Typ,
-		Expr: &plan.Expr_Col{Col: &plan.ColRef{RelPos: newAggTag, ColPos: 0}},
+	aggregatePos := int32(0)
+	if subRoot != aggNode {
+		aggregatePos = subRoot.ProjectList[0].GetCol().ColPos
 	}
+	retExpr := GetColExpr(aggExprs[aggregatePos].Typ, newAggTag, aggregatePos)
 
 	// COUNT rewrite: LEFT JOIN produces NULLs for non-matching rows,
 	// COUNT should return 0 instead of NULL.

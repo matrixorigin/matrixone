@@ -258,6 +258,28 @@ insert into row_scalar_inner_28295 values (1,20);
 select o.k, (select group_concat(i.v order by i.v desc separator '~')
              from row_scalar_inner_28295 i where i.k<o.k) as ordered_concat
 from row_scalar_outer_28295 o order by o.k;
+create table row_scalar_decimal_28295(x decimal(10,2) not null, y int not null);
+select (1.001,1) = (select x,y from row_scalar_decimal_28295) as empty_decimal_eq;
+select (1.001,1) <> (select x,y from row_scalar_decimal_28295) as empty_decimal_neq;
+select (select x,y from row_scalar_decimal_28295) = (1.001,1) as reversed_empty_decimal_eq;
+select 1.001 = (select x from row_scalar_decimal_28295) as ordinary_empty_decimal_eq;
+insert into row_scalar_decimal_28295 values (1.00,1);
+select (1.001,1) <> (select x,y from row_scalar_decimal_28295) as matched_decimal_neq;
+select o.k, (1.001,1) <> (select i.x,i.y from row_scalar_decimal_28295 i where i.y=o.k) as correlated_decimal_neq
+from row_scalar_outer_28295 o order by o.k;
+select o.k, (1.001,0) <> (select min(i.x),count(*) from row_scalar_decimal_28295 i where i.y<o.k) as aggregate_decimal_neq
+from row_scalar_outer_28295 o order by o.k;
+drop table row_scalar_decimal_28295;
+create table row_scalar_ifnull_outer_28295(k int primary key);
+insert into row_scalar_ifnull_outer_28295 values (1),(2),(3);
+create table row_scalar_ifnull_inner_28295(k int, v int);
+insert into row_scalar_ifnull_inner_28295 values (1,10),(1,20),(2,null);
+select o.k, ifnull((select min(i.v) from row_scalar_ifnull_inner_28295 i where i.k<o.k),0) as selected_ifnull
+from row_scalar_ifnull_outer_28295 o order by o.k;
+select o.k, (select min(i.v) from row_scalar_ifnull_inner_28295 i where i.k<o.k) as raw_min
+from row_scalar_ifnull_outer_28295 o order by o.k;
+drop table row_scalar_ifnull_inner_28295;
+drop table row_scalar_ifnull_outer_28295;
 drop table row_scalar_inner_28295;
 drop table row_scalar_outer_28295;
 select (1,5) = (select a,b from row_scalar_28295 where id>0) as multi_v;

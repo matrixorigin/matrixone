@@ -79,6 +79,19 @@ func TestIssue28295RowConstructorScalarSubquery(t *testing.T) {
 		assertBool("select (1,2) = (select 1,2 limit 1 offset 1)", sql.NullBool{})
 		assertBool("select (1,2) = (select 1,2 limit 1 offset 0)", sql.NullBool{Bool: true, Valid: true})
 		assertBool("select (1,2) <=> (select 1,2 limit 0)", sql.NullBool{Valid: true})
+		_, err = conn.ExecContext(ctx, "create table scalar_decimal(x decimal(10,2) not null, y int not null)")
+		require.NoError(t, err)
+		assertBool("select (1.001,1) = (select x,y from scalar_decimal)", sql.NullBool{})
+		assertBool("select (1.001,1) <> (select x,y from scalar_decimal)", sql.NullBool{})
+		assertBool("select (select x,y from scalar_decimal) = (1.001,1)", sql.NullBool{})
+		assertBool("select 1.001 = (select x from scalar_decimal)", sql.NullBool{})
+		assertBool("select (1.001,1) <=> (select x,y from scalar_decimal)", sql.NullBool{Valid: true})
+		_, err = conn.ExecContext(ctx, "insert into scalar_decimal values (1.00,1)")
+		require.NoError(t, err)
+		assertBool("select (1.001,1) = (select x,y from scalar_decimal)", sql.NullBool{Valid: true})
+		assertBool("select (1.001,1) <> (select x,y from scalar_decimal)", sql.NullBool{Bool: true, Valid: true})
+		assertBool("select (select x,y from scalar_decimal) <> (1.001,1)", sql.NullBool{Bool: true, Valid: true})
+		assertBool("select (1.001,1) = (select x,y from scalar_decimal where y=2)", sql.NullBool{})
 		assertBool("select (1,'5') = (select a,b from scalar_rows where id=1)", sql.NullBool{Bool: true, Valid: true})
 		assertBool("select (1,(select 5)) = (select a,b from scalar_rows where id=1)", sql.NullBool{Bool: true, Valid: true})
 		assertBool("select (select a,b from scalar_rows where id=1) = ((select 1),5)", sql.NullBool{Bool: true, Valid: true})
@@ -98,6 +111,16 @@ func TestIssue28295RowConstructorScalarSubquery(t *testing.T) {
 		require.NoError(t, err)
 		_, err = conn.ExecContext(ctx, "insert into scalar_inner values (1,10)")
 		require.NoError(t, err)
+		err = conn.QueryRowContext(ctx, `select count(*) from scalar_outer o
+			where (1.001,1) <> (select i.x,i.y from scalar_decimal i where i.y=o.k)`).Scan(&correlatedCount)
+		require.NoError(t, err)
+		require.Equal(t, 1, correlatedCount, "an unmatched scalar row must not pass WHERE <>")
+		assertBool(`select (1.001,0) <> (select min(i.x),count(*) from scalar_decimal i
+			where i.y<o.k) from scalar_outer o where o.k=1`, sql.NullBool{})
+		assertBool(`select (1.001,0) <> (select min(i.x),count(*) from scalar_decimal i
+			where i.y<o.k) from scalar_outer o where o.k=2`, sql.NullBool{Bool: true, Valid: true})
+		assertBool(`select 1.001 <> (select min(i.x) from scalar_decimal i
+			where i.y<o.k) from scalar_outer o where o.k=1`, sql.NullBool{})
 		assertBool(`select (1,10) =
 			(select count(*),sum(v) from scalar_inner i where i.k=o.k)
 			from scalar_outer o where o.k=2`, sql.NullBool{Valid: true})
@@ -170,6 +193,46 @@ func TestIssue28295RowConstructorScalarSubquery(t *testing.T) {
 			return values
 		}()
 		require.Equal(t, []int{10, 0}, ifNullValues)
+		_, err = conn.ExecContext(ctx, "create table ifnull_outer(k int primary key)")
+		require.NoError(t, err)
+		_, err = conn.ExecContext(ctx, "insert into ifnull_outer values (1),(2),(3)")
+		require.NoError(t, err)
+		_, err = conn.ExecContext(ctx, "create table ifnull_inner(k int, v int)")
+		require.NoError(t, err)
+		_, err = conn.ExecContext(ctx, "insert into ifnull_inner values (1,10),(1,20),(2,null)")
+		require.NoError(t, err)
+		ifNullSelected := func() []int {
+			rows, queryErr := conn.QueryContext(ctx, `select o.k,
+				ifnull((select min(i.v) from ifnull_inner i where i.k<o.k),0)
+				from ifnull_outer o order by o.k`)
+			require.NoError(t, queryErr)
+			defer func() { require.NoError(t, rows.Close()) }()
+			var values []int
+			for rows.Next() {
+				var key, value int
+				require.NoError(t, rows.Scan(&key, &value))
+				values = append(values, value)
+			}
+			require.NoError(t, rows.Err())
+			return values
+		}()
+		require.Equal(t, []int{0, 10, 10}, ifNullSelected)
+		rawMin := func() []sql.NullInt64 {
+			rows, queryErr := conn.QueryContext(ctx, `select
+				(select min(i.v) from ifnull_inner i where i.k<o.k)
+				from ifnull_outer o order by o.k`)
+			require.NoError(t, queryErr)
+			defer func() { require.NoError(t, rows.Close()) }()
+			var values []sql.NullInt64
+			for rows.Next() {
+				var value sql.NullInt64
+				require.NoError(t, rows.Scan(&value))
+				values = append(values, value)
+			}
+			require.NoError(t, rows.Err())
+			return values
+		}()
+		require.Equal(t, []sql.NullInt64{{}, {Int64: 10, Valid: true}, {Int64: 10, Valid: true}}, rawMin)
 		err = conn.QueryRowContext(ctx, `select count(*) from scalar_outer o
 			where (1,10) =
 				(select count(*),sum(v) from scalar_inner i where i.k<o.k)`).Scan(&correlatedCount)
