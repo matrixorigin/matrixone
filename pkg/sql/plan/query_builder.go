@@ -4424,14 +4424,6 @@ func (builder *QueryBuilder) buildUnionWithResultLen(
 						metadata.ProvisionalResultPeerScale = source.Typ.Scale
 					}
 				}
-				if preparedDeferredColumn && preparedExprContainsParam(builder.qry.Nodes[tmpID].ProjectList[columnIdx]) {
-					metadata := ensurePreparedNumericMetadata(builder.qry.Nodes[tmpID].ProjectList[columnIdx])
-					metadata.Fallback = true
-					metadata.ParamPos = -1
-					if pos, ok := firstPlanParamPosition(builder.qry.Nodes[tmpID].ProjectList[columnIdx]); ok {
-						metadata.ParamPos = pos
-					}
-				}
 			}
 		}
 	}

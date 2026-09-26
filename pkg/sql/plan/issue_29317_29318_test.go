@@ -240,6 +240,21 @@ func TestPreparedVariadicRuntimeSourceDomains(t *testing.T) {
 		name: "predicate consumer", sql: "prepare p from 'select 1 from (select ? as x) d where field(x, abs(cast(9007199254740992 as decimal(20,0))))=0'", fn: "field",
 		values: []ParamValue{decimal("9007199254740993")}, want: []types.T{types.T_decimal128, types.T_decimal128},
 	})
+	cases = append(cases,
+		sourceDomainCase{
+			name: "set output owns both source domains",
+			sql:  "prepare p from 'select field(x, abs(cast(9007199254740992 as decimal(20,0)))) from (select ? as x union all select ?) d'",
+			fn:   "field", values: []ParamValue{decimal("9007199254740993"),
+				{Value: "9007199254740993", SourceType: types.T_varchar.ToType(), HasSourceType: true}},
+			want: []types.T{types.T_float64, types.T_float64},
+		},
+		sourceDomainCase{
+			name: "table scalar selected output",
+			sql:  "prepare p from 'select field((select ? from nation r where r.n_nationkey=1 limit 1), abs(cast(9007199254740992 as decimal(20,0))))'",
+			fn:   "field", values: []ParamValue{decimal("9007199254740993")},
+			want: []types.T{types.T_decimal128, types.T_decimal128},
+		},
+	)
 	for _, tc := range cases {
 		t.Run(tc.name, func(t *testing.T) {
 			prepared, err := runOneStmt(NewMockOptimizer(false), t, tc.sql)

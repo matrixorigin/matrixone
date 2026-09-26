@@ -499,6 +499,11 @@ type ResetParamRefRule struct {
 	// String-domain lineage is self-contained in sparse expression metadata and
 	// does not add a plan-graph walk to prepared execution.
 	preparedPlan *Plan
+	// exactProjectedParam records only transparent output-to-marker identity
+	// before ParamRefs are materialized. Domain summaries are not value sources.
+	exactProjectedParam  map[preparedSetOperationNullKey]int32
+	projectedParamDomain map[preparedSetOperationNullKey]int32
+	setArmParam          map[preparedSetOperationInputKey]int32
 	// preparedTemporalNullEnvelopeExprs marks runtime-only casts that restore a
 	// strict NULL TIME-arithmetic envelope. Deferred numeric consumers must keep
 	// these casts intact instead of pairing their target-type argument with the
@@ -827,12 +832,70 @@ func (rule *ResetParamRefRule) setPreparedPlan(preparePlan *Plan) {
 		return
 	}
 	positions := make(map[int32]struct{})
+	var checkedProjectedParam map[preparedSetOperationNullKey]struct{}
 	for nodeID, node := range query.Nodes {
 		if node == nil {
 			continue
 		}
+		if isPreparedSetOperationNode(node.NodeType) {
+			for branchIdx, childID := range node.Children {
+				if childID < 0 || int(childID) >= len(query.Nodes) {
+					continue
+				}
+				child := query.Nodes[childID]
+				if child == nil {
+					continue
+				}
+				for colPos, output := range child.ProjectList {
+					if colPos >= len(node.ProjectList) || node.ProjectList[colPos] == nil {
+						continue
+					}
+					source := unwrapPreparedSetOperationCoercion(query, childID, colPos,
+						node.ProjectList[colPos].Typ, output)
+					if pos, ok := preparedProjectedParamPosition(query, child, source,
+						make(map[preparedSetOperationNullKey]bool), false); ok {
+						if rule.setArmParam == nil {
+							rule.setArmParam = make(map[preparedSetOperationInputKey]int32)
+						}
+						rule.setArmParam[preparedSetOperationInputKey{
+							node: node, branchIdx: branchIdx, colPos: colPos,
+						}] = pos
+					}
+				}
+			}
+		}
 		_ = plan.VisitExpressionsInOwner(node, func(root *plan.Expr) error {
 			return plan.VisitExprTree(root, func(expr *plan.Expr) error {
+				if fn := expr.GetF(); fn != nil && expr.GetPreparedNumeric().GetProvisionalResultCast() &&
+					len(fn.Args) > 0 && fn.Args[0].GetCol() != nil {
+					col := fn.Args[0].GetCol()
+					if col.RelPos >= 0 && col.ColPos >= 0 && int(col.RelPos) < len(node.Children) {
+						key := preparedSetOperationNullKey{nodeID: node.Children[col.RelPos], colPos: col.ColPos}
+						if _, checked := checkedProjectedParam[key]; !checked {
+							if checkedProjectedParam == nil {
+								checkedProjectedParam = make(map[preparedSetOperationNullKey]struct{})
+							}
+							checkedProjectedParam[key] = struct{}{}
+							if pos, exact := preparedProjectedOutputParamPosition(query, key.nodeID, key.colPos,
+								make(map[preparedSetOperationNullKey]bool), false); exact {
+								if rule.exactProjectedParam == nil {
+									rule.exactProjectedParam = make(map[preparedSetOperationNullKey]int32)
+								}
+								if rule.projectedParamDomain == nil {
+									rule.projectedParamDomain = make(map[preparedSetOperationNullKey]int32)
+								}
+								rule.exactProjectedParam[key] = pos
+								rule.projectedParamDomain[key] = pos
+							} else if pos, domain := preparedProjectedOutputParamPosition(query, key.nodeID, key.colPos,
+								make(map[preparedSetOperationNullKey]bool), true); domain {
+								if rule.projectedParamDomain == nil {
+									rule.projectedParamDomain = make(map[preparedSetOperationNullKey]int32)
+								}
+								rule.projectedParamDomain[key] = pos
+							}
+						}
+					}
+				}
 				for _, source := range integerArgumentSources(expr) {
 					collectPreparedIntegerArgumentParamPositions(query, int32(nodeID), source,
 						positions, make(map[[2]int32]struct{}), rule.integerSourceRoots)
@@ -2718,9 +2781,10 @@ func (rule *ResetParamRefRule) applyExpr(e *plan.Expr) (*plan.Expr, error) {
 			}
 			implicitParamCast := isImplicitPreparedParamCast(arg)
 			provisionalCommonValueCast := false
-			if (isPreparedCommonValueFunction(functionName) || functionName == "if" ||
+			commonValueResultArg := (isPreparedCommonValueFunction(functionName) || functionName == "if" ||
 				functionName == "ifnull" || functionName == "case") &&
-				preparedSQLExecuteNumericResultValueArg(functionName, i, len(exprImpl.F.Args)) &&
+				preparedSQLExecuteNumericResultValueArg(functionName, i, len(exprImpl.F.Args))
+			if commonValueResultArg &&
 				originalArgs[i] != nil && originalArgs[i].GetPreparedNumeric().GetProvisionalResultCast() {
 				if cast := arg.GetF(); cast != nil && cast.Func != nil &&
 					cast.Func.GetObjName() == "cast" && len(cast.Args) == 2 && cast.Args[0] != nil &&
@@ -2734,6 +2798,8 @@ func (rule *ResetParamRefRule) applyExpr(e *plan.Expr) (*plan.Expr, error) {
 			bitwiseParamCast := isPreparedBitwiseOperator(functionName) &&
 				isPreparedBitwiseParamCast(arg)
 			paramPos, hasParamPos := preparedParamPosition(arg)
+			bareCommonValueNull := commonValueResultArg && hasParamPos &&
+				arg.GetP() != nil && rule.preparedRuntimeParamIsNull(paramPos)
 			var preparedBitwiseSource *plan.Expr
 			var hasPreparedBitwiseSource bool
 			var nestedPreparedBitwiseSource *plan.Expr
@@ -2945,12 +3011,15 @@ func (rule *ResetParamRefRule) applyExpr(e *plan.Expr) (*plan.Expr, error) {
 					}
 				}
 				rewrittenArg = DeepCopyExpr(source)
-			} else if provisionalCommonValueCast {
+			} else if provisionalCommonValueCast || bareCommonValueNull {
 				commonValueSourceChanged = true
 				// The outer cast was selected while the result operand was an
 				// unresolved TEXT marker. Rebind its source for this EXECUTE so a
 				// nested numeric function can supply its actual result domain.
-				source := arg.GetF().Args[0]
+				source := arg
+				if provisionalCommonValueCast {
+					source = arg.GetF().Args[0]
+				}
 				if marker := source.GetP(); marker != nil {
 					var known bool
 					rewrittenArg, known, err = rule.preparedRuntimeSourceExpr(int(marker.Pos), false)
@@ -3451,7 +3520,7 @@ func (rule *ResetParamRefRule) applyExpr(e *plan.Expr) (*plan.Expr, error) {
 			if numericPrefixDependent && !isExplicitPreparedCast(e) {
 				rule.markNumericPrefixDependent(e, rewritten)
 			}
-			if sqlExecuteNumericSourceDependent && !isExplicitPreparedCast(e) {
+			if (sqlExecuteNumericSourceDependent || commonValueSourceChanged) && !isExplicitPreparedCast(e) {
 				rule.markSQLExecuteNumericDependent(e, rewritten)
 			}
 			return rewritten, nil
@@ -3467,7 +3536,7 @@ func (rule *ResetParamRefRule) applyExpr(e *plan.Expr) (*plan.Expr, error) {
 		if numericPrefixDependent && !isExplicitPreparedCast(e) {
 			rule.markNumericPrefixDependent(e)
 		}
-		if sqlExecuteNumericSourceDependent && !isExplicitPreparedCast(e) {
+		if (sqlExecuteNumericSourceDependent || commonValueSourceChanged) && !isExplicitPreparedCast(e) {
 			rule.markSQLExecuteNumericDependent(e)
 		}
 		return e, nil

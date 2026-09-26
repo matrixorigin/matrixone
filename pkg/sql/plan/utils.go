@@ -7478,6 +7478,79 @@ func attachPreparedRuntimeParamSource(expr, source *Expr) bool {
 
 type preparedPlanColumnTypeResolver func(*plan.ColRef, plan.Type) (plan.Type, bool)
 
+// A projected parameter is an exact value source only through transparent
+// output edges. A string-domain witness merely summarizes possible domains;
+// set operations, joins and computed outputs own their values independently.
+func preparedProjectedParamPosition(
+	query *plan.Query, node *plan.Node, expr *plan.Expr,
+	visited map[preparedSetOperationNullKey]bool,
+	allowJoin bool,
+) (int32, bool) {
+	if expr == nil || node == nil {
+		return 0, false
+	}
+	if param := expr.GetP(); param != nil {
+		return param.Pos, true
+	}
+	if fn := expr.GetF(); fn != nil && expr.GetPreparedNumeric().GetProvisionalResultCast() &&
+		!isExplicitPreparedCast(expr) && len(fn.Args) > 0 {
+		return preparedProjectedParamPosition(query, node, fn.Args[0], visited, allowJoin)
+	}
+	col := expr.GetCol()
+	if col == nil || col.ColPos < 0 || col.RelPos < 0 || int(col.RelPos) >= len(node.Children) {
+		return 0, false
+	}
+	return preparedProjectedOutputParamPosition(query, node.Children[col.RelPos], col.ColPos, visited, allowJoin)
+}
+
+func preparedProjectedOutputParamPosition(
+	query *plan.Query, nodeID, colPos int32,
+	visited map[preparedSetOperationNullKey]bool,
+	allowJoin bool,
+) (int32, bool) {
+	if query == nil || nodeID < 0 || int(nodeID) >= len(query.Nodes) || colPos < 0 {
+		return 0, false
+	}
+	key := preparedSetOperationNullKey{nodeID: nodeID, colPos: colPos}
+	if visited[key] {
+		return 0, false
+	}
+	visited[key] = true
+	defer delete(visited, key)
+	node := query.Nodes[nodeID]
+	if node == nil {
+		return 0, false
+	}
+	switch node.NodeType {
+	case plan.Node_PROJECT, plan.Node_FILTER, plan.Node_MATERIAL,
+		plan.Node_PARTITION, plan.Node_SORT, plan.Node_DISTINCT, plan.Node_SAMPLE:
+	case plan.Node_JOIN, plan.Node_APPLY:
+		if !allowJoin {
+			return 0, false
+		}
+	case plan.Node_AGG:
+		if !allowJoin || int(colPos) >= len(node.ProjectList) {
+			return 0, false
+		}
+		col := node.ProjectList[colPos].GetCol()
+		if col == nil || col.RelPos != -1 || col.ColPos < 0 || int(col.ColPos) >= len(node.GroupBy) {
+			return 0, false
+		}
+		return preparedProjectedParamPosition(query, node, node.GroupBy[col.ColPos], visited, allowJoin)
+	default:
+		return 0, false
+	}
+	if int(colPos) < len(node.ProjectList) && node.ProjectList[colPos] != nil {
+		return preparedProjectedParamPosition(query, node, node.ProjectList[colPos], visited, allowJoin)
+	}
+	if len(node.Children) == 1 {
+		return preparedProjectedOutputParamPosition(query, node.Children[0], colPos, visited, allowJoin)
+	}
+	return 0, false
+}
+
+type preparedPlanColumnParamResolver func(*plan.ColRef) (pos int32, domain, exact bool)
+
 // refreshPreparedPlanProjectionExprType propagates execute-time source types
 // through one plan expression. When an input domain changes, its enclosing
 // function must be rebound too; otherwise the plan can pair a runtime vector
@@ -7486,6 +7559,7 @@ func refreshPreparedPlanProjectionExprType(
 	ctx context.Context,
 	expr *plan.Expr,
 	resolveColumnType preparedPlanColumnTypeResolver,
+	resolveColumnParam preparedPlanColumnParamResolver,
 	paramRule *ResetParamRefRule,
 ) (bool, error) {
 	if expr == nil {
@@ -7523,7 +7597,7 @@ func refreshPreparedPlanProjectionExprType(
 				// rebinding the conversion until the aggregate can choose again
 				// between its numeric and binary input domains.
 				argChanged, err := refreshPreparedPlanProjectionExprType(
-					ctx, arg.GetF().Args[0], resolveColumnType, paramRule)
+					ctx, arg.GetF().Args[0], resolveColumnType, resolveColumnParam, paramRule)
 				if err != nil {
 					return false, err
 				}
@@ -7531,7 +7605,7 @@ func refreshPreparedPlanProjectionExprType(
 				bitwiseAggregateSourceChanged = bitwiseAggregateSourceChanged || argChanged
 				continue
 			}
-			argChanged, err := refreshPreparedPlanProjectionExprType(ctx, arg, resolveColumnType, paramRule)
+			argChanged, err := refreshPreparedPlanProjectionExprType(ctx, arg, resolveColumnType, resolveColumnParam, paramRule)
 			if err != nil {
 				return false, err
 			}
@@ -7539,22 +7613,18 @@ func refreshPreparedPlanProjectionExprType(
 		}
 
 		// This envelope was selected for an unresolved source, not requested by
-		// SQL. A surviving ColRef needs the same source-domain resolution as an
-		// inlined marker, while its physical producer and null extension stay intact.
+		// SQL. Only a transparent projected marker can provide its runtime domain;
+		// a set/common-result column must use its producer's reconciled type.
 		if expr.GetPreparedNumeric().GetProvisionalResultCast() && functionName == "cast" &&
 			!isExplicitPreparedCast(expr) && len(exprImpl.F.Args) == 2 {
 			source := exprImpl.F.Args[0]
-			if source.GetCol() != nil && types.T(source.Typ.Id).IsMySQLString() {
-				if marker := source.GetPreparedNumeric().GetStringDomainSource().GetP(); marker != nil {
-					runtimeSource, known, err := paramRule.preparedRuntimeSourceExpr(int(marker.Pos), false)
+			if col := source.GetCol(); col != nil && types.T(source.Typ.Id).IsMySQLString() {
+				if pos, domain, exact := resolveColumnParam(col); domain {
+					runtimeSource, known, err := paramRule.preparedRuntimeSourceExpr(int(pos), false)
 					if err != nil {
 						return false, err
 					}
-					if known && types.T(runtimeSource.Typ.Id) == types.T_any && runtimeSource.GetLit().GetIsnull() {
-						// An exact marker known to be domainless NULL stays NULL in
-						// every row, including outer-join null extension. Only this
-						// state permits substituting the value without reading the
-						// physical TEXT column; a non-NULL source must keep its ColRef.
+					if exact && known && types.T(runtimeSource.Typ.Id) == types.T_any && runtimeSource.GetLit().GetIsnull() {
 						source = runtimeSource
 					} else if known && types.T(runtimeSource.Typ.Id) != types.T_any {
 						target := runtimeSource.Typ
@@ -7670,7 +7740,7 @@ func refreshPreparedPlanProjectionExprType(
 			return false, nil
 		}
 		for _, item := range exprImpl.List.List {
-			itemChanged, err := refreshPreparedPlanProjectionExprType(ctx, item, resolveColumnType, paramRule)
+			itemChanged, err := refreshPreparedPlanProjectionExprType(ctx, item, resolveColumnType, resolveColumnParam, paramRule)
 			if err != nil {
 				return false, err
 			}
@@ -7682,7 +7752,7 @@ func refreshPreparedPlanProjectionExprType(
 			return false, nil
 		}
 		if exprImpl.W.WindowFunc != nil {
-			windowFuncChanged, err := refreshPreparedPlanProjectionExprType(ctx, exprImpl.W.WindowFunc, resolveColumnType, paramRule)
+			windowFuncChanged, err := refreshPreparedPlanProjectionExprType(ctx, exprImpl.W.WindowFunc, resolveColumnType, resolveColumnParam, paramRule)
 			if err != nil {
 				return false, err
 			}
@@ -7693,7 +7763,7 @@ func refreshPreparedPlanProjectionExprType(
 			}
 		}
 		for _, item := range exprImpl.W.PartitionBy {
-			itemChanged, err := refreshPreparedPlanProjectionExprType(ctx, item, resolveColumnType, paramRule)
+			itemChanged, err := refreshPreparedPlanProjectionExprType(ctx, item, resolveColumnType, resolveColumnParam, paramRule)
 			if err != nil {
 				return false, err
 			}
@@ -7703,7 +7773,7 @@ func refreshPreparedPlanProjectionExprType(
 			if order == nil {
 				continue
 			}
-			orderChanged, err := refreshPreparedPlanProjectionExprType(ctx, order.Expr, resolveColumnType, paramRule)
+			orderChanged, err := refreshPreparedPlanProjectionExprType(ctx, order.Expr, resolveColumnType, resolveColumnParam, paramRule)
 			if err != nil {
 				return false, err
 			}
@@ -7714,7 +7784,7 @@ func refreshPreparedPlanProjectionExprType(
 				if bound == nil {
 					continue
 				}
-				boundChanged, err := refreshPreparedPlanProjectionExprType(ctx, bound.Val, resolveColumnType, paramRule)
+				boundChanged, err := refreshPreparedPlanProjectionExprType(ctx, bound.Val, resolveColumnType, resolveColumnParam, paramRule)
 				if err != nil {
 					return false, err
 				}
@@ -7959,7 +8029,11 @@ func preparedSetOperationCommonType(
 		hasDecimalInput = hasDecimalInput || typ.Oid.IsDecimal()
 	}
 	if len(argTypes) == 0 {
-		return types.Type{}, false, nil
+		// Domainless NULLs have no common value domain to infer. Keep the
+		// prepared set's physical output type so no ANY vector reaches a set
+		// operator or spool; a consumer can still treat every value as NULL.
+		original := makeTypeByPlan2Expr(&plan.Expr{Typ: currentOutputType})
+		return original, original.Oid != types.T_any, nil
 	}
 	if pureCharType, ok := setOperationPureCharCommonType(argTypes); ok {
 		return pureCharType, true, nil
@@ -8253,6 +8327,7 @@ func reconcilePreparedSetOperationInputs(
 	childProjectLists [][]*plan.Expr,
 	originalOutputTypes map[*plan.Node][]plan.Type,
 	originalInputTypes map[preparedSetOperationInputKey]plan.Type,
+	paramRule *ResetParamRefRule,
 ) (bool, []bool, error) {
 	if !isPreparedSetOperationNode(node.NodeType) || len(node.Children) < 2 || len(node.ProjectList) == 0 {
 		return false, nil, nil
@@ -8291,6 +8366,17 @@ func reconcilePreparedSetOperationInputs(
 					return false, nil, err
 				}
 				sourceExpressions[branchIdx][colPos] = source
+			}
+			if pos, direct := paramRule.setArmParam[preparedSetOperationInputKey{
+				node: node, branchIdx: branchIdx, colPos: colPos,
+			}]; direct {
+				if source, known, err := paramRule.preparedRuntimeSourceExpr(int(pos), false); err != nil {
+					return false, nil, err
+				} else if known {
+					sourceExpressions[branchIdx][colPos] = source
+					pureNullColumns[branchIdx][colPos] = types.T(source.Typ.Id) == types.T_any &&
+						source.GetLit().GetIsnull()
+				}
 			}
 			if colPos < len(node.ProjectList) && sourceExpressions[branchIdx][colPos] != nil {
 				originalType, ok := originalInputTypes[preparedSetOperationInputKey{
@@ -8518,7 +8604,7 @@ func refreshPreparedPlanProjectionTypes(
 		}
 		setOperationSpecialized, _, err := reconcilePreparedSetOperationInputs(
 			ctx, query, node, childProjectLists, originalSetOperationTypes,
-			originalSetOperationInputTypes,
+			originalSetOperationInputTypes, paramRule,
 		)
 		if err != nil {
 			return err
@@ -8596,8 +8682,19 @@ func refreshPreparedPlanProjectionTypes(
 			}
 			return childProjectList[col.ColPos].Typ, true
 		}
+		resolveColumnParam := func(col *plan.ColRef) (int32, bool, bool) {
+			if col == nil || col.RelPos < 0 || int(col.RelPos) >= len(node.Children) {
+				return 0, false, false
+			}
+			key := preparedSetOperationNullKey{
+				nodeID: node.Children[col.RelPos], colPos: col.ColPos,
+			}
+			pos, domain := paramRule.projectedParamDomain[key]
+			_, exact := paramRule.exactProjectedParam[key]
+			return pos, domain, exact
+		}
 		refreshExpr := func(expr *plan.Expr) error {
-			changed, err := refreshPreparedPlanProjectionExprType(ctx, expr, resolveColumnType, paramRule)
+			changed, err := refreshPreparedPlanProjectionExprType(ctx, expr, resolveColumnType, resolveColumnParam, paramRule)
 			specialized = specialized || changed
 			return err
 		}

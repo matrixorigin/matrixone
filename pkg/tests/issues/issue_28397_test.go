@@ -352,6 +352,7 @@ func TestIssue28397FieldKeepsExactNumericComparison(t *testing.T) {
 				{"unflattened numeric", "field(x, abs(" + first + ")) from (select ? as x limit 1) d", []any{uint64(9007199254740993)}, 0},
 				{"unflattened null candidate", "field(" + second + ", x, abs(" + first + "), abs(" + second + ")) from (select ? as x limit 1) d", []any{nil}, 3},
 				{"unflattened null common result", "field(coalesce(x, abs(" + second + ")), abs(" + first + ")) from (select ? as x limit 1) d", []any{nil}, 0},
+				{"nested projected null common result", "field(coalesce(x, abs(" + second + ")), abs(" + first + ")) from (select coalesce(?, " + second + ") as x) d", []any{nil}, 0},
 				{"unflattened null", "field(x, abs(" + first + ")) from (select ? as x limit 1) d", []any{nil}, 0},
 				{"literal null control", "field(?, null, abs(" + first + "), abs(" + second + "))", []any{uint64(9007199254740993)}, 3},
 			} {
@@ -361,6 +362,81 @@ func TestIssue28397FieldKeepsExactNumericComparison(t *testing.T) {
 					defer func() { require.NoError(t, stmt.Close()) }()
 					var got int64
 					require.NoError(t, stmt.QueryRowContext(ctx, tc.args...).Scan(&got))
+					require.Equal(t, tc.want, got)
+				})
+			}
+			t.Run("mixed set keeps every physical row", func(t *testing.T) {
+				stmt, err := conn.PrepareContext(ctx,
+					"select x, field(x, cast(0 as decimal(20,0))) from (select ? as x union all select ?) d order by 2")
+				require.NoError(t, err)
+				defer func() { require.NoError(t, stmt.Close()) }()
+				for execution, args := range [][]any{
+					{nil, "abc"}, {"abc", nil}, {nil, nil},
+					{uint64(9007199254740993), uint64(9007199254740992)}, {nil, "abc"},
+				} {
+					t.Run(fmt.Sprintf("execution %d", execution), func(t *testing.T) {
+						rows, err := stmt.QueryContext(ctx, args...)
+						require.NoError(t, err)
+						defer func() { require.NoError(t, rows.Close()) }()
+						var got []struct {
+							source sql.NullString
+							field  int64
+						}
+						for rows.Next() {
+							var row struct {
+								source sql.NullString
+								field  int64
+							}
+							require.NoError(t, rows.Scan(&row.source, &row.field))
+							got = append(got, row)
+						}
+						require.NoError(t, rows.Err())
+						require.Len(t, got, 2)
+						if _, numeric := args[0].(uint64); numeric {
+							require.Equal(t, []int64{0, 0}, []int64{got[0].field, got[1].field})
+							require.ElementsMatch(t, []sql.NullString{
+								{String: "9007199254740993", Valid: true},
+								{String: "9007199254740992", Valid: true},
+							}, []sql.NullString{got[0].source, got[1].source})
+						} else if args[0] == nil && args[1] == nil {
+							require.Equal(t, []int64{0, 0}, []int64{got[0].field, got[1].field})
+							require.False(t, got[0].source.Valid)
+							require.False(t, got[1].source.Valid)
+						} else {
+							require.False(t, got[0].source.Valid)
+							require.Equal(t, int64(0), got[0].field)
+							require.Equal(t, sql.NullString{String: "abc", Valid: true}, got[1].source)
+							require.Equal(t, int64(1), got[1].field)
+						}
+					})
+				}
+			})
+			for _, tc := range []struct {
+				name, branch string
+				want         []int64
+			}{
+				{"domainless null", "?", []int64{0, 0}},
+				{"typed text null", "cast(? as varchar)", []int64{1, 1}},
+				{"typed decimal null", "cast(? as decimal(20,0))", []int64{0, 0}},
+				{"typed double null", "cast(? as double)", []int64{1, 1}},
+			} {
+				t.Run("conditional "+tc.name, func(t *testing.T) {
+					stmt, err := conn.PrepareContext(ctx,
+						"select field(coalesce(x, abs("+second+")), abs("+first+")) "+
+							"from (select if(id=1, "+tc.branch+", null) as x from "+
+							"(select 1 as id union all select 2) r) d order by 1")
+					require.NoError(t, err)
+					defer func() { require.NoError(t, stmt.Close()) }()
+					rows, err := stmt.QueryContext(ctx, nil)
+					require.NoError(t, err)
+					defer rows.Close()
+					var got []int64
+					for rows.Next() {
+						var value int64
+						require.NoError(t, rows.Scan(&value))
+						got = append(got, value)
+					}
+					require.NoError(t, rows.Err())
 					require.Equal(t, tc.want, got)
 				})
 			}
@@ -507,6 +583,14 @@ func TestIssue28397FieldKeepsExactNumericComparison(t *testing.T) {
 					name: "unflattened common result", expr: "field(coalesce(x, abs(" + second + ")), abs(" + first + ")) from (select ? as x limit 1) d",
 					runs: []fieldBoundaryRun{{"exact", []string{second}, []int64{0}}, {"typed text null", []string{"null"}, []int64{1}}},
 				},
+				{
+					name: "nested common result", expr: "field(coalesce(x, abs(" + second + ")), abs(" + first + ")) from (select coalesce(?, " + second + ") as x) d",
+					runs: []fieldBoundaryRun{{"typed text null stays a string", []string{"null"}, []int64{1}}},
+				},
+				{
+					name: "table backed scalar output", expr: "field((select ? from field_decimal where search=123 limit 1), abs(" + first + "))",
+					runs: []fieldBoundaryRun{{"selected numeric source", []string{second}, []int64{0}}},
+				},
 
 				{
 					name: "unflattened reuse", expr: "field(x, abs(" + first + ")) from (select ? as x limit 1) d",
@@ -521,6 +605,17 @@ func TestIssue28397FieldKeepsExactNumericComparison(t *testing.T) {
 				{
 					name: "union both markers", expr: "field(x, abs(" + first + ")) from (select ? as x union all select ?) d order by 1",
 					runs: []fieldBoundaryRun{{"both exact", []string{second, first}, []int64{0, 1}}},
+				},
+				{
+					name: "union numeric and text source", expr: "field(x, abs(" + first + ")) from (select ? as x union all select ?) d order by 1",
+					runs: []fieldBoundaryRun{
+						{"decimal then text", []string{second, "'9007199254740993'"}, []int64{1, 1}},
+						{"text then decimal", []string{"'9007199254740993'", second}, []int64{1, 1}},
+					},
+				},
+				{
+					name: "union typed text null", expr: "field(x, abs(" + first + ")) from (select ? as x union all select ?) d order by 1",
+					runs: []fieldBoundaryRun{{"null and exact", []string{"cast(null as char)", first}, []int64{0, 1}}},
 				},
 				{
 					name: "union left marker", expr: "field(x, abs(" + first + ")) from (select ? as x union all select " + second + ") d",

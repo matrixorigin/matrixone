@@ -3217,11 +3217,23 @@ func (b *baseBinder) preparedExprContainsProjectedParam(expr *Expr) bool {
 		return int(pos) < len(node.ProjectList) && contains(node.ProjectList[pos])
 	}
 	contains = func(source *Expr) bool {
+		if source == nil {
+			return false
+		}
+		if sub := source.GetSub(); sub != nil && sub.Typ == plan.SubqueryRef_SCALAR {
+			// Only the selected scalar output can own this value. Predicates and
+			// other internal columns are dependencies of the subquery's rows, not
+			// of its result domain.
+			return output(sub.NodeId, -1, 0)
+		}
 		if preparedExprContainsParam(source) {
 			return true
 		}
 		found := false
 		_ = plan.VisitExprTree(source, func(nested *Expr) error {
+			if sub := nested.GetSub(); !found && sub != nil && sub.Typ == plan.SubqueryRef_SCALAR {
+				found = output(sub.NodeId, -1, 0)
+			}
 			if col := nested.GetCol(); !found && col != nil {
 				if nodeID, ok := b.builder.tag2NodeID[col.RelPos]; ok {
 					found = output(nodeID, col.RelPos, col.ColPos)
