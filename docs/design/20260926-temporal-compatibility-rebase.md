@@ -1,7 +1,8 @@
 # Temporal compatibility repair after MORPC 97
 
 Status: product target decided by GPT-6-astra/xhigh on 2026-09-26 at the
-user's request; this revised text awaits exact-revision design review.  The
+user's request and implemented in PR #28851 on main
+`b1b68925d7f6fb32153e788b5285f424222e85ca`. The
 user directly accepted C03, C13, and C12/C34.  Implementation PR:
 [#28851](https://github.com/matrixorigin/matrixone/pull/28851).  This document
 records the target for integrating that PR with main after #29241.  The PR's
@@ -9,7 +10,8 @@ C01–C42 matrix is frozen in the accompanying
 [contract appendix](20260926-temporal-compatibility-contract.md); this document
 defines the decisions and ownership boundaries that those examples must satisfy.
 The decision record in the appendix governs the remaining expect behavior.
-Implementation evidence and final PR review remain separate gates.
+The PR records implementation evidence and final review separately from this
+target decision.
 
 ## Problem and evidence
 
@@ -19,16 +21,16 @@ negative second or year 10000, an inactive CASE publishing an overflow warning,
 TIME and DATETIME interpreting the same no-digit interval differently, and a
 new coordinator routing changed temporal semantics to released 4.2 workers.
 Those are violations of result-domain, evaluation, grammar, and mixed-version
-ownership, respectively.  The current PR head fixes the local reproductions,
-but its latest remote BVT run still has 67 proxy and 5 pessimistic failures.
-Coverage did not calculate a verdict because those producers failed.  Exact
-CI logs show a mixture: outdated temporal goldens, an un-restored `sql_mode`
-in the new temporal BVT that changes later unrelated tests, and three identical
-decimal-comparison warnings where one was expected.  The last is an
-unresolved diagnostic regression, not an approved expectation change.
+ownership, respectively. An earlier remote BVT run had 67 proxy and 5
+pessimistic failures and no coverage verdict. Its logs exposed outdated
+temporal goldens, an un-restored `sql_mode`, and duplicate decimal-comparison
+warnings. The current implementation restores mode, updates reviewed goldens,
+and defers a constant JOIN-key diagnostic until both logical inputs have rows;
+local BVT and focused tests exercise those repairs. A fresh remote CI verdict
+must be read from the final pushed head.
 
 The PR was based on `3f0a68bd8034d37e098765920f328985c308c9ff`.
-Current main `b457977980137e5056be18f03b22da6fc31908e0` adds decimal
+Its integration base `b457977980137e5056be18f03b22da6fc31908e0` adds decimal
 division semantics under MORPC 97.  The PR independently assigned temporal
 semantics to MORPC 97.  A worker advertising 97 after #29241 is not thereby
 capable of the PR's temporal behavior.  Textual conflict resolution alone would
@@ -203,8 +205,8 @@ marker or background reconciler is introduced.
    throughput, or peak-memory behavior.
 
 Product target: the user accepted C03, C13, and C12/C34 and delegated the
-remaining expectation decisions to GPT-6-astra/xhigh.  Its 2026-09-26 decision
+remaining expectation decisions to GPT-6-astra/xhigh. Its 2026-09-26 decision
 accepted C01–C42 with the precise amendments recorded in the appendix,
 including C10 binary FLOAT behavior, C39 persisted ABI, and the C40/C42
-integration at temporal MORPC 98.  Exact-revision design review, implementation,
-and validation remain pending.
+integration at temporal MORPC 98. The implementation has been reviewed and
+locally validated on the rebased branch; remote CI remains an independent gate.

@@ -1,16 +1,17 @@
 # Frozen temporal SQL contract for PR #28851
 
-Status: target decisions approved by GPT-6-astra/xhigh on 2026-09-26; revised
-text pending exact-revision design review.  This is the
-versioned C01–C42 snapshot from the PR body at head
-`21f8701059cb7fb1dd716df13ab131df930ce958`, amended by the target
-decisions below and the integration with current main
-`b457977980137e5056be18f03b22da6fc31908e0`, which has reserved MORPC97
-for decimal division.  The companion
-[design](20260926-temporal-compatibility-rebase.md) states why temporal
-contracts now require MORPC98.  The user explicitly accepted C03, C13 and
-C12/C34 on 2026-09-26 and delegated the remaining expect decisions to
-GPT-6-astra/xhigh.  Implementation and validation remain pending.
+Status: target decisions approved by GPT-6-astra/xhigh on 2026-09-26 and
+implemented in PR #28851, rebased onto main
+`b1b68925d7f6fb32153e788b5285f424222e85ca`. This C01–C42 contract
+originated from the PR body at head
+`21f8701059cb7fb1dd716df13ab131df930ce958`; the decisions below
+supersede its conflicting historical expectations. Main reserved MORPC97 for
+decimal division, so the temporal contract uses MORPC98. The companion
+[design](20260926-temporal-compatibility-rebase.md) records that integration.
+The user explicitly accepted C03, C13 and C12/C34 and delegated the remaining
+expect decisions to GPT-6-astra/xhigh. Local validation evidence and its
+limits are recorded in the PR; this contract does not assert that all CI jobs
+or a live mixed-binary rolling upgrade have passed.
 
 ## C42. Fresh bootstrap and upgrade
 
