@@ -15,6 +15,7 @@ on:
       - "optools/images/gpu/Dockerfile"
       - "optools/images/gpu/Dockerfile.dev"
       - "optools/run_ut.sh"
+      - "optools/gpu/**"
       - "optools/ut_tools.bash"
       - "thirdparties/**"
   push:
@@ -33,6 +34,7 @@ on:
       - "optools/images/gpu/Dockerfile"
       - "optools/images/gpu/Dockerfile.dev"
       - "optools/run_ut.sh"
+      - "optools/gpu/**"
       - "optools/ut_tools.bash"
       - "thirdparties/**"
   workflow_dispatch:
@@ -59,7 +61,9 @@ jobs:
         uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
       - name: Validate native state, staging, and Make DAG
         run: |
+          python3 -m unittest discover -s cgo -p 'test_gpu_toolchain.py' -v
           sh -n \
+            cgo/mo-gpu-env \
             cgo/mo-native-provenance \
             cgo/mo-stage-native-libs \
             .agents/skills/mo-dev/scripts/mo-cgo-test \
