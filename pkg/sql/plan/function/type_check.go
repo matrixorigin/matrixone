@@ -420,23 +420,6 @@ func stringDomainFixedTypeMatch(overloads []overload, inputs []types.Type) check
 	return stringDomainFixedTypeMatchIf(overloads, inputs, func(oid types.T) bool { return oid.IsMySQLString() })
 }
 
-// hexTypeMatch keeps HEX's byte-preserving string domains while treating BOOL
-// as the numeric value 0/1. BOOL must not be added to the global implicit-cast
-// lattice because unrelated string/binary functions intentionally stringify it.
-func hexTypeMatch(overloads []overload, inputs []types.Type) checkResult {
-	if len(inputs) == 1 {
-		switch inputs[0].Oid {
-		case types.T_bool:
-			return fixedTypeMatchWithBoolNumericCast(overloads, inputs)
-		case types.T_float32:
-			return newCheckResultWithSuccess(HexFloat32Overload)
-		case types.T_float64:
-			return newCheckResultWithSuccess(HexFloat64Overload)
-		}
-	}
-	return stringDomainFixedTypeMatch(overloads, inputs)
-}
-
 // spatialDistanceTypeMatch keeps the historical integer third argument for
 // ST_DISTANCE while making a statically string-backed third argument select
 // the MySQL length-unit overload. fixedTypeMatch treats both conversions as

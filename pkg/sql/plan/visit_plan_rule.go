@@ -439,7 +439,8 @@ type ResetParamRefRule struct {
 	exprMemo map[*plan.Expr]*plan.Expr
 	// Runtime value sources reached through integer-consumer lineage, including
 	// bare markers and producers behind PROJECT, set, aggregate or window nodes.
-	integerSourceRoots map[*plan.Expr]struct{}
+	integerSourceRoots    map[*plan.Expr]struct{}
+	integerPredicateRoots map[*plan.Expr]map[int32]struct{}
 	// preserveRoots contains DML write expressions whose outer shape must
 	// remain stable while nested parameters are rebound.  The write operator
 	// consumes these expressions positionally; rebuilding the outer function
@@ -819,6 +820,7 @@ func NewResetParamRefRule(ctx context.Context, params []*Expr) *ResetParamRefRul
 func (rule *ResetParamRefRule) setPreparedPlan(preparePlan *Plan) {
 	rule.preparedPlan = preparePlan
 	rule.integerSourceRoots = make(map[*plan.Expr]struct{})
+	rule.integerPredicateRoots = make(map[*plan.Expr]map[int32]struct{})
 	query := preparePlan.GetQuery()
 	if query == nil {
 		return
@@ -830,11 +832,42 @@ func (rule *ResetParamRefRule) setPreparedPlan(preparePlan *Plan) {
 		}
 		_ = plan.VisitExpressionsInOwner(node, func(root *plan.Expr) error {
 			return plan.VisitExprTree(root, func(expr *plan.Expr) error {
-				if isIntegerArgumentCast(expr) {
-					collectPreparedIntegerArgumentParamPositions(query, int32(nodeID), expr.GetF().Args[0],
+				for _, source := range integerArgumentSources(expr) {
+					collectPreparedIntegerArgumentParamPositions(query, int32(nodeID), source,
 						positions, make(map[[2]int32]struct{}), rule.integerSourceRoots)
 				}
 				return nil
+			})
+		})
+	}
+	// A numeric peer in NULLIF establishes a separate comparison domain. Its
+	// provisional casts need rebinding for numeric EXECUTE values, but TEXT
+	// comparisons must not inherit the integer result source contract.
+	for _, node := range query.Nodes {
+		if node == nil {
+			continue
+		}
+		_ = plan.VisitExpressionsInOwner(node, func(root *plan.Expr) error {
+			return plan.VisitExprTree(root, func(expr *plan.Expr) error {
+				fn := expr.GetF()
+				if fn == nil || fn.Func == nil || fn.Func.ObjName != "case" || len(fn.Args) != 3 ||
+					!preparedNullValueExpr(fn.Args[1]) || !preparedComparisonHasNumericLiteral(fn.Args[0]) {
+					return nil
+				}
+				if _, source := rule.integerSourceRoots[expr]; !source {
+					return nil
+				}
+				positions := preparedNumericValueParamPositions(fn.Args[0])
+				if len(positions) == 0 || !preparedComparisonUsesResultMarker(positions, fn.Args[2]) {
+					return nil
+				}
+				return plan.VisitExprTree(fn.Args[0], func(predicate *plan.Expr) error {
+					if predicate.GetF() != nil || predicate.GetP() != nil {
+						rule.integerSourceRoots[predicate] = struct{}{}
+						rule.integerPredicateRoots[predicate] = positions
+					}
+					return nil
+				})
 			})
 		})
 	}
@@ -854,6 +887,7 @@ func (rule *ResetParamRefRule) setPreparedPlan(preparePlan *Plan) {
 				for _, arg := range fn.Args {
 					_ = plan.VisitExprTree(arg, func(descendant *plan.Expr) error {
 						delete(rule.integerSourceRoots, descendant)
+						delete(rule.integerPredicateRoots, descendant)
 						return nil
 					})
 				}
@@ -2037,6 +2071,9 @@ func (rule *ResetParamRefRule) refreshPreparedNumericSource(expr *plan.Expr) (*E
 		if typ, ok := rule.preparedNumericSourceType(expr); ok && !reflect.DeepEqual(expr.Typ, typ) {
 			copy := DeepCopyExpr(expr)
 			copy.Typ = typ
+			// The producer owns the value domain, but an outer join can add
+			// NULLs at this occurrence even for a non-nullable aggregate.
+			copy.Typ.NotNullable = typ.NotNullable && expr.Typ.NotNullable
 			return copy, true, nil
 		}
 		return expr, false, nil
@@ -2060,6 +2097,9 @@ func (rule *ResetParamRefRule) refreshPreparedNumericSource(expr *plan.Expr) (*E
 			return nil, false, err
 		}
 		preserveReboundFunctionMetadata(fn, bound.GetF())
+		// Rebinding a child must not erase the enclosing expression's
+		// provenance (notably an IFNULL common-value boundary).
+		bound.PreparedNumeric = copyPreparedNumericMetadata(expr.PreparedNumeric)
 		return bound, true, nil
 	}
 	if list := expr.GetList(); list != nil {
@@ -2118,12 +2158,29 @@ func (rule *ResetParamRefRule) ApplyExpr(e *plan.Expr) (*plan.Expr, error) {
 	}
 	var rewritten *plan.Expr
 	var err error
-	if _, source := rule.integerSourceRoots[e]; source {
+	_, source := rule.integerSourceRoots[e]
+	if positions, predicate := rule.integerPredicateRoots[e]; predicate {
+		// All markers participating in this separate comparison must have a
+		// numeric execution domain. One numeric result cannot coerce a TEXT
+		// comparison peer into an integer value source.
+		source = len(positions) > 0
+		for pos := range positions {
+			if pos < 0 || int(pos) >= len(rule.paramValues) ||
+				!PreparedParamValueHasNumericRuntime(rule.paramValues[pos]) {
+				source = false
+				break
+			}
+		}
+	}
+	if source {
 		// This occurrence already uses the actual runtime domain. A second
 		// numeric-fallback pass would infer a number from real TEXT again.
 		fallbackSource = nil
 		rewritten, err = rule.integerArgumentRuntimeSource(e)
 		rule.specialized = true
+	} else if hasSourceDependentIntegerArguments(e) {
+		fallbackSource = nil
+		rewritten, err = rule.rebindSourceDependentIntegerArguments(e)
 	} else if isIntegerArgumentCast(e) {
 		rewritten, err = rule.rebindIntegerArgumentCast(e)
 	} else if _, preserve := rule.preserveRoots[e]; preserve {
