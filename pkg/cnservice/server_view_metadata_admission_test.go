@@ -18,6 +18,8 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"github.com/matrixorigin/matrixone/pkg/common/mpool"
+	"github.com/matrixorigin/matrixone/pkg/container/types"
 	"strings"
 	"sync"
 	"sync/atomic"
@@ -159,7 +161,7 @@ func newViewMetadataAdmissionStartService(
 		cancelMoServerFunc:              func() {},
 		lockService:                     &admissionStartLockService{},
 		queryService:                    &admissionStartQueryService{},
-		sqlExecutor:                     sqlExecutor,
+		sqlExecutor:                     existingSystemViewsExecutor{sqlExecutor},
 		bootstrapService:                boot,
 		stopper:                         stopper.NewStopper("view-metadata-admission-start"),
 		viewMetadataAdmissionGeneration: 11,
@@ -316,7 +318,7 @@ func TestCNViewMetadataAdmissionRejectsUnknownPersistedExpressionProtocol(t *tes
 			Generation: 9,
 			Admitted:   true,
 			PersistedExpressionRequiredProtocolVersion: uint64(defines.MORPCLatestVersion + 1),
-		}, false, false, nil)
+		}, false, false, nil, 0)
 	require.False(t, ok)
 	require.ErrorContains(t, err, "requires persisted expression protocol version")
 
@@ -325,7 +327,7 @@ func TestCNViewMetadataAdmissionRejectsUnknownPersistedExpressionProtocol(t *tes
 			Generation: 9,
 			Admitted:   true,
 			PersistedExpressionRequiredProtocolVersion: uint64(defines.MORPCLatestVersion),
-		}, false, false, nil)
+		}, false, false, nil, 0)
 	require.True(t, ok)
 	require.NoError(t, err)
 }
@@ -393,6 +395,7 @@ func TestCNApplyViewMetadataAdmissionPublishesDurableFloorBeforeFence(t *testing
 	}
 	require.NoError(t, s.applyViewMetadataAdmission(context.Background(), &logservicepb.ViewMetadataAdmission{
 		Enabled:    true,
+		Preparing:  true,
 		Epoch:      2,
 		Generation: 9,
 		Admitted:   true,
@@ -454,7 +457,7 @@ func TestCNViewMetadataAdmissionSeparatesReadAndAuthoringFloors(t *testing.T) {
 	// catalog-fenced. Only then may it author the new protocol's metadata.
 	require.NoError(t, s.applyViewMetadataAdmission(context.Background(), &logservicepb.ViewMetadataAdmission{
 		Enabled:              true,
-		Ready:                true,
+		Ready:                false,
 		Admitted:             true,
 		Epoch:                1,
 		Generation:           9,
@@ -1457,4 +1460,109 @@ func TestCNViewMetadataAdmissionDoesNotAckFailedCatalogFence(t *testing.T) {
 	require.ErrorIs(t, err, fenceErr)
 	require.Equal(t, uint64(6), s.viewMetadataEpochFence.Epoch())
 	require.Zero(t, s.viewMetadataCatalogFencedEpoch.Load())
+}
+
+func TestCNCompletesSystemViewsAfterAdmissionBeforeIngress(t *testing.T) {
+	for _, fail := range []bool{false, true} {
+		t.Run(fmt.Sprint(fail), func(t *testing.T) {
+			failure := errors.New("derived view creation failed")
+			var s *service
+			var creates int
+			exec := executor.NewMemExecutor(func(sql string) (executor.Result, error) {
+				if sql == catalog.ViewMetadataLifecycleGateSQL {
+					return viewMetadataLifecycleGateTestResult(), nil
+				}
+				if strings.HasPrefix(sql, "CREATE VIEW") {
+					require.Equal(t, uint64(5), s.viewMetadataCatalogFencedEpoch.Load())
+					require.False(t, s.viewMetadataIngressReady.Load())
+					creates++
+					if fail {
+						return executor.Result{}, failure
+					}
+				}
+				return executor.Result{}, nil
+			})
+			s = newViewMetadataAdmissionStartService(t, &testBootService{}, exec, time.Second)
+			s.sqlExecutor = exec
+			snapshot := *s.viewMetadataAdmission.Load()
+			snapshot.Ready = false
+			snapshot.PersistedExpressionRequiredProtocolVersion = 97
+			snapshot.CatalogFencedEpoch = 5
+			s.viewMetadataAdmission.Store(&snapshot)
+			t.Cleanup(func() { _ = s.Close() })
+			err := s.Start()
+			if fail {
+				require.ErrorIs(t, err, failure)
+				require.Equal(t, serviceClosed, s.lifecycle)
+				require.False(t, s.viewMetadataIngressReady.Load())
+				require.Equal(t, 1, creates)
+			} else {
+				require.NoError(t, err)
+				require.Equal(t, 4, creates)
+				require.True(t, s.viewMetadataIngressReady.Load())
+			}
+		})
+	}
+}
+
+func TestCNDerivedViewsWaitForAuthoringProtocol(t *testing.T) {
+	s := newViewMetadataAdmissionStartService(t, &testBootService{}, executor.NewMemExecutor(func(string) (executor.Result, error) { return executor.Result{}, nil }), 20*time.Millisecond)
+	t.Cleanup(func() { _ = s.Close() })
+	s.viewMetadataAdmission.Store(&logservicepb.ViewMetadataAdmission{Generation: 11})
+	require.NoError(t, s.waitForViewMetadataAdmission())
+	require.Error(t, s.waitForViewMetadataAdmissionHandoff(false, uint64(defines.MORPCVersion97)), "disabled admission cannot authorize new derived definitions")
+	require.False(t, s.viewMetadataIngressReady.Load())
+	s.viewMetadataAdmission.Store(&logservicepb.ViewMetadataAdmission{Generation: 12})
+	require.ErrorContains(t, s.waitForViewMetadataAdmissionHandoff(false, 97), "generation was superseded")
+	s.viewMetadataAdmission.Store(&logservicepb.ViewMetadataAdmission{Generation: 11, PersistedExpressionRequiredProtocolVersion: uint64(defines.MORPCLatestVersion + 1)})
+	require.ErrorContains(t, s.waitForViewMetadataAdmissionHandoff(false, 97), "newer protocol")
+	s.viewMetadataGenerationRevoked.Store(true)
+	require.ErrorContains(t, s.waitForViewMetadataAdmissionHandoff(false, 97), "generation revoked")
+	s.viewMetadataGenerationRevoked.Store(false)
+	require.NoError(t, s.viewMetadataEpochFence.Advance(t.Context(), 5))
+	s.viewMetadataCatalogFencedEpoch.Store(5)
+	ready := &logservicepb.ViewMetadataAdmission{Generation: 11, Epoch: 5, Enabled: true, Ready: false, Admitted: true, CatalogFencedEpoch: 5, RevalidationRequired: true, PersistedExpressionRequiredProtocolVersion: uint64(defines.MORPCVersion97)}
+	for _, tc := range []struct {
+		name    string
+		floor   uint64
+		pending bool
+		want    bool
+	}{
+		{"lower floor", 96, false, false}, {"activation pending", 97, true, false}, {"ready", 97, false, true},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			current := *ready
+			current.PersistedExpressionRequiredProtocolVersion = tc.floor
+			current.PersistedExpressionProtocolActivationPending = tc.pending
+			s.viewMetadataAdmission.Store(&current)
+			accepted, _, err := s.acceptViewMetadataAdmissionSnapshot(ready, false, false, nil, 97)
+			require.NoError(t, err)
+			require.Equal(t, tc.want, accepted, "check current authority, not the older fenced snapshot")
+			current.Preparing = true
+			s.viewMetadataAdmission.Store(&current)
+			accepted, _, err = s.acceptViewMetadataAdmissionSnapshot(ready, false, false, nil, 97)
+			require.NoError(t, err)
+			require.False(t, accepted, "a preparing epoch cannot authorize writes")
+		})
+	}
+}
+
+// These startup fixtures model an already bootstrapped catalog. Preserve their
+// custom fence/rollback executor while answering the new read-only preflight.
+type existingSystemViewsExecutor struct{ executor.SQLExecutor }
+
+func (e existingSystemViewsExecutor) ExecTxn(ctx context.Context, fn func(executor.TxnExecutor) error, opts executor.Options) error {
+	return e.SQLExecutor.ExecTxn(ctx, func(txn executor.TxnExecutor) error { return fn(existingSystemViewsTxn{txn}) }, opts)
+}
+
+type existingSystemViewsTxn struct{ executor.TxnExecutor }
+
+func (e existingSystemViewsTxn) Exec(sql string, opts executor.StatementOption) (executor.Result, error) {
+	if strings.HasPrefix(sql, "select relkind from mo_catalog.mo_tables") {
+		result := executor.NewMemResult([]types.Type{types.T_varchar.ToType()}, mpool.MustNewZero())
+		result.NewBatchWithRowCount(1)
+		executor.AppendStringRows(result, 0, []string{catalog.SystemViewRel})
+		return result.GetResult(), nil
+	}
+	return e.TxnExecutor.Exec(sql, opts)
 }

@@ -218,11 +218,14 @@ func (s *service) publishPersistedExpressionAuthoringFloor(
 	}
 }
 
+// Ready describes public routing and depends on ingress already listening.
+// Admitted authorizes local initialization after the protocol/catalog barrier;
+// requiring routing readiness here would deadlock derived-schema bootstrap.
 func (s *service) persistedExpressionAuthoringSnapshotReady(
 	snapshot *logservicepb.ViewMetadataAdmission,
 ) bool {
 	if snapshot == nil || snapshot.PersistedExpressionRequiredProtocolVersion == 0 ||
-		!snapshot.Enabled || !snapshot.Ready || !snapshot.Admitted ||
+		snapshot.Preparing || !snapshot.Enabled || !snapshot.Admitted ||
 		snapshot.PersistedExpressionProtocolActivationPending {
 		return false
 	}
@@ -356,6 +359,7 @@ func (s *service) acceptViewMetadataAdmissionSnapshot(
 	disabled bool,
 	publishIngress bool,
 	upgradeResult <-chan error,
+	minimumAuthoringProtocol uint64,
 ) (bool, <-chan error, error) {
 	s.lockViewMetadataAdmission()
 	defer s.viewMetadataAdmissionMu.Unlock()
@@ -394,6 +398,14 @@ func (s *service) acceptViewMetadataAdmissionSnapshot(
 			return false, upgradeResult, nil
 		}
 	}
+	if minimumAuthoringProtocol > 0 &&
+		(!s.persistedExpressionAuthoringSnapshotReady(current) ||
+			current.PersistedExpressionRequiredProtocolVersion < minimumAuthoringProtocol) {
+		return false, upgradeResult, nil
+	}
+	if minimumAuthoringProtocol > 0 {
+		s.publishPersistedExpressionAuthoringFloor(current)
+	}
 	if publishIngress {
 		if s.beforeViewMetadataAdmissionHandoff != nil {
 			s.beforeViewMetadataAdmissionHandoff()
@@ -428,11 +440,11 @@ func viewMetadataCatalogFenceRetryDelay(serviceID string, attempt uint32) time.D
 }
 
 func (s *service) waitForViewMetadataAdmission() error {
-	return s.waitForViewMetadataAdmissionHandoff(false)
+	return s.waitForViewMetadataAdmissionHandoff(false, 0)
 }
 
 func (s *service) waitForViewMetadataIngressAdmission() error {
-	return s.waitForViewMetadataAdmissionHandoff(true)
+	return s.waitForViewMetadataAdmissionHandoff(true, 0)
 }
 
 func pollBootstrapUpgradeResult(result <-chan error) (<-chan error, error) {
@@ -444,7 +456,7 @@ func pollBootstrapUpgradeResult(result <-chan error) (<-chan error, error) {
 	}
 }
 
-func (s *service) waitForViewMetadataAdmissionHandoff(publishIngress bool) error {
+func (s *service) waitForViewMetadataAdmissionHandoff(publishIngress bool, minimumAuthoringProtocol uint64) error {
 	if s.viewMetadataAdmissionGeneration == 0 {
 		// Focused unit tests can construct a partial service. Production
 		// NewService always allocates a non-zero generation.
@@ -480,9 +492,38 @@ func (s *service) waitForViewMetadataAdmissionHandoff(publishIngress bool) error
 
 	for {
 		snapshot := s.viewMetadataAdmission.Load()
+		if minimumAuthoringProtocol > 0 {
+			if err := s.checkViewMetadataGenerationRevoked(); err != nil {
+				return err
+			}
+			if snapshot != nil && snapshot.Generation != 0 && snapshot.Generation != s.viewMetadataAdmissionGeneration {
+				return moerr.NewInvalidStateNoCtx("CN system view admission generation was superseded")
+			}
+			if snapshot != nil && snapshot.PersistedExpressionRequiredProtocolVersion > uint64(defines.MORPCLatestVersion) {
+				return moerr.NewNotSupportedNoCtx("CN system view admission requires a newer protocol")
+			}
+		}
 		if snapshot != nil && !snapshot.Preparing && !snapshot.Enabled {
+			if minimumAuthoringProtocol > 0 {
+				// A new cluster can advertise a disabled snapshot before activation.
+				// Prerequisites are committed; wait for capability/fence heartbeats,
+				// without opening ingress or spinning on this unchanged snapshot.
+				select {
+				case <-discoveryCtx.Done():
+					return moerr.AttachCause(discoveryCtx, discoveryCtx.Err())
+				case <-operationCtx.Done():
+					return moerr.AttachCause(operationCtx, operationCtx.Err())
+				case upgradeErr := <-upgradeResult:
+					upgradeResult = nil
+					if upgradeErr != nil {
+						return upgradeErr
+					}
+				case <-s.viewMetadataAdmissionUpdated:
+				}
+				continue
+			}
 			accepted, result, upgradeErr := s.acceptViewMetadataAdmissionSnapshot(
-				snapshot, true, publishIngress, upgradeResult)
+				snapshot, true, publishIngress, upgradeResult, 0)
 			upgradeResult = result
 			if upgradeErr != nil {
 				return upgradeErr
@@ -573,13 +614,15 @@ func (s *service) waitForViewMetadataAdmissionHandoff(publishIngress bool) error
 				}
 			}
 			accepted, result, upgradeErr := s.acceptViewMetadataAdmissionSnapshot(
-				snapshot, false, publishIngress, upgradeResult)
+				snapshot, false, publishIngress, upgradeResult, minimumAuthoringProtocol)
 			upgradeResult = result
 			if upgradeErr != nil {
 				return upgradeErr
 			}
 			if accepted {
-				s.publishPersistedExpressionAuthoringFloor(snapshot)
+				if minimumAuthoringProtocol == 0 {
+					s.publishPersistedExpressionAuthoringFloor(snapshot)
+				}
 				return nil
 			}
 		}

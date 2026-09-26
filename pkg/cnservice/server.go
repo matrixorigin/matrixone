@@ -464,6 +464,23 @@ func (s *service) Start() (err error) {
 		return err
 	}
 	if err = s.startUnlessViewMetadataGenerationRevoked(func() error {
+		ctx, cancel := context.WithTimeoutCause(context.Background(), 5*time.Minute, moerr.CauseBootstrap)
+		defer cancel()
+		if s.pu != nil {
+			ctx = context.WithValue(ctx, config.ParameterUnitKey, s.pu)
+		}
+		complete, err := bootstrap.SystemViewsExist(ctx, s.sqlExecutor)
+		if err != nil || complete {
+			return err
+		}
+		if err = s.waitForViewMetadataAdmissionHandoff(false, uint64(defines.MORPCVersion97)); err != nil {
+			return err
+		}
+		return bootstrap.InitSystemViews(ctx, s.sqlExecutor)
+	}); err != nil {
+		return err
+	}
+	if err = s.startUnlessViewMetadataGenerationRevoked(func() error {
 		return s.startSiriusRuntime(context.Background())
 	}); err != nil {
 		return err
