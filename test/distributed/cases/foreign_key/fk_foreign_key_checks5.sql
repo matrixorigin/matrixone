@@ -43,6 +43,16 @@ drop table fk_foreign_key_checks5_db1.t2;
 --no error
 drop database fk_foreign_key_checks5_db0;
 
+-- Checks disabled permits dropping a database referenced from another database.
+create database fk_foreign_key_checks5_db0;
+create table fk_foreign_key_checks5_db0.t1(a int primary key);
+create table fk_foreign_key_checks5_db1.t2(b int, foreign key (b) references fk_foreign_key_checks5_db0.t1(a));
+set foreign_key_checks=0;
+drop database fk_foreign_key_checks5_db0;
+set foreign_key_checks=1;
+select count(*) as dropped_with_checks_off from mo_catalog.mo_database where account_id = 0 and datname = 'fk_foreign_key_checks5_db0';
+drop table fk_foreign_key_checks5_db1.t2;
+
 drop database if exists fk_foreign_key_checks5;
 drop database if exists fk_foreign_key_checks5_db0;
 drop database if exists fk_foreign_key_checks5_db1;
