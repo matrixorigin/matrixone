@@ -464,9 +464,9 @@ func (builder *QueryBuilder) flattenSubqueryWithConsumer(
 	// Pagination can delete the one aggregate result row even when COUNT
 	// would otherwise produce zero. Capture this before pagination is
 	// rewritten into a per-correlation-key window/filter.
-	countRowDiscarded := false
-	if subquery.Typ == plan.SubqueryRef_SCALAR && builder.findAggrCount(subCtx.aggregates) {
-		countRowDiscarded = builder.scalarCountRowDiscardedByPagination(subID)
+	aggregateRowUnsafe, aggregateRowDeleted := false, false
+	if subquery.Typ == plan.SubqueryRef_SCALAR && len(subCtx.aggregates) > 0 {
+		aggregateRowUnsafe, aggregateRowDeleted = builder.scalarAggregatePagination(subID)
 	}
 	subID, preds, err := builder.pullupCorrelatedPredicates(subID, subCtx, subquery.Typ, true)
 	if err != nil {
@@ -512,7 +512,7 @@ func (builder *QueryBuilder) flattenSubqueryWithConsumer(
 		var rewriteCount bool
 		// Preserve the legacy COUNT fallback for plan shapes that cannot use the
 		// more precise empty-input projection reconstruction below.
-		if len(joinPreds) > 0 && !countRowDiscarded && len(subCtx.groups) == 0 && len(subCtx.results) == 1 &&
+		if len(joinPreds) > 0 && !aggregateRowUnsafe && len(subCtx.groups) == 0 && len(subCtx.results) == 1 &&
 			builder.findAggrCount(subCtx.aggregates) {
 			// An implicit single-group COUNT produces zero on empty input.
 			// Follow identity projections through ordering/duplicate wrappers;
@@ -567,7 +567,7 @@ func (builder *QueryBuilder) flattenSubqueryWithConsumer(
 
 		var postJoinProjection *plan.Expr
 		var finalizeProjection bool
-		if !countRowDiscarded {
+		if !aggregateRowUnsafe {
 			postJoinProjection, finalizeProjection, err =
 				builder.prepareCorrelatedScalarAggregatePostJoinProjection(subID, subCtx, joinPreds)
 		}
@@ -663,7 +663,7 @@ func (builder *QueryBuilder) flattenSubqueryWithConsumer(
 				Typ: makePlan2Type(&returnType),
 			}
 		}
-		if localCTEHaving != nil {
+		if localCTEHaving != nil && !aggregateRowDeleted {
 			if !finalizeProjection && !rewriteCount {
 				return 0, nil, moerr.NewNYI(builder.GetContext(),
 					"correlated COUNT HAVING without a proven raw COUNT result")
@@ -1455,25 +1455,32 @@ func replaceAggregateRefsForPostJoin(
 	}
 }
 
-// scalarCountRowDiscardedByPagination checks the original scalar plan,
-// before its LIMIT/OFFSET nodes are rewritten into a per-key window.
-func (builder *QueryBuilder) scalarCountRowDiscardedByPagination(root int32) bool {
+// scalarAggregatePagination checks the original scalar plan before its
+// pagination is rewritten into a per-key window. The first return value
+// prevents empty-input restoration for any aggregate when the result row may
+// be removed. The second proves the row is always removed, so a detached
+// COUNT HAVING predicate need not be evaluated above the join.
+func (builder *QueryBuilder) scalarAggregatePagination(root int32) (unsafe, deleted bool) {
 	for {
 		n := builder.qry.Nodes[root]
 		if n.Limit != nil {
 			lit := n.Limit.GetLit()
-			if lit == nil || lit.GetU64Val() == 0 {
-				return true
+			if lit == nil {
+				unsafe = true
+			} else if lit.GetU64Val() == 0 {
+				deleted = true
 			}
 		}
 		if n.Offset != nil {
 			lit := n.Offset.GetLit()
-			if lit == nil || lit.GetU64Val() != 0 {
-				return true
+			if lit == nil {
+				unsafe = true
+			} else if lit.GetU64Val() != 0 {
+				deleted = true
 			}
 		}
 		if n.NodeType == plan.Node_AGG || len(n.Children) != 1 {
-			return false
+			return unsafe || deleted, deleted
 		}
 		root = n.Children[0]
 	}

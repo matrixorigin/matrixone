@@ -288,6 +288,21 @@ set @count_threshold=2;
 execute count_having_stmt using @count_threshold;
 deallocate prepare count_having_stmt;
 
+-- Pagination deletes the one aggregate result row, regardless of its
+-- empty-input identity. HAVING must not turn the deleted row into an error.
+select p.id, (select bit_or(a.id) from pages a where a.id=p.id
+              limit 1 offset 1) as v
+from pages p where p.id in (1, 2) order by p.id;
+select p.id, (select bit_and(a.id) from pages a where a.id=p.id
+              limit 1 offset 1) as v
+from pages p where p.id in (1, 2) order by p.id;
+select p.id, (select count(*)+1 from pages a where a.id=p.id and a.id<2
+              having count(*)>=0 limit 0) as v
+from pages p where p.id in (1, 2) order by p.id;
+select p.id, (select count(*)+1 from pages a where a.id=p.id and a.id<2
+              having count(*)>=0 limit 1 offset 1) as v
+from pages p where p.id in (1, 2) order by p.id;
+
 -- Empty outer input starts no parameter partitions.
 select p.id,
        (with recursive r(n) as (

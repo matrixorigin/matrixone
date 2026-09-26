@@ -385,6 +385,30 @@ execute count_having_stmt using @count_threshold;
 1  ¦  null  𝄀
 2  ¦  null
 deallocate prepare count_having_stmt;
+select p.id, (select bit_or(a.id) from pages a where a.id=p.id
+limit 1 offset 1) as v
+from pages p where p.id in (1, 2) order by p.id;
+➤ id[4,32,0]  ¦  v[-5,64,0]  𝄀
+1  ¦  null  𝄀
+2  ¦  null
+select p.id, (select bit_and(a.id) from pages a where a.id=p.id
+limit 1 offset 1) as v
+from pages p where p.id in (1, 2) order by p.id;
+➤ id[4,32,0]  ¦  v[-5,64,0]  𝄀
+1  ¦  null  𝄀
+2  ¦  null
+select p.id, (select count(*)+1 from pages a where a.id=p.id and a.id<2
+having count(*)>=0 limit 0) as v
+from pages p where p.id in (1, 2) order by p.id;
+➤ id[4,32,0]  ¦  v[-5,64,0]  𝄀
+1  ¦  null  𝄀
+2  ¦  null
+select p.id, (select count(*)+1 from pages a where a.id=p.id and a.id<2
+having count(*)>=0 limit 1 offset 1) as v
+from pages p where p.id in (1, 2) order by p.id;
+➤ id[4,32,0]  ¦  v[-5,64,0]  𝄀
+1  ¦  null  𝄀
+2  ¦  null
 select p.id,
 (with recursive r(n) as (
 select p.parent_id union all select n-1 from r where n>1

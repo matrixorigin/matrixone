@@ -60,6 +60,28 @@ func TestLocalCTEOuterReferencesExecutablePlan(t *testing.T) {
 				select count(*)+count(n) from q order by count(*)) from tpch.nation p`,
 		},
 		{
+			name: "bit or offset deletes scalar result",
+			sql: `select p.n_nationkey, (select bit_or(a.n_nationkey) from tpch.nation a
+				where a.n_nationkey=p.n_nationkey limit 1 offset 1) from tpch.nation p`,
+		},
+		{
+			name: "bit and offset deletes scalar result",
+			sql: `select p.n_nationkey, (select bit_and(a.n_nationkey) from tpch.nation a
+				where a.n_nationkey=p.n_nationkey limit 1 offset 1) from tpch.nation p`,
+		},
+		{
+			name: "ordinary count having limit zero",
+			sql: `select p.n_nationkey, (select count(*)+1 from tpch.nation a
+				where a.n_nationkey=p.n_nationkey having count(*)>=0 limit 0)
+				from tpch.nation p`,
+		},
+		{
+			name: "ordinary count having offset deletes result",
+			sql: `select p.n_nationkey, (select count(*)+1 from tpch.nation a
+				where a.n_nationkey=p.n_nationkey having count(*)>=0 limit 1 offset 1)
+				from tpch.nation p`,
+		},
+		{
 			name: "ordinary grouped having control",
 			sql: `select p.n_nationkey, (select count(*) from tpch.nation a
 				where a.n_nationkey=p.n_nationkey group by a.n_nationkey having count(*)=1)
