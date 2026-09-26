@@ -708,7 +708,7 @@ func buildDefaultExprWithColumns(
 	} else {
 		binder = NewDefaultBinder(bindCtx, nil, nil, typ, nil)
 	}
-	planExpr, err := binder.BindExpr(semanticExpr, 0, false)
+	planExpr, err := binder.bindPersistedExpr(semanticExpr, 0, false)
 	if err != nil {
 		return nil, err
 	}
@@ -792,7 +792,7 @@ func buildOnUpdate(bindCtx context.Context, col *tree.ColumnTableDef, typ plan.T
 	}
 
 	binder := NewDefaultBinder(bindCtx, nil, nil, typ, nil)
-	planExpr, err := binder.BindExpr(expr, 0, false)
+	planExpr, err := binder.bindPersistedExpr(expr, 0, false)
 	if err != nil {
 		return nil, err
 	}
@@ -882,7 +882,7 @@ func buildGeneratedExpr(bindCtx context.Context, col *tree.ColumnTableDef, typ p
 	}
 
 	binder := NewGeneratedColBinder(bindCtx, colNames, colTypes)
-	planExpr, err := binder.BindExpr(genAttr.Expr, 0, false)
+	planExpr, err := binder.bindPersistedExpr(genAttr.Expr, 0, false)
 	if err != nil {
 		return nil, err
 	}

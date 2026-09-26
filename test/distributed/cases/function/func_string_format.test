@@ -404,3 +404,15 @@ SET @format_precision = '1.9tail';
 EXECUTE format_precision_stmt USING @format_precision;
 DEALLOCATE PREPARE format_precision_stmt;
 SET @format_precision = NULL;
+
+-- Catalog precision keeps its historical source domain before integer binding.
+DROP TABLE IF EXISTS format_catalog_precision;
+CREATE TABLE format_catalog_precision(p DATE, a VARCHAR(64) DEFAULT (FORMAT(1.125,CAST('2024-01-01' AS DATE))), g VARCHAR(64) GENERATED ALWAYS AS (FORMAT(1.125,p)) STORED, CHECK (FORMAT(1.125,p) <> ''));
+INSERT INTO format_catalog_precision(p) VALUES ('2024-01-01'), (NULL);
+SELECT p,a,g FROM format_catalog_precision ORDER BY p;
+DROP TABLE IF EXISTS format_catalog_precision_copy;
+CREATE TABLE format_catalog_precision_copy AS SELECT a FROM format_catalog_precision WHERE p IS NOT NULL;
+INSERT INTO format_catalog_precision_copy VALUES (DEFAULT);
+SELECT a FROM format_catalog_precision_copy;
+DROP TABLE format_catalog_precision_copy;
+DROP TABLE format_catalog_precision;

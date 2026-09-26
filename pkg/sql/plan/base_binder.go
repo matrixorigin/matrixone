@@ -3603,6 +3603,9 @@ func (b *baseBinder) coerceBoolNumericAggregateArg(
 }
 
 func (b *baseBinder) bindFuncExprImplByAstExpr(name string, astArgs []tree.Expr, depth int32) (*plan.Expr, error) {
+	if name == "format" && b.persistedFormatCompatibility {
+		return b.bindPersistedFormat(astArgs, depth)
+	}
 	if (name == "utc_time" || name == "utc_timestamp") && len(astArgs) == 1 {
 		if _, ok := astArgs[0].(*tree.NumVal); !ok {
 			return nil, invalidUTCFunctionFSPError(b.GetContext(), name)

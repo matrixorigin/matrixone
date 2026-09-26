@@ -101,3 +101,10 @@ FORMAT：只迁移 precision，输出格式与 exact/approximate 第一参数域
 ## 7. 审批结论
 
 用户已批准：增加必要的 append-only execution identity，并分配独立 MORPC capability（最终为 v98，合并前再次核对）；共享 CAST v85 不改号、不扩写已发布含义。按本文实现、验证并创建 #28981 的 draft PR。
+
+## 8. Review 修正：源域必须在绑定前保留
+
+- MAKETIME 的 BINARY/VARBINARY/BLOB seconds 不是整数位置。保留原数值转换路径（FLOAT64/动态小数 scale），不能以 `IsMySQLString` 将其归入 INT64；HEX/BIT literal 的既有整数值/scale 语义仍保持。
+- 仅在成功绑定之后撤销 FORMAT precision 转换不足以实现第 4 节：DATE 等历史可用 source 会先被 private INT64 CAST 拒绝。五个 catalog authoring/rebuild 入口以 `bindPersistedExpr` 限定作用域，在 FORMAT 参数绑定之前直接选 legacy 字符串契约；使用原 AST 做普通 selector 绑定。作用域通过 defer 在成功或错误时恢复，不影响 transient query 或其它 consumer。
+- 原 post-binding bridge 保留，用于已有 typed plan 的兼容转换。新 catalog 路径不先生成再删除自身整数 coercion；嵌套真实 consumer 的 capability 仍由其各自绑定和最终 owner 扫描保留。
+- Review 修复已合并 `mo/main@9c79a6edfc`：v97 现在是已合入的 decimal division capability，和本 PR v98 同时保留。

@@ -17,10 +17,54 @@ package plan
 import (
 	"context"
 
+	"github.com/matrixorigin/matrixone/pkg/common/moerr"
 	"github.com/matrixorigin/matrixone/pkg/container/types"
 	planpb "github.com/matrixorigin/matrixone/pkg/pb/plan"
+	"github.com/matrixorigin/matrixone/pkg/sql/parsers/tree"
 	"github.com/matrixorigin/matrixone/pkg/sql/plan/function"
 )
+
+// bindPersistedExpr selects catalog FORMAT semantics before argument binding.
+// A post-binding bridge alone cannot recover source domains rejected by the
+// transient integer precision contract. Keep the mode scoped to this authoring
+// operation; nested non-FORMAT consumers retain their own argument contracts.
+func (b *baseBinder) bindPersistedExpr(ast tree.Expr, depth int32, isRoot bool) (*planpb.Expr, error) {
+	previous := b.persistedFormatCompatibility
+	b.persistedFormatCompatibility = true
+	defer func() { b.persistedFormatCompatibility = previous }()
+	return b.impl.BindExpr(ast, depth, isRoot)
+}
+
+func (b *baseBinder) bindPersistedFormat(astArgs []tree.Expr, depth int32) (*planpb.Expr, error) {
+	ctx := b.GetContext()
+	if len(astArgs) < 2 || len(astArgs) > 3 {
+		return nil, moerr.NewInvalidInput(ctx, "format function has invalid argument count")
+	}
+	varchar := planpb.Type{Id: int32(types.T_varchar), Width: types.MaxVarcharLen}
+	args := make([]*planpb.Expr, len(astArgs))
+	for i, ast := range astArgs {
+		source, err := b.impl.BindExpr(ast, depth, false)
+		if err != nil {
+			return nil, err
+		}
+		// Only precision/locale historically accept date-like values. Do not
+		// broaden FORMAT's first-argument domain as part of catalog rebuilding.
+		if i == 0 && types.T(source.Typ.Id).IsDateRelate() {
+			return nil, moerr.NewInvalidInput(ctx, "format function has invalid first argument type")
+		}
+		args[i], err = appendCastBeforeExpr(ctx, source, varchar)
+		if err != nil {
+			return nil, err
+		}
+	}
+	id := function.EncodeOverloadID(function.FORMAT, int32(len(args)-2))
+	typ := types.T_varchar.ToType()
+	result := makePlan2Type(&typ)
+	result.NotNullable = function.DeduceNotNullable(id, args)
+	return &planpb.Expr{Typ: result, Expr: &planpb.Expr_F{F: &planpb.Function{
+		Func: getFunctionObjRef(id, "format"), Args: args,
+	}}}, nil
+}
 
 // preservePersistedFormatCompatibility keeps catalog expressions executable by
 // pre-v59 CNs, including after downgrade. Catalog consumers can evaluate locally

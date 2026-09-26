@@ -57,13 +57,13 @@ func makeTimeIntegerCheck(overloads []overload, inputs []types.Type) checkResult
 		return newCheckResultWithFailure(failedFunctionParametersWrong)
 	}
 	second := inputs[2]
-	target := types.T_float64
+	target := types.T_float64 // Binary strings retain fractional seconds through FLOAT64, not INT64.
 	switch {
 	case isMakeTimeTextType(second.Oid) || second.Oid.IsDecimal():
 		target = types.T_varchar
 	case second.Oid.IsUnsignedInt() || second.Oid == types.T_bit:
 		target = types.T_uint64
-	case second.Oid.IsInteger() || second.Oid == types.T_bool || second.Oid == types.T_any || second.Oid.IsMySQLString():
+	case second.Oid.IsInteger() || second.Oid == types.T_bool || second.Oid == types.T_any:
 		target = types.T_int64
 	}
 	for i, ov := range overloads {

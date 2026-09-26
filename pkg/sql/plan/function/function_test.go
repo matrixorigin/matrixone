@@ -1184,7 +1184,15 @@ func TestMakeTimeBinaryArgumentsUseNumericOverloads(t *testing.T) {
 			result, err := GetFunctionByName(proc.Ctx, "maketime", inputs)
 			require.NoError(t, err)
 			require.True(t, result.needCast)
-			require.Equal(t, types.T_int64, result.targetTypes[position].Oid)
+			if position == 2 {
+				// Seconds are not an integer parameter. Binary strings may
+				// contain fractions and require the floating numeric path.
+				require.Equal(t, types.T_float64, result.targetTypes[position].Oid)
+				require.Equal(t, int32(-1), result.targetTypes[position].Scale)
+				require.Equal(t, types.T_time.ToTypeWithScale(6), result.retType)
+			} else {
+				require.Equal(t, types.T_int64, result.targetTypes[position].Oid)
+			}
 		}
 	}
 }

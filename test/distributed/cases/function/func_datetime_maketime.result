@@ -191,3 +191,15 @@ EXECUTE maketime_integer_stmt USING @maketime_hour, @maketime_minute;
 12:00:01.125
 DEALLOCATE PREPARE maketime_integer_stmt;
 SET @maketime_hour = NULL, @maketime_minute = NULL;
+SELECT CAST(MAKETIME(1.0,1,CAST('1.5' AS BINARY)) AS VARCHAR);
+➤ cast(MAKETIME(1.0, 1, cast(1.5 as binary)) as varchar)[12,65535,0]  𝄀
+01:01:01.500000
+DROP TABLE IF EXISTS maketime_binary_seconds;
+CREATE TABLE maketime_binary_seconds(s VARBINARY(8), g TIME(6) GENERATED ALWAYS AS (MAKETIME(1.0,1,s)) STORED);
+INSERT INTO maketime_binary_seconds(s) VALUES ('1.5'), ('59.5'), (NULL);
+SELECT s,CAST(MAKETIME(1.0,1,s) AS VARCHAR),CAST(g AS VARCHAR) FROM maketime_binary_seconds ORDER BY s;
+➤ s[-3,8,0]  ¦  cast(MAKETIME(1.0, 1, s) as varchar)[12,65535,0]  ¦  cast(g as varchar)[12,65535,0]  𝄀
+null  ¦  null  ¦  null  𝄀
+1.5  ¦  01:01:01.500000  ¦  01:01:01.500000  𝄀
+59.5  ¦  01:01:59.500000  ¦  01:01:59.500000
+DROP TABLE maketime_binary_seconds;

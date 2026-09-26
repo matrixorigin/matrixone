@@ -69,6 +69,9 @@ func TestSpecialIntegerArgumentEvaluation(t *testing.T) {
 		{"makedate(2024,'1.9')", "2024-01-01", false, false},
 		{"makedate(2024,cast('9223372036854775808' as unsigned))", "", false, true},
 		{"makedate(null,1)", "", true, false},
+		{"cast(maketime(1.0,1,cast('1.5' as binary)) as varchar)", "01:01:01.500000", false, false},
+		{"cast(maketime(1.0,1,cast(null as binary)) as varchar)", "", true, false},
+		{"cast(maketime(1.0,1,X'01') as varchar)", "01:01:01", false, false},
 		{"cast(maketime(2.5e0,1.5,3.125) as varchar)", "02:02:03.125", false, false},
 		{"cast(maketime(cast(2.5 as double),2.5,3.125) as varchar)", "02:03:03.125", false, false},
 		{"cast(maketime(-12.5,59,59.9999996) as varchar)", "-14:00:00.000000", false, false},
@@ -111,6 +114,36 @@ func TestSpecialIntegerArgumentEvaluation(t *testing.T) {
 					}
 				})
 			}
+		})
+	}
+}
+
+func TestMakeTimeBinarySecondsColumns(t *testing.T) {
+	proc := testutil.NewProcess(t)
+	stmt, err := parsers.ParseOne(proc.Ctx, dialect.MYSQL, "select cast(maketime(1.0,1,s) as varchar)", 1)
+	require.NoError(t, err)
+	defer stmt.Free()
+	ast := stmt.(*tree.Select).Select.(*tree.SelectClause).Exprs[0].Expr
+	for _, oid := range []types.T{types.T_binary, types.T_varbinary, types.T_blob} {
+		t.Run(oid.String(), func(t *testing.T) {
+			typ := oid.ToType()
+			expr, err := NewGeneratedColBinder(proc.Ctx, []string{"s"}, []planpb.Type{makePlan2Type(&typ)}).BindExpr(ast, 0, false)
+			require.NoError(t, err)
+			input := batch.NewWithSize(1)
+			defer input.Clean(proc.Mp())
+			input.Vecs[0] = vector.NewVec(typ)
+			for _, seconds := range []string{"1.5", "59.5", ""} {
+				require.NoError(t, vector.AppendBytes(input.Vecs[0], []byte(seconds), seconds == "", proc.Mp()))
+			}
+			input.SetRowCount(3)
+			result, free, err := colexec.GetReadonlyResultFromExpression(proc, expr, []*batch.Batch{input})
+			if free != nil {
+				defer free()
+			}
+			require.NoError(t, err)
+			require.Equal(t, "01:01:01.500000", result.GetStringAt(0))
+			require.Equal(t, "01:01:59.500000", result.GetStringAt(1))
+			require.True(t, result.IsNull(2))
 		})
 	}
 }
@@ -219,6 +252,11 @@ func TestPersistedFormatPrecisionCompatibility(t *testing.T) {
 	require.NoError(t, err)
 	require.NoError(t, preservePersistedFormatCompatibility(proc.Ctx, expr))
 	version, err := RequiredPersistedExpressionProtocolVersion(expr)
+	require.NoError(t, err)
+	require.Equal(t, int64(defines.MORPCVersion85), version)
+	catalogExpr, err := NewDefaultBinder(proc.Ctx, nil, nil, planpb.Type{}, nil).bindPersistedExpr(stmt.(*tree.Select).Select.(*tree.SelectClause).Exprs[0].Expr, 0, false)
+	require.NoError(t, err)
+	version, err = RequiredPersistedExpressionProtocolVersion(catalogExpr)
 	require.NoError(t, err)
 	require.Equal(t, int64(defines.MORPCVersion85), version)
 }
