@@ -328,6 +328,7 @@ const (
 	planDatetimeTypeID               int32 = 52
 	planTimestampTypeID              int32 = 53
 	planInt64TypeID                  int32 = 23
+	planUint32TypeID                 int32 = 27
 	planAnyTypeID                    int32 = 0
 	maxVarcharWidth                  int32 = 65535
 )
@@ -391,7 +392,7 @@ type RemoteExpressionFeatures struct {
 	PreparedPrecisionScalar           bool
 	DecimalDivisionSemantics          bool
 	TemporalResultContracts           bool
-	LegacyTemporalResultContracts     bool
+	InvalidTemporalResultContract     bool
 	NormalizedIntervalUnits           bool
 	LegacyIntervalUnits               bool
 	WeekSessionDefault                bool
@@ -418,7 +419,7 @@ func (features RemoteExpressionFeatures) Any() bool {
 		features.PreparedPrecisionScalar ||
 		features.DecimalDivisionSemantics ||
 		features.TemporalResultContracts ||
-		features.LegacyTemporalResultContracts ||
+		features.InvalidTemporalResultContract ||
 		features.NormalizedIntervalUnits ||
 		features.LegacyIntervalUnits ||
 		features.WeekSessionDefault
@@ -875,22 +876,39 @@ func RequiredRemoteExpressionFeatures(owner any) (features RemoteExpressionFeatu
 				if id == 216 && (overload == 0 || overload == 1) { // one-arg WEEK
 					features.WeekSessionDefault = true
 				}
-				// EXTRACT and string-first ADDTIME/SUBTIME retain their overload
-				// numbers but changed physical result vectors in v98. Observe
-				// both result shapes so incoming legacy plans fail before execution.
-				if id == 208 && overload >= 0 && overload <= 4 {
-					features.TemporalResultContracts = true
-					if current.Typ.Id != planInt64TypeID {
-						features.LegacyTemporalResultContracts = true
+				// Released overloads retain their physical vector ABI. The new
+				// numeric EXTRACT and string ADDTIME/SUBTIME results use appended
+				// identities, so 4.2 catalog expressions remain executable.
+				if id == 208 && overload >= 0 && overload <= 9 {
+					want := planVarcharTypeID
+					if overload == 1 {
+						want = planUint32TypeID
 					}
-				}
-				if (id == 41 || id == 378) && len(fn.Args) == 2 && fn.Args[0] != nil &&
-					isPlanMySQLStringType(fn.Args[0].Typ.Id) {
-					features.TemporalResultContracts = true
-					if current.Typ.Id == planDatetimeTypeID {
-						features.LegacyTemporalResultContracts = true
+					if overload >= 5 {
+						want = planInt64TypeID
+						features.TemporalResultContracts = true
 					}
+					features.InvalidTemporalResultContract = features.InvalidTemporalResultContract || current.Typ.Id != want
 				}
+				if (id == 41 && overload >= 6 && overload <= 11) || (id == 378 && overload >= 6 && overload <= 15) {
+					want := planDatetimeTypeID
+					preparedTime := false
+					if (id == 41 && overload >= 9) || (id == 378 && overload >= 11) {
+						want = planVarcharTypeID
+						// A direct prepared first marker has a TIME(6) result;
+						// its string payload still uses this executor.
+						preparedTime = current.Typ.Id == planTimeTypeID
+						features.TemporalResultContracts = true
+					}
+					features.InvalidTemporalResultContract = features.InvalidTemporalResultContract || (!preparedTime && current.Typ.Id != want)
+				}
+				// Stable TIME integer identities also changed the endpoint/error
+				// contract. In 4.2, 838:59:59 + 1 SECOND returned 839:00:00;
+				// newly bound execution returns NULL + warning 1441.
+				if (id == 224 && overload == 5) || (id == 225 && overload == 6) {
+					features.TemporalResultContracts = true
+				}
+
 				if (id == 72 || id == 103) && len(fn.Args) == 2 &&
 					hasPrivateIntegerPrecisionCast(fn.Args[1]) {
 					features.PreparedPrecisionScalar = true

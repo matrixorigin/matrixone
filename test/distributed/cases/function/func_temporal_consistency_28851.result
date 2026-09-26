@@ -410,6 +410,30 @@ cast(x'' as unsigned) as binary_unsigned_zero,
 cast(x'' as double) as binary_double_zero;
 ➤ binary_signed_zero[-5,64,0]  ¦  binary_unsigned_zero[-5,64,0]  ¦  binary_double_zero[8,53,31]  𝄀
 0  ¦  0  ¦  0.0
+set sql_mode = '';
+insert into temporal_empty_time values (4, '');
+insert into temporal_empty_time select 5, v from interval_text where v is null;
+prepare empty_time_assign from 'insert into temporal_empty_time values (?, ?)';
+set @empty_id = 6, @empty_value = '';
+execute empty_time_assign using @empty_id, @empty_value;
+set sql_mode = 'STRICT_TRANS_TABLES';
+set @empty_id = 7;
+execute empty_time_assign using @empty_id, @empty_value;
+deallocate prepare empty_time_assign;
+set sql_mode = '';
+prepare empty_time_update from 'update temporal_empty_time set value = ? where id = 2';
+execute empty_time_update using @empty_value;
+deallocate prepare empty_time_update;
+select id, ifnull(cast(value as char), 'NULL') as value from temporal_empty_time order by id;
+➤ id[4,32,0]  ¦  value[12,65535,0]  𝄀
+1  ¦  NULL  𝄀
+2  ¦  NULL  𝄀
+3  ¦  00:00:00  𝄀
+4  ¦  NULL  𝄀
+5  ¦  NULL  𝄀
+6  ¦  NULL  𝄀
+7  ¦  NULL
+set sql_mode = 'STRICT_TRANS_TABLES';
 drop table temporal_empty_time;
 prepare inactive_temporal_cast from
 'select case when 0 then cast(''123 -12:34:56.000000'' as datetime(6)) else cast(''2024-01-01'' as datetime(6)) end';
