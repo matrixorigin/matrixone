@@ -1,13 +1,15 @@
 # Temporal compatibility repair after MORPC 97
 
-Status: draft, pending complete target and design approval.  The user accepted
-the C03, C13, and C12/C34 choices on 2026-09-26.  Implementation PR:
+Status: product target decided by GPT-6-astra/xhigh on 2026-09-26 at the
+user's request; this revised text awaits exact-revision design review.  The
+user directly accepted C03, C13, and C12/C34.  Implementation PR:
 [#28851](https://github.com/matrixorigin/matrixone/pull/28851).  This document
 records the target for integrating that PR with main after #29241.  The PR's
 C01–C42 matrix is frozen in the accompanying
 [contract appendix](20260926-temporal-compatibility-contract.md); this document
 defines the decisions and ownership boundaries that those examples must satisfy.
-Other target choices below remain proposals until explicitly accepted.
+The decision record in the appendix governs the remaining expect behavior.
+Implementation evidence and final PR review remain separate gates.
 
 ## Problem and evidence
 
@@ -19,8 +21,11 @@ new coordinator routing changed temporal semantics to released 4.2 workers.
 Those are violations of result-domain, evaluation, grammar, and mixed-version
 ownership, respectively.  The current PR head fixes the local reproductions,
 but its latest remote BVT run still has 67 proxy and 5 pessimistic failures.
-Coverage did not calculate a verdict because those producers failed.  These
-failures need classification before changing any expected result.
+Coverage did not calculate a verdict because those producers failed.  Exact
+CI logs show a mixture: outdated temporal goldens, an un-restored `sql_mode`
+in the new temporal BVT that changes later unrelated tests, and three identical
+decimal-comparison warnings where one was expected.  The last is an
+unresolved diagnostic regression, not an approved expectation change.
 
 The PR was based on `3f0a68bd8034d37e098765920f328985c308c9ff`.
 Current main `b457977980137e5056be18f03b22da6fc31908e0` adds decimal
@@ -29,7 +34,7 @@ semantics to MORPC 97.  A worker advertising 97 after #29241 is not thereby
 capable of the PR's temporal behavior.  Textual conflict resolution alone would
 break mixed-version admission.
 
-## Proposed target and explicit differences from MySQL
+## Decided target and explicit differences from MySQL
 
 1. Equivalent temporal arithmetic has one exact-result policy.  A valid
    evaluated DATE_ADD/SUB, ADDTIME/SUBTIME, or TIMEDIFF result outside its SQL
@@ -45,21 +50,26 @@ break mixed-version admission.
    Explicit numeric/text zero remains valid.  This deliberately departs from
    the main/MySQL no-op behavior of some compound units.  Parsing validity
    cannot depend on whether a caller requests an overflow-status output.
-3. Numeric scalar intervals retain their unit, scale with checked arithmetic,
-   then round once half away from zero; exact DECIMAL values remain exact.
+3. DATE_ADD/SUB numeric scalar intervals retain their unit, scale with checked
+   arithmetic, then round once half away from zero; exact DECIMAL values remain
+   exact.  FLOAT uses its binary multiplication/rounding path.  TIMESTAMPADD
+   retains its declared integer-amount coercion.
    Compound numeric values use the documented field normalization, while
    VARCHAR keeps its released field grammar.  These source-type differences
    are explicit; transport or constant folding is not a semantic distinction.
 4. Preserve released 4.2 exceptions: ordinary empty text assigned/cast to TIME
-   produces NULL, whitespace-only produces zero, the numeric versus VARCHAR
+   produces NULL, but `TIME('')` / `TIME ''` retains zero under the TIME-function
+   grammar.  Whitespace-only produces zero, the numeric versus VARCHAR
    compound grammar remains distinct, and the established STR_TO_DATE `%%`
    extension remains.  These are not claims of MySQL parity.  New binding may
    change result family/FSP/width where specified in C01–C42; released stored
    expression identities keep their physical ABI.  Already normalized stored
    constants are not reparsed using the new interval grammar.
-5. Ordinary calendar years are 1–9999 with real date validation; typed all-zero
-   and mode-controlled partial-zero values follow their explicit exceptional
-   contracts.  TIME remains a signed duration bounded by ±838:59:59 with FSP
+5. Ordinary calendar years are 1–9999 with real date validation.  Typed
+   all-zero sentinel fields stay zero; all-zero *text* calendar fields depend on
+   `NO_ZERO_DATE`, while accepted partial-zero raw fields and valid zero-calendar
+   clocks remain inspectable.  The appendix freezes the exact truth table.
+   TIME remains a signed duration bounded by ±838:59:59 with FSP
    0–6.  Unsupported SQL types/units fail at binding, not as a row-value
    exception.  Explicit strict numeric PERIOD APIs keep their own error policy.
 
@@ -76,7 +86,7 @@ Full MySQL 8.0 behavior would saturate some TIME arithmetic and preserve some
 no-digit compound no-ops.  It reduces one migration difference but makes
 equivalent MatrixOne arithmetic disagree and accepts malformed text as success.
 Retaining the current branch without one owner leaves typed/string and
-TIME/DATETIME path dependence.  The proposed contract centralizes parse,
+TIME/DATETIME path dependence.  The decided contract centralizes parse,
 checked arithmetic, final-domain validation, and diagnostic publication while
 limiting compatibility exceptions to documented release behavior.  The MySQL
 8.0.46 observations in the PR are comparison data, not an automatic oracle for
@@ -87,11 +97,11 @@ all versions or MatrixOne operations.
 | Owner | Required closure |
 | --- | --- |
 | `pkg/container/types` | Classify complete temporal syntax; distinguish invalid, internal numeric overflow, and valid zero; bound parser field storage and work per input byte. |
-| Function evaluators | Perform checked intermediate arithmetic; validate the final SQL domain once for typed/string and ADD/SUB siblings; preserve adjacent valid rows and NULL masks. |
+| Function evaluators | Perform checked intermediate arithmetic; validate the final SQL domain once for typed/string and ADD/SUB siblings; preserve adjacent valid rows and NULL masks.  Shared SQL HEX/BIT numeric casts and numeric-to-TIME conversion retain their separate source/operation rules. |
 | Binder and constant folder | Keep family/FSP/width and source provenance; fold without publishing an EXECUTE-only diagnostic from an inactive expression.  Repeated prepared execution observes current session state. |
 | Session/process codec | Carry sql_mode, time zone, and week mode to remote consumers; unavailable required state fails explicitly. |
 | Function registry and persistence | Preserve released 4.2 physical overload ABI; new SQL binds new identities where needed; view/default/CTAS/Substrait consumers see the declared result type. |
-| Compile, wire, and catalog admission | Decimal division requires MORPC 97.  Temporal semantics require one *new* final epoch, MORPC 98 while main remains at 97.  New temporal expressions may execute only on workers advertising 98; a 97 worker remains eligible for decimal-only plans.  Apply this at feature detection, placement, send, receive, and persisted-expression admission.  Do not change the meaning of decimal 97. |
+| Compile, wire, and catalog admission | Decimal division requires MORPC 97.  The changed temporal/conversion contract requires one *new* final epoch, MORPC 98 while main remains at 97.  Detect all changed identities, including SQL HEX/BIT numeric casts, numeric-to-TIME, string-to-temporal casts, and stable temporal arithmetic IDs.  A 97 worker remains semantically eligible for decimal-only plans, subject to the deployment's admission floor.  Apply this at feature detection, placement, send, receive, and persisted-expression admission.  Do not change the meaning of decimal 97. |
 | Bootstrap | Commit prerequisite tables first.  Before ingress, reconcile missing derived views only after an authoritative enabled, non-preparing, admitted and catalog-fenced temporal-98 snapshot.  Wait outside SQL transactions; routing Ready is an output of completion, not an input to catalog authoring.  Keep existing release view definitions; wrong-kind objects and permanent/rollback errors fail startup. |
 
 MORPC 98 is a mainline integration decision, not another epoch for an
@@ -100,20 +110,23 @@ choose the next free epoch and repeat the capability proof.  Worker eligibility
 depends on the capability introduced by that epoch, not on a coincidentally
 equal integer in a branch that assigned the same number a different meaning.
 
-| Worker capability | Newly bound decimal division | Newly bound temporal contract |
+| Worker capability | Newly bound decimal division | Newly bound temporal/conversion contract |
 | --- | --- | --- |
 | Released 4.2, 9/10 | Reject or place elsewhere | Reject or place elsewhere |
 | Main after #29241, 97 | Execute | Reject or place elsewhere |
 | Integrated candidate, 98 | Execute | Execute |
 
 A plan containing both requires `max(97, 98) = 98`.  Feature collection keeps
-the two flags independently through nested expressions and casts.  Binding
+the two flags independently through nested expressions and casts, including
+SQL HEX/BIT numeric conversions and numeric-to-TIME conversions.  Binding
 checks source expressions before constant folding removes their provenance.
 Placement, scope encoding, receiving, and persisted-expression authoring apply
 the same requirement; a released physical identity gets only its enumerated
 compatibility path, never a blanket exemption for newly authored SQL.  The
 bootstrap authority requires temporal 98 while public routing Ready remains
-false.  This matrix is based on actual capability semantics, not merely the
+false.  A worker may still be excluded by a later deployment admission floor
+even when the query's minimum required version is lower.  This matrix is based
+on actual capability semantics, not merely the
 numeric version reported by the PR's old temporary branch.
 
 ## Failure, lifecycle, cost, and rollback
@@ -123,7 +136,7 @@ folding and prepared reuse.  Session diagnostics obey the existing retention
 limit.  Failed binding/evaluation leaves subsequent rows and executions usable.
 No parser path may allocate an unbounded token list or add per-row CAST/TRIM
 chains.  No new background worker/cache is proposed.  Missing-view recovery
-uses bounded catalog reads and one transaction; normal startup does not rewrite
+uses bounded catalog reads and one transaction per attempt; normal startup does not rewrite
 existing views.  Admission waits are cancellable and cannot hold a SQL
 transaction or public ingress open.  Retry applies only to known transient
 transaction failures; a nonretryable rollback error is reported.
@@ -176,6 +189,12 @@ marker or background reconciler is introduced.
 4. Existing temporal BVT with metadata/warning oracles, normal comparison on
    the same test-owned instance twice, including cleanup and residual catalog
    checks.  Classify every current 67/5 mismatch before changing a golden.
+   Save and restore `sql_mode` in every test file that changes it; verify that
+   a subsequent unrelated case sees its own declared/default mode.  Assert
+   the appendix's zero-calendar truth table under both empty and default modes,
+   the CAST-versus-TIME empty-input distinction, and two diagnostics for the
+   specified conversion-then-arithmetic example.  Keep the decimal-comparison
+   warning count at one rather than approving a duplicate-warning golden.
 5. Two independent fresh 4.2.4 seed→candidate→same-disk restart cycles, plus
    empty-catalog and competing multi-CN missing-view startup.  Real binary
    prepared protocol checks use server preparation, not client emulation.
@@ -183,6 +202,9 @@ marker or background reconciler is introduced.
    warning assertions.  Helper-only numbers do not establish whole-query CPU,
    throughput, or peak-memory behavior.
 
-Open product decisions: accept the remaining C01–C42 details, including C10
-unit rounding and C39 persisted ABI, plus the necessary C40/C42 revision from
-temporal 97 to temporal 98.  This draft does not authorize production edits.
+Product target: the user accepted C03, C13, and C12/C34 and delegated the
+remaining expectation decisions to GPT-6-astra/xhigh.  Its 2026-09-26 decision
+accepted C01–C42 with the precise amendments recorded in the appendix,
+including C10 binary FLOAT behavior, C39 persisted ABI, and the C40/C42
+integration at temporal MORPC 98.  Exact-revision design review, implementation,
+and validation remain pending.
