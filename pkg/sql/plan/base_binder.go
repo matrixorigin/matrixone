@@ -3603,6 +3603,9 @@ func (b *baseBinder) coerceBoolNumericAggregateArg(
 }
 
 func (b *baseBinder) bindFuncExprImplByAstExpr(name string, astArgs []tree.Expr, depth int32) (*plan.Expr, error) {
+	if name == "format" && b.persistedFormatCompatibility && !function.LegacySpecialConsumers(b.GetContext()) {
+		return b.bindPersistedFormat(astArgs, depth)
+	}
 	if (name == "utc_time" || name == "utc_timestamp") && len(astArgs) == 1 {
 		if _, ok := astArgs[0].(*tree.NumVal); !ok {
 			return nil, invalidUTCFunctionFSPError(b.GetContext(), name)
@@ -3769,7 +3772,8 @@ func (b *baseBinder) bindFuncExprImplByAstExpr(name string, astArgs []tree.Expr,
 				b.suppressDefaultValueBindType = true
 				b.inetNtoaNumericLiteralContext = true
 			}
-			if target, integerContext := function.IntegerArgumentTarget(name, idx); integerContext {
+			if target, integerContext := function.IntegerArgumentTarget(name, idx); integerContext &&
+				!(function.LegacySpecialConsumers(b.GetContext()) && (name == "format" || name == "makedate" || name == "maketime")) {
 				b.numericParamType = nil
 				b.numericSubqueryTarget = nil
 				expr, err = b.bindIntegerArgumentAst(arg, depth, target)
@@ -5843,9 +5847,15 @@ func bindFuncExprImplByPlanExpr(
 			return nil, moerr.NewInvalidInput(ctx, "Only constant XPATH queries are supported")
 		}
 	}
-	args, err = bindIntegerFunctionArguments(ctx, name, args)
-	if err != nil {
-		return nil, err
+	// DUMP/LOAD verifies old SQL origins against their historical physical
+	// signature. AST-level suppression alone is insufficient: this second
+	// binding pass would insert new private INT64 casts into the old tree.
+	if !function.LegacySpecialConsumers(ctx) ||
+		(name != "format" && name != "makedate" && name != "maketime") {
+		args, err = bindIntegerFunctionArguments(ctx, name, args)
+		if err != nil {
+			return nil, err
+		}
 	}
 	rejectIntervalArgs := rejectBoundIntervalFunctionArgs
 	if descendFunctions {

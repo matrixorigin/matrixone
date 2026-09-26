@@ -88,7 +88,11 @@ func resolveDivPrecisionIncrement(ctx CompilerContext) int32 {
 // DDL expression binders are independent of QueryBuilder. Bind persisted
 // expressions with the same statement setting as ordinary SELECT expressions.
 func ddlExpressionContext(ctx CompilerContext, base context.Context) context.Context {
-	return function.WithDivPrecisionIncrement(base, resolveDivPrecisionIncrement(ctx))
+	bound := function.WithDivPrecisionIncrement(base, resolveDivPrecisionIncrement(ctx))
+	if function.LegacySpecialConsumers(ctx.GetContext()) {
+		return function.WithLegacySpecialConsumers(bound)
+	}
+	return bound
 }
 
 func NewQueryBuilder(queryType plan.Query_StatementType, ctx CompilerContext, isPrepareStatement bool, skipStats bool) *QueryBuilder {

@@ -1108,6 +1108,9 @@ type baseBinder struct {
 	ctx       *BindContext
 	impl      Binder
 	boundCols []boundColumn
+	// Catalog FORMAT must choose its legacy string contract before binding
+	// precision: some historical source types (e.g. DATE) cannot cast to INT64.
+	persistedFormatCompatibility bool
 	// Integer consumers own the source domain of their operands. An enclosing
 	// default/assignment target must not pre-convert their numeric literals.
 	integerArgumentSourceContext     bool

@@ -4472,72 +4472,50 @@ func TestFormatNumericDomainsKeepTheirRoundingContracts(t *testing.T) {
 	}
 }
 
-func TestFormatCheckSelectsSourceDomainWithoutExtraOverloads(t *testing.T) {
+func TestFormatLegacyAndCanonicalSourceDomains(t *testing.T) {
 	fn := allSupportedFunctions[FORMAT]
-	require.NotNil(t, fn.checkFn)
-
-	result := fn.checkFn(fn.Overloads, []types.Type{
-		types.T_int64.ToType(),
-		types.T_varchar.ToType(),
-	})
+	require.Equal(t, []types.T{types.T_varchar, types.T_varchar}, fn.Overloads[0].args)
+	require.Equal(t, []types.T{types.T_varchar, types.T_varchar, types.T_varchar}, fn.Overloads[1].args)
+	for _, first := range []types.T{types.T_int64, types.T_decimal64, types.T_decimal128, types.T_decimal256, types.T_float64, types.T_varchar} {
+		for _, count := range []int{2, 3} {
+			inputs := []types.Type{first.ToType(), types.T_varchar.ToType()}
+			if count == 3 {
+				inputs = append(inputs, types.T_int64.ToType())
+			}
+			result := fn.checkArgumentTypes(inputs, nil)
+			require.Equal(t, succeedWithCast, result.status)
+			require.Equal(t, count, result.idx)
+			require.Equal(t, first, result.finalType[0].Oid)
+			require.Equal(t, types.T_int64, result.finalType[1].Oid)
+			if count == 3 {
+				require.Equal(t, types.T_varchar, result.finalType[2].Oid)
+			}
+		}
+	}
+	result := fn.checkArgumentTypes([]types.Type{types.T_decimal64.ToType(), types.T_int64.ToType()}, nil)
 	require.Equal(t, succeedMatched, result.status)
-	require.Equal(t, 0, result.idx)
-
-	result = fn.checkFn(fn.Overloads, []types.Type{
-		types.T_decimal64.ToType(),
-		types.T_int64.ToType(),
-	})
-	require.Equal(t, succeedWithCast, result.status)
-	require.Equal(t, 0, result.idx)
-	require.Equal(t, types.T_decimal64, result.finalType[0].Oid)
-	require.Equal(t, types.T_varchar, result.finalType[1].Oid)
-
-	result = fn.checkFn(fn.Overloads, []types.Type{
-		types.T_float64.ToType(),
-		types.T_varchar.ToType(),
-		types.T_varchar.ToType(),
-	})
-	require.Equal(t, succeedMatched, result.status)
-	require.Equal(t, 1, result.idx)
-
-	result = fn.checkFn(fn.Overloads, []types.Type{
-		types.T_float64.ToType(),
-		types.T_int64.ToType(),
-		types.T_int64.ToType(),
-	})
-	require.Equal(t, succeedWithCast, result.status)
-	require.Equal(t, 1, result.idx)
-	require.Len(t, result.finalType, 3)
-	require.Equal(t, types.T_varchar, result.finalType[1].Oid)
-	require.Equal(t, types.T_varchar, result.finalType[2].Oid)
-
-	result = fn.checkFn(fn.Overloads, []types.Type{
-		types.T_varchar.ToType(),
-		types.T_varchar.ToType(),
-	})
-	require.Equal(t, succeedMatched, result.status)
-	require.Equal(t, 0, result.idx)
+	require.Equal(t, FormatIntegerPrecisionOverload, result.idx)
 
 	resolved, ok := GetFunctionByNameWithoutError("format", []types.Type{
 		types.T_int64.ToType(),
 		types.T_varchar.ToType(),
 	})
 	require.True(t, ok)
-	require.Equal(t, int32(0), resolved.overloadId)
+	require.Equal(t, int32(FormatIntegerPrecisionOverload), resolved.overloadId)
 	resolved, ok = GetFunctionByNameWithoutError("format", []types.Type{
 		types.T_float64.ToType(),
 		types.T_varchar.ToType(),
 		types.T_varchar.ToType(),
 	})
 	require.True(t, ok)
-	require.Equal(t, int32(1), resolved.overloadId)
+	require.Equal(t, int32(FormatIntegerPrecisionLocaleOverload), resolved.overloadId)
 
 	for _, inputs := range [][]types.Type{
 		{types.T_date.ToType(), types.T_varchar.ToType()},
 		{types.T_int64.ToType()},
 		{types.T_int64.ToType(), types.T_varchar.ToType(), types.T_varchar.ToType(), types.T_varchar.ToType()},
 	} {
-		result = fn.checkFn(fn.Overloads, inputs)
+		result = fn.checkArgumentTypes(inputs, nil)
 		require.Equal(t, failedFunctionParametersWrong, result.status, inputs)
 	}
 }
