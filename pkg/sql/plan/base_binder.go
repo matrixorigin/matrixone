@@ -5847,9 +5847,15 @@ func bindFuncExprImplByPlanExpr(
 			return nil, moerr.NewInvalidInput(ctx, "Only constant XPATH queries are supported")
 		}
 	}
-	args, err = bindIntegerFunctionArguments(ctx, name, args)
-	if err != nil {
-		return nil, err
+	// DUMP/LOAD verifies old SQL origins against their historical physical
+	// signature. AST-level suppression alone is insufficient: this second
+	// binding pass would insert new private INT64 casts into the old tree.
+	if !function.LegacySpecialConsumers(ctx) ||
+		(name != "format" && name != "makedate" && name != "maketime") {
+		args, err = bindIntegerFunctionArguments(ctx, name, args)
+		if err != nil {
+			return nil, err
+		}
 	}
 	rejectIntervalArgs := rejectBoundIntervalFunctionArgs
 	if descendFunctions {
