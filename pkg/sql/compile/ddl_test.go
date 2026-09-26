@@ -971,7 +971,7 @@ func TestTableScopedDDLDatabaseEOBMapsToNoSuchTable(t *testing.T) {
 		err := s.dropTableSingle(c, &plan2.DropTable{
 			Database: "db1",
 			Table:    "t2",
-		})
+		}, new(bool))
 		require.True(t, moerr.IsMoErrCode(err, moerr.ErrNoSuchTable))
 	})
 
@@ -985,11 +985,11 @@ func TestTableScopedDDLDatabaseEOBMapsToNoSuchTable(t *testing.T) {
 			TableDef: &plan2.TableDef{IsTemporary: true},
 		}
 
-		err := s.dropTableSingle(c, qry)
+		err := s.dropTableSingle(c, qry, new(bool))
 		require.True(t, moerr.IsMoErrCode(err, moerr.ErrNoSuchTable))
 
 		qry.IfExists = true
-		require.NoError(t, s.dropTableSingle(c, qry))
+		require.NoError(t, s.dropTableSingle(c, qry, new(bool)))
 	})
 }
 
@@ -2832,6 +2832,9 @@ func TestDropDatabase_SnapshotAdvance(t *testing.T) {
 		defer ctrl.Finish()
 
 		proc := testutil.NewProcess(t)
+		installDropDDLExecutor(t, proc, executor.NewMemExecutor(func(string) (executor.Result, error) {
+			return executor.Result{}, nil
+		}))
 		proc.Base.SessionInfo.Buf = buffer.New()
 		ctx := defines.AttachAccountId(context.Background(), sysAccountId)
 		proc.Ctx = ctx
@@ -2901,6 +2904,9 @@ func TestDropDatabase_SnapshotAdvance(t *testing.T) {
 		defer ctrl.Finish()
 
 		proc := testutil.NewProcess(t)
+		installDropDDLExecutor(t, proc, executor.NewMemExecutor(func(string) (executor.Result, error) {
+			return executor.Result{}, nil
+		}))
 		proc.Base.SessionInfo.Buf = buffer.New()
 		ctx := defines.AttachAccountId(context.Background(), sysAccountId)
 		proc.Ctx = ctx
@@ -3076,8 +3082,7 @@ func TestDropDatabaseSkipsDeletedRelationsWhenCollectingTables(t *testing.T) {
 	}
 
 	var cleanupSQLs []string
-	moruntime.ServiceRuntime(proc.GetService()).SetGlobalVariables(
-		moruntime.InternalSQLExecutor,
+	installDropDDLExecutor(t, proc,
 		executor.NewMemExecutor(func(sql string) (executor.Result, error) {
 			cleanupSQLs = append(cleanupSQLs, sql)
 			return executor.Result{}, nil
@@ -3099,6 +3104,9 @@ func TestDropDatabaseSkipsForeignKeyCleanupWhenIgnored(t *testing.T) {
 	defer ctrl.Finish()
 
 	proc := testutil.NewProcess(t)
+	installDropDDLExecutor(t, proc, executor.NewMemExecutor(func(string) (executor.Result, error) {
+		return executor.Result{}, nil
+	}))
 	proc.Base.SessionInfo.Buf = buffer.New()
 	ctx := defines.AttachAccountId(context.Background(), sysAccountId)
 	ctx = context.WithValue(ctx, defines.IgnoreForeignKey{}, true)
@@ -3153,6 +3161,9 @@ func TestDropDatabaseReturnsInternalRelationErrorWhenCollectingTables(t *testing
 	defer ctrl.Finish()
 
 	proc := testutil.NewProcess(t)
+	installDropDDLExecutor(t, proc, executor.NewMemExecutor(func(string) (executor.Result, error) {
+		return executor.Result{}, nil
+	}))
 	proc.Base.SessionInfo.Buf = buffer.New()
 	ctx := defines.AttachAccountId(context.Background(), sysAccountId)
 	proc.Ctx = ctx
@@ -3504,7 +3515,7 @@ func TestDropTableSingleSkipsMissingFkTables(t *testing.T) {
 		TableDef:             &plan2.TableDef{},
 		ForeignTbl:           []uint64{42},
 		FkChildTblsReferToMe: []uint64{43},
-	})
+	}, new(bool))
 	require.NoError(t, err)
 }
 
