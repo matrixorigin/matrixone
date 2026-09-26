@@ -1700,6 +1700,71 @@ func TestTableDumpRestoredExpressionsDoesNotMutateTarget(t *testing.T) {
 	require.NotSame(t, target.Cols[0], restored.Cols[0])
 }
 
+func TestTableDumpRestoredExpressionsDeclarationMatrix(t *testing.T) {
+	boundInt := func(value int64) *plan.Expr {
+		return &plan.Expr{Typ: plan.Type{Id: int32(types.T_int64)}, Expr: &plan.Expr_Lit{
+			Lit: &plan.Literal{Value: &plan.Literal_I64Val{I64Val: value}},
+		}}
+	}
+	boundBool := func(value bool) *plan.Expr {
+		return &plan.Expr{Typ: plan.Type{Id: int32(types.T_bool)}, Expr: &plan.Expr_Lit{
+			Lit: &plan.Literal{Value: &plan.Literal_Bval{Bval: value}},
+		}}
+	}
+	source := &plan.TableDef{Cols: []*plan.ColDef{
+		{Name: "default_col", Typ: plan.Type{Id: int32(types.T_int64)}, Default: &plan.Default{OriginString: "a / b", Expr: boundInt(10)}},
+		// Old catalog metadata can carry an on-update expression even when current
+		// SQL syntax would not accept this declaration.
+		{Name: "update_col", Typ: plan.Type{Id: int32(types.T_int64)}, OnUpdate: &plan.OnUpdate{OriginString: "a / b", Expr: boundInt(11)}},
+		{Name: "generated_col", Typ: plan.Type{Id: int32(types.T_int64)}, GeneratedCol: &plan.GeneratedCol{OriginString: "a / b", IsStored: true, Expr: boundInt(12)}},
+	}, Checks: []*plan.CheckDef{{Name: "check_div", OriginSql: "a / b > 1", Check: boundBool(true)}}}
+	target := proto.Clone(source).(*plan.TableDef)
+	target.TblId = 123
+	target.Cols[0].Default.Expr = boundInt(1)
+	target.Cols[1].OnUpdate.Expr = boundInt(2)
+	target.Cols[2].GeneratedCol.Expr = boundInt(3)
+	target.Checks[0].Check = boundBool(false)
+	before := proto.Clone(target)
+	payload, digest, err := tableDumpBoundExpressions(source)
+	require.NoError(t, err)
+	require.True(t, tableDumpMayDependOnDivision(source))
+	restored, changed, err := tableDumpRestoredExpressions(target, payload, digest)
+	require.NoError(t, err)
+	require.True(t, changed)
+	require.True(t, proto.Equal(before, target), "restoration must not mutate the target")
+	require.Equal(t, target.TblId, restored.TblId)
+	require.Equal(t, int64(10), restored.Cols[0].Default.Expr.GetLit().GetI64Val())
+	require.Equal(t, int64(11), restored.Cols[1].OnUpdate.Expr.GetLit().GetI64Val())
+	require.Equal(t, int64(12), restored.Cols[2].GeneratedCol.Expr.GetLit().GetI64Val())
+	require.True(t, restored.Checks[0].Check.GetLit().GetBval())
+
+	// A valid digest does not authorize restoring bindings into a different
+	// declaration. Each mismatch must fail before changing catalog state.
+	for _, tc := range []struct {
+		name   string
+		want   string
+		change func(*plan.TableDef)
+	}{
+		{"default origin", "table dump default does not match target schema", func(def *plan.TableDef) { def.Cols[0].Default.OriginString = "a / (b + 1)" }},
+		{"on-update origin", "table dump on-update expression does not match target schema", func(def *plan.TableDef) { def.Cols[1].OnUpdate.OriginString = "a / (b + 1)" }},
+		{"generated storage", "table dump generated expression does not match target schema", func(def *plan.TableDef) { def.Cols[2].GeneratedCol.IsStored = false }},
+		{"generated origin", "table dump generated expression does not match target schema", func(def *plan.TableDef) { def.Cols[2].GeneratedCol.OriginString = "a / (b + 1)" }},
+		{"check origin", "table dump checks do not match target schema", func(def *plan.TableDef) { def.Checks[0].OriginSql = "a / b > 2" }},
+		{"check name", "table dump checks do not match target schema", func(def *plan.TableDef) { def.Checks[0].Name = "other" }},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			mismatch := proto.Clone(target).(*plan.TableDef)
+			tc.change(mismatch)
+			unchanged := proto.Clone(mismatch)
+			replacement, changed, err := tableDumpRestoredExpressions(mismatch, payload, digest)
+			require.ErrorContains(t, err, tc.want)
+			require.Nil(t, replacement)
+			require.False(t, changed)
+			require.True(t, proto.Equal(unchanged, mismatch))
+		})
+	}
+}
+
 func TestTableDumpBoundPayloadRejectsExpansionBeforeUnmarshal(t *testing.T) {
 	var columns []byte
 	for range 16_385 {
