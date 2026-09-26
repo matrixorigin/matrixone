@@ -202,6 +202,36 @@ func TestPreparedVariadicRuntimeSourceDomains(t *testing.T) {
 			want: []types.T{types.T_float64, types.T_float64},
 		},
 		{
+			name: "field reverse coalesce with text null keeps exact result",
+			sql:  "prepare p from 'select field(coalesce(abs(?), ?), abs(cast(9007199254740992 as decimal(20,0))))'", fn: "field",
+			values: []ParamValue{
+				{Value: nil, SourceType: types.T_text.ToType(), HasSourceType: true},
+				{Value: "9007199254740993", SourceType: types.New(types.T_decimal128, 20, 0),
+					HasSourceType: true, PrepareParamKind: vector.PrepareParamDecimal},
+			},
+			want: []types.T{types.T_decimal128, types.T_decimal128},
+		},
+		{
+			name: "field reverse coalesce with binary protocol null keeps exact result",
+			sql:  "prepare p from 'select field(coalesce(abs(?), ?), abs(cast(9007199254740992 as decimal(20,0))))'", fn: "field",
+			values: []ParamValue{
+				{Value: nil, IsBinaryProtocol: true},
+				{Value: "9007199254740993", RuntimeType: types.T_uint64.ToType(),
+					HasRuntimeType: true, IsBinaryProtocol: true},
+			},
+			want: []types.T{types.T_decimal128, types.T_decimal128},
+		},
+		{
+			name: "field reverse coalesce with double null remains approximate",
+			sql:  "prepare p from 'select field(coalesce(abs(?), ?), abs(cast(9007199254740992 as decimal(20,0))))'", fn: "field",
+			values: []ParamValue{
+				{Value: nil, SourceType: types.T_float64.ToType(), HasSourceType: true},
+				{Value: "9007199254740993", SourceType: types.New(types.T_decimal128, 20, 0),
+					HasSourceType: true, PrepareParamKind: vector.PrepareParamDecimal},
+			},
+			want: []types.T{types.T_float64, types.T_float64},
+		},
+		{
 			name: "field nested abs after null coalesce remains decimal",
 			sql:  "prepare p from 'select field(coalesce(?, abs(?)), abs(cast(9007199254740992 as decimal(20,0))))'", fn: "field",
 			values: []ParamValue{

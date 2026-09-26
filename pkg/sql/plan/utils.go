@@ -1116,6 +1116,14 @@ func PreparedPlanNumericFallbackParamPositions(preparePlan *Plan) []int32 {
 func preparedNodeOutputContainsParam(
 	query *plan.Query, nodeID, colPos int32, visited map[[2]int32]struct{},
 ) bool {
+	return preparedNodeOutputContainsParamWithTags(query, nodeID, colPos, visited, nil)
+}
+
+// tags is supplied by the binder, where ColRef.RelPos is a binding tag rather
+// than an index into the current node's children.
+func preparedNodeOutputContainsParamWithTags(
+	query *plan.Query, nodeID, colPos int32, visited map[[2]int32]struct{}, tags map[int32]int32,
+) bool {
 	if query == nil || nodeID < 0 || int(nodeID) >= len(query.Nodes) || colPos < 0 {
 		return false
 	}
@@ -1142,6 +1150,13 @@ func preparedNodeOutputContainsParam(
 	_ = plan.VisitExprTree(expr, func(nested *plan.Expr) error {
 		col := nested.GetCol()
 		if found || col == nil || col.ColPos < 0 {
+			return nil
+		}
+		if tags != nil {
+			if sourceID, ok := tags[col.RelPos]; ok &&
+				preparedNodeOutputContainsParamWithTags(query, sourceID, col.ColPos, visited, tags) {
+				found = true
+			}
 			return nil
 		}
 		if col.RelPos >= 0 && int(col.RelPos) < len(node.Children) &&

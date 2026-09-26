@@ -336,6 +336,57 @@ func TestIssue28397FieldKeepsExactNumericComparison(t *testing.T) {
 				require.NoError(t, nested.QueryRowContext(ctx, value.param).Scan(&got))
 				require.Equal(t, value.want, got, "param=%d", value.param)
 			}
+
+			// COM_STMT sends nil without the TEXT source type that SQL user
+			// variables carry. The null candidate and null result must not
+			// turn the fixed DECIMAL peer into a rounded DOUBLE.
+			for _, tc := range []struct {
+				name, expr string
+				args       []any
+				want       int64
+			}{
+				{"coalesce", "field(coalesce(?, abs(?)), abs(" + first + "))", []any{nil, uint64(9007199254740993)}, 0},
+				{"ifnull", "field(ifnull(?, abs(?)), abs(" + first + "))", []any{nil, uint64(9007199254740993)}, 0},
+				{"reverse coalesce", "field(coalesce(abs(?), ?), abs(" + first + "))", []any{nil, uint64(9007199254740993)}, 0},
+				{"extra null candidate", "field(?, ?, abs(" + first + "), abs(" + second + "))", []any{uint64(9007199254740993), nil}, 3},
+				{"literal null control", "field(?, null, abs(" + first + "), abs(" + second + "))", []any{uint64(9007199254740993)}, 3},
+			} {
+				t.Run(tc.name, func(t *testing.T) {
+					stmt, err := conn.PrepareContext(ctx, "select "+tc.expr)
+					require.NoError(t, err)
+					defer func() { require.NoError(t, stmt.Close()) }()
+					var got int64
+					require.NoError(t, stmt.QueryRowContext(ctx, tc.args...).Scan(&got))
+					require.Equal(t, tc.want, got)
+				})
+			}
+			for _, tc := range []struct {
+				name, expr, wantType, wantValue string
+			}{
+				{"untyped null", "coalesce(abs(?), ?)", "DECIMAL", "9007199254740993"},
+				{"explicit double null", "coalesce(abs(cast(? as double)), ?)", "DOUBLE", ""},
+			} {
+				t.Run(tc.name+" result metadata", func(t *testing.T) {
+					stmt, err := conn.PrepareContext(ctx, "select "+tc.expr)
+					require.NoError(t, err)
+					defer func() { require.NoError(t, stmt.Close()) }()
+					rows, err := stmt.QueryContext(ctx, nil, uint64(9007199254740993))
+					require.NoError(t, err)
+					defer rows.Close()
+					columns, err := rows.ColumnTypes()
+					require.NoError(t, err)
+					require.Equal(t, tc.wantType, columns[0].DatabaseTypeName())
+					require.True(t, rows.Next())
+					var value string
+					require.NoError(t, rows.Scan(&value))
+					if tc.wantValue != "" {
+						require.Equal(t, tc.wantValue, value)
+					} else {
+						require.NotEmpty(t, value)
+					}
+					require.NoError(t, rows.Err())
+				})
+			}
 		})
 
 		t.Run("issue 29378 explicit string and nested null boundaries", func(t *testing.T) {
@@ -365,13 +416,41 @@ func TestIssue28397FieldKeepsExactNumericComparison(t *testing.T) {
 				{
 					name: "null then nested abs", expr: "field(coalesce(?, abs(?)), abs(" + first + "))",
 					runs: []fieldBoundaryRun{
-						{"null and distinct decimal", []string{"null", second}, 0},
+						{"text null and distinct decimal", []string{"null", second}, 1},
 						{"null and matching decimal", []string{"null", first}, 1},
+						{"char null source", []string{"cast(null as char)", second}, 1},
+						{"double null source", []string{"cast(null as double)", second}, 1},
 						{"string boundary", []string{"'9007199254740993'", second}, 1},
-						{"null after string", []string{"null", second}, 0},
+						{"null after string", []string{"null", second}, 1},
 						{"real boundary", []string{"null", "cast(9007199254740993 as double)"}, 1},
-						{"null after real", []string{"null", second}, 0},
+						{"null after real", []string{"null", second}, 1},
 					},
+				},
+				{
+					name: "null in numeric result", expr: "field(coalesce(abs(?), ?), abs(" + first + "))",
+					runs: []fieldBoundaryRun{
+						{"text null", []string{"null", second}, 0},
+						{"double null", []string{"cast(null as double)", second}, 1},
+						{"decimal null", []string{"cast(null as decimal(20,0))", second}, 0},
+					},
+				},
+				{
+					name: "projected marker", expr: "field(x, abs(" + first + ")) from (select ? as x) d",
+					runs: []fieldBoundaryRun{{"exact decimal", []string{second}, 0}},
+				},
+				{
+					name: "nested projected marker",
+					expr: "field(y, abs(" + first + ")) from (select x as y from (select ? as x) d1) d2",
+					runs: []fieldBoundaryRun{{"exact decimal", []string{second}, 0}},
+				},
+				{
+					name: "unrelated projected marker",
+					expr: "field(y, abs(" + first + ")) from (select ? as x, cast(" + second + " as double) as y) d where x is not null",
+					runs: []fieldBoundaryRun{{"explicit real peer stays real", []string{second}, 1}},
+				},
+				{
+					name: "extra text null candidate", expr: "field(?, ?, abs(" + first + "), abs(" + second + "))",
+					runs: []fieldBoundaryRun{{"exact search", []string{second, "null"}, 2}},
 				},
 			} {
 				t.Run(tc.name, func(t *testing.T) {
@@ -388,8 +467,8 @@ func TestIssue28397FieldKeepsExactNumericComparison(t *testing.T) {
 							directExpr := tc.expr
 							variables := make([]string, len(run.values))
 							for i, source := range run.values {
-								directExpr = strings.Replace(directExpr, "?", source, 1)
 								variables[i] = fmt.Sprintf("@field_review_%d", i)
+								directExpr = strings.Replace(directExpr, "?", variables[i], 1)
 								_, err := conn.ExecContext(ctx, "set "+variables[i]+" = "+source)
 								require.NoError(t, err)
 							}

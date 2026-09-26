@@ -92,7 +92,7 @@ SET @char_needle = CAST(9007199254740992 AS DECIMAL(20,0));
 SET @fallback = NULL, @nested = CAST(9007199254740993 AS DECIMAL(20,0));
 EXECUTE p_field_boundary USING @char_needle, @fallback, @nested;
 ➤ explicit_char[-5,64,0]  ¦  nested_null[-5,64,0]  𝄀
-1  ¦  0
+1  ¦  1
 SET @nested = CAST(9007199254740992 AS DECIMAL(20,0));
 EXECUTE p_field_boundary USING @char_needle, @fallback, @nested;
 ➤ explicit_char[-5,64,0]  ¦  nested_null[-5,64,0]  𝄀
@@ -104,7 +104,7 @@ EXECUTE p_field_boundary USING @char_needle, @fallback, @nested;
 SET @fallback = NULL;
 EXECUTE p_field_boundary USING @char_needle, @fallback, @nested;
 ➤ explicit_char[-5,64,0]  ¦  nested_null[-5,64,0]  𝄀
-1  ¦  0
+1  ¦  1
 DEALLOCATE PREPARE p_field_boundary;
 SELECT FIELD(x'0062', x'61', x'0062'), FIELD(x'0062', x'62'), FIELD(x'41', x'61');
 ➤ FIELD(0x0062, 0x61, 0x0062)[-5,64,0]  ¦  FIELD(0x0062, 0x62)[-5,64,0]  ¦  FIELD(0x41, 0x61)[-5,64,0]  𝄀

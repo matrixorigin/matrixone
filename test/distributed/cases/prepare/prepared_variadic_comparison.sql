@@ -66,8 +66,10 @@ SELECT FIELD(CAST(9007199254740992 AS DECIMAL(20,0)), CAST(9007199254740993 AS C
        FIELD(COALESCE(NULL, ABS(CAST(9007199254740993 AS DECIMAL(20,0)))),
              ABS(CAST(9007199254740992 AS DECIMAL(20,0)))) AS nested_null;
 PREPARE p_field_boundary FROM 'SELECT FIELD(?, CAST(9007199254740993 AS CHAR)) AS explicit_char,
-                                      FIELD(COALESCE(?, ABS(?)), ABS(CAST(9007199254740992 AS DECIMAL(20,0)))) AS nested_null';
+FIELD(COALESCE(?, ABS(?)), ABS(CAST(9007199254740992 AS DECIMAL(20,0)))) AS nested_null';
 SET @char_needle = CAST(9007199254740992 AS DECIMAL(20,0));
+-- SQL user variables assigned NULL have a TEXT source domain. Unlike the
+-- literal NULL above, @fallback therefore makes COALESCE compare as DOUBLE.
 SET @fallback = NULL, @nested = CAST(9007199254740993 AS DECIMAL(20,0));
 EXECUTE p_field_boundary USING @char_needle, @fallback, @nested;
 SET @nested = CAST(9007199254740992 AS DECIMAL(20,0));

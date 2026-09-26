@@ -1039,7 +1039,7 @@ func (rule *ResetParamRefRule) preparedBitCountUsesNumericRuntime(expr *plan.Exp
 
 func (rule *ResetParamRefRule) runtimeParamType(pos int) (types.Type, bool) {
 	value, kind, ok := rule.runtimeParamValue(pos)
-	if !ok || value == nil {
+	if !ok {
 		return types.Type{}, false
 	}
 	if pos < len(rule.paramValues) {
@@ -1058,6 +1058,9 @@ func (rule *ResetParamRefRule) runtimeParamType(pos int) (types.Type, bool) {
 				return param.SourceType, true
 			}
 		}
+	}
+	if value == nil {
+		return types.Type{}, false
 	}
 	switch kind {
 	case vector.PrepareParamInteger:
@@ -1158,6 +1161,12 @@ func (rule *ResetParamRefRule) typedDecimalParamExpr(pos int32) (*Expr, bool, er
 }
 
 func (rule *ResetParamRefRule) typedRuntimeParamExpr(pos int) (*Expr, bool, error) {
+	if value, _, ok := rule.runtimeParamValue(pos); ok && value == nil {
+		// A NULL still has a source domain (or is genuinely ANY). Rebinding
+		// the enclosing numeric expression from that source lets its overload
+		// be selected as if the same value had appeared in the direct query.
+		return rule.preparedRuntimeSourceExpr(pos, false)
+	}
 	if bound, ok := rule.typedIntegerParamExpr(int32(pos)); ok {
 		return bound, true, nil
 	}
@@ -2760,7 +2769,8 @@ func (rule *ResetParamRefRule) applyExpr(e *plan.Expr) (*plan.Expr, error) {
 				(functionName == "field" || functionName == "greatest" || functionName == "least") &&
 				paramPos < len(rule.paramValues) {
 				if param, ok := rule.paramValues[paramPos].(ParamValue); ok &&
-					((!param.IsBinaryProtocol && param.HasSourceType && param.SourceType.Oid != types.T_any) ||
+					((param.Value == nil && (param.IsBinaryProtocol || param.HasSourceType || param.HasRuntimeType)) ||
+						(!param.IsBinaryProtocol && param.HasSourceType && param.SourceType.Oid != types.T_any) ||
 						(functionName == "field" && param.IsBinaryProtocol && param.HasRuntimeType &&
 							param.RuntimeType.Oid != types.T_any && preparedNumericCommonOperandType(param.RuntimeType.Oid))) {
 					variadicSource = true
@@ -2924,20 +2934,25 @@ func (rule *ResetParamRefRule) applyExpr(e *plan.Expr) (*plan.Expr, error) {
 					}
 				}
 				rewrittenArg = DeepCopyExpr(source)
-			} else if provisionalCommonValueCast && !sharedControlParam {
+			} else if provisionalCommonValueCast {
 				// The outer cast was selected while the result operand was an
 				// unresolved TEXT marker. Rebind its source for this EXECUTE so a
 				// nested numeric function can supply its actual result domain.
-				rewrittenArg, err = rule.ApplyExpr(arg.GetF().Args[0])
+				source := arg.GetF().Args[0]
+				if marker := source.GetP(); marker != nil {
+					var known bool
+					rewrittenArg, known, err = rule.preparedRuntimeSourceExpr(int(marker.Pos), false)
+					if err != nil {
+						return nil, err
+					}
+					if !known {
+						rewrittenArg, err = rule.ApplyExpr(source)
+					}
+				} else {
+					rewrittenArg, err = rule.ApplyExpr(source)
+				}
 				if err != nil {
 					return nil, err
-				}
-				if rewrittenArg != nil && arg.GetF().Args[0].GetP() != nil && rewrittenArg.GetLit().GetIsnull() {
-					// An untyped NULL contributes no common-value domain. Explicit
-					// CAST(NULL AS ...) remains inside the source and stays typed.
-					rewrittenArg = DeepCopyExpr(rewrittenArg)
-					anyType := types.T_any.ToType()
-					rewrittenArg.Typ = makePlan2Type(&anyType)
 				}
 				needResetFunction = true
 				compareArgTypes = true
@@ -4573,10 +4588,12 @@ func (rule *ResetParamRefRule) preparedRuntimeSourceExpr(pos int, preserveProtoc
 		sourceType = param.SourceType
 	case param.HasRuntimeType:
 		sourceType = param.RuntimeType
+	case param.Value == nil && param.IsBinaryProtocol:
+		sourceType = types.T_any.ToType()
 	default:
 		return nil, false, nil
 	}
-	if sourceType.Oid == types.T_any {
+	if sourceType.Oid == types.T_any && param.Value != nil {
 		return nil, false, nil
 	}
 	if sourceType.Oid.IsMySQLString() &&
