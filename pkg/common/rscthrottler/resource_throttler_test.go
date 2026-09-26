@@ -27,6 +27,152 @@ import (
 	"github.com/stretchr/testify/require"
 )
 
+func TestCgroupBudgetAcrossInstances(t *testing.T) {
+	oldRead := getCgroupMemoryUsage
+	t.Cleanup(func() { getCgroupMemoryUsage = oldRead })
+	getCgroupMemoryUsage = func(int) (int64, error) { return 95, nil }
+	policies := []struct {
+		name    string
+		acquire func(*memThrottler, int64) (int64, bool)
+	}{
+		{"workspace", defaultAcquirePolicy},
+		{"s3", AcquirePolicyForCNFlushS3},
+		{"branch", AcquirePolicyForDataBranch},
+	}
+	for _, first := range policies {
+		for _, second := range policies {
+			t.Run(first.name+"/"+second.name, func(t *testing.T) {
+				budget := &cgroupMemoryBudget{}
+				makeOwner := func() *memThrottler {
+					m := &memThrottler{cgroupBudget: budget, limitRate: 0.8}
+					m.actualTotalMemory.Store(100)
+					m.total.Store(200)
+					m.cgroup.Store(100)
+					m.limit.Store(80)
+					m.rss.Store(60)
+					m.refreshCgroupUsage()
+					return m
+				}
+				a, b := makeOwner(), makeOwner()
+				_, ok := first.acquire(a, 4)
+				require.True(t, ok)
+				// A has reserved but has not allocated yet. Neither a competing
+				// owner nor the same owner can spend those four units again.
+				for _, owner := range []*memThrottler{a, b} {
+					left, granted := second.acquire(owner, 4)
+					require.False(t, granted)
+					require.Equal(t, int64(1), left)
+				}
+				b.refreshCgroupUsage()
+				require.Equal(t, int64(1), b.Available())
+				require.Equal(t, int64(1), cnFlushS3PhysicalAvailable(b, 0, b.cgroupSnapshot()))
+				_, ok = second.acquire(b, 4)
+				require.False(t, ok)
+				require.Equal(t, int64(4), budget.reserved.Load())
+				// Failed upstream allocation: release A's claim and retry B.
+				a.Release(4)
+				_, ok = second.acquire(b, 4)
+				require.True(t, ok)
+				// An extra release by A must not return B's claim.
+				a.Release(4)
+				require.Equal(t, int64(4), budget.reserved.Load())
+				b.Release(100)
+				require.Zero(t, budget.reserved.Load())
+				// A local quota failure must leave the shared budget untouched.
+				b.limit.Store(1)
+				_, ok = second.acquire(b, 4)
+				require.False(t, ok)
+				require.Zero(t, budget.reserved.Load())
+			})
+		}
+	}
+}
+
+func TestCgroupBudgetConcurrentOwnersAndRefresh(t *testing.T) {
+	oldRead := getCgroupMemoryUsage
+	t.Cleanup(func() { getCgroupMemoryUsage = oldRead })
+	getCgroupMemoryUsage = func(int) (int64, error) { return 95, nil }
+	b := &cgroupMemoryBudget{}
+	owners := make([]*memThrottler, 8)
+	for i := range owners {
+		m := &memThrottler{cgroupBudget: b}
+		m.total.Store(200)
+		m.cgroup.Store(100)
+		m.actualTotalMemory.Store(100)
+		m.limit.Store(80)
+		m.rss.Store(60)
+		m.refreshCgroupUsage()
+		owners[i] = m
+	}
+	start := make(chan struct{})
+	var wg sync.WaitGroup
+	var granted atomic.Int64
+	for _, m := range owners {
+		for range 4 {
+			wg.Add(1)
+			go func() {
+				defer wg.Done()
+				<-start
+				for range 20 {
+					m.refreshCgroupUsage()
+					if _, ok := defaultAcquirePolicy(m, 1); ok {
+						granted.Add(1)
+					}
+				}
+			}()
+		}
+	}
+	close(start)
+	wg.Wait()
+	require.Equal(t, int64(5), granted.Load())
+	require.Equal(t, int64(5), b.reserved.Load())
+	for _, m := range owners {
+		m.Release(100)
+	}
+	require.Zero(t, b.reserved.Load())
+}
+
+func TestProductionThrottlersShareCgroupOwner(t *testing.T) {
+	a := NewMemThrottler("test-a", 0.8).(*memThrottler)
+	b := NewMemThrottler("test-b", 0.8).(*memThrottler)
+	require.Same(t, &processCgroupBudget, a.cgroupBudget)
+	require.Same(t, a.cgroupBudget, b.cgroupBudget)
+}
+
+func TestSharedCgroupClaimsSurvivePressureTransitionAndReadFailure(t *testing.T) {
+	oldRead := getCgroupMemoryUsage
+	t.Cleanup(func() { getCgroupMemoryUsage = oldRead })
+	b := &cgroupMemoryBudget{}
+	a := &memThrottler{cgroupBudget: b}
+	a.total.Store(200)
+	a.cgroup.Store(100)
+	a.actualTotalMemory.Store(100)
+	a.limit.Store(80)
+	a.rss.Store(60)
+	// The claim predates hard pressure and must still be included afterwards.
+	b.sample.Store(&cgroupMemorySample{usage: 80, limit: 100})
+	_, ok := defaultAcquirePolicy(a, 4)
+	require.True(t, ok)
+	other := &memThrottler{cgroupBudget: b}
+	other.total.Store(200)
+	other.cgroup.Store(100)
+	other.actualTotalMemory.Store(100)
+	other.limit.Store(80)
+	other.rss.Store(60)
+	getCgroupMemoryUsage = func(int) (int64, error) { return 95, nil }
+	other.refreshCgroupUsage()
+	getCgroupMemoryUsage = func(int) (int64, error) { return 0, errors.New("failed read") }
+	a.refreshCgroupUsage()
+	_, ok = AcquirePolicyForCNFlushS3(other, 4)
+	require.False(t, ok)
+	require.Equal(t, int64(4), b.reserved.Load())
+	a.Release(4)
+	_, ok = AcquirePolicyForCNFlushS3(other, 4)
+	require.True(t, ok)
+	other.Release(4)
+	require.Zero(t, b.reserved.Load())
+}
+
 // No allocation is performed by the policies themselves. Model an owner paused
 // between Acquire and allocation; refreshing memory.current must not cover it.
 func TestCgroupPendingReservationSurvivesRefresh(t *testing.T) {
