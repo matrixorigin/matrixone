@@ -433,6 +433,16 @@ func TestYearAssignmentCastHonorsSQLMode(t *testing.T) {
 	}
 }
 
+func TestParseTimePrefixPreservesInvalidFields(t *testing.T) {
+	for _, value := range []string{"12:99:00", "12:99:00tail", "12:34:99", "12:34:99tail", "12:34:56:99"} {
+		_, ok := parseTimePrefix(value, 0)
+		require.False(t, ok, value)
+	}
+	parsed, ok := parseTimePrefix("12:34:56tail", 0)
+	require.True(t, ok)
+	require.Equal(t, "12:34:56", parsed.String())
+}
+
 func TestTimeAssignmentCastHonorsMySQLRange(t *testing.T) {
 	timeType := types.T_time.ToTypeWithScale(6)
 	max := types.MySQLTimeMax
@@ -596,16 +606,11 @@ func TestTimeAssignmentCastHonorsMySQLRange(t *testing.T) {
 		require.True(t, moerr.IsMoErrCode(err, moerr.ErrOutOfRange), err)
 	})
 
-	t.Run("ordinary expression cast preserves MatrixOne extended time", func(t *testing.T) {
+	t.Run("ordinary expression cast clamps to MySQL TIME range", func(t *testing.T) {
 		result, err := run(t, stringInput, "STRICT_TRANS_TABLES", NewCast)
 		require.NoError(t, err)
 		values := vector.MustFixedColWithTypeCheck[types.Time](result)
-		require.Equal(t, []types.Time{
-			types.TimeFromClock(false, 838, 59, 59, 1),
-			types.TimeFromClock(false, 839, 0, 0, 0),
-			types.TimeFromClock(true, 838, 59, 59, 1),
-			types.TimeFromClock(true, 839, 0, 0, 0),
-		}, values)
+		require.Equal(t, []types.Time{max, max, -max, -max}, values)
 	})
 
 	t.Run("scale zero rejects values that round over the endpoint", func(t *testing.T) {
@@ -908,7 +913,7 @@ func TestBinaryToFloatConversion(t *testing.T) {
 		})
 	}
 
-	for _, input := range []string{"", "this-is-a-very-long-string"} {
+	for _, input := range []string{"this-is-a-very-long-string"} {
 		t.Run("invalid_"+input, func(t *testing.T) {
 			inputVec := testutil.MakeVarlenaVector([][]byte{[]byte(input)}, nil, types.T_blob.ToType(), mp)
 			defer inputVec.Free(mp)
@@ -923,6 +928,15 @@ func TestBinaryToFloatConversion(t *testing.T) {
 			require.True(t, moerr.IsMoErrCode(err, moerr.ErrInvalidInput))
 		})
 	}
+
+	inputVec := testutil.MakeVarlenaVector([][]byte{{}}, nil, types.T_blob.ToType(), mp)
+	defer inputVec.Free(mp)
+	inputVec.SetIsBin(true)
+	to := vector.NewFunctionResultWrapper(types.T_float64.ToType(), mp).(*vector.FunctionResult[float64])
+	defer to.Free()
+	require.NoError(t, to.PreExtendAndReset(1))
+	require.NoError(t, strToFloat(ctx, SQLCompatibilityMySQL, vector.GenerateFunctionStrParameter(inputVec), to, 64, 1, nil))
+	require.Equal(t, []float64{0}, vector.MustFixedColNoTypeCheck[float64](to.GetResultVector()))
 }
 
 func Test_CastToDecimal256(t *testing.T) {
@@ -3064,8 +3078,7 @@ func Test_strToSigned_Binary(t *testing.T) {
 			name:    "empty slice",
 			inputs:  [][]byte{{}},
 			bitSize: 64,
-			wantErr: true,
-			errMsg:  "invalid arg",
+			want:    []int64{0},
 		},
 		{
 			name:    "out of range length",

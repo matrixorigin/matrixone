@@ -127,17 +127,18 @@ type container struct {
 }
 
 type LoopJoin struct {
-	ctr                 container
-	LeftTypes           []types.Type
-	RightTypes          []types.Type
-	NonEqCond           *plan.Expr
-	ResultCols          []colexec.ResultPos
-	JoinMapTag          int32
-	JoinType            plan.Node_JoinType
-	MarkPos             int
-	allocationAccount   *mpool.AllocationAccount
-	resultAllocation    *vector.AllocationAccountSelection
-	conditionAllocation *vector.AllocationAccountSelection
+	ctr                           container
+	LeftTypes                     []types.Type
+	RightTypes                    []types.Type
+	NonEqCond                     *plan.Expr
+	OwnsConstantFilterDiagnostics bool
+	ResultCols                    []colexec.ResultPos
+	JoinMapTag                    int32
+	JoinType                      plan.Node_JoinType
+	MarkPos                       int
+	allocationAccount             *mpool.AllocationAccount
+	resultAllocation              *vector.AllocationAccountSelection
+	conditionAllocation           *vector.AllocationAccountSelection
 	// recursiveProbe is derived from the operator tree during Prepare. An empty
 	// INNER/SEMI build must still drain a recursive probe until its round marker.
 	recursiveProbe bool

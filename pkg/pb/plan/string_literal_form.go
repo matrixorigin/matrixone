@@ -327,6 +327,8 @@ const (
 	planTimeTypeID                   int32 = 51
 	planDatetimeTypeID               int32 = 52
 	planTimestampTypeID              int32 = 53
+	planInt64TypeID                  int32 = 23
+	planUint32TypeID                 int32 = 27
 	planAnyTypeID                    int32 = 0
 	maxVarcharWidth                  int32 = 65535
 )
@@ -389,6 +391,11 @@ type RemoteExpressionFeatures struct {
 	SpatialDistanceSemantics          bool
 	PreparedPrecisionScalar           bool
 	DecimalDivisionSemantics          bool
+	TemporalResultContracts           bool
+	InvalidTemporalResultContract     bool
+	NormalizedIntervalUnits           bool
+	LegacyIntervalUnits               bool
+	WeekSessionDefault                bool
 }
 
 func (features RemoteExpressionFeatures) Any() bool {
@@ -410,7 +417,12 @@ func (features RemoteExpressionFeatures) Any() bool {
 		features.DecimalLiteralSemantics ||
 		features.SpatialDistanceSemantics ||
 		features.PreparedPrecisionScalar ||
-		features.DecimalDivisionSemantics
+		features.DecimalDivisionSemantics ||
+		features.TemporalResultContracts ||
+		features.InvalidTemporalResultContract ||
+		features.NormalizedIntervalUnits ||
+		features.LegacyIntervalUnits ||
+		features.WeekSessionDefault
 }
 
 func hasPrivateIntegerPrecisionCast(expr *Expr) bool {
@@ -847,6 +859,85 @@ func RequiredRemoteExpressionFeatures(owner any) (features RemoteExpressionFeatu
 					(current.Typ.Id == 32 || current.Typ.Id == 33 || current.Typ.Id == 34) {
 					features.DecimalDivisionSemantics = true
 				}
+				// Function IDs live in the function registry, which cannot be
+				// imported here because the planner depends on this package.
+				if id == 189 { // legacy TO_INTERVAL: ambiguous across pre-v97 and v97 binaries
+					features.LegacyIntervalUnits = true
+				}
+				if id == 583 { // TO_INTERVAL_MICROSECOND
+					features.NormalizedIntervalUnits = true
+				}
+				if (id == 224 || id == 225) && overload >= 8 && overload <= 15 { // DATE_ADD/SUB raw TIME interval
+					features.NormalizedIntervalUnits = true
+				}
+				if (id == 205 || id == 218 || id == 141) && overload == 2 { // DAY/YEAR/MONTH(VARCHAR) raw field contract
+					features.TemporalResultContracts = true
+				}
+				if id == 216 && (overload == 0 || overload == 1) { // one-arg WEEK
+					features.WeekSessionDefault = true
+				}
+				// Released overloads retain their physical vector ABI. The new
+				// numeric EXTRACT and string ADDTIME/SUBTIME results use appended
+				// identities, so 4.2 catalog expressions remain executable.
+				if id == 208 && overload >= 0 && overload <= 9 {
+					want := planVarcharTypeID
+					if overload == 1 {
+						want = planUint32TypeID
+					}
+					if overload >= 5 {
+						want = planInt64TypeID
+						features.TemporalResultContracts = true
+					}
+					features.InvalidTemporalResultContract = features.InvalidTemporalResultContract || current.Typ.Id != want
+				}
+				if (id == 41 && overload >= 6 && overload <= 11) || (id == 378 && overload >= 6 && overload <= 15) {
+					want := planDatetimeTypeID
+					preparedTime := false
+					if (id == 41 && overload >= 9) || (id == 378 && overload >= 11) {
+						want = planVarcharTypeID
+						// A direct prepared first marker has a TIME(6) result;
+						// its string payload still uses this executor.
+						preparedTime = current.Typ.Id == planTimeTypeID
+						features.TemporalResultContracts = true
+					}
+					features.InvalidTemporalResultContract = features.InvalidTemporalResultContract || (!preparedTime && current.Typ.Id != want)
+				}
+				// A stable physical ABI does not imply stable value/diagnostic
+				// semantics. Newly executing arithmetic must use one final
+				// temporal contract, including on released 4.2 workers.
+				if (id == 41 || id == 378) && overload >= 0 && overload <= 5 {
+					features.TemporalResultContracts = true
+				}
+				switch id {
+				case 93, 94, 95, 224, 225, 250, 364, 373, 375, 376: // differences, arithmetic, construction, periods
+					features.TemporalResultContracts = true
+				case 141, 201, 203, 204, 205, 206, 216, 217, 218, 219, 220, 221, 222, 223,
+					360, 361, 362, 368, 369, 370, 374, 383: // components, zero calendars and week modes
+					features.TemporalResultContracts = true
+				case 187, 188, 196, 197, 251, 363: // parsing, Unix conversion and formatting
+					features.TemporalResultContracts = true
+				}
+
+				// CAST keeps its physical identity. The changed TIME conversion
+				// includes numeric inputs; the other temporal conversions use the
+				// shared text parser. SQL HEX/BIT literals also changed numeric
+				// coercion, independent of a temporal target.
+				if id == 21 && len(fn.Args) > 0 && fn.Args[0] != nil {
+					source := fn.Args[0]
+					if isPlanTemporalType(current.Typ.Id) &&
+						(isPlanStringType(source.Typ.Id) ||
+							(current.Typ.Id == planTimeTypeID && isPlanNumericType(source.Typ.Id))) {
+						features.TemporalResultContracts = true
+					}
+					if isPlanNumericType(current.Typ.Id) {
+						if lit := source.GetLit(); lit != nil &&
+							(lit.LiteralForm == StringLiteralForm_STRING_LITERAL_HEX ||
+								lit.LiteralForm == StringLiteralForm_STRING_LITERAL_BIT) {
+							features.TemporalResultContracts = true
+						}
+					}
+				}
+
 				if (id == 72 || id == 103) && len(fn.Args) == 2 &&
 					hasPrivateIntegerPrecisionCast(fn.Args[1]) {
 					features.PreparedPrecisionScalar = true

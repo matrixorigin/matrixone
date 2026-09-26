@@ -173,8 +173,18 @@ func (expr *memoRootExpressionExecutor) IsColumnExpr() bool { return expr.execut
 func (expr *memoRootExpressionExecutor) TypeName() string   { return expr.executor.TypeName() }
 
 type expressionExecutorBuildContext struct {
-	memos  map[int32]*memoExpressionState
-	states []*memoExpressionState
+	memos                       map[int32]*memoExpressionState
+	states                      []*memoExpressionState
+	foldOwnedLiteralNumericCast bool
+	joinBuildDiagnosticOwner    *DeferredJoinDiagnostic
+	joinActivation              *[]ExpressionExecutor
+	conditionalJoinDepth        int
+}
+
+// NewOwnedConstantFilterExecutors is only for a single coordinator filter
+// whose diagnostic constant casts were excluded from storage pruning.
+func NewOwnedConstantFilterExecutors(proc *process.Process, exprs []*plan.Expr) ([]ExpressionExecutor, error) {
+	return NewExpressionExecutorsFromPlanExpressionsWithAllocation(proc, exprs, nil, true)
 }
 
 func NewExpressionExecutorsFromPlanExpressions(proc *process.Process, planExprs []*plan.Expr) (executors []ExpressionExecutor, err error) {
@@ -188,15 +198,83 @@ func NewExpressionExecutorsFromPlanExpressionsWithAllocation(
 	proc *process.Process,
 	planExprs []*plan.Expr,
 	selection *vector.AllocationAccountSelection,
+	foldOwnedConstantCasts ...bool,
+) (executors []ExpressionExecutor, err error) {
+	return newExpressionExecutorsWithDiagnosticOwner(
+		proc, planExprs, selection,
+		len(foldOwnedConstantCasts) > 0 && foldOwnedConstantCasts[0], nil,
+	)
+}
+
+// NewJoinBuildExpressionExecutors isolates diagnostics from statement-constant
+// subtrees while HashBuild speculatively computes its keys.
+func NewJoinBuildExpressionExecutors(
+	proc *process.Process,
+	planExprs []*plan.Expr,
+	selection *vector.AllocationAccountSelection,
+	owner *DeferredJoinDiagnostic,
+) ([]ExpressionExecutor, error) {
+	return newExpressionExecutorsWithDiagnosticOwner(proc, planExprs, selection, true, owner)
+}
+
+// NewJoinProbeExpressionExecutors returns borrowed references to the constant
+// subtrees that are unconditionally evaluated by the probe expression. The
+// returned roots alone own those executors and must be freed exactly once.
+func NewJoinProbeExpressionExecutors(
+	proc *process.Process,
+	planExprs []*plan.Expr,
+	selection *vector.AllocationAccountSelection,
+	owner *DeferredJoinDiagnostic,
+) ([]ExpressionExecutor, []ExpressionExecutor, error) {
+	if owner == nil {
+		execs, err := NewExpressionExecutorsFromPlanExpressionsWithAllocation(proc, planExprs, selection)
+		return execs, nil, err
+	}
+	activation := make([]ExpressionExecutor, 0)
+	execs := make([]ExpressionExecutor, len(planExprs))
+	for i, expr := range planExprs {
+		buildCtx := &expressionExecutorBuildContext{
+			foldOwnedLiteralNumericCast: true,
+			joinBuildDiagnosticOwner:    owner,
+			joinActivation:              &activation,
+		}
+		var err error
+		execs[i], err = newExpressionExecutorWithAllocation(proc, expr, selection, buildCtx)
+		if err != nil {
+			for j := 0; j < i; j++ {
+				execs[j].Free()
+			}
+			return nil, nil, err
+		}
+		if len(buildCtx.states) > 0 {
+			execs[i] = &memoRootExpressionExecutor{executor: execs[i], states: buildCtx.states}
+		}
+	}
+	return execs, activation, nil
+}
+
+func newExpressionExecutorsWithDiagnosticOwner(
+	proc *process.Process,
+	planExprs []*plan.Expr,
+	selection *vector.AllocationAccountSelection,
+	foldOwnedConstantCasts bool,
+	owner *DeferredJoinDiagnostic,
 ) (executors []ExpressionExecutor, err error) {
 	executors = make([]ExpressionExecutor, len(planExprs))
 	for i := range executors {
-		executors[i], err = NewExpressionExecutorWithAllocation(proc, planExprs[i], selection)
+		buildCtx := &expressionExecutorBuildContext{
+			foldOwnedLiteralNumericCast: foldOwnedConstantCasts,
+			joinBuildDiagnosticOwner:    owner,
+		}
+		executors[i], err = newExpressionExecutorWithAllocation(proc, planExprs[i], selection, buildCtx)
 		if err != nil {
 			for j := 0; j < i; j++ {
 				executors[j].Free()
 			}
 			return nil, err
+		}
+		if len(buildCtx.states) > 0 {
+			executors[i] = &memoRootExpressionExecutor{executor: executors[i], states: buildCtx.states}
 		}
 	}
 	return executors, err
@@ -364,11 +442,10 @@ func newExpressionExecutorWithAllocation(
 		{
 			// init function information for evaluation.
 			executor.overloadID = overloadID
-			// String-to-numeric casts can emit one warning for every logical
-			// output row. Do not fold ordinary text parameters, but retain the
-			// cast information so doFold can safely fold parameters whose
-			// protocol metadata proves that they originated as integers.
-			executor.stringToNumericCast = !overload.CannotFold() && isStringToNumericCast(planExpr)
+			// Dynamic casts retain row-level diagnostics. Only the designated
+			// coordinator filter may fold a literal cast once per execution.
+			executor.stringToNumericCast = !overload.CannotFold() &&
+				isStringToNumericCast(planExpr, buildCtx.foldOwnedLiteralNumericCast)
 			executor.volatile = overload.CannotFold() || executor.stringToNumericCast
 			executor.timeDependent = overload.IsRealTimeRelated()
 			executor.fid, _ = function.DecodeOverloadID(overloadID)
@@ -383,6 +460,20 @@ func newExpressionExecutorWithAllocation(
 			return nil, err
 		}
 
+		deferDiagnostic := buildCtx.joinBuildDiagnosticOwner != nil &&
+			function.IsStatementConstantInput(planExpr) &&
+			!function.ContainsRowScopedConversion(planExpr)
+		owner := buildCtx.joinBuildDiagnosticOwner
+		if deferDiagnostic {
+			buildCtx.joinBuildDiagnosticOwner = nil
+			defer func() { buildCtx.joinBuildDiagnosticOwner = owner }()
+		}
+		conditional := !deferDiagnostic &&
+			(executor.fid == function.IFF || executor.fid == function.CASE || executor.fid == function.COALESCE)
+		if conditional {
+			buildCtx.conditionalJoinDepth++
+			defer func() { buildCtx.conditionalJoinDepth-- }()
+		}
 		for i := range executor.parameterExecutor {
 			subExecutor, paramErr := newExpressionExecutorWithAllocation(proc, t.F.Args[i], selection, buildCtx)
 			if paramErr != nil {
@@ -391,13 +482,25 @@ func newExpressionExecutorWithAllocation(
 			}
 			executor.SetParameter(i, subExecutor)
 		}
+		if deferDiagnostic {
+			wrapped := &deferredJoinConstantExecutor{
+				executor:  executor,
+				owner:     owner,
+				typ:       typ,
+				selection: selection,
+			}
+			if buildCtx.joinActivation != nil && buildCtx.conditionalJoinDepth == 0 {
+				*buildCtx.joinActivation = append(*buildCtx.joinActivation, wrapped)
+			}
+			return wrapped, nil
+		}
 		return executor, nil
 	}
 
 	return nil, moerr.NewNYI(proc.Ctx, fmt.Sprintf("unsupported expression executor for %v now", planExpr))
 }
 
-func isStringToNumericCast(expr *plan.Expr) bool {
+func isStringToNumericCast(expr *plan.Expr, foldOwnedLiteral bool) bool {
 	if expr == nil {
 		return false
 	}
@@ -405,14 +508,19 @@ func isStringToNumericCast(expr *plan.Expr) bool {
 	if f == nil || f.Func == nil || len(f.Args) == 0 {
 		return false
 	}
-	switch f.Func.GetObjName() {
+	name := f.Func.GetObjName()
+	switch name {
 	case "cast", "cast_strict", "cast_assign", "cast_ignore":
 	default:
 		return false
 	}
 	source := types.T(f.Args[0].Typ.Id)
 	target := types.T(expr.Typ.Id)
-	return source.IsMySQLString() && target.ToType().IsNumeric()
+	if !source.IsMySQLString() || !target.ToType().IsNumeric() {
+		return false
+	}
+	return name != "cast" || f.GetSyntaxExplicitCast() || !foldOwnedLiteral ||
+		!function.IsStatementConstantInput(f.Args[0])
 }
 
 func newExpressionOffHeapVector(

@@ -37,9 +37,9 @@ const (
 	MySQLTimeMax = Time((838*SecsPerHour + 59*SecsPerMinute + 59) * MicroSecsPerSec)
 
 	// MySQLTimeFunctionMax is the largest value returned by MySQL duration
-	// functions such as SEC_TO_TIME. Unlike a TIME-column assignment, that
-	// result may retain microseconds at the 838:59:59 endpoint.
-	MySQLTimeFunctionMax = MySQLTimeMax + MicroSecsPerSec - 1
+	// functions such as SEC_TO_TIME. MySQL clamps function results to the
+	// same whole-second endpoint as TIME columns.
+	MySQLTimeFunctionMax = MySQLTimeMax
 )
 
 // no msec part
@@ -146,6 +146,9 @@ func parseTime(s string, scale int32, outOfRangeNegative, outOfRange *bool) (Tim
 	var msecPart string
 	timeString := s
 	if dotIdx := strings.IndexByte(s, '.'); dotIdx >= 0 {
+		if dotIdx == 0 || dotIdx == len(s)-1 {
+			return -1, moerr.NewInvalidInputNoCtxf("invalid time value %s", s)
+		}
 		timeString = s[:dotIdx]
 		msecPart = s[dotIdx+1:]
 	}
@@ -575,7 +578,12 @@ func IsTimeStringOutOfInternalRange(value string, scale int32) (negative bool, o
 func isDateType(s string) bool {
 	strArr := strings.Split(s, " ")
 	if len(strArr) > 1 {
-		if _, err := strconv.ParseUint(strArr[0], 10, 64); err != nil {
+		day := strArr[0]
+		if strings.HasPrefix(day, "-") || strings.HasPrefix(day, "+") {
+			// Signed day-prefixed TIME values are durations, not datetimes.
+			day = day[1:]
+		}
+		if _, err := strconv.ParseUint(day, 10, 64); err != nil {
 			return true
 		}
 	}

@@ -366,6 +366,8 @@ type PrepareStmt struct {
 	// cached capability and refreshes it once before execution.
 	numericPrefixConsumerPlan     *plan.Plan
 	numericPrefixConsumer         bool
+	joinDiagnosticCandidatePlan   *plan.Plan
+	joinDiagnosticCandidate       bool
 	directResultParamPositions    []int32
 	directResultParamPositionsSet bool
 	// fixedIntegerParamPositions identifies parameters with a fixed unsigned-

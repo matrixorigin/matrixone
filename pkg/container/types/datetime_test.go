@@ -25,6 +25,56 @@ import (
 
 var dayInMonth []int = []int{31, 28, 31, 30, 31, 30, 31, 31, 30, 31, 30, 31}
 
+// Calendar precedence is intentional for a successfully parsed compact date.
+// Padding a TIME to eight digits must not make an impossible calendar date.
+func TestCalendarCandidateCompactDurationBoundary(t *testing.T) {
+	for _, tc := range []struct {
+		input    string
+		calendar bool
+	}{
+		{"1234", false},
+		{"0001234", false},
+		{"00001234", false},
+		{"00001234.5", false},
+		{"00001234.123456", false},
+		{"00000000.5", false},
+		{"00010101.5", false},
+		{"00000101", false}, // zero-year DATE cannot be represented, but 00:01:01 can.
+		{"08385959", false}, // impossible calendar month, valid bounded TIME.
+		{"00010101", true},  // year 0001 is a valid compact DATE in MatrixOne.
+		{"00000000", true},  // established zero-date sentinel.
+		{"20240229", true},
+		{"20240230", true},       // invalid unambiguous calendar must not become TIME.
+		{"00000000001234", true}, // 14-digit datetime grammar retains precedence.
+		{"20240229123456.123456", true},
+		{"2024.2.29", true},
+		{"2024@2@29", true},
+		{"1234.5", false},
+		{"1-1-1", true},
+		{"24-2-29", true},
+		{"123-2-3", true},
+		{"24/2/29", true},
+		{"24.2.29", true},
+		{"24@2@29", true},
+		{"24-2-30", true},   // Invalid calendar spellings must not fall back to TIME.
+		{"10:11:12", false}, // An ordinary clock wins over a two-digit year.
+		{"12:99:00", false}, // An invalid clock must not become a calendar.
+		{"12:34.56", false}, // One-colon fractional clocks are still durations.
+		{"01:02.03", false},
+		{"1:2.3", false},
+		{"123:45.6", false},
+		{"12:99.56", false},   // Validate a malformed clock as TIME; do not reinterpret it as a date.
+		{"1234:56:07", false}, // Four-digit hours can cancel back into the SQL TIME range.
+		{"1234:56.7", false},
+		{"2024:02:29", false}, // Whole colon clocks take precedence at every hour width.
+		{"24:2-29", true},     // Mixed punctuation is not a whole clock.
+	} {
+		t.Run(tc.input, func(t *testing.T) {
+			require.Equal(t, tc.calendar, IsCalendarStringCandidate(tc.input))
+		})
+	}
+}
+
 func TestDate(t *testing.T) {
 	fmt.Println(DateFromCalendar(1215, 6, 15).Calendar(true))
 	fmt.Println(DateFromCalendar(1776, 7, 4).Calendar(true))
@@ -177,6 +227,43 @@ func TestSubDateTime(t *testing.T) {
 		d, b := d.AddInterval(-ret, rettype, DateType)
 		require.Equal(t, d.String2(6), test.expect)
 		require.Equal(t, b, test.success)
+	}
+}
+
+func TestConvertToMonthHonorsTimeOfDay(t *testing.T) {
+	start, err := ParseDatetime("2024-01-31 10:00:00.000001", 6)
+	require.NoError(t, err)
+	end, err := ParseDatetime("2024-03-31 10:00:00.000000", 6)
+	require.NoError(t, err)
+	require.Equal(t, int64(1), end.ConvertToMonth(start))
+
+	start, err = ParseDatetime("2024-01-31 10:00:00.000000", 6)
+	require.NoError(t, err)
+	end, err = ParseDatetime("2024-03-31 10:00:00.000001", 6)
+	require.NoError(t, err)
+	require.Equal(t, int64(2), end.ConvertToMonth(start))
+
+	start, err = ParseDatetime("2024-03-31 10:00:00.000000", 6)
+	require.NoError(t, err)
+	end, err = ParseDatetime("2024-01-31 10:00:00.000001", 6)
+	require.NoError(t, err)
+	require.Equal(t, int64(-1), end.ConvertToMonth(start))
+
+	start, err = ParseDatetime("2000-01-01 00:00:00.000000", 6)
+	require.NoError(t, err)
+	end, err = ParseDatetime("1999-12-31 23:59:59.999999", 6)
+	require.NoError(t, err)
+	require.Equal(t, int64(0), end.ConvertToMonth(start))
+}
+
+func TestParseDatetimeMalformedPrefixesNeverPanic(t *testing.T) {
+	for _, separator := range []string{" ", "T"} {
+		for prefixLength := 0; prefixLength < 8; prefixLength++ {
+			input := "1234-05-06"[:prefixLength] + separator + "12:34:56.000000"
+			require.NotPanics(t, func() {
+				_, _ = ParseDatetime(input, 6)
+			}, input)
+		}
 	}
 }
 
@@ -357,6 +444,11 @@ func TestParseDatetime(t *testing.T) {
 			name: "1-digit month and day",
 			args: "2000-1-2 3:4:5",
 			want: "2000-01-02 03:04:05.000000",
+		},
+		{
+			name:    "short date prefix before a long clock",
+			args:    "123 -12:34:56.000000",
+			wantErr: true,
 		},
 		{
 			name: "trailing colon in time",
@@ -675,5 +767,39 @@ func TestAddIntervalMicrosecond(t *testing.T) {
 				require.Equal(t, test.want, got)
 			}
 		})
+	}
+}
+
+// DATE and DATETIME share calendar spelling; clock fields never wrap into
+// another day, and malformed prefixes are rejected without panic recovery.
+func TestParseDatetimeCalendarAndClockContract(t *testing.T) {
+	for _, tc := range []struct{ input, want string }{
+		{"50-01-01 00:00:01", "2050-01-01 00:00:01.000000"},
+		{"90-01-01 00:00:01", "1990-01-01 00:00:01.000000"},
+		{"69-1-1 0:0", "2069-01-01 00:00:00.000000"},
+		{"70-1-1T0:0", "1970-01-01 00:00:00.000000"},
+		{"24.2.29 1:2:3.4", "2024-02-29 01:02:03.400000"},
+		{"2024@2@29 1:2:3.4", "2024-02-29 01:02:03.400000"},
+		{"20240229235959.999999", "2024-02-29 23:59:59.999999"},
+	} {
+		t.Run(tc.input, func(t *testing.T) {
+			got, err := ParseDatetime(tc.input, 6)
+			require.NoError(t, err)
+			require.Equal(t, tc.want, got.String2(6))
+		})
+	}
+	for _, input := range []string{"T", "1 T", "24-1-1 1:2 3:4", "2024-1-1 1 12:34", "2024- 12:34:56", "2024-1- 12:34:56", "20240230235959", "20240229240000", "20240229236000", "20240229235960", "20240229x00000", "20240229/00000", "2024-02-29 24:00:00", "2024-02-29 23:60:00", "2024-02-29 23:59:60", "9999-12-31 23:59:59.9999999"} {
+		t.Run(input, func(t *testing.T) { _, err := ParseDatetime(input, 6); require.Error(t, err) })
+	}
+}
+
+func TestTemporalFractionValidatesDiscardedSuffix(t *testing.T) {
+	for _, scale := range []int32{0, 1, 6} {
+		for _, suffix := range []string{".", ".1234567x", ".12345678!", ".123456789012345678901234x"} {
+			_, err := ParseDatetime("2024-02-29 12:34:56"+suffix, scale)
+			require.Error(t, err)
+			_, err = ParseTime("12:34:56"+suffix, scale)
+			require.Error(t, err)
+		}
 	}
 }

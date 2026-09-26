@@ -92,6 +92,12 @@ func RequiredPersistedExpressionProtocolVersion(owner any) (int64, error) {
 	if err != nil {
 		return 0, err
 	}
+	if features.InvalidTemporalResultContract {
+		return 0, moerr.NewNotSupportedNoCtx("persisted temporal result vector contract mismatch requires rebinding")
+	}
+	if features.LegacyIntervalUnits {
+		return 0, moerr.NewNotSupportedNoCtx("persisted legacy interval unit contract requires rebinding")
+	}
 	requiredVersion := int64(0)
 	if features.IPFunctionSemantics {
 		requiredVersion = defines.MORPCVersion72
@@ -117,6 +123,10 @@ func RequiredPersistedExpressionProtocolVersion(owner any) (int64, error) {
 	}
 	if features.DecimalDivisionSemantics && requiredVersion < defines.MORPCVersion97 {
 		requiredVersion = defines.MORPCVersion97
+	}
+	if (features.TemporalResultContracts || features.NormalizedIntervalUnits || features.WeekSessionDefault) &&
+		requiredVersion < defines.MORPCVersion98 {
+		requiredVersion = defines.MORPCVersion98
 	}
 	return requiredVersion, nil
 }

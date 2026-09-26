@@ -1017,6 +1017,14 @@ func newCast(parameters []*vector.Vector, result vector.FunctionResultWrapper, p
 	// Cast Parameter1 as Type Parameter2
 	fromType := parameters[0].GetType()
 	toType := parameters[1].GetType()
+	if mode == castModeExplicit && toType.Oid == types.T_date {
+		switch fromType.Oid {
+		case types.T_date:
+			return DateToDate(parameters, result, proc, length, selectList)
+		case types.T_datetime:
+			return DatetimeToDate(parameters, result, proc, length, selectList)
+		}
+	}
 	from := parameters[0]
 	if mode.isAssignment() && toType.Oid.IsInteger() {
 		switch fromType.Oid {
@@ -4700,8 +4708,12 @@ func timeToTime(
 
 func mysqlTimeForCast(ctx context.Context, proc *process.Process, value types.Time, mode castMode, scale int32, row uint64) (types.Time, error) {
 	maxValue := types.MySQLTimeMaxForScale(scale)
-	if !mode.isAssignment() || (value >= -maxValue && value <= maxValue) {
+	if value >= -maxValue && value <= maxValue {
 		return value, nil
+	}
+	if !mode.isAssignment() {
+		appendTimeRangeWarning(proc, value, scale)
+		return types.ClampMySQLTimeForScale(value, scale), nil
 	}
 	return mysqlTimeOutOfRangeForCast(ctx, proc, mode, value.String2(scale), value < 0, row)
 }
@@ -6657,9 +6669,6 @@ func strToSignedWithProc[T constraints.Signed](
 			if isBinary {
 				var r int64
 				var num uint64
-				if len(v) == 0 {
-					return moerr.NewInvalidArg(ctx, "cast to int", v)
-				}
 				if len(v) > 8 {
 					return moerr.NewOutOfRange(ctx, "int", "")
 				}
@@ -6873,6 +6882,9 @@ func parseStringToFloatWithBitSize(s string, bitSize int, mode SQLCompatibilityM
 func parseBytesToFloat(value []byte, isBinary bool, bitSize int, mode SQLCompatibilityMode) (float64, error) {
 	if !isBinary {
 		return parseStringToFloatWithBitSize(convertByteSliceToString(value), bitSize, mode)
+	}
+	if len(value) == 0 {
+		return 0, nil
 	}
 
 	encoded := hex.EncodeToString(value)
@@ -7585,7 +7597,11 @@ func strToUnsignedWithProc[T constraints.Unsigned](
 			if isBinary {
 				s := hex.EncodeToString(v)
 				res = &s
-				val, tErr = strconv.ParseUint(s, 16, 64)
+				if len(v) == 0 {
+					val, tErr = 0, nil
+				} else {
+					val, tErr = strconv.ParseUint(s, 16, 64)
+				}
 			} else {
 				s := strings.TrimSpace(convertByteSliceToString(v))
 				res = &s
@@ -8752,6 +8768,7 @@ func strToTime(
 	proc *process.Process, from vector.FunctionParameterWrapper[types.Varlena],
 	to *vector.FunctionResult[types.Time], length int, selectList *FunctionSelectList, mode castMode) error {
 	ctx := proc.Ctx
+	isBinary := from.GetSourceVector().GetIsBin()
 	var i uint64
 	var l = uint64(length)
 	var dft types.Time
@@ -8764,8 +8781,22 @@ func strToTime(
 			continue
 		}
 		v, null := from.GetStrValue(i)
-		if null || len(v) == 0 {
+		if null {
 			if err := to.Append(dft, true); err != nil {
+				return err
+			}
+		} else if len(v) == 0 {
+			// Keep the 4.2 empty-string -> NULL contract for ordinary
+			// assignments as well as expressions. Literal folding, column
+			// evaluation and prepared string/binary payloads must agree in
+			// both strict and non-strict sessions. IGNORE explicitly adjusts
+			// invalid text to the target's zero value with a warning.
+			if mode == castModeAssignmentIgnore && !isBinary {
+				appendTimeConversionWarning(proc, "", mode, false)
+				if err := to.Append(dft, false); err != nil {
+					return err
+				}
+			} else if err := to.Append(dft, true); err != nil {
 				return err
 			}
 		} else {
@@ -8794,6 +8825,30 @@ func strToTime(
 						continue
 					}
 				}
+				// In non-strict mode MySQL consumes a valid TIME prefix and
+				// converts the remainder to a warning.  A completely malformed
+				// expression becomes NULL; an assignment stores zero TIME.
+				if (mode == castModeAssignmentIgnore || !isStrictSqlMode(proc)) && !isBinary {
+					if prefix, ok := parseTimePrefix(s, totype.Scale); ok {
+						appendTimeConversionWarning(proc, s, mode, true)
+						prefix, err = mysqlTimeForCast(ctx, proc, prefix, mode, totype.Scale, i)
+						if err != nil {
+							return err
+						}
+						if err = to.Append(prefix, false); err != nil {
+							return err
+						}
+						continue
+					}
+					appendTimeConversionWarning(proc, s, mode, false)
+					// Expression casts publish SQL NULL; non-strict and IGNORE
+					// assignments publish the target's zero value instead.
+					nullResult := !mode.isAssignment() || mode == castModeStrictStringWidth
+					if err = to.Append(dft, nullResult); err != nil {
+						return err
+					}
+					continue
+				}
 				return err
 			}
 			val, err = mysqlTimeForCast(ctx, proc, val, mode, totype.Scale, i)
@@ -8806,6 +8861,46 @@ func strToTime(
 		}
 	}
 	return nil
+}
+
+// parseTimePrefix recovers a valid TIME followed by non-time text. Never trim
+// inside a numeric field: an invalid minute/second must not become valid by
+// dropping digits from its end.
+func parseTimePrefix(value string, scale int32) (types.Time, bool) {
+	value = strings.TrimSpace(value)
+	for i := 0; i < len(value); i++ {
+		switch value[i] {
+		case '0', '1', '2', '3', '4', '5', '6', '7', '8', '9', ':', '.', '-', '+', ' ':
+			continue
+		}
+		candidate := strings.TrimRight(value[:i], " .:+-")
+		if candidate != "" {
+			if parsed, err := types.ParseTime(candidate, scale); err == nil {
+				return parsed, true
+			}
+		}
+		break
+	}
+	return 0, false
+}
+
+func appendTimeConversionWarning(proc *process.Process, value string, mode castMode, prefix bool) {
+	if proc == nil {
+		return
+	}
+	appender, ok := proc.GetWarningSink().(warningDiagnosticAppender)
+	if !ok {
+		return
+	}
+	if mode.isAssignment() {
+		appender.AppendWarningDiagnostic(moerr.WARN_DATA_TRUNCATED,
+			fmt.Sprintf("Data truncated for TIME value: '%-.128s'", value))
+		return
+	}
+	// Keep the same 1292 diagnostic used by MySQL for expression casts.
+	_ = prefix
+	appender.AppendWarningDiagnostic(moerr.ER_TRUNCATED_WRONG_VALUE,
+		fmt.Sprintf("Truncated incorrect TIME value: '%-.128s'", value))
 }
 
 func strToDatetime(proc *process.Process,

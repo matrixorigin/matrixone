@@ -480,11 +480,12 @@ func TestDecimal256IntervalGuardsAndProtocolPaths(t *testing.T) {
 func TestDecimal256IntervalRejectsInt64OverflowAfterRounding(t *testing.T) {
 	ctx := context.Background()
 	dateExpr := makeDatetimeConst("2026-01-01 00:00:00")
-	_, err := resetDateFunctionArgs(ctx, dateExpr, makeIntervalExpr(
+	args, err := resetDateFunctionArgs(ctx, dateExpr, makeIntervalExpr(
 		makeWideDecimalIntervalExpr(t, "9223372036854.77580800000000000000000000000000000000"),
 		"SECOND"))
-	require.Error(t, err)
-	require.ErrorContains(t, err, "out of range")
+	require.NoError(t, err)
+	require.Equal(t, "to_interval_microsecond", args[1].GetF().GetFunc().GetObjName(),
+		"overflow is decided at execution, after branch selection")
 }
 
 func TestDecimal256IntervalRoundsExactlyBeforeWindowValidation(t *testing.T) {

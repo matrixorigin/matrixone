@@ -46,3 +46,22 @@ func TestExtractToDateReturnTypeDerivedDateDirectives(t *testing.T) {
 		require.Zero(t, fsp, format)
 	}
 }
+
+func TestExtractToDateReturnTypeDurationDays(t *testing.T) {
+	for _, tc := range []struct {
+		format string
+		want   types.T
+		fsp    int
+	}{
+		{"%d %H:%i:%s", types.T_time, 0},
+		{"%e %H:%i:%s.%f", types.T_time, 6},
+		{"%D %T", types.T_time, 0},
+		{"%Y-%m-%d %H:%i:%s", types.T_datetime, 0},
+		{"%d", types.T_date, 0},
+		{"%%", types.T_date, 0},
+	} {
+		tp, fsp := ExtractToDateReturnType(tc.format)
+		require.Equal(t, tc.want, tp, tc.format)
+		require.Equal(t, tc.fsp, fsp, tc.format)
+	}
+}

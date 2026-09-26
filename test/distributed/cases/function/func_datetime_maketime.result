@@ -27,10 +27,10 @@ time8
 100:00:00
 SELECT MAKETIME(839, 0, 0) AS oversized_positive_hour;
 oversized_positive_hour
-838:59:59
+null
 SELECT MAKETIME(-839, 0, 0) AS oversized_negative_hour;
 oversized_negative_hour
--838:59:59
+null
 SELECT CAST(MAKETIME(-1, 15, 30) AS VARCHAR) AS negative_hour;
 negative_hour
 -01:15:30
@@ -87,10 +87,10 @@ fractional_carry
 13:00:00.000000
 SELECT CAST(MAKETIME(838, 59, 59.9999996) AS VARCHAR) AS positive_rounded_endpoint;
 positive_rounded_endpoint
-838:59:59.000000
+null
 SELECT CAST(MAKETIME(-838, 59, 59.9999996) AS VARCHAR) AS negative_rounded_endpoint;
 negative_rounded_endpoint
--838:59:59.000000
+null
 SELECT CAST(MAKETIME(12, 59, '59.99999949999999999') AS VARCHAR) AS varchar_below_half_microsecond;
 varchar_below_half_microsecond
 12:59:59.999999

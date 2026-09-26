@@ -40,7 +40,8 @@ func TestStatisticsUpgradeRegistration(t *testing.T) {
 	require.Greater(t, versions.Compare(metadata.Version, "4.0.7"), 0, "old workers must reject the target version")
 	require.False(t, metadata.CanDirectUpgrade("4.0.6"), "do not bypass the 4.0.7 provenance migration")
 	require.Equal(t, versions.Yes, metadata.UpgradeTenant)
-	require.Equal(t, uint32(len(tenantUpgEntries)), metadata.VersionOffset)
+	require.Equal(t, versions.Yes, metadata.UpgradeCluster)
+	require.Equal(t, uint32(len(tenantUpgEntries)+len(clusterUpgEntries)), metadata.VersionOffset)
 
 	var found bool
 	for _, entry := range tenantUpgEntries {
@@ -57,6 +58,9 @@ func TestStatisticsUpgradeHandlerLifecycle(t *testing.T) {
 	runtime.RunTest("", func(runtime.Runtime) {
 		ctx := context.Background()
 		txn := newVersionTxnExecutor(t, func(sql string) (executor.Result, error) {
+			if strings.HasPrefix(sql, "SELECT reldatabase, relname, account_id") {
+				return statisticsStringResult(t, catalog.MO_CATALOG), nil
+			}
 			require.True(t, strings.HasPrefix(sql, "SELECT tbl.rel_createsql"), "unexpected SQL: %s", sql)
 			return statisticsStringResult(t, sysview.InformationSchemaStatisticsDDL), nil
 		})

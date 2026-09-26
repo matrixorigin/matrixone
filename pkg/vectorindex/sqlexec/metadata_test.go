@@ -91,6 +91,10 @@ func TestResolveVariableWithSessionDefaults(t *testing.T) {
 	require.Nil(t, err)
 	require.Nil(t, v)
 
+	v, err = m.ResolveVariableWithSessionDefaults("default_week_format", true, false)
+	require.NoError(t, err)
+	require.Equal(t, int64(0), v)
+
 	// FAIL FAST on an un-enumerated session var: rather than silently defaulting to
 	// nil, a newly-plumbed dependency surfaces loudly, named, so it gets a
 	// deliberate default. (This is design B.)

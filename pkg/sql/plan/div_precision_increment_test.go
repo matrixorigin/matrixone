@@ -420,19 +420,19 @@ func TestDivisionSQLBoundaries(t *testing.T) {
 			width: 50, scale: 30, want: "2020010123595.9999999" + strings.Repeat("0", 23),
 		},
 		{
-			name: "time six digit maximum", increment: 4,
+			name: "time six digit conversion clamps before division", increment: 4,
 			sql:   "select cast('2562047787:59:59.999999' as time(6)) / cast(1 as signed)",
-			width: 24, scale: 10, want: "25620477875959.9999990000",
+			width: 24, scale: 10, want: "8385959.0000000000",
 		},
 		{
-			name: "time six digit decimal64 divisor", increment: 4,
+			name: "clamped time decimal64 divisor", increment: 4,
 			sql:   "select cast('2562047787:59:59.999999' as time(6)) / cast(1 as decimal(10,0))",
-			width: 24, scale: 10, want: "25620477875959.9999990000",
+			width: 24, scale: 10, want: "8385959.0000000000",
 		},
 		{
-			name: "time six digit decimal128 divisor", increment: 4,
+			name: "clamped time decimal128 divisor", increment: 4,
 			sql:   "select cast('2562047787:59:59.999999' as time(6)) / cast(1 as decimal(20,0))",
-			width: 24, scale: 10, want: "25620477875959.9999990000",
+			width: 24, scale: 10, want: "8385959.0000000000",
 		},
 		{
 			name: "time six digit reversed", increment: 4,
@@ -440,9 +440,9 @@ func TestDivisionSQLBoundaries(t *testing.T) {
 			width: 29, scale: 4, want: "0.0000",
 		},
 		{
-			name: "time six digit negative maximum", increment: 4,
+			name: "negative time conversion clamps before division", increment: 4,
 			sql:   "select cast('-2562047787:59:59.999999' as time(6)) / cast(1 as signed)",
-			width: 24, scale: 10, want: "-25620477875959.9999990000",
+			width: 24, scale: 10, want: "-8385959.0000000000",
 		},
 		{
 			name: "date with decimal divisor", increment: 4,

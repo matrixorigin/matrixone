@@ -19,6 +19,7 @@ import (
 	"testing"
 
 	"github.com/matrixorigin/matrixone/pkg/container/types"
+	planpb "github.com/matrixorigin/matrixone/pkg/pb/plan"
 	"github.com/stretchr/testify/require"
 )
 
@@ -31,15 +32,15 @@ func TestPreparedIntervalMarkerRebindsInternalDateFunction(t *testing.T) {
 		expectedUnit types.IntervalType
 		normalized   bool
 	}{
-		{name: "integer", unit: "second", value: ParamValue{Value: "3", SourceType: types.T_int64.ToType(), HasSourceType: true}, expectedUnit: types.Second},
-		{name: "negative integer", unit: "second", value: ParamValue{Value: "-3", SourceType: types.T_int64.ToType(), HasSourceType: true}, expectedUnit: types.Second},
-		{name: "NULL integer", unit: "second", value: ParamValue{SourceType: types.T_int64.ToType(), HasSourceType: true}, expectedUnit: types.Second},
-		{name: "valid string", unit: "second", value: ParamValue{Value: "3", SourceType: types.T_varchar.ToType(), HasSourceType: true}, expectedUnit: types.Second, normalized: true},
-		{name: "invalid string", unit: "second", value: ParamValue{Value: "not-an-interval", SourceType: types.T_varchar.ToType(), HasSourceType: true}, expectedUnit: types.Second, normalized: true},
-		{name: "DAY_SECOND string", unit: "day_second", value: ParamValue{Value: "1 02:03:04", SourceType: types.T_varchar.ToType(), HasSourceType: true}, expectedUnit: types.Second, normalized: true},
+		{name: "integer", unit: "second", value: ParamValue{Value: "3", SourceType: types.T_int64.ToType(), HasSourceType: true}, expectedUnit: types.MicroSecond},
+		{name: "negative integer", unit: "second", value: ParamValue{Value: "-3", SourceType: types.T_int64.ToType(), HasSourceType: true}, expectedUnit: types.MicroSecond},
+		{name: "NULL integer", unit: "second", value: ParamValue{SourceType: types.T_int64.ToType(), HasSourceType: true}, expectedUnit: types.MicroSecond},
+		{name: "valid string", unit: "second", value: ParamValue{Value: "3", SourceType: types.T_varchar.ToType(), HasSourceType: true}, expectedUnit: types.MicroSecond, normalized: true},
+		{name: "invalid string", unit: "second", value: ParamValue{Value: "not-an-interval", SourceType: types.T_varchar.ToType(), HasSourceType: true}, expectedUnit: types.MicroSecond, normalized: true},
+		{name: "DAY_SECOND string", unit: "day_second", value: ParamValue{Value: "1 02:03:04", SourceType: types.T_varchar.ToType(), HasSourceType: true}, expectedUnit: types.MicroSecond, normalized: true},
 		{name: "YEAR_MONTH string", unit: "year_month", value: ParamValue{Value: "1-2", SourceType: types.T_varchar.ToType(), HasSourceType: true}, expectedUnit: types.Month, normalized: true},
-		{name: "binary integer", unit: "second", value: ParamValue{Value: "3", RuntimeType: types.T_int64.ToType(), HasRuntimeType: true, IsBinaryProtocol: true}, expectedUnit: types.Second},
-		{name: "binary string", unit: "second", value: ParamValue{Value: "3", RuntimeType: types.T_text.ToType(), HasRuntimeType: true, IsBinaryProtocol: true}, expectedUnit: types.Second, normalized: true},
+		{name: "binary integer", unit: "second", value: ParamValue{Value: "3", RuntimeType: types.T_int64.ToType(), HasRuntimeType: true, IsBinaryProtocol: true}, expectedUnit: types.MicroSecond},
+		{name: "binary string", unit: "second", value: ParamValue{Value: "3", RuntimeType: types.T_text.ToType(), HasRuntimeType: true, IsBinaryProtocol: true}, expectedUnit: types.MicroSecond, normalized: true},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			for _, name := range []string{"date_add", "date_sub"} {
@@ -52,7 +53,7 @@ func TestPreparedIntervalMarkerRebindsInternalDateFunction(t *testing.T) {
 					dateFunction := findPlanFunctionExpr(preparedPlan, name)
 					require.NotNil(t, dateFunction, preparedPlan.String())
 					require.Len(t, dateFunction.GetF().GetArgs(), 3, dateFunction.String())
-					require.NotNil(t, findPlanFunctionExpr(preparedPlan, "to_interval"), preparedPlan.String())
+					require.NotNil(t, findPlanFunctionExpr(preparedPlan, "to_interval_microsecond"), preparedPlan.String())
 
 					filled, _, err := FillValuesOfParamsInPlanWithSpecialization(
 						ctx,
@@ -66,7 +67,7 @@ func TestPreparedIntervalMarkerRebindsInternalDateFunction(t *testing.T) {
 					require.Equal(t, int32(types.T_int64), dateFunction.GetF().GetArgs()[1].Typ.Id, dateFunction.String())
 					require.Equal(t, int64(tc.expectedUnit), dateFunction.GetF().GetArgs()[2].GetLit().GetI64Val(), dateFunction.String())
 					if tc.normalized {
-						require.NotNil(t, findPlanFunctionExpr(filled, "to_interval"), filled.String())
+						require.NotNil(t, findPlanFunctionExpr(filled, "to_interval_microsecond"), filled.String())
 					}
 				})
 			}
@@ -94,6 +95,228 @@ func TestPreparedIntervalMarkerRepeatedExecutionsDoNotMutatePlan(t *testing.T) {
 		require.NoError(t, fillErr)
 		require.False(t, preparedExprContainsParam(findPlanFunctionExpr(filled, "date_add")), filled.String())
 		require.True(t, preparedExprContainsParam(findPlanFunctionExpr(preparedPlan, "date_add")), preparedPlan.String())
+	}
+}
+
+// TIME's interval eligibility belongs to the original SQL unit. Dynamic
+// strings, decimals and prepared markers must not hide a DAY-containing unit
+// by first normalizing its numeric value to MICROSECOND.
+func TestTimeIntervalOriginalUnitBindingMatrix(t *testing.T) {
+	ctx := context.Background()
+	timeExpr := &planpb.Expr{Typ: planpb.Type{Id: int32(types.T_time)}, Expr: &planpb.Expr_Col{Col: &planpb.ColRef{ColPos: 0}}}
+	dateExpr := &planpb.Expr{Typ: planpb.Type{Id: int32(types.T_date)}, Expr: &planpb.Expr_Col{Col: &planpb.ColRef{ColPos: 0}}}
+	inputs := []struct {
+		name string
+		expr *planpb.Expr
+	}{
+		{"string one", makePlan2StringConstExprWithType("1")},
+		{"string zero", makePlan2StringConstExprWithType("0")},
+		{"string fractional", makePlan2StringConstExprWithType("1.5")},
+		{"integer one", makePlan2Int64ConstExprWithType(1)},
+		{"integer zero", makePlan2Int64ConstExprWithType(0)},
+		{"floating one", makePlan2Float64ConstExprWithType(1.5)},
+		{"NULL", makePlan2NullConstExprWithType()},
+		{"varchar column", &planpb.Expr{Typ: planpb.Type{Id: int32(types.T_varchar)}, Expr: &planpb.Expr_Col{Col: &planpb.ColRef{ColPos: 1}}}},
+		{"integer column", &planpb.Expr{Typ: planpb.Type{Id: int32(types.T_int64)}, Expr: &planpb.Expr_Col{Col: &planpb.ColRef{ColPos: 1}}}},
+		{"marker", &planpb.Expr{Typ: planpb.Type{Id: int32(types.T_text)}, Expr: &planpb.Expr_P{P: &planpb.ParamRef{Pos: 0}}}},
+	}
+	bind := func(date *planpb.Expr, value *planpb.Expr, unit string) ([]*planpb.Expr, error) {
+		interval := &planpb.Expr{Expr: &planpb.Expr_List{List: &planpb.ExprList{List: []*planpb.Expr{
+			value, makePlan2StringConstExprWithType(unit),
+		}}}}
+		return resetDateFunctionArgs(ctx, date, interval)
+	}
+	for _, unit := range []string{
+		"day", "week", "month", "quarter", "year", "year_month",
+		"day_hour", "day_minute", "day_second", "day_microsecond",
+	} {
+		for _, input := range inputs {
+			t.Run(unit+"/"+input.name, func(t *testing.T) {
+				_, err := bind(timeExpr, input.expr, unit)
+				require.ErrorContains(t, err, "time interval unit")
+			})
+		}
+	}
+	for _, unit := range []string{
+		"microsecond", "second", "minute", "hour",
+		"second_microsecond", "minute_microsecond", "minute_second",
+		"hour_microsecond", "hour_second", "hour_minute",
+	} {
+		for _, input := range inputs {
+			t.Run("supported/"+unit+"/"+input.name, func(t *testing.T) {
+				args, err := bind(timeExpr, input.expr, unit)
+				require.NoError(t, err)
+				require.Len(t, args, 3)
+				require.Equal(t, int32(types.T_time), args[0].Typ.Id)
+				originalUnit, err := types.IntervalTypeOf(unit)
+				require.NoError(t, err)
+				// A numeric column cannot reach the TIME executor with an
+				// unsupported compound unit after losing its SQL spelling.
+				if input.name == "integer column" {
+					switch unit {
+					case "second_microsecond", "minute_microsecond", "minute_second",
+						"hour_microsecond", "hour_second", "hour_minute":
+						require.Equal(t, int64(originalUnit), args[2].GetLit().GetI64Val())
+						require.Equal(t, int32(types.T_varchar), args[1].Typ.Id)
+						require.Greater(t, args[1].Typ.Width, int32(0))
+					}
+				}
+			})
+		}
+	}
+	for _, unit := range []string{"day", "day_second", "month", "year_month"} {
+		_, err := bind(dateExpr, makePlan2StringConstExprWithType("1"), unit)
+		require.NoError(t, err, unit)
+	}
+}
+
+func TestTimeNumericDecimalCompoundRetainsSource(t *testing.T) {
+	ctx := context.Background()
+	timeExpr := &planpb.Expr{Typ: planpb.Type{Id: int32(types.T_time)}, Expr: &planpb.Expr_Col{Col: &planpb.ColRef{ColPos: 0}}}
+	for _, unit := range []string{"second_microsecond", "minute_microsecond", "minute_second", "hour_microsecond", "hour_second", "hour_minute"} {
+		for _, sourceType := range []planpb.Type{
+			{Id: int32(types.T_decimal64), Width: 12, Scale: 0},
+			{Id: int32(types.T_decimal64), Width: 12, Scale: 7},
+			{Id: int32(types.T_decimal128), Width: 30, Scale: 14},
+			{Id: int32(types.T_decimal256), Width: 50, Scale: 20},
+			{Id: int32(types.T_float32)},
+			{Id: int32(types.T_float64)},
+		} {
+			value := &planpb.Expr{Typ: sourceType, Expr: &planpb.Expr_Col{Col: &planpb.ColRef{ColPos: 1}}}
+			interval := &planpb.Expr{Expr: &planpb.Expr_List{List: &planpb.ExprList{List: []*planpb.Expr{value, makePlan2StringConstExprWithType(unit)}}}}
+			args, err := resetDateFunctionArgs(ctx, timeExpr, interval)
+			require.NoError(t, err, unit)
+			require.Len(t, args, 3)
+			require.Equal(t, value, args[1], unit)
+			originalUnit, err := types.IntervalTypeOf(unit)
+			require.NoError(t, err)
+			require.Equal(t, int64(originalUnit), args[2].GetLit().GetI64Val())
+		}
+	}
+}
+
+func TestDateArithmeticNumericSourcesPreserveTheirUnitAndPrecision(t *testing.T) {
+	ctx := context.Background()
+	for _, tc := range []struct {
+		name      string
+		dateType  types.T
+		valueType planpb.Type
+		unit      string
+	}{
+		{"datetime compound decimal", types.T_datetime, planpb.Type{Id: int32(types.T_decimal128), Width: 30, Scale: 1}, "hour_second"},
+		{"datetime compound float", types.T_datetime, planpb.Type{Id: int32(types.T_float64)}, "hour_second"},
+		{"datetime scalar decimal256", types.T_datetime, planpb.Type{Id: int32(types.T_decimal256), Width: 50, Scale: 20}, "hour"},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			dateExpr := &planpb.Expr{Typ: planpb.Type{Id: int32(tc.dateType)}, Expr: &planpb.Expr_Col{Col: &planpb.ColRef{ColPos: 0}}}
+			valueExpr := &planpb.Expr{Typ: tc.valueType, Expr: &planpb.Expr_Col{Col: &planpb.ColRef{ColPos: 1}}}
+			args, err := resetDateFunctionArgs(ctx, dateExpr, makeIntervalExpr(valueExpr, tc.unit))
+			require.NoError(t, err)
+			require.Len(t, args, 3)
+			normalizer := args[1].GetF()
+			require.NotNil(t, normalizer)
+			require.Equal(t, "to_interval_microsecond", normalizer.Func.ObjName)
+			require.Equal(t, tc.valueType.Id, normalizer.Args[0].Typ.Id)
+			require.Equal(t, tc.valueType.Scale, normalizer.Args[0].Typ.Scale)
+			require.Equal(t, int64(types.MicroSecond), args[2].GetLit().GetI64Val())
+		})
+	}
+}
+
+func TestPrepareKeepsMalformedDatetimeInInactiveBranch(t *testing.T) {
+	_, err := runOneStmt(NewMockOptimizer(false), t,
+		"PREPARE p FROM 'SELECT CASE WHEN ? THEN CAST(''123 -12:34:56.000000'' AS DATETIME) ELSE CAST(''2024-01-01'' AS DATETIME) END'")
+	require.NoError(t, err)
+}
+
+func TestScalarNumericColumnPreservesFractionalUnit(t *testing.T) {
+	ctx := context.Background()
+	for _, unit := range []string{"second", "minute", "hour", "day"} {
+		firstType := types.T_time
+		if unit == "day" {
+			firstType = types.T_datetime
+		}
+		first := &planpb.Expr{Typ: planpb.Type{Id: int32(firstType)}, Expr: &planpb.Expr_Col{Col: &planpb.ColRef{ColPos: 0}}}
+		for _, sourceType := range []planpb.Type{
+			{Id: int32(types.T_decimal64), Width: 12, Scale: 7},
+			{Id: int32(types.T_decimal128), Width: 30, Scale: 14},
+			{Id: int32(types.T_float32)},
+			{Id: int32(types.T_float64)},
+		} {
+			value := &planpb.Expr{Typ: sourceType, Expr: &planpb.Expr_Col{Col: &planpb.ColRef{ColPos: 1}}}
+			interval := &planpb.Expr{Expr: &planpb.Expr_List{List: &planpb.ExprList{List: []*planpb.Expr{value, makePlan2StringConstExprWithType(unit)}}}}
+			args, err := resetDateFunctionArgs(ctx, first, interval)
+			require.NoError(t, err, unit)
+			if firstType == types.T_time {
+				switch unit {
+				case "second":
+					require.Equal(t, int64(types.Second), args[2].GetLit().GetI64Val())
+				case "minute":
+					require.Equal(t, int64(types.Minute), args[2].GetLit().GetI64Val())
+				case "hour":
+					require.Equal(t, int64(types.Hour), args[2].GetLit().GetI64Val())
+				}
+				require.Equal(t, value, args[1], "TIME executor retains nullable typed input")
+				continue
+			}
+			require.Equal(t, int64(types.MicroSecond), args[2].GetLit().GetI64Val(), unit)
+			normalizer := args[1].GetF()
+			require.NotNil(t, normalizer, unit)
+			require.Equal(t, "to_interval_microsecond", normalizer.Func.ObjName, unit)
+			require.Equal(t, sourceType.Id, normalizer.Args[0].Typ.Id, unit)
+		}
+	}
+}
+
+func TestPreparedTimeCompoundIntegerRebindKeepsRawUnit(t *testing.T) {
+	ctx := context.Background()
+	base := &planpb.Expr{Typ: planpb.Type{Id: int32(types.T_time)}, Expr: &planpb.Expr_Col{Col: &planpb.ColRef{ColPos: 0}}}
+	marker := &planpb.Expr{Typ: planpb.Type{Id: int32(types.T_varchar)}, Expr: &planpb.Expr_Col{Col: &planpb.ColRef{ColPos: 1}}}
+	unit := makePlan2Int64ConstExprWithType(int64(types.Minute_Second))
+	original := &planpb.Expr{Typ: planpb.Type{Id: int32(types.T_time), Scale: 6}, Expr: &planpb.Expr_F{F: &planpb.Function{
+		Func: &planpb.ObjectRef{ObjName: "date_add"}, Args: []*planpb.Expr{base, marker, unit},
+	}}}
+	bound, err := bindPreparedFuncExprImplByPlanExpr(ctx, original, "date_add",
+		[]*planpb.Expr{base, makePlan2Int64ConstExprWithType(1), unit}, nil)
+	require.NoError(t, err)
+	require.Equal(t, int32(types.T_varchar), bound.GetF().Args[1].Typ.Id)
+	require.Equal(t, int64(types.Minute_Second), bound.GetF().Args[2].GetLit().GetI64Val())
+}
+
+func TestTimeCalendarIntervalRejectedAcrossSyntaxes(t *testing.T) {
+	for _, tc := range []struct {
+		name    string
+		sql     string
+		wantErr string
+	}{
+		{"add literal", "date_add(cast('12:00:00' as time), interval '1' day)", "time interval unit"},
+		{"sub literal", "date_sub(cast('12:00:00' as time), interval 1 day)", "time interval unit"},
+		{"add marker", "date_add(cast('12:00:00' as time), interval ? day)", "time interval unit"},
+		{"sub marker", "date_sub(cast('12:00:00' as time), interval ? day_second)", "time interval unit"},
+		{"adddate alias", "adddate(cast('12:00:00' as time), interval ? day)", "time interval unit"},
+		{"subdate alias", "subdate(cast('12:00:00' as time), interval ? day)", "time interval unit"},
+		{"plus operator", "cast('12:00:00' as time) + interval ? day", "bad value [TIME INTERVAL]"},
+		{"minus operator", "cast('12:00:00' as time) - interval ? day", "bad value [TIME INTERVAL]"},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			_, err := runOneStmt(NewMockOptimizer(false), t,
+				"prepare stmt_time_unit from select "+tc.sql)
+			require.ErrorContains(t, err, tc.wantErr)
+		})
+	}
+	for _, name := range []string{"date_add", "date_sub"} {
+		prepared, err := runOneStmt(NewMockOptimizer(false), t,
+			"prepare stmt_time_hour from select "+name+"(cast('12:00:00' as time), interval ? hour)")
+		require.NoError(t, err)
+		fn := findPlanFunctionExpr(prepared.GetDcl().GetPrepare().GetPlan(), name)
+		require.NotNil(t, fn)
+		require.Equal(t, int32(types.T_time), fn.Typ.Id)
+		prepared, err = runOneStmt(NewMockOptimizer(false), t,
+			"prepare stmt_time_compound from select "+name+"(cast('12:00:00' as time), interval ? hour_second)")
+		require.NoError(t, err)
+		fn = findPlanFunctionExpr(prepared.GetDcl().GetPrepare().GetPlan(), name)
+		require.NotNil(t, fn)
+		require.Equal(t, int32(types.T_time), fn.Typ.Id)
 	}
 }
 

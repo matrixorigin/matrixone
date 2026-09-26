@@ -136,8 +136,9 @@ func (m *Metadata) ResolveVariableFunc(varName string, isSystemVar, isGlobalVar 
 //     nil, which a fixed value would wrongly override; this matches backSession,
 //     which returns nil for it too.
 var sessionSystemVarDefaults = map[string]any{
-	"sql_mode":          "",
-	"lock_wait_timeout": nil,
+	"sql_mode":            "",
+	"lock_wait_timeout":   nil,
+	"default_week_format": int64(0),
 }
 
 // captured reports whether varName was written into this blob's cfg — i.e. it is

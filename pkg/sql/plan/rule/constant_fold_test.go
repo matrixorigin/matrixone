@@ -323,9 +323,16 @@ func TestPreparedConstantFoldKeepsSqlModeDependentTemporalCast(t *testing.T) {
 		types.New(types.T_timestamp, 0, 6),
 	} {
 		t.Run(targetType.Oid.String(), func(t *testing.T) {
-			expr := makeConstantCastExpr(t, "cast", stringType, targetType, "2024-01-02 03:04:05")
+			expr := makeConstantCastExpr(t, "cast", stringType, targetType, "0000-00-00 00:00:00")
 			folded := NewConstantFold(true).constantFold(expr, proc)
 			require.NotNil(t, folded.GetF())
+			valid := makeConstantCastExpr(t, "cast", stringType, targetType, "2024-01-02 03:04:05")
+			validFolded := NewConstantFold(true).constantFold(valid, proc)
+			if targetType.Oid == types.T_timestamp {
+				require.NotNil(t, validFolded.GetF()) // session time_zone changes at EXECUTE
+			} else {
+				require.NotNil(t, validFolded.GetLit())
+			}
 		})
 	}
 }
@@ -480,4 +487,33 @@ func TestConstantFoldPreservesSerializedResultProvenance(t *testing.T) {
 		require.False(t, literal.GetIsBin(), "NULL must not acquire binary identity metadata")
 		require.False(t, literal.GetIsSerialized(), "NULL must not acquire serialized provenance")
 	})
+}
+
+type foldTestWarnings struct{ count int }
+
+func (s *foldTestWarnings) AppendWarningDiagnostic(uint16, string) { s.count++ }
+
+func TestConstantFoldDefersDiagnosticExpressions(t *testing.T) {
+	for _, prepared := range []bool{false, true} {
+		for _, value := range []string{"838:59:59", "12:00:00"} {
+			proc := testutil.NewProcess(t)
+			sink := &foldTestWarnings{}
+			proc.WarningSink = sink
+			expr := &plan.Expr{Typ: plan.Type{Id: int32(types.T_varchar), Width: 29, Scale: 6}, Expr: &plan.Expr_F{F: &plan.Function{
+				Func: &plan.ObjectRef{Obj: function.EncodeOverloadID(function.ADDTIME, 9)},
+				Args: []*plan.Expr{
+					{Typ: plan.Type{Id: int32(types.T_varchar)}, Expr: &plan.Expr_Lit{Lit: &plan.Literal{Value: &plan.Literal_Sval{Sval: value}}}},
+					{Typ: plan.Type{Id: int32(types.T_varchar)}, Expr: &plan.Expr_Lit{Lit: &plan.Literal{Value: &plan.Literal_Sval{Sval: "00:00:01"}}}},
+				},
+			}}}
+			got := NewConstantFold(prepared).constantFold(expr, proc)
+			require.Zero(t, sink.count)
+			require.Same(t, sink, proc.GetWarningSink())
+			if value == "838:59:59" {
+				require.NotNil(t, got.GetF())
+			} else {
+				require.NotNil(t, got.GetLit())
+			}
+		}
+	}
 }

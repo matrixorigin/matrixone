@@ -5409,7 +5409,7 @@ func initToTimeCase() []tcTemp {
 					[]bool{false}),
 			},
 			expect: NewFunctionTestResult(types.T_time.ToType(), false,
-				[]types.Time{types.TimeFromClock(false, 2022121211, 22, 33, 0)},
+				[]types.Time{types.MySQLTimeMax},
 				[]bool{false}),
 		},
 		{
@@ -5420,7 +5420,7 @@ func initToTimeCase() []tcTemp {
 					[]string{"2022-01-01 16:22:44.1235"},
 					[]bool{false}),
 			},
-			expect: NewFunctionTestResult(types.T_time.ToType(), false,
+			expect: NewFunctionTestResult(types.T_time.ToTypeWithScale(4), false,
 				[]types.Time{types.TimeFromClock(false, 16, 22, 44, 123500)},
 				[]bool{false}),
 		},
@@ -9411,6 +9411,54 @@ func TestDateTimeToWeek(t *testing.T) {
 	//TODO: Ignoring Scalar Nulls: Original code:https://github.com/m-schen/matrixone/blob/749eb739130decdbbf3dcc3dd5b21f656620edd9/pkg/sql/plan/function/builtin/unary/week_test.go#L114
 }
 
+func TestWeekUsesPerRowMode(t *testing.T) {
+	dates := []types.Date{
+		types.DateFromCalendar(2008, 1, 1),
+		types.DateFromCalendar(2008, 1, 6),
+		types.DateFromCalendar(2008, 1, 7),
+		types.DateFromCalendar(2008, 12, 31),
+	}
+	modes := []int64{0, 1, 2, -1}
+	wanted := make([]uint8, len(dates))
+	for i := range dates {
+		wanted[i] = uint8(dates[i].Week(normalizeWeekMode(modes[i])))
+	}
+
+	proc := testutil.NewProcess(t)
+	caseWithRows := NewFunctionTestCase(proc,
+		[]FunctionTestInput{
+			NewFunctionTestInput(types.T_date.ToType(), dates, nil),
+			NewFunctionTestInput(types.T_int64.ToType(), modes, nil),
+		},
+		NewFunctionTestResult(types.T_uint8.ToType(), false, wanted, nil),
+		DateToWeek)
+	ok, info := caseWithRows.Run()
+	require.True(t, ok, info)
+
+	caseWithNullMode := NewFunctionTestCase(proc,
+		[]FunctionTestInput{
+			NewFunctionTestInput(types.T_date.ToType(), dates[:3], nil),
+			NewFunctionTestInput(types.T_int64.ToType(), []int64{0, 1, 2}, []bool{false, true, false}),
+		},
+		NewFunctionTestResult(types.T_uint8.ToType(), false,
+			[]uint8{wanted[0], 1, wanted[2]}, nil),
+		DateToWeek)
+	ok, info = caseWithNullMode.Run()
+	require.True(t, ok, info)
+
+	caseDatetime := NewFunctionTestCase(proc,
+		[]FunctionTestInput{
+			NewFunctionTestInput(types.T_datetime.ToType(), []types.Datetime{
+				dates[0].ToDatetime(), dates[1].ToDatetime(), dates[2].ToDatetime(), dates[3].ToDatetime(),
+			}, nil),
+			NewFunctionTestInput(types.T_int64.ToType(), modes, nil),
+		},
+		NewFunctionTestResult(types.T_uint8.ToType(), false, wanted, nil),
+		DatetimeToWeek)
+	ok, info = caseDatetime.Run()
+	require.True(t, ok, info)
+}
+
 // Week day
 
 func initDateToWeekdayTestCase() []tcTemp {
@@ -13399,6 +13447,62 @@ func TestDateStringExtractorsYearZeroAndLegacyDelimiters(t *testing.T) {
 			succeed, info := testCase.Run()
 			require.True(t, succeed, info)
 		})
+	}
+}
+
+func TestDateStringRawFieldsOnPartialZeroDates(t *testing.T) {
+	proc := testutil.NewProcess(t)
+	input := []FunctionTestInput{NewFunctionTestInput(types.T_varchar.ToType(),
+		[]string{"2024-00-15", "2024-02-00", "0000-00-00", "2024-02-30"}, nil)}
+	for _, tc := range []struct {
+		name string
+		fn   fEvalFn
+		want FunctionTestResult
+	}{
+		{"year", DateStringToYear, NewFunctionTestResult(types.T_int64.ToType(), false,
+			[]int64{2024, 2024, 0, 0}, []bool{false, false, false, true})},
+		{"month", DateStringToMonth, NewFunctionTestResult(types.T_uint8.ToType(), false,
+			[]uint8{0, 2, 0, 0}, []bool{false, false, false, true})},
+		{"day and dayofmonth", DateStringToDay, NewFunctionTestResult(types.T_uint8.ToType(), false,
+			[]uint8{15, 0, 0, 0}, []bool{false, false, false, true})},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			caseDef := NewFunctionTestCase(proc, input, tc.want, tc.fn)
+			ok, info := caseDef.Run()
+			require.True(t, ok, info)
+		})
+	}
+}
+
+func TestZeroCalendarClockCarrySharedByUnaryAndExtract(t *testing.T) {
+	proc := testutil.NewProcess(t)
+	values := []string{"0000-00-00 23:59:59.9999994", "0000-00-00 23:59:59.9999995", "0000-00-00 23:59:59.9999999"}
+	input := []FunctionTestInput{NewFunctionTestInput(types.T_varchar.ToType(), values, nil)}
+	for _, tc := range []struct {
+		name string
+		fn   fEvalFn
+		want FunctionTestResult
+	}{
+		{"hour", StringToHour, NewFunctionTestResult(types.T_uint32.ToType(), false, []uint32{23, 24, 24}, nil)},
+		{"minute", StringToMinute, NewFunctionTestResult(types.T_uint8.ToType(), false, []uint8{59, 0, 0}, nil)},
+		{"second", StringToSecond, NewFunctionTestResult(types.T_uint8.ToType(), false, []uint8{59, 0, 0}, nil)},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			caseDef := NewFunctionTestCase(proc, input, tc.want, tc.fn)
+			ok, info := caseDef.Run()
+			require.True(t, ok, info)
+		})
+	}
+	for _, value := range values {
+		clock, ok := zeroCalendarClockForExtract(value, 6)
+		require.True(t, ok)
+		extracted, err := extractNumericFromTime("hour", clock)
+		require.NoError(t, err)
+		if value == values[0] {
+			require.Equal(t, int64(23), extracted)
+		} else {
+			require.Equal(t, int64(24), extracted)
+		}
 	}
 }
 

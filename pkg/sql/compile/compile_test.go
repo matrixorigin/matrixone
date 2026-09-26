@@ -170,7 +170,7 @@ func TestFilterScanStorageExprsExcludesVolatilePredicates(t *testing.T) {
 	}}}}
 	stable := plan2.MakePlan2Int64ConstExprWithType(1)
 
-	require.Equal(t, []*plan.Expr{stable}, filterScanStorageExprs([]*plan.Expr{stable, volatile}))
+	require.Equal(t, []*plan.Expr{stable}, filterScanStorageExprs(nil, []*plan.Expr{stable, volatile}))
 }
 
 func TestCompileRunPreservesBinaryPrepareParamAcrossRetries(t *testing.T) {

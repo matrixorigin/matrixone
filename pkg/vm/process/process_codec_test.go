@@ -93,7 +93,7 @@ func newCodecTestProcess(t *testing.T) (*Process, client.TxnOperator) {
 		MatrixOneNativeMode:                 true,
 		LogLevel:                            zap.WarnLevel,
 		SessionId:                           uuid.MustParse("11111111-2222-3333-4444-555555555555"),
-		ExplicitZeroTemporalCastReturnsNull: true,
+		ExplicitZeroTemporalCastReturnsNull: false,
 		SqlMode:                             "STRICT_TRANS_TABLES",
 		AutoIncrementIncrement:              7,
 		AutoIncrementOffset:                 4,
@@ -282,7 +282,10 @@ func TestProcessCodecHelpers(t *testing.T) {
 func TestBuildProcessInfoPreservesBackgroundSqlModeAcrossForwards(t *testing.T) {
 	proc, _ := newCodecTestProcess(t)
 	proc.Base.IsFrontend = false
-	proc.SetResolveVariableFunc(func(string, bool, bool) (interface{}, error) {
+	proc.SetResolveVariableFunc(func(name string, _, _ bool) (interface{}, error) {
+		if name == "default_week_format" {
+			return int64(0), nil
+		}
 		return "", nil
 	})
 
@@ -305,6 +308,47 @@ func TestBuildProcessInfoPreservesBackgroundSqlModeAcrossForwards(t *testing.T) 
 	require.Equal(t, "STRICT_TRANS_TABLES", second.SessionInfo.SqlMode)
 	require.Equal(t, uint32(128), second.SessionInfo.MaxErrorCount)
 	require.True(t, second.SessionInfo.MaxErrorCountSet)
+}
+
+func TestBuildProcessInfoPreservesWeekModePerExecution(t *testing.T) {
+	proc, _ := newCodecTestProcess(t)
+	mode := int64(3)
+	proc.SetResolveVariableFunc(func(name string, _, _ bool) (interface{}, error) {
+		if name == "default_week_format" {
+			return mode, nil
+		}
+		return nil, nil
+	})
+	first, err := proc.BuildProcessInfo("select week(d)")
+	require.NoError(t, err)
+	require.Equal(t, uint32(3), first.SessionInfo.DefaultWeekFormat)
+	require.True(t, first.SessionInfo.DefaultWeekFormatSet)
+	wire, err := first.Marshal()
+	require.NoError(t, err)
+	var received pipeline.ProcessInfo
+	require.NoError(t, received.Unmarshal(wire))
+	svc := NewCodecService(fakeCodecTxnClient{op: fakeCodecTxnOperator{}}, nil, nil, nil, nil, nil, nil, nil)
+	remote, err := svc.Decode(defines.AttachAccountId(context.Background(), 42), received)
+	require.NoError(t, err)
+	defer remote.Free()
+	got, present, err := ResolveDefaultWeekFormatMode(remote)
+	require.NoError(t, err)
+	require.True(t, present)
+	require.Equal(t, 3, got)
+	forwarded, err := remote.BuildProcessInfo("select week(d)")
+	require.NoError(t, err)
+	require.Equal(t, first.SessionInfo.DefaultWeekFormat, forwarded.SessionInfo.DefaultWeekFormat)
+	require.True(t, forwarded.SessionInfo.DefaultWeekFormatSet)
+
+	mode = 0 // A new prepared execution reads the new session value.
+	second, err := proc.BuildProcessInfo("select week(d)")
+	require.NoError(t, err)
+	require.Equal(t, uint32(0), second.SessionInfo.DefaultWeekFormat)
+	require.True(t, second.SessionInfo.DefaultWeekFormatSet)
+	missing := &Process{Base: &BaseProcess{SessionInfo: SessionInfo{}}}
+	_, present, err = ResolveDefaultWeekFormatMode(missing)
+	require.NoError(t, err)
+	require.False(t, present)
 }
 
 func TestBuildProcessInfoUsesEffectiveWarningSinkAcrossForwards(t *testing.T) {
@@ -664,7 +708,7 @@ func TestBuildProcessInfoAndMockProcessInfoWithPro(t *testing.T) {
 	require.Equal(t, uint64(99), info.SessionInfo.ConnectionId)
 	require.Equal(t, int64(7), info.SessionInfo.LockWaitTimeout)
 	require.True(t, info.SessionInfo.MatrixoneNativeMode)
-	require.True(t, info.SessionInfo.ExplicitZeroTemporalCastReturnsNull)
+	require.False(t, info.SessionInfo.ExplicitZeroTemporalCastReturnsNull)
 	require.Equal(t, "STRICT_TRANS_TABLES", info.SessionInfo.SqlMode)
 	require.True(t, info.SessionInfo.LockWaitTimeoutSet)
 	require.Equal(t, uint64(7), info.SessionInfo.AutoIncrementIncrement)
@@ -815,7 +859,7 @@ func TestCodecServiceEncodeDecodeAndLookup(t *testing.T) {
 	require.Equal(t, info.SessionInfo.User, decodedProc.Base.SessionInfo.User)
 	require.Equal(t, info.SessionInfo.LockWaitTimeout, decodedProc.Base.SessionInfo.LockWaitTimeout)
 	require.Equal(t, info.SessionInfo.MatrixoneNativeMode, decodedProc.Base.SessionInfo.MatrixOneNativeMode)
-	require.True(t, decodedProc.Base.SessionInfo.ExplicitZeroTemporalCastReturnsNull)
+	require.False(t, decodedProc.Base.SessionInfo.ExplicitZeroTemporalCastReturnsNull)
 	require.Equal(t, info.SessionInfo.SqlMode, decodedProc.Base.SessionInfo.SqlMode)
 	require.Equal(t, info.SessionInfo.LockWaitTimeoutSet, decodedProc.Base.SessionInfo.LockWaitTimeoutSet)
 	require.Equal(t, info.SessionInfo.AutoIncrementIncrement, decodedProc.Base.SessionInfo.AutoIncrementIncrement)

@@ -1,0 +1,606 @@
+-- @suite
+-- @case
+-- @desc: Dynamic interval, date format and non-strict TIME coercion agree with literal semantics.
+-- @label:bvt
+
+set @temporal_28851_saved_sql_mode = @@sql_mode;
+drop database if exists temporal_consistency_28851;
+create database temporal_consistency_28851;
+use temporal_consistency_28851;
+
+create table interval_text(v varchar(20));
+insert into interval_text values ('1'), ('1.5'), ('-1.5'), (null);
+select v,
+       timestampdiff(microsecond, '2024-01-01 00:00:00', date_add('2024-01-01 00:00:00', interval v second)) as second_us,
+       timestampdiff(microsecond, '2024-01-01 00:00:00', date_add('2024-01-01 00:00:00', interval v minute)) as minute_us,
+       timestampdiff(microsecond, '2024-01-01 00:00:00', date_add('2024-01-01 00:00:00', interval v hour)) as hour_us,
+       timestampdiff(microsecond, '2024-01-01 00:00:00', date_add('2024-01-01 00:00:00', interval v day)) as day_us
+from interval_text order by v;
+select timestampdiff(microsecond, '2024-01-01 00:00:00', date_add('2024-01-01 00:00:00', interval '1.5' second)) as literal_us;
+prepare dynamic_seconds from 'select timestampdiff(microsecond, ''2024-01-01 00:00:00'', date_add(''2024-01-01 00:00:00'', interval ? second)) as prepared_us';
+set @interval_value = '1.5';
+execute dynamic_seconds using @interval_value;
+set @interval_value = null;
+execute dynamic_seconds using @interval_value;
+deallocate prepare dynamic_seconds;
+
+select date_add('2024-01-01 00:00:00', interval '213503982.334602' day) as positive_overflow,
+       date_add('2024-01-01 00:00:00', interval '-213503982.334602' day) as negative_overflow;
+insert into interval_text values ('213503982.334602'), ('-213503982.334602');
+select v, date_add('2024-01-01 00:00:00', interval v day) as overflow_date
+from interval_text where v in ('213503982.334602', '-213503982.334602') order by v;
+
+select str_to_date('2024-09-4', '%x-%v-%w') as literal_week_date;
+prepare dynamic_date from 'select str_to_date(?, ?) as prepared_date';
+set @date_value = '2024-09-4', @date_format = '%x-%v-%w';
+execute dynamic_date using @date_value, @date_format;
+set @date_value = '2024-%f-02-29', @date_format = '%Y-%%f-%m-%d';
+execute dynamic_date using @date_value, @date_format;
+deallocate prepare dynamic_date;
+
+-- A day directive paired with a clock denotes a duration. MatrixOne's TIME
+-- endpoint is 838:59:59; values beyond that endpoint remain SQL NULL.
+select str_to_date('1 12:34:56', '%d %H:%i:%s') as duration_day,
+       str_to_date('34 22:59:59', '%d %H:%i:%s') as duration_max,
+       str_to_date('35 00:00:00', '%d %H:%i:%s') as duration_overflow;
+
+-- Direct markers retain TIME(6) metadata through repeated execution, even
+-- if the next value looks like a DATETIME or cannot be parsed.
+prepare dynamic_time from 'select addtime(?, ?) as added, subtime(?, ?) as subtracted';
+show count(*) warnings;
+set @first = '12:34:56', @second = '1:02:03';
+execute dynamic_time using @first, @second, @first, @second;
+set @first = '2024-02-29 12:34:56';
+execute dynamic_time using @first, @second, @first, @second;
+set @first = 'invalid';
+execute dynamic_time using @first, @second, @first, @second;
+show count(*) warnings;
+set @second = null;
+execute dynamic_time using @first, @second, @first, @second;
+show count(*) warnings;
+set @first = null, @second = 'invalid';
+execute dynamic_time using @first, @second, @first, @second;
+show count(*) warnings;
+set @first = '12:00:00';
+execute dynamic_time using @first, @second, @first, @second;
+show count(*) warnings;
+set @second = '00:00:01';
+execute dynamic_time using @first, @second, @first, @second;
+show count(*) warnings;
+deallocate prepare dynamic_time;
+
+select timediff('12:00:00.1', '11:00:00.0') as literal_fsp,
+       timediff('12:00:00.123456', '11:00:00') as full_fsp;
+select timediff('838:59:59', '-00:00:01') as positive_overflow,
+       timediff('-838:59:59', '00:00:01') as negative_overflow,
+       addtime('2000000000:00:00', '2000000000:00:00') as add_overflow,
+       subtime('2000000000:00:00', '-2000000000:00:00') as sub_overflow;
+prepare dynamic_timediff from 'select timediff(?, ?) as dynamic_fsp';
+set @first = '12:00:00.123456', @second = '11:00:00';
+execute dynamic_timediff using @first, @second;
+set @first = '12:00:00.1';
+execute dynamic_timediff using @first, @second;
+deallocate prepare dynamic_timediff;
+
+set sql_mode = '';
+select cast('12:99:00' as time) as invalid_minute, cast('12:34:99' as time) as invalid_second,
+       cast('12:34:56tail' as time) as valid_prefix;
+set sql_mode = 'STRICT_TRANS_TABLES';
+
+-- Accepted calendar spellings keep their date; the second argument remains a duration.
+create table temporal_strings(v varchar(40), duration varchar(40));
+insert into temporal_strings values
+  ('2024-2-29 00:00:00', '01:00:00'),
+  ('2024.2.29', '01:00:00'),
+  ('2024@2@29', '01:00:00'),
+  ('20240229120000.123456', '01:00:00'),
+  ('00000123456', '01:00:00'),
+  ('00001234', '01:00:00'),
+  ('00001234.5', '01:00:00'),
+  ('1234.5', '01:00:00'),
+  ('12:00:00', '01:00:00');
+select v, addtime(v, duration) as added, subtime(v, duration) as subtracted
+from temporal_strings order by v;
+select addtime('00:00:01', v) as compact_duration_operand
+from temporal_strings where v in ('00000123456', '00001234', '00001234.5', '1234.5') order by v;
+select addtime('12:00:00', '2024-2-29 01:00:00') is null as calendar_duration_rejected,
+       timediff('2024-2-29 00:00:00', '2024-2-28 00:00:00') as leap_day_difference;
+select addtime('20240230', '00:00:01') is null as invalid_compact_calendar,
+       addtime('00010101', '00:00:01') is not null as valid_low_year_calendar;
+select addtime('00000000.5', '00:00:01') = cast('00:00:01.5' as time(6)) as zero_padded_fraction,
+       addtime('00010101.5', '00:00:01') = cast('01:01:02.5' as time(6)) as low_year_fraction;
+
+-- Compound EXTRACT values retain field widths and one sign.
+select extract(hour_second from cast('01:02:03' as time)) as hs_value,
+       extract(minute_second from cast('01:02:03' as time)) as ms_value,
+       extract(hour_microsecond from cast('01:02:03.000004' as time(6))) as hms_value,
+       extract(hour_second from cast('-00:02:03' as time)) as negative_hs_value;
+
+-- Zero date fields do not erase a nonzero time suffix in a VARCHAR value.
+set sql_mode = '';
+create table temporal_extract_zero(v varchar(40));
+insert into temporal_extract_zero values
+  ('0000-00-00 12:34:56.123456'),
+  ('0000-00-00 00:00:00.000000'),
+  ('2024-02-29 12:34:56.123456'),
+  (null);
+select hour(v) = extract(hour from v) as same_hour,
+       extract(second_microsecond from v) = 56123456 as second_us,
+       extract(day_microsecond from v) = 123456123456 as day_us
+from temporal_extract_zero where v = '0000-00-00 12:34:56.123456';
+select extract(hour from v) = 0 as zero_hour,
+       extract(day_microsecond from v) = 0 as zero_day_us
+from temporal_extract_zero where v = '0000-00-00 00:00:00.000000';
+select extract(day_microsecond from v) = 29123456123456 as ordinary_day_us
+from temporal_extract_zero where v = '2024-02-29 12:34:56.123456';
+select hour('0000-00-00 12.34.56.123456') = extract(hour from '0000-00-00 12.34.56.123456') as relaxed_hour,
+       extract(second_microsecond from '0000-00-00 12.34.56.123456') = 56123456 as relaxed_second_us,
+       extract(second_microsecond from '0000-00-00 12:34.56') = 56000000 as mixed_second_us,
+       extract(second_microsecond from '0000-00-00 12.34') = 0 as absent_second;
+drop table temporal_extract_zero;
+set sql_mode = 'STRICT_TRANS_TABLES';
+
+-- DATE_ADD/SUB share a NULL outcome for equivalent TIME interval overflow.
+select date_add(cast('838:59:59' as time), interval 1 second) is null as add_overflow,
+       date_sub(cast('838:59:59' as time), interval -1 second) is null as sub_overflow;
+
+-- TIME calendar units are rejected before any representation-specific rewrite.
+select date_add(cast('12:00:00' as time), interval '1' day);
+select date_sub(cast('12:00:00' as time), interval 1 day);
+select date_add(cast('12:00:00' as time), interval v day)
+from interval_text where v = '1';
+select date_sub(cast('12:00:00' as time), interval v day_second)
+from interval_text where v = '1';
+prepare unsupported_time_day from 'select date_add(cast(''12:00:00'' as time), interval ? day)';
+select date_add(cast('12:00:00' as time), interval v hour) = cast('13:00:00' as time) as allowed_hour
+from interval_text where v = '1';
+-- Subday composite units keep their existing TIME contract for numeric and
+-- string representations. The integer 10203 means 10203 seconds here.
+create table temporal_compound_units(v varchar(20), n int);
+insert into temporal_compound_units values ('1', 1), ('10203', 10203);
+select date_add(cast('12:00:00' as time), interval n hour_second) = cast('12:00:01' as time) as numeric_one,
+       date_sub(cast('12:00:00' as time), interval n hour_second) = cast('11:59:59' as time) as numeric_sub,
+       date_add(cast('12:00:00' as time), interval v hour_second) = cast('12:00:01' as time) as string_one
+from temporal_compound_units where n = 1;
+select date_add(cast('12:00:00' as time), interval n hour_second) = cast('14:50:03' as time) as numeric_10203,
+       date_add(cast('12:00:00' as time), interval v hour_second) = cast('14:50:03' as time) as string_10203
+from temporal_compound_units where n = 10203;
+select date_add(cast('12:00:00' as time), interval n second_microsecond) =
+         cast('12:00:00.1' as time(6)) as second_us,
+       date_add(cast('12:00:00' as time), interval n minute_microsecond) =
+         cast('12:00:00.1' as time(6)) as minute_us,
+       date_add(cast('12:00:00' as time), interval n minute_second) =
+         cast('12:00:01' as time(6)) as cmp_ms,
+       date_add(cast('12:00:00' as time), interval n hour_microsecond) =
+         cast('12:00:00.1' as time(6)) as hour_us,
+       date_add(cast('12:00:00' as time), interval n hour_minute) =
+         cast('12:01:00' as time(6)) as cmp_hm
+from temporal_compound_units where n = 1;
+drop table temporal_compound_units;
+
+-- Short separated years retain MatrixOne's calendar precedence. Colon clocks
+-- and calendar values in the duration-only operand remain separate controls.
+select addtime('24-2-29', '00:00:01') = '2024-02-29 00:00:01' as short_year_calendar,
+       addtime('10:11:12', '00:00:01') = '10:11:13' as colon_clock,
+       addtime('00:00:01', '24-2-29') is null as calendar_duration_rejected,
+       addtime('24-2-30', '00:00:01') is null as invalid_short_calendar;
+select timediff('24-2-29', '24-2-28') = cast('24:00:00' as time) as short_year_difference;
+
+-- A whole colon clock is a duration at every supported hour width, including
+-- a one-colon fraction and an over-limit input that cancels into range.
+select addtime('12:34.56', '00:00:01') = '12:34:01.560000' as short_fraction_clock,
+       addtime('01:02.03', '00:00:01') = '01:02:01.030000' as date_shaped_clock,
+       addtime('00:00:01', '12:34.56') = '12:34:01.560000' as duration_operand,
+       subtime('12:34.56', '00:00:01') = '12:33:59.560000' as subtract_clock,
+       timediff('12:34.56', '12:34:00.00') = cast('00:00:00.56' as time(6)) as clock_difference;
+select addtime('1234:00:00', '-500:00:00') = '734:00:00' as wide_clock_cancel,
+       addtime('1234:00:00', '-500:00:00') = addtime('51 10:00:00', '-500:00:00') as day_clock_equivalent,
+       addtime('24-2-29', '00:00:01') = '2024-02-29 00:00:01' as calendar_control,
+       addtime('24-2-30', '00:00:01') is null as invalid_calendar_control;
+
+-- Fractional intervals round after converting their original unit to final
+-- microseconds. Whitespace and decimal scale do not change an exact value.
+select date_add(time '12:00:00', interval '0.0000009' hour) = cast('12:00:00.003240' as time(6)) as tiny_hour,
+       date_add(time '12:00:00', interval '-0.0000009' hour) = cast('11:59:59.996760' as time(6)) as negative_tiny_hour,
+       date_add(time '12:00:00', interval '0.0000005' minute) = cast('12:00:00.000030' as time(6)) as tiny_minute;
+select date_add(time '12:00:00', interval '1:02:03.4 ' hour_second) = cast('13:02:03.4' as time(6)) as padded_hour_second,
+       date_add(time '12:00:00', interval '1.5 ' second_microsecond) = cast('12:00:01.5' as time(6)) as padded_second_microsecond,
+       date_add(time '12:00:00', interval '1.9999999' second_microsecond) = cast('12:00:02' as time(6)) as rounded_second;
+create table temporal_decimal_intervals(n decimal(12,7));
+insert into temporal_decimal_intervals values (1.5000000), (-1.5000000);
+select date_add(time '12:00:00', interval n second_microsecond) = cast('12:00:01.5' as time(6)) as positive_decimal
+from temporal_decimal_intervals where n > 0;
+select date_add(time '12:00:00', interval n second_microsecond) = cast('11:59:58.5' as time(6)) as negative_decimal
+from temporal_decimal_intervals where n < 0;
+-- DECIMAL scale padding is formatting; VARCHAR field width remains grammar.
+select date_add(time '12:00:00', interval n minute_second) = cast('12:01:05' as time(6)) as numeric_minute_second,
+       date_add(time '12:00:00', interval n hour_second) = cast('12:01:05' as time(6)) as numeric_hour_second,
+       date_add(time '12:00:00', interval n hour_minute) = cast('13:05:00' as time(6)) as numeric_hour_minute
+from temporal_decimal_intervals where n > 0;
+select date_add(time '12:00:00', interval n minute_second) = cast('11:58:55' as time(6)) as negative_minute_second,
+       date_add(time '12:00:00', interval n hour_minute) = cast('10:55:00' as time(6)) as negative_hour_minute
+from temporal_decimal_intervals where n < 0;
+select date_add(time '12:00:00', interval n hour) = cast('13:30:00' as time(6)) as positive_scalar_hour
+from temporal_decimal_intervals where n > 0;
+select date_add(time '12:00:00', interval n hour) = cast('10:30:00' as time(6)) as negative_scalar_hour
+from temporal_decimal_intervals where n < 0;
+select timestampdiff(second, '2024-01-01 00:00:00',
+       date_add('2024-01-01 00:00:00', interval '1.5000000' minute_second)) = 5000060 as string_width_control;
+select date_add(time '12:00:00', interval cast(1.0000000 as decimal(12,7)) second_microsecond) =
+         date_add(time '12:00:00', interval 1 second_microsecond) as decimal_integer_microsecond,
+       date_add(time '12:00:00', interval cast(1.0000000 as decimal(12,7)) minute_second) =
+         date_add(time '12:00:00', interval 1 minute_second) as decimal_integer_minute_second;
+drop table temporal_decimal_intervals;
+
+-- Round scalar DECIMAL once after converting to microseconds. The same
+-- half-microsecond value must agree across literal and column bindings.
+create table temporal_scalar_ties(n decimal(18,7));
+insert into temporal_scalar_ties values (34410126.8315485), (-34410126.8315485);
+select date_add(cast('2024-01-01 00:00:00' as datetime(6)), interval n second) =
+         cast('2025-02-02 06:22:06.831549' as datetime(6)) as positive_column_tie
+from temporal_scalar_ties where n > 0;
+select date_add(cast('2024-01-01 00:00:00' as datetime(6)), interval n second) =
+         cast('2022-11-28 17:37:53.168451' as datetime(6)) as negative_column_tie
+from temporal_scalar_ties where n < 0;
+select date_add(cast('2024-01-01 00:00:00' as datetime(6)), interval cast(34410126.8315485 as decimal(18,7)) second) =
+         cast('2025-02-02 06:22:06.831549' as datetime(6)) as positive_literal_tie,
+       date_add(cast('2024-01-01 00:00:00' as datetime(6)), interval cast(-34410126.8315485 as decimal(18,7)) second) =
+         cast('2022-11-28 17:37:53.168451' as datetime(6)) as negative_literal_tie;
+drop table temporal_scalar_ties;
+
+-- DOUBLE scalar intervals use the same binary rounding for columns and
+-- literals; DECIMAL ties above intentionally round from exact decimal text.
+create table temporal_scalar_double(n double);
+insert into temporal_scalar_double values (34410126.8315485e0), (-34410126.8315485e0);
+select date_add(cast('2024-01-01 00:00:00' as datetime(6)), interval n second) =
+         cast('2025-02-02 06:22:06.831548' as datetime(6)) as positive_double_column
+from temporal_scalar_double where n > 0;
+select date_add(cast('2024-01-01 00:00:00' as datetime(6)), interval n second) =
+         cast('2022-11-28 17:37:53.168452' as datetime(6)) as negative_double_column
+from temporal_scalar_double where n < 0;
+select date_add(cast('2024-01-01 00:00:00' as datetime(6)), interval 34410126.8315485e0 second) =
+         cast('2025-02-02 06:22:06.831548' as datetime(6)) as positive_double_literal,
+       date_add(cast('2024-01-01 00:00:00' as datetime(6)), interval -34410126.8315485e0 second) =
+         cast('2022-11-28 17:37:53.168452' as datetime(6)) as negative_double_literal;
+drop table temporal_scalar_double;
+
+-- Numeric exponent formatting must never enter the compound field grammar.
+-- Text intervals retain that grammar, including its unusual singleton rules.
+select date_add(time '12:00:00', interval cast(1e-14 as double) second_microsecond) = cast('12:00:00' as time(6)) as tiny_float_us,
+       date_add(time '12:00:00', interval cast(0.00000000000001 as decimal(38,14)) second_microsecond) = cast('12:00:00' as time(6)) as tiny_decimal_us,
+       date_add(time '12:00:00', interval cast(1e-14 as double) hour_minute) = cast('12:01:00' as time(6)) as tiny_float_hm,
+       date_add(time '12:00:00', interval cast(1000000000000000 as double) hour_second) is null as huge_float_hs,
+       date_add(time '12:00:00', interval cast(1000000000000000 as double) second_microsecond) = cast('12:00:00.1' as time(6)) as huge_float_us,
+       date_add(time '12:00:00', interval '1E-14' second_microsecond) = cast('12:00:01.14' as time(6)) as legacy_text_fields;
+create table temporal_numeric_repr(f double, d decimal(38,14));
+insert into temporal_numeric_repr values (1e-14, 0.00000000000001), (1.5, 1.50000000000000), (1000000000000000, 1000000000000000), (null, null);
+select date_add(time '12:00:00', interval f second_microsecond) = date_add(time '12:00:00', interval d second_microsecond) as equivalent_numeric_us,
+       date_add(time '12:00:00', interval f hour_second) = date_add(time '12:00:00', interval d hour_second) as equivalent_numeric_hs
+from temporal_numeric_repr where f < 2 order by f;
+select date_add(time '12:00:00', interval f hour_second) is null as float_overflow,
+       date_add(time '12:00:00', interval d hour_second) is null as decimal_overflow,
+       date_add(time '12:00:00', interval f second_microsecond) = date_add(time '12:00:00', interval d second_microsecond) as singleton_fraction
+from temporal_numeric_repr where f > 100000000000000;
+drop table temporal_numeric_repr;
+
+-- Numeric source identity, compound units, and the static DATE + fractional
+-- DAY family are observable through normal SQL and prepared statements.
+select date_add(time '12:00:00', interval cast(-1.5 as double) second) = cast('11:59:58.5' as time(6)) as cast_double,
+       date_add(time '12:00:00', interval cast(-0.0000005 as double) second) = cast('11:59:59.999999' as time(6)) as negative_float_tie,
+       date_add(cast('2024-01-01 00:00:00' as datetime(6)), interval cast(1.5 as decimal(40,1)) hour_second) =
+         cast('2024-01-01 00:01:05' as datetime(6)) as datetime_compound,
+       date_add(cast('2024-01-01' as date), interval cast(1.5 as decimal(40,1)) day) =
+         cast('2024-01-02 12:00:00' as datetime(6)) as fractional_day;
+select date_add(cast('2024-01-01' as date), interval 1 day) as integer_day,
+       date_add(cast('2024-01-01' as date), interval cast(1.0 as decimal(4,1)) day) as decimal_day;
+select day('2024-00-15') as raw_day, dayofmonth('2024-00-15') as raw_dayofmonth,
+       month('2024-00-15') as raw_month, year('2024-00-15') as raw_year;
+select hour('0000-00-00 23:59:59.9999999') as clock_hour,
+       minute('0000-00-00 23:59:59.9999999') as clock_minute,
+       second('0000-00-00 23:59:59.9999999') as clock_second,
+       extract(hour from '0000-00-00 23:59:59.9999999') as extract_hour;
+select case when 0 then date_add(time '12:00:00', interval cast(10000000000000.0 as decimal(30,1)) second)
+       else time '12:00:00' end as inactive_overflow;
+show warnings;
+create table temporal_time_interval_status(id int, base time, amount varchar(32));
+insert into temporal_time_interval_status values
+  (1, time '12:00:00', '1.5'),
+  (2, time '12:00:00', 'bad'),
+  (3, null, '10000000000000.0'),
+  (4, time '12:00:00', '10000000000000.0');
+select id, date_add(base, interval amount second) as added
+from temporal_time_interval_status order by id;
+show warnings;
+drop table temporal_time_interval_status;
+-- The 4.2 empty-string payload contract is NULL for text and binary parameters.
+-- A SQL hex literal has separate numeric provenance; x'' assigns numeric zero.
+create table temporal_empty_time(id int, value time null);
+insert into temporal_empty_time values (1, ''), (2, ' '), (3, x'');
+select id, ifnull(cast(value as char), 'NULL') as value from temporal_empty_time order by id;
+select cast(x'' as signed) as binary_signed_zero,
+       cast(x'' as unsigned) as binary_unsigned_zero,
+       cast(x'' as double) as binary_double_zero;
+set sql_mode = '';
+insert into temporal_empty_time values (4, '');
+insert into temporal_empty_time select 5, v from interval_text where v is null;
+prepare empty_time_assign from 'insert into temporal_empty_time values (?, ?)';
+set @empty_id = 6, @empty_value = '';
+execute empty_time_assign using @empty_id, @empty_value;
+set sql_mode = 'STRICT_TRANS_TABLES';
+set @empty_id = 7;
+execute empty_time_assign using @empty_id, @empty_value;
+deallocate prepare empty_time_assign;
+set sql_mode = '';
+prepare empty_time_update from 'update temporal_empty_time set value = ? where id = 2';
+execute empty_time_update using @empty_value;
+deallocate prepare empty_time_update;
+select id, ifnull(cast(value as char), 'NULL') as value from temporal_empty_time order by id;
+set sql_mode = 'STRICT_TRANS_TABLES';
+drop table temporal_empty_time;
+prepare inactive_temporal_cast from
+  'select case when 0 then cast(''123 -12:34:56.000000'' as datetime(6)) else cast(''2024-01-01'' as datetime(6)) end';
+execute inactive_temporal_cast;
+deallocate prepare inactive_temporal_cast;
+
+create table week_dates(d date);
+insert into week_dates values ('2021-01-01');
+set default_week_format = 3;
+select week(d) as session_week, week(d, 0) as explicit_week, yearweek(d) as year_week from week_dates;
+set default_week_format = 0;
+select week(d) as session_week from week_dates;
+
+-- Numeric MICROSECOND uses the same exact tie rule for TIME and DATETIME.
+-- Text MICROSECOND keeps its existing interval-string grammar.
+select date_add(time '12:00:00', interval cast(1.5 as decimal(10,1)) microsecond) = cast('12:00:00.000002' as time(6)) as positive_decimal_us,
+       date_add(time '12:00:00', interval cast(-1.5 as decimal(10,1)) microsecond) = cast('11:59:59.999998' as time(6)) as negative_decimal_us,
+       date_add(time '12:00:00', interval cast(1.5 as double) microsecond) = cast('12:00:00.000002' as time(6)) as positive_double_us,
+       date_add(time '12:00:00', interval cast(-1.5 as double) microsecond) = cast('11:59:59.999998' as time(6)) as negative_double_us,
+       date_sub(time '12:00:00', interval cast(1.5 as decimal(65,1)) microsecond) = cast('11:59:59.999998' as time(6)) as decimal256_sub_us,
+       date_add(time '12:00:00', interval '1.5' microsecond) is null as text_grammar_control;
+select date_add(cast('2024-01-01 12:00:00' as datetime(6)), interval cast(1.5 as decimal(10,1)) microsecond) =
+       cast('2024-01-01 12:00:00.000002' as datetime(6)) as datetime_us_control;
+
+select addtime(time '12:00:00','00:00:00.1') as typed_time_fsp,
+       subtime(cast('2024-01-01 12:00:00' as datetime),'00:00:00.1') as typed_datetime_fsp;
+
+-- Exact arithmetic checks the final domain; explicit conversion keeps its policy.
+set sql_mode = '';
+select addtime(time '838:59:59', '00:00:01') is null as add_null,
+       subtime(time '-838:59:59', '00:00:01') is null as sub_null,
+       timediff('838:59:59','-00:00:01') is null as diff_null,
+       maketime(839,0,0) is null as make_null;
+show warnings;
+select subtime(cast('0001-01-01' as datetime(6)), '00:00:01') is null as below_calendar,
+       addtime(cast('9999-12-31 23:59:59.999999' as datetime(6)), '00:00:00.000001') is null as above_calendar;
+show warnings;
+select addtime('1234:00:00','-500:00:00') as cancellation,
+       timestamp('2024-01-01','839:00:00') as full_internal_duration,
+       cast('839:00:00' as time) as explicit_conversion;
+select case when 0 then addtime(time '838:59:59','00:00:01') else time '00:00:01' end as inactive_add,
+       case when 0 then timediff('900:00:00','00:00:00') else time '00:00:01' end as inactive_diff,
+       case when 0 then date_add(cast('9999-12-31' as date), interval 1 day) else cast('2024-01-01' as date) end as inactive_date;
+show warnings;
+create table arithmetic_rows(id int, d datetime(6));
+insert into arithmetic_rows values (1,'0001-01-01'),(2,'2024-01-01'),(3,'9999-12-31 23:59:59.999999'),(4,null);
+select id, case when id=2 then date_add(d,interval 1 day) else null end as selected,
+       case when id=2 then subtime(d,'00:00:01') else null end as selected_sub
+from arithmetic_rows order by id;
+show warnings;
+create table interval_invalid(v varchar(50));
+insert into interval_invalid values (''),(' '),('bad'),('0'),(null);
+select v, date_add(time '12:00:00', interval v hour_second) as duration,
+       date_add(cast('2024-01-01' as datetime),interval v hour_second) as calendar,
+       date_sub(cast('2024-01-01' as date),interval v second) as date_value,
+       date_add(cast('2024-01-01' as timestamp),interval v second) as timestamp_value
+from interval_invalid order by v;
+show warnings;
+select date_add(cast('2024-01-01' as datetime),interval '999999999999999999999999' second) as overflow_value;
+show warnings;
+select date_add(cast(null as datetime),interval '999999999999999999999999' second) as null_base;
+show warnings;
+select extract(year from '2024-00-15') as y, extract(month from '2024-00-15') as m,
+       extract(day from '2024-00-15') as d, extract(year_month from '2024-00-15') as ym,
+       extract(hour from '') as empty_input, extract(hour from ' ') as whitespace_input,
+       extract(week from from_days(0)) as zero_week, week(from_days(0),0) as week_control;
+prepare extract_mode_contract from 'select extract(year from ''0000-00-00'') as literal_year, extract(year from ?) as marker_year, extract(hour from ?) as clock';
+set @zero_calendar = '0000-00-00', @zero_clock = '0000-00-00 12:34:56';
+execute extract_mode_contract using @zero_calendar, @zero_clock;
+set sql_mode = 'NO_ZERO_DATE';
+execute extract_mode_contract using @zero_calendar, @zero_clock;
+set sql_mode = '';
+execute extract_mode_contract using @zero_calendar, @zero_clock;
+deallocate prepare extract_mode_contract;
+
+
+-- Shared calendar grammar remains the same with a clock. Compact clock fields
+-- are validated before constructing a date; 24h/60m/60s must not normalize.
+select date_sub('50-01-01 00:00:01', interval 2 second), date_sub('90-01-01 00:00:01', interval 2 second);
+create table temporal_calendar_spelling_28851 (id int, s varchar(40));
+insert into temporal_calendar_spelling_28851 values (1,'24.2.29 1:2:3.4'),(2,'2024@2@29 1:2:3.4'),(3,'20240229240000'),(4,'20240229236000'),(5,'20240229235960'),(6,'20240229x00000');
+select id, date_add(s, interval 0 second), addtime(s,'00:00:00') from temporal_calendar_spelling_28851 order by id;
+drop table temporal_calendar_spelling_28851;
+
+-- TIME() keeps its own grammar while exposing a bounded, honest TIME type.
+select time(9000000) as positive_numeric, time(-9000000) as negative_numeric,
+       time(cast(9000000.0 as decimal(10,1))) as positive_decimal,
+       time(cast(-9000000.0 as decimal(10,1))) as negative_decimal,
+       time(cast(9000000.0 as decimal(65,1))) as positive_wide_decimal,
+       time(cast(9000000 as double)) as positive_float;
+show warnings;
+select time(cast('00:00:00.123456' as time(6))) as typed_fsp,
+       microsecond(time(cast('00:00:00.123456' as time(6)))) as typed_us,
+       time(cast(123.123456 as decimal(12,6))) as decimal_fsp,
+       microsecond(time(cast(123.123456 as decimal(12,6)))) as decimal_us,
+       time(cast(123.1234567 as decimal(65,7))) as wide_decimal_fsp,
+       microsecond(time(cast(123.1234567 as decimal(65,7)))) as wide_decimal_us,
+       time('00:00:00.1234') as literal_fsp;
+create table time_fsp_materialized_28851 as
+select time(cast('00:00:00.123456' as time(6))) as typed_time,
+       time(cast(123.1234567 as decimal(65,7))) as wide_decimal_time,
+       time('00:00:00.1234') as literal_time;
+select column_name, column_type, datetime_precision from information_schema.columns
+where table_schema = database() and table_name = 'time_fsp_materialized_28851'
+order by ordinal_position;
+select microsecond(typed_time), microsecond(wide_decimal_time), microsecond(literal_time)
+from time_fsp_materialized_28851;
+drop table time_fsp_materialized_28851;
+create table time_fsp_sources_28851 (s varchar(30));
+insert into time_fsp_sources_28851 values ('00:00:00.123456'), ('00:00:01');
+select s, time(s) as dynamic_fsp, microsecond(time(s)) as dynamic_us
+from time_fsp_sources_28851 order by s;
+prepare time_fsp_marker_28851 from 'select time(?) as marker_fsp, microsecond(time(?)) as marker_us';
+set @time_fsp_value_28851 = '00:00:00.123456';
+execute time_fsp_marker_28851 using @time_fsp_value_28851, @time_fsp_value_28851;
+set @time_fsp_value_28851 = '00:00:01';
+execute time_fsp_marker_28851 using @time_fsp_value_28851, @time_fsp_value_28851;
+deallocate prepare time_fsp_marker_28851;
+drop table time_fsp_sources_28851;
+
+-- Statement-constant ON operands share one diagnostic owner. Empty inputs
+-- suppress diagnostics; nonempty inputs activate even for NULL/no-match keys.
+create table temporal_join_left (k int, v time);
+create table temporal_join_right (k int, v time);
+insert into temporal_join_right values (1, '00:00:00'), (1, '00:00:01');
+set sql_mode = 'STRICT_TRANS_TABLES';
+select count(*) from temporal_join_left a join temporal_join_right b
+on a.k = b.k and a.v = addtime(b.v, cast('bad' as time));
+show count(*) warnings;
+prepare temporal_join_cast from 'select count(*) from temporal_join_left a join temporal_join_right b on a.k = b.k and a.v = addtime(b.v, cast(? as time))';
+show count(*) warnings;
+set @temporal_join_value = 'bad';
+execute temporal_join_cast using @temporal_join_value;
+show count(*) warnings;
+insert into temporal_join_left values (1, '00:00:00');
+execute temporal_join_cast using @temporal_join_value;
+set @temporal_join_value = '00:00:00.000000';
+execute temporal_join_cast using @temporal_join_value;
+show count(*) warnings;
+set sql_mode = '';
+set @temporal_join_value = '900:00:00';
+execute temporal_join_cast using @temporal_join_value;
+show warnings;
+delete from temporal_join_right;
+execute temporal_join_cast using @temporal_join_value;
+show count(*) warnings;
+deallocate prepare temporal_join_cast;
+
+-- Constructor 1441 and conversion 1292 are distinct, including prepared reuse.
+insert into temporal_join_right values (2, '00:00:00'), (2, '00:00:01');
+prepare temporal_join_make from 'select count(*) from temporal_join_left a join temporal_join_right b on a.k = b.k and a.v = addtime(b.v, maketime(?,0,0))';
+set @temporal_join_value = 839;
+execute temporal_join_make using @temporal_join_value;
+show warnings;
+delete from temporal_join_left;
+execute temporal_join_make using @temporal_join_value;
+show count(*) warnings;
+insert into temporal_join_left values (2, '00:00:00');
+set @temporal_join_value = 0;
+execute temporal_join_make using @temporal_join_value;
+show count(*) warnings;
+deallocate prepare temporal_join_make;
+update temporal_join_right set v = '00:00:00';
+prepare temporal_join_seconds from 'select count(*) from temporal_join_left a join temporal_join_right b on a.v = addtime(b.v, sec_to_time(?))';
+set @temporal_join_value = 4000000;
+execute temporal_join_seconds using @temporal_join_value;
+show warnings;
+delete from temporal_join_left;
+execute temporal_join_seconds using @temporal_join_value;
+show count(*) warnings;
+deallocate prepare temporal_join_seconds;
+
+-- An unselected constant branch stays inactive even with both JOIN inputs.
+insert into temporal_join_left values (2, '00:00:00');
+set sql_mode = 'STRICT_TRANS_TABLES';
+prepare temporal_join_case from 'select count(*) from temporal_join_left a join temporal_join_right b on a.v = addtime(b.v, case when true then time(''00:00:00'') else cast(? as time) end)';
+set @temporal_join_value = 'bad';
+execute temporal_join_case using @temporal_join_value;
+show count(*) warnings;
+deallocate prepare temporal_join_case;
+
+-- Strict PERIOD errors are delayed at the same owner, not swallowed.
+prepare temporal_join_period from 'select count(*) from temporal_join_left a join temporal_join_right b on a.k = b.k + period_diff(?,202401)';
+set @temporal_join_value = 202413;
+execute temporal_join_period using @temporal_join_value;
+delete from temporal_join_left;
+execute temporal_join_period using @temporal_join_value;
+show count(*) warnings;
+insert into temporal_join_left values (2, '00:00:00');
+set @temporal_join_value = 202401;
+execute temporal_join_period using @temporal_join_value;
+show count(*) warnings;
+deallocate prepare temporal_join_period;
+drop table temporal_join_left;
+drop table temporal_join_right;
+
+-- A later WHERE, LEFT JOIN elimination or TOP pushdown must not erase the
+-- diagnostic owner. The PK fixture makes those optimizations eligible.
+create table temporal_join_pk_left (k int primary key, v time);
+create table temporal_join_pk_right (k int primary key, v time);
+insert into temporal_join_pk_left values (1, '00:00:00'), (2, '00:00:00');
+insert into temporal_join_pk_right select * from temporal_join_pk_left;
+prepare temporal_join_where from 'select count(*) from temporal_join_pk_left a join temporal_join_pk_right b on a.k=b.k and a.v=addtime(b.v,maketime(?,0,0)) where a.k=-1';
+set @temporal_join_value = 839;
+execute temporal_join_where using @temporal_join_value;
+show warnings;
+deallocate prepare temporal_join_where;
+prepare temporal_join_elimination from 'select a.k from temporal_join_pk_left a left join temporal_join_pk_right b on a.k=b.k and a.v<time(?) order by a.k';
+set @temporal_join_value = '900:00:00';
+execute temporal_join_elimination using @temporal_join_value;
+show warnings;
+deallocate prepare temporal_join_elimination;
+prepare temporal_join_limit from 'select a.k,b.k from temporal_join_pk_left a left join temporal_join_pk_right b on a.k=b.k and b.v<case when a.k=2 then time(?) else time(''00:00:01'') end order by a.k limit 1';
+execute temporal_join_limit using @temporal_join_value;
+show warnings;
+deallocate prepare temporal_join_limit;
+drop table temporal_join_pk_left;
+drop table temporal_join_pk_right;
+
+-- A residual constant is activated with two nonempty inputs even when a hash
+-- key has no match. A row-dependent CASE keeps its per-pair selection.
+create table temporal_residual_left(k int, v time);
+create table temporal_residual_right(k int, v time);
+insert into temporal_residual_left values (1, '00:00:01');
+insert into temporal_residual_right values (2, '00:00:02');
+set sql_mode = '';
+select count(*) from temporal_residual_left a join temporal_residual_right b
+on a.k=b.k and a.v>time('900:00:00');
+show count(*) warnings;
+select count(*) from temporal_residual_left a join temporal_residual_right b
+on a.k-b.k=0 and a.v>time('900:00:00');
+show count(*) warnings;
+select count(*) from temporal_residual_left a join temporal_residual_right b
+on a.k=b.k and case when a.k=1 then a.v>time('900:00:00') else true end;
+show count(*) warnings;
+select count(*) from temporal_residual_left a join temporal_residual_right b
+on a.k=b.k and case when a.k=2 then a.v>time('900:00:00') else true end;
+show count(*) warnings;
+delete from temporal_residual_right;
+select count(*) from temporal_residual_left a join temporal_residual_right b
+on a.k=b.k and a.v>time('900:00:00');
+show count(*) warnings;
+insert into temporal_residual_right values
+(2, '00:00:02'), (3, '00:00:02'), (4, '00:00:02'), (5, '00:00:02'), (6, '00:00:02');
+select count(*) from temporal_residual_left a left join temporal_residual_right b
+on a.k=b.k and case when a.k=1 then a.v>time('900:00:00') else true end;
+show count(*) warnings;
+drop table temporal_residual_left;
+drop table temporal_residual_right;
+
+-- DATE(text marker) has the same empty-input diagnostic boundary as TIME.
+create table temporal_date_empty(k int);
+create table temporal_date_right(k int);
+insert into temporal_date_right values (2);
+prepare temporal_date_marker from 'select count(*) from temporal_date_empty a join temporal_date_right b on a.k=b.k+year(date(cast(? as char)))';
+set @temporal_date_value = 'bad';
+execute temporal_date_marker using @temporal_date_value;
+show count(*) warnings;
+set @temporal_date_value = null;
+execute temporal_date_marker using @temporal_date_value;
+show count(*) warnings;
+deallocate prepare temporal_date_marker;
+drop table temporal_date_empty;
+drop table temporal_date_right;
+
+set @temporal_join_value = null;
+set sql_mode = @temporal_28851_saved_sql_mode;
+drop database temporal_consistency_28851;

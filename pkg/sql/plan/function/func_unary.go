@@ -1107,15 +1107,41 @@ func UtcDate(_ []*vector.Vector, result vector.FunctionResultWrapper, proc *proc
 }
 
 func DateToDate(ivecs []*vector.Vector, result vector.FunctionResultWrapper, proc *process.Process, length int, selectList *FunctionSelectList) error {
-	return opUnaryFixedToFixed[types.Date, types.Date](ivecs, result, proc, length, func(v types.Date) types.Date {
-		return v
+	modeChecked, rejectZero := false, false
+	var modeErr error
+	err := opUnaryFixedToFixedWithNullCheck[types.Date, types.Date](ivecs, result, length, func(v types.Date) (types.Date, bool) {
+		if v == types.ZeroDate {
+			if !modeChecked {
+				rejectZero, modeErr = process.ResolveExplicitZeroTemporalCastReturnsNull(proc)
+				modeChecked = true
+			}
+			return v, rejectZero || modeErr != nil
+		}
+		return v, false
 	}, selectList)
+	if modeErr != nil {
+		return modeErr
+	}
+	return err
 }
 
 func DatetimeToDate(ivecs []*vector.Vector, result vector.FunctionResultWrapper, proc *process.Process, length int, selectList *FunctionSelectList) error {
-	return opUnaryFixedToFixed[types.Datetime, types.Date](ivecs, result, proc, length, func(v types.Datetime) types.Date {
-		return v.ToDate()
+	modeChecked, rejectZero := false, false
+	var modeErr error
+	err := opUnaryFixedToFixedWithNullCheck[types.Datetime, types.Date](ivecs, result, length, func(v types.Datetime) (types.Date, bool) {
+		if v == types.ZeroDatetime {
+			if !modeChecked {
+				rejectZero, modeErr = process.ResolveExplicitZeroTemporalCastReturnsNull(proc)
+				modeChecked = true
+			}
+			return v.ToDate(), rejectZero || modeErr != nil
+		}
+		return v.ToDate(), false
 	}, selectList)
+	if modeErr != nil {
+		return modeErr
+	}
+	return err
 }
 
 func TimeToDate(ivecs []*vector.Vector, result vector.FunctionResultWrapper, proc *process.Process, length int, selectList *FunctionSelectList) error {
@@ -1126,13 +1152,47 @@ func TimeToDate(ivecs []*vector.Vector, result vector.FunctionResultWrapper, pro
 
 // DateStringToDate can still speed up if vec is const. but we will do the constant fold. so it does not matter.
 func DateStringToDate(ivecs []*vector.Vector, result vector.FunctionResultWrapper, proc *process.Process, length int, selectList *FunctionSelectList) error {
-	return opUnaryBytesToFixedWithErrorCheck[types.Date](ivecs, result, proc, length, func(v []byte) (types.Date, error) {
-		d, e := types.ParseDatetime(functionUtil.QuickBytesToStr(v), 6)
-		if e != nil {
-			return 0, moerr.NewOutOfRangeNoCtxf("date", "'%s'", v)
+	source := vector.GenerateFunctionStrParameter(ivecs[0])
+	rs := vector.MustFunctionResult[types.Date](result)
+	modeChecked, rejectZero := false, false
+	for i := uint64(0); i < uint64(length); i++ {
+		if functionRowSkipped(selectList, i) {
+			if err := rs.Append(0, true); err != nil {
+				return err
+			}
+			continue
 		}
-		return d.ToDate(), nil
-	}, selectList)
+		value, null := source.GetStrValue(i)
+		if null {
+			if err := rs.Append(0, true); err != nil {
+				return err
+			}
+			continue
+		}
+		parsed, err := types.ParseDatetime(functionUtil.QuickBytesToStr(value), 6)
+		if err != nil {
+			return moerr.NewOutOfRangeNoCtxf("date", "'%s'", value)
+		}
+		if parsed == types.ZeroDatetime {
+			if !modeChecked {
+				rejectZero, err = process.ResolveExplicitZeroTemporalCastReturnsNull(proc)
+				if err != nil {
+					return err
+				}
+				modeChecked = true
+			}
+			if rejectZero {
+				if err := rs.Append(0, true); err != nil {
+					return err
+				}
+				continue
+			}
+		}
+		if err := rs.Append(parsed.ToDate(), false); err != nil {
+			return err
+		}
+	}
+	return nil
 }
 
 func DateToDay(ivecs []*vector.Vector, result vector.FunctionResultWrapper, proc *process.Process, length int, selectList *FunctionSelectList) error {
@@ -1196,9 +1256,10 @@ func parseDateExtractParts(value string) (dateExtractParts, bool) {
 	return parts, true
 }
 
-func dateStringToFixedWithNullOnError[T types.FixedSizeTExceptStrType](ivecs []*vector.Vector, result vector.FunctionResultWrapper, _ *process.Process, length int, selectList *FunctionSelectList, fn func(dateExtractParts) (T, bool)) error {
+func dateStringToFixedWithNullOnError[T types.FixedSizeTExceptStrType](ivecs []*vector.Vector, result vector.FunctionResultWrapper, proc *process.Process, length int, selectList *FunctionSelectList, fn func(dateExtractParts) (T, bool)) error {
 	source := vector.GenerateFunctionStrParameter(ivecs[0])
 	rs := vector.MustFunctionResult[T](result)
+	modeChecked, rejectZero := false, false
 	for i := uint64(0); i < uint64(length); i++ {
 		if selectList != nil && (selectList.IgnoreAllRow() ||
 			(!selectList.ShouldEvalAllRow() && selectList.Contains(i))) {
@@ -1220,6 +1281,22 @@ func dateStringToFixedWithNullOnError[T types.FixedSizeTExceptStrType](ivecs []*
 				return err
 			}
 			continue
+		}
+		if parts.year == 0 && parts.month == 0 && parts.day == 0 {
+			if !modeChecked {
+				var err error
+				rejectZero, err = process.ResolveExplicitZeroTemporalCastReturnsNull(proc)
+				if err != nil {
+					return err
+				}
+				modeChecked = true
+			}
+			if rejectZero {
+				if err := rs.Append(*new(T), true); err != nil {
+					return err
+				}
+				continue
+			}
 		}
 		valueToAppend, valid := fn(parts)
 		if err := rs.Append(valueToAppend, !valid); err != nil {
@@ -6236,8 +6313,9 @@ func SpaceDecimal256(ivecs []*vector.Vector, result vector.FunctionResultWrapper
 }
 
 func TimeToTime(ivecs []*vector.Vector, result vector.FunctionResultWrapper, proc *process.Process, length int, selectList *FunctionSelectList) error {
+	scale := result.GetResultVector().GetType().Scale
 	return opUnaryFixedToFixed[types.Time, types.Time](ivecs, result, proc, length, func(v types.Time) types.Time {
-		return v
+		return clampPublicTimeResult(proc, v, scale).TruncateToScale(scale)
 	}, selectList)
 }
 
@@ -6248,16 +6326,14 @@ func DateToTime(ivecs []*vector.Vector, result vector.FunctionResultWrapper, pro
 }
 
 func DatetimeToTime(ivecs []*vector.Vector, result vector.FunctionResultWrapper, proc *process.Process, length int, selectList *FunctionSelectList) error {
-	scale := ivecs[0].GetType().Scale
-	result.GetResultVector().SetTypeScale(scale)
+	scale := result.GetResultVector().GetType().Scale
 	return opUnaryFixedToFixed[types.Datetime, types.Time](ivecs, result, proc, length, func(v types.Datetime) types.Time {
 		return v.ToTime(scale)
 	}, selectList)
 }
 
 func TimestampToTime(ivecs []*vector.Vector, result vector.FunctionResultWrapper, proc *process.Process, length int, selectList *FunctionSelectList) error {
-	scale := ivecs[0].GetType().Scale
-	result.GetResultVector().SetTypeScale(scale)
+	scale := result.GetResultVector().GetType().Scale
 	loc := time.Local
 	if proc != nil && proc.GetSessionInfo() != nil && proc.GetSessionInfo().TimeZone != nil {
 		loc = proc.GetSessionInfo().TimeZone
@@ -6273,29 +6349,52 @@ func Int64ToTime(ivecs []*vector.Vector, result vector.FunctionResultWrapper, pr
 		if e != nil {
 			return 0, moerr.NewOutOfRangeNoCtxf("time", "'%d'", v)
 		}
-		return t, nil
+		return clampPublicTimeResult(proc, t, 0), nil
 	}, selectList)
 }
 
 func DateStringToTime(ivecs []*vector.Vector, result vector.FunctionResultWrapper, proc *process.Process, length int, selectList *FunctionSelectList) error {
+	scale := result.GetResultVector().GetType().Scale
 	return opUnaryBytesToFixedWithErrorCheck[types.Time](ivecs, result, proc, length, func(v []byte) (types.Time, error) {
-		t, e := types.ParseTime(string(v), 6)
+		t, e := types.ParseTime(string(v), scale)
 		if e != nil {
 			return 0, moerr.NewOutOfRangeNoCtxf("time", "'%s'", string(v))
 		}
-		return t, nil
+		return clampPublicTimeResult(proc, t, scale), nil
 	}, selectList)
 }
 
 func Decimal128ToTime(ivecs []*vector.Vector, result vector.FunctionResultWrapper, proc *process.Process, length int, selectList *FunctionSelectList) error {
 	scale := ivecs[0].GetType().Scale
+	targetScale := result.GetResultVector().GetType().Scale
 	return opUnaryFixedToFixedWithErrorCheck[types.Decimal128, types.Time](ivecs, result, proc, length, func(v types.Decimal128) (types.Time, error) {
-		t, e := types.ParseDecimal128ToTime(v, scale, 6)
+		t, e := types.ParseTime(v.Format(scale), targetScale)
 		if e != nil {
 			return 0, moerr.NewOutOfRangeNoCtxf("time", "'%s'", v.Format(0))
 		}
-		return t, nil
+		return clampPublicTimeResult(proc, t, targetScale), nil
 	}, selectList)
+}
+
+func Decimal256ToTime(ivecs []*vector.Vector, result vector.FunctionResultWrapper, proc *process.Process, length int, selectList *FunctionSelectList) error {
+	scale := ivecs[0].GetType().Scale
+	targetScale := result.GetResultVector().GetType().Scale
+	return opUnaryFixedToFixedWithErrorCheck[types.Decimal256, types.Time](ivecs, result, proc, length, func(v types.Decimal256) (types.Time, error) {
+		text := v.Format(scale)
+		t, err := types.ParseTime(text, targetScale)
+		if err != nil {
+			return 0, moerr.NewOutOfRangeNoCtxf("time", "'%s'", text)
+		}
+		return clampPublicTimeResult(proc, t, targetScale), nil
+	}, selectList)
+}
+
+func clampPublicTimeResult(proc *process.Process, value types.Time, scale int32) types.Time {
+	clamped := types.ClampMySQLTimeForScale(value, scale)
+	if clamped != value {
+		appendTimeRangeWarning(proc, value, scale)
+	}
+	return clamped
 }
 
 func DateToTimestamp(ivecs []*vector.Vector, result vector.FunctionResultWrapper, proc *process.Process, length int, selectList *FunctionSelectList) error {
@@ -6443,6 +6542,13 @@ func timeStringToFixedWithNullOnError[T types.FixedSizeTExceptStrType](
 			}
 			continue
 		}
+		if clock, ok := zeroCalendarClockForExtract(str, 6); ok {
+			hour, minute, second, _, _ := clock.ClockFormat()
+			if err := rs.Append(fn(uint32(hour), minute, second), false); err != nil {
+				return err
+			}
+			continue
+		}
 
 		hour, minute, second, ok := timeStringToClockForExtract(str)
 		if !ok {
@@ -6457,6 +6563,54 @@ func timeStringToFixedWithNullOnError[T types.FixedSizeTExceptStrType](
 		}
 	}
 	return nil
+}
+
+// A zero calendar cannot be represented as DATETIME, but its valid clock is
+// still a TIME duration. Both unary fields and EXTRACT use this FSP6 rounding
+// path so a carry beyond 23:59:59 agrees across the two SQL forms.
+func zeroCalendarClockForExtract(value string, scale int32) (types.Time, bool) {
+	// HOUR/MINUTE/SECOND normally see TIME strings. Avoid running the date
+	// grammar for those rows; only a leading zero year can be a zero calendar.
+	start := 0
+	for start < len(value) && (value[start] == ' ' || value[start] == '\t') {
+		start++
+	}
+	if start == len(value) || value[start] != '0' {
+		return 0, false
+	}
+	parts, ok := parseDateExtractParts(value)
+	if !ok || parts.year != 0 || parts.month != 0 || parts.day != 0 {
+		return 0, false
+	}
+	trimmed := strings.TrimSpace(value)
+	separator := strings.IndexAny(trimmed, " T")
+	if separator < 0 {
+		return 0, true
+	}
+	clockText := strings.TrimSpace(trimmed[separator+1:])
+	if strings.IndexByte(clockText, ' ') >= 0 {
+		clockText = strings.ReplaceAll(clockText, " ", "")
+	}
+	fields := 0
+	var canonical []byte
+	for i := 0; i < len(clockText) && fields < 2; i++ {
+		ch := clockText[i]
+		if ch >= '0' && ch <= '9' {
+			continue
+		}
+		if ch != ':' {
+			if canonical == nil {
+				canonical = []byte(clockText)
+			}
+			canonical[i] = ':'
+		}
+		fields++
+	}
+	if canonical != nil {
+		clockText = string(canonical)
+	}
+	clock, err := types.ParseTime(clockText, scale)
+	return clock, err == nil
 }
 
 // timeStringToClockForExtract follows MySQL's string-to-TIME coercion for
@@ -10650,36 +10804,9 @@ func DateStringToQuarter(ivecs []*vector.Vector, result vector.FunctionResultWra
 
 // TODO: I will support template soon.
 func DateStringToMonth(ivecs []*vector.Vector, result vector.FunctionResultWrapper, proc *process.Process, length int, selectList *FunctionSelectList) error {
-	//return opUnaryStrToFixedWithErrorCheck[uint8](ivecs, result, proc, length, func(v string) (uint8, error) {
-	//	d, e := types.ParseDateCast(v)
-	//	if e != nil {
-	//		return 0, e
-	//	}
-	//	return d.Month(), nil
-	//})
-
-	ivec := vector.GenerateFunctionStrParameter(ivecs[0])
-	rs := vector.MustFunctionResult[uint8](result)
-	for i := uint64(0); i < uint64(length); i++ {
-		v, null := ivec.GetStrValue(i)
-		if null {
-			if err := rs.Append(0, true); err != nil {
-				return err
-			}
-		} else {
-			d, e := types.ParseDateCast(functionUtil.QuickBytesToStr(v))
-			if e != nil {
-				if err := rs.Append(0, true); err != nil {
-					return err
-				}
-			} else {
-				if err := rs.Append(d.Month(), false); err != nil {
-					return err
-				}
-			}
-		}
-	}
-	return nil
+	return dateStringToFixedWithNullOnError(ivecs, result, proc, length, selectList, func(parts dateExtractParts) (uint8, bool) {
+		return parts.month, true
+	})
 }
 
 func DateToYear(ivecs []*vector.Vector, result vector.FunctionResultWrapper, proc *process.Process, length int, selectList *FunctionSelectList) error {
@@ -10695,25 +10822,56 @@ func DatetimeToYear(ivecs []*vector.Vector, result vector.FunctionResultWrapper,
 }
 
 func DateStringToYear(ivecs []*vector.Vector, result vector.FunctionResultWrapper, proc *process.Process, length int, selectList *FunctionSelectList) error {
-	return opUnaryStrToFixedWithErrorCheck[int64](ivecs, result, proc, length, func(v string) (int64, error) {
-		d, e := types.ParseDateCast(v)
-		if e != nil {
-			return 0, e
-		}
-		return int64(d.Year()), nil
-	}, selectList)
+	return dateStringToFixedWithNullOnError(ivecs, result, proc, length, selectList, func(parts dateExtractParts) (int64, bool) {
+		return int64(parts.year), true
+	})
+}
+
+// normalizeWeekMode applies the same modulo-eight normalization used by the
+// date implementation for both WEEK and YEARWEEK.  The SQL mode argument may
+// be a vector, so callers must invoke this per row rather than reading row 0.
+func normalizeWeekMode(mode int64) int {
+	mode %= 8
+	if mode < 0 {
+		mode += 8
+	}
+	return int(mode)
+}
+
+func weekModeAt(modes vector.FunctionParameterWrapper[int64], row uint64) int {
+	if modes == nil {
+		return 0
+	}
+	// An explicit NULL mode uses mode 0 regardless of whether it is a
+	// literal or a row-dependent expression.
+	mode, null := modes.GetValue(row)
+	if null {
+		return 0
+	}
+	return normalizeWeekMode(mode)
+}
+
+// getDefaultWeekFormatMode reads the session default at execution time so a
+// prepared one-argument WEEK call observes a later SET default_week_format.
+func getDefaultWeekFormatMode(proc *process.Process) (int, error) {
+	mode, _, err := process.ResolveDefaultWeekFormatMode(proc)
+	return mode, err
 }
 
 func DateToWeek(ivecs []*vector.Vector, result vector.FunctionResultWrapper, proc *process.Process, length int, selectList *FunctionSelectList) error {
 	rs := vector.MustFunctionResult[uint8](result)
 	dates := vector.GenerateFunctionFixedTypeParameter[types.Date](ivecs[0])
-
-	// Get mode (default 0 if not provided)
-	// MySQL uses mode % 8 for out-of-range values
-	mode := 0
-	if len(ivecs) > 1 && !ivecs[1].IsConstNull() {
-		mode = int(vector.MustFixedColWithTypeCheck[int64](ivecs[1])[0])
-		mode = ((mode % 8) + 8) % 8
+	var modes vector.FunctionParameterWrapper[int64]
+	if len(ivecs) > 1 {
+		modes = vector.GenerateFunctionFixedTypeParameter[int64](ivecs[1])
+	}
+	defaultMode := 0
+	if modes == nil {
+		var err error
+		defaultMode, err = getDefaultWeekFormatMode(proc)
+		if err != nil {
+			return err
+		}
 	}
 
 	for i := uint64(0); i < uint64(length); i++ {
@@ -10724,6 +10882,10 @@ func DateToWeek(ivecs []*vector.Vector, result vector.FunctionResultWrapper, pro
 			continue
 		}
 
+		mode := weekModeAt(modes, i)
+		if modes == nil {
+			mode = defaultMode
+		}
 		date, null := dates.GetValue(i)
 		if null || date == types.ZeroDate {
 			if err := rs.Append(0, true); err != nil {
@@ -10743,13 +10905,17 @@ func DateToWeek(ivecs []*vector.Vector, result vector.FunctionResultWrapper, pro
 func DatetimeToWeek(ivecs []*vector.Vector, result vector.FunctionResultWrapper, proc *process.Process, length int, selectList *FunctionSelectList) error {
 	rs := vector.MustFunctionResult[uint8](result)
 	datetimes := vector.GenerateFunctionFixedTypeParameter[types.Datetime](ivecs[0])
-
-	// Get mode (default 0 if not provided)
-	// MySQL uses mode % 8 for out-of-range values
-	mode := 0
-	if len(ivecs) > 1 && !ivecs[1].IsConstNull() {
-		mode = int(vector.MustFixedColWithTypeCheck[int64](ivecs[1])[0])
-		mode = ((mode % 8) + 8) % 8
+	var modes vector.FunctionParameterWrapper[int64]
+	if len(ivecs) > 1 {
+		modes = vector.GenerateFunctionFixedTypeParameter[int64](ivecs[1])
+	}
+	defaultMode := 0
+	if modes == nil {
+		var err error
+		defaultMode, err = getDefaultWeekFormatMode(proc)
+		if err != nil {
+			return err
+		}
 	}
 
 	for i := uint64(0); i < uint64(length); i++ {
@@ -10760,6 +10926,10 @@ func DatetimeToWeek(ivecs []*vector.Vector, result vector.FunctionResultWrapper,
 			continue
 		}
 
+		mode := weekModeAt(modes, i)
+		if modes == nil {
+			mode = defaultMode
+		}
 		dt, null := datetimes.GetValue(i)
 		if null || dt == types.ZeroDatetime {
 			if err := rs.Append(0, true); err != nil {

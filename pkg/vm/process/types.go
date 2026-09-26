@@ -135,6 +135,9 @@ type SessionInfo struct {
 	// SqlMode is captured on the initiating CN and used when a remote process has
 	// no session variable resolver.
 	SqlMode string
+	// Captured per execution for one-argument WEEK on remote/forwarded CNs.
+	DefaultWeekFormat    uint8
+	DefaultWeekFormatSet bool
 	// AutoIncrementIncrement and AutoIncrementOffset are captured on the
 	// initiating CN and used by remote PRE_INSERT operators.  They are
 	// statement-scoped; zero means the default value one for compatibility with

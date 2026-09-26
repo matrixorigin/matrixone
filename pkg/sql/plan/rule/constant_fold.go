@@ -253,7 +253,7 @@ func (r *ConstantFold) constantFold(expr *plan.Expr, proc *process.Process) *pla
 		fn.Args[i] = r.constantFold(fn.Args[i], proc)
 		isVec = isVec || fn.Args[i].GetVec() != nil
 	}
-	if r.isPrepared && isSqlModeDependentTemporalCast(fn) {
+	if r.isPrepared && ContainsSqlModeDependentTemporalCall(expr) {
 		return expr
 	}
 	if f.IsAgg() || f.IsWin() {
@@ -269,11 +269,14 @@ func (r *ConstantFold) constantFold(expr *plan.Expr, proc *process.Process) *pla
 		return expr
 	}
 
-	vec, free, err := colexec.GetReadonlyResultFromExpression(proc, expr, []*batch.Batch{r.bat})
+	vec, free, warned, err := EvaluateConstantExpression(proc, expr, r.bat)
 	if err != nil {
 		return expr
 	}
 	defer free()
+	if warned {
+		return expr
+	}
 
 	if isVec {
 		requiresDecimalProvenance, err := plan.RequiresMORPCVersion89DecimalLiteralSemantics(fn.Args)
@@ -901,7 +904,7 @@ func ContainsSerializedLiteral(exprs []*plan.Expr) bool {
 }
 
 func isSqlModeDependentTemporalCast(fn *plan.Function) bool {
-	functionID, _ := function.DecodeOverloadID(fn.Func.GetObj())
+	functionID, overloadID := function.DecodeOverloadID(fn.Func.GetObj())
 	if functionID != function.CAST || len(fn.Args) != 2 {
 		return false
 	}
@@ -909,16 +912,100 @@ func isSqlModeDependentTemporalCast(fn *plan.Function) bool {
 	switch types.T(fn.Args[0].Typ.Id) {
 	case types.T_char, types.T_varchar, types.T_binary, types.T_varbinary,
 		types.T_blob, types.T_text, types.T_datalink:
+		target := types.T(fn.Args[1].Typ.Id)
+		if target != types.T_date && target != types.T_datetime && target != types.T_timestamp {
+			return false
+		}
+		lit := fn.Args[0].GetLit()
+		if lit == nil {
+			return true
+		}
+		if lit.Isnull {
+			return false
+		}
+		if types.T(fn.Args[1].Typ.Id) == types.T_timestamp {
+			// TIMESTAMP conversion also depends on the execution-time zone.
+			return true
+		}
+		value, ok := lit.Value.(*plan.Literal_Sval)
+		if !ok {
+			return true
+		}
+		switch types.T(fn.Args[1].Typ.Id) {
+		case types.T_date:
+			parsed, err := types.ParseDateCast(value.Sval)
+			return err != nil || parsed == types.ZeroDate
+		case types.T_datetime:
+			parsed, err := types.ParseDatetime(value.Sval, 6)
+			return err != nil || parsed == types.ZeroDatetime
+		default:
+			return false
+		}
+	case types.T_date, types.T_datetime:
+		if types.T(fn.Args[1].Typ.Id) != types.T_date ||
+			(!fn.SyntaxExplicitCast && overloadID != 1) {
+			return false
+		}
+		// Only the typed zero sentinel depends on NO_ZERO_DATE. Keep normal
+		// literal casts foldable, including prepared interval constants.
+		lit := fn.Args[0].GetLit()
+		if lit == nil {
+			return true
+		}
+		if lit.Isnull {
+			return false
+		}
+		if types.T(fn.Args[0].Typ.Id) == types.T_date {
+			return lit.GetDateval() == int32(types.ZeroDate)
+		}
+		return lit.GetDatetimeval() == int64(types.ZeroDatetime)
 	default:
 		return false
 	}
 
-	switch types.T(fn.Args[1].Typ.Id) {
-	case types.T_date, types.T_datetime, types.T_timestamp:
+}
+
+func isSqlModeDependentTemporalFunction(fn *plan.Function) bool {
+	id, overload := function.DecodeOverloadID(fn.Func.GetObj())
+	if id == function.EXTRACT && overload >= 5 && len(fn.Args) == 2 && types.T(fn.Args[1].Typ.Id).IsMySQLString() {
 		return true
+	}
+	if len(fn.Args) != 1 {
+		return false
+	}
+	functionID, _ := function.DecodeOverloadID(fn.Func.GetObj())
+	argType := types.T(fn.Args[0].Typ.Id)
+	switch functionID {
+	case function.DATE:
+		return argType == types.T_date || argType == types.T_datetime || argType.IsMySQLString()
+	case function.DAY:
+		// DAY is resolved through a DATE argument. Retain its literal-to-DATE
+		// conversion until EXECUTE so NO_ZERO_DATE can still null it.
+		return true
+	case function.YEAR, function.MONTH, function.QUARTER, function.DAYOFMONTH:
+		return argType.IsMySQLString()
 	default:
 		return false
 	}
+}
+
+// A wrapper such as IS NULL is itself constant-looking when its child is a
+// literal-only DATE/YEAR expression. Preserve the entire path to that child
+// so every EXECUTE evaluates it under the current session sql_mode.
+func ContainsSqlModeDependentTemporalCall(expr *plan.Expr) bool {
+	fn := expr.GetF()
+	if fn == nil {
+		return false
+	}
+	if isSqlModeDependentTemporalCast(fn) || isSqlModeDependentTemporalFunction(fn) {
+		return true
+	}
+	for _, arg := range fn.Args {
+		if arg != nil && ContainsSqlModeDependentTemporalCall(arg) {
+			return true
+		}
+	}
+	return false
 }
 
 // IsLegacyTimeAssignmentOutsideInternalRange identifies a CAST_STRICT literal
@@ -1041,4 +1128,24 @@ func isZeroLiteral(lit *plan.Literal) bool {
 		return v.Decimal128Val.A == 0 && v.Decimal128Val.B == 0
 	}
 	return false
+}
+
+// foldWarningSink records only the presence of diagnostics. Speculative
+// evaluation must neither publish a warning nor erase its runtime producer.
+type foldWarningSink struct{ warned bool }
+
+func (s *foldWarningSink) AppendWarningDiagnostic(uint16, string) { s.warned = true }
+func (s *foldWarningSink) AppendWarningCount(n uint64)            { s.warned = s.warned || n != 0 }
+func (s *foldWarningSink) GetWarningRetentionLimit() int          { return 0 }
+
+// EvaluateConstantExpression is shared by binder and optimizer folding. The
+// child borrows the context and memory pool; only the expression result needs
+// freeing. Never mutate the statement's immutable warning destination.
+func EvaluateConstantExpression(proc *process.Process, expr *plan.Expr, bat *batch.Batch) (*vector.Vector, func(), bool, error) {
+	sink := &foldWarningSink{}
+	child := proc.NewNoContextChildProc(0)
+	child.Ctx = proc.Ctx
+	child.WarningSink = sink
+	vec, free, err := colexec.GetReadonlyResultFromExpression(child, expr, []*batch.Batch{bat})
+	return vec, free, sink.warned, err
 }

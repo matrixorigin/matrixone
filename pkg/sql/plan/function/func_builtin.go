@@ -73,9 +73,131 @@ func builtInDateDiff(parameters []*vector.Vector, result vector.FunctionResultWr
 	return nil
 }
 
-// ToInterval normalizes dynamic string interval values per row. Invalid values
-// become NULL, matching DATE_ADD/DATE_SUB invalid-interval behavior.
+// ToInterval retains the legacy whole-unit contract for already-bound plans.
 func ToInterval(ivecs []*vector.Vector, result vector.FunctionResultWrapper, _ *process.Process, length int, selectList *FunctionSelectList) error {
+	return toInterval(ivecs, result, length, false)
+}
+
+// ToIntervalMicrosecond has a distinct execution identity because its results
+// are paired with a MICROSECOND outer unit in new DATE_ADD/DATE_SUB plans.
+func ToIntervalMicrosecond(ivecs []*vector.Vector, result vector.FunctionResultWrapper, _ *process.Process, length int, selectList *FunctionSelectList) error {
+	switch ivecs[0].GetType().Oid {
+	case types.T_float32:
+		return toTypedInterval[float32](ivecs, result, length, func(v float32, _ int32) (string, bool) {
+			if math.IsNaN(float64(v)) || math.IsInf(float64(v), 0) {
+				return "", false
+			}
+			return strconv.FormatFloat(float64(v), 'f', -1, 32), true
+		}, func(v float32, unit types.IntervalType) (int64, bool, bool) {
+			return roundedScalarFloatInterval(float64(v), unit)
+		})
+	case types.T_float64:
+		return toTypedInterval[float64](ivecs, result, length, func(v float64, _ int32) (string, bool) {
+			if math.IsNaN(v) || math.IsInf(v, 0) {
+				return "", false
+			}
+			return strconv.FormatFloat(v, 'f', -1, 64), true
+		}, roundedScalarFloatInterval)
+	case types.T_decimal64:
+		return toTypedInterval[types.Decimal64](ivecs, result, length, func(v types.Decimal64, scale int32) (string, bool) {
+			return canonicalIntervalDecimal(v.Format(scale), scale), true
+		}, nil)
+	case types.T_decimal128:
+		return toTypedInterval[types.Decimal128](ivecs, result, length, func(v types.Decimal128, scale int32) (string, bool) {
+			return canonicalIntervalDecimal(v.Format(scale), scale), true
+		}, nil)
+	case types.T_decimal256:
+		return toTypedInterval[types.Decimal256](ivecs, result, length, func(v types.Decimal256, scale int32) (string, bool) {
+			return canonicalIntervalDecimal(v.Format(scale), scale), true
+		}, nil)
+	}
+	return toInterval(ivecs, result, length, true)
+}
+
+// Numeric compound fields use a value's shortest fixed-point spelling. A
+// DECIMAL's declared scale must not become extra fields, while the existing
+// VARCHAR field-width grammar remains unchanged.
+func canonicalIntervalDecimal(s string, scale int32) string {
+	if scale > 0 {
+		s = strings.TrimRight(s, "0")
+		s = strings.TrimSuffix(s, ".")
+	}
+	return s
+}
+
+// Scalar floating intervals use the same binary floating-point multiplication
+// and rounding as literal binding. Compound units retain their field grammar.
+func roundedScalarFloatInterval(value float64, unit types.IntervalType) (int64, bool, bool) {
+	var multiplier int64
+	switch unit {
+	case types.MicroSecond:
+		multiplier = 1
+	case types.Second:
+		multiplier = types.MicroSecsPerSec
+	case types.Minute:
+		multiplier = types.MicroSecsPerSec * types.SecsPerMinute
+	case types.Hour:
+		multiplier = types.MicroSecsPerSec * types.SecsPerHour
+	case types.Day:
+		multiplier = types.MicroSecsPerSec * types.SecsPerDay
+	default:
+		return 0, false, false
+	}
+	rounded := math.Round(value * float64(multiplier))
+	if math.IsNaN(rounded) || rounded >= float64(math.MaxInt64) || rounded < float64(math.MinInt64) {
+		return 0, false, true
+	}
+	return int64(rounded), true, true
+}
+
+func toTypedInterval[T types.FixedSizeTExceptStrType](
+	ivecs []*vector.Vector, result vector.FunctionResultWrapper, length int,
+	format func(T, int32) (string, bool),
+	scalarFloat func(T, types.IntervalType) (int64, bool, bool),
+) error {
+	values := vector.GenerateFunctionFixedTypeParameter[T](ivecs[0])
+	units := vector.GenerateFunctionFixedTypeParameter[int64](ivecs[1])
+	rs := vector.MustFunctionResult[int64](result)
+	scale := ivecs[0].GetType().Scale
+	for i := uint64(0); i < uint64(length); i++ {
+		value, valueNull := values.GetValue(i)
+		unit, unitNull := units.GetValue(i)
+		if valueNull || unitNull {
+			if err := rs.Append(0, true); err != nil {
+				return err
+			}
+			continue
+		}
+		if scalarFloat != nil {
+			if microseconds, valid, handled := scalarFloat(value, types.IntervalType(unit)); handled {
+				// Non-finite inputs are malformed; finite scaling overflow is
+				// retained until the arithmetic consumer knows row activity.
+				if !valid {
+					if _, finite := format(value, scale); finite {
+						microseconds, valid = calendarIntervalOverflow, true
+					}
+				}
+				if err := rs.Append(microseconds, !valid); err != nil {
+					return err
+				}
+				continue
+			}
+		}
+		text, valid := format(value, scale)
+		if !valid {
+			if err := rs.Append(0, true); err != nil {
+				return err
+			}
+			continue
+		}
+		if err := appendNormalizedInterval(rs, text, types.IntervalType(unit), true); err != nil {
+			return err
+		}
+	}
+	return nil
+}
+
+func toInterval(ivecs []*vector.Vector, result vector.FunctionResultWrapper, length int, normalizeMicroseconds bool) error {
 	values := vector.GenerateFunctionStrParameter(ivecs[0])
 	units := vector.GenerateFunctionFixedTypeParameter[int64](ivecs[1])
 	rs := vector.MustFunctionResult[int64](result)
@@ -88,18 +210,33 @@ func ToInterval(ivecs []*vector.Vector, result vector.FunctionResultWrapper, _ *
 			}
 			continue
 		}
-		number, _, err := types.NormalizeInterval(string(value), types.IntervalType(unit))
-		if err != nil {
-			if err := rs.Append(0, true); err != nil {
-				return err
-			}
-			continue
-		}
-		if err := rs.Append(number, false); err != nil {
+		if err := appendNormalizedInterval(rs, string(value), types.IntervalType(unit), normalizeMicroseconds); err != nil {
 			return err
 		}
 	}
 	return nil
+}
+
+// No calendar or public TIME operand can cancel an INT64_MIN interval into
+// its result domain. Keep this out-of-domain value for overflow, instead of
+// collapsing it into SQL NULL before the consumer can apply row diagnostics.
+// The released whole-unit helper retains its old NULL representation.
+const calendarIntervalOverflow int64 = math.MinInt64
+
+func appendNormalizedInterval(rs *vector.FunctionResult[int64], text string, intervalType types.IntervalType, normalizeMicroseconds bool) error {
+	if normalizeMicroseconds {
+		value := normalizeRawTimeInterval(text, intervalType)
+		switch value.state {
+		case timeIntervalOverflow:
+			return rs.Append(calendarIntervalOverflow, false)
+		case timeIntervalInvalid, timeIntervalNull:
+			return rs.Append(0, true)
+		default:
+			return rs.Append(value.value, false)
+		}
+	}
+	number, _, err := types.NormalizeInterval(text, intervalType)
+	return rs.Append(number, err != nil)
 }
 
 func builtInCurrentTimestamp(ivecs []*vector.Vector, result vector.FunctionResultWrapper, proc *process.Process, length int, selectList *FunctionSelectList) error {
@@ -4031,6 +4168,9 @@ const SecondsIn24Hours = 86400
 // The number of days in the year 0000 AD
 const ADZeroDays = 366
 
+// The largest day number whose result fits MatrixOne's DATE calendar.
+var maxFromDays = int64(types.DateFromCalendar(types.MaxDateYear, 12, 31)) + ADZeroDays
+
 const (
 	intervalUnitYEAR      = "YEAR"
 	intervalUnitQUARTER   = "QUARTER"
@@ -4077,6 +4217,21 @@ func builtInFromDays(parameters []*vector.Vector, result vector.FunctionResultWr
 	for i := uint64(0); i < uint64(length); i++ {
 		dayNumber, isNull := dayParams.GetValue(i)
 		if isNull {
+			if err := rs.Append(types.Date(0), true); err != nil {
+				return err
+			}
+			continue
+		}
+		// Pre-year-1 values have a defined zero-date result. Keep the upper
+		// overflow separate so neither the subtraction nor AddInterval's
+		// day-to-microsecond multiplication can wrap.
+		if dayNumber < ADZeroDays {
+			if err := rs.Append(types.ZeroDate, false); err != nil {
+				return err
+			}
+			continue
+		}
+		if dayNumber > maxFromDays {
 			if err := rs.Append(types.Date(0), true); err != nil {
 				return err
 			}

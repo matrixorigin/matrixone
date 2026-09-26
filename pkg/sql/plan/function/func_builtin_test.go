@@ -34,6 +34,27 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/vm/process"
 )
 
+func TestBuiltInFromDaysBoundaryAndOverflow(t *testing.T) {
+	proc := testutil.NewProcess(t)
+	days := []int64{
+		math.MinInt64, -1, 0, 1, 365, 366, 367,
+		3652424, 3652425, 2251799813685614, math.MaxInt64, 0,
+	}
+	inputNulls := []bool{false, false, false, false, false, false, false, false, false, false, false, true}
+	want := []types.Date{
+		types.ZeroDate, types.ZeroDate, types.ZeroDate, types.ZeroDate, types.ZeroDate,
+		types.DateFromCalendar(1, 1, 1), types.DateFromCalendar(1, 1, 2),
+		types.DateFromCalendar(types.MaxDateYear, 12, 31), 0, 0, 0, 0,
+	}
+	wantNulls := []bool{false, false, false, false, false, false, false, false, true, true, true, true}
+	fcTC := NewFunctionTestCase(proc,
+		[]FunctionTestInput{NewFunctionTestInput(types.T_int64.ToType(), days, inputNulls)},
+		NewFunctionTestResult(types.T_date.ToType(), false, want, wantNulls),
+		builtInFromDays)
+	ok, info := fcTC.Run()
+	require.True(t, ok, info)
+}
+
 func Test_BuiltIn_CurrentSessionInfo(t *testing.T) {
 	proc := testutil.NewProcess(t)
 	proc.Ctx = defines.AttachAccountId(proc.Ctx, 246)
@@ -680,6 +701,29 @@ func TestToIntervalStringTypesRegistered(t *testing.T) {
 
 func TestToIntervalNormalizesDynamicStrings(t *testing.T) {
 	proc := testutil.NewProcess(t)
+	for _, tc := range []struct {
+		unit  types.IntervalType
+		whole int64
+	}{
+		{types.Second, types.MicroSecsPerSec},
+		{types.Minute, types.SecsPerMinute * types.MicroSecsPerSec},
+		{types.Hour, types.SecsPerHour * types.MicroSecsPerSec},
+		{types.Day, types.SecsPerDay * types.MicroSecsPerSec},
+	} {
+		t.Run(tc.unit.String(), func(t *testing.T) {
+			caseDef := NewFunctionTestCase(proc,
+				[]FunctionTestInput{
+					NewFunctionTestInput(types.T_varchar.ToType(), []string{"1", "1.5", "-1.5", "9223372036854775807", ""}, []bool{false, false, false, false, true}),
+					NewFunctionTestConstInput(types.T_int64.ToType(), []int64{int64(tc.unit)}, nil),
+				},
+				NewFunctionTestResult(types.T_int64.ToType(), false,
+					[]int64{tc.whole, tc.whole + tc.whole/2, -tc.whole - tc.whole/2, math.MinInt64, 0},
+					[]bool{false, false, false, false, true}),
+				ToIntervalMicrosecond)
+			ok, info := caseDef.Run()
+			require.True(t, ok, info)
+		})
+	}
 
 	t.Run("day_second and NULL", func(t *testing.T) {
 		tc := NewFunctionTestCase(proc,
@@ -687,8 +731,8 @@ func TestToIntervalNormalizesDynamicStrings(t *testing.T) {
 				NewFunctionTestInput(types.T_varchar.ToType(), []string{"1 02:03:04", ""}, []bool{false, true}),
 				NewFunctionTestConstInput(types.T_int64.ToType(), []int64{int64(types.Day_Second)}, []bool{false}),
 			},
-			NewFunctionTestResult(types.T_int64.ToType(), false, []int64{93784, 0}, []bool{false, true}),
-			ToInterval,
+			NewFunctionTestResult(types.T_int64.ToType(), false, []int64{93784 * types.MicroSecsPerSec, 0}, []bool{false, true}),
+			ToIntervalMicrosecond,
 		)
 		ok, info := tc.Run()
 		require.True(t, ok, info)
@@ -701,11 +745,90 @@ func TestToIntervalNormalizesDynamicStrings(t *testing.T) {
 				NewFunctionTestConstInput(types.T_int64.ToType(), []int64{int64(types.Year_Month)}, []bool{false}),
 			},
 			NewFunctionTestResult(types.T_int64.ToType(), false, []int64{14, 0}, []bool{false, true}),
-			ToInterval,
+			ToIntervalMicrosecond,
 		)
 		ok, info := tc.Run()
 		require.True(t, ok, info)
 	})
+}
+
+func TestToIntervalNormalizesTypedNumericValues(t *testing.T) {
+	proc := testutil.NewProcess(t)
+	decimalTiny, err := types.ParseDecimal128("0.00000000000001", 38, 14)
+	require.NoError(t, err)
+	decimalOneHalf, err := types.ParseDecimal128("1.50000000000000", 38, 14)
+	require.NoError(t, err)
+	negativeDecimal, err := types.ParseDecimal64("-1.5000000", 18, 7)
+	require.NoError(t, err)
+	widePositive, err := types.ParseDecimal256("1.50000000000000000000", 50, 20)
+	require.NoError(t, err)
+	wideNegative, err := types.ParseDecimal256("-1.50000000000000000000", 50, 20)
+	require.NoError(t, err)
+	positiveTie, err := types.ParseDecimal128("34410126.8315485", 38, 7)
+	require.NoError(t, err)
+	negativeTie, err := types.ParseDecimal128("-34410126.8315485", 38, 7)
+	require.NoError(t, err)
+	for _, tc := range []struct {
+		name  string
+		input FunctionTestInput
+		unit  types.IntervalType
+		want  []int64
+		nulls []bool
+	}{
+		{
+			name:  "double tiny exponent and singleton microsecond",
+			input: NewFunctionTestInput(types.T_float64.ToType(), []float64{1e-14, 1, 1.5, math.NaN(), math.Inf(1)}, nil),
+			unit:  types.Second_MicroSecond,
+			want:  []int64{0, 100000, 1500000, 0, 0},
+			nulls: []bool{false, false, false, true, true},
+		},
+		{
+			name:  "float32 lexical width and NULL",
+			input: NewFunctionTestInput(types.T_float32.ToType(), []float32{1.5, 0}, []bool{false, true}),
+			unit:  types.Second_MicroSecond,
+			want:  []int64{1500000, 0},
+			nulls: []bool{false, true},
+		},
+		{
+			name:  "decimal64 declared scale does not alter fields",
+			input: NewFunctionTestInput(types.New(types.T_decimal64, 18, 7), []types.Decimal64{15000000, negativeDecimal}, nil),
+			unit:  types.Hour_Minute,
+			want:  []int64{65, -65},
+			nulls: []bool{false, false},
+		},
+		{
+			name:  "decimal128 tiny precision and fractional second",
+			input: NewFunctionTestInput(types.New(types.T_decimal128, 38, 14), []types.Decimal128{decimalTiny, decimalOneHalf}, nil),
+			unit:  types.Second_MicroSecond,
+			want:  []int64{0, 1500000},
+			nulls: []bool{false, false},
+		},
+		{
+			name: "decimal256 scalar preserves the stored fractional value",
+			input: NewFunctionTestInput(types.New(types.T_decimal256, 50, 20),
+				[]types.Decimal256{widePositive, wideNegative}, nil),
+			unit:  types.Second,
+			want:  []int64{1500000, -1500000},
+			nulls: []bool{false, false},
+		},
+		{
+			name: "decimal128 scalar rounds exactly at one microsecond",
+			input: NewFunctionTestInput(types.New(types.T_decimal128, 38, 7),
+				[]types.Decimal128{positiveTie, negativeTie}, nil),
+			unit:  types.Second,
+			want:  []int64{34410126831549, -34410126831549},
+			nulls: []bool{false, false},
+		},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			caseDef := NewFunctionTestCase(proc,
+				[]FunctionTestInput{tc.input, NewFunctionTestConstInput(types.T_int64.ToType(), []int64{int64(tc.unit)}, nil)},
+				NewFunctionTestResult(types.T_int64.ToType(), false, tc.want, tc.nulls),
+				ToIntervalMicrosecond)
+			ok, info := caseDef.Run()
+			require.True(t, ok, info)
+		})
+	}
 }
 
 func Test_BuiltIn_IntervalCheck(t *testing.T) {

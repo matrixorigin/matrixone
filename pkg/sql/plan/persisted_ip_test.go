@@ -49,6 +49,18 @@ func TestPersistedDecimalLiteralUsesDedicatedEpochInMixedOwner(t *testing.T) {
 			Obj: function.EncodeOverloadID(function.ST_DISTANCE, 4),
 		}}},
 	}
+	temporalExpr := &planpb.Expr{Typ: planpb.Type{Id: int32(types.T_int64)}, Expr: &planpb.Expr_F{F: &planpb.Function{
+		Func: &planpb.ObjectRef{Obj: function.EncodeOverloadID(function.EXTRACT, 5)},
+	}}}
+	intervalExpr := &planpb.Expr{Typ: planpb.Type{Id: int32(types.T_int64)}, Expr: &planpb.Expr_F{F: &planpb.Function{
+		Func: &planpb.ObjectRef{Obj: function.EncodeOverloadID(function.TO_INTERVAL_MICROSECOND, 0)},
+	}}}
+	typedIntervalExpr := &planpb.Expr{Typ: planpb.Type{Id: int32(types.T_int64)}, Expr: &planpb.Expr_F{F: &planpb.Function{
+		Func: &planpb.ObjectRef{Obj: function.EncodeOverloadID(function.TO_INTERVAL_MICROSECOND, 5)},
+	}}}
+	weekExpr := &planpb.Expr{Typ: planpb.Type{Id: int32(types.T_uint8)}, Expr: &planpb.Expr_F{F: &planpb.Function{
+		Func: &planpb.ObjectRef{Obj: function.EncodeOverloadID(function.WEEK, 0)},
+	}}}
 	for _, tc := range []struct {
 		name  string
 		exprs []*planpb.Expr
@@ -58,6 +70,12 @@ func TestPersistedDecimalLiteralUsesDedicatedEpochInMixedOwner(t *testing.T) {
 		{"spatial only", []*planpb.Expr{spatialExpr}, defines.MORPCVersion90},
 		{"decimal then spatial", []*planpb.Expr{decimalExpr, spatialExpr}, defines.MORPCVersion90},
 		{"spatial then decimal", []*planpb.Expr{spatialExpr, decimalExpr}, defines.MORPCVersion90},
+		{"temporal result", []*planpb.Expr{temporalExpr}, defines.MORPCVersion98},
+		{"temporal then spatial", []*planpb.Expr{temporalExpr, spatialExpr}, defines.MORPCVersion98},
+		{"normalized interval", []*planpb.Expr{intervalExpr}, defines.MORPCVersion98},
+		{"typed numeric interval overload", []*planpb.Expr{typedIntervalExpr}, defines.MORPCVersion98},
+		{"week session default", []*planpb.Expr{weekExpr}, defines.MORPCVersion98},
+		{"temporal then interval", []*planpb.Expr{temporalExpr, intervalExpr}, defines.MORPCVersion98},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			owner := &planpb.TableDef{}
@@ -69,6 +87,10 @@ func TestPersistedDecimalLiteralUsesDedicatedEpochInMixedOwner(t *testing.T) {
 			require.Equal(t, tc.want, required, "mixed contracts take the maximum independently of order")
 		})
 	}
+	legacyTemporal := DeepCopyExpr(temporalExpr)
+	legacyTemporal.Typ.Id = int32(types.T_varchar)
+	_, err = RequiredPersistedExpressionProtocolVersion(legacyTemporal)
+	require.ErrorContains(t, err, "temporal result vector")
 }
 
 func TestPersistedDecimalDivisionRequiresV97(t *testing.T) {
@@ -246,7 +268,8 @@ func TestPersistedDecimalLiteralTargetTypedDefaultAdmission(t *testing.T) {
 	require.NoError(t, RequirePersistedExpressionProtocol(proc.Ctx, proc, plain))
 	// A temporal/non-DECIMAL target keeps the original spelling for the cast,
 	// so it does not depend on the exact DECIMAL literal carrier introduced by
-	// v89 and remains admissible at the v81 floor.
+	// v89. Its string-to-TIME cast independently requires the final temporal
+	// contract; do not confuse that requirement with DECIMAL provenance.
 	timeSource := "0.001"
 	timeStmt, err := parsers.ParseOne(context.Background(), dialect.MYSQL,
 		"create table t_time(a time(3) default ("+timeSource+"))", 1)
@@ -256,12 +279,22 @@ func TestPersistedDecimalLiteralTargetTypedDefaultAdmission(t *testing.T) {
 	timeTyp := planpb.Type{Id: int32(types.T_time), Scale: 3}
 	rt.SetGlobalVariables(moruntime.PersistedExpressionProtocolFloor, int64(defines.MORPCVersion81))
 	rt.SetGlobalVariables(moruntime.PersistedExpressionProtocolAuthoringFloor, int64(defines.MORPCVersion81))
+	_, err = buildDefaultExpr(proc.Ctx, timeCol, timeTyp, proc)
+	require.ErrorContains(t, err, "protocol version 98")
+	rt.SetGlobalVariables(moruntime.PersistedExpressionProtocolFloor, int64(defines.MORPCVersion98))
+	rt.SetGlobalVariables(moruntime.PersistedExpressionProtocolAuthoringFloor, int64(defines.MORPCVersion98))
 	timeDefault, err := buildDefaultExpr(proc.Ctx, timeCol, timeTyp, proc)
 	require.NoError(t, err)
 	require.NotNil(t, timeDefault)
 	timeVersion, err := RequiredPersistedExpressionProtocolVersion(timeDefault)
 	require.NoError(t, err)
+	// Admission checks the source cast before folding. The persisted literal
+	// itself has no parser dependency and keeps its released physical ABI.
 	require.Zero(t, timeVersion)
+	timeFeatures, err := planpb.RequiredRemoteExpressionFeatures(timeDefault)
+	require.NoError(t, err)
+	require.False(t, timeFeatures.DecimalLiteralSemantics)
+	require.False(t, timeFeatures.TemporalResultContracts)
 }
 
 func TestPersistedDecimalLiteralMarkerSurvivesDeepCopyAndListFold(t *testing.T) {
@@ -321,6 +354,11 @@ func TestPersistedDecimalLiteralMarkerSurvivesDeepCopyAndListFold(t *testing.T) 
 			require.True(t, decoded.GetVec().GetDecimalLiteralRequiresV82())
 		})
 	}
+	legacyExpr := &planpb.Expr{Typ: planpb.Type{Id: int32(types.T_int64)}, Expr: &planpb.Expr_F{F: &planpb.Function{
+		Func: &planpb.ObjectRef{Obj: function.EncodeOverloadID(function.TO_INTERVAL, 0)},
+	}}}
+	_, err = RequiredPersistedExpressionProtocolVersion(legacyExpr)
+	require.ErrorContains(t, err, "legacy interval")
 }
 
 func TestPersistedDecimalLiteralMarkerSurvivesConstantFold(t *testing.T) {
@@ -727,28 +765,39 @@ func TestPersistedMixedTemporalViewProtocolAdmission(t *testing.T) {
 		}
 	})
 
-	const createSQL = "create view v_mixed_temporal as select if(1 = 1, cast('2024-01-02 12:34:56.123456' as timestamp(6)), cast('2024-01-02 12:34:56.123' as datetime(3))) as value"
-	build := func(authoringFloor int64) (*Plan, error) {
-		rt.SetGlobalVariables(moruntime.MOProtocolVersion, defines.MORPCVersion86)
-		rt.SetGlobalVariables(moruntime.PersistedExpressionProtocolAuthoringFloor, authoringFloor)
-		stmt, err := parsers.ParseOne(t.Context(), dialect.MYSQL, createSQL, 1)
-		if err != nil {
-			return nil, err
-		}
-		defer stmt.Free()
-		return BuildPlan(&rootSQLCompilerContext{MockCompilerContext: ctx, rootSQL: createSQL}, stmt, false)
+	for _, createSQL := range []string{
+		"create view v_mixed_temporal as select if(1 = 1, cast('2024-01-02 12:34:56.123456' as timestamp(6)), cast('2024-01-02 12:34:56.123' as datetime(3))) as value",
+		"create view v_stable_temporal as select date_sub(now(), interval 10 minute) as value",
+		"create view v_numeric_time as select cast(900 as time) as value",
+		"create view v_hex_numeric as select cast(X'' as signed) as value",
+		"create view v_bit_numeric as select cast(b'0' as double) as value",
+	} {
+		t.Run(createSQL, func(t *testing.T) {
+			build := func(authoringFloor int64) (*Plan, error) {
+				rt.SetGlobalVariables(moruntime.MOProtocolVersion, defines.MORPCVersion98)
+				rt.SetGlobalVariables(moruntime.PersistedExpressionProtocolAuthoringFloor, authoringFloor)
+				stmt, err := parsers.ParseOne(t.Context(), dialect.MYSQL, createSQL, 1)
+				if err != nil {
+					return nil, err
+				}
+				defer stmt.Free()
+				return BuildPlan(&rootSQLCompilerContext{MockCompilerContext: ctx, rootSQL: createSQL}, stmt, false)
+			}
+
+			_, err := build(0)
+			require.ErrorContains(t, err, "protocol version 98")
+			_, err = build(defines.MORPCVersion96)
+			require.ErrorContains(t, err, "protocol version 98")
+
+			created, err := build(defines.MORPCVersion98)
+			require.NoError(t, err)
+			var viewData ViewData
+			require.NoError(t, json.Unmarshal(
+				[]byte(created.GetDdl().GetCreateView().GetTableDef().GetViewSql().GetView()), &viewData))
+			require.NotNil(t, viewData.RequiredProtocolVersion)
+			require.Equal(t, int64(defines.MORPCVersion98), *viewData.RequiredProtocolVersion)
+		})
 	}
-
-	_, err := build(defines.MORPCVersion85)
-	require.ErrorContains(t, err, "protocol version 86")
-
-	created, err := build(defines.MORPCVersion86)
-	require.NoError(t, err)
-	var viewData ViewData
-	require.NoError(t, json.Unmarshal(
-		[]byte(created.GetDdl().GetCreateView().GetTableDef().GetViewSql().GetView()), &viewData))
-	require.NotNil(t, viewData.RequiredProtocolVersion)
-	require.Equal(t, int64(defines.MORPCVersion86), *viewData.RequiredProtocolVersion)
 }
 
 func TestPersistedBoundedConditionalStringProtocolAdmission(t *testing.T) {

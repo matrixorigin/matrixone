@@ -28,6 +28,40 @@ import (
 	"github.com/stretchr/testify/require"
 )
 
+type filterFoldWarningCounter struct{ count int }
+
+func (c *filterFoldWarningCounter) AppendWarningDiagnostic(uint16, string) { c.count++ }
+
+func TestDiagnosticFilterClassificationExcludesStorageCopy(t *testing.T) {
+	proc := testutil.NewProcess(t)
+	t.Cleanup(func() { proc.Free() })
+	warnings := &filterFoldWarningCounter{}
+	proc.WarningSink = warnings
+	column := &planpb.Expr{
+		Typ:  planpb.Type{Id: int32(types.T_float64)},
+		Expr: &planpb.Expr_Col{Col: &planpb.ColRef{Name: "d"}},
+	}
+	source := &planpb.Expr{
+		Typ:  planpb.Type{Id: int32(types.T_text)},
+		Expr: &planpb.Expr_Lit{Lit: &planpb.Literal{Value: &planpb.Literal_Sval{Sval: "12suffix"}}},
+	}
+	target := &planpb.Expr{
+		Typ:  planpb.Type{Id: int32(types.T_float64)},
+		Expr: &planpb.Expr_T{T: &planpb.TargetType{}},
+	}
+	cast, err := plan2.BindFuncExprImplByPlanExpr(
+		context.Background(), "cast", []*planpb.Expr{source, target})
+	require.NoError(t, err)
+	filter, err := plan2.BindFuncExprImplByPlanExpr(
+		context.Background(), "=", []*planpb.Expr{column, cast})
+	require.NoError(t, err)
+	require.True(t, plan2.ContainsConstantFilterDiagnostic(proc, filter))
+	require.Empty(t, filterScanStorageExprs(proc, []*planpb.Expr{filter}))
+	require.True(t, (&Compile{proc: proc}).needsCoordinatorConstantFilterDiagnostic(
+		&planpb.Node{FilterList: []*planpb.Expr{filter}}))
+	require.Zero(t, warnings.count, "the classification probe must not publish diagnostics")
+}
+
 func TestBuildFoldedFilterExprsRollsBackAndCanRetry(t *testing.T) {
 	proc := testutil.NewProcess(t)
 	t.Cleanup(func() { proc.Free() })
