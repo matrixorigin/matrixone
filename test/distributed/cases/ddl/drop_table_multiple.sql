@@ -173,7 +173,7 @@ drop table parent_fk;
 drop table if exists child_fk;
 drop table if exists parent_fk;
 
--- A failed first member must not retire the later table's auto-ID service.
+-- Planner rejection of the first member leaves the later auto-ID table untouched.
 drop database if exists drop_multi_guard;
 create database drop_multi_guard;
 create table first_fail(id int primary key auto_increment);
