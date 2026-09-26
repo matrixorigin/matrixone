@@ -107,6 +107,19 @@ func TestIssue28295RowConstructorScalarSubquery(t *testing.T) {
 		require.NoError(t, err)
 		_, err = conn.ExecContext(ctx, "insert into scalar_outer values (1),(2)")
 		require.NoError(t, err)
+		for _, tc := range []struct {
+			condition string
+			want      int
+		}{
+			{"y=2", 0}, // AVG over no rows is NULL, not a passing comparison.
+			{"y=1", 1}, // The matching AVG is 1.00, so only outer key 2 passes.
+		} {
+			err = conn.QueryRowContext(ctx, `select count(*) from scalar_outer o
+			where cast(o.k as decimal(10,2)) >
+			(select avg(x) from scalar_decimal where `+tc.condition+`)`).Scan(&correlatedCount)
+			require.NoError(t, err)
+			require.Equal(t, tc.want, correlatedCount)
+		}
 		_, err = conn.ExecContext(ctx, "create table scalar_inner(k int, v int)")
 		require.NoError(t, err)
 		_, err = conn.ExecContext(ctx, "insert into scalar_inner values (1,10)")
