@@ -942,3 +942,40 @@ func TestRequiredRemoteExpressionFeaturesDecimalLiteralSemantics(t *testing.T) {
 	require.NoError(t, err)
 	require.False(t, features.DecimalLiteralSemantics)
 }
+
+func TestTemporalConversionProtocolSourceMatrix(t *testing.T) {
+	column := func(id int32) *Expr {
+		return &Expr{Typ: Type{Id: id}, Expr: &Expr_Col{Col: &ColRef{ColPos: 0}}}
+	}
+	literal := func(form StringLiteralForm) *Expr {
+		return &Expr{Typ: Type{Id: planVarcharTypeID}, Expr: &Expr_Lit{Lit: &Literal{
+			Value: &Literal_Sval{Sval: ""}, LiteralForm: form,
+			IsBin: form == StringLiteralForm_STRING_LITERAL_HEX || form == StringLiteralForm_STRING_LITERAL_BIT,
+		}}}
+	}
+	cast := func(source *Expr, result int32) *Expr {
+		return &Expr{Typ: Type{Id: result}, Expr: &Expr_F{F: &Function{
+			Func: &ObjectRef{Obj: int64(21) << 32},
+			Args: []*Expr{source, {Typ: Type{Id: result}, Expr: &Expr_T{T: &TargetType{}}}},
+		}}}
+	}
+	for _, tc := range []struct {
+		name string
+		expr *Expr
+		want bool
+	}{
+		{"text to date", cast(column(planVarcharTypeID), planDateTypeID), true},
+		{"numeric to time", cast(column(planInt64TypeID), planTimeTypeID), true},
+		{"hex to signed", cast(literal(StringLiteralForm_STRING_LITERAL_HEX), planInt64TypeID), true},
+		{"bit to double", cast(literal(StringLiteralForm_STRING_LITERAL_BIT), 31), true},
+		{"ordinary text to signed", cast(literal(StringLiteralForm_STRING_LITERAL_TEXT), planInt64TypeID), false},
+		{"binary payload to signed", cast(literal(StringLiteralForm_STRING_LITERAL_BINARY_INTRODUCER), planInt64TypeID), false},
+		{"numeric to date", cast(column(planInt64TypeID), planDateTypeID), false},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			features, err := RequiredRemoteExpressionFeatures(tc.expr)
+			require.NoError(t, err)
+			require.Equal(t, tc.want, features.TemporalResultContracts)
+		})
+	}
+}

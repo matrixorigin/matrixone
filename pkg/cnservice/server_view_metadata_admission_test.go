@@ -1510,37 +1510,37 @@ func TestCNDerivedViewsWaitForAuthoringProtocol(t *testing.T) {
 	t.Cleanup(func() { _ = s.Close() })
 	s.viewMetadataAdmission.Store(&logservicepb.ViewMetadataAdmission{Generation: 11})
 	require.NoError(t, s.waitForViewMetadataAdmission())
-	require.Error(t, s.waitForViewMetadataAdmissionHandoff(false, uint64(defines.MORPCVersion97)), "disabled admission cannot authorize new derived definitions")
+	require.Error(t, s.waitForViewMetadataAdmissionHandoff(false, uint64(defines.MORPCVersion98)), "disabled admission cannot authorize new derived definitions")
 	require.False(t, s.viewMetadataIngressReady.Load())
 	s.viewMetadataAdmission.Store(&logservicepb.ViewMetadataAdmission{Generation: 12})
-	require.ErrorContains(t, s.waitForViewMetadataAdmissionHandoff(false, 97), "generation was superseded")
+	require.ErrorContains(t, s.waitForViewMetadataAdmissionHandoff(false, 98), "generation was superseded")
 	s.viewMetadataAdmission.Store(&logservicepb.ViewMetadataAdmission{Generation: 11, PersistedExpressionRequiredProtocolVersion: uint64(defines.MORPCLatestVersion + 1)})
-	require.ErrorContains(t, s.waitForViewMetadataAdmissionHandoff(false, 97), "newer protocol")
+	require.ErrorContains(t, s.waitForViewMetadataAdmissionHandoff(false, 98), "newer protocol")
 	s.viewMetadataGenerationRevoked.Store(true)
-	require.ErrorContains(t, s.waitForViewMetadataAdmissionHandoff(false, 97), "generation revoked")
+	require.ErrorContains(t, s.waitForViewMetadataAdmissionHandoff(false, 98), "generation revoked")
 	s.viewMetadataGenerationRevoked.Store(false)
 	require.NoError(t, s.viewMetadataEpochFence.Advance(t.Context(), 5))
 	s.viewMetadataCatalogFencedEpoch.Store(5)
-	ready := &logservicepb.ViewMetadataAdmission{Generation: 11, Epoch: 5, Enabled: true, Ready: false, Admitted: true, CatalogFencedEpoch: 5, RevalidationRequired: true, PersistedExpressionRequiredProtocolVersion: uint64(defines.MORPCVersion97)}
+	ready := &logservicepb.ViewMetadataAdmission{Generation: 11, Epoch: 5, Enabled: true, Ready: false, Admitted: true, CatalogFencedEpoch: 5, RevalidationRequired: true, PersistedExpressionRequiredProtocolVersion: uint64(defines.MORPCVersion98)}
 	for _, tc := range []struct {
 		name    string
 		floor   uint64
 		pending bool
 		want    bool
 	}{
-		{"lower floor", 96, false, false}, {"activation pending", 97, true, false}, {"ready", 97, false, true},
+		{"lower floor", 97, false, false}, {"activation pending", 98, true, false}, {"ready", 98, false, true},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			current := *ready
 			current.PersistedExpressionRequiredProtocolVersion = tc.floor
 			current.PersistedExpressionProtocolActivationPending = tc.pending
 			s.viewMetadataAdmission.Store(&current)
-			accepted, _, err := s.acceptViewMetadataAdmissionSnapshot(ready, false, false, nil, 97)
+			accepted, _, err := s.acceptViewMetadataAdmissionSnapshot(ready, false, false, nil, 98)
 			require.NoError(t, err)
 			require.Equal(t, tc.want, accepted, "check current authority, not the older fenced snapshot")
 			current.Preparing = true
 			s.viewMetadataAdmission.Store(&current)
-			accepted, _, err = s.acceptViewMetadataAdmissionSnapshot(ready, false, false, nil, 97)
+			accepted, _, err = s.acceptViewMetadataAdmissionSnapshot(ready, false, false, nil, 98)
 			require.NoError(t, err)
 			require.False(t, accepted, "a preparing epoch cannot authorize writes")
 		})

@@ -2683,7 +2683,7 @@ func (rule *ResetParamRefRule) applyExpr(e *plan.Expr) (*plan.Expr, error) {
 		var originalTemporalExpr *Expr
 		if exprImpl.F.Func != nil {
 			switch strings.ToLower(exprImpl.F.Func.GetObjName()) {
-			case "date_add", "date_sub", "str_to_date", "to_date", "addtime", "subtime", "timediff":
+			case "date_add", "date_sub", "str_to_date", "to_date", "addtime", "subtime", "timediff", "time":
 				originalTemporalExpr = DeepCopyExpr(e)
 			}
 		}

@@ -5767,6 +5767,30 @@ func TestCreateTableAsSelectWithTimestampPairPrecision(t *testing.T) {
 	}
 }
 
+func TestCreateTableAsSelectWithTimeFunctionPrecision(t *testing.T) {
+	for _, test := range []struct {
+		name       string
+		expression string
+		wantFSP    int32
+	}{
+		{name: "typed time", expression: "time(cast('00:00:00.123456' as time(6)))", wantFSP: 6},
+		{name: "decimal256", expression: "time(cast(123.1234567 as decimal(65,7)))", wantFSP: 6},
+		{name: "validated literal", expression: "time('00:00:00.1234')", wantFSP: 4},
+		{name: "integer", expression: "time(123)", wantFSP: 0},
+	} {
+		t.Run(test.name, func(t *testing.T) {
+			mock := NewMockOptimizer(false)
+			logicPlan, err := buildSingleStmt(mock, t,
+				"create table time_ctas as select "+test.expression+" as time_value")
+			require.NoError(t, err)
+			column := logicPlan.GetDdl().GetCreateTable().GetTableDef().GetCols()[0]
+			require.Equal(t, int32(types.T_time), column.Typ.Id)
+			require.Equal(t, test.wantFSP, column.Typ.Width)
+			require.Equal(t, test.wantFSP, column.Typ.Scale)
+		})
+	}
+}
+
 func TestCreateTableAsSelectPreservesTimeWindowMicrosecondBoundaryScale(t *testing.T) {
 	mock := NewMockOptimizer(false)
 	mockTimeWindowScaleTable(t, mock, types.T_datetime.ToTypeWithScale(0))

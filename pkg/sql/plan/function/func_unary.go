@@ -6313,8 +6313,9 @@ func SpaceDecimal256(ivecs []*vector.Vector, result vector.FunctionResultWrapper
 }
 
 func TimeToTime(ivecs []*vector.Vector, result vector.FunctionResultWrapper, proc *process.Process, length int, selectList *FunctionSelectList) error {
+	scale := result.GetResultVector().GetType().Scale
 	return opUnaryFixedToFixed[types.Time, types.Time](ivecs, result, proc, length, func(v types.Time) types.Time {
-		return v
+		return clampPublicTimeResult(proc, v, scale).TruncateToScale(scale)
 	}, selectList)
 }
 
@@ -6325,16 +6326,14 @@ func DateToTime(ivecs []*vector.Vector, result vector.FunctionResultWrapper, pro
 }
 
 func DatetimeToTime(ivecs []*vector.Vector, result vector.FunctionResultWrapper, proc *process.Process, length int, selectList *FunctionSelectList) error {
-	scale := ivecs[0].GetType().Scale
-	result.GetResultVector().SetTypeScale(scale)
+	scale := result.GetResultVector().GetType().Scale
 	return opUnaryFixedToFixed[types.Datetime, types.Time](ivecs, result, proc, length, func(v types.Datetime) types.Time {
 		return v.ToTime(scale)
 	}, selectList)
 }
 
 func TimestampToTime(ivecs []*vector.Vector, result vector.FunctionResultWrapper, proc *process.Process, length int, selectList *FunctionSelectList) error {
-	scale := ivecs[0].GetType().Scale
-	result.GetResultVector().SetTypeScale(scale)
+	scale := result.GetResultVector().GetType().Scale
 	loc := time.Local
 	if proc != nil && proc.GetSessionInfo() != nil && proc.GetSessionInfo().TimeZone != nil {
 		loc = proc.GetSessionInfo().TimeZone
@@ -6350,33 +6349,52 @@ func Int64ToTime(ivecs []*vector.Vector, result vector.FunctionResultWrapper, pr
 		if e != nil {
 			return 0, moerr.NewOutOfRangeNoCtxf("time", "'%d'", v)
 		}
-		return t, nil
+		return clampPublicTimeResult(proc, t, 0), nil
 	}, selectList)
 }
 
 func DateStringToTime(ivecs []*vector.Vector, result vector.FunctionResultWrapper, proc *process.Process, length int, selectList *FunctionSelectList) error {
+	scale := result.GetResultVector().GetType().Scale
 	return opUnaryBytesToFixedWithErrorCheck[types.Time](ivecs, result, proc, length, func(v []byte) (types.Time, error) {
-		t, e := types.ParseTime(string(v), 6)
+		t, e := types.ParseTime(string(v), scale)
 		if e != nil {
 			return 0, moerr.NewOutOfRangeNoCtxf("time", "'%s'", string(v))
 		}
-		clamped := types.ClampMySQLTimeForScale(t, 6)
-		if clamped != t {
-			appendTimeRangeWarning(proc, t, 6)
-		}
-		return clamped, nil
+		return clampPublicTimeResult(proc, t, scale), nil
 	}, selectList)
 }
 
 func Decimal128ToTime(ivecs []*vector.Vector, result vector.FunctionResultWrapper, proc *process.Process, length int, selectList *FunctionSelectList) error {
 	scale := ivecs[0].GetType().Scale
+	targetScale := result.GetResultVector().GetType().Scale
 	return opUnaryFixedToFixedWithErrorCheck[types.Decimal128, types.Time](ivecs, result, proc, length, func(v types.Decimal128) (types.Time, error) {
-		t, e := types.ParseDecimal128ToTime(v, scale, 6)
+		t, e := types.ParseTime(v.Format(scale), targetScale)
 		if e != nil {
 			return 0, moerr.NewOutOfRangeNoCtxf("time", "'%s'", v.Format(0))
 		}
-		return t, nil
+		return clampPublicTimeResult(proc, t, targetScale), nil
 	}, selectList)
+}
+
+func Decimal256ToTime(ivecs []*vector.Vector, result vector.FunctionResultWrapper, proc *process.Process, length int, selectList *FunctionSelectList) error {
+	scale := ivecs[0].GetType().Scale
+	targetScale := result.GetResultVector().GetType().Scale
+	return opUnaryFixedToFixedWithErrorCheck[types.Decimal256, types.Time](ivecs, result, proc, length, func(v types.Decimal256) (types.Time, error) {
+		text := v.Format(scale)
+		t, err := types.ParseTime(text, targetScale)
+		if err != nil {
+			return 0, moerr.NewOutOfRangeNoCtxf("time", "'%s'", text)
+		}
+		return clampPublicTimeResult(proc, t, targetScale), nil
+	}, selectList)
+}
+
+func clampPublicTimeResult(proc *process.Process, value types.Time, scale int32) types.Time {
+	clamped := types.ClampMySQLTimeForScale(value, scale)
+	if clamped != value {
+		appendTimeRangeWarning(proc, value, scale)
+	}
+	return clamped
 }
 
 func DateToTimestamp(ivecs []*vector.Vector, result vector.FunctionResultWrapper, proc *process.Process, length int, selectList *FunctionSelectList) error {

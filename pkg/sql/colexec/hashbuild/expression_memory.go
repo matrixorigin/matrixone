@@ -36,12 +36,14 @@ func NewExpressionExecutors(
 	proc *process.Process,
 	exprs []*plan.Expr,
 	account *mpool.AllocationAccount,
+	foldOwnedConstantCasts ...bool,
 ) ([]colexec.ExpressionExecutor, error) {
 	return newExpressionExecutorsWithCapacityClass(
 		proc,
 		exprs,
 		account,
 		mpool.AllocationCapacityClassDefault,
+		foldOwnedConstantCasts...,
 	)
 }
 
@@ -50,6 +52,7 @@ func newExpressionExecutorsWithCapacityClass(
 	exprs []*plan.Expr,
 	account *mpool.AllocationAccount,
 	capacityClass mpool.AllocationCapacityClass,
+	foldOwnedConstantCasts ...bool,
 ) ([]colexec.ExpressionExecutor, error) {
 	if len(exprs) == 0 {
 		return nil, process.ErrExecutionResourceInvalid
@@ -72,6 +75,6 @@ func newExpressionExecutorsWithCapacityClass(
 		return nil, err
 	}
 	return colexec.NewExpressionExecutorsFromPlanExpressionsWithAllocation(
-		proc, exprs, selection,
+		proc, exprs, selection, foldOwnedConstantCasts...,
 	)
 }

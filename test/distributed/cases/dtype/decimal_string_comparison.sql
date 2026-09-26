@@ -114,7 +114,32 @@ SELECT id FROM token_values WHERE d = '0x10' ORDER BY id;
 SELECT id FROM token_values WHERE d = CONCAT('0x', '10') ORDER BY id;
 SELECT id FROM token_values WHERE d = CONCAT('1e2', 'suffix') ORDER BY id;
 SHOW WARNINGS;
+SELECT id FROM token_values WHERE d = CONCAT('1e2', 'suffix') OR d = CONCAT('1e3', 'suffix') ORDER BY id;
+SHOW COUNT(*) WARNINGS;
+SELECT id FROM token_values WHERE d = CONCAT('1e3', 'suffix') ORDER BY id;
+SHOW COUNT(*) WARNINGS;
+-- One implicit scalar conversion keeps one owner through JOIN and UNION.
+SELECT COUNT(*) FROM token_values a JOIN token_values b ON a.d = b.d
+WHERE a.d = CONCAT('1e2', 'suffix');
+SHOW COUNT(*) WARNINGS;
+SELECT COUNT(*) FROM (SELECT d FROM token_values UNION ALL SELECT d FROM token_values) u
+WHERE d = CONCAT('1e2', 'suffix');
+SHOW COUNT(*) WARNINGS;
+SELECT COUNT(*) FROM token_values WHERE d = CASE WHEN TRUE THEN '1e2suffix' ELSE '2suffix' END;
+SHOW COUNT(*) WARNINGS;
+SELECT COUNT(*) FROM token_values a JOIN token_values b
+ON a.d = b.d AND a.d = CASE WHEN TRUE THEN '1e2suffix' ELSE '2suffix' END;
+SHOW COUNT(*) WARNINGS;
+-- User-written casts in a projector retain row-level conversion diagnostics.
+SELECT CAST('12suffix' AS DOUBLE) FROM token_values;
+SHOW COUNT(*) WARNINGS;
 SELECT id FROM token_values WHERE d = CONCAT('0x', '10foo') ORDER BY id;
+
+CREATE TABLE adjusted_values (d DOUBLE);
+INSERT IGNORE INTO adjusted_values SELECT '12suffix' FROM token_values;
+SHOW COUNT(*) WARNINGS;
+SELECT COUNT(*), MIN(d), MAX(d) FROM adjusted_values;
+DROP TABLE adjusted_values;
 
 SET @decimal_string_old_sql_mode = @@session.sql_mode;
 SET SESSION sql_mode = 'MATRIXONE_NATIVE';
@@ -123,5 +148,9 @@ SELECT id FROM token_values WHERE d = CONCAT('1e2', 'suffix') ORDER BY id;
 SET SESSION sql_mode = @decimal_string_old_sql_mode;
 SELECT @@session.sql_mode = @decimal_string_old_sql_mode AS sql_mode_restored;
 SET @decimal_string_old_sql_mode = NULL;
+
+DELETE FROM token_values;
+SELECT id FROM token_values WHERE d = CONCAT('1e2', 'suffix') ORDER BY id;
+SHOW COUNT(*) WARNINGS;
 
 DROP DATABASE decimal_string_comparison;

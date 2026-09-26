@@ -473,7 +473,7 @@ func (s *service) Start() (err error) {
 		if err != nil || complete {
 			return err
 		}
-		if err = s.waitForViewMetadataAdmissionHandoff(false, uint64(defines.MORPCVersion97)); err != nil {
+		if err = s.waitForViewMetadataAdmissionHandoff(false, uint64(defines.MORPCVersion98)); err != nil {
 			return err
 		}
 		return bootstrap.InitSystemViews(ctx, s.sqlExecutor)
