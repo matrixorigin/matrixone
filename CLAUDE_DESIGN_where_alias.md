@@ -1,6 +1,6 @@
 # WHERE 别名扩展设计 v1
 
-关联 issue：#16244。实现 PR：待创建。用户于本轮确认默认关闭的显式开关方向；本文在实现前记录细化契约与设计审查。
+关联 issue：#16244。实现 PR：https://github.com/matrixorigin/matrixone/pull/29385 。用户于本轮确认默认关闭的显式开关方向；本文在实现前记录细化契约与设计审查。
 
 ## 门禁、证据及不变量
 这是 SQL 兼容契约扩展，触发设计门禁。当前 main 的 SELECT 在绑定 WHERE 后才注册 SELECT 别名。MySQL 8.0 文档明确 WHERE 不支持 SELECT 别名：https://dev.mysql.com/doc/refman/8.0/en/problems-with-alias.html 。本功能是 MO 的 opt-in 扩展，不宣称 MySQL 兼容。
