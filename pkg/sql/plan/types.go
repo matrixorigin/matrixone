@@ -475,6 +475,9 @@ type QueryBuilder struct {
 	nextBindTag      int32
 	nextMsgTag       int32
 	nextSQLUdfCallID uint64
+	// Negative AuxIds identify memoized expression sources across every bind
+	// context that can contribute expressions to this query.
+	nextVolatileExprMemoID int32
 
 	isPrepareStatement     bool
 	mysqlCompatible        bool
@@ -950,7 +953,6 @@ type BindContext struct {
 	projectByExpr          map[string]int32
 	timeByAst              map[string]int32
 	whereFilters           []*plan.Expr
-	volatileExprMemoID     int32
 	flattenedVolatileExprs map[int32]*plan.Expr
 	// gapFillWhereFilters preserves the complete bound WHERE tree before
 	// subqueries are flattened into joins. Bounded GAPFILL inference must see

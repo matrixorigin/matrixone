@@ -567,4 +567,173 @@ select (col1,col2) != ('abcdef','{"ehyiuwqnve": "ashyiujewv"}') from row05;
 1
 1
 drop table row05;
+drop table if exists row_scalar_28295;
+create table row_scalar_28295(id int primary key, a int, b int);
+insert into row_scalar_28295 values (1,1,5),(2,1,null),(3,2,8),(4,2,10);
+select (1,5) = (select a,b from row_scalar_28295 where id=1) as match_v;
+match_v
+1
+select (1,5) = (select a,b from row_scalar_28295 where id=99) as empty_v;
+empty_v
+null
+select (1,5) = (select a,b from row_scalar_28295 where id=2) as null_v;
+null_v
+null
+select (1,4) < (select a,b from row_scalar_28295 where id=1) as order_v;
+order_v
+1
+select (1,null) <=> (select a,b from row_scalar_28295 where id=2) as null_safe_v;
+null_safe_v
+1
+select (1,(select 5)) = (select a,b from row_scalar_28295 where id=1) as nested_scalar_v;
+nested_scalar_v
+1
+select id from row_scalar_28295 outer_row
+where (outer_row.a, outer_row.b) =
+(select inner_row.a, inner_row.b from row_scalar_28295 inner_row where inner_row.id=outer_row.id)
+order by id;
+id
+1
+3
+4
+select id from row_scalar_28295 outer_row
+where (outer_row.id, outer_row.a) =
+(select outer_row.id, inner_row.a from row_scalar_28295 inner_row where inner_row.id=outer_row.id)
+order by id;
+id
+1
+2
+3
+4
+select (1,7) =
+(select outer_row.id,7 from row_scalar_28295 inner_row
+where inner_row.id=outer_row.id limit 1) as outer_limit_v
+from row_scalar_28295 outer_row where outer_row.id=1;
+outer_limit_v
+1
+select (1,7) =
+(select distinct outer_row.id,7 from row_scalar_28295 inner_row
+where inner_row.id=outer_row.id) as outer_distinct_v
+from row_scalar_28295 outer_row where outer_row.id=1;
+outer_distinct_v
+1
+select (0,null) <=>
+(select count(*),sum(inner_row.b) from row_scalar_28295 inner_row
+where inner_row.id=outer_row.id+100 having count(*)=0) as aggregate_empty_v
+from row_scalar_28295 outer_row where outer_row.id=1;
+aggregate_empty_v
+1
+create table row_scalar_outer_28295(k int primary key);
+create table row_scalar_inner_28295(k int, v int);
+insert into row_scalar_outer_28295 values (1),(2);
+insert into row_scalar_inner_28295 values (1,10);
+select o.k, (0,null) <=>
+(select count(1),sum(i.v) from row_scalar_inner_28295 i where i.k<o.k) as real_rows_only
+from row_scalar_outer_28295 o order by o.k;
+k    real_rows_only
+1    1
+2    0
+select o.k, (0,null) <=>
+(select count(*),sum(i.v) from row_scalar_inner_28295 i where i.k<o.k limit 0) as rejected_limit
+from row_scalar_outer_28295 o order by o.k;
+pagination in non-equality correlated aggregate is not supported is not yet implemented
+select o.k, (0,null) <=>
+(select sum(coalesce(i.v,0)),sum(i.v) from row_scalar_inner_28295 i where i.k<o.k) as rejected_expression
+from row_scalar_outer_28295 o order by o.k;
+unsupported non-equality correlated aggregate input is not yet implemented
+select o.k, (o.k,(select v from row_scalar_inner_28295 where k=1)) =
+(select count(*),sum(i.v) from row_scalar_inner_28295 i where i.k<o.k) as rejected_composition
+from row_scalar_outer_28295 o order by o.k;
+non-equality correlated aggregate with outer composition cannot be safely decorrelated is not yet implemented
+select 1 as query_after_rejections;
+query_after_rejections
+1
+insert into row_scalar_inner_28295 values (1,20);
+select o.k, (select group_concat(i.v order by i.v desc separator '~')
+from row_scalar_inner_28295 i where i.k<o.k) as ordered_concat
+from row_scalar_outer_28295 o order by o.k;
+k    ordered_concat
+1    null
+2    20~10
+create table row_scalar_decimal_28295(x decimal(10,2) not null, y int not null);
+select (1.001,1) = (select x,y from row_scalar_decimal_28295) as empty_decimal_eq;
+empty_decimal_eq
+null
+select (1.001,1) <> (select x,y from row_scalar_decimal_28295) as empty_decimal_neq;
+empty_decimal_neq
+null
+select (select x,y from row_scalar_decimal_28295) = (1.001,1) as reversed_empty_decimal_eq;
+reversed_empty_decimal_eq
+null
+select 1.001 = (select x from row_scalar_decimal_28295) as ordinary_empty_decimal_eq;
+ordinary_empty_decimal_eq
+null
+insert into row_scalar_decimal_28295 values (1.00,1);
+select (1.001,1) <> (select x,y from row_scalar_decimal_28295) as matched_decimal_neq;
+matched_decimal_neq
+1
+select o.k, (1.001,1) <> (select i.x,i.y from row_scalar_decimal_28295 i where i.y=o.k) as correlated_decimal_neq
+from row_scalar_outer_28295 o order by o.k;
+k    correlated_decimal_neq
+1    1
+2    null
+select o.k, (1.001,0) <> (select min(i.x),count(*) from row_scalar_decimal_28295 i where i.y<o.k) as aggregate_decimal_neq
+from row_scalar_outer_28295 o order by o.k;
+k    aggregate_decimal_neq
+1    null
+2    1
+drop table row_scalar_decimal_28295;
+create table row_scalar_ifnull_outer_28295(k int primary key);
+insert into row_scalar_ifnull_outer_28295 values (1),(2),(3);
+create table row_scalar_ifnull_inner_28295(k int, v int);
+insert into row_scalar_ifnull_inner_28295 values (1,10),(1,20),(2,null);
+select o.k, ifnull((select min(i.v) from row_scalar_ifnull_inner_28295 i where i.k<o.k),0) as selected_ifnull
+from row_scalar_ifnull_outer_28295 o order by o.k;
+k    selected_ifnull
+1    0
+2    10
+3    10
+select o.k, (select min(i.v) from row_scalar_ifnull_inner_28295 i where i.k<o.k) as raw_min
+from row_scalar_ifnull_outer_28295 o order by o.k;
+k    raw_min
+1    null
+2    10
+3    10
+drop table row_scalar_ifnull_inner_28295;
+drop table row_scalar_ifnull_outer_28295;
+drop table row_scalar_inner_28295;
+drop table row_scalar_outer_28295;
+select (1,5) = (select a,b from row_scalar_28295 where id>0) as multi_v;
+Subquery returns more than 1 row
+select (1,2) = (select 1,2 limit 0) as no_from_empty_limit_v;
+no_from_empty_limit_v
+null
+select (1,2) = (select 1,2 limit 1 offset 1) as no_from_empty_offset_v;
+no_from_empty_offset_v
+null
+select (1,2) = (select 1,2 limit 1 offset 0) as no_from_one_v;
+no_from_one_v
+1
+select (1,2) <=> (select 1,2 limit 0) as no_from_null_safe_empty_v;
+no_from_null_safe_empty_v
+0
+create sequence row_scalar_guard_seq;
+select (nextval('row_scalar_guard_seq'),0) < (select 1,1) as volatile_order_v;
+volatile row ordering comparison requires single evaluation is not yet implemented
+select (0,null) <=>
+(select count(*),sum(inner_row.b) from row_scalar_28295 inner_row
+where inner_row.id=outer_row.id+100 having nextval('row_scalar_guard_seq')=1) as volatile_having_v
+from row_scalar_28295 outer_row where outer_row.id=1;
+volatile correlated scalar HAVING cannot be safely decorrelated is not yet implemented
+select nextval('row_scalar_guard_seq') as first_value_after_rejection;
+first_value_after_rejection
+1
+drop sequence row_scalar_guard_seq;
+set @row_scalar_a=1, @row_scalar_b=5;
+prepare row_scalar_stmt from 'select (?,?) = (select a,b from row_scalar_28295 where id=1) as prepared_v';
+execute row_scalar_stmt using @row_scalar_a, @row_scalar_b;
+prepared_v
+1
+deallocate prepare row_scalar_stmt;
+drop table row_scalar_28295;
 drop database test;

@@ -412,22 +412,43 @@ func exprNotNullableWithColResolver(
 }
 
 func isIfNullCase(fn *plan.Function) bool {
-	if fn == nil || fn.Func == nil || fn.Func.ObjName != "case" || len(fn.Args) != 3 {
+	source, elseSource, ok := ifNullCaseSources(fn)
+	if !ok {
 		return false
 	}
+	if source.AuxId < 0 && source.AuxId == elseSource.AuxId {
+		return true
+	}
+	return exprStructuralEqual(source, elseSource)
+}
+
+func ifNullCaseSources(fn *plan.Function) (source, elseSource *plan.Expr, ok bool) {
+	if fn == nil || fn.Func == nil || fn.Func.ObjName != "case" || len(fn.Args) != 3 {
+		return nil, nil, false
+	}
 	condition := fn.Args[0].GetF()
-	return condition != nil && condition.Func != nil && condition.Func.ObjName == "isnull" &&
-		len(condition.Args) == 1 && ifNullCaseSourceMatches(condition.Args[0], fn.Args[2])
+	if condition == nil || condition.Func == nil || condition.Func.ObjName != "isnull" || len(condition.Args) != 1 {
+		return nil, nil, false
+	}
+	elseSource = ifNullCaseElseSource(fn.Args[2])
+	if condition.Args[0] == nil || elseSource == nil {
+		return nil, nil, false
+	}
+	return condition.Args[0], elseSource, true
 }
 
 // CASE type reconciliation can add CAST nodes around IFNULL's ELSE source.
-// Ignore those binder-introduced casts when recognizing the rewrite; the
-// initial IFNULL metadata calculation uses the same source relationship.
-func ifNullCaseSourceMatches(source, elseExpr *plan.Expr) bool {
+// Ignore those binder-introduced casts when recognizing the rewrite.
+func ifNullCaseElseSource(elseExpr *plan.Expr) *plan.Expr {
 	for {
 		fn := elseExpr.GetF()
-		if fn == nil || fn.Func == nil || fn.Func.ObjName != "cast" || len(fn.Args) == 0 {
-			return exprStructuralEqual(source, elseExpr)
+		if fn == nil || fn.Func == nil || fn.Func.ObjName != "cast" || len(fn.Args) == 0 ||
+			fn.GetSyntaxExplicitCast() {
+			return elseExpr
+		}
+		_, overload := function.DecodeOverloadID(fn.Func.Obj)
+		if overload != 0 {
+			return elseExpr
 		}
 		elseExpr = fn.Args[0]
 	}
@@ -543,12 +564,38 @@ func refreshExprNullabilityFromInputs(expr *plan.Expr, inputs ...[]*plan.Expr) {
 	if expr == nil {
 		return
 	}
-	if fn := expr.GetF(); fn != nil {
+	switch impl := expr.Expr.(type) {
+	case *plan.Expr_Col:
+		col := impl.Col
+		if col == nil {
+			expr.Typ.NotNullable = false
+			return
+		}
+		relPos, colPos := int(col.RelPos), int(col.ColPos)
+		expr.Typ.NotNullable = relPos >= 0 && relPos < len(inputs) &&
+			colPos >= 0 && colPos < len(inputs[relPos]) &&
+			inputs[relPos][colPos] != nil && inputs[relPos][colPos].Typ.NotNullable
+	case *plan.Expr_F:
+		fn := impl.F
+		if fn == nil || fn.Func == nil {
+			expr.Typ.NotNullable = false
+			return
+		}
 		for _, arg := range fn.Args {
+			if arg == nil {
+				expr.Typ.NotNullable = false
+				return
+			}
 			refreshExprNullabilityFromInputs(arg, inputs...)
 		}
+		// The children now carry their materialized input contracts. Deducing
+		// from them directly avoids recursively rescanning each subtree.
+		if isIfNullCase(fn) {
+			expr.Typ.NotNullable = fn.Args[1].Typ.NotNullable || fn.Args[2].Typ.NotNullable
+		} else {
+			expr.Typ.NotNullable = function.DeduceNotNullable(fn.Func.Obj, fn.Args)
+		}
 	}
-	expr.Typ.NotNullable = exprEffectivelyNotNullable(expr, inputs...)
 }
 
 // IsJoinExprEffectivelyNotNullable derives the runtime nullability of an
@@ -2775,6 +2822,7 @@ func (builder *QueryBuilder) remapAllColRefsForConsumer(
 		if err != nil {
 			return nil, err
 		}
+		childProjList := builder.qry.Nodes[node.Children[0]].ProjectList
 
 		remapInfo.tip = "FilterList"
 		for idx, expr := range node.FilterList {
@@ -2784,9 +2832,9 @@ func (builder *QueryBuilder) remapAllColRefsForConsumer(
 			if err != nil {
 				return nil, err
 			}
+			refreshExprNullabilityFromInputs(expr, childProjList)
 		}
 
-		childProjList := builder.qry.Nodes[node.Children[0]].ProjectList
 		for i, globalRef := range childRemapping.localToGlobal {
 			if colRefCnt[globalRef] == 0 {
 				continue

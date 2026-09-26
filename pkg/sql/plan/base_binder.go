@@ -2692,6 +2692,12 @@ func (b *baseBinder) bindComparisonExpr(astExpr *tree.ComparisonExpr, depth int3
 		return nil, moerr.NewNYIf(b.GetContext(), "'%v'", astExpr)
 	}
 
+	if astExpr.SubOp < tree.ANY {
+		if expr, handled, err := b.bindRowScalarSubqueryComparison(leftAst, rightAst, op, depth); handled {
+			return expr, err
+		}
+	}
+
 	if astExpr.SubOp >= tree.ANY {
 		expr, err := b.impl.BindExpr(astExpr.Right, depth, false)
 		if err != nil {
@@ -2752,6 +2758,89 @@ func (b *baseBinder) bindComparisonExpr(astExpr *tree.ComparisonExpr, depth int3
 		})
 	}
 	return b.bindFuncExprImplByAstExpr(op, args, depth)
+}
+
+// bindRowScalarSubqueryComparison preserves a direct row comparison until the
+// scalar subquery has been decorrelated. A multi-column scalar subquery is
+// represented as TUPLE while binding, but its individual result expressions
+// only become available to the outer expression during subquery flattening.
+func (b *baseBinder) bindRowScalarSubqueryComparison(
+	leftAst, rightAst tree.Expr,
+	op string,
+	depth int32,
+) (*Expr, bool, error) {
+	switch op {
+	case "=", "<>", "<", "<=", ">", ">=", "<=>":
+	default:
+		return nil, false, nil
+	}
+
+	var rowAst, subqueryAst tree.Expr
+	reversed := false
+	if _, ok := leftAst.(*tree.Tuple); ok {
+		if _, ok = rightAst.(*tree.Subquery); ok {
+			rowAst, subqueryAst = leftAst, rightAst
+		}
+	}
+	if rowAst == nil {
+		if _, ok := rightAst.(*tree.Tuple); ok {
+			if _, ok = leftAst.(*tree.Subquery); ok {
+				rowAst, subqueryAst = rightAst, leftAst
+				reversed = true
+			}
+		}
+	}
+	if rowAst == nil {
+		return nil, false, nil
+	}
+
+	row, err := b.impl.BindExpr(rowAst, depth, false)
+	if err != nil {
+		return nil, true, err
+	}
+	subqueryExpr, err := b.impl.BindExpr(subqueryAst, depth, false)
+	if err != nil {
+		return nil, true, err
+	}
+	subquery := subqueryExpr.GetSub()
+	if subquery == nil || subquery.Typ != plan.SubqueryRef_SCALAR {
+		return nil, true, moerr.NewInvalidInput(b.GetContext(), "row comparison requires a scalar subquery")
+	}
+	if err = rejectBoundIntervalFunctionArgs(b.GetContext(), op, []*plan.Expr{row}); err != nil {
+		return nil, true, err
+	}
+	items := row.GetList()
+	if items == nil {
+		return nil, true, moerr.NewInvalidInput(b.GetContext(), "row comparison requires a row constructor")
+	}
+	if len(items.List) != int(subquery.RowSize) {
+		return nil, true, moerr.NewInvalidInputf(
+			b.GetContext(), "subquery should return %d columns", len(items.List))
+	}
+	row, err = b.useStoredMySQLSpecialTypesForNumericSubquery(row, subqueryExpr)
+	if err != nil {
+		return nil, true, err
+	}
+	if reversed {
+		switch op {
+		case "<":
+			op = ">"
+		case "<=":
+			op = ">="
+		case ">":
+			op = "<"
+		case ">=":
+			op = "<="
+		}
+	}
+
+	subquery.Op = op
+	subquery.Child = row
+	subqueryExpr.Typ = plan.Type{
+		Id:          int32(types.T_bool),
+		NotNullable: op == "<=>",
+	}
+	return subqueryExpr, true, nil
 }
 
 func (b *baseBinder) bindWithRawMySQLSpecialTypes(bind func() (*Expr, error)) (*Expr, error) {
@@ -2879,7 +2968,9 @@ func (b *baseBinder) bindTupleInByAst(leftTuple *tree.Tuple, rightTuple *tree.Tu
 			}
 			if eqFunc := eqExpr.GetF(); eqFunc != nil && len(eqFunc.Args) == 2 &&
 				containsVolatileFunction(eqFunc.Args[0]) && b.ctx != nil {
-				b.markTupleVolatileSources(eqFunc.Args[0], &leftMemoIDs[i])
+				if err := b.markTupleVolatileSources(eqFunc.Args[0], &leftMemoIDs[i]); err != nil {
+					return nil, err
+				}
 			}
 			equalities = append(equalities, eqExpr)
 		}
@@ -2902,7 +2993,7 @@ func (b *baseBinder) bindTupleInByAst(leftTuple *tree.Tuple, rightTuple *tree.Tu
 	return newExpr, nil
 }
 
-func (b *baseBinder) markTupleVolatileSources(expr *plan.Expr, memoIDs *[]int32) {
+func (b *baseBinder) markTupleVolatileSources(expr *plan.Expr, memoIDs *[]int32) error {
 	sources := make([]*plan.Expr, 0, 1)
 	collectVolatileFunctionSources(expr, &sources)
 	if len(sources) == 0 {
@@ -2911,12 +3002,16 @@ func (b *baseBinder) markTupleVolatileSources(expr *plan.Expr, memoIDs *[]int32)
 		sources = append(sources, expr)
 	}
 	for len(*memoIDs) < len(sources) {
-		b.ctx.volatileExprMemoID--
-		*memoIDs = append(*memoIDs, b.ctx.volatileExprMemoID)
+		memoID, err := b.allocateVolatileExprMemoID()
+		if err != nil {
+			return err
+		}
+		*memoIDs = append(*memoIDs, memoID)
 	}
 	for i, source := range sources {
 		source.AuxId = (*memoIDs)[i]
 	}
+	return nil
 }
 
 func collectVolatileFunctionSources(expr *plan.Expr, sources *[]*plan.Expr) {
@@ -3964,7 +4059,9 @@ func (b *baseBinder) bindFuncExprImplByAstExpr(name string, astArgs []tree.Expr,
 	}
 	if (name == "in" || name == "not_in") && len(args) == 2 &&
 		containsVolatileFunction(args[0]) && b.ctx != nil {
-		b.markVolatileInLeft(args[0])
+		if err := b.markVolatileInLeft(args[0]); err != nil {
+			return nil, err
+		}
 	}
 	//promote interval expr rewrite here
 	if name == "interval" {
@@ -4037,7 +4134,9 @@ func (b *baseBinder) bindFuncExprImplByAstExpr(name string, astArgs []tree.Expr,
 				}
 			}
 			if isIfNull {
-				e.Typ.NotNullable = args[1].Typ.NotNullable || args[2].Typ.NotNullable
+				if err := b.recordIfNullContract(e, args); err != nil {
+					return nil, err
+				}
 				ensurePreparedNumericMetadata(e).IfnullCommonValue = true
 			}
 			markPreparedResultCastsProvisional(
@@ -4061,7 +4160,9 @@ func (b *baseBinder) bindFuncExprImplByAstExpr(name string, astArgs []tree.Expr,
 			b.GetContext(), name, args, false, nil, nil, findInSetInternalArgs)
 		if err == nil {
 			if isIfNull {
-				builtinExpr.Typ.NotNullable = args[1].Typ.NotNullable || args[2].Typ.NotNullable
+				if err := b.recordIfNullContract(builtinExpr, args); err != nil {
+					return nil, err
+				}
 				ensurePreparedNumericMetadata(builtinExpr).IfnullCommonValue = true
 			}
 			return builtinExpr, nil
@@ -4089,6 +4190,27 @@ func (b *baseBinder) bindFuncExprImplByAstExpr(name string, astArgs []tree.Expr,
 	}
 
 	return bindFuncExprImplUdf(b, name, udf, astArgs, args, depth)
+}
+
+func (b *baseBinder) recordIfNullContract(expr *plan.Expr, args []*plan.Expr) error {
+	expr.Typ.NotNullable = args[1].Typ.NotNullable || args[2].Typ.NotNullable
+	if b.ctx == nil || !hasSubquery(expr) {
+		return nil
+	}
+	conditionSource, elseSource, ok := ifNullCaseSources(expr.GetF())
+	if !ok {
+		return nil
+	}
+	// IFNULL evaluates its first argument once, but the CASE rewrite binds that
+	// source twice. Give both copies one flattening memo so a scalar subquery is
+	// decorrelated once and both CASE arms consume the same projected value.
+	memoID, err := b.allocateVolatileExprMemoID()
+	if err != nil {
+		return err
+	}
+	conditionSource.AuxId = memoID
+	elseSource.AuxId = memoID
+	return nil
 }
 
 func sequenceFunctionPublicArity(name string) (minArgs, maxArgs int, ok bool) {
@@ -4257,18 +4379,36 @@ func markPreparedTemporalNumericPeer(expr *Expr, temporal Type) {
 	}
 }
 
-func (b *baseBinder) markVolatileInLeft(left *plan.Expr) {
+func (b *baseBinder) allocateVolatileExprMemoID() (int32, error) {
+	if b.builder == nil {
+		return 0, moerr.NewInternalError(b.GetContext(), "memoized expression requires a query builder")
+	}
+	if b.builder.nextVolatileExprMemoID == math.MinInt32 {
+		return 0, moerr.NewInternalError(b.GetContext(), "too many memoized expressions in query")
+	}
+	b.builder.nextVolatileExprMemoID--
+	return b.builder.nextVolatileExprMemoID, nil
+}
+
+func (b *baseBinder) markVolatileInLeft(left *plan.Expr) error {
 	if list := left.GetList(); list != nil {
 		for _, elem := range list.List {
 			if containsVolatileFunction(elem) {
-				b.ctx.volatileExprMemoID--
-				elem.AuxId = b.ctx.volatileExprMemoID
+				memoID, err := b.allocateVolatileExprMemoID()
+				if err != nil {
+					return err
+				}
+				elem.AuxId = memoID
 			}
 		}
-		return
+		return nil
 	}
-	b.ctx.volatileExprMemoID--
-	left.AuxId = b.ctx.volatileExprMemoID
+	memoID, err := b.allocateVolatileExprMemoID()
+	if err != nil {
+		return err
+	}
+	left.AuxId = memoID
+	return nil
 }
 
 func (b *baseBinder) resolvePreparedNumericArgs(name string, args []*Expr) ([]*Expr, error) {
