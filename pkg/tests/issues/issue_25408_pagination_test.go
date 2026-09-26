@@ -413,10 +413,10 @@ func TestIssue25408PreparedPaginationParameters(t *testing.T) {
 				wantValue        string
 				wantDatabaseType string
 			}{
-				{assignment: "set @issue25408_divide = 2.5", wantValue: "1.2500000", wantDatabaseType: "DECIMAL"},
-				{assignment: "set @issue25408_divide = 9007199254740993.5", wantValue: "4503599627370496.7500000",
+				{assignment: "set @issue25408_divide = 2.5", wantValue: "1.25000", wantDatabaseType: "DECIMAL"},
+				{assignment: "set @issue25408_divide = 9007199254740993.5", wantValue: "4503599627370496.75000",
 					wantDatabaseType: "DECIMAL"},
-				{assignment: "set @issue25408_divide = 3.5", wantValue: "1.7500000", wantDatabaseType: "DECIMAL"},
+				{assignment: "set @issue25408_divide = 3.5", wantValue: "1.75000", wantDatabaseType: "DECIMAL"},
 			} {
 				execSQLRequire(t, ctx, db, execution.assignment)
 				preparedRows, preparedErr := db.QueryContext(
@@ -439,12 +439,12 @@ func TestIssue25408PreparedPaginationParameters(t *testing.T) {
 				wantValue        string
 				wantDatabaseType string
 			}{
-				{name: "exact integer peer", expression: "(? / 2) + 1", directExpression: "(@issue25408_nested / 2) + 1", wantValue: "4503599627370497.7500000", wantDatabaseType: "DECIMAL"},
+				{name: "exact integer peer", expression: "(? / 2) + 1", directExpression: "(@issue25408_nested / 2) + 1", wantValue: "4503599627370497.75000", wantDatabaseType: "DECIMAL"},
 				{name: "scientific integral float peer", expression: "(? / 2) + 1e0", directExpression: "(@issue25408_nested / 2) + 1e0", wantValue: "4.503599627370498e+15", wantDatabaseType: "DOUBLE"},
 				{name: "scientific fractional float peer", expression: "(? / 2) + 1e-1", directExpression: "(@issue25408_nested / 2) + 1e-1", wantValue: "4.503599627370497e+15", wantDatabaseType: "DOUBLE"},
 				{name: "explicit double peer", expression: "(? / 2) + cast(1 as double)", directExpression: "(@issue25408_nested / 2) + cast(1 as double)", wantValue: "4.503599627370498e+15", wantDatabaseType: "DOUBLE"},
-				{name: "abs", expression: "abs(? / 2)", directExpression: "abs(@issue25408_nested / 2)", wantValue: "4503599627370496.7500000", wantDatabaseType: "DECIMAL"},
-				{name: "multiplication", expression: "(? / 2) * 3", directExpression: "(@issue25408_nested / 2) * 3", wantValue: "13510798882111490.2500000", wantDatabaseType: "DECIMAL"},
+				{name: "abs", expression: "abs(? / 2)", directExpression: "abs(@issue25408_nested / 2)", wantValue: "4503599627370496.75000", wantDatabaseType: "DECIMAL"},
+				{name: "multiplication", expression: "(? / 2) * 3", directExpression: "(@issue25408_nested / 2) * 3", wantValue: "13510798882111490.25000", wantDatabaseType: "DECIMAL"},
 			} {
 				t.Run(test.name, func(t *testing.T) {
 					execSQLRequire(t, ctx, db, "set @issue25408_nested = 9007199254740993.5")

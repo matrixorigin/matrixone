@@ -46,6 +46,13 @@ func TestViewDescriptionPublicSQL(t *testing.T) {
 		cn, err := cluster.GetCNService(0)
 		require.NoError(t, err)
 		db := openViewDescriptionDB(t, cn.GetServiceConfig().CN.Frontend.Port, "dump:111")
+		var viewName, viewDDL, charset, collation string
+		require.NoError(t, db.QueryRowContext(ctx, "show create view information_schema.columns").Scan(
+			&viewName, &viewDDL, &charset, &collation))
+		require.Equal(t, "columns", viewName)
+		require.Contains(t, strings.ToLower(viewDDL), "__mo_visible_subscription_views")
+		require.Equal(t, "utf8mb4", charset)
+		require.Equal(t, "utf8mb4_general_ci", collation)
 		exec := func(q string) { t.Helper(); _, err := db.ExecContext(ctx, q); require.NoError(t, err, q) }
 		exec("create database view_description_test")
 		defer exec("drop database view_description_test")
@@ -615,16 +622,18 @@ func TestViewDescriptionSubscription(t *testing.T) {
 		hiddenConn, err := reader.Conn(ctx)
 		require.NoError(t, err)
 		defer hiddenConn.Close()
-		hiddenRows, err := hiddenConn.QueryContext(ctx,
-			"select table_name from information_schema.columns where table_schema='subscribed'")
-		require.NoError(t, err)
-		for hiddenRows.Next() {
-			var name string
-			require.NoError(t, hiddenRows.Scan(&name))
-			require.NotEqual(t, "bad_view", name)
-		}
-		require.NoError(t, hiddenRows.Err())
-		require.NoError(t, hiddenRows.Close())
+		func() {
+			hiddenRows, queryErr := hiddenConn.QueryContext(ctx,
+				"select table_name from information_schema.columns where table_schema='subscribed'")
+			require.NoError(t, queryErr)
+			defer hiddenRows.Close()
+			for hiddenRows.Next() {
+				var name string
+				require.NoError(t, hiddenRows.Scan(&name))
+				require.NotEqual(t, "bad_view", name)
+			}
+			require.NoError(t, hiddenRows.Err())
+		}()
 		hiddenWarnings, err := hiddenConn.QueryContext(ctx, "show warnings")
 		require.NoError(t, err)
 		defer hiddenWarnings.Close()

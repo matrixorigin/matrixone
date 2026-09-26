@@ -232,6 +232,6 @@ https://dev.mysql.com/doc/refman/8.0/en/information-schema-columns-table.html
 - B1：执行期 provider 由请求级 `SessionInfo.CompilerContext` 所有，APPLY 强制 origin CN 串行执行；frontend、internal executor、subscription 和双 CN 实测通过。
 - B2：单对象 View 描述失败仍报错；批量 I_S 在可见且进入候选集合的 View 失效时跳过该 View，向客户端产生 warning 1356；不可见或被安全筛选排除的 View 不绑定、不产生 warning。产品选择、MySQL 8.0.45 对照与公开 SQL 证据见第 8 节。
 - B3：CREATE VIEW 已有 star 固化定义继续作为权威；按需绑定不读取旧派生类型。遗留规范化行为由现有 star 测试保持。
-- B4：4.0.9 + protocol 97 控制混合版本切换（94 已由 CDC 占用，95 已由 prepared scalar precision 占用，96 已由 vector scan 占用）；每 scan 最多 65,536 个 View、每 View 4,096 列、定义 16 MiB，并响应 context 取消。
+- B4：4.0.9 + protocol 98 控制混合版本切换（94 已由 CDC 占用，95 已由 prepared scalar precision 占用，96 已由 vector scan 占用，97 已由 decimal division 占用）；每 scan 最多 65,536 个 View、每 View 4,096 列、定义 16 MiB，并响应 context 取消。
 
 已作决策：拒绝先全库绑定后鉴权；拒绝全局 schema 缓存；拒绝管理员 SQL 特例；保留旧 `mo_columns` 仅作兼容存储，公共 DESC/I_S 不再将其作为用户 View 当前类型真相。

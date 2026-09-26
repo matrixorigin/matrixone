@@ -479,7 +479,7 @@ func Test_createTablesInMoCatalogOfGeneralTenant(t *testing.T) {
 		}).AnyTimes()
 		bh.EXPECT().ClearExecResultSet().Return().AnyTimes()
 		msr := newMrsForCheckTenant([][]interface{}{{1, "test"}})
-		protocolResult := newMrsForCheckTenant([][]interface{}{{`{"result":"cn-a:97"}`}})
+		protocolResult := newMrsForCheckTenant([][]interface{}{{`{"result":"cn-a:98"}`}})
 		bh.EXPECT().GetExecResultSet().DoAndReturn(func() []interface{} {
 			if protocolQuery {
 				return []interface{}{protocolResult}
@@ -606,10 +606,10 @@ func Test_createTablesInInformationSchemaOfGeneralTenant_UsesProtocolAwareViews(
 	}
 }
 
-func TestCreateTenantInformationSchemaWaitsForAllProtocol97Peers(t *testing.T) {
+func TestCreateTenantInformationSchemaWaitsForAllProtocol98Peers(t *testing.T) {
 	moruntime.RunTest("", func(rt moruntime.Runtime) {
 		previous, exists := rt.GetGlobalVariables(moruntime.MOProtocolVersion)
-		rt.SetGlobalVariables(moruntime.MOProtocolVersion, defines.MORPCVersion97)
+		rt.SetGlobalVariables(moruntime.MOProtocolVersion, defines.MORPCVersion98)
 		defer func() {
 			if exists {
 				rt.SetGlobalVariables(moruntime.MOProtocolVersion, previous)
@@ -623,7 +623,7 @@ func TestCreateTenantInformationSchemaWaitsForAllProtocol97Peers(t *testing.T) {
 		}{
 			{name: "mixed", response: `{"result":"cn-a:96,cn-b:95"}`, wantError: true},
 			{name: "missing response", wantError: true},
-			{name: "all ready", response: `{"result":"cn-a:97,cn-b:97"}`},
+			{name: "all ready", response: `{"result":"cn-a:98,cn-b:98"}`},
 		} {
 			t.Run(tc.name, func(t *testing.T) {
 				ctrl := gomock.NewController(t)
@@ -641,7 +641,7 @@ func TestCreateTenantInformationSchemaWaitsForAllProtocol97Peers(t *testing.T) {
 				bh.EXPECT().GetExecResultSet().Return([]interface{}{newMrsForCheckTenant(rows)}).AnyTimes()
 				err := createTablesInInformationSchemaOfGeneralTenant(t.Context(), bh, "")
 				if tc.wantError {
-					require.ErrorContains(t, err, "protocol version 97")
+					require.ErrorContains(t, err, "protocol version 98")
 					require.Equal(t, []string{"SELECT mo_ctl('cn', 'GetProtocolVersion', '')"}, executed)
 				} else {
 					require.NoError(t, err)
@@ -649,7 +649,7 @@ func TestCreateTenantInformationSchemaWaitsForAllProtocol97Peers(t *testing.T) {
 				}
 			})
 		}
-		for _, protocol := range []int64{defines.MORPCVersion94, defines.MORPCVersion95, defines.MORPCVersion96} {
+		for _, protocol := range []int64{defines.MORPCVersion94, defines.MORPCVersion95, defines.MORPCVersion96, defines.MORPCVersion97} {
 			t.Run(fmt.Sprintf("CN%d uses legacy definition", protocol), func(t *testing.T) {
 				rt.SetGlobalVariables(moruntime.MOProtocolVersion, protocol)
 				ctrl := gomock.NewController(t)

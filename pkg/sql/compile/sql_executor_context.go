@@ -606,10 +606,16 @@ func (c *compilerContext) ResolveVariable(varName string, isSystemVar bool, isGl
 	// silently compiles the replay under different rules than the statement
 	// the user ran.
 	//
-	// Internal SQL with no attached frontend context keeps the nil default: it
-	// has no user session whose variables could apply.
+	// Replay may carry the original frontend context; other internal SQL can
+	// carry a partial session resolver on its process (e.g. ALTER TABLE).
+	// Prefer the former, then request only the persisted division variable.
 	if delegate := c.resolveDelegate(); delegate != nil {
 		return delegate.ResolveVariable(varName, isSystemVar, isGlobalVar)
+	}
+	if isSystemVar && !isGlobalVar && strings.EqualFold(varName, "div_precision_increment") && c.proc != nil {
+		if resolve := c.proc.GetResolveVariableFunc(); resolve != nil {
+			return resolve(varName, isSystemVar, isGlobalVar)
+		}
 	}
 	return nil, nil
 }
