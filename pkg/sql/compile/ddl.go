@@ -221,6 +221,13 @@ func (s *Scope) DropDatabase(c *Compile) error {
 	if err := ensureDatabaseNotPublished(c, db, dbName); err != nil {
 		return err
 	}
+	// Reject references from another database before retiring any local table.
+	// The planner's predicate excludes foreign keys wholly inside this database.
+	if sql := s.Plan.GetDdl().GetDropDatabase().GetCheckFKSql(); len(sql) != 0 {
+		if err = runDetectFkReferToDBSql(c, sql); err != nil {
+			return err
+		}
+	}
 
 	// handle sub
 	if db.IsSubscription(c.proc.Ctx) {
@@ -310,13 +317,6 @@ func (s *Scope) DropDatabase(c *Compile) error {
 
 	if err = c.dropDatabaseTables(dbName, deleteTables); err != nil {
 		return err
-	}
-
-	sql := s.Plan.GetDdl().GetDropDatabase().GetCheckFKSql()
-	if len(sql) != 0 {
-		if err = runDetectFkReferToDBSql(c, sql); err != nil {
-			return err
-		}
 	}
 
 	err = c.e.Delete(c.proc.Ctx, dbName, c.proc.GetTxnOperator())

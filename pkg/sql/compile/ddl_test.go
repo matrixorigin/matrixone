@@ -2804,8 +2804,9 @@ func TestPitrGranularitySqlEscapesStringLiterals(t *testing.T) {
 func TestDropDatabase_SnapshotAdvance(t *testing.T) {
 	stubPublicationGuardForDropTests(t)
 	dropDbDef := &plan2.DropDatabase{
-		IfExists: false,
-		Database: "test_db",
+		IfExists:   false,
+		Database:   "test_db",
+		CheckFKSql: "select incoming_fk",
 	}
 	cplan := &plan.Plan{
 		Plan: &plan2.Plan_Ddl{
@@ -2832,7 +2833,13 @@ func TestDropDatabase_SnapshotAdvance(t *testing.T) {
 		defer ctrl.Finish()
 
 		proc := testutil.NewProcess(t)
-		installDropDDLExecutor(t, proc, executor.NewMemExecutor(func(string) (executor.Result, error) {
+		var advancedSnapshotTS timestamp.Timestamp
+		fkChecked := false
+		installDropDDLExecutor(t, proc, executor.NewMemExecutor(func(sql string) (executor.Result, error) {
+			if sql == dropDbDef.CheckFKSql {
+				assert.True(t, origSnapshotTS.Less(advancedSnapshotTS), "RC snapshot must advance before the FK check")
+				fkChecked = true
+			}
 			return executor.Result{}, nil
 		}))
 		proc.Base.SessionInfo.Buf = buffer.New()
@@ -2851,7 +2858,6 @@ func TestDropDatabase_SnapshotAdvance(t *testing.T) {
 		txnOp := mock_frontend.NewMockTxnOperator(ctrl)
 		txnOp.EXPECT().Commit(gomock.Any()).Return(nil).AnyTimes()
 		txnOp.EXPECT().Rollback(gomock.Any()).Return(nil).AnyTimes()
-		var advancedSnapshotTS timestamp.Timestamp
 		ws := &Ws{advanceSnapshot: func(_ context.Context, ts timestamp.Timestamp) error {
 			assert.True(t, origSnapshotTS.Less(ts),
 				"AdvanceSnapshot should be called with HLC Now > origSnapshotTS")
@@ -2876,6 +2882,7 @@ func TestDropDatabase_SnapshotAdvance(t *testing.T) {
 		// Relations returns an error to stop execution after the snapshot advance.
 		mockDb.EXPECT().Relations(gomock.Any()).DoAndReturn(
 			func(_ context.Context) ([]string, error) {
+				assert.True(t, fkChecked, "incoming FK check must precede table work")
 				assert.Equal(t, advancedSnapshotTS, txnMeta.SnapshotTS,
 					"Relations must run while DropDatabase is using the advanced SnapshotTS")
 				return nil, moerr.NewInternalErrorNoCtx("stop here")
@@ -2904,7 +2911,11 @@ func TestDropDatabase_SnapshotAdvance(t *testing.T) {
 		defer ctrl.Finish()
 
 		proc := testutil.NewProcess(t)
-		installDropDDLExecutor(t, proc, executor.NewMemExecutor(func(string) (executor.Result, error) {
+		fkChecked := false
+		installDropDDLExecutor(t, proc, executor.NewMemExecutor(func(sql string) (executor.Result, error) {
+			if sql == dropDbDef.CheckFKSql {
+				fkChecked = true
+			}
 			return executor.Result{}, nil
 		}))
 		proc.Base.SessionInfo.Buf = buffer.New()
@@ -2942,6 +2953,7 @@ func TestDropDatabase_SnapshotAdvance(t *testing.T) {
 		mockDb.EXPECT().GetDatabaseId(gomock.Any()).Return("invalid").AnyTimes()
 		mockDb.EXPECT().Relations(gomock.Any()).DoAndReturn(
 			func(_ context.Context) ([]string, error) {
+				assert.True(t, fkChecked, "incoming FK check must precede table work")
 				assert.Equal(t, origSnapshotTS, txnMeta.SnapshotTS,
 					"Non-RC DropDatabase must not advance SnapshotTS before Relations")
 				return nil, moerr.NewInternalErrorNoCtx("stop here")

@@ -1,8 +1,8 @@
 # DROP DATABASE: reuse lifecycle admission without reordering cleanup
 
-Design revision: **3**, 2026-09-26. **Supersedes revision 2 (REQUEST_CHANGES). Grouped branch reclaim and up-front lifecycle admission are withdrawn. Pure multi-DROP batching remains rejected as the fix.** Status: proposed for independent revision-3 design review; no implementation approval is implied.
+Design revision: **3**, 2026-09-26. **Supersedes revision 2 (REQUEST_CHANGES). Grouped branch reclaim and up-front lifecycle admission are withdrawn. Pure multi-DROP batching remains rejected as the fix.** The exact revision-3 document (SHA256 `2e048fa5acdaf51ab64388c7001db8ced67a32b813d621321e65e8daab70ad6f`) passed independent design review (SHA256 `6c2dbcf555ae25db467c5091320ef78d0d312287d3b9af2cb5a331ede88e4496`). Implementation checkpoint: `6b095210e78`.
 
-Issue: https://github.com/matrixorigin/matrixone/issues/27575. Implementation PR: pending. Intended versioned repository artifact: `docs/design/20260926-drop-database-lifecycle.md`.
+Issue: https://github.com/matrixorigin/matrixone/issues/27575. Implementation PR: pending. This document records the approved P3 design; P3 remains a partial fix because the quiet 1,000-table and busy-system performance gates have not passed.
 
 Inspected worktree/base: `/tmp/mo-issue-27575`, `9c79a6edfcad5ce9635d91b0f1646d0bde375cc3`, branch `codex/issue-27575-drop-database-serial`. Designer owns only this artifact and changed no tracked source. Source/GitHub reads are this agent's evidence; SQL measurements were supplied by the parent and require its raw evidence bundle.
 
@@ -204,4 +204,4 @@ A standalone speedup does not establish the two-hour disconnect cause or claim i
 
 Revision 2 failed independent design review. Revision 3 incorporates both confirmed blockers, removes unsafe regrouping, and retains the smallest measurable candidate. Critical review points: exact lazy admission location, no admission state beyond one invocation, unchanged per-table branch/partition/hook order, both mixed temporary outcomes, and statement rollback followed by COMMIT.
 
-Pending: independent revision-3 approval, implementation and its real performance/functional validation, independent implementation reviews and senior QA. Designer supplied source reasoning plus this artifact only; no tracked implementation, candidate test pass or GitHub mutation was produced. Actual Astra/xhigh invocation metadata remains the parent's orchestration evidence.
+Current status: revision-3 design approval and P3 implementation commit are complete. The independent commit review requested real failed-statement→COMMIT and executor-temporary rollback evidence; the task ledger now records both public SQL probes and the first-member BVT. A later focused change moves the existing incoming-FK check before table retirement, closing the demonstrated E12 external-FK/auto-ID failure path on a real service; its separate independent design review approved the move. Measured quiet improvement still misses the 1,000-table gate, and E25's unrelated-DDL wait persists under one slow table. General statement-effect recovery, merge-event outcome and scoped busy isolation remain unresolved. See the task ledger for exact binaries, raw samples, reviews and withdrawn experiments; no PR readiness is claimed here.

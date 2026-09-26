@@ -371,6 +371,55 @@ func TestDropDatabaseSelectsParentOwnedTables(t *testing.T) {
 	require.Equal(t, []string{"parent", "legacy_lookalike", "tail"}, dropped)
 }
 
+func TestDropDatabaseRejectsIncomingFKBeforeTableWork(t *testing.T) {
+	for _, tc := range []struct {
+		name     string
+		queryErr error
+	}{
+		{name: "referenced"},
+		{name: "query error", queryErr: errors.New("FK query failed")},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			ctrl := gomock.NewController(t)
+			locked, checked := false, false
+			const fkSQL = "select incoming_fk"
+			var c *Compile
+			exec := &dropDDLExecutor{exec: func(_ context.Context, sql string, _ executor.Options) (executor.Result, error) {
+				if sql != fkSQL {
+					return executor.Result{}, nil
+				}
+				require.True(t, locked, "the database lock must precede the FK check")
+				checked = true
+				if tc.queryErr != nil {
+					return executor.Result{}, tc.queryErr
+				}
+				return newAlterCopyFixedResult(t, c.proc.Mp(), types.T_bool.ToType(), []bool{true}), nil
+			}}
+			var eng *mock_frontend.MockEngine
+			c, eng = newDropDDLCompile(t, ctrl, exec)
+			stubs := gostub.Stub(&lockMoDatabase, func(*Compile, string, lock.LockMode) error {
+				locked = true
+				return nil
+			})
+			t.Cleanup(stubs.Reset)
+			db := mock_frontend.NewMockDatabase(ctrl)
+			eng.EXPECT().Database(gomock.Any(), "db", c.proc.GetTxnOperator()).Return(db, nil)
+			db.EXPECT().IsSubscription(gomock.Any()).Return(true)
+			pn := &plan.Plan{Plan: &plan.Plan_Ddl{Ddl: &plan.DataDefinition{DdlType: plan.DataDefinition_DROP_DATABASE,
+				Definition: &plan.DataDefinition_DropDatabase{DropDatabase: &plan.DropDatabase{Database: "db", CheckFKSql: fkSQL}},
+			}}}
+			c.pn = pn
+			err := (&Scope{Plan: pn}).DropDatabase(c)
+			require.True(t, checked)
+			if tc.queryErr != nil {
+				require.ErrorIs(t, err, tc.queryErr)
+			} else {
+				require.ErrorContains(t, err, "referenced by foreign keys")
+			}
+		})
+	}
+}
+
 func TestDropTableTemporaryAndNoopMembersDoNotAdmit(t *testing.T) {
 	ctrl := gomock.NewController(t)
 	exec := &dropDDLExecutor{exec: func(context.Context, string, executor.Options) (executor.Result, error) {
@@ -413,15 +462,10 @@ func TestDropTableReclaimFailureStopsLaterHooks(t *testing.T) {
 	eng.EXPECT().Database(gomock.Any(), "db", c.proc.GetTxnOperator()).Return(db, nil)
 	db.EXPECT().Relation(gomock.Any(), "plain", nil).Return(rel, nil)
 	db.EXPECT().Delete(gomock.Any(), "plain").Return(nil)
-	// The mock transaction rejects any AppendEventCallback call. No lookup of
-	// the second member is allowed: its allocator, ISCP and cache owners cannot
-	// be reached after the first member's fallible reclaim.
-	laterDef := &plan.TableDef{TblId: 2, Cols: []*plan.ColDef{{Name: "id", Typ: plan.Type{AutoIncr: true}}},
-		Indexes: []*plan.IndexDef{{IndexName: "ft", IndexAlgo: catalog.MOIndexFullTextAlgo.ToString()}},
-	}
+	// No lookup of the second member is allowed after the first reclaim fails.
 	s := dropTableScope(
 		&plan.DropTable{Database: "db", Table: "plain", TableId: 1, TableDef: &plan.TableDef{TblId: 1}},
-		&plan.DropTable{Database: "db", Table: "later", TableId: 2, TableDef: laterDef},
+		&plan.DropTable{Database: "db", Table: "later", TableId: 2, TableDef: &plan.TableDef{TblId: 2}},
 	)
 	require.ErrorIs(t, s.DropTable(c), wantErr)
 	require.Equal(t, 1, gates)
