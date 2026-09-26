@@ -76,6 +76,11 @@ func getPreparedResultColumnsForWithGroupConcatMaxLen(
 	if isPerformStatement(stmt) {
 		return nil
 	}
+	// Frontend publication SHOW statements have no engine query plan. PREPARE
+	// and execution must use the same result schema and wire type conversion.
+	if columns := publicationShowResultColumns(stmt); columns != nil {
+		return columns
+	}
 	if query := preparedPlan.GetQuery(); query != nil {
 		var title string
 		switch stmt.(type) {

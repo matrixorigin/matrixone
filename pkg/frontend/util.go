@@ -1829,7 +1829,17 @@ func mysqlColDef2PlanResultColDef(cols []Column) (*plan.ResultColDef, []types.Ty
 		}
 		var pType plan.Type
 		var tType types.Type
-		switch col.ColumnType() {
+		columnType := col.ColumnType()
+		// TEXT result metadata uses a BLOB-family wire type with a text
+		// charset. Recover the internal TEXT type before saving frontend rows.
+		if mysqlColumn, ok := col.(*MysqlColumn); ok && mysqlColumn.Charset() != charsetBinary {
+			switch columnType {
+			case defines.MYSQL_TYPE_TINY_BLOB, defines.MYSQL_TYPE_BLOB,
+				defines.MYSQL_TYPE_MEDIUM_BLOB, defines.MYSQL_TYPE_LONG_BLOB:
+				columnType = defines.MYSQL_TYPE_TEXT
+			}
+		}
+		switch columnType {
 		case defines.MYSQL_TYPE_VAR_STRING, defines.MYSQL_TYPE_VARCHAR:
 			pType = plan.Type{
 				Id: int32(types.T_varchar),
