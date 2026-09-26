@@ -401,11 +401,18 @@ func (builder *QueryBuilder) joinOwnsConstantDiagnostic(node *plan.Node) bool {
 		return false
 	}
 	for _, expr := range node.OnList {
-		if ContainsStatementInvariantFilterDiagnostic(builder.compCtx.GetProcess(), expr) {
+		if builder.containsStatementInvariantFilterDiagnostic(expr) {
 			return true
 		}
 	}
 	return false
+}
+
+func (builder *QueryBuilder) containsStatementInvariantFilterDiagnostic(expr *plan.Expr) bool {
+	return containsStatementInvariantFilterDiagnostic(
+		builder.compCtx.GetProcess(), expr,
+		preparedJoinDiagnosticFree(builder.compCtx.GetContext()),
+	)
 }
 
 func (builder *QueryBuilder) subtreeOwnsConstantDiagnostic(nodeID int32) bool {

@@ -47,6 +47,36 @@ func NewExpressionExecutors(
 	)
 }
 
+// NewJoinProbeExpressionExecutors returns the probe roots and borrowed
+// constant executors that the JOIN diagnostic owner activates once.
+func NewJoinProbeExpressionExecutors(
+	proc *process.Process,
+	exprs []*plan.Expr,
+	account *mpool.AllocationAccount,
+	owner *colexec.DeferredJoinDiagnostic,
+) ([]colexec.ExpressionExecutor, []colexec.ExpressionExecutor, error) {
+	if len(exprs) == 0 {
+		return nil, nil, process.ErrExecutionResourceInvalid
+	}
+	for _, expr := range exprs {
+		if expr == nil {
+			return nil, nil, process.ErrExecutionResourceInvalid
+		}
+	}
+	selection, err := vector.NewAllocationAccountSelectionWithCapacityClass(
+		account, mpool.AllocationOwnerHashBuild,
+		executionResourceAllocationSiteExpressionData,
+		executionResourceAllocationSiteExpressionArea,
+		executionResourceAllocationSiteExpressionNulls,
+		executionResourceAllocationSiteExpressionGrouping,
+		mpool.AllocationCapacityClassDefault,
+	)
+	if err != nil {
+		return nil, nil, err
+	}
+	return colexec.NewJoinProbeExpressionExecutors(proc, exprs, selection, owner)
+}
+
 func newExpressionExecutorsWithCapacityClass(
 	proc *process.Process,
 	exprs []*plan.Expr,

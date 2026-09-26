@@ -554,6 +554,53 @@ show warnings;
 deallocate prepare temporal_join_limit;
 drop table temporal_join_pk_left;
 drop table temporal_join_pk_right;
+
+-- A residual constant is activated with two nonempty inputs even when a hash
+-- key has no match. A row-dependent CASE keeps its per-pair selection.
+create table temporal_residual_left(k int, v time);
+create table temporal_residual_right(k int, v time);
+insert into temporal_residual_left values (1, '00:00:01');
+insert into temporal_residual_right values (2, '00:00:02');
+set sql_mode = '';
+select count(*) from temporal_residual_left a join temporal_residual_right b
+on a.k=b.k and a.v>time('900:00:00');
+show count(*) warnings;
+select count(*) from temporal_residual_left a join temporal_residual_right b
+on a.k-b.k=0 and a.v>time('900:00:00');
+show count(*) warnings;
+select count(*) from temporal_residual_left a join temporal_residual_right b
+on a.k=b.k and case when a.k=1 then a.v>time('900:00:00') else true end;
+show count(*) warnings;
+select count(*) from temporal_residual_left a join temporal_residual_right b
+on a.k=b.k and case when a.k=2 then a.v>time('900:00:00') else true end;
+show count(*) warnings;
+delete from temporal_residual_right;
+select count(*) from temporal_residual_left a join temporal_residual_right b
+on a.k=b.k and a.v>time('900:00:00');
+show count(*) warnings;
+insert into temporal_residual_right values
+(2, '00:00:02'), (3, '00:00:02'), (4, '00:00:02'), (5, '00:00:02'), (6, '00:00:02');
+select count(*) from temporal_residual_left a left join temporal_residual_right b
+on a.k=b.k and case when a.k=1 then a.v>time('900:00:00') else true end;
+show count(*) warnings;
+drop table temporal_residual_left;
+drop table temporal_residual_right;
+
+-- DATE(text marker) has the same empty-input diagnostic boundary as TIME.
+create table temporal_date_empty(k int);
+create table temporal_date_right(k int);
+insert into temporal_date_right values (2);
+prepare temporal_date_marker from 'select count(*) from temporal_date_empty a join temporal_date_right b on a.k=b.k+year(date(cast(? as char)))';
+set @temporal_date_value = 'bad';
+execute temporal_date_marker using @temporal_date_value;
+show count(*) warnings;
+set @temporal_date_value = null;
+execute temporal_date_marker using @temporal_date_value;
+show count(*) warnings;
+deallocate prepare temporal_date_marker;
+drop table temporal_date_empty;
+drop table temporal_date_right;
+
 set @temporal_join_value = null;
 set sql_mode = @temporal_28851_saved_sql_mode;
 drop database temporal_consistency_28851;

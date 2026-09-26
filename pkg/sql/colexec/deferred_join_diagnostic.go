@@ -141,6 +141,12 @@ func (d *DeferredJoinDiagnostic) canDeferError() bool {
 	return d.ready && !d.active
 }
 
+func (d *DeferredJoinDiagnostic) isActive() bool {
+	d.mu.Lock()
+	defer d.mu.Unlock()
+	return d.active
+}
+
 // Activate is called once the join knows the build side and the current probe
 // batch both contain rows. A NULL key or zero matches do not suppress the
 // logical evaluation of a selected constant ON operand.
@@ -196,6 +202,11 @@ type deferredJoinConstantExecutor struct {
 }
 
 func (e *deferredJoinConstantExecutor) capturedProcess(proc *process.Process) *process.Process {
+	// Residual expressions can first be selected after the JOIN has activated.
+	// Their diagnostics belong to the live statement sink at that point.
+	if e.owner.isActive() {
+		return proc
+	}
 	if e.captured == nil {
 		e.captured = e.owner.captureProcess(proc)
 	}

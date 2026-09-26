@@ -278,7 +278,7 @@ const maxVectorIndexTopPushdownLimit = uint64(^uint(0) >> 1)
 
 func (builder *QueryBuilder) filterPushdownBarrier(expr *plan.Expr) bool {
 	return ContainsVolatileFunction(expr) ||
-		ContainsStatementInvariantFilterDiagnostic(builder.compCtx.GetProcess(), expr)
+		builder.containsStatementInvariantFilterDiagnostic(expr)
 }
 
 func (builder *QueryBuilder) pushdownFilters(nodeID int32, filters []*plan.Expr, separateNonEquiConds bool) (int32, []*plan.Expr) {

@@ -30,6 +30,7 @@ func TestStatementParameterDiagnosticCapabilities(t *testing.T) {
 		want bool
 	}{
 		{"time", []types.T{types.T_varchar}, true},
+		{"date", []types.T{types.T_varchar}, true},
 		{"maketime", []types.T{types.T_int64, types.T_int64, types.T_int64}, true},
 		{"sec_to_time", []types.T{types.T_int64}, true},
 		{"timestamp", []types.T{types.T_varchar, types.T_varchar}, true},
@@ -56,6 +57,8 @@ func TestStatementParameterDiagnosticCapabilities(t *testing.T) {
 			require.False(t, MayDiagnoseStatementParameter(expr))
 		})
 	}
+	typedDate := diagnosticTestCall(t, "date", types.T_datetime)
+	require.False(t, MayDiagnoseStatementParameter(typedDate))
 	for _, target := range []types.T{types.T_time, types.T_date, types.T_datetime, types.T_timestamp, types.T_float64} {
 		t.Run("cast/"+target.String(), func(t *testing.T) {
 			expr := diagnosticTestCall(t, "cast", types.T_varchar, target)

@@ -90,7 +90,7 @@ func (hashJoin *HashJoin) callAsofBuildLeft(proc *process.Process) (vm.CallResul
 				continue
 			}
 			if hashJoin.JoinDiagnostic != nil && ctr.globalBuildRowCnt > 0 {
-				if err := hashJoin.JoinDiagnostic.Activate(proc); err != nil {
+				if err := hashJoin.activateJoinDiagnostic(proc); err != nil {
 					return result, err
 				}
 			}

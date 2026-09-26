@@ -2273,6 +2273,19 @@ func (builder *QueryBuilder) determineBuildAndProbeSide(nodeID int32, recursive 
 	if node.NodeType != plan.Node_JOIN {
 		return
 	}
+	if node.JoinType == plan.Node_LEFT || node.JoinType == plan.Node_SEMI ||
+		node.JoinType == plan.Node_ANTI || node.JoinType == plan.Node_SINGLE {
+		// A row-dependent diagnostic needs LoopJoin to evaluate the selected
+		// ON arm even when hash keys do not match. LoopJoin implements these
+		// joins with the logical left input as probe; preserve that layout
+		// across both cost-based and recursive-side orientation choices.
+		for _, expr := range node.OnList {
+			if ContainsGuardedJoinDiagnostic(builder.compCtx.GetProcess(), expr) {
+				node.IsRightJoin = false
+				return
+			}
+		}
+	}
 	// A predeclared runtime-filter pair is a physical dependency: child 1 must
 	// build and publish before child 0 may probe. Reversing the children turns
 	// the producer into a consumer and creates a wait cycle.

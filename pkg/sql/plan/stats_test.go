@@ -993,6 +993,48 @@ func TestDetermineBuildSidePreservesDeclaredRuntimeFilterDependency(t *testing.T
 	require.False(t, builder.qry.Nodes[2].IsRightJoin)
 }
 
+func TestGuardedDiagnosticKeepsLoopJoinSupportedOrientation(t *testing.T) {
+	ctx := NewMockCompilerContext(true)
+	intType := planpb.Type{Id: int32(types.T_int64)}
+	timeType := planpb.Type{Id: int32(types.T_time)}
+	leftTag, rightTag := int32(10), int32(20)
+	bind := func(name string, args ...*planpb.Expr) *planpb.Expr {
+		expr, err := BindFuncExprImplByPlanExpr(ctx.GetContext(), name, args)
+		require.NoError(t, err)
+		return expr
+	}
+	key := bind("=", GetColExpr(intType, leftTag, 0), GetColExpr(intType, rightTag, 0))
+	invalidTime := bind("time", makePlan2StringConstExprWithType("900:00:00"))
+	guard := bind("case",
+		bind("=", GetColExpr(intType, leftTag, 0), makePlan2Int64ConstExprWithType(1)),
+		bind(">", GetColExpr(timeType, leftTag, 1), invalidTime),
+		makePlan2BoolConstExprWithType(true))
+	require.True(t, ContainsGuardedJoinDiagnostic(ctx.GetProcess(), guard))
+
+	for _, joinType := range []planpb.Node_JoinType{
+		planpb.Node_LEFT, planpb.Node_SEMI, planpb.Node_ANTI, planpb.Node_SINGLE,
+	} {
+		t.Run(joinType.String(), func(t *testing.T) {
+			builder := NewQueryBuilder(planpb.Query_SELECT, ctx, false, true)
+			builder.qry.Nodes = []*planpb.Node{
+				{NodeId: 0, NodeType: planpb.Node_TABLE_SCAN, BindingTags: []int32{leftTag}, Stats: &planpb.Stats{Outcnt: 1}},
+				{NodeId: 1, NodeType: planpb.Node_TABLE_SCAN, BindingTags: []int32{rightTag}, Stats: &planpb.Stats{Outcnt: 100}},
+				{NodeId: 2, NodeType: planpb.Node_JOIN, JoinType: joinType, Children: []int32{0, 1},
+					OnList: []*planpb.Expr{key}, Stats: &planpb.Stats{HashmapStats: &planpb.HashMapStats{}}},
+			}
+			builder.determineBuildAndProbeSide(2, false)
+			require.True(t, builder.qry.Nodes[2].IsRightJoin, "ordinary equijoin retains its cost choice")
+
+			builder.qry.Nodes[2].OnList = []*planpb.Expr{key, guard}
+			builder.determineBuildAndProbeSide(2, false)
+			require.False(t, builder.qry.Nodes[2].IsRightJoin)
+			builder.swapJoinChildren(2)
+			require.Equal(t, []int32{0, 1}, builder.qry.Nodes[2].Children)
+			require.Equal(t, joinType, builder.qry.Nodes[2].JoinType)
+		})
+	}
+}
+
 func TestDetermineBuildSideCostsUnfilteredIndexByRetainedBytes(t *testing.T) {
 	const (
 		indexNodeID    int32 = 0
