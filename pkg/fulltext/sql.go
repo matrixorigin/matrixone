@@ -19,8 +19,24 @@ import (
 	"strings"
 
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
+	"github.com/matrixorigin/matrixone/pkg/monlp/tokenizer"
 	"github.com/matrixorigin/matrixone/pkg/sql/parsers/tree"
 )
+
+// truncateStarPrefix caps a `word*` prefix at the stored-token byte limit (MAX_TOKEN_SIZE) on a
+// UTF-8 boundary, so a Latin stem longer than the cap prefix-matches the truncated token the index
+// actually stored instead of a string no token can start with (#29273). No-op for CJK trigram tails
+// (well under the cap).
+func truncateStarPrefix(prefix string) string {
+	if len(prefix) <= tokenizer.MAX_TOKEN_SIZE {
+		return prefix
+	}
+	n := tokenizer.MAX_TOKEN_SIZE
+	for n > 0 && prefix[n]&0xC0 == 0x80 {
+		n--
+	}
+	return prefix[:n]
+}
 
 /*
 fulltext SQL generation
@@ -188,6 +204,36 @@ func GenTextSql(p *Pattern, mode int64, idxtbl string, parser string) (string, e
 	return sql, nil
 }
 
+// genStarPhraseSql expands a `word*` leaf whose stem must be matched as a positional phrase into its
+// phrase SQL (#29273): a CJK stem longer than one trigram, or a gojieba stem of more than one word,
+// is tiled into byte-positioned tokens with the trailing token a prefix_eq, so `苹果香蕉*` matches
+// the whole stem (苹果香 · 蕉*) instead of prefix_eq'ing the never-stored 4-rune string. Returns
+// ok=false for a plain-prefix star (Latin / <=3-rune / single gojieba word), which keeps prefix_eq.
+func genStarPhraseSql(kw string, mode int64, idxtbl string, parser string) (string, bool, error) {
+	if len(kw) == 0 || kw[len(kw)-1] != '*' {
+		return "", false, nil
+	}
+	stem := kw[:len(kw)-1]
+	var children []*Pattern
+	var err error
+	if parser == "gojieba" {
+		children, err = jiebaStarPhraseChildren(stem)
+		if err != nil {
+			return "", false, err
+		}
+	} else {
+		children = cjkStarPhraseChildren(stem)
+	}
+	if len(children) == 0 {
+		return "", false, nil
+	}
+	sql, err := SqlPhrase(children, mode, idxtbl, false)
+	if err != nil {
+		return "", false, err
+	}
+	return sql, true, nil
+}
+
 // PLUS node as JOIN.  Index is from TEXT/STAR node
 // children of PLUS node can be a single TEXT/STAR or GROUP.
 // In case of GROUP, mutiple SqlNodes will be generated.
@@ -218,8 +264,14 @@ func GenJoinPlusSql(p *Pattern, mode int64, idxtbl string, parser string) ([]*Sq
 			if kw[len(kw)-1] != '*' {
 				return nil, moerr.NewInternalErrorNoCtx("wildcard search without character *")
 			}
-			prefix := kw[0 : len(kw)-1]
-			sql = fmt.Sprintf("%s AS (SELECT doc_id FROM %s WHERE prefix_eq(word,'%s'))", alias, idxtbl, escape(prefix))
+			if phraseSql, ok, perr := genStarPhraseSql(kw, mode, idxtbl, parser); perr != nil {
+				return nil, perr
+			} else if ok {
+				sql = fmt.Sprintf("%s AS (%s)", alias, phraseSql)
+			} else {
+				prefix := truncateStarPrefix(kw[0 : len(kw)-1])
+				sql = fmt.Sprintf("%s AS (SELECT doc_id FROM %s WHERE prefix_eq(word,'%s'))", alias, idxtbl, escape(prefix))
+			}
 			sqlnode.Children = append(sqlnode.Children, &SqlNode{Index: tp.Index, Label: alias, IsJoin: true, Sql: sql})
 		}
 
@@ -262,8 +314,14 @@ func GenJoinSql(p *Pattern, mode int64, idxtbl string, parser string) ([]*SqlNod
 			if kw[len(kw)-1] != '*' {
 				return nil, moerr.NewInternalErrorNoCtx("wildcard search without character *")
 			}
-			prefix := kw[0 : len(kw)-1]
-			sql = fmt.Sprintf("%s AS (SELECT doc_id FROM %s WHERE prefix_eq(word,'%s'))", alias, idxtbl, escape(prefix))
+			if phraseSql, ok, perr := genStarPhraseSql(kw, mode, idxtbl, parser); perr != nil {
+				return nil, perr
+			} else if ok {
+				sql = fmt.Sprintf("%s AS (%s)", alias, phraseSql)
+			} else {
+				prefix := truncateStarPrefix(kw[0 : len(kw)-1])
+				sql = fmt.Sprintf("%s AS (SELECT doc_id FROM %s WHERE prefix_eq(word,'%s'))", alias, idxtbl, escape(prefix))
+			}
 			sqlnode.Children = append(sqlnode.Children, &SqlNode{Index: idx, Label: alias, IsJoin: true, Sql: sql})
 			subidx++
 		}
@@ -328,8 +386,14 @@ func GenSql(p *Pattern, mode int64, idxtbl string, joinsql []*SqlNode, isJoin bo
 				if kw[len(kw)-1] != '*' {
 					return nil, moerr.NewInternalErrorNoCtx("wildcard search without character *")
 				}
-				prefix := kw[0 : len(kw)-1]
-				sql = fmt.Sprintf("SELECT doc_id, CAST(%d as int) FROM %s WHERE prefix_eq(word,'%s')", idx, idxtbl, escape(prefix))
+				if phraseSql, ok, perr := genStarPhraseSql(kw, mode, idxtbl, parser); perr != nil {
+					return nil, perr
+				} else if ok {
+					sql = fmt.Sprintf("SELECT doc_id, CAST(%d as int) FROM (%s) x", idx, phraseSql)
+				} else {
+					prefix := truncateStarPrefix(kw[0 : len(kw)-1])
+					sql = fmt.Sprintf("SELECT doc_id, CAST(%d as int) FROM %s WHERE prefix_eq(word,'%s')", idx, idxtbl, escape(prefix))
+				}
 				sqlnode.Sql = sql
 
 			}
@@ -360,9 +424,16 @@ func GenSql(p *Pattern, mode int64, idxtbl string, joinsql []*SqlNode, isJoin bo
 					if kw[len(kw)-1] != '*' {
 						return nil, moerr.NewInternalErrorNoCtx("wildcard search without character *")
 					}
-					prefix := kw[0 : len(kw)-1]
-					sql = fmt.Sprintf("SELECT %s.doc_id, CAST(%d as int) FROM %s as %s, %s WHERE %s.doc_id = %s.doc_id AND prefix_eq(%s.word, '%s')",
-						jn.Label, idx, idxtbl, alias, jn.Label, jn.Label, alias, alias, escape(prefix))
+					if phraseSql, ok, perr := genStarPhraseSql(kw, mode, idxtbl, parser); perr != nil {
+						return nil, perr
+					} else if ok {
+						sql = fmt.Sprintf("SELECT %s.doc_id, CAST(%d as int) FROM (%s) %s, %s WHERE %s.doc_id = %s.doc_id",
+							jn.Label, idx, phraseSql, alias, jn.Label, jn.Label, alias)
+					} else {
+						prefix := truncateStarPrefix(kw[0 : len(kw)-1])
+						sql = fmt.Sprintf("SELECT %s.doc_id, CAST(%d as int) FROM %s as %s, %s WHERE %s.doc_id = %s.doc_id AND prefix_eq(%s.word, '%s')",
+							jn.Label, idx, idxtbl, alias, jn.Label, jn.Label, alias, alias, escape(prefix))
+					}
 					sqlnode.Sql = sql
 
 				}
@@ -478,7 +549,7 @@ func SqlPhrase(ps []*Pattern, mode int64, idxtbl string, withIndex bool) (string
 			if kw[len(kw)-1] != '*' {
 				return "", moerr.NewInternalErrorNoCtx("wildcard search without character *")
 			}
-			prefix := kw[0 : len(kw)-1]
+			prefix := truncateStarPrefix(kw[0 : len(kw)-1])
 			if withIndex {
 				sql = fmt.Sprintf("SELECT doc_id, CAST(%d as int) FROM %s WHERE prefix_eq(word,'%s')",
 					tp.Index, idxtbl, escape(prefix))
@@ -518,7 +589,7 @@ func SqlPhrase(ps []*Pattern, mode int64, idxtbl string, withIndex bool) (string
 				if kw[len(kw)-1] != '*' {
 					return "", moerr.NewInternalErrorNoCtx("wildcard search without character *")
 				}
-				prefix := kw[0 : len(kw)-1]
+				prefix := truncateStarPrefix(kw[0 : len(kw)-1])
 				cond = fmt.Sprintf("prefix_eq(word,'%s')", escape(prefix))
 			}
 			union = append(union, fmt.Sprintf("SELECT doc_id, pos - %d AS anchor FROM %s WHERE %s",
