@@ -5018,7 +5018,12 @@ func (builder *QueryBuilder) bindNoRecursiveCte(
 	table string) (nodeID int32, err error) {
 	subCtx := NewBindContext(builder, cteRef.declarationCtx)
 	subCtx.cteName = table
-	subCtx.snapshot = cteRef.snapshot
+	// The CTE body is bound at its use site. A snapshot on the enclosing
+	// View/query must reach its catalog reads, not just the CTE scan itself.
+	subCtx.snapshot = ctx.snapshot
+	if cteRef.snapshot != nil {
+		subCtx.snapshot = cteRef.snapshot
+	}
 	if targets := ctx.numericTableProjectionTypes[strings.ToLower(table)]; len(targets) > 0 {
 		subCtx.numericProjectionTypes = targets
 	}
@@ -8349,6 +8354,11 @@ func (builder *QueryBuilder) bindSelectClause(
 	// unfold stars and generate headings
 	if selectList, err = appendSelectList(builder, ctx, selectList, clause.Exprs...); err != nil {
 		return
+	}
+	if capture, metadataBinding := builder.compCtx.(viewDependencyScope); metadataBinding {
+		if err = capture.chargeViewColumns(len(selectList)); err != nil {
+			return
+		}
 	}
 	if len(selectList) == 0 {
 		err = moerr.NewParseError(builder.GetContext(), "No tables used")
@@ -11744,7 +11754,9 @@ func (builder *QueryBuilder) bindView(
 	defer builder.compCtx.SetContext(previousWarningContext)
 
 	if capture, ok := builder.compCtx.(viewDependencyScope); ok {
-		capture.enterNestedView()
+		if err := capture.enterNestedView(); err != nil {
+			return 0, err
+		}
 		defer capture.leaveNestedView()
 	}
 	if isSubscriptionStatistics {
@@ -11774,7 +11786,7 @@ func (builder *QueryBuilder) bindView(
 	if isSubscriptionStatistics {
 		rewriteSubscriptionStatisticsOutput(builder, nodeID, viewCtx, metadataSubscription.Meta.SubName)
 	}
-	viewCtx.markViewCTASDefaultBoundary(tableDef.Cols)
+	viewCtx.markViewCTASDefaultBoundary()
 	if len(viewStmt.ColNames) > 0 {
 		if len(viewStmt.ColNames) != len(viewCtx.headings) {
 			return 0, moerr.NewViewWrongList(builder.GetContext())
@@ -13329,6 +13341,8 @@ func (builder *QueryBuilder) buildTableFunction(tbl *tree.TableFunction, ctx *Bi
 			nodeId, err = builder.buildCurrentRoles(tbl, ctx, exprs, nil)
 		case subscriptionTablesFunctionName:
 			nodeId, err = builder.buildSubscriptionTables(tbl, ctx, exprs, nil)
+		case ViewColumnsFunctionName, SubscriptionViewColumnsFunctionName:
+			nodeId, err = builder.buildViewColumns(tbl, ctx, exprs, nil)
 		case subscriptionColumnsFunctionName:
 			nodeId, err = builder.buildSubscriptionColumns(tbl, ctx, exprs, nil)
 		case "fulltext_index_scan":

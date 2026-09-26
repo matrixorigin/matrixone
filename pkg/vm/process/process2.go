@@ -17,6 +17,7 @@ package process
 import (
 	"context"
 	"sync"
+	"sync/atomic"
 	"time"
 
 	"github.com/matrixorigin/matrixone/pkg/taskservice"
@@ -111,6 +112,43 @@ func NewTopProcess(
 	}
 	proc.doPrepareForRunningWithoutPipeline()
 	return proc
+}
+
+// NewViewBindingProcess borrows the transaction and services but owns the mutable
+// process context used while binding a nested View. Unlike pipeline children it
+// must not share BaseProcess: SetContext on the child must not change the caller.
+// The caller owns Free on the returned process.
+func (proc *Process) NewViewBindingProcess(ctx context.Context) *Process {
+	child := NewTopProcess(ctx, proc.Base.mp, proc.Base.TxnClient, proc.Base.TxnOperator,
+		proc.Base.FileService, proc.Base.LockService, proc.Base.QueryClient,
+		proc.Base.Hakeeper, proc.Base.UdfService, proc.Base.Aicm, proc.Base.TaskService)
+	// Only borrow identity and binding configuration, which remain immutable
+	// during a statement. The parent SessionInfo also contains result counters,
+	// sequence maps and output buffers that the executing pipeline mutates.
+	info := &proc.Base.SessionInfo
+	child.Base.SessionInfo = SessionInfo{
+		Account: info.Account, User: info.User, Host: info.Host, Role: info.Role,
+		ConnectionID: info.ConnectionID, Database: info.Database, Version: info.Version,
+		TimeZone: info.TimeZone, LockWaitTimeout: info.LockWaitTimeout,
+		LockWaitTimeoutSet: info.LockWaitTimeoutSet, MatrixOneNativeMode: info.MatrixOneNativeMode,
+		IsRestore: info.IsRestore, ExplicitZeroTemporalCastReturnsNull: info.ExplicitZeroTemporalCastReturnsNull,
+		SqlMode: info.SqlMode, AutoIncrementIncrement: info.AutoIncrementIncrement,
+		AutoIncrementOffset: info.AutoIncrementOffset, ApplySQLSelectLimit: info.ApplySQLSelectLimit,
+		CountUpdateChangedRows: info.CountUpdateChangedRows, StorageEngine: info.StorageEngine,
+		SqlHelper: info.SqlHelper, CompilerContext: info.CompilerContext,
+		LogLevel: info.LogLevel, SessionId: info.SessionId,
+	}
+	child.Base.IsFrontend = proc.Base.IsFrontend
+	child.Base.DivByZeroErrorMode = atomic.LoadInt32(&proc.Base.DivByZeroErrorMode)
+	child.Base.resolveVariableFunc = proc.Base.resolveVariableFunc
+	child.Base.resolveVariableTypeFunc = proc.Base.resolveVariableTypeFunc
+	child.Base.resolveVariableIsBinFunc = proc.Base.resolveVariableIsBinFunc
+	child.Base.resolveVariableStringDomainFunc = proc.Base.resolveVariableStringDomainFunc
+	child.Base.resolveVariablePrepareParamKindFunc = proc.Base.resolveVariablePrepareParamKindFunc
+	child.Session = proc.Session
+	child.WarningSink = proc.WarningSink
+	child.CopyPlanSnapshotFrom(proc)
+	return child
 }
 
 // NewNoContextChildProc make a new child process without a context field.

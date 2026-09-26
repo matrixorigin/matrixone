@@ -21,6 +21,7 @@ import (
 	"testing"
 
 	"github.com/stretchr/testify/assert"
+	"github.com/stretchr/testify/require"
 
 	"github.com/matrixorigin/matrixone/pkg/catalog"
 	"github.com/matrixorigin/matrixone/pkg/defines"
@@ -289,8 +290,19 @@ func TestInitInformationSchemaSysTablesForProtocol(t *testing.T) {
 	}
 
 	latest := InitInformationSchemaSysTablesForProtocol(defines.MORPCVersion58)
-	assert.Equal(t, InitInformationSchemaSysTables, latest)
+	assert.Len(t, latest, len(InitInformationSchemaSysTables))
+	for _, ddl := range latest {
+		assertInformationSchemaInitSQLParses(t, ddl)
+	}
+	assert.Contains(t, latest, InformationSchemaColumnsV58DDL())
+	assert.NotContains(t, strings.Join(latest, "\n"), "mo_subscription_view_columns")
 	assert.Contains(t, strings.Join(latest, "\n"), "WHEN 3 then 'utf8mb4'")
+	for _, protocol := range []int64{defines.MORPCVersion58 + 1, defines.MORPCVersion94, defines.MORPCVersion95, defines.MORPCVersion96, defines.MORPCVersion97} {
+		assert.Contains(t, InitInformationSchemaSysTablesForProtocol(protocol), InformationSchemaColumnsV58DDL())
+		assert.NotContains(t, strings.Join(InitInformationSchemaSysTablesForProtocol(protocol), "\n"),
+			"mo_subscription_view_columns")
+	}
+	assert.Contains(t, InitInformationSchemaSysTablesForProtocol(defines.MORPCVersion98), InformationSchemaColumnsDDL)
 }
 
 func assertInformationSchemaInitSQLParses(t *testing.T, sql string) {
@@ -309,6 +321,38 @@ func TestInformationSchemaStatisticsDDL_RestrictsCatalogJoins(t *testing.T) {
 	assert.True(t, strings.Contains(InformationSchemaStatisticsDDL, "`tbl`.`account_id` = current_account_id()"))
 }
 
+func TestInformationSchemaColumnsDDL_MixedVersionSubscriptionViews(t *testing.T) {
+	// A V97 CN must still supply persisted subscription View columns to a V58
+	// COLUMNS definition until the tenant migration installs the new definition.
+	legacy := InformationSchemaColumnsV58DDL()
+	require.Contains(t, legacy, "from mo_subscription_columns() mc")
+	require.NotContains(t, legacy, "mo_subscription_view_columns")
+	require.NotContains(t, legacy, "AND NOT (mc.relkind = 'v'")
+
+	current := InformationSchemaColumnsDDL
+	require.Contains(t, current, "from mo_subscription_columns() mc")
+	require.Contains(t, current, "AND NOT (mc.relkind = 'v' AND mc.att_database NOT IN")
+	require.Contains(t, current, "mo_subscription_view_columns(mt.publisher_account_id, mt.rel_id)")
+	// All four branches must share the V58 selector mapping, not just the
+	// publisher/local and physical subscription paths.
+	require.Equal(t, 4, strings.Count(current,
+		"WHEN 1 then 'utf8mb4' WHEN 2 then 'binary' WHEN 3 then 'utf8mb4' else NULL end) AS CHARACTER_SET_NAME,"))
+	require.Equal(t, 4, strings.Count(current,
+		"WHEN 1 then 'utf8mb4_bin' WHEN 2 then 'binary' WHEN 3 then 'utf8mb4_general_ci' else NULL end) AS COLLATION_NAME,"))
+	require.NotContains(t, InitInformationSchemaSysTablesForProtocol(defines.MORPCVersion97), current)
+	require.Contains(t, InitInformationSchemaSysTablesForProtocol(defines.MORPCVersion98), current)
+}
+
+func TestInformationSchemaColumnsDDL_PreservesCatalogNameWidth(t *testing.T) {
+	// Both generated View branches must match the legacy catalog-backed
+	// branches; otherwise UNION promotes the public result to varchar(5000).
+	assert.Equal(t, 2, strings.Count(InformationSchemaColumnsDDL,
+		"cast(mt.reldatabase as varchar(256)) as TABLE_SCHEMA,"))
+	assert.Equal(t, 2, strings.Count(InformationSchemaColumnsDDL,
+		"cast(mt.relname as varchar(256)) AS TABLE_NAME,"))
+	assert.NotContains(t, InformationSchemaColumnsV58DDL(), "cast(mt.reldatabase as varchar(256))")
+}
+
 func TestInformationSchemaColumnsDDL_UsesConnectorCompatibleDataType(t *testing.T) {
 	assert.Contains(t, InformationSchemaColumnsDDL, "lower(case when length(mc.attr_enum) > 0 then")
 	assert.Contains(t, InformationSchemaColumnsDDL, "case when upper(mo_show_visible_bin(mc.atttyp,2)) = 'BOOL' then 'TINYINT'")
@@ -323,6 +367,9 @@ func TestHistoricalColumnsUpgradeDefinition(t *testing.T) {
 		"WHEN 0 then 'utf8_bin' WHEN 1 then 'utf8_bin' WHEN 2 then 'binary' else NULL end) AS COLLATION_NAME")
 	assert.NotContains(t, InformationSchemaColumnsV46UpgradeDDL, "WHEN 3 then")
 	assert.NotEqual(t, InformationSchemaColumnsDDL, InformationSchemaColumnsV46UpgradeDDL)
+	assert.NotContains(t, InformationSchemaColumnsV46UpgradeDDL, "mo_subscription_view_columns")
+	assert.NotContains(t, InformationSchemaColumnsV46DDL, "mo_subscription_view_columns")
+	assert.NotContains(t, InformationSchemaColumnsV58DDL(), "mo_subscription_view_columns")
 	// Mixed-cluster initialization remains distinct from replaying historical DDL.
 	assert.Contains(t, InformationSchemaColumnsV46DDL, "WHEN 3 then 'utf8'")
 	assert.Contains(t, InformationSchemaColumnsV46DDL, "WHEN 3 then 'utf8_bin'")
@@ -332,7 +379,11 @@ func TestInformationSchemaSubscriptionMetadataDDL(t *testing.T) {
 	assert.Contains(t, InformationSchemaTablesDDL, "FROM mo_subscription_tables()")
 	assert.NotContains(t, InformationSchemaTablesV41DDL, "mo_subscription_tables()")
 	assert.Equal(t, 1, strings.Count(InformationSchemaTablesV41DDL, "internal_auto_increment("))
-	assert.NotContains(t, InformationSchemaColumnsDDL, "mo_subscription_tables()")
+	assert.Contains(t, InformationSchemaColumnsDDL,
+		"__mo_visible_subscription_views AS (SELECT mt.* FROM mo_subscription_tables() mt WHERE mt.relkind = 'v' AND (")
+	assert.Contains(t, InformationSchemaColumnsDDL, "from __mo_visible_subscription_views mt cross apply "+
+		"mo_subscription_view_columns(mt.publisher_account_id, mt.rel_id)")
+	assert.Contains(t, InformationSchemaColumnsDDL, "mt.owner IN (SELECT role_id FROM __mo_active_roles)")
 	assert.Contains(t, InformationSchemaColumnsDDL, "from mo_subscription_columns() mc")
 	assert.NotContains(t, InformationSchemaColumnsV41DDL, "mo_subscription_tables()")
 	assert.NotContains(t, InformationSchemaColumnsV41DDL, "mo_subscription_columns()")

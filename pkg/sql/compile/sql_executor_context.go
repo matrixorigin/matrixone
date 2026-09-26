@@ -16,13 +16,19 @@ package compile
 
 import (
 	"context"
+	"encoding/json"
+	"fmt"
 	"slices"
 	"strconv"
 	"strings"
 	"sync"
 	"time"
 
+	"github.com/matrixorigin/matrixone/pkg/catalog"
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
+	"github.com/matrixorigin/matrixone/pkg/common/sqlquote"
+	"github.com/matrixorigin/matrixone/pkg/container/types"
+	"github.com/matrixorigin/matrixone/pkg/container/vector"
 	"github.com/matrixorigin/matrixone/pkg/defines"
 	planpb "github.com/matrixorigin/matrixone/pkg/pb/plan"
 	pb "github.com/matrixorigin/matrixone/pkg/pb/statsinfo"
@@ -32,6 +38,7 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/sql/plan"
 	"github.com/matrixorigin/matrixone/pkg/sql/plan/function"
 	"github.com/matrixorigin/matrixone/pkg/util/trace/impl/motrace/statistic"
+	"github.com/matrixorigin/matrixone/pkg/vectorindex/sqlexec"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine"
 	"github.com/matrixorigin/matrixone/pkg/vm/process"
 )
@@ -46,6 +53,11 @@ type compilerContext struct {
 	proc               *process.Process
 	statsCache         *plan.StatsCache
 	statsCacheVersions map[uint64]uint32
+	viewChild          bool
+	viewDelegate       plan.CompilerContext
+	viewSnapshot       *plan.Snapshot
+	viewSubscription   *plan.SubscriptionMeta
+	viewViews          []string
 
 	buildAlterView       bool
 	dbOfView, nameOfView string
@@ -55,21 +67,68 @@ type compilerContext struct {
 	lower int64
 }
 
+func (c *compilerContext) NewViewDescriptionCompilerContext(
+	ctx context.Context,
+) (plan.CompilerContext, func(), error) {
+	child := &compilerContext{
+		ctx: ctx, defaultDB: c.defaultDB, engine: c.engine, proc: c.proc,
+		statsCache: c.statsCache, lower: c.lower, viewChild: true,
+		buildAlterView: c.buildAlterView, dbOfView: c.dbOfView, nameOfView: c.nameOfView,
+		sql: c.sql,
+	}
+	if delegate := c.sessionCompilerContextValue(); delegate != nil {
+		provider, ok := delegate.(plan.ViewDescriptionContextProvider)
+		if !ok {
+			return nil, nil, moerr.NewInternalError(ctx, "session compiler context cannot isolate view binding")
+		}
+		isolated, cleanup, err := provider.NewViewDescriptionCompilerContext(ctx)
+		if err != nil {
+			return nil, nil, err
+		}
+		child.viewDelegate = isolated
+		if isolated.GetProcess() != nil && isolated.GetProcess() != c.proc {
+			child.proc = isolated.GetProcess()
+		} else if c.proc != nil {
+			// Other providers may isolate binding state without cloning the process.
+			// Keep the internal compiler context's process private as well.
+			child.proc = c.proc.NewViewBindingProcess(ctx)
+			previousCleanup := cleanup
+			cleanup = func() { previousCleanup(); child.proc.Free() }
+		}
+		if child.proc != nil {
+			child.proc.GetSessionInfo().CompilerContext = child
+		}
+		child.viewSnapshot = isolated.GetSnapshot()
+		child.viewSubscription = isolated.GetQueryingSubscription()
+		return child, cleanup, nil
+	}
+	if c.proc != nil {
+		child.proc = c.proc.NewViewBindingProcess(ctx)
+		child.proc.GetSessionInfo().CompilerContext = child
+		return child, child.proc.Free, nil
+	}
+	return child, func() {}, nil
+}
+
 func (c *compilerContext) GetLowerCaseTableNames() int64 {
 	return c.lower
 }
 
 func (c *compilerContext) GetViews() []string {
-	return nil
+	return c.viewViews
 }
 
-func (c *compilerContext) SetViews(views []string) {}
+func (c *compilerContext) SetViews(views []string) { c.viewViews = views }
 
 func (c *compilerContext) GetSnapshot() *plan.Snapshot {
-	return nil
+	return c.viewSnapshot
 }
 
 func (c *compilerContext) SetSnapshot(snapshot *plan.Snapshot) {
+	c.viewSnapshot = snapshot
+	if c.viewDelegate != nil {
+		c.viewDelegate.SetSnapshot(snapshot)
+	}
 }
 
 func (c *compilerContext) InitExecuteStmtParam(execPlan *planpb.Execute) (*planpb.Plan, tree.Statement, error) {
@@ -86,11 +145,12 @@ func (c *compilerContext) CheckSubscriptionValid(subName, accName string, pubNam
 }
 
 func (c *compilerContext) ResolveSubscriptionTableById(tableId uint64, pubmeta *plan.SubscriptionMeta) (*plan.ObjectRef, *plan.TableDef, error) {
-	delegate, err := c.sessionCompilerContext()
-	if err != nil {
-		return nil, nil, err
+	if delegate := c.sessionCompilerContextValue(); delegate != nil {
+		return delegate.ResolveSubscriptionTableById(tableId, pubmeta)
 	}
-	return delegate.ResolveSubscriptionTableById(tableId, pubmeta)
+	// Metadata scans from an internal executor have no frontend session. The
+	// caller binds this isolated child to the publisher account before lookup.
+	return c.ResolveById(tableId, c.GetSnapshot())
 }
 
 func (c *compilerContext) IsPublishing(dbName string) (bool, error) {
@@ -129,20 +189,117 @@ func (c *compilerContext) CheckTimeStampValid(ts int64) (bool, error) {
 }
 
 func (c *compilerContext) SetQueryingSubscription(meta *plan.SubscriptionMeta) {
+	if c.viewChild {
+		c.viewSubscription = meta
+		if c.viewDelegate != nil {
+			c.viewDelegate.SetQueryingSubscription(meta)
+		}
+		return
+	}
 	if delegate := c.sessionCompilerContextValue(); delegate != nil {
 		delegate.SetQueryingSubscription(meta)
 	}
 }
 
 func (c *compilerContext) GetQueryingSubscription() *plan.SubscriptionMeta {
+	if c.viewChild {
+		if c.viewDelegate != nil {
+			return c.viewDelegate.GetQueryingSubscription()
+		}
+		return c.viewSubscription
+	}
 	if delegate := c.sessionCompilerContextValue(); delegate != nil {
 		return delegate.GetQueryingSubscription()
 	}
 	return nil
 }
 
-func (c *compilerContext) ResolveUdf(name string, ast []*plan.Expr) (*function.Udf, error) {
+func (c *compilerContext) ResolveUdf(name string, args []*plan.Expr) (*function.Udf, error) {
+	if c.viewChild {
+		return c.ResolveViewUdf(name, args, c.DefaultDatabase())
+	}
 	panic("not supported in internal sql executor")
+}
+
+func (c *compilerContext) ResolveViewUdf(name string, args []*plan.Expr, database string) (*function.Udf, error) {
+	if c.viewDelegate != nil {
+		if resolver, ok := c.viewDelegate.(plan.ViewUdfResolver); ok {
+			return resolver.ResolveViewUdf(name, args, database)
+		}
+		return c.viewDelegate.ResolveUdf(name, args)
+	}
+	if !c.viewChild || c.proc == nil {
+		return nil, moerr.NewNotSupported(c.GetContext(), "View UDF resolution requires an isolated compiler context")
+	}
+	if err := c.GetContext().Err(); err != nil {
+		return nil, err
+	}
+	sp := sqlexec.NewSqlProcess(c.proc)
+	sp.DatabaseOverride = catalog.MO_CATALOG
+	sp.ApplyScanSnapshot(c.GetSnapshot())
+	if sub := c.GetQueryingSubscription(); sub != nil {
+		sp.WithExecutionIdentity(uint32(sub.AccountId), catalog.MO_CATALOG)
+	}
+	query := fmt.Sprintf("select args, body, language, rettype, db, cast(modified_time as varchar(64)), sql_mode "+
+		"from mo_catalog.mo_user_defined_function where name = %s and db = %s",
+		sqlquote.String(name), sqlquote.String(database))
+	result, err := sqlexec.RunSql(sp, query)
+	if err != nil {
+		return nil, err
+	}
+	defer result.Close()
+	from := make([]types.Type, len(args))
+	for i, arg := range args {
+		from[i] = types.Type{Oid: types.T(arg.Typ.Id), Width: arg.Typ.Width, Scale: arg.Typ.Scale}
+	}
+	var best *function.Udf
+	bestCost := int(^uint(0) >> 1)
+	matches := 0
+	var decodeErr error
+	result.ReadRows(func(n int, cols []*vector.Vector) bool {
+		for i := 0; i < n; i++ {
+			udf := &function.Udf{
+				Body: cols[1].GetStringAt(i), Language: cols[2].GetStringAt(i),
+				RetType: cols[3].GetStringAt(i), Db: cols[4].GetStringAt(i),
+				ModifiedTime: strings.NewReplacer(" ", "_", ":", "-").Replace(cols[5].GetStringAt(i)),
+			}
+			mode := cols[6].GetStringAt(i)
+			udf.SQLMode = &mode
+			if decodeErr = json.Unmarshal([]byte(types.DecodeJson(cols[0].GetBytesAt(i)).String()), &udf.Args); decodeErr != nil {
+				return false
+			}
+			if len(udf.Args) != len(from) {
+				continue
+			}
+			to := make([]types.T, len(from))
+			for j, arg := range udf.Args {
+				if from[j].IsDecimal() && arg.Type == "decimal" {
+					to[j] = from[j].Oid
+				} else {
+					to[j] = types.Types[arg.Type]
+				}
+			}
+			if ok, cost := function.UdfArgTypeMatch(from, to); ok {
+				if cost < bestCost {
+					best, bestCost, matches = udf, cost, 1
+					best.ArgsType = function.UdfArgTypeCast(from, to)
+				} else if cost == bestCost {
+					matches++
+				}
+			}
+		}
+		return true
+	})
+	if decodeErr != nil {
+		return nil, decodeErr
+	}
+	if matches > 1 {
+		return nil, moerr.NewInvalidInputf(c.GetContext(), "call to %s is ambiguous", name)
+	}
+	if best == nil {
+		return nil, moerr.NewNotSupportedf(c.GetContext(), "function or operator '%s'", name)
+	}
+	return best, nil
 }
 
 func (c *compilerContext) ResolveAccountIds(accountNames []string) ([]uint32, error) {
@@ -277,6 +434,9 @@ func (c *compilerContext) sessionCompilerContext() (plan.CompilerContext, error)
 }
 
 func (c *compilerContext) sessionCompilerContextValue() plan.CompilerContext {
+	if c.viewChild {
+		return c.viewDelegate
+	}
 	if delegate := getInternalExecutorCompilerContext(c.ctx); delegate != nil && delegate != c {
 		return delegate
 	}
@@ -374,17 +534,31 @@ func (c *compilerContext) GetUserName() string {
 }
 
 func (c *compilerContext) GetAccountId() (uint32, error) {
-	return defines.GetAccountId(c.proc.GetTopContext())
+	return defines.GetAccountId(c.GetContext())
 }
 
 func (c *compilerContext) GetAccountName() string {
 	return "sys"
 }
 func (c *compilerContext) GetContext() context.Context {
+	if c.viewChild {
+		return c.ctx
+	}
 	return c.proc.GetTopContext()
 }
 
 func (c *compilerContext) SetContext(ctx context.Context) {
+	if c.viewChild {
+		c.ctx = ctx
+		if c.proc != nil {
+			c.proc.ReplaceTopCtx(ctx)
+			c.proc.Ctx = ctx
+		}
+		if c.viewDelegate != nil {
+			c.viewDelegate.SetContext(ctx)
+		}
+		return
+	}
 	c.proc.ReplaceTopCtx(ctx)
 }
 
@@ -418,12 +592,22 @@ func (c *compilerContext) ResolveIndexTableByRef(ref *plan.ObjectRef, tblName st
 	return obj, def, err
 }
 
+func (c *compilerContext) resolveDelegate() plan.CompilerContext {
+	if c.viewChild {
+		return c.viewDelegate
+	}
+	if delegate := getInternalExecutorCompilerContext(c.ctx); delegate != nil && delegate != c {
+		return delegate
+	}
+	return nil
+}
+
 func (c *compilerContext) Resolve(dbName string, tableName string, snapshot *plan.Snapshot) (*plan.ObjectRef, *plan.TableDef, error) {
 	// CTAS follow-up compilation carries the original frontend compiler
 	// context. Delegate relation resolution as one operation so subscription,
 	// snapshot, tenant, and physical-account mapping cannot diverge between
 	// GetSubscriptionMeta and the actual catalog lookup.
-	if delegate := getInternalExecutorCompilerContext(c.ctx); delegate != nil && delegate != c {
+	if delegate := c.resolveDelegate(); delegate != nil {
 		return delegate.Resolve(dbName, tableName, snapshot)
 	}
 	// In order to be compatible with various GUI clients and BI tools, lower case db and table name if it's a mysql system table
@@ -513,11 +697,10 @@ func (c *compilerContext) ResolveVariable(varName string, isSystemVar bool, isGl
 	// silently compiles the replay under different rules than the statement
 	// the user ran.
 	//
-	// Internal SQL may instead carry the session resolver on its process, as
-	// ALTER TABLE does when it compiles the replacement table definition. That
-	// resolver can be partial, so only request the variable needed for the
-	// persisted division binding from it.
-	if delegate := getInternalExecutorCompilerContext(c.ctx); delegate != nil && delegate != c {
+	// Replay may carry the original frontend context; other internal SQL can
+	// carry a partial session resolver on its process (e.g. ALTER TABLE).
+	// Prefer the former, then request only the persisted division variable.
+	if delegate := c.resolveDelegate(); delegate != nil {
 		return delegate.ResolveVariable(varName, isSystemVar, isGlobalVar)
 	}
 	if isSystemVar && !isGlobalVar && strings.EqualFold(varName, "div_precision_increment") && c.proc != nil {

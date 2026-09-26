@@ -515,6 +515,7 @@ func (exec *txnExecutor) Exec(
 
 	compileContext := exec.s.getCompileContext(exec.ctx, proc, exec.getDatabase(), lower)
 	compileContext.SetRootSql(sql)
+	proc.Base.SessionInfo.CompilerContext = compileContext
 
 	var pn *plan.Plan
 

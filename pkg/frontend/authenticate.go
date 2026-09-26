@@ -33,6 +33,7 @@ import (
 	"github.com/tidwall/btree"
 	"golang.org/x/sync/errgroup"
 
+	"github.com/matrixorigin/matrixone/pkg/bootstrap/versions"
 	"github.com/matrixorigin/matrixone/pkg/catalog"
 	"github.com/matrixorigin/matrixone/pkg/clusterservice"
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
@@ -11014,7 +11015,15 @@ func createTablesInInformationSchemaOfGeneralTenant(ctx context.Context, bh Back
 	// TODO: when we have the auto_increment column, we need new strategy.
 
 	var err error
-	informationSchemaTables := sysview.InitInformationSchemaSysTablesForProtocol(protocolVersionForTenantInitialization(service))
+	protocol := protocolVersionForTenantInitialization(service)
+	if protocol >= defines.MORPCVersion98 {
+		// A new CN can already speak 96 while an older CN still serves the
+		// cluster. Do not persist a View using a function that peer cannot plan.
+		if err := requireCommonViewColumnsProtocol(ctx, bh); err != nil {
+			return err
+		}
+	}
+	informationSchemaTables := sysview.InitInformationSchemaSysTablesForProtocol(protocol)
 	sqls := make([]string, 0, len(informationSchemaTables)+len(sysview.InitMysqlSysTables)+4)
 
 	sqls = append(sqls, "use information_schema;")
@@ -11030,6 +11039,25 @@ func createTablesInInformationSchemaOfGeneralTenant(ctx context.Context, bh Back
 		}
 	}
 	return err
+}
+
+func requireCommonViewColumnsProtocol(ctx context.Context, bh BackgroundExec) error {
+	bh.ClearExecResultSet()
+	if err := bh.Exec(ctx, "SELECT mo_ctl('cn', 'GetProtocolVersion', '')"); err != nil {
+		return err
+	}
+	results, err := getResultSet(ctx, bh)
+	if err != nil {
+		return err
+	}
+	if len(results) == 0 || results[0].GetRowCount() == 0 {
+		return versions.CheckProtocolVersionResponse("", defines.MORPCVersion98)
+	}
+	encoded, err := results[0].GetString(ctx, 0, 0)
+	if err != nil {
+		return err
+	}
+	return versions.CheckProtocolVersionResponse(encoded, defines.MORPCVersion98)
 }
 
 func protocolVersionForTenantInitialization(service string) int64 {

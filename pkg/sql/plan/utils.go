@@ -3559,6 +3559,13 @@ func doFormatExprInConsole(expr *plan.Expr, out *bytes.Buffer, depth int, option
 	}
 }
 
+// viewDatabaseExistenceChecker lets View regeneration distinguish an absent
+// source database from a failed catalog lookup. The general CompilerContext
+// boolean probe is retained for callers that cannot propagate errors.
+type viewDatabaseExistenceChecker interface {
+	CheckViewDatabase(name string, snapshot *Snapshot) (bool, error)
+}
+
 // databaseIsValid checks whether the database exists or not.
 func databaseIsValid(dbName string, ctx CompilerContext, snapshot *Snapshot) (string, error) {
 	connectDBFirst := false
@@ -3574,12 +3581,24 @@ func databaseIsValid(dbName string, ctx CompilerContext, snapshot *Snapshot) (st
 		dbName = strings.ToLower(dbName)
 	}
 
-	if len(dbName) == 0 || !ctx.DatabaseExists(dbName, snapshot) {
+	if len(dbName) == 0 {
+		return "", moerr.NewNoDB(ctx.GetContext())
+	}
+	exists := false
+	if checker, ok := ctx.(viewDatabaseExistenceChecker); ok {
+		var err error
+		exists, err = checker.CheckViewDatabase(dbName, snapshot)
+		if err != nil {
+			return "", err
+		}
+	} else {
+		exists = ctx.DatabaseExists(dbName, snapshot)
+	}
+	if !exists {
 		if connectDBFirst {
 			return "", moerr.NewNoDB(ctx.GetContext())
-		} else {
-			return "", moerr.NewBadDB(ctx.GetContext(), dbName)
 		}
+		return "", moerr.NewBadDB(ctx.GetContext(), dbName)
 	}
 	return dbName, nil
 }

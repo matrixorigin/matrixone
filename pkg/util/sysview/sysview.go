@@ -76,7 +76,7 @@ var (
 )
 
 func InitInformationSchemaSysTablesForProtocol(protocol int64) []string {
-	if protocol >= defines.MORPCVersion58 {
+	if protocol >= defines.MORPCVersion98 {
 		return InitInformationSchemaSysTables
 	}
 
@@ -90,7 +90,9 @@ func InitInformationSchemaSysTablesForProtocol(protocol int64) []string {
 				sql = InformationSchemaTablesV41DDL
 			}
 		case InformationSchemaColumnsDDL:
-			if protocol >= defines.MORPCVersion46 {
+			if protocol >= defines.MORPCVersion58 {
+				sql = InformationSchemaColumnsV58DDL()
+			} else if protocol >= defines.MORPCVersion46 {
 				sql = InformationSchemaColumnsV46DDL
 			} else {
 				sql = InformationSchemaColumnsV41DDL

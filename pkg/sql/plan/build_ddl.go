@@ -233,6 +233,7 @@ func genViewTableDef(
 ) (*plan.TableDef, error) {
 	var tableDef plan.TableDef
 	dependencyCapture := newViewDependencyCaptureContext(ctx)
+	dependencyCapture.metadataBudget = !forAuthoring
 	ctx = dependencyCapture
 	// The optimizer may constant-fold a protocol-sensitive function out of a
 	// persisted view. Keep the requirement observed on the bound plan so the

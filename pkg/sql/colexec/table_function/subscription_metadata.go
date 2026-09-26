@@ -107,6 +107,7 @@ var subscriptionTablesConfig = subscriptionMetadataConfig{
 		"extra_info",
 		"rel_logical_id",
 		"owner",
+		"publisher_account_id",
 	},
 	columnTypes: []types.Type{
 		catalog.MoTablesTypes[catalog.MO_TABLES_ACCOUNT_ID_IDX],
@@ -122,6 +123,7 @@ var subscriptionTablesConfig = subscriptionMetadataConfig{
 		catalog.MoTablesTypes[catalog.MO_TABLES_EXTRA_INFO_IDX],
 		catalog.MoTablesTypes[catalog.MO_TABLES_LOGICAL_ID_IDX],
 		catalog.MoTablesTypes[catalog.MO_TABLES_OWNER_IDX],
+		types.New(types.T_uint32, 0, 0),
 	},
 	buildQuery: buildSubscriptionTablesQuery,
 }
@@ -288,6 +290,12 @@ func (s *subscriptionMetadataState) start(
 		subscriberID,
 		proc.GetResolveVariableFunc(),
 	)
+	// Both the subscriber's subscription catalog and the publisher's table
+	// catalog must be read at the function scan's timestamp. Never pair a
+	// current relation ID with historical View binding.
+	if ts := sqlexec.NewSqlProcess(proc).ApplyScanSnapshot(tf.ScanSnapshot); ts != nil {
+		sqlContext.TxnOperator = proc.GetTxnOperator().CloneSnapshotOp(*ts)
+	}
 	streamCh := s.streamCh
 	errCh := s.errCh
 	done := s.streamDone
@@ -767,7 +775,9 @@ func buildSubscriptionTablesQuery(candidate subscriptionCandidate, tableNames []
 		" AS BIGINT UNSIGNED) AS reldatabase_id, " +
 		"tbl.relkind, tbl.rel_createsql, tbl.created_time, tbl.partitioned, tbl.rel_comment, tbl.extra_info, " +
 		"tbl.rel_logical_id, CAST(" + strconv.FormatUint(uint64(candidate.localOwner), 10) +
-		" AS INT UNSIGNED) AS owner " +
+		" AS INT UNSIGNED) AS owner, " +
+		"CAST(" + strconv.FormatUint(uint64(candidate.publisherID), 10) +
+		" AS INT UNSIGNED) AS publisher_account_id " +
 		"FROM mo_catalog.mo_tables tbl " +
 		"WHERE tbl.account_id = current_account_id() AND tbl.reldatabase = " +
 		sqlquote.String(candidate.sourceDatabase) +
@@ -775,7 +785,7 @@ func buildSubscriptionTablesQuery(candidate subscriptionCandidate, tableNames []
 }
 
 func buildSubscriptionColumnsQuery(candidate subscriptionCandidate, tableNames []string) string {
-	return "SELECT " +
+	ordinary := "SELECT " +
 		"CAST(" + strconv.FormatUint(uint64(candidate.subscriberID), 10) +
 		" AS INT UNSIGNED) AS account_id, " +
 		"CAST(" + strconv.FormatUint(candidate.localDatabaseID, 10) +
@@ -810,6 +820,7 @@ func buildSubscriptionColumnsQuery(candidate subscriptionCandidate, tableNames [
 		"WHERE mc.account_id = current_account_id() AND mc.att_database = " +
 		sqlquote.String(candidate.sourceDatabase) +
 		subscriptionTablePredicate("mc.att_relname", tableNames)
+	return ordinary
 }
 
 func publishSubscriptionMetadataError(ctx context.Context, errCh chan<- error, err error) {

@@ -18,6 +18,7 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
+	"slices"
 	"strings"
 
 	"github.com/matrixorigin/matrixone/pkg/catalog"
@@ -670,18 +671,33 @@ func buildShowColumns(stmt *tree.ShowColumns, ctx CompilerContext) (*Plan, error
 		sql = fmt.Sprintf(sql, keyStr, MO_CATALOG_DB_NAME, MO_CATALOG_DB_NAME, dbName, tblName)
 	}
 
-	if stmt.Where != nil {
-		return returnByWhereAndBaseSQL(ctx, sql, stmt.Where, ddlType)
+	var viewDependencies []*ObjectRef
+	if tableDef.ViewSql != nil && tableDef.ViewSql.View != "" &&
+		!slices.Contains(catalog.SystemDatabases, strings.ToLower(dbName)) {
+		columns, dependencies, err := viewDescriptionRelation(ctx, tableDef, accountId, dbName, tblName)
+		if err != nil {
+			return nil, err
+		}
+		sql = strings.Replace(sql, "FROM "+MO_CATALOG_DB_NAME+".mo_columns col", "FROM "+columns+" col", 1)
+		viewDependencies = appendPrepareSchemas(dependencies, prepareSchemaRefWithSnapshot(obj, tableDef, nil))
 	}
 
-	if stmt.Like != nil {
-		// append filter [AND ma.attname like stmt.Like] to WHERE clause
+	var result *Plan
+	if stmt.Where != nil {
+		result, err = returnByWhereAndBaseSQL(ctx, sql, stmt.Where, ddlType)
+	} else if stmt.Like != nil {
 		likeExpr := stmt.Like
 		likeExpr.Left = tree.NewUnresolvedColName("attname")
-		return returnByLikeAndSQL(ctx, sql, likeExpr, ddlType)
+		result, err = returnByLikeAndSQL(ctx, sql, likeExpr, ddlType)
+	} else {
+		result, err = returnByRewriteSQL(ctx, sql, ddlType)
 	}
-
-	return returnByRewriteSQL(ctx, sql, ddlType)
+	if err != nil {
+		return nil, err
+	}
+	result.GetQuery().CatalogDependencies = appendPrepareSchemas(
+		result.GetQuery().CatalogDependencies, viewDependencies...)
+	return result, nil
 }
 
 func buildShowTableStatus(stmt *tree.ShowTableStatus, ctx CompilerContext) (*Plan, error) {

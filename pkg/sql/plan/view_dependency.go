@@ -18,6 +18,8 @@ import (
 	"sort"
 	"strconv"
 	"strings"
+
+	"github.com/matrixorigin/matrixone/pkg/common/moerr"
 )
 
 // ViewDependency is the catalog identity captured while the authoritative View
@@ -50,26 +52,60 @@ type ViewDependencyIdentityResolver interface {
 }
 
 type viewDependencyScope interface {
-	enterNestedView()
+	enterNestedView() error
 	leaveNestedView()
+	chargeViewColumns(int) error
 }
 
 type viewDependencyCaptureContext struct {
 	CompilerContext
-	depth         int
-	deps          map[string]ViewDependency
-	snapshotNames map[string]string
+	depth          int
+	expandedViews  int
+	boundColumns   int
+	metadataBudget bool
+	deps           map[string]ViewDependency
+	snapshotNames  map[string]string
 }
 
 func newViewDependencyCaptureContext(ctx CompilerContext) *viewDependencyCaptureContext {
 	return &viewDependencyCaptureContext{
 		CompilerContext: ctx,
+		metadataBudget:  true,
 		deps:            make(map[string]ViewDependency),
 		snapshotNames:   make(map[string]string),
 	}
 }
 
-func (c *viewDependencyCaptureContext) enterNestedView() { c.depth++ }
+func (c *viewDependencyCaptureContext) CheckViewDatabase(name string, snapshot *Snapshot) (bool, error) {
+	if checker, ok := c.CompilerContext.(viewDatabaseExistenceChecker); ok {
+		return checker.CheckViewDatabase(name, snapshot)
+	}
+	return c.CompilerContext.DatabaseExists(name, snapshot), nil
+}
+
+func (c *viewDependencyCaptureContext) enterNestedView() error {
+	if !c.metadataBudget {
+		c.depth++
+		return nil
+	}
+	c.expandedViews++
+	if c.expandedViews > MaxViewMetadataColumns {
+		return moerr.NewInternalError(c.GetContext(), "View metadata exceeds its binding budget")
+	}
+	c.depth++
+	return nil
+}
+
+func (c *viewDependencyCaptureContext) chargeViewColumns(count int) error {
+	if !c.metadataBudget {
+		return nil
+	}
+	if count > MaxViewMetadataColumns-c.boundColumns {
+		return moerr.NewInternalError(c.GetContext(), "View metadata exceeds its column budget")
+	}
+	c.boundColumns += count
+	return nil
+}
 
 func (c *viewDependencyCaptureContext) leaveNestedView() {
 	if c.depth == 0 {

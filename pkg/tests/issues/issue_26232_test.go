@@ -23,6 +23,8 @@ import (
 	"time"
 
 	_ "github.com/go-sql-driver/mysql"
+	moruntime "github.com/matrixorigin/matrixone/pkg/common/runtime"
+	"github.com/matrixorigin/matrixone/pkg/defines"
 	"github.com/matrixorigin/matrixone/pkg/embed"
 	"github.com/stretchr/testify/require"
 )
@@ -31,6 +33,30 @@ func TestIssue26232ViewDefaultAndCTASContracts(t *testing.T) {
 	embed.RunBaseClusterTests(t, func(c embed.Cluster) {
 		cn, err := c.GetCNService(0)
 		require.NoError(t, err)
+		// The CTAS follow-up can run on either CN of the shared cluster.
+		// Admit persisted expressions on both owners for this test only.
+		for i := range 2 {
+			peer, peerErr := c.GetCNService(i)
+			require.NoError(t, peerErr)
+			serviceRuntime := moruntime.ServiceRuntime(peer.GetServiceConfig().CN.UUID)
+			oldProtocol, hadProtocol := serviceRuntime.GetGlobalVariables(moruntime.MOProtocolVersion)
+			oldReadFloor, hadReadFloor := serviceRuntime.GetGlobalVariables(moruntime.PersistedExpressionProtocolFloor)
+			oldAuthorFloor, hadAuthorFloor := serviceRuntime.GetGlobalVariables(moruntime.PersistedExpressionProtocolAuthoringFloor)
+			serviceRuntime.SetGlobalVariables(moruntime.MOProtocolVersion, defines.MORPCLatestVersion)
+			serviceRuntime.SetGlobalVariables(moruntime.PersistedExpressionProtocolFloor, defines.MORPCLatestVersion)
+			serviceRuntime.SetGlobalVariables(moruntime.PersistedExpressionProtocolAuthoringFloor, defines.MORPCLatestVersion)
+			defer func() {
+				if hadProtocol {
+					serviceRuntime.SetGlobalVariables(moruntime.MOProtocolVersion, oldProtocol)
+				}
+				if hadReadFloor {
+					serviceRuntime.SetGlobalVariables(moruntime.PersistedExpressionProtocolFloor, oldReadFloor)
+				}
+				if hadAuthorFloor {
+					serviceRuntime.SetGlobalVariables(moruntime.PersistedExpressionProtocolAuthoringFloor, oldAuthorFloor)
+				}
+			}()
+		}
 		port := cn.GetServiceConfig().CN.Frontend.Port
 		dbConn, err := sql.Open("mysql", fmt.Sprintf("dump:111@tcp(127.0.0.1:%d)/", port))
 		require.NoError(t, err)
