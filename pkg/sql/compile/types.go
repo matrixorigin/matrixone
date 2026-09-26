@@ -225,6 +225,9 @@ type Scope struct {
 	Proc *process.Process
 
 	ScopeAnalyzer *ScopeAnalyzer
+	// roleRuleRenameAdmissionChecked certifies that a complete RENAME TABLE
+	// batch passed admission before any child rename mutates catalog state.
+	roleRuleRenameAdmissionChecked bool
 
 	// resourceExecutedLocally distinguishes a planned remote scope that fell
 	// back to MergeRun from a scope that was actually dispatched. It is

@@ -5454,6 +5454,13 @@ func executeStmtWithWorkspace(ses FeSession,
 	if err != nil {
 		return err
 	}
+	if backSes, ok := ses.(*backSession); ok {
+		if hook := backSes.processHook; hook != nil {
+			if err = hook(execCtx.reqCtx, execCtx.proc); err != nil {
+				return err
+			}
+		}
+	}
 
 	ses.EnterFPrint(FPExecStmtWithWorkspaceBeforeStart)
 	defer ses.ExitFPrint(FPExecStmtWithWorkspaceBeforeStart)

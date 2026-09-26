@@ -10001,6 +10001,7 @@ func Test_doDropRole(t *testing.T) {
 		}
 		priv := determinePrivilegeSetOfStatement(stmt)
 		ses := newSes(priv, ctrl)
+		ses.ruleCache = map[string]string{"db1.t1": "select a from db1.t1"}
 
 		//no result set
 		bh.sql2result["begin;"] = nil
@@ -10025,6 +10026,11 @@ func Test_doDropRole(t *testing.T) {
 
 		err := doDropRole(ses.GetTxnHandler().GetTxnCtx(), ses, stmt)
 		convey.So(err, convey.ShouldBeNil)
+		roleLookup, lookupErr := getSqlForRoleIdOfRole(context.TODO(), stmt.Roles[0].UserName)
+		require.NoError(t, lookupErr)
+		require.Equal(t, []string{"begin;", "select 1", roleLookup}, bh.executedSQLs[:3])
+		require.Equal(t, fmt.Sprintf(deleteRoleFromMoRoleRuleFormat, int64(0)), bh.executedSQLs[3])
+		require.Nil(t, ses.ruleCache)
 	})
 	convey.Convey("drop role succ (if exists)", t, func() {
 		ctrl := gomock.NewController(t)
