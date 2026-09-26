@@ -295,8 +295,10 @@ func (builder *QueryBuilder) pushdownFilters(nodeID int32, filters []*plan.Expr,
 
 	var canPushdown, cantPushdown []*plan.Expr
 
-	if node.Limit != nil {
-		// can not push down over limit
+	if node.Limit != nil || node.Offset != nil {
+		// can not push down over limit or offset: a predicate above OFFSET filters the
+		// rows that survive pagination, so pushing it below would change which rows OFFSET
+		// skips (e.g. an outer WHERE across an OFFSET-only subquery would run before the skip).
 		cantPushdown = append(cantPushdown, filters...)
 		filters = nil
 	}
