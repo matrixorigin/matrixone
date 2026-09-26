@@ -27,6 +27,37 @@ import (
 	"github.com/stretchr/testify/require"
 )
 
+// Empty string payloads retain the 4.2 nullable TIME contract regardless of
+// transport, source vector, or strict mode. IGNORE has its own adjustment rule.
+func TestEmptyTimeConversionPreservesReleaseContract(t *testing.T) {
+	for _, sqlMode := range []string{"", "STRICT_TRANS_TABLES"} {
+		for _, source := range []types.T{types.T_varchar, types.T_varbinary} {
+			for _, binary := range []bool{false, true} {
+				for name, fn := range map[string]fEvalFn{"expression": NewCast, "explicit": NewExplicitCast, "assignment": NewAssignCast} {
+					t.Run(fmt.Sprintf("%s/%s/bin=%t/%s", sqlMode, source, binary, name), func(t *testing.T) {
+						proc := testutil.NewProcess(t)
+						proc.SetResolveVariableFunc(func(string, bool, bool) (interface{}, error) { return sqlMode, nil })
+						session := &numericWarningSession{}
+						proc.Session = session
+						inputs := []FunctionTestInput{
+							NewFunctionTestInput(source.ToType(), []string{"", " ", "15", "", "bad"}, []bool{false, false, false, true, false}),
+							NewFunctionTestInput(types.T_time.ToType(), []types.Time{}, nil),
+						}
+						expect := NewFunctionTestResult(types.T_time.ToType(), false,
+							[]types.Time{0, 0, 15 * types.MicroSecsPerSec, 0, 0}, []bool{true, false, false, true, true})
+						tc := NewFunctionTestCase(proc, inputs, expect, fn).
+							WithSelectList(&FunctionSelectList{AnyNull: true, SelectList: []bool{true, true, true, true, false}})
+						tc.parameters[0].SetIsBin(binary)
+						ok, info := tc.Run()
+						require.True(t, ok, info)
+						require.Empty(t, session.warnings)
+					})
+				}
+			}
+		}
+	}
+}
+
 func TestCastZeroTemporalToNumericUsesZero(t *testing.T) {
 	proc := testutil.NewProcess(t)
 	proc.GetSessionInfo().TimeZone = time.FixedZone("UTC+8", 8*60*60)

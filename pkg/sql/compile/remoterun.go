@@ -2277,8 +2277,8 @@ func validateRemoteExpressionPipelineProtocol(
 	if !features.Any() {
 		return nil
 	}
-	if features.LegacyTemporalResultContracts {
-		return moerr.NewNotSupportedNoCtx("legacy temporal result vector contract is incompatible with this CN")
+	if features.InvalidTemporalResultContract {
+		return moerr.NewNotSupportedNoCtx("temporal result vector contract mismatch is incompatible with this CN")
 	}
 	if features.LegacyIntervalUnits {
 		return moerr.NewNotSupportedNoCtx("legacy interval unit contract requires rebinding")

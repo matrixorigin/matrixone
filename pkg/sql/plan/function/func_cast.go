@@ -8786,7 +8786,12 @@ func strToTime(
 				return err
 			}
 		} else if len(v) == 0 {
-			if (mode == castModeAssignmentIgnore || mode == castModeAssignment) && !isBinary {
+			// Keep the 4.2 empty-string -> NULL contract for ordinary
+			// assignments as well as expressions. Literal folding, column
+			// evaluation and prepared string/binary payloads must agree in
+			// both strict and non-strict sessions. IGNORE explicitly adjusts
+			// invalid text to the target's zero value with a warning.
+			if mode == castModeAssignmentIgnore && !isBinary {
 				appendTimeConversionWarning(proc, "", mode, false)
 				if err := to.Append(dft, false); err != nil {
 					return err

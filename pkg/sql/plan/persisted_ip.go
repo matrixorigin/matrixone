@@ -92,8 +92,8 @@ func RequiredPersistedExpressionProtocolVersion(owner any) (int64, error) {
 	if err != nil {
 		return 0, err
 	}
-	if features.LegacyTemporalResultContracts {
-		return 0, moerr.NewNotSupportedNoCtx("persisted legacy temporal result vector contract requires rebinding")
+	if features.InvalidTemporalResultContract {
+		return 0, moerr.NewNotSupportedNoCtx("persisted temporal result vector contract mismatch requires rebinding")
 	}
 	if features.LegacyIntervalUnits {
 		return 0, moerr.NewNotSupportedNoCtx("persisted legacy interval unit contract requires rebinding")

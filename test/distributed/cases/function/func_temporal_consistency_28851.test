@@ -297,14 +297,30 @@ select id, date_add(base, interval amount second) as added
 from temporal_time_interval_status order by id;
 show warnings;
 drop table temporal_time_interval_status;
--- Empty text remains MatrixOne's nullable TIME NULL policy. Empty binary is
--- the numeric zero payload used by binary-literal assignment.
+-- The 4.2 empty-string payload contract is NULL for text and binary parameters.
+-- A SQL hex literal has separate numeric provenance; x'' assigns numeric zero.
 create table temporal_empty_time(id int, value time null);
 insert into temporal_empty_time values (1, ''), (2, ' '), (3, x'');
 select id, ifnull(cast(value as char), 'NULL') as value from temporal_empty_time order by id;
 select cast(x'' as signed) as binary_signed_zero,
        cast(x'' as unsigned) as binary_unsigned_zero,
        cast(x'' as double) as binary_double_zero;
+set sql_mode = '';
+insert into temporal_empty_time values (4, '');
+insert into temporal_empty_time select 5, v from interval_text where v is null;
+prepare empty_time_assign from 'insert into temporal_empty_time values (?, ?)';
+set @empty_id = 6, @empty_value = '';
+execute empty_time_assign using @empty_id, @empty_value;
+set sql_mode = 'STRICT_TRANS_TABLES';
+set @empty_id = 7;
+execute empty_time_assign using @empty_id, @empty_value;
+deallocate prepare empty_time_assign;
+set sql_mode = '';
+prepare empty_time_update from 'update temporal_empty_time set value = ? where id = 2';
+execute empty_time_update using @empty_value;
+deallocate prepare empty_time_update;
+select id, ifnull(cast(value as char), 'NULL') as value from temporal_empty_time order by id;
+set sql_mode = 'STRICT_TRANS_TABLES';
 drop table temporal_empty_time;
 prepare inactive_temporal_cast from
   'select case when 0 then cast(''123 -12:34:56.000000'' as datetime(6)) else cast(''2024-01-01'' as datetime(6)) end';

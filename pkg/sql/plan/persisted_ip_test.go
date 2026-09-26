@@ -50,7 +50,7 @@ func TestPersistedDecimalLiteralUsesDedicatedEpochInMixedOwner(t *testing.T) {
 		}}},
 	}
 	temporalExpr := &planpb.Expr{Typ: planpb.Type{Id: int32(types.T_int64)}, Expr: &planpb.Expr_F{F: &planpb.Function{
-		Func: &planpb.ObjectRef{Obj: function.EncodeOverloadID(function.EXTRACT, 0)},
+		Func: &planpb.ObjectRef{Obj: function.EncodeOverloadID(function.EXTRACT, 5)},
 	}}}
 	intervalExpr := &planpb.Expr{Typ: planpb.Type{Id: int32(types.T_int64)}, Expr: &planpb.Expr_F{F: &planpb.Function{
 		Func: &planpb.ObjectRef{Obj: function.EncodeOverloadID(function.TO_INTERVAL_MICROSECOND, 0)},
@@ -90,7 +90,7 @@ func TestPersistedDecimalLiteralUsesDedicatedEpochInMixedOwner(t *testing.T) {
 	legacyTemporal := DeepCopyExpr(temporalExpr)
 	legacyTemporal.Typ.Id = int32(types.T_varchar)
 	_, err = RequiredPersistedExpressionProtocolVersion(legacyTemporal)
-	require.ErrorContains(t, err, "legacy temporal")
+	require.ErrorContains(t, err, "temporal result vector")
 }
 
 func TestPersistedDecimalDivisionRequiresV97(t *testing.T) {

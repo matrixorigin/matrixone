@@ -187,6 +187,34 @@ func fixedTypeMatch(overloads []overload, inputs []types.Type) checkResult {
 	return fixedTypeMatchExcept(overloads, inputs, -1)
 }
 
+// Persisted 4.2 expressions keep overloads 0..4 and their original physical
+// results. Only newly bound EXTRACT expressions select the numeric results.
+func extractNumericTypeMatch(overloads []overload, inputs []types.Type) checkResult {
+	r := fixedTypeMatch(overloads[5:], inputs)
+	if r.status == succeedMatched || r.status == succeedWithCast {
+		r.idx += 5
+	}
+	return r
+}
+
+func addTimeTypeMatch(overloads []overload, inputs []types.Type) checkResult {
+	return timeArithmeticTypeMatch(overloads, inputs, 9)
+}
+
+func subTimeTypeMatch(overloads []overload, inputs []types.Type) checkResult {
+	return timeArithmeticTypeMatch(overloads, inputs, 11)
+}
+
+func timeArithmeticTypeMatch(overloads []overload, inputs []types.Type, legacyCount int) checkResult {
+	r := fixedTypeMatch(overloads[:legacyCount], inputs)
+	if (r.status == succeedMatched || r.status == succeedWithCast) && r.idx >= 6 {
+		// The input signatures are unchanged; string results are appended
+		// after the legacy DATETIME-producing string overloads.
+		r.idx += legacyCount - 6
+	}
+	return r
+}
+
 // inetNtoaTypeMatch keeps native numeric inputs on their existing, allocation-
 // free executors while routing value-domain inputs through INET_NTOA's local
 // dynamic executor. This is deliberately a function-local matcher: adding

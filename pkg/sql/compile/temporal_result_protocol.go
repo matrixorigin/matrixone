@@ -25,7 +25,8 @@ import (
 )
 
 // The final temporal result, interval, and WEEK contracts share one release
-// boundary relative to the v96 baseline.
+// boundary. The supported upgrade source is the 4.2 release line (latest
+// 4.2.4 advertises MORPC 10); main's internal epochs are not release versions.
 func (c *Compile) constrainTemporalResultWorkers(qry *plan.Query) error {
 	features, err := plan.RequiredRemoteExpressionFeatures(qry)
 	if err != nil {
