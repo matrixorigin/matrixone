@@ -13451,26 +13451,31 @@ func TestDateStringExtractorsYearZeroAndLegacyDelimiters(t *testing.T) {
 }
 
 func TestDateStringRawFieldsOnPartialZeroDates(t *testing.T) {
-	proc := testutil.NewProcess(t)
 	input := []FunctionTestInput{NewFunctionTestInput(types.T_varchar.ToType(),
-		[]string{"2024-00-15", "2024-02-00", "0000-00-00", "2024-02-30"}, nil)}
+		[]string{"2024-00-15", "2024-02-00", "0000-00-00", "0000-00-00 12:34:56", "2024-02-30"}, nil)}
 	for _, tc := range []struct {
 		name string
 		fn   fEvalFn
 		want FunctionTestResult
 	}{
 		{"year", DateStringToYear, NewFunctionTestResult(types.T_int64.ToType(), false,
-			[]int64{2024, 2024, 0, 0}, []bool{false, false, false, true})},
+			[]int64{2024, 2024, 0, 0, 0}, []bool{false, false, false, false, true})},
 		{"month", DateStringToMonth, NewFunctionTestResult(types.T_uint8.ToType(), false,
-			[]uint8{0, 2, 0, 0}, []bool{false, false, false, true})},
+			[]uint8{0, 2, 0, 0, 0}, []bool{false, false, false, false, true})},
 		{"day and dayofmonth", DateStringToDay, NewFunctionTestResult(types.T_uint8.ToType(), false,
-			[]uint8{15, 0, 0, 0}, []bool{false, false, false, true})},
+			[]uint8{15, 0, 0, 0, 0}, []bool{false, false, false, false, true})},
+		{"quarter", DateStringToQuarter, NewFunctionTestResult(types.T_uint8.ToType(), false,
+			[]uint8{0, 1, 0, 0, 0}, []bool{false, false, false, false, true})},
 	} {
-		t.Run(tc.name, func(t *testing.T) {
-			caseDef := NewFunctionTestCase(proc, input, tc.want, tc.fn)
-			ok, info := caseDef.Run()
-			require.True(t, ok, info)
-		})
+		for _, rejectZero := range []bool{false, true} {
+			t.Run(fmt.Sprintf("%s/no_zero=%t", tc.name, rejectZero), func(t *testing.T) {
+				proc := testutil.NewProcess(t)
+				proc.GetSessionInfo().ExplicitZeroTemporalCastReturnsNull = rejectZero
+				caseDef := NewFunctionTestCase(proc, input, tc.want, tc.fn)
+				ok, info := caseDef.Run()
+				require.True(t, ok, info)
+			})
+		}
 	}
 }
 

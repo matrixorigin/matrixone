@@ -587,7 +587,7 @@ execute extract_mode_contract using @zero_calendar, @zero_clock;
 set sql_mode = 'NO_ZERO_DATE';
 execute extract_mode_contract using @zero_calendar, @zero_clock;
 ➤ literal_year[-5,64,0]  ¦  marker_year[-5,64,0]  ¦  clock[-5,64,0]  𝄀
-null  ¦  null  ¦  12
+0  ¦  0  ¦  12
 set sql_mode = '';
 execute extract_mode_contract using @zero_calendar, @zero_clock;
 ➤ literal_year[-5,64,0]  ¦  marker_year[-5,64,0]  ¦  clock[-5,64,0]  𝄀

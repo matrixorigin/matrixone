@@ -178,9 +178,10 @@ break mixed-version admission.
    expression identities keep their physical ABI.  Already normalized stored
    constants are not reparsed using the new interval grammar.
 5. Ordinary calendar years are 1–9999 with real date validation.  Typed
-   all-zero sentinel fields stay zero; all-zero *text* calendar fields depend on
-   `NO_ZERO_DATE`, while accepted partial-zero raw fields and valid zero-calendar
-   clocks remain inspectable.  The appendix freezes the exact truth table.
+   all-zero sentinel fields stay zero; accepted all-zero *text* raw fields also
+   stay zero in either SQL mode, while DATE construction from that text observes
+   `NO_ZERO_DATE`. Accepted partial-zero raw fields and valid zero-calendar
+   clocks remain inspectable. The appendix freezes the exact truth table.
    TIME remains a signed duration bounded by ±838:59:59 with FSP
    0–6.  Unsupported SQL types/units fail at binding, not as a row-value
    exception.  Explicit strict numeric PERIOD APIs keep their own error policy.

@@ -71,8 +71,8 @@ All result types are fixed by the bound expression, not the first row. Empty/all
 
 | ID / family | Required values / types |
 |---|---|
-| C16 EXTRACT | Newly bound DATE, TIME, DATETIME, TIMESTAMP and VARCHAR overloads all return signed BIGINT. Compose compound values numerically with fixed field widths and one overall sign: HOUR_SECOND(01:02:03)=10203; HOUR_SECOND(-00:02:03)=-203; SECOND_MICROSECOND(56.123456)=56123456. EXTRACT(WEEK FROM x)=WEEK(x,0). TIMESTAMP uses the execution time zone. Empty/whitespace-only or malformed VARCHAR input is NULL; zero-calendar field extraction observes the same typed-sentinel / execution-mode distinction as the corresponding component function. Numeric ordering, arithmetic, CTAS/view types and negative values must work. Released stored overloads retain their old ABI, below. |
-| C17 Raw component extraction | YEAR/MONTH/DAY/DAYOFMONTH preserve accepted partial-zero fields: `'2024-00-15'` gives 2024/0/15. Complete zero-calendar text fields remain execution-mode dependent, while typed zero-sentinel fields remain zero. This does not make a partial-zero value a valid stored calendar. HOUR/MINUTE/SECOND and corresponding EXTRACT fields agree on the same accepted clock grammar. Preserve the clock of a zero calendar; FSP6 carry from `'0000-00-00 23:59:59.9999999'` gives a 24-hour duration clock, not a fabricated date. |
+| C16 EXTRACT | Newly bound DATE, TIME, DATETIME, TIMESTAMP and VARCHAR overloads all return signed BIGINT. Compose compound values numerically with fixed field widths and one overall sign: HOUR_SECOND(01:02:03)=10203; HOUR_SECOND(-00:02:03)=-203; SECOND_MICROSECOND(56.123456)=56123456. EXTRACT(WEEK FROM x)=WEEK(x,0). TIMESTAMP uses the execution time zone. Empty/whitespace-only or malformed VARCHAR input is NULL; accepted zero-calendar raw fields from text and typed sentinels are zero in both SQL modes, as in the corresponding component functions. DATE/CAST conversion before EXTRACT retains its own mode policy. Numeric ordering, arithmetic, CTAS/view types and negative values must work. Released stored overloads retain their old ABI, below. |
+| C17 Raw component extraction | YEAR/MONTH/DAY/DAYOFMONTH/QUARTER preserve accepted partial-zero fields: `'2024-00-15'` gives 2024/0/15 for YEAR/MONTH/DAY. Accepted complete zero-calendar text and typed zero sentinels yield zero raw fields in either SQL mode. This does not make a partial-zero value a valid stored calendar: WEEK and WEEKOFYEAR still return NULL. HOUR/MINUTE/SECOND and corresponding EXTRACT fields agree on the same accepted clock grammar. Preserve the clock of a zero calendar; FSP6 carry from `'0000-00-00 23:59:59.9999999'` gives a 24-hour duration clock, not a fabricated date. |
 | C18 ADDTIME/SUBTIME | Typed TIME stays TIME; typed DATETIME stays DATETIME; supported typed TIMESTAMP overload keeps its declared type and session conversion. Newly bound string-first results are VARCHAR(29), never today's date for a bare duration. Direct prepared first marker selects TIME(6); explicit VARCHAR casts retain string-family intent. Both signs obey C03/C04. |
 | C19 TIMEDIFF | TIME result, maximum known input FSP for typed/static inputs; dynamic string/marker cases use FSP6. Two `.1` literals give TIME(1), not arbitrary TIME(6). Mixed duration/calendar strings are invalid, same-family subtraction is checked and follows C03. |
 | C20 DATE_ADD/SUB and TIMESTAMPADD | Preserve DATE only when the bound units/source guarantee an integral date result. TIMESTAMPADD first applies its declared integer-amount coercion; it does not inherit C10 fractional INTERVAL semantics. DATE plus fractional-capable DAY is statically DATETIME(6), even if a current row or parameter happens to be 1.0, 0 or NULL; integer-only DAY remains DATE. Calendar month/year addition clamps a day to the target month's last valid day. Invalid textual calendar arguments return NULL without diagnostics; valid result overflow returns NULL +1441. Validate the resulting calendar and all scaling/negation intermediates. |
@@ -101,16 +101,17 @@ Unchanged temporal APIs such as NOW/CURRENT_TIMESTAMP/CURDATE/CURTIME, DATE/TIME
 
 C12 and C34 retain unusual released behavior for compatibility and state exactly where it applies. C03 and C13 instead reject accidental/unreasonable results and are explicitly new target decisions. Do not cite “MySQL does this” as their sole rationale.
 
-The zero-calendar field policy is source- and mode-sensitive.  Default means the
-repository default, including `NO_ZERO_DATE` and `NO_ZERO_IN_DATE`:
+Raw zero-calendar fields are mode-independent; converting the same input to a
+DATE still observes the execution mode. Default means the repository default,
+including `NO_ZERO_DATE` and `NO_ZERO_IN_DATE`:
 
 | Expression/input | `sql_mode=''` | Default mode |
 | --- | --- | --- |
 | `YEAR/MONTH/DAY/QUARTER(FROM_DAYS(0))` | `0/0/0/0` | `0/0/0/0` |
 | Calendar `EXTRACT` from `FROM_DAYS(0)` | zero | zero |
-| `YEAR/MONTH/DAY/QUARTER('0000-00-00')` | `0/0/0/0` | all NULL |
-| Calendar `EXTRACT` from `'0000-00-00'` | zero | NULL |
-| Calendar fields from `'0000-00-00 12:34:56'` | zero | NULL |
+| `YEAR/MONTH/DAY/DAYOFMONTH/QUARTER('0000-00-00')` | all zero | all zero |
+| Raw calendar `EXTRACT` from `'0000-00-00'`, including `YEAR_MONTH` | zero | zero |
+| Raw calendar fields from `'0000-00-00 12:34:56'` | zero | zero |
 | `HOUR/MINUTE/SECOND('0000-00-00 12:34:56')` and matching `EXTRACT` | `12/34/56` | `12/34/56` |
 | Clock extraction from `'0000-00-00 23:59:59.9999999'` at FSP6 | `24/0/0` | `24/0/0` |
 | `EXTRACT(DAY_SECOND FROM '0000-00-00 12:34:56')` | `123456` | `123456` |
@@ -118,8 +119,10 @@ repository default, including `NO_ZERO_DATE` and `NO_ZERO_IN_DATE`:
 | `EXTRACT(YEAR_MONTH FROM '2024-00-15')` | `202400` | same |
 | `EXTRACT(MONTH FROM '2001-02-00')` | `2` | `2` |
 | `WEEK(FROM_DAYS(0),0)` and matching `EXTRACT` | NULL | NULL |
+| `WEEKOFYEAR('0000-00-00')` | NULL | NULL |
 | `DATE(FROM_DAYS(0))` / explicit DATE cast | typed zero | NULL |
 | `DATE('0000-00-00')` / explicit DATE cast | typed zero | NULL |
+| `YEAR(DATE('0000-00-00'))` | zero | NULL |
 | Malformed calendar `'2024-02-30'` in tolerant raw-field extraction | NULL | NULL |
 
 The same input can therefore have raw field value zero while construction of

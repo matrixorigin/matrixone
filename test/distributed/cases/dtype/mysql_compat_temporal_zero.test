@@ -286,6 +286,7 @@ prepare temporal_zero_extract from
             month(''0000-00-00'') is null as month_null,
             day(''0000-00-00'') is null as day_null,
             quarter(''0000-00-00'') is null as quarter_null,
+            year(date(''0000-00-00'')) is null as converted_year_null,
             cast(from_days(0) as date) is null as typed_cast_null,
             date(from_days(0)) is null as typed_date_null,
             year(from_days(0)) as sentinel_year';

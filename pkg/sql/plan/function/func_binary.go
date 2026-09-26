@@ -8466,7 +8466,6 @@ func ExtractFromVarchar(ivecs []*vector.Vector, result vector.FunctionResultWrap
 		// If scale is 0 (default for VARCHAR), use scale 6 to preserve microsecond precision
 		scale = 6
 	}
-	modeChecked, rejectZero := false, false
 	for i := uint64(0); i < uint64(length); i++ {
 		if functionRowSkipped(selectList, i) {
 			if err = rs.Append(0, true); err != nil {
@@ -8481,23 +8480,6 @@ func ExtractFromVarchar(ivecs []*vector.Vector, result vector.FunctionResultWrap
 			}
 		} else {
 			text := functionUtil.QuickBytesToStr(v2)
-			if strings.HasPrefix(strings.TrimSpace(text), "0") && !extractUnitPrefersTime(unit) && !strings.HasPrefix(unit, "day_") {
-				if parts, ok := parseDateExtractParts(text); ok && parts.year == 0 && parts.month == 0 && parts.day == 0 {
-					if !modeChecked {
-						rejectZero, err = process.ResolveExplicitZeroTemporalCastReturnsNull(proc)
-						if err != nil {
-							return err
-						}
-						modeChecked = true
-					}
-					if rejectZero {
-						if err = rs.Append(0, true); err != nil {
-							return err
-						}
-						continue
-					}
-				}
-			}
 			res, e := extractNumericFromVarchar(unit, text, scale)
 			if e != nil {
 				if err = rs.Append(0, true); err != nil {

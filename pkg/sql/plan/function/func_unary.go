@@ -1256,10 +1256,11 @@ func parseDateExtractParts(value string) (dateExtractParts, bool) {
 	return parts, true
 }
 
-func dateStringToFixedWithNullOnError[T types.FixedSizeTExceptStrType](ivecs []*vector.Vector, result vector.FunctionResultWrapper, proc *process.Process, length int, selectList *FunctionSelectList, fn func(dateExtractParts) (T, bool)) error {
+// Raw field extraction inspects accepted calendar fields without applying the
+// SQL mode policy for converting a zero date into a DATE value.
+func dateStringToFixedWithNullOnError[T types.FixedSizeTExceptStrType](ivecs []*vector.Vector, result vector.FunctionResultWrapper, _ *process.Process, length int, selectList *FunctionSelectList, fn func(dateExtractParts) (T, bool)) error {
 	source := vector.GenerateFunctionStrParameter(ivecs[0])
 	rs := vector.MustFunctionResult[T](result)
-	modeChecked, rejectZero := false, false
 	for i := uint64(0); i < uint64(length); i++ {
 		if selectList != nil && (selectList.IgnoreAllRow() ||
 			(!selectList.ShouldEvalAllRow() && selectList.Contains(i))) {
@@ -1281,22 +1282,6 @@ func dateStringToFixedWithNullOnError[T types.FixedSizeTExceptStrType](ivecs []*
 				return err
 			}
 			continue
-		}
-		if parts.year == 0 && parts.month == 0 && parts.day == 0 {
-			if !modeChecked {
-				var err error
-				rejectZero, err = process.ResolveExplicitZeroTemporalCastReturnsNull(proc)
-				if err != nil {
-					return err
-				}
-				modeChecked = true
-			}
-			if rejectZero {
-				if err := rs.Append(*new(T), true); err != nil {
-					return err
-				}
-				continue
-			}
 		}
 		valueToAppend, valid := fn(parts)
 		if err := rs.Append(valueToAppend, !valid); err != nil {

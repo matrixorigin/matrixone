@@ -1059,14 +1059,14 @@ func TestExtractRawFieldsModeAndInvalidText(t *testing.T) {
 		for _, tc := range []struct {
 			unit    string
 			partial int64
-		}{{"year", 2024}, {"month", 0}, {"day", 15}, {"year_month", 202400}} {
+		}{{"year", 2024}, {"month", 0}, {"day", 15}, {"quarter", 0}, {"year_month", 202400}} {
 			t.Run(fmt.Sprintf("%s/no_zero=%t", tc.unit, rejectZero), func(t *testing.T) {
 				proc := newTmpProcess(t)
 				proc.GetSessionInfo().ExplicitZeroTemporalCastReturnsNull = rejectZero
 				c := NewFunctionTestCase(proc, []FunctionTestInput{
 					NewFunctionTestConstInput(types.T_varchar.ToType(), []string{tc.unit}, nil),
-					NewFunctionTestInput(types.T_varchar.ToType(), []string{"", " ", "bad", "2024-00-15", "0000-00-00", "2024-00-15"}, nil),
-				}, NewFunctionTestResult(types.T_int64.ToType(), false, []int64{0, 0, 0, tc.partial, 0, tc.partial}, []bool{true, true, true, false, rejectZero, false}), ExtractFromVarchar)
+					NewFunctionTestInput(types.T_varchar.ToType(), []string{"", " ", "bad", "2024-00-15", "0000-00-00", "0000-00-00 12:34:56", "2024-00-15", "2024-02-30"}, nil),
+				}, NewFunctionTestResult(types.T_int64.ToType(), false, []int64{0, 0, 0, tc.partial, 0, 0, tc.partial, 0}, []bool{true, true, true, false, false, false, false, true}), ExtractFromVarchar)
 				ok, info := c.Run()
 				require.True(t, ok, info)
 			})

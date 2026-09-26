@@ -312,7 +312,7 @@ month('0000-00-00') is null as month_string_null,
 day('0000-00-00') is null as day_string_null,
 year(from_days(0)) as typed_sentinel_year;
 ➤ cast_string_null[-7,1,0]  ¦  cast_typed_null[-7,1,0]  ¦  date_typed_null[-7,1,0]  ¦  year_string_null[-7,1,0]  ¦  month_string_null[-7,1,0]  ¦  day_string_null[-7,1,0]  ¦  typed_sentinel_year[-5,64,0]  𝄀
-1  ¦  1  ¦  1  ¦  1  ¦  1  ¦  1  ¦  0
+1  ¦  1  ¦  1  ¦  0  ¦  0  ¦  0  ¦  0
 insert into mysql_compat_temporal_zero_dml
 select 30,
 cast('0000-00-00' as date),
@@ -350,20 +350,21 @@ year(''0000-00-00'') is null as year_null,
 month(''0000-00-00'') is null as month_null,
 day(''0000-00-00'') is null as day_null,
 quarter(''0000-00-00'') is null as quarter_null,
+year(date(''0000-00-00'')) is null as converted_year_null,
 cast(from_days(0) as date) is null as typed_cast_null,
 date(from_days(0)) is null as typed_date_null,
 year(from_days(0)) as sentinel_year';
 execute temporal_zero_extract;
-➤ date_null[-7,1,0]  ¦  year_null[-7,1,0]  ¦  month_null[-7,1,0]  ¦  day_null[-7,1,0]  ¦  quarter_null[-7,1,0]  ¦  typed_cast_null[-7,1,0]  ¦  typed_date_null[-7,1,0]  ¦  sentinel_year[-5,64,0]  𝄀
-0  ¦  0  ¦  0  ¦  0  ¦  0  ¦  0  ¦  0  ¦  0
+➤ date_null[-7,1,0]  ¦  year_null[-7,1,0]  ¦  month_null[-7,1,0]  ¦  day_null[-7,1,0]  ¦  quarter_null[-7,1,0]  ¦  converted_year_null[-7,1,0]  ¦  typed_cast_null[-7,1,0]  ¦  typed_date_null[-7,1,0]  ¦  sentinel_year[-5,64,0]  𝄀
+0  ¦  0  ¦  0  ¦  0  ¦  0  ¦  0  ¦  0  ¦  0  ¦  0
 set sql_mode = 'NO_ZERO_DATE';
 execute temporal_zero_extract;
-➤ date_null[-7,1,0]  ¦  year_null[-7,1,0]  ¦  month_null[-7,1,0]  ¦  day_null[-7,1,0]  ¦  quarter_null[-7,1,0]  ¦  typed_cast_null[-7,1,0]  ¦  typed_date_null[-7,1,0]  ¦  sentinel_year[-5,64,0]  𝄀
-1  ¦  1  ¦  1  ¦  1  ¦  1  ¦  1  ¦  1  ¦  0
+➤ date_null[-7,1,0]  ¦  year_null[-7,1,0]  ¦  month_null[-7,1,0]  ¦  day_null[-7,1,0]  ¦  quarter_null[-7,1,0]  ¦  converted_year_null[-7,1,0]  ¦  typed_cast_null[-7,1,0]  ¦  typed_date_null[-7,1,0]  ¦  sentinel_year[-5,64,0]  𝄀
+1  ¦  0  ¦  0  ¦  0  ¦  0  ¦  1  ¦  1  ¦  1  ¦  0
 set sql_mode = 'STRICT_TRANS_TABLES';
 execute temporal_zero_extract;
-➤ date_null[-7,1,0]  ¦  year_null[-7,1,0]  ¦  month_null[-7,1,0]  ¦  day_null[-7,1,0]  ¦  quarter_null[-7,1,0]  ¦  typed_cast_null[-7,1,0]  ¦  typed_date_null[-7,1,0]  ¦  sentinel_year[-5,64,0]  𝄀
-0  ¦  0  ¦  0  ¦  0  ¦  0  ¦  0  ¦  0  ¦  0
+➤ date_null[-7,1,0]  ¦  year_null[-7,1,0]  ¦  month_null[-7,1,0]  ¦  day_null[-7,1,0]  ¦  quarter_null[-7,1,0]  ¦  converted_year_null[-7,1,0]  ¦  typed_cast_null[-7,1,0]  ¦  typed_date_null[-7,1,0]  ¦  sentinel_year[-5,64,0]  𝄀
+0  ¦  0  ¦  0  ¦  0  ¦  0  ¦  0  ¦  0  ¦  0  ¦  0
 deallocate prepare temporal_zero_extract;
 prepare temporal_timestamp_cast from 'select cast(''1970-01-01 08:00:01'' as timestamp)';
 execute temporal_timestamp_cast;
