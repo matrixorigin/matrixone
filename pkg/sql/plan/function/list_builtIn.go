@@ -10226,14 +10226,17 @@ var supportedDateAndTimeBuiltIns = []FuncNew{
 					return DateIntAdd
 				},
 			},
-			{overloadId: 8, args: []types.T{types.T_time, types.T_varchar, types.T_int64}, volatile: true, retType: func([]types.Type) types.Type { return types.T_time.ToType() }, newOp: func() executeLogicOfOverload { return TimeAddRaw }},
-			{overloadId: 9, args: []types.T{types.T_time, types.T_char, types.T_int64}, volatile: true, retType: func([]types.Type) types.Type { return types.T_time.ToType() }, newOp: func() executeLogicOfOverload { return TimeAddRaw }},
-			{overloadId: 10, args: []types.T{types.T_time, types.T_text, types.T_int64}, volatile: true, retType: func([]types.Type) types.Type { return types.T_time.ToType() }, newOp: func() executeLogicOfOverload { return TimeAddRaw }},
-			{overloadId: 11, args: []types.T{types.T_time, types.T_float32, types.T_int64}, volatile: true, retType: func([]types.Type) types.Type { return types.T_time.ToType() }, newOp: func() executeLogicOfOverload { return TimeAddRaw }},
-			{overloadId: 12, args: []types.T{types.T_time, types.T_float64, types.T_int64}, volatile: true, retType: func([]types.Type) types.Type { return types.T_time.ToType() }, newOp: func() executeLogicOfOverload { return TimeAddRaw }},
-			{overloadId: 13, args: []types.T{types.T_time, types.T_decimal64, types.T_int64}, volatile: true, retType: func([]types.Type) types.Type { return types.T_time.ToType() }, newOp: func() executeLogicOfOverload { return TimeAddRaw }},
-			{overloadId: 14, args: []types.T{types.T_time, types.T_decimal128, types.T_int64}, volatile: true, retType: func([]types.Type) types.Type { return types.T_time.ToType() }, newOp: func() executeLogicOfOverload { return TimeAddRaw }},
-			{overloadId: 15, args: []types.T{types.T_time, types.T_decimal256, types.T_int64}, volatile: true, retType: func([]types.Type) types.Type { return types.T_time.ToType() }, newOp: func() executeLogicOfOverload { return TimeAddRaw }},
+			// Raw interval parsing is deterministic for its inputs. Keeping these
+			// overloads foldable also lets statement-constant JOIN diagnostics
+			// retain one execution owner; genuinely row-scoped inputs stay dynamic.
+			{overloadId: 8, args: []types.T{types.T_time, types.T_varchar, types.T_int64}, retType: func([]types.Type) types.Type { return types.T_time.ToType() }, newOp: func() executeLogicOfOverload { return TimeAddRaw }},
+			{overloadId: 9, args: []types.T{types.T_time, types.T_char, types.T_int64}, retType: func([]types.Type) types.Type { return types.T_time.ToType() }, newOp: func() executeLogicOfOverload { return TimeAddRaw }},
+			{overloadId: 10, args: []types.T{types.T_time, types.T_text, types.T_int64}, retType: func([]types.Type) types.Type { return types.T_time.ToType() }, newOp: func() executeLogicOfOverload { return TimeAddRaw }},
+			{overloadId: 11, args: []types.T{types.T_time, types.T_float32, types.T_int64}, retType: func([]types.Type) types.Type { return types.T_time.ToType() }, newOp: func() executeLogicOfOverload { return TimeAddRaw }},
+			{overloadId: 12, args: []types.T{types.T_time, types.T_float64, types.T_int64}, retType: func([]types.Type) types.Type { return types.T_time.ToType() }, newOp: func() executeLogicOfOverload { return TimeAddRaw }},
+			{overloadId: 13, args: []types.T{types.T_time, types.T_decimal64, types.T_int64}, retType: func([]types.Type) types.Type { return types.T_time.ToType() }, newOp: func() executeLogicOfOverload { return TimeAddRaw }},
+			{overloadId: 14, args: []types.T{types.T_time, types.T_decimal128, types.T_int64}, retType: func([]types.Type) types.Type { return types.T_time.ToType() }, newOp: func() executeLogicOfOverload { return TimeAddRaw }},
+			{overloadId: 15, args: []types.T{types.T_time, types.T_decimal256, types.T_int64}, retType: func([]types.Type) types.Type { return types.T_time.ToType() }, newOp: func() executeLogicOfOverload { return TimeAddRaw }},
 		},
 	},
 
@@ -10489,14 +10492,14 @@ var supportedDateAndTimeBuiltIns = []FuncNew{
 					return DateIntSub
 				},
 			},
-			{overloadId: 8, args: []types.T{types.T_time, types.T_varchar, types.T_int64}, volatile: true, retType: func([]types.Type) types.Type { return types.T_time.ToType() }, newOp: func() executeLogicOfOverload { return TimeSubRaw }},
-			{overloadId: 9, args: []types.T{types.T_time, types.T_char, types.T_int64}, volatile: true, retType: func([]types.Type) types.Type { return types.T_time.ToType() }, newOp: func() executeLogicOfOverload { return TimeSubRaw }},
-			{overloadId: 10, args: []types.T{types.T_time, types.T_text, types.T_int64}, volatile: true, retType: func([]types.Type) types.Type { return types.T_time.ToType() }, newOp: func() executeLogicOfOverload { return TimeSubRaw }},
-			{overloadId: 11, args: []types.T{types.T_time, types.T_float32, types.T_int64}, volatile: true, retType: func([]types.Type) types.Type { return types.T_time.ToType() }, newOp: func() executeLogicOfOverload { return TimeSubRaw }},
-			{overloadId: 12, args: []types.T{types.T_time, types.T_float64, types.T_int64}, volatile: true, retType: func([]types.Type) types.Type { return types.T_time.ToType() }, newOp: func() executeLogicOfOverload { return TimeSubRaw }},
-			{overloadId: 13, args: []types.T{types.T_time, types.T_decimal64, types.T_int64}, volatile: true, retType: func([]types.Type) types.Type { return types.T_time.ToType() }, newOp: func() executeLogicOfOverload { return TimeSubRaw }},
-			{overloadId: 14, args: []types.T{types.T_time, types.T_decimal128, types.T_int64}, volatile: true, retType: func([]types.Type) types.Type { return types.T_time.ToType() }, newOp: func() executeLogicOfOverload { return TimeSubRaw }},
-			{overloadId: 15, args: []types.T{types.T_time, types.T_decimal256, types.T_int64}, volatile: true, retType: func([]types.Type) types.Type { return types.T_time.ToType() }, newOp: func() executeLogicOfOverload { return TimeSubRaw }},
+			{overloadId: 8, args: []types.T{types.T_time, types.T_varchar, types.T_int64}, retType: func([]types.Type) types.Type { return types.T_time.ToType() }, newOp: func() executeLogicOfOverload { return TimeSubRaw }},
+			{overloadId: 9, args: []types.T{types.T_time, types.T_char, types.T_int64}, retType: func([]types.Type) types.Type { return types.T_time.ToType() }, newOp: func() executeLogicOfOverload { return TimeSubRaw }},
+			{overloadId: 10, args: []types.T{types.T_time, types.T_text, types.T_int64}, retType: func([]types.Type) types.Type { return types.T_time.ToType() }, newOp: func() executeLogicOfOverload { return TimeSubRaw }},
+			{overloadId: 11, args: []types.T{types.T_time, types.T_float32, types.T_int64}, retType: func([]types.Type) types.Type { return types.T_time.ToType() }, newOp: func() executeLogicOfOverload { return TimeSubRaw }},
+			{overloadId: 12, args: []types.T{types.T_time, types.T_float64, types.T_int64}, retType: func([]types.Type) types.Type { return types.T_time.ToType() }, newOp: func() executeLogicOfOverload { return TimeSubRaw }},
+			{overloadId: 13, args: []types.T{types.T_time, types.T_decimal64, types.T_int64}, retType: func([]types.Type) types.Type { return types.T_time.ToType() }, newOp: func() executeLogicOfOverload { return TimeSubRaw }},
+			{overloadId: 14, args: []types.T{types.T_time, types.T_decimal128, types.T_int64}, retType: func([]types.Type) types.Type { return types.T_time.ToType() }, newOp: func() executeLogicOfOverload { return TimeSubRaw }},
+			{overloadId: 15, args: []types.T{types.T_time, types.T_decimal256, types.T_int64}, retType: func([]types.Type) types.Type { return types.T_time.ToType() }, newOp: func() executeLogicOfOverload { return TimeSubRaw }},
 		},
 	},
 
