@@ -242,6 +242,45 @@ func TestPreparedVariadicRuntimeSourceDomains(t *testing.T) {
 	})
 	cases = append(cases,
 		sourceDomainCase{
+			name: "projected greatest without operand casts",
+			sql:  "prepare p from 'select greatest(x,y) from (select ? as x, ? as y limit 1) d'",
+			fn:   "greatest", values: []ParamValue{decimal("2"), decimal("10")},
+			want: []types.T{types.T_decimal128, types.T_decimal128},
+		},
+		sourceDomainCase{
+			name: "projected field without operand casts",
+			sql:  "prepare p from 'select field(x,y) from (select ? as x, ? as y limit 1) d'",
+			fn:   "field", values: []ParamValue{decimal("1"), decimal("1")},
+			want: []types.T{types.T_decimal128, types.T_decimal128},
+		},
+		sourceDomainCase{
+			name: "projected comparison without operand casts",
+			sql:  "prepare p from 'select if(x>y,x,y) from (select ? as x, ? as y limit 1) d'",
+			fn:   ">", values: []ParamValue{decimal("2"), decimal("10")},
+			want: []types.T{types.T_decimal128, types.T_decimal128},
+		},
+		sourceDomainCase{
+			name: "projected IN with constant string list",
+			sql:  "prepare p from 'select x in (''1'',''2'') from (select ? as x limit 1) d'",
+			fn:   "=", values: []ParamValue{decimal("1.0")},
+			want: []types.T{types.T_float64, types.T_float64},
+		},
+		sourceDomainCase{
+			name: "retained BETWEEN with constant string bounds",
+			sql:  "prepare p from 'select x between ''1'' and ''2'' from (select ? as x limit 1) d'",
+			fn:   "between", values: []ParamValue{decimal("10")},
+			want: []types.T{types.T_float64, types.T_float64, types.T_float64},
+		},
+		sourceDomainCase{
+			name: "grouped coalesce without operand casts",
+			sql:  "prepare p from 'select coalesce(x,y) from (select ? as x, ? as y from nation group by x,y) d'",
+			fn:   "coalesce", values: []ParamValue{
+				{Value: nil, SourceType: types.New(types.T_decimal128, 20, 0), HasSourceType: true},
+				decimal("9007199254740993"),
+			},
+			want: []types.T{types.T_decimal128, types.T_decimal128},
+		},
+		sourceDomainCase{
 			name: "set output owns both source domains",
 			sql:  "prepare p from 'select field(x, abs(cast(9007199254740992 as decimal(20,0)))) from (select ? as x union all select ?) d'",
 			fn:   "field", values: []ParamValue{decimal("9007199254740993"),

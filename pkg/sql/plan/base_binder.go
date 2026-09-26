@@ -4347,6 +4347,13 @@ func (b *baseBinder) markPreparedResultCastsProvisional(
 			len(fn.Args) == 0 || !b.preparedExprContainsProjectedParam(fn.Args[0]) {
 			continue
 		}
+		if b.builder != nil && b.builder.boolSumAvgCompat &&
+			(strings.EqualFold(name, "sum") || strings.EqualFold(name, "avg")) &&
+			types.T(arg.Typ.Id) == types.T_int8 && types.T(fn.Args[0].Typ.Id) == types.T_bool {
+			// This is SUM/AVG's mode-authorized BOOL adapter, not a temporary
+			// cast chosen for the marker's unresolved PREPARE-time domain.
+			continue
+		}
 		// This cast was introduced while the marker still had its prepare-time
 		// TEXT domain. Record occurrence provenance because its function overload
 		// can be identical to a user-authored CAST, which remains authoritative.

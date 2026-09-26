@@ -864,34 +864,46 @@ func (rule *ResetParamRefRule) setPreparedPlan(preparePlan *Plan) {
 				}
 			}
 		}
+		registerProjectedParam := func(col *plan.ColRef) {
+			if col == nil || col.RelPos < 0 || col.ColPos < 0 || int(col.RelPos) >= len(node.Children) {
+				return
+			}
+			key := preparedSetOperationNullKey{nodeID: node.Children[col.RelPos], colPos: col.ColPos}
+			if _, checked := checkedProjectedParam[key]; checked {
+				return
+			}
+			if checkedProjectedParam == nil {
+				checkedProjectedParam = make(map[preparedSetOperationNullKey]struct{})
+			}
+			checkedProjectedParam[key] = struct{}{}
+			if pos, exact := preparedProjectedOutputParamPosition(query, key.nodeID, key.colPos,
+				make(map[preparedSetOperationNullKey]bool), false); exact {
+				if rule.exactProjectedParam == nil {
+					rule.exactProjectedParam = make(map[preparedSetOperationNullKey]int32)
+				}
+				if rule.projectedParamDomain == nil {
+					rule.projectedParamDomain = make(map[preparedSetOperationNullKey]int32)
+				}
+				rule.exactProjectedParam[key] = pos
+				rule.projectedParamDomain[key] = pos
+			} else if pos, domain := preparedProjectedOutputParamPosition(query, key.nodeID, key.colPos,
+				make(map[preparedSetOperationNullKey]bool), true); domain {
+				if rule.projectedParamDomain == nil {
+					rule.projectedParamDomain = make(map[preparedSetOperationNullKey]int32)
+				}
+				rule.projectedParamDomain[key] = pos
+			}
+		}
 		_ = plan.VisitExpressionsInOwner(node, func(root *plan.Expr) error {
 			return plan.VisitExprTree(root, func(expr *plan.Expr) error {
-				if fn := expr.GetF(); fn != nil && expr.GetPreparedNumeric().GetProvisionalResultCast() &&
-					len(fn.Args) > 0 && fn.Args[0].GetCol() != nil {
-					col := fn.Args[0].GetCol()
-					if col.RelPos >= 0 && col.ColPos >= 0 && int(col.RelPos) < len(node.Children) {
-						key := preparedSetOperationNullKey{nodeID: node.Children[col.RelPos], colPos: col.ColPos}
-						if _, checked := checkedProjectedParam[key]; !checked {
-							if checkedProjectedParam == nil {
-								checkedProjectedParam = make(map[preparedSetOperationNullKey]struct{})
-							}
-							checkedProjectedParam[key] = struct{}{}
-							if pos, exact := preparedProjectedOutputParamPosition(query, key.nodeID, key.colPos,
-								make(map[preparedSetOperationNullKey]bool), false); exact {
-								if rule.exactProjectedParam == nil {
-									rule.exactProjectedParam = make(map[preparedSetOperationNullKey]int32)
-								}
-								if rule.projectedParamDomain == nil {
-									rule.projectedParamDomain = make(map[preparedSetOperationNullKey]int32)
-								}
-								rule.exactProjectedParam[key] = pos
-								rule.projectedParamDomain[key] = pos
-							} else if pos, domain := preparedProjectedOutputParamPosition(query, key.nodeID, key.colPos,
-								make(map[preparedSetOperationNullKey]bool), true); domain {
-								if rule.projectedParamDomain == nil {
-									rule.projectedParamDomain = make(map[preparedSetOperationNullKey]int32)
-								}
-								rule.projectedParamDomain[key] = pos
+				if fn := expr.GetF(); fn != nil {
+					if expr.GetPreparedNumeric().GetProvisionalResultCast() && len(fn.Args) > 0 {
+						registerProjectedParam(fn.Args[0].GetCol())
+					}
+					if fn.Func != nil {
+						for i, arg := range fn.Args {
+							if preparedProjectedValueOperand(fn.Func.GetObjName(), i, len(fn.Args)) {
+								registerProjectedParam(arg.GetCol())
 							}
 						}
 					}

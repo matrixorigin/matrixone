@@ -4266,6 +4266,7 @@ func PreparedPlanRuntimeSpecializationRequirements(preparePlan *Plan) (needs boo
 		directResult: false,
 		skipExprs:    preparedDMLWriteExpressions(query),
 		seen:         make(map[*plan.Expr]struct{}),
+		query:        query,
 	}
 	if err := NewVisitPlan(scanPlan, []VisitPlanRule{rule}).Visit(context.Background()); err != nil {
 		// The scan is an optimization only. Preserve correctness if a newly
@@ -4434,6 +4435,8 @@ type preparedRuntimeSpecializationScanRule struct {
 	integerAssignments []int32
 	skipExprs          map[*plan.Expr]struct{}
 	seen               map[*plan.Expr]struct{}
+	query              *plan.Query
+	node               *plan.Node
 }
 
 type preparedRuntimeTextComparisonScanRule struct {
@@ -4641,6 +4644,7 @@ func (rule *preparedRuntimeTextComparisonScanRule) paramTypeIsText(position int)
 }
 
 func (rule *preparedRuntimeSpecializationScanRule) MatchNode(node *Node) bool {
+	rule.node = node
 	if node.NodeType == plan.Node_FUNCTION_SCAN && node.TableDef != nil &&
 		node.TableDef.TblFunc != nil && node.TableDef.TblFunc.Name == "generate_series" &&
 		len(node.TblFuncExprList) > 0 {
@@ -4705,6 +4709,16 @@ func (rule *preparedRuntimeSpecializationScanRule) scanExpr(expr *plan.Expr, roo
 			return
 		}
 		name := strings.ToLower(exprImpl.F.Func.GetObjName())
+		for i, arg := range exprImpl.F.Args {
+			if !preparedProjectedValueOperand(name, i, len(exprImpl.F.Args)) || arg.GetCol() == nil {
+				continue
+			}
+			if _, ok := preparedProjectedParamPosition(rule.query, rule.node, arg,
+				make(map[preparedSetOperationNullKey]bool), true); ok {
+				rule.needs = true
+				return
+			}
+		}
 		if isPreparedGeometrySRIDFunction(name) && len(exprImpl.F.Args) >= 2 {
 			if len(preparedGeometrySRIDParamPositionsInExpr(exprImpl.F.Args[len(exprImpl.F.Args)-1])) > 0 {
 				rule.needs = true
@@ -7551,6 +7565,59 @@ func preparedProjectedOutputParamPosition(
 
 type preparedPlanColumnParamResolver func(*plan.ColRef) (pos int32, domain, exact bool)
 
+// PREPARE need not insert a cast when projected TEXT markers meet in the same
+// value consumer. Their source domains still determine that consumer's overload.
+func preparedProjectedValueOperand(name string, argIndex, argCount int) bool {
+	name = canonicalPreparedResultFunctionName(strings.ToLower(name))
+	if isPreparedNumericComparison(name) {
+		return true
+	}
+	switch name {
+	case "field", "greatest", "least", "coalesce":
+		return true
+	case "between", "not_between":
+		return argCount == 3
+	case "in", "not_in":
+		return argIndex == 0
+	case "if", "ifnull", "case":
+		return preparedSQLExecuteNumericResultValueArg(name, argIndex, argCount)
+	default:
+		return false
+	}
+}
+
+func recoverPreparedProjectedValueOperand(
+	ctx context.Context,
+	source *plan.Expr,
+	resolveColumnParam preparedPlanColumnParamResolver,
+	paramRule *ResetParamRefRule,
+) (*plan.Expr, bool, error) {
+	if source == nil || source.GetCol() == nil || !types.T(source.Typ.Id).IsMySQLString() {
+		return source, false, nil
+	}
+	pos, domain, exact := resolveColumnParam(source.GetCol())
+	if !domain {
+		return source, false, nil
+	}
+	runtimeSource, known, err := paramRule.preparedRuntimeSourceExpr(int(pos), false)
+	if err != nil || !known {
+		return source, false, err
+	}
+	if exact && types.T(runtimeSource.Typ.Id) == types.T_any && runtimeSource.GetLit().GetIsnull() {
+		return runtimeSource, true, nil
+	}
+	if types.T(runtimeSource.Typ.Id) == types.T_any {
+		return source, false, nil
+	}
+	target := runtimeSource.Typ
+	target.NotNullable = source.Typ.NotNullable
+	if reflect.DeepEqual(source.Typ, target) {
+		return source, false, nil
+	}
+	recovered, err := appendCastBeforeExpr(ctx, source, target)
+	return recovered, err == nil, err
+}
+
 // refreshPreparedPlanProjectionExprType propagates execute-time source types
 // through one plan expression. When an input domain changes, its enclosing
 // function must be rebound too; otherwise the plan can pair a runtime vector
@@ -7610,6 +7677,18 @@ func refreshPreparedPlanProjectionExprType(
 				return false, err
 			}
 			changed = changed || argChanged
+			if !preparedProjectedValueOperand(functionName, i, len(exprImpl.F.Args)) {
+				continue
+			}
+			recovered, recoveredChanged, err := recoverPreparedProjectedValueOperand(
+				ctx, arg, resolveColumnParam, paramRule)
+			if err != nil {
+				return false, err
+			}
+			if recoveredChanged {
+				exprImpl.F.Args[i] = recovered
+				changed = true
+			}
 		}
 
 		// This envelope was selected for an unresolved source, not requested by
@@ -7617,24 +7696,10 @@ func refreshPreparedPlanProjectionExprType(
 		// a set/common-result column must use its producer's reconciled type.
 		if expr.GetPreparedNumeric().GetProvisionalResultCast() && functionName == "cast" &&
 			!isExplicitPreparedCast(expr) && len(exprImpl.F.Args) == 2 {
-			source := exprImpl.F.Args[0]
-			if col := source.GetCol(); col != nil && types.T(source.Typ.Id).IsMySQLString() {
-				if pos, domain, exact := resolveColumnParam(col); domain {
-					runtimeSource, known, err := paramRule.preparedRuntimeSourceExpr(int(pos), false)
-					if err != nil {
-						return false, err
-					}
-					if exact && known && types.T(runtimeSource.Typ.Id) == types.T_any && runtimeSource.GetLit().GetIsnull() {
-						source = runtimeSource
-					} else if known && types.T(runtimeSource.Typ.Id) != types.T_any {
-						target := runtimeSource.Typ
-						target.NotNullable = source.Typ.NotNullable
-						source, err = appendCastBeforeExpr(ctx, source, target)
-						if err != nil {
-							return false, err
-						}
-					}
-				}
+			source, _, err := recoverPreparedProjectedValueOperand(
+				ctx, exprImpl.F.Args[0], resolveColumnParam, paramRule)
+			if err != nil {
+				return false, err
 			}
 			*expr = *source
 			return true, nil
@@ -7709,6 +7774,14 @@ func refreshPreparedPlanProjectionExprType(
 			// It will insert CAST4 for numeric inputs or leave binary inputs on
 			// their native byte-oriented path.
 			rebindArgs[0] = DeepCopyExpr(rebindArgs[0].GetF().Args[0])
+		}
+		if (functionName == "in" || functionName == "not_in") && len(rebindArgs) == 2 &&
+			rebindArgs[1].GetVec() != nil {
+			values, ok := materializeInRHSValues(rebindArgs[1], nil)
+			if !ok || len(values) == 0 {
+				return false, moerr.NewInternalError(ctx, "cannot decode prepared IN value list")
+			}
+			rebindArgs[1].Expr = &plan.Expr_List{List: &plan.ExprList{List: values}}
 		}
 		var rebound *plan.Expr
 		var err error

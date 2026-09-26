@@ -107,6 +107,93 @@ func TestIssue28397FieldKeepsExactNumericComparison(t *testing.T) {
 		require.NoError(t, err)
 		_, err = conn.ExecContext(ctx, "insert into field_decimal values (99999999999999999999999999999999999999, 99999999999999999999999999999999999998, 99999999999999999999999999999999999999), (9007199254740993,9007199254740992,9007199254740993), (123,122,123)")
 		require.NoError(t, err)
+		t.Run("issue 29378 prepared bool aggregate keeps numeric adapter", func(t *testing.T) {
+			_, err := conn.ExecContext(ctx,
+				"prepare projected_bool_sum from 'select sum(char_length(?)), sum(? like ''____'') from field_decimal'")
+			require.NoError(t, err)
+			defer func() { _, _ = conn.ExecContext(ctx, "deallocate prepare projected_bool_sum") }()
+			_, err = conn.ExecContext(ctx, "prepare projected_bool_avg from 'select avg(? like ''____'') from field_decimal'")
+			require.NoError(t, err)
+			defer func() { _, _ = conn.ExecContext(ctx, "deallocate prepare projected_bool_avg") }()
+			for _, tc := range []struct {
+				source string
+				want   []sql.NullInt64
+			}{
+				{"X'61626364'", []sql.NullInt64{{Int64: 12, Valid: true}, {Int64: 3, Valid: true}}},
+				{"if(false, X'ff', '你好')", []sql.NullInt64{{Int64: 6, Valid: true}, {Int64: 0, Valid: true}}},
+				{"null", []sql.NullInt64{{}, {}}},
+				{"X'61626364'", []sql.NullInt64{{Int64: 12, Valid: true}, {Int64: 3, Valid: true}}},
+			} {
+				_, err = conn.ExecContext(ctx, "set @aggregate_source="+tc.source)
+				require.NoError(t, err)
+				read := func(query string) []sql.NullInt64 {
+					var length, matches sql.NullInt64
+					require.NoError(t, conn.QueryRowContext(ctx, query).Scan(&length, &matches), query)
+					return []sql.NullInt64{length, matches}
+				}
+				direct := read("select sum(char_length(@aggregate_source)), sum(@aggregate_source like '____') from field_decimal")
+				prepared := read("execute projected_bool_sum using @aggregate_source,@aggregate_source")
+				require.Equal(t, tc.want, direct, tc.source)
+				require.Equal(t, direct, prepared, tc.source)
+				var directAvg, preparedAvg sql.NullString
+				require.NoError(t, conn.QueryRowContext(ctx,
+					"select avg(@aggregate_source like '____') from field_decimal").Scan(&directAvg))
+				require.NoError(t, conn.QueryRowContext(ctx,
+					"execute projected_bool_avg using @aggregate_source").Scan(&preparedAvg))
+				require.Equal(t, directAvg, preparedAvg, tc.source)
+			}
+		})
+		t.Run("issue 29378 projected BETWEEN domain", func(t *testing.T) {
+			_, err := conn.ExecContext(ctx,
+				"prepare projected_between from 'select x between ''1'' and ''2'', x not between ''1'' and ''2'' from (select ? as x limit 1) d'")
+			require.NoError(t, err)
+			defer func() { _, _ = conn.ExecContext(ctx, "deallocate prepare projected_between") }()
+			for _, tc := range []struct {
+				source string
+				want   []int64
+			}{
+				{"cast(10 as decimal(20,0))", []int64{0, 1}},
+				{"'10'", []int64{1, 0}},
+				{"cast(10 as decimal(20,0))", []int64{0, 1}},
+			} {
+				_, err = conn.ExecContext(ctx, "set @between_source="+tc.source)
+				require.NoError(t, err)
+				read := func(query string) []int64 {
+					var between, notBetween int64
+					require.NoError(t, conn.QueryRowContext(ctx, query).Scan(&between, &notBetween), query)
+					return []int64{between, notBetween}
+				}
+				direct := read("select x between '1' and '2', x not between '1' and '2' from (select @between_source as x limit 1) d")
+				prepared := read("execute projected_between using @between_source")
+				require.Equal(t, tc.want, direct, tc.source)
+				require.Equal(t, direct, prepared, tc.source)
+			}
+			_, err = conn.ExecContext(ctx,
+				"prepare projected_between_bounds from 'select x between lo and hi, x not between lo and hi from (select ? as x, ? as lo, ? as hi limit 1) d'")
+			require.NoError(t, err)
+			defer func() { _, _ = conn.ExecContext(ctx, "deallocate prepare projected_between_bounds") }()
+			for _, tc := range []struct {
+				value, low, high string
+				want             []sql.NullInt64
+			}{
+				{"cast(2 as decimal(20,0))", "cast(1 as decimal(20,0))", "cast(10 as decimal(20,0))", []sql.NullInt64{{Int64: 1, Valid: true}, {Int64: 0, Valid: true}}},
+				{"'2'", "'1'", "'10'", []sql.NullInt64{{Int64: 0, Valid: true}, {Int64: 1, Valid: true}}},
+				{"cast(2 as decimal(20,0))", "cast(1 as decimal(20,0))", "null", []sql.NullInt64{{}, {}}},
+				{"cast(2 as decimal(20,0))", "cast(1 as decimal(20,0))", "cast(10 as decimal(20,0))", []sql.NullInt64{{Int64: 1, Valid: true}, {Int64: 0, Valid: true}}},
+			} {
+				_, err = conn.ExecContext(ctx, "set @between_value="+tc.value+", @between_low="+tc.low+", @between_high="+tc.high)
+				require.NoError(t, err)
+				read := func(query string) []sql.NullInt64 {
+					var between, notBetween sql.NullInt64
+					require.NoError(t, conn.QueryRowContext(ctx, query).Scan(&between, &notBetween), query)
+					return []sql.NullInt64{between, notBetween}
+				}
+				direct := read("select x between lo and hi, x not between lo and hi from (select @between_value as x, @between_low as lo, @between_high as hi limit 1) d")
+				prepared := read("execute projected_between_bounds using @between_value,@between_low,@between_high")
+				require.Equal(t, tc.want, direct, tc)
+				require.Equal(t, direct, prepared, tc)
+			}
+		})
 		rows, err := conn.QueryContext(ctx, "select field(search,candidate1,candidate2) from field_decimal order by search")
 		require.NoError(t, err)
 		defer rows.Close()
@@ -365,6 +452,19 @@ func TestIssue28397FieldKeepsExactNumericComparison(t *testing.T) {
 					require.Equal(t, tc.want, got)
 				})
 			}
+			t.Run("grouped domainless null common value", func(t *testing.T) {
+				const source = "field(coalesce(x,y), abs(" + first + ")) from "
+				var direct int64
+				require.NoError(t, conn.QueryRowContext(ctx,
+					"select "+source+"(select null as x, cast(9007199254740993 as unsigned) as y from field_decimal group by x,y) d").Scan(&direct))
+				stmt, err := conn.PrepareContext(ctx,
+					"select "+source+"(select ? as x, ? as y from field_decimal group by x,y) d")
+				require.NoError(t, err)
+				defer func() { require.NoError(t, stmt.Close()) }()
+				var prepared int64
+				require.NoError(t, stmt.QueryRowContext(ctx, nil, uint64(9007199254740993)).Scan(&prepared))
+				require.Equal(t, direct, prepared)
+			})
 			t.Run("mixed set keeps every physical row", func(t *testing.T) {
 				stmt, err := conn.PrepareContext(ctx,
 					"select x, field(x, cast(0 as decimal(20,0))) from (select ? as x union all select ?) d order by 2")
@@ -500,6 +600,153 @@ func TestIssue28397FieldKeepsExactNumericComparison(t *testing.T) {
 			require.Zero(t, field)
 		})
 
+		t.Run("issue 29378 projected common result metadata and reuse", func(t *testing.T) {
+			_, err := conn.ExecContext(ctx, "prepare common_projected from 'select x, greatest(x,y), least(x,y) from (select ? as x, ? as y limit 1) d'")
+			require.NoError(t, err)
+			defer func() {
+				_, err := conn.ExecContext(ctx, "deallocate prepare common_projected")
+				require.NoError(t, err)
+			}()
+			for _, run := range []struct {
+				name, left, right, visible, greatest, least string
+			}{
+				{"decimal", "cast(2 as decimal(20,0))", "cast(10 as decimal(20,0))", "2", "10", "2"},
+				{"varchar", "'2'", "'10'", "2", "2", "10"},
+				{"decimal again", "cast(2 as decimal(20,0))", "cast(10 as decimal(20,0))", "2", "10", "2"},
+			} {
+				t.Run(run.name, func(t *testing.T) {
+					_, err := conn.ExecContext(ctx, "set @common_left="+run.left+", @common_right="+run.right)
+					require.NoError(t, err)
+					read := func(query string) ([]string, []string) {
+						rows, err := conn.QueryContext(ctx, query)
+						require.NoError(t, err)
+						defer func() { require.NoError(t, rows.Close()) }()
+						columns, err := rows.ColumnTypes()
+						require.NoError(t, err)
+						require.Len(t, columns, 3)
+						types := make([]string, len(columns))
+						for i, column := range columns {
+							types[i] = column.DatabaseTypeName()
+							if precision, scale, ok := column.DecimalSize(); ok {
+								types[i] = fmt.Sprintf("%s(%d,%d)", types[i], precision, scale)
+							}
+						}
+						require.True(t, rows.Next())
+						var visible, high, low string
+						require.NoError(t, rows.Scan(&visible, &high, &low))
+						require.False(t, rows.Next())
+						require.NoError(t, rows.Err())
+						return []string{visible, high, low}, types
+					}
+					directValues, directTypes := read("select x, greatest(x,y), least(x,y) from (select @common_left as x, @common_right as y limit 1) d")
+					preparedValues, preparedTypes := read("execute common_projected using @common_left, @common_right")
+					require.Equal(t, []string{run.visible, run.greatest, run.least}, directValues, "direct oracle")
+					require.Equal(t, directValues, preparedValues)
+					require.Equal(t, directTypes[1:], preparedTypes[1:], "computed result types")
+					require.Equal(t, "TEXT", preparedTypes[0], "bare projected marker stays visible TEXT")
+				})
+			}
+		})
+
+		t.Run("issue 29378 projected condition follows direct SQL", func(t *testing.T) {
+			const projection = "greatest(x,y), if(x>y,x,y), case when x>y then x else y end from (select ? as x, ? as y limit 1) d"
+			_, err := conn.ExecContext(ctx, "prepare projected_selection from 'select "+projection+"'")
+			require.NoError(t, err)
+			defer func() { _, _ = conn.ExecContext(ctx, "deallocate prepare projected_selection") }()
+			for _, tc := range []struct {
+				left, right, want string
+			}{
+				{"cast(2 as decimal(20,0))", "cast(10 as decimal(20,0))", "10"},
+				{"'2'", "'10'", "2"},
+				{"cast(2 as decimal(20,0))", "cast(10 as decimal(20,0))", "10"},
+				{"cast(2 as decimal(20,0))", "cast(10 as char)", ""},
+				{"cast(2 as double)", "cast(10 as decimal(20,0))", ""},
+			} {
+				_, err = conn.ExecContext(ctx, "set @select_left="+tc.left+", @select_right="+tc.right)
+				require.NoError(t, err)
+				read := func(query string) []string {
+					var greatest, conditional, searchedCase string
+					require.NoError(t, conn.QueryRowContext(ctx, query).Scan(&greatest, &conditional, &searchedCase))
+					return []string{greatest, conditional, searchedCase}
+				}
+				direct := read("select greatest(x,y), if(x>y,x,y), case when x>y then x else y end from (select @select_left as x, @select_right as y limit 1) d")
+				prepared := read("execute projected_selection using @select_left,@select_right")
+				if tc.want != "" {
+					require.Equal(t, tc.want, direct[0], "direct common-value oracle")
+				}
+				require.Equal(t, direct, prepared)
+			}
+		})
+
+		t.Run("issue 29378 projected null-safe comparison", func(t *testing.T) {
+			_, err := conn.ExecContext(ctx,
+				"prepare projected_null_compare from 'select x<=>y, ifnull(x>y,0) from (select ? as x, ? as y limit 1) d'")
+			require.NoError(t, err)
+			defer func() { _, _ = conn.ExecContext(ctx, "deallocate prepare projected_null_compare") }()
+			for _, tc := range []struct {
+				left, right string
+				want        []int64
+			}{
+				{"null", "null", []int64{1, 0}},
+				{"null", "cast(10 as decimal(20,0))", []int64{0, 0}},
+				{"cast(2 as decimal(20,0))", "cast(10 as decimal(20,0))", []int64{0, 0}},
+				{"'2'", "'10'", []int64{0, 1}},
+			} {
+				_, err = conn.ExecContext(ctx, "set @cmp_left="+tc.left+", @cmp_right="+tc.right)
+				require.NoError(t, err)
+				read := func(query string) []int64 {
+					var equal, greater int64
+					require.NoError(t, conn.QueryRowContext(ctx, query).Scan(&equal, &greater))
+					return []int64{equal, greater}
+				}
+				direct := read("select x<=>y, ifnull(x>y,0) from (select @cmp_left as x, @cmp_right as y limit 1) d")
+				prepared := read("execute projected_null_compare using @cmp_left,@cmp_right")
+				require.Equal(t, tc.want, direct)
+				require.Equal(t, direct, prepared)
+			}
+		})
+
+		t.Run("issue 29378 projected IN domain", func(t *testing.T) {
+			_, err := conn.ExecContext(ctx,
+				"prepare projected_in from 'select x in (''1'',''2''), x not in (''1'',''2'') from (select ? as x limit 1) d'")
+			require.NoError(t, err)
+			defer func() { _, _ = conn.ExecContext(ctx, "deallocate prepare projected_in") }()
+			for _, tc := range []struct {
+				source string
+				want   []int64
+			}{
+				{"cast(1 as decimal(10,1))", []int64{1, 0}},
+				{"'1.0'", []int64{0, 1}},
+				{"cast(1 as decimal(10,1))", []int64{1, 0}},
+			} {
+				_, err = conn.ExecContext(ctx, "set @in_source="+tc.source)
+				require.NoError(t, err)
+				read := func(query string) []int64 {
+					var in, notIn int64
+					require.NoError(t, conn.QueryRowContext(ctx, query).Scan(&in, &notIn))
+					return []int64{in, notIn}
+				}
+				direct := read("select x in ('1','2'), x not in ('1','2') from (select @in_source as x limit 1) d")
+				prepared := read("execute projected_in using @in_source")
+				require.Equal(t, tc.want, direct)
+				require.Equal(t, direct, prepared)
+			}
+			_, err = conn.ExecContext(ctx,
+				"prepare projected_in_null from 'select x in (''1'',null), x not in (''1'',null) from (select ? as x limit 1) d'")
+			require.NoError(t, err)
+			defer func() { _, _ = conn.ExecContext(ctx, "deallocate prepare projected_in_null") }()
+			_, err = conn.ExecContext(ctx, "set @in_source=cast(3 as decimal(10,1))")
+			require.NoError(t, err)
+			var directIn, directNotIn, preparedIn, preparedNotIn sql.NullInt64
+			require.NoError(t, conn.QueryRowContext(ctx,
+				"select x in ('1',null), x not in ('1',null) from (select @in_source as x limit 1) d").Scan(&directIn, &directNotIn))
+			require.NoError(t, conn.QueryRowContext(ctx,
+				"execute projected_in_null using @in_source").Scan(&preparedIn, &preparedNotIn))
+			require.Equal(t, sql.NullInt64{}, directIn)
+			require.Equal(t, sql.NullInt64{}, directNotIn)
+			require.Equal(t, []sql.NullInt64{directIn, directNotIn}, []sql.NullInt64{preparedIn, preparedNotIn})
+		})
+
 		t.Run("issue 29378 explicit string and nested null boundaries", func(t *testing.T) {
 			const first = "cast(9007199254740992 as decimal(20,0))"
 			const second = "cast(9007199254740993 as decimal(20,0))"
@@ -554,6 +801,31 @@ func TestIssue28397FieldKeepsExactNumericComparison(t *testing.T) {
 					name: "nested projected marker",
 					expr: "field(y, abs(" + first + ")) from (select x as y from (select ? as x) d1) d2",
 					runs: []fieldBoundaryRun{{"exact decimal", []string{second}, []int64{0}}},
+				},
+				{
+					name: "projected common operands",
+					expr: "field(greatest(x,y), abs(" + first + ")) from (select ? as x, ? as y limit 1) d",
+					runs: []fieldBoundaryRun{
+						{"two decimals", []string{second, first}, []int64{0}},
+						{"two strings", []string{"'9007199254740993'", "'9007199254740992'"}, []int64{1}},
+						{"decimals after strings", []string{second, first}, []int64{0}},
+					},
+				},
+				{
+					name: "projected field operands",
+					expr: "field(x,y) from (select ? as x, ? as y limit 1) d",
+					runs: []fieldBoundaryRun{
+						{"numeric scales", []string{"cast(1 as decimal(10,1))", "cast(1 as decimal(10,2))"}, []int64{1}},
+						{"distinct strings", []string{"'1.0'", "'1.00'"}, []int64{0}},
+					},
+				},
+				{
+					name: "grouped common operands",
+					expr: "field(coalesce(x,y), abs(" + first + ")) from (select ? as x, ? as y from field_decimal group by x,y) d",
+					runs: []fieldBoundaryRun{
+						{"decimal null", []string{"cast(null as decimal(20,0))", second}, []int64{0}},
+						{"char null", []string{"cast(null as char)", second}, []int64{1}},
+					},
 				},
 				{
 					name: "unrelated projected marker",

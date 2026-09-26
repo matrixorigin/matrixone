@@ -456,6 +456,10 @@ func blockFilterConstantVectorSet(literalVec *plan.LiteralVec) (ret map[string]s
 // must match the comparison column's type: its payload type is executable data,
 // so accepting inconsistent plan metadata could encode a different compound key.
 func inRHSValues(expr *plan.Expr, expectedType plan.Type) (values []*plan.Expr, ok bool) {
+	return materializeInRHSValues(expr, &expectedType)
+}
+
+func materializeInRHSValues(expr *plan.Expr, expectedType *plan.Type) (values []*plan.Expr, ok bool) {
 	if expr == nil {
 		return nil, false
 	}
@@ -474,7 +478,9 @@ func inRHSValues(expr *plan.Expr, expectedType plan.Type) (values []*plan.Expr, 
 	if !ok {
 		return nil, false
 	}
-	if !literalVecMatchesType(vec.GetType(), expectedType) {
+	// Composite-key callers require the packed values to match their column.
+	// Execute-time IN rebinding has no fixed element type; use the vector's own.
+	if expectedType != nil && !literalVecMatchesType(vec.GetType(), *expectedType) {
 		return nil, false
 	}
 
