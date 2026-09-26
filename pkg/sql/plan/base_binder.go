@@ -3128,6 +3128,31 @@ func (b *baseBinder) hasPreparedNumericParamExprs(exprs []tree.Expr, depth int32
 	return false, nil
 }
 
+// HAVING and SELECT bind before their aggregate/window nodes are appended.
+// Resolve those output tags from the current binding context during that phase.
+func (b *baseBinder) pendingColumnSource(col *plan.ColRef) *Expr {
+	if b.ctx == nil || col == nil || col.ColPos < 0 {
+		return nil
+	}
+	var outputs []*Expr
+	switch col.RelPos {
+	case b.ctx.groupTag:
+		outputs = b.ctx.groups
+	case b.ctx.aggregateTag:
+		outputs = b.ctx.aggregates
+	case b.ctx.windowTag:
+		outputs = b.ctx.windows
+	}
+	if int(col.ColPos) >= len(outputs) {
+		return nil
+	}
+	source := outputs[col.ColPos]
+	if window := source.GetW(); window != nil {
+		return window.WindowFunc
+	}
+	return source
+}
+
 // A derived column can hide its marker behind a ColRef before the enclosing
 // function is bound. Follow only that column's projection, not unrelated
 // predicates or siblings, when deciding which numeric peers are provisional.
@@ -3138,23 +3163,77 @@ func (b *baseBinder) preparedExprContainsProjectedParam(expr *Expr) bool {
 	if expr == nil || b.builder == nil || b.builder.qry == nil {
 		return false
 	}
-	var visited map[[2]int32]struct{}
-	found := false
-	_ = plan.VisitExprTree(expr, func(nested *Expr) error {
-		col := nested.GetCol()
-		if found || col == nil {
-			return nil
+	var visited map[[3]int32]struct{}
+	var contains func(*Expr) bool
+	var output func(int32, int32, int32) bool
+	output = func(nodeID, tag, pos int32) bool {
+		if nodeID < 0 || int(nodeID) >= len(b.builder.qry.Nodes) || pos < 0 {
+			return false
 		}
-		if nodeID, ok := b.builder.tag2NodeID[col.RelPos]; ok {
-			if visited == nil {
-				visited = make(map[[2]int32]struct{})
+		if visited == nil {
+			visited = make(map[[3]int32]struct{})
+		}
+		key := [3]int32{nodeID, tag, pos}
+		if _, seen := visited[key]; seen {
+			return false
+		}
+		visited[key] = struct{}{}
+		node := b.builder.qry.Nodes[nodeID]
+		if node == nil {
+			return false
+		}
+		switch node.NodeType {
+		case plan.Node_AGG:
+			if len(node.BindingTags) > 0 && tag == node.BindingTags[0] && int(pos) < len(node.GroupBy) {
+				return contains(node.GroupBy[pos])
 			}
-			found = preparedNodeOutputContainsParamWithTags(
-				b.builder.qry, nodeID, col.ColPos, visited, b.builder.tag2NodeID)
+			if len(node.BindingTags) > 1 && tag == node.BindingTags[1] && int(pos) < len(node.AggList) {
+				return contains(node.AggList[pos])
+			}
+		case plan.Node_WINDOW:
+			if node.WindowIdx == pos && len(node.WinSpecList) > 0 {
+				return contains(node.WinSpecList[0].GetW().GetWindowFunc())
+			}
+			// All windows in a query block share a tag; its map entry is the last window.
+			if len(node.Children) == 1 {
+				return output(node.Children[0], tag, pos)
+			}
+		case plan.Node_PARTITION:
+			if len(node.Children) == 1 {
+				return output(node.Children[0], tag, pos)
+			}
 		}
-		return nil
-	})
-	return found
+		if isPreparedSetOperationNode(node.NodeType) {
+			for _, childID := range node.Children {
+				if childID >= 0 && int(childID) < len(b.builder.qry.Nodes) {
+					child := b.builder.qry.Nodes[childID]
+					if child != nil && int(pos) < len(child.ProjectList) && contains(child.ProjectList[pos]) {
+						return true
+					}
+				}
+			}
+			return false
+		}
+		return int(pos) < len(node.ProjectList) && contains(node.ProjectList[pos])
+	}
+	contains = func(source *Expr) bool {
+		if preparedExprContainsParam(source) {
+			return true
+		}
+		found := false
+		_ = plan.VisitExprTree(source, func(nested *Expr) error {
+			if col := nested.GetCol(); !found && col != nil {
+				if nodeID, ok := b.builder.tag2NodeID[col.RelPos]; ok {
+					found = output(nodeID, col.RelPos, col.ColPos)
+				} else if pending := b.pendingColumnSource(col); pending != nil {
+					found = contains(pending)
+				}
+			}
+			return nil
+		})
+		return found
+	}
+	return contains(expr)
 }
 
 func isPreparedNumericAggregate(name string, argCount int) bool {
@@ -4069,7 +4148,7 @@ func (b *baseBinder) bindFuncExprImplByAstExpr(name string, astArgs []tree.Expr,
 				e.Typ.NotNullable = args[1].Typ.NotNullable || args[2].Typ.NotNullable
 				ensurePreparedNumericMetadata(e).IfnullCommonValue = true
 			}
-			markPreparedResultCastsProvisional(
+			b.markPreparedResultCastsProvisional(
 				b.GetContext(), name, astArgs, preparedPeerSources, e, preparedNumericProvenance)
 			return e, nil
 		}
@@ -4208,7 +4287,7 @@ func avgIntegerConstantPrecision(astExpr tree.Expr) (int32, bool) {
 	}
 }
 
-func markPreparedResultCastsProvisional(
+func (b *baseBinder) markPreparedResultCastsProvisional(
 	ctx context.Context,
 	name string,
 	astArgs []tree.Expr,
@@ -4245,7 +4324,7 @@ func markPreparedResultCastsProvisional(
 				}
 			}
 		}
-		if i >= len(astArgs) || !preparedSQLExecuteNumericResultValueArg(name, i, len(args)) {
+		if i >= len(astArgs) || (name != "field" && !preparedSQLExecuteNumericResultValueArg(name, i, len(args))) {
 			continue
 		}
 		if _, explicit := unwrapParenExpr(astArgs[i]).(*tree.CastExpr); explicit {
@@ -4253,7 +4332,7 @@ func markPreparedResultCastsProvisional(
 		}
 		fn := arg.GetF()
 		if fn == nil || fn.Func == nil || !strings.EqualFold(fn.Func.GetObjName(), "cast") ||
-			len(fn.Args) == 0 || !preparedExprContainsParam(fn.Args[0]) {
+			len(fn.Args) == 0 || !b.preparedExprContainsProjectedParam(fn.Args[0]) {
 			continue
 		}
 		// This cast was introduced while the marker still had its prepare-time
@@ -5196,15 +5275,28 @@ func (b *baseBinder) annotateStringDomainSource(
 		if b.builder == nil || b.builder.qry == nil {
 			return
 		}
-		nodeID, ok := b.builder.tag2NodeID[col.RelPos]
-		if !ok || nodeID < 0 || int(nodeID) >= len(b.builder.qry.Nodes) {
-			return
+		var source *Expr
+		if b.ctx != nil && col.RelPos == b.ctx.groupTag {
+			source = b.pendingColumnSource(col)
+		} else {
+			nodeID, ok := b.builder.tag2NodeID[col.RelPos]
+			if !ok || nodeID < 0 || int(nodeID) >= len(b.builder.qry.Nodes) {
+				return
+			}
+			node := b.builder.qry.Nodes[nodeID]
+			if node == nil || col.ColPos < 0 {
+				return
+			}
+			outputs := node.ProjectList
+			if node.NodeType == plan.Node_AGG && len(node.BindingTags) > 0 && col.RelPos == node.BindingTags[0] {
+				outputs = node.GroupBy
+			}
+			if int(col.ColPos) >= len(outputs) {
+				return
+			}
+			source = outputs[col.ColPos]
 		}
-		node := b.builder.qry.Nodes[nodeID]
-		if node == nil || col.ColPos < 0 || int(col.ColPos) >= len(node.ProjectList) {
-			return
-		}
-		key := [2]int32{nodeID, col.ColPos}
+		key := [2]int32{col.RelPos, col.ColPos}
 		if witness, ok := memo[key]; ok {
 			if witness != nil {
 				ensurePreparedNumericMetadata(expr).StringDomainSource = DeepCopyExpr(witness)
@@ -5216,7 +5308,6 @@ func (b *baseBinder) annotateStringDomainSource(
 		}
 		visited[key] = struct{}{}
 		defer delete(visited, key)
-		source := node.ProjectList[col.ColPos]
 		if source == nil || source == expr {
 			memo[key] = nil
 			return

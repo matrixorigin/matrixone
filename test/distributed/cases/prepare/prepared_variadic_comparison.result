@@ -126,3 +126,36 @@ EXECUTE p_cast USING @cast_num, @cast_text, @cast_num, @cast_text;
 ➤ GREATEST(cast(? as varchar), ?)[-1,16383,0]  ¦  FIELD(cast(? as varchar), ?)[-5,64,0]  𝄀
 2  ¦  0
 DEALLOCATE PREPARE p_cast;
+SET @dnull = CAST(NULL AS DECIMAL(20,0)), @snull = CAST(NULL AS CHAR), @exact = CAST(9007199254740993 AS DECIMAL(20,0));
+PREPARE p_tuple FROM 'SELECT FIELD(COALESCE(?, ?, ABS(?)), ABS(CAST(9007199254740992 AS DECIMAL(20,0)))) AS f';
+EXECUTE p_tuple USING @dnull, @snull, @exact;
+➤ f[-5,64,0]  𝄀
+1
+EXECUTE p_tuple USING @snull, @dnull, @exact;
+➤ f[-5,64,0]  𝄀
+1
+EXECUTE p_tuple USING @dnull, @dnull, @exact;
+➤ f[-5,64,0]  𝄀
+0
+DEALLOCATE PREPARE p_tuple;
+PREPARE p_limit FROM 'SELECT x, FIELD(x, ABS(CAST(9007199254740992 AS DECIMAL(20,0)))) AS f FROM (SELECT ? AS x LIMIT 1) d';
+EXECUTE p_limit USING @exact;
+➤ x[-1,16383,0]  ¦  f[-5,64,0]  𝄀
+9007199254740993  ¦  0
+DEALLOCATE PREPARE p_limit;
+PREPARE p_agg FROM 'SELECT FIELD(x, ABS(CAST(9007199254740992 AS DECIMAL(20,0)))) AS f FROM (SELECT MAX(?) AS x) d';
+EXECUTE p_agg USING @exact;
+➤ f[-5,64,0]  𝄀
+0
+DEALLOCATE PREPARE p_agg;
+PREPARE p_union FROM 'SELECT FIELD(x, ABS(CAST(9007199254740992 AS DECIMAL(20,0)))) AS f FROM (SELECT ? AS x UNION ALL SELECT CAST(9007199254740993 AS DECIMAL(20,0))) d';
+EXECUTE p_union USING @exact;
+➤ f[-5,64,0]  𝄀
+0  𝄀
+0
+DEALLOCATE PREPARE p_union;
+PREPARE p_having FROM 'SELECT 1 AS kept FROM (SELECT ? AS x) d GROUP BY x HAVING FIELD(x, ABS(CAST(9007199254740992 AS DECIMAL(20,0))))=0';
+EXECUTE p_having USING @exact;
+➤ kept[-5,64,0]  𝄀
+1
+DEALLOCATE PREPARE p_having;

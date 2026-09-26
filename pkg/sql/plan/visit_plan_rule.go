@@ -2687,6 +2687,7 @@ func (rule *ResetParamRefRule) applyExpr(e *plan.Expr) (*plan.Expr, error) {
 		numericPrefixDependent := false
 		sqlExecuteNumericSourceDependent := false
 		sqlExecuteNumericNestedDependent := false
+		commonValueSourceChanged := false
 		numericComparisonFallback := false
 		boundArgs := make([]*plan.Expr, len(exprImpl.F.Args))
 		// An implicit cast around a COM_STMT text marker is provisional.  For a
@@ -2723,7 +2724,9 @@ func (rule *ResetParamRefRule) applyExpr(e *plan.Expr) (*plan.Expr, error) {
 				originalArgs[i] != nil && originalArgs[i].GetPreparedNumeric().GetProvisionalResultCast() {
 				if cast := arg.GetF(); cast != nil && cast.Func != nil &&
 					cast.Func.GetObjName() == "cast" && len(cast.Args) == 2 && cast.Args[0] != nil &&
-					!cast.GetSyntaxExplicitCast() {
+					!cast.GetSyntaxExplicitCast() && cast.Args[0].GetCol() == nil {
+					// A relational source is refreshed after its producer. Keep its
+					// annotated envelope until that pass can resolve the column.
 					_, overload := planfunction.DecodeOverloadID(cast.Func.GetObj())
 					provisionalCommonValueCast = overload == 0
 				}
@@ -2825,6 +2828,14 @@ func (rule *ResetParamRefRule) applyExpr(e *plan.Expr) (*plan.Expr, error) {
 			}
 			prefixEligibleOccurrence := !(sharedControlParam &&
 				paramPos < len(rule.sqlExecuteStringBackedParams) && rule.sqlExecuteStringBackedParams[paramPos])
+			// Common results preserve concrete SQL strings, including typed NULL.
+			// Prefix eligibility belongs to transport-only text and numeric consumers.
+			if hasParamPos && isPreparedCommonValueFunction(functionName) && paramPos < len(rule.paramValues) {
+				if param, ok := rule.paramValues[paramPos].(ParamValue); ok && !param.IsBinaryProtocol &&
+					param.HasSourceType && param.SourceType.Oid.IsMySQLString() {
+					prefixEligibleOccurrence = false
+				}
+			}
 			if hasParamPos && rule.numericPrefixParamPositions[paramPos] && prefixEligibleOccurrence && !variadicSource {
 				numericPrefixArgs[i] = true
 				numericPrefixKinds[i] = rule.numericPrefixParamKinds[paramPos]
@@ -2935,6 +2946,7 @@ func (rule *ResetParamRefRule) applyExpr(e *plan.Expr) (*plan.Expr, error) {
 				}
 				rewrittenArg = DeepCopyExpr(source)
 			} else if provisionalCommonValueCast {
+				commonValueSourceChanged = true
 				// The outer cast was selected while the result operand was an
 				// unresolved TEXT marker. Rebind its source for this EXECUTE so a
 				// nested numeric function can supply its actual result domain.
@@ -3243,7 +3255,9 @@ func (rule *ResetParamRefRule) applyExpr(e *plan.Expr) (*plan.Expr, error) {
 				}
 			}
 		}
-		sqlExecuteNumericPeerDependent := !variadicStringBoundary && (sqlExecuteNumericNestedDependent ||
+		// A concrete string/typed NULL also invalidates the provisional peer
+		// envelope. Resolve the whole original tuple, including result metadata.
+		sqlExecuteNumericPeerDependent := commonValueSourceChanged || !variadicStringBoundary && (sqlExecuteNumericNestedDependent ||
 			(sqlExecuteNumericSourceDependent &&
 				(functionName == "/" || functionName == "field" || preparedSQLExecuteNumericResultConsumer(functionName))))
 		if numericPrefixDependent || sqlExecuteNumericPeerDependent {

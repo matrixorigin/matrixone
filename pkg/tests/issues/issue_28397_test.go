@@ -349,6 +349,10 @@ func TestIssue28397FieldKeepsExactNumericComparison(t *testing.T) {
 				{"ifnull", "field(ifnull(?, abs(?)), abs(" + first + "))", []any{nil, uint64(9007199254740993)}, 0},
 				{"reverse coalesce", "field(coalesce(abs(?), ?), abs(" + first + "))", []any{nil, uint64(9007199254740993)}, 0},
 				{"extra null candidate", "field(?, ?, abs(" + first + "), abs(" + second + "))", []any{uint64(9007199254740993), nil}, 3},
+				{"unflattened numeric", "field(x, abs(" + first + ")) from (select ? as x limit 1) d", []any{uint64(9007199254740993)}, 0},
+				{"unflattened null candidate", "field(" + second + ", x, abs(" + first + "), abs(" + second + ")) from (select ? as x limit 1) d", []any{nil}, 3},
+				{"unflattened null common result", "field(coalesce(x, abs(" + second + ")), abs(" + first + ")) from (select ? as x limit 1) d", []any{nil}, 0},
+				{"unflattened null", "field(x, abs(" + first + ")) from (select ? as x limit 1) d", []any{nil}, 0},
 				{"literal null control", "field(?, null, abs(" + first + "), abs(" + second + "))", []any{uint64(9007199254740993)}, 3},
 			} {
 				t.Run(tc.name, func(t *testing.T) {
@@ -389,70 +393,186 @@ func TestIssue28397FieldKeepsExactNumericComparison(t *testing.T) {
 			}
 		})
 
+		t.Run("issue 29378 result metadata and failed execution reuse", func(t *testing.T) {
+			_, err := conn.ExecContext(ctx, "set @md = cast(null as decimal(20,0)), @ms = 'abc', @mn = cast(9007199254740993 as decimal(20,0))")
+			require.NoError(t, err)
+			_, err = conn.ExecContext(ctx, "prepare field_metadata from 'select coalesce(?, ?, abs(?)), x, field(x, abs(cast(9007199254740992 as decimal(20,0)))) from (select ? as x limit 1) d'")
+			require.NoError(t, err)
+			defer func() { _, err := conn.ExecContext(ctx, "deallocate prepare field_metadata"); require.NoError(t, err) }()
+			rows, err := conn.QueryContext(ctx, "execute field_metadata using @md, @ms, @mn, @mn")
+			require.NoError(t, err)
+			defer rows.Close()
+			columns, err := rows.ColumnTypes()
+			require.NoError(t, err)
+			require.Equal(t, []string{"VARCHAR", "TEXT", "UNSIGNED BIGINT"}, []string{columns[0].DatabaseTypeName(), columns[1].DatabaseTypeName(), columns[2].DatabaseTypeName()})
+			require.True(t, rows.Next())
+			var selected, visible string
+			var field int64
+			require.NoError(t, rows.Scan(&selected, &visible, &field))
+			require.Equal(t, "abc", selected)
+			require.Equal(t, "9007199254740993", visible)
+			require.Zero(t, field)
+			require.False(t, rows.Next())
+			require.NoError(t, rows.Err())
+			require.NoError(t, rows.Close())
+
+			stmt, err := conn.PrepareContext(ctx, "select field(cast(? as decimal(20,0)), abs(cast(9007199254740992 as decimal(20,0))))")
+			require.NoError(t, err)
+			defer func() { require.NoError(t, stmt.Close()) }()
+			require.Error(t, stmt.QueryRowContext(ctx, "invalid").Scan(&field))
+			require.NoError(t, stmt.QueryRowContext(ctx, uint64(9007199254740993)).Scan(&field))
+			require.Zero(t, field)
+		})
+
 		t.Run("issue 29378 explicit string and nested null boundaries", func(t *testing.T) {
 			const first = "cast(9007199254740992 as decimal(20,0))"
 			const second = "cast(9007199254740993 as decimal(20,0))"
 			type fieldBoundaryRun struct {
 				name   string
 				values []string
-				want   int64
+				want   []int64
 			}
-			for _, tc := range []struct {
+			type fieldBoundaryCase struct {
 				name, expr string
 				runs       []fieldBoundaryRun
-			}{
+			}
+			cases := []fieldBoundaryCase{
 				{
 					name: "explicit char peer", expr: "field(?, cast(9007199254740993 as char))",
 					runs: []fieldBoundaryRun{
-						{"distinct decimal", []string{first}, 1},
-						{"matching decimal", []string{second}, 1},
-						{"decimal after reuse", []string{first}, 1},
+						{"distinct decimal", []string{first}, []int64{1}},
+						{"matching decimal", []string{second}, []int64{1}},
+						{"decimal after reuse", []string{first}, []int64{1}},
 					},
 				},
 				{
 					name: "folded explicit char peer", expr: "field(?, cast(abs(" + second + ") as char))",
-					runs: []fieldBoundaryRun{{"distinct decimal", []string{first}, 1}},
+					runs: []fieldBoundaryRun{{"distinct decimal", []string{first}, []int64{1}}},
 				},
 				{
 					name: "null then nested abs", expr: "field(coalesce(?, abs(?)), abs(" + first + "))",
 					runs: []fieldBoundaryRun{
-						{"text null and distinct decimal", []string{"null", second}, 1},
-						{"null and matching decimal", []string{"null", first}, 1},
-						{"char null source", []string{"cast(null as char)", second}, 1},
-						{"double null source", []string{"cast(null as double)", second}, 1},
-						{"string boundary", []string{"'9007199254740993'", second}, 1},
-						{"null after string", []string{"null", second}, 1},
-						{"real boundary", []string{"null", "cast(9007199254740993 as double)"}, 1},
-						{"null after real", []string{"null", second}, 1},
+						{"text null and distinct decimal", []string{"null", second}, []int64{1}},
+						{"null and matching decimal", []string{"null", first}, []int64{1}},
+						{"char null source", []string{"cast(null as char)", second}, []int64{1}},
+						{"double null source", []string{"cast(null as double)", second}, []int64{1}},
+						{"string boundary", []string{"'9007199254740993'", second}, []int64{1}},
+						{"null after string", []string{"null", second}, []int64{1}},
+						{"real boundary", []string{"null", "cast(9007199254740993 as double)"}, []int64{1}},
+						{"null after real", []string{"null", second}, []int64{1}},
 					},
 				},
 				{
 					name: "null in numeric result", expr: "field(coalesce(abs(?), ?), abs(" + first + "))",
 					runs: []fieldBoundaryRun{
-						{"text null", []string{"null", second}, 0},
-						{"double null", []string{"cast(null as double)", second}, 1},
-						{"decimal null", []string{"cast(null as decimal(20,0))", second}, 0},
+						{"text null", []string{"null", second}, []int64{0}},
+						{"double null", []string{"cast(null as double)", second}, []int64{1}},
+						{"decimal null", []string{"cast(null as decimal(20,0))", second}, []int64{0}},
 					},
 				},
 				{
 					name: "projected marker", expr: "field(x, abs(" + first + ")) from (select ? as x) d",
-					runs: []fieldBoundaryRun{{"exact decimal", []string{second}, 0}},
+					runs: []fieldBoundaryRun{{"exact decimal", []string{second}, []int64{0}}},
 				},
 				{
 					name: "nested projected marker",
 					expr: "field(y, abs(" + first + ")) from (select x as y from (select ? as x) d1) d2",
-					runs: []fieldBoundaryRun{{"exact decimal", []string{second}, 0}},
+					runs: []fieldBoundaryRun{{"exact decimal", []string{second}, []int64{0}}},
 				},
 				{
 					name: "unrelated projected marker",
 					expr: "field(y, abs(" + first + ")) from (select ? as x, cast(" + second + " as double) as y) d where x is not null",
-					runs: []fieldBoundaryRun{{"explicit real peer stays real", []string{second}, 1}},
+					runs: []fieldBoundaryRun{{"explicit real peer stays real", []string{second}, []int64{1}}},
 				},
 				{
-					name: "extra text null candidate", expr: "field(?, ?, abs(" + first + "), abs(" + second + "))",
-					runs: []fieldBoundaryRun{{"exact search", []string{second, "null"}, 2}},
+					name: "both window ordinals", expr: "field(x, abs(" + first + "))+field(y, 0) from (select max(?) over () as x, max(0) over () as y) d",
+					runs: []fieldBoundaryRun{{"exact source", []string{second}, []int64{1}}},
 				},
+				{
+					name: "second window ordinal", expr: "field(x, abs(" + first + "))+field(y, 0) from (select max(0) over () as y, max(?) over () as x) d",
+					runs: []fieldBoundaryRun{{"exact source", []string{second}, []int64{1}}},
+				},
+
+				{
+					name: "three operand source boundary", expr: "field(coalesce(?, ?, abs(?)), abs(" + first + "))",
+					runs: []fieldBoundaryRun{
+						{"typed null", []string{"cast(null as decimal(20,0))", "cast(null as char)", second}, []int64{1}},
+						{"reversed types", []string{"cast(null as char)", "cast(null as decimal(20,0))", second}, []int64{1}},
+						{"selected text", []string{"cast(null as decimal(20,0))", "'9007199254740993'", second}, []int64{1}},
+						{"all exact", []string{"cast(null as decimal(20,0))", "cast(null as decimal(20,0))", second}, []int64{0}},
+						{"real null", []string{"cast(null as decimal(20,0))", "cast(null as double)", second}, []int64{1}},
+					},
+				},
+				{
+					name: "unflattened common result", expr: "field(coalesce(x, abs(" + second + ")), abs(" + first + ")) from (select ? as x limit 1) d",
+					runs: []fieldBoundaryRun{{"exact", []string{second}, []int64{0}}, {"typed text null", []string{"null"}, []int64{1}}},
+				},
+
+				{
+					name: "unflattened reuse", expr: "field(x, abs(" + first + ")) from (select ? as x limit 1) d",
+					runs: []fieldBoundaryRun{
+						{"decimal", []string{second}, []int64{0}},
+						{"text", []string{"'9007199254740993'"}, []int64{1}},
+						{"real", []string{"cast(9007199254740993 as double)"}, []int64{1}},
+						{"null", []string{"null"}, []int64{0}},
+						{"decimal again", []string{second}, []int64{0}},
+					},
+				},
+				{
+					name: "union both markers", expr: "field(x, abs(" + first + ")) from (select ? as x union all select ?) d order by 1",
+					runs: []fieldBoundaryRun{{"both exact", []string{second, first}, []int64{0, 1}}},
+				},
+				{
+					name: "union left marker", expr: "field(x, abs(" + first + ")) from (select ? as x union all select " + second + ") d",
+					runs: []fieldBoundaryRun{{"exact", []string{second}, []int64{0, 0}}},
+				},
+				{
+					name: "union right marker", expr: "field(x, abs(" + first + ")) from (select " + second + " as x union all select ?) d",
+					runs: []fieldBoundaryRun{{"exact", []string{second}, []int64{0, 0}}},
+				},
+				{
+					name: "union distinct", expr: "field(x, abs(" + first + ")) from (select " + second + " as x union select ?) d",
+					runs: []fieldBoundaryRun{{"exact", []string{second}, []int64{0}}, {"real", []string{"cast(9007199254740993 as double)"}, []int64{1}}},
+				},
+				{
+					name: "where cardinality", expr: "1 from (select ? as x) d where field(x, abs(" + first + "))=0",
+					runs: []fieldBoundaryRun{{"retained", []string{second}, []int64{1}}, {"filtered", []string{first}, nil}},
+				},
+				{
+					name: "having cardinality", expr: "1 from (select ? as x) d group by x having field(x, abs(" + first + "))=0",
+					runs: []fieldBoundaryRun{{"retained", []string{second}, []int64{1}}, {"filtered", []string{first}, nil}},
+				},
+				{
+					name: "empty projection", expr: "field(x, abs(" + first + ")) from (select ? as x limit 0) d",
+					runs: []fieldBoundaryRun{{"no rows", []string{second}, nil}},
+				},
+				{
+					name: "outer join null extension", expr: "field(x, abs(" + second + ")) from (select 1 as id) a left join (select max(?) as x) d on a.id=2",
+					runs: []fieldBoundaryRun{{"null rather than parameter", []string{second}, []int64{0}}},
+				},
+				{
+					name: "projected explicit char", expr: "field(cast(x as char), abs(" + first + ")) from (select ? as x limit 1) d",
+					runs: []fieldBoundaryRun{{"string remains boundary", []string{second}, []int64{1}}},
+				},
+
+				{
+					name: "extra text null candidate", expr: "field(?, ?, abs(" + first + "), abs(" + second + "))",
+					runs: []fieldBoundaryRun{{"exact search", []string{second, "null"}, []int64{2}}},
+				},
+			}
+			// One fixture, with one witness for each relational ownership boundary.
+			for _, relation := range []string{
+				"(select ? as x limit 1) d",
+				"(select x from (select ? as x limit 1) a limit 1) d",
+				"(select max(?) as x) d", "(select sum(?) as x) d", "(select avg(?) as x) d",
+				"(select ? as x group by x) d", "(select distinct ? as x) d",
 			} {
+				cases = append(cases, fieldBoundaryCase{
+					name: relation, expr: "field(x, abs(" + first + ")) from " + relation,
+					runs: []fieldBoundaryRun{{"exact source", []string{second}, []int64{0}}},
+				})
+			}
+			for _, tc := range cases {
 				t.Run(tc.name, func(t *testing.T) {
 					_, err := conn.ExecContext(ctx, "prepare field_review from 'select "+tc.expr+"'")
 					require.NoError(t, err)
@@ -472,12 +592,21 @@ func TestIssue28397FieldKeepsExactNumericComparison(t *testing.T) {
 								_, err := conn.ExecContext(ctx, "set "+variables[i]+" = "+source)
 								require.NoError(t, err)
 							}
-							var direct, prepared int64
-							require.NoError(t, conn.QueryRowContext(ctx, "select "+directExpr).Scan(&direct))
-							require.Equal(t, run.want, direct)
-							require.NoError(t, conn.QueryRowContext(ctx,
-								"execute field_review using "+strings.Join(variables, ", ")).Scan(&prepared))
-							require.Equal(t, run.want, prepared)
+							query := func(sql string) []int64 {
+								rows, err := conn.QueryContext(ctx, sql)
+								require.NoError(t, err)
+								defer rows.Close()
+								var result []int64
+								for rows.Next() {
+									var value int64
+									require.NoError(t, rows.Scan(&value))
+									result = append(result, value)
+								}
+								require.NoError(t, rows.Err())
+								return result
+							}
+							require.Equal(t, run.want, query("select "+directExpr), "direct oracle")
+							require.Equal(t, run.want, query("execute field_review using "+strings.Join(variables, ", ")))
 						})
 					}
 				})
