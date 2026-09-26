@@ -1857,7 +1857,7 @@ func TestPreparedSetOperationReconciliationKeepsInternalRowIDColumn(t *testing.T
 	changed, _, err := reconcilePreparedSetOperationInputs(
 		context.Background(), query, setNode,
 		[][]*planpb.Expr{left.ProjectList, right.ProjectList},
-		originalOutputTypes, originalInputTypes,
+		originalOutputTypes, originalInputTypes, &ResetParamRefRule{},
 	)
 	require.NoError(t, err)
 	require.True(t, changed)

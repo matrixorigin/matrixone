@@ -380,7 +380,22 @@ func TestIssue27088PreparedDecimalCommonType(t *testing.T) {
 			}
 		})
 
-		t.Run("SQL PREPARE uses the same prefix domain", func(t *testing.T) {
+		readResult := func(t *testing.T, query string) (string, string) {
+			t.Helper()
+			rows, queryErr := conn.QueryContext(ctx, query)
+			require.NoError(t, queryErr)
+			defer rows.Close()
+			columnTypes, typeErr := rows.ColumnTypes()
+			require.NoError(t, typeErr)
+			require.Len(t, columnTypes, 1)
+			require.True(t, rows.Next())
+			var value string
+			require.NoError(t, rows.Scan(&value))
+			require.NoError(t, rows.Err())
+			return value, columnTypes[0].DatabaseTypeName()
+		}
+
+		t.Run("SQL PREPARE separates numeric comparison from common-value source", func(t *testing.T) {
 			mustExec(t, ctx, conn,
 				"prepare issue27088_sql from 'select id from common_type where d = ? order by id'")
 			defer func() { _, _ = conn.ExecContext(context.Background(), "deallocate prepare issue27088_sql") }()
@@ -402,10 +417,20 @@ func TestIssue27088PreparedDecimalCommonType(t *testing.T) {
 			defer rows.Close()
 			assertIDs(t, rows, queryErr)
 			require.NoError(t, rows.Err())
+			// SQL user-variable NULL has a concrete TEXT domain. The common
+			// result is a string; the enclosing decimal comparison uses DOUBLE,
+			// exactly as direct SQL using that same variable does.
 			mustExec(t, ctx, conn, "set @issue27088_nested = null")
-			rows, queryErr = conn.QueryContext(ctx, "execute issue27088_nested_sql using @issue27088_nested")
+			rows, queryErr = conn.QueryContext(ctx, `select id from common_type
+				where coalesce(@issue27088_nested, d) = cast('9007199254740992.0000000002' as decimal(38,10)) order by id`)
+			require.NoError(t, queryErr)
 			defer rows.Close()
-			assertIDs(t, rows, queryErr, 2)
+			assertIDs(t, rows, queryErr, 1, 2, 3)
+			require.NoError(t, rows.Err())
+			rows, queryErr = conn.QueryContext(ctx, "execute issue27088_nested_sql using @issue27088_nested")
+			require.NoError(t, queryErr)
+			defer rows.Close()
+			assertIDs(t, rows, queryErr, 1, 2, 3)
 			require.NoError(t, rows.Err())
 		})
 
@@ -450,9 +475,12 @@ func TestIssue27088PreparedDecimalCommonType(t *testing.T) {
 			defer func() { _, _ = conn.ExecContext(context.Background(), "deallocate prepare issue27088_set") }()
 			mustExec(t, ctx, conn, "set @issue27088_set_value = '12.5tail'")
 			mustExec(t, ctx, conn, "execute issue27088_set using @issue27088_set_value")
-			var value string
-			require.NoError(t, conn.QueryRowContext(ctx, "select @issue27088_out").Scan(&value))
-			require.Equal(t, "12.5000000000", value)
+			direct, directType := readResult(t, "select coalesce(@issue27088_set_value, cast(1 as decimal(38,10)))")
+			value, valueType := readResult(t, "select @issue27088_out")
+			require.Equal(t, "12.5tail", direct)
+			require.Equal(t, "VARCHAR", directType)
+			require.Equal(t, direct, value)
+			require.Equal(t, directType, valueType)
 		})
 
 		t.Run("COM_STMT SET scalar subquery preserves runtime type", func(t *testing.T) {
@@ -552,19 +580,6 @@ func TestIssue27088PreparedDecimalCommonType(t *testing.T) {
 		})
 
 		t.Run("SQL EXECUTE preserves numeric result consumer domains across reuse", func(t *testing.T) {
-			readResult := func(query string) (string, string) {
-				rows, queryErr := conn.QueryContext(ctx, query)
-				require.NoError(t, queryErr)
-				defer rows.Close()
-				columnTypes, typeErr := rows.ColumnTypes()
-				require.NoError(t, typeErr)
-				require.Len(t, columnTypes, 1)
-				require.True(t, rows.Next())
-				var value string
-				require.NoError(t, rows.Scan(&value))
-				require.NoError(t, rows.Err())
-				return value, columnTypes[0].DatabaseTypeName()
-			}
 			for i, test := range []struct {
 				expression   string
 				expectedType string
@@ -602,8 +617,8 @@ func TestIssue27088PreparedDecimalCommonType(t *testing.T) {
 				for _, value := range []string{"9007199254740993.5", "9007199254740994.5"} {
 					mustExec(t, ctx, conn, fmt.Sprintf(
 						"set @issue27088_numeric_result = cast(%s as decimal(17,1))", value))
-					directValue, directType := readResult("select " + directExpression)
-					preparedValue, preparedType := readResult("execute " + statement + " using @issue27088_numeric_result")
+					directValue, directType := readResult(t, "select "+directExpression)
+					preparedValue, preparedType := readResult(t, "execute "+statement+" using @issue27088_numeric_result")
 					require.Equal(t, directValue, preparedValue, test.expression)
 					require.Equal(t, directType, preparedType, test.expression)
 					require.Equal(t, test.expectedType, preparedType, test.expression)
@@ -614,9 +629,9 @@ func TestIssue27088PreparedDecimalCommonType(t *testing.T) {
 			mustExec(t, ctx, conn, `prepare issue27088_nullif_string_result from
 				'select nullif(?, cast(1 as decimal(38,10)))'`)
 			mustExec(t, ctx, conn, "set @issue27088_numeric_result = '12.5tail'")
-			directValue, directType := readResult(
+			directValue, directType := readResult(t,
 				"select nullif(@issue27088_numeric_result, cast(1 as decimal(38,10)))")
-			preparedValue, preparedType := readResult(
+			preparedValue, preparedType := readResult(t,
 				"execute issue27088_nullif_string_result using @issue27088_numeric_result")
 			require.Equal(t, "12.5tail", directValue)
 			require.Equal(t, directValue, preparedValue)
@@ -627,9 +642,9 @@ func TestIssue27088PreparedDecimalCommonType(t *testing.T) {
 			mustExec(t, ctx, conn, `prepare issue27088_nullif_binary_result from
 				'select nullif(?, cast(1 as decimal(38,10)))'`)
 			mustExec(t, ctx, conn, "set @issue27088_numeric_result = x'31322e357461696c'")
-			directValue, directType = readResult(
+			directValue, directType = readResult(t,
 				"select nullif(@issue27088_numeric_result, cast(1 as decimal(38,10)))")
-			preparedValue, preparedType = readResult(
+			preparedValue, preparedType = readResult(t,
 				"execute issue27088_nullif_binary_result using @issue27088_numeric_result")
 			require.Equal(t, "12.5tail", directValue)
 			require.Equal(t, directValue, preparedValue)
@@ -653,21 +668,18 @@ func TestIssue27088PreparedDecimalCommonType(t *testing.T) {
 			mustExec(t, ctx, conn, `prepare issue27088_set_outer from
 				'set @issue27088_outer_out = coalesce(?, (select cast(1 as decimal(38,10))))'`)
 			defer func() { _, _ = conn.ExecContext(context.Background(), "deallocate prepare issue27088_set_outer") }()
-			mustExec(t, ctx, conn, "set @issue27088_outer_value = '12.5tail'")
-			mustExec(t, ctx, conn, "execute issue27088_set_outer using @issue27088_outer_value")
-			var value string
-			require.NoError(t, conn.QueryRowContext(ctx, "select @issue27088_outer_out").Scan(&value))
-			require.Equal(t, "12.5000000000", value)
-
-			mustExec(t, ctx, conn, "set @issue27088_outer_value = 'tail'")
-			mustExec(t, ctx, conn, "execute issue27088_set_outer using @issue27088_outer_value")
-			require.NoError(t, conn.QueryRowContext(ctx, "select @issue27088_outer_out").Scan(&value))
-			require.Equal(t, "0.0000000000", value)
-
-			mustExec(t, ctx, conn, "set @issue27088_outer_value = null")
-			mustExec(t, ctx, conn, "execute issue27088_set_outer using @issue27088_outer_value")
-			require.NoError(t, conn.QueryRowContext(ctx, "select @issue27088_outer_out").Scan(&value))
-			require.Equal(t, "1.0000000000", value)
+			for _, tc := range []struct{ source, want string }{
+				{"'12.5tail'", "12.5tail"}, {"'tail'", "tail"}, {"null", "1.0000000000"},
+			} {
+				mustExec(t, ctx, conn, "set @issue27088_outer_value = "+tc.source)
+				direct, directType := readResult(t,
+					"select coalesce(@issue27088_outer_value, (select cast(1 as decimal(38,10))))")
+				require.Equal(t, tc.want, direct)
+				mustExec(t, ctx, conn, "execute issue27088_set_outer using @issue27088_outer_value")
+				prepared, preparedType := readResult(t, "select @issue27088_outer_out")
+				require.Equal(t, direct, prepared)
+				require.Equal(t, directType, preparedType)
+			}
 		})
 
 		t.Run("SQL EXECUTE SET preserves multiple scalar subquery order and typed NULL", func(t *testing.T) {

@@ -31,6 +31,55 @@ SET @needle = 2.0;
 EXECUTE p_field USING @needle, @first, @second, @text, @nil;
 DEALLOCATE PREPARE p_field;
 
+-- A fixed DECIMAL candidate must keep its exact source type after PREPARE (#29378).
+SELECT FIELD(CAST(9007199254740993 AS DECIMAL(20,0)), CAST(9007199254740992 AS DECIMAL(20,0)));
+PREPARE p_field_fixed FROM 'SELECT FIELD(?, CAST(9007199254740992 AS DECIMAL(20,0)))';
+SET @field_exact = CAST(9007199254740993 AS DECIMAL(20,0));
+EXECUTE p_field_fixed USING @field_exact;
+DEALLOCATE PREPARE p_field_fixed;
+
+-- Numeric results nested inside FIELD must also restore a fixed DECIMAL peer.
+SELECT FIELD(ABS(CAST(9007199254740993 AS DECIMAL(20,0))), CAST(9007199254740992 AS DECIMAL(20,0))),
+       FIELD(CAST(9007199254740993 AS DECIMAL(20,0)), ABS(CAST(9007199254740992 AS DECIMAL(20,0))));
+PREPARE p_field_nested FROM 'SELECT FIELD(ABS(?), CAST(9007199254740992 AS DECIMAL(20,0))),
+                                    FIELD(CAST(9007199254740993 AS DECIMAL(20,0)), ABS(?))';
+SET @field_exact = CAST(9007199254740993 AS DECIMAL(20,0));
+SET @field_other = CAST(9007199254740992 AS DECIMAL(20,0));
+EXECUTE p_field_nested USING @field_exact, @field_other;
+DEALLOCATE PREPARE p_field_nested;
+
+-- Fixed numeric expressions must keep exact sources through constant folding.
+SELECT FIELD(CAST(9007199254740993 AS DECIMAL(20,0)), ABS(CAST(9007199254740992 AS DECIMAL(20,0)))) AS fixed_abs,
+       FIELD(CAST(9007199254740993 AS DECIMAL(20,0)), COALESCE(CAST(9007199254740992 AS DECIMAL(20,0)), CAST(0 AS DECIMAL(20,0)))) AS fixed_coalesce,
+       FIELD(GREATEST(CAST(9007199254740993 AS DECIMAL(20,0)), CAST(0 AS DECIMAL(20,0))), CAST(9007199254740992 AS DECIMAL(20,0))) AS nested_greatest,
+       FIELD(LEAST(CAST(9007199254740993 AS DECIMAL(20,0)), CAST(9007199254740994 AS DECIMAL(20,0))), CAST(9007199254740992 AS DECIMAL(20,0))) AS nested_least;
+PREPARE p_field_folded FROM 'SELECT FIELD(?, ABS(CAST(9007199254740992 AS DECIMAL(20,0)))) AS fixed_abs,
+                                    FIELD(?, COALESCE(CAST(9007199254740992 AS DECIMAL(20,0)), CAST(0 AS DECIMAL(20,0)))) AS fixed_coalesce,
+                                    FIELD(GREATEST(?, CAST(0 AS DECIMAL(20,0))), CAST(9007199254740992 AS DECIMAL(20,0))) AS nested_greatest,
+                                    FIELD(LEAST(?, CAST(9007199254740994 AS DECIMAL(20,0))), CAST(9007199254740992 AS DECIMAL(20,0))) AS nested_least';
+SET @field_exact = CAST(9007199254740993 AS DECIMAL(20,0));
+EXECUTE p_field_folded USING @field_exact, @field_exact, @field_exact, @field_exact;
+DEALLOCATE PREPARE p_field_folded;
+
+-- Explicit CHAR is a string boundary; NULL followed by nested ABS is domainless then exact DECIMAL.
+SELECT FIELD(CAST(9007199254740992 AS DECIMAL(20,0)), CAST(9007199254740993 AS CHAR)) AS explicit_char,
+       FIELD(COALESCE(NULL, ABS(CAST(9007199254740993 AS DECIMAL(20,0)))),
+             ABS(CAST(9007199254740992 AS DECIMAL(20,0)))) AS nested_null;
+PREPARE p_field_boundary FROM 'SELECT FIELD(?, CAST(9007199254740993 AS CHAR)) AS explicit_char,
+FIELD(COALESCE(?, ABS(?)), ABS(CAST(9007199254740992 AS DECIMAL(20,0)))) AS nested_null';
+SET @char_needle = CAST(9007199254740992 AS DECIMAL(20,0));
+-- SQL user variables assigned NULL have a TEXT source domain. Unlike the
+-- literal NULL above, @fallback therefore makes COALESCE compare as DOUBLE.
+SET @fallback = NULL, @nested = CAST(9007199254740993 AS DECIMAL(20,0));
+EXECUTE p_field_boundary USING @char_needle, @fallback, @nested;
+SET @nested = CAST(9007199254740992 AS DECIMAL(20,0));
+EXECUTE p_field_boundary USING @char_needle, @fallback, @nested;
+SET @fallback = '9007199254740993', @nested = CAST(9007199254740993 AS DECIMAL(20,0));
+EXECUTE p_field_boundary USING @char_needle, @fallback, @nested;
+SET @fallback = NULL;
+EXECUTE p_field_boundary USING @char_needle, @fallback, @nested;
+DEALLOCATE PREPARE p_field_boundary;
+
 SELECT FIELD(x'0062', x'61', x'0062'), FIELD(x'0062', x'62'), FIELD(x'41', x'61');
 PREPARE p_binary FROM 'SELECT FIELD(?, ?, ?), FIELD(?, ?), FIELD(?, ?)';
 SET @binary = x'0062', @binary_first = x'61', @binary_second = x'0062';
@@ -44,3 +93,25 @@ PREPARE p_cast FROM 'SELECT GREATEST(CAST(? AS CHAR), ?), FIELD(CAST(? AS CHAR),
 SET @cast_num = 2, @cast_text = '10';
 EXECUTE p_cast USING @cast_num, @cast_text, @cast_num, @cast_text;
 DEALLOCATE PREPARE p_cast;
+
+-- The whole common-value tuple owns its domain, including typed NULL operands.
+SET @dnull = CAST(NULL AS DECIMAL(20,0)), @snull = CAST(NULL AS CHAR), @exact = CAST(9007199254740993 AS DECIMAL(20,0));
+PREPARE p_tuple FROM 'SELECT FIELD(COALESCE(?, ?, ABS(?)), ABS(CAST(9007199254740992 AS DECIMAL(20,0)))) AS f';
+EXECUTE p_tuple USING @dnull, @snull, @exact;
+EXECUTE p_tuple USING @snull, @dnull, @exact;
+EXECUTE p_tuple USING @dnull, @dnull, @exact;
+DEALLOCATE PREPARE p_tuple;
+
+-- LIMIT, aggregate and set outputs must retain the exact consumer domain.
+PREPARE p_limit FROM 'SELECT x, FIELD(x, ABS(CAST(9007199254740992 AS DECIMAL(20,0)))) AS f FROM (SELECT ? AS x LIMIT 1) d';
+EXECUTE p_limit USING @exact;
+DEALLOCATE PREPARE p_limit;
+PREPARE p_agg FROM 'SELECT FIELD(x, ABS(CAST(9007199254740992 AS DECIMAL(20,0)))) AS f FROM (SELECT MAX(?) AS x) d';
+EXECUTE p_agg USING @exact;
+DEALLOCATE PREPARE p_agg;
+PREPARE p_union FROM 'SELECT FIELD(x, ABS(CAST(9007199254740992 AS DECIMAL(20,0)))) AS f FROM (SELECT ? AS x UNION ALL SELECT CAST(9007199254740993 AS DECIMAL(20,0))) d';
+EXECUTE p_union USING @exact;
+DEALLOCATE PREPARE p_union;
+PREPARE p_having FROM 'SELECT 1 AS kept FROM (SELECT ? AS x) d GROUP BY x HAVING FIELD(x, ABS(CAST(9007199254740992 AS DECIMAL(20,0))))=0';
+EXECUTE p_having USING @exact;
+DEALLOCATE PREPARE p_having;
