@@ -262,7 +262,7 @@ func (s *Scope) DropDatabase(c *Compile) error {
 			return err
 		}
 	}
-	var ignoreTables []string
+	ignoreTables := make(map[string]struct{})
 	existingRelations := make([]string, 0, len(relations))
 	for _, r := range relations {
 		t, err := database.Relation(c.proc.Ctx, r, nil)
@@ -276,7 +276,7 @@ func (s *Scope) DropDatabase(c *Compile) error {
 
 		if features.IsPartition(t.GetExtraInfo().FeatureFlag) ||
 			features.IsIndexTable(t.GetExtraInfo().FeatureFlag) {
-			ignoreTables = append(ignoreTables, r)
+			ignoreTables[r] = struct{}{}
 			continue
 		}
 
@@ -289,22 +289,15 @@ func (s *Scope) DropDatabase(c *Compile) error {
 		for _, ct := range constrain.Cts {
 			if ds, ok := ct.(*engine.IndexDef); ok {
 				for _, d := range ds.Indexes {
-					ignoreTables = append(ignoreTables, d.IndexTableName)
+					ignoreTables[d.IndexTableName] = struct{}{}
 				}
 			}
 		}
 	}
 
-	deleteTables := make([]string, 0, len(existingRelations))
+	deleteTables := existingRelations[:0]
 	for _, r := range existingRelations {
-		isIndexTable := false
-		for _, d := range ignoreTables {
-			if d == r {
-				isIndexTable = true
-				break
-			}
-		}
-		if !isIndexTable {
+		if _, hidden := ignoreTables[r]; !hidden {
 			deleteTables = append(deleteTables, r)
 		}
 	}
@@ -315,21 +308,8 @@ func (s *Scope) DropDatabase(c *Compile) error {
 		}
 	}
 
-	for _, t := range deleteTables {
-		dropSql := fmt.Sprintf("drop table if exists %s.%s;",
-			quoteMySQLIdent(dbName), quoteMySQLIdent(t))
-		if err = c.runSqlWithOptions(
-			dropSql, executor.StatementOption{}.WithDisableLog().WithIgnorePublish(),
-		); err != nil {
-			return err
-		}
-		// Keep this point after the nested DROP: a canceled database DROP must
-		// roll back both its catalog writes and its external table actions.
-		if _, _, ok := fault.TriggerFaultWithContext(c.proc.Ctx, "drop_database_after_table"); ok {
-			if err := c.proc.Ctx.Err(); err != nil {
-				return err
-			}
-		}
+	if err = c.dropDatabaseTables(dbName, deleteTables); err != nil {
+		return err
 	}
 
 	sql := s.Plan.GetDdl().GetDropDatabase().GetCheckFKSql()
@@ -435,6 +415,37 @@ var ensureDatabaseNotPublished = func(c *Compile, db engine.Database, dbName str
 	res.Close()
 	if publishing {
 		return moerr.NewInternalErrorf(c.proc.Ctx, "can not drop database '%v' which is publishing", dbName)
+	}
+	return nil
+}
+
+// Keep each nested plan bounded while sharing lifecycle admission among its
+// ordered members. All groups still belong to the outer DROP DATABASE transaction.
+func (c *Compile) dropDatabaseTables(dbName string, tables []string) error {
+	const batchSize = 32
+	dbIdent := quoteMySQLIdent(dbName)
+	for start := 0; start < len(tables); start += batchSize {
+		var sql strings.Builder
+		sql.WriteString("drop table if exists ")
+		for i, name := range tables[start:min(start+batchSize, len(tables))] {
+			if i > 0 {
+				sql.WriteByte(',')
+			}
+			sql.WriteString(dbIdent)
+			sql.WriteByte('.')
+			sql.WriteString(quoteMySQLIdent(name))
+		}
+		sql.WriteByte(';')
+		if err := c.runSqlWithOptions(sql.String(), executor.StatementOption{}.WithDisableLog().WithIgnorePublish()); err != nil {
+			return err
+		}
+		// A canceled database DROP must roll back the nested table DROP and
+		// its external table actions together with the outer catalog writes.
+		if _, _, ok := fault.TriggerFaultWithContext(c.proc.Ctx, "drop_database_after_table"); ok {
+			if err := c.proc.Ctx.Err(); err != nil {
+				return err
+			}
+		}
 	}
 	return nil
 }
@@ -4244,22 +4255,23 @@ func (s *Scope) DropTable(c *Compile) error {
 	defer s.ScopeAnalyzer.Stop()
 
 	qry := s.Plan.GetDdl().GetDropTable()
-	if len(qry.GetTables()) > 0 {
-		for _, entry := range qry.GetTables() {
-			sub := plan2.DeepCopyDropTable(entry)
-			if sub == nil {
-				continue
-			}
-			if err := s.dropTableSingle(c, sub); err != nil {
-				return err
-			}
-		}
-		return nil
+	tables := qry.GetTables()
+	if len(tables) == 0 {
+		tables = []*plan.DropTable{qry}
 	}
-	return s.dropTableSingle(c, qry)
+	lifecycleAdmitted := false
+	for _, entry := range tables {
+		if entry == nil {
+			continue
+		}
+		if err := s.dropTableSingle(c, plan2.DeepCopyDropTable(entry), &lifecycleAdmitted); err != nil {
+			return err
+		}
+	}
+	return nil
 }
 
-func (s *Scope) dropTableSingle(c *Compile, qry *plan.DropTable) error {
+func (s *Scope) dropTableSingle(c *Compile, qry *plan.DropTable, lifecycleAdmitted *bool) error {
 	dbName := qry.GetDatabase()
 	tblName := qry.GetTable()
 	if tblName == "" {
@@ -4299,12 +4311,13 @@ func (s *Scope) dropTableSingle(c *Compile, qry *plan.DropTable) error {
 			return nil
 		}
 	}
-	if !isTemp {
-		// A plain DROP TABLE updates PITR state and may reclaim branch-owner
-		// rows. The gate must precede mo_database/mo_tables locks.
+	if !isTemp && !*lifecycleAdmitted {
+		// Admit lazily so preceding temporary drops keep their own retirement
+		// semantics. The gate must precede mo_database/mo_tables locks.
 		if err = c.lockDataBranchLineageOwnerLifecycle(); err != nil {
 			return err
 		}
+		*lifecycleAdmitted = true
 	}
 
 	if !c.disableLock {

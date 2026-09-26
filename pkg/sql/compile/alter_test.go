@@ -3254,7 +3254,7 @@ func TestOwnerCatalogDropEntryPointsStopAtLifecycleAdmissionFailure(t *testing.T
 					Database: "db",
 					Table:    "tbl",
 					TableDef: &plan2.TableDef{},
-				})
+				}, new(bool))
 			},
 		},
 		{
