@@ -21,6 +21,7 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
 	"github.com/matrixorigin/matrixone/pkg/container/types"
 	planpb "github.com/matrixorigin/matrixone/pkg/pb/plan"
+	"github.com/matrixorigin/matrixone/pkg/pb/timestamp"
 	"github.com/stretchr/testify/require"
 )
 
@@ -64,6 +65,46 @@ func TestDescribeViewColumnsFailureDoesNotCache(t *testing.T) {
 	cols, err = DescribeViewColumns(ctx, definition)
 	require.NoError(t, err)
 	require.Len(t, cols, 1)
+}
+
+type subscriptionViewDatabaseContext struct {
+	*MockCompilerContext
+	sub *SubscriptionMeta
+}
+
+func (c *subscriptionViewDatabaseContext) GetQueryingSubscription() *SubscriptionMeta {
+	return c.sub
+}
+
+func TestSubscriptionViewDatabaseLookupUsesPublisherSnapshot(t *testing.T) {
+	const publisher uint32 = 23
+	subscriberSnapshot := &Snapshot{
+		TS:     &timestamp.Timestamp{PhysicalTime: 50},
+		Tenant: &planpb.SnapshotTenant{TenantID: 17},
+	}
+	mock := NewMockCompilerContext(false)
+	ctx := &subscriptionViewDatabaseContext{MockCompilerContext: mock,
+		sub: &SubscriptionMeta{AccountId: int32(publisher)}}
+	mock.GetDatabaseIdFunc = func(name string, snapshot *Snapshot) (uint64, error) {
+		require.Equal(t, "source", name)
+		require.Equal(t, publisher, snapshot.Tenant.TenantID)
+		require.Equal(t, subscriberSnapshot.TS, snapshot.TS)
+		return 42, nil
+	}
+	checker := &viewRegenerationContext{CompilerContext: ctx}
+	exists, err := checker.CheckViewDatabase("source", subscriberSnapshot)
+	require.NoError(t, err)
+	require.True(t, exists)
+	require.Equal(t, uint32(17), subscriberSnapshot.Tenant.TenantID, "caller snapshot must remain unchanged")
+
+	ctx.sub = nil
+	mock.GetDatabaseIdFunc = func(_ string, snapshot *Snapshot) (uint64, error) {
+		require.Same(t, subscriberSnapshot, snapshot)
+		return 0, moerr.NewBadDB(t.Context(), "source")
+	}
+	exists, err = checker.CheckViewDatabase("source", subscriberSnapshot)
+	require.NoError(t, err)
+	require.False(t, exists, "a non-subscription lookup must not borrow a publisher")
 }
 
 func TestDescribeViewColumnsPreservesDatabaseLookupFailure(t *testing.T) {

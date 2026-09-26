@@ -72,6 +72,14 @@ type viewRegenerationContext struct {
 // Use the error-returning catalog lookup rather than DatabaseExists: the
 // latter collapses both genuine absence and storage failures into false.
 func (c *viewRegenerationContext) CheckViewDatabase(name string, snapshot *Snapshot) (bool, error) {
+	// Subscription View definitions are rebound in the publisher's isolated
+	// context. A historical snapshot still names the subscriber as its tenant;
+	// GetDatabaseId would otherwise switch back to that tenant and reject a
+	// valid publisher source (or accept an unrelated same-named database).
+	if sub := c.GetQueryingSubscription(); sub != nil && snapshot != nil {
+		snapshot = DeepCopySnapshot(snapshot)
+		snapshot.Tenant = &planpb.SnapshotTenant{TenantID: uint32(sub.AccountId)}
+	}
 	_, err := c.CompilerContext.GetDatabaseId(name, snapshot)
 	if err == nil {
 		return true, nil

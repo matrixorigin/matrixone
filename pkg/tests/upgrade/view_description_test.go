@@ -443,7 +443,49 @@ func TestViewDescriptionSubscription(t *testing.T) {
 		require.Equal(t, publisherTable, readCharsets(subscriber, "subscribed", "charset_src"))
 		require.Equal(t, publisherView, readCharsets(subscriber, "subscribed", "charset_v"))
 		require.Equal(t, legacySubscriptionView, readCharsets(subscriber, "subscribed", "charset_v"))
+
+		// The snapshot belongs to the subscriber, but the View's source database
+		// belongs to the publisher. Database existence and relation binding must
+		// use the same account and historical timestamp.
+		_, err = subscriber.ExecContext(ctx, "create snapshot view_description_sub_history for account")
+		require.NoError(t, err)
+		defer func() {
+			_, dropErr := subscriber.ExecContext(ctx, "drop snapshot view_description_sub_history")
+			require.NoError(t, dropErr)
+		}()
 		exec("alter table view_description_pub.src modify column x varchar(60)")
+		checkHistoricalView := func(snapshotName string, wantWidth int) {
+			t.Helper()
+			conn, err := subscriber.Conn(ctx)
+			require.NoError(t, err)
+			defer conn.Close()
+			var column string
+			var width int
+			require.NoError(t, conn.QueryRowContext(ctx,
+				"select column_name, character_maximum_length from information_schema.columns {snapshot = '"+snapshotName+"'} "+
+					"where table_schema='subscribed' and table_name='v'").Scan(&column, &width))
+			require.Equal(t, "x", column)
+			require.Equal(t, wantWidth, width)
+			warnings, err := conn.QueryContext(ctx, "show warnings")
+			require.NoError(t, err)
+			defer warnings.Close()
+			for warnings.Next() {
+				var level, message string
+				var code int
+				require.NoError(t, warnings.Scan(&level, &code, &message))
+				require.NotEqual(t, 1356, code, "a valid historical subscription View must not be skipped")
+			}
+			require.NoError(t, warnings.Err())
+		}
+		checkHistoricalView("view_description_sub_history", 5)
+		// An unrelated same-named empty database in the subscriber must never
+		// substitute for the publisher's source catalog at a later snapshot.
+		_, err = subscriber.ExecContext(ctx, "create database view_description_pub")
+		require.NoError(t, err)
+		defer func() {
+			_, dropErr := subscriber.ExecContext(ctx, "drop database view_description_pub")
+			require.NoError(t, dropErr)
+		}()
 		var field, typ, nullable, key, defaultValue, extra, comment sql.NullString
 		require.NoError(t, subscriber.QueryRowContext(ctx, "desc subscribed.v").Scan(
 			&field, &typ, &nullable, &key, &defaultValue, &extra, &comment))
@@ -487,7 +529,14 @@ func TestViewDescriptionSubscription(t *testing.T) {
 		prepared, err := subscriber.PrepareContext(ctx, query)
 		require.NoError(t, err)
 		defer prepared.Close()
+		_, err = subscriber.ExecContext(ctx, "create snapshot view_description_sub_same_name for account")
+		require.NoError(t, err)
+		defer func() {
+			_, dropErr := subscriber.ExecContext(ctx, "drop snapshot view_description_sub_same_name")
+			require.NoError(t, dropErr)
+		}()
 		exec("alter table view_description_pub.src modify column x varchar(90)")
+		checkHistoricalView("view_description_sub_same_name", 60)
 		checkSubscribedShow("VARCHAR(90)")
 		require.NoError(t, prepared.QueryRowContext(ctx).Scan(&width))
 		require.Equal(t, 90, width)
