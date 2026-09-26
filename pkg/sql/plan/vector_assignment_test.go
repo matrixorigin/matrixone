@@ -79,7 +79,7 @@ func TestVectorGeneratedColumnAssignment(t *testing.T) {
 	defer stmt.Free()
 	col := stmt.(*tree.CreateTable).Defs[1].(*tree.ColumnTableDef)
 	pt := planpb.Type{Id: int32(types.T_array_float32), Width: 2}
-	gen, err := buildGeneratedExpr(col, pt, []*ColDef{{Name: "a", Typ: pt}}, proc)
+	gen, err := buildGeneratedExpr(proc.Ctx, col, pt, []*ColDef{{Name: "a", Typ: pt}}, proc)
 	require.NoError(t, err)
 	require.Equal(t, "cast", gen.Expr.GetF().Func.ObjName)
 	require.Equal(t, "greatest", gen.Expr.GetF().Args[0].GetF().Func.ObjName)
