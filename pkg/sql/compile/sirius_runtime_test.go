@@ -184,6 +184,45 @@ func TestSiriusCompileFastRejections(t *testing.T) {
 	require.ErrorContains(t, err, "missing Sirius execution owner")
 }
 
+type siriusAdmissionBackend struct {
+	SiriusBackend
+	accepting bool
+}
+
+func (b *siriusAdmissionBackend) Accepting() bool { return b.accepting }
+
+func TestEmbeddedSiriusAdmissionNeverSilentlyFallsBack(t *testing.T) {
+	proc := testutil.NewProcess(t)
+	t.Cleanup(proc.Free)
+	runtime := moruntime.ServiceRuntime(proc.GetService())
+	previous, existed := runtime.GetGlobalVariables(SiriusRuntimeKey)
+	backend := &siriusAdmissionBackend{accepting: true}
+	configured := &SiriusRuntime{EmbeddedMO: true, Backend: backend, CleanupTimeout: time.Second}
+	runtime.SetGlobalVariables(SiriusRuntimeKey, configured)
+	t.Cleanup(func() {
+		if existed {
+			runtime.SetGlobalVariables(SiriusRuntimeKey, previous)
+		} else {
+			runtime.CompareAndDeleteGlobalVariables(SiriusRuntimeKey, configured)
+		}
+	})
+	c := &Compile{proc: proc, stmt: &tree.Select{}}
+	ctx := WithSiriusOffload(context.Background())
+	for _, query := range []*planpb.Plan{nil, {Plan: &planpb.Plan_Query{Query: &planpb.Query{}}}} {
+		offloaded, err := c.tryCompileSiriusRead(ctx, query)
+		require.False(t, offloaded)
+		require.ErrorContains(t, err, "reader admission is not yet available")
+		backend.accepting = false
+		offloaded, err = c.tryCompileSiriusRead(ctx, query)
+		require.False(t, offloaded)
+		require.ErrorContains(t, err, "admission is sealed")
+		backend.accepting = true
+	}
+	offloaded, err := c.tryCompileSiriusRead(context.Background(), nil)
+	require.False(t, offloaded)
+	require.NoError(t, err)
+}
+
 func TestSQLSelectLimitIsMaterializedBeforeSiriusExport(t *testing.T) {
 	proc := testutil.NewProcess(t)
 	proc.Base.SessionInfo.ApplySQLSelectLimit = true

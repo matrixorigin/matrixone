@@ -235,7 +235,8 @@ JIEBA_DICT_SRC_DIR=$(ROOT_DIR)/pkg/monlp/tokenizer/dict
 RACE_OPT :=
 DEBUG_OPT :=
 CGO_DEBUG_OPT :=
-TAGS :=
+BUILD_TAGS :=
+TAGS = $(if $(strip $(BUILD_TAGS)),-tags "$(strip $(BUILD_TAGS))")
 
 # Native artifacts are reusable only when every semantic build input matches.
 # Keep these dimensions independent so adding one feature cannot silently alias
@@ -278,15 +279,38 @@ ifeq ($(MO_CL_CUDA),1)
 	CUVS_LDFLAGS := -L$(CONDA_PREFIX)/lib -lcuvs -lcuvs_c
 	CUDA_CFLAGS := -I/usr/local/cuda/include $(CUVS_CFLAGS)
 	CUDA_LDFLAGS := -L/usr/local/cuda/lib64/stubs -lcuda -L/usr/local/cuda/lib64 -lcudart $(CUVS_LDFLAGS) -lstdc++
-	TAGS += -tags "gpu"
+	BUILD_TAGS += gpu
 endif
 
 ifeq ($(TYPECHECK),1)
-	TAGS += -tags "typecheck"
+	BUILD_TAGS += typecheck
 endif
 
-CGO_OPTS :=CGO_CFLAGS="-I$(CGO_DIR) -I$(THIRDPARTIES_INSTALL_DIR)/include $(CUDA_CFLAGS)"
-GOLDFLAGS=-ldflags="-extldflags '$(CUDA_LDFLAGS) -L$(CGO_DIR) -lmo -L$(THIRDPARTIES_INSTALL_DIR)/lib -Wl,-rpath,\$${ORIGIN}/lib -fopenmp' $(VERSION_INFO)"
+SIRIUS_SDK ?=
+SIRIUS_BUILD_MODE ?= release
+SIRIUS_MERGED_REF ?=
+SIRIUS_PREPARED := $(ROOT_DIR)/.sirius-sdk
+ifeq ($(MO_SIRIUS),1)
+ifneq ($(UNAME_S)/$(UNAME_M),linux/x86_64)
+$(error MO_SIRIUS=1 requires Linux amd64)
+endif
+ifeq ($(strip $(SIRIUS_SDK)),)
+$(error MO_SIRIUS=1 requires a generated SIRIUS_SDK directory)
+endif
+	BUILD_TAGS += sirius
+	# Go's cache does not track external headers/archives behind an unchanged
+	# include path or response file. Bind CGo compilation to the verified SDK.
+	SIRIUS_SDK_FINGERPRINT := $(shell python3 -c 'import hashlib; print(hashlib.sha256(open("$(SIRIUS_SDK)/link.json", "rb").read()).hexdigest())')
+	SIRIUS_CFLAGS := -I$(abspath $(SIRIUS_SDK)) -DSIRIUS_SDK_BUILD_$(SIRIUS_SDK_FINGERPRINT)=1
+	SIRIUS_LDFLAGS := @$(SIRIUS_PREPARED)/link.rsp
+	SIRIUS_CC := $(shell python3 -c 'import json; print(json.load(open("$(SIRIUS_SDK)/link.json"))["c_compiler"])')
+	SIRIUS_CXX := $(shell python3 -c 'import json; print(json.load(open("$(SIRIUS_SDK)/link.json"))["compiler"])')
+	SIRIUS_CGO_ENV := CC="$(SIRIUS_CC)" CXX="$(SIRIUS_CXX)"
+	SIRIUS_EXTLD := -extld=$(SIRIUS_CXX)
+endif
+
+CGO_OPTS :=$(SIRIUS_CGO_ENV) CGO_CFLAGS="-I$(CGO_DIR) -I$(THIRDPARTIES_INSTALL_DIR)/include $(CUDA_CFLAGS) $(SIRIUS_CFLAGS)"
+GOLDFLAGS=-ldflags="$(SIRIUS_EXTLD) -extldflags '$(CUDA_LDFLAGS) -L$(CGO_DIR) -lmo -L$(THIRDPARTIES_INSTALL_DIR)/lib $(SIRIUS_LDFLAGS) -Wl,-rpath,\$${ORIGIN}/lib -fopenmp' $(VERSION_INFO)"
 
 ifeq ("$(UNAME_S)","darwin")
 GOLDFLAGS:=-ldflags="-extldflags '-L$(CGO_DIR) -lmo -L$(THIRDPARTIES_INSTALL_DIR)/lib -Wl,-rpath,@executable_path/lib' $(VERSION_INFO)"
@@ -296,6 +320,16 @@ endif
 # may differ in how native dependencies are produced, never in the Go binary
 # they emit.
 MO_SERVICE_BUILD=$(GOEXPERIMENT_OPT) $(CGO_OPTS) $(GO) build $(GO_MODULE_MODE) $(TAGS) $(RACE_OPT) $(GOLDFLAGS) $(DEBUG_OPT) $(GOBUILD_OPT) -o $(BIN_NAME) ./cmd/mo-service
+
+.PHONY: sirius-sdk-prepare
+sirius-sdk-prepare:
+ifeq ($(MO_SIRIUS),1)
+	python3 "$(ROOT_DIR)/optools/sirius_sdk.py" prepare --sdk "$(SIRIUS_SDK)" --mode "$(SIRIUS_BUILD_MODE)" --merged-ref "$(SIRIUS_MERGED_REF)" --output "$(SIRIUS_PREPARED)"
+endif
+
+define SIRIUS_PACKAGE
+$(if $(filter 1,$(MO_SIRIUS)),python3 "$(ROOT_DIR)/optools/sirius_sdk.py" package --prepared "$(SIRIUS_PREPARED)" --binary "$(ROOT_DIR)/$(BIN_NAME)" --output "$(ROOT_DIR)/lib")
+endef
 
 ifeq ($(GOBUILD_OPT),)
 	GOBUILD_OPT :=
@@ -397,19 +431,21 @@ jieba-dict:
 
 # build mo-service binary
 .PHONY: build
-build: config cgo jieba-dict
+build: config cgo jieba-dict sirius-sdk-prepare
 	$(info [Build binary])
 	$(MO_SERVICE_BUILD)
+	$(SIRIUS_PACKAGE)
 
 # Build with native libraries supplied by a prebuilt stage or image. This target
 # is for CI image builds: unlike build, it must not rebuild cgo or thirdparties
 # after the source tree has been copied into the builder.
 .PHONY: build-with-prebuilt-native
-build-with-prebuilt-native: config jieba-dict
+build-with-prebuilt-native: config jieba-dict sirius-sdk-prepare
 	@test -f "$(CGO_DIR)/libmo.so" || test -f "$(CGO_DIR)/libmo.dylib"
 	@test -f "$(THIRDPARTIES_INSTALL_DIR)/lib/libusearch_c.so" || test -f "$(THIRDPARTIES_INSTALL_DIR)/lib/libusearch_c.dylib"
 	$(info [Build binary with prebuilt native libraries])
 	$(MO_SERVICE_BUILD)
+	$(SIRIUS_PACKAGE)
 
 # https://wiki.musl-libc.org/getting-started.html
 # https://musl.cc/

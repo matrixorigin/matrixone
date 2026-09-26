@@ -1,6 +1,6 @@
 # Embedded Sirius migration
 
-Design version: 1.
+Design version: 2.
 
 Owner: MatrixOne query execution.
 
@@ -178,6 +178,52 @@ window parks result-producing work without occupying every task-creator/GPU
 worker. Include in-flight publication in capacity; wakeups are durable and
 cancellation-aware. Never collect the full result and only then expose a stream.
 TAE metadata dispatch and prefetch also remain bounded.
+
+### Bounded native execution details
+
+The approved follow-up split names the remaining closures C through I:
+C is the TAE demand pump, D the native result sink, E the CGo/service/SDK
+bridge, F the real MO reader/result path, G protected direct-TAE admission,
+H default cutover, and I sidecar retirement. They refine the delivery map
+below rather than creating another migration issue. C/D/E implementation
+can overlap with frozen interfaces; D readiness requires merged C, and E
+readiness requires merged D. F and G can proceed independently after E.
+H still requires both routes and every numeric/performance gate; I follows H.
+
+- TAE has one query-owned metadata worker and at most `max(2, 2*S)` live
+  units across all scans, where S is the GPU stream count. Dependency-blocked
+  scans do not request metadata. Immutable cached metadata is capped at
+  32 MiB inside the existing 256 MiB metadata envelope.
+- Each unit holds a fixed staging entitlement no larger than 8 MiB and
+  no larger than its share of the 64 MiB TAE host window. The sum fits the
+  window without waiting inside a GPU worker. Pinned allocation and payload
+  reads happen only after full converter GPU admission; logical entitlement
+  and physical allocation are not two separate charges. CRC-framed extents
+  larger than the window are read through that reusable slice.
+- Metadata-only tasks that cannot obtain their full converter reservation
+  stay in the scheduler's existing queue. Downstream tasks can bypass them.
+  Admission never clamps this mandatory floor below the required bytes;
+  observed retry floors are also respected. New task/device events wake the
+  scheduler, with a bounded 10 ms backstop for external cuCascade memory
+  retirement, which does not expose a public subscription API.
+- Each terminal producer obtains a query-wide ticket before claiming input.
+  A dedicated bounded publisher owns completed GPU cursors and serializes
+  result slices in claim order. It may wait for output credits; task-creator
+  and GPU workers do not wait for the Go consumer. Ticket retirement follows
+  GPU-owner retirement, not enqueueing. The bound is `max(2, 2*S)` cursors.
+- The 64 MiB result window includes allocator-rounded storage, descriptors,
+  borrowed batches, and codec scratch. D2H writes into segmented native
+  storage without another GPU mirror. The 32 MiB target leaves room for
+  physical rounding/scratch; one row that cannot fit is rejected explicitly.
+  A borrowed result remains valid through cancellation and makes query close
+  return busy until release. EOF follows both execution and publisher drain.
+
+PR evidence must apply to each PR's own committed state. Combined working-tree
+tests are integration evidence only. Sirius verification uses incremental
+host builds in Pixi; containers are not part of this workflow. SDK manifests
+record source revision/dirty state and hashes of the verified consumer/link
+closure. Development artifacts are explicit opt-in; release artifacts must
+come from a clean merged Sirius revision.
 
 ## 6. Lifecycle, failure and recovery
 
