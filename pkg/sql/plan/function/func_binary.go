@@ -4080,6 +4080,13 @@ func addTimeToTime(ivecs []*vector.Vector, result vector.FunctionResultWrapper, 
 			continue
 		}
 
+		time2Str, null2 := time2Param.GetStrValue(i)
+		if null2 {
+			if err := rs.Append(types.Time(0), true); err != nil {
+				return err
+			}
+			continue
+		}
 		var time1 types.Time
 		var null1 bool
 		if stringInput {
@@ -4089,16 +4096,14 @@ func addTimeToTime(ivecs []*vector.Vector, result vector.FunctionResultWrapper, 
 				var parseErr error
 				time1, parseErr = types.ParseTime(functionUtil.QuickBytesToStr(raw), scale)
 				if parseErr != nil {
-					appendInvalidTimeWarning(proc, functionUtil.QuickBytesToStr(raw))
 					null1 = true
 				}
 			}
 		} else {
 			time1, null1 = times1.GetValue(i)
 		}
-		time2Str, null2 := time2Param.GetStrValue(i)
 
-		if null1 || null2 {
+		if null1 {
 			if err := rs.Append(types.Time(0), true); err != nil {
 				return err
 			}
@@ -4325,16 +4330,6 @@ func datetimeArithmeticResult(first types.Datetime, delta types.Time, subtract b
 	return value, false
 }
 
-func appendInvalidTimeWarning(proc *process.Process, value string) {
-	if proc == nil {
-		return
-	}
-	if appender, ok := proc.GetWarningSink().(warningDiagnosticAppender); ok {
-		appender.AppendWarningDiagnostic(moerr.ER_TRUNCATED_WRONG_VALUE,
-			fmt.Sprintf("Truncated incorrect time value: '%s'", value))
-	}
-}
-
 func validDatetimeResult(value types.Datetime) bool {
 	return value >= types.DatetimeEpoch && value <= types.DatetimeFromClock(types.MaxDatetimeYear, 12, 31, 23, 59, 59, 999999)
 }
@@ -4460,6 +4455,13 @@ func subTimeFromTime(ivecs []*vector.Vector, result vector.FunctionResultWrapper
 			continue
 		}
 
+		time2Str, null2 := time2Param.GetStrValue(i)
+		if null2 {
+			if err := rs.Append(types.Time(0), true); err != nil {
+				return err
+			}
+			continue
+		}
 		var time1 types.Time
 		var null1 bool
 		if stringInput {
@@ -4469,16 +4471,14 @@ func subTimeFromTime(ivecs []*vector.Vector, result vector.FunctionResultWrapper
 				var parseErr error
 				time1, parseErr = types.ParseTime(functionUtil.QuickBytesToStr(raw), scale)
 				if parseErr != nil {
-					appendInvalidTimeWarning(proc, functionUtil.QuickBytesToStr(raw))
 					null1 = true
 				}
 			}
 		} else {
 			time1, null1 = times1.GetValue(i)
 		}
-		time2Str, null2 := time2Param.GetStrValue(i)
 
-		if null1 || null2 {
+		if null1 {
 			if err := rs.Append(types.Time(0), true); err != nil {
 				return err
 			}

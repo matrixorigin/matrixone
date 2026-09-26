@@ -1,5 +1,115 @@
 # Temporal compatibility repair after MORPC 97
 
+## Follow-up diagnostic ownership repair (2026-09-26)
+
+Review of `3b873c4f8efe` reproduced four violations: a prepared TIME operand
+removed an eligible hash key (1,000 rows became 1,000,000 intermediate rows),
+prepared temporal CAST/MAKETIME diagnosed an empty JOIN, prepared tolerant
+ADDTIME/SUBTIME emitted 1292 for malformed or NULL input, and the SUBTIME BVT
+golden still discarded valid fractional seconds. C01–C42 remain the oracle.
+
+The GPT-6-astra/xhigh design review approved this focused repair before
+production implementation. It reuses the existing deferred JOIN owner:
+
+- Share statement-constant and row-scoped-conversion classification in the
+  function package, removing the duplicate planner/executor definitions.
+  Parameter diagnostic capability covers ordinary temporal CAST, implicit
+  string-to-numeric CAST, TIME, MAKETIME, SEC_TO_TIME, TIMESTAMP, temporal
+  arithmetic and PERIOD APIs, including nested diagnostic operands.
+  Explicit string-to-numeric CAST and assignment conversion remain row-scoped;
+  columns, volatile and real-time expressions are not statement constants.
+  Literal diagnostic probing stays isolated. This is not a general function
+  effects framework.
+- Keep the complete original ON list and JoinType at a protected JOIN before
+  distributivity or filter pushdown. Incoming WHERE filters retain their
+  original boundary.
+  A JOIN owning such diagnostics is a local join-ordering boundary: optimize
+  its children, but treat it as one leaf in the parent's join graph. This
+  prevents the second pushdown pass from losing ON provenance, with no wire
+  field or additional execution state. The same boundary rejects incoming
+  parent filters, associative and semi/anti rewrites, owner/subtree elimination,
+  and TOP/aggregate pushdown that changes its selected rows. Optimize original
+  children internally while preserving the complete ON list and input domains.
+- HashBuild retains complete keys and temporarily owns only selected constant
+  diagnostics. HashJoin publishes once after both logical inputs have rows,
+  including no-match/NULL-key cases. Empty input, inactive CASE, reset and free
+  discard pending diagnostics. PERIOD's SQL wrong-arguments error may be
+  deferred; cancellation, resource and internal errors remain immediate.
+- Tolerant ADDTIME/SUBTIME check selection and both NULL inputs before parsing
+  marker text; malformed operands produce silent NULL, actual arithmetic
+  overflow still produces NULL + 1441. Explicit TIME conversion remains a
+  distinct operation. Update the stale SUBTIME golden to retain 300000 us.
+
+The alternatives are keeping the broad barrier (quadratic JOIN work), adding
+only two whitelist names (leaves adjacent producers uncovered), or carrying
+predicate provenance through all join reordering (larger protocol/optimizer
+change). The chosen closure shares existing classification and ownership, at
+the cost of limiting reordering and early filtering across a diagnostic JOIN,
+including potentially diagnostic but valid prepared temporal values. No per-row AST scan,
+global cache, worker or new queue is added; retained warnings use the existing
+statement budget and reset/free paths. No format/ABI epoch changes are needed.
+
+Validation maps this R3 planner/executor closure to capability and typed-plan
+UTs, two pushdown passes plus join ordering, public prepared/literal controls,
+both empty-side directions, strict/permissive and inactive-CASE checks,
+invalid→NULL→valid reuse, existing lifecycle race tests, and duplicate-key
+EXPLAIN ANALYZE cardinality. The R2 evaluator closure gets selected/masked,
+NULL, malformed, valid and overflow vector tests and prepared SQL warning
+assertions. Reuse existing BVT fixtures and run affected cases twice in normal
+comparison mode, with teardown checks. Run owning package UTs and incremental
+vet/lint for the complete changed package closure. Rollback is reverting this
+repair commit; that reintroduces the documented defects, without a data-format
+migration. Implementation and test evidence are recorded separately below or
+in the PR; design approval does not claim these tests have passed.
+
+### Follow-up implementation evidence
+
+The repair is based on `3b873c4f8efe`, with main/merge-base
+`b1b68925d7f6`. The changed Go source/test content digest is
+`6e4984d880b7ffe280095defc5c3877b9fb9853efad97dfd5593face3eab59db`
+(SHA256 of sorted relative path + NUL + file bytes). The final service was built
+with Go 1.26.4 using `make build-with-prebuilt-native` and verified native
+artifacts; no native code or protocol format changed in this repair.
+
+- New tolerant-input and retained-hash-key UTs fail on the previous production
+  implementation and pass after repair. The optimizer matrix includes positive
+  optimization controls and protected JOIN controls for both pushdown modes,
+  reversed keys, ON/WHERE provenance, associative and semi/anti rewrites,
+  parent filters, LEFT/subtree elimination and TOP. Function, plan, colexec,
+  hashbuild, hashjoin and compile owning-package tests pass with `-count=1`;
+  plan and compile were rerun after the last planner change.
+- `./pkg/sql/colexec` passes `-race -count=1 -timeout=180s`. The existing
+  `TestDeferredJoinDiagnosticResetDiscardsLateBuildWarnings` passes
+  `-race -count=100 -timeout=120s`. Tests use the repository CGo wrapper.
+  Cancellation, deadline, OOM and internal errors remain immediate controls;
+  strict PERIOD errors are deferred only until the JOIN becomes active.
+- On the final binary, original public SQL counterexamples pass in three
+  independent sessions. Extra WHERE, LEFT-elimination and TOP counterexamples
+  preserve the required warning; LEFT-to-ANTI enabled/disabled controls each
+  emit one 1292. SUBTIME returns `15:30:45.300000`, with wire type TIME,
+  display length 17 and decimals 6.
+- Normal mo-tester comparison (`-m run -n -g -o`) passes twice for
+  `function/func_temporal_consistency_28851.test` (307/307),
+  `function/func_datetime_subtime.test` (31/31),
+  `dtype/decimal_string_comparison.sql` (118/118), and `dtype/time.test` (83/83).
+  Every run has zero failed, ignored or abnormal statements; the temporal test
+  database is absent after teardown. New golden rows were reviewed against the
+  contract before comparison; generation alone was not counted as a pass.
+- Configured incremental `go vet` and golangci-lint v2.6.2 pass across all 23
+  changed Go package directories from the merge-base. Lint reports zero issues;
+  formatting checks cover all 119 changed Go files. `git diff --check` passes.
+- A 1,000-row duplicate leading key on each input previously caused 1,000,000
+  intermediate JOIN rows and 15.26 MiB operator memory for a prepared temporal
+  second key. The final binary retains both keys: three prepared executions
+  and the literal control each produce 1,000 intermediate rows and report
+  139.94 KiB JOIN memory. This is cardinality/operator-memory evidence, not a
+  whole-server RSS or universal latency guarantee. The optimization restrictions
+  for potentially diagnostic prepared values described above still apply.
+
+This follow-up reuses the earlier release/JDBC/bootstrap evidence where its
+semantic inputs are unchanged. It does not claim a new full-repository UT/race
+run, a live mixed-binary rolling upgrade, or a final remote CI result.
+
 Status: product target decided by GPT-6-astra/xhigh on 2026-09-26 at the
 user's request and implemented in PR #28851 on main
 `b1b68925d7f6fb32153e788b5285f424222e85ca`. The

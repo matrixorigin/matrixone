@@ -507,6 +507,23 @@ func (builder *QueryBuilder) pushdownFilters(nodeID int32, filters []*plan.Expr,
 		cantPushdown = append(cantPushdown, filters...)
 
 	case plan.Node_JOIN:
+		if builder.joinOwnsConstantDiagnostic(node) {
+			// ON diagnostics belong to these two logical inputs. Keep complete
+			// hash keys here, and do not let incoming WHERE predicates or other
+			// ON conjuncts pre-filter an input and erase diagnostic activation.
+			node.OnList = splitPlanConjunctions(node.OnList)
+			cantPushdown = append(cantPushdown, filters...)
+			for i, child := range node.Children {
+				childID, remaining := builder.pushdownFilters(child, nil, separateNonEquiConds)
+				if len(remaining) > 0 {
+					childID = builder.appendNode(&plan.Node{
+						NodeType: plan.Node_FILTER, Children: []int32{childID}, FilterList: remaining,
+					}, nil)
+				}
+				node.Children[i] = childID
+			}
+			break
+		}
 		dedupIgnoreHasReleaseRows := node.JoinType == plan.Node_DEDUP &&
 			node.OnDuplicateAction == plan.Node_IGNORE && node.DedupJoinCtx != nil &&
 			len(node.DedupJoinCtx.OldColList) > 1
@@ -1468,7 +1485,7 @@ func (builder *QueryBuilder) pushdownTopThroughLeftJoin(nodeID int32) {
 	}
 
 	//before join order, only left join
-	if joinnode.JoinType != plan.Node_LEFT {
+	if joinnode.JoinType != plan.Node_LEFT || builder.joinOwnsConstantDiagnostic(joinnode) {
 		goto END
 	}
 
