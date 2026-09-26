@@ -454,10 +454,10 @@ func LockTableWithMode(
 
 // LockTableForSnapshotRefreshWithContext acquires a table lock and advances an
 // RC transaction's snapshot past the latest commit on that table without
-// turning the refresh into the ordinary retry signal. Callers that need a
-// global frontier may install a stronger barrier afterward. Definition changes
-// remain retryable because a newer snapshot cannot validate a stale logical
-// plan.
+// turning the refresh into the ordinary retry signal. A fixed-snapshot
+// transaction instead rejects a newer table commit. Callers that need a global
+// frontier may install a stronger barrier afterward. Definition changes remain
+// retryable because a newer snapshot cannot validate a stale logical plan.
 func LockTableForSnapshotRefreshWithContext(
 	ctx context.Context,
 	eng engine.Engine,
@@ -873,12 +873,16 @@ func doLock(
 	// batch that hasNewVersionInRange can probe or invalidate. A table commit
 	// newer than the statement snapshot is therefore sufficient reason to
 	// refresh the RC snapshot in place, but not to retry work that has not run.
+	// A fixed SI snapshot cannot be advanced, so reject the stale validation.
 	//
 	// Use a strict comparison: a commit at the snapshot is already visible and
 	// must not cause an endless retry at the same table timestamp.
 	if opts.refreshTableSnapshot && opts.lockTable && bat == nil &&
-		snapshotTS.Less(lockedTS) &&
-		txnOp.Txn().IsRCIsolation() {
+		snapshotTS.Less(lockedTS) {
+		if !txnOp.Txn().IsRCIsolation() {
+			return false, false, timestamp.Timestamp{},
+				moerr.NewTxnWWConflict(ctx, tableID, "table snapshot is stale")
+		}
 		start = time.Now()
 		newSnapshotTS, err := txnClient.WaitLogTailAppliedAt(ctx, lockedTS)
 		if err != nil {

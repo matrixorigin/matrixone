@@ -135,6 +135,47 @@ func TestIssue28934AddForeignKeyLockOrdering(t *testing.T) {
 			require.Equal(t, 2, parentID, "the committed orphan must be the state rejected by ALTER")
 		})
 
+		t.Run("SI rejects a commit newer than its snapshot", func(t *testing.T) {
+			fixture := newFixture(t)
+			ddlConn := issue28934Conn(t, ctx, fixture.ddlDB, fixture.database)
+			writerConn := issue28934Conn(t, ctx, fixture.writerDB, fixture.database)
+			var originalIsolation string
+			require.NoError(t, ddlConn.QueryRowContext(ctx,
+				"select @@session.transaction_isolation").Scan(&originalIsolation))
+			require.NoError(t, issue28934Exec(ctx, ddlConn,
+				"set session transaction_isolation = 'REPEATABLE-READ'"))
+			defer func() {
+				cleanupCtx, cleanupCancel := context.WithTimeout(context.Background(), 5*time.Second)
+				defer cleanupCancel()
+				require.NoError(t, issue28934Exec(cleanupCtx, ddlConn,
+					"set session transaction_isolation = '"+originalIsolation+"'"))
+			}()
+
+			require.NoError(t, issue28934Exec(ctx, ddlConn, "begin"))
+			ddlOpen := true
+			defer func() {
+				if ddlOpen {
+					issue28934Rollback(ddlConn)
+				}
+			}()
+			var parentID int
+			require.NoError(t, ddlConn.QueryRowContext(ctx,
+				"select parent_id from child where id = 1").Scan(&parentID))
+			require.Equal(t, 1, parentID)
+			require.NoError(t, issue28934Exec(ctx, writerConn,
+				"update child set parent_id = 2 where id = 1"))
+			require.NoError(t, ddlConn.QueryRowContext(ctx,
+				"select parent_id from child where id = 1").Scan(&parentID))
+			require.Equal(t, 1, parentID, "SI transaction must still see its old snapshot")
+
+			alterErr := issue28934Exec(ctx, ddlConn, issue28934AddForeignKeySQL)
+			require.ErrorContains(t, alterErr, "table snapshot is stale",
+				"stale SI validation must not publish the foreign key")
+			require.NoError(t, issue28934Exec(ctx, ddlConn, "rollback"))
+			ddlOpen = false
+			issue28934AssertMetadata(t, ctx, fixture, false)
+		})
+
 		t.Run("alter lock precedes orphan writer", func(t *testing.T) {
 			fixture := newFixture(t)
 			ddlConn := issue28934Conn(t, ctx, fixture.ddlDB, fixture.database)

@@ -334,7 +334,9 @@ func TestLockTableRefreshesForNewerWholeTableCommit(t *testing.T) {
 		commitTS        func(timestamp.Timestamp) timestamp.Timestamp
 		waiter          func() client.TimestampWaiter
 		snapshotRefresh bool
+		useSI           bool
 		wantAdvance     bool
+		wantWWConflict  bool
 		wantErr         error
 	}{
 		{
@@ -359,6 +361,34 @@ func TestLockTableRefreshesForNewerWholeTableCommit(t *testing.T) {
 			snapshotRefresh: true,
 		},
 		{
+			name: "SI rejects a newer whole-table commit",
+			commitTS: func(snapshot timestamp.Timestamp) timestamp.Timestamp {
+				return snapshot.Next()
+			},
+			waiter:          func() client.TimestampWaiter { return immediateLockTimestampWaiter{} },
+			snapshotRefresh: true,
+			useSI:           true,
+			wantWWConflict:  true,
+		},
+		{
+			name: "SI accepts a commit already visible at snapshot",
+			commitTS: func(snapshot timestamp.Timestamp) timestamp.Timestamp {
+				return snapshot
+			},
+			waiter:          func() client.TimestampWaiter { return immediateLockTimestampWaiter{} },
+			snapshotRefresh: true,
+			useSI:           true,
+		},
+		{
+			name: "SI accepts an older whole-table commit",
+			commitTS: func(snapshot timestamp.Timestamp) timestamp.Timestamp {
+				return snapshot.Prev()
+			},
+			waiter:          func() client.TimestampWaiter { return immediateLockTimestampWaiter{} },
+			snapshotRefresh: true,
+			useSI:           true,
+		},
+		{
 			name: "logtail wait failure",
 			commitTS: func(snapshot timestamp.Timestamp) timestamp.Timestamp {
 				return snapshot.Next()
@@ -378,6 +408,14 @@ func TestLockTableRefreshesForNewerWholeTableCommit(t *testing.T) {
 				return immediateLockTimestampWaiter{}
 			},
 		},
+		{
+			name: "ordinary SI table lock preserves policy",
+			commitTS: func(snapshot timestamp.Timestamp) timestamp.Timestamp {
+				return snapshot.Next()
+			},
+			waiter: func() client.TimestampWaiter { return immediateLockTimestampWaiter{} },
+			useSI:  true,
+		},
 	}
 
 	for _, test := range tests {
@@ -385,6 +423,9 @@ func TestLockTableRefreshesForNewerWholeTableCommit(t *testing.T) {
 			runLockOpTest(
 				t,
 				func(proc *process.Process) {
+					if test.useSI {
+						proc.GetTxnOperator().TxnRef().Isolation = txnpb.TxnIsolation_SI
+					}
 					runtime.SetupServiceRuntimeTestingContext(proc.GetService())
 					testingContext := runtime.MustGetTestingContext(proc.GetService())
 					testingContext.SetBeforeLockFunc(func(_ []byte, _ uint64) {})
@@ -412,6 +453,11 @@ func TestLockTableRefreshesForNewerWholeTableCommit(t *testing.T) {
 					}
 					if test.wantErr != nil {
 						require.ErrorIs(t, err, test.wantErr)
+						return
+					}
+					if test.wantWWConflict {
+						require.True(t, moerr.IsMoErrCode(err, moerr.ErrTxnWWConflict), "%v", err)
+						require.Equal(t, snapshot, proc.GetTxnOperator().Txn().SnapshotTS)
 						return
 					}
 					require.NoError(t, err)
