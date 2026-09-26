@@ -95,7 +95,7 @@ func TestSplitPartReusesLegacyExecutionIdentity(t *testing.T) {
 }
 
 func TestIntegerArgumentAdditionalSignatures(t *testing.T) {
-	for _, name := range []string{"period_add", "period_diff", "ceil", "ceiling", "floor", "round", "truncate", "from_days", "week", "yearweek", "timestampadd", "subvector", "last_query_id", "random_bytes", "sha2", "split_part", "regexp_instr", "regexp_replace", "regexp_substr"} {
+	for _, name := range []string{"period_add", "period_diff", "ceil", "ceiling", "floor", "round", "truncate", "from_days", "week", "yearweek", "timestampadd", "subvector", "last_query_id", "random_bytes", "sha2", "split_part", "regexp_instr", "regexp_replace", "regexp_substr", "format", "makedate", "maketime"} {
 		id, ok := getFunctionIdByNameWithoutErr(name)
 		require.True(t, ok, name)
 		fn := allSupportedFunctions[id]

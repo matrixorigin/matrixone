@@ -839,3 +839,47 @@ SELECT a, g, v, FORMAT(d, 0) AS direct_format FROM format_catalog_28508;
 a    g    v    direct_format
 1    4    2    4
 DROP TABLE format_catalog_28508;
+SELECT FORMAT(1.125, 1.5), FORMAT(1.125, 2.5E0), FORMAT(1.125, CAST(1.5 AS DOUBLE)), FORMAT(1.125, '1.9tail');
+➤ FORMAT(1.125, 1.5)[12,65535,0]  ¦  FORMAT(1.125, 2.5e0)[12,65535,0]  ¦  FORMAT(1.125, cast(1.5 as double))[12,65535,0]  ¦  FORMAT(1.125, 1.9tail)[12,65535,0]  𝄀
+1.13  ¦  1.13  ¦  1.1  ¦  1.1
+SELECT FORMAT(2.5, 0), FORMAT(2.5E0, 0), FORMAT('2.5', 0);
+➤ FORMAT(2.5, 0)[12,65535,0]  ¦  FORMAT(2.5e0, 0)[12,65535,0]  ¦  FORMAT(2.5, 0)[12,65535,0]  𝄀
+3  ¦  2  ¦  2
+SELECT FORMAT(1.125, IF(TRUE, 1.5, 2.5E0)), FORMAT(1.125, IF(FALSE, 1.5, 2.5E0));
+➤ FORMAT(1.125, IF(true, 1.5, 2.5e0))[12,65535,0]  ¦  FORMAT(1.125, IF(false, 1.5, 2.5e0))[12,65535,0]  𝄀
+1.13  ¦  1.13
+SELECT FORMAT(1, CAST('9223372036854775808' AS UNSIGNED));
+Data truncation: data out of range: data type int64, integer argument
+SELECT FORMAT(NULL, CAST('9223372036854775808' AS UNSIGNED));
+Data truncation: data out of range: data type int64, integer argument
+SELECT FORMAT(1, NULL), FORMAT(1, 9223372036854775807);
+➤ FORMAT(1, null)[12,65535,0]  ¦  FORMAT(1, 9223372036854775807)[12,65535,0]  𝄀
+null  ¦  1.000000000000000000000000000000
+DROP TABLE IF EXISTS format_precision_contract;
+CREATE TABLE format_precision_contract(d DECIMAL(10,3), p DECIMAL(4,1), g VARCHAR(64) GENERATED ALWAYS AS (FORMAT(d, IF(d > 0, p, 0))) STORED);
+INSERT INTO format_precision_contract(d,p) VALUES (1.125,1.5), (1.125,2.5), (NULL,NULL);
+SELECT d,p,FORMAT(d,p),g FROM format_precision_contract ORDER BY p;
+➤ d[3,10,3]  ¦  p[3,4,1]  ¦  FORMAT(d, p)[12,65535,0]  ¦  g[12,64,0]  𝄀
+null  ¦  null  ¦  null  ¦  null  𝄀
+1.125  ¦  1.5  ¦  1.13  ¦  1.1  𝄀
+1.125  ¦  2.5  ¦  1.125  ¦  1.12
+DROP TABLE format_precision_contract;
+PREPARE format_precision_stmt FROM 'SELECT FORMAT(1.125, ?)';
+SET @format_precision = NULL;
+EXECUTE format_precision_stmt USING @format_precision;
+➤ FORMAT(1.125, ?)[12,65535,0]  𝄀
+null
+SET @format_precision = 1.5;
+EXECUTE format_precision_stmt USING @format_precision;
+➤ FORMAT(1.125, ?)[12,65535,0]  𝄀
+1.13
+SET @format_precision = 2.5E0;
+EXECUTE format_precision_stmt USING @format_precision;
+➤ FORMAT(1.125, ?)[12,65535,0]  𝄀
+1.13
+SET @format_precision = '1.9tail';
+EXECUTE format_precision_stmt USING @format_precision;
+➤ FORMAT(1.125, ?)[12,65535,0]  𝄀
+1.1
+DEALLOCATE PREPARE format_precision_stmt;
+SET @format_precision = NULL;

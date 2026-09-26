@@ -29,7 +29,7 @@ SELECT MAKETIME(12, NULL, 30) AS null_minute;
 SELECT MAKETIME(12, 15, NULL) AS null_second;
 SELECT MAKETIME(NULL, NULL, NULL) AS null_all;
 
-# Float hour and minute values round half away from zero; fractional seconds are preserved
+# Exact decimal hour and minute values round half away from zero; fractional seconds are preserved
 SELECT CAST(MAKETIME(12.7, 15.8, 30.9) AS VARCHAR) AS float_values;
 SELECT CAST(MAKETIME(12.5, 58.5, 0) AS VARCHAR) AS positive_half_values;
 SELECT CAST(MAKETIME(-12.5, 0, 0) AS VARCHAR) AS negative_half_hour;
@@ -94,3 +94,25 @@ DROP TABLE t1;
 # Different numeric types
 SELECT CAST(MAKETIME(12.0, 15.0, 30.0) AS VARCHAR) AS float_input;
 SELECT MAKETIME(CAST(12 AS UNSIGNED), CAST(15 AS UNSIGNED), CAST(30 AS UNSIGNED)) AS unsigned_input;
+
+-- Approximate values use shared ties-to-even, explicit DOUBLE truncates.
+SELECT CAST(MAKETIME(12.5E0,58.5E0,1.125) AS VARCHAR), CAST(MAKETIME(CAST(12.9 AS DOUBLE),CAST(58.9 AS DOUBLE),1.125) AS VARCHAR);
+SELECT MAKETIME(CAST('9223372036854775808' AS UNSIGNED),0,0);
+SELECT MAKETIME(1,CAST('9223372036854775808' AS UNSIGNED),0);
+SELECT MAKETIME(9223372036854775807,0,0), MAKETIME(1,0,CAST('18446744073709551615' AS UNSIGNED));
+
+DROP TABLE IF EXISTS maketime_integer_contract;
+CREATE TABLE maketime_integer_contract(h DECIMAL(10,1), m DOUBLE, s DECIMAL(10,6), g TIME(6) GENERATED ALWAYS AS (MAKETIME(h,m,s)) STORED);
+INSERT INTO maketime_integer_contract(h,m,s) VALUES (12.5,58.5,1.125), (-12.5,59,59.999999), (NULL,NULL,NULL);
+SELECT h,m,s,CAST(MAKETIME(h,m,s) AS VARCHAR),CAST(g AS VARCHAR) FROM maketime_integer_contract ORDER BY h;
+DROP TABLE maketime_integer_contract;
+
+PREPARE maketime_integer_stmt FROM 'SELECT CAST(MAKETIME(?, ?, 1.125) AS VARCHAR)';
+SET @maketime_hour = NULL, @maketime_minute = 0;
+EXECUTE maketime_integer_stmt USING @maketime_hour, @maketime_minute;
+SET @maketime_hour = 12.5E0, @maketime_minute = 58.5;
+EXECUTE maketime_integer_stmt USING @maketime_hour, @maketime_minute;
+SET @maketime_hour = '12.9', @maketime_minute = 0;
+EXECUTE maketime_integer_stmt USING @maketime_hour, @maketime_minute;
+DEALLOCATE PREPARE maketime_integer_stmt;
+SET @maketime_hour = NULL, @maketime_minute = NULL;

@@ -92,3 +92,29 @@ SELECT MAKEDATE(2024, 2913175);
 SELECT MAKEDATE(2024, 29131750000);
 SELECT MAKEDATE(29131750000, 2024);
 SELECT MAKEDATE(29131750000111111111, 2024);
+
+-- Calendar bounds are checked before narrowing the day value.
+SELECT MAKEDATE(2024, 4294967297), MAKEDATE(2024, 9223372036854775807);
+SELECT MAKEDATE(9999,365), MAKEDATE(9999,366), MAKEDATE(10000,1);
+SELECT MAKEDATE(0,1), MAKEDATE(69,1), MAKEDATE(70,1), MAKEDATE(99,1), MAKEDATE(100,1);
+SELECT MAKEDATE(2023.5,1.5), MAKEDATE(2024,2.5E0), MAKEDATE(2024,CAST(1.5 AS DOUBLE));
+SELECT MAKEDATE(2024,CAST('9223372036854775808' AS UNSIGNED));
+
+DROP DATABASE IF EXISTS makedate_integer_contract_db;
+CREATE DATABASE makedate_integer_contract_db;
+USE makedate_integer_contract_db;
+CREATE TABLE makedate_integer_contract(y DECIMAL(10,1), d BIGINT, g VARCHAR(32) GENERATED ALWAYS AS (MAKEDATE(y,d)) STORED);
+INSERT INTO makedate_integer_contract(y,d) VALUES (2023.5,366), (2024,4294967297), (9999,366);
+SELECT y,d,MAKEDATE(y,d),g FROM makedate_integer_contract ORDER BY y,d;
+DROP TABLE makedate_integer_contract;
+
+PREPARE makedate_integer_stmt FROM 'SELECT MAKEDATE(?,?)';
+SET @makedate_year = 2023.5, @makedate_day = 1.5;
+EXECUTE makedate_integer_stmt USING @makedate_year, @makedate_day;
+SET @makedate_day = NULL;
+EXECUTE makedate_integer_stmt USING @makedate_year, @makedate_day;
+SET @makedate_year = 2024, @makedate_day = '1.9tail';
+EXECUTE makedate_integer_stmt USING @makedate_year, @makedate_day;
+DEALLOCATE PREPARE makedate_integer_stmt;
+SET @makedate_year = NULL, @makedate_day = NULL;
+DROP DATABASE makedate_integer_contract_db;

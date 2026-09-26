@@ -34,15 +34,60 @@ func preservePersistedFormatCompatibility(ctx context.Context, expr *planpb.Expr
 		if fn == nil || fn.Func == nil || len(fn.Args) < 2 || fn.Args[0] == nil {
 			return nil
 		}
-		id, _ := function.DecodeOverloadID(fn.Func.Obj)
-		if id != function.FORMAT || !makeTypeByPlan2Expr(fn.Args[0]).IsNumeric() {
+		id, overload := function.DecodeOverloadID(fn.Func.Obj)
+		if id != function.FORMAT {
 			return nil
 		}
-		arg, err := appendCastBeforeExpr(ctx, fn.Args[0], planpb.Type{Id: int32(types.T_varchar), Width: types.MaxVarcharLen})
-		if err != nil {
-			return err
+		varchar := planpb.Type{Id: int32(types.T_varchar), Width: types.MaxVarcharLen}
+		if makeTypeByPlan2Expr(fn.Args[0]).IsNumeric() {
+			arg, err := appendCastBeforeExpr(ctx, fn.Args[0], varchar)
+			if err != nil {
+				return err
+			}
+			fn.Args[0] = arg
 		}
-		fn.Args[0] = arg
+		if overload == function.FormatIntegerPrecisionOverload || overload == function.FormatIntegerPrecisionLocaleOverload {
+			source, err := persistedFormatPrecisionSource(ctx, fn.Args[1])
+			if err != nil {
+				return err
+			}
+			precision, err := appendCastBeforeExpr(ctx, source, varchar)
+			if err != nil {
+				return err
+			}
+			fn.Args[1] = precision
+			fn.Func.Obj = function.EncodeOverloadID(function.FORMAT, int32(len(fn.Args)-2))
+		}
 		return nil
 	})
+}
+
+// Undo only this parameter's integer context. A value-producing function or
+// user CAST owns its own semantics; stripping conversions recursively through
+// it would silently lower the catalog floor for unrelated integer consumers.
+func persistedFormatPrecisionSource(ctx context.Context, expr *planpb.Expr) (*planpb.Expr, error) {
+	if isIntegerArgumentCast(expr) {
+		return expr.GetF().Args[0], nil
+	}
+	fn := expr.GetF()
+	if fn == nil || fn.Func == nil || fn.SyntaxExplicitCast {
+		return expr, nil
+	}
+	id, _ := function.DecodeOverloadID(fn.Func.Obj)
+	if id != function.CASE && id != function.IFF {
+		return expr, nil
+	}
+	args := append([]*planpb.Expr(nil), fn.Args...)
+	for i := range args {
+		if i%2 == 0 && i != len(args)-1 {
+			continue
+		}
+		source, err := persistedFormatPrecisionSource(ctx, args[i])
+		if err != nil {
+			return nil, err
+		}
+		args[i] = source
+	}
+	// Reconcile the recovered source domains, not the old INT64 selector type.
+	return BindFuncExprImplByPlanExpr(ctx, fn.Func.ObjName, args)
 }
