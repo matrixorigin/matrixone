@@ -237,6 +237,29 @@ select (0,null) <=>
        (select count(*),sum(inner_row.b) from row_scalar_28295 inner_row
         where inner_row.id=outer_row.id+100 having count(*)=0) as aggregate_empty_v
 from row_scalar_28295 outer_row where outer_row.id=1;
+create table row_scalar_outer_28295(k int primary key);
+create table row_scalar_inner_28295(k int, v int);
+insert into row_scalar_outer_28295 values (1),(2);
+insert into row_scalar_inner_28295 values (1,10);
+select o.k, (0,null) <=>
+       (select count(1),sum(i.v) from row_scalar_inner_28295 i where i.k<o.k) as real_rows_only
+from row_scalar_outer_28295 o order by o.k;
+select o.k, (0,null) <=>
+       (select count(*),sum(i.v) from row_scalar_inner_28295 i where i.k<o.k limit 0) as rejected_limit
+from row_scalar_outer_28295 o order by o.k;
+select o.k, (0,null) <=>
+       (select sum(coalesce(i.v,0)),sum(i.v) from row_scalar_inner_28295 i where i.k<o.k) as rejected_expression
+from row_scalar_outer_28295 o order by o.k;
+select o.k, (o.k,(select v from row_scalar_inner_28295 where k=1)) =
+       (select count(*),sum(i.v) from row_scalar_inner_28295 i where i.k<o.k) as rejected_composition
+from row_scalar_outer_28295 o order by o.k;
+select 1 as query_after_rejections;
+insert into row_scalar_inner_28295 values (1,20);
+select o.k, (select group_concat(i.v order by i.v desc separator '~')
+             from row_scalar_inner_28295 i where i.k<o.k) as ordered_concat
+from row_scalar_outer_28295 o order by o.k;
+drop table row_scalar_inner_28295;
+drop table row_scalar_outer_28295;
 select (1,5) = (select a,b from row_scalar_28295 where id>0) as multi_v;
 select (1,2) = (select 1,2 limit 0) as no_from_empty_limit_v;
 select (1,2) = (select 1,2 limit 1 offset 1) as no_from_empty_offset_v;

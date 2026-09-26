@@ -175,6 +175,69 @@ func TestIssue28295RowConstructorScalarSubquery(t *testing.T) {
 				(select count(*),sum(v) from scalar_inner i where i.k<o.k)`).Scan(&correlatedCount)
 		require.NoError(t, err)
 		require.Equal(t, 1, correlatedCount)
+		// The non-equality aggregate fallback must discard the synthetic LEFT JOIN row.
+		assertBool(`select (0,null) <=> (select count(1),sum(i.v)
+			from scalar_inner i where i.k<o.k) from scalar_outer o where o.k=1`,
+			sql.NullBool{Bool: true, Valid: true})
+		assertBool(`select (1,10) <=> (select count(1),sum(i.v)
+			from scalar_inner i where i.k<o.k) from scalar_outer o where o.k=2`,
+			sql.NullBool{Bool: true, Valid: true})
+		var emptyCount int
+		require.NoError(t, conn.QueryRowContext(ctx, `select (select count(1)
+			from scalar_inner i where i.k<o.k) from scalar_outer o where o.k=1`).Scan(&emptyCount))
+		require.Zero(t, emptyCount)
+		for _, query := range []string{
+			`select (0,null) <=> (select count(*),sum(i.v)
+				from scalar_inner i where i.k<o.k limit 0) from scalar_outer o where o.k=1`,
+			`select (0,null) <=> (select sum(coalesce(i.v,0)),sum(i.v)
+				from scalar_inner i where i.k<o.k) from scalar_outer o where o.k=1`,
+			`select (o.k,(select v from scalar_inner where k=1)) =
+				(select count(*),sum(i.v) from scalar_inner i where i.k<o.k)
+				from scalar_outer o where o.k=1`,
+			`select (0,null) <=> (select count(*),sum(i.v) from scalar_inner i where i.k<o.k),
+				(0,null) <=> (select count(*),sum(i.v) from scalar_inner i where i.k<o.k)
+				from scalar_outer o where o.k=1`,
+		} {
+			require.ErrorContains(t, drainQueryError(ctx, conn, query), "not yet implemented")
+		}
+		assertBool(`select (o.k,(select 10)) =
+			(select count(*),sum(i.v) from scalar_inner i where i.k<o.k)
+			from scalar_outer o where o.k=2`, sql.NullBool{Valid: true})
+		require.NoError(t, conn.QueryRowContext(ctx, "select 1").Scan(&emptyCount))
+		require.Equal(t, 1, emptyCount)
+		_, err = conn.ExecContext(ctx, "insert into scalar_inner values (1,null)")
+		require.NoError(t, err)
+		assertBool(`select (1,2) <=> (select count(distinct 1),sum(1)
+			from scalar_inner i where i.k<o.k) from scalar_outer o where o.k=2`,
+			sql.NullBool{Bool: true, Valid: true})
+		assertBool(`select (0,null) <=> (select count(distinct 1),sum(1)
+			from scalar_inner i where i.k<o.k) from scalar_outer o where o.k=1`,
+			sql.NullBool{Bool: true, Valid: true})
+		assertBool(`select (1,0,null) <=> (select count(*),count(i.v),sum(i.v)
+			from scalar_inner i where i.k<o.k and i.v is null)
+			from scalar_outer o where o.k=2`, sql.NullBool{Bool: true, Valid: true})
+		_, err = conn.ExecContext(ctx, "insert into scalar_inner values (1,20),(1,10)")
+		require.NoError(t, err)
+		var concat sql.NullString
+		require.NoError(t, conn.QueryRowContext(ctx, `select
+			(select group_concat(i.v order by i.v desc separator '~')
+			 from scalar_inner i where i.k<o.k) from scalar_outer o where o.k=1`).Scan(&concat))
+		require.Equal(t, sql.NullString{}, concat)
+		require.NoError(t, conn.QueryRowContext(ctx, `select
+			(select group_concat(distinct i.v order by i.v desc separator '~')
+			 from scalar_inner i where i.k<o.k) from scalar_outer o where o.k=2`).Scan(&concat))
+		require.Equal(t, sql.NullString{String: "20~10", Valid: true}, concat)
+		require.NoError(t, conn.QueryRowContext(ctx, `select
+			(select group_concat(1 order by i.v desc separator '~')
+			 from scalar_inner i where i.k<o.k) from scalar_outer o where o.k=2`).Scan(&concat))
+		require.Equal(t, sql.NullString{String: "1~1~1~1", Valid: true}, concat)
+		_, err = conn.ExecContext(ctx, "create table scalar_outer_dup(k int)")
+		require.NoError(t, err)
+		_, err = conn.ExecContext(ctx, "insert into scalar_outer_dup values (2),(2)")
+		require.NoError(t, err)
+		require.NoError(t, conn.QueryRowContext(ctx, `select count(*) from scalar_outer_dup o
+			where (4,40) <=> (select count(1),sum(i.v) from scalar_inner i where i.k<o.k)`).Scan(&emptyCount))
+		require.Equal(t, 2, emptyCount)
 
 		queryErr := drainQueryError(ctx, conn,
 			"select (1,5) = (select a,b from scalar_rows where id > 0)")

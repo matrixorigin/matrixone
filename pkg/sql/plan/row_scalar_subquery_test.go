@@ -194,6 +194,57 @@ func TestRowConstructorCorrelatedAggregateUnsupportedWrapperFailsClosed(t *testi
 	require.ErrorContains(t, err, "correlated aggregate row result cannot be safely decorrelated")
 }
 
+func TestRowConstructorNonEqAggregateMasksDistinctLiteral(t *testing.T) {
+	logicPlan, err := runOneStmt(NewMockOptimizer(false), t, `select n.N_NATIONKEY
+		from NATION n where (1,2) <=>
+		(select count(distinct 1),sum(1) from REGION r where r.R_REGIONKEY<n.N_REGIONKEY)`)
+	require.NoError(t, err)
+	masked := 0
+	for _, node := range logicPlan.GetQuery().Nodes {
+		if node.NodeType != planpb.Node_AGG {
+			continue
+		}
+		for _, agg := range node.AggList {
+			f := agg.GetF()
+			if f == nil || f.Func == nil || len(f.Args) != 1 {
+				continue
+			}
+			arg := f.Args[0]
+			caseFn := arg.GetF()
+			if caseFn == nil || caseFn.Func.ObjName != "case" {
+				continue
+			}
+			require.False(t, arg.Typ.NotNullable)
+			markerTest := caseFn.Args[0].GetF()
+			require.NotNil(t, markerTest)
+			require.Equal(t, "isnull", markerTest.Func.ObjName)
+			require.False(t, markerTest.Args[0].Typ.NotNullable)
+			if f.Func.ObjName == "count" {
+				require.NotZero(t, uint64(f.Func.Obj)&function.Distinct)
+			}
+			masked++
+		}
+	}
+	require.Equal(t, 2, masked, "both unary aggregates must ignore synthetic rows")
+}
+
+func TestRowConstructorNonEqAggregateRejectsUnsafeComposition(t *testing.T) {
+	for _, test := range []struct{ sql, want string }{
+		{`select n.N_NATIONKEY from NATION n where (0,null) <=>
+			(select count(*),sum(r.R_REGIONKEY) from REGION r
+			 where r.R_REGIONKEY<n.N_REGIONKEY limit 0)`, "pagination in non-equality correlated aggregate"},
+		{`select n.N_NATIONKEY from NATION n where (0,null) <=>
+			(select sum(coalesce(r.R_REGIONKEY,0)),sum(r.R_REGIONKEY) from REGION r
+			 where r.R_REGIONKEY<n.N_REGIONKEY)`, "unsupported non-equality correlated aggregate input"},
+		{`select n.N_NATIONKEY, (n.N_REGIONKEY,(select R_REGIONKEY from REGION where R_REGIONKEY=1)) =
+			(select count(*),sum(r.R_REGIONKEY) from REGION r where r.R_REGIONKEY<n.N_REGIONKEY)
+			from NATION n`, "outer composition cannot be safely decorrelated"},
+	} {
+		_, err := runOneStmt(NewMockOptimizer(false), t, test.sql)
+		require.ErrorContains(t, err, test.want)
+	}
+}
+
 func TestRowConstructorCorrelatedVolatileProjectionFailsClosed(t *testing.T) {
 	for _, sql := range []string{
 		`select N_NATIONKEY from NATION n where (n.N_REGIONKEY, 1) =

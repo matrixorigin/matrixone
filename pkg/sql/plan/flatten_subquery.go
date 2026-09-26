@@ -2231,6 +2231,11 @@ func (builder *QueryBuilder) flattenScalarSubqueryWithNonEqAgg(
 			"aggregation with non equal predicate in scalar subquery will be supported in future version")
 	}
 	subRoot := builder.qry.Nodes[subID]
+	if subRoot.Limit != nil || subRoot.Offset != nil || subRoot.RankOption != nil ||
+		aggNode.Limit != nil || aggNode.Offset != nil || aggNode.RankOption != nil {
+		return 0, nil, moerr.NewNYI(builder.GetContext(),
+			"pagination in non-equality correlated aggregate is not supported")
+	}
 	if subquery.Child != nil && subRoot == aggNode && len(subCtx.results) != len(aggNode.AggList) {
 		return 0, nil, moerr.NewNYIf(builder.GetContext(),
 			"aggregation with non equal predicate in scalar subquery will be supported in future version")
@@ -2296,25 +2301,22 @@ func (builder *QueryBuilder) flattenScalarSubqueryWithNonEqAgg(
 	// Restrictions (avoid known correctness traps):
 	//  1. Exactly one outer binding.  Multiple bindings would force us to
 	//     pick a single tag for the AGG, dropping access to the others.
-	//  2. The single binding must have at least one hidden column (Row_ID).
-	//     Without a unique row identifier in GROUP BY, duplicate outer rows
-	//     would be merged by the AGG, producing wrong results.  Base table
-	//     scans always carry Row_ID; derived tables (FROM (...) sub) do not.
+	//  2. The current outer stream must expose that table unchanged. Earlier
+	//     scalar joins or other output-changing nodes cannot survive this AGG.
 	if len(ctx.bindings) != 1 {
 		return 0, nil, moerr.NewNYIf(builder.GetContext(),
 			"aggregation with non equal predicate in scalar subquery referencing multiple outer tables will be supported in future version")
 	}
 	outerBinding := ctx.bindings[0]
-	hasHiddenCol := false
-	for _, hidden := range outerBinding.colIsHidden {
-		if hidden {
-			hasHiddenCol = true
-			break
-		}
-	}
-	if !hasHiddenCol {
+	outerMarker := builder.findReachableRowIDColRef(nodeID)
+	if outerMarker == nil || outerMarker.GetCol() == nil ||
+		outerMarker.GetCol().RelPos != outerBinding.tag ||
+		outerMarker.GetCol().ColPos < 0 ||
+		int(outerMarker.GetCol().ColPos) >= len(outerBinding.cols) ||
+		int(outerMarker.GetCol().ColPos) >= len(outerBinding.colIsHidden) ||
+		!outerBinding.colIsHidden[outerMarker.GetCol().ColPos] {
 		return 0, nil, moerr.NewNYIf(builder.GetContext(),
-			"aggregation with non equal predicate in scalar subquery on derived tables will be supported in future version")
+			"non-equality correlated aggregate with outer composition cannot be safely decorrelated")
 	}
 	outerGroupBy := make([]*plan.Expr, 0, len(outerBinding.cols))
 	for i := range outerBinding.cols {
@@ -2334,45 +2336,85 @@ func (builder *QueryBuilder) flattenScalarSubqueryWithNonEqAgg(
 		aggExprs[i] = DeepCopyExpr(agg)
 	}
 
-	// LEFT JOIN produces a NULL row for non-matching outer rows.
-	// starcount/count(*) would count that NULL row as 1 instead of 0.
-	//
-	// Fix: rewrite starcount → count(inner.Row_ID).  Row_ID is always
-	// non-null on real inner rows and becomes NULL when the LEFT JOIN
-	// produces a no-match row, so count() naturally returns 0 for
-	// outer rows that have no matching inner rows.
-	//
-	// We require the inner subtree to walk down through single-child
-	// nodes to a single TABLE_SCAN that exposes Row_ID; otherwise the
-	// rewrite is unsafe and we fall back to NYI.
-	hasStarCount := false
-	for _, agg := range aggExprs {
-		if f, ok := agg.Expr.(*plan.Expr_F); ok && f.F.Func.ObjName == "starcount" {
-			hasStarCount = true
+	// A LEFT JOIN creates one synthetic row for an unmatched outer row.
+	// Only the inner scan's accessible Row_ID distinguishes it from real input.
+	markerCol := builder.findReachableRowIDColRef(innerID)
+	if markerCol == nil || markerCol.GetCol() == nil {
+		return 0, nil, moerr.NewNYI(builder.GetContext(),
+			"non-equality correlated aggregate requires an accessible inner row marker")
+	}
+	markerCol.Typ.NotNullable = false // nullable after the LEFT JOIN
+	markerTag := markerCol.GetCol().RelPos
+	innerColCount := 0
+	for _, binding := range subCtx.bindings {
+		if binding.tag == markerTag {
+			innerColCount = len(binding.cols)
 			break
 		}
 	}
-	if hasStarCount {
-		markerCol := builder.findRowIDColRef(innerID)
-		if markerCol == nil {
-			return 0, nil, moerr.NewNYIf(builder.GetContext(),
-				"count(*) with non equal predicate in scalar subquery on this inner shape will be supported in future version")
+	if innerColCount == 0 {
+		return 0, nil, moerr.NewNYI(builder.GetContext(),
+			"non-equality correlated aggregate requires an accessible inner row marker")
+	}
+	markerIsNull, err := BindFuncExprImplByPlanExpr(builder.GetContext(), "isnull", []*plan.Expr{markerCol})
+	if err != nil {
+		return 0, nil, err
+	}
+	for _, agg := range aggExprs {
+		f := agg.GetF()
+		if f == nil || f.Func == nil {
+			return 0, nil, moerr.NewNYI(builder.GetContext(),
+				"unsupported non-equality correlated aggregate input")
 		}
-		for _, agg := range aggExprs {
-			f, ok := agg.Expr.(*plan.Expr_F)
-			if !ok || f.F.Func.ObjName != "starcount" {
-				continue
-			}
-			argType := makeTypeByPlan2Expr(markerCol)
-			fGet, err := function.GetFunctionByName(builder.GetContext(), "count", []types.Type{argType})
+		fid, _ := function.DecodeOverloadID(f.Func.Obj & function.DistinctMask)
+		if fid == function.STARCOUNT {
+			fGet, err := function.GetFunctionByName(builder.GetContext(), "count", []types.Type{makeTypeByPlan2Expr(markerCol)})
 			if err != nil {
 				return 0, nil, err
 			}
-			f.F.Func.ObjName = "count"
-			f.F.Func.Obj = fGet.GetEncodedOverloadID()
-			f.F.Args = []*plan.Expr{DeepCopyExpr(markerCol)}
+			f.Func.ObjName = "count"
+			f.Func.Obj = fGet.GetEncodedOverloadID()
+			f.Args = []*plan.Expr{DeepCopyExpr(markerCol)}
 			retType := fGet.GetReturnType()
 			agg.Typ = makePlan2Type(&retType)
+			continue
+		}
+		switch fid {
+		case function.COUNT, function.SUM, function.MIN, function.MAX, function.AVG:
+			if len(f.Args) != 1 {
+				return 0, nil, moerr.NewNYI(builder.GetContext(),
+					"unsupported non-equality correlated aggregate input")
+			}
+		case function.GROUP_CONCAT:
+			if len(f.Args) == 0 {
+				return 0, nil, moerr.NewNYI(builder.GetContext(),
+					"unsupported non-equality correlated aggregate input")
+			}
+		default:
+			return 0, nil, moerr.NewNYI(builder.GetContext(),
+				"unsupported non-equality correlated aggregate input")
+		}
+		for i, arg := range f.Args {
+			switch input := arg.Expr.(type) {
+			case *plan.Expr_Col:
+				if input.Col == nil || input.Col.RelPos != markerTag || input.Col.ColPos < 0 ||
+					int(input.Col.ColPos) >= innerColCount {
+					return 0, nil, moerr.NewNYI(builder.GetContext(),
+						"unsupported non-equality correlated aggregate input")
+				}
+			case *plan.Expr_Lit:
+			default:
+				return 0, nil, moerr.NewNYI(builder.GetContext(),
+					"unsupported non-equality correlated aggregate input")
+			}
+			masked, err := BindFuncExprImplByPlanExpr(builder.GetContext(), "case", []*plan.Expr{
+				DeepCopyExpr(markerIsNull), makePlan2NullConstExprWithType(), arg,
+			})
+			if err != nil {
+				return 0, nil, err
+			}
+			masked.Typ.NotNullable = false
+			f.Args[i] = masked
 		}
 	}
 
