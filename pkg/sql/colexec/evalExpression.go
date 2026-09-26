@@ -177,6 +177,8 @@ type expressionExecutorBuildContext struct {
 	states                      []*memoExpressionState
 	foldOwnedLiteralNumericCast bool
 	joinBuildDiagnosticOwner    *DeferredJoinDiagnostic
+	joinActivation              *[]ExpressionExecutor
+	conditionalJoinDepth        int
 }
 
 // NewOwnedConstantFilterExecutors is only for a single coordinator filter
@@ -213,6 +215,42 @@ func NewJoinBuildExpressionExecutors(
 	owner *DeferredJoinDiagnostic,
 ) ([]ExpressionExecutor, error) {
 	return newExpressionExecutorsWithDiagnosticOwner(proc, planExprs, selection, true, owner)
+}
+
+// NewJoinProbeExpressionExecutors returns borrowed references to the constant
+// subtrees that are unconditionally evaluated by the probe expression. The
+// returned roots alone own those executors and must be freed exactly once.
+func NewJoinProbeExpressionExecutors(
+	proc *process.Process,
+	planExprs []*plan.Expr,
+	selection *vector.AllocationAccountSelection,
+	owner *DeferredJoinDiagnostic,
+) ([]ExpressionExecutor, []ExpressionExecutor, error) {
+	if owner == nil {
+		execs, err := NewExpressionExecutorsFromPlanExpressionsWithAllocation(proc, planExprs, selection)
+		return execs, nil, err
+	}
+	activation := make([]ExpressionExecutor, 0)
+	execs := make([]ExpressionExecutor, len(planExprs))
+	for i, expr := range planExprs {
+		buildCtx := &expressionExecutorBuildContext{
+			foldOwnedLiteralNumericCast: true,
+			joinBuildDiagnosticOwner:    owner,
+			joinActivation:              &activation,
+		}
+		var err error
+		execs[i], err = newExpressionExecutorWithAllocation(proc, expr, selection, buildCtx)
+		if err != nil {
+			for j := 0; j < i; j++ {
+				execs[j].Free()
+			}
+			return nil, nil, err
+		}
+		if len(buildCtx.states) > 0 {
+			execs[i] = &memoRootExpressionExecutor{executor: execs[i], states: buildCtx.states}
+		}
+	}
+	return execs, activation, nil
 }
 
 func newExpressionExecutorsWithDiagnosticOwner(
@@ -430,6 +468,12 @@ func newExpressionExecutorWithAllocation(
 			buildCtx.joinBuildDiagnosticOwner = nil
 			defer func() { buildCtx.joinBuildDiagnosticOwner = owner }()
 		}
+		conditional := !deferDiagnostic &&
+			(executor.fid == function.IFF || executor.fid == function.CASE || executor.fid == function.COALESCE)
+		if conditional {
+			buildCtx.conditionalJoinDepth++
+			defer func() { buildCtx.conditionalJoinDepth-- }()
+		}
 		for i := range executor.parameterExecutor {
 			subExecutor, paramErr := newExpressionExecutorWithAllocation(proc, t.F.Args[i], selection, buildCtx)
 			if paramErr != nil {
@@ -439,12 +483,16 @@ func newExpressionExecutorWithAllocation(
 			executor.SetParameter(i, subExecutor)
 		}
 		if deferDiagnostic {
-			return &deferredJoinConstantExecutor{
+			wrapped := &deferredJoinConstantExecutor{
 				executor:  executor,
 				owner:     owner,
 				typ:       typ,
 				selection: selection,
-			}, nil
+			}
+			if buildCtx.joinActivation != nil && buildCtx.conditionalJoinDepth == 0 {
+				*buildCtx.joinActivation = append(*buildCtx.joinActivation, wrapped)
+			}
+			return wrapped, nil
 		}
 		return executor, nil
 	}

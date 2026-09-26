@@ -22,6 +22,7 @@ import (
 
 	"github.com/matrixorigin/matrixone/pkg/catalog"
 	"github.com/matrixorigin/matrixone/pkg/container/types"
+	"github.com/matrixorigin/matrixone/pkg/container/vector"
 	"github.com/matrixorigin/matrixone/pkg/pb/plan"
 	"github.com/matrixorigin/matrixone/pkg/sql/plan/function"
 	"github.com/matrixorigin/matrixone/pkg/vectorindex/metric"
@@ -182,6 +183,65 @@ func TestJoinKeepsDiagnosticEquijoinKeys(t *testing.T) {
 			}
 		}
 	}
+}
+
+func TestPreparedJoinDiagnosticProofOnlyRelaxesCurrentExecution(t *testing.T) {
+	ctx := NewMockCompilerContext(true)
+	builder, leftTag, _ := newVolatileJoinPushdownBuilder(ctx, plan.Node_INNER)
+	param := &plan.Expr{Typ: Type{Id: int32(types.T_varchar)}, Expr: &plan.Expr_P{P: &plan.ParamRef{Pos: 0}}}
+	clock, err := BindFuncExprImplByPlanExpr(ctx.GetContext(), "time", []*plan.Expr{param})
+	require.NoError(t, err)
+	column := &plan.Expr{Typ: Type{Id: int32(types.T_time)}, Expr: &plan.Expr_Col{
+		Col: &plan.ColRef{RelPos: leftTag, ColPos: 0},
+	}}
+	condition, err := BindFuncExprImplByPlanExpr(ctx.GetContext(), "=", []*plan.Expr{column, clock})
+	require.NoError(t, err)
+	builder.qry.Nodes[2].OnList = []*plan.Expr{condition}
+	builder.qry.Steps = []int32{2}
+	template := &plan.Plan{Plan: &plan.Plan_Query{Query: builder.qry}}
+	require.True(t, PreparedPlanHasJoinParameterDiagnostic(template))
+	require.True(t, builder.joinOwnsConstantDiagnostic(builder.qry.Nodes[2]))
+	require.True(t, builder.filterPushdownBarrier(condition))
+
+	proc := ctx.GetProcess()
+	params := vector.NewVec(types.T_text.ToType())
+	defer func() { proc.SetPrepareParams(nil); params.Free(proc.Mp()) }()
+	require.NoError(t, vector.AppendBytes(params, []byte("00:00:01"), false, proc.Mp()))
+	proc.SetPrepareParams(params)
+	safe, err := ProbePreparedJoinParameterDiagnostics(proc, template)
+	require.NoError(t, err)
+	require.True(t, safe)
+	originalContext := ctx.GetContext()
+	ctx.SetContext(WithPreparedJoinDiagnosticFree(originalContext))
+	require.False(t, builder.joinOwnsConstantDiagnostic(builder.qry.Nodes[2]))
+	require.False(t, builder.filterPushdownBarrier(condition))
+	ctx.SetContext(originalContext)
+	require.True(t, builder.joinOwnsConstantDiagnostic(builder.qry.Nodes[2]))
+
+	require.NoError(t, vector.SetStringAt(params, 0, "900:00:00", proc.Mp()))
+	safe, err = ProbePreparedJoinParameterDiagnostics(proc, template)
+	require.NoError(t, err)
+	require.False(t, safe)
+	require.True(t, builder.joinOwnsConstantDiagnostic(builder.qry.Nodes[2]))
+
+	// The proof covers other parameter diagnostics in the same statement too:
+	// the execution-scoped optimizer flag must not move an unprobed WHERE error.
+	whereParam := &plan.Expr{Typ: Type{Id: int32(types.T_varchar)}, Expr: &plan.Expr_P{P: &plan.ParamRef{Pos: 1}}}
+	whereClock, err := BindFuncExprImplByPlanExpr(ctx.GetContext(), "time", []*plan.Expr{whereParam})
+	require.NoError(t, err)
+	builder.qry.Nodes = append(builder.qry.Nodes, &plan.Node{
+		NodeType: plan.Node_FILTER, Children: []int32{2}, FilterList: []*plan.Expr{whereClock},
+	})
+	builder.qry.Steps = []int32{3}
+	require.NoError(t, vector.SetStringAt(params, 0, "00:00:01", proc.Mp()))
+	require.NoError(t, vector.AppendBytes(params, []byte("900:00:00"), false, proc.Mp()))
+	safe, err = ProbePreparedJoinParameterDiagnostics(proc, template)
+	require.NoError(t, err)
+	require.False(t, safe)
+	builder.qry.Steps = []int32{2}
+	safe, err = ProbePreparedJoinParameterDiagnostics(proc, template)
+	require.NoError(t, err)
+	require.False(t, safe, "auxiliary nodes must also be covered before relaxing the whole replan")
 }
 
 func TestPushdownLimitToTableScanComposesExistingPagination(t *testing.T) {

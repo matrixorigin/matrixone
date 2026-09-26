@@ -41,6 +41,11 @@ func MayDiagnoseStatementParameter(expr *plan.Expr) bool {
 		}
 		return len(fn.Args) > 0 && fn.Args[0] != nil &&
 			types.T(fn.Args[0].Typ.Id).IsMySQLString() && target.ToType().IsNumeric()
+	case DATE:
+		// DATE(text) reports an out-of-range SQL error for malformed input.
+		// Typed temporal inputs use non-parsing overloads and need no owner.
+		return len(fn.Args) > 0 && fn.Args[0] != nil &&
+			types.T(fn.Args[0].Typ.Id).IsMySQLString()
 	case TIME, MAKETIME, SEC_TO_TIME, TIMESTAMP,
 		DATE_ADD, DATE_SUB, TIMESTAMPADD, ADDTIME, SUBTIME, TIMEDIFF,
 		PERIOD_ADD, PERIOD_DIFF:

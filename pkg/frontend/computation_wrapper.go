@@ -90,6 +90,7 @@ type TxnComputationWrapper struct {
 	// a direct projected binary parameter. Compile retry must replay the same
 	// admission without rescanning the prepared plan.
 	runtimeDirectResultSpecialization bool
+	preparedJoinDiagnosticFree        bool
 	// runtimeCacheTarget/runtimeCacheKey/runtimeCachePlan stage a candidate
 	// specialization outside the live PrepareStmt cache. The candidate is
 	// installed only after its Compile succeeds, so a failed replacement leaves
@@ -249,6 +250,7 @@ func (cwft *TxnComputationWrapper) Clear() {
 	cwft.runResult = nil
 	cwft.paramVals = nil
 	cwft.runtimeDirectResultSpecialization = false
+	cwft.preparedJoinDiagnosticFree = false
 	cwft.prepareName = ""
 	cwft.binaryPrepare = false
 	cwft.preparedStmt = nil
@@ -571,6 +573,7 @@ func (cwft *TxnComputationWrapper) Compile(any any, fill func(*batch.Batch, *per
 				cwft.paramVals,
 				execCtx.input != nil && execCtx.input.isBinaryProtExecute,
 				cwft.runtimeDirectResultSpecialization,
+				cwft.preparedJoinDiagnosticFree,
 			)
 			var planSnapshotTS *timestamp.Timestamp
 			if cwft.preparedStmt != nil {
@@ -618,6 +621,7 @@ func (cwft *TxnComputationWrapper) Compile(any any, fill func(*batch.Batch, *per
 					cwft.paramVals,
 					execCtx.input != nil && execCtx.input.isBinaryProtExecute,
 					cwft.runtimeDirectResultSpecialization,
+					cwft.preparedJoinDiagnosticFree,
 				),
 				cwft.preparedStmt.defaultDatabase,
 				true,
@@ -1947,6 +1951,50 @@ func initExecuteStmtParamWithResolverInSession(
 		}
 	}
 
+	// A prepared JOIN template must retain its diagnostic boundary because an
+	// unknown parameter can fail. For this execution alone, a successful
+	// isolated scalar probe proves that the boundary is unnecessary and lets
+	// the ordinary optimizer push unrelated selective filters to the scans.
+	// The template, its compile, and its result metadata remain immutable.
+	if prepareStmt.joinDiagnosticCandidatePlan != executionPlan {
+		prepareStmt.joinDiagnosticCandidatePlan = executionPlan
+		prepareStmt.joinDiagnosticCandidate = plan2.PreparedPlanHasJoinParameterDiagnostic(executionPlan)
+	}
+	var joinDiagnosticTemplatePlan *plan.Plan
+	if prepareStmt.joinDiagnosticCandidate &&
+		!runtimeNumericOverloadCandidate &&
+		!runtimeNumericPrefixCandidate && !runtimeTextComparisonSpecialization &&
+		!runtimeConversionCandidate && !runtimeDirectResultCandidate {
+		free, probeErr := plan2.ProbePreparedJoinParameterDiagnostics(cwft.proc, executionPlan)
+		if probeErr != nil {
+			return nil, nil, nil, originSQL, false, probeErr
+		}
+		if free {
+			compilerCtx := executionSes.GetTxnCompileCtx()
+			previousCtx := compilerCtx.GetContext()
+			planningCtx := previousCtx
+			if planningCtx == nil {
+				planningCtx = reqCtx
+			}
+			compilerCtx.SetContext(plan2.WithPreparedJoinDiagnosticFree(planningCtx))
+			localPlan, buildErr := rebuildPreparePlan(execCtx, executionSes, prepareStmt, buildPlan)
+			compilerCtx.SetContext(previousCtx)
+			if buildErr != nil {
+				return nil, nil, nil, originSQL, false, buildErr
+			}
+			if localPlan == nil || localPlan.GetDcl().GetPrepare() == nil ||
+				localPlan.GetDcl().GetPrepare().Plan == nil {
+				return nil, nil, nil, originSQL, false,
+					moerr.NewInternalError(reqCtx, "execution-local prepared JOIN replan is missing its query")
+			}
+			if slices.Equal(localPlan.GetDcl().GetPrepare().ParamTypes, preparePlan.ParamTypes) {
+				joinDiagnosticTemplatePlan = executionPlan
+				executionPlan = localPlan.GetDcl().GetPrepare().Plan
+				cwft.preparedJoinDiagnosticFree = true
+			}
+		}
+	}
+
 	// Static binary specialization, numeric-prefix consumers, and direct numeric
 	// result markers enter the same bounded one-category cache. The copied plan
 	// keeps typed ParamRefs, so values in a stable runtime domain reuse its compile
@@ -1974,6 +2022,7 @@ func initExecuteStmtParamWithResolverInSession(
 		prepareStmt.clearRuntimeSpecializationCache()
 	}
 	cacheableRuntimeQuery := executionPlan.GetQuery() != nil && !runtimeTextComparisonSpecialization &&
+		!cwft.preparedJoinDiagnosticFree &&
 		runtimeCacheEligible &&
 		(runtimeDirectResultCandidate ||
 			(runtimeCategoryCandidate && preparedRuntimeCacheSupports(cwft.paramVals)))
@@ -2003,6 +2052,18 @@ func initExecuteStmtParamWithResolverInSession(
 			reqCtx, executionPlan, cwft.paramVals, binaryExecute,
 			runtimeNumericOverloadCandidate, runtimeDirectResultCandidate, needsRuntimeSpecialization,
 			runtimeDirectResultPositions, true, runtimeTextComparisonSpecialization)
+		// A later value-dependent rebind can change the diagnostic expression
+		// whose original value was probed. Execute from the conservative template
+		// in that case; only a structurally unchanged plan uses the proof.
+		if err == nil && cwft.preparedJoinDiagnosticFree &&
+			(runtimePlanApplied || laterRuntimeSpecialized) {
+			cwft.preparedJoinDiagnosticFree = false
+			executionPlan = joinDiagnosticTemplatePlan
+			runtimePlan, laterRuntimeSpecialized, runtimePlanApplied, err = specializePreparedExecutionPlan(
+				reqCtx, executionPlan, cwft.paramVals, binaryExecute,
+				runtimeNumericOverloadCandidate, runtimeDirectResultCandidate, needsRuntimeSpecialization,
+				runtimeDirectResultPositions, true, runtimeTextComparisonSpecialization)
+		}
 		runtimeSpecialized = runtimeSpecialized || laterRuntimeSpecialized
 		if err == nil && cacheableRuntimeQuery && laterRuntimeSpecialized && runtimePlanApplied {
 			err = plan2.RestorePreparedRuntimeParamRefs(reqCtx, runtimePlan)
@@ -2049,7 +2110,8 @@ func initExecuteStmtParamWithResolverInSession(
 	retComp := prepareStmt.compile
 	if cachedRuntimeCompile != nil {
 		retComp = cachedRuntimeCompile
-	} else if runtimePlanApplied || runtimeSpecialized || prepareStmt.hasPaginationParams {
+	} else if runtimePlanApplied || runtimeSpecialized || prepareStmt.hasPaginationParams ||
+		cwft.preparedJoinDiagnosticFree {
 		// The cached compile was built from the prepare-time parameter types and
 		// cannot execute a plan whose overloads, result metadata, or pagination
 		// values must be rebound for this execution. An AP runtime cache hit
@@ -2475,22 +2537,26 @@ type preparedExecutionRetry struct {
 	paramVals                  []any
 	binaryExecute              bool
 	directResultSpecialization bool
+	diagnosticFreeJoin         bool
 }
 
 func newPreparedExecutionRetry(
 	paramVals []any,
 	binaryExecute bool,
-	directResultSpecialization ...bool,
+	flags ...bool,
 ) *preparedExecutionRetry {
-	if len(paramVals) == 0 {
+	if len(paramVals) == 0 && (len(flags) < 2 || !flags[1]) {
 		return nil
 	}
 	retry := &preparedExecutionRetry{
 		paramVals:     append([]any(nil), paramVals...),
 		binaryExecute: binaryExecute,
 	}
-	if len(directResultSpecialization) > 0 {
-		retry.directResultSpecialization = directResultSpecialization[0]
+	if len(flags) > 0 {
+		retry.directResultSpecialization = flags[0]
+	}
+	if len(flags) > 1 {
+		retry.diagnosticFreeJoin = flags[1]
 	}
 	return retry
 }
@@ -3484,6 +3550,15 @@ func buildPlanForCompileRetry(
 	forcePrepare bool,
 	preparedRetry *preparedExecutionRetry,
 ) (*plan2.Plan, error) {
+	if preparedRetry != nil && preparedRetry.diagnosticFreeJoin {
+		previousCtx := compilerContext.GetContext()
+		planningCtx := previousCtx
+		if planningCtx == nil {
+			planningCtx = ctx
+		}
+		compilerContext.SetContext(plan2.WithPreparedJoinDiagnosticFree(planningCtx))
+		defer compilerContext.SetContext(previousCtx)
+	}
 	if ses != nil {
 		ctx = function.WithNoUnsignedSubtraction(ctx, mysql.HasSQLMode(sessionSQLMode(ses), "NO_UNSIGNED_SUBTRACTION"))
 		ctx = function.WithDivPrecisionIncrement(ctx, sessionDivPrecisionIncrement(ses))

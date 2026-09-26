@@ -138,24 +138,26 @@ func (hashJoin *HashJoin) Prepare(proc *process.Process) (err error) {
 			// The physical probe is the logical right input in this mode.
 			probeConditions = hashJoin.EqConds[1]
 		}
-		eqCondExecs, err := hashbuild.NewExpressionExecutors(
+		eqCondExecs, eqActivation, err := hashbuild.NewJoinProbeExpressionExecutors(
 			proc,
 			probeConditions,
 			hashJoin.allocationAccount,
-			hashJoin.OwnsConstantFilterDiagnostics,
+			hashJoin.JoinDiagnostic,
 		)
 		if err != nil {
 			return err
 		}
 
 		var nonEqCondExec colexec.ExpressionExecutor
+		activation := eqActivation
 		if hashJoin.NonEqCond != nil {
 			var nonEqExecs []colexec.ExpressionExecutor
-			nonEqExecs, err = hashbuild.NewExpressionExecutors(
+			var nonEqActivation []colexec.ExpressionExecutor
+			nonEqExecs, nonEqActivation, err = hashbuild.NewJoinProbeExpressionExecutors(
 				proc,
 				[]*plan.Expr{hashJoin.NonEqCond},
 				hashJoin.allocationAccount,
-				hashJoin.OwnsConstantFilterDiagnostics,
+				hashJoin.JoinDiagnostic,
 			)
 			if err != nil {
 				for _, exec := range eqCondExecs {
@@ -164,14 +166,36 @@ func (hashJoin *HashJoin) Prepare(proc *process.Process) (err error) {
 				return err
 			}
 			nonEqCondExec = nonEqExecs[0]
+			activation = append(activation, nonEqActivation...)
 		}
 
 		ctr.eqCondVecs = make([]*vector.Vector, len(hashJoin.EqConds[0]))
 		ctr.eqCondExecs = eqCondExecs
 		ctr.nonEqCondExec = nonEqCondExec
+		ctr.joinDiagnosticActivation = activation
 	}
 
 	return err
+}
+
+func (hashJoin *HashJoin) activateJoinDiagnostic(proc *process.Process) error {
+	ctr := &hashJoin.ctr
+	if ctr.joinDiagnosticActivated {
+		return nil
+	}
+	// These are the actual constant children of the probe and residual trees.
+	// Evaluate them with one logical row before hash-match pruning, then use
+	// their folded results if the ordinary residual expression later runs.
+	for _, executor := range ctr.joinDiagnosticActivation {
+		if _, err := executor.Eval(proc, nil, nil); err != nil {
+			return err
+		}
+	}
+	if err := hashJoin.JoinDiagnostic.Activate(proc); err != nil {
+		return err
+	}
+	ctr.joinDiagnosticActivated = true
+	return nil
 }
 
 func isAsofTemporalType(typeID types.T) bool {
@@ -265,7 +289,7 @@ func (hashJoin *HashJoin) Call(proc *process.Process) (vm.CallResult, error) {
 					continue
 				}
 				if hashJoin.JoinDiagnostic != nil && ctr.globalBuildRowCnt > 0 {
-					if err = hashJoin.JoinDiagnostic.Activate(proc); err != nil {
+					if err = hashJoin.activateJoinDiagnostic(proc); err != nil {
 						return result, err
 					}
 				}

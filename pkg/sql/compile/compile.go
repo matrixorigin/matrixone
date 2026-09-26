@@ -7012,6 +7012,19 @@ func hashMarkOperandRel(expr *plan.Expr) (int32, bool) {
 func (c *Compile) compileProbeSideForBroadcastJoin(node, left, right *plan.Node, probeScopes []*Scope) []*Scope {
 	var rs []*Scope
 	isEq := plan2.IsEquiJoin2(node.OnList)
+	if isEq && (node.JoinType == plan.Node_INNER || node.JoinType == plan.Node_LEFT ||
+		node.JoinType == plan.Node_RIGHT || node.JoinType == plan.Node_SEMI ||
+		node.JoinType == plan.Node_ANTI || node.JoinType == plan.Node_SINGLE ||
+		node.JoinType == plan.Node_OUTER) {
+		for _, expr := range node.OnList {
+			if plan2.ContainsGuardedJoinDiagnostic(c.proc, expr) {
+				// Preserve row-dependent CASE/IF/COALESCE selection across
+				// nonmatching hash keys by evaluating the complete ON in LoopJoin.
+				isEq = false
+				break
+			}
+		}
+	}
 
 	rightTypes := make([]types.Type, len(right.ProjectList))
 	for i, expr := range right.ProjectList {

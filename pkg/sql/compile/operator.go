@@ -1552,7 +1552,7 @@ func constructHashJoin(node, left *plan.Node, left_types, right_types []types.Ty
 	arg.ResultCols = result
 	arg.NonEqCond = nonEqCond
 	arg.OwnsConstantFilterDiagnostics = containsStatementInvariantDiagnosticInList(proc, node.OnList)
-	if containsStatementInvariantDiagnosticInList(proc, eqConds) {
+	if arg.OwnsConstantFilterDiagnostics {
 		arg.JoinDiagnostic = new(colexec.DeferredJoinDiagnostic)
 	}
 	arg.EqConds = constructJoinConditions(eqConds, proc)

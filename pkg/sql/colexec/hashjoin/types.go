@@ -74,6 +74,9 @@ type container struct {
 	// globalBuildRowCnt is independent of the currently loaded spill bucket.
 	// MARK join needs the global empty-build fact for SQL three-valued logic.
 	globalBuildRowCnt int64
+	// Borrowed from eqCondExecs/nonEqCondExec; never freed independently.
+	joinDiagnosticActivation []colexec.ExpressionExecutor
+	joinDiagnosticActivated  bool
 
 	leftBat *batch.Batch
 	resBat  *batch.Batch
@@ -414,6 +417,8 @@ func (hashJoin *HashJoin) Reset(proc *process.Process, pipelineFailed bool, err 
 	ctr.cleanEqCondExecutors()
 	ctr.cleanHashMap()
 	ctr.cleanNonEqCondExecutor()
+	ctr.joinDiagnosticActivation = nil
+	ctr.joinDiagnosticActivated = false
 	if ctr.resBat != nil {
 		ctr.resBat.Clean(proc.GetMPool())
 		ctr.resBat = nil
@@ -449,6 +454,8 @@ func (hashJoin *HashJoin) Free(proc *process.Process, pipelineFailed bool, err e
 	ctr.cleanEqCondExecutors()
 	ctr.cleanHashMap()
 	ctr.cleanNonEqCondExecutor()
+	ctr.joinDiagnosticActivation = nil
+	ctr.joinDiagnosticActivated = false
 }
 
 func (ctr *container) cleanAsofIndexes(proc *process.Process) {
