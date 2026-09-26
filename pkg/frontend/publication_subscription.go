@@ -31,6 +31,7 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
 	"github.com/matrixorigin/matrixone/pkg/common/pubsub"
 	"github.com/matrixorigin/matrixone/pkg/common/sqlquote"
+	"github.com/matrixorigin/matrixone/pkg/container/types"
 	"github.com/matrixorigin/matrixone/pkg/defines"
 	"github.com/matrixorigin/matrixone/pkg/pb/plan"
 	"github.com/matrixorigin/matrixone/pkg/publication"
@@ -73,58 +74,35 @@ const (
 	getDbAccountIdAndTypByIdFormat = `select account_id,dat_type from mo_catalog.mo_database where dat_id = %d and datname = '%s';`
 )
 
-var (
-	showPublicationsOutputColumns = [8]Column{
-		&MysqlColumn{
-			ColumnImpl: ColumnImpl{
-				name:       "publication",
-				columnType: defines.MYSQL_TYPE_VARCHAR,
-			},
-		},
-		&MysqlColumn{
-			ColumnImpl: ColumnImpl{
-				name:       "database",
-				columnType: defines.MYSQL_TYPE_VARCHAR,
-			},
-		},
-		&MysqlColumn{
-			ColumnImpl: ColumnImpl{
-				name:       "tables",
-				columnType: defines.MYSQL_TYPE_TEXT,
-			},
-		},
-		&MysqlColumn{
-			ColumnImpl: ColumnImpl{
-				name:       "sub_account",
-				columnType: defines.MYSQL_TYPE_TEXT,
-			},
-		},
-		&MysqlColumn{
-			ColumnImpl: ColumnImpl{
-				name:       "subscribed_accounts",
-				columnType: defines.MYSQL_TYPE_TEXT,
-			},
-		},
-		&MysqlColumn{
-			ColumnImpl: ColumnImpl{
-				name:       "create_time",
-				columnType: defines.MYSQL_TYPE_TIMESTAMP,
-			},
-		},
-		&MysqlColumn{
-			ColumnImpl: ColumnImpl{
-				name:       "update_time",
-				columnType: defines.MYSQL_TYPE_TIMESTAMP,
-			},
-		},
-		&MysqlColumn{
-			ColumnImpl: ColumnImpl{
-				name:       "comments",
-				columnType: defines.MYSQL_TYPE_TEXT,
-			},
-		},
+// publicationShowResultColumns is shared by PREPARE metadata and execution.
+// Return fresh definitions so metadata consumers cannot mutate another query.
+func publicationShowResultColumns(stmt tree.Statement) []*plan.ColDef {
+	var columns []*plan.ColDef
+	switch stmt.(type) {
+	case *tree.ShowPublications:
+		columns = []*plan.ColDef{
+			{Name: "publication", Typ: plan.Type{Id: int32(types.T_varchar)}},
+			{Name: "database", Typ: plan.Type{Id: int32(types.T_varchar)}},
+			{Name: "tables", Typ: plan.Type{Id: int32(types.T_text)}},
+			{Name: "sub_account", Typ: plan.Type{Id: int32(types.T_text)}},
+			{Name: "subscribed_accounts", Typ: plan.Type{Id: int32(types.T_text)}},
+			{Name: "create_time", Typ: plan.Type{Id: int32(types.T_timestamp)}},
+			{Name: "update_time", Typ: plan.Type{Id: int32(types.T_timestamp)}},
+			{Name: "comments", Typ: plan.Type{Id: int32(types.T_text)}},
+		}
+	case *tree.ShowPublicationCoverage:
+		columns = []*plan.ColDef{
+			{Name: "Database", Typ: plan.Type{Id: int32(types.T_varchar)}},
+			{Name: "Table", Typ: plan.Type{Id: int32(types.T_varchar)}},
+		}
 	}
+	for _, column := range columns {
+		column.OriginName = column.Name
+	}
+	return columns
+}
 
+var (
 	showSubscriptionsOutputColumns = [9]Column{
 		&MysqlColumn{
 			ColumnImpl: ColumnImpl{
@@ -1835,8 +1813,12 @@ func doShowPublications(ctx context.Context, ses *Session, sp *tree.ShowPublicat
 	}
 
 	var rs = &MysqlResultSet{}
-	for _, column := range showPublicationsOutputColumns {
-		rs.AddColumn(column)
+	for _, column := range publicationShowResultColumns(sp) {
+		mysqlColumn, err := colDef2MysqlColumn(ctx, column)
+		if err != nil {
+			return err
+		}
+		rs.AddColumn(mysqlColumn)
 	}
 	for _, pubInfo := range pubInfos {
 		var updateTime interface{}
@@ -2238,18 +2220,13 @@ func doShowPublicationCoverage(ctx context.Context, ses *Session, spc *tree.Show
 
 	// Build result set with columns: Database, Table
 	var rs = &MysqlResultSet{}
-	rs.AddColumn(&MysqlColumn{
-		ColumnImpl: ColumnImpl{
-			name:       "Database",
-			columnType: defines.MYSQL_TYPE_VARCHAR,
-		},
-	})
-	rs.AddColumn(&MysqlColumn{
-		ColumnImpl: ColumnImpl{
-			name:       "Table",
-			columnType: defines.MYSQL_TYPE_VARCHAR,
-		},
-	})
+	for _, column := range publicationShowResultColumns(spc) {
+		mysqlColumn, err := colDef2MysqlColumn(ctx, column)
+		if err != nil {
+			return err
+		}
+		rs.AddColumn(mysqlColumn)
+	}
 
 	// Get database name
 	dbName := pubInfo.DbName

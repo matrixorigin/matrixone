@@ -254,6 +254,9 @@ func getFunctionByName(
 	case failedTooManyFunctionMatched:
 		err = moerr.NewInvalidArg(ctx, fmt.Sprintf("too many overloads matched %s", name), args)
 	}
+	if err == nil {
+		r.applyDivPrecisionIncrement(ctx, args)
+	}
 
 	return r, err
 }
@@ -279,6 +282,7 @@ func GetFunctionByNameWithoutError(name string, args []types.Type) (r FuncGetRes
 		r.overloadId = int32(check.idx)
 		r.retType = f.Overloads[r.overloadId].retType(args)
 		r.cannotRunInParallel = f.Overloads[r.overloadId].cannotParallel
+		r.applyDivPrecisionIncrement(context.Background(), args)
 		return r, true
 
 	case succeedWithCast:
@@ -287,6 +291,7 @@ func GetFunctionByNameWithoutError(name string, args []types.Type) (r FuncGetRes
 		r.targetTypes = check.finalType
 		r.retType = f.Overloads[r.overloadId].retType(r.targetTypes)
 		r.cannotRunInParallel = f.Overloads[r.overloadId].cannotParallel
+		r.applyDivPrecisionIncrement(context.Background(), args)
 		return r, true
 
 	default:
@@ -300,6 +305,7 @@ func GetFunctionByNameWithoutError(name string, args []types.Type) (r FuncGetRes
 func GetFunctionByNameWithOverload(
 	ctx context.Context, name string, args []types.Type, overloadID int32,
 ) (r FuncGetResult, err error) {
+	originalArgs := args
 	if name == "cast" && IsIntegerArgumentCastOverload(overloadID) {
 		if !integerArgumentCastSignature(overloadID, args) {
 			return FuncGetResult{}, moerr.NewInvalidInputf(ctx, "invalid integer argument cast signature %v", args)
@@ -323,6 +329,7 @@ func GetFunctionByNameWithOverload(
 	}
 	r.retType = f.Overloads[overloadID].retType(args)
 	r.cannotRunInParallel = f.Overloads[overloadID].cannotParallel
+	r.applyDivPrecisionIncrement(ctx, originalArgs)
 	return r, nil
 }
 

@@ -157,6 +157,11 @@ func encodeRemoteScopeWithVectorProtocol(s *Scope, proc *process.Process, requir
 			return nil, err
 		}
 	}
+	if features.DecimalDivisionSemantics {
+		if err = validateDecimalDivisionDestination(proc, p); err != nil {
+			return nil, err
+		}
+	}
 	if features.IPFunctionSemantics || features.TOBase64ResultContracts || features.IPFunctionResultContracts ||
 		features.ExpressionResultMetadataContracts {
 		if err = validateIPFunctionDestination(proc, p); err != nil {

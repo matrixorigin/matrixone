@@ -420,14 +420,14 @@ func Test_GetFunctionByName(t *testing.T) {
 			shouldErr:  false,
 			requireFid: DIV, requireOid: 0,
 			shouldCast: true, requireTyp: []types.Type{types.T_decimal128.ToType(), types.T_decimal128.ToType()},
-			requireRet: types.New(types.T_decimal128, 38, 6),
+			requireRet: types.New(types.T_decimal128, 24, 4),
 		},
 		{
 			name: "/", args: []types.Type{types.T_int64.ToType(), types.T_uint64.ToType()},
 			shouldErr:  false,
 			requireFid: DIV, requireOid: 0,
 			shouldCast: true, requireTyp: []types.Type{types.T_decimal128.ToType(), types.T_decimal128.ToType()},
-			requireRet: types.New(types.T_decimal128, 38, 6),
+			requireRet: types.New(types.T_decimal128, 23, 4),
 		},
 
 		{

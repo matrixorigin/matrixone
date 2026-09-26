@@ -1480,6 +1480,28 @@ func TestNormalizeViewDependencyKeyForRestoreTopology(t *testing.T) {
 	require.Equal(t, genKey("db#part", "view#part"), normalized)
 }
 
+func TestFrontendTextWireResultColumns(t *testing.T) {
+	for _, wireType := range []defines.MysqlType{
+		defines.MYSQL_TYPE_TINY_BLOB, defines.MYSQL_TYPE_BLOB,
+		defines.MYSQL_TYPE_MEDIUM_BLOB, defines.MYSQL_TYPE_LONG_BLOB,
+	} {
+		column := &MysqlColumn{}
+		column.SetName("text_result")
+		column.SetColumnType(wireType)
+		column.SetCharset(charsetVarchar)
+		result, columnTypes, names, err := mysqlColDef2PlanResultColDef([]Column{column})
+		require.NoError(t, err)
+		require.Equal(t, int32(types.T_text), result.ResultCols[0].Typ.Id)
+		require.Equal(t, types.T_text, columnTypes[0].Oid)
+		require.Equal(t, []string{"text_result"}, names)
+		require.Equal(t, wireType, column.ColumnType(), "conversion must not mutate wire metadata")
+
+		column.SetCharset(charsetBinary)
+		_, _, _, err = mysqlColDef2PlanResultColDef([]Column{column})
+		require.Error(t, err, "binary BLOB must not be silently treated as TEXT")
+	}
+}
+
 func Test_convertRowsIntoBatch(t *testing.T) {
 	colMysqlTyps := []defines.MysqlType{
 		defines.MYSQL_TYPE_VAR_STRING,

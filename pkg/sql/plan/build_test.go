@@ -133,6 +133,46 @@ func TestBuildPrepareStringUsesSessionSQLMode(t *testing.T) {
 	require.NotNil(t, p.GetDcl().GetPrepare().GetPlan())
 }
 
+func TestPreparePublicationUsesFrontendExecutionPlan(t *testing.T) {
+	for _, sql := range []string{
+		"create publication pub database db account all",
+		"alter publication pub account all",
+		"drop publication pub",
+		"show publications",
+		"show publications like 'pub%'",
+		"show publication coverage pub",
+	} {
+		t.Run(sql, func(t *testing.T) {
+			ctx := NewMockCompilerContext(true)
+			stmt := tree.NewPrepareString("stmt", sql)
+			defer stmt.Free()
+			p, err := buildPrepare(stmt, ctx)
+			require.NoError(t, err)
+			prepared := p.GetDcl().GetPrepare()
+			require.NotNil(t, prepared.Plan)
+			require.True(t, prepared.Plan.IsPrepare)
+			require.Nil(t, prepared.Plan.Plan)
+			require.Empty(t, prepared.ParamTypes)
+			require.Empty(t, prepared.Schemas)
+		})
+	}
+}
+
+func TestPreparePublicationRejectsNonliteralPattern(t *testing.T) {
+	for _, sql := range []string{
+		"show publications like ?",
+		"show publications like concat('pub', ?)",
+		"show publications like 1",
+	} {
+		t.Run(sql, func(t *testing.T) {
+			stmt := tree.NewPrepareString("stmt", sql)
+			defer stmt.Free()
+			_, err := buildPrepare(stmt, NewMockCompilerContext(true))
+			require.ErrorContains(t, err, "requires a string literal LIKE pattern")
+		})
+	}
+}
+
 func TestPrepareDataBranchUsesFrontendExecutionPlan(t *testing.T) {
 	tests := []struct {
 		name       string
