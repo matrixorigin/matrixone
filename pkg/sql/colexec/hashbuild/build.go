@@ -100,6 +100,10 @@ func (hashBuild *HashBuild) Prepare(proc *process.Process) (err error) {
 	hashBuild.ctr.hashmapBuilder.DedupColName = hashBuild.DedupColName
 	hashBuild.ctr.hashmapBuilder.DedupColTypes = hashBuild.DedupColTypes
 	hashBuild.ctr.hashmapBuilder.TrackNullKeys = hashBuild.TrackNullKeys
+	hashBuild.ctr.hashmapBuilder.joinDiagnostic = hashBuild.JoinDiagnostic
+	if hashBuild.JoinDiagnostic != nil {
+		hashBuild.JoinDiagnostic.Prepare(proc)
+	}
 
 	err = hashBuild.ctr.hashmapBuilder.Prepare(
 		hashBuild.Conditions,
@@ -457,7 +461,8 @@ func (hashBuild *HashBuild) build(
 		}
 		needUniqueVec := false
 		ctr.hashmapBuilder.uniqueKeySlots = nil
-		if !hashBuild.IsShuffle && hashBuild.RuntimeFilterSpec != nil {
+		if !hashBuild.IsShuffle && hashBuild.RuntimeFilterSpec != nil &&
+			(hashBuild.JoinDiagnostic == nil || hashBuild.RuntimeFilterSpec.MustApply) {
 			// Membership-filter consumers own a separate typed-key contract.
 			// Ordinary exact filters collect unique keys only when the plan
 			// advertises every producer-side closure required by their payload
@@ -844,6 +849,16 @@ func (hashBuild *HashBuild) handleRuntimeFilter(
 	}
 
 	if hashBuild.RuntimeFilterSpec == nil {
+		return nil
+	}
+	if hashBuild.JoinDiagnostic != nil && !hashBuild.RuntimeFilterSpec.MustApply {
+		// Probe input cardinality activates ON diagnostics. An optional filter
+		// from this join must not erase every probe row before that point.
+		runtimeFilter := message.RuntimeFilterMessage{
+			Tag: hashBuild.RuntimeFilterSpec.Tag,
+			Typ: message.RuntimeFilter_PASS,
+		}
+		hashBuild.sendRuntimeFilter(runtimeFilter, hashBuild.RuntimeFilterSpec, proc)
 		return nil
 	}
 

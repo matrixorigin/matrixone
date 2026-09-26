@@ -264,6 +264,11 @@ func (hashJoin *HashJoin) Call(proc *process.Process) (vm.CallResult, error) {
 				if bat.IsEmpty() {
 					continue
 				}
+				if hashJoin.JoinDiagnostic != nil && ctr.globalBuildRowCnt > 0 {
+					if err = hashJoin.JoinDiagnostic.Activate(proc); err != nil {
+						return result, err
+					}
+				}
 
 				if ctr.mp == nil && !ctr.probeEmitUnmatched && !ctr.probeMark {
 					continue

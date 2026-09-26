@@ -289,6 +289,7 @@ type HashBuild struct {
 	IsShuffle                     bool
 	Conditions                    []*plan.Expr
 	OwnsConstantFilterDiagnostics bool
+	JoinDiagnostic                *colexec.DeferredJoinDiagnostic
 	JoinMapTag                    int32
 	JoinMapRefCnt                 int32
 	ShuffleIdx                    int32

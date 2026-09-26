@@ -225,6 +225,7 @@ type HashJoin struct {
 	NonEqCond                     *plan.Expr
 	EqConds                       [][]*plan.Expr
 	OwnsConstantFilterDiagnostics bool
+	JoinDiagnostic                *colexec.DeferredJoinDiagnostic
 
 	Mailbox *BitmapMailbox
 	NumCPU  uint64
@@ -395,6 +396,9 @@ func (hashJoin *HashJoin) ExecProjection(proc *process.Process, input *batch.Bat
 }
 
 func (hashJoin *HashJoin) Reset(proc *process.Process, pipelineFailed bool, err error) {
+	if hashJoin.JoinDiagnostic != nil {
+		hashJoin.JoinDiagnostic.Reset()
+	}
 	ctr := &hashJoin.ctr
 	hashmap.IteratorClearOwner(ctr.itr)
 	ctr.itr = nil
@@ -434,6 +438,9 @@ func (hashJoin *HashJoin) Reset(proc *process.Process, pipelineFailed bool, err 
 }
 
 func (hashJoin *HashJoin) Free(proc *process.Process, pipelineFailed bool, err error) {
+	if hashJoin.JoinDiagnostic != nil {
+		hashJoin.JoinDiagnostic.Reset()
+	}
 	ctr := &hashJoin.ctr
 	ctr.cleanAsofIndexes(proc)
 	ctr.cleanAsofBuildLeftState(proc)
