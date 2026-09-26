@@ -337,5 +337,72 @@ func TestIssue28397FieldKeepsExactNumericComparison(t *testing.T) {
 				require.Equal(t, value.want, got, "param=%d", value.param)
 			}
 		})
+
+		t.Run("issue 29378 explicit string and nested null boundaries", func(t *testing.T) {
+			const first = "cast(9007199254740992 as decimal(20,0))"
+			const second = "cast(9007199254740993 as decimal(20,0))"
+			type fieldBoundaryRun struct {
+				name   string
+				values []string
+				want   int64
+			}
+			for _, tc := range []struct {
+				name, expr string
+				runs       []fieldBoundaryRun
+			}{
+				{
+					name: "explicit char peer", expr: "field(?, cast(9007199254740993 as char))",
+					runs: []fieldBoundaryRun{
+						{"distinct decimal", []string{first}, 1},
+						{"matching decimal", []string{second}, 1},
+						{"decimal after reuse", []string{first}, 1},
+					},
+				},
+				{
+					name: "folded explicit char peer", expr: "field(?, cast(abs(" + second + ") as char))",
+					runs: []fieldBoundaryRun{{"distinct decimal", []string{first}, 1}},
+				},
+				{
+					name: "null then nested abs", expr: "field(coalesce(?, abs(?)), abs(" + first + "))",
+					runs: []fieldBoundaryRun{
+						{"null and distinct decimal", []string{"null", second}, 0},
+						{"null and matching decimal", []string{"null", first}, 1},
+						{"string boundary", []string{"'9007199254740993'", second}, 1},
+						{"null after string", []string{"null", second}, 0},
+						{"real boundary", []string{"null", "cast(9007199254740993 as double)"}, 1},
+						{"null after real", []string{"null", second}, 0},
+					},
+				},
+			} {
+				t.Run(tc.name, func(t *testing.T) {
+					_, err := conn.ExecContext(ctx, "prepare field_review from 'select "+tc.expr+"'")
+					require.NoError(t, err)
+					defer func() {
+						cleanupCtx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+						defer cancel()
+						_, cleanupErr := conn.ExecContext(cleanupCtx, "deallocate prepare field_review")
+						require.NoError(t, cleanupErr)
+					}()
+					for _, run := range tc.runs {
+						t.Run(run.name, func(t *testing.T) {
+							directExpr := tc.expr
+							variables := make([]string, len(run.values))
+							for i, source := range run.values {
+								directExpr = strings.Replace(directExpr, "?", source, 1)
+								variables[i] = fmt.Sprintf("@field_review_%d", i)
+								_, err := conn.ExecContext(ctx, "set "+variables[i]+" = "+source)
+								require.NoError(t, err)
+							}
+							var direct, prepared int64
+							require.NoError(t, conn.QueryRowContext(ctx, "select "+directExpr).Scan(&direct))
+							require.Equal(t, run.want, direct)
+							require.NoError(t, conn.QueryRowContext(ctx,
+								"execute field_review using "+strings.Join(variables, ", ")).Scan(&prepared))
+							require.Equal(t, run.want, prepared)
+						})
+					}
+				})
+			}
+		})
 	})
 }

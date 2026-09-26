@@ -2707,6 +2707,18 @@ func (rule *ResetParamRefRule) applyExpr(e *plan.Expr) (*plan.Expr, error) {
 				originalArgFuncObj = preparedExprFunctionObj(arg)
 			}
 			implicitParamCast := isImplicitPreparedParamCast(arg)
+			provisionalCommonValueCast := false
+			if (isPreparedCommonValueFunction(functionName) || functionName == "if" ||
+				functionName == "ifnull" || functionName == "case") &&
+				preparedSQLExecuteNumericResultValueArg(functionName, i, len(exprImpl.F.Args)) &&
+				originalArgs[i] != nil && originalArgs[i].GetPreparedNumeric().GetProvisionalResultCast() {
+				if cast := arg.GetF(); cast != nil && cast.Func != nil &&
+					cast.Func.GetObjName() == "cast" && len(cast.Args) == 2 && cast.Args[0] != nil &&
+					!cast.GetSyntaxExplicitCast() {
+					_, overload := planfunction.DecodeOverloadID(cast.Func.GetObj())
+					provisionalCommonValueCast = overload == 0
+				}
+			}
 			bitwiseParamCast := isPreparedBitwiseOperator(functionName) &&
 				isPreparedBitwiseParamCast(arg)
 			paramPos, hasParamPos := preparedParamPosition(arg)
@@ -2912,6 +2924,24 @@ func (rule *ResetParamRefRule) applyExpr(e *plan.Expr) (*plan.Expr, error) {
 					}
 				}
 				rewrittenArg = DeepCopyExpr(source)
+			} else if provisionalCommonValueCast && !sharedControlParam {
+				// The outer cast was selected while the result operand was an
+				// unresolved TEXT marker. Rebind its source for this EXECUTE so a
+				// nested numeric function can supply its actual result domain.
+				rewrittenArg, err = rule.ApplyExpr(arg.GetF().Args[0])
+				if err != nil {
+					return nil, err
+				}
+				if rewrittenArg != nil && arg.GetF().Args[0].GetP() != nil && rewrittenArg.GetLit().GetIsnull() {
+					// An untyped NULL contributes no common-value domain. Explicit
+					// CAST(NULL AS ...) remains inside the source and stays typed.
+					rewrittenArg = DeepCopyExpr(rewrittenArg)
+					anyType := types.T_any.ToType()
+					rewrittenArg.Typ = makePlan2Type(&anyType)
+				}
+				needResetFunction = true
+				compareArgTypes = true
+				rule.specialized = true
 			} else {
 				var applyErr error
 				disablePrefix := sharedControlParam && paramPos >= 0 &&
@@ -3226,7 +3256,7 @@ func (rule *ResetParamRefRule) applyExpr(e *plan.Expr) (*plan.Expr, error) {
 						needResetFunction = true
 						compareArgTypes = true
 					} else if literal := candidate.GetLit(); literal != nil &&
-						(candidate.GetPreparedNumeric().GetProvisionalResultPeer() || literal.GetStringSource() != 0) &&
+						candidate.GetPreparedNumeric().GetProvisionalResultPeer() &&
 						types.T(candidate.Typ.Id).IsMySQLString() && preparedNumericCommonOperandType(types.T(sqlExecuteResultType.Id)) {
 						peerType := sqlExecuteResultType
 						metadata := candidate.GetPreparedNumeric()

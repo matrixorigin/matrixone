@@ -61,6 +61,23 @@ SET @field_exact = CAST(9007199254740993 AS DECIMAL(20,0));
 EXECUTE p_field_folded USING @field_exact, @field_exact, @field_exact, @field_exact;
 DEALLOCATE PREPARE p_field_folded;
 
+-- Explicit CHAR is a string boundary; NULL followed by nested ABS is domainless then exact DECIMAL.
+SELECT FIELD(CAST(9007199254740992 AS DECIMAL(20,0)), CAST(9007199254740993 AS CHAR)) AS explicit_char,
+       FIELD(COALESCE(NULL, ABS(CAST(9007199254740993 AS DECIMAL(20,0)))),
+             ABS(CAST(9007199254740992 AS DECIMAL(20,0)))) AS nested_null;
+PREPARE p_field_boundary FROM 'SELECT FIELD(?, CAST(9007199254740993 AS CHAR)) AS explicit_char,
+                                      FIELD(COALESCE(?, ABS(?)), ABS(CAST(9007199254740992 AS DECIMAL(20,0)))) AS nested_null';
+SET @char_needle = CAST(9007199254740992 AS DECIMAL(20,0));
+SET @fallback = NULL, @nested = CAST(9007199254740993 AS DECIMAL(20,0));
+EXECUTE p_field_boundary USING @char_needle, @fallback, @nested;
+SET @nested = CAST(9007199254740992 AS DECIMAL(20,0));
+EXECUTE p_field_boundary USING @char_needle, @fallback, @nested;
+SET @fallback = '9007199254740993', @nested = CAST(9007199254740993 AS DECIMAL(20,0));
+EXECUTE p_field_boundary USING @char_needle, @fallback, @nested;
+SET @fallback = NULL;
+EXECUTE p_field_boundary USING @char_needle, @fallback, @nested;
+DEALLOCATE PREPARE p_field_boundary;
+
 SELECT FIELD(x'0062', x'61', x'0062'), FIELD(x'0062', x'62'), FIELD(x'41', x'61');
 PREPARE p_binary FROM 'SELECT FIELD(?, ?, ?), FIELD(?, ?), FIELD(?, ?)';
 SET @binary = x'0062', @binary_first = x'61', @binary_second = x'0062';

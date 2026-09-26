@@ -184,6 +184,34 @@ func TestPreparedVariadicRuntimeSourceDomains(t *testing.T) {
 			want: []types.T{types.T_float64, types.T_float64},
 		},
 		{
+			name: "field explicit char peer stays a string",
+			sql:  "prepare p from 'select field(?, cast(9007199254740993 as char))'", fn: "field",
+			values: []ParamValue{{
+				Value: "9007199254740992", SourceType: types.New(types.T_decimal128, 20, 0),
+				HasSourceType: true, PrepareParamKind: vector.PrepareParamDecimal,
+			}},
+			want: []types.T{types.T_float64, types.T_float64},
+		},
+		{
+			name: "field folded explicit char peer stays a string",
+			sql:  "prepare p from 'select field(?, cast(abs(cast(9007199254740993 as decimal(20,0))) as char))'", fn: "field",
+			values: []ParamValue{{
+				Value: "9007199254740992", SourceType: types.New(types.T_decimal128, 20, 0),
+				HasSourceType: true, PrepareParamKind: vector.PrepareParamDecimal,
+			}},
+			want: []types.T{types.T_float64, types.T_float64},
+		},
+		{
+			name: "field nested abs after null coalesce remains decimal",
+			sql:  "prepare p from 'select field(coalesce(?, abs(?)), abs(cast(9007199254740992 as decimal(20,0))))'", fn: "field",
+			values: []ParamValue{
+				{Value: nil, SourceType: types.T_any.ToType(), HasSourceType: true},
+				{Value: "9007199254740993", SourceType: types.New(types.T_decimal128, 20, 0),
+					HasSourceType: true, PrepareParamKind: vector.PrepareParamDecimal},
+			},
+			want: []types.T{types.T_decimal128, types.T_decimal128},
+		},
+		{
 			name: "field binary", sql: "prepare p from 'select field(?, ?)'", fn: "field",
 			values: []ParamValue{
 				{Value: []byte{0, 'b'}, SourceType: types.T_varbinary.ToType(), HasSourceType: true, IsBinaryString: true},
