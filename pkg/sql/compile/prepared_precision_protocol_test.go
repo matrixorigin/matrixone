@@ -169,6 +169,62 @@ func TestTypedNumericIntervalRequiresTemporalProtocol(t *testing.T) {
 	require.NoError(t, validateRemoteExpressionPipelineProtocol(c.proc, p))
 }
 
+func TestRawTimeIntervalOverloadsRequireV97(t *testing.T) {
+	c, client := expressionProtocolTestCompile(t)
+	for _, functionID := range []int32{function.DATE_ADD, function.DATE_SUB} {
+		for _, overloadID := range []int32{8, 15} {
+			expr := &planpb.Expr{Typ: planpb.Type{Id: int32(types.T_time), Scale: 6}, Expr: &planpb.Expr_F{F: &planpb.Function{
+				Func: &planpb.ObjectRef{Obj: function.EncodeOverloadID(functionID, overloadID)},
+				Args: []*planpb.Expr{
+					{Typ: planpb.Type{Id: int32(types.T_time)}, Expr: &planpb.Expr_Col{Col: &planpb.ColRef{ColPos: 0}}},
+					{Typ: planpb.Type{Id: int32(types.T_varchar)}, Expr: &planpb.Expr_Col{Col: &planpb.ColRef{ColPos: 1}}},
+					{Typ: planpb.Type{Id: int32(types.T_int64)}, Expr: &planpb.Expr_Lit{Lit: &planpb.Literal{Value: &planpb.Literal_I64Val{I64Val: int64(types.Second)}}}},
+				},
+			}}}
+			features, err := planpb.RequiredRemoteExpressionFeatures(expr)
+			require.NoError(t, err)
+			require.True(t, features.NormalizedIntervalUnits)
+			require.Equal(t, defines.MORPCVersion97, temporalExpressionProtocolVersion(features))
+			qry := &planpb.Query{Nodes: []*planpb.Node{{ProjectList: []*planpb.Expr{expr}}}, Steps: []int32{0}}
+			client.version = defines.MORPCVersion96
+			c.execType = plan2.ExecTypeAP_MULTICN
+			c.cnList = engine.Nodes{{Id: "old-worker", Addr: "remote:6001", Mcpu: 4}}
+			require.NoError(t, c.constrainTemporalResultWorkers(qry))
+			require.Equal(t, plan2.ExecTypeAP_ONECN, c.execType)
+		}
+	}
+}
+
+func TestRawDayFieldOverloadRequiresV97(t *testing.T) {
+	c, client := expressionProtocolTestCompile(t)
+	for _, id := range []int32{function.DAY, function.YEAR, function.MONTH} {
+		expr := &planpb.Expr{Typ: planpb.Type{Id: int32(types.T_uint8)}, Expr: &planpb.Expr_F{F: &planpb.Function{
+			Func: &planpb.ObjectRef{Obj: function.EncodeOverloadID(id, 2)},
+			Args: []*planpb.Expr{{Typ: planpb.Type{Id: int32(types.T_varchar)}, Expr: &planpb.Expr_Col{Col: &planpb.ColRef{ColPos: 0}}}},
+		}}}
+		features, err := planpb.RequiredRemoteExpressionFeatures(expr)
+		require.NoError(t, err)
+		require.True(t, features.TemporalResultContracts)
+		require.Equal(t, defines.MORPCVersion97, temporalExpressionProtocolVersion(features))
+		qry := &planpb.Query{Nodes: []*planpb.Node{{ProjectList: []*planpb.Expr{expr}}}, Steps: []int32{0}}
+		c.execType = plan2.ExecTypeAP_MULTICN
+		c.cnList = engine.Nodes{{Id: "old-worker", Addr: "remote:6001", Mcpu: 4}}
+		client.version = defines.MORPCVersion96
+		require.NoError(t, c.constrainTemporalResultWorkers(qry))
+		require.Equal(t, plan2.ExecTypeAP_ONECN, c.execType)
+		op := projection.NewArgument()
+		op.ProjectList = []*planpb.Expr{expr}
+		scope := &Scope{Magic: Remote, Proc: c.proc, NodeInfo: engine.Node{Id: "old-worker", Addr: "remote:6001"}, RootOp: op}
+		_, err = encodeRemoteScope(scope, c.proc)
+		require.ErrorContains(t, err, "temporal result contracts")
+		client.version = defines.MORPCVersion97
+		_, err = encodeRemoteScope(scope, c.proc)
+		require.NoError(t, err)
+		op.Release()
+	}
+	require.Equal(t, client.calls, client.releases)
+}
+
 func TestTemporalResultProtocolPlacementAndReceive(t *testing.T) {
 	c, client := expressionProtocolTestCompile(t)
 	expr := temporalResultProtocolExpr(function.ADDTIME, types.T_varchar, types.T_varchar)

@@ -106,6 +106,10 @@ func ToIntervalMicrosecond(ivecs []*vector.Vector, result vector.FunctionResultW
 		return toTypedInterval[types.Decimal128](ivecs, result, length, func(v types.Decimal128, scale int32) (string, bool) {
 			return canonicalIntervalDecimal(v.Format(scale), scale), true
 		}, nil)
+	case types.T_decimal256:
+		return toTypedInterval[types.Decimal256](ivecs, result, length, func(v types.Decimal256, scale int32) (string, bool) {
+			return canonicalIntervalDecimal(v.Format(scale), scale), true
+		}, nil)
 	}
 	return toInterval(ivecs, result, length, true)
 }
@@ -126,6 +130,8 @@ func canonicalIntervalDecimal(s string, scale int32) string {
 func roundedScalarFloatInterval(value float64, unit types.IntervalType) (int64, bool, bool) {
 	var multiplier int64
 	switch unit {
+	case types.MicroSecond:
+		multiplier = 1
 	case types.Second:
 		multiplier = types.MicroSecsPerSec
 	case types.Minute:

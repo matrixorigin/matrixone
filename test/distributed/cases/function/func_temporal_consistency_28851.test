@@ -268,11 +268,65 @@ select date_add(time '12:00:00', interval f hour_second) is null as float_overfl
 from temporal_numeric_repr where f > 100000000000000;
 drop table temporal_numeric_repr;
 
+-- Numeric source identity, compound units, and the static DATE + fractional
+-- DAY family are observable through normal SQL and prepared statements.
+select date_add(time '12:00:00', interval cast(-1.5 as double) second) = cast('11:59:58.5' as time(6)) as cast_double,
+       date_add(time '12:00:00', interval cast(-0.0000005 as double) second) = cast('11:59:59.999999' as time(6)) as negative_float_tie,
+       date_add(cast('2024-01-01 00:00:00' as datetime(6)), interval cast(1.5 as decimal(40,1)) hour_second) =
+         cast('2024-01-01 00:01:05' as datetime(6)) as datetime_compound,
+       date_add(cast('2024-01-01' as date), interval cast(1.5 as decimal(40,1)) day) =
+         cast('2024-01-02 12:00:00' as datetime(6)) as fractional_day;
+select date_add(cast('2024-01-01' as date), interval 1 day) as integer_day,
+       date_add(cast('2024-01-01' as date), interval cast(1.0 as decimal(4,1)) day) as decimal_day;
+select day('2024-00-15') as raw_day, dayofmonth('2024-00-15') as raw_dayofmonth,
+       month('2024-00-15') as raw_month, year('2024-00-15') as raw_year;
+select hour('0000-00-00 23:59:59.9999999') as clock_hour,
+       minute('0000-00-00 23:59:59.9999999') as clock_minute,
+       second('0000-00-00 23:59:59.9999999') as clock_second,
+       extract(hour from '0000-00-00 23:59:59.9999999') as extract_hour;
+select case when 0 then date_add(time '12:00:00', interval cast(10000000000000.0 as decimal(30,1)) second)
+       else time '12:00:00' end as inactive_overflow;
+show warnings;
+create table temporal_time_interval_status(id int, base time, amount varchar(32));
+insert into temporal_time_interval_status values
+  (1, time '12:00:00', '1.5'),
+  (2, time '12:00:00', 'bad'),
+  (3, null, '10000000000000.0'),
+  (4, time '12:00:00', '10000000000000.0');
+select id, date_add(base, interval amount second) as added
+from temporal_time_interval_status order by id;
+show warnings;
+drop table temporal_time_interval_status;
+-- Empty text remains MatrixOne's nullable TIME NULL policy. Empty binary is
+-- the numeric zero payload used by binary-literal assignment.
+create table temporal_empty_time(id int, value time null);
+insert into temporal_empty_time values (1, ''), (2, ' '), (3, x'');
+select id, ifnull(cast(value as char), 'NULL') as value from temporal_empty_time order by id;
+select cast(x'' as signed) as binary_signed_zero,
+       cast(x'' as unsigned) as binary_unsigned_zero,
+       cast(x'' as double) as binary_double_zero;
+drop table temporal_empty_time;
+prepare inactive_temporal_cast from
+  'select case when 0 then cast(''123 -12:34:56.000000'' as datetime(6)) else cast(''2024-01-01'' as datetime(6)) end';
+execute inactive_temporal_cast;
+deallocate prepare inactive_temporal_cast;
+
 create table week_dates(d date);
 insert into week_dates values ('2021-01-01');
 set default_week_format = 3;
 select week(d) as session_week, week(d, 0) as explicit_week, yearweek(d) as year_week from week_dates;
 set default_week_format = 0;
 select week(d) as session_week from week_dates;
+
+-- Numeric MICROSECOND uses the same exact tie rule for TIME and DATETIME.
+-- Text MICROSECOND keeps its existing interval-string grammar.
+select date_add(time '12:00:00', interval cast(1.5 as decimal(10,1)) microsecond) = cast('12:00:00.000002' as time(6)) as positive_decimal_us,
+       date_add(time '12:00:00', interval cast(-1.5 as decimal(10,1)) microsecond) = cast('11:59:59.999998' as time(6)) as negative_decimal_us,
+       date_add(time '12:00:00', interval cast(1.5 as double) microsecond) = cast('12:00:00.000002' as time(6)) as positive_double_us,
+       date_add(time '12:00:00', interval cast(-1.5 as double) microsecond) = cast('11:59:59.999998' as time(6)) as negative_double_us,
+       date_sub(time '12:00:00', interval cast(1.5 as decimal(65,1)) microsecond) = cast('11:59:59.999998' as time(6)) as decimal256_sub_us,
+       date_add(time '12:00:00', interval '1.5' microsecond) is null as text_grammar_control;
+select date_add(cast('2024-01-01 12:00:00' as datetime(6)), interval cast(1.5 as decimal(10,1)) microsecond) =
+       cast('2024-01-01 12:00:00.000002' as datetime(6)) as datetime_us_control;
 
 drop database temporal_consistency_28851;

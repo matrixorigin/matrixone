@@ -959,10 +959,10 @@ func isSqlModeDependentTemporalCast(fn *plan.Function) bool {
 		switch types.T(fn.Args[1].Typ.Id) {
 		case types.T_date:
 			parsed, err := types.ParseDateCast(value.Sval)
-			return err == nil && parsed == types.ZeroDate
+			return err != nil || parsed == types.ZeroDate
 		case types.T_datetime:
 			parsed, err := types.ParseDatetime(value.Sval, 6)
-			return err == nil && parsed == types.ZeroDatetime
+			return err != nil || parsed == types.ZeroDatetime
 		default:
 			return false
 		}

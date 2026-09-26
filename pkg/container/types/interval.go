@@ -200,6 +200,18 @@ func conv(a []int64, mul []int64, rt IntervalType) (int64, IntervalType, error) 
 }
 
 func NormalizeInterval(s string, it IntervalType) (ret int64, rettype IntervalType, err error) {
+	return normalizeInterval(s, it, nil)
+}
+
+// NormalizeIntervalWithOverflow retains the error kind for consumers whose
+// diagnostics distinguish a numeric overflow from invalid interval syntax.
+// The ordinary NormalizeInterval error and result contract remains unchanged.
+func NormalizeIntervalWithOverflow(s string, it IntervalType) (ret int64, rettype IntervalType, overflow bool, err error) {
+	ret, rettype, err = normalizeInterval(s, it, &overflow)
+	return
+}
+
+func normalizeInterval(s string, it IntervalType, overflow *bool) (ret int64, rettype IntervalType, err error) {
 	s = strings.TrimSpace(s)
 	maxLen := typeMaxLength(it)
 	fields, count, err := splitIntervalNumberFields(s, maxLen+1)
@@ -208,6 +220,9 @@ func NormalizeInterval(s string, it IntervalType) (ret int64, rettype IntervalTy
 	}
 	invalid := func() (int64, IntervalType, error) {
 		return 0, IntervalTypeInvalid, moerr.NewInvalidInputNoCtxf("invalid time interval value '%s'", s)
+	}
+	if count == 0 && overflow != nil {
+		return invalid()
 	}
 	negative := strings.HasPrefix(s, "-")
 	microsecondFields := isxxxMicrosecondType(it)
@@ -253,6 +268,9 @@ func NormalizeInterval(s string, it IntervalType) (ret int64, rettype IntervalTy
 	for i := 0; i < prefixCount; i++ {
 		field, fieldErr := intervalFieldValue(s, fields[i])
 		if fieldErr != nil {
+			if overflow != nil {
+				*overflow = true // digit-only field exceeded int64
+			}
 			return 0, IntervalTypeInvalid, fieldErr
 		}
 		vals = append(vals, field)
@@ -263,6 +281,9 @@ func NormalizeInterval(s string, it IntervalType) (ret int64, rettype IntervalTy
 		} else if maxLen == 1 {
 			whole := vals[0]
 			if whole > (math.MaxInt64-fractional)/multiplier {
+				if overflow != nil {
+					*overflow = true
+				}
 				return invalid()
 			}
 			value := whole*multiplier + fractional
@@ -273,6 +294,9 @@ func NormalizeInterval(s string, it IntervalType) (ret int64, rettype IntervalTy
 		} else {
 			last := len(vals) - 1
 			if vals[last] > (math.MaxInt64-fractional)/MicroSecsPerSec {
+				if overflow != nil {
+					*overflow = true
+				}
 				return invalid()
 			}
 			vals[last] = vals[last]*MicroSecsPerSec + fractional
@@ -364,6 +388,9 @@ func NormalizeInterval(s string, it IntervalType) (ret int64, rettype IntervalTy
 		ret, rettype, err = conv(vals, []int64{24, 1}, Hour)
 	case Year_Month:
 		ret, rettype, err = conv(vals, []int64{12, 1}, Month)
+	}
+	if err != nil && overflow != nil {
+		*overflow = true // checked field multiplication or sum in conv
 	}
 	return
 }

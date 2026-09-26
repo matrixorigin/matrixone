@@ -256,6 +256,17 @@ func TestConvertToMonthHonorsTimeOfDay(t *testing.T) {
 	require.Equal(t, int64(0), end.ConvertToMonth(start))
 }
 
+func TestParseDatetimeMalformedPrefixesNeverPanic(t *testing.T) {
+	for _, separator := range []string{" ", "T"} {
+		for prefixLength := 0; prefixLength < 8; prefixLength++ {
+			input := "1234-05-06"[:prefixLength] + separator + "12:34:56.000000"
+			require.NotPanics(t, func() {
+				_, _ = ParseDatetime(input, 6)
+			}, input)
+		}
+	}
+}
+
 func TestParseDatetime(t *testing.T) {
 	tests := []struct {
 		name    string
@@ -433,6 +444,11 @@ func TestParseDatetime(t *testing.T) {
 			name: "1-digit month and day",
 			args: "2000-1-2 3:4:5",
 			want: "2000-01-02 03:04:05.000000",
+		},
+		{
+			name:    "short date prefix before a long clock",
+			args:    "123 -12:34:56.000000",
+			wantErr: true,
 		},
 		{
 			name: "trailing colon in time",

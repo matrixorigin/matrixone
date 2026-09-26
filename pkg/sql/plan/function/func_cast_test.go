@@ -913,7 +913,7 @@ func TestBinaryToFloatConversion(t *testing.T) {
 		})
 	}
 
-	for _, input := range []string{"", "this-is-a-very-long-string"} {
+	for _, input := range []string{"this-is-a-very-long-string"} {
 		t.Run("invalid_"+input, func(t *testing.T) {
 			inputVec := testutil.MakeVarlenaVector([][]byte{[]byte(input)}, nil, types.T_blob.ToType(), mp)
 			defer inputVec.Free(mp)
@@ -928,6 +928,15 @@ func TestBinaryToFloatConversion(t *testing.T) {
 			require.True(t, moerr.IsMoErrCode(err, moerr.ErrInvalidInput))
 		})
 	}
+
+	inputVec := testutil.MakeVarlenaVector([][]byte{{}}, nil, types.T_blob.ToType(), mp)
+	defer inputVec.Free(mp)
+	inputVec.SetIsBin(true)
+	to := vector.NewFunctionResultWrapper(types.T_float64.ToType(), mp).(*vector.FunctionResult[float64])
+	defer to.Free()
+	require.NoError(t, to.PreExtendAndReset(1))
+	require.NoError(t, strToFloat(ctx, SQLCompatibilityMySQL, vector.GenerateFunctionStrParameter(inputVec), to, 64, 1, nil))
+	require.Equal(t, []float64{0}, vector.MustFixedColNoTypeCheck[float64](to.GetResultVector()))
 }
 
 func Test_CastToDecimal256(t *testing.T) {
@@ -3069,8 +3078,7 @@ func Test_strToSigned_Binary(t *testing.T) {
 			name:    "empty slice",
 			inputs:  [][]byte{{}},
 			bitSize: 64,
-			wantErr: true,
-			errMsg:  "invalid arg",
+			want:    []int64{0},
 		},
 		{
 			name:    "out of range length",

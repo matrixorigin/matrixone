@@ -148,17 +148,17 @@ func TestTimeIntervalOriginalUnitBindingMatrix(t *testing.T) {
 				require.NoError(t, err)
 				require.Len(t, args, 3)
 				require.Equal(t, int32(types.T_time), args[0].Typ.Id)
+				originalUnit, err := types.IntervalTypeOf(unit)
+				require.NoError(t, err)
 				// A numeric column cannot reach the TIME executor with an
 				// unsupported compound unit after losing its SQL spelling.
 				if input.name == "integer column" {
 					switch unit {
 					case "second_microsecond", "minute_microsecond", "minute_second",
-						"hour_microsecond", "hour_second":
-						require.Equal(t, int64(types.MicroSecond), args[2].GetLit().GetI64Val())
-						require.Greater(t, args[1].GetF().Args[0].Typ.Width, int32(0))
-					case "hour_minute":
-						require.Equal(t, int64(types.Minute), args[2].GetLit().GetI64Val())
-						require.Greater(t, args[1].GetF().Args[0].Typ.Width, int32(0))
+						"hour_microsecond", "hour_second", "hour_minute":
+						require.Equal(t, int64(originalUnit), args[2].GetLit().GetI64Val())
+						require.Equal(t, int32(types.T_varchar), args[1].Typ.Id)
+						require.Greater(t, args[1].Typ.Width, int32(0))
 					}
 				}
 			})
@@ -170,7 +170,7 @@ func TestTimeIntervalOriginalUnitBindingMatrix(t *testing.T) {
 	}
 }
 
-func TestTimeNumericDecimalCompoundCanonicalSpelling(t *testing.T) {
+func TestTimeNumericDecimalCompoundRetainsSource(t *testing.T) {
 	ctx := context.Background()
 	timeExpr := &planpb.Expr{Typ: planpb.Type{Id: int32(types.T_time)}, Expr: &planpb.Expr_Col{Col: &planpb.ColRef{ColPos: 0}}}
 	for _, unit := range []string{"second_microsecond", "minute_microsecond", "minute_second", "hour_microsecond", "hour_second", "hour_minute"} {
@@ -178,6 +178,7 @@ func TestTimeNumericDecimalCompoundCanonicalSpelling(t *testing.T) {
 			{Id: int32(types.T_decimal64), Width: 12, Scale: 0},
 			{Id: int32(types.T_decimal64), Width: 12, Scale: 7},
 			{Id: int32(types.T_decimal128), Width: 30, Scale: 14},
+			{Id: int32(types.T_decimal256), Width: 50, Scale: 20},
 			{Id: int32(types.T_float32)},
 			{Id: int32(types.T_float64)},
 		} {
@@ -186,13 +187,46 @@ func TestTimeNumericDecimalCompoundCanonicalSpelling(t *testing.T) {
 			args, err := resetDateFunctionArgs(ctx, timeExpr, interval)
 			require.NoError(t, err, unit)
 			require.Len(t, args, 3)
-			normalizer := args[1].GetF()
-			require.NotNil(t, normalizer, unit)
-			require.Equal(t, "to_interval_microsecond", normalizer.Func.ObjName, unit)
-			require.Equal(t, sourceType.Id, normalizer.Args[0].Typ.Id, unit)
-			require.Equal(t, sourceType.Scale, normalizer.Args[0].Typ.Scale, unit)
+			require.Equal(t, value, args[1], unit)
+			originalUnit, err := types.IntervalTypeOf(unit)
+			require.NoError(t, err)
+			require.Equal(t, int64(originalUnit), args[2].GetLit().GetI64Val())
 		}
 	}
+}
+
+func TestDateArithmeticNumericSourcesPreserveTheirUnitAndPrecision(t *testing.T) {
+	ctx := context.Background()
+	for _, tc := range []struct {
+		name      string
+		dateType  types.T
+		valueType planpb.Type
+		unit      string
+	}{
+		{"datetime compound decimal", types.T_datetime, planpb.Type{Id: int32(types.T_decimal128), Width: 30, Scale: 1}, "hour_second"},
+		{"datetime compound float", types.T_datetime, planpb.Type{Id: int32(types.T_float64)}, "hour_second"},
+		{"datetime scalar decimal256", types.T_datetime, planpb.Type{Id: int32(types.T_decimal256), Width: 50, Scale: 20}, "hour"},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			dateExpr := &planpb.Expr{Typ: planpb.Type{Id: int32(tc.dateType)}, Expr: &planpb.Expr_Col{Col: &planpb.ColRef{ColPos: 0}}}
+			valueExpr := &planpb.Expr{Typ: tc.valueType, Expr: &planpb.Expr_Col{Col: &planpb.ColRef{ColPos: 1}}}
+			args, err := resetDateFunctionArgs(ctx, dateExpr, makeIntervalExpr(valueExpr, tc.unit))
+			require.NoError(t, err)
+			require.Len(t, args, 3)
+			normalizer := args[1].GetF()
+			require.NotNil(t, normalizer)
+			require.Equal(t, "to_interval_microsecond", normalizer.Func.ObjName)
+			require.Equal(t, tc.valueType.Id, normalizer.Args[0].Typ.Id)
+			require.Equal(t, tc.valueType.Scale, normalizer.Args[0].Typ.Scale)
+			require.Equal(t, int64(types.MicroSecond), args[2].GetLit().GetI64Val())
+		})
+	}
+}
+
+func TestPrepareKeepsMalformedDatetimeInInactiveBranch(t *testing.T) {
+	_, err := runOneStmt(NewMockOptimizer(false), t,
+		"PREPARE p FROM 'SELECT CASE WHEN ? THEN CAST(''123 -12:34:56.000000'' AS DATETIME) ELSE CAST(''2024-01-01'' AS DATETIME) END'")
+	require.NoError(t, err)
 }
 
 func TestScalarNumericColumnPreservesFractionalUnit(t *testing.T) {
@@ -213,6 +247,18 @@ func TestScalarNumericColumnPreservesFractionalUnit(t *testing.T) {
 			interval := &planpb.Expr{Expr: &planpb.Expr_List{List: &planpb.ExprList{List: []*planpb.Expr{value, makePlan2StringConstExprWithType(unit)}}}}
 			args, err := resetDateFunctionArgs(ctx, first, interval)
 			require.NoError(t, err, unit)
+			if firstType == types.T_time {
+				switch unit {
+				case "second":
+					require.Equal(t, int64(types.Second), args[2].GetLit().GetI64Val())
+				case "minute":
+					require.Equal(t, int64(types.Minute), args[2].GetLit().GetI64Val())
+				case "hour":
+					require.Equal(t, int64(types.Hour), args[2].GetLit().GetI64Val())
+				}
+				require.Equal(t, value, args[1], "TIME executor retains nullable typed input")
+				continue
+			}
 			require.Equal(t, int64(types.MicroSecond), args[2].GetLit().GetI64Val(), unit)
 			normalizer := args[1].GetF()
 			require.NotNil(t, normalizer, unit)
@@ -220,6 +266,21 @@ func TestScalarNumericColumnPreservesFractionalUnit(t *testing.T) {
 			require.Equal(t, sourceType.Id, normalizer.Args[0].Typ.Id, unit)
 		}
 	}
+}
+
+func TestPreparedTimeCompoundIntegerRebindKeepsRawUnit(t *testing.T) {
+	ctx := context.Background()
+	base := &planpb.Expr{Typ: planpb.Type{Id: int32(types.T_time)}, Expr: &planpb.Expr_Col{Col: &planpb.ColRef{ColPos: 0}}}
+	marker := &planpb.Expr{Typ: planpb.Type{Id: int32(types.T_varchar)}, Expr: &planpb.Expr_Col{Col: &planpb.ColRef{ColPos: 1}}}
+	unit := makePlan2Int64ConstExprWithType(int64(types.Minute_Second))
+	original := &planpb.Expr{Typ: planpb.Type{Id: int32(types.T_time), Scale: 6}, Expr: &planpb.Expr_F{F: &planpb.Function{
+		Func: &planpb.ObjectRef{ObjName: "date_add"}, Args: []*planpb.Expr{base, marker, unit},
+	}}}
+	bound, err := bindPreparedFuncExprImplByPlanExpr(ctx, original, "date_add",
+		[]*planpb.Expr{base, makePlan2Int64ConstExprWithType(1), unit}, nil)
+	require.NoError(t, err)
+	require.Equal(t, int32(types.T_varchar), bound.GetF().Args[1].Typ.Id)
+	require.Equal(t, int64(types.Minute_Second), bound.GetF().Args[2].GetLit().GetI64Val())
 }
 
 func TestTimeCalendarIntervalRejectedAcrossSyntaxes(t *testing.T) {

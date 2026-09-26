@@ -28,6 +28,25 @@ func TestJudgeIntervalNumOverflow(t *testing.T) {
 	require.NoError(t, JudgeIntervalNumOverflow(math.MinInt64, MicroSecond))
 }
 
+func TestNormalizeIntervalDistinguishesOverflowFromInvalidSyntax(t *testing.T) {
+	for _, tc := range []struct {
+		text     string
+		unit     IntervalType
+		overflow bool
+		valid    bool
+	}{
+		{"1.5", Second, false, true},
+		{"10000000000000.0", Second, true, false},
+		{"999999999999999999999999999", Hour_Second, true, false},
+		{"not-an-interval", Second, false, false},
+		{"1.2.3", Second, false, false},
+	} {
+		_, _, overflow, err := NormalizeIntervalWithOverflow(tc.text, tc.unit)
+		require.Equal(t, tc.valid, err == nil, tc.text)
+		require.Equal(t, tc.overflow, overflow, tc.text)
+	}
+}
+
 func TestIntervalType(t *testing.T) {
 	var it IntervalType
 	var err error

@@ -760,6 +760,14 @@ func TestToIntervalNormalizesTypedNumericValues(t *testing.T) {
 	require.NoError(t, err)
 	negativeDecimal, err := types.ParseDecimal64("-1.5000000", 18, 7)
 	require.NoError(t, err)
+	widePositive, err := types.ParseDecimal256("1.50000000000000000000", 50, 20)
+	require.NoError(t, err)
+	wideNegative, err := types.ParseDecimal256("-1.50000000000000000000", 50, 20)
+	require.NoError(t, err)
+	positiveTie, err := types.ParseDecimal128("34410126.8315485", 38, 7)
+	require.NoError(t, err)
+	negativeTie, err := types.ParseDecimal128("-34410126.8315485", 38, 7)
+	require.NoError(t, err)
 	for _, tc := range []struct {
 		name  string
 		input FunctionTestInput
@@ -793,6 +801,22 @@ func TestToIntervalNormalizesTypedNumericValues(t *testing.T) {
 			input: NewFunctionTestInput(types.New(types.T_decimal128, 38, 14), []types.Decimal128{decimalTiny, decimalOneHalf}, nil),
 			unit:  types.Second_MicroSecond,
 			want:  []int64{0, 1500000},
+			nulls: []bool{false, false},
+		},
+		{
+			name: "decimal256 scalar preserves the stored fractional value",
+			input: NewFunctionTestInput(types.New(types.T_decimal256, 50, 20),
+				[]types.Decimal256{widePositive, wideNegative}, nil),
+			unit:  types.Second,
+			want:  []int64{1500000, -1500000},
+			nulls: []bool{false, false},
+		},
+		{
+			name: "decimal128 scalar rounds exactly at one microsecond",
+			input: NewFunctionTestInput(types.New(types.T_decimal128, 38, 7),
+				[]types.Decimal128{positiveTie, negativeTie}, nil),
+			unit:  types.Second,
+			want:  []int64{34410126831549, -34410126831549},
 			nulls: []bool{false, false},
 		},
 	} {
