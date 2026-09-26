@@ -2285,6 +2285,11 @@ func constantFoldWithPreparedExactSource(
 		c.StringSource = uint32(source) + 1
 	}
 	rule.MarkFoldedLiteralSerialized(overloadID, fn.Args, c)
+	if preservePreparedExactSource {
+		if source, ok := rule.ProvisionalPreparedExactPeerSource(expr); ok {
+			c.Src = source
+		}
+	}
 	ec := &plan.Expr_Lit{
 		Lit: c,
 	}

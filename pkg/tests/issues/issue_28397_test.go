@@ -236,11 +236,48 @@ func TestIssue28397FieldKeepsExactNumericComparison(t *testing.T) {
 					values: []fieldSource{{first, 0}},
 				},
 				{
+					name: "folded fixed abs candidate", expr: "field(?, abs(" + first + "))",
+					values: []fieldSource{{second, 0}, {"cast(9007199254740993 as double)", 1}, {second, 0}},
+				},
+				{
+					name:   "folded fixed coalesce candidate",
+					expr:   "field(?, coalesce(" + first + ", cast(0 as decimal(20,0))))",
+					values: []fieldSource{{second, 0}},
+				},
+				{
+					name:   "folded fixed coalesce null branch",
+					expr:   "field(?, coalesce(cast(null as decimal(20,0)), " + first + "))",
+					values: []fieldSource{{second, 0}},
+				},
+				{
+					name: "folded fixed abs needle", expr: "field(abs(" + second + "), ?)",
+					values: []fieldSource{{first, 0}},
+				},
+				{
+					name:   "folded fixed fractional candidate",
+					expr:   "field(?, abs(cast(1.0000000000000000 as decimal(20,16))))",
+					values: []fieldSource{{"cast(1.0000000000000001 as decimal(20,16))", 0}},
+				},
+				{
+					name:   "greatest nested exact peer",
+					expr:   "field(greatest(?, cast(0 as decimal(20,0))), " + first + ")",
+					values: []fieldSource{{second, 0}},
+				},
+				{
+					name:   "least nested exact peer",
+					expr:   "field(least(?, cast(9007199254740994 as decimal(20,0))), " + first + ")",
+					values: []fieldSource{{second, 0}},
+				},
+				{
 					name: "explicit real marker", expr: "field(abs(cast(? as double)), " + first + ")",
 					values: []fieldSource{{second, 1}},
 				},
 				{
 					name: "explicit real peer", expr: "field(abs(?), cast(9007199254740992 as double))",
+					values: []fieldSource{{second, 1}},
+				},
+				{
+					name: "fixed real expression boundary", expr: "field(?, abs(cast(9007199254740992 as double)))",
 					values: []fieldSource{{second, 1}},
 				},
 			} {

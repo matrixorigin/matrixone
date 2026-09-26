@@ -76,6 +76,42 @@ func TestPreparedVariadicRuntimeSourceDomains(t *testing.T) {
 			want: []types.T{types.T_decimal128, types.T_decimal128},
 		},
 		{
+			name: "field fixed abs decimal candidate",
+			sql:  "prepare p from 'select field(?, abs(cast(9007199254740992 as decimal(20,0))))'", fn: "field",
+			values: []ParamValue{{
+				Value: "9007199254740993", SourceType: types.New(types.T_decimal128, 20, 0),
+				HasSourceType: true, PrepareParamKind: vector.PrepareParamDecimal,
+			}},
+			want: []types.T{types.T_decimal128, types.T_decimal128},
+		},
+		{
+			name: "field fixed coalesce decimal candidate",
+			sql:  "prepare p from 'select field(?, coalesce(cast(9007199254740992 as decimal(20,0)), cast(0 as decimal(20,0))))'", fn: "field",
+			values: []ParamValue{{
+				Value: "9007199254740993", SourceType: types.New(types.T_decimal128, 20, 0),
+				HasSourceType: true, PrepareParamKind: vector.PrepareParamDecimal,
+			}},
+			want: []types.T{types.T_decimal128, types.T_decimal128},
+		},
+		{
+			name: "field nested greatest with exact peer",
+			sql:  "prepare p from 'select field(greatest(?, cast(0 as decimal(20,0))), cast(9007199254740992 as decimal(20,0)))'", fn: "field",
+			values: []ParamValue{{
+				Value: "9007199254740993", SourceType: types.New(types.T_decimal128, 20, 0),
+				HasSourceType: true, PrepareParamKind: vector.PrepareParamDecimal,
+			}},
+			want: []types.T{types.T_decimal128, types.T_decimal128},
+		},
+		{
+			name: "field nested least with exact peer",
+			sql:  "prepare p from 'select field(least(?, cast(9007199254740994 as decimal(20,0))), cast(9007199254740992 as decimal(20,0)))'", fn: "field",
+			values: []ParamValue{{
+				Value: "9007199254740993", SourceType: types.New(types.T_decimal128, 20, 0),
+				HasSourceType: true, PrepareParamKind: vector.PrepareParamDecimal,
+			}},
+			want: []types.T{types.T_decimal128, types.T_decimal128},
+		},
+		{
 			name: "field fixed exact needle with nested abs decimal candidate",
 			sql:  "prepare p from 'select field(cast(9007199254740993 as decimal(20,0)), abs(?))'", fn: "field",
 			values: []ParamValue{{

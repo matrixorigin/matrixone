@@ -66,6 +66,21 @@ EXECUTE p_field_nested USING @field_exact, @field_other;
 ➤ FIELD(ABS(?), cast(9007199254740992 as decimal(20)))[-5,64,0]  ¦  FIELD(cast(9007199254740993 as decimal(20)), ABS(?))[-5,64,0]  𝄀
 0  ¦  0
 DEALLOCATE PREPARE p_field_nested;
+SELECT FIELD(CAST(9007199254740993 AS DECIMAL(20,0)), ABS(CAST(9007199254740992 AS DECIMAL(20,0)))) AS fixed_abs,
+FIELD(CAST(9007199254740993 AS DECIMAL(20,0)), COALESCE(CAST(9007199254740992 AS DECIMAL(20,0)), CAST(0 AS DECIMAL(20,0)))) AS fixed_coalesce,
+FIELD(GREATEST(CAST(9007199254740993 AS DECIMAL(20,0)), CAST(0 AS DECIMAL(20,0))), CAST(9007199254740992 AS DECIMAL(20,0))) AS nested_greatest,
+FIELD(LEAST(CAST(9007199254740993 AS DECIMAL(20,0)), CAST(9007199254740994 AS DECIMAL(20,0))), CAST(9007199254740992 AS DECIMAL(20,0))) AS nested_least;
+➤ fixed_abs[-5,64,0]  ¦  fixed_coalesce[-5,64,0]  ¦  nested_greatest[-5,64,0]  ¦  nested_least[-5,64,0]  𝄀
+0  ¦  0  ¦  0  ¦  0
+PREPARE p_field_folded FROM 'SELECT FIELD(?, ABS(CAST(9007199254740992 AS DECIMAL(20,0)))) AS fixed_abs,
+FIELD(?, COALESCE(CAST(9007199254740992 AS DECIMAL(20,0)), CAST(0 AS DECIMAL(20,0)))) AS fixed_coalesce,
+FIELD(GREATEST(?, CAST(0 AS DECIMAL(20,0))), CAST(9007199254740992 AS DECIMAL(20,0))) AS nested_greatest,
+FIELD(LEAST(?, CAST(9007199254740994 AS DECIMAL(20,0))), CAST(9007199254740992 AS DECIMAL(20,0))) AS nested_least';
+SET @field_exact = CAST(9007199254740993 AS DECIMAL(20,0));
+EXECUTE p_field_folded USING @field_exact, @field_exact, @field_exact, @field_exact;
+➤ fixed_abs[-5,64,0]  ¦  fixed_coalesce[-5,64,0]  ¦  nested_greatest[-5,64,0]  ¦  nested_least[-5,64,0]  𝄀
+0  ¦  0  ¦  0  ¦  0
+DEALLOCATE PREPARE p_field_folded;
 SELECT FIELD(x'0062', x'61', x'0062'), FIELD(x'0062', x'62'), FIELD(x'41', x'61');
 ➤ FIELD(0x0062, 0x61, 0x0062)[-5,64,0]  ¦  FIELD(0x0062, 0x62)[-5,64,0]  ¦  FIELD(0x41, 0x61)[-5,64,0]  𝄀
 2  ¦  0  ¦  1
