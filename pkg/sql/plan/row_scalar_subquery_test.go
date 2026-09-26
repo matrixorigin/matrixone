@@ -211,6 +211,47 @@ func TestRowConstructorCorrelatedVolatileProjectionFailsClosed(t *testing.T) {
 	}
 }
 
+func TestRowConstructorScalarOrderingDoesNotDuplicateVolatileFields(t *testing.T) {
+	for _, test := range []struct {
+		name string
+		sql  string
+	}{
+		{"row on left", "select (nextval('row_cmp_seq'), 0) < (select 1, 1)"},
+		{"row on right", "select (select 1, 1) > (nextval('row_cmp_seq'), 0)"},
+		{"subquery projection", "select (1, 0) < (select nextval('row_cmp_seq'), 1)"},
+	} {
+		t.Run(test.name, func(t *testing.T) {
+			_, err := runOneStmt(NewMockOptimizer(false), t, test.sql)
+			require.ErrorContains(t, err, "volatile row ordering comparison")
+		})
+	}
+
+	_, err := runOneStmt(NewMockOptimizer(false), t,
+		"select (1, nextval('row_cmp_seq')) < (select 1, 2)")
+	require.NoError(t, err, "the final field appears only once in the comparison")
+	for _, sql := range []string{
+		"select (nextval('row_cmp_seq'), 0) < any (select 1, 1)",
+		"select (nextval('row_cmp_seq'), 0) < all (select R_REGIONKEY, 1 from REGION)",
+	} {
+		_, err = runOneStmt(NewMockOptimizer(false), t, sql)
+		require.NoError(t, err, "quantified row comparisons retain their existing planning path")
+	}
+}
+
+func TestRowConstructorCorrelatedAggregateVolatileHavingFailsClosed(t *testing.T) {
+	_, err := runOneStmt(NewMockOptimizer(false), t, `select N_NATIONKEY from NATION n
+		where (0, null) <=>
+			(select count(*), sum(r.R_REGIONKEY) from REGION r
+			 where r.R_REGIONKEY = n.N_REGIONKEY + 100
+			 having nextval('row_having_seq') = 1)`)
+	require.ErrorContains(t, err, "volatile correlated scalar HAVING")
+
+	_, err = runOneStmt(NewMockOptimizer(false), t, `select (select count(*) from REGION r
+		where r.R_REGIONKEY = n.N_REGIONKEY having nextval('row_having_seq') = 1)
+		from NATION n`)
+	require.NoError(t, err, "ordinary one-column scalar HAVING keeps its existing plan")
+}
+
 func TestRowConstructorScalarSubqueryComparisonRejectsArityMismatch(t *testing.T) {
 	_, err := runOneStmt(NewMockOptimizer(false), t,
 		"select (1, 2) = (select R_REGIONKEY, R_NAME, R_COMMENT from REGION where R_REGIONKEY = 0)")

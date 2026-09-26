@@ -75,6 +75,10 @@ func TestIssue28295RowConstructorScalarSubquery(t *testing.T) {
 		assertBool("select (0,5) = (select a,b from scalar_rows where id=2)", sql.NullBool{Valid: true})
 		assertBool("select (1,null) <=> (select a,b from scalar_rows where id=2)", sql.NullBool{Bool: true, Valid: true})
 		assertBool("select (1,5) <=> (select a,b from scalar_rows where id=99)", sql.NullBool{Valid: true})
+		assertBool("select (1,2) = (select 1,2 limit 0)", sql.NullBool{})
+		assertBool("select (1,2) = (select 1,2 limit 1 offset 1)", sql.NullBool{})
+		assertBool("select (1,2) = (select 1,2 limit 1 offset 0)", sql.NullBool{Bool: true, Valid: true})
+		assertBool("select (1,2) <=> (select 1,2 limit 0)", sql.NullBool{Valid: true})
 		assertBool("select (1,'5') = (select a,b from scalar_rows where id=1)", sql.NullBool{Bool: true, Valid: true})
 		assertBool("select (1,(select 5)) = (select a,b from scalar_rows where id=1)", sql.NullBool{Bool: true, Valid: true})
 		assertBool("select (select a,b from scalar_rows where id=1) = ((select 1),5)", sql.NullBool{Bool: true, Valid: true})
@@ -122,6 +126,24 @@ func TestIssue28295RowConstructorScalarSubquery(t *testing.T) {
 		assertBool(`select (0,null) <=>
 			(select count(*),sum(v) from scalar_inner i where i.k=o.k having count(*)=0)
 			from scalar_outer o where o.k=2`, sql.NullBool{Bool: true, Valid: true})
+		_, err = conn.ExecContext(ctx, "create sequence row_scalar_guard_seq")
+		require.NoError(t, err)
+		require.ErrorContains(t, drainQueryError(ctx, conn,
+			"select (nextval('row_scalar_guard_seq'),0) < (select 1,1)"),
+			"volatile row ordering comparison")
+		require.ErrorContains(t, drainQueryError(ctx, conn, `select (0,null) <=>
+			(select count(*),sum(i.v) from scalar_inner i where i.k=o.k+100
+			 having nextval('row_scalar_guard_seq')=1)
+			from scalar_outer o where o.k=1`), "volatile correlated scalar HAVING")
+		var firstSequenceValue int64
+		require.NoError(t, conn.QueryRowContext(ctx,
+			"select nextval('row_scalar_guard_seq')").Scan(&firstSequenceValue))
+		require.Equal(t, int64(1), firstSequenceValue)
+		var ordinaryScalarCount int64
+		require.NoError(t, conn.QueryRowContext(ctx, `select (select count(*) from scalar_inner i
+			where i.k=o.k having nextval('row_scalar_guard_seq')=2)
+			from scalar_outer o where o.k=1`).Scan(&ordinaryScalarCount))
+		require.Equal(t, int64(1), ordinaryScalarCount)
 		ifNullValues := func() []int {
 			rows, queryErr := conn.QueryContext(ctx, `select ifnull(
 				(select min(i.v) from scalar_inner i where i.k=o.k), 0),

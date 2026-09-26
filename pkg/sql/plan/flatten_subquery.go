@@ -434,13 +434,21 @@ func (builder *QueryBuilder) flattenSubqueryWithConsumer(
 
 	// Strip unnecessary subqueries which have no FROM clause
 	subNode := builder.qry.Nodes[subID]
-	if subNode.NodeType == plan.Node_PROJECT &&
-		builder.qry.Nodes[subNode.Children[0]].NodeType == plan.Node_VALUE_SCAN &&
-		builder.qry.Nodes[subNode.Children[0]].TableDef == nil {
+	var noFromInput *plan.Node
+	if subNode.NodeType == plan.Node_PROJECT && len(subNode.Children) == 1 &&
+		subNode.Limit == nil && subNode.Offset == nil && subNode.RankOption == nil {
+		childID := subNode.Children[0]
+		if childID >= 0 && int(childID) < len(builder.qry.Nodes) {
+			noFromInput = builder.qry.Nodes[childID]
+		}
+	}
+	if noFromInput != nil && noFromInput.NodeType == plan.Node_VALUE_SCAN &&
+		noFromInput.TableDef == nil && noFromInput.Limit == nil &&
+		noFromInput.Offset == nil && noFromInput.RankOption == nil {
 		switch subquery.Typ {
 		case plan.SubqueryRef_SCALAR:
 			if subquery.Child != nil {
-				newExpr, err := builder.generateRowComparison(subquery.Op, subquery.Child, subCtx, true)
+				newExpr, err := builder.generateRowComparison(subquery.Op, subquery.Child, subCtx, true, true)
 				return nodeID, newExpr, err
 			}
 			newProj, _ := decreaseDepth(subNode.ProjectList[0])
@@ -453,7 +461,7 @@ func (builder *QueryBuilder) flattenSubqueryWithConsumer(
 			return nodeID, constFalse, nil
 
 		case plan.SubqueryRef_IN:
-			newExpr, err := builder.generateRowComparison("=", subquery.Child, subCtx, true)
+			newExpr, err := builder.generateRowComparison("=", subquery.Child, subCtx, true, false)
 			if err != nil {
 				return 0, nil, err
 			}
@@ -461,7 +469,7 @@ func (builder *QueryBuilder) flattenSubqueryWithConsumer(
 			return nodeID, newExpr, nil
 
 		case plan.SubqueryRef_NOT_IN:
-			newExpr, err := builder.generateRowComparison("<>", subquery.Child, subCtx, true)
+			newExpr, err := builder.generateRowComparison("<>", subquery.Child, subCtx, true, false)
 			if err != nil {
 				return 0, nil, err
 			}
@@ -469,7 +477,7 @@ func (builder *QueryBuilder) flattenSubqueryWithConsumer(
 			return nodeID, newExpr, nil
 
 		case plan.SubqueryRef_ANY, plan.SubqueryRef_ALL:
-			newExpr, err := builder.generateRowComparison(subquery.Op, subquery.Child, subCtx, true)
+			newExpr, err := builder.generateRowComparison(subquery.Op, subquery.Child, subCtx, true, false)
 			if err != nil {
 				return 0, nil, err
 			}
@@ -558,7 +566,7 @@ func (builder *QueryBuilder) flattenSubqueryWithConsumer(
 				if err != nil {
 					return 0, nil, err
 				}
-				newExpr, err := builder.generateRowComparisonWithProjects(subquery.Op, subquery.Child, projects)
+				newExpr, err := builder.generateRowComparisonWithProjects(subquery.Op, subquery.Child, projects, true)
 				return nodeID, newExpr, err
 			}
 			retExpr, err = BindFuncExprImplByPlanExpr(builder.GetContext(), "case", []*plan.Expr{
@@ -590,7 +598,7 @@ func (builder *QueryBuilder) flattenSubqueryWithConsumer(
 		}
 
 		subID, postJoinProjections, finalizeProjection, err :=
-			builder.prepareCorrelatedScalarAggregatePostJoinProjection(subID, subCtx, joinPreds)
+			builder.prepareCorrelatedScalarAggregatePostJoinProjection(subID, subCtx, joinPreds, subquery.Child != nil)
 		if err != nil {
 			return nodeID, nil, err
 		}
@@ -629,7 +637,7 @@ func (builder *QueryBuilder) flattenSubqueryWithConsumer(
 		if subquery.Child != nil {
 			if finalizeProjection {
 				newExpr, err := builder.generateRowComparisonWithProjects(
-					subquery.Op, subquery.Child, postJoinProjections)
+					subquery.Op, subquery.Child, postJoinProjections, true)
 				if err != nil {
 					return 0, nil, err
 				}
@@ -650,7 +658,7 @@ func (builder *QueryBuilder) flattenSubqueryWithConsumer(
 			if err != nil {
 				return 0, nil, err
 			}
-			newExpr, err := builder.generateRowComparisonWithProjects(subquery.Op, subquery.Child, projects)
+			newExpr, err := builder.generateRowComparisonWithProjects(subquery.Op, subquery.Child, projects, true)
 			return nodeID, newExpr, err
 		}
 
@@ -753,7 +761,7 @@ func (builder *QueryBuilder) flattenSubqueryWithConsumer(
 		return nodeID, markExpr, nil
 
 	case plan.SubqueryRef_IN:
-		outerPred, err := builder.generateRowComparison("=", subquery.Child, subCtx, false)
+		outerPred, err := builder.generateRowComparison("=", subquery.Child, subCtx, false, false)
 		if err != nil {
 			return 0, nil, err
 		}
@@ -767,7 +775,7 @@ func (builder *QueryBuilder) flattenSubqueryWithConsumer(
 		return nodeID, markExpr, nil
 
 	case plan.SubqueryRef_NOT_IN:
-		outerPred, err := builder.generateRowComparison("=", subquery.Child, subCtx, false)
+		outerPred, err := builder.generateRowComparison("=", subquery.Child, subCtx, false, false)
 		if err != nil {
 			return 0, nil, err
 		}
@@ -781,7 +789,7 @@ func (builder *QueryBuilder) flattenSubqueryWithConsumer(
 		return nodeID, markExpr, nil
 
 	case plan.SubqueryRef_ANY:
-		outerPred, err := builder.generateRowComparison(subquery.Op, subquery.Child, subCtx, false)
+		outerPred, err := builder.generateRowComparison(subquery.Op, subquery.Child, subCtx, false, false)
 		if err != nil {
 			return 0, nil, err
 		}
@@ -795,7 +803,7 @@ func (builder *QueryBuilder) flattenSubqueryWithConsumer(
 		return nodeID, markExpr, nil
 
 	case plan.SubqueryRef_ALL:
-		outerPred, err := builder.generateRowComparison(subquery.Op, subquery.Child, subCtx, false)
+		outerPred, err := builder.generateRowComparison(subquery.Op, subquery.Child, subCtx, false, false)
 		if err != nil {
 			return 0, nil, err
 		}
@@ -1263,18 +1271,19 @@ func getProjectExpr(idx int, ctx *BindContext, strip bool) *plan.Expr {
 	}
 }
 
-func (builder *QueryBuilder) generateRowComparison(op string, child *plan.Expr, ctx *BindContext, strip bool) (*plan.Expr, error) {
+func (builder *QueryBuilder) generateRowComparison(op string, child *plan.Expr, ctx *BindContext, strip, guardVolatile bool) (*plan.Expr, error) {
 	projects := make([]*plan.Expr, len(ctx.results))
 	for i := range projects {
 		projects[i] = getProjectExpr(i, ctx, strip)
 	}
-	return builder.generateRowComparisonWithProjects(op, child, projects)
+	return builder.generateRowComparisonWithProjects(op, child, projects, guardVolatile)
 }
 
 func (builder *QueryBuilder) generateRowComparisonWithProjects(
 	op string,
 	child *plan.Expr,
 	projects []*plan.Expr,
+	guardVolatile bool,
 ) (*plan.Expr, error) {
 	switch childImpl := child.Expr.(type) {
 	case *plan.Expr_List:
@@ -1307,6 +1316,14 @@ func (builder *QueryBuilder) generateRowComparisonWithProjects(
 			return combinePlanExprsBalanced(builder.GetContext(), logicalOp, comparisons)
 
 		case "<", "<=", ">", ">=":
+			if guardVolatile {
+				for i := 0; i < len(childList)-1; i++ {
+					if containsVolatileFunction(childList[i]) || containsVolatileFunction(projects[i]) {
+						return nil, moerr.NewNYI(builder.GetContext(),
+							"volatile row ordering comparison requires single evaluation")
+					}
+				}
+			}
 			nonEqOp := op[:1] // <= -> <, >= -> >
 			return unwindTupleComparison(builder.GetContext(), nonEqOp, op, childList, projects, 0)
 
@@ -1344,6 +1361,7 @@ func (builder *QueryBuilder) prepareCorrelatedScalarAggregatePostJoinProjection(
 	subID int32,
 	subCtx *BindContext,
 	joinPreds []*plan.Expr,
+	directRowComparison bool,
 ) (int32, []*plan.Expr, bool, error) {
 	if !subCtx.hasSingleRow || len(subCtx.groups) != 0 || len(subCtx.aggregates) == 0 || len(joinPreds) == 0 {
 		return subID, nil, false, nil
@@ -1433,6 +1451,13 @@ func (builder *QueryBuilder) prepareCorrelatedScalarAggregatePostJoinProjection(
 	if len(having) > 0 {
 		postJoinHaving := make([]*plan.Expr, len(having))
 		for i := range having {
+			if containsVolatileFunction(having[i]) {
+				if !directRowComparison {
+					return subID, nil, false, nil
+				}
+				return subID, nil, false, moerr.NewNYI(builder.GetContext(),
+					"volatile correlated scalar HAVING cannot be safely decorrelated")
+			}
 			var ok bool
 			postJoinHaving[i], ok = replaceAggregateRefsForPostJoin(
 				DeepCopyExpr(having[i]), subCtx.aggregateTag, projectedAggregates)
@@ -2379,7 +2404,7 @@ func (builder *QueryBuilder) flattenScalarSubqueryWithNonEqAgg(
 			}
 			projects[i] = GetColExpr(result.Typ, newAggTag, aggregatePos)
 		}
-		retExpr, err := builder.generateRowComparisonWithProjects(subquery.Op, subquery.Child, projects)
+		retExpr, err := builder.generateRowComparisonWithProjects(subquery.Op, subquery.Child, projects, true)
 		return nodeID, retExpr, err
 	}
 

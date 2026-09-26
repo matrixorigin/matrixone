@@ -238,6 +238,18 @@ select (0,null) <=>
         where inner_row.id=outer_row.id+100 having count(*)=0) as aggregate_empty_v
 from row_scalar_28295 outer_row where outer_row.id=1;
 select (1,5) = (select a,b from row_scalar_28295 where id>0) as multi_v;
+select (1,2) = (select 1,2 limit 0) as no_from_empty_limit_v;
+select (1,2) = (select 1,2 limit 1 offset 1) as no_from_empty_offset_v;
+select (1,2) = (select 1,2 limit 1 offset 0) as no_from_one_v;
+select (1,2) <=> (select 1,2 limit 0) as no_from_null_safe_empty_v;
+create sequence row_scalar_guard_seq;
+select (nextval('row_scalar_guard_seq'),0) < (select 1,1) as volatile_order_v;
+select (0,null) <=>
+       (select count(*),sum(inner_row.b) from row_scalar_28295 inner_row
+        where inner_row.id=outer_row.id+100 having nextval('row_scalar_guard_seq')=1) as volatile_having_v
+from row_scalar_28295 outer_row where outer_row.id=1;
+select nextval('row_scalar_guard_seq') as first_value_after_rejection;
+drop sequence row_scalar_guard_seq;
 set @row_scalar_a=1, @row_scalar_b=5;
 prepare row_scalar_stmt from 'select (?,?) = (select a,b from row_scalar_28295 where id=1) as prepared_v';
 execute row_scalar_stmt using @row_scalar_a, @row_scalar_b;

@@ -625,6 +625,30 @@ aggregate_empty_v
 1
 select (1,5) = (select a,b from row_scalar_28295 where id>0) as multi_v;
 Subquery returns more than 1 row
+select (1,2) = (select 1,2 limit 0) as no_from_empty_limit_v;
+no_from_empty_limit_v
+null
+select (1,2) = (select 1,2 limit 1 offset 1) as no_from_empty_offset_v;
+no_from_empty_offset_v
+null
+select (1,2) = (select 1,2 limit 1 offset 0) as no_from_one_v;
+no_from_one_v
+1
+select (1,2) <=> (select 1,2 limit 0) as no_from_null_safe_empty_v;
+no_from_null_safe_empty_v
+0
+create sequence row_scalar_guard_seq;
+select (nextval('row_scalar_guard_seq'),0) < (select 1,1) as volatile_order_v;
+volatile row ordering comparison requires single evaluation is not yet implemented
+select (0,null) <=>
+(select count(*),sum(inner_row.b) from row_scalar_28295 inner_row
+where inner_row.id=outer_row.id+100 having nextval('row_scalar_guard_seq')=1) as volatile_having_v
+from row_scalar_28295 outer_row where outer_row.id=1;
+volatile correlated scalar HAVING cannot be safely decorrelated is not yet implemented
+select nextval('row_scalar_guard_seq') as first_value_after_rejection;
+first_value_after_rejection
+1
+drop sequence row_scalar_guard_seq;
 set @row_scalar_a=1, @row_scalar_b=5;
 prepare row_scalar_stmt from 'select (?,?) = (select a,b from row_scalar_28295 where id=1) as prepared_v';
 execute row_scalar_stmt using @row_scalar_a, @row_scalar_b;

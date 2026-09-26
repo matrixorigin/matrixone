@@ -2138,7 +2138,7 @@ func TestPrepareCorrelatedScalarAggregatePostJoinProjection(t *testing.T) {
 		results:      []*plan.Expr{projection},
 	}
 
-	newSubID, postJoinProjections, ok, err := builder.prepareCorrelatedScalarAggregatePostJoinProjection(1, ctx, []*plan.Expr{constTrue})
+	newSubID, postJoinProjections, ok, err := builder.prepareCorrelatedScalarAggregatePostJoinProjection(1, ctx, []*plan.Expr{constTrue}, false)
 	require.NoError(t, err)
 	require.True(t, ok)
 	require.Equal(t, int32(0), newSubID)
@@ -2299,7 +2299,7 @@ func TestPrepareCorrelatedScalarAggregatePostJoinProjectionRejectsUnsupportedSha
 			builder := NewQueryBuilder(plan.Query_SELECT, NewMockCompilerContext(true), false, true)
 			builder.qry.Nodes = nodes
 
-			newSubID, postJoinProjections, ok, err := builder.prepareCorrelatedScalarAggregatePostJoinProjection(1, ctx, []*plan.Expr{constTrue})
+			newSubID, postJoinProjections, ok, err := builder.prepareCorrelatedScalarAggregatePostJoinProjection(1, ctx, []*plan.Expr{constTrue}, false)
 			require.Equal(t, int32(1), newSubID)
 			if tt.wantErr {
 				require.Error(t, err)
@@ -2328,7 +2328,7 @@ func TestPrepareCorrelatedScalarAggregatePostJoinProjectionRejectsUnsupportedDir
 		results:      []*plan.Expr{GetColExpr(aggregate.Typ, 21, 0)},
 	}
 
-	newSubID, postJoinProjections, ok, err := builder.prepareCorrelatedScalarAggregatePostJoinProjection(0, ctx, []*plan.Expr{constTrue})
+	newSubID, postJoinProjections, ok, err := builder.prepareCorrelatedScalarAggregatePostJoinProjection(0, ctx, []*plan.Expr{constTrue}, false)
 	require.Equal(t, int32(0), newSubID)
 	require.Error(t, err)
 	require.False(t, ok)
@@ -2828,7 +2828,7 @@ func TestGenerateRowComparisonBuildsBalancedTree(t *testing.T) {
 		{name: "tuple not in inequality", op: "<>", logicalOp: "or"},
 	} {
 		t.Run(tt.name, func(t *testing.T) {
-			expr, err := builder.generateRowComparison(tt.op, child, subqueryCtx, false)
+			expr, err := builder.generateRowComparison(tt.op, child, subqueryCtx, false, false)
 			require.NoError(t, err)
 			require.Equal(t, tt.logicalOp, expr.GetF().Func.GetObjName())
 
@@ -2847,7 +2847,7 @@ func TestGenerateRowComparisonRejectsEmptyTuple(t *testing.T) {
 		Expr: &plan.Expr_List{
 			List: &plan.ExprList{},
 		},
-	}, subqueryCtx, false)
+	}, subqueryCtx, false, false)
 	require.ErrorContains(t, err, "row comparison requires at least one column")
 }
 
