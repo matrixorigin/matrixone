@@ -387,7 +387,7 @@ func (builder *QueryBuilder) flattenSubqueryWithConsumer(
 	subID := subquery.NodeId
 	subCtx := builder.ctxByNode[subID]
 	var err error
-	subID, err = builder.parameterizeLocalCTEs(nodeID, subID, ctx)
+	subID, err = builder.parameterizeLocalCTEs(nodeID, subID, ctx, subquery.Typ)
 	if err != nil {
 		return 0, nil, err
 	}

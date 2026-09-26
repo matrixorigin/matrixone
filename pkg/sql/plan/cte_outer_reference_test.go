@@ -159,7 +159,7 @@ func TestLocalCTEDomainAdmissionIsAtomic(t *testing.T) {
 	builder.localCTERoots = map[int32]bool{good: true, bad: true}
 	before, err := builder.qry.Marshal()
 	require.NoError(t, err)
-	_, err = builder.parameterizeLocalCTEs(outerID, root, ctx)
+	_, err = builder.parameterizeLocalCTEs(outerID, root, ctx, planpb.SubqueryRef_SCALAR)
 	require.ErrorContains(t, err, "producer contains pagination")
 	after, err := builder.qry.Marshal()
 	require.NoError(t, err)
@@ -183,6 +183,57 @@ func TestLocalCTEOuterReferencesRejectUnsafeDomains(t *testing.T) {
 		name string
 		sql  string
 	}{
+		{
+			name: "non equality having must not lose filter",
+			sql: `select (with q(n) as (select p.n_regionkey)
+				select count(n) from q where n<=p.n_nationkey having count(n)=0)
+				from tpch.nation p`,
+		},
+		{
+			name: "exists empty aggregate is one row",
+			sql: `select p.n_nationkey from tpch.nation p where exists (
+				with q(n) as (select p.n_regionkey from tpch.nation a where a.n_nationkey=-1)
+				select count(*) from q)`,
+		},
+		{
+			name: "in empty aggregate is one row",
+			sql: `select p.n_nationkey from tpch.nation p where 0 in (
+				with q(n) as (select p.n_regionkey from tpch.nation a where a.n_nationkey=-1)
+				select count(*) from q)`,
+		},
+		{
+			name: "union empty aggregate result",
+			sql: `select p.n_nationkey from tpch.nation p where exists (
+				with q(n) as (select p.n_regionkey from tpch.nation a where a.n_nationkey=-1)
+				select count(*) from q union all select count(*) from q)`,
+		},
+		{
+			name: "nested empty aggregates",
+			sql: `select (with q(n) as (select p.n_regionkey from tpch.nation a where a.n_nationkey=-1)
+				select sum(c) from (select count(*) as c from q) s)
+				from tpch.nation p`,
+		},
+		{
+			name: "window predicate before row numbering",
+			sql: `select (with q(n) as (select p.n_regionkey from tpch.nation a where a.n_nationkey in (1,2))
+				select row_number() over (order by n desc) from q where n<=p.n_nationkey)
+				from tpch.nation p`,
+		},
+		{
+			name: "count pagination without having limit zero",
+			sql: `select (with q(n) as (select p.n_regionkey)
+				select count(*) from q limit 0) from tpch.nation p`,
+		},
+		{
+			name: "count pagination without having offset",
+			sql: `select (with q(n) as (select p.n_regionkey)
+				select count(*) from q limit 1 offset 1) from tpch.nation p`,
+		},
+		{
+			name: "window count fallback without having",
+			sql: `select (with q(n) as (select p.n_regionkey)
+				select row_number() over (order by count(*)) from q) from tpch.nation p`,
+		},
 		{
 			name: "having with limit zero",
 			sql: `select (with q(n) as (select p.n_regionkey)

@@ -28,6 +28,7 @@ type localCTEDomain struct {
 	builder  *QueryBuilder
 	outerID  int32
 	ctx      *BindContext
+	subType  plan.SubqueryRef_Type
 	values   []*plan.Expr
 	params   map[[2]int32]int
 	equality *plan.Expr
@@ -35,7 +36,9 @@ type localCTEDomain struct {
 	scans    map[int32][]*plan.Expr
 }
 
-func (builder *QueryBuilder) parameterizeLocalCTEs(outerID, subID int32, ctx *BindContext) (int32, error) {
+func (builder *QueryBuilder) parameterizeLocalCTEs(
+	outerID, subID int32, ctx *BindContext, subType plan.SubqueryRef_Type,
+) (int32, error) {
 	if len(builder.localCTERoots) == 0 {
 		return subID, nil
 	}
@@ -43,7 +46,7 @@ func (builder *QueryBuilder) parameterizeLocalCTEs(outerID, subID int32, ctx *Bi
 	var admit func(int32) error
 	admit = func(id int32) error {
 		if builder.localCTERoots[id] {
-			d := &localCTEDomain{builder: builder, outerID: outerID, ctx: ctx,
+			d := &localCTEDomain{builder: builder, outerID: outerID, ctx: ctx, subType: subType,
 				params: make(map[[2]int32]int), nodes: make(map[int32]bool), scans: make(map[int32][]*plan.Expr)}
 			d.collect(id)
 			needsDomain := false
@@ -97,8 +100,8 @@ func (builder *QueryBuilder) parameterizeLocalCTEs(outerID, subID int32, ctx *Bi
 // through pagination or a branching/outer join boundary is not equivalent to
 // evaluating the original subquery separately for each outer identity.
 func (d *localCTEDomain) admitConsumer(root int32) error {
-	var visit func(id int32, filtered, paginated, branched, having bool) error
-	visit = func(id int32, filtered, paginated, branched, having bool) error {
+	var visit func(id int32, filtered, paginated, branched, having, windowed, aggregated bool) error
+	visit = func(id int32, filtered, paginated, branched, having, windowed, aggregated bool) error {
 		if id < 0 || int(id) >= len(d.builder.qry.Nodes) {
 			return nil
 		}
@@ -108,6 +111,8 @@ func (d *localCTEDomain) admitConsumer(root int32) error {
 		case plan.Node_UNION, plan.Node_INTERSECT, plan.Node_INTERSECT_ALL,
 			plan.Node_MINUS, plan.Node_MINUS_ALL:
 			return d.unsupported("consumer set operation needs per-outer-row output schema")
+		case plan.Node_WINDOW:
+			windowed = true
 		case plan.Node_UNION_ALL:
 			branched = true
 		case plan.Node_JOIN:
@@ -119,6 +124,11 @@ func (d *localCTEDomain) admitConsumer(root int32) error {
 			}
 			branched = true
 		case plan.Node_AGG:
+			if len(n.GroupBy) == 0 && (d.subType != plan.SubqueryRef_SCALAR || branched || windowed ||
+				aggregated || paginated) {
+				return d.unsupported("consumer scalar aggregate cannot preserve empty-input or result-row semantics")
+			}
+			aggregated = true
 			having = filtered || len(n.FilterList) > 0
 			if having && (paginated || branched) {
 				return d.unsupported("consumer HAVING across pagination or branches")
@@ -129,6 +139,13 @@ func (d *localCTEDomain) admitConsumer(root int32) error {
 				return d.unsupported("consumer HAVING needs per-outer-row empty-group semantics")
 			}
 		case plan.Node_FILTER:
+			if having || windowed {
+				for _, cond := range n.FilterList {
+					if hasCorrCol(cond) {
+						return d.unsupported("consumer correlated filter must run before aggregation or window")
+					}
+				}
+			}
 			filtered = true
 		}
 		if d.builder.localCTERoots[id] && id != root && id != d.outerID {
@@ -138,13 +155,13 @@ func (d *localCTEDomain) admitConsumer(root int32) error {
 			if d.nodes[child] {
 				continue
 			}
-			if err := visit(child, filtered, paginated, branched, having); err != nil {
+			if err := visit(child, filtered, paginated, branched, having, windowed, aggregated); err != nil {
 				return err
 			}
 		}
 		return nil
 	}
-	return visit(root, false, false, false, false)
+	return visit(root, false, false, false, false, false, false)
 }
 
 func (d *localCTEDomain) collect(id int32) {

@@ -155,6 +155,44 @@ select p.id, (with q(n) as (select p.parent_id)
               select row_number() over (order by count(*)) from q having count(*)=1) as rn
 from pages p where p.id=2;
 
+-- Non-equality WHERE cannot lose HAVING in the non-equality aggregate path.
+select p.id, (with q(n) as (select p.parent_id)
+              select count(n) from q where n<=p.id having count(n)=0) as c
+from pages p where p.id=2;
+
+-- An ungrouped aggregate on empty input still returns a row to EXISTS and IN.
+select p.id from pages p where exists (
+  with q(n) as (select p.parent_id from pages a where a.id=-1)
+  select count(*) from q
+) and p.id=2;
+select p.id from pages p where 0 in (
+  with q(n) as (select p.parent_id from pages a where a.id=-1)
+  select count(*) from q
+) and p.id=2;
+select p.id from pages p where exists (
+  with q(n) as (select p.parent_id from pages a where a.id=-1)
+  select count(*) from q union all select count(*) from q
+) and p.id=2;
+select p.id, (with q(n) as (select p.parent_id from pages a where a.id=-1)
+              select sum(c) from (select count(*) as c from q) s) as total
+from pages p where p.id=2;
+
+-- User WHERE filters before window numbering, not after.
+select p.id, (with q(n) as (select a.id+p.parent_id-1 from pages a where a.id in (2, 5))
+              select row_number() over (order by n desc) from q where n<=p.id) as rn
+from pages p where p.id=2;
+
+-- Pagination can delete an aggregate result row without HAVING.
+select p.id, (with q(n) as (select p.parent_id)
+              select count(*) from q limit 0) as c from pages p where p.id=2;
+select p.id, (with q(n) as (select p.parent_id)
+              select count(*) from q limit 1 offset 1) as c from pages p where p.id=2;
+
+-- A non-COUNT window projection cannot inherit COUNT empty-group fallback.
+select p.id, (with q(n) as (select p.parent_id)
+              select row_number() over (order by count(*)) from q) as rn
+from pages p where p.id=2;
+
 -- Empty outer input starts no parameter partitions.
 select p.id,
        (with recursive r(n) as (
