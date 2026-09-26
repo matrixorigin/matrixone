@@ -1,6 +1,6 @@
 # Embedded Sirius migration
 
-Design version: 1.
+Design version: 2.
 
 Owner: MatrixOne query execution.
 
@@ -9,9 +9,11 @@ Separate numeric compatibility blocker:
 [#28968](https://github.com/matrixorigin/matrixone/issues/28968).
 
 Status: implementation in progress. The user approved the ten-PR plan before
-implementation. That approval does not claim implementation review, CI, GPU
-validation, or production readiness. Each implementation PR must link the
-reviewed revision of this document and report its own evidence.
+implementation and narrowed this milestone to MO-reader input on 2026-09-23.
+Direct TAE input requires a separately reviewed design and is deferred. These
+decisions do not claim implementation review, CI, GPU validation, or production
+readiness. Each implementation PR must link the reviewed revision of this
+document and report its own evidence.
 
 ## 1. Decision and scope
 
@@ -19,8 +21,8 @@ Embed Sirius and DuckDB statically in `mo-service` through a C ABI and CGo,
 retaining pinned shared GPU dependencies. Use `upstream-dev-merge` synchronized
 with `sirius-db/sirius:dev`, not the legacy engine or a from-scratch port.
 
-- MO readers are the default embedded input; explicitly selected direct TAE
-  input remains available under its existing admission restrictions.
+- MO readers are the only embedded input in this milestone. No new TAE or
+  directory-lock changes are required for Sirius offload.
 - One active Sirius query on the selected GPU initially; bounded competing
   requests wait without starting readers. Default GPU stream count is two.
 - Bound input and incremental output, including asynchronous ownership.
@@ -83,7 +85,6 @@ MO planning + transaction snapshot
        ^                       |
    MO readers             MO result writer
 
-Alternative: MO-admitted immutable TAE snapshot -> TAE GPU ingestible
 ```
 
 MO owns authorization, the statement snapshot, relation handles, native scan
@@ -96,12 +97,11 @@ schema before starting readers. Every binding is scoped to account, query,
 snapshot and schema; arbitrary file reads and undeclared bindings are rejected
 by the MO-specific entry point. No cross-query MO scan cache is introduced.
 
-Direct TAE preserves schema checks, immutable-object protection and rejection
-of unsupported visible tails/tombstones. Linking TAE is not enough: its table
-function and converters must be registered in the embedded context. In-process
-resolution does not waive storage protection. A deployment lacking the required
-storage protection capability rejects direct TAE. MO-reader execution does not
-require Flight certificates, an external resolver, or direct-TAE leases.
+MO-reader execution uses the existing MO statement snapshot and scan ownership.
+It does not require Flight certificates, an external resolver, direct-TAE
+leases, or a new storage bootstrap hook. An explicit direct-TAE input request
+fails configuration before a native query starts. The existing Flight service
+retains its own lease and recovery contract during coexistence.
 
 ## 4. Native ABI and ownership
 
@@ -177,7 +177,8 @@ Output uses an incremental sink with capacity-aware scheduling. A full result
 window parks result-producing work without occupying every task-creator/GPU
 worker. Include in-flight publication in capacity; wakeups are durable and
 cancellation-aware. Never collect the full result and only then expose a stream.
-TAE metadata dispatch and prefetch also remain bounded.
+MO reader prefetch remains bounded by its existing pipeline and the native
+input credit window.
 
 ## 6. Lifecycle, failure and recovery
 
@@ -197,8 +198,8 @@ Cleanup order:
 1. Seal publication and wake input/output/admission waits.
 2. Request both MO and native cancellation; stop and join MO producers.
 3. Drain native scans, task creation, GPU tasks and asynchronous transfers.
-4. Release leases and query-owned repositories.
-5. Release TAE protection and MO scan/snapshot resources.
+4. Release query-owned repositories and credits.
+5. Release MO scan/snapshot resources.
 6. Release admission and destroy the query handle.
 
 Waits must have an independently callable cancellation path; a data-path mutex
@@ -214,9 +215,10 @@ A timeout does not authorize freeing live buffers, resetting a device in use,
 or starting another query on a poisoned runtime. This larger blast radius is
 an accepted consequence of embedding and must be visible in readiness/health.
 
-Direct-TAE recovery and old Flight leases remain protected until their owner
-is quiescent or process death has been established. Do not remove lease
-recovery merely because new calls no longer use a network resolver.
+Old Flight leases remain protected until their owner is quiescent or process
+death has been established. The embedded MO-reader path creates no direct-TAE
+lease authority. Do not remove Flight recovery merely because the new path
+does not use a network resolver.
 
 ## 7. Packaging and service integration
 
@@ -237,7 +239,7 @@ Flight during coexistence. Unsupported/uncompiled embedded execution is an
 explicit configuration error, not successful native fallback. Separate common
 query limits from Flight-only certificates/addresses. Keep ordinary CPU builds
 free of a new GPU library requirement. Preserve old hint behavior while adding
-embedded selection with MO-reader default and explicit direct TAE.
+embedded selection with MO-reader input only.
 
 ## 8. Ten-PR delivery map
 
@@ -250,10 +252,10 @@ Numeric #28968 has its own design and PR count outside this table.
 | 2 | MO | This design, narrow backend/execution contract, Flight adapter and selector | approved design | CPU contract/config tests, unchanged Flight behavior, fake backend lifecycle |
 | 3 | Sirius | Static target, C ABI, native leases, query lifecycle, errors/cancel/join/health | 1 and contract from 2 | Linked native consumer, partial init, cancel-before-start, queued GPU failure, safe reuse |
 | 4 | Sirius | Bounded MO-native ingestion on unified scan path | 3 | Capacity/ownership, bitmap/NULL varlena, GPU conversion, full-window cancellation |
-| 5 | Sirius | Embedded TAE registration/bindings and strict Substrait admission | 3, 4 | TAE fixtures, schema/identity/plan rejection, projection/filter and bounded preparation |
+| 5 | Sirius | Embedded MO bindings and strict Substrait admission | 3, 4 | Schema/identity/plan rejection and bounded preparation; any existing TAE capability stays inaccessible from MO |
 | 6 | Sirius | Bounded incremental native result sink and capacity wakeups | 3; integrates 4, 5 | Result larger than window, stalled output, full-window cancel, failure is not EOF |
 | 7 | MO | CGo bridge, artifact/build/package, service owner, memory/admission/fatal handling | 2, merged 3-6 | CPU/Sirius/combined build and loader checks, callback lifetime, allocation balance, GPU coexistence |
-| 8 | MO | Real readers/results, direct TAE admission, execution evidence and parity harness | 7 | Public SQL and lifecycle on supported types; opt-in only while numeric blocker remains |
+| 8 | MO | Real MO readers/results, execution evidence and parity harness | 7 | Public SQL and lifecycle on supported types; opt-in only while numeric blocker remains |
 | 9 | MO | Default cutover, Flight removal and configuration/recovery migration | 8, 28968, every gate | Fresh all-22/GPU/performance, failure/restart/config migration, MO CI |
 | 10 | sidecar | Retire MO/Sirius Flight service and its stale deployment/code/tests | 9 and release artifact | Retained tooling tests, current README, explicit replacement mapping |
 
@@ -306,15 +308,16 @@ bounded; redact credentials, object paths and row contents from artifacts.
 
 ## 10. All-22 and performance cutover gates
 
-Run all 22 canonical SF1 and SF10 queries through embedded MO-reader and TAE
-inputs with streams=2 and fallback disabled. Require GPU execution evidence,
-correct schema and native-MO results. Also validate streams=1 and a higher-
-stream stress configuration. Passing at one stream alone is insufficient.
+Run all 22 canonical SF1 and SF10 queries through embedded MO-reader input
+with streams=2 and fallback disabled. Require GPU execution evidence, correct
+schema and native-MO results. Also validate streams=1 and a higher-stream
+stress configuration. Passing at one stream alone is insufficient.
 Agreed floating-point tolerance never excuses decimal/type corruption.
 
-Publish Q1-Q22 and a sum for MO native, Flight+TAE, Flight+MO, embedded+TAE and
-embedded+MO. Use identical data/semantics, matching hardware/memory configuration
-and exact recorded source/artifact revisions. Distinguish cold/warm runs.
+Publish Q1-Q22 and a sum for MO native, Flight+TAE, Flight+MO and embedded+MO.
+Flight+TAE is a retained comparison baseline, not an embedded route. Use
+identical data/semantics, matching hardware/memory configuration and exact
+recorded source/artifact revisions. Distinguish cold/warm runs.
 
 Default campaign: one excluded warm-up and five measured repetitions, routes
 alternated and GPU benchmarks never concurrent. Report each query's median and
@@ -322,9 +325,10 @@ their sum, plus raw runs and the separately labelled median full-suite time.
 Repeat Q9 ten times for its concurrency sensitivity. CPU samples are not wall
 time and are not additive stage latencies.
 
-Embedded MO-reader Q9 and full-suite median must each be at most 2x embedded
-direct TAE. Neither embedded route may regress against its controlled matching
-Flight baseline. Historical 34.16s/15.50s observations are not fresh evidence.
+Embedded MO-reader Q9 and full-suite median must not regress against their
+controlled Flight+MO baselines. Report their ratios to Flight+TAE for context;
+that route uses a different reader and is not an embedded acceptance gate.
+Historical 34.16s/15.50s observations are not fresh evidence.
 
 #28968 must inventory current-main numeric failures and provide separately
 reviewed exact lowering/execution/result reconstruction. No benchmark SQL
