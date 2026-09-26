@@ -11,6 +11,7 @@ remove files from stage if exists 'stage://table_dump_load_stage/auto/objects/*'
 remove files from stage if exists 'stage://table_dump_load_stage/indexed/*';
 remove files from stage if exists 'stage://table_dump_load_stage/binding/*';
 remove files from stage if exists 'stage://table_dump_load_stage/binding_reverse/*';
+remove files from stage if exists 'stage://table_dump_load_stage/binding_position/*';
 
 create table src (id int primary key, value varchar(32));
 insert into src values (1, 'one'), (2, 'two'), (3, 'three');
@@ -107,6 +108,31 @@ update binding_reverse_dst set a = 2;
 select count(distinct r) as distinct_updated_generated_values from binding_reverse_dst;
 select distinct r from binding_reverse_dst;
 
+-- CREATE accepts base-column forward references in generated expressions.
+-- DUMP/LOAD must bind those expressions using the same column positions.
+set div_precision_increment = 10;
+create table binding_position_src (
+    q decimal(30,12) generated always as (a / b) stored,
+    a decimal(10,2),
+    r decimal(30,12) generated always as (a / b) stored,
+    b decimal(10,2)
+);
+insert into binding_position_src(a,b) values (1,3);
+-- @separator:table
+select mo_ctl('dn', 'flush', 'table_dump_load_bvt.binding_position_src');
+dump table binding_position_src to 'stage://table_dump_load_stage/binding_position' metadata only;
+set div_precision_increment = 0;
+create table binding_position_dst (
+    q decimal(30,12) generated always as (a / b) stored,
+    a decimal(10,2),
+    r decimal(30,12) generated always as (a / b) stored,
+    b decimal(10,2)
+);
+load table binding_position_dst from 'stage://table_dump_load_stage/binding_position';
+select q,r from binding_position_dst;
+insert into binding_position_dst(a,b) values (2,3);
+select a,q,r from binding_position_dst order by a;
+
 drop database table_dump_load_bvt;
 remove files from stage if exists 'stage://table_dump_load_stage/full/*';
 remove files from stage if exists 'stage://table_dump_load_stage/full/objects/*';
@@ -116,4 +142,5 @@ remove files from stage if exists 'stage://table_dump_load_stage/auto/objects/*'
 remove files from stage if exists 'stage://table_dump_load_stage/indexed/*';
 remove files from stage if exists 'stage://table_dump_load_stage/binding/*';
 remove files from stage if exists 'stage://table_dump_load_stage/binding_reverse/*';
+remove files from stage if exists 'stage://table_dump_load_stage/binding_position/*';
 drop stage table_dump_load_stage;

@@ -157,9 +157,11 @@ func TestDDLDivisionBindersUseSessionPrecision(t *testing.T) {
 			var restored planpb.TableDef
 			require.NoError(t, proto.Unmarshal(encoded, &restored))
 			require.Len(t, restored.Checks, 1)
+			original := proto.Clone(&restored).(*planpb.TableDef)
 			sensitive, err := AnalyzeTableDumpBindings(ctx, &restored, &restored)
 			require.NoError(t, err)
 			require.True(t, sensitive)
+			require.True(t, proto.Equal(original, &restored), "DUMP analysis mutated a schema with a CHECK")
 			for _, expr := range []*planpb.Expr{restored.Cols[2].GeneratedCol.Expr, restored.Checks[0].Check} {
 				division := findDivision(expr)
 				require.NotNil(t, division)
@@ -167,6 +169,49 @@ func TestDDLDivisionBindersUseSessionPrecision(t *testing.T) {
 			}
 		})
 	}
+
+	t.Run("generated column positions in dump bindings", func(t *testing.T) {
+		for _, tc := range []struct {
+			name, columns string
+			aPos, bPos    int32
+		}{
+			{"first", "q decimal(30,12) generated always as (a/b) stored, a decimal(10,2), b decimal(10,2)", 1, 2},
+			{"middle", "a decimal(10,2), q decimal(30,12) generated always as (a/b) stored, b decimal(10,2)", 0, 2},
+			{"last", "a decimal(10,2), b decimal(10,2), q decimal(30,12) generated always as (a/b) stored", 0, 1},
+		} {
+			t.Run(tc.name, func(t *testing.T) {
+				stmt, parseErr := mysql.ParseOne(t.Context(), "create table t("+tc.columns+")", 1)
+				require.NoError(t, parseErr)
+				defer stmt.Free()
+				build := func(increment int64) *planpb.TableDef {
+					planned, buildErr := BuildPlan(divPrecisionCompilerContext{
+						CompilerContext: compiler, increment: increment,
+					}, stmt, false)
+					require.NoError(t, buildErr)
+					return planned.GetDdl().GetCreateTable().GetTableDef()
+				}
+				source := build(10)
+				target := build(0)
+				var generated *planpb.Expr
+				for _, col := range source.Cols {
+					if col.Name == "q" {
+						generated = col.GeneratedCol.Expr
+						break
+					}
+				}
+				require.NotNil(t, generated)
+				division := findDivision(generated)
+				require.NotNil(t, division)
+				require.Equal(t, tc.aPos, division.GetF().Args[0].GetCol().ColPos)
+				require.Equal(t, tc.bPos, division.GetF().Args[1].GetCol().ColPos)
+				sensitive, analyzeErr := AnalyzeTableDumpBindings(compiler, source, source)
+				require.NoError(t, analyzeErr)
+				require.True(t, sensitive)
+				_, analyzeErr = AnalyzeTableDumpBindings(compiler, target, source)
+				require.NoError(t, analyzeErr)
+			})
+		}
+	})
 
 	t.Run("mixed persisted bindings", func(t *testing.T) {
 		mixedDDL := "create table t(a decimal(10,2), b decimal(10,2), " +
@@ -185,6 +230,8 @@ func TestDDLDivisionBindersUseSessionPrecision(t *testing.T) {
 		source := DeepCopyTableDef(at(4), true)
 		source.Cols[2].Default = at(10).Cols[2].Default
 		target := at(4)
+		originalSource := proto.Clone(source).(*planpb.TableDef)
+		originalTarget := proto.Clone(target).(*planpb.TableDef)
 		sensitive, analyzeErr := AnalyzeTableDumpBindings(compiler, source, source)
 		require.NoError(t, analyzeErr)
 		require.True(t, sensitive)
@@ -194,6 +241,8 @@ func TestDDLDivisionBindersUseSessionPrecision(t *testing.T) {
 		sensitive, analyzeErr = AnalyzeTableDumpBindings(compiler, target, nil)
 		require.NoError(t, analyzeErr)
 		require.True(t, sensitive)
+		require.True(t, proto.Equal(originalSource, source), "DUMP analysis mutated the source schema")
+		require.True(t, proto.Equal(originalTarget, target), "DUMP analysis mutated the target schema")
 		t.Run("tampered bound tree", func(t *testing.T) {
 			tampered := DeepCopyTableDef(source, true)
 			tampered.Cols[2].Default.Expr = &planpb.Expr{
@@ -254,6 +303,51 @@ func TestDDLDivisionBindersUseSessionPrecision(t *testing.T) {
 				"q decimal(30,12) on update (a/b))", 1)
 		require.Error(t, parseErr)
 	})
+}
+
+func BenchmarkAnalyzeTableDumpBindingsChecks(b *testing.B) {
+	compiler := NewMockCompilerContext(false)
+	compiler.tables["t"] = &planpb.TableDef{Name: "t"}
+	rt := moruntime.ServiceRuntime(compiler.GetProcess().GetService())
+	oldVersion, hadVersion := rt.GetGlobalVariables(moruntime.MOProtocolVersion)
+	oldFloor, hadFloor := rt.GetGlobalVariables(moruntime.PersistedExpressionProtocolAuthoringFloor)
+	b.Cleanup(func() {
+		if hadVersion {
+			rt.SetGlobalVariables(moruntime.MOProtocolVersion, oldVersion)
+		}
+		if hadFloor {
+			rt.SetGlobalVariables(moruntime.PersistedExpressionProtocolAuthoringFloor, oldFloor)
+		} else if current, ok := rt.GetGlobalVariables(moruntime.PersistedExpressionProtocolAuthoringFloor); ok {
+			rt.CompareAndDeleteGlobalVariables(moruntime.PersistedExpressionProtocolAuthoringFloor, current)
+		}
+	})
+	rt.SetGlobalVariables(moruntime.MOProtocolVersion, defines.MORPCVersion97)
+	rt.SetGlobalVariables(moruntime.PersistedExpressionProtocolAuthoringFloor, defines.MORPCVersion97)
+	ctx := divPrecisionCompilerContext{CompilerContext: compiler, increment: 10}
+	for _, count := range []int{10, 100} {
+		b.Run(fmt.Sprintf("checks=%d", count), func(b *testing.B) {
+			var sql strings.Builder
+			sql.WriteString("create table t(a decimal(10,2), b decimal(10,2)")
+			for i := range count {
+				fmt.Fprintf(&sql, ", constraint c%d check(a/b > 0)", i)
+			}
+			sql.WriteByte(')')
+			stmt, err := mysql.ParseOne(b.Context(), sql.String(), 1)
+			require.NoError(b, err)
+			b.Cleanup(stmt.Free)
+			built, err := BuildPlan(ctx, stmt, false)
+			require.NoError(b, err)
+			def := built.GetDdl().GetCreateTable().GetTableDef()
+			b.ReportAllocs()
+			b.ResetTimer()
+			for range b.N {
+				_, err := AnalyzeTableDumpBindings(ctx, def, def)
+				if err != nil {
+					b.Fatal(err)
+				}
+			}
+		})
+	}
 }
 
 func TestPreparedDivisionSpecializationUsesPrecisionIncrementContext(t *testing.T) {

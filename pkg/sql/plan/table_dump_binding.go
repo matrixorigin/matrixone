@@ -176,7 +176,7 @@ func bindTableDumpExpression(ctx CompilerContext, def *planpb.TableDef, item tab
 		}
 		cols := make([]*planpb.ColDef, 0, len(def.Cols))
 		for _, candidate := range def.Cols {
-			if candidate != nil && !candidate.Hidden && !strings.EqualFold(candidate.Name, item.name) {
+			if candidate != nil && !candidate.Hidden {
 				cols = append(cols, candidate)
 			}
 		}
@@ -184,12 +184,15 @@ func bindTableDumpExpression(ctx CompilerContext, def *planpb.TableDef, item tab
 		if err != nil {
 			return nil, err
 		}
+		if exprReferencesColumn(bound.Expr, item.name, cols) {
+			return nil, moerr.NewInvalidInputf(ctx.GetContext(), "generated column '%s' cannot refer to itself", item.name)
+		}
 		return bound.Expr, nil
 	case "check":
 		wrapper := tableDumpBindContext{CompilerContext: ctx, ctx: bindCtx, increment: increment}
-		scratch := DeepCopyTableDef(def, true)
+		scratch := *def
 		scratch.Checks = nil
-		if err := appendCheckDef(wrapper, scratch, item.name, ast, -1); err != nil {
+		if err := appendCheckDef(wrapper, &scratch, item.name, ast, -1); err != nil {
 			return nil, err
 		}
 		if len(scratch.Checks) != 1 {
@@ -308,6 +311,9 @@ func AnalyzeTableDumpBindings(ctx CompilerContext, target, supplied *planpb.Tabl
 				}
 				if sameTableDumpBoundExpression(want, candidate) {
 					matched = true
+				}
+				if matched && sensitive {
+					break
 				}
 			}
 			stmt.Free()

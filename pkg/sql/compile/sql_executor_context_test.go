@@ -476,9 +476,24 @@ func TestCompilerContextResolveVariableDelegatesToAttachedSession(t *testing.T) 
 	value, err = processOnly.ResolveVariable("div_precision_increment", true, false)
 	require.NoError(t, err)
 	require.Equal(t, int64(10), value)
-	_, err = processOnly.ResolveVariable("other", false, true)
-	require.Error(t, err)
-	require.Equal(t, []resolved{{"div_precision_increment", true, false}, {"other", false, true}}, processSeen)
+	// Internal SQL callers can install a resolver for only a subset of
+	// session variables. Unrelated planner lookups retain their nil default.
+	value, err = processOnly.ResolveVariable("foreign_key_checks", true, false)
+	require.NoError(t, err)
+	require.Nil(t, value)
+	value, err = processOnly.ResolveVariable("other", false, true)
+	require.NoError(t, err)
+	require.Nil(t, value)
+	require.Equal(t, []resolved{{"div_precision_increment", true, false}}, processSeen)
+
+	// An actual error resolving the required precision setting must propagate.
+	_, err = processOnly.ResolveVariable("div_precision_increment", false, true)
+	require.NoError(t, err)
+	processOnly.proc.SetResolveVariableFunc(func(string, bool, bool) (interface{}, error) {
+		return nil, moerr.NewInternalErrorNoCtx("precision resolver failed")
+	})
+	_, err = processOnly.ResolveVariable("div_precision_increment", true, false)
+	require.ErrorContains(t, err, "precision resolver failed")
 
 	detached := &compilerContext{ctx: context.Background(), proc: testutil.NewProcess(t)}
 	value, err = detached.ResolveVariable("sql_mode", true, false)

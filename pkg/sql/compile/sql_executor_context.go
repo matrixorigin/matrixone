@@ -514,11 +514,13 @@ func (c *compilerContext) ResolveVariable(varName string, isSystemVar bool, isGl
 	// the user ran.
 	//
 	// Internal SQL may instead carry the session resolver on its process, as
-	// ALTER TABLE does when it compiles the replacement table definition.
+	// ALTER TABLE does when it compiles the replacement table definition. That
+	// resolver can be partial, so only request the variable needed for the
+	// persisted division binding from it.
 	if delegate := getInternalExecutorCompilerContext(c.ctx); delegate != nil && delegate != c {
 		return delegate.ResolveVariable(varName, isSystemVar, isGlobalVar)
 	}
-	if c.proc != nil {
+	if isSystemVar && !isGlobalVar && strings.EqualFold(varName, "div_precision_increment") && c.proc != nil {
 		if resolve := c.proc.GetResolveVariableFunc(); resolve != nil {
 			return resolve(varName, isSystemVar, isGlobalVar)
 		}

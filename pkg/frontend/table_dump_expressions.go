@@ -319,7 +319,7 @@ func tableDumpRestoredExpressions(target *plan.TableDef, payload []byte, digest 
 			return nil, false, moerr.NewInvalidInputNoCtx("target table contains a nil check")
 		}
 		source := sourceChecks[strings.ToLower(dest.Name)]
-		if source == nil || dest == nil || !strings.EqualFold(source.Name, dest.Name) ||
+		if source == nil || !strings.EqualFold(source.Name, dest.Name) ||
 			source.OriginSql != dest.OriginSql {
 			return nil, false, moerr.NewInvalidInputNoCtx("table dump checks do not match target schema")
 		}
