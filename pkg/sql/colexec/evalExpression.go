@@ -176,6 +176,7 @@ type expressionExecutorBuildContext struct {
 	memos                       map[int32]*memoExpressionState
 	states                      []*memoExpressionState
 	foldOwnedLiteralNumericCast bool
+	joinBuildDiagnosticOwner    *DeferredJoinDiagnostic
 }
 
 // NewOwnedConstantFilterExecutors is only for a single coordinator filter
@@ -197,10 +198,35 @@ func NewExpressionExecutorsFromPlanExpressionsWithAllocation(
 	selection *vector.AllocationAccountSelection,
 	foldOwnedConstantCasts ...bool,
 ) (executors []ExpressionExecutor, err error) {
+	return newExpressionExecutorsWithDiagnosticOwner(
+		proc, planExprs, selection,
+		len(foldOwnedConstantCasts) > 0 && foldOwnedConstantCasts[0], nil,
+	)
+}
+
+// NewJoinBuildExpressionExecutors isolates diagnostics from statement-constant
+// subtrees while HashBuild speculatively computes its keys.
+func NewJoinBuildExpressionExecutors(
+	proc *process.Process,
+	planExprs []*plan.Expr,
+	selection *vector.AllocationAccountSelection,
+	owner *DeferredJoinDiagnostic,
+) ([]ExpressionExecutor, error) {
+	return newExpressionExecutorsWithDiagnosticOwner(proc, planExprs, selection, true, owner)
+}
+
+func newExpressionExecutorsWithDiagnosticOwner(
+	proc *process.Process,
+	planExprs []*plan.Expr,
+	selection *vector.AllocationAccountSelection,
+	foldOwnedConstantCasts bool,
+	owner *DeferredJoinDiagnostic,
+) (executors []ExpressionExecutor, err error) {
 	executors = make([]ExpressionExecutor, len(planExprs))
 	for i := range executors {
 		buildCtx := &expressionExecutorBuildContext{
-			foldOwnedLiteralNumericCast: len(foldOwnedConstantCasts) > 0 && foldOwnedConstantCasts[0],
+			foldOwnedLiteralNumericCast: foldOwnedConstantCasts,
+			joinBuildDiagnosticOwner:    owner,
 		}
 		executors[i], err = newExpressionExecutorWithAllocation(proc, planExprs[i], selection, buildCtx)
 		if err != nil {
@@ -396,6 +422,14 @@ func newExpressionExecutorWithAllocation(
 			return nil, err
 		}
 
+		deferDiagnostic := buildCtx.joinBuildDiagnosticOwner != nil &&
+			isStatementConstantFilterInput(planExpr) &&
+			!containsExplicitNumericCastForJoin(planExpr)
+		owner := buildCtx.joinBuildDiagnosticOwner
+		if deferDiagnostic {
+			buildCtx.joinBuildDiagnosticOwner = nil
+			defer func() { buildCtx.joinBuildDiagnosticOwner = owner }()
+		}
 		for i := range executor.parameterExecutor {
 			subExecutor, paramErr := newExpressionExecutorWithAllocation(proc, t.F.Args[i], selection, buildCtx)
 			if paramErr != nil {
@@ -404,10 +438,45 @@ func newExpressionExecutorWithAllocation(
 			}
 			executor.SetParameter(i, subExecutor)
 		}
+		if deferDiagnostic {
+			return &deferredJoinConstantExecutor{
+				executor:  executor,
+				owner:     owner,
+				typ:       typ,
+				selection: selection,
+			}, nil
+		}
 		return executor, nil
 	}
 
 	return nil, moerr.NewNYI(proc.Ctx, fmt.Sprintf("unsupported expression executor for %v now", planExpr))
+}
+
+func containsExplicitNumericCastForJoin(expr *plan.Expr) bool {
+	if expr == nil {
+		return false
+	}
+	if fn := expr.GetF(); fn != nil {
+		if fn.GetSyntaxExplicitCast() && fn.Func != nil &&
+			fn.Func.GetObjName() == "cast" && len(fn.Args) > 0 && fn.Args[0] != nil &&
+			types.T(fn.Args[0].Typ.Id).IsMySQLString() &&
+			types.T(expr.Typ.Id).ToType().IsNumeric() {
+			return true
+		}
+		for _, arg := range fn.Args {
+			if containsExplicitNumericCastForJoin(arg) {
+				return true
+			}
+		}
+	}
+	if list := expr.GetList(); list != nil {
+		for _, arg := range list.List {
+			if containsExplicitNumericCastForJoin(arg) {
+				return true
+			}
+		}
+	}
+	return false
 }
 
 func isStringToNumericCast(expr *plan.Expr, foldOwnedLiteral bool) bool {

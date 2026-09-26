@@ -89,6 +89,11 @@ func (hashJoin *HashJoin) callAsofBuildLeft(proc *process.Process) (vm.CallResul
 			if input.Batch.IsEmpty() {
 				continue
 			}
+			if hashJoin.JoinDiagnostic != nil && ctr.globalBuildRowCnt > 0 {
+				if err := hashJoin.JoinDiagnostic.Activate(proc); err != nil {
+					return result, err
+				}
+			}
 			if ctr.mp == nil {
 				return result, moerr.NewInternalErrorNoCtx(
 					"ASOF build-left probe received a batch without a build map")

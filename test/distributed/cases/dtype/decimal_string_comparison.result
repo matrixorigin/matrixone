@@ -219,6 +219,99 @@ ON a.d = b.d AND a.d = CASE WHEN TRUE THEN '1e2suffix' ELSE '2suffix' END;
 SHOW COUNT(*) WARNINGS;
 ➤ @@session.warning_count[-5,0,0]  𝄀
 1
+CREATE TABLE empty_token_values (id INT PRIMARY KEY, d DECIMAL(20,4));
+CREATE TABLE distant_token_values (id INT PRIMARY KEY, d DECIMAL(20,4));
+INSERT INTO distant_token_values VALUES (1, 200);
+SELECT COUNT(*) FROM empty_token_values a JOIN token_values b
+ON a.d = b.d + CASE WHEN TRUE THEN '0suffix' ELSE '1suffix' END;
+➤ COUNT(*)[-5,64,0]  𝄀
+0
+SHOW COUNT(*) WARNINGS;
+➤ @@session.warning_count[-5,0,0]  𝄀
+0
+SELECT COUNT(*) FROM token_values a JOIN empty_token_values b
+ON a.d = b.d + CASE WHEN TRUE THEN '0suffix' ELSE '1suffix' END;
+➤ COUNT(*)[-5,64,0]  𝄀
+0
+SHOW COUNT(*) WARNINGS;
+➤ @@session.warning_count[-5,0,0]  𝄀
+0
+SELECT COUNT(*) FROM token_values a JOIN token_values b
+ON a.d = b.d + CASE WHEN TRUE THEN '0suffix' ELSE '1suffix' END;
+➤ COUNT(*)[-5,64,0]  𝄀
+2
+SHOW COUNT(*) WARNINGS;
+➤ @@session.warning_count[-5,0,0]  𝄀
+1
+SELECT COUNT(*) FROM distant_token_values a JOIN token_values b
+ON a.d = b.d + CASE WHEN TRUE THEN '0suffix' ELSE '1suffix' END;
+➤ COUNT(*)[-5,64,0]  𝄀
+0
+SHOW COUNT(*) WARNINGS;
+➤ @@session.warning_count[-5,0,0]  𝄀
+1
+SELECT COUNT(*) FROM token_values a JOIN token_values b
+ON a.d = b.d + CASE WHEN FALSE THEN '0suffix' ELSE '0' END;
+➤ COUNT(*)[-5,64,0]  𝄀
+2
+SHOW COUNT(*) WARNINGS;
+➤ @@session.warning_count[-5,0,0]  𝄀
+0
+SELECT COUNT(*) FROM token_values a JOIN token_values b
+ON a.id = b.id AND a.d = b.d + CASE WHEN TRUE THEN '0suffix' ELSE '1suffix' END;
+➤ COUNT(*)[-5,64,0]  𝄀
+2
+SHOW COUNT(*) WARNINGS;
+➤ @@session.warning_count[-5,0,0]  𝄀
+1
+CREATE TABLE join_time_values (id INT PRIMARY KEY, v TIME);
+INSERT INTO join_time_values VALUES (1, '00:00:00');
+SELECT COUNT(*) FROM join_time_values a JOIN join_time_values b
+ON a.v = ADDTIME(b.v, ADDTIME('838:59:59', '00:00:01'));
+➤ COUNT(*)[-5,64,0]  𝄀
+0
+SHOW COUNT(*) WARNINGS;
+➤ @@session.warning_count[-5,0,0]  𝄀
+1
+DROP TABLE join_time_values;
+PREPARE join_diagnostic_stmt FROM
+'SELECT COUNT(*) FROM empty_token_values a JOIN token_values b ON a.d = b.d + CASE WHEN TRUE THEN ''0suffix'' ELSE ''1suffix'' END';
+EXECUTE join_diagnostic_stmt;
+➤ COUNT(*)[-5,64,0]  𝄀
+0
+SHOW COUNT(*) WARNINGS;
+➤ @@session.warning_count[-5,0,0]  𝄀
+0
+INSERT INTO empty_token_values VALUES (1, 16), (2, 100);
+EXECUTE join_diagnostic_stmt;
+➤ COUNT(*)[-5,64,0]  𝄀
+2
+SHOW COUNT(*) WARNINGS;
+➤ @@session.warning_count[-5,0,0]  𝄀
+1
+DELETE FROM empty_token_values;
+EXECUTE join_diagnostic_stmt;
+➤ COUNT(*)[-5,64,0]  𝄀
+0
+SHOW COUNT(*) WARNINGS;
+➤ @@session.warning_count[-5,0,0]  𝄀
+0
+DEALLOCATE PREPARE join_diagnostic_stmt;
+SET @join_diagnostic_old_mode = @@session.sql_mode;
+SET SESSION sql_mode = 'MATRIXONE_NATIVE';
+SELECT COUNT(*) FROM empty_token_values a JOIN token_values b
+ON a.d = b.d + CASE WHEN TRUE THEN '1e2suffix' ELSE '0' END;
+➤ COUNT(*)[-5,64,0]  𝄀
+0
+SHOW COUNT(*) WARNINGS;
+➤ @@session.warning_count[-5,0,0]  𝄀
+0
+SELECT COUNT(*) FROM token_values a JOIN token_values b
+ON a.d = b.d + CASE WHEN TRUE THEN '1e2suffix' ELSE '0' END;
+invalid input: "1e2suffix" is invalid numeric string
+SET SESSION sql_mode = @join_diagnostic_old_mode;
+SET @join_diagnostic_old_mode = NULL;
+DROP TABLE empty_token_values, distant_token_values;
 SELECT CAST('12suffix' AS DOUBLE) FROM token_values;
 ➤ cast(12suffix as double)[8,53,31]  𝄀
 12.0  𝄀

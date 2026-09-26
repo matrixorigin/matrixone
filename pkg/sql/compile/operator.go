@@ -180,6 +180,7 @@ func dupOperatorWithContext(sourceOp vm.Operator, index int, maxParallel int, du
 		op.IsShuffle = t.IsShuffle
 		op.Conditions = t.Conditions
 		op.OwnsConstantFilterDiagnostics = t.OwnsConstantFilterDiagnostics
+		op.JoinDiagnostic = t.JoinDiagnostic
 		op.JoinMapTag = t.JoinMapTag
 		op.JoinMapRefCnt = t.JoinMapRefCnt
 		if t.IsShuffle && t.ShuffleIdx == -1 {
@@ -225,6 +226,7 @@ func dupOperatorWithContext(sourceOp vm.Operator, index int, maxParallel int, du
 		op.IsRightJoin = t.IsRightJoin
 		op.NonEqCond = t.NonEqCond
 		op.OwnsConstantFilterDiagnostics = t.OwnsConstantFilterDiagnostics
+		op.JoinDiagnostic = t.JoinDiagnostic
 		op.ResultCols = t.ResultCols
 		op.LeftTypes = t.LeftTypes
 		op.RightTypes = t.RightTypes
@@ -1550,6 +1552,9 @@ func constructHashJoin(node, left *plan.Node, left_types, right_types []types.Ty
 	arg.ResultCols = result
 	arg.NonEqCond = nonEqCond
 	arg.OwnsConstantFilterDiagnostics = containsStatementInvariantDiagnosticInList(proc, node.OnList)
+	if containsStatementInvariantDiagnosticInList(proc, eqConds) {
+		arg.JoinDiagnostic = new(colexec.DeferredJoinDiagnostic)
+	}
 	arg.EqConds = constructJoinConditions(eqConds, proc)
 	arg.RuntimeFilterSpecs = node.RuntimeFilterBuildList
 	arg.HashOnPK = node.Stats.HashmapStats != nil && node.Stats.HashmapStats.HashOnPK
@@ -2590,7 +2595,8 @@ func constructBroadcastHashBuild(op vm.Operator, proc *process.Process, mcpu int
 			buildConditions = arg.EqConds[0]
 		}
 		ret.Conditions = rewriteJoinExprToHashBuildExpr(buildConditions)
-		ret.OwnsConstantFilterDiagnostics = arg.OwnsConstantFilterDiagnostics
+		ret.OwnsConstantFilterDiagnostics = arg.JoinDiagnostic != nil
+		ret.JoinDiagnostic = arg.JoinDiagnostic
 
 		ret.NeedBatches = arg.NeedBuildBatches()
 

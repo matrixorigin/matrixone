@@ -130,6 +130,57 @@ SHOW COUNT(*) WARNINGS;
 SELECT COUNT(*) FROM token_values a JOIN token_values b
 ON a.d = b.d AND a.d = CASE WHEN TRUE THEN '1e2suffix' ELSE '2suffix' END;
 SHOW COUNT(*) WARNINGS;
+-- HashBuild may calculate a constant ON key before the probe has a row. The
+-- diagnostic belongs to the join's logical evaluation, including no-match and
+-- null-key cases, not to speculative key preparation or a runtime filter.
+CREATE TABLE empty_token_values (id INT PRIMARY KEY, d DECIMAL(20,4));
+CREATE TABLE distant_token_values (id INT PRIMARY KEY, d DECIMAL(20,4));
+INSERT INTO distant_token_values VALUES (1, 200);
+SELECT COUNT(*) FROM empty_token_values a JOIN token_values b
+ON a.d = b.d + CASE WHEN TRUE THEN '0suffix' ELSE '1suffix' END;
+SHOW COUNT(*) WARNINGS;
+SELECT COUNT(*) FROM token_values a JOIN empty_token_values b
+ON a.d = b.d + CASE WHEN TRUE THEN '0suffix' ELSE '1suffix' END;
+SHOW COUNT(*) WARNINGS;
+SELECT COUNT(*) FROM token_values a JOIN token_values b
+ON a.d = b.d + CASE WHEN TRUE THEN '0suffix' ELSE '1suffix' END;
+SHOW COUNT(*) WARNINGS;
+SELECT COUNT(*) FROM distant_token_values a JOIN token_values b
+ON a.d = b.d + CASE WHEN TRUE THEN '0suffix' ELSE '1suffix' END;
+SHOW COUNT(*) WARNINGS;
+SELECT COUNT(*) FROM token_values a JOIN token_values b
+ON a.d = b.d + CASE WHEN FALSE THEN '0suffix' ELSE '0' END;
+SHOW COUNT(*) WARNINGS;
+SELECT COUNT(*) FROM token_values a JOIN token_values b
+ON a.id = b.id AND a.d = b.d + CASE WHEN TRUE THEN '0suffix' ELSE '1suffix' END;
+SHOW COUNT(*) WARNINGS;
+CREATE TABLE join_time_values (id INT PRIMARY KEY, v TIME);
+INSERT INTO join_time_values VALUES (1, '00:00:00');
+SELECT COUNT(*) FROM join_time_values a JOIN join_time_values b
+ON a.v = ADDTIME(b.v, ADDTIME('838:59:59', '00:00:01'));
+SHOW COUNT(*) WARNINGS;
+DROP TABLE join_time_values;
+PREPARE join_diagnostic_stmt FROM
+'SELECT COUNT(*) FROM empty_token_values a JOIN token_values b ON a.d = b.d + CASE WHEN TRUE THEN ''0suffix'' ELSE ''1suffix'' END';
+EXECUTE join_diagnostic_stmt;
+SHOW COUNT(*) WARNINGS;
+INSERT INTO empty_token_values VALUES (1, 16), (2, 100);
+EXECUTE join_diagnostic_stmt;
+SHOW COUNT(*) WARNINGS;
+DELETE FROM empty_token_values;
+EXECUTE join_diagnostic_stmt;
+SHOW COUNT(*) WARNINGS;
+DEALLOCATE PREPARE join_diagnostic_stmt;
+SET @join_diagnostic_old_mode = @@session.sql_mode;
+SET SESSION sql_mode = 'MATRIXONE_NATIVE';
+SELECT COUNT(*) FROM empty_token_values a JOIN token_values b
+ON a.d = b.d + CASE WHEN TRUE THEN '1e2suffix' ELSE '0' END;
+SHOW COUNT(*) WARNINGS;
+SELECT COUNT(*) FROM token_values a JOIN token_values b
+ON a.d = b.d + CASE WHEN TRUE THEN '1e2suffix' ELSE '0' END;
+SET SESSION sql_mode = @join_diagnostic_old_mode;
+SET @join_diagnostic_old_mode = NULL;
+DROP TABLE empty_token_values, distant_token_values;
 -- User-written casts in a projector retain row-level conversion diagnostics.
 SELECT CAST('12suffix' AS DOUBLE) FROM token_values;
 SHOW COUNT(*) WARNINGS;
