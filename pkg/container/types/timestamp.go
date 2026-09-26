@@ -128,6 +128,11 @@ var scaleTable = [...]uint32{1000000, 100000, 10000, 1000, 100, 10, 1}
 var OneSecInMicroSeconds = uint32(1000000)
 
 func getMsec(msecStr string, scale int32) (uint32, uint32, error) {
+	// Validate the whole fraction before rounding; discarded digits still
+	// belong to the input grammar (including for a target scale of zero).
+	if scale < 0 || scale > 6 || len(msecStr) == 0 || !isAllDigit(msecStr) {
+		return 0, 0, moerr.NewInvalidArgNoCtx("get ms", msecStr)
+	}
 	msecs := uint32(0)
 	carry := uint32(0)
 	msecCarry := uint32(0)

@@ -221,7 +221,7 @@ func normalizeInterval(s string, it IntervalType, overflow *bool) (ret int64, re
 	invalid := func() (int64, IntervalType, error) {
 		return 0, IntervalTypeInvalid, moerr.NewInvalidInputNoCtxf("invalid time interval value '%s'", s)
 	}
-	if count == 0 && overflow != nil {
+	if count == 0 {
 		return invalid()
 	}
 	negative := strings.HasPrefix(s, "-")

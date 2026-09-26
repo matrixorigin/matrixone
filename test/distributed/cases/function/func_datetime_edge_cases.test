@@ -1,3 +1,6 @@
+-- Epoch boundary values require an explicit session time zone.
+set @edge_time_zone = @@time_zone;
+set time_zone = '+00:00';
 -- @suite
 -- @setup
 drop table if exists t_edge_boundary;
@@ -108,3 +111,5 @@ select
     microsecond(timestampadd(microsecond, 999999, '2022-07-01 10:20:30.000000'))
 ;
 
+
+set time_zone = @edge_time_zone;

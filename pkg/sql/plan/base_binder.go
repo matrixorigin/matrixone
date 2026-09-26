@@ -6884,6 +6884,20 @@ func bindFuncExprImplByPlanExpr(
 		if len(args) == 2 && (args[0].GetP() != nil ||
 			(originalBoundExpr != nil && originalBoundExpr.Typ.Id == int32(types.T_time))) {
 			returnType = types.New(types.T_time, 0, 6)
+		} else if len(args) == 2 && (argsType[0].Oid == types.T_time || argsType[0].Oid == types.T_datetime || argsType[0].Oid == types.T_timestamp) {
+			// A string duration contributes its known literal precision, or
+			// FSP6 when its value is only available during execution.
+			durationFSP := argsType[1].Scale
+			if argsType[1].Oid.IsMySQLString() {
+				durationFSP = 6
+				if literalFSP, ok := timestampPairLiteralFSP(args[1], false); ok {
+					durationFSP = literalFSP
+				}
+			}
+			returnType.Scale = max(returnType.Scale, durationFSP)
+		}
+		if originalBoundExpr != nil {
+			returnType.Scale = max(returnType.Scale, originalBoundExpr.Typ.Scale)
 		}
 
 	case "maketime":
@@ -10292,12 +10306,23 @@ func bindStringIntervalExpr(ctx context.Context, expr *Expr, intervalType types.
 		return nil, types.IntervalTypeInvalid, false, nil
 	}
 	if lit := expr.GetLit(); lit != nil {
-		number, normalizedType, err := types.NormalizeInterval(lit.GetSval(), intervalType)
+		if lit.Isnull {
+			null := makePlan2Int64ConstExprWithType(0)
+			null.GetLit().Isnull = true
+			null.Typ.NotNullable = false
+			return null, intervalType, true, nil
+		}
+		number, normalizedType, overflow, err := types.NormalizeIntervalWithOverflow(lit.GetSval(), intervalType)
 		if err != nil {
-			// Existing literal behavior: date functions recognize this marker and
-			// return NULL rather than propagating a parse/cast error.
-			number = math.MaxInt64
-			normalizedType = intervalType
+			if !overflow {
+				null := makePlan2Int64ConstExprWithType(0)
+				null.GetLit().Isnull = true
+				null.Typ.NotNullable = false
+				return null, intervalType, true, nil
+			}
+			// Preserve a provably out-of-domain count until arithmetic can
+			// determine whether the row is active and its base is non-NULL.
+			number, normalizedType = math.MinInt64, intervalType
 		}
 		return makePlan2Int64ConstExprWithType(number), normalizedType, true, nil
 	}

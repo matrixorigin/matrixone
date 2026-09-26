@@ -1,16 +1,17 @@
+# Cast signed durations to preserve the sign/fraction in JDBC golden output.
 # Basic test case from requirements
-SELECT TIMEDIFF('2000:01:01 00:00:00', '2000:01:01 00:00:00.000001') AS result1;
+SELECT CAST(TIMEDIFF('2000:01:01 00:00:00', '2000:01:01 00:00:00.000001') AS VARCHAR) AS result1;
 
 # Additional test cases
 # String inputs (datetime format)
-SELECT TIMEDIFF('2000:01:01 00:00:00', '2000:01:01 00:00:00.000001') AS microsecond_diff;
+SELECT CAST(TIMEDIFF('2000:01:01 00:00:00', '2000:01:01 00:00:00.000001') AS VARCHAR) AS microsecond_diff;
 SELECT TIMEDIFF('2000:01:01 00:00:00', '2000:01:01 00:00:00') AS zero_diff;
 SELECT TIMEDIFF('2000:01:01 00:00:01', '2000:01:01 00:00:00') AS one_second_diff;
 SELECT TIMEDIFF('2000:01:01 01:00:00', '2000:01:01 00:00:00') AS one_hour_diff;
 
 # Negative differences
-SELECT TIMEDIFF('2000:01:01 00:00:00', '2000:01:01 00:00:01') AS negative_one_second;
-SELECT TIMEDIFF('2000:01:01 00:00:00', '2000:01:01 01:00:00') AS negative_one_hour;
+SELECT CAST(TIMEDIFF('2000:01:01 00:00:00', '2000:01:01 00:00:01') AS VARCHAR) AS negative_one_second;
+SELECT CAST(TIMEDIFF('2000:01:01 00:00:00', '2000:01:01 01:00:00') AS VARCHAR) AS negative_one_hour;
 
 # TIME type inputs
 SELECT TIMEDIFF('15:30:45', '10:20:30') AS time_diff;
@@ -49,7 +50,7 @@ DROP TABLE t1;
 # Edge cases
 SELECT TIMEDIFF('2000-01-01 23:59:59', '2000-01-01 00:00:00') AS max_day_diff;
 SELECT TIMEDIFF('2000-01-02 00:00:00', '2000-01-01 00:00:00') AS day_boundary;
-SELECT TIMEDIFF('2000-01-01 00:00:00', '2000-01-02 00:00:00') AS negative_day_boundary;
+SELECT CAST(TIMEDIFF('2000-01-01 00:00:00', '2000-01-02 00:00:00') AS VARCHAR) AS negative_day_boundary;
 
 # Zero calendar operands return NULL. Exercise both operand positions and both typed/string paths.
 SELECT TIMEDIFF(CAST('0000-00-00 00:00:00' AS DATETIME), CAST('2024-01-01 00:00:00' AS DATETIME)) AS typed_zero_first;

@@ -223,6 +223,39 @@ func TestPreparedTimeArithmeticMarkerKeepsTimeMetadata(t *testing.T) {
 	}
 }
 
+func TestExtractStringAndMarkerUseTolerantParser(t *testing.T) {
+	for _, kind := range []types.T{types.T_any, types.T_char, types.T_varchar, types.T_text} {
+		source := &planpb.Expr{Typ: planpb.Type{Id: int32(kind)}, Expr: &planpb.Expr_P{P: &planpb.ParamRef{Pos: 0}}}
+		bound, err := BindFuncExprImplByPlanExpr(context.Background(), "extract", []*planpb.Expr{makePlan2StringConstExprWithType("hour"), source})
+		require.NoError(t, err)
+		_, overload := function.DecodeOverloadID(bound.GetF().Func.Obj)
+		require.Equal(t, int32(8), overload)
+		require.Equal(t, int32(types.T_int64), bound.Typ.Id)
+		require.Equal(t, int32(types.T_varchar), bound.GetF().Args[1].Typ.Id)
+	}
+}
+
+func TestTypedTimeArithmeticDurationPrecision(t *testing.T) {
+	ctx := context.Background()
+	for _, name := range []string{"addtime", "subtime"} {
+		for _, kind := range []types.T{types.T_time, types.T_datetime} {
+			first := &planpb.Expr{Typ: planpb.Type{Id: int32(kind)}, Expr: &planpb.Expr_Col{Col: &planpb.ColRef{ColPos: 0}}}
+			literal := makePlan2StringConstExprWithType("00:00:00.1")
+			bound, err := BindFuncExprImplByPlanExpr(ctx, name, []*planpb.Expr{DeepCopyExpr(first), literal})
+			require.NoError(t, err)
+			require.Equal(t, int32(kind), bound.Typ.Id)
+			require.Equal(t, int32(1), bound.Typ.Scale)
+			marker := &planpb.Expr{Typ: planpb.Type{Id: int32(types.T_text)}, Expr: &planpb.Expr_P{P: &planpb.ParamRef{Pos: 0}}}
+			bound, err = BindFuncExprImplByPlanExpr(ctx, name, []*planpb.Expr{DeepCopyExpr(first), marker})
+			require.NoError(t, err)
+			require.Equal(t, int32(6), bound.Typ.Scale)
+			rebound, err := bindPreparedFuncExprImplByPlanExpr(ctx, bound, name, []*planpb.Expr{DeepCopyExpr(first), DeepCopyExpr(literal)}, nil)
+			require.NoError(t, err)
+			require.Equal(t, int32(6), rebound.Typ.Scale)
+		}
+	}
+}
+
 func TestTimeDiffStringLiteralPrecision(t *testing.T) {
 	ctx := context.Background()
 	for _, tc := range []struct {

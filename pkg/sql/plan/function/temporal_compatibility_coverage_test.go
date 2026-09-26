@@ -17,6 +17,7 @@ package function
 import (
 	"bytes"
 	"context"
+	"fmt"
 	"math"
 	"testing"
 	"time"
@@ -396,6 +397,19 @@ func BenchmarkTemporalNumericExtract(b *testing.B) {
 			temporalExtractBenchmarkSink = v
 		}
 	})
+	for _, unit := range []string{"year", "hour"} {
+		b.Run("string_"+unit, func(b *testing.B) {
+			b.ReportAllocs()
+			for i := 0; i < b.N; i++ {
+				v, err := extractNumericFromVarchar(unit, "2024-02-29 12:34:56.123456", 6)
+				if err != nil {
+					b.Fatal(err)
+				}
+				temporalExtractBenchmarkSink = v
+			}
+		})
+	}
+
 }
 
 func TestTemporalCompatibilityPeriodAndUnixDomains(t *testing.T) {
@@ -559,21 +573,19 @@ func TestTemporalCompatibilityErrorAndBoundaryHelpers(t *testing.T) {
 	_, _, err = parsePeriod(200813)
 	require.Error(t, err)
 
-	require.Equal(t, types.MySQLTimeFunctionMaxForScale(6), signedMySQLTimeFunctionMax(false))
-	require.Equal(t, -types.MySQLTimeFunctionMaxForScale(6), signedMySQLTimeFunctionMax(true))
 	diff, err := timeDiff(types.TimeFromClock(false, 838, 59, 59, 0), -tm)
-	require.NoError(t, err)
-	require.Equal(t, types.MySQLTimeMaxForScale(6), diff)
+	require.Error(t, err)
+	require.Zero(t, diff)
 	for _, tc := range []struct {
 		first, second types.Time
 		subtract      bool
 		want          types.Time
 	}{
-		{types.TimeFromClock(false, 2_000_000_000, 0, 0, 0), types.TimeFromClock(false, 2_000_000_000, 0, 0, 0), false, types.MySQLTimeMaxForScale(6)},
-		{types.TimeFromClock(false, 2_000_000_000, 0, 0, 0), types.TimeFromClock(true, 2_000_000_000, 0, 0, 0), true, types.MySQLTimeMaxForScale(6)},
-		{types.TimeFromClock(true, 2_000_000_000, 0, 0, 0), types.TimeFromClock(true, 2_000_000_000, 0, 0, 0), false, -types.MySQLTimeMaxForScale(6)},
+		{types.TimeFromClock(false, 2_000_000_000, 0, 0, 0), types.TimeFromClock(false, 2_000_000_000, 0, 0, 0), false, 0},
+		{types.TimeFromClock(false, 2_000_000_000, 0, 0, 0), types.TimeFromClock(true, 2_000_000_000, 0, 0, 0), true, 0},
+		{types.TimeFromClock(true, 2_000_000_000, 0, 0, 0), types.TimeFromClock(true, 2_000_000_000, 0, 0, 0), false, 0},
 	} {
-		got, _, truncated := timeArithmeticResult(tc.first, tc.second, tc.subtract, 6)
+		got, truncated := timeArithmeticResult(tc.first, tc.second, tc.subtract)
 		require.True(t, truncated, "first=%d second=%d subtract=%t got=%d", tc.first, tc.second, tc.subtract, got)
 		require.Equal(t, tc.want, got)
 	}
@@ -654,7 +666,7 @@ func TestTemporalCompatibilityAdditionalExecutionBranches(t *testing.T) {
 			want []string
 			null []bool
 		}{
-			{name: "add", fn: AddTime, want: []string{"13:00:00", "2024-02-29 13:00:00", "", "838:59:59"}, null: []bool{false, false, true, false}},
+			{name: "add", fn: AddTime, want: []string{"13:00:00", "2024-02-29 13:00:00", "", ""}, null: []bool{false, false, true, true}},
 			{name: "sub", fn: SubTime, want: []string{"11:00:00", "2024-02-29 11:00:00", "", "838:59:58"}, null: []bool{false, false, true, false}},
 		} {
 			t.Run(tc.name, func(t *testing.T) {
@@ -708,8 +720,8 @@ func TestTemporalCompatibilityAdditionalHelperBranches(t *testing.T) {
 	}{
 		{unit: "microsecond", value: "12:34:56.123456", want: 123456},
 		{unit: "year", value: "2024-02-29", want: 2024},
-		{unit: "week", value: "0000-00-00 00:00:00", want: 0},
-		{unit: "hour", value: "", want: 0},
+		{unit: "week", value: "0000-00-00 00:00:00", err: true},
+		{unit: "hour", value: "", err: true},
 		{unit: "hour", value: "not-a-temporal", err: true},
 	} {
 		got, gotErr := extractNumericFromVarchar(tc.unit, tc.value, 6)
@@ -750,8 +762,8 @@ func TestTemporalCompatibilityAdditionalHelperBranches(t *testing.T) {
 	require.NoError(t, err)
 	require.Equal(t, types.TimeFromClock(false, 1, 14, 15, 160000), got)
 	got, err = timeDiff(types.Time(math.MaxInt64), types.Time(-math.MaxInt64))
-	require.NoError(t, err)
-	require.Equal(t, types.MySQLTimeMaxForScale(6), got)
+	require.Error(t, err)
+	require.Zero(t, got)
 }
 
 // The eight-digit overlap is decided by an accepted calendar parse, not by
@@ -848,13 +860,20 @@ func TestTemporalCompatibilityCompactOperandMatrix(t *testing.T) {
 // A zero calendar does not imply a zero clock. Exercise every EXTRACT field
 // family against its exact numeric value, including the day-prefixed clocks.
 func TestTemporalCompatibilityZeroCalendarClockMatrix(t *testing.T) {
+	for _, input := range []string{"0000-00-00", "0000-00-00 12:34:56", "", " "} {
+		_, err := extractNumericFromVarchar("week", input, 6)
+		require.Error(t, err, input)
+	}
+	_, errWeek := extractNumericFromDatetime("week", types.ZeroDatetime)
+	require.Error(t, errWeek)
+
 	clock := "0000-00-00 12:34:56.123456"
 	for _, tc := range []struct {
 		unit string
 		want int64
 	}{
 		{"year", 0}, {"month", 0}, {"day", 0}, {"quarter", 0},
-		{"week", 0}, {"year_month", 0},
+		{"year_month", 0},
 		{"hour", 12}, {"minute", 34}, {"second", 56}, {"microsecond", 123456},
 		{"second_microsecond", 56123456}, {"minute_microsecond", 3456123456},
 		{"minute_second", 3456}, {"hour_microsecond", 123456123456},
@@ -921,5 +940,158 @@ func TestTemporalCompatibilityZeroCalendarClockMatrix(t *testing.T) {
 		got, err := extractNumericFromVarchar(tc.unit, "2024-02-29 12:34:56.123456", 6)
 		require.NoError(t, err, tc.unit)
 		require.Equal(t, tc.want, got, tc.unit)
+	}
+}
+
+// One matrix owns the exact-result contract, independent of SQL spelling.
+func TestTemporalArithmeticExactResultContract(t *testing.T) {
+	for _, tc := range []struct {
+		name  string
+		fn    fEvalFn
+		left  FunctionTestInput
+		right FunctionTestInput
+		want  FunctionTestResult
+	}{
+		{"duration add", AddTime, NewFunctionTestInput(types.T_time.ToType(), []types.Time{types.MySQLTimeMax, 0, -types.MySQLTimeMax}, nil), NewFunctionTestInput(types.T_varchar.ToType(), []string{"00:00:01", "00:00:01", "-00:00:01"}, nil), NewFunctionTestResult(types.T_time.ToType(), false, []types.Time{0, types.Time(types.MicroSecsPerSec), 0}, []bool{true, false, true})},
+		{"duration sub", SubTime, NewFunctionTestInput(types.T_time.ToType(), []types.Time{types.MySQLTimeMax, 0, -types.MySQLTimeMax}, nil), NewFunctionTestInput(types.T_varchar.ToType(), []string{"-00:00:01", "-00:00:01", "00:00:01"}, nil), NewFunctionTestResult(types.T_time.ToType(), false, []types.Time{0, types.Time(types.MicroSecsPerSec), 0}, []bool{true, false, true})},
+		{"duration diff", TimeDiff[types.Time], NewFunctionTestInput(types.T_time.ToType(), []types.Time{types.MySQLTimeMax, 0, -types.MySQLTimeMax}, nil), NewFunctionTestInput(types.T_time.ToType(), []types.Time{-types.Time(types.MicroSecsPerSec), -types.Time(types.MicroSecsPerSec), types.Time(types.MicroSecsPerSec)}, nil), NewFunctionTestResult(types.T_time.ToType(), false, []types.Time{0, types.Time(types.MicroSecsPerSec), 0}, []bool{true, false, true})},
+		{"calendar sub", SubTime, NewFunctionTestInput(types.T_datetime.ToTypeWithScale(6), []types.Datetime{types.DatetimeEpoch, types.DatetimeFromClock(2024, 1, 1, 0, 0, 0, 0), types.DatetimeFromClock(9999, 12, 31, 23, 59, 59, 999999)}, nil), NewFunctionTestInput(types.T_varchar.ToType(), []string{"00:00:01", "-00:00:01", "-00:00:00.000001"}, nil), NewFunctionTestResult(types.T_datetime.ToTypeWithScale(6), false, []types.Datetime{0, types.DatetimeFromClock(2024, 1, 1, 0, 0, 1, 0), 0}, []bool{true, false, true})},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			proc := newTmpProcess(t)
+			warnings := &numericWarningSession{}
+			proc.WarningSink = warnings
+			c := NewFunctionTestCase(proc, []FunctionTestInput{tc.left, tc.right}, tc.want, tc.fn)
+			ok, info := c.Run()
+			require.True(t, ok, info)
+			require.Len(t, warnings.warnings, 2)
+			for _, w := range warnings.warnings {
+				require.Equal(t, uint16(moerr.ER_DATETIME_FUNCTION_OVERFLOW), w.code)
+			}
+			warnings.warnings = nil
+			masked := tc.want
+			masked.nullList = []bool{true, true, true}
+			skip := NewFunctionTestCase(proc, []FunctionTestInput{tc.left, tc.right}, masked, tc.fn).
+				WithSelectList(&FunctionSelectList{AnyNull: true, AllNull: true})
+			ok, info = skip.Run()
+			require.True(t, ok, info)
+			require.Empty(t, warnings.warnings)
+
+		})
+	}
+}
+
+func TestCalendarIntervalDiagnosticsAndSelection(t *testing.T) {
+	minimum := types.DatetimeEpoch
+	ordinary := types.DatetimeFromClock(2024, 1, 1, 0, 0, 0, 0)
+	maximum := types.DatetimeFromClock(9999, 12, 31, 0, 0, 0, 0)
+	values := []types.Datetime{minimum, ordinary, maximum, types.ZeroDatetime, ordinary, minimum, ordinary}
+	inputNulls := []bool{false, false, false, false, true, false, false}
+	wantNulls := []bool{true, false, true, true, true, true, true}
+	mask := &FunctionSelectList{AnyNull: true, SelectList: []bool{true, true, true, true, true, false, true}}
+	for _, subtract := range []bool{false, true} {
+		counts := []int64{-1, 1, 1, math.MinInt64, math.MinInt64, -1, math.MaxInt64}
+		if subtract {
+			counts = []int64{1, -1, -1, math.MinInt64, math.MinInt64, 1, math.MaxInt64}
+		}
+		for _, kind := range []types.T{types.T_date, types.T_datetime, types.T_timestamp, types.T_varchar} {
+			t.Run(fmt.Sprintf("%s/sub=%t", kind, subtract), func(t *testing.T) {
+				proc := newTmpProcess(t)
+				proc.GetSessionInfo().TimeZone = time.UTC
+				warnings := &numericWarningSession{}
+				proc.WarningSink = warnings
+				var input FunctionTestInput
+				var want FunctionTestResult
+				var fn fEvalFn
+				expected := ordinary + types.Datetime(types.MicroSecsPerSec*types.SecsPerDay)
+				switch kind {
+				case types.T_date:
+					dates := make([]types.Date, len(values))
+					for i, v := range values {
+						dates[i] = v.ToDate()
+					}
+					input = NewFunctionTestInput(kind.ToType(), dates, inputNulls)
+					want = NewFunctionTestResult(kind.ToType(), false, []types.Date{0, expected.ToDate(), 0, 0, 0, 0, 0}, wantNulls)
+					fn = DateAdd
+					if subtract {
+						fn = DateSub
+					}
+				case types.T_datetime:
+					input = NewFunctionTestInput(kind.ToType(), values, inputNulls)
+					want = NewFunctionTestResult(kind.ToType(), false, []types.Datetime{0, expected, 0, 0, 0, 0, 0}, wantNulls)
+					fn = DatetimeAdd
+					if subtract {
+						fn = DatetimeSub
+					}
+				case types.T_timestamp:
+					timestamps := make([]types.Timestamp, len(values))
+					for i, v := range values {
+						timestamps[i] = v.ToTimestamp(time.UTC)
+					}
+					input = NewFunctionTestInput(kind.ToType(), timestamps, inputNulls)
+					want = NewFunctionTestResult(kind.ToType(), false, []types.Timestamp{0, expected.ToTimestamp(time.UTC), 0, 0, 0, 0, 0}, wantNulls)
+					fn = TimestampAdd
+					if subtract {
+						fn = TimestampSub
+					}
+				case types.T_varchar:
+					input = NewFunctionTestInput(kind.ToType(), []string{"0001-01-01", "2024-01-01", "9999-12-31", "bad", "2024-01-01", "0001-01-01", "2024-01-01"}, inputNulls)
+					want = NewFunctionTestResult(kind.ToType(), false, []string{"", "2024-01-02", "", "", "", "", ""}, wantNulls)
+					fn = DateStringAdd
+					if subtract {
+						fn = DateStringSub
+					}
+				}
+				c := NewFunctionTestCase(proc, []FunctionTestInput{input, NewFunctionTestInput(types.T_int64.ToType(), counts, nil), NewFunctionTestConstInput(types.T_int64.ToType(), []int64{int64(types.Day)}, nil)}, want, fn).WithSelectList(mask)
+				ok, info := c.Run()
+				require.True(t, ok, info)
+				require.Len(t, warnings.warnings, 3)
+				for _, warning := range warnings.warnings {
+					require.Equal(t, uint16(moerr.ER_DATETIME_FUNCTION_OVERFLOW), warning.code)
+				}
+			})
+		}
+	}
+}
+
+func TestExtractRawFieldsModeAndInvalidText(t *testing.T) {
+	for _, rejectZero := range []bool{false, true} {
+		for _, tc := range []struct {
+			unit    string
+			partial int64
+		}{{"year", 2024}, {"month", 0}, {"day", 15}, {"year_month", 202400}} {
+			t.Run(fmt.Sprintf("%s/no_zero=%t", tc.unit, rejectZero), func(t *testing.T) {
+				proc := newTmpProcess(t)
+				proc.GetSessionInfo().ExplicitZeroTemporalCastReturnsNull = rejectZero
+				c := NewFunctionTestCase(proc, []FunctionTestInput{
+					NewFunctionTestConstInput(types.T_varchar.ToType(), []string{tc.unit}, nil),
+					NewFunctionTestInput(types.T_varchar.ToType(), []string{"", " ", "bad", "2024-00-15", "0000-00-00", "2024-00-15"}, nil),
+				}, NewFunctionTestResult(types.T_int64.ToType(), false, []int64{0, 0, 0, tc.partial, 0, tc.partial}, []bool{true, true, true, false, rejectZero, false}), ExtractFromVarchar)
+				ok, info := c.Run()
+				require.True(t, ok, info)
+			})
+		}
+	}
+}
+
+func TestTimestampArithmeticUtcLowerBound(t *testing.T) {
+	for _, zone := range []*time.Location{time.UTC, time.FixedZone("east", 8*3600), time.FixedZone("west", -8*3600)} {
+		for _, subtract := range []bool{false, true} {
+			delta := int64(-1)
+			if subtract {
+				delta = 1
+			}
+			fn := doTimestampAdd
+			if subtract {
+				fn = doTimestampSub
+			}
+			_, err := fn(zone, types.TimestampMinValue, delta, types.MicroSecond)
+			require.Equal(t, datetimeOverflowMaxError, err, zone.String())
+			got, err := fn(zone, types.TimestampMinValue+1, delta, types.MicroSecond)
+			require.NoError(t, err)
+			require.Equal(t, types.TimestampMinValue, got)
+		}
+		_, err := calendarArithmeticTimestamp((types.TimestampMinValue - 1).ToDatetime(zone), zone)
+		require.Equal(t, datetimeOverflowMaxError, err)
 	}
 }

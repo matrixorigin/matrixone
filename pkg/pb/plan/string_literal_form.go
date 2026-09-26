@@ -902,10 +902,27 @@ func RequiredRemoteExpressionFeatures(owner any) (features RemoteExpressionFeatu
 					}
 					features.InvalidTemporalResultContract = features.InvalidTemporalResultContract || (!preparedTime && current.Typ.Id != want)
 				}
-				// Stable TIME integer identities also changed the endpoint/error
-				// contract. In 4.2, 838:59:59 + 1 SECOND returned 839:00:00;
-				// newly bound execution returns NULL + warning 1441.
-				if (id == 224 && overload == 5) || (id == 225 && overload == 6) {
+				// A stable physical ABI does not imply stable value/diagnostic
+				// semantics. Newly executing arithmetic must use one final
+				// temporal contract, including on released 4.2 workers.
+				if (id == 41 || id == 378) && overload >= 0 && overload <= 5 {
+					features.TemporalResultContracts = true
+				}
+				switch id {
+				case 93, 94, 95, 224, 225, 250, 364, 373, 375, 376: // differences, arithmetic, construction, periods
+					features.TemporalResultContracts = true
+				case 141, 201, 203, 204, 205, 206, 216, 217, 218, 219, 220, 221, 222, 223,
+					360, 361, 362, 368, 369, 370, 374, 383: // components, zero calendars and week modes
+					features.TemporalResultContracts = true
+				case 187, 188, 196, 197, 251, 363: // parsing, Unix conversion and formatting
+					features.TemporalResultContracts = true
+				}
+
+				// The shared temporal text parser also executes beneath a CAST.
+				// Preserve its physical ABI, but never send the new grammar or
+				// range policy to a released worker through that stable identity.
+				if id == 21 && isPlanTemporalType(current.Typ.Id) && len(fn.Args) > 0 &&
+					fn.Args[0] != nil && isPlanStringType(fn.Args[0].Typ.Id) {
 					features.TemporalResultContracts = true
 				}
 

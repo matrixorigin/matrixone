@@ -242,6 +242,32 @@ func TestRelease42TemporalProtocolBoundary(t *testing.T) {
 		id, overload int32
 		result       types.T
 	}{
+		{"date text cast", function.CAST, 0, types.T_date},
+		{"time text cast", function.CAST, 0, types.T_time},
+		{"datetime text cast", function.CAST, 0, types.T_datetime},
+		{"timestamp text cast", function.CAST, 0, types.T_timestamp},
+		{"timestampdiff", function.TIMESTAMPDIFF, 0, types.T_int64},
+		{"date conversion", function.DATE, 0, types.T_date},
+		{"time conversion", function.TIME, 0, types.T_time},
+		{"microsecond parser", function.MICROSECOND, 0, types.T_int64},
+		{"last day parser", function.LAST_DAY, 0, types.T_varchar},
+		{"from days sentinel", function.FROM_DAYS, 0, types.T_date},
+		{"yearweek modes", function.YEARWEEK, 0, types.T_uint32},
+		{"period arithmetic", function.PERIOD_ADD, 0, types.T_int64},
+		{"unix conversion", function.UNIX_TIMESTAMP, 0, types.T_int64},
+		{"dynamic date parser", function.STR_TO_DATE, 0, types.T_datetime},
+		{"date formatter", function.DATE_FORMAT, 0, types.T_varchar},
+		{"time formatter", function.TIME_FORMAT, 0, types.T_varchar},
+		{"typed addtime", function.ADDTIME, 0, types.T_time},
+		{"typed subtime", function.SUBTIME, 0, types.T_time},
+		{"typed timediff", function.TIMEDIFF, 0, types.T_time},
+		{"datetime addtime", function.ADDTIME, 3, types.T_datetime},
+		{"datetime subtime", function.SUBTIME, 3, types.T_datetime},
+		{"calendar add", function.DATE_ADD, 0, types.T_date},
+		{"calendar sub", function.DATE_SUB, 0, types.T_date},
+		{"timestampadd", function.TIMESTAMPADD, 0, types.T_datetime},
+		{"timestamp pair", function.TIMESTAMP, 5, types.T_datetime},
+		{"maketime", function.MAKETIME, 0, types.T_time},
 		{"time integer add", function.DATE_ADD, 5, types.T_time},
 		{"time integer sub", function.DATE_SUB, 6, types.T_time},
 		{"numeric extract", function.EXTRACT, 5, types.T_int64},
@@ -253,6 +279,12 @@ func TestRelease42TemporalProtocolBoundary(t *testing.T) {
 			expr := &planpb.Expr{Typ: planpb.Type{Id: int32(tc.result)}, Expr: &planpb.Expr_F{F: &planpb.Function{
 				Func: &planpb.ObjectRef{Obj: function.EncodeOverloadID(tc.id, tc.overload)},
 			}}}
+			if tc.id == function.CAST {
+				expr.GetF().Args = []*planpb.Expr{
+					{Typ: planpb.Type{Id: int32(types.T_varchar)}, Expr: &planpb.Expr_Col{Col: &planpb.ColRef{ColPos: 0}}},
+					{Typ: expr.Typ, Expr: &planpb.Expr_T{T: &planpb.TargetType{}}},
+				}
+			}
 			qry := &planpb.Query{Nodes: []*planpb.Node{{ProjectList: []*planpb.Expr{expr}}}, Steps: []int32{0}}
 			op := projection.NewArgument()
 			defer op.Release()
@@ -262,13 +294,22 @@ func TestRelease42TemporalProtocolBoundary(t *testing.T) {
 			// protocol-boundary negative control without calling it a release.
 			for _, version := range []int64{9, 10, defines.MORPCVersion96, defines.MORPCVersion97} {
 				client.version = version
+				rt := moruntime.ServiceRuntime(c.proc.GetService())
+				rt.SetGlobalVariables(moruntime.MOProtocolVersion, version)
+				pipeline := &pipeline.Pipeline{InstructionList: []*pipeline.Instruction{{ProjectList: []*planpb.Expr{expr}}}}
+				receiveErr := validateRemoteExpressionPipelineProtocol(c.proc, pipeline)
+				if version < defines.MORPCVersion97 {
+					require.Error(t, receiveErr)
+				} else {
+					require.NoError(t, receiveErr)
+				}
 				c.execType = plan2.ExecTypeAP_MULTICN
 				c.cnList = engine.Nodes{{Id: "old-worker", Addr: "remote:6001", Mcpu: 4}}
 				require.NoError(t, c.constrainTemporalResultWorkers(qry))
 				_, err := encodeRemoteScope(scope, c.proc)
 				if version < defines.MORPCVersion97 {
 					require.Equal(t, plan2.ExecTypeAP_ONECN, c.execType)
-					require.ErrorContains(t, err, "temporal result contracts")
+					require.ErrorContains(t, err, "temporal")
 				} else {
 					require.Equal(t, plan2.ExecTypeAP_MULTICN, c.execType)
 					require.NoError(t, err)
@@ -314,7 +355,7 @@ func TestTemporalResultProtocolPlacementAndReceive(t *testing.T) {
 	typed := temporalResultProtocolExpr(function.ADDTIME, types.T_time, types.T_time)
 	typedFeatures, err := planpb.RequiredRemoteExpressionFeatures(typed)
 	require.NoError(t, err)
-	require.False(t, typedFeatures.TemporalResultContracts)
+	require.True(t, typedFeatures.TemporalResultContracts)
 
 	qry := &planpb.Query{Nodes: []*planpb.Node{{ProjectList: []*planpb.Expr{expr}}}, Steps: []int32{0}}
 	op := projection.NewArgument()

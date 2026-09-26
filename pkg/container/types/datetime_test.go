@@ -769,3 +769,37 @@ func TestAddIntervalMicrosecond(t *testing.T) {
 		})
 	}
 }
+
+// DATE and DATETIME share calendar spelling; clock fields never wrap into
+// another day, and malformed prefixes are rejected without panic recovery.
+func TestParseDatetimeCalendarAndClockContract(t *testing.T) {
+	for _, tc := range []struct{ input, want string }{
+		{"50-01-01 00:00:01", "2050-01-01 00:00:01.000000"},
+		{"90-01-01 00:00:01", "1990-01-01 00:00:01.000000"},
+		{"69-1-1 0:0", "2069-01-01 00:00:00.000000"},
+		{"70-1-1T0:0", "1970-01-01 00:00:00.000000"},
+		{"24.2.29 1:2:3.4", "2024-02-29 01:02:03.400000"},
+		{"2024@2@29 1:2:3.4", "2024-02-29 01:02:03.400000"},
+		{"20240229235959.999999", "2024-02-29 23:59:59.999999"},
+	} {
+		t.Run(tc.input, func(t *testing.T) {
+			got, err := ParseDatetime(tc.input, 6)
+			require.NoError(t, err)
+			require.Equal(t, tc.want, got.String2(6))
+		})
+	}
+	for _, input := range []string{"T", "1 T", "24-1-1 1:2 3:4", "2024-1-1 1 12:34", "2024- 12:34:56", "2024-1- 12:34:56", "20240230235959", "20240229240000", "20240229236000", "20240229235960", "20240229x00000", "20240229/00000", "2024-02-29 24:00:00", "2024-02-29 23:60:00", "2024-02-29 23:59:60", "9999-12-31 23:59:59.9999999"} {
+		t.Run(input, func(t *testing.T) { _, err := ParseDatetime(input, 6); require.Error(t, err) })
+	}
+}
+
+func TestTemporalFractionValidatesDiscardedSuffix(t *testing.T) {
+	for _, scale := range []int32{0, 1, 6} {
+		for _, suffix := range []string{".", ".1234567x", ".12345678!", ".123456789012345678901234x"} {
+			_, err := ParseDatetime("2024-02-29 12:34:56"+suffix, scale)
+			require.Error(t, err)
+			_, err = ParseTime("12:34:56"+suffix, scale)
+			require.Error(t, err)
+		}
+	}
+}

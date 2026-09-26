@@ -170,6 +170,13 @@ func toTypedInterval[T types.FixedSizeTExceptStrType](
 		}
 		if scalarFloat != nil {
 			if microseconds, valid, handled := scalarFloat(value, types.IntervalType(unit)); handled {
+				// Non-finite inputs are malformed; finite scaling overflow is
+				// retained until the arithmetic consumer knows row activity.
+				if !valid {
+					if _, finite := format(value, scale); finite {
+						microseconds, valid = calendarIntervalOverflow, true
+					}
+				}
 				if err := rs.Append(microseconds, !valid); err != nil {
 					return err
 				}
@@ -210,33 +217,26 @@ func toInterval(ivecs []*vector.Vector, result vector.FunctionResultWrapper, len
 	return nil
 }
 
+// No calendar or public TIME operand can cancel an INT64_MIN interval into
+// its result domain. Keep this out-of-domain value for overflow, instead of
+// collapsing it into SQL NULL before the consumer can apply row diagnostics.
+// The released whole-unit helper retains its old NULL representation.
+const calendarIntervalOverflow int64 = math.MinInt64
+
 func appendNormalizedInterval(rs *vector.FunctionResult[int64], text string, intervalType types.IntervalType, normalizeMicroseconds bool) error {
-	number, normalizedType, err := types.NormalizeInterval(text, intervalType)
-	if err != nil {
-		return rs.Append(0, true)
-	}
-	// The binder fixes one unit for all rows. Scale whole values to the
-	// microsecond unit used by fractional values of these interval types.
-	if normalizeMicroseconds && normalizedType != types.MicroSecond {
-		multiplier := int64(0)
-		switch intervalType {
-		case types.Second, types.Minute_Second, types.Hour_Second, types.Day_Second:
-			multiplier = types.MicroSecsPerSec
-		case types.Minute:
-			multiplier = types.SecsPerMinute * types.MicroSecsPerSec
-		case types.Hour:
-			multiplier = types.SecsPerHour * types.MicroSecsPerSec
-		case types.Day:
-			multiplier = types.SecsPerDay * types.MicroSecsPerSec
-		}
-		if multiplier != 0 {
-			if number > math.MaxInt64/multiplier || number < math.MinInt64/multiplier {
-				return rs.Append(0, true)
-			}
-			number *= multiplier
+	if normalizeMicroseconds {
+		value := normalizeRawTimeInterval(text, intervalType)
+		switch value.state {
+		case timeIntervalOverflow:
+			return rs.Append(calendarIntervalOverflow, false)
+		case timeIntervalInvalid, timeIntervalNull:
+			return rs.Append(0, true)
+		default:
+			return rs.Append(value.value, false)
 		}
 	}
-	return rs.Append(number, false)
+	number, _, err := types.NormalizeInterval(text, intervalType)
+	return rs.Append(number, err != nil)
 }
 
 func builtInCurrentTimestamp(ivecs []*vector.Vector, result vector.FunctionResultWrapper, proc *process.Process, length int, selectList *FunctionSelectList) error {
