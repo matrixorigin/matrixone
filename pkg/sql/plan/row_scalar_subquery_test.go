@@ -17,6 +17,7 @@ package plan
 import (
 	"testing"
 
+	"github.com/matrixorigin/matrixone/pkg/catalog"
 	"github.com/matrixorigin/matrixone/pkg/container/types"
 	planpb "github.com/matrixorigin/matrixone/pkg/pb/plan"
 	"github.com/matrixorigin/matrixone/pkg/sql/plan/function"
@@ -242,6 +243,98 @@ func TestRowConstructorNonEqAggregateRejectsUnsafeComposition(t *testing.T) {
 	} {
 		_, err := runOneStmt(NewMockOptimizer(false), t, test.sql)
 		require.ErrorContains(t, err, test.want)
+	}
+}
+
+func TestNonEqAggregateFallbackRejectsBypassedBoundariesBeforeAppend(t *testing.T) {
+	intType := planpb.Type{Id: int32(types.T_int32)}
+	rowIDType := planpb.Type{Id: int32(types.T_Rowid), Width: 16, NotNullable: true}
+	newScan := func(tag int32) *planpb.Node {
+		return &planpb.Node{
+			NodeType: planpb.Node_TABLE_SCAN, BindingTags: []int32{tag},
+			TableDef: &planpb.TableDef{
+				Name2ColIndex: map[string]int32{catalog.Row_ID: 1},
+				Cols: []*planpb.ColDef{
+					{Name: "k", Typ: intType},
+					{Name: catalog.Row_ID, Typ: rowIDType, Hidden: true},
+				},
+			},
+		}
+	}
+	newBuilder := func() (*QueryBuilder, *BindContext, *BindContext) {
+		outerBinding := &Binding{tag: 10, cols: []string{"k", catalog.Row_ID},
+			colIsHidden: []bool{false, true}, types: []*planpb.Type{&intType, &rowIDType}}
+		innerBinding := &Binding{tag: 20, cols: []string{"k", catalog.Row_ID},
+			colIsHidden: []bool{false, true}, types: []*planpb.Type{&intType, &rowIDType}}
+		builder := &QueryBuilder{
+			compCtx: NewMockCompilerContext(true),
+			qry: &planpb.Query{Nodes: []*planpb.Node{
+				newScan(10), newScan(20),
+				{NodeType: planpb.Node_AGG, Children: []int32{1}, BindingTags: []int32{30, 31},
+					AggList: []*planpb.Expr{makePlan2Int64ConstExprWithType(1)}},
+				{NodeType: planpb.Node_PROJECT, Children: []int32{2}, BindingTags: []int32{32},
+					ProjectList: []*planpb.Expr{GetColExpr(intType, 31, 0)}},
+			}},
+		}
+		return builder, &BindContext{bindings: []*Binding{innerBinding}, aggregateTag: 31},
+			&BindContext{bindings: []*Binding{outerBinding}}
+	}
+	for _, test := range []struct {
+		name, node string
+		set        func(*planpb.Node)
+	}{
+		{"project limit", "project", func(n *planpb.Node) { n.Limit = makePlan2Uint64ConstExprWithType(0) }},
+		{"project offset", "project", func(n *planpb.Node) { n.Offset = makePlan2Uint64ConstExprWithType(1) }},
+		{"project rank", "project", func(n *planpb.Node) { n.RankOption = &planpb.RankOption{Mode: "force"} }},
+		{"aggregate limit", "aggregate", func(n *planpb.Node) { n.Limit = makePlan2Uint64ConstExprWithType(0) }},
+		{"aggregate offset", "aggregate", func(n *planpb.Node) { n.Offset = makePlan2Uint64ConstExprWithType(1) }},
+		{"aggregate rank", "aggregate", func(n *planpb.Node) { n.RankOption = &planpb.RankOption{Mode: "force"} }},
+	} {
+		t.Run(test.name, func(t *testing.T) {
+			builder, subCtx, ctx := newBuilder()
+			index := 3
+			if test.node == "aggregate" {
+				index = 2
+			}
+			test.set(builder.qry.Nodes[index])
+			before := len(builder.qry.Nodes)
+			_, _, err := builder.flattenScalarSubqueryWithNonEqAgg(0, 3, subCtx, nil, ctx,
+				&planpb.SubqueryRef{Typ: planpb.SubqueryRef_SCALAR})
+			require.ErrorContains(t, err, "pagination in non-equality correlated aggregate")
+			require.Len(t, builder.qry.Nodes, before)
+		})
+	}
+	for _, test := range []struct {
+		name  string
+		outer bool
+	}{
+		{"outer project", true}, {"inner project", false},
+	} {
+		t.Run(test.name, func(t *testing.T) {
+			builder, subCtx, ctx := newBuilder()
+			child := int32(1)
+			if test.outer {
+				child = 0
+			}
+			builder.qry.Nodes = append(builder.qry.Nodes, &planpb.Node{
+				NodeType: planpb.Node_PROJECT, Children: []int32{child}, BindingTags: []int32{40},
+			})
+			outerID := int32(0)
+			if test.outer {
+				outerID = 4
+			} else {
+				builder.qry.Nodes[2].Children[0] = 4
+			}
+			before := len(builder.qry.Nodes)
+			_, _, err := builder.flattenScalarSubqueryWithNonEqAgg(outerID, 3, subCtx, nil, ctx,
+				&planpb.SubqueryRef{Typ: planpb.SubqueryRef_SCALAR})
+			if test.outer {
+				require.ErrorContains(t, err, "outer composition cannot be safely decorrelated")
+			} else {
+				require.ErrorContains(t, err, "accessible inner row marker")
+			}
+			require.Len(t, builder.qry.Nodes, before)
+		})
 	}
 }
 
