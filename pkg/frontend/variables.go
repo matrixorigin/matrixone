@@ -3819,6 +3819,15 @@ var gSysVarsDefs = map[string]SystemVariable{
 		Type:              InitSystemVariableBoolType("disable_txn_trace"),
 		Default:           int64(0),
 	},
+	"enable_where_alias": {
+		Name:              "enable_where_alias",
+		Scope:             ScopeSession,
+		Dynamic:           true,
+		SetVarHintApplies: false,
+		Type:              InitSystemVariableBoolType("enable_where_alias"),
+		Default:           int8(0),
+		UpdateSessVar:     updateWhereAlias,
+	},
 	"enable_remap_hint": {
 		Name:              "enable_remap_hint",
 		Scope:             ScopeBoth,

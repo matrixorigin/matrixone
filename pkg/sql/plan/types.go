@@ -1180,6 +1180,9 @@ type TableBinder struct {
 
 type WhereBinder struct {
 	baseBinder
+	// aliases is populated only while binding a SELECT's own WHERE clause.
+	// A nil expression denotes a duplicate explicit alias.
+	aliases map[string]tree.Expr
 }
 
 type GroupBinder struct {

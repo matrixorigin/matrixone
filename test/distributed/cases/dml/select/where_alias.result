@@ -1,0 +1,90 @@
+drop database if exists where_alias_test;
+create database where_alias_test;
+use where_alias_test;
+create table t(a int, b int);
+insert into t values (0, 10), (2, 20), (null, 30);
+select @@session.enable_where_alias;
+➤ @@enable_where_alias[-1,16383,0]  𝄀
+0
+set global enable_where_alias = 1;
+internal error: the system variable is session
+set session enable_where_alias = 2;
+internal error: convert to the system variable bool type failed
+select a as alias_a, b from t where alias_a > 1;
+invalid input: column alias_a does not exist
+set session enable_where_alias = 1;
+select a as alias_a, b from t where alias_a > 1;
+➤ alias_a[4,32,0]  ¦  b[4,32,0]  𝄀
+2  ¦  20
+select abs(a) + 1 as k, b from t where k > 1 order by b;
+➤ k[-5,64,0]  ¦  b[4,32,0]  𝄀
+3  ¦  20
+select a as k, b from t where k is null;
+➤ k[4,32,0]  ¦  b[4,32,0]  𝄀
+null  ¦  30
+select 2 as k where k > 1;
+➤ k[-5,64,0]  𝄀
+2
+select b as a from t where a > 1;
+➤ a[4,32,0]  𝄀
+20
+select x.a as a from t x join t y on x.b = y.b where a > 1;
+invalid input: ambiguous column reference to 'a'
+select a from t o where exists (select b as a from t i where a > 1) order by a;
+➤ a[4,32,0]  𝄀
+null  𝄀
+0  𝄀
+2
+select a, b from t where exists (select 1 as b where b > 15) order by b;
+➤ a[4,32,0]  ¦  b[4,32,0]  𝄀
+2  ¦  20  𝄀
+null  ¦  30
+select a as k, b as k from t where b = 20;
+➤ k[4,32,0]  ¦  k[4,32,0]  𝄀
+2  ¦  20
+select a as k, b as k from t where k > 1;
+invalid input: ambiguous column reference 'k'
+select a as k from t where t.k > 1;
+invalid input: column 't.k' does not exist
+select sum(a) as k from t where k > 1;
+SQL syntax error: aggregate function sum not allowed in WHERE clause
+select row_number() over () as k from t where k > 1;
+SQL syntax error: window function row_number not allowed in WHERE clause
+select a as k, k + 1 as j from t where j > 1;
+invalid input: column k does not exist
+select a as k from t where exists (select 1 where k > 1);
+invalid input: column k does not exist
+select (select max(b) from t) as k from t where k = 30 order by a;
+➤ k[4,32,0]  𝄀
+30  𝄀
+30  𝄀
+30
+prepare p from 'select a as k, b from t where k > ? order by b';
+set @v = 1;
+execute p using @v;
+➤ k[4,32,0]  ¦  b[4,32,0]  𝄀
+2  ¦  20
+select a as alias_a, b from t where alias_a > 1;
+➤ alias_a[4,32,0]  ¦  b[4,32,0]  𝄀
+2  ¦  20
+set session enable_where_alias = 0;
+select a as alias_a, b from t where alias_a > 1;
+invalid input: column alias_a does not exist
+execute p using @v;
+invalid input: column k does not exist
+set session enable_where_alias = 1;
+execute p using @v;
+➤ k[4,32,0]  ¦  b[4,32,0]  𝄀
+2  ¦  20
+deallocate prepare p;
+prepare p from 'select cast(? as signed) as k where k > 1';
+set @v = 2;
+execute p using @v;
+➤ k[-5,64,0]  𝄀
+2
+set @v = 0;
+execute p using @v;
+➤ k[-5,64,0]
+deallocate prepare p;
+set session enable_where_alias = 0;
+drop database where_alias_test;

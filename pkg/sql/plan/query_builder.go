@@ -8352,12 +8352,18 @@ func (builder *QueryBuilder) bindSelectClause(
 	// rewrite right join to left join
 	builder.rewriteRightJoinToLeftJoin(nodeID)
 	if clause.Where != nil {
+		whereBinder := ctx.binder.(*WhereBinder)
+		if enabled, resolveErr := builder.compCtx.ResolveVariable("enable_where_alias", true, false); resolveErr == nil && systemVariableEnabled(enabled) {
+			whereBinder.setSelectAliases(selectList)
+		}
 		var boundFilterList []*plan.Expr
 		if nodeID, boundFilterList, notCacheable, err = builder.bindWhere(
 			ctx, clause.Where, nodeID, astTimeWindow != nil && astTimeWindow.GapFill,
 		); err != nil {
+			whereBinder.aliases = nil
 			return
 		}
+		whereBinder.aliases = nil
 
 		nodeID = builder.appendWhereNode(ctx, nodeID, boundFilterList, notCacheable)
 	}
