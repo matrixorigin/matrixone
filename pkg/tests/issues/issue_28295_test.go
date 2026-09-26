@@ -217,6 +217,24 @@ func TestIssue28295RowConstructorScalarSubquery(t *testing.T) {
 			return values
 		}()
 		require.Equal(t, []int{0, 10, 10}, ifNullSelected)
+		for _, test := range []struct {
+			query string
+			want  int
+		}{
+			{"select (select ifnull((select 2),0)) + ifnull((select 3),0)", 5},
+			{"select ifnull((select 3),0) + (select ifnull((select 2),0))", 5},
+			{"select (select ifnull((select 2),0)) + (select ifnull((select 3),0))", 5},
+			{"select x + ifnull((select 3),0) from (select ifnull((select 2),0) x) d", 5},
+			{"select ifnull((select 2),0) + ifnull((select 3),0)", 5},
+		} {
+			var got int
+			require.NoError(t, conn.QueryRowContext(ctx, test.query).Scan(&got), test.query)
+			require.Equal(t, test.want, got, test.query)
+		}
+		var ifNullStrings string
+		require.NoError(t, conn.QueryRowContext(ctx,
+			"select concat((select ifnull((select 'left'),'')),ifnull((select 'right'),''))").Scan(&ifNullStrings))
+		require.Equal(t, "leftright", ifNullStrings)
 		rawMin := func() []sql.NullInt64 {
 			rows, queryErr := conn.QueryContext(ctx, `select
 				(select min(i.v) from ifnull_inner i where i.k<o.k)

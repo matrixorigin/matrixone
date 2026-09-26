@@ -16,6 +16,7 @@ package plan
 
 import (
 	"context"
+	"math"
 	"testing"
 
 	"github.com/matrixorigin/matrixone/pkg/container/batch"
@@ -43,16 +44,28 @@ func TestTupleMemoIdentityMarksStableVolatileSource(t *testing.T) {
 	}
 	first, firstSource := newCandidate(types.T_float64)
 	second, secondSource := newCandidate(types.T_decimal128)
-	binder := &baseBinder{ctx: &BindContext{}}
+	binder := &baseBinder{builder: &QueryBuilder{}, ctx: &BindContext{}}
 	var memoIDs []int32
 
-	binder.markTupleVolatileSources(first, &memoIDs)
-	binder.markTupleVolatileSources(second, &memoIDs)
+	require.NoError(t, binder.markTupleVolatileSources(first, &memoIDs))
+	require.NoError(t, binder.markTupleVolatileSources(second, &memoIDs))
 
 	require.Zero(t, first.AuxId)
 	require.Zero(t, second.AuxId)
 	require.Negative(t, firstSource.AuxId)
 	require.Equal(t, firstSource.AuxId, secondSource.AuxId)
+}
+
+func TestVolatileMemoIDExhaustionFailsWithoutWrapping(t *testing.T) {
+	builder := &QueryBuilder{nextVolatileExprMemoID: math.MinInt32 + 1}
+	binder := &baseBinder{sysCtx: context.Background(), builder: builder}
+
+	id, err := binder.allocateVolatileExprMemoID()
+	require.NoError(t, err)
+	require.Equal(t, int32(math.MinInt32), id)
+	_, err = binder.allocateVolatileExprMemoID()
+	require.ErrorContains(t, err, "too many memoized expressions")
+	require.Equal(t, int32(math.MinInt32), builder.nextVolatileExprMemoID)
 }
 
 func mixedStringNumericInList(t *testing.T, ctx context.Context) *planpb.Expr {
