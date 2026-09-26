@@ -174,6 +174,10 @@ func (s *service) maybeAddTxn(meta txn.TxnMeta) (*txnContext, bool) {
 	}
 
 	txnCtx := s.acquireTxnContext()
+	// A context must be fully initialized before it is published. Readers of
+	// transactions assume that every context in the map is ready for use.
+	txnCtx.init(meta, acquireNotifier())
+
 	v, loaded := s.transactions.LoadOrStore(id, txnCtx)
 	if loaded {
 		s.releaseTxnContext(txnCtx)
@@ -182,7 +186,6 @@ func (s *service) maybeAddTxn(meta txn.TxnMeta) (*txnContext, bool) {
 
 	// 1. first transaction write request at current DNShard
 	// 2. transaction already committed or aborted, the transaction context will be removed by gcZombieTxn.
-	txnCtx.init(meta, acquireNotifier())
 	util.LogTxnCreateOn(s.logger, meta, s.shard)
 	return txnCtx, true
 }
