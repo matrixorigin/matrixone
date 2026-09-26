@@ -18,6 +18,7 @@ package system
 
 import (
 	"context"
+	"os"
 	"path/filepath"
 	"unsafe"
 
@@ -45,27 +46,35 @@ func runWatchCgroupConfig(stopper *stopper.Stopper) {
 		return
 	}
 
-	// cgroup v2 root
-	cgDir := cgroupv2MountPoint
-
-	fd, err := unix.InotifyInit()
-	if err != nil {
-		logutil.Errorf("unable to init inotify: %v", err)
-		return
+	if err := watchCgroupConfig(stopper, cgroupv2MountPoint, func(name string) {
+		if shouldRefreshQuotaConfig() {
+			logutil.Infof("got %s changed", name)
+			refreshQuotaConfig()
+		}
+	}); err != nil {
+		logutil.Errorf("failed to start cgroup config watcher: %v", err)
 	}
+}
+
+func watchCgroupConfig(stopper *stopper.Stopper, cgDir string, changed func(string)) error {
+	// os.File can interrupt Read on Close only when the descriptor participates
+	// in the runtime poller. A blocking unix.Read cannot be cancelled by Stop.
+	fd, err := unix.InotifyInit1(unix.IN_NONBLOCK | unix.IN_CLOEXEC)
+	if err != nil {
+		return err
+	}
+	file := os.NewFile(uintptr(fd), "cgroup config watcher")
 	// watch cpu.max modified
 	cpuFd, err := unix.InotifyAddWatch(fd, filepath.Join(cgDir, cgroupv2CPULimit), unix.IN_MODIFY)
 	if err != nil {
-		unix.Close(fd)
-		logutil.Errorf("unable to add inotify watch cpu.max: %v", err)
-		return
+		file.Close()
+		return err
 	}
 	// watch memory.max modified
 	memFd, err := unix.InotifyAddWatch(fd, filepath.Join(cgDir, cgroupv2MemLimit), unix.IN_MODIFY)
 	if err != nil {
-		unix.Close(fd)
-		logutil.Errorf("unable to add inotify watch memory.max: %v", err)
-		return
+		file.Close()
+		return err
 	}
 
 	if err := stopper.RunNamedTask("cgroup config watcher", func(ctx context.Context) {
@@ -74,14 +83,18 @@ func runWatchCgroupConfig(stopper *stopper.Stopper) {
 			offset uint32
 		)
 		defer func() {
-			unix.Close(fd)
+			file.Close()
 			logutil.Info("exit cgroup config watcher")
 		}()
+		stopClose := context.AfterFunc(ctx, func() { file.Close() })
+		defer stopClose()
 
 		for {
-			n, err := unix.Read(fd, buffer[:])
+			n, err := file.Read(buffer[:])
 			if err != nil {
-				logutil.Error("unable to read event data from inotify", zap.Error(err))
+				if ctx.Err() == nil {
+					logutil.Error("unable to read event data from inotify", zap.Error(err))
+				}
 				return
 			}
 			if n < unix.SizeofInotifyEvent {
@@ -97,19 +110,15 @@ func runWatchCgroupConfig(stopper *stopper.Stopper) {
 				}
 				switch int(rawEvent.Wd) {
 				case cpuFd:
-					if shouldRefreshQuotaConfig() {
-						logutil.Info("got cpu.max changed")
-						refreshQuotaConfig()
-					}
+					changed(cgroupv2CPULimit)
 				case memFd:
-					if shouldRefreshQuotaConfig() {
-						logutil.Info("got memory.max changed")
-						refreshQuotaConfig()
-					}
+					changed(cgroupv2MemLimit)
 				}
 			}
 		}
 	}); err != nil {
-		logutil.Errorf("failed to start cgroup config watcher: %v", err)
+		file.Close()
+		return err
 	}
+	return nil
 }
