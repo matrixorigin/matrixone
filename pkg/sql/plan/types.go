@@ -621,6 +621,10 @@ type QueryBuilder struct {
 	// populated lazily so unused CTE bodies retain their existing lazy-binding
 	// semantics.
 	cteRefs []*CTERef
+
+	// localCTERoots identifies CTE boundaries before executable-column remapping.
+	// Correlated producers must be parameterized before their consumers flatten.
+	localCTERoots map[int32]bool
 }
 
 type irregularUpdateMaintenance struct {

@@ -1,0 +1,418 @@
+drop database if exists cte_outer_reference;
+create database cte_outer_reference;
+use cte_outer_reference;
+create table pages(id int primary key, parent_id int, active tinyint);
+insert into pages values (1,null,1),(2,1,0),(3,2,1),(4,3,1),(5,1,1);
+select p.id,
+(with q(n) as (select p.parent_id) select n from q) as parent
+from pages p order by p.id;
+➤ id[4,32,0]  ¦  parent[4,32,0]  𝄀
+1  ¦  null  𝄀
+2  ¦  1  𝄀
+3  ¦  2  𝄀
+4  ¦  3  𝄀
+5  ¦  1
+select p.id,
+(with recursive r(n) as (
+select p.parent_id
+union all
+select n-1 from r where n>1
+) select count(*) from r) as depth
+from pages p order by p.id;
+➤ id[4,32,0]  ¦  depth[-5,64,0]  𝄀
+1  ¦  1  𝄀
+2  ¦  1  𝄀
+3  ¦  2  𝄀
+4  ¦  3  𝄀
+5  ¦  1
+select p.id from pages p where not exists (
+with recursive ancestors as (
+select a.* from pages a where a.id=p.parent_id
+union all
+select a.* from pages a join ancestors on ancestors.parent_id=a.id
+) select * from ancestors where active=0
+) and active=1 order by p.id;
+➤ id[4,32,0]  𝄀
+1  𝄀
+5
+select p.id,
+(with recursive r(n) as (
+select a.id from pages a where a.id=p.parent_id
+union all
+select n-1 from r where n>1
+) select count(*) from r) as depth
+from pages p order by p.id;
+➤ id[4,32,0]  ¦  depth[-5,64,0]  𝄀
+1  ¦  0  𝄀
+2  ¦  1  𝄀
+3  ¦  2  𝄀
+4  ¦  3  𝄀
+5  ¦  1
+select p.id,
+(with recursive r(n) as (
+select 1
+union all
+select n+1 from r where n<p.parent_id
+) select count(*) from r) as depth
+from pages p order by p.id;
+➤ id[4,32,0]  ¦  depth[-5,64,0]  𝄀
+1  ¦  1  𝄀
+2  ¦  1  𝄀
+3  ¦  2  𝄀
+4  ¦  3  𝄀
+5  ¦  1
+select p.id,
+(with recursive r(n) as (
+select p.parent_id
+union distinct
+select n from r where n is not null
+) select count(*) from r) as depth
+from pages p order by p.id;
+➤ id[4,32,0]  ¦  depth[-5,64,0]  𝄀
+1  ¦  1  𝄀
+2  ¦  1  𝄀
+3  ¦  1  𝄀
+4  ¦  1  𝄀
+5  ¦  1
+select p.id,
+(with q(n) as (select p.parent_id)
+select a.n+b.n from q a join q b on a.n=b.n) as doubled
+from pages p order by p.id;
+➤ id[4,32,0]  ¦  doubled[4,32,0]  𝄀
+1  ¦  null  𝄀
+2  ¦  2  𝄀
+3  ¦  4  𝄀
+4  ¦  6  𝄀
+5  ¦  2
+select (with q(n) as (select p.parent_id from pages a where a.id<=2)
+select n from q) from pages p;
+Subquery returns more than 1 row
+set @saved_cte_depth=@@cte_max_recursion_depth;
+set cte_max_recursion_depth=2;
+select p.id,
+(with recursive r(n) as (
+select p.parent_id union all select n-1 from r where n>1
+) select count(*) from r) as depth
+from pages p order by p.id;
+➤ id[4,32,0]  ¦  depth[-5,64,0]  𝄀
+1  ¦  1  𝄀
+2  ¦  1  𝄀
+3  ¦  2  𝄀
+4  ¦  3  𝄀
+5  ¦  1
+set cte_max_recursion_depth=1;
+select (with recursive r(n) as (
+select p.parent_id union all select n-1 from r where n>1
+) select count(*) from r) from pages p;
+recursive level out of range
+set cte_max_recursion_depth=@saved_cte_depth;
+set @saved_cte_memory=@@cte_max_memory_bytes;
+set cte_max_memory_bytes=1;
+select (with recursive r(n) as (
+select p.parent_id union all select n-1 from r where n>1
+) select count(*) from r) from pages p;
+-- @regex("recursive CTE memory quota exceeded", true)
+recursive CTE memory quota exceeded on this CN: projected 160 bytes, query limit 1 bytes; increase @@cte_max_memory_bytes or rewrite the query to converge
+set cte_max_memory_bytes=@saved_cte_memory;
+prepare local_cte_stmt from 'select p.id, (with recursive r(n) as (select p.parent_id union all select n-1 from r where n>1) select count(*) from r) as depth from pages p where p.id=? order by p.id';
+set @page_id=4;
+execute local_cte_stmt using @page_id;
+➤ id[4,32,0]  ¦  depth[-5,64,0]  𝄀
+4  ¦  3
+set @page_id=1;
+execute local_cte_stmt using @page_id;
+➤ id[4,32,0]  ¦  depth[-5,64,0]  𝄀
+1  ¦  1
+deallocate prepare local_cte_stmt;
+select p.id,
+(with q(n) as (select p.parent_id)
+select row_number() over (order by n) from q) as rn
+from pages p where p.id in (2, 5) order by p.id;
+➤ id[4,32,0]  ¦  rn[-5,64,0]  𝄀
+2  ¦  1  𝄀
+5  ¦  1
+select p.id,
+(with q(n) as (select p.parent_id from pages a where a.id in (2, 5))
+select max(rn) from (select row_number() over (order by n) as rn from q) w) as max_rn
+from pages p where p.id in (2, 5) order by p.id;
+➤ id[4,32,0]  ¦  max_rn[-5,64,0]  𝄀
+2  ¦  2  𝄀
+5  ¦  2
+select p.id,
+(with q(n) as (select p.parent_id)
+select count(*) from q having count(*)=0) as filtered_count
+from pages p where p.id in (2, 5) order by p.id;
+➤ id[4,32,0]  ¦  filtered_count[-5,64,0]  𝄀
+2  ¦  null  𝄀
+5  ¦  null
+select p.id,
+(with q(n) as (select p.parent_id from pages a where a.id=p.id and a.active=0)
+select count(*) from q having count(*)=0) as filtered_count
+from pages p where p.id in (2, 5) order by p.id;
+➤ id[4,32,0]  ¦  filtered_count[-5,64,0]  𝄀
+2  ¦  null  𝄀
+5  ¦  0
+select p.id from pages p where exists (
+with q(n) as (select p.parent_id)
+select n from q union all select n from q
+) and p.id in (2, 5) order by p.id;
+➤ id[4,32,0]  𝄀
+2  𝄀
+5
+select (with q(n) as (select p.parent_id)
+select n from q union all select n from q)
+from pages p where p.id=2;
+Subquery returns more than 1 row
+select p.id from pages p where exists (
+with q(n) as (select p.parent_id)
+select n from q union all select 7
+) and p.id=2;
+correlated local CTE: UNION ALL without matching row identities is not yet implemented
+select p.id, (with q(n) as (select p.parent_id)
+select count(*) from q having count(*)=0 limit 0) as c
+from pages p where p.id=2;
+correlated local CTE: consumer scalar aggregate cannot preserve empty-input or result-row semantics is not yet implemented
+select p.id, (with q(n) as (select p.parent_id)
+select count(*) from q having count(*)=0 limit 1 offset 1) as c
+from pages p where p.id=2;
+correlated local CTE: consumer scalar aggregate cannot preserve empty-input or result-row semantics is not yet implemented
+select p.id from pages p where exists (
+with q(n) as (select p.parent_id from pages a where a.id=-1)
+select count(*) from q having count(*)=0
+union all select count(*) from q having count(*)=0
+) and p.id=2;
+correlated local CTE: consumer scalar aggregate cannot preserve empty-input or result-row semantics is not yet implemented
+select p.id, (with q(n) as (select p.parent_id)
+select count(*) from pages a left join q on a.id=q.n) as c
+from pages p where p.id=2;
+correlated local CTE: consumer outer join cannot pull up an identity predicate is not yet implemented
+select p.id, (with q(n) as (select p.parent_id)
+select row_number() over (order by count(*)) from q having count(*)=1) as rn
+from pages p where p.id=2;
+correlated local CTE: consumer aggregate window cannot use COUNT empty-input fallback is not yet implemented
+select p.id, (with q(n) as (select p.parent_id)
+select count(n) from q where n<=p.id having count(n)=0) as c
+from pages p where p.id=2;
+correlated local CTE: consumer correlated filter must run before aggregation or window is not yet implemented
+select p.id from pages p where exists (
+with q(n) as (select p.parent_id from pages a where a.id=-1)
+select count(*) from q
+) and p.id=2;
+correlated local CTE: consumer scalar aggregate cannot preserve empty-input or result-row semantics is not yet implemented
+select p.id from pages p where 0 in (
+with q(n) as (select p.parent_id from pages a where a.id=-1)
+select count(*) from q
+) and p.id=2;
+correlated local CTE: consumer scalar aggregate cannot preserve empty-input or result-row semantics is not yet implemented
+select p.id from pages p where exists (
+with q(n) as (select p.parent_id from pages a where a.id=-1)
+select count(*) from q union all select count(*) from q
+) and p.id=2;
+correlated local CTE: consumer scalar aggregate cannot preserve empty-input or result-row semantics is not yet implemented
+select p.id, (with q(n) as (select p.parent_id from pages a where a.id=-1)
+select sum(c) from (select count(*) as c from q) s) as total
+from pages p where p.id=2;
+correlated local CTE: consumer scalar aggregate cannot preserve empty-input or result-row semantics is not yet implemented
+select p.id, (with q(n) as (select a.id+p.parent_id-1 from pages a where a.id in (2, 5))
+select row_number() over (order by n desc) from q where n<=p.id) as rn
+from pages p where p.id=2;
+correlated local CTE: consumer correlated filter must run before aggregation or window is not yet implemented
+select p.id, (with q(n) as (select p.parent_id)
+select count(*) from q limit 0) as c from pages p where p.id=2;
+correlated local CTE: consumer scalar aggregate cannot preserve empty-input or result-row semantics is not yet implemented
+select p.id, (with q(n) as (select p.parent_id)
+select count(*) from q limit 1 offset 1) as c from pages p where p.id=2;
+correlated local CTE: consumer scalar aggregate cannot preserve empty-input or result-row semantics is not yet implemented
+select p.id, (with q(n) as (select p.parent_id)
+select row_number() over (order by count(*)) from q) as rn
+from pages p where p.id=2;
+correlated local CTE: consumer aggregate window cannot use COUNT empty-input fallback is not yet implemented
+select p.id, (with q(n) as (select p.parent_id from pages a where a.id=-1)
+select count(*) from q group by n) as c
+from pages p where p.id=2;
+➤ id[4,32,0]  ¦  c[-5,64,0]  𝄀
+2  ¦  null
+select p.id, (with q(n) as (select p.parent_id from pages a where a.id=-1)
+select count(*) from q group by n limit 1 offset 1) as c
+from pages p where p.id=2;
+➤ id[4,32,0]  ¦  c[-5,64,0]  𝄀
+2  ¦  null
+select p.id, (with q(n) as (select p.parent_id)
+select count(*) from q group by n) as c
+from pages p where p.id in (2, 5) order by p.id;
+➤ id[4,32,0]  ¦  c[-5,64,0]  𝄀
+2  ¦  1  𝄀
+5  ¦  1
+select p.id, (with q(n) as (select p.parent_id)
+select row_number() over (order by count(*)) from q group by n) as rn
+from pages p where p.id=2;
+correlated local CTE: consumer aggregate window cannot use COUNT empty-input fallback is not yet implemented
+select p.id, (with q(n) as (select p.parent_id)
+select count(*) from q join pages b on n=b.id and n=p.id) as c
+from pages p where p.id=2;
+correlated local CTE: consumer join ON has an unhandled outer reference is not yet implemented
+select p.id, (select count(*) from pages a
+where a.id=p.id and a.id<2 order by count(*)) as c
+from pages p where p.id in (1, 2) order by p.id;
+➤ id[4,32,0]  ¦  c[-5,64,0]  𝄀
+1  ¦  1  𝄀
+2  ¦  0
+select p.id, (with q(n) as (select p.parent_id from pages a where a.id=p.id and a.id<2)
+select count(*) from q order by count(*)) as c
+from pages p where p.id in (1, 2) order by p.id;
+➤ id[4,32,0]  ¦  c[-5,64,0]  𝄀
+1  ¦  1  𝄀
+2  ¦  0
+select p.id from pages p where (
+with q(n) as (select p.parent_id from pages a where a.id=p.id and a.id<2)
+select count(*) from q order by count(*)
+)=0 and p.id in (1, 2) order by p.id;
+➤ id[4,32,0]  𝄀
+2
+select p.id, (with q(n) as (select p.parent_id from pages a where a.id=p.id and a.id<2)
+select distinct count(*) from q) as c
+from pages p where p.id in (1, 2) order by p.id;
+➤ id[4,32,0]  ¦  c[-5,64,0]  𝄀
+1  ¦  1  𝄀
+2  ¦  0
+select p.id, (with q(n) as (select p.parent_id)
+select distinct count(*)+1 from q) as c
+from pages p where p.id in (2, 5) order by p.id;
+➤ id[4,32,0]  ¦  c[-5,64,0]  𝄀
+2  ¦  2  𝄀
+5  ¦  2
+select p.id, (select count(*)+1 from pages a
+where a.id=p.id and a.id<2 order by count(*)) as c
+from pages p where p.id in (1, 2) order by p.id;
+➤ id[4,32,0]  ¦  c[-5,64,0]  𝄀
+1  ¦  2  𝄀
+2  ¦  1
+select p.id, (with q(n) as (select p.parent_id from pages a where a.id=p.id and a.id<2)
+select count(*)+1 from q order by count(*)) as c
+from pages p where p.id in (1, 2) order by p.id;
+➤ id[4,32,0]  ¦  c[-5,64,0]  𝄀
+1  ¦  2  𝄀
+2  ¦  1
+select p.id, (select count(*)+1 from pages a
+where a.id=p.id and a.id<2 order by count(*) limit 1) as c
+from pages p where p.id in (1, 2) order by p.id;
+➤ id[4,32,0]  ¦  c[-5,64,0]  𝄀
+1  ¦  2  𝄀
+2  ¦  1
+select p.id, (select count(*)+1 from pages a
+where a.id=p.id and a.id<2 order by count(*) limit 0) as c
+from pages p where p.id in (1, 2) order by p.id;
+➤ id[4,32,0]  ¦  c[-5,64,0]  𝄀
+1  ¦  null  𝄀
+2  ¦  null
+select p.id, (select count(*)+1 from pages a
+where a.id=p.id and a.id<2 order by count(*) limit 1 offset 1) as c
+from pages p where p.id in (1, 2) order by p.id;
+➤ id[4,32,0]  ¦  c[-5,64,0]  𝄀
+1  ¦  null  𝄀
+2  ¦  null
+select p.id, (select count(*) from pages a where a.id=p.id and a.id<2
+having count(*)=0 order by count(*)) as c
+from pages p where p.id in (1, 2) order by p.id;
+➤ id[4,32,0]  ¦  c[-5,64,0]  𝄀
+1  ¦  null  𝄀
+2  ¦  0
+select p.id, (select count(*)+1 from pages a where a.id=p.id and a.id<2
+having count(*)=0 order by count(*) limit 1) as c
+from pages p where p.id in (1, 2) order by p.id;
+➤ id[4,32,0]  ¦  c[-5,64,0]  𝄀
+1  ¦  null  𝄀
+2  ¦  1
+select p.id, (with q(n) as (select p.parent_id from pages a where a.id=p.id and a.id<2)
+select count(*)+1 from q having count(*)=0 order by count(*)) as c
+from pages p where p.id in (1, 2) order by p.id;
+➤ id[4,32,0]  ¦  c[-5,64,0]  𝄀
+1  ¦  null  𝄀
+2  ¦  1
+select p.id, (select count(*)+1 from pages a where a.id=p.id and a.id<2
+having count(*)=1 limit 1) as c
+from pages p where p.id in (1, 2) order by p.id;
+➤ id[4,32,0]  ¦  c[-5,64,0]  𝄀
+1  ¦  2  𝄀
+2  ¦  null
+select p.id, (with q(n) as (select p.parent_id from pages a where a.id=p.id and a.id<2)
+select count(*)+1 from q having count(*)=1 limit 1) as c
+from pages p where p.id in (1, 2) order by p.id;
+➤ id[4,32,0]  ¦  c[-5,64,0]  𝄀
+1  ¦  2  𝄀
+2  ¦  null
+select p.id, (select count(*)*2 from pages a where a.id=p.id and a.id<2 limit 1) as c
+from pages p where p.id in (1, 2) order by p.id;
+➤ id[4,32,0]  ¦  c[-5,64,0]  𝄀
+1  ¦  2  𝄀
+2  ¦  0
+select p.id, (with q(n) as (select p.parent_id from pages a where a.id=p.id and a.id<2)
+select count(*)*2 from q limit 1) as c
+from pages p where p.id in (1, 2) order by p.id;
+➤ id[4,32,0]  ¦  c[-5,64,0]  𝄀
+1  ¦  2  𝄀
+2  ¦  0
+select p.id, (select count(*)+count(a.id) from pages a
+where a.id=p.id and a.id<2 order by count(*)) as c
+from pages p where p.id in (1, 2) order by p.id;
+➤ id[4,32,0]  ¦  c[-5,64,0]  𝄀
+1  ¦  2  𝄀
+2  ¦  0
+select p.id, (with q(n) as (select p.parent_id from pages a where a.id=p.id and a.id<2)
+select count(*)+count(n) from q order by count(*)) as c
+from pages p where p.id in (1, 2) order by p.id;
+➤ id[4,32,0]  ¦  c[-5,64,0]  𝄀
+1  ¦  1  𝄀
+2  ¦  0
+select p.id, (select count(*) from pages a where a.id=p.id and a.id<2
+group by a.id having count(*)=1) as c
+from pages p where p.id in (1, 2) order by p.id;
+➤ id[4,32,0]  ¦  c[-5,64,0]  𝄀
+1  ¦  1  𝄀
+2  ¦  null
+prepare count_having_stmt from 'select p.id, (with q(n) as
+(select p.parent_id from pages a where a.id=p.id and a.id<2)
+select count(*) from q having count(*)>=?) as c
+from pages p where p.id in (1,2) order by p.id';
+set @count_threshold=0;
+execute count_having_stmt using @count_threshold;
+➤ id[4,32,0]  ¦  c[-5,64,0]  𝄀
+1  ¦  1  𝄀
+2  ¦  0
+set @count_threshold=2;
+execute count_having_stmt using @count_threshold;
+➤ id[4,32,0]  ¦  c[-5,64,0]  𝄀
+1  ¦  null  𝄀
+2  ¦  null
+deallocate prepare count_having_stmt;
+select p.id, (select bit_or(a.id) from pages a where a.id=p.id
+limit 1 offset 1) as v
+from pages p where p.id in (1, 2) order by p.id;
+➤ id[4,32,0]  ¦  v[-5,64,0]  𝄀
+1  ¦  null  𝄀
+2  ¦  null
+select p.id, (select bit_and(a.id) from pages a where a.id=p.id
+limit 1 offset 1) as v
+from pages p where p.id in (1, 2) order by p.id;
+➤ id[4,32,0]  ¦  v[-5,64,0]  𝄀
+1  ¦  null  𝄀
+2  ¦  null
+select p.id, (select count(*)+1 from pages a where a.id=p.id and a.id<2
+having count(*)>=0 limit 0) as v
+from pages p where p.id in (1, 2) order by p.id;
+➤ id[4,32,0]  ¦  v[-5,64,0]  𝄀
+1  ¦  null  𝄀
+2  ¦  null
+select p.id, (select count(*)+1 from pages a where a.id=p.id and a.id<2
+having count(*)>=0 limit 1 offset 1) as v
+from pages p where p.id in (1, 2) order by p.id;
+➤ id[4,32,0]  ¦  v[-5,64,0]  𝄀
+1  ¦  null  𝄀
+2  ¦  null
+select p.id,
+(with recursive r(n) as (
+select p.parent_id union all select n-1 from r where n>1
+) select count(*) from r) as depth
+from pages p where p.id=99;
+➤ id[4,32,0]  ¦  depth[-5,64,0]
+drop database cte_outer_reference;

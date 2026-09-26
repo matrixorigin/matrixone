@@ -5466,6 +5466,10 @@ func (builder *QueryBuilder) bindCte(
 			return 0, err
 		}
 	}
+	if builder.localCTERoots == nil {
+		builder.localCTERoots = make(map[int32]bool)
+	}
+	builder.localCTERoots[nodeID] = true
 	// The declaration context is detached from the use-site context for name
 	// resolution, so forward root-owned view dependencies explicitly.
 	ctx.recordViews(cteRef.declarationCtx.views[viewCount:])
