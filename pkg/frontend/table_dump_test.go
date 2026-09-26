@@ -26,6 +26,7 @@ import (
 	"testing"
 	"time"
 
+	"github.com/gogo/protobuf/proto"
 	"github.com/golang/mock/gomock"
 	"github.com/prashantv/gostub"
 	"github.com/stretchr/testify/require"
@@ -1728,6 +1729,75 @@ func TestTableDumpBoundPayloadRejectsExpansionBeforeUnmarshal(t *testing.T) {
 	table := protowire.AppendTag(nil, 4, protowire.BytesType)
 	table = protowire.AppendBytes(table, column)
 	require.ErrorContains(t, preflightTableDumpBoundPayload(table), "nesting exceeds limit")
+}
+
+func TestTableDumpBoundPayloadRejectsMalformedWire(t *testing.T) {
+	bytesField := func(number protowire.Number, value []byte) []byte {
+		return protowire.AppendBytes(protowire.AppendTag(nil, number, protowire.BytesType), value)
+	}
+	target := &plan.TableDef{Cols: []*plan.ColDef{{
+		Name: "q", Typ: plan.Type{Id: int32(types.T_int64)},
+		Default: &plan.Default{OriginString: "1 / 2", Expr: &plan.Expr{
+			Typ:  plan.Type{Id: int32(types.T_int64)},
+			Expr: &plan.Expr_Lit{Lit: &plan.Literal{Value: &plan.Literal_I64Val{I64Val: 0}}},
+		}},
+	}}}
+	before := proto.Clone(target)
+	payload, digest, err := tableDumpBoundExpressions(target)
+	require.NoError(t, err)
+	restored, changed, err := tableDumpRestoredExpressions(target, payload, digest)
+	require.NoError(t, err)
+	require.False(t, changed)
+	require.True(t, proto.Equal(target, restored))
+
+	for _, test := range []struct {
+		name    string
+		payload []byte
+		message string
+	}{
+		{"invalid tag", []byte{0}, "invalid table dump expression wire data"},
+		{"truncated bytes", []byte{0x22, 2, 1}, "invalid table dump expression wire data"},
+		{"wrong nested wire type", []byte{0x20, 0}, "invalid table dump expression wire type"},
+		{"unexpected catalog field", bytesField(1, nil), "unexpected table dump expression metadata"},
+		{"truncated scalar", bytesField(4, []byte{0x08, 0x80}), "invalid table dump expression wire data"},
+		{"unsupported expression 8", bytesField(4, bytesField(7, bytesField(1, bytesField(8, nil)))), "unsupported table dump expression kind"},
+		{"unsupported expression 9", bytesField(4, bytesField(7, bytesField(1, bytesField(9, nil)))), "unsupported table dump expression kind"},
+	} {
+		t.Run(test.name, func(t *testing.T) {
+			require.ErrorContains(t, preflightTableDumpBoundPayload(test.payload), test.message)
+			// A matching digest must not let invalid executable metadata reach
+			// replacement preparation or mutate the existing catalog definition.
+			sum := sha256.Sum256(test.payload)
+			restored, changed, err := tableDumpRestoredExpressions(target, test.payload, fmt.Sprintf("%x", sum))
+			require.ErrorContains(t, err, test.message)
+			require.Nil(t, restored)
+			require.False(t, changed)
+			require.Equal(t, before, target)
+		})
+	}
+}
+
+func TestTableDumpBoundPayloadFieldAndCheckLimits(t *testing.T) {
+	var checks []byte
+	for range 16_384 {
+		checks = protowire.AppendBytes(protowire.AppendTag(checks, 15, protowire.BytesType), nil)
+	}
+	require.NoError(t, preflightTableDumpBoundPayload(checks))
+	checks = protowire.AppendBytes(protowire.AppendTag(checks, 15, protowire.BytesType), nil)
+	require.ErrorContains(t, preflightTableDumpBoundPayload(checks), "too many checks")
+
+	// Repeated scalar fields can expand decoder work without adding columns.
+	// Count the enclosing column field as part of the same work budget.
+	var column []byte
+	for range 99_999 {
+		column = protowire.AppendVarint(protowire.AppendTag(column, 1, protowire.VarintType), 0)
+	}
+	wrap := func() []byte {
+		return protowire.AppendBytes(protowire.AppendTag(nil, 4, protowire.BytesType), column)
+	}
+	require.NoError(t, preflightTableDumpBoundPayload(wrap()))
+	column = protowire.AppendVarint(protowire.AppendTag(column, 1, protowire.VarintType), 0)
+	require.ErrorContains(t, preflightTableDumpBoundPayload(wrap()), "too many fields")
 }
 
 func TestTableSchemaHashIgnoresIdentity(t *testing.T) {
