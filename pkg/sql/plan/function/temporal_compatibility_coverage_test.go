@@ -1160,3 +1160,36 @@ func TestTimePublicNumericBoundary(t *testing.T) {
 		})
 	}
 }
+
+func TestPreparedTimeArithmeticTolerantInputs(t *testing.T) {
+	for _, tc := range []struct {
+		name string
+		fn   fEvalFn
+		step string
+	}{
+		{"add", AddTime, "00:00:01"},
+		{"sub", SubTime, "-00:00:01"},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			proc := newTmpProcess(t)
+			warnings := &numericWarningSession{}
+			proc.WarningSink = warnings
+			// A first marker selects TIME(6), while its input vector remains text.
+			// Bad text is tolerant arithmetic input, not an explicit TIME cast.
+			left := NewFunctionTestInput(types.T_varchar.ToType(), []string{
+				"bad", "bad", "", "12:00:00", "12:00:00.123456", "838:59:59", "838:59:59", "bad",
+			}, []bool{false, false, true, false, false, false, false, false})
+			right := NewFunctionTestInput(types.T_varchar.ToType(), []string{
+				"", tc.step, "bad", "bad", tc.step, tc.step, "", tc.step,
+			}, []bool{true, false, false, false, false, false, true, false})
+			want := NewFunctionTestResult(types.T_time.ToTypeWithScale(6), false,
+				[]types.Time{0, 0, 0, 0, types.TimeFromClock(false, 12, 0, 1, 123456), 0, 0, 0},
+				[]bool{true, true, true, true, false, true, true, true})
+			c := NewFunctionTestCase(proc, []FunctionTestInput{left, right}, want, tc.fn).
+				WithSelectList(&FunctionSelectList{AnyNull: true, SelectList: []bool{true, true, true, true, true, true, true, false}})
+			ok, info := c.Run()
+			require.True(t, ok, info)
+			require.Equal(t, []numericWarning{{code: moerr.ER_DATETIME_FUNCTION_OVERFLOW, msg: "Datetime function: time field overflow"}}, warnings.warnings)
+		})
+	}
+}

@@ -47,12 +47,26 @@ select str_to_date('1 12:34:56', '%d %H:%i:%s') as duration_day,
 -- Direct markers retain TIME(6) metadata through repeated execution, even
 -- if the next value looks like a DATETIME or cannot be parsed.
 prepare dynamic_time from 'select addtime(?, ?) as added, subtime(?, ?) as subtracted';
+show count(*) warnings;
 set @first = '12:34:56', @second = '1:02:03';
 execute dynamic_time using @first, @second, @first, @second;
 set @first = '2024-02-29 12:34:56';
 execute dynamic_time using @first, @second, @first, @second;
 set @first = 'invalid';
 execute dynamic_time using @first, @second, @first, @second;
+show count(*) warnings;
+set @second = null;
+execute dynamic_time using @first, @second, @first, @second;
+show count(*) warnings;
+set @first = null, @second = 'invalid';
+execute dynamic_time using @first, @second, @first, @second;
+show count(*) warnings;
+set @first = '12:00:00';
+execute dynamic_time using @first, @second, @first, @second;
+show count(*) warnings;
+set @second = '00:00:01';
+execute dynamic_time using @first, @second, @first, @second;
+show count(*) warnings;
 deallocate prepare dynamic_time;
 
 select timediff('12:00:00.1', '11:00:00.0') as literal_fsp,
@@ -441,5 +455,105 @@ set @time_fsp_value_28851 = '00:00:01';
 execute time_fsp_marker_28851 using @time_fsp_value_28851, @time_fsp_value_28851;
 deallocate prepare time_fsp_marker_28851;
 drop table time_fsp_sources_28851;
+
+-- Statement-constant ON operands share one diagnostic owner. Empty inputs
+-- suppress diagnostics; nonempty inputs activate even for NULL/no-match keys.
+create table temporal_join_left (k int, v time);
+create table temporal_join_right (k int, v time);
+insert into temporal_join_right values (1, '00:00:00'), (1, '00:00:01');
+set sql_mode = 'STRICT_TRANS_TABLES';
+select count(*) from temporal_join_left a join temporal_join_right b
+on a.k = b.k and a.v = addtime(b.v, cast('bad' as time));
+show count(*) warnings;
+prepare temporal_join_cast from 'select count(*) from temporal_join_left a join temporal_join_right b on a.k = b.k and a.v = addtime(b.v, cast(? as time))';
+show count(*) warnings;
+set @temporal_join_value = 'bad';
+execute temporal_join_cast using @temporal_join_value;
+show count(*) warnings;
+insert into temporal_join_left values (1, '00:00:00');
+execute temporal_join_cast using @temporal_join_value;
+set @temporal_join_value = '00:00:00.000000';
+execute temporal_join_cast using @temporal_join_value;
+show count(*) warnings;
+set sql_mode = '';
+set @temporal_join_value = '900:00:00';
+execute temporal_join_cast using @temporal_join_value;
+show warnings;
+delete from temporal_join_right;
+execute temporal_join_cast using @temporal_join_value;
+show count(*) warnings;
+deallocate prepare temporal_join_cast;
+
+-- Constructor 1441 and conversion 1292 are distinct, including prepared reuse.
+insert into temporal_join_right values (2, '00:00:00'), (2, '00:00:01');
+prepare temporal_join_make from 'select count(*) from temporal_join_left a join temporal_join_right b on a.k = b.k and a.v = addtime(b.v, maketime(?,0,0))';
+set @temporal_join_value = 839;
+execute temporal_join_make using @temporal_join_value;
+show warnings;
+delete from temporal_join_left;
+execute temporal_join_make using @temporal_join_value;
+show count(*) warnings;
+insert into temporal_join_left values (2, '00:00:00');
+set @temporal_join_value = 0;
+execute temporal_join_make using @temporal_join_value;
+show count(*) warnings;
+deallocate prepare temporal_join_make;
+update temporal_join_right set v = '00:00:00';
+prepare temporal_join_seconds from 'select count(*) from temporal_join_left a join temporal_join_right b on a.v = addtime(b.v, sec_to_time(?))';
+set @temporal_join_value = 4000000;
+execute temporal_join_seconds using @temporal_join_value;
+show warnings;
+delete from temporal_join_left;
+execute temporal_join_seconds using @temporal_join_value;
+show count(*) warnings;
+deallocate prepare temporal_join_seconds;
+
+-- An unselected constant branch stays inactive even with both JOIN inputs.
+insert into temporal_join_left values (2, '00:00:00');
+set sql_mode = 'STRICT_TRANS_TABLES';
+prepare temporal_join_case from 'select count(*) from temporal_join_left a join temporal_join_right b on a.v = addtime(b.v, case when true then time(''00:00:00'') else cast(? as time) end)';
+set @temporal_join_value = 'bad';
+execute temporal_join_case using @temporal_join_value;
+show count(*) warnings;
+deallocate prepare temporal_join_case;
+
+-- Strict PERIOD errors are delayed at the same owner, not swallowed.
+prepare temporal_join_period from 'select count(*) from temporal_join_left a join temporal_join_right b on a.k = b.k + period_diff(?,202401)';
+set @temporal_join_value = 202413;
+execute temporal_join_period using @temporal_join_value;
+delete from temporal_join_left;
+execute temporal_join_period using @temporal_join_value;
+show count(*) warnings;
+insert into temporal_join_left values (2, '00:00:00');
+set @temporal_join_value = 202401;
+execute temporal_join_period using @temporal_join_value;
+show count(*) warnings;
+deallocate prepare temporal_join_period;
+drop table temporal_join_left;
+drop table temporal_join_right;
+
+-- A later WHERE, LEFT JOIN elimination or TOP pushdown must not erase the
+-- diagnostic owner. The PK fixture makes those optimizations eligible.
+create table temporal_join_pk_left (k int primary key, v time);
+create table temporal_join_pk_right (k int primary key, v time);
+insert into temporal_join_pk_left values (1, '00:00:00'), (2, '00:00:00');
+insert into temporal_join_pk_right select * from temporal_join_pk_left;
+prepare temporal_join_where from 'select count(*) from temporal_join_pk_left a join temporal_join_pk_right b on a.k=b.k and a.v=addtime(b.v,maketime(?,0,0)) where a.k=-1';
+set @temporal_join_value = 839;
+execute temporal_join_where using @temporal_join_value;
+show warnings;
+deallocate prepare temporal_join_where;
+prepare temporal_join_elimination from 'select a.k from temporal_join_pk_left a left join temporal_join_pk_right b on a.k=b.k and a.v<time(?) order by a.k';
+set @temporal_join_value = '900:00:00';
+execute temporal_join_elimination using @temporal_join_value;
+show warnings;
+deallocate prepare temporal_join_elimination;
+prepare temporal_join_limit from 'select a.k,b.k from temporal_join_pk_left a left join temporal_join_pk_right b on a.k=b.k and b.v<case when a.k=2 then time(?) else time(''00:00:01'') end order by a.k limit 1';
+execute temporal_join_limit using @temporal_join_value;
+show warnings;
+deallocate prepare temporal_join_limit;
+drop table temporal_join_pk_left;
+drop table temporal_join_pk_right;
+set @temporal_join_value = null;
 set sql_mode = @temporal_28851_saved_sql_mode;
 drop database temporal_consistency_28851;

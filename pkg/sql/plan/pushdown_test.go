@@ -16,6 +16,7 @@ package plan
 
 import (
 	"context"
+	"fmt"
 	"math"
 	"testing"
 
@@ -123,6 +124,64 @@ func TestJoinDoesNotPushDownVolatileFilter(t *testing.T) {
 		require.Empty(t, builder.qry.Nodes[0].FilterList)
 		require.Empty(t, builder.qry.Nodes[1].FilterList)
 	})
+}
+
+func TestJoinKeepsDiagnosticEquijoinKeys(t *testing.T) {
+	for _, separate := range []bool{false, true} {
+		for _, fromOn := range []bool{false, true} {
+			for _, reversed := range []bool{false, true} {
+				t.Run(fmt.Sprintf("separate=%t/on=%t/reversed=%t", separate, fromOn, reversed), func(t *testing.T) {
+					ctx := NewMockCompilerContext(true)
+					builder, leftTag, rightTag := newVolatileJoinPushdownBuilder(ctx, plan.Node_INNER)
+					for i, node := range builder.qry.Nodes {
+						node.NodeId = int32(i)
+					}
+					column := func(tag int32) *plan.Expr {
+						return &plan.Expr{Typ: Type{Id: int32(types.T_time)}, Expr: &plan.Expr_Col{
+							Col: &plan.ColRef{RelPos: tag, ColPos: 0},
+						}}
+					}
+					param := &plan.Expr{Typ: Type{Id: int32(types.T_varchar)}, Expr: &plan.Expr_P{P: &plan.ParamRef{Pos: 0}}}
+					clock, err := BindFuncExprImplByPlanExpr(ctx.GetContext(), "time", []*plan.Expr{param})
+					require.NoError(t, err)
+					right, err := BindFuncExprImplByPlanExpr(ctx.GetContext(), "addtime", []*plan.Expr{column(rightTag), clock})
+					require.NoError(t, err)
+					args := []*plan.Expr{column(leftTag), right}
+					if reversed {
+						args[0], args[1] = args[1], args[0]
+					}
+					condition, err := BindFuncExprImplByPlanExpr(ctx.GetContext(), "=", args)
+					require.NoError(t, err)
+					require.True(t, ContainsStatementInvariantFilterDiagnostic(ctx.GetProcess(), condition))
+					filters := []*plan.Expr{condition}
+					if fromOn {
+						builder.qry.Nodes[2].OnList = filters
+						filters = nil
+					}
+					_, remaining := builder.pushdownFilters(2, filters, separate)
+					if fromOn {
+						require.Empty(t, remaining, "a diagnostic must not demote an eligible hash key")
+						require.Equal(t, []*plan.Expr{condition}, builder.qry.Nodes[2].OnList)
+						require.True(t, isEquiCond(condition, map[int32]bool{leftTag: true}, map[int32]bool{rightTag: true}))
+						require.Equal(t, int32(2), builder.determineJoinOrder(2))
+						_, remaining = builder.pushdownFilters(2, nil, true)
+						require.Empty(t, remaining)
+						require.Equal(t, []*plan.Expr{condition}, builder.qry.Nodes[2].OnList)
+						// A parent may reorder its other inputs, but cannot flatten
+						// away this diagnostic owner's two logical input domains.
+						leaves, conditions := builder.gatherJoinLeavesAndConds(builder.qry.Nodes[2], nil, nil)
+						require.Equal(t, []*plan.Node{builder.qry.Nodes[2]}, leaves)
+						require.Empty(t, conditions)
+					} else {
+						require.Equal(t, []*plan.Expr{condition}, remaining, "WHERE retains its post-join diagnostic owner")
+						require.Empty(t, builder.qry.Nodes[2].OnList)
+					}
+					require.Empty(t, builder.qry.Nodes[0].FilterList)
+					require.Empty(t, builder.qry.Nodes[1].FilterList)
+				})
+			}
+		}
+	}
 }
 
 func TestPushdownLimitToTableScanComposesExistingPagination(t *testing.T) {

@@ -15,8 +15,10 @@
 package colexec
 
 import (
+	"context"
 	"testing"
 
+	"github.com/matrixorigin/matrixone/pkg/common/moerr"
 	"github.com/matrixorigin/matrixone/pkg/container/batch"
 	"github.com/matrixorigin/matrixone/pkg/container/types"
 	"github.com/matrixorigin/matrixone/pkg/pb/plan"
@@ -93,6 +95,15 @@ func TestDeferredJoinConstantSemanticErrorActivation(t *testing.T) {
 	require.True(t, value.IsNull(0))
 	require.ErrorContains(t, owner.Activate(proc), "unexpected branch evaluation")
 	owner.Reset()
+}
+
+func TestDeferredJoinErrorClasses(t *testing.T) {
+	require.True(t, deferJoinExpressionError(moerr.NewWrongArguments(context.Background(), "PERIOD_DIFF")))
+	require.True(t, deferJoinExpressionError(moerr.NewInvalidInputNoCtx("invalid time")))
+	require.False(t, deferJoinExpressionError(context.Canceled))
+	require.False(t, deferJoinExpressionError(context.DeadlineExceeded))
+	require.False(t, deferJoinExpressionError(moerr.NewInternalErrorNoCtx("build failed")))
+	require.False(t, deferJoinExpressionError(moerr.NewOOMNoCtx()))
 }
 
 func TestDeferredJoinDiagnosticResetDiscardsLateBuildWarnings(t *testing.T) {

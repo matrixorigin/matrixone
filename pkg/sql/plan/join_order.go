@@ -49,7 +49,8 @@ func (builder *QueryBuilder) pushdownSemiAntiJoins(nodeID int32) int32 {
 		node.Children[i] = builder.pushdownSemiAntiJoins(childID)
 	}
 
-	if node.NodeType != plan.Node_JOIN || (node.JoinType != plan.Node_SEMI && node.JoinType != plan.Node_ANTI) {
+	if node.NodeType != plan.Node_JOIN || (node.JoinType != plan.Node_SEMI && node.JoinType != plan.Node_ANTI) ||
+		builder.joinOwnsConstantDiagnostic(node) {
 		return nodeID
 	}
 
@@ -65,7 +66,7 @@ func (builder *QueryBuilder) pushdownSemiAntiJoins(nodeID int32) int32 {
 	}
 
 	for {
-		if joinNode.NodeType != plan.Node_JOIN {
+		if joinNode.NodeType != plan.Node_JOIN || builder.joinOwnsConstantDiagnostic(joinNode) {
 			break
 		}
 
@@ -236,7 +237,7 @@ func (builder *QueryBuilder) determineJoinOrder(nodeID int32) int32 {
 	}
 	node := builder.qry.Nodes[nodeID]
 
-	if node.NodeType != plan.Node_JOIN || node.JoinType != plan.Node_INNER {
+	if node.NodeType != plan.Node_JOIN || node.JoinType != plan.Node_INNER || builder.joinOwnsConstantDiagnostic(node) {
 		if len(node.Children) > 0 {
 			for i, child := range node.Children {
 				node.Children[i] = builder.determineJoinOrder(child)
@@ -393,6 +394,33 @@ func (builder *QueryBuilder) determineJoinOrder(nodeID int32) int32 {
 	return nodeID
 }
 
+// Flattening this join would change its logical activation inputs and lose ON
+// provenance when the gathered conditions enter the second pushdown pass.
+func (builder *QueryBuilder) joinOwnsConstantDiagnostic(node *plan.Node) bool {
+	if node == nil || builder.compCtx == nil {
+		return false
+	}
+	for _, expr := range node.OnList {
+		if ContainsStatementInvariantFilterDiagnostic(builder.compCtx.GetProcess(), expr) {
+			return true
+		}
+	}
+	return false
+}
+
+func (builder *QueryBuilder) subtreeOwnsConstantDiagnostic(nodeID int32) bool {
+	node := builder.qry.Nodes[nodeID]
+	if builder.joinOwnsConstantDiagnostic(node) {
+		return true
+	}
+	for _, child := range node.Children {
+		if builder.subtreeOwnsConstantDiagnostic(child) {
+			return true
+		}
+	}
+	return false
+}
+
 func (builder *QueryBuilder) isIndexTableWithoutFilters(nodeId int32) bool {
 	node := builder.qry.Nodes[nodeId]
 	if node.NodeType != plan.Node_TABLE_SCAN || node.TableDef == nil {
@@ -405,7 +433,8 @@ func (builder *QueryBuilder) isIndexTableWithoutFilters(nodeId int32) bool {
 }
 
 func (builder *QueryBuilder) gatherJoinLeavesAndConds(joinNode *plan.Node, leaves []*plan.Node, conds []*plan.Expr) ([]*plan.Node, []*plan.Expr) {
-	if joinNode.NodeType != plan.Node_JOIN || joinNode.JoinType != plan.Node_INNER || joinNode.Limit != nil {
+	if joinNode.NodeType != plan.Node_JOIN || joinNode.JoinType != plan.Node_INNER || joinNode.Limit != nil ||
+		builder.joinOwnsConstantDiagnostic(joinNode) {
 		nodeID := builder.determineJoinOrder(joinNode.NodeId)
 		leaves = append(leaves, builder.qry.Nodes[nodeID])
 		return leaves, conds

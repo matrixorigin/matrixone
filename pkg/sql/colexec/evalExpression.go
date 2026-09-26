@@ -423,8 +423,8 @@ func newExpressionExecutorWithAllocation(
 		}
 
 		deferDiagnostic := buildCtx.joinBuildDiagnosticOwner != nil &&
-			isStatementConstantFilterInput(planExpr) &&
-			!containsExplicitNumericCastForJoin(planExpr)
+			function.IsStatementConstantInput(planExpr) &&
+			!function.ContainsRowScopedConversion(planExpr)
 		owner := buildCtx.joinBuildDiagnosticOwner
 		if deferDiagnostic {
 			buildCtx.joinBuildDiagnosticOwner = nil
@@ -452,33 +452,6 @@ func newExpressionExecutorWithAllocation(
 	return nil, moerr.NewNYI(proc.Ctx, fmt.Sprintf("unsupported expression executor for %v now", planExpr))
 }
 
-func containsExplicitNumericCastForJoin(expr *plan.Expr) bool {
-	if expr == nil {
-		return false
-	}
-	if fn := expr.GetF(); fn != nil {
-		if fn.GetSyntaxExplicitCast() && fn.Func != nil &&
-			fn.Func.GetObjName() == "cast" && len(fn.Args) > 0 && fn.Args[0] != nil &&
-			types.T(fn.Args[0].Typ.Id).IsMySQLString() &&
-			types.T(expr.Typ.Id).ToType().IsNumeric() {
-			return true
-		}
-		for _, arg := range fn.Args {
-			if containsExplicitNumericCastForJoin(arg) {
-				return true
-			}
-		}
-	}
-	if list := expr.GetList(); list != nil {
-		for _, arg := range list.List {
-			if containsExplicitNumericCastForJoin(arg) {
-				return true
-			}
-		}
-	}
-	return false
-}
-
 func isStringToNumericCast(expr *plan.Expr, foldOwnedLiteral bool) bool {
 	if expr == nil {
 		return false
@@ -499,40 +472,7 @@ func isStringToNumericCast(expr *plan.Expr, foldOwnedLiteral bool) bool {
 		return false
 	}
 	return name != "cast" || f.GetSyntaxExplicitCast() || !foldOwnedLiteral ||
-		!isStatementConstantFilterInput(f.Args[0])
-}
-
-func isStatementConstantFilterInput(expr *plan.Expr) bool {
-	if expr == nil {
-		return false
-	}
-	switch e := expr.Expr.(type) {
-	case *plan.Expr_Lit, *plan.Expr_T, *plan.Expr_Vec, *plan.Expr_P:
-		return true
-	case *plan.Expr_F:
-		if e.F == nil || e.F.Func == nil {
-			return false
-		}
-		f, ok := function.GetFunctionByIdWithoutError(e.F.Func.GetObj())
-		if !ok || f.CannotFold() || f.IsRealTimeRelated() {
-			return false
-		}
-		for _, arg := range e.F.Args {
-			if !isStatementConstantFilterInput(arg) {
-				return false
-			}
-		}
-		return true
-	case *plan.Expr_List:
-		for _, arg := range e.List.List {
-			if !isStatementConstantFilterInput(arg) {
-				return false
-			}
-		}
-		return true
-	default:
-		return false
-	}
+		!function.IsStatementConstantInput(f.Args[0])
 }
 
 func newExpressionOffHeapVector(

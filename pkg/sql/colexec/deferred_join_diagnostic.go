@@ -174,6 +174,7 @@ func deferJoinExpressionError(err error) bool {
 		moerr.ErrTruncatedWrongValue,
 		moerr.ErrInvalidInput,
 		moerr.ErrWrongDatetimeSpec,
+		moerr.ErrWrongArguments,
 	} {
 		if moerr.IsMoErrCode(err, code) {
 			return true

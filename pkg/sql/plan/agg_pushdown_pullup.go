@@ -21,6 +21,9 @@ import (
 // some restrictions for agg pushdown to make it easier to acheive
 // will remove some restrictions in the future
 func shouldAggPushDown(agg, join, leftChild, rightChild *plan.Node, builder *QueryBuilder) bool {
+	if builder.joinOwnsConstantDiagnostic(join) {
+		return false
+	}
 	if leftChild.NodeType != plan.Node_TABLE_SCAN || rightChild.NodeType != plan.Node_TABLE_SCAN {
 		return false
 	}
