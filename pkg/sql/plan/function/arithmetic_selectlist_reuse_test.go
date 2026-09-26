@@ -203,21 +203,21 @@ func testDecimalStaleSelectList[T templateDec](t *testing.T, decType types.Type,
 			case types.T_decimal64:
 				if tc.id == DIV {
 					got := vector.MustFixedColWithTypeCheck[types.Decimal128](vec)[0]
-					require.Equal(t, "2.50000000", got.Format(resultType.Scale))
+					require.Equal(t, "2.500000", got.Format(resultType.Scale))
 				} else {
 					require.Equal(t, types.Decimal64(100), vector.MustFixedColWithTypeCheck[types.Decimal64](vec)[0])
 				}
 			case types.T_decimal128:
 				got := vector.MustFixedColWithTypeCheck[types.Decimal128](vec)[0]
 				if tc.id == DIV {
-					require.Equal(t, "2.50000000", got.Format(resultType.Scale))
+					require.Equal(t, "2.500000", got.Format(resultType.Scale))
 				} else {
 					require.Equal(t, "1.00", got.Format(resultType.Scale))
 				}
 			case types.T_decimal256:
 				got := vector.MustFixedColWithTypeCheck[types.Decimal256](vec)[0]
 				if tc.id == DIV {
-					require.Equal(t, "2.50000000", got.Format(resultType.Scale))
+					require.Equal(t, "2.500000", got.Format(resultType.Scale))
 				} else {
 					require.Equal(t, "1.00", got.Format(resultType.Scale))
 				}

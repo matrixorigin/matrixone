@@ -132,7 +132,7 @@ func TestTimeNumericArithmeticPreservesFractionAndMetadata(t *testing.T) {
 	timeType := types.T_time.ToTypeWithScale(3)
 	decimal64Type := types.New(types.T_decimal64, 18, 3)
 	decimal128Scale3Type := types.New(types.T_decimal128, 38, 3)
-	decimal128Scale9Type := types.New(types.T_decimal128, 38, 9)
+	decimal128Scale7Type := types.New(types.T_decimal128, 21, 7)
 
 	timeSmall, err := types.ParseTime("00:00:00.001", 3)
 	require.NoError(t, err)
@@ -160,7 +160,7 @@ func TestTimeNumericArithmeticPreservesFractionAndMetadata(t *testing.T) {
 		wantReturn types.Type
 	}{
 		{name: "multiply", operator: "*", wantReturn: decimal128Scale3Type},
-		{name: "divide", operator: "/", wantReturn: decimal128Scale9Type},
+		{name: "divide", operator: "/", wantReturn: decimal128Scale7Type},
 		{name: "modulo", operator: "%", wantReturn: decimal64Type},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
@@ -169,7 +169,14 @@ func TestTimeNumericArithmeticPreservesFractionAndMetadata(t *testing.T) {
 			require.NoError(t, err)
 			targets, needsCast := resolved.ShouldDoImplicitTypeCast()
 			require.True(t, needsCast)
-			require.Equal(t, []types.Type{decimal64Type, types.T_decimal64.ToType()}, targets)
+			wantTargets := []types.Type{decimal64Type, types.T_decimal64.ToType()}
+			if tc.operator == "/" {
+				wantTargets = []types.Type{
+					types.New(types.T_decimal128, 17, 3),
+					types.New(types.T_decimal128, 19, 0),
+				}
+			}
+			require.Equal(t, wantTargets, targets)
 			require.Equal(t, tc.wantReturn, resolved.GetReturnType())
 		})
 	}
@@ -194,16 +201,16 @@ func TestTimeNumericArithmeticPreservesFractionAndMetadata(t *testing.T) {
 	succeed, info = multiplyCase.Run()
 	require.True(t, succeed, info)
 
-	wantDivideSmall, err := types.ParseDecimal128("0.000100000", 38, 9)
+	wantDivideSmall, err := types.ParseDecimal128("0.0001000", 21, 7)
 	require.NoError(t, err)
-	wantDivideLarge, err := types.ParseDecimal128("3.450000000", 38, 9)
+	wantDivideLarge, err := types.ParseDecimal128("3.4500000", 21, 7)
 	require.NoError(t, err)
 	divideCase := NewFunctionTestCase(proc,
 		[]FunctionTestInput{
 			NewFunctionTestInput(decimal64Type, []types.Decimal64{wantSmall, wantLarge}, nil),
 			NewFunctionTestInput(types.T_decimal64.ToType(), []types.Decimal64{decimalTen, decimalTen}, nil),
 		},
-		NewFunctionTestResult(decimal128Scale9Type, false,
+		NewFunctionTestResult(decimal128Scale7Type, false,
 			[]types.Decimal128{wantDivideSmall, wantDivideLarge}, nil),
 		divFn,
 	)

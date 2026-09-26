@@ -1771,9 +1771,10 @@ func buildCTASDefaultFromOrigin(
 		return nil, moerr.NewInternalError(ctx.GetContext(), "invalid CTAS type default expression")
 	}
 
-	binder := NewDefaultBinder(ctx.GetContext(), nil, nil, typ, nil)
+	bindCtx := ddlExpressionContext(ctx, ctx.GetContext())
+	binder := NewDefaultBinder(bindCtx, nil, nil, typ, nil)
 	if len(columns) > 0 {
-		binder = NewDefaultBinderWithColumns(ctx.GetContext(), typ, columns)
+		binder = NewDefaultBinderWithColumns(bindCtx, typ, columns)
 	}
 	defaultExpr, err := binder.BindExpr(selectClause.Exprs[0].Expr, 0, false)
 	if err != nil {
@@ -1806,12 +1807,28 @@ func buildCTASDefaultFromOrigin(
 	}, nil
 }
 
-// Rebinding closes type overrides as well as SQL replay: merely updating a
-// ColRef's position/type cannot update its enclosing function overload. Check
-// the final physical order too, since LIKE and dump reconstruct that order.
+// A copied CTAS default is already bound. Rebind it only if a target type
+// change makes that expression stale: rebinding an unchanged division under a
+// different session precision would change the inherited default's value.
+// The position/name check also verifies the final physical column order.
 func finalizeCTASDefaults(ctx CompilerContext, cols []*ColDef) error {
 	for _, col := range cols {
 		if col.Default == nil || !exprHasLocalColumnRef(col.Default.Expr) {
+			continue
+		}
+		if ctasBoundDefaultMatchesTarget(col, cols) {
+			// CTAS persists a new schema even when it reuses a source binding.
+			// Keep the same authoring admission checks as the rebind path.
+			if err := preservePersistedFormatCompatibility(ctx.GetContext(), col.Default.Expr); err != nil {
+				return err
+			}
+			if err := RequirePersistedIPFunctionProtocolForAuthoring(ctx.GetContext(), ctx.GetProcess(), col.Default.Expr); err != nil {
+				return err
+			}
+			if err := requireExpressionDefaultProtocol(ctx.GetProcess()); err != nil {
+				return err
+			}
+			updateCTASDefaultNullability(col.Default.Expr, cols)
 			continue
 		}
 		bound, err := buildCTASDefaultFromOrigin(ctx, col.Typ,
@@ -1822,6 +1839,81 @@ func finalizeCTASDefaults(ctx CompilerContext, cols []*ColDef) error {
 		col.Default = bound
 	}
 	return validateDefaultColumnDependencies(ctx.GetContext(), cols)
+}
+
+func ctasSameDefaultType(bound, target plan.Type) bool {
+	// Table is catalog lineage, not part of an expression's value domain.
+	// Bound defaults commonly have Table="" while resolved source columns
+	// carry the source table name. Nullability is reconciled separately.
+	return bound.Id == target.Id && bound.Width == target.Width &&
+		bound.Scale == target.Scale && bound.AutoIncr == target.AutoIncr &&
+		bound.Enumvalues == target.Enumvalues && bound.Charset == target.Charset &&
+		bound.PadSpace == target.PadSpace
+}
+
+func ctasBoundDefaultMatchesTarget(col *ColDef, cols []*ColDef) bool {
+	if !ctasSameDefaultType(col.Default.Expr.Typ, col.Typ) {
+		return false
+	}
+	var matches func(*plan.Expr) bool
+	matches = func(expr *plan.Expr) bool {
+		if expr == nil {
+			return true
+		}
+		if ref := expr.GetCol(); ref != nil && ref.RelPos == 0 {
+			pos := int(ref.ColPos)
+			return pos >= 0 && pos < len(cols) && cols[pos] != nil &&
+				strings.EqualFold(ref.Name, cols[pos].Name) &&
+				ctasSameDefaultType(expr.Typ, cols[pos].Typ)
+		}
+		if f := expr.GetF(); f != nil {
+			for _, arg := range f.Args {
+				if !matches(arg) {
+					return false
+				}
+			}
+		}
+		if list := expr.GetList(); list != nil {
+			for _, item := range list.List {
+				if !matches(item) {
+					return false
+				}
+			}
+		}
+		return true
+	}
+	return matches(col.Default.Expr)
+}
+
+// A newly nullable operand can invalidate an ancestor's non-null annotation.
+// Mark those ancestors nullable conservatively, without changing the copied
+// function overload or its result precision. Tightening nullability needs no
+// ancestor update because an existing nullable annotation remains safe.
+func updateCTASDefaultNullability(expr *plan.Expr, cols []*ColDef) bool {
+	if expr == nil {
+		return false
+	}
+	if ref := expr.GetCol(); ref != nil && ref.RelPos == 0 {
+		target := cols[ref.ColPos].Typ.NotNullable
+		becameNullable := expr.Typ.NotNullable && !target
+		expr.Typ.NotNullable = target
+		return becameNullable
+	}
+	becameNullable := false
+	if f := expr.GetF(); f != nil {
+		for _, arg := range f.Args {
+			becameNullable = updateCTASDefaultNullability(arg, cols) || becameNullable
+		}
+	}
+	if list := expr.GetList(); list != nil {
+		for _, item := range list.List {
+			becameNullable = updateCTASDefaultNullability(item, cols) || becameNullable
+		}
+	}
+	if becameNullable {
+		expr.Typ.NotNullable = false
+	}
+	return becameNullable
 }
 
 func ctasViewTypeDefaultOrigin(typ plan.Type) (string, bool) {
@@ -2573,7 +2665,14 @@ func buildCreateTable(
 			// `CREATE TABLE IF NOT EXISTS T LIKE S` errors with "table already
 			// exists" when T exists instead of being a no-op (issue #25119).
 			stmtLike.IfNotExists = stmt.IfNotExists
-			p, err := buildCreateTable(ctx, stmtLike, nil, isPrepareStmt)
+			// The SQL skeleton describes the source columns, but its expression
+			// text must not be rebound under the cloning session's settings.
+			originalCtx := ctx.GetContext()
+			ctx.SetContext(WithPersistedDDLReplay(originalCtx, tableDef, tableDef))
+			p, err := func() (*Plan, error) {
+				defer ctx.SetContext(originalCtx)
+				return buildCreateTable(ctx, stmtLike, nil, isPrepareStmt)
+			}()
 			if err != nil {
 				return nil, err
 			}
@@ -3198,6 +3297,7 @@ func makeClusterTableAttributeDefault(colType plan.Type) *plan.Default {
 }
 
 func buildTableDefs(stmt *tree.CreateTable, ctx CompilerContext, createTable *plan.CreateTable, asSelectCols []*ColDef) error {
+	replay := ddlReplayForTable(ctx.GetContext(), string(stmt.Table.ObjectName))
 	// all below fields' key is lower case
 	// Keep the SELECT output schema in its original coordinate system. The
 	// explicit column pass may replace matching entries in asSelectCols, but
@@ -3375,11 +3475,19 @@ func buildTableDefs(stmt *tree.CreateTable, ctx CompilerContext, createTable *pl
 			var defaultValue *plan.Default
 			var onUpdateExpr *plan.OnUpdate
 			var generatedCol *plan.GeneratedCol
+			var preserved *replayedColumnExpressions
+			if replay != nil {
+				preserved = replay.columns[strings.ToLower(colName)]
+			}
 
 			if isGenerated {
 				// Build generated column expression using the full column list
 				// so that base columns defined later can be referenced (forward reference).
-				generatedCol, err = buildGeneratedExpr(def, colType, allColDefs, ctx.GetProcess())
+				if preserved != nil && preserved.generated != nil {
+					generatedCol = proto.Clone(preserved.generated).(*plan.GeneratedCol)
+				} else {
+					generatedCol, err = buildGeneratedExpr(ddlExpressionContext(ctx, ctx.GetProcess().Ctx), def, colType, allColDefs, ctx.GetProcess())
+				}
 				if err != nil {
 					return err
 				}
@@ -3398,7 +3506,11 @@ func buildTableDefs(stmt *tree.CreateTable, ctx CompilerContext, createTable *pl
 					OriginString: "",
 				}
 			} else {
-				defaultValue, err = buildDefaultExprWithColumns(def, colType, ctx.GetProcess(), allColDefs)
+				if preserved != nil && preserved.defaultExpr != nil {
+					defaultValue = proto.Clone(preserved.defaultExpr).(*plan.Default)
+				} else {
+					defaultValue, err = buildDefaultExprWithColumns(ddlExpressionContext(ctx, ctx.GetProcess().Ctx), def, colType, ctx.GetProcess(), allColDefs)
+				}
 				if err != nil {
 					return err
 				}
@@ -3406,7 +3518,11 @@ func buildTableDefs(stmt *tree.CreateTable, ctx CompilerContext, createTable *pl
 					return moerr.NewInvalidInputf(ctx.GetContext(), "invalid default value for '%s'", colNameOrigin)
 				}
 
-				onUpdateExpr, err = buildOnUpdate(def, colType, ctx.GetProcess())
+				if preserved != nil && preserved.onUpdate != nil {
+					onUpdateExpr = proto.Clone(preserved.onUpdate).(*plan.OnUpdate)
+				} else {
+					onUpdateExpr, err = buildOnUpdate(ddlExpressionContext(ctx, ctx.GetProcess().Ctx), def, colType, ctx.GetProcess())
+				}
 				if err != nil {
 					return err
 				}
@@ -4094,6 +4210,25 @@ func appendCheckDef(
 	if err := requireCheckConstraintProtocol(ctx.GetContext(), ctx.GetProcess()); err != nil {
 		return err
 	}
+	if replay := ddlReplayForTable(ctx.GetContext(), tableDef.Name); replay != nil {
+		checkName := name
+		if checkName == "" {
+			checkName = fmt.Sprintf("__mo_chk_%d", len(tableDef.Checks)+1)
+		}
+		if preserved := replay.checks[strings.ToLower(checkName)]; preserved != nil {
+			for _, check := range tableDef.Checks {
+				if strings.EqualFold(check.Name, checkName) {
+					return moerr.NewInvalidInputf(ctx.GetContext(), "duplicate check constraint name '%s'", checkName)
+				}
+			}
+			copy := proto.Clone(preserved).(*plan.CheckDef)
+			if err := validateCheckExpr(ctx.GetContext(), tableDef, copy.Check, columnPos); err != nil {
+				return err
+			}
+			tableDef.Checks = append(tableDef.Checks, copy)
+			return nil
+		}
+	}
 	colNames := make([]string, 0, len(tableDef.Cols))
 	colTypes := make([]plan.Type, 0, len(tableDef.Cols))
 	for _, col := range tableDef.Cols {
@@ -4124,7 +4259,7 @@ func appendCheckDef(
 		return moerr.NewInternalError(ctx.GetContext(), "invalid canonical check constraint expression")
 	}
 
-	binder := NewGeneratedColBinder(ctx.GetContext(), colNames, colTypes)
+	binder := NewGeneratedColBinder(ddlExpressionContext(ctx, ctx.GetContext()), colNames, colTypes)
 	binder.enableCanonicalNameConstValueCast()
 	checkExpr, err := binder.BindExpr(canonicalClause.Exprs[0].Expr, 0, true)
 	if err != nil {
