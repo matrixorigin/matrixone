@@ -290,6 +290,12 @@ func (s *subscriptionMetadataState) start(
 		subscriberID,
 		proc.GetResolveVariableFunc(),
 	)
+	// Both the subscriber's subscription catalog and the publisher's table
+	// catalog must be read at the function scan's timestamp. Never pair a
+	// current relation ID with historical View binding.
+	if ts := sqlexec.NewSqlProcess(proc).ApplyScanSnapshot(tf.ScanSnapshot); ts != nil {
+		sqlContext.TxnOperator = proc.GetTxnOperator().CloneSnapshotOp(*ts)
+	}
 	streamCh := s.streamCh
 	errCh := s.errCh
 	done := s.streamDone

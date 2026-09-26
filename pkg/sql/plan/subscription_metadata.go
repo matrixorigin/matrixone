@@ -835,6 +835,7 @@ func (builder *QueryBuilder) buildSubscriptionMetadata(
 		BindingTags:     []int32{builder.genNewBindTag()},
 		Children:        children,
 		TblFuncExprList: exprs,
+		ScanSnapshot:    DeepCopySnapshot(ctx.snapshot),
 	}
 	return builder.appendNode(node, ctx), nil
 }

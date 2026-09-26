@@ -222,6 +222,10 @@ func TestViewDescriptionPublicSQL(t *testing.T) {
 		require.Equal(t, "11", repaired[1][4].String)
 		require.NoError(t, db.QueryRowContext(ctx, "select character_maximum_length from information_schema.columns where table_schema='view_description_test' and table_name='v' and column_name='label'").Scan(&width))
 		require.Equal(t, 90, width)
+		require.NoError(t, db.QueryRowContext(ctx,
+			"select character_maximum_length from information_schema.columns {snapshot = 'view_description_history'} "+
+				"where table_schema='view_description_test' and table_name='v' and column_name='label'").Scan(&width))
+		require.Equal(t, 60, width, "CTE binding must not use the current source's replacement width")
 		require.NoError(t, prepared.QueryRowContext(ctx).Scan(&width))
 		require.Equal(t, 90, width, "prepared metadata reads must rebind the View")
 
@@ -478,6 +482,19 @@ func TestViewDescriptionSubscription(t *testing.T) {
 			require.NoError(t, warnings.Err())
 		}
 		checkHistoricalView("view_description_sub_history", 5)
+		publisherConn, err := sys.Conn(ctx)
+		require.NoError(t, err)
+		defer publisherConn.Close()
+		_, err = publisherConn.ExecContext(ctx, "use view_description_pub")
+		require.NoError(t, err)
+		_, err = publisherConn.ExecContext(ctx, "alter view v as select x as changed from src")
+		require.NoError(t, err)
+		checkHistoricalView("view_description_sub_history", 5)
+		_, err = publisherConn.ExecContext(ctx, "drop view v")
+		require.NoError(t, err)
+		checkHistoricalView("view_description_sub_history", 5)
+		_, err = publisherConn.ExecContext(ctx, "create view v as select x from src")
+		require.NoError(t, err)
 		// An unrelated same-named empty database in the subscriber must never
 		// substitute for the publisher's source catalog at a later snapshot.
 		_, err = subscriber.ExecContext(ctx, "create database view_description_pub")
@@ -595,6 +612,30 @@ func TestViewDescriptionSubscription(t *testing.T) {
 		defer reader.Close()
 		err = reader.QueryRowContext(ctx, query).Scan(&width)
 		require.Error(t, err, "an invisible subscription View must not be bound or exposed")
+		hiddenConn, err := reader.Conn(ctx)
+		require.NoError(t, err)
+		defer hiddenConn.Close()
+		hiddenRows, err := hiddenConn.QueryContext(ctx,
+			"select table_name from information_schema.columns where table_schema='subscribed'")
+		require.NoError(t, err)
+		for hiddenRows.Next() {
+			var name string
+			require.NoError(t, hiddenRows.Scan(&name))
+			require.NotEqual(t, "bad_view", name)
+		}
+		require.NoError(t, hiddenRows.Err())
+		require.NoError(t, hiddenRows.Close())
+		hiddenWarnings, err := hiddenConn.QueryContext(ctx, "show warnings")
+		require.NoError(t, err)
+		defer hiddenWarnings.Close()
+		for hiddenWarnings.Next() {
+			var level, message string
+			var code int
+			require.NoError(t, hiddenWarnings.Scan(&level, &code, &message))
+			require.NotContains(t, message, "bad_view", "hidden View names must not leak through warnings")
+			require.NotEqual(t, 1356, code, "hidden Views must not be described")
+		}
+		require.NoError(t, hiddenWarnings.Err())
 		_, err = subscriber.ExecContext(ctx, "grant show tables on database subscribed to metadata_reader")
 		require.NoError(t, err)
 		require.NoError(t, reader.QueryRowContext(ctx, query).Scan(&width))

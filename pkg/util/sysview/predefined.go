@@ -294,6 +294,10 @@ func informationSchemaCurrentColumnsDDL() string {
 	).Replace(viewRows)
 	viewRows = castViewColumnNames(viewRows)
 	userView := "mt.relkind = 'v' AND mt.reldatabase NOT IN ('mo_catalog','information_schema','mysql','system','system_metrics','mo_task','mo_debug')"
+	// Restrict the left side of APPLY before describing publisher Views. A
+	// post-APPLY WHERE cannot prevent invisible Views from consuming budget.
+	prefix += ", __mo_visible_subscription_views AS (SELECT mt.* FROM mo_subscription_tables() mt WHERE mt.relkind = 'v' AND (" +
+		informationSchemaSubscriptionViewAuthorizationPredicate() + ")) "
 	return prefix + local + " AND NOT (" + userView + ") UNION ALL " +
 		viewRows + " AND (" + userView + ") UNION ALL " + branches[1] +
 		" AND NOT (mc.relkind = 'v' AND mc.att_database NOT IN ('mo_catalog','information_schema','mysql','system','system_metrics','mo_task','mo_debug')) UNION ALL " +
@@ -364,7 +368,7 @@ func castViewColumnNames(selectSQL string) string {
 func informationSchemaSubscriptionViewColumnsSelect(localSelect string) string {
 	subscriptionViewSelect := strings.NewReplacer(
 		informationSchemaColumnsLocalFromSQL(),
-		"from mo_subscription_tables() mt "+
+		"from __mo_visible_subscription_views mt "+
 			"cross apply mo_subscription_view_columns(mt.publisher_account_id, mt.rel_id) mc ",
 		"mc.att_database", "mt.reldatabase",
 		"mc.att_relname", "mt.relname",
@@ -372,8 +376,7 @@ func informationSchemaSubscriptionViewColumnsSelect(localSelect string) string {
 		"mk.key_priority", "0",
 	).Replace(localSelect)
 	subscriptionViewSelect = castViewColumnNames(subscriptionViewSelect)
-	subscriptionViewSelect += " AND mt.relkind = 'v' AND (" +
-		informationSchemaSubscriptionViewAuthorizationPredicate() + ")"
+	subscriptionViewSelect += " AND mt.relkind = 'v'"
 	return subscriptionViewSelect
 }
 
