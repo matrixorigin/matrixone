@@ -108,3 +108,9 @@ FORMAT：只迁移 precision，输出格式与 exact/approximate 第一参数域
 - 仅在成功绑定之后撤销 FORMAT precision 转换不足以实现第 4 节：DATE 等历史可用 source 会先被 private INT64 CAST 拒绝。五个 catalog authoring/rebuild 入口以 `bindPersistedExpr` 限定作用域，在 FORMAT 参数绑定之前直接选 legacy 字符串契约；使用原 AST 做普通 selector 绑定。作用域通过 defer 在成功或错误时恢复，不影响 transient query 或其它 consumer。
 - 原 post-binding bridge 保留，用于已有 typed plan 的兼容转换。新 catalog 路径不先生成再删除自身整数 coercion；嵌套真实 consumer 的 capability 仍由其各自绑定和最终 owner 扫描保留。
 - Review 修复已合并 `mo/main@9c79a6edfc`：v97 现在是已合入的 decimal division capability，和本 PR v98 同时保留。
+
+## 9. Review 修正：跨版本 DUMP/LOAD 来源校验
+
+DUMP/LOAD 的 `AnalyzeTableDumpBindings` 不只验证 owner 的 SQL 声明，还需严格验证从 origin SQL 可达的 protobuf 函数 identity、CAST 结构和类型。旧目录的 FORMAT、MAKEDATE、MAKETIME 使用迁移前的物理签名，不能用新 binder 的树做唯一候选，也不能通过忽略 CAST/identity/参数类型来放宽比较。
+
+仅在有 `/` 且 AST 包含三个目标函数的 DUMP/LOAD 校验中，以同一 SQL、schema、parser mode、`div_precision_increment` 和已有 visit budget 生成两个独立候选：现行绑定与迁移前绑定。旧候选复用旧 checkers 和 append-only 保留的执行 overload，不得用于新 DDL/普通查询；两候选均必须通过未改变的完整 protobuf 比较（仅忽略原先已忽略的表 lineage）。无论候选如何，origin/schema/checksum/容量边界不变，不能根据传入的树改写 origin 或猜测重写 CAST。独立计算旧候选 division sensitivity 以保持 dump metadata 的真实性；测试要求老树序列化与重绑相符、跨新版目标可恢复，而篡改树仍拒绝。

@@ -3603,7 +3603,7 @@ func (b *baseBinder) coerceBoolNumericAggregateArg(
 }
 
 func (b *baseBinder) bindFuncExprImplByAstExpr(name string, astArgs []tree.Expr, depth int32) (*plan.Expr, error) {
-	if name == "format" && b.persistedFormatCompatibility {
+	if name == "format" && b.persistedFormatCompatibility && !function.LegacySpecialConsumers(b.GetContext()) {
 		return b.bindPersistedFormat(astArgs, depth)
 	}
 	if (name == "utc_time" || name == "utc_timestamp") && len(astArgs) == 1 {
@@ -3772,7 +3772,8 @@ func (b *baseBinder) bindFuncExprImplByAstExpr(name string, astArgs []tree.Expr,
 				b.suppressDefaultValueBindType = true
 				b.inetNtoaNumericLiteralContext = true
 			}
-			if target, integerContext := function.IntegerArgumentTarget(name, idx); integerContext {
+			if target, integerContext := function.IntegerArgumentTarget(name, idx); integerContext &&
+				!(function.LegacySpecialConsumers(b.GetContext()) && (name == "format" || name == "makedate" || name == "maketime")) {
 				b.numericParamType = nil
 				b.numericSubqueryTarget = nil
 				expr, err = b.bindIntegerArgumentAst(arg, depth, target)
