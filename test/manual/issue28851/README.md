@@ -20,6 +20,12 @@ DATETIME defaults still execute, while a SQL-rebound view exposes the new BIGINT
 EXTRACT result through both text and actual server-prepared JDBC. The same
 prepared handles exercise INSERT/UPDATE/CAST with text and binary payloads,
 strict/non-strict modes, NULL, empty, whitespace and valid rebinding controls.
+The same probe checks exact arithmetic bounds, inactive diagnostics, EXTRACT
+mode changes and interval parameter rebinding. `TemporalUpgradeProbe contract`
+runs those checks alone on an existing candidate. Temporal FSP is read from
+the MySQL field decimals: Connector/J returns zero from JDBC `getScale()` for
+non-numeric types.
+
 Empty string payloads retain the release's NULL policy. SQL hex literals have
 separate numeric provenance (`x''` assigns zero); they are not equivalent to
 JDBC `setBytes(new byte[0])`.

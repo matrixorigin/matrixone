@@ -1736,7 +1736,8 @@ func TestTimestampAddErrorHandling(t *testing.T) {
 		require.NoError(t, err)
 
 		err = TimestampAddString(parameters, result, proc, fnLength, nil)
-		require.Error(t, err, "Should return error for invalid date string")
+		require.NoError(t, err)
+		require.True(t, result.GetResultVector().GetNulls().Contains(0))
 	})
 
 	// Test case 3: Empty unit string
@@ -1823,7 +1824,8 @@ func TestTimestampAddErrorHandling(t *testing.T) {
 		require.NoError(t, err)
 
 		err = TimestampAddString(parameters, result, proc, fnLength, nil)
-		require.Error(t, err, "Should return error for invalid date string with time unit")
+		require.NoError(t, err)
+		require.True(t, result.GetResultVector().GetNulls().Contains(0))
 	})
 
 	// Test case 7: Malformed datetime string
@@ -5556,7 +5558,7 @@ func initTimeDiffInDatetimeTestCase() []tcTemp {
 				NewFunctionTestInput(types.T_datetime.ToType(), []types.Datetime{t11, t21, t31, t41, t51, t61, t71, t81, t91}, []bool{}),
 				NewFunctionTestInput(types.T_datetime.ToType(), []types.Datetime{t12, t22, t32, t42, t52, t62, t72, t82, t92}, []bool{}),
 			},
-			expect: NewFunctionTestResult(types.T_time.ToType(), false, []types.Time{r1, r2, r3, r4, r5, r6, r7, r8, r9}, []bool{}),
+			expect: NewFunctionTestResult(types.T_time.ToType(), false, []types.Time{r1, r2, r3, r4, r5, r6, r7, r8, r9}, []bool{false, false, true, true, true, true, false, false, false}),
 		},
 	}
 }
@@ -11816,7 +11818,7 @@ func TestExtract(t *testing.T) {
 	}
 }
 
-func TestExtractWeekZeroTemporalsReturnZero(t *testing.T) {
+func TestExtractWeekZeroTemporalsReturnNull(t *testing.T) {
 	proc := testutil.NewProcess(t)
 	unit := NewFunctionTestConstInput(types.T_varchar.ToType(), []string{"week"}, nil)
 
@@ -11832,7 +11834,7 @@ func TestExtractWeekZeroTemporalsReturnZero(t *testing.T) {
 				unit,
 				NewFunctionTestInput(types.T_date.ToType(), []types.Date{types.ZeroDate}, nil),
 			},
-			expect: NewFunctionTestResult(types.T_int64.ToType(), false, []int64{0}, nil),
+			expect: NewFunctionTestResult(types.T_int64.ToType(), false, []int64{0}, []bool{true}),
 			fn:     ExtractFromDate,
 		},
 		{
@@ -11841,7 +11843,7 @@ func TestExtractWeekZeroTemporalsReturnZero(t *testing.T) {
 				unit,
 				NewFunctionTestInput(types.T_datetime.ToType(), []types.Datetime{types.ZeroDatetime}, nil),
 			},
-			expect: NewFunctionTestResult(types.T_int64.ToType(), false, []int64{0}, nil),
+			expect: NewFunctionTestResult(types.T_int64.ToType(), false, []int64{0}, []bool{true}),
 			fn:     ExtractFromDatetime,
 		},
 		{
@@ -11850,7 +11852,7 @@ func TestExtractWeekZeroTemporalsReturnZero(t *testing.T) {
 				unit,
 				NewFunctionTestInput(types.T_timestamp.ToType(), []types.Timestamp{types.ZeroTimestamp}, nil),
 			},
-			expect: NewFunctionTestResult(types.T_int64.ToType(), false, []int64{0}, nil),
+			expect: NewFunctionTestResult(types.T_int64.ToType(), false, []int64{0}, []bool{true}),
 			fn:     ExtractFromTimestamp,
 		},
 		{
@@ -11859,7 +11861,7 @@ func TestExtractWeekZeroTemporalsReturnZero(t *testing.T) {
 				unit,
 				NewFunctionTestInput(types.T_varchar.ToType(), []string{"0000-00-00 00:00:00"}, nil),
 			},
-			expect: NewFunctionTestResult(types.T_int64.ToType(), false, []int64{0}, nil),
+			expect: NewFunctionTestResult(types.T_int64.ToType(), false, []int64{0}, []bool{true}),
 			fn:     ExtractFromVarchar,
 		},
 	} {
@@ -13004,7 +13006,7 @@ func TestMakeTimeFractionAndSign(t *testing.T) {
 				0,
 				0,
 			},
-			[]bool{false, false, false, false, false, false, false, true, true, true, false, false, false, false, true, true, true, true}),
+			[]bool{false, false, false, true, true, true, true, true, true, true, true, true, true, true, true, true, true, true}),
 		MakeTime)
 
 	s, info := fcTC.Run()
@@ -13030,7 +13032,7 @@ func TestMakeTimeUnsignedHourOverflow(t *testing.T) {
 				types.TimeFromClock(false, 838, 34, 56, 0),
 				types.TimeFromClock(false, 838, 59, 59, 0),
 			},
-			[]bool{false, false}),
+			[]bool{false, true}),
 		MakeTime)
 
 	s, info := fcTC.Run()
@@ -13079,7 +13081,7 @@ func TestMakeTimeSignedHourOverflow(t *testing.T) {
 				types.TimeFromClock(false, 838, 59, 59, 0),
 				types.TimeFromClock(true, 838, 59, 59, 0),
 			},
-			[]bool{false, false}),
+			[]bool{true, true}),
 		MakeTime)
 
 	s, info := fcTC.Run()
@@ -13126,7 +13128,7 @@ func TestMakeTimeFloatHourRounding(t *testing.T) {
 				types.TimeFromClock(true, 14, 0, 0, 0),
 				types.TimeFromClock(false, 838, 59, 59, 0),
 			},
-			[]bool{false, false, false, false, false, false}),
+			[]bool{false, false, false, false, false, true}),
 		MakeTime)
 
 	s, info := fcTC.Run()
@@ -15867,7 +15869,7 @@ func TestIsDateOverflowMaxError(t *testing.T) {
 	require.False(t, isDateOverflowMaxError(nil))
 
 	// Test with dateOverflowMaxError
-	require.True(t, isDateOverflowMaxError(dateOverflowMaxError))
+	require.True(t, isDateOverflowMaxError(datetimeOverflowMaxError))
 
 	// Test with different error
 	require.False(t, isDateOverflowMaxError(moerr.NewInvalidArgNoCtx("test", "different error")))
@@ -17474,7 +17476,7 @@ func TestStringTimeArithmeticKeepsTimeDomain(t *testing.T) {
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			case1 := NewFunctionTestCase(proc, []FunctionTestInput{first, second},
-				NewFunctionTestResult(types.New(types.T_varchar, 0, 6), false, tc.want, []bool{false, false, false, true}), tc.fn)
+				NewFunctionTestResult(types.New(types.T_varchar, 0, 6), false, tc.want, []bool{false, tc.name == "add", false, true}), tc.fn)
 			ok, info := case1.Run()
 			require.True(t, ok, info)
 		})

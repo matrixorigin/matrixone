@@ -488,3 +488,32 @@ func TestConstantFoldPreservesSerializedResultProvenance(t *testing.T) {
 		require.False(t, literal.GetIsSerialized(), "NULL must not acquire serialized provenance")
 	})
 }
+
+type foldTestWarnings struct{ count int }
+
+func (s *foldTestWarnings) AppendWarningDiagnostic(uint16, string) { s.count++ }
+
+func TestConstantFoldDefersDiagnosticExpressions(t *testing.T) {
+	for _, prepared := range []bool{false, true} {
+		for _, value := range []string{"838:59:59", "12:00:00"} {
+			proc := testutil.NewProcess(t)
+			sink := &foldTestWarnings{}
+			proc.WarningSink = sink
+			expr := &plan.Expr{Typ: plan.Type{Id: int32(types.T_varchar), Width: 29, Scale: 6}, Expr: &plan.Expr_F{F: &plan.Function{
+				Func: &plan.ObjectRef{Obj: function.EncodeOverloadID(function.ADDTIME, 9)},
+				Args: []*plan.Expr{
+					{Typ: plan.Type{Id: int32(types.T_varchar)}, Expr: &plan.Expr_Lit{Lit: &plan.Literal{Value: &plan.Literal_Sval{Sval: value}}}},
+					{Typ: plan.Type{Id: int32(types.T_varchar)}, Expr: &plan.Expr_Lit{Lit: &plan.Literal{Value: &plan.Literal_Sval{Sval: "00:00:01"}}}},
+				},
+			}}}
+			got := NewConstantFold(prepared).constantFold(expr, proc)
+			require.Zero(t, sink.count)
+			require.Same(t, sink, proc.GetWarningSink())
+			if value == "838:59:59" {
+				require.NotNil(t, got.GetF())
+			} else {
+				require.NotNil(t, got.GetLit())
+			}
+		}
+	}
+}

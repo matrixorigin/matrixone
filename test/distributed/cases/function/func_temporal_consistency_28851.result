@@ -73,12 +73,12 @@ select timediff('12:00:00.1', '11:00:00.0') as literal_fsp,
 timediff('12:00:00.123456', '11:00:00') as full_fsp;
 ➤ literal_fsp[92,12,0]  ¦  full_fsp[92,17,0]  𝄀
 01:00:00.100000000  ¦  01:00:00.123456000
-select timediff('838:59:59', '-00:00:01') as positive_clip,
-timediff('-838:59:59', '00:00:01') as negative_clip,
+select timediff('838:59:59', '-00:00:01') as positive_overflow,
+timediff('-838:59:59', '00:00:01') as negative_overflow,
 addtime('2000000000:00:00', '2000000000:00:00') as add_overflow,
 subtime('2000000000:00:00', '-2000000000:00:00') as sub_overflow;
-➤ positive_clip[92,10,0]  ¦  negative_clip[92,10,0]  ¦  add_overflow[12,29,0]  ¦  sub_overflow[12,29,0]  𝄀
-838:59:59  ¦  -838:59:59  ¦  838:59:59  ¦  838:59:59
+➤ positive_overflow[92,10,0]  ¦  negative_overflow[92,10,0]  ¦  add_overflow[12,29,0]  ¦  sub_overflow[12,29,0]  𝄀
+null  ¦  null  ¦  null  ¦  null
 prepare dynamic_timediff from 'select timediff(?, ?) as dynamic_fsp';
 set @first = '12:00:00.123456', @second = '11:00:00';
 execute dynamic_timediff using @first, @second;
@@ -463,4 +463,113 @@ select date_add(cast('2024-01-01 12:00:00' as datetime(6)), interval cast(1.5 as
 cast('2024-01-01 12:00:00.000002' as datetime(6)) as datetime_us_control;
 ➤ datetime_us_control[-7,1,0]  𝄀
 1
+select addtime(time '12:00:00','00:00:00.1') as typed_time_fsp,
+subtime(cast('2024-01-01 12:00:00' as datetime),'00:00:00.1') as typed_datetime_fsp;
+➤ typed_time_fsp[92,12,0]  ¦  typed_datetime_fsp[93,21,0]  𝄀
+12:00:00.100000000  ¦  2024-01-01 11:59:59.900000000
+set sql_mode = '';
+select addtime(time '838:59:59', '00:00:01') is null as add_null,
+subtime(time '-838:59:59', '00:00:01') is null as sub_null,
+timediff('838:59:59','-00:00:01') is null as diff_null,
+maketime(839,0,0) is null as make_null;
+➤ add_null[-7,1,0]  ¦  sub_null[-7,1,0]  ¦  diff_null[-7,1,0]  ¦  make_null[-7,1,0]  𝄀
+1  ¦  1  ¦  1  ¦  1
+show warnings;
+➤ Level[12,0,0]  ¦  Code[5,0,0]  ¦  Message[12,0,0]  𝄀
+Warning  ¦  1441  ¦  Datetime function: time field overflow  𝄀
+Warning  ¦  1441  ¦  Datetime function: time field overflow  𝄀
+Warning  ¦  1441  ¦  Datetime function: time field overflow  𝄀
+Warning  ¦  1441  ¦  Datetime function: time field overflow
+select subtime(cast('0001-01-01' as datetime(6)), '00:00:01') is null as below_calendar,
+addtime(cast('9999-12-31 23:59:59.999999' as datetime(6)), '00:00:00.000001') is null as above_calendar;
+➤ below_calendar[-7,1,0]  ¦  above_calendar[-7,1,0]  𝄀
+1  ¦  1
+show warnings;
+➤ Level[12,0,0]  ¦  Code[5,0,0]  ¦  Message[12,0,0]  𝄀
+Warning  ¦  1441  ¦  Datetime function: time field overflow  𝄀
+Warning  ¦  1441  ¦  Datetime function: time field overflow
+select addtime('1234:00:00','-500:00:00') as cancellation,
+timestamp('2024-01-01','839:00:00') as full_internal_duration,
+cast('839:00:00' as time) as explicit_conversion;
+➤ cancellation[12,29,0]  ¦  full_internal_duration[93,19,0]  ¦  explicit_conversion[92,10,0]  𝄀
+734:00:00  ¦  2024-02-04 23:00:00  ¦  838:59:59
+select case when 0 then addtime(time '838:59:59','00:00:01') else time '00:00:01' end as inactive_add,
+case when 0 then timediff('900:00:00','00:00:00') else time '00:00:01' end as inactive_diff,
+case when 0 then date_add(cast('9999-12-31' as date), interval 1 day) else cast('2024-01-01' as date) end as inactive_date;
+➤ inactive_add[92,10,0]  ¦  inactive_diff[92,10,0]  ¦  inactive_date[91,10,0]  𝄀
+00:00:01  ¦  00:00:01  ¦  2024-01-01
+show warnings;
+➤ Level[12,0,0]  ¦  Code[5,0,0]  ¦  Message[12,0,0]
+create table arithmetic_rows(id int, d datetime(6));
+insert into arithmetic_rows values (1,'0001-01-01'),(2,'2024-01-01'),(3,'9999-12-31 23:59:59.999999'),(4,null);
+select id, case when id=2 then date_add(d,interval 1 day) else null end as selected,
+case when id=2 then subtime(d,'00:00:01') else null end as selected_sub
+from arithmetic_rows order by id;
+➤ id[4,32,0]  ¦  selected[93,26,0]  ¦  selected_sub[93,26,0]  𝄀
+1  ¦  null  ¦  null  𝄀
+2  ¦  2024-01-02 00:00:00  ¦  2023-12-31 23:59:59  𝄀
+3  ¦  null  ¦  null  𝄀
+4  ¦  null  ¦  null
+show warnings;
+➤ Level[12,0,0]  ¦  Code[5,0,0]  ¦  Message[12,0,0]
+create table interval_invalid(v varchar(50));
+insert into interval_invalid values (''),(' '),('bad'),('0'),(null);
+select v, date_add(time '12:00:00', interval v hour_second) as duration,
+date_add(cast('2024-01-01' as datetime),interval v hour_second) as calendar,
+date_sub(cast('2024-01-01' as date),interval v second) as date_value,
+date_add(cast('2024-01-01' as timestamp),interval v second) as timestamp_value
+from interval_invalid order by v;
+➤ v[12,50,0]  ¦  duration[92,17,0]  ¦  calendar[93,26,0]  ¦  date_value[93,26,0]  ¦  timestamp_value[93,26,0]  𝄀
+null  ¦  null  ¦  null  ¦  null  ¦  null  𝄀
+  ¦  null  ¦  null  ¦  null  ¦  null  𝄀
+   ¦  null  ¦  null  ¦  null  ¦  null  𝄀
+0  ¦  12:00:00  ¦  2024-01-01 00:00:00  ¦  2024-01-01 00:00:00  ¦  2024-01-01 00:00:00  𝄀
+bad  ¦  null  ¦  null  ¦  null  ¦  null
+show warnings;
+➤ Level[12,0,0]  ¦  Code[5,0,0]  ¦  Message[12,0,0]
+select date_add(cast('2024-01-01' as datetime),interval '999999999999999999999999' second) as overflow_value;
+➤ overflow_value[93,19,0]  𝄀
+null
+show warnings;
+➤ Level[12,0,0]  ¦  Code[5,0,0]  ¦  Message[12,0,0]  𝄀
+Warning  ¦  1441  ¦  Datetime function: time field overflow
+select date_add(cast(null as datetime),interval '999999999999999999999999' second) as null_base;
+➤ null_base[93,19,0]  𝄀
+null
+show warnings;
+➤ Level[12,0,0]  ¦  Code[5,0,0]  ¦  Message[12,0,0]
+select extract(year from '2024-00-15') as y, extract(month from '2024-00-15') as m,
+extract(day from '2024-00-15') as d, extract(year_month from '2024-00-15') as ym,
+extract(hour from '') as empty_input, extract(hour from ' ') as whitespace_input,
+extract(week from from_days(0)) as zero_week, week(from_days(0),0) as week_control;
+➤ y[-5,64,0]  ¦  m[-5,64,0]  ¦  d[-5,64,0]  ¦  ym[-5,64,0]  ¦  empty_input[-5,64,0]  ¦  whitespace_input[-5,64,0]  ¦  zero_week[-5,64,0]  ¦  week_control[-6,8,0]  𝄀
+2024  ¦  0  ¦  15  ¦  202400  ¦  null  ¦  null  ¦  null  ¦  null
+prepare extract_mode_contract from 'select extract(year from ''0000-00-00'') as literal_year, extract(year from ?) as marker_year, extract(hour from ?) as clock';
+set @zero_calendar = '0000-00-00', @zero_clock = '0000-00-00 12:34:56';
+execute extract_mode_contract using @zero_calendar, @zero_clock;
+➤ literal_year[-5,64,0]  ¦  marker_year[-5,64,0]  ¦  clock[-5,64,0]  𝄀
+0  ¦  0  ¦  12
+set sql_mode = 'NO_ZERO_DATE';
+execute extract_mode_contract using @zero_calendar, @zero_clock;
+➤ literal_year[-5,64,0]  ¦  marker_year[-5,64,0]  ¦  clock[-5,64,0]  𝄀
+null  ¦  null  ¦  12
+set sql_mode = '';
+execute extract_mode_contract using @zero_calendar, @zero_clock;
+➤ literal_year[-5,64,0]  ¦  marker_year[-5,64,0]  ¦  clock[-5,64,0]  𝄀
+0  ¦  0  ¦  12
+deallocate prepare extract_mode_contract;
+select date_sub('50-01-01 00:00:01', interval 2 second), date_sub('90-01-01 00:00:01', interval 2 second);
+➤ date_sub(50-01-01 00:00:01, INTERVAL 2 second)[12,65535,0]  ¦  date_sub(90-01-01 00:00:01, INTERVAL 2 second)[12,65535,0]  𝄀
+2049-12-31 23:59:59  ¦  1989-12-31 23:59:59
+create table temporal_calendar_spelling_28851 (id int, s varchar(40));
+insert into temporal_calendar_spelling_28851 values (1,'24.2.29 1:2:3.4'),(2,'2024@2@29 1:2:3.4'),(3,'20240229240000'),(4,'20240229236000'),(5,'20240229235960'),(6,'20240229x00000');
+select id, date_add(s, interval 0 second), addtime(s,'00:00:00') from temporal_calendar_spelling_28851 order by id;
+➤ id[4,32,0]  ¦  date_add(s, INTERVAL 0 second)[12,65535,0]  ¦  addtime(s, 00:00:00)[12,29,0]  𝄀
+1  ¦  2024-02-29 01:02:03.400000  ¦  2024-02-29 01:02:03.400000  𝄀
+2  ¦  2024-02-29 01:02:03.400000  ¦  2024-02-29 01:02:03.400000  𝄀
+3  ¦  null  ¦  null  𝄀
+4  ¦  null  ¦  null  𝄀
+5  ¦  null  ¦  null  𝄀
+6  ¦  null  ¦  null
+drop table temporal_calendar_spelling_28851;
 drop database temporal_consistency_28851;

@@ -16,7 +16,6 @@ package plan
 
 import (
 	"context"
-	"math"
 	"testing"
 
 	"github.com/matrixorigin/matrixone/pkg/container/types"
@@ -146,7 +145,7 @@ func TestResetIntervalFunctionArgsComprehensive(t *testing.T) {
 			name:                 "INTERVAL 'invalid' SECOND (varchar, invalid string)",
 			intervalValueExpr:    makeVarcharConst("invalid"),
 			intervalUnit:         "SECOND",
-			expectedIntervalVal:  math.MaxInt64, // Invalid string returns MaxInt64
+			expectedIntervalVal:  0, // Invalid string returns MaxInt64
 			expectedIntervalType: types.Second,
 		},
 		// Test float64 time units
@@ -358,6 +357,11 @@ func TestResetIntervalFunctionArgsComprehensive(t *testing.T) {
 			require.NoError(t, err)
 			require.NotNil(t, args)
 			require.Len(t, args, 2, "resetIntervalFunctionArgs should return 2 expressions")
+
+			// Invalid interval syntax is NULL, distinct from a numeric overflow.
+			if tc.name == "INTERVAL 'invalid' SECOND (varchar, invalid string)" {
+				require.True(t, args[0].GetLit().Isnull)
+			}
 
 			// Verify the interval value
 			intervalValue := extractInt64FromExpr(args[0])

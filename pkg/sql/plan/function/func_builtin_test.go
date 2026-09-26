@@ -717,8 +717,8 @@ func TestToIntervalNormalizesDynamicStrings(t *testing.T) {
 					NewFunctionTestConstInput(types.T_int64.ToType(), []int64{int64(tc.unit)}, nil),
 				},
 				NewFunctionTestResult(types.T_int64.ToType(), false,
-					[]int64{tc.whole, tc.whole + tc.whole/2, -tc.whole - tc.whole/2, 0, 0},
-					[]bool{false, false, false, true, true}),
+					[]int64{tc.whole, tc.whole + tc.whole/2, -tc.whole - tc.whole/2, math.MinInt64, 0},
+					[]bool{false, false, false, false, true}),
 				ToIntervalMicrosecond)
 			ok, info := caseDef.Run()
 			require.True(t, ok, info)

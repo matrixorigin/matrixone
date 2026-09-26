@@ -146,6 +146,9 @@ func parseTime(s string, scale int32, outOfRangeNegative, outOfRange *bool) (Tim
 	var msecPart string
 	timeString := s
 	if dotIdx := strings.IndexByte(s, '.'); dotIdx >= 0 {
+		if dotIdx == 0 || dotIdx == len(s)-1 {
+			return -1, moerr.NewInvalidInputNoCtxf("invalid time value %s", s)
+		}
 		timeString = s[:dotIdx]
 		msecPart = s[dotIdx+1:]
 	}

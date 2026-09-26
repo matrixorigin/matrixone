@@ -2226,6 +2226,9 @@ func constantFoldWithPreparedExactSource(
 		fn.Args[i] = foldExpr
 		isVec = isVec || foldExpr.GetVec() != nil
 	}
+	if preservePreparedExactSource && rule.ContainsSqlModeDependentTemporalCall(expr) {
+		return expr, nil
+	}
 	if f.IsAgg() || f.IsWin() {
 		return expr, nil
 	}
@@ -2239,11 +2242,14 @@ func constantFoldWithPreparedExactSource(
 		return expr, nil
 	}
 
-	vec, free, err := colexec.GetReadonlyResultFromExpression(proc, expr, []*batch.Batch{bat})
+	vec, free, warned, err := rule.EvaluateConstantExpression(proc, expr, bat)
 	if err != nil {
 		return nil, err
 	}
 	defer free()
+	if warned {
+		return expr, nil
+	}
 
 	if isVec {
 		requiresDecimalProvenance, err := plan.RequiresMORPCVersion89DecimalLiteralSemantics(fn.Args)

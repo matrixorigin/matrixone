@@ -156,11 +156,7 @@ func newTimestampPairTimeReader(vec *vector.Vector, proc *process.Process) (time
 			if isNull {
 				return 0, true
 			}
-			clamped := types.ClampMySQLTimeForScale(value, 6)
-			if clamped != value {
-				appendTimeRangeWarning(proc, value, 6)
-			}
-			return clamped, false
+			return value, false
 		}, nil
 	case types.T_date:
 		parameter := vector.GenerateFunctionFixedTypeParameter[types.Date](vec)
@@ -230,11 +226,7 @@ func newTimestampPairTimeReader(vec *vector.Vector, proc *process.Process) (time
 			if err != nil {
 				return 0, true
 			}
-			clamped := types.ClampMySQLTimeForScale(timeValue, 6)
-			if clamped != timeValue {
-				appendTimeRangeWarning(proc, timeValue, 6)
-			}
-			return clamped, false
+			return timeValue, false
 		}, nil
 	default:
 		return nil, moerr.NewInternalErrorNoCtxf("unexpected TIMESTAMP second argument type %s", vec.GetType().Oid)
@@ -280,6 +272,7 @@ func timestampWithTime(
 
 		deltaValue := int64(delta)
 		if deltaValue < minimum-baseValue || deltaValue > maximum-baseValue {
+			appendTimeIntervalOverflowWarning(proc)
 			if err = results.Append(0, true); err != nil {
 				return err
 			}

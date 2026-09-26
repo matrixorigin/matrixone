@@ -130,17 +130,16 @@ func TestConv(t *testing.T) {
 	require.Equal(t, vt, Minute, "HM error")
 	require.Equal(t, err, nil, "HM error")
 
-	// MySQL behavior: empty string is treated as 0, no error
-	val, vt, err = NormalizeInterval("", Hour_Minute)
-	require.Equal(t, val, int64(0), "HM error")
-	require.Equal(t, vt, Minute, "HM error")
-	require.Equal(t, err, nil, "HM error")
-
-	// MySQL behavior: invalid string is treated as 0, no error
-	val, vt, err = NormalizeInterval("foo", Hour_Minute)
-	require.Equal(t, val, int64(0), "HM error")
-	require.Equal(t, vt, Minute, "HM error")
-	require.Equal(t, err, nil, "HM error")
+	// A diagnostic output cannot change validity. No-digit input is not zero.
+	for _, input := range []string{"", " ", "foo"} {
+		for unit := MicroSecond; unit < IntervalTypeMax; unit++ {
+			_, _, err = NormalizeInterval(input, unit)
+			require.Error(t, err)
+			_, _, overflow, statusErr := NormalizeIntervalWithOverflow(input, unit)
+			require.Error(t, statusErr)
+			require.False(t, overflow)
+		}
+	}
 
 	val, vt, err = NormalizeInterval("1 01:02:03.4", Day_MicroSecond)
 	val2, vt2, _ := NormalizeInterval("1 01:02:03.0", Day_MicroSecond)
