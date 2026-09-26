@@ -765,28 +765,36 @@ func TestPersistedMixedTemporalViewProtocolAdmission(t *testing.T) {
 		}
 	})
 
-	const createSQL = "create view v_mixed_temporal as select if(1 = 1, cast('2024-01-02 12:34:56.123456' as timestamp(6)), cast('2024-01-02 12:34:56.123' as datetime(3))) as value"
-	build := func(authoringFloor int64) (*Plan, error) {
-		rt.SetGlobalVariables(moruntime.MOProtocolVersion, defines.MORPCVersion97)
-		rt.SetGlobalVariables(moruntime.PersistedExpressionProtocolAuthoringFloor, authoringFloor)
-		stmt, err := parsers.ParseOne(t.Context(), dialect.MYSQL, createSQL, 1)
-		if err != nil {
-			return nil, err
-		}
-		defer stmt.Free()
-		return BuildPlan(&rootSQLCompilerContext{MockCompilerContext: ctx, rootSQL: createSQL}, stmt, false)
+	for _, createSQL := range []string{
+		"create view v_mixed_temporal as select if(1 = 1, cast('2024-01-02 12:34:56.123456' as timestamp(6)), cast('2024-01-02 12:34:56.123' as datetime(3))) as value",
+		"create view v_stable_temporal as select date_sub(now(), interval 10 minute) as value",
+	} {
+		t.Run(createSQL, func(t *testing.T) {
+			build := func(authoringFloor int64) (*Plan, error) {
+				rt.SetGlobalVariables(moruntime.MOProtocolVersion, defines.MORPCVersion97)
+				rt.SetGlobalVariables(moruntime.PersistedExpressionProtocolAuthoringFloor, authoringFloor)
+				stmt, err := parsers.ParseOne(t.Context(), dialect.MYSQL, createSQL, 1)
+				if err != nil {
+					return nil, err
+				}
+				defer stmt.Free()
+				return BuildPlan(&rootSQLCompilerContext{MockCompilerContext: ctx, rootSQL: createSQL}, stmt, false)
+			}
+
+			_, err := build(0)
+			require.ErrorContains(t, err, "protocol version 97")
+			_, err = build(defines.MORPCVersion96)
+			require.ErrorContains(t, err, "protocol version 97")
+
+			created, err := build(defines.MORPCVersion97)
+			require.NoError(t, err)
+			var viewData ViewData
+			require.NoError(t, json.Unmarshal(
+				[]byte(created.GetDdl().GetCreateView().GetTableDef().GetViewSql().GetView()), &viewData))
+			require.NotNil(t, viewData.RequiredProtocolVersion)
+			require.Equal(t, int64(defines.MORPCVersion97), *viewData.RequiredProtocolVersion)
+		})
 	}
-
-	_, err := build(defines.MORPCVersion96)
-	require.ErrorContains(t, err, "protocol version 97")
-
-	created, err := build(defines.MORPCVersion97)
-	require.NoError(t, err)
-	var viewData ViewData
-	require.NoError(t, json.Unmarshal(
-		[]byte(created.GetDdl().GetCreateView().GetTableDef().GetViewSql().GetView()), &viewData))
-	require.NotNil(t, viewData.RequiredProtocolVersion)
-	require.Equal(t, int64(defines.MORPCVersion97), *viewData.RequiredProtocolVersion)
 }
 
 func TestPersistedBoundedConditionalStringProtocolAdmission(t *testing.T) {

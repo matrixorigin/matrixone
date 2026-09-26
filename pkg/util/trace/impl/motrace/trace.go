@@ -24,12 +24,14 @@ package motrace
 import (
 	"bytes"
 	"context"
+	"fmt"
 	"sync/atomic"
 	"time"
 
 	"github.com/matrixorigin/matrixone/pkg/catalog"
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
 	"github.com/matrixorigin/matrixone/pkg/config"
+	"github.com/matrixorigin/matrixone/pkg/container/vector"
 	"github.com/matrixorigin/matrixone/pkg/defines"
 	"github.com/matrixorigin/matrixone/pkg/logutil"
 	"github.com/matrixorigin/matrixone/pkg/util/batchpipe"
@@ -165,34 +167,50 @@ func InitSchema(ctx context.Context, sqlExecutor func() ie.InternalExecutor) err
 	return nil
 }
 
-// InitSchemaWithTxn
-// PS: only in system bootstrap init schema with `executor.TxnExecutor`
+// InitSchemaWithTxn initializes the complete schema for an admitted caller.
 func InitSchemaWithTxn(ctx context.Context, txn executor.TxnExecutor) error {
-	_, err := txn.Exec(sqlCreateDBConst, executor.StatementOption{})
+	if err := InitSchemaTablesWithTxn(ctx, txn); err != nil {
+		return err
+	}
+	return InitSchemaViewsWithTxn(ctx, txn)
+}
+
+// InitSchemaTablesWithTxn creates prerequisites before catalog admission. Views
+// can require versioned expression semantics and must be created after admission.
+func InitSchemaTablesWithTxn(ctx context.Context, txn executor.TxnExecutor) error {
+	res, err := txn.Exec(sqlCreateDBConst, executor.StatementOption{})
+	res.Close()
 	if err != nil {
 		return err
 	}
-
-	var createCost time.Duration
-	defer func() {
-		logutil.Debugf("[Trace] init tables: create cost %d ms", createCost.Milliseconds())
-	}()
-
-	instant := time.Now()
 	for _, tbl := range tables {
-		_, err = txn.Exec(tbl.ToCreateSql(ctx, true), executor.StatementOption{})
+		res, err = txn.Exec(tbl.ToCreateSql(ctx, true), executor.StatementOption{})
+		res.Close()
 		if err != nil {
 			return err
 		}
 	}
+	return nil
+}
 
+// InitSchemaViewsWithTxn reconciles derived views after catalog admission.
+// Check existence before binding: even CREATE IF NOT EXISTS binds its source
+// and would impose new requirements on unchanged release catalog definitions.
+func InitSchemaViewsWithTxn(ctx context.Context, txn executor.TxnExecutor) error {
 	for _, v := range views {
-		_, err = txn.Exec(v.ToCreateSql(ctx, true), executor.StatementOption{})
+		exists, err := schemaViewExists(ctx, txn, v)
+		if err != nil {
+			return err
+		}
+		if exists {
+			continue
+		}
+		res, err := txn.Exec(v.ToCreateSql(ctx, true), executor.StatementOption{})
+		res.Close()
 		if err != nil {
 			return err
 		}
 	}
-	createCost = time.Since(instant)
 	return nil
 }
 
@@ -318,4 +336,39 @@ func (n NoopBatchProcessor) Register(batchpipe.HasName, PipeImpl)             {}
 
 func GetGlobalBatchProcessor() BatchProcessor {
 	return GetTracerProvider().batchProcessor
+}
+
+// SchemaViewsExistWithTxn is a read-only preflight. The caller closes this
+// transaction before waiting for the protocol needed to create missing views.
+func SchemaViewsExistWithTxn(ctx context.Context, txn executor.TxnExecutor) (bool, error) {
+	for _, v := range views {
+		exists, err := schemaViewExists(ctx, txn, v)
+		if err != nil || !exists {
+			return false, err
+		}
+	}
+	return true, nil
+}
+
+func schemaViewExists(ctx context.Context, txn executor.TxnExecutor, v *table.View) (bool, error) {
+	res, err := txn.Exec(fmt.Sprintf(
+		"select relkind from mo_catalog.mo_tables where account_id = 0 and reldatabase = '%s' and relname = '%s'",
+		v.Database, v.Table), executor.StatementOption{})
+	if err != nil {
+		res.Close()
+		return false, err
+	}
+	exists, wrongKind := false, false
+	res.ReadRows(func(_ int, cols []*vector.Vector) bool {
+		for _, kind := range executor.GetStringRows(cols[0]) {
+			exists = true
+			wrongKind = wrongKind || kind != catalog.SystemViewRel
+		}
+		return true
+	})
+	res.Close()
+	if wrongKind {
+		return false, moerr.NewInternalErrorf(ctx, "system view %s.%s conflicts with a non-view object", v.Database, v.Table)
+	}
+	return exists, nil
 }
