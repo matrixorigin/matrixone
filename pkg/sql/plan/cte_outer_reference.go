@@ -106,7 +106,21 @@ func (d *localCTEDomain) admitConsumer(root int32) error {
 			return nil
 		}
 		n := d.builder.qry.Nodes[id]
-		paginated = paginated || n.Limit != nil || n.Offset != nil
+		if n.Limit != nil || n.Offset != nil {
+			// An implicit scalar aggregate has at most one result row.
+			// LIMIT 1 (OFFSET 0) above it preserves that row and is
+			// rewritten into the per-identity window by decorrelation.
+			var limit *plan.Literal
+			if n.Limit != nil {
+				limit = n.Limit.GetLit()
+			}
+			offsetZero := n.Offset == nil ||
+				(n.Offset.GetLit() != nil && n.Offset.GetLit().GetU64Val() == 0)
+			if aggregated || d.subType != plan.SubqueryRef_SCALAR || limit == nil ||
+				limit.GetU64Val() != 1 || !offsetZero {
+				paginated = true
+			}
+		}
 		switch n.NodeType {
 		case plan.Node_UNION, plan.Node_INTERSECT, plan.Node_INTERSECT_ALL,
 			plan.Node_MINUS, plan.Node_MINUS_ALL:

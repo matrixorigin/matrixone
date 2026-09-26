@@ -329,6 +329,62 @@ from pages p where p.id in (1, 2) order by p.id;
 ➤ id[4,32,0]  ¦  c[-5,64,0]  𝄀
 1  ¦  null  𝄀
 2  ¦  1
+select p.id, (select count(*)+1 from pages a where a.id=p.id and a.id<2
+having count(*)=1 limit 1) as c
+from pages p where p.id in (1, 2) order by p.id;
+➤ id[4,32,0]  ¦  c[-5,64,0]  𝄀
+1  ¦  2  𝄀
+2  ¦  null
+select p.id, (with q(n) as (select p.parent_id from pages a where a.id=p.id and a.id<2)
+select count(*)+1 from q having count(*)=1 limit 1) as c
+from pages p where p.id in (1, 2) order by p.id;
+➤ id[4,32,0]  ¦  c[-5,64,0]  𝄀
+1  ¦  2  𝄀
+2  ¦  null
+select p.id, (select count(*)*2 from pages a where a.id=p.id and a.id<2 limit 1) as c
+from pages p where p.id in (1, 2) order by p.id;
+➤ id[4,32,0]  ¦  c[-5,64,0]  𝄀
+1  ¦  2  𝄀
+2  ¦  0
+select p.id, (with q(n) as (select p.parent_id from pages a where a.id=p.id and a.id<2)
+select count(*)*2 from q limit 1) as c
+from pages p where p.id in (1, 2) order by p.id;
+➤ id[4,32,0]  ¦  c[-5,64,0]  𝄀
+1  ¦  2  𝄀
+2  ¦  0
+select p.id, (select count(*)+count(a.id) from pages a
+where a.id=p.id and a.id<2 order by count(*)) as c
+from pages p where p.id in (1, 2) order by p.id;
+➤ id[4,32,0]  ¦  c[-5,64,0]  𝄀
+1  ¦  2  𝄀
+2  ¦  0
+select p.id, (with q(n) as (select p.parent_id from pages a where a.id=p.id and a.id<2)
+select count(*)+count(n) from q order by count(*)) as c
+from pages p where p.id in (1, 2) order by p.id;
+➤ id[4,32,0]  ¦  c[-5,64,0]  𝄀
+1  ¦  1  𝄀
+2  ¦  0
+select p.id, (select count(*) from pages a where a.id=p.id and a.id<2
+group by a.id having count(*)=1) as c
+from pages p where p.id in (1, 2) order by p.id;
+➤ id[4,32,0]  ¦  c[-5,64,0]  𝄀
+1  ¦  1  𝄀
+2  ¦  null
+prepare count_having_stmt from 'select p.id, (with q(n) as
+(select p.parent_id from pages a where a.id=p.id and a.id<2)
+select count(*) from q having count(*)>=?) as c
+from pages p where p.id in (1,2) order by p.id';
+set @count_threshold=0;
+execute count_having_stmt using @count_threshold;
+➤ id[4,32,0]  ¦  c[-5,64,0]  𝄀
+1  ¦  1  𝄀
+2  ¦  0
+set @count_threshold=2;
+execute count_having_stmt using @count_threshold;
+➤ id[4,32,0]  ¦  c[-5,64,0]  𝄀
+1  ¦  null  𝄀
+2  ¦  null
+deallocate prepare count_having_stmt;
 select p.id,
 (with recursive r(n) as (
 select p.parent_id union all select n-1 from r where n>1

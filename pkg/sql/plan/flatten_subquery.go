@@ -664,6 +664,10 @@ func (builder *QueryBuilder) flattenSubqueryWithConsumer(
 			}
 		}
 		if localCTEHaving != nil {
+			if !finalizeProjection && !rewriteCount {
+				return 0, nil, moerr.NewNYI(builder.GetContext(),
+					"correlated COUNT HAVING without a proven raw COUNT result")
+			}
 			havingCount := retExpr
 			if finalizeProjection {
 				if len(subCtx.aggregates) != 1 || subCtx.aggregates[0].GetF() == nil ||
@@ -1191,9 +1195,9 @@ func (builder *QueryBuilder) generateRowComparison(op string, child *plan.Expr, 
 // extension. The saved final expression is then evaluated against those
 // post-join values.
 //
-// This is intentionally limited to a direct AGG or the ordinary PROJECT -> AGG
-// shape. Wrappers that can remove or reorder the aggregate row (for example
-// HAVING, DISTINCT, SORT, or LIMIT) keep the legacy path.
+// This is limited to a provable single-group aggregate path. Transparent
+// ORDER BY/DISTINCT projections and a per-key LIMIT 1 window may carry the
+// row through; a pagination operator that deletes it must not be restored.
 func (builder *QueryBuilder) prepareCorrelatedScalarAggregatePostJoinProjection(
 	subID int32,
 	subCtx *BindContext,
@@ -1204,9 +1208,21 @@ func (builder *QueryBuilder) prepareCorrelatedScalarAggregatePostJoinProjection(
 	}
 
 	project := builder.qry.Nodes[subID]
+	if project.NodeType == plan.Node_WINDOW && len(project.Children) == 1 &&
+		len(project.FilterList) == 1 && len(project.WinSpecList) == 1 &&
+		project.WinSpecList[0].GetW() != nil && project.WinSpecList[0].GetW().Name == "row_number" {
+		child := builder.qry.Nodes[project.Children[0]]
+		if child.NodeType == plan.Node_PARTITION && len(child.Children) == 1 &&
+			builder.qry.Nodes[child.Children[0]].NodeType == plan.Node_PROJECT {
+			// The per-key LIMIT window passes the aggregate projection
+			// through. Restore its raw inputs on the other side of the join.
+			return builder.prepareCorrelatedScalarAggregatePostJoinProjection(
+				child.Children[0], subCtx, joinPreds)
+		}
+	}
 	// ORDER BY/DISTINCT may add a final pass-through projection above the
-	// original aggregate projection. Move that projection's expression above
-	// the join too, while retaining its raw COUNT as the right-hand result.
+	// original aggregate projection. Move the expression above the join,
+	// retaining all raw aggregate inputs as right-hand outputs.
 	if project.NodeType == plan.Node_PROJECT && len(project.BindingTags) == 1 && len(project.Children) == 1 &&
 		len(project.ProjectList) > 0 && project.Limit == nil && project.Offset == nil {
 		childID := project.Children[0]
@@ -1239,25 +1255,42 @@ func (builder *QueryBuilder) prepareCorrelatedScalarAggregatePostJoinProjection(
 				return nil, false, nil
 			}
 			outerCol := project.ProjectList[0].GetCol()
-			if len(agg.AggList) == 1 && len(subCtx.aggregates) == 1 && len(agg.BindingTags) > 1 &&
-				agg.BindingTags[1] == subCtx.aggregateTag && outerCol != nil &&
-				outerCol.RelPos == inner.BindingTags[0] && outerCol.ColPos == 0 {
-				fn := agg.AggList[0].GetF()
-				if fn != nil && fn.Func != nil {
-					projected := GetColExpr(agg.AggList[0].Typ, project.BindingTags[0], 0)
+			if len(agg.AggList) > 0 && len(agg.AggList) == len(subCtx.aggregates) &&
+				len(agg.BindingTags) > 1 && agg.BindingTags[1] == subCtx.aggregateTag &&
+				outerCol != nil && outerCol.RelPos == inner.BindingTags[0] && outerCol.ColPos == 0 {
+				projectedAggregates := make([]*plan.Expr, len(agg.AggList))
+				rawAggregates := make([]*plan.Expr, len(agg.AggList))
+				for i, aggregate := range agg.AggList {
+					fn := aggregate.GetF()
+					if fn == nil || fn.Func == nil {
+						return nil, false, nil
+					}
+					projectPos := int32(0)
+					if i > 0 {
+						projectPos = int32(len(project.ProjectList) + i - 1)
+					}
+					projected := GetColExpr(aggregate.Typ, project.BindingTags[0], projectPos)
 					projected.Typ.NotNullable = false
-					restored, err := builder.restoreAggregateEmptyResult(projected, agg.AggList[0], fn.Func.ObjName)
+					var err error
+					projectedAggregates[i], err = builder.restoreAggregateEmptyResult(projected, aggregate, fn.Func.ObjName)
 					if err != nil {
 						return nil, false, err
 					}
-					postJoin, ok := replaceAggregateRefsForPostJoin(
-						DeepCopyExpr(inner.ProjectList[0]), subCtx.aggregateTag, []*plan.Expr{restored})
-					if ok {
-						postJoin, stillCorrelated := decreaseDepth(postJoin)
-						if !stillCorrelated {
-							inner.ProjectList[0] = GetColExpr(agg.AggList[0].Typ, subCtx.aggregateTag, 0)
-							return postJoin, true, nil
+					rawAggregates[i] = GetColExpr(aggregate.Typ, subCtx.aggregateTag, int32(i))
+				}
+				postJoin, ok := replaceAggregateRefsForPostJoin(
+					DeepCopyExpr(inner.ProjectList[0]), subCtx.aggregateTag, projectedAggregates)
+				if ok {
+					postJoin, stillCorrelated := decreaseDepth(postJoin)
+					if !stillCorrelated {
+						innerProject := append([]*plan.Expr(nil), inner.ProjectList...)
+						innerProject[0] = rawAggregates[0]
+						inner.ProjectList = append(innerProject, rawAggregates[1:]...)
+						for i := 1; i < len(rawAggregates); i++ {
+							project.ProjectList = append(project.ProjectList, GetColExpr(
+								agg.AggList[i].Typ, inner.BindingTags[0], int32(len(innerProject)+i-1)))
 						}
+						return postJoin, true, nil
 					}
 				}
 			}
@@ -2541,7 +2574,12 @@ func (builder *QueryBuilder) detachCorrelatedCountHaving(root int32, ctx *BindCo
 				// Leave other aggregate HAVING paths on their existing route.
 				return nil, nil
 			}
-			if len(n.FilterList) != 1 || len(agg.GroupBy) != 0 || len(ctx.results) != 1 ||
+			if len(agg.GroupBy) != 0 || len(ctx.groups) != 0 {
+				// An explicit group has no synthetic empty-input row; the
+				// existing grouped HAVING path already preserves that contract.
+				return nil, nil
+			}
+			if len(n.FilterList) != 1 || len(ctx.results) != 1 ||
 				!builder.scalarCountHavingProjection(root, ctx.results[0], ctx.aggregateTag) {
 				return nil, moerr.NewNYI(builder.GetContext(), "correlated local CTE: COUNT HAVING projection is not the aggregate result")
 			}
@@ -2578,8 +2616,12 @@ func replaceCountHavingResult(expr *plan.Expr, aggregateTag int32, result *plan.
 		}
 		return copy, true
 	}
-	_, isConst := copy.Expr.(*plan.Expr_Lit)
-	return copy, isConst
+	switch copy.Expr.(type) {
+	case *plan.Expr_Lit, *plan.Expr_P, *plan.Expr_T:
+		return copy, true
+	default:
+		return nil, false
+	}
 }
 
 func correlatedIdentityOuterKey(expr *plan.Expr) (*plan.CorrColRef, bool) {

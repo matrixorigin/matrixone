@@ -32,6 +32,40 @@ func TestLocalCTEOuterReferencesExecutablePlan(t *testing.T) {
 		sql  string
 	}{
 		{
+			name: "count expression having limit one",
+			sql: `select p.n_nationkey, (select count(*)+1 from tpch.nation a
+				where a.n_nationkey=p.n_nationkey having count(*)=1 limit 1)
+				from tpch.nation p`,
+		},
+		{
+			name: "count expression multiply limit one",
+			sql: `select p.n_nationkey, (select count(*)*2 from tpch.nation a
+				where a.n_nationkey=p.n_nationkey limit 1) from tpch.nation p`,
+		},
+		{
+			name: "two counts with order",
+			sql: `select p.n_nationkey, (select count(*)+count(a.n_nationkey) from tpch.nation a
+				where a.n_nationkey=p.n_nationkey order by count(*)) from tpch.nation p`,
+		},
+		{
+			name: "local count expression having limit one",
+			sql: `select p.n_nationkey, (with q(n) as
+				(select p.n_nationkey from tpch.nation a where a.n_nationkey=p.n_nationkey)
+				select count(*)+1 from q having count(*)=1 limit 1) from tpch.nation p`,
+		},
+		{
+			name: "local two counts with order",
+			sql: `select p.n_nationkey, (with q(n) as
+				(select p.n_nationkey from tpch.nation a where a.n_nationkey=p.n_nationkey)
+				select count(*)+count(n) from q order by count(*)) from tpch.nation p`,
+		},
+		{
+			name: "ordinary grouped having control",
+			sql: `select p.n_nationkey, (select count(*) from tpch.nation a
+				where a.n_nationkey=p.n_nationkey group by a.n_nationkey having count(*)=1)
+				from tpch.nation p`,
+		},
+		{
 			name: "ordinary count order limit one",
 			sql: `select p.n_nationkey, (select count(*) from tpch.nation a
 				where a.n_nationkey=p.n_nationkey and a.n_nationkey<2 order by count(*) limit 1)

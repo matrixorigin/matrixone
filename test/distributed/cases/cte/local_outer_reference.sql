@@ -256,6 +256,38 @@ select p.id, (with q(n) as (select p.parent_id from pages a where a.id=p.id and 
               select count(*)+1 from q having count(*)=0 order by count(*)) as c
 from pages p where p.id in (1, 2) order by p.id;
 
+-- HAVING must see restored raw COUNT, not COUNT+1; LIMIT 1 retains
+-- the aggregate row, whereas a real group still disappears when empty.
+select p.id, (select count(*)+1 from pages a where a.id=p.id and a.id<2
+              having count(*)=1 limit 1) as c
+from pages p where p.id in (1, 2) order by p.id;
+select p.id, (with q(n) as (select p.parent_id from pages a where a.id=p.id and a.id<2)
+              select count(*)+1 from q having count(*)=1 limit 1) as c
+from pages p where p.id in (1, 2) order by p.id;
+select p.id, (select count(*)*2 from pages a where a.id=p.id and a.id<2 limit 1) as c
+from pages p where p.id in (1, 2) order by p.id;
+select p.id, (with q(n) as (select p.parent_id from pages a where a.id=p.id and a.id<2)
+              select count(*)*2 from q limit 1) as c
+from pages p where p.id in (1, 2) order by p.id;
+select p.id, (select count(*)+count(a.id) from pages a
+              where a.id=p.id and a.id<2 order by count(*)) as c
+from pages p where p.id in (1, 2) order by p.id;
+select p.id, (with q(n) as (select p.parent_id from pages a where a.id=p.id and a.id<2)
+              select count(*)+count(n) from q order by count(*)) as c
+from pages p where p.id in (1, 2) order by p.id;
+select p.id, (select count(*) from pages a where a.id=p.id and a.id<2
+              group by a.id having count(*)=1) as c
+from pages p where p.id in (1, 2) order by p.id;
+prepare count_having_stmt from 'select p.id, (with q(n) as
+  (select p.parent_id from pages a where a.id=p.id and a.id<2)
+  select count(*) from q having count(*)>=?) as c
+  from pages p where p.id in (1,2) order by p.id';
+set @count_threshold=0;
+execute count_having_stmt using @count_threshold;
+set @count_threshold=2;
+execute count_having_stmt using @count_threshold;
+deallocate prepare count_having_stmt;
+
 -- Empty outer input starts no parameter partitions.
 select p.id,
        (with recursive r(n) as (
