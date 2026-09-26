@@ -348,7 +348,9 @@ func TestViewDescriptionSubscription(t *testing.T) {
 		defer exec("drop account view_description_sub")
 		exec("create database view_description_pub")
 		defer exec("drop database view_description_pub")
-		exec("create table view_description_pub.src (x varchar(5))")
+		exec("create table view_description_pub.src (x varchar(5) character set utf8mb4 collate utf8mb4_general_ci)")
+		exec("create table view_description_pub.charset_src (mb4 varchar(5) character set utf8mb4 collate utf8mb4_general_ci, mb4_bin varchar(5) character set utf8mb4 collate utf8mb4_bin, legacy varchar(5) character set utf8, raw varbinary(5), txt text)")
+		exec("create view view_description_pub.charset_v as select mb4, mb4_bin, legacy, raw, txt from view_description_pub.charset_src")
 		exec("create table view_description_pub.bad_src (x int)")
 		exec("create view view_description_pub.v as select x from view_description_pub.src")
 		exec("create view view_description_pub.bad_view as select x from view_description_pub.bad_src")
@@ -387,7 +389,60 @@ func TestViewDescriptionSubscription(t *testing.T) {
 		require.NoError(t, subscriber.QueryRowContext(ctx,
 			"select column_name from information_schema.columns where table_schema='subscribed' and table_name='v'").Scan(&legacyColumn))
 		require.Equal(t, "x", legacyColumn)
+		// Compare the historical projection with the new one on the same CN.
+		// Publisher View, subscription table and subscription View must all
+		// agree on the supported character-set selector variants.
+		type charsetColumn struct {
+			name, charset, collation string
+		}
+		readCharsets := func(db *sql.DB, schema, table string) []charsetColumn {
+			t.Helper()
+			rows, err := db.QueryContext(ctx,
+				"select column_name, character_set_name, collation_name from information_schema.columns "+
+					"where table_schema=? and table_name=? order by ordinal_position", schema, table)
+			require.NoError(t, err)
+			defer rows.Close()
+			var columns []charsetColumn
+			for rows.Next() {
+				var name string
+				var charset, collation sql.NullString
+				require.NoError(t, rows.Scan(&name, &charset, &collation))
+				columns = append(columns, charsetColumn{name, charset.String, collation.String})
+			}
+			require.NoError(t, rows.Err())
+			return columns
+		}
+		selectorRows, err := sys.QueryContext(ctx,
+			"select internal_column_character_set(atttyp) from mo_catalog.mo_columns "+
+				"where att_database='view_description_pub' and att_relname='charset_src' and attname in ('mb4','mb4_bin','legacy','raw')")
+		require.NoError(t, err)
+		var selectors []int64
+		func() {
+			defer selectorRows.Close()
+			for selectorRows.Next() {
+				var selector int64
+				require.NoError(t, selectorRows.Scan(&selector))
+				selectors = append(selectors, selector)
+			}
+			require.NoError(t, selectorRows.Err())
+		}()
+		// DDL exposes explicit utf8mb4-bin (1), binary (2), and utf8 /
+		// utf8mb4-general (3). Legacy selector 0 is covered by the DDL UT.
+		require.ElementsMatch(t, []int64{1, 2, 3, 3}, selectors)
+		publisherTable := readCharsets(sys, "view_description_pub", "charset_src")
+		require.Len(t, publisherTable, 5)
+		publisherView := readCharsets(sys, "view_description_pub", "charset_v")
+		require.Equal(t, publisherTable, publisherView)
+		legacySubscriptionView := readCharsets(subscriber, "subscribed", "charset_v")
+		require.Equal(t, publisherView, legacySubscriptionView)
+		require.Equal(t, "utf8mb4", publisherTable[0].charset)
+		require.Equal(t, "utf8mb4_general_ci", publisherTable[0].collation)
+		require.Equal(t, "binary", publisherTable[3].charset)
+
 		require.NoError(t, replaceColumns(ctx, sysview.InformationSchemaColumnsDDL))
+		require.Equal(t, publisherTable, readCharsets(subscriber, "subscribed", "charset_src"))
+		require.Equal(t, publisherView, readCharsets(subscriber, "subscribed", "charset_v"))
+		require.Equal(t, legacySubscriptionView, readCharsets(subscriber, "subscribed", "charset_v"))
 		exec("alter table view_description_pub.src modify column x varchar(60)")
 		var field, typ, nullable, key, defaultValue, extra, comment sql.NullString
 		require.NoError(t, subscriber.QueryRowContext(ctx, "desc subscribed.v").Scan(

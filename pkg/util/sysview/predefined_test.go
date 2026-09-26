@@ -333,6 +333,12 @@ func TestInformationSchemaColumnsDDL_MixedVersionSubscriptionViews(t *testing.T)
 	require.Contains(t, current, "from mo_subscription_columns() mc")
 	require.Contains(t, current, "AND NOT (mc.relkind = 'v' AND mc.att_database NOT IN")
 	require.Contains(t, current, "mo_subscription_view_columns(mt.publisher_account_id, mt.rel_id)")
+	// All four branches must share the V58 selector mapping, not just the
+	// publisher/local and physical subscription paths.
+	require.Equal(t, 4, strings.Count(current,
+		"WHEN 1 then 'utf8mb4' WHEN 2 then 'binary' WHEN 3 then 'utf8mb4' else NULL end) AS CHARACTER_SET_NAME,"))
+	require.Equal(t, 4, strings.Count(current,
+		"WHEN 1 then 'utf8mb4_bin' WHEN 2 then 'binary' WHEN 3 then 'utf8mb4_general_ci' else NULL end) AS COLLATION_NAME,"))
 	require.NotContains(t, InitInformationSchemaSysTablesForProtocol(defines.MORPCVersion96), current)
 	require.Contains(t, InitInformationSchemaSysTablesForProtocol(defines.MORPCVersion97), current)
 }
