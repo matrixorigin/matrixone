@@ -45,7 +45,7 @@
 
 <h3 align="center">Connect with us:</h3>
 <p align="center">
-<a href="https://twitter.com/matrixone16" target="blank"><img align="center" src="https://raw.githubusercontent.com/rahuldkjain/github-profile-readme-generator/master/src/images/icons/Social/twitter.svg" alt="matrixone16" height="30" width="40" /></a>
+<a href="https://x.com/MatrixOne16" target="blank"><img align="center" src="https://raw.githubusercontent.com/rahuldkjain/github-profile-readme-generator/master/src/images/icons/Social/twitter.svg" alt="MatrixOne16 on X" height="30" width="40" /></a> <a href="https://x.com/MatrixOne_moi" target="blank"><img align="center" src="https://raw.githubusercontent.com/rahuldkjain/github-profile-readme-generator/master/src/images/icons/Social/twitter.svg" alt="MatrixOne_moi on X" height="30" width="40" /></a>
 <a href="http://matrixoneworkspace.slack.com" target="blank"><img align="center" src="https://github.com/dengn/CASAUVSQ/blob/priority/slack_icon.png" alt="matrixone16" height="30" width="30" /></a>
 
 </p>
