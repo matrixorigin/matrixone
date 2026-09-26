@@ -193,6 +193,27 @@ select p.id, (with q(n) as (select p.parent_id)
               select row_number() over (order by count(*)) from q) as rn
 from pages p where p.id=2;
 
+-- Explicit grouping on empty input produces no COUNT result row, not zero.
+select p.id, (with q(n) as (select p.parent_id from pages a where a.id=-1)
+              select count(*) from q group by n) as c
+from pages p where p.id=2;
+select p.id, (with q(n) as (select p.parent_id from pages a where a.id=-1)
+              select count(*) from q group by n limit 1 offset 1) as c
+from pages p where p.id=2;
+select p.id, (with q(n) as (select p.parent_id)
+              select count(*) from q group by n) as c
+from pages p where p.id in (2, 5) order by p.id;
+
+-- An aggregate window must not inherit COUNT's empty-input fallback.
+select p.id, (with q(n) as (select p.parent_id)
+              select row_number() over (order by count(*)) from q group by n) as rn
+from pages p where p.id=2;
+
+-- Consumer JOIN ON references to the outer row must not reach the executor.
+select p.id, (with q(n) as (select p.parent_id)
+              select count(*) from q join pages b on n=b.id and n=p.id) as c
+from pages p where p.id=2;
+
 -- Empty outer input starts no parameter partitions.
 select p.id,
        (with recursive r(n) as (

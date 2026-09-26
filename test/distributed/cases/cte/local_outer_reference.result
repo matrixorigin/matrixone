@@ -189,7 +189,7 @@ correlated local CTE: consumer outer join cannot pull up an identity predicate i
 select p.id, (with q(n) as (select p.parent_id)
 select row_number() over (order by count(*)) from q having count(*)=1) as rn
 from pages p where p.id=2;
-correlated local CTE: consumer scalar aggregate cannot preserve empty-input or result-row semantics is not yet implemented
+correlated local CTE: consumer aggregate window cannot use COUNT empty-input fallback is not yet implemented
 select p.id, (with q(n) as (select p.parent_id)
 select count(n) from q where n<=p.id having count(n)=0) as c
 from pages p where p.id=2;
@@ -226,7 +226,31 @@ correlated local CTE: consumer scalar aggregate cannot preserve empty-input or r
 select p.id, (with q(n) as (select p.parent_id)
 select row_number() over (order by count(*)) from q) as rn
 from pages p where p.id=2;
-correlated local CTE: consumer scalar aggregate cannot preserve empty-input or result-row semantics is not yet implemented
+correlated local CTE: consumer aggregate window cannot use COUNT empty-input fallback is not yet implemented
+select p.id, (with q(n) as (select p.parent_id from pages a where a.id=-1)
+select count(*) from q group by n) as c
+from pages p where p.id=2;
+➤ id[4,32,0]  ¦  c[-5,64,0]  𝄀
+2  ¦  null
+select p.id, (with q(n) as (select p.parent_id from pages a where a.id=-1)
+select count(*) from q group by n limit 1 offset 1) as c
+from pages p where p.id=2;
+➤ id[4,32,0]  ¦  c[-5,64,0]  𝄀
+2  ¦  null
+select p.id, (with q(n) as (select p.parent_id)
+select count(*) from q group by n) as c
+from pages p where p.id in (2, 5) order by p.id;
+➤ id[4,32,0]  ¦  c[-5,64,0]  𝄀
+2  ¦  1  𝄀
+5  ¦  1
+select p.id, (with q(n) as (select p.parent_id)
+select row_number() over (order by count(*)) from q group by n) as rn
+from pages p where p.id=2;
+correlated local CTE: consumer aggregate window cannot use COUNT empty-input fallback is not yet implemented
+select p.id, (with q(n) as (select p.parent_id)
+select count(*) from q join pages b on n=b.id and n=p.id) as c
+from pages p where p.id=2;
+correlated local CTE: consumer join ON has an unhandled outer reference is not yet implemented
 select p.id,
 (with recursive r(n) as (
 select p.parent_id union all select n-1 from r where n>1

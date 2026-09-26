@@ -116,6 +116,11 @@ func (d *localCTEDomain) admitConsumer(root int32) error {
 		case plan.Node_UNION_ALL:
 			branched = true
 		case plan.Node_JOIN:
+			for _, on := range n.OnList {
+				if hasCorrCol(on) {
+					return d.unsupported("consumer join ON has an unhandled outer reference")
+				}
+			}
 			if n.JoinType != plan.Node_INNER {
 				return d.unsupported("consumer outer join cannot pull up an identity predicate")
 			}
@@ -124,6 +129,9 @@ func (d *localCTEDomain) admitConsumer(root int32) error {
 			}
 			branched = true
 		case plan.Node_AGG:
+			if windowed && len(n.AggList) != 0 {
+				return d.unsupported("consumer aggregate window cannot use COUNT empty-input fallback")
+			}
 			if len(n.GroupBy) == 0 && (d.subType != plan.SubqueryRef_SCALAR || branched || windowed ||
 				aggregated || paginated) {
 				return d.unsupported("consumer scalar aggregate cannot preserve empty-input or result-row semantics")

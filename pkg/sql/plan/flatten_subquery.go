@@ -503,8 +503,18 @@ func (builder *QueryBuilder) flattenSubqueryWithConsumer(
 
 		// Preserve the legacy COUNT fallback for plan shapes that cannot use the
 		// more precise empty-input projection reconstruction below.
-		if len(joinPreds) > 0 && builder.findAggrCount(subCtx.aggregates) {
-			rewriteCount = true
+		if len(joinPreds) > 0 && len(subCtx.groups) == 0 && len(subCtx.results) == 1 &&
+			builder.findAggrCount(subCtx.aggregates) {
+			// Only the original ungrouped COUNT result owns the empty-input
+			// zero. A grouped COUNT has no result row on empty input, and a
+			// window/other projection must never inherit COUNT's fallback.
+			if col := subCtx.results[0].GetCol(); col != nil &&
+				col.RelPos == subCtx.aggregateTag && col.ColPos >= 0 &&
+				int(col.ColPos) < len(subCtx.aggregates) {
+				f := subCtx.aggregates[col.ColPos].GetF()
+				rewriteCount = f != nil && f.Func != nil &&
+					(f.Func.ObjName == "count" || f.Func.ObjName == "starcount")
+			}
 		}
 
 		if scalarExistential {

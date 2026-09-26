@@ -72,6 +72,16 @@ func TestLocalCTEOuterReferencesExecutablePlan(t *testing.T) {
 			) select count(*) from r) from tpch.nation p`,
 		},
 		{
+			name: "explicit group count empty input",
+			sql: `select (with q(n) as (select p.n_regionkey from tpch.nation a where a.n_nationkey=-1)
+				select count(*) from q group by n) from tpch.nation p`,
+		},
+		{
+			name: "explicit group count with offset",
+			sql: `select (with q(n) as (select p.n_regionkey from tpch.nation a where a.n_nationkey=-1)
+				select count(*) from q group by n limit 1 offset 1) from tpch.nation p`,
+		},
+		{
 			name: "consumer window per outer row",
 			sql: `select (with q(n) as (select p.n_regionkey)
 				select row_number() over (order by n) from q) from tpch.nation p`,
@@ -228,6 +238,18 @@ func TestLocalCTEOuterReferencesRejectUnsafeDomains(t *testing.T) {
 			name: "count pagination without having offset",
 			sql: `select (with q(n) as (select p.n_regionkey)
 				select count(*) from q limit 1 offset 1) from tpch.nation p`,
+		},
+		{
+			name: "grouped count window cannot use count fallback",
+			sql: `select (with q(n) as (select p.n_regionkey)
+				select row_number() over (order by count(*)) from q group by n)
+				from tpch.nation p`,
+		},
+		{
+			name: "join on outer reference must not reach executor",
+			sql: `select (with q(n) as (select p.n_regionkey)
+				select count(*) from q join tpch.nation b
+				on n=b.n_regionkey and n=p.n_regionkey) from tpch.nation p`,
 		},
 		{
 			name: "window count fallback without having",
