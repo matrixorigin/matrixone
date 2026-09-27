@@ -151,7 +151,6 @@ from parent_agg p order by p.id;
 -- @regex("unsupported singleton aggregate in correlated CTE", true)
 select p.id, (with x as (select count(*) as c from child_agg c where c.corr_key = p.corr_key) select avg(c) from x) as count_avg
 from parent_agg p order by p.id;
--- @regex("correlated aggregate spine cannot preserve empty-input rows", true)
 select p.id, (with x as (select max(c.v) as m from child_agg c where c.corr_key > p.corr_key) select m from x) as non_equal_max
 from parent_agg p order by p.id;
 -- @regex("correlated aggregate spine cannot preserve empty-input rows", true)

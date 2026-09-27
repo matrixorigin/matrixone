@@ -305,8 +305,11 @@ from parent_agg p order by p.id;
 unsupported singleton aggregate in correlated CTE is not yet implemented
 select p.id, (with x as (select max(c.v) as m from child_agg c where c.corr_key > p.corr_key) select m from x) as non_equal_max
 from parent_agg p order by p.id;
--- @regex("correlated aggregate spine cannot preserve empty-input rows", true)
-correlated aggregate spine cannot preserve empty-input rows is not yet implemented
+➤ id[4,32,0]  ¦  non_equal_max[4,32,0]  𝄀
+1  ¦  null  𝄀
+2  ¦  null  𝄀
+3  ¦  null  𝄀
+4  ¦  null
 select p.id, (with x as (select max(c.v) as m from child_agg c where c.corr_key = p.corr_key group by c.corr_key) select nullif(count(*), 0) from x limit 1) as grouped_count_nullif
 from parent_agg p order by p.id;
 -- @regex("correlated aggregate spine cannot preserve empty-input rows", true)

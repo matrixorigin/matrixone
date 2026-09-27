@@ -281,6 +281,28 @@ func (builder *QueryBuilder) filterPushdownBarrier(expr *plan.Expr) bool {
 		builder.containsStatementInvariantFilterDiagnostic(expr)
 }
 
+func normalizeScalarReaggFilterRefs(expr *plan.Expr, groupTag int32, aliases map[[2]int32]int32) {
+	if expr == nil {
+		return
+	}
+	switch e := expr.Expr.(type) {
+	case *plan.Expr_Col:
+		if e.Col != nil {
+			if groupPos, ok := aliases[[2]int32{e.Col.RelPos, e.Col.ColPos}]; ok {
+				e.Col.RelPos, e.Col.ColPos = groupTag, groupPos
+			}
+		}
+	case *plan.Expr_F:
+		for _, arg := range e.F.Args {
+			normalizeScalarReaggFilterRefs(arg, groupTag, aliases)
+		}
+	case *plan.Expr_List:
+		for _, item := range e.List.List {
+			normalizeScalarReaggFilterRefs(item, groupTag, aliases)
+		}
+	}
+}
+
 func (builder *QueryBuilder) pushdownFilters(nodeID int32, filters []*plan.Expr, separateNonEquiConds bool) (int32, []*plan.Expr) {
 	originalNodeID := nodeID
 	if builder.checkPlanningCanceled() != nil {
@@ -315,6 +337,21 @@ func (builder *QueryBuilder) pushdownFilters(nodeID int32, filters []*plan.Expr,
 		}
 		groupTag := node.BindingTags[0]
 		aggregateTag := node.BindingTags[1]
+		// A scalar reaggregation groups earlier scalar outputs under this node's
+		// group tag. Normalize their old tags before deciding whether a filter
+		// belongs below the aggregate or in its HAVING list.
+		if aliases := builder.scalarReaggAliases[nodeID]; len(aliases) > 0 {
+			byRef := make(map[[2]int32]int32, len(aliases))
+			for _, alias := range aliases {
+				byRef[alias.ref] = alias.groupPos
+			}
+			for _, filter := range filters {
+				normalizeScalarReaggFilterRefs(filter, groupTag, byRef)
+			}
+			for _, filter := range node.FilterList {
+				normalizeScalarReaggFilterRefs(filter, groupTag, byRef)
+			}
+		}
 
 		for _, filter := range filters {
 			if builder.filterPushdownBarrier(filter) {

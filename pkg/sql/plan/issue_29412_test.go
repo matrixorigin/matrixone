@@ -58,8 +58,6 @@ func TestCorrelatedLocalCTEImplicitAggregateSpineRejectsRowRemoval(t *testing.T)
 		{"grouped", `SELECT o.N_NATIONKEY, (WITH a AS (SELECT MAX(i.N_NATIONKEY) AS m FROM NATION i WHERE i.N_NATIONKEY = o.N_NATIONKEY GROUP BY i.N_REGIONKEY), x AS (SELECT COUNT(*) AS c FROM a) SELECT c FROM x) FROM NATION o`},
 		{"non equality", `SELECT o.N_NATIONKEY, (WITH a AS (SELECT MAX(i.N_NATIONKEY) AS m FROM NATION i WHERE i.N_NATIONKEY <= o.N_NATIONKEY), x AS (SELECT COUNT(*) AS c FROM a) SELECT c FROM x) FROM NATION o`},
 		{"or equalities", `SELECT o.N_NATIONKEY, (WITH a AS (SELECT MAX(i.N_NATIONKEY) AS m FROM NATION i WHERE i.N_NATIONKEY = o.N_NATIONKEY OR i.N_NATIONKEY = o.N_NATIONKEY + 1), x AS (SELECT COUNT(*) AS c FROM a) SELECT c FROM x) FROM NATION o`},
-		{"non-equality nullable max", `SELECT o.N_NATIONKEY, (WITH x AS (SELECT MAX(i.N_NATIONKEY) AS m FROM NATION i WHERE i.N_NATIONKEY > o.N_NATIONKEY) SELECT m FROM x) FROM NATION o`},
-		{"or nullable max", `SELECT o.N_NATIONKEY, (WITH x AS (SELECT MAX(i.N_NATIONKEY) AS m FROM NATION i WHERE i.N_NATIONKEY = o.N_NATIONKEY OR i.N_NATIONKEY = o.N_NATIONKEY + 1) SELECT m FROM x) FROM NATION o`},
 		{"like", `SELECT o.N_NATIONKEY, (WITH a AS (SELECT MAX(i.N_NATIONKEY) AS m FROM NATION i WHERE i.N_NAME LIKE o.N_NAME), x AS (SELECT COUNT(*) AS c FROM a) SELECT c FROM x) FROM NATION o`},
 		{"empty retaining having", `SELECT o.N_NATIONKEY, (WITH x AS (SELECT COUNT(*) AS c FROM NATION i WHERE i.N_NATIONKEY = o.N_NATIONKEY HAVING COUNT(*) >= 0) SELECT c FROM x) FROM NATION o`},
 		{"retaining null then count", `SELECT o.N_NATIONKEY, (WITH x AS (SELECT MAX(i.N_NATIONKEY) AS m FROM NATION i WHERE i.N_NATIONKEY = o.N_NATIONKEY HAVING MAX(i.N_NATIONKEY) IS NULL) SELECT COUNT(*) FROM x) FROM NATION o`},
@@ -68,12 +66,31 @@ func TestCorrelatedLocalCTEImplicitAggregateSpineRejectsRowRemoval(t *testing.T)
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			_, err := runOneStmt(NewMockOptimizer(true), t, tc.sql)
-			require.ErrorContains(t, err, "correlated aggregate spine")
+			want := "correlated aggregate spine"
+			switch tc.name {
+			case "non equality", "or equalities", "like":
+				want = "nested non-equality correlated aggregate"
+			}
+			require.ErrorContains(t, err, want)
 		})
 	}
 	_, err := runOneStmt(NewMockOptimizer(true), t,
 		`SELECT o.N_NATIONKEY, (WITH x AS (SELECT COUNT(*) AS c FROM NATION i WHERE i.N_NATIONKEY = o.N_NATIONKEY) SELECT AVG(c) FROM x) FROM NATION o`)
 	require.ErrorContains(t, err, "unsupported singleton aggregate")
+}
+
+func TestCorrelatedLocalCTENonEqualityMaxUsesRawRows(t *testing.T) {
+	for _, sql := range []string{
+		`SELECT o.N_NATIONKEY, (WITH x AS (SELECT MAX(i.N_NATIONKEY) AS m FROM NATION i
+		 WHERE i.N_NATIONKEY > o.N_NATIONKEY) SELECT m FROM x) FROM NATION o`,
+		`SELECT o.N_NATIONKEY, (WITH x AS (SELECT MAX(i.N_NATIONKEY) AS m FROM NATION i
+		 WHERE i.N_NATIONKEY = o.N_NATIONKEY OR i.N_NATIONKEY = o.N_NATIONKEY + 1)
+		 SELECT m FROM x) FROM NATION o`,
+	} {
+		p, err := runOneStmt(NewMockOptimizer(true), t, sql)
+		require.NoError(t, err)
+		assertReachablePlanHasNoCorrelatedExpr(t, p.GetQuery())
+	}
 }
 
 func TestCorrelatedLocalCTEPreservesExistingScalarBoundaries(t *testing.T) {
