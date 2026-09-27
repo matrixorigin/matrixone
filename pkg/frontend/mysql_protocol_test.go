@@ -3872,6 +3872,72 @@ func TestMysqlProtocolWriteUsesLogicalBatchRowCount(t *testing.T) {
 	}
 }
 
+func TestDatetimeExactSecondWireRowsKeepDeclaredScale(t *testing.T) {
+	for _, tc := range []struct {
+		name string
+		cmd  CommandType
+		want [][]byte
+	}{
+		{
+			name: "text", cmd: COM_QUERY,
+			want: [][]byte{
+				[]byte("\x1a2024-01-15 10:20:30.000000"),
+				[]byte("\x1a0000-00-00 00:00:00.000000"),
+			},
+		},
+		{
+			name: "binary", cmd: COM_STMT_EXECUTE,
+			want: [][]byte{
+				{0, 0, 7, 0xe8, 0x07, 1, 15, 10, 20, 30},
+				{0, 0, 0},
+			},
+		},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			sv, err := getSystemVariables("test/system_vars_config.toml")
+			require.NoError(t, err)
+			pu := config.NewParameterUnit(sv, nil, nil, nil)
+			raw := &testConn{}
+			allocator := NewLeakCheckAllocator()
+			t.Cleanup(func() { require.True(t, allocator.CheckBalance()) })
+			ioses, err := NewIOSessionWithOptions(raw, pu, "", WithIOSessionAllocator(allocator))
+			require.NoError(t, err)
+			t.Cleanup(func() { require.NoError(t, ioses.Close()) })
+			proto := NewMysqlClientProtocol("", 0, ioses, 1024, sv)
+			t.Cleanup(proto.Close)
+			ses := &Session{}
+			ses.SetCmd(tc.cmd)
+			proto.ses = ses
+
+			mrs := &MysqlResultSet{}
+			column := &MysqlColumn{}
+			column.SetName("dt6")
+			column.SetColumnType(defines.MYSQL_TYPE_DATETIME)
+			column.SetDecimal(6)
+			mrs.AddColumn(column)
+
+			mp := mpool.MustNewZero()
+			bat := batch.NewWithSize(1)
+			bat.Vecs[0] = vector.NewVec(types.New(types.T_datetime, 0, 6))
+			t.Cleanup(func() { bat.Clean(mp) })
+			dt, err := types.ParseDatetime("2024-01-15 10:20:30", 6)
+			require.NoError(t, err)
+			require.NoError(t, vector.AppendFixed(bat.Vecs[0], dt, false, mp))
+			require.NoError(t, vector.AppendFixed(bat.Vecs[0], types.ZeroDatetime, false, mp))
+			bat.SetRowCount(2)
+			colSlices := &ColumnSlices{
+				ctx: context.Background(), dataSet: bat, colIdx2SliceIdx: []int{0},
+				arrDatetime: [][]types.Datetime{vector.ToSliceNoTypeCheck2[types.Datetime](bat.Vecs[0])},
+			}
+			t.Cleanup(colSlices.Close)
+
+			require.NoError(t, proto.WriteResultSetRow2(mrs, colSlices, 2))
+			require.NoError(t, proto.tcpConn.Flush())
+			require.Equal(t, tc.want, splitProtocolPackets(t, raw.data))
+		})
+	}
+}
+
 func TestMysqlProtocolWriteSendsLogicalConstNullRow(t *testing.T) {
 	sv, err := getSystemVariables("test/system_vars_config.toml")
 	require.NoError(t, err)
