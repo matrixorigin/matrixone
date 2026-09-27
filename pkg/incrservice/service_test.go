@@ -1099,10 +1099,19 @@ func TestDeleteWithTxnAborted(t *testing.T) {
 func TestDeleteStatementRollbackPreservesOnlyEarlierActions(t *testing.T) {
 	runServiceTests(t, 2, func(ctx context.Context, ss []*service, ops []client.TxnOperator) {
 		s := ss[0]
+		store := s.store.(*memStore)
 		for _, id := range []uint64{10, 11} {
 			require.NoError(t, s.Create(ctx, id, newTestTableDef(1), ops[0]))
 		}
 		require.NoError(t, ops[0].Commit(ctx))
+		for _, id := range []uint64{10, 11} {
+			cols, err := store.GetColumns(ctx, id, nil)
+			require.NoError(t, err)
+			require.Len(t, cols, 1)
+		}
+		s.mu.Lock()
+		original := s.mu.tables[11]
+		s.mu.Unlock()
 
 		txnOp := ops[1]
 		callbacks := txnOp.(client.StatementCallbackOperator)
@@ -1113,12 +1122,23 @@ func TestDeleteStatementRollbackPreservesOnlyEarlierActions(t *testing.T) {
 		require.NoError(t, callbacks.RollbackStatementCallbacks(ctx))
 		require.NoError(t, txnOp.Commit(ctx))
 
+		// The reaper can finish before this check. Snapshot storage and the
+		// queue together so both queued and completed deletion are accepted.
+		store.Lock()
 		s.mu.Lock()
-		_, firstDeleted := s.mu.destroyed[10]
-		_, secondDeleted := s.mu.destroyed[11]
+		_, firstCached := s.mu.tables[10]
+		_, firstQueued := s.mu.destroyed[10]
+		_, firstStored := store.caches[10]
+		secondCache := s.mu.tables[11]
+		_, secondQueued := s.mu.destroyed[11]
+		_, secondStored := store.caches[11]
 		s.mu.Unlock()
-		require.True(t, firstDeleted)
-		require.False(t, secondDeleted)
+		store.Unlock()
+		require.False(t, firstCached)
+		require.True(t, firstQueued || !firstStored)
+		require.Same(t, original, secondCache)
+		require.True(t, secondStored)
+		require.False(t, secondQueued)
 		_, err := s.CurrentValue(ctx, 11, "auto_0")
 		require.NoError(t, err)
 	})
@@ -1155,8 +1175,8 @@ func TestResetStatementRollbackKeepsOriginalCache(t *testing.T) {
 		require.False(t, oldDestroyed)
 		require.False(t, newDestroyed)
 		require.Equal(t, int64(1), replacement.retires.Load())
-		// memStore models transaction close, not statement rollback. The
-		// standalone SQL probe is the durable-catalog oracle for this path.
+		// This test verifies cache lifecycle only: memStore models transaction
+		// close, not statement-level catalog rollback for TRUNCATE.
 	})
 }
 
