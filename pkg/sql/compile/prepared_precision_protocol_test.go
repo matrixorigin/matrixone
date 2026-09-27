@@ -179,7 +179,7 @@ func TestTypedNumericIntervalRequiresTemporalProtocol(t *testing.T) {
 	require.NoError(t, validateRemoteExpressionPipelineProtocol(c.proc, p))
 }
 
-func TestRawTimeIntervalOverloadsRequireV97(t *testing.T) {
+func TestRawTimeIntervalOverloadsRequireV98(t *testing.T) {
 	c, client := expressionProtocolTestCompile(t)
 	for _, functionID := range []int32{function.DATE_ADD, function.DATE_SUB} {
 		for _, overloadID := range []int32{8, 15} {

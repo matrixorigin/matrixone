@@ -1140,9 +1140,9 @@ cast(subtime(time '00:00:00', cast(0.0000005 as decimal(10,7))) as varchar) as r
 create table temporal_decimal_fsp as
 select addtime(time '00:00:00', cast(0.0000005 as decimal(10,7))) as t;
 show create table temporal_decimal_fsp;
-➤ Table[12,20,0]  ¦  Create Table[12,62,0]  𝄀
+➤ Table[12,20,0]  ¦  Create Table[12,66,0]  𝄀
 temporal_decimal_fsp  ¦  CREATE TABLE `temporal_decimal_fsp` (
-  `t` time(6) NOT NULL
+  `t` time(6) DEFAULT NULL
 )
 select t, microsecond(t) as t_us from temporal_decimal_fsp;
 ➤ t[92,17,0]  ¦  t_us[-5,64,0]  𝄀

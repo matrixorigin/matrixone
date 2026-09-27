@@ -1,8 +1,9 @@
 # Temporal compatibility repair after MORPC 97
 
-Integration note (2026-09-27): main later assigned unreleased MORPC98 to the
-independent FORMAT/MAKEDATE/MAKETIME integer-argument change. The integrated
-candidate ships both contracts behind the same MORPC98 boundary relative to
+Integration note (2026-09-27): main assigned unreleased MORPC98 to the
+independent FORMAT/MAKEDATE/MAKETIME integer-argument change and MORPC99 to
+writer-fair row-lock admission. The integrated candidate ships temporal and
+integer-argument contracts behind the same MORPC98 boundary relative to
 released 4.2 binaries; intermediate main commits are not rolling-upgrade
 compatibility targets. C40 in the contract records the final decision.
 
@@ -220,14 +221,14 @@ all versions or MatrixOne operations.
 | Binder and constant folder | Keep family/FSP/width and source provenance; fold without publishing an EXECUTE-only diagnostic from an inactive expression.  Repeated prepared execution observes current session state. |
 | Session/process codec | Carry sql_mode, time zone, and week mode to remote consumers; unavailable required state fails explicitly. |
 | Function registry and persistence | Preserve released 4.2 physical overload ABI; new SQL binds new identities where needed; view/default/CTAS/Substrait consumers see the declared result type. |
-| Compile, wire, and catalog admission | Decimal division requires MORPC 97.  The changed temporal/conversion contract requires one *new* final epoch, MORPC 98 while main remains at 97.  Detect all changed identities, including SQL HEX/BIT numeric casts, numeric-to-TIME, string-to-temporal casts, and stable temporal arithmetic IDs.  A 97 worker remains semantically eligible for decimal-only plans, subject to the deployment's admission floor.  Apply this at feature detection, placement, send, receive, and persisted-expression admission.  Do not change the meaning of decimal 97. |
-| Bootstrap | Commit prerequisite tables first.  Before ingress, reconcile missing derived views only after an authoritative enabled, non-preparing, admitted and catalog-fenced temporal-98 snapshot.  Wait outside SQL transactions; routing Ready is an output of completion, not an input to catalog authoring.  Keep existing release view definitions; wrong-kind objects and permanent/rollback errors fail startup. |
+| Compile, wire, and catalog admission | Decimal division requires MORPC 97. The integrated integer-argument and temporal/conversion contracts require MORPC 98; writer-fair locks retain MORPC 99. Detect all changed identities, including SQL HEX/BIT numeric casts, numeric-to-TIME, string-to-temporal casts, and stable temporal arithmetic IDs. A 97 worker remains semantically eligible for decimal-only plans, subject to the deployment's admission floor. Apply this at feature detection, placement, send, receive, and persisted-expression admission. |
+| Bootstrap | Commit prerequisite tables first. Before ingress, reconcile missing derived views only after an authoritative enabled, non-preparing, admitted and catalog-fenced temporal-98 snapshot. Wait outside SQL transactions; routing Ready is an output of completion, not an input to catalog authoring. Keep existing release view definitions; wrong-kind objects and permanent/rollback errors fail startup. |
 
-MORPC 98 is a mainline integration decision, not another epoch for an
-intermediate revision of this PR.  If main advances again before integration,
-choose the next free epoch and repeat the capability proof.  Worker eligibility
-depends on the capability introduced by that epoch, not on a coincidentally
-equal integer in a branch that assigned the same number a different meaning.
+MORPC 98 is the release-based integration decision, not another epoch for an
+intermediate revision of this PR. If a release intervenes before integration,
+reassess the capability boundary against that released binary. Worker eligibility
+depends on the capability introduced by the candidate, not on an intermediate
+unreleased main commit with the same integer.
 
 | Worker capability | Newly bound decimal division | Newly bound temporal/conversion contract |
 | --- | --- | --- |
@@ -235,7 +236,7 @@ equal integer in a branch that assigned the same number a different meaning.
 | Main after #29241, 97 | Execute | Reject or place elsewhere |
 | Integrated candidate, 98 | Execute | Execute |
 
-A plan containing both requires `max(97, 98) = 98`.  Feature collection keeps
+A plan containing both requires `max(97, 98) = 98`. Feature collection keeps
 the two flags independently through nested expressions and casts, including
 SQL HEX/BIT numeric conversions and numeric-to-TIME conversions.  Binding
 checks source expressions before constant folding removes their provenance.
@@ -299,9 +300,9 @@ marker or background reconciler is introduced.
 1. Owner-level invariant and nearest counterexample tests, `-count=3`, for
    parse, final domain, diagnostic masking, FSP/width, and prepared reuse.
    Include valid→NULL→invalid→overflow→valid on one actual prepared handle.
-2. A protocol cross-product of release 9/10, main decimal-only 97, and new 98:
-   97 accepts decimal semantics but rejects new temporal semantics; 98 accepts
-   both.  Exercise placement, send, receive, persisted admission, and bootstrap.
+2. A protocol cross-product of release 9/10, decimal-only 97, and integrated
+   candidate 98: 97 rejects new temporal semantics; 98 accepts them.
+   Exercise placement, send, receive, persisted admission, and bootstrap.
 3. Relevant owning packages, direct consumers, race for admission/lifecycle,
    and configured incremental SCA on the rebased diff.  Recheck decimal
    division, defaults, and DUMP replay touched by #29241.

@@ -758,6 +758,8 @@ select addtime(time '00:00:00', cast(0.0000005 as decimal(10,7))) as rounded_up,
        cast(subtime(time '00:00:00', cast(0.0000005 as decimal(10,7))) as varchar) as rounded_down_text;
 create table temporal_decimal_fsp as
   select addtime(time '00:00:00', cast(0.0000005 as decimal(10,7))) as t;
+-- The overload can return NULL on overflow for other values, even though
+-- this input is safe; CTAS must not promise NOT NULL from argument metadata.
 show create table temporal_decimal_fsp;
 select t, microsecond(t) as t_us from temporal_decimal_fsp;
 drop table temporal_decimal_fsp;
