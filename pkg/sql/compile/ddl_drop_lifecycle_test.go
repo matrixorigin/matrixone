@@ -58,7 +58,7 @@ func newDropDDLCompile(t *testing.T, ctrl *gomock.Controller, exec *dropDDLExecu
 	proc := testutil.NewProcess(t)
 	proc.Ctx = defines.AttachAccountId(proc.Ctx, 7)
 	proc.Base.SessionInfo.TimeZone = time.UTC
-	proc.Base.TxnClient, proc.Base.TxnOperator = newTestTxnClientAndOp(ctrl)
+	proc.Base.TxnClient, proc.Base.TxnOperator = newTestTxnClientAndOpWithPessimistic(ctrl)
 	proc.Base.TxnOperator.(*mock_frontend.MockTxnOperator).EXPECT().SnapshotTS().Return(timestamp.Timestamp{}).AnyTimes()
 	installDropDDLExecutor(t, proc, exec)
 	eng := mock_frontend.NewMockEngine(ctrl)
