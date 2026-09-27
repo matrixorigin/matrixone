@@ -303,6 +303,39 @@ select p.id, (select count(*)+1 from pages a where a.id=p.id and a.id<2
               having count(*)>=0 limit 1 offset 1) as v
 from pages p where p.id in (1, 2) order by p.id;
 
+-- Multi-conjunct and IN COUNT HAVING retain the ordinary correlated
+-- subquery domain; empty input either deletes the row or admits COUNT 0.
+select p.id, (select count(*) from pages a where a.id=p.id and a.id<2
+              having count(*)>0 and count(*)<2) as c
+from pages p where p.id in (1, 2) order by p.id;
+select p.id, (select count(*) from pages a where a.id=p.id and a.id<2
+              having count(*) in (0,1)) as c
+from pages p where p.id in (1, 2) order by p.id;
+select p.id, (with q(n) as (select p.parent_id from pages a where a.id=p.id and a.id<2)
+              select count(*) from q having count(*)>0 and count(*)<2) as c
+from pages p where p.id in (1, 2) order by p.id;
+select p.id, (with q(n) as (select p.parent_id from pages a where a.id=p.id and a.id<2)
+              select count(*) from q having count(*) in (0,1)) as c
+from pages p where p.id in (1, 2) order by p.id;
+
+-- A producer cast over skipped CASE rows must fail during planning, not
+-- evaluate 'bad' before the consumer chooses the inactive branch.
+create table guarded_values(id int primary key, val varchar(10));
+insert into guarded_values values (1,'bad'),(2,'2');
+select p.id, case when p.id=1 then 0 else
+  (with q(n) as (select cast(p.val as signed)) select n from q) end as c
+from guarded_values p order by p.id;
+-- Ordinary scalar subqueries preserve the same inactive/active CASE domain.
+select p.id, case when p.id=1 then 0 else (select cast(p.val as signed)) end as c
+from guarded_values p order by p.id;
+-- Filtering out bad rows does not prove the text column's entire type
+-- domain cast-safe; a total producer cast remains supported instead.
+select p.id, (with q(n) as (select cast(p.val as signed)) select n from q) as c
+from guarded_values p where p.id=2;
+select p.id, (with q(n) as (select cast(p.id as signed)) select n from q) as c
+from guarded_values p where p.id=2;
+drop table guarded_values;
+
 -- Empty outer input starts no parameter partitions.
 select p.id,
        (with recursive r(n) as (

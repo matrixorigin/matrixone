@@ -32,6 +32,29 @@ func TestLocalCTEOuterReferencesExecutablePlan(t *testing.T) {
 		sql  string
 	}{
 		{
+			name: "ordinary count having multiple conjuncts",
+			sql: `select p.n_nationkey, (select count(*) from tpch.nation a
+				where a.n_nationkey=p.n_nationkey having count(*)>0 and count(*)<2)
+				from tpch.nation p`,
+		},
+		{
+			name: "ordinary count having in list",
+			sql: `select p.n_nationkey, (select count(*) from tpch.nation a
+				where a.n_nationkey=p.n_nationkey having count(*) in (0,1))
+				from tpch.nation p`,
+		},
+		{
+			name: "local count having multiple conjuncts",
+			sql: `select p.n_nationkey, (with q(n) as
+				(select p.n_nationkey from tpch.nation a where a.n_nationkey=p.n_nationkey)
+				select count(*) from q having count(*)>0 and count(*)<2) from tpch.nation p`,
+		},
+		{
+			name: "safe producer cast",
+			sql: `select p.n_nationkey, (with q(n) as
+				(select cast(p.n_nationkey as signed)) select n from q) from tpch.nation p`,
+		},
+		{
 			name: "count expression having limit one",
 			sql: `select p.n_nationkey, (select count(*)+1 from tpch.nation a
 				where a.n_nationkey=p.n_nationkey having count(*)=1 limit 1)
@@ -385,6 +408,23 @@ func TestLocalCTEOuterReferencesRejectUnsafeDomains(t *testing.T) {
 			name: "explicit values expression executor",
 			sql: `select (with q(n) as (select p.n_regionkey+v.x from (values row(rand())) v(x))
 				select n from q) from tpch.nation p`,
+		},
+		{
+			name: "throwing producer cast in inactive case",
+			sql: `select p.n_nationkey, case when p.n_nationkey=1 then 0 else
+				(with q(n) as (select cast(p.n_name as signed)) select n from q) end
+				from tpch.nation p`,
+		},
+		{
+			name: "throwing producer cast in active case",
+			sql: `select p.n_nationkey, case when p.n_nationkey=1 then
+				(with q(n) as (select cast(p.n_name as signed)) select n from q) else 0 end
+				from tpch.nation p`,
+		},
+		{
+			name: "throwing producer cast on filtered domain",
+			sql: `select (with q(n) as (select cast(p.n_name as signed)) select n from q)
+				from tpch.nation p where p.n_nationkey=2`,
 		},
 		{
 			name: "volatile producer",

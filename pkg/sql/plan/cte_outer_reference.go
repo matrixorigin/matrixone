@@ -18,6 +18,7 @@ import (
 	"sort"
 
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
+	"github.com/matrixorigin/matrixone/pkg/container/types"
 	"github.com/matrixorigin/matrixone/pkg/pb/plan"
 )
 
@@ -309,6 +310,12 @@ func (d *localCTEDomain) admit() error {
 			return d.unsupported("producer operator " + n.NodeType.String())
 		}
 		for _, e := range localCTENodeExprs(n) {
+			// The replayed producer can run before a scalar consumer's CASE
+			// chooses its branch. A row-dependent cast may fail on a row
+			// that would never have evaluated the original subquery.
+			if !localCTEProducerTextCastsAreTotal(e) {
+				return d.unsupported("producer text cast can fail outside the consumer evaluation domain")
+			}
 			valid := true
 			walkLocalCTEExpr(e, func(x *plan.Expr) {
 				switch v := x.Expr.(type) {
@@ -339,6 +346,28 @@ func (d *localCTEDomain) admit() error {
 		d.values = append(d.values, keys[key])
 	}
 	return nil
+}
+
+// A text cast can fail for an arbitrary row even when it is deterministic.
+// Producer replay happens before the scalar consumer chooses a CASE branch;
+// keep casts with unproven string domains out of that eager evaluation path.
+func localCTEProducerTextCastsAreTotal(expr *plan.Expr) bool {
+	total := true
+	walkLocalCTEExpr(expr, func(e *plan.Expr) {
+		fn := e.GetF()
+		if fn == nil || fn.Func == nil || fn.Func.ObjName != "cast" {
+			return
+		}
+		if len(fn.Args) != 2 || fn.Args[1].GetT() == nil {
+			total = false
+			return
+		}
+		if types.T(fn.Args[0].Typ.Id).IsMySQLString() &&
+			!singleRowCastIsTotal(fn.Args[0].Typ, e.Typ) {
+			total = false
+		}
+	})
+	return total
 }
 
 // A bound literal/parameter cast has a statement-constant value (or error).

@@ -2970,11 +2970,22 @@ func (builder *QueryBuilder) detachCorrelatedCountHaving(root int32, ctx *BindCo
 				// existing grouped HAVING path already preserves that contract.
 				return nil, nil
 			}
-			if len(n.FilterList) != 1 || len(ctx.results) != 1 ||
+			if len(ctx.results) != 1 ||
 				!builder.scalarCountHavingProjection(root, ctx.results[0], ctx.aggregateTag) {
 				return nil, moerr.NewNYI(builder.GetContext(), "correlated local CTE: COUNT HAVING projection is not the aggregate result")
 			}
-			having := n.FilterList[0]
+			// Validate every conjunct before detaching any filter: both ordinary
+			// scalar queries and local CTE consumers can carry a bound IN list.
+			for _, cond := range n.FilterList {
+				if _, ok := replaceCountHavingResult(cond, ctx.aggregateTag,
+					GetColExpr(agg.AggList[0].Typ, ctx.aggregateTag, 0)); !ok {
+					return nil, moerr.NewNYI(builder.GetContext(), "correlated COUNT HAVING condition cannot be restored")
+				}
+			}
+			having, err := combinePlanExprsBalanced(builder.GetContext(), "and", n.FilterList)
+			if err != nil {
+				return nil, err
+			}
 			n.FilterList = nil
 			if n.NodeType == plan.Node_FILTER && parentID >= 0 {
 				builder.qry.Nodes[parentID].Children[0] = n.Children[0]
@@ -3001,6 +3012,16 @@ func replaceCountHavingResult(expr *plan.Expr, aggregateTag int32, result *plan.
 		for i, arg := range f.Args {
 			var ok bool
 			f.Args[i], ok = replaceCountHavingResult(arg, aggregateTag, result)
+			if !ok {
+				return nil, false
+			}
+		}
+		return copy, true
+	}
+	if list := copy.GetList(); list != nil {
+		for i, item := range list.List {
+			var ok bool
+			list.List[i], ok = replaceCountHavingResult(item, aggregateTag, result)
 			if !ok {
 				return nil, false
 			}

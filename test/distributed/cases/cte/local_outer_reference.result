@@ -409,6 +409,49 @@ from pages p where p.id in (1, 2) order by p.id;
 ➤ id[4,32,0]  ¦  v[-5,64,0]  𝄀
 1  ¦  null  𝄀
 2  ¦  null
+select p.id, (select count(*) from pages a where a.id=p.id and a.id<2
+having count(*)>0 and count(*)<2) as c
+from pages p where p.id in (1, 2) order by p.id;
+➤ id[4,32,0]  ¦  c[-5,64,0]  𝄀
+1  ¦  1  𝄀
+2  ¦  null
+select p.id, (select count(*) from pages a where a.id=p.id and a.id<2
+having count(*) in (0,1)) as c
+from pages p where p.id in (1, 2) order by p.id;
+➤ id[4,32,0]  ¦  c[-5,64,0]  𝄀
+1  ¦  1  𝄀
+2  ¦  0
+select p.id, (with q(n) as (select p.parent_id from pages a where a.id=p.id and a.id<2)
+select count(*) from q having count(*)>0 and count(*)<2) as c
+from pages p where p.id in (1, 2) order by p.id;
+➤ id[4,32,0]  ¦  c[-5,64,0]  𝄀
+1  ¦  1  𝄀
+2  ¦  null
+select p.id, (with q(n) as (select p.parent_id from pages a where a.id=p.id and a.id<2)
+select count(*) from q having count(*) in (0,1)) as c
+from pages p where p.id in (1, 2) order by p.id;
+➤ id[4,32,0]  ¦  c[-5,64,0]  𝄀
+1  ¦  1  𝄀
+2  ¦  0
+create table guarded_values(id int primary key, val varchar(10));
+insert into guarded_values values (1,'bad'),(2,'2');
+select p.id, case when p.id=1 then 0 else
+(with q(n) as (select cast(p.val as signed)) select n from q) end as c
+from guarded_values p order by p.id;
+correlated local CTE: producer text cast can fail outside the consumer evaluation domain is not yet implemented
+select p.id, case when p.id=1 then 0 else (select cast(p.val as signed)) end as c
+from guarded_values p order by p.id;
+➤ id[4,32,0]  ¦  c[-5,64,0]  𝄀
+1  ¦  0  𝄀
+2  ¦  2
+select p.id, (with q(n) as (select cast(p.val as signed)) select n from q) as c
+from guarded_values p where p.id=2;
+correlated local CTE: producer text cast can fail outside the consumer evaluation domain is not yet implemented
+select p.id, (with q(n) as (select cast(p.id as signed)) select n from q) as c
+from guarded_values p where p.id=2;
+➤ id[4,32,0]  ¦  c[-5,64,0]  𝄀
+2  ¦  2
+drop table guarded_values;
 select p.id,
 (with recursive r(n) as (
 select p.parent_id union all select n-1 from r where n>1
