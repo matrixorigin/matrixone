@@ -158,9 +158,41 @@ func TestPreparePublicationUsesFrontendExecutionPlan(t *testing.T) {
 	}
 }
 
-func TestPreparePublicationRejectsNonliteralPattern(t *testing.T) {
+func TestPreparePublicationLikeParameter(t *testing.T) {
+	ctx := NewMockCompilerContext(true)
+	for _, binaryPrepare := range []bool{false, true} {
+		t.Run(fmt.Sprintf("binary=%t", binaryPrepare), func(t *testing.T) {
+			var stmt tree.Prepare
+			if binaryPrepare {
+				parsed, err := mysql.Parse(ctx.GetContext(), "show publications like ?", 1)
+				require.NoError(t, err)
+				stmt = tree.NewPrepareStmt("stmt", parsed[0])
+			} else {
+				stmt = tree.NewPrepareString("stmt", "show publications like ?")
+			}
+			defer stmt.Free()
+			p, err := buildPrepare(stmt, ctx)
+			require.NoError(t, err)
+			prepared := p.GetDcl().GetPrepare()
+			require.Equal(t, []int32{int32(types.T_varchar)}, prepared.ParamTypes)
+			require.Empty(t, prepared.Schemas)
+			require.True(t, prepared.Plan.IsPrepare)
+			require.Nil(t, prepared.Plan.Plan)
+		})
+	}
+}
+
+func TestPreparePublicationRejectsUnsupportedPattern(t *testing.T) {
+	t.Run("invalid parameter offset", func(t *testing.T) {
+		ctx := NewMockCompilerContext(true)
+		stmts, err := mysql.Parse(ctx.GetContext(), "show publications like ?", 1)
+		require.NoError(t, err)
+		defer stmts[0].Free()
+		stmts[0].(*tree.ShowPublications).Like.Right.(*tree.ParamExpr).Offset = 2
+		_, _, err = getPreparePlan(ctx, stmts[0])
+		require.ErrorContains(t, err, "requires one LIKE parameter")
+	})
 	for _, sql := range []string{
-		"show publications like ?",
 		"show publications like concat('pub', ?)",
 		"show publications like 1",
 	} {
@@ -168,7 +200,7 @@ func TestPreparePublicationRejectsNonliteralPattern(t *testing.T) {
 			stmt := tree.NewPrepareString("stmt", sql)
 			defer stmt.Free()
 			_, err := buildPrepare(stmt, NewMockCompilerContext(true))
-			require.ErrorContains(t, err, "requires a string literal LIKE pattern")
+			require.ErrorContains(t, err, "requires a string literal or parameter marker LIKE pattern")
 		})
 	}
 }
@@ -8901,6 +8933,7 @@ func TestOrderedGroupConcatInNonEquiCorrelatedScalarSubqueryKeepsConfig(t *testi
 	require.NoError(t, err)
 
 	found := false
+	masked := false
 	for _, node := range logicPlan.GetQuery().Nodes {
 		for _, agg := range node.AggList {
 			fn := agg.GetF()
@@ -8914,9 +8947,18 @@ func TestOrderedGroupConcatInNonEquiCorrelatedScalarSubqueryKeepsConfig(t *testi
 				fn.AggConfigType,
 			)
 			require.NotEmpty(t, fn.AggConfig)
+			if len(fn.Args) == 2 && fn.Args[0].GetF() != nil &&
+				fn.Args[0].GetF().Func.ObjName == "case" {
+				masked = true
+				for _, arg := range fn.Args {
+					require.Equal(t, "case", arg.GetF().Func.ObjName)
+					require.False(t, arg.Typ.NotNullable)
+				}
+			}
 		}
 	}
 	require.True(t, found)
+	require.True(t, masked, "rewritten ordered GROUP_CONCAT keeps both masked arguments")
 }
 
 func TestMysqlCompatibilityMode(t *testing.T) {

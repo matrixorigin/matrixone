@@ -1873,9 +1873,15 @@ func initExecuteStmtParamWithResolverInSession(
 		if len(execPlan.Args) != numParams {
 			return nil, nil, nil, originSQL, false, moerr.NewInvalidInput(reqCtx, "Incorrect arguments to EXECUTE")
 		}
+		showPublicationPatternPositions := []int32(nil)
+		if show, ok := prepareStmt.PrepareStmt.(*tree.ShowPublications); ok && show.Like != nil {
+			if _, parameterized := show.Like.Right.(*tree.ParamExpr); parameterized {
+				showPublicationPatternPositions = []int32{0}
+			}
+		}
 		params, paramVals, paramIsBin, paramBinaryString, paramKinds, paramTypes, err := buildExecuteUserParamsWithMemberOfPositions(
 			cwft.proc, execPlan.Args, prepareStmt.jsonComparisonParamPositions,
-			prepareStmt.jsonMemberOfParamPositions, prepareStmt.inetNtoaParamPositions)
+			prepareStmt.jsonMemberOfParamPositions, prepareStmt.inetNtoaParamPositions, showPublicationPatternPositions)
 		if err != nil {
 			return nil, nil, nil, originSQL, false, err
 		}
@@ -3099,9 +3105,12 @@ func buildExecuteUserParamsWithMemberOfPositions(
 	paramDomains := make([]types.RuntimeStringDomain, len(args))
 	effectiveParamDomains := make([]types.RuntimeStringDomain, len(args))
 	paramKinds = make([]vector.PrepareParamKind, len(args))
-	var inetNtoaPositions []int32
+	var inetNtoaPositions, showPublicationPatternPositions []int32
 	if len(inetNtoaPositionsArg) > 0 {
 		inetNtoaPositions = inetNtoaPositionsArg[0]
+	}
+	if len(inetNtoaPositionsArg) > 1 {
+		showPublicationPatternPositions = inetNtoaPositionsArg[1]
 	}
 	for i, arg := range args {
 		exprImpl := arg.Expr.(*plan.Expr_V)
@@ -3163,6 +3172,19 @@ func buildExecuteUserParamsWithMemberOfPositions(
 			if err != nil {
 				return
 			}
+		}
+		if _, relevant := slices.BinarySearch(showPublicationPatternPositions, int32(i)); relevant {
+			// SQL EXECUTE transports all bindings as text. Preserve the
+			// assignment-time type so frontend SHOW applies the same type
+			// check as COM_STMT_EXECUTE rather than trusting that vector.
+			concreteType := resolvedSourceType.Oid
+			if concreteType == types.T_any {
+				concreteType = types.T(inferUserDefinedVarType(param).Id)
+			}
+			if paramTypes == nil {
+				paramTypes = make([]types.T, len(args))
+			}
+			paramTypes[i] = concreteType
 		}
 		if _, relevant := slices.BinarySearch(typedPositions, int32(i)); relevant {
 			var concreteType types.T

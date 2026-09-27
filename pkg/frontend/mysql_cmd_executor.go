@@ -3340,7 +3340,10 @@ func handleCreateAccount(ses FeSession, execCtx *ExecCtx, ca *tree.CreateAccount
 		return b.err
 	}
 
-	bh := ses.GetBackgroundExec(execCtx.reqCtx)
+	bh := ses.GetBackgroundExec(
+		execCtx.reqCtx,
+		&BackgroundExecOption{forcePessimisticRC: true},
+	)
 	defer bh.Close()
 
 	err = bh.Exec(execCtx.reqCtx, "begin;")
@@ -3837,6 +3840,16 @@ func doShowCollation(ses *Session, execCtx *ExecCtx, proc *process.Process, sc *
 }
 
 func handleShowPublications(ses FeSession, execCtx *ExecCtx, sp *tree.ShowPublications) error {
+	if sp.Like != nil {
+		if _, parameterized := sp.Like.Right.(*tree.ParamExpr); parameterized {
+			// SQL EXECUTE can leave its owned parameter vector on the session
+			// process. A bare SHOW must never borrow that previous binding.
+			cw, ok := execCtx.cw.(*TxnComputationWrapper)
+			if !ok || !cw.ifIsExeccute {
+				return moerr.NewInvalidInput(execCtx.reqCtx, "SHOW PUBLICATIONS LIKE parameter requires prepared execution")
+			}
+		}
+	}
 	return doShowPublications(execCtx.reqCtx, ses.(*Session), sp)
 }
 
@@ -5392,6 +5405,9 @@ func executeStmtWithWorkspace(ses FeSession,
 	}
 	execCtx.effectiveTxnDefaultDatabase = effectiveDefaultDatabase
 	execCtx.txnOpt.forcePessimisticObjectLifecycle = requiresPessimisticObjectLifecycleTxn(
+		ses, effectiveStmt, effectiveDefaultDatabase,
+	)
+	execCtx.txnOpt.forcePessimisticLifecycleMode = requiresPessimisticLifecycleModeTxn(
 		ses, effectiveStmt, effectiveDefaultDatabase,
 	)
 	execCtx.txnOpt.activeTxnAtStart = ses.GetTxnHandler().InActiveTxn()

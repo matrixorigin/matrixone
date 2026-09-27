@@ -50,6 +50,12 @@ func TestPersistedIntegerArgumentGeneratedAndCheck(t *testing.T) {
 		{name: "bit exact decimal", sqlType: "decimal(38,1)", argument: "a", callTemplate: "export_set(%s,'Y','N','',4)", decimal: true, want: []string{"NYNN", "YYNN"}},
 		{name: "bit overflow", sqlType: "decimal(38,1)", argument: "a", callTemplate: "export_set(%s,'Y','N','',4)", decimal: true, overflow: true},
 		{name: "hex explicit real", sqlType: "double", argument: "cast(a as double)", callTemplate: "hex(%s)", want: []string{"1", "2"}},
+		{name: "makedate approximate day", sqlType: "double", argument: "a", callTemplate: "makedate(2024,%s)", want: []string{"2024-01-02", "2024-01-02"}},
+		{name: "makedate exact day", sqlType: "decimal(38,1)", argument: "a", callTemplate: "makedate(2024,%s)", decimal: true, want: []string{"2024-01-02", "2024-01-03"}},
+		{name: "makedate exact year", sqlType: "decimal(38,1)", argument: "a", callTemplate: "makedate(%s,1)", decimal: true, want: []string{"2002-01-01", "2003-01-01"}},
+		{name: "maketime approximate hour", sqlType: "double", argument: "a", callTemplate: "cast(maketime(%s,0,1.25) as varchar)", want: []string{"02:00:01.25", "02:00:01.25"}},
+		{name: "maketime exact minute", sqlType: "decimal(38,1)", argument: "a", callTemplate: "cast(maketime(1,%s,1.25) as varchar)", decimal: true, want: []string{"01:02:01.25", "01:03:01.25"}},
+		{name: "makedate overflow", sqlType: "decimal(38,1)", argument: "a", callTemplate: "makedate(2024,%s)", decimal: true, overflow: true},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			call := "substring_index('a.b.c.d','.'," + tc.argument + ")"

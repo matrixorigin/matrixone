@@ -475,6 +475,9 @@ type QueryBuilder struct {
 	nextBindTag      int32
 	nextMsgTag       int32
 	nextSQLUdfCallID uint64
+	// Negative AuxIds identify memoized expression sources across every bind
+	// context that can contribute expressions to this query.
+	nextVolatileExprMemoID int32
 
 	isPrepareStatement     bool
 	mysqlCompatible        bool
@@ -950,7 +953,6 @@ type BindContext struct {
 	projectByExpr          map[string]int32
 	timeByAst              map[string]int32
 	whereFilters           []*plan.Expr
-	volatileExprMemoID     int32
 	flattenedVolatileExprs map[int32]*plan.Expr
 	// gapFillWhereFilters preserves the complete bound WHERE tree before
 	// subqueries are flattened into joins. Bounded GAPFILL inference must see
@@ -1108,6 +1110,9 @@ type baseBinder struct {
 	ctx       *BindContext
 	impl      Binder
 	boundCols []boundColumn
+	// Catalog FORMAT must choose its legacy string contract before binding
+	// precision: some historical source types (e.g. DATE) cannot cast to INT64.
+	persistedFormatCompatibility bool
 	// Integer consumers own the source domain of their operands. An enclosing
 	// default/assignment target must not pre-convert their numeric literals.
 	integerArgumentSourceContext     bool
