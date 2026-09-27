@@ -5,6 +5,7 @@ import (
 	"testing"
 	"time"
 
+	"github.com/matrixorigin/matrixone/pkg/objectio/ioutil"
 	"github.com/matrixorigin/matrixone/pkg/txn/rpc"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/catalog"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/db/testutil"
@@ -27,7 +28,13 @@ func TestIssue29415ReplayPromotionLateTable(t *testing.T) {
 	ctx := context.Background()
 	writeOpts := config.WithLongScanAndCKPOpts(nil, options.WithWalClientFactory(nil))
 	writer := testutil.NewTestEngine(ctx, ModuleName, t, writeOpts)
-	t.Cleanup(func() { writer.Close() })
+	writerClosed := false
+	t.Cleanup(func() {
+		if !writerClosed {
+			require.NoError(t, writer.DB.Close())
+		}
+		ioutil.Stop("")
+	})
 
 	replayOpts := config.WithLongScanAndCKPOpts(nil,
 		options.WithWalClientFactory(writeOpts.WalClientFactory))
@@ -62,6 +69,8 @@ func TestIssue29415ReplayPromotionLateTable(t *testing.T) {
 		replayTable = table.GetMeta().(*catalog.TableEntry)
 		return true
 	}, 10*time.Second, time.Millisecond)
+	require.NoError(t, writer.DB.Close())
+	writerClosed = true
 
 	var exists bool
 	var queryErr error
