@@ -55,5 +55,46 @@ select o.id, (with x as (select count(*) as c from inner_rows i where i.n = o.n)
               select c + 1 from x) as computed_count
 from outer_rows o order by o.id;
 
+-- Equality GROUP BY and null-rejecting HAVING retain their existing scalar semantics.
+select o.id,
+       (with x as (select max(i.v) as m from inner_rows i where i.n = o.n
+                   having max(i.v) > 0) select m from x) as having_max,
+       (with x as (select count(*) as c from inner_rows i where i.n = o.n
+                   group by i.n) select c from x) as grouped_count
+from outer_rows o where o.id in (1, 2, 4) order by o.id;
+
+-- A preceding raw scalar column must survive the range reaggregation.
+select o.id, (select i.v from inner_rows i where i.n = o.n) as raw_value,
+       (with x as (select max(i.n) as m from inner_rows i where i.n <= o.n)
+        select m from x) as range_max
+from outer_rows o where o.id in (1, 2, 4) order by o.id;
+
+-- A WHERE disjunction consumes both old scalar values and the new aggregate.
+select o.id from outer_rows o where
+    (with x as (select max(i.n) as m from inner_rows i where i.n <= o.n)
+     select m from x) > 0 or
+    (with x as (select sum(i.n) as s from inner_rows i where i.n < o.n)
+     select s from x) > 0 order by o.id;
+select o.id from outer_rows o where
+    exists (select 1 from inner_rows e where e.n = o.n and e.v is null) or
+    (with x as (select max(i.n) as m from inner_rows i where i.n <= o.n)
+     select m from x) < 0 order by o.id;
+
+-- Every selected COUNT output needs the zero-on-empty reconstruction.
+select o.id,
+       (0, 0) = (with x as (select count(*) as c, count(i.v) as d
+                           from inner_rows i where i.n = o.n)
+                 select c, d from x) as zero_pair,
+       (1, 0) = (with x as (select count(*) as c, count(i.v) as d
+                           from inner_rows i where i.n = o.n)
+                 select c, d from x) as null_value_pair
+from outer_rows o order by o.id;
+
+-- A lower global aggregate always emits one row; flattening two levels
+-- without preserving that row is rejected rather than fabricating COUNT zero.
+select o.id, (with a as (select max(i.n) as m from inner_rows i where i.n = o.n),
+              x as (select count(*) as c from a) select c from x) as nested_count
+from outer_rows o order by o.id;
+
 -- @teardown
 drop database test_scalar_cte_non_eq_agg;

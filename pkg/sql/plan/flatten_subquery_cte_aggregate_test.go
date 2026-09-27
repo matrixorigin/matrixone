@@ -95,6 +95,10 @@ func TestCorrelatedLocalCTENonEqAggregateRejectsUnsafeShapes(t *testing.T) {
 
 func TestCorrelatedLocalCTEAggregateSiblingOutputsSurviveRemapping(t *testing.T) {
 	for _, tc := range []struct{ name, sql string }{
+		{"raw scalar before range", `SELECT o.N_NATIONKEY,
+			(SELECT i.N_REGIONKEY FROM NATION i WHERE i.N_NATIONKEY = o.N_NATIONKEY),
+			(WITH x AS (SELECT MAX(i.N_NATIONKEY) AS m FROM NATION i WHERE i.N_NATIONKEY <= o.N_NATIONKEY)
+			 SELECT m FROM x) FROM NATION o`},
 		{"two siblings", `SELECT o.N_NATIONKEY,
 			(WITH x AS (SELECT MAX(i.N_NATIONKEY) AS m FROM NATION i WHERE i.N_NATIONKEY <= o.N_NATIONKEY) SELECT m FROM x),
 			(WITH x AS (SELECT SUM(i.N_NATIONKEY) AS s FROM NATION i WHERE i.N_NATIONKEY < o.N_NATIONKEY) SELECT s FROM x)
@@ -108,6 +112,15 @@ func TestCorrelatedLocalCTEAggregateSiblingOutputsSurviveRemapping(t *testing.T)
 			(WITH x AS (SELECT COUNT(*) AS c FROM NATION i WHERE i.N_NATIONKEY = o.N_NATIONKEY) SELECT c FROM x) +
 			(WITH x AS (SELECT COUNT(*) AS c FROM NATION i WHERE i.N_NATIONKEY <= o.N_NATIONKEY) SELECT c FROM x)
 			FROM NATION o`},
+		{"range scalars in filter disjunction", `SELECT o.N_NATIONKEY FROM NATION o WHERE
+			(WITH x AS (SELECT MAX(i.N_NATIONKEY) AS m FROM NATION i WHERE i.N_NATIONKEY <= o.N_NATIONKEY)
+			 SELECT m FROM x) > 0 OR
+			(WITH x AS (SELECT SUM(i.N_NATIONKEY) AS s FROM NATION i WHERE i.N_NATIONKEY < o.N_NATIONKEY)
+			 SELECT s FROM x) > 0`},
+		{"existential marker in filter disjunction", `SELECT o.N_NATIONKEY FROM NATION o WHERE
+			EXISTS (SELECT 1 FROM NATION e WHERE e.N_NATIONKEY = o.N_NATIONKEY) OR
+			(WITH x AS (SELECT MAX(i.N_NATIONKEY) AS m FROM NATION i WHERE i.N_NATIONKEY <= o.N_NATIONKEY)
+			 SELECT m FROM x) > 0`},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			logicPlan, err := runOneStmt(NewMockOptimizer(true), t, tc.sql)
@@ -156,6 +169,33 @@ func TestCorrelatedLocalCTEEqualityComputedEmptyResultFailsClosed(t *testing.T) 
 		_, err := runOneStmt(NewMockOptimizer(true), t, sql)
 		require.ErrorContains(t, err, "non-transparent correlated aggregate projection")
 	}
+}
+
+func TestCorrelatedLocalCTEEqualityAggregateBoundaries(t *testing.T) {
+	for _, tc := range []struct {
+		name, sql string
+	}{
+		{"having", `SELECT o.N_NATIONKEY, (WITH x AS
+			(SELECT MAX(i.N_NATIONKEY) AS m FROM NATION i WHERE i.N_NATIONKEY = o.N_NATIONKEY
+			 HAVING MAX(i.N_NATIONKEY) > 0) SELECT m FROM x) FROM NATION o`},
+		{"grouped", `SELECT o.N_NATIONKEY, (WITH x AS
+			(SELECT MAX(i.N_NATIONKEY) AS m FROM NATION i WHERE i.N_NATIONKEY = o.N_NATIONKEY
+			 GROUP BY i.N_NATIONKEY) SELECT m FROM x) FROM NATION o`},
+		{"count tuple", `SELECT o.N_NATIONKEY, (0, 0) = (WITH x AS
+			(SELECT COUNT(*) AS c, COUNT(i.N_REGIONKEY) AS d FROM NATION i
+			 WHERE i.N_NATIONKEY = o.N_NATIONKEY) SELECT c, d FROM x) FROM NATION o`},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			logicPlan, err := runOneStmt(NewMockOptimizer(true), t, tc.sql)
+			require.NoError(t, err)
+			assertReachablePlanHasNoCorrelatedExpr(t, logicPlan.GetQuery())
+		})
+	}
+	_, err := runOneStmt(NewMockOptimizer(true), t, `SELECT o.N_NATIONKEY,
+		(WITH a AS (SELECT MAX(i.N_NATIONKEY) AS m FROM NATION i
+		 WHERE i.N_NATIONKEY = o.N_NATIONKEY),
+		 x AS (SELECT COUNT(*) AS c FROM a) SELECT c FROM x) FROM NATION o`)
+	require.ErrorContains(t, err, "nested correlated aggregate cannot preserve empty-input rows")
 }
 
 func TestCorrelatedLocalCTEProjectionOnlyCorrelationPreserved(t *testing.T) {

@@ -492,8 +492,24 @@ func (builder *QueryBuilder) flattenSubqueryWithConsumer(
 	// adds the inner correlation key to the aggregate's GROUP BY.
 	var wrappedAgg *scalarAggregateProjectionPath
 	var wrappedAggCandidate bool
+	var wrappedAggRowOutputs []*scalarAggregateProjectionPath
+	var wrappedAggEmptyRowSuppressed bool
 	if subquery.Typ == plan.SubqueryRef_SCALAR && len(subCtx.aggregates) == 0 {
 		wrappedAgg, wrappedAggCandidate = builder.traceScalarAggregateProjection(subID)
+		if wrappedAgg != nil && subquery.Child != nil {
+			wrappedAggRowOutputs = make([]*scalarAggregateProjectionPath, len(subCtx.results))
+			for i := range wrappedAggRowOutputs {
+				path := builder.traceScalarAggregateProjectionAt(subID, int32(i))
+				if path == nil || path.aggNode != wrappedAgg.aggNode {
+					return 0, nil, moerr.NewNYI(builder.GetContext(),
+						"row comparison with a non-transparent correlated aggregate")
+				}
+				wrappedAggRowOutputs[i] = path
+			}
+		}
+		if wrappedAggCandidate && wrappedAgg == nil {
+			wrappedAggEmptyRowSuppressed = builder.scalarAggregateEmptyRowSuppressed(subID)
+		}
 	}
 
 	var correlatedHaving []*plan.Expr
@@ -537,7 +553,12 @@ func (builder *QueryBuilder) flattenSubqueryWithConsumer(
 			}
 			return builder.flattenScalarSubqueryWithNonEqAgg(nodeID, subID, subCtx, preds, ctx, subquery, wrappedAgg)
 		}
-		if len(preds) > 0 && wrappedAggCandidate && wrappedAgg == nil {
+		if len(preds) > 0 && wrappedAgg != nil &&
+			builder.subtreeContainsAggregate(wrappedAgg.aggNode.Children[0]) {
+			return 0, nil, moerr.NewNYI(builder.GetContext(),
+				"nested correlated aggregate cannot preserve empty-input rows")
+		}
+		if len(preds) > 0 && wrappedAggCandidate && wrappedAgg == nil && !wrappedAggEmptyRowSuppressed {
 			return 0, nil, moerr.NewNYI(builder.GetContext(),
 				"non-transparent correlated aggregate projection cannot preserve empty-input result")
 		}
@@ -584,15 +605,6 @@ func (builder *QueryBuilder) flattenSubqueryWithConsumer(
 		if len(joinPreds) > 0 && builder.findAggrCount(subCtx.aggregates) {
 			rewriteCount = true
 		}
-		// A transparent local CTE owns its COUNT in a separate binding
-		// context. The equality JOIN is already scalar; restore COUNT's
-		// zero-on-empty result without imposing range reaggregation's outer
-		// row-identity and single-binding restrictions.
-		if len(joinPreds) > 0 && wrappedAgg != nil &&
-			builder.findAggrCount([]*plan.Expr{wrappedAgg.aggNode.AggList[wrappedAgg.aggregatePos]}) {
-			rewriteCount = true
-		}
-
 		if scalarExistential {
 			if len(joinPreds) == 0 {
 				joinPreds = append(joinPreds, newSubqueryBoolConst(true))
@@ -688,6 +700,25 @@ func (builder *QueryBuilder) flattenSubqueryWithConsumer(
 			}, ctx)
 		}
 		if subquery.Child != nil {
+			if len(wrappedAggRowOutputs) > 0 && len(joinPreds) > 0 {
+				projects := make([]*plan.Expr, len(wrappedAggRowOutputs))
+				for i, path := range wrappedAggRowOutputs {
+					aggregate := path.aggNode.AggList[path.aggregatePos]
+					fn := aggregate.GetF()
+					if fn == nil || fn.Func == nil {
+						return 0, nil, moerr.NewNYI(builder.GetContext(),
+							"correlated aggregate row output is unavailable")
+					}
+					projected := GetColExpr(aggregate.Typ, path.aggNode.BindingTags[1], path.aggregatePos)
+					projected.Typ.NotNullable = false
+					projects[i], err = builder.restoreAggregateEmptyResult(projected, aggregate, fn.Func.ObjName)
+					if err != nil {
+						return 0, nil, err
+					}
+				}
+				newExpr, err := builder.generateRowComparisonWithProjects(subquery.Op, subquery.Child, projects, true)
+				return nodeID, newExpr, err
+			}
 			if finalizeProjection {
 				newExpr, err := builder.generateRowComparisonWithProjects(
 					subquery.Op, subquery.Child, postJoinProjections, true)
@@ -743,6 +774,18 @@ func (builder *QueryBuilder) flattenSubqueryWithConsumer(
 				scalarOuterResults[0],
 				makePlan2NullConstExprWithType(),
 			})
+			if err != nil {
+				return 0, nil, err
+			}
+		}
+		if !finalizeProjection && wrappedAgg != nil && len(joinPreds) > 0 {
+			aggregate := wrappedAgg.aggNode.AggList[wrappedAgg.aggregatePos]
+			fn := aggregate.GetF()
+			if fn == nil || fn.Func == nil {
+				return 0, nil, moerr.NewNYI(builder.GetContext(),
+					"correlated aggregate output is unavailable")
+			}
+			retExpr, err = builder.restoreAggregateEmptyResult(retExpr, aggregate, fn.Func.ObjName)
 			if err != nil {
 				return 0, nil, err
 			}
@@ -2330,9 +2373,9 @@ type scalarOuterOutput struct {
 	aliases [][2]int32
 }
 
-// scalarProjectionAliases records only pure column forwarding through a
-// PROJECT chain. Later projection cleanup may use any of these column tags
-// for the same value.
+// scalarProjectionAliases records pure column forwarding through transparent
+// projections and filters down to the output owner. Projection cleanup may
+// use any of these column tags for the same value.
 func (builder *QueryBuilder) scalarProjectionAliases(childID int32, expr *plan.Expr) [][2]int32 {
 	var aliases [][2]int32
 	for i := 0; i < len(builder.qry.Nodes); i++ {
@@ -2354,6 +2397,18 @@ func (builder *QueryBuilder) scalarProjectionAliases(childID int32, expr *plan.E
 			if len(child.BindingTags) >= 2 &&
 				((col.RelPos == child.BindingTags[0] && col.ColPos >= 0 && int(col.ColPos) < len(child.GroupBy)) ||
 					(col.RelPos == child.BindingTags[1] && col.ColPos >= 0 && int(col.ColPos) < len(child.AggList))) {
+				aliases = append(aliases, [2]int32{col.RelPos, col.ColPos})
+			}
+			return aliases
+		case plan.Node_FILTER, plan.Node_SORT:
+			if len(child.Children) != 1 {
+				return aliases
+			}
+			childID = child.Children[0]
+		case plan.Node_TABLE_SCAN, plan.Node_MATERIAL_SCAN:
+			if len(child.BindingTags) == 1 && child.TableDef != nil &&
+				col.RelPos == child.BindingTags[0] && col.ColPos >= 0 &&
+				int(col.ColPos) < len(child.TableDef.Cols) {
 				aliases = append(aliases, [2]int32{col.RelPos, col.ColPos})
 			}
 			return aliases
@@ -2448,7 +2503,7 @@ func (builder *QueryBuilder) collectScalarOuterOutputs(nodeID, outerTag, baseCol
 					return false
 				}
 				marker := [2]int32{node.BindingTags[0], 0}
-				if neededByProjection[marker] > 0 {
+				if neededByProjection[marker] > 0 || scalarMarkerNeededByWhere(ctx.whereFilters, marker) {
 					add(marker, plan.Type{Id: int32(types.T_bool)})
 				}
 				return true
@@ -2472,6 +2527,31 @@ func (builder *QueryBuilder) collectScalarOuterOutputs(nodeID, outerTag, baseCol
 	return outputs, true
 }
 
+// A stand-alone EXISTS filter may become a SEMI/ANTI join and no longer
+// expose its marker. Composite WHERE expressions retain the marker value.
+func scalarMarkerNeededByWhere(filters []*plan.Expr, marker [2]int32) bool {
+	for _, filter := range filters {
+		if !containsTag(filter, marker[0]) {
+			continue
+		}
+		for expr := filter; expr != nil; {
+			if col := expr.GetCol(); col != nil {
+				if col.RelPos == marker[0] && col.ColPos == marker[1] {
+					break
+				}
+				return true
+			}
+			fn := expr.GetF()
+			if fn == nil || fn.Func == nil || len(fn.Args) != 1 ||
+				(fn.Func.ObjName != "istrue" && fn.Func.ObjName != "not") {
+				return true
+			}
+			expr = fn.Args[0]
+		}
+	}
+	return false
+}
+
 func (builder *QueryBuilder) traceScalarAggregateProjection(subID int32) (*scalarAggregateProjectionPath, bool) {
 	// A non-transparent wrapper or JOIN branch can hide an aggregate. Return
 	// the candidate bit so unsafe rewrites fail closed.
@@ -2479,36 +2559,82 @@ func (builder *QueryBuilder) traceScalarAggregateProjection(subID int32) (*scala
 	if !candidate {
 		return nil, false
 	}
+	return builder.traceScalarAggregateProjectionAt(subID, 0), true
+}
+
+func (builder *QueryBuilder) traceScalarAggregateProjectionAt(subID, outputPos int32) *scalarAggregateProjectionPath {
 	path := &scalarAggregateProjectionPath{}
-	outputPos := int32(0)
 	for {
+		if subID < 0 || int(subID) >= len(builder.qry.Nodes) || builder.qry.Nodes[subID] == nil {
+			return nil
+		}
 		node := builder.qry.Nodes[subID]
 		if node.NodeType == plan.Node_AGG {
 			if len(node.GroupBy) != 0 || len(node.Children) != 1 || len(node.BindingTags) < 2 ||
 				outputPos < 0 || int(outputPos) >= len(node.AggList) {
-				return nil, true
+				return nil
 			}
 			path.aggNode = node
 			path.aggregatePos = outputPos
-			return path, true
+			return path
 		}
 		if node.NodeType != plan.Node_PROJECT || len(node.Children) != 1 ||
 			len(node.BindingTags) != 1 || node.Limit != nil || node.Offset != nil ||
 			len(node.OrderBy) != 0 || node.RankOption != nil ||
 			outputPos < 0 || int(outputPos) >= len(node.ProjectList) {
-			return nil, true
+			return nil
 		}
 		child := builder.qry.Nodes[node.Children[0]]
 		selected := node.ProjectList[outputPos].GetCol()
 		if selected == nil || selected.ColPos < 0 ||
 			(child.NodeType == plan.Node_AGG && (len(child.BindingTags) < 2 || selected.RelPos != child.BindingTags[1])) ||
 			(child.NodeType == plan.Node_PROJECT && (len(child.BindingTags) != 1 || selected.RelPos != child.BindingTags[0])) {
-			return nil, true
+			return nil
 		}
 		path.projects = append(path.projects, node)
 		outputPos = selected.ColPos
 		subID = node.Children[0]
 	}
+}
+
+// A grouped aggregate has no empty-input row. An ungrouped aggregate followed
+// by a null-rejecting HAVING predicate also loses its row on empty input. In
+// both cases the existing scalar join correctly exposes NULL for no match.
+func (builder *QueryBuilder) scalarAggregateEmptyRowSuppressed(subID int32) bool {
+	var having []*plan.Expr
+	for subID >= 0 && int(subID) < len(builder.qry.Nodes) {
+		node := builder.qry.Nodes[subID]
+		if node == nil {
+			return false
+		}
+		switch node.NodeType {
+		case plan.Node_PROJECT, plan.Node_FILTER:
+			if len(node.Children) != 1 || node.Limit != nil || node.Offset != nil || node.RankOption != nil {
+				return false
+			}
+			if node.NodeType == plan.Node_FILTER {
+				having = append(having, node.FilterList...)
+			}
+			subID = node.Children[0]
+		case plan.Node_AGG:
+			if len(node.GroupBy) > 0 {
+				return true
+			}
+			if len(node.BindingTags) < 2 || !allAggregatesReturnNullOnEmpty(node.AggList) {
+				return false
+			}
+			having = append(having, node.FilterList...)
+			for _, filter := range having {
+				if nullPropagatesFromAggregate(filter, node.BindingTags[1]) {
+					return true
+				}
+			}
+			return false
+		default:
+			return false
+		}
+	}
+	return false
 }
 
 // A raw inner column becomes NULL on the unmatched side of a LEFT JOIN, so

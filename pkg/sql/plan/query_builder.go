@@ -1850,17 +1850,16 @@ func (builder *QueryBuilder) remapAllColRefsForConsumer(
 		groupTag := node.BindingTags[0]
 		aggregateTag := node.BindingTags[1]
 		groupSize := int32(len(node.GroupBy))
-		// Child remapping consumes input references. Snapshot demand for
-		// passthrough aliases before their GROUP BY inputs are remapped.
-		aliasDemand := make(map[[2]int32]bool)
-		for _, alias := range builder.scalarReaggAliases[nodeID] {
-			aliasDemand[alias.ref] = colRefCnt[alias.ref] > 0
-		}
-
 		// HAVING is evaluated inside the aggregate node, so its output refs are
 		// consumers even when the outer projection does not expose them.
 		for _, expr := range node.FilterList {
 			increaseRefCnt(expr, 1, colRefCnt)
+		}
+		// Child remapping consumes input references. Snapshot demand for
+		// passthrough aliases after all aggregate-local consumers are counted.
+		aliasDemand := make(map[[2]int32]bool)
+		for _, alias := range builder.scalarReaggAliases[nodeID] {
+			aliasDemand[alias.ref] = colRefCnt[alias.ref] > 0
 		}
 
 		neededAggCount := int32(0)
