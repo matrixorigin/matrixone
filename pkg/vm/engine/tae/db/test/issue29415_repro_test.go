@@ -19,6 +19,18 @@ import (
 	"github.com/stretchr/testify/require"
 )
 
+type replayPromotionCase struct {
+	name                 string
+	createSettings       bool
+	settingsJSON         string
+	expectTrigger        bool
+	expectError          string
+	cancelBeforeCall     bool
+	preexistingLockMerge bool
+	deleteSettingsRow    bool
+	futureWriterClock    bool
+}
+
 func TestIssue29415ReplayPromotionLateTableAndSettings(t *testing.T) {
 	setting := merge.DefaultMergeSettings.Clone()
 	setting.VacuumTopK++
@@ -26,17 +38,9 @@ func TestIssue29415ReplayPromotionLateTableAndSettings(t *testing.T) {
 	shortPoints.L0MaxCountDecayControl = shortPoints.L0MaxCountDecayControl[:3]
 	extraPoints := setting.Clone()
 	extraPoints.L0MaxCountDecayControl = append(extraPoints.L0MaxCountDecayControl, 0.9)
-	for _, tc := range []struct {
-		name                 string
-		createSettings       bool
-		settingsJSON         string
-		expectTrigger        bool
-		expectError          string
-		cancelBeforeCall     bool
-		preexistingLockMerge bool
-		deleteSettingsRow    bool
-	}{
+	for _, tc := range []replayPromotionCase{
 		{name: "late setting", createSettings: true, settingsJSON: setting.String(), expectTrigger: true, cancelBeforeCall: true},
+		{name: "future WAL timestamp", createSettings: true, settingsJSON: setting.String(), expectTrigger: true, futureWriterClock: true},
 		{name: "settings table absent"},
 		{name: "settings row absent", createSettings: true},
 		{name: "settings row deleted", createSettings: true, settingsJSON: setting.String(), deleteSettingsRow: true},
@@ -46,24 +50,18 @@ func TestIssue29415ReplayPromotionLateTableAndSettings(t *testing.T) {
 		{name: "optional replay lock merge job", preexistingLockMerge: true},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
-			runReplayPromotionLateSettings(t, tc.createSettings, tc.settingsJSON, tc.expectTrigger, tc.expectError, tc.cancelBeforeCall, tc.preexistingLockMerge, tc.deleteSettingsRow)
+			runReplayPromotionLateSettings(t, tc)
 		})
 	}
 }
 
-func runReplayPromotionLateSettings(
-	t *testing.T,
-	createSettings bool,
-	settingsJSON string,
-	expectTrigger bool,
-	expectError string,
-	cancelBeforeCall bool,
-	preexistingLockMerge bool,
-	deleteSettingsRow bool,
-) {
+func runReplayPromotionLateSettings(t *testing.T, tc replayPromotionCase) {
 	t.Helper()
 	ctx := context.Background()
 	writeOpts := config.WithLongScanAndCKPOpts(nil, options.WithWalClientFactory(nil))
+	if tc.futureWriterClock {
+		writeOpts.Clock = types.NewMockHLCClock(time.Now().Add(time.Hour).UnixNano())
+	}
 	writer := testutil.NewTestEngine(ctx, ModuleName, t, writeOpts)
 	writerClosed := false
 	t.Cleanup(func() {
@@ -86,7 +84,7 @@ func runReplayPromotionLateSettings(
 	require.NoError(t, err)
 	rel, err := database.CreateRelation(schema)
 	require.NoError(t, err)
-	if createSettings {
+	if tc.createSettings {
 		settingsSchema := catalog.NewEmptySchema(pkgcatalog.MO_MERGE_SETTINGS)
 		require.NoError(t, settingsSchema.AppendCol("account_id", types.T_uint32.ToType()))
 		require.NoError(t, settingsSchema.AppendPKCol("tid", types.T_uint64.ToType(), 0))
@@ -98,8 +96,8 @@ func runReplayPromotionLateSettings(
 		require.NoError(t, err)
 		settingsTable, err := settingsRel.CreateRelation(settingsSchema)
 		require.NoError(t, err)
-		if settingsJSON != "" {
-			jsonValue, err := types.ParseStringToByteJson(settingsJSON)
+		if tc.settingsJSON != "" {
+			jsonValue, err := types.ParseStringToByteJson(tc.settingsJSON)
 			require.NoError(t, err)
 			encoded, err := types.EncodeJson(jsonValue)
 			require.NoError(t, err)
@@ -118,7 +116,7 @@ func runReplayPromotionLateSettings(
 		}
 	}
 	require.NoError(t, txn.Commit(ctx))
-	if deleteSettingsRow {
+	if tc.deleteSettingsRow {
 		deleteTxn, err := writer.StartTxn(nil)
 		require.NoError(t, err)
 		settingsDB, err := deleteTxn.GetDatabaseByID(pkgcatalog.MO_CATALOG_ID)
@@ -149,21 +147,27 @@ func runReplayPromotionLateSettings(
 	}, 10*time.Second, time.Millisecond)
 	require.NoError(t, writer.DB.Close())
 	writerClosed = true
+	if tc.futureWriterClock {
+		maxCommitted := replay.TxnMgr.MaxCommittedTS.Load()
+		require.Greater(t, maxCommitted.Physical(), time.Now().UnixNano(), "WAL commit must be ahead of the replay TN wall clock")
+		now := replay.TxnMgr.Now()
+		require.True(t, now.LT(maxCommitted), "promotion must use the replayed commit timestamp when the local clock is behind")
+	}
 
-	if cancelBeforeCall {
+	if tc.cancelBeforeCall {
 		canceled, cancel := context.WithCancel(ctx)
 		cancel()
 		require.ErrorIs(t, replay.Controller.SwitchTxnMode(canceled, 2, ""), context.Canceled)
 	}
-	if preexistingLockMerge {
+	if tc.preexistingLockMerge {
 		require.NoError(t, db.AddCronJob(replay.DB, db.CronJobs_Name_GCLockMerge, false))
 		require.ErrorContains(t, replay.Controller.SwitchTxnMode(ctx, 2, ""), "already exists before promotion")
 		require.Nil(t, replay.CronJobs.GetJob(db.CronJobs_Name_GCCheckpoint))
 		db.RemoveCronJob(replay.DB, db.CronJobs_Name_GCLockMerge)
 	}
 	err = replay.Controller.SwitchTxnMode(ctx, 2, "")
-	if expectError != "" {
-		require.ErrorContains(t, err, expectError)
+	if tc.expectError != "" {
+		require.ErrorContains(t, err, tc.expectError)
 		require.True(t, replay.IsReplayMode())
 		require.EqualError(t, replay.Controller.SwitchTxnMode(ctx, 2, ""), err.Error(), "failed handoff must not retry")
 		_, startErr := replay.StartTxn(nil)
@@ -179,7 +183,7 @@ func runReplayPromotionLateSettings(
 	answer, err := replay.MergeScheduler.Query(ctx, catalog.ToMergeTable(replayTable))
 	require.NoError(t, err)
 	require.False(t, answer.NotExists, "scheduler missed a table committed by WAL replay")
-	if expectTrigger {
+	if tc.expectTrigger {
 		require.NotEmpty(t, answer.BaseTrigger, "scheduler missed settings committed by WAL replay")
 	} else {
 		require.Empty(t, answer.BaseTrigger)
