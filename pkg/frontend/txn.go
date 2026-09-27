@@ -729,9 +729,15 @@ func requiresPessimisticObjectLifecycleTxn(
 // fixed caller snapshot is part of their semantics. They must use pessimistic
 // mode so lifecycle barriers are physical locks, but forcing RC would change
 // existing SI behavior.
-func requiresPessimisticLifecycleModeTxn(stmt tree.Statement) bool {
-	switch stmt.(type) {
-	case *tree.AlterTable, *tree.RenameTable,
+func requiresPessimisticLifecycleModeTxn(
+	ses FeSession,
+	stmt tree.Statement,
+	defaultDatabase string,
+) bool {
+	switch st := stmt.(type) {
+	case *tree.AlterTable:
+		return st.Table == nil || !isSessionTemporaryTable(ses, st.Table, defaultDatabase)
+	case *tree.RenameTable,
 		*tree.CloneTable, *tree.CloneDatabase,
 		*tree.DataBranchCreateTable, *tree.DataBranchCreateDatabase:
 		return true

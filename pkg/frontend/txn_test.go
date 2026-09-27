@@ -2392,11 +2392,26 @@ func TestRequiresPessimisticObjectLifecycleTxn(t *testing.T) {
 		&tree.DataBranchCreateTable{},
 		&tree.DataBranchCreateDatabase{},
 	} {
-		require.True(t, requiresPessimisticLifecycleModeTxn(stmt))
+		require.True(t, requiresPessimisticLifecycleModeTxn(nil, stmt, ""))
 		require.False(t, requiresPessimisticObjectLifecycleTxn(nil, stmt, ""))
 	}
-	require.False(t, requiresPessimisticLifecycleModeTxn(&tree.TruncateTable{}))
-	require.False(t, requiresPessimisticLifecycleModeTxn(&tree.Select{}))
+	require.False(t, requiresPessimisticLifecycleModeTxn(nil, &tree.TruncateTable{}, ""))
+	require.False(t, requiresPessimisticLifecycleModeTxn(nil, &tree.Select{}, ""))
+
+	// The session alias wins over a persistent table of the same name, while
+	// qualified names and prepared-statement default databases remain scoped.
+	temp := tree.NewTableName(tree.Identifier("alias"), tree.ObjectNamePrefix{}, nil)
+	qualifiedTemp := tree.NewTableName(tree.Identifier("alias"), tree.ObjectNamePrefix{
+		SchemaName: tree.Identifier("db"), ExplicitSchema: true,
+	}, nil)
+	qualifiedOther := tree.NewTableName(tree.Identifier("alias"), tree.ObjectNamePrefix{
+		SchemaName: tree.Identifier("other"), ExplicitSchema: true,
+	}, nil)
+	require.False(t, requiresPessimisticLifecycleModeTxn(ses, &tree.AlterTable{Table: temp}, "db"))
+	require.False(t, requiresPessimisticLifecycleModeTxn(ses, &tree.AlterTable{Table: qualifiedTemp}, "other"))
+	require.True(t, requiresPessimisticLifecycleModeTxn(ses, &tree.AlterTable{Table: temp}, "other"))
+	require.True(t, requiresPessimisticLifecycleModeTxn(ses, &tree.AlterTable{Table: qualifiedOther}, "db"))
+	require.True(t, requiresPessimisticLifecycleModeTxn(nil, &tree.AlterTable{Table: qualifiedTemp}, "db"))
 }
 
 func TestCreateRollsBackPublishedGenerationOnStorageInitFailure(t *testing.T) {
