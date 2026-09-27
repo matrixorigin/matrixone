@@ -310,6 +310,13 @@ func (s *Scope) DropDatabase(c *Compile) error {
 		); err != nil {
 			return err
 		}
+		// Keep this point after the nested DROP: a canceled database DROP must
+		// roll back both its catalog writes and its external table actions.
+		if _, _, ok := fault.TriggerFaultWithContext(c.proc.Ctx, "drop_database_after_table"); ok {
+			if err := c.proc.Ctx.Err(); err != nil {
+				return err
+			}
+		}
 	}
 
 	sql := s.Plan.GetDdl().GetDropDatabase().GetCheckFKSql()
