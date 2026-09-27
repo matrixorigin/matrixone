@@ -490,6 +490,17 @@ func (c *Controller) handleToWriteCmd(cmd *controlCmd) {
 	if err = c.db.ReplayCtl.StopForWrite(ctx); err != nil {
 		return
 	}
+	// The transaction manager shares Opts.Clock. Replay advances the committed
+	// watermark, but not that clock; align it before any write-capable worker
+	// can allocate a prepare timestamp older than its transaction's start.
+	maxCommitted := c.db.TxnMgr.MaxCommittedTS.Load()
+	if now := c.db.TxnMgr.Now(); now.LE(maxCommitted) {
+		c.db.Opts.Clock.Update(maxCommitted.ToTimestamp())
+		if now = c.db.TxnMgr.Now(); now.LE(maxCommitted) {
+			err = moerr.NewTxnControlErrorNoCtxf("promotion clock did not advance past replayed commit")
+			return
+		}
+	}
 
 	source := &merge.TNCatalogEventSource{
 		Catalog: c.db.Catalog, TxnManager: c.db.TxnMgr,
@@ -522,6 +533,9 @@ func (c *Controller) handleToWriteCmd(cmd *controlCmd) {
 		CronJobs_Name_GCLockMerge,
 		CronJobs_Name_GCDisk,
 	} {
+		if name == CronJobs_Name_GCDisk && c.db.Opts.GCCfg.DisableGC {
+			continue
+		}
 		if err = AddCronJob(c.db, name, true); err != nil {
 			return
 		}

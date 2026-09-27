@@ -1,6 +1,7 @@
 # Replay promotion merge bootstrap (#29415)
 
-Status: revision for design review. Implementation PR: pending.
+Status: approved local promotion contract; corrective review follow-up below.
+Implementation PR: https://github.com/matrixorigin/matrixone/pull/29421.
 Base: `origin/main` at `5a96035fc792b07b7a28e2f509dc0dcd4236e048`.
 
 ## Scope and evidence
@@ -166,3 +167,28 @@ can invoke this mode switch. Do not submit a production implementation until
 this exact design revision has been reviewed and approved under `mo-dev`.
 
 [repro]: https://github.com/XuPeng-SH/matrixone/blob/9599e3dbe5/pkg/vm/engine/tae/db/test/issue29415_repro_test.go
+
+## Review corrections (2026-09-27)
+
+Independent `gpt-6-sol` / `xhigh` design review classified these as corrections
+to the approved local invariants, with no new service, protocol, or recovery
+contract. The approved revision remains `f41de8c29248e05af185ee3bf973454e3d89f4a7`.
+
+- A future WAL timestamp must advance the shared DB/transaction-manager clock,
+  not just the offline settings snapshot. After replay joins, update that clock
+  only when behind the replay high-water mark and verify a strictly newer
+  timestamp before enabling writes. A clock that cannot advance takes the
+  existing terminal failure path. No normal transaction code changes.
+- In sequence step 4, disk GC is conditional on `DisableGC == false`; only
+  checkpoint and lock-merge cron jobs are unconditional. Preserve the existing
+  normal-startup cron specification rather than changing production behavior.
+- The promotion-only decoder rejects unsafe tombstone counts, nonpositive
+  overlap depth, and nonpositive vacuum decay duration before starting the
+  scheduler. Existing normal settings parsing and scheduling are unchanged.
+
+Validation extends the existing two-engine fixture with a real committed write
+after promotion, exact recovered trigger content, disabled GC, and failed clock
+advancement. Pure settings-domain cases use a lightweight unit table, with one
+invalid persisted setting retaining the terminal failure/retry/admission oracle.
+Clock update and domain validation occur once per promotion (constant work per
+setting); no new worker, retained state, or hot-path operation is introduced.

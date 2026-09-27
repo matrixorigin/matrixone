@@ -1,3 +1,17 @@
+// Copyright 2026 Matrix Origin
+//
+// Licensed under the Apache License, Version 2.0 (the "License");
+// you may not use this file except in compliance with the License.
+// You may obtain a copy of the License at
+//
+//     http://www.apache.org/licenses/LICENSE-2.0
+//
+// Unless required by applicable law or agreed to in writing, software
+// distributed under the License is distributed on an "AS IS" BASIS,
+// WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+// See the License for the specific language governing permissions and
+// limitations under the License.
+
 package test
 
 import (
@@ -8,6 +22,7 @@ import (
 	pkgcatalog "github.com/matrixorigin/matrixone/pkg/catalog"
 	"github.com/matrixorigin/matrixone/pkg/container/types"
 	"github.com/matrixorigin/matrixone/pkg/objectio/ioutil"
+	"github.com/matrixorigin/matrixone/pkg/pb/timestamp"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/catalog"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/containers"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/db"
@@ -29,7 +44,13 @@ type replayPromotionCase struct {
 	preexistingLockMerge bool
 	deleteSettingsRow    bool
 	futureWriterClock    bool
+	disableGC            bool
+	ignoreClockUpdate    bool
 }
+
+type promotionUnresponsiveClock struct{ *types.MockHLCClock }
+
+func (promotionUnresponsiveClock) Update(timestamp.Timestamp) {}
 
 func TestIssue29415ReplayPromotionLateTableAndSettings(t *testing.T) {
 	setting := merge.DefaultMergeSettings.Clone()
@@ -38,10 +59,15 @@ func TestIssue29415ReplayPromotionLateTableAndSettings(t *testing.T) {
 	shortPoints.L0MaxCountDecayControl = shortPoints.L0MaxCountDecayControl[:3]
 	extraPoints := setting.Clone()
 	extraPoints.L0MaxCountDecayControl = append(extraPoints.L0MaxCountDecayControl, 0.9)
+	negativeCount := setting.Clone()
+	negativeCount.TombstoneL1Count = -1
 	for _, tc := range []replayPromotionCase{
 		{name: "late setting", createSettings: true, settingsJSON: setting.String(), expectTrigger: true, cancelBeforeCall: true},
 		{name: "future WAL timestamp", createSettings: true, settingsJSON: setting.String(), expectTrigger: true, futureWriterClock: true},
 		{name: "settings table absent"},
+		{name: "disabled disk GC", disableGC: true},
+		{name: "clock cannot advance", futureWriterClock: true, ignoreClockUpdate: true, expectError: "promotion clock did not advance"},
+		{name: "negative tombstone count", createSettings: true, settingsJSON: negativeCount.String(), expectError: "invalid merge settings counts"},
 		{name: "settings row absent", createSettings: true},
 		{name: "settings row deleted", createSettings: true, settingsJSON: setting.String(), deleteSettingsRow: true},
 		{name: "invalid setting", createSettings: true, settingsJSON: `{"bad_settings":100}`, expectError: "probable corrupted merge settings"},
@@ -73,6 +99,12 @@ func runReplayPromotionLateSettings(t *testing.T, tc replayPromotionCase) {
 
 	replayOpts := config.WithLongScanAndCKPOpts(nil,
 		options.WithWalClientFactory(writeOpts.WalClientFactory))
+	if tc.disableGC {
+		replayOpts.GCCfg = &options.GCCfg{DisableGC: true}
+	}
+	if tc.ignoreClockUpdate {
+		replayOpts.Clock = promotionUnresponsiveClock{types.NewMockHLCClock(time.Now().UnixNano())}
+	}
 	replay := testutil.NewReplayTestEngine(ctx, ModuleName, t, replayOpts)
 	t.Cleanup(func() { replay.Close() })
 
@@ -165,6 +197,7 @@ func runReplayPromotionLateSettings(t *testing.T, tc replayPromotionCase) {
 		require.Nil(t, replay.CronJobs.GetJob(db.CronJobs_Name_GCCheckpoint))
 		db.RemoveCronJob(replay.DB, db.CronJobs_Name_GCLockMerge)
 	}
+	replayedCommit := *replay.TxnMgr.MaxCommittedTS.Load()
 	err = replay.Controller.SwitchTxnMode(ctx, 2, "")
 	if tc.expectError != "" {
 		require.ErrorContains(t, err, tc.expectError)
@@ -179,12 +212,30 @@ func runReplayPromotionLateSettings(t *testing.T, tc replayPromotionCase) {
 	}
 	require.NoError(t, err)
 	require.True(t, replay.IsWriteMode())
-	require.NoError(t, db.CheckCronJobs(replay.DB, db.DBTxnMode_Write))
+	if tc.disableGC {
+		require.Nil(t, replay.CronJobs.GetJob(db.CronJobs_Name_GCDisk))
+		require.NotNil(t, replay.CronJobs.GetJob(db.CronJobs_Name_GCCheckpoint))
+		require.NotNil(t, replay.CronJobs.GetJob(db.CronJobs_Name_GCLockMerge))
+	} else {
+		require.NoError(t, db.CheckCronJobs(replay.DB, db.DBTxnMode_Write))
+	}
+	// Prove write admission is usable, including a WAL clock ahead of local time.
+	writeTxn, err := replay.StartTxn(nil)
+	require.NoError(t, err)
+	_, err = writeTxn.CreateDatabase("after_promotion", "", "")
+	require.NoError(t, err)
+	require.NoError(t, writeTxn.Commit(ctx))
+	commitTS := writeTxn.GetCommitTS()
+	require.True(t, commitTS.GT(&replayedCommit))
 	answer, err := replay.MergeScheduler.Query(ctx, catalog.ToMergeTable(replayTable))
 	require.NoError(t, err)
 	require.False(t, answer.NotExists, "scheduler missed a table committed by WAL replay")
 	if tc.expectTrigger {
-		require.NotEmpty(t, answer.BaseTrigger, "scheduler missed settings committed by WAL replay")
+		expected := merge.DefaultMergeSettings.Clone()
+		expected.VacuumTopK++
+		trigger, err := expected.ToMMsgTaskTrigger()
+		require.NoError(t, err)
+		require.Equal(t, trigger.String(), answer.BaseTrigger, "scheduler must recover the exact nondefault settings")
 	} else {
 		require.Empty(t, answer.BaseTrigger)
 	}

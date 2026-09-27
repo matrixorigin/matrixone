@@ -28,6 +28,40 @@ func promotionTable(id uint64) catalog.MergeTable {
 	return catalog.ToMergeTable(catalog.MockTableEntryWithDB(db, id))
 }
 
+func TestPromotionSettingsDomains(t *testing.T) {
+	for _, tc := range []struct {
+		name string
+		edit func(*MergeSettings)
+	}{
+		{"negative L1 count", func(s *MergeSettings) { s.TombstoneL1Count = -1 }},
+		{"zero L1 count", func(s *MergeSettings) { s.TombstoneL1Count = 0 }},
+		{"negative L2 count", func(s *MergeSettings) { s.TombstoneL2Count = -1 }},
+		{"zero L2 count", func(s *MergeSettings) { s.TombstoneL2Count = 0 }},
+		{"negative overlap depth", func(s *MergeSettings) { s.LNMinPointDepthPerCluster = -1 }},
+		{"zero overlap depth", func(s *MergeSettings) { s.LNMinPointDepthPerCluster = 0 }},
+		{"zero vacuum duration", func(s *MergeSettings) { s.VacuumScoreDecayDuration = "0s" }},
+		{"negative vacuum duration", func(s *MergeSettings) { s.VacuumScoreDecayDuration = "-1s" }},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			s := DefaultMergeSettings.Clone()
+			tc.edit(s)
+			trigger, err := s.toPromotionTrigger()
+			require.ErrorContains(t, err, "invalid merge settings")
+			require.Nil(t, trigger)
+		})
+	}
+
+	// The smallest positive capacities and duration must still be schedulable.
+	s := DefaultMergeSettings.Clone()
+	s.TombstoneL1Count, s.TombstoneL2Count = 1, 1
+	s.LNMinPointDepthPerCluster = 1
+	s.VacuumScoreDecayDuration = "1ns"
+	trigger, err := s.toPromotionTrigger()
+	require.NoError(t, err)
+	require.Equal(t, s.VacuumScoreStart, trigger.vacuum.CalcScore(0))
+	require.Empty(t, GatherTombstoneTasks(t.Context(), IterStats(nil), trigger.tomb, 0))
+}
+
 func TestPreparePromotionReconcilesStoppedScheduler(t *testing.T) {
 	keep := promotionTable(1001)
 	drop := promotionTable(1002)
@@ -99,10 +133,20 @@ func TestResumePromotionCancellationAfterCommitPoint(t *testing.T) {
 	// Drive the private queue by hand so cancellation lands after the resume
 	// message is sent and before the query barrier is answered.
 	sched.stopped.Store(false)
-	sched.generation.Store(newMergeSchedulerGeneration())
+	generation := newMergeSchedulerGeneration()
+	sched.generation.Store(generation)
 	ctx, cancel := context.WithCancel(t.Context())
 	result := make(chan error, 1)
-	go func() { result <- sched.ResumePromotion(ctx) }()
+	done := make(chan struct{})
+	t.Cleanup(func() {
+		cancel()
+		close(generation.stopCh)
+		<-done
+	})
+	go func() {
+		defer close(done)
+		result <- sched.ResumePromotion(ctx)
+	}()
 	select {
 	case msg := <-sched.msgChan:
 		require.Equal(t, MMsgKindSwitch, msg.Kind)

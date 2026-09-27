@@ -253,16 +253,31 @@ func (c *TNCatalogEventSource) ReadPromotionSettings(
 		if decodeErr != nil {
 			return nil, decodeErr
 		}
-		if len(setting.L0MaxCountDecayControl) < 4 {
-			return nil, moerr.NewInternalErrorNoCtxf(
-				"invalid merge settings decay points for table %d: %d", tid, len(setting.L0MaxCountDecayControl),
-			)
-		}
-		trigger, decodeErr := setting.ToMMsgTaskTrigger()
+		trigger, decodeErr := setting.toPromotionTrigger()
 		if decodeErr != nil {
 			return nil, decodeErr
 		}
 		settings[tid] = trigger
 	}
 	return settings, nil
+}
+
+// toPromotionTrigger validates the domains consumed by scheduling before the
+// one-way promotion starts workers. Normal startup/config parsing is unchanged.
+func (s *MergeSettings) toPromotionTrigger() (*MMsgTaskTrigger, error) {
+	if len(s.L0MaxCountDecayControl) < 4 {
+		return nil, moerr.NewInternalErrorNoCtxf("invalid merge settings decay points: %d", len(s.L0MaxCountDecayControl))
+	}
+	if s.TombstoneL1Count <= 0 || s.TombstoneL2Count <= 0 || s.LNMinPointDepthPerCluster <= 0 {
+		return nil, moerr.NewInternalErrorNoCtxf("invalid merge settings counts: tombstone L1=%d L2=%d, overlap depth=%d",
+			s.TombstoneL1Count, s.TombstoneL2Count, s.LNMinPointDepthPerCluster)
+	}
+	trigger, err := s.ToMMsgTaskTrigger()
+	if err != nil {
+		return nil, err
+	}
+	if trigger.vacuum.Duration <= 0 {
+		return nil, moerr.NewInternalErrorNoCtxf("invalid merge settings vacuum duration: %s", s.VacuumScoreDecayDuration)
+	}
+	return trigger, nil
 }
