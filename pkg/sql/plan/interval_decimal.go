@@ -26,19 +26,23 @@ import (
 	planfunction "github.com/matrixorigin/matrixone/pkg/sql/plan/function"
 )
 
-// normalizeDecimalIntervalValue converts a constant Decimal256 interval to the
+// normalizeDecimalIntervalValue converts a constant DECIMAL interval to the
 // microsecond representation used by date and window functions. Decimal256
 // literals are represented as string-to-decimal casts in plan expressions, so
 // this helper owns both direct decimal literals and that cast representation.
-// Decimal64 and Decimal128 intentionally stay on their historical float64 path
-// in the callers: changing their rounding here would change old persisted-plan
-// results without a protocol fence.
+// Previously bound plans already contain their rounded int64 interval value;
+// exact binding here affects only newly bound expressions.
 // The returned negative flag describes the exact value before rounding; window
 // frame validation uses it to reject a negative sub-microsecond bound.
 func normalizeDecimalIntervalValue(
 	expr *Expr, intervalType types.IntervalType,
 ) (value int64, negative, handled bool, err error) {
-	if expr == nil || types.T(expr.Typ.Id) != types.T_decimal256 {
+	if expr == nil {
+		return 0, false, false, nil
+	}
+	switch types.T(expr.Typ.Id) {
+	case types.T_decimal64, types.T_decimal128, types.T_decimal256:
+	default:
 		return 0, false, false, nil
 	}
 	multiplier, ok := intervalMicrosecondMultiplier(intervalType)

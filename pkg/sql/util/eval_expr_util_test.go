@@ -218,6 +218,9 @@ func TestGenVectorByVarValueInternalFixedTypes(t *testing.T) {
 func TestHexToInt(t *testing.T) {
 	var val uint64
 	var err error
+	val, err = HexToInt("0x")
+	require.NoError(t, err)
+	require.Zero(t, val)
 
 	val, err = HexToInt("0x1")
 	require.NoError(t, err)
@@ -388,6 +391,9 @@ func TestSetInsertValueStringBinaryStringKeepsLegacyWidthBehavior(t *testing.T) 
 func TestBinaryToInt(t *testing.T) {
 	var val uint64
 	var err error
+	val, err = BinaryToInt("0b")
+	require.NoError(t, err)
+	require.Zero(t, val)
 
 	val, err = BinaryToInt("0x1")
 	require.NoError(t, err)

@@ -1254,3 +1254,53 @@ func (h *testVersionHandle) HandleTenantUpgrade(ctx context.Context, tenantID in
 func (h *testVersionHandle) HandleCreateFrameworkDeps(txn executor.TxnExecutor) error {
 	return nil
 }
+
+func TestInitSystemViewsRetryAndCancellation(t *testing.T) {
+	for _, tc := range []struct {
+		name          string
+		first         error
+		retry, cancel bool
+	}{
+		{name: "success"},
+		{name: "uncertain commit", first: moerr.NewTxnUnknown(t.Context(), "test"), retry: true},
+		{name: "concurrent DDL", first: moerr.NewTxnNeedRetryNoCtx(), retry: true},
+		{name: "authoring rejected", first: moerr.NewNotSupportedNoCtx("protocol version 97")},
+		{name: "rollback does not mask body", first: errors.Join(errors.New("body failed"), moerr.NewTxnNeedRetryNoCtx())},
+		{name: "rollback failure is not retried", first: errors.Join(moerr.NewTxnNeedRetryNoCtx(), errors.New("rollback failed"))},
+		{name: "cancelled retry", first: moerr.NewTxnNeedRetryNoCtx(), cancel: true},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			ctx, cancel := context.WithCancel(t.Context())
+			defer cancel()
+			attempts := 0
+			exec := mock_executor.NewMockSQLExecutor(gomock.NewController(t))
+			exec.EXPECT().ExecTxn(gomock.Any(), gomock.Any(), gomock.Any()).DoAndReturn(
+				func(ctx context.Context, body func(executor.TxnExecutor) error, _ executor.Options) error {
+					attempts++
+					if attempts == 1 && tc.first != nil {
+						if tc.cancel {
+							cancel()
+						}
+						return tc.first
+					}
+					return body(executor.NewMemTxnExecutor(func(string) (executor.Result, error) {
+						return newBootstrapStringResult(catalog.SystemViewRel), nil
+					}, nil))
+				}).AnyTimes()
+			err := InitSystemViews(ctx, exec)
+			switch {
+			case tc.cancel:
+				require.ErrorIs(t, err, context.Canceled)
+			case tc.first != nil && !tc.retry:
+				require.ErrorIs(t, err, tc.first)
+			default:
+				require.NoError(t, err)
+			}
+			want := 1
+			if tc.retry {
+				want = 2
+			}
+			require.Equal(t, want, attempts)
+		})
+	}
+}

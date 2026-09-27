@@ -16,6 +16,7 @@ package types
 
 import (
 	"math"
+	"math/big"
 	"testing"
 
 	"github.com/stretchr/testify/require"
@@ -25,6 +26,25 @@ func TestJudgeIntervalNumOverflow(t *testing.T) {
 	require.NoError(t, JudgeIntervalNumOverflow(-int64(IntervalNumMAX), Year))
 	require.Error(t, JudgeIntervalNumOverflow(math.MinInt64, Year))
 	require.NoError(t, JudgeIntervalNumOverflow(math.MinInt64, MicroSecond))
+}
+
+func TestNormalizeIntervalDistinguishesOverflowFromInvalidSyntax(t *testing.T) {
+	for _, tc := range []struct {
+		text     string
+		unit     IntervalType
+		overflow bool
+		valid    bool
+	}{
+		{"1.5", Second, false, true},
+		{"10000000000000.0", Second, true, false},
+		{"999999999999999999999999999", Hour_Second, true, false},
+		{"not-an-interval", Second, false, false},
+		{"1.2.3", Second, false, false},
+	} {
+		_, _, overflow, err := NormalizeIntervalWithOverflow(tc.text, tc.unit)
+		require.Equal(t, tc.valid, err == nil, tc.text)
+		require.Equal(t, tc.overflow, overflow, tc.text)
+	}
 }
 
 func TestIntervalType(t *testing.T) {
@@ -110,17 +130,16 @@ func TestConv(t *testing.T) {
 	require.Equal(t, vt, Minute, "HM error")
 	require.Equal(t, err, nil, "HM error")
 
-	// MySQL behavior: empty string is treated as 0, no error
-	val, vt, err = NormalizeInterval("", Hour_Minute)
-	require.Equal(t, val, int64(0), "HM error")
-	require.Equal(t, vt, Minute, "HM error")
-	require.Equal(t, err, nil, "HM error")
-
-	// MySQL behavior: invalid string is treated as 0, no error
-	val, vt, err = NormalizeInterval("foo", Hour_Minute)
-	require.Equal(t, val, int64(0), "HM error")
-	require.Equal(t, vt, Minute, "HM error")
-	require.Equal(t, err, nil, "HM error")
+	// A diagnostic output cannot change validity. No-digit input is not zero.
+	for _, input := range []string{"", " ", "foo"} {
+		for unit := MicroSecond; unit < IntervalTypeMax; unit++ {
+			_, _, err = NormalizeInterval(input, unit)
+			require.Error(t, err)
+			_, _, overflow, statusErr := NormalizeIntervalWithOverflow(input, unit)
+			require.Error(t, statusErr)
+			require.False(t, overflow)
+		}
+	}
 
 	val, vt, err = NormalizeInterval("1 01:02:03.4", Day_MicroSecond)
 	val2, vt2, _ := NormalizeInterval("1 01:02:03.0", Day_MicroSecond)
@@ -228,4 +247,157 @@ func TestNormalizeIntervalMicrosecondMoreThanTwoValues(t *testing.T) {
 	// Input "1 2 3 4" -> [1, 2, 3, 400000] -> padding: [0, 1, 2, 3, 400000]
 	// Expected: 0*24*60*60*1000000 + 1*60*60*1000000 + 2*60*1000000 + 3*1000000 + 400000 = 3723000000 + 400000 = 3723400000
 	require.Equal(t, int64(3723400000), val)
+}
+
+func TestNormalizeIntervalCompositeSecondsWithFraction(t *testing.T) {
+	for _, tc := range []struct {
+		name string
+		unit IntervalType
+		text string
+		want int64
+	}{
+		{"minute_second", Minute_Second, "1:02.500000", (62 * MicroSecsPerSec) + 500000},
+		{"hour_second", Hour_Second, "1:02:03.500000", (3723 * MicroSecsPerSec) + 500000},
+		{"day_second", Day_Second, "1 02:03:04.500000", (93784 * MicroSecsPerSec) + 500000},
+		{"negative_day_second", Day_Second, "-1 02:03:04.500000", -((93784 * MicroSecsPerSec) + 500000)},
+		{"second_microsecond_seven_digits", Second_MicroSecond, "1.5000000", 1500000},
+		{"second_microsecond_scale_38", Second_MicroSecond, "1.50000000000000000000000000000000000000", 1500000},
+		{"second_microsecond_trailing_space", Second_MicroSecond, "1.5 ", 1500000},
+		{"second_microsecond_round_tie", Second_MicroSecond, "1.1234565", 1123457},
+		{"negative_second_microsecond_round_tie", Second_MicroSecond, "-1.1234565", -1123457},
+		{"second_microsecond_carry", Second_MicroSecond, "1.9999999", 2000000},
+		{"hour_second_trailing_space", Hour_Second, "1:02:03.4 ", 3723400000},
+		{"hour_second_round_tie", Hour_Second, "1:02:03.1234565", 3723123457},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			got, typ, err := NormalizeInterval(tc.text, tc.unit)
+			require.NoError(t, err)
+			require.Equal(t, MicroSecond, typ)
+			require.Equal(t, tc.want, got)
+		})
+	}
+}
+
+func TestNormalizeIntervalSimpleSecondsWithFraction(t *testing.T) {
+	for _, tc := range []struct {
+		unit IntervalType
+		text string
+		want int64
+	}{
+		{Second, "1.5", 1500000},
+		{Minute, "1.5", 90000000},
+		{Hour, "1.5", 5400000000},
+		{Day, "1.5", 129600000000},
+		{Hour, "0.0000009", 3240},
+		{Hour, "-0.0000009", -3240},
+		{Minute, "0.0000005", 30},
+		{Day, "0.0000005", 43200},
+		{Second, "0.0000004", 0},
+		{Second, "0.0000005", 1},
+		{Second, "-0.0000005", -1},
+		{Second, "0.0000006", 1},
+		{Hour, " 1.5 ", 5400000000},
+		{Hour, "0.0000000002", 1},
+		{Hour, "0.0000000001", 0},
+		{Hour, "0000000000000000000000000000000000000001.5", 5400000000},
+	} {
+		got, typ, err := NormalizeInterval(tc.text, tc.unit)
+		require.NoError(t, err)
+		require.Equal(t, MicroSecond, typ)
+		require.Equal(t, tc.want, got)
+	}
+}
+
+// Use exact rational arithmetic as an oracle for the final microsecond value.
+// This is independent of the production digit-by-digit conversion.
+func TestNormalizeIntervalFractionPrecisionAgainstRational(t *testing.T) {
+	fractions := []string{
+		"0", "1", "4", "5", "9", "0000004", "0000005", "0000009",
+		"1234564", "1234565", "9999999", "0000000001", "0000000002",
+		"50000000000000000000000000000000000000",
+	}
+	for _, unit := range []struct {
+		typeOf     IntervalType
+		multiplier int64
+	}{
+		{Second, MicroSecsPerSec},
+		{Minute, MicroSecsPerSec * SecsPerMinute},
+		{Hour, MicroSecsPerSec * SecsPerHour},
+		{Day, MicroSecsPerSec * SecsPerDay},
+	} {
+		for _, fraction := range fractions {
+			for _, sign := range []string{"", "-"} {
+				input := sign + "0." + fraction
+				rational, ok := new(big.Rat).SetString(input)
+				require.True(t, ok)
+				rational.Mul(rational, new(big.Rat).SetInt64(unit.multiplier))
+				value, remainder := new(big.Int).QuoRem(
+					new(big.Int).Abs(rational.Num()), rational.Denom(), new(big.Int))
+				if new(big.Int).Lsh(remainder, 1).Cmp(rational.Denom()) >= 0 {
+					value.Add(value, big.NewInt(1))
+				}
+				if rational.Sign() < 0 {
+					value.Neg(value)
+				}
+				require.True(t, value.IsInt64())
+				got, gotUnit, err := NormalizeInterval(input, unit.typeOf)
+				require.NoError(t, err, input)
+				require.Equal(t, MicroSecond, gotUnit, input)
+				require.Equal(t, value.Int64(), got, "%s %s", input, unit.typeOf)
+			}
+		}
+	}
+}
+
+var benchmarkIntervalResult int64
+
+func BenchmarkNormalizeIntervalInputClasses(b *testing.B) {
+	for _, tc := range []struct {
+		name  string
+		value string
+		unit  IntervalType
+	}{
+		{"integer", "1", Hour},
+		{"ordinary_fraction", "1.5", Hour},
+		{"seven_digits", "0.0000009", Hour},
+		{"long_fraction", "0.50000000000000000000000000000000000000", Hour},
+		{"compound", "1:02:03.5", Hour_Second},
+	} {
+		b.Run(tc.name, func(b *testing.B) {
+			b.ReportAllocs()
+			for i := 0; i < b.N; i++ {
+				value, _, err := NormalizeInterval(tc.value, tc.unit)
+				if err != nil {
+					b.Fatal(err)
+				}
+				benchmarkIntervalResult = value
+			}
+		})
+	}
+}
+
+func TestNormalizeIntervalRejectsArithmeticWrap(t *testing.T) {
+	_, _, err := NormalizeInterval("1.1234567junk", Second)
+	require.Error(t, err, "fractional suffix junk must not be silently ignored")
+
+	value, unit, err := NormalizeInterval("106751991.167300", Day)
+	require.NoError(t, err)
+	require.Equal(t, MicroSecond, unit)
+	require.Equal(t, int64(9223372036854720000), value)
+
+	for _, tc := range []struct {
+		value string
+		unit  IntervalType
+	}{
+		{"106751991.167301", Day},
+		{"213503982.334602", Day},
+		{"-213503982.334602", Day},
+		{"307445734561.825861", Minute},
+		{"5124095576.030432", Hour},
+		{"106751992 00:00:00.000001", Day_Second},
+		{"18446744073709551617", Second},
+	} {
+		_, _, err := NormalizeInterval(tc.value, tc.unit)
+		require.Error(t, err, "%s %s", tc.value, tc.unit)
+	}
 }

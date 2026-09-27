@@ -16,11 +16,13 @@ package plan
 
 import (
 	"context"
+	"fmt"
 	"math"
 	"testing"
 
 	"github.com/matrixorigin/matrixone/pkg/catalog"
 	"github.com/matrixorigin/matrixone/pkg/container/types"
+	"github.com/matrixorigin/matrixone/pkg/container/vector"
 	"github.com/matrixorigin/matrixone/pkg/pb/plan"
 	"github.com/matrixorigin/matrixone/pkg/sql/plan/function"
 	"github.com/matrixorigin/matrixone/pkg/vectorindex/metric"
@@ -123,6 +125,233 @@ func TestJoinDoesNotPushDownVolatileFilter(t *testing.T) {
 		require.Empty(t, builder.qry.Nodes[0].FilterList)
 		require.Empty(t, builder.qry.Nodes[1].FilterList)
 	})
+}
+
+func TestJoinKeepsDiagnosticEquijoinKeys(t *testing.T) {
+	for _, separate := range []bool{false, true} {
+		for _, fromOn := range []bool{false, true} {
+			for _, reversed := range []bool{false, true} {
+				t.Run(fmt.Sprintf("separate=%t/on=%t/reversed=%t", separate, fromOn, reversed), func(t *testing.T) {
+					ctx := NewMockCompilerContext(true)
+					builder, leftTag, rightTag := newVolatileJoinPushdownBuilder(ctx, plan.Node_INNER)
+					for i, node := range builder.qry.Nodes {
+						node.NodeId = int32(i)
+					}
+					column := func(tag int32) *plan.Expr {
+						return &plan.Expr{Typ: Type{Id: int32(types.T_time)}, Expr: &plan.Expr_Col{
+							Col: &plan.ColRef{RelPos: tag, ColPos: 0},
+						}}
+					}
+					param := &plan.Expr{Typ: Type{Id: int32(types.T_varchar)}, Expr: &plan.Expr_P{P: &plan.ParamRef{Pos: 0}}}
+					clock, err := BindFuncExprImplByPlanExpr(ctx.GetContext(), "time", []*plan.Expr{param})
+					require.NoError(t, err)
+					right, err := BindFuncExprImplByPlanExpr(ctx.GetContext(), "addtime", []*plan.Expr{column(rightTag), clock})
+					require.NoError(t, err)
+					args := []*plan.Expr{column(leftTag), right}
+					if reversed {
+						args[0], args[1] = args[1], args[0]
+					}
+					condition, err := BindFuncExprImplByPlanExpr(ctx.GetContext(), "=", args)
+					require.NoError(t, err)
+					require.True(t, ContainsStatementInvariantFilterDiagnostic(ctx.GetProcess(), condition))
+					filters := []*plan.Expr{condition}
+					if fromOn {
+						builder.qry.Nodes[2].OnList = filters
+						filters = nil
+					}
+					_, remaining := builder.pushdownFilters(2, filters, separate)
+					if fromOn {
+						require.Empty(t, remaining, "a diagnostic must not demote an eligible hash key")
+						require.Equal(t, []*plan.Expr{condition}, builder.qry.Nodes[2].OnList)
+						require.True(t, isEquiCond(condition, map[int32]bool{leftTag: true}, map[int32]bool{rightTag: true}))
+						require.Equal(t, int32(2), builder.determineJoinOrder(2))
+						_, remaining = builder.pushdownFilters(2, nil, true)
+						require.Empty(t, remaining)
+						require.Equal(t, []*plan.Expr{condition}, builder.qry.Nodes[2].OnList)
+						// A parent may reorder its other inputs, but cannot flatten
+						// away this diagnostic owner's two logical input domains.
+						leaves, conditions := builder.gatherJoinLeavesAndConds(builder.qry.Nodes[2], nil, nil)
+						require.Equal(t, []*plan.Node{builder.qry.Nodes[2]}, leaves)
+						require.Empty(t, conditions)
+					} else {
+						require.Equal(t, []*plan.Expr{condition}, remaining, "WHERE retains its post-join diagnostic owner")
+						require.Empty(t, builder.qry.Nodes[2].OnList)
+					}
+					require.Empty(t, builder.qry.Nodes[0].FilterList)
+					require.Empty(t, builder.qry.Nodes[1].FilterList)
+				})
+			}
+		}
+	}
+}
+
+func TestPreparedJoinDiagnosticProofOnlyRelaxesCurrentExecution(t *testing.T) {
+	ctx := NewMockCompilerContext(true)
+	builder, leftTag, _ := newVolatileJoinPushdownBuilder(ctx, plan.Node_INNER)
+	param := &plan.Expr{Typ: Type{Id: int32(types.T_varchar)}, Expr: &plan.Expr_P{P: &plan.ParamRef{Pos: 0}}}
+	clock, err := BindFuncExprImplByPlanExpr(ctx.GetContext(), "time", []*plan.Expr{param})
+	require.NoError(t, err)
+	column := &plan.Expr{Typ: Type{Id: int32(types.T_time)}, Expr: &plan.Expr_Col{
+		Col: &plan.ColRef{RelPos: leftTag, ColPos: 0},
+	}}
+	condition, err := BindFuncExprImplByPlanExpr(ctx.GetContext(), "=", []*plan.Expr{column, clock})
+	require.NoError(t, err)
+	builder.qry.Nodes[2].OnList = []*plan.Expr{condition}
+	builder.qry.Steps = []int32{2}
+	template := &plan.Plan{Plan: &plan.Plan_Query{Query: builder.qry}}
+	require.True(t, PreparedPlanHasJoinParameterDiagnostic(template))
+	require.True(t, builder.joinOwnsConstantDiagnostic(builder.qry.Nodes[2]))
+	require.True(t, builder.filterPushdownBarrier(condition))
+
+	proc := ctx.GetProcess()
+	params := vector.NewVec(types.T_text.ToType())
+	defer func() { proc.SetPrepareParams(nil); params.Free(proc.Mp()) }()
+	require.NoError(t, vector.AppendBytes(params, []byte("00:00:01"), false, proc.Mp()))
+	proc.SetPrepareParams(params)
+	safe, err := ProbePreparedJoinParameterDiagnostics(proc, template)
+	require.NoError(t, err)
+	require.True(t, safe)
+	rowCondition, err := BindFuncExprImplByPlanExpr(ctx.GetContext(), "=", []*plan.Expr{column, column})
+	require.NoError(t, err)
+	guarded, err := BindFuncExprImplByPlanExpr(ctx.GetContext(), "case", []*plan.Expr{rowCondition, clock, column})
+	require.NoError(t, err)
+	require.True(t, ContainsGuardedJoinDiagnostic(proc, guarded))
+	require.False(t, ContainsGuardedJoinDiagnosticWithProof(proc, guarded, safe))
+	invalidLiteral, err := BindFuncExprImplByPlanExpr(ctx.GetContext(), "time", []*plan.Expr{
+		makePlan2StringConstExprWithType("900:00:00"),
+	})
+	require.NoError(t, err)
+	guardedLiteral, err := BindFuncExprImplByPlanExpr(ctx.GetContext(), "case", []*plan.Expr{rowCondition, invalidLiteral, column})
+	require.NoError(t, err)
+	require.True(t, ContainsGuardedJoinDiagnosticWithProof(proc, guardedLiteral, safe),
+		"parameter proof cannot suppress an unrelated literal diagnostic")
+	originalContext := ctx.GetContext()
+	ctx.SetContext(WithPreparedJoinDiagnosticFree(originalContext))
+	require.False(t, builder.joinOwnsConstantDiagnostic(builder.qry.Nodes[2]))
+	require.False(t, builder.filterPushdownBarrier(condition))
+	ctx.SetContext(originalContext)
+	require.True(t, builder.joinOwnsConstantDiagnostic(builder.qry.Nodes[2]))
+
+	require.NoError(t, vector.SetStringAt(params, 0, "900:00:00", proc.Mp()))
+	safe, err = ProbePreparedJoinParameterDiagnostics(proc, template)
+	require.NoError(t, err)
+	require.False(t, safe)
+	require.True(t, builder.joinOwnsConstantDiagnostic(builder.qry.Nodes[2]))
+
+	// The proof covers other parameter diagnostics in the same statement too:
+	// the execution-scoped optimizer flag must not move an unprobed WHERE error.
+	whereParam := &plan.Expr{Typ: Type{Id: int32(types.T_varchar)}, Expr: &plan.Expr_P{P: &plan.ParamRef{Pos: 1}}}
+	whereClock, err := BindFuncExprImplByPlanExpr(ctx.GetContext(), "time", []*plan.Expr{whereParam})
+	require.NoError(t, err)
+	builder.qry.Nodes = append(builder.qry.Nodes, &plan.Node{
+		NodeType: plan.Node_FILTER, Children: []int32{2}, FilterList: []*plan.Expr{whereClock},
+	})
+	builder.qry.Steps = []int32{3}
+	require.NoError(t, vector.SetStringAt(params, 0, "00:00:01", proc.Mp()))
+	require.NoError(t, vector.AppendBytes(params, []byte("900:00:00"), false, proc.Mp()))
+	safe, err = ProbePreparedJoinParameterDiagnostics(proc, template)
+	require.NoError(t, err)
+	require.False(t, safe)
+	builder.qry.Steps = []int32{2}
+	safe, err = ProbePreparedJoinParameterDiagnostics(proc, template)
+	require.NoError(t, err)
+	require.False(t, safe, "auxiliary nodes must also be covered before relaxing the whole replan")
+	builder.qry.Nodes = builder.qry.Nodes[:3]
+
+	// A projection retains its own execution owner when the JOIN is replanned.
+	// Its invalid TIME value must still warn at execution, but cannot block a
+	// selective JOIN whose ON and filter inputs are diagnostic-free.
+	builder.qry.Nodes = append(builder.qry.Nodes, &plan.Node{
+		NodeType: plan.Node_PROJECT, Children: []int32{2}, ProjectList: []*plan.Expr{whereClock},
+	})
+	builder.qry.Steps = []int32{3}
+	safe, err = ProbePreparedJoinParameterDiagnostics(proc, template)
+	require.NoError(t, err)
+	require.True(t, safe)
+	require.NoError(t, vector.SetStringAt(params, 0, "900:00:00", proc.Mp()))
+	safe, err = ProbePreparedJoinParameterDiagnostics(proc, template)
+	require.NoError(t, err)
+	require.False(t, safe, "the JOIN's own invalid input still blocks the replan")
+	require.NoError(t, vector.SetStringAt(params, 0, "00:00:01", proc.Mp()))
+	builder.qry.Nodes = builder.qry.Nodes[:3]
+	builder.qry.Steps = []int32{2}
+	builder.qry.Nodes[0].BlockFilterList = []*plan.Expr{whereClock}
+	safe, err = ProbePreparedJoinParameterDiagnostics(proc, template)
+	require.NoError(t, err)
+	require.False(t, safe, "block filters are part of the predicate proof")
+	builder.qry.Nodes[0].BlockFilterList = nil
+	builder.qry.Nodes = append(builder.qry.Nodes, &plan.Node{
+		NodeType:        plan.Node_VECTOR_INDEX_SCAN,
+		VectorIndexScan: &plan.VectorIndexScan{PreFilters: []*plan.Expr{whereClock}},
+	})
+	safe, err = ProbePreparedJoinParameterDiagnostics(proc, template)
+	require.NoError(t, err)
+	require.False(t, safe, "index prefilters remain predicate owners after pushdown")
+	builder.qry.Nodes = builder.qry.Nodes[:3]
+
+	// Runtime binding may replace TIME(?) by TIME(literal). The proof must
+	// inspect that final expression even though it no longer contains a marker.
+	for _, tc := range []struct {
+		value string
+		free  bool
+	}{
+		{value: "00:00:01", free: true},
+		{value: "900:00:00", free: false},
+	} {
+		boundClock, bindErr := BindFuncExprImplByPlanExpr(ctx.GetContext(), "time", []*plan.Expr{
+			makePlan2StringConstExprWithType(tc.value),
+		})
+		require.NoError(t, bindErr)
+		boundCondition, bindErr := BindFuncExprImplByPlanExpr(ctx.GetContext(), "=", []*plan.Expr{column, boundClock})
+		require.NoError(t, bindErr)
+		builder.qry.Nodes[2].OnList = []*plan.Expr{boundCondition}
+		require.False(t, PreparedPlanHasJoinParameterDiagnostic(template))
+		free, probeErr := ProbePreparedJoinParameterDiagnostics(proc, template)
+		require.NoError(t, probeErr)
+		require.Equal(t, tc.free, free, tc.value)
+	}
+	goodClock, err := BindFuncExprImplByPlanExpr(ctx.GetContext(), "time", []*plan.Expr{
+		makePlan2StringConstExprWithType("00:00:01"),
+	})
+	require.NoError(t, err)
+	badClock, err := BindFuncExprImplByPlanExpr(ctx.GetContext(), "time", []*plan.Expr{
+		makePlan2StringConstExprWithType("900:00:00"),
+	})
+	require.NoError(t, err)
+	for _, tc := range []struct {
+		active bool
+		free   bool
+	}{
+		{active: false, free: true},
+		{active: true, free: false},
+	} {
+		// The maximal constant CASE must decide which TIME arm runs. Probing
+		// TIME descendants independently would reject the inactive bad arm.
+		selected, bindErr := BindFuncExprImplByPlanExpr(ctx.GetContext(), "case", []*plan.Expr{
+			makePlan2BoolConstExprWithType(tc.active), badClock, goodClock,
+		})
+		require.NoError(t, bindErr)
+		builder.qry.Nodes[2].OnList = []*plan.Expr{selected}
+		free, probeErr := ProbePreparedJoinParameterDiagnostics(proc, template)
+		require.NoError(t, probeErr)
+		require.Equal(t, tc.free, free)
+	}
+	for _, tc := range []struct {
+		clock *plan.Expr
+		free  bool
+	}{
+		{clock: goodClock, free: true},
+		{clock: badClock, free: false},
+	} {
+		// Aggregate and window functions have no scalar executor. Inspect
+		// their diagnostic operand without attempting to execute the wrapper.
+		aggregate, bindErr := BindFuncExprImplByPlanExpr(ctx.GetContext(), "max", []*plan.Expr{tc.clock})
+		require.NoError(t, bindErr)
+		builder.qry.Nodes[2].OnList = []*plan.Expr{aggregate}
+		free, probeErr := ProbePreparedJoinParameterDiagnostics(proc, template)
+		require.NoError(t, probeErr)
+		require.Equal(t, tc.free, free)
+	}
 }
 
 func TestPushdownLimitToTableScanComposesExistingPagination(t *testing.T) {

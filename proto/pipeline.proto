@@ -795,6 +795,10 @@ message SessionInfo {
   // distinguishes a configured zero from an absent field on older CNs.
   uint32 max_error_count = 18;
   bool max_error_count_set = 19;
+  // Effective value captured for this execution; presence distinguishes zero
+  // from a process sent by an older coordinator.
+  uint32 default_week_format = 20;
+  bool default_week_format_set = 21;
 }
 
 message SessionLoggerInfo {

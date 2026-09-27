@@ -284,9 +284,15 @@ show create table temporal_result;
 temporal_result  ¦  CREATE TABLE `temporal_result` (
   `q` decimal(24,10) DEFAULT NULL
 )
+select cast('838:59:58.999999' as time(6)) / cast(1 as signed) as q;
+➤ q[3,24,10]  𝄀
+8385958.9999990000
 select cast('2562047787:59:59.999999' as time(6)) / cast(1 as signed) as q;
 ➤ q[3,24,10]  𝄀
-25620477875959.9999990000
+8385959.0000000000
+show warnings;
+➤ Level[12,0,0]  ¦  Code[5,0,0]  ¦  Message[12,0,0]  𝄀
+Warning  ¦  1292  ¦  Truncated incorrect time value: '2562047787:59:59.999999'
 select cast(1 as signed) / cast('2562047787:59:59.999999' as time(6)) as q;
 ➤ q[3,29,4]  𝄀
 0.0000

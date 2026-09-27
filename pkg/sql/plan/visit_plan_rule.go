@@ -2683,7 +2683,7 @@ func (rule *ResetParamRefRule) applyExpr(e *plan.Expr) (*plan.Expr, error) {
 		var originalTemporalExpr *Expr
 		if exprImpl.F.Func != nil {
 			switch strings.ToLower(exprImpl.F.Func.GetObjName()) {
-			case "date_add", "date_sub", "str_to_date", "to_date":
+			case "date_add", "date_sub", "str_to_date", "to_date", "addtime", "subtime", "timediff", "time":
 				originalTemporalExpr = DeepCopyExpr(e)
 			}
 		}
@@ -2939,6 +2939,25 @@ func (rule *ResetParamRefRule) applyExpr(e *plan.Expr) (*plan.Expr, error) {
 				needResetFunction = true
 			}
 			var rewrittenArg *plan.Expr
+			numericTemporalArg := false
+			switch functionName {
+			case "to_interval_microsecond", "time", "from_unixtime", "sec_to_time":
+				numericTemporalArg = i == 0
+			case "date_add", "date_sub":
+				numericTemporalArg = i == 1 && len(originalArgs) == 3 &&
+					originalArgs[0].Typ.Id == int32(types.T_time)
+			case "addtime", "subtime":
+				numericTemporalArg = i == 1
+			}
+			numericTemporalSource := false
+			if numericTemporalArg && hasParamPos && !isExplicitPreparedCast(arg) &&
+				paramPos < len(rule.paramValues) {
+				if param, ok := rule.paramValues[paramPos].(ParamValue); ok {
+					numericTemporalSource = !param.IsBinaryProtocol && param.HasSourceType &&
+						(param.SourceType.IsDecimal() || param.SourceType.Oid == types.T_float32 ||
+							param.SourceType.Oid == types.T_float64)
+				}
+			}
 			if nestedPreparedBitwiseSource != nil {
 				var applyErr error
 				rewrittenArg, applyErr = rule.ApplyExpr(DeepCopyExpr(nestedPreparedBitwiseSource))
@@ -2969,6 +2988,21 @@ func (rule *ResetParamRefRule) applyExpr(e *plan.Expr) (*plan.Expr, error) {
 						return nil, err
 					}
 				}
+			} else if numericTemporalSource {
+				// SQL EXECUTE transports DECIMAL and FLOAT variables as text. These
+				// temporal consumers need the numeric source, including TIME's raw
+				// interval argument, without changing the interval string grammar.
+				var known bool
+				rewrittenArg, known, err = rule.preparedRuntimeSourceExpr(paramPos, false)
+				if err != nil {
+					return nil, err
+				}
+				if !known {
+					return nil, moerr.NewInternalErrorNoCtx("missing prepared numeric temporal source type")
+				}
+				needResetFunction = true
+				compareArgTypes = true
+				rule.specialized = true
 			} else if variadicSource {
 				var sourceOK bool
 				rewrittenArg, sourceOK, err = rule.preparedRuntimeSourceExpr(paramPos, false)
@@ -3490,6 +3524,25 @@ func (rule *ResetParamRefRule) applyExpr(e *plan.Expr) (*plan.Expr, error) {
 					resultArg != nil && resultArg.GetLit().GetIsnull() {
 					resultArg.Typ = *sharedControlReturnType
 				}
+			}
+		}
+		if functionName == "cast" && !isExplicitPreparedCast(e) && len(boundArgs) == 2 &&
+			boundArgs[0] != nil && boundArgs[1] != nil && boundArgs[1].GetT() != nil &&
+			originalArgs[0] != nil && originalArgs[1] != nil &&
+			originalArgs[0].Typ.Scale == originalArgs[1].Typ.Scale &&
+			boundArgs[0].Typ.Scale > originalArgs[0].Typ.Scale {
+			source := types.T(boundArgs[0].Typ.Id)
+			target := types.T(boundArgs[1].Typ.Id)
+			if (source == types.T_time || source == types.T_datetime || source == types.T_timestamp) &&
+				(target == types.T_time || target == types.T_datetime || target == types.T_timestamp) {
+				// PREPARE fixed this implicit temporal cast to the marker's provisional
+				// FSP. Its target must follow a nested function rebound at EXECUTE;
+				// otherwise the cast truncates microseconds before the parent rebinds.
+				boundArgs[1] = DeepCopyExpr(boundArgs[1])
+				boundArgs[1].Typ.Scale = boundArgs[0].Typ.Scale
+				boundArgs[1].Typ.Width = boundArgs[0].Typ.Scale
+				needResetFunction = true
+				compareArgTypes = true
 			}
 		}
 

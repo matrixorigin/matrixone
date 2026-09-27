@@ -753,6 +753,9 @@ func (builder *QueryBuilder) removeEffectlessLeftJoins(nodeID int32, tagCnt map[
 	if !node.Stats.HashmapStats.HashOnPK {
 		goto END
 	}
+	if builder.joinOwnsConstantDiagnostic(node) || builder.subtreeOwnsConstantDiagnostic(node.Children[1]) {
+		goto END
+	}
 
 	nodeID = node.Children[0]
 
