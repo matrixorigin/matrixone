@@ -24,20 +24,18 @@ import (
 
 	"github.com/golang/mock/gomock"
 	"github.com/matrixorigin/matrixone/pkg/catalog"
-	"github.com/matrixorigin/matrixone/pkg/common/mpool"
+	"github.com/matrixorigin/matrixone/pkg/common/moerr"
 	moruntime "github.com/matrixorigin/matrixone/pkg/common/runtime"
 	"github.com/matrixorigin/matrixone/pkg/container/types"
 	"github.com/matrixorigin/matrixone/pkg/defines"
 	"github.com/matrixorigin/matrixone/pkg/frontend/databranchutils"
 	mock_frontend "github.com/matrixorigin/matrixone/pkg/frontend/test"
+	"github.com/matrixorigin/matrixone/pkg/incrservice"
 	"github.com/matrixorigin/matrixone/pkg/pb/api"
 	"github.com/matrixorigin/matrixone/pkg/pb/lock"
 	"github.com/matrixorigin/matrixone/pkg/pb/plan"
 	"github.com/matrixorigin/matrixone/pkg/pb/timestamp"
 	"github.com/matrixorigin/matrixone/pkg/sql/features"
-	"github.com/matrixorigin/matrixone/pkg/sql/parsers"
-	"github.com/matrixorigin/matrixone/pkg/sql/parsers/dialect"
-	"github.com/matrixorigin/matrixone/pkg/sql/parsers/tree"
 	"github.com/matrixorigin/matrixone/pkg/testutil"
 	"github.com/matrixorigin/matrixone/pkg/util/executor"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine"
@@ -95,89 +93,100 @@ func dropTableScope(tables ...*plan.DropTable) *Scope {
 	}}}}
 }
 
-func parseDropTableNames(t *testing.T, sql, dbName string) []string {
-	t.Helper()
-	stmt, err := parsers.ParseOne(context.Background(), dialect.MYSQL, sql, 0)
-	require.NoError(t, err)
-	defer stmt.Free()
-	drop, ok := stmt.(*tree.DropTable)
-	require.True(t, ok)
-	require.True(t, drop.IfExists)
-	names := make([]string, 0, len(drop.Names))
-	for _, name := range drop.Names {
-		require.Equal(t, dbName, string(name.SchemaName))
-		names = append(names, string(name.ObjectName))
+func TestDropDatabaseRelationsStopsAfterMemberFailure(t *testing.T) {
+	ctrl := gomock.NewController(t)
+	wantErr := errors.New("second table cleanup failed")
+	var fkCleanups, mergeCleanups int
+	exec := &dropDDLExecutor{}
+	exec.exec = func(_ context.Context, sql string, _ executor.Options) (executor.Result, error) {
+		if strings.Contains(sql, "mo_foreign_keys") {
+			fkCleanups++
+		}
+		if strings.Contains(sql, "mo_merge_settings") {
+			mergeCleanups++
+		}
+		return executor.Result{}, nil
 	}
-	return names
-}
-
-func TestDropDatabaseTableBatches(t *testing.T) {
-	for _, tc := range []struct {
-		n       int
-		failAt  int
-		wantErr error
-	}{
-		{n: 0}, {n: 1}, {n: 32}, {n: 33},
-		{n: 65, failAt: 2, wantErr: errors.New("second group failed")},
-		{n: 33, failAt: 1, wantErr: context.Canceled},
-	} {
-		t.Run(fmt.Sprintf("n=%d/error=%v", tc.n, tc.wantErr), func(t *testing.T) {
-			ctrl := gomock.NewController(t)
-			mp := mpool.MustNewZero()
-			const dbName = "库`db"
-			names := make([]string, tc.n)
-			for i := range names {
-				names[i] = fmt.Sprintf("表`%d", i)
+	c, _ := newDropDDLCompile(t, ctrl, exec)
+	c.ignorePublish = false
+	c.skipDataBranchReclaim = true
+	c.disableDropAutoIncrement = true
+	originalCtx := c.proc.Ctx
+	db := mock_frontend.NewMockDatabase(ctrl)
+	resolved := make(map[string]engine.Relation)
+	for i, name := range []string{"first", "second"} {
+		def := &plan.TableDef{TblId: uint64(i + 1), Name: name}
+		rel := mock_frontend.NewMockRelation(ctrl)
+		rel.EXPECT().GetTableID(gomock.Any()).Return(def.TblId).AnyTimes()
+		rel.EXPECT().GetTableDef(gomock.Any()).Return(def).AnyTimes()
+		rel.EXPECT().GetExtraInfo().Return(nil).AnyTimes()
+		resolved[name] = rel
+		db.EXPECT().Delete(gomock.Any(), name).DoAndReturn(func(context.Context, string) error {
+			if name == "second" {
+				return wantErr
 			}
-			var got []string
-			calls := 0
-			var c *Compile
-			exec := &dropDDLExecutor{exec: func(ctx context.Context, sql string, opts executor.Options) (executor.Result, error) {
-				calls++
-				require.Zero(t, mp.CurrNB(), "previous group result must be closed")
-				require.Same(t, c.proc.GetTxnOperator(), opts.Txn())
-				require.True(t, opts.DisableIncrStatement())
-				require.True(t, opts.IsFrontend())
-				require.Same(t, time.UTC, opts.GetTimeZone())
-				require.Equal(t, int64(1), opts.LowerCaseTableNames())
-				require.False(t, opts.HasAccountID(), "retain the originating tenant context")
-				account, err := defines.GetAccountId(ctx)
-				require.NoError(t, err)
-				require.Equal(t, uint32(7), account)
-				require.Equal(t, c.proc.Ctx.Done(), ctx.Done())
-				require.True(t, opts.StatementOption().IgnoreForeignKey())
-				require.True(t, opts.StatementOption().IgnorePublish())
-				require.True(t, opts.StatementOption().DisableLog())
-				group := parseDropTableNames(t, sql, dbName)
-				require.LessOrEqual(t, len(group), 32)
-				got = append(got, group...)
-				if calls == tc.failAt {
-					if tc.wantErr == context.Canceled {
-						require.ErrorIs(t, ctx.Err(), context.Canceled)
-					}
-					return executor.Result{}, tc.wantErr
-				}
-				return newAlterCopyFixedResult(t, mp, types.T_uint64.ToType(), []uint64{1}), nil
-			}}
-			c, _ = newDropDDLCompile(t, ctrl, exec)
-			ctx, cancel := context.WithCancel(c.proc.Ctx)
-			defer cancel()
-			if tc.wantErr == context.Canceled {
-				cancel()
-			}
-			c.proc.Ctx, c.proc.Base.IsFrontend = ctx, true
-			c.pn = &plan.Plan{Plan: &plan.Plan_Ddl{Ddl: &plan.DataDefinition{DdlType: plan.DataDefinition_DROP_DATABASE}}}
-			err := c.dropDatabaseTables(dbName, names)
-			require.ErrorIs(t, err, tc.wantErr)
-			wantCalls := (tc.n + 31) / 32
-			if tc.failAt > 0 {
-				wantCalls = tc.failAt
-			}
-			require.Equal(t, wantCalls, calls)
-			require.Equal(t, names[:min(tc.n, wantCalls*32)], append([]string{}, got...))
-			require.Zero(t, mp.CurrNB())
+			return nil
 		})
 	}
+	tables := []*plan.DropTable{
+		{Database: "db", Table: "first", TableId: 1, UpdateFkSqls: []string{dropDatabaseTableFkCleanupSQL("db", "first")}, TableDef: &plan.TableDef{TblId: 1, Name: "first"}},
+		{Database: "db", Table: "second", TableId: 2, UpdateFkSqls: []string{dropDatabaseTableFkCleanupSQL("db", "second")}, TableDef: &plan.TableDef{TblId: 2, Name: "second"}},
+		{Database: "db", Table: "third", TableId: 3, TableDef: &plan.TableDef{TblId: 3, Name: "third"}},
+	}
+	err := c.dropDatabaseRelations(db, tables, resolved, true)
+	require.ErrorIs(t, err, wantErr)
+	require.Equal(t, 2, fkCleanups)
+	require.Equal(t, 1, mergeCleanups)
+	require.Same(t, originalCtx, c.proc.Ctx)
+	require.False(t, c.ignorePublish)
+}
+
+func TestDropDatabasePhysicalTemporaryRunsAllocatorCleanup(t *testing.T) {
+	ctrl := gomock.NewController(t)
+	exec := &dropDDLExecutor{exec: func(context.Context, string, executor.Options) (executor.Result, error) {
+		return executor.Result{}, nil
+	}}
+	c, _ := newDropDDLCompile(t, ctrl, exec)
+	c.skipDataBranchReclaim = true
+	def := &plan.TableDef{
+		TblId:     17,
+		Name:      "__mo_tmp_db_t",
+		TableType: catalog.SystemTemporaryTable,
+		Cols:      []*plan.ColDef{{Name: "id", Typ: plan.Type{Id: int32(types.T_int64), AutoIncr: true}}},
+	}
+	rel := mock_frontend.NewMockRelation(ctrl)
+	rel.EXPECT().GetTableID(gomock.Any()).Return(def.TblId).AnyTimes()
+	rel.EXPECT().GetTableDef(gomock.Any()).Return(def).AnyTimes()
+	rel.EXPECT().GetExtraInfo().Return(nil).AnyTimes()
+	db := mock_frontend.NewMockDatabase(ctrl)
+	db.EXPECT().Delete(gomock.Any(), def.Name).Return(nil)
+	auto := mock_frontend.NewMockAutoIncrementService(ctrl)
+	auto.EXPECT().Delete(gomock.Any(), def.TblId, c.proc.GetTxnOperator()).Return(nil)
+	rt := moruntime.ServiceRuntime(c.proc.GetService())
+	oldAuto, hadAuto := rt.GetGlobalVariables(moruntime.AutoIncrementService)
+	t.Cleanup(func() {
+		if hadAuto {
+			rt.SetGlobalVariables(moruntime.AutoIncrementService, oldAuto)
+		} else {
+			rt.CompareAndDeleteGlobalVariables(moruntime.AutoIncrementService, auto)
+		}
+	})
+	incrservice.SetAutoIncrementServiceByID(c.proc.GetService(), auto)
+
+	tables := []*plan.DropTable{{
+		Database: "db",
+		Table:    def.Name,
+		TableId:  def.TblId,
+		TableDef: def,
+	}}
+	require.NoError(t, c.dropDatabaseRelations(db, tables, map[string]engine.Relation{def.Name: rel}, true))
+}
+
+func TestDropDatabaseTableFkCleanupSQLEscapesNames(t *testing.T) {
+	require.Equal(t,
+		"delete from `mo_catalog`.`mo_foreign_keys` where db_name = 'db\\'name' and table_name = 'table\\\\name'",
+		dropDatabaseTableFkCleanupSQL("db'name", `table\name`),
+	)
 }
 
 func TestDropTableLifecycleAdmission(t *testing.T) {
@@ -324,26 +333,25 @@ func TestDropTableMixedTemporaryFailureOrder(t *testing.T) {
 func TestDropDatabaseSelectsParentOwnedTables(t *testing.T) {
 	ctrl := gomock.NewController(t)
 	var dropped []string
-	exec := &dropDDLExecutor{exec: func(_ context.Context, sql string, _ executor.Options) (executor.Result, error) {
-		if strings.HasPrefix(sql, "drop table") {
-			dropped = append(dropped, parseDropTableNames(t, sql, "db")...)
-		}
+	exec := &dropDDLExecutor{exec: func(_ context.Context, _ string, _ executor.Options) (executor.Result, error) {
 		return executor.Result{}, nil
 	}}
 	c, eng := newDropDDLCompile(t, ctrl, exec)
+	c.proc.Session = &trackingTempTableSession{tables: map[string]string{"db.shadowed": "__mo_tmp_db_shadowed"}}
 	c.proc.Ctx = context.WithValue(c.proc.Ctx, defines.IgnoreForeignKey{}, true)
+	c.skipDataBranchReclaim = true
 	stubs := gostub.Stub(&lockMoDatabase, func(*Compile, string, lock.LockMode) error { return nil })
 	t.Cleanup(stubs.Reset)
 	db := mock_frontend.NewMockDatabase(ctrl)
-	eng.EXPECT().Database(gomock.Any(), "db", c.proc.GetTxnOperator()).Return(db, nil).Times(2)
+	eng.EXPECT().Database(gomock.Any(), "db", c.proc.GetTxnOperator()).Return(db, nil).AnyTimes()
 	db.EXPECT().IsSubscription(gomock.Any()).Return(false).AnyTimes()
 	db.EXPECT().GetDatabaseId(gomock.Any()).Return("42").AnyTimes()
 	// The legacy child comes before its parent and has no feature marker.
-	names := []string{"legacy", "partition", "index", "parent", "legacy_lookalike", "tail"}
+	names := []string{"legacy", "partition", "index", "parent", "legacy_lookalike", "shadowed", "temporary", "tail"}
 	db.EXPECT().Relations(gomock.Any()).Return(names, nil)
-	for _, name := range names {
+	for i, name := range names {
 		rel := mock_frontend.NewMockRelation(ctrl)
-		db.EXPECT().Relation(gomock.Any(), name, nil).Return(rel, nil)
+		db.EXPECT().Relation(gomock.Any(), name, nil).Return(rel, nil).AnyTimes()
 		extra := &api.SchemaExtra{}
 		switch name {
 		case "partition":
@@ -351,15 +359,35 @@ func TestDropDatabaseSelectsParentOwnedTables(t *testing.T) {
 		case "index":
 			extra.FeatureFlag = features.IndexTable
 		}
-		rel.EXPECT().GetExtraInfo().Return(extra).AnyTimes()
 		if name == "partition" || name == "index" {
+			rel.EXPECT().GetExtraInfo().Return(extra).AnyTimes()
 			continue
 		}
+		extraCalls := 0
+		rel.EXPECT().GetExtraInfo().DoAndReturn(func() *api.SchemaExtra {
+			extraCalls++
+			if extraCalls <= 2 {
+				return extra
+			}
+			return nil
+		}).AnyTimes()
 		var defs []engine.TableDef
 		if name == "parent" {
 			defs = []engine.TableDef{&engine.ConstraintDef{Cts: []engine.Constraint{&engine.IndexDef{Indexes: []*plan.IndexDef{{IndexTableName: "legacy"}}}}}}
 		}
-		rel.EXPECT().TableDefs(gomock.Any()).Return(defs, nil)
+		rel.EXPECT().TableDefs(gomock.Any()).Return(defs, nil).AnyTimes()
+		def := &plan.TableDef{TblId: uint64(i + 1), Name: name}
+		if name == "temporary" {
+			def.TableType = catalog.SystemTemporaryTable
+		}
+		rel.EXPECT().GetTableID(gomock.Any()).Return(def.TblId).AnyTimes()
+		rel.EXPECT().GetTableDef(gomock.Any()).Return(def).AnyTimes()
+		if name != "legacy" && name != "partition" && name != "index" {
+			db.EXPECT().Delete(gomock.Any(), name).DoAndReturn(func(context.Context, string) error {
+				dropped = append(dropped, name)
+				return nil
+			})
+		}
 	}
 	stopErr := errors.New("engine tail reached")
 	eng.EXPECT().Delete(gomock.Any(), "db", c.proc.GetTxnOperator()).Return(stopErr)
@@ -368,7 +396,7 @@ func TestDropDatabaseSelectsParentOwnedTables(t *testing.T) {
 	}}}
 	c.pn = pn
 	require.ErrorIs(t, (&Scope{Plan: pn}).DropDatabase(c), stopErr)
-	require.Equal(t, []string{"parent", "legacy_lookalike", "tail"}, dropped)
+	require.Equal(t, []string{"parent", "legacy_lookalike", "shadowed", "temporary", "tail"}, dropped)
 }
 
 func TestDropDatabaseRejectsIncomingFKBeforeTableWork(t *testing.T) {
@@ -418,6 +446,70 @@ func TestDropDatabaseRejectsIncomingFKBeforeTableWork(t *testing.T) {
 			}
 		})
 	}
+}
+
+func TestDropDatabaseRechecksIncomingFKAfterLateLockRetry(t *testing.T) {
+	ctrl := gomock.NewController(t)
+	const fkSQL = "select incoming_fk"
+	var fkChecks, lockCalls int
+	var c *Compile
+	exec := &dropDDLExecutor{exec: func(_ context.Context, sql string, _ executor.Options) (executor.Result, error) {
+		if sql != fkSQL {
+			return executor.Result{}, nil
+		}
+		fkChecks++
+		// The first attempt sees no incoming reference. A later table-lock
+		// conflict aborts the statement; its retry must execute the live FK
+		// predicate again rather than reuse the old decision.
+		return newAlterCopyFixedResult(t, c.proc.Mp(), types.T_bool.ToType(), []bool{fkChecks > 1}), nil
+	}}
+	c, eng := newDropDDLCompile(t, ctrl, exec)
+	c.disableLock = false
+	c.proc.Base.IsFrontend = false
+	c.proc.Ctx = context.WithValue(c.proc.Ctx, defines.IgnoreForeignKey{}, true)
+	// Use a pessimistic operator so the real late table-lock branch is taken.
+	txnClient, txnOp := newTestTxnClientAndOpWithPessimistic(ctrl)
+	txnOp.(*mock_frontend.MockTxnOperator).EXPECT().SnapshotTS().Return(timestamp.Timestamp{}).AnyTimes()
+	c.proc.Base.TxnClient, c.proc.Base.TxnOperator = txnClient, txnOp
+	lockDB := gostub.Stub(&lockMoDatabase, func(*Compile, string, lock.LockMode) error {
+		lockCalls++
+		return nil
+	})
+	defer lockDB.Reset()
+	lockDatabaseTable := gostub.Stub(&lockMoTable, func(*Compile, string, string, lock.LockMode) error {
+		return nil
+	})
+	defer lockDatabaseTable.Reset()
+	physicalLock := gostub.Stub(&lockTable, func(context.Context, engine.Engine, *process.Process, engine.Relation, string, bool) error {
+		if lockCalls == 1 {
+			return moerr.NewTxnNeedRetryNoCtx()
+		}
+		return nil
+	})
+	defer physicalLock.Reset()
+	db := mock_frontend.NewMockDatabase(ctrl)
+	eng.EXPECT().Database(gomock.Any(), "db", c.proc.GetTxnOperator()).Return(db, nil).AnyTimes()
+	db.EXPECT().IsSubscription(gomock.Any()).Return(true).AnyTimes()
+	db.EXPECT().GetDatabaseId(gomock.Any()).Return("42").AnyTimes()
+	db.EXPECT().Relations(gomock.Any()).Return([]string{"p"}, nil).Times(1)
+	rel := mock_frontend.NewMockRelation(ctrl)
+	def := &plan.TableDef{TblId: 1, Name: "p"}
+	rel.EXPECT().GetExtraInfo().Return(&api.SchemaExtra{}).AnyTimes()
+	rel.EXPECT().TableDefs(gomock.Any()).Return(nil, nil).AnyTimes()
+	rel.EXPECT().GetPrimaryKeys(gomock.Any()).Return([]*engine.Attribute{{Type: types.T_int32.ToType()}}, nil).AnyTimes()
+	rel.EXPECT().GetTableID(gomock.Any()).Return(def.TblId).AnyTimes()
+	rel.EXPECT().GetTableDef(gomock.Any()).Return(def).AnyTimes()
+	db.EXPECT().Relation(gomock.Any(), "p", nil).Return(rel, nil).Times(1)
+	pn := &plan.Plan{Plan: &plan.Plan_Ddl{Ddl: &plan.DataDefinition{DdlType: plan.DataDefinition_DROP_DATABASE,
+		Definition: &plan.DataDefinition_DropDatabase{DropDatabase: &plan.DropDatabase{Database: "db", DatabaseId: 42, CheckFKSql: fkSQL}},
+	}}}
+	s := &Scope{Plan: pn}
+	firstErr := s.DropDatabase(c)
+	require.True(t, moerr.IsMoErrCode(firstErr, moerr.ErrTxnNeedRetry), firstErr)
+	secondErr := s.DropDatabase(c)
+	require.ErrorContains(t, secondErr, "referenced by foreign keys")
+	require.Equal(t, 2, fkChecks)
+	require.Equal(t, 2, lockCalls)
 }
 
 func TestDropTableTemporaryAndNoopMembersDoNotAdmit(t *testing.T) {

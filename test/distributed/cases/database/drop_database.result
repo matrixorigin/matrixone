@@ -14,13 +14,22 @@ create table drop_database_bvt.p(id int primary key auto_increment, v int unique
 create table drop_database_bvt.c(id int primary key, pid int, foreign key(pid) references drop_database_bvt.p(id));
 insert into drop_database_bvt.p(v) values (7);
 insert into drop_database_bvt.c values (1, 1);
+create temporary table drop_database_bvt.tmp_ai(id bigint primary key auto_increment, v int);
+insert into drop_database_bvt.tmp_ai(v) values (7);
 create view drop_database_bvt.v as select id, v from drop_database_bvt.p;
 create sequence drop_database_bvt.s;
 set @drop_db_id = (select dat_id from mo_catalog.mo_database where account_id = 0 and datname = 'drop_database_bvt');
 set @drop_p_id = (select rel_id from mo_catalog.mo_tables where account_id = 0 and reldatabase_id = @drop_db_id and relname = 'p');
+set @drop_tmp_id = (select rel_id from mo_catalog.mo_tables where account_id = 0 and reldatabase_id = @drop_db_id and relkind = 'temporary_table');
+select count(*) as temp_allocator_before from mo_catalog.mo_increment_columns where table_id = @drop_tmp_id;
+➤ temp_allocator_before[-5,64,0]  𝄀
+1
 begin;
 drop database drop_database_bvt;
 rollback;
+select count(*) as temp_allocator_after_rollback from mo_catalog.mo_increment_columns where table_id = @drop_tmp_id;
+➤ temp_allocator_after_rollback[-5,64,0]  𝄀
+1
 select dat_id = @drop_db_id as same_database from mo_catalog.mo_database where account_id = 0 and datname = 'drop_database_bvt';
 ➤ same_database[-7,1,0]  𝄀
 1
