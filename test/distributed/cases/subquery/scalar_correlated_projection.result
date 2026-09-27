@@ -246,6 +246,22 @@ select (with x as (select count(*) as c from child_agg c where c.corr_key = p.co
 from (select cast(null as signed) as corr_key) p;
 ➤ null_key_count[-5,64,0]  𝄀
 1
+select p.id,
+(with x as (select count(*) as c from child_agg c where c.corr_key = p.corr_key group by c.corr_key) select c from x) as grouped_count,
+(with x as (select max(c.v) as m from child_agg c where c.corr_key = p.corr_key having max(c.v) > 0) select m from x) as having_max,
+(with x as (select count(*) as c from child_agg c where c.corr_key = p.corr_key having count(*) > 0) select c from x) as having_count,
+(with x as (select max(c.v) as m from child_agg c where c.corr_key = p.corr_key), y as (select m from x where m > 0) select m from y) as filtered_max,
+(with x as (select max(c.v) as m from child_agg c where c.corr_key = p.corr_key) select m from x limit 0) as zero_limit
+from parent_agg p order by p.id;
+➤ id[4,32,0]  ¦  grouped_count[-5,64,0]  ¦  having_max[4,32,0]  ¦  having_count[-5,64,0]  ¦  filtered_max[4,32,0]  ¦  zero_limit[4,32,0]  𝄀
+1  ¦  2  ¦  7  ¦  2  ¦  7  ¦  null  𝄀
+2  ¦  1  ¦  null  ¦  1  ¦  null  ¦  null  𝄀
+3  ¦  null  ¦  null  ¦  null  ¦  null  ¦  null  𝄀
+4  ¦  null  ¦  null  ¦  null  ¦  null  ¦  null
+select p.id, (with x as (select count(*) as c from child_agg c where c.corr_key = p.corr_key having count(*) >= 0) select c from x) as retaining_having
+from parent_agg p order by p.id;
+-- @regex("correlated aggregate spine cannot preserve empty-input rows", true)
+correlated aggregate spine cannot preserve empty-input rows is not yet implemented
 set @@sql_mode = 'ONLY_FULL_GROUP_BY';
 select p.id, exists (select c.corr_key from child_agg c group by c.corr_key having count(*) >= p.id) as ex from parent_agg p order by p.id;
 ➤ id[4,32,0]  ¦  ex[-7,1,0]  𝄀

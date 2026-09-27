@@ -59,10 +59,30 @@ func TestCorrelatedLocalCTEImplicitAggregateSpineRejectsRowRemoval(t *testing.T)
 		{"non equality", `SELECT o.N_NATIONKEY, (WITH a AS (SELECT MAX(i.N_NATIONKEY) AS m FROM NATION i WHERE i.N_NATIONKEY <= o.N_NATIONKEY), x AS (SELECT COUNT(*) AS c FROM a) SELECT c FROM x) FROM NATION o`},
 		{"or equalities", `SELECT o.N_NATIONKEY, (WITH a AS (SELECT MAX(i.N_NATIONKEY) AS m FROM NATION i WHERE i.N_NATIONKEY = o.N_NATIONKEY OR i.N_NATIONKEY = o.N_NATIONKEY + 1), x AS (SELECT COUNT(*) AS c FROM a) SELECT c FROM x) FROM NATION o`},
 		{"like", `SELECT o.N_NATIONKEY, (WITH a AS (SELECT MAX(i.N_NATIONKEY) AS m FROM NATION i WHERE i.N_NAME LIKE o.N_NAME), x AS (SELECT COUNT(*) AS c FROM a) SELECT c FROM x) FROM NATION o`},
+		{"empty retaining having", `SELECT o.N_NATIONKEY, (WITH x AS (SELECT COUNT(*) AS c FROM NATION i WHERE i.N_NATIONKEY = o.N_NATIONKEY HAVING COUNT(*) >= 0) SELECT c FROM x) FROM NATION o`},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			_, err := runOneStmt(NewMockOptimizer(true), t, tc.sql)
 			require.ErrorContains(t, err, "correlated aggregate spine")
+		})
+	}
+}
+
+func TestCorrelatedLocalCTEPreservesExistingScalarBoundaries(t *testing.T) {
+	for _, tc := range []struct {
+		name string
+		sql  string
+	}{
+		{"grouped", `SELECT o.N_NATIONKEY, (WITH x AS (SELECT COUNT(*) AS c FROM NATION i WHERE i.N_NATIONKEY = o.N_NATIONKEY GROUP BY i.N_NATIONKEY) SELECT c FROM x) FROM NATION o`},
+		{"rejecting having max", `SELECT o.N_NATIONKEY, (WITH x AS (SELECT MAX(i.N_NATIONKEY) AS m FROM NATION i WHERE i.N_NATIONKEY = o.N_NATIONKEY HAVING MAX(i.N_NATIONKEY) > 0) SELECT m FROM x) FROM NATION o`},
+		{"rejecting having count", `SELECT o.N_NATIONKEY, (WITH x AS (SELECT COUNT(*) AS c FROM NATION i WHERE i.N_NATIONKEY = o.N_NATIONKEY HAVING COUNT(*) > 0) SELECT c FROM x) FROM NATION o`},
+		{"rejecting projected filter", `SELECT o.N_NATIONKEY, (WITH x AS (SELECT MAX(i.N_NATIONKEY) AS m FROM NATION i WHERE i.N_NATIONKEY = o.N_NATIONKEY), y AS (SELECT m FROM x WHERE m > 0) SELECT m FROM y) FROM NATION o`},
+		{"zero limit", `SELECT o.N_NATIONKEY, (WITH x AS (SELECT MAX(i.N_NATIONKEY) AS m FROM NATION i WHERE i.N_NATIONKEY = o.N_NATIONKEY) SELECT m FROM x LIMIT 0) FROM NATION o`},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			p, err := runOneStmt(NewMockOptimizer(true), t, tc.sql)
+			require.NoError(t, err)
+			assertReachablePlanHasNoCorrelatedExpr(t, p.GetQuery())
 		})
 	}
 }

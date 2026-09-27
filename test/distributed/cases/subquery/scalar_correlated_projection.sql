@@ -119,6 +119,19 @@ from parent_agg p order by p.id;
 select (with x as (select count(*) as c from child_agg c where c.corr_key = p.corr_key) select c + 1 from x) as null_key_count
 from (select cast(null as signed) as corr_key) p;
 
+-- Keep scalar CTE forms that were already correct on main: explicit grouping,
+-- empty-row-rejecting HAVING/filter, and a final zero-row limit.
+select p.id,
+  (with x as (select count(*) as c from child_agg c where c.corr_key = p.corr_key group by c.corr_key) select c from x) as grouped_count,
+  (with x as (select max(c.v) as m from child_agg c where c.corr_key = p.corr_key having max(c.v) > 0) select m from x) as having_max,
+  (with x as (select count(*) as c from child_agg c where c.corr_key = p.corr_key having count(*) > 0) select c from x) as having_count,
+  (with x as (select max(c.v) as m from child_agg c where c.corr_key = p.corr_key), y as (select m from x where m > 0) select m from y) as filtered_max,
+  (with x as (select max(c.v) as m from child_agg c where c.corr_key = p.corr_key) select m from x limit 0) as zero_limit
+from parent_agg p order by p.id;
+-- @regex("correlated aggregate spine cannot preserve empty-input rows", true)
+select p.id, (with x as (select count(*) as c from child_agg c where c.corr_key = p.corr_key having count(*) >= 0) select c from x) as retaining_having
+from parent_agg p order by p.id;
+
 -- @case
 -- @desc:ONLY_FULL_GROUP_BY allows inner HAVING to reference an ungrouped outer row
 -- @label:bvt
