@@ -276,6 +276,11 @@ func (c *Compile) alterTableHasLatestHistoricalBranchSource(
 }
 
 func (c *Compile) lockDataBranchLineageOwnerLifecycle() error {
+	txnOp := c.proc.GetTxnOperator()
+	if txnOp == nil || !txnOp.Txn().IsPessimistic() {
+		return moerr.NewInternalError(c.proc.Ctx,
+			"data branch lineage lifecycle writer requires a pessimistic transaction")
+	}
 	return databranchutils.LockLineageOwnerLifecycle(func(sql string) error {
 		return c.runSqlWithAccountId(sql, int32(catalog.System_Account))
 	})

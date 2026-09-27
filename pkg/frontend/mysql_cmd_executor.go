@@ -3340,7 +3340,10 @@ func handleCreateAccount(ses FeSession, execCtx *ExecCtx, ca *tree.CreateAccount
 		return b.err
 	}
 
-	bh := ses.GetBackgroundExec(execCtx.reqCtx)
+	bh := ses.GetBackgroundExec(
+		execCtx.reqCtx,
+		&BackgroundExecOption{forcePessimisticRC: true},
+	)
 	defer bh.Close()
 
 	err = bh.Exec(execCtx.reqCtx, "begin;")
@@ -5402,6 +5405,9 @@ func executeStmtWithWorkspace(ses FeSession,
 	}
 	execCtx.effectiveTxnDefaultDatabase = effectiveDefaultDatabase
 	execCtx.txnOpt.forcePessimisticObjectLifecycle = requiresPessimisticObjectLifecycleTxn(
+		ses, effectiveStmt, effectiveDefaultDatabase,
+	)
+	execCtx.txnOpt.forcePessimisticLifecycleMode = requiresPessimisticLifecycleModeTxn(
 		ses, effectiveStmt, effectiveDefaultDatabase,
 	)
 	execCtx.txnOpt.activeTxnAtStart = ses.GetTxnHandler().InActiveTxn()
