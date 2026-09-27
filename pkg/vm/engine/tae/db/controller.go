@@ -165,9 +165,10 @@ func (c *controlCmd) Error() error {
 }
 
 type Controller struct {
-	queue     sm.Queue
-	db        *DB
-	closedCmd atomic.Pointer[controlCmd]
+	queue        sm.Queue
+	db           *DB
+	closedCmd    atomic.Pointer[controlCmd]
+	promotionErr error // accessed only by the serialized control queue
 }
 
 func NewController(db *DB) *Controller {
@@ -401,6 +402,10 @@ func (c *Controller) handleToReplayCmd(cmd *controlCmd) {
 }
 
 func (c *Controller) handleToWriteCmd(cmd *controlCmd) {
+	if c.promotionErr != nil {
+		cmd.setError(c.promotionErr)
+		return
+	}
 	switch c.db.GetTxnMode() {
 	case DBTxnMode_Write:
 		cmd.setError(nil)
@@ -410,11 +415,14 @@ func (c *Controller) handleToWriteCmd(cmd *controlCmd) {
 		cmd.setError(
 			moerr.NewTxnControlErrorNoCtxf("bad db txn mode %d to write", c.db.GetTxnMode()),
 		)
+		return
 	}
 	var (
-		err           error
-		start         time.Time = time.Now()
-		rollbackSteps stepFuncs
+		err              error
+		start            = time.Now()
+		crossed          bool
+		started          bool
+		notifierAttached bool
 	)
 
 	ctx, cancel := context.WithTimeout(cmd.ctx, 10*time.Minute)
@@ -427,91 +435,97 @@ func (c *Controller) handleToWriteCmd(cmd *controlCmd) {
 	)
 
 	defer func() {
-		err2 := err
-		if err2 != nil {
-			err = rollbackSteps.Apply("DB-SwitchToWrite-Rollback", true, 1)
-		}
-		if err2 != nil {
-			logger = logutil.Error
-		}
 		if err != nil {
-			logger = logutil.Fatal
+			logger = logutil.Error
+			if crossed {
+				c.promotionErr = err
+				c.db.TxnMgr.OnException(err)
+				if notifierAttached {
+					c.db.Catalog.SetMergeNotifier(nil)
+				}
+				if started {
+					c.db.MergeScheduler.Stop()
+				}
+				c.db.BGFlusher.Stop()
+				RemoveCronJob(c.db, CronJobs_Name_GCDisk)
+				RemoveCronJob(c.db, CronJobs_Name_GCCheckpoint)
+				RemoveCronJob(c.db, CronJobs_Name_GCLockMerge)
+			}
 		}
 		logger(
 			"DB-SwitchToWrite-Done",
 			zap.String("cmd", cmd.String()),
 			zap.Duration("duration", time.Since(start)),
-			zap.Any("rollback-error", err2),
 			zap.Error(err),
 		)
 		cmd.setError(err)
 	}()
 
-	// TODO: error handling
-	// replay mode -> write mode switch steps:
-
-	// 1. it can only be changed after it receives the change-writer-config txn from the logservice
-	// TODO
-
-	// 2. stop replaying the log entries
-	// TODO
-
-	// 3. switch the txnmgr to write mode
-	c.db.TxnMgr.ToWriteMode()
-
-	c.db.Catalog.SetMergeNotifier(c.db.MergeScheduler)
-	c.db.MergeScheduler.Start()
-	rollbackSteps.Add("stop merge scheduler", func() error {
-		c.db.MergeScheduler.Stop()
-		c.db.Catalog.SetMergeNotifier(nil)
-		return nil
-	})
-
-	// 4. unfreeze the write requests
-	if err = c.db.TxnServer.SwitchTxnHandleStateTo(rpc2.TxnLocalHandle); err != nil {
+	// This local switch is not a distributed writer handoff. Its caller must
+	// fence the old writer and exclude concurrent DB/RPC requests.
+	if c.db.ReplayCtl == nil {
+		err = moerr.NewTxnControlErrorNoCtxf("replay-to-write requires a replay controller")
 		return
 	}
-
-	// 5. start merge scheduler|checkpoint|diskcleaner
-	// 5.1 TODO: start the merger|checkpoint|flusher
-	c.db.BGFlusher.Restart() // TODO: Restart with new config
-	rollbackSteps.Add("stop bg flusher", func() error {
-		c.db.BGFlusher.Stop()
-		return nil
-	})
-
-	// 5.2 switch the diskcleaner to write mode
-	if err = c.db.DiskCleaner.SwitchToWriteMode(ctx); err != nil {
-		// Rollback
+	if err = c.db.MergeScheduler.CheckPromotionReady(); err != nil {
 		return
 	}
-	if !c.db.Opts.GCCfg.DisableGC {
-		if err = AddCronJob(
-			c.db, CronJobs_Name_GCDisk, true,
-		); err != nil {
-			// Rollback
+	if err = CheckCronJobs(c.db, DBTxnMode_Replay); err != nil {
+		return
+	}
+	for _, name := range []string{
+		CronJobs_Name_GCCheckpoint,
+		CronJobs_Name_GCLockMerge,
+		CronJobs_Name_GCDisk,
+	} {
+		if c.db.CronJobs.GetJob(name) != nil {
+			err = moerr.NewTxnControlErrorNoCtxf("cron job %s already exists before promotion", name)
 			return
 		}
 	}
-	if err = AddCronJob(
-		c.db, CronJobs_Name_GCCheckpoint, true,
-	); err != nil {
-		// Rollback
+	if err = ctx.Err(); err != nil {
 		return
 	}
-	// if err = AddCronJob(
-	// 	c.db, CronJobs_Name_Scanner, true,
-	// ); err != nil {
-	// 	// Rollback
-	// 	return
-	// }
-	if err = CheckCronJobs(c.db, DBTxnMode_Write); err != nil {
-		// Rollback
+	crossed = true
+	if err = c.db.ReplayCtl.StopForWrite(ctx); err != nil {
 		return
 	}
-	// 5.x TODO
 
+	source := &merge.TNCatalogEventSource{
+		Catalog: c.db.Catalog, TxnManager: c.db.TxnMgr,
+	}
+	settings, readErr := source.ReadPromotionSettings(ctx)
+	if readErr != nil {
+		err = readErr
+		return
+	}
+	if err = c.db.MergeScheduler.PreparePromotion(source, settings); err != nil {
+		return
+	}
+	c.db.Catalog.SetMergeNotifier(c.db.MergeScheduler)
+	notifierAttached = true
+	c.db.TxnMgr.ToWriteMode()
+	c.db.BGFlusher.Restart()
+	if err = c.db.DiskCleaner.SwitchToWriteMode(ctx); err != nil {
+		return
+	}
+	c.db.MergeScheduler.Start()
+	started = true
 	WithTxnMode(DBTxnMode_Write)(c.db)
+	if err = c.db.MergeScheduler.ResumePromotion(ctx); err != nil {
+		return
+	}
+	// Preflight verified all three names absent. The caller excludes concurrent
+	// job changes, so AddJob cannot fail for a duplicate after the first starts.
+	for _, name := range []string{
+		CronJobs_Name_GCCheckpoint,
+		CronJobs_Name_GCLockMerge,
+		CronJobs_Name_GCDisk,
+	} {
+		if err = AddCronJob(c.db, name, true); err != nil {
+			return
+		}
+	}
 }
 func (c *Controller) handleToStopGC(cmd *controlCmd) {
 	var (

@@ -5,26 +5,63 @@ import (
 	"testing"
 	"time"
 
+	pkgcatalog "github.com/matrixorigin/matrixone/pkg/catalog"
+	"github.com/matrixorigin/matrixone/pkg/container/types"
 	"github.com/matrixorigin/matrixone/pkg/objectio/ioutil"
-	"github.com/matrixorigin/matrixone/pkg/txn/rpc"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/catalog"
+	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/containers"
+	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/db"
+	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/db/merge"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/db/testutil"
+	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/iface/handle"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/options"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/testutils/config"
 	"github.com/stretchr/testify/require"
 )
 
-type inspectPromotionServer struct {
-	rpc.TxnServer
-	inspect func()
+func TestIssue29415ReplayPromotionLateTableAndSettings(t *testing.T) {
+	setting := merge.DefaultMergeSettings.Clone()
+	setting.VacuumTopK++
+	shortPoints := setting.Clone()
+	shortPoints.L0MaxCountDecayControl = shortPoints.L0MaxCountDecayControl[:3]
+	extraPoints := setting.Clone()
+	extraPoints.L0MaxCountDecayControl = append(extraPoints.L0MaxCountDecayControl, 0.9)
+	for _, tc := range []struct {
+		name                 string
+		createSettings       bool
+		settingsJSON         string
+		expectTrigger        bool
+		expectError          string
+		cancelBeforeCall     bool
+		preexistingLockMerge bool
+		deleteSettingsRow    bool
+	}{
+		{name: "late setting", createSettings: true, settingsJSON: setting.String(), expectTrigger: true, cancelBeforeCall: true},
+		{name: "settings table absent"},
+		{name: "settings row absent", createSettings: true},
+		{name: "settings row deleted", createSettings: true, settingsJSON: setting.String(), deleteSettingsRow: true},
+		{name: "invalid setting", createSettings: true, settingsJSON: `{"bad_settings":100}`, expectError: "probable corrupted merge settings"},
+		{name: "short decay points", createSettings: true, settingsJSON: shortPoints.String(), expectError: "invalid merge settings decay points"},
+		{name: "extra decay points preserved", createSettings: true, settingsJSON: extraPoints.String(), expectTrigger: true},
+		{name: "optional replay lock merge job", preexistingLockMerge: true},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			runReplayPromotionLateSettings(t, tc.createSettings, tc.settingsJSON, tc.expectTrigger, tc.expectError, tc.cancelBeforeCall, tc.preexistingLockMerge, tc.deleteSettingsRow)
+		})
+	}
 }
 
-func (s *inspectPromotionServer) SwitchTxnHandleStateTo(_ int, _ ...rpc.ServerOption) error {
-	s.inspect()
-	return context.Canceled
-}
-
-func TestIssue29415ReplayPromotionLateTable(t *testing.T) {
+func runReplayPromotionLateSettings(
+	t *testing.T,
+	createSettings bool,
+	settingsJSON string,
+	expectTrigger bool,
+	expectError string,
+	cancelBeforeCall bool,
+	preexistingLockMerge bool,
+	deleteSettingsRow bool,
+) {
+	t.Helper()
 	ctx := context.Background()
 	writeOpts := config.WithLongScanAndCKPOpts(nil, options.WithWalClientFactory(nil))
 	writer := testutil.NewTestEngine(ctx, ModuleName, t, writeOpts)
@@ -47,9 +84,50 @@ func TestIssue29415ReplayPromotionLateTable(t *testing.T) {
 	require.NoError(t, err)
 	database, err := txn.CreateDatabase("late_replay_db", "", "")
 	require.NoError(t, err)
-	_, err = database.CreateRelation(schema)
+	rel, err := database.CreateRelation(schema)
 	require.NoError(t, err)
+	if createSettings {
+		settingsSchema := catalog.NewEmptySchema(pkgcatalog.MO_MERGE_SETTINGS)
+		require.NoError(t, settingsSchema.AppendCol("account_id", types.T_uint32.ToType()))
+		require.NoError(t, settingsSchema.AppendPKCol("tid", types.T_uint64.ToType(), 0))
+		require.NoError(t, settingsSchema.AppendCol("version", types.T_uint32.ToType()))
+		require.NoError(t, settingsSchema.AppendCol("settings", types.T_json.ToType()))
+		require.NoError(t, settingsSchema.AppendCol("extra_info", types.T_varchar.ToType()))
+		require.NoError(t, settingsSchema.Finalize(false))
+		settingsRel, err := txn.GetDatabaseByID(pkgcatalog.MO_CATALOG_ID)
+		require.NoError(t, err)
+		settingsTable, err := settingsRel.CreateRelation(settingsSchema)
+		require.NoError(t, err)
+		if settingsJSON != "" {
+			jsonValue, err := types.ParseStringToByteJson(settingsJSON)
+			require.NoError(t, err)
+			encoded, err := types.EncodeJson(jsonValue)
+			require.NoError(t, err)
+			bat := containers.BuildBatch(
+				[]string{"account_id", "tid", "version", "settings", "extra_info"},
+				[]types.Type{types.T_uint32.ToType(), types.T_uint64.ToType(), types.T_uint32.ToType(), types.T_json.ToType(), types.T_varchar.ToType()},
+				containers.Options{},
+			)
+			t.Cleanup(bat.Close)
+			bat.Vecs[0].Append(uint32(0), false)
+			bat.Vecs[1].Append(rel.ID(), false)
+			bat.Vecs[2].Append(uint32(merge.MergeSettingsVersion_Curr), false)
+			bat.Vecs[3].Append(encoded, false)
+			bat.Vecs[4].Append([]byte(""), false)
+			require.NoError(t, settingsTable.Append(ctx, bat))
+		}
+	}
 	require.NoError(t, txn.Commit(ctx))
+	if deleteSettingsRow {
+		deleteTxn, err := writer.StartTxn(nil)
+		require.NoError(t, err)
+		settingsDB, err := deleteTxn.GetDatabaseByID(pkgcatalog.MO_CATALOG_ID)
+		require.NoError(t, err)
+		settingsTable, err := settingsDB.GetRelationByName(pkgcatalog.MO_MERGE_SETTINGS)
+		require.NoError(t, err)
+		require.NoError(t, settingsTable.DeleteByFilter(ctx, handle.NewEQFilter(rel.ID())))
+		require.NoError(t, deleteTxn.Commit(ctx))
+	}
 
 	var replayTable *catalog.TableEntry
 	require.Eventually(t, func() bool {
@@ -72,19 +150,38 @@ func TestIssue29415ReplayPromotionLateTable(t *testing.T) {
 	require.NoError(t, writer.DB.Close())
 	writerClosed = true
 
-	var exists bool
-	var queryErr error
-	replay.TxnServer = &inspectPromotionServer{
-		TxnServer: newTestTxnServer(t),
-		inspect: func() {
-			answer, err := replay.MergeScheduler.Query(ctx, catalog.ToMergeTable(replayTable))
-			queryErr = err
-			if queryErr == nil {
-				exists = !answer.NotExists
-			}
-		},
+	if cancelBeforeCall {
+		canceled, cancel := context.WithCancel(ctx)
+		cancel()
+		require.ErrorIs(t, replay.Controller.SwitchTxnMode(canceled, 2, ""), context.Canceled)
 	}
-	_ = replay.Controller.SwitchTxnMode(ctx, 2, "")
-	require.NoError(t, queryErr)
-	require.True(t, exists, "scheduler missed a table committed by WAL replay")
+	if preexistingLockMerge {
+		require.NoError(t, db.AddCronJob(replay.DB, db.CronJobs_Name_GCLockMerge, false))
+		require.ErrorContains(t, replay.Controller.SwitchTxnMode(ctx, 2, ""), "already exists before promotion")
+		require.Nil(t, replay.CronJobs.GetJob(db.CronJobs_Name_GCCheckpoint))
+		db.RemoveCronJob(replay.DB, db.CronJobs_Name_GCLockMerge)
+	}
+	err = replay.Controller.SwitchTxnMode(ctx, 2, "")
+	if expectError != "" {
+		require.ErrorContains(t, err, expectError)
+		require.True(t, replay.IsReplayMode())
+		require.EqualError(t, replay.Controller.SwitchTxnMode(ctx, 2, ""), err.Error(), "failed handoff must not retry")
+		_, startErr := replay.StartTxn(nil)
+		require.EqualError(t, startErr, err.Error(), "terminal handoff must reject new transactions")
+		require.Nil(t, replay.CronJobs.GetJob(db.CronJobs_Name_GCCheckpoint))
+		require.Nil(t, replay.CronJobs.GetJob(db.CronJobs_Name_GCLockMerge))
+		require.Nil(t, replay.CronJobs.GetJob(db.CronJobs_Name_GCDisk))
+		return
+	}
+	require.NoError(t, err)
+	require.True(t, replay.IsWriteMode())
+	require.NoError(t, db.CheckCronJobs(replay.DB, db.DBTxnMode_Write))
+	answer, err := replay.MergeScheduler.Query(ctx, catalog.ToMergeTable(replayTable))
+	require.NoError(t, err)
+	require.False(t, answer.NotExists, "scheduler missed a table committed by WAL replay")
+	if expectTrigger {
+		require.NotEmpty(t, answer.BaseTrigger, "scheduler missed settings committed by WAL replay")
+	} else {
+		require.Empty(t, answer.BaseTrigger)
+	}
 }
