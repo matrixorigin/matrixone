@@ -3518,6 +3518,9 @@ func createCompile(
 		getStatementStartAt(execCtx.reqCtx),
 	)
 	retCompile.SetIsPrepare(isPrepare)
+	if preparedRetry != nil {
+		retCompile.SetPreparedJoinDiagnosticFree(preparedRetry.diagnosticFreeJoin)
+	}
 	if preparedRetry != nil && preparedCTASNeedsSemanticParams(stmt) {
 		retCompile.SetPreparedParamValues(preparedRetry.paramVals)
 	}

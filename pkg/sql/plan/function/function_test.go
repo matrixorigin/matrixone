@@ -1408,6 +1408,54 @@ func TestTypedDateConversionNullability(t *testing.T) {
 	require.False(t, DeduceNotNullable(EncodeOverloadID(CAST, 1), []*plan.Expr{dateSource, datetimeTarget}))
 }
 
+func TestTemporalArithmeticOverflowNullability(t *testing.T) {
+	notNull := &plan.Expr{Typ: plan.Type{NotNullable: true}}
+	for _, tt := range []struct {
+		name        string
+		fid         int32
+		first, last int32
+	}{
+		{"addtime", ADDTIME, 0, 5},
+		{"addtime new", ADDTIME, 9, 11},
+		{"subtime", SUBTIME, 0, 5},
+		{"subtime new", SUBTIME, 11, 15},
+		{"timediff", TIMEDIFF, 0, 8},
+		{"date_add", DATE_ADD, 0, 15},
+		{"date_sub", DATE_SUB, 0, 15},
+		{"maketime", MAKETIME, 0, 38},
+		{"timestampadd", TIMESTAMPADD, 0, 7},
+	} {
+		t.Run(tt.name, func(t *testing.T) {
+			for id := tt.first; id <= tt.last; id++ {
+				op, err := GetFunctionById(t.Context(), EncodeOverloadID(tt.fid, id))
+				require.NoError(t, err)
+				args := make([]*plan.Expr, len(op.args))
+				for i := range args {
+					args[i] = notNull
+				}
+				require.False(t, DeduceNotNullable(EncodeOverloadID(tt.fid, id), args), "overload %d", id)
+			}
+		})
+	}
+	for _, tt := range []struct {
+		fid int32
+		ids []int32
+	}{
+		{ADDTIME, []int32{6, 7, 8}},
+		{SUBTIME, []int32{6, 7, 8, 9, 10}},
+	} {
+		for _, id := range tt.ids {
+			op, err := GetFunctionById(t.Context(), EncodeOverloadID(tt.fid, id))
+			require.NoError(t, err)
+			args := make([]*plan.Expr, len(op.args))
+			for i := range args {
+				args[i] = notNull
+			}
+			require.True(t, DeduceNotNullable(EncodeOverloadID(tt.fid, id), args), "legacy overload %d", id)
+		}
+	}
+}
+
 func TestOctNullability(t *testing.T) {
 	for _, typ := range []types.T{types.T_char, types.T_varchar, types.T_text,
 		types.T_binary, types.T_varbinary, types.T_blob, types.T_int64, types.T_float64, types.T_time, types.T_bit} {

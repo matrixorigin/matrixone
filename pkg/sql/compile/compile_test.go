@@ -79,6 +79,37 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/vm/process"
 )
 
+func TestBroadcastJoinUsesHashAfterPreparedDiagnosticProof(t *testing.T) {
+	ctx := plan2.NewMockCompilerContext(true)
+	proc := ctx.GetProcess()
+	params := vector.NewVec(types.T_text.ToType())
+	defer func() { proc.SetPrepareParams(nil); params.Free(proc.Mp()) }()
+	require.NoError(t, vector.AppendBytes(params, []byte("00:00:01"), false, proc.Mp()))
+	proc.SetPrepareParams(params)
+
+	bind := func(name string, args ...*plan.Expr) *plan.Expr {
+		expr, err := plan2.BindFuncExprImplByPlanExpr(ctx.GetContext(), name, args)
+		require.NoError(t, err)
+		return expr
+	}
+	intType := plan.Type{Id: int32(types.T_int64)}
+	timeType := plan.Type{Id: int32(types.T_time)}
+	leftID, rightID := plan2.GetColExpr(intType, 0, 0), plan2.GetColExpr(intType, 1, 0)
+	leftTime, rightTime := plan2.GetColExpr(timeType, 0, 1), plan2.GetColExpr(timeType, 1, 1)
+	param := &plan.Expr{Typ: plan.Type{Id: int32(types.T_varchar)}, Expr: &plan.Expr_P{P: &plan.ParamRef{Pos: 0}}}
+	guard := bind("case", bind(">", rightID, plan2.MakePlan2Int64ConstExprWithType(0)),
+		bind("time", param), rightTime)
+	node := &plan.Node{JoinType: plan.Node_INNER, OnList: []*plan.Expr{
+		bind("=", leftID, rightID), bind("=", leftTime, guard),
+	}}
+	c := &Compile{proc: proc}
+	require.False(t, c.broadcastJoinUsesHash(node), "unproved guarded ON retains LoopJoin")
+	c.SetPreparedJoinDiagnosticFree(true)
+	require.True(t, c.broadcastJoinUsesHash(node), "current clean binding permits HashJoin")
+	c.SetPreparedJoinDiagnosticFree(false)
+	require.False(t, c.broadcastJoinUsesHash(node), "a subsequent execution must not inherit proof")
+}
+
 func TestHasOrderedGroupConcat(t *testing.T) {
 	ordered := &plan.Node{
 		AggList: []*plan.Expr{{

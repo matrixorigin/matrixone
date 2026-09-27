@@ -446,6 +446,33 @@ func DeduceNotNullable(overloadID int64, args []*plan.Expr) bool {
 		if len(args) == 2 {
 			return false
 		}
+	case ADDTIME:
+		// These overloads can return NULL for an out-of-range TIME result
+		// even when every operand is NOT NULL. The intervening legacy
+		// DATETIME overloads retain their released contract.
+		if oid <= 5 || (oid >= 9 && oid <= 11) {
+			return false
+		}
+	case SUBTIME:
+		if oid <= 5 || (oid >= 11 && oid <= 15) {
+			return false
+		}
+	case TIMEDIFF:
+		if oid <= 8 {
+			return false
+		}
+	case DATE_ADD, DATE_SUB:
+		if oid <= 15 {
+			return false
+		}
+	case MAKETIME:
+		if oid <= 38 {
+			return false
+		}
+	case TIMESTAMPADD:
+		if oid <= 7 {
+			return false
+		}
 	case COALESCE:
 		for _, arg := range args {
 			if arg.Typ.NotNullable {

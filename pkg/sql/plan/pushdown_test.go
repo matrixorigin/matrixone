@@ -211,6 +211,20 @@ func TestPreparedJoinDiagnosticProofOnlyRelaxesCurrentExecution(t *testing.T) {
 	safe, err := ProbePreparedJoinParameterDiagnostics(proc, template)
 	require.NoError(t, err)
 	require.True(t, safe)
+	rowCondition, err := BindFuncExprImplByPlanExpr(ctx.GetContext(), "=", []*plan.Expr{column, column})
+	require.NoError(t, err)
+	guarded, err := BindFuncExprImplByPlanExpr(ctx.GetContext(), "case", []*plan.Expr{rowCondition, clock, column})
+	require.NoError(t, err)
+	require.True(t, ContainsGuardedJoinDiagnostic(proc, guarded))
+	require.False(t, ContainsGuardedJoinDiagnosticWithProof(proc, guarded, safe))
+	invalidLiteral, err := BindFuncExprImplByPlanExpr(ctx.GetContext(), "time", []*plan.Expr{
+		makePlan2StringConstExprWithType("900:00:00"),
+	})
+	require.NoError(t, err)
+	guardedLiteral, err := BindFuncExprImplByPlanExpr(ctx.GetContext(), "case", []*plan.Expr{rowCondition, invalidLiteral, column})
+	require.NoError(t, err)
+	require.True(t, ContainsGuardedJoinDiagnosticWithProof(proc, guardedLiteral, safe),
+		"parameter proof cannot suppress an unrelated literal diagnostic")
 	originalContext := ctx.GetContext()
 	ctx.SetContext(WithPreparedJoinDiagnosticFree(originalContext))
 	require.False(t, builder.joinOwnsConstantDiagnostic(builder.qry.Nodes[2]))

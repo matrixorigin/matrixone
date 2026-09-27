@@ -281,6 +281,7 @@ func (c *Compile) FreezeResultMetadata() {
 func (c *Compile) Reset(proc *process.Process, startAt time.Time, fill func(*batch.Batch, *perfcounter.CounterSet) error, sql string) error {
 	// A cached Compile must never expose the previous execution's CTAS values.
 	c.preparedParamValues = nil
+	c.preparedJoinDiagnosticFree = false
 	// Reset only supports the TP topology admitted by prepare-time compilation.
 	// AP scan state and worker placement belong to one execution; updating the
 	// transaction offset cannot make them valid for another execution.
@@ -493,6 +494,7 @@ func (c *Compile) clear() {
 	c.pn = nil
 	c.fill = nil
 	c.preparedParamValues = nil
+	c.preparedJoinDiagnosticFree = false
 	c.resultSink = nil
 	c.executionGeneration = 0
 	c.retryTimes = 0
@@ -7009,15 +7011,14 @@ func hashMarkOperandRel(expr *plan.Expr) (int32, bool) {
 	return relPos, singleRel && relPos >= 0
 }
 
-func (c *Compile) compileProbeSideForBroadcastJoin(node, left, right *plan.Node, probeScopes []*Scope) []*Scope {
-	var rs []*Scope
+func (c *Compile) broadcastJoinUsesHash(node *plan.Node) bool {
 	isEq := plan2.IsEquiJoin2(node.OnList)
 	if isEq && (node.JoinType == plan.Node_INNER || node.JoinType == plan.Node_LEFT ||
 		node.JoinType == plan.Node_RIGHT || node.JoinType == plan.Node_SEMI ||
 		node.JoinType == plan.Node_ANTI || node.JoinType == plan.Node_SINGLE ||
 		node.JoinType == plan.Node_OUTER) {
 		for _, expr := range node.OnList {
-			if plan2.ContainsGuardedJoinDiagnostic(c.proc, expr) {
+			if plan2.ContainsGuardedJoinDiagnosticWithProof(c.proc, expr, c.preparedJoinDiagnosticFree) {
 				// Preserve row-dependent CASE/IF/COALESCE selection across
 				// nonmatching hash keys by evaluating the complete ON in LoopJoin.
 				isEq = false
@@ -7025,7 +7026,12 @@ func (c *Compile) compileProbeSideForBroadcastJoin(node, left, right *plan.Node,
 			}
 		}
 	}
+	return isEq
+}
 
+func (c *Compile) compileProbeSideForBroadcastJoin(node, left, right *plan.Node, probeScopes []*Scope) []*Scope {
+	var rs []*Scope
+	isEq := c.broadcastJoinUsesHash(node)
 	rightTypes := make([]types.Type, len(right.ProjectList))
 	for i, expr := range right.ProjectList {
 		rightTypes[i] = dupType(&expr.Typ)
@@ -10996,6 +11002,12 @@ func (c *Compile) SetPreparedParamValues(values []any) {
 	// A compile can be pooled, and parameter values may retain large payloads.
 	// Copy only the current execution's values and release the old backing array.
 	c.preparedParamValues = append([]any(nil), values...)
+}
+
+// SetPreparedJoinDiagnosticFree applies the current execution's proof to
+// physical JOIN selection. A rebuilt plan must be reproved.
+func (c *Compile) SetPreparedJoinDiagnosticFree(proven bool) {
+	c.preparedJoinDiagnosticFree = proven
 }
 
 // SetResourceAttemptOwnerEligible marks this Compile as the top-level

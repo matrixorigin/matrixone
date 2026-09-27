@@ -22,6 +22,7 @@ import (
 
 	"github.com/matrixorigin/matrixone/pkg/catalog"
 	"github.com/matrixorigin/matrixone/pkg/container/types"
+	"github.com/matrixorigin/matrixone/pkg/container/vector"
 	planpb "github.com/matrixorigin/matrixone/pkg/pb/plan"
 	pb "github.com/matrixorigin/matrixone/pkg/pb/statsinfo"
 	"github.com/matrixorigin/matrixone/pkg/sql/internal/materialized"
@@ -1032,6 +1033,34 @@ func TestGuardedDiagnosticKeepsLoopJoinSupportedOrientation(t *testing.T) {
 			require.Equal(t, []int32{0, 1}, builder.qry.Nodes[2].Children)
 			require.Equal(t, joinType, builder.qry.Nodes[2].JoinType)
 		})
+	}
+
+	param := &planpb.Expr{Typ: planpb.Type{Id: int32(types.T_varchar)}, Expr: &planpb.Expr_P{
+		P: &planpb.ParamRef{Pos: 0},
+	}}
+	params := vector.NewVec(types.T_text.ToType())
+	proc := ctx.GetProcess()
+	defer func() { proc.SetPrepareParams(nil); params.Free(proc.Mp()) }()
+	require.NoError(t, vector.AppendBytes(params, []byte("00:00:01"), false, proc.Mp()))
+	proc.SetPrepareParams(params)
+	preparedGuard := bind("case",
+		bind("=", GetColExpr(intType, leftTag, 0), makePlan2Int64ConstExprWithType(1)),
+		bind(">", GetColExpr(timeType, leftTag, 1), bind("time", param)),
+		makePlan2BoolConstExprWithType(true))
+	require.True(t, ContainsGuardedJoinDiagnostic(proc, preparedGuard))
+	ctx.SetContext(WithPreparedJoinDiagnosticFree(ctx.GetContext()))
+	for _, joinType := range []planpb.Node_JoinType{
+		planpb.Node_LEFT, planpb.Node_SEMI, planpb.Node_ANTI, planpb.Node_SINGLE,
+	} {
+		builder := NewQueryBuilder(planpb.Query_SELECT, ctx, false, true)
+		builder.qry.Nodes = []*planpb.Node{
+			{NodeId: 0, NodeType: planpb.Node_TABLE_SCAN, BindingTags: []int32{leftTag}, Stats: &planpb.Stats{Outcnt: 1}},
+			{NodeId: 1, NodeType: planpb.Node_TABLE_SCAN, BindingTags: []int32{rightTag}, Stats: &planpb.Stats{Outcnt: 100}},
+			{NodeId: 2, NodeType: planpb.Node_JOIN, JoinType: joinType, Children: []int32{0, 1},
+				OnList: []*planpb.Expr{key, preparedGuard}, Stats: &planpb.Stats{HashmapStats: &planpb.HashMapStats{}}},
+		}
+		builder.determineBuildAndProbeSide(2, false)
+		require.True(t, builder.qry.Nodes[2].IsRightJoin, "%s safe prepared operand restores cost choice", joinType)
 	}
 }
 

@@ -62,26 +62,32 @@ func ContainsStatementInvariantFilterDiagnostic(proc *process.Process, expr *pla
 // flow control. A hash join cannot activate that operand before key matching
 // without guessing which rows select the arm.
 func ContainsGuardedJoinDiagnostic(proc *process.Process, expr *plan.Expr) bool {
-	if expr == nil {
+	return ContainsGuardedJoinDiagnosticWithProof(proc, expr, false)
+}
+
+// ContainsGuardedJoinDiagnosticWithProof accepts only a proof for the current
+// execution's bound plan. It still checks literal and row-scoped diagnostics.
+func ContainsGuardedJoinDiagnosticWithProof(proc *process.Process, expr *plan.Expr, provenFree bool) bool {
+	if proc == nil || proc.Base == nil || expr == nil {
 		return false
 	}
 	if fn := expr.GetF(); fn != nil {
 		if fn.Func != nil && !function.IsStatementConstantInput(expr) {
 			id, _ := function.DecodeOverloadID(fn.Func.Obj)
 			if (id == function.CASE || id == function.IFF || id == function.COALESCE) &&
-				ContainsStatementInvariantFilterDiagnostic(proc, expr) {
+				containsStatementInvariantFilterDiagnostic(proc, expr, provenFree) {
 				return true
 			}
 		}
 		for _, arg := range fn.Args {
-			if ContainsGuardedJoinDiagnostic(proc, arg) {
+			if ContainsGuardedJoinDiagnosticWithProof(proc, arg, provenFree) {
 				return true
 			}
 		}
 	}
 	if list := expr.GetList(); list != nil {
 		for _, item := range list.List {
-			if ContainsGuardedJoinDiagnostic(proc, item) {
+			if ContainsGuardedJoinDiagnosticWithProof(proc, item, provenFree) {
 				return true
 			}
 		}

@@ -2280,7 +2280,8 @@ func (builder *QueryBuilder) determineBuildAndProbeSide(nodeID int32, recursive 
 		// joins with the logical left input as probe; preserve that layout
 		// across both cost-based and recursive-side orientation choices.
 		for _, expr := range node.OnList {
-			if ContainsGuardedJoinDiagnostic(builder.compCtx.GetProcess(), expr) {
+			if ContainsGuardedJoinDiagnosticWithProof(builder.compCtx.GetProcess(), expr,
+				preparedJoinDiagnosticFree(builder.compCtx.GetContext())) {
 				node.IsRightJoin = false
 				return
 			}
