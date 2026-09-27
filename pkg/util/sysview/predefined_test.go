@@ -322,7 +322,7 @@ func TestInformationSchemaStatisticsDDL_RestrictsCatalogJoins(t *testing.T) {
 }
 
 func TestInformationSchemaColumnsDDL_MixedVersionSubscriptionViews(t *testing.T) {
-	// A V97 CN must still supply persisted subscription View columns to a V58
+	// A V99 CN must still supply persisted subscription View columns to a V58
 	// COLUMNS definition until the tenant migration installs the new definition.
 	legacy := InformationSchemaColumnsV58DDL()
 	require.Contains(t, legacy, "from mo_subscription_columns() mc")
