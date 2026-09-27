@@ -1,6 +1,6 @@
 # Replay promotion merge bootstrap (#29415)
 
-Status: draft for design review. Implementation PR: pending.
+Status: revision for design review. Implementation PR: pending.
 Base: `origin/main` at `5a96035fc792b07b7a28e2f509dc0dcd4236e048`.
 
 ## Scope and evidence
@@ -86,15 +86,22 @@ must close/fence its writer before requesting promotion.
    `bootstrapMsg` before `Start`, so it cannot replay a stale settings closure.
    The legacy `OnMergeDone` path has no current
    caller; validate that no promotion event can reintroduce a removed supporter.
-4. Attach `Catalog.SetMergeNotifier` after reconciliation while the catalog is
+4. Before crossing the replay barrier, require all three write-only cron job
+   names to be absent. The Replay cron specification permits an optional
+   `GCLockMerge` job, so checking only the Replay job set is insufficient.
+   Attach `Catalog.SetMergeNotifier` after reconciliation while the catalog is
    quiescent and set the stopped scheduler's paused flag synchronously. Switch
    the transaction manager to Write **before** starting write-capable workers;
    the caller's exclusive-control precondition prevents new direct/RPC writes
-   during the remaining setup. Start the local write services and cron jobs
-   using the existing `skipMode=true` path, which permits write jobs while DB
-   mode still reads Replay. Start the reconciled scheduler paused, verify the
-   target cron set, then set DB mode Write and resume the scheduler. A failure
-   after the manager switch is terminal and must latch `OnException` before
+   during the remaining setup. Start the flusher and disk cleaner, then start
+   the reconciled scheduler paused and set DB mode Write. Resume the scheduler
+   with a query barrier. A canceled caller may stop the handoff before the
+   resume message is queued; once queued, the resume is the commit point and
+   the query barrier waits without caller cancellation. This prevents reporting
+   failure after merge work may have begun. Add the three write-only cron jobs
+   only after the barrier. With the exclusive caller and absent-name preflight,
+   `AddJob` has no reachable ordinary error after the first job starts. A failure
+   after the replay barrier is terminal and must latch `OnException` before
    returning. Skip the existing `SwitchTxnHandleStateTo(TxnLocalHandle)` call:
    fresh Replay-open has no forwarding transition, and the server defaults to
    Local. That call is not an admission barrier. Return success only after all
@@ -104,13 +111,18 @@ must close/fence its writer before requesting promotion.
 
 - Before the replay handoff, failure preserves Replay mode. After the handoff,
   latch a terminal error, call `TxnMgr.OnException`, detach the catalog notifier
-  while no new normal requests are allowed, then stop any started scheduler
-  and write services. Return the original error joined with cleanup errors.
+  only if it was attached after the replay worker joined, then stop any started
+  scheduler and write services. Return the original error; cleanup operations
+  on this path have no error return.
   Never report success because rollback succeeded.
 - `StopForWrite(ctx)` observes cancellation and cancels the replay worker. If
   cancellation returns before the worker joins, leave replay transaction flags
   unchanged, keep the terminal error latched, and let DB close join the worker.
   Do not retry promotion on the same DB instance.
+- After a resume message is queued, the private query barrier uses a detached
+  context. A fresh scheduler with no concurrent sender or Stop must process the
+  queued resume and query in order; a caller cancellation after the commit point
+  does not reverse a transition that may have started merge work.
 - The strict reader uses a promotion-only block scanner whose lower-level scan
   never closes the shared partial batch. Its caller is the sole close owner on
   every success and error path; it does not call `HybridScanByBlock`, which
