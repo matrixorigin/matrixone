@@ -2570,8 +2570,12 @@ func (txn *Transaction) getUncommittedS3Tombstone(
 // TODO:: refactor in next PR, to make it more efficient and include persisted deletes in S3
 func (txn *Transaction) forEachTableHasDeletesLocked(
 	isObject bool,
-	f func(tbl *txnTable) error) error {
-	tables := make(map[uint64]*txnTable)
+	f func(tbl *txnTable, writeName string) error) error {
+	type tableWrite struct {
+		table     *txnTable
+		writeName string
+	}
+	tables := make(map[uint64]tableWrite)
 	for i := 0; i < len(txn.writes); i++ {
 		e := txn.writes[i]
 		if e.typ != DELETE || e.bat == nil || e.bat.RowCount() == 0 ||
@@ -2592,21 +2596,27 @@ func (txn *Transaction) forEachTableHasDeletesLocked(
 			txn.Lock()
 			return err
 		}
-		rel, err := db.Relation(ctx, e.tableName, nil)
+		// mo_columns_update is a TN write marker, not a catalog relation.
+		relationName := e.tableName
+		if e.databaseId == catalog.MO_CATALOG_ID && e.tableId == catalog.MO_COLUMNS_ID &&
+			relationName == catalog.MO_COLUMNS_UPDATE {
+			relationName = catalog.MO_COLUMNS
+		}
+		rel, err := db.Relation(ctx, relationName, nil)
 		if err != nil {
 			txn.Lock()
 			return err
 		}
 		txn.Lock()
 		if v, ok := rel.(*txnTableDelegate); ok {
-			tables[e.tableId] = v.origin
+			tables[e.tableId] = tableWrite{v.origin, e.tableName}
 		} else {
-			tables[e.tableId] = rel.(*txnTable)
+			tables[e.tableId] = tableWrite{rel.(*txnTable), e.tableName}
 		}
 
 	}
-	for _, tbl := range tables {
-		if err := f(tbl); err != nil {
+	for _, write := range tables {
+		if err := f(write.table, write.writeName); err != nil {
 			return err
 		}
 	}
