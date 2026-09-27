@@ -529,10 +529,10 @@ func lockTableWithModeAndContext(
 		return err
 	}
 
-	return lockTableRefreshError(defChanged, refreshTS, retryOnRefresh)
+	return lockRefreshError(defChanged, refreshTS, retryOnRefresh)
 }
 
-func lockTableRefreshError(
+func lockRefreshError(
 	defChanged bool,
 	refreshTS timestamp.Timestamp,
 	retryOnRefresh bool,
@@ -549,7 +549,8 @@ func lockTableRefreshError(
 	return nil
 }
 
-// LockRow lock rows in table, rows will be locked, and wait current txn closed.
+// LockRows locks rows until the current transaction closes. A successful RC
+// snapshot refresh asks the caller to replay stale input.
 func LockRows(
 	eng engine.Engine,
 	proc *process.Process,
@@ -561,6 +562,41 @@ func LockRows(
 	lockMode lock.LockMode,
 	sharding lock.Sharding,
 	group uint32,
+) error {
+	return lockRows(eng, proc, rel, tableID, bat, idx, pkType, lockMode, sharding, group, true)
+}
+
+// LockRowsForSnapshotRefresh admits caller-supplied rows before their values
+// are read. It accepts a successful RC refresh without asking the caller to
+// replay input, but still rejects definition changes and all lock failures.
+// Callers must verify the row's current value under the same transaction.
+func LockRowsForSnapshotRefresh(
+	eng engine.Engine,
+	proc *process.Process,
+	rel engine.Relation,
+	tableID uint64,
+	bat *batch.Batch,
+	idx int32,
+	pkType types.Type,
+	lockMode lock.LockMode,
+	sharding lock.Sharding,
+	group uint32,
+) error {
+	return lockRows(eng, proc, rel, tableID, bat, idx, pkType, lockMode, sharding, group, false)
+}
+
+func lockRows(
+	eng engine.Engine,
+	proc *process.Process,
+	rel engine.Relation,
+	tableID uint64,
+	bat *batch.Batch,
+	idx int32,
+	pkType types.Type,
+	lockMode lock.LockMode,
+	sharding lock.Sharding,
+	group uint32,
+	retryOnRefresh bool,
 ) error {
 	txnOp := proc.GetTxnOperator()
 	if !txnOp.Txn().IsPessimistic() {
@@ -613,14 +649,7 @@ func LockRows(
 	if err != nil {
 		return err
 	}
-	// If the returned timestamp is not empty, we should return a retry error,
-	if !refreshTS.IsEmpty() {
-		if !defChanged {
-			return retryError
-		}
-		return retryWithDefChangedError
-	}
-	return nil
+	return lockRefreshError(defChanged, refreshTS, retryOnRefresh)
 }
 
 // doLock locks a set of data so that no other transaction can modify it.
@@ -726,6 +755,7 @@ func doLock(
 		Granularity:     g,
 		Policy:          proc.GetWaitPolicy(),
 		Mode:            opts.mode,
+		WriterFair:      isWriterFairLockRequest(ctx),
 		TableDefChanged: opts.changeDef,
 		Sharding:        opts.sharding,
 		Group:           opts.group,
@@ -1047,6 +1077,10 @@ func doLock(
 		return false, false, timestamp.Timestamp{}, err
 	}
 	return true, result.TableDefChanged, newTS, nil
+}
+
+func isWriterFairLockRequest(ctx context.Context) bool {
+	return defines.IsLockWriterFair(ctx)
 }
 
 func setPlanSnapshotForLock(

@@ -16,6 +16,7 @@ package frontend
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"strings"
 	"testing"
@@ -47,6 +48,54 @@ func TestIsUserDatabaseType(t *testing.T) {
 	}
 	require.False(t, isUserDatabaseType(catalog.SystemDBTypeDataBranch, defines.MORPCVersion74))
 	require.True(t, isUserDatabaseType(catalog.SystemDBTypeDataBranch, defines.MORPCVersion75))
+}
+
+func TestPublicationMutationUsesLifecycleOwnerTxn(t *testing.T) {
+	for _, testCase := range []struct {
+		name string
+		run  func(context.Context, *Session) error
+	}{
+		{
+			name: "alter",
+			run: func(ctx context.Context, ses *Session) error {
+				return doAlterPublication(ctx, ses, &tree.AlterPublication{})
+			},
+		},
+		{
+			name: "drop",
+			run: func(ctx context.Context, ses *Session) error {
+				return doDropPublication(ctx, ses, &tree.DropPublication{})
+			},
+		},
+	} {
+		t.Run(testCase.name, func(t *testing.T) {
+			ctrl := gomock.NewController(t)
+			ctx := context.Background()
+			ses := newTestSession(t, ctrl)
+			defer ses.Close()
+			ses.SetTenantInfo(&TenantInfo{
+				Tenant:      sysAccountName,
+				DefaultRole: moAdminRoleName,
+			})
+			bh := &backgroundExecTest{}
+			bh.init()
+			beginErr := errors.New("begin failed")
+			bh.sql2err["begin;"] = beginErr
+			oldNewBackgroundExec := NewBackgroundExec
+			defer func() { NewBackgroundExec = oldNewBackgroundExec }()
+			forcedPessimisticRC := false
+			NewBackgroundExec = func(_ context.Context, _ FeSession, opts ...*BackgroundExecOption) BackgroundExec {
+				for _, opt := range opts {
+					forcedPessimisticRC = forcedPessimisticRC || opt != nil && opt.forcePessimisticRC
+				}
+				return bh
+			}
+
+			err := testCase.run(ctx, ses)
+			require.ErrorIs(t, err, beginErr)
+			require.True(t, forcedPessimisticRC)
+		})
+	}
 }
 
 func Test_doCreatePublication(t *testing.T) {

@@ -47,6 +47,14 @@ func TestCanPullupDeepCorrelatedPredicates(t *testing.T) {
 	}
 }
 
+func TestSubqueryBoolConstIsQueryLocal(t *testing.T) {
+	first := newSubqueryBoolConst(true)
+	second := newSubqueryBoolConst(true)
+	require.NotSame(t, first, second)
+	first.Ndv = 7
+	require.Zero(t, second.Ndv)
+}
+
 func TestHasInnerColumnInDeepCorrelatedFilters(t *testing.T) {
 	const (
 		subID    int32 = 0
@@ -2138,7 +2146,7 @@ func TestPrepareCorrelatedScalarAggregatePostJoinProjection(t *testing.T) {
 		results:      []*plan.Expr{projection},
 	}
 
-	newSubID, postJoinProjections, ok, err := builder.prepareCorrelatedScalarAggregatePostJoinProjection(1, ctx, []*plan.Expr{constTrue}, nil, false)
+	newSubID, postJoinProjections, ok, err := builder.prepareCorrelatedScalarAggregatePostJoinProjection(1, ctx, []*plan.Expr{newSubqueryBoolConst(true)}, nil, false)
 	require.NoError(t, err)
 	require.True(t, ok)
 	require.Equal(t, int32(0), newSubID)
@@ -2299,7 +2307,7 @@ func TestPrepareCorrelatedScalarAggregatePostJoinProjectionRejectsUnsupportedSha
 			builder := NewQueryBuilder(plan.Query_SELECT, NewMockCompilerContext(true), false, true)
 			builder.qry.Nodes = nodes
 
-			newSubID, postJoinProjections, ok, err := builder.prepareCorrelatedScalarAggregatePostJoinProjection(1, ctx, []*plan.Expr{constTrue}, nil, false)
+			newSubID, postJoinProjections, ok, err := builder.prepareCorrelatedScalarAggregatePostJoinProjection(1, ctx, []*plan.Expr{newSubqueryBoolConst(true)}, nil, false)
 			require.Equal(t, int32(1), newSubID)
 			if tt.wantErr {
 				require.Error(t, err)
@@ -2328,7 +2336,7 @@ func TestPrepareCorrelatedScalarAggregatePostJoinProjectionRejectsUnsupportedDir
 		results:      []*plan.Expr{GetColExpr(aggregate.Typ, 21, 0)},
 	}
 
-	newSubID, postJoinProjections, ok, err := builder.prepareCorrelatedScalarAggregatePostJoinProjection(0, ctx, []*plan.Expr{constTrue}, nil, false)
+	newSubID, postJoinProjections, ok, err := builder.prepareCorrelatedScalarAggregatePostJoinProjection(0, ctx, []*plan.Expr{newSubqueryBoolConst(true)}, nil, false)
 	require.Equal(t, int32(0), newSubID)
 	require.Error(t, err)
 	require.False(t, ok)
