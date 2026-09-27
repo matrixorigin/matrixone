@@ -2692,6 +2692,12 @@ func (b *baseBinder) bindComparisonExpr(astExpr *tree.ComparisonExpr, depth int3
 		return nil, moerr.NewNYIf(b.GetContext(), "'%v'", astExpr)
 	}
 
+	if astExpr.SubOp < tree.ANY {
+		if expr, handled, err := b.bindRowScalarSubqueryComparison(leftAst, rightAst, op, depth); handled {
+			return expr, err
+		}
+	}
+
 	if astExpr.SubOp >= tree.ANY {
 		expr, err := b.impl.BindExpr(astExpr.Right, depth, false)
 		if err != nil {
@@ -2752,6 +2758,89 @@ func (b *baseBinder) bindComparisonExpr(astExpr *tree.ComparisonExpr, depth int3
 		})
 	}
 	return b.bindFuncExprImplByAstExpr(op, args, depth)
+}
+
+// bindRowScalarSubqueryComparison preserves a direct row comparison until the
+// scalar subquery has been decorrelated. A multi-column scalar subquery is
+// represented as TUPLE while binding, but its individual result expressions
+// only become available to the outer expression during subquery flattening.
+func (b *baseBinder) bindRowScalarSubqueryComparison(
+	leftAst, rightAst tree.Expr,
+	op string,
+	depth int32,
+) (*Expr, bool, error) {
+	switch op {
+	case "=", "<>", "<", "<=", ">", ">=", "<=>":
+	default:
+		return nil, false, nil
+	}
+
+	var rowAst, subqueryAst tree.Expr
+	reversed := false
+	if _, ok := leftAst.(*tree.Tuple); ok {
+		if _, ok = rightAst.(*tree.Subquery); ok {
+			rowAst, subqueryAst = leftAst, rightAst
+		}
+	}
+	if rowAst == nil {
+		if _, ok := rightAst.(*tree.Tuple); ok {
+			if _, ok = leftAst.(*tree.Subquery); ok {
+				rowAst, subqueryAst = rightAst, leftAst
+				reversed = true
+			}
+		}
+	}
+	if rowAst == nil {
+		return nil, false, nil
+	}
+
+	row, err := b.impl.BindExpr(rowAst, depth, false)
+	if err != nil {
+		return nil, true, err
+	}
+	subqueryExpr, err := b.impl.BindExpr(subqueryAst, depth, false)
+	if err != nil {
+		return nil, true, err
+	}
+	subquery := subqueryExpr.GetSub()
+	if subquery == nil || subquery.Typ != plan.SubqueryRef_SCALAR {
+		return nil, true, moerr.NewInvalidInput(b.GetContext(), "row comparison requires a scalar subquery")
+	}
+	if err = rejectBoundIntervalFunctionArgs(b.GetContext(), op, []*plan.Expr{row}); err != nil {
+		return nil, true, err
+	}
+	items := row.GetList()
+	if items == nil {
+		return nil, true, moerr.NewInvalidInput(b.GetContext(), "row comparison requires a row constructor")
+	}
+	if len(items.List) != int(subquery.RowSize) {
+		return nil, true, moerr.NewInvalidInputf(
+			b.GetContext(), "subquery should return %d columns", len(items.List))
+	}
+	row, err = b.useStoredMySQLSpecialTypesForNumericSubquery(row, subqueryExpr)
+	if err != nil {
+		return nil, true, err
+	}
+	if reversed {
+		switch op {
+		case "<":
+			op = ">"
+		case "<=":
+			op = ">="
+		case ">":
+			op = "<"
+		case ">=":
+			op = "<="
+		}
+	}
+
+	subquery.Op = op
+	subquery.Child = row
+	subqueryExpr.Typ = plan.Type{
+		Id:          int32(types.T_bool),
+		NotNullable: op == "<=>",
+	}
+	return subqueryExpr, true, nil
 }
 
 func (b *baseBinder) bindWithRawMySQLSpecialTypes(bind func() (*Expr, error)) (*Expr, error) {
@@ -2879,7 +2968,9 @@ func (b *baseBinder) bindTupleInByAst(leftTuple *tree.Tuple, rightTuple *tree.Tu
 			}
 			if eqFunc := eqExpr.GetF(); eqFunc != nil && len(eqFunc.Args) == 2 &&
 				containsVolatileFunction(eqFunc.Args[0]) && b.ctx != nil {
-				b.markTupleVolatileSources(eqFunc.Args[0], &leftMemoIDs[i])
+				if err := b.markTupleVolatileSources(eqFunc.Args[0], &leftMemoIDs[i]); err != nil {
+					return nil, err
+				}
 			}
 			equalities = append(equalities, eqExpr)
 		}
@@ -2902,7 +2993,7 @@ func (b *baseBinder) bindTupleInByAst(leftTuple *tree.Tuple, rightTuple *tree.Tu
 	return newExpr, nil
 }
 
-func (b *baseBinder) markTupleVolatileSources(expr *plan.Expr, memoIDs *[]int32) {
+func (b *baseBinder) markTupleVolatileSources(expr *plan.Expr, memoIDs *[]int32) error {
 	sources := make([]*plan.Expr, 0, 1)
 	collectVolatileFunctionSources(expr, &sources)
 	if len(sources) == 0 {
@@ -2911,12 +3002,16 @@ func (b *baseBinder) markTupleVolatileSources(expr *plan.Expr, memoIDs *[]int32)
 		sources = append(sources, expr)
 	}
 	for len(*memoIDs) < len(sources) {
-		b.ctx.volatileExprMemoID--
-		*memoIDs = append(*memoIDs, b.ctx.volatileExprMemoID)
+		memoID, err := b.allocateVolatileExprMemoID()
+		if err != nil {
+			return err
+		}
+		*memoIDs = append(*memoIDs, memoID)
 	}
 	for i, source := range sources {
 		source.AuxId = (*memoIDs)[i]
 	}
+	return nil
 }
 
 func collectVolatileFunctionSources(expr *plan.Expr, sources *[]*plan.Expr) {
@@ -3126,6 +3221,126 @@ func (b *baseBinder) hasPreparedNumericParamExprs(exprs []tree.Expr, depth int32
 		}
 	}
 	return false, nil
+}
+
+// HAVING and SELECT bind before their aggregate/window nodes are appended.
+// Resolve those output tags from the current binding context during that phase.
+func (b *baseBinder) pendingColumnSource(col *plan.ColRef) *Expr {
+	if b.ctx == nil || col == nil || col.ColPos < 0 {
+		return nil
+	}
+	var outputs []*Expr
+	switch col.RelPos {
+	case b.ctx.groupTag:
+		outputs = b.ctx.groups
+	case b.ctx.aggregateTag:
+		outputs = b.ctx.aggregates
+	case b.ctx.windowTag:
+		outputs = b.ctx.windows
+	}
+	if int(col.ColPos) >= len(outputs) {
+		return nil
+	}
+	source := outputs[col.ColPos]
+	if window := source.GetW(); window != nil {
+		return window.WindowFunc
+	}
+	return source
+}
+
+// A derived column can hide its marker behind a ColRef before the enclosing
+// function is bound. Follow only that column's projection, not unrelated
+// predicates or siblings, when deciding which numeric peers are provisional.
+func (b *baseBinder) preparedExprContainsProjectedParam(expr *Expr) bool {
+	if preparedExprContainsParam(expr) {
+		return true
+	}
+	if expr == nil || b.builder == nil || b.builder.qry == nil {
+		return false
+	}
+	var visited map[[3]int32]struct{}
+	var contains func(*Expr) bool
+	var output func(int32, int32, int32) bool
+	output = func(nodeID, tag, pos int32) bool {
+		if nodeID < 0 || int(nodeID) >= len(b.builder.qry.Nodes) || pos < 0 {
+			return false
+		}
+		if visited == nil {
+			visited = make(map[[3]int32]struct{})
+		}
+		key := [3]int32{nodeID, tag, pos}
+		if _, seen := visited[key]; seen {
+			return false
+		}
+		visited[key] = struct{}{}
+		node := b.builder.qry.Nodes[nodeID]
+		if node == nil {
+			return false
+		}
+		switch node.NodeType {
+		case plan.Node_AGG:
+			if len(node.BindingTags) > 0 && tag == node.BindingTags[0] && int(pos) < len(node.GroupBy) {
+				return contains(node.GroupBy[pos])
+			}
+			if len(node.BindingTags) > 1 && tag == node.BindingTags[1] && int(pos) < len(node.AggList) {
+				return contains(node.AggList[pos])
+			}
+		case plan.Node_WINDOW:
+			if node.WindowIdx == pos && len(node.WinSpecList) > 0 {
+				return contains(node.WinSpecList[0].GetW().GetWindowFunc())
+			}
+			// All windows in a query block share a tag; its map entry is the last window.
+			if len(node.Children) == 1 {
+				return output(node.Children[0], tag, pos)
+			}
+		case plan.Node_PARTITION:
+			if len(node.Children) == 1 {
+				return output(node.Children[0], tag, pos)
+			}
+		}
+		if isPreparedSetOperationNode(node.NodeType) {
+			for _, childID := range node.Children {
+				if childID >= 0 && int(childID) < len(b.builder.qry.Nodes) {
+					child := b.builder.qry.Nodes[childID]
+					if child != nil && int(pos) < len(child.ProjectList) && contains(child.ProjectList[pos]) {
+						return true
+					}
+				}
+			}
+			return false
+		}
+		return int(pos) < len(node.ProjectList) && contains(node.ProjectList[pos])
+	}
+	contains = func(source *Expr) bool {
+		if source == nil {
+			return false
+		}
+		if sub := source.GetSub(); sub != nil && sub.Typ == plan.SubqueryRef_SCALAR {
+			// Only the selected scalar output can own this value. Predicates and
+			// other internal columns are dependencies of the subquery's rows, not
+			// of its result domain.
+			return output(sub.NodeId, -1, 0)
+		}
+		if preparedExprContainsParam(source) {
+			return true
+		}
+		found := false
+		_ = plan.VisitExprTree(source, func(nested *Expr) error {
+			if sub := nested.GetSub(); !found && sub != nil && sub.Typ == plan.SubqueryRef_SCALAR {
+				found = output(sub.NodeId, -1, 0)
+			}
+			if col := nested.GetCol(); !found && col != nil {
+				if nodeID, ok := b.builder.tag2NodeID[col.RelPos]; ok {
+					found = output(nodeID, col.RelPos, col.ColPos)
+				} else if pending := b.pendingColumnSource(col); pending != nil {
+					found = contains(pending)
+				}
+			}
+			return nil
+		})
+		return found
+	}
+	return contains(expr)
 }
 
 func isPreparedNumericAggregate(name string, argCount int) bool {
@@ -3831,15 +4046,15 @@ func (b *baseBinder) bindFuncExprImplByAstExpr(name string, astArgs []tree.Expr,
 	preparedNumericProvenance := false
 	if b.builder != nil && b.builder.isPrepareStatement &&
 		(isNumericContextFunction(name) || supportsGenericNumericFunctionContext(name) ||
-			preparedSQLExecuteNumericResultConsumer(name) || name == "iff") {
+			preparedSQLExecuteNumericResultConsumer(name) || name == "iff" || name == "field") {
 		var err error
 		preparedNumericProvenance, err = b.hasPreparedNumericParamExprs(astArgs, depth)
 		if err != nil {
 			return nil, err
 		}
-		if !preparedNumericProvenance && (preparedSQLExecuteNumericResultConsumer(name) || name == "iff") {
+		if !preparedNumericProvenance && (preparedSQLExecuteNumericResultConsumer(name) || name == "iff" || name == "field") {
 			for _, arg := range args {
-				if preparedExprContainsParam(arg) {
+				if b.preparedExprContainsProjectedParam(arg) {
 					preparedNumericProvenance = true
 					break
 				}
@@ -3857,7 +4072,7 @@ func (b *baseBinder) bindFuncExprImplByAstExpr(name string, astArgs []tree.Expr,
 	preparedPeerSources := make([]*plan.Expr, len(args))
 	if preparedNumericProvenance {
 		for i, arg := range args {
-			if arg == nil || preparedExprContainsParam(arg) {
+			if arg == nil || b.preparedExprContainsProjectedParam(arg) {
 				continue
 			}
 			source := arg
@@ -3964,7 +4179,9 @@ func (b *baseBinder) bindFuncExprImplByAstExpr(name string, astArgs []tree.Expr,
 	}
 	if (name == "in" || name == "not_in") && len(args) == 2 &&
 		containsVolatileFunction(args[0]) && b.ctx != nil {
-		b.markVolatileInLeft(args[0])
+		if err := b.markVolatileInLeft(args[0]); err != nil {
+			return nil, err
+		}
 	}
 	//promote interval expr rewrite here
 	if name == "interval" {
@@ -4037,10 +4254,12 @@ func (b *baseBinder) bindFuncExprImplByAstExpr(name string, astArgs []tree.Expr,
 				}
 			}
 			if isIfNull {
-				e.Typ.NotNullable = args[1].Typ.NotNullable || args[2].Typ.NotNullable
+				if err := b.recordIfNullContract(e, args); err != nil {
+					return nil, err
+				}
 				ensurePreparedNumericMetadata(e).IfnullCommonValue = true
 			}
-			markPreparedResultCastsProvisional(
+			b.markPreparedResultCastsProvisional(
 				b.GetContext(), name, astArgs, preparedPeerSources, e, preparedNumericProvenance)
 			return e, nil
 		}
@@ -4061,7 +4280,9 @@ func (b *baseBinder) bindFuncExprImplByAstExpr(name string, astArgs []tree.Expr,
 			b.GetContext(), name, args, false, nil, nil, findInSetInternalArgs)
 		if err == nil {
 			if isIfNull {
-				builtinExpr.Typ.NotNullable = args[1].Typ.NotNullable || args[2].Typ.NotNullable
+				if err := b.recordIfNullContract(builtinExpr, args); err != nil {
+					return nil, err
+				}
 				ensurePreparedNumericMetadata(builtinExpr).IfnullCommonValue = true
 			}
 			return builtinExpr, nil
@@ -4089,6 +4310,27 @@ func (b *baseBinder) bindFuncExprImplByAstExpr(name string, astArgs []tree.Expr,
 	}
 
 	return bindFuncExprImplUdf(b, name, udf, astArgs, args, depth)
+}
+
+func (b *baseBinder) recordIfNullContract(expr *plan.Expr, args []*plan.Expr) error {
+	expr.Typ.NotNullable = args[1].Typ.NotNullable || args[2].Typ.NotNullable
+	if b.ctx == nil || !hasSubquery(expr) {
+		return nil
+	}
+	conditionSource, elseSource, ok := ifNullCaseSources(expr.GetF())
+	if !ok {
+		return nil
+	}
+	// IFNULL evaluates its first argument once, but the CASE rewrite binds that
+	// source twice. Give both copies one flattening memo so a scalar subquery is
+	// decorrelated once and both CASE arms consume the same projected value.
+	memoID, err := b.allocateVolatileExprMemoID()
+	if err != nil {
+		return err
+	}
+	conditionSource.AuxId = memoID
+	elseSource.AuxId = memoID
+	return nil
 }
 
 func sequenceFunctionPublicArity(name string) (minArgs, maxArgs int, ok bool) {
@@ -4179,7 +4421,7 @@ func avgIntegerConstantPrecision(astExpr tree.Expr) (int32, bool) {
 	}
 }
 
-func markPreparedResultCastsProvisional(
+func (b *baseBinder) markPreparedResultCastsProvisional(
 	ctx context.Context,
 	name string,
 	astArgs []tree.Expr,
@@ -4216,7 +4458,7 @@ func markPreparedResultCastsProvisional(
 				}
 			}
 		}
-		if i >= len(astArgs) || !preparedSQLExecuteNumericResultValueArg(name, i, len(args)) {
+		if i >= len(astArgs) || (name != "field" && !preparedSQLExecuteNumericResultValueArg(name, i, len(args))) {
 			continue
 		}
 		if _, explicit := unwrapParenExpr(astArgs[i]).(*tree.CastExpr); explicit {
@@ -4224,7 +4466,14 @@ func markPreparedResultCastsProvisional(
 		}
 		fn := arg.GetF()
 		if fn == nil || fn.Func == nil || !strings.EqualFold(fn.Func.GetObjName(), "cast") ||
-			len(fn.Args) == 0 || !preparedExprContainsParam(fn.Args[0]) {
+			len(fn.Args) == 0 || !b.preparedExprContainsProjectedParam(fn.Args[0]) {
+			continue
+		}
+		if b.builder != nil && b.builder.boolSumAvgCompat &&
+			(strings.EqualFold(name, "sum") || strings.EqualFold(name, "avg")) &&
+			types.T(arg.Typ.Id) == types.T_int8 && types.T(fn.Args[0].Typ.Id) == types.T_bool {
+			// This is SUM/AVG's mode-authorized BOOL adapter, not a temporary
+			// cast chosen for the marker's unresolved PREPARE-time domain.
 			continue
 		}
 		// This cast was introduced while the marker still had its prepare-time
@@ -4257,18 +4506,36 @@ func markPreparedTemporalNumericPeer(expr *Expr, temporal Type) {
 	}
 }
 
-func (b *baseBinder) markVolatileInLeft(left *plan.Expr) {
+func (b *baseBinder) allocateVolatileExprMemoID() (int32, error) {
+	if b.builder == nil {
+		return 0, moerr.NewInternalError(b.GetContext(), "memoized expression requires a query builder")
+	}
+	if b.builder.nextVolatileExprMemoID == math.MinInt32 {
+		return 0, moerr.NewInternalError(b.GetContext(), "too many memoized expressions in query")
+	}
+	b.builder.nextVolatileExprMemoID--
+	return b.builder.nextVolatileExprMemoID, nil
+}
+
+func (b *baseBinder) markVolatileInLeft(left *plan.Expr) error {
 	if list := left.GetList(); list != nil {
 		for _, elem := range list.List {
 			if containsVolatileFunction(elem) {
-				b.ctx.volatileExprMemoID--
-				elem.AuxId = b.ctx.volatileExprMemoID
+				memoID, err := b.allocateVolatileExprMemoID()
+				if err != nil {
+					return err
+				}
+				elem.AuxId = memoID
 			}
 		}
-		return
+		return nil
 	}
-	b.ctx.volatileExprMemoID--
-	left.AuxId = b.ctx.volatileExprMemoID
+	memoID, err := b.allocateVolatileExprMemoID()
+	if err != nil {
+		return err
+	}
+	left.AuxId = memoID
+	return nil
 }
 
 func (b *baseBinder) resolvePreparedNumericArgs(name string, args []*Expr) ([]*Expr, error) {
@@ -5167,15 +5434,28 @@ func (b *baseBinder) annotateStringDomainSource(
 		if b.builder == nil || b.builder.qry == nil {
 			return
 		}
-		nodeID, ok := b.builder.tag2NodeID[col.RelPos]
-		if !ok || nodeID < 0 || int(nodeID) >= len(b.builder.qry.Nodes) {
-			return
+		var source *Expr
+		if b.ctx != nil && col.RelPos == b.ctx.groupTag {
+			source = b.pendingColumnSource(col)
+		} else {
+			nodeID, ok := b.builder.tag2NodeID[col.RelPos]
+			if !ok || nodeID < 0 || int(nodeID) >= len(b.builder.qry.Nodes) {
+				return
+			}
+			node := b.builder.qry.Nodes[nodeID]
+			if node == nil || col.ColPos < 0 {
+				return
+			}
+			outputs := node.ProjectList
+			if node.NodeType == plan.Node_AGG && len(node.BindingTags) > 0 && col.RelPos == node.BindingTags[0] {
+				outputs = node.GroupBy
+			}
+			if int(col.ColPos) >= len(outputs) {
+				return
+			}
+			source = outputs[col.ColPos]
 		}
-		node := b.builder.qry.Nodes[nodeID]
-		if node == nil || col.ColPos < 0 || int(col.ColPos) >= len(node.ProjectList) {
-			return
-		}
-		key := [2]int32{nodeID, col.ColPos}
+		key := [2]int32{col.RelPos, col.ColPos}
 		if witness, ok := memo[key]; ok {
 			if witness != nil {
 				ensurePreparedNumericMetadata(expr).StringDomainSource = DeepCopyExpr(witness)
@@ -5187,7 +5467,6 @@ func (b *baseBinder) annotateStringDomainSource(
 		}
 		visited[key] = struct{}{}
 		defer delete(visited, key)
-		source := node.ProjectList[col.ColPos]
 		if source == nil || source == expr {
 			memo[key] = nil
 			return
