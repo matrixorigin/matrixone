@@ -23,6 +23,7 @@ import (
 	"time"
 
 	"github.com/matrixorigin/matrixone/pkg/clusterservice"
+	"github.com/matrixorigin/matrixone/pkg/cnservice"
 	"github.com/matrixorigin/matrixone/pkg/embed"
 	"github.com/matrixorigin/matrixone/pkg/pb/metadata"
 	"github.com/matrixorigin/matrixone/pkg/tests/testutils"
@@ -34,10 +35,14 @@ func TestIssue29226VectorScanAcrossCoordinators(t *testing.T) {
 		ctx, cancel := context.WithTimeout(context.Background(), 3*time.Minute)
 		defer cancel()
 		dbs := make([]*sql.DB, 2)
+		services := make([]cnservice.Service, len(dbs))
 		addrs := make([]string, 2)
 		for i := range dbs {
 			cn, err := cluster.GetCNService(i)
 			require.NoError(t, err)
+			service, ok := cn.RawService().(cnservice.Service)
+			require.True(t, ok)
+			services[i] = service
 			inventory := clusterservice.GetMOCluster(cn.ServiceID())
 			require.Eventually(t, func() bool {
 				inventory.ForceRefresh(true)
@@ -142,6 +147,23 @@ func TestIssue29226VectorScanAcrossCoordinators(t *testing.T) {
 					require.NoError(t, tx.Commit())
 				}
 			}()
+			if tc.commit {
+				// An independent CN may start from an older snapshot when
+				// freshness-sacrificing mode is enabled. Fence its next read at
+				// the writer's commit instead of relying on logtail timing.
+				frontier := services[tc.ingress].GetTxnClient().GetLatestCommitTS()
+				require.False(t, frontier.IsEmpty())
+				for observer := range services {
+					if observer == tc.ingress {
+						continue
+					}
+					waitCtx, waitCancel := context.WithTimeout(ctx, 10*time.Second)
+					snapshot, err := services[observer].GetTxnClient().WaitLogTailAppliedAt(waitCtx, frontier)
+					waitCancel()
+					require.NoError(t, err)
+					require.True(t, frontier.Less(snapshot))
+				}
+			}
 			want := []int64{1, 2, 3, 4, 5, 6}
 			if tc.commit {
 				want = []int64{3, 4, 5, 6, 7, 1}
