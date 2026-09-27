@@ -51,14 +51,18 @@ func TestPreparedPublicationPatternBindings(t *testing.T) {
 				name     string
 				value    any
 				wireType defines.MysqlType
+				sqlType  types.T
 				invalid  bool
 			}{
-				{"first", "team_%", defines.MYSQL_TYPE_VAR_STRING, false},
-				{"integer", int64(42), defines.MYSQL_TYPE_LONGLONG, true},
-				{"null", nil, defines.MYSQL_TYPE_NULL, true},
-				{"after_errors", "other_%", defines.MYSQL_TYPE_VAR_STRING, false},
-				{"empty_literal_compatibility", "", defines.MYSQL_TYPE_VAR_STRING, false},
-				{"escaped", "x' OR 1=1 -- \\_%\x00", defines.MYSQL_TYPE_BLOB, false},
+				{"first", "team_%", defines.MYSQL_TYPE_VAR_STRING, types.T_varchar, false},
+				{"integer", int64(42), defines.MYSQL_TYPE_LONGLONG, types.T_int64, true},
+				{"null", nil, defines.MYSQL_TYPE_NULL, types.T_any, true},
+				{"date", "2024-01-02", defines.MYSQL_TYPE_DATE, types.T_date, true},
+				{"datetime", "2024-01-02 03:04:05", defines.MYSQL_TYPE_DATETIME, types.T_datetime, true},
+				{"json", "{\"a\":1}", defines.MYSQL_TYPE_JSON, types.T_json, true},
+				{"after_errors", "other_%", defines.MYSQL_TYPE_VAR_STRING, types.T_varchar, false},
+				{"empty_literal_compatibility", "", defines.MYSQL_TYPE_VAR_STRING, types.T_varchar, false},
+				{"escaped", "x' OR 1=1 -- \\_%\x00", defines.MYSQL_TYPE_BLOB, types.T_blob, false},
 			} {
 				t.Run(tc.name, func(t *testing.T) {
 					if binaryExecute {
@@ -74,7 +78,12 @@ func TestPreparedPublicationPatternBindings(t *testing.T) {
 						require.NoError(t, vector.AppendBytes(prepared.params, []byte(value), tc.value == nil, cw.proc.Mp()))
 						prepared.ParamTypes = []byte{byte(tc.wireType), 0}
 					} else {
-						require.NoError(t, ses.SetUserDefinedVar("pattern", tc.value, ""))
+						if tc.invalid && tc.value != nil && tc.sqlType != types.T_int64 {
+							require.NoError(t, ses.setUserDefinedVarWithType(
+								"pattern", tc.value, "", false, plan.Type{Id: int32(tc.sqlType)}))
+						} else {
+							require.NoError(t, ses.SetUserDefinedVar("pattern", tc.value, ""))
+						}
 						execPlan.Args = []*plan.Expr{{Expr: &plan.Expr_V{V: &plan.VarRef{Name: "pattern"}}}}
 					}
 					_, _, _, _, _, err := initExecuteStmtParam(execCtx, ses, cw, execPlan, "")

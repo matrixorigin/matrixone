@@ -16,7 +16,7 @@ prepare pub_pattern from 'show publications like ?';
 set @pub_filter = 'prepared_management%';
 execute pub_pattern using @pub_filter;
 ➤ publication[12,-1,0]  ¦  database[12,-1,0]  ¦  tables[-1,21845,0]  ¦  sub_account[-1,21845,0]  ¦  subscribed_accounts[-1,21845,0]  ¦  create_time[93,19,0]  ¦  update_time[93,19,0]  ¦  comments[-1,21845,0]  𝄀
-prepared_management_pub  ¦  prepared_management_db  ¦  t1  ¦  *  ¦    ¦  2026-09-26 20:29:55  ¦  null  ¦  initial comment
+prepared_management_pub  ¦  prepared_management_db  ¦  t1  ¦  *  ¦    ¦  2026-09-27 13:04:00  ¦  null  ¦  initial comment
 show publications like ?;
 invalid input: SHOW PUBLICATIONS LIKE parameter requires prepared execution
 set @pub_filter = 'no_matching_publication%';
@@ -30,19 +30,28 @@ invalid input: SHOW PUBLICATIONS LIKE parameter must be a non-NULL string
 set @pub_filter = null;
 execute pub_pattern using @pub_filter;
 invalid input: SHOW PUBLICATIONS LIKE parameter must be a non-NULL string
+set @pub_filter = cast('2024-01-02' as date);
+execute pub_pattern using @pub_filter;
+invalid input: SHOW PUBLICATIONS LIKE parameter must be a non-NULL string
+set @pub_filter = cast('2024-01-02 03:04:05' as datetime);
+execute pub_pattern using @pub_filter;
+invalid input: SHOW PUBLICATIONS LIKE parameter must be a non-NULL string
+set @pub_filter = cast('{"a":1}' as json);
+execute pub_pattern using @pub_filter;
+invalid input: SHOW PUBLICATIONS LIKE parameter must be a non-NULL string
 set @pub_filter = 'x'' OR 1=1 -- ';
 execute pub_pattern using @pub_filter;
 ➤ publication[12,-1,0]  ¦  database[12,-1,0]  ¦  tables[-1,21845,0]  ¦  sub_account[-1,21845,0]  ¦  subscribed_accounts[-1,21845,0]  ¦  create_time[93,19,0]  ¦  update_time[93,19,0]  ¦  comments[-1,21845,0]
 set @pub_filter = 'prepared_management_pub';
 execute pub_pattern using @pub_filter;
 ➤ publication[12,-1,0]  ¦  database[12,-1,0]  ¦  tables[-1,21845,0]  ¦  sub_account[-1,21845,0]  ¦  subscribed_accounts[-1,21845,0]  ¦  create_time[93,19,0]  ¦  update_time[93,19,0]  ¦  comments[-1,21845,0]  𝄀
-prepared_management_pub  ¦  prepared_management_db  ¦  t1  ¦  *  ¦    ¦  2026-09-26 20:29:55  ¦  null  ¦  initial comment
+prepared_management_pub  ¦  prepared_management_db  ¦  t1  ¦  *  ¦    ¦  2026-09-27 13:04:00  ¦  null  ¦  initial comment
 prepare pub_show from 'show publications like ''prepared_management_pub''';
 prepare pub_ddl from 'show create publication prepared_management_pub';
 prepare pub_coverage from 'show publication coverage prepared_management_pub';
 execute pub_show;
 ➤ publication[12,-1,0]  ¦  database[12,-1,0]  ¦  tables[-1,21845,0]  ¦  sub_account[-1,21845,0]  ¦  subscribed_accounts[-1,21845,0]  ¦  create_time[93,19,0]  ¦  update_time[93,19,0]  ¦  comments[-1,21845,0]  𝄀
-prepared_management_pub  ¦  prepared_management_db  ¦  t1  ¦  *  ¦    ¦  2026-09-26 20:29:55  ¦  null  ¦  initial comment
+prepared_management_pub  ¦  prepared_management_db  ¦  t1  ¦  *  ¦    ¦  2026-09-27 13:04:00  ¦  null  ¦  initial comment
 execute pub_ddl;
 ➤ Publication[12,64,0]  ¦  Create Publication[-1,16383,0]  𝄀
 prepared_management_pub  ¦  CREATE PUBLICATION prepared_management_pub DATABASE prepared_management_db TABLE t1 ACCOUNT all
@@ -59,10 +68,10 @@ set @publication_saved_result = @@save_query_result;
 set save_query_result = on;
 execute pub_show;
 ➤ publication[12,-1,0]  ¦  database[12,-1,0]  ¦  tables[-1,21845,0]  ¦  sub_account[-1,21845,0]  ¦  subscribed_accounts[-1,21845,0]  ¦  create_time[93,19,0]  ¦  update_time[93,19,0]  ¦  comments[-1,21845,0]  𝄀
-prepared_management_pub  ¦  prepared_management_db  ¦  t2  ¦  *  ¦    ¦  2026-09-26 20:29:55  ¦  2026-09-26 20:29:57  ¦  prepared update
+prepared_management_pub  ¦  prepared_management_db  ¦  t2  ¦  *  ¦    ¦  2026-09-27 13:04:00  ¦  2026-09-27 13:04:00  ¦  prepared update
 select * from result_scan(last_query_id()) as saved;
 ➤ publication[12,-1,0]  ¦  database[12,-1,0]  ¦  tables[-1,21845,0]  ¦  sub_account[-1,21845,0]  ¦  subscribed_accounts[-1,21845,0]  ¦  create_time[93,19,0]  ¦  update_time[93,19,0]  ¦  comments[-1,21845,0]  𝄀
-prepared_management_pub  ¦  prepared_management_db  ¦  t2  ¦  *  ¦    ¦  2026-09-26 20:29:55  ¦  2026-09-26 20:29:57  ¦  prepared update
+prepared_management_pub  ¦  prepared_management_db  ¦  t2  ¦  *  ¦    ¦  2026-09-27 13:04:00  ¦  2026-09-27 13:04:00  ¦  prepared update
 set save_query_result = @publication_saved_result;
 execute pub_ddl;
 ➤ Publication[12,64,0]  ¦  Create Publication[-1,16383,0]  𝄀
@@ -105,7 +114,7 @@ execute pub_drop_if;
 execute pub_create;
 execute pub_pattern using @pub_filter;
 ➤ publication[12,-1,0]  ¦  database[12,-1,0]  ¦  tables[-1,21845,0]  ¦  sub_account[-1,21845,0]  ¦  subscribed_accounts[-1,21845,0]  ¦  create_time[93,19,0]  ¦  update_time[93,19,0]  ¦  comments[-1,21845,0]  𝄀
-prepared_management_pub  ¦  prepared_management_db  ¦  t1  ¦  *  ¦    ¦  2026-09-26 20:29:59  ¦  null  ¦  initial comment
+prepared_management_pub  ¦  prepared_management_db  ¦  t1  ¦  *  ¦    ¦  2026-09-27 13:04:00  ¦  null  ¦  initial comment
 execute pub_coverage;
 ➤ Database[12,-1,0]  ¦  Table[12,-1,0]  𝄀
 prepared_management_db  ¦  t1
