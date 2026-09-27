@@ -187,6 +187,16 @@ type blockingCommitIncrTableCache struct {
 	once          sync.Once
 }
 
+type observedRetireCache struct {
+	incrTableCache
+	retires atomic.Int64
+}
+
+func (c *observedRetireCache) retire() {
+	c.retires.Add(1)
+	c.incrTableCache.retire()
+}
+
 func (c *countingIncrTableCache) table() uint64 { return c.tableID }
 func (c *countingIncrTableCache) epoch() uint32 { return 0 }
 func (c *countingIncrTableCache) acquire()      { c.acquires.Add(1) }
@@ -346,8 +356,7 @@ func TestCreate(t *testing.T) {
 			s.mu.Lock()
 			assert.Equal(t, 1, len(s.mu.tables))
 			assert.Equal(t, 1, len(s.mu.creates))
-			assert.Equal(t, 0, len(s.mu.deletes))
-			assert.Equal(t, 1, len(s.mu.creates[string(op.Txn().ID)]))
+			assert.NotNil(t, s.mu.creates[privateResetKey{txnID: string(op.Txn().ID), tableID: 0}])
 			assert.Equal(t, 2, len(s.mu.tables[0].columns()))
 			s.mu.Unlock()
 			checkStoreCachesUncommitted(t, s.store.(*memStore), op, 2)
@@ -356,7 +365,6 @@ func TestCreate(t *testing.T) {
 			s.mu.Lock()
 			assert.Equal(t, 1, len(s.mu.tables))
 			assert.Equal(t, 0, len(s.mu.creates))
-			assert.Equal(t, 0, len(s.mu.deletes))
 			s.mu.Unlock()
 			checkStoreCachesCommitted(t, s.store.(*memStore), 2)
 		})
@@ -383,7 +391,6 @@ func TestCreateOnOtherService(t *testing.T) {
 			s2.mu.Lock()
 			assert.Equal(t, 1, len(s2.mu.tables))
 			assert.Equal(t, 0, len(s2.mu.creates))
-			assert.Equal(t, 0, len(s2.mu.deletes))
 			s2.mu.Unlock()
 		})
 }
@@ -1026,8 +1033,7 @@ func TestCreateWithTxnAborted(t *testing.T) {
 			s.mu.Lock()
 			assert.Equal(t, 1, len(s.mu.tables))
 			assert.Equal(t, 1, len(s.mu.creates))
-			assert.Equal(t, 0, len(s.mu.deletes))
-			assert.Equal(t, 1, len(s.mu.creates[string(op.Txn().ID)]))
+			assert.NotNil(t, s.mu.creates[privateResetKey{txnID: string(op.Txn().ID), tableID: 0}])
 			assert.Equal(t, 2, len(s.mu.tables[0].columns()))
 			s.mu.Unlock()
 			checkStoreCachesUncommitted(t, s.store.(*memStore), op, 2)
@@ -1035,7 +1041,6 @@ func TestCreateWithTxnAborted(t *testing.T) {
 			require.NoError(t, op.Rollback(ctx))
 			s.mu.Lock()
 			assert.Equal(t, 0, len(s.mu.creates))
-			assert.Equal(t, 0, len(s.mu.deletes))
 			s.mu.Unlock()
 			checkStoreCachesCommitted(t, s.store.(*memStore), 0)
 			assert.Equal(t, 0, len(s.mu.tables))
@@ -1089,6 +1094,70 @@ func TestDeleteWithTxnAborted(t *testing.T) {
 			require.NoError(t, op2.Rollback(ctx))
 			checkStoreCachesCommitted(t, s.store.(*memStore), 2)
 		})
+}
+
+func TestDeleteStatementRollbackPreservesOnlyEarlierActions(t *testing.T) {
+	runServiceTests(t, 2, func(ctx context.Context, ss []*service, ops []client.TxnOperator) {
+		s := ss[0]
+		for _, id := range []uint64{10, 11} {
+			require.NoError(t, s.Create(ctx, id, newTestTableDef(1), ops[0]))
+		}
+		require.NoError(t, ops[0].Commit(ctx))
+
+		txnOp := ops[1]
+		callbacks := txnOp.(client.StatementCallbackOperator)
+		callbacks.BeginStatementCallbacks()
+		require.NoError(t, s.Delete(ctx, 10, txnOp)) // Successful statement A.
+		callbacks.BeginStatementCallbacks()
+		require.NoError(t, s.Delete(ctx, 11, txnOp)) // Failed statement B.
+		require.NoError(t, callbacks.RollbackStatementCallbacks(ctx))
+		require.NoError(t, txnOp.Commit(ctx))
+
+		s.mu.Lock()
+		_, firstDeleted := s.mu.destroyed[10]
+		_, secondDeleted := s.mu.destroyed[11]
+		s.mu.Unlock()
+		require.True(t, firstDeleted)
+		require.False(t, secondDeleted)
+		_, err := s.CurrentValue(ctx, 11, "auto_0")
+		require.NoError(t, err)
+	})
+}
+
+func TestResetStatementRollbackKeepsOriginalCache(t *testing.T) {
+	runServiceTests(t, 2, func(ctx context.Context, ss []*service, ops []client.TxnOperator) {
+		s := ss[0]
+		require.NoError(t, s.Create(ctx, 20, newTestTableDef(1), ops[0]))
+		require.NoError(t, ops[0].Commit(ctx))
+		s.mu.Lock()
+		original := s.mu.tables[20]
+		s.mu.Unlock()
+
+		txnOp := ops[1]
+		callbacks := txnOp.(client.StatementCallbackOperator)
+		callbacks.BeginStatementCallbacks()
+		require.NoError(t, s.Reset(ctx, 20, 21, false, txnOp))
+		s.mu.Lock()
+		replacement := &observedRetireCache{incrTableCache: s.mu.tables[21]}
+		s.mu.tables[21] = replacement
+		s.mu.Unlock()
+		require.NoError(t, callbacks.RollbackStatementCallbacks(ctx))
+		require.NoError(t, txnOp.Commit(ctx))
+
+		s.mu.Lock()
+		stillOriginal := s.mu.tables[20] == original
+		_, replacementPresent := s.mu.tables[21]
+		_, oldDestroyed := s.mu.destroyed[20]
+		_, newDestroyed := s.mu.destroyed[21]
+		s.mu.Unlock()
+		require.True(t, stillOriginal)
+		require.False(t, replacementPresent)
+		require.False(t, oldDestroyed)
+		require.False(t, newDestroyed)
+		require.Equal(t, int64(1), replacement.retires.Load())
+		// memStore models transaction close, not statement rollback. The
+		// standalone SQL probe is the durable-catalog oracle for this path.
+	})
 }
 
 func TestDeleteOnOtherService(t *testing.T) {
@@ -1167,6 +1236,12 @@ func TestDeleteDoesNotHoldServiceLockWhileRetiringCache(t *testing.T) {
 	})
 }
 
+func readyCreateCallback(txnKey string, tableID uint64) *createCallback {
+	ready := make(chan struct{})
+	close(ready)
+	return &createCallback{txnKey: txnKey, tableID: tableID, ready: ready}
+}
+
 func TestCreateTxnCloseRunsCacheLifecycleOutsideServiceLock(t *testing.T) {
 	testCases := []struct {
 		name         string
@@ -1209,9 +1284,10 @@ func TestCreateTxnCloseRunsCacheLifecycleOutsideServiceLock(t *testing.T) {
 				}
 			}
 
+			create := readyCreateCallback(key, 1)
 			s.mu.Lock()
 			s.mu.tables[1] = current
-			s.mu.creates[key] = []uint64{1}
+			s.mu.creates[privateResetKey{txnID: key, tableID: 1}] = create
 			if test.createdReset {
 				blockedBase = &countingIncrTableCache{tableID: 1}
 				s.mu.createdResets[privateResetKey{txnID: key, tableID: 1}] =
@@ -1228,9 +1304,9 @@ func TestCreateTxnCloseRunsCacheLifecycleOutsideServiceLock(t *testing.T) {
 			defer release()
 			closed := make(chan error, 1)
 			go func() {
-				closed <- s.txnClosed(ctx, nil, client.TxnEvent{Txn: txn.TxnMeta{
+				closed <- s.createClosed(ctx, nil, client.TxnEvent{Txn: txn.TxnMeta{
 					ID: txnID, Status: test.status,
-				}}, nil)
+				}}, create)
 			}()
 			select {
 			case <-started:
@@ -1281,7 +1357,7 @@ func TestCreateTxnCloseRunsCacheLifecycleOutsideServiceLock(t *testing.T) {
 				require.NoError(t, <-sameTableResult)
 			}
 			s.mu.Lock()
-			_, createTracked := s.mu.creates[key]
+			_, createTracked := s.mu.creates[privateResetKey{txnID: key, tableID: 1}]
 			_, resetTracked := s.mu.createdResets[privateResetKey{txnID: key, tableID: 1}]
 			_, commitPending := s.mu.pendingCommits[1]
 			installed := s.mu.tables[1] == current
@@ -1315,9 +1391,10 @@ func TestCloseWaitsForPendingCreateCommit(t *testing.T) {
 		started:                started,
 		releaseCommit:          releaseCommit,
 	}
+	create := readyCreateCallback(string(txnID), 1)
 	s.mu.Lock()
 	s.mu.tables[1] = cache
-	s.mu.creates[string(txnID)] = []uint64{1}
+	s.mu.creates[privateResetKey{txnID: string(txnID), tableID: 1}] = create
 	s.mu.Unlock()
 
 	var releaseOnce sync.Once
@@ -1325,9 +1402,9 @@ func TestCloseWaitsForPendingCreateCommit(t *testing.T) {
 	defer release()
 	txnClosedResult := make(chan error, 1)
 	go func() {
-		txnClosedResult <- s.txnClosed(ctx, nil, client.TxnEvent{Txn: txn.TxnMeta{
+		txnClosedResult <- s.createClosed(ctx, nil, client.TxnEvent{Txn: txn.TxnMeta{
 			ID: txnID, Status: txn.TxnStatus_Committed,
-		}}, nil)
+		}}, create)
 	}()
 	select {
 	case <-started:
