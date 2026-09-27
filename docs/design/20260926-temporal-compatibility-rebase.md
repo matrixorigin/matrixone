@@ -1,5 +1,11 @@
 # Temporal compatibility repair after MORPC 97
 
+Integration note (2026-09-27): main later assigned unreleased MORPC98 to the
+independent FORMAT/MAKEDATE/MAKETIME integer-argument change. The integrated
+candidate ships both contracts behind the same MORPC98 boundary relative to
+released 4.2 binaries; intermediate main commits are not rolling-upgrade
+compatibility targets. C40 in the contract records the final decision.
+
 ## Follow-up diagnostic ownership repair (2026-09-26)
 
 Review of `3b873c4f8efe` reproduced four violations: a prepared TIME operand

@@ -610,6 +610,29 @@ func TestMakeTimeReturnScale(t *testing.T) {
 	})
 	require.NoError(t, err)
 	require.Equal(t, types.T_time.ToTypeWithScale(6), defaultFloatResult.retType)
+
+	variableFloatResult, err := GetFunctionByName(proc.Ctx, "maketime", []types.Type{
+		types.T_int64.ToType(), types.T_int64.ToType(), types.T_float64.ToType(),
+	})
+	require.NoError(t, err)
+	require.Equal(t, types.T_time.ToTypeWithScale(6), variableFloatResult.retType,
+		"a FLOAT variable can contain fractional seconds even when its plan Scale is zero")
+}
+
+func TestTimeArithmeticFloatDurationKeepsFractionalPrecision(t *testing.T) {
+	proc := testutil.NewProcess(t)
+	for _, name := range []string{"addtime", "subtime"} {
+		for _, floatType := range []types.T{types.T_float32, types.T_float64} {
+			result, err := GetFunctionByName(proc.Ctx, name, []types.Type{
+				types.T_time.ToType(), floatType.ToType(),
+			})
+			require.NoError(t, err)
+			require.True(t, result.needCast)
+			require.Equal(t, types.T_varchar, result.targetTypes[1].Oid)
+			require.Equal(t, int32(6), result.targetTypes[1].Scale)
+			require.Equal(t, int32(6), result.retType.Scale)
+		}
+	}
 }
 
 func TestSecToTimeReturnScale(t *testing.T) {
@@ -643,6 +666,12 @@ func TestSecToTimeReturnScale(t *testing.T) {
 	})
 	require.NoError(t, err)
 	require.Equal(t, types.T_time.ToTypeWithScale(6), floatResult.retType)
+
+	variableFloatResult, err := GetFunctionByName(proc.Ctx, "sec_to_time", []types.Type{
+		types.T_float64.ToType(),
+	})
+	require.NoError(t, err)
+	require.Equal(t, types.T_time.ToTypeWithScale(6), variableFloatResult.retType)
 }
 
 func TestUnixTimestampTemporalReturnScale(t *testing.T) {
@@ -1136,7 +1165,7 @@ func TestMakeTimeStringArgumentTargets(t *testing.T) {
 				types.T_varchar.ToType(), scaledFloat, scaledFloat,
 			},
 			overloadArgs: []types.T{types.T_varchar, types.T_float64, types.T_float64},
-			returnType:   types.T_time.ToTypeWithScale(1),
+			returnType:   types.T_time.ToTypeWithScale(6),
 		},
 		{
 			name: "only minute is varchar",
@@ -1144,7 +1173,7 @@ func TestMakeTimeStringArgumentTargets(t *testing.T) {
 				scaledFloat, types.T_varchar.ToType(), scaledFloat,
 			},
 			overloadArgs: []types.T{types.T_float64, types.T_varchar, types.T_float64},
-			returnType:   types.T_time.ToTypeWithScale(1),
+			returnType:   types.T_time.ToTypeWithScale(6),
 		},
 	}
 

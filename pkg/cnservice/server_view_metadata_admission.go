@@ -508,8 +508,13 @@ func (s *service) waitForViewMetadataAdmissionHandoff(publishIngress bool, minim
 				// A new cluster can advertise a disabled snapshot before activation.
 				// Prerequisites are committed; wait for capability/fence heartbeats,
 				// without opening ingress or spinning on this unchanged snapshot.
+				discoveryDone := discoveryCtx.Done()
+				if upgradeResult != nil && operationCtx.Err() == nil {
+					// The active bootstrap owner has a longer deadline than discovery.
+					discoveryDone = nil
+				}
 				select {
-				case <-discoveryCtx.Done():
+				case <-discoveryDone:
 					return moerr.AttachCause(discoveryCtx, discoveryCtx.Err())
 				case <-operationCtx.Done():
 					return moerr.AttachCause(operationCtx, operationCtx.Err())

@@ -43,6 +43,9 @@ func TestPreparedIntervalMarkerRebindsInternalDateFunction(t *testing.T) {
 		{name: "decimal microsecond", unit: "microsecond", value: ParamValue{Value: "1.5", SourceType: types.New(types.T_decimal64, 2, 1), HasSourceType: true}, expectedUnit: types.MicroSecond, normalized: true, sourceType: types.T_decimal64},
 		{name: "decimal256 microsecond", unit: "microsecond", value: ParamValue{Value: "1.5", SourceType: types.New(types.T_decimal256, 50, 1), HasSourceType: true}, expectedUnit: types.MicroSecond, normalized: true, sourceType: types.T_decimal256},
 		{name: "float microsecond", unit: "microsecond", value: ParamValue{Value: "1.5", SourceType: types.T_float64.ToType(), HasSourceType: true}, expectedUnit: types.MicroSecond, normalized: true, sourceType: types.T_float64},
+		{name: "decimal compound", unit: "second_microsecond", value: ParamValue{Value: "1.0", SourceType: types.New(types.T_decimal64, 10, 1), HasSourceType: true}, expectedUnit: types.MicroSecond, normalized: true, sourceType: types.T_decimal64},
+		{name: "decimal year month", unit: "year_month", value: ParamValue{Value: "1.0", SourceType: types.New(types.T_decimal64, 10, 1), HasSourceType: true}, expectedUnit: types.Month, normalized: true, sourceType: types.T_decimal64},
+		{name: "float scientific second", unit: "second", value: ParamValue{Value: "1e+07", SourceType: types.T_float64.ToType(), HasSourceType: true}, expectedUnit: types.MicroSecond, normalized: true, sourceType: types.T_float64},
 		{name: "binary integer", unit: "second", value: ParamValue{Value: "3", RuntimeType: types.T_int64.ToType(), HasRuntimeType: true, IsBinaryProtocol: true}, expectedUnit: types.MicroSecond},
 		{name: "binary string", unit: "second", value: ParamValue{Value: "3", RuntimeType: types.T_text.ToType(), HasRuntimeType: true, IsBinaryProtocol: true}, expectedUnit: types.MicroSecond, normalized: true},
 	} {
@@ -106,7 +109,7 @@ func TestPreparedIntervalMarkerRepeatedExecutionsDoNotMutatePlan(t *testing.T) {
 	}
 }
 
-func TestPreparedTimeMicrosecondMarkerKeepsNumericSource(t *testing.T) {
+func TestPreparedTimeIntervalMarkerKeepsNumericSource(t *testing.T) {
 	for _, tc := range []struct {
 		name string
 		typ  types.Type
@@ -114,21 +117,50 @@ func TestPreparedTimeMicrosecondMarkerKeepsNumericSource(t *testing.T) {
 		{"decimal", types.New(types.T_decimal64, 2, 1)},
 		{"float", types.T_float64.ToType()},
 	} {
-		for _, name := range []string{"date_add", "date_sub"} {
-			t.Run(tc.name+"/"+name, func(t *testing.T) {
-				prepared, err := runOneStmt(NewMockOptimizer(false), t,
-					"prepare stmt_time_microsecond from select "+name+"(time '12:00:00', interval ? microsecond)")
-				require.NoError(t, err)
-				filled, _, err := FillValuesOfParamsInPlanWithSpecialization(context.Background(),
-					prepared.GetDcl().GetPrepare().GetPlan(), []any{
-						ParamValue{Value: "1.5", SourceType: tc.typ, HasSourceType: true},
-					})
-				require.NoError(t, err)
-				dateFunction := findPlanFunctionExpr(filled, name)
-				require.NotNil(t, dateFunction)
-				require.Equal(t, int32(tc.typ.Oid), dateFunction.GetF().GetArgs()[1].Typ.Id)
-			})
+		for _, unit := range []string{"microsecond", "second_microsecond", "hour_minute"} {
+			for _, name := range []string{"date_add", "date_sub"} {
+				t.Run(tc.name+"/"+name+"/"+unit, func(t *testing.T) {
+					prepared, err := runOneStmt(NewMockOptimizer(false), t,
+						"prepare stmt_time_interval from select "+name+"(time '12:00:00', interval ? "+unit+")")
+					require.NoError(t, err)
+					filled, _, err := FillValuesOfParamsInPlanWithSpecialization(context.Background(),
+						prepared.GetDcl().GetPrepare().GetPlan(), []any{
+							ParamValue{Value: "1.5", SourceType: tc.typ, HasSourceType: true},
+						})
+					require.NoError(t, err)
+					dateFunction := findPlanFunctionExpr(filled, name)
+					require.NotNil(t, dateFunction)
+					require.Equal(t, int32(tc.typ.Oid), dateFunction.GetF().GetArgs()[1].Typ.Id)
+				})
+			}
 		}
+	}
+}
+
+func TestPreparedImplicitTemporalCastTracksNestedFSP(t *testing.T) {
+	for _, tc := range []struct {
+		name      string
+		sql       string
+		wantScale int32
+	}{
+		{"implicit", "prepare p from select unix_timestamp(from_unixtime(?))", 6},
+		{"explicit", "prepare p from select unix_timestamp(cast(from_unixtime(?) as timestamp(0)))", 0},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			prepared, err := runOneStmt(NewMockOptimizer(false), t, tc.sql)
+			require.NoError(t, err)
+			original := prepared.GetDcl().GetPrepare().GetPlan()
+			filled, _, err := FillValuesOfParamsInPlanWithSpecialization(context.Background(), original,
+				[]any{ParamValue{Value: "1000000.5", SourceType: types.T_float64.ToType(), HasSourceType: true}})
+			require.NoError(t, err)
+			outer := findPlanFunctionExpr(filled, "unix_timestamp")
+			require.NotNil(t, outer)
+			cast := outer.GetF().GetArgs()[0]
+			require.Equal(t, "cast", cast.GetF().GetFunc().GetObjName())
+			require.Equal(t, tc.wantScale, cast.GetF().GetArgs()[1].Typ.Scale)
+			require.Equal(t, tc.wantScale, cast.Typ.Scale)
+			require.True(t, preparedExprContainsParam(findPlanFunctionExpr(original, "from_unixtime")))
+		})
 	}
 }
 

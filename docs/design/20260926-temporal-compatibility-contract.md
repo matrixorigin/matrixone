@@ -5,8 +5,11 @@ implemented in PR #28851, rebased onto main
 `b1b68925d7f6fb32153e788b5285f424222e85ca`. This C01–C42 contract
 originated from the PR body at head
 `21f8701059cb7fb1dd716df13ab131df930ce958`; the decisions below
-supersede its conflicting historical expectations. Main reserved MORPC97 for
-decimal division, so the temporal contract uses MORPC98. The companion
+supersede its conflicting historical expectations. The preceding released
+4.2 binaries advertise MORPC9/10. Main reserved MORPC97 for decimal division
+and later used MORPC98 for integer-argument consumers; no MORPC98 binary was
+released between those commits. The integrated candidate uses MORPC98 for both
+integer-argument and temporal contracts. The companion
 [design](20260926-temporal-compatibility-rebase.md) records that integration.
 The user explicitly accepted C03, C13 and C12/C34 and delegated the remaining
 expect decisions to GPT-6-astra/xhigh. Local validation evidence and its
@@ -159,7 +162,7 @@ the TIME operand with 1292; the evaluated arithmetic then returns NULL with
 - **C37 Reuse:** the same prepared handle survives valid→NULL→invalid→valid and string→integer→decimal(scale change)→float→NULL→string where supported. The expression's declared family/FSP remains coherent; NULL bits, diagnostics, parameter physical types and result buffers cannot leak across executions. An explicit source-type change is tested against the conversion contract, not assumed to be byte-for-byte identical.
 - **C38 Session:** each EXECUTE observes sql_mode, time_zone and default_week_format. Remote operators receive the same statement snapshot; absent/unavailable required state fails clearly rather than silently falling back to the server default. A read-only fold must not call a diagnostic sink as if an inactive expression executed.
 - **C39 Release ABI:** upgrade from **released 4.2**, not an intermediate main revision. Stored EXTRACT IDs0–4 keep VARCHAR/UINT32; new SQL binds appended IDs5–9 BIGINT. Stored string ADDTIME6–8 / SUBTIME6–10 keep DATETIME; newly bound string results use ADDTIME9–11 / SUBTIME11–15. Physical ABI preservation is not permission for old workers to execute a changed new-query value policy. Views rebind stored SQL; stored typed expression identities remain readable. Do not reinterpret an old normalized constant under a new grammar.
-- **C40 Placement/admission:** use **one final MORPC98** boundary. Release4.2.0/.1 advertise9 and 4.2.2–.4 advertise10. Every changed new-query contract, including unchanged arithmetic IDs, string/numeric-to-TIME CAST, and SQL HEX/BIT numeric casts with changed grammar/value/diagnostic semantics, must be constrained before placement and rechecked before send/receive/persisted admission. Fall back to a capable local worker or reject; never silently use old behavior. MORPC98 follows main's independent decimal-division MORPC97; no additional intermediate temporal epoch is introduced. A worker's capability does not override a later deployment admission floor.
+- **C40 Placement/admission:** use **one final MORPC98** boundary against released 4.2 binaries. Release4.2.0/.1 advertise9 and 4.2.2–.4 advertise10. Every changed new-query contract, including unchanged arithmetic IDs, string/numeric-to-TIME CAST, and SQL HEX/BIT numeric casts with changed grammar/value/diagnostic semantics, must be constrained before placement and rechecked before send/receive/persisted admission. Fall back to a capable local worker or reject; never silently use old behavior. MORPC98 covers the integrated integer-argument and temporal changes after decimal-division MORPC97; no intermediate temporal epoch is introduced. A worker's capability does not override a later deployment admission floor.
 - **C41 Upgrade/restart:** real release binary→stop→candidate→stop→restart on the same DISK data must preserve ordinary reads/writes/defaults/views. Existing unreleased catalog4.0.8 creates missing view-dependency/refresh tables idempotently before admission; it preserves existing data and propagates lookup/DDL failure. Existing4.2 catalog4.0.6 offset5 must not skip necessary later work. Retry cannot create duplicate metadata or leave startup waiting forever.
 
 ## 7. Tests and non-functional acceptance

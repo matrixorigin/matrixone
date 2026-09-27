@@ -7215,16 +7215,26 @@ func bindFuncExprImplByPlanExpr(
 		if originalBoundExpr != nil {
 			returnType.Scale = max(returnType.Scale, originalBoundExpr.Typ.Scale)
 		}
+		if returnType.Oid == types.T_time || returnType.Oid == types.T_datetime || returnType.Oid == types.T_timestamp {
+			returnType.Scale = min(max(returnType.Scale, 0), 6)
+			returnType.Width = returnType.Scale
+		}
 
 	case "maketime":
 		// Hex and bit literals are represented as VARCHAR literals carrying
-		// IsBin. They are integral seconds, so they retain TIME(0) metadata even
-		// though the VARCHAR seconds overload normally advertises TIME(6).
+		// IsBin. Integral seconds retain TIME(0) metadata even when overload
+		// resolution casts them to FLOAT, whose result advertises TIME(6).
 		if len(args) == 3 {
 			if literal := args[2].GetLit(); literal != nil && literal.IsBin {
 				returnType.Scale = 0
+			} else if types.T(args[2].Typ.Id).IsInteger() {
+				returnType.Scale = 0
 			}
 		}
+		returnType.Width = returnType.Scale
+
+	case "sec_to_time":
+		returnType.Width = returnType.Scale
 
 	case "utc_time", "utc_timestamp":
 		// The overload receives only argument types, while the temporal result
@@ -10577,7 +10587,7 @@ func resetDateFunctionArgs(ctx context.Context, dateExpr *Expr, intervalExpr *Ex
 			}
 		}
 	}
-	if isTimeUnit && isDecimalOrFloat {
+	if (isTimeUnit || intervalType == types.MicroSecond) && isDecimalOrFloat {
 		numberExpr, returnType, err := bindTypedNumericIntervalExpr(ctx, firstExpr, intervalType)
 		if err != nil {
 			return nil, err

@@ -38,6 +38,7 @@ import (
 
 var _ plan.CompilerContext = new(compilerContext)
 var _ plan.TableDefStatsCompilerContext = new(compilerContext)
+var _ plan.UserVariableTypeResolver = new(compilerContext)
 
 type compilerContext struct {
 	ctx                context.Context
@@ -526,6 +527,15 @@ func (c *compilerContext) ResolveVariable(varName string, isSystemVar bool, isGl
 		}
 	}
 	return nil, nil
+}
+
+func (c *compilerContext) ResolveVariableType(varName string, isSystemVar, isGlobalVar bool) (plan.Type, error) {
+	if delegate := getInternalExecutorCompilerContext(c.ctx); delegate != nil && delegate != c {
+		if resolver, ok := delegate.(plan.UserVariableTypeResolver); ok {
+			return resolver.ResolveVariableType(varName, isSystemVar, isGlobalVar)
+		}
+	}
+	return plan.Type{}, nil
 }
 
 func (c *compilerContext) SetBuildingAlterView(yesOrNo bool, dbName, viewName string) {

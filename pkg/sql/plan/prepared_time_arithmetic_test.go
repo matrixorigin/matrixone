@@ -862,3 +862,19 @@ func TestPreparedTimeArithmeticOrdinaryLiteralControl(t *testing.T) {
 	_, err := runOneStmt(mock, t, "select n_nationkey * 10 from nation")
 	require.NoError(t, err)
 }
+
+func TestTimeArithmeticDecimalResultFSPIsCapped(t *testing.T) {
+	for _, name := range []string{"addtime", "subtime"} {
+		for _, precision := range []string{"decimal(10,7)", "decimal(30,18)"} {
+			t.Run(name+"/"+precision, func(t *testing.T) {
+				query, err := runOneStmt(NewMockOptimizer(false), t,
+					"select "+name+"(time '00:00:00', cast(0.0000005 as "+precision+"))")
+				require.NoError(t, err)
+				call := findPlanFunctionExpr(query, name)
+				require.NotNil(t, call)
+				require.Equal(t, int32(6), call.Typ.Scale)
+				require.Equal(t, int32(6), call.Typ.Width)
+			})
+		}
+	}
+}

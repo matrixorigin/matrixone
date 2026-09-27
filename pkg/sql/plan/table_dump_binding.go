@@ -20,6 +20,7 @@ import (
 
 	"github.com/gogo/protobuf/proto"
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
+	"github.com/matrixorigin/matrixone/pkg/container/types"
 	planpb "github.com/matrixorigin/matrixone/pkg/pb/plan"
 	"github.com/matrixorigin/matrixone/pkg/sql/parsers"
 	"github.com/matrixorigin/matrixone/pkg/sql/parsers/dialect"
@@ -229,6 +230,12 @@ func sameTableDumpBoundExpression(a, b *planpb.Expr) bool {
 		// against its current table fills it in, while older stored trees do
 		// not carry it. It does not affect overload or value semantics.
 		expr.Typ.Table = ""
+		// Older TIME trees carry Scale but leave Width unset. New binding
+		// mirrors Scale into Width for DDL metadata; the stored Scale is the
+		// execution precision and must still match exactly.
+		if expr.Typ.Id == int32(types.T_time) && expr.Typ.Width == expr.Typ.Scale {
+			expr.Typ.Width = 0
+		}
 		if f := expr.GetF(); f != nil {
 			for _, arg := range f.Args {
 				normalize(arg)

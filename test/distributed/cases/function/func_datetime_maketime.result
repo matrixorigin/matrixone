@@ -165,8 +165,8 @@ Data truncation: data out of range: data type int64, integer argument
 SELECT MAKETIME(1,CAST('9223372036854775808' AS UNSIGNED),0);
 Data truncation: data out of range: data type int64, integer argument
 SELECT MAKETIME(9223372036854775807,0,0), MAKETIME(1,0,CAST('18446744073709551615' AS UNSIGNED));
-➤ MAKETIME(9223372036854775807, 0, 0)[92,10,0]  ¦  MAKETIME(1, 0, cast(18446744073709551615 as unsigned))[92,17,0]  𝄀
-838:59:59  ¦  null
+➤ MAKETIME(9223372036854775807, 0, 0)[92,10,0]  ¦  MAKETIME(1, 0, cast(18446744073709551615 as unsigned))[92,10,0]  𝄀
+null  ¦  null
 DROP TABLE IF EXISTS maketime_integer_contract;
 CREATE TABLE maketime_integer_contract(h DECIMAL(10,1), m DOUBLE, s DECIMAL(10,6), g TIME(6) GENERATED ALWAYS AS (MAKETIME(h,m,s)) STORED);
 INSERT INTO maketime_integer_contract(h,m,s) VALUES (12.5,58.5,1.125), (-12.5,59,59.999999), (NULL,NULL,NULL);

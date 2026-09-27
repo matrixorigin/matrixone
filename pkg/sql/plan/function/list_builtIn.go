@@ -12516,7 +12516,7 @@ var supportedDateAndTimeBuiltIns = []FuncNew{
 
 func makeTimeReturnType(parameters []types.Type) types.Type {
 	scale := parameters[2].Scale
-	if scale < 0 {
+	if parameters[2].Oid == types.T_float32 || parameters[2].Oid == types.T_float64 || scale < 0 {
 		scale = 6
 	} else if scale > 6 {
 		scale = 6
@@ -12540,6 +12540,8 @@ func secToTimeReturnType(parameters []types.Type) types.Type {
 	switch parameters[0].Oid {
 	case types.T_int64, types.T_uint64:
 		scale = 0
+	case types.T_float32, types.T_float64:
+		scale = 6
 	default:
 		if scale < 0 {
 			scale = 6

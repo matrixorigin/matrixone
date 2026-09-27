@@ -692,4 +692,74 @@ drop table temporal_date_right;
 
 set @temporal_join_value = null;
 set sql_mode = @temporal_28851_saved_sql_mode;
+
+-- Numeric interval overflow belongs to the active row, not the binder.
+create table temporal_micro_overflow(id int, n decimal(38,1));
+insert into temporal_micro_overflow values (1, 1.5), (2, '9223372036854775807.5'), (3, null);
+select id, date_add(cast('2024-01-01' as datetime), interval n microsecond) as added
+from temporal_micro_overflow order by id;
+show warnings;
+select id, case when id=1 then date_add(cast('2024-01-01' as datetime), interval n microsecond)
+                     else cast('2024-01-01' as datetime) end as selected
+from temporal_micro_overflow where id in (1,2) order by id;
+show count(*) warnings;
+drop table temporal_micro_overflow;
+
+-- SQL EXECUTE preserves the numeric source domain; VARCHAR keeps field grammar.
+set @temporal_numeric = cast(1.0 as decimal(10,1));
+select date_add(time '12:00:00', interval @temporal_numeric second_microsecond) as direct_compound;
+prepare temporal_numeric_compound from 'select date_add(time ''12:00:00'', interval ? second_microsecond) as prepared_compound';
+execute temporal_numeric_compound using @temporal_numeric;
+set @temporal_numeric = '1.0';
+execute temporal_numeric_compound using @temporal_numeric;
+set @temporal_numeric = cast(1.0 as decimal(10,1));
+execute temporal_numeric_compound using @temporal_numeric;
+deallocate prepare temporal_numeric_compound;
+select date_add(cast('2024-01-01' as datetime), interval @temporal_numeric year_month) as direct_month;
+prepare temporal_numeric_month from 'select date_add(cast(''2024-01-01'' as datetime), interval ? year_month) as prepared_month';
+execute temporal_numeric_month using @temporal_numeric;
+deallocate prepare temporal_numeric_month;
+
+set @temporal_numeric = cast(10000000 as double);
+select date_add(cast('2024-01-01' as datetime), interval @temporal_numeric second) as direct_scientific;
+prepare temporal_numeric_second from 'select date_add(cast(''2024-01-01'' as datetime), interval ? second) as prepared_scientific';
+execute temporal_numeric_second using @temporal_numeric;
+deallocate prepare temporal_numeric_second;
+set @temporal_numeric = cast(1000000.5 as double);
+select time(@temporal_numeric) as direct_time,
+       unix_timestamp(from_unixtime(@temporal_numeric)) as direct_epoch;
+prepare temporal_numeric_functions from 'select time(?) as prepared_time, unix_timestamp(from_unixtime(?)) as prepared_epoch';
+execute temporal_numeric_functions using @temporal_numeric, @temporal_numeric;
+deallocate prepare temporal_numeric_functions;
+set @temporal_numeric = cast(0.5 as double);
+select addtime(time '00:00:00', @temporal_numeric) as direct_addtime,
+       sec_to_time(@temporal_numeric) as direct_seconds;
+prepare temporal_numeric_duration from 'select addtime(time ''00:00:00'', ?) as prepared_addtime, sec_to_time(?) as prepared_seconds';
+execute temporal_numeric_duration using @temporal_numeric, @temporal_numeric;
+deallocate prepare temporal_numeric_duration;
+
+-- FLOAT variables can contain microseconds even when their type has Scale=0.
+set @temporal_numeric = cast(0.000001 as double);
+select maketime(0,0,@temporal_numeric) as made,
+       microsecond(maketime(0,0,@temporal_numeric)) as made_us,
+       sec_to_time(@temporal_numeric) as seconds;
+create table temporal_float_fsp as
+  select maketime(0,0,@temporal_numeric) as t,
+         addtime(time '00:00:00',@temporal_numeric) as a,
+         sec_to_time(@temporal_numeric) as s;
+show create table temporal_float_fsp;
+select t, microsecond(t) as made_us,
+       a, microsecond(a) as added_us,
+       s, microsecond(s) as seconds_us
+from temporal_float_fsp;
+drop table temporal_float_fsp;
+-- DECIMAL scales above the public TIME FSP limit still round into TIME(6).
+select addtime(time '00:00:00', cast(0.0000005 as decimal(10,7))) as rounded_up,
+       cast(subtime(time '00:00:00', cast(0.0000005 as decimal(10,7))) as varchar) as rounded_down_text;
+create table temporal_decimal_fsp as
+  select addtime(time '00:00:00', cast(0.0000005 as decimal(10,7))) as t;
+show create table temporal_decimal_fsp;
+select t, microsecond(t) as t_us from temporal_decimal_fsp;
+drop table temporal_decimal_fsp;
+set @temporal_numeric = null;
 drop database temporal_consistency_28851;

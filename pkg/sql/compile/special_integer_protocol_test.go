@@ -81,3 +81,46 @@ func TestSpecialIntegerProtocolPlacementAndSend(t *testing.T) {
 	rt.SetGlobalVariables(moruntime.MOProtocolVersion, defines.MORPCVersion98)
 	require.NoError(t, validateRemoteExpressionPipelineProtocol(c.proc, p))
 }
+
+func TestMakeTimeIntegerOverloadAlsoRequiresTemporalProtocol(t *testing.T) {
+	c, client := expressionProtocolTestCompile(t)
+	expr := &planpb.Expr{Typ: planpb.Type{Id: int32(types.T_time), Scale: 6}, Expr: &planpb.Expr_F{F: &planpb.Function{
+		Func: &planpb.ObjectRef{Obj: function.EncodeOverloadID(function.MAKETIME, function.MakeTimeIntegerFloatOverload)},
+		Args: []*planpb.Expr{
+			{Typ: planpb.Type{Id: int32(types.T_int64)}, Expr: &planpb.Expr_Col{Col: &planpb.ColRef{ColPos: 0}}},
+			{Typ: planpb.Type{Id: int32(types.T_int64)}, Expr: &planpb.Expr_Col{Col: &planpb.ColRef{ColPos: 1}}},
+			{Typ: planpb.Type{Id: int32(types.T_float64)}, Expr: &planpb.Expr_Col{Col: &planpb.ColRef{ColPos: 2}}},
+		},
+	}}}
+	features, err := planpb.RequiredRemoteExpressionFeatures(expr)
+	require.NoError(t, err)
+	require.True(t, features.SpecialIntegerConsumers)
+	require.True(t, features.TemporalResultContracts)
+	version, err := plan2.RequiredPersistedExpressionProtocolVersion(expr)
+	require.NoError(t, err)
+	require.Equal(t, int64(defines.MORPCVersion98), version)
+
+	qry := &planpb.Query{Nodes: []*planpb.Node{{ProjectList: []*planpb.Expr{expr}}}, Steps: []int32{0}}
+	client.version = defines.MORPCVersion97
+	c.execType = plan2.ExecTypeAP_MULTICN
+	c.cnList = engine.Nodes{{Id: "old-worker", Addr: "remote:6001", Mcpu: 4}}
+	require.NoError(t, c.constrainTemporalResultWorkers(qry))
+	require.Equal(t, plan2.ExecTypeAP_ONECN, c.execType)
+	op := projection.NewArgument()
+	defer op.Release()
+	op.ProjectList = []*planpb.Expr{expr}
+	scope := &Scope{Magic: Remote, Proc: c.proc, NodeInfo: engine.Node{Id: "old-worker", Addr: "remote:6001"}, RootOp: op}
+	_, err = encodeRemoteScope(scope, c.proc)
+	require.ErrorContains(t, err, "version 98")
+	client.version = defines.MORPCVersion98
+	_, err = encodeRemoteScope(scope, c.proc)
+	require.NoError(t, err)
+	require.Equal(t, client.calls, client.releases)
+
+	p := &pipeline.Pipeline{InstructionList: []*pipeline.Instruction{{ProjectList: []*planpb.Expr{expr}}}}
+	rt := moruntime.ServiceRuntime(c.proc.GetService())
+	rt.SetGlobalVariables(moruntime.MOProtocolVersion, defines.MORPCVersion97)
+	require.ErrorContains(t, validateRemoteExpressionPipelineProtocol(c.proc, p), "version 98")
+	rt.SetGlobalVariables(moruntime.MOProtocolVersion, defines.MORPCVersion98)
+	require.NoError(t, validateRemoteExpressionPipelineProtocol(c.proc, p))
+}

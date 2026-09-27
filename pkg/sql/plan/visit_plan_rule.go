@@ -2939,20 +2939,21 @@ func (rule *ResetParamRefRule) applyExpr(e *plan.Expr) (*plan.Expr, error) {
 				needResetFunction = true
 			}
 			var rewrittenArg *plan.Expr
-			numericMicrosecondSource := false
-			intervalUnitArg := -1
-			if functionName == "to_interval_microsecond" && i == 0 && len(originalArgs) == 2 {
-				intervalUnitArg = 1
-			} else if (functionName == "date_add" || functionName == "date_sub") && i == 1 &&
-				len(originalArgs) == 3 && originalArgs[0].Typ.Id == int32(types.T_time) {
-				intervalUnitArg = 2
+			numericTemporalArg := false
+			switch functionName {
+			case "to_interval_microsecond", "time", "from_unixtime", "sec_to_time":
+				numericTemporalArg = i == 0
+			case "date_add", "date_sub":
+				numericTemporalArg = i == 1 && len(originalArgs) == 3 &&
+					originalArgs[0].Typ.Id == int32(types.T_time)
+			case "addtime", "subtime":
+				numericTemporalArg = i == 1
 			}
-			if intervalUnitArg >= 0 && hasParamPos && !isExplicitPreparedCast(arg) &&
-				originalArgs[intervalUnitArg] != nil && originalArgs[intervalUnitArg].GetLit() != nil &&
-				originalArgs[intervalUnitArg].GetLit().GetI64Val() == int64(types.MicroSecond) &&
+			numericTemporalSource := false
+			if numericTemporalArg && hasParamPos && !isExplicitPreparedCast(arg) &&
 				paramPos < len(rule.paramValues) {
 				if param, ok := rule.paramValues[paramPos].(ParamValue); ok {
-					numericMicrosecondSource = !param.IsBinaryProtocol && param.HasSourceType &&
+					numericTemporalSource = !param.IsBinaryProtocol && param.HasSourceType &&
 						(param.SourceType.IsDecimal() || param.SourceType.Oid == types.T_float32 ||
 							param.SourceType.Oid == types.T_float64)
 				}
@@ -2987,9 +2988,9 @@ func (rule *ResetParamRefRule) applyExpr(e *plan.Expr) (*plan.Expr, error) {
 						return nil, err
 					}
 				}
-			} else if numericMicrosecondSource {
-				// SQL EXECUTE transports DECIMAL and FLOAT variables as text. Preserve
-				// their numeric source for MICROSECOND rounding, including TIME's raw
+			} else if numericTemporalSource {
+				// SQL EXECUTE transports DECIMAL and FLOAT variables as text. These
+				// temporal consumers need the numeric source, including TIME's raw
 				// interval argument, without changing the interval string grammar.
 				var known bool
 				rewrittenArg, known, err = rule.preparedRuntimeSourceExpr(paramPos, false)
@@ -2997,7 +2998,7 @@ func (rule *ResetParamRefRule) applyExpr(e *plan.Expr) (*plan.Expr, error) {
 					return nil, err
 				}
 				if !known {
-					return nil, moerr.NewInternalErrorNoCtx("missing prepared numeric interval source type")
+					return nil, moerr.NewInternalErrorNoCtx("missing prepared numeric temporal source type")
 				}
 				needResetFunction = true
 				compareArgTypes = true
@@ -3523,6 +3524,25 @@ func (rule *ResetParamRefRule) applyExpr(e *plan.Expr) (*plan.Expr, error) {
 					resultArg != nil && resultArg.GetLit().GetIsnull() {
 					resultArg.Typ = *sharedControlReturnType
 				}
+			}
+		}
+		if functionName == "cast" && !isExplicitPreparedCast(e) && len(boundArgs) == 2 &&
+			boundArgs[0] != nil && boundArgs[1] != nil && boundArgs[1].GetT() != nil &&
+			originalArgs[0] != nil && originalArgs[1] != nil &&
+			originalArgs[0].Typ.Scale == originalArgs[1].Typ.Scale &&
+			boundArgs[0].Typ.Scale > originalArgs[0].Typ.Scale {
+			source := types.T(boundArgs[0].Typ.Id)
+			target := types.T(boundArgs[1].Typ.Id)
+			if (source == types.T_time || source == types.T_datetime || source == types.T_timestamp) &&
+				(target == types.T_time || target == types.T_datetime || target == types.T_timestamp) {
+				// PREPARE fixed this implicit temporal cast to the marker's provisional
+				// FSP. Its target must follow a nested function rebound at EXECUTE;
+				// otherwise the cast truncates microseconds before the parent rebinds.
+				boundArgs[1] = DeepCopyExpr(boundArgs[1])
+				boundArgs[1].Typ.Scale = boundArgs[0].Typ.Scale
+				boundArgs[1].Typ.Width = boundArgs[0].Typ.Scale
+				needResetFunction = true
+				compareArgTypes = true
 			}
 		}
 

@@ -1547,6 +1547,41 @@ func TestCNDerivedViewsWaitForAuthoringProtocol(t *testing.T) {
 	}
 }
 
+func TestCNDisabledAdmissionWaitsForActiveBootstrapOwner(t *testing.T) {
+	upgradeErr := errors.New("bootstrap owner failed after discovery deadline")
+	upgradeCtx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+	upgradeResult := make(chan error, 1)
+	s := &service{
+		cfg:                             &Config{UUID: "disabled-admission-upgrade-owner"},
+		logger:                          zap.NewNop(),
+		viewMetadataAdmissionGeneration: 11,
+		viewMetadataAdmissionUpdated:    make(chan struct{}, 1),
+		bootstrapUpgradeContext:         upgradeCtx,
+		bootstrapUpgradeResult:          upgradeResult,
+	}
+	s.cfg.HAKeeper.DiscoveryTimeout.Duration = 10 * time.Millisecond
+	s.viewMetadataAdmission.Store(&logservicepb.ViewMetadataAdmission{Generation: 11})
+	done := make(chan error, 1)
+	go func() {
+		done <- s.waitForViewMetadataAdmissionHandoff(false, uint64(defines.MORPCVersion98))
+	}()
+	require.Eventually(t, s.viewMetadataCatalogFenceStartupWaiting.Load, time.Second, time.Millisecond)
+	time.Sleep(30 * time.Millisecond)
+	select {
+	case err := <-done:
+		t.Fatalf("active bootstrap owner was preempted by discovery: %v", err)
+	default:
+	}
+	upgradeResult <- upgradeErr
+	select {
+	case err := <-done:
+		require.ErrorIs(t, err, upgradeErr)
+	case <-time.After(time.Second):
+		t.Fatal("disabled admission did not report bootstrap failure")
+	}
+}
+
 // These startup fixtures model an already bootstrapped catalog. Preserve their
 // custom fence/rollback executor while answering the new read-only preflight.
 type existingSystemViewsExecutor struct{ executor.SQLExecutor }

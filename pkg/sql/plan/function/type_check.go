@@ -217,6 +217,13 @@ func subTimeTypeMatch(overloads []overload, inputs []types.Type) checkResult {
 
 func timeArithmeticTypeMatch(overloads []overload, inputs []types.Type, legacyCount int) checkResult {
 	r := fixedTypeMatch(overloads[:legacyCount], inputs)
+	if len(inputs) == 2 && (inputs[1].Oid == types.T_float32 || inputs[1].Oid == types.T_float64) &&
+		r.status == succeedWithCast && len(r.finalType) == 2 &&
+		(r.finalType[1].Oid == types.T_varchar || r.finalType[1].Oid == types.T_char) {
+		// FLOAT has no declared decimal scale, but its duration can carry
+		// microseconds. The implicit text cast must not force FSP 0.
+		r.finalType[1].Scale = 6
+	}
 	if (r.status == succeedMatched || r.status == succeedWithCast) && r.idx >= 6 {
 		// The input signatures are unchanged; string results are appended
 		// after the legacy DATETIME-producing string overloads.

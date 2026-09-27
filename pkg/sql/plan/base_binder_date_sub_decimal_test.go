@@ -404,6 +404,24 @@ func TestResetDateFunctionArgsDoesNotFoldLiteralFirstDynamicFunction(t *testing.
 	require.Equal(t, int64(types.MicroSecond), intervalType, "dynamic numeric SECOND interval uses a microsecond result")
 }
 
+func TestCalendarMicrosecondNumericIntervalUsesCheckedNormalizer(t *testing.T) {
+	for _, typ := range []plan.Type{
+		{Id: int32(types.T_float64)},
+		{Id: int32(types.T_decimal128), Width: 38, Scale: 1},
+		{Id: int32(types.T_decimal256), Width: 50, Scale: 20},
+	} {
+		source := &plan.Expr{Typ: typ, Expr: &plan.Expr_Col{Col: &plan.ColRef{ColPos: 0}}}
+		args, err := resetDateFunctionArgs(context.Background(),
+			makeDatetimeConst("2024-01-01 00:00:00"), makeIntervalExpr(source, "MICROSECOND"))
+		require.NoError(t, err)
+		normalizer := args[1].GetF()
+		require.NotNil(t, normalizer)
+		require.Equal(t, "to_interval_microsecond", normalizer.GetFunc().GetObjName())
+		require.Equal(t, typ.Id, normalizer.GetArgs()[0].Typ.Id)
+		require.Equal(t, int64(types.MicroSecond), args[2].GetLit().GetI64Val())
+	}
+}
+
 func TestResetDateFunctionArgsExactDecimalHalfMicrosecond(t *testing.T) {
 	for _, text := range []string{"34410126.8315485", "-34410126.8315485"} {
 		t.Run(text, func(t *testing.T) {
