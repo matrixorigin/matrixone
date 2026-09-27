@@ -612,6 +612,43 @@ func TestLockViewMetadataLifecycleUsesSystemContextWithoutMutatingCaller(t *test
 	require.Equal(t, callerAccountID, afterAccountID)
 }
 
+func TestSharedLifecycleLocksAcquireLocalGateBeforeSQL(t *testing.T) {
+	callerCtx := defines.AttachAccountId(context.Background(), 42)
+	var acquired [][]accountLifecycleGate
+	originalAcquire := acquireAccountLifecycleSharedGates
+	acquireAccountLifecycleSharedGates = func(
+		_ context.Context,
+		_ *Session,
+		_ BackgroundExec,
+		gates ...accountLifecycleGate,
+	) error {
+		acquired = append(acquired, append([]accountLifecycleGate(nil), gates...))
+		return nil
+	}
+	t.Cleanup(func() { acquireAccountLifecycleSharedGates = originalAcquire })
+
+	snapshotExec := &backgroundExecTest{}
+	snapshotExec.init()
+	require.NoError(t, lockSnapshotLifecycleShared(callerCtx, nil, snapshotExec))
+	require.Equal(t, []string{catalog.SnapshotLifecycleSharedGateSQL}, snapshotExec.executedSQLs)
+	require.Equal(t, []bool{false}, snapshotExec.lockWriterFair)
+
+	viewExec := &backgroundExecTest{}
+	viewExec.init()
+	require.NoError(t, lockViewMetadataLifecycleShared(callerCtx, nil, viewExec))
+	require.Equal(t,
+		[]string{catalog.SnapshotLifecycleSharedGateSQL, catalog.ViewMetadataLifecycleSharedGateSQL},
+		viewExec.executedSQLs)
+	require.Equal(t, []bool{false, false}, viewExec.lockWriterFair)
+	require.Equal(t, [][]accountLifecycleGate{
+		{accountLifecycleSnapshotGate},
+		{accountLifecycleSnapshotGate, accountLifecycleViewGate},
+	}, acquired)
+
+	require.False(t, defines.IsLockWriterFair(callerCtx),
+		"the lifecycle helper must not mutate the caller context")
+}
+
 type failViewMutationBackgroundExec struct {
 	*backgroundExecTest
 	err error
@@ -3238,6 +3275,47 @@ func TestRestoreSnapshotUsesLifecycleOwnerTxn(t *testing.T) {
 	_, err := doRestoreSnapshot(ctx, ses, &tree.RestoreSnapShot{})
 	require.ErrorIs(t, err, beginErr)
 	require.True(t, forcedPessimisticRC)
+}
+
+func TestDropSnapshotUsesLifecycleOwnerTxn(t *testing.T) {
+	ctrl := gomock.NewController(t)
+	ctx := context.Background()
+	ses := newTestSession(t, ctrl)
+	defer ses.Close()
+	ses.SetTenantInfo(&TenantInfo{
+		Tenant:      sysAccountName,
+		DefaultRole: moAdminRoleName,
+	})
+	bh := &backgroundExecTest{}
+	bh.init()
+	beginErr := errors.New("begin failed")
+	bh.sql2err["begin;"] = beginErr
+	oldNewBackgroundExec := NewBackgroundExec
+	defer func() { NewBackgroundExec = oldNewBackgroundExec }()
+	forcedPessimisticRC := false
+	NewBackgroundExec = func(_ context.Context, _ FeSession, opts ...*BackgroundExecOption) BackgroundExec {
+		for _, opt := range opts {
+			forcedPessimisticRC = forcedPessimisticRC || opt != nil && opt.forcePessimisticRC
+		}
+		return bh
+	}
+
+	err := doDropSnapshot(ctx, ses, &tree.DropSnapShot{})
+	require.ErrorIs(t, err, beginErr)
+	require.True(t, forcedPessimisticRC)
+}
+
+func TestValidateAccountLifecycleTxnRejectsOptimistic(t *testing.T) {
+	ctrl := gomock.NewController(t)
+	txnOp := mock_frontend.NewMockTxnOperator(ctrl)
+	txnOp.EXPECT().Txn().Return(txn.TxnMeta{Mode: txn.TxnMode_Optimistic})
+
+	err := validateAccountLifecycleTxn(context.Background(), txnOp)
+	require.ErrorContains(t, err, "require a pessimistic transaction")
+
+	txnOp.EXPECT().Txn().Return(txn.TxnMeta{Mode: txn.TxnMode_Pessimistic})
+	require.NoError(t, validateAccountLifecycleTxn(context.Background(), txnOp))
+	require.Error(t, validateAccountLifecycleTxn(context.Background(), nil))
 }
 
 func TestDataBranchAuditFkDepsEscapesQuotedNames(t *testing.T) {
