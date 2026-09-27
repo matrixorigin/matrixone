@@ -1,0 +1,156 @@
+# Replay promotion merge bootstrap (#29415)
+
+Status: draft for design review. Implementation PR: pending.
+Base: `origin/main` at `5a96035fc792b07b7a28e2f509dc0dcd4236e048`.
+
+## Scope and evidence
+
+The replay TN constructs its merge scheduler before WAL replay completes. A
+two-engine test opens the replay TN, commits a table on the writer, waits until
+the replay TN can read it, then intercepts local write admission during
+`SwitchTxnMode(ctx, 2, "")`. The scheduler reports `NotExists=true`. The same
+test fails on clean main and PR #29416. See the [reproducer][repro].
+
+`SwitchTxnMode(1/2)` and `WithTxnMode(DBTxnMode_Replay)` have no in-repository
+production callers. The debug RPC calls only modes 3/4. Normal TN startup uses
+Write mode. This design changes only code reached through the dormant
+Replay-to-Write command. It does not enable that command from a service, change
+wire/catalog/storage formats, or add work to normal startup or merge hot paths.
+External Go callers cannot be excluded by repository search alone; this is an
+explicit limit of the no-production-impact claim.
+
+The existing controller still has TODOs for distributed writer fencing,
+logtail tunneling, and write forwarding. This design repairs the **local
+promotion bootstrap** under a caller-provided guarantee that the prior writer
+is already fenced and there are no concurrent direct `DB` or RPC callers. No service
+may expose this switch to production until those conditions are enforced.
+It does not claim that live TN migration is supported. The integration test
+must close/fence its writer before requesting promotion.
+
+## Invariants and ownership
+
+1. With exclusive local control, `SwitchTxnMode` returns success only after WAL
+   replay has stopped at its handoff point, the catalog/settings view is newer
+   than the last replayed commit, the existing merge scheduler has reconciled
+   that view, and all local write services have started successfully. The
+   existing RPC server starts in Local state, so `TxnLocalHandle` is **not** an
+   admission barrier. Concurrent RPC or direct DB traffic is outside this
+   local-only contract and must be prohibited by its future caller.
+2. No stale scheduler work or config is published between the replay barrier and
+   local write admission. The stopped scheduler is reconciled in place, keeping
+   the identical supporter pointers and task observers for surviving tables.
+   New tables are added. Dropped tables are removed from map and heap at once;
+   an in-flight observer retains its supporter and resource controller pointer
+   until completion. Settings absent from the fresh snapshot clear old overrides.
+3. Once replay has crossed its one-way `ReplayForWrite` boundary, any failure or
+   cancellation makes this DB instance terminal for promotion. The controller
+   returns the original error, rejects retries, and blocks new transactions.
+   The caller owns close/reopen after the control command returns. It must not
+   synchronously close the DB or RPC server from the controller callback.
+4. The controller owns the promotion phase and terminal error. Replay control
+   owns its worker and cancellation. The merge scheduler owns its supporters,
+   task observers, and generation queues. The settings reader owns and closes
+   every partial batch on error. No new background worker or persistent state
+   is added.
+
+## Sequence
+
+1. Reject a prior terminal promotion error. Require a fresh Replay-open DB:
+   non-nil replay controller, scheduler never started, old writer fenced, and
+   no concurrent DB/RPC callers. A promotion-only preflight checks
+   `stopped=true` and a never-run generation: `generation=nil` on this main
+   base, or a generation with an open `stopCh` if the constructor initializes
+   it (as in PR #29416). A completed Start/Stop leaves a closed stop channel.
+   Test fresh and Start/Stop states. Write-to-replay-to-write lacks a WAL barrier and fails
+   closed. Also require the stopped scheduler's shared message queue to be
+   empty. `SendConfig` and `SendTrigger`
+   can enqueue untagged messages even before first Start; a nonempty queue
+   fails closed before state mutation. The exclusive-control precondition
+   excludes concurrent senders, making the check stable. Then request
+   `ReplayForWrite`, wait for its worker with the command context, and
+   propagate replay failure.
+2. Require the prior writer to be fenced and catalog replay to be quiescent.
+   Select `max(TxnMgr.Now(), TxnMgr.MaxCommittedTS.Next())` after the replay
+   worker joins. Enumerate active catalog tables from the now-quiescent
+   catalog; this enumeration is not an MVCC snapshot. Read visible
+   `mo_merge_settings` rows using one offline transaction at that timestamp.
+   A new promotion-only reader accepts context, returns scan errors, strictly
+   decodes both JSON and trigger parameters, and closes partial batches.
+   A missing settings table means an empty settings set only on an explicit
+   table-not-found result; missing `mo_catalog` or scan failure is an error.
+3. While the scheduler is stopped, reconcile its supporters by table ID:
+   preserve each surviving pointer and in-flight count, add only missing IDs,
+   and remove dropped IDs from map and heap. The observer closure owns a
+   removed supporter's eventual task release. Reset all overrides and apply
+   the fresh settings set, including deletions. Clear the old constructor
+   `bootstrapMsg` before `Start`, so it cannot replay a stale settings closure.
+   The legacy `OnMergeDone` path has no current
+   caller; validate that no promotion event can reintroduce a removed supporter.
+4. Attach `Catalog.SetMergeNotifier` after reconciliation while the catalog is
+   quiescent and set the stopped scheduler's paused flag synchronously. Switch
+   the transaction manager to Write **before** starting write-capable workers;
+   the caller's exclusive-control precondition prevents new direct/RPC writes
+   during the remaining setup. Start the local write services and cron jobs
+   using the existing `skipMode=true` path, which permits write jobs while DB
+   mode still reads Replay. Start the reconciled scheduler paused, verify the
+   target cron set, then set DB mode Write and resume the scheduler. A failure
+   after the manager switch is terminal and must latch `OnException` before
+   returning. Skip the existing `SwitchTxnHandleStateTo(TxnLocalHandle)` call:
+   fresh Replay-open has no forwarding transition, and the server defaults to
+   Local. That call is not an admission barrier. Return success only after all
+   steps finish.
+
+## Errors, cancellation, and recovery
+
+- Before the replay handoff, failure preserves Replay mode. After the handoff,
+  latch a terminal error, call `TxnMgr.OnException`, detach the catalog notifier
+  while no new normal requests are allowed, then stop any started scheduler
+  and write services. Return the original error joined with cleanup errors.
+  Never report success because rollback succeeded.
+- `StopForWrite(ctx)` observes cancellation and cancels the replay worker. If
+  cancellation returns before the worker joins, leave replay transaction flags
+  unchanged, keep the terminal error latched, and let DB close join the worker.
+  Do not retry promotion on the same DB instance.
+- The strict reader uses a promotion-only block scanner whose lower-level scan
+  never closes the shared partial batch. Its caller is the sole close owner on
+  every success and error path; it does not call `HybridScanByBlock`, which
+  closes the batch internally on some errors but not others. The existing
+  normal-startup reader and scanner are unchanged.
+- A settings scan error or timeout does not substitute a partial/default batch.
+  No scheduler or write endpoint is published. Existing background workers are
+  stopped by their current owner; the TN lifecycle owner closes/reopens after
+  the command returns.
+- This local fail-stop does not implement a distributed request gate or old
+  writer fence. Promotion cannot be exposed to production until those separate
+  contracts are designed and verified.
+
+## Alternatives and cost
+
+- Recreate the scheduler: less code, but loses in-flight task accounting and
+  changes references held by the catalog/DB. Rejected.
+- Asynchronously enqueue replayed table/config events: leaves an interval in
+  which writes or merge scheduling can observe stale state. Rejected.
+- Reconcile the stopped scheduler before admission: selected. Work is O(active
+  tables + settings rows) and occurs once per explicit promotion; normal Write
+  startup, transaction, and merge paths execute no added instruction or I/O.
+  The snapshot batch is bounded by existing table size and released on every
+  path; no retained copy is required after reconciliation.
+
+## Validation and delivery gate
+
+The pinned baseline diagnostic reproducer fails with its writer DB closed
+before promotion. The final regression reuses that two-engine setup but checks
+a completed successful switch and the public scheduler query; the old
+`TxnLocalHandle` interception is removed with the dormant branch's redundant
+call, so it is not retained as the final oracle.
+Extend it with a late settings row and absent/deleted row.
+The no-replay-control local switch and a pre-Start queued scheduler message
+must fail closed. Cover replay error, canceled
+wait, settings read failure, one-way retry rejection, and surviving supporter
+task count. Run selected tests in normal/race modes, owning packages, CGo
+wrapper, incremental SCA, and a no-change call-graph/diff audit of normal TN
+startup and merge hot paths. No SQL BVT applies because no production service
+can invoke this mode switch. Do not submit a production implementation until
+this exact design revision has been reviewed and approved under `mo-dev`.
+
+[repro]: https://github.com/XuPeng-SH/matrixone/blob/9599e3dbe5/pkg/vm/engine/tae/db/test/issue29415_repro_test.go
