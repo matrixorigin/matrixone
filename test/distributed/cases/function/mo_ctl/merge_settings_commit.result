@@ -1,9 +1,12 @@
 drop database if exists merge_settings_commit;
 create database merge_settings_commit;
+create table merge_settings_commit.settings_template(settings json not null);
+insert into merge_settings_commit.settings_template values
+('{"vacuum-top-k":10,"vacuum-score-start":60,"vacuum-score-end":10,"vacuum-score-decay-duration":"30m0s","l0-max-count-start":32,"l0-max-count-end":1,"l0-max-count-decay-duration":"1h0m0s","l0-max-count-decay-control":[0.7,0,0.1,1],"ln-start-lv":1,"ln-end-lv":7,"ln-min-point-depth-per-cluster":3,"tombstone-l1-size":"8MiB","tombstone-l1-count":4,"tombstone-l2-count":2}');
 create table merge_settings_commit.t1(a int primary key);
 insert into mo_catalog.mo_merge_settings (account_id, tid, version, settings, extra_info)
 select 0, t.rel_id, 0,
-json_set((select settings from mo_catalog.mo_merge_settings where account_id = 0 and tid = 0), '$."l0-max-count-start"', 32), ''
+json_set((select settings from merge_settings_commit.settings_template), '$."l0-max-count-start"', 32), ''
 from mo_catalog.mo_tables t
 where t.reldatabase = 'merge_settings_commit' and t.relname = 't1';
 select instr(mo_ctl('dn', 'inspect', 'merge show -t merge_settings_commit.t1'), 'LayerZeroOpts{S: 32') > 0 as applied;
@@ -13,7 +16,7 @@ begin;
 create table merge_settings_commit.t2(a int primary key);
 insert into mo_catalog.mo_merge_settings (account_id, tid, version, settings, extra_info)
 select 0, t.rel_id, 0,
-json_set((select settings from mo_catalog.mo_merge_settings where account_id = 0 and tid = 0), '$."l0-max-count-start"', 44), ''
+json_set((select settings from merge_settings_commit.settings_template), '$."l0-max-count-start"', 44), ''
 from mo_catalog.mo_tables t
 where t.reldatabase = 'merge_settings_commit' and t.relname = 't2';
 commit;
@@ -44,12 +47,12 @@ where reldatabase = 'merge_settings_commit' and relname = 'abort_t');
 0
 insert into mo_catalog.mo_merge_settings (account_id, tid, version, settings, extra_info)
 select 0, t.rel_id, 0,
-json_set((select settings from mo_catalog.mo_merge_settings where account_id = 0 and tid = 0), '$."l0-max-count-start"', 77), ''
+json_set((select settings from merge_settings_commit.settings_template), '$."l0-max-count-start"', 77), ''
 from mo_catalog.mo_tables t
 where t.reldatabase = 'merge_settings_commit' and t.relname = 'abort_t';
 insert into mo_catalog.mo_merge_settings (account_id, tid, version, settings, extra_info)
 select 0, t.rel_id, 0,
-json_set((select settings from mo_catalog.mo_merge_settings where account_id = 0 and tid = 0), '$."l0-max-count-start"', 32), ''
+json_set((select settings from merge_settings_commit.settings_template), '$."l0-max-count-start"', 32), ''
 from mo_catalog.mo_tables t
 where t.reldatabase = 'merge_settings_commit' and t.relname = 'abort_t';
 commit;
