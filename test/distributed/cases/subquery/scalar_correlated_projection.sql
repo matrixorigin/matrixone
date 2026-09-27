@@ -106,6 +106,20 @@ select p.id, (select sum(c.v) from child_agg c where c.corr_key = p.corr_key gro
 select p.id, (select sum(c.v) from child_agg c where c.corr_key = p.corr_key having sum(c.v) > 100) as having_sum from parent_agg p order by p.id;
 
 -- @case
+-- @desc:issue #29412 - local CTE aggregate outputs retain their empty-input row through computed and nested consumers
+-- @label:bvt
+select p.id,
+  (with x as (select count(*) as c from child_agg c where c.corr_key = p.corr_key) select c + 1 from x) as computed_count,
+  (with a as (select max(c.v) as m from child_agg c where c.corr_key = p.corr_key), x as (select count(*) as c from a) select c from x) as nested_star_count,
+  (with a as (select max(c.v) as m from child_agg c where c.corr_key = p.corr_key), x as (select count(m) as c from a) select c from x) as nested_value_count,
+  (with a as (select max(c.v) as m from child_agg c where c.corr_key = p.corr_key), x as (select sum(m) as s from a) select s from x) as nested_sum,
+  (with a as (select max(c.v) as m from child_agg c where c.corr_key = p.corr_key), x as (select sum(coalesce(m, 9) + 1) as s from a) select s from x) as computed_sum,
+  (with a as (select max(c.v) as m from child_agg c where c.corr_key = p.corr_key), x as (select count(m) as c from a), y as (select sum(c) as s from x) select s from y) as triple_sum
+from parent_agg p order by p.id;
+select (with x as (select count(*) as c from child_agg c where c.corr_key = p.corr_key) select c + 1 from x) as null_key_count
+from (select cast(null as signed) as corr_key) p;
+
+-- @case
 -- @desc:ONLY_FULL_GROUP_BY allows inner HAVING to reference an ungrouped outer row
 -- @label:bvt
 set @@sql_mode = 'ONLY_FULL_GROUP_BY';

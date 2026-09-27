@@ -487,6 +487,11 @@ func (builder *QueryBuilder) flattenSubqueryWithConsumer(
 				"wrapped correlated scalar projection cannot be safely decorrelated")
 		}
 	}
+	var aggregateSpine []*plan.Node
+	var aggregateSpineCandidate bool
+	if subquery.Typ == plan.SubqueryRef_SCALAR {
+		aggregateSpine, aggregateSpineCandidate = builder.traceCorrelatedAggregateSpine(subID, subCtx)
+	}
 
 	var correlatedHaving []*plan.Expr
 	if subquery.Typ == plan.SubqueryRef_SCALAR && subquery.Child != nil {
@@ -499,6 +504,12 @@ func (builder *QueryBuilder) flattenSubqueryWithConsumer(
 	subID, preds, err := builder.pullupCorrelatedPredicates(subID, subCtx, subquery.Typ, true)
 	if err != nil {
 		return 0, nil, err
+	}
+	if aggregateSpineCandidate && len(preds) > 0 {
+		if _, ok := correlatedPaginationPartitionKeys(preds); aggregateSpine == nil || !ok {
+			return 0, nil, moerr.NewNYI(builder.GetContext(),
+				"correlated aggregate spine cannot preserve empty-input rows")
+		}
 	}
 
 	// When a scalar aggregate subquery has non-equality correlated predicates,
@@ -514,6 +525,10 @@ func (builder *QueryBuilder) flattenSubqueryWithConsumer(
 	}
 
 	filterPreds, joinPreds := decreaseDepthAndDispatch(preds)
+	if aggregateSpineCandidate && len(filterPreds) > 0 {
+		return 0, nil, moerr.NewNYI(builder.GetContext(),
+			"deep correlated aggregate spine cannot preserve empty-input rows")
+	}
 	if len(correlatedHaving) > 0 {
 		if len(filterPreds) > 0 {
 			return 0, nil, moerr.NewNYI(builder.GetContext(),
@@ -523,7 +538,7 @@ func (builder *QueryBuilder) flattenSubqueryWithConsumer(
 			joinPreds = append(joinPreds, newSubqueryBoolConst(true))
 		}
 	}
-	if subquery.Typ == plan.SubqueryRef_SCALAR && len(subCtx.aggregates) > 0 {
+	if subquery.Typ == plan.SubqueryRef_SCALAR && len(subCtx.aggregates) > 0 && !aggregateSpineCandidate {
 		builder.pushdownScalarAggregateKeys(subID, joinPreds, ctx)
 	}
 
@@ -604,12 +619,20 @@ func (builder *QueryBuilder) flattenSubqueryWithConsumer(
 			if len(joinPreds) == 0 {
 				joinPreds = append(joinPreds, newSubqueryBoolConst(true))
 			}
-		} else if subCtx.hasSingleRow {
+		} else if subCtx.hasSingleRow || aggregateSpineCandidate && len(joinPreds) > 0 {
 			joinType = plan.Node_LEFT
 		}
 
-		subID, postJoinProjections, finalizeProjection, err :=
-			builder.prepareCorrelatedScalarAggregatePostJoinProjection(subID, subCtx, joinPreds, correlatedHaving, subquery.Child != nil)
+		var postJoinProjections []*plan.Expr
+		var finalizeProjection bool
+		if aggregateSpineCandidate && len(joinPreds) > 0 {
+			subID, postJoinProjections, err = builder.prepareCorrelatedAggregateSpine(
+				aggregateSpine, subCtx.results, joinPreds)
+			finalizeProjection = err == nil
+		} else {
+			subID, postJoinProjections, finalizeProjection, err =
+				builder.prepareCorrelatedScalarAggregatePostJoinProjection(subID, subCtx, joinPreds, correlatedHaving, subquery.Child != nil)
+		}
 		if err != nil {
 			return nodeID, nil, err
 		}
@@ -1577,6 +1600,255 @@ func (builder *QueryBuilder) prepareCorrelatedScalarAggregatePostJoinProjection(
 		joinPreds[i] = replaceGroupTagRefs(joinPreds[i], projectTag, root.ProjectList)
 	}
 	return aggID, postJoinProjections, true, nil
+}
+
+// traceCorrelatedAggregateSpine recognizes CTE projections and nested implicit
+// aggregates whose upper aggregates consume exactly one row from the lowest
+// aggregate. Inspect GroupBy before correlation pullup adds its grouping keys.
+func (builder *QueryBuilder) traceCorrelatedAggregateSpine(subID int32, ctx *BindContext) ([]*plan.Node, bool) {
+	first := builder.findAggNodeBelow(subID)
+	if first == nil || len(ctx.aggregates) > 0 &&
+		(len(first.Children) != 1 || builder.findAggNodeBelow(first.Children[0]) == nil) {
+		return nil, false
+	}
+
+	var spine []*plan.Node
+	for nodeID := subID; len(spine) < 32; {
+		node := builder.qry.Nodes[nodeID]
+		if len(node.Children) != 1 || node.Limit != nil || node.Offset != nil ||
+			node.RankOption != nil || len(node.OrderBy) != 0 || len(node.FilterList) != 0 {
+			return nil, true
+		}
+		switch node.NodeType {
+		case plan.Node_PROJECT:
+			if len(node.BindingTags) != 1 {
+				return nil, true
+			}
+			for _, expr := range node.ProjectList {
+				if containsVolatileFunction(expr) {
+					return nil, true
+				}
+			}
+		case plan.Node_AGG:
+			if len(node.BindingTags) < 2 || len(node.GroupBy) != 0 {
+				return nil, true
+			}
+			for _, agg := range node.AggList {
+				if agg.GetF() == nil {
+					return nil, true
+				}
+				for _, arg := range agg.GetF().Args {
+					if containsVolatileFunction(arg) {
+						return nil, true
+					}
+				}
+			}
+		default:
+			return nil, true
+		}
+		spine = append(spine, node)
+		if node.NodeType == plan.Node_AGG && builder.findAggNodeBelow(node.Children[0]) == nil {
+			return spine, true
+		}
+		nodeID = node.Children[0]
+	}
+	return nil, true
+}
+
+// The upper implicit aggregates in spine operate on a proven singleton. Fold
+// them into scalar expressions so the existing empty-input restoration can run
+// immediately after joining the lowest aggregate, before any upper consumer.
+func (builder *QueryBuilder) prepareCorrelatedAggregateSpine(
+	spine []*plan.Node, results []*plan.Expr, joinPreds []*plan.Expr,
+) (int32, []*plan.Expr, error) {
+	if len(spine) == 0 || len(results) == 0 {
+		return 0, nil, moerr.NewNYI(builder.GetContext(), "correlated aggregate spine cannot be reconstructed")
+	}
+	lowest := spine[len(spine)-1]
+	if lowest.NodeType != plan.Node_AGG {
+		return 0, nil, moerr.NewNYI(builder.GetContext(), "correlated aggregate spine has no lowest aggregate")
+	}
+	restored := make([]*plan.Expr, len(lowest.AggList))
+	for i, agg := range lowest.AggList {
+		col := GetColExpr(agg.Typ, lowest.BindingTags[1], int32(i))
+		col.Typ.NotNullable = false
+		var err error
+		restored[i], err = builder.restoreAggregateEmptyResult(col, agg, agg.GetF().Func.ObjName)
+		if err != nil {
+			return 0, nil, err
+		}
+	}
+
+	root := spine[0]
+	postJoin := make([]*plan.Expr, len(results))
+	for i := range results {
+		var expr *plan.Expr
+		if root.NodeType == plan.Node_PROJECT && i < len(root.ProjectList) {
+			expr = GetColExpr(root.ProjectList[i].Typ, root.BindingTags[0], int32(i))
+		} else if root.NodeType == plan.Node_AGG && i < len(root.AggList) {
+			expr = GetColExpr(root.AggList[i].Typ, root.BindingTags[1], int32(i))
+		} else {
+			return 0, nil, moerr.NewNYI(builder.GetContext(), "correlated aggregate spine output cannot be reconstructed")
+		}
+		budget := 4096
+		for _, node := range spine[:len(spine)-1] {
+			var err error
+			if node.NodeType == plan.Node_PROJECT {
+				expr, err = builder.replaceAggregateSpineTag(expr, node.BindingTags[0], node.ProjectList, nil, &budget)
+			} else {
+				expr, err = builder.replaceAggregateSpineTag(expr, node.BindingTags[1], nil, node.AggList, &budget)
+			}
+			if err != nil {
+				return 0, nil, err
+			}
+		}
+		if !containsTag(expr, lowest.BindingTags[1]) {
+			// An upper COUNT(*) does not reference the lower aggregate result.
+			// Its elimination must not suppress a fallible lower argument.
+			for _, agg := range lowest.AggList {
+				for _, arg := range agg.GetF().Args {
+					if !isTruncationSafeRowExpr(arg) {
+						return 0, nil, moerr.NewNYI(builder.GetContext(),
+							"unobserved fallible aggregate in correlated CTE")
+					}
+				}
+			}
+		}
+		var ok bool
+		expr, ok = replaceAggregateRefsForPostJoin(expr, lowest.BindingTags[1], restored)
+		if !ok {
+			return 0, nil, moerr.NewNYI(builder.GetContext(), "correlated aggregate spine expression cannot be reconstructed")
+		}
+		var correlated bool
+		expr, correlated = decreaseDepth(expr)
+		if correlated {
+			return 0, nil, moerr.NewNYI(builder.GetContext(), "deep correlated aggregate spine expression")
+		}
+		refreshExprNullabilityFromInputs(expr)
+		resultType := results[i].Typ
+		resultType.NotNullable = expr.Typ.NotNullable
+		expr.Typ = resultType
+		postJoin[i] = expr
+	}
+
+	// Pullup appended the correlation key to every PROJECT and upper AGG.
+	// Unwind those references before bypassing the upper nodes.
+	for _, node := range spine[:len(spine)-1] {
+		for i, pred := range joinPreds {
+			if node.NodeType == plan.Node_PROJECT {
+				joinPreds[i] = replaceGroupTagRefs(pred, node.BindingTags[0], node.ProjectList)
+			} else {
+				joinPreds[i] = replaceGroupTagRefs(pred, node.BindingTags[0], node.GroupBy)
+			}
+		}
+	}
+	return lowest.NodeId, postJoin, nil
+}
+
+func (builder *QueryBuilder) replaceAggregateSpineTag(
+	expr *plan.Expr, tag int32, projects, aggregates []*plan.Expr, budget *int,
+) (*plan.Expr, error) {
+	*budget--
+	if *budget < 0 {
+		return nil, moerr.NewNYI(builder.GetContext(), "correlated aggregate spine expression is too large")
+	}
+	switch item := expr.Expr.(type) {
+	case *plan.Expr_Col:
+		if item.Col.RelPos != tag {
+			return expr, nil
+		}
+		pos := int(item.Col.ColPos)
+		if projects != nil {
+			if pos < 0 || pos >= len(projects) {
+				return nil, moerr.NewNYI(builder.GetContext(), "correlated aggregate spine project reference is invalid")
+			}
+			if !aggregateSpineExprWithinBudget(projects[pos], budget) {
+				return nil, moerr.NewNYI(builder.GetContext(), "correlated aggregate spine expression is too large")
+			}
+			return DeepCopyExpr(projects[pos]), nil
+		}
+		if pos < 0 || pos >= len(aggregates) {
+			return nil, moerr.NewNYI(builder.GetContext(), "correlated aggregate spine aggregate reference is invalid")
+		}
+		replacement, err := builder.singletonAggregateExpr(aggregates[pos])
+		if err != nil {
+			return nil, err
+		}
+		if !aggregateSpineExprWithinBudget(replacement, budget) {
+			return nil, moerr.NewNYI(builder.GetContext(), "correlated aggregate spine expression is too large")
+		}
+		return replacement, nil
+	case *plan.Expr_F:
+		for i, arg := range item.F.Args {
+			var err error
+			item.F.Args[i], err = builder.replaceAggregateSpineTag(arg, tag, projects, aggregates, budget)
+			if err != nil {
+				return nil, err
+			}
+		}
+	case *plan.Expr_List, *plan.Expr_W, *plan.Expr_Sub:
+		return nil, moerr.NewNYI(builder.GetContext(), "correlated aggregate spine expression is not scalar")
+	}
+	return expr, nil
+}
+
+func aggregateSpineExprWithinBudget(expr *plan.Expr, budget *int) bool {
+	if expr == nil {
+		return false
+	}
+	*budget--
+	if *budget < 0 {
+		return false
+	}
+	if fn := expr.GetF(); fn != nil {
+		for _, arg := range fn.Args {
+			if !aggregateSpineExprWithinBudget(arg, budget) {
+				return false
+			}
+		}
+	}
+	return true
+}
+
+func (builder *QueryBuilder) singletonAggregateExpr(aggregate *plan.Expr) (*plan.Expr, error) {
+	fn := aggregate.GetF()
+	if fn == nil || fn.Func == nil {
+		return nil, moerr.NewNYI(builder.GetContext(), "unsupported singleton aggregate")
+	}
+	switch fn.Func.ObjName {
+	case "starcount":
+		one := makePlan2Int64ConstExprWithType(1)
+		one.Typ = aggregate.Typ
+		return one, nil
+	case "count":
+		if len(fn.Args) == 1 {
+			arg := DeepCopyExpr(fn.Args[0])
+			isNull, err := BindFuncExprImplByPlanExpr(builder.GetContext(), "isnull", []*plan.Expr{arg})
+			if err != nil {
+				return nil, err
+			}
+			zero := makePlan2Int64ConstExprWithType(0)
+			one := makePlan2Int64ConstExprWithType(1)
+			zero.Typ, one.Typ = aggregate.Typ, aggregate.Typ
+			return BindFuncExprImplByPlanExpr(builder.GetContext(), "case", []*plan.Expr{isNull, zero, one})
+		}
+	case "min", "max":
+		if len(fn.Args) == 1 && makeTypeByPlan2Expr(fn.Args[0]).Eq(makeTypeByPlan2Expr(aggregate)) {
+			return DeepCopyExpr(fn.Args[0]), nil
+		}
+	case "sum":
+		if len(fn.Args) == 1 {
+			switch types.T(fn.Args[0].Typ.Id) {
+			case types.T_int8, types.T_int16, types.T_int32, types.T_int64,
+				types.T_uint8, types.T_uint16, types.T_uint32, types.T_uint64,
+				types.T_decimal64, types.T_decimal128, types.T_decimal256:
+				resultType := aggregate.Typ
+				resultType.NotNullable = false
+				return appendCastBeforeExpr(builder.GetContext(), DeepCopyExpr(fn.Args[0]), resultType)
+			}
+		}
+	}
+	return nil, moerr.NewNYI(builder.GetContext(), "unsupported singleton aggregate in correlated CTE")
 }
 
 func (builder *QueryBuilder) restoreAggregateEmptyResult(
