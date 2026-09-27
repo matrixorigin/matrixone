@@ -1226,10 +1226,12 @@ var supportedStringBuiltIns = []FuncNew{
 
 	// function `format`
 	{
-		functionId: FORMAT,
-		class:      plan.Function_STRICT,
-		layout:     STANDARD_FUNCTION,
-		checkFn:    formatCheck,
+		functionId:        FORMAT,
+		class:             plan.Function_STRICT,
+		layout:            STANDARD_FUNCTION,
+		checkFn:           formatIntegerCheck,
+		integerParameters: []integerParameter{{position: 1, target: types.T_int64}},
+		bindingOverloads:  []int{2, 3},
 
 		Overloads: []overload{
 			{
@@ -1251,6 +1253,18 @@ var supportedStringBuiltIns = []FuncNew{
 				newOp: func() executeLogicOfOverload {
 					return FormatWith3Args
 				},
+			},
+			{
+				overloadId: FormatIntegerPrecisionOverload,
+				args:       []types.T{types.T_varchar, types.T_int64},
+				retType:    func([]types.Type) types.Type { return types.T_varchar.ToType() },
+				newOp:      func() executeLogicOfOverload { return formatIntegerPrecision },
+			},
+			{
+				overloadId: FormatIntegerPrecisionLocaleOverload,
+				args:       []types.T{types.T_varchar, types.T_int64, types.T_varchar},
+				retType:    func([]types.Type) types.Type { return types.T_varchar.ToType() },
+				newOp:      func() executeLogicOfOverload { return formatIntegerPrecision },
 			},
 		},
 	},
@@ -12351,72 +12365,6 @@ func isMakeTimeTextType(oid types.T) bool {
 	}
 }
 
-func makeTimeCheck(overloads []overload, inputs []types.Type) checkResult {
-	if len(inputs) != 3 {
-		return newCheckResultWithFailure(failedFunctionParametersWrong)
-	}
-	exactSecond := isMakeTimeTextType(inputs[2].Oid) || inputs[2].Oid.IsDecimal()
-	exactHour := inputs[0].Oid.IsDecimal()
-	exactMinute := inputs[1].Oid.IsDecimal()
-	if !isMakeTimeTextType(inputs[0].Oid) && !isMakeTimeTextType(inputs[1].Oid) && !exactHour && !exactMinute && !exactSecond {
-		return fixedTypeMatch(overloads, inputs)
-	}
-
-	targetOids := []types.T{types.T_float64, types.T_float64, types.T_float64}
-	if isMakeTimeTextType(inputs[0].Oid) {
-		targetOids[0] = types.T_varchar
-	} else if exactHour {
-		if inputs[0].Oid == types.T_decimal256 {
-			targetOids[0] = types.T_decimal256
-		} else {
-			targetOids[0] = types.T_decimal128
-		}
-	}
-	if isMakeTimeTextType(inputs[1].Oid) {
-		targetOids[1] = types.T_varchar
-	} else if exactMinute {
-		if inputs[1].Oid == types.T_decimal256 {
-			targetOids[1] = types.T_decimal256
-		} else {
-			targetOids[1] = types.T_decimal128
-		}
-	}
-	if exactSecond {
-		targetOids[2] = types.T_varchar
-	}
-	status, _ := tryToMatch(inputs, targetOids)
-	if status == matchFailed {
-		return fixedTypeMatch(overloads, inputs)
-	}
-
-	for i, ov := range overloads {
-		if len(ov.args) != len(targetOids) || ov.args[0] != targetOids[0] || ov.args[1] != targetOids[1] || ov.args[2] != targetOids[2] {
-			continue
-		}
-		if status == matchDirectly && !exactSecond {
-			return newCheckResultWithSuccess(i)
-		}
-		targets := make([]types.Type, len(inputs))
-		for j := range targets {
-			if inputs[j].Oid == targetOids[j] {
-				targets[j] = inputs[j]
-			} else {
-				targets[j] = targetOids[j].ToType()
-				SetTargetScaleFromSource(&inputs[j], &targets[j])
-			}
-		}
-		if exactSecond {
-			if inputs[2].Oid.IsDecimal() {
-				targets[2].Scale = inputs[2].Scale
-			} else {
-				targets[2].Scale = -1
-			}
-		}
-		return newCheckResultWithCast(i, targets)
-	}
-	return newCheckResultWithFailure(failedFunctionParametersWrong)
-}
-
 func secToTimeReturnType(parameters []types.Type) types.Type {
 	scale := parameters[0].Scale
 	switch parameters[0].Oid {
@@ -12942,10 +12890,12 @@ var supportedControlBuiltIns = []FuncNew{
 
 	// function `MAKEDATE`
 	{
-		functionId: MAKEDATE,
-		class:      plan.Function_STRICT,
-		layout:     STANDARD_FUNCTION,
-		checkFn:    fixedTypeMatch,
+		functionId:        MAKEDATE,
+		class:             plan.Function_STRICT,
+		layout:            STANDARD_FUNCTION,
+		checkFn:           fixedTypeMatch,
+		integerParameters: []integerParameter{{position: 0, target: types.T_int64}, {position: 1, target: types.T_int64}},
+		bindingOverloads:  []int{1},
 		Overloads: []overload{
 			{
 				overloadId: 0,
@@ -12957,15 +12907,23 @@ var supportedControlBuiltIns = []FuncNew{
 					return MakeDateString
 				},
 			},
+			{
+				overloadId: MakeDateIntegerOverload,
+				args:       []types.T{types.T_int64, types.T_int64},
+				retType:    func([]types.Type) types.Type { return types.T_varchar.ToType() },
+				newOp:      func() executeLogicOfOverload { return makeDateInteger },
+			},
 		},
 	},
 
 	// function `MAKETIME`
 	{
-		functionId: MAKETIME,
-		class:      plan.Function_STRICT,
-		layout:     STANDARD_FUNCTION,
-		checkFn:    makeTimeCheck,
+		functionId:        MAKETIME,
+		class:             plan.Function_STRICT,
+		layout:            STANDARD_FUNCTION,
+		checkFn:           makeTimeIntegerCheck,
+		integerParameters: []integerParameter{{position: 0, target: types.T_int64}, {position: 1, target: types.T_int64}},
+		bindingOverloads:  []int{0, 36, 37, 38},
 		Overloads: []overload{
 			{
 				overloadId: 0,
@@ -13204,6 +13162,24 @@ var supportedControlBuiltIns = []FuncNew{
 			{
 				overloadId: 35,
 				args:       []types.T{types.T_decimal128, types.T_decimal256, types.T_varchar},
+				retType:    makeTimeReturnType,
+				newOp:      func() executeLogicOfOverload { return MakeTime },
+			},
+			{
+				overloadId: MakeTimeIntegerFloatOverload,
+				args:       []types.T{types.T_int64, types.T_int64, types.T_float64},
+				retType:    makeTimeReturnType,
+				newOp:      func() executeLogicOfOverload { return MakeTime },
+			},
+			{
+				overloadId: MakeTimeIntegerExactOverload,
+				args:       []types.T{types.T_int64, types.T_int64, types.T_varchar},
+				retType:    makeTimeReturnType,
+				newOp:      func() executeLogicOfOverload { return MakeTime },
+			},
+			{
+				overloadId: MakeTimeIntegerUnsignedOverload,
+				args:       []types.T{types.T_int64, types.T_int64, types.T_uint64},
 				retType:    makeTimeReturnType,
 				newOp:      func() executeLogicOfOverload { return MakeTime },
 			},

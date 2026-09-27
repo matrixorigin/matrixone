@@ -217,6 +217,11 @@ func getFunctionByName(
 	}
 
 	check := f.checkArgumentTypes(args, stringDomainModes)
+	if (r.fid == FORMAT || r.fid == MAKEDATE || r.fid == MAKETIME) && LegacySpecialConsumers(ctx) {
+		if legacy, ok := legacySpecialConsumerCheck(r.fid, f.Overloads, args); ok {
+			check = legacy
+		}
+	}
 	if r.fid == MINUS && signedUnsignedSubtraction(ctx, args) {
 		check = newCheckResultWithCast(3, integerDomainOperands(args))
 	}

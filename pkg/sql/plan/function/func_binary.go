@@ -6814,43 +6814,6 @@ func ExportSet(ivecs []*vector.Vector, result vector.FunctionResultWrapper, proc
 	return nil
 }
 
-func formatCheck(overloads []overload, inputs []types.Type) checkResult {
-	if len(inputs) < 2 || len(inputs) > 3 {
-		return newCheckResultWithFailure(failedFunctionParametersWrong)
-	}
-	// FORMAT's first argument has two observable numeric domains. Keep exact
-	// integer/DECIMAL vectors typed so execution can apply MySQL's decimal
-	// half-up rounding; strings and floating-point values continue through the
-	// existing approximate (ties-to-even) path. Do not infer this from the
-	// rendered text: scientific notation is syntax, not a type contract.
-	if inputs[0].IsNumeric() {
-		overloadID := len(inputs) - 2
-		if overloadID < 0 || overloadID >= len(overloads) {
-			return newCheckResultWithFailure(failedFunctionParametersWrong)
-		}
-		targets := append([]types.Type(nil), inputs...)
-		needsCast := false
-		for i := 1; i < len(targets); i++ {
-			if targets[i].Oid.IsMySQLString() {
-				continue
-			}
-			targets[i] = formattedScalarStringType(targets[i])
-			SetTargetScaleFromSource(&inputs[i], &targets[i])
-			needsCast = true
-		}
-		if needsCast {
-			return newCheckResultWithCast(overloadID, targets)
-		}
-		return newCheckResultWithSuccess(overloadID)
-	}
-	// If the first parameter is a date-like value, preserve the established
-	// invalid-argument contract instead of silently stringifying it.
-	if inputs[0].Oid.IsDateRelate() {
-		return newCheckResultWithFailure(failedFunctionParametersWrong)
-	}
-	return fixedTypeMatch(overloads, inputs)
-}
-
 func FormatWith2Args(ivecs []*vector.Vector, result vector.FunctionResultWrapper, _ *process.Process, length int, selectList *FunctionSelectList) (err error) {
 	if ivecs[0].GetType().IsNumeric() {
 		return formatWithNumericFirst(ivecs, result, length, false)
