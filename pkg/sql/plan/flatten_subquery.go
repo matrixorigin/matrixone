@@ -490,8 +490,9 @@ func (builder *QueryBuilder) flattenSubqueryWithConsumer(
 	}
 	var aggregateSpine []*plan.Node
 	var aggregateSpineCandidate bool
+	var preserveAggregateSpine bool
 	if subquery.Typ == plan.SubqueryRef_SCALAR {
-		aggregateSpine, aggregateSpineCandidate = builder.traceCorrelatedAggregateSpine(subID, subCtx)
+		aggregateSpine, aggregateSpineCandidate, preserveAggregateSpine = builder.traceCorrelatedAggregateSpine(subID, subCtx)
 	}
 
 	var correlatedHaving []*plan.Expr
@@ -506,8 +507,10 @@ func (builder *QueryBuilder) flattenSubqueryWithConsumer(
 	if err != nil {
 		return 0, nil, err
 	}
-	if aggregateSpineCandidate && len(preds) > 0 {
-		if _, ok := correlatedPaginationPartitionKeys(preds); aggregateSpine == nil || !ok {
+	// Preservation proves only the missing-row value. Nonempty partitions still
+	// need one equality-key group; otherwise pullup can create multiple scalar rows.
+	if (aggregateSpineCandidate || preserveAggregateSpine) && len(preds) > 0 {
+		if _, ok := correlatedPaginationPartitionKeys(preds); !ok || (aggregateSpineCandidate && aggregateSpine == nil) {
 			return 0, nil, moerr.NewNYI(builder.GetContext(),
 				"correlated aggregate spine cannot preserve empty-input rows")
 		}
@@ -636,6 +639,12 @@ func (builder *QueryBuilder) flattenSubqueryWithConsumer(
 		}
 		if err != nil {
 			return nodeID, nil, err
+		}
+		// Preservation must include the legacy finalizer: without a rebuilt
+		// projection, its COUNT fallback turns a proven NULL scalar into zero.
+		if preserveAggregateSpine && rewriteCount && !finalizeProjection {
+			return 0, nil, moerr.NewNYI(builder.GetContext(),
+				"correlated aggregate spine cannot preserve empty-input rows")
 		}
 		if len(correlatedHaving) > 0 && !finalizeProjection {
 			return 0, nil, moerr.NewNYI(builder.GetContext(),
@@ -1606,18 +1615,18 @@ func (builder *QueryBuilder) prepareCorrelatedScalarAggregatePostJoinProjection(
 // traceCorrelatedAggregateSpine recognizes CTE projections and nested implicit
 // aggregates whose upper aggregates consume exactly one row from the lowest
 // aggregate. Inspect GroupBy before correlation pullup adds its grouping keys.
-func (builder *QueryBuilder) traceCorrelatedAggregateSpine(subID int32, ctx *BindContext) ([]*plan.Node, bool) {
+func (builder *QueryBuilder) traceCorrelatedAggregateSpine(subID int32, ctx *BindContext) ([]*plan.Node, bool, bool) {
 	first := builder.findAggNodeBelow(subID)
 	if first == nil || len(ctx.aggregates) > 0 &&
 		(len(first.Children) != 1 || builder.findAggNodeBelow(first.Children[0]) == nil) {
-		return nil, false
+		return nil, false, false
 	}
 	// A zero-row limit above the first aggregate discards the whole scalar
 	// result. A lone explicit GROUP BY has no empty-input row to restore.
 	for nodeID := subID; nodeID != first.NodeId; {
 		node := builder.qry.Nodes[nodeID]
 		if limit, ok := getLiteralUint64(node.Limit); ok && limit == 0 {
-			return nil, false
+			return nil, false, false
 		}
 		if len(node.Children) != 1 {
 			break
@@ -1625,9 +1634,12 @@ func (builder *QueryBuilder) traceCorrelatedAggregateSpine(subID int32, ctx *Bin
 		nodeID = node.Children[0]
 	}
 	if len(first.Children) == 1 && builder.findAggNodeBelow(first.Children[0]) == nil {
-		if len(first.GroupBy) > 0 || builder.singleAggregateEmptyRowSuppressed(subID, first) {
-			return nil, false
+		if len(first.GroupBy) > 0 {
+			return nil, false, false
 		}
+	}
+	if builder.aggregateSpineLegacySafe(subID, ctx) {
+		return nil, false, true
 	}
 
 	var spine []*plan.Node
@@ -1635,140 +1647,226 @@ func (builder *QueryBuilder) traceCorrelatedAggregateSpine(subID int32, ctx *Bin
 		node := builder.qry.Nodes[nodeID]
 		if len(node.Children) != 1 || node.Limit != nil || node.Offset != nil ||
 			node.RankOption != nil || len(node.OrderBy) != 0 || len(node.FilterList) != 0 {
-			return nil, true
+			return nil, true, false
 		}
 		switch node.NodeType {
 		case plan.Node_PROJECT:
 			if len(node.BindingTags) != 1 {
-				return nil, true
+				return nil, true, false
 			}
 			for _, expr := range node.ProjectList {
 				if containsVolatileFunction(expr) {
-					return nil, true
+					return nil, true, false
 				}
 			}
 		case plan.Node_AGG:
 			if len(node.BindingTags) < 2 || len(node.GroupBy) != 0 {
-				return nil, true
+				return nil, true, false
 			}
 			for _, agg := range node.AggList {
 				if agg.GetF() == nil {
-					return nil, true
+					return nil, true, false
 				}
 				for _, arg := range agg.GetF().Args {
 					if containsVolatileFunction(arg) {
-						return nil, true
+						return nil, true, false
 					}
 				}
 			}
 		default:
-			return nil, true
+			return nil, true, false
 		}
 		spine = append(spine, node)
 		if node.NodeType == plan.Node_AGG && builder.findAggNodeBelow(node.Children[0]) == nil {
-			return spine, true
+			return spine, true, false
 		}
 		nodeID = node.Children[0]
 	}
-	return nil, true
+	return nil, true, false
 }
 
-// A HAVING/filter above one implicit aggregate can make its mandatory empty
-// row unobservable. Prove that against the aggregate's actual empty values;
-// COUNT(*) is zero, whereas MAX is NULL. Unknown predicates stay on the NYI
-// path instead of treating all HAVING clauses as null rejecting.
-func (builder *QueryBuilder) singleAggregateEmptyRowSuppressed(subID int32, agg *plan.Node) bool {
-	if len(agg.BindingTags) < 2 || len(agg.GroupBy) != 0 {
-		return false
-	}
-	type filterAt struct {
-		expr    *plan.Expr
-		childID int32
-	}
-	filters := make([]filterAt, 0, len(agg.FilterList)+1)
-	for nodeID := subID; nodeID != agg.NodeId; {
+// The old scalar join exposes NULL when correlation pullup removes an empty
+// group. Preserve that path only when evaluating the original unary subquery
+// on the aggregate's empty row also returns no row or only NULL outputs.
+// This proof is independent of the singleton-aggregate rewrite's coverage.
+func (builder *QueryBuilder) aggregateSpineLegacySafe(subID int32, ctx *BindContext) bool {
+	var path []*plan.Node
+	for nodeID := subID; len(path) < 32; {
 		node := builder.qry.Nodes[nodeID]
 		if len(node.Children) != 1 {
 			return false
 		}
-		if node.NodeType == plan.Node_FILTER {
-			for _, expr := range node.FilterList {
-				filters = append(filters, filterAt{expr, node.Children[0]})
-			}
+		path = append(path, node)
+		if node.NodeType == plan.Node_AGG && builder.findAggNodeBelow(node.Children[0]) == nil {
+			break
 		}
 		nodeID = node.Children[0]
 	}
-	for _, expr := range agg.FilterList {
-		filters = append(filters, filterAt{expr, agg.NodeId})
-	}
-	if len(filters) == 0 {
+	if len(path) == 0 || path[len(path)-1].NodeType != plan.Node_AGG ||
+		len(path[len(path)-1].Children) != 1 || builder.findAggNodeBelow(path[len(path)-1].Children[0]) != nil {
 		return false
 	}
-	empty := make([]*plan.Expr, len(agg.AggList))
-	for i, expr := range agg.AggList {
-		fn := expr.GetF()
-		if fn == nil || fn.Func == nil {
-			return false
-		}
-		kind := aggexec.GetEmptyResultKind(int64(uint64(fn.Func.Obj) & function.DistinctMask))
-		if kind == aggexec.EmptyResultUnsupported {
-			return false
-		}
-		if kind == aggexec.EmptyResultNull {
-			empty[i] = makePlan2NullConstExprWithType()
-			empty[i].Typ = expr.Typ
-			empty[i].Typ.NotNullable = false
-		} else {
-			var err error
-			empty[i], err = makeAggregateEmptyResultExpr(kind, expr.Typ)
-			if err != nil {
+
+	var values []*plan.Expr
+	var tag int32
+	present := false
+	// A parameter-dependent filter may leave either zero or one row. In that
+	// case present tracks the possible row; every later proof must also hold
+	// when that row is absent.
+	for i := len(path) - 1; i >= 0; i-- {
+		node := path[i]
+		switch node.NodeType {
+		case plan.Node_AGG:
+			if len(node.BindingTags) < 2 || i != len(path)-1 && len(node.GroupBy) > 0 {
 				return false
 			}
-		}
-	}
-	for _, filter := range filters {
-		budget := 4096
-		if containsVolatileFunction(filter.expr) || !aggregateSpineExprWithinBudget(filter.expr, &budget) {
-			return false
-		}
-		condition := DeepCopyExpr(filter.expr)
-		for nodeID := filter.childID; nodeID != agg.NodeId; {
-			node := builder.qry.Nodes[nodeID]
-			if len(node.Children) != 1 {
+			if len(node.GroupBy) == 0 {
+				next := make([]*plan.Expr, len(node.AggList))
+				for j, agg := range node.AggList {
+					fn := agg.GetF()
+					if fn == nil || fn.Func == nil {
+						return false
+					}
+					if i != len(path)-1 && present {
+						id, _ := function.DecodeOverloadID(fn.Func.Obj & function.DistinctMask)
+						switch id {
+						case function.MIN, function.MAX, function.SUM, function.AVG, function.ANY_VALUE:
+						default:
+							return false
+						}
+						if len(fn.Args) != 1 || fn.AggConfigType != plan.AggregateConfigType_AGG_CONFIG_NONE || len(fn.AggConfig) != 0 {
+							return false
+						}
+						arg, ok := builder.foldAggregateSpineEmptyExpr(fn.Args[0], tag, values)
+						if !ok || !arg.GetLit().Isnull {
+							return false
+						}
+					}
+					kind := aggexec.GetEmptyResultKind(int64(uint64(fn.Func.Obj) & function.DistinctMask))
+					if kind == aggexec.EmptyResultUnsupported {
+						return false
+					}
+					if kind == aggexec.EmptyResultNull {
+						next[j] = makePlan2NullConstExprWithType()
+						next[j].Typ = agg.Typ
+						next[j].Typ.NotNullable = false
+					} else {
+						if i != len(path)-1 && present {
+							return false
+						}
+						var err error
+						next[j], err = makeAggregateEmptyResultExpr(kind, agg.Typ)
+						if err != nil {
+							return false
+						}
+					}
+				}
+				values, present = next, true
+			}
+			tag = node.BindingTags[1]
+
+		case plan.Node_PROJECT:
+			if len(node.BindingTags) != 1 {
 				return false
 			}
-			if node.NodeType == plan.Node_PROJECT {
-				var err error
-				condition, err = builder.replaceAggregateSpineTag(
-					condition, node.BindingTags[0], node.ProjectList, nil, &budget)
-				if err != nil {
+			if present {
+				next := make([]*plan.Expr, len(node.ProjectList))
+				for j, expr := range node.ProjectList {
+					var ok bool
+					next[j], ok = builder.foldAggregateSpineEmptyExpr(expr, tag, values)
+					if !ok {
+						return false
+					}
+				}
+				values = next
+			}
+			tag = node.BindingTags[0]
+
+		case plan.Node_FILTER, plan.Node_SORT:
+		default:
+			return false
+		}
+		if node.RankOption != nil {
+			return false
+		}
+		if present {
+			for _, filter := range node.FilterList {
+				condition, ok := builder.substituteAggregateSpineEmptyExpr(filter, tag, values)
+				if !ok {
+					return false
+				}
+				lit := condition.GetLit()
+				if lit == nil {
+					// The predicate may retain or remove the synthetic row.
+					// Keep legacy evaluation unchanged, and prove the final scalar
+					// value is the same under either outcome. Prepared parameters
+					// need not be folded or declared total for this path.
+					continue
+				}
+				if lit.Isnull {
+					present = false
+					continue
+				}
+				value, ok := lit.Value.(*plan.Literal_Bval)
+				if !ok {
+					return false
+				}
+				if !value.Bval {
+					present = false
+				}
+			}
+			for _, order := range node.OrderBy {
+				if _, ok := builder.foldAggregateSpineEmptyExpr(order.Expr, tag, values); !ok {
 					return false
 				}
 			}
-			nodeID = node.Children[0]
 		}
-		if containsVolatileFunction(condition) {
-			return false
+		if node.Limit != nil {
+			limit, ok := getLiteralUint64(node.Limit)
+			if !ok {
+				return false
+			}
+			present = present && limit > 0
 		}
-		condition, ok := replaceAggregateRefsForPostJoin(
-			condition, agg.BindingTags[1], empty)
-		if !ok {
-			continue
-		}
-		folded, err := ConstantFold(batch.EmptyForConstFoldBatch, condition,
-			builder.compCtx.GetProcess(), false, true)
-		if err != nil || folded == nil || folded.GetLit() == nil {
-			continue
-		}
-		lit := folded.GetLit()
-		if lit.Isnull {
-			return true
-		}
-		if value, ok := lit.Value.(*plan.Literal_Bval); ok && !value.Bval {
-			return true
+		if node.Offset != nil {
+			offset, ok := getLiteralUint64(node.Offset)
+			if !ok {
+				return false
+			}
+			present = present && offset == 0
 		}
 	}
-	return false
+	if !present {
+		return len(ctx.aggregates) == 0 || !builder.findAggrCount(ctx.aggregates)
+	}
+	if len(ctx.results) == 0 || len(values) < len(ctx.results) {
+		return false
+	}
+	for i := range ctx.results {
+		if !values[i].GetLit().Isnull {
+			return false
+		}
+	}
+	return true
+}
+
+func (builder *QueryBuilder) foldAggregateSpineEmptyExpr(expr *plan.Expr, tag int32, values []*plan.Expr) (*plan.Expr, bool) {
+	folded, ok := builder.substituteAggregateSpineEmptyExpr(expr, tag, values)
+	return folded, ok && folded.GetLit() != nil
+}
+
+func (builder *QueryBuilder) substituteAggregateSpineEmptyExpr(expr *plan.Expr, tag int32, values []*plan.Expr) (*plan.Expr, bool) {
+	budget := 4096
+	if containsVolatileFunction(expr) || !aggregateSpineExprWithinBudget(expr, &budget) {
+		return nil, false
+	}
+	folded, ok := replaceAggregateRefsForPostJoin(DeepCopyExpr(expr), tag, values)
+	if !ok {
+		return nil, false
+	}
+	var err error
+	folded, err = ConstantFold(batch.EmptyForConstFoldBatch, folded, builder.compCtx.GetProcess(), false, true)
+	return folded, err == nil && folded != nil
 }
 
 // The upper implicit aggregates in spine operate on a proven singleton. Fold

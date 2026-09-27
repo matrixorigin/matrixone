@@ -126,10 +126,36 @@ select p.id,
   (with x as (select max(c.v) as m from child_agg c where c.corr_key = p.corr_key having max(c.v) > 0) select m from x) as having_max,
   (with x as (select count(*) as c from child_agg c where c.corr_key = p.corr_key having count(*) > 0) select c from x) as having_count,
   (with x as (select max(c.v) as m from child_agg c where c.corr_key = p.corr_key), y as (select m from x where m > 0) select m from y) as filtered_max,
-  (with x as (select max(c.v) as m from child_agg c where c.corr_key = p.corr_key) select m from x limit 0) as zero_limit
+  (with x as (select max(c.v) as m from child_agg c where c.corr_key = p.corr_key) select m from x limit 0) as zero_limit,
+  (with x as (select max(c.v) as m from child_agg c where c.corr_key = p.corr_key having max(c.v) is null) select m from x) as retaining_null_having,
+  (with x as (select max(c.v) as m from child_agg c where c.corr_key = p.corr_key) select m from x limit 1) as one_limit,
+  (with x as (select max(c.v) as m from child_agg c where c.corr_key = p.corr_key) select m from x order by m) as ordered_max,
+  (with x as (select max(c.v) as m from child_agg c where c.corr_key = p.corr_key) select avg(m) from x) as nested_avg,
+  (with x as (select max(c.v) as m from child_agg c where c.corr_key = p.corr_key group by c.corr_key) select max(m) from x) as grouped_max
 from parent_agg p order by p.id;
+prepare scalar_cte_filter from 'select p.id, (with x as (select max(c.v) as m from child_agg c where c.corr_key = p.corr_key) select m from x where m > ?) as m from parent_agg p order by p.id';
+set @cutoff = 5;
+execute scalar_cte_filter using @cutoff;
+set @cutoff = 50;
+execute scalar_cte_filter using @cutoff;
+deallocate prepare scalar_cte_filter;
+prepare scalar_cte_having from 'select p.id, (with x as (select max(c.v) as m from child_agg c where c.corr_key = p.corr_key having max(c.v) is null or ? = 1) select m from x) as m from parent_agg p order by p.id';
+set @retain = 0;
+execute scalar_cte_having using @retain;
+set @retain = 1;
+execute scalar_cte_having using @retain;
+deallocate prepare scalar_cte_having;
 -- @regex("correlated aggregate spine cannot preserve empty-input rows", true)
 select p.id, (with x as (select count(*) as c from child_agg c where c.corr_key = p.corr_key having count(*) >= 0) select c from x) as retaining_having
+from parent_agg p order by p.id;
+-- @regex("unsupported singleton aggregate in correlated CTE", true)
+select p.id, (with x as (select count(*) as c from child_agg c where c.corr_key = p.corr_key) select avg(c) from x) as count_avg
+from parent_agg p order by p.id;
+-- @regex("correlated aggregate spine cannot preserve empty-input rows", true)
+select p.id, (with x as (select max(c.v) as m from child_agg c where c.corr_key > p.corr_key) select m from x) as non_equal_max
+from parent_agg p order by p.id;
+-- @regex("correlated aggregate spine cannot preserve empty-input rows", true)
+select p.id, (with x as (select max(c.v) as m from child_agg c where c.corr_key = p.corr_key group by c.corr_key) select nullif(count(*), 0) from x limit 1) as grouped_count_nullif
 from parent_agg p order by p.id;
 
 -- @case
