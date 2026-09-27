@@ -953,9 +953,9 @@ func TestTemporalConversionProtocolSourceMatrix(t *testing.T) {
 			IsBin: form == StringLiteralForm_STRING_LITERAL_HEX || form == StringLiteralForm_STRING_LITERAL_BIT,
 		}}}
 	}
-	cast := func(source *Expr, result int32) *Expr {
+	cast := func(source *Expr, result, overload int32) *Expr {
 		return &Expr{Typ: Type{Id: result}, Expr: &Expr_F{F: &Function{
-			Func: &ObjectRef{Obj: int64(21) << 32},
+			Func: &ObjectRef{Obj: int64(21)<<32 | int64(overload)},
 			Args: []*Expr{source, {Typ: Type{Id: result}, Expr: &Expr_T{T: &TargetType{}}}},
 		}}}
 	}
@@ -964,13 +964,19 @@ func TestTemporalConversionProtocolSourceMatrix(t *testing.T) {
 		expr *Expr
 		want bool
 	}{
-		{"text to date", cast(column(planVarcharTypeID), planDateTypeID), true},
-		{"numeric to time", cast(column(planInt64TypeID), planTimeTypeID), true},
-		{"hex to signed", cast(literal(StringLiteralForm_STRING_LITERAL_HEX), planInt64TypeID), true},
-		{"bit to double", cast(literal(StringLiteralForm_STRING_LITERAL_BIT), 31), true},
-		{"ordinary text to signed", cast(literal(StringLiteralForm_STRING_LITERAL_TEXT), planInt64TypeID), false},
-		{"binary payload to signed", cast(literal(StringLiteralForm_STRING_LITERAL_BINARY_INTRODUCER), planInt64TypeID), false},
-		{"numeric to date", cast(column(planInt64TypeID), planDateTypeID), false},
+		{"text to date", cast(column(planVarcharTypeID), planDateTypeID, 0), true},
+		{"numeric to time", cast(column(planInt64TypeID), planTimeTypeID, 0), true},
+		{"typed date explicit without syntax bit", cast(column(planDateTypeID), planDateTypeID, 1), true},
+		{"typed datetime explicit without syntax bit", cast(column(planDatetimeTypeID), planDateTypeID, 1), true},
+		{"typed date legacy cast", cast(column(planDateTypeID), planDateTypeID, 0), false},
+		{"typed datetime legacy cast", cast(column(planDatetimeTypeID), planDateTypeID, 0), false},
+		{"typed date assignment cast", cast(column(planDateTypeID), planDateTypeID, 3), false},
+		{"typed datetime explicit to datetime", cast(column(planDatetimeTypeID), planDatetimeTypeID, 1), false},
+		{"hex to signed", cast(literal(StringLiteralForm_STRING_LITERAL_HEX), planInt64TypeID, 0), true},
+		{"bit to double", cast(literal(StringLiteralForm_STRING_LITERAL_BIT), 31, 0), true},
+		{"ordinary text to signed", cast(literal(StringLiteralForm_STRING_LITERAL_TEXT), planInt64TypeID, 0), false},
+		{"binary payload to signed", cast(literal(StringLiteralForm_STRING_LITERAL_BINARY_INTRODUCER), planInt64TypeID, 0), false},
+		{"numeric to date", cast(column(planInt64TypeID), planDateTypeID, 0), false},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			features, err := RequiredRemoteExpressionFeatures(tc.expr)

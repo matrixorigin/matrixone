@@ -1,0 +1,41 @@
+-- Typed zero dates may be stored in NOT NULL columns in permissive mode, but
+-- DATE() and explicit CAST can synthesize NULL under NO_ZERO_DATE.
+drop database if exists temporal_typed_date_ctas_28851;
+create database temporal_typed_date_ctas_28851;
+use temporal_typed_date_ctas_28851;
+set @old_sql_mode = @@sql_mode;
+set sql_mode = '';
+create table source_dates (d date not null, dt datetime not null);
+insert into source_dates values
+    ('0000-00-00', '0000-00-00 00:00:00'),
+    ('2024-01-02', '2024-01-02 03:04:05');
+
+-- Reusing one prepared plan must not freeze the mode or infer NOT NULL from
+-- the source column through either mode-sensitive conversion.
+prepare typed_date_read from
+    'select date(d) is null as date_null, cast(dt as date) is null as cast_null
+       from source_dates order by d';
+execute typed_date_read;
+set sql_mode = 'NO_ZERO_DATE';
+execute typed_date_read;
+set sql_mode = 'STRICT_TRANS_TABLES';
+execute typed_date_read;
+set sql_mode = 'NO_ZERO_DATE';
+deallocate prepare typed_date_read;
+
+-- A derived projection challenges metadata propagation as well as the CTAS
+-- insert path. The unconverted source columns remain NOT NULL controls.
+create table materialized_dates as
+    select d as direct_d, dt as direct_dt,
+           date(d) as date_d, date(dt) as date_dt,
+           cast(d as date) as cast_d, cast(dt as date) as cast_dt
+      from (select d, dt from source_dates) as x;
+select column_name, is_nullable from information_schema.columns
+ where table_schema = 'temporal_typed_date_ctas_28851'
+   and table_name = 'materialized_dates' order by ordinal_position;
+select direct_d, date_d is null as date_d_null, date_dt is null as date_dt_null,
+       cast_d is null as cast_d_null, cast_dt is null as cast_dt_null
+  from materialized_dates order by direct_d;
+
+set sql_mode = @old_sql_mode;
+drop database temporal_typed_date_ctas_28851;

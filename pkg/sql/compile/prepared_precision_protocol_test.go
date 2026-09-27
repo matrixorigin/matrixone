@@ -340,6 +340,71 @@ func TestRelease42TemporalProtocolBoundary(t *testing.T) {
 	require.Equal(t, client.calls, client.releases)
 }
 
+func TestTypedDateCastProtocolBoundary(t *testing.T) {
+	for _, source := range []types.T{types.T_date, types.T_datetime} {
+		t.Run(source.String(), func(t *testing.T) {
+			c, client := expressionProtocolTestCompile(t)
+			expr := &planpb.Expr{Typ: planpb.Type{Id: int32(types.T_date)}, Expr: &planpb.Expr_F{F: &planpb.Function{
+				Func: &planpb.ObjectRef{Obj: function.EncodeOverloadID(function.CAST, 1), ObjName: "cast"},
+				Args: []*planpb.Expr{
+					{Typ: planpb.Type{Id: int32(source)}, Expr: &planpb.Expr_Col{Col: &planpb.ColRef{ColPos: 0}}},
+					{Typ: planpb.Type{Id: int32(types.T_date)}, Expr: &planpb.Expr_T{T: &planpb.TargetType{}}},
+				},
+			}}}
+			features, err := planpb.RequiredRemoteExpressionFeatures(expr)
+			require.NoError(t, err)
+			require.True(t, features.TemporalResultContracts, "old serialized CAST1 has no syntax bit")
+			floor, err := plan2.RequiredPersistedExpressionProtocolVersion(expr)
+			require.NoError(t, err)
+			require.Equal(t, defines.MORPCVersion98, floor)
+			query := &planpb.Query{Nodes: []*planpb.Node{{ProjectList: []*planpb.Expr{expr}}}, Steps: []int32{0}}
+			op := projection.NewArgument()
+			defer op.Release()
+			op.ProjectList = []*planpb.Expr{expr}
+			scope := &Scope{Magic: Remote, Proc: c.proc, NodeInfo: engine.Node{Id: "old-worker", Addr: "remote:6001"}, RootOp: op}
+			pipeline := &pipeline.Pipeline{InstructionList: []*pipeline.Instruction{{ProjectList: []*planpb.Expr{expr}}}}
+			for _, version := range []int64{9, 10, defines.MORPCVersion98} {
+				client.version = version
+				moruntime.ServiceRuntime(c.proc.GetService()).SetGlobalVariables(moruntime.MOProtocolVersion, version)
+				c.execType = plan2.ExecTypeAP_MULTICN
+				c.cnList = engine.Nodes{{Id: "old-worker", Addr: "remote:6001", Mcpu: 4}}
+				require.NoError(t, c.constrainTemporalResultWorkers(query))
+				_, sendErr := encodeRemoteScope(scope, c.proc)
+				receiveErr := validateRemoteExpressionPipelineProtocol(c.proc, pipeline)
+				if version < defines.MORPCVersion98 {
+					require.Equal(t, plan2.ExecTypeAP_ONECN, c.execType)
+					require.ErrorContains(t, sendErr, "temporal")
+					require.ErrorContains(t, receiveErr, "version 98")
+				} else {
+					require.Equal(t, plan2.ExecTypeAP_MULTICN, c.execType)
+					require.NoError(t, sendErr)
+					require.NoError(t, receiveErr)
+				}
+			}
+			wire, err := expr.Marshal()
+			require.NoError(t, err)
+			legacy := &planpb.Expr{}
+			require.NoError(t, legacy.Unmarshal(wire))
+			legacy.GetF().Func.Obj = function.EncodeOverloadID(function.CAST, 0)
+			floor, err = plan2.RequiredPersistedExpressionProtocolVersion(legacy)
+			require.NoError(t, err)
+			require.Zero(t, floor)
+			client.version = 9
+			moruntime.ServiceRuntime(c.proc.GetService()).SetGlobalVariables(moruntime.MOProtocolVersion, int64(9))
+			c.execType = plan2.ExecTypeAP_MULTICN
+			query.Nodes[0].ProjectList = []*planpb.Expr{legacy}
+			op.ProjectList = []*planpb.Expr{legacy}
+			pipeline.InstructionList[0].ProjectList = []*planpb.Expr{legacy}
+			require.NoError(t, c.constrainTemporalResultWorkers(query))
+			require.Equal(t, plan2.ExecTypeAP_MULTICN, c.execType)
+			_, err = encodeRemoteScope(scope, c.proc)
+			require.NoError(t, err)
+			require.NoError(t, validateRemoteExpressionPipelineProtocol(c.proc, pipeline))
+			require.Equal(t, client.calls, client.releases)
+		})
+	}
+}
+
 func TestTemporalResultProtocolPlacementAndReceive(t *testing.T) {
 	c, client := expressionProtocolTestCompile(t)
 	expr := temporalResultProtocolExpr(function.ADDTIME, types.T_varchar, types.T_varchar)

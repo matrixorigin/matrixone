@@ -1388,6 +1388,26 @@ func TestDeduceNotNullableKeepsNullSynthesizingFunctionsNullable(t *testing.T) {
 	}
 }
 
+func TestTypedDateConversionNullability(t *testing.T) {
+	for _, sourceType := range []types.T{types.T_date, types.T_datetime} {
+		source := &plan.Expr{Typ: plan.Type{Id: int32(sourceType), NotNullable: true}}
+		target := &plan.Expr{Typ: plan.Type{Id: int32(types.T_date), NotNullable: true}}
+		dateOverload := int32(0)
+		if sourceType == types.T_datetime {
+			dateOverload = 2
+		}
+		require.False(t, DeduceNotNullable(EncodeOverloadID(DATE, dateOverload), []*plan.Expr{source}))
+		require.False(t, DeduceNotNullable(EncodeOverloadID(CAST, 1), []*plan.Expr{source, target}))
+		require.True(t, DeduceNotNullable(EncodeOverloadID(CAST, 0), []*plan.Expr{source, target}))
+		require.True(t, DeduceNotNullable(EncodeOverloadID(CAST, 3), []*plan.Expr{source, target}))
+	}
+	dateSource := &plan.Expr{Typ: plan.Type{Id: int32(types.T_date), NotNullable: true}}
+	datetimeTarget := &plan.Expr{Typ: plan.Type{Id: int32(types.T_datetime), NotNullable: true}}
+	require.True(t, DeduceNotNullable(EncodeOverloadID(CAST, 1), []*plan.Expr{dateSource, datetimeTarget}))
+	dateSource.Typ.NotNullable = false
+	require.False(t, DeduceNotNullable(EncodeOverloadID(CAST, 1), []*plan.Expr{dateSource, datetimeTarget}))
+}
+
 func TestOctNullability(t *testing.T) {
 	for _, typ := range []types.T{types.T_char, types.T_varchar, types.T_text,
 		types.T_binary, types.T_varbinary, types.T_blob, types.T_int64, types.T_float64, types.T_time, types.T_bit} {

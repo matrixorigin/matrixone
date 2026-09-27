@@ -9843,10 +9843,9 @@ func appendExplicitCastBeforeExpr(ctx context.Context, expr *Expr, toType Type) 
 	return appendCastBeforeExprWithOverload(ctx, expr, toType, 1)
 }
 
-// appendSyntaxExplicitCastBeforeExpr keeps the legacy CAST overload on the
-// wire while recording syntax provenance in an optional protobuf field. Old
-// CNs ignore that field and continue to execute overload 0, while new planners
-// can distinguish this user-written CAST from implicit reconciliation casts.
+// appendSyntaxExplicitCastBeforeExpr records syntax provenance while retaining
+// legacy overload 0 except for typed DATE conversions, which need overload 1's
+// SQL-mode-sensitive zero-date policy.
 func appendSyntaxExplicitCastBeforeExpr(ctx context.Context, expr *Expr, toType Type) (*Expr, error) {
 	overload := int32(0)
 	if types.T(toType.Id) == types.T_date &&
@@ -10015,19 +10014,20 @@ func appendCastBeforeExprWithOverload(
 	if len(isBin) == 2 && isBin[0] && isBin[1] {
 		typ.Id = int32(types.T_uint64)
 	}
+	targetArg := &Expr{
+		Typ: typ,
+		Expr: &plan.Expr_T{
+			T: &plan.TargetType{},
+		},
+	}
+	args := []*Expr{expr, targetArg}
+	typ.NotNullable = function.DeduceNotNullable(fGet.GetEncodedOverloadID(), args)
+	targetArg.Typ.NotNullable = typ.NotNullable
 	return &Expr{
 		Expr: &plan.Expr_F{
 			F: &plan.Function{
 				Func: getFunctionObjRef(fGet.GetEncodedOverloadID(), "cast"),
-				Args: []*Expr{
-					expr,
-					{
-						Typ: typ,
-						Expr: &plan.Expr_T{
-							T: &plan.TargetType{},
-						},
-					},
-				},
+				Args: args,
 			},
 		},
 		Typ: typ,

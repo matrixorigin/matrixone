@@ -409,6 +409,19 @@ func GetAggFunctionNameByID(overloadID int64) string {
 func DeduceNotNullable(overloadID int64, args []*plan.Expr) bool {
 	fid, oid := DecodeOverloadID(overloadID)
 	switch fid {
+	case DATE:
+		// Typed zero DATE/DATETIME values become NULL under NO_ZERO_DATE.
+		if oid == 0 || oid == 2 {
+			return false
+		}
+	case CAST:
+		// Explicit typed DATE casts share the DATE conversion policy. Legacy
+		// implicit and assignment casts keep their existing nullability.
+		if oid == 1 && len(args) == 2 &&
+			types.T(args[1].Typ.Id) == types.T_date &&
+			(types.T(args[0].Typ.Id) == types.T_date || types.T(args[0].Typ.Id) == types.T_datetime) {
+			return false
+		}
 	case OCT:
 		// New string executors produce NULL for empty non-NULL input.
 		// Preserve the persisted legacy and numeric overload contracts.

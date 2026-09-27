@@ -766,6 +766,7 @@ func TestPersistedMixedTemporalViewProtocolAdmission(t *testing.T) {
 	})
 
 	for _, createSQL := range []string{
+		"create view v_typed_date as select cast(l_shipdate as date) as value from lineitem",
 		"create view v_mixed_temporal as select if(1 = 1, cast('2024-01-02 12:34:56.123456' as timestamp(6)), cast('2024-01-02 12:34:56.123' as datetime(3))) as value",
 		"create view v_stable_temporal as select date_sub(now(), interval 10 minute) as value",
 		"create view v_numeric_time as select cast(900 as time) as value",

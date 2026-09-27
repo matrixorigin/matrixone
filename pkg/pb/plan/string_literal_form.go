@@ -927,14 +927,16 @@ func RequiredRemoteExpressionFeatures(owner any) (features RemoteExpressionFeatu
 				}
 
 				// CAST keeps its physical identity. The changed TIME conversion
-				// includes numeric inputs; the other temporal conversions use the
-				// shared text parser. SQL HEX/BIT literals also changed numeric
-				// coercion, independent of a temporal target.
+				// includes numeric inputs; other temporal casts use the shared
+				// text parser, or (for explicit typed DATE) the zero-date policy.
+				// SQL HEX/BIT literals also changed numeric coercion.
 				if id == 21 && len(fn.Args) > 0 && fn.Args[0] != nil {
 					source := fn.Args[0]
 					if isPlanTemporalType(current.Typ.Id) &&
 						(isPlanStringType(source.Typ.Id) ||
-							(current.Typ.Id == planTimeTypeID && isPlanNumericType(source.Typ.Id))) {
+							(current.Typ.Id == planTimeTypeID && isPlanNumericType(source.Typ.Id)) ||
+							(overload == 1 && current.Typ.Id == planDateTypeID &&
+								(source.Typ.Id == planDateTypeID || source.Typ.Id == planDatetimeTypeID))) {
 						features.TemporalResultContracts = true
 					}
 					if isPlanNumericType(current.Typ.Id) {

@@ -2642,6 +2642,33 @@ func TestOctNotNullSourceCTAS(t *testing.T) {
 	}
 }
 
+func TestTypedDateConversionCTASAllowsSynthesizedNull(t *testing.T) {
+	for _, sourceType := range []types.T{types.T_date, types.T_datetime} {
+		for _, expression := range []struct {
+			sql      string
+			wantNull bool
+		}{
+			{"l_shipdate", false},
+			{"date(l_shipdate)", true},
+			{"cast(l_shipdate as date)", true},
+		} {
+			t.Run(sourceType.String()+"/"+expression.sql, func(t *testing.T) {
+				opt := NewMockOptimizer(false)
+				ctx := opt.CurrentContext().(*MockCompilerContext)
+				source := ctx.tables["lineitem"].Cols[ctx.tables["lineitem"].Name2ColIndex["l_shipdate"]]
+				source.Typ.Id = int32(sourceType)
+				source.Typ.NotNullable = true
+				source.Default = &plan.Default{NullAbility: false}
+				p, err := buildSingleStmt(opt, t, "create table typed_date_copy as select "+expression.sql+" as d from lineitem")
+				require.NoError(t, err)
+				col := p.GetDdl().GetCreateTable().GetTableDef().GetCols()[0]
+				require.Equal(t, expression.wantNull, !col.Typ.NotNullable)
+				require.Equal(t, expression.wantNull, col.GetDefault().GetNullAbility())
+			})
+		}
+	}
+}
+
 func TestBuildCTASFromViewUsesIndependentExecutableDefault(t *testing.T) {
 	ctx := NewMockCompilerContext(false)
 	sourceCol := ctx.tables["nation"].Cols[0]
