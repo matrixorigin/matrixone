@@ -126,6 +126,89 @@ func TestPersistedFormatRoundingAndProjection(t *testing.T) {
 	}
 }
 
+func TestPersistedFormatLegacyPrecisionDomains(t *testing.T) {
+	ctx := NewMockCompilerContext(false)
+	proc := ctx.GetProcess()
+	for _, precision := range []string{
+		"cast('2024-01-01' as date)",
+		"if(true,cast('2024-01-01' as date),cast('2025-01-01' as date))",
+		"cast('18446744073709551615' as unsigned)",
+	} {
+		t.Run(precision, func(t *testing.T) {
+			call := "format(1.125," + precision + ")"
+			stmt, err := parsers.ParseOne(proc.Ctx, dialect.MYSQL,
+				"create table t(a varchar(64) default ("+call+"), g varchar(64) generated always as ("+call+") stored, check ("+call+" is not null))", 1)
+			require.NoError(t, err)
+			defer stmt.Free()
+			built, err := BuildPlan(ctx, stmt, false)
+			require.NoError(t, err)
+			data, err := proto.Marshal(built.GetDdl().GetCreateTable().GetTableDef())
+			require.NoError(t, err)
+			var loaded planpb.TableDef
+			require.NoError(t, proto.Unmarshal(data, &loaded))
+			features, err := planpb.RequiredRemoteExpressionFeatures(&loaded)
+			require.NoError(t, err)
+			require.False(t, features.SpecialIntegerConsumers)
+			require.False(t, features.IntegerParameterCoercion)
+			require.False(t, features.FormatNumericArguments)
+			def := loaded.Cols[0].Default
+			rebuilt, err := buildCTASDefaultFromOrigin(ctx, loaded.Cols[0].Typ, true, def.OriginString)
+			require.NoError(t, err)
+			col := stmt.(*tree.CreateTable).Defs[0].(*tree.ColumnTableDef)
+			col.Attributes = append(col.Attributes, tree.NewAttributeOnUpdate(col.Attributes[0].(*tree.AttributeDefault).Expr))
+			update, err := buildOnUpdate(proc.Ctx, col, loaded.Cols[0].Typ, proc)
+			require.NoError(t, err)
+			for i, expr := range []*planpb.Expr{def.Expr, rebuilt.Expr, loaded.Cols[1].GeneratedCol.Expr, update.Expr} {
+				t.Run(fmt.Sprint(i), func(t *testing.T) {
+					result, free, err := colexec.GetReadonlyResultFromExpression(proc, expr, []*batch.Batch{batch.EmptyForConstFoldBatch})
+					if free != nil {
+						defer free()
+					}
+					require.NoError(t, err)
+					require.Equal(t, "1.125000000000000000000000000000", result.GetStringAt(0))
+				})
+			}
+		})
+	}
+}
+
+func TestPersistedFormatBindingScope(t *testing.T) {
+	proc := testutil.NewProcess(t)
+	binder := NewDefaultBinder(proc.Ctx, nil, nil, planpb.Type{}, nil)
+	for _, sql := range []string{
+		"format(1)", "format(1,2,3,4)", "format(cast('2024-01-01' as date),1)",
+		"format(1,missing_column)",
+	} {
+		t.Run(sql, func(t *testing.T) {
+			stmt, err := parsers.ParseOne(proc.Ctx, dialect.MYSQL, "select "+sql, 1)
+			require.NoError(t, err)
+			defer stmt.Free()
+			_, err = binder.bindPersistedExpr(stmt.(*tree.Select).Select.(*tree.SelectClause).Exprs[0].Expr, 0, false)
+			require.Error(t, err)
+			require.False(t, binder.persistedFormatCompatibility)
+		})
+	}
+	stmt, err := parsers.ParseOne(proc.Ctx, dialect.MYSQL, "select format(1.125,1.5,'en_US')", 1)
+	require.NoError(t, err)
+	defer stmt.Free()
+	ast := stmt.(*tree.Select).Select.(*tree.SelectClause).Exprs[0].Expr
+	catalog, err := binder.bindPersistedExpr(ast, 0, false)
+	require.NoError(t, err)
+	require.False(t, binder.persistedFormatCompatibility)
+	query, err := binder.BindExpr(ast, 0, false)
+	require.NoError(t, err)
+	for i, expr := range []*planpb.Expr{catalog, query} {
+		t.Run(fmt.Sprint(i), func(t *testing.T) {
+			result, free, err := colexec.GetReadonlyResultFromExpression(proc, expr, []*batch.Batch{batch.EmptyForConstFoldBatch})
+			if free != nil {
+				defer free()
+			}
+			require.NoError(t, err)
+			require.Equal(t, []string{"1.1", "1.13"}[i], result.GetStringAt(0))
+		})
+	}
+}
+
 func TestPersistedFormatDefaultCompatibility(t *testing.T) {
 	proc := testutil.NewProcess(t)
 	stmt, err := parsers.ParseOne(t.Context(), dialect.MYSQL,

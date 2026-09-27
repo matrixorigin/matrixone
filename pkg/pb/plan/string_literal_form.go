@@ -389,6 +389,8 @@ type RemoteExpressionFeatures struct {
 	SpatialDistanceSemantics          bool
 	PreparedPrecisionScalar           bool
 	DecimalDivisionSemantics          bool
+	// SpecialIntegerConsumers requires v98 independently of private CASTs.
+	SpecialIntegerConsumers bool
 }
 
 func (features RemoteExpressionFeatures) Any() bool {
@@ -410,6 +412,7 @@ func (features RemoteExpressionFeatures) Any() bool {
 		features.DecimalLiteralSemantics ||
 		features.SpatialDistanceSemantics ||
 		features.PreparedPrecisionScalar ||
+		features.SpecialIntegerConsumers ||
 		features.DecimalDivisionSemantics
 }
 
@@ -841,6 +844,11 @@ func RequiredRemoteExpressionFeatures(owner any) (features RemoteExpressionFeatu
 			fn := current.GetF()
 			if fn != nil && fn.Func != nil {
 				id, overload := int32(fn.Func.Obj>>32), int32(fn.Func.Obj)
+				special, err := isSpecialIntegerConsumer(fn, id, overload)
+				if err != nil {
+					return err
+				}
+				features.SpecialIntegerConsumers = features.SpecialIntegerConsumers || special
 				// DIV overload 0 keeps its function identity, but v97 changes
 				// decimal result scale and coefficient interpretation.
 				if id == 13 && overload == 0 &&
@@ -1035,6 +1043,59 @@ func isTypedConversionFunction(function *Function) bool {
 	default:
 		return false
 	}
+}
+
+// Stable execution IDs and type IDs are part of the wire contract. Keep this
+// validation independent of container/types and function (which import plan).
+func isSpecialIntegerConsumer(fn *Function, id, overload int32) (bool, error) {
+	count, integerCount := 0, 0
+	switch {
+	case id == 262 && (overload == 2 || overload == 3): // FORMAT
+		count = int(overload)
+	case id == 202 && overload == 1: // MAKEDATE
+		count, integerCount = 2, 2
+	case id == 373 && overload >= 36 && overload <= 38: // MAKETIME
+		count, integerCount = 3, 2
+	default:
+		return false, nil
+	}
+	if len(fn.Args) != count {
+		return false, moerr.NewInvalidInputNoCtx("invalid special integer consumer arity")
+	}
+	for _, arg := range fn.Args {
+		if arg == nil {
+			return false, moerr.NewInvalidInputNoCtx("missing special integer consumer argument")
+		}
+	}
+	for i := 0; i < integerCount; i++ {
+		if fn.Args[i].Typ.Id != 23 {
+			return false, moerr.NewInvalidInputNoCtx("special integer consumer requires INT64 operands")
+		}
+	}
+	if id == 262 {
+		if fn.Args[1].Typ.Id != 23 {
+			return false, moerr.NewInvalidInputNoCtx("FORMAT precision requires INT64")
+		}
+		if !isPlanNumericType(fn.Args[0].Typ.Id) && !isPlanMySQLStringType(fn.Args[0].Typ.Id) {
+			return false, moerr.NewInvalidInputNoCtx("invalid FORMAT number signature")
+		}
+		if count == 3 && !isPlanMySQLStringType(fn.Args[2].Typ.Id) {
+			return false, moerr.NewInvalidInputNoCtx("invalid FORMAT locale signature")
+		}
+	}
+	if id == 373 {
+		second := int32(31) // FLOAT64
+		if overload == 37 {
+			second = 61
+		} // VARCHAR
+		if overload == 38 {
+			second = 28
+		} // UINT64
+		if fn.Args[2].Typ.Id != second {
+			return false, moerr.NewInvalidInputNoCtx("invalid MAKETIME seconds signature")
+		}
+	}
+	return true, nil
 }
 
 // FORMAT reuses its historical VARCHAR overload IDs for the new typed numeric
