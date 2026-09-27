@@ -1474,7 +1474,6 @@ type txnTable struct {
 	fake bool
 }
 
-// FIXME: no pointer here
 type blockSortHelper struct {
 	blk *objectio.BlockInfo
 	zm  index.ZM

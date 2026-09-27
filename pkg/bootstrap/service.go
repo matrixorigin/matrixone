@@ -405,7 +405,7 @@ func (s *service) execBootstrap(ctx context.Context) (bool, error) {
 		if err := mometric.InitSchema(ctx, txn); err != nil {
 			return err
 		}
-		if err := motrace.InitSchemaWithTxn(ctx, txn); err != nil {
+		if err := motrace.InitSchemaTablesWithTxn(ctx, txn); err != nil {
 			return err
 		}
 		txnBodyCompleted = true
@@ -421,7 +421,7 @@ func (s *service) execBootstrap(ctx context.Context) (bool, error) {
 }
 
 func (s *service) completeBootstrap() {
-	s.logger.Info("bootstrap system init completed")
+	s.logger.Info("bootstrap system prerequisites initialized")
 
 	if s.client != nil {
 		s.logger.Info("wait bootstrap logtail applied")
@@ -466,4 +466,62 @@ func initPreprocessSQL(ctx context.Context, txn executor.TxnExecutor, finalVersi
 
 	timeCost = time.Since(begin)
 	return nil
+}
+
+// InitSystemViews completes derived schema after catalog admission, before CN
+// ingress opens. Reconciliation on every startup also repairs a crash between
+// the prerequisite commit and this phase, without a separate completion marker.
+func InitSystemViews(ctx context.Context, exec executor.SQLExecutor) error {
+	opts := executor.Options{}.WithDisableTrace().WithWaitCommittedLogApplied().
+		WithTimeZone(time.Local).WithAccountID(catalog.System_Account)
+	for {
+		if err := ctx.Err(); err != nil {
+			return err
+		}
+		err := exec.ExecTxn(ctx, func(txn executor.TxnExecutor) error {
+			return motrace.InitSchemaViewsWithTxn(ctx, txn)
+		}, opts)
+		if err == nil || !isSystemViewRetryableError(err) {
+			return err
+		}
+		// An uncertain commit is safe to reconcile: the next transaction reads the
+		// actual object set before issuing any idempotent CREATE IF NOT EXISTS.
+		if err := waitBootstrapRetry(ctx); err != nil {
+			return err
+		}
+	}
+}
+
+func isSystemViewRetryableError(err error) bool {
+	if joined, ok := err.(interface{ Unwrap() []error }); ok {
+		children := joined.Unwrap()
+		if len(children) == 0 {
+			return false
+		}
+		for _, child := range children {
+			if !isSystemViewRetryableError(child) {
+				return false
+			}
+		}
+		return true
+	}
+	if wrapped, ok := err.(interface{ Unwrap() error }); ok {
+		return isSystemViewRetryableError(wrapped.Unwrap())
+	}
+	return isBootstrapRetryableError(err) ||
+		moerr.IsMoErrCode(err, moerr.ErrTxnWWConflict) ||
+		moerr.IsMoErrCode(err, moerr.ErrTxnNeedRetry) ||
+		moerr.IsMoErrCode(err, moerr.ErrTxnNeedRetryWithDefChanged)
+}
+
+// SystemViewsExist inspects derived schema without retaining a transaction
+// across the CN's protocol-admission wait.
+func SystemViewsExist(ctx context.Context, exec executor.SQLExecutor) (bool, error) {
+	complete := false
+	err := exec.ExecTxn(ctx, func(txn executor.TxnExecutor) error {
+		var err error
+		complete, err = motrace.SchemaViewsExistWithTxn(ctx, txn)
+		return err
+	}, executor.Options{}.WithDisableTrace().WithAccountID(catalog.System_Account))
+	return complete, err
 }
