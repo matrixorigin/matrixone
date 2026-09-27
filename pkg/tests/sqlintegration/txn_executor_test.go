@@ -16,6 +16,7 @@ package sqlintegration
 
 import (
 	"context"
+	"fmt"
 	"testing"
 	"time"
 
@@ -44,6 +45,32 @@ func Test_TxnExecutorExec(t *testing.T) {
 			return nil
 		}, executor.Options{}.WithWaitCommittedLogApplied())
 		require.NoError(t, err)
+	})
+}
+
+func TestCatalogUpgradeUpdatePlanRebuild(t *testing.T) {
+	runSQLIntegration(t, func(c embed.Cluster) {
+		cn, err := c.GetCNService(0)
+		require.NoError(t, err)
+		exec := testutils.GetSQLExecutor(cn)
+		require.NotNil(t, exec)
+
+		db := testutils.GetDatabaseName(t)
+		defer cleanupSQLIntegration(t, cn, "drop database if exists "+db)
+		testutils.CreateTestDatabase(t, db, cn)
+
+		ctx, cancel := context.WithTimeout(context.Background(), 5*time.Minute)
+		defer cancel()
+		_, err = exec.Exec(ctx, "create table t (v int unsigned)", executor.Options{}.WithDatabase(db))
+		require.NoError(t, err)
+
+		sql := fmt.Sprintf("UPDATE mo_catalog.mo_columns SET att_is_unsigned = 1 WHERE att_database = '%s' AND att_relname = 't' AND attname = 'v'", db)
+		_, err = exec.Exec(ctx, sql, executor.Options{}.WithForceRebuildPlan().WithStatementOption(
+			executor.StatementOption{}.WithMoColumnsUpdate()))
+		require.NoError(t, err)
+
+		_, err = exec.Exec(ctx, sql, executor.Options{}.WithForceRebuildPlan())
+		require.ErrorContains(t, err, "direct DML on mo_catalog.mo_columns")
 	})
 }
 
