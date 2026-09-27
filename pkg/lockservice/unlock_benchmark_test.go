@@ -74,6 +74,42 @@ func BenchmarkLockUnlockWithoutConflict(b *testing.B) {
 	)
 }
 
+// BenchmarkSharedLockUnlockWithoutConflict covers the ordinary Shared-row
+// path, which also exercises waiter-cohort notification without a queued writer.
+func BenchmarkSharedLockUnlockWithoutConflict(b *testing.B) {
+	runLockServiceTestsWithLevel(
+		b,
+		zapcore.ErrorLevel,
+		[]string{"s1"},
+		10*time.Second,
+		func(_ *lockTableAllocator, services []*service) {
+			b.StopTimer()
+			service := services[0]
+			ctx := context.Background()
+			txnIDs := make([][]byte, b.N)
+			rows := make([][]byte, b.N)
+			for idx := range b.N {
+				txnIDs[idx] = []byte(fmt.Sprintf("shared-lock-bench-txn-%d", idx))
+				rows[idx] = []byte(fmt.Sprintf("shared-lock-bench-row-%d", idx))
+			}
+
+			b.ReportAllocs()
+			b.ResetTimer()
+			b.StartTimer()
+			for idx := range b.N {
+				if _, err := service.Lock(ctx, 2670604, [][]byte{rows[idx]}, txnIDs[idx], newTestRowSharedOptions()); err != nil {
+					b.Fatal(err)
+				}
+				if err := service.Unlock(ctx, txnIDs[idx], timestamp.Timestamp{}); err != nil {
+					b.Fatal(err)
+				}
+			}
+			b.StopTimer()
+		},
+		nil,
+	)
+}
+
 // BenchmarkUnlockWithoutConflict isolates the transaction-close half of the
 // ordinary one-table path. Setup is outside the timer so admission, ledger
 // cleanup and pooled-object reset regressions are not hidden by Lock work.

@@ -608,6 +608,62 @@ func issue28079Wait[T any](t *testing.T, done <-chan T, operation string) T {
 	}
 }
 
+func TestIssue28079TemporaryAlterKeepsOptimisticTransaction(t *testing.T) {
+	runAuthenticatedClusterTest(t, func(cluster embed.Cluster) {
+		ctx, cancel := context.WithTimeout(context.Background(), time.Minute)
+		defer cancel()
+		cn, err := cluster.GetCNService(0)
+		require.NoError(t, err)
+		restoreDefaults := issue28079SetTxnDefaults(
+			[]embed.ServiceOperator{cn}, pbtxn.TxnMode_Optimistic, pbtxn.TxnIsolation_SI)
+		defer restoreDefaults()
+
+		db, err := sql.Open("mysql", issue27487DSN(cn.GetServiceConfig().CN.Frontend.Port))
+		require.NoError(t, err)
+		defer db.Close()
+		conn, err := db.Conn(ctx)
+		require.NoError(t, err)
+		defer conn.Close()
+
+		const schema = "issue_28079_temp_alter"
+		_, err = conn.ExecContext(ctx, "drop database if exists "+schema)
+		require.NoError(t, err)
+		_, err = conn.ExecContext(ctx, "create database "+schema)
+		require.NoError(t, err)
+		defer func() {
+			cleanupCtx, cleanupCancel := context.WithTimeout(context.Background(), 20*time.Second)
+			defer cleanupCancel()
+			_, _ = conn.ExecContext(cleanupCtx, "rollback")
+			if _, cleanupErr := conn.ExecContext(cleanupCtx, "drop temporary table if exists "+schema+".t"); cleanupErr != nil {
+				t.Errorf("drop temporary table: %v", cleanupErr)
+			}
+			if _, cleanupErr := conn.ExecContext(cleanupCtx, "drop database if exists "+schema); cleanupErr != nil {
+				t.Errorf("drop test database: %v", cleanupErr)
+			}
+		}()
+
+		_, err = conn.ExecContext(ctx, "create table "+schema+".t (a int)")
+		require.NoError(t, err)
+		_, err = conn.ExecContext(ctx, "create temporary table "+schema+".t (a int)")
+		require.NoError(t, err)
+		_, err = conn.ExecContext(ctx, "begin")
+		require.NoError(t, err)
+		_, err = conn.ExecContext(ctx, "alter table "+schema+".t add column b int")
+		require.NoError(t, err, "temporary alias should bypass persistent lifecycle admission")
+		_, err = conn.ExecContext(ctx, "rollback")
+		require.NoError(t, err)
+		_, err = conn.ExecContext(ctx, "drop temporary table "+schema+".t")
+		require.NoError(t, err)
+
+		_, err = conn.ExecContext(ctx, "begin")
+		require.NoError(t, err)
+		_, err = conn.ExecContext(ctx, "alter table "+schema+".t add column b int")
+		require.ErrorContains(t, err, "lifecycle statements require an existing pessimistic transaction")
+		_, err = conn.ExecContext(ctx, "rollback")
+		require.NoError(t, err)
+	})
+}
+
 func issue28079SetTxnDefaults(
 	services []embed.ServiceOperator,
 	mode pbtxn.TxnMode,
