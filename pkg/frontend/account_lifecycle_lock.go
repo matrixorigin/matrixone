@@ -130,7 +130,7 @@ func acquireAccountLifecycleSharedGateRows(
 			(*hook)(gateName, false)
 		}
 		err = withCloneLockContext(lockProc, systemCtx, func() error {
-			return lockop.LockRows(
+			return lockop.LockRowsForSnapshotRefresh(
 				eng,
 				lockProc,
 				rel,

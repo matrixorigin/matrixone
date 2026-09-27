@@ -71,6 +71,14 @@ SNAPSHOT key is the exact `mo_feature_registry('SNAPSHOT')` primary key. The
 verification SELECTs remain in place so missing/partially upgraded catalog
 objects keep their existing typed-error behavior.
 
+Direct row admission uses a pre-read RC-refresh policy: when locking a literal
+gate key succeeds and advances the transaction snapshot, it continues to the
+same-transaction verification SELECT instead of returning the ordinary
+stale-input retry. The gate key was not derived from a prior scan, and the
+inherited View generation is read only after both gates. A changed table
+definition or any error before successful admission still propagates; the
+caller must not hide a lower-layer retry or replay unrelated prior work.
+
 Writer fairness is carried only from the initiating process context to
 `LockOptions.WriterFair`; it is not a pipeline wire contract. A local owner
 applies the queue rule directly. A remote origin sends the new
@@ -306,3 +314,8 @@ consistency, and rebase validation against current `main`.
   remain pessimistic. Existing optimistic transactions fail before DATA BRANCH
   mutation, while a pessimistic SI caller reaches the finite-quota RC guard.
   Concurrent planner initialization no longer writes an unused global type slice.
+- Revision 10 distinguishes a successful RC snapshot refresh during pre-read
+  direct row admission from a failed lock or stale table definition. Ordinary
+  row-lock callers retain their retry contract; CREATE verifies both gate rows
+  and reads the current inherited generation after admission. This closes the
+  RC retry surfaced by recreated accounts in cluster restore.
