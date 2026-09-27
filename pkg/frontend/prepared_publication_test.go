@@ -28,8 +28,15 @@ func TestPreparedPublicationWireMetadata(t *testing.T) {
 		sql       string
 		names     []string
 		wireTypes []defines.MysqlType
+		params    int
 	}{
 		{sql: "alter publication pub account all"},
+		{
+			sql:       "show publications like ?",
+			params:    1,
+			names:     []string{"publication", "database", "tables", "sub_account", "subscribed_accounts", "create_time", "update_time", "comments"},
+			wireTypes: []defines.MysqlType{defines.MYSQL_TYPE_VAR_STRING, defines.MYSQL_TYPE_VAR_STRING, defines.MYSQL_TYPE_BLOB, defines.MYSQL_TYPE_BLOB, defines.MYSQL_TYPE_BLOB, defines.MYSQL_TYPE_TIMESTAMP, defines.MYSQL_TYPE_TIMESTAMP, defines.MYSQL_TYPE_BLOB},
+		},
 		{
 			sql:       "show publications",
 			names:     []string{"publication", "database", "tables", "sub_account", "subscribed_accounts", "create_time", "update_time", "comments"},
@@ -49,14 +56,23 @@ func TestPreparedPublicationWireMetadata(t *testing.T) {
 			require.NoError(t, proto.SendPrepareResponse(t.Context(), prepared))
 			packets := splitProtocolPackets(t, conn.writes)
 			packetCount := 1
+			columnOffset := 1
+			if tt.params > 0 {
+				packetCount += tt.params + 1
+				columnOffset += tt.params + 1
+			}
 			if len(tt.names) > 0 {
 				packetCount += len(tt.names) + 1
 			}
 			require.Len(t, packets, packetCount)
 			require.Equal(t, uint16(len(tt.names)), binary.LittleEndian.Uint16(packets[0][5:]))
-			require.Zero(t, binary.LittleEndian.Uint16(packets[0][7:]))
+			require.Equal(t, uint16(tt.params), binary.LittleEndian.Uint16(packets[0][7:]))
+			if tt.params > 0 {
+				param := parsePrepareColumnDefinition(t, packets[1])
+				require.Equal(t, defines.MYSQL_TYPE_VAR_STRING, param.typ)
+			}
 			for i, name := range tt.names {
-				col := parsePrepareColumnDefinition(t, packets[i+1])
+				col := parsePrepareColumnDefinition(t, packets[i+columnOffset])
 				require.Equal(t, name, col.name)
 				require.Equal(t, tt.wireTypes[i], col.typ)
 			}

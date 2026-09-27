@@ -1777,7 +1777,7 @@ func buildCTASDefaultFromOrigin(
 	if len(columns) > 0 {
 		binder = NewDefaultBinderWithColumns(bindCtx, typ, columns)
 	}
-	defaultExpr, err := binder.BindExpr(selectClause.Exprs[0].Expr, 0, false)
+	defaultExpr, err := binder.bindPersistedExpr(selectClause.Exprs[0].Expr, 0, false)
 	if err != nil {
 		return nil, err
 	}
@@ -4262,7 +4262,7 @@ func appendCheckDef(
 
 	binder := NewGeneratedColBinder(ddlExpressionContext(ctx, ctx.GetContext()), colNames, colTypes)
 	binder.enableCanonicalNameConstValueCast()
-	checkExpr, err := binder.BindExpr(canonicalClause.Exprs[0].Expr, 0, true)
+	checkExpr, err := binder.bindPersistedExpr(canonicalClause.Exprs[0].Expr, 0, true)
 	if err != nil {
 		return err
 	}

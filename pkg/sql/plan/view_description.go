@@ -25,6 +25,7 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/container/types"
 	"github.com/matrixorigin/matrixone/pkg/defines"
 	planpb "github.com/matrixorigin/matrixone/pkg/pb/plan"
+	"github.com/matrixorigin/matrixone/pkg/sql/plan/function"
 )
 
 const MaxViewMetadataColumns = 4096
@@ -37,6 +38,18 @@ type viewDescriptionDependencyContext struct {
 	refs               []*ObjectRef
 	publisherBinding   bool
 	publisherAccountID uint32
+}
+
+// Keep the definition-database UDF lookup contract when wrapping the isolated
+// binder to record dependencies for DESC/SHOW. Embedding CompilerContext alone
+// would hide this optional interface and fall back to the caller's database.
+func (c *viewDescriptionDependencyContext) ResolveViewUdf(
+	name string, args []*Expr, database string,
+) (*function.Udf, error) {
+	if resolver, ok := c.CompilerContext.(ViewUdfResolver); ok {
+		return resolver.ResolveViewUdf(name, args, database)
+	}
+	return c.CompilerContext.ResolveUdf(name, args)
 }
 
 func (c *viewDescriptionDependencyContext) record(obj *ObjectRef, def *TableDef, snapshot *Snapshot) {

@@ -3837,6 +3837,16 @@ func doShowCollation(ses *Session, execCtx *ExecCtx, proc *process.Process, sc *
 }
 
 func handleShowPublications(ses FeSession, execCtx *ExecCtx, sp *tree.ShowPublications) error {
+	if sp.Like != nil {
+		if _, parameterized := sp.Like.Right.(*tree.ParamExpr); parameterized {
+			// SQL EXECUTE can leave its owned parameter vector on the session
+			// process. A bare SHOW must never borrow that previous binding.
+			cw, ok := execCtx.cw.(*TxnComputationWrapper)
+			if !ok || !cw.ifIsExeccute {
+				return moerr.NewInvalidInput(execCtx.reqCtx, "SHOW PUBLICATIONS LIKE parameter requires prepared execution")
+			}
+		}
+	}
 	return doShowPublications(execCtx.reqCtx, ses.(*Session), sp)
 }
 

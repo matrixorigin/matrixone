@@ -147,7 +147,7 @@ func encodeRemoteScopeWithVectorProtocol(s *Scope, proc *process.Process, requir
 			return nil, err
 		}
 	}
-	if features.IntegerParameterCoercion {
+	if features.IntegerParameterCoercion || features.SpecialIntegerConsumers {
 		if err = validateIntegerArgumentDestination(proc, p); err != nil {
 			return nil, err
 		}
@@ -2278,6 +2278,9 @@ func validateRemoteExpressionPipelineProtocol(
 	}
 	if features.IntegerParameterCoercion && (!hasProtocolVersion || protocolVersion < defines.MORPCVersion85) {
 		return moerr.NewNotSupportedNoCtx("integer parameter coercion requires MORPC protocol version 85")
+	}
+	if features.SpecialIntegerConsumers && (!hasProtocolVersion || protocolVersion < defines.MORPCVersion98) {
+		return moerr.NewNotSupportedNoCtx("special integer consumers require MORPC protocol version 98")
 	}
 	if features.PreparedPrecisionScalar && (!hasProtocolVersion || protocolVersion < defines.MORPCVersion95) {
 		return moerr.NewNotSupportedNoCtx("prepared scalar precision requires MORPC protocol version 95")

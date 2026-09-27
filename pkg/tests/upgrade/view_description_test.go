@@ -369,6 +369,27 @@ func TestViewDescriptionUdfDatabaseContext(t *testing.T) {
 		require.NoError(t, err)
 		_, err = definition.ExecContext(ctx, "create view v as select f_answer() as answer")
 		require.NoError(t, err)
+		checkShow := func(query string) {
+			t.Helper()
+			rows, queryErr := definition.QueryContext(ctx, query)
+			require.NoError(t, queryErr, query)
+			defer rows.Close()
+			columns, colErr := rows.Columns()
+			require.NoError(t, colErr)
+			require.GreaterOrEqual(t, len(columns), 2)
+			require.True(t, rows.Next())
+			values := make([]sql.NullString, len(columns))
+			targets := make([]any, len(columns))
+			for i := range targets {
+				targets[i] = &values[i]
+			}
+			require.NoError(t, rows.Scan(targets...))
+			require.Equal(t, "answer", values[0].String)
+			require.Equal(t, "BIGINT", strings.ToUpper(values[1].String))
+			require.False(t, rows.Next())
+			require.NoError(t, rows.Err())
+		}
+		checkShow("desc view_description_udf.v")
 
 		query := "select count(*) from information_schema.columns where table_schema='view_description_udf' and table_name='v'"
 		var count int
@@ -378,6 +399,38 @@ func TestViewDescriptionUdfDatabaseContext(t *testing.T) {
 		require.NoError(t, err)
 		require.NoError(t, definition.QueryRowContext(ctx, query).Scan(&count))
 		require.Equal(t, 1, count, "another caller database must not change View UDF binding")
+		checkShow("desc view_description_udf.v")
+		checkShow("show full columns from view_description_udf.v")
+		_, err = db.ExecContext(ctx, "create database view_description_udf_caller")
+		require.NoError(t, err)
+		defer func() {
+			_, dropErr := db.ExecContext(ctx, "drop database view_description_udf_caller")
+			require.NoError(t, dropErr)
+		}()
+		_, err = definition.ExecContext(ctx, "use view_description_udf_caller")
+		require.NoError(t, err)
+		prepared, err := definition.PrepareContext(ctx, "show columns from view_description_udf.v")
+		require.NoError(t, err)
+		defer prepared.Close()
+		checkPrepared := func() {
+			t.Helper()
+			var field, typ, nullable, key, defaultValue, extra, comment sql.NullString
+			require.NoError(t, prepared.QueryRowContext(ctx).Scan(
+				&field, &typ, &nullable, &key, &defaultValue, &extra, &comment))
+			require.Equal(t, "answer", field.String)
+			require.Equal(t, "BIGINT", strings.ToUpper(typ.String))
+		}
+		checkShow("desc view_description_udf.v")
+		checkPrepared()
+		_, err = definition.ExecContext(ctx,
+			"create function f_answer() returns varchar(20) language sql as 'repeat(\"x\",7)'")
+		require.NoError(t, err)
+		checkShow("desc view_description_udf.v")
+		checkShow("show full columns from view_description_udf.v")
+		checkPrepared()
+		_, err = definition.ExecContext(ctx, "use mo_catalog")
+		require.NoError(t, err)
+		checkPrepared()
 		require.NoError(t, db.QueryRowContext(ctx, query).Scan(&count))
 		require.Equal(t, 1, count, "a caller without a default database must also resolve the View UDF")
 
