@@ -40,12 +40,19 @@ type tableDumpBindingBudget struct {
 type tableDumpExpressionVisitor struct {
 	nodes       int
 	hasDivision bool
+	hasSpecial  bool
 }
 
 func (v *tableDumpExpressionVisitor) Enter(e tree.Expr) (tree.Expr, bool) {
 	v.nodes++
 	if binary, ok := e.(*tree.BinaryExpr); ok && binary.Op == tree.DIV {
 		v.hasDivision = true
+	}
+	if fn, ok := e.(*tree.FuncExpr); ok {
+		switch numericAstFunctionName(fn) {
+		case "format", "makedate", "maketime":
+			v.hasSpecial = true
+		}
 	}
 	return e, false
 }
@@ -139,8 +146,11 @@ func parseTableDumpExpression(ctx context.Context, origin, mode string) (tree.St
 	return stmt, expr, visitor, nil
 }
 
-func bindTableDumpExpression(ctx CompilerContext, def *planpb.TableDef, item tableDumpExpression, ast tree.Expr, increment int64) (*planpb.Expr, error) {
+func bindTableDumpExpression(ctx CompilerContext, def *planpb.TableDef, item tableDumpExpression, ast tree.Expr, increment int64, legacy bool) (*planpb.Expr, error) {
 	bindCtx := function.WithDivPrecisionIncrement(ctx.GetContext(), int32(increment))
+	if legacy {
+		bindCtx = function.WithLegacySpecialConsumers(bindCtx)
+	}
 	proc := ctx.GetProcess()
 	if proc == nil {
 		return nil, moerr.NewInternalError(ctx.GetContext(), "table dump expression binding requires a process")
@@ -289,28 +299,45 @@ func AnalyzeTableDumpBindings(ctx CompilerContext, target, supplied *planpb.Tabl
 			if visit.hasDivision {
 				maxIncrement = 30
 			}
-			var first *planpb.Expr
+			var first, legacyFirst *planpb.Expr
+			var matchedLegacy bool
+			want := item.expr
+			if supplied != nil {
+				want = sourceItems[i].expr
+			}
 			for increment := int64(0); increment <= maxIncrement; increment++ {
 				budget.visits += visit.nodes
 				if budget.visits > tableDumpMaxCandidateVisits {
 					stmt.Free()
 					return false, moerr.NewInvalidInputNoCtx("table dump expression binding exceeds limit")
 				}
-				candidate, err := bindTableDumpExpression(ctx, target, item, ast, increment)
-				if err != nil {
-					continue
+				candidate, err := bindTableDumpExpression(ctx, target, item, ast, increment, false)
+				if err == nil {
+					if first == nil {
+						first = candidate
+					} else if visit.hasDivision && !sameTableDumpBoundExpression(first, candidate) {
+						sensitive = true
+					}
+					matched = matched || sameTableDumpBoundExpression(want, candidate)
 				}
-				if first == nil {
-					first = candidate
-				} else if visit.hasDivision && !sameTableDumpBoundExpression(first, candidate) {
-					sensitive = true
-				}
-				want := item.expr
-				if supplied != nil {
-					want = sourceItems[i].expr
-				}
-				if sameTableDumpBoundExpression(want, candidate) {
-					matched = true
+				if visit.hasSpecial && (!matched || matchedLegacy) {
+					budget.visits += visit.nodes
+					if budget.visits > tableDumpMaxCandidateVisits {
+						stmt.Free()
+						return false, moerr.NewInvalidInputNoCtx("table dump expression binding exceeds limit")
+					}
+					legacy, err := bindTableDumpExpression(ctx, target, item, ast, increment, true)
+					if err == nil {
+						if legacyFirst == nil {
+							legacyFirst = legacy
+						} else if visit.hasDivision && !sameTableDumpBoundExpression(legacyFirst, legacy) {
+							sensitive = true
+						}
+						if sameTableDumpBoundExpression(want, legacy) {
+							matched = true
+							matchedLegacy = true
+						}
+					}
 				}
 				if matched && sensitive {
 					break

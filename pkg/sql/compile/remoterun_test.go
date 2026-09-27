@@ -1482,16 +1482,12 @@ func TestRemoteExpressionProtocolValidation(t *testing.T) {
 				Expr: &planpb.Expr_Col{Col: &planpb.ColRef{ColPos: 2}},
 			})
 		}
-		inputTypes := make([]types.Type, len(args))
-		for i := range args {
-			inputTypes[i] = types.New(types.T(args[i].Typ.Id), args[i].Typ.Width, args[i].Typ.Scale)
-		}
-		resolved, err := planfunction.GetFunctionByName(context.Background(), "format", inputTypes)
-		require.NoError(t, err)
+		// Pin the historical v59 physical signature. New bindings use INT64
+		// precision and have an independent v98 protocol test.
 		return &planpb.Expr{
 			Typ: planpb.Type{Id: int32(types.T_varchar)},
 			Expr: &planpb.Expr_F{F: &planpb.Function{
-				Func: &planpb.ObjectRef{Obj: resolved.GetEncodedOverloadID(), ObjName: "format"},
+				Func: &planpb.ObjectRef{Obj: planfunction.EncodeOverloadID(planfunction.FORMAT, int32(len(args)-2)), ObjName: "format"},
 				Args: args,
 			}},
 		}

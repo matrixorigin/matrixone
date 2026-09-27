@@ -157,3 +157,49 @@ float_input
 SELECT MAKETIME(CAST(12 AS UNSIGNED), CAST(15 AS UNSIGNED), CAST(30 AS UNSIGNED)) AS unsigned_input;
 unsigned_input
 12:15:30
+SELECT CAST(MAKETIME(12.5E0,58.5E0,1.125) AS VARCHAR), CAST(MAKETIME(CAST(12.9 AS DOUBLE),CAST(58.9 AS DOUBLE),1.125) AS VARCHAR);
+➤ cast(MAKETIME(12.5e0, 58.5e0, 1.125) as varchar)[12,65535,0]  ¦  cast(MAKETIME(cast(12.9 as double), cast(58.9 as double), 1.125) as varchar)[12,65535,0]  𝄀
+12:58:01.125  ¦  12:58:01.125
+SELECT MAKETIME(CAST('9223372036854775808' AS UNSIGNED),0,0);
+Data truncation: data out of range: data type int64, integer argument
+SELECT MAKETIME(1,CAST('9223372036854775808' AS UNSIGNED),0);
+Data truncation: data out of range: data type int64, integer argument
+SELECT MAKETIME(9223372036854775807,0,0), MAKETIME(1,0,CAST('18446744073709551615' AS UNSIGNED));
+➤ MAKETIME(9223372036854775807, 0, 0)[92,10,0]  ¦  MAKETIME(1, 0, cast(18446744073709551615 as unsigned))[92,17,0]  𝄀
+838:59:59  ¦  null
+DROP TABLE IF EXISTS maketime_integer_contract;
+CREATE TABLE maketime_integer_contract(h DECIMAL(10,1), m DOUBLE, s DECIMAL(10,6), g TIME(6) GENERATED ALWAYS AS (MAKETIME(h,m,s)) STORED);
+INSERT INTO maketime_integer_contract(h,m,s) VALUES (12.5,58.5,1.125), (-12.5,59,59.999999), (NULL,NULL,NULL);
+SELECT h,m,s,CAST(MAKETIME(h,m,s) AS VARCHAR),CAST(g AS VARCHAR) FROM maketime_integer_contract ORDER BY h;
+➤ h[3,10,1]  ¦  m[8,53,31]  ¦  s[3,10,6]  ¦  cast(MAKETIME(h, m, s) as varchar)[12,65535,0]  ¦  cast(g as varchar)[12,65535,0]  𝄀
+null  ¦  null  ¦  null  ¦  null  ¦  null  𝄀
+-12.5  ¦  59.0  ¦  59.999999  ¦  -13:59:59.999999  ¦  -13:59:59.999999  𝄀
+12.5  ¦  58.5  ¦  1.125000  ¦  13:58:01.125000  ¦  13:58:01.125000
+DROP TABLE maketime_integer_contract;
+PREPARE maketime_integer_stmt FROM 'SELECT CAST(MAKETIME(?, ?, 1.125) AS VARCHAR)';
+SET @maketime_hour = NULL, @maketime_minute = 0;
+EXECUTE maketime_integer_stmt USING @maketime_hour, @maketime_minute;
+➤ cast(MAKETIME(?, ?, 1.125) as varchar)[12,65535,0]  𝄀
+null
+SET @maketime_hour = 12.5E0, @maketime_minute = 58.5;
+EXECUTE maketime_integer_stmt USING @maketime_hour, @maketime_minute;
+➤ cast(MAKETIME(?, ?, 1.125) as varchar)[12,65535,0]  𝄀
+12:59:01.125
+SET @maketime_hour = '12.9', @maketime_minute = 0;
+EXECUTE maketime_integer_stmt USING @maketime_hour, @maketime_minute;
+➤ cast(MAKETIME(?, ?, 1.125) as varchar)[12,65535,0]  𝄀
+12:00:01.125
+DEALLOCATE PREPARE maketime_integer_stmt;
+SET @maketime_hour = NULL, @maketime_minute = NULL;
+SELECT CAST(MAKETIME(1.0,1,CAST('1.5' AS BINARY)) AS VARCHAR);
+➤ cast(MAKETIME(1.0, 1, cast(1.5 as binary)) as varchar)[12,65535,0]  𝄀
+01:01:01.500000
+DROP TABLE IF EXISTS maketime_binary_seconds;
+CREATE TABLE maketime_binary_seconds(s VARBINARY(8), g TIME(6) GENERATED ALWAYS AS (MAKETIME(1.0,1,s)) STORED);
+INSERT INTO maketime_binary_seconds(s) VALUES ('1.5'), ('59.5'), (NULL);
+SELECT s,CAST(MAKETIME(1.0,1,s) AS VARCHAR),CAST(g AS VARCHAR) FROM maketime_binary_seconds ORDER BY s;
+➤ s[-3,8,0]  ¦  cast(MAKETIME(1.0, 1, s) as varchar)[12,65535,0]  ¦  cast(g as varchar)[12,65535,0]  𝄀
+null  ¦  null  ¦  null  𝄀
+1.5  ¦  01:01:01.500000  ¦  01:01:01.500000  𝄀
+59.5  ¦  01:01:59.500000  ¦  01:01:59.500000
+DROP TABLE maketime_binary_seconds;
