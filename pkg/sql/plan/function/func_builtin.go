@@ -190,6 +190,14 @@ func toTypedInterval[T types.FixedSizeTExceptStrType](
 			}
 			continue
 		}
+		if scalarFloat == nil && types.IntervalType(unit) == types.MicroSecond {
+			// DECIMAL is numeric even though its exact value is formatted as text.
+			// The interval string grammar must not reject its fractional part.
+			if err := appendTimeIntervalValue(rs, roundedRawMicroseconds(text)); err != nil {
+				return err
+			}
+			continue
+		}
 		if err := appendNormalizedInterval(rs, text, types.IntervalType(unit), true); err != nil {
 			return err
 		}
@@ -225,18 +233,21 @@ const calendarIntervalOverflow int64 = math.MinInt64
 
 func appendNormalizedInterval(rs *vector.FunctionResult[int64], text string, intervalType types.IntervalType, normalizeMicroseconds bool) error {
 	if normalizeMicroseconds {
-		value := normalizeRawTimeInterval(text, intervalType)
-		switch value.state {
-		case timeIntervalOverflow:
-			return rs.Append(calendarIntervalOverflow, false)
-		case timeIntervalInvalid, timeIntervalNull:
-			return rs.Append(0, true)
-		default:
-			return rs.Append(value.value, false)
-		}
+		return appendTimeIntervalValue(rs, normalizeRawTimeInterval(text, intervalType))
 	}
 	number, _, err := types.NormalizeInterval(text, intervalType)
 	return rs.Append(number, err != nil)
+}
+
+func appendTimeIntervalValue(rs *vector.FunctionResult[int64], value timeIntervalValue) error {
+	switch value.state {
+	case timeIntervalOverflow:
+		return rs.Append(calendarIntervalOverflow, false)
+	case timeIntervalInvalid, timeIntervalNull:
+		return rs.Append(0, true)
+	default:
+		return rs.Append(value.value, false)
+	}
 }
 
 func builtInCurrentTimestamp(ivecs []*vector.Vector, result vector.FunctionResultWrapper, proc *process.Process, length int, selectList *FunctionSelectList) error {

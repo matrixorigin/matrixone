@@ -526,6 +526,62 @@ select date_add(cast('2024-01-01 12:00:00' as datetime(6)), interval cast(1.5 as
 cast('2024-01-01 12:00:00.000002' as datetime(6)) as datetime_us_control;
 ➤ datetime_us_control[-7,1,0]  𝄀
 1
+create table temporal_microsecond_values(n decimal(10,1));
+insert into temporal_microsecond_values values (1.5), (-1.5);
+select n,
+timestampdiff(microsecond, '2024-01-01', date_add(cast('2024-01-01' as datetime), interval n microsecond)) as added_us,
+timestampdiff(microsecond, '2024-01-01', date_sub(cast('2024-01-01' as datetime), interval n microsecond)) as subtracted_us
+from temporal_microsecond_values order by n;
+➤ n[3,10,1]  ¦  added_us[-5,64,0]  ¦  subtracted_us[-5,64,0]  𝄀
+-1.5  ¦  -2  ¦  2  𝄀
+1.5  ¦  2  ¦  -2
+drop table temporal_microsecond_values;
+prepare temporal_microsecond_marker from
+'select date_add(cast(''2024-01-01'' as datetime), interval ? microsecond) as added,
+date_sub(cast(''2024-01-01'' as datetime), interval ? microsecond) as subtracted';
+set @temporal_microsecond_value = cast(1.5 as decimal(10,1));
+execute temporal_microsecond_marker using @temporal_microsecond_value, @temporal_microsecond_value;
+➤ added[93,26,0]  ¦  subtracted[93,26,0]  𝄀
+2024-01-01 00:00:00.000002000  ¦  2023-12-31 23:59:59.999998000
+set @temporal_microsecond_value = cast(-1.5 as decimal(10,1));
+execute temporal_microsecond_marker using @temporal_microsecond_value, @temporal_microsecond_value;
+➤ added[93,26,0]  ¦  subtracted[93,26,0]  𝄀
+2023-12-31 23:59:59.999998000  ¦  2024-01-01 00:00:00.000002000
+set @temporal_microsecond_value = cast(1.5 as double);
+execute temporal_microsecond_marker using @temporal_microsecond_value, @temporal_microsecond_value;
+➤ added[93,26,0]  ¦  subtracted[93,26,0]  𝄀
+2024-01-01 00:00:00.000002000  ¦  2023-12-31 23:59:59.999998000
+set @temporal_microsecond_value = null;
+execute temporal_microsecond_marker using @temporal_microsecond_value, @temporal_microsecond_value;
+➤ added[93,26,0]  ¦  subtracted[93,26,0]  𝄀
+null  ¦  null
+set @temporal_microsecond_value = '1.5';
+execute temporal_microsecond_marker using @temporal_microsecond_value, @temporal_microsecond_value;
+➤ added[93,26,0]  ¦  subtracted[93,26,0]  𝄀
+null  ¦  null
+set @temporal_microsecond_value = cast(1.5 as decimal(10,1));
+execute temporal_microsecond_marker using @temporal_microsecond_value, @temporal_microsecond_value;
+➤ added[93,26,0]  ¦  subtracted[93,26,0]  𝄀
+2024-01-01 00:00:00.000002000  ¦  2023-12-31 23:59:59.999998000
+deallocate prepare temporal_microsecond_marker;
+set @temporal_microsecond_value = null;
+prepare temporal_time_microsecond_marker from
+'select date_add(time ''12:00:00'', interval ? microsecond) as added,
+date_sub(time ''12:00:00'', interval ? microsecond) as subtracted';
+set @temporal_microsecond_value = cast(1.5 as decimal(10,1));
+execute temporal_time_microsecond_marker using @temporal_microsecond_value, @temporal_microsecond_value;
+➤ added[92,17,0]  ¦  subtracted[92,17,0]  𝄀
+12:00:00.000002000  ¦  11:59:59.999998000
+set @temporal_microsecond_value = cast(-1.5 as double);
+execute temporal_time_microsecond_marker using @temporal_microsecond_value, @temporal_microsecond_value;
+➤ added[92,17,0]  ¦  subtracted[92,17,0]  𝄀
+11:59:59.999998000  ¦  12:00:00.000002000
+set @temporal_microsecond_value = '1.5';
+execute temporal_time_microsecond_marker using @temporal_microsecond_value, @temporal_microsecond_value;
+➤ added[92,17,0]  ¦  subtracted[92,17,0]  𝄀
+null  ¦  null
+deallocate prepare temporal_time_microsecond_marker;
+set @temporal_microsecond_value = null;
 select addtime(time '12:00:00','00:00:00.1') as typed_time_fsp,
 subtime(cast('2024-01-01 12:00:00' as datetime),'00:00:00.1') as typed_datetime_fsp;
 ➤ typed_time_fsp[92,12,0]  ¦  typed_datetime_fsp[93,21,0]  𝄀

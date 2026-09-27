@@ -2939,6 +2939,24 @@ func (rule *ResetParamRefRule) applyExpr(e *plan.Expr) (*plan.Expr, error) {
 				needResetFunction = true
 			}
 			var rewrittenArg *plan.Expr
+			numericMicrosecondSource := false
+			intervalUnitArg := -1
+			if functionName == "to_interval_microsecond" && i == 0 && len(originalArgs) == 2 {
+				intervalUnitArg = 1
+			} else if (functionName == "date_add" || functionName == "date_sub") && i == 1 &&
+				len(originalArgs) == 3 && originalArgs[0].Typ.Id == int32(types.T_time) {
+				intervalUnitArg = 2
+			}
+			if intervalUnitArg >= 0 && hasParamPos && !isExplicitPreparedCast(arg) &&
+				originalArgs[intervalUnitArg] != nil && originalArgs[intervalUnitArg].GetLit() != nil &&
+				originalArgs[intervalUnitArg].GetLit().GetI64Val() == int64(types.MicroSecond) &&
+				paramPos < len(rule.paramValues) {
+				if param, ok := rule.paramValues[paramPos].(ParamValue); ok {
+					numericMicrosecondSource = !param.IsBinaryProtocol && param.HasSourceType &&
+						(param.SourceType.IsDecimal() || param.SourceType.Oid == types.T_float32 ||
+							param.SourceType.Oid == types.T_float64)
+				}
+			}
 			if nestedPreparedBitwiseSource != nil {
 				var applyErr error
 				rewrittenArg, applyErr = rule.ApplyExpr(DeepCopyExpr(nestedPreparedBitwiseSource))
@@ -2969,6 +2987,21 @@ func (rule *ResetParamRefRule) applyExpr(e *plan.Expr) (*plan.Expr, error) {
 						return nil, err
 					}
 				}
+			} else if numericMicrosecondSource {
+				// SQL EXECUTE transports DECIMAL and FLOAT variables as text. Preserve
+				// their numeric source for MICROSECOND rounding, including TIME's raw
+				// interval argument, without changing the interval string grammar.
+				var known bool
+				rewrittenArg, known, err = rule.preparedRuntimeSourceExpr(paramPos, false)
+				if err != nil {
+					return nil, err
+				}
+				if !known {
+					return nil, moerr.NewInternalErrorNoCtx("missing prepared numeric interval source type")
+				}
+				needResetFunction = true
+				compareArgTypes = true
+				rule.specialized = true
 			} else if variadicSource {
 				var sourceOK bool
 				rewrittenArg, sourceOK, err = rule.preparedRuntimeSourceExpr(paramPos, false)

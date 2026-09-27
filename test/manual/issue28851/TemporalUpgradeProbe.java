@@ -1,4 +1,5 @@
 import java.sql.*;
+import java.math.BigDecimal;
 import java.util.Objects;
 
 // Connector/J 8.4.0; see README.md. No emulated prepared statements are allowed.
@@ -23,6 +24,44 @@ public final class TemporalUpgradeProbe {
             while (r.next()) { ++seen; check(r.getInt(2) == code, "warning code " + r.getInt(2)); }
         }
         check(seen == count, "warning count expected=" + count + " actual=" + seen);
+    }
+    static void decimalMicrosecondContract(Connection c, Statement s) throws Exception {
+        String sql = "select date_add(cast('2024-01-01' as datetime), interval ? microsecond), "
+                   + "date_sub(cast('2024-01-01' as datetime), interval ? microsecond), "
+                   + "date_add(time '12:00:00', interval ? microsecond)";
+        try (PreparedStatement p = prepare(c, sql)) {
+            String[][] cases = {
+                {"1.5", "2024-01-01 00:00:00.000002", "2023-12-31 23:59:59.999998", "12:00:00.000002"},
+                {"-1.5", "2023-12-31 23:59:59.999998", "2024-01-01 00:00:00.000002", "11:59:59.999998"},
+                {"0", "2024-01-01 00:00:00", "2024-01-01 00:00:00", "12:00:00"},
+                {"1.5", "2024-01-01 00:00:00.000002", "2023-12-31 23:59:59.999998", "12:00:00.000002"}
+            };
+            for (String[] test : cases) {
+                for (int i = 1; i <= 3; ++i) p.setBigDecimal(i, new BigDecimal(test[0]));
+                try (ResultSet r = p.executeQuery()) {
+                    check(r.next(), "DECIMAL microsecond row " + test[0]);
+                    for (int i = 1; i <= 3; ++i)
+                        check(test[i].equals(r.getString(i)), "DECIMAL microsecond " + test[0] + " column " + i + " got " + r.getString(i));
+                }
+                warnings(s, 0, 1441);
+            }
+            for (int i = 1; i <= 3; ++i) p.setString(i, "1.5");
+            try (ResultSet r = p.executeQuery()) {
+                check(r.next() && r.getString(1) == null && r.getString(2) == null && r.getString(3) == null,
+                    "VARCHAR microsecond grammar changed");
+            }
+            warnings(s, 0, 1441);
+        }
+        try (PreparedStatement p = prepare(c,
+                "select date_add(cast(? as datetime), interval ? microsecond)")) {
+            p.setString(1, "2024-01-01");
+            p.setBigDecimal(2, new BigDecimal("9223372036854775807.5"));
+            try (ResultSet r = p.executeQuery()) { check(r.next() && r.getString(1) == null, "active DECIMAL overflow"); }
+            warnings(s, 1, 1441);
+            p.setNull(1, Types.TIMESTAMP);
+            try (ResultSet r = p.executeQuery()) { check(r.next() && r.getString(1) == null, "NULL base"); }
+            warnings(s, 0, 1441);
+        }
     }
     static void arithmeticContract(Connection c, Statement s) throws Exception {
         s.execute("set sql_mode=''");
@@ -110,7 +149,8 @@ public final class TemporalUpgradeProbe {
                 }
             }
         }
-        System.out.println("PASS temporal contract: exact bounds, inactive diagnostics, text/binary metadata, mode and ASCII rebinding");
+        decimalMicrosecondContract(c, s);
+        System.out.println("PASS temporal contract: exact bounds, inactive diagnostics, DECIMAL microseconds, text/binary metadata, mode and ASCII rebinding");
     }
     public static void main(String[] args) throws Exception {
         String url = System.getenv("MO_JDBC_URL");

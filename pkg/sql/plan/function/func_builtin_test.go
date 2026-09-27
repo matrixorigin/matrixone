@@ -760,9 +760,23 @@ func TestToIntervalNormalizesTypedNumericValues(t *testing.T) {
 	require.NoError(t, err)
 	negativeDecimal, err := types.ParseDecimal64("-1.5000000", 18, 7)
 	require.NoError(t, err)
+	negativeOneHalf, err := types.ParseDecimal64("-1.5", 18, 1)
+	require.NoError(t, err)
+	positiveSubmicrosecond, err := types.ParseDecimal64("0.4", 18, 1)
+	require.NoError(t, err)
+	negativeSubmicrosecond, err := types.ParseDecimal64("-0.5", 18, 1)
+	require.NoError(t, err)
 	widePositive, err := types.ParseDecimal256("1.50000000000000000000", 50, 20)
 	require.NoError(t, err)
 	wideNegative, err := types.ParseDecimal256("-1.50000000000000000000", 50, 20)
+	require.NoError(t, err)
+	wideTinyPositive, err := types.ParseDecimal256("0.50000000000000000000", 50, 20)
+	require.NoError(t, err)
+	wideTinyNegative, err := types.ParseDecimal256("-0.50000000000000000000", 50, 20)
+	require.NoError(t, err)
+	maximumMicrosecond, err := types.ParseDecimal128("9223372036854775807.4", 38, 1)
+	require.NoError(t, err)
+	overflowMicrosecond, err := types.ParseDecimal128("9223372036854775807.5", 38, 1)
 	require.NoError(t, err)
 	positiveTie, err := types.ParseDecimal128("34410126.8315485", 38, 7)
 	require.NoError(t, err)
@@ -790,6 +804,15 @@ func TestToIntervalNormalizesTypedNumericValues(t *testing.T) {
 			nulls: []bool{false, true},
 		},
 		{
+			name: "decimal64 microsecond rounds once and preserves NULL",
+			input: NewFunctionTestInput(types.New(types.T_decimal64, 18, 1),
+				[]types.Decimal64{15, negativeOneHalf, positiveSubmicrosecond, negativeSubmicrosecond, 0},
+				[]bool{false, false, false, false, true}),
+			unit:  types.MicroSecond,
+			want:  []int64{2, -2, 0, -1, 0},
+			nulls: []bool{false, false, false, false, true},
+		},
+		{
 			name:  "decimal64 declared scale does not alter fields",
 			input: NewFunctionTestInput(types.New(types.T_decimal64, 18, 7), []types.Decimal64{15000000, negativeDecimal}, nil),
 			unit:  types.Hour_Minute,
@@ -801,6 +824,22 @@ func TestToIntervalNormalizesTypedNumericValues(t *testing.T) {
 			input: NewFunctionTestInput(types.New(types.T_decimal128, 38, 14), []types.Decimal128{decimalTiny, decimalOneHalf}, nil),
 			unit:  types.Second_MicroSecond,
 			want:  []int64{0, 1500000},
+			nulls: []bool{false, false},
+		},
+		{
+			name: "decimal128 microsecond keeps the exact int64 boundary",
+			input: NewFunctionTestInput(types.New(types.T_decimal128, 38, 1),
+				[]types.Decimal128{maximumMicrosecond, overflowMicrosecond}, nil),
+			unit:  types.MicroSecond,
+			want:  []int64{math.MaxInt64, calendarIntervalOverflow},
+			nulls: []bool{false, false},
+		},
+		{
+			name: "decimal256 microsecond rounds long fractions",
+			input: NewFunctionTestInput(types.New(types.T_decimal256, 50, 20),
+				[]types.Decimal256{wideTinyPositive, wideTinyNegative}, nil),
+			unit:  types.MicroSecond,
+			want:  []int64{1, -1},
 			nulls: []bool{false, false},
 		},
 		{

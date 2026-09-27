@@ -31,6 +31,7 @@ func TestPreparedIntervalMarkerRebindsInternalDateFunction(t *testing.T) {
 		value        ParamValue
 		expectedUnit types.IntervalType
 		normalized   bool
+		sourceType   types.T
 	}{
 		{name: "integer", unit: "second", value: ParamValue{Value: "3", SourceType: types.T_int64.ToType(), HasSourceType: true}, expectedUnit: types.MicroSecond},
 		{name: "negative integer", unit: "second", value: ParamValue{Value: "-3", SourceType: types.T_int64.ToType(), HasSourceType: true}, expectedUnit: types.MicroSecond},
@@ -39,6 +40,9 @@ func TestPreparedIntervalMarkerRebindsInternalDateFunction(t *testing.T) {
 		{name: "invalid string", unit: "second", value: ParamValue{Value: "not-an-interval", SourceType: types.T_varchar.ToType(), HasSourceType: true}, expectedUnit: types.MicroSecond, normalized: true},
 		{name: "DAY_SECOND string", unit: "day_second", value: ParamValue{Value: "1 02:03:04", SourceType: types.T_varchar.ToType(), HasSourceType: true}, expectedUnit: types.MicroSecond, normalized: true},
 		{name: "YEAR_MONTH string", unit: "year_month", value: ParamValue{Value: "1-2", SourceType: types.T_varchar.ToType(), HasSourceType: true}, expectedUnit: types.Month, normalized: true},
+		{name: "decimal microsecond", unit: "microsecond", value: ParamValue{Value: "1.5", SourceType: types.New(types.T_decimal64, 2, 1), HasSourceType: true}, expectedUnit: types.MicroSecond, normalized: true, sourceType: types.T_decimal64},
+		{name: "decimal256 microsecond", unit: "microsecond", value: ParamValue{Value: "1.5", SourceType: types.New(types.T_decimal256, 50, 1), HasSourceType: true}, expectedUnit: types.MicroSecond, normalized: true, sourceType: types.T_decimal256},
+		{name: "float microsecond", unit: "microsecond", value: ParamValue{Value: "1.5", SourceType: types.T_float64.ToType(), HasSourceType: true}, expectedUnit: types.MicroSecond, normalized: true, sourceType: types.T_float64},
 		{name: "binary integer", unit: "second", value: ParamValue{Value: "3", RuntimeType: types.T_int64.ToType(), HasRuntimeType: true, IsBinaryProtocol: true}, expectedUnit: types.MicroSecond},
 		{name: "binary string", unit: "second", value: ParamValue{Value: "3", RuntimeType: types.T_text.ToType(), HasRuntimeType: true, IsBinaryProtocol: true}, expectedUnit: types.MicroSecond, normalized: true},
 	} {
@@ -67,7 +71,11 @@ func TestPreparedIntervalMarkerRebindsInternalDateFunction(t *testing.T) {
 					require.Equal(t, int32(types.T_int64), dateFunction.GetF().GetArgs()[1].Typ.Id, dateFunction.String())
 					require.Equal(t, int64(tc.expectedUnit), dateFunction.GetF().GetArgs()[2].GetLit().GetI64Val(), dateFunction.String())
 					if tc.normalized {
-						require.NotNil(t, findPlanFunctionExpr(filled, "to_interval_microsecond"), filled.String())
+						normalizer := findPlanFunctionExpr(filled, "to_interval_microsecond")
+						require.NotNil(t, normalizer, filled.String())
+						if tc.sourceType != 0 {
+							require.Equal(t, int32(tc.sourceType), normalizer.GetF().GetArgs()[0].Typ.Id)
+						}
 					}
 				})
 			}
@@ -95,6 +103,32 @@ func TestPreparedIntervalMarkerRepeatedExecutionsDoNotMutatePlan(t *testing.T) {
 		require.NoError(t, fillErr)
 		require.False(t, preparedExprContainsParam(findPlanFunctionExpr(filled, "date_add")), filled.String())
 		require.True(t, preparedExprContainsParam(findPlanFunctionExpr(preparedPlan, "date_add")), preparedPlan.String())
+	}
+}
+
+func TestPreparedTimeMicrosecondMarkerKeepsNumericSource(t *testing.T) {
+	for _, tc := range []struct {
+		name string
+		typ  types.Type
+	}{
+		{"decimal", types.New(types.T_decimal64, 2, 1)},
+		{"float", types.T_float64.ToType()},
+	} {
+		for _, name := range []string{"date_add", "date_sub"} {
+			t.Run(tc.name+"/"+name, func(t *testing.T) {
+				prepared, err := runOneStmt(NewMockOptimizer(false), t,
+					"prepare stmt_time_microsecond from select "+name+"(time '12:00:00', interval ? microsecond)")
+				require.NoError(t, err)
+				filled, _, err := FillValuesOfParamsInPlanWithSpecialization(context.Background(),
+					prepared.GetDcl().GetPrepare().GetPlan(), []any{
+						ParamValue{Value: "1.5", SourceType: tc.typ, HasSourceType: true},
+					})
+				require.NoError(t, err)
+				dateFunction := findPlanFunctionExpr(filled, name)
+				require.NotNil(t, dateFunction)
+				require.Equal(t, int32(tc.typ.Oid), dateFunction.GetF().GetArgs()[1].Typ.Id)
+			})
+		}
 	}
 }
 
