@@ -17,15 +17,114 @@ package rscthrottler
 import (
 	"context"
 	"errors"
+	"fmt"
 	"math/rand"
 	"sync"
 	"sync/atomic"
 	"testing"
 	"time"
 
+	"github.com/KimMachineGun/automemlimit/memlimit"
 	"github.com/matrixorigin/matrixone/pkg/common/mpool"
 	"github.com/stretchr/testify/require"
 )
+
+func TestFullRefreshPreservesSharedBudgetOnLimitFailure(t *testing.T) {
+	oldLimit, oldTotal, oldUsage := getCgroupMemoryLimit, getHostTotalMemory, getCgroupMemoryUsage
+	t.Cleanup(func() {
+		getCgroupMemoryLimit, getHostTotalMemory, getCgroupMemoryUsage = oldLimit, oldTotal, oldUsage
+	})
+	const unit = int64(1 << 30)
+	for _, policy := range []struct {
+		name    string
+		acquire func(*memThrottler, int64) (int64, bool)
+	}{{"workspace", defaultAcquirePolicy}, {"s3", AcquirePolicyForCNFlushS3}, {"branch", AcquirePolicyForDataBranch}} {
+		for _, failure := range []string{"limit", "host-total", "zero-limit"} {
+			t.Run(policy.name+"/"+failure, func(t *testing.T) {
+				var failed bool
+				getCgroupMemoryLimit = func() (uint64, error) {
+					if failed && failure == "limit" {
+						return 0, errors.New("limit read failed")
+					}
+					if failed && failure == "zero-limit" {
+						return 0, nil
+					}
+					return uint64(100 * unit), nil
+				}
+				getHostTotalMemory = func() uint64 {
+					if failed && failure == "host-total" {
+						return 0
+					}
+					return uint64(200 * unit)
+				}
+				getCgroupMemoryUsage = func(int) (int64, error) { return 95 * unit, nil }
+				budget := &cgroupMemoryBudget{}
+				makeOwner := func() *memThrottler {
+					m := &memThrottler{cgroupBudget: budget, limitRate: 0.8}
+					m.fillDefaults()
+					m.ForceRefresh()
+					return m
+				}
+				a, b := makeOwner(), makeOwner()
+				_, ok := policy.acquire(a, 4*unit)
+				require.True(t, ok)
+				_, ok = policy.acquire(b, 4*unit)
+				require.False(t, ok)
+				sample := budget.sample.Load()
+				failed = true
+				b.ForceRefresh()
+				require.Same(t, sample, budget.sample.Load())
+				require.Equal(t, uint64(100*unit), b.cgroup.Load())
+				require.Equal(t, uint64(200*unit), b.total.Load())
+				require.Equal(t, uint64(100*unit), b.actualTotalMemory.Load())
+				require.Equal(t, 80*unit, b.limit.Load())
+				_, ok = policy.acquire(b, 4*unit)
+				require.False(t, ok)
+				// A newly constructed owner must not erase the shared sample either.
+				c := makeOwner()
+				require.Same(t, sample, budget.sample.Load())
+				_, ok = policy.acquire(c, 4*unit)
+				require.False(t, ok)
+				require.Equal(t, 4*unit, budget.reserved.Load())
+				failed = false
+				b.ForceRefresh()
+				_, ok = policy.acquire(b, 4*unit)
+				require.False(t, ok)
+				a.Release(4 * unit)
+				_, ok = policy.acquire(b, 4*unit)
+				require.True(t, ok)
+				b.Release(4 * unit)
+				require.Zero(t, budget.reserved.Load())
+			})
+		}
+	}
+}
+
+func TestFullRefreshClearsConfirmedRemovedCgroupLimit(t *testing.T) {
+	oldLimit, oldTotal, oldUsage := getCgroupMemoryLimit, getHostTotalMemory, getCgroupMemoryUsage
+	t.Cleanup(func() {
+		getCgroupMemoryLimit, getHostTotalMemory, getCgroupMemoryUsage = oldLimit, oldTotal, oldUsage
+	})
+	getHostTotalMemory = func() uint64 { return 200 }
+	getCgroupMemoryUsage = func(int) (int64, error) { return 95, nil }
+	for _, noLimit := range []error{memlimit.ErrNoLimit, memlimit.ErrNoCgroup, memlimit.ErrCgroupsNotSupported} {
+		t.Run(noLimit.Error(), func(t *testing.T) {
+			getCgroupMemoryLimit = func() (uint64, error) { return 100, nil }
+			budget := &cgroupMemoryBudget{}
+			m := &memThrottler{cgroupBudget: budget, limitRate: 0.8}
+			m.fillDefaults()
+			m.ForceRefresh()
+			require.NotNil(t, budget.sample.Load())
+			budget.reserved.Store(4)
+			getCgroupMemoryLimit = func() (uint64, error) { return 0, fmt.Errorf("no finite limit: %w", noLimit) }
+			m.ForceRefresh()
+			require.Nil(t, budget.sample.Load())
+			require.Equal(t, int64(4), budget.reserved.Load())
+			require.Zero(t, m.cgroup.Load())
+			require.Equal(t, int64(160), m.limit.Load())
+		})
+	}
+}
 
 func TestCgroupBudgetAcrossInstances(t *testing.T) {
 	oldRead := getCgroupMemoryUsage

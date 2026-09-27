@@ -16,6 +16,7 @@ package rscthrottler
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"math"
 	"os"
@@ -51,7 +52,9 @@ const (
 )
 
 var (
-	freeOSMemory = debug.FreeOSMemory
+	freeOSMemory         = debug.FreeOSMemory
+	getCgroupMemoryLimit = memlimit.FromCgroup
+	getHostTotalMemory   = objectio.TotalMem
 
 	// getCgroupMemoryUsage is a variable so the cgroup-aware admission and
 	// pressure paths can be tested without depending on the host's cgroup.
@@ -263,28 +266,47 @@ func (m *memThrottler) refresh(force bool) {
 		)
 	}()
 
-	total = objectio.TotalMem()
-	cgroup, err = memlimit.FromCgroup()
-
-	if cgroup != 0 && cgroup < total {
-		m.actualTotalMemory.Store(cgroup)
-	} else if total != 0 {
-		m.actualTotalMemory.Store(total)
-	} else {
-		m.actualTotalMemory.Store(math.MaxInt64)
-		logutil.Info(
-			fmt.Sprintf("%s-Refresh", MemoryThrottlerLogHeader),
-			zap.String("err", "cannot get the total memory, unlimited"),
-		)
+	total = getHostTotalMemory()
+	cgroup, err = getCgroupMemoryLimit()
+	noCgroupLimit := errors.Is(err, memlimit.ErrNoLimit) ||
+		errors.Is(err, memlimit.ErrNoCgroup) ||
+		errors.Is(err, memlimit.ErrCgroupsNotSupported)
+	if noCgroupLimit {
+		cgroup = 0
 	}
+	validLimits := total != 0 && (noCgroupLimit || (err == nil && cgroup != 0))
+	// A failed observation is not evidence that the limit was removed. Keep
+	// both the component quota and the shared pressure sample until a valid
+	// observation replaces them; in particular, do not publish zero on error.
+	if validLimits {
+		if cgroup != 0 && cgroup < total {
+			m.actualTotalMemory.Store(cgroup)
+		} else {
+			m.actualTotalMemory.Store(total)
+		}
 
-	// if the const limit option is set, we should not change the limit.
-	if m.options.constLimit < 0 {
-		m.limit.Store(int64(float64(m.actualTotalMemory.Load()) * m.limitRate))
+		// if the const limit option is set, we should not change the limit.
+		if m.options.constLimit < 0 {
+			m.limit.Store(int64(float64(m.actualTotalMemory.Load()) * m.limitRate))
+		}
+		m.cgroup.Store(cgroup)
+		m.total.Store(total)
+		m.refreshCgroupUsage()
+	} else if m.actualTotalMemory.Load() == 0 {
+		// Bootstrap a new owner without clearing another owner's valid shared
+		// sample. Subsequent failed observations retain the last local limits.
+		initialTotal := total
+		if sample := m.cgroupSnapshot(); sample != nil {
+			initialTotal = uint64(sample.limit)
+		}
+		if initialTotal == 0 {
+			initialTotal = math.MaxInt64
+		}
+		m.actualTotalMemory.Store(initialTotal)
+		if m.options.constLimit < 0 {
+			m.limit.Store(int64(float64(initialTotal) * m.limitRate))
+		}
 	}
-	m.cgroup.Store(cgroup)
-	m.total.Store(total)
-	m.refreshCgroupUsage()
 
 	if m.proc == nil {
 		m.proc, _ = process.NewProcess(int32(os.Getpid()))
