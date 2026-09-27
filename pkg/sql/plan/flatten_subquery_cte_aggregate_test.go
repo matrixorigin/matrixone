@@ -63,6 +63,18 @@ func TestCorrelatedLocalCTEAggregateReaggregates(t *testing.T) {
 }
 
 func TestCorrelatedLocalCTENonEqAggregateRejectsUnsafeShapes(t *testing.T) {
+	t.Run("aggregate behind join", func(t *testing.T) {
+		_, err := runOneStmt(NewMockOptimizer(true), t, `SELECT o.N_NATIONKEY,
+			(WITH x AS (SELECT MAX(i.N_NATIONKEY) AS m FROM NATION i WHERE i.N_NATIONKEY <= o.N_NATIONKEY),
+			 y AS (SELECT 1 AS k) SELECT m FROM x CROSS JOIN y) FROM NATION o`)
+		require.ErrorContains(t, err, "non-equality correlated aggregate behind a non-transparent projection")
+	})
+	t.Run("nested aggregate", func(t *testing.T) {
+		_, err := runOneStmt(NewMockOptimizer(true), t, `SELECT o.N_NATIONKEY,
+			(WITH a AS (SELECT MAX(i.N_NATIONKEY) AS m FROM NATION i WHERE i.N_NATIONKEY <= o.N_NATIONKEY),
+			 x AS (SELECT SUM(m) AS s FROM a) SELECT s FROM x) FROM NATION o`)
+		require.ErrorContains(t, err, "nested non-equality correlated aggregate")
+	})
 	for _, tc := range []struct{ name, sql string }{
 		{"synthetic row argument", `SELECT o.N_NATIONKEY,
 			(WITH x AS (SELECT SUM(1) AS m FROM NATION i WHERE i.N_NATIONKEY <= o.N_NATIONKEY)
@@ -132,4 +144,23 @@ func TestCorrelatedLocalCTEEqualityCountAllowsMultipleOuterBindings(t *testing.T
 		FROM NATION o CROSS JOIN NATION p`)
 	require.NoError(t, err)
 	assertReachablePlanHasNoCorrelatedExpr(t, logicPlan.GetQuery())
+}
+
+func TestCorrelatedLocalCTEEqualityComputedEmptyResultFailsClosed(t *testing.T) {
+	for _, sql := range []string{
+		`SELECT o.N_NATIONKEY, (WITH x AS (SELECT COUNT(*) AS c FROM NATION i
+			WHERE i.N_NATIONKEY = o.N_NATIONKEY) SELECT c + 1 FROM x) FROM NATION o`,
+		`SELECT o.N_NATIONKEY, (WITH x AS (SELECT SUM(i.N_NATIONKEY) AS s FROM NATION i
+			WHERE i.N_NATIONKEY = o.N_NATIONKEY) SELECT COALESCE(s, 7) FROM x) FROM NATION o`,
+	} {
+		_, err := runOneStmt(NewMockOptimizer(true), t, sql)
+		require.ErrorContains(t, err, "non-transparent correlated aggregate projection")
+	}
+}
+
+func TestCorrelatedLocalCTEProjectionOnlyCorrelationPreserved(t *testing.T) {
+	_, err := runOneStmt(NewMockOptimizer(true), t, `SELECT o.N_NATIONKEY,
+		(WITH x AS (SELECT MAX(i.N_NATIONKEY) AS m FROM NATION i)
+		 SELECT m + o.N_NATIONKEY FROM x) FROM NATION o`)
+	require.NoError(t, err)
 }

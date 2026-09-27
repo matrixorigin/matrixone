@@ -537,6 +537,10 @@ func (builder *QueryBuilder) flattenSubqueryWithConsumer(
 			}
 			return builder.flattenScalarSubqueryWithNonEqAgg(nodeID, subID, subCtx, preds, ctx, subquery, wrappedAgg)
 		}
+		if len(preds) > 0 && wrappedAggCandidate && wrappedAgg == nil {
+			return 0, nil, moerr.NewNYI(builder.GetContext(),
+				"non-transparent correlated aggregate projection cannot preserve empty-input result")
+		}
 	}
 
 	filterPreds, joinPreds := decreaseDepthAndDispatch(preds)
@@ -638,7 +642,7 @@ func (builder *QueryBuilder) flattenSubqueryWithConsumer(
 			if len(joinPreds) == 0 {
 				joinPreds = append(joinPreds, newSubqueryBoolConst(true))
 			}
-		} else if subCtx.hasSingleRow {
+		} else if subCtx.hasSingleRow && wrappedAgg == nil {
 			joinType = plan.Node_LEFT
 		}
 
@@ -2469,10 +2473,9 @@ func (builder *QueryBuilder) collectScalarOuterOutputs(nodeID, outerTag, baseCol
 }
 
 func (builder *QueryBuilder) traceScalarAggregateProjection(subID int32) (*scalarAggregateProjectionPath, bool) {
-	// A non-transparent unary wrapper can still hide an aggregate. Return the
-	// candidate bit so the non-equality path rejects it instead of producing
-	// one scalar row for every artificial correlation group.
-	candidate := builder.findAggNodeBelow(subID) != nil
+	// A non-transparent wrapper or JOIN branch can hide an aggregate. Return
+	// the candidate bit so unsafe rewrites fail closed.
+	candidate := builder.subtreeContainsAggregate(subID)
 	if !candidate {
 		return nil, false
 	}
@@ -2614,7 +2617,8 @@ func (builder *QueryBuilder) flattenScalarSubqueryWithNonEqAgg(
 	groupTag := aggNode.BindingTags[0]
 	innerID := aggNode.Children[0]
 	// The raw-row rewrite removes only this aggregate. A lower aggregate
-	// changes the input seen by the selected aggregate (for example SUM(MAX(x))).
+	// would still be grouped by the pulled-up correlation key and change
+	// the input seen by the selected aggregate (for example SUM(MAX(x))).
 	if builder.subtreeContainsAggregate(innerID) {
 		return 0, nil, moerr.NewNYI(builder.GetContext(),
 			"nested non-equality correlated aggregate cannot be safely decorrelated")
@@ -2661,7 +2665,13 @@ func (builder *QueryBuilder) flattenScalarSubqueryWithNonEqAgg(
 			"aggregation with non equal predicate in scalar subquery referencing multiple outer tables will be supported in future version")
 	}
 	outerBinding := ctx.bindings[0]
-	outerMarker := builder.findReachableRowIDColRef(nodeID)
+	// Row comparisons may still consume other subquery outputs in Child.
+	// Reaggregating an already composed outer plan cannot remap those refs.
+	if subquery.Child != nil && builder.findReachableRowIDColRef(nodeID) == nil {
+		return 0, nil, moerr.NewNYI(builder.GetContext(),
+			"non-equality correlated aggregate with outer composition cannot be safely decorrelated")
+	}
+	outerMarker := builder.findPreservedOuterRowIDColRef(nodeID)
 	if outerMarker == nil || outerMarker.GetCol() == nil ||
 		outerMarker.GetCol().RelPos != outerBinding.tag ||
 		outerMarker.GetCol().ColPos < 0 ||
@@ -2737,13 +2747,13 @@ func (builder *QueryBuilder) flattenScalarSubqueryWithNonEqAgg(
 	}
 	markerCol.Typ.NotNullable = false // nullable after the LEFT JOIN
 	markerTag := markerCol.GetCol().RelPos
-	innerColCount := 0
-	for _, binding := range subCtx.bindings {
-		if binding.tag == markerTag {
-			innerColCount = len(binding.cols)
-			break
-		}
+	// CTE bindings can differ from the underlying scan tag; validate aggregate
+	// arguments against the scan that supplies the reachable Row_ID.
+	innerScanID := innerID
+	for builder.qry.Nodes[innerScanID].NodeType != plan.Node_TABLE_SCAN {
+		innerScanID = builder.qry.Nodes[innerScanID].Children[0]
 	}
+	innerColCount := len(builder.qry.Nodes[innerScanID].TableDef.Cols)
 	if innerColCount == 0 {
 		return 0, nil, moerr.NewNYI(builder.GetContext(),
 			"non-equality correlated aggregate requires an accessible inner row marker")
@@ -2896,6 +2906,30 @@ func (builder *QueryBuilder) flattenScalarSubqueryWithNonEqAgg(
 	return nodeID, retExpr, nil
 }
 
+// subtreeContainsAggregate checks every reachable child, including JOIN
+// branches. An invalid node reference cannot prove the raw-row precondition.
+func (builder *QueryBuilder) subtreeContainsAggregate(root int32) bool {
+	seen := make(map[int32]struct{})
+	pending := []int32{root}
+	for len(pending) > 0 {
+		id := pending[len(pending)-1]
+		pending = pending[:len(pending)-1]
+		if id < 0 || int(id) >= len(builder.qry.Nodes) || builder.qry.Nodes[id] == nil {
+			return true
+		}
+		if _, ok := seen[id]; ok {
+			continue
+		}
+		seen[id] = struct{}{}
+		node := builder.qry.Nodes[id]
+		if node.NodeType == plan.Node_AGG {
+			return true
+		}
+		pending = append(pending, node.Children...)
+	}
+	return false
+}
+
 // findAggNodeBelow walks down from nodeID through single-child nodes to find
 // the first AGG node.
 func (builder *QueryBuilder) findAggNodeBelow(nodeID int32) *plan.Node {
@@ -2933,6 +2967,51 @@ func (builder *QueryBuilder) findReachableRowIDColRef(nodeID int32) *plan.Expr {
 			return nil
 		}
 	}
+}
+
+// findPreservedOuterRowIDColRef also accepts joins that emit at most one row
+// per left row and reaggregations built by this rewrite.
+func (builder *QueryBuilder) findPreservedOuterRowIDColRef(nodeID int32) *plan.Expr {
+	if marker := builder.findReachableRowIDColRef(nodeID); marker != nil {
+		return marker
+	}
+	if nodeID < 0 || int(nodeID) >= len(builder.qry.Nodes) {
+		return nil
+	}
+	node := builder.qry.Nodes[nodeID]
+	switch node.NodeType {
+	case plan.Node_JOIN:
+		if len(node.Children) == 2 && (node.JoinType == plan.Node_SINGLE ||
+			node.JoinType == plan.Node_SEMI || node.JoinType == plan.Node_ANTI ||
+			node.JoinType == plan.Node_MARK) {
+			return builder.findPreservedOuterRowIDColRef(node.Children[0])
+		}
+	case plan.Node_AGG:
+		if _, synthetic := builder.scalarReaggAliases[nodeID]; !synthetic || len(node.Children) != 1 {
+			return nil
+		}
+		join := builder.qry.Nodes[node.Children[0]]
+		if join.NodeType != plan.Node_JOIN || join.JoinType != plan.Node_LEFT || len(join.Children) != 2 {
+			return nil
+		}
+		marker := builder.findPreservedOuterRowIDColRef(join.Children[0])
+		if marker == nil || marker.GetCol() == nil {
+			return nil
+		}
+		pos := marker.GetCol().ColPos
+		if pos < 0 || int(pos) >= len(node.GroupBy) ||
+			node.GroupBy[pos].GetCol() == nil ||
+			node.GroupBy[pos].GetCol().RelPos != marker.GetCol().RelPos ||
+			node.GroupBy[pos].GetCol().ColPos != pos {
+			return nil
+		}
+		return marker
+	case plan.Node_FILTER, plan.Node_SORT:
+		if len(node.Children) == 1 {
+			return builder.findPreservedOuterRowIDColRef(node.Children[0])
+		}
+	}
+	return nil
 }
 
 // findRowIDColRef walks down from nodeID through single-child nodes to find

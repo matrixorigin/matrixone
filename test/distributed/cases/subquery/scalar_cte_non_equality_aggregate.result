@@ -78,4 +78,19 @@ where o.id in (1, 4) and p.id in (1, 4) order by o.id, p.id;
 1  ¦  4  ¦  1  𝄀
 4  ¦  1  ¦  0  𝄀
 4  ¦  4  ¦  0
+select o.id, (with a as (select max(i.n) as m from inner_rows i where i.n <= o.n),
+x as (select sum(m) as s from a) select s from x) as nested_value
+from outer_rows o order by o.id;
+-- @regex("nested non-equality correlated aggregate cannot be safely decorrelated", true)
+nested non-equality correlated aggregate cannot be safely decorrelated is not yet implemented
+select o.id, (with x as (select max(i.n) as m from inner_rows i where i.n <= o.n),
+y as (select 1 as k) select x.m from x cross join y) as joined_value
+from outer_rows o order by o.id;
+-- @regex("non-equality correlated aggregate behind a non-transparent projection", true)
+non-equality correlated aggregate behind a non-transparent projection is not yet implemented
+select o.id, (with x as (select count(*) as c from inner_rows i where i.n = o.n)
+select c + 1 from x) as computed_count
+from outer_rows o order by o.id;
+-- @regex("non-transparent correlated aggregate projection cannot preserve empty-input result", true)
+non-transparent correlated aggregate projection cannot preserve empty-input result is not yet implemented
 drop database test_scalar_cte_non_eq_agg;

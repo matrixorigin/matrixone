@@ -40,5 +40,20 @@ select o.id, p.id,
 from outer_rows o cross join outer_rows p
 where o.id in (1, 4) and p.id in (1, 4) order by o.id, p.id;
 
+-- A second aggregate cannot be replaced by the single raw-row reaggregation.
+select o.id, (with a as (select max(i.n) as m from inner_rows i where i.n <= o.n),
+              x as (select sum(m) as s from a) select s from x) as nested_value
+from outer_rows o order by o.id;
+
+-- An aggregate hidden behind a JOIN also cannot use the scalar rewrite.
+select o.id, (with x as (select max(i.n) as m from inner_rows i where i.n <= o.n),
+              y as (select 1 as k) select x.m from x cross join y) as joined_value
+from outer_rows o order by o.id;
+
+-- An empty equality-correlated COUNT is a row with zero; c+1 must not become NULL.
+select o.id, (with x as (select count(*) as c from inner_rows i where i.n = o.n)
+              select c + 1 from x) as computed_count
+from outer_rows o order by o.id;
+
 -- @teardown
 drop database test_scalar_cte_non_eq_agg;
