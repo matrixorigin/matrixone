@@ -119,6 +119,17 @@ from parent_agg p order by p.id;
 select (with x as (select count(*) as c from child_agg c where c.corr_key = p.corr_key) select c + 1 from x) as null_key_count
 from (select cast(null as signed) as corr_key) p;
 
+-- A missing equality group is not an upper aggregate's singleton input.
+-- Preserve COUNT(*)=0 after row removal, COUNT(value)=0 on a NULL singleton,
+-- and the final NULLIF projection's NULL result.
+select p.id,
+  (with a as (select max(c.v) as m from child_agg c where c.corr_key = p.corr_key group by c.corr_key) select count(*) from a) as grouped_rows,
+  (with a as (select max(c.v) as m from child_agg c where c.corr_key = p.corr_key having max(c.v) > 0) select count(*) from a) as accepted_rows,
+  (with a as (select max(c.v) as m from child_agg c where c.corr_key = p.corr_key limit 0) select count(*) from a) as limited_rows,
+  (with a as (select max(c.v) as m from child_agg c where c.corr_key = p.corr_key having max(c.v) is null) select count(m) from a) as null_values,
+  (with a as (select max(c.v) as m from child_agg c where c.corr_key = p.corr_key group by c.corr_key) select nullif(count(*), 0) from a) as nullif_rows
+from parent_agg p order by p.id;
+
 -- Keep scalar CTE forms that were already correct on main: explicit grouping,
 -- empty-row-rejecting HAVING/filter, and a final zero-row limit.
 select p.id,

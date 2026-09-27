@@ -49,20 +49,36 @@ func TestCorrelatedLocalCTEImplicitAggregateSpine(t *testing.T) {
 	}
 }
 
-func TestCorrelatedLocalCTEImplicitAggregateSpineRejectsRowRemoval(t *testing.T) {
+func TestCorrelatedLocalCTEImplicitAggregateSpineRowRemoval(t *testing.T) {
 	for _, tc := range []struct {
 		name string
 		sql  string
 	}{
-		{"having", `SELECT o.N_NATIONKEY, (WITH a AS (SELECT MAX(i.N_NATIONKEY) AS m FROM NATION i WHERE i.N_NATIONKEY = o.N_NATIONKEY HAVING MAX(i.N_NATIONKEY) > 0), x AS (SELECT COUNT(*) AS c FROM a) SELECT c FROM x) FROM NATION o`},
-		{"grouped", `SELECT o.N_NATIONKEY, (WITH a AS (SELECT MAX(i.N_NATIONKEY) AS m FROM NATION i WHERE i.N_NATIONKEY = o.N_NATIONKEY GROUP BY i.N_REGIONKEY), x AS (SELECT COUNT(*) AS c FROM a) SELECT c FROM x) FROM NATION o`},
+		{"grouped count", `SELECT o.N_NATIONKEY, (WITH a AS (SELECT MAX(i.N_NATIONKEY) AS m FROM NATION i WHERE i.N_NATIONKEY = o.N_NATIONKEY GROUP BY i.N_REGIONKEY) SELECT COUNT(*) FROM a) FROM NATION o`},
+		{"rejecting having count", `SELECT o.N_NATIONKEY, (WITH a AS (SELECT MAX(i.N_NATIONKEY) AS m FROM NATION i WHERE i.N_NATIONKEY = o.N_NATIONKEY HAVING MAX(i.N_NATIONKEY) > 0) SELECT COUNT(*) FROM a) FROM NATION o`},
+		{"zero limit count", `SELECT o.N_NATIONKEY, (WITH a AS (SELECT MAX(i.N_NATIONKEY) AS m FROM NATION i WHERE i.N_NATIONKEY = o.N_NATIONKEY LIMIT 0) SELECT COUNT(*) FROM a) FROM NATION o`},
+		{"retained null count value", `SELECT o.N_NATIONKEY, (WITH a AS (SELECT MAX(i.N_NATIONKEY) AS m FROM NATION i WHERE i.N_NATIONKEY = o.N_NATIONKEY HAVING MAX(i.N_NATIONKEY) IS NULL) SELECT COUNT(m) FROM a) FROM NATION o`},
+		{"grouped nullif count", `SELECT o.N_NATIONKEY, (WITH a AS (SELECT MAX(i.N_NATIONKEY) AS m FROM NATION i WHERE i.N_NATIONKEY = o.N_NATIONKEY GROUP BY i.N_NATIONKEY) SELECT NULLIF(COUNT(*), 0) FROM a) FROM NATION o`},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			p, err := runOneStmt(NewMockOptimizer(true), t, tc.sql)
+			require.NoError(t, err)
+			assertReachablePlanHasNoCorrelatedExpr(t, p.GetQuery())
+		})
+	}
+	for _, tc := range []struct {
+		name string
+		sql  string
+	}{
 		{"non equality", `SELECT o.N_NATIONKEY, (WITH a AS (SELECT MAX(i.N_NATIONKEY) AS m FROM NATION i WHERE i.N_NATIONKEY <= o.N_NATIONKEY), x AS (SELECT COUNT(*) AS c FROM a) SELECT c FROM x) FROM NATION o`},
 		{"or equalities", `SELECT o.N_NATIONKEY, (WITH a AS (SELECT MAX(i.N_NATIONKEY) AS m FROM NATION i WHERE i.N_NATIONKEY = o.N_NATIONKEY OR i.N_NATIONKEY = o.N_NATIONKEY + 1), x AS (SELECT COUNT(*) AS c FROM a) SELECT c FROM x) FROM NATION o`},
 		{"like", `SELECT o.N_NATIONKEY, (WITH a AS (SELECT MAX(i.N_NATIONKEY) AS m FROM NATION i WHERE i.N_NAME LIKE o.N_NAME), x AS (SELECT COUNT(*) AS c FROM a) SELECT c FROM x) FROM NATION o`},
 		{"empty retaining having", `SELECT o.N_NATIONKEY, (WITH x AS (SELECT COUNT(*) AS c FROM NATION i WHERE i.N_NATIONKEY = o.N_NATIONKEY HAVING COUNT(*) >= 0) SELECT c FROM x) FROM NATION o`},
 		{"retaining null then count", `SELECT o.N_NATIONKEY, (WITH x AS (SELECT MAX(i.N_NATIONKEY) AS m FROM NATION i WHERE i.N_NATIONKEY = o.N_NATIONKEY HAVING MAX(i.N_NATIONKEY) IS NULL) SELECT COUNT(*) FROM x) FROM NATION o`},
+		{"unknown filter then count value", `PREPARE unsafe_count FROM 'SELECT o.N_NATIONKEY, (WITH a AS (SELECT MAX(i.N_NATIONKEY) AS m FROM NATION i WHERE i.N_NATIONKEY = o.N_NATIONKEY), b AS (SELECT m FROM a WHERE CAST(? AS SIGNED) > 0) SELECT COUNT(m) FROM b) FROM NATION o'`},
+		{"count then unknown filter", `PREPARE unsafe_count_filter FROM 'SELECT o.N_NATIONKEY, (WITH a AS (SELECT MAX(i.N_NATIONKEY) AS m FROM NATION i WHERE i.N_NATIONKEY = o.N_NATIONKEY GROUP BY i.N_NATIONKEY), b AS (SELECT NULLIF(COUNT(*), 0) AS c FROM a) SELECT c FROM b WHERE CAST(? AS SIGNED) > 0) FROM NATION o'`},
+		{"computed null then unknown filter", `PREPARE unsafe_computed_filter FROM 'SELECT o.N_NATIONKEY, (WITH a AS (SELECT MAX(i.N_NATIONKEY) AS m FROM NATION i WHERE i.N_NATIONKEY = o.N_NATIONKEY) SELECT NULLIF(m, 1) FROM a WHERE CAST(? AS SIGNED) > 0) FROM NATION o'`},
 		{"volatile filter", `SELECT o.N_NATIONKEY, (WITH x AS (SELECT MAX(i.N_NATIONKEY) AS m FROM NATION i WHERE i.N_NATIONKEY = o.N_NATIONKEY) SELECT m FROM x WHERE RAND() > 0.5) FROM NATION o`},
-		{"grouped count nullif limit", `SELECT o.N_NATIONKEY, (WITH x AS (SELECT MAX(i.N_NATIONKEY) AS m FROM NATION i WHERE i.N_NATIONKEY = o.N_NATIONKEY GROUP BY i.N_NATIONKEY) SELECT NULLIF(COUNT(*), 0) FROM x LIMIT 1) FROM NATION o`},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			_, err := runOneStmt(NewMockOptimizer(true), t, tc.sql)
@@ -109,6 +125,7 @@ func TestCorrelatedLocalCTEPreservesExistingScalarBoundaries(t *testing.T) {
 		{"nested avg null", `SELECT o.N_NATIONKEY, (WITH x AS (SELECT MAX(i.N_NATIONKEY) AS m FROM NATION i WHERE i.N_NATIONKEY = o.N_NATIONKEY) SELECT AVG(m) FROM x) FROM NATION o`},
 		{"nested widened sum null", `SELECT o.N_NATIONKEY, (WITH a AS (SELECT MAX(i.N_NATIONKEY) AS m FROM NATION i WHERE i.N_NATIONKEY = o.N_NATIONKEY), x AS (SELECT SUM(m) AS s FROM a) SELECT s FROM x) FROM NATION o`},
 		{"grouped lower max", `SELECT o.N_NATIONKEY, (WITH x AS (SELECT MAX(i.N_NATIONKEY) AS m FROM NATION i WHERE i.N_NATIONKEY = o.N_NATIONKEY GROUP BY i.N_NATIONKEY) SELECT MAX(m) FROM x) FROM NATION o`},
+		{"independent count with correlated filter", `SELECT o.N_NATIONKEY, (WITH x AS (SELECT COUNT(*) AS c FROM NATION i) SELECT c FROM x WHERE c = o.N_NATIONKEY) FROM NATION o`},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			p, err := runOneStmt(NewMockOptimizer(true), t, tc.sql)
@@ -141,5 +158,5 @@ func TestCorrelatedLocalCTEPreservationProofDepth(t *testing.T) {
 	nodes[32] = &plan.Node{NodeId: 32, NodeType: plan.Node_AGG, Children: []int32{33}}
 	nodes[33] = &plan.Node{NodeId: 33, NodeType: plan.Node_TABLE_SCAN}
 	builder := &QueryBuilder{qry: &plan.Query{Nodes: nodes}}
-	require.False(t, builder.aggregateSpineLegacySafe(0, &BindContext{results: []*plan.Expr{{}}}))
+	require.Nil(t, builder.aggregateSpineOriginalEmpty(0, &BindContext{results: []*plan.Expr{{}}}))
 }

@@ -247,6 +247,18 @@ from (select cast(null as signed) as corr_key) p;
 ➤ null_key_count[-5,64,0]  𝄀
 1
 select p.id,
+(with a as (select max(c.v) as m from child_agg c where c.corr_key = p.corr_key group by c.corr_key) select count(*) from a) as grouped_rows,
+(with a as (select max(c.v) as m from child_agg c where c.corr_key = p.corr_key having max(c.v) > 0) select count(*) from a) as accepted_rows,
+(with a as (select max(c.v) as m from child_agg c where c.corr_key = p.corr_key limit 0) select count(*) from a) as limited_rows,
+(with a as (select max(c.v) as m from child_agg c where c.corr_key = p.corr_key having max(c.v) is null) select count(m) from a) as null_values,
+(with a as (select max(c.v) as m from child_agg c where c.corr_key = p.corr_key group by c.corr_key) select nullif(count(*), 0) from a) as nullif_rows
+from parent_agg p order by p.id;
+➤ id[4,32,0]  ¦  grouped_rows[-5,64,0]  ¦  accepted_rows[-5,64,0]  ¦  limited_rows[-5,64,0]  ¦  null_values[-5,64,0]  ¦  nullif_rows[-5,64,0]  𝄀
+1  ¦  1  ¦  1  ¦  0  ¦  0  ¦  1  𝄀
+2  ¦  1  ¦  0  ¦  0  ¦  0  ¦  1  𝄀
+3  ¦  0  ¦  0  ¦  0  ¦  0  ¦  null  𝄀
+4  ¦  0  ¦  0  ¦  0  ¦  0  ¦  null
+select p.id,
 (with x as (select count(*) as c from child_agg c where c.corr_key = p.corr_key group by c.corr_key) select c from x) as grouped_count,
 (with x as (select max(c.v) as m from child_agg c where c.corr_key = p.corr_key having max(c.v) > 0) select m from x) as having_max,
 (with x as (select count(*) as c from child_agg c where c.corr_key = p.corr_key having count(*) > 0) select c from x) as having_count,
