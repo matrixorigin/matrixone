@@ -642,6 +642,8 @@ func (txn *Transaction) GetSyncProtectionJobID() string {
 type Summary struct {
 	objBat             *batch.Batch
 	accountId          uint32
+	databaseId         uint64
+	tableId            uint64
 	tbName             string
 	dbName             string
 	autoIncrEpoch      uint32

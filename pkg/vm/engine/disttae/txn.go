@@ -1477,6 +1477,14 @@ func (txn *Transaction) getTable(
 	return tbl, nil
 }
 
+func physicalCatalogTableName(databaseId, tableId uint64, tableName string) string {
+	if databaseId == catalog.MO_CATALOG_ID && tableId == catalog.MO_COLUMNS_ID &&
+		tableName == catalog.MO_COLUMNS_UPDATE {
+		return catalog.MO_COLUMNS
+	}
+	return tableName
+}
+
 func (txn *Transaction) resolvePKCheckPosForWrite(
 	ctx context.Context,
 	typ int,
@@ -1546,6 +1554,7 @@ func (txn *Transaction) resolvePKCheckPosForWrite(
 func (txn *Transaction) registerCNObjects(
 	objId types.Objectid,
 	accountId uint32,
+	databaseId, tableId uint64,
 	objBat *batch.Batch,
 	dbName string,
 	tbName string,
@@ -1555,6 +1564,8 @@ func (txn *Transaction) registerCNObjects(
 	txn.cnObjsSummary[objId] = Summary{
 		objBat:             objBat,
 		accountId:          accountId,
+		databaseId:         databaseId,
+		tableId:            tableId,
 		dbName:             dbName,
 		tbName:             tbName,
 		autoIncrEpoch:      autoIncrEpoch,
@@ -1629,7 +1640,7 @@ func (txn *Transaction) writeFileLockedWithAutoIncrEpochKnown(
 			sid := oid.Segment()
 
 			server.PutCnSegment(txn.op.Txn().ID, tableId, sid, colexec.TxnWorkspaceUnCommitType)
-			txn.registerCNObjects(*oid, accountId, copied, databaseName, tableName, autoIncrEpoch, autoIncrEpochKnown)
+			txn.registerCNObjects(*oid, accountId, databaseId, tableId, copied, databaseName, tableName, autoIncrEpoch, autoIncrEpochKnown)
 		}
 	}
 
@@ -1743,7 +1754,7 @@ func (txn *Transaction) writeFileLockedSkipTransferWithAutoIncrEpochKnown(
 			sid := oid.Segment()
 
 			server.PutCnSegment(txn.op.Txn().ID, tableId, sid, colexec.TxnWorkspaceUnCommitType)
-			txn.registerCNObjects(*oid, accountId, copied, databaseName, tableName, autoIncrEpoch, autoIncrEpochKnown)
+			txn.registerCNObjects(*oid, accountId, databaseId, tableId, copied, databaseName, tableName, autoIncrEpoch, autoIncrEpochKnown)
 		}
 	}
 
@@ -2234,9 +2245,13 @@ func (txn *Transaction) mergeTxnWorkspaceLocked(ctx context.Context) error {
 // the lock is released, the scan-resolve cycle repeats until every table
 // referenced by txn.deletedBlocks is resolved.
 func (txn *Transaction) resolveCompactTablesLocked(ctx context.Context) (map[tableKey]engine.Relation, error) {
+	type lookup struct {
+		key          tableKey
+		relationName string
+	}
 	tables := make(map[tableKey]engine.Relation)
 	for {
-		var missing []tableKey
+		var missing []lookup
 		seen := make(map[tableKey]bool)
 		txn.deletedBlocks.iter(
 			func(blkId *types.Blockid, offsets []int64) bool {
@@ -2248,7 +2263,7 @@ func (txn *Transaction) resolveCompactTablesLocked(ctx context.Context) (map[tab
 				}
 				if _, ok := tables[k]; !ok && !seen[k] {
 					seen[k] = true
-					missing = append(missing, k)
+					missing = append(missing, lookup{k, physicalCatalogTableName(summary.databaseId, summary.tableId, summary.tbName)})
 				}
 				return true
 			})
@@ -2257,8 +2272,9 @@ func (txn *Transaction) resolveCompactTablesLocked(ctx context.Context) (map[tab
 		}
 
 		txn.Unlock()
-		for _, k := range missing {
-			tbl, err := txn.getTable(ctx, k.accountId, k.dbName, k.name)
+		for _, entry := range missing {
+			k := entry.key
+			tbl, err := txn.getTable(ctx, k.accountId, k.dbName, entry.relationName)
 			if err != nil {
 				txn.Lock()
 				return nil, err
@@ -2375,13 +2391,18 @@ func (txn *Transaction) compactDeletionOnObjsLocked(ctx context.Context) error {
 
 		locker.Lock()
 		defer locker.Unlock()
+		writeName := tbl.tableName
+		if tbl.db.databaseId == catalog.MO_CATALOG_ID && tbl.tableId == catalog.MO_COLUMNS_ID &&
+			tbKey.name == catalog.MO_COLUMNS_UPDATE {
+			writeName = tbKey.name
+		}
 		if err = txn.writeFileLockedWithAutoIncrEpochKnown(
 			INSERT,
 			tbl.accountId,
 			tbl.db.databaseId,
 			tbl.tableId,
 			tbl.db.databaseName,
-			tbl.tableName,
+			writeName,
 			fileName,
 			bat,
 			txn.tnStores[0],
@@ -2597,11 +2618,7 @@ func (txn *Transaction) forEachTableHasDeletesLocked(
 			return err
 		}
 		// mo_columns_update is a TN write marker, not a catalog relation.
-		relationName := e.tableName
-		if e.databaseId == catalog.MO_CATALOG_ID && e.tableId == catalog.MO_COLUMNS_ID &&
-			relationName == catalog.MO_COLUMNS_UPDATE {
-			relationName = catalog.MO_COLUMNS
-		}
+		relationName := physicalCatalogTableName(e.databaseId, e.tableId, e.tableName)
 		rel, err := db.Relation(ctx, relationName, nil)
 		if err != nil {
 			txn.Lock()
