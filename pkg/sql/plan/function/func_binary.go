@@ -8501,6 +8501,15 @@ func extractNumericFromVarchar(unit string, value string, scale int32) (int64, e
 	if value == "" {
 		return 0, moerr.NewInvalidInputNoCtx("empty temporal value")
 	}
+	// A complete colon clock is a duration even when relaxed DATE parsing
+	// accepts its fields as a short-year calendar.
+	if types.IsWholeColonClock(value) {
+		t, err := types.ParseTime(value, scale)
+		if err != nil {
+			return 0, err
+		}
+		return extractNumericFromTime(unit, t)
+	}
 	parts, calendarFields := parseDateExtractParts(value)
 	if calendarFields && parts.year == 0 && parts.month == 0 && parts.day == 0 {
 		if unit == "week" {

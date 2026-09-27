@@ -82,16 +82,17 @@ public final class TemporalUpgradeProbe {
                 }
             }
         }
-        try (PreparedStatement p = prepare(c, "select extract(year from '0000-00-00'),extract(year from ?),extract(hour from ?)");
+        try (PreparedStatement p = prepare(c, "select extract(year from '0000-00-00'),extract(year from ?),extract(hour from ?),date('0000-00-00'),date(?)");
              PreparedStatement interval = prepare(c, "select date_add(cast(? as datetime), interval ? hour_second)")) {
             for (String mode : new String[]{"", "NO_ZERO_DATE", ""}) {
                 s.execute("set sql_mode='" + mode + "'");
-                p.setString(1,"0000-00-00"); p.setString(2,"0000-00-00 12:34:56");
+                p.setString(1,"0000-00-00"); p.setString(2,"0000-00-00 12:34:56"); p.setString(3,"0000-00-00");
                 try (ResultSet r = p.executeQuery()) {
                     check(r.next(), "mode row");
-                    String want = mode.isEmpty() ? "0" : null;
-                    check(Objects.equals(want, r.getString(1)) && Objects.equals(want, r.getString(2)), "execute-time EXTRACT mode");
+                    check("0".equals(r.getString(1)) && "0".equals(r.getString(2)), "raw EXTRACT ignores mode");
                     check(r.getLong(3) == 12, "zero calendar preserves clock");
+                    String wantDate = mode.isEmpty() ? "0000-00-00" : null;
+                    check(Objects.equals(wantDate, r.getString(4)) && Objects.equals(wantDate, r.getString(5)), "execute-time DATE mode");
                 }
             }
             for (boolean bytes : new boolean[]{false, true}) {

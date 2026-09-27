@@ -941,6 +941,31 @@ func TestTemporalCompatibilityZeroCalendarClockMatrix(t *testing.T) {
 		require.NoError(t, err, tc.unit)
 		require.Equal(t, tc.want, got, tc.unit)
 	}
+	// A complete colon clock is a duration even when relaxed DATE parsing
+	// accepts the same bytes as a short-year calendar.
+	for _, tc := range []struct {
+		input string
+		unit  string
+		want  int64
+	}{
+		{"10:11:12", "day_hour", 10},
+		{"10:11:12", "day_minute", 1011},
+		{"10:11:12", "day_second", 101112},
+		{"10:11:12", "day_microsecond", 101112000000},
+		{"2010:11:12", "day_second", 20101112},
+		{"-10:11:12", "day_second", -101112},
+		{"2010-11-12", "day_second", 12000000},
+		{"1230101", "year", 123},
+		{"1230101", "day_second", 1000000},
+	} {
+		got, err := extractNumericFromVarchar(tc.unit, tc.input, 6)
+		require.NoError(t, err, tc.input)
+		require.Equal(t, tc.want, got, tc.input)
+	}
+	for _, unit := range []string{"year", "month", "day", "week", "year_month"} {
+		_, err := extractNumericFromVarchar(unit, "10:11:12", 6)
+		require.Error(t, err, unit)
+	}
 }
 
 // One matrix owns the exact-result contract, independent of SQL spelling.

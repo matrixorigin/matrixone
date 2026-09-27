@@ -11901,15 +11901,15 @@ func TestExtractFromVarcharTimeIsNotColonDate(t *testing.T) {
 	}
 }
 
-func TestExtractFromVarcharColonDateForDateUnit(t *testing.T) {
+func TestExtractFromVarcharColonClockHasNoYear(t *testing.T) {
 	proc := testutil.NewProcess(t)
 	testCase := NewFunctionTestCase(
 		proc,
 		[]FunctionTestInput{
 			NewFunctionTestConstInput(types.T_varchar.ToType(), []string{"year"}, nil),
-			NewFunctionTestInput(types.T_varchar.ToType(), []string{"10:11:12"}, nil),
+			NewFunctionTestInput(types.T_varchar.ToType(), []string{"10:11:12", "2010-11-12"}, nil),
 		},
-		NewFunctionTestResult(types.T_int64.ToType(), false, []int64{2010}, nil),
+		NewFunctionTestResult(types.T_int64.ToType(), false, []int64{0, 2010}, []bool{true, false}),
 		ExtractFromVarchar,
 	)
 

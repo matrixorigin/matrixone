@@ -123,6 +123,7 @@ insert into temporal_extract_zero values
   ('0000-00-00 12:34:56.123456'),
   ('0000-00-00 00:00:00.000000'),
   ('2024-02-29 12:34:56.123456'),
+  ('10:11:12'),
   (null);
 select hour(v) = extract(hour from v) as same_hour,
        extract(second_microsecond from v) = 56123456 as second_us,
@@ -137,6 +138,23 @@ select hour('0000-00-00 12.34.56.123456') = extract(hour from '0000-00-00 12.34.
        extract(second_microsecond from '0000-00-00 12.34.56.123456') = 56123456 as relaxed_second_us,
        extract(second_microsecond from '0000-00-00 12:34.56') = 56000000 as mixed_second_us,
        extract(second_microsecond from '0000-00-00 12.34') = 0 as absent_second;
+select extract(day_second from '10:11:12') = extract(day_second from time '10:11:12') as literal_clock,
+       extract(year from '10:11:12') is null as clock_has_no_year,
+       extract(week from '10:11:12') is null as clock_has_no_week,
+       extract(day_second from '2010:11:12') = 20101112 as wide_clock,
+       extract(day_second from '2010-11-12') = 12000000 as calendar_control,
+       extract(year from '1230101') = 123 as compact_calendar_control;
+select extract(day_second from v) = 101112 as column_clock
+from temporal_extract_zero where v = '10:11:12';
+prepare extract_clock_28851 from 'select extract(day_second from ?) as marker_clock';
+set @temporal_extract_clock_28851 = '10:11:12';
+execute extract_clock_28851 using @temporal_extract_clock_28851;
+set @temporal_extract_clock_28851 = '2010-11-12';
+execute extract_clock_28851 using @temporal_extract_clock_28851;
+set @temporal_extract_clock_28851 = '10:11:12';
+execute extract_clock_28851 using @temporal_extract_clock_28851;
+deallocate prepare extract_clock_28851;
+set @temporal_extract_clock_28851 = null;
 drop table temporal_extract_zero;
 set sql_mode = 'STRICT_TRANS_TABLES';
 

@@ -108,7 +108,7 @@ func IsCalendarStringCandidate(s string) bool {
 	// A complete colon clock is a duration even when its fields also look
 	// like a separated date. Decide the family before validating the fields:
 	// an invalid minute must not be reinterpreted as a calendar month.
-	if isWholeColonClock(s) {
+	if IsWholeColonClock(s) {
 		return false
 	}
 	// Short separated years are accepted by ParseDateCast. The ordinary
@@ -153,9 +153,9 @@ func IsCalendarStringCandidate(s string) bool {
 	return true
 }
 
-// isWholeColonClock recognizes only a complete H:MM[:SS][.fraction] shape.
+// IsWholeColonClock recognizes only a complete H:MM[:SS][.fraction] shape.
 // ParseTime remains responsible for the actual field and range checks.
-func isWholeColonClock(s string) bool {
+func IsWholeColonClock(s string) bool {
 	i := 0
 	for i < len(s) && s[i] >= '0' && s[i] <= '9' {
 		i++
