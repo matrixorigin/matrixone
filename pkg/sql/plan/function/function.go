@@ -409,6 +409,22 @@ func GetAggFunctionNameByID(overloadID int64) string {
 func DeduceNotNullable(overloadID int64, args []*plan.Expr) bool {
 	fid, oid := DecodeOverloadID(overloadID)
 	switch fid {
+	case EXTRACT:
+		// Numeric EXTRACT synthesizes NULL for invalid text/fields and zero
+		// calendar weeks. Released overloads 0..4 retain their physical ABI.
+		if oid >= 5 && oid <= 9 {
+			return false
+		}
+	case YEAR, MONTH, QUARTER, DAY, DAYOFMONTH, HOUR, MINUTE, SECOND, MICROSECOND:
+		// Tolerant string extractors may reject a non-NULL value. Typed field
+		// extraction remains non-NULL, including its zero-calendar fields.
+		if len(args) == 1 && types.T(args[0].Typ.Id).IsMySQLString() {
+			return false
+		}
+	case WEEK, WEEKOFYEAR, WEEKDAY, YEARWEEK, DAYOFWEEK, DAYOFYEAR, DAYNAME, MONTHNAME, FROM_DAYS:
+		// Calendar calculations reject zero dates; FROM_DAYS rejects values
+		// above the representable calendar even when the input is NOT NULL.
+		return false
 	case DATE:
 		// Typed zero DATE/DATETIME values become NULL under NO_ZERO_DATE.
 		if oid == 0 || oid == 2 {

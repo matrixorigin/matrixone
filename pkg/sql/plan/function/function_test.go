@@ -1456,6 +1456,32 @@ func TestTemporalArithmeticOverflowNullability(t *testing.T) {
 	}
 }
 
+func TestTemporalExtractionNullability(t *testing.T) {
+	// Enumerate registered overloads so text aliases and optional WEEK modes
+	// cannot silently inherit a stronger guarantee than their executor.
+	for _, fid := range []int32{EXTRACT, YEAR, MONTH, QUARTER, DAY, DAYOFMONTH,
+		HOUR, MINUTE, SECOND, MICROSECOND, WEEK, WEEKOFYEAR, WEEKDAY, YEARWEEK,
+		DAYOFWEEK, DAYOFYEAR, DAYNAME, MONTHNAME, FROM_DAYS} {
+		for _, op := range allSupportedFunctions[fid].Overloads {
+			args := make([]*plan.Expr, len(op.args))
+			for i, typ := range op.args {
+				args[i] = &plan.Expr{Typ: plan.Type{Id: int32(typ), NotNullable: true}}
+			}
+			want := false
+			switch fid {
+			case EXTRACT:
+				want = op.overloadId < 5 // persisted legacy executors
+			case YEAR, MONTH, QUARTER, DAY, DAYOFMONTH, HOUR, MINUTE, SECOND, MICROSECOND:
+				want = !op.args[0].IsMySQLString()
+			}
+			id := EncodeOverloadID(fid, int32(op.overloadId))
+			require.Equal(t, want, DeduceNotNullable(id, args), "function %d overload %d", fid, op.overloadId)
+			args[0].Typ.NotNullable = false
+			require.False(t, DeduceNotNullable(id, args), "nullable input: function %d overload %d", fid, op.overloadId)
+		}
+	}
+}
+
 func TestOctNullability(t *testing.T) {
 	for _, typ := range []types.T{types.T_char, types.T_varchar, types.T_text,
 		types.T_binary, types.T_varbinary, types.T_blob, types.T_int64, types.T_float64, types.T_time, types.T_bit} {

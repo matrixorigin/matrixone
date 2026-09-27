@@ -2651,6 +2651,9 @@ func TestTypedDateConversionCTASAllowsSynthesizedNull(t *testing.T) {
 			{"l_shipdate", false},
 			{"date(l_shipdate)", true},
 			{"cast(l_shipdate as date)", true},
+			{"extract(week from l_shipdate)", true},
+			{"week(l_shipdate)", true},
+			{"year(l_shipdate)", false},
 		} {
 			t.Run(sourceType.String()+"/"+expression.sql, func(t *testing.T) {
 				opt := NewMockOptimizer(false)
@@ -2666,6 +2669,27 @@ func TestTypedDateConversionCTASAllowsSynthesizedNull(t *testing.T) {
 				require.Equal(t, expression.wantNull, col.GetDefault().GetNullAbility())
 			})
 		}
+	}
+}
+
+func TestTemporalTextExtractionCTASAllowsSynthesizedNull(t *testing.T) {
+	for _, expression := range []string{"extract(year from n_name)", "year(n_name)", "month(n_name)", "quarter(n_name)", "from_days(n_nationkey)"} {
+		t.Run(expression, func(t *testing.T) {
+			ctx := NewMockCompilerContext(false)
+			for _, source := range ctx.tables["nation"].Cols {
+				source.Typ.NotNullable = true
+				source.Default = &plan.Default{NullAbility: false}
+			}
+			stmt, err := parsers.ParseOne(t.Context(), dialect.MYSQL,
+				"create table temporal_copy as select "+expression+" as v from nation", 1)
+			require.NoError(t, err)
+			defer stmt.Free()
+			p, err := BuildPlan(ctx, stmt, false)
+			require.NoError(t, err)
+			col := p.GetDdl().GetCreateTable().GetTableDef().GetCols()[0]
+			require.False(t, col.Typ.NotNullable)
+			require.True(t, col.GetDefault().GetNullAbility())
+		})
 	}
 }
 
