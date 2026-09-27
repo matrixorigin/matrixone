@@ -432,7 +432,7 @@ func (d *localCTEDomain) inject(id int32) (int32, []*plan.Expr) {
 	b := d.builder
 	domain, values := d.cloneDomain()
 	id = b.appendNode(&plan.Node{NodeType: plan.Node_JOIN, JoinType: plan.Node_INNER,
-		Children: []int32{id, domain}, OnList: []*plan.Expr{DeepCopyExpr(constTrue)}, SpillMem: b.joinSpillMem}, b.ctxByNode[id])
+		Children: []int32{id, domain}, OnList: []*plan.Expr{makePlan2BoolConstExprWithType(true)}, SpillMem: b.joinSpillMem}, b.ctxByNode[id])
 	return id, values
 }
 
