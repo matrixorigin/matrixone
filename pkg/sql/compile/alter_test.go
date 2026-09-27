@@ -2567,6 +2567,7 @@ func TestScopeAlterTableCopyPrecheckPrimaryKeyThenSkipDedup(t *testing.T) {
 	require.True(t, spyExec.insertOption.AlterCopyDedupOpt().SkipPkDedup)
 	require.Equal(t, alterTable.Options.TargetTableName, spyExec.insertOption.AlterCopyDedupOpt().TargetTableName)
 	assert.Equal(t, []string{
+		databranchutils.LineageOwnerLifecyclePessimisticLockSQL(),
 		databranchutils.LineageOwnerLifecycleLockSQL(),
 		alterDataBranchParticipationSQL(1),
 		alterDataBranchHistoricalSnapshotSourceSQL("", "test", "dept", 1),
