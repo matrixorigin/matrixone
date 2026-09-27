@@ -270,7 +270,8 @@ func (s *Scope) DropDatabase(c *Compile) error {
 		}
 	}
 	ignoreTables := make(map[string]struct{})
-	existingRelations := make([]string, 0, len(relations))
+	resolvedRelations := make(map[string]engine.Relation, len(relations))
+	dropTables := make([]*plan.DropTable, 0, len(relations))
 	for _, r := range relations {
 		t, err := database.Relation(c.proc.Ctx, r, nil)
 		if err != nil {
@@ -279,8 +280,7 @@ func (s *Scope) DropDatabase(c *Compile) error {
 			}
 			return err
 		}
-		existingRelations = append(existingRelations, r)
-
+		resolvedRelations[r] = t
 		if features.IsPartition(t.GetExtraInfo().FeatureFlag) ||
 			features.IsIndexTable(t.GetExtraInfo().FeatureFlag) {
 			ignoreTables[r] = struct{}{}
@@ -300,12 +300,36 @@ func (s *Scope) DropDatabase(c *Compile) error {
 				}
 			}
 		}
-	}
 
-	deleteTables := existingRelations[:0]
-	for _, r := range existingRelations {
-		if _, hidden := ignoreTables[r]; !hidden {
-			deleteTables = append(deleteTables, r)
+		tableDef := t.GetTableDef(c.proc.Ctx)
+		dropTable := &plan.DropTable{
+			IfExists: true,
+			Database: dbName,
+			Table:    r,
+			TableId:  t.GetTableID(c.proc.Ctx),
+			TableDef: tableDef,
+		}
+		if tableDef != nil {
+			// Match the DROP TABLE planner's session-resolved IsTemporary bit.
+			// A physical temporary descriptor has a system-temporary relkind but
+			// keeps this bit clear, so it still gets allocator and storage cleanup.
+			if !tableDef.GetIsTemporary() {
+				dropTable.UpdateFkSqls = []string{dropDatabaseTableFkCleanupSQL(dbName, r)}
+			}
+			for _, indexDef := range tableDef.Indexes {
+				if indexDef.TableExist {
+					dropTable.IndexTableNames = append(dropTable.IndexTableNames, indexDef.IndexTableName)
+				}
+			}
+		}
+		dropTables = append(dropTables, dropTable)
+	}
+	filteredDropTables := dropTables[:0]
+	dropDatabaseTableCount := 0
+	for _, dropTable := range dropTables {
+		if _, hidden := ignoreTables[dropTable.Table]; !hidden {
+			dropDatabaseTableCount++
+			filteredDropTables = append(filteredDropTables, dropTable)
 		}
 	}
 
@@ -315,7 +339,7 @@ func (s *Scope) DropDatabase(c *Compile) error {
 		}
 	}
 
-	if err = c.dropDatabaseTables(dbName, deleteTables); err != nil {
+	if err = c.dropDatabaseRelations(database, filteredDropTables, resolvedRelations, true); err != nil {
 		return err
 	}
 
@@ -385,7 +409,7 @@ func (s *Scope) DropDatabase(c *Compile) error {
 		session.RemoveTempTablesByDatabase(dbName)
 	}
 
-	c.setAffectedRows(uint64(len(deleteTables)))
+	c.setAffectedRows(uint64(dropDatabaseTableCount))
 	return nil
 }
 
@@ -419,24 +443,44 @@ var ensureDatabaseNotPublished = func(c *Compile, db engine.Database, dbName str
 	return nil
 }
 
-// Keep each nested plan bounded while sharing lifecycle admission among its
-// ordered members. All groups still belong to the outer DROP DATABASE transaction.
-func (c *Compile) dropDatabaseTables(dbName string, tables []string) error {
-	const batchSize = 32
-	dbIdent := quoteMySQLIdent(dbName)
-	for start := 0; start < len(tables); start += batchSize {
-		var sql strings.Builder
-		sql.WriteString("drop table if exists ")
-		for i, name := range tables[start:min(start+batchSize, len(tables))] {
-			if i > 0 {
-				sql.WriteByte(',')
-			}
-			sql.WriteString(dbIdent)
-			sql.WriteByte('.')
-			sql.WriteString(quoteMySQLIdent(name))
+func (c *Compile) dropDatabaseRelations(
+	database engine.Database,
+	tables []*plan.DropTable,
+	resolvedRelations map[string]engine.Relation,
+	lifecycleAdmitted bool,
+) error {
+	oldCtx := c.proc.Ctx
+	c.proc.Ctx = context.WithValue(oldCtx, defines.IgnoreForeignKey{}, true)
+	oldIgnorePublish := c.ignorePublish
+	c.ignorePublish = true
+	defer func() {
+		c.proc.Ctx = oldCtx
+		c.ignorePublish = oldIgnorePublish
+	}()
+
+	s := &Scope{}
+	for _, table := range tables {
+		if table == nil || table.Table == "" || table.TableDef == nil ||
+			table.IsView || table.TableDef.ViewSql != nil ||
+			table.TableDef.TableType == catalog.SystemSequenceRel {
+			continue
 		}
-		sql.WriteByte(';')
-		if err := c.runSqlWithOptions(sql.String(), executor.StatementOption{}.WithDisableLog().WithIgnorePublish()); err != nil {
+		relation := resolvedRelations[table.Table]
+		if relation == nil {
+			var err error
+			relation, err = database.Relation(c.proc.Ctx, table.Table, nil)
+			if err != nil {
+				return err
+			}
+		}
+		if err := s.dropTableSingleResolved(
+			c,
+			plan2.DeepCopyDropTable(table),
+			&lifecycleAdmitted,
+			true,
+			database,
+			relation,
+		); err != nil {
 			return err
 		}
 		// A canceled database DROP must roll back the nested table DROP and
@@ -448,6 +492,20 @@ func (c *Compile) dropDatabaseTables(dbName string, tables []string) error {
 		}
 	}
 	return nil
+}
+
+func dropDatabaseTableFkCleanupSQL(dbName, tableName string) string {
+	return fmt.Sprintf(
+		"delete from `%s`.`%s` where db_name = %s and table_name = %s",
+		catalog.MO_CATALOG,
+		catalog.MOForeignKeys,
+		dropDatabaseTableFkSQLLiteral(dbName),
+		dropDatabaseTableFkSQLLiteral(tableName),
+	)
+}
+
+func dropDatabaseTableFkSQLLiteral(value string) string {
+	return "'" + strings.NewReplacer(`\`, `\\`, `'`, `\'`).Replace(value) + "'"
 }
 
 func logAndSkipMissingRelationByNameForDropDatabase(c *Compile, dbName, rel, msg string, err error) bool {
@@ -4272,6 +4330,17 @@ func (s *Scope) DropTable(c *Compile) error {
 }
 
 func (s *Scope) dropTableSingle(c *Compile, qry *plan.DropTable, lifecycleAdmitted *bool) error {
+	return s.dropTableSingleResolved(c, qry, lifecycleAdmitted, false, nil, nil)
+}
+
+func (s *Scope) dropTableSingleResolved(
+	c *Compile,
+	qry *plan.DropTable,
+	lifecycleAdmitted *bool,
+	databaseLocked bool,
+	dbSource engine.Database,
+	rel engine.Relation,
+) error {
 	dbName := qry.GetDatabase()
 	tblName := qry.GetTable()
 	if tblName == "" {
@@ -4282,18 +4351,18 @@ func (s *Scope) dropTableSingle(c *Compile, qry *plan.DropTable, lifecycleAdmitt
 	if qry.TableDef != nil {
 		isSource = qry.TableDef.TableType == catalog.SystemSourceRel
 	}
-	var dbSource engine.Database
-	var rel engine.Relation
 	var err error
 	var isTemp bool
 	var originTableName string
 
-	if session := c.proc.GetSession(); session != nil {
-		if real, ok := session.GetTempTable(dbName, tblName); ok {
-			originTableName = tblName
-			tblName = real
-			qry.Table = real
-			isTemp = true
+	if dbSource == nil {
+		if session := c.proc.GetSession(); session != nil {
+			if real, ok := session.GetTempTable(dbName, tblName); ok {
+				originTableName = tblName
+				tblName = real
+				qry.Table = real
+				isTemp = true
+			}
 		}
 	}
 
@@ -4320,26 +4389,30 @@ func (s *Scope) dropTableSingle(c *Compile, qry *plan.DropTable, lifecycleAdmitt
 		*lifecycleAdmitted = true
 	}
 
-	if !c.disableLock {
+	if !databaseLocked && !c.disableLock {
 		if err := lockMoDatabase(c, dbName, lock.LockMode_Shared); err != nil {
 			return err
 		}
 	}
 
 	tblID := qry.GetTableId()
-	dbSource, err = c.e.Database(c.proc.Ctx, dbName, c.proc.GetTxnOperator())
-	if err != nil {
-		if qry.GetIfExists() {
-			return nil
+	if dbSource == nil {
+		dbSource, err = c.e.Database(c.proc.Ctx, dbName, c.proc.GetTxnOperator())
+		if err != nil {
+			if qry.GetIfExists() {
+				return nil
+			}
+			return convertDBEOBToNoSuchTable(c.proc.Ctx, err, dbName, tblName)
 		}
-		return convertDBEOBToNoSuchTable(c.proc.Ctx, err, dbName, tblName)
 	}
 
-	if rel, err = dbSource.Relation(c.proc.Ctx, tblName, nil); err != nil {
-		if qry.GetIfExists() {
-			return nil
+	if rel == nil {
+		if rel, err = dbSource.Relation(c.proc.Ctx, tblName, nil); err != nil {
+			if qry.GetIfExists() {
+				return nil
+			}
+			return err
 		}
-		return err
 	}
 	if isTemp {
 		if owner, ok := sessionTemporaryDDLOwner(c); ok {

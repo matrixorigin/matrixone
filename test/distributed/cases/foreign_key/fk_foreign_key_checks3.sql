@@ -55,6 +55,14 @@ SET FOREIGN_KEY_CHECKS=1;
 --no error. but mysql error.
 insert into t1 values (3,3);
 
+select count(*) = 2 as deferred_fks from mo_catalog.mo_foreign_keys where db_name = 'fk_foreign_key_checks3';
+create database fk_foreign_key_checks3_db0;
+drop database fk_foreign_key_checks3_db0;
+create database fk_foreign_key_checks3_db0;
+create table fk_foreign_key_checks3_db0.unrelated(a int);
+drop database fk_foreign_key_checks3_db0;
+select count(*) = 2 as deferred_fks from mo_catalog.mo_foreign_keys where db_name = 'fk_foreign_key_checks3';
+
 --no error
 create database fk_foreign_key_checks3_db0;
 create table fk_foreign_key_checks3_db0.t2(a int primary key,b int);
@@ -80,6 +88,7 @@ insert into t1 values (4,4);
 insert into t1 values (3,3);
 
 drop table fk_foreign_key_checks3.t1;
+select count(*) = 0 as removed_fks from mo_catalog.mo_foreign_keys where db_name = 'fk_foreign_key_checks3';
 
 --no error
 drop table fk_foreign_key_checks3_db0.t2;
