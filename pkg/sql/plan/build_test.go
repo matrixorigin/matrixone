@@ -8901,6 +8901,7 @@ func TestOrderedGroupConcatInNonEquiCorrelatedScalarSubqueryKeepsConfig(t *testi
 	require.NoError(t, err)
 
 	found := false
+	masked := false
 	for _, node := range logicPlan.GetQuery().Nodes {
 		for _, agg := range node.AggList {
 			fn := agg.GetF()
@@ -8914,9 +8915,18 @@ func TestOrderedGroupConcatInNonEquiCorrelatedScalarSubqueryKeepsConfig(t *testi
 				fn.AggConfigType,
 			)
 			require.NotEmpty(t, fn.AggConfig)
+			if len(fn.Args) == 2 && fn.Args[0].GetF() != nil &&
+				fn.Args[0].GetF().Func.ObjName == "case" {
+				masked = true
+				for _, arg := range fn.Args {
+					require.Equal(t, "case", arg.GetF().Func.ObjName)
+					require.False(t, arg.Typ.NotNullable)
+				}
+			}
 		}
 	}
 	require.True(t, found)
+	require.True(t, masked, "rewritten ordered GROUP_CONCAT keeps both masked arguments")
 }
 
 func TestMysqlCompatibilityMode(t *testing.T) {

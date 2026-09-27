@@ -362,6 +362,11 @@ func (r *ConstantFold) constantFold(expr *plan.Expr, proc *process.Process) *pla
 			}
 		}
 	}
+	if r.isPrepared {
+		if source, ok := ProvisionalPreparedExactPeerSource(expr); ok {
+			c.Src = source
+		}
+	}
 
 	ec := &plan.Expr_Lit{
 		Lit: c,
@@ -403,6 +408,33 @@ func IsImplicitFloatCastOfExplicitDecimalConstant(expr *plan.Expr) bool {
 	}
 	_, sourceOverload := function.DecodeOverloadID(sourceFn.Func.GetObj())
 	return sourceOverload != 0
+}
+
+// ProvisionalPreparedExactPeerSource returns the exact input of a binder cast
+// chosen while a prepared parameter had only a provisional type. Constant
+// folding may still materialize the FLOAT or TEXT value, but EXECUTE needs
+// this source to restore the fixed peer's numeric domain without rounding.
+func ProvisionalPreparedExactPeerSource(expr *plan.Expr) (*plan.Expr, bool) {
+	if expr == nil || !expr.GetPreparedNumeric().GetProvisionalResultPeer() {
+		return nil, false
+	}
+	target := types.T(expr.Typ.Id)
+	if !target.IsFloat() && !target.IsMySQLString() {
+		return nil, false
+	}
+	fn := expr.GetF()
+	if fn == nil || fn.Func == nil || fn.Func.GetObjName() != "cast" || len(fn.Args) == 0 {
+		return nil, false
+	}
+	_, overload := function.DecodeOverloadID(fn.Func.GetObj())
+	if overload != 0 || fn.GetSyntaxExplicitCast() || fn.Args[0] == nil {
+		return nil, false
+	}
+	source := types.T(fn.Args[0].Typ.Id)
+	if source.IsInteger() || source.IsDecimal() || source == types.T_bit {
+		return fn.Args[0], true
+	}
+	return nil, false
 }
 
 // PreserveFoldedLiteralStringDomain keeps a binder-inserted cast transparent to

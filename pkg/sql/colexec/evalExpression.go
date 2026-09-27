@@ -1441,6 +1441,25 @@ func (expr *FunctionExpressionExecutor) makeNullResult(rowCount int) (*vector.Ve
 	return result, nil
 }
 
+// Memo executors only share evaluation; they do not change whether their
+// underlying result is aligned with the input batch rows.
+func isRowAlignedExpressionExecutor(executor ExpressionExecutor) bool {
+	for {
+		switch source := executor.(type) {
+		case *memoExpressionExecutor:
+			executor = source.state.executor
+		case *memoRootExpressionExecutor:
+			executor = source.executor
+		case *ColumnExpressionExecutor:
+			return true
+		case *FunctionExpressionExecutor:
+			return !source.folded.canFold
+		default:
+			return false
+		}
+	}
+}
+
 func (expr *FunctionExpressionExecutor) evalSelectedRows(
 	proc *process.Process,
 	rowCount int,
@@ -1462,13 +1481,7 @@ func (expr *FunctionExpressionExecutor) evalSelectedRows(
 		// Constants, folded vectors, and list/vector literals are not row-aligned.
 		// They must be passed through unchanged; only column and non-folded
 		// function results map one-to-one to the input batch rows.
-		rowAligned := false
-		switch executor := expr.parameterExecutor[i].(type) {
-		case *ColumnExpressionExecutor:
-			rowAligned = true
-		case *FunctionExpressionExecutor:
-			rowAligned = !executor.folded.canFold
-		}
+		rowAligned := isRowAlignedExpressionExecutor(expr.parameterExecutor[i])
 		if rowAligned && !parameter.IsConst() {
 			selected := expr.selectedParameterVectors[i]
 			if selected == nil {
