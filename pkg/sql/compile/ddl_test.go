@@ -2499,6 +2499,10 @@ func Test_getSqlForCheckPitrDup(t *testing.T) {
 	assert.Contains(t, getSqlForCheckPitrDup(mk(int32(tree.PITRLEVELDATABASE), false), false), "database_name = 'db'")
 	assert.Contains(t, getSqlForCheckPitrDup(mk(int32(tree.PITRLEVELTABLE), false), false), "table_name = 'tb'")
 	assert.Contains(t, getSqlForCheckPitrDup(mk(int32(tree.PITRLEVELTABLE), false), true), "lower(table_name) = lower('tb')")
+	assert.Contains(t, getSqlForCheckPitrDup(mk(int32(tree.PITRLEVELTABLE), false), true), "SELECT pitr_id,database_name,table_name")
+	assert.True(t, mode2PitrNamesMatch(tree.PITRLEVELTABLE, "\xc0A", "Tb", "\xc0a", "tb"))
+	assert.False(t, mode2PitrNamesMatch(tree.PITRLEVELTABLE, "\xc0a", "Tb", "\xc1a", "tb"))
+	assert.True(t, mode2PitrNamesMatch(tree.PITRLEVELDATABASE, "\xc0A", "", "\xc0a", ""))
 }
 
 func TestPitrInternalSQLEscapesStringLiterals(t *testing.T) {

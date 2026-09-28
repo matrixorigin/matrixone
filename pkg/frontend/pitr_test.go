@@ -1457,6 +1457,29 @@ func TestGetSqlForCheckPitrDup(t *testing.T) {
 	}, true)
 	require.Contains(t, mode2, "lower(database_name) = lower('MixedDB')")
 	require.Contains(t, mode2, "lower(table_name) = lower('MixedT')")
+	require.Contains(t, mode2, "select pitr_id,database_name,table_name")
+	require.True(t, mode2PitrNamesMatch(tree.PITRLEVELTABLE, "\xc0A", "MixedT", "\xc0a", "mixedt"))
+	require.False(t, mode2PitrNamesMatch(tree.PITRLEVELTABLE, "\xc0a", "MixedT", "\xc1a", "mixedt"))
+	require.False(t, mode2PitrNamesMatch(tree.PITRLEVELTABLE, "\xc0a", "MixedT", "\xc0a", "other"))
+	require.True(t, mode2PitrNamesMatch(tree.PITRLEVELDATABASE, "\xc0A", "", "\xc0a", ""))
+}
+
+func TestCheckPitrDupMode2FiltersLowerFalsePositives(t *testing.T) {
+	ctx := defines.AttachMode2NameResolution(defines.AttachAccountId(context.Background(), 0), true)
+	stmt := &tree.CreatePitr{Level: tree.PITRLEVELTABLE, DatabaseName: "\xc0A", TableName: "Target"}
+	bh := &backgroundExecTest{}
+	bh.init()
+	sql := getSqlForCheckPitrDup("sys", 0, stmt, true)
+	result := &MysqlResultSet{Columns: []Column{&MysqlColumn{}, &MysqlColumn{}, &MysqlColumn{}}}
+	result.AddRow([]interface{}{uint64(1), "\xc1a", "Target"})
+	bh.sql2result[sql] = result
+	duplicate, err := checkPitrDup(ctx, bh, "sys", 0, stmt)
+	require.NoError(t, err)
+	require.False(t, duplicate)
+	result.AddRow([]interface{}{uint64(2), "\xc0a", "target"})
+	duplicate, err = checkPitrDup(ctx, bh, "sys", 0, stmt)
+	require.NoError(t, err)
+	require.True(t, duplicate)
 }
 
 func Test_doRestorePitr_Account(t *testing.T) {

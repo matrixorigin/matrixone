@@ -22,6 +22,7 @@ import (
 	"time"
 
 	"github.com/matrixorigin/matrixone/pkg/catalog"
+	"github.com/matrixorigin/matrixone/pkg/common/identifier"
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
 	"github.com/matrixorigin/matrixone/pkg/common/pubsub"
 	moruntime "github.com/matrixorigin/matrixone/pkg/common/runtime"
@@ -753,7 +754,9 @@ func (c *recoveryCompilerContext) GetSubscriptionMeta(
 	_ *plan2.Snapshot,
 ) (*planpb.SubscriptionMeta, error) {
 	key := databaseName
-	if c.compilerContext.lower != 0 {
+	if c.compilerContext.lower == 2 {
+		key = identifier.Fold(databaseName)
+	} else if c.compilerContext.lower != 0 {
 		key = strings.ToLower(databaseName)
 	}
 	if _, ok := c.legacySubscriptionLooked[key]; ok {
@@ -774,18 +777,23 @@ func (c *recoveryCompilerContext) GetSubscriptionMeta(
 		// Resolve that namespace before consulting mo_subs, including old
 		// case-colliding catalogs where only one candidate is a subscription.
 		dbs, resolveErr := c.execCatalogQuery(fmt.Sprintf(
-			"select datname from %s.mo_database where account_id=%d and lower(datname)=lower('%s') limit 2",
+			"select datname from %s.mo_database where account_id=%d and lower(datname)=lower('%s')",
 			catalog.MO_CATALOG, accountID, sqlquote.EscapeString(databaseName)), catalog.System_Account)
 		if resolveErr != nil {
 			return nil, resolveErr
 		}
 		count := 0
 		physical := ""
+		foldedName := identifier.Fold(databaseName)
 		dbs.ReadRows(func(rows int, columns []*vector.Vector) bool {
 			for i := 0; i < rows; i++ {
+				candidate := columns[0].GetStringAt(i)
+				if identifier.Fold(candidate) != foldedName {
+					continue
+				}
 				count++
 				if count == 1 {
-					physical = columns[0].GetStringAt(i)
+					physical = candidate
 				}
 			}
 			return count < 2
