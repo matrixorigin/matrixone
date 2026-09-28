@@ -1,4 +1,4 @@
-// Copyright 2021 Matrix Origin
+// Copyright 2026 Matrix Origin
 //
 // Licensed under the Apache License, Version 2.0 (the "License");
 // you may not use this file except in compliance with the License.
@@ -12,37 +12,20 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-package tree
+package frontend
 
-import "github.com/matrixorigin/matrixone/pkg/common/identifier"
+import (
+	"context"
+	"testing"
 
-type CStrParts [4]*CStr
-type CStr struct {
-	// user origin input
-	o string
-	// use for compare
-	c string
-	// quote bool
-}
+	"github.com/matrixorigin/matrixone/pkg/defines"
+	"github.com/stretchr/testify/require"
+)
 
-func NewCStr(str string, lower int64) *CStr {
-	cs := &CStr{o: str}
-	if lower == 0 {
-		cs.c = cs.o
-		return cs
+func TestMode2PublicationRejectsSystemDatabaseAliases(t *testing.T) {
+	ctx := defines.AttachMode2NameResolution(context.Background(), true)
+	for _, name := range []string{"MO_CATALOG", "Information_Schema", "MySQL", "MO_TASK"} {
+		require.True(t, isSystemPublicationDatabase(ctx, name), name)
 	}
-	cs.c = identifier.Fold(cs.o)
-	return cs
-}
-
-func (cs *CStr) Origin() string {
-	return cs.o
-}
-
-func (cs *CStr) Compare() string {
-	return cs.c
-}
-
-func (cs *CStr) Empty() bool {
-	return len(cs.o) == 0
+	require.False(t, isSystemPublicationDatabase(ctx, "UserDatabase"))
 }

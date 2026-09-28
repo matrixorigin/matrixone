@@ -1289,6 +1289,10 @@ func (backSes *backSession) GetSqlHelper() *SqlHelper {
 	return nil
 }
 
+func (backSes *backSession) CheckDatabasePublishing(ctx context.Context, physicalName string) (bool, error) {
+	return isDbPublishing(ctx, physicalName, backSes)
+}
+
 func (backSes *backSession) GetProc() *process.Process {
 	return nil
 }
@@ -1593,6 +1597,20 @@ func (backSes *backSession) GetTempTable(dbName, alias string) (string, bool) {
 		return "", false
 	}
 	return backSes.upstream.GetTempTable(dbName, alias)
+}
+
+func (backSes *backSession) ResolveTempTable(ctx context.Context, dbName, alias string) (string, bool, error) {
+	if backSes == nil || backSes.upstream == nil {
+		return "", false, nil
+	}
+	return backSes.upstream.ResolveTempTable(ctx, dbName, alias)
+}
+
+func (backSes *backSession) GetTempTableAliasByRealName(dbName, realName string) (string, bool) {
+	if owner := upstreamUserSession(backSes); owner != nil {
+		return owner.GetTempTableAliasByRealName(dbName, realName)
+	}
+	return "", false
 }
 
 func (backSes *backSession) AddTempTable(dbName, alias, realName string) {

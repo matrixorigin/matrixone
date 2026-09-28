@@ -13,7 +13,9 @@
 package compile
 
 import (
+	"context"
 	"github.com/google/uuid"
+	"github.com/matrixorigin/matrixone/pkg/common/identifier"
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
 	moruntime "github.com/matrixorigin/matrixone/pkg/common/runtime"
 	"github.com/matrixorigin/matrixone/pkg/defines"
@@ -22,6 +24,46 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/util/executor"
 	"github.com/matrixorigin/matrixone/pkg/vm/process"
 )
+
+func resolveSessionTemporaryAlias(
+	ctx context.Context, session process.Session, databaseName, alias string,
+) (string, bool, error) {
+	if resolver, ok := session.(interface {
+		ResolveTempTable(context.Context, string, string) (string, bool, error)
+	}); ok {
+		return resolver.ResolveTempTable(ctx, databaseName, alias)
+	}
+	realName, found := session.GetTempTable(databaseName, alias)
+	return realName, found, nil
+}
+
+// resolveDDLTemporaryAlias uses the physical parent database key used by the
+// session temp map. Keep the error channel: an ambiguous mode-2 alias must not
+// fall through to a permanent relation.
+func resolveDDLTemporaryAlias(c *Compile, databaseName, alias string) (string, string, bool, error) {
+	session := c.proc.GetSession()
+	if session == nil {
+		return databaseName, "", false, nil
+	}
+	if defines.Mode2NameResolutionEnabled(c.proc.Ctx) {
+		db, err := c.e.Database(c.proc.Ctx, databaseName, c.proc.GetTxnOperator())
+		if moerr.IsMoErrCode(err, moerr.OkExpectedEOB) {
+			// No temporary alias can be resolved without its parent database.
+			// Let the owning DDL apply its existing IF EXISTS / absent rule.
+			return databaseName, "", false, nil
+		}
+		if err != nil {
+			return "", "", false, err
+		}
+		named, ok := db.(interface{ GetPhysicalName() string })
+		if !ok || named.GetPhysicalName() == "" {
+			return "", "", false, moerr.NewInternalError(c.proc.Ctx, "database resolver did not return physical name")
+		}
+		databaseName = named.GetPhysicalName()
+	}
+	real, found, err := resolveSessionTemporaryAlias(c.proc.Ctx, session, databaseName, alias)
+	return databaseName, real, found, err
+}
 
 func supportsSessionTemporaryDDL(service string) bool {
 	rt := moruntime.ServiceRuntime(service)
@@ -55,23 +97,56 @@ type temporaryDDLSession struct {
 	process.Session
 	sessionID  uuid.UUID
 	generation string
-	aliases    map[string]string
+	aliases    map[temporaryAliasKey]string
+}
+
+type temporaryAliasKey struct {
+	database string
+	alias    string
 }
 
 func (s *temporaryDDLSession) TemporaryTableName(db, alias string) string {
 	return defines.GenTempTableName(s.sessionID, db, s.generation+"_"+alias)
 }
 func (s *temporaryDDLSession) GetTempTable(db, alias string) (string, bool) {
-	if name, ok := s.aliases[db+"."+alias]; ok {
+	if name, ok := s.aliases[temporaryAliasKey{db, alias}]; ok {
 		return name, true
 	}
 	return s.Session.GetTempTable(db, alias)
 }
-func (s *temporaryDDLSession) AddTempTable(db, alias, name string) { s.aliases[db+"."+alias] = name }
+func (s *temporaryDDLSession) ResolveTempTable(ctx context.Context, db, alias string) (string, bool, error) {
+	if !defines.Mode2NameResolutionEnabled(ctx) {
+		if name, ok := s.aliases[temporaryAliasKey{db, alias}]; ok {
+			return name, true, nil
+		}
+	} else {
+		var real string
+		found := false
+		for key, name := range s.aliases {
+			if identifier.Fold(key.database) != identifier.Fold(db) ||
+				identifier.Fold(key.alias) != identifier.Fold(alias) {
+				continue
+			}
+			if found {
+				return "", false, moerr.NewAmbiguousIdentifier(ctx, "temporary table", alias)
+			}
+			real, found = name, true
+		}
+		if found {
+			return real, true, nil
+		}
+	}
+	return resolveSessionTemporaryAlias(ctx, s.Session, db, alias)
+}
+func (s *temporaryDDLSession) AddTempTable(db, alias, name string) {
+	s.aliases[temporaryAliasKey{db, alias}] = name
+}
 func (s *temporaryDDLSession) AddTempIndexTable(db, alias, name string) {
 	s.AddTempTable(db, alias, name)
 }
-func (s *temporaryDDLSession) RemoveTempTable(db, alias string) { delete(s.aliases, db+"."+alias) }
+func (s *temporaryDDLSession) RemoveTempTable(db, alias string) {
+	delete(s.aliases, temporaryAliasKey{db, alias})
+}
 func (s *temporaryDDLSession) RemoveTempTableByRealName(name string) {
 	for alias, physical := range s.aliases {
 		if physical == name {
@@ -96,7 +171,11 @@ func (s *Scope) createSessionTemporaryTable(c *Compile, owner process.TemporaryT
 	if db == "" {
 		db = c.db
 	}
-	if _, exists := c.proc.GetSession().GetTempTable(db, alias); exists {
+	_, exists, err := resolveSessionTemporaryAlias(c.proc.Ctx, c.proc.GetSession(), db, alias)
+	if err != nil {
+		return err
+	}
+	if exists {
 		if qry.IfNotExists {
 			return nil
 		}
@@ -112,7 +191,7 @@ func (s *Scope) createSessionTemporaryTable(c *Compile, owner process.TemporaryT
 	parentID := parentDB.GetDatabaseId(c.proc.Ctx)
 
 	stage := &temporaryDDLSession{Session: c.proc.GetSession(), sessionID: c.proc.GetSessionInfo().SessionId,
-		generation: uuid.NewString(), aliases: make(map[string]string)}
+		generation: uuid.NewString(), aliases: make(map[temporaryAliasKey]string)}
 	physical := stage.TemporaryTableName(db, alias)
 	schemaPlan := planutil.DeepCopyPlan(s.Plan)
 	schemaPlan.GetDdl().GetCreateTable().CreateAsSelectSql = ""

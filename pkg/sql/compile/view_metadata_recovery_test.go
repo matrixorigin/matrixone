@@ -711,12 +711,15 @@ func TestEnabledLifecycleRemovalAndCleanupPaths(t *testing.T) {
 }
 
 func TestRecoveryCompilerContextCatalogAndBindingAdapters(t *testing.T) {
-	t.Run("subscription catalog result is cached", func(t *testing.T) {
+	t.Run("mode-2 subscription alias uses folded catalog lookup and cache", func(t *testing.T) {
 		proc := testutil.NewProcess(t)
 		proc.Ctx = defines.AttachAccountId(proc.Ctx, 7)
+		database := executor.NewMemResult([]types.Type{types.T_varchar.ToType()}, proc.Mp())
+		database.NewBatchWithRowCount(1)
+		require.NoError(t, executor.AppendStringRows(database, 0, []string{"SubDB"}))
 		result := executor.NewMemResult([]types.Type{
 			types.T_int32.ToType(), types.T_varchar.ToType(), types.T_varchar.ToType(),
-			types.T_varchar.ToType(), types.T_varchar.ToType(),
+			types.T_varchar.ToType(), types.T_varchar.ToType(), types.T_varchar.ToType(),
 		}, proc.Mp())
 		result.NewBatchWithRowCount(1)
 		require.NoError(t, executor.AppendFixedRows(result, 0, []int32{11}))
@@ -724,20 +727,44 @@ func TestRecoveryCompilerContextCatalogAndBindingAdapters(t *testing.T) {
 		require.NoError(t, executor.AppendStringRows(result, 2, []string{"publication"}))
 		require.NoError(t, executor.AppendStringRows(result, 3, []string{"published_db"}))
 		require.NoError(t, executor.AppendStringRows(result, 4, []string{"table_a,table_b"}))
-		exec := &viewMetadataCleanupRecordingExecutor{results: []executor.Result{result.GetResult()}}
+		require.NoError(t, executor.AppendStringRows(result, 5, []string{"SubDB"}))
+		exec := &viewMetadataCleanupRecordingExecutor{results: []executor.Result{database.GetResult(), result.GetResult()}}
 		installViewMetadataTestExecutor(t, proc, exec)
 		ctx := &recoveryCompilerContext{compilerContext: &compilerContext{
-			ctx: proc.Ctx, proc: proc, lower: 1,
+			ctx: proc.Ctx, proc: proc, lower: 2,
 		}}
 		meta, err := ctx.GetSubscriptionMeta("SUB_DB", nil)
 		require.NoError(t, err)
 		require.Equal(t, int32(11), meta.AccountId)
 		require.Equal(t, "published_db", meta.DbName)
-		require.Equal(t, "SUB_DB", meta.SubName)
+		require.Equal(t, "SubDB", meta.SubName)
 		cached, err := ctx.GetSubscriptionMeta("sub_db", nil)
 		require.NoError(t, err)
 		require.Same(t, meta, cached)
+		require.Len(t, exec.sqls, 2)
+		require.Contains(t, exec.sqls[0], "lower(datname)=lower('SUB_DB')")
+		require.Contains(t, exec.sqls[1], "sub_name='SubDB'")
+	})
+
+	t.Run("mode-2 ordinary and subscription database collision is ambiguous across batches", func(t *testing.T) {
+		proc := testutil.NewProcess(t)
+		proc.Ctx = defines.AttachAccountId(proc.Ctx, 7)
+		database := executor.NewMemResult([]types.Type{types.T_varchar.ToType()}, proc.Mp())
+		for _, name := range []string{"Foo", "foo"} {
+			database.NewBatchWithRowCount(1)
+			require.NoError(t, executor.AppendStringRows(database, 0, []string{name}))
+		}
+		exec := &viewMetadataCleanupRecordingExecutor{results: []executor.Result{database.GetResult()}}
+		installViewMetadataTestExecutor(t, proc, exec)
+		ctx := &recoveryCompilerContext{compilerContext: &compilerContext{ctx: proc.Ctx, proc: proc, lower: 2}}
+		_, err := ctx.GetSubscriptionMeta("foo", nil)
+		require.ErrorContains(t, err, "ambiguous database")
 		require.Len(t, exec.sqls, 1)
+		// An ambiguity must not cache a negative result for a later retry.
+		meta, err := ctx.GetSubscriptionMeta("foo", nil)
+		require.NoError(t, err)
+		require.Nil(t, meta)
+		require.Len(t, exec.sqls, 2)
 	})
 
 	t.Run("dependency binding uses physical account", func(t *testing.T) {

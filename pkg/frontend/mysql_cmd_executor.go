@@ -1205,9 +1205,12 @@ func doUse(ctx context.Context, ses FeSession, db string) (err error) {
 	txn := txnHandler.GetTxn()
 	//TODO: check meta data
 	if dbMeta, err = getPu(ses.GetService()).StorageEngine.Database(ctx, db, txn); err != nil {
-		//echo client. no such database
-		return moerr.NewBadDB(ctx, db)
+		if moerr.IsMoErrCode(err, moerr.OkExpectedEOB) {
+			return moerr.NewBadDB(ctx, db)
+		}
+		return err
 	}
+	db = resolvedDatabaseName(dbMeta, db)
 
 	if dbMeta.IsSubscription(ctx) {
 		bh := ses.GetShareTxnBackgroundExec(ctx, false)
@@ -5407,12 +5410,18 @@ func executeStmtWithWorkspace(ses FeSession,
 		effectiveDefaultDatabase = execCtx.effectiveTxnDefaultDatabase
 	}
 	execCtx.effectiveTxnDefaultDatabase = effectiveDefaultDatabase
-	execCtx.txnOpt.forcePessimisticObjectLifecycle = requiresPessimisticObjectLifecycleTxn(
-		ses, effectiveStmt, effectiveDefaultDatabase,
+	execCtx.txnOpt.forcePessimisticObjectLifecycle, err = requiresPessimisticObjectLifecycleTxn(
+		execCtx.reqCtx, ses, effectiveStmt, effectiveDefaultDatabase,
 	)
-	execCtx.txnOpt.forcePessimisticLifecycleMode = requiresPessimisticLifecycleModeTxn(
-		ses, effectiveStmt, effectiveDefaultDatabase,
+	if err != nil {
+		return err
+	}
+	execCtx.txnOpt.forcePessimisticLifecycleMode, err = requiresPessimisticLifecycleModeTxn(
+		execCtx.reqCtx, ses, effectiveStmt, effectiveDefaultDatabase,
 	)
+	if err != nil {
+		return err
+	}
 	execCtx.txnOpt.activeTxnAtStart = ses.GetTxnHandler().InActiveTxn()
 	execCtx.txnOpt.activeTxnAtStartKnown = true
 	switch execCtx.stmt.(type) {
@@ -5862,6 +5871,10 @@ func doComQuery(ses *Session, execCtx *ExecCtx, input *UserInput) (retErr error)
 	beginInstant := time.Now()
 	execCtx.reqCtx = appendStatementAt(execCtx.reqCtx, beginInstant)
 	execCtx.reqCtx = defines.AttachDDLOwnerRoleIDProvider(execCtx.reqCtx, ses)
+	execCtx.reqCtx = defines.AttachMode2NameResolution(
+		execCtx.reqCtx,
+		parserLowerCaseTableNames(ses) == 2,
+	)
 	input.genSqlSourceType(ses)
 	ses.SetShowStmtType(NotShowStatement)
 	resper := ses.GetResponser()

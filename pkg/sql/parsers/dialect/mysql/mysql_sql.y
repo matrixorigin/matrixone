@@ -5502,7 +5502,7 @@ database_name_opt:
     }
 |   from_or_in ident
     {
-        $$ = $2.Compare()
+		$$ = yylex.(*Lexer).GetDbOrTblName($2.Origin())
     }
 
 table_column_name:
@@ -5746,13 +5746,13 @@ drop_view_stmt:
 drop_database_stmt:
     DROP DATABASE exists_opt db_name_ident
     {
-        var name = tree.Identifier($4.Compare())
+		var name = tree.Identifier(yylex.(*Lexer).GetDbOrTblName($4.Origin()))
         var ifExists = $3
         $$ = tree.NewDropDatabase(name, ifExists)
     }
 |   DROP SCHEMA exists_opt db_name_ident
     {
-        var name = tree.Identifier($4.Compare())
+		var name = tree.Identifier(yylex.(*Lexer).GetDbOrTblName($4.Origin()))
         var ifExists = $3
         $$ = tree.NewDropDatabase(name, ifExists)
     }

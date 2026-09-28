@@ -121,6 +121,9 @@ func (c *clientConn) migrateConnToContext(
 	if !info.LastInsertIDExported {
 		return moerr.GetOkExpectedNotSafeToStartTransfer()
 	}
+	if !info.ModeAtSourceExported || info.ModeAtSource < 0 || info.ModeAtSource > 2 {
+		return moerr.GetOkExpectedNotSafeToStartTransfer()
+	}
 	if typedMigration || info.FoundRows != 0 || info.LastInsertID != 0 ||
 		len(info.TempTables) > 0 {
 		addr = getQueryAddress(c.moCluster, sc.RawConn().RemoteAddr().String())
@@ -222,6 +225,8 @@ func (c *clientConn) migrateConnToContext(
 		LastAffectedRows:          info.LastAffectedRows,
 		LastInsertID:              info.LastInsertID,
 		LastInsertIDExported:      info.LastInsertIDExported,
+		ModeAtSource:              info.ModeAtSource,
+		ModeAtSourceExported:      info.ModeAtSourceExported,
 		FoundRows:                 info.FoundRows,
 		UserDefinedVars:           nil,
 		UserDefinedVarsExported:   false,

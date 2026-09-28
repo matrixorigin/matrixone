@@ -680,14 +680,15 @@ func (c *recoveryCompilerContext) Resolve(
 			!viewBindingNameEqual(relationName, bindingRelation, dependency.LowerCaseTableNames) {
 			continue
 		}
+		var subscription *planpb.SubscriptionMeta
 		if dependency.SubscriptionName != "" {
-			subscription, subscriptionErr := c.GetSubscriptionMeta(bindingDatabase, snapshot)
+			var subscriptionErr error
+			subscription, subscriptionErr = c.GetSubscriptionMeta(bindingDatabase, snapshot)
 			if subscriptionErr != nil {
 				return nil, nil, subscriptionErr
 			}
 			if subscription == nil || uint32(subscription.AccountId) != dependency.AccountID ||
-				!viewBindingNameEqual(subscription.DbName, dependency.DatabaseName, dependency.LowerCaseTableNames) ||
-				!pubsub.InSubMetaTables(subscription, bindingRelation) {
+				!viewBindingNameEqual(subscription.DbName, dependency.DatabaseName, dependency.LowerCaseTableNames) {
 				return nil, nil, &viewRefreshDependencyUnavailableError{cause: moerr.NewInternalErrorf(
 					c.GetContext(), "subscription binding %q is unavailable", bindingDatabase)}
 			}
@@ -706,6 +707,12 @@ func (c *recoveryCompilerContext) Resolve(
 		if object == nil || tableDef == nil {
 			return nil, nil, nil
 		}
+		if dependency.SubscriptionName != "" {
+			if !pubsub.InSubMetaTables(subscription, object.ObjName) {
+				return nil, nil, &viewRefreshDependencyUnavailableError{cause: moerr.NewInternalErrorf(
+					c.GetContext(), "subscription binding %q is unavailable", bindingDatabase)}
+			}
+		}
 		object.SubscriptionName = dependency.SubscriptionName
 		if dependency.SubscriptionName != "" {
 			object.PubInfo = &planpb.PubInfo{TenantId: int32(dependency.AccountID)}
@@ -717,9 +724,6 @@ func (c *recoveryCompilerContext) Resolve(
 		return nil, nil, err
 	}
 	if subscription != nil {
-		if !pubsub.InSubMetaTables(subscription, relationName) {
-			return nil, nil, nil
-		}
 		physicalContext := defines.AttachAccountId(c.GetContext(), uint32(subscription.AccountId))
 		var object *plan2.ObjectRef
 		var tableDef *plan2.TableDef
@@ -728,6 +732,9 @@ func (c *recoveryCompilerContext) Resolve(
 		})
 		if err != nil || object == nil || tableDef == nil {
 			return object, tableDef, err
+		}
+		if !pubsub.InSubMetaTables(subscription, object.ObjName) {
+			return nil, nil, nil
 		}
 		object.SubscriptionName = subscription.SubName
 		object.PubInfo = &planpb.PubInfo{TenantId: subscription.AccountId}
@@ -755,7 +762,6 @@ func (c *recoveryCompilerContext) GetSubscriptionMeta(
 	if c.legacySubscriptionLooked == nil {
 		c.legacySubscriptionLooked = make(map[string]struct{})
 	}
-	c.legacySubscriptionLooked[key] = struct{}{}
 	if c.legacySubscriptions == nil {
 		c.legacySubscriptions = make(map[string]*planpb.SubscriptionMeta)
 	}
@@ -763,25 +769,66 @@ func (c *recoveryCompilerContext) GetSubscriptionMeta(
 	if err != nil {
 		return nil, err
 	}
+	if c.compilerContext.lower == 2 {
+		// A subscription shares the database namespace with ordinary databases.
+		// Resolve that namespace before consulting mo_subs, including old
+		// case-colliding catalogs where only one candidate is a subscription.
+		dbs, resolveErr := c.execCatalogQuery(fmt.Sprintf(
+			"select datname from %s.mo_database where account_id=%d and lower(datname)=lower('%s') limit 2",
+			catalog.MO_CATALOG, accountID, sqlquote.EscapeString(databaseName)), catalog.System_Account)
+		if resolveErr != nil {
+			return nil, resolveErr
+		}
+		count := 0
+		physical := ""
+		dbs.ReadRows(func(rows int, columns []*vector.Vector) bool {
+			for i := 0; i < rows; i++ {
+				count++
+				if count == 1 {
+					physical = columns[0].GetStringAt(i)
+				}
+			}
+			return count < 2
+		})
+		dbs.Close()
+		if count > 1 {
+			return nil, moerr.NewInternalErrorf(c.GetContext(), "ambiguous database %s", databaseName)
+		}
+		if count == 0 {
+			c.legacySubscriptionLooked[key] = struct{}{}
+			return nil, nil
+		}
+		databaseName = physical
+	}
 	result, err := c.execCatalogQuery(fmt.Sprintf(
-		"select pub_account_id,pub_account_name,pub_name,pub_database,pub_tables "+
-			"from %s.mo_subs where sub_account_id=%d and sub_name='%s' and status=0 limit 1",
+		"select pub_account_id,pub_account_name,pub_name,pub_database,pub_tables,sub_name "+
+			"from %s.mo_subs where sub_account_id=%d and sub_name='%s' and status=0 limit 2",
 		catalog.MO_CATALOG, accountID, sqlquote.EscapeString(databaseName)), catalog.System_Account)
 	if err != nil {
 		return nil, err
 	}
 	defer result.Close()
+	matched := 0
 	result.ReadRows(func(rows int, columns []*vector.Vector) bool {
-		if rows > 0 {
+		for i := 0; i < rows; i++ {
+			matched++
+			if matched > 1 {
+				break
+			}
 			c.legacySubscriptions[key] = &planpb.SubscriptionMeta{
-				AccountId:   vector.MustFixedColNoTypeCheck[int32](columns[0])[0],
-				AccountName: columns[1].GetStringAt(0), Name: columns[2].GetStringAt(0),
-				DbName: columns[3].GetStringAt(0), SubName: databaseName,
-				Tables: columns[4].GetStringAt(0),
+				AccountId:   vector.MustFixedColNoTypeCheck[int32](columns[0])[i],
+				AccountName: columns[1].GetStringAt(i), Name: columns[2].GetStringAt(i),
+				DbName: columns[3].GetStringAt(i), SubName: columns[5].GetStringAt(i),
+				Tables: columns[4].GetStringAt(i),
 			}
 		}
-		return false
+		return matched < 2
 	})
+	if matched > 1 {
+		delete(c.legacySubscriptions, key)
+		return nil, moerr.NewInternalErrorf(c.GetContext(), "ambiguous subscription %s", databaseName)
+	}
+	c.legacySubscriptionLooked[key] = struct{}{}
 	return c.legacySubscriptions[key], nil
 }
 

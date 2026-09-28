@@ -2345,6 +2345,16 @@ func TestSetAutocommitStatusInResponse(t *testing.T) {
 }
 
 func TestRequiresPessimisticObjectLifecycleTxn(t *testing.T) {
+	objectDecision := func(ses FeSession, stmt tree.Statement, db string) bool {
+		value, err := requiresPessimisticObjectLifecycleTxn(context.Background(), ses, stmt, db)
+		require.NoError(t, err)
+		return value
+	}
+	modeDecision := func(ses FeSession, stmt tree.Statement, db string) bool {
+		value, err := requiresPessimisticLifecycleModeTxn(context.Background(), ses, stmt, db)
+		require.NoError(t, err)
+		return value
+	}
 	persistent := tree.NewTableName(tree.Identifier("persistent"), tree.ObjectNamePrefix{
 		SchemaName: tree.Identifier("db"), ExplicitSchema: true,
 	}, nil)
@@ -2366,21 +2376,21 @@ func TestRequiresPessimisticObjectLifecycleTxn(t *testing.T) {
 		&tree.DataBranchMerge{},
 		&tree.DataBranchPick{},
 	} {
-		require.True(t, requiresPessimisticObjectLifecycleTxn(nil, stmt, ""))
+		require.True(t, objectDecision(nil, stmt, ""))
 	}
-	require.False(t, requiresPessimisticObjectLifecycleTxn(nil, &tree.CreateView{}, ""))
-	require.False(t, requiresPessimisticObjectLifecycleTxn(nil, &tree.DropTable{Temporary: true}, ""))
-	require.False(t, requiresPessimisticObjectLifecycleTxn(nil, &tree.Select{}, ""))
+	require.False(t, objectDecision(nil, &tree.CreateView{}, ""))
+	require.False(t, objectDecision(nil, &tree.DropTable{Temporary: true}, ""))
+	require.False(t, objectDecision(nil, &tree.Select{}, ""))
 
 	ses := &Session{tempTables: make(map[string]string), tempTablesRev: make(map[string]string)}
 	ses.AddTempTable("db", "alias", "__mo_temp_alias")
 	alias := tree.NewTableName(tree.Identifier("alias"), tree.ObjectNamePrefix{
 		SchemaName: tree.Identifier("db"), ExplicitSchema: true,
 	}, nil)
-	require.False(t, requiresPessimisticObjectLifecycleTxn(ses, &tree.DropTable{
+	require.False(t, objectDecision(ses, &tree.DropTable{
 		Names: tree.TableNames{alias},
 	}, ""))
-	require.True(t, requiresPessimisticObjectLifecycleTxn(ses, &tree.DropTable{
+	require.True(t, objectDecision(ses, &tree.DropTable{
 		Names: tree.TableNames{alias, persistent},
 	}, ""))
 
@@ -2392,11 +2402,11 @@ func TestRequiresPessimisticObjectLifecycleTxn(t *testing.T) {
 		&tree.DataBranchCreateTable{},
 		&tree.DataBranchCreateDatabase{},
 	} {
-		require.True(t, requiresPessimisticLifecycleModeTxn(nil, stmt, ""))
-		require.False(t, requiresPessimisticObjectLifecycleTxn(nil, stmt, ""))
+		require.True(t, modeDecision(nil, stmt, ""))
+		require.False(t, objectDecision(nil, stmt, ""))
 	}
-	require.False(t, requiresPessimisticLifecycleModeTxn(nil, &tree.TruncateTable{}, ""))
-	require.False(t, requiresPessimisticLifecycleModeTxn(nil, &tree.Select{}, ""))
+	require.False(t, modeDecision(nil, &tree.TruncateTable{}, ""))
+	require.False(t, modeDecision(nil, &tree.Select{}, ""))
 
 	// The session alias wins over a persistent table of the same name, while
 	// qualified names and prepared-statement default databases remain scoped.
@@ -2407,11 +2417,11 @@ func TestRequiresPessimisticObjectLifecycleTxn(t *testing.T) {
 	qualifiedOther := tree.NewTableName(tree.Identifier("alias"), tree.ObjectNamePrefix{
 		SchemaName: tree.Identifier("other"), ExplicitSchema: true,
 	}, nil)
-	require.False(t, requiresPessimisticLifecycleModeTxn(ses, &tree.AlterTable{Table: temp}, "db"))
-	require.False(t, requiresPessimisticLifecycleModeTxn(ses, &tree.AlterTable{Table: qualifiedTemp}, "other"))
-	require.True(t, requiresPessimisticLifecycleModeTxn(ses, &tree.AlterTable{Table: temp}, "other"))
-	require.True(t, requiresPessimisticLifecycleModeTxn(ses, &tree.AlterTable{Table: qualifiedOther}, "db"))
-	require.True(t, requiresPessimisticLifecycleModeTxn(nil, &tree.AlterTable{Table: qualifiedTemp}, "db"))
+	require.False(t, modeDecision(ses, &tree.AlterTable{Table: temp}, "db"))
+	require.False(t, modeDecision(ses, &tree.AlterTable{Table: qualifiedTemp}, "other"))
+	require.True(t, modeDecision(ses, &tree.AlterTable{Table: temp}, "other"))
+	require.True(t, modeDecision(ses, &tree.AlterTable{Table: qualifiedOther}, "db"))
+	require.True(t, modeDecision(nil, &tree.AlterTable{Table: qualifiedTemp}, "db"))
 }
 
 func TestCreateRollsBackPublishedGenerationOnStorageInitFailure(t *testing.T) {

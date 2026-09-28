@@ -20,6 +20,7 @@ import (
 	"fmt"
 	"math"
 	"slices"
+	"strconv"
 	"strings"
 	"time"
 
@@ -1130,11 +1131,24 @@ func (s *Scope) alterTableCopy(c *Compile, cleanup *alterAutoIncrementResetClean
 	}
 	tblName := qry.GetTableDef().GetName()
 	isTemp := qry.TableDef.IsTemporary
+	registeredTempAlias := qry.TableDef.Name
 	if isTemp {
 		var err error
 		tblName, err = resolveAlterTemporaryTable(c, dbName, qry.TableDef)
 		if err != nil {
 			return err
+		}
+		if defines.Mode2NameResolutionEnabled(c.proc.Ctx) {
+			aliases, ok := c.proc.GetSession().(interface {
+				GetTempTableAliasByRealName(string, string) (string, bool)
+			})
+			if !ok {
+				return moerr.NewInternalError(c.proc.Ctx, "temporary table alias lookup is unavailable")
+			}
+			registeredTempAlias, ok = aliases.GetTempTableAliasByRealName(dbName, tblName)
+			if !ok {
+				return moerr.NewInternalError(c.proc.Ctx, "temporary table alias is missing")
+			}
 		}
 		originalCtx := c.proc.Ctx
 		c.proc.Ctx = attachInternalExecutorSession(originalCtx, c.proc.GetSession())
@@ -1150,6 +1164,16 @@ func (s *Scope) alterTableCopy(c *Compile, cleanup *alterAutoIncrementResetClean
 	if err != nil {
 		return convertDBEOBToNoSuchTable(c.proc.Ctx, err, dbName, tblName)
 	}
+	resolvedDatabaseID := ""
+	if defines.Mode2NameResolutionEnabled(c.proc.Ctx) {
+		named, ok := dbSource.(interface{ GetPhysicalName() string })
+		if !ok || named.GetPhysicalName() == "" {
+			return moerr.NewInternalError(c.proc.Ctx, "database resolver did not return physical name")
+		}
+		dbName = named.GetPhysicalName()
+		qry.Database = dbName
+		resolvedDatabaseID = dbSource.GetDatabaseId(c.proc.Ctx)
+	}
 
 	accountId, err := defines.GetAccountId(c.proc.Ctx)
 	if err != nil {
@@ -1159,6 +1183,9 @@ func (s *Scope) alterTableCopy(c *Compile, cleanup *alterAutoIncrementResetClean
 	originRel, err := dbSource.Relation(c.proc.Ctx, tblName, nil)
 	if err != nil {
 		return err
+	}
+	if defines.Mode2NameResolutionEnabled(c.proc.Ctx) {
+		tblName = originRel.GetTableDef(c.proc.Ctx).Name
 	}
 
 	if isTemp && originRel.GetTableID(c.proc.Ctx) != qry.TableDef.TblId {
@@ -1190,6 +1217,41 @@ func (s *Scope) alterTableCopy(c *Compile, cleanup *alterAutoIncrementResetClean
 		if err = lockMoDatabase(c, dbName, lock.LockMode_Shared); err != nil {
 			return err
 		}
+		if defines.Mode2NameResolutionEnabled(c.proc.Ctx) {
+			if lineageTxnOp.Txn().IsRCIsolation() {
+				now, _ := moruntime.ServiceRuntime(c.proc.GetService()).Clock().Now()
+				if err := lineageTxnOp.GetWorkspace().AdvanceSnapshot(c.proc.Ctx, now); err != nil {
+					return err
+				}
+			}
+			currentDB, lookupErr := c.e.Database(c.proc.Ctx, dbName, lineageTxnOp)
+			if lookupErr != nil || currentDB.GetDatabaseId(c.proc.Ctx) != resolvedDatabaseID {
+				return moerr.NewTxnNeedRetryWithDefChanged(c.proc.Ctx)
+			}
+		}
+		if defines.Mode2NameResolutionEnabled(c.proc.Ctx) && !c.disableLock {
+			if qry.CopyTableDef == nil || qry.CopyTableDef.Name == "" {
+				return moerr.NewInternalError(c.proc.Ctx, "missing COPY table name for mode-2 namespace lock")
+			}
+			// The nested CREATE replans hidden index tables with fresh UUIDs.
+			// Reserve their whole prefix before taking the original table X lock.
+			if len(qry.CopyTableDef.Indexes) != 0 {
+				databaseID, parseErr := strconv.ParseUint(dbSource.GetDatabaseId(c.proc.Ctx), 10, 64)
+				if parseErr != nil {
+					return moerr.NewInternalError(c.proc.Ctx, "invalid database ID for COPY index namespace lock")
+				}
+				if err = lockHiddenIndexNamespace(c, databaseID, lock.LockMode_Exclusive); err != nil {
+					return err
+				}
+			}
+			copyName := qry.CopyTableDef.Name
+			if isTemp && !defines.IsTempTableName(copyName) {
+				copyName = defines.GenTempTableName(c.proc.Base.SessionInfo.SessionId, dbName, copyName)
+			}
+			if err = lockTableCreationNamespaces(c, dbSource, []string{copyName}); err != nil {
+				return err
+			}
+		}
 
 		// 1. lock origin table metadata in catalog
 		if err = lockMoTable(c, dbName, tblName, lock.LockMode_Exclusive); err != nil {
@@ -1213,6 +1275,14 @@ func (s *Scope) alterTableCopy(c *Compile, cleanup *alterAutoIncrementResetClean
 				return err
 			}
 			retryErr = moerr.NewTxnNeedRetryWithDefChanged(c.proc.Ctx)
+		}
+		if defines.Mode2NameResolutionEnabled(c.proc.Ctx) {
+			currentRel, lookupErr := dbSource.Relation(c.proc.Ctx, tblName, nil)
+			if lookupErr != nil || currentRel.GetTableID(c.proc.Ctx) != oldId ||
+				(qry.TableDef.TblId != 0 && qry.TableDef.TblId != oldId) {
+				return moerr.NewTxnNeedRetryWithDefChanged(c.proc.Ctx)
+			}
+			originRel = currentRel
 		}
 
 		if qry.TableDef.Indexes != nil {
@@ -1545,7 +1615,10 @@ func (s *Scope) alterTableCopy(c *Compile, cleanup *alterAutoIncrementResetClean
 	}
 
 	if isTemp {
-		c.proc.GetSession().AddTempTable(dbName, qry.TableDef.Name, tblName)
+		if defines.Mode2NameResolutionEnabled(c.proc.Ctx) {
+			c.proc.GetSession().RemoveTempTableByRealName(tblName)
+		}
+		c.proc.GetSession().AddTempTable(dbName, registeredTempAlias, tblName)
 	}
 
 	if !isTemp && !plan2.IsFkBannedDatabase(qry.Database) {
@@ -3009,10 +3082,12 @@ func cloneUnaffectedIndexes(
 // resolveAlterTemporaryTable never falls through to a permanent table when a
 // cached plan outlives its session alias. The relation ID is checked by callers.
 func resolveAlterTemporaryTable(c *Compile, dbName string, def *plan.TableDef) (string, error) {
-	if session := c.proc.GetSession(); session != nil {
-		if name, ok := session.GetTempTable(dbName, def.Name); ok {
-			return name, nil
-		}
+	_, name, found, err := resolveDDLTemporaryAlias(c, dbName, def.Name)
+	if err != nil {
+		return "", err
+	}
+	if found {
+		return name, nil
 	}
 	return "", moerr.NewNoSuchTable(c.proc.Ctx, dbName, def.Name)
 }

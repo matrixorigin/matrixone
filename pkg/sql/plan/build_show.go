@@ -75,7 +75,7 @@ func buildShowCreateDatabase(stmt *tree.ShowCreateDatabase,
 		}
 		// get data from schema
 		//sql := fmt.Sprintf("SELECT md.datname as `Database` FROM %s.mo_database md WHERE md.datname = '%s'", MO_CATALOG_DB_NAME, stmt.Name)
-		sql := fmt.Sprintf("SELECT md.datname as `Database`,dat_createsql as `Create Database` FROM %s.mo_database %s md WHERE md.datname = '%s' and account_id=%d", MO_CATALOG_DB_NAME, snapshotSpec, stmt.Name, accountId)
+		sql := fmt.Sprintf("SELECT md.datname as `Database`,dat_createsql as `Create Database` FROM %s.mo_database %s md WHERE md.datname = '%s' and account_id=%d", MO_CATALOG_DB_NAME, snapshotSpec, name, accountId)
 		return returnByRewriteSQL(ctx, sql, plan.DataDefinition_SHOW_CREATEDATABASE)
 	}
 
@@ -109,22 +109,21 @@ func buildShowCreateTable(stmt *tree.ShowCreateTable, ctx CompilerContext) (*Pla
 		return nil, err
 	}
 	if sub != nil {
-		if !pubsub.InSubMetaTables(sub, tblName) {
-			return nil, moerr.NewInternalErrorNoCtxf("table %s not found in publication %s", tblName, sub.Name)
-		}
-
 		ctx.SetQueryingSubscription(sub)
 		defer func() {
 			ctx.SetQueryingSubscription(nil)
 		}()
 	}
 
-	_, tableDef, err := ctx.Resolve(dbName, tblName, snapshot)
+	obj, tableDef, err := ctx.Resolve(dbName, tblName, snapshot)
 	if err != nil {
 		return nil, err
 	}
 	if tableDef == nil {
 		return nil, moerr.NewNoSuchTable(ctx.GetContext(), dbName, tblName)
+	}
+	if sub != nil && !pubsub.InSubMetaTables(sub, obj.ObjName) {
+		return nil, moerr.NewInternalErrorNoCtxf("table %s not found in publication %s", tblName, sub.Name)
 	}
 	if err = ValidateSnapshotScope(snapshot, dbName, tblName, tableDef.DbId, SnapshotTableID(tableDef)); err != nil {
 		return nil, err
@@ -456,6 +455,8 @@ func buildShowColumnNumber(stmt *tree.ShowColumnNumber, ctx CompilerContext) (*P
 	if tableDef == nil {
 		return nil, moerr.NewNoSuchTable(ctx.GetContext(), dbName, tblName)
 	}
+	tblName = obj.ObjName
+	dbName = obj.SchemaName
 
 	ddlType := plan.DataDefinition_SHOW_COLUMNS
 	var sql string
@@ -504,6 +505,7 @@ func buildShowTableValues(stmt *tree.ShowTableValues, ctx CompilerContext) (*Pla
 	if tableDef == nil {
 		return nil, moerr.NewNoSuchTable(ctx.GetContext(), dbName, tblName)
 	}
+	tblName = obj.ObjName
 
 	if obj.PubInfo != nil {
 		sub := &SubscriptionMeta{
@@ -539,7 +541,7 @@ func buildShowTableValues(stmt *tree.ShowTableValues, ctx CompilerContext) (*Pla
 	if isAllNull {
 		sql += " LIMIT 1"
 	}
-	sql = fmt.Sprintf(sql, tblName)
+	sql = fmt.Sprintf(sql, "`"+strings.ReplaceAll(dbName, "`", "``")+"`.`"+strings.ReplaceAll(tblName, "`", "``")+"`")
 
 	return returnByRewriteSQL(ctx, sql, ddlType)
 }
@@ -567,6 +569,8 @@ func buildShowColumns(stmt *tree.ShowColumns, ctx CompilerContext) (*Plan, error
 	if tableDef == nil {
 		return nil, moerr.NewNoSuchTable(ctx.GetContext(), dbName, tblName)
 	}
+	tblName = obj.ObjName
+	dbName = obj.SchemaName
 
 	colIdToOriginName := make(map[uint64]string)
 	colNameToOriginName := make(map[string]string)
@@ -902,6 +906,9 @@ func buildShowIndex(stmt *tree.ShowIndex, ctx CompilerContext) (*Plan, error) {
 	if tableDef == nil {
 		return nil, moerr.NewNoSuchTable(ctx.GetContext(), dbName, tblName)
 	}
+	displayTblName := tblName
+	tblName = obj.ObjName
+	dbName = obj.SchemaName
 
 	ddlType := plan.DataDefinition_SHOW_INDEX
 
@@ -975,7 +982,6 @@ func buildShowIndex(stmt *tree.ShowIndex, ctx CompilerContext) (*Plan, error) {
 		"ORDER BY CASE `idx`.`type` WHEN 'PRIMARY' THEN 0 WHEN 'UNIQUE' THEN 1 ELSE 2 END, " +
 		"MIN(`idx`.`id`), `idx`.`ordinal_position`"
 
-	displayTblName := tblName
 	if tableDef.IsTemporary {
 		tblName = tableDef.Name
 	}

@@ -1412,8 +1412,17 @@ type tableOp struct {
 
 type tableOpsChain struct {
 	sync.RWMutex
-	names       map[tableKey][]tableOp
+	names map[tableKey][]tableOp
+	// Built on the first mode-2 lookup, then maintained with names under the
+	// same lock. Mode 0/1 transactions pay no index allocation.
+	foldedNames map[foldedTableKey]map[tableKey]struct{}
 	creatdInTxn map[uint64]int // tableId -> statementId
+}
+
+type foldedTableKey struct {
+	accountId  uint32
+	databaseId uint64
+	name       string
 }
 
 type dbOp struct {
@@ -1430,7 +1439,13 @@ type databaseKey struct {
 
 type dbOpsChain struct {
 	sync.RWMutex
-	names map[databaseKey][]dbOp
+	names       map[databaseKey][]dbOp
+	foldedNames map[foldedDatabaseKey]map[databaseKey]struct{}
+}
+
+type foldedDatabaseKey struct {
+	accountId uint32
+	name      string
 }
 
 // txnTable represents an opened table in a transaction

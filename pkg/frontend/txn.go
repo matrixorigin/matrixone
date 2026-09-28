@@ -703,25 +703,27 @@ func (th *TxnHandler) createUnsafe(execCtx *ExecCtx) (err error) {
 }
 
 func requiresPessimisticObjectLifecycleTxn(
+	ctx context.Context,
 	ses FeSession,
 	stmt tree.Statement,
 	defaultDatabase string,
-) bool {
+) (bool, error) {
 	switch st := stmt.(type) {
 	case *tree.TruncateTable, *tree.CreatePitr, *tree.DropPitr, *tree.AlterPitr,
 		*tree.DropDatabase, *tree.DropView, *tree.DropSequence, *tree.AlterView,
 		*tree.AlterSequence, *tree.DataBranchDeleteTable, *tree.DataBranchDeleteDatabase,
 		*tree.DataBranchDiff, *tree.DataBranchMerge, *tree.DataBranchPick:
-		return true
+		return true, nil
 	case *tree.DropTable:
 		// Ordinary DROP TABLE can resolve to a session temporary alias only after
 		// parsing. Classify every target before admission so temp-only statements
 		// do not inherit the persistent catalog protocol.
-		return len(capturePersistentDropTableTargets(ses, st, defaultDatabase)) > 0
+		targets, err := capturePersistentDropTableTargets(ctx, ses, st, defaultDatabase)
+		return len(targets) > 0, err
 	case *tree.CreateView:
-		return st.Replace
+		return st.Replace, nil
 	default:
-		return false
+		return false, nil
 	}
 }
 
@@ -730,19 +732,24 @@ func requiresPessimisticObjectLifecycleTxn(
 // mode so lifecycle barriers are physical locks, but forcing RC would change
 // existing SI behavior.
 func requiresPessimisticLifecycleModeTxn(
+	ctx context.Context,
 	ses FeSession,
 	stmt tree.Statement,
 	defaultDatabase string,
-) bool {
+) (bool, error) {
 	switch st := stmt.(type) {
 	case *tree.AlterTable:
-		return st.Table == nil || !isSessionTemporaryTable(ses, st.Table, defaultDatabase)
+		if st.Table == nil {
+			return true, nil
+		}
+		isTemporary, err := isSessionTemporaryTable(ctx, ses, st.Table, defaultDatabase)
+		return !isTemporary, err
 	case *tree.RenameTable,
 		*tree.CloneTable, *tree.CloneDatabase,
 		*tree.DataBranchCreateTable, *tree.DataBranchCreateDatabase:
-		return true
+		return true, nil
 	default:
-		return false
+		return false, nil
 	}
 }
 

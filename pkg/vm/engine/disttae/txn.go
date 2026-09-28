@@ -27,6 +27,7 @@ import (
 	"time"
 
 	"github.com/matrixorigin/matrixone/pkg/catalog"
+	"github.com/matrixorigin/matrixone/pkg/common/identifier"
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
 	"github.com/matrixorigin/matrixone/pkg/common/mpool"
 	"github.com/matrixorigin/matrixone/pkg/container/batch"
@@ -3154,6 +3155,9 @@ func newDbOps() *dbOpsChain {
 func (c *dbOpsChain) addCreateDatabase(key databaseKey, statementId int, db *txnDatabase) {
 	c.Lock()
 	defer c.Unlock()
+	if _, exists := c.names[key]; !exists {
+		c.addFoldedKeyLocked(key)
+	}
 	c.names[key] = append(c.names[key],
 		dbOp{kind: INSERT, statementId: statementId, databaseId: db.databaseId, payload: db})
 }
@@ -3161,6 +3165,9 @@ func (c *dbOpsChain) addCreateDatabase(key databaseKey, statementId int, db *txn
 func (c *dbOpsChain) addDeleteDatabase(key databaseKey, statementId int, did uint64) {
 	c.Lock()
 	defer c.Unlock()
+	if _, exists := c.names[key]; !exists {
+		c.addFoldedKeyLocked(key)
+	}
 	c.names[key] = append(c.names[key],
 		dbOp{kind: DELETE, databaseId: did, statementId: statementId})
 }
@@ -3184,6 +3191,65 @@ func (c *dbOpsChain) existAndActive(key databaseKey) *txnDatabase {
 	return nil
 }
 
+// foldedSnapshot captures only transaction-local operations that share a
+// mode-2 identity. Their latest operation overrides the committed catalog
+// entry with the same physical name.
+func (c *dbOpsChain) foldedSnapshot(accountID uint32, foldedName string) map[string]dbOp {
+	c.RLock()
+	if c.foldedNames != nil {
+		result := c.foldedSnapshotLocked(accountID, foldedName)
+		c.RUnlock()
+		return result
+	}
+	c.RUnlock()
+	c.Lock()
+	defer c.Unlock()
+	if c.foldedNames == nil {
+		c.foldedNames = make(map[foldedDatabaseKey]map[databaseKey]struct{})
+		for key := range c.names {
+			c.addFoldedKeyLocked(key)
+		}
+	}
+	return c.foldedSnapshotLocked(accountID, foldedName)
+}
+
+func (c *dbOpsChain) foldedSnapshotLocked(accountID uint32, foldedName string) map[string]dbOp {
+	var result map[string]dbOp
+	for key := range c.foldedNames[foldedDatabaseKey{accountID, foldedName}] {
+		if result == nil {
+			result = make(map[string]dbOp)
+		}
+		ops := c.names[key]
+		result[key.name] = ops[len(ops)-1]
+	}
+	return result
+}
+
+func (c *dbOpsChain) addFoldedKeyLocked(key databaseKey) {
+	if c.foldedNames == nil {
+		return
+	}
+	folded := foldedDatabaseKey{key.accountId, identifier.Fold(key.name)}
+	group := c.foldedNames[folded]
+	if group == nil {
+		group = make(map[databaseKey]struct{})
+		c.foldedNames[folded] = group
+	}
+	group[key] = struct{}{}
+}
+
+func (c *dbOpsChain) removeFoldedKeyLocked(key databaseKey) {
+	if c.foldedNames == nil {
+		return
+	}
+	folded := foldedDatabaseKey{key.accountId, identifier.Fold(key.name)}
+	group := c.foldedNames[folded]
+	delete(group, key)
+	if len(group) == 0 {
+		delete(c.foldedNames, folded)
+	}
+}
+
 func (c *dbOpsChain) rollbackLastStatement(statementId int) {
 	c.Lock()
 	defer c.Unlock()
@@ -3196,6 +3262,7 @@ func (c *dbOpsChain) rollbackLastStatement(statementId int) {
 		}
 		if i < 0 {
 			delete(c.names, k)
+			c.removeFoldedKeyLocked(k)
 		} else if i < len(v)-1 {
 			c.names[k] = v[:i+1]
 		}
@@ -3226,6 +3293,9 @@ func (c *tableOpsChain) existCreatedInTxn(tid uint64) bool {
 func (c *tableOpsChain) addCreateTable(key tableKey, statementId int, t *txnTable) {
 	c.Lock()
 	defer c.Unlock()
+	if _, exists := c.names[key]; !exists {
+		c.addFoldedKeyLocked(key)
+	}
 	c.names[key] = append(c.names[key],
 		tableOp{kind: INSERT, statementId: statementId, tableId: t.tableId, payload: t})
 }
@@ -3233,6 +3303,9 @@ func (c *tableOpsChain) addCreateTable(key tableKey, statementId int, t *txnTabl
 func (c *tableOpsChain) addDeleteTable(key tableKey, statementId int, tid uint64) {
 	c.Lock()
 	defer c.Unlock()
+	if _, exists := c.names[key]; !exists {
+		c.addFoldedKeyLocked(key)
+	}
 	c.names[key] = append(c.names[key],
 		tableOp{kind: DELETE, tableId: tid, statementId: statementId})
 }
@@ -3254,6 +3327,64 @@ func (c *tableOpsChain) existAndActive(key tableKey) *txnTable {
 		return x[len(x)-1].payload
 	}
 	return nil
+}
+
+func (c *tableOpsChain) foldedSnapshot(
+	accountID uint32, databaseID uint64, foldedName string,
+) map[string]tableOp {
+	c.RLock()
+	if c.foldedNames != nil {
+		result := c.foldedSnapshotLocked(accountID, databaseID, foldedName)
+		c.RUnlock()
+		return result
+	}
+	c.RUnlock()
+	c.Lock()
+	defer c.Unlock()
+	if c.foldedNames == nil {
+		c.foldedNames = make(map[foldedTableKey]map[tableKey]struct{})
+		for key := range c.names {
+			c.addFoldedKeyLocked(key)
+		}
+	}
+	return c.foldedSnapshotLocked(accountID, databaseID, foldedName)
+}
+
+func (c *tableOpsChain) foldedSnapshotLocked(accountID uint32, databaseID uint64, foldedName string) map[string]tableOp {
+	var result map[string]tableOp
+	for key := range c.foldedNames[foldedTableKey{accountID, databaseID, foldedName}] {
+		if result == nil {
+			result = make(map[string]tableOp)
+		}
+		ops := c.names[key]
+		result[key.name] = ops[len(ops)-1]
+	}
+	return result
+}
+
+func (c *tableOpsChain) addFoldedKeyLocked(key tableKey) {
+	if c.foldedNames == nil {
+		return
+	}
+	folded := foldedTableKey{key.accountId, key.databaseId, identifier.Fold(key.name)}
+	group := c.foldedNames[folded]
+	if group == nil {
+		group = make(map[tableKey]struct{})
+		c.foldedNames[folded] = group
+	}
+	group[key] = struct{}{}
+}
+
+func (c *tableOpsChain) removeFoldedKeyLocked(key tableKey) {
+	if c.foldedNames == nil {
+		return
+	}
+	folded := foldedTableKey{key.accountId, key.databaseId, identifier.Fold(key.name)}
+	group := c.foldedNames[folded]
+	delete(group, key)
+	if len(group) == 0 {
+		delete(c.foldedNames, folded)
+	}
 }
 
 // queryNameByTid:
@@ -3302,6 +3433,7 @@ func (c *tableOpsChain) rollbackLastStatement(statementId int) {
 		}
 		if i < 0 {
 			delete(c.names, k)
+			c.removeFoldedKeyLocked(k)
 		} else if i < len(v)-1 {
 			c.names[k] = v[:i+1]
 		}

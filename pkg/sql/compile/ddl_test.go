@@ -2496,11 +2496,12 @@ func Test_getSqlForCheckPitrDup(t *testing.T) {
 			OriginAccountName: origin,
 		}
 	}
-	assert.Contains(t, getSqlForCheckPitrDup(mk(int32(tree.PITRLEVELCLUSTER), false)), "obj_id")
-	assert.Contains(t, getSqlForCheckPitrDup(mk(int32(tree.PITRLEVELACCOUNT), true)), "account_name = 'acc'")
-	assert.Contains(t, getSqlForCheckPitrDup(mk(int32(tree.PITRLEVELACCOUNT), false)), "account_name = 'curacc'")
-	assert.Contains(t, getSqlForCheckPitrDup(mk(int32(tree.PITRLEVELDATABASE), false)), "database_name = 'db'")
-	assert.Contains(t, getSqlForCheckPitrDup(mk(int32(tree.PITRLEVELTABLE), false)), "table_name = 'tb'")
+	assert.Contains(t, getSqlForCheckPitrDup(mk(int32(tree.PITRLEVELCLUSTER), false), false), "obj_id")
+	assert.Contains(t, getSqlForCheckPitrDup(mk(int32(tree.PITRLEVELACCOUNT), true), false), "account_name = 'acc'")
+	assert.Contains(t, getSqlForCheckPitrDup(mk(int32(tree.PITRLEVELACCOUNT), false), false), "account_name = 'curacc'")
+	assert.Contains(t, getSqlForCheckPitrDup(mk(int32(tree.PITRLEVELDATABASE), false), false), "database_name = 'db'")
+	assert.Contains(t, getSqlForCheckPitrDup(mk(int32(tree.PITRLEVELTABLE), false), false), "table_name = 'tb'")
+	assert.Contains(t, getSqlForCheckPitrDup(mk(int32(tree.PITRLEVELTABLE), false), true), "lower(table_name) = lower('tb')")
 }
 
 func TestPitrInternalSQLEscapesStringLiterals(t *testing.T) {
@@ -2516,7 +2517,7 @@ func TestPitrInternalSQLEscapesStringLiterals(t *testing.T) {
 		DatabaseName:     "db'name",
 		TableName:        "tb\\name",
 	}
-	sql := getSqlForCheckPitrDup(p)
+	sql := getSqlForCheckPitrDup(p, false)
 	assert.Contains(t, sql, "database_name = 'db''name'")
 	assert.Contains(t, sql, "table_name = 'tb\\\\name'")
 }
@@ -2584,14 +2585,17 @@ func TestResolveCurrentPitrObjectIDRefreshesPlannedTableID(t *testing.T) {
 	eng.dbs["db"] = db
 	c := &Compile{e: eng, proc: testutil.NewProc(t)}
 
-	objectID, err := c.resolveCurrentPitrObjectID(&plan2.CreatePitr{
+	createPitr := &plan2.CreatePitr{
 		Level:        int32(tree.PITRLEVELTABLE),
 		DatabaseName: "db",
 		TableName:    "tbl",
 		TableId:      99,
-	})
+	}
+	objectID, err := c.resolveCurrentPitrObjectID(createPitr)
 	require.NoError(t, err)
 	require.Equal(t, uint64(1), objectID)
+	require.Equal(t, "db", createPitr.DatabaseName)
+	require.Equal(t, "tbl", createPitr.TableName)
 }
 
 func TestCheckSysMoCatalogPitrResult(t *testing.T) {
@@ -3229,6 +3233,76 @@ func stubPublicationGuardForDropTests(t *testing.T) {
 	stub := gostub.Stub(&ensureDatabaseNotPublished,
 		func(_ *Compile, _ engine.Database, _ string) error { return nil })
 	t.Cleanup(stub.Reset)
+}
+
+type publicationCheckSession struct {
+	testInternalExecutorSession
+	publishing bool
+	checkErr   error
+	calls      int
+}
+
+func (s *publicationCheckSession) CheckDatabasePublishing(context.Context, string) (bool, error) {
+	s.calls++
+	return s.publishing, s.checkErr
+}
+
+func TestEnsureDatabaseNotPublishedMode2LegacyIdentity(t *testing.T) {
+	for _, tc := range []struct {
+		name       string
+		indexed    bool
+		publishing bool
+		checkErr   error
+		wantErr    string
+		wantCalls  int
+	}{
+		{"legacy_id_zero_named_publication", false, false,
+			moerr.NewInternalError(t.Context(), "publication catalog has inconsistent database identity"),
+			"inconsistent database identity", 1},
+		{"database_star_does_not_block_unrelated_database", false, false, nil, "", 1},
+		{"current_physical_id_is_protected", true, false, nil, "is publishing", 0},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			ctrl := gomock.NewController(t)
+			proc := testutil.NewProcess(t)
+			ctx := defines.AttachMode2NameResolution(t.Context(), true)
+			proc.Ctx = ctx
+			proc.ReplaceTopCtx(ctx)
+			ses := &publicationCheckSession{publishing: tc.publishing, checkErr: tc.checkErr}
+			proc.Session = ses
+
+			query := "select 1 from mo_catalog.mo_pubs where database_id = 42 limit 1"
+			exec := &mongoDBMappingTestExecutor{results: make(map[string]executor.Result)}
+			if tc.indexed {
+				result := executor.NewMemResult([]types.Type{types.T_int64.ToType()}, proc.Mp())
+				result.NewBatchWithRowCount(1)
+				require.NoError(t, executor.AppendFixedRows(result, 0, []int64{1}))
+				exec.results[query] = result.GetResult()
+			}
+			rt := moruntime.ServiceRuntime(proc.GetService())
+			previous, hadPrevious := rt.GetGlobalVariables(moruntime.InternalSQLExecutor)
+			rt.SetGlobalVariables(moruntime.InternalSQLExecutor, exec)
+			t.Cleanup(func() {
+				if hadPrevious {
+					rt.SetGlobalVariables(moruntime.InternalSQLExecutor, previous)
+				} else {
+					rt.CompareAndDeleteGlobalVariables(moruntime.InternalSQLExecutor, exec)
+				}
+			})
+
+			db := mock_frontend.NewMockDatabase(ctrl)
+			db.EXPECT().IsSubscription(gomock.Any()).Return(false)
+			db.EXPECT().GetDatabaseId(gomock.Any()).Return("42")
+			err := ensureDatabaseNotPublished(&Compile{proc: proc}, db, "QaPhysical")
+			if tc.wantErr == "" {
+				require.NoError(t, err)
+			} else {
+				require.ErrorContains(t, err, tc.wantErr)
+			}
+			require.Equal(t, tc.wantCalls, ses.calls)
+			require.Equal(t, []string{query}, exec.sqls)
+		})
+	}
 }
 
 func TestDropDatabaseLookupErrorIsNotMissing(t *testing.T) {

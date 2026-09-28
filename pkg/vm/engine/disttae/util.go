@@ -851,6 +851,82 @@ func execReadSql(
 	return exec.Exec(ctx, sql, opts)
 }
 
+// scanReadSql consumes a single internal SQL scan without retaining the full
+// result. The producer owns the executor call; the consumer owns each streamed
+// batch and joins the producer before returning, including on cancellation.
+func scanReadSql(
+	ctx context.Context,
+	op client.TxnOperator,
+	sql string,
+	visit func(executor.Result) error,
+) error {
+	service := op.GetWorkspace().(*Transaction).proc.GetService()
+	v, ok := moruntime.ServiceRuntime(service).GetGlobalVariables(moruntime.InternalSQLExecutor)
+	if !ok {
+		panic(fmt.Sprintf("missing sql executor in service %q", service))
+	}
+	exec := v.(executor.SQLExecutor)
+	proc := op.GetWorkspace().(*Transaction).proc
+	streamCtx, cancel := context.WithCancel(ctx)
+	defer cancel()
+	results := make(chan executor.Result, 1)
+	// The SQL executor may report an error here before returning it from Exec.
+	// Drain both channels until the producer closes them to avoid blocking Exec.
+	errors := make(chan error, 1)
+	done := make(chan error, 1)
+	opts := executor.Options{}.
+		WithDisableIncrStatement().
+		WithTxn(op).
+		WithTimeZone(proc.GetSessionInfo().TimeZone).
+		WithStatementOption(executor.StatementOption{}.WithDisableLog()).
+		WithStreaming(results, errors)
+	go func() {
+		result, err := exec.Exec(streamCtx, sql, opts)
+		result.Close()
+		close(results)
+		close(errors)
+		done <- err
+	}()
+	var visitErr error
+	var streamErr error
+	for results != nil || errors != nil {
+		select {
+		case result, open := <-results:
+			if !open {
+				results = nil
+				continue
+			}
+			if visitErr == nil && streamErr == nil {
+				visitErr = visit(result)
+				if visitErr != nil {
+					cancel()
+				}
+			}
+			result.Close()
+		case err, open := <-errors:
+			if !open {
+				errors = nil
+				continue
+			}
+			if streamErr == nil && err != nil {
+				streamErr = err
+				cancel()
+			}
+		}
+	}
+	execErr := <-done
+	if visitErr != nil {
+		return visitErr
+	}
+	if streamErr != nil {
+		return streamErr
+	}
+	if execErr != nil {
+		return execErr
+	}
+	return context.Cause(ctx)
+}
+
 func fillTsVecForSysTableQueryBatch(bat *batch.Batch, ts types.TS, m *mpool.MPool) error {
 	tsvec := vector.NewVec(types.T_TS.ToType())
 	for i := 0; i < bat.RowCount(); i++ {

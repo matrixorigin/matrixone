@@ -317,7 +317,8 @@ func TestV408LoginRejectsAccountDroppedAfterAuthentication(t *testing.T) {
 		defer authConn.Close()
 		var connID uint32
 		require.NoError(t, authConn.QueryRowContext(ctx, "select connection_id()").Scan(&connID))
-		sessionManager := cn.RawService().(frontend.BaseService).SessionMgr()
+		baseService := cn.RawService().(frontend.BaseService)
+		sessionManager := baseService.SessionMgr()
 		var ses *frontend.Session
 		for _, candidate := range sessionManager.GetAllSessions() {
 			candidate := candidate.(*frontend.Session)
@@ -342,8 +343,10 @@ func TestV408LoginRejectsAccountDroppedAfterAuthentication(t *testing.T) {
 
 		for range 2 {
 			// Retry also proves that no successful checked-tenant cache entry was
-			// published for the failed post-authentication compensation.
-			err = ses.MaybeUpgradeTenant(ctx, ses.GetCreateVersion(), int64(tenantID))
+			// published for the failed post-authentication compensation. Dropping
+			// the account can close the borrowed frontend session, so check through
+			// the service that owns the tenant-upgrade cache.
+			err = baseService.CheckTenantUpgrade(ctx, int64(tenantID))
 			var notFound *moerr.Error
 			require.ErrorAs(t, err, &notFound)
 			require.True(t, moerr.IsMoErrCode(notFound, moerr.ErrNotFound), "unexpected error: %v", err)

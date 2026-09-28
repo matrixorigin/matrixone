@@ -718,6 +718,9 @@ func (rt *Routine) migrateConnectionTo(ctx context.Context, req *query.MigrateCo
 		// snapshot cannot prove LAST_INSERT_ID state is authoritative.
 		return moerr.GetOkExpectedNotSafeToStartTransfer()
 	}
+	if !req.ModeAtSourceExported || req.ModeAtSource < 0 || req.ModeAtSource > 2 {
+		return moerr.GetOkExpectedNotSafeToStartTransfer()
+	}
 
 	rt.mc.migrateOnce.Do(func() {
 		ses := rt.getSession()
@@ -791,6 +794,14 @@ func (rt *Routine) migrateConnectionFromActionWithCapabilities(
 		// a successful handoff to silently reset LAST_INSERT_ID().
 		return moerr.GetOkExpectedNotSafeToStartTransfer()
 	}
+	modeValue, err := ses.GetSessionSysVar("lower_case_table_names")
+	if err != nil {
+		return err
+	}
+	mode, valid := modeValue.(int64)
+	if !valid || mode < 0 || mode > 2 {
+		return moerr.NewInternalError(operationCtx, "invalid lower_case_table_names during migration")
+	}
 	if states := function.UserLevelLocksForMigration(ses.proc); len(states) > 0 {
 		return moerr.NewInternalErrorNoCtx("cannot migrate connection while user-level locks are held")
 	}
@@ -823,6 +834,8 @@ func (rt *Routine) migrateConnectionFromActionWithCapabilities(
 		resp.TempTableStateExported = true
 	}
 	resp.UserLevelLockReleaseSupported = true
+	resp.ModeAtSource = int32(mode)
+	resp.ModeAtSourceExported = true
 	resp.DB = ses.GetDatabaseName()
 	resp.LastAffectedRows = ses.GetLastAffectedRows()
 	resp.LastInsertID = ses.GetLastInsertID()

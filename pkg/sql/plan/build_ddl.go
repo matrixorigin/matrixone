@@ -31,6 +31,7 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/sql/parsers"
 
 	"github.com/matrixorigin/matrixone/pkg/catalog"
+	"github.com/matrixorigin/matrixone/pkg/common/identifier"
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
 	"github.com/matrixorigin/matrixone/pkg/common/objectkey"
 	"github.com/matrixorigin/matrixone/pkg/common/runtime"
@@ -2272,6 +2273,16 @@ func buildAlterSequence(stmt *tree.AlterSequence, ctx CompilerContext) (*Plan, e
 	} else if sub != nil {
 		return nil, moerr.NewInternalError(ctx.GetContext(), "cannot alter sequence in subscription database")
 	}
+	if defines.Mode2NameResolutionEnabled(ctx.GetContext()) {
+		obj, oldDef, err := ctx.Resolve(alterSequence.Database, alterSequence.TableDef.Name, nil)
+		if err != nil {
+			return nil, err
+		}
+		if oldDef != nil && obj != nil {
+			alterSequence.Database = obj.SchemaName
+			alterSequence.TableDef.Name = obj.ObjName
+		}
+	}
 
 	err := buildAlterSequenceTableDef(stmt, ctx, alterSequence)
 	if err != nil {
@@ -2720,6 +2731,15 @@ func buildCreateTable(
 		return nil, err
 	} else if sub != nil {
 		return nil, moerr.NewInternalError(ctx.GetContext(), "cannot create table in subscription database")
+	}
+	if defines.Mode2NameResolutionEnabled(ctx.GetContext()) {
+		physicalName, _, found, err := resolveDatabaseForPlan(ctx, createTable.Database, nil)
+		if err != nil {
+			return nil, err
+		}
+		if found {
+			createTable.Database = physicalName
+		}
 	}
 
 	// set tableDef
@@ -4116,36 +4136,53 @@ func buildTableDefs(stmt *tree.CreateTable, ctx CompilerContext, createTable *pl
 			return err
 		}
 		if existingTableDef == nil {
-			fks, catalogLayout, err := getFkReferredToWithCatalogLayout(ctx, createTable.Database, createTable.TableDef.Name)
-			if err != nil {
-				return err
+			referenceNames := []forwardFKReferenceName{{
+				database: createTable.Database, table: createTable.TableDef.Name,
+			}}
+			if defines.Mode2NameResolutionEnabled(ctx.GetContext()) {
+				referenceNames, err = getMode2ForwardFKReferenceNames(ctx, createTable.Database, createTable.TableDef.Name)
+				if err != nil {
+					return err
+				}
 			}
 			// for fk forward reference. the column id of the tableDef is not ready.
 			// setup fake column id to distinguish the columns
 			for i, def := range createTable.TableDef.Cols {
 				def.ColId = uint64(i)
 			}
-			for rkey, fkDefs := range fks {
-				for constraintName, defs := range fkDefs {
-					data, err := buildFkDataOfForwardRefer(ctx, constraintName, defs, createTable)
-					if err != nil {
-						return err
+			for _, referenceName := range referenceNames {
+				fks, catalogLayout, err := getFkReferredToWithCatalogLayout(ctx, referenceName.database, referenceName.table)
+				if err != nil {
+					return err
+				}
+				for rkey, fkDefs := range fks {
+					for constraintName, defs := range fkDefs {
+						data, err := buildFkDataOfForwardRefer(ctx, constraintName, defs, createTable)
+						if err != nil {
+							return err
+						}
+						// The child was created while foreign_key_checks was disabled, so
+						// its catalog row has no parent key name. Persist the selected key
+						// when the metadata column exists; an old-layout row is reconciled
+						// by the tenant migration after the columns are committed.
+						if catalogLayout == foreignKeyCatalogExtended {
+							createTable.UpdateFkSqls = append(createTable.UpdateFkSqls,
+								getSqlForUpdateFkReferencedIndex(rkey.Db, rkey.Tbl, constraintName, data.Def.ReferencedIndexName))
+						}
+						info := &plan.ForeignKeyInfo{
+							Db:           rkey.Db,
+							Table:        rkey.Tbl,
+							ColsReferred: data.ColsReferred,
+							Def:          data.Def,
+						}
+						createTable.FksReferToMe = append(createTable.FksReferToMe, info)
 					}
-					// The child was created while foreign_key_checks was disabled, so
-					// its catalog row has no parent key name. Persist the selected key
-					// when the metadata column exists; an old-layout row is reconciled
-					// by the tenant migration after the columns are committed.
-					if catalogLayout == foreignKeyCatalogExtended {
-						createTable.UpdateFkSqls = append(createTable.UpdateFkSqls,
-							getSqlForUpdateFkReferencedIndex(rkey.Db, rkey.Tbl, constraintName, data.Def.ReferencedIndexName))
-					}
-					info := &plan.ForeignKeyInfo{
-						Db:           rkey.Db,
-						Table:        rkey.Tbl,
-						ColsReferred: data.ColsReferred,
-						Def:          data.Def,
-					}
-					createTable.FksReferToMe = append(createTable.FksReferToMe, info)
+				}
+				if (referenceName.database != createTable.Database || referenceName.table != createTable.TableDef.Name) && len(fks) != 0 {
+					createTable.UpdateFkSqls = append(createTable.UpdateFkSqls, fmt.Sprintf(
+						"update `mo_catalog`.`mo_foreign_keys` set refer_db_name = %s, refer_table_name = %s where refer_db_name = %s and refer_table_name = %s",
+						quoteSQLStringLiteral(createTable.Database), quoteSQLStringLiteral(createTable.TableDef.Name),
+						quoteSQLStringLiteral(referenceName.database), quoteSQLStringLiteral(referenceName.table)))
 				}
 			}
 		}
@@ -5580,6 +5617,10 @@ func buildDropTableSingle(ifExists bool, temporary bool, name *tree.TableName, c
 		}
 		return dropTable, nil
 	}
+	if defines.Mode2NameResolutionEnabled(ctx.GetContext()) && obj != nil && !tableDef.IsTemporary {
+		dropTable.Database = obj.SchemaName
+		dropTable.Table = obj.ObjName
+	}
 	if err := validateTableIndexDefinitions(tableDef); err != nil {
 		return nil, err
 	}
@@ -5776,12 +5817,13 @@ func buildDropDatabase(stmt *tree.DropDatabase, ctx CompilerContext) (*Plan, err
 		IfExists: stmt.IfExists,
 		Database: string(stmt.Name),
 	}
-	if ctx.DatabaseExists(string(stmt.Name), nil) {
-		databaseId, err := ctx.GetDatabaseId(string(stmt.Name), nil)
-		if err != nil {
-			return nil, err
-		}
-		dropDB.DatabaseId = databaseId
+	physicalName, databaseID, found, err := resolveDatabaseForPlan(ctx, dropDB.Database, nil)
+	if err != nil {
+		return nil, err
+	}
+	if found {
+		dropDB.Database = physicalName
+		dropDB.DatabaseId = databaseID
 
 		// check foreign keys exists or not
 		enabled, err := IsForeignKeyChecksEnabled(ctx)
@@ -6163,6 +6205,11 @@ func buildAlterView(stmt *tree.AlterView, ctx CompilerContext) (*Plan, error) {
 				alterView.Database,
 				viewName)
 		}
+		if defines.Mode2NameResolutionEnabled(ctx.GetContext()) {
+			alterView.Database = obj.SchemaName
+			viewName = obj.ObjName
+			alterView.TableDef.Name = viewName
+		}
 	}
 
 	// step 2: generate new view def
@@ -6196,17 +6243,30 @@ func buildAlterView(stmt *tree.AlterView, ctx CompilerContext) (*Plan, error) {
 }
 
 func rejectCrossDatabaseTableRename(
-	ctx context.Context,
+	ctx CompilerContext,
 	sourceDatabase string,
 	option *tree.AlterOptionTableName,
 ) error {
 	target := option.Name.ToTableName()
-	if !target.ExplicitSchema || string(target.Schema()) == sourceDatabase {
+	if !target.ExplicitSchema {
+		return nil
+	}
+	targetDatabase := string(target.Schema())
+	if defines.Mode2NameResolutionEnabled(ctx.GetContext()) {
+		physical, _, found, err := resolveDatabaseForPlan(ctx, targetDatabase, nil)
+		if err != nil {
+			return err
+		}
+		if found {
+			targetDatabase = physical
+		}
+	}
+	if targetDatabase == sourceDatabase {
 		return nil
 	}
 
 	return moerr.NewNotSupportedf(
-		ctx,
+		ctx.GetContext(),
 		"cross-database table rename from database '%s' to '%s'",
 		sourceDatabase,
 		target.Schema(),
@@ -6228,13 +6288,31 @@ func buildRenameTable(stmt *tree.RenameTable, ctx CompilerContext) (*Plan, error
 		if schemaName == "" {
 			schemaName = ctx.DefaultDatabase()
 		}
+		mode2Names := defines.Mode2NameResolutionEnabled(ctx.GetContext())
+		if mode2Names {
+			physicalName, _, found, err := resolveDatabaseForPlan(ctx, schemaName, nil)
+			if err != nil {
+				return nil, err
+			}
+			if found {
+				schemaName = physicalName
+			}
+		}
 		srcKey := schemaName + "." + tableName
+		if mode2Names {
+			srcKey = schemaName + "." + identifier.Fold(tableName)
+		}
 		var objRef *ObjectRef
 		var tableDef *TableDef
 		var err error
+		mapped := false
 		if info, ok := nameMapping[srcKey]; ok {
+			mapped = true
 			objRef = info.objRef
 			tableDef = DeepCopyTableDef(info.tableDef, true)
+			if mode2Names {
+				tableName = info.tableDef.Name
+			}
 			tableDef.Name = tableName
 		} else if removed[srcKey] {
 			return nil, moerr.NewNoSuchTable(ctx.GetContext(), schemaName, tableName)
@@ -6247,12 +6325,16 @@ func buildRenameTable(stmt *tree.RenameTable, ctx CompilerContext) (*Plan, error
 		if tableDef == nil {
 			return nil, moerr.NewNoSuchTable(ctx.GetContext(), schemaName, tableName)
 		}
+		if mode2Names && !mapped && objRef != nil {
+			schemaName = objRef.SchemaName
+			tableName = objRef.ObjName
+		}
 		if err := validateTableIndexDefinitions(tableDef); err != nil {
 			return nil, err
 		}
 		for _, option := range alterTable.Options {
 			if rename, ok := option.(*tree.AlterOptionTableName); ok {
-				if err := rejectCrossDatabaseTableRename(ctx.GetContext(), schemaName, rename); err != nil {
+				if err := rejectCrossDatabaseTableRename(ctx, schemaName, rename); err != nil {
 					return nil, err
 				}
 			}
@@ -6295,6 +6377,9 @@ func buildRenameTable(stmt *tree.RenameTable, ctx CompilerContext) (*Plan, error
 					return nil, err
 				}
 				dstKey := schemaName + "." + newName
+				if mode2Names {
+					dstKey = schemaName + "." + identifier.Fold(newName)
+				}
 				if oldName != newName {
 					if _, ok := nameMapping[dstKey]; ok {
 						return nil, moerr.NewTableAlreadyExists(ctx.GetContext(), newName)
@@ -6304,7 +6389,7 @@ func buildRenameTable(stmt *tree.RenameTable, ctx CompilerContext) (*Plan, error
 						if err != nil {
 							return nil, err
 						}
-						if existDef != nil {
+						if existDef != nil && (!mode2Names || existDef.TblId != tableDef.TblId) {
 							return nil, moerr.NewTableAlreadyExists(ctx.GetContext(), newName)
 						}
 					}
@@ -6320,7 +6405,15 @@ func buildRenameTable(stmt *tree.RenameTable, ctx CompilerContext) (*Plan, error
 				updateSqls = append(updateSqls, getSqlForRenameTable(schemaName, oldName, newName)...)
 				delete(nameMapping, srcKey)
 				removed[srcKey] = true
-				nameMapping[dstKey] = &renamedInfo{objRef: objRef, tableDef: tableDef}
+				if mode2Names {
+					mappedDef := DeepCopyTableDef(tableDef, true)
+					mappedDef.Name = newName
+					mappedRef := *objRef
+					mappedRef.ObjName = newName
+					nameMapping[dstKey] = &renamedInfo{objRef: &mappedRef, tableDef: mappedDef}
+				} else {
+					nameMapping[dstKey] = &renamedInfo{objRef: objRef, tableDef: tableDef}
+				}
 				delete(removed, dstKey)
 
 			default:
@@ -6359,12 +6452,16 @@ func buildAlterTableInplace(stmt *tree.AlterTable, ctx CompilerContext) (*Plan, 
 		databaseName = ctx.DefaultDatabase()
 	}
 
-	_, tableDef, err := ctx.Resolve(databaseName, tableName, nil)
+	obj, tableDef, err := ctx.Resolve(databaseName, tableName, nil)
 	if err != nil {
 		return nil, err
 	}
 	if tableDef == nil {
 		return nil, moerr.NewNoSuchTable(ctx.GetContext(), databaseName, tableName)
+	}
+	if defines.Mode2NameResolutionEnabled(ctx.GetContext()) && obj != nil && !tableDef.IsTemporary {
+		databaseName = obj.SchemaName
+		tableName = obj.ObjName
 	}
 
 	if tableDef.IsTemporary {
@@ -7258,13 +7355,30 @@ func getForeignKeyData(ctx CompilerContext, dbName string, tableDef *TableDef, d
 	if parentDbName == "" {
 		parentDbName = ctx.DefaultDatabase()
 	}
+	mode2Names := defines.Mode2NameResolutionEnabled(ctx.GetContext())
+	if mode2Names {
+		physicalName, _, found, err := resolveDatabaseForPlan(ctx, parentDbName, nil)
+		if err != nil {
+			return nil, err
+		}
+		if found {
+			parentDbName = physicalName
+		}
+	}
 
 	if IsFkBannedDatabase(parentDbName) {
 		return nil, moerr.NewInternalErrorf(ctx.GetContext(), "can not refer foreign keys in %s", parentDbName)
 	}
 
 	// foreign key reference to itself
-	if IsFkSelfRefer(parentDbName, parentTableName, dbName, tableDef.Name) {
+	isSelfReference := IsFkSelfRefer(parentDbName, parentTableName, dbName, tableDef.Name)
+	if mode2Names {
+		isSelfReference = identifier.Fold(parentDbName) == identifier.Fold(dbName) &&
+			identifier.Fold(parentTableName) == identifier.Fold(tableDef.Name)
+	}
+	if isSelfReference {
+		parentDbName = dbName
+		parentTableName = tableDef.Name
 		// should be handled later for fk self reference
 		// PK and unique key may not be processed now
 		// check fk columns can not reference to themselves
@@ -7289,7 +7403,7 @@ func getForeignKeyData(ctx CompilerContext, dbName string, tableDef *TableDef, d
 	fkData.ParentDbName = parentDbName
 	fkData.ParentTableName = parentTableName
 
-	_, parentTableDef, err := ctx.Resolve(parentDbName, parentTableName, nil)
+	parentObj, parentTableDef, err := ctx.Resolve(parentDbName, parentTableName, nil)
 	if err != nil {
 		return nil, err
 	}
@@ -7314,6 +7428,12 @@ func getForeignKeyData(ctx CompilerContext, dbName string, tableDef *TableDef, d
 
 	if parentTableDef.IsTemporary {
 		return nil, moerr.NewNotSupported(ctx.GetContext(), "add foreign key for temporary table")
+	}
+	if mode2Names && parentObj != nil {
+		parentDbName = parentObj.SchemaName
+		parentTableName = parentObj.ObjName
+		fkData.ParentDbName = parentDbName
+		fkData.ParentTableName = parentTableName
 	}
 
 	fkData.Def.ForeignTbl = parentTableDef.TblId
@@ -7588,18 +7708,24 @@ func buildCreatePitr(stmt *tree.CreatePitr, ctx CompilerContext) (*Plan, error) 
 			accountName = string(stmt.AccountName)
 		}
 	case tree.PITRLEVELDATABASE:
-		if !ctx.DatabaseExists(string(stmt.DatabaseName), nil) {
+		physicalName, id, found, resolveErr := resolveDatabaseForPlan(ctx, string(stmt.DatabaseName), nil)
+		if resolveErr != nil {
+			return nil, resolveErr
+		}
+		if !found {
 			return nil, moerr.NewInternalError(ctx.GetContext(), "database "+string(stmt.DatabaseName)+" does not exist")
 		}
-		databaseId, err = ctx.GetDatabaseId(string(stmt.DatabaseName), nil)
-		if err != nil {
-			return nil, err
-		}
+		databaseId = id
+		stmt.DatabaseName = tree.Identifier(physicalName)
 	case tree.PITRLEVELTABLE:
-		if !ctx.DatabaseExists(string(stmt.DatabaseName), nil) {
+		physicalName, _, found, resolveErr := resolveDatabaseForPlan(ctx, string(stmt.DatabaseName), nil)
+		if resolveErr != nil {
+			return nil, resolveErr
+		}
+		if !found {
 			return nil, moerr.NewInternalError(ctx.GetContext(), "database "+string(stmt.DatabaseName)+" does not exist")
 		}
-		objRef, tableDef, err := ctx.Resolve(string(stmt.DatabaseName), string(stmt.TableName), nil)
+		objRef, tableDef, err := ctx.Resolve(physicalName, string(stmt.TableName), nil)
 		if err != nil {
 			return nil, err
 		}
@@ -7607,6 +7733,8 @@ func buildCreatePitr(stmt *tree.CreatePitr, ctx CompilerContext) (*Plan, error) 
 			return nil, moerr.NewInternalError(ctx.GetContext(), "table "+string(stmt.DatabaseName)+"."+string(stmt.TableName)+" does not exist")
 		}
 		tableId = tableDef.TblId
+		stmt.DatabaseName = tree.Identifier(objRef.SchemaName)
+		stmt.TableName = tree.Identifier(objRef.ObjName)
 	}
 
 	return &Plan{
