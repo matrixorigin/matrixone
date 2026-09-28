@@ -102,4 +102,20 @@ select l2_distance(cast('[3,4]' as vecf64(2)), cast('[0,0]' as vecf64(2))) as go
 l2_distance_xc(cast('[3,4]' as vecf64(2)), cast('[0,0]' as vecf64(2))) as c_path;
 ➤ go_path[8,53,31]  ¦  c_path[8,53,31]  𝄀
 5.0  ¦  5.0
+select l1_norm(cast('[2e38,2e38]' as vecf32(2)));
+internal error: l1 norm: vector magnitude is too large, the result overflows the element domain
+select l2_norm(cast('[2.5e38,2.5e38]' as vecf32(2)));
+internal error: l2 norm: vector magnitude is too large, the result overflows the element domain
+select l2_distance(cast('[2.5e38,2.5e38]' as vecf32(2)), cast('[0,0]' as vecf32(2)));
+internal error: l2 distance: vector magnitude is too large, the result overflows the element domain
+select l2_norm(cast('[3,4]' as vecf32(2))) as l2n,
+l2_distance(cast('[3,4]' as vecf32(2)), cast('[0,0]' as vecf32(2))) as l2d,
+l1_norm(cast('[3,-4]' as vecf32(2))) as l1n,
+l1_distance(cast('[3,-4]' as vecf32(2)), cast('[0,0]' as vecf32(2))) as l1d;
+➤ l2n[8,53,31]  ¦  l2d[8,53,31]  ¦  l1n[8,53,31]  ¦  l1d[8,53,31]  𝄀
+5.0  ¦  5.0  ¦  7.0  ¦  7.0
+select l2_norm(cast('[1e300,1e300]' as vecf64(2))) as l2n64,
+l1_norm(cast('[1e300,1e300]' as vecf64(2))) as l1n64;
+➤ l2n64[8,53,31]  ¦  l1n64[8,53,31]  𝄀
+1.4142135623730952E300  ¦  2.0E300
 drop database vec_extreme;

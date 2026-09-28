@@ -302,8 +302,10 @@ func NormalizeL2[T types.RealNumbers](v1 []T, normalized []T) error {
 func L1Norm[T types.RealNumbers](v []T) (float64, error) {
 	switch any(v).(type) {
 	case []float32:
+		// blas32.Asum accumulates in float32, so an L1 norm past the float32 domain returns +Inf;
+		// reject it like the distance kernels instead of leaking the +Inf (#29083).
 		_v := blas32.Vector{N: len(v), Inc: 1, Data: any(v).([]float32)}
-		return float64(blas32.Asum(_v)), nil
+		return metric.CheckFiniteDist(float64(blas32.Asum(_v)), "l1 norm")
 	case []float64:
 		_v := blas64.Vector{N: len(v), Inc: 1, Data: any(v).([]float64)}
 		return blas64.Asum(_v), nil
@@ -316,8 +318,10 @@ func L1Norm[T types.RealNumbers](v []T) (float64, error) {
 func L2Norm[T types.RealNumbers](v []T) (float64, error) {
 	switch any(v).(type) {
 	case []float32:
+		// blas32.Nrm2 returns a float32, so an L2 norm past the float32 domain returns +Inf;
+		// reject it like the distance kernels instead of leaking the +Inf (#29083).
 		_v := blas32.Vector{N: len(v), Inc: 1, Data: any(v).([]float32)}
-		return float64(blas32.Nrm2(_v)), nil
+		return metric.CheckFiniteDist(float64(blas32.Nrm2(_v)), "l2 norm")
 	case []float64:
 		_v := blas64.Vector{N: len(v), Inc: 1, Data: any(v).([]float64)}
 		return blas64.Nrm2(_v), nil

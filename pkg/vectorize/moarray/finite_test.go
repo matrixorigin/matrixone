@@ -95,3 +95,34 @@ func TestSummationRejectsOverflow(t *testing.T) {
 	require.NoError(t, err)
 	require.EqualValues(t, 0.75, got)
 }
+
+// #29083: a VECF32 whose l1/l2 norm exceeds the float32 element domain must ERROR like the distance
+// kernels, not silently return +Inf. That silent Inf also broke the l2_distance(v,zero)==l2_norm(v)
+// identity (the distance errored while the norm returned Inf). VECF32 norms that fit float32, and all
+// VECF64 norms, are unaffected.
+func TestF32NormRejectsOverflow(t *testing.T) {
+	_, err := L1Norm[float32]([]float32{2e38, 2e38}) // 4e38 > float32 max
+	require.Error(t, err)
+	require.Contains(t, err.Error(), "overflows the element domain")
+
+	_, err = L2Norm[float32]([]float32{2.5e38, 2.5e38}) // ~3.5e38 > float32 max
+	require.Error(t, err)
+	require.Contains(t, err.Error(), "overflows the element domain")
+
+	// A VECF32 norm within float32 range is unchanged.
+	got, err := L2Norm[float32]([]float32{3, 4})
+	require.NoError(t, err)
+	require.EqualValues(t, 5, got)
+	got, err = L1Norm[float32]([]float32{1e38, 1e38}) // ~2e38 < float32 max
+	require.NoError(t, err)
+	require.False(t, math.IsInf(got, 0))
+	require.InEpsilon(t, 2e38, got, 1e-6)
+
+	// VECF64 norms are computed in the float64 domain and stay finite here (f64 is unchanged).
+	got, err = L2Norm[float64]([]float64{1e300, 1e300})
+	require.NoError(t, err)
+	require.False(t, math.IsInf(got, 0))
+	got, err = L1Norm[float64]([]float64{1e300, 1e300})
+	require.NoError(t, err)
+	require.False(t, math.IsInf(got, 0))
+}
