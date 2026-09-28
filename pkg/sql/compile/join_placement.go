@@ -19,6 +19,19 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/vm"
 )
 
+// Use the same force-one-CN decision before and during probe compilation:
+// build placement must follow the final probe owner, not the original scans.
+func broadcastJoinForcesOneCN(node *plan.Node, isEq bool) bool {
+	switch node.JoinType {
+	case plan.Node_OUTER, plan.Node_DEDUP:
+		return true
+	case plan.Node_LEFT, plan.Node_RIGHT, plan.Node_SEMI, plan.Node_ANTI, plan.Node_SINGLE:
+		return isEq && node.IsRightJoin
+	default:
+		return false
+	}
+}
+
 // CN ownership, not local worker count, determines colocation. This differs
 // from scopesRunOnCoordinator, which requires one single-worker pipeline.
 func (c *Compile) joinInputsOnCoordinator(probe, build []*Scope) bool {

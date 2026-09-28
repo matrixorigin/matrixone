@@ -1,4 +1,4 @@
-# 多层关联子查询：独立物理前置修复（r1）
+# 多层关联子查询：独立物理前置修复（r2）
 
 ## 范围与设计门禁
 
@@ -32,10 +32,10 @@ JoinMap 通过当前 CN 的 MessageBoard 交接，不能把远端 HashBuild 直�
 
 在构造广播 JoinMap 前，通过已有 Merge/Connector **传批次而不是传进程内 map**：
 
-- 单 probe + 单 remote build、地址不同：先归并到协调 CN，再构造 JOIN/build。
+- 单 probe + 单 remote build、地址不同：先归并到协调 CN，再构造 JOIN/build。FULL/RIGHT/DEDUP 等可能先将多个 probe 归并到协调 CN；广播阶段必须在确定**最终** probe owner 后共址 build，不可在已安装 HashJoin 后包 Merge。
 - 本地 SINK_SCAN 或 foreign 执行依赖：广播阶段保留其 owner，扫描仍可远端执行。
 - 所有根 scope 已位于当前 CN 时保留原路径，包括本地并行与多 probe SINK；共址不要求单 scope/Mcpu=1。同一 remote CN、普通可搬移 local build，以及普通多 probe 广播也保持现有路径。
-- ASOF build-left 同样使用该边界，交换后的真实 probe/build 才是判断输入。
+- force-one-CN 形状先保护 SINK_SCAN/foreign 本地依赖，再确定 FULL/RIGHT/DEDUP 最终 probe owner，随后再次共址 build；普通多 probe 不额外合并。ASOF build-left 同样使用该边界，交换后的真实 probe/build 才是判断输入。
 - 原有 owner-aware shuffle Source 路径不被广播修复无条件降级。
 
 选择协调 CN 是明确的正确性优先方案，不是最优成本模型或性能提升声明。未来若选择其他 JOIN owner，应显式建立输入批次传输边界，不得只改地址标签，也不得把缺失 JoinMap 当成空表补救。
@@ -50,10 +50,10 @@ JoinMap 通过当前 CN 的 MessageBoard 交接，不能把远端 HashBuild 直�
 
 ## 验证与测试架构
 
-- 轻量 typed-scope UT：共址/异址、local sink、本地并行/多个 probe、WINDOW 两侧及已共址并行对照；实际调用 `compileJoin` 验证该阶段 shuffle 被关闭且扫描地址保留，另保留普通安全路径对照。
+- 轻量 typed-scope UT：共址/异址、local sink、本地并行/多个 probe、WINDOW 两侧及已共址并行对照；实际调用 `compileJoin` 验证该阶段 shuffle 被关闭且扫描地址保留，另保留普通安全路径对照。新增多个远端 probe + 一个远端 build 的 FULL/RIGHT、DEDUP、local sink 和普通 INNER 对照：旧代码 FULL/RIGHT 在最终本地 Join 下挂远端 HashBuild，修复后同 CN。
 - 单独 `multicn` 测试进程：一个两 CN fixture，两个表共 7 行。入口 CN 在查询期间 draining，强制扫描到另一 CN；比对完整结果、LIMIT 1、空输入和 PHYPLAN 远端地址。DDL/清理前恢复入口 CN；SQL 连接、全局测试开关及 cluster 均注册清理。
 - 独立子包是必要的隔离边界：共享单 CN 集成包已经持有进程内完整 cluster 准入，不能在其内部再启动第二个完整 cluster，也不应为该测试销毁共享 fixture。首次全包执行暴露这一约束，已据此调整。
-- 公共 BVT：`test/distributed/cases/join/coordinator_stage.sql`，覆盖相同语义、prepare 重用和空输入。结果经 mo-tester 生成、人工核对、同实例普通比较复跑，并检查 schema 清理。
+- 公共 BVT：`test/distributed/cases/join/coordinator_stage.sql`，覆盖相同语义、prepare 重用和空输入；新增 FULL/RIGHT 的匹配、probe-only、build-only 结果。结果经 mo-tester 生成、人工核对、同实例普通比较复跑，并检查 schema 清理。当前两 CN SQL fixture 在旧代码也通过，说明它仅证明公开 SQL 语义不回退，**不证明该 fixture 实际产生多个 probe scope**；触发该路径的红绿证据是 typed-scope UT，不将公开测试虚报为失效前反例。
 - 对 compile/plan 运行完整普通 UT；对两个集成包运行完整普通测试。另检查增量覆盖、静态分析、编译包 race 与精确两 CN 用例的按预算 race 重复。
 
 后续通用多层关联方案仍需独立证明 demand/cardinality、空聚合重建、任意参数类型、原 outer relation 单次求值、晚到错误可见性及物化预算。本 PR 的公开 SQL 回归不充当这些能力的证据。

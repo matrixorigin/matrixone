@@ -18,6 +18,7 @@ import (
 	"testing"
 
 	"github.com/matrixorigin/matrixone/pkg/pb/plan"
+	"github.com/matrixorigin/matrixone/pkg/sql/colexec/hashbuild"
 	"github.com/matrixorigin/matrixone/pkg/sql/colexec/merge"
 	windowop "github.com/matrixorigin/matrixone/pkg/sql/colexec/window"
 	"github.com/matrixorigin/matrixone/pkg/vm"
@@ -81,6 +82,61 @@ func TestBroadcastJoinInputColocation(t *testing.T) {
 				require.Equal(t, oldCPU, probe[0].NodeInfo.Mcpu)
 				require.Same(t, oldProbe, probe[0])
 				require.Same(t, oldBuild, build[0])
+			}
+		})
+	}
+}
+
+func TestForcedBroadcastJoinColocatesFinalProbeAndBuild(t *testing.T) {
+	nodes := engine.Nodes{{Id: "local", Addr: "local:6001", Mcpu: 1}, {Id: "remote", Addr: "remote:6001", Mcpu: 1}}
+	for _, tc := range []struct {
+		name      string
+		joinType  plan.Node_JoinType
+		right     bool
+		forced    bool
+		localSink bool
+	}{
+		{"full outer", plan.Node_OUTER, true, true, false},
+		{"right", plan.Node_RIGHT, true, true, false},
+		{"full outer local sink", plan.Node_OUTER, true, true, true},
+		{"right dedup", plan.Node_DEDUP, true, true, false},
+		{"left dedup", plan.Node_DEDUP, false, true, false},
+		{"inner control", plan.Node_INNER, false, false, false},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			c := newCompileForShuffleJoinTest(t, nodes)
+			probes := []*Scope{newShuffleJoinTestScope(t, nodes[1], 1), newShuffleJoinTestScope(t, nodes[1], 1)}
+			build := newShuffleJoinTestScope(t, nodes[1], 1)
+			if tc.localSink {
+				build = newShuffleJoinTestScope(t, nodes[0], 1)
+				build.setRootOperator(merge.NewArgument().WithSinkScan(true))
+			}
+			node := newShuffleJoinTestNode(1)
+			node.JoinType = tc.joinType
+			node.IsRightJoin = tc.right
+			if tc.joinType == plan.Node_DEDUP {
+				node.DedupJoinCtx = &plan.DedupJoinCtx{}
+			}
+			node.Stats.HashmapStats.Shuffle = false
+			node.OnList = []*plan.Expr{makeMarkJoinTestCondition(t, "=", 0, true)}
+			left := &plan.Node{ProjectList: []*plan.Expr{makeMarkJoinTestColumn(0, 0, true)}}
+			right := &plan.Node{ProjectList: []*plan.Expr{makeMarkJoinTestColumn(1, 0, true)}}
+			result := c.compileJoin(node, left, right, probes, []*Scope{build})
+			defer ReleaseScopes(result)
+			if !tc.forced {
+				require.Len(t, result, len(probes))
+				require.Equal(t, nodes[1].Addr, result[0].NodeInfo.Addr)
+				return
+			}
+			require.Len(t, result, 1)
+			require.Equal(t, nodes[0].Addr, result[0].NodeInfo.Addr)
+			require.Equal(t, nodes[0].Addr, result[0].PreScopes[len(result[0].PreScopes)-1].NodeInfo.Addr)
+			require.IsType(t, &hashbuild.HashBuild{}, result[0].PreScopes[len(result[0].PreScopes)-1].RootOp)
+			if !tc.localSink {
+				require.Equal(t, nodes[1].Addr, build.NodeInfo.Addr, "scan remains remote")
+			}
+			for _, probe := range probes {
+				require.Equal(t, nodes[1].Addr, probe.NodeInfo.Addr, "probe scan remains remote")
 			}
 		})
 	}

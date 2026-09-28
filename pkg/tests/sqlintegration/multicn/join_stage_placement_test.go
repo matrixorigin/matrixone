@@ -93,7 +93,7 @@ func TestJoinCoordinatorStage(t *testing.T) {
 		"drop database if exists " + schema, "create database " + schema, "use " + schema,
 		"create table a(id int,k int,x int)", "create table c(rid int,k int,v int)",
 		"insert into a values(1,1,1),(2,1,1),(3,2,NULL),(4,NULL,0)",
-		"insert into c values(11,1,1),(12,1,3),(13,2,NULL)",
+		"insert into c values(11,1,1),(12,1,3),(13,2,NULL),(14,3,7)",
 	} {
 		exec(statement)
 	}
@@ -136,6 +136,8 @@ func TestJoinCoordinatorStage(t *testing.T) {
 		{"local window probe", `select d.id,d.rn,c.v from (select id,k,row_number() over(order by id) as rn from a) d left join c on d.k=c.k order by d.id,c.v`, "1\t1\t1\n1\t1\t3\n2\t2\t1\n2\t2\t3\n3\t3\tNULL\n4\t4\tNULL\n"},
 		{"local window build", `select a.id,d.v from a left join (select k,v,row_number() over(partition by k order by rid desc) as rn from c) d on a.k=d.k and d.rn=1 order by a.id`, "1\t3\n2\t3\n3\tNULL\n4\tNULL\n"},
 		{"numeric cast provenance", `with d as (select distinct k,x,k is null as kn,coalesce(k,0) as kv,x is null as xn,coalesce(x,0) as xv from a), f as (select d.kn,d.kv,d.xn,d.xv,coalesce(max(c.v),0) as result from d join c on c.k=d.k where c.rid>10 group by d.kn,d.kv,d.xn,d.xv) select a.id,coalesce(f.result,0) from a left join f on (a.k is null)=f.kn and coalesce(a.k,0)=f.kv and (a.x is null)=f.xn and coalesce(a.x,0)=f.xv order by a.id`, "1\t3\n2\t3\n3\t0\n4\t0\n"},
+		{"full outer unmatched build", `select a.id,c.rid from a full outer join c on a.k=c.k order by coalesce(a.id,999),c.rid`, "1\t11\n1\t12\n2\t11\n2\t12\n3\t13\n4\tNULL\nNULL\t14\n"},
+		{"right unmatched build", `select a.id,c.rid from a right join c on a.k=c.k order by coalesce(a.id,999),c.rid`, "1\t11\n1\t12\n2\t11\n2\t12\n3\t13\nNULL\t14\n"},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			require.Equal(t, tc.want, query(t, tc.statement))
