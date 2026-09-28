@@ -16,6 +16,7 @@ package disttae
 
 import (
 	"context"
+	"fmt"
 	"slices"
 	"strings"
 	"sync"
@@ -381,13 +382,13 @@ func TestLocalDatasourceWorkspaceDeleteEntriesSortsWithoutMutatingBatch(t *testi
 		require.True(t, entry.sorted)
 		require.True(t, slices.IsSortedFunc(entry.rowIds, func(a, b types.Rowid) int { return a.Compare(&b) }))
 	}
-	blkEntries := ls.workspaceDeleteEntriesForBlockLocked(&blk, true)
+	blkEntries := ls.workspaceDeleteEntriesForBlockLocked(&blk)
 	require.Len(t, blkEntries, 1)
 	require.Equal(t, []types.Rowid{types.NewRowid(&blk, 1), types.NewRowid(&blk, 3)}, blkEntries[0].rowIds)
-	blk2Entries := ls.workspaceDeleteEntriesForBlockLocked(&blk2, true)
+	blk2Entries := ls.workspaceDeleteEntriesForBlockLocked(&blk2)
 	require.Len(t, blk2Entries, 1)
 	require.Equal(t, rows2, blk2Entries[0].rowIds)
-	require.Empty(t, ls.workspaceDeleteEntriesForBlockLocked(&blk3, true))
+	require.Empty(t, ls.workspaceDeleteEntriesForBlockLocked(&blk3))
 	require.Equal(t, []int64{4}, ls.applyWorkspaceEntryDeletes(&blk, []int64{1, 3, 4}, nil))
 	require.Equal(t, []int64{4}, ls.applyWorkspaceEntryDeletes(&blk2, []int64{2, 4}, nil))
 	require.Equal(t, []int64{1, 4}, ls.applyWorkspaceEntryDeletes(&blk3, []int64{1, 4}, nil))
@@ -448,14 +449,14 @@ func TestLocalDatasourceWorkspaceDeleteEntriesMergesLargeDeleteSet(t *testing.T)
 	require.Len(t, entries[0].rowIds, mergeWorkspaceDeleteEntriesThreshold+1)
 	require.True(t, slices.IsSortedFunc(entries[0].rowIds, func(a, b types.Rowid) int { return a.Compare(&b) }))
 
-	blkEntries := ls.workspaceDeleteEntriesForBlockLocked(&blk, true)
+	blkEntries := ls.workspaceDeleteEntriesForBlockLocked(&blk)
 	require.Len(t, blkEntries, 1)
 	require.True(t, blkEntries[0].sorted)
 	for _, rowID := range blkEntries[0].rowIds {
 		require.Equal(t, blk, *rowID.BorrowBlockID())
 	}
 
-	blk2Entries := ls.workspaceDeleteEntriesForBlockLocked(&blk2, true)
+	blk2Entries := ls.workspaceDeleteEntriesForBlockLocked(&blk2)
 	require.Len(t, blk2Entries, 1)
 	require.True(t, blk2Entries[0].sorted)
 	for _, rowID := range blk2Entries[0].rowIds {
@@ -463,7 +464,7 @@ func TestLocalDatasourceWorkspaceDeleteEntriesMergesLargeDeleteSet(t *testing.T)
 	}
 }
 
-func TestLocalDatasourceWorkspaceDeleteEntriesMergesHotBlock(t *testing.T) {
+func TestLocalDatasourceWorkspaceDeleteEntriesIndexesHotBlock(t *testing.T) {
 	ctx, cancel := context.WithTimeout(context.Background(), time.Minute*5)
 	defer cancel()
 
@@ -473,8 +474,8 @@ func TestLocalDatasourceWorkspaceDeleteEntriesMergesHotBlock(t *testing.T) {
 	oid := types.NewObjectid()
 	blk := types.NewBlockidWithObjectID(&oid, 1)
 	otherBlk := types.NewBlockidWithObjectID(&oid, 2)
-	writes := make([]Entry, 0, mergeWorkspaceDeleteEntriesForBlockThreshold+1)
-	for i := mergeWorkspaceDeleteEntriesForBlockThreshold - 1; i >= 0; i-- {
+	writes := make([]Entry, 0, indexWorkspaceDeleteEntriesForBlockThreshold+1)
+	for i := indexWorkspaceDeleteEntriesForBlockThreshold - 1; i >= 0; i-- {
 		writes = append(writes, Entry{
 			typ:        DELETE,
 			databaseId: 11,
@@ -492,42 +493,66 @@ func TestLocalDatasourceWorkspaceDeleteEntriesMergesHotBlock(t *testing.T) {
 	txnOp.AddWorkspace(txn)
 	ls := &LocalDisttaeDataSource{
 		ctx:       ctx,
-		txnOffset: mergeWorkspaceDeleteEntriesForBlockThreshold - 1,
+		txnOffset: indexWorkspaceDeleteEntriesForBlockThreshold - 1,
 		table: &txnTable{
 			db:      &txnDatabase{databaseId: 11, op: txnOp},
 			tableId: 22,
 		},
 	}
 
-	require.Len(t, ls.workspaceDeleteEntriesForBlockLocked(&blk, true), mergeWorkspaceDeleteEntriesForBlockThreshold-1)
+	require.Len(t, ls.workspaceDeleteEntriesForBlockLocked(&blk), indexWorkspaceDeleteEntriesForBlockThreshold-1)
 	require.Equal(t, []int64{0}, ls.applyWorkspaceEntryDeletes(&blk, []int64{0}, nil))
+	require.Equal(t, []int64{indexWorkspaceDeleteEntriesForBlockThreshold},
+		ls.applyWorkspaceEntryDeletes(&blk, []int64{indexWorkspaceDeleteEntriesForBlockThreshold}, nil))
+	require.Empty(t, ls.workspaceDeletes.pointRows)
 	ls.txnOffset = len(txn.writes)
-	blockEntries := ls.workspaceDeleteEntriesForBlockLocked(&blk, true)
-	require.Len(t, blockEntries, 1)
-	require.Len(t, blockEntries[0].rowIds, mergeWorkspaceDeleteEntriesForBlockThreshold)
-	require.True(t, slices.IsSortedFunc(blockEntries[0].rowIds, func(a, b types.Rowid) int { return a.Compare(&b) }))
-	require.Len(t, ls.workspaceDeleteEntriesForBlockLocked(&blk, true), 1)
-	require.Equal(t, []int64{mergeWorkspaceDeleteEntriesForBlockThreshold},
-		ls.applyWorkspaceEntryDeletes(&blk, []int64{0, 1, mergeWorkspaceDeleteEntriesForBlockThreshold - 1, mergeWorkspaceDeleteEntriesForBlockThreshold}, nil))
+	require.Len(t, ls.workspaceDeleteEntriesForBlockLocked(&blk), indexWorkspaceDeleteEntriesForBlockThreshold)
+	require.Empty(t, ls.workspaceDeletes.pointRows)
+	require.Equal(t, []int64{indexWorkspaceDeleteEntriesForBlockThreshold},
+		ls.applyWorkspaceEntryDeletes(&blk, []int64{indexWorkspaceDeleteEntriesForBlockThreshold}, nil))
+	_, seen := ls.workspaceDeletes.pointRows[blk]
+	require.True(t, seen)
+	require.Nil(t, ls.workspaceDeletes.pointRows[blk])
+	require.Empty(t, ls.applyWorkspaceEntryDeletes(&blk, []int64{indexWorkspaceDeleteEntriesForBlockThreshold - 1}, nil))
+	require.Nil(t, ls.workspaceDeletes.pointRows[blk])
+	require.Equal(t, []int64{indexWorkspaceDeleteEntriesForBlockThreshold},
+		ls.applyWorkspaceEntryDeletes(&blk, []int64{indexWorkspaceDeleteEntriesForBlockThreshold}, nil))
+	require.Len(t, ls.workspaceDeletes.pointRows[blk], objectio.BlockMaxRows/64)
+	require.Len(t, ls.workspaceDeleteEntriesForBlockLocked(&blk), indexWorkspaceDeleteEntriesForBlockThreshold)
+	require.Empty(t, ls.applyWorkspaceEntryDeletes(&blk, []int64{indexWorkspaceDeleteEntriesForBlockThreshold - 1}, nil))
+	require.Equal(t, []int64{indexWorkspaceDeleteEntriesForBlockThreshold},
+		ls.applyWorkspaceEntryDeletes(&blk, []int64{0, 1, indexWorkspaceDeleteEntriesForBlockThreshold - 1, indexWorkspaceDeleteEntriesForBlockThreshold}, nil))
 	require.Empty(t, ls.applyWorkspaceEntryDeletes(&otherBlk, []int64{7}, nil))
+
+	// A later workspace delete invalidates the point index. The row that was
+	// a miss above must now be filtered.
+	txn.writes = append(txn.writes, Entry{
+		typ: DELETE, databaseId: 11, tableId: 22,
+		bat: newWorkspaceDeleteBatch(t, []types.Rowid{types.NewRowid(&blk, indexWorkspaceDeleteEntriesForBlockThreshold)}),
+	})
+	ls.txnOffset = len(txn.writes)
+	require.Len(t, ls.workspaceDeleteEntriesForBlockLocked(&blk), indexWorkspaceDeleteEntriesForBlockThreshold+1)
+	require.Empty(t, ls.workspaceDeletes.pointRows)
+	require.Empty(t, ls.applyWorkspaceEntryDeletes(&blk, []int64{indexWorkspaceDeleteEntriesForBlockThreshold}, nil))
 }
 
 func TestLocalDatasourceWorkspaceDeleteEntriesKeepsLargeBlockBatches(t *testing.T) {
 	oid := types.NewObjectid()
 	blk := types.NewBlockidWithObjectID(&oid, 1)
 	for _, tc := range []struct {
-		name       string
-		totalRows  int
-		wantGroups int
+		name      string
+		totalRows int
+		wantIndex bool
 	}{
-		{name: "at cap", totalRows: maxMergedWorkspaceDeleteRowsPerBlock, wantGroups: 1},
-		{name: "above cap", totalRows: maxMergedWorkspaceDeleteRowsPerBlock + 1, wantGroups: mergeWorkspaceDeleteEntriesForBlockThreshold},
+		{name: "at cap", totalRows: maxIndexedWorkspaceDeleteRowsPerBlock, wantIndex: true},
+		{name: "above cap", totalRows: maxIndexedWorkspaceDeleteRowsPerBlock + 1},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			ls := &LocalDisttaeDataSource{txnOffset: 1}
+			ls.rc.WorkspaceLocked = true
 			ls.workspaceDeletes.initialized = true
 			ls.workspaceDeletes.txnOffset = 1
-			ls.workspaceDeletes.entries = make([]workspaceDeleteEntry, mergeWorkspaceDeleteEntriesForBlockThreshold)
+			ls.workspaceDeletes.entries = make([]workspaceDeleteEntry, indexWorkspaceDeleteEntriesForBlockThreshold)
 			firstRows := tc.totalRows - len(ls.workspaceDeletes.entries) + 1
 			rows := make([]types.Rowid, firstRows)
 			for i := range rows {
@@ -540,7 +565,13 @@ func TestLocalDatasourceWorkspaceDeleteEntriesKeepsLargeBlockBatches(t *testing.
 					sorted: true,
 				}
 			}
-			require.Len(t, ls.workspaceDeleteEntriesForBlockLocked(&blk, true), tc.wantGroups)
+			require.Len(t, ls.workspaceDeleteEntriesForBlockLocked(&blk), indexWorkspaceDeleteEntriesForBlockThreshold)
+			for i := 0; i < 2; i++ {
+				require.Equal(t, []int64{int64(tc.totalRows + 1)},
+					ls.applyWorkspaceEntryDeletes(&blk, []int64{int64(tc.totalRows + 1)}, nil))
+			}
+			require.Len(t, ls.workspaceDeleteEntriesForBlockLocked(&blk), indexWorkspaceDeleteEntriesForBlockThreshold)
+			require.Equal(t, tc.wantIndex, len(ls.workspaceDeletes.pointRows[blk]) > 0)
 		})
 	}
 }
@@ -548,33 +579,113 @@ func TestLocalDatasourceWorkspaceDeleteEntriesKeepsLargeBlockBatches(t *testing.
 func TestLocalDatasourceWorkspaceDeleteColdReadsKeepBatches(t *testing.T) {
 	oid := types.NewObjectid()
 	blk := types.NewBlockidWithObjectID(&oid, 1)
-	entries := make([]workspaceDeleteEntry, mergeWorkspaceDeleteEntriesForBlockThreshold)
-	for i := range entries {
-		rows := make([]types.Rowid, 32)
-		for j := range rows {
-			rows[j] = types.NewRowid(&blk, uint32((len(entries)-1-i)*len(rows)+j))
-		}
-		entries[i] = workspaceDeleteEntry{rowIds: rows, sorted: true}
+	for _, rowsPerEntry := range []int{2, 32} {
+		t.Run(fmt.Sprint(rowsPerEntry), func(t *testing.T) {
+			entries := make([]workspaceDeleteEntry, indexWorkspaceDeleteEntriesForBlockThreshold)
+			for i := range entries {
+				rows := make([]types.Rowid, rowsPerEntry)
+				for j := range rows {
+					rows[j] = types.NewRowid(&blk, uint32((len(entries)-1-i)*len(rows)+j))
+				}
+				entries[i] = workspaceDeleteEntry{rowIds: rows, sorted: true}
+			}
+			ls := &LocalDisttaeDataSource{txnOffset: 1}
+			ls.rc.WorkspaceLocked = true
+			ls.workspaceDeletes.initialized = true
+			ls.workspaceDeletes.txnOffset = 1
+			ls.workspaceDeletes.entries = entries
+			ls.workspaceDeletes.byBlock = map[objectio.Blockid][]workspaceDeleteEntry{blk: entries}
+
+			rowCount := len(entries) * rowsPerEntry
+			mask := objectio.GetReusableBitmap()
+			defer mask.Release()
+			ls.applyWorkspaceEntryDeletes(&blk, nil, &mask)
+			require.True(t, mask.Contains(0))
+			require.True(t, mask.Contains(uint64(rowCount-1)))
+			require.Len(t, ls.workspaceDeletes.byBlock[blk], len(entries))
+
+			require.Equal(t, []int64{int64(rowCount)}, ls.applyWorkspaceEntryDeletes(&blk, []int64{0, int64(rowCount)}, nil))
+			require.Len(t, ls.workspaceDeletes.byBlock[blk], len(entries))
+
+			require.Empty(t, ls.applyWorkspaceEntryDeletes(&blk, []int64{int64(rowCount - rowsPerEntry)}, nil))
+			require.Len(t, ls.workspaceDeletes.byBlock[blk], len(entries))
+			require.Empty(t, ls.workspaceDeletes.pointRows)
+
+			require.Equal(t, []int64{int64(rowCount)}, ls.applyWorkspaceEntryDeletes(&blk, []int64{int64(rowCount)}, nil))
+			require.Len(t, ls.workspaceDeletes.byBlock[blk], len(entries))
+			if rowsPerEntry > maxIndexedWorkspaceDeleteRowsPerBlock/len(entries) {
+				require.Empty(t, ls.workspaceDeletes.pointRows)
+			} else {
+				_, seen := ls.workspaceDeletes.pointRows[blk]
+				require.True(t, seen)
+				require.Nil(t, ls.workspaceDeletes.pointRows[blk])
+			}
+		})
 	}
-	ls := &LocalDisttaeDataSource{txnOffset: 1}
-	ls.rc.WorkspaceLocked = true
-	ls.workspaceDeletes.initialized = true
-	ls.workspaceDeletes.txnOffset = 1
-	ls.workspaceDeletes.entries = entries
-	ls.workspaceDeletes.byBlock = map[objectio.Blockid][]workspaceDeleteEntry{blk: entries}
+}
 
-	mask := objectio.GetReusableBitmap()
-	defer mask.Release()
-	ls.applyWorkspaceEntryDeletes(&blk, nil, &mask)
-	require.True(t, mask.Contains(0))
-	require.True(t, mask.Contains(4095))
-	require.Len(t, ls.workspaceDeletes.byBlock[blk], len(entries))
+func TestLocalDatasourceWorkspaceDeletePointIndexOffsetBoundary(t *testing.T) {
+	oid := types.NewObjectid()
+	blk := types.NewBlockidWithObjectID(&oid, 1)
+	for _, target := range []uint32{objectio.BlockMaxRows - 1, objectio.BlockMaxRows} {
+		t.Run(fmt.Sprint(target), func(t *testing.T) {
+			entries := make([]workspaceDeleteEntry, indexWorkspaceDeleteEntriesForBlockThreshold)
+			for i := range entries {
+				offset := uint32(i)
+				if i == 0 {
+					offset = target
+				}
+				entries[i] = workspaceDeleteEntry{
+					rowIds: []types.Rowid{types.NewRowid(&blk, offset)}, sorted: true,
+				}
+			}
+			ls := &LocalDisttaeDataSource{txnOffset: 1}
+			ls.rc.WorkspaceLocked = true
+			ls.workspaceDeletes.initialized = true
+			ls.workspaceDeletes.txnOffset = 1
+			ls.workspaceDeletes.entries = entries
+			ls.workspaceDeletes.byBlock = map[objectio.Blockid][]workspaceDeleteEntry{blk: entries}
 
-	require.Equal(t, []int64{4096}, ls.applyWorkspaceEntryDeletes(&blk, []int64{0, 4096}, nil))
-	require.Len(t, ls.workspaceDeletes.byBlock[blk], len(entries))
+			miss := int64(objectio.BlockMaxRows - 2)
+			for i := 0; i < 2; i++ {
+				require.Equal(t, []int64{miss},
+					ls.applyWorkspaceEntryDeletes(&blk, []int64{miss}, nil))
+			}
+			require.Equal(t, target < objectio.BlockMaxRows, len(ls.workspaceDeletes.pointRows[blk]) > 0)
+			require.Empty(t, ls.applyWorkspaceEntryDeletes(&blk, []int64{int64(target)}, nil))
+			if target < objectio.BlockMaxRows {
+				outOfRange := (int64(1) << 32) + int64(target)
+				require.Equal(t, []int64{outOfRange},
+					ls.applyWorkspaceEntryDeletes(&blk, []int64{outOfRange}, nil))
+			}
+		})
+	}
+}
 
-	require.Empty(t, ls.applyWorkspaceEntryDeletes(&blk, []int64{4064}, nil))
-	require.Len(t, ls.workspaceDeletes.byBlock[blk], len(entries))
+func TestLocalDatasourceWorkspaceDeletePointSearchSortedBatch(t *testing.T) {
+	oid := types.NewObjectid()
+	blk := types.NewBlockidWithObjectID(&oid, 1)
+	for _, count := range []int{31, 32, 33} {
+		t.Run(fmt.Sprint(count), func(t *testing.T) {
+			rows := make([]types.Rowid, count)
+			for i := range rows {
+				rows[i] = types.NewRowid(&blk, uint32(i*17))
+			}
+			entries := []workspaceDeleteEntry{{rowIds: rows, sorted: true}}
+			ls := &LocalDisttaeDataSource{txnOffset: 1}
+			ls.rc.WorkspaceLocked = true
+			ls.workspaceDeletes.initialized = true
+			ls.workspaceDeletes.txnOffset = 1
+			ls.workspaceDeletes.entries = entries
+			ls.workspaceDeletes.byBlock = map[objectio.Blockid][]workspaceDeleteEntry{blk: entries}
+			for _, offset := range []int64{0, int64((count / 2) * 17), int64((count - 1) * 17)} {
+				require.Empty(t, ls.applyWorkspaceEntryDeletes(&blk, []int64{offset}, nil))
+			}
+			require.Equal(t, []int64{1}, ls.applyWorkspaceEntryDeletes(&blk, []int64{1}, nil))
+			require.Equal(t, []int64{int64(count * 17)}, ls.applyWorkspaceEntryDeletes(&blk, []int64{int64(count * 17)}, nil))
+			require.Equal(t, rows, entries[0].rowIds)
+		})
+	}
 }
 
 func TestLocalDatasourceWorkspaceDeleteEntriesInvalidatesCacheWhenTxnOffsetChanges(t *testing.T) {
@@ -621,8 +732,8 @@ func TestLocalDatasourceWorkspaceDeleteEntriesInvalidatesCacheWhenTxnOffsetChang
 		},
 	}
 
-	require.Equal(t, []workspaceDeleteEntry{{rowIds: []types.Rowid{row}, sorted: true}}, ls.workspaceDeleteEntriesForBlockLocked(&blk, true))
-	require.Empty(t, ls.workspaceDeleteEntriesForBlockLocked(&blk2, true))
+	require.Equal(t, []workspaceDeleteEntry{{rowIds: []types.Rowid{row}, sorted: true}}, ls.workspaceDeleteEntriesForBlockLocked(&blk))
+	require.Empty(t, ls.workspaceDeleteEntriesForBlockLocked(&blk2))
 	require.Equal(t, 1, ls.workspaceDeletes.txnOffset)
 	require.NotNil(t, ls.workspaceDeletes.byBlock)
 
@@ -633,8 +744,8 @@ func TestLocalDatasourceWorkspaceDeleteEntriesInvalidatesCacheWhenTxnOffsetChang
 	// Changing txnOffset must invalidate the block index built for the previous
 	// view of txn writes, otherwise later deletes can be silently skipped.
 	require.Nil(t, ls.workspaceDeletes.byBlock)
-	require.Equal(t, []workspaceDeleteEntry{{rowIds: []types.Rowid{row2}, sorted: true}}, ls.workspaceDeleteEntriesForBlockLocked(&blk2, true))
-	require.Equal(t, []workspaceDeleteEntry{{rowIds: []types.Rowid{row}, sorted: true}}, ls.workspaceDeleteEntriesForBlockLocked(&blk, true))
+	require.Equal(t, []workspaceDeleteEntry{{rowIds: []types.Rowid{row2}, sorted: true}}, ls.workspaceDeleteEntriesForBlockLocked(&blk2))
+	require.Equal(t, []workspaceDeleteEntry{{rowIds: []types.Rowid{row}, sorted: true}}, ls.workspaceDeleteEntriesForBlockLocked(&blk))
 }
 
 func newWorkspaceDeleteBatch(t *testing.T, rows []types.Rowid) *batch.Batch {
