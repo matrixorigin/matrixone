@@ -392,9 +392,12 @@ CREATE TABLE t_datetime_wire_scale (
     dt6 DATETIME(6)
 );
 
+SET @old_datetime_wire_sql_mode = @@sql_mode;
+SET sql_mode = '';
 INSERT INTO t_datetime_wire_scale VALUES
     (1, '2024-01-15 10:20:30'),
     (2, CAST('0000-00-00 00:00:00' AS DATETIME(6)));
+SET sql_mode = @old_datetime_wire_sql_mode;
 
 SELECT id, dt6
 FROM t_datetime_wire_scale
