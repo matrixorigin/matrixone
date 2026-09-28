@@ -43,7 +43,7 @@ func TestBranchComponentRejectsUnsafeOwnerBeforeCatalogAccess(t *testing.T) {
 			ses.GetTxnHandler().SetShareTxn(owner)
 			// No Engine, lock service, rollback, or commit expectation: this is the
 			// real share-txn background constructor and must fail before touching them.
-			bh, admission, finish, err := getDataBranchComponentExecutor(defines.AttachAccountId(t.Context(), 0), ses)
+			bh, admission, finish, err := getDataBranchComponentExecutor(defines.AttachAccountId(t.Context(), 0), ses, false)
 			require.True(t, moerr.IsMoErrCode(err, moerr.ErrNotSupported), "%v", err)
 			require.Nil(t, bh)
 			require.Nil(t, admission)

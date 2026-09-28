@@ -172,3 +172,31 @@ func TestIssue29400BranchDeletePartitionChildrenStayInternal(t *testing.T) {
 		require.Zero(t, count)
 	})
 }
+
+func TestIssue29400BranchCloneFromForeignKeyBranch(t *testing.T) {
+	runAuthenticatedClusterTest(t, func(cluster embed.Cluster) {
+		ctx, cancel := context.WithTimeout(context.Background(), time.Minute)
+		defer cancel()
+		cn, err := cluster.GetCNService(0)
+		require.NoError(t, err)
+		db, err := sql.Open("mysql", issue27487DSN(cn.GetServiceConfig().CN.Frontend.Port))
+		require.NoError(t, err)
+		defer db.Close()
+		const name = "issue_29400_fk_branch"
+		defer func() { _, _ = db.Exec("drop database if exists " + name) }()
+		for _, query := range []string{
+			"drop database if exists " + name,
+			"create database " + name,
+			"create table " + name + ".p (id int primary key)",
+			"create table " + name + ".c (id int primary key, pid int, constraint fk_c_p foreign key(pid) references " + name + ".p(id))",
+			"data branch create table " + name + ".c1 from " + name + ".c",
+			"data branch create table " + name + ".c2 from " + name + ".c1",
+		} {
+			execSQLRequire(t, ctx, db, query)
+		}
+		var count int
+		require.NoError(t, db.QueryRowContext(ctx,
+			"select count(*) from mo_catalog.mo_foreign_keys where db_name=? and table_name='c2' and refer_table_name='p'", name).Scan(&count))
+		require.Equal(t, 1, count)
+	})
+}
