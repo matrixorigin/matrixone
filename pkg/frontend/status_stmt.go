@@ -192,9 +192,12 @@ func executeStatusStmt(ses *Session, execCtx *ExecCtx) (err error) {
 		//change privilege
 		switch st := execCtx.stmt.(type) {
 		case *tree.DropTable:
-			execCtx.persistentDropTableTargets = capturePersistentDropTableTargets(
-				ses, st, execCtx.effectiveTxnDefaultDatabase,
+			execCtx.persistentDropTableTargets, err = capturePersistentDropTableTargets(
+				execCtx.reqCtx, ses, st, execCtx.effectiveTxnDefaultDatabase,
 			)
+			if err != nil {
+				return
+			}
 			ses.InvalidatePrivilegeCache()
 			// must execute before run to get database id or table id
 			if err = doRevokePrivilegeImplicitly(
@@ -295,15 +298,16 @@ func executeStatusStmt(ses *Session, execCtx *ExecCtx) (err error) {
 // ownership revoke and the post-execution dynamic-table cleanup must consume
 // this same snapshot: dropTableSingle removes temporary aliases as it runs.
 func capturePersistentDropTableTargets(
+	ctx context.Context,
 	ses FeSession,
 	st *tree.DropTable,
 	defaultDatabase string,
-) tree.TableNames {
+) (tree.TableNames, error) {
 	if st == nil || st.Temporary {
-		return nil
+		return nil, nil
 	}
 	if ses == nil {
-		return st.Names
+		return st.Names, nil
 	}
 
 	targets := make(tree.TableNames, 0, len(st.Names))
@@ -311,17 +315,21 @@ func capturePersistentDropTableTargets(
 		if name == nil {
 			continue
 		}
-		if isSessionTemporaryTable(ses, name, defaultDatabase) {
+		isTemporary, err := isSessionTemporaryTable(ctx, ses, name, defaultDatabase)
+		if err != nil {
+			return nil, err
+		}
+		if isTemporary {
 			continue
 		}
 		targets = append(targets, name)
 	}
-	return targets
+	return targets, nil
 }
 
-func isSessionTemporaryTable(ses FeSession, name *tree.TableName, defaultDatabase string) bool {
+func isSessionTemporaryTable(ctx context.Context, ses FeSession, name *tree.TableName, defaultDatabase string) (bool, error) {
 	if ses == nil || name == nil {
-		return false
+		return false, nil
 	}
 	dbName := string(name.SchemaName)
 	if dbName == "" {
@@ -330,8 +338,14 @@ func isSessionTemporaryTable(ses FeSession, name *tree.TableName, defaultDatabas
 			dbName = ses.GetDatabaseName()
 		}
 	}
-	_, isTemporary := ses.GetTempTable(dbName, string(name.ObjectName))
-	return isTemporary
+	if resolver, ok := ses.(interface {
+		ResolveTempTable(context.Context, string, string) (string, bool, error)
+	}); ok {
+		_, found, err := resolver.ResolveTempTable(ctx, dbName, string(name.ObjectName))
+		return found, err
+	}
+	_, found := ses.GetTempTable(dbName, string(name.ObjectName))
+	return found, nil
 }
 
 func (resper *MysqlResp) respStatus(ses *Session,

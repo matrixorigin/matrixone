@@ -76,11 +76,17 @@ create view mode_i as select * from MODE_V;
 set global lower_case_table_names = 2;
 use replace_view;
 create or replace view mode_v as select * from mode_i;
+ambiguous table name MODE_V
 select * from mode_v;
-a
-2
+ambiguous table name mode_v
 set global lower_case_table_names = 0;
 use replace_view;
+select * from mode_v;
+a
+1
+select * from MODE_V;
+a
+2
 drop view mode_i;
 drop view MODE_V;
 drop view mode_v;

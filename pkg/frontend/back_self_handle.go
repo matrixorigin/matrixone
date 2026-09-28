@@ -32,7 +32,7 @@ func execInFrontendInBack(backSes *backSession,
 	case *tree.Use:
 		execCtx.ses.EnterFPrint(FPInBackUse)
 		defer execCtx.ses.ExitFPrint(FPInBackUse)
-		err = handleChangeDB(backSes, execCtx, st.Name.Compare())
+		err = handleChangeDB(backSes, execCtx, useDatabaseCatalogName(execCtx.reqCtx, st, execCtx.ses))
 		if err != nil {
 			return
 		}

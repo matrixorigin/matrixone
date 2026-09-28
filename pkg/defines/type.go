@@ -173,6 +173,19 @@ type NodeIDKey struct{}
 type InternalExecutorKey struct{}
 type LockWriterFairKey struct{}
 
+// Mode2NameResolutionKey records whether mode-2 catalog lookup is active for
+// this statement. An absent value keeps engine internal callers on exact lookup.
+type Mode2NameResolutionKey struct{}
+
+func AttachMode2NameResolution(ctx context.Context, enabled bool) context.Context {
+	return context.WithValue(ctx, Mode2NameResolutionKey{}, enabled)
+}
+
+func Mode2NameResolutionEnabled(ctx context.Context) bool {
+	enabled, _ := ctx.Value(Mode2NameResolutionKey{}).(bool)
+	return enabled
+}
+
 func IsInternalExecutor(ctx context.Context) bool {
 	if v := ctx.Value(InternalExecutorKey{}); v != nil {
 		return v.(bool)

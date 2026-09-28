@@ -17,6 +17,7 @@ package frontend
 import (
 	"context"
 
+	"github.com/matrixorigin/matrixone/pkg/defines"
 	"github.com/matrixorigin/matrixone/pkg/sql/parsers/tree"
 	"github.com/matrixorigin/matrixone/pkg/txn/client"
 	"github.com/matrixorigin/matrixone/pkg/util/trace/impl/motrace/statistic"
@@ -56,7 +57,7 @@ func execInFrontend(ses *Session, execCtx *ExecCtx) (stats statistic.StatsArray,
 		// USE is deliberately NOT affected by remapdb: it switches to the named
 		// database as written. remapdb instead redirects unqualified name
 		// resolution for whatever the current database is (see DefaultDatabase).
-		dbName := st.Name.Compare()
+		dbName := useDatabaseCatalogName(execCtx.reqCtx, st, ses)
 		//use database
 		err = handleChangeDB(ses, execCtx, dbName)
 		if err != nil {
@@ -767,6 +768,13 @@ func execInFrontend(ses *Session, execCtx *ExecCtx) (stats statistic.StatsArray,
 		}
 	}
 	return
+}
+
+func useDatabaseCatalogName(ctx context.Context, st *tree.Use, ses FeSession) string {
+	if parserLowerCaseTableNames(ses) == 2 && defines.Mode2NameResolutionEnabled(ctx) {
+		return st.Name.Origin()
+	}
+	return st.Name.Compare()
 }
 
 func enterFrontendRunSQL(ses *Session, execCtx *ExecCtx) (func(), error) {

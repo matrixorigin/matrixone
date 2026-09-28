@@ -24,6 +24,7 @@ import (
 	"go.uber.org/zap"
 
 	"github.com/matrixorigin/matrixone/pkg/catalog"
+	"github.com/matrixorigin/matrixone/pkg/common/identifier"
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
 	"github.com/matrixorigin/matrixone/pkg/common/sqlquote"
 	"github.com/matrixorigin/matrixone/pkg/container/batch"
@@ -54,6 +55,10 @@ func (db *txnDatabase) getEng() *Engine {
 
 func (db *txnDatabase) GetDatabaseId(ctx context.Context) string {
 	return strconv.FormatUint(db.databaseId, 10)
+}
+
+func (db *txnDatabase) GetPhysicalName() string {
+	return db.databaseName
 }
 
 func (db *txnDatabase) GetCreateSql(ctx context.Context) string {
@@ -105,6 +110,12 @@ func (db *txnDatabase) relation(ctx context.Context, name string, proc any) (eng
 		p = proc.(*process.Process)
 	}
 
+	if defines.Mode2NameResolutionEnabled(ctx) && db.databaseId == catalog.MO_CATALOG_ID {
+		canonical := identifier.Fold(name)
+		if catalog.IsSystemTableByName(canonical) {
+			name = canonical
+		}
+	}
 	openSys := db.databaseId == catalog.MO_CATALOG_ID && catalog.IsSystemTableByName(name)
 	accountId, err := defines.GetAccountId(ctx)
 	if err != nil {
@@ -112,6 +123,16 @@ func (db *txnDatabase) relation(ctx context.Context, name string, proc any) (eng
 	}
 	if openSys {
 		accountId = 0
+	}
+	if defines.Mode2NameResolutionEnabled(ctx) && !openSys && !defines.IsTempTableName(name) {
+		physical, found, err := db.resolveMode2TableName(ctx, accountId, name, txn)
+		if err != nil {
+			return nil, err
+		}
+		if !found {
+			return nil, nil
+		}
+		name = physical
 	}
 
 	key := genTableKey(accountId, name, db.databaseId, db.databaseName)
@@ -220,6 +241,13 @@ func (db *txnDatabase) deleteTable(ctx context.Context, name string, forAlter bo
 	rel, err := db.Relation(ctx, name, nil)
 	if err != nil {
 		return nil, err
+	}
+	// AlterTable changes the relation handle's tableName before deleting its
+	// old catalog row. In that path the caller passes the old physical name;
+	// replacing it with the handle's new name would query the wrong row.
+	// Ordinary DROP can use the resolved handle to canonicalize a mode-2 alias.
+	if !forAlter {
+		name = rel.GetTableName()
 	}
 
 	var toDelTbl *txnTable
