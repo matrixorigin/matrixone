@@ -13946,7 +13946,7 @@ func newTestTxnServer(t *testing.T) rpc.TxnServer {
 	return server
 }
 
-func Test_BasicTxnModeSwitch(t *testing.T) {
+func Test_BasicTxnModeSwitchRejectsMissingReplayController(t *testing.T) {
 	ctx := context.Background()
 	opts := config.WithLongScanAndCKPOpts(nil)
 	tae := testutil.NewTestEngine(ctx, ModuleName, t, opts)
@@ -13961,10 +13961,10 @@ func Test_BasicTxnModeSwitch(t *testing.T) {
 	assert.True(t, tae.TxnMgr.IsReplayMode())
 
 	err = tae.SwitchTxnMode(ctx, 2, "todo")
-	assert.NoError(t, err)
-	assert.True(t, tae.IsWriteMode())
-	assert.True(t, tae.TxnMgr.IsWriteMode())
-	assert.Error(t, db.CheckCronJobs(tae.DB, db.DBTxnMode_Replay))
+	assert.ErrorContains(t, err, "requires a replay controller")
+	assert.True(t, tae.IsReplayMode())
+	assert.True(t, tae.TxnMgr.IsReplayMode())
+	assert.NoError(t, db.CheckCronJobs(tae.DB, db.DBTxnMode_Replay))
 }
 
 func prepareTxnModeSwitchWithInflightTxn(

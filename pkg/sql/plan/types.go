@@ -408,7 +408,11 @@ type QueryBuilder struct {
 	// detached CTE contexts cannot lose the private system-function owner.
 	persistedViewTarget string
 
-	ctxByNode               []*BindContext
+	ctxByNode []*BindContext
+	// Synthetic scalar reaggregations preserve earlier scalar outputs as
+	// grouping keys. Each alias keeps its original column identity through
+	// final column pruning without changing the executable plan format.
+	scalarReaggAliases      map[int32][]scalarReaggAlias
 	headingProvenanceByNode map[int32]headingProvenanceMap
 	windowValidationScans   []*plan.Node
 	nameByColRef            map[[2]int32]string

@@ -1104,12 +1104,24 @@ func literalVectorOptions(encoded *planpb.LiteralVec, expected *planpb.Type) (op
 }
 
 func (e *exporter) extractExpr(result *planpb.Expr, call *planpb.Function, inputs []int) (*spb.Expression, error) {
-	if len(call.Args) != 2 || call.Args[0].GetLit() == nil {
+	if len(call.Args) != 2 || call.Args[0].GetLit() == nil || call.Args[1] == nil {
 		return nil, notEligiblef(EligibilityExpression, "extract requires a literal field and one value")
 	}
 	unit := strings.ToLower(call.Args[0].GetLit().GetSval())
 	if unit == "" {
 		return nil, notEligiblef(EligibilityExpression, "extract field is empty")
+	}
+	// Sirius lowers EXTRACT to DuckDB date_part. Only the simple DATE fields
+	// share our contract: WEEK uses ISO weeks there, text has no tolerant
+	// parser, and TIME durations / TIMESTAMP session zones are not equivalent.
+	// Check the literal before either exact or parameterized admission.
+	if types.T(call.Args[1].Typ.Id) != types.T_date {
+		return nil, notEligiblef(EligibilityExpression, "extract requires a DATE value for Sirius")
+	}
+	switch unit {
+	case "year", "month", "day", "quarter":
+	default:
+		return nil, notEligiblef(EligibilityExpression, "extract field %q has no declared Sirius semantic equivalence", unit)
 	}
 	supported, err := hasSemanticCapability(semanticScalar, "extract", call.Func, call.Args, &result.Typ)
 	if err != nil {
@@ -1525,6 +1537,7 @@ type semanticDeclaration struct {
 var semanticDeclarations = []semanticDeclaration{
 	{semanticScalar, function.AND, "and", "and", []types.Type{types.T_bool.ToType(), types.T_bool.ToType()}, "sirius-v1:boolean-three-valued-logic"},
 	{semanticScalar, function.OR, "or", "or", []types.Type{types.T_bool.ToType(), types.T_bool.ToType()}, "sirius-v1:boolean-three-valued-logic"},
+	{semanticScalar, function.EXTRACT, "extract", "extract", []types.Type{types.T_varchar.ToType(), types.T_date.ToType()}, "sirius-v1:extract"},
 	{semanticScalar, function.NOT, "not", "not", []types.Type{types.T_bool.ToType()}, "sirius-v1:boolean-three-valued-logic"},
 	{semanticScalar, function.EQUAL, "=", "equal", []types.Type{types.T_int64.ToType(), types.T_int64.ToType()}, "sirius-v1:signed-i64-comparison"},
 	{semanticScalar, function.NOT_EQUAL, "!=", "not_equal", []types.Type{types.T_int64.ToType(), types.T_int64.ToType()}, "sirius-v1:signed-i64-comparison"},
@@ -1680,7 +1693,7 @@ func hasTPCHSemanticCapability(kind semanticCapabilityKind, name string, ref *pl
 		case "singular_or_list":
 			declared = functionID == function.IN && len(args) >= 2 && (types.T(args[0].Typ.Id) == types.T_int32 || isTPCHStringType(types.T(args[0].Typ.Id)))
 		case "extract":
-			declared = functionID == function.EXTRACT && len(args) == 2 && types.T(args[0].Typ.Id) == types.T_varchar && types.T(args[1].Typ.Id) == types.T_date && types.T(out.Id) == types.T_uint32
+			declared = functionID == function.EXTRACT && len(args) == 2 && types.T(args[0].Typ.Id) == types.T_varchar && types.T(args[1].Typ.Id) == types.T_date && types.T(out.Id) == types.T_int64
 		}
 	case semanticAggregate:
 		switch name {
@@ -1745,11 +1758,15 @@ func hasTPCHSemanticCapability(kind semanticCapabilityKind, name string, ref *pl
 	if int32(result.Oid) != out.Id || !widthMatches || result.Scale != out.Scale {
 		return false, nil
 	}
-	notNullable := semanticNotNullable(resolved.GetEncodedOverloadID(), args)
 	if kind == semanticAggregate && aggregateCanReturnNullOnEmpty(functionID) && !out.NotNullable {
 		return true, nil
 	}
-	return notNullable == out.NotNullable, nil
+	// Constant folding may replace a nullable expression with a non-NULL
+	// literal without strengthening its parent's annotation. Accept either
+	// the original argument contract or the concrete-literal proof; never
+	// strengthen a nullable column or a NULL-synthesizing function.
+	return function.DeduceNotNullable(resolved.GetEncodedOverloadID(), args) == out.NotNullable ||
+		semanticNotNullable(resolved.GetEncodedOverloadID(), args) == out.NotNullable, nil
 }
 
 // Only prove the text subset supported by this exporter. Static VARCHAR alone

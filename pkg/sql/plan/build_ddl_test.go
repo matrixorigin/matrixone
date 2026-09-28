@@ -2642,6 +2642,57 @@ func TestOctNotNullSourceCTAS(t *testing.T) {
 	}
 }
 
+func TestTypedDateConversionCTASAllowsSynthesizedNull(t *testing.T) {
+	for _, sourceType := range []types.T{types.T_date, types.T_datetime} {
+		for _, expression := range []struct {
+			sql      string
+			wantNull bool
+		}{
+			{"l_shipdate", false},
+			{"date(l_shipdate)", true},
+			{"cast(l_shipdate as date)", true},
+			{"extract(week from l_shipdate)", true},
+			{"week(l_shipdate)", true},
+			{"year(l_shipdate)", false},
+		} {
+			t.Run(sourceType.String()+"/"+expression.sql, func(t *testing.T) {
+				opt := NewMockOptimizer(false)
+				ctx := opt.CurrentContext().(*MockCompilerContext)
+				source := ctx.tables["lineitem"].Cols[ctx.tables["lineitem"].Name2ColIndex["l_shipdate"]]
+				source.Typ.Id = int32(sourceType)
+				source.Typ.NotNullable = true
+				source.Default = &plan.Default{NullAbility: false}
+				p, err := buildSingleStmt(opt, t, "create table typed_date_copy as select "+expression.sql+" as d from lineitem")
+				require.NoError(t, err)
+				col := p.GetDdl().GetCreateTable().GetTableDef().GetCols()[0]
+				require.Equal(t, expression.wantNull, !col.Typ.NotNullable)
+				require.Equal(t, expression.wantNull, col.GetDefault().GetNullAbility())
+			})
+		}
+	}
+}
+
+func TestTemporalTextExtractionCTASAllowsSynthesizedNull(t *testing.T) {
+	for _, expression := range []string{"extract(year from n_name)", "year(n_name)", "month(n_name)", "quarter(n_name)", "from_days(n_nationkey)"} {
+		t.Run(expression, func(t *testing.T) {
+			ctx := NewMockCompilerContext(false)
+			for _, source := range ctx.tables["nation"].Cols {
+				source.Typ.NotNullable = true
+				source.Default = &plan.Default{NullAbility: false}
+			}
+			stmt, err := parsers.ParseOne(t.Context(), dialect.MYSQL,
+				"create table temporal_copy as select "+expression+" as v from nation", 1)
+			require.NoError(t, err)
+			defer stmt.Free()
+			p, err := BuildPlan(ctx, stmt, false)
+			require.NoError(t, err)
+			col := p.GetDdl().GetCreateTable().GetTableDef().GetCols()[0]
+			require.False(t, col.Typ.NotNullable)
+			require.True(t, col.GetDefault().GetNullAbility())
+		})
+	}
+}
+
 func TestBuildCTASFromViewUsesIndependentExecutableDefault(t *testing.T) {
 	ctx := NewMockCompilerContext(false)
 	sourceCol := ctx.tables["nation"].Cols[0]
@@ -5763,6 +5814,30 @@ func TestCreateTableAsSelectWithTimestampPairPrecision(t *testing.T) {
 			require.Equal(t, test.wantFSP, column.Typ.Width)
 			require.Equal(t, test.wantFSP, column.Typ.Scale)
 			require.True(t, column.GetDefault().GetNullAbility())
+		})
+	}
+}
+
+func TestCreateTableAsSelectWithTimeFunctionPrecision(t *testing.T) {
+	for _, test := range []struct {
+		name       string
+		expression string
+		wantFSP    int32
+	}{
+		{name: "typed time", expression: "time(cast('00:00:00.123456' as time(6)))", wantFSP: 6},
+		{name: "decimal256", expression: "time(cast(123.1234567 as decimal(65,7)))", wantFSP: 6},
+		{name: "validated literal", expression: "time('00:00:00.1234')", wantFSP: 4},
+		{name: "integer", expression: "time(123)", wantFSP: 0},
+	} {
+		t.Run(test.name, func(t *testing.T) {
+			mock := NewMockOptimizer(false)
+			logicPlan, err := buildSingleStmt(mock, t,
+				"create table time_ctas as select "+test.expression+" as time_value")
+			require.NoError(t, err)
+			column := logicPlan.GetDdl().GetCreateTable().GetTableDef().GetCols()[0]
+			require.Equal(t, int32(types.T_time), column.Typ.Id)
+			require.Equal(t, test.wantFSP, column.Typ.Width)
+			require.Equal(t, test.wantFSP, column.Typ.Scale)
 		})
 	}
 }
