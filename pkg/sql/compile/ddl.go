@@ -6778,8 +6778,25 @@ func (s *Scope) CreatePitr(c *Compile) error {
 	}
 	defer res.Close()
 	dup := false
-	res.ReadRows(func(rows int, _ []*vector.Vector) bool {
-		dup = rows > 0
+	mode2Names := defines.Mode2NameResolutionEnabled(c.proc.Ctx) &&
+		(tree.PitrLevel(createPitr.GetLevel()) == tree.PITRLEVELDATABASE ||
+			tree.PitrLevel(createPitr.GetLevel()) == tree.PITRLEVELTABLE)
+	res.ReadRows(func(rows int, columns []*vector.Vector) bool {
+		if !mode2Names {
+			dup = rows > 0
+			return !dup
+		}
+		for row := 0; row < rows; row++ {
+			actualTable := ""
+			if tree.PitrLevel(createPitr.GetLevel()) == tree.PITRLEVELTABLE {
+				actualTable = columns[2].GetStringAt(row)
+			}
+			if mode2PitrNamesMatch(tree.PitrLevel(createPitr.GetLevel()), createPitr.DatabaseName,
+				createPitr.TableName, columns[1].GetStringAt(row), actualTable) {
+				dup = true
+				break
+			}
+		}
 		return !dup
 	})
 	if dup {
@@ -6921,6 +6938,13 @@ func (s *Scope) CreatePitr(c *Compile) error {
 	// --- End sys_mo_catalog_pitr logic ---
 
 	return nil
+}
+
+func mode2PitrNamesMatch(level tree.PitrLevel, expectedDB, expectedTable, actualDB, actualTable string) bool {
+	if identifier.Fold(expectedDB) != identifier.Fold(actualDB) {
+		return false
+	}
+	return level == tree.PITRLEVELDATABASE || identifier.Fold(expectedTable) == identifier.Fold(actualTable)
 }
 
 func preparePitrPublication(
@@ -7066,6 +7090,10 @@ func getSqlForCheckPitrDup(
 	databaseName := fmt.Sprintf("database_name = '%s'", sqlquote.EscapeString(createPitr.DatabaseName))
 	tableName := fmt.Sprintf("table_name = '%s'", sqlquote.EscapeString(createPitr.TableName))
 	if mode2 {
+		if tree.PitrLevel(createPitr.GetLevel()) == tree.PITRLEVELDATABASE ||
+			tree.PitrLevel(createPitr.GetLevel()) == tree.PITRLEVELTABLE {
+			sql = "SELECT pitr_id,database_name,table_name FROM mo_catalog.mo_pitr WHERE create_account = %d"
+		}
 		databaseName = fmt.Sprintf("lower(database_name) = lower('%s')", sqlquote.EscapeString(createPitr.DatabaseName))
 		tableName = fmt.Sprintf("lower(table_name) = lower('%s')", sqlquote.EscapeString(createPitr.TableName))
 	}
