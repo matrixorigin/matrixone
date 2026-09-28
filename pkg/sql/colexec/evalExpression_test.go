@@ -4425,6 +4425,7 @@ func TestConstantStringNumericCastWarningRunsOnceWhenSelected(t *testing.T) {
 	proc := testutil.NewProcess(t)
 	defer proc.Free()
 	proc.SetBaseProcessRunningStatus(true)
+	proc.GetSessionInfo().MySQLNumericCompatibilityMode = true
 	warnings := &preparedCastWarningSession{}
 	proc.Session = warnings
 	sourceType, targetType := types.T_text.ToType(), types.T_float64.ToType()

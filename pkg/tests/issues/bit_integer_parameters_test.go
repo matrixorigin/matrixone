@@ -20,6 +20,7 @@ import (
 	"fmt"
 	"math"
 	"net"
+	"strings"
 	"sync"
 	"testing"
 
@@ -402,6 +403,14 @@ func testBitIntegerPreparedParameters(t *testing.T, ctx context.Context, db *sql
 		conn, err := db.Conn(ctx)
 		require.NoError(t, err)
 		defer conn.Close()
+		var originalSQLMode string
+		require.NoError(t, conn.QueryRowContext(ctx, "select @@session.sql_mode").Scan(&originalSQLMode))
+		defer func() {
+			_, err := conn.ExecContext(ctx, fmt.Sprintf("set session sql_mode = '%s'", strings.ReplaceAll(originalSQLMode, "'", "''")))
+			require.NoError(t, err)
+		}()
+		_, err = conn.ExecContext(ctx, "set session sql_mode = concat_ws(',', @@session.sql_mode, 'MYSQL_NUMERIC_COMPATIBILITY')")
+		require.NoError(t, err)
 		var direct string
 		require.NoError(t, conn.QueryRowContext(ctx,
 			`select make_set(nullif('abc',1.5),'a','b')`).Scan(&direct))
