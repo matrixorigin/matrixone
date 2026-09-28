@@ -1068,7 +1068,11 @@ func (builder *QueryBuilder) pushdownFilters(nodeID int32, filters []*plan.Expr,
 
 			node.Children[0] = childID
 		} else {
-			cantPushdown = filters
+			// A leaf (e.g. SINK_SCAN): APPEND rather than overwrite, so filters the
+			// limit/offset guard above already moved into cantPushdown are preserved. A
+			// recursive-CTE consumer SINK_SCAN carries Offset (#29332), so an outer WHERE
+			// blocked by the guard would otherwise be silently dropped here (#29065).
+			cantPushdown = append(cantPushdown, filters...)
 		}
 	}
 
