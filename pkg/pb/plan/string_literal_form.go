@@ -376,20 +376,20 @@ const (
 // execution contracts.
 // JSONScalarLiteralContracts requires MORPC v104 because older executors
 // decode JSON-typed Sval literals as VARCHAR rather than encoded JSON.
-// StrictStringNumericCompatibility requires MORPC v100 when the sender uses
-// the strict-by-default contract. Pre-v100 workers understand the prefix-cast
+// StrictStringNumericCompatibility requires MORPC v101 when the sender uses
+// the strict-by-default contract. Pre-v101 workers understand the prefix-cast
 // representation but default to permissive conversion when the new SessionInfo
 // marker is absent.
-// NumericBinaryLiteralProvenance requires v100 in every mode when a
+// NumericBinaryLiteralProvenance requires v101 in every mode when a
 // CASE/IF/COALESCE result can carry a selected non-NULL HEX/BIT marker. The
 // marker can affect a downstream numeric cast even when every non-NULL branch
-// is marked (or the other branch is NULL), and pre-v100 flow-control executors
+// is marked (or the other branch is NULL), and pre-v101 flow-control executors
 // do not propagate it. This is independent of string-prefix conversion mode.
-// HistoricalStringMathCompatibility requires v100 in every mode: old CEIL/FLOOR
+// HistoricalStringMathCompatibility requires v101 in every mode: old CEIL/FLOOR
 // VARCHAR overloads used ParseFloat, not the current mode-aware parser.
-// Ordinary/comparison/set-operation FLOAT -> INT64 casts require v100's exact
+// Ordinary/comparison/set-operation FLOAT -> INT64 casts require v101's exact
 // bounds in every mode, independently of string-prefix conversion.
-// ScalarMathPrecisionCompatibility requires v100 to preserve row-level
+// ScalarMathPrecisionCompatibility requires v101 to preserve row-level
 // warnings while presenting a constant precision argument to CEIL/FLOOR kernels.
 type RemoteExpressionFeatures struct {
 	NumericPrefix                     bool
@@ -862,7 +862,7 @@ func classifyNumericBinaryLiteralValue(expr *Expr) numericBinaryLiteralValueClas
 
 // isFlowControlNumericBinaryLiteralSource identifies a CASE/IF/COALESCE result
 // that can carry a selected non-NULL HEX/BIT marker. Uniformly marked values
-// still need the v100 contract: older flow-control executors dropped the scalar
+// still need the v101 contract: older flow-control executors dropped the scalar
 // marker, so a downstream numeric cast could produce a different result.
 // NULL-only alternatives do not create a marker, but a marked value alongside
 // NULL still does.
