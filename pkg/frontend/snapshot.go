@@ -1942,7 +1942,6 @@ func sortedViewInfos(
 		err         error
 		snapshot    *plan.Snapshot
 		sortedViews []string
-		oldSnapshot *plan.Snapshot
 	)
 
 	if inputSnapshot != nil {
@@ -1953,14 +1952,23 @@ func sortedViewInfos(
 			return nil, err
 		}
 	}
+	if len(viewMap) == 0 {
+		return nil, nil
+	}
 
-	compCtx := ses.GetTxnCompileCtx()
+	// Plan source views with the source account and an isolated mutable binder.
+	// A tenant-only subscription snapshot has no TS, so SetSnapshot alone does
+	// not move DatabaseExists/GetSubscriptionMeta to the publisher account.
+	compCtx, closeCompCtx, err := ses.GetTxnCompileCtx().NewViewDescriptionCompilerContext(
+		defines.AttachAccountId(ctx, fromAccountId),
+	)
+	if err != nil {
+		return nil, err
+	}
+	defer closeCompCtx()
+	viewCtx := compCtx.(*TxnCompilerContext)
 	if snapshot != nil {
-		oldSnapshot = compCtx.GetSnapshot()
 		compCtx.SetSnapshot(snapshot)
-		defer func() {
-			compCtx.SetSnapshot(oldSnapshot)
-		}()
 	}
 
 	g := toposort{next: make(map[string][]string)}
@@ -1971,7 +1979,7 @@ func sortedViewInfos(
 			return nil, err
 		}
 
-		compCtx.SetDatabase(viewEntry.dbName)
+		viewCtx.SetDatabase(viewEntry.dbName)
 		// build create sql to find dependent views
 		_, err = plan.BuildPlan(compCtx, stmts[0], false)
 		freeStatements(stmts)

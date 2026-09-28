@@ -273,7 +273,10 @@ func resolveBranchCloneSource(ctx context.Context, ses *Session, bh BackgroundEx
 		return branchResolvedSource{}, err
 	}
 	if ref == nil || def == nil || def.TblId == 0 {
-		return branchResolvedSource{}, moerr.NewNoSuchTable(ctx, source.database, source.table)
+		// Match the CLONE planner's missing-source diagnostic. Admission may
+		// discover the absence first, but must not change the public error.
+		return branchResolvedSource{}, moerr.NewParseErrorf(ctx,
+			"table %v-%v does not exist", source.database, source.table)
 	}
 	if source.snapshot != nil && source.snapshot.Tenant != nil {
 		source.account = source.snapshot.Tenant.TenantID

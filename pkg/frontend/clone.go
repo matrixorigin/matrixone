@@ -152,7 +152,10 @@ func lockNamedDataBranchCloneSnapshot(
 	if err != nil {
 		return err
 	}
-	records, err := getSnapshotRecords(ctx, bh, sql)
+	// Snapshot names belong to the system catalog even when the historical
+	// source table belongs to another account. Source identity is only for
+	// table reads; this revalidates an already-authorized global snapshot row.
+	records, err := getSnapshotRecords(defines.AttachAccountId(ctx, catalog.System_Account), bh, sql)
 	if err != nil {
 		return err
 	}
@@ -1131,7 +1134,7 @@ func handleCloneDatabaseWithSource(
 		accounts = cloneDatabaseAccountResolution{
 			opAccountId: resolvedSource.opAccountId,
 			toAccountId: resolvedSource.toAccountId,
-			snapshot:    resolvedSource.snapshot,
+			snapshot:    resolvedSource.requestSnapshot,
 		}
 	} else if accounts, err = resolveCloneDatabaseAccounts(reqCtx, ses, bh, stmt); err != nil {
 		return

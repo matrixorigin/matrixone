@@ -20,6 +20,7 @@ import (
 	"slices"
 	"strconv"
 	"strings"
+	"time"
 
 	"github.com/matrixorigin/matrixone/pkg/catalog"
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
@@ -79,7 +80,7 @@ func (c *Compile) prepareBranchReclaimRC(deadTIDs []uint64) (func() error, datab
 	}
 	batchSize := max(1, int(c.proc.GetLockService().GetConfig().MaxLockRowCount))
 	return func() error {
-		return databranchutils.MarkAndReclaimBranchSnapshotsCore(
+		if err := databranchutils.MarkAndReclaimBranchSnapshotsCore(
 			deadTIDs,
 			func() (databranchutils.BranchReclaimDag, error) { return dag, nil },
 			func() error {
@@ -107,8 +108,67 @@ func (c *Compile) prepareBranchReclaimRC(deadTIDs []uint64) (func() error, datab
 				}
 				return nil
 			},
-		)
+		); err != nil {
+			return err
+		}
+		return c.compactExpiredAlterDataBranchLineageRC()
 	}, dag, nil
+}
+
+// compactExpiredAlterDataBranchLineageRC finishes the synchronous DROP
+// transition. Admission already holds C shared and G exclusive, ahead of D and K;
+// the applied RC frontier therefore sees every committed Snapshot/PITR owner.
+// Read the complete ownership graph again after the DROP's own mutations, then
+// lock and delete only the selected primary keys in this same transaction.
+func (c *Compile) compactExpiredAlterDataBranchLineageRC() error {
+	dag, err := c.loadAlterDataBranchDAG(false)
+	if err != nil || len(dag.Info) == 0 {
+		return err
+	}
+	edges, err := c.loadAlterDataBranchLineageEdges()
+	if err != nil {
+		return err
+	}
+	now := c.proc.GetTxnOperator().SnapshotTS().ToStdTime().UTC()
+	if now.IsZero() {
+		now = time.Now().UTC()
+	}
+	sources, err := c.loadAlterDataBranchHistoricalSources(now)
+	if err != nil {
+		return err
+	}
+	plan := databranchutils.ComputeAlterLineageCompactionPlan(dag, edges, sources)
+	if len(plan.TableIDs) == 0 {
+		return nil
+	}
+	if err = c.runSqlWithSystemTenant(databranchutils.LineageOwnerLifecycleLockSQL()); err != nil {
+		return err
+	}
+	keys := batch.NewWithSize(1)
+	keys.Vecs[0] = vector.NewVec(types.T_uint64.ToType())
+	defer keys.Vecs[0].Free(c.proc.Mp())
+	for _, id := range plan.TableIDs {
+		if err = vector.AppendFixed(keys.Vecs[0], id, false, c.proc.Mp()); err != nil {
+			return err
+		}
+	}
+	if _, err = c.lockBranchCatalogRowsRC(catalog.MO_BRANCH_METADATA, keys); err != nil {
+		return err
+	}
+	if err = c.lockBranchSnapshotNamesRC(plan.SnapshotNames); err != nil {
+		return err
+	}
+	const batchSize = 128
+	for start := 0; start < len(plan.TableIDs); start += batchSize {
+		end := min(start+batchSize, len(plan.TableIDs))
+		if err = c.runExactBranchMutationRC(databranchutils.BuildAlterLineageSnapshotDeleteSQL(plan.SnapshotNames[start:end])); err != nil {
+			return err
+		}
+		if err = c.runExactBranchMutationRC(databranchutils.BuildAlterLineageMetadataDeleteSQL(plan.TableIDs[start:end])); err != nil {
+			return err
+		}
+	}
+	return nil
 }
 
 func (c *Compile) runExactBranchMutationRC(sql string) error {
