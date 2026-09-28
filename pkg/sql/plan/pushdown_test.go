@@ -127,6 +127,31 @@ func TestJoinDoesNotPushDownVolatileFilter(t *testing.T) {
 	})
 }
 
+// TestPushdownFiltersLeafWithOffsetKeepsFilter is the #29065 regression: a filter blocked by the
+// LIMIT/OFFSET guard at a LEAF node (a recursive-CTE consumer SINK_SCAN carries only Offset, #29332)
+// must be RETURNED as cantPushdown, not overwritten to nil by the default leaf branch, so the caller
+// re-attaches it as a FILTER instead of silently dropping it (which returned wrong recursive-CTE rows).
+func TestPushdownFiltersLeafWithOffsetKeepsFilter(t *testing.T) {
+	ctx := NewMockCompilerContext(true)
+	builder := NewQueryBuilder(plan.Query_SELECT, ctx, false, false)
+	tag := builder.GenNewBindTag()
+	// Append directly (not via appendNode) to skip ReCalcNodeStats, which a bare SINK_SCAN with no
+	// source step cannot satisfy; the leaf pushdown branch only reads NodeType/Offset/Children.
+	leafID := int32(len(builder.qry.Nodes))
+	builder.qry.Nodes = append(builder.qry.Nodes, &plan.Node{
+		NodeType:    plan.Node_SINK_SCAN,
+		NodeId:      leafID,
+		BindingTags: []int32{tag},
+		Offset:      makePlan2Int64ConstExprWithType(1),
+	})
+	filter := makeVolatileJoinFilter(t, ctx, &tag)
+
+	_, cantPushdown := builder.pushdownFilters(leafID, []*plan.Expr{filter}, false)
+	require.Equal(t, []*plan.Expr{filter}, cantPushdown,
+		"a filter blocked over a leaf OFFSET node must be returned, not dropped (#29065)")
+	require.Empty(t, builder.qry.Nodes[leafID].FilterList)
+}
+
 func TestJoinKeepsDiagnosticEquijoinKeys(t *testing.T) {
 	for _, separate := range []bool{false, true} {
 		for _, fromOn := range []bool{false, true} {

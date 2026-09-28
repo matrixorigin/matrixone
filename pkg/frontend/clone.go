@@ -321,6 +321,7 @@ func lockDatabaseCatalogRow(
 	bh BackgroundExec,
 	accountID uint32,
 	databaseName string,
+	mode lock.LockMode,
 ) error {
 	lockProc, err := newCloneDatabaseTargetLockProcess(ctx, ses, bh)
 	if err != nil {
@@ -355,7 +356,7 @@ func lockDatabaseCatalogRow(
 			lockBat,
 			0,
 			*lockBat.Vecs[0].GetType(),
-			lock.LockMode_Exclusive,
+			mode,
 			lock.Sharding_None,
 			accountID,
 		)
@@ -369,7 +370,7 @@ var lockCloneDatabaseTarget = func(
 	accountID uint32,
 	databaseName string,
 ) error {
-	return lockDatabaseCatalogRow(ctx, ses, bh, accountID, databaseName)
+	return lockDatabaseCatalogRow(ctx, ses, bh, accountID, databaseName, lock.LockMode_Exclusive)
 }
 
 func checkCloneDatabaseTarget(

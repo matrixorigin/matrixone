@@ -2939,6 +2939,46 @@ func Test_getAccountFromPublication(t *testing.T) {
 	})
 }
 
+func TestLockedPublicationRejectsRetiredSubscriber(t *testing.T) {
+	const (
+		liveSQL = "select account_id from mo_catalog.mo_account where account_name = 'subscriber'"
+		pubSQL  = "SELECT account_id, account_name, pub_name, database_name, database_id, table_list, account_list \n" +
+			"\t\t\tFROM mo_catalog.mo_pubs \n" +
+			"\t\t\tWHERE account_name = 'publisher' AND pub_name = 'pub' for update"
+	)
+	for _, test := range []struct {
+		name       string
+		liveID     uint64
+		liveExists bool
+		wantError  bool
+	}{
+		{name: "same generation", liveID: 27, liveExists: true},
+		{name: "recreated name", liveID: 28, liveExists: true, wantError: true},
+		{name: "dropped name", wantError: true},
+	} {
+		t.Run(test.name, func(t *testing.T) {
+			bh := &backgroundExecTest{}
+			bh.init()
+			if test.liveExists {
+				bh.sql2result[liveSQL] = newMrsForCheckTenant([][]interface{}{{test.liveID, "subscriber", "open", 0}})
+			} else {
+				bh.sql2result[liveSQL] = newMrsForCheckTenant(nil)
+			}
+			bh.sql2result[pubSQL] = newMrsForPublicationInfo(100, "publisher", "pub", "db", 1, "*", "all")
+			publisherID, _, err := lockAccountFromPublication(t.Context(), bh, "publisher", "pub", "subscriber", 27)
+			if test.wantError {
+				require.ErrorContains(t, err, "session is no longer active")
+				require.Equal(t, []string{liveSQL}, bh.executedSQLs)
+			} else {
+				require.NoError(t, err)
+				require.Equal(t, uint64(100), publisherID)
+				require.Equal(t, []string{liveSQL, pubSQL}, bh.executedSQLs)
+			}
+			require.Equal(t, uint32(sysAccountID), bh.executionAccountIDs[0])
+		})
+	}
+}
+
 // newMrsForMoIndexes creates a MysqlResultSet for mo_indexes query
 // columns: table_id, name, algo_table_type, index_table_name
 func newMrsForMoIndexes(records [][]interface{}) *MysqlResultSet {

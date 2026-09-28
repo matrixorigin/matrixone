@@ -1271,7 +1271,8 @@ func TestBuildSubscriptionMetadataProtocolAndViewGate(t *testing.T) {
 	require.Equal(t, subscriptionTablesFunctionName, node.TableDef.TblFunc.Name)
 	require.Equal(t, "account_id", node.TableDef.Cols[0].Name)
 	require.Equal(t, int32(types.T_uint32), node.TableDef.Cols[0].Typ.Id)
-	require.Equal(t, "owner", node.TableDef.Cols[len(node.TableDef.Cols)-1].Name)
+	require.Equal(t, "publisher_account_id", node.TableDef.Cols[len(node.TableDef.Cols)-1].Name)
+	require.Equal(t, int32(types.T_uint32), node.TableDef.Cols[len(node.TableDef.Cols)-1].Typ.Id)
 
 	directCtx := NewBindContext(builder, nil)
 	_, err = builder.buildSubscriptionTables(tableFunction, directCtx, nil, nil)
@@ -1297,7 +1298,7 @@ func TestBuildSubscriptionMetadataProtocolAndViewGate(t *testing.T) {
 	require.Equal(t, int32(types.T_uint32), columnsNode.TableDef.Cols[len(columnsNode.TableDef.Cols)-1].Typ.Id)
 
 	_, err = builder.buildSubscriptionTables(tableFunction, columnsCtx, nil, nil)
-	require.ErrorContains(t, err, "private to information_schema metadata views")
+	require.NoError(t, err, "COLUMNS enumerates authorized subscription View candidates before binding")
 
 	_, err = builder.buildSubscriptionColumns(tableFunction, tablesCtx, nil, nil)
 	require.ErrorContains(t, err, "private to information_schema metadata views")
