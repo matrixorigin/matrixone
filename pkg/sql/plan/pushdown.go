@@ -1040,8 +1040,12 @@ func (builder *QueryBuilder) pushdownFilters(nodeID int32, filters []*plan.Expr,
 		}
 
 	case plan.Node_APPLY:
+		leftTags := make(map[int32]bool)
+		for _, tag := range builder.enumerateTags(node.Children[0]) {
+			leftTags[tag] = true
+		}
 		for _, filter := range filters {
-			if builder.filterPushdownBarrier(filter) {
+			if builder.filterPushdownBarrier(filter) || !containsOnlyTags(filter, leftTags) {
 				cantPushdown = append(cantPushdown, filter)
 			} else {
 				canPushdown = append(canPushdown, filter)
