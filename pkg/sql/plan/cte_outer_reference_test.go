@@ -316,6 +316,22 @@ func TestPreparedLocalCTEOuterReferences(t *testing.T) {
 	assertReachablePlanHasNoCorrelatedExpr(t, logicPlan.GetQuery())
 }
 
+func TestLocalCTEGuardedLiteralProof(t *testing.T) {
+	lit := func(value int64) *planpb.Literal {
+		return &planpb.Literal{Value: &planpb.Literal_I64Val{I64Val: value}}
+	}
+	require.True(t, localCTEIntegerLiteralFits(lit(2), types.T_int32))
+	require.False(t, localCTEIntegerLiteralFits(lit(2147483648), types.T_int32))
+	require.False(t, localCTEIntegerLiteralFits(lit(-1), types.T_uint32))
+	require.False(t, localCTEIntegerLiteralFits(&planpb.Literal{
+		Value: &planpb.Literal_U64Val{U64Val: ^uint64(0)},
+	}, types.T_int32))
+	require.True(t, localCTEStringLiteralFits(&planpb.Literal{
+		Value: &planpb.Literal_Sval{Sval: "active"},
+	}, planpb.Type{Id: int32(types.T_varchar), Width: 20}))
+	require.False(t, localCTEStringLiteralFits(lit(42), planpb.Type{Id: int32(types.T_varchar), Width: 20}))
+}
+
 func TestLocalCTEOuterReferencesRejectUnsafeDomains(t *testing.T) {
 	for _, tc := range []struct {
 		name string
@@ -458,6 +474,12 @@ func TestLocalCTEOuterReferencesRejectUnsafeDomains(t *testing.T) {
 			name: "throwing consumer abs in inactive case",
 			sql: `select p.n_nationkey, case when p.n_nationkey=1 then 0 else
 				(with q(n) as (select p.n_regionkey) select abs(n) from q) end
+				from tpch.nation p`,
+		},
+		{
+			name: "throwing consumer arithmetic in inactive case",
+			sql: `select p.n_nationkey, case when p.n_nationkey=1 then 0 else
+				(with q(n) as (select p.n_regionkey) select n-1 from q) end
 				from tpch.nation p`,
 		},
 		{
