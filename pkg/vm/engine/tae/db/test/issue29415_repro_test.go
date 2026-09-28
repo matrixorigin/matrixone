@@ -79,7 +79,7 @@ func TestIssue29415ReplayPromotionLateTableAndSettings(t *testing.T) {
 		{name: "settings row deleted", createSettings: true, settingsJSON: setting.String(), deleteSettingsRow: true},
 		{name: "invalid setting", createSettings: true, settingsJSON: `{"bad_settings":100}`, expectError: "probable corrupted merge settings"},
 		{name: "short decay points", createSettings: true, settingsJSON: shortPoints.String(), expectError: "invalid merge settings decay points"},
-		{name: "extra decay points preserved", createSettings: true, settingsJSON: extraPoints.String(), expectTrigger: true},
+		{name: "extra decay points", createSettings: true, settingsJSON: extraPoints.String(), expectError: "invalid merge settings decay points"},
 		{name: "optional replay lock merge job", preexistingLockMerge: true},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
