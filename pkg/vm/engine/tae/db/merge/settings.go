@@ -89,6 +89,9 @@ func DecodeMergeSettingsBatchAnd(
 				zap.Error(err),
 				zap.String("settings", string(bs)),
 			)
+			// The row still supersedes an older committed setting. Deliver a
+			// nil trigger so a late callback cannot restore stale config.
+			fn(tid, nil)
 			continue
 		}
 		fn(tid, setting)
@@ -148,6 +151,11 @@ func (s *MergeSettings) String() string {
 }
 
 func (s *MergeSettings) ToMMsgTaskTrigger() (*MMsgTaskTrigger, error) {
+	if len(s.L0MaxCountDecayControl) != 4 {
+		return nil, moerr.NewInternalErrorNoCtxf(
+			"merge settings l0 decay control needs 4 points, got %d",
+			len(s.L0MaxCountDecayControl))
+	}
 	l0MaxCountDecayDuration, err := time.ParseDuration(s.L0MaxCountDecayDuration)
 	if err != nil {
 		return nil, err
@@ -191,7 +199,11 @@ func (c *TNCatalogEventSource) GetMergeSettingsBatchFn() func() (*batch.Batch, f
 	if err != nil {
 		return nil
 	}
-	txn := c.OpenOfflineTxn(types.BuildTS(time.Now().UTC().UnixNano(), 0))
+	ts := c.Now()
+	if maxCommitted := c.MaxCommittedTS.Load(); ts.LE(maxCommitted) {
+		ts = maxCommitted.Next()
+	}
+	txn := c.OpenOfflineTxn(ts)
 	entry, err := db.GetTableEntryByName(0, pkgcatalog.MO_MERGE_SETTINGS, txn)
 	if err != nil {
 		return nil

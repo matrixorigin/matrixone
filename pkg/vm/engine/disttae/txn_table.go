@@ -2062,7 +2062,7 @@ func (tbl *txnTable) Write(ctx context.Context, bat *batch.Batch) error {
 			tbl.db.databaseId,
 			tbl.tableId,
 			tbl.db.databaseName,
-			tbl.tableName,
+			tbl.writeTableName(ctx),
 			fileName,
 			bat,
 			tbl.getTxn().tnStores[0], tbl.extraInfo.AutoIncrEpoch)
