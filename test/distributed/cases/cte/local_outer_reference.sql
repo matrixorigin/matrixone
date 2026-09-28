@@ -425,6 +425,8 @@ from guarded_abs p order by p.id limit 0;
 select p.id, (with q(n) as (select abs(p.v)) select n from q) as c
 from guarded_abs p where p.id=2 order by p.id desc limit 1;
 select p.id, (with q(n) as (select p.v) select n from q) as c
+from guarded_abs p where p.id=2 order by p.id desc limit 1;
+select p.id, (with q(n) as (select p.v) select n from q) as c
 from guarded_abs p order by p.id desc limit 1;
 drop table guarded_abs;
 
