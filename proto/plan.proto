@@ -1715,6 +1715,10 @@ message Query {
   // execution so a committed concurrent CREATE INDEX can rebuild the plan;
   // without a definition change, it returns the original key-not-found error.
   repeated UnresolvedIndexHint unresolved_index_hints = 16;
+
+  // SHOW View column VALUES were bound using a mutable UDF catalog row.
+  // Neither the View nor the UDF catalog table changes schema when that row is replaced.
+  bool view_metadata_depends_on_udf = 17;
 }
 
 message TransationControl {

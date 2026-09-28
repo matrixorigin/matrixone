@@ -413,7 +413,26 @@ func estimateLoadRowsize(param *tree.ExternParam, tableDef *TableDef, inputSize 
 		return rowSize
 	}
 	if tableDef != nil {
-		if rowSize := GetRowSizeFromTableDef(tableDef, true) * 0.8; rowSize > 0 {
+		estimateDef := tableDef
+		if param != nil && param.Format == tree.PARQUET {
+			// BLOB family widths are assignment limits, not observed payload
+			// lengths. Counting a BLOB's 65535-byte capacity as its average
+			// size underestimates input rows and can disable distributed LOAD.
+			// Keep the catalog type intact for assignment validation, using
+			// the legacy BLOB estimate until source statistics are available.
+			copyDef := *tableDef
+			copyDef.Cols = make([]*ColDef, len(tableDef.Cols))
+			for i, col := range tableDef.Cols {
+				copyDef.Cols[i] = col
+				if col.Typ.Id == int32(types.T_blob) && col.Typ.Width > 0 {
+					copyCol := *col
+					copyCol.Typ.Width = 0
+					copyDef.Cols[i] = &copyCol
+				}
+			}
+			estimateDef = &copyDef
+		}
+		if rowSize := GetRowSizeFromTableDef(estimateDef, true) * 0.8; rowSize > 0 {
 			return clampLoadRowsize(rowSize, inputSize)
 		}
 	}

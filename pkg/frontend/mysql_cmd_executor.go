@@ -4296,6 +4296,9 @@ func checkModify(plan0 *plan.Plan, resolveFn func(string, string, *plan2.Snapsho
 	}
 	switch p := plan0.Plan.(type) {
 	case *plan.Plan_Query:
+		if p.Query.GetViewMetadataDependsOnUdf() {
+			return true, nil
+		}
 		for i := range p.Query.Nodes {
 			if def := p.Query.Nodes[i].TableDef; def != nil {
 				flag, err := checkFn(p.Query.Nodes[i].ObjRef, def)
@@ -5911,6 +5914,7 @@ func doComQuery(ses *Session, execCtx *ExecCtx, input *UserInput) (retErr error)
 		StorageEngine:          pu.StorageEngine,
 		LastInsertID:           ses.GetLastInsertID(),
 		SqlHelper:              ses.GetSqlHelper(),
+		CompilerContext:        ses.txnCompileCtx,
 		Buf:                    ses.GetBuffer(),
 		LogLevel:               zapcore.InfoLevel, //TODO: need set by session level config
 		SessionId:              ses.GetSessId(),
