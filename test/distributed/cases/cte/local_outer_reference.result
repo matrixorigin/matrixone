@@ -490,6 +490,56 @@ from guarded_abs p where p.id=1;
 Data truncation: data out of range: data type int, '-9223372036854775808'
 select abs(p.v) from guarded_abs p where p.id=1;
 Data truncation: data out of range: data type int, '-9223372036854775808'
+select p.id, (with q(n) as (select p.id where p.id<2)
+select count(*) in (0,1) from q) as c from guarded_abs p order by p.id;
+➤ id[4,32,0]  ¦  c[-7,1,0]  𝄀
+1  ¦  1  𝄀
+2  ¦  1
+select p.id, (with q(n) as (select p.id where p.id<2)
+select case when count(*) in (0,1) then 7 else 8 end from q) as c
+from guarded_abs p order by p.id;
+➤ id[4,32,0]  ¦  c[-5,64,0]  𝄀
+1  ¦  7  𝄀
+2  ¦  7
+select p.id, (with q(n) as (select p.id where p.id<2)
+select count(*) from q having count(*) in (0,1)) as c
+from guarded_abs p order by p.id;
+➤ id[4,32,0]  ¦  c[-5,64,0]  𝄀
+1  ¦  1  𝄀
+2  ¦  0
+select p.id, (with q(n) as (select p.id where p.id<2)
+select count(*) in (count(n),0) from q) as c
+from guarded_abs p order by p.id;
+➤ id[4,32,0]  ¦  c[-7,1,0]  𝄀
+1  ¦  1  𝄀
+2  ¦  1
+select p.id, (with q(n) as (select p.id where p.id<2)
+select count(*) in (0,1) from q limit 0) as c
+from guarded_abs p order by p.id;
+correlated local CTE: consumer scalar aggregate cannot preserve empty-input or result-row semantics is not yet implemented
+select p.id, (with q(n) as (select p.id where p.id<2)
+select count(*) in (0,1) from q group by n) as c
+from guarded_abs p order by p.id;
+➤ id[4,32,0]  ¦  c[-7,1,0]  𝄀
+1  ¦  1  𝄀
+2  ¦  null
+select p.id, case when p.id=1 then 0 else
+(with q(n) as (select p.v) select abs(n) from q) end as c
+from guarded_abs p order by p.id;
+correlated local CTE: consumer expression may fail outside the consumer evaluation domain is not yet implemented
+select p.id from guarded_abs p where p.id=2 and
+(with q(n) as (select abs(p.v)) select n from q)>0;
+correlated local CTE: producer expression may fail outside the consumer evaluation domain is not yet implemented
+select p.id from guarded_abs p where
+(with q(n) as (select abs(p.v)) select n from q)>0 and p.id=2;
+correlated local CTE: producer expression may fail outside the consumer evaluation domain is not yet implemented
+select p.id from guarded_abs p where p.id=2 and
+(with q(n) as (select p.v) select abs(n) from q)>0;
+correlated local CTE: consumer expression may fail outside the consumer evaluation domain is not yet implemented
+select p.id from guarded_abs p where p.id=2 and
+(with q(n) as (select p.v) select n from q)>0;
+➤ id[4,32,0]  𝄀
+2
 drop table guarded_abs;
 select p.id,
 (with recursive r(n) as (

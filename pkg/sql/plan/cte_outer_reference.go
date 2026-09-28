@@ -18,6 +18,7 @@ import (
 	"sort"
 
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
+	"github.com/matrixorigin/matrixone/pkg/container/types"
 	"github.com/matrixorigin/matrixone/pkg/pb/plan"
 )
 
@@ -107,6 +108,9 @@ func (d *localCTEDomain) admitConsumer(root int32) error {
 			return nil
 		}
 		n := d.builder.qry.Nodes[id]
+		if d.guarded && !localCTEReplaySafeNode(n, true) {
+			return d.unsupported("consumer expression may fail outside the consumer evaluation domain")
+		}
 		if n.Limit != nil || n.Offset != nil {
 			// An implicit scalar aggregate has at most one result row.
 			// LIMIT 1 (OFFSET 0) above it preserves that row and is
@@ -313,7 +317,7 @@ func (d *localCTEDomain) admit() error {
 		// CASE (or another consumer) decides which rows use this CTE.
 		// Volatility alone cannot prove an expression is total: ABS on
 		// MinInt64, arithmetic overflow and casts can all fail.
-		if d.guarded && !localCTEProducerReplaySafe(n) {
+		if d.guarded && !localCTEReplaySafeNode(n, false) {
 			return d.unsupported("producer expression may fail outside the consumer evaluation domain")
 		}
 		for _, e := range localCTENodeExprs(n) {
@@ -349,10 +353,10 @@ func (d *localCTEDomain) admit() error {
 	return nil
 }
 
-// Reuse the totality proof from aggregate truncation safety, but replace
-// correlated references with typed columns only in a read-only proof copy.
-// Consumer-dependent evaluation is not safe for unproven producer functions.
-func localCTEProducerReplaySafe(n *plan.Node) bool {
+// Reuse the totality proof from aggregate truncation safety on both sides of
+// the producer boundary. Only the proof copy changes correlated references;
+// the executable expression and its depth remain untouched.
+func localCTEReplaySafeNode(n *plan.Node, consumer bool) bool {
 	proof := func(expr *plan.Expr) *plan.Expr {
 		copy := DeepCopyExpr(expr)
 		walkLocalCTEExpr(copy, func(e *plan.Expr) {
@@ -367,11 +371,111 @@ func localCTEProducerReplaySafe(n *plan.Node) bool {
 			return false
 		}
 	}
-	for _, predicates := range [][]*plan.Expr{n.FilterList, n.OnList} {
-		for _, expr := range predicates {
-			if !isTruncationSafePredicateExpr(proof(expr)) {
+	for _, expr := range n.FilterList {
+		if !localCTEGuardedPredicateSafe(proof(expr)) {
+			return false
+		}
+	}
+	for _, expr := range n.OnList {
+		if !localCTEGuardedPredicateSafe(proof(expr)) {
+			return false
+		}
+	}
+	if consumer {
+		for _, expr := range n.GroupBy {
+			if !isTruncationSafeRowExpr(proof(expr)) {
 				return false
 			}
+		}
+		for _, expr := range n.AggList {
+			fn := expr.GetF()
+			if fn == nil || fn.Func == nil ||
+				(fn.Func.ObjName != "count" && fn.Func.ObjName != "starcount") {
+				return false
+			}
+			for _, arg := range fn.Args {
+				if !isTruncationSafeRowExpr(proof(arg)) {
+					return false
+				}
+			}
+		}
+		if len(n.WinSpecList) != 0 {
+			return false
+		}
+	}
+	return true
+}
+
+// Constant casts in a replayed predicate are harmless only when their entire
+// input type is safe. Do not use the outer-domain proof's statement-constant
+// shortcut for a skipped consumer: even a constant error could run too early.
+func localCTEGuardedPredicateSafe(expr *plan.Expr) bool {
+	total := true
+	walkLocalCTEExpr(expr, func(e *plan.Expr) {
+		fn := e.GetF()
+		if fn != nil && fn.Func != nil && fn.Func.ObjName == "cast" && len(fn.Args) == 2 &&
+			(fn.Args[0].GetLit() != nil || fn.Args[0].GetP() != nil) &&
+			!singleRowCastIsTotal(fn.Args[0].Typ, e.Typ) {
+			lit := fn.Args[0].GetLit()
+			// A bound ASCII string literal fits a wider string target even
+			// when the generic type-domain cast proof cannot prove all bytes.
+			if lit == nil || !(localCTEStringLiteralFits(lit, e.Typ) ||
+				localCTEIntegerLiteralFits(lit, types.T(e.Typ.Id))) {
+				total = false
+			}
+		}
+	})
+	return total && localCTEDomainPredicateReplaySafe(expr)
+}
+
+func localCTEStringLiteralFits(lit *plan.Literal, target plan.Type) bool {
+	_, ok := lit.Value.(*plan.Literal_Sval)
+	return ok && types.T(target.Id).IsMySQLString() &&
+		target.Width >= int32(len(lit.GetSval())) && isASCII(lit.GetSval())
+}
+
+// Only bound integer literals, not arbitrary integer columns or parameters,
+// can discharge a narrowing cast with a value-level proof.
+func localCTEIntegerLiteralFits(lit *plan.Literal, target types.T) bool {
+	var value int64
+	switch x := lit.Value.(type) {
+	case *plan.Literal_I8Val:
+		value = int64(x.I8Val)
+	case *plan.Literal_I16Val:
+		value = int64(x.I16Val)
+	case *plan.Literal_I32Val:
+		value = int64(x.I32Val)
+	case *plan.Literal_I64Val:
+		value = x.I64Val
+	default:
+		return false
+	}
+	switch target {
+	case types.T_int8:
+		return value >= -128 && value <= 127
+	case types.T_int16:
+		return value >= -32768 && value <= 32767
+	case types.T_int32:
+		return value >= -2147483648 && value <= 2147483647
+	case types.T_int64:
+		return true
+	case types.T_uint8:
+		return value >= 0 && value <= 255
+	case types.T_uint16:
+		return value >= 0 && value <= 65535
+	case types.T_uint32:
+		return value >= 0 && value <= 4294967295
+	case types.T_uint64:
+		return value >= 0
+	default:
+		return false
+	}
+}
+
+func isASCII(s string) bool {
+	for i := 0; i < len(s); i++ {
+		if s[i] >= 128 {
+			return false
 		}
 	}
 	return true

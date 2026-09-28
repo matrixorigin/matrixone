@@ -8567,7 +8567,9 @@ func (builder *QueryBuilder) bindWhere(
 	ctx.whereFilters = whereList
 	var expr *plan.Expr
 	for _, cond := range whereList {
-		if nodeID, expr, err = builder.flattenFilterSubqueries(nodeID, cond, ctx); err != nil {
+		// Each split conjunct can run before its siblings have filtered the
+		// outer rows. A replayed local CTE must not depend on that filtering.
+		if nodeID, expr, err = builder.flattenFilterSubqueriesGuarded(nodeID, cond, ctx, len(whereList) > 1); err != nil {
 			return
 		}
 		boundFilterList = append(boundFilterList, expr)
@@ -10379,7 +10381,7 @@ func (builder *QueryBuilder) appendNonAggregateHavingNode(
 	newFilterList := make([]*plan.Expr, 0, len(boundHavingList))
 	for _, cond := range boundHavingList {
 		var expr *plan.Expr
-		if nodeID, expr, err = builder.flattenFilterSubqueries(nodeID, cond, ctx); err != nil {
+		if nodeID, expr, err = builder.flattenFilterSubqueriesGuarded(nodeID, cond, ctx, len(boundHavingList) > 1); err != nil {
 			return
 		}
 		newFilterList = append(newFilterList, expr)
@@ -10404,7 +10406,7 @@ func (builder *QueryBuilder) appendSampleNode(
 		var expr *plan.Expr
 
 		for _, cond := range boundHavingList {
-			if nodeID, expr, err = builder.flattenFilterSubqueries(nodeID, cond, ctx); err != nil {
+			if nodeID, expr, err = builder.flattenFilterSubqueriesGuarded(nodeID, cond, ctx, len(boundHavingList) > 1); err != nil {
 				return
 			}
 
@@ -10494,7 +10496,7 @@ func (builder *QueryBuilder) appendAggNode(
 		var expr *plan.Expr
 
 		for _, cond := range preWindowHavingList {
-			if nodeID, expr, err = builder.flattenFilterSubqueries(nodeID, cond, ctx); err != nil {
+			if nodeID, expr, err = builder.flattenFilterSubqueriesGuarded(nodeID, cond, ctx, len(boundHavingList) > 1); err != nil {
 				return
 			}
 
@@ -10669,7 +10671,7 @@ func (builder *QueryBuilder) appendWindowNode(
 		var expr *plan.Expr
 
 		for _, cond := range postWindowHavingList {
-			if nodeID, expr, err = builder.flattenFilterSubqueries(nodeID, cond, ctx); err != nil {
+			if nodeID, expr, err = builder.flattenFilterSubqueriesGuarded(nodeID, cond, ctx, len(boundHavingList) > 1); err != nil {
 				return
 			}
 
@@ -13186,7 +13188,7 @@ func (builder *QueryBuilder) buildJoinTable(tbl *tree.JoinTableExpr, ctx *BindCo
 			var onConds, filterConds []*plan.Expr
 			for _, cond := range joinConds {
 				if hasSubquery(cond) {
-					nodeID, cond, err = builder.flattenFilterSubqueries(nodeID, cond, ctx)
+					nodeID, cond, err = builder.flattenFilterSubqueriesGuarded(nodeID, cond, ctx, len(joinConds) > 1)
 					if err != nil {
 						return 0, err
 					}

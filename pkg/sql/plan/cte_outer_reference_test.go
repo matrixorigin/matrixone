@@ -50,10 +50,25 @@ func TestLocalCTEOuterReferencesExecutablePlan(t *testing.T) {
 				from tpch.nation p`,
 		},
 		{
+			name: "local count in empty group",
+			sql: `select p.n_nationkey, (with q(n) as (select p.n_nationkey where p.n_nationkey<2)
+				select count(*) in (0,1) from q) from tpch.nation p`,
+		},
+		{
+			name: "local count case empty group",
+			sql: `select p.n_nationkey, (with q(n) as (select p.n_nationkey where p.n_nationkey<2)
+				select case when count(*) in (0,1) then 7 else 8 end from q) from tpch.nation p`,
+		},
+		{
 			name: "local count having multiple conjuncts",
 			sql: `select p.n_nationkey, (with q(n) as
 				(select p.n_nationkey from tpch.nation a where a.n_nationkey=p.n_nationkey)
 				select count(*) from q having count(*)>0 and count(*)<2) from tpch.nation p`,
+		},
+		{
+			name: "split where safe consumer",
+			sql: `select p.n_nationkey from tpch.nation p where p.n_nationkey=2 and
+				(with q(n) as (select p.n_regionkey) select n from q)>0`,
 		},
 		{
 			name: "unguarded producer cast on filtered domain",
@@ -438,6 +453,27 @@ func TestLocalCTEOuterReferencesRejectUnsafeDomains(t *testing.T) {
 				(with q(n) as (select p.n_regionkey),
 				r(n) as (select n+1 from q) select n from r) end
 				from tpch.nation p`,
+		},
+		{
+			name: "throwing consumer abs in inactive case",
+			sql: `select p.n_nationkey, case when p.n_nationkey=1 then 0 else
+				(with q(n) as (select p.n_regionkey) select abs(n) from q) end
+				from tpch.nation p`,
+		},
+		{
+			name: "split where conjuncts cannot guard producer",
+			sql: `select p.n_nationkey from tpch.nation p where p.n_nationkey=2 and
+				(with q(n) as (select abs(p.n_regionkey)) select n from q)>0`,
+		},
+		{
+			name: "split where consumer expression can fail",
+			sql: `select p.n_nationkey from tpch.nation p where p.n_nationkey=2 and
+				(with q(n) as (select p.n_regionkey) select abs(n) from q)>0`,
+		},
+		{
+			name: "split where conjuncts reversed",
+			sql: `select p.n_nationkey from tpch.nation p where
+				(with q(n) as (select abs(p.n_regionkey)) select n from q)>0 and p.n_nationkey=2`,
 		},
 		{
 			name: "throwing producer abs in inactive case",

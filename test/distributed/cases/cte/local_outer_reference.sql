@@ -363,6 +363,40 @@ from guarded_abs p where p.id=2;
 select p.id, (with q(n) as (select abs(p.v)) select n from q) as c
 from guarded_abs p where p.id=1;
 select abs(p.v) from guarded_abs p where p.id=1;
+-- COUNT's empty group still emits a row before IN/CASE or HAVING runs.
+select p.id, (with q(n) as (select p.id where p.id<2)
+  select count(*) in (0,1) from q) as c from guarded_abs p order by p.id;
+select p.id, (with q(n) as (select p.id where p.id<2)
+  select case when count(*) in (0,1) then 7 else 8 end from q) as c
+from guarded_abs p order by p.id;
+select p.id, (with q(n) as (select p.id where p.id<2)
+  select count(*) from q having count(*) in (0,1)) as c
+from guarded_abs p order by p.id;
+select p.id, (with q(n) as (select p.id where p.id<2)
+  select count(*) in (count(n),0) from q) as c
+from guarded_abs p order by p.id;
+-- LIMIT 0 removes the scalar aggregate's result row and is safely rejected
+-- for this local CTE shape; explicit GROUP BY has no empty-input row.
+select p.id, (with q(n) as (select p.id where p.id<2)
+  select count(*) in (0,1) from q limit 0) as c
+from guarded_abs p order by p.id;
+select p.id, (with q(n) as (select p.id where p.id<2)
+  select count(*) in (0,1) from q group by n) as c
+from guarded_abs p order by p.id;
+-- Proof covers the consumer as well as the producer. Neither a skipped CASE
+-- arm nor a WHERE conjunct may eagerly evaluate the unproven ABS.
+select p.id, case when p.id=1 then 0 else
+  (with q(n) as (select p.v) select abs(n) from q) end as c
+from guarded_abs p order by p.id;
+select p.id from guarded_abs p where p.id=2 and
+  (with q(n) as (select abs(p.v)) select n from q)>0;
+select p.id from guarded_abs p where
+  (with q(n) as (select abs(p.v)) select n from q)>0 and p.id=2;
+select p.id from guarded_abs p where p.id=2 and
+  (with q(n) as (select p.v) select abs(n) from q)>0;
+-- A safe producer is still available after the same WHERE split.
+select p.id from guarded_abs p where p.id=2 and
+  (with q(n) as (select p.v) select n from q)>0;
 drop table guarded_abs;
 
 -- Empty outer input starts no parameter partitions.

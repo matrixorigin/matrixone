@@ -38,6 +38,12 @@ func (builder *QueryBuilder) flattenSubqueries(nodeID int32, expr *plan.Expr, ct
 }
 
 func (builder *QueryBuilder) flattenFilterSubqueries(nodeID int32, expr *plan.Expr, ctx *BindContext) (int32, *plan.Expr, error) {
+	return builder.flattenFilterSubqueriesGuarded(nodeID, expr, ctx, false)
+}
+
+func (builder *QueryBuilder) flattenFilterSubqueriesGuarded(
+	nodeID int32, expr *plan.Expr, ctx *BindContext, guarded bool,
+) (int32, *plan.Expr, error) {
 	// Only the conjunct itself consumes TRUE. NULL rejection through a scalar
 	// function is insufficient (for example NOT(IN) also observes FALSE).
 	if sub := expr.GetSub(); sub != nil {
@@ -45,14 +51,14 @@ func (builder *QueryBuilder) flattenFilterSubqueries(nodeID int32, expr *plan.Ex
 		if sub.Typ == plan.SubqueryRef_NOT_EXISTS {
 			consumer = existentialNegatedFilter
 		}
-		return builder.flattenSubqueriesWithConsumer(nodeID, expr, ctx, true, consumer)
+		return builder.flattenSubqueriesWithConsumerGuarded(nodeID, expr, ctx, true, consumer, guarded)
 	}
 	if f := expr.GetF(); f != nil && f.Func.ObjName == "not" && len(f.Args) == 1 {
 		if sub := f.Args[0].GetSub(); sub != nil && sub.Typ == plan.SubqueryRef_EXISTS {
-			return builder.flattenSubqueriesWithConsumer(nodeID, expr, ctx, true, existentialNegatedFilter)
+			return builder.flattenSubqueriesWithConsumerGuarded(nodeID, expr, ctx, true, existentialNegatedFilter, guarded)
 		}
 	}
-	return builder.flattenSubqueriesWithContext(nodeID, expr, ctx, true)
+	return builder.flattenSubqueriesWithConsumerGuarded(nodeID, expr, ctx, true, existentialIneligible, guarded)
 }
 
 // flattenOuterJoinConditionSubqueries decorrelates each subquery against the
@@ -285,7 +291,14 @@ func (builder *QueryBuilder) flattenSubqueriesWithConsumer(
 	nodeID int32, expr *plan.Expr, ctx *BindContext,
 	nullResultRejected bool, consumer existentialConsumer,
 ) (int32, *plan.Expr, error) {
-	nodeID, expr, _, err := builder.flattenSubqueriesWithConsumerAndChange(nodeID, expr, ctx, nullResultRejected, consumer, false)
+	return builder.flattenSubqueriesWithConsumerGuarded(nodeID, expr, ctx, nullResultRejected, consumer, false)
+}
+
+func (builder *QueryBuilder) flattenSubqueriesWithConsumerGuarded(
+	nodeID int32, expr *plan.Expr, ctx *BindContext,
+	nullResultRejected bool, consumer existentialConsumer, guarded bool,
+) (int32, *plan.Expr, error) {
+	nodeID, expr, _, err := builder.flattenSubqueriesWithConsumerAndChange(nodeID, expr, ctx, nullResultRejected, consumer, guarded)
 	return nodeID, expr, err
 }
 
@@ -2489,7 +2502,16 @@ func replaceAggregateRefsForPostJoin(
 			}
 		}
 		return expr, true
-	case *plan.Expr_List, *plan.Expr_W, *plan.Expr_Sub:
+	case *plan.Expr_List:
+		for i, arg := range item.List.List {
+			var ok bool
+			item.List.List[i], ok = replaceAggregateRefsForPostJoin(arg, aggregateTag, projectedAggregates)
+			if !ok {
+				return nil, false
+			}
+		}
+		return expr, true
+	case *plan.Expr_W, *plan.Expr_Sub:
 		return nil, false
 	default:
 		return expr, true
