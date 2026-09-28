@@ -1,15 +1,19 @@
 # Exact numeric semantics for embedded Sirius
 
-Design version: 1.
+Design version: 2.
 
 Owner: MatrixOne query planning and Sirius execution.
 
 Tracking: [#28968](https://github.com/matrixorigin/matrixone/issues/28968).
 Parent migration: [#28966](https://github.com/matrixorigin/matrixone/issues/28966).
 
-Status: proposed for design review. This N0 revision records the contract and
-the current inventory only. It is not approval to lower another numeric
-signature, change eligibility, or enable embedded execution by default.
+Status: proposed for exact-revision design re-review. N0's exporter inventory
+was rechecked against this branch's main base; it must be rerun if relevant
+planner inputs change. The later review of its first design revision
+identified overflow, division, and error-carrier contradictions. This
+revision resolves those contracts; it is not approval to lower another
+numeric signature, change eligibility, or enable embedded execution by
+default.
 
 ## 1. Decision and invariant
 
@@ -24,6 +28,13 @@ overflow, division-by-zero, and result-metadata semantics. The invariant is:
 The negation is any value, NULL bit, error class, column type, precision, scale,
 or nullability difference. A value-only comparison is insufficient.
 
+The current embedded backend admits SELECT statements only. DML and other
+statement kinds fail eligibility before native preparation, readers, or leases;
+v1 therefore has no strict-mode, statement-kind, or IGNORE carrier. Ordinary
+MatrixOne DML retains its existing numeric behavior. Extending embedded
+execution to DML requires a separately reviewed context carrier and semantic
+capability, not an implicit interpretation of this SELECT-only contract.
+
 The selected representation is a versioned Substrait user-defined exact
 decimal type and function family. It covers MatrixOne `DECIMAL64`,
 `DECIMAL128`, and `DECIMAL256` uniformly. Sirius implements their semantics
@@ -31,9 +42,10 @@ natively. It must not convert an exact value or intermediate to floating point,
 narrow a coefficient or declared type, execute an exact-numeric fragment back
 in MatrixOne, or retry/fall back after embedded execution has been selected.
 
-Until the complete capability is approved and implemented, the exporter keeps
-declining unsupported signatures before readers, leases, or native execution
-start. Such declines are blockers for [#28968](https://github.com/matrixorigin/matrixone/issues/28968)
+Until the complete capability is approved and implemented, the embedded
+exporter keeps declining unsupported signatures before MO readers or native
+execution start. The Flight exporter and its lease path are unchanged. Such
+declines are blockers for [#28968](https://github.com/matrixorigin/matrixone/issues/28968)
 and the default cutover in [#28966](https://github.com/matrixorigin/matrixone/issues/28966),
 not evidence of parity.
 
@@ -54,6 +66,7 @@ not evidence of parity.
 - Splitting one exact-numeric expression tree between Sirius and MatrixOne.
 - Changing on-disk table formats, Flight compatibility, or the migration
   lifecycle defined in `docs/design/sirius-embedded.md`.
+- Admitting INSERT, UPDATE, or IGNORE through the embedded backend in v1.
 
 ## 2. Current exporter inventory
 
@@ -129,6 +142,10 @@ The same extension URI owns the v1 function names
 sorting, and joins consume the same type and comparison kernels. The full
 input and output type parameters form the signature; matching a function name
 alone is never sufficient.
+V1 `mo_decimal_cast` admits signed-integer and exact-decimal sources only.
+String, binary, and floating-point conversion signatures remain ineligible
+before readers start; they cannot introduce an unreviewed parsing or
+approximate-numeric error contract.
 
 ## 4. MatrixOne semantic contract
 
@@ -196,22 +213,29 @@ is published. Ordinary scalar results enforce their declared precision before
 the row is published.
 
 The positive 65-digit boundary and its negative counterpart must succeed when
-representable; the corresponding 66-digit result must fail. Physical signed
-256-bit overflow is also an error even if a later scale reduction might have
-made a wrapped value appear small.
+representable; the corresponding 66-digit result must fail. For multiplication
+that reduces scale, MatrixOne may compute the raw product in a fixed-width
+512-bit scratch value, round once at the target scale, and then check the
+signed 256-bit and declared-precision result domains. A raw product exceeding
+256 bits is not itself an error when that scaled result fits; overflow remains
+an error when the scaled result does not fit. Sirius must preserve this
+operation boundary without wrapping or allocating per row. For example, two
+`DECIMAL(41,30)` values of `10000000000` have a raw coefficient product of
+`10^80`, yet their `DECIMAL256(65,30)` result coefficient `10^50` fits.
 
 ### 4.4 Division and zero
 
-Division first propagates an input NULL or an execution mask. For an evaluated
-non-NULL zero divisor, the statement kind is part of the semantic contract:
-
-- `SELECT` produces NULL regardless of strict SQL mode;
-- `INSERT` and `UPDATE` return MatrixOne's division-by-zero error only when
-  strict mode and `ERROR_FOR_DIVISION_BY_ZERO` are both active;
-- `INSERT IGNORE`, non-strict DML, a NULL operand, and a masked row produce
-  NULL and must not raise that error.
+Division first propagates an input NULL or an execution mask. In an admitted
+SELECT, an evaluated non-NULL zero divisor produces NULL regardless of strict
+SQL mode. A NULL operand or masked row also produces NULL without evaluating
+division. INSERT, UPDATE, and IGNORE are rejected before native preparation;
+their different division-by-zero behavior remains owned by MatrixOne.
 
 The result uses the scale formula above and half-away-from-zero rounding.
+Current MatrixOne Decimal256 division runs through `decimal256BatchArith`,
+which checks the declared result precision after the physical kernel; Sirius
+must perform the same check before publishing a scalar result.
+
 `DIV` is separate: it truncates toward zero and returns its MatrixOne integer
 domain. Modulo preserves MatrixOne's aligned-scale remainder behavior. A
 native failure after any result becomes visible is terminal and cannot restart
@@ -246,18 +270,26 @@ results, and downstream expressions must observe the native MatrixOne type.
 
 ## 5. Planning, capability, and failure flow
 
-The first owner is the MatrixOne exporter. The Sirius runtime advertises one
-exact capability version plus the complete scalar, aggregate, cast, and
-comparison signature set. Preparation proceeds as follows:
+The first owner is the MatrixOne exporter. `sirius_capabilities()` advertises
+`SIRIUS_CAP_MO_EXACT_DECIMAL_V1` (bit 16) only when the entire v1 type/function
+family is implemented; partial kernels do not set it. The versioned extension
+URI and the complete scalar, aggregate, cast, and comparison signatures are
+validated again by Sirius during preparation. C ABI version 1 and its existing
+struct layouts remain unchanged. The `sirius_column` and
+`sirius_input_column` descriptors carry MatrixOne OIDs 32/33/34 with 8/16/32
+little-endian coefficient bytes and their existing precision, scale, and
+nullability fields. Preparation proceeds as follows:
 
 1. MatrixOne binds the query and derives every operand and result type.
-2. The exporter validates the complete reachable expression graph against the
-   exact-decimal v1 capability, including working types and output metadata.
+2. The exporter rejects non-SELECT statements and validates the complete
+   reachable expression graph against the exact-decimal v1 capability,
+   including working types and output metadata.
 3. It emits extension type/function anchors only if every signature is
    supported. Partial exact-numeric offload is forbidden.
 4. Sirius validates the anchors, parameters, schemas, and capability version
    again before accepting a query handle.
-5. Only then may MatrixOne start readers or publish a storage lease.
+5. Only then may MatrixOne start its embedded MO readers. This milestone does
+   not admit direct TAE or publish a new embedded storage lease.
 
 An unknown version, missing signature, invalid precision/scale, coefficient
 width mismatch, or unsupported session mode is a typed not-eligible result at
@@ -266,9 +298,22 @@ does not report success after CPU, Flight, or native-MatrixOne fallback.
 Operational failures after preparation are execution errors and never
 eligibility declines.
 
+The C ABI appends `SIRIUS_NUMERIC_OUT_OF_RANGE` (status 12) for arithmetic
+overflow and declared-precision failures. MatrixOne's `decimalBatchArith`
+maps a kernel's physical `ErrInvalidInput` to SQL-visible
+`moerr.ErrOutOfRange`; Sirius must preserve that public class rather than
+exposing the kernel's internal class. The MO bridge maps status 12 to
+`moerr.ErrOutOfRange` and never parses a bounded message to infer a class.
+Malformed type parameters and ineligible casts fail preparation as typed
+unsupported/invalid-plan results, not as row-level arithmetic failures.
+SELECT division by zero returns NULL. An unknown status is a terminal native
+execution failure, not a fallback signal.
+
 No persisted format changes. Mixed MO/Sirius revisions negotiate capability;
 if either side lacks exact-decimal v1, preparation fails before data access.
 Rollback disables the capability and restores the current explicit declines.
+Only the embedded exporter emits this extension; Flight plan emission and its
+numeric admission behavior remain unchanged during coexistence.
 
 ## 6. Counterexamples and independent oracles
 
@@ -278,8 +323,10 @@ Rollback disables the capability and restores the current explicit declines.
 | No Decimal128 narrowing | 38-digit maximum plus one | Exact `DECIMAL256(39,0)` result, not overflow or rounding. |
 | Signed tie rounding | `1.25`, `-1.25` reduced to scale one | `1.3`, `-1.3`. |
 | Multiply result domain | 38-digit value times a 20-digit value | Exact widened result or declared-precision overflow at the same boundary as MO. |
+| Raw product wider than 256 bits | `DECIMAL(41,30)` `10000000000 * 10000000000` | The 512-bit scratch product scales to the valid coefficient `10^50`; no premature overflow. A scaled result outside signed 256 bits still fails. |
 | Division scale | `DECIMAL(...,2) 1.00 / 8` | Value `0.12500000` with the planned scale eight. |
-| Division by zero | `SELECT 1/0`; strict `INSERT` of `1/0`; `INSERT IGNORE`; `NULL/0`; masked `1/0` | SELECT/IGNORE/NULL/masked cases are NULL; only qualifying strict DML errors. |
+| Division by zero and admission | `SELECT 1/0`; `NULL/0`; masked `1/0`; attempted embedded INSERT/UPDATE/IGNORE | SELECT/NULL/masked cases are NULL; DML is rejected before native preparation and readers. |
+| Decimal256 division precision | A quotient whose rounded coefficient has one digit beyond the declared precision | The physical quotient fits, but the same `ErrOutOfRange` as current MatrixOne is returned before publication. |
 | Aggregate cancellation | `max + max - max - max` across separate partial states | Exact zero independent of merge order. |
 | Public precision bound | Largest 65-digit magnitude and a 66-digit result | Boundary succeeds; overflow has the MatrixOne error class. |
 | Empty aggregate | `SUM` and `AVG` over zero rows | NULL value and nullable result metadata. |
@@ -329,7 +376,8 @@ existing bounded MatrixOne numeric diagnostic contract.
 Numeric work is separate from the ten-PR embedding map in
 `docs/design/sirius-embedded.md`:
 
-1. **N0 (this change):** design and exact Q1-Q22 exporter inventory only.
+1. **N0:** design and exact Q1-Q22 exporter inventory, followed by this
+   exact-revision semantic correction and its independent technical review.
 2. **Native contract:** Sirius type/function extension, fixed-width buffers,
    exact kernels, aggregate state, errors, and capability advertisement.
 3. **MO lowering:** exporter and bridge support after the native contract is
