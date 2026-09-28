@@ -66,9 +66,9 @@ func (e *cancellationUpgradeExecutor) ExecTxn(
 	txn := executor.NewMemTxnExecutor(func(sql string) (executor.Result, error) {
 		switch sql {
 		case "select create_version from mo_account where account_id = 11":
-			version := "4.0.7"
+			version := "4.0.9"
 			if e.current.Load() {
-				version = "4.0.9"
+				version = "4.0.10"
 			}
 			return e.result(version), nil
 		case "select version, version_offset, state from mo_version order by create_at desc limit 1":
@@ -110,9 +110,9 @@ func TestSessionTenantUpgradeCancellationReleasesCNConsumer(t *testing.T) {
 			result: func(kind string) executor.Result {
 				switch kind {
 				case "cluster":
-					return tenantUpgradeSQLResult(t, "4.0.9", uint32(1), int32(versions.StateCreated))
+					return tenantUpgradeSQLResult(t, "4.0.10", uint32(1), int32(versions.StateCreated))
 				case "route":
-					return tenantUpgradeSQLResult(t, uint64(100), "4.0.7", "4.0.9", "4.0.9", uint32(1),
+					return tenantUpgradeSQLResult(t, uint64(100), "4.0.9", "4.0.10", "4.0.10", uint32(1),
 						int32(versions.StateCreated), int32(0), int32(versions.No), int32(versions.Yes), int32(1), int32(0))
 				default:
 					return tenantUpgradeSQLResult(t, kind)
@@ -129,7 +129,7 @@ func TestSessionTenantUpgradeCancellationReleasesCNConsumer(t *testing.T) {
 		exited := make(chan struct{})
 		go func() {
 			defer close(exited)
-			done <- ses.MaybeUpgradeTenant(ctx, "4.0.7", 11)
+			done <- ses.MaybeUpgradeTenant(ctx, "4.0.9", 11)
 		}()
 		// Abort and join the worker even if the regression fails on the old wrapper.
 		defer func() {
@@ -163,9 +163,9 @@ func TestSessionTenantUpgradeCancellationReleasesCNConsumer(t *testing.T) {
 		// A subsequent successful check must execute SQL: cancellation must not
 		// have populated bootstrap's checked-tenant cache. Only that check is cached.
 		exec.current.Store(true)
-		require.NoError(t, ses.MaybeUpgradeTenant(t.Context(), "4.0.7", 11))
+		require.NoError(t, ses.MaybeUpgradeTenant(t.Context(), "4.0.9", 11))
 		require.Equal(t, int32(2), exec.transactions.Load())
-		require.NoError(t, ses.MaybeUpgradeTenant(t.Context(), "4.0.7", 11))
+		require.NoError(t, ses.MaybeUpgradeTenant(t.Context(), "4.0.9", 11))
 		require.Equal(t, int32(2), exec.transactions.Load())
 		closed := make(chan error, 1)
 		go func() { closed <- s.closeBootstrapService() }()

@@ -13378,12 +13378,15 @@ func mockSnapshotQuotaResult(
 	})
 
 	countSQL := fmt.Sprintf(
-		"select count(*) from %s.%s where account_name = '%s' and level = '%s'",
-		catalog.MO_CATALOG, catalog.MO_SNAPSHOTS, accountName, scope,
+		"select count(*) from %s.%s where account_name = '%s' and level = '%s' and kind != '%s'",
+		catalog.MO_CATALOG, catalog.MO_SNAPSHOTS, accountName, scope, databranchutils.BranchSnapshotKind,
 	)
 	bh.sql2result[countSQL] = newMrsForSnapshotCount([][]interface{}{
 		{int64(0)},
 	})
+	if accountId != sysAccountID && scope == tree.SNAPSHOTLEVELACCOUNT.String() {
+		bh.sql2result[fmt.Sprintf("%s and obj_id = %d", countSQL, accountId)] = newMrsForSnapshotCount([][]interface{}{{int64(0)}})
+	}
 
 	return nil
 }
@@ -17999,7 +18002,7 @@ func TestDoCreateSnapshot(t *testing.T) {
 		mrs2 := newMrsForPasswordOfUser([][]interface{}{{1}})
 		bh.sql2result[sql2] = mrs2
 
-		quotaErr := mockSnapshotQuotaResult(bh, tenant.Tenant, tenant.TenantID, tree.SNAPSHOTLEVELACCOUNT.String())
+		quotaErr := mockSnapshotQuotaResult(bh, "acc1", 1, tree.SNAPSHOTLEVELACCOUNT.String())
 		convey.So(quotaErr, convey.ShouldBeNil)
 
 		err := doCreateSnapshot(ctx, ses, cs)

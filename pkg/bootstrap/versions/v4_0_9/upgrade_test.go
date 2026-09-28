@@ -4,7 +4,7 @@
 // you may not use this file except in compliance with the License.
 // You may obtain a copy of the License at
 //
-//     http://www.apache.org/licenses/LICENSE-2.0
+//      http://www.apache.org/licenses/LICENSE-2.0
 //
 // Unless required by applicable law or agreed to in writing, software
 // distributed under the License is distributed on an "AS IS" BASIS,
@@ -15,53 +15,23 @@
 package v4_0_9
 
 import (
-	"context"
-	"errors"
-	"strings"
 	"testing"
 
-	"github.com/golang/mock/gomock"
 	"github.com/matrixorigin/matrixone/pkg/bootstrap/versions"
 	"github.com/matrixorigin/matrixone/pkg/catalog"
-	"github.com/matrixorigin/matrixone/pkg/common/mpool"
-	"github.com/matrixorigin/matrixone/pkg/common/runtime"
-	"github.com/matrixorigin/matrixone/pkg/container/types"
-	"github.com/matrixorigin/matrixone/pkg/defines"
-	mock_frontend "github.com/matrixorigin/matrixone/pkg/frontend/test"
-	pbtxn "github.com/matrixorigin/matrixone/pkg/pb/txn"
-	"github.com/matrixorigin/matrixone/pkg/util/executor"
-	"github.com/matrixorigin/matrixone/pkg/util/sysview"
 	"github.com/stretchr/testify/require"
 )
 
-func TestColumnsUpgradeMetadata(t *testing.T) {
-	m := Handler.Metadata()
-	require.Equal(t, "4.0.9", m.Version)
-	require.Equal(t, "4.0.8", m.MinUpgradeVersion)
-	require.Equal(t, versions.Yes, m.UpgradeTenant)
-	require.Equal(t, versions.No, m.UpgradeCluster)
-	require.Equal(t, defines.MORPCVersion100, m.RequiredProtocolVersion)
-	require.Equal(t, uint32(1), m.VersionOffset)
-}
-
-func TestColumnsUpgradeLifecycle(t *testing.T) {
-	runtime.RunTest("", func(runtime.Runtime) {
-		ctx := context.Background()
-		operator := mock_frontend.NewMockTxnOperator(gomock.NewController(t))
-		operator.EXPECT().TxnOptions().Return(pbtxn.TxnOptions{}).AnyTimes()
-		txn := executor.NewMemTxnExecutor(func(sql string) (executor.Result, error) {
-			require.True(t, strings.HasPrefix(sql, "SELECT tbl.rel_createsql"), sql)
-			mp := mpool.MustNewZero()
-			r := executor.NewMemResult([]types.Type{types.T_varchar.ToType()}, mp)
-			r.NewBatchWithRowCount(1)
-			require.NoError(t, executor.AppendStringRows(r, 0, []string{sysview.InformationSchemaColumnsDDL}))
-			return r.GetResult(), nil
-		}, operator)
-		require.NoError(t, Handler.Prepare(ctx, txn, true))
-		require.NoError(t, Handler.HandleTenantUpgrade(ctx, int32(catalog.System_Account), txn))
-		require.Error(t, Handler.HandleCreateFrameworkDeps(txn))
-		injected := errors.New("injected")
-		failed := executor.NewMemTxnExecutor(func(string) (executor.Result, error) { return executor.Result{}, injected }, operator)
-		require.ErrorIs(t, Handler.HandleTenantUpgrade(ctx, 7, failed), injected)
-	})
+func TestSnapshotQuotaIndexUpgrade(t *testing.T) {
+	metadata := Handler.Metadata()
+	require.Equal(t, "4.0.9", metadata.Version)
+	require.Equal(t, "4.0.8", metadata.MinUpgradeVersion)
+	require.False(t, metadata.CanDirectUpgrade("4.0.6"))
+	require.Equal(t, versions.Yes, metadata.UpgradeCluster)
+	require.Equal(t, versions.No, metadata.UpgradeTenant)
+	require.Len(t, clusterUpgEntries, 1)
+	entry := clusterUpgEntries[0]
+	require.Equal(t, catalog.MO_SNAPSHOTS, entry.TableName)
+	require.Equal(t, versions.ADD_INDEX, entry.UpgType)
+	require.Contains(t, entry.UpgSql, "(account_name, level, obj_id, kind)")
 }
