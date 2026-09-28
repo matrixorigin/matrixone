@@ -183,6 +183,35 @@ func TestLockRowsAdmissionRefusesWideningAndInvalidOwners(t *testing.T) {
 	}, client.WithTimestampWaiter(immediateLockTimestampWaiter{}))
 }
 
+func TestExactMutationRowsKeepsHiddenIndexDMLExact(t *testing.T) {
+	runLockOpTest(t, func(proc *process.Process) {
+		bat := batch.NewWithSize(1)
+		bat.Vecs[0] = vector.NewVec(types.T_uint64.ToType())
+		defer bat.Clean(proc.Mp())
+		for _, id := range []uint64{2, 4, 6} {
+			require.NoError(t, vector.AppendFixed(bat.Vecs[0], id, false, proc.Mp()))
+		}
+		ls := proc.GetLockService()
+		cfg := ls.GetConfig()
+		cfg.MaxLockRowCount = 2
+		calls := 0
+		proc.Base.LockService = admissionLockService{LockService: lockServiceConfigOverride{LockService: ls, cfg: cfg}, lockFn: func(_ context.Context, _ uint64, rows [][]byte, _ []byte, opts lock.LockOptions) (lock.Result, error) {
+			calls++
+			require.Equal(t, lock.Granularity_Row, opts.Granularity)
+			require.True(t, opts.KeepRows)
+			require.Len(t, rows, 3)
+			return lock.Result{}, moerr.NewLockNeedUpgradeNoCtx()
+		}}
+		packer := types.NewPacker()
+		defer packer.Close()
+		_, _, _, err := doLock(WithExactMutationRows(proc.Ctx), nil, process.NewTempAnalyzer(), nil,
+			46, proc, bat, 0, *bat.Vecs[0].GetType(), -1, DefaultLockOptions(packer), 0)
+		require.True(t, moerr.IsMoErrCode(err, moerr.ErrLockNeedUpgrade), "%v", err)
+		require.Equal(t, 1, calls, "exact mutation must not retry as a range or table lock")
+		require.NoError(t, proc.GetTxnOperator().Rollback(proc.Ctx))
+	}, client.WithTimestampWaiter(immediateLockTimestampWaiter{}))
+}
+
 func TestLockRowsAdmissionCancellation(t *testing.T) {
 	runLockOpTest(t, func(proc *process.Process) {
 		bat := admissionKeys(t, proc)

@@ -721,16 +721,19 @@ func doLock(
 	if opts.maxCountPerLock == 0 {
 		opts.maxCountPerLock = int(lockService.GetConfig().MaxLockRowCount)
 	}
+	exactMutation := exactMutationRows(ctx)
+	if exactMutation && opts.lockTable {
+		return false, false, timestamp.Timestamp{}, moerr.NewLockNeedUpgradeNoCtx()
+	}
 	fetchFunc := opts.fetchFunc
 	if fetchFunc == nil {
 		fetchFunc = GetFetchRowsFunc(pkType)
 	}
 	fetchLimit := opts.maxCountPerLock
-	if opts.mode == lock.LockMode_Shared && !opts.lockTable && vec != nil {
-		// A runtime cardinality surprise must not change Shared compatibility.
-		// Only an explicit planner table fallback may widen a Shared row target;
-		// otherwise retain its exact rows until lockservice reaches the separate
-		// fixed-bookkeeping ceiling and requests a table-lock upgrade.
+	if (opts.mode == lock.LockMode_Shared || exactMutation) && !opts.lockTable && vec != nil {
+		// A runtime cardinality surprise must not widen a Shared target or an
+		// exact internal mutation. The latter fails on the fixed-bookkeeping
+		// ceiling instead of upgrading to a table lock.
 		fetchLimit = vec.Length()
 	}
 
@@ -756,7 +759,7 @@ func doLock(
 		Policy:          proc.GetWaitPolicy(),
 		Mode:            opts.mode,
 		WriterFair:      isWriterFairLockRequest(ctx),
-		KeepRows:        opts.admissionOnly,
+		KeepRows:        opts.admissionOnly || exactMutation,
 		TableDefChanged: opts.changeDef,
 		Sharding:        opts.sharding,
 		Group:           opts.group,
@@ -1293,7 +1296,7 @@ func LockWithMayUpgrade(
 	if !moerr.IsMoErrCode(err, moerr.ErrLockNeedUpgrade) {
 		return result, err
 	}
-	if opts.admissionOnly && !opts.lockTable {
+	if (opts.admissionOnly || exactMutationRows(ctx)) && !opts.lockTable {
 		// Catalog name admission must not widen to unrelated catalog rows.
 		return result, err
 	}

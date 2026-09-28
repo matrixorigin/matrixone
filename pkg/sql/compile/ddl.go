@@ -4817,7 +4817,7 @@ func (s *Scope) dropTableSingleResolved(
 	}
 
 	return ps.Delete(
-		c.proc.Ctx,
+		databranchutils.WithoutBranchDeleteTarget(c.proc.Ctx),
 		tblID,
 		c.proc.GetTxnOperator(),
 	)

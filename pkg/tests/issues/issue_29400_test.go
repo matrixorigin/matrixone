@@ -128,3 +128,47 @@ func TestIssue29400DropDatabaseDoesNotHoldBranchDAGAfterTable(t *testing.T) {
 		require.Zero(t, snapshots)
 	})
 }
+
+func TestIssue29400BranchDeletePartitionChildrenStayInternal(t *testing.T) {
+	runAuthenticatedClusterTest(t, func(cluster embed.Cluster) {
+		ctx, cancel := context.WithTimeout(context.Background(), 2*time.Minute)
+		defer cancel()
+		cn, err := cluster.GetCNService(0)
+		require.NoError(t, err)
+		db, err := sql.Open("mysql", issue27487DSN(cn.GetServiceConfig().CN.Frontend.Port))
+		require.NoError(t, err)
+		defer db.Close()
+		const source, clone = "issue_29400_partition_source", "issue_29400_partition_clone"
+		defer func() {
+			for _, name := range []string{clone, source} {
+				_, _ = db.Exec("drop database if exists " + name)
+			}
+		}()
+		for _, q := range []string{
+			"drop database if exists " + clone,
+			"drop database if exists " + source,
+			"create database " + source,
+			"create table " + source + ".src(id int primary key, v int) partition by hash(id) partitions 2",
+			"insert into " + source + ".src values (1, 1)",
+			"data branch create table " + source + ".child from " + source + ".src",
+		} {
+			execSQLRequire(t, ctx, db, q)
+		}
+		var childID uint64
+		require.NoError(t, db.QueryRowContext(ctx,
+			"select rel_id from mo_catalog.mo_tables where reldatabase=? and relname='child'", source).Scan(&childID))
+		execSQLRequire(t, ctx, db, "data branch delete table "+source+".child")
+		var count int
+		require.NoError(t, db.QueryRowContext(ctx,
+			"select count(*) from mo_catalog.mo_tables where reldatabase=? and (relname='child' or relname like '%!%child')", source).Scan(&count))
+		require.Zero(t, count)
+		require.NoError(t, db.QueryRowContext(ctx,
+			"select count(*) from mo_catalog.mo_snapshots where sname=?", fmt.Sprintf("__mo_branch_%d", childID)).Scan(&count))
+		require.Zero(t, count)
+		execSQLRequire(t, ctx, db, "data branch create database "+clone+" from "+source)
+		execSQLRequire(t, ctx, db, "data branch delete database "+clone)
+		require.NoError(t, db.QueryRowContext(ctx,
+			"select count(*) from mo_catalog.mo_database where datname=?", clone).Scan(&count))
+		require.Zero(t, count)
+	})
+}
