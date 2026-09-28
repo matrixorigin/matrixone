@@ -268,4 +268,19 @@ FROM t_dateadd_scale;
 id    dt0_add_sec    dt0_sec_micro    dt3_add_sec    dt3_sec_micro
 1    2024-01-15 12:34:57    0    2024-01-15 12:34:58.789000000    789000
 DROP TABLE t_dateadd_scale;
+DROP TABLE IF EXISTS t_datetime_wire_scale;
+CREATE TABLE t_datetime_wire_scale (
+id INT PRIMARY KEY,
+dt6 DATETIME(6)
+);
+INSERT INTO t_datetime_wire_scale VALUES
+(1, '2024-01-15 10:20:30'),
+(2, CAST('0000-00-00 00:00:00' AS DATETIME(6)));
+SELECT id, dt6
+FROM t_datetime_wire_scale
+ORDER BY id;
+id    dt6
+1    2024-01-15 10:20:30
+2    0000-00-00 00:00:00
+DROP TABLE t_datetime_wire_scale;
 DROP DATABASE test_datetime_precision;
