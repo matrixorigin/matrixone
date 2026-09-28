@@ -192,3 +192,39 @@ advancement. Pure settings-domain cases use a lightweight unit table, with one
 invalid persisted setting retaining the terminal failure/retry/admission oracle.
 Clock update and domain validation occur once per promotion (constant work per
 setting); no new worker, retained state, or hot-path operation is introduced.
+
+## Promotion count budget correction (2026-09-27)
+
+The previous lower-bound check still accepts `math.MaxInt` for either
+`TombstoneL1Count` or `TombstoneL2Count`. Both fields survive catalog JSON
+encoding and decoding. Local promotion then reports success, but
+`GatherTombstoneTasks` uses each count as the initial capacity of a pointer
+slice and panics with `makeslice: cap out of range`, even for an empty table.
+The real two-engine fixture reproduced the successful but unsafe promotion;
+isolated consumer probes reproduced the panic for both fields.
+
+The promotion-only setting reader will require each count in `[1, 65536]`,
+rejecting larger values before scheduler start through the existing terminal
+failure path. This bound allows the two pointer backing arrays together at most
+`2 * 65536 * 8 = 1048576` bytes of settings-driven preallocation per gather on
+64-bit targets, or half that on 32-bit targets. It is a deliberate 1 MiB local
+budget, not an existing merge scheduler limit. Current defaults are 4 and 2;
+existing tests use values through 100. The bound does not constrain growth
+from the actual number of tombstone objects, and no general OOM guarantee is
+claimed. The normal-startup settings converter and scheduler remain unchanged.
+
+Alternatives considered: guarding only integer overflow still admits enormous
+allocations; clamping changes the requested merge threshold without telling the
+caller; changing `GatherTombstoneTasks` would affect the current merge hot path.
+Rejecting invalid promotion settings at the reader makes the one-way handoff
+fail closed without changing any enabled production path.
+
+Validation: for each field independently, round-trip the setting through the
+catalog JSON codec, accept 65536, and reject 65537 and `math.MaxInt`; exercise
+the accepted boundary with an empty consumer. Persist both invalid upper-count
+variants in the two-engine fixture and assert the original error, blocked retry
+and transaction admission, and absence of write-only cron jobs. Reuse the
+existing normal, future-clock, cancellation, and race results when their
+semantic inputs are unchanged. Run focused CGo tests and incremental static
+checks on affected packages. No SQL BVT applies because no production service
+invokes local Replay-to-Write promotion.
