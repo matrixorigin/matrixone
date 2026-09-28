@@ -143,6 +143,10 @@ var (
 			obj_id bigint unsigned,
     		kind varchar(32) not null default 'user'
 			)`, catalog.MO_CATALOG, catalog.MO_SNAPSHOTS)
+	MoCatalogSysSnapshotQuotaIndexDDL = fmt.Sprintf(
+		"create index idx_snapshot_quota_target on %s.%s(account_name, level, obj_id, kind)",
+		catalog.MO_CATALOG, catalog.MO_SNAPSHOTS,
+	)
 
 	MoCatalogMoPitrDDL = fmt.Sprintf(`CREATE TABLE %s.%s (
 			pitr_id uuid unique key,
