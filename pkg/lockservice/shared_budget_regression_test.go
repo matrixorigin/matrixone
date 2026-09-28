@@ -403,8 +403,10 @@ func TestWaitingReplacementFallsBackAfterConcurrentSharedLock(t *testing.T) {
 		name       string
 		serviceIDs []string
 		forward    bool
+		exactRows  bool
 	}{
 		{name: "local", serviceIDs: []string{"s1"}},
+		{name: "exact-exclusive", serviceIDs: []string{"s1"}, exactRows: true},
 		{name: "remote", serviceIDs: []string{"s1", "s2"}},
 		{name: "forward", serviceIDs: []string{"s1", "s2"}, forward: true},
 	}
@@ -453,6 +455,10 @@ func TestWaitingReplacementFallsBackAfterConcurrentSharedLock(t *testing.T) {
 					waitWaiters(t, owner, table, newTestRows(5)[0], 1)
 
 					shared := newTestRowSharedOptions()
+					if tt.exactRows {
+						shared.Mode = pb.LockMode_Exclusive
+						shared.KeepRows = true
+					}
 					if tt.forward {
 						shared.ForwardTo = owner.serviceID
 					}
@@ -477,7 +483,7 @@ func TestWaitingReplacementFallsBackAfterConcurrentSharedLock(t *testing.T) {
 						require.True(t, lock.isLockRow(),
 							"stale replacement absorbed row %d", row)
 						if row == 4 {
-							require.Equal(t, pb.LockMode_Shared, lock.GetLockMode())
+							require.Equal(t, shared.Mode, lock.GetLockMode())
 						}
 					}
 					_, gapExists := lt.mu.store.Get(newTestRows(5)[0])
@@ -519,8 +525,11 @@ func TestWaitingReplacementFallsBackAfterConcurrentSharedLock(t *testing.T) {
 					probe := newTestRowSharedOptions()
 					probe.Policy = pb.WaitPolicy_FastFail
 					_, err = owner.Lock(ctx, table, newTestRows(4), probeTxn, probe)
-					require.NoError(t, err,
-						"concurrent Shared ownership was strengthened to Exclusive")
+					if tt.exactRows {
+						require.True(t, moerr.IsMoErrCode(err, moerr.ErrLockConflict), "%v", err)
+					} else {
+						require.NoError(t, err, "concurrent Shared ownership was strengthened to Exclusive")
+					}
 					require.NoError(t, owner.Unlock(ctx, probeTxn, timestamp.Timestamp{}))
 
 					gapProbeTxn := []byte("replacement-gap-probe")
