@@ -88,6 +88,7 @@ Use focused cache/transaction unit tests with deterministic barriers for concurr
 
 - Parser-only spelling fix solves the reported exact-spelling DROP but leaves case-variant USE, tables, duplicates and publications incorrect.
 - SQL `lower(name)` for every lookup avoids new cache indexes but adds catalog I/O and account scans to common queries; it also differs from the byte-preserving fold on malformed UTF-8.
+- The rare PITR duplicate and view recovery catalog probes may use SQL `lower(name)` only to find a superset of candidates. They compare every returned physical name with `identifier.Fold` before deciding identity or ambiguity, without a limit that can hide a later match.
 - Revision 4's full folded index gives one mode-2 seek but doubles index insertion for every catalog version, including lowercase names common in mode 1. Its measured default-mode update regression exceeds the acceptance gate. Revision 6 uses a sparse folded index with one extra exact seek for mode-2 reads and merges canonical with variant candidates. Candidate merge, GC, and production-cache benchmarks are required before approval; the standalone B-tree probe only motivated the change.
 - A persisted folded catalog key would make historical fallback indexed, but changes the catalog format and migration/upgrade protocol. It is disproportionate until the measured fallback path requires it.
 - Choosing an exact match among ambiguous mode-0 names would make mode-2 identity depend on input spelling and could target the wrong physical ID. Return ambiguity instead.

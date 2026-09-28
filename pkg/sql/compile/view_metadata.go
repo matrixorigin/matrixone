@@ -23,6 +23,7 @@ import (
 	"strings"
 
 	"github.com/matrixorigin/matrixone/pkg/catalog"
+	"github.com/matrixorigin/matrixone/pkg/common/identifier"
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
 	"github.com/matrixorigin/matrixone/pkg/common/sqlquote"
 	"github.com/matrixorigin/matrixone/pkg/container/types"
@@ -555,7 +556,9 @@ func (c *Compile) loadDependentViews(
 }
 
 func viewDependencyNameKey(name string, lowerCaseTableNames int64) string {
-	if lowerCaseTableNames != 0 {
+	if lowerCaseTableNames == 2 {
+		name = identifier.Fold(name)
+	} else if lowerCaseTableNames != 0 {
 		name = strings.ToLower(name)
 	}
 	return fmt.Sprintf("%x", sha256.Sum256([]byte(name)))
@@ -564,6 +567,9 @@ func viewDependencyNameKey(name string, lowerCaseTableNames int64) string {
 func viewBindingNameEqual(left, right string, lowerCaseTableNames int64) bool {
 	if lowerCaseTableNames == 0 {
 		return left == right
+	}
+	if lowerCaseTableNames == 2 {
+		return identifier.Fold(left) == identifier.Fold(right)
 	}
 	return strings.EqualFold(left, right)
 }
@@ -577,15 +583,26 @@ func viewDependencyMutationPredicate(
 	relationNameKeyExact := viewDependencyNameKey(mutation.relationName, 0)
 	databaseNameKeyFolded := viewDependencyNameKey(mutation.databaseName, 1)
 	relationNameKeyFolded := viewDependencyNameKey(mutation.relationName, 1)
+	databaseNameKeyMode2 := viewDependencyNameKey(mutation.databaseName, 2)
+	relationNameKeyMode2 := viewDependencyNameKey(mutation.relationName, 2)
+	mode2Names := fmt.Sprintf("(d.source_database_name_key='%s' and d.source_relation_name_key='%s')",
+		databaseNameKeyMode2, relationNameKeyMode2)
+	if databaseNameKeyMode2 != databaseNameKeyFolded || relationNameKeyMode2 != relationNameKeyFolded {
+		// Existing mode-2 dependency rows used strings.ToLower for malformed names.
+		mode2Names += fmt.Sprintf(" or (d.source_database_name_key='%s' and d.source_relation_name_key='%s')",
+			databaseNameKeyFolded, relationNameKeyFolded)
+	}
 	return fmt.Sprintf(
 		"d.source_account_id=%d and ("+
 			"(d.source_database_id=%d and d.source_relation_id<>0 and d.source_relation_id in (%d,%d)) or "+
 			"(d.source_database_id=%d and d.source_logical_id<>0 and d.source_logical_id in (%d,%d)) or "+
 			"((d.lower_case_table_names=0 and d.source_database_name_key='%s' and d.source_relation_name_key='%s') or "+
-			"(d.lower_case_table_names<>0 and d.source_database_name_key='%s' and d.source_relation_name_key='%s')))",
+			"(d.lower_case_table_names=1 and d.source_database_name_key='%s' and d.source_relation_name_key='%s') or "+
+			"(d.lower_case_table_names=2 and (%s))))",
 		mutation.accountID, mutation.databaseID, mutation.relationID, oldRelationID,
 		mutation.databaseID, mutation.logicalID, oldLogicalID,
 		databaseNameKeyExact, relationNameKeyExact, databaseNameKeyFolded, relationNameKeyFolded,
+		mode2Names,
 	)
 }
 

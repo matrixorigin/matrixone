@@ -218,9 +218,38 @@ func checkPitrDup(ctx context.Context, bh BackgroundExec, createAccount string, 
 	}
 
 	if execResultArrayHasData(erArray) {
+		if defines.Mode2NameResolutionEnabled(ctx) &&
+			(stmt.Level == tree.PITRLEVELDATABASE || stmt.Level == tree.PITRLEVELTABLE) {
+			for _, result := range erArray {
+				for row := uint64(0); row < result.GetRowCount(); row++ {
+					databaseName, err := result.GetString(newCtx, row, 1)
+					if err != nil {
+						return false, err
+					}
+					tableName := ""
+					if stmt.Level == tree.PITRLEVELTABLE {
+						tableName, err = result.GetString(newCtx, row, 2)
+						if err != nil {
+							return false, err
+						}
+					}
+					if mode2PitrNamesMatch(stmt.Level, string(stmt.DatabaseName), string(stmt.TableName), databaseName, tableName) {
+						return true, nil
+					}
+				}
+			}
+			return false, nil
+		}
 		return true, nil
 	}
 	return false, nil
+}
+
+func mode2PitrNamesMatch(level tree.PitrLevel, expectedDB, expectedTable, actualDB, actualTable string) bool {
+	if identifier.Fold(expectedDB) != identifier.Fold(actualDB) {
+		return false
+	}
+	return level == tree.PITRLEVELDATABASE || identifier.Fold(expectedTable) == identifier.Fold(actualTable)
 }
 
 // @param pitrLevel
@@ -234,6 +263,9 @@ func getSqlForCheckPitrDup(createAccount string, createAccountId uint64, stmt *t
 	databaseName := fmt.Sprintf("database_name = '%s'", sqlquote.EscapeString(string(stmt.DatabaseName)))
 	tableName := fmt.Sprintf("table_name = '%s'", sqlquote.EscapeString(string(stmt.TableName)))
 	if mode2 {
+		if stmt.Level == tree.PITRLEVELDATABASE || stmt.Level == tree.PITRLEVELTABLE {
+			sql = "select pitr_id,database_name,table_name from mo_catalog.mo_pitr where create_account = %d"
+		}
 		databaseName = fmt.Sprintf("lower(database_name) = lower('%s')", sqlquote.EscapeString(string(stmt.DatabaseName)))
 		tableName = fmt.Sprintf("lower(table_name) = lower('%s')", sqlquote.EscapeString(string(stmt.TableName)))
 	}
