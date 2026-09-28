@@ -24,6 +24,14 @@ func sqlModeHasMatrixOneNativeValue(value interface{}) (bool, bool) {
 	return mysql.HasMatrixOneNativeSQLMode(mode), true
 }
 
+func sqlModeHasMySQLNumericCompatibilityValue(value interface{}) (bool, bool) {
+	mode, ok := value.(string)
+	if !ok {
+		return false, false
+	}
+	return mysql.HasMySQLNumericCompatibilitySQLMode(mode), true
+}
+
 func sqlModeHasOnlyFullGroupByValue(value interface{}) (bool, bool) {
 	mode, ok := value.(string)
 	if !ok {

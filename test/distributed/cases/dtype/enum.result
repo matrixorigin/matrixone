@@ -340,9 +340,13 @@ select id from insert01 where status in (1, 4) order by id;
 ➤ id[4,32,0]  𝄀
 1  𝄀
 4
+set @enum_string_compare_saved_sql_mode = @@session.sql_mode;
+set session sql_mode = concat_ws(',', nullif(@enum_string_compare_saved_sql_mode, ''), 'MYSQL_NUMERIC_COMPATIBILITY');
 select id from insert01 where status in ('Pending', 4) order by id;
 ➤ id[4,32,0]  𝄀
 1
+set session sql_mode = @enum_string_compare_saved_sql_mode;
+set @enum_string_compare_saved_sql_mode = NULL;
 delete from insert01 where status=3;
 update insert01 set status='Pending' where status=2;
 select * from insert01;
@@ -353,10 +357,14 @@ select * from insert01;
 select * from insert01 where status=4;
 ➤ id[4,32,0]  ¦  order_number[12,-1,0]  ¦  status[12,-1,0]  𝄀
 4  ¦  444  ¦  Cancelled
+set @enum_string_compare_saved_sql_mode = @@session.sql_mode;
+set session sql_mode = concat_ws(',', nullif(@enum_string_compare_saved_sql_mode, ''), 'MYSQL_NUMERIC_COMPATIBILITY');
 select * from insert01 where status in ('Pending',4);
 ➤ id[4,32,0]  ¦  order_number[12,-1,0]  ¦  status[12,-1,0]  𝄀
 1  ¦  111  ¦  Pending  𝄀
 2  ¦  222  ¦  Pending
+set session sql_mode = @enum_string_compare_saved_sql_mode;
+set @enum_string_compare_saved_sql_mode = NULL;
 drop table insert01;
 drop table if exists mysql_compat_special_numeric_context;
 create table mysql_compat_special_numeric_context (

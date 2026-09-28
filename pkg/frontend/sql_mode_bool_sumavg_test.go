@@ -66,10 +66,39 @@ func TestSQLModeExistingValueBitsAreStable(t *testing.T) {
 	setType, ok := gSysVarsDefs["sql_mode"].Type.(SystemVariableSetType)
 	require.True(t, ok)
 	values := setType.Values()
-	require.Equal(t, mysqlparser.SQLModeEnableBoolSumAvg, values[len(values)-1],
+	require.Equal(t, mysqlparser.SQLModeMySQLNumericCompatibility, values[len(values)-1],
 		"a new sql_mode value must be appended, never inserted")
+	require.Equal(t, mysqlparser.SQLModeEnableBoolSumAvg, values[len(values)-2],
+		"existing sql_mode SET bits must retain their position")
 
 	// The bit index of a pre-existing value is unchanged: MATRIXONE_NATIVE, the
 	// other MatrixOne-specific mode, still sits at index 7.
 	require.Equal(t, mysqlparser.SQLModeMatrixOneNative, values[7])
+}
+
+func TestSQLModeMySQLNumericCompatibilityContract(t *testing.T) {
+	sysVar, ok := gSysVarsDefs["sql_mode"]
+	require.True(t, ok)
+	setType, ok := sysVar.Type.(SystemVariableSetType)
+	require.True(t, ok, "sql_mode must stay a SET so modes compose")
+	require.Contains(t, setType.Values(), mysqlparser.SQLModeMySQLNumericCompatibility)
+
+	converted, err := sysVar.Type.Convert(mysqlparser.SQLModeMySQLNumericCompatibility)
+	require.NoError(t, err)
+	require.Equal(t, mysqlparser.SQLModeMySQLNumericCompatibility, converted)
+
+	defaultMode, ok := sysVar.Default.(string)
+	require.True(t, ok)
+	require.False(t, mysqlparser.HasMySQLNumericCompatibilitySQLMode(defaultMode),
+		"the new compatibility token must not silently change the default SQL mode")
+
+	combined, err := sysVar.Type.Convert(defaultMode + "," + mysqlparser.SQLModeMySQLNumericCompatibility)
+	require.NoError(t, err)
+	combinedMode, ok := combined.(string)
+	require.True(t, ok)
+	require.True(t, mysqlparser.HasMySQLNumericCompatibilitySQLMode(combinedMode))
+	for _, mode := range strings.Split(defaultMode, ",") {
+		require.True(t, mysqlparser.HasSQLMode(combinedMode, mode),
+			"%s must survive enabling numeric compatibility", mode)
+	}
 }
