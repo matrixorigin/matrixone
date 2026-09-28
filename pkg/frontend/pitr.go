@@ -310,53 +310,6 @@ func resolvePitrCreateNames(ctx context.Context, bh BackgroundExec, dbName, tabl
 	return dbName, tableName, nil
 }
 
-// Restore identifies its source at the requested time. Looking up today's
-// relation would reject a dropped object or select a later generation.
-func resolvePitrRestoreNames(ctx context.Context, bh BackgroundExec, ts int64, accountID uint32, dbName, tableName string) (string, string, error) {
-	if !defines.Mode2NameResolutionEnabled(ctx) || dbName == "" {
-		return dbName, tableName, nil
-	}
-	resolve := func(sql, input string) (string, error) {
-		bh.ClearExecResultSet()
-		if err := bh.Exec(ctx, sql); err != nil {
-			return "", err
-		}
-		results, err := getResultSet(ctx, bh)
-		if err != nil {
-			return "", err
-		}
-		var physical string
-		for _, result := range results {
-			for row := uint64(0); row < result.GetRowCount(); row++ {
-				if physical != "" {
-					return "", moerr.NewInternalErrorf(ctx, "ambiguous historical object %s", input)
-				}
-				physical, err = result.GetString(ctx, row, 0)
-				if err != nil {
-					return "", err
-				}
-			}
-		}
-		if physical == "" {
-			return "", moerr.NewInternalErrorf(ctx, "historical object %s does not exist", input)
-		}
-		return physical, nil
-	}
-	physicalDB, err := resolve(fmt.Sprintf(
-		"select datname from mo_catalog.mo_database {MO_TS = %d} where account_id = %d and lower(datname) = lower('%s')",
-		ts, accountID, sqlquote.EscapeString(dbName)), dbName)
-	if err != nil {
-		return "", "", err
-	}
-	if tableName == "" {
-		return physicalDB, "", nil
-	}
-	physicalTable, err := resolve(fmt.Sprintf(
-		"select relname from mo_catalog.mo_tables {MO_TS = %d} where account_id = %d and reldatabase = '%s' and lower(relname) = lower('%s')",
-		ts, accountID, sqlquote.EscapeString(physicalDB), sqlquote.EscapeString(tableName)), tableName)
-	return physicalDB, physicalTable, err
-}
-
 func doCreatePitr(ctx context.Context, ses *Session, stmt *tree.CreatePitr) (err error) {
 	var (
 		pitrLevel      tree.PitrLevel
@@ -618,6 +571,9 @@ func doCreatePitr(ctx context.Context, ses *Session, stmt *tree.CreatePitr) (err
 		if err != nil {
 			return err
 		}
+		if needSkipDb(databaseName) {
+			return moerr.NewInternalErrorf(ctx, "can not create pitr for current database %s", databaseName)
+		}
 
 		isDup, err = checkPitrDup(ctx, bh, currentAccount, uint64(createAcc), stmt)
 		if err != nil {
@@ -696,6 +652,9 @@ func doCreatePitr(ctx context.Context, ses *Session, stmt *tree.CreatePitr) (err
 		tblId, err = getTableIdFunc(databaseName, tableName)
 		if err != nil {
 			return err
+		}
+		if needSkipDb(databaseName) {
+			return moerr.NewInternalErrorf(ctx, "can not create pitr for current table %s.%s", databaseName, tableName)
 		}
 
 		isDup, err = checkPitrDup(ctx, bh, currentAccount, uint64(createAcc), stmt)
@@ -1119,7 +1078,7 @@ func doRestorePitr(ctx context.Context, ses *Session, stmt *tree.RestorePitr) (s
 	}
 
 	// check if the database can be restore
-	if len(dbName) != 0 && needSkipDb(dbName) {
+	if len(dbName) != 0 && isProtectedRecoveryDatabase(ctx, dbName) {
 		return stats, moerr.NewInternalErrorf(ctx, "database %s can not be restore", dbName)
 	}
 
@@ -1129,25 +1088,44 @@ func doRestorePitr(ctx context.Context, ses *Session, stmt *tree.RestorePitr) (s
 		return stats, err
 	}
 
+	// check the restore level and the pitr level
+	if err = checkPitrValidOrNot(pitr, stmt, tenantInfo, defines.Mode2NameResolutionEnabled(ctx)); err != nil {
+		return stats, err
+	}
+
 	// check the ts is valid or not
 	if err = checkPitrInValidDurtion(ts, pitr); err != nil {
 		return stats, err
 	}
-	if stmt.Level == tree.RESTORELEVELDATABASE || stmt.Level == tree.RESTORELEVELTABLE {
-		dbName, tblName, err = resolvePitrRestoreNames(ctx, bh, ts, tenantInfo.TenantID, dbName, tblName)
-		if err != nil {
-			return stats, err
+	if defines.Mode2NameResolutionEnabled(ctx) && (stmt.Level == tree.RESTORELEVELDATABASE || stmt.Level == tree.RESTORELEVELTABLE) {
+		physicalDB, physicalTable, sourceID, resolveErr := resolveCatalogObjectAtSnapshot(
+			ctx, bh, uint32(pitr.accountId), ts, dbName, tblName)
+		if resolveErr != nil {
+			return stats, resolveErr
 		}
-		stmt.DatabaseName = tree.Identifier(dbName)
-		stmt.TableName = tree.Identifier(tblName)
-		if needSkipDb(dbName) {
-			return stats, moerr.NewInternalErrorf(ctx, "database %s can not be restore", dbName)
+		if pitr.level == tree.PITRLEVELDATABASE.String() && stmt.Level == tree.RESTORELEVELTABLE {
+			_, _, sourceID, resolveErr = resolveCatalogObjectAtSnapshot(
+				ctx, bh, uint32(pitr.accountId), ts, dbName, "")
+			if resolveErr != nil {
+				return stats, resolveErr
+			}
 		}
-	}
-
-	// Authorization and all downstream catalog queries use the historical name.
-	if err = checkPitrValidOrNot(pitr, stmt, tenantInfo, defines.Mode2NameResolutionEnabled(ctx)); err != nil {
-		return stats, err
+		identityMatches := sourceID == pitr.objId
+		if !identityMatches && pitr.level == tree.PITRLEVELTABLE.String() {
+			identityMatches, resolveErr = historicalTableIDMatchesPitr(
+				ctx, bh, uint32(pitr.accountId), ts, dbName, tblName, sourceID, pitr.objId)
+			if resolveErr != nil {
+				return stats, resolveErr
+			}
+		}
+		if (pitr.level == tree.PITRLEVELDATABASE.String() || pitr.level == tree.PITRLEVELTABLE.String()) && !identityMatches {
+			return stats, moerr.NewInternalError(ctx, "PITR source object identity changed")
+		}
+		if isProtectedRecoveryDatabase(ctx, physicalDB) {
+			return stats, moerr.NewInternalErrorf(ctx, "database %s can not be restore", physicalDB)
+		}
+		dbName, tblName = physicalDB, physicalTable
+		stmt.DatabaseName, stmt.TableName = tree.Identifier(physicalDB), tree.Identifier(physicalTable)
 	}
 
 	if stmt.Level == tree.RESTORELEVELACCOUNT && len(accountName) > 0 {
@@ -1902,6 +1880,13 @@ func deleteCurFkTableInPitrRestore(ctx context.Context,
 		curFkTableMap map[string]*tableInfo
 		isMasterTable bool
 	)
+	if dbName != "" {
+		var found bool
+		dbName, tblName, found, err = resolveCurrentRestoreTarget(ctx, bh, dbName, tblName)
+		if err != nil || !found {
+			return err
+		}
+	}
 
 	// get topo sorted tables with foreign key
 	sortedFkTbls, err = fkTablesTopoSortInPitrRestore(ctx, bh, 0, dbName, tblName, nil)

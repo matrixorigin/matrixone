@@ -849,13 +849,15 @@ func (tcc *TxnCompilerContext) ResolveIndexTableByRef(
 		}
 	}
 
-	// Check if it is a temporary table in the current session
-	realName, isTmpTable, err := tcc.resolveTemporaryAlias(ref.SchemaName, tblName)
-	if err != nil {
-		return nil, nil, err
-	}
-	if isTmpTable {
-		tblName = realName
+	// Subscriber temporary aliases belong to this session, not the publisher.
+	if subMeta == nil {
+		realName, found, err := tcc.resolveTemporaryAlias(ref.SchemaName, tblName)
+		if err != nil {
+			return nil, nil, err
+		}
+		if found {
+			tblName = realName
+		}
 	}
 
 	ctx, _, table, err := tcc.getRelation(ref.SchemaName, tblName, subMeta, snapshot)
