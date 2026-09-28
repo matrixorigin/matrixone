@@ -263,6 +263,8 @@ type container struct {
 	// aggs, which holds the intermediate state of agg functions.
 	aggList                     []aggexec.GroupAggFuncExec
 	aggExprs                    []aggexec.AggFuncExecExpression
+	warningRetentionLimit       int
+	warningRetentionSet         bool
 	groupConcatWarnings         aggexec.GroupConcatWarningAccumulator
 	prepareParamKind            aggexec.PrepareParamKindStates
 	prepareParamKindWireV1      bool
@@ -279,6 +281,9 @@ type container struct {
 	// legacyTextHLLAddState keeps CHAR and JSON HLL_ADD_AGG on the raw v2 hash
 	// domain while a pre-v91 peer may consume that state.
 	legacyTextHLLAddState bool
+	// legacyFloatHLLAddState keeps scalar FLOAT/DOUBLE HLL_ADD_AGG on the raw
+	// v2 hash domain while a pre-v92 peer may consume that state.
+	legacyFloatHLLAddState bool
 	// legacyDistinctFloatKeys is frozen before aggregate groups are admitted.
 	// Pre-v79 remote producers keep the compatibility FLOAT key policy, which
 	// preserves every non-zero bit pattern in the fixed index and wire output.

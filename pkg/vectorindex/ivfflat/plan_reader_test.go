@@ -103,10 +103,7 @@ func TestGetVersionUsesTypedRelationScan(t *testing.T) {
 	require.Len(t, scanner.requests, 1)
 }
 
-func TestRelationScanPolicyAssignsInMemoryRowsOnlyToPartitionZero(t *testing.T) {
-	require.True(t, ownsInMemoryPartition(1, 0))
-	require.True(t, ownsInMemoryPartition(2, 0))
-	require.False(t, ownsInMemoryPartition(2, 1))
+func TestRelationScanPolicyAssignsInMemoryRowsOnlyToCoordinator(t *testing.T) {
 	require.Equal(t, engine.DataCollectPolicy(engine.Policy_CollectAllData), relationScanPolicy(1, false))
 	require.Equal(t, engine.DataCollectPolicy(engine.Policy_CollectAllData), relationScanPolicy(2, true))
 	require.Equal(t, engine.DataCollectPolicy(engine.Policy_CollectCommittedPersistedData), relationScanPolicy(2, false))
@@ -494,33 +491,61 @@ func TestScanEntriesPushesDistanceRangeToStorageTopK(t *testing.T) {
 }
 
 func TestScanEntriesFallsBackForUnsafeDistanceRanges(t *testing.T) {
-	makeRange := func(lower bool, bound float64) *plan.DistRange {
+	makeRange := func(lower, excl bool, bound float64) *plan.DistRange {
 		r := &plan.DistRange{}
+		bt := plan.BoundType_INCLUSIVE
+		if excl {
+			bt = plan.BoundType_EXCLUSIVE
+		}
 		if lower {
-			r.LowerBoundType = plan.BoundType_INCLUSIVE
+			r.LowerBoundType = bt
 			r.LowerBound = ivfFloat64Expr(bound)
 		} else {
-			r.UpperBoundType = plan.BoundType_INCLUSIVE
+			r.UpperBoundType = bt
 			r.UpperBound = ivfFloat64Expr(bound)
 		}
 		return r
 	}
+	// exposedL2 is the entry's distance in the float32 domain the post-filter compares in:
+	// float32(sqrt(rawSquared / QuantMul^2)), QuantMul=255.
+	exposedL2 := func(raw int) float64 { return float64(float32(math.Sqrt(float64(raw) / (255.0 * 255.0)))) }
 
 	for _, test := range []struct {
-		name     string
-		lower    bool
-		raw      int
-		entry    []int8
-		bound    float64
-		wantDist float64
+		name      string
+		lower     bool
+		excl      bool
+		raw       int
+		entry     []int8
+		bound     float64
+		wantDist  float64
+		wantEmpty bool
 	}{
 		{
+			// #29040 blocker: exclusive upper bound one f64 ULP ABOVE the entry's exposed distance.
+			// `exposed < bound` is true, so the row must be KEPT. The previous code rounded the bound
+			// into float32 -- which rounds back DOWN to the exposed distance -- making `exposed < exposed`
+			// false and dropping the row (rowCount 0 instead of 1). Keeping the raw f64 bound fixes it.
+			name: "exclusive upper one ULP above exposed keeps row", entry: []int8{7, 2, 2}, raw: 57, excl: true,
+			bound: math.Nextafter(exposedL2(57), math.Inf(1)), wantDist: 57,
+		},
+		{
+			// upper bound sqrt(57)/255 (raw f64). The entry's exposed distance is
+			// float32(sqrt(57/255^2)) = 0.029607193544507027, just BELOW the bound
+			// 0.029607193863806863, so `<= bound` keeps it -- matching the scalar l2_distance for the
+			// dequantized vector. The post-filter compares the f32 distance against the RAW f64 bound;
+			// it must NOT round the bound (#29040).
 			name: "quantized upper rounding boundary", entry: []int8{7, 2, 2}, raw: 57,
 			bound: math.Sqrt(57.0 / (255.0 * 255.0)), wantDist: 57,
 		},
 		{
+			// lower bound sqrt(11)/255 (raw f64). The entry's exposed distance
+			// float32(sqrt(11/255^2)) = 0.013006371445953846 is just BELOW that bound
+			// (0.01300637172688392), so `>= bound` is FALSE and the row is dropped -- exactly what the
+			// scalar l2_distance predicate does for the dequantized vector. The previous bound-rounding
+			// wrongly rounded the bound down to the entry and kept the row, diverging from the scalar
+			// (#29040).
 			name: "quantized lower rounding boundary", lower: true, entry: []int8{3, 1, 1}, raw: 11,
-			bound: math.Sqrt(11.0 / (255.0 * 255.0)), wantDist: 11,
+			bound: math.Sqrt(11.0 / (255.0 * 255.0)), wantEmpty: true,
 		},
 	} {
 		t.Run(test.name, func(t *testing.T) {
@@ -550,7 +575,7 @@ func TestScanEntriesFallsBackForUnsafeDistanceRanges(t *testing.T) {
 			sqlproc := sqlexec.NewSqlProcess(proc)
 			sqlproc.RelationScanner = scanner
 			sqlproc.IndexReaderParam = &plan.IndexReaderParam{
-				DistRange: makeRange(test.lower, test.bound),
+				DistRange: makeRange(test.lower, test.excl, test.bound),
 			}
 			idxcfg := vectorindex.IndexConfig{}
 			idxcfg.Ivfflat.Metric = uint16(metric.Metric_L2sqDistance)
@@ -563,6 +588,11 @@ func TestScanEntriesFallsBackForUnsafeDistanceRanges(t *testing.T) {
 			require.NoError(t, err)
 			defer res.Close()
 			require.Len(t, res.Batches, 1)
+			if test.wantEmpty {
+				require.Zero(t, res.Batches[0].RowCount(),
+					"exposed f32 distance below the raw f64 lower bound must be dropped, matching the scalar predicate")
+				return
+			}
 			require.Equal(t, []int64{int64(test.raw)},
 				vector.MustFixedColWithTypeCheck[int64](res.Batches[0].Vecs[0]))
 			require.Equal(t, []float64{test.wantDist},
@@ -718,6 +748,20 @@ func TestRuntimeMembershipLowersToTypedSourcePkPredicate(t *testing.T) {
 	_, err = ivfRuntimeMembershipExpr(proc.Ctx, []byte("not-a-vector"),
 		ivfColExpr(2, plan.Type{Id: int32(types.T_int32)}))
 	require.Error(t, err)
+
+	bitKeys := vector.NewVec(types.New(types.T_bit, 64, 0))
+	defer bitKeys.Free(mp)
+	require.NoError(t, vector.AppendFixedList(bitKeys, []uint64{uint64(1) << 63, ^uint64(0)}, nil, mp))
+	bitData, err := bitKeys.MarshalBinary()
+	require.NoError(t, err)
+	bitExpr, err := ivfRuntimeMembershipExpr(proc.Ctx, bitData,
+		ivfColExpr(2, plan.Type{Id: int32(types.T_bit)}))
+	require.NoError(t, err)
+	require.Equal(t, function.InFunctionName, bitExpr.GetF().Func.ObjName)
+	require.Equal(t, int32(types.T_bit), bitExpr.GetF().Args[0].Typ.Id)
+	require.Equal(t, int32(types.T_bit), bitExpr.GetF().Args[1].Typ.Id)
+	require.Equal(t, 2, int(bitExpr.GetF().Args[1].GetVec().Len))
+	require.Equal(t, bitData, bitExpr.GetF().Args[1].GetVec().Data)
 }
 
 func TestPlanReaderSortsAndBoundsCandidates(t *testing.T) {
@@ -2505,6 +2549,7 @@ func TestNewPlanReaderOwnsItsExecutionState(t *testing.T) {
 	}, searchplugin.Request{Identity: searchplugin.ScanIdentity{
 		PartitionCount: 2,
 		PartitionIndex: 1,
+		IsRemote:       true,
 	}})
 	require.NoError(t, err)
 	r := reader.(*planReader)
@@ -2546,6 +2591,39 @@ func TestNewPlanReaderOwnsItsExecutionState(t *testing.T) {
 	snapshotPlanReader := snapshotReader.(*planReader)
 	require.Equal(t, uint32(3), *snapshotPlanReader.scanner.accountID)
 	require.Equal(t, int64(8), snapshotPlanReader.scanner.snapshot.TS.PhysicalTime)
+}
+
+func TestNewPlanReaderExecutionRouteOwnsMemory(t *testing.T) {
+	ctrl := gomock.NewController(t)
+	proc := testutil.NewProc(t)
+	t.Cleanup(proc.Free)
+	proc.Base.TxnOperator = mock_frontend.NewMockTxnOperator(ctrl)
+	proc.Base.SessionInfo.StorageEngine = mock_frontend.NewMockEngine(ctrl)
+	for _, tc := range []struct {
+		name         string
+		count, index int32
+		remote, owns bool
+	}{
+		{"local nonzero", 2, 1, false, true},
+		{"remote zero", 2, 0, true, false},
+		{"legacy local", 2, 0, false, true},
+		{"legacy remote", 2, 1, true, false},
+		{"single", 1, 0, false, true},
+		{"replicated", 1, 0, true, true},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			reader, err := NewPlanReader(proc, &plan.VectorIndexScan{
+				Index: &plan.IndexDef{}, SourceTable: &plan.ObjectRef{},
+			}, searchplugin.Request{Identity: searchplugin.ScanIdentity{
+				PartitionCount: tc.count, PartitionIndex: tc.index, IsRemote: tc.remote,
+			}})
+			require.NoError(t, err)
+			t.Cleanup(func() { require.NoError(t, reader.Close()) })
+			scanner := reader.(*planReader).scanner
+			require.Equal(t, tc.owns, scanner.ownsInMemory)
+			require.Equal(t, tc.index, scanner.partitionIndex)
+		})
+	}
 }
 
 // Centroid IDs reach ivfCentroidPrefixFilter ranked by distance to the query, not

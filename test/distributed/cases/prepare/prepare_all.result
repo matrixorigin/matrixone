@@ -920,25 +920,25 @@ deallocate prepare issue25408_runtime_reexecute;
 prepare issue25408_runtime_divide from 'select ? / 2 as quotient';
 set @issue25408_runtime_value = 2.5;
 execute issue25408_runtime_divide using @issue25408_runtime_value;
-➤ quotient[3,38,7]  𝄀
-1.2500000
+➤ quotient[3,6,5]  𝄀
+1.25000
 set @issue25408_runtime_value = 9007199254740993.5;
 execute issue25408_runtime_divide using @issue25408_runtime_value;
-➤ quotient[3,38,7]  𝄀
-4503599627370496.7500000
+➤ quotient[3,21,5]  𝄀
+4503599627370496.75000
 set @issue25408_runtime_value = 3.5;
 execute issue25408_runtime_divide using @issue25408_runtime_value;
-➤ quotient[3,38,7]  𝄀
-1.7500000
+➤ quotient[3,6,5]  𝄀
+1.75000
 deallocate prepare issue25408_runtime_divide;
 set @issue25408_runtime_value = 9007199254740993.5;
 select (@issue25408_runtime_value / 2) + 1 as result;
-➤ result[3,38,7]  𝄀
-4503599627370497.7500000
+➤ result[3,44,5]  𝄀
+4503599627370497.75000
 prepare issue25408_nested_add from 'select (? / 2) + 1 as result';
 execute issue25408_nested_add using @issue25408_runtime_value;
-➤ result[3,38,7]  𝄀
-4503599627370497.7500000
+➤ result[3,38,5]  𝄀
+4503599627370497.75000
 deallocate prepare issue25408_nested_add;
 select (@issue25408_runtime_value / 2) + 1e0 as result;
 ➤ result[5,0,0]  𝄀
@@ -966,13 +966,13 @@ execute issue25408_nested_explicit_double using @issue25408_runtime_value;
 deallocate prepare issue25408_nested_explicit_double;
 prepare issue25408_nested_abs from 'select abs(? / 2) as result';
 execute issue25408_nested_abs using @issue25408_runtime_value;
-➤ result[3,38,7]  𝄀
-4503599627370496.7500000
+➤ result[3,21,5]  𝄀
+4503599627370496.75000
 deallocate prepare issue25408_nested_abs;
 prepare issue25408_nested_multiply from 'select (? / 2) * 3 as result';
 execute issue25408_nested_multiply using @issue25408_runtime_value;
-➤ result[3,38,7]  𝄀
-13510798882111490.2500000
+➤ result[3,38,5]  𝄀
+13510798882111490.25000
 deallocate prepare issue25408_nested_multiply;
 select abs(@issue25408_runtime_value + 1) as result;
 ➤ result[3,38,1]  𝄀

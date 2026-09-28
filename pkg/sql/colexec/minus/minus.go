@@ -97,8 +97,12 @@ func (minus *Minus) Call(proc *process.Process) (vm.CallResult, error) {
 // buildHashTable use all batches from proc.Reg.MergeReceiver[index] to build the hash map.
 func (minus *Minus) buildHashTable(proc *process.Process, analyzer process.Analyzer, index int) error {
 	ctr := &minus.ctr
+	child, err := vm.GetChild(minus, index)
+	if err != nil {
+		return err
+	}
 	for {
-		input, err := vm.ChildrenCall(minus.GetChildren(index), proc, analyzer)
+		input, err := vm.ChildrenCall(child, proc, analyzer)
 		if err != nil {
 			return err
 		}
@@ -139,9 +143,13 @@ func (minus *Minus) buildHashTable(proc *process.Process, analyzer process.Analy
 func (minus *Minus) probeHashTable(proc *process.Process, analyzer process.Analyzer, index int, result *vm.CallResult) (bool, error) {
 	inserted := make([]uint8, hashmap.UnitLimit)
 	restoreInserted := make([]uint8, hashmap.UnitLimit)
+	child, err := vm.GetChild(minus, index)
+	if err != nil {
+		return false, err
+	}
 
 	for {
-		input, err := vm.ChildrenCall(minus.GetChildren(index), proc, analyzer)
+		input, err := vm.ChildrenCall(child, proc, analyzer)
 		if err != nil {
 			return false, err
 		}

@@ -880,11 +880,13 @@ func (ctr *container) initSpillExprExecs(proc *process.Process, conditions []*pl
 	ctr.spillConditions = conditions
 	if len(ctr.hashmapBuilder.executors) != len(conditions) {
 		ctr.hashmapBuilder.FreeExecutors()
-		execs, err := newExpressionExecutorsWithCapacityClass(
+		execs, err := newExpressionExecutorsWithCapacityClassAndDiagnostic(
 			proc,
 			conditions,
 			ctr.hashmapBuilder.mapAllocationAccount,
 			ctr.recoveryCapacityClass,
+			ctr.hashmapBuilder.joinDiagnostic != nil,
+			ctr.hashmapBuilder.joinDiagnostic,
 		)
 		if err != nil {
 			return nil, err

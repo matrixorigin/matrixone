@@ -221,6 +221,26 @@ func TestOperatorChildrenAndTraversal(t *testing.T) {
 	require.Same(t, leaf, root.GetChildren(0))
 }
 
+func TestGetChildRejectsIncompleteOperatorTrees(t *testing.T) {
+	root := &testOperator{name: "root"}
+	child := &testOperator{name: "child"}
+	root.AppendChild(child)
+
+	got, err := GetChild(root, 0)
+	require.NoError(t, err)
+	require.Same(t, child, got)
+
+	_, err = GetChild(root, 1)
+	require.ErrorContains(t, err, "missing child 1")
+
+	root.SetChildren([]Operator{nil})
+	_, err = GetChild(root, 0)
+	require.ErrorContains(t, err, "nil child at index 0")
+
+	_, err = GetChild(nil, 0)
+	require.ErrorContains(t, err, "nil operator")
+}
+
 func TestExecCancelAndProjection(t *testing.T) {
 	ctx, cancel := context.WithCancel(context.Background())
 	cancel()

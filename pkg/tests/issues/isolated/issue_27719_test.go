@@ -118,8 +118,17 @@ func TestIssue27719DropAccountCleansSQLTaskLifecycle(t *testing.T) {
 	sysDBCN2 := openIssue27719DB(t, ctx, fmt.Sprintf("dump:111@tcp(127.0.0.1:%d)/", cn2Port))
 	defer sysDBCN2.Close()
 	require.NoError(t, waitSystemBootstrap(ctx, sysDB))
+	require.NoError(t, waitSystemBootstrap(ctx, sysDBCN2))
 	requireIssue27719Exec(t, ctx, sysDB, "set role moadmin")
 	requireIssue27719Exec(t, ctx, sysDBCN2, "set role moadmin")
+	// Table bootstrap does not imply frontend task-service publication or a
+	// readable task store on either CN. Observe readiness before business DDL.
+	readyCtx, readyCancel := context.WithTimeout(ctx, 30*time.Second)
+	defer readyCancel()
+	for i, db := range []*sql.DB{sysDB, sysDBCN2} {
+		require.NoErrorf(t, waitSQLTaskReady(readyCtx, db), "CN%d SQL task readiness", i+1)
+	}
+	readyCancel()
 
 	accountName := fmt.Sprintf("issue27719_%d", time.Now().UnixNano())
 	defer func() {
@@ -158,7 +167,7 @@ func TestIssue27719DropAccountCleansSQLTaskLifecycle(t *testing.T) {
 		"create task running_task as begin insert into sink select sleep(8) + 5; end",
 	}
 	for _, statement := range createStatements {
-		requireIssue27719EventuallyExec(t, ctx, tenantDB, statement)
+		requireIssue27719Exec(t, ctx, tenantDB, statement)
 	}
 	requireIssue27719Exec(t, ctx, tenantDB, "alter task suspended_task suspend")
 	requireIssue27719Exec(t, ctx, tenantDB, "execute task completed_task")
@@ -247,7 +256,7 @@ func TestIssue27719DropAccountCleansSQLTaskLifecycle(t *testing.T) {
 	defer recreatedRoot.Close()
 	requireIssue27719Exec(t, ctx, recreatedRoot, "create database `"+databaseName+"`")
 	requireIssue27719Exec(t, ctx, recreatedRoot, "use `"+databaseName+"`")
-	requireIssue27719EventuallyExec(t, ctx, recreatedRoot,
+	requireIssue27719Exec(t, ctx, recreatedRoot,
 		"create task never_run schedule '0 0 0 1 1 *' timezone 'UTC' as begin select 1; end")
 	require.Eventually(t, func() bool {
 		return queryIssue27719Count(t, ctx, sysDB,
@@ -310,16 +319,6 @@ func requireIssue27719Exec(t *testing.T, ctx context.Context, db *sql.DB, statem
 	t.Helper()
 	_, err := db.ExecContext(ctx, statement)
 	require.NoErrorf(t, err, "exec failed: %s", statement)
-}
-
-func requireIssue27719EventuallyExec(t *testing.T, ctx context.Context, db *sql.DB, statement string) {
-	t.Helper()
-	var lastErr error
-	require.Eventually(t, func() bool {
-		_, lastErr = db.ExecContext(ctx, statement)
-		return lastErr == nil || !strings.Contains(lastErr.Error(), "task service not ready yet")
-	}, 10*time.Second, 100*time.Millisecond, "task service did not become ready")
-	require.NoErrorf(t, lastErr, "exec failed: %s", statement)
 }
 
 func queryIssue27719Count(t *testing.T, ctx context.Context, db *sql.DB, query string, args ...any) int {

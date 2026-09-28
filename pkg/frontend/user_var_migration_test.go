@@ -389,6 +389,42 @@ func TestSessionSystemVariableMigrationValidation(t *testing.T) {
 	require.NoError(t, err)
 	require.Equal(t, "transaction_isolation", vars[0].name)
 	require.Equal(t, "ANSI_QUOTES", vars[0].value)
+	readOnlyZero := plan2.MakePlan2Int64ConstExprWithType(0)
+	readOnlyOne := plan2.MakePlan2Int64ConstExprWithType(1)
+	vars, err = decodeSessionSystemVars(context.Background(), []*query.MigrateSystemVariable{
+		{Name: transactionReadOnlySystemVariableAlias, Value: readOnlyZero},
+		{Name: transactionReadOnlySystemVariable, Value: readOnlyOne},
+	})
+	require.NoError(t, err)
+	require.Len(t, vars, 1)
+	require.Equal(t, transactionReadOnlySystemVariable, vars[0].name)
+	require.Equal(t, int64(1), vars[0].value)
+	vars, err = decodeSessionSystemVars(context.Background(), []*query.MigrateSystemVariable{
+		{Name: transactionReadOnlySystemVariable, Value: readOnlyOne},
+		{Name: transactionReadOnlySystemVariableAlias, Value: readOnlyZero},
+	})
+	require.NoError(t, err)
+	require.Len(t, vars, 1)
+	require.Equal(t, int64(1), vars[0].value)
+	vars, err = decodeSessionSystemVars(context.Background(), []*query.MigrateSystemVariable{
+		{Name: transactionReadOnlySystemVariableAlias, Value: readOnlyOne},
+	})
+	require.NoError(t, err)
+	require.Len(t, vars, 1)
+	require.Equal(t, transactionReadOnlySystemVariable, vars[0].name)
+
+	ctrl := gomock.NewController(t)
+	session := newTestSession(t, ctrl)
+	defer session.Close()
+	exported, err := session.snapshotSessionSystemVars(context.Background())
+	require.NoError(t, err)
+	exportedNames := make(map[string]bool, len(exported))
+	for _, variable := range exported {
+		exportedNames[variable.Name] = true
+	}
+	require.True(t, exportedNames[transactionReadOnlySystemVariable])
+	require.True(t, exportedNames[transactionReadOnlySystemVariableAlias])
+
 	vars, err = decodeSessionSystemVars(context.Background(), []*query.MigrateSystemVariable{{
 		Name:         "optimizer_hints",
 		Value:        value,
@@ -413,6 +449,15 @@ func TestSessionSystemVariableMigrationValidation(t *testing.T) {
 		{Name: "transaction_isolation", Value: value},
 	})
 	require.ErrorContains(t, err, "duplicate session system variable")
+	_, err = decodeSessionSystemVars(context.Background(), []*query.MigrateSystemVariable{
+		{Name: transactionReadOnlySystemVariableAlias, Value: readOnlyZero},
+		{Name: transactionReadOnlySystemVariableAlias, Value: readOnlyOne},
+	})
+	require.ErrorContains(t, err, "duplicate session system variable")
+	_, err = decodeSessionSystemVars(context.Background(), []*query.MigrateSystemVariable{
+		{Name: transactionReadOnlySystemVariable, Value: readOnlyOne, NextTransaction: true},
+	})
+	require.ErrorContains(t, err, "next transaction scope is invalid")
 	_, err = decodeSessionSystemVars(context.Background(), []*query.MigrateSystemVariable{
 		{Name: "transaction_isolation", Value: nextValue, NextTransaction: true},
 		{Name: "tx_isolation", Value: nextValue, NextTransaction: true},

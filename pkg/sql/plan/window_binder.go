@@ -39,6 +39,7 @@ type windowFuncExprBinder interface {
 	bindPreparedNumericFuncExpr(string, []tree.Expr, int32) (*plan.Expr, error)
 	bindPreparedWindowFrameBound(tree.Expr, *plan.Type) (*plan.Expr, error)
 	makeFrameConstValue(tree.Expr, *plan.Type) (*plan.Expr, error)
+	mysqlSpecialOrderKey(*plan.Expr, *plan.Type) (*plan.Expr, error)
 	GetContext() context.Context
 }
 
@@ -908,7 +909,7 @@ func bindWindowSpec(
 					expr = fn.Args[1]
 				}
 			} else if storageType := ctx.mysqlSpecialOrderTypeForExpr(expr); storageType != nil {
-				expr, err = makeMySQLSpecialOrderKey(b.GetContext(), expr, storageType)
+				expr, err = b.mysqlSpecialOrderKey(expr, storageType)
 				if err != nil {
 					return nil, err
 				}

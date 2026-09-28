@@ -90,6 +90,21 @@ func TestMinus(t *testing.T) {
 	require.Equal(t, int64(0), c.proc.Mp().CurrNB())
 }
 
+func TestMinusMissingChildReturnsError(t *testing.T) {
+	proc := testutil.NewProcess(t)
+	arg := new(Minus)
+	arg.AppendChild(colexec.NewMockOperator())
+	require.NoError(t, arg.Prepare(proc))
+
+	_, err := vm.Exec(arg, proc)
+	require.ErrorContains(t, err, "missing child 1")
+
+	arg.GetChildren(0).Free(proc, false, err)
+	arg.Free(proc, false, err)
+	proc.Free()
+	require.Zero(t, proc.Mp().CurrNB())
+}
+
 func newMinusTestCase(proc *process.Process) minusTestCase {
 	arg := new(Minus)
 	arg.OperatorBase.OperatorInfo = vm.OperatorInfo{
