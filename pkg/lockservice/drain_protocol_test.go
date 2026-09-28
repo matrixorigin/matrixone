@@ -17,12 +17,17 @@ package lockservice
 import (
 	"context"
 	"reflect"
+	"sync"
+	"sync/atomic"
 	"testing"
 	"time"
 
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
 	"github.com/matrixorigin/matrixone/pkg/common/morpc"
+	moruntime "github.com/matrixorigin/matrixone/pkg/common/runtime"
+	"github.com/matrixorigin/matrixone/pkg/defines"
 	pb "github.com/matrixorigin/matrixone/pkg/pb/lock"
+	"github.com/stretchr/testify/require"
 )
 
 func TestGetBindRejectsInvalidAllocatorResult(t *testing.T) {
@@ -42,7 +47,7 @@ func TestGetBindRejectsInvalidAllocatorResult(t *testing.T) {
 		resp := &pb.Response{Method: pb.Method_GetBind}
 		cs := &testClientSession{ctx: context.Background()}
 		a.handleGetBind(context.Background(), nil, req, resp, cs)
-		if !cs.writeCalled || !moerr.IsMoErrCode(resp.UnwrapError(), moerr.ErrNewTxnInCNRollingRestart) {
+		if !cs.writeCalled || !moerr.IsMoErrCode(resp.UnwrapError(), moerr.ErrLockTableBindChanged) {
 			t.Fatalf("invalid bind was reported as success: response=%+v", resp.GetBind)
 		}
 	})
@@ -273,4 +278,203 @@ func TestInstanceBoundDrainWireRoundTrip(t *testing.T) {
 	if decodedResponse.Method != pb.Method_QueryDrain || !reflect.DeepEqual(decodedResponse.QueryDrain, response.QueryDrain) {
 		t.Fatalf("drain proof changed on the wire: %+v", decodedResponse.QueryDrain)
 	}
+}
+
+// TestGetBindDrainInterleaving pauses the real handler, not a second admission
+// probe. The allocator option is installed before the RPC server starts.
+func TestGetBindDrainInterleaving(t *testing.T) {
+	for _, tc := range []struct {
+		name       string
+		existing   bool
+		transition string
+	}{
+		{"begin-new", false, "begin"},
+		{"begin-existing", true, "begin"},
+		{"legacy", false, "legacy"},
+		{"retired", true, "retire"},
+		{"no-drain", false, ""},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			var admitted, resume chan struct{}
+			runLockTableAllocatorTest(t, time.Hour, func(a *lockTableAllocator) {
+				const id = "1234567890123456789interleaving"
+				const table = uint64(42)
+				b := a.registerService(id)
+				var original pb.LockTable
+				if tc.existing {
+					original = a.Get(id, 0, table, table, pb.Sharding_None)
+					require.True(t, original.Valid)
+				}
+				ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+				var release sync.Once
+				done := make(chan struct{})
+				defer func() {
+					release.Do(func() { close(resume) })
+					cancel()
+					<-done
+				}()
+				req := &pb.Request{Method: pb.Method_GetBind}
+				req.GetBind.ServiceID, req.GetBind.Table = id, table
+				resp := &pb.Response{Method: pb.Method_GetBind}
+				cs := &testClientSession{ctx: ctx}
+				go func() {
+					defer close(done)
+					a.handleGetBind(ctx, nil, req, resp, cs)
+				}()
+				select {
+				case <-admitted:
+				case <-ctx.Done():
+					t.Fatal("GetBind did not reach admission barrier")
+				}
+				var query pb.QueryDrainRequest
+				switch tc.transition {
+				case "begin", "retire":
+					begin := a.beginDrain(pb.BeginDrainRequest{ServiceID: id, AttemptID: "attempt"})
+					require.True(t, begin.OK)
+					query = pb.QueryDrainRequest{ServiceID: id, AttemptID: "attempt",
+						AllocatorID: begin.AllocatorID, AllocatorVersion: begin.AllocatorVersion}
+					if tc.transition == "retire" {
+						b.setStatus(pb.Status_ServiceCanRestart)
+						a.disableTableBinds(b)
+						require.True(t, a.queryDrain(query).Safe)
+					}
+				case "legacy":
+					require.True(t, a.setRestartService(id))
+				}
+				release.Do(func() { close(resume) })
+				select {
+				case <-done:
+				case <-ctx.Done():
+					t.Fatal("GetBind did not finish after drain")
+				}
+				require.True(t, cs.writeCalled)
+				if tc.transition == "" {
+					require.NoError(t, resp.UnwrapError())
+					require.True(t, resp.GetBind.LockTable.Valid)
+					require.Equal(t, id, resp.GetBind.LockTable.ServiceID)
+					require.Equal(t, table, resp.GetBind.LockTable.Table)
+					return
+				}
+				require.True(t, moerr.IsMoErrCode(resp.UnwrapError(), moerr.ErrLockTableBindChanged))
+				require.False(t, resp.GetBind.LockTable.Valid)
+				// Read only after the handler has completed; no background heartbeat uses id.
+				a.mu.RLock()
+				stored, exists := a.mu.lockTables[0][table]
+				a.mu.RUnlock()
+				if tc.transition == "retire" {
+					require.Nil(t, a.getServiceBinds(id), "late GetBind resurrected retirement")
+					require.False(t, stored.Valid)
+					require.True(t, a.queryDrain(query).Safe, "late GetBind revoked the proof")
+				} else if tc.existing {
+					require.Equal(t, original, stored, "stale request changed an existing bind")
+				} else {
+					require.False(t, exists, "stale request allocated a table")
+				}
+				// The next request sees drain at admission and must not enter the hook.
+				next := &pb.Response{Method: pb.Method_GetBind}
+				a.handleGetBind(ctx, nil, req, next, &testClientSession{ctx: ctx})
+				require.True(t, moerr.IsMoErrCode(next.UnwrapError(), moerr.ErrNewTxnInCNRollingRestart))
+			}, func(a *lockTableAllocator) {
+				admitted, resume = make(chan struct{}), make(chan struct{})
+				a.options.afterGetBindAdmission = func() { close(admitted); <-resume }
+			})
+		})
+	}
+}
+
+func TestInstanceBoundDrainCanonicalClient(t *testing.T) {
+	runLockTableAllocatorTest(t, time.Hour, func(a *lockTableAllocator) {
+		rt := moruntime.ServiceRuntime("")
+		version, ok := rt.GetGlobalVariables(moruntime.MOProtocolVersion)
+		require.True(t, ok)
+		defer rt.SetGlobalVariables(moruntime.MOProtocolVersion, version)
+		var calls atomic.Int32
+		// No incoming requests exist until this client is constructed.
+		a.server.RegisterMethodHandler(pb.Method_BeginDrain, func(ctx context.Context, cancel context.CancelFunc,
+			req *pb.Request, resp *pb.Response, cs morpc.ClientSession) {
+			calls.Add(1)
+			a.handleBeginDrain(ctx, cancel, req, resp, cs)
+		})
+		a.server.RegisterMethodHandler(pb.Method_QueryDrain, func(ctx context.Context, cancel context.CancelFunc,
+			req *pb.Request, resp *pb.Response, cs morpc.ClientSession) {
+			calls.Add(1)
+			a.handleQueryDrain(ctx, cancel, req, resp, cs)
+		})
+		client, err := NewClient("", morpc.Config{})
+		require.NoError(t, err)
+		defer client.Close()
+		ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+		defer cancel()
+		send := func(method pb.Method, fill func(*pb.Request)) *pb.Response {
+			req := acquireRequest()
+			defer releaseRequest(req)
+			req.Method = method
+			fill(req)
+			resp, err := client.Send(ctx, req)
+			require.NoError(t, err)
+			return resp
+		}
+		rt.SetGlobalVariables(moruntime.MOProtocolVersion, defines.MORPCVersion99)
+		for _, method := range []pb.Method{pb.Method_BeginDrain, pb.Method_QueryDrain} {
+			req := acquireRequest()
+			req.Method = method
+			resp, err := client.Send(ctx, req)
+			releaseRequest(req)
+			require.Nil(t, resp)
+			require.True(t, moerr.IsMoErrCode(err, moerr.ErrNotSupported))
+		}
+		require.Zero(t, calls.Load(), "unsupported methods reached transport")
+		rt.SetGlobalVariables(moruntime.MOProtocolVersion, defines.MORPCVersion100)
+		const id = "1234567890123456789canonical"
+		a.registerService(id)
+		resp := send(pb.Method_BeginDrain, func(req *pb.Request) {
+			req.BeginDrain = pb.BeginDrainRequest{ServiceID: id, AttemptID: "attempt"}
+		})
+		begin := resp.BeginDrain
+		releaseResponse(resp)
+		require.True(t, begin.OK)
+		require.Equal(t, id, begin.ServiceID)
+		require.Equal(t, "attempt", begin.AttemptID)
+		require.Equal(t, a.allocatorID, begin.AllocatorID)
+		require.Equal(t, a.version, begin.AllocatorVersion)
+		query := pb.QueryDrainRequest{ServiceID: id, AttemptID: "attempt",
+			AllocatorID: begin.AllocatorID, AllocatorVersion: begin.AllocatorVersion}
+		querySafe := func(q pb.QueryDrainRequest) bool {
+			resp := send(pb.Method_QueryDrain, func(req *pb.Request) { req.QueryDrain = q })
+			defer releaseResponse(resp)
+			require.Equal(t, q.ServiceID, resp.QueryDrain.ServiceID)
+			require.Equal(t, q.AttemptID, resp.QueryDrain.AttemptID)
+			require.Equal(t, a.allocatorID, resp.QueryDrain.AllocatorID)
+			require.Equal(t, a.version, resp.QueryDrain.AllocatorVersion)
+			return resp.QueryDrain.Safe
+		}
+		require.False(t, querySafe(query))
+		resp = send(pb.Method_KeepLockTableBind, func(req *pb.Request) {
+			req.KeepLockTableBind.ServiceID = id
+			req.KeepLockTableBind.Status = pb.Status_ServiceUnLockSucc
+		})
+		heartbeat := resp.KeepLockTableBind
+		releaseResponse(resp)
+		require.True(t, heartbeat.OK)
+		require.Equal(t, pb.Status_ServiceCanRestart, heartbeat.Status)
+		require.True(t, querySafe(query))
+		for _, change := range []func(*pb.QueryDrainRequest){
+			func(q *pb.QueryDrainRequest) { q.AttemptID = "other" },
+			func(q *pb.QueryDrainRequest) { q.AllocatorID = "other" },
+			func(q *pb.QueryDrainRequest) { q.AllocatorVersion++ },
+		} {
+			wrong := query
+			change(&wrong)
+			require.False(t, querySafe(wrong))
+		}
+		require.Equal(t, int32(6), calls.Load())
+		canceled, stop := context.WithCancel(ctx)
+		stop()
+		req := acquireRequest()
+		defer releaseRequest(req)
+		req.Method, req.QueryDrain = pb.Method_QueryDrain, query
+		resp, err = client.Send(canceled, req)
+		require.Error(t, err)
+		require.Nil(t, resp)
+	})
 }

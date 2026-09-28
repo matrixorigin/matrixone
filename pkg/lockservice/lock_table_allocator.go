@@ -96,6 +96,8 @@ type lockTableAllocator struct {
 	options struct {
 		getActiveTxnFunc         func(context.Context, string) (bool, [][]byte, error)
 		removeDisconnectDuration time.Duration
+		// Installed before serving requests; nil outside deterministic tests.
+		afterGetBindAdmission func()
 	}
 }
 
@@ -1535,6 +1537,9 @@ func (l *lockTableAllocator) handleGetBind(
 		writeResponse(l.logger, cancel, resp, moerr.NewNewTxnInCNRollingRestart(), cs)
 		return
 	}
+	if l.options.afterGetBindAdmission != nil {
+		l.options.afterGetBindAdmission()
+	}
 	resp.GetBind.LockTable = l.Get(
 		req.GetBind.ServiceID,
 		req.GetBind.Group,
@@ -1544,7 +1549,7 @@ func (l *lockTableAllocator) handleGetBind(
 	// Admission can be revoked between canGetBind and Get. In that case Get
 	// returns an invalid bind; it must never be sent as a successful binding.
 	if !resp.GetBind.LockTable.Valid || resp.GetBind.LockTable.ServiceID == "" {
-		writeResponse(l.logger, cancel, resp, moerr.NewNewTxnInCNRollingRestart(), cs)
+		writeResponse(l.logger, cancel, resp, ErrLockTableBindChanged, cs)
 		return
 	}
 	writeResponse(l.logger, cancel, resp, nil, cs)
