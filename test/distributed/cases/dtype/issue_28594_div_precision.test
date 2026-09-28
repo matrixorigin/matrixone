@@ -206,7 +206,10 @@ select cast('2020-01-01 23:59:59.999999' as datetime(6)) / 10 as q;
 create table temporal_result as
     select cast('2020-01-01 23:59:59.999999' as datetime(6)) / 10 as q;
 show create table temporal_result;
+-- Keep a representable TIME(6) fraction in the division precision oracle.
+select cast('838:59:58.999999' as time(6)) / cast(1 as signed) as q;
 select cast('2562047787:59:59.999999' as time(6)) / cast(1 as signed) as q;
+show warnings;
 select cast(1 as signed) / cast('2562047787:59:59.999999' as time(6)) as q;
 select cast('2020-01-01 23:59:59.999999' as timestamp(6)) / 10 as q;
 set session div_precision_increment = 30;

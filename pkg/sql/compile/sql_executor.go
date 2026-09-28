@@ -513,8 +513,22 @@ func (exec *txnExecutor) Exec(
 		proc.Free()
 	}()
 
-	compileContext := exec.s.getCompileContext(exec.ctx, proc, exec.getDatabase(), lower)
-	compileContext.SetRootSql(sql)
+	newCompileContext := func(ctx context.Context) *compilerContext {
+		cc := exec.s.getCompileContext(ctx, proc, exec.getDatabase(), lower)
+		if statementOption.AllowMoColumnsUpdate() {
+			cc.SetContext(context.WithValue(cc.GetContext(), defines.MoColumnsUpdateKey{}, true))
+		}
+		cc.SetRootSql(sql)
+		return cc
+	}
+	compileContext := newCompileContext(exec.ctx)
+	buildPlan := func(ctx *compilerContext, prepared bool) (*plan.Plan, error) {
+		pn, err := plan.BuildPlan(ctx, stmts[0], prepared)
+		if err == nil && statementOption.AllowMoColumnsUpdate() {
+			markMoColumnsUpdatePlan(pn)
+		}
+		return pn, err
+	}
 
 	var pn *plan.Plan
 
@@ -537,16 +551,12 @@ func (exec *txnExecutor) Exec(
 			return executor.Result{}, err
 		}
 	default:
-		pn, err = plan.BuildPlan(compileContext, stmt, prepared)
+		pn, err = buildPlan(compileContext, prepared)
 	}
 
 	if err != nil {
 		return executor.Result{}, err
 	}
-	if statementOption.AllowMoColumnsUpdate() {
-		markMoColumnsUpdatePlan(pn)
-	}
-
 	if prepared {
 		_, _, err := plan.ResetPreparePlan(compileContext, pn)
 		if err != nil {
@@ -573,10 +583,7 @@ func (exec *txnExecutor) Exec(
 
 	if prepared {
 		c.SetBuildPlanFunc(func(ctx context.Context) (*plan.Plan, error) {
-			pn, err := plan.BuildPlan(
-				exec.s.getCompileContext(ctx, proc, exec.getDatabase(), lower),
-				stmts[0], true,
-			)
+			pn, err := buildPlan(newCompileContext(ctx), true)
 			if err != nil {
 				return pn, err
 			}
@@ -588,9 +595,7 @@ func (exec *txnExecutor) Exec(
 		})
 	} else {
 		c.SetBuildPlanFunc(func(ctx context.Context) (*plan.Plan, error) {
-			return plan.BuildPlan(
-				exec.s.getCompileContext(ctx, proc, exec.getDatabase(), lower),
-				stmts[0], false)
+			return buildPlan(newCompileContext(ctx), false)
 		})
 	}
 

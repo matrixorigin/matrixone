@@ -459,8 +459,8 @@ func TestProjectionBinderResetIntervalComprehensive(t *testing.T) {
 			name:                 "INTERVAL '1.5' SECOND (varchar)",
 			intervalValueExpr:    makeVarcharConstForProjection("1.5"),
 			intervalUnit:         "SECOND",
-			expectedIntervalVal:  math.MaxInt64, // "1.5" is invalid format for SECOND, returns MaxInt64
-			expectedIntervalType: types.Second,
+			expectedIntervalVal:  1500000, // fractional SECOND text is normalized to microseconds
+			expectedIntervalType: types.MicroSecond,
 		},
 		{
 			name:                 "INTERVAL '1' DAY (char)",

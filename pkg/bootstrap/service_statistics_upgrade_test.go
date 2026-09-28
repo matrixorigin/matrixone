@@ -48,6 +48,9 @@ func TestDoCheckUpgradeQueuesStatisticsRefresh(t *testing.T) {
 		upgrade bool
 		via407  bool
 	}{
+		// Released v4.2.4 has four tenant entries and one cluster entry;
+		// later additions to main's 4.0.6 handler must not be assumed to run.
+		{name: "release_4.2.4", version: "4.0.6", offset: 5, upgrade: true, via407: true},
 		{name: "4.0.6", version: "4.0.6", offset: v4_0_6.Handler.Metadata().VersionOffset, upgrade: true, via407: true},
 		{name: "old_4.0.7", version: "4.0.7", upgrade: true},
 		{name: "4.0.7_offset_1", version: "4.0.7", offset: 1, upgrade: true},

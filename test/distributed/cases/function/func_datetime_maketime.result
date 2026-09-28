@@ -27,10 +27,10 @@ time8
 100:00:00
 SELECT MAKETIME(839, 0, 0) AS oversized_positive_hour;
 oversized_positive_hour
-838:59:59
+null
 SELECT MAKETIME(-839, 0, 0) AS oversized_negative_hour;
 oversized_negative_hour
--838:59:59
+null
 SELECT CAST(MAKETIME(-1, 15, 30) AS VARCHAR) AS negative_hour;
 negative_hour
 -01:15:30
@@ -87,10 +87,10 @@ fractional_carry
 13:00:00.000000
 SELECT CAST(MAKETIME(838, 59, 59.9999996) AS VARCHAR) AS positive_rounded_endpoint;
 positive_rounded_endpoint
-838:59:59.000000
+null
 SELECT CAST(MAKETIME(-838, 59, 59.9999996) AS VARCHAR) AS negative_rounded_endpoint;
 negative_rounded_endpoint
--838:59:59.000000
+null
 SELECT CAST(MAKETIME(12, 59, '59.99999949999999999') AS VARCHAR) AS varchar_below_half_microsecond;
 varchar_below_half_microsecond
 12:59:59.999999
@@ -165,8 +165,8 @@ Data truncation: data out of range: data type int64, integer argument
 SELECT MAKETIME(1,CAST('9223372036854775808' AS UNSIGNED),0);
 Data truncation: data out of range: data type int64, integer argument
 SELECT MAKETIME(9223372036854775807,0,0), MAKETIME(1,0,CAST('18446744073709551615' AS UNSIGNED));
-➤ MAKETIME(9223372036854775807, 0, 0)[92,10,0]  ¦  MAKETIME(1, 0, cast(18446744073709551615 as unsigned))[92,17,0]  𝄀
-838:59:59  ¦  null
+➤ MAKETIME(9223372036854775807, 0, 0)[92,10,0]  ¦  MAKETIME(1, 0, cast(18446744073709551615 as unsigned))[92,10,0]  𝄀
+null  ¦  null
 DROP TABLE IF EXISTS maketime_integer_contract;
 CREATE TABLE maketime_integer_contract(h DECIMAL(10,1), m DOUBLE, s DECIMAL(10,6), g TIME(6) GENERATED ALWAYS AS (MAKETIME(h,m,s)) STORED);
 INSERT INTO maketime_integer_contract(h,m,s) VALUES (12.5,58.5,1.125), (-12.5,59,59.999999), (NULL,NULL,NULL);

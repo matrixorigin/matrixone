@@ -774,7 +774,7 @@ full_time  ¦  VARCHAR(17)  ¦  YES  ¦    ¦  null  ¦    ¦    𝄀
 signed_minute  ¦  VARCHAR(3)  ¦  YES  ¦    ¦  null  ¦    ¦  
 select * from time_format_bounds;
 ➤ zero_weeks[12,29,0]  ¦  full_hour[12,11,0]  ¦  full_time[12,17,0]  ¦  signed_minute[12,3,0]  𝄀
-613566757|613566757|613566757  ¦  -2562047787  ¦  -2562047787:59:59  ¦  -59
+613566757|613566757|613566757  ¦  -838  ¦  -838:59:59  ¦  -59
 drop table time_format_bounds;
 set sql_mode = @old_ctas_date_format_sql_mode;
 drop table if exists time03;

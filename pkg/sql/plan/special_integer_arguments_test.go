@@ -75,7 +75,7 @@ func TestSpecialIntegerArgumentEvaluation(t *testing.T) {
 		{"cast(maketime(2.5e0,1.5,3.125) as varchar)", "02:02:03.125", false, false},
 		{"cast(maketime(cast(2.5 as double),2.5,3.125) as varchar)", "02:03:03.125", false, false},
 		{"cast(maketime(-12.5,59,59.9999996) as varchar)", "-14:00:00.000000", false, false},
-		{"cast(maketime(9223372036854775807,0,0) as varchar)", "838:59:59", false, false},
+		{"cast(maketime(9223372036854775807,0,0) as varchar)", "", true, false},
 		{"cast(maketime(1,0,cast('18446744073709551615' as unsigned)) as varchar)", "", true, false},
 		{"cast(maketime(null,0,1.25) as varchar)", "", true, false},
 		{"cast(maketime(1,60,0) as varchar)", "", true, false},

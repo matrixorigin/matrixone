@@ -409,6 +409,35 @@ func GetAggFunctionNameByID(overloadID int64) string {
 func DeduceNotNullable(overloadID int64, args []*plan.Expr) bool {
 	fid, oid := DecodeOverloadID(overloadID)
 	switch fid {
+	case EXTRACT:
+		// Numeric EXTRACT synthesizes NULL for invalid text/fields and zero
+		// calendar weeks. Released overloads 0..4 retain their physical ABI.
+		if oid >= 5 && oid <= 9 {
+			return false
+		}
+	case YEAR, MONTH, QUARTER, DAY, DAYOFMONTH, HOUR, MINUTE, SECOND, MICROSECOND:
+		// Tolerant string extractors may reject a non-NULL value. Typed field
+		// extraction remains non-NULL, including its zero-calendar fields.
+		if len(args) == 1 && types.T(args[0].Typ.Id).IsMySQLString() {
+			return false
+		}
+	case WEEK, WEEKOFYEAR, WEEKDAY, YEARWEEK, DAYOFWEEK, DAYOFYEAR, DAYNAME, MONTHNAME, FROM_DAYS:
+		// Calendar calculations reject zero dates; FROM_DAYS rejects values
+		// above the representable calendar even when the input is NOT NULL.
+		return false
+	case DATE:
+		// Typed zero DATE/DATETIME values become NULL under NO_ZERO_DATE.
+		if oid == 0 || oid == 2 {
+			return false
+		}
+	case CAST:
+		// Explicit typed DATE casts share the DATE conversion policy. Legacy
+		// implicit and assignment casts keep their existing nullability.
+		if oid == 1 && len(args) == 2 &&
+			types.T(args[1].Typ.Id) == types.T_date &&
+			(types.T(args[0].Typ.Id) == types.T_date || types.T(args[0].Typ.Id) == types.T_datetime) {
+			return false
+		}
 	case OCT:
 		// New string executors produce NULL for empty non-NULL input.
 		// Preserve the persisted legacy and numeric overload contracts.
@@ -431,6 +460,33 @@ func DeduceNotNullable(overloadID int64, args []*plan.Expr) bool {
 		return true
 	case TIMESTAMP:
 		if len(args) == 2 {
+			return false
+		}
+	case ADDTIME:
+		// These overloads can return NULL for an out-of-range TIME result
+		// even when every operand is NOT NULL. The intervening legacy
+		// DATETIME overloads retain their released contract.
+		if oid <= 5 || (oid >= 9 && oid <= 11) {
+			return false
+		}
+	case SUBTIME:
+		if oid <= 5 || (oid >= 11 && oid <= 15) {
+			return false
+		}
+	case TIMEDIFF:
+		if oid <= 8 {
+			return false
+		}
+	case DATE_ADD, DATE_SUB:
+		if oid <= 15 {
+			return false
+		}
+	case MAKETIME:
+		if oid <= 38 {
+			return false
+		}
+	case TIMESTAMPADD:
+		if oid <= 7 {
 			return false
 		}
 	case COALESCE:
@@ -479,7 +535,7 @@ func DeduceNotNullable(overloadID int64, args []*plan.Expr) bool {
 		SHA2, AES_ENCRYPT, AES_DECRYPT, COMPRESS, UNCOMPRESS, EXTRACTVALUE, UPDATEXML,
 		DATE_FORMAT, TIME_FORMAT,
 		UUID_EXTRACT_VERSION, UUID_EXTRACT_TIMESTAMP,
-		TO_INTERVAL:
+		TO_INTERVAL, TO_INTERVAL_MICROSECOND:
 		return false
 	}
 	if ProducesNoNull(overloadID) {

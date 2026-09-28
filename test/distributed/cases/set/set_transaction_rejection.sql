@@ -14,9 +14,11 @@ from issue29185_txn_rejection.t
 where id = 1;
 -- @session}
 
+set @issue29185_saved_session_read_only = @@session.transaction_read_only;
+set @issue29185_saved_session_isolation = @@session.transaction_isolation;
+set @issue29185_saved_session_sql_mode = @@session.sql_mode;
 set session transaction_read_only = 0;
 set session transaction_isolation = 'REPEATABLE-READ';
-set @saved_session_sql_mode = @@session.sql_mode;
 set session sql_mode = 'ONLY_FULL_GROUP_BY';
 begin;
 insert into issue29185_txn_rejection.t values (29185);
@@ -74,6 +76,7 @@ from issue29185_txn_rejection.t
 where id = 29185;
 -- @session}
 
-set session sql_mode = @saved_session_sql_mode;
-
 drop database issue29185_txn_rejection;
+set session sql_mode = @issue29185_saved_session_sql_mode;
+set session transaction_isolation = @issue29185_saved_session_isolation;
+set session transaction_read_only = @issue29185_saved_session_read_only;
