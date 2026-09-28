@@ -2846,8 +2846,6 @@ func TestDropDatabase_SnapshotAdvance(t *testing.T) {
 		ctx := defines.AttachAccountId(context.Background(), sysAccountId)
 		proc.Ctx = ctx
 		proc.ReplaceTopCtx(ctx)
-		installDDLLineageLifecycleTestExecutor(t, proc)
-
 		// Use a real TxnMeta so the workspace can simulate snapshot advancement.
 		txnMeta := txn.TxnMeta{
 			Mode:       txn.TxnMode_Pessimistic,
@@ -2922,8 +2920,6 @@ func TestDropDatabase_SnapshotAdvance(t *testing.T) {
 		ctx := defines.AttachAccountId(context.Background(), sysAccountId)
 		proc.Ctx = ctx
 		proc.ReplaceTopCtx(ctx)
-		installDDLLineageLifecycleTestExecutor(t, proc)
-
 		txnMeta := txn.TxnMeta{
 			Mode:       txn.TxnMode_Optimistic,
 			Isolation:  txn.TxnIsolation_SI,

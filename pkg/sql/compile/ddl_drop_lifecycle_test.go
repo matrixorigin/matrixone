@@ -431,8 +431,8 @@ func TestDropDatabaseRejectsIncomingFKBeforeTableWork(t *testing.T) {
 			})
 			t.Cleanup(stubs.Reset)
 			db := mock_frontend.NewMockDatabase(ctrl)
-			eng.EXPECT().Database(gomock.Any(), "db", c.proc.GetTxnOperator()).Return(db, nil)
-			db.EXPECT().IsSubscription(gomock.Any()).Return(true)
+			eng.EXPECT().Database(gomock.Any(), "db", c.proc.GetTxnOperator()).Return(db, nil).Times(2)
+			db.EXPECT().IsSubscription(gomock.Any()).Return(true).AnyTimes()
 			pn := &plan.Plan{Plan: &plan.Plan_Ddl{Ddl: &plan.DataDefinition{DdlType: plan.DataDefinition_DROP_DATABASE,
 				Definition: &plan.DataDefinition_DropDatabase{DropDatabase: &plan.DropDatabase{Database: "db", CheckFKSql: fkSQL}},
 			}}}
