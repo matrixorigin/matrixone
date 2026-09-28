@@ -3512,6 +3512,29 @@ func (rule *ResetParamRefRule) applyExpr(e *plan.Expr) (*plan.Expr, error) {
 				}
 			}
 		}
+		if supportsGenericNumericFunctionContext(functionName) {
+			for i, original := range originalArgs {
+				if original == nil || boundArgs[i] == nil {
+					continue
+				}
+				cast := original.GetF()
+				if cast == nil || cast.Func == nil || cast.Func.GetObjName() != "cast" ||
+					cast.GetSyntaxExplicitCast() || len(cast.Args) != 2 ||
+					cast.Args[0].GetF() == nil || !preparedExprContainsParam(cast.Args[0]) {
+					continue
+				}
+				source := unwrapPreparedImplicitCast(boundArgs[i], false)
+				if source == nil || source == boundArgs[i] || !types.T(source.Typ.Id).IsDecimal() ||
+					reflect.DeepEqual(cast.Args[0].Typ, source.Typ) || reflect.DeepEqual(boundArgs[i].Typ, source.Typ) {
+					continue
+				}
+				// This cast selected an overload against the PREPARE-time child.
+				// Its domain is stale once that child has rebound to DECIMAL.
+				boundArgs[i] = source
+				needResetFunction = true
+				compareArgTypes = true
+			}
+		}
 		variadicStringBoundary := false
 		if functionName == "greatest" || functionName == "least" {
 			for i, arg := range boundArgs {
@@ -4461,6 +4484,12 @@ func preparedFixedDecimalCommonType(
 	prefixArgs []bool,
 ) (types.Type, bool, error) {
 	maxIntegral, maxScale, fixedScale := int32(0), int32(0), int32(0)
+	type textShape struct {
+		integral    int32
+		coefficient string
+		exponent    int64
+	}
+	var textShapes []textShape
 	for i, operand := range operands {
 		typ := makeTypeByPlan2Expr(operand)
 		eligibleText := i < len(prefixArgs) && prefixArgs[i] &&
@@ -4476,7 +4505,7 @@ func preparedFixedDecimalCommonType(
 			if literal == nil {
 				return types.Type{}, false, nil
 			}
-			integral, scale, bounded := preparedNumericPrefixWidths(literal.GetSval())
+			integral, scale, coefficient, exponent, bounded := preparedNumericPrefixWidths(literal.GetSval())
 			if !bounded {
 				prefix, _ := planfunction.GetNumericStringPrefix(literal.GetSval())
 				approximate, _ := strconv.ParseFloat(prefix, 64)
@@ -4485,6 +4514,10 @@ func preparedFixedDecimalCommonType(
 				} else {
 					integral = int64(types.T_decimal256.ToType().Width) + 1
 				}
+			} else {
+				textShapes = append(textShapes, textShape{
+					int32(min(integral, int64(types.T_decimal256.ToType().Width)+1)), coefficient, exponent,
+				})
 			}
 			maxIntegral = max(maxIntegral, int32(min(integral, int64(types.T_decimal256.ToType().Width)+1)))
 			maxScale = max(maxScale, int32(min(scale, int64(types.T_decimal256.ToType().Width)+1)))
@@ -4510,6 +4543,19 @@ func preparedFixedDecimalCommonType(
 		return types.Type{}, false, moerr.NewOutOfRange(ctx, "DECIMAL", "prepared common type exceeds exact precision")
 	}
 	scale := min(maxScale, maxWidth-maxIntegral)
+	if scale < maxScale {
+		for _, shape := range textShapes {
+			if shape.integral >= maxIntegral &&
+				preparedNumericPrefixIntegralCarry(shape.coefficient, shape.exponent, scale) {
+				maxIntegral++
+				if maxWidth-maxIntegral < fixedScale {
+					return types.Type{}, false, moerr.NewOutOfRange(ctx, "DECIMAL", "prepared common type exceeds exact precision")
+				}
+				scale = min(maxScale, maxWidth-maxIntegral)
+				break
+			}
+		}
+	}
 	width := max(maxIntegral+scale, int32(1))
 	switch {
 	case width <= types.T_decimal64.ToType().Width:

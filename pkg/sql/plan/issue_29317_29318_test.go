@@ -404,3 +404,62 @@ func TestPreparedFixedDecimalPrefixReservesIntegralDigits(t *testing.T) {
 	require.Equal(t, int32(76), extrema.Typ.Width, extrema.String())
 	require.Equal(t, int32(67), extrema.Typ.Scale, extrema.String())
 }
+
+func TestPreparedFixedDecimalPrefixReservesRoundingCarry(t *testing.T) {
+	prepared, err := runOneStmt(NewMockOptimizer(false), t,
+		"prepare p from 'select least(?, cast(1.25 as decimal(10,2)))'")
+	require.NoError(t, err)
+	template := prepared.GetDcl().GetPrepare().Plan
+	before := template.String()
+	for _, tc := range []struct {
+		value string
+		scale int32
+	}{
+		{"999999999." + strings.Repeat("9", 67) + "4", 67},
+		{"999999999." + strings.Repeat("9", 67) + "5", 66},
+		{"-999999999." + strings.Repeat("9", 68), 66},
+		{"9." + strings.Repeat("9", 76) + "e8", 66},
+	} {
+		params := []any{ParamValue{Value: tc.value, SourceType: types.T_varchar.ToType(),
+			HasSourceType: true, EnableNumericPrefix: true}}
+		filled, specialized, err := FillValuesOfParamsInPlanWithSpecialization(context.Background(), template, params)
+		require.NoError(t, err)
+		require.True(t, specialized)
+		require.Equal(t, before, template.String(), "EXECUTE changed the PREPARE template")
+		extrema := findPlanFunctionExpr(filled, "least")
+		require.NotNil(t, extrema)
+		require.Equal(t, int32(types.T_decimal256), extrema.Typ.Id, extrema.String())
+		require.Equal(t, int32(76), extrema.Typ.Width, extrema.String())
+		require.Equal(t, tc.scale, extrema.Typ.Scale, extrema.String())
+	}
+}
+
+func TestPreparedRoundRebindsNestedFixedDecimalChild(t *testing.T) {
+	prepared, err := runOneStmt(NewMockOptimizer(false), t,
+		"prepare p from 'select greatest(?,round(coalesce(?,cast(9007199254740992.0000000001 as decimal(38,10))),10))'")
+	require.NoError(t, err)
+	template := prepared.GetDcl().GetPrepare().Plan
+	before := template.String()
+	p := ParamValue{Value: "9007199254740992.0000000002", SourceType: types.T_varchar.ToType(),
+		HasSourceType: true, EnableNumericPrefix: true}
+	filled, specialized, err := FillValuesOfParamsInPlanWithSpecialization(context.Background(), template, []any{p, p})
+	require.NoError(t, err)
+	require.True(t, specialized)
+	require.Equal(t, before, template.String(), "EXECUTE changed the PREPARE template")
+	round := findPlanFunctionExpr(filled, "round")
+	require.NotNil(t, round)
+	require.Equal(t, int32(types.T_decimal128), round.Typ.Id, round.String())
+	require.Equal(t, int32(10), round.Typ.Scale, round.String())
+	require.Equal(t, int32(types.T_decimal128), round.GetF().Args[0].Typ.Id, round.String())
+
+	explicit, err := runOneStmt(NewMockOptimizer(false), t,
+		"prepare p from 'select round(cast(coalesce(?,cast(9007199254740992.0000000001 as decimal(38,10))) as double),10)'")
+	require.NoError(t, err)
+	explicitPlan := explicit.GetDcl().GetPrepare().Plan
+	filled, specialized, err = FillValuesOfParamsInPlanWithSpecialization(context.Background(), explicitPlan, []any{p})
+	require.NoError(t, err)
+	require.True(t, specialized)
+	round = findPlanFunctionExpr(filled, "round")
+	require.NotNil(t, round)
+	require.Equal(t, int32(types.T_float64), round.GetF().Args[0].Typ.Id, round.String())
+}

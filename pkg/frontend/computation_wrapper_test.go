@@ -4119,6 +4119,16 @@ func TestPreparedRuntimeSemanticKeyKeepsValueAndSQLSourceDomains(t *testing.T) {
 	}}
 	require.NotEqual(t, preparedRuntimeSemanticKey(complete), preparedRuntimeSemanticKey(suffix),
 		"CHAR's exact numeric and prefix-string paths must not share a cached plan")
+	concreteText := func(value string) []any {
+		return []any{plan2.ParamValue{Value: value, SourceType: types.T_varchar.ToType(),
+			HasSourceType: true, EnableNumericPrefix: true}}
+	}
+	require.NotEqual(t, preparedRuntimeSemanticKey(concreteText("abc")),
+		preparedRuntimeSemanticKey(concreteText("0xx")),
+		"concrete SQL strings with and without a numeric prefix take different common-value paths")
+	require.Equal(t, preparedRuntimeSemanticKey(concreteText("0xx")),
+		preparedRuntimeSemanticKey(concreteText("0tail")),
+		"the spelling of equal-domain numeric prefixes need not split the cache")
 
 	extreme := func(value string) []any {
 		return []any{plan2.ParamValue{Value: value, EnableNumericPrefix: true}}

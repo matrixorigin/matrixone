@@ -6115,7 +6115,7 @@ func PreparedRuntimeTypeFromString(value string) (types.Type, bool) {
 // DECIMAL-aware common-type consumer, while that consumer follows MySQL and
 // treats a missing numeric prefix as zero.
 func PreparedNumericPrefixTypeFromString(value string) types.Type {
-	integralWidth, scale, bounded := preparedNumericPrefixWidths(value)
+	integralWidth, scale, _, _, bounded := preparedNumericPrefixWidths(value)
 	if !bounded {
 		return types.T_float64.ToType()
 	}
@@ -6140,10 +6140,10 @@ func PreparedNumericPrefixTypeFromString(value string) types.Type {
 
 // The shape remains available when total precision exceeds Decimal256, so a
 // fixed DECIMAL peer can reserve integral digits before reducing text scale.
-func preparedNumericPrefixWidths(value string) (integralWidth, scale int64, bounded bool) {
+func preparedNumericPrefixWidths(value string) (integralWidth, scale int64, coefficient string, decimalExponent int64, bounded bool) {
 	prefix, ok := function.GetNumericStringPrefix(value)
 	if !ok {
-		return 1, 0, true
+		return 1, 0, "", 0, true
 	}
 
 	unsigned := prefix
@@ -6160,7 +6160,7 @@ func preparedNumericPrefixWidths(value string) (integralWidth, scale int64, boun
 	digits := strings.ReplaceAll(mantissa, ".", "")
 	nonZero := strings.TrimLeft(digits, "0")
 	if nonZero == "" {
-		return 1, 0, true
+		return 1, 0, "", 0, true
 	}
 
 	fractionalDigits := int64(0)
@@ -6171,11 +6171,11 @@ func preparedNumericPrefixWidths(value string) (integralWidth, scale int64, boun
 	exponentCompensation := -fractionalDigits + int64(trailingZeros)
 	exponent, bounded := preparedBoundedDecimalExponent(exponentText, exponentCompensation)
 	if !bounded {
-		return 0, 0, false
+		return 0, 0, "", 0, false
 	}
 
-	coefficient := nonZero[:len(nonZero)-trailingZeros]
-	decimalExponent := exponent
+	coefficient = nonZero[:len(nonZero)-trailingZeros]
+	decimalExponent = exponent
 
 	if decimalExponent >= 0 {
 		integralWidth = int64(len(coefficient)) + decimalExponent
@@ -6186,7 +6186,23 @@ func preparedNumericPrefixWidths(value string) (integralWidth, scale int64, boun
 			integralWidth = 0
 		}
 	}
-	return integralWidth, scale, true
+	return integralWidth, scale, coefficient, decimalExponent, true
+}
+
+// Only a carry across every retained 9 can increase the integer width when
+// Decimal256 forces a text prefix to lose fractional digits.
+func preparedNumericPrefixIntegralCarry(coefficient string, decimalExponent int64, targetScale int32) bool {
+	decimalPosition := int64(len(coefficient)) + decimalExponent
+	cut := decimalPosition + int64(targetScale)
+	if decimalPosition < 0 || cut < 0 || cut >= int64(len(coefficient)) || coefficient[cut] < '5' {
+		return false
+	}
+	for i := int64(0); i < cut; i++ {
+		if coefficient[i] != '9' {
+			return false
+		}
+	}
+	return true
 }
 
 // PreparedNumericStringIsComplete reports whether the whole value (apart from

@@ -83,6 +83,10 @@ EXECUTE pg_abs_nested USING @p,@p;
 EXECUTE pc_abs_nested USING @p,@p;
 EXECUTE pg_arith_nested USING @p,@p;
 
+-- A rebound DECIMAL child must reach ROUND without PREPARE's integer cast.
+PREPARE pg_round_nested FROM 'SELECT id FROM t WHERE GREATEST(?,ROUND(COALESCE(?,d),10))=d ORDER BY id';
+EXECUTE pg_round_nested USING @p,@p;
+
 -- A separate concrete SQL string still owns the mixed-result domain.
 SET @decimal_null=CAST(NULL AS DECIMAL(20,0)), @text_peer='abc';
 PREPARE pc_string_peer FROM 'SELECT COALESCE(?, ?, d) AS c FROM t WHERE id=2';
@@ -118,6 +122,30 @@ EXECUTE pg_width USING @tiny;
 SET @wide=CONCAT('123456789.',REPEAT('0',67),'1');
 PREPARE pl_wide FROM 'SELECT LEAST(?,CAST(1.25 AS DECIMAL(10,2))) AS v';
 EXECUTE pl_wide USING @wide;
+SET @wide=CONCAT('999999999.',REPEAT('9',68));
+EXECUTE pl_wide USING @wide;
+PREPARE pg_wide FROM 'SELECT GREATEST(?,CAST(1.25 AS DECIMAL(10,2))) AS v';
+EXECUTE pg_wide USING @wide;
+SET @wide=CONCAT('-999999999.',REPEAT('9',68));
+EXECUTE pl_wide USING @wide;
+
+-- Cache reuse must distinguish a concrete SQL string with no numeric prefix
+-- from one whose prefix is zero, in either execution order.
+PREPARE pc_prefix_switch FROM 'SELECT COALESCE(?,CAST(1.25 AS DECIMAL(10,2))) AS v';
+PREPARE pg_prefix_switch FROM 'SELECT GREATEST(?,CAST(1.25 AS DECIMAL(10,2))) AS v';
+PREPARE pl_prefix_switch FROM 'SELECT LEAST(?,CAST(1.25 AS DECIMAL(10,2))) AS v';
+SET @switch='abc';
+EXECUTE pc_prefix_switch USING @switch;
+EXECUTE pg_prefix_switch USING @switch;
+EXECUTE pl_prefix_switch USING @switch;
+SET @switch='0xx';
+EXECUTE pc_prefix_switch USING @switch;
+EXECUTE pg_prefix_switch USING @switch;
+EXECUTE pl_prefix_switch USING @switch;
+SET @switch='abc';
+EXECUTE pc_prefix_switch USING @switch;
+EXECUTE pg_prefix_switch USING @switch;
+EXECUTE pl_prefix_switch USING @switch;
 
 -- A concrete string, explicit CHAR marker, or FLOAT peer does not establish
 -- the fixed DECIMAL-only context for the text parameter.
@@ -148,13 +176,18 @@ DEALLOCATE PREPARE pg_nested;
 DEALLOCATE PREPARE pg_abs_nested;
 DEALLOCATE PREPARE pc_abs_nested;
 DEALLOCATE PREPARE pg_arith_nested;
+DEALLOCATE PREPARE pg_round_nested;
 DEALLOCATE PREPARE pc_string_peer;
 DEALLOCATE PREPARE pg_string_peer;
 DEALLOCATE PREPARE pc_char_null;
 DEALLOCATE PREPARE pg_width;
 DEALLOCATE PREPARE pl_wide;
+DEALLOCATE PREPARE pg_wide;
 DEALLOCATE PREPARE pc_width;
 DEALLOCATE PREPARE p_char_peer;
 DEALLOCATE PREPARE p_char_marker;
 DEALLOCATE PREPARE p_float_peer;
+DEALLOCATE PREPARE pc_prefix_switch;
+DEALLOCATE PREPARE pg_prefix_switch;
+DEALLOCATE PREPARE pl_prefix_switch;
 DROP DATABASE prepared_decimal_extrema;
