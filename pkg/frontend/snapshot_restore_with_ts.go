@@ -420,7 +420,10 @@ func restoreDatabaseFromTS(
 
 	if isSubDb {
 		var isPubExist bool
-		isPubExist, _ = checkPubExistOrNot(toCtx, sid, bh, "", dbName, snapshotTs)
+		isPubExist, err = checkPubExistOrNot(toCtx, sid, bh, "", dbName, snapshotTs)
+		if err != nil {
+			return err
+		}
 		if !isPubExist {
 			getLogger(sid).Info(fmt.Sprintf("[%d:%d] skip restore db: %v, no publication", restoreAccount, snapshotTs, dbName))
 			return

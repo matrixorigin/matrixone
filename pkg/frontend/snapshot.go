@@ -1222,7 +1222,10 @@ func restoreToDatabaseOrTable(
 		// else skip restore the db
 
 		var isPubExist bool
-		isPubExist, _ = checkPubExistOrNot(toCtx, sid, bh, snapshotName, dbName, snapshotTs)
+		isPubExist, err = checkPubExistOrNot(toCtx, sid, bh, snapshotName, dbName, snapshotTs)
+		if err != nil {
+			return err
+		}
 		if !isPubExist {
 			getLogger(sid).Debug(fmt.Sprintf("[%s] skip restore db: %v, no publication", snapshotName, dbName))
 			return
@@ -1364,10 +1367,15 @@ func restoreToSubDb(
 	// a cluster restore.
 	sourceCtx := defines.AttachAccountId(ctx, subDb.sourceAccount)
 	var isPubExist bool
-	isPubExist, _ = checkPubExistOrNot(sourceCtx, sid, bh, snapshotName, subDb.dbName, subDb.snapshotTs)
+	isPubExist, err = checkPubExistOrNot(sourceCtx, sid, bh, snapshotName, subDb.dbName, subDb.snapshotTs)
+	if err != nil {
+		return err
+	}
 	if !isPubExist {
+		// A snapshot can contain a subscription whose publication was already
+		// deleted. Preserve the existing skip policy, but never discard query errors.
 		getLogger(sid).Debug(fmt.Sprintf("[%s] skip restore db: %v, no publication", snapshotName, subDb.dbName))
-		return
+		return nil
 	}
 
 	targetCtx := defines.AttachAccountId(ctx, subDb.targetAccount)
@@ -3240,23 +3248,33 @@ func createPubs(
 	snapshotName string,
 	pubInfos []*pubsub.PubInfo,
 ) (err error) {
-	// restore pub to toAccount
-	var ast []tree.Statement
-	defer func() {
-		for _, s := range ast {
-			s.Free()
-		}
-	}()
+	if len(pubInfos) == 0 {
+		return nil
+	}
+	_, targetAccounts, err := getAccounts(ctx, bh, false)
+	if err != nil {
+		return err
+	}
 
 	for _, pubInfo := range pubInfos {
-		toCtx := defines.AttachAccount(ctx, pubInfo.PubAccountId, pubInfo.Owner, pubInfo.Creator)
+		targetAccount := targetAccounts[pubInfo.PubAccountName]
+		if targetAccount == nil || targetAccount.Id < 0 {
+			return moerr.NewInternalErrorf(ctx, "cannot restore publication %s: target account %s does not exist",
+				pubInfo.PubName, pubInfo.PubAccountName)
+		}
+		// Account IDs change on recreation. User and role IDs are retained by
+		// this branch's account catalog clone, unlike the account identity.
+		toCtx := defines.AttachAccount(ctx, uint32(targetAccount.Id), pubInfo.Creator, pubInfo.Owner)
 		getLogger(sid).Debug(fmt.Sprintf("[%s] create pub: create pub sql: %s", snapshotName, pubInfo.GetCreateSql()))
-		ast, err = mysql.Parse(toCtx, pubInfo.GetCreateSql(), 1)
+		var stmt tree.Statement
+		stmt, err = mysql.ParseOne(toCtx, pubInfo.GetCreateSql(), 1)
 		if err != nil {
 			return
 		}
 
-		if err = createPublication(toCtx, bh, ast[0].(*tree.CreatePublication)); err != nil {
+		err = createPublication(toCtx, bh, stmt.(*tree.CreatePublication))
+		stmt.Free()
+		if err != nil {
 			return
 		}
 	}
@@ -3378,8 +3396,7 @@ func checkPubValid(
 	}
 
 	if !execResultArrayHasData(erArray) {
-		err = moerr.NewInternalErrorf(newCtx, "there is no publication account %s", pubAccountName)
-		return
+		return false, nil
 	}
 	if accId, err = erArray[0].GetInt64(newCtx, 0, 0); err != nil {
 		return
@@ -3392,8 +3409,7 @@ func checkPubValid(
 		return
 	}
 	if pubInfo == nil {
-		err = moerr.NewInternalErrorf(newCtx, "there is no publication %s", pubName)
-		return
+		return false, nil
 	}
 
 	return true, nil
