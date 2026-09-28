@@ -18353,7 +18353,7 @@ func Test_checkPitrDup(t *testing.T) {
 			Level: tree.PITRLEVELACCOUNT,
 		}
 
-		sql := getSqlForCheckPitrDup(tenant.Tenant, 0, stmt)
+		sql := getSqlForCheckPitrDup(tenant.Tenant, 0, stmt, false)
 		mrs := newMrsForPasswordOfUser([][]interface{}{})
 		bh.sql2result[sql] = mrs
 
@@ -18396,7 +18396,7 @@ func Test_checkPitrDup(t *testing.T) {
 			Level: tree.PITRLEVELACCOUNT,
 		}
 
-		sql := getSqlForCheckPitrDup(tenant.Tenant, 0, stmt)
+		sql := getSqlForCheckPitrDup(tenant.Tenant, 0, stmt, false)
 		mrs := newMrsForPasswordOfUser([][]interface{}{
 			{1},
 		})

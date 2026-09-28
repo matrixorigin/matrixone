@@ -681,6 +681,7 @@ func TestResolveIndexTableByRefUsesPublisherDatabase(t *testing.T) {
 	).Times(1)
 	database.EXPECT().Relation(gomock.Any(), "__mo_index_secondary_events", gomock.Nil()).
 		Return(relation, nil)
+	relation.EXPECT().GetTableName().Return("__mo_index_secondary_events")
 	relation.EXPECT().GetTableID(gomock.Any()).Return(uint64(99))
 	relation.EXPECT().GetTableDef(gomock.Any()).Return(&pbplan.TableDef{Name: "__mo_index_secondary_events"})
 

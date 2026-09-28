@@ -68,6 +68,8 @@ func newStubDatabase(name string) *stubDatabase {
 	return &stubDatabase{name: name, rels: make(map[string]*stubRelation)}
 }
 
+func (db *stubDatabase) GetPhysicalName() string { return db.name }
+
 func (db *stubDatabase) Relation(ctx context.Context, name string, op any) (engine.Relation, error) {
 	if rel, ok := db.rels[name]; ok {
 		return rel, nil
@@ -117,6 +119,8 @@ type stubRelation struct {
 func newStubRelation(name string) *stubRelation {
 	return &stubRelation{name: name}
 }
+
+func (r *stubRelation) GetTableName() string { return r.name }
 
 func (r *stubRelation) GetTableID(ctx context.Context) uint64 {
 	if r.tableID != 0 {

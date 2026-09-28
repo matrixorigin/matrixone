@@ -133,7 +133,7 @@ func Test_checkPitrValidOrNot_AllowsExplicitCurrentAccountForScopedRestore(t *te
 		Level:        tree.RESTORELEVELDATABASE,
 		AccountName:  "acc01",
 		DatabaseName: "db01",
-	}, tenant)
+	}, tenant, false)
 	require.NoError(t, err)
 
 	err = checkPitrValidOrNot(pitr, &tree.RestorePitr{
@@ -141,7 +141,7 @@ func Test_checkPitrValidOrNot_AllowsExplicitCurrentAccountForScopedRestore(t *te
 		AccountName:  "acc01",
 		DatabaseName: "db01",
 		TableName:    "t01",
-	}, tenant)
+	}, tenant, false)
 	require.NoError(t, err)
 }
 
@@ -163,7 +163,7 @@ func Test_checkPitrValidOrNot_RejectsOtherAccountForScopedRestore(t *testing.T) 
 		Level:        tree.RESTORELEVELDATABASE,
 		AccountName:  "acc02",
 		DatabaseName: "db01",
-	}, tenant)
+	}, tenant, false)
 	require.Error(t, err)
 
 	err = checkPitrValidOrNot(pitr, &tree.RestorePitr{
@@ -171,8 +171,26 @@ func Test_checkPitrValidOrNot_RejectsOtherAccountForScopedRestore(t *testing.T) 
 		AccountName:  "acc02",
 		DatabaseName: "db01",
 		TableName:    "t01",
-	}, tenant)
+	}, tenant, false)
 	require.Error(t, err)
+}
+
+func Test_checkPitrValidOrNot_Mode2LegacyNames(t *testing.T) {
+	tenant := &TenantInfo{Tenant: "acc01", TenantID: 101}
+	pitr := &pitrRecord{
+		pitrName: "legacy", level: tree.PITRLEVELTABLE.String(), accountId: 101,
+		databaseName: "mixeddb", tableName: "mixedt",
+	}
+	stmt := &tree.RestorePitr{
+		Level: tree.RESTORELEVELTABLE, DatabaseName: "MixedDB", TableName: "MixedT",
+	}
+	require.NoError(t, checkPitrValidOrNot(pitr, stmt, tenant, true))
+	require.Error(t, checkPitrValidOrNot(pitr, stmt, tenant, false))
+	stmt.TableName = "OtherT"
+	require.Error(t, checkPitrValidOrNot(pitr, stmt, tenant, true))
+	stmt.TableName = "MixedT"
+	pitr.accountId++
+	require.Error(t, checkPitrValidOrNot(pitr, stmt, tenant, true))
 }
 
 func Test_createPubByPitr(t *testing.T) {
@@ -1428,12 +1446,17 @@ func TestGetSqlForCheckPitrDup(t *testing.T) {
 
 	for _, tt := range tests {
 		t.Run(tt.expected, func(t *testing.T) {
-			result := getSqlForCheckPitrDup(tt.createAccount, tt.createAccountId, tt.stmt)
+			result := getSqlForCheckPitrDup(tt.createAccount, tt.createAccountId, tt.stmt, false)
 			if result != tt.expected {
 				t.Errorf("expected %s, got %s", tt.expected, result)
 			}
 		})
 	}
+	mode2 := getSqlForCheckPitrDup("testAccount", 1, &tree.CreatePitr{
+		Level: tree.PITRLEVELTABLE, DatabaseName: "MixedDB", TableName: "MixedT",
+	}, true)
+	require.Contains(t, mode2, "lower(database_name) = lower('MixedDB')")
+	require.Contains(t, mode2, "lower(table_name) = lower('MixedT')")
 }
 
 func Test_doRestorePitr_Account(t *testing.T) {

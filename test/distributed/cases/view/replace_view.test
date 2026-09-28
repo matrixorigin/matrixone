@@ -56,6 +56,8 @@ set global lower_case_table_names = 0;
 
 -- @session:id=3&user=sys:root&password=111
 use replace_view;
+select * from mode_v;
+select * from MODE_V;
 drop view mode_i;
 drop view MODE_V;
 drop view mode_v;

@@ -35,6 +35,7 @@ import (
 
 	"github.com/matrixorigin/matrixone/pkg/bootstrap/versions"
 	"github.com/matrixorigin/matrixone/pkg/common/buffer"
+	"github.com/matrixorigin/matrixone/pkg/common/identifier"
 	"github.com/matrixorigin/matrixone/pkg/common/log"
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
 	"github.com/matrixorigin/matrixone/pkg/common/mpool"
@@ -202,6 +203,9 @@ type Session struct {
 
 	// the process of the session
 	proc *process.Process
+	// This is a frozen per-connection copy of the global identifier mode.
+	identifierModeInitialized atomic.Bool
+	identifierMode2           atomic.Bool
 
 	isInternal bool
 
@@ -225,6 +229,9 @@ type Session struct {
 	// table aliases are marked internal so connection migration clones only the
 	// user-visible table; cloning that table recreates its hidden index tables.
 	tempTableIdentities map[string]tempTableIdentity
+	// Built on first mode-2 lookup, then updated with each alias mutation.
+	tempTableFolded        map[string]tempTableFoldedEntry
+	tempTableFoldedMembers map[string]map[string]string
 	// tempTableVersion changes whenever the session's temporary-table name
 	// resolution changes. Prepared statements use it to invalidate plans that
 	// were built against an older temporary-table mapping.
@@ -427,6 +434,11 @@ type tempTableIdentity struct {
 	internal bool
 }
 
+type tempTableFoldedEntry struct {
+	realName  string
+	ambiguous bool
+}
+
 // A migration snapshot carries identifiers only, not table data. Keep its
 // count bounded nevertheless: every entry becomes a CREATE ... CLONE statement
 // on the target and all entries share the fixed connection-transfer deadline.
@@ -516,9 +528,12 @@ func (ses *Session) initSystemVariablesFromGlobal(ctx context.Context, sv *Syste
 		}
 	}
 
+	mode := sessionVars.Get("lower_case_table_names")
 	ses.mu.Lock()
 	ses.gSysVars = sv
 	ses.sesSysVars = sessionVars
+	ses.identifierMode2.Store(mode == int64(2))
+	ses.identifierModeInitialized.Store(true)
 	if ses.errInfo != nil {
 		ses.errInfo.setMaxCnt(maxErrorCount)
 	}
@@ -756,13 +771,16 @@ func (ses *Session) addTempTableWithIdentity(
 	}
 	if oldRealName, ok := ses.tempTables[key]; ok {
 		if oldRealName == realName {
-			if ses.tempTableIdentityLocked(key) != identity {
+			if oldIdentity := ses.tempTableIdentityLocked(key); oldIdentity != identity {
 				ses.recordTempTableMutationLocked(txnKey, stmtKey, key)
+				ses.updateTempTableFoldedLocked(key, oldIdentity, oldRealName, false)
 				ses.tempTableIdentities[key] = identity
+				ses.updateTempTableFoldedLocked(key, identity, realName, true)
 			}
 			return
 		}
 		ses.recordTempTableMutationLocked(txnKey, stmtKey, key)
+		ses.updateTempTableFoldedLocked(key, ses.tempTableIdentityLocked(key), oldRealName, false)
 		delete(ses.tempTablesRev, oldRealName)
 	} else {
 		ses.recordTempTableMutationLocked(txnKey, stmtKey, key)
@@ -770,6 +788,7 @@ func (ses *Session) addTempTableWithIdentity(
 	ses.tempTables[key] = realName
 	ses.tempTablesRev[realName] = key
 	ses.tempTableIdentities[key] = identity
+	ses.updateTempTableFoldedLocked(key, identity, realName, true)
 	ses.tempTableVersion++
 }
 
@@ -827,10 +846,106 @@ func (ses *Session) snapshotTempTablesForMigration(ctx context.Context) ([]*quer
 
 // GetTempTable gets the real name of the temporary table
 func (ses *Session) GetTempTable(dbName, alias string) (string, bool) {
+	if !ses.mode2TemporaryLookupEnabled() {
+		ses.mu.Lock()
+		defer ses.mu.Unlock()
+		realName, found := ses.tempTables[dbName+"."+alias]
+		return realName, found
+	}
+	ctx := defines.AttachMode2NameResolution(context.Background(), true)
+	realName, found, _ := ses.ResolveTempTable(ctx, dbName, alias)
+	return realName, found
+}
+
+// GetTempTableAliasByRealName returns the spelling registered when the
+// temporary table was created. A case variant used by a later ALTER must not
+// become a second alias for the same table.
+func (ses *Session) GetTempTableAliasByRealName(dbName, realName string) (string, bool) {
 	ses.mu.Lock()
 	defer ses.mu.Unlock()
-	val, ok := ses.tempTables[dbName+"."+alias]
-	return val, ok
+	key, ok := ses.tempTablesRev[realName]
+	if !ok {
+		return "", false
+	}
+	identity := ses.tempTableIdentityLocked(key)
+	if identity.dbName != dbName {
+		return "", false
+	}
+	return identity.alias, true
+}
+
+func (ses *Session) mode2TemporaryLookupEnabled() bool {
+	if ses.identifierModeInitialized.Load() {
+		return ses.identifierMode2.Load()
+	}
+	return parserLowerCaseTableNames(ses) == 2
+}
+
+func tempTableFoldKey(dbName, alias string) string {
+	return identifier.Fold(dbName) + "\x00" + identifier.Fold(alias)
+}
+
+func (ses *Session) rebuildTempTableFoldedLocked() {
+	if ses.tempTableFolded != nil {
+		return
+	}
+	ses.tempTableFolded = make(map[string]tempTableFoldedEntry, len(ses.tempTables))
+	ses.tempTableFoldedMembers = make(map[string]map[string]string, len(ses.tempTables))
+	for key, realName := range ses.tempTables {
+		ses.updateTempTableFoldedLocked(key, ses.tempTableIdentityLocked(key), realName, true)
+	}
+}
+
+func (ses *Session) updateTempTableFoldedLocked(key string, identity tempTableIdentity, realName string, add bool) {
+	if ses.tempTableFolded == nil {
+		return
+	}
+	foldedKey := tempTableFoldKey(identity.dbName, identity.alias)
+	members := ses.tempTableFoldedMembers[foldedKey]
+	if add {
+		if members == nil {
+			members = make(map[string]string)
+			ses.tempTableFoldedMembers[foldedKey] = members
+		}
+		members[key] = realName
+	} else {
+		delete(members, key)
+	}
+	if len(members) == 0 {
+		delete(ses.tempTableFoldedMembers, foldedKey)
+		delete(ses.tempTableFolded, foldedKey)
+		return
+	}
+	entry := tempTableFoldedEntry{}
+	for _, physical := range members {
+		if entry.realName != "" && entry.realName != physical {
+			entry.ambiguous = true
+			break
+		}
+		entry.realName = physical
+	}
+	ses.tempTableFolded[foldedKey] = entry
+}
+
+// ResolveTempTable reports ambiguity left by an older mode-0 session rather
+// than selecting a temporary table by the spelling of the query.
+func (ses *Session) ResolveTempTable(ctx context.Context, dbName, alias string) (string, bool, error) {
+	mode2 := defines.Mode2NameResolutionEnabled(ctx)
+	ses.mu.Lock()
+	defer ses.mu.Unlock()
+	if !mode2 {
+		val, ok := ses.tempTables[dbName+"."+alias]
+		return val, ok, nil
+	}
+	ses.rebuildTempTableFoldedLocked()
+	entry, ok := ses.tempTableFolded[tempTableFoldKey(dbName, alias)]
+	if !ok {
+		return "", false, nil
+	}
+	if entry.ambiguous {
+		return "", false, moerr.NewAmbiguousIdentifier(ctx, "temporary table", alias)
+	}
+	return entry.realName, true, nil
 }
 
 // GetTempTableVersion returns the version of the session's temporary-table
@@ -839,6 +954,12 @@ func (ses *Session) GetTempTableVersion() uint64 {
 	ses.mu.Lock()
 	defer ses.mu.Unlock()
 	return ses.tempTableVersion
+}
+
+func (ses *Session) HasTemporaryTables() bool {
+	ses.mu.Lock()
+	defer ses.mu.Unlock()
+	return len(ses.tempTables) != 0
 }
 
 func (ses *Session) getDDLVersion() uint64 {
@@ -878,6 +999,7 @@ func (ses *Session) removeTempTablesByDatabase(dbName, txnKey, stmtKey string) {
 			continue
 		}
 		ses.recordTempTableMutationLocked(txnKey, stmtKey, key)
+		ses.updateTempTableFoldedLocked(key, ses.tempTableIdentityLocked(key), realName, false)
 		delete(ses.tempTables, key)
 		delete(ses.tempTablesRev, realName)
 		delete(ses.tempTableIdentities, key)
@@ -894,6 +1016,7 @@ func (ses *Session) removeTempTable(dbName, alias, txnKey, stmtKey string) {
 	key := dbName + "." + alias
 	if realName, ok := ses.tempTables[key]; ok {
 		ses.recordTempTableMutationLocked(txnKey, stmtKey, key)
+		ses.updateTempTableFoldedLocked(key, ses.tempTableIdentityLocked(key), realName, false)
 		delete(ses.tempTables, key)
 		delete(ses.tempTablesRev, realName)
 		delete(ses.tempTableIdentities, key)
@@ -912,6 +1035,7 @@ func (ses *Session) removeTempTableByRealName(realName, txnKey, stmtKey string) 
 	defer ses.mu.Unlock()
 	if alias, ok := ses.tempTablesRev[realName]; ok {
 		ses.recordTempTableMutationLocked(txnKey, stmtKey, alias)
+		ses.updateTempTableFoldedLocked(alias, ses.tempTableIdentityLocked(alias), realName, false)
 		delete(ses.tempTables, alias)
 		delete(ses.tempTablesRev, realName)
 		delete(ses.tempTableIdentities, alias)
@@ -1010,6 +1134,7 @@ func (ses *Session) restoreTempTableAliasesLocked(before map[string]tempTableAli
 		}
 		changed = true
 		if exists {
+			ses.updateTempTableFoldedLocked(alias, currentIdentity, current, false)
 			delete(ses.tempTablesRev, current)
 		}
 		delete(ses.tempTables, alias)
@@ -1021,6 +1146,7 @@ func (ses *Session) restoreTempTableAliasesLocked(before map[string]tempTableAli
 			ses.tempTables[alias] = state.realName
 			ses.tempTablesRev[state.realName] = alias
 			ses.tempTableIdentities[alias] = state.identity
+			ses.updateTempTableFoldedLocked(alias, state.identity, state.realName, true)
 		}
 	}
 	if changed {
@@ -1986,6 +2112,8 @@ func NewSession(
 	ses.tempTables = make(map[string]string)
 	ses.tempTablesRev = make(map[string]string)
 	ses.tempTableIdentities = make(map[string]tempTableIdentity)
+	ses.tempTableFolded = nil
+	ses.tempTableFoldedMembers = nil
 	ses.prepareStmts = make(map[string]*PrepareStmt)
 	// For seq init values.
 	ses.seqCurValues = make(map[uint64]string)
@@ -2074,6 +2202,8 @@ func (ses *Session) takeTempTables() ([]sessionTempTable, *TenantInfo) {
 	ses.tempTables = nil
 	ses.tempTablesRev = nil
 	ses.tempTableIdentities = nil
+	ses.tempTableFolded = nil
+	ses.tempTableFoldedMembers = nil
 	ses.tempTableTxnJournals = nil
 	tenant := ses.tenant
 	ses.mu.Unlock()
@@ -2139,6 +2269,8 @@ func (ses *Session) resetTempTables(ctx context.Context) error {
 		ses.tempTables = make(map[string]string, len(tempTables))
 		ses.tempTablesRev = make(map[string]string, len(tempTables))
 		ses.tempTableIdentities = make(map[string]tempTableIdentity, len(tempTables))
+		ses.tempTableFolded = nil
+		ses.tempTableFoldedMembers = nil
 		for _, tbl := range tempTables {
 			if tbl.retired {
 				if ses.retiredTempTables == nil {
@@ -4273,6 +4405,12 @@ func Migrate(ctx context.Context, ses *Session, req *query.MigrateConnToRequest)
 		// target session.
 		return moerr.GetOkExpectedNotSafeToStartTransfer()
 	}
+	if !req.ModeAtSourceExported || req.ModeAtSource < 0 || req.ModeAtSource > 2 {
+		return moerr.GetOkExpectedNotSafeToStartTransfer()
+	}
+	if err := ses.installMigratedIdentifierMode(int64(req.ModeAtSource)); err != nil {
+		return err
+	}
 	parameters := getPu(ses.GetService()).SV
 	// USE and PREPARE are replayed as internal statements and update ROW_COUNT().
 	// Restore the source session values after all replay work has finished.
@@ -4475,6 +4613,25 @@ func Migrate(ctx context.Context, ses *Session, req *query.MigrateConnToRequest)
 	if cause := context.Cause(migrationCtx); cause != nil {
 		return cause
 	}
+	return nil
+}
+
+func (ses *Session) installMigratedIdentifierMode(mode int64) error {
+	if mode < 0 || mode > 2 {
+		return moerr.NewInternalErrorNoCtx("invalid lower_case_table_names during migration")
+	}
+	if ses.sesSysVars == nil {
+		if ses.gSysVars != nil {
+			ses.sesSysVars = ses.gSysVars.Clone()
+		} else {
+			ses.sesSysVars = &SystemVariables{mp: make(map[string]interface{})}
+		}
+	} else if ses.sesSysVars == ses.gSysVars {
+		ses.sesSysVars = ses.gSysVars.Clone()
+	}
+	ses.sesSysVars.Set("lower_case_table_names", mode)
+	ses.identifierMode2.Store(mode == 2)
+	ses.identifierModeInitialized.Store(true)
 	return nil
 }
 

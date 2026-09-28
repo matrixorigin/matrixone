@@ -20503,7 +20503,7 @@ yydefault:
 		yyDollar = yyS[yypt-2 : yypt+1]
 //line mysql_sql.y:5504
 		{
-			yyVAL.str = yyDollar[2].cstrUnion().Compare()
+			yyVAL.str = yylex.(*Lexer).GetDbOrTblName(yyDollar[2].cstrUnion().Origin())
 		}
 	case 778:
 		yyDollar = yyS[yypt-2 : yypt+1]
@@ -20789,7 +20789,7 @@ yydefault:
 		var yyLOCAL tree.Statement
 //line mysql_sql.y:5748
 		{
-			var name = tree.Identifier(yyDollar[4].cstrUnion().Compare())
+			var name = tree.Identifier(yylex.(*Lexer).GetDbOrTblName(yyDollar[4].cstrUnion().Origin()))
 			var ifExists = yyDollar[3].boolValUnion()
 			yyLOCAL = tree.NewDropDatabase(name, ifExists)
 		}
@@ -20799,7 +20799,7 @@ yydefault:
 		var yyLOCAL tree.Statement
 //line mysql_sql.y:5754
 		{
-			var name = tree.Identifier(yyDollar[4].cstrUnion().Compare())
+			var name = tree.Identifier(yylex.(*Lexer).GetDbOrTblName(yyDollar[4].cstrUnion().Origin()))
 			var ifExists = yyDollar[3].boolValUnion()
 			yyLOCAL = tree.NewDropDatabase(name, ifExists)
 		}

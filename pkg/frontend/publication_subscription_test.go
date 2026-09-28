@@ -261,7 +261,7 @@ func TestGenPubTablesStrDeduplicatesExplicitTables(t *testing.T) {
 	bh.init()
 	bh.sql2result[showTablesSQL] = result
 
-	pubTables, err := genPubTablesStr(ctx, bh, "db", statements[0].(*tree.CreatePublication).Table)
+	pubTables, err := genPubTablesStr(ctx, bh, "db", 0, statements[0].(*tree.CreatePublication).Table)
 	require.NoError(t, err)
 	require.Equal(t, "t1,t2", pubTables)
 	require.Equal(t, []string{showTablesSQL}, bh.executedSQLs)

@@ -2156,7 +2156,9 @@ func TestEffectiveStatementForTxn(t *testing.T) {
 	require.NoError(t, err)
 	require.IsType(t, &tree.DropTable{}, effective)
 	require.Equal(t, "prepare_db", defaultDatabase)
-	require.True(t, requiresPessimisticObjectLifecycleTxn(ses, effective, defaultDatabase))
+	lifecycle, err := requiresPessimisticObjectLifecycleTxn(ctx, ses, effective, defaultDatabase)
+	require.NoError(t, err)
+	require.True(t, lifecycle)
 
 	selectStmt := &tree.Select{}
 	effective, defaultDatabase, err = effectiveStatementForTxn(ctx, ses, selectStmt)

@@ -397,48 +397,38 @@ func (tcc *TxnCompilerContext) SetContext(ctx context.Context) {
 }
 
 func (tcc *TxnCompilerContext) DatabaseExists(name string, snapshot *plan2.Snapshot) bool {
-	var err error
 	tempCtx := tcc.execCtx.reqCtx
 	txn := tcc.GetTxnHandler().GetTxn()
-
-	// change txn to snapshot txn
 	if plan2.IsSnapshotValid(snapshot) && snapshot.TS.Less(txn.Txn().SnapshotTS) {
 		txn = txn.CloneSnapshotOp(*snapshot.TS)
-
 		if snapshot.Tenant != nil {
 			tempCtx = context.WithValue(tempCtx, defines.TenantIDKey{}, snapshot.Tenant.TenantID)
 		}
 	}
-
-	//open database
-	ses := tcc.GetSession()
-	_, err = tcc.GetTxnHandler().GetStorage().Database(tempCtx, name, txn)
+	_, err := tcc.GetTxnHandler().GetStorage().Database(tempCtx, name, txn)
 	if err != nil {
-		// ExpectedEOB means the database is not visible at this snapshot. That
-		// is a normal negative answer for an existence probe, not an engine
-		// failure that should be emitted at ERROR level.
-		if moerr.IsMoErrCode(err, moerr.OkExpectedEOB) {
-			return false
+		if !moerr.IsMoErrCode(err, moerr.OkExpectedEOB) {
+			tcc.GetSession().Error(tempCtx,
+				"Failed to get database", zap.String("databaseName", name), zap.Error(err))
 		}
-		ses.Error(tempCtx,
-			"Failed to get database",
-			zap.String("databaseName", name),
-			zap.Error(err))
 		return false
 	}
-
 	return true
 }
 
-func (tcc *TxnCompilerContext) GetDatabaseId(dbName string, snapshot *plan2.Snapshot) (uint64, error) {
-	dbName, _, err := tcc.ensureDatabaseIsNotEmpty(dbName, false, snapshot)
+// ResolveDatabase retains the engine's absent/ambiguous/error distinction and
+// returns the physical catalog spelling for plans and direct catalog queries.
+func (tcc *TxnCompilerContext) ResolveDatabase(
+	name string, snapshot *plan2.Snapshot,
+) (physicalName string, databaseID uint64, found bool, err error) {
+	name, _, err = tcc.ensureDatabaseIsNotEmpty(name, false, snapshot)
 	if err != nil {
-		return 0, err
+		return "", 0, false, err
 	}
 	tempCtx := tcc.execCtx.reqCtx
 	txn := tcc.GetTxnHandler().GetTxn()
-	// change txn to snapshot txn
 
+	// change txn to snapshot txn
 	if plan2.IsSnapshotValid(snapshot) && snapshot.TS.Less(txn.Txn().SnapshotTS) {
 		txn = txn.CloneSnapshotOp(*snapshot.TS)
 
@@ -447,15 +437,30 @@ func (tcc *TxnCompilerContext) GetDatabaseId(dbName string, snapshot *plan2.Snap
 		}
 	}
 
-	database, err := tcc.GetTxnHandler().GetStorage().Database(tempCtx, dbName, txn)
+	database, err := tcc.GetTxnHandler().GetStorage().Database(tempCtx, name, txn)
+	if err != nil {
+		if moerr.IsMoErrCode(err, moerr.OkExpectedEOB) {
+			return name, 0, false, nil
+		}
+		return "", 0, false, err
+	}
+	databaseID, err = strconv.ParseUint(database.GetDatabaseId(tempCtx), 10, 64)
+	if err != nil {
+		return "", 0, false, moerr.NewInternalErrorf(tempCtx,
+			"The databaseid of '%s' is not a valid number", name)
+	}
+	return resolvedDatabaseName(database, name), databaseID, true, nil
+}
+
+func (tcc *TxnCompilerContext) GetDatabaseId(dbName string, snapshot *plan2.Snapshot) (uint64, error) {
+	_, databaseID, found, err := tcc.ResolveDatabase(dbName, snapshot)
 	if err != nil {
 		return 0, err
 	}
-	databaseId, err := strconv.ParseUint(database.GetDatabaseId(tempCtx), 10, 64)
-	if err != nil {
-		return 0, moerr.NewInternalErrorf(tempCtx, "The databaseid of '%s' is not a valid number", dbName)
+	if !found {
+		return 0, moerr.GetOkExpectedEOB()
 	}
-	return databaseId, nil
+	return databaseID, nil
 }
 
 func (tcc *TxnCompilerContext) GetConfig(varName string, dbName string, tblName string) (string, error) {
@@ -495,16 +500,32 @@ func ShouldSwitchToSysAccount(dbName string, tableName string) bool {
 	return false
 }
 
+// Fold for owner classification. Ordinary objects retain their input name so
+// the engine can reject ambiguity; reserved system pairs are canonicalized.
+func systemRoutingNames(ctx context.Context, dbName, tableName string) (string, string) {
+	if defines.Mode2NameResolutionEnabled(ctx) {
+		return strings.ToLower(dbName), strings.ToLower(tableName)
+	}
+	return dbName, tableName
+}
+
 // getRelation returns the context (maybe updated) and the relation
+func resolvedDatabaseName(db engine.Database, fallback string) string {
+	if named, ok := db.(interface{ GetPhysicalName() string }); ok {
+		return named.GetPhysicalName()
+	}
+	return fallback
+}
+
 func (tcc *TxnCompilerContext) getRelation(
 	dbName string,
 	tableName string,
 	sub *plan.SubscriptionMeta,
 	snapshot *plan2.Snapshot,
-) (context.Context, engine.Relation, error) {
+) (context.Context, string, engine.Relation, error) {
 	dbName, _, err := tcc.ensureDatabaseIsNotEmpty(dbName, false, snapshot)
 	if err != nil {
-		return nil, nil, err
+		return nil, "", nil, err
 	}
 
 	var (
@@ -527,7 +548,8 @@ func (tcc *TxnCompilerContext) getRelation(
 	}
 
 	account := ses.GetTenantInfo()
-	if isClusterTable(dbName, tableName) {
+	routeDB, routeTable := systemRoutingNames(tempCtx, dbName, tableName)
+	if isClusterTable(routeDB, routeTable) {
 		//if it is the cluster table in the general account, switch into the sys account
 		if account != nil && account.GetTenantID() != sysAccountID {
 			tempCtx = defines.AttachAccountId(tempCtx, sysAccountID)
@@ -536,10 +558,16 @@ func (tcc *TxnCompilerContext) getRelation(
 	if sub != nil {
 		tempCtx = defines.AttachAccountId(tempCtx, uint32(sub.AccountId))
 		dbName = sub.DbName
+		routeDB, routeTable = systemRoutingNames(tempCtx, dbName, tableName)
 	}
 
-	if ShouldSwitchToSysAccount(dbName, tableName) {
+	if ShouldSwitchToSysAccount(routeDB, routeTable) {
 		tempCtx = defines.AttachAccountId(tempCtx, uint32(sysAccountID))
+		if defines.Mode2NameResolutionEnabled(tempCtx) {
+			// These reserved names are stored canonically in the sys tenant.
+			// Their database paths do not use the mo_catalog relation fold.
+			dbName, tableName = routeDB, routeTable
+		}
 	}
 
 	start = time.Now()
@@ -556,7 +584,7 @@ func (tcc *TxnCompilerContext) getRelation(
 		// ExpectedEOB means the database is not visible at this snapshot.
 		// Treat as "database not found" so callers handle it like a missing entity.
 		if moerr.IsMoErrCode(err, moerr.OkExpectedEOB) {
-			return nil, nil, nil
+			return nil, "", nil, nil
 		}
 		ses.Error(
 			tempCtx,
@@ -564,23 +592,24 @@ func (tcc *TxnCompilerContext) getRelation(
 			zap.String("db-name", dbName),
 			zap.Error(err),
 		)
-		return nil, nil, err
+		return nil, "", nil, err
 	} else {
 		v2.OpenDBDurationHistogram.Observe(time.Since(start).Seconds())
 	}
+	dbName = resolvedDatabaseName(db, dbName)
 
 	start = time.Now()
 
 	if table, err = db.Relation(tempCtx, tableName, nil); err != nil {
 		// maybe have (if exists)
 		if moerr.IsMoErrCode(err, moerr.ErrNoSuchTable) {
-			return nil, nil, nil
+			return nil, "", nil, nil
 		}
-		return nil, nil, err
+		return nil, "", nil, err
 	}
 	v2.OpenTableDurationHistogram.Observe(time.Since(start).Seconds())
 
-	return tempCtx, table, nil
+	return tempCtx, dbName, table, nil
 }
 
 func (tcc *TxnCompilerContext) recoverLegacyTinyText(
@@ -601,7 +630,7 @@ func (tcc *TxnCompilerContext) recoverLegacyTinyText(
 		if sourceDB == "" {
 			sourceDB = dbName
 		}
-		sourceCtx, relation, err := tcc.getRelation(sourceDB, sourceTable, sub, snapshot)
+		sourceCtx, _, relation, err := tcc.getRelation(sourceDB, sourceTable, sub, snapshot)
 		if err != nil || relation == nil {
 			return nil, err
 		}
@@ -702,6 +731,16 @@ func (tcc *TxnCompilerContext) ResolveSubscriptionTableById(tableId uint64, subM
 	return obj, tableDef, nil
 }
 
+func (tcc *TxnCompilerContext) resolveTemporaryAlias(dbName, alias string) (string, bool, error) {
+	if resolver, ok := tcc.GetSession().(interface {
+		ResolveTempTable(context.Context, string, string) (string, bool, error)
+	}); ok {
+		return resolver.ResolveTempTable(tcc.GetContext(), dbName, alias)
+	}
+	realName, found := tcc.GetSession().GetTempTable(dbName, alias)
+	return realName, found, nil
+}
+
 func (tcc *TxnCompilerContext) Resolve(dbName string, tableName string, snapshot *plan2.Snapshot) (*plan2.ObjectRef, *plan2.TableDef, error) {
 	start := time.Now()
 	defer func() {
@@ -724,26 +763,43 @@ func (tcc *TxnCompilerContext) Resolve(dbName string, tableName string, snapshot
 		return nil, nil, err
 	}
 
-	if sub != nil {
-		isSubMetaTable := pubsub.InSubMetaTables(sub, tableName)
-		if !isSubMetaTable {
-			return nil, nil, nil
+	// Temporary aliases belong to the physical database identity. Only pay
+	// for this extra database resolution when the session owns temp tables.
+	if sub == nil && defines.Mode2NameResolutionEnabled(tcc.GetContext()) {
+		if owner, ok := tcc.GetSession().(interface{ HasTemporaryTables() bool }); ok && owner.HasTemporaryTables() {
+			physicalName, _, found, resolveErr := tcc.ResolveDatabase(dbName, snapshot)
+			if resolveErr != nil {
+				return nil, nil, resolveErr
+			}
+			if found {
+				dbName = physicalName
+			}
+		}
+	}
+	// Check if it is a temporary table in the current session.
+	isTmpTable := false
+	if sub == nil {
+		realName, found, resolveErr := tcc.resolveTemporaryAlias(dbName, tableName)
+		if resolveErr != nil {
+			return nil, nil, resolveErr
+		}
+		if found {
+			tableName, isTmpTable = realName, true
 		}
 	}
 
-	// Check if it is a temporary table in the current session
-	realName, isTmpTable := tcc.GetSession().GetTempTable(dbName, tableName)
-	if isTmpTable {
-		tableName = realName
-	}
-
-	ctx, table, err := tcc.getRelation(dbName, tableName, sub, snapshot)
+	ctx, physicalDBName, table, err := tcc.getRelation(dbName, tableName, sub, snapshot)
 	if err != nil {
 		return nil, nil, err
 	}
 	if table == nil {
 		return nil, nil, nil
 	}
+	if sub != nil && !pubsub.InSubMetaTables(sub, table.GetTableName()) {
+		return nil, nil, nil
+	}
+	dbName = physicalDBName
+	tableName = table.GetTableName()
 	tableDef := plan2.CloneTableDefForPlan(table.GetTableDef(ctx), true)
 	if err := tcc.recoverLegacyTinyText(ctx, dbName, tableDef, sub, snapshot); err != nil {
 		return nil, nil, err
@@ -802,18 +858,22 @@ func (tcc *TxnCompilerContext) ResolveIndexTableByRef(
 	}
 
 	// Check if it is a temporary table in the current session
-	realName, isTmpTable := tcc.GetSession().GetTempTable(ref.SchemaName, tblName)
+	realName, isTmpTable, err := tcc.resolveTemporaryAlias(ref.SchemaName, tblName)
+	if err != nil {
+		return nil, nil, err
+	}
 	if isTmpTable {
 		tblName = realName
 	}
 
-	ctx, table, err := tcc.getRelation(ref.SchemaName, tblName, subMeta, snapshot)
+	ctx, _, table, err := tcc.getRelation(ref.SchemaName, tblName, subMeta, snapshot)
 	if err != nil {
 		return nil, nil, err
 	}
 	if table == nil {
 		return nil, nil, moerr.NewNoSuchTable(ctx, ref.SchemaName, tblName)
 	}
+	tblName = table.GetTableName()
 
 	tableID := int64(table.GetTableID(ctx))
 	obj := &plan2.ObjectRef{
@@ -1369,21 +1429,21 @@ func (tcc *TxnCompilerContext) doStatsHeavyWork(obj *plan2.ObjectRef, snapshot *
 	dbName := obj.GetSchemaName()
 	tableName := obj.GetObjName()
 
-	// Resolve temporary table alias: the ObjectRef may carry the original
-	// user-visible name while the real engine name is the session-scoped
-	// temp name.  Without this lookup Stats() would fail with "no such table".
-	if realName, ok := tcc.GetSession().GetTempTable(dbName, tableName); ok {
-		tableName = realName
-	}
-
 	// 1. Check database and subscription
 	checkSub := obj.PubInfo == nil
 	dbName, sub, err := tcc.ensureDatabaseIsNotEmpty(dbName, checkSub, snapshot)
 	if err != nil {
 		return nil, err
 	}
-	if sub != nil && !pubsub.InSubMetaTables(sub, tableName) {
-		return nil, moerr.NewInternalErrorNoCtxf("table %s not found in publication %s", tableName, sub.Name)
+	// Only a local relation may be shadowed by a session temporary table.
+	if checkSub && sub == nil {
+		realName, found, resolveErr := tcc.resolveTemporaryAlias(dbName, tableName)
+		if resolveErr != nil {
+			return nil, resolveErr
+		}
+		if found {
+			tableName = realName
+		}
 	}
 	if !checkSub {
 		sub = &plan.SubscriptionMeta{
@@ -1393,12 +1453,15 @@ func (tcc *TxnCompilerContext) doStatsHeavyWork(obj *plan2.ObjectRef, snapshot *
 	}
 
 	// 2. Get table relation
-	ctx, table, err := tcc.getRelation(dbName, tableName, sub, snapshot)
+	ctx, _, table, err := tcc.getRelation(dbName, tableName, sub, snapshot)
 	if err != nil {
 		return nil, err
 	}
 	if table == nil {
 		return nil, moerr.NewNoSuchTable(ctx, dbName, tableName)
+	}
+	if checkSub && sub != nil && !pubsub.InSubMetaTables(sub, table.GetTableName()) {
+		return nil, moerr.NewInternalErrorNoCtxf("table %s not found in publication %s", tableName, sub.Name)
 	}
 
 	// 4. Call table.Stats() to get new data

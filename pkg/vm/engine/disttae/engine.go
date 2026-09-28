@@ -417,6 +417,9 @@ func (e *Engine) Database(
 	if err != nil {
 		return nil, err
 	}
+	if defines.Mode2NameResolutionEnabled(ctx) {
+		return e.resolveMode2Database(ctx, name, op, txn)
+	}
 	if name == catalog.MO_CATALOG {
 		db := &txnDatabase{
 			op:           op,
@@ -723,6 +726,9 @@ func (e *Engine) Delete(ctx context.Context, name string, op client.TxnOperator)
 	if err != nil {
 		return err
 	}
+	// All catalog writes and transaction keys use the resolved physical name.
+	// A mode-2 alias is only an input spelling, never a storage key.
+	name = toDelDB.(*txnDatabase).databaseName
 
 	// delete all tables of the database
 	rels, err := toDelDB.Relations(ctx)

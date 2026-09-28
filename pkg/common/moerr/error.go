@@ -145,6 +145,9 @@ const (
 	// ErrCannotConvertString preserves MySQL's binary-to-text conversion error
 	// when a character function receives invalid UTF-8 bytes.
 	ErrCannotConvertString uint16 = 20337
+	// ErrAmbiguousIdentifier is returned when mode-2 folding maps one input to
+	// multiple visible physical catalog objects.
+	ErrAmbiguousIdentifier uint16 = 20338
 
 	// Group 4: unexpected state and io errors
 	ErrInvalidState                             uint16 = 20400
@@ -504,6 +507,7 @@ var errorMsgRefer = map[uint16]moErrorMsgItem{
 	ErrInvalidBitwiseAggregateOperandsSize: {ER_INVALID_BITWISE_AGGREGATE_OPERANDS_SIZE, []string{MySQLDefaultSqlState}, "Aggregate bitwise functions cannot accept arguments longer than 511 bytes; consider using the SUBSTRING() function"},
 	ErrInvalidBitwiseOperandsSize:          {ER_INVALID_BITWISE_OPERANDS_SIZE, []string{MySQLDefaultSqlState}, "Binary operands of bitwise operators must be of equal length"},
 	ErrCannotConvertString:                 {ER_CANNOT_CONVERT_STRING, []string{MySQLDefaultSqlState}, "Cannot convert string '%.64s' from %s to %s"},
+	ErrAmbiguousIdentifier:                 {ER_UNKNOWN_ERROR, []string{MySQLDefaultSqlState}, "ambiguous %s name %s"},
 	ErrWrongParamCountToNativeFct:          {ER_WRONG_PARAMCOUNT_TO_NATIVE_FCT, []string{"42000"}, "Incorrect parameter count in the call to native function '%-.192s'"},
 	ErrAESInvalidIV:                        {ER_AES_INVALID_IV, []string{"HY000"}, "The initialization vector supplied to %s is too short. Must be at least %d bytes long"},
 	ErrUserLockWrongName:                   {ER_USER_LOCK_WRONG_NAME, []string{"42000"}, "Incorrect user-level lock name '%-.192s'."},
@@ -1171,6 +1175,10 @@ func NewInvalidInputf(ctx context.Context, format string, args ...any) *Error {
 
 func NewInvalidInput(ctx context.Context, msg string) *Error {
 	return newError(ctx, ErrInvalidInput, msg)
+}
+
+func NewAmbiguousIdentifier(ctx context.Context, kind, name string) *Error {
+	return newError(ctx, ErrAmbiguousIdentifier, kind, name)
 }
 
 // NewFtMatchingKeyNotFound reports a MATCH() AGAINST() that no FULLTEXT index can serve.

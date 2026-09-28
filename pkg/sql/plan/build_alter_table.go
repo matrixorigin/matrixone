@@ -29,6 +29,7 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/common/sqlquote"
 	"github.com/matrixorigin/matrixone/pkg/container/types"
 	"github.com/matrixorigin/matrixone/pkg/container/vector"
+	"github.com/matrixorigin/matrixone/pkg/defines"
 	indexplugin "github.com/matrixorigin/matrixone/pkg/indexplugin"
 	"github.com/matrixorigin/matrixone/pkg/logutil"
 	"github.com/matrixorigin/matrixone/pkg/pb/plan"
@@ -248,12 +249,18 @@ func buildAlterTableCopy(stmt *tree.AlterTable, cctx CompilerContext) (*Plan, er
 	}
 
 	var snapshot *Snapshot
-	_, tableDef, err := cctx.Resolve(schemaName, tableName, snapshot)
+	obj, tableDef, err := cctx.Resolve(schemaName, tableName, snapshot)
 	if err != nil {
 		return nil, err
 	}
 	if tableDef == nil {
 		return nil, moerr.NewNoSuchTable(ctx, schemaName, tableName)
+	}
+	if defines.Mode2NameResolutionEnabled(ctx) && obj != nil {
+		schemaName = obj.SchemaName
+		if !tableDef.IsTemporary {
+			tableName = obj.ObjName
+		}
 	}
 
 	if tableDef.IsTemporary {
@@ -1272,7 +1279,11 @@ func buildAlterTable(stmt *tree.AlterTable, ctx CompilerContext) (*Plan, error) 
 	}
 	for _, option := range stmt.Options {
 		if rename, ok := option.(*tree.AlterOptionTableName); ok {
-			if err := rejectCrossDatabaseTableRename(ctx.GetContext(), schemaName, rename); err != nil {
+			renameSourceDatabase := schemaName
+			if defines.Mode2NameResolutionEnabled(ctx.GetContext()) && objRef != nil {
+				renameSourceDatabase = objRef.SchemaName
+			}
+			if err := rejectCrossDatabaseTableRename(ctx, renameSourceDatabase, rename); err != nil {
 				return nil, err
 			}
 		}
