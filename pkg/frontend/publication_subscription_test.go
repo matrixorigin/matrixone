@@ -2494,6 +2494,14 @@ func Test_getSubscriptionMeta_ErrorPropagation(t *testing.T) {
 		require.Equal(t, 0, logs.Len())
 	})
 
+	t.Run("preserves ambiguous mode-2 database error", func(t *testing.T) {
+		ambiguous := moerr.NewAmbiguousIdentifier(ctx, "database", "test_db")
+		mockEngine.EXPECT().Database(gomock.Any(), "test_db", mockTxn).Return(nil, ambiguous)
+
+		_, err := getSubscriptionMeta(ctx, "test_db", ses, mockTxn, mockBh)
+		require.ErrorIs(t, err, ambiguous)
+	})
+
 	t.Run("returns NoDB when Database fails with internal error", func(t *testing.T) {
 		internalErr := moerr.NewInternalErrorNoCtx("engine failure")
 		mockEngine.EXPECT().Database(gomock.Any(), "test_db", mockTxn).Return(nil, internalErr)
