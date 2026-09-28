@@ -49,6 +49,51 @@ func TestRestoreDDLContext(t *testing.T) {
 	require.ErrorContains(t, err, "missing historical ownership")
 }
 
+func TestPrepareRestoreOwnershipRebindsCurrentPrincipals(t *testing.T) {
+	const databaseQuery = "select datname, '', cast(creator as char), cast(owner as char) from mo_catalog.mo_database {MO_TS = 42} where account_id = 10 and datname = 'app'"
+	const tableQuery = "select reldatabase, relname, cast(creator as char), cast(owner as char) from mo_catalog.mo_tables {MO_TS = 42} where account_id = 10 and reldatabase = 'app' and relname = 't'"
+	const oldUsers = "select cast(user_id as char), user_name from mo_catalog.mo_user {MO_TS = 42}"
+	const currentUsers = "select cast(user_id as char), user_name from mo_catalog.mo_user"
+	const oldRoles = "select cast(role_id as char), role_name from mo_catalog.mo_role {MO_TS = 42}"
+	const currentRoles = "select cast(role_id as char), role_name from mo_catalog.mo_role"
+
+	bh := &backgroundExecTest{}
+	bh.init()
+	setRows := func(query string, columns []string, rows [][]interface{}) {
+		bh.sql2result[query] = newMrsForRestoreStringRows(columns, rows)
+	}
+	setRows(databaseQuery, []string{"database", "table", "creator", "owner"}, [][]interface{}{{"app", "", "1", "2"}})
+	setRows(tableQuery, []string{"database", "table", "creator", "owner"}, [][]interface{}{{"app", "t", "3", "4"}})
+	setRows(oldUsers, []string{"id", "name"}, [][]interface{}{{"1", "creator"}, {"3", "editor"}})
+	setRows(currentUsers, []string{"id", "name"}, [][]interface{}{{"11", "creator"}, {"33", "editor"}})
+	setRows(oldRoles, []string{"id", "name"}, [][]interface{}{{"2", "db_owner"}, {"4", "table_owner"}})
+	setRows(currentRoles, []string{"id", "name"}, [][]interface{}{{"22", "db_owner"}, {"44", "table_owner"}})
+
+	ctx, err := prepareRestoreOwnership(t.Context(), bh, 42, 10, 20, "app", "t")
+	require.NoError(t, err)
+	for _, tc := range []struct {
+		table string
+		user  uint32
+		role  uint32
+	}{
+		{"", 11, 22},
+		{"t", 33, 44},
+	} {
+		ownerCtx, err := restoreDDLContext(ctx, "app", tc.table)
+		require.NoError(t, err)
+		require.Equal(t, tc.user, defines.GetUserId(ownerCtx))
+		require.Equal(t, tc.role, defines.GetRoleId(ownerCtx))
+	}
+
+	setRows(currentUsers, []string{"id", "name"}, [][]interface{}{{"11", "creator"}})
+	_, err = prepareRestoreOwnership(t.Context(), bh, 42, 10, 20, "app", "t")
+	require.ErrorContains(t, err, "creator no longer exists")
+	setRows(currentUsers, []string{"id", "name"}, [][]interface{}{{"11", "creator"}, {"33", "editor"}})
+	setRows(currentRoles, []string{"id", "name"}, [][]interface{}{{"22", "db_owner"}})
+	_, err = prepareRestoreOwnership(t.Context(), bh, 42, 10, 20, "app", "t")
+	require.ErrorContains(t, err, "owner role no longer exists")
+}
+
 func TestPartialRestoreRebindsOnlyCurrentScopedIDs(t *testing.T) {
 	const databases = "select cast(dat_id as char), datname from mo_catalog.mo_database where account_id = 20 and datname = 'app'"
 	const tables = "select cast(coalesce(rel_logical_id, rel_id) as char), reldatabase, relname, relkind from mo_catalog.mo_tables where account_id = 20 and reldatabase = 'app'"
