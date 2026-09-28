@@ -16,6 +16,7 @@ package fulltext2
 
 import (
 	"bytes"
+	"encoding/binary"
 	"encoding/json"
 	"math"
 	"sort"
@@ -144,6 +145,38 @@ func TestIntegerAndFloatLeavesShareOneEncoding(t *testing.T) {
 	big := `{"b":9007199254740993}` // 2^53+1
 	require.Equal(t, JSONFloatTerm("b", 9007199254740993),
 		termsOf(t, big, opt)[0])
+
+	// a number above int64 max is parsed as an UNSIGNED leaf, but it must still
+	// encode through the same float64 normalization as any other JSON number
+	require.Equal(t, JSONFloatTerm("b", float64(uint64(18446744073709551615))),
+		termsOf(t, `{"b":18446744073709551615}`, opt)[0])
+}
+
+// decimalJson builds a scalar TpCodeDecimal document carrying the decimal TEXT,
+// the layout TokenizeLeaves reads as a LeafDecimal. A decimal reaches JSON by
+// casting a SQL decimal into it, never by text parsing, so it cannot be produced
+// with ParseFromString.
+func decimalJson(s string) bytejson.ByteJson {
+	data := make([]byte, binary.MaxVarintLen64+len(s))
+	n := binary.PutUvarint(data, uint64(len(s)))
+	copy(data[n:], s)
+	return bytejson.ByteJson{Type: bytejson.TpCodeDecimal, Data: data[:n+len(s)]}
+}
+
+// A DECIMAL leaf is numeric to both extractors, so it routes through the SAME
+// float64 normalization as an equal float leaf -- including #29279's signed-zero
+// collapse. An unparsable decimal text yields no term rather than a wrong one.
+func TestDecimalLeafSharesNumericEncoding(t *testing.T) {
+	opt := JSONTermOptions{IncludeKeys: true}
+
+	decTerms := JSONTupleTerms(decimalJson("3.14"), opt)
+	require.Equal(t, termsOf(t, `3.14`, opt), decTerms)
+
+	// -0 decimal collapses to the same term as +0, matching the float zero.
+	require.Equal(t, termsOf(t, `0`, opt), JSONTupleTerms(decimalJson("-0"), opt))
+
+	// unparsable decimal text emits nothing.
+	require.Empty(t, JSONTupleTerms(decimalJson("not-a-number"), opt))
 }
 
 // Negative and zero values must keep ordering across the sign boundary.
