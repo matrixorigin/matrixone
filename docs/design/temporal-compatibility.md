@@ -297,7 +297,7 @@ execution. The proof reaches physical compilation and retry, and is renewed on
 each execution. Neither the proof nor the specialized plan is published into
 the reusable prepared-plan cache, and probing publishes no statement warning.
 
-Proposed amendment for issue #29429 (subject to its design review): an
+Issue #29429 amendment (approved and implemented): an
 additional optimized *parameterized template* may be built from the original
 PREPARE statement while no execution parameter values are attached. It carries
 no binding proof or value-derived plan state. Each EXECUTE must prove the

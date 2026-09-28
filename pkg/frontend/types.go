@@ -364,10 +364,28 @@ type PrepareStmt struct {
 	// numericPrefixConsumer belongs to numericPrefixConsumerPlan. Prepared plans
 	// are immutable within one generation; replacing the plan invalidates this
 	// cached capability and refreshes it once before execution.
-	numericPrefixConsumerPlan     *plan.Plan
-	numericPrefixConsumer         bool
-	joinDiagnosticCandidatePlan   *plan.Plan
-	joinDiagnosticCandidate       bool
+	numericPrefixConsumerPlan   *plan.Plan
+	numericPrefixConsumer       bool
+	joinDiagnosticCandidatePlan *plan.Plan
+	joinDiagnosticCandidate     bool
+	joinDiagnosticNeedsTemplate bool
+	// Diagnostic candidates belong to the conservative and unbound optimized
+	// plans in this PreparePlan generation. A binding proof is never cached.
+	joinDiagnosticCandidates []*plan.Expr
+	diagnosticSafePlan       *plan.Plan
+	diagnosticSafeCandidates []*plan.Expr
+	// A rejected unbound template is not rebuilt for every safe binding in the
+	// same prepared generation. Reprepare resets this conservative decision.
+	diagnosticSafeRejected bool
+	// The lazy diagnostic template must be planned under the optimizer hints
+	// captured with its conservative PREPARE generation.
+	preparedOptimizerGlobalHints    string
+	preparedOptimizerStatementHints string
+	// Percentile configuration is fixed by a value during compilation. Cache
+	// this static trait with the conservative generation rather than walking
+	// the plan on every EXECUTE.
+	percentileParamPlan           *plan.Plan
+	hasPercentileParams           bool
 	directResultParamPositions    []int32
 	directResultParamPositionsSet bool
 	// fixedIntegerParamPositions identifies parameters with a fixed unsigned-
@@ -426,9 +444,10 @@ type PrepareStmt struct {
 	// stable parameter semantic category. The cached runtime plan retains
 	// ParamRefs, so equivalent values reuse the compile without embedding the
 	// preceding execution's literal.
-	runtimeSpecializationKey string
-	runtimePlan              *plan.Plan
-	runtimeCompile           *compile.Compile
+	runtimeSpecializationKey    string
+	runtimePlan                 *plan.Plan
+	runtimeDiagnosticCandidates []*plan.Expr
+	runtimeCompile              *compile.Compile
 
 	// schedulingSQLMode freezes the lexical mode used when Sql was prepared.
 	// EXECUTE must not reinterpret optimizer comments after session sql_mode
@@ -861,6 +880,7 @@ func (prepareStmt *PrepareStmt) installRuntimeSpecializationCache(
 	}
 	prepareStmt.runtimeSpecializationKey = key
 	prepareStmt.runtimePlan = runtimePlan
+	prepareStmt.runtimeDiagnosticCandidates = plan2.PreparedPlanRuntimeDiagnosticCandidates(runtimePlan)
 	prepareStmt.runtimeCompile = runtimeCompile
 	if oldRuntimeCompile == runtimeCompile {
 		return nil
@@ -875,6 +895,7 @@ func (prepareStmt *PrepareStmt) clearRuntimeSpecializationCache() {
 	oldRuntimeCompile := prepareStmt.runtimeCompile
 	prepareStmt.runtimeSpecializationKey = ""
 	prepareStmt.runtimePlan = nil
+	prepareStmt.runtimeDiagnosticCandidates = nil
 	prepareStmt.runtimeCompile = nil
 	prepareStmt.releaseRuntimeCompile(oldRuntimeCompile)
 }
@@ -911,6 +932,14 @@ func (prepareStmt *PrepareStmt) Close() {
 	}
 	prepareStmt.directResultParamPositions = nil
 	prepareStmt.directResultParamPositionsSet = false
+	prepareStmt.joinDiagnosticCandidatePlan = nil
+	prepareStmt.joinDiagnosticCandidates = nil
+	prepareStmt.diagnosticSafePlan = nil
+	prepareStmt.diagnosticSafeCandidates = nil
+	prepareStmt.diagnosticSafeRejected = false
+	prepareStmt.preparedOptimizerGlobalHints = ""
+	prepareStmt.preparedOptimizerStatementHints = ""
+	prepareStmt.percentileParamPlan = nil
 	prepareStmt.remapDb = nil
 	prepareStmt.getFromSendLongData = nil
 }

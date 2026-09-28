@@ -3091,6 +3091,8 @@ func createPrepareStmtInSession(
 
 	fixedIntegerParamPositions, hasPaginationParams, hasLagLeadParams :=
 		preparedFixedIntegerParamPositions(prepareControl.Plan)
+	optimizerGlobalHints, optimizerStatementHints :=
+		preparedOptimizerHintsSnapshot(executionSes.GetTxnCompileCtx())
 	prepareStmt := &PrepareStmt{
 		groupConcatMaxLenFloor:   groupConcatFloor,
 		Name:                     preparePlan.GetDcl().GetPrepare().GetName(),
@@ -3126,11 +3128,13 @@ func createPrepareStmtInSession(
 			prepareControl.Plan),
 		jsonMemberOfParamPositions: plan2.PreparedJSONMemberOfParamPositions(
 			prepareControl.Plan),
-		fixedIntegerParamPositions: fixedIntegerParamPositions,
-		hasPaginationParams:        hasPaginationParams,
-		hasLagLeadParams:           hasLagLeadParams,
-		getFromSendLongData:        make(map[int]struct{}),
-		schedulingSQLMode:          schedulingSQLMode,
+		fixedIntegerParamPositions:      fixedIntegerParamPositions,
+		hasPaginationParams:             hasPaginationParams,
+		hasLagLeadParams:                hasLagLeadParams,
+		getFromSendLongData:             make(map[int]struct{}),
+		schedulingSQLMode:               schedulingSQLMode,
+		preparedOptimizerGlobalHints:    optimizerGlobalHints,
+		preparedOptimizerStatementHints: optimizerStatementHints,
 	}
 	prepareStmt.refreshNumericPrefixConsumer(
 		prepareControl.Plan, len(prepareControl.ParamTypes))

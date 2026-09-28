@@ -314,6 +314,7 @@ func newPreparedExecuteEnvForSQLWithCompilerContext(
 
 	fixedIntegerParamPositions, hasPaginationParams, hasLagLeadParams :=
 		preparedFixedIntegerParamPositions(preparePlan.GetDcl().GetPrepare().Plan)
+	optimizerGlobalHints, optimizerStatementHints := preparedOptimizerHintsSnapshot(compilerContext)
 	prepareStmt := &PrepareStmt{
 		Name:                       stmtName,
 		Sql:                        prepareString.Sql,
@@ -336,8 +337,10 @@ func newPreparedExecuteEnvForSQLWithCompilerContext(
 		fixedIntegerParamPositions: fixedIntegerParamPositions,
 		bitCountOverloadParamPositions: plan2.PreparedPlanBitCountFallbackParamPositions(
 			preparePlan.GetDcl().GetPrepare().Plan),
-		hasPaginationParams: hasPaginationParams,
-		hasLagLeadParams:    hasLagLeadParams,
+		hasPaginationParams:             hasPaginationParams,
+		hasLagLeadParams:                hasLagLeadParams,
+		preparedOptimizerGlobalHints:    optimizerGlobalHints,
+		preparedOptimizerStatementHints: optimizerStatementHints,
 	}
 	prepareStmt.refreshNumericPrefixConsumer(
 		preparePlan.GetDcl().GetPrepare().Plan,
@@ -3660,6 +3663,176 @@ func TestPreparedExplicitDoubleAbsReusesOriginalCachedCompile(t *testing.T) {
 	floatParams.Free(cw.proc.Mp())
 }
 
+func TestPreparedDiagnosticFreeFilterReusesPlan(t *testing.T) {
+	ses, prepareStmt, cw, execCtx := newPreparedExecuteEnvForSQL(
+		t, 229, "select n_nationkey from (select 1 as n_nationkey) t where n_nationkey = ?")
+	defer func() {
+		cw.proc.SetPrepareParams(nil)
+		prepareStmt.Close()
+	}()
+	conservative := prepareStmt.PreparePlan.GetDcl().GetPrepare().Plan
+	require.True(t, plan2.PreparedPlanHasJoinParameterDiagnostic(conservative))
+	install := func(value string, mysqlType defines.MysqlType) {
+		old := prepareStmt.params
+		if old != nil {
+			if cw.proc.GetPrepareParams() == old {
+				cw.proc.SetPrepareParams(nil)
+			}
+			old.Free(cw.proc.Mp())
+		}
+		params := vector.NewVec(types.T_text.ToType())
+		require.NoError(t, vector.AppendBytes(params, []byte(value), false, cw.proc.Mp()))
+		prepareStmt.params = params
+		prepareStmt.ParamTypes = []byte{byte(mysqlType), 0}
+	}
+	execute := func() (*compile.Compile, *plan.Plan) {
+		comp, p, stmt, _, owned, err := initExecuteStmtParam(execCtx, ses, cw, nil, prepareStmt.Name)
+		if owned && stmt != nil {
+			stmt.Free()
+		}
+		require.NoError(t, err)
+		return comp, p
+	}
+	install("7", defines.MYSQL_TYPE_LONGLONG)
+	_, selective := execute()
+	require.NotSame(t, conservative, selective)
+	require.Same(t, selective, cw.runtimeCachePlan)
+	require.Nil(t, prepareStmt.diagnosticSafePlan, "a template must wait for successful physical compilation")
+	cachedCompile := compile.NewCompile("", "", prepareStmt.Sql, "", "", nil,
+		cw.proc, prepareStmt.PrepareStmt, false, nil, time.Now())
+	cw.publishDiagnosticSafeTemplate()
+	require.Same(t, selective, prepareStmt.diagnosticSafePlan)
+	require.True(t, cw.installRuntimeCacheCandidate(cachedCompile))
+	install("8", defines.MYSQL_TYPE_LONGLONG)
+	comp, p := execute()
+	require.Same(t, cachedCompile, comp)
+	require.Same(t, selective, p)
+	install("invalid", defines.MYSQL_TYPE_VAR_STRING)
+	_, p = execute()
+	require.NotSame(t, selective, p)
+	install("9", defines.MYSQL_TYPE_LONGLONG)
+	comp, p = execute()
+	require.Same(t, cachedCompile, comp)
+	require.Same(t, selective, p)
+}
+
+func TestPreparedDiagnosticFreeUnboundTemplateRetainsParameters(t *testing.T) {
+	ses, prepared, cw, execCtx := newPreparedExecuteEnvForSQL(
+		t, 29429, "select x.n from (select 1 as n) x join (select 2 as n) y on x.n = ?")
+	t.Cleanup(func() {
+		cw.proc.SetPrepareParams(nil)
+		prepared.Close()
+	})
+	original := prepared.PreparePlan.GetDcl().GetPrepare()
+	require.True(t, plan2.PreparedPlanHasJoinParameterDiagnostic(original.Plan))
+	params := vector.NewVec(types.T_text.ToType())
+	require.NoError(t, vector.AppendBytes(params, []byte("1"), false, cw.proc.Mp()))
+	cw.proc.SetPrepareParams(params)
+	t.Cleanup(func() { params.Free(cw.proc.Mp()) })
+
+	bound := cw.proc.DetachPrepareParams()
+	var rebuilt *plan.Plan
+	var err error
+	func() {
+		defer cw.proc.RestorePrepareParams(bound)
+		require.Nil(t, cw.proc.GetPrepareParams())
+		rebuilt, err = withPreparedJoinDiagnosticFreeContext(
+			execCtx.reqCtx, ses.GetTxnCompileCtx(),
+			func() (*plan.Plan, error) { return rebuildPreparePlan(execCtx, ses, prepared, buildPlan) })
+	}()
+	require.NoError(t, err)
+	require.Same(t, params, cw.proc.GetPrepareParams())
+	require.NotNil(t, rebuilt.GetDcl().GetPrepare())
+	require.Equal(t, original.ParamTypes, rebuilt.GetDcl().GetPrepare().ParamTypes)
+	require.True(t, admitUnboundPreparedDiagnosticTemplate(
+		original.Plan, rebuilt.GetDcl().GetPrepare().Plan, len(original.ParamTypes)))
+	positions := make(map[int32]bool)
+	var predicateParam *plan.ParamRef
+	require.NoError(t, plan.VisitExpressionsInOwner(rebuilt.GetDcl().GetPrepare().Plan, func(root *plan.Expr) error {
+		return plan.VisitExprTree(root, func(expr *plan.Expr) error {
+			if param := expr.GetP(); param != nil {
+				positions[param.Pos] = true
+				predicateParam = param
+			}
+			return nil
+		})
+	}))
+	require.True(t, positions[0], "unbound safe template must retain the predicate marker")
+	require.NotNil(t, predicateParam)
+	predicateParam.Pos = int32(len(original.ParamTypes))
+	require.False(t, admitUnboundPreparedDiagnosticTemplate(
+		original.Plan, rebuilt.GetDcl().GetPrepare().Plan, len(original.ParamTypes)),
+		"a template with a missing or out-of-range parameter cannot be cached")
+	predicateParam.Pos = 0
+	rebuilt.GetDcl().GetPrepare().Plan.GetQuery().HasForeignKeyAction = true
+	require.False(t, admitUnboundPreparedDiagnosticTemplate(
+		original.Plan, rebuilt.GetDcl().GetPrepare().Plan, len(original.ParamTypes)),
+		"a template with changed compile-cache traits cannot be cached")
+}
+
+func TestPreparedDiagnosticTemplateRejectsCompactedParameterSet(t *testing.T) {
+	ses, prepared, cw, execCtx := newPreparedExecuteEnvForSQL(
+		t, 29430, "select x.n from (select 1 as n) x join (select 2 as n) y on x.n = ? and y.n = ?")
+	t.Cleanup(func() {
+		cw.proc.SetPrepareParams(nil)
+		prepared.Close()
+	})
+	original := prepared.PreparePlan.GetDcl().GetPrepare()
+	require.Len(t, original.ParamTypes, 2)
+	rebuilt, err := buildUnboundPreparedDiagnosticSafePlan(execCtx, ses, prepared, cw.proc)
+	require.NoError(t, err)
+	candidate := rebuilt.GetDcl().GetPrepare()
+	require.Equal(t, original.ParamTypes, candidate.ParamTypes)
+	require.True(t, admitUnboundPreparedDiagnosticTemplate(original.Plan, candidate.Plan, 2))
+
+	// Equal ParamTypes cannot distinguish two equal-type parameters after
+	// ordinal compaction. A candidate that retains only position 0 must fail.
+	require.NoError(t, plan.VisitExpressionsInOwner(candidate.Plan.GetQuery(), func(root *plan.Expr) error {
+		return plan.VisitExprTree(root, func(expr *plan.Expr) error {
+			if param := expr.GetP(); param != nil && param.Pos == 1 {
+				param.Pos = 0
+			}
+			return nil
+		})
+	}))
+	require.False(t, admitUnboundPreparedDiagnosticTemplate(original.Plan, candidate.Plan, 2))
+}
+
+func TestPreparedDiagnosticTemplateRejectsChangedOptimizerHints(t *testing.T) {
+	optimizer := plan2.NewMockOptimizer(false)
+	compilerCtx := optimizer.CurrentContext()
+	rt := moruntime.ServiceRuntime(compilerCtx.GetProcess().GetService())
+	rt.SetGlobalVariables("optimizer_hints", "blockFilter=2")
+	t.Cleanup(func() { rt.SetGlobalVariables("optimizer_hints", "") })
+	ses, prepared, cw, execCtx := newPreparedExecuteEnvForSQLWithCompilerContext(
+		t, 29431,
+		"select x.n from (select 1 as n) x join (select 2 as n) y on x.n = ?",
+		compilerCtx)
+	t.Cleanup(func() {
+		cw.proc.SetPrepareParams(nil)
+		prepared.Close()
+	})
+	original := prepared.PreparePlan.GetDcl().GetPrepare()
+	require.Equal(t, "blockFilter=2", prepared.preparedOptimizerGlobalHints)
+	// The first safe EXECUTE must keep its conservative generation when a
+	// global hint changed before the lazy template could be constructed.
+	rt.SetGlobalVariables("optimizer_hints", "blockFilter=1")
+	currentGlobalHints, _ := preparedOptimizerHintsSnapshot(ses.GetTxnCompileCtx())
+	require.Equal(t, "blockFilter=1", currentGlobalHints)
+	prepared.params = vector.NewVec(types.T_text.ToType())
+	require.NoError(t, vector.AppendBytes(prepared.params, []byte("1"), false, cw.proc.Mp()))
+	prepared.ParamTypes = []byte{byte(defines.MYSQL_TYPE_LONGLONG), 0}
+	_, executionPlan, stmt, _, owned, err := initExecuteStmtParam(execCtx, ses, cw, nil, prepared.Name)
+	if owned && stmt != nil {
+		stmt.Free()
+	}
+	require.NoError(t, err)
+	require.True(t, prepared.joinDiagnosticNeedsTemplate)
+	require.True(t, prepared.diagnosticSafeRejected)
+	require.Same(t, original.Plan, executionPlan)
+	require.Nil(t, cw.pendingDiagnosticSafePlan)
+}
+
 func TestPreparedArithmeticDMLReusesStableRuntimeCategory(t *testing.T) {
 	optimizer := plan2.NewMockOptimizer(false)
 	ses, prepareStmt, cw, execCtx := newPreparedExecuteEnvForSQLWithCompilerContext(
@@ -6687,4 +6860,57 @@ func TestBuildExecuteUserParamsPreservesExplicitTextOverride(t *testing.T) {
 	param := values[0].(plan2.ParamValue)
 	require.Equal(t, types.RuntimeStringText, param.RuntimeStringDomain)
 	require.Equal(t, types.NewWithCharset(types.T_varbinary, 16, 0, types.CharsetBinary), param.SourceType)
+}
+
+func TestPreparedBinaryIntegerCastDiagnosticProofBoundary(t *testing.T) {
+	proc := testutil.NewProcess(t)
+	t.Cleanup(proc.Free)
+	for _, tc := range []struct {
+		name      string
+		value     string
+		mysqlType defines.MysqlType
+		unsigned  bool
+		target    types.T
+		null      bool
+		longData  bool
+		binary    bool
+		want      bool
+	}{
+		{"short max", "32767", defines.MYSQL_TYPE_SHORT, false, types.T_int16, false, false, true, true},
+		{"short min widening", "-32768", defines.MYSQL_TYPE_SHORT, false, types.T_int32, false, false, true, true},
+		{"short overflow", "32768", defines.MYSQL_TYPE_SHORT, false, types.T_int32, false, false, true, false},
+		{"long min widening", "-2147483648", defines.MYSQL_TYPE_LONG, false, types.T_int64, false, false, true, true},
+		{"long max", "2147483647", defines.MYSQL_TYPE_LONG, false, types.T_int32, false, false, true, true},
+		{"unsigned long widening", "4294967295", defines.MYSQL_TYPE_LONG, true, types.T_uint64, false, false, true, true},
+		{"unsigned long long max", "18446744073709551615", defines.MYSQL_TYPE_LONGLONG, true, types.T_uint64, false, false, true, true},
+		{"unsigned overflow", "18446744073709551616", defines.MYSQL_TYPE_LONGLONG, true, types.T_uint64, false, false, true, false},
+		{"leading zero", "001", defines.MYSQL_TYPE_LONG, false, types.T_int32, false, false, true, false},
+		{"numeric suffix", "1suffix", defines.MYSQL_TYPE_LONG, false, types.T_int32, false, false, true, false},
+		{"negative zero", "-0", defines.MYSQL_TYPE_LONG, false, types.T_int32, false, false, true, false},
+		{"sign mismatch", "1", defines.MYSQL_TYPE_LONG, false, types.T_uint32, false, false, true, false},
+		{"narrowing", "1", defines.MYSQL_TYPE_LONG, false, types.T_int16, false, false, true, false},
+		{"tiny bool heuristic", "1", defines.MYSQL_TYPE_TINY, false, types.T_int32, false, false, true, false},
+		{"long data", "1", defines.MYSQL_TYPE_LONG, false, types.T_int32, false, true, true, false},
+		{"sql prepare", "1", defines.MYSQL_TYPE_LONG, false, types.T_int32, false, false, false, false},
+		{"null", "", defines.MYSQL_TYPE_LONG, false, types.T_int32, true, false, true, true},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			param := &plan.Expr{Typ: plan.Type{Id: int32(types.T_text)}, Expr: &plan.Expr_P{P: &plan.ParamRef{Pos: 0}}}
+			target := &plan.Expr{Typ: plan.Type{Id: int32(tc.target)}, Expr: &plan.Expr_T{T: &plan.TargetType{}}}
+			cast, err := plan2.BindFuncExprImplByPlanExpr(context.Background(), "cast", []*plan.Expr{param, target})
+			require.NoError(t, err)
+			params := vector.NewVec(types.T_text.ToType())
+			require.NoError(t, vector.AppendBytes(params, []byte(tc.value), tc.null, proc.Mp()))
+			defer params.Free(proc.Mp())
+			flag := byte(0)
+			if tc.unsigned {
+				flag = 0x80
+			}
+			prepared := &PrepareStmt{params: params, ParamTypes: []byte{byte(tc.mysqlType), flag}}
+			if tc.longData {
+				prepared.getFromSendLongData = map[int]struct{}{0: {}}
+			}
+			require.Equal(t, tc.want, preparedBinaryIntegerCastDiagnosticFree(prepared, cast, tc.binary))
+		})
+	}
 }

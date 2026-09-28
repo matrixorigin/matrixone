@@ -21,6 +21,7 @@ import (
 	"fmt"
 	"maps"
 	"slices"
+	"strconv"
 	"strings"
 	"sync/atomic"
 	"time"
@@ -29,6 +30,7 @@ import (
 	"github.com/mohae/deepcopy"
 
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
+	moruntime "github.com/matrixorigin/matrixone/pkg/common/runtime"
 	"github.com/matrixorigin/matrixone/pkg/container/batch"
 	"github.com/matrixorigin/matrixone/pkg/container/types"
 	"github.com/matrixorigin/matrixone/pkg/container/vector"
@@ -100,6 +102,11 @@ type TxnComputationWrapper struct {
 	runtimeCacheKey             string
 	runtimeCachePlan            *plan.Plan
 	runtimeCacheRetiredCompiles []retiredRuntimeCompile
+	// The value-free optimized template is published only after physical
+	// compilation succeeds. A failed compile leaves the prepared owner intact.
+	pendingDiagnosticSafeTarget     *PrepareStmt
+	pendingDiagnosticSafePlan       *plan.Plan
+	pendingDiagnosticSafeCandidates []*plan.Expr
 
 	explainBuffer *bytes.Buffer
 	binaryPrepare bool
@@ -252,6 +259,9 @@ func (cwft *TxnComputationWrapper) Clear() {
 	cwft.paramVals = nil
 	cwft.runtimeDirectResultSpecialization = false
 	cwft.preparedJoinDiagnosticFree = false
+	cwft.pendingDiagnosticSafeTarget = nil
+	cwft.pendingDiagnosticSafePlan = nil
+	cwft.pendingDiagnosticSafeCandidates = nil
 	cwft.prepareName = ""
 	cwft.binaryPrepare = false
 	cwft.preparedStmt = nil
@@ -604,6 +614,7 @@ func (cwft *TxnComputationWrapper) Compile(any any, fill func(*batch.Batch, *per
 				return nil, err
 			}
 			cwft.compile.SetOriginSQL(originSQL)
+			cwft.publishDiagnosticSafeTemplate()
 			if cwft.runtimeCacheTarget != nil {
 				runtimeCompile, ok := cwft.compile.(*compile.Compile)
 				if !ok || !cwft.completeRuntimeCacheCandidate(runtimeCompile, nil) {
@@ -637,6 +648,7 @@ func (cwft *TxnComputationWrapper) Compile(any any, fill func(*batch.Batch, *per
 				getStatementStartAt(execCtx.reqCtx),
 				compileOutputCallback(execCtx, cwft.ses, cwft.stmt, fill),
 				cwft.ses.GetSql(),
+				cwft.preparedJoinDiagnosticFree,
 			); err != nil {
 				return nil, err
 			}
@@ -903,6 +915,115 @@ func withPreparedJoinDiagnosticFreeContext(
 	return build()
 }
 
+// buildUnboundPreparedDiagnosticSafePlan builds an optimizer alternative from
+// PREPARE syntax while no current execution value is visible to the planner.
+// The resulting plan is only a candidate: every use still requires a fresh
+// proof against both conservative and optimized diagnostic expressions.
+func buildUnboundPreparedDiagnosticSafePlan(
+	execCtx *ExecCtx,
+	executionSes FeSession,
+	prepareStmt *PrepareStmt,
+	proc *process.Process,
+) (*plan.Plan, error) {
+	bound := proc.DetachPrepareParams()
+	defer proc.RestorePrepareParams(bound)
+	return withPreparedJoinDiagnosticFreeContext(
+		execCtx.reqCtx, executionSes.GetTxnCompileCtx(),
+		func() (*plan.Plan, error) {
+			return rebuildPreparePlan(execCtx, executionSes, prepareStmt, buildPlan)
+		},
+	)
+}
+
+func preparedOptimizerHintsSnapshot(compilerCtx plan2.CompilerContext) (global, statement string) {
+	if compilerCtx == nil {
+		return "", ""
+	}
+	if proc := compilerCtx.GetProcess(); proc != nil {
+		if raw, ok := moruntime.ServiceRuntime(proc.GetService()).GetGlobalVariables("optimizer_hints"); ok {
+			global, _ = raw.(string)
+		}
+	}
+	if ctx := compilerCtx.GetContext(); ctx != nil {
+		statement, _ = ctx.Value(defines.OptimizerHints{}).(string)
+	}
+	return global, statement
+}
+
+func (prepareStmt *PrepareStmt) preparedOptimizerHintsMatch(compilerCtx plan2.CompilerContext) bool {
+	global, statement := preparedOptimizerHintsSnapshot(compilerCtx)
+	return global == prepareStmt.preparedOptimizerGlobalHints &&
+		statement == prepareStmt.preparedOptimizerStatementHints
+}
+
+// admitUnboundPreparedDiagnosticTemplate runs once when a relaxed template is
+// built. ResetPreparePlan compacts parameter ordinals, so matching ParamTypes
+// alone cannot show that the template still has every prepared parameter.
+// Reject a candidate if its reachable owner expressions lose a parameter or
+// if a value-sensitive cache trait changes under the relaxed optimization.
+func admitUnboundPreparedDiagnosticTemplate(conservative, candidate *plan.Plan, paramCount int) bool {
+	if conservative == nil || conservative.GetQuery() == nil || candidate == nil || candidate.GetQuery() == nil ||
+		!preparedPlanHasAllParamRefs(conservative, paramCount) ||
+		!preparedPlanHasAllParamRefs(candidate, paramCount) ||
+		!slices.Equal(preparedScanOptions(conservative), preparedScanOptions(candidate)) {
+		return false
+	}
+	conservativeNeeds, conservativeAssignments := plan2.PreparedPlanRuntimeSpecializationRequirements(conservative)
+	candidateNeeds, candidateAssignments := plan2.PreparedPlanRuntimeSpecializationRequirements(candidate)
+	if conservativeNeeds != candidateNeeds || !slices.Equal(conservativeAssignments, candidateAssignments) ||
+		plan2.PreparedPlanHasPercentileParams(conservative) != plan2.PreparedPlanHasPercentileParams(candidate) ||
+		plan2.PreparedPlanHasPaginationParams(conservative) != plan2.PreparedPlanHasPaginationParams(candidate) ||
+		shouldCachePrepareCompile(conservative) != shouldCachePrepareCompile(candidate) {
+		return false
+	}
+	conservativeEndpoints, conservativeGenerateSeries := plan2.PreparedPlanGenerateSeriesParameterInfo(conservative)
+	candidateEndpoints, candidateGenerateSeries := plan2.PreparedPlanGenerateSeriesParameterInfo(candidate)
+	return conservativeGenerateSeries == candidateGenerateSeries &&
+		slices.Equal(conservativeEndpoints, candidateEndpoints)
+}
+
+func preparedScanOptions(p *plan.Plan) []string {
+	var options []string
+	for _, node := range p.GetQuery().Nodes {
+		if node != nil && node.NodeType == plan.Node_TABLE_SCAN {
+			options = append(options, node.ExtraOptions)
+		}
+	}
+	// Relation optimization may reorder scans. Compare their decisions as a
+	// multiset so a lazy rebuild cannot silently change a PREPARE-time hint.
+	slices.Sort(options)
+	return options
+}
+
+func preparedPlanHasAllParamRefs(p *plan.Plan, paramCount int) bool {
+	if paramCount < 0 {
+		return false
+	}
+	seen := make([]bool, paramCount)
+	valid := true
+	err := plan.VisitExpressionsInOwner(p.GetQuery(), func(root *plan.Expr) error {
+		return plan.VisitExprTree(root, func(expr *plan.Expr) error {
+			if ref := expr.GetP(); ref != nil {
+				if ref.Pos < 0 || int(ref.Pos) >= paramCount {
+					valid = false
+				} else {
+					seen[ref.Pos] = true
+				}
+			}
+			return nil
+		})
+	})
+	if err != nil || !valid {
+		return false
+	}
+	for _, present := range seen {
+		if !present {
+			return false
+		}
+	}
+	return true
+}
+
 // initExecuteStmtParam replaces the plan of the EXECUTE by the plan generated by
 // the PREPARE and setups the params for the plan.
 func initExecuteStmtParam(execCtx *ExecCtx, ses *Session, cwft *TxnComputationWrapper, execPlan *plan.Execute, stmtName string) (*compile.Compile, *plan.Plan, tree.Statement, string, bool, error) {
@@ -971,6 +1092,73 @@ func binaryProtocolPrepareParamKind(
 	default:
 		return vector.PrepareParamNone
 	}
+}
+
+// preparedBinaryIntegerCastDiagnosticFree proves one current binary binding
+// without evaluating a CAST. The protocol type supplies width and sign; an
+// exact parse of the normalized parameter bytes prevents stale or manually
+// constructed metadata from authorizing an arbitrary text value.
+func preparedBinaryIntegerCastDiagnosticFree(
+	prepareStmt *PrepareStmt, expr *plan.Expr, binaryExecute bool,
+) bool {
+	if !binaryExecute || prepareStmt == nil || prepareStmt.params == nil {
+		return false
+	}
+	position, target, ok := plan2.PreparedDirectImplicitIntegerCastParam(expr)
+	if !ok || int(position) >= prepareStmt.params.Length() || int(position)*2+1 >= len(prepareStmt.ParamTypes) {
+		return false
+	}
+	if _, longData := prepareStmt.getFromSendLongData[int(position)]; longData {
+		return false
+	}
+	if prepareStmt.params.IsNull(uint64(position)) {
+		return true
+	}
+	var sourceBits int
+	switch defines.MysqlType(prepareStmt.ParamTypes[int(position)*2]) {
+	case defines.MYSQL_TYPE_SHORT:
+		sourceBits = 16
+	case defines.MYSQL_TYPE_LONG:
+		sourceBits = 32
+	case defines.MYSQL_TYPE_LONGLONG:
+		sourceBits = 64
+	default:
+		return false
+	}
+	sourceUnsigned := prepareStmt.ParamTypes[int(position)*2+1]&0x80 != 0
+	var targetBits int
+	var targetUnsigned bool
+	switch target {
+	case types.T_int8:
+		targetBits = 8
+	case types.T_int16:
+		targetBits = 16
+	case types.T_int32:
+		targetBits = 32
+	case types.T_int64:
+		targetBits = 64
+	case types.T_uint8:
+		targetBits, targetUnsigned = 8, true
+	case types.T_uint16:
+		targetBits, targetUnsigned = 16, true
+	case types.T_uint32:
+		targetBits, targetUnsigned = 32, true
+	case types.T_uint64:
+		targetBits, targetUnsigned = 64, true
+	default:
+		return false
+	}
+	if sourceUnsigned != targetUnsigned || targetBits < sourceBits {
+		return false
+	}
+	raw := prepareStmt.params.GetRawBytesAt(int(position))
+	var formatted [24]byte
+	if sourceUnsigned {
+		value, err := strconv.ParseUint(string(raw), 10, sourceBits)
+		return err == nil && bytes.Equal(raw, strconv.AppendUint(formatted[:0], value, 10))
+	}
+	value, err := strconv.ParseInt(string(raw), 10, sourceBits)
+	return err == nil && bytes.Equal(raw, strconv.AppendInt(formatted[:0], value, 10))
 }
 
 // binaryProtocolPrepareParamConcreteType retains the protocol's SQL domain
@@ -1432,6 +1620,9 @@ func initExecuteStmtParamWithResolverInSession(
 		return nil, nil, nil, "", false, prepareStmt.longDataErr
 	}
 	cwft.preparedStmt = prepareStmt
+	cwft.pendingDiagnosticSafeTarget = nil
+	cwft.pendingDiagnosticSafePlan = nil
+	cwft.pendingDiagnosticSafeCandidates = nil
 	// Carry the binding database through execute-time authorization, lifecycle
 	// admission, and ownership cleanup. All three must address the same object.
 	execCtx.effectiveTxnDefaultDatabase = prepareStmt.defaultDatabase
@@ -1558,6 +1749,8 @@ func initExecuteStmtParamWithResolverInSession(
 		preparePlan = newPreparePlan
 		executionPlan = preparePlan.Plan
 		prepareStmt.PreparePlan = newPlan
+		prepareStmt.preparedOptimizerGlobalHints, prepareStmt.preparedOptimizerStatementHints =
+			preparedOptimizerHintsSnapshot(executionSes.GetTxnCompileCtx())
 		rebuildCommitted = true
 		prepareStmt.directResultParamPositions = plan2.PreparedPlanDirectResultParamPositions(executionPlan)
 		prepareStmt.directResultParamPositionsSet = true
@@ -1730,10 +1923,28 @@ func initExecuteStmtParamWithResolverInSession(
 	runtimeTextComparisonSpecialization := false
 	directResultPositions := prepareStmt.directResultParamPositions
 	runtimeDirectResultPositions := make([]int32, 0, len(directResultPositions))
+	// Scan diagnostics inspect the current Process parameter vector directly.
+	// A relational template also needs the runtime category for its bounded
+	// plan cache. Discover candidate expressions once per generation.
+	if prepareStmt.joinDiagnosticCandidatePlan != executionPlan {
+		prepareStmt.joinDiagnosticCandidatePlan = executionPlan
+		prepareStmt.joinDiagnosticCandidates = plan2.PreparedPlanDiagnosticCandidates(executionPlan)
+		prepareStmt.joinDiagnosticCandidate = len(prepareStmt.joinDiagnosticCandidates) != 0
+		prepareStmt.joinDiagnosticNeedsTemplate =
+			prepareStmt.joinDiagnosticCandidate && plan2.PreparedPlanDiagnosticNeedsTemplate(executionPlan)
+		prepareStmt.diagnosticSafePlan = nil
+		prepareStmt.diagnosticSafeCandidates = nil
+		prepareStmt.diagnosticSafeRejected = false
+	}
+	if prepareStmt.percentileParamPlan != executionPlan {
+		prepareStmt.percentileParamPlan = executionPlan
+		prepareStmt.hasPercentileParams = plan2.PreparedPlanHasPercentileParams(executionPlan)
+	}
 	needsRuntimeParamVals := !binaryExecute || binaryLiteralPlan ||
 		prepareStmt.hasPaginationParams || prepareStmt.hasLagLeadParams || preparedExplain ||
 		runtimeNumericOverloadCandidate || deferredBitCountOverloadCandidate ||
-		len(prepareStmt.inetNtoaParamPositions) > 0
+		len(prepareStmt.inetNtoaParamPositions) > 0 ||
+		(prepareStmt.joinDiagnosticCandidate && prepareStmt.joinDiagnosticNeedsTemplate)
 	cwft.paramVals = nil
 	cwft.runtimeDirectResultSpecialization = false
 	if prepareStmt.params != nil && prepareStmt.params.Length() > 0 { // use binary protocol
@@ -1973,12 +2184,30 @@ func initExecuteStmtParamWithResolverInSession(
 		}
 	}
 
-	// Candidate discovery is cached with the conservative prepared generation.
-	// The proof and execution-local replan follow runtime binding below, so an
-	// unrelated specialized parameter cannot invalidate a safe JOIN operand.
-	if prepareStmt.joinDiagnosticCandidatePlan != executionPlan {
-		prepareStmt.joinDiagnosticCandidatePlan = executionPlan
-		prepareStmt.joinDiagnosticCandidate = plan2.PreparedPlanHasJoinParameterDiagnostic(executionPlan)
+	// The proof and execution-local replan follow runtime binding, so an
+	// unrelated specialized parameter cannot invalidate a safe operand.
+	var fastDiagnosticProof func(*plan.Expr) bool
+	if binaryExecute {
+		fastDiagnosticProof = func(expr *plan.Expr) bool {
+			return preparedBinaryIntegerCastDiagnosticFree(prepareStmt, expr, true)
+		}
+	}
+	diagnosticFree := false
+	safeTemplateProven := false
+	if prepareStmt.joinDiagnosticCandidate {
+		diagnosticFree, err = plan2.ProbePreparedDiagnosticCandidatesWithProof(
+			cwft.proc, prepareStmt.joinDiagnosticCandidates, fastDiagnosticProof)
+		if err != nil {
+			return nil, nil, nil, originSQL, false, err
+		}
+		if diagnosticFree && prepareStmt.joinDiagnosticNeedsTemplate && prepareStmt.diagnosticSafePlan != nil {
+			diagnosticFree, err = plan2.ProbePreparedDiagnosticCandidatesWithProof(
+				cwft.proc, prepareStmt.diagnosticSafeCandidates, fastDiagnosticProof)
+			if err != nil {
+				return nil, nil, nil, originSQL, false, err
+			}
+			safeTemplateProven = diagnosticFree
+		}
 	}
 
 	// Static binary specialization, numeric-prefix consumers, and direct numeric
@@ -1994,26 +2223,43 @@ func initExecuteStmtParamWithResolverInSession(
 	// one-entry runtime cache install or retrieve a compile for such a plan:
 	// a second EXECUTE with the same parameter domain but a different percentile
 	// would otherwise run the first execution's immutable aggregate config.
-	runtimeCategoryCandidate := runtimeNumericPrefixCandidate || runtimeNumericOverloadCandidate ||
+	// A diagnostic-free scan/JOIN plan can be reused within the same parameter
+	// domain. Reprove each binding before looking up that plan: a malformed
+	// value in the same domain must execute the conservative template.
+	otherRuntimeCategoryCandidate := runtimeNumericPrefixCandidate || runtimeNumericOverloadCandidate ||
 		runtimeConversionCandidate || stableRuntimeSpecializationCandidate
+	// Only a value-independent query template enters the diagnostic category.
+	// Other specialization categories may change the plan with the current
+	// value and keep their existing independent cache admission rules.
+	diagnosticCacheCandidate := diagnosticFree && binaryExecute && !needsRuntimeSpecialization &&
+		!otherRuntimeCategoryCandidate && !runtimeDirectResultCandidate &&
+		!prepareStmt.hasPaginationParams && !prepareStmt.hasLagLeadParams &&
+		!preparedExplain && !runtimeTextComparisonSpecialization &&
+		preparedRuntimeCacheSupports(cwft.paramVals)
+	if diagnosticCacheCandidate {
+		retainPreparedRuntimeParamRefs(cwft.paramVals)
+	}
+	runtimeCategoryCandidate := otherRuntimeCategoryCandidate || diagnosticCacheCandidate
 	runtimeSpecializationCandidate := runtimeCategoryCandidate || runtimeDirectResultCandidate
+	diagnosticPlanCacheHit := false
 	// Cache eligibility walks the plan. Without a runtime candidate this cache
 	// cannot be read or installed, so leave its bounded previous category dormant
 	// instead of scanning an ordinary prepared DML on every EXECUTE.
 	runtimeCacheEligible := !runtimeSpecializationCandidate ||
-		(!prepareStmt.parameterizedGenerateSeries &&
-			shouldCachePreparedRuntimeSpecialization(preparePlan.Plan) &&
-			shouldCachePreparedRuntimeSpecialization(executionPlan))
+		(!prepareStmt.parameterizedGenerateSeries && !prepareStmt.hasPercentileParams)
 	if !runtimeCacheEligible {
 		prepareStmt.clearRuntimeSpecializationCache()
 	}
 	cacheableRuntimeQuery := executionPlan.GetQuery() != nil && !runtimeTextComparisonSpecialization &&
-		runtimeCacheEligible &&
+		runtimeCacheEligible && (!prepareStmt.joinDiagnosticCandidate || diagnosticFree) &&
 		(runtimeDirectResultCandidate ||
 			(runtimeCategoryCandidate && preparedRuntimeCacheSupports(cwft.paramVals)))
 	if cacheableRuntimeQuery {
 		if runtimeCategoryCandidate {
 			runtimeCacheKey = preparedRuntimeSemanticKey(cwft.paramVals)
+			if diagnosticCacheCandidate {
+				runtimeCacheKey = "diagnostic-free:" + runtimeCacheKey
+			}
 			if geometryKey := plan2.PreparedPlanGeometrySRIDSemanticKeyForPositions(
 				cwft.paramVals, prepareStmt.geometrySRIDParamPositions,
 				prepareStmt.geometrySRIDSourceParamPositions); geometryKey != "" {
@@ -2023,15 +2269,43 @@ func initExecuteStmtParamWithResolverInSession(
 			runtimeCacheKey = preparedDirectResultSemanticKey(cwft.paramVals, runtimeDirectResultPositions)
 		}
 		if runtimeCacheKey != "" && runtimeCacheKey == prepareStmt.runtimeSpecializationKey &&
-			prepareStmt.runtimePlan != nil {
-			runtimePlan = prepareStmt.runtimePlan
-			runtimePlanApplied = true
-			cachedRuntimeCompile = prepareStmt.runtimeCompile
+			prepareStmt.runtimePlan != nil &&
+			(!diagnosticCacheCandidate ||
+				(prepareStmt.joinDiagnosticNeedsTemplate && prepareStmt.runtimePlan == prepareStmt.diagnosticSafePlan) ||
+				(!prepareStmt.joinDiagnosticNeedsTemplate && prepareStmt.runtimePlan == executionPlan)) {
+			cachedFree := true
+			if prepareStmt.joinDiagnosticCandidate {
+				// The conservative and safe templates were proved for this binding
+				// above. A separately specialized plan still needs its own probe.
+				if prepareStmt.runtimePlan == executionPlan ||
+					(safeTemplateProven && prepareStmt.runtimePlan == prepareStmt.diagnosticSafePlan) {
+					cachedFree = diagnosticFree
+				} else {
+					cachedFree, err = plan2.ProbePreparedDiagnosticCandidatesWithProof(
+						cwft.proc, prepareStmt.runtimeDiagnosticCandidates, fastDiagnosticProof)
+					if err != nil {
+						return nil, nil, nil, originSQL, false, err
+					}
+				}
+			}
+			if cachedFree {
+				runtimePlan = prepareStmt.runtimePlan
+				runtimePlanApplied = true
+				cachedRuntimeCompile = prepareStmt.runtimeCompile
+				diagnosticPlanCacheHit = diagnosticCacheCandidate
+				if diagnosticPlanCacheHit {
+					cwft.preparedJoinDiagnosticFree = true
+				}
+			}
 		}
 	}
-	if !runtimePlanApplied &&
-		(!binaryExecute || runtimeSpecializationCandidate || binaryLiteralPlan ||
-			prepareStmt.hasPaginationParams || needsRuntimeSpecialization) {
+	shouldSpecialize := !binaryExecute || otherRuntimeCategoryCandidate || runtimeDirectResultCandidate ||
+		binaryLiteralPlan || prepareStmt.hasPaginationParams || needsRuntimeSpecialization
+	// A safe diagnostic binding should specialize the selected relaxed template
+	// once. Keep the conservative specialization for the fallback path only.
+	deferConservativeSpecialization := !runtimePlanApplied && shouldSpecialize &&
+		prepareStmt.joinDiagnosticNeedsTemplate && diagnosticFree
+	if !runtimePlanApplied && shouldSpecialize && !deferConservativeSpecialization {
 		var laterRuntimeSpecialized bool
 		runtimePlan, laterRuntimeSpecialized, runtimePlanApplied, err = specializePreparedExecutionPlan(
 			reqCtx, executionPlan, cwft.paramVals, binaryExecute,
@@ -2056,62 +2330,131 @@ func initExecuteStmtParamWithResolverInSession(
 		}
 		executionPlan = runtimePlan
 	}
-	// A proof belongs to this parameter binding and this plan generation. The
-	// conservative plan is already runnable, including any runtime cache hit.
-	// Probe it before rebuilding: a relaxed optimizer can remove the expression
-	// whose warning would have prevented the rewrite.
-	if prepareStmt.joinDiagnosticCandidate {
-		templateFree, probeErr := plan2.ProbePreparedJoinParameterDiagnostics(cwft.proc, preparePlan.Plan)
-		if probeErr != nil {
-			return nil, nil, nil, originSQL, false, probeErr
+	// The relaxed template is built once without parameter values. Each binding
+	// must prove both the conservative and relaxed predicate owners safe before
+	// using it. A value-specialized plan is execution-local and is proved again.
+	if prepareStmt.joinDiagnosticNeedsTemplate && diagnosticFree && !diagnosticPlanCacheHit {
+		if diagnosticCacheCandidate {
+			cwft.discardRuntimeCacheCandidate()
 		}
-		if templateFree {
-			runtimeFree, probeErr := plan2.ProbePreparedJoinParameterDiagnostics(cwft.proc, executionPlan)
-			if probeErr != nil {
-				return nil, nil, nil, originSQL, false, probeErr
+		// The unmodified conservative plan was already proved through its
+		// generation's precomputed candidate list above.
+		runtimeFree := true
+		if runtimeFree {
+			safePlan := prepareStmt.diagnosticSafePlan
+			safeCandidates := prepareStmt.diagnosticSafeCandidates
+			if safePlan == nil && !prepareStmt.diagnosticSafeRejected &&
+				!prepareStmt.preparedOptimizerHintsMatch(executionSes.GetTxnCompileCtx()) {
+				prepareStmt.diagnosticSafeRejected = true
 			}
-			if runtimeFree {
-				compilerCtx := executionSes.GetTxnCompileCtx()
-				localPlan, buildErr := withPreparedJoinDiagnosticFreeContext(reqCtx, compilerCtx, func() (*plan2.Plan, error) {
-					return rebuildPreparePlan(execCtx, executionSes, prepareStmt, buildPlan)
-				})
+			if safePlan == nil && !prepareStmt.diagnosticSafeRejected {
+				localPlan, buildErr := buildUnboundPreparedDiagnosticSafePlan(
+					execCtx, executionSes, prepareStmt, cwft.proc)
 				if buildErr != nil {
 					return nil, nil, nil, originSQL, false, buildErr
 				}
 				if localPlan == nil || localPlan.GetDcl().GetPrepare() == nil ||
 					localPlan.GetDcl().GetPrepare().Plan == nil {
 					return nil, nil, nil, originSQL, false,
-						moerr.NewInternalError(reqCtx, "execution-local prepared JOIN replan is missing its query")
+						moerr.NewInternalError(reqCtx, "unbound prepared JOIN template is missing its query")
 				}
-				if slices.Equal(localPlan.GetDcl().GetPrepare().ParamTypes, preparePlan.ParamTypes) {
-					localQuery := localPlan.GetDcl().GetPrepare().Plan
-					localRuntime, localSpecialized, localApplied, specializeErr := specializePreparedExecutionPlan(
-						reqCtx, localQuery, cwft.paramVals, binaryExecute,
-						runtimeNumericOverloadCandidate, runtimeDirectResultCandidate, needsRuntimeSpecialization,
-						runtimeDirectResultPositions, true, runtimeTextComparisonSpecialization)
-					if specializeErr != nil {
-						return nil, nil, nil, originSQL, false, specializeErr
-					}
-					if localApplied {
-						if err = plan2.RefreshPreparedCTASInferredColumns(reqCtx, localRuntime, localQuery, prepareStmt.PrepareStmt); err != nil {
-							return nil, nil, nil, originSQL, false, err
-						}
-						localQuery = localRuntime
-					}
-					localFree, probeErr := plan2.ProbePreparedJoinParameterDiagnostics(cwft.proc, localQuery)
+				if slices.Equal(localPlan.GetDcl().GetPrepare().ParamTypes, preparePlan.ParamTypes) &&
+					admitUnboundPreparedDiagnosticTemplate(
+						preparePlan.Plan, localPlan.GetDcl().GetPrepare().Plan, len(preparePlan.ParamTypes)) {
+					safePlan = localPlan.GetDcl().GetPrepare().Plan
+					safeCandidates = plan2.PreparedPlanDiagnosticCandidates(safePlan)
+				} else {
+					prepareStmt.diagnosticSafeRejected = true
+				}
+			}
+			if safePlan != nil {
+				localFree := safeTemplateProven && safePlan == prepareStmt.diagnosticSafePlan
+				var probeErr error
+				if !localFree {
+					localFree, probeErr = plan2.ProbePreparedDiagnosticCandidatesWithProof(
+						cwft.proc, safeCandidates, fastDiagnosticProof)
 					if probeErr != nil {
 						return nil, nil, nil, originSQL, false, probeErr
 					}
+				}
+				if localFree {
+					localQuery := safePlan
+					if !diagnosticCacheCandidate {
+						localRuntime, localSpecialized, localApplied, specializeErr := specializePreparedExecutionPlan(
+							reqCtx, localQuery, cwft.paramVals, binaryExecute,
+							runtimeNumericOverloadCandidate, runtimeDirectResultCandidate, needsRuntimeSpecialization,
+							runtimeDirectResultPositions, true, runtimeTextComparisonSpecialization)
+						if specializeErr != nil {
+							return nil, nil, nil, originSQL, false, specializeErr
+						}
+						if localApplied {
+							if err = plan2.RefreshPreparedCTASInferredColumns(reqCtx, localRuntime, localQuery, prepareStmt.PrepareStmt); err != nil {
+								return nil, nil, nil, originSQL, false, err
+							}
+							localQuery = localRuntime
+							runtimeSpecialized = runtimeSpecialized || localSpecialized
+						}
+						localFree, probeErr = plan2.ProbePreparedJoinParameterDiagnostics(cwft.proc, localQuery)
+						if probeErr != nil {
+							return nil, nil, nil, originSQL, false, probeErr
+						}
+						cwft.discardRuntimeCacheCandidate()
+					}
 					if localFree {
+						if prepareStmt.diagnosticSafePlan == nil {
+							cwft.pendingDiagnosticSafeTarget = prepareStmt
+							cwft.pendingDiagnosticSafePlan = safePlan
+							cwft.pendingDiagnosticSafeCandidates = safeCandidates
+						}
+						if diagnosticCacheCandidate {
+							cwft.runtimeCacheTarget = prepareStmt
+							cwft.runtimeCacheKey = runtimeCacheKey
+							cwft.runtimeCachePlan = localQuery
+						}
 						executionPlan = localQuery
 						runtimePlanApplied = true
-						runtimeSpecialized = runtimeSpecialized || localSpecialized
 						cwft.preparedJoinDiagnosticFree = true
-						cwft.discardRuntimeCacheCandidate()
 						cachedRuntimeCompile = nil
 					}
 				}
 			}
+		}
+	}
+	if deferConservativeSpecialization && !cwft.preparedJoinDiagnosticFree {
+		var laterRuntimeSpecialized bool
+		runtimePlan, laterRuntimeSpecialized, runtimePlanApplied, err = specializePreparedExecutionPlan(
+			reqCtx, executionPlan, cwft.paramVals, binaryExecute,
+			runtimeNumericOverloadCandidate, runtimeDirectResultCandidate, needsRuntimeSpecialization,
+			runtimeDirectResultPositions, true, runtimeTextComparisonSpecialization)
+		if err != nil {
+			return nil, nil, nil, originSQL, false, err
+		}
+		runtimeSpecialized = runtimeSpecialized || laterRuntimeSpecialized
+		if runtimePlanApplied {
+			if err = plan2.RefreshPreparedCTASInferredColumns(reqCtx, runtimePlan, executionPlan, prepareStmt.PrepareStmt); err != nil {
+				return nil, nil, nil, originSQL, false, err
+			}
+			executionPlan = runtimePlan
+		}
+	}
+	if prepareStmt.joinDiagnosticCandidate && !prepareStmt.joinDiagnosticNeedsTemplate && diagnosticFree {
+		finalFree := true
+		if executionPlan != preparePlan.Plan && executionPlan != prepareStmt.runtimePlan {
+			var probeErr error
+			finalFree, probeErr = plan2.ProbePreparedJoinParameterDiagnostics(cwft.proc, executionPlan)
+			if probeErr != nil {
+				return nil, nil, nil, originSQL, false, probeErr
+			}
+		}
+		if finalFree {
+			cwft.preparedJoinDiagnosticFree = true
+			if diagnosticCacheCandidate && !diagnosticPlanCacheHit {
+				cwft.runtimeCacheTarget = prepareStmt
+				cwft.runtimeCacheKey = runtimeCacheKey
+				cwft.runtimeCachePlan = executionPlan
+			}
+		} else {
+			cwft.discardRuntimeCacheCandidate()
 		}
 	}
 	if binaryExecute && runtimePlanApplied {
@@ -2141,8 +2484,7 @@ func initExecuteStmtParamWithResolverInSession(
 	retComp := prepareStmt.compile
 	if cachedRuntimeCompile != nil {
 		retComp = cachedRuntimeCompile
-	} else if runtimePlanApplied || runtimeSpecialized || prepareStmt.hasPaginationParams ||
-		cwft.preparedJoinDiagnosticFree {
+	} else if runtimePlanApplied || runtimeSpecialized || prepareStmt.hasPaginationParams {
 		// The cached compile was built from the prepare-time parameter types and
 		// cannot execute a plan whose overloads, result metadata, or pagination
 		// values must be rebound for this execution. An AP runtime cache hit
@@ -2185,6 +2527,18 @@ func (cwft *TxnComputationWrapper) discardRuntimeCacheCandidate() {
 	cwft.runtimeCacheTarget = nil
 	cwft.runtimeCacheKey = ""
 	cwft.runtimeCachePlan = nil
+}
+
+func (cwft *TxnComputationWrapper) publishDiagnosticSafeTemplate() {
+	target := cwft.pendingDiagnosticSafeTarget
+	if target != nil && target == cwft.preparedStmt && cwft.pendingDiagnosticSafePlan != nil &&
+		target.diagnosticSafePlan == nil {
+		target.diagnosticSafePlan = cwft.pendingDiagnosticSafePlan
+		target.diagnosticSafeCandidates = cwft.pendingDiagnosticSafeCandidates
+	}
+	cwft.pendingDiagnosticSafeTarget = nil
+	cwft.pendingDiagnosticSafePlan = nil
+	cwft.pendingDiagnosticSafeCandidates = nil
 }
 
 func (cwft *TxnComputationWrapper) completeRuntimeCacheCandidate(

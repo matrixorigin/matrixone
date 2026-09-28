@@ -4176,6 +4176,16 @@ func (builder *QueryBuilder) createQuery() (*Query, error) {
 		scan.NodeId = int32(len(builder.qry.Nodes))
 		builder.qry.Nodes = append(builder.qry.Nodes, scan)
 	}
+	// Empty BlockFilterList can mean either a stats choice or an explicit
+	// blockFilter=2 hint. Preserve the latter in the prepared plan so physical
+	// compilation cannot backfill a block predicate for a later binding.
+	if builder.optimizerHints != nil && builder.optimizerHints.blockFilter == 2 {
+		for _, node := range builder.qry.Nodes {
+			if node.NodeType == plan.Node_TABLE_SCAN && node.ExtraOptions == "" {
+				node.ExtraOptions = PreparedBlockFilterDisabledScanOption
+			}
+		}
+	}
 	return builder.qry, nil
 }
 

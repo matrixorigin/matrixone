@@ -179,16 +179,16 @@ func copyBlockFiltersForRemoteRun(s *Scope) *Scope {
 	var blockFilters []*plan.Expr
 	if s.DataSource != nil {
 		// DataSource.BlockFilterList contains coordinator-owned Fold IDs after
-		// InitAllDataSource. Send the original expressions from the plan node so
-		// the remote Compile can create and evaluate its own Fold executors. This
-		// also preserves empty scalar literals across protobuf serialization.
-		if s.DataSource.node != nil && len(s.DataSource.node.BlockFilterList) > 0 {
+		// InitAllDataSource. The scope's plan node contains only the predicates
+		// admitted for this execution, including the empty subset. Never fall
+		// back to folded expressions when the selected subset is empty.
+		if s.DataSource.node != nil {
 			blockFilters = s.DataSource.node.BlockFilterList
 		} else {
 			blockFilters = s.DataSource.BlockFilterList
 		}
 	}
-	if len(blockFilters) > 0 {
+	if len(blockFilters) > 0 || (s.DataSource != nil && len(s.DataSource.BlockFilterList) > 0) {
 		value := *s
 		dataSource := *s.DataSource
 		dataSource.BlockFilterList = plan2.DeepCopyExprList(blockFilters)

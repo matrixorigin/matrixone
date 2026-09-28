@@ -7749,6 +7749,58 @@ func TestBuildPlanForCompileRetryReprovesPreparedJoin(t *testing.T) {
 	require.Same(t, previousCtx, compilerCtx.GetContext())
 }
 
+func TestPreparedJoinUnboundAssumptionRestoresScanFilter(t *testing.T) {
+	ctx := defines.AttachAccountId(context.Background(), catalog.System_Account)
+	sql := "select count(*) from select_test.bind_select a join select_test.bind_select b on a.a=b.a and a.a=hour(time(?)) where a.a=?"
+	build := func(assumeSafe bool) *plan.Plan {
+		stmt, err := parsers.ParseOne(ctx, dialect.MYSQL, sql, 1)
+		require.NoError(t, err)
+		defer stmt.Free()
+		compilerCtx := plan.NewMockCompilerContext(true)
+		planningCtx := ctx
+		if assumeSafe {
+			planningCtx = plan.WithPreparedJoinDiagnosticFree(ctx)
+		}
+		compilerCtx.SetContext(planningCtx)
+		require.Nil(t, compilerCtx.GetProcess().GetPrepareParams())
+		built, err := plan.BuildPlan(compilerCtx, stmt, true)
+		require.NoError(t, err)
+		return built
+	}
+	conservative := build(false)
+	safe := build(true)
+	countScanFilters := func(built *plan.Plan) int {
+		count := 0
+		for _, node := range built.GetQuery().Nodes {
+			if node.NodeType == plan0.Node_TABLE_SCAN {
+				count += len(node.FilterList)
+			}
+		}
+		return count
+	}
+	require.Zero(t, countScanFilters(conservative))
+	require.Positive(t, countScanFilters(safe))
+	positions := make(map[int32]bool)
+	for _, position := range queryParamPositions(safe.GetQuery()) {
+		positions[position] = true
+	}
+	require.Equal(t, map[int32]bool{1: true, 2: true}, positions)
+}
+
+func TestPreparedSingleTableLockScanNeedsOnlyStorageProof(t *testing.T) {
+	ctx := defines.AttachAccountId(context.Background(), catalog.System_Account)
+	stmt, err := parsers.ParseOne(ctx, dialect.MYSQL,
+		"select a from select_test.bind_select where a=? for update", 1)
+	require.NoError(t, err)
+	defer stmt.Free()
+	compilerCtx := plan.NewMockCompilerContext(true)
+	compilerCtx.SetContext(ctx)
+	built, err := plan.BuildPlan(compilerCtx, stmt, true)
+	require.NoError(t, err)
+	require.True(t, plan.PreparedPlanHasJoinParameterDiagnostic(built))
+	require.False(t, plan.PreparedPlanDiagnosticNeedsTemplate(built), built.String())
+}
+
 func TestBuildPlanForPreparedExpressionRetryPreservesBinaryRuntimeType(t *testing.T) {
 	ctx := defines.AttachAccountId(context.Background(), catalog.System_Account)
 	stmt, err := parsers.ParseOne(ctx, dialect.MYSQL, "select ? from dual", 1)

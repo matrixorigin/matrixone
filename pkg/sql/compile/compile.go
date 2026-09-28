@@ -278,10 +278,10 @@ func (c *Compile) FreezeResultMetadata() {
 	}
 }
 
-func (c *Compile) Reset(proc *process.Process, startAt time.Time, fill func(*batch.Batch, *perfcounter.CounterSet) error, sql string) error {
+func (c *Compile) Reset(proc *process.Process, startAt time.Time, fill func(*batch.Batch, *perfcounter.CounterSet) error, sql string, diagnosticProof ...bool) error {
 	// A cached Compile must never expose the previous execution's CTAS values.
 	c.preparedParamValues = nil
-	c.preparedJoinDiagnosticFree = false
+	c.preparedJoinDiagnosticFree = len(diagnosticProof) != 0 && diagnosticProof[0]
 	// Reset only supports the TP topology admitted by prepare-time compilation.
 	// AP scan state and worker placement belong to one execution; updating the
 	// transaction offset cannot make them valid for another execution.
@@ -5749,7 +5749,10 @@ func (c *Compile) compileTableScanDataSource(s *Scope) error {
 
 	c.filterExprMu.Lock()
 	defer c.filterExprMu.Unlock()
-	storageFilters := filterScanStorageExprs(c.proc, node.FilterList)
+	storageFilters, err := filterScanStorageExprs(c.proc, node.FilterList, c.preparedJoinDiagnosticFree)
+	if err != nil {
+		return err
+	}
 	filters, executors, rebuilt, err := prepareFoldedFilterExprs(
 		c.proc, storageFilters, s.DataSource.FilterList, c.filterExprExes, true)
 	if err != nil {
@@ -5761,8 +5764,21 @@ func (c *Compile) compileTableScanDataSource(s *Scope) error {
 	}
 	s.DataSource.FilterExpr = colexec.RewriteFilterExprList(s.DataSource.FilterList)
 
+	blockFilters, err := filterScanStorageExprs(c.proc, node.BlockFilterList, c.preparedJoinDiagnosticFree)
+	if err != nil {
+		return err
+	}
+	if c.preparedJoinDiagnosticFree {
+		blockFilters = plan2.CompletePreparedDiagnosticBlockFilters(ctx, node, storageFilters, blockFilters)
+	}
+	// Remote scopes serialize the plan node's raw block predicates because the
+	// folded DataSource expressions contain coordinator-owned Fold IDs. Give this
+	// scope its admitted subset so an excluded diagnostic cannot reappear on CN.
+	selectedNode := *node
+	selectedNode.BlockFilterList = blockFilters
+	s.DataSource.node = &selectedNode
 	filters, executors, rebuilt, err = prepareFoldedFilterExprs(
-		c.proc, filterScanStorageExprs(c.proc, node.BlockFilterList), s.DataSource.BlockFilterList, c.filterExprExes, false)
+		c.proc, blockFilters, s.DataSource.BlockFilterList, c.filterExprExes, false)
 	if err != nil {
 		return err
 	}
@@ -5788,23 +5804,24 @@ func (c *Compile) compileTableScanDataSource(s *Scope) error {
 // filterScanStorageExprs excludes row-dependent predicates from the engine
 // reader. The complete node.FilterList remains owned by TableScan or Restrict,
 // so these predicates are still evaluated once at the row-level boundary.
-func filterScanStorageExprs(proc *process.Process, exprs []*plan.Expr) []*plan.Expr {
+func filterScanStorageExprs(proc *process.Process, exprs []*plan.Expr, provenFree bool) ([]*plan.Expr, error) {
+	var filtered []*plan.Expr
 	for i, expr := range exprs {
-		if plan2.ContainsVolatileFunction(expr) || plan2.ContainsConstantFilterDiagnostic(proc, expr) ||
-			plan2.ContainsStatementInvariantFilterDiagnostic(proc, expr) {
-			filtered := make([]*plan.Expr, 0, len(exprs)-1)
-			filtered = append(filtered, exprs[:i]...)
-			for _, remaining := range exprs[i+1:] {
-				if !plan2.ContainsVolatileFunction(remaining) &&
-					!plan2.ContainsConstantFilterDiagnostic(proc, remaining) &&
-					!plan2.ContainsStatementInvariantFilterDiagnostic(proc, remaining) {
-					filtered = append(filtered, remaining)
-				}
+		exclude := plan2.ContainsVolatileFunction(expr) || plan2.ContainsConstantFilterDiagnostic(proc, expr) ||
+			plan2.ContainsStatementInvariantFilterDiagnosticWithProof(proc, expr, provenFree)
+		if exclude {
+			if filtered == nil {
+				filtered = make([]*plan.Expr, 0, len(exprs)-1)
+				filtered = append(filtered, exprs[:i]...)
 			}
-			return filtered
+		} else if filtered != nil {
+			filtered = append(filtered, expr)
 		}
 	}
-	return exprs
+	if filtered == nil {
+		return exprs, nil
+	}
+	return filtered, nil
 }
 
 func (c *Compile) compileVectorIndexScanDataSource(s *Scope) error {
@@ -5971,7 +5988,7 @@ func (c *Compile) needsCoordinatorConstantFilterDiagnostic(node *plan.Node) bool
 		return false
 	}
 	for _, expr := range node.FilterList {
-		if plan2.ContainsStatementInvariantFilterDiagnostic(c.proc, expr) {
+		if plan2.ContainsStatementInvariantFilterDiagnosticWithProof(c.proc, expr, c.preparedJoinDiagnosticFree) {
 			return true
 		}
 	}
