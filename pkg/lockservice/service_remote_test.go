@@ -90,7 +90,8 @@ func TestLockProtocolCapabilitiesFollowProtocolVersion(t *testing.T) {
 			Method: pb.Method_LockWriterFair,
 		}))
 		for _, method := range []pb.Method{pb.Method_BeginDrain, pb.Method_QueryDrain} {
-			require.Error(t, checkMethodVersion(context.Background(), "", &pb.Request{Method: method}))
+			err := checkMethodVersion(context.Background(), "", &pb.Request{Method: method})
+			require.True(t, moerr.IsMoErrCode(err, moerr.ErrNotSupported))
 		}
 		rt.SetGlobalVariables(moruntime.MOProtocolVersion, defines.MORPCVersion100)
 		for _, method := range []pb.Method{pb.Method_BeginDrain, pb.Method_QueryDrain} {
