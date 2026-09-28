@@ -17,6 +17,7 @@ package merge
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"slices"
 	"time"
@@ -217,4 +218,84 @@ func (c *TNCatalogEventSource) GetMergeSettingsBatchFn() func() (*batch.Batch, f
 			bat.Close()
 		}
 	}
+}
+
+// ReadPromotionSettings is used only after replay has joined. It does not
+// change the normal startup bootstrap path or turn a failed scan into defaults.
+func (c *TNCatalogEventSource) ReadPromotionSettings(
+	ctx context.Context,
+) (settings map[uint64]*MMsgTaskTrigger, err error) {
+	db, err := c.GetDatabaseByID(pkgcatalog.MO_CATALOG_ID)
+	if err != nil {
+		return nil, err
+	}
+	ts := c.Now()
+	if maxCommitted := c.MaxCommittedTS.Load(); ts.LE(maxCommitted) {
+		ts = maxCommitted.Next()
+	}
+	txn := c.OpenOfflineTxn(ts)
+	defer func() { err = errors.Join(err, txn.GetStore().Close()) }()
+	entry, err := db.GetTableEntryByName(0, pkgcatalog.MO_MERGE_SETTINGS, txn)
+	if moerr.IsMoErrCode(err, moerr.OkExpectedEOB) {
+		return map[uint64]*MMsgTaskTrigger{}, nil
+	}
+	if err != nil {
+		return nil, err
+	}
+	bat, err := tables.ReadMergeSettingsBatchForPromotion(ctx, entry, txn)
+	if err != nil {
+		return nil, err
+	}
+	if bat == nil {
+		return map[uint64]*MMsgTaskTrigger{}, nil
+	}
+	defer bat.Close()
+	cnBat := containers.ToCNBatch(bat)
+	tids := vector.MustFixedColNoTypeCheck[uint64](cnBat.Vecs[1])
+	versions := vector.MustFixedColNoTypeCheck[uint32](cnBat.Vecs[2])
+	settings = make(map[uint64]*MMsgTaskTrigger, len(tids))
+	for i, tid := range tids {
+		if err = ctx.Err(); err != nil {
+			return nil, err
+		}
+		if _, exists := settings[tid]; exists {
+			return nil, moerr.NewInternalErrorNoCtxf("duplicate merge settings for table %d", tid)
+		}
+		setting, decodeErr := DecodeMergeSettings(versions[i], cnBat.Vecs[3].GetBytesAt(i))
+		if decodeErr != nil {
+			return nil, decodeErr
+		}
+		trigger, decodeErr := setting.toPromotionTrigger()
+		if decodeErr != nil {
+			return nil, decodeErr
+		}
+		settings[tid] = trigger
+	}
+	return settings, nil
+}
+
+// Each tombstone count becomes a pointer-slice capacity on every gather. Two
+// slices at this limit preallocate at most 1 MiB together on 64-bit targets.
+const maxPromotionTombstoneCount = 1 << 16
+
+// toPromotionTrigger validates the domains consumed by scheduling before the
+// one-way promotion starts workers. Normal startup/config parsing is unchanged.
+func (s *MergeSettings) toPromotionTrigger() (*MMsgTaskTrigger, error) {
+	if len(s.L0MaxCountDecayControl) < 4 {
+		return nil, moerr.NewInternalErrorNoCtxf("invalid merge settings decay points: %d", len(s.L0MaxCountDecayControl))
+	}
+	if s.TombstoneL1Count <= 0 || s.TombstoneL1Count > maxPromotionTombstoneCount ||
+		s.TombstoneL2Count <= 0 || s.TombstoneL2Count > maxPromotionTombstoneCount ||
+		s.LNMinPointDepthPerCluster <= 0 {
+		return nil, moerr.NewInternalErrorNoCtxf("invalid merge settings counts: tombstone L1=%d L2=%d, overlap depth=%d",
+			s.TombstoneL1Count, s.TombstoneL2Count, s.LNMinPointDepthPerCluster)
+	}
+	trigger, err := s.ToMMsgTaskTrigger()
+	if err != nil {
+		return nil, err
+	}
+	if trigger.vacuum.Duration <= 0 {
+		return nil, moerr.NewInternalErrorNoCtxf("invalid merge settings vacuum duration: %s", s.VacuumScoreDecayDuration)
+	}
+	return trigger, nil
 }
