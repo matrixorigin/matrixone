@@ -1271,6 +1271,17 @@ func TestJSONValuePersistedSQLAdmission(t *testing.T) {
 						return
 					}
 					require.NoError(t, err)
+					if table := built.GetDdl().GetCreateTable(); table != nil && table.GetTableDef().GetName() == "jv_index" {
+						required, err := RequiredPersistedExpressionProtocolVersion(table.GetTableDef())
+						require.NoError(t, err)
+						require.Equal(t, int64(defines.MORPCVersion100), required)
+						require.Len(t, table.GetIndexTables(), 1)
+						// The SQL builder's physical index stores materialized
+						// keys, not the generated expression owned by its table.
+						required, err = RequiredPersistedExpressionProtocolVersion(table.GetIndexTables()[0])
+						require.NoError(t, err)
+						require.Zero(t, required)
+					}
 					if view := built.GetDdl().GetCreateView(); view != nil {
 						var data ViewData
 						require.NoError(t, json.Unmarshal([]byte(view.GetTableDef().GetViewSql().GetView()), &data))
