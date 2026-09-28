@@ -66,6 +66,9 @@ func createTablesInMoCatalog(ctx context.Context, txn executor.TxnExecutor, fina
 	for _, sql := range createSqls {
 		addSqlIntoSet(sql)
 	}
+	// Fresh bootstrap starts at the final catalog version and does not replay
+	// upgrade entries. Only sys needs the cross-catalog snapshot quota index.
+	addSqlIntoSet(MoCatalogSysSnapshotQuotaIndexDDL)
 
 	//initialize the default data of tables for the tenant
 	//step 1: add new tenant entry to the mo_account

@@ -17,6 +17,7 @@ package v4_0_8
 import (
 	"github.com/matrixorigin/matrixone/pkg/bootstrap/versions"
 	"github.com/matrixorigin/matrixone/pkg/catalog"
+	"github.com/matrixorigin/matrixone/pkg/common/moerr"
 	"github.com/matrixorigin/matrixone/pkg/util/executor"
 )
 
@@ -27,6 +28,29 @@ import (
 var clusterUpgEntries = []versions.UpgradeEntry{
 	viewMetadataTable(catalog.MO_VIEW_DEPENDENCIES, catalog.MoViewDependenciesDDL),
 	viewMetadataTable(catalog.MO_VIEW_REFRESH, catalog.MoViewRefreshDDL),
+	{
+		Schema:    catalog.MO_CATALOG,
+		TableName: catalog.MO_PUBS,
+		UpgType:   versions.ADD_INDEX,
+		UpgSql:    "create index idx_mo_pubs_database_id on mo_catalog.mo_pubs(database_id)",
+		CheckFunc: func(txn executor.TxnExecutor, accountID uint32) (bool, error) {
+			// A named publication with a missing or stale physical ID cannot be
+			// protected by the indexed DROP guard. Stop the upgrade for explicit
+			// catalog repair rather than silently carrying an orphan forward.
+			invalid, err := versions.CheckTableDataExist(txn, accountID,
+				"select 1 from mo_catalog.mo_pubs p where p.database_name <> '*' and "+
+					"(p.database_id is null or p.database_id = 0 or not exists "+
+					"(select 1 from mo_catalog.mo_database d where d.dat_id = p.database_id "+
+					"and d.datname = p.database_name)) limit 1")
+			if err != nil || invalid {
+				if err != nil {
+					return false, err
+				}
+				return false, moerr.NewInternalErrorNoCtx("named mo_pubs row has a missing or stale database_id; repair publication catalog before upgrade")
+			}
+			return versions.CheckIndexDefinition(txn, accountID, catalog.MO_CATALOG, catalog.MO_PUBS, "idx_mo_pubs_database_id")
+		},
+	},
 }
 
 func viewMetadataTable(name, ddl string) versions.UpgradeEntry {
