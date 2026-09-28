@@ -7,9 +7,9 @@ Owner: MatrixOne query planning and Sirius execution.
 Tracking: [#28968](https://github.com/matrixorigin/matrixone/issues/28968).
 Parent migration: [#28966](https://github.com/matrixorigin/matrixone/issues/28966).
 
-Status: proposed for exact-revision design re-review. N0's exporter inventory
-was rechecked against this branch's main base; it must be rerun if relevant
-planner inputs change. The later review of its first design revision
+Status: proposed for exact-revision design re-review. N0's executable
+exporter inventory remains the baseline; implementation PRs must rerun it
+against their exact base. The later review of its first design revision
 identified overflow, division, and error-carrier contradictions. This
 revision resolves those contracts; it is not approval to lower another
 numeric signature, change eligibility, or enable embedded execution by
