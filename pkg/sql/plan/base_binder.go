@@ -3833,7 +3833,7 @@ func (b *baseBinder) coerceJSONNumericAggregateArg(
 		return args, nil
 	}
 	switch strings.ToLower(name) {
-	case "sum", "avg", "var_pop", "var_samp", "stddev_pop", "stddev_samp":
+	case "sum", "avg", "var_pop", "var_samp", "stddev_pop", "stddev_samp", "variance", "std", "stddev":
 	default:
 		return args, nil
 	}

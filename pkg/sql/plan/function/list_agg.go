@@ -760,8 +760,9 @@ func typeInList(typ types.T, supported []types.T) bool {
 }
 
 // mysqlNumericAggTypeCheck implements MySQL's numeric coercion for variance
-// and standard-deviation aggregates. JSON operands use the existing
-// JSON-to-DOUBLE conversion path. Unlike SUM, these aggregates also accept
+// and standard-deviation aggregates. JSON operands resolve to DOUBLE; SQL
+// binding supplies the aggregate warning conversion. Unlike SUM, these
+// aggregates also accept
 // string and temporal expressions and evaluate their numeric representation.
 // BIT's storage domain is unsigned, but its legacy aggregate state is not
 // widened. Bind through the existing UINT64 aggregate instead of changing the

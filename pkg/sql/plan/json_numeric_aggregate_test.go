@@ -228,6 +228,7 @@ func TestNumericAggregateBindingPreservesExistingDomains(t *testing.T) {
 func TestJSONNumericAggregateWindowUsesDoubleDomain(t *testing.T) {
 	for _, name := range []string{
 		"sum", "avg", "var_pop", "var_samp", "stddev_pop", "stddev_samp",
+		"variance", "std", "stddev",
 	} {
 		t.Run(name, func(t *testing.T) {
 			optimizer := NewMockOptimizer(true)
@@ -258,11 +259,43 @@ func TestJSONNumericAggregateWindowUsesDoubleDomain(t *testing.T) {
 					require.Equal(t, int32(types.T_float64), fn.Args[0].Typ.Id)
 					require.NotNil(t, fn.Args[0].GetF())
 					require.Equal(t, "json_agg_to_double", fn.Args[0].GetF().Func.ObjName)
+					fid, overload := function.DecodeOverloadID(fn.Args[0].GetF().Func.Obj)
+					require.Equal(t, int32(function.JSON_AGG_TO_DOUBLE), fid)
+					require.Zero(t, overload)
 					require.Len(t, fn.Args[0].GetF().Args, 1)
 					require.Equal(t, int32(types.T_json), fn.Args[0].GetF().Args[0].Typ.Id)
 				}
 			}
 			require.True(t, found, "window function %s was not found", name)
+		})
+	}
+}
+
+func TestJSONNumericAggregateSQLAliases(t *testing.T) {
+	for _, name := range []string{"var_pop", "variance", "stddev_pop", "std", "stddev"} {
+		t.Run(name, func(t *testing.T) {
+			optimizer := NewMockOptimizer(true)
+			table := DeepCopyTableDef(optimizer.ctxt.tables["nation"], true)
+			table.Cols[1].Typ = planpb.Type{Id: int32(types.T_json)}
+			optimizer.ctxt.tables["nation"] = table
+			logicPlan, err := runOneStmt(optimizer, t, "select "+name+"(n_name) from nation")
+			require.NoError(t, err)
+			found := false
+			for _, node := range logicPlan.GetQuery().Nodes {
+				for _, agg := range node.AggList {
+					fn := agg.GetF()
+					if fn == nil || fn.Func.ObjName != name {
+						continue
+					}
+					found = true
+					require.Equal(t, int32(types.T_float64), agg.Typ.Id)
+					require.Len(t, fn.Args, 1)
+					require.NotNil(t, fn.Args[0].GetF())
+					fid, _ := function.DecodeOverloadID(fn.Args[0].GetF().Func.Obj)
+					require.Equal(t, int32(function.JSON_AGG_TO_DOUBLE), fid)
+				}
+			}
+			require.True(t, found)
 		})
 	}
 }

@@ -13,9 +13,9 @@ SELECT id, SUM(j) OVER (ORDER BY id ROWS BETWEEN UNBOUNDED PRECEDING AND CURRENT
 SELECT SUM(j) FROM json_numeric_agg WHERE grp = 3;
 SELECT SUM(j), SUM(DISTINCT j) FROM json_numeric_agg WHERE grp = 4;
 
--- JSON NOT NULL still permits the JSON literal null, which casts to SQL NULL.
--- Keep its grouping row through both the single-aggregate DISTINCT rewrite and
--- the sibling-aggregate path that leaves DISTINCT in the outer node.
+-- JSON NOT NULL permits JSON null: aggregates convert it to 0, whereas an
+-- explicit numeric CAST produces SQL NULL. Retain the group through both the
+-- single-aggregate DISTINCT rewrite and the sibling-aggregate path.
 DROP TABLE IF EXISTS json_numeric_agg_not_null;
 CREATE TABLE json_numeric_agg_not_null (g INT NOT NULL, j JSON NOT NULL);
 INSERT INTO json_numeric_agg_not_null VALUES (1, 'null'), (2, '1'), (2, '1.0');
@@ -34,4 +34,5 @@ INSERT INTO json_numeric_agg_mysql VALUES (1, 'true'), (2, 'false'), (3, '"12x"'
 SELECT SUM(j), AVG(j) FROM json_numeric_agg_mysql;
 SELECT SUM(j) FROM json_numeric_agg_mysql WHERE id = 3;
 SHOW WARNINGS;
+SELECT VARIANCE(j) = VAR_POP(j) AS variance_matches, STD(j) = STDDEV_POP(j) AS std_matches, STDDEV(j) = STDDEV_POP(j) AS stddev_matches FROM json_numeric_agg_mysql;
 DROP TABLE json_numeric_agg_mysql;

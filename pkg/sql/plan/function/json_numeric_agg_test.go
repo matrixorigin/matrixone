@@ -19,6 +19,7 @@ import (
 	"math"
 	"testing"
 
+	"github.com/matrixorigin/matrixone/pkg/common/moerr"
 	"github.com/matrixorigin/matrixone/pkg/common/mpool"
 	"github.com/matrixorigin/matrixone/pkg/container/nulls"
 	"github.com/matrixorigin/matrixone/pkg/container/types"
@@ -149,13 +150,15 @@ func TestJSONNumericAggExecUsesExistingCastDomain(t *testing.T) {
 			wantNull bool
 		}{
 			{name: "empty", texts: []string{}, wantNull: true},
+			{name: "sql-null-only", texts: []string{""}, nulls: []bool{true}, wantNull: true},
+			{name: "single-json-null", texts: []string{`null`}, want: 0},
 			{name: "json-null-is-zero", texts: []string{`null`, `null`, ``}, nulls: []bool{false, false, true}, want: 0, wantNull: false},
 			{name: "singleton", texts: []string{`2.5`}, want: 2.5},
 		} {
 			t.Run(expectation.name+"/"+input.name, func(t *testing.T) {
 				got, gotNull := runJSONNumericAgg(t, proc, expectation.name, input.texts, input.nulls, false)
 				wantNull := input.wantNull ||
-					(input.name == "singleton" &&
+					((input.name == "singleton" || input.name == "single-json-null") &&
 						(expectation.name == "var_samp" || expectation.name == "stddev_samp"))
 				require.Equal(t, wantNull, gotNull)
 				if wantNull {
@@ -311,31 +314,55 @@ func TestJSONNumericAggMySQLWarningConversion(t *testing.T) {
 		text     string
 		want     float64
 		warnings int
+		sqlNull  bool
+		code     uint16
 	}{
 		{text: `true`, want: 1},
 		{text: `false`, want: 0},
-		{text: `"12x"`, want: 12, warnings: 1},
+		{text: `"12x"`, want: 12, warnings: 1, code: moerr.ER_TRUNCATED_WRONG_VALUE},
+		{text: `"abc"`, want: 0, warnings: 1, code: moerr.ER_TRUNCATED_WRONG_VALUE},
+		{text: "SQL NULL", sqlNull: true},
 		{text: `"12"`, want: 12},
 		{text: `" 12 "`, want: 12},
-		{text: `null`, want: 0, warnings: 1},
-		{text: `[1]`, want: 0, warnings: 1},
-		{text: `{"v":1}`, want: 0, warnings: 1},
+		{text: `null`, want: 0, warnings: 1, code: moerr.WARN_DATA_TRUNCATED},
+		{text: `[1]`, want: 0, warnings: 1, code: moerr.WARN_DATA_TRUNCATED},
+		{text: `{"v":1}`, want: 0, warnings: 1, code: moerr.WARN_DATA_TRUNCATED},
 	}
 	for _, tc := range cases {
 		t.Run(tc.text, func(t *testing.T) {
 			session := &numericWarningSession{}
 			proc.Session = session
-			values, err := castJSONNumericAggInput(t, proc, []string{tc.text}, nil)
+			values, err := castJSONNumericAggInput(t, proc, []string{tc.text}, []bool{tc.sqlNull})
 			require.NoError(t, err)
 			defer values.Free(proc.Mp())
-			require.False(t, values.IsNull(0))
-			require.InDelta(t, tc.want, vector.GetFixedAtNoTypeCheck[float64](values, 0), 1e-14)
+			require.Equal(t, tc.sqlNull, values.IsNull(0))
+			if !tc.sqlNull {
+				require.InDelta(t, tc.want, vector.GetFixedAtNoTypeCheck[float64](values, 0), 1e-14)
+			}
 			require.Len(t, session.warnings, tc.warnings)
 			if tc.warnings > 0 {
+				require.Equal(t, tc.code, session.warnings[0].code)
 				require.Contains(t, session.warnings[0].msg, "Truncated incorrect DOUBLE value")
 			}
 		})
 	}
+	t.Run("execution warning sink takes precedence", func(t *testing.T) {
+		session := &numericWarningSession{}
+		sink := &numericWarningSession{}
+		proc.Session = session
+		proc.WarningSink = sink
+		defer func() { proc.WarningSink = nil }()
+		values, err := castJSONNumericAggInput(t, proc, []string{`"12x"`}, nil)
+		require.NoError(t, err)
+		defer values.Free(proc.Mp())
+		require.False(t, values.IsNull(0))
+		require.Equal(t, float64(12), vector.GetFixedAtNoTypeCheck[float64](values, 0))
+		require.Empty(t, session.warnings)
+		require.Equal(t, []numericWarning{{
+			code: moerr.ER_TRUNCATED_WRONG_VALUE,
+			msg:  "Truncated incorrect DOUBLE value: '12x'",
+		}}, sink.warnings)
+	})
 }
 
 func TestJSONNumericAggCastErrorsDoNotPoisonRetry(t *testing.T) {
