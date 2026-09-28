@@ -58,7 +58,7 @@ EXECUTE json_depth_prepared USING @json_depth_input;
 Invalid data type for JSON data in argument 1 to function json_depth; a JSON string or JSON type is required.
 SET @json_depth_input = CAST('{"a":[1]}' AS BINARY);
 EXECUTE json_depth_prepared USING @json_depth_input;
-Cannot create a JSON value from a string with CHARACTER SET 'binary'.
+Data truncation: Cannot create a JSON value from a string with CHARACTER SET 'binary'.
 SET @json_depth_input = NULL;
 EXECUTE json_depth_prepared USING @json_depth_input;
 ➤ result[-5,64,0]  𝄀
@@ -66,10 +66,10 @@ null
 SET @json_depth_input = 'not-json';
 EXECUTE json_depth_prepared USING @json_depth_input;
 invalid argument json_depth, bad value invalid JSON document
-SET @json_depth_input = '{"a":{"b":1}}';
+SET @json_depth_input = '{"a":{"b":[1]}}';
 EXECUTE json_depth_prepared USING @json_depth_input;
 ➤ result[-5,64,0]  𝄀
-3
+4
 DEALLOCATE PREPARE json_depth_prepared;
 SET @json_depth_input = NULL;
 DROP TABLE IF EXISTS t_json_depth_teardown;
@@ -79,6 +79,6 @@ SELECT JSON_DEPTH(doc) FROM t_json_depth_teardown;
 JSON_DEPTH(doc)
 1
 DROP TABLE t_json_depth_teardown;
-SELECT COUNT(*) AS residue FROM information_schema.tables WHERE table_schema = DATABASE() AND table_name = 't_json_depth_teardown';
+SELECT COUNT(*) AS residue FROM information_schema.tables WHERE table_schema = DATABASE() AND table_name IN ('t_json_depth', 't_json_depth_teardown');
 residue
 0
