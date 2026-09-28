@@ -118,7 +118,7 @@ func JSONTupleTerms(bj bytejson.ByteJson, opt JSONTermOptions) []string {
 			// so only the numeric form is ever probed. An unparsable decimal text
 			// yields no term rather than a wrong one.
 			if f, err := strconv.ParseFloat(string(l.Str), 64); err == nil {
-				emit(l, func(p *types.Packer) { p.EncodeFloat64(f) })
+				emit(l, func(p *types.Packer) { packJSONNumeric(p, f) })
 			}
 			continue
 		}
@@ -146,12 +146,24 @@ func packLeafValue(p *types.Packer, l bytejson.Leaf) {
 	case bytejson.LeafString:
 		p.EncodeStringType(truncValue(l.Str))
 	case bytejson.LeafInt64:
-		p.EncodeFloat64(float64(l.I64))
+		packJSONNumeric(p, float64(l.I64))
 	case bytejson.LeafUint64:
-		p.EncodeFloat64(float64(l.U64))
+		packJSONNumeric(p, float64(l.U64))
 	case bytejson.LeafFloat64:
-		p.EncodeFloat64(l.F64)
+		packJSONNumeric(p, l.F64)
 	}
+}
+
+// packJSONNumeric encodes a JSON number as its order-preserving float64 term, canonicalizing
+// negative zero to +0.0. JSON has one number type and -0.0, 0.0, -0 and 0 are one value (the SQL
+// predicate and json_extract_float64 all compare them equal), so they must produce ONE term. Without
+// this, -0.0 keeps its sign bit and EncodeFloat64 emits a distinct term, so an exact-zero probe joins
+// away the -0.0 document (#29279). The SAME helper runs on the build and probe sides, so they agree.
+func packJSONNumeric(p *types.Packer, f float64) {
+	if f == 0 {
+		f = 0 // collapse -0.0 to +0.0 (both compare == 0)
+	}
+	p.EncodeFloat64(f)
 }
 
 // truncateTerm bounds a term to maxTermBytes.
@@ -185,7 +197,7 @@ func JSONStringTerm(tag, value string) string {
 func JSONFloatTerm(tag string, value float64) string {
 	return packProbe(func(p *types.Packer) {
 		p.EncodeStringType([]byte(tag))
-		p.EncodeFloat64(value)
+		packJSONNumeric(p, value)
 	})
 }
 

@@ -17,6 +17,7 @@ package fulltext2
 import (
 	"bytes"
 	"encoding/json"
+	"math"
 	"sort"
 	"strings"
 	"testing"
@@ -54,6 +55,30 @@ func TestBuildAndProbeTermsAgree(t *testing.T) {
 	// path-agnostic by design
 	require.Equal(t, termsOf(t, `{"b":"XXX"}`, leafOnly),
 		termsOf(t, `{"a":{"b":"XXX"}}`, leafOnly))
+}
+
+// #29279: -0.0, 0.0, -0 and 0 are one JSON value (all compare == 0 in the SQL predicate and
+// json_extract_float64), so they MUST produce one term on both the build and probe sides. Negative
+// zero keeps its sign bit through EncodeFloat64, so without canonicalization the -0.0 document gets a
+// distinct term and an exact-zero probe joins it away, silently dropping the row.
+func TestSignedZeroTermsUnify(t *testing.T) {
+	opt := JSONTermOptions{IncludeKeys: true}
+	negZero := math.Copysign(0, -1)
+	require.True(t, math.Signbit(negZero) && negZero == 0, "sanity: negZero is -0.0")
+
+	// Every zero spelling builds the SAME single term.
+	want := termsOf(t, `{"n":0}`, opt)
+	require.Len(t, want, 1)
+	for _, doc := range []string{`{"n":-0.0}`, `{"n":0.0}`, `{"n":-0}`, `{"n":0}`} {
+		require.Equal(t, want, termsOf(t, doc, opt), "doc %s must share the canonical zero term", doc)
+	}
+
+	// The probe for either zero spelling equals that build term.
+	require.Equal(t, want[0], JSONFloatTerm("n", 0))
+	require.Equal(t, want[0], JSONFloatTerm("n", negZero))
+
+	// A genuinely different value still differs (the fix only collapses signed zero).
+	require.NotEqual(t, want[0], JSONFloatTerm("n", 1))
 }
 
 // The defect being fixed: the same value under different keys must not collide.
