@@ -4044,6 +4044,17 @@ func restorePubsWithSnapshotName(
 	if pubInfos, err = getAllPubInfosBySnapshotName(ctx, bh, snapshotName, restoreTs); err != nil {
 		return
 	}
+	// Recreating a dropped account commits its own background transaction.
+	// Publication replay must start a transaction before taking its database
+	// lock, so the lock remains held through the publication catalog write.
+	if len(pubInfos) > 0 {
+		back := bh.(*backExec)
+		if back.backSes.GetTxnHandler().GetTxn() == nil {
+			if err = bh.Exec(ctx, "begin;"); err != nil {
+				return err
+			}
+		}
+	}
 
 	return createPubs(ctx, sid, bh, snapshotName, restoreTs, pubInfos)
 }
