@@ -44,4 +44,21 @@ insert into jb values (1,'苹果香蕉'),(2,'苹果香蕉西瓜'),(3,'苹果甜�
 create fulltext index fi on jb(body) with parser gojieba;
 select id from jb where match(body) against('苹果香蕉*' in boolean mode) order by id;
 
+-- #29273 P1: json_value stores each value as ONE verbatim token (not trigrams), so a trailing * is a
+-- WHOLE-VALUE prefix, not a positional trigram phrase. 苹果香蕉* must match the 苹果香蕉 row, not
+-- require the never-stored 苹果香/蕉 index tokens.
+create table jvc(id int primary key, body json);
+insert into jvc values (1,'{"w":"苹果香蕉"}'),(2,'{"w":"苹果香瓜"}'),(3,'{"w":"other"}');
+create fulltext index fi on jvc(body) with parser json_value;
+select id from jvc where match(body) against('苹果香蕉*' in boolean mode) order by id;
+select id from jvc where match(body) against('+苹果香蕉*' in boolean mode) order by id;
+
+-- #29273 P1: json_value's stored-token cap is 127 bytes, not the SimpleTokenizer 23. A 26-char Latin
+-- prefix must match ONLY the value that starts with all 26 chars; capping the query at 23 would wrongly
+-- match the sibling that shares the first 23.
+create table jvl(id int primary key, body json);
+insert into jvl values (1,'{"w":"abcdefghijklmnopqrstuvwxyz"}'),(2,'{"w":"abcdefghijklmnopqrstuvwabc"}');
+create fulltext index fi on jvl(body) with parser json_value;
+select id from jvl where match(body) against('abcdefghijklmnopqrstuvwxyz*' in boolean mode) order by id;
+
 drop database ft_star_phrase;

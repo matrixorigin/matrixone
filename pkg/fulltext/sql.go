@@ -19,15 +19,24 @@ import (
 	"strings"
 
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
+	"github.com/matrixorigin/matrixone/pkg/container/bytejson"
 	"github.com/matrixorigin/matrixone/pkg/monlp/tokenizer"
 	"github.com/matrixorigin/matrixone/pkg/sql/parsers/tree"
 )
 
-// truncateStarPrefix caps a `word*` prefix at the stored-token byte limit (MAX_TOKEN_SIZE) on a
-// UTF-8 boundary, so a Latin stem longer than the cap prefix-matches the truncated token the index
-// actually stored instead of a string no token can start with (#29273). No-op for CJK trigram tails
-// (well under the cap).
-func truncateStarPrefix(prefix string) string {
+// truncateStarPrefix caps a `word*` prefix at the stored-token byte limit of the selected parser, so
+// a stem longer than the cap prefix-matches the truncated token the index actually stored instead of
+// a string no token can start with (#29273). SimpleTokenizer (default/ngram) caps Latin tokens at 23
+// bytes on a UTF-8 boundary; json_value stores each value verbatim capped at 127 bytes (raw byte cut,
+// bytejson.fillToken), so it must use the 127-byte cap — the 23-byte cap would match too many values.
+// No-op for CJK trigram tails (well under either cap).
+func truncateStarPrefix(prefix, parser string) string {
+	if parser == "json_value" {
+		if len(prefix) <= bytejson.MAX_TOKEN_SIZE {
+			return prefix
+		}
+		return prefix[:bytejson.MAX_TOKEN_SIZE]
+	}
 	if len(prefix) <= tokenizer.MAX_TOKEN_SIZE {
 		return prefix
 	}
@@ -213,6 +222,12 @@ func genStarPhraseSql(kw string, mode int64, idxtbl string, parser string) (stri
 	if len(kw) == 0 || kw[len(kw)-1] != '*' {
 		return "", false, nil
 	}
+	// json_value stores each JSON value as ONE verbatim token, not trigrams, so a star is a
+	// whole-value prefix. Fall through to prefix_eq rather than a positional trigram phrase, which
+	// would require index tokens that were never stored (#29273 P1).
+	if parser == "json_value" {
+		return "", false, nil
+	}
 	stem := kw[:len(kw)-1]
 	var children []*Pattern
 	var err error
@@ -269,7 +284,7 @@ func GenJoinPlusSql(p *Pattern, mode int64, idxtbl string, parser string) ([]*Sq
 			} else if ok {
 				sql = fmt.Sprintf("%s AS (%s)", alias, phraseSql)
 			} else {
-				prefix := truncateStarPrefix(kw[0 : len(kw)-1])
+				prefix := truncateStarPrefix(kw[0:len(kw)-1], parser)
 				sql = fmt.Sprintf("%s AS (SELECT doc_id FROM %s WHERE prefix_eq(word,'%s'))", alias, idxtbl, escape(prefix))
 			}
 			sqlnode.Children = append(sqlnode.Children, &SqlNode{Index: tp.Index, Label: alias, IsJoin: true, Sql: sql})
@@ -319,7 +334,7 @@ func GenJoinSql(p *Pattern, mode int64, idxtbl string, parser string) ([]*SqlNod
 			} else if ok {
 				sql = fmt.Sprintf("%s AS (%s)", alias, phraseSql)
 			} else {
-				prefix := truncateStarPrefix(kw[0 : len(kw)-1])
+				prefix := truncateStarPrefix(kw[0:len(kw)-1], parser)
 				sql = fmt.Sprintf("%s AS (SELECT doc_id FROM %s WHERE prefix_eq(word,'%s'))", alias, idxtbl, escape(prefix))
 			}
 			sqlnode.Children = append(sqlnode.Children, &SqlNode{Index: idx, Label: alias, IsJoin: true, Sql: sql})
@@ -391,7 +406,7 @@ func GenSql(p *Pattern, mode int64, idxtbl string, joinsql []*SqlNode, isJoin bo
 				} else if ok {
 					sql = fmt.Sprintf("SELECT doc_id, CAST(%d as int) FROM (%s) x", idx, phraseSql)
 				} else {
-					prefix := truncateStarPrefix(kw[0 : len(kw)-1])
+					prefix := truncateStarPrefix(kw[0:len(kw)-1], parser)
 					sql = fmt.Sprintf("SELECT doc_id, CAST(%d as int) FROM %s WHERE prefix_eq(word,'%s')", idx, idxtbl, escape(prefix))
 				}
 				sqlnode.Sql = sql
@@ -430,7 +445,7 @@ func GenSql(p *Pattern, mode int64, idxtbl string, joinsql []*SqlNode, isJoin bo
 						sql = fmt.Sprintf("SELECT %s.doc_id, CAST(%d as int) FROM (%s) %s, %s WHERE %s.doc_id = %s.doc_id",
 							jn.Label, idx, phraseSql, alias, jn.Label, jn.Label, alias)
 					} else {
-						prefix := truncateStarPrefix(kw[0 : len(kw)-1])
+						prefix := truncateStarPrefix(kw[0:len(kw)-1], parser)
 						sql = fmt.Sprintf("SELECT %s.doc_id, CAST(%d as int) FROM %s as %s, %s WHERE %s.doc_id = %s.doc_id AND prefix_eq(%s.word, '%s')",
 							jn.Label, idx, idxtbl, alias, jn.Label, jn.Label, alias, alias, escape(prefix))
 					}
@@ -549,7 +564,7 @@ func SqlPhrase(ps []*Pattern, mode int64, idxtbl string, withIndex bool) (string
 			if kw[len(kw)-1] != '*' {
 				return "", moerr.NewInternalErrorNoCtx("wildcard search without character *")
 			}
-			prefix := truncateStarPrefix(kw[0 : len(kw)-1])
+			prefix := truncateStarPrefix(kw[0:len(kw)-1], "")
 			if withIndex {
 				sql = fmt.Sprintf("SELECT doc_id, CAST(%d as int) FROM %s WHERE prefix_eq(word,'%s')",
 					tp.Index, idxtbl, escape(prefix))
@@ -589,7 +604,7 @@ func SqlPhrase(ps []*Pattern, mode int64, idxtbl string, withIndex bool) (string
 				if kw[len(kw)-1] != '*' {
 					return "", moerr.NewInternalErrorNoCtx("wildcard search without character *")
 				}
-				prefix := truncateStarPrefix(kw[0 : len(kw)-1])
+				prefix := truncateStarPrefix(kw[0:len(kw)-1], "")
 				cond = fmt.Sprintf("prefix_eq(word,'%s')", escape(prefix))
 			}
 			union = append(union, fmt.Sprintf("SELECT doc_id, pos - %d AS anchor FROM %s WHERE %s",

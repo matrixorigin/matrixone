@@ -678,16 +678,21 @@ func cjkStarPhraseChildren(stem string) []*Pattern {
 		return nil
 	}
 	children := make([]*Pattern, 0, len(runes)/3+1)
+	// Track the byte offset in one pass; re-encoding string(runes[:i]) per child is O(n^2) and a long
+	// CJK stem (thousands of runes) would amplify per-query CPU/GC before execution (#29273 P2).
+	bytePos := int32(0)
 	for i := 0; i < len(runes); i += 3 {
 		end := i + 3
 		if end > len(runes) {
 			end = len(runes)
 		}
+		text := string(runes[i:end])
 		children = append(children, &Pattern{
-			Text:     string(runes[i:end]),
+			Text:     text,
 			Operator: TEXT,
-			Position: int32(len(string(runes[:i]))),
+			Position: bytePos,
 		})
+		bytePos += int32(len(text))
 	}
 	last := children[len(children)-1]
 	last.Operator = STAR

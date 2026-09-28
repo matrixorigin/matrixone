@@ -76,16 +76,22 @@ func TestStarPhraseAllGenSites(t *testing.T) {
 // #29273: truncateStarPrefix caps an over-long Latin star prefix at the stored-token byte limit on a
 // rune boundary; short/CJK prefixes pass through untouched.
 func TestTruncateStarPrefix(t *testing.T) {
-	require.Equal(t, "abc", truncateStarPrefix("abc"))
+	require.Equal(t, "abc", truncateStarPrefix("abc", ""))
 	require.Equal(t, strings.Repeat("a", tokenizer.MAX_TOKEN_SIZE),
-		truncateStarPrefix(strings.Repeat("a", tokenizer.MAX_TOKEN_SIZE)))
+		truncateStarPrefix(strings.Repeat("a", tokenizer.MAX_TOKEN_SIZE), ""))
 	require.Equal(t, strings.Repeat("b", tokenizer.MAX_TOKEN_SIZE),
-		truncateStarPrefix(strings.Repeat("b", 30)))
-	require.Equal(t, "蕉", truncateStarPrefix("蕉"))
+		truncateStarPrefix(strings.Repeat("b", 30), ""))
+	require.Equal(t, "蕉", truncateStarPrefix("蕉", ""))
 	// 12 x 2-byte rune (24 bytes) must cap on a rune boundary, never mid-rune.
-	got := truncateStarPrefix(strings.Repeat("é", 12))
+	got := truncateStarPrefix(strings.Repeat("é", 12), "")
 	require.LessOrEqual(t, len(got), tokenizer.MAX_TOKEN_SIZE)
 	require.True(t, utf8.ValidString(got))
+
+	// json_value stores each value verbatim up to 127 bytes, so its prefix keeps the whole stem (a
+	// 26-byte Latin prefix must NOT be cut to 23 -- that would match sibling values), and only caps
+	// past 127 bytes (#29273 P1).
+	require.Equal(t, strings.Repeat("a", 26), truncateStarPrefix(strings.Repeat("a", 26), "json_value"))
+	require.Equal(t, strings.Repeat("a", 127), truncateStarPrefix(strings.Repeat("a", 200), "json_value"))
 }
 
 // #29273: genStarPhraseSql returns ok=true only for a stem that must become a positional phrase (a
@@ -107,6 +113,11 @@ func TestGenStarPhraseSql(t *testing.T) {
 	require.False(t, ok)
 	// Latin -> ok=false.
 	_, ok, err = genStarPhraseSql("hello*", mode, "idx", "")
+	require.NoError(t, err)
+	require.False(t, ok)
+	// json_value stores each value as ONE verbatim token, so even a >3-rune CJK stem must NOT expand
+	// to a trigram phrase -> ok=false (whole-value prefix_eq) (#29273 P1).
+	_, ok, err = genStarPhraseSql("苹果香蕉*", mode, "idx", "json_value")
 	require.NoError(t, err)
 	require.False(t, ok)
 }
