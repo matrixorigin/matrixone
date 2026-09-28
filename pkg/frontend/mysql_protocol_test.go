@@ -178,9 +178,90 @@ func TestMysqlProtocolReceiveExtraInfoSaltValidation(t *testing.T) {
 				require.False(t, ses.fromProxy)
 				require.Len(t, logs.FilterMessage("invalid proxy salt length").All(), 1)
 			}
-			require.NotEmpty(t, proto.makeHandshakeV10Payload())
+			handshake, err := proto.makeHandshakeV10Payload()
+			require.NoError(t, err)
+			require.NotEmpty(t, handshake)
 		})
 	}
+}
+
+func TestMysqlProtocolWriteHandshakeAfterKillConnection(t *testing.T) {
+	parameters := &config.FrontendParameters{}
+	proto := NewMysqlClientProtocol("", 42, &Conn{conn: &testConn{}}, 0, parameters)
+	routine := NewRoutine(context.Background(), proto, parameters)
+	require.Len(t, proto.GetSalt(), 20)
+
+	done := make(chan struct{})
+	go func() {
+		routine.killConnection(false)
+		close(done)
+	}()
+	<-done
+	require.Empty(t, proto.GetSalt())
+	require.ErrorContains(t, proto.WriteHandshake(), "connection closed before handshake")
+}
+
+func TestMysqlProtocolWriteHandshakeRejectsInvalidSalt(t *testing.T) {
+	parameters := &config.FrontendParameters{}
+	proto := NewMysqlClientProtocol("", 42, &Conn{conn: &testConn{}}, 0, parameters)
+	proto.SetSalt(nil)
+	require.ErrorContains(t, proto.WriteHandshake(), "invalid handshake salt length")
+}
+
+type handshakeBlockingIO struct {
+	IOPackage
+	entered chan struct{}
+	release chan struct{}
+	once    sync.Once
+}
+
+func (b *handshakeBlockingIO) WriteUint8(data []byte, pos int, value uint8) int {
+	b.once.Do(func() {
+		close(b.entered)
+		<-b.release
+	})
+	return b.IOPackage.WriteUint8(data, pos, value)
+}
+
+func TestMysqlProtocolHandshakeSaltSnapshotSurvivesClose(t *testing.T) {
+	parameters := &config.FrontendParameters{}
+	proto := NewMysqlClientProtocol("", 42, &Conn{conn: &testConn{}}, 0, parameters)
+	routine := NewRoutine(context.Background(), proto, parameters)
+	blockingIO := &handshakeBlockingIO{
+		IOPackage: gIO,
+		entered:   make(chan struct{}),
+		release:   make(chan struct{}),
+	}
+	proto.io = blockingIO
+	release := sync.OnceFunc(func() { close(blockingIO.release) })
+	t.Cleanup(release)
+
+	type result struct {
+		payload []byte
+		err     error
+	}
+	handshakeDone := make(chan result, 1)
+	go func() {
+		payload, err := proto.makeHandshakeV10Payload()
+		handshakeDone <- result{payload: payload, err: err}
+	}()
+	<-blockingIO.entered
+
+	closeDone := make(chan struct{})
+	go func() {
+		routine.killConnection(false)
+		close(closeDone)
+	}()
+	select {
+	case <-closeDone:
+	case <-time.After(5 * time.Second):
+		t.Fatal("closing the connection waited for handshake construction")
+	}
+	release()
+	res := <-handshakeDone
+	require.NoError(t, res.err)
+	require.NotEmpty(t, res.payload)
+	require.Empty(t, proto.GetSalt())
 }
 
 func registerConn(clientConn net.Conn) {
