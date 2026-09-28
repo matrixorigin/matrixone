@@ -1,0 +1,65 @@
+DROP DATABASE IF EXISTS view_metadata_on_demand;
+CREATE DATABASE view_metadata_on_demand;
+USE view_metadata_on_demand;
+CREATE TABLE src (
+id INT,
+code VARCHAR(5),
+qty INT NOT NULL DEFAULT 7,
+price DECIMAL(10,2)
+);
+CREATE VIEW v AS SELECT id, code, qty, price, qty * price AS total FROM src;
+ALTER TABLE src MODIFY COLUMN code VARCHAR(60);
+ALTER TABLE src MODIFY COLUMN qty BIGINT NOT NULL DEFAULT 9;
+ALTER TABLE src MODIFY COLUMN price DECIMAL(20,5);
+DESC v;
+➤ Field[1,0,0]  ¦  Type[1,0,0]  ¦  Null[1,0,0]  ¦  Key[1,0,0]  ¦  Default[1,0,0]  ¦  Extra[1,0,0]  ¦  Comment[1,0,0]  𝄀
+id  ¦  INT(32)  ¦  YES  ¦    ¦  null  ¦    ¦    𝄀
+code  ¦  VARCHAR(60)  ¦  YES  ¦    ¦  null  ¦    ¦    𝄀
+qty  ¦  BIGINT(64)  ¦  NO  ¦    ¦  9  ¦    ¦    𝄀
+price  ¦  DECIMAL(20,5)  ¦  YES  ¦    ¦  null  ¦    ¦    𝄀
+total  ¦  DECIMAL(39,5)  ¦  YES  ¦    ¦  null  ¦    ¦  
+SELECT column_name, data_type, character_maximum_length, numeric_precision, numeric_scale,
+is_nullable, column_default
+FROM information_schema.columns
+WHERE table_schema = 'view_metadata_on_demand' AND table_name = 'v'
+ORDER BY ordinal_position;
+➤ column_name[12,256,0]  ¦  data_type[12,65535,0]  ¦  character_maximum_length[-5,64,0]  ¦  numeric_precision[-5,64,0]  ¦  numeric_scale[-5,64,0]  ¦  is_nullable[12,3,0]  ¦  column_default[12,65535,0]  𝄀
+id  ¦  int  ¦  null  ¦  10  ¦  0  ¦  YES  ¦  null  𝄀
+code  ¦  varchar  ¦  60  ¦  null  ¦  null  ¦  YES  ¦  null  𝄀
+qty  ¦  bigint  ¦  null  ¦  19  ¦  0  ¦  NO  ¦  9  𝄀
+price  ¦  decimal  ¦  null  ¦  20  ¦  5  ¦  YES  ¦  null  𝄀
+total  ¦  decimal  ¦  null  ¦  39  ¦  5  ¦  YES  ¦  null
+CREATE TABLE copied AS SELECT id, code, qty, price FROM v;
+DESC copied;
+➤ Field[1,0,0]  ¦  Type[1,0,0]  ¦  Null[1,0,0]  ¦  Key[1,0,0]  ¦  Default[1,0,0]  ¦  Extra[1,0,0]  ¦  Comment[1,0,0]  𝄀
+id  ¦  INT(32)  ¦  YES  ¦    ¦  null  ¦    ¦    𝄀
+code  ¦  VARCHAR(60)  ¦  YES  ¦    ¦  null  ¦    ¦    𝄀
+qty  ¦  BIGINT(64)  ¦  NO  ¦    ¦  0  ¦    ¦    𝄀
+price  ¦  DECIMAL(20,5)  ¦  YES  ¦    ¦  null  ¦    ¦  
+DROP TABLE src;
+DESC v;
+SQL parser error: table "src" does not exist
+CREATE TABLE src (
+id BIGINT,
+code VARCHAR(90),
+qty BIGINT NOT NULL DEFAULT 11,
+price DECIMAL(24,6)
+);
+DESC v;
+➤ Field[1,0,0]  ¦  Type[1,0,0]  ¦  Null[1,0,0]  ¦  Key[1,0,0]  ¦  Default[1,0,0]  ¦  Extra[1,0,0]  ¦  Comment[1,0,0]  𝄀
+id  ¦  BIGINT(64)  ¦  YES  ¦    ¦  null  ¦    ¦    𝄀
+code  ¦  VARCHAR(90)  ¦  YES  ¦    ¦  null  ¦    ¦    𝄀
+qty  ¦  BIGINT(64)  ¦  NO  ¦    ¦  11  ¦    ¦    𝄀
+price  ¦  DECIMAL(24,6)  ¦  YES  ¦    ¦  null  ¦    ¦    𝄀
+total  ¦  DECIMAL(43,6)  ¦  YES  ¦    ¦  null  ¦    ¦  
+SELECT column_name, column_type, column_default
+FROM information_schema.columns
+WHERE table_schema = 'view_metadata_on_demand' AND table_name = 'v'
+ORDER BY ordinal_position;
+➤ column_name[12,256,0]  ¦  column_type[12,65535,0]  ¦  column_default[12,65535,0]  𝄀
+id  ¦  BIGINT(64)  ¦  null  𝄀
+code  ¦  VARCHAR(90)  ¦  null  𝄀
+qty  ¦  BIGINT(64)  ¦  11  𝄀
+price  ¦  DECIMAL(24,6)  ¦  null  𝄀
+total  ¦  DECIMAL(43,6)  ¦  null
+DROP DATABASE view_metadata_on_demand;
