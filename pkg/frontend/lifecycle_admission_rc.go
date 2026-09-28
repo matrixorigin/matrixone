@@ -186,18 +186,24 @@ func beginLifecycleRCAdmission(ctx context.Context, ses *Session, bh BackgroundE
 func (a *lifecycleRCAdmission) lockKey(relationName string, ctx context.Context, keys *batch.Batch, mode lock.LockMode, group uint32) error {
 	defer keys.Vecs[0].Free(a.proc.Mp())
 	systemCtx := defines.AttachAccountId(ctx, catalog.System_Account)
+	relationCtx := systemCtx
+	if relationName == catalog.MO_SNAPSHOTS {
+		// Each account owns a separate mo_snapshots relation. Resolve the same
+		// relation that the subsequent named-snapshot SELECT FOR UPDATE reads.
+		relationCtx = ctx
+	}
 	eng := a.proc.GetSessionInfo().StorageEngine
-	db, err := eng.Database(systemCtx, catalog.MO_CATALOG, a.proc.GetTxnOperator())
+	db, err := eng.Database(relationCtx, catalog.MO_CATALOG, a.proc.GetTxnOperator())
 	if err != nil {
 		return err
 	}
-	relation, err := db.Relation(systemCtx, relationName, nil)
+	relation, err := db.Relation(relationCtx, relationName, nil)
 	if err != nil {
 		return err
 	}
 	return withCloneLockContext(a.proc, ctx, func() error {
 		_, err := lockop.LockRowsForAdmissionWithContext(ctx, eng, a.proc,
-			relation.GetTableID(systemCtx), keys, 0, *keys.Vecs[0].GetType(), mode, group)
+			relation.GetTableID(relationCtx), keys, 0, *keys.Vecs[0].GetType(), mode, group)
 		return err
 	})
 }

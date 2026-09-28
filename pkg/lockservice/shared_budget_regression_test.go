@@ -70,6 +70,44 @@ func requireExactMixedModeLockStore(
 	}
 }
 
+func TestFastFailSharedToExclusiveGatePromotion(t *testing.T) {
+	runLockServiceTestsWithAdjustConfig(t, []string{"s1"}, time.Second*10,
+		func(_ *lockTableAllocator, services []*service) {
+			s := services[0]
+			ctx, cancel := context.WithTimeout(context.Background(), time.Second*10)
+			defer cancel()
+			const table = uint64(26712)
+			a, b := []byte("gate-a"), []byte("gate-b")
+			shared := newTestRowSharedOptions()
+			exclusive := newTestRowExclusiveOptions()
+			exclusive.Policy = pb.WaitPolicy_FastFail
+			_, err := s.Lock(ctx, table, newTestRows(1), a, shared)
+			require.NoError(t, err)
+			_, err = s.Lock(ctx, table, newTestRows(1), a, exclusive)
+			require.NoError(t, err, "sole shared holder must promote without waiting")
+			lt := s.tableGroups.get(0, table).(*localLockTable)
+			func() {
+				lt.mu.RLock()
+				defer lt.mu.RUnlock()
+				held, ok := lt.mu.store.Get(newTestRows(1)[0])
+				require.True(t, ok)
+				require.Equal(t, pb.LockMode_Exclusive, held.GetLockMode())
+			}()
+			require.NoError(t, s.Unlock(ctx, a, timestamp.Timestamp{}))
+
+			_, err = s.Lock(ctx, table, newTestRows(1), a, shared)
+			require.NoError(t, err)
+			_, err = s.Lock(ctx, table, newTestRows(1), b, shared)
+			require.NoError(t, err)
+			_, err = s.Lock(ctx, table, newTestRows(1), a, exclusive)
+			require.True(t, moerr.IsMoErrCode(err, moerr.ErrLockConflict), "%v", err)
+			require.NoError(t, s.Unlock(ctx, b, timestamp.Timestamp{}))
+			_, err = s.Lock(ctx, table, newTestRows(1), a, exclusive)
+			require.NoError(t, err, "remaining holder must promote after competitor rolls back")
+			require.NoError(t, s.Unlock(ctx, a, timestamp.Timestamp{}))
+		}, nil)
+}
+
 func TestMixedModeBudgetKeepsExactOwnership(t *testing.T) {
 	for _, foreignHolder := range []bool{false, true} {
 		name := "sole-holder"

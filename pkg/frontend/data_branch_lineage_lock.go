@@ -506,17 +506,17 @@ func (a *lifecycleRCAdmission) admitBranchCloneRC(ctx context.Context, ses *Sess
 }
 
 func (a *lifecycleRCAdmission) lockBranchSnapshotName(ctx context.Context, tableID uint64) error {
-	return a.lockSnapshotName(ctx, databranchutils.BranchSnapshotName(tableID))
+	return a.lockSnapshotName(ctx, databranchutils.BranchSnapshotName(tableID), catalog.System_Account)
 }
 
-func (a *lifecycleRCAdmission) lockSnapshotName(ctx context.Context, name string) error {
+func (a *lifecycleRCAdmission) lockSnapshotName(ctx context.Context, name string, ownerAccountID uint32) error {
 	keys := batch.NewWithSize(1)
 	keys.Vecs[0] = vector.NewVec(types.T_varchar.ToType())
 	if err := vector.AppendBytes(keys.Vecs[0], []byte(name), false, a.proc.Mp()); err != nil {
 		keys.Vecs[0].Free(a.proc.Mp())
 		return err
 	}
-	return a.lockKey(catalog.MO_SNAPSHOTS, defines.AttachAccountId(ctx, catalog.System_Account), keys, lockpb.LockMode_Exclusive, catalog.System_Account)
+	return a.lockKey(catalog.MO_SNAPSHOTS, defines.AttachAccountId(ctx, ownerAccountID), keys, lockpb.LockMode_Exclusive, ownerAccountID)
 }
 
 func compareBranchCloneSource(a, b branchCloneSource) int {

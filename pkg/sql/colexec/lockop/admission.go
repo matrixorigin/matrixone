@@ -47,12 +47,19 @@ func exactMutationRows(ctx context.Context) bool {
 // install an applied frontier and revalidate catalog identity before effects.
 // The returned timestamp can include lock-table creation time and is not a TN
 // read barrier. Capacity exhaustion fails instead of widening to a table lock.
-// The caller retains batch ownership and must finish the owning transaction.
+// The optional wait policy applies only to this request, allowing a retained
+// shared owner to attempt a nonwaiting exclusive promotion without changing
+// the process's policy for other locks. The caller retains batch ownership
+// and must finish the owning transaction.
 func LockRowsForAdmissionWithContext(
 	ctx context.Context, eng engine.Engine, proc *process.Process,
 	tableID uint64, bat *batch.Batch, idx int32, pkType types.Type,
 	mode lock.LockMode, group uint32,
+	waitPolicy ...lock.WaitPolicy,
 ) (timestamp.Timestamp, error) {
+	if len(waitPolicy) > 1 {
+		return timestamp.Timestamp{}, moerr.NewInternalError(ctx, "invalid lifecycle lock wait policy")
+	}
 	if bat == nil || idx < 0 || int(idx) >= len(bat.Vecs) || bat.Vecs[idx] == nil ||
 		bat.Vecs[idx].Length() == 0 || bat.Vecs[idx].HasNull() ||
 		bat.Vecs[idx].GetType().Oid != pkType.Oid {
@@ -77,6 +84,9 @@ func LockRowsForAdmissionWithContext(
 	opts := DefaultLockOptions(packer).WithLockMode(mode).WithLockGroup(group).
 		WithLockTable(false, false)
 	opts.admissionOnly = true
+	if len(waitPolicy) == 1 {
+		opts.waitPolicy = &waitPolicy[0]
+	}
 	// Also prevent the fetcher from promoting a large Exclusive key batch.
 	opts.maxCountPerLock = bat.Vecs[idx].Length()
 	var deadline int64

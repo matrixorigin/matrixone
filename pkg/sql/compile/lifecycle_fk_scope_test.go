@@ -137,6 +137,21 @@ func TestDropLifecycleForeignKeyDomain(t *testing.T) {
 	require.ErrorIs(t, err, context.Canceled)
 }
 
+func TestDropLifecycleBranchRootsExcludeForeignKeyDomain(t *testing.T) {
+	domain := map[uint64]dropLifecycleIdentity{
+		1: {database: "target"},
+		2: {database: "target"},
+		3: {database: "foreign"},
+	}
+	tables := []*plan.DropTable{
+		{Database: "target", TableId: 2},
+		{Database: "target", TableId: 1},
+		{Database: "foreign", TableId: 3, IsView: true},
+	}
+	require.Equal(t, []uint64{1, 2}, dropLifecycleBranchRoots(domain, tables, ""))
+	require.Equal(t, []uint64{1, 2}, dropLifecycleBranchRoots(domain, nil, "target"))
+}
+
 func TestBroadDropLifecycleReceiptIsSynchronous(t *testing.T) {
 	ctrl := gomock.NewController(t)
 	stop := errors.New("target lookup reached without nested admission")

@@ -152,10 +152,9 @@ func lockNamedDataBranchCloneSnapshot(
 	if err != nil {
 		return err
 	}
-	// Snapshot names belong to the system catalog even when the historical
-	// source table belongs to another account. Source identity is only for
-	// table reads; this revalidates an already-authorized global snapshot row.
-	records, err := getSnapshotRecords(defines.AttachAccountId(ctx, catalog.System_Account), bh, sql)
+	// The snapshot row belongs to the account that resolved its name, which
+	// may differ from the account owning the historical source table.
+	records, err := getSnapshotRecords(ctx, bh, sql)
 	if err != nil {
 		return err
 	}
@@ -949,13 +948,13 @@ func handleCloneTable(
 	if admission != nil {
 		namedSnapshotCtx = context.WithValue(namedSnapshotCtx, dataBranchCloneLockCtxKey{}, true)
 		if shouldLockNamedDataBranchCloneSnapshot(namedSnapshotCtx, snapshot) {
-			if err = admission.lockSnapshotName(reqCtx, snapshot.ExtraInfo.Name); err != nil {
+			if err = admission.lockSnapshotName(reqCtx, snapshot.ExtraInfo.Name, opAccountId); err != nil {
 				return
 			}
 		}
 	}
 	if err = lockNamedDataBranchCloneSnapshot(
-		defines.AttachAccountId(namedSnapshotCtx, fromAccountId), bh, snapshot,
+		defines.AttachAccountId(namedSnapshotCtx, opAccountId), bh, snapshot,
 	); err != nil {
 		return
 	}
@@ -1225,13 +1224,13 @@ func handleCloneDatabaseWithSource(
 	if admission != nil {
 		namedSnapshotCtx = context.WithValue(namedSnapshotCtx, dataBranchCloneLockCtxKey{}, true)
 		if shouldLockNamedDataBranchCloneSnapshot(namedSnapshotCtx, source.snapshot) {
-			if err = admission.lockSnapshotName(reqCtx, source.snapshot.ExtraInfo.Name); err != nil {
+			if err = admission.lockSnapshotName(reqCtx, source.snapshot.ExtraInfo.Name, source.opAccountId); err != nil {
 				return
 			}
 		}
 	}
 	if err = lockNamedDataBranchCloneSnapshot(
-		defines.AttachAccountId(namedSnapshotCtx, fromAccountID), bh, source.snapshot,
+		defines.AttachAccountId(namedSnapshotCtx, source.opAccountId), bh, source.snapshot,
 	); err != nil {
 		return
 	}
