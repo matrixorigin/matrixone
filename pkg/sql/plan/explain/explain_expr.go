@@ -110,10 +110,13 @@ func describeExpr(ctx context.Context, expr *plan.Expr, options *ExplainOptions,
 				// stable rather than emitting binary into the plan text.
 				buf.WriteString("'" + geometryLiteralText(expr.Typ.Id, val.Sval) + "'")
 			} else if exprImpl.Lit.IsSerialized {
-				// Tuple-encoded serial values have no meaningful text form. Keep
-				// their bytes out of diagnostic output even when they happen to be
-				// valid and printable UTF-8.
-				buf.WriteString("'<opaque>'")
+				// Text diagnostics redact tuple-encoded values. SQL JSON instead
+				// preserves their bytes and type without interpreting tuple contents.
+				if options != nil && options.CompleteLiteralVectors {
+					fmt.Fprintf(buf, "serialized(type=%d,width=%d,scale=%d,value=0x%X)", expr.Typ.Id, expr.Typ.Width, expr.Typ.Scale, []byte(val.Sval))
+				} else {
+					buf.WriteString("'<opaque>'")
+				}
 			} else if exprImpl.Lit.IsBin || !isPrintableUTF8(val.Sval) {
 				// SQL hex/bit literals and arbitrary non-text bytes remain useful
 				// when rendered canonically, without leaking invalid UTF-8 or
@@ -210,7 +213,11 @@ func describeExpr(ctx context.Context, expr *plan.Expr, options *ExplainOptions,
 			}
 		}
 	case *plan.Expr_Vec:
-		buf.WriteString(literalVecText(exprImpl.Vec, options != nil && options.CompleteLiteralVectors))
+		value, err := literalVecText(ctx, exprImpl.Vec, options != nil && options.CompleteLiteralVectors)
+		if err != nil {
+			return err
+		}
+		buf.WriteString(value)
 	case *plan.Expr_T:
 		tt := types.T(expr.Typ.Id)
 		if tt == types.T_decimal64 || tt == types.T_decimal128 {
@@ -236,33 +243,33 @@ func printableVectorText(value string) string {
 	return fmt.Sprintf("0x%X", []byte(value))
 }
 
-func literalVecText(literalVec *plan.LiteralVec, complete bool) (text string) {
+func literalVecText(ctx context.Context, literalVec *plan.LiteralVec, complete bool) (text string, err error) {
+	invalid := func() (string, error) {
+		if complete {
+			return "", moerr.NewInvalidInput(ctx, "literal vector cannot be serialized for EXPLAIN FORMAT=JSON")
+		}
+		return "<invalid-vector>", nil
+	}
 	if literalVec == nil {
-		return "<invalid-vector>"
+		return invalid()
 	}
-	if literalVec.IsSerialized {
-		// A LiteralVec cannot represent per-element diagnostic provenance.
-		// If any element is tuple-encoded, redact the container as a whole.
-		return "[<opaque>]"
+	if literalVec.IsSerialized && !complete {
+		return "[<opaque>]", nil
 	}
-
-	// UnmarshalBinary is no-copy and vector formatting trusts encoded varlen
-	// metadata. Keep malformed internal plans from escaping this diagnostic
-	// boundary as a panic.
+	// Decoding is no-copy. Formatting never mutates the encoded source, and
+	// malformed internal vectors must not escape the diagnostic boundary.
 	defer func() {
 		if recover() != nil {
-			text = "<invalid-vector>"
+			text, err = invalid()
 		}
 	}()
 	vec := vector.NewVec(types.T_any.ToType())
 	defer vec.Free(nil)
 	if err := vec.UnmarshalBinary(literalVec.Data); err != nil {
-		return "<invalid-vector>"
+		return invalid()
 	}
-
 	originalLen := vec.Length()
 	if !complete {
-		// Preserve the established text EXPLAIN display contract.
 		if originalLen > 16 {
 			vec.SetLength(16)
 		}
@@ -270,19 +277,36 @@ func literalVecText(literalVec *plan.LiteralVec, complete bool) (text string) {
 		if originalLen > 16 {
 			text += fmt.Sprintf("... %v values", originalLen)
 		}
-		return text
+		return text, nil
 	}
-	renderLen := originalLen
-	values := make([]string, 0, renderLen)
-	for i := 0; i < renderLen; i++ {
+	if literalVec.IsSerialized {
+		typ := vec.GetType()
+		if typ == nil {
+			return invalid()
+		}
+		switch typ.Oid {
+		case types.T_char, types.T_varchar, types.T_text, types.T_blob, types.T_binary, types.T_varbinary:
+		default:
+			return invalid()
+		}
+		values := make([]string, 0, originalLen)
+		for i := 0; i < originalLen; i++ {
+			if vec.IsNull(uint64(i)) {
+				values = append(values, "NULL")
+			} else {
+				values = append(values, fmt.Sprintf("0x%X", []byte(vec.GetStringAt(i))))
+			}
+		}
+		return fmt.Sprintf("serialized_vec(type=%d,width=%d,scale=%d,values=[%s])", typ.Oid, typ.Width, typ.Scale, strings.Join(values, ",")), nil
+	}
+	values := make([]string, 0, originalLen)
+	for i := 0; i < originalLen; i++ {
 		values = append(values, literalVecElementText(vec, i))
 	}
-	if renderLen == 1 {
-		text = values[0]
-	} else {
-		text = "[" + strings.Join(values, ", ") + "]"
+	if originalLen == 1 {
+		return values[0], nil
 	}
-	return text
+	return "[" + strings.Join(values, ", ") + "]", nil
 }
 
 // literalVecElementText renders one element with the type and scale carried by
@@ -437,7 +461,7 @@ func funcExprExplain(ctx context.Context, funcExpr *plan.Function, Typ *plan.Typ
 		if uint64(funcExpr.Func.Obj)&function.Distinct != 0 {
 			buf.WriteString("DISTINCT ")
 		}
-		if needSpecialHandling(funcExpr) {
+		if needSpecialHandling(funcExpr) && (options == nil || !options.CompleteLiteralVectors) {
 			//contains invisible character, need special handling
 			err = describeExpr(ctx, funcExpr.Args[0], options, buf)
 			if err != nil {
@@ -489,7 +513,7 @@ func funcExprExplain(ctx context.Context, funcExpr *plan.Function, Typ *plan.Typ
 			return err
 		}
 		buf.WriteString(" " + funcExpr.Func.GetObjName() + " ")
-		if !needSpecialHandling(funcExpr) {
+		if !needSpecialHandling(funcExpr) || (options != nil && options.CompleteLiteralVectors) {
 			err = describeExpr(ctx, funcExpr.Args[1], options, buf)
 			if err != nil {
 				return err
@@ -585,7 +609,7 @@ func funcExprExplain(ctx context.Context, funcExpr *plan.Function, Typ *plan.Typ
 			return err
 		}
 		buf.WriteString(" " + funcExpr.Func.GetObjName() + " (")
-		if !needSpecialHandling(funcExpr) {
+		if !needSpecialHandling(funcExpr) || (options != nil && options.CompleteLiteralVectors) {
 			err = describeExpr(ctx, funcExpr.Args[1], options, buf)
 			if err != nil {
 				return err

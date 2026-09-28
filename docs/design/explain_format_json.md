@@ -159,6 +159,17 @@ The following mappings are normative for schema version 1:
   `fill_value[i]=<expression>` from `FillVal`, in their original order.
   Empty target/value lists add no entries. Unknown modes and missing required
   expressions are errors; the renderer never rebuilds pre-pruning targets.
+- Serialized scalar bytes use
+  `serialized(type=<oid>,width=<width>,scale=<scale>,value=0x<HEX>)`.
+  Serialized literal vectors use
+  `serialized_vec(type=<oid>,width=<width>,scale=<scale>,values=[0x<HEX>,NULL,...])`.
+  Type/width/scale come from the scalar type or decoded vector type. Hex is
+  uppercase, empty bytes are `0x`, and one-element vectors retain brackets.
+  The vector marker means at least one element was serialized; it does not
+  invent per-element provenance. JSON retains every byte-valued element and
+  function argument, while text EXPLAIN keeps its existing diagnostic
+  redaction. Unsupported serialized vector types and malformed complete
+  vector payloads are errors, not successful opaque/invalid placeholders.
 - Statistics are copied only when finite. The source `Stats` object is never
   cleaned or rewritten as part of serialization.
 

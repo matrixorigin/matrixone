@@ -97,6 +97,19 @@ explain format=json select min(v) from fill_values interval(ts, 5, second) fill(
 explain format=json select min(v) from fill_values interval(ts, 5, second) fill(value, 8);
 drop table fill_values;
 
+-- Serialized IN predicates retain bytes even when runtime provenance keeps scalar lists.
+create table serial_values(v varchar(65535));
+insert into serial_values values (serial(cast(99999 as decimal(38,0))));
+-- @regex("(?s)serialized.*0x458000000000000000000000000001869F",true)
+explain format=json select v from serial_values where v in (serial(cast(99999 as decimal(38,0))),serial(cast(100000 as decimal(38,0))));
+-- @regex("(?s)serialized.*0x458000000000000000000000000001869E",true)
+explain format=json select v from serial_values where v in (serial(cast(99998 as decimal(38,0))),serial(cast(100000 as decimal(38,0))));
+prepare e28301_serial from 'explain format=json select v from serial_values where v in (serial(cast(99999 as decimal(38,0))),serial(cast(100000 as decimal(38,0))))';
+-- @regex("(?s)serialized.*0x458000000000000000000000000001869F",true)
+execute e28301_serial;
+deallocate prepare e28301_serial;
+drop table serial_values;
+
 -- ANALYZE FALSE is normalized to ordinary JSON EXPLAIN and must not start a runner.
 -- @regex("(?s)query_block.*matrixone.*schema_version",true)
 explain (analyze false, format json) select * from t;

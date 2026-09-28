@@ -10265,3 +10265,22 @@ func TestPreparedGroupConcatFloorCapturedWithoutPhysicalCompile(t *testing.T) {
 		return nil
 	})
 }
+
+func TestWriteExplainJSONMalformedLiteralHasNoResult(t *testing.T) {
+	ctrl := gomock.NewController(t)
+	ses := newTestSession(t, ctrl)
+	query := &plan0.Query{
+		StmtType: plan0.Query_SELECT,
+		Nodes: []*plan0.Node{{NodeId: 0, NodeType: plan0.Node_PROJECT,
+			ProjectList: []*plan0.Expr{{Expr: &plan0.Expr_Vec{Vec: &plan0.LiteralVec{Data: []byte{1, 2, 3}}}}}}},
+		Steps: []int32{0},
+	}
+	stmt := tree.NewExplainStmt(&tree.Select{}, "json")
+	stmt.Options = []tree.OptionElem{{Name: tree.FormatOption, Value: "json"}}
+	err := writeExplainResult(context.Background(), ses, stmt,
+		&plan0.Plan{Plan: &plan0.Plan_Query{Query: query}},
+		&explain.ExplainOptions{Format: explain.EXPLAIN_FORMAT_JSON}, "", nil)
+	require.Error(t, err)
+	require.Equal(t, uint64(0), ses.GetMysqlResultSet().GetRowCount())
+	require.Equal(t, uint64(0), ses.GetMysqlResultSet().GetColumnCount())
+}

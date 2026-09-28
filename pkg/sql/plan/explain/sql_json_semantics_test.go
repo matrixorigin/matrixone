@@ -335,3 +335,67 @@ func TestSQLJSONFillBoundaryRoles(t *testing.T) {
 		require.Empty(t, data)
 	}
 }
+
+func TestSQLJSONPlannerSerializedPredicates(t *testing.T) {
+	for _, form := range []string{"n_name in (%s, serial(cast(100000 as decimal(38,0))))", "n_name = %s", "n_name between %s and serial(cast(100000 as decimal(38,0)))"} {
+		t.Run(form, func(t *testing.T) {
+			var filters []string
+			for _, value := range []string{"99999", "99998"} {
+				sql := "select n_name from nation where " + fmt.Sprintf(form, "serial(cast("+value+" as decimal(38,0)))")
+				stmt, err := mysql.ParseOne(t.Context(), sql, 1)
+				require.NoError(t, err)
+				query, err := planpkg.NewBaseOptimizer(planpkg.NewMockCompilerContext(true)).Optimize(stmt, false)
+				require.NoError(t, err)
+				serialized := 0
+				var visit func(*plan.Expr)
+				visit = func(expr *plan.Expr) {
+					if expr == nil {
+						return
+					}
+					if vec := expr.GetVec(); vec != nil && vec.IsSerialized {
+						serialized++
+					}
+					if lit := expr.GetLit(); lit != nil && lit.IsSerialized {
+						serialized++
+					}
+					if f := expr.GetF(); f != nil {
+						for _, arg := range f.Args {
+							visit(arg)
+						}
+					}
+					if l := expr.GetList(); l != nil {
+						for _, arg := range l.List {
+							visit(arg)
+						}
+					}
+				}
+				for _, node := range query.Nodes {
+					for _, expr := range node.FilterList {
+						visit(expr)
+					}
+				}
+				require.Positive(t, serialized, "public SQL must reach serialized literals")
+				data, err := BuildSQLJSONPlan(t.Context(), query)
+				require.NoError(t, err)
+				var doc struct {
+					MatrixOne sqlJSONMatrixOne `json:"matrixone"`
+				}
+				require.NoError(t, json.Unmarshal(data, &doc))
+				var parts []string
+				for _, node := range doc.MatrixOne.Nodes {
+					parts = append(parts, node.Filter)
+				}
+				filter := strings.Join(parts, "\n")
+				require.Contains(t, filter, "serialized")
+				require.NotContains(t, filter, "opaque")
+				expectedBytes := map[string]string{"99999": "0x458000000000000000000000000001869F", "99998": "0x458000000000000000000000000001869E"}
+				require.Contains(t, filter, expectedBytes[value])
+				if strings.Contains(form, " in ") {
+					require.Contains(t, filter, "serialized_vec(")
+				}
+				filters = append(filters, filter)
+			}
+			require.NotEqual(t, filters[0], filters[1])
+		})
+	}
+}

@@ -18,6 +18,7 @@ import (
 	"bytes"
 	"context"
 	"encoding/hex"
+	"fmt"
 	"strings"
 	"testing"
 	"time"
@@ -32,6 +33,7 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/sql/parsers/dialect/mysql"
 	planpkg "github.com/matrixorigin/matrixone/pkg/sql/plan"
 	"github.com/matrixorigin/matrixone/pkg/sql/plan/function"
+	"github.com/stretchr/testify/require"
 )
 
 func TestCompositeSecondaryIndexRangeBoundsArePrintable(t *testing.T) {
@@ -472,4 +474,78 @@ func mustDecodeHex(t *testing.T, encoded string) []byte {
 		t.Fatal(err)
 	}
 	return decoded
+}
+
+func TestJSONSerializedVectorValuesAndErrors(t *testing.T) {
+	for _, count := range []int{1, 18} {
+		t.Run(fmt.Sprint(count), func(t *testing.T) {
+			mp := mpool.MustNew(t.Name())
+			vec := vector.NewVec(types.T_varchar.ToType())
+			defer vec.Free(mp)
+			for i := 0; i < count; i++ {
+				value := []byte{byte(i), 0xff}
+				if i == 0 {
+					value = []byte{}
+				}
+				require.NoError(t, vector.AppendBytes(vec, value, i == 1, mp))
+			}
+			data, err := vec.MarshalBinary()
+			require.NoError(t, err)
+			before := bytes.Clone(data)
+			expr := &planpb.Expr{Expr: &planpb.Expr_Vec{Vec: &planpb.LiteralVec{Len: int32(count), Data: data, IsSerialized: true}}}
+			got, err := sqlJSONExpr(t.Context(), expr, &ExplainOptions{CompleteLiteralVectors: true})
+			require.NoError(t, err)
+			require.Contains(t, got, fmt.Sprintf("serialized_vec(type=%d,width=65535,scale=0,values=[0x", types.T_varchar))
+			if count > 16 {
+				require.Contains(t, got, ",NULL,")
+				require.Contains(t, got, "0x11FF]")
+			}
+			var buf bytes.Buffer
+			require.NoError(t, describeExpr(t.Context(), expr, NewExplainDefaultOptions(), &buf))
+			require.Equal(t, "[<opaque>]", buf.String())
+			require.Equal(t, before, data, "rendering must not mutate encoded input")
+			if count > 16 {
+				require.NoError(t, vector.SetBytesAt(vec, 17, []byte{0x12, 0xff}, mp))
+				changed, err := vec.MarshalBinary()
+				require.NoError(t, err)
+				expr.GetVec().Data = changed
+				other, err := sqlJSONExpr(t.Context(), expr, &ExplainOptions{CompleteLiteralVectors: true})
+				require.NoError(t, err)
+				require.NotEqual(t, got, other)
+				require.Contains(t, other, "0x12FF]")
+			}
+		})
+	}
+	for _, literal := range []*planpb.LiteralVec{nil, {Data: []byte{1, 2, 3}}} {
+		expr := &planpb.Expr{Expr: &planpb.Expr_Vec{Vec: literal}}
+		_, err := sqlJSONExpr(t.Context(), expr, &ExplainOptions{CompleteLiteralVectors: true})
+		require.Error(t, err)
+		var buf bytes.Buffer
+		require.NoError(t, describeExpr(t.Context(), expr, NewExplainDefaultOptions(), &buf))
+		require.Equal(t, "<invalid-vector>", buf.String())
+	}
+	vec := vector.NewVec(types.T_int32.ToType())
+	defer vec.Free(nil)
+	data, err := vec.MarshalBinary()
+	require.NoError(t, err)
+	_, err = sqlJSONExpr(t.Context(), &planpb.Expr{Expr: &planpb.Expr_Vec{Vec: &planpb.LiteralVec{Data: data, IsSerialized: true}}}, &ExplainOptions{CompleteLiteralVectors: true})
+	require.Error(t, err)
+}
+
+func TestJSONSerializedScalarAndHiddenArguments(t *testing.T) {
+	for _, name := range []string{"prefix_eq", "="} {
+		registered, err := function.GetFunctionByName(t.Context(), name, []types.Type{types.T_varchar.ToType(), types.T_varchar.ToType()})
+		require.NoError(t, err)
+		literal := &planpb.Expr{Typ: planpb.Type{Id: int32(types.T_varchar)}, Expr: &planpb.Expr_Lit{Lit: &planpb.Literal{IsSerialized: true, Value: &planpb.Literal_Sval{Sval: string([]byte{0, 0xff})}}}}
+		expr := &planpb.Expr{Typ: planpb.Type{Id: int32(types.T_bool)}, Expr: &planpb.Expr_F{F: &planpb.Function{
+			Func: &planpb.ObjectRef{Obj: registered.GetEncodedOverloadID(), ObjName: name},
+			Args: []*planpb.Expr{{Typ: planpb.Type{Id: int32(types.T_varchar)}, Expr: &planpb.Expr_Col{Col: &planpb.ColRef{Name: catalog.PrefixPriColName + "key"}}}, literal},
+		}}}
+		got, err := sqlJSONExpr(t.Context(), expr, &ExplainOptions{CompleteLiteralVectors: true})
+		require.NoError(t, err)
+		require.Contains(t, got, fmt.Sprintf("serialized(type=%d,width=0,scale=0,value=0x00FF)", types.T_varchar))
+		var buf bytes.Buffer
+		require.NoError(t, describeExpr(t.Context(), expr, NewExplainDefaultOptions(), &buf))
+		require.NotContains(t, buf.String(), "00FF")
+	}
 }
