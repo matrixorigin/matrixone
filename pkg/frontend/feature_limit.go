@@ -71,9 +71,12 @@ func checkBranchQuotaForAccount(
 	)
 }
 
+// The account quota row serializes publishers. Locking every counted branch
+// here would invert K -> Q when another component waits for the same quota.
+// Deletion only reduces usage; whole-catalog restore is excluded by G.
 func branchQuotaUsageSQL(accountID uint32) string {
 	return fmt.Sprintf(
-		"select count(*) from %s.%s b join %s.%s t on b.table_id = t.rel_id where t.account_id = %d and b.table_deleted = false and b.level != '%s' for update",
+		"select count(*) from %s.%s b join %s.%s t on b.table_id = t.rel_id where t.account_id = %d and b.table_deleted = false and b.level != '%s'",
 		catalog.MO_CATALOG,
 		catalog.MO_BRANCH_METADATA,
 		catalog.MO_CATALOG,
@@ -126,6 +129,11 @@ func featureLimitCheckerForAccount(
 	if featureCode == featureCodeBranch && limitQuota > 0 {
 		if err = checkBranchQuotaTxn(bh); err != nil {
 			return err
+		}
+		if _, realOwner := bh.(*backExec); realOwner {
+			if err = lockBranchQuotaAdmission(ctx, ses, bh, accId); err != nil {
+				return err
+			}
 		}
 		if limitQuota, err = lockFeatureQuota(ctx, ses, bh, accId, featureCode, featureScope); err != nil {
 			return err

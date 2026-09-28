@@ -76,6 +76,9 @@ func TestIssue29400DropDatabaseDoesNotHoldBranchDAGAfterTable(t *testing.T) {
 		// after the first physical table, independent of relation scan order.
 		const barrier = "drop_database_after_table"
 		const probe = "issue29400_drop_database_waiters"
+		tx, err := db0.BeginTx(ctx, nil)
+		require.NoError(t, err)
+		defer tx.Rollback()
 		require.NoError(t, fault.AddFaultPoint(ctx, barrier, "1:1::", "wait", 0, "", false))
 		require.NoError(t, fault.AddFaultPoint(ctx, probe, ":::", "getwaiters", 0, barrier, false))
 		release := func() {
@@ -87,7 +90,7 @@ func TestIssue29400DropDatabaseDoesNotHoldBranchDAGAfterTable(t *testing.T) {
 		defer dropCancel()
 		dropA := make(chan error, 1)
 		go func() {
-			_, err := db0.ExecContext(dropCtx, "drop database "+a)
+			_, err := tx.ExecContext(dropCtx, "drop database "+a)
 			dropA <- err
 		}()
 		// The old path held a whole-DAG lock at this exact point, blocking B
@@ -107,6 +110,13 @@ func TestIssue29400DropDatabaseDoesNotHoldBranchDAGAfterTable(t *testing.T) {
 		require.NoError(t, err, "unrelated branch DROP waited for A's post-table work")
 		release()
 		require.NoError(t, <-dropA)
+		// A now retains all statement locks until COMMIT. Its component must
+		// not pin B's root during this explicit transaction tail.
+		otherCtx, otherCancel := context.WithTimeout(ctx, 2*time.Second)
+		defer otherCancel()
+		_, err = db1.ExecContext(otherCtx, "drop table "+b+".a_root")
+		require.NoError(t, err, "unrelated branch DROP waited for A's COMMIT")
+		require.NoError(t, tx.Commit())
 		var deleted bool
 		require.NoError(t, db0.QueryRowContext(ctx,
 			"select table_deleted from mo_catalog.mo_branch_metadata where table_id=?", childID).Scan(&deleted))

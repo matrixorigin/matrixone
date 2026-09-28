@@ -27,6 +27,7 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/pb/lock"
 	"github.com/matrixorigin/matrixone/pkg/sql/colexec/lockop"
 	"github.com/matrixorigin/matrixone/pkg/sql/plan/function"
+	"github.com/matrixorigin/matrixone/pkg/vm/process"
 )
 
 // admitLocalLifecycleRC keeps the catalog identity, lifecycle row, optional
@@ -39,60 +40,14 @@ func admitLocalLifecycleRC(
 	if databaseName == "" {
 		return moerr.NewInternalError(ctx, "missing snapshot database")
 	}
-	lockProc, err := newCloneDatabaseTargetLockProcess(ctx, ses, bh)
+	admission, err := beginLifecycleRCAdmission(ctx, ses, bh)
 	if err != nil {
 		return err
 	}
-	defer lockProc.Free()
-	txnOp := lockProc.GetTxnOperator()
-	if txnOp == nil || !txnOp.Txn().IsPessimistic() || !txnOp.Txn().IsRCIsolation() {
-		return moerr.NewInternalError(ctx, "local snapshot requires pessimistic RC")
-	}
-	eng := lockProc.GetSessionInfo().StorageEngine
-	systemCtx := context.WithValue(
-		defines.AttachAccountId(ctx, catalog.System_Account),
-		defines.LockWriterFairKey{}, false,
-	)
-	systemDB, err := eng.Database(systemCtx, catalog.MO_CATALOG, txnOp)
-	if err != nil {
-		return err
-	}
-	lockKey := func(relationName string, lockCtx context.Context, keys *batch.Batch, mode lock.LockMode, group uint32) error {
-		defer keys.Vecs[0].Free(lockProc.Mp())
-		relation, err := systemDB.Relation(systemCtx, relationName, nil)
-		if err != nil {
-			return err
-		}
-		err = withCloneLockContext(lockProc, lockCtx, func() error {
-			_, err := lockop.LockRowsForAdmissionWithContext(
-				lockCtx, eng, lockProc, relation.GetTableID(systemCtx), keys, 0,
-				*keys.Vecs[0].GetType(), mode, group,
-			)
-			return err
-		})
-		return err
-	}
-	identity, err := cloneCatalogLockBatch(lockProc, catalog.System_Account,
-		catalog.MO_CATALOG, catalog.MO_FEATURE_REGISTRY)
-	if err != nil {
-		return err
-	}
-	if err = lockKey(catalog.MO_TABLES, systemCtx, identity, lock.LockMode_Shared, catalog.System_Account); err != nil {
-		return err
-	}
-	lockedRegistry, err := systemDB.Relation(systemCtx, catalog.MO_FEATURE_REGISTRY, nil)
-	if err != nil {
-		return err
-	}
-	registry := batch.NewWithSize(1)
-	registry.SetVector(0, vector.NewVec(types.T_varchar.ToType()))
-	if err = vector.AppendBytes(registry.Vecs[0], []byte(catalog.SnapshotLifecycleFeatureCode), false, lockProc.Mp()); err != nil {
-		registry.Vecs[0].Free(lockProc.Mp())
-		return err
-	}
-	if err = lockKey(catalog.MO_FEATURE_REGISTRY, systemCtx, registry, lock.LockMode_Shared, catalog.System_Account); err != nil {
-		return err
-	}
+	defer admission.proc.Free()
+	lockProc := admission.proc
+	systemCtx := context.WithValue(defines.AttachAccountId(ctx, catalog.System_Account), defines.LockWriterFairKey{}, false)
+	lockKey := admission.lockKey
 	databaseKey, err := cloneCatalogLockBatch(lockProc, accountID, databaseName)
 	if err != nil {
 		return err
@@ -170,21 +125,101 @@ func admitLocalLifecycleRC(
 			return err
 		}
 	}
-	if err = advanceFeatureLimitSnapshot(ctx, ses, bh); err != nil {
-		return err
+	return admission.finish(ctx, ses, bh)
+}
+
+// lifecycleRCAdmission owns only a temporary Process; its locks belong to the
+// existing background transaction. Callers keep their established D/T/Q/P order
+// between begin and finish. Branch publishers finish before their first write.
+type lifecycleRCAdmission struct {
+	proc       *process.Process
+	registryID uint64
+}
+
+func beginLifecycleRCAdmission(ctx context.Context, ses *Session, bh BackgroundExec) (_ *lifecycleRCAdmission, err error) {
+	proc, err := newCloneDatabaseTargetLockProcess(ctx, ses, bh)
+	if err != nil {
+		return nil, err
 	}
-	currentDB, err := eng.Database(systemCtx, catalog.MO_CATALOG, txnOp)
+	ready := false
+	defer func() {
+		if !ready {
+			proc.Free()
+		}
+	}()
+	op := proc.GetTxnOperator()
+	if op == nil || !op.Txn().IsPessimistic() || !op.Txn().IsRCIsolation() {
+		return nil, moerr.NewInternalError(ctx, "local snapshot requires pessimistic RC")
+	}
+	a := &lifecycleRCAdmission{proc: proc}
+	systemCtx := context.WithValue(defines.AttachAccountId(ctx, catalog.System_Account), defines.LockWriterFairKey{}, false)
+	identity, err := cloneCatalogLockBatch(proc, catalog.System_Account,
+		catalog.MO_CATALOG, catalog.MO_FEATURE_REGISTRY)
+	if err != nil {
+		return nil, err
+	}
+	if err = a.lockKey(catalog.MO_TABLES, systemCtx, identity, lock.LockMode_Shared, catalog.System_Account); err != nil {
+		return nil, err
+	}
+	db, err := proc.GetSessionInfo().StorageEngine.Database(systemCtx, catalog.MO_CATALOG, op)
+	if err != nil {
+		return nil, err
+	}
+	registry, err := db.Relation(systemCtx, catalog.MO_FEATURE_REGISTRY, nil)
+	if err != nil {
+		return nil, err
+	}
+	a.registryID = registry.GetTableID(systemCtx)
+	key := batch.NewWithSize(1)
+	key.Vecs[0] = vector.NewVec(types.T_varchar.ToType())
+	if err = vector.AppendBytes(key.Vecs[0], []byte(catalog.SnapshotLifecycleFeatureCode), false, proc.Mp()); err != nil {
+		key.Vecs[0].Free(proc.Mp())
+		return nil, err
+	}
+	if err = a.lockKey(catalog.MO_FEATURE_REGISTRY, systemCtx, key, lock.LockMode_Shared, catalog.System_Account); err != nil {
+		return nil, err
+	}
+	ready = true
+	return a, nil
+}
+
+func (a *lifecycleRCAdmission) lockKey(relationName string, ctx context.Context, keys *batch.Batch, mode lock.LockMode, group uint32) error {
+	defer keys.Vecs[0].Free(a.proc.Mp())
+	systemCtx := defines.AttachAccountId(ctx, catalog.System_Account)
+	eng := a.proc.GetSessionInfo().StorageEngine
+	db, err := eng.Database(systemCtx, catalog.MO_CATALOG, a.proc.GetTxnOperator())
 	if err != nil {
 		return err
 	}
-	currentRegistry, err := currentDB.Relation(systemCtx, catalog.MO_FEATURE_REGISTRY, nil)
+	relation, err := db.Relation(systemCtx, relationName, nil)
 	if err != nil {
 		return err
 	}
-	if currentRegistry.GetTableID(systemCtx) != lockedRegistry.GetTableID(systemCtx) {
+	return withCloneLockContext(a.proc, ctx, func() error {
+		_, err := lockop.LockRowsForAdmissionWithContext(ctx, eng, a.proc,
+			relation.GetTableID(systemCtx), keys, 0, *keys.Vecs[0].GetType(), mode, group)
+		return err
+	})
+}
+
+func (a *lifecycleRCAdmission) finish(ctx context.Context, ses *Session, bh BackgroundExec) error {
+	if err := advanceFeatureLimitSnapshot(ctx, ses, bh); err != nil {
+		return err
+	}
+	systemCtx := defines.AttachAccountId(ctx, catalog.System_Account)
+	eng := a.proc.GetSessionInfo().StorageEngine
+	db, err := eng.Database(systemCtx, catalog.MO_CATALOG, a.proc.GetTxnOperator())
+	if err != nil {
+		return err
+	}
+	registry, err := db.Relation(systemCtx, catalog.MO_FEATURE_REGISTRY, nil)
+	if err != nil {
+		return err
+	}
+	if registry.GetTableID(systemCtx) != a.registryID {
 		return moerr.NewTxnNeedRetryWithDefChanged(ctx)
 	}
-	_, _, exists, err := queryFeatureRegistry(ctx, ses, bh, featureCodeSnapshot)
+	_, _, exists, err := queryFeatureRegistry(systemCtx, ses, bh, featureCodeSnapshot)
 	if err != nil {
 		return err
 	}

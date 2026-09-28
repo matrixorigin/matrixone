@@ -1,0 +1,318 @@
+// Copyright 2026 Matrix Origin
+//
+// Licensed under the Apache License, Version 2.0 (the "License");
+// you may not use this file except in compliance with the License.
+// You may obtain a copy of the License at
+//
+//      http://www.apache.org/licenses/LICENSE-2.0
+//
+// Unless required by applicable law or agreed to in writing, software
+// distributed under the License is distributed on an "AS IS" BASIS,
+// WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+// See the License for the specific language governing permissions and
+// limitations under the License.
+
+package compile
+
+import (
+	"context"
+	"fmt"
+	"slices"
+	"strconv"
+	"strings"
+
+	"github.com/matrixorigin/matrixone/pkg/catalog"
+	"github.com/matrixorigin/matrixone/pkg/common/moerr"
+	"github.com/matrixorigin/matrixone/pkg/container/batch"
+	"github.com/matrixorigin/matrixone/pkg/container/types"
+	"github.com/matrixorigin/matrixone/pkg/container/vector"
+	"github.com/matrixorigin/matrixone/pkg/defines"
+	"github.com/matrixorigin/matrixone/pkg/frontend/databranchutils"
+	"github.com/matrixorigin/matrixone/pkg/pb/lock"
+	"github.com/matrixorigin/matrixone/pkg/pb/plan"
+	"github.com/matrixorigin/matrixone/pkg/sql/colexec/lockop"
+	"github.com/matrixorigin/matrixone/pkg/util/executor"
+)
+
+// prepareBranchReclaimRC pins every touched component before physical DROP
+// work. The returned closure performs the metadata transition after that
+// work, still in the same transaction and under the retained component locks.
+func (c *Compile) prepareBranchReclaimRC(deadTIDs []uint64) (func() error, databranchutils.BranchReclaimDag, error) {
+	if len(deadTIDs) == 0 {
+		return nil, databranchutils.BranchReclaimDag{}, nil
+	}
+	var ids strings.Builder
+	for i, id := range deadTIDs {
+		if i > 0 {
+			ids.WriteByte(',')
+		}
+		ids.WriteString(strconv.FormatUint(id, 10))
+	}
+	idList := ids.String()
+	// Even an absent root must be pinned: a concurrent clone can publish its
+	// first child after an unlocked empty-row probe.
+	dag, err := c.loadBranchReclaimComponentsRC(deadTIDs)
+	if err != nil {
+		return nil, databranchutils.BranchReclaimDag{}, err
+	}
+	if len(dag.Info) == 0 {
+		return nil, dag, nil
+	}
+	return func() error {
+		return databranchutils.MarkAndReclaimBranchSnapshotsCore(
+			deadTIDs,
+			func() (databranchutils.BranchReclaimDag, error) { return dag, nil },
+			func() error {
+				return c.runSqlWithSystemTenant(fmt.Sprintf(
+					"update %s.%s set table_deleted = true where table_id in (%s)",
+					catalog.MO_CATALOG, catalog.MO_BRANCH_METADATA, idList,
+				))
+			},
+			func(names []string) error {
+				if err := c.lockBranchSnapshotNamesRC(names); err != nil {
+					return err
+				}
+				return c.runSqlWithSystemTenant(databranchutils.BuildBranchSnapshotDeleteSQL(names))
+			},
+		)
+	}, dag, nil
+}
+
+// DROP DATABASE holds D exclusive, so a branch publisher cannot add a source
+// or target edge in that database while this probe runs. When no lineage
+// touches its tables, skip thousands of otherwise unnecessary component keys.
+// DROP TABLE only holds D shared and must pin even absent roots instead.
+func (c *Compile) databaseHasBranchLineageRC(tableIDs []uint64) (bool, error) {
+	const batchSize = 256
+	for start := 0; start < len(tableIDs); start += batchSize {
+		end := min(start+batchSize, len(tableIDs))
+		var ids strings.Builder
+		for i, id := range tableIDs[start:end] {
+			if i > 0 {
+				ids.WriteByte(',')
+			}
+			ids.WriteString(strconv.FormatUint(id, 10))
+		}
+		for _, column := range [...]string{"p_table_id", "table_id"} {
+			res, err := c.runSqlWithResult(fmt.Sprintf(
+				"select 1 from %s.%s where %s in (%s) limit 1",
+				catalog.MO_CATALOG, catalog.MO_BRANCH_METADATA, column, ids.String(),
+			), int32(catalog.System_Account))
+			if err != nil {
+				return false, err
+			}
+			found := false
+			res.ReadRows(func(n int, _ []*vector.Vector) bool {
+				found = found || n > 0
+				return !found
+			})
+			res.Close()
+			if found {
+				return true, nil
+			}
+		}
+	}
+	return false, nil
+}
+
+// lockBranchCatalogRowsRC retains exact PK locks through the outer owner.
+// Admission locks disable later cumulative range coarsening on this table.
+func (c *Compile) lockBranchCatalogRowsRC(relationName string, keys *batch.Batch) (uint64, error) {
+	ctx := context.WithValue(
+		defines.AttachAccountId(c.proc.Ctx, catalog.System_Account),
+		defines.LockWriterFairKey{}, false,
+	)
+	db, err := c.e.Database(ctx, catalog.MO_CATALOG, c.proc.GetTxnOperator())
+	if err != nil {
+		return 0, err
+	}
+	relation, err := db.Relation(ctx, relationName, nil)
+	if err != nil {
+		return 0, err
+	}
+	id := relation.GetTableID(ctx)
+	_, err = lockop.LockRowsForAdmissionWithContext(
+		ctx, c.e, c.proc, id, keys, 0, *keys.Vecs[0].GetType(),
+		lock.LockMode_Exclusive, catalog.System_Account,
+	)
+	return id, err
+}
+
+func (c *Compile) branchCatalogRelationIDRC(relationName string) (uint64, error) {
+	ctx := defines.AttachAccountId(c.proc.Ctx, catalog.System_Account)
+	db, err := c.e.Database(ctx, catalog.MO_CATALOG, c.proc.GetTxnOperator())
+	if err != nil {
+		return 0, err
+	}
+	relation, err := db.Relation(ctx, relationName, nil)
+	if err != nil {
+		return 0, err
+	}
+	return relation.GetTableID(ctx), nil
+}
+
+func (c *Compile) loadBranchReclaimComponentsRC(deadTIDs []uint64) (databranchutils.BranchReclaimDag, error) {
+	return databranchutils.LoadLockedBranchComponents(
+		c.proc.Ctx, deadTIDs,
+		func(ctx context.Context, sql string) (executor.Result, error) {
+			if err := ctx.Err(); err != nil {
+				return executor.Result{}, err
+			}
+			return c.runSqlWithResult(sql, int32(catalog.System_Account))
+		},
+		func(roots []uint64) error {
+			keys := batch.NewWithSize(1)
+			keys.Vecs[0] = vector.NewVec(types.T_uint64.ToType())
+			defer keys.Vecs[0].Free(c.proc.Mp())
+			for _, root := range roots {
+				if err := vector.AppendFixed(keys.Vecs[0], root, false, c.proc.Mp()); err != nil {
+					return err
+				}
+			}
+			lockedID, err := c.lockBranchCatalogRowsRC(catalog.MO_BRANCH_METADATA, keys)
+			if err != nil {
+				return err
+			}
+			if err = c.advanceLifecycleAdmissionSnapshot(); err != nil {
+				return err
+			}
+			currentID, err := c.branchCatalogRelationIDRC(catalog.MO_BRANCH_METADATA)
+			if err != nil {
+				return err
+			}
+			if currentID != lockedID {
+				return moerr.NewTxnNeedRetryWithDefChangedNoCtx()
+			}
+			return nil
+		},
+	)
+}
+
+func (c *Compile) lockBranchSnapshotNamesRC(names []string) error {
+	if len(names) == 0 {
+		return nil
+	}
+	keys := batch.NewWithSize(1)
+	keys.Vecs[0] = vector.NewVec(types.T_varchar.ToType())
+	defer keys.Vecs[0].Free(c.proc.Mp())
+	for _, name := range names {
+		if err := vector.AppendBytes(keys.Vecs[0], []byte(name), false, c.proc.Mp()); err != nil {
+			return err
+		}
+	}
+	_, err := c.lockBranchCatalogRowsRC(catalog.MO_SNAPSHOTS, keys)
+	return err
+}
+
+func (c *Compile) branchDeleteTargetRC() (*databranchutils.BranchDeleteTarget, error) {
+	target, err := databranchutils.BranchDeleteTargetFromContext(c.proc.Ctx, c.proc.GetTxnOperator())
+	if err != nil || target == nil {
+		return target, err
+	}
+	accountID, err := defines.GetAccountId(c.proc.Ctx)
+	if err != nil {
+		return nil, err
+	}
+	if !c.isLifecycleRC() || target.AccountID != accountID || target.Database == "" {
+		return nil, moerr.NewInternalError(c.proc.Ctx, "invalid DATA BRANCH DELETE owner")
+	}
+	return target, nil
+}
+
+func validateActiveBranchDeleteRows(
+	ctx context.Context, target *databranchutils.BranchDeleteTarget,
+	dag databranchutils.BranchReclaimDag,
+) error {
+	for _, id := range target.TableIDs {
+		row, ok := dag.Info[id]
+		if !ok || row.Deleted || row.Level == databranchutils.AlterLineageLevel {
+			name := target.Database
+			if target.Table != "" {
+				name += "." + target.Table
+			}
+			return moerr.NewInternalErrorf(ctx,
+				"DATA BRANCH DELETE target %s is not an active branch table", name)
+		}
+	}
+	return nil
+}
+
+func (c *Compile) validateBranchDeleteTableRC(
+	tables []*plan.DropTable, domain map[uint64]dropLifecycleIdentity,
+	dag databranchutils.BranchReclaimDag,
+) error {
+	target, err := c.branchDeleteTargetRC()
+	if err != nil || target == nil {
+		return err
+	}
+	if target.Table == "" || target.DatabaseID != 0 || target.MembershipSQL != "" ||
+		len(tables) != 1 || tables[0] == nil || len(target.TableIDs) != 1 {
+		return moerr.NewInternalError(c.proc.Ctx, "invalid DATA BRANCH DELETE table receipt")
+	}
+	id := target.TableIDs[0]
+	identity, ok := domain[id]
+	if !ok || tables[0].Database != target.Database || tables[0].Table != target.Table ||
+		identity.database != target.Database || identity.table != target.Table {
+		return moerr.NewInternalErrorf(c.proc.Ctx,
+			"DATA BRANCH DELETE target %s.%s changed during admission", target.Database, target.Table)
+	}
+	return validateActiveBranchDeleteRows(c.proc.Ctx, target, dag)
+}
+
+func (c *Compile) validateBranchDeleteDatabaseRC(
+	database string, databaseID uint64, dag databranchutils.BranchReclaimDag,
+) error {
+	target, err := c.branchDeleteTargetRC()
+	if err != nil || target == nil {
+		return err
+	}
+	if target.Table != "" || target.Database != database || target.DatabaseID == 0 ||
+		target.MembershipSQL == "" {
+		return moerr.NewInternalError(c.proc.Ctx, "invalid DATA BRANCH DELETE database receipt")
+	}
+	if target.DatabaseID != databaseID {
+		return moerr.NewInternalErrorf(c.proc.Ctx,
+			"DATA BRANCH DELETE target %s changed during admission", target.Database)
+	}
+	res, err := c.runSqlWithResult(target.MembershipSQL, int32(catalog.System_Account))
+	if err != nil {
+		return err
+	}
+	defer res.Close()
+	current := make([]uint64, 0, len(target.TableIDs))
+	names := make(map[uint64]string, len(target.TableIDs))
+	var readErr error
+	res.ReadRows(func(n int, cols []*vector.Vector) bool {
+		if len(cols) != 2 || cols[0] == nil || cols[0].GetType().Oid != types.T_uint64 ||
+			cols[0].Length() != n || cols[0].GetNulls().Any() || cols[1] == nil ||
+			cols[1].GetType().Oid != types.T_varchar || cols[1].Length() != n || cols[1].GetNulls().Any() {
+			readErr = moerr.NewInternalError(c.proc.Ctx, "invalid DATA BRANCH DELETE membership")
+			return false
+		}
+		for i := 0; i < n; i++ {
+			id := vector.GetFixedAtWithTypeCheck[uint64](cols[0], i)
+			current = append(current, id)
+			names[id] = cols[1].GetStringAt(i)
+		}
+		return true
+	})
+	if readErr != nil {
+		return readErr
+	}
+	slices.Sort(current)
+	if !slices.Equal(current, target.TableIDs) {
+		for _, id := range current {
+			if !slices.Contains(target.TableIDs, id) {
+				row, ok := dag.Info[id]
+				if !ok || row.Deleted || row.Level == databranchutils.AlterLineageLevel {
+					return moerr.NewInternalErrorf(c.proc.Ctx,
+						"DATA BRANCH DELETE target %s.%s is not an active branch table",
+						target.Database, names[id])
+				}
+			}
+		}
+		return moerr.NewInternalErrorf(c.proc.Ctx,
+			"DATA BRANCH DELETE target %s changed during admission", target.Database)
+	}
+	return validateActiveBranchDeleteRows(c.proc.Ctx, target, dag)
+}

@@ -82,6 +82,7 @@ type cloneReceipt struct {
 }
 
 type dataBranchCloneLockCtxKey struct{}
+type branchCloneComponentKey struct{}
 
 func shouldLockDataBranchCloneSource(snapshot *plan.Snapshot) bool {
 	// A named snapshot already publishes a durable historical owner before the
@@ -216,25 +217,23 @@ func revalidateTimestampDataBranchCloneSource(
 		return nil
 	}
 
-	sourceCtx := defines.AttachAccountId(ctx, fromAccountID)
-	tcc := ses.GetTxnCompileCtx()
-	originalCtx := tcc.GetContext()
-	tcc.SetContext(sourceCtx)
-	defer tcc.SetContext(originalCtx)
-
 	return validateTimestampDataBranchSourceAfterLock(
 		snapshot,
 		func(at *plan.Snapshot) (uint64, error) {
-			_, tableDef, err := tcc.Resolve(databaseName, tableName, at)
+			resolved, err := resolveBranchCloneSource(ctx, ses, bh, branchCloneSource{fromAccountID, databaseName, tableName, at})
 			if err != nil {
 				return 0, err
 			}
-			if tableDef == nil {
-				return 0, moerr.NewNoSuchTable(sourceCtx, databaseName, tableName)
-			}
-			return tableDef.TblId, nil
+			return resolved.def.TblId, nil
 		},
 		func() (*databranchutils.DataBranchDAG, error) {
+			if component, ok := ctx.Value(branchCloneComponentKey{}).(*databranchutils.BranchReclaimDag); ok {
+				rows := make([]databranchutils.DataBranchMetadata, 0, len(component.Info))
+				for id, node := range component.Info {
+					rows = append(rows, databranchutils.DataBranchMetadata{TableID: id, PTableID: node.ParentTableID, CloneTS: node.CloneTS, Creator: node.Creator, Level: node.Level, TableDeleted: node.Deleted})
+				}
+				return databranchutils.NewDAG(rows), nil
+			}
 			return constructBranchDAGForUpdate(ctx, ses, bh)
 		},
 	)
@@ -1629,21 +1628,12 @@ func updateBranchMetaTable(
 		return nil
 	}
 
-	srcCtx := defines.AttachAccountId(ctx, receipt.srcAccount)
-	tcc := ses.GetTxnCompileCtx()
-	origCtx := tcc.GetContext()
-	tcc.SetContext(srcCtx)
-	defer tcc.SetContext(origCtx)
-
-	// The metadata parent must be the physical generation that supplied the
-	// clone data. For snapshot clones that can differ from the table currently
-	// reachable by name after one or more copy-and-swap ALTERs.
-	if _, srcTblDef, err = tcc.Resolve(receipt.srcDb, receipt.srcTbl, receipt.snapshot); err != nil {
+	resolved, err := resolveBranchCloneSource(ctx, ses, bh, branchCloneSource{receipt.srcAccount, receipt.srcDb, receipt.srcTbl, receipt.snapshot})
+	if err != nil {
 		return err
 	}
-	if srcTblDef == nil {
-		return moerr.NewNoSuchTable(srcCtx, receipt.srcDb, receipt.srcTbl)
-	}
+	srcTblDef = resolved.def
+	receipt.srcAccount, receipt.srcDb, receipt.srcTbl = resolved.source.account, resolved.source.database, resolved.source.table
 
 	dstCtx := defines.AttachAccountId(ctx, receipt.toAccount)
 
