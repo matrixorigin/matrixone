@@ -21,10 +21,146 @@ import (
 	"testing"
 	"time"
 
+	"github.com/go-sql-driver/mysql"
+	"github.com/matrixorigin/matrixone/pkg/catalog"
+	"github.com/matrixorigin/matrixone/pkg/common/moerr"
 	"github.com/matrixorigin/matrixone/pkg/embed"
+	"github.com/matrixorigin/matrixone/pkg/lockservice"
 	"github.com/matrixorigin/matrixone/pkg/util/fault"
 	"github.com/stretchr/testify/require"
 )
+
+func TestIssue29400CopyAlterRetainedGatePromotionFastFails(t *testing.T) {
+	runAuthenticatedClusterTest(t, func(cluster embed.Cluster) {
+		ctx, cancel := context.WithTimeout(context.Background(), 2*time.Minute)
+		defer cancel()
+		cn0, err := cluster.GetCNService(0)
+		require.NoError(t, err)
+		cn1, err := cluster.GetCNService(1)
+		require.NoError(t, err)
+		db0, err := sql.Open("mysql", issue27487DSN(cn0.GetServiceConfig().CN.Frontend.Port))
+		require.NoError(t, err)
+		defer db0.Close()
+		db1, err := sql.Open("mysql", issue27487DSN(cn1.GetServiceConfig().CN.Frontend.Port))
+		require.NoError(t, err)
+		defer db1.Close()
+		const target, witness, solo = "issue_29400_promotion", "issue_29400_promotion_witness", "issue_29400_promotion_solo"
+		defer func() {
+			cleanupCtx, done := context.WithTimeout(context.Background(), 20*time.Second)
+			defer done()
+			_, _ = db0.ExecContext(cleanupCtx, "drop database if exists "+target)
+			_, _ = db0.ExecContext(cleanupCtx, "drop database if exists "+witness)
+			_, _ = db0.ExecContext(cleanupCtx, "drop database if exists "+solo)
+		}()
+		for _, query := range []string{
+			"drop database if exists " + target,
+			"drop database if exists " + witness,
+			"create database " + target,
+			"create database " + witness,
+			"create table " + target + ".t (i int)",
+			"create table " + target + ".u (i int)",
+			"create table " + witness + ".marker (i int)",
+		} {
+			execSQLRequire(t, ctx, db0, query)
+		}
+		tx, err := db0.BeginTx(ctx, nil)
+		require.NoError(t, err)
+		defer tx.Rollback()
+		_, err = tx.ExecContext(ctx, "insert into "+witness+".marker values (1)")
+		require.NoError(t, err)
+		_, err = tx.ExecContext(ctx, "drop table "+target+".t")
+		require.NoError(t, err)
+
+		// B has G shared and waits for A's retained D before A attempts G X.
+		waiter := make(chan struct{}, 1)
+		restore := lockservice.SetWaiterEnqueuedHookForTest(func(tableID uint64, _ []byte, _ [][]byte) {
+			if tableID == catalog.MO_DATABASE_ID {
+				select {
+				case waiter <- struct{}{}:
+				default:
+				}
+			}
+		})
+		defer restore()
+		dropCtx, dropCancel := context.WithTimeout(ctx, 30*time.Second)
+		defer dropCancel()
+		dropDone := make(chan error, 1)
+		dropFinished := false
+		go func() {
+			_, err := db1.ExecContext(dropCtx, "drop database "+target)
+			dropDone <- err
+		}()
+		defer func() {
+			_ = tx.Rollback()
+			dropCancel()
+			if !dropFinished {
+				select {
+				case <-dropDone:
+				case <-time.After(5 * time.Second):
+				}
+			}
+		}()
+		select {
+		case <-waiter:
+		case <-time.After(15 * time.Second):
+			t.Fatal("DROP DATABASE did not wait for A's database lock")
+		}
+		alterCtx, alterCancel := context.WithTimeout(ctx, 10*time.Second)
+		defer alterCancel()
+		_, err = tx.ExecContext(alterCtx, "alter table "+target+".u modify column i bigint")
+		var mysqlErr *mysql.MySQLError
+		require.ErrorAs(t, err, &mysqlErr)
+		require.Equal(t, moerr.ErrLockConflict, mysqlErr.Number,
+			"retained G promotion must fail without a deadlock-detector wait")
+		require.NoError(t, <-dropDone, "B should finish when A's whole transaction rolls back")
+		dropFinished = true
+		var rows int
+		require.NoError(t, db0.QueryRowContext(ctx, "select count(*) from "+witness+".marker").Scan(&rows))
+		require.Zero(t, rows, "the earlier insert must not commit after the G conflict")
+		_ = tx.Commit()
+		require.NoError(t, db0.QueryRowContext(ctx, "select count(*) from "+witness+".marker").Scan(&rows))
+		require.Zero(t, rows)
+
+		for _, query := range []string{
+			"create database " + solo,
+			"create table " + solo + ".t (i int)",
+			"create table " + solo + ".u (i int)",
+			"create table " + solo + ".v (i int)",
+			"insert into " + solo + ".v values (1)",
+		} {
+			execSQLRequire(t, ctx, db0, query)
+		}
+		sole, err := db0.BeginTx(ctx, nil)
+		require.NoError(t, err)
+		defer sole.Rollback()
+		_, err = sole.ExecContext(ctx, "drop table "+solo+".t")
+		require.NoError(t, err)
+		_, err = sole.ExecContext(ctx, "alter table "+solo+".u modify column i bigint")
+		require.NoError(t, err, "sole G shared holder should promote for COPY ALTER")
+		require.NoError(t, sole.Commit())
+		_, err = db0.ExecContext(ctx, "truncate table "+solo+".v")
+		require.NoError(t, err, "TRUNCATE should enter the same broad RC gate")
+		require.NoError(t, db0.QueryRowContext(ctx, "select count(*) from "+solo+".v").Scan(&rows))
+		require.Zero(t, rows)
+
+		// Public TRUNCATE starts a fresh transaction, but still must fail
+		// promptly if another transaction holds the shared lifecycle gate.
+		execSQLRequire(t, ctx, db0, "create table "+solo+".w (i int)")
+		holder, err := db0.BeginTx(ctx, nil)
+		require.NoError(t, err)
+		defer holder.Rollback()
+		_, err = holder.ExecContext(ctx, "drop table "+solo+".w")
+		require.NoError(t, err)
+		truncateCtx, truncateCancel := context.WithTimeout(ctx, 10*time.Second)
+		defer truncateCancel()
+		_, err = db1.ExecContext(truncateCtx, "truncate table "+solo+".v")
+		require.ErrorAs(t, err, &mysqlErr)
+		require.Equal(t, moerr.ErrLockConflict, mysqlErr.Number)
+		require.NoError(t, holder.Commit())
+		_, err = db1.ExecContext(ctx, "truncate table "+solo+".v")
+		require.NoError(t, err, "TRUNCATE should succeed after the competing gate owner commits")
+	})
+}
 
 func TestIssue29400DropDatabaseDoesNotHoldBranchDAGAfterTable(t *testing.T) {
 	faultEnabledHere := fault.Enable()

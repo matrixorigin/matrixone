@@ -295,6 +295,7 @@ func TestExecutorTemporaryDDLPolicyRetryAndPoolReuse(t *testing.T) {
 	from := NewCompile("cn", "test", "", "", "", nil, proc, nil, false, nil, time.Now())
 	defer from.Release()
 	from.temporaryDDLInExecutorTxn = true
+	from.temporaryDropRetryStage = &temporaryDropRetireStage{}
 	from.SetPreparedParamValues([]any{"2020-01-01", "2020-01-03"})
 	from.pn = &plan.Plan{Plan: &plan.Plan_Ddl{Ddl: &plan.DataDefinition{
 		DdlType: plan.DataDefinition_CREATE_TABLE,
@@ -303,6 +304,7 @@ func TestExecutorTemporaryDDLPolicyRetryAndPoolReuse(t *testing.T) {
 	require.NoError(t, err)
 	defer retry.Release()
 	require.True(t, retry.temporaryDDLInExecutorTxn)
+	require.Same(t, from.temporaryDropRetryStage, retry.temporaryDropRetryStage)
 	require.Equal(t, from.preparedParamValues, retry.preparedParamValues)
 	retry.SetPreparedParamValues([]any{"1"})
 	require.Equal(t, []any{"2020-01-01", "2020-01-03"}, from.preparedParamValues)
@@ -310,6 +312,7 @@ func TestExecutorTemporaryDDLPolicyRetryAndPoolReuse(t *testing.T) {
 	rebuilt, err := from.buildRetryCompile(true)
 	require.NoError(t, err)
 	defer rebuilt.Release()
+	require.Same(t, from.temporaryDropRetryStage, rebuilt.temporaryDropRetryStage)
 	require.Equal(t, from.preparedParamValues, rebuilt.preparedParamValues)
 	_, admitted := sessionTemporaryDDLOwner(retry)
 	require.False(t, admitted)
@@ -319,11 +322,13 @@ func TestExecutorTemporaryDDLPolicyRetryAndPoolReuse(t *testing.T) {
 	// choosing to return this object from a later allocation.
 	released := NewCompile("cn", "test", "", "", "", nil, testutil.NewProcess(t), nil, false, nil, time.Now())
 	released.temporaryDDLInExecutorTxn = true
+	released.temporaryDropRetryStage = &temporaryDropRetireStage{}
 	released.SetPreparedParamValues([]any{strings.Repeat("x", 70000)})
 	// Keep ownership in this test while exercising the reset seam. Only return
 	// the object to the global reuse pool after the assertion is complete.
 	released.clear()
 	require.False(t, released.temporaryDDLInExecutorTxn)
+	require.Nil(t, released.temporaryDropRetryStage)
 	require.Nil(t, released.preparedParamValues)
 	doCompileRelease(released)
 

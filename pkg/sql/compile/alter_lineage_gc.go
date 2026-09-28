@@ -84,7 +84,7 @@ func dataBranchLineageGCExecutorWithBudget(
 		if cause := context.Cause(ctx); cause != nil {
 			return cause
 		}
-		// One invocation performs one fixed-SI discovery and at most one bounded
+		// One invocation performs one provisional RC discovery and at most one bounded
 		// mutation batch. This removes the former 16x full-catalog rescan while
 		// retaining durable progress across scheduled invocations. The local
 		// budget bounds discovery CPU/I/O and task-worker occupancy; its expiry

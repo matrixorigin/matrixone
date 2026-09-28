@@ -26,12 +26,45 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/defines"
 	"github.com/matrixorigin/matrixone/pkg/pb/lock"
 	"github.com/matrixorigin/matrixone/pkg/sql/colexec/lockop"
+	"github.com/matrixorigin/matrixone/pkg/vm/engine"
 )
 
 type lifecycleDatabaseName struct {
 	accountID uint32
 	name      string
 	mode      lock.LockMode
+}
+
+// admitBroadTableLifecycleRC enters the broad gate before COPY ALTER or
+// TRUNCATE takes table locks. Re-resolve after the applied frontier: the
+// relation read before admission cannot establish its current identity.
+func (c *Compile) admitBroadTableLifecycleRC(database, table string, expectedID uint64) (engine.Database, engine.Relation, error) {
+	ctx := c.proc.Ctx
+	accountID, err := defines.GetAccountId(ctx)
+	if err != nil {
+		return nil, nil, err
+	}
+	if err = c.admitLifecycleRC([]lifecycleDatabaseName{{accountID: accountID, name: database, mode: lock.LockMode_Shared}}, true); err != nil {
+		return nil, nil, err
+	}
+	db, err := c.e.Database(ctx, database, c.proc.GetTxnOperator())
+	if err != nil {
+		if moerr.IsMoErrCode(err, moerr.OkExpectedEOB) {
+			return nil, nil, moerr.NewTxnNeedRetryWithDefChanged(ctx)
+		}
+		return nil, nil, err
+	}
+	rel, err := db.Relation(ctx, table, nil)
+	if err != nil {
+		if moerr.IsMoErrCode(err, moerr.ErrNoSuchTable) {
+			return nil, nil, moerr.NewTxnNeedRetryWithDefChanged(ctx)
+		}
+		return nil, nil, err
+	}
+	if rel.GetTableID(ctx) != expectedID {
+		return nil, nil, moerr.NewTxnNeedRetryWithDefChanged(ctx)
+	}
+	return db, rel, nil
 }
 
 // admitLifecycleRC takes the stable registry identity, the SNAPSHOT key, and

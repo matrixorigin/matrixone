@@ -92,9 +92,9 @@ func viewMetadataRequireRevalidationSQL() []string {
 }
 
 // ViewMetadataRequireRevalidationSQL returns the statements that atomically
-// fence a lifecycle-unaware mutation. Frontend catalog mutations execute these
-// statements in their existing transaction while this lifecycle layer remains
-// inactive, matching Compile.viewMetadataRefreshAvailable.
+// fence an explicit lifecycle-unaware mutation. Snapshot/restore pathways may
+// call these while View refresh is inactive; ordinary Compile DDL does not
+// maintain an incremental marker when viewMetadataRefreshAvailable is false.
 func ViewMetadataRequireRevalidationSQL() []string {
 	return viewMetadataRequireRevalidationSQL()
 }

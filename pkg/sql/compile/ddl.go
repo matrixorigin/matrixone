@@ -530,6 +530,8 @@ func (c *Compile) dropDatabaseRelations(
 			true,
 			database,
 			relation,
+			nil,
+			nil,
 		); err != nil {
 			return err
 		}
@@ -3978,16 +3980,14 @@ func (s *Scope) TruncateTable(c *Compile) error {
 
 	if !isTemp && c.proc.GetTxnOperator().Txn().IsPessimistic() {
 		if c.isLifecycleRC() {
-			if err = c.lockLifecycleIdentityRC(); err != nil {
+			if dbSource, rel, err = c.admitBroadTableLifecycleRC(db, relationName, oldID); err != nil {
 				return err
 			}
-		}
-		// DROP ACCOUNT takes the SNAPSHOT lifecycle lock before cleaning up
-		// cluster tables. Take the same row lock before the table locks to
-		// prevent an inverted lock order. Keep the later write barrier after
-		// snapshot advancement for lineage publication.
-		if err := c.lockDataBranchLineageOwnerLifecyclePessimistic(); err != nil {
-			return err
+		} else {
+			// SI keeps the existing broad lifecycle and fixed snapshot.
+			if err := c.lockDataBranchLineageOwnerLifecyclePessimistic(); err != nil {
+				return err
+			}
 		}
 		var err error
 		if e := lockMoTable(c, db, table, lock.LockMode_Exclusive); e != nil {
@@ -4360,7 +4360,68 @@ func lockDroppedRelation(
 	return retryErr
 }
 
-func (s *Scope) DropTable(c *Compile) error {
+type temporaryDropRetireStage struct {
+	aliases map[string]struct{}
+	retire  []temporaryDropRetirement
+}
+
+type temporaryDropRetirement struct {
+	key   string
+	apply func()
+}
+
+func (s *temporaryDropRetireStage) contains(db, alias string) bool {
+	_, ok := s.aliases[db+"."+alias]
+	return ok
+}
+
+func (s *temporaryDropRetireStage) add(owner process.TemporaryTableDDL, db, alias, physical string, indexes []string) {
+	key := db + "." + alias
+	if s.contains(db, alias) {
+		return
+	}
+	if s.aliases == nil {
+		s.aliases = make(map[string]struct{})
+	}
+	s.aliases[key] = struct{}{}
+	s.retire = append(s.retire, temporaryDropRetirement{
+		key: key, apply: func() { owner.RetireTemporaryTable(db, alias, physical, indexes) },
+	})
+}
+
+func (s *temporaryDropRetireStage) absorb(other *temporaryDropRetireStage) {
+	if other == nil {
+		return
+	}
+	if s.aliases == nil {
+		s.aliases = make(map[string]struct{})
+	}
+	for _, entry := range other.retire {
+		if _, exists := s.aliases[entry.key]; exists {
+			continue
+		}
+		s.aliases[entry.key] = struct{}{}
+		s.retire = append(s.retire, entry)
+	}
+}
+
+func (s *temporaryDropRetireStage) publish() {
+	for _, entry := range s.retire {
+		entry.apply()
+	}
+	s.retire = nil
+	s.aliases = nil
+}
+
+func (c *Compile) finishTemporaryDropRetry() {
+	if c.temporaryDropRetryStage != nil {
+		c.temporaryDropRetryStage.publish()
+		c.temporaryDropRetryStage = nil
+	}
+	c.temporaryDropRetryActive = false
+}
+
+func (s *Scope) DropTable(c *Compile) (retErr error) {
 	if s.ScopeAnalyzer == nil {
 		s.ScopeAnalyzer = NewScopeAnalyzer()
 	}
@@ -4376,52 +4437,72 @@ func (s *Scope) DropTable(c *Compile) error {
 	if err != nil {
 		return err
 	}
-	var finishBranchReclaim func() error
+	var temporaryRetire *temporaryDropRetireStage
 	if !lifecycleAdmitted && c.isLifecycleRC() {
-		var domain map[uint64]dropLifecycleIdentity
-		var branchExclusiveGate bool
-		if domain, branchExclusiveGate, err = c.admitDropLifecycleRCWithDomain(tables, ""); err != nil {
-			return err
-		}
-		deadTIDs := make([]uint64, 0, len(tables))
-		for _, entry := range tables {
-			if entry != nil && entry.Database != catalog.MO_CATALOG &&
-				!entry.IsView && entry.TableId != 0 && entry.TableDef != nil {
-				if _, ok := domain[entry.TableId]; ok {
-					deadTIDs = append(deadTIDs, entry.TableId)
-				}
+		temporaryRetire = &temporaryDropRetireStage{}
+		defer func() {
+			// A definition-change retry rebuilds the entire statement. Keep
+			// aliases visible until that retry finishes, or replanning would
+			// fail on a temporary prefix already retired by this attempt.
+			if c.temporaryDropRetryStage == nil {
+				c.temporaryDropRetryStage = &temporaryDropRetireStage{}
 			}
-		}
-		var branchDAG databranchutils.BranchReclaimDag
-		finishBranchReclaim, branchDAG, err = c.prepareBranchReclaimRC(deadTIDs, branchExclusiveGate)
-		if err != nil {
-			return err
-		}
-		if len(deadTIDs) > 0 {
-			_, current, err := c.loadDropLifecycleDomain(tables, "")
+			c.temporaryDropRetryStage.absorb(temporaryRetire)
+			if !c.temporaryDropRetryActive && (retErr == nil || !c.canRetry(retErr)) {
+				c.temporaryDropRetryStage.publish()
+			}
+		}()
+	}
+	var finishBranchReclaim func() error
+	var admitPersistent func() error
+	if !lifecycleAdmitted && c.isLifecycleRC() {
+		oldSkip := c.skipDataBranchReclaim
+		defer func() { c.skipDataBranchReclaim = oldSkip }()
+		// The first live persistent member enters this complete-domain
+		// admission at its original per-table boundary. Earlier temporary
+		// and no-op members retain their independent ordered effects.
+		admitPersistent = func() error {
+			domain, branchExclusiveGate, err := c.admitDropLifecycleRCWithDomain(tables, "")
 			if err != nil {
 				return err
 			}
-			if !equalDropLifecycleDomain(domain, current) {
-				return moerr.NewTxnNeedRetryWithDefChangedNoCtx()
+			deadTIDs := make([]uint64, 0, len(tables))
+			for _, entry := range tables {
+				if entry != nil && entry.Database != catalog.MO_CATALOG &&
+					!entry.IsView && entry.TableId != 0 && entry.TableDef != nil {
+					if _, ok := domain[entry.TableId]; ok {
+						deadTIDs = append(deadTIDs, entry.TableId)
+					}
+				}
 			}
+			var branchDAG databranchutils.BranchReclaimDag
+			finishBranchReclaim, branchDAG, err = c.prepareBranchReclaimRC(deadTIDs, branchExclusiveGate)
+			if err != nil {
+				return err
+			}
+			if len(deadTIDs) > 0 {
+				_, current, err := c.loadDropLifecycleDomain(tables, "")
+				if err != nil {
+					return err
+				}
+				if !equalDropLifecycleDomain(domain, current) {
+					return moerr.NewTxnNeedRetryWithDefChangedNoCtx()
+				}
+			}
+			if err = c.validateBranchDeleteTableRC(tables, domain, branchDAG); err != nil {
+				return err
+			}
+			c.skipDataBranchReclaim = true
+			return nil
 		}
-		if err = c.validateBranchDeleteTableRC(tables, domain, branchDAG); err != nil {
-			return err
-		}
-		lifecycleAdmitted = true
-		oldSkip := c.skipDataBranchReclaim
-		c.skipDataBranchReclaim = true
-		defer func() { c.skipDataBranchReclaim = oldSkip }()
 	}
-	databaseLocked := lifecycleAdmitted
 	for _, entry := range tables {
 		if entry == nil {
 			continue
 		}
 		if err := s.dropTableSingleResolved(
 			c, plan2.DeepCopyDropTable(entry), &lifecycleAdmitted,
-			databaseLocked, nil, nil,
+			lifecycleAdmitted, nil, nil, admitPersistent, temporaryRetire,
 		); err != nil {
 			return err
 		}
@@ -4433,7 +4514,7 @@ func (s *Scope) DropTable(c *Compile) error {
 }
 
 func (s *Scope) dropTableSingle(c *Compile, qry *plan.DropTable, lifecycleAdmitted *bool) error {
-	return s.dropTableSingleResolved(c, qry, lifecycleAdmitted, false, nil, nil)
+	return s.dropTableSingleResolved(c, qry, lifecycleAdmitted, false, nil, nil, nil, nil)
 }
 
 func (s *Scope) dropTableSingleResolved(
@@ -4443,11 +4524,19 @@ func (s *Scope) dropTableSingleResolved(
 	databaseLocked bool,
 	dbSource engine.Database,
 	rel engine.Relation,
+	admitPersistent func() error,
+	temporaryRetire *temporaryDropRetireStage,
 ) error {
 	dbName := qry.GetDatabase()
 	tblName := qry.GetTable()
 	if tblName == "" {
 		return nil
+	}
+	if temporaryRetire != nil && qry.GetTableDef().GetIsTemporary() && temporaryRetire.contains(dbName, tblName) {
+		if qry.GetIfExists() {
+			return nil
+		}
+		return moerr.NewNoSuchTable(c.proc.Ctx, dbName, tblName)
 	}
 	isView := qry.GetIsView()
 	var isSource = false
@@ -4484,7 +4573,12 @@ func (s *Scope) dropTableSingleResolved(
 		}
 	}
 	if !isTemp && !*lifecycleAdmitted {
-		if c.isLifecycleRC() {
+		if admitPersistent != nil {
+			if err = admitPersistent(); err != nil {
+				return err
+			}
+			databaseLocked = true
+		} else if c.isLifecycleRC() {
 			if err = c.admitDropLifecycleRC([]*plan.DropTable{qry}, ""); err != nil {
 				return err
 			}
@@ -4522,7 +4616,12 @@ func (s *Scope) dropTableSingleResolved(
 	}
 	if isTemp {
 		if owner, ok := sessionTemporaryDDLOwner(c); ok {
-			owner.RetireTemporaryTable(dbName, originTableName, tblName, temporaryIndexNames(rel.GetTableDef(c.proc.Ctx)))
+			indexes := temporaryIndexNames(rel.GetTableDef(c.proc.Ctx))
+			if temporaryRetire != nil {
+				temporaryRetire.add(owner, dbName, originTableName, tblName, indexes)
+			} else {
+				owner.RetireTemporaryTable(dbName, originTableName, tblName, indexes)
+			}
 			return nil
 		}
 	}
