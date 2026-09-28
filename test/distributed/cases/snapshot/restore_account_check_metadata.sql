@@ -22,6 +22,8 @@ create snapshot restore_check_s2 for account restore_check;
 insert into app.checkpoint values (2);
 select * from app.checkpoint order by id;
 insert into app.checked_values values (-1);
+insert into app.checked_values values (2), (-1);
+select * from app.checked_values;
 -- @session
 
 restore account restore_check {snapshot = 'restore_check_s2'};
@@ -34,6 +36,9 @@ insert into app.checkpoint_like values (3);
 select * from app.checkpoint_like;
 create table app.checked_like like app.checked_values;
 insert into app.checked_like values (-1);
+insert into app.checked_like values (null), (2);
+insert into app.checked_like values (3), (0);
+select * from app.checked_like order by id;
 -- @session
 
 restore account restore_check {snapshot = 'restore_check_s2'} to account restore_check_copy;
@@ -41,6 +46,7 @@ restore account restore_check {snapshot = 'restore_check_s2'} to account restore
 select * from app.checkpoint;
 select * from app.checked_values;
 insert into app.checked_values values (-1);
+select * from app.checked_values;
 -- @session
 drop account restore_check_copy;
 drop snapshot restore_check_s2;

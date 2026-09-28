@@ -76,6 +76,27 @@ func TestBuildCatalogRestoreIdentityMapRejectsMalformedRows(t *testing.T) {
 	}
 }
 
+func TestCatalogRestoreIdentityMapUsesQualifiedNames(t *testing.T) {
+	identityMap, err := buildCatalogRestoreIdentityMap(
+		[][]string{{"10", "app"}, {"11", "other"}},
+		[][]string{{"20", "other"}, {"21", "app"}},
+		[][]string{
+			{"100", "app", "t", catalog.SystemOrdinaryRel},
+			{"101", "other", "t", catalog.SystemOrdinaryRel},
+			{"102", "app", "missing", catalog.SystemOrdinaryRel},
+		},
+		[][]string{
+			{"100", "other", "t", catalog.SystemOrdinaryRel},
+			{"201", "app", "t", catalog.SystemOrdinaryRel},
+			// A coincident numeric ID cannot rescue a missing qualified name.
+			{"102", "other", "missing", catalog.SystemOrdinaryRel},
+		},
+	)
+	require.NoError(t, err)
+	require.Equal(t, map[uint64]uint64{10: 21, 11: 20}, identityMap.databaseIDs)
+	require.Equal(t, map[uint64]uint64{100: 201, 101: 100}, identityMap.objectIDs)
+}
+
 func TestRemapRolePrivilegeObjectID(t *testing.T) {
 	identityMap := &catalogRestoreIdentityMap{
 		databaseIDs: map[uint64]uint64{10: 20},
@@ -278,29 +299,53 @@ func TestRestoreAccountPrivileges(t *testing.T) {
 	t.Run("validate before replacing target grants", func(t *testing.T) {
 		invalid := slices.Clone(row)
 		invalid[6] = "invalid"
-		bh := newExec(t, [][]interface{}{invalid})
+		bh := newExec(t, [][]interface{}{row, invalid})
 		require.Error(t, restoreAccountPrivileges(t.Context(), bh, 42, 10, 20))
 		require.NotContains(t, bh.executedSQLs, deleteSQL)
 	})
-	t.Run("bounded batches and escaped names", func(t *testing.T) {
-		rows := make([][]interface{}, rolePrivilegeRestoreInsertBatchSize+1)
-		for i := range rows {
-			rows[i] = slices.Clone(row)
-			rows[i][0] = fmt.Sprint(i + 1)
-			rows[i][1] = "read'er"
-		}
-		bh := newExec(t, rows)
-		require.NoError(t, restoreAccountPrivileges(t.Context(), bh, 42, 10, 20))
-		require.Len(t, bh.executedSQLs, 8)
-		require.Equal(t, 256, strings.Count(bh.executedSQLs[6], "'read''er'"))
-		require.Equal(t, 1, strings.Count(bh.executedSQLs[7], "'read''er'"))
-	})
-	for failAt := 1; failAt <= 7; failAt++ {
-		t.Run(fmt.Sprintf("query %d failure propagates", failAt), func(t *testing.T) {
-			bh := newExec(t, [][]interface{}{row})
-			bh.failAt = failAt
-			require.ErrorIs(t, restoreAccountPrivileges(t.Context(), bh, 42, 10, 20), bh.failure)
-			require.Equal(t, failAt, bh.calls)
+	for _, count := range []int{255, 256, 257, 512} {
+		t.Run(fmt.Sprintf("batch boundary %d and escaped names", count), func(t *testing.T) {
+			rows := make([][]interface{}, count)
+			for i := range rows {
+				rows[i] = slices.Clone(row)
+				rows[i][0] = fmt.Sprint(i + 1)
+				rows[i][1] = "read'er"
+			}
+			bh := newExec(t, rows)
+			require.NoError(t, restoreAccountPrivileges(t.Context(), bh, 42, 10, 20))
+			require.Len(t, bh.executedSQLs, 6+(count+255)/256)
+			for i, sql := range bh.executedSQLs[6:] {
+				require.Equal(t, min(256, count-i*256), strings.Count(sql, "'read''er'"))
+			}
 		})
+	}
+	t.Run("omitted grants do not skip neighboring valid rows", func(t *testing.T) {
+		missing := slices.Clone(row)
+		missing[3] = "999"
+		withoutGrant := slices.Clone(row)
+		withoutGrant[0] = "8"
+		withoutGrant[9] = "false"
+		bh := newExec(t, [][]interface{}{missing, row, missing, withoutGrant, missing})
+		require.NoError(t, restoreAccountPrivileges(t.Context(), bh, 42, 10, 20))
+		require.Len(t, bh.executedSQLs, 7)
+		require.Contains(t, bh.executedSQLs[6], "(7,'reader','table',222,2,'select','d.t',3,'2026-09-28 00:00:00',true)")
+		require.Contains(t, bh.executedSQLs[6], "(8,'reader','table',222,2,'select','d.t',3,'2026-09-28 00:00:00',false)")
+		require.NotContains(t, bh.executedSQLs[6], "999")
+	})
+	for _, failure := range []error{errors.New("restore query failed"), context.Canceled, context.DeadlineExceeded} {
+		for failAt := 1; failAt <= 8; failAt++ {
+			t.Run(fmt.Sprintf("query %d propagates %v", failAt, failure), func(t *testing.T) {
+				rows := make([][]interface{}, 257)
+				for i := range rows {
+					rows[i] = slices.Clone(row)
+					rows[i][0] = fmt.Sprint(i + 1)
+				}
+				bh := newExec(t, rows)
+				bh.failAt = failAt
+				bh.failure = failure
+				require.ErrorIs(t, restoreAccountPrivileges(t.Context(), bh, 42, 10, 20), bh.failure)
+				require.Equal(t, failAt, bh.calls)
+			})
+		}
 	}
 }

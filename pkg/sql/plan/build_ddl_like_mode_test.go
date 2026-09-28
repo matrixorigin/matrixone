@@ -17,6 +17,7 @@ package plan
 import (
 	"testing"
 
+	"github.com/gogo/protobuf/proto"
 	"github.com/matrixorigin/matrixone/pkg/catalog"
 	moruntime "github.com/matrixorigin/matrixone/pkg/common/runtime"
 	"github.com/matrixorigin/matrixone/pkg/defines"
@@ -173,6 +174,36 @@ func TestCreateTableLikeRequiresCheckProtocol(t *testing.T) {
 			defer stmt.Free()
 			_, err = BuildPlan(mock.CurrentContext(), stmt, false)
 			require.ErrorContains(t, err, "protocol version 7")
+		})
+	}
+}
+
+func TestRecoverLegacyChecksFailureDoesNotPublishPartialConstraints(t *testing.T) {
+	for _, legacySQL := range []string{
+		"create table source_t(a int, check (a > 0), check (missing > 0))",
+		"create table source_t(a int, check (a > 0), check (a < 10) not enforced)",
+		"create table source_t(a int check (a > 0), b int check (b > 0))",
+		"create table source_t(a int check (a > 0) not enforced)",
+		"create table source_t clone /* CHECK */",
+	} {
+		t.Run(legacySQL, func(t *testing.T) {
+			mock := NewMockOptimizer(false)
+			stmt, err := mysql.ParseOne(t.Context(), "create table source_t(a int)", 1)
+			require.NoError(t, err)
+			defer stmt.Free()
+			built, err := BuildPlan(mock.CurrentContext(), stmt, false)
+			require.NoError(t, err)
+			source := built.GetDdl().GetCreateTable().GetTableDef()
+			source.Createsql = legacySQL
+			before := proto.Clone(source)
+			require.Error(t, recoverLegacyChecksForCreateLike(mock.CurrentContext(), source))
+			require.True(t, proto.Equal(before, source), "failed recovery mutated source metadata")
+
+			// A rejected attempt must not poison the next valid bind.
+			source.Createsql = "create table source_t(a int, constraint positive check (a > 0))"
+			require.NoError(t, recoverLegacyChecksForCreateLike(mock.CurrentContext(), source))
+			require.Len(t, source.Checks, 1)
+			require.Equal(t, "positive", source.Checks[0].Name)
 		})
 	}
 }
