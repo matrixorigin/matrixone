@@ -148,8 +148,9 @@ func (s *Scope) DropDatabase(c *Compile) error {
 
 	dbName := s.Plan.GetDdl().GetDropDatabase().GetDatabase()
 	rcAdmission := c.isLifecycleRC()
+	var dropDomain map[uint64]dropLifecycleIdentity
 	if rcAdmission {
-		if err = c.admitDropLifecycleRC(nil, dbName); err != nil {
+		if dropDomain, err = c.admitDropLifecycleRCWithDomain(nil, dbName); err != nil {
 			return err
 		}
 	} else if err = c.lockDataBranchLineageOwnerLifecycle(); err != nil {
@@ -191,11 +192,45 @@ func (s *Scope) DropDatabase(c *Compile) error {
 			}
 		}
 	}
+	deferBranchReclaim := rcAdmission && !c.skipDataBranchReclaim && dbName != catalog.MO_CATALOG
+	var finishBranchReclaim func() error
+	var branchDAG databranchutils.BranchReclaimDag
+	if deferBranchReclaim {
+		deadTIDs := make([]uint64, 0, len(dropDomain))
+		for id, identity := range dropDomain {
+			if id != 0 && identity.database == dbName && identity.databaseID == dbID {
+				deadTIDs = append(deadTIDs, id)
+			}
+		}
+		sort.Slice(deadTIDs, func(i, j int) bool { return deadTIDs[i] < deadTIDs[j] })
+		if len(deadTIDs) > 0 {
+			var hasLineage bool
+			hasLineage, err = c.databaseHasBranchLineageRC(deadTIDs)
+			if err != nil {
+				return err
+			}
+			if hasLineage {
+				finishBranchReclaim, branchDAG, err = c.prepareBranchReclaimRC(deadTIDs)
+				if err != nil {
+					return err
+				}
+			}
+		}
+		if len(deadTIDs) > 0 {
+			_, current, err := c.loadDropLifecycleDomain(nil, dbName)
+			if err != nil {
+				return err
+			}
+			if !equalDropLifecycleDomain(dropDomain, current) {
+				return moerr.NewTxnNeedRetryWithDefChangedNoCtx()
+			}
+		}
+	}
+	if err = c.validateBranchDeleteDatabaseRC(dbName, dbID, branchDAG); err != nil {
+		return err
+	}
 	if c.proc.Base.IsFrontend && !needSkipDbs[dbName] &&
 		(!c.proc.GetSessionInfo().IsRestore || restoreInvalidatesViewMetadata(c.proc.Ctx)) {
-		// Recovery takes this gate before locking a target View. Take it before
-		// the database lock so DROP cannot hold catalog/target locks while
-		// waiting for recovery's refresh-row transaction.
 		if err = lockViewMetadataLifecycleGate(c.proc); err != nil {
 			return err
 		}
@@ -339,10 +374,8 @@ func (s *Scope) DropDatabase(c *Compile) error {
 		}
 	}
 
-	// A database DROP can wait on a slow table after dropping an earlier
-	// branch table. Keep that wait outside the branch metadata lock, then
-	// reclaim all retired branch tables together before the transaction ends.
-	deferBranchReclaim := rcAdmission && !c.skipDataBranchReclaim && dbName != catalog.MO_CATALOG
+	// The component is pinned before any physical table is retired. Reclaim
+	// once after the full database cleanup, still in the owning transaction.
 	if deferBranchReclaim {
 		c.skipDataBranchReclaim = true
 	}
@@ -419,12 +452,8 @@ func (s *Scope) DropDatabase(c *Compile) error {
 		// session implementation journals this cleanup with the DDL statement.
 		session.RemoveTempTablesByDatabase(dbName)
 	}
-	if deferBranchReclaim {
-		deadTIDs := make([]uint64, 0, len(filteredDropTables))
-		for _, table := range filteredDropTables {
-			deadTIDs = append(deadTIDs, table.TableId)
-		}
-		if err = c.reclaimAndCompactBranchProtectSnapshots(deadTIDs); err != nil {
+	if finishBranchReclaim != nil {
+		if err = finishBranchReclaim(); err != nil {
 			return err
 		}
 	}
@@ -4358,11 +4387,42 @@ func (s *Scope) DropTable(c *Compile) error {
 	if err != nil {
 		return err
 	}
+	var finishBranchReclaim func() error
 	if !lifecycleAdmitted && c.isLifecycleRC() {
-		if err = c.admitDropLifecycleRC(tables, ""); err != nil {
+		var domain map[uint64]dropLifecycleIdentity
+		if domain, err = c.admitDropLifecycleRCWithDomain(tables, ""); err != nil {
+			return err
+		}
+		deadTIDs := make([]uint64, 0, len(tables))
+		for _, entry := range tables {
+			if entry != nil && entry.Database != catalog.MO_CATALOG &&
+				!entry.IsView && entry.TableId != 0 && entry.TableDef != nil {
+				if _, ok := domain[entry.TableId]; ok {
+					deadTIDs = append(deadTIDs, entry.TableId)
+				}
+			}
+		}
+		var branchDAG databranchutils.BranchReclaimDag
+		finishBranchReclaim, branchDAG, err = c.prepareBranchReclaimRC(deadTIDs)
+		if err != nil {
+			return err
+		}
+		if len(deadTIDs) > 0 {
+			_, current, err := c.loadDropLifecycleDomain(tables, "")
+			if err != nil {
+				return err
+			}
+			if !equalDropLifecycleDomain(domain, current) {
+				return moerr.NewTxnNeedRetryWithDefChangedNoCtx()
+			}
+		}
+		if err = c.validateBranchDeleteTableRC(tables, domain, branchDAG); err != nil {
 			return err
 		}
 		lifecycleAdmitted = true
+		oldSkip := c.skipDataBranchReclaim
+		c.skipDataBranchReclaim = true
+		defer func() { c.skipDataBranchReclaim = oldSkip }()
 	}
 	databaseLocked := lifecycleAdmitted
 	for _, entry := range tables {
@@ -4375,6 +4435,9 @@ func (s *Scope) DropTable(c *Compile) error {
 		); err != nil {
 			return err
 		}
+	}
+	if finishBranchReclaim != nil {
+		return finishBranchReclaim()
 	}
 	return nil
 }

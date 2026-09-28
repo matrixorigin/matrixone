@@ -264,19 +264,24 @@ func (c *Compile) loadDropLifecycleDomain(tables []*plan.DropTable, database str
 }
 
 func (c *Compile) admitDropLifecycleRC(tables []*plan.DropTable, database string) error {
+	_, err := c.admitDropLifecycleRCWithDomain(tables, database)
+	return err
+}
+
+func (c *Compile) admitDropLifecycleRCWithDomain(tables []*plan.DropTable, database string) (map[uint64]dropLifecycleIdentity, error) {
 	names, before, err := c.loadDropLifecycleDomain(tables, database)
 	if err != nil || len(names) == 0 {
-		return err
+		return nil, err
 	}
 	if err = c.admitLifecycleRC(names); err != nil {
-		return err
+		return nil, err
 	}
 	_, after, err := c.loadDropLifecycleDomain(tables, database)
 	if err != nil {
-		return err
+		return nil, err
 	}
 	if !equalDropLifecycleDomain(before, after) {
-		return moerr.NewTxnNeedRetryWithDefChangedNoCtx()
+		return nil, moerr.NewTxnNeedRetryWithDefChangedNoCtx()
 	}
-	return nil
+	return after, nil
 }
