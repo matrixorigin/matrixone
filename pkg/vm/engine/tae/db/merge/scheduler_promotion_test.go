@@ -141,7 +141,7 @@ func TestPromotionPreflightRejectsQueuedOrPreviouslyRunScheduler(t *testing.T) {
 	sched := NewMergeScheduler(time.Hour,
 		&dummyCatalogSource{initTables: []catalog.MergeTable{table}},
 		&dummyExecutor{}, NewStdClock())
-	require.NoError(t, sched.SendConfig(table.ID(), DefaultMergeSettings, types.BuildTS(1, 0)))
+	require.NoError(t, sched.SendConfig(table.ID(), DefaultMergeSettings, types.TS{}))
 	require.ErrorContains(t, sched.CheckPromotionReady(), "queued messages")
 	require.Len(t, sched.msgChan, 1)
 
