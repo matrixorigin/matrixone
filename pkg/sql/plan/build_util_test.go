@@ -1212,7 +1212,7 @@ func TestBuildGeneratedExprRejectsStatementDigestText(t *testing.T) {
 	}
 	require.NotNil(t, genCol)
 
-	_, err = buildGeneratedExpr(genCol, plan.Type{Id: int32(types.T_text)}, nil, proc)
+	_, err = buildGeneratedExpr(proc.Ctx, genCol, plan.Type{Id: int32(types.T_text)}, nil, proc)
 	require.Error(t, err)
 	require.Contains(t, err.Error(), "non-deterministic function 'statement_digest_text'")
 }

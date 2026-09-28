@@ -864,6 +864,7 @@ const (
 
 // functionIdRegister is what function we have registered already.
 var functionIdRegister = map[string]int32{
+	"statement_digest_text":   STATEMENT_DIGEST_TEXT,
 	"to_interval_microsecond": TO_INTERVAL_MICROSECOND,
 	"extractvalue":            EXTRACTVALUE,
 	"updatexml":               UPDATEXML,

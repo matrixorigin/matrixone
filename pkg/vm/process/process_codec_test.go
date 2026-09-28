@@ -401,12 +401,18 @@ func TestBuildProcessInfoPreservesMaxDigestLengthAcrossForwards(t *testing.T) {
 			proc, _ := newCodecTestProcess(t)
 			defer proc.Free()
 			proc.SetResolveVariableFunc(func(name string, system, global bool) (interface{}, error) {
-				if name == "max_digest_length" {
+				switch name {
+				case "default_week_format":
+					return int64(0), nil
+				case "sql_mode":
+					return "STRICT_TRANS_TABLES", nil
+				case "max_digest_length":
 					require.True(t, system)
 					require.True(t, global)
 					return test.value, nil
+				default:
+					return nil, moerr.NewInternalErrorNoCtx("unavailable")
 				}
-				return nil, moerr.NewInternalErrorNoCtx("unavailable")
 			})
 
 			svc := NewCodecService(fakeCodecTxnClient{op: fakeCodecTxnOperator{}}, nil, nil, nil, nil, nil, nil, nil)
@@ -465,10 +471,14 @@ func TestBuildProcessInfoKeepsOrdinaryQueriesIndependentOfDigestSettings(t *test
 	proc, _ := newCodecTestProcess(t)
 	defer proc.Free()
 	proc.SetResolveVariableFunc(func(name string, _, _ bool) (interface{}, error) {
-		if name == "sql_mode" {
+		switch name {
+		case "default_week_format":
+			return int64(0), nil
+		case "sql_mode":
 			return "", nil
+		default:
+			return nil, fmt.Errorf("%s unavailable", name)
 		}
-		return nil, fmt.Errorf("%s unavailable", name)
 	})
 
 	info, err := proc.BuildProcessInfo("select 1")

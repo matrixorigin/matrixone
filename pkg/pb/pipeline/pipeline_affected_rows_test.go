@@ -29,8 +29,8 @@ func TestSessionInfoWireCompatibility(t *testing.T) {
 	}{
 		{"legacy", nil, SessionInfo{}},
 		{"v56 auto increment", []byte{0x78, 7, 0x80, 1, 4}, SessionInfo{AutoIncrementIncrement: 7, AutoIncrementOffset: 4}},
-		{"explicit zero digest", []byte{0x98, 1, 1}, SessionInfo{MaxDigestLengthSet: true}},
-		{"both", []byte{0x78, 7, 0x80, 1, 4, 0x90, 1, 16, 0x98, 1, 1}, SessionInfo{AutoIncrementIncrement: 7, AutoIncrementOffset: 4, MaxDigestLength: 16, MaxDigestLengthSet: true}},
+		{"explicit zero digest", []byte{0xb8, 1, 1}, SessionInfo{MaxDigestLengthSet: true}},
+		{"both", []byte{0x78, 7, 0x80, 1, 4, 0xb0, 1, 16, 0xb8, 1, 1}, SessionInfo{AutoIncrementIncrement: 7, AutoIncrementOffset: 4, MaxDigestLength: 16, MaxDigestLengthSet: true}},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			var got SessionInfo
@@ -41,7 +41,7 @@ func TestSessionInfoWireCompatibility(t *testing.T) {
 			require.Equal(t, tc.wire, append([]byte(nil), wire...))
 		})
 	}
-	for _, wire := range [][]byte{{0x90, 1}, {0x98, 1}, {0x92, 1, 0}} {
+	for _, wire := range [][]byte{{0xb0, 1}, {0xb8, 1}, {0xb2, 1, 0}} {
 		var got SessionInfo
 		require.Error(t, got.Unmarshal(wire), "truncated or wrong-wire-type digest field: %x", wire)
 	}
