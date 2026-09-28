@@ -1,0 +1,83 @@
+# Pessimistic RC lifecycle and data-branch component protocol
+
+- Status: revision 1 design accepted for implementation; exact-head validation and review remain separate gates.
+- Issue: [#29400](https://github.com/matrixorigin/matrixone/issues/29400); draft implementation: [#29457](https://github.com/matrixorigin/matrixone/pull/29457).
+- Design input: `6ba5c78e17ff6ee319361ef78c6c6d015a1b4d1d` against `e6e3af58ce5693c33517b4e85bf51d0bc609b7b8`. GPT-6 Astra, medium, `/root/design_latest` approved the correction design for implementation on 2026-09-29; this is not approval of the implementation or of pending CI.
+- Parent: [DROP DATABASE lifecycle revision 4](20260926-drop-database-lifecycle.md) describes #29393's per-table execution and separate performance gate. Its earlier claim that no new wire, wait-graph or upgrade contract was introduced applies to that revision, not to this protocol.
+
+## Purpose and boundaries
+
+The old transaction-long exclusive `SNAPSHOT` gate serialized unrelated RC DROP work. Replacing it with shared admission is safe only if every publisher and destructive owner agrees on catalog identity, database domains, branch components, exact rows, snapshot visibility, and transaction ownership. This document specifies that shared contract. It does not relax #29393's ordered per-table cleanup or its still-open current-source 1,000/2,000-table three-sample 25% performance gate.
+
+The current synchronous cleanup of touched ALTER history is a scoped-progress limit: it loads the complete ALTER lineage DAG and retains G X for its transaction. An otherwise unrelated DROP can therefore wait behind that owner. The unrelated-component progress claim and its two-CN check cover ordinary branch components without ALTER lineage; ALTER-bearing progress needs its own measurement before any broader concurrency claim.
+
+The supported foreground path is pessimistic RC. DATA BRANCH CREATE/DELETE rejects fixed SI and optimistic owners before catalog mutation; existing supported pessimistic SI behavior of other foreground DDL remains. The optimistic test mode is retired and is not a rollout target. A first deployment of this shared protocol requires a full maintenance cutover; rolling old/new writers are unsupported.
+
+## Keys, order and conflicts
+
+All keys below are physical lockservice row identities, not CN-local mutexes. S/S is compatible; X conflicts with both S and X on the *same* key. Different D, K and T keys can progress concurrently. Discovery is provisional until the owner revalidates it after locking and advancing the applied frontier.
+
+| Key | Physical identity | Mode and purpose |
+| --- | --- | --- |
+| C | System `mo_tables` composite key naming `mo_catalog.mo_feature_registry` | S pins the registry relation generation; catalog replacement requires X. C precedes G. |
+| G | System `mo_feature_registry` PK `SNAPSHOT` | S admits scoped RC work; X excludes all scoped work for a broad owner or historical ALTER compaction. A retained S→X request must FastFail if another holder exists. |
+| D | `mo_database` account ID plus database name, including an absent name | S for compatible readers/table work; X for database inventory/name changes. Names are sorted by account and name before acquisition. |
+| K | System `mo_branch_metadata` component/root table ID, including an absent root | X serializes overlapping branch components. Discovery and locking use the complete connected component; disjoint components remain independent. |
+| T | `mo_tables` account ID plus database/relation name; physical storage locks where required | S for admitted source readers and X for target or destructive schema work. Actual relation IDs are rechecked after admission. |
+| Q | Feature/account/scope quota key | X serializes count validation and publication. Acquire after target D/T waits so an unrelated target is not queued behind Q. |
+
+This is the core partial order: C → G → complete sorted D domain → K → T → Q. It is not a promise that every participant takes every key. Named-snapshot locks on the *requester's* `mo_snapshots` relation, system-owned branch snapshot names, PITR retention keys, publication keys, and exact metadata mutation rows follow their documented owner-specific order after the applicable D/T admission. Foreign-key D names are discovered before K/T. Internal borrowed DROP receipts must not reacquire C behind a held G or escape their synchronous callback.
+
+The broad lifecycle write barrier updates the existing `SNAPSHOT` registry row inside the owner's transaction. Pessimistic row ownership is retained through that transaction; SI's existing write-conflict barrier remains its fixed-snapshot mechanism. The barrier is not interchangeable with a lock grant timestamp.
+
+## Participant ownership
+
+| Participant and source boundary | Admission and revalidation | Terminal owner |
+| --- | --- | --- |
+| Local Snapshot/PITR, `frontend/lifecycle_admission_rc.go` | C S, G S, target D S/X and T S for table scope; then Q or PITR retention and publication key as applicable; advance/verify before publish. | Its background transaction; the temporary Process only owns memory. |
+| DATA BRANCH and ordinary CLONE, `frontend/data_branch_lineage_lock.go` | C S/G S, sorted requester/source/publisher/target/FK D domain, K X, source T S and target T X, named snapshot and quota protection; re-resolve definitions under the fresh frontier. | The same background/foreground transaction as the nested clone. |
+| RC DROP TABLE/DATABASE, `compile/lifecycle_fk_scope.go` and `lifecycle_branch_reclaim.go` | C S/G S for ordinary components, complete D domain, K X, destructive T and exact metadata rows. Touched ALTER historical lineage requires G X before synchronous compaction. | Caller transaction; statement retry does not release prior locks. |
+| COPY ALTER and TRUNCATE, `compile/alter.go` and `ddl.go` | C S, G X by nonwaiting RC admission, source D S, fresh relation-ID check, then T/storage locks and later lineage write barrier. SI retains its legacy fixed-snapshot entry. | Caller transaction, including any prior retained G S/D/K. |
+| Snapshot/PITR deletion, account destruction and restore/rebuild | Existing broad G X lifecycle owners must enter before catalog/object teardown; account and View-specific gates retain their own documented order. They do not borrow a scoped branch receipt. | Their owning transaction or explicitly bounded maintenance transaction. |
+| Background ALTER-lineage GC, `compile/alter_lineage_gc.go` | Ungated RC discovery is only an empty-work filter. For mutation, acquire C S/G X with FastFail in the same pessimistic RC transaction, advance the applied frontier, recheck registry identity, and recompute the plan under that gate; then write G with FastFail to validate legacy fixed-snapshot owners before exact deletes. | Background transaction; a failed attempt rolls back and can be retried from fresh discovery. |
+| In-place ALTER and publication writers | Existing D/T and publication-name order remains; their table-definition or publication generation changes are caught by scoped owners' post-admission identity/domain checks. | Writer transaction. |
+| Registry replacement | C X conflicts with every C S generation before replacing the physical registry relation. | Replacement transaction. |
+
+An explicit transaction can hold G S and D/K after a preceding statement. A later broad operation must never enqueue G X behind another G S holder while retaining those lower keys: another transaction may already hold G S and wait for its D/K. Successful sole-holder promotion is allowed. A competing holder returns `ErrLockConflict`; frontend treats it as a **whole-transaction** rollback. This intentionally exposes contention to that client instead of waiting for a deadlock detector. COPY ALTER and TRUNCATE use the same nonwaiting admission as ALTER-compacting DROP. Public TRUNCATE commits a preceding transaction before planning, so the retained-lock interleaving is exercised through COPY ALTER; TRUNCATE is checked for its own ordinary RC admission and contention behavior.
+
+## Discovery, visibility, retry and failure
+
+The owner first discovers a provisional database/FK/component/source domain. It then locks the complete sorted name set, including absent names and K roots. It obtains the TN-applied logtail frontier, advances the RC snapshot without discarding its own workspace writes, re-resolves the registry physical relation and row, and compares database/relation IDs, FK links, component roots, source definitions and applicable snapshot identity. A lock grant timestamp alone does not establish that committed metadata has reached the observing CN.
+
+If the domain or definition changed, return a definition-change retry *before* physical effects. Retry rebuilds mutable descriptors from the protected snapshot. An ALTER generation found after initial G S admission can only promote G without waiting; conflict aborts the transaction. A missing root is still locked by its ID so first-child publication cannot pass between an empty probe and DROP. Branch reclaim marks or deletes only selected exact IDs/names, in the same transaction as physical DROP. Historical Snapshot/PITR ownership is rechecked before ALTER compaction.
+
+For public multi-table DROP, a direct-client temporary table may retire outside the statement's persistent catalog transaction. The first live persistent member invokes the **complete remaining persistent-domain** preflight at its original per-table boundary. A leading temporary/no-op member completes before a terminal persistent admission failure, while a persistent failure prevents later temporary retirement. RC stages direct-client temporary retirement per attempt so a retryable definition change leaves the alias visible to replanning. The statement's root Compile retains reached retirements across retry generations and publishes them once on success or any terminal outcome, including retry-transition and plan-build failure. A virtual per-attempt tombstone preserves ordered duplicate-name behavior while retirement is staged. The complete persistent domain is still admitted once before its first mutation; its validation may reject the persistent suffix before any member of that suffix is changed. Internal executor temporary deletion stays in the parent transaction. A new invocation recreates all admission state; no session cache is allowed.
+
+Locks belong to the transaction, not the short-lived admission Process. COMMIT/full rollback releases them; statement rollback and Process freeing do not. Failed `ErrLockConflict` promotion is terminal to the whole transaction. A definition-change retry keeps staged direct-client temporary aliases visible for replanning; a terminal result publishes only the temporary prefix already reached, including prefixes from earlier retry attempts. Borrowed DROP receipts are synchronous, bound to one transaction and one target domain, and expire when the nested callback returns. Partial failure after a successful preflight cannot execute later members' cleanup hooks.
+
+## Exact-row and tenant contract
+
+`LockOptions.KeepRows` is carried in the lock RPC and honored by local, remote and proxy lock owners. It preserves gaps and disables later cumulative row-to-range/table coarsening for that transaction/table. An incompatible already-coarsened owner fails instead of claiming exact ownership. Admission rejects oversized requests rather than widening. Mutation batching bounds each request and SQL statement, **not** the transaction's total retained lock memory; capacity and allocation errors abort the affected owner, whose terminal rollback releases locks and waiters. No new background queue or unbounded retry loop is introduced.
+
+D/T and quota keys include tenant identity. System branch metadata and branch-managed snapshot names use the system account. User-named snapshot rows are per-account: lock the physical `mo_snapshots` relation belonging to the resolver/requester and read it under that account, even when the historical table belongs to another account. Subscription CLONE retains the subscriber's logical request snapshot separately from the publisher's physical read snapshot; publisher views are compiled with an isolated publisher-account context.
+
+## View activation and maintenance
+
+`Compile.viewMetadataRefreshAvailable` is disabled. Ordinary inactive compile DDL therefore does not maintain an incremental durable View revalidation marker. Explicit snapshot/restore/account pathways can still call their own marker helpers; those calls do not establish complete incremental dependency coverage. The comments in `view_metadata_recovery.go` must reflect that distinction. There is **no online enablement path** for View refresh: a future activation requires quiesced mutations and a complete rebuild and validation of affected dependency metadata before enabling readers.
+
+First protocol activation requires an approved maintenance window: stop foreground ingress and all background catalog/lineage producers, drain or abort old transactions, replace every participating CN/TN/lockservice binary, prevent old-image restart, validate catalog/bootstrap state, and only then reopen traffic. An old owner may ignore `KeepRows` or use the old global lock order, so mixed-version correctness is not asserted. Rollback also requires drained transactions and a maintenance window; no retained new-protocol lock may cross downgrade. Durable catalog compatibility and View metadata readiness must be checked separately, and an old image must not activate stale View metadata without rebuild. This is a prerequisite contract, not a claim that an untested rollback procedure is safe.
+
+## Acceptance and evidence map
+
+| Risk | Required discriminator |
+| --- | --- |
+| Retained G promotion wait cycle | Deterministic two-CN A/B interleaving for COPY ALTER, sole-holder promotion control; assert terminal rollback releases D/K and B can finish. Test ordinary RC TRUNCATE admission and a competing G holder separately because public TRUNCATE commits its preceding transaction. |
+| Ordered temporary semantics | RC and SI mixed DROP in both orders, injected terminal and definition-change retry admission failures, retry plan-build failure after a reached temporary prefix, internal-executor transactional temporary control, duplicate alias handling and pure temporary/no-op zero-gate control. |
+| Stale scope/frontier | Changed registry, database, relation, FK or component identity after provisional discovery must retry before effects; same-txn uncommitted source remains visible. |
+| Component concurrency | Overlapping components exclude each other; unrelated ordinary branch components progress; target waits precede Q. Measure ALTER-bearing DROP separately because its synchronous compaction retains G X and can delay an unrelated DROP. |
+| Exact rows and failure cleanup | Local/remote/proxy KeepRows, low capacity, gaps, re-entry, prior coarsening, cancellation and terminal owner cleanup. |
+| Tenant and historical clone | Same names in different tenants, requester-owned named snapshots, publisher/subscriber view and historical snapshot contexts. |
+| Rollback and receipt | Whole rollback, statement rollback followed by COMMIT, retry after promotion, nested receipt expiry and reclaim failure. |
+| Public acceptance | Pessimistic RC multi-CN BVT branch edge/rebuild/clone cases plus SI controls; maintenance restart/View rebuild evidence before activation. |
+
+The #29393 two-scale, three-sample >=25% end-to-end DROP DATABASE performance gate remains separate and open until current-source measurements meet it. Historical single samples and a passing unit suite cannot close that gate or a pending multi-CN BVT.

@@ -1,5 +1,7 @@
 # DROP DATABASE: reuse lifecycle admission without reordering cleanup
 
+The subsequent pessimistic-RC component protocol in [revision 1 of the RC lifecycle design](20260929-rc-lifecycle-protocol.md) supersedes this document's earlier no-new-wire/wait/upgrade assumption for PR #29457. This document retains #29393's ordered per-table cleanup and separate performance acceptance.
+
 Design revision: **4**, 2026-09-27, with a focused performance addendum dated 2026-09-28. **Supersedes revision 3. The rejected grouped SQL path is removed; DROP DATABASE now reuses the existing per-table primitive directly after resolving live descriptors.** Revision 3's admission and callback constraints remain. Current review and operational limits are recorded below.
 
 Issue: https://github.com/matrixorigin/matrixone/issues/27575. PR: https://github.com/matrixorigin/matrixone/pull/29393. This document records the direct-execution implementation and its evidence; inherited busy-system and callback-scope limits remain explicit below.

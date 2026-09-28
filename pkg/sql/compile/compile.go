@@ -536,6 +536,8 @@ func (c *Compile) clear() {
 	c.needLockMeta = false
 	c.isInternal = false
 	c.temporaryDDLInExecutorTxn = false
+	c.temporaryDropRetryStage = nil
+	c.temporaryDropRetryActive = false
 	c.resourceAttemptOwnerEligible = false
 	c.allocationAccountRegistry = nil
 	c.allocationAccountLimit = 0

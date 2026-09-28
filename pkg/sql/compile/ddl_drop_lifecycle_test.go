@@ -35,6 +35,7 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/pb/lock"
 	"github.com/matrixorigin/matrixone/pkg/pb/plan"
 	"github.com/matrixorigin/matrixone/pkg/pb/timestamp"
+	"github.com/matrixorigin/matrixone/pkg/pb/txn"
 	"github.com/matrixorigin/matrixone/pkg/sql/features"
 	"github.com/matrixorigin/matrixone/pkg/testutil"
 	"github.com/matrixorigin/matrixone/pkg/util/executor"
@@ -330,6 +331,211 @@ func TestDropTableMixedTemporaryFailureOrder(t *testing.T) {
 	}
 }
 
+func TestDropTableMixedTemporaryRCAdmissionFailureOrder(t *testing.T) {
+	for _, tc := range []struct {
+		name                   string
+		tempFirst, executorTxn bool
+		retry                  bool
+	}{
+		{name: "temporary first", tempFirst: true},
+		{name: "temporary first retry keeps alias for replanning", tempFirst: true, retry: true},
+		{name: "persistent first"},
+		{name: "executor temporary first", tempFirst: true, executorTxn: true},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			ctrl := gomock.NewController(t)
+			var wantErr error = errors.New("persistent domain discovery failed")
+			if tc.retry {
+				wantErr = moerr.NewTxnNeedRetryWithDefChangedNoCtx()
+			}
+			c, eng := newDropDDLCompile(t, ctrl, &dropDDLExecutor{exec: func(context.Context, string, executor.Options) (executor.Result, error) {
+				return executor.Result{}, nil
+			}})
+			c.proc.Base.TxnClient, c.proc.Base.TxnOperator = newTestTxnClientAndOpWithModeIsolation(
+				ctrl, txn.TxnMode_Pessimistic, txn.TxnIsolation_RC,
+			)
+			c.proc.Base.IsFrontend = true
+			c.temporaryDDLInExecutorTxn = tc.executorTxn
+			owner := &sessionTemporaryDDLTestOwner{trackingTempTableSession: trackingTempTableSession{
+				tables: map[string]string{catalog.MO_CATALOG + ".tmp": "physical"},
+			}}
+			c.proc.Session = owner
+			rt := moruntime.ServiceRuntime(c.proc.GetService())
+			old, exists := rt.GetGlobalVariables(moruntime.MOProtocolVersion)
+			t.Cleanup(func() {
+				if exists {
+					rt.SetGlobalVariables(moruntime.MOProtocolVersion, old)
+				} else {
+					rt.CompareAndDeleteGlobalVariables(moruntime.MOProtocolVersion, defines.MORPCVersion55)
+				}
+			})
+			rt.SetGlobalVariables(moruntime.MOProtocolVersion, defines.MORPCVersion55)
+			tempDB := newStubDatabase(catalog.MO_CATALOG)
+			tempDB.rels["physical"] = &stubRelation{tableDef: &plan.TableDef{IsTemporary: true}}
+			if tc.tempFirst {
+				eng.EXPECT().Database(gomock.Any(), catalog.MO_CATALOG, c.proc.GetTxnOperator()).Return(tempDB, nil)
+			}
+			eng.EXPECT().Database(gomock.Any(), "db", c.proc.GetTxnOperator()).Return(nil, wantErr)
+			temp := &plan.DropTable{Database: catalog.MO_CATALOG, Table: "tmp", TableDef: &plan.TableDef{IsTemporary: true}}
+			persistent := &plan.DropTable{Database: "db", Table: "p", TableId: 1, TableDef: &plan.TableDef{TblId: 1}}
+			tables := []*plan.DropTable{persistent, temp}
+			if tc.tempFirst {
+				tables[0], tables[1] = temp, persistent
+			}
+			err := dropTableScope(tables...).DropTable(c)
+			require.ErrorIs(t, err, wantErr)
+			require.Equal(t, tc.retry, c.canRetry(err))
+			_, present := owner.GetTempTable(catalog.MO_CATALOG, "tmp")
+			require.Equal(t, !tc.tempFirst || tc.retry, present)
+			if tc.tempFirst && tc.executorTxn {
+				require.Empty(t, owner.retired)
+				require.NotContains(t, tempDB.rels, "physical")
+			} else if tc.tempFirst && !tc.retry {
+				require.Equal(t, []string{"physical"}, owner.retired)
+				require.Contains(t, tempDB.rels, "physical")
+			} else {
+				require.Empty(t, owner.retired)
+				require.Contains(t, tempDB.rels, "physical")
+			}
+			require.Equal(t, "tmp", temp.Table, "execution must not mutate the reusable plan")
+			if tc.retry {
+				// A failed retry transition or plan rebuild terminalizes Run.
+				// The statement owner then publishes the reached prefix once.
+				c.finishTemporaryDropRetry()
+				c.finishTemporaryDropRetry()
+				require.Equal(t, []string{"physical"}, owner.retired)
+				_, present = owner.GetTempTable(catalog.MO_CATALOG, "tmp")
+				require.False(t, present)
+			}
+		})
+	}
+}
+
+func TestDropTableRCStagedTemporaryDuplicateName(t *testing.T) {
+	for _, ifExists := range []bool{false, true} {
+		name := "without if exists"
+		if ifExists {
+			name = "with if exists"
+		}
+		t.Run(name, func(t *testing.T) {
+			ctrl := gomock.NewController(t)
+			c, eng := newDropDDLCompile(t, ctrl, nil)
+			c.proc.Base.TxnClient, c.proc.Base.TxnOperator = newTestTxnClientAndOpWithModeIsolation(
+				ctrl, txn.TxnMode_Pessimistic, txn.TxnIsolation_RC,
+			)
+			c.proc.Base.IsFrontend = true
+			owner := &sessionTemporaryDDLTestOwner{trackingTempTableSession: trackingTempTableSession{
+				tables: map[string]string{catalog.MO_CATALOG + ".tmp": "physical"},
+			}}
+			c.proc.Session = owner
+			rt := moruntime.ServiceRuntime(c.proc.GetService())
+			old, exists := rt.GetGlobalVariables(moruntime.MOProtocolVersion)
+			t.Cleanup(func() {
+				if exists {
+					rt.SetGlobalVariables(moruntime.MOProtocolVersion, old)
+				} else {
+					rt.CompareAndDeleteGlobalVariables(moruntime.MOProtocolVersion, defines.MORPCVersion55)
+				}
+			})
+			rt.SetGlobalVariables(moruntime.MOProtocolVersion, defines.MORPCVersion55)
+			tempDB := newStubDatabase(catalog.MO_CATALOG)
+			tempDB.rels["physical"] = &stubRelation{tableDef: &plan.TableDef{IsTemporary: true}}
+			eng.EXPECT().Database(gomock.Any(), catalog.MO_CATALOG, c.proc.GetTxnOperator()).Return(tempDB, nil)
+			temp := &plan.DropTable{Database: catalog.MO_CATALOG, Table: "tmp", IfExists: ifExists, TableDef: &plan.TableDef{IsTemporary: true}}
+			err := dropTableScope(temp, temp).DropTable(c)
+			if ifExists {
+				require.NoError(t, err)
+			} else {
+				require.True(t, moerr.IsMoErrCode(err, moerr.ErrNoSuchTable), "%v", err)
+			}
+			require.Equal(t, []string{"physical"}, owner.retired)
+			_, present := owner.GetTempTable(catalog.MO_CATALOG, "tmp")
+			require.False(t, present)
+			require.Equal(t, "tmp", temp.Table)
+		})
+	}
+}
+
+func TestCompileRunDropTableRetryPlanFailurePublishesTemporaryPrefix(t *testing.T) {
+	ctrl := gomock.NewController(t)
+	retryErr := moerr.NewTxnNeedRetryWithDefChangedNoCtx()
+	planErr := errors.New("persistent table disappeared during replan")
+	c, eng := newDropDDLCompile(t, ctrl, &dropDDLExecutor{exec: func(context.Context, string, executor.Options) (executor.Result, error) {
+		return executor.Result{}, nil
+	}})
+	c.proc.Base.TxnClient, c.proc.Base.TxnOperator = newTestTxnClientAndOpWithModeIsolation(
+		ctrl, txn.TxnMode_Pessimistic, txn.TxnIsolation_RC,
+	)
+	c.proc.Base.TxnOperator.(*mock_frontend.MockTxnOperator).EXPECT().SnapshotTS().Return(timestamp.Timestamp{}).AnyTimes()
+	c.proc.Base.IsFrontend = true
+	owner := &sessionTemporaryDDLTestOwner{trackingTempTableSession: trackingTempTableSession{
+		tables: map[string]string{catalog.MO_CATALOG + ".tmp": "physical"},
+	}}
+	c.proc.Session = owner
+	rt := moruntime.ServiceRuntime(c.proc.GetService())
+	old, exists := rt.GetGlobalVariables(moruntime.MOProtocolVersion)
+	t.Cleanup(func() {
+		if exists {
+			rt.SetGlobalVariables(moruntime.MOProtocolVersion, old)
+		} else {
+			rt.CompareAndDeleteGlobalVariables(moruntime.MOProtocolVersion, defines.MORPCVersion55)
+		}
+	})
+	rt.SetGlobalVariables(moruntime.MOProtocolVersion, defines.MORPCVersion55)
+	tempDB := newStubDatabase(catalog.MO_CATALOG)
+	tempDB.rels["physical"] = &stubRelation{tableDef: &plan.TableDef{IsTemporary: true}}
+	eng.EXPECT().Database(gomock.Any(), catalog.MO_CATALOG, c.proc.GetTxnOperator()).Return(tempDB, nil)
+	eng.EXPECT().Database(gomock.Any(), "db", c.proc.GetTxnOperator()).Return(nil, retryErr)
+	temp := &plan.DropTable{Database: catalog.MO_CATALOG, Table: "tmp", TableDef: &plan.TableDef{IsTemporary: true}}
+	persistent := &plan.DropTable{Database: "db", Table: "p", TableId: 1, TableDef: &plan.TableDef{TblId: 1}}
+	c.SetBuildPlanFunc(func(context.Context) (*plan.Plan, error) {
+		_, present := owner.GetTempTable(catalog.MO_CATALOG, "tmp")
+		require.True(t, present, "retry planning must still resolve the temporary prefix")
+		require.Empty(t, owner.retired)
+		return nil, planErr
+	})
+	require.NoError(t, c.Compile(c.proc.Ctx, dropTableScope(temp, persistent).Plan, nil))
+	_, err := c.Run(0)
+	require.ErrorIs(t, err, planErr)
+	require.Equal(t, 1, c.retryTimes)
+	require.Equal(t, []string{"physical"}, owner.retired)
+	_, present := owner.GetTempTable(catalog.MO_CATALOG, "tmp")
+	require.False(t, present)
+}
+
+func TestCompileRunDropTablePublishesTemporaryOnSuccess(t *testing.T) {
+	ctrl := gomock.NewController(t)
+	c, eng := newDropDDLCompile(t, ctrl, nil)
+	c.proc.Base.TxnClient, c.proc.Base.TxnOperator = newTestTxnClientAndOpWithModeIsolation(
+		ctrl, txn.TxnMode_Pessimistic, txn.TxnIsolation_RC,
+	)
+	c.proc.Base.IsFrontend = true
+	owner := &sessionTemporaryDDLTestOwner{trackingTempTableSession: trackingTempTableSession{
+		tables: map[string]string{catalog.MO_CATALOG + ".tmp": "physical"},
+	}}
+	c.proc.Session = owner
+	rt := moruntime.ServiceRuntime(c.proc.GetService())
+	old, exists := rt.GetGlobalVariables(moruntime.MOProtocolVersion)
+	t.Cleanup(func() {
+		if exists {
+			rt.SetGlobalVariables(moruntime.MOProtocolVersion, old)
+		} else {
+			rt.CompareAndDeleteGlobalVariables(moruntime.MOProtocolVersion, defines.MORPCVersion55)
+		}
+	})
+	rt.SetGlobalVariables(moruntime.MOProtocolVersion, defines.MORPCVersion55)
+	tempDB := newStubDatabase(catalog.MO_CATALOG)
+	tempDB.rels["physical"] = &stubRelation{tableDef: &plan.TableDef{IsTemporary: true}}
+	eng.EXPECT().Database(gomock.Any(), catalog.MO_CATALOG, c.proc.GetTxnOperator()).Return(tempDB, nil)
+	temp := &plan.DropTable{Database: catalog.MO_CATALOG, Table: "tmp", TableDef: &plan.TableDef{IsTemporary: true}}
+	require.NoError(t, c.Compile(c.proc.Ctx, dropTableScope(temp).Plan, nil))
+	_, err := c.Run(0)
+	require.NoError(t, err)
+	require.Equal(t, []string{"physical"}, owner.retired)
+	_, present := owner.GetTempTable(catalog.MO_CATALOG, "tmp")
+	require.False(t, present)
+}
+
 func TestDropDatabaseSelectsParentOwnedTables(t *testing.T) {
 	ctrl := gomock.NewController(t)
 	var dropped []string
@@ -513,23 +719,36 @@ func TestDropDatabaseRechecksIncomingFKAfterLateLockRetry(t *testing.T) {
 }
 
 func TestDropTableTemporaryAndNoopMembersDoNotAdmit(t *testing.T) {
-	ctrl := gomock.NewController(t)
-	exec := &dropDDLExecutor{exec: func(context.Context, string, executor.Options) (executor.Result, error) {
-		t.Fatal("temporary/no-op drop entered the persistent lifecycle")
-		return executor.Result{}, nil
-	}}
-	c, eng := newDropDDLCompile(t, ctrl, exec)
-	c.proc.Session = &trackingTempTableSession{tables: map[string]string{catalog.MO_CATALOG + ".tmp": "physical"}}
-	db := newStubDatabase(catalog.MO_CATALOG)
-	db.rels["physical"] = &stubRelation{tableDef: &plan.TableDef{IsTemporary: true}}
-	eng.EXPECT().Database(gomock.Any(), catalog.MO_CATALOG, c.proc.GetTxnOperator()).Return(db, nil)
-	temp := &plan.DropTable{Database: catalog.MO_CATALOG, Table: "tmp", IfExists: true, TableDef: &plan.TableDef{IsTemporary: true}}
-	s := dropTableScope(nil, &plan.DropTable{}, &plan.DropTable{Database: "db", Table: "missing", IfExists: true}, temp)
-	require.NoError(t, s.DropTable(c))
-	require.NotContains(t, db.rels, "physical")
-	// The retained plan sees the now-absent temporary alias on the next call.
-	require.NoError(t, s.DropTable(c))
-	require.Equal(t, "tmp", temp.Table)
+	for _, rc := range []bool{false, true} {
+		name := "SI"
+		if rc {
+			name = "RC"
+		}
+		t.Run(name, func(t *testing.T) {
+			ctrl := gomock.NewController(t)
+			exec := &dropDDLExecutor{exec: func(context.Context, string, executor.Options) (executor.Result, error) {
+				t.Fatal("temporary/no-op drop entered the persistent lifecycle")
+				return executor.Result{}, nil
+			}}
+			c, eng := newDropDDLCompile(t, ctrl, exec)
+			if rc {
+				c.proc.Base.TxnClient, c.proc.Base.TxnOperator = newTestTxnClientAndOpWithModeIsolation(
+					ctrl, txn.TxnMode_Pessimistic, txn.TxnIsolation_RC,
+				)
+			}
+			c.proc.Session = &trackingTempTableSession{tables: map[string]string{catalog.MO_CATALOG + ".tmp": "physical"}}
+			db := newStubDatabase(catalog.MO_CATALOG)
+			db.rels["physical"] = &stubRelation{tableDef: &plan.TableDef{IsTemporary: true}}
+			eng.EXPECT().Database(gomock.Any(), catalog.MO_CATALOG, c.proc.GetTxnOperator()).Return(db, nil)
+			temp := &plan.DropTable{Database: catalog.MO_CATALOG, Table: "tmp", IfExists: true, TableDef: &plan.TableDef{IsTemporary: true}}
+			s := dropTableScope(nil, &plan.DropTable{}, &plan.DropTable{Database: "db", Table: "missing", IfExists: true}, temp, temp)
+			require.NoError(t, s.DropTable(c))
+			require.NotContains(t, db.rels, "physical")
+			// The retained plan sees the now-absent temporary alias on the next call.
+			require.NoError(t, s.DropTable(c))
+			require.Equal(t, "tmp", temp.Table)
+		})
+	}
 }
 
 func TestDropTableReclaimFailureStopsLaterHooks(t *testing.T) {

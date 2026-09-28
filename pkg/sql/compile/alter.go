@@ -1181,14 +1181,17 @@ func (s *Scope) alterTableCopy(c *Compile, cleanup *alterAutoIncrementResetClean
 		var retryErr error
 		if !isTemp {
 			if c.isLifecycleRC() {
-				if err = c.lockLifecycleIdentityRC(); err != nil {
+				if dbSource, originRel, err = c.admitBroadTableLifecycleRC(dbName, tblName, oldId); err != nil {
 					return err
 				}
-			}
-			// TRUNCATE, DROP TABLE, and DROP ACCOUNT enter this lifecycle
-			// before locking table metadata. Use the same order for COPY ALTER.
-			if err = c.lockDataBranchLineageOwnerLifecyclePessimistic(); err != nil {
-				return err
+				if plannedID := qry.TableDef.GetTblId(); plannedID != 0 && plannedID != oldId {
+					return moerr.NewTxnNeedRetryWithDefChanged(c.proc.Ctx)
+				}
+			} else {
+				// SI keeps the existing broad lifecycle and fixed snapshot.
+				if err = c.lockDataBranchLineageOwnerLifecyclePessimistic(); err != nil {
+					return err
+				}
 			}
 		}
 		// 0. lock origin database metadata in catalog
