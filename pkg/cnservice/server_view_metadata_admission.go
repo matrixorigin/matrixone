@@ -365,7 +365,7 @@ func (s *service) acceptViewMetadataAdmissionSnapshot(
 	defer s.viewMetadataAdmissionMu.Unlock()
 
 	var upgradeErr error
-	upgradeResult, upgradeErr = pollBootstrapUpgradeResult(upgradeResult)
+	upgradeResult, upgradeErr = pollBootstrapUpgradeResult(s.bootstrapUpgradeContext, upgradeResult)
 	if upgradeErr != nil {
 		return false, upgradeResult, upgradeErr
 	}
@@ -447,13 +447,21 @@ func (s *service) waitForViewMetadataIngressAdmission() error {
 	return s.waitForViewMetadataAdmissionHandoff(true, 0)
 }
 
-func pollBootstrapUpgradeResult(result <-chan error) (<-chan error, error) {
+func pollBootstrapUpgradeResult(ctx context.Context, result <-chan error) (<-chan error, error) {
 	select {
 	case err := <-result:
-		return nil, err
+		result = nil
+		if err != nil {
+			return nil, err
+		}
 	default:
-		return result, nil
 	}
+	// Cancellation can precede the owner's terminal-result publication. Do not
+	// admit a CN in that window, even if its catalog is already fenced.
+	if ctx != nil && ctx.Err() != nil {
+		return result, moerr.AttachCause(ctx, ctx.Err())
+	}
+	return result, nil
 }
 
 func (s *service) waitForViewMetadataAdmissionHandoff(publishIngress bool, minimumAuthoringProtocol uint64) error {
@@ -491,6 +499,11 @@ func (s *service) waitForViewMetadataAdmissionHandoff(publishIngress bool, minim
 	catalogRetryReady := true
 
 	for {
+		var upgradeErr error
+		upgradeResult, upgradeErr = pollBootstrapUpgradeResult(s.bootstrapUpgradeContext, upgradeResult)
+		if upgradeErr != nil {
+			return upgradeErr
+		}
 		snapshot := s.viewMetadataAdmission.Load()
 		if minimumAuthoringProtocol > 0 {
 			if err := s.checkViewMetadataGenerationRevoked(); err != nil {
@@ -562,7 +575,6 @@ func (s *service) waitForViewMetadataAdmissionHandoff(publishIngress bool, minim
 			}
 		}
 
-		catalogPending := false
 		var catalogRetry <-chan time.Time
 		var catalogEpoch uint64
 		if snapshot != nil {
@@ -575,7 +587,6 @@ func (s *service) waitForViewMetadataAdmissionHandoff(publishIngress bool, minim
 			// A heartbeat may refresh the same admission snapshot while the
 			// catalog is unavailable. Process authority changes immediately, but
 			// do not let that notification bypass the catalog backoff.
-			catalogPending = true
 			catalogRetry = catalogRetryTimer.C
 		} else if err := s.fenceViewMetadataCatalog(operationCtx, snapshot); err != nil {
 			upgradeOwnerActive := upgradeResult != nil && operationCtx.Err() == nil
@@ -589,7 +600,6 @@ func (s *service) waitForViewMetadataAdmissionHandoff(publishIngress bool, minim
 				}
 				return moerr.AttachCause(operationCtx, err)
 			}
-			catalogPending = true
 			if catalogEpoch != catalogPendingEpoch {
 				catalogRetryAttempt = 0
 			}
@@ -634,11 +644,17 @@ func (s *service) waitForViewMetadataAdmissionHandoff(publishIngress bool, minim
 
 		discoveryDone := discoveryCtx.Done()
 		var upgradeDone <-chan struct{}
-		if catalogPending && upgradeResult != nil {
-			// Once the asynchronous catalog owner is known to be progressing,
-			// HAKeeper discovery's shorter deadline no longer owns this wait.
-			discoveryDone = nil
+		if s.bootstrapUpgradeContext != nil {
 			upgradeDone = operationCtx.Done()
+		}
+		if snapshot != nil && upgradeResult != nil {
+			// Once authority is discovered, the bootstrap owner owns the whole
+			// startup handoff, not just catalog repair. HAKeeper may still need
+			// to drain a crashed generation after the catalog fence commits.
+			// Keep that safety barrier intact without reverting to the shorter
+			// discovery deadline. Missing authority or a completed owner still
+			// uses discovery's bound; owner cancellation is always observed.
+			discoveryDone = nil
 		}
 		select {
 		case <-discoveryDone:
