@@ -460,6 +460,9 @@ func getUpdateTableInfo(ctx CompilerContext, stmt *tree.Update) (*dmlTableInfo, 
 		}
 		idx := tblInfo.alias[alias]
 		tblDef := tblInfo.tableDefs[idx]
+		if err := checkCatalogDMLTarget(ctx.GetContext(), tblInfo.objRef[idx], true); err != nil {
+			return nil, err
+		}
 		newTblInfo.objRef = append(newTblInfo.objRef, tblInfo.objRef[idx])
 		newTblInfo.tableDefs = append(newTblInfo.tableDefs, tblDef)
 		newTblInfo.isClusterTable = append(newTblInfo.isClusterTable, tblInfo.isClusterTable[idx])
@@ -569,6 +572,11 @@ func setTableExprToDmlTableInfo(ctx CompilerContext, tbl tree.TableExpr, tblInfo
 	}
 	if tableDef == nil {
 		return moerr.NewNoSuchTable(ctx.GetContext(), dbName, tblName)
+	}
+	if tblInfo.typ != "update" {
+		if err := checkCatalogDMLTarget(ctx.GetContext(), obj, false); err != nil {
+			return err
+		}
 	}
 	if err := validateTableIndexDefinitions(tableDef); err != nil {
 		return err
