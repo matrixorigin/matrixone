@@ -434,6 +434,8 @@ func queryQuota(
 
 	if len(sqlRet.Batches) == 0 || sqlRet.Batches[0].RowCount() == 0 {
 		// no record for this account, init
+		sqlRet.Close()
+		sqlRet = executor.Result{}
 		if code == featureCodeSnapshot {
 			quota = defaultSnapshotLimit
 		} else {
@@ -450,9 +452,9 @@ func queryQuota(
 		)
 
 		if code == featureCodeBranch {
-			_, err = runSqlWithBackExec(ctx, ses, bh, sql)
+			sqlRet, err = runSqlWithBackExec(ctx, ses, bh, sql)
 		} else {
-			_, err = runSql(ctx, ses, bh, sql, nil, nil)
+			sqlRet, err = runSql(ctx, ses, bh, sql, nil, nil)
 		}
 		if err != nil {
 			return 0, err

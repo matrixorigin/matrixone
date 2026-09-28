@@ -141,19 +141,20 @@ func (s *Scope) DropDatabase(c *Compile) error {
 	}
 	s.ScopeAnalyzer.Start()
 	defer s.ScopeAnalyzer.Stop()
-	// DROP DATABASE changes PITR ownership and can reclaim branch metadata
-	// through its nested table drops. Enter the shared lifecycle before any
-	// account, database, or relation lookup/lock.
-	if err := c.lockDataBranchLineageOwnerLifecycle(); err != nil {
-		return err
-	}
-
 	accountId, err := defines.GetAccountId(c.proc.Ctx)
 	if err != nil {
 		return err
 	}
 
 	dbName := s.Plan.GetDdl().GetDropDatabase().GetDatabase()
+	rcAdmission := c.isLifecycleRC()
+	if rcAdmission {
+		if err = c.admitDropLifecycleRC(nil, dbName); err != nil {
+			return err
+		}
+	} else if err = c.lockDataBranchLineageOwnerLifecycle(); err != nil {
+		return err
+	}
 	db, err := c.e.Database(c.proc.Ctx, dbName, c.proc.GetTxnOperator())
 	if err != nil {
 		if !moerr.IsMoErrCode(err, moerr.OkExpectedEOB) {
@@ -164,12 +165,23 @@ func (s *Scope) DropDatabase(c *Compile) error {
 		}
 		return moerr.NewErrDropNonExistsDB(c.proc.Ctx, dbName)
 	}
-
+	var dbID uint64
+	if rcAdmission {
+		dbID, err = strconv.ParseUint(db.GetDatabaseId(c.proc.Ctx), 10, 64)
+		if err != nil {
+			return err
+		}
+		if dbID != s.Plan.GetDdl().GetDropDatabase().GetDatabaseId() {
+			return moerr.NewTxnNeedRetryWithDefChangedNoCtx()
+		}
+	}
 	// Check if the database is a CCPR shared database
 	if !db.IsSubscription(c.proc.Ctx) {
-		dbIDStr := db.GetDatabaseId(c.proc.Ctx)
-		dbID, err := strconv.ParseUint(dbIDStr, 10, 64)
-		if err == nil {
+		var idErr error
+		if !rcAdmission {
+			dbID, idErr = strconv.ParseUint(db.GetDatabaseId(c.proc.Ctx), 10, 64)
+		}
+		if idErr == nil {
 			canDrop, err := checkCCPRDbBeforeDrop(c, dbID)
 			if err != nil {
 				return err
@@ -189,35 +201,23 @@ func (s *Scope) DropDatabase(c *Compile) error {
 		}
 	}
 
-	if err = lockMoDatabase(c, dbName, lock.LockMode_Exclusive); err != nil {
-		return err
-	}
-
-	// After acquiring the exclusive lock on mo_database, advance
-	// the transaction's snapshot so that Relations() can see all tables
-	// committed by other CNs (e.g. concurrent CLONE) before the lock was
-	// granted.
-	//
-	// AdvanceSnapshot also transfers workspace tombstones to objects visible at
-	// the new snapshot. SnapshotTS must remain advanced afterwards because
-	// rewinding it alone cannot undo an in-memory tombstone transfer.
-	txnOp := c.proc.GetTxnOperator()
-	if txnOp.Txn().IsPessimistic() && txnOp.Txn().IsRCIsolation() {
-		now, _ := moruntime.ServiceRuntime(c.proc.GetService()).Clock().Now()
-		if err = txnOp.GetWorkspace().AdvanceSnapshot(c.proc.Ctx, now); err != nil {
+	if !rcAdmission {
+		if err = lockMoDatabase(c, dbName, lock.LockMode_Exclusive); err != nil {
 			return err
 		}
-	}
-	db, err = c.e.Database(c.proc.Ctx, dbName, txnOp)
-	if err != nil {
-		if !moerr.IsMoErrCode(err, moerr.OkExpectedEOB) {
-			return err
+		db, err = c.e.Database(c.proc.Ctx, dbName, c.proc.GetTxnOperator())
+		if err != nil {
+			if !moerr.IsMoErrCode(err, moerr.OkExpectedEOB) {
+				return err
+			}
+			if s.Plan.GetDdl().GetDropDatabase().GetIfExists() {
+				return nil
+			}
+			return moerr.NewErrDropNonExistsDB(c.proc.Ctx, dbName)
 		}
-		if s.Plan.GetDdl().GetDropDatabase().GetIfExists() {
-			return nil
-		}
-		return moerr.NewErrDropNonExistsDB(c.proc.Ctx, dbName)
 	}
+	// RC admission already installed a TN-ordered applied snapshot after D;
+	// publication writers hold that same D key through their catalog write.
 	if err := ensureDatabaseNotPublished(c, db, dbName); err != nil {
 		return err
 	}
@@ -339,7 +339,18 @@ func (s *Scope) DropDatabase(c *Compile) error {
 		}
 	}
 
-	if err = c.dropDatabaseRelations(database, filteredDropTables, resolvedRelations, true); err != nil {
+	// A database DROP can wait on a slow table after dropping an earlier
+	// branch table. Keep that wait outside the branch metadata lock, then
+	// reclaim all retired branch tables together before the transaction ends.
+	deferBranchReclaim := rcAdmission && !c.skipDataBranchReclaim && dbName != catalog.MO_CATALOG
+	if deferBranchReclaim {
+		c.skipDataBranchReclaim = true
+	}
+	err = c.dropDatabaseRelations(database, filteredDropTables, resolvedRelations, true)
+	if deferBranchReclaim {
+		c.skipDataBranchReclaim = false
+	}
+	if err != nil {
 		return err
 	}
 
@@ -407,6 +418,15 @@ func (s *Scope) DropDatabase(c *Compile) error {
 		// relations that cannot be cloned during connection migration. The
 		// session implementation journals this cleanup with the DDL statement.
 		session.RemoveTempTablesByDatabase(dbName)
+	}
+	if deferBranchReclaim {
+		deadTIDs := make([]uint64, 0, len(filteredDropTables))
+		for _, table := range filteredDropTables {
+			deadTIDs = append(deadTIDs, table.TableId)
+		}
+		if err = c.reclaimAndCompactBranchProtectSnapshots(deadTIDs); err != nil {
+			return err
+		}
 	}
 
 	c.setAffectedRows(uint64(dropDatabaseTableCount))
@@ -2893,6 +2913,12 @@ func (c *Compile) reclaimAndCompactBranchProtectSnapshots(deadTIDs []uint64) err
 	if err != nil || !branchParticipates {
 		return err
 	}
+	if c.isLifecycleRC() {
+		// Scoped DROP does not exclude a Snapshot/PITR publisher in another
+		// database. The gated background GC rechecks global historical sources
+		// before removing expired ALTER-only lineage.
+		return nil
+	}
 	return c.compactExpiredAlterDataBranchLineage(time.Time{})
 }
 
@@ -3933,6 +3959,11 @@ func (s *Scope) TruncateTable(c *Compile) error {
 	}
 
 	if !isTemp && c.proc.GetTxnOperator().Txn().IsPessimistic() {
+		if c.isLifecycleRC() {
+			if err = c.lockLifecycleIdentityRC(); err != nil {
+				return err
+			}
+		}
 		// DROP ACCOUNT takes the SNAPSHOT lifecycle lock before cleaning up
 		// cluster tables. Take the same row lock before the table locks to
 		// prevent an inverted lock order. Keep the later write barrier after
@@ -4072,11 +4103,17 @@ func (s *Scope) TruncateTable(c *Compile) error {
 	if isTemp {
 		dropSQL = fmt.Sprintf("drop temporary table `%s`.`%s`", db, table)
 	}
-	if err = c.runSqlWithAccountIdAndOptions(
-		dropSQL,
-		int32(accountID),
-		dropOpts,
-	); err != nil {
+	drop := func() error {
+		return c.runSqlWithAccountIdAndOptions(dropSQL, int32(accountID), dropOpts)
+	}
+	if !isTemp && c.isLifecycleRC() {
+		// G-X is still held. Nested DROP must not reacquire C/D or advance the
+		// snapshot after this owner has already locked the target relation.
+		err = c.withBroadDropLifecycle(drop)
+	} else {
+		err = drop()
+	}
+	if err != nil {
 		return err
 	}
 
@@ -4317,12 +4354,25 @@ func (s *Scope) DropTable(c *Compile) error {
 	if len(tables) == 0 {
 		tables = []*plan.DropTable{qry}
 	}
-	lifecycleAdmitted := false
+	lifecycleAdmitted, err := c.borrowedDropLifecycle()
+	if err != nil {
+		return err
+	}
+	if !lifecycleAdmitted && c.isLifecycleRC() {
+		if err = c.admitDropLifecycleRC(tables, ""); err != nil {
+			return err
+		}
+		lifecycleAdmitted = true
+	}
+	databaseLocked := lifecycleAdmitted
 	for _, entry := range tables {
 		if entry == nil {
 			continue
 		}
-		if err := s.dropTableSingle(c, plan2.DeepCopyDropTable(entry), &lifecycleAdmitted); err != nil {
+		if err := s.dropTableSingleResolved(
+			c, plan2.DeepCopyDropTable(entry), &lifecycleAdmitted,
+			databaseLocked, nil, nil,
+		); err != nil {
 			return err
 		}
 	}
@@ -4381,9 +4431,12 @@ func (s *Scope) dropTableSingleResolved(
 		}
 	}
 	if !isTemp && !*lifecycleAdmitted {
-		// Admit lazily so preceding temporary drops keep their own retirement
-		// semantics. The gate must precede mo_database/mo_tables locks.
-		if err = c.lockDataBranchLineageOwnerLifecycle(); err != nil {
+		if c.isLifecycleRC() {
+			if err = c.admitDropLifecycleRC([]*plan.DropTable{qry}, ""); err != nil {
+				return err
+			}
+			databaseLocked = true
+		} else if err = c.lockDataBranchLineageOwnerLifecycle(); err != nil {
 			return err
 		}
 		*lifecycleAdmitted = true
@@ -4421,6 +4474,9 @@ func (s *Scope) dropTableSingleResolved(
 		}
 	}
 	droppedRelationID := rel.GetTableID(c.proc.Ctx)
+	if !isTemp && c.isLifecycleRC() && tblID != 0 && droppedRelationID != tblID {
+		return moerr.NewTxnNeedRetryWithDefChanged(c.proc.Ctx)
+	}
 	droppedTableDef := rel.GetTableDef(c.proc.Ctx)
 	droppedLogicalID := droppedTableDef.GetLogicalId()
 	droppedObjectID := plan2.SnapshotTableID(droppedTableDef)
