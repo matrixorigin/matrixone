@@ -32,6 +32,7 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/frontend/databranchutils"
 	lockpb "github.com/matrixorigin/matrixone/pkg/pb/lock"
 	"github.com/matrixorigin/matrixone/pkg/pb/plan"
+	"github.com/matrixorigin/matrixone/pkg/sql/parsers/tree"
 	plan2 "github.com/matrixorigin/matrixone/pkg/sql/plan"
 	"github.com/matrixorigin/matrixone/pkg/sql/plan/function"
 	"github.com/matrixorigin/matrixone/pkg/txn/client"
@@ -171,8 +172,12 @@ func admitFeatureLimitedLineageOwnerMutation(
 // getDataBranchComponentExecutor owns C/G through the same transaction as the
 // nested clone/drop. Explicit fixed-SI and optimistic owners are rejected before
 // any catalog lock or mutation; no terminal S-to-X registry upgrade is needed.
-func getDataBranchComponentExecutor(ctx context.Context, ses *Session) (BackgroundExec, *lifecycleRCAdmission, func(error) error, error) {
-	bh, finish, err := getBackExecutor(ctx, ses, &BackgroundExecOption{
+func getDataBranchComponentExecutor(ctx context.Context, ses *Session, useTxnHandler bool) (BackgroundExec, *lifecycleRCAdmission, func(error) error, error) {
+	factory := getBackExecutor
+	if useTxnHandler {
+		factory = getBackExecutorWithTxnHandler
+	}
+	bh, finish, err := factory(ctx, ses, &BackgroundExecOption{
 		forcePessimisticRC: true, cloneSnapshotUsesBackgroundTxn: true,
 	})
 	if err != nil {
@@ -232,6 +237,25 @@ type branchResolvedSource struct {
 	def    *plan.TableDef
 }
 
+func cloneDatabaseAdmissionRequests(source cloneDatabaseSource, stmt *tree.CloneDatabase) []branchCloneSource {
+	fromAccount := source.opAccountId
+	if source.snapshot != nil && source.snapshot.Tenant != nil {
+		fromAccount = source.snapshot.Tenant.TenantID
+	}
+	requests := make([]branchCloneSource, 0, 2+len(source.srcTblInfos)+len(source.fkTableMap))
+	requests = append(requests, branchCloneSource{fromAccount, source.srcResolveDBName, "", source.snapshot},
+		branchCloneSource{source.opAccountId, stmt.SrcDatabase.String(), "", source.snapshot})
+	for _, table := range source.sourceTableInfosForLifecycle() {
+		requests = append(requests, branchCloneSource{fromAccount, table.dbName, table.tblName, source.snapshot})
+	}
+	for _, table := range source.fkTableMap {
+		if table != nil {
+			requests = append(requests, branchCloneSource{fromAccount, table.dbName, table.tblName, source.snapshot})
+		}
+	}
+	return requests
+}
+
 // Resolve through the background owner, including its own catalog writes and
 // historical/subscription routing. Never borrow the outer session's operator.
 func resolveBranchCloneSource(ctx context.Context, ses *Session, bh BackgroundExec, source branchCloneSource) (branchResolvedSource, error) {
@@ -265,7 +289,8 @@ func resolveBranchCloneSource(ctx context.Context, ses *Session, bh BackgroundEx
 // caller rechecks any database inventory after this returns, before quota or
 // target writes. This is a single synchronous mutation, not a session cache.
 func (a *lifecycleRCAdmission) admitBranchCloneRC(ctx context.Context, ses *Session, bh BackgroundExec,
-	requests []branchCloneSource, target branchCloneDatabase, createDatabase bool,
+	requests []branchCloneSource, target branchCloneDatabase, targetTable string, createDatabase bool,
+	afterDomains func(error) (bool, error),
 ) (databranchutils.BranchReclaimDag, error) {
 	var empty databranchutils.BranchReclaimDag
 	databases := map[branchCloneDatabase]lockpb.LockMode{target: lockpb.LockMode_Shared}
@@ -278,7 +303,8 @@ func (a *lifecycleRCAdmission) admitBranchCloneRC(ctx context.Context, ses *Sess
 		return compareBranchCloneSource(a, b) == 0 && a.snapshot == b.snapshot
 	})
 	before := make([]branchResolvedSource, len(requests))
-	var ids []uint64
+	ids := make([]uint64, 0, len(requests))
+	var discoveryErr error
 	for i, request := range requests {
 		databases[branchCloneDatabase{request.account, request.database}] = lockpb.LockMode_Shared
 		if request.table == "" {
@@ -286,26 +312,44 @@ func (a *lifecycleRCAdmission) admitBranchCloneRC(ctx context.Context, ses *Sess
 		}
 		resolved, err := resolveBranchCloneSource(ctx, ses, bh, request)
 		if err != nil {
-			return empty, err
+			discoveryErr = err
+			break
 		}
 		before[i] = resolved
 		ids = append(ids, resolved.def.TblId)
 		databases[branchCloneDatabase{resolved.source.account, resolved.source.database}] = lockpb.LockMode_Shared
-		// CREATE LIKE consumes FK names from the selected CREATE SQL. Both the
-		// source and destination account domains precede K, even for absent parents.
-		deps, err := getFkDepsFromTableInfos(ctx, []*tableInfo{{dbName: resolved.source.database, tblName: resolved.source.table, createSql: resolved.def.Createsql}})
-		if err != nil {
-			return empty, err
-		}
-		for _, parents := range deps {
-			for _, key := range parents {
-				dbName, _ := splitKey(key)
-				databases[branchCloneDatabase{resolved.source.account, dbName}] = lockpb.LockMode_Shared
-				if dbName != resolved.source.database {
-					databases[branchCloneDatabase{target.account, dbName}] = lockpb.LockMode_Shared
+		// A branch source can store DATA BRANCH CREATE as its original SQL.
+		// SHOW CREATE reconstructs the schema consumed by CREATE LIKE.
+		if len(resolved.def.Fkeys) != 0 {
+			createSQL, err := getCreateTableSql(defines.AttachAccountId(ctx, resolved.source.account), bh, resolved.source.snapshot, resolved.source.database, resolved.source.table)
+			if err != nil {
+				discoveryErr = err
+				break
+			}
+			deps, err := getFkDepsFromTableInfos(ctx, []*tableInfo{{dbName: resolved.source.database, tblName: resolved.source.table, createSql: createSQL}})
+			if err != nil {
+				discoveryErr = err
+				break
+			}
+			for _, parents := range deps {
+				for _, key := range parents {
+					dbName, _ := splitKey(key)
+					databases[branchCloneDatabase{resolved.source.account, dbName}] = lockpb.LockMode_Shared
+					if dbName != resolved.source.database {
+						databases[branchCloneDatabase{target.account, dbName}] = lockpb.LockMode_Shared
+					}
 				}
 			}
 		}
+	}
+	if discoveryErr != nil {
+		if afterDomains == nil {
+			return empty, discoveryErr
+		}
+		// A pre-lock source read is provisional for IF NOT EXISTS. Pin only
+		// the target name and let the fresh frontier decide the no-op.
+		databases = map[branchCloneDatabase]lockpb.LockMode{target: lockpb.LockMode_Exclusive}
+		requests = nil
 	}
 	// Empty-table requests pin the whole source database inventory, including
 	// an empty database, while ordinary table sources keep D shared.
@@ -337,6 +381,18 @@ func (a *lifecycleRCAdmission) admitBranchCloneRC(ctx context.Context, ses *Sess
 			return empty, err
 		}
 	}
+	if afterDomains != nil {
+		if err := a.finish(ctx, ses, bh); err != nil {
+			return empty, err
+		}
+		stop, err := afterDomains(discoveryErr)
+		if stop || err != nil {
+			return empty, err
+		}
+		if discoveryErr != nil {
+			return empty, discoveryErr
+		}
+	}
 	rt := moruntime.ServiceRuntime(ses.GetService())
 	if rt == nil {
 		return empty, moerr.NewInternalError(ctx, "missing branch component executor")
@@ -359,14 +415,27 @@ func (a *lifecycleRCAdmission) admitBranchCloneRC(ctx context.Context, ses *Sess
 		}
 		return rel.GetTableID(systemCtx), nil
 	}
-	tables := make([]branchCloneSource, 0, len(before))
+	type tableName struct {
+		account         uint32
+		database, table string
+	}
+	tableModes := make(map[tableName]lockpb.LockMode, len(before)+1)
 	for _, source := range before {
 		if source.def != nil && shouldLockDataBranchCloneSource(source.source.snapshot) {
-			tables = append(tables, source.source)
+			tableModes[tableName{source.source.account, source.source.database, source.source.table}] = lockpb.LockMode_Shared
 		}
 	}
-	slices.SortFunc(tables, compareBranchCloneSource)
-	tables = slices.CompactFunc(tables, func(a, b branchCloneSource) bool { return compareBranchCloneSource(a, b) == 0 })
+	if targetTable != "" {
+		tableModes[tableName{target.account, target.name, targetTable}] = lockpb.LockMode_Exclusive
+	}
+	tables := make([]tableName, 0, len(tableModes))
+	for name := range tableModes {
+		tables = append(tables, name)
+	}
+	slices.SortFunc(tables, func(a, b tableName) int {
+		return compareBranchCloneSource(branchCloneSource{account: a.account, database: a.database, table: a.table},
+			branchCloneSource{account: b.account, database: b.database, table: b.table})
+	})
 	dag, err := databranchutils.LoadLockedBranchComponents(ctx, ids,
 		func(ctx context.Context, sql string) (executor.Result, error) {
 			return sqlExec.Exec(defines.AttachAccountId(ctx, catalog.System_Account), sql, options)
@@ -393,7 +462,7 @@ func (a *lifecycleRCAdmission) admitBranchCloneRC(ctx context.Context, ses *Sess
 				if err != nil {
 					return err
 				}
-				if err = a.lockKey(catalog.MO_TABLES, defines.AttachAccountId(ctx, source.account), keys, lockpb.LockMode_Shared, source.account); err != nil {
+				if err = a.lockKey(catalog.MO_TABLES, defines.AttachAccountId(ctx, source.account), keys, tableModes[source], source.account); err != nil {
 					return err
 				}
 			}
@@ -434,9 +503,13 @@ func (a *lifecycleRCAdmission) admitBranchCloneRC(ctx context.Context, ses *Sess
 }
 
 func (a *lifecycleRCAdmission) lockBranchSnapshotName(ctx context.Context, tableID uint64) error {
+	return a.lockSnapshotName(ctx, databranchutils.BranchSnapshotName(tableID))
+}
+
+func (a *lifecycleRCAdmission) lockSnapshotName(ctx context.Context, name string) error {
 	keys := batch.NewWithSize(1)
 	keys.Vecs[0] = vector.NewVec(types.T_varchar.ToType())
-	if err := vector.AppendBytes(keys.Vecs[0], []byte(databranchutils.BranchSnapshotName(tableID)), false, a.proc.Mp()); err != nil {
+	if err := vector.AppendBytes(keys.Vecs[0], []byte(name), false, a.proc.Mp()); err != nil {
 		keys.Vecs[0].Free(a.proc.Mp())
 		return err
 	}

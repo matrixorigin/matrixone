@@ -577,7 +577,7 @@ func dataBranchCreateTable(
 	)
 
 	var admission *lifecycleRCAdmission
-	if bh, admission, deferred, err = getDataBranchComponentExecutor(execCtx.reqCtx, ses); err != nil {
+	if bh, admission, deferred, err = getDataBranchComponentExecutor(execCtx.reqCtx, ses, false); err != nil {
 		return
 	}
 	restoreReqCtx := installDataBranchCloneContext(
@@ -623,7 +623,7 @@ func dataBranchCreateTable(
 	}
 	dag, admitErr := admission.admitBranchCloneRC(execCtx.reqCtx, ses, bh,
 		[]branchCloneSource{{fromAccount, cloneStmt.SrcTable.SchemaName.String(), cloneStmt.SrcTable.ObjectName.String(), snapshot}},
-		branchCloneDatabase{targetAccountID, cloneStmt.CreateTable.Table.SchemaName.String()}, false)
+		branchCloneDatabase{targetAccountID, cloneStmt.CreateTable.Table.SchemaName.String()}, cloneStmt.CreateTable.Table.ObjectName.String(), false, nil)
 	if admitErr != nil {
 		return admitErr
 	}
@@ -680,7 +680,7 @@ func dataBranchCreateDatabase(
 		return
 	}
 	var admission *lifecycleRCAdmission
-	if bh, admission, deferred, err = getDataBranchComponentExecutor(execCtx.reqCtx, ses); err != nil {
+	if bh, admission, deferred, err = getDataBranchComponentExecutor(execCtx.reqCtx, ses, false); err != nil {
 		return
 	}
 	restoreReqCtx := installDataBranchCloneContext(
@@ -711,21 +711,8 @@ func dataBranchCreateDatabase(
 	}
 	stats.Add(&authStats)
 
-	fromAccount := source.opAccountId
-	if source.snapshot != nil && source.snapshot.Tenant != nil {
-		fromAccount = source.snapshot.Tenant.TenantID
-	}
-	requests := make([]branchCloneSource, 0, 2+len(source.srcTblInfos)+len(source.fkTableMap))
-	requests = append(requests, branchCloneSource{fromAccount, source.srcResolveDBName, "", source.snapshot}, branchCloneSource{source.opAccountId, stmt.SrcDatabase.String(), "", source.snapshot})
-	for _, table := range source.sourceTableInfosForLifecycle() {
-		requests = append(requests, branchCloneSource{fromAccount, table.dbName, table.tblName, source.snapshot})
-	}
-	for _, table := range source.fkTableMap {
-		if table != nil {
-			requests = append(requests, branchCloneSource{fromAccount, table.dbName, table.tblName, source.snapshot})
-		}
-	}
-	dag, admitErr := admission.admitBranchCloneRC(execCtx.reqCtx, ses, bh, requests, branchCloneDatabase{source.toAccountId, stmt.DstDatabase.String()}, true)
+	requests := cloneDatabaseAdmissionRequests(source, &stmt.CloneDatabase)
+	dag, admitErr := admission.admitBranchCloneRC(execCtx.reqCtx, ses, bh, requests, branchCloneDatabase{source.toAccountId, stmt.DstDatabase.String()}, "", true, nil)
 	if admitErr != nil {
 		err = admitErr
 		return
@@ -816,50 +803,6 @@ func lockDataBranchTargetAccount(
 	return bh.Exec(defines.AttachAccountId(ctx, sysAccountID), sql)
 }
 
-func markBranchTablesDeleted(
-	ctx context.Context,
-	ses *Session,
-	bh BackgroundExec,
-	accId uint32,
-	tableIDs []uint64,
-) error {
-	updateCtx := ctx
-	if accId != sysAccountID {
-		updateCtx = defines.AttachAccountId(updateCtx, sysAccountID)
-	}
-
-	for start := 0; start < len(tableIDs); start += dataBranchMetadataIDBatchSize {
-		end := start + dataBranchMetadataIDBatchSize
-		if end > len(tableIDs) {
-			end = len(tableIDs)
-		}
-
-		var sqlBuilder strings.Builder
-		sqlBuilder.Grow(128 + (end-start)*20)
-		sqlBuilder.WriteString("update ")
-		sqlBuilder.WriteString(catalog.MO_CATALOG)
-		sqlBuilder.WriteByte('.')
-		sqlBuilder.WriteString(catalog.MO_BRANCH_METADATA)
-		sqlBuilder.WriteString(" set table_deleted = true where table_id in (")
-
-		for i, id := range tableIDs[start:end] {
-			if i > 0 {
-				sqlBuilder.WriteByte(',')
-			}
-			sqlBuilder.WriteString(strconv.FormatUint(id, 10))
-		}
-		sqlBuilder.WriteString(")")
-
-		updateRet, err := runSql(updateCtx, ses, bh, sqlBuilder.String(), nil, nil)
-		if err != nil {
-			return err
-		}
-		updateRet.Close()
-	}
-
-	return nil
-}
-
 func dataBranchDeleteTable(
 	execCtx *ExecCtx,
 	ses *Session,
@@ -871,7 +814,7 @@ func dataBranchDeleteTable(
 	)
 
 	var admission *lifecycleRCAdmission
-	if bh, admission, deferred, err = getDataBranchComponentExecutor(execCtx.reqCtx, ses); err != nil {
+	if bh, admission, deferred, err = getDataBranchComponentExecutor(execCtx.reqCtx, ses, false); err != nil {
 		return
 	}
 
@@ -935,7 +878,7 @@ func dataBranchDeleteDatabase(
 	)
 
 	var admission *lifecycleRCAdmission
-	if bh, admission, deferred, err = getDataBranchComponentExecutor(execCtx.reqCtx, ses); err != nil {
+	if bh, admission, deferred, err = getDataBranchComponentExecutor(execCtx.reqCtx, ses, false); err != nil {
 		return
 	}
 
