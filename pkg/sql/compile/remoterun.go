@@ -1212,7 +1212,7 @@ func convertToPipelineInstruction(op vm.Operator, proc *process.Process, ctx *sc
 			}
 			// The wire format is intentionally the existing MultiUpdate
 			// payload. The receiver reconstructs the partition wrapper from
-			// PartitionIndexCtx instead of needing a new protocol operator.
+			// the target metadata instead of needing a new protocol operator.
 			in.Op = int32(vm.MultiUpdate)
 		}
 		targetAware := false
@@ -1238,6 +1238,9 @@ func convertToPipelineInstruction(op vm.Operator, proc *process.Process, ctx *sc
 		}
 		updateCtxList := make([]*plan.UpdateCtx, len(updateOp.MultiUpdateCtx))
 		for i, muCtx := range updateOp.MultiUpdateCtx {
+			if err := validateRemotePartitionFulltextRouteProtocol(proc, muCtx.PartitionIndexCtx != nil); err != nil {
+				return ctxId, nil, err
+			}
 			if err := validateRemoteODKUAffectedRowsProtocol(proc,
 				muCtx.AffectedRowsWeightCol != nil || muCtx.PhysicalChangedRowsCol != nil); err != nil {
 				return ctxId, nil, err
@@ -1924,23 +1927,14 @@ func convertToVmOperator(opr *pipeline.Instruction, ctx *scopeContext, eng engin
 			}
 		}
 
-		partitionIndexTarget := false
-		for _, updateCtx := range arg.MultiUpdateCtx {
-			if updateCtx != nil && updateCtx.PartitionIndexCtx != nil {
-				partitionIndexTarget = true
-				break
-			}
+		var remoteProc *process.Process
+		if ctx != nil && ctx.scope != nil {
+			remoteProc = ctx.scope.Proc
 		}
-		if partitionIndexTarget {
-			if ctx == nil || ctx.scope == nil || ctx.scope.Proc == nil {
-				return nil, moerr.NewInvalidInputNoCtx("partition fulltext maintenance requires a remote process")
-			}
-			if !ctx.scope.Proc.GetPartitionService().Enabled() {
-				return nil, moerr.NewInvalidInput(ctx.scope.Proc.Ctx, "partition fulltext maintenance requires partition service")
-			}
-			op = multi_update.NewPartitionMultiUpdate(arg)
-		} else {
-			op = arg
+		var err error
+		op, err = wrapPartitionMultiUpdate(arg, t.UpdateCtxList, remoteProc)
+		if err != nil {
+			return nil, err
 		}
 
 	case vm.PostDml:
@@ -2181,14 +2175,14 @@ func validateRemoteStatementLastInsertIDProtocol(
 
 func validateRemotePartitionFulltextRouteProtocol(
 	proc *process.Process,
-	preserveInput bool,
+	required bool,
 ) error {
-	if !preserveInput {
+	if !required {
 		return nil
 	}
 	if proc == nil || !supportsRemotePartitionFulltextRoute(proc.GetService()) {
 		return moerr.NewNotSupportedNoCtx(
-			"partitioned FULLTEXT PRE_INSERT route preservation requires MORPC protocol version 89",
+			"partitioned FULLTEXT routing requires MORPC protocol version 89",
 		)
 	}
 	return nil
@@ -2454,6 +2448,15 @@ func validateRemoteStatementLastInsertIDPipelineProtocol(
 		return nil
 	}
 	for _, instruction := range p.InstructionList {
+		if update := instruction.GetMultiUpdate(); update != nil {
+			for _, target := range update.UpdateCtxList {
+				if target != nil {
+					if err := validateRemotePartitionFulltextRouteProtocol(proc, target.PartitionIndexCtx != nil); err != nil {
+						return err
+					}
+				}
+			}
+		}
 		if preInsert := instruction.GetPreInsert(); preInsert != nil {
 			if err := validateRemoteStatementLastInsertIDProtocol(
 				proc, preInsert.HasAutoCol, preInsert.TrackAutoIncrementGenerated); err != nil {

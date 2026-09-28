@@ -1075,7 +1075,7 @@ func TestRemoteAutoIncrementStatementLastInsertIDProtocolValidation(t *testing.T
 			},
 		}},
 	}}}
-	rt.SetGlobalVariables(moruntime.MOProtocolVersion, defines.MORPCVersion84)
+	rt.SetGlobalVariables(moruntime.MOProtocolVersion, defines.MORPCVersion88)
 	_, _, err = convertToPipelineInstruction(routePreInsert, proc, ctx, 1)
 	require.ErrorContains(t, err, "requires MORPC protocol version 89")
 	require.ErrorContains(t,
@@ -2621,6 +2621,9 @@ func Test_DMLOperatorSerializationRoundtrip(t *testing.T) {
 	})
 
 	t.Run("MultiUpdate_PartitionCols", func(t *testing.T) {
+		oldService := proc.Base.PartitionService
+		proc.Base.PartitionService = codecPartitionService{}
+		t.Cleanup(func() { proc.Base.PartitionService = oldService })
 		ctx.scope = &Scope{Proc: proc}
 		t.Cleanup(func() { ctx.scope = nil })
 		changedRowsCol := 7
@@ -2659,7 +2662,11 @@ func Test_DMLOperatorSerializationRoundtrip(t *testing.T) {
 			"partition wrapper uses the existing MultiUpdate wire operator")
 		require.Len(t, pipeInstr.MultiUpdate.UpdateCtxList[0].PartitionCols, 2)
 
-		restored, err := convertToVmOperator(pipeInstr, ctx, nil)
+		data, err := pipeInstr.Marshal()
+		require.NoError(t, err)
+		wire := new(pipeline.Instruction)
+		require.NoError(t, wire.Unmarshal(data))
+		restored, err := convertToVmOperator(wire, ctx, nil)
 		require.NoError(t, err)
 		restoredOp, ok := restored.(*multi_update.PartitionMultiUpdate)
 		require.True(t, ok, "remote receive must restore the production partition wrapper")

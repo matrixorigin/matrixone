@@ -1037,36 +1037,32 @@ func constructMultiUpdate(
 	}
 	arg.Action = action
 
-	ps := proc.GetPartitionService()
-	if !ps.Enabled() {
-		if hasPartitionIndexTarget(node.UpdateCtxList) {
-			return nil, moerr.NewInvalidInput(proc.Ctx, "partition fulltext maintenance requires partition service")
-		}
-		return arg, nil
-	}
-	if !hasPartitionedUpdateTarget(node.UpdateCtxList) {
-		return arg, nil
-	}
+	return wrapPartitionMultiUpdate(arg, node.UpdateCtxList, proc)
+}
 
+// Keep local construction and remote decoding on the same target contract.
+// NewPartitionMultiUpdate deliberately leaves FlushS3Info as a raw consumer.
+func wrapPartitionMultiUpdate(arg *multi_update.MultiUpdate, contexts []*plan.UpdateCtx, proc *process.Process) (vm.Operator, error) {
+	if !hasPartitionedUpdateTarget(contexts) {
+		return arg, nil
+	}
+	if arg.Action != multi_update.UpdateFlushS3Info &&
+		(proc == nil || proc.Base == nil || proc.Base.PartitionService == nil || !proc.GetPartitionService().Enabled()) {
+		arg.Release()
+		return nil, moerr.NewInvalidInputNoCtx("partition maintenance requires partition service")
+	}
 	return multi_update.NewPartitionMultiUpdate(arg), nil
 }
 
 func hasPartitionedUpdateTarget(contexts []*plan.UpdateCtx) bool {
 	for _, updateCtx := range contexts {
+		if updateCtx == nil {
+			continue
+		}
 		if updateCtx.PartitionIndexCtx != nil {
 			return true
 		}
-		if !features.IsIndexTable(updateCtx.TableDef.FeatureFlag) &&
-			features.IsPartitioned(updateCtx.TableDef.FeatureFlag) {
-			return true
-		}
-	}
-	return false
-}
-
-func hasPartitionIndexTarget(contexts []*plan.UpdateCtx) bool {
-	for _, updateCtx := range contexts {
-		if updateCtx != nil && updateCtx.PartitionIndexCtx != nil {
+		if updateCtx.TableDef != nil && !features.IsIndexTable(updateCtx.TableDef.FeatureFlag) && features.IsPartitioned(updateCtx.TableDef.FeatureFlag) {
 			return true
 		}
 	}

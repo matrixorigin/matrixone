@@ -408,6 +408,10 @@ func TestPartitionedFulltextDeleteRoutesRegularHiddenIndexes(t *testing.T) {
 
 	const uniqueIndexName = catalog.UniqueIndexTableNamePrefix + "docs-ft-dual-payload"
 	found := false
+	foundLock := false
+	_, indexTable, resolveErr := mock.ctxt.ResolveIndexTableByRef(&planpb.ObjectRef{SchemaName: "constraint_test", ObjName: base.Name}, uniqueIndexName, nil)
+	require.NoError(t, resolveErr)
+	require.NotNil(t, indexTable)
 	for _, node := range logicPlan.GetQuery().Nodes {
 		if node == nil {
 			continue
@@ -415,6 +419,12 @@ func TestPartitionedFulltextDeleteRoutesRegularHiddenIndexes(t *testing.T) {
 		if node.NodeType == planpb.Node_DELETE && node.DeleteCtx != nil && node.DeleteCtx.TableDef != nil {
 			require.NotEqual(t, uniqueIndexName, node.DeleteCtx.TableDef.Name,
 				"partitioned regular index deletes must not target the logical hidden table")
+		}
+		for _, target := range node.LockTargets {
+			if target.TableId == indexTable.TblId {
+				require.Equal(t, indexTable.Cols[0].Typ, target.PrimaryColTyp, "routed unique-index deletes must keep the hidden key lock type")
+				foundLock = true
+			}
 		}
 		if node.NodeType != planpb.Node_MULTI_UPDATE {
 			continue
@@ -433,6 +443,7 @@ func TestPartitionedFulltextDeleteRoutesRegularHiddenIndexes(t *testing.T) {
 		}
 	}
 	require.True(t, found, "partitioned regular unique-index delete must use routed maintenance")
+	require.True(t, foundLock, "partitioned unique-index deletes must retain key locking")
 }
 
 func nullSafeEqualityColumns(t *testing.T, marker *planpb.Expr) []string {

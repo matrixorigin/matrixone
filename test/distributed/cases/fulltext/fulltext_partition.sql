@@ -42,6 +42,15 @@ rollback;
 select id from ft_part where match(body) against('rollback') order by id;
 select id from ft_part where match(body) against('zeta') order by id;
 
+create table ft_replace(id int primary key, code int unique, body text, fulltext fti_replace(body)) partition by hash(id) partitions 2;
+insert into ft_replace values (1, 10, 'old alpha');
+replace into ft_replace values (2, 10, 'new beta'), (3, 30, 'new gamma');
+select id, code from ft_replace order by id;
+select id from ft_replace where match(body) against('alpha') order by id;
+select id from ft_replace where match(body) against('beta') order by id;
+select id from ft_replace where match(body) against('gamma') order by id;
+drop table ft_replace;
+
 create table ft_join_src(id int);
 insert into ft_join_src values (3), (3), (999);
 delete d from ft_part d join ft_join_src s on d.id = s.id;
@@ -56,6 +65,10 @@ create table ft_range(id int primary key, bucket int, body text, fulltext fti_ra
 partition by range(bucket)(partition r0 values less than (10), partition r1 values less than maxvalue);
 insert into ft_range values (101, 1, 'range alpha alpha'), (102, 20, 'range beta');
 select id from ft_range where match(body) against('alpha') order by id;
+update ft_range set bucket = 20 where id = 101;
+select id, bucket from ft_range where match(body) against('alpha') order by id;
+insert into ft_range values (101, 1, 'range alpha alpha') on duplicate key update bucket = values(bucket);
+select id, bucket from ft_range where match(body) against('alpha') order by id;
 update ft_range set bucket = 20, body = 'range moved' where id = 101;
 select id from ft_range where match(body) against('alpha') order by id;
 select id from ft_range where match(body) against('moved') order by id;

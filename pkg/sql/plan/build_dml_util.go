@@ -6680,7 +6680,7 @@ func buildDeleteRegularIndex(ctx CompilerContext, builder *QueryBuilder, bindCtx
 									TableId:            uniqueTableDef.TblId,
 									PrimaryColRelPos:   rowIDRelPos,
 									PrimaryColIdxInBat: int32(len(delCtx.tableDef.Cols) + 1),
-									PrimaryColTyp:      uniqueTblPkTyp,
+									PrimaryColTyp:      uniqueTableDef.Cols[0].Typ,
 									RefreshTsIdxInBat:  -1,
 									LockTable:          delCtx.lockTable,
 								}},

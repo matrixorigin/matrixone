@@ -173,56 +173,58 @@ func TestPreInsertExpandsConstVectorToBatchRowCount(t *testing.T) {
 
 func TestPreInsertPreserveInputKeepsRouteAfterAutoKeyAllocation(t *testing.T) {
 	ctrl := gomock.NewController(t)
-	defer ctrl.Finish()
-
-	txnOperator := mock_frontend.NewMockTxnOperator(ctrl)
-	incrService := mock_frontend.NewMockAutoIncrementService(ctrl)
-	incrService.EXPECT().InsertValues(
-		gomock.Any(), uint64(100), gomock.Any(), txnOperator, gomock.Any(), 1, int64(1),
-	).DoAndReturn(func(_ context.Context, _ uint64, _ uint32, _ client.TxnOperator, vecs []*vector.Vector, _ int, _ int64) (uint64, error) {
-		require.Len(t, vecs, 1, "PRE_INSERT must allocate only the stored fake_pk column")
-		require.NoError(t, vector.SetFixedAtNoTypeCheck(vecs[0], 0, int64(111)))
-		return 111, nil
-	})
-
 	proc := testutil.NewProc(t)
 	defer proc.Free()
-	proc.Base.TxnOperator = txnOperator
-	proc.Base.IncrService = incrService
-
+	txn := mock_frontend.NewMockTxnOperator(ctrl)
+	proc.Base.TxnOperator = txn
+	allocator := mock_frontend.NewMockAutoIncrementService(ctrl)
+	proc.Base.IncrService = allocator
+	allocated := false
+	allocator.EXPECT().InsertValues(gomock.Any(), uint64(100), gomock.Any(), txn, gomock.Any(), 2, int64(2)).DoAndReturn(
+		func(_ context.Context, _ uint64, _ uint32, _ client.TxnOperator, vecs []*vector.Vector, _ int, _ int64) (uint64, error) {
+			require.Len(t, vecs, 4, "allocator must receive stored columns only")
+			require.True(t, vecs[3].IsNull(0))
+			require.True(t, vecs[3].IsNull(1))
+			for row := 0; row < 2; row++ {
+				require.NoError(t, vector.SetFixedAtNoTypeCheck(vecs[3], row, uint64(111+row)))
+				vecs[3].GetNulls().Del(uint64(row))
+			}
+			allocated = true
+			return 111, nil
+		})
+	attrs := []string{"doc_id", "pos", "word", catalog.FakePrimaryKeyColName}
 	arg := &PreInsert{
-		HasAutoCol:    true,
-		PreserveInput: true,
-		TableDef: &plan.TableDef{
-			Name:        "fulltext_index",
-			TblId:       100,
-			IsTemporary: true,
-			Cols: []*plan.ColDef{{
-				Name: catalog.FakePrimaryKeyColName,
-				Typ:  i32typ,
-			}},
-			Pkey: &plan.PrimaryKeyDef{PkeyColName: catalog.FakePrimaryKeyColName},
-		},
-		Attrs:             []string{catalog.FakePrimaryKeyColName},
-		EstimatedRowCount: 1,
-		ctr:               container{canFreeVecIdx: make(map[int]bool)},
+		HasAutoCol: true, PreserveInput: true, EstimatedRowCount: 2, Attrs: attrs,
+		TableDef: &plan.TableDef{TblId: 100, Name: "fulltext_index", Cols: []*plan.ColDef{
+			{Name: "doc_id", Typ: plan.Type{Id: int32(types.T_int64)}},
+			{Name: "pos", Typ: plan.Type{Id: int32(types.T_int32)}},
+			{Name: "word", Typ: plan.Type{Id: int32(types.T_varchar)}},
+			{Name: catalog.FakePrimaryKeyColName, NotNull: true, Primary: true, Hidden: true, Typ: plan.Type{Id: int32(types.T_uint64), AutoIncr: true, NotNullable: true}},
+		}, Pkey: &plan.PrimaryKeyDef{PkeyColName: catalog.FakePrimaryKeyColName, Names: []string{catalog.FakePrimaryKeyColName}}},
 	}
-	arg.ctr.tblId = arg.TableDef.TblId
-
-	input := batch.NewWithSize(2)
-	input.Vecs[0] = testutil.MakeInt64Vector([]int64{0}, nil, proc.Mp())
-	input.Vecs[1] = testutil.MakeInt32Vector([]int32{1}, nil, proc.Mp())
-	input.SetRowCount(1)
-	defer input.Clean(proc.Mp())
-
-	require.NoError(t, arg.constructColBuf(proc, input, true))
-	require.Len(t, arg.ctr.buf.Vecs, 2)
-	arg.ctr.buf.SetRowCount(1)
-	require.NoError(t, genAutoIncrCol(arg.ctr.buf, proc, arg))
-	require.Equal(t, int64(111), vector.GetFixedAtNoTypeCheck[int64](arg.ctr.buf.Vecs[0], 0))
-	require.Equal(t, int32(1), vector.GetFixedAtNoTypeCheck[int32](arg.ctr.buf.Vecs[1], 0),
-		"the partition route must survive PRE_INSERT and remain outside stored columns")
-	arg.Free(proc, false, nil)
+	input := batch.New(append(append([]string(nil), attrs...), "partition_route"))
+	input.Vecs[0] = testutil.MakeInt64Vector([]int64{10, 20}, nil, proc.Mp())
+	input.Vecs[1] = testutil.MakeInt32Vector([]int32{0, 1}, nil, proc.Mp())
+	input.Vecs[2] = vector.NewVec(types.T_varchar.ToType())
+	require.NoError(t, vector.AppendBytes(input.Vecs[2], []byte("alpha"), false, proc.Mp()))
+	require.NoError(t, vector.AppendBytes(input.Vecs[2], []byte("beta"), false, proc.Mp()))
+	input.Vecs[3] = vector.NewConstNull(types.T_uint64.ToType(), 2, proc.Mp())
+	input.Vecs[4] = testutil.MakeInt32Vector([]int32{1, 0}, nil, proc.Mp())
+	input.SetRowCount(2)
+	child := colexec.NewMockOperator().WithBatchs([]*batch.Batch{input})
+	defer child.Free(proc, false, nil)
+	arg.AppendChild(child)
+	defer arg.Free(proc, false, nil)
+	require.NoError(t, arg.Prepare(proc))
+	result, err := arg.Call(proc)
+	require.NoError(t, err)
+	require.True(t, allocated)
+	require.Len(t, result.Batch.Vecs, 5)
+	require.Equal(t, []uint64{111, 112}, vector.MustFixedColNoTypeCheck[uint64](result.Batch.Vecs[3]))
+	require.False(t, result.Batch.Vecs[3].IsNull(0))
+	require.False(t, result.Batch.Vecs[3].IsNull(1))
+	require.Equal(t, []int32{1, 0}, vector.MustFixedColNoTypeCheck[int32](result.Batch.Vecs[4]))
+	require.True(t, input.Vecs[3].IsNull(0), "allocator must not mutate the child input")
 }
 
 func TestPreInsertNullCheck(t *testing.T) {
