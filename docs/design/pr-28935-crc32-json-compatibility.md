@@ -81,3 +81,17 @@ protocol reassignment. Integration validation is recorded separately.
 - NOT_RUN: real v93/new mixed binaries, old-version persisted-table upgrade and
   restart, physical restore, and post-activation downgrade rejection. Component
   tests and same-version SQL execution do not replace those acceptance tests.
+
+## Main integration validation on 2026-09-28
+
+Integrated main `239fe81c82ae07a8c316576cac8555c445c92212` and reassigned
+the new identity to v100, preserving all preceding main contracts.
+
+- PASS: all five owning packages, 6,816 top-level tests with GOMAXPROCS=4.
+- PASS: SQL and binary PREPARE integration, including reprepare and generated DML.
+- PASS: normal mo-tester CRC32 (115 statements) and generated-column (334
+  statements) cases, twice each, zero failures or ignored statements, with
+  actual authoring-floor/ISCP readiness and database teardown checks.
+- PASS: immediate pre-feature v99 destination rejection and v100 admission.
+- NOT_RUN: the real mixed-binary and persisted upgrade/restore/downgrade
+  acceptance scenarios described above. These remain required QA evidence.
