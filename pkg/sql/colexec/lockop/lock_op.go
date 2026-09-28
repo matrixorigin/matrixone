@@ -756,6 +756,7 @@ func doLock(
 		Policy:          proc.GetWaitPolicy(),
 		Mode:            opts.mode,
 		WriterFair:      isWriterFairLockRequest(ctx),
+		KeepRows:        opts.admissionOnly,
 		TableDefChanged: opts.changeDef,
 		Sharding:        opts.sharding,
 		Group:           opts.group,
@@ -855,9 +856,16 @@ func doLock(
 		time.Since(startAt),
 		nil)
 
+	// An admission grant needs a real binding, including the forwarding path.
+	if opts.admissionOnly && (!result.LockedOn.Valid || result.LockedOn.Table != tableID || result.LockedOn.Group != opts.group) {
+		return false, false, timestamp.Timestamp{}, moerr.NewLockTableBindChangedNoCtx()
+	}
 	// add bind locks
 	if err = txnOp.AddLockTable(result.LockedOn); err != nil {
 		return false, false, timestamp.Timestamp{}, err
+	}
+	if opts.admissionOnly {
+		return false, false, result.Timestamp, nil
 	}
 
 	snapshotTS := txn.SnapshotTS
@@ -1283,6 +1291,10 @@ func LockWithMayUpgrade(
 	}
 	result, err := lockService.Lock(ctx, tableID, rows, txnID, options)
 	if !moerr.IsMoErrCode(err, moerr.ErrLockNeedUpgrade) {
+		return result, err
+	}
+	if opts.admissionOnly && !opts.lockTable {
+		// Catalog name admission must not widen to unrelated catalog rows.
 		return result, err
 	}
 
