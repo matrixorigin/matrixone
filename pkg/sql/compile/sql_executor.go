@@ -525,6 +525,7 @@ func (exec *txnExecutor) Exec(
 		return cc
 	}
 	compileContext := newCompileContext(exec.ctx)
+	proc.Base.SessionInfo.CompilerContext = compileContext
 	buildPlan := func(ctx *compilerContext, prepared bool) (*plan.Plan, error) {
 		pn, err := plan.BuildPlan(ctx, stmts[0], prepared)
 		if err == nil && statementOption.AllowMoColumnsUpdate() {
