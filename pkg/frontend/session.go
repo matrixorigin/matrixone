@@ -2977,6 +2977,16 @@ func (ses *Session) GetPrepareStmt(ctx context.Context, name string) (*PrepareSt
 	return nil, moerr.NewInvalidStatef(ctx, "prepared statement '%s' does not exist", name)
 }
 
+// getPrepareStmtIfPresent looks up an optional prepared statement without
+// logging when it is absent. Callers that only capture a construction-time
+// snapshot must not report an execution error before the statement runs.
+func (ses *Session) getPrepareStmtIfPresent(name string) (*PrepareStmt, bool) {
+	ses.mu.Lock()
+	defer ses.mu.Unlock()
+	prepareStmt, ok := ses.prepareStmts[strings.ToLower(name)]
+	return prepareStmt, ok
+}
+
 func (ses *Session) GetPrepareStmts() []*PrepareStmt {
 	ses.mu.Lock()
 	defer ses.mu.Unlock()

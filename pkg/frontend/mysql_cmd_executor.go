@@ -4439,11 +4439,11 @@ var GetComputationWrapper = func(execCtx *ExecCtx, db string, user string, eng e
 			tcw.stmtBorrowed = true
 		}
 		tcw.SetRemapDb(execCtx.input.remapDb)
-		if prepared, getErr := ses.GetPrepareStmt(execCtx.reqCtx, execCtx.input.stmtName); getErr == nil {
+		if prepared, ok := ses.getPrepareStmtIfPresent(execCtx.input.stmtName); ok {
 			tcw.setStatementFingerprint(prepared.statementFingerprint, prepared.statementFingerprintAttempted)
 		} else {
-			// A failed prepared lookup is not a fingerprint of the EXECUTE
-			// command's text; keep telemetry explicitly absent.
+			// No construction-time owner means no fingerprint snapshot; keep
+			// telemetry explicitly absent until the execution boundary refreshes it.
 			tcw.setStatementFingerprint("", true)
 		}
 		cws = append(cws, tcw)
@@ -4582,7 +4582,7 @@ var GetComputationWrapper = func(execCtx *ExecCtx, db string, user string, eng e
 			// saved with the prepared statement before authorization/planning.
 			for i, stmt := range stmts {
 				if execute, ok := stmt.(*tree.Execute); ok {
-					if prepared, getErr := ses.GetPrepareStmt(execCtx.reqCtx, string(execute.Name)); getErr == nil {
+					if prepared, ok := ses.getPrepareStmtIfPresent(string(execute.Name)); ok {
 						statementRemaps[i] = prepared.remapDb
 					}
 				}
@@ -4615,9 +4615,11 @@ var GetComputationWrapper = func(execCtx *ExecCtx, db string, user string, eng e
 			tcw.SetRemapDb(statementRemaps[i])
 		}
 		if execute, ok := stmt.(*tree.Execute); ok {
-			if prepared, getErr := ses.GetPrepareStmt(execCtx.reqCtx, string(execute.Name)); getErr == nil {
+			if prepared, ok := ses.getPrepareStmtIfPresent(string(execute.Name)); ok {
 				tcw.setStatementFingerprint(prepared.statementFingerprint, prepared.statementFingerprintAttempted)
 			} else {
+				// PREPARE may not have executed yet in this request; the execution
+				// boundary refreshes this optional snapshot after it does.
 				tcw.setStatementFingerprint("", true)
 			}
 		} else if motrace.GetTracerProvider().IsEnable() {

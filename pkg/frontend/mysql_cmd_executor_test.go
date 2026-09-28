@@ -36,6 +36,7 @@ import (
 	"github.com/smartystreets/goconvey/convey"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
+	"go.uber.org/zap"
 
 	"github.com/matrixorigin/matrixone/pkg/catalog"
 	"github.com/matrixorigin/matrixone/pkg/clusterservice"
@@ -4699,6 +4700,10 @@ func TestRefreshPreparedStatementFingerprintAtExecutionBoundary(t *testing.T) {
 	ctx := context.Background()
 	ctrl := gomock.NewController(t)
 	ses := newTestSession(t, ctrl)
+	observedLoggerSession, logs := newObservedProtocolSession()
+	ses.logger = observedLoggerSession.logger
+	ses.logLevel = zap.ErrorLevel
+	ses.loggerOnce.Do(func() {})
 	proc := testutil.NewProcessWithMPool(t, "", mpool.MustNewZero())
 
 	makeWrappers := func() []ComputationWrapper {
@@ -4747,12 +4752,33 @@ func TestRefreshPreparedStatementFingerprintAtExecutionBoundary(t *testing.T) {
 	require.True(t, ses.RemovePrepareStmt("stmt1"))
 	refreshPreparedStatementFingerprint(ctx, ses, executeCW)
 	assertFingerprint(executeCW, "")
+	logs.TakeAll()
 
 	// A PREPARE followed by EXECUTE in the same request starts with no owner
 	// while wrappers are built, then must pick up the owner installed by PREPARE.
 	newStmtCWs := makeWrappers()
 	newExecuteCW := newStmtCWs[1]
 	assertFingerprint(newExecuteCW, "")
+	missingStmtLog := "prepared statement 'stmt1' does not exist on connection 0"
+	missingStmtLogs := logs.FilterMessage(missingStmtLog).All()
+	require.Empty(t, missingStmtLogs)
+	// Wrapper construction happens before PREPARE executes, so its optional
+	// remap/fingerprint snapshots must not log a runtime lookup failure.
+	// Rewriting exercises the additional remap lookup; both paths remain
+	// unresolved until the execution boundary refreshes the fingerprint.
+	ses.rewriteEnabled.Store(true)
+	rewrittenStmtCWs := makeWrappers()
+	rewrittenExecuteCW := rewrittenStmtCWs[1]
+	assertFingerprint(rewrittenExecuteCW, "")
+	require.Empty(t, logs.FilterMessage(missingStmtLog).All())
+	ses.rewriteEnabled.Store(false)
+	// A real runtime lookup still returns and logs the established error.
+	_, err := ses.GetPrepareStmt(ctx, "stmt1")
+	require.ErrorContains(t, err, "prepared statement 'stmt1' does not exist")
+	missingStmtLogs = logs.FilterMessage(missingStmtLog).All()
+	require.Len(t, missingStmtLogs, 1)
+	require.Equal(t, zap.ErrorLevel, missingStmtLogs[0].Level)
+	logs.TakeAll()
 	require.NoError(t, ses.SetPrepareStmt(ctx, "stmt1", newPrepared("created-template")))
 	refreshPreparedStatementFingerprint(ctx, ses, newExecuteCW)
 	assertFingerprint(newExecuteCW, "created-template")
@@ -4762,6 +4788,10 @@ func TestGetComputationWrapperUsesSameTemplateForBinaryBindings(t *testing.T) {
 	ctx := context.Background()
 	ctrl := gomock.NewController(t)
 	ses := newTestSession(t, ctrl)
+	observedLoggerSession, logs := newObservedProtocolSession()
+	ses.logger = observedLoggerSession.logger
+	ses.logLevel = zap.ErrorLevel
+	ses.loggerOnce.Do(func() {})
 	proc := testutil.NewProcessWithMPool(t, "", mpool.MustNewZero())
 	prepareString := tree.NewPrepareString("stmt1", "select ?")
 	preparePlan, err := buildPlan(ctx, nil, plan.NewEmptyCompilerContext(), prepareString)
@@ -4794,6 +4824,23 @@ func TestGetComputationWrapperUsesSameTemplateForBinaryBindings(t *testing.T) {
 		require.Equal(t, "prepared-template-fingerprint", fingerprint.getStatementFingerprint())
 		cws[0].Free()
 	}
+
+	// This branch only snapshots optional fingerprint metadata. A prior
+	// protocol lookup owns execution validity; wrapper construction itself must
+	// not turn an absent snapshot into an error-level runtime diagnostic.
+	execCtx := newTestExecCtx(ctx, ctrl)
+	execCtx.ses = ses
+	execCtx.input = &UserInput{
+		stmtName:            "missing",
+		stmt:                prepareBody,
+		preparePlan:         preparePlan,
+		isBinaryProtExecute: true,
+	}
+	cws, err := GetComputationWrapper(execCtx, "", "root", nil, proc, ses)
+	require.NoError(t, err)
+	require.Len(t, cws, 1)
+	cws[0].Free()
+	require.Empty(t, logs.FilterMessage("prepared statement 'missing' does not exist on connection 0").All())
 }
 
 func TestGetComputationWrapperCapturesFingerprintAfterRemap(t *testing.T) {
