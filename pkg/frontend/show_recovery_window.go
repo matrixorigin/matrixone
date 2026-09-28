@@ -21,6 +21,7 @@ import (
 	"time"
 
 	"github.com/matrixorigin/matrixone/pkg/catalog"
+	"github.com/matrixorigin/matrixone/pkg/common/identifier"
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
 	"github.com/matrixorigin/matrixone/pkg/common/sqlquote"
 	"github.com/matrixorigin/matrixone/pkg/defines"
@@ -188,6 +189,11 @@ func constructRecoveryWindow(
 	default:
 		return nil, moerr.NewInternalErrorNoCtxf("show recovery window level does not exist")
 	}
+	if defines.Mode2NameResolutionEnabled(ctx) && level != tree.RECOVERYWINDOWLEVELACCOUNT {
+		// Historical records can outlive the current database/table. Search this
+		// account's sources, then resolve each requested name at its source TS.
+		snapPitrSearchCond = fmt.Sprintf("account_name = '%s'", sqlquote.EscapeString(accountName))
+	}
 
 	snapSearchSQL = fmt.Sprintf(
 		"select sname, level, account_name, database_name, table_name, ts from `%s`.`%s` where %s and kind != '%s'",
@@ -198,7 +204,7 @@ func constructRecoveryWindow(
 	pitrSearchSQL = fmt.Sprintf(
 		"select "+
 			"	pitr_name, level, account_name, database_name, table_name, "+
-			"	modified_time, pitr_length, pitr_unit, pitr_status, pitr_status_changed_time "+
+			"	modified_time, pitr_length, pitr_unit, pitr_status, pitr_status_changed_time, obj_id "+
 			"from "+
 			"`%s`.`%s` "+
 			"	where %s AND pitr_name != '%s'",
@@ -326,6 +332,20 @@ func searchTables(
 		fromAccount    uint32
 		needUpdateFrom = true
 	)
+	requestedDatabase, requestedTable := databaseName, tableName
+	mode2 := defines.Mode2NameResolutionEnabled(ctx)
+	accountIDAtTS := make(map[int64]uint32)
+	foldedRequestedDatabase, foldedRequestedTable := identifier.Fold(requestedDatabase), identifier.Fold(requestedTable)
+	mayCoverRequested := func(sourceLevel, sourceDatabase, sourceTable string) bool {
+		if !mode2 || level == tree.RECOVERYWINDOWLEVELACCOUNT || sourceLevel == "account" {
+			return true
+		}
+		if identifier.Fold(sourceDatabase) != foldedRequestedDatabase {
+			return false
+		}
+		return level != tree.RECOVERYWINDOWLEVELTABLE || sourceLevel != "table" ||
+			identifier.Fold(sourceTable) == foldedRequestedTable
+	}
 
 	skipCond := ""
 	for i, db := range skipDbs {
@@ -346,11 +366,35 @@ func searchTables(
 		fromAccount = opAccount
 	}
 
-	makeCondB := func(ts int64) error {
-		if needUpdateFrom {
-			if fromAccount, err = getAccountIdByTS(ctx, bh, accountName, ts); err != nil {
-				return err
+	makeCondB := func(ts int64) (bool, error) {
+		if needUpdateFrom || mode2 {
+			if cached, ok := accountIDAtTS[ts]; ok {
+				fromAccount = cached
+			} else {
+				if fromAccount, err = getAccountIdByTS(ctx, bh, accountName, ts); err != nil {
+					return false, err
+				}
+				accountIDAtTS[ts] = fromAccount
 			}
+			if mode2 && !needUpdateFrom && fromAccount != opAccount {
+				return false, nil
+			}
+		}
+		databaseName, tableName = requestedDatabase, requestedTable
+		if mode2 && level != tree.RECOVERYWINDOWLEVELACCOUNT {
+			requestedTableAtTS := ""
+			if level == tree.RECOVERYWINDOWLEVELTABLE {
+				requestedTableAtTS = requestedTable
+			}
+			physicalDB, physicalTable, _, lookupErr := resolveCatalogObjectAtSnapshot(
+				ctx, bh, fromAccount, ts, requestedDatabase, requestedTableAtTS)
+			if lookupErr != nil {
+				if isAbsentCatalogObjectError(lookupErr) {
+					return false, nil
+				}
+				return false, lookupErr
+			}
+			databaseName, tableName = physicalDB, physicalTable
 		}
 
 		switch level {
@@ -362,18 +406,18 @@ func searchTables(
 		case tree.RECOVERYWINDOWLEVELDATABASE:
 			searchCondB = fmt.Sprintf(
 				" AND account_id = %d AND reldatabase = '%s'",
-				fromAccount, databaseName,
+				fromAccount, sqlquote.EscapeString(databaseName),
 			)
 		case tree.RECOVERYWINDOWLEVELTABLE:
 			searchCondB = fmt.Sprintf(
 				" AND account_id = %d AND reldatabase = '%s' AND relname = '%s'",
-				fromAccount, databaseName, tableName,
+				fromAccount, sqlquote.EscapeString(databaseName), sqlquote.EscapeString(tableName),
 			)
 		default:
-			return moerr.NewInternalErrorNoCtxf("show recovery window level does not exist")
+			return false, moerr.NewInternalErrorNoCtxf("show recovery window level does not exist")
 		}
 
-		return nil
+		return true, nil
 	}
 
 	var (
@@ -387,10 +431,19 @@ func searchTables(
 
 	newCtx = defines.AttachAccountId(ctx, opAccount)
 	for _, snap := range snapRecords {
+		if !mayCoverRequested(snap.level, snap.databaseName, snap.tableName) {
+			continue
+		}
 		ts := timestamp.Timestamp{PhysicalTime: snap.ts}
 
-		if err = makeCondB(snap.ts); err != nil {
+		var found bool
+		if found, err = makeCondB(snap.ts); err != nil {
 			return
+		}
+		if !found || (mode2 && ((snap.level == "database" && snap.databaseName != databaseName && level != tree.RECOVERYWINDOWLEVELACCOUNT) ||
+			(snap.level == "table" && level != tree.RECOVERYWINDOWLEVELACCOUNT &&
+				(snap.databaseName != databaseName || (level == tree.RECOVERYWINDOWLEVELTABLE && snap.tableName != tableName))))) {
+			continue
 		}
 
 		// already table level, no need to query mo_tables.
@@ -405,7 +458,7 @@ func searchTables(
 		} else if snap.level == "database" {
 			searchCondC = fmt.Sprintf(
 				" AND reldatabase = '%s'",
-				snap.databaseName,
+				sqlquote.EscapeString(snap.databaseName),
 			)
 
 		} else if snap.level == "account" {
@@ -453,8 +506,14 @@ func searchTables(
 	}
 
 	for _, pitr := range pitrsRecords {
+		if !mayCoverRequested(pitr.level, pitr.databaseName, pitr.tableName) {
+			continue
+		}
 		if startStr, err = getStartTimeOfRecoveryWindowInLoc(pitr); err != nil {
 			return
+		}
+		if startStr == "" {
+			continue
 		}
 
 		endStr = getEndTimeOfRecoveryWindowInLoc(pitr)
@@ -463,8 +522,35 @@ func searchTables(
 			return
 		}
 
-		if err = makeCondB(startTS); err != nil {
+		var found bool
+		if found, err = makeCondB(startTS); err != nil {
 			return
+		}
+		if !found {
+			continue
+		}
+		if mode2 && level != tree.RECOVERYWINDOWLEVELACCOUNT && pitr.level != "account" {
+			physicalDB, physicalTable, sourceID, lookupErr := resolveCatalogObjectAtSnapshot(
+				ctx, bh, fromAccount, startTS, pitr.databaseName, pitr.tableName)
+			if lookupErr != nil {
+				if isAbsentCatalogObjectError(lookupErr) {
+					continue
+				}
+				return nil, nil, lookupErr
+			}
+			identityMatches := sourceID == pitr.objId
+			if !identityMatches && pitr.level == "table" {
+				identityMatches, lookupErr = historicalTableIDMatchesPitr(
+					ctx, bh, fromAccount, startTS, pitr.databaseName, pitr.tableName, sourceID, pitr.objId)
+				if lookupErr != nil {
+					return nil, nil, lookupErr
+				}
+			}
+			if !identityMatches || physicalDB != databaseName ||
+				(level == tree.RECOVERYWINDOWLEVELTABLE && pitr.level == "table" && physicalTable != tableName) {
+				continue
+			}
+			pitr.databaseName, pitr.tableName = physicalDB, physicalTable
 		}
 
 		if pitr.level == "table" {
@@ -480,7 +566,7 @@ func searchTables(
 		} else if pitr.level == "database" {
 			searchCondC = fmt.Sprintf(
 				" AND reldatabase = '%s'",
-				pitr.databaseName,
+				sqlquote.EscapeString(pitr.databaseName),
 			)
 
 		} else if pitr.level == "account" {
@@ -594,6 +680,9 @@ func execPitrSearchSQL(
 			if record.pitrStatusChangedTime, err = sqlRet[0].GetInt64(ctx, i, 9); err != nil {
 				return nil, err
 			}
+			if record.objId, err = sqlRet[0].GetUint64(ctx, i, 10); err != nil {
+				return nil, err
+			}
 
 			records = append(records, record)
 		}
@@ -675,12 +764,12 @@ func checkShowRecoveryWindowPrivilege(
 		}
 	case tree.RECOVERYWINDOWLEVELDATABASE:
 		dbName := srw.DatabaseName.String()
-		if len(dbName) > 0 && needSkipDb(dbName) {
+		if len(dbName) > 0 && isProtectedRecoveryDatabase(ctx, dbName) {
 			return moerr.NewInternalError(ctx, "can not show recovery window for system database")
 		}
 	case tree.RECOVERYWINDOWLEVELTABLE:
 		dbName := srw.DatabaseName.String()
-		if len(dbName) > 0 && needSkipDb(dbName) {
+		if len(dbName) > 0 && isProtectedRecoveryDatabase(ctx, dbName) {
 			return moerr.NewInternalError(ctx, "can not show recovery window for system table")
 		}
 	default:
@@ -692,6 +781,7 @@ func checkShowRecoveryWindowPrivilege(
 type tableRecoveryWindow struct {
 	pitrName              string
 	level                 string
+	objId                 uint64
 	modifiedTime          int64
 	pitrValue             uint64
 	pitrUnit              string

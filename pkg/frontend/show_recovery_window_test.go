@@ -18,6 +18,7 @@ import (
 	"context"
 	"testing"
 
+	"github.com/matrixorigin/matrixone/pkg/defines"
 	"github.com/matrixorigin/matrixone/pkg/sql/parsers/tree"
 	"github.com/stretchr/testify/require"
 )
@@ -54,4 +55,23 @@ func TestSearchTablesReadsCatalogAtSnapshotTimestamp(t *testing.T) {
 	require.Len(t, bh.executedSQLs, 1)
 	require.Contains(t, bh.executedSQLs[0], "`mo_catalog`.`mo_tables` {MO_TS = 42}")
 	require.NotContains(t, bh.executedSQLs[0], "SNAPSHOT =")
+}
+
+func TestSearchTablesMode2SkipsUnrelatedAndExpiredPitr(t *testing.T) {
+	ses := newValidateSession(t)
+	ses.SetTenantInfo(&TenantInfo{Tenant: "tenant"})
+	ctx := defines.AttachMode2NameResolution(context.Background(), true)
+	bh := &recoveryWindowExecRecorder{}
+	bh.init()
+	rows, pitrs, err := searchTables(ctx, ses, bh, tree.RECOVERYWINDOWLEVELTABLE,
+		"tenant", "Db", "T",
+		[]tableRecoveryWindow{
+			{level: "table", databaseName: "Other", tableName: "T", pitrUnit: "invalid"},
+			{level: "table", databaseName: "Db", tableName: "T", modifiedTime: 1,
+				pitrStatusChangedTime: 1, pitrValue: 1, pitrUnit: "h", pitrStatus: 0},
+		}, nil, 1)
+	require.NoError(t, err)
+	require.Empty(t, rows)
+	require.Empty(t, pitrs)
+	require.Empty(t, bh.executedSQLs)
 }

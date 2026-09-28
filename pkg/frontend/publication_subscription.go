@@ -3003,6 +3003,9 @@ func getSubscriptionMeta(ctx context.Context, dbName string, ses FeSession, txn 
 		if moerr.IsMoErrCode(err, moerr.OkExpectedEOB) {
 			return nil, nil
 		}
+		if moerr.IsMoErrCode(err, moerr.ErrAmbiguousIdentifier) {
+			return nil, err
+		}
 		ses.Errorf(ctx, "Get Subscription database %s meta error: %s", dbName, err.Error())
 		return nil, moerr.NewNoDB(ctx)
 	}

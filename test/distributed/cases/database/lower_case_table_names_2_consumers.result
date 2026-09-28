@@ -1,0 +1,181 @@
+set @mode2_previous = @@global.lower_case_table_names;
+set global lower_case_table_names = 2;
+drop publication if exists qa_mode2_consumer_pub;
+drop pitr if exists qa_mode2_consumer_pitr;
+drop pitr if exists qa_mode2_consumer_internal internal;
+drop snapshot if exists qa_mode2_consumer_snapshot;
+drop database if exists QaMode2Consumer29422;
+drop account if exists qa_mode2_consumer_sub;
+create database QaMode2Consumer29422;
+create table QaMode2Consumer29422.FinalMix(id int primary key, v int);
+create table QaMode2Consumer29422.Secret(id int);
+create table QaMode2Consumer29422.SecretPublic(id int);
+insert into QaMode2Consumer29422.FinalMix values (1, 10);
+show full columns from qamode2consumer29422.finalmix;
+➤ Field[1,0,0]  ¦  Type[1,0,0]  ¦  Collation[1,0,0]  ¦  Null[1,0,0]  ¦  Key[1,0,0]  ¦  Default[1,0,0]  ¦  Extra[1,0,0]  ¦  Privileges[1,0,0]  ¦  Comment[1,0,0]  𝄀
+id  ¦  INT(32)  ¦  null  ¦  NO  ¦  PRI  ¦  null  ¦    ¦  select,insert,update,references  ¦    𝄀
+v  ¦  INT(32)  ¦  null  ¦  YES  ¦    ¦  null  ¦    ¦  select,insert,update,references  ¦  
+show index from qamode2consumer29422.finalmix;
+➤ Table[12,8,0]  ¦  Non_unique[-5,64,0]  ¦  Key_name[12,64,0]  ¦  Seq_in_index[4,32,0]  ¦  Column_name[12,256,0]  ¦  Collation[12,1,0]  ¦  Cardinality[-5,64,0]  ¦  Sub_part[12,4,0]  ¦  Packed[12,4,0]  ¦  Null[12,3,0]  ¦  Index_type[12,11,0]  ¦  Comment[1,0,0]  ¦  Index_comment[12,2048,0]  ¦  Index_params[12,2048,0]  ¦  Visible[12,3,0]  ¦  Expression[12,256,0]  𝄀
+finalmix  ¦  0  ¦  PRIMARY  ¦  1  ¦  id  ¦  A  ¦  0  ¦  NULL  ¦  NULL  ¦    ¦  BTREE  ¦    ¦    ¦    ¦  YES  ¦  id
+describe qamode2consumer29422.finalmix;
+➤ Field[1,0,0]  ¦  Type[1,0,0]  ¦  Null[1,0,0]  ¦  Key[1,0,0]  ¦  Default[1,0,0]  ¦  Extra[1,0,0]  ¦  Comment[1,0,0]  𝄀
+id  ¦  INT(32)  ¦  NO  ¦  PRI  ¦  null  ¦    ¦    𝄀
+v  ¦  INT(32)  ¦  YES  ¦    ¦  null  ¦    ¦  
+show create table qamode2consumer29422.finalmix;
+➤ Table[12,8,0]  ¦  Create Table[12,93,0]  𝄀
+finalmix  ¦  CREATE TABLE `FinalMix` (
+  `id` int NOT NULL,
+  `v` int DEFAULT NULL,
+  PRIMARY KEY (`id`)
+)
+create pitr qa_mode2_consumer_pitr for table qamode2consumer29422 finalmix range 1 'h';
+select database_name, table_name, obj_id =
+(select rel_id from mo_catalog.mo_tables where reldatabase = 'QaMode2Consumer29422' and relname = 'FinalMix') as physical_id
+from mo_catalog.mo_pitr where pitr_name = 'qa_mode2_consumer_pitr';
+➤ database_name[12,5000,0]  ¦  table_name[12,5000,0]  ¦  physical_id[-7,1,0]  𝄀
+QaMode2Consumer29422  ¦  FinalMix  ¦  1
+show recovery_window for table qamode2consumer29422 finalmix;
+➤ RecoveryWindowLevel[12,0,0]  ¦  AccountName[12,0,0]  ¦  DatabaseName[12,0,0]  ¦  TableName[12,0,0]  ¦  RecoveryWindows[-1,0,0]  𝄀
+table  ¦  sys  ¦  QaMode2Consumer29422  ¦  FinalMix  ¦  [{'start_time':'2026-09-28 08:49:00.133109351', 'end_time':'2026-09-28 08:49:00.144023968', 'source':'pitr', 'source_name':'qa_mode2_consumer_pitr'}]
+drop pitr qa_mode2_consumer_pitr;
+create pitr qa_mode2_consumer_internal for table qamode2consumer29422 finalmix range 1 'h' internal;
+select database_name, table_name, obj_id =
+(select rel_id from mo_catalog.mo_tables where reldatabase = 'QaMode2Consumer29422' and relname = 'FinalMix') as physical_id
+from mo_catalog.mo_pitr where pitr_name = 'qa_mode2_consumer_internal';
+➤ database_name[12,5000,0]  ¦  table_name[12,5000,0]  ¦  physical_id[-7,1,0]  𝄀
+QaMode2Consumer29422  ¦  FinalMix  ¦  1
+drop pitr qa_mode2_consumer_internal internal;
+alter table QaMode2Consumer29422.FinalMix add column CopyMarker int first;
+select rel_id <> rel_logical_id as copied from mo_catalog.mo_tables
+where reldatabase = 'QaMode2Consumer29422' and relname = 'FinalMix';
+➤ copied[-7,1,0]  𝄀
+1
+create snapshot qa_mode2_consumer_snapshot for table qamode2consumer29422 finalmix;
+select database_name, table_name, obj_id =
+(select rel_logical_id from mo_catalog.mo_tables where reldatabase = 'QaMode2Consumer29422' and relname = 'FinalMix') as logical_id
+from mo_catalog.mo_snapshots where sname = 'qa_mode2_consumer_snapshot';
+➤ database_name[12,5000,0]  ¦  table_name[12,5000,0]  ¦  logical_id[-7,1,0]  𝄀
+QaMode2Consumer29422  ¦  FinalMix  ¦  1
+select v from qamode2consumer29422.finalmix{snapshot = 'qa_mode2_consumer_snapshot'};
+➤ v[4,32,0]  𝄀
+10
+show recovery_window for table qamode2consumer29422 finalmix;
+➤ RecoveryWindowLevel[12,0,0]  ¦  AccountName[12,0,0]  ¦  DatabaseName[12,0,0]  ¦  TableName[12,0,0]  ¦  RecoveryWindows[-1,0,0]  𝄀
+table  ¦  sys  ¦  QaMode2Consumer29422  ¦  FinalMix  ¦  [{'timestamp':'2026-09-28 12:49:00.248457836 +0000 UTC', 'source':'snapshot', 'source_name':'qa_mode2_consumer_snapshot'}]
+update QaMode2Consumer29422.FinalMix set v = 20;
+restore table qamode2consumer29422.finalmix{snapshot = 'qa_mode2_consumer_snapshot'};
+select v from QaMode2Consumer29422.FinalMix;
+➤ v[4,32,0]  𝄀
+10
+drop table QaMode2Consumer29422.FinalMix;
+show recovery_window for table qamode2consumer29422 finalmix;
+➤ RecoveryWindowLevel[12,0,0]  ¦  AccountName[12,0,0]  ¦  DatabaseName[12,0,0]  ¦  TableName[12,0,0]  ¦  RecoveryWindows[-1,0,0]  𝄀
+table  ¦  sys  ¦  QaMode2Consumer29422  ¦  FinalMix  ¦  [{'timestamp':'2026-09-28 12:49:00.248457836 +0000 UTC', 'source':'snapshot', 'source_name':'qa_mode2_consumer_snapshot'}]
+restore table qamode2consumer29422.finalmix{snapshot = 'qa_mode2_consumer_snapshot'};
+select v from QaMode2Consumer29422.FinalMix;
+➤ v[4,32,0]  𝄀
+10
+drop table QaMode2Consumer29422.FinalMix;
+create table QaMode2Consumer29422.finalmix(id int primary key, v int);
+insert into QaMode2Consumer29422.finalmix values (2, 30);
+create table QaMode2Consumer29422.ChildRef(pid int,
+constraint fk_mode2_consumer foreign key(pid) references QaMode2Consumer29422.finalmix(id));
+restore table qamode2consumer29422.finalmix{snapshot = 'qa_mode2_consumer_snapshot'};
+not supported: can not restore table 'QaMode2Consumer29422.FinalMix' referenced by some foreign key constraint
+select id, v from QaMode2Consumer29422.finalmix;
+➤ id[4,32,0]  ¦  v[4,32,0]  𝄀
+2  ¦  30
+drop table QaMode2Consumer29422.ChildRef;
+drop table QaMode2Consumer29422.finalmix;
+restore table qamode2consumer29422.finalmix{snapshot = 'qa_mode2_consumer_snapshot'};
+select v from QaMode2Consumer29422.FinalMix;
+➤ v[4,32,0]  𝄀
+10
+drop snapshot qa_mode2_consumer_snapshot;
+create account qa_mode2_consumer_sub ADMIN_NAME 'admin' IDENTIFIED BY 'test123';
+create publication qa_mode2_consumer_pub database QaMode2Consumer29422 table FinalMix,SecretPublic account qa_mode2_consumer_sub;
+set global lower_case_table_names = 2;
+select @@session.lower_case_table_names;
+➤ @@lower_case_table_names[-1,16383,0]  𝄀
+2
+create database SubMix from sys publication qa_mode2_consumer_pub;
+select id, v from SubMix.finalmix;
+➤ id[4,32,0]  ¦  v[4,32,0]  𝄀
+1  ¦  10
+select id, v from submix.finalmix;
+➤ id[4,32,0]  ¦  v[4,32,0]  𝄀
+1  ¦  10
+show create table SubMix.finalmix;
+➤ Table[12,8,0]  ¦  Create Table[12,126,0]  𝄀
+finalmix  ¦  CREATE TABLE `FinalMix` (
+  `CopyMarker` int DEFAULT NULL,
+  `id` int NOT NULL,
+  `v` int DEFAULT NULL,
+  PRIMARY KEY (`id`)
+)
+show create table submix.finalmix;
+➤ Table[12,8,0]  ¦  Create Table[12,126,0]  𝄀
+finalmix  ¦  CREATE TABLE `FinalMix` (
+  `CopyMarker` int DEFAULT NULL,
+  `id` int NOT NULL,
+  `v` int DEFAULT NULL,
+  PRIMARY KEY (`id`)
+)
+show create database submix;
+➤ Database[12,5000,0]  ¦  Create Database[12,5000,0]  𝄀
+SubMix  ¦  create database SubMix from sys publication qa_mode2_consumer_pub
+select mo_table_rows('submix', 'finalmix');
+➤ mo_table_rows(submix, finalmix)[-5,64,0]  𝄀
+0
+create database qa_mode2_sub_view;
+create view qa_mode2_sub_view.v as select id, v from submix.finalmix;
+select id, v from qa_mode2_sub_view.v;
+➤ id[4,32,0]  ¦  v[4,32,0]  𝄀
+1  ¦  10
+drop database qa_mode2_sub_view;
+select id from SubMix.Secret;
+SQL parser error: table "Secret" does not exist
+select mo_table_rows('SubMix', 'Secret');
+internal error: no such subscribed table
+select mo_table_size('SubMix', 'Secret');
+internal error: no such subscribed table
+select count(*) from SYSTEM.STATEMENT_INFO where 1 = 0;
+➤ count(*)[-5,64,0]  𝄀
+0
+select count(*) from SYSTEM_METRICS.METRIC where 1 = 0;
+➤ count(*)[-5,64,0]  𝄀
+0
+select count(*) from MO_CATALOG.MO_TABLES where reldatabase = 'QaMode2Consumer29422';
+➤ count(*)[-5,64,0]  𝄀
+0
+select mo_table_col_max('mo_catalog', 'mo_tables', 'relname');
+invalid input: mo_table_col_max has bad input table mo_tables
+select mo_table_col_max('mo_catalog', 'MO_TABLES', 'relname');
+invalid input: mo_table_col_max has bad input table MO_TABLES
+select mo_table_col_min('mo_catalog', 'MO_TABLES', 'relname');
+invalid input: mo_table_col_min has bad input table MO_TABLES
+drop database SubMix;
+drop publication qa_mode2_consumer_pub;
+drop account qa_mode2_consumer_sub;
+drop database QaMode2Consumer29422;
+drop snapshot if exists qa_mode2_account_restore_snapshot;
+drop account if exists qa_mode2_account_restore;
+create account qa_mode2_account_restore ADMIN_NAME 'admin' IDENTIFIED BY 'test123';
+set global lower_case_table_names = 2;
+create database QaMode2AccountRestore;
+create table QaMode2AccountRestore.Parent(id int primary key);
+insert into QaMode2AccountRestore.Parent values (7);
+create snapshot qa_mode2_account_restore_snapshot for cluster;
+drop account qa_mode2_account_restore;
+restore account qa_mode2_account_restore{snapshot='qa_mode2_account_restore_snapshot'};
+select @@session.lower_case_table_names;
+➤ @@lower_case_table_names[-1,16383,0]  𝄀
+1
+set global lower_case_table_names = 2;
+select id from QaMode2AccountRestore.Parent;
+➤ id[4,32,0]  𝄀
+7
+drop snapshot qa_mode2_account_restore_snapshot;
+drop account qa_mode2_account_restore;
+set global lower_case_table_names = @mode2_previous;
