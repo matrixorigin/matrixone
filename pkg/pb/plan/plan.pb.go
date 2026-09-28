@@ -3163,7 +3163,13 @@ type PreparedNumericMetadata struct {
 	// is semantically independent of numeric fallback. It preserves the source
 	// expression needed to recompute a runtime string domain after derived-column
 	// or scalar-subquery flattening without adding another pointer to every Expr.
-	StringDomainSource   *Expr    `protobuf:"bytes,11,opt,name=string_domain_source,json=stringDomainSource,proto3" json:"string_domain_source,omitempty"`
+	StringDomainSource *Expr `protobuf:"bytes,11,opt,name=string_domain_source,json=stringDomainSource,proto3" json:"string_domain_source,omitempty"`
+	// IFNULL is lowered to CASE, but its reconciled common value remains a
+	// value-producing boundary for source-dependent integer consumers.
+	IfnullCommonValue bool `protobuf:"varint,12,opt,name=ifnull_common_value,json=ifnullCommonValue,proto3" json:"ifnull_common_value,omitempty"`
+	// A selector inlined from a projected column owns its reconciled result
+	// domain; integer consumers must not reinterpret its individual arms.
+	ProjectedCommonValue bool     `protobuf:"varint,13,opt,name=projected_common_value,json=projectedCommonValue,proto3" json:"projected_common_value,omitempty"`
 	XXX_NoUnkeyedLiteral struct{} `json:"-"`
 	XXX_unrecognized     []byte   `json:"-"`
 	XXX_sizecache        int32    `json:"-"`
@@ -3279,9 +3285,24 @@ func (m *PreparedNumericMetadata) GetStringDomainSource() *Expr {
 	return nil
 }
 
+func (m *PreparedNumericMetadata) GetIfnullCommonValue() bool {
+	if m != nil {
+		return m.IfnullCommonValue
+	}
+	return false
+}
+
+func (m *PreparedNumericMetadata) GetProjectedCommonValue() bool {
+	if m != nil {
+		return m.ProjectedCommonValue
+	}
+	return false
+}
+
 type Expr struct {
 	Typ Type `protobuf:"bytes,1,opt,name=typ,proto3" json:"typ"`
 	// Types that are valid to be assigned to Expr:
+	//
 	//	*Expr_Lit
 	//	*Expr_P
 	//	*Expr_V
@@ -19069,6 +19090,26 @@ func (m *PreparedNumericMetadata) MarshalToSizedBuffer(dAtA []byte) (int, error)
 		i -= len(m.XXX_unrecognized)
 		copy(dAtA[i:], m.XXX_unrecognized)
 	}
+	if m.ProjectedCommonValue {
+		i--
+		if m.ProjectedCommonValue {
+			dAtA[i] = 1
+		} else {
+			dAtA[i] = 0
+		}
+		i--
+		dAtA[i] = 0x68
+	}
+	if m.IfnullCommonValue {
+		i--
+		if m.IfnullCommonValue {
+			dAtA[i] = 1
+		} else {
+			dAtA[i] = 0
+		}
+		i--
+		dAtA[i] = 0x60
+	}
 	if m.StringDomainSource != nil {
 		{
 			size, err := m.StringDomainSource.MarshalToSizedBuffer(dAtA[:i])
@@ -32573,6 +32614,12 @@ func (m *PreparedNumericMetadata) ProtoSize() (n int) {
 		l = m.StringDomainSource.ProtoSize()
 		n += 1 + l + sovPlan(uint64(l))
 	}
+	if m.IfnullCommonValue {
+		n += 2
+	}
+	if m.ProjectedCommonValue {
+		n += 2
+	}
 	if m.XXX_unrecognized != nil {
 		n += len(m.XXX_unrecognized)
 	}
@@ -41570,6 +41617,46 @@ func (m *PreparedNumericMetadata) Unmarshal(dAtA []byte) error {
 				return err
 			}
 			iNdEx = postIndex
+		case 12:
+			if wireType != 0 {
+				return fmt.Errorf("proto: wrong wireType = %d for field IfnullCommonValue", wireType)
+			}
+			var v int
+			for shift := uint(0); ; shift += 7 {
+				if shift >= 64 {
+					return ErrIntOverflowPlan
+				}
+				if iNdEx >= l {
+					return io.ErrUnexpectedEOF
+				}
+				b := dAtA[iNdEx]
+				iNdEx++
+				v |= int(b&0x7F) << shift
+				if b < 0x80 {
+					break
+				}
+			}
+			m.IfnullCommonValue = bool(v != 0)
+		case 13:
+			if wireType != 0 {
+				return fmt.Errorf("proto: wrong wireType = %d for field ProjectedCommonValue", wireType)
+			}
+			var v int
+			for shift := uint(0); ; shift += 7 {
+				if shift >= 64 {
+					return ErrIntOverflowPlan
+				}
+				if iNdEx >= l {
+					return io.ErrUnexpectedEOF
+				}
+				b := dAtA[iNdEx]
+				iNdEx++
+				v |= int(b&0x7F) << shift
+				if b < 0x80 {
+					break
+				}
+			}
+			m.ProjectedCommonValue = bool(v != 0)
 		default:
 			iNdEx = preIndex
 			skippy, err := skipPlan(dAtA[iNdEx:])
