@@ -681,8 +681,10 @@ func TestL2Norm(t *testing.T) {
 	tests := []testCase{
 		{
 			name: "Test1 - float32",
+			// #29083: l2_norm accumulates in float64, so an exactly-representable VECF32 yields the
+			// same accurate value as the VECF64 case, not the older float32-reduced result.
 			args: args{argF32: []float32{1, 2, 3}},
-			want: 3.741657257080078,
+			want: 3.741657386773941,
 		},
 		{
 			name: "Test2 - float64",

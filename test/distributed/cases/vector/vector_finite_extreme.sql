@@ -98,4 +98,20 @@ select l2_distance_sq_xc(cast('[1e40,0]' as vecf64(2)), cast('[0,0]' as vecf64(2
 select l2_distance(cast('[3,4]' as vecf64(2)), cast('[0,0]' as vecf64(2))) as go_path,
        l2_distance_xc(cast('[3,4]' as vecf64(2)), cast('[0,0]' as vecf64(2))) as c_path;
 
+-- l1_norm / l2_norm are DOUBLE functions, not index scores. A finite VECF32 whose norm exceeds the
+-- float32 range but fits double returns that representable double: the norm is accumulated in float64,
+-- so it neither overflows to +Inf nor errors (#29083).
+select l1_norm(cast('[2e38,2e38]' as vecf32(2)));
+select l2_norm(cast('[2.5e38,2.5e38]' as vecf32(2)));
+-- The norm does NOT share the distance kernel's float32-square contract: this vector has a finite
+-- L2 norm even though l2_distance(v,0) rejects its float32-squared intermediate.
+select l2_norm(cast('[1e20,0]' as vecf32(2))) as l2n_finite;
+select l2_distance(cast('[1e20,0]' as vecf32(2)), cast('[0,0]' as vecf32(2)));
+-- Ordinary VECF32 norms are exact.
+select l2_norm(cast('[3,4]' as vecf32(2))) as l2n,
+       l1_norm(cast('[3,-4]' as vecf32(2))) as l1n;
+-- VECF64 norms keep their existing float64-domain behavior.
+select l2_norm(cast('[1e300,1e300]' as vecf64(2))) as l2n64,
+       l1_norm(cast('[1e300,1e300]' as vecf64(2))) as l1n64;
+
 drop database vec_extreme;
