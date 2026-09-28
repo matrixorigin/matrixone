@@ -60,9 +60,26 @@ func TestIntegerArgumentProtocolBoundaries(t *testing.T) {
 			features, err := planpb.RequiredRemoteExpressionFeatures(p)
 			require.NoError(t, err)
 			require.Equal(t, id >= function.IntegerArgumentCastOverload, features.IntegerParameterCoercion)
+			require.Equal(t, id == 0 || id == 2 || id == 3, features.OrdinaryFloatInt64Bounds)
 			rt.SetGlobalVariables(moruntime.MOProtocolVersion, defines.MORPCVersion84)
 			err = validateRemoteExpressionPipelineProtocol(c.proc, p)
 			if !features.IntegerParameterCoercion {
+				if features.OrdinaryFloatInt64Bounds {
+					// These FLOAT -> INT64 identities use the corrected bounds,
+					// independently of the v85 private integer-argument casts.
+					require.ErrorContains(t, err, "version 94")
+					// Main's v93 is reserved for LAST_INSERT_ID migration and
+					// must not admit the strict numeric contract.
+					rt.SetGlobalVariables(moruntime.MOProtocolVersion, defines.MORPCVersion93)
+					require.ErrorContains(t, validateRemoteExpressionPipelineProtocol(c.proc, p), "version 94")
+					rt.SetGlobalVariables(moruntime.MOProtocolVersion, defines.MORPCVersion94)
+					require.NoError(t, validateRemoteExpressionPipelineProtocol(c.proc, p))
+					// The same ordinary identity with an integer source remains
+					// executable on old peers; do not fence every CAST0/2/3.
+					expr.GetF().Args[0].Typ.Id = int32(types.T_int64)
+					rt.SetGlobalVariables(moruntime.MOProtocolVersion, defines.MORPCVersion84)
+					err = validateRemoteExpressionPipelineProtocol(c.proc, p)
+				}
 				require.NoError(t, err)
 				return
 			}

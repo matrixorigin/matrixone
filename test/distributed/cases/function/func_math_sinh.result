@@ -1,3 +1,5 @@
+SET @func_math_sinh_saved_sql_mode = @@session.sql_mode;
+SET SESSION sql_mode = CONCAT_WS(',', NULLIF(@func_math_sinh_saved_sql_mode, ''), 'MYSQL_NUMERIC_COMPATIBILITY');
 SELECT SINH(PI());
 ➤ SINH(PI())[8,54,0]  𝄀
 11.548739357257748
@@ -110,3 +112,5 @@ SELECT a FROM t1 group by a having SINH(a)>0;
 drop table t1;
 SELECT SINH(0.745e5);
 Data truncation: data out of range: data type float64, DOUBLE value is out of range in 'sinh(74500)'
+SET SESSION sql_mode = @func_math_sinh_saved_sql_mode;
+SET @func_math_sinh_saved_sql_mode = NULL;

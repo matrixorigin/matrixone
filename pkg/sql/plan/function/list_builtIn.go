@@ -7913,7 +7913,7 @@ var supportedMathBuiltIns = []FuncNew{
 		functionId: ABS,
 		class:      plan.Function_STRICT,
 		layout:     STANDARD_FUNCTION,
-		checkFn:    fixedTypeMatchWithBoolNumericCast,
+		checkFn:    mathStringTypeMatch,
 
 		Overloads: []overload{
 			{
@@ -8043,7 +8043,7 @@ var supportedMathBuiltIns = []FuncNew{
 		functionId: SIGN,
 		class:      plan.Function_STRICT,
 		layout:     STANDARD_FUNCTION,
-		checkFn:    fixedTypeMatchWithBoolNumericCast,
+		checkFn:    mathStringTypeMatch,
 
 		Overloads: []overload{
 			{
@@ -8560,10 +8560,10 @@ var supportedMathBuiltIns = []FuncNew{
 	// function `ceil`, `ceiling`
 	{
 		functionId:        CEIL,
-		class:             plan.Function_STRICT | plan.Function_ZONEMAPPABLE,
-		integerParameters: []integerParameter{{position: 1, target: types.T_int64}},
+		class:             plan.Function_STRICT,
+		integerParameters: []integerParameter{{position: 1, target: types.T_int64, ordinaryCast: true}},
 		layout:            STANDARD_FUNCTION,
-		checkFn:           fixedTypeMatch,
+		checkFn:           mathStringTypeMatchKeepBoolStringFallback,
 
 		Overloads: []overload{
 			{
@@ -8686,6 +8686,9 @@ var supportedMathBuiltIns = []FuncNew{
 					return CeilDecimal256
 				},
 			},
+			// Keep the historical BOOL-to-VARCHAR fallback for CEIL/FLOOR.
+			// Character inputs are routed to the stable FLOAT64 overload by
+			// mathStringTypeMatchKeepBoolStringFallback.
 			{
 				overloadId: 12,
 				args:       []types.T{types.T_varchar},
@@ -8788,10 +8791,10 @@ var supportedMathBuiltIns = []FuncNew{
 	// function `floor`
 	{
 		functionId:        FLOOR,
-		class:             plan.Function_STRICT | plan.Function_ZONEMAPPABLE,
-		integerParameters: []integerParameter{{position: 1, target: types.T_int64}},
+		class:             plan.Function_STRICT,
+		integerParameters: []integerParameter{{position: 1, target: types.T_int64, ordinaryCast: true}},
 		layout:            STANDARD_FUNCTION,
-		checkFn:           fixedTypeMatch,
+		checkFn:           mathStringTypeMatchKeepBoolStringFallback,
 
 		Overloads: []overload{
 			{
@@ -9537,10 +9540,10 @@ var supportedMathBuiltIns = []FuncNew{
 	// function `round`
 	{
 		functionId:        ROUND,
-		class:             plan.Function_STRICT | plan.Function_ZONEMAPPABLE,
-		integerParameters: []integerParameter{{position: 1, target: types.T_int64}},
+		class:             plan.Function_STRICT,
+		integerParameters: []integerParameter{{position: 1, target: types.T_int64, ordinaryCast: true}},
 		layout:            STANDARD_FUNCTION,
-		checkFn:           fixedTypeMatchWithBoolNumericCast,
+		checkFn:           mathStringTypeMatch,
 
 		Overloads: []overload{
 			{
@@ -9670,9 +9673,9 @@ var supportedMathBuiltIns = []FuncNew{
 	{
 		functionId:        TRUNCATE,
 		class:             plan.Function_STRICT,
-		integerParameters: []integerParameter{{position: 1, target: types.T_int64}},
+		integerParameters: []integerParameter{{position: 1, target: types.T_int64, ordinaryCast: true}},
 		layout:            STANDARD_FUNCTION,
-		checkFn:           fixedTypeMatchWithBoolNumericCast,
+		checkFn:           mathStringTypeMatch,
 
 		Overloads: []overload{
 			{

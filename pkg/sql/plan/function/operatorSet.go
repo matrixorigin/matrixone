@@ -819,7 +819,7 @@ func IffConditionTruthyAt(vec *vector.Vector, row uint64, mode SQLCompatibilityM
 	case types.T_decimal256:
 		return vector.GetFixedAtNoTypeCheck[types.Decimal256](vec, int(row)).Compare(types.Decimal256{}) != 0, nil
 	case types.T_char, types.T_varchar, types.T_binary, types.T_varbinary, types.T_blob, types.T_text:
-		value, err := parseBytesToFloat(vec.GetBytesAt(int(row)), vec.GetIsBin(), 64, mode)
+		value, err := parseBytesToFloat(vec.GetBytesAt(int(row)), vec.GetIsBinAt(int(row)), 64, mode)
 		if err != nil {
 			return false, err
 		}

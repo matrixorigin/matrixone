@@ -1316,6 +1316,7 @@ func initExecuteStmtParamWithResolverInSession(
 	}
 	previousGroupConcatMaxLenFloor := prepareStmt.groupConcatMaxLenFloor
 	currentNativeMode := owner.sqlModeHasMatrixOneNative()
+	currentMySQLNumericCompatibilityMode := owner.sqlModeHasMySQLNumericCompatibility()
 	currentOnlyFullGroupBy := owner.sqlModeHasOnlyFullGroupBy()
 	currentBoolSumAvg := owner.sqlModeHasEnableBoolSumAvg()
 	currentNoUnsignedSubtraction := owner.sqlModeHasNoUnsignedSubtraction()
@@ -1368,6 +1369,7 @@ func initExecuteStmtParamWithResolverInSession(
 	// value, while subscription metadata plans expand the current visible
 	// subscription set. Rebuild both classes on every EXECUTE.
 	modeMismatch := prepareStmt.NativeMode != currentNativeMode ||
+		prepareStmt.MySQLNumericCompatibilityMode != currentMySQLNumericCompatibilityMode ||
 		prepareStmt.sqlModeFlagsSet && (prepareStmt.OnlyFullGroupBy != currentOnlyFullGroupBy ||
 			prepareStmt.BoolSumAvg != currentBoolSumAvg ||
 			prepareStmt.NoUnsignedSubtraction != currentNoUnsignedSubtraction) ||
@@ -1455,6 +1457,7 @@ func initExecuteStmtParamWithResolverInSession(
 			}
 		}
 		prepareStmt.NativeMode = currentNativeMode
+		prepareStmt.MySQLNumericCompatibilityMode = currentMySQLNumericCompatibilityMode
 		prepareStmt.OnlyFullGroupBy = currentOnlyFullGroupBy
 		prepareStmt.BoolSumAvg = currentBoolSumAvg
 		prepareStmt.NoUnsignedSubtraction = currentNoUnsignedSubtraction

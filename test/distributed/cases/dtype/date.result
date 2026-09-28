@@ -129,9 +129,13 @@ SELECT id, id >= 20200102 FROM t_date;
 ➤ id[91,64,0]  ¦  id >= 20200102[-7,1,0]  𝄀
 2020-01-01  ¦  0  𝄀
 2022-01-02  ¦  1
+set @date_string_compare_saved_sql_mode = @@session.sql_mode;
+set session sql_mode = concat_ws(',', nullif(@date_string_compare_saved_sql_mode, ''), 'MYSQL_NUMERIC_COMPATIBILITY');
 SELECT 1.1 <= '2020-01-01';
 ➤ 1.1 <= 2020-01-01[-7,1,0]  𝄀
 1
+set session sql_mode = @date_string_compare_saved_sql_mode;
+set @date_string_compare_saved_sql_mode = NULL;
 SELECT id, id = 202020101 FROM t_date;
 ➤ id[91,64,0]  ¦  id = 202020101[-7,1,0]  𝄀
 2020-01-01  ¦  0  𝄀

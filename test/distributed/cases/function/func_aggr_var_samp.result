@@ -1,3 +1,5 @@
+SET @func_aggr_var_samp_saved_sql_mode = @@session.sql_mode;
+SET SESSION sql_mode = CONCAT_WS(',', NULLIF(@func_aggr_var_samp_saved_sql_mode, ''), 'MYSQL_NUMERIC_COMPATIBILITY');
 SELECT VAR_SAMP(null);
 ➤ VAR_SAMP(null)[8,54,0]  𝄀
 null
@@ -275,3 +277,5 @@ select VAR_SAMP(a) from test06;
 99999999991023042560.000000000000
 drop table test06;
 drop database test;
+SET SESSION sql_mode = @func_aggr_var_samp_saved_sql_mode;
+SET @func_aggr_var_samp_saved_sql_mode = NULL;

@@ -1,0 +1,216 @@
+DROP DATABASE IF EXISTS issue28487_math_string;
+CREATE DATABASE issue28487_math_string;
+USE issue28487_math_string;
+SET @old_math_string_numeric_sql_mode_28487 = @@session.sql_mode;
+
+-- The server default is strict: incomplete, empty, whitespace-only, and
+-- malformed-exponent values are rejected unless compatibility is explicit.
+SELECT ABS('1.5tail') AS abs_default_prefix_error;
+SELECT ABS('abc') AS abs_default_invalid_error;
+SELECT ABS('') AS abs_default_empty_error;
+SELECT ABS('   ') AS abs_default_whitespace_error;
+SELECT ABS('1eabc') AS abs_default_exponent_error;
+SELECT CAST('1.5tail' AS DOUBLE) AS cast_default_prefix_error;
+
+-- Valid signed, surrounding-space, and complete exponent forms remain valid.
+SELECT ABS('  -1.5 ') AS abs_signed_space,
+    CEIL('+1.25e1') AS ceil_complete_exponent,
+    ROUND('1.25e1') AS round_complete_exponent,
+    TRUNCATE('-1.25e1', 1) AS truncate_complete_exponent;
+
+-- Empty sql_mode has the same strict behavior as the server default.
+SET SESSION sql_mode = '';
+SELECT ABS('1.5tail') AS abs_empty_mode_prefix_error;
+
+CREATE TABLE src(id INT PRIMARY KEY, s VARCHAR(30));
+INSERT INTO src VALUES
+    (1, '1.5'),
+    (2, '-1.5'),
+    (3, ' 1.5'),
+    (4, '+1.5'),
+    (5, '1.5tail'),
+    (6, 'abc'),
+    (7, ''),
+    (8, NULL);
+
+-- Strict vector execution uses the same complete-token rule and preserves NULL.
+SELECT id, ABS(s) AS abs_strict_vector FROM src WHERE id < 5 ORDER BY id;
+SELECT id, ABS(s) AS abs_null FROM src WHERE id = 8;
+SELECT id, ABS(s) AS abs_strict_column_error FROM src WHERE id = 5;
+
+-- Opt in to the existing MySQL numeric-prefix algorithm.
+SET SESSION sql_mode = 'MYSQL_NUMERIC_COMPATIBILITY';
+SELECT
+    ABS('1.5') AS abs_literal,
+    CEIL(' 1.5') AS ceil_literal,
+    CEILING('abc') AS ceiling_literal,
+    FLOOR('1.5tail') AS floor_literal,
+    MOD('-1.5', 2) AS mod_literal,
+	MOD(2, '-1.5tail') AS mod_right_literal,
+    ROUND('1.5') AS round_literal,
+    SIGN('+1.5') AS sign_literal,
+    TRUNCATE('1.5tail', 1) AS truncate_literal,
+    CAST('1.5tail' AS DOUBLE) AS cast_compatibility;
+
+-- VARCHAR vectors use the same prefix conversion and preserve NULL.
+SELECT
+    id,
+    ABS(s) AS abs_varchar,
+    CEIL(s) AS ceil_varchar,
+    FLOOR(s) AS floor_varchar,
+    MOD(s, 2) AS mod_varchar,
+    ROUND(s) AS round_varchar,
+    SIGN(s) AS sign_varchar,
+    TRUNCATE(s, 1) AS truncate_varchar
+FROM src
+WHERE id < 8
+ORDER BY id;
+SELECT id, ABS(s) AS abs_null_compatibility FROM src WHERE id = 8;
+
+-- Binary literal provenance is unchanged: X'31' remains numeric value 49.
+SELECT ABS(X'31') AS binary_literal_value;
+SELECT ABS(B'00110001') AS bit_literal_value;
+
+-- Runtime BINARY domain and HEX literal numeric provenance are separate axes.
+-- CASE/IF/COALESCE must preserve the selected row's HEX/BIT marker while an
+-- ordinary BINARY cast or column continues to parse its bytes as text.
+CREATE TABLE numeric_binary_provenance(id INT PRIMARY KEY, binary_value BINARY(1));
+INSERT INTO numeric_binary_provenance VALUES (1, '1'), (2, '1'), (3, '1'), (4, '1');
+SELECT id,
+    ABS(CASE
+        WHEN id = 1 THEN CAST('1' AS BINARY)
+        WHEN id = 2 THEN X'31'
+        WHEN id = 3 THEN '1'
+        ELSE NULL
+    END) AS case_numeric_provenance,
+    ABS(CASE WHEN id = 2 THEN X'31' ELSE binary_value END) AS case_binary_column_provenance,
+    ABS(IF(id = 2, X'31', CAST('1' AS BINARY))) AS if_numeric_provenance,
+    ABS(COALESCE(IF(id = 2, X'31', NULL), CAST('1' AS BINARY))) AS coalesce_numeric_provenance
+FROM numeric_binary_provenance
+ORDER BY id;
+SELECT id,
+    ABS(CASE WHEN id = 3 THEN B'00110001' ELSE CAST('1' AS BINARY) END) AS bit_case_provenance,
+    ABS(IF(id = 3, B'00110001', CAST('1' AS BINARY))) AS bit_if_provenance,
+    ABS(COALESCE(IF(id = 3, B'00110001', NULL), CAST('1' AS BINARY))) AS bit_coalesce_provenance
+FROM numeric_binary_provenance
+ORDER BY id;
+
+-- Execution-only HEX/BIT provenance must not become stored column metadata.
+-- Once materialized, both byte strings are ordinary values and numeric math
+-- parses their bytes as text rather than treating 0x31 as the number 49.
+CREATE TABLE numeric_binary_materialized(id INT PRIMARY KEY, val VARBINARY(8));
+INSERT INTO numeric_binary_materialized
+SELECT id, CASE
+    WHEN id = 2 THEN X'31'
+    ELSE CAST('1' AS BINARY)
+END
+FROM numeric_binary_provenance
+WHERE id <= 2;
+DROP TABLE numeric_binary_provenance;
+SELECT id, ABS(val) AS stored_numeric_value
+FROM numeric_binary_materialized
+ORDER BY id;
+DROP TABLE numeric_binary_materialized;
+
+-- Prefix compatibility keeps its warning code/count; empty and whitespace-only
+-- inputs still coerce to zero without a warning.
+SELECT ABS('1.5tail') AS abs_prefix_warning;
+SHOW WARNINGS;
+SELECT ABS('abc') AS abs_invalid_warning;
+SHOW WARNINGS;
+SELECT ABS('1eabc') AS abs_malformed_exponent_warning;
+SHOW WARNINGS;
+SELECT ABS('') AS abs_empty_no_warning;
+SHOW WARNINGS;
+SELECT ABS('   ') AS abs_whitespace_no_warning;
+SHOW WARNINGS;
+
+-- Prepared SQL and user-variable values use the same explicit compatibility mode.
+PREPARE math_string_numeric_stmt_28487 FROM 'SELECT ABS(?) AS abs_prepare, CEIL(?) AS ceil_prepare, CEILING(?) AS ceiling_prepare, FLOOR(?) AS floor_prepare, MOD(?, 2) AS mod_prepare, ROUND(?) AS round_prepare, SIGN(?) AS sign_prepare, TRUNCATE(?, 1) AS truncate_prepare';
+SET @math_string_numeric_v_28487 = '1.5tail';
+EXECUTE math_string_numeric_stmt_28487 USING @math_string_numeric_v_28487, @math_string_numeric_v_28487, @math_string_numeric_v_28487, @math_string_numeric_v_28487, @math_string_numeric_v_28487, @math_string_numeric_v_28487, @math_string_numeric_v_28487, @math_string_numeric_v_28487;
+SET @math_string_numeric_v_28487 = 'abc';
+EXECUTE math_string_numeric_stmt_28487 USING @math_string_numeric_v_28487, @math_string_numeric_v_28487, @math_string_numeric_v_28487, @math_string_numeric_v_28487, @math_string_numeric_v_28487, @math_string_numeric_v_28487, @math_string_numeric_v_28487, @math_string_numeric_v_28487;
+SET @math_string_numeric_v_28487 = '';
+EXECUTE math_string_numeric_stmt_28487 USING @math_string_numeric_v_28487, @math_string_numeric_v_28487, @math_string_numeric_v_28487, @math_string_numeric_v_28487, @math_string_numeric_v_28487, @math_string_numeric_v_28487, @math_string_numeric_v_28487, @math_string_numeric_v_28487;
+DEALLOCATE PREPARE math_string_numeric_stmt_28487;
+
+PREPARE math_string_numeric_null_stmt_28487 FROM 'SELECT ABS(?) AS abs_prepare, CEIL(?) AS ceil_prepare, CEILING(?) AS ceiling_prepare, MOD(?, 2) AS mod_prepare, ROUND(?) AS round_prepare, SIGN(?) AS sign_prepare, TRUNCATE(?, 1) AS truncate_prepare';
+SET @math_string_numeric_v_28487 = NULL;
+EXECUTE math_string_numeric_null_stmt_28487 USING @math_string_numeric_v_28487, @math_string_numeric_v_28487, @math_string_numeric_v_28487, @math_string_numeric_v_28487, @math_string_numeric_v_28487, @math_string_numeric_v_28487, @math_string_numeric_v_28487;
+DEALLOCATE PREPARE math_string_numeric_null_stmt_28487;
+
+-- A normal cached constant statement must not retain a prior mode's result.
+SET SESSION sql_mode = '';
+SELECT ABS('1.5tail') AS cached_constant_mode_flip;
+SET SESSION sql_mode = 'MYSQL_NUMERIC_COMPATIBILITY';
+SELECT ABS('1.5tail') AS cached_constant_mode_flip;
+SET SESSION sql_mode = '';
+SELECT ABS('1.5tail') AS cached_constant_mode_flip;
+SET SESSION sql_mode = 'MYSQL_NUMERIC_COMPATIBILITY';
+SELECT ABS('1.5tail') AS cached_constant_mode_flip;
+
+-- A SQL PREPARE created in strict mode is rebuilt across both mode transitions.
+SET SESSION sql_mode = '';
+PREPARE math_string_mode_flip_stmt_28487 FROM 'SELECT ABS(?) AS abs_mode_flip';
+SET @math_string_numeric_v_28487 = '1.5tail';
+EXECUTE math_string_mode_flip_stmt_28487 USING @math_string_numeric_v_28487;
+SET SESSION sql_mode = 'MYSQL_NUMERIC_COMPATIBILITY';
+EXECUTE math_string_mode_flip_stmt_28487 USING @math_string_numeric_v_28487;
+SET SESSION sql_mode = '';
+EXECUTE math_string_mode_flip_stmt_28487 USING @math_string_numeric_v_28487;
+SET SESSION sql_mode = 'MYSQL_NUMERIC_COMPATIBILITY';
+EXECUTE math_string_mode_flip_stmt_28487 USING @math_string_numeric_v_28487;
+DEALLOCATE PREPARE math_string_mode_flip_stmt_28487;
+
+-- MATRIXONE_NATIVE always wins when both mode bits are present.
+SET SESSION sql_mode = 'MATRIXONE_NATIVE,MYSQL_NUMERIC_COMPATIBILITY';
+SELECT ABS('1.5tail') AS abs_both_modes_prefix_error;
+SELECT ABS('abc') AS abs_both_modes_invalid_error;
+
+-- MATRIXONE_NATIVE alone remains strict for direct and prepared string math.
+SET SESSION sql_mode = 'MATRIXONE_NATIVE';
+SELECT ABS('1.5tail') AS abs_native_prefix_error;
+SELECT ABS('abc') AS abs_native_invalid_error;
+SELECT ABS('') AS abs_native_empty_error;
+SELECT CEIL('1.5tail') AS ceil_native_prefix_error;
+SELECT FLOOR('1.5tail') AS floor_native_prefix_error;
+SELECT SIGN('1.5tail') AS sign_native_prefix_error;
+SELECT ROUND('1.5tail') AS round_native_prefix_error;
+SELECT TRUNCATE('1.5tail', 0) AS truncate_native_prefix_error;
+SELECT MOD('1.5tail', 2) AS mod_native_prefix_error;
+SELECT MOD(2, '1.5tail') AS mod_native_right_prefix_error;
+
+-- The same native-mode contract holds for VARCHAR columns.
+SELECT id, ABS(s) AS abs_native_column_error FROM src WHERE id = 5;
+
+SET @math_string_native_v_28487 = '1.5tail';
+PREPARE math_string_native_abs_stmt_28487 FROM 'SELECT ABS(?) AS abs_native_prepare';
+EXECUTE math_string_native_abs_stmt_28487 USING @math_string_native_v_28487;
+DEALLOCATE PREPARE math_string_native_abs_stmt_28487;
+
+-- Native integer, FLOAT, and DECIMAL sources retain their existing domains.
+SET SESSION sql_mode = 'MYSQL_NUMERIC_COMPATIBILITY';
+SELECT
+    ABS(-2) AS abs_int_compatibility,
+    CEIL(1.5) AS ceil_float_compatibility,
+    FLOOR(CAST(-1.5 AS DECIMAL(5, 1))) AS floor_decimal_compatibility,
+    MOD(5, 2) AS mod_int_compatibility,
+    ROUND(1.5) AS round_float_compatibility,
+    SIGN(CAST(-1.5 AS DECIMAL(5, 1))) AS sign_decimal_compatibility,
+    TRUNCATE(CAST(1.5 AS DECIMAL(5, 1)), 0) AS truncate_decimal_compatibility;
+SET SESSION sql_mode = '';
+SELECT
+    ABS(-2) AS abs_int,
+    CEIL(1.5) AS ceil_float,
+    FLOOR(CAST(-1.5 AS DECIMAL(5, 1))) AS floor_decimal,
+    MOD(5, 2) AS mod_int,
+    ROUND(1.5) AS round_float,
+    SIGN(CAST(-1.5 AS DECIMAL(5, 1))) AS sign_decimal,
+    TRUNCATE(CAST(1.5 AS DECIMAL(5, 1)), 0) AS truncate_decimal;
+
+SET SESSION sql_mode = @old_math_string_numeric_sql_mode_28487;
+DROP DATABASE issue28487_math_string;
+SELECT COUNT(*) AS residual_database_count
+FROM information_schema.schemata
+WHERE schema_name = 'issue28487_math_string';
