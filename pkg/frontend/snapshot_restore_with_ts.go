@@ -392,7 +392,7 @@ func restoreDatabaseFromTS(
 		// if restore to cluster, and the db is sub, append the sub db to restore list
 		getLogger(sid).Info(fmt.Sprintf("[%d:%d] append sub db to restore list: %v, at restore cluster account %d", restoreAccount, snapshotTs, dbName, toAccountId))
 		key := genKey(fmt.Sprint(restoreAccount), dbName)
-		subDbToRestore[key] = NewSubDbRestoreRecord(dbName, restoreAccount, createDbSql, snapshotTs)
+		subDbToRestore[key] = NewSubDbRestoreRecord(dbName, restoreAccount, toAccountId, createDbSql, snapshotTs)
 		return
 	}
 
