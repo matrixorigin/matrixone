@@ -485,6 +485,11 @@ select p.id, (with q(n) as (select abs(p.v)) select n from q) as c
 from guarded_abs p where p.id=2;
 ➤ id[4,32,0]  ¦  c[-5,64,0]  𝄀
 2  ¦  2
+select p.id, (with q(n) as (select abs(p.v)) select n from q) as c
+from guarded_abs p where p.id=1;
+Data truncation: data out of range: data type int, '-9223372036854775808'
+select abs(p.v) from guarded_abs p where p.id=1;
+Data truncation: data out of range: data type int, '-9223372036854775808'
 drop table guarded_abs;
 select p.id,
 (with recursive r(n) as (

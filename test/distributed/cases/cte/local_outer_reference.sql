@@ -359,6 +359,10 @@ select p.id, case when p.id=1 then 0 else (select abs(p.v)) end as c
 from guarded_abs p order by p.id;
 select p.id, (with q(n) as (select abs(p.v)) select n from q) as c
 from guarded_abs p where p.id=2;
+-- With no skipped consumer branch, both forms must expose the active error.
+select p.id, (with q(n) as (select abs(p.v)) select n from q) as c
+from guarded_abs p where p.id=1;
+select abs(p.v) from guarded_abs p where p.id=1;
 drop table guarded_abs;
 
 -- Empty outer input starts no parameter partitions.
