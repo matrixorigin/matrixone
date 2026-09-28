@@ -729,27 +729,32 @@ func convertDecimal(text string, target types.Type, parse func(string) (any, err
 	if outOfRange {
 		return Result{Status: StatusRangeError, Err: decimalRangeError(text, target)}
 	}
-	input := text
-	if known {
-		input = canonical
-	}
-	value, err := parse(input)
-	if err != nil {
-		return Result{Status: decimalFailureStatus(text), Err: err}
-	}
-	isHexadecimal, withinHexWidth := decimalHexValueWithinWidth(text, target)
 	if !known {
+		// Hexadecimal and other legacy spellings must be analyzed before the
+		// destination scale is applied. A nil parser error is not proof that
+		// rescaling preserves the coefficient.
+		canonical, truncated, known, outOfRange = canonicalLegacyDecimalInput(text, target)
+		if outOfRange {
+			return Result{Status: StatusRangeError, Err: decimalRangeError(text, target)}
+		}
+		if !known {
+			// Preserve the established parser diagnostic for rejected inputs,
+			// without treating an unavailable diagnostic analysis as exactness.
+			_, err := parse(text)
+			if err == nil {
+				err = conversionError(target, text)
+			}
+			return Result{Status: decimalFailureStatus(text), Err: err}
+		}
+		isHexadecimal, withinHexWidth := decimalHexValueWithinWidth(text, target)
 		if isHexadecimal && !withinHexWidth {
 			return Result{Status: StatusRangeError, Err: decimalRangeError(text, target)}
 		}
-		if !decimalValueWithinWidth(value, target) {
-			return Result{Status: StatusRangeError, Err: decimalRangeError(text, target)}
-		}
 	}
-	// Inputs outside the bounded grammar retain the legacy parser's value and
-	// diagnostic contract. Range is checked above for every successful fallback;
-	// scale-loss warnings come only from the bounded canonical path, where the
-	// discarded digits are observable without an unbounded numeric intermediate.
+	value, err := parse(canonical)
+	if err != nil {
+		return Result{Status: decimalFailureStatus(text), Err: err}
+	}
 	return decimalResult(value, target, truncated)
 }
 
@@ -793,30 +798,6 @@ func decimalRangeError(text string, target types.Type) error {
 	default:
 		return conversionError(target, text)
 	}
-}
-
-func decimalValueWithinWidth(value any, target types.Type) bool {
-	width := target.Width
-	if limit := decimalWidthLimit(target.Oid); width > limit {
-		width = limit
-	}
-	if width < 0 {
-		return false
-	}
-
-	var formatted string
-	switch value := value.(type) {
-	case types.Decimal64:
-		formatted = value.Format(0)
-	case types.Decimal128:
-		formatted = value.Format(0)
-	case types.Decimal256:
-		formatted = value.Format(0)
-	default:
-		return false
-	}
-	magnitude := strings.TrimLeft(strings.TrimPrefix(formatted, "-"), "0")
-	return len(magnitude) <= int(width)
 }
 
 func decimalHexValueWithinWidth(text string, target types.Type) (isHexadecimal, within bool) {
@@ -914,10 +895,54 @@ func canonicalDecimalInput(text string, target types.Type) (canonical string, tr
 	}
 
 	keepLimit := int64(width) + 1
-	scan, ok := scanDecimal(text, keepLimit)
+	scan, ok := scanDecimal(text, keepLimit, target.Oid)
 	if !ok {
 		return "", false, false, false
 	}
+	return canonicalScannedDecimal(scan, target, width)
+}
+
+// canonicalLegacyDecimalInput obtains the fixed-width coefficient and source
+// scale, rather than the already rescaled destination value. Formatting at scale
+// zero is bounded by the representation width even for a huge source scale.
+func canonicalLegacyDecimalInput(text string, target types.Type) (string, bool, bool, bool) {
+	width := target.Width
+	limit := decimalWidthLimit(target.Oid)
+	if limit == 0 || width <= 0 || target.Scale < 0 || target.Scale > limit {
+		return "", false, false, false
+	}
+	if width > limit {
+		width = limit
+	}
+	var coefficient string
+	var scale int32
+	var err error
+	switch target.Oid {
+	case types.T_decimal64:
+		var value types.Decimal64
+		value, scale, err = types.Parse64(text)
+		coefficient = value.Format(0)
+	case types.T_decimal128:
+		var value types.Decimal128
+		value, scale, err = types.Parse128(text)
+		coefficient = value.Format(0)
+	case types.T_decimal256:
+		var value types.Decimal256
+		value, scale, err = types.Parse256(text)
+		coefficient = value.Format(0)
+	}
+	if err != nil {
+		return "", false, false, false
+	}
+	scan, ok := scanDecimal(coefficient, int64(width)+1, target.Oid)
+	if !ok {
+		return "", false, false, false
+	}
+	scan.point -= int64(scale)
+	return canonicalScannedDecimal(scan, target, width)
+}
+
+func canonicalScannedDecimal(scan decimalScan, target types.Type, width int32) (canonical string, truncated, known, outOfRange bool) {
 	if scan.digitCount == 0 {
 		return "0", false, true, false
 	}
@@ -975,7 +1000,7 @@ func canonicalDecimalInput(text string, target types.Type) (canonical string, tr
 // scanDecimal retains only significant digits needed to form a target-width
 // coefficient. It records whether non-zero digits were omitted so warning
 // classification never depends on an unbounded intermediate number.
-func scanDecimal(text string, keepLimit int64) (decimalScan, bool) {
+func scanDecimal(text string, keepLimit int64, oid types.T) (decimalScan, bool) {
 	text = strings.TrimSpace(text)
 	var scan decimalScan
 	scan.exponentSign = 1
@@ -983,15 +1008,12 @@ func scanDecimal(text string, keepLimit int64) (decimalScan, bool) {
 	digitIndex := int64(0)
 	digitsBeforeDot := int64(0)
 	seenDot := false
-	seenExponent := false
 	inExponent := false
-	exponentSignSeen := false
-	exponentDigitsSeen := false
 	const maxExponent = int64(1 << 60)
 
 	for i := 0; i < len(text); i++ {
 		ch := text[i]
-		if ch == ' ' {
+		if ch == ' ' || ch == '+' && oid != types.T_decimal64 {
 			continue
 		}
 		if i == 0 && (ch == '-' || ch == '+') {
@@ -1023,10 +1045,9 @@ func scanDecimal(text string, keepLimit int64) (decimalScan, bool) {
 				}
 				seenDot = true
 			case ch == 'e':
-				if seenExponent || digitIndex == 0 {
+				if digitIndex == 0 {
 					return decimalScan{}, false
 				}
-				seenExponent = true
 				inExponent = true
 			default:
 				return decimalScan{}, false
@@ -1034,18 +1055,25 @@ func scanDecimal(text string, keepLimit int64) (decimalScan, bool) {
 			continue
 		}
 
-		if !exponentSignSeen && !exponentDigitsSeen && (ch == '-' || ch == '+') {
-			scan.exponentSign = 1
-			if ch == '-' {
-				scan.exponentSign = -1
+		// Legacy parsers concatenate exponent digits across repeated e and
+		// signs. A minus anywhere in the exponent is sticky; a later plus
+		// does not undo it ("1e2-3" means 1e-23).
+		switch ch {
+		case '-':
+			scan.exponentSign = -1
+			continue
+		case '+', 'e':
+			continue
+		case '.':
+			if seenDot {
+				return decimalScan{}, false
 			}
-			exponentSignSeen = true
+			seenDot = true
 			continue
 		}
 		if ch < '0' || ch > '9' {
 			return decimalScan{}, false
 		}
-		exponentDigitsSeen = true
 		if scan.exponentHuge {
 			continue
 		}
@@ -1060,8 +1088,7 @@ func scanDecimal(text string, keepLimit int64) (decimalScan, bool) {
 		return decimalScan{}, false
 	}
 	// ParseDecimal accepts a missing exponent number (for example, "1e+")
-	// as a zero exponent. Keep that established behavior while rejecting a
-	// second sign after exponent digits.
+	// as a zero exponent, just as it ignores repeated exponent markers.
 	if firstNonZero < 0 {
 		return scan, true
 	}

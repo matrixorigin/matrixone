@@ -380,8 +380,8 @@ func TestConvertScalarDecimalBoundaryMatrix(t *testing.T) {
 			}
 
 			lossyFallback := ConvertScalar(parseConversionValue(t, `"1e2-3"`), test.target)
-			require.Equal(t, StatusSuccess, lossyFallback.Status)
-			require.Nil(t, lossyFallback.Warning)
+			require.Equal(t, StatusTruncated, lossyFallback.Status)
+			require.NotNil(t, lossyFallback.Warning)
 			require.Equal(t, "0", decimalValueCoefficient(lossyFallback.Value).String())
 		})
 	}
@@ -429,46 +429,93 @@ func TestConvertScalarDecimalBoundaryMatrix(t *testing.T) {
 	}
 }
 
-func TestConvertScalarLegacyDecimalFallbackRetainsParserContract(t *testing.T) {
-	legacy := []struct {
-		name   string
-		target types.Type
-		input  string
-		parse  func(string) (any, error)
+func TestConvertScalarLegacyDecimalDiagnostics(t *testing.T) {
+	// Fixed coefficients follow the legacy grammar: exponent digits concatenate,
+	// any exponent minus makes the exponent negative, and repeated e is ignored.
+	// These expectations deliberately do not call the production decimal parser.
+	cases := []struct {
+		input       string
+		coefficient string
+		truncated   bool
 	}{
-		{
-			name:   "decimal64 malformed exponent",
-			target: types.New(types.T_decimal64, 10, 2),
-			input:  "1e2-3",
-			parse: func(input string) (any, error) {
-				return types.ParseDecimal64(input, 10, 2)
-			},
-		},
-		{
-			name:   "decimal128 malformed exponent",
-			target: types.New(types.T_decimal128, 20, 2),
-			input:  "1e2-3",
-			parse: func(input string) (any, error) {
-				return types.ParseDecimal128(input, 20, 2)
-			},
-		},
-		{
-			name:   "decimal256 malformed exponent",
-			target: types.New(types.T_decimal256, 40, 2),
-			input:  "1e2e3",
-			parse: func(input string) (any, error) {
-				return types.ParseDecimal256(input, 40, 2)
-			},
-		},
+		{"1e2-3", "0", true},
+		{"1e0-0", "100", false},
+		{"1.2345e0e0", "123", true},
+		{"1.2300e0e0", "123", false},
+		{"-1.235e-0+0", "-124", true},
+		{"1e--0+2", "1", false},
+		{"1e-0e3", "0", true},
+		{"1e.2", "10000", false},
+		{"0x1", "100", false},
+		{"00x1", "100", false},
+		{"0.00x1", "1", false},
+		{"0.000x1", "0", true},
+		{"0.000x5", "1", true},
+		{"-0.000x5", "-1", true},
+		{"1.2349999999999999999e0e0", "123", true},
 	}
-	for _, test := range legacy {
-		t.Run(test.name, func(t *testing.T) {
-			want, err := test.parse(test.input)
-			require.NoError(t, err, "legacy parser must accept %q", test.input)
-			result := ConvertScalar(parseConversionValue(t, strconv.Quote(test.input)), test.target)
-			require.Equal(t, StatusSuccess, result.Status)
-			require.Nil(t, result.Warning)
-			require.Equal(t, want, result.Value)
+	for _, oid := range []types.T{types.T_decimal64, types.T_decimal128, types.T_decimal256} {
+		t.Run(oid.String(), func(t *testing.T) {
+			target := types.New(oid, 10, 2)
+			// Decimal128/256 historically ignore plus signs within a mantissa;
+			// Decimal64 rejects them. Do not unify these input grammars silently.
+			inlinePlus := ConvertScalar(parseConversionValue(t, `"1.2+35"`), target)
+			if oid == types.T_decimal64 {
+				require.Equal(t, StatusConversionError, inlinePlus.Status)
+				require.Error(t, inlinePlus.Err)
+			} else {
+				require.Equal(t, StatusTruncated, inlinePlus.Status)
+				require.Equal(t, "124", decimalValueCoefficient(inlinePlus.Value).String())
+				require.NotNil(t, inlinePlus.Warning)
+				require.Equal(t, moerr.WARN_DATA_TRUNCATED, inlinePlus.Warning.Code)
+			}
+			for _, input := range []string{"0xz", "1e--x", "1.2.3e0e0"} {
+				result := ConvertScalar(parseConversionValue(t, strconv.Quote(input)), target)
+				require.Equal(t, StatusConversionError, result.Status)
+				require.Error(t, result.Err)
+				require.Nil(t, result.Warning)
+			}
+			for _, input := range []string{"1000e0e0", "-1000e0e0", "999.5e0e0", "-999.5e0e0"} {
+				result := ConvertScalar(parseConversionValue(t, strconv.Quote(input)), types.New(oid, 3, 0))
+				require.Equal(t, StatusRangeError, result.Status)
+				require.Error(t, result.Err)
+			}
+			for _, input := range []string{"999e0e0", "-999e0e0"} {
+				result := ConvertScalar(parseConversionValue(t, strconv.Quote(input)), types.New(oid, 3, 0))
+				require.Equal(t, StatusSuccess, result.Status)
+				require.NoError(t, result.Err)
+				require.Nil(t, result.Warning)
+			}
+			for _, test := range cases {
+				t.Run(test.input, func(t *testing.T) {
+					result := ConvertScalar(parseConversionValue(t, strconv.Quote(test.input)), target)
+					require.NoError(t, result.Err)
+					require.Equal(t, test.coefficient, decimalValueCoefficient(result.Value).String())
+					if test.truncated {
+						require.Equal(t, StatusTruncated, result.Status)
+						require.NotNil(t, result.Warning)
+						require.Equal(t, moerr.WARN_DATA_TRUNCATED, result.Warning.Code)
+					} else {
+						require.Equal(t, StatusSuccess, result.Status)
+						require.Nil(t, result.Warning)
+					}
+					mp := mpool.MustNewZero()
+					vec := vector.NewVec(target)
+					defer vec.Free(mp)
+					require.NoError(t, AppendResult(vec, result, mp))
+					require.Equal(t, 1, vec.Length())
+					var stored any
+					switch oid {
+					case types.T_decimal64:
+						stored = vector.GetFixedAtNoTypeCheck[types.Decimal64](vec, 0)
+					case types.T_decimal128:
+						stored = vector.GetFixedAtNoTypeCheck[types.Decimal128](vec, 0)
+					case types.T_decimal256:
+						stored = vector.GetFixedAtNoTypeCheck[types.Decimal256](vec, 0)
+					}
+					require.Equal(t, test.coefficient, decimalValueCoefficient(stored).String())
+				})
+			}
 		})
 	}
 }
@@ -592,7 +639,7 @@ func TestConvertScalarMalformedByteJsonFailsClosed(t *testing.T) {
 func TestConvertScalarDecimalAnalysisIsBounded(t *testing.T) {
 	target := types.New(types.T_decimal64, 10, 2)
 	_, _, known, _ := canonicalDecimalInput("1e2-3", target)
-	require.False(t, known, "an exponent sign is valid only before exponent digits")
+	require.True(t, known, "legacy exponent signs may follow exponent digits")
 	_, _, known, _ = canonicalDecimalInput("1E2", target)
 	require.False(t, known, "legacy decimal parser accepts only lowercase e")
 	for _, input := range []string{"1e", "1e+", "1e-"} {
@@ -610,6 +657,16 @@ func TestConvertScalarDecimalAnalysisIsBounded(t *testing.T) {
 	require.Equal(t, StatusTruncated, result.Status)
 	require.Equal(t, types.Decimal64(0), result.Value)
 	require.NotNil(t, result.Warning)
+
+	// The legacy exponent grammar takes the same bounded path, including a
+	// minus appearing after digits and repeated exponent markers.
+	legacyExponent := parseConversionValue(t, `"1e0-e`+strings.Repeat("9", 4096)+`"`)
+	result = ConvertScalar(legacyExponent, target)
+	require.Equal(t, StatusTruncated, result.Status)
+	require.Equal(t, types.Decimal64(0), result.Value)
+	require.NoError(t, result.Err)
+	require.NotNil(t, result.Warning)
+	require.Equal(t, moerr.WARN_DATA_TRUNCATED, result.Warning.Code)
 }
 
 func TestConvertPathMatchesMalformedRootJSONFailsClosed(t *testing.T) {
