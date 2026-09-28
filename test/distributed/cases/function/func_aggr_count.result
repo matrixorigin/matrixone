@@ -332,10 +332,10 @@ select i, count(*), std(o1/o2) from bug22555 group by i order by i;
 2  ¦  1  ¦  0.0  𝄀
 3  ¦  1  ¦  0.0
 select i, count(*), std(e1/e2) from bug22555 group by i order by i;
-➤ i[5,16,0]  ¦  count(*)[-5,64,0]  ¦  std(e1 / e2)[3,38,12]  𝄀
-1  ¦  1  ¦  0E-12  𝄀
-2  ¦  1  ¦  0E-12  𝄀
-3  ¦  1  ¦  0E-12
+➤ i[5,16,0]  ¦  count(*)[-5,64,0]  ¦  std(e1 / e2)[3,38,10]  𝄀
+1  ¦  1  ¦  0E-10  𝄀
+2  ¦  1  ¦  0E-10  𝄀
+3  ¦  1  ¦  0E-10
 select i, count(*), variance(s1/s2) from bug22555 group by i order by i;
 ➤ i[5,16,0]  ¦  count(*)[-5,64,0]  ¦  variance(s1 / s2)[8,54,0]  𝄀
 1  ¦  1  ¦  0.0  𝄀
@@ -347,10 +347,10 @@ select i, count(*), variance(o1/o2) from bug22555 group by i order by i;
 2  ¦  1  ¦  0.0  𝄀
 3  ¦  1  ¦  0.0
 select i, count(*), variance(e1/e2) from bug22555 group by i order by i;
-➤ i[5,16,0]  ¦  count(*)[-5,64,0]  ¦  variance(e1 / e2)[3,38,12]  𝄀
-1  ¦  1  ¦  0E-12  𝄀
-2  ¦  1  ¦  0E-12  𝄀
-3  ¦  1  ¦  0E-12
+➤ i[5,16,0]  ¦  count(*)[-5,64,0]  ¦  variance(e1 / e2)[3,38,10]  𝄀
+1  ¦  1  ¦  0E-10  𝄀
+2  ¦  1  ¦  0E-10  𝄀
+3  ¦  1  ¦  0E-10
 select i, count(*), std(s1/s2) from bug22555 group by i order by i;
 ➤ i[5,16,0]  ¦  count(*)[-5,64,0]  ¦  std(s1 / s2)[8,54,0]  𝄀
 1  ¦  1  ¦  0.0  𝄀
@@ -362,10 +362,10 @@ select i, count(*), std(o1/o2) from bug22555 group by i order by i;
 2  ¦  1  ¦  0.0  𝄀
 3  ¦  1  ¦  0.0
 select i, count(*), std(e1/e2) from bug22555 group by i order by i;
-➤ i[5,16,0]  ¦  count(*)[-5,64,0]  ¦  std(e1 / e2)[3,38,12]  𝄀
-1  ¦  1  ¦  0E-12  𝄀
-2  ¦  1  ¦  0E-12  𝄀
-3  ¦  1  ¦  0E-12
+➤ i[5,16,0]  ¦  count(*)[-5,64,0]  ¦  std(e1 / e2)[3,38,10]  𝄀
+1  ¦  1  ¦  0E-10  𝄀
+2  ¦  1  ¦  0E-10  𝄀
+3  ¦  1  ¦  0E-10
 select i, count(*), variance(s1/s2) from bug22555 group by i order by i;
 ➤ i[5,16,0]  ¦  count(*)[-5,64,0]  ¦  variance(s1 / s2)[8,54,0]  𝄀
 1  ¦  1  ¦  0.0  𝄀
@@ -377,10 +377,10 @@ select i, count(*), variance(o1/o2) from bug22555 group by i order by i;
 2  ¦  1  ¦  0.0  𝄀
 3  ¦  1  ¦  0.0
 select i, count(*), variance(e1/e2) from bug22555 group by i order by i;
-➤ i[5,16,0]  ¦  count(*)[-5,64,0]  ¦  variance(e1 / e2)[3,38,12]  𝄀
-1  ¦  1  ¦  0E-12  𝄀
-2  ¦  1  ¦  0E-12  𝄀
-3  ¦  1  ¦  0E-12
+➤ i[5,16,0]  ¦  count(*)[-5,64,0]  ¦  variance(e1 / e2)[3,38,10]  𝄀
+1  ¦  1  ¦  0E-10  𝄀
+2  ¦  1  ¦  0E-10  𝄀
+3  ¦  1  ¦  0E-10
 select i, count(*), std(s1/s2) from bug22555 group by i order by i;
 ➤ i[5,16,0]  ¦  count(*)[-5,64,0]  ¦  std(s1 / s2)[8,54,0]  𝄀
 1  ¦  1  ¦  0.0  𝄀
@@ -392,10 +392,10 @@ select i, count(*), std(o1/o2) from bug22555 group by i order by i;
 2  ¦  1  ¦  0.0  𝄀
 3  ¦  1  ¦  0.0
 select i, count(*), std(e1/e2) from bug22555 group by i order by i;
-➤ i[5,16,0]  ¦  count(*)[-5,64,0]  ¦  std(e1 / e2)[3,38,12]  𝄀
-1  ¦  1  ¦  0E-12  𝄀
-2  ¦  1  ¦  0E-12  𝄀
-3  ¦  1  ¦  0E-12
+➤ i[5,16,0]  ¦  count(*)[-5,64,0]  ¦  std(e1 / e2)[3,38,10]  𝄀
+1  ¦  1  ¦  0E-10  𝄀
+2  ¦  1  ¦  0E-10  𝄀
+3  ¦  1  ¦  0E-10
 insert into bug22555 values (1,53,78,53,78,53,78),(2,17,78,17,78,17,78),(3,18,76,18,76,18,76);
 insert into bug22555 values (1,53,78,53,78,53,78),(2,17,78,17,78,17,78),(3,18,76,18,76,18,76);
 insert into bug22555 values (1,53,78,53,78,53,78),(2,17,78,17,78,17,78),(3,18,76,18,76,18,76);
@@ -410,10 +410,10 @@ select i, count(*), round(std(o1/o2), 16) from bug22555 group by i order by i;
 2  ¦  4  ¦  0.0  𝄀
 3  ¦  4  ¦  0.0
 select i, count(*), std(e1/e2) from bug22555 group by i order by i;
-➤ i[5,16,0]  ¦  count(*)[-5,64,0]  ¦  std(e1 / e2)[3,38,12]  𝄀
-1  ¦  4  ¦  0E-12  𝄀
-2  ¦  4  ¦  0E-12  𝄀
-3  ¦  4  ¦  0E-12
+➤ i[5,16,0]  ¦  count(*)[-5,64,0]  ¦  std(e1 / e2)[3,38,10]  𝄀
+1  ¦  4  ¦  0E-10  𝄀
+2  ¦  4  ¦  0E-10  𝄀
+3  ¦  4  ¦  0E-10
 select std(s1/s2) from bug22555;
 ➤ std(s1 / s2)[8,54,0]  𝄀
 0.2132576358664934
@@ -421,8 +421,8 @@ select std(o1/o2) from bug22555;
 ➤ std(o1 / o2)[8,54,0]  𝄀
 0.2132576358664934
 select std(e1/e2) from bug22555;
-➤ std(e1 / e2)[3,38,12]  𝄀
-0.213257503950
+➤ std(e1 / e2)[3,38,10]  𝄀
+0.2132851664
 select i, count(*), std(s1/s2) from bug22555 group by i order by i;
 ➤ i[5,16,0]  ¦  count(*)[-5,64,0]  ¦  std(s1 / s2)[8,54,0]  𝄀
 1  ¦  4  ¦  0.0  𝄀
@@ -434,10 +434,10 @@ select i, count(*), round(std(o1/o2), 16) from bug22555 group by i order by i;
 2  ¦  4  ¦  0.0  𝄀
 3  ¦  4  ¦  0.0
 select i, count(*), std(e1/e2) from bug22555 group by i order by i;
-➤ i[5,16,0]  ¦  count(*)[-5,64,0]  ¦  std(e1 / e2)[3,38,12]  𝄀
-1  ¦  4  ¦  0E-12  𝄀
-2  ¦  4  ¦  0E-12  𝄀
-3  ¦  4  ¦  0E-12
+➤ i[5,16,0]  ¦  count(*)[-5,64,0]  ¦  std(e1 / e2)[3,38,10]  𝄀
+1  ¦  4  ¦  0E-10  𝄀
+2  ¦  4  ¦  0E-10  𝄀
+3  ¦  4  ¦  0E-10
 select round(std(s1/s2), 17) from bug22555;
 ➤ round(std(s1 / s2), 17)[8,54,0]  𝄀
 0.2132576358664934
@@ -445,8 +445,8 @@ select std(o1/o2) from bug22555;
 ➤ std(o1 / o2)[8,54,0]  𝄀
 0.2132576358664934
 select round(std(e1/e2), 17) from bug22555;
-➤ round(std(e1 / e2), 17)[3,38,12]  𝄀
-0.213257503950
+➤ round(std(e1 / e2), 17)[3,38,10]  𝄀
+0.2132851664
 drop table bug22555;
 create table t1 (a decimal(20));
 insert into t1 values (12345678901234567890);

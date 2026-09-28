@@ -576,6 +576,17 @@ func TestSemanticNullabilityUsesConcreteNonNullLiteralFact(t *testing.T) {
 	require.False(t, nonNullLiteral.Typ.NotNullable, "the planner literal annotation is deliberately conservative")
 	require.True(t, semanticNotNullable(
 		resolved.GetEncodedOverloadID(), []*planpb.Expr{notNullColumn, nonNullLiteral}))
+	// Folding a previously nullable expression need not rewrite its parent's
+	// conservative annotation. Both annotations describe the same safe call.
+	ref := &planpb.ObjectRef{ObjName: "=", Obj: resolved.GetEncodedOverloadID()}
+	for _, notNullable := range []bool{false, true} {
+		out := boolType()
+		out.NotNullable = notNullable
+		supported, err := hasSemanticCapability(semanticScalar, "equal", ref,
+			[]*planpb.Expr{notNullColumn, nonNullLiteral}, &out)
+		require.NoError(t, err)
+		require.True(t, supported)
+	}
 
 	nullLiteral := i64(1)
 	nullLiteral.GetLit().Isnull = true

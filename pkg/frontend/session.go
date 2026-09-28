@@ -1432,6 +1432,25 @@ func (ses *Session) sqlModeHasNoUnsignedSubtraction() bool {
 	return ok && mysql.HasSQLMode(mode, "NO_UNSIGNED_SUBTRACTION")
 }
 
+func (ses *Session) currentDivPrecisionIncrement() int64 {
+	return int64(sessionDivPrecisionIncrement(ses))
+}
+
+func sessionDivPrecisionIncrement(ses FeSession) int32 {
+	if ses == nil {
+		return function.DefaultDivPrecisionIncrement
+	}
+	value, err := ses.GetSessionSysVar("div_precision_increment")
+	if err != nil {
+		return function.DefaultDivPrecisionIncrement
+	}
+	increment, ok := value.(int64)
+	if !ok {
+		return function.DefaultDivPrecisionIncrement
+	}
+	return int32(increment)
+}
+
 func (ses *Session) sqlModeHasIgnoreSpace() bool {
 	if ses == nil {
 		return false

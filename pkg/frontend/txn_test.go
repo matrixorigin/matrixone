@@ -2349,6 +2349,10 @@ func TestRequiresPessimisticObjectLifecycleTxn(t *testing.T) {
 		SchemaName: tree.Identifier("db"), ExplicitSchema: true,
 	}, nil)
 	for _, stmt := range []tree.Statement{
+		&tree.TruncateTable{},
+		&tree.CreatePitr{},
+		&tree.DropPitr{},
+		&tree.AlterPitr{},
 		&tree.DropDatabase{},
 		&tree.DropTable{Names: tree.TableNames{persistent}},
 		&tree.DropView{},
@@ -2358,18 +2362,14 @@ func TestRequiresPessimisticObjectLifecycleTxn(t *testing.T) {
 		&tree.CreateView{Replace: true},
 		&tree.DataBranchDeleteTable{},
 		&tree.DataBranchDeleteDatabase{},
-		&tree.CreateDatabase{},
-		&tree.CreateSequence{},
-		&tree.CreateTable{Table: *persistent},
-		&tree.TruncateTable{Name: persistent},
-		&tree.AlterTable{Table: persistent},
-		&tree.RenameTable{AlterTables: []*tree.AlterTable{{Table: persistent}}},
+		&tree.DataBranchDiff{},
+		&tree.DataBranchMerge{},
+		&tree.DataBranchPick{},
 	} {
 		require.True(t, requiresPessimisticObjectLifecycleTxn(nil, stmt, ""))
 	}
 	require.False(t, requiresPessimisticObjectLifecycleTxn(nil, &tree.CreateView{}, ""))
 	require.False(t, requiresPessimisticObjectLifecycleTxn(nil, &tree.DropTable{Temporary: true}, ""))
-	require.False(t, requiresPessimisticObjectLifecycleTxn(nil, &tree.CreateTable{Temporary: true}, ""))
 	require.False(t, requiresPessimisticObjectLifecycleTxn(nil, &tree.Select{}, ""))
 
 	ses := &Session{tempTables: make(map[string]string), tempTablesRev: make(map[string]string)}
@@ -2380,11 +2380,38 @@ func TestRequiresPessimisticObjectLifecycleTxn(t *testing.T) {
 	require.False(t, requiresPessimisticObjectLifecycleTxn(ses, &tree.DropTable{
 		Names: tree.TableNames{alias},
 	}, ""))
-	require.False(t, requiresPessimisticObjectLifecycleTxn(ses, &tree.TruncateTable{Name: alias}, ""))
-	require.False(t, requiresPessimisticObjectLifecycleTxn(ses, &tree.AlterTable{Table: alias}, ""))
 	require.True(t, requiresPessimisticObjectLifecycleTxn(ses, &tree.DropTable{
 		Names: tree.TableNames{alias, persistent},
 	}, ""))
+
+	for _, stmt := range []tree.Statement{
+		&tree.AlterTable{},
+		&tree.RenameTable{},
+		&tree.CloneTable{},
+		&tree.CloneDatabase{},
+		&tree.DataBranchCreateTable{},
+		&tree.DataBranchCreateDatabase{},
+	} {
+		require.True(t, requiresPessimisticLifecycleModeTxn(nil, stmt, ""))
+		require.False(t, requiresPessimisticObjectLifecycleTxn(nil, stmt, ""))
+	}
+	require.False(t, requiresPessimisticLifecycleModeTxn(nil, &tree.TruncateTable{}, ""))
+	require.False(t, requiresPessimisticLifecycleModeTxn(nil, &tree.Select{}, ""))
+
+	// The session alias wins over a persistent table of the same name, while
+	// qualified names and prepared-statement default databases remain scoped.
+	temp := tree.NewTableName(tree.Identifier("alias"), tree.ObjectNamePrefix{}, nil)
+	qualifiedTemp := tree.NewTableName(tree.Identifier("alias"), tree.ObjectNamePrefix{
+		SchemaName: tree.Identifier("db"), ExplicitSchema: true,
+	}, nil)
+	qualifiedOther := tree.NewTableName(tree.Identifier("alias"), tree.ObjectNamePrefix{
+		SchemaName: tree.Identifier("other"), ExplicitSchema: true,
+	}, nil)
+	require.False(t, requiresPessimisticLifecycleModeTxn(ses, &tree.AlterTable{Table: temp}, "db"))
+	require.False(t, requiresPessimisticLifecycleModeTxn(ses, &tree.AlterTable{Table: qualifiedTemp}, "other"))
+	require.True(t, requiresPessimisticLifecycleModeTxn(ses, &tree.AlterTable{Table: temp}, "other"))
+	require.True(t, requiresPessimisticLifecycleModeTxn(ses, &tree.AlterTable{Table: qualifiedOther}, "db"))
+	require.True(t, requiresPessimisticLifecycleModeTxn(nil, &tree.AlterTable{Table: qualifiedTemp}, "db"))
 }
 
 func TestCreateRollsBackPublishedGenerationOnStorageInitFailure(t *testing.T) {
@@ -2488,4 +2515,37 @@ func TestObjectLifecycleRejectsExistingUnsafeTxn(t *testing.T) {
 		txnOpt: FeTxnOption{forcePessimisticObjectLifecycle: true},
 	}))
 	require.Same(t, op, handler.GetTxn())
+}
+
+func TestFixedSnapshotLifecycleRequiresPessimisticModeAndPreservesSI(t *testing.T) {
+	ctrl := gomock.NewController(t)
+	ctx := defines.AttachAccountId(context.Background(), sysAccountID)
+	ses := newTestSession(t, ctrl)
+	defer ses.Close()
+	handler := ses.GetTxnHandler()
+	op := newTestTxnOp()
+	op.meta = txn.TxnMeta{
+		ID: []byte{1}, Status: txn.TxnStatus_Active,
+		Mode: txn.TxnMode_Optimistic, Isolation: txn.TxnIsolation_SI,
+	}
+	handler.txnOp = op
+	handler.txnCtx = ctx
+
+	err := handler.Create(&ExecCtx{
+		reqCtx: ctx,
+		ses:    ses,
+		txnOpt: FeTxnOption{forcePessimisticLifecycleMode: true},
+	})
+	require.ErrorContains(t, err, "require an existing pessimistic transaction")
+	require.Same(t, op, handler.GetTxn())
+	require.Zero(t, op.rollbackCalls)
+
+	op.meta.Mode = txn.TxnMode_Pessimistic
+	require.NoError(t, handler.Create(&ExecCtx{
+		reqCtx: ctx,
+		ses:    ses,
+		txnOpt: FeTxnOption{forcePessimisticLifecycleMode: true},
+	}))
+	require.Same(t, op, handler.GetTxn())
+	require.Equal(t, txn.TxnIsolation_SI, op.Txn().Isolation)
 }

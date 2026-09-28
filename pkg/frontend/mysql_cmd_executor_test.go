@@ -2070,6 +2070,43 @@ func TestForcedObjectLifecycleTxnConsumesNextIsolation(t *testing.T) {
 	})
 }
 
+func TestForcedLifecycleModePreservesNextIsolation(t *testing.T) {
+	txnclient.RunTxnTests(func(realTxnClient txnclient.TxnClient, _ rpc.TxnSender) {
+		ctrl := gomock.NewController(t)
+		ctx := defines.AttachAccountId(context.Background(), sysAccountID)
+		ses := newTestSession(t, ctrl)
+		defer ses.Close()
+		originalTxnClient := getPu("").TxnClient
+		defer func() { getPu("").TxnClient = originalTxnClient }()
+		getPu("").TxnClient = realTxnClient
+
+		handler := ses.GetTxnHandler()
+		require.NoError(t, handler.setNextTxnIsolation(ctx, txn.TxnIsolation_SI, false))
+		execCtx := &ExecCtx{
+			reqCtx: ctx,
+			ses:    ses,
+			stmt:   &tree.AlterTable{},
+			txnOpt: FeTxnOption{
+				autoCommit:                    true,
+				forcePessimisticLifecycleMode: true,
+			},
+		}
+
+		handler.mu.Lock()
+		err := handler.createTxnOpUnsafe(execCtx)
+		op := handler.txnOp
+		handler.txnOp = nil
+		handler.mu.Unlock()
+		require.NoError(t, err)
+		require.NotNil(t, op)
+		require.Equal(t, txn.TxnMode_Pessimistic, op.Txn().Mode)
+		require.Equal(t, txn.TxnIsolation_SI, op.Txn().Isolation)
+		require.NoError(t, op.Rollback(ctx))
+		_, hasNextIsolation := handler.nextTxnIsolationSnapshot()
+		require.False(t, hasNextIsolation)
+	})
+}
+
 func TestExecCtxStatementGenerationPreparedDatabase(t *testing.T) {
 	preparedStmt := &PrepareStmt{
 		Name:            "binary_drop",
@@ -2158,6 +2195,39 @@ func TestHandleDropAccountUsesLifecycleOwnerTxn(t *testing.T) {
 	}
 
 	err := handleDropAccount(ses, &ExecCtx{reqCtx: ctx}, &tree.DropAccount{Name: boxExprStr("tenant")}, ses.GetProc())
+	require.ErrorIs(t, err, beginErr)
+	require.True(t, forcedPessimisticRC)
+}
+
+func TestHandleCreateAccountUsesLifecycleOwnerTxn(t *testing.T) {
+	ctrl := gomock.NewController(t)
+	ctx := context.Background()
+	ses := newTestSession(t, ctrl)
+	defer ses.Close()
+	bh := &backgroundExecTest{}
+	bh.init()
+	beginErr := errors.New("begin failed")
+	bh.sql2err["begin;"] = beginErr
+	oldNewBackgroundExec := NewBackgroundExec
+	defer func() { NewBackgroundExec = oldNewBackgroundExec }()
+	forcedPessimisticRC := false
+	NewBackgroundExec = func(_ context.Context, _ FeSession, opts ...*BackgroundExecOption) BackgroundExec {
+		for _, opt := range opts {
+			forcedPessimisticRC = forcedPessimisticRC || opt != nil && opt.forcePessimisticRC
+		}
+		return bh
+	}
+
+	err := handleCreateAccount(ses, &ExecCtx{reqCtx: ctx}, &tree.CreateAccount{
+		Name: boxExprStr("tenant"),
+		AuthOption: tree.AccountAuthOption{
+			AdminName: boxExprStr("admin"),
+			IdentifiedType: tree.AccountIdentified{
+				Typ: tree.AccountIdentifiedByPassword,
+				Str: boxExprStr("111"),
+			},
+		},
+	}, ses.GetProc())
 	require.ErrorIs(t, err, beginErr)
 	require.True(t, forcedPessimisticRC)
 }
@@ -7610,6 +7680,61 @@ func TestBuildPlanForCompileRetryReappliesPreparedRuntimeSpecialization(t *testi
 	requiresV26, err := plan0.RequiresMORPCVersion30NumericPrefix(commonValue)
 	require.NoError(t, err)
 	require.True(t, requiresV26, commonValue.String())
+}
+
+func TestBuildPlanForCompileRetryReprovesPreparedJoin(t *testing.T) {
+	ctx := defines.AttachAccountId(context.Background(), catalog.System_Account)
+	ses := newTestSession(t, gomock.NewController(t))
+	defer ses.Close()
+	ses.SetSql("execute p")
+	stmt, err := parsers.ParseOne(ctx, dialect.MYSQL,
+		"select count(*) from select_test.bind_select a join select_test.bind_select b on a.a=b.a and a.a=hour(time(?)) where a.a=?", 1)
+	require.NoError(t, err)
+	defer stmt.Free()
+	compilerCtx := plan.NewMockCompilerContext(true)
+	compilerCtx.SetContext(ctx)
+	proc := compilerCtx.GetProcess()
+	params := vector.NewVec(types.T_text.ToType())
+	defer func() { proc.SetPrepareParams(nil); params.Free(proc.Mp()) }()
+	require.NoError(t, vector.AppendBytes(params, []byte("01:00:00"), false, proc.Mp()))
+	require.NoError(t, vector.AppendBytes(params, []byte("1"), false, proc.Mp()))
+	proc.SetPrepareParams(params)
+	scanFilters := func(query *plan0.Query) int {
+		count := 0
+		for _, node := range query.Nodes {
+			if node.NodeType == plan0.Node_TABLE_SCAN {
+				count += len(node.FilterList)
+			}
+		}
+		return count
+	}
+	retry := newPreparedExecutionRetry([]any{
+		plan.ParamValue{Value: "01:00:00"}, plan.ParamValue{Value: int64(1)},
+	}, false, false, true)
+	safe, err := buildPlanForCompileRetry(ctx, ses, compilerCtx, stmt, false, retry)
+	require.NoError(t, err)
+	require.NotNil(t, safe.GetQuery())
+	require.Positive(t, scanFilters(safe.GetQuery()), "safe values must restore selective scans")
+
+	require.NoError(t, vector.SetStringAt(params, 0, "900:00:00", proc.Mp()))
+	retry.paramVals[0] = plan.ParamValue{Value: "900:00:00"}
+	unsafe, err := buildPlanForCompileRetry(ctx, ses, compilerCtx, stmt, false, retry)
+	require.NoError(t, err)
+	require.NotNil(t, unsafe.GetQuery())
+	require.Zero(t, scanFilters(unsafe.GetQuery()), "warning-producing values keep the JOIN boundary")
+
+	require.NoError(t, vector.SetStringAt(params, 0, "01:00:00", proc.Mp()))
+	retry.paramVals[0] = plan.ParamValue{Value: "01:00:00"}
+	again, err := buildPlanForCompileRetry(ctx, ses, compilerCtx, stmt, false, retry)
+	require.NoError(t, err)
+	require.Positive(t, scanFilters(again.GetQuery()), "the earlier unsafe retry must not retain its barrier")
+
+	previousCtx := compilerCtx.GetContext()
+	_, err = withPreparedJoinDiagnosticFreeContext(ctx, compilerCtx, func() (*plan.Plan, error) {
+		return nil, moerr.NewInternalErrorNoCtx("injected local replan failure")
+	})
+	require.Error(t, err)
+	require.Same(t, previousCtx, compilerCtx.GetContext())
 }
 
 func TestBuildPlanForPreparedExpressionRetryPreservesBinaryRuntimeType(t *testing.T) {

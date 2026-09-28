@@ -132,8 +132,10 @@ const (
 	MORPCVersion94     int64 = 94 // lossless physical/logical NoFull CDC start watermark
 	MORPCVersion95     int64 = 95 // prepared scalar precision execution across CNs
 	MORPCVersion96     int64 = 96 // coordinator-independent vector scan object partitions
-	MORPCVersion97     int64 = 97 // durable CDC target identity and admission attempts
-	MORPCLatestVersion       = MORPCVersion97
+	MORPCVersion97     int64 = 97 // decimal division result semantics across CNs
+	MORPCVersion98     int64 = 98 // canonical FORMAT precision and MAKEDATE/MAKETIME integer signatures
+	MORPCVersion99     int64 = 99 // owner-atomic writer-fair row-lock admission
+	MORPCLatestVersion       = MORPCVersion99
 )
 
 // DefaultLockWaitTimeoutSeconds is shared by the frontend default and by

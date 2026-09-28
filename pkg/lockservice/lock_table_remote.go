@@ -135,6 +135,12 @@ func (l *remoteLockTable) lock(
 		req.Lock.Rows = opts.originalRows
 		req.Lock.Options = opts.originalOptions
 	}
+	writerFairAdmission := req.Lock.Options.Mode == pb.LockMode_Shared &&
+		req.Lock.Options.Granularity == pb.Granularity_Row &&
+		req.Lock.Options.WriterFair
+	if writerFairAdmission {
+		req.Method = pb.Method_LockWriterFair
+	}
 
 	if err := ctx.Err(); err != nil {
 		logRemoteLockFailed(l.logger, txn, rows, opts, l.bind, err)
@@ -164,6 +170,16 @@ func (l *remoteLockTable) lock(
 		}
 	}()
 	resp, err := l.client.Send(rpcCtx, req)
+	if writerFairAdmission && moerr.IsMoErrCode(err, moerr.ErrNotSupported) {
+		// The capability-bearing method is rejected by an old or locally
+		// downgraded owner before admission. Retrying as Exclusive is stronger
+		// than the requested Shared lock and preserves the legacy no-barging
+		// behavior without requiring a cluster-wide version oracle.
+		req.Method = pb.Method_Lock
+		req.Lock.Options.Mode = pb.LockMode_Exclusive
+		req.Lock.Options.WriterFair = false
+		resp, err = l.client.Send(rpcCtx, req)
+	}
 
 	txn.Lock()
 
@@ -206,7 +222,7 @@ func (l *remoteLockTable) lock(
 		)
 		ownerLocalSnapshot := resp.Lock.TxnWaitingListOnLockTableSupported
 		recordRows := rows
-		recordOptions := opts.LockOptions
+		recordOptions := req.Lock.Options
 		if opts.replaceTxnLocks && len(opts.originalRows) > 0 {
 			// A concurrent Shared/sharded acquisition can invalidate the same
 			// origin-side plan while the RPC is in flight. In that case the owner

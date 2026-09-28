@@ -96,7 +96,7 @@ func (builder *QueryBuilder) applyOuterJoinPreservedSideRule(nodeID int32) (int3
 	}
 
 	if node.NodeType != plan.Node_JOIN || node.JoinType != plan.Node_INNER ||
-		joinNodeHasLocalSemantics(node) {
+		joinNodeHasLocalSemantics(node) || builder.joinOwnsConstantDiagnostic(node) {
 		return nodeID, changed
 	}
 
@@ -104,7 +104,7 @@ func (builder *QueryBuilder) applyOuterJoinPreservedSideRule(nodeID int32) (int3
 	for i, childID := range node.Children {
 		child := builder.qry.Nodes[childID]
 		if child.NodeType == plan.Node_JOIN && child.JoinType == plan.Node_LEFT &&
-			!joinNodeHasLocalSemantics(child) {
+			!joinNodeHasLocalSemantics(child) && !builder.joinOwnsConstantDiagnostic(child) {
 			outerPos = i
 			break
 		}
@@ -182,7 +182,7 @@ func (builder *QueryBuilder) applyOuterJoinNullableSideRule(nodeID int32) (int32
 	}
 
 	if node.NodeType != plan.Node_JOIN || node.JoinType != plan.Node_INNER ||
-		joinNodeHasLocalSemantics(node) {
+		joinNodeHasLocalSemantics(node) || builder.joinOwnsConstantDiagnostic(node) {
 		return nodeID, changed
 	}
 
@@ -190,7 +190,7 @@ func (builder *QueryBuilder) applyOuterJoinNullableSideRule(nodeID int32) (int32
 	for i, childID := range node.Children {
 		child := builder.qry.Nodes[childID]
 		if child.NodeType == plan.Node_JOIN && child.JoinType == plan.Node_LEFT &&
-			!joinNodeHasLocalSemantics(child) {
+			!joinNodeHasLocalSemantics(child) && !builder.joinOwnsConstantDiagnostic(child) {
 			outerPos = i
 			break
 		}
@@ -275,11 +275,11 @@ func (builder *QueryBuilder) applyAssociativeLawRule1(nodeID int32) int32 {
 			node.Children[i] = builder.applyAssociativeLawRule1(child)
 		}
 	}
-	if node.NodeType != plan.Node_JOIN || node.JoinType != plan.Node_INNER {
+	if node.NodeType != plan.Node_JOIN || node.JoinType != plan.Node_INNER || builder.joinOwnsConstantDiagnostic(node) {
 		return nodeID
 	}
 	rightChild := builder.qry.Nodes[node.Children[1]]
-	if rightChild.NodeType != plan.Node_JOIN || rightChild.JoinType != plan.Node_INNER {
+	if rightChild.NodeType != plan.Node_JOIN || rightChild.JoinType != plan.Node_INNER || builder.joinOwnsConstantDiagnostic(rightChild) {
 		return nodeID
 	}
 	NodeB := builder.qry.Nodes[rightChild.Children[0]]
@@ -326,11 +326,11 @@ func (builder *QueryBuilder) applyAssociativeLawRule2(nodeID int32) int32 {
 			node.Children[i] = builder.applyAssociativeLawRule2(child)
 		}
 	}
-	if node.NodeType != plan.Node_JOIN || node.JoinType != plan.Node_INNER {
+	if node.NodeType != plan.Node_JOIN || node.JoinType != plan.Node_INNER || builder.joinOwnsConstantDiagnostic(node) {
 		return nodeID
 	}
 	leftChild := builder.qry.Nodes[node.Children[0]]
-	if leftChild.NodeType != plan.Node_JOIN || leftChild.JoinType != plan.Node_INNER {
+	if leftChild.NodeType != plan.Node_JOIN || leftChild.JoinType != plan.Node_INNER || builder.joinOwnsConstantDiagnostic(leftChild) {
 		return nodeID
 	}
 	NodeC := builder.qry.Nodes[node.Children[1]]
@@ -377,11 +377,11 @@ func (builder *QueryBuilder) applyAssociativeLawRule3(nodeID int32) int32 {
 			node.Children[i] = builder.applyAssociativeLawRule3(child)
 		}
 	}
-	if node.NodeType != plan.Node_JOIN || node.JoinType != plan.Node_INNER {
+	if node.NodeType != plan.Node_JOIN || node.JoinType != plan.Node_INNER || builder.joinOwnsConstantDiagnostic(node) {
 		return nodeID
 	}
 	leftChild := builder.qry.Nodes[node.Children[0]]
-	if leftChild.NodeType != plan.Node_JOIN || leftChild.JoinType != plan.Node_INNER {
+	if leftChild.NodeType != plan.Node_JOIN || leftChild.JoinType != plan.Node_INNER || builder.joinOwnsConstantDiagnostic(leftChild) {
 		return nodeID
 	}
 	NodeA := builder.qry.Nodes[leftChild.Children[0]]

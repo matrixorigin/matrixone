@@ -226,9 +226,13 @@ type FeTxnOption struct {
 	// transaction created to execute the SET statement itself.
 	activeTxnAtStart      bool
 	activeTxnAtStartKnown bool
-	// forcePessimisticObjectLifecycle marks statements that delete catalog
-	// objects and therefore must share GRANT's pessimistic lifecycle protocol.
+	// forcePessimisticObjectLifecycle marks lifecycle statements whose owning
+	// transaction must be both pessimistic and RC.
 	forcePessimisticObjectLifecycle bool
+	// forcePessimisticLifecycleMode marks fixed-snapshot-compatible lifecycle
+	// statements. They need real pessimistic locks but retain the transaction's
+	// selected isolation level (including an existing SI snapshot).
+	forcePessimisticLifecycleMode bool
 	// implicitCommitBefore marks a top-level TRUNCATE statement. Its old
 	// transaction has already been committed before authorization/planning;
 	// the transaction created for the statement must be finalized separately.
@@ -243,6 +247,7 @@ func (opt *FeTxnOption) Close() {
 	opt.activeTxnAtStart = false
 	opt.activeTxnAtStartKnown = false
 	opt.forcePessimisticObjectLifecycle = false
+	opt.forcePessimisticLifecycleMode = false
 	opt.implicitCommitBefore = false
 }
 
@@ -565,6 +570,14 @@ func (th *TxnHandler) Create(execCtx *ExecCtx) error {
 			)
 		}
 	}
+	if execCtx.txnOpt.forcePessimisticLifecycleMode && th.inActiveTxnUnsafe() {
+		if !th.txnOp.Txn().IsPessimistic() {
+			return moerr.NewNotSupported(
+				execCtx.reqCtx,
+				"lifecycle statements require an existing pessimistic transaction",
+			)
+		}
+	}
 
 	// BEGIN and implicit-commit statements own a fresh transaction.  The latter
 	// has already committed any previous transaction at the statement boundary;
@@ -695,32 +708,16 @@ func requiresPessimisticObjectLifecycleTxn(
 	defaultDatabase string,
 ) bool {
 	switch st := stmt.(type) {
-	case *tree.DropDatabase, *tree.DropView, *tree.DropSequence, *tree.AlterView,
-		*tree.AlterSequence, *tree.DataBranchDeleteTable, *tree.DataBranchDeleteDatabase:
+	case *tree.TruncateTable, *tree.CreatePitr, *tree.DropPitr, *tree.AlterPitr,
+		*tree.DropDatabase, *tree.DropView, *tree.DropSequence, *tree.AlterView,
+		*tree.AlterSequence, *tree.DataBranchDeleteTable, *tree.DataBranchDeleteDatabase,
+		*tree.DataBranchDiff, *tree.DataBranchMerge, *tree.DataBranchPick:
 		return true
 	case *tree.DropTable:
 		// Ordinary DROP TABLE can resolve to a session temporary alias only after
 		// parsing. Classify every target before admission so temp-only statements
 		// do not inherit the persistent catalog protocol.
 		return len(capturePersistentDropTableTargets(ses, st, defaultDatabase)) > 0
-	case *tree.CreateDatabase, *tree.CreateSequence:
-		return true
-	case *tree.CreateTable:
-		return !st.Temporary
-	case *tree.TruncateTable:
-		if st.Name == nil {
-			return false
-		}
-		return isPersistentLifecycleTable(ses, st.Name, defaultDatabase)
-	case *tree.AlterTable:
-		return isPersistentLifecycleTable(ses, st.Table, defaultDatabase)
-	case *tree.RenameTable:
-		for _, alter := range st.AlterTables {
-			if alter != nil && isPersistentLifecycleTable(ses, alter.Table, defaultDatabase) {
-				return true
-			}
-		}
-		return false
 	case *tree.CreateView:
 		return st.Replace
 	default:
@@ -728,22 +725,25 @@ func requiresPessimisticObjectLifecycleTxn(
 	}
 }
 
-func isPersistentLifecycleTable(ses FeSession, name *tree.TableName, defaultDatabase string) bool {
-	if name == nil {
+// requiresPessimisticLifecycleModeTxn identifies lifecycle statements whose
+// fixed caller snapshot is part of their semantics. They must use pessimistic
+// mode so lifecycle barriers are physical locks, but forcing RC would change
+// existing SI behavior.
+func requiresPessimisticLifecycleModeTxn(
+	ses FeSession,
+	stmt tree.Statement,
+	defaultDatabase string,
+) bool {
+	switch st := stmt.(type) {
+	case *tree.AlterTable:
+		return st.Table == nil || !isSessionTemporaryTable(ses, st.Table, defaultDatabase)
+	case *tree.RenameTable,
+		*tree.CloneTable, *tree.CloneDatabase,
+		*tree.DataBranchCreateTable, *tree.DataBranchCreateDatabase:
+		return true
+	default:
 		return false
 	}
-	if ses == nil {
-		return true
-	}
-	dbName := string(name.SchemaName)
-	if dbName == "" {
-		dbName = defaultDatabase
-		if dbName == "" {
-			dbName = ses.GetDatabaseName()
-		}
-	}
-	_, temporary := ses.GetTempTable(dbName, string(name.ObjectName))
-	return !temporary
 }
 
 // createTxnOpUnsafe creates a new txn operator using TxnClient. Should not be called outside txn.
@@ -839,6 +839,11 @@ func (th *TxnHandler) createTxnOpUnsafe(execCtx *ExecCtx) error {
 		opts = append(opts,
 			txnclient.WithTxnMode(pbtxn.TxnMode_Pessimistic),
 			txnclient.WithTxnIsolation(pbtxn.TxnIsolation_RC))
+	} else if execCtx.txnOpt.forcePessimisticLifecycleMode {
+		opts = append(opts, txnclient.WithTxnMode(pbtxn.TxnMode_Pessimistic))
+		if hasSelectedIsolation {
+			opts = append(opts, txnclient.WithTxnIsolation(selectedIsolation))
+		}
 	} else if hasSelectedIsolation {
 		opts = append(opts, txnclient.WithTxnIsolation(selectedIsolation))
 	}

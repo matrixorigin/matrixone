@@ -102,6 +102,75 @@ func TestMemoExpressionExecutorCachesOncePerRootEvaluation(t *testing.T) {
 	second.Free()
 }
 
+func TestMemoWrappedColumnUsesSelectedRowIndexes(t *testing.T) {
+	proc := testutil.NewProcess(t)
+	defer proc.Free()
+	input := batch.NewWithSize(1)
+	input.Vecs[0] = vector.NewVec(types.T_int32.ToType())
+	defer input.Clean(proc.Mp())
+	require.NoError(t, vector.AppendFixedList(input.Vecs[0], []int32{0, 10, 10}, []bool{true, false, false}, proc.Mp()))
+	input.SetRowCount(3)
+
+	fn, err := function.GetFunctionByName(proc.Ctx, "cast", []types.Type{types.T_int32.ToType(), types.T_int64.ToType()})
+	require.NoError(t, err)
+	for _, test := range []struct {
+		name  string
+		auxID int32
+	}{
+		{name: "direct column"},
+		{name: "memo wrapped column", auxID: -1},
+	} {
+		t.Run(test.name, func(t *testing.T) {
+			expression := &plan.Expr{
+				Typ: plan.Type{Id: int32(types.T_int64)},
+				Expr: &plan.Expr_F{F: &plan.Function{
+					Func: &plan.ObjectRef{Obj: fn.GetEncodedOverloadID(), ObjName: "cast"},
+					Args: []*plan.Expr{
+						{AuxId: test.auxID, Typ: plan.Type{Id: int32(types.T_int32)},
+							Expr: &plan.Expr_Col{Col: &plan.ColRef{RelPos: 0, ColPos: 0}}},
+						{Typ: plan.Type{Id: int32(types.T_int64)}, Expr: &plan.Expr_T{T: &plan.TargetType{}}},
+					},
+				}},
+			}
+			executor, err := NewExpressionExecutor(proc, expression)
+			require.NoError(t, err)
+			defer executor.Free()
+			result, err := executor.Eval(proc, []*batch.Batch{input}, []bool{false, true, true})
+			require.NoError(t, err)
+			require.Equal(t, 3, result.Length())
+			require.True(t, result.IsNull(0))
+			require.False(t, result.IsNull(1))
+			require.False(t, result.IsNull(2))
+			require.Equal(t, int64(10), vector.GetFixedAtNoTypeCheck[int64](result, 1))
+			require.Equal(t, int64(10), vector.GetFixedAtNoTypeCheck[int64](result, 2))
+		})
+	}
+}
+
+func TestMemoRowAlignmentClassification(t *testing.T) {
+	column := &ColumnExpressionExecutor{}
+	functionValue := &FunctionExpressionExecutor{}
+	folded := &FunctionExpressionExecutor{}
+	folded.folded.canFold = true
+	for _, test := range []struct {
+		name string
+		root ExpressionExecutor
+		want bool
+	}{
+		{name: "column", root: column, want: true},
+		{name: "memo column", root: &memoExpressionExecutor{state: &memoExpressionState{executor: column}}, want: true},
+		{name: "memo root column", root: &memoRootExpressionExecutor{executor: &memoExpressionExecutor{state: &memoExpressionState{executor: column}}}, want: true},
+		{name: "function", root: functionValue, want: true},
+		{name: "memo function", root: &memoExpressionExecutor{state: &memoExpressionState{executor: functionValue}}, want: true},
+		{name: "folded function", root: &memoExpressionExecutor{state: &memoExpressionState{executor: folded}}},
+		{name: "list", root: &memoExpressionExecutor{state: &memoExpressionState{executor: &ListExpressionExecutor{}}}},
+	} {
+		t.Run(test.name, func(t *testing.T) {
+			require.Equal(t, test.want, isRowAlignedExpressionExecutor(test.root))
+		})
+	}
+}
+
 func TestListExpressionExecutor(t *testing.T) {
 	proc := testutil.NewProcess(t)
 
@@ -3230,6 +3299,54 @@ func (*preparedCastWarningSession) RemoveTempTableByRealName(string)           {
 func (*preparedCastWarningSession) GetSqlModeNoAutoValueOnZero() (bool, bool)  { return false, false }
 func (s *preparedCastWarningSession) AppendWarningDiagnostic(uint16, string) {
 	s.warningCount++
+}
+
+func TestConstantStringNumericCastWarningRunsOnceWhenSelected(t *testing.T) {
+	proc := testutil.NewProcess(t)
+	defer proc.Free()
+	proc.SetBaseProcessRunningStatus(true)
+	warnings := &preparedCastWarningSession{}
+	proc.Session = warnings
+	sourceType, targetType := types.T_text.ToType(), types.T_float64.ToType()
+	fn, err := function.GetFunctionByName(proc.Ctx, "cast", []types.Type{sourceType, targetType})
+	require.NoError(t, err)
+	expr := &plan.Expr{Typ: plan.Type{Id: int32(types.T_float64)}, Expr: &plan.Expr_F{F: &plan.Function{
+		Func: &plan.ObjectRef{Obj: fn.GetEncodedOverloadID(), ObjName: "cast"},
+		Args: []*plan.Expr{
+			{Typ: plan.Type{Id: int32(types.T_text)}, Expr: &plan.Expr_Lit{Lit: &plan.Literal{Value: &plan.Literal_Sval{Sval: "12suffix"}}}},
+			{Typ: plan.Type{Id: int32(types.T_float64)}, Expr: &plan.Expr_T{T: &plan.TargetType{}}},
+		},
+	}}}
+	executors, err := NewOwnedConstantFilterExecutors(proc, []*plan.Expr{expr})
+	require.NoError(t, err)
+	executor := executors[0]
+	defer executor.Free()
+	input := batch.New(nil)
+	input.SetRowCount(4)
+	result, err := executor.Eval(proc, []*batch.Batch{input}, []bool{false, false, false, false})
+	require.NoError(t, err)
+	require.Equal(t, 4, result.Length())
+	require.Zero(t, warnings.warningCount)
+
+	result, err = executor.Eval(proc, []*batch.Batch{input}, []bool{true, false, true, false})
+	require.NoError(t, err)
+	require.True(t, result.IsConst())
+	require.Equal(t, 1, warnings.warningCount)
+	_, err = executor.Eval(proc, []*batch.Batch{input}, nil)
+	require.NoError(t, err)
+	require.Equal(t, 1, warnings.warningCount)
+
+	executor.ResetForNextQuery()
+	_, err = executor.Eval(proc, []*batch.Batch{input}, nil)
+	require.NoError(t, err)
+	require.Equal(t, 2, warnings.warningCount)
+
+	defaultExecutor, err := NewExpressionExecutor(proc, expr)
+	require.NoError(t, err)
+	defer defaultExecutor.Free()
+	_, err = defaultExecutor.Eval(proc, []*batch.Batch{input}, nil)
+	require.NoError(t, err)
+	require.Equal(t, 6, warnings.warningCount, "ordinary expressions retain four row diagnostics")
 }
 
 func TestPreparedStringNumericCastWarningsAcrossReuse(t *testing.T) {
