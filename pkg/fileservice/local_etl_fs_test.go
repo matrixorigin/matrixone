@@ -198,6 +198,54 @@ func TestLocalETLFS(t *testing.T) {
 
 }
 
+func TestLocalETLFSWriteFailureRemovesTemp(t *testing.T) {
+	for _, tc := range []struct {
+		name    string
+		prepare func(t *testing.T, root string)
+		entries []IOEntry
+	}{
+		{
+			name: "size mismatch",
+			entries: []IOEntry{
+				{Offset: 0, Size: 2, Data: []byte("ab")},
+				{Offset: 1, Size: 1, Data: []byte("c")},
+			},
+		},
+		{
+			name:    "reader error",
+			entries: []IOEntry{{ReaderForWrite: errReader{}, Size: -1}},
+		},
+		{
+			name: "rename error",
+			prepare: func(t *testing.T, root string) {
+				require.NoError(t, os.Mkdir(filepath.Join(root, "target"), 0700))
+			},
+			entries: []IOEntry{{Size: 1, Data: []byte("x")}},
+		},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			root := t.TempDir()
+			fs, err := NewLocalETLFS("etl", root)
+			require.NoError(t, err)
+			t.Cleanup(func() { fs.Close(context.Background()) })
+			if tc.prepare != nil {
+				tc.prepare(t, root)
+			}
+			err = fs.write(context.Background(), IOVector{FilePath: "target", Entries: tc.entries})
+			require.Error(t, err)
+			entries, err := os.ReadDir(root)
+			require.NoError(t, err)
+			for _, entry := range entries {
+				require.NotContains(t, entry.Name(), ".tmp.")
+			}
+			if tc.name != "rename error" {
+				_, err = os.Stat(filepath.Join(root, "target"))
+				require.True(t, os.IsNotExist(err))
+			}
+		})
+	}
+}
+
 func TestLocalETLFSEmptyRootPath(t *testing.T) {
 	fs, err := NewLocalETLFS(
 		"test",

@@ -68,8 +68,26 @@ func TestLockProtocolCapabilitiesFollowProtocolVersion(t *testing.T) {
 		rt.SetGlobalVariables(moruntime.MOProtocolVersion, defines.MORPCVersion31)
 		require.True(t, supportsLockProtocolV28(""))
 		require.True(t, supportsLockProtocolV31(""))
+		require.False(t, supportsLockProtocolV99(""))
 		require.NoError(t, checkMethodVersion(context.Background(), "", &pb.Request{
 			Method: pb.Method_BatchUnlock,
+		}))
+		err = checkMethodVersion(context.Background(), "", &pb.Request{
+			Method: pb.Method_LockWriterFair,
+		})
+		require.True(t, moerr.IsMoErrCode(err, moerr.ErrNotSupported))
+
+		rt.SetGlobalVariables(moruntime.MOProtocolVersion, defines.MORPCVersion98)
+		require.False(t, supportsLockProtocolV99(""))
+		err = checkMethodVersion(context.Background(), "", &pb.Request{
+			Method: pb.Method_LockWriterFair,
+		})
+		require.True(t, moerr.IsMoErrCode(err, moerr.ErrNotSupported))
+
+		rt.SetGlobalVariables(moruntime.MOProtocolVersion, defines.MORPCVersion99)
+		require.True(t, supportsLockProtocolV99(""))
+		require.NoError(t, checkMethodVersion(context.Background(), "", &pb.Request{
+			Method: pb.Method_LockWriterFair,
 		}))
 
 		s := &service{

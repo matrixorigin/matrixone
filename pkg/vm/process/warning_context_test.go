@@ -34,3 +34,26 @@ func TestWarningSinkContextGeneration(t *testing.T) {
 	require.Nil(t, WarningSinkFromContext(ContextWithWarningSink(second, nil)))
 	require.Same(t, old, WarningSinkFromContext(ContextWithWarningSink(nil, old)))
 }
+
+func TestWarningRetentionLimitContextGeneration(t *testing.T) {
+	ctx := context.Background()
+	_, ok := WarningRetentionLimitFromContext(ctx)
+	require.False(t, ok)
+
+	for _, tc := range []struct {
+		name  string
+		value int
+		want  int
+	}{
+		{name: "zero_is_explicit", value: 0, want: 0},
+		{name: "ordinary", value: 128, want: 128},
+		{name: "upper_bound_is_clamped", value: 65536, want: 65535},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			snapshot := ContextWithWarningRetentionLimit(ctx, tc.value)
+			got, ok := WarningRetentionLimitFromContext(snapshot)
+			require.True(t, ok)
+			require.Equal(t, tc.want, got)
+		})
+	}
+}

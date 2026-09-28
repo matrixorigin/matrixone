@@ -75,6 +75,26 @@ func NewSnapshotNotFoundError(ctx context.Context, snapshotName string) error {
 	return moerr.NewInvalidInputf(ctx, "snapshot '%s' not found", snapshotName)
 }
 
+func resolveDivPrecisionIncrement(ctx CompilerContext) int32 {
+	value, err := ctx.ResolveVariable("div_precision_increment", true, false)
+	if err == nil {
+		if increment, ok := value.(int64); ok {
+			return int32(increment)
+		}
+	}
+	return function.DefaultDivPrecisionIncrement
+}
+
+// DDL expression binders are independent of QueryBuilder. Bind persisted
+// expressions with the same statement setting as ordinary SELECT expressions.
+func ddlExpressionContext(ctx CompilerContext, base context.Context) context.Context {
+	bound := function.WithDivPrecisionIncrement(base, resolveDivPrecisionIncrement(ctx))
+	if function.LegacySpecialConsumers(ctx.GetContext()) {
+		return function.WithLegacySpecialConsumers(bound)
+	}
+	return bound
+}
+
 func NewQueryBuilder(queryType plan.Query_StatementType, ctx CompilerContext, isPrepareStatement bool, skipStats bool) *QueryBuilder {
 	//
 	// There is a class of variables that controls SQL behavior.  To add such a variable, first
@@ -98,6 +118,7 @@ func NewQueryBuilder(queryType plan.Query_StatementType, ctx CompilerContext, is
 	var mysqlFullGroupByCompat bool
 	var boolSumAvgCompat bool
 	var noUnsignedSubtraction bool
+	divPrecisionIncrement := resolveDivPrecisionIncrement(ctx)
 
 	mode, err := ctx.ResolveVariable("sql_mode", true, false)
 	if err == nil {
@@ -109,7 +130,6 @@ func NewQueryBuilder(queryType plan.Query_StatementType, ctx CompilerContext, is
 			noUnsignedSubtraction = mysql.HasSQLMode(modeStr, mysql.SQLModeNoUnsignedSubtraction)
 		}
 	}
-
 	var aggSpillMem int64
 	aggSpillMemInt, err := ctx.ResolveVariable("agg_spill_mem", true, false)
 	if err == nil {
@@ -162,6 +182,7 @@ func NewQueryBuilder(queryType plan.Query_StatementType, ctx CompilerContext, is
 		mysqlFullGroupByCompat:   mysqlFullGroupByCompat,
 		boolSumAvgCompat:         boolSumAvgCompat,
 		noUnsignedSubtraction:    noUnsignedSubtraction,
+		divPrecisionIncrement:    divPrecisionIncrement,
 		aggSpillMem:              aggSpillMem,
 		joinSpillMem:             joinSpillMem,
 		sortSpillMem:             sortSpillMem,
@@ -395,22 +416,43 @@ func exprNotNullableWithColResolver(
 }
 
 func isIfNullCase(fn *plan.Function) bool {
-	if fn == nil || fn.Func == nil || fn.Func.ObjName != "case" || len(fn.Args) != 3 {
+	source, elseSource, ok := ifNullCaseSources(fn)
+	if !ok {
 		return false
 	}
+	if source.AuxId < 0 && source.AuxId == elseSource.AuxId {
+		return true
+	}
+	return exprStructuralEqual(source, elseSource)
+}
+
+func ifNullCaseSources(fn *plan.Function) (source, elseSource *plan.Expr, ok bool) {
+	if fn == nil || fn.Func == nil || fn.Func.ObjName != "case" || len(fn.Args) != 3 {
+		return nil, nil, false
+	}
 	condition := fn.Args[0].GetF()
-	return condition != nil && condition.Func != nil && condition.Func.ObjName == "isnull" &&
-		len(condition.Args) == 1 && ifNullCaseSourceMatches(condition.Args[0], fn.Args[2])
+	if condition == nil || condition.Func == nil || condition.Func.ObjName != "isnull" || len(condition.Args) != 1 {
+		return nil, nil, false
+	}
+	elseSource = ifNullCaseElseSource(fn.Args[2])
+	if condition.Args[0] == nil || elseSource == nil {
+		return nil, nil, false
+	}
+	return condition.Args[0], elseSource, true
 }
 
 // CASE type reconciliation can add CAST nodes around IFNULL's ELSE source.
-// Ignore those binder-introduced casts when recognizing the rewrite; the
-// initial IFNULL metadata calculation uses the same source relationship.
-func ifNullCaseSourceMatches(source, elseExpr *plan.Expr) bool {
+// Ignore those binder-introduced casts when recognizing the rewrite.
+func ifNullCaseElseSource(elseExpr *plan.Expr) *plan.Expr {
 	for {
 		fn := elseExpr.GetF()
-		if fn == nil || fn.Func == nil || fn.Func.ObjName != "cast" || len(fn.Args) == 0 {
-			return exprStructuralEqual(source, elseExpr)
+		if fn == nil || fn.Func == nil || fn.Func.ObjName != "cast" || len(fn.Args) == 0 ||
+			fn.GetSyntaxExplicitCast() {
+			return elseExpr
+		}
+		_, overload := function.DecodeOverloadID(fn.Func.Obj)
+		if overload != 0 {
+			return elseExpr
 		}
 		elseExpr = fn.Args[0]
 	}
@@ -526,12 +568,38 @@ func refreshExprNullabilityFromInputs(expr *plan.Expr, inputs ...[]*plan.Expr) {
 	if expr == nil {
 		return
 	}
-	if fn := expr.GetF(); fn != nil {
+	switch impl := expr.Expr.(type) {
+	case *plan.Expr_Col:
+		col := impl.Col
+		if col == nil {
+			expr.Typ.NotNullable = false
+			return
+		}
+		relPos, colPos := int(col.RelPos), int(col.ColPos)
+		expr.Typ.NotNullable = relPos >= 0 && relPos < len(inputs) &&
+			colPos >= 0 && colPos < len(inputs[relPos]) &&
+			inputs[relPos][colPos] != nil && inputs[relPos][colPos].Typ.NotNullable
+	case *plan.Expr_F:
+		fn := impl.F
+		if fn == nil || fn.Func == nil {
+			expr.Typ.NotNullable = false
+			return
+		}
 		for _, arg := range fn.Args {
+			if arg == nil {
+				expr.Typ.NotNullable = false
+				return
+			}
 			refreshExprNullabilityFromInputs(arg, inputs...)
 		}
+		// The children now carry their materialized input contracts. Deducing
+		// from them directly avoids recursively rescanning each subtree.
+		if isIfNullCase(fn) {
+			expr.Typ.NotNullable = fn.Args[1].Typ.NotNullable || fn.Args[2].Typ.NotNullable
+		} else {
+			expr.Typ.NotNullable = function.DeduceNotNullable(fn.Func.Obj, fn.Args)
+		}
 	}
-	expr.Typ.NotNullable = exprEffectivelyNotNullable(expr, inputs...)
 }
 
 // IsJoinExprEffectivelyNotNullable derives the runtime nullability of an
@@ -674,6 +742,9 @@ func (builder *QueryBuilder) copyNode(ctx *BindContext, nodeId int32) int32 {
 	newNodeId := builder.appendNode(newNode, ctx)
 	if _, protected := builder.existentialGateProjects[nodeId]; protected {
 		builder.existentialGateProjects[newNodeId] = struct{}{}
+	}
+	if aliases, ok := builder.scalarReaggAliases[nodeId]; ok {
+		builder.scalarReaggAliases[newNodeId] = append([]scalarReaggAlias(nil), aliases...)
 	}
 	return newNodeId
 }
@@ -1779,11 +1850,16 @@ func (builder *QueryBuilder) remapAllColRefsForConsumer(
 		groupTag := node.BindingTags[0]
 		aggregateTag := node.BindingTags[1]
 		groupSize := int32(len(node.GroupBy))
-
 		// HAVING is evaluated inside the aggregate node, so its output refs are
 		// consumers even when the outer projection does not expose them.
 		for _, expr := range node.FilterList {
 			increaseRefCnt(expr, 1, colRefCnt)
+		}
+		// Child remapping consumes input references. Snapshot demand for
+		// passthrough aliases after all aggregate-local consumers are counted.
+		aliasDemand := make(map[[2]int32]bool)
+		for _, alias := range builder.scalarReaggAliases[nodeID] {
+			aliasDemand[alias.ref] = colRefCnt[alias.ref] > 0
 		}
 
 		neededAggCount := int32(0)
@@ -1871,6 +1947,13 @@ func (builder *QueryBuilder) remapAllColRefsForConsumer(
 
 		remapInfo.tip = "GroupBy"
 		childProjList := builder.qry.Nodes[node.Children[0]].ProjectList
+		var aliasesByGroup map[int32][][2]int32
+		if aliases := builder.scalarReaggAliases[nodeID]; len(aliases) > 0 {
+			aliasesByGroup = make(map[int32][][2]int32, len(aliases))
+			for _, alias := range aliases {
+				aliasesByGroup[alias.groupPos] = append(aliasesByGroup[alias.groupPos], alias.ref)
+			}
+		}
 		for idx, expr := range node.GroupBy {
 			increaseRefCnt(expr, -1, colRefCnt)
 			remapInfo.srcExprIdx = idx
@@ -1881,11 +1964,26 @@ func (builder *QueryBuilder) remapAllColRefsForConsumer(
 			refreshExprNullabilityFromInputs(expr, childProjList)
 
 			globalRef := [2]int32{groupTag, int32(idx)}
-			if colRefCnt[globalRef] == 0 {
+			aliases := aliasesByGroup[int32(idx)]
+			canonicalRef := globalRef
+			for _, aliasRef := range aliases {
+				if aliasDemand[aliasRef] {
+					canonicalRef = aliasRef
+					break
+				}
+			}
+			if colRefCnt[globalRef] == 0 && canonicalRef == globalRef {
 				continue
 			}
 
-			remapping.addColRef(globalRef)
+			// The alias is the original output identity of a previously
+			// computed scalar. Use it as the canonical output when demanded so
+			// an enclosing JOIN carries it through its own column pruning.
+			remapping.addColRef(canonicalRef)
+			remapping.globalToLocal[globalRef] = remapping.globalToLocal[canonicalRef]
+			for _, aliasRef := range aliases {
+				remapping.globalToLocal[aliasRef] = remapping.globalToLocal[canonicalRef]
+			}
 
 			node.ProjectList = append(node.ProjectList, &plan.Expr{
 				Typ: groupingFlagOutputType(expr.Typ, node.GroupingFlag, int32(idx)),
@@ -1893,7 +1991,7 @@ func (builder *QueryBuilder) remapAllColRefsForConsumer(
 					Col: &ColRef{
 						RelPos: -1,
 						ColPos: int32(idx),
-						Name:   builder.nameByColRef[globalRef],
+						Name:   builder.nameByColRef[canonicalRef],
 					},
 				},
 			})
@@ -2758,6 +2856,7 @@ func (builder *QueryBuilder) remapAllColRefsForConsumer(
 		if err != nil {
 			return nil, err
 		}
+		childProjList := builder.qry.Nodes[node.Children[0]].ProjectList
 
 		remapInfo.tip = "FilterList"
 		for idx, expr := range node.FilterList {
@@ -2767,9 +2866,9 @@ func (builder *QueryBuilder) remapAllColRefsForConsumer(
 			if err != nil {
 				return nil, err
 			}
+			refreshExprNullabilityFromInputs(expr, childProjList)
 		}
 
-		childProjList := builder.qry.Nodes[node.Children[0]].ProjectList
 		for i, globalRef := range childRemapping.localToGlobal {
 			if colRefCnt[globalRef] == 0 {
 				continue
@@ -4407,14 +4506,6 @@ func (builder *QueryBuilder) buildUnionWithResultLen(
 						metadata.ProvisionalResultPeerScale = source.Typ.Scale
 					}
 				}
-				if preparedDeferredColumn && preparedExprContainsParam(builder.qry.Nodes[tmpID].ProjectList[columnIdx]) {
-					metadata := ensurePreparedNumericMetadata(builder.qry.Nodes[tmpID].ProjectList[columnIdx])
-					metadata.Fallback = true
-					metadata.ParamPos = -1
-					if pos, ok := firstPlanParamPosition(builder.qry.Nodes[tmpID].ProjectList[columnIdx]); ok {
-						metadata.ParamPos = pos
-					}
-				}
 			}
 		}
 	}
@@ -5344,10 +5435,9 @@ func (builder *QueryBuilder) bindRecursiveCte(
 	nodeID = appendCTEScanNode(builder, ctx, initSourceStep, initCtx.sinkTag)
 	builder.qry.Nodes[nodeID].RecursiveUnionDistinct = distinct
 	setMaterializedProjectionNullability(builder.qry.Nodes[nodeID], recursiveNotNullable)
-	if limitExpr != nil || offsetExpr != nil {
-		node := builder.qry.Nodes[nodeID]
-		node.Limit = limitExpr
-		node.Offset = offsetExpr
+	builder.qry.Nodes[nodeID].Limit, err = recursiveCTEPrefixLimit(builder.GetContext(), limitExpr, offsetExpr)
+	if err != nil {
+		return 0, err
 	}
 	//4.1 make recursive parts as the source step of the CTE Scan Node besides initSourceStep of initial statement
 	for i := 0; i < len(recursiveSteps); i++ {
@@ -5375,6 +5465,9 @@ func (builder *QueryBuilder) bindRecursiveCte(
 	//5.1 add Sink Scan Node as the scan node of the recursive cte
 	sourceStep := builder.appendStep(unionAllLastNodeID)
 	nodeID = appendSinkScanNodeWithTag(builder, ctx, sourceStep, initCtx.sinkTag)
+	// Skipped result rows must still reach the recursive member through the
+	// shared sink. Apply OFFSET only on this non-feedback consumer.
+	builder.qry.Nodes[nodeID].Offset = offsetExpr
 	return
 }
 
@@ -13380,7 +13473,8 @@ func (builder *QueryBuilder) GetContext() context.Context {
 	if builder == nil {
 		return context.TODO()
 	}
-	return function.WithNoUnsignedSubtraction(builder.compCtx.GetContext(), builder.noUnsignedSubtraction)
+	ctx := function.WithNoUnsignedSubtraction(builder.compCtx.GetContext(), builder.noUnsignedSubtraction)
+	return function.WithDivPrecisionIncrement(ctx, builder.divPrecisionIncrement)
 }
 
 func (builder *QueryBuilder) checkPlanningCanceled() error {

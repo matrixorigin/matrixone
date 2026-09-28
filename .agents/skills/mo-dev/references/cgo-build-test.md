@@ -137,7 +137,8 @@ also hashes supported compiler/SDK/flag override values (including `CC`,
 `CXX`, and GPU environment selectors), so a custom profile cannot alias the
 default profile. It does not fingerprint compiler or SDK installation bytes;
 record exact tool versions separately when attribution or reproducibility
-depends on them.
+depends on them. GPU Pixi lock changes invalidate the common provenance and
+force a full thirdparty rebuild even if compiler paths stay unchanged.
 
 ### Why test rpaths differ from packaged binaries
 

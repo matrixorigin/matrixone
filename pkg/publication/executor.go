@@ -38,6 +38,7 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/frontend/databranchutils"
 	"github.com/matrixorigin/matrixone/pkg/logutil"
 	"github.com/matrixorigin/matrixone/pkg/pb/task"
+	"github.com/matrixorigin/matrixone/pkg/pb/txn"
 	"github.com/matrixorigin/matrixone/pkg/taskservice"
 	"github.com/matrixorigin/matrixone/pkg/txn/client"
 	"github.com/matrixorigin/matrixone/pkg/util/executor"
@@ -1313,7 +1314,14 @@ func deleteSnapshotInSeparateTxn(
 	cnUUID string,
 	snapshotName string,
 ) error {
-	txn, err := getTxn(ctx, txnEngine, cnTxnClient, "publication gc delete snapshot")
+	txn, err := getTxn(
+		ctx,
+		txnEngine,
+		cnTxnClient,
+		"publication gc delete snapshot",
+		client.WithTxnMode(txn.TxnMode_Pessimistic),
+		client.WithTxnIsolation(txn.TxnIsolation_RC),
+	)
 	if err != nil {
 		logutil.Error("Publication-Task GCSnapshots failed to create txn for deleting snapshot",
 			zap.String("sname", snapshotName),
@@ -1507,6 +1515,7 @@ var getTxn = func(
 	cnEngine engine.Engine,
 	cnTxnClient client.TxnClient,
 	info string,
+	txnOptions ...client.TxnOption,
 ) (client.TxnOperator, error) {
 	nowTs := cnEngine.LatestLogtailAppliedTime()
 	createByOpt := client.WithTxnCreateBy(
@@ -1514,7 +1523,8 @@ var getTxn = func(
 		"",
 		info,
 		0)
-	op, err := cnTxnClient.New(ctx, nowTs, createByOpt)
+	txnOptions = append([]client.TxnOption{createByOpt}, txnOptions...)
+	op, err := cnTxnClient.New(ctx, nowTs, txnOptions...)
 	if err != nil {
 		return nil, err
 	}

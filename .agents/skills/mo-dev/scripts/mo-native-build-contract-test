@@ -322,11 +322,10 @@ if grep -Fq 'mocl_kernel64.fatbin /mocl_kernel64.fatbin' "$gpu_dockerfile" &&
    grep -Fq 'pixi run --frozen' "$gpu_dev_dockerfile" &&
    ! grep -Eq 'conda env create|/usr/local/cuda' "$gpu_dockerfile" &&
    ! grep -Eq 'conda env create|/usr/local/cuda' "$gpu_dev_dockerfile" &&
-   grep -Fq -- "-name 'libcuda.so*'" "$gpu_dockerfile" &&
-   grep -Fq -- "-name 'libcuda.so*'" "$gpu_dev_dockerfile" &&
-   [ "$(grep -Fxc '      - "optools/images/gpu/Dockerfile"' \
-       "$native_workflow")" -eq 2 ] &&
-   [ "$(grep -Fxc '      - "optools/images/gpu/Dockerfile.dev"' \
+   grep -Fq 'stage-runtime-libs.sh' "$gpu_dockerfile" &&
+   grep -Fq 'stage-runtime-libs.sh' "$gpu_dev_dockerfile" &&
+   grep -Fq 'test_stage_runtime_libs.py' "$native_workflow" &&
+   [ "$(grep -Fxc '      - "optools/images/gpu/**"' \
        "$native_workflow")" -eq 2 ]; then
     pass "GPU runtime images package the sidecar through the Pixi-only contract"
 else

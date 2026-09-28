@@ -465,6 +465,27 @@ clean_all
 produce_outputs gpu
 (CONDA_PREFIX="$work/gpu-b" native record "$repo" gpu debug 1)
 
+# The same Pixi prefix can be upgraded in place. Its compiler paths stay the
+# same while a new lock installs a different compiler/sysroot, so thirdparties
+# must not survive that transition with a newly stamped CGo generation.
+printf 'upgraded lock\n' >>"$work/pixi.lock"
+printf 'upgraded compiler\n' >"$work/gpu-b/bin/x86_64-conda-linux-gnu-c++"
+gpu_lock_upgrade_action=$(CONDA_PREFIX="$work/gpu-b" \
+    native prepare "$repo" gpu debug 1)
+if [ "$gpu_lock_upgrade_action" = rebuild-all ]; then
+    echo "ok   same-prefix Pixi lock upgrade rebuilds compiler-owned thirdparties"
+else
+    printf 'FAIL same-prefix Pixi upgrade expected rebuild-all, got %s\n' \
+        "$gpu_lock_upgrade_action"
+    failures=$((failures + 1))
+fi
+clean_all
+(CONDA_PREFIX="$work/gpu-b" native begin "$repo" gpu debug 1)
+produce_outputs gpu
+(CONDA_PREFIX="$work/gpu-b" native record "$repo" gpu debug 1)
+(CONDA_PREFIX="$work/gpu-b" native verify "$repo" \
+    "$repo/cgo/libmo.dylib" darwin amd64 gpu debug 1)
+
 # Both the compiler output and executable-side publication belong to the same
 # GPU generation. Content hashes, not mtimes alone, close restored-time drift.
 printf 'mismatched gpu kernel\n' >"$repo/cgo/cuda/mocl_kernel64.fatbin"

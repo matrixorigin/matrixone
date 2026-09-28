@@ -27,6 +27,21 @@ import (
 
 // These functions are exposed externally via SQL API.
 
+// checkVectorFinite returns the controlled-overflow error when any component is non-finite, so
+// vector-vector arithmetic rejects an overflowed (or NaN) result instead of persisting it, the same
+// way ScalarOp guards vector-scalar arithmetic. It uses the metric.CheckFinite* test x-x != 0 (0 for
+// every finite x, NaN for +Inf/-Inf/NaN alike): it also catches a NaN produced from a non-finite
+// input (e.g. Inf-Inf) that a math.IsInf check would miss, and stays in T's domain with no float64
+// widening per element.
+func checkVectorFinite[T types.RealNumbers](x []T) error {
+	for i := range x {
+		if x[i]-x[i] != 0 {
+			return moerr.NewInternalErrorNoCtx("vector contains infinity values")
+		}
+	}
+	return nil
+}
+
 func Add[T types.RealNumbers](p, q []T) ([]T, error) {
 	if len(p) != len(q) {
 		return nil, moerr.NewArrayInvalidOpNoCtx(len(p), len(q))
@@ -56,6 +71,9 @@ func Add[T types.RealNumbers](p, q []T) ([]T, error) {
 	for i < n {
 		x[i] = p[i] + q[i]
 		i++
+	}
+	if err := checkVectorFinite(x); err != nil {
+		return nil, err
 	}
 	return x, nil
 }
@@ -90,6 +108,9 @@ func Subtract[T types.RealNumbers](p, q []T) ([]T, error) {
 		x[i] = p[i] - q[i]
 		i++
 	}
+	if err := checkVectorFinite(x); err != nil {
+		return nil, err
+	}
 	return x, nil
 }
 
@@ -122,6 +143,9 @@ func Multiply[T types.RealNumbers](p, q []T) ([]T, error) {
 	for i < n {
 		x[i] = p[i] * q[i]
 		i++
+	}
+	if err := checkVectorFinite(x); err != nil {
+		return nil, err
 	}
 	return x, nil
 }
@@ -162,6 +186,9 @@ func Divide[T types.RealNumbers](p, q []T) ([]T, error) {
 	for i < n {
 		x[i] = p[i] / q[i]
 		i++
+	}
+	if err := checkVectorFinite(x); err != nil {
+		return nil, err
 	}
 	return x, nil
 }

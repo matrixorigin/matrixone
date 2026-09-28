@@ -13,4 +13,4 @@ l_partkey = p_partkey
 and l_shipdate >= date '1996-04-01'
 and l_shipdate < date '1996-04-01' + interval '1' month;
 promo_revenue
-17.68284163936513
+17.6828416394

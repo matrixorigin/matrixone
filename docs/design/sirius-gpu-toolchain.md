@@ -29,8 +29,8 @@ its ordinary CUDA 13.2 and CUDA 12 profiles remain unaffected. MO's own Pixi
 profile supports MO GPU-only builds without Sirius source. Combined builds
 run under Sirius's MO profile, not a second environment. Every GPU invocation
 uses `pixi run --frozen`; native provenance binds the Pixi project, environment,
-prefix, and lockfile digest, so changing the installed profile invalidates
-reusable native artifacts.
+prefix, and lockfile digest. A lock revision forces a full thirdparty and CGo
+rebuild because its compiler or sysroot may change without changing paths.
 
 Make and the CGo test wrapper derive the compiler, NVCC, CUDA target
 include/library directories and RAPIDS directories from the activated Pixi
@@ -67,11 +67,13 @@ by default.
 
 The deleted `go_cuda-133_arch-x86_64.yaml` is not converted at upgrade time:
 `optools/gpu/pixi.toml` and its lock are the MO GPU-only source of truth. Sirius
-independently locks its `mo` profile. To upgrade cuVS, update the compatible
-CUDA/cuVS/RMM constraints and regenerate each affected Pixi lock; verify the
-MO GPU-only build and the combined build against Sirius's one activated `mo`
-prefix. The bridge rejects mixed prefixes, so differing standalone lockfiles
-cannot silently provide libraries to one combined binary.
+independently locks its multi-environment `mo` profile; its whole lock must not
+replace MO's smaller standalone lock. The upgrade helper synchronizes shared
+direct constraints from Sirius's `mo` manifest into MO's manifest and asks
+Pixi to re-lock MO's own graph. Verify the MO GPU-only build and the combined
+build against Sirius's one activated `mo` prefix. The bridge rejects mixed
+prefixes, so differing standalone lockfiles cannot silently provide libraries
+to one combined binary.
 
 The rejected optional-provider design added a bespoke manifest exporter,
 resolver, and two copies of GPU package identity. A system CUDA/Conda fallback

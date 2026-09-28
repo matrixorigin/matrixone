@@ -203,8 +203,8 @@ select ceil(12.345,2.5),floor(12.345,2.5),round(12.345,2.5),truncate(12.345,2.5)
 12.345  ¦  12.345  ¦  12.345  ¦  12.345
 select from_days(d),week(cast('2026-09-20' as date),d),yearweek(cast('2026-09-20' as date),d),timestampadd(day,d,cast('2026-09-20' as date)) from sources order by id;
 ➤ from_days(d)[91,10,0]  ¦  week(cast(2026-09-20 as date), d)[-6,8,0]  ¦  yearweek(cast(2026-09-20 as date), d)[-5,64,0]  ¦  timestampadd(day, d, cast(2026-09-20 as date))[91,10,0]  𝄀
-null  ¦  38  ¦  202638  ¦  2026-09-23  𝄀
-null  ¦  38  ¦  202638  ¦  2026-09-22  𝄀
+0000-00-00  ¦  38  ¦  202638  ¦  2026-09-23  𝄀
+0000-00-00  ¦  38  ¦  202638  ¦  2026-09-22  𝄀
 null  ¦  38  ¦  202638  ¦  null
 select subvector(cast('[1,2,3,4]' as vecf32(4)),d),subvector(cast('[1,2,3,4]' as vecf32(4)),1,d) from sources order by id;
 ➤ subvector(cast([1,2,3,4] as vecf32(4)), d)[12,65535,0]  ¦  subvector(cast([1,2,3,4] as vecf32(4)), 1, d)[12,65535,0]  𝄀
@@ -230,11 +230,11 @@ prepare utility_source from 'select period_add(202401,?),round(12.345,?),from_da
 set @v=1.5;
 execute utility_source using @v,@v,@v,@v,@v,@v,@v,@v;
 ➤ period_add(202401, ?)[-5,64,0]  ¦  round(12.345, ?)[3,5,3]  ¦  from_days(?)[91,10,0]  ¦  week(cast(2026-09-20 as date), ?)[-6,8,0]  ¦  timestampadd(day, ?, cast(2026-09-20 as date))[91,10,0]  ¦  split_part(a.b.c, ., ?)[12,5,0]  ¦  sha2(matrixone, ?)[12,128,0]  ¦  regexp_instr(abcabc, b, ?)[-5,64,0]  𝄀
-202403  ¦  12.350  ¦  null  ¦  38  ¦  2026-09-22  ¦  b  ¦  null  ¦  2
+202403  ¦  12.350  ¦  0000-00-00  ¦  38  ¦  2026-09-22  ¦  b  ¦  null  ¦  2
 set @v='2.5tail';
 execute utility_source using @v,@v,@v,@v,@v,@v,@v,@v;
 ➤ period_add(202401, ?)[-5,64,0]  ¦  round(12.345, ?)[3,5,3]  ¦  from_days(?)[91,10,0]  ¦  week(cast(2026-09-20 as date), ?)[-6,8,0]  ¦  timestampadd(day, ?, cast(2026-09-20 as date))[91,10,0]  ¦  split_part(a.b.c, ., ?)[12,5,0]  ¦  sha2(matrixone, ?)[12,128,0]  ¦  regexp_instr(abcabc, b, ?)[-5,64,0]  𝄀
-202403  ¦  12.350  ¦  null  ¦  38  ¦  2026-09-22  ¦  b  ¦  null  ¦  2
+202403  ¦  12.350  ¦  0000-00-00  ¦  38  ¦  2026-09-22  ¦  b  ¦  null  ¦  2
 set @v=null;
 execute utility_source using @v,@v,@v,@v,@v,@v,@v,@v;
 ➤ period_add(202401, ?)[-5,64,0]  ¦  round(12.345, ?)[3,5,3]  ¦  from_days(?)[91,10,0]  ¦  week(cast(2026-09-20 as date), ?)[-6,8,0]  ¦  timestampadd(day, ?, cast(2026-09-20 as date))[91,10,0]  ¦  split_part(a.b.c, ., ?)[12,5,0]  ¦  sha2(matrixone, ?)[12,128,0]  ¦  regexp_instr(abcabc, b, ?)[-5,64,0]  𝄀

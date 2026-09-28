@@ -73,6 +73,12 @@ host_platform() {
 }
 
 native_common_environment_hash() {
+    common_accelerator=$1
+    common_pixi_lock_hash=
+    if [ "$common_accelerator" = gpu ]; then
+        common_pixi_lock_hash=$(git hash-object --no-filters \
+            "$PIXI_PROJECT_ROOT/pixi.lock") || return 1
+    fi
     {
         # These are the supported Make/toolchain overrides that can change
         # regular CGo or thirdparty bytes. Empty values represent repository
@@ -95,6 +101,12 @@ native_common_environment_hash() {
         printf 'MACOSX_DEPLOYMENT_TARGET=%s\n' "${MACOSX_DEPLOYMENT_TARGET-}"
         printf 'UNAME_S=%s\n' "${UNAME_S-}"
         printf 'UNAME_M=%s\n' "${UNAME_M-}"
+        if [ "$common_accelerator" = gpu ]; then
+            # A Pixi lock replacement can change the compiler and sysroot at
+            # the same CC/CXX paths. Thirdparties must then be rebuilt too,
+            # even though accelerator-only flag changes need only rebuild CGo.
+            printf 'PIXI_LOCK_HASH=%s\n' "$common_pixi_lock_hash"
+        fi
     } | git hash-object --stdin
 }
 
@@ -162,7 +174,7 @@ emit_provenance() {
     if [ "$accelerator" = gpu ]; then
         . "$root/cgo/mo-gpu-env" || return 1
     fi
-    common_environment_hash=$(native_common_environment_hash) || return 1
+    common_environment_hash=$(native_common_environment_hash "$accelerator") || return 1
     accelerator_environment_hash=$(native_accelerator_environment_hash \
         "$accelerator") || return 1
 

@@ -408,7 +408,11 @@ type QueryBuilder struct {
 	// detached CTE contexts cannot lose the private system-function owner.
 	persistedViewTarget string
 
-	ctxByNode               []*BindContext
+	ctxByNode []*BindContext
+	// Synthetic scalar reaggregations preserve earlier scalar outputs as
+	// grouping keys. Each alias keeps its original column identity through
+	// final column pruning without changing the executable plan format.
+	scalarReaggAliases      map[int32][]scalarReaggAlias
 	headingProvenanceByNode map[int32]headingProvenanceMap
 	windowValidationScans   []*plan.Node
 	nameByColRef            map[[2]int32]string
@@ -475,6 +479,9 @@ type QueryBuilder struct {
 	nextBindTag      int32
 	nextMsgTag       int32
 	nextSQLUdfCallID uint64
+	// Negative AuxIds identify memoized expression sources across every bind
+	// context that can contribute expressions to this query.
+	nextVolatileExprMemoID int32
 
 	isPrepareStatement     bool
 	mysqlCompatible        bool
@@ -484,6 +491,7 @@ type QueryBuilder struct {
 	// window, PREPARE) reads the same decision.
 	boolSumAvgCompat      bool
 	noUnsignedSubtraction bool
+	divPrecisionIncrement int32
 	isForUpdate           bool // if it's a query plan for update
 	isRestore             bool
 	isRestoreByTs         bool
@@ -949,7 +957,6 @@ type BindContext struct {
 	projectByExpr          map[string]int32
 	timeByAst              map[string]int32
 	whereFilters           []*plan.Expr
-	volatileExprMemoID     int32
 	flattenedVolatileExprs map[int32]*plan.Expr
 	// gapFillWhereFilters preserves the complete bound WHERE tree before
 	// subqueries are flattened into joins. Bounded GAPFILL inference must see
@@ -1107,6 +1114,9 @@ type baseBinder struct {
 	ctx       *BindContext
 	impl      Binder
 	boundCols []boundColumn
+	// Catalog FORMAT must choose its legacy string contract before binding
+	// precision: some historical source types (e.g. DATE) cannot cast to INT64.
+	persistedFormatCompatibility bool
 	// Integer consumers own the source domain of their operands. An enclosing
 	// default/assignment target must not pre-convert their numeric literals.
 	integerArgumentSourceContext     bool

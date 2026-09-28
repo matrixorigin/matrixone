@@ -20,19 +20,37 @@ artifacts and Sirius SDK use the same activated prefix before packaging.
 Make and Go test entrypoints require `PIXI_PROJECT_ROOT`,
 `PIXI_ENVIRONMENT_NAME`, and `CONDA_PREFIX` from Pixi activation and fail if
 required CUDA/cuVS inputs are missing. Native provenance includes the Pixi
-prefix, selected environment, and lockfile digest, so changing the profile
-invalidates cached GPU artifacts.
+prefix, selected environment, and lockfile digest. A changed lock forces a
+full thirdparty and CGo rebuild because the compiler or sysroot can change at
+the same paths.
 
 The build uses separate compiler and CUDA target roots inside the Pixi prefix.
 NVCC uses Pixi's host C++ compiler. Driver stubs are used only for linking;
 they are excluded from runtime search paths.
 
-To upgrade cuVS, change the version constraints in this `pixi.toml` and run
-`pixi lock` here; there is no Conda YAML conversion step. Sirius's separate
-`mo` profile must be upgraded and locked for a combined build. Build MO under
-that Sirius profile and rerun the combined cuVS/Sirius test so both components
-use the same installed libraries. MO's standalone lock is for MO GPU-only
-builds and is never combined with the Sirius SDK.
+From the MO repository root, use the following upgrade commands. Sirius's
+`pixi.lock` covers several environments and platforms, including
+packages MO does not use. Do not copy or subset it into MO's standalone lock.
+For a cuVS/toolchain upgrade, first update and lock Sirius's `mo` profile,
+then synchronize its shared direct constraints into MO and let Pixi resolve
+MO's own smaller dependency graph:
+
+```sh
+python3 optools/gpu/sync_sirius_mo.py \
+  --sirius-manifest /path/to/sirius/pixi.toml --check
+python3 optools/gpu/sync_sirius_mo.py \
+  --sirius-manifest /path/to/sirius/pixi.toml
+cd optools/gpu && pixi lock --check
+```
+
+The helper updates MO's manifest and lock only when the shared constraints
+change; it leaves MO-only dependencies in place. If the CUDA minor version
+changes, the helper first requests the shown `pixi workspace platform edit`
+command for MO's `__cuda` virtual package; rerun the helper after that edit.
+Build MO under both its own GPU-only profile and Sirius's single `mo` profile,
+then rerun the combined cuVS/Sirius test. The standalone MO lock is never used
+to supply libraries
+to the combined binary.
 
 Pixi supplies user-space dependencies. GPU execution still requires compatible
 NVIDIA hardware and a host driver. This PR configures builds and tests; the
@@ -44,4 +62,6 @@ Focused contract tests require Python and Make, with no GPU dependencies:
 
 ```sh
 python3 -m unittest discover -s cgo -p 'test_gpu_toolchain.py' -v
+python3 -m unittest discover -s optools/gpu -p 'test_sync_sirius_mo.py' -v
+python3 -m unittest discover -s optools/images/gpu -p 'test_stage_runtime_libs.py' -v
 ```

@@ -12,8 +12,7 @@ on:
       - "go.mod"
       - "go.sum"
       - "optools/images/Dockerfile"
-      - "optools/images/gpu/Dockerfile"
-      - "optools/images/gpu/Dockerfile.dev"
+      - "optools/images/gpu/**"
       - "optools/run_ut.sh"
       - "optools/gpu/**"
       - "optools/ut_tools.bash"
@@ -31,8 +30,7 @@ on:
       - "go.mod"
       - "go.sum"
       - "optools/images/Dockerfile"
-      - "optools/images/gpu/Dockerfile"
-      - "optools/images/gpu/Dockerfile.dev"
+      - "optools/images/gpu/**"
       - "optools/run_ut.sh"
       - "optools/gpu/**"
       - "optools/ut_tools.bash"
@@ -62,10 +60,15 @@ jobs:
       - name: Validate native state, staging, and Make DAG
         run: |
           python3 -m unittest discover -s cgo -p 'test_gpu_toolchain.py' -v
+          python3 -m unittest discover -s optools/gpu -p 'test_sync_sirius_mo.py' -v
+          if [ "$RUNNER_OS" = Linux ]; then
+            python3 -m unittest discover -s optools/images/gpu -p 'test_stage_runtime_libs.py' -v
+          fi
           sh -n \
             cgo/mo-gpu-env \
             cgo/mo-native-provenance \
             cgo/mo-stage-native-libs \
+            optools/images/gpu/stage-runtime-libs.sh \
             .agents/skills/mo-dev/scripts/mo-cgo-test \
             .agents/skills/mo-dev/scripts/mo-cgo-test-tags-test \
             .agents/skills/mo-dev/scripts/mo-cgo-test-worktree-artifacts-test \
