@@ -338,6 +338,10 @@ message KeepLockTableBindRequest {
   Status Status = 2;
   repeated bytes TxnIDs = 3;
   repeated LockTable LockTables = 4 [(gogoproto.nullable) = false];
+  // Echo the allocator epoch observed by this CN. A replacement allocator
+  // accepts an in-progress drain only after the CN has observed its epoch.
+  string ObservedAllocatorID = 5;
+  uint64 ObservedAllocatorVersion = 6;
 }
 
 // KeepLockTableBindResponse keep lock table bind response. TN -> CN

@@ -27,6 +27,7 @@ import (
 	moruntime "github.com/matrixorigin/matrixone/pkg/common/runtime"
 	"github.com/matrixorigin/matrixone/pkg/defines"
 	pb "github.com/matrixorigin/matrixone/pkg/pb/lock"
+	"github.com/matrixorigin/matrixone/pkg/pb/timestamp"
 	"github.com/stretchr/testify/require"
 )
 
@@ -82,12 +83,16 @@ func TestInstanceBoundDrainColdCNNeedsFreshHeartbeat(t *testing.T) {
 			t.Fatal(err)
 		}
 		defer client.Close()
-		sendHeartbeat := func(status pb.Status) pb.KeepLockTableBindResponse {
+		sendHeartbeat := func(status pb.Status, observed bool) pb.KeepLockTableBindResponse {
 			req := acquireRequest()
 			defer releaseRequest(req)
 			req.Method = pb.Method_KeepLockTableBind
 			req.KeepLockTableBind.ServiceID = id
 			req.KeepLockTableBind.Status = status
+			if observed {
+				req.KeepLockTableBind.ObservedAllocatorID = a.allocatorID
+				req.KeepLockTableBind.ObservedAllocatorVersion = a.version
+			}
 			ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
 			defer cancel()
 			resp, err := client.Send(ctx, req)
@@ -97,21 +102,183 @@ func TestInstanceBoundDrainColdCNNeedsFreshHeartbeat(t *testing.T) {
 			defer releaseResponse(resp)
 			return resp.KeepLockTableBind
 		}
-		if sendHeartbeat(pb.Status_ServiceUnLockSucc).OK || a.beginDrain(request).OK || a.queryDrain(query).Safe {
+		if sendHeartbeat(pb.Status_ServiceUnLockSucc, false).OK || a.beginDrain(request).OK || a.queryDrain(query).Safe {
 			t.Fatal("stale completion heartbeat adopted a pending cold CN")
 		}
-		observed := sendHeartbeat(pb.Status_ServiceLockEnable)
+		observed := sendHeartbeat(pb.Status_ServiceLockEnable, true)
 		if !observed.OK || observed.Status != pb.Status_ServiceLockWaiting || !a.beginDrain(request).OK {
 			t.Fatal("normal heartbeat did not establish the exact cold CN drain")
 		}
 		if a.queryDrain(query).Safe {
 			t.Fatal("heartbeat was mistaken for completed drain")
 		}
-		if completed := sendHeartbeat(pb.Status_ServiceUnLockSucc); !completed.OK ||
+		if completed := sendHeartbeat(pb.Status_ServiceUnLockSucc, true); !completed.OK ||
 			completed.Status != pb.Status_ServiceCanRestart || !a.queryDrain(query).Safe {
 			t.Fatal("completed cold CN drain was not accepted")
 		}
 	})
+}
+
+func TestInstanceBoundDrainResumesAfterAllocatorLoss(t *testing.T) {
+	runLockTableAllocatorTest(t, time.Hour, func(a *lockTableAllocator) {
+		const id = "1234567890123456789restarting-cn"
+		const attempt = "new-allocator-attempt"
+		// The CN reached Waiting against the previous allocator. A replacement
+		// allocator has no bind record, while the CN must not reopen admission.
+		begin := a.beginDrain(pb.BeginDrainRequest{ServiceID: id, AttemptID: attempt})
+		if begin.OK {
+			t.Fatal("unknown service was accepted without a heartbeat")
+		}
+		client, err := NewClient("", morpc.Config{})
+		if err != nil {
+			t.Fatal(err)
+		}
+		defer client.Close()
+		sendHeartbeat := func(status pb.Status, observed bool, txnIDs ...[]byte) pb.KeepLockTableBindResponse {
+			req := acquireRequest()
+			defer releaseRequest(req)
+			req.Method = pb.Method_KeepLockTableBind
+			req.KeepLockTableBind.ServiceID = id
+			req.KeepLockTableBind.Status = status
+			req.KeepLockTableBind.TxnIDs = txnIDs
+			if observed {
+				req.KeepLockTableBind.ObservedAllocatorID = a.allocatorID
+				req.KeepLockTableBind.ObservedAllocatorVersion = a.version
+			}
+			ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+			defer cancel()
+			resp, err := client.Send(ctx, req)
+			if err != nil {
+				t.Fatal(err)
+			}
+			defer releaseResponse(resp)
+			return resp.KeepLockTableBind
+		}
+		if sendHeartbeat(pb.Status_ServiceLockWaiting, false).OK ||
+			a.beginDrain(pb.BeginDrainRequest{ServiceID: id, AttemptID: attempt}).OK {
+			t.Fatal("old allocator heartbeat adopted the pending drain")
+		}
+		if !sendHeartbeat(pb.Status_ServiceLockWaiting, true, []byte("remote-txn")).OK {
+			t.Fatal("live draining CN could not re-handshake with the new allocator")
+		}
+		if !a.beginDrain(pb.BeginDrainRequest{ServiceID: id, AttemptID: attempt}).OK {
+			t.Fatal("fresh attempt did not become accepted")
+		}
+		query := pb.QueryDrainRequest{ServiceID: id, AttemptID: attempt,
+			AllocatorID: a.allocatorID, AllocatorVersion: a.version}
+		if a.queryDrain(query).Safe || a.canGetBind(id) ||
+			a.Get(id, 0, 1, 0, pb.Sharding_None).Valid {
+			t.Fatal("remote transaction or pending drain allowed unsafe exit or bind")
+		}
+		if completed := sendHeartbeat(pb.Status_ServiceUnLockSucc, true, []byte("remote-txn")); completed.OK || a.queryDrain(query).Safe {
+			t.Fatal("terminal phase with a remote transaction was accepted")
+		}
+		if completed := sendHeartbeat(pb.Status_ServiceUnLockSucc, true); !completed.OK ||
+			completed.Status != pb.Status_ServiceCanRestart || !a.queryDrain(query).Safe {
+			t.Fatal("drained CN was not confirmed after remote transaction release")
+		}
+	})
+}
+
+func TestLiveRemoteLockDrainResumesAfterAllocatorLoss(t *testing.T) {
+	runLockServiceTests(t, []string{"owner", "remote"},
+		func(a *lockTableAllocator, services []*service) {
+			owner, remote := services[0], services[1]
+			ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
+			defer cancel()
+			const table = uint64(51801)
+			ownerTxn, remoteTxn := newTestTxnID(1), newTestTxnID(2)
+			rows, opts := newTestRows(1), newTestRowExclusiveOptions()
+			_, err := owner.Lock(ctx, table, rows, ownerTxn, opts)
+			require.NoError(t, err)
+			require.NoError(t, owner.Unlock(ctx, ownerTxn, timestamp.Timestamp{}))
+			_, err = remote.Lock(ctx, table, rows, remoteTxn, opts)
+			require.NoError(t, err)
+			require.Equal(t, owner.serviceID, remote.tableGroups.get(0, table).getBind().ServiceID)
+			require.False(t, owner.activeTxnHolder.empty())
+
+			const attempt = "recover-drain"
+			require.True(t, a.beginDrain(pb.BeginDrainRequest{
+				ServiceID: owner.serviceID, AttemptID: attempt}).OK)
+			owner.remote.keeper.(*lockTableKeeper).doKeepLockTableBind(ctx)
+			// The keeper dispatches this transition asynchronously in production.
+			// Invoke the same idempotent transition here as the synchronization
+			// point before replacing the allocator.
+			owner.checkCanMoveGroupTables()
+			require.Equal(t, pb.Status_ServiceLockWaiting, owner.getStatus())
+
+			// The old allocator's volatile state disappears while the remote
+			// transaction is still holding a lock on this CN.
+			a.mu.Lock()
+			a.mu.services = make(map[string]*serviceBinds)
+			a.mu.lockTables = make(map[uint32]map[uint64]pb.LockTable)
+			a.allocatorID = "replacement-allocator"
+			a.version++
+			a.mu.Unlock()
+			begin := a.beginDrain(pb.BeginDrainRequest{
+				ServiceID: owner.serviceID, AttemptID: attempt})
+			require.False(t, begin.OK)
+			query := pb.QueryDrainRequest{ServiceID: owner.serviceID, AttemptID: attempt,
+				AllocatorID: begin.AllocatorID, AllocatorVersion: begin.AllocatorVersion}
+			owner.remote.keeper.(*lockTableKeeper).doKeepLockTableBind(ctx)
+			require.Equal(t, begin.AllocatorID, owner.allocatorStateSnapshot().id)
+			require.False(t, a.beginDrain(pb.BeginDrainRequest{
+				ServiceID: owner.serviceID, AttemptID: attempt}).OK)
+			require.False(t, a.queryDrain(query).Safe)
+			owner.remote.keeper.(*lockTableKeeper).doKeepLockTableBind(ctx)
+			require.True(t, a.beginDrain(pb.BeginDrainRequest{
+				ServiceID: owner.serviceID, AttemptID: attempt}).OK)
+			require.False(t, a.queryDrain(query).Safe)
+			require.Equal(t, pb.Status_ServiceLockWaiting, owner.getStatus())
+
+			require.NoError(t, remote.Unlock(ctx, remoteTxn, timestamp.Timestamp{}))
+			owner.remote.keeper.(*lockTableKeeper).doKeepLockTableBind(ctx)
+			require.True(t, a.queryDrain(query).Safe)
+		})
+}
+
+func TestInstanceBoundDrainTerminalRehandshake(t *testing.T) {
+	for _, status := range []pb.Status{
+		pb.Status_ServiceUnLockSucc, pb.Status_ServiceCanRestart,
+	} {
+		t.Run(status.String(), func(t *testing.T) {
+			runLockTableAllocatorTest(t, time.Hour, func(a *lockTableAllocator) {
+				const id = "1234567890123456789terminal-cn"
+				const attempt = "recovery-attempt"
+				require.False(t, a.beginDrain(pb.BeginDrainRequest{
+					ServiceID: id, AttemptID: attempt}).OK)
+				client, err := NewClient("", morpc.Config{})
+				require.NoError(t, err)
+				defer client.Close()
+				send := func(observedID string, observedVersion uint64) bool {
+					req := acquireRequest()
+					defer releaseRequest(req)
+					req.Method = pb.Method_KeepLockTableBind
+					req.KeepLockTableBind.ServiceID = id
+					req.KeepLockTableBind.Status = status
+					req.KeepLockTableBind.ObservedAllocatorID = observedID
+					req.KeepLockTableBind.ObservedAllocatorVersion = observedVersion
+					ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+					defer cancel()
+					resp, err := client.Send(ctx, req)
+					require.NoError(t, err)
+					defer releaseResponse(resp)
+					return resp.KeepLockTableBind.OK
+				}
+				query := pb.QueryDrainRequest{ServiceID: id, AttemptID: attempt,
+					AllocatorID: a.allocatorID, AllocatorVersion: a.version}
+				require.False(t, send("", 0))
+				require.False(t, send("old-allocator", a.version))
+				require.False(t, send(a.allocatorID, a.version-1))
+				require.False(t, a.queryDrain(query).Safe)
+				require.True(t, send(a.allocatorID, a.version))
+				require.True(t, a.beginDrain(pb.BeginDrainRequest{
+					ServiceID: id, AttemptID: attempt}).OK)
+				require.True(t, a.queryDrain(query).Safe)
+				require.False(t, a.canGetBind(id))
+			})
+		})
+	}
 }
 
 func TestInstanceBoundDrainProtocol(t *testing.T) {
@@ -242,6 +409,23 @@ func TestInstanceBoundDrainRetirementExpiresFailClosed(t *testing.T) {
 }
 
 func TestInstanceBoundDrainWireRoundTrip(t *testing.T) {
+	heartbeat := pb.Request{Method: pb.Method_KeepLockTableBind}
+	heartbeat.KeepLockTableBind.ServiceID = "1234567890123456789uuid1"
+	heartbeat.KeepLockTableBind.Status = pb.Status_ServiceLockWaiting
+	heartbeat.KeepLockTableBind.ObservedAllocatorID = "allocator-1"
+	heartbeat.KeepLockTableBind.ObservedAllocatorVersion = 42
+	heartbeatData, err := heartbeat.Marshal()
+	if err != nil {
+		t.Fatal(err)
+	}
+	var decodedHeartbeat pb.Request
+	if err := decodedHeartbeat.Unmarshal(heartbeatData); err != nil {
+		t.Fatal(err)
+	}
+	if decodedHeartbeat.KeepLockTableBind.ObservedAllocatorID != "allocator-1" ||
+		decodedHeartbeat.KeepLockTableBind.ObservedAllocatorVersion != 42 {
+		t.Fatalf("heartbeat epoch was lost on the wire: %+v", decodedHeartbeat.KeepLockTableBind)
+	}
 	request := pb.Request{
 		Method: pb.Method_BeginDrain,
 		BeginDrain: pb.BeginDrainRequest{

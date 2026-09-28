@@ -465,7 +465,8 @@ func (l *lockTableAllocator) beginDrain(req pb.BeginDrainRequest) pb.BeginDrainR
 		}
 		// A CN that has never requested GetBind has no allocator bind yet.
 		// Create a pending, non-admitting bind, but do not accept the drain
-		// until this exact instance sends a fresh normal-state heartbeat.
+		// until this exact instance acknowledges this allocator epoch in a
+		// heartbeat. It may already be draining against a lost allocator.
 		b = newServiceBinds(req.ServiceID,
 			l.logger.With(zap.String("lockservice", req.ServiceID)), l.logger)
 		b.drainAttemptID = req.AttemptID
@@ -1403,15 +1404,25 @@ func (b *serviceBinds) active() bool {
 	return true
 }
 
-func (b *serviceBinds) confirmPendingDrainHeartbeat(status pb.Status) bool {
+func (b *serviceBinds) confirmPendingDrainHeartbeat(
+	req pb.KeepLockTableBindRequest,
+	allocatorID string,
+	allocatorVersion uint64,
+) bool {
 	b.Lock()
 	defer b.Unlock()
 	if !b.drainAwaitingHeartbeat {
 		return true
 	}
-	// A stale drain phase from before an allocator restart is not proof
-	// that this new attempt reached the current CN incarnation.
-	if status != pb.Status_ServiceLockEnable {
+	// A heartbeat sent before the CN observed this allocator may carry an
+	// old terminal drain phase. Require the live CN to echo this epoch;
+	// unlike an Enable-only handshake, this also lets a CN already in
+	// Waiting or a later phase finish without reopening lock admission.
+	if allocatorID == "" || allocatorVersion == 0 ||
+		req.ObservedAllocatorID != allocatorID ||
+		req.ObservedAllocatorVersion != allocatorVersion ||
+		req.Status < pb.Status_ServiceLockEnable ||
+		req.Status > pb.Status_ServiceCanRestart {
 		return false
 	}
 	b.drainAwaitingHeartbeat = false
@@ -1570,8 +1581,17 @@ func (l *lockTableAllocator) handleKeepLockTableBind(
 		writeResponse(l.logger, cancel, resp, nil, cs)
 		return
 	}
-	if b == nil || !b.confirmPendingDrainHeartbeat(req.KeepLockTableBind.Status) {
-		// A pending drain may only accept a fresh normal-state heartbeat.
+	if (req.KeepLockTableBind.Status >= pb.Status_ServiceUnLockSucc &&
+		len(req.KeepLockTableBind.TxnIDs) != 0) ||
+		req.KeepLockTableBind.Status < pb.Status_ServiceLockEnable ||
+		req.KeepLockTableBind.Status > pb.Status_ServiceCanRestart {
+		resp.KeepLockTableBind.OK = false
+		writeResponse(l.logger, cancel, resp, nil, cs)
+		return
+	}
+	if b == nil || !b.confirmPendingDrainHeartbeat(req.KeepLockTableBind,
+		l.allocatorID, l.version) {
+		// The CN has not yet echoed this allocator's identity and epoch.
 		resp.KeepLockTableBind.OK = false
 		writeResponse(l.logger, cancel, resp, nil, cs)
 		return
@@ -1591,6 +1611,11 @@ func (l *lockTableAllocator) handleKeepLockTableBind(
 	case pb.Status_ServiceLockEnable:
 		resp.KeepLockTableBind.Status = b.getStatus()
 	case pb.Status_ServiceUnLockSucc:
+		b.disable()
+		l.disableTableBindsWithoutDelete(b)
+		b.setStatus(pb.Status_ServiceCanRestart)
+		resp.KeepLockTableBind.Status = pb.Status_ServiceCanRestart
+	case pb.Status_ServiceCanRestart:
 		b.disable()
 		l.disableTableBindsWithoutDelete(b)
 		b.setStatus(pb.Status_ServiceCanRestart)
