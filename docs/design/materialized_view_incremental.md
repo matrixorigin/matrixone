@@ -1,14 +1,14 @@
 # Materialized views: implemented contract (D2)
 
 Status: implementation contract for this PR. The persisted definition is format
-1 and requires the dedicated protocol 74 capability. This document describes the implemented aggregate
+1 and requires the dedicated protocol 101 capability. This document describes the implemented aggregate
 and UNION ALL variants; it does not specify a future operator-graph format.
 
 ## Design traceability and approval
 
 - Owning issue: [matrixorigin/matrixone#24553](https://github.com/matrixorigin/matrixone/issues/24553)
 - Implementation PR: [matrixorigin/matrixone#27615](https://github.com/matrixorigin/matrixone/pull/27615)
-- Approval decision: approved
+- Approval decision: pending independent approval of the exact revision
 
 ## SQL and refresh policy
 
@@ -126,7 +126,7 @@ individually so unrelated log replay can continue.
 
 ## Upgrade and rollback
 
-All creation, including ON DEMAND, requires protocol 74. Admission is a rollout
+All creation, including ON DEMAND, requires protocol 101. Admission is a rollout
 check; safety also relies on representations understood by predecessor readers.
 On disk, the job uses the existing IndexSync discriminator with an empty index
 selector and an additive MVReference. A predecessor's writer registry rejects
@@ -139,7 +139,9 @@ physical target/state relations. Predecessors retain the view definition and
 reject its syntax for reads and its view kind for DML. This also covers ON DEMAND
 objects, which have no background job.
 
-Mixed-version MV availability is unsupported. Use capable binaries for reads,
+Mixed-version MV availability is unsupported. Protocol 99 and the independently
+assigned protocol 100 feature are predecessors without the MV consumer; neither
+may create, claim, refresh, or recover MV jobs. Use capable binaries for reads,
 refresh and cleanup, and drop materialized views before a binary rollback.
 Pre-envelope metadata from earlier revisions of this unreleased PR requires
 recreation. Component compatibility tests exercise the actual predecessor's

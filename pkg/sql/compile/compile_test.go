@@ -2684,7 +2684,7 @@ func TestMultiSourceISCPGatedByProtocolVersion(t *testing.T) {
 	require.False(t, supportsMultiSourceISCP(service))
 	rt.SetGlobalVariables(runtime.MOProtocolVersion, defines.MORPCVersion99)
 	require.False(t, supportsMultiSourceISCP(service), "the MV capability must be newer than the current predecessor")
-	rt.SetGlobalVariables(runtime.MOProtocolVersion, defines.MORPCVersion100)
+	rt.SetGlobalVariables(runtime.MOProtocolVersion, defines.MORPCVersion101)
 	require.True(t, supportsMultiSourceISCP(service))
 
 	rt.SetGlobalVariables(runtime.MOProtocolVersion, defines.MORPCVersion29)
@@ -2705,7 +2705,9 @@ func TestMaterializedViewCapabilityAndReadValidationGuards(t *testing.T) {
 
 	rt.SetGlobalVariables(runtime.MOProtocolVersion, defines.MORPCVersion73)
 	require.Error(t, requireMaterializedViewCapability(c))
-	rt.SetGlobalVariables(runtime.MOProtocolVersion, defines.MORPCVersion74)
+	rt.SetGlobalVariables(runtime.MOProtocolVersion, defines.MORPCVersion99)
+	require.Error(t, requireMaterializedViewCapability(c))
+	rt.SetGlobalVariables(runtime.MOProtocolVersion, defines.MORPCVersion101)
 	require.NoError(t, requireMaterializedViewCapability(c))
 }
 
