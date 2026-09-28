@@ -11,36 +11,51 @@ RUN curl -fsSL https://pixi.sh/install.sh -o /tmp/pixi-install.sh && \
     PIXI_VERSION=v0.81.0 PIXI_HOME=${PIXI_HOME} PIXI_NO_PATH_UPDATE=1 \
     sh /tmp/pixi-install.sh && rm /tmp/pixi-install.sh
 
-# This development image intentionally builds the MatrixOne + cuVS Go
-# workspace. Its CUDA/RAPIDS dependencies still come only from MO's Pixi lock.
-WORKDIR /app
-COPY matrixone matrixone
-COPY cuvs cuvs
-COPY go.work .
-COPY go.work.sum .
+# Build from the MatrixOne repository root. The former sibling cuVS Go
+# workspace is not part of the build: MO owns its Go bindings and Pixi supplies
+# the native CUDA/cuVS dependencies.
+WORKDIR /matrixone
+COPY go.mod go.sum ./
 
 ARG GOPROXY="https://proxy.golang.org,direct"
+ENV GOWORK=off
 RUN go env -w GOPROXY=${GOPROXY}
-RUN cd matrixone && \
-    module_files="$(sha256sum go.mod go.sum ../go.work ../go.work.sum)" && \
+RUN module_files="$(sha256sum go.mod go.sum)" && \
     go mod download && \
-    test "$module_files" = "$(sha256sum go.mod go.sum ../go.work ../go.work.sum)"
+    test "$module_files" = "$(sha256sum go.mod go.sum)"
 
-RUN cd matrixone/optools/gpu && \
-    pixi run --frozen make -C ../.. MO_CL_CUDA=1 -j8
+COPY . .
 
-RUN sh matrixone/optools/images/gpu/stage-runtime-libs.sh \
-    matrixone/optools/gpu/.pixi/envs/default /gpu-runtime
+# Rootless container builds cannot restore archive owners outside their UID map.
+# Pipe jobserver tokens also work with CMake's older system gmake.
+RUN cd optools/gpu && pixi run --frozen env TAR_OPTIONS=--no-same-owner \
+    make --jobserver-style=pipe -C ../.. MO_CL_CUDA=1 -j8
+
+RUN sh optools/images/gpu/stage-runtime-libs.sh \
+    optools/gpu/.pixi/envs/default /gpu-runtime
+
+# Keep the source tree and frozen Pixi toolchain available for interactive
+# development with --target development; the default target remains a runtime.
+FROM builder AS development
+WORKDIR /matrixone
+CMD ["/bin/bash"]
 
 FROM ubuntu:24.04
 
-COPY --from=builder /app/matrixone/mo-service /mo-service
-COPY --from=builder /app/matrixone/mocl_kernel64.fatbin /mocl_kernel64.fatbin
-COPY --from=builder /app/matrixone/etc /etc
-COPY --from=builder /app/matrixone/thirdparties/install/lib/*.so /usr/local/lib/
-COPY --from=builder /app/matrixone/cgo/*.so /usr/local/lib/
+# Pixi's Tk library depends on the OS X11 client library. Keep its closure in
+# the final image without copying the Pixi build prefix or any driver stub.
+RUN apt-get update && apt-get install -y --no-install-recommends libx11-6 && \
+    rm -rf /var/lib/apt/lists/*
+
+COPY --from=builder /matrixone/mo-service /mo-service
+COPY --from=builder /matrixone/mocl_kernel64.fatbin /mocl_kernel64.fatbin
+COPY --from=builder /matrixone/etc /etc
+COPY --from=builder /matrixone/thirdparties/install/lib/*.so /usr/local/lib/
+COPY --from=builder /matrixone/cgo/*.so /usr/local/lib/
+COPY --from=builder /matrixone/pkg/monlp/tokenizer/dict /usr/local/share/jieba
 COPY --from=builder /gpu-runtime/ /usr/local/lib/
 
+ENV MO_JIEBA_DICT_DIR=/usr/local/share/jieba
 ENV LD_LIBRARY_PATH=/usr/local/lib
 
 WORKDIR /

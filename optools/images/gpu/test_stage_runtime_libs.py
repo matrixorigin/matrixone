@@ -18,6 +18,7 @@ import unittest
 
 
 SCRIPT = Path(__file__).resolve().with_name("stage-runtime-libs.sh")
+IMAGE_DIR = SCRIPT.parent
 
 
 class RuntimeLibraryStagingTest(unittest.TestCase):
@@ -102,6 +103,31 @@ class RuntimeLibraryStagingTest(unittest.TestCase):
         result = self.stage()
         self.assertNotEqual(result.returncode, 0)
         self.assertIn("must be empty", result.stderr)
+
+
+class GPUImageRecipeContractTest(unittest.TestCase):
+    def test_both_final_runtime_stages_are_identical(self):
+        production = (IMAGE_DIR / "Dockerfile").read_text()
+        development = (IMAGE_DIR / "Dockerfile.dev").read_text()
+        marker = "FROM ubuntu:24.04\n"
+        self.assertEqual(production.count(marker), 1)
+        self.assertEqual(development.count(marker), 1)
+        self.assertEqual(production.split(marker, 1)[1], development.split(marker, 1)[1])
+
+    def test_development_image_uses_the_locked_mo_build(self):
+        development = (IMAGE_DIR / "Dockerfile.dev").read_text()
+        self.assertIn("COPY . .", development)
+        self.assertIn("ENV GOWORK=off", development)
+        self.assertIn("pixi run --frozen env TAR_OPTIONS=--no-same-owner", development)
+        self.assertIn("make --jobserver-style=pipe", development)
+        self.assertIn("FROM builder AS development", development)
+        for obsolete_input in ("COPY cuvs", "COPY go.work", "CONDA_PREFIX", "/usr/local/cuda"):
+            self.assertNotIn(obsolete_input, development)
+
+    def test_runtime_image_audit_attaches_its_shell_input(self):
+        audit = (IMAGE_DIR / "verify-runtime-image.sh").read_text()
+        self.assertIn('"$engine" run --rm -i', audit)
+        self.assertIn('verified $checked ELF files', audit)
 
 
 if __name__ == "__main__":
