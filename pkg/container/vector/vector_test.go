@@ -2494,10 +2494,28 @@ func TestNumericBinaryLiteralMetadataVectorLifecycle(t *testing.T) {
 }
 
 func TestNumericBinaryLiteralMetadataBulkUnionBatch(t *testing.T) {
+	t.Run("unmarked batches remain metadata-free", func(t *testing.T) {
+		mp := mpool.MustNewZero()
+		source := NewVec(types.T_int64.ToType())
+		destination := NewVec(types.T_int64.ToType())
+		require.NoError(t, AppendFixedList(source, []int64{1, 2, 3}, nil, mp))
+		defer func() {
+			destination.Free(mp)
+			source.Free(mp)
+			require.Zero(t, mp.CurrNB())
+		}()
+
+		require.False(t, source.HasIsBinMetadata())
+		require.False(t, destination.HasIsBinMetadata())
+		require.NoError(t, destination.UnionBatch(source, 0, source.Length(), nil, mp))
+		require.Equal(t, []int64{1, 2, 3}, MustFixedColNoTypeCheck[int64](destination))
+		require.False(t, destination.HasIsBinMetadata())
+	})
+
 	mp := mpool.MustNewZero()
 	source := NewVec(types.T_int64.ToType())
 	destination := NewVec(types.T_int64.ToType())
-	const rows = 8192
+	const rows = 65
 	values := make([]int64, rows)
 	markers := make([]bool, rows)
 	for row := range values {

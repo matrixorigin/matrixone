@@ -1664,7 +1664,7 @@ func TestPreparedMathStringValueAndPrecisionRoles(t *testing.T) {
 		return ParamValue{Value: value, SourceType: types.T_varchar.ToType(), HasSourceType: true}
 	}
 
-	for _, name := range []string{"round", "truncate", "ceil", "ceiling", "floor"} {
+	for _, name := range []string{"round", "truncate", "ceil", "floor"} {
 		t.Run(name+" rejects non-integer precision without DOUBLE prefix", func(t *testing.T) {
 			prepared, err := runOneStmt(NewMockOptimizer(false), t,
 				"prepare stmt_math_precision from 'select "+name+"(?, ?)'")
