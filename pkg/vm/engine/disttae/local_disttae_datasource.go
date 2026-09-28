@@ -159,6 +159,8 @@ type workspaceDeleteEntry struct {
 }
 
 const mergeWorkspaceDeleteEntriesThreshold = 1024
+const mergeWorkspaceDeleteEntriesForBlockThreshold = 128
+const maxMergedWorkspaceDeleteRowsPerBlock = 4096
 
 // Building the tombstone range index has a fixed per-scan cost. Benchmarks
 // with the QA shape (700 tombstone objects) put its break-even point below 32
@@ -1158,7 +1160,29 @@ func (ls *LocalDisttaeDataSource) workspaceDeleteEntriesForBlockLocked(
 			ls.addWorkspaceDeleteEntryByBlock(entries[idx])
 		}
 	}
-	return ls.workspaceDeletes.byBlock[*bid]
+	blockEntries := ls.workspaceDeletes.byBlock[*bid]
+	if len(blockEntries) < mergeWorkspaceDeleteEntriesForBlockThreshold {
+		return blockEntries
+	}
+	// A point read would otherwise probe every delete batch for this block.
+	// Merge only the block being read, and keep the result until txnOffset
+	// changes and invalidates the block index.
+	totalRows := 0
+	for _, entry := range blockEntries {
+		totalRows += len(entry.rowIds)
+		// Large batches already amortize the probe; avoid another large copy.
+		if totalRows > maxMergedWorkspaceDeleteRowsPerBlock {
+			return blockEntries
+		}
+	}
+	rowIds := make([]objectio.Rowid, 0, totalRows)
+	for _, entry := range blockEntries {
+		rowIds = append(rowIds, entry.rowIds...)
+	}
+	slices.SortFunc(rowIds, func(a, b objectio.Rowid) int { return a.Compare(&b) })
+	merged := []workspaceDeleteEntry{{rowIds: rowIds, sorted: true}}
+	ls.workspaceDeletes.byBlock[*bid] = merged
+	return merged
 }
 
 func (ls *LocalDisttaeDataSource) addWorkspaceDeleteEntryByBlock(entry workspaceDeleteEntry) {
