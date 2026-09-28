@@ -16,7 +16,7 @@ package proxy
 
 import (
 	"bufio"
-	"bytes"
+	"encoding/binary"
 	io "io"
 )
 
@@ -47,8 +47,7 @@ func readData(reader *bufio.Reader) ([]byte, error) {
 	if err != nil {
 		return nil, err
 	}
-	buf := bytes.NewBuffer(s)
-	size := uint16(buf.Bytes()[0]) + uint16(buf.Bytes()[1])<<8 + 2
+	size := int(binary.LittleEndian.Uint16(s)) + 2
 	data := make([]byte, size)
 	_, err = io.ReadFull(reader, data)
 	if err != nil {

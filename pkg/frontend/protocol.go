@@ -202,10 +202,8 @@ func (mp *MysqlProtocolImpl) safeQuit() {
 	if mp.tcpConn != nil {
 		_ = mp.tcpConn.closeConn()
 	}
-	//release salt
-	if mp.salt != nil {
-		mp.salt = nil
-	}
+	// Keep the handshake salt stable until the protocol is collected. A handshake
+	// already in progress may still read it after another goroutine closes us.
 }
 
 func (mp *MysqlProtocolImpl) GetTcpConnection() *Conn {

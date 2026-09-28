@@ -49,6 +49,7 @@ import (
 	mock_frontend "github.com/matrixorigin/matrixone/pkg/frontend/test"
 	"github.com/matrixorigin/matrixone/pkg/logutil"
 	planPb "github.com/matrixorigin/matrixone/pkg/pb/plan"
+	"github.com/matrixorigin/matrixone/pkg/pb/proxy"
 	"github.com/matrixorigin/matrixone/pkg/pb/txn"
 	"github.com/matrixorigin/matrixone/pkg/perfcounter"
 	"github.com/matrixorigin/matrixone/pkg/sql/parsers"
@@ -3109,14 +3110,84 @@ func TestMysqlProtocolImpl_Close(t *testing.T) {
 	pu.SV.SkipCheckUser = true
 	pu.SV.KillRountinesInterval = 0
 	setPu("", pu)
+	setSessionAlloc("", NewLeakCheckAllocator())
 	ioses, err := NewIOSession(&testConn{}, pu, "")
-	convey.ShouldBeNil(err)
+	require.NoError(t, err)
+	t.Cleanup(func() { _ = ioses.Close() })
 	proto := NewMysqlClientProtocol("", 0, ioses, 1024, sv)
+	salt := append([]byte(nil), proto.GetSalt()...)
 	proto.Close()
-	assert.Nil(t, proto.GetSalt())
+	assert.Equal(t, salt, proto.GetSalt())
 	assert.Nil(t, proto.strconvBuffer)
 	assert.Nil(t, proto.lenEncBuffer)
 	assert.Nil(t, proto.binaryNullBuffer)
+}
+
+func TestMysqlProtocolReceiveExtraInfoSaltLength(t *testing.T) {
+	tests := []struct {
+		name  string
+		wire  []byte
+		valid bool
+	}{
+		{name: "empty", wire: []byte{0, 0}},
+		{name: "short", wire: mustEncodeExtraInfo(t, proxy.ExtraInfo{Salt: []byte("short"), ConnectionID: 99})},
+		{name: "long", wire: mustEncodeExtraInfo(t, proxy.ExtraInfo{Salt: []byte("123456789012345678901"), ConnectionID: 99})},
+		{name: "valid", wire: mustEncodeExtraInfo(t, proxy.ExtraInfo{Salt: []byte("12345678901234567890"), ConnectionID: 99}), valid: true},
+	}
+
+	for _, tc := range tests {
+		t.Run(tc.name, func(t *testing.T) {
+			conn := &Conn{conn: &testConn{data: tc.wire}}
+			proto := NewMysqlClientProtocol("", 42, conn, 0, &config.FrontendParameters{})
+			ses := &Session{}
+			proto.SetSession(ses)
+			originalSalt := append([]byte(nil), proto.GetSalt()...)
+
+			proto.receiveExtraInfo(conn)
+			if tc.valid {
+				require.Equal(t, []byte("12345678901234567890"), proto.GetSalt())
+				require.Equal(t, uint32(99), proto.ConnectionID())
+				require.True(t, ses.fromProxy)
+			} else {
+				require.Equal(t, originalSalt, proto.GetSalt())
+				require.Equal(t, uint32(42), proto.ConnectionID())
+				require.False(t, ses.fromProxy)
+			}
+			require.NotEmpty(t, proto.makeHandshakeV10Payload())
+		})
+	}
+}
+
+func mustEncodeExtraInfo(t *testing.T, info proxy.ExtraInfo) []byte {
+	t.Helper()
+	wire, err := info.Encode()
+	require.NoError(t, err)
+	return wire
+}
+
+func TestMysqlProtocolWriteHandshakeAfterKillConnection(t *testing.T) {
+	clientConn, serverConn := net.Pipe()
+	t.Cleanup(func() { _ = clientConn.Close() })
+	t.Cleanup(func() { _ = serverConn.Close() })
+
+	params := &config.FrontendParameters{}
+	pu := config.NewParameterUnit(params, nil, nil, nil)
+	setSessionAlloc("", NewLeakCheckAllocator())
+	conn, err := NewIOSession(serverConn, pu, "")
+	require.NoError(t, err)
+	t.Cleanup(func() { _ = conn.Close() })
+	proto := NewMysqlClientProtocol("", 42, conn, 0, params)
+	routine := NewRoutine(context.Background(), proto, params)
+	require.Len(t, proto.GetSalt(), 20)
+
+	done := make(chan struct{})
+	go func() {
+		routine.killConnection(false)
+		close(done)
+	}()
+	<-done
+	require.Len(t, proto.GetSalt(), 20)
+	require.Error(t, proto.WriteHandshake())
 }
 
 func TestMysqlProtocolImpl_Disconnect(t *testing.T) {
