@@ -16,6 +16,7 @@ package plan
 
 import (
 	"context"
+	"strings"
 	"testing"
 
 	"github.com/matrixorigin/matrixone/pkg/container/types"
@@ -356,6 +357,9 @@ func TestPreparedCommonValueStringMarkerWithFixedDecimalPeer(t *testing.T) {
 	}{
 		{"explicit typed peer", "coalesce(?, cast(? as decimal(38,10)))"},
 		{"nested fixed peer", "greatest(?, coalesce(?, cast(1 as decimal(38,10))))"},
+		{"nested abs peer", "greatest(?, abs(coalesce(?, cast(1 as decimal(38,10)))))"},
+		{"nested abs coalesce peer", "coalesce(?, abs(coalesce(?, cast(1 as decimal(38,10)))))"},
+		{"nested arithmetic peer", "greatest(?, coalesce(?, cast(1 as decimal(38,10)))+0)"},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			prepared, err := runOneStmt(NewMockOptimizer(false), t,
@@ -379,4 +383,24 @@ func TestPreparedCommonValueStringMarkerWithFixedDecimalPeer(t *testing.T) {
 			}
 		})
 	}
+}
+
+func TestPreparedFixedDecimalPrefixReservesIntegralDigits(t *testing.T) {
+	prepared, err := runOneStmt(NewMockOptimizer(false), t,
+		"prepare p from 'select least(?, cast(1.25 as decimal(10,2)))'")
+	require.NoError(t, err)
+	template := prepared.GetDcl().GetPrepare().Plan
+	before := template.String()
+	value := "123456789." + strings.Repeat("0", 67) + "1"
+	params := []any{ParamValue{Value: value, SourceType: types.T_varchar.ToType(),
+		HasSourceType: true, EnableNumericPrefix: true}}
+	filled, specialized, err := FillValuesOfParamsInPlanWithSpecialization(context.Background(), template, params)
+	require.NoError(t, err)
+	require.True(t, specialized)
+	require.Equal(t, before, template.String())
+	extrema := findPlanFunctionExpr(filled, "least")
+	require.NotNil(t, extrema)
+	require.Equal(t, int32(types.T_decimal256), extrema.Typ.Id, extrema.String())
+	require.Equal(t, int32(76), extrema.Typ.Width, extrema.String())
+	require.Equal(t, int32(67), extrema.Typ.Scale, extrema.String())
 }

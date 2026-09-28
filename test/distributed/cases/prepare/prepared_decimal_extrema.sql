@@ -73,9 +73,25 @@ EXECUTE pl_cast USING @p;
 PREPARE pc_typed FROM 'SELECT id FROM t WHERE COALESCE(?,CAST(? AS DECIMAL(38,10)))=d ORDER BY id';
 PREPARE pg_typed FROM 'SELECT id FROM t WHERE GREATEST(?,CAST(? AS DECIMAL(38,10)))=d ORDER BY id';
 PREPARE pg_nested FROM 'SELECT id FROM t WHERE GREATEST(?,COALESCE(?,d))=d ORDER BY id';
+PREPARE pg_abs_nested FROM 'SELECT id FROM t WHERE GREATEST(?,ABS(COALESCE(?,d)))=d ORDER BY id';
+PREPARE pc_abs_nested FROM 'SELECT id FROM t WHERE COALESCE(?,ABS(COALESCE(?,d)))=d ORDER BY id';
+PREPARE pg_arith_nested FROM 'SELECT id FROM t WHERE GREATEST(?,COALESCE(?,d)+0)=d ORDER BY id';
 EXECUTE pc_typed USING @p,@p;
 EXECUTE pg_typed USING @p,@p;
 EXECUTE pg_nested USING @p,@p;
+EXECUTE pg_abs_nested USING @p,@p;
+EXECUTE pc_abs_nested USING @p,@p;
+EXECUTE pg_arith_nested USING @p,@p;
+
+-- A separate concrete SQL string still owns the mixed-result domain.
+SET @decimal_null=CAST(NULL AS DECIMAL(20,0)), @text_peer='abc';
+PREPARE pc_string_peer FROM 'SELECT COALESCE(?, ?, d) AS c FROM t WHERE id=2';
+PREPARE pg_string_peer FROM 'SELECT GREATEST(d, ?, CAST(9007199254740992 AS DECIMAL(20,0))) AS g FROM t WHERE id=2';
+EXECUTE pc_string_peer USING @decimal_null,@text_peer;
+EXECUTE pg_string_peer USING @text_peer;
+SET @char_null=CAST(NULL AS CHAR);
+PREPARE pc_char_null FROM 'SELECT COALESCE(?,d) AS c FROM t WHERE id=2';
+EXECUTE pc_char_null USING @char_null;
 
 -- A tiny text marker must not turn the DECIMAL column into FLOAT when the
 -- combined declared precision exceeds Decimal256's width.
@@ -96,6 +112,12 @@ SET @tiny='1e1000';
 EXECUTE pg_width USING @tiny;
 SET @tiny='1e-48';
 EXECUTE pg_width USING @tiny;
+
+-- A text prefix whose fractional tail exceeds the DECIMAL envelope must
+-- retain enough integral digits before rounding that tail.
+SET @wide=CONCAT('123456789.',REPEAT('0',67),'1');
+PREPARE pl_wide FROM 'SELECT LEAST(?,CAST(1.25 AS DECIMAL(10,2))) AS v';
+EXECUTE pl_wide USING @wide;
 
 -- A concrete string, explicit CHAR marker, or FLOAT peer does not establish
 -- the fixed DECIMAL-only context for the text parameter.
@@ -123,7 +145,14 @@ DEALLOCATE PREPARE pl_cast;
 DEALLOCATE PREPARE pc_typed;
 DEALLOCATE PREPARE pg_typed;
 DEALLOCATE PREPARE pg_nested;
+DEALLOCATE PREPARE pg_abs_nested;
+DEALLOCATE PREPARE pc_abs_nested;
+DEALLOCATE PREPARE pg_arith_nested;
+DEALLOCATE PREPARE pc_string_peer;
+DEALLOCATE PREPARE pg_string_peer;
+DEALLOCATE PREPARE pc_char_null;
 DEALLOCATE PREPARE pg_width;
+DEALLOCATE PREPARE pl_wide;
 DEALLOCATE PREPARE pc_width;
 DEALLOCATE PREPARE p_char_peer;
 DEALLOCATE PREPARE p_char_marker;

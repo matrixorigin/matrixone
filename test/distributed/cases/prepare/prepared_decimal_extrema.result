@@ -146,6 +146,9 @@ EXECUTE pl_cast USING @p;
 PREPARE pc_typed FROM 'SELECT id FROM t WHERE COALESCE(?,CAST(? AS DECIMAL(38,10)))=d ORDER BY id';
 PREPARE pg_typed FROM 'SELECT id FROM t WHERE GREATEST(?,CAST(? AS DECIMAL(38,10)))=d ORDER BY id';
 PREPARE pg_nested FROM 'SELECT id FROM t WHERE GREATEST(?,COALESCE(?,d))=d ORDER BY id';
+PREPARE pg_abs_nested FROM 'SELECT id FROM t WHERE GREATEST(?,ABS(COALESCE(?,d)))=d ORDER BY id';
+PREPARE pc_abs_nested FROM 'SELECT id FROM t WHERE COALESCE(?,ABS(COALESCE(?,d)))=d ORDER BY id';
+PREPARE pg_arith_nested FROM 'SELECT id FROM t WHERE GREATEST(?,COALESCE(?,d)+0)=d ORDER BY id';
 EXECUTE pc_typed USING @p,@p;
 ➤ id[4,32,0]  𝄀
 2
@@ -153,6 +156,15 @@ EXECUTE pg_typed USING @p,@p;
 ➤ id[4,32,0]  𝄀
 2
 EXECUTE pg_nested USING @p,@p;
+➤ id[4,32,0]  𝄀
+2
+EXECUTE pg_abs_nested USING @p,@p;
+➤ id[4,32,0]  𝄀
+2
+EXECUTE pc_abs_nested USING @p,@p;
+➤ id[4,32,0]  𝄀
+2
+EXECUTE pg_arith_nested USING @p,@p;
 ➤ id[4,32,0]  𝄀
 2
 PREPARE pg_width FROM 'SELECT id FROM t WHERE GREATEST(d,?)=CAST(9007199254740992.0000000002 AS DECIMAL(38,10)) ORDER BY id';
@@ -180,11 +192,16 @@ EXECUTE pc_width USING @tiny;
 2
 SET @tiny='1e1000';
 EXECUTE pg_width USING @tiny;
-invalid input: 1e1000 beyond the range, can't be converted to Decimal256(76,48).
+Data truncation: data out of range: data type DECIMAL, prepared common type exceeds exact precision
 SET @tiny='1e-48';
 EXECUTE pg_width USING @tiny;
 ➤ id[4,32,0]  𝄀
 2
+SET @wide=CONCAT('123456789.',REPEAT('0',67),'1');
+PREPARE pl_wide FROM 'SELECT LEAST(?,CAST(1.25 AS DECIMAL(10,2))) AS v';
+EXECUTE pl_wide USING @wide;
+➤ v[3,76,67]  𝄀
+1.2500000000000000000000000000000000000000000000000000000000000000000
 SET @small='2';
 PREPARE p_char_peer FROM 'SELECT GREATEST(CAST(1 AS DECIMAL(10,0)),?,CAST(10 AS CHAR)) AS g';
 PREPARE p_char_marker FROM 'SELECT GREATEST(CAST(1 AS DECIMAL(10,0)),CAST(? AS CHAR),CAST(10 AS DECIMAL(10,0))) AS g';
@@ -214,7 +231,11 @@ DEALLOCATE PREPARE pl_cast;
 DEALLOCATE PREPARE pc_typed;
 DEALLOCATE PREPARE pg_typed;
 DEALLOCATE PREPARE pg_nested;
+DEALLOCATE PREPARE pg_abs_nested;
+DEALLOCATE PREPARE pc_abs_nested;
+DEALLOCATE PREPARE pg_arith_nested;
 DEALLOCATE PREPARE pg_width;
+DEALLOCATE PREPARE pl_wide;
 DEALLOCATE PREPARE pc_width;
 DEALLOCATE PREPARE p_char_peer;
 DEALLOCATE PREPARE p_char_marker;

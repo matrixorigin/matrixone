@@ -6115,52 +6115,9 @@ func PreparedRuntimeTypeFromString(value string) (types.Type, bool) {
 // DECIMAL-aware common-type consumer, while that consumer follows MySQL and
 // treats a missing numeric prefix as zero.
 func PreparedNumericPrefixTypeFromString(value string) types.Type {
-	prefix, ok := function.GetNumericStringPrefix(value)
-	if !ok {
-		return types.New(types.T_decimal64, 1, 0)
-	}
-
-	unsigned := prefix
-	if unsigned[0] == '+' || unsigned[0] == '-' {
-		unsigned = unsigned[1:]
-	}
-	mantissa := unsigned
-	exponentText := ""
-	if exponentAt := strings.IndexAny(unsigned, "eE"); exponentAt >= 0 {
-		mantissa = unsigned[:exponentAt]
-		exponentText = unsigned[exponentAt+1:]
-	}
-
-	digits := strings.ReplaceAll(mantissa, ".", "")
-	nonZero := strings.TrimLeft(digits, "0")
-	if nonZero == "" {
-		return types.New(types.T_decimal64, 1, 0)
-	}
-
-	fractionalDigits := int64(0)
-	if pointAt := strings.IndexByte(mantissa, '.'); pointAt >= 0 {
-		fractionalDigits = int64(len(mantissa) - pointAt - 1)
-	}
-	trailingZeros := len(nonZero) - len(strings.TrimRight(nonZero, "0"))
-	exponentCompensation := -fractionalDigits + int64(trailingZeros)
-	exponent, bounded := preparedBoundedDecimalExponent(exponentText, exponentCompensation)
+	integralWidth, scale, bounded := preparedNumericPrefixWidths(value)
 	if !bounded {
 		return types.T_float64.ToType()
-	}
-
-	coefficient := nonZero[:len(nonZero)-trailingZeros]
-	decimalExponent := exponent
-
-	integralWidth := int64(0)
-	scale := int64(0)
-	if decimalExponent >= 0 {
-		integralWidth = int64(len(coefficient)) + decimalExponent
-	} else {
-		scale = -decimalExponent
-		integralWidth = int64(len(coefficient)) - scale
-		if integralWidth < 0 {
-			integralWidth = 0
-		}
 	}
 	width := integralWidth + scale
 	if width < 1 {
@@ -6179,6 +6136,57 @@ func PreparedNumericPrefixTypeFromString(value string) types.Type {
 	default:
 		return types.New(types.T_decimal256, w, s)
 	}
+}
+
+// The shape remains available when total precision exceeds Decimal256, so a
+// fixed DECIMAL peer can reserve integral digits before reducing text scale.
+func preparedNumericPrefixWidths(value string) (integralWidth, scale int64, bounded bool) {
+	prefix, ok := function.GetNumericStringPrefix(value)
+	if !ok {
+		return 1, 0, true
+	}
+
+	unsigned := prefix
+	if unsigned[0] == '+' || unsigned[0] == '-' {
+		unsigned = unsigned[1:]
+	}
+	mantissa := unsigned
+	exponentText := ""
+	if exponentAt := strings.IndexAny(unsigned, "eE"); exponentAt >= 0 {
+		mantissa = unsigned[:exponentAt]
+		exponentText = unsigned[exponentAt+1:]
+	}
+
+	digits := strings.ReplaceAll(mantissa, ".", "")
+	nonZero := strings.TrimLeft(digits, "0")
+	if nonZero == "" {
+		return 1, 0, true
+	}
+
+	fractionalDigits := int64(0)
+	if pointAt := strings.IndexByte(mantissa, '.'); pointAt >= 0 {
+		fractionalDigits = int64(len(mantissa) - pointAt - 1)
+	}
+	trailingZeros := len(nonZero) - len(strings.TrimRight(nonZero, "0"))
+	exponentCompensation := -fractionalDigits + int64(trailingZeros)
+	exponent, bounded := preparedBoundedDecimalExponent(exponentText, exponentCompensation)
+	if !bounded {
+		return 0, 0, false
+	}
+
+	coefficient := nonZero[:len(nonZero)-trailingZeros]
+	decimalExponent := exponent
+
+	if decimalExponent >= 0 {
+		integralWidth = int64(len(coefficient)) + decimalExponent
+	} else {
+		scale = -decimalExponent
+		integralWidth = int64(len(coefficient)) - scale
+		if integralWidth < 0 {
+			integralWidth = 0
+		}
+	}
+	return integralWidth, scale, true
 }
 
 // PreparedNumericStringIsComplete reports whether the whole value (apart from

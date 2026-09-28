@@ -4130,6 +4130,34 @@ func TestPreparedRuntimeSemanticKeyKeepsValueAndSQLSourceDomains(t *testing.T) {
 		preparedRuntimeSemanticKey(extreme("1e-1000")))
 }
 
+func TestPreparedOrdinaryFloatRuntimeCacheReusesCompile(t *testing.T) {
+	ses, prepared, cw, ec := newPreparedExecuteEnvForSQL(t, 29428, "select abs(?)")
+	t.Cleanup(func() {
+		cw.releaseRuntimeCacheRetiredCompiles()
+		cw.proc.SetPrepareParams(nil)
+		prepared.Close()
+	})
+	prepared.ParamTypes = []byte{byte(defines.MYSQL_TYPE_DOUBLE), 0}
+	execute := func(value string) (*plan.Plan, *compile.Compile) {
+		cw.proc.SetPrepareParams(nil)
+		if prepared.params != nil {
+			prepared.params.Free(cw.proc.Mp())
+		}
+		prepared.params = vector.NewVec(types.T_text.ToType())
+		require.NoError(t, vector.AppendBytes(prepared.params, []byte(value), false, cw.proc.Mp()))
+		cached, executionPlan, _, _, _, err := initExecuteStmtParam(ec, ses, cw, nil, prepared.Name)
+		require.NoError(t, err)
+		return executionPlan, cached
+	}
+	first, _ := execute("-1.5")
+	require.Same(t, first, cw.runtimeCachePlan)
+	cached := compile.NewCompile("", "", prepared.Sql, "", "", nil, cw.proc, prepared.PrepareStmt, false, nil, time.Now())
+	require.True(t, cw.installRuntimeCacheCandidate(cached))
+	second, reused := execute("-2.5")
+	require.Same(t, first, second)
+	require.Same(t, cached, reused)
+}
+
 func TestCOMStmtCharRuntimeCacheSeparatesEffectiveIntegerDomains(t *testing.T) {
 	for i, scenario := range []struct {
 		name   string
