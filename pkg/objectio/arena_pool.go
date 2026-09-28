@@ -18,11 +18,13 @@ import (
 	"runtime"
 	"sync"
 	"time"
+
+	metric "github.com/matrixorigin/matrixone/pkg/util/metric/v2"
 )
 
 // Arena size tiers.  Small arenas serve flush tasks and sinkers that
 // process modest data volumes.  Large arenas serve merge/compaction
-// tasks that may aggregate up to arenaMaxSize (128 MB).  Keeping the
+// tasks that may aggregate up to arenaMaxSize (200 MB).  Keeping the
 // tiers separate prevents small callers from inflating arena sizes and
 // saves ~50% of permanent RSS on large-core machines.
 const (
@@ -93,6 +95,7 @@ func GetArena(tier int) *WriteArena {
 	pool.mu.Lock()
 	if n := len(pool.parked); n > 0 {
 		a := pool.parked[n-1].arena
+		metric.MemObjectIOPooledSerialBytesGauge.Sub(float64(a.serialBuf.Cap()))
 		pool.parked[n-1] = parkedArena{}
 		pool.parked = pool.parked[:n-1]
 		pool.mu.Unlock()
@@ -119,6 +122,7 @@ func PutArena(a *WriteArena) {
 	if a == nil {
 		return
 	}
+	a.resetSerialBuf(a.serialBuf.Cap() > arenaSerialRetainLimit)
 	tier := ArenaSmall
 	if a.sizeLimit > arenaSmallMax {
 		tier = ArenaLarge
@@ -131,6 +135,7 @@ func PutArena(a *WriteArena) {
 		return
 	}
 	pool.parked = append(pool.parked, parkedArena{arena: a, parkedAt: time.Now()})
+	metric.MemObjectIOPooledSerialBytesGauge.Add(float64(a.serialBuf.Cap()))
 	if pool.reaper == nil {
 		pool.reaper = time.AfterFunc(arenaIdleTTL, pool.reap)
 	}
@@ -149,6 +154,9 @@ func (pool *arenaFreeList) reap() {
 	var freed []parkedArena
 	if expired > 0 {
 		freed = append(freed, pool.parked[:expired]...)
+		for _, p := range freed {
+			metric.MemObjectIOPooledSerialBytesGauge.Sub(float64(p.arena.serialBuf.Cap()))
+		}
 		n := copy(pool.parked, pool.parked[expired:])
 		clear(pool.parked[n:]) // drop references past the new length
 		pool.parked = pool.parked[:n]

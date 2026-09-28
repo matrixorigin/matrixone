@@ -24,6 +24,7 @@ import (
 
 	"github.com/matrixorigin/matrixone/pkg/bootstrap/versions"
 	"github.com/matrixorigin/matrixone/pkg/bootstrap/versions/v4_0_8"
+	"github.com/matrixorigin/matrixone/pkg/bootstrap/versions/v4_0_9"
 	"github.com/matrixorigin/matrixone/pkg/catalog"
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
 	"github.com/matrixorigin/matrixone/pkg/embed"
@@ -240,7 +241,7 @@ func TestV408LoginRepairsTenantCreatedAfterUpgradeSnapshot(t *testing.T) {
 		}, executor.Options{}.WithDatabase(catalog.MO_CATALOG).WithWaitCommittedLogApplied()))
 		require.NoError(t, catalogExec(ctx,
 			fmt.Sprintf("update mo_catalog.mo_upgrade_tenant set ready = 1 where upgrade_id = %d", upgradeID)))
-		final := v4_0_8.Handler.Metadata()
+		final := v4_0_9.Handler.Metadata()
 		require.NoError(t, sqlExecutor.ExecTxn(ctx, func(txn executor.TxnExecutor) error {
 			return versions.UpdateVersionState(final.Version, final.VersionOffset, versions.StateReady, txn)
 		}, executor.Options{}.WithDatabase(catalog.MO_CATALOG).WithWaitCommittedLogApplied()))
