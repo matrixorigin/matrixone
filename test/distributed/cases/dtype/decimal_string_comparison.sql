@@ -187,14 +187,14 @@ DROP TABLE empty_token_values, distant_token_values;
 SELECT CAST('12suffix' AS DOUBLE) FROM token_values;
 SHOW COUNT(*) WARNINGS;
 SELECT id FROM token_values WHERE d = CONCAT('0x', '10foo') ORDER BY id;
-SET SESSION sql_mode = @decimal_string_compat_saved_sql_mode;
-SET @decimal_string_compat_saved_sql_mode = NULL;
 
 CREATE TABLE adjusted_values (d DOUBLE);
 INSERT IGNORE INTO adjusted_values SELECT '12suffix' FROM token_values;
 SHOW COUNT(*) WARNINGS;
 SELECT COUNT(*), MIN(d), MAX(d) FROM adjusted_values;
 DROP TABLE adjusted_values;
+SET SESSION sql_mode = @decimal_string_compat_saved_sql_mode;
+SET @decimal_string_compat_saved_sql_mode = NULL;
 
 SET @decimal_string_old_sql_mode = @@session.sql_mode;
 SET SESSION sql_mode = 'MATRIXONE_NATIVE';
