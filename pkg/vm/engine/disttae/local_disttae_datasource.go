@@ -160,7 +160,7 @@ type workspaceDeleteEntry struct {
 
 const mergeWorkspaceDeleteEntriesThreshold = 1024
 const mergeWorkspaceDeleteEntriesForBlockThreshold = 128
-const maxMergedWorkspaceDeleteRowsPerBlock = 4096
+const maxMergedWorkspaceDeleteRowsPerBlock = 256
 
 // Building the tombstone range index has a fixed per-scan cost. Benchmarks
 // with the QA shape (700 tombstone objects) put its break-even point below 32
@@ -1136,7 +1136,10 @@ func (ls *LocalDisttaeDataSource) applyWorkspaceEntryDeletes(
 		defer ls.table.getTxn().Unlock()
 	}
 
-	for _, entry := range ls.workspaceDeleteEntriesForBlockLocked(bid) {
+	// The copy/sort only pays off for repeated point probes. A bitmap or a
+	// multi-row scan can consume the existing batches directly.
+	mergePointRead := deletedRows == nil && len(leftRows) == 1
+	for _, entry := range ls.workspaceDeleteEntriesForBlockLocked(bid, mergePointRead) {
 		readutil.FastApplyDeletesByRowIds(bid, &leftRows, deletedRows, entry.rowIds, entry.sorted)
 
 		if leftRows != nil && len(leftRows) == 0 {
@@ -1149,6 +1152,7 @@ func (ls *LocalDisttaeDataSource) applyWorkspaceEntryDeletes(
 
 func (ls *LocalDisttaeDataSource) workspaceDeleteEntriesForBlockLocked(
 	bid *objectio.Blockid,
+	mergePointRead bool,
 ) []workspaceDeleteEntry {
 	entries := ls.workspaceDeleteEntriesLocked()
 	if len(entries) == 0 {
@@ -1161,7 +1165,7 @@ func (ls *LocalDisttaeDataSource) workspaceDeleteEntriesForBlockLocked(
 		}
 	}
 	blockEntries := ls.workspaceDeletes.byBlock[*bid]
-	if len(blockEntries) < mergeWorkspaceDeleteEntriesForBlockThreshold {
+	if !mergePointRead || len(blockEntries) < mergeWorkspaceDeleteEntriesForBlockThreshold {
 		return blockEntries
 	}
 	// A point read would otherwise probe every delete batch for this block.
