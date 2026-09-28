@@ -16,7 +16,6 @@ package frontend
 
 import (
 	"context"
-	"fmt"
 	"sync"
 
 	"github.com/matrixorigin/matrixone/pkg/catalog"
@@ -74,20 +73,20 @@ func (exec *CDCTaskExecutor) withCDCSourceGenerationGuard(
 			return relErr
 		}
 		if err = lockCDCCatalogName(proc, tenantCtx, exec.cnEngine, rel, accountID, target.parts...); err != nil {
-			return fmt.Errorf("CDC source guard lock %s: %w", target.name, err)
+			return moerr.NewInternalErrorf(ctx, "CDC source guard lock %s: %v", target.name, err)
 		}
 	}
 	now, _ := moruntime.ServiceRuntime(exec.cnUUID).Clock().Now()
 	if err = op.GetWorkspace().AdvanceSnapshot(tenantCtx, now); err != nil {
-		return fmt.Errorf("CDC source guard advance snapshot: %w", err)
+		return moerr.NewInternalErrorf(ctx, "CDC source guard advance snapshot: %v", err)
 	}
 	db, err := exec.cnEngine.Database(tenantCtx, databaseName, op)
 	if err != nil {
-		return fmt.Errorf("CDC source guard resolve database: %w", err)
+		return moerr.NewInternalErrorf(ctx, "CDC source guard resolve database: %v", err)
 	}
 	rel, err := db.Relation(tenantCtx, tableName, nil)
 	if err != nil {
-		return fmt.Errorf("CDC source guard resolve table: %w", err)
+		return moerr.NewInternalErrorf(ctx, "CDC source guard resolve table: %v", err)
 	}
 	if actual := rel.GetTableID(tenantCtx); actual != expectedID {
 		return moerr.NewInternalErrorf(ctx,
