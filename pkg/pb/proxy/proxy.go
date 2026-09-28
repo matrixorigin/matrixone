@@ -17,8 +17,9 @@ package proxy
 import (
 	"bufio"
 	"encoding/binary"
-	"fmt"
 	io "io"
+
+	"github.com/matrixorigin/matrixone/pkg/common/moerr"
 )
 
 func (i *ExtraInfo) Encode() ([]byte, error) {
@@ -28,7 +29,7 @@ func (i *ExtraInfo) Encode() ([]byte, error) {
 	}
 	size := len(data)
 	if size > 0xffff {
-		return nil, fmt.Errorf("proxy extra info too large: %d bytes", size)
+		return nil, moerr.NewInvalidInputNoCtxf("proxy extra info too large: %d bytes", size)
 	}
 	ret := make([]byte, 2, len(data)+2)
 	binary.LittleEndian.PutUint16(ret, uint16(size))
