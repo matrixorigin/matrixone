@@ -387,6 +387,9 @@ SELECT JSON_ARRAYAGG(varbinary_value) AS empty_array
 FROM t_json_opaque_agg WHERE id = 99;
 ➤ empty_array[-1,2147483647,0]  𝄀
 NULL
+SELECT JSON_OBJECTAGG(CAST(id AS CHAR), varbinary_value) AS empty_object FROM t_json_opaque_agg WHERE id = 99;
+➤ empty_object[-1,2147483647,0]  𝄀
+NULL
 DROP TABLE t_json_opaque_agg;
 drop database test_json;
 SET @agg_decimal = CAST('123.4500' AS DECIMAL(20,4));

@@ -15,8 +15,11 @@
 package compile
 
 import (
+	"context"
+	"errors"
 	"fmt"
 	"os"
+	"path/filepath"
 	"testing"
 
 	"github.com/matrixorigin/matrixone/pkg/clusterservice"
@@ -27,12 +30,14 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/pb/metadata"
 	"github.com/matrixorigin/matrixone/pkg/pb/pipeline"
 	planpb "github.com/matrixorigin/matrixone/pkg/pb/plan"
+	"github.com/matrixorigin/matrixone/pkg/pb/query"
 	"github.com/matrixorigin/matrixone/pkg/queryservice"
 	queryclient "github.com/matrixorigin/matrixone/pkg/queryservice/client"
 	"github.com/matrixorigin/matrixone/pkg/sql/colexec/aggexec"
 	"github.com/matrixorigin/matrixone/pkg/sql/colexec/value_scan"
 	plan2 "github.com/matrixorigin/matrixone/pkg/sql/plan"
 	"github.com/matrixorigin/matrixone/pkg/sql/plan/function"
+	"github.com/matrixorigin/matrixone/pkg/sql/schedule"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine"
 	"github.com/stretchr/testify/require"
 )
@@ -76,8 +81,8 @@ func TestJSONAggregateOpaqueRejectsPreviousCapability(t *testing.T) {
 	rt := moruntime.ServiceRuntime(c.proc.GetService())
 	worker := engine.Nodes{{Id: "old-worker", Addr: "remote:6001", Mcpu: 4}}
 
-	// The original base v93, collision v94, and cumulative predecessor v99 do not include this aggregate executor. The gate
-	// must not reuse a version already assigned to another wire contract.
+	// The original base, reused v94 and cumulative predecessor lack this
+	// executor. Reject each rather than relying on an obsolete v84 boundary.
 	for _, version := range []int64{
 		defines.MORPCVersion93,
 		defines.MORPCVersion94,
@@ -90,6 +95,10 @@ func TestJSONAggregateOpaqueRejectsPreviousCapability(t *testing.T) {
 		require.Equal(t, plan2.ExecTypeAP_ONECN, c.execType)
 		require.Len(t, c.cnList, 1)
 		require.Equal(t, c.addr, c.cnList[0].Addr)
+		wire := jsonAggregateOpaqueTestPipeline()
+		wire.Node = &pipeline.NodeInfo{Id: worker[0].Id, Addr: worker[0].Addr}
+		require.ErrorContains(t, validateJSONAggregateOpaqueDestination(c.proc, wire),
+			fmt.Sprintf("MORPC protocol version %d", jsonAggregateOpaqueCapabilityVersion))
 	}
 
 	scope := &Scope{
@@ -149,8 +158,10 @@ func TestJSONAggregateOpaqueQueryServiceCapabilityProbe(t *testing.T) {
 
 	workerID := "json-aggregate-opaque-capability-peer"
 	workerPipelineAddress := "json-aggregate-opaque-capability-peer:pipeline"
-	workerQueryAddress := "unix:///tmp/mo-json-opaque-capability-peer.sock"
-	require.NoError(t, os.RemoveAll(workerQueryAddress[len("unix://"):]))
+	socketDir, err := os.MkdirTemp("", "mo-opaque-probe-")
+	require.NoError(t, err)
+	t.Cleanup(func() { require.NoError(t, os.RemoveAll(socketDir)) })
+	workerQueryAddress := "unix://" + filepath.Join(socketDir, "peer.sock")
 	workerRT := moruntime.ServiceRuntime(workerID)
 	if workerRT == nil {
 		moruntime.SetupServiceBasedRuntime(workerID, moruntime.DefaultRuntime())
@@ -172,11 +183,29 @@ func TestJSONAggregateOpaqueQueryServiceCapabilityProbe(t *testing.T) {
 	rt.SetGlobalVariables(moruntime.ClusterService, cluster)
 	rt.SetGlobalVariables(moruntime.MOProtocolVersion, jsonAggregateOpaqueCapabilityVersion)
 
+	t.Cleanup(func() {
+		cluster.Close()
+		rt.SetGlobalVariables(moruntime.MOProtocolVersion, oldVersion)
+		if hadWorkerVersion {
+			workerRT.SetGlobalVariables(moruntime.MOProtocolVersion, oldWorkerVersion)
+		} else {
+			current, _ := workerRT.GetGlobalVariables(moruntime.MOProtocolVersion)
+			workerRT.CompareAndDeleteGlobalVariables(moruntime.MOProtocolVersion, current)
+		}
+		if hadCluster {
+			rt.SetGlobalVariables(moruntime.ClusterService, oldCluster)
+		} else {
+			rt.CompareAndDeleteGlobalVariables(moruntime.ClusterService, cluster)
+		}
+	})
+
 	qs, err := queryservice.NewQueryService(workerID, workerQueryAddress, morpc.Config{})
 	require.NoError(t, err)
+	t.Cleanup(func() { require.NoError(t, qs.Close()) })
 	require.NoError(t, qs.Start())
 	queryClient, err := queryclient.NewQueryClient(coordinatorService, morpc.Config{})
 	require.NoError(t, err)
+	t.Cleanup(func() { require.NoError(t, queryClient.Close()) })
 	c.proc.Base.QueryClient = queryClient
 
 	worker := engine.Nodes{{
@@ -185,23 +214,6 @@ func TestJSONAggregateOpaqueQueryServiceCapabilityProbe(t *testing.T) {
 		Mcpu: 4,
 	}}
 	qry := jsonAggregateOpaqueTestQuery()
-	t.Cleanup(func() {
-		require.NoError(t, queryClient.Close())
-		require.NoError(t, qs.Close())
-		cluster.Close()
-		rt.SetGlobalVariables(moruntime.MOProtocolVersion, oldVersion)
-		if hadWorkerVersion {
-			workerRT.SetGlobalVariables(moruntime.MOProtocolVersion, oldWorkerVersion)
-		} else {
-			workerRT.CompareAndDeleteGlobalVariables(
-				moruntime.MOProtocolVersion, jsonAggregateOpaqueCapabilityVersion)
-		}
-		if hadCluster {
-			rt.SetGlobalVariables(moruntime.ClusterService, oldCluster)
-		} else {
-			rt.CompareAndDeleteGlobalVariables(moruntime.ClusterService, cluster)
-		}
-	})
 
 	// This same-binary QueryService probe checks real capability RPC routing.
 	// It does not execute an old decoder or an aggregate pipeline. The v99
@@ -249,6 +261,87 @@ func TestJSONAggregateOpaqueQueryServiceCapabilityProbe(t *testing.T) {
 	require.Equal(t, plan2.ExecTypeAP_MULTICN, c.execType)
 	_, err = encodeRemoteScope(scope, c.proc)
 	require.NoError(t, err)
+}
+
+func TestJSONAggregateOpaqueUnavailableDestination(t *testing.T) {
+	for _, name := range []string{"unknown-version", "missing-version", "probe-failure", "missing-node", "stale-address", "replaced-id", "canceled"} {
+		t.Run(name, func(t *testing.T) {
+			c, client := expressionProtocolTestCompile(t)
+			client.version = jsonAggregateOpaqueCapabilityVersion
+			worker := engine.Node{Id: "old-worker", Addr: "remote:6001", Mcpu: 4}
+			switch name {
+			case "unknown-version":
+				client.version = 0
+			case "missing-version":
+				client.customResponse = true
+				client.response = &query.Response{}
+			case "probe-failure":
+				client.customResponse = true
+				client.response = &query.Response{}
+				client.sendErr = errors.New("probe failed")
+			case "missing-node":
+				worker = engine.Node{}
+			case "stale-address":
+				worker.Addr = "stale:6001"
+			case "replaced-id":
+				worker.Id = "replacement"
+			case "canceled":
+				ctx, cancel := context.WithCancel(c.proc.Ctx)
+				cancel()
+				c.proc.Ctx = ctx
+			}
+			c.execType = plan2.ExecTypeAP_MULTICN
+			c.cnList = engine.Nodes{worker}
+			err := c.constrainJSONAggregateOpaqueWorkers(jsonAggregateOpaqueTestQuery())
+			if name == "canceled" {
+				require.ErrorIs(t, err, context.Canceled)
+				require.Equal(t, plan2.ExecTypeAP_MULTICN, c.execType)
+			} else {
+				require.NoError(t, err)
+				require.Equal(t, plan2.ExecTypeAP_ONECN, c.execType)
+				require.Len(t, c.cnList, 1)
+				require.Equal(t, c.addr, c.cnList[0].Addr)
+			}
+			wire := jsonAggregateOpaqueTestPipeline()
+			if name != "missing-node" {
+				wire.Node = &pipeline.NodeInfo{Id: worker.Id, Addr: worker.Addr}
+			}
+			err = validateJSONAggregateOpaqueDestination(c.proc, wire)
+			if name == "canceled" {
+				require.ErrorIs(t, err, context.Canceled)
+				require.Zero(t, client.calls)
+			} else if name == "missing-node" {
+				require.ErrorContains(t, err, "target CN protocol capability")
+			} else {
+				require.ErrorContains(t, err, fmt.Sprintf("MORPC protocol version %d", jsonAggregateOpaqueCapabilityVersion))
+			}
+			require.Equal(t, client.calls, client.releases)
+		})
+	}
+}
+
+func TestJSONAggregateOpaqueFallbackRespectsPlacement(t *testing.T) {
+	for _, probeFails := range []bool{false, true} {
+		t.Run(fmt.Sprintf("probe-fails=%t", probeFails), func(t *testing.T) {
+			c, client := expressionProtocolTestCompile(t)
+			client.version = defines.MORPCVersion99
+			if probeFails {
+				client.customResponse = true
+				client.sendErr = errors.New("probe failed")
+			}
+			c.execType = plan2.ExecTypeAP_MULTICN
+			c.cnList = engine.Nodes{{Id: "old-worker", Addr: "remote:6001", Mcpu: 4}}
+			c.SetQuerySchedulingIntent(schedule.SchedulingIntent{
+				CurrentCNPolicy: schedule.CurrentCNExcluded,
+			})
+
+			err := c.constrainJSONAggregateOpaqueWorkers(jsonAggregateOpaqueTestQuery())
+			require.ErrorContains(t, err, schedule.ReasonExcludedCurrentCN)
+			require.False(t, c.queryPlacement.Satisfied)
+			require.Empty(t, c.cnList)
+			require.Equal(t, 1, client.calls)
+		})
+	}
 }
 
 func jsonAggregateOpaqueTestQuery() *planpb.Query {

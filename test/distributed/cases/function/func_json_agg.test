@@ -317,6 +317,7 @@ SELECT
 FROM t_json_opaque_agg WHERE id = 1;
 SELECT JSON_ARRAYAGG(varbinary_value) AS empty_array
 FROM t_json_opaque_agg WHERE id = 99;
+SELECT JSON_OBJECTAGG(CAST(id AS CHAR), varbinary_value) AS empty_object FROM t_json_opaque_agg WHERE id = 99;
 DROP TABLE t_json_opaque_agg;
 drop database test_json;
 
