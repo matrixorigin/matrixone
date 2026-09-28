@@ -1525,11 +1525,12 @@ func TestRegisterCdcExecutor(t *testing.T) {
 		"2026-09-16T00:00:00Z",
 		"",
 		true,
-		fmt.Sprintf("{\"%s\":%v,\"%s\":\"%s\",\"%s\":%v,\"%s\":\"%s\"}",
+		fmt.Sprintf("{\"%s\":%v,\"%s\":\"%s\",\"%s\":%v,\"%s\":\"%s\",\"%s\":\"%s\"}",
 			cdc.CDCTaskExtraOptions_InitSnapshotSplitTxn, cdc.CDCDefaultTaskExtra_InitSnapshotSplitTxn,
 			cdc.CDCTaskExtraOptions_SendSqlTimeout, cdc.CDCDefaultSendSqlTimeout,
 			cdc.CDCTaskExtraOptions_MaxSqlLength, cdc.CDCDefaultTaskExtra_MaxSQLLen,
 			cdc.CDCTaskExtraOptions_InitialSnapshotProtocol, cdc.CDCInitialSnapshotProtocolNoFullHLC,
+			cdc.CDCTaskExtraOptions_GenerationProtocol, cdc.CDCGenerationAwareProtocolV2,
 		),
 	))
 

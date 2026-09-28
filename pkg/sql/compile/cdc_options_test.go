@@ -22,6 +22,7 @@ import (
 	"testing"
 	"time"
 
+	"github.com/DATA-DOG/go-sqlmock"
 	"github.com/golang/mock/gomock"
 	"github.com/matrixorigin/matrixone/pkg/catalog"
 	"github.com/matrixorigin/matrixone/pkg/cdc"
@@ -39,6 +40,57 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/vm/engine"
 	"github.com/stretchr/testify/require"
 )
+
+func TestValidateCDCTargetIdentityCatalog(t *testing.T) {
+	const query = "SELECT pending_source_table_id, target_identity FROM mo_catalog.mo_cdc_watermark LIMIT 0"
+	for _, tc := range []struct {
+		name      string
+		setup     func(sqlmock.Sqlmock)
+		wantError string
+	}{
+		{
+			name: "supported catalog",
+			setup: func(mock sqlmock.Sqlmock) {
+				mock.ExpectQuery(query).WillReturnRows(sqlmock.NewRows([]string{"pending_source_table_id", "target_identity"}))
+			},
+		},
+		{
+			name: "missing columns",
+			setup: func(mock sqlmock.Sqlmock) {
+				mock.ExpectQuery(query).WillReturnError(fmt.Errorf("unknown column"))
+			},
+			wantError: "target identity catalog columns are not available",
+		},
+		{
+			name: "unexpected row",
+			setup: func(mock sqlmock.Sqlmock) {
+				mock.ExpectQuery(query).WillReturnRows(sqlmock.NewRows([]string{"pending_source_table_id", "target_identity"}).AddRow(uint64(1), "id"))
+			},
+			wantError: "probe unexpectedly returned a row",
+		},
+		{
+			name: "row iteration error",
+			setup: func(mock sqlmock.Sqlmock) {
+				mock.ExpectQuery(query).WillReturnRows(sqlmock.NewRows([]string{"pending_source_table_id", "target_identity"}).RowError(0, fmt.Errorf("row error")))
+			},
+			wantError: "row error",
+		},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			db, mock, err := sqlmock.New(sqlmock.QueryMatcherOption(sqlmock.QueryMatcherEqual))
+			require.NoError(t, err)
+			defer db.Close()
+			tc.setup(mock)
+			err = validateCDCTargetIdentityCatalog(context.Background(), db)
+			if tc.wantError == "" {
+				require.NoError(t, err)
+			} else {
+				require.ErrorContains(t, err, tc.wantError)
+			}
+			require.NoError(t, mock.ExpectationsWereMet())
+		})
+	}
+}
 
 func TestCheckPitrGranularityWildcardRejectsNoPrimaryKey(t *testing.T) {
 	proc := testutil.NewProcess(t)
