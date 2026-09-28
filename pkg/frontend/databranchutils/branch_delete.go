@@ -62,3 +62,10 @@ func BranchDeleteTargetFromContext(ctx context.Context, owner client.TxnOperator
 	result.TableIDs = slices.Clone(result.TableIDs)
 	return &result, nil
 }
+
+// Partition cleanup issues internal child DROP statements through the same
+// transaction. Their own lifecycle admission must run without the outer
+// user-facing branch target receipt.
+func WithoutBranchDeleteTarget(ctx context.Context) context.Context {
+	return context.WithValue(ctx, branchDeleteKey{}, nil)
+}

@@ -27,6 +27,20 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/vm/process"
 )
 
+type exactMutationRowsKey struct{}
+
+// WithExactMutationRows keeps every lock target of one internal catalog DML
+// statement at row granularity, including its hidden index tables. The caller
+// must bound the affected row count and retain its admission locks until the
+// transaction ends.
+func WithExactMutationRows(ctx context.Context) context.Context {
+	return context.WithValue(ctx, exactMutationRowsKey{}, true)
+}
+
+func exactMutationRows(ctx context.Context) bool {
+	return ctx.Value(exactMutationRowsKey{}) == true
+}
+
 // LockRowsForAdmissionWithContext locks exactly the supplied non-null catalog
 // keys in an existing pessimistic RC transaction. It records the lock binding
 // but does not validate a data plan or advance the snapshot. The caller must

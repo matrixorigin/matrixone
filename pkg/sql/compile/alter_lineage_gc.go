@@ -232,9 +232,9 @@ func compactExpiredAlterDataBranchLineageBatchWithExecutor(
 		for i, tableID := range plan.TableIDs {
 			plan.SnapshotNames[i] = databranchutils.BranchSnapshotName(tableID)
 		}
-		// Explicit DATA BRANCH validates its fixed-SI discovery by writing G
-		// at terminal commit. Keep the GC write so an earlier branch decision
-		// cannot commit after this deletion against an unchanged G version.
+		// Legacy fixed-snapshot owner paths validate discovery by writing G at
+		// terminal commit. Keep the GC write so an earlier owner decision cannot
+		// commit after this deletion against an unchanged G version.
 		validation, err := txn.Exec(databranchutils.LineageOwnerLifecycleLockSQL(), gateOpts)
 		if err != nil {
 			return err

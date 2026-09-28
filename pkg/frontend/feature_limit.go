@@ -110,10 +110,9 @@ func featureLimitCheckerForAccount(
 
 	// Feature limits are admission-control state. The owning mutation installs
 	// its TN-ordered catalog frontier before writing the shared lifecycle gate;
-	// do not advance that transaction snapshot again after the write. A branch
-	// running inside an explicit SI transaction instead uses an independent short
-	// RC transaction for this control-plane read, because advancing the caller's
-	// fixed snapshot would violate its isolation.
+	// do not advance that transaction snapshot again after the write. Retain the
+	// independent quota read for legacy fixed-SI test callers; public DATA BRANCH
+	// mutation now requires pessimistic RC.
 	if featureCode == featureCodeBranch && featureLimitTxnUsesFixedSnapshot(bh) {
 		limitQuota, err = queryQuotaInIndependentTxn(
 			ctx, ses, accId, featureCode, featureScope,

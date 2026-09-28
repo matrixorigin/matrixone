@@ -41,14 +41,6 @@ func (c *Compile) prepareBranchReclaimRC(deadTIDs []uint64) (func() error, datab
 	if len(deadTIDs) == 0 {
 		return nil, databranchutils.BranchReclaimDag{}, nil
 	}
-	var ids strings.Builder
-	for i, id := range deadTIDs {
-		if i > 0 {
-			ids.WriteByte(',')
-		}
-		ids.WriteString(strconv.FormatUint(id, 10))
-	}
-	idList := ids.String()
 	// Even an absent root must be pinned: a concurrent clone can publish its
 	// first child after an unlocked empty-row probe.
 	dag, err := c.loadBranchReclaimComponentsRC(deadTIDs)
@@ -58,24 +50,83 @@ func (c *Compile) prepareBranchReclaimRC(deadTIDs []uint64) (func() error, datab
 	if len(dag.Info) == 0 {
 		return nil, dag, nil
 	}
+	// Ordinary UPDATE can choose a range lock or fall back to a table lock if
+	// its matching rows exceed the lock budget. Pin every row it will change
+	// exactly, while the component keys still precede all physical DROP work.
+	present := make([]uint64, 0, len(deadTIDs))
+	for _, id := range deadTIDs {
+		if _, ok := dag.Info[id]; ok {
+			present = append(present, id)
+		}
+	}
+	slices.Sort(present)
+	present = slices.Compact(present)
+	if len(present) == 0 {
+		return nil, dag, nil
+	}
+	keys := batch.NewWithSize(1)
+	keys.Vecs[0] = vector.NewVec(types.T_uint64.ToType())
+	for _, id := range present {
+		if err = vector.AppendFixed(keys.Vecs[0], id, false, c.proc.Mp()); err != nil {
+			keys.Vecs[0].Free(c.proc.Mp())
+			return nil, databranchutils.BranchReclaimDag{}, err
+		}
+	}
+	_, err = c.lockBranchCatalogRowsRC(catalog.MO_BRANCH_METADATA, keys)
+	keys.Vecs[0].Free(c.proc.Mp())
+	if err != nil {
+		return nil, databranchutils.BranchReclaimDag{}, err
+	}
+	batchSize := max(1, int(c.proc.GetLockService().GetConfig().MaxLockRowCount))
 	return func() error {
 		return databranchutils.MarkAndReclaimBranchSnapshotsCore(
 			deadTIDs,
 			func() (databranchutils.BranchReclaimDag, error) { return dag, nil },
 			func() error {
-				return c.runSqlWithSystemTenant(fmt.Sprintf(
-					"update %s.%s set table_deleted = true where table_id in (%s)",
-					catalog.MO_CATALOG, catalog.MO_BRANCH_METADATA, idList,
-				))
+				for start := 0; start < len(present); start += batchSize {
+					end := min(start+batchSize, len(present))
+					if err := c.runExactBranchMutationRC(fmt.Sprintf(
+						"update %s.%s set table_deleted = true where table_id in (%s)",
+						catalog.MO_CATALOG, catalog.MO_BRANCH_METADATA, branchReclaimIDList(present[start:end]),
+					)); err != nil {
+						return err
+					}
+				}
+				return nil
 			},
 			func(names []string) error {
 				if err := c.lockBranchSnapshotNamesRC(names); err != nil {
 					return err
 				}
-				return c.runSqlWithSystemTenant(databranchutils.BuildBranchSnapshotDeleteSQL(names))
+				for start := 0; start < len(names); start += batchSize {
+					if err := c.runExactBranchMutationRC(databranchutils.BuildBranchSnapshotDeleteSQL(
+						names[start:min(start+batchSize, len(names))],
+					)); err != nil {
+						return err
+					}
+				}
+				return nil
 			},
 		)
 	}, dag, nil
+}
+
+func (c *Compile) runExactBranchMutationRC(sql string) error {
+	oldCtx := c.proc.Ctx
+	c.proc.Ctx = lockop.WithExactMutationRows(oldCtx)
+	defer func() { c.proc.Ctx = oldCtx }()
+	return c.runSqlWithSystemTenant(sql)
+}
+
+func branchReclaimIDList(ids []uint64) string {
+	var b strings.Builder
+	for i, id := range ids {
+		if i > 0 {
+			b.WriteByte(',')
+		}
+		b.WriteString(strconv.FormatUint(id, 10))
+	}
+	return b.String()
 }
 
 // DROP DATABASE holds D exclusive, so a branch publisher cannot add a source
