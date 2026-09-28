@@ -132,7 +132,9 @@ must close/fence its writer before requesting promotion.
 - A settings scan error or timeout does not substitute a partial/default batch.
   No scheduler or write endpoint is published. Existing background workers are
   stopped by their current owner; the TN lifecycle owner closes/reopens after
-  the command returns.
+  the command returns. The terminal failure path stops the transaction heartbeat
+  before latching the transaction exception, so its next tick cannot dereference
+  the nil transaction returned by a failed admission.
 - This local fail-stop does not implement a distributed request gate or old
   writer fence. Promotion cannot be exposed to production until those separate
   contracts are designed and verified.

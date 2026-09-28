@@ -16,9 +16,11 @@ package merge
 
 import (
 	"context"
+	"math"
 	"testing"
 	"time"
 
+	"github.com/matrixorigin/matrixone/pkg/container/types"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/catalog"
 	"github.com/stretchr/testify/require"
 )
@@ -29,22 +31,40 @@ func promotionTable(id uint64) catalog.MergeTable {
 }
 
 func TestPromotionSettingsDomains(t *testing.T) {
+	decode := func(t *testing.T, setting *MergeSettings) *MergeSettings {
+		t.Helper()
+		jsonValue, err := types.ParseStringToByteJson(setting.String())
+		require.NoError(t, err)
+		encoded, err := types.EncodeJson(jsonValue)
+		require.NoError(t, err)
+		decoded, err := DecodeMergeSettings(MergeSettingsVersion_Curr, encoded)
+		require.NoError(t, err)
+		return decoded
+	}
 	for _, tc := range []struct {
-		name string
-		edit func(*MergeSettings)
+		name      string
+		edit      func(*MergeSettings)
+		roundTrip bool
 	}{
-		{"negative L1 count", func(s *MergeSettings) { s.TombstoneL1Count = -1 }},
-		{"zero L1 count", func(s *MergeSettings) { s.TombstoneL1Count = 0 }},
-		{"negative L2 count", func(s *MergeSettings) { s.TombstoneL2Count = -1 }},
-		{"zero L2 count", func(s *MergeSettings) { s.TombstoneL2Count = 0 }},
-		{"negative overlap depth", func(s *MergeSettings) { s.LNMinPointDepthPerCluster = -1 }},
-		{"zero overlap depth", func(s *MergeSettings) { s.LNMinPointDepthPerCluster = 0 }},
-		{"zero vacuum duration", func(s *MergeSettings) { s.VacuumScoreDecayDuration = "0s" }},
-		{"negative vacuum duration", func(s *MergeSettings) { s.VacuumScoreDecayDuration = "-1s" }},
+		{"negative L1 count", func(s *MergeSettings) { s.TombstoneL1Count = -1 }, false},
+		{"zero L1 count", func(s *MergeSettings) { s.TombstoneL1Count = 0 }, false},
+		{"negative L2 count", func(s *MergeSettings) { s.TombstoneL2Count = -1 }, false},
+		{"zero L2 count", func(s *MergeSettings) { s.TombstoneL2Count = 0 }, false},
+		{"L1 above budget", func(s *MergeSettings) { s.TombstoneL1Count = 65537 }, true},
+		{"L2 above budget", func(s *MergeSettings) { s.TombstoneL2Count = 65537 }, true},
+		{"L1 integer maximum", func(s *MergeSettings) { s.TombstoneL1Count = math.MaxInt }, true},
+		{"L2 integer maximum", func(s *MergeSettings) { s.TombstoneL2Count = math.MaxInt }, true},
+		{"negative overlap depth", func(s *MergeSettings) { s.LNMinPointDepthPerCluster = -1 }, false},
+		{"zero overlap depth", func(s *MergeSettings) { s.LNMinPointDepthPerCluster = 0 }, false},
+		{"zero vacuum duration", func(s *MergeSettings) { s.VacuumScoreDecayDuration = "0s" }, false},
+		{"negative vacuum duration", func(s *MergeSettings) { s.VacuumScoreDecayDuration = "-1s" }, false},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			s := DefaultMergeSettings.Clone()
 			tc.edit(s)
+			if tc.roundTrip {
+				s = decode(t, s)
+			}
 			trigger, err := s.toPromotionTrigger()
 			require.ErrorContains(t, err, "invalid merge settings")
 			require.Nil(t, trigger)
@@ -59,6 +79,12 @@ func TestPromotionSettingsDomains(t *testing.T) {
 	trigger, err := s.toPromotionTrigger()
 	require.NoError(t, err)
 	require.Equal(t, s.VacuumScoreStart, trigger.vacuum.CalcScore(0))
+	require.Empty(t, GatherTombstoneTasks(t.Context(), IterStats(nil), trigger.tomb, 0))
+
+	// The largest accepted settings must also be usable by their consumer.
+	s.TombstoneL1Count, s.TombstoneL2Count = 65536, 65536
+	trigger, err = decode(t, s).toPromotionTrigger()
+	require.NoError(t, err)
 	require.Empty(t, GatherTombstoneTasks(t.Context(), IterStats(nil), trigger.tomb, 0))
 }
 

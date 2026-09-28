@@ -262,13 +262,19 @@ func (c *TNCatalogEventSource) ReadPromotionSettings(
 	return settings, nil
 }
 
+// Each tombstone count becomes a pointer-slice capacity on every gather. Two
+// slices at this limit preallocate at most 1 MiB together on 64-bit targets.
+const maxPromotionTombstoneCount = 1 << 16
+
 // toPromotionTrigger validates the domains consumed by scheduling before the
 // one-way promotion starts workers. Normal startup/config parsing is unchanged.
 func (s *MergeSettings) toPromotionTrigger() (*MMsgTaskTrigger, error) {
 	if len(s.L0MaxCountDecayControl) < 4 {
 		return nil, moerr.NewInternalErrorNoCtxf("invalid merge settings decay points: %d", len(s.L0MaxCountDecayControl))
 	}
-	if s.TombstoneL1Count <= 0 || s.TombstoneL2Count <= 0 || s.LNMinPointDepthPerCluster <= 0 {
+	if s.TombstoneL1Count <= 0 || s.TombstoneL1Count > maxPromotionTombstoneCount ||
+		s.TombstoneL2Count <= 0 || s.TombstoneL2Count > maxPromotionTombstoneCount ||
+		s.LNMinPointDepthPerCluster <= 0 {
 		return nil, moerr.NewInternalErrorNoCtxf("invalid merge settings counts: tombstone L1=%d L2=%d, overlap depth=%d",
 			s.TombstoneL1Count, s.TombstoneL2Count, s.LNMinPointDepthPerCluster)
 	}

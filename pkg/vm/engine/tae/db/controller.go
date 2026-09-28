@@ -439,6 +439,8 @@ func (c *Controller) handleToWriteCmd(cmd *controlCmd) {
 			logger = logutil.Error
 			if crossed {
 				c.promotionErr = err
+				// No heartbeat may start a transaction after this terminal error.
+				c.db.TxnMgr.StopHeartbeat()
 				c.db.TxnMgr.OnException(err)
 				if notifierAttached {
 					c.db.Catalog.SetMergeNotifier(nil)

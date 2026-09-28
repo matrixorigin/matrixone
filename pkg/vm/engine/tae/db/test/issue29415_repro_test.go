@@ -16,6 +16,7 @@ package test
 
 import (
 	"context"
+	"math"
 	"testing"
 	"time"
 
@@ -61,6 +62,10 @@ func TestIssue29415ReplayPromotionLateTableAndSettings(t *testing.T) {
 	extraPoints.L0MaxCountDecayControl = append(extraPoints.L0MaxCountDecayControl, 0.9)
 	negativeCount := setting.Clone()
 	negativeCount.TombstoneL1Count = -1
+	tooManyL1 := setting.Clone()
+	tooManyL1.TombstoneL1Count = math.MaxInt
+	tooManyL2 := setting.Clone()
+	tooManyL2.TombstoneL2Count = math.MaxInt
 	for _, tc := range []replayPromotionCase{
 		{name: "late setting", createSettings: true, settingsJSON: setting.String(), expectTrigger: true, cancelBeforeCall: true},
 		{name: "future WAL timestamp", createSettings: true, settingsJSON: setting.String(), expectTrigger: true, futureWriterClock: true},
@@ -68,6 +73,8 @@ func TestIssue29415ReplayPromotionLateTableAndSettings(t *testing.T) {
 		{name: "disabled disk GC", disableGC: true},
 		{name: "clock cannot advance", futureWriterClock: true, ignoreClockUpdate: true, expectError: "promotion clock did not advance"},
 		{name: "negative tombstone count", createSettings: true, settingsJSON: negativeCount.String(), expectError: "invalid merge settings counts"},
+		{name: "oversized L1 count", createSettings: true, settingsJSON: tooManyL1.String(), expectError: "invalid merge settings counts"},
+		{name: "oversized L2 count", createSettings: true, settingsJSON: tooManyL2.String(), expectError: "invalid merge settings counts"},
 		{name: "settings row absent", createSettings: true},
 		{name: "settings row deleted", createSettings: true, settingsJSON: setting.String(), deleteSettingsRow: true},
 		{name: "invalid setting", createSettings: true, settingsJSON: `{"bad_settings":100}`, expectError: "probable corrupted merge settings"},
