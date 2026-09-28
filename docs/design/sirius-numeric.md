@@ -142,10 +142,21 @@ The same extension URI owns the v1 function names
 sorting, and joins consume the same type and comparison kernels. The full
 input and output type parameters form the signature; matching a function name
 alone is never sufficient.
-V1 `mo_decimal_cast` admits signed-integer and exact-decimal sources only.
-String, binary, and floating-point conversion signatures remain ineligible
-before readers start; they cannot introduce an unreviewed parsing or
-approximate-numeric error contract.
+V1 `mo_decimal_cast` admits the normal expression-cast overload with
+signed-integer or exact-decimal sources and an exact-decimal target only.
+An integer-source signature is admitted only when the target's declared and
+physical domains contain the entire source domain, so valid input cannot hit
+an unchecked scale-overflow path. Exact-decimal-source signatures may narrow
+or rescale through MatrixOne's checked normal cast path.
+Explicit SQL casts, assignment/comparison casts, decimal-to-integer casts,
+and string, binary, or floating-point conversion signatures remain ineligible
+before readers start. Their clamping, parsing, or SQL-mode behavior cannot be
+silently inferred from the normal cast signature. The MatrixOne overload ID
+distinguishes the admitted normal cast from these rejected modes.
+V1 `mo_decimal_negate` is admitted only when the declared input and result
+domains prove that negation cannot reach the signed physical minimum or exceed
+the result precision; otherwise preparation declines the signature. This
+avoids inventing an error class for a value outside the proven unary domain.
 
 ## 4. MatrixOne semantic contract
 
@@ -202,15 +213,22 @@ because typical values agree.
 
 For a declared SQL `DECIMAL(p,s)` result, a non-NULL coefficient is valid only
 when its magnitude is less than `10^p`. A result outside that domain returns
-the same MatrixOne numeric error class. It must not wrap, saturate, clamp
-metadata, become NULL, become infinity, or trigger local replay.
+the error class of the MatrixOne operation that detects it; scalar, aggregate,
+and cast paths do not have one universal overflow class. It must not wrap,
+saturate, clamp metadata, become NULL, become infinity, or trigger local replay.
 
 Intermediate arithmetic uses the full selected MatrixOne physical domain.
 `SUM` uses a full `DECIMAL256` partial state when required so values can cancel
 across input batches and merge order does not create a false intermediate
 overflow. The declared precision check occurs once when the aggregate result
-is published. Ordinary scalar results enforce their declared precision before
-the row is published.
+is published. MatrixOne's `validateDecimal256SumResult` reports that final
+`SUM` overflow as `ErrInvalidInput`; `decAvg` reports Decimal128/256 `AVG`
+division or result-precision overflow through the same public class. These
+aggregate paths do not pass through `decimalBatchArith`. Ordinary scalar
+arithmetic does: it exposes physical arithmetic overflow and declared-result
+precision overflow as `ErrOutOfRange` before the row is published. A scalar
+expression inside an aggregate retains its own scalar error class if it fails
+before the aggregate receives its value.
 
 The positive 65-digit boundary and its negative counterpart must succeed when
 representable; the corresponding 66-digit result must fail. For multiplication
@@ -298,16 +316,25 @@ does not report success after CPU, Flight, or native-MatrixOne fallback.
 Operational failures after preparation are execution errors and never
 eligibility declines.
 
-The C ABI appends `SIRIUS_NUMERIC_OUT_OF_RANGE` (status 12) for arithmetic
-overflow and declared-precision failures. MatrixOne's `decimalBatchArith`
-maps a kernel's physical `ErrInvalidInput` to SQL-visible
-`moerr.ErrOutOfRange`; Sirius must preserve that public class rather than
-exposing the kernel's internal class. The MO bridge maps status 12 to
-`moerr.ErrOutOfRange` and never parses a bounded message to infer a class.
-Malformed type parameters and ineligible casts fail preparation as typed
-unsupported/invalid-plan results, not as row-level arithmetic failures.
-SELECT division by zero returns NULL. An unknown status is a terminal native
-execution failure, not a fallback signal.
+The C ABI appends two typed runtime statuses without changing ABI-v1 struct
+layouts. The error owner selects the status at the failing operation, not from
+the outer query shape:
+
+| Admitted v1 operation and failure | MatrixOne public class | Native status and MO bridge mapping |
+| --- | --- | --- |
+| Decimal scalar `add`/`subtract`/`multiply`/`divide`/`DIV`/`modulo`, or scalar result precision | `ErrOutOfRange` (1690/22003); `decimalBatchArith` converts a physical kernel `ErrInvalidInput` at this boundary | `SIRIUS_NUMERIC_OUT_OF_RANGE` (12) → `moerr.ErrOutOfRange` |
+| Checked Decimal128/256 `SUM` state overflow or Decimal256 final declared precision, and Decimal128/256 `AVG` state/division/result-precision overflow | `ErrInvalidInput` (20301/HY000); aggregate fill/merge/flush does not use `decimalBatchArith` | `SIRIUS_NUMERIC_INVALID_INPUT` (13) → `moerr.ErrInvalidInput` |
+| Normal exact-decimal → exact-decimal checked narrowing or rescale failure | `ErrInvalidInput` (20301/HY000), from the normal cast's `Scale`/`ParseDecimal*` path | `SIRIUS_NUMERIC_INVALID_INPUT` (13) → `moerr.ErrInvalidInput` |
+| Decimal `MIN`/`MAX`, comparison, grouping, sorting, proven-safe negate, or a domain-preserving cast (including admitted signed-integer casts) on valid input | No row-level numeric failure | No numeric error status; malformed or unproven types/signatures fail preparation |
+
+SELECT division by zero produces NULL, not an error status. Empty or all-NULL
+`SUM`/`AVG` also produces NULL rather than a synthetic division error. A
+failure in a scalar argument to `SUM` remains status 12; only an aggregate-owned
+failure uses status 13. The bridge maps the typed status to the listed `moerr`
+class and never parses the bounded message to infer it. Malformed type
+parameters or ineligible cast modes fail preparation as typed unsupported or
+invalid-plan results, not row-level arithmetic failures. An unknown status is
+a terminal native execution failure, not a fallback signal.
 
 No persisted format changes. Mixed MO/Sirius revisions negotiate capability;
 if either side lacks exact-decimal v1, preparation fails before data access.
@@ -328,7 +355,9 @@ numeric admission behavior remain unchanged during coexistence.
 | Division by zero and admission | `SELECT 1/0`; `NULL/0`; masked `1/0`; attempted embedded INSERT/UPDATE/IGNORE | SELECT/NULL/masked cases are NULL; DML is rejected before native preparation and readers. |
 | Decimal256 division precision | A quotient whose rounded coefficient has one digit beyond the declared precision | The physical quotient fits, but the same `ErrOutOfRange` as current MatrixOne is returned before publication. |
 | Aggregate cancellation | `max + max - max - max` across separate partial states | Exact zero independent of merge order. |
-| Public precision bound | Largest 65-digit magnitude and a 66-digit result | Boundary succeeds; overflow has the MatrixOne error class. |
+| Scalar versus aggregate overflow | One `DECIMAL(65,0)` column with the 65-digit maximum and a second row of `1`; compare `SUM(v)` with a scalar addition of the maximum and one | `SUM(v)` fails as `ErrInvalidInput` (20301/HY000); scalar addition fails as `ErrOutOfRange` (1690/22003). `SUM(v)` over only the maximum and scalar maximum plus zero both succeed. |
+| Cast versus aggregate failure owner | An exact numeric cast whose target cannot represent its value, used alone and inside `SUM` | The cast fails as `ErrInvalidInput` before aggregate admission; the outer `SUM` does not reclassify it. |
+| Public precision bound | Largest 65-digit magnitude and a 66-digit scalar result | Boundary succeeds; scalar overflow is `ErrOutOfRange`. A final `SUM` overflow retains `ErrInvalidInput`. |
 | Empty aggregate | `SUM` and `AVG` over zero rows | NULL value and nullable result metadata. |
 | Metadata identity | Equal coefficient under `(10,2)` and `(12,4)` | Precision, scale, OID, and protocol metadata remain distinct. |
 
