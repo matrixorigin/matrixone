@@ -149,8 +149,9 @@ func (s *Scope) DropDatabase(c *Compile) error {
 	dbName := s.Plan.GetDdl().GetDropDatabase().GetDatabase()
 	rcAdmission := c.isLifecycleRC()
 	var dropDomain map[uint64]dropLifecycleIdentity
+	var branchExclusiveGate bool
 	if rcAdmission {
-		if dropDomain, err = c.admitDropLifecycleRCWithDomain(nil, dbName); err != nil {
+		if dropDomain, branchExclusiveGate, err = c.admitDropLifecycleRCWithDomain(nil, dbName); err != nil {
 			return err
 		}
 	} else if err = c.lockDataBranchLineageOwnerLifecycle(); err != nil {
@@ -210,7 +211,7 @@ func (s *Scope) DropDatabase(c *Compile) error {
 				return err
 			}
 			if hasLineage {
-				finishBranchReclaim, branchDAG, err = c.prepareBranchReclaimRC(deadTIDs)
+				finishBranchReclaim, branchDAG, err = c.prepareBranchReclaimRC(deadTIDs, branchExclusiveGate)
 				if err != nil {
 					return err
 				}
@@ -4378,7 +4379,8 @@ func (s *Scope) DropTable(c *Compile) error {
 	var finishBranchReclaim func() error
 	if !lifecycleAdmitted && c.isLifecycleRC() {
 		var domain map[uint64]dropLifecycleIdentity
-		if domain, err = c.admitDropLifecycleRCWithDomain(tables, ""); err != nil {
+		var branchExclusiveGate bool
+		if domain, branchExclusiveGate, err = c.admitDropLifecycleRCWithDomain(tables, ""); err != nil {
 			return err
 		}
 		deadTIDs := make([]uint64, 0, len(tables))
@@ -4391,7 +4393,7 @@ func (s *Scope) DropTable(c *Compile) error {
 			}
 		}
 		var branchDAG databranchutils.BranchReclaimDag
-		finishBranchReclaim, branchDAG, err = c.prepareBranchReclaimRC(deadTIDs)
+		finishBranchReclaim, branchDAG, err = c.prepareBranchReclaimRC(deadTIDs, branchExclusiveGate)
 		if err != nil {
 			return err
 		}

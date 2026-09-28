@@ -765,6 +765,9 @@ func doLock(
 		Group:           opts.group,
 		SnapShotTs:      txnOp.CreateTS(),
 	}
+	if opts.waitPolicy != nil {
+		options.Policy = *opts.waitPolicy
+	}
 	if err = setPlanSnapshotForLock(ctx, tableID, txn.IsRCIsolation(), proc, &options); err != nil {
 		return false, false, timestamp.Timestamp{}, err
 	}

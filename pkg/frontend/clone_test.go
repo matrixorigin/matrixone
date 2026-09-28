@@ -402,7 +402,7 @@ func TestLockNamedDataBranchCloneSnapshot(t *testing.T) {
 		)
 		require.NoError(t, lockNamedDataBranchCloneSnapshot(sourceCtx, bh, snapshot))
 		require.Equal(t, []string{lockSQL}, bh.executedSQLs)
-		require.Equal(t, []uint32{catalog.System_Account}, bh.executionAccountIDs)
+		require.Equal(t, []uint32{47}, bh.executionAccountIDs)
 		accountID, err := defines.GetAccountId(sourceCtx)
 		require.NoError(t, err)
 		require.Equal(t, uint32(47), accountID)

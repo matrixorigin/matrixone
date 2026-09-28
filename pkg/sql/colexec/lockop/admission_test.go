@@ -86,6 +86,29 @@ func TestLockRowsAdmissionKeepsOwnerWithoutSnapshotWait(t *testing.T) {
 	}, client.WithTimestampWaiter(waiter))
 }
 
+func TestLockRowsAdmissionFastFailPolicyIsPerRequest(t *testing.T) {
+	runLockOpTest(t, func(proc *process.Process) {
+		bat := admissionKeys(t, proc)
+		defer bat.Clean(proc.Mp())
+		op := proc.GetTxnOperator()
+		defer func() { require.NoError(t, op.Rollback(proc.Ctx)) }()
+		ls := proc.GetLockService()
+		policies := make([]lock.WaitPolicy, 0, 2)
+		proc.Base.LockService = admissionLockService{LockService: ls, lockFn: func(ctx context.Context, table uint64, rows [][]byte, id []byte, opts lock.LockOptions) (lock.Result, error) {
+			policies = append(policies, opts.Policy)
+			return ls.Lock(ctx, table, rows, id, opts)
+		}}
+		_, err := LockRowsForAdmissionWithContext(proc.Ctx, nil, proc, 47, bat, 0,
+			*bat.Vecs[0].GetType(), lock.LockMode_Shared, 0)
+		require.NoError(t, err)
+		_, err = LockRowsForAdmissionWithContext(proc.Ctx, nil, proc, 47, bat, 0,
+			*bat.Vecs[0].GetType(), lock.LockMode_Exclusive, 0, lock.WaitPolicy_FastFail)
+		require.NoError(t, err)
+		require.Equal(t, []lock.WaitPolicy{lock.WaitPolicy_Wait, lock.WaitPolicy_FastFail}, policies)
+		require.Equal(t, lock.WaitPolicy_Wait, proc.GetWaitPolicy())
+	}, client.WithTimestampWaiter(immediateLockTimestampWaiter{}))
+}
+
 func TestLockRowsAdmissionTransportAndBinding(t *testing.T) {
 	oldWait := defaultWaitTimeOnRetryLock
 	defaultWaitTimeOnRetryLock = 0

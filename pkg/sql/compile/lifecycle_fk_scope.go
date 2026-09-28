@@ -264,24 +264,82 @@ func (c *Compile) loadDropLifecycleDomain(tables []*plan.DropTable, database str
 }
 
 func (c *Compile) admitDropLifecycleRC(tables []*plan.DropTable, database string) error {
-	_, err := c.admitDropLifecycleRCWithDomain(tables, database)
+	_, _, err := c.admitDropLifecycleRCWithDomain(tables, database)
 	return err
 }
 
-func (c *Compile) admitDropLifecycleRCWithDomain(tables []*plan.DropTable, database string) (map[uint64]dropLifecycleIdentity, error) {
+func (c *Compile) admitDropLifecycleRCWithDomain(tables []*plan.DropTable, database string) (map[uint64]dropLifecycleIdentity, bool, error) {
 	names, before, err := c.loadDropLifecycleDomain(tables, database)
 	if err != nil || len(names) == 0 {
-		return nil, err
+		return nil, false, err
 	}
-	if err = c.admitLifecycleRC(names); err != nil {
-		return nil, err
+	rootIDs := dropLifecycleBranchRoots(before, tables, database)
+	needsExclusiveGate, err := c.dropRootsHaveAlterLineageRC(rootIDs)
+	if err != nil {
+		return nil, false, err
+	}
+	if err = c.admitLifecycleRC(names, needsExclusiveGate); err != nil {
+		return nil, false, err
 	}
 	_, after, err := c.loadDropLifecycleDomain(tables, database)
 	if err != nil {
-		return nil, err
+		return nil, false, err
 	}
 	if !equalDropLifecycleDomain(before, after) {
-		return nil, moerr.NewTxnNeedRetryWithDefChangedNoCtx()
+		return nil, false, moerr.NewTxnNeedRetryWithDefChangedNoCtx()
 	}
-	return after, nil
+	// An owner can publish lineage while the first probe still sees an older
+	// RC snapshot. D and the applied frontier make this probe authoritative.
+	// Promote G without waiting, then retry under the refreshed frontier. A
+	// competing holder causes a terminal lock conflict and whole-txn rollback;
+	// queuing an upgrade after D could form a wait cycle.
+	if !needsExclusiveGate {
+		participates, err := c.dropRootsHaveAlterLineageRC(dropLifecycleBranchRoots(after, tables, database))
+		if err != nil {
+			return nil, false, err
+		}
+		if participates {
+			if err := c.admitLifecycleRC(nil, true); err != nil {
+				return nil, false, err
+			}
+			return nil, false, moerr.NewTxnNeedRetryWithDefChangedNoCtx()
+		}
+	}
+	return after, needsExclusiveGate, nil
+}
+
+func (c *Compile) dropRootsHaveAlterLineageRC(ids []uint64) (bool, error) {
+	if len(ids) == 0 {
+		return false, nil
+	}
+	hasBranch, err := c.databaseHasBranchLineageRC(ids)
+	if err != nil || !hasBranch {
+		return false, err
+	}
+	dag, err := c.loadAlterDataBranchDAG(false)
+	if err != nil {
+		return false, err
+	}
+	return dag.ComponentsHaveAlterLineage(ids), nil
+}
+
+func dropLifecycleBranchRoots(domain map[uint64]dropLifecycleIdentity, tables []*plan.DropTable, database string) []uint64 {
+	ids := make([]uint64, 0, len(domain))
+	if database != "" {
+		for id, identity := range domain {
+			if id != 0 && identity.database == database {
+				ids = append(ids, id)
+			}
+		}
+	} else {
+		for _, table := range tables {
+			if table != nil && !table.IsView && table.TableId != 0 {
+				if _, ok := domain[table.TableId]; ok {
+					ids = append(ids, table.TableId)
+				}
+			}
+		}
+	}
+	slices.Sort(ids)
+	return slices.Compact(ids)
 }

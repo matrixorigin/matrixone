@@ -37,7 +37,7 @@ type lifecycleDatabaseName struct {
 // admitLifecycleRC takes the stable registry identity, the SNAPSHOT key, and
 // complete database-name domain before the caller reads mutable catalog facts.
 // All locks remain owned by the caller's transaction until its terminal path.
-func (c *Compile) admitLifecycleRC(names []lifecycleDatabaseName) error {
+func (c *Compile) admitLifecycleRC(names []lifecycleDatabaseName, exclusiveSnapshotGate bool) error {
 	ctx := c.proc.Ctx
 	txnOp := c.proc.GetTxnOperator()
 	if txnOp == nil || !txnOp.Txn().IsPessimistic() || !txnOp.Txn().IsRCIsolation() {
@@ -79,9 +79,18 @@ func (c *Compile) admitLifecycleRC(names []lifecycleDatabaseName) error {
 		registryKeys.Vecs[0].Free(c.proc.Mp())
 		return err
 	}
+	gateMode := lock.LockMode_Shared
+	var waitPolicy []lock.WaitPolicy
+	if exclusiveSnapshotGate {
+		gateMode = lock.LockMode_Exclusive
+		// A preceding statement in this transaction may already own G shared
+		// and D/K. Never queue an upgrade behind another G holder, which may
+		// itself be waiting for those retained database/component keys.
+		waitPolicy = []lock.WaitPolicy{lock.WaitPolicy_FastFail}
+	}
 	_, err = lockop.LockRowsForAdmissionWithContext(systemCtx, c.e, c.proc,
 		registry.GetTableID(systemCtx), registryKeys, 0, *registryKeys.Vecs[0].GetType(),
-		lock.LockMode_Exclusive, catalog.System_Account)
+		gateMode, catalog.System_Account, waitPolicy...)
 	registryKeys.Vecs[0].Free(c.proc.Mp())
 	if err != nil {
 		return err
