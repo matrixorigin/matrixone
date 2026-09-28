@@ -62,4 +62,26 @@ code  ¦  VARCHAR(90)  ¦  null  𝄀
 qty  ¦  BIGINT(64)  ¦  11  𝄀
 price  ¦  DECIMAL(24,6)  ¦  null  𝄀
 total  ¦  DECIMAL(43,6)  ¦  null
+CREATE TABLE metadata_target (code VARCHAR(5));
+PREPARE show_target FROM 'SHOW COLUMNS FROM view_metadata_on_demand.metadata_target';
+EXECUTE show_target;
+➤ Field[1,0,0]  ¦  Type[1,0,0]  ¦  Null[1,0,0]  ¦  Key[1,0,0]  ¦  Default[1,0,0]  ¦  Extra[1,0,0]  ¦  Comment[1,0,0]  𝄀
+code  ¦  VARCHAR(5)  ¦  YES  ¦    ¦  null  ¦    ¦  
+DROP TABLE view_metadata_on_demand.metadata_target;
+CREATE VIEW view_metadata_on_demand.metadata_target AS
+SELECT code FROM view_metadata_on_demand.src;
+ALTER TABLE view_metadata_on_demand.src MODIFY COLUMN code VARCHAR(120);
+EXECUTE show_target;
+➤ Field[1,0,0]  ¦  Type[1,0,0]  ¦  Null[1,0,0]  ¦  Key[1,0,0]  ¦  Default[1,0,0]  ¦  Extra[1,0,0]  ¦  Comment[1,0,0]  𝄀
+code  ¦  VARCHAR(120)  ¦  YES  ¦    ¦  null  ¦    ¦  
+SELECT column_name, column_type FROM information_schema.columns
+WHERE table_schema = 'view_metadata_on_demand' AND table_name = 'metadata_target';
+➤ column_name[12,256,0]  ¦  column_type[12,65535,0]  𝄀
+code  ¦  VARCHAR(120)
+DROP VIEW view_metadata_on_demand.metadata_target;
+CREATE TABLE view_metadata_on_demand.metadata_target (code BIGINT);
+EXECUTE show_target;
+➤ Field[1,0,0]  ¦  Type[1,0,0]  ¦  Null[1,0,0]  ¦  Key[1,0,0]  ¦  Default[1,0,0]  ¦  Extra[1,0,0]  ¦  Comment[1,0,0]  𝄀
+code  ¦  BIGINT(64)  ¦  YES  ¦    ¦  null  ¦    ¦  
+DEALLOCATE PREPARE show_target;
 DROP DATABASE view_metadata_on_demand;
