@@ -39,7 +39,6 @@ import (
 func TestParquetDictionarySourceBudgetBoundaries(t *testing.T) {
 	values := []*string{nil}
 	for _, s := range []string{"", "a", strings.Repeat("b", 127), "a", ""} {
-		s := s
 		values = append(values, &s)
 	}
 	values = append(values, nil)
