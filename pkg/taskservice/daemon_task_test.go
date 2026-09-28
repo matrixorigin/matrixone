@@ -53,16 +53,6 @@ type mockActiveRoutine struct {
 	cancelC chan struct{}
 }
 
-type claimLossActiveRoutine struct {
-	mockActiveRoutine
-	claimLossCancelC chan struct{}
-}
-
-func (r *claimLossActiveRoutine) CancelWithoutWatermarkCleanup() error {
-	r.claimLossCancelC <- struct{}{}
-	return nil
-}
-
 func newMockActiveRoutine() *mockActiveRoutine {
 	return &mockActiveRoutine{
 		pauseC:  make(chan struct{}, 1),
