@@ -6577,10 +6577,12 @@ func scopesContainOperator(scopes []*Scope, target vm.OpType) bool {
 }
 
 func (c *Compile) compileJoin(node, left, right *plan.Node, probeScopes, buildScopes []*Scope) []*Scope {
-	if containsStatementInvariantDiagnosticInList(c.proc, node.OnList) {
-		// The ON expression is a single logical diagnostic owner. Keep the
-		// join on one coordinator pipeline; shuffle and parallel copies would
-		// each evaluate the same statement-invariant operand independently.
+	if containsStatementInvariantDiagnosticInList(c.proc, node.OnList) ||
+		c.joinNeedsLocalWindow(node, probeScopes, buildScopes) {
+		// Keep WINDOW local: it has no remote encoding. The same local
+		// stage also gives statement-invariant ON diagnostics a single owner.
+		// Neither shuffle nor parallel copies may independently evaluate
+		// those diagnostic operands.
 		if !c.scopesRunOnCoordinator(probeScopes) {
 			probeScopes = []*Scope{c.newMergeScope(probeScopes)}
 		}
@@ -6610,6 +6612,7 @@ func (c *Compile) compileJoin(node, left, right *plan.Node, probeScopes, buildSc
 		}
 	}
 
+	probeScopes, buildScopes = c.colocateBroadcastJoinInputs(probeScopes, buildScopes)
 	rs := c.compileProbeSideForBroadcastJoin(node, left, right, probeScopes)
 	return c.compileBuildSideForBroadcastJoin(node, rs, buildScopes)
 }
@@ -6625,6 +6628,7 @@ func (c *Compile) compileBroadcastAsofBuildLeft(
 	if len(rightScopes) != 1 || rightScopes[0].NodeInfo.Mcpu != 1 {
 		rightScopes = []*Scope{c.newMergeScope(rightScopes)}
 	}
+	rightScopes, leftScopes = c.colocateBroadcastJoinInputs(rightScopes, leftScopes)
 
 	leftTypes := make([]types.Type, len(left.ProjectList))
 	for i, expr := range left.ProjectList {
