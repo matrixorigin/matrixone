@@ -247,14 +247,19 @@ func TestPreparedCeilPrecisionScalarRuntime(t *testing.T) {
 	}{
 		{"decimal", ParamValue{Value: "2.5", SourceType: types.New(types.T_decimal64, 2, 1), HasSourceType: true}},
 		{"double", ParamValue{Value: 2.5, SourceType: types.T_float64.ToType(), HasSourceType: true}},
-		{"text", ParamValue{Value: "2.5tail", SourceType: types.T_varchar.ToType(), HasSourceType: true}},
+		{"text", ParamValue{Value: "2", SourceType: types.T_varchar.ToType(), HasSourceType: true}},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			filled, err := FillValuesOfParamsInPlan(ctx, prepare.Plan, []any{tc.value})
 			require.NoError(t, err)
 			fn := findPlanFunctionExpr(filled, "ceil")
 			require.NotNil(t, fn)
-			require.True(t, isIntegerArgumentCast(fn.GetF().Args[1]))
+			precision := fn.GetF().Args[1]
+			require.Equal(t, int32(types.T_int64), precision.Typ.Id)
+			require.NotNil(t, precision.GetF())
+			require.Equal(t, "cast", precision.GetF().Func.GetObjName())
+			_, overload := function.DecodeOverloadID(precision.GetF().Func.GetObj())
+			require.Zero(t, overload, "precision uses the ordinary strict INT64 cast")
 			result, free, err := colexec.GetReadonlyResultFromExpression(proc, fn, []*batch.Batch{batch.EmptyForConstFoldBatch})
 			require.NoError(t, err)
 			defer free()
