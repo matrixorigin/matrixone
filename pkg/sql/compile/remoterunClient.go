@@ -30,6 +30,7 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/common/mpool"
 	moruntime "github.com/matrixorigin/matrixone/pkg/common/runtime"
 	"github.com/matrixorigin/matrixone/pkg/container/batch"
+	"github.com/matrixorigin/matrixone/pkg/defines"
 	"github.com/matrixorigin/matrixone/pkg/pb/pipeline"
 	"github.com/matrixorigin/matrixone/pkg/sql/colexec/connector"
 	"github.com/matrixorigin/matrixone/pkg/sql/colexec/dispatch"
@@ -83,12 +84,14 @@ func (s *Scope) remoteRun(c *Compile) (sender *messageSenderOnClient, err error)
 	var scopeEncodeData, processEncodeData []byte
 	var withoutOutput, folded bool
 	remoteFragmentCounts, remoteExecutionID := remoteExecutionTopology(c, s)
-	scopeEncodeData, withoutOutput, processEncodeData, folded, err = prepareRemoteRunSendingData(
+	var requiresBoundProtocol bool
+	scopeEncodeData, withoutOutput, processEncodeData, folded, err = prepareRemoteRunSendingDataWithVectorProtocol(
 		c.sql,
 		s,
 		c.proc,
 		remoteFragmentCounts,
 		remoteExecutionID,
+		&requiresBoundProtocol,
 	)
 	if err != nil {
 		return nil, err
@@ -120,6 +123,11 @@ func (s *Scope) remoteRun(c *Compile) (sender *messageSenderOnClient, err error)
 	// before an old RPC callback is delivered; a closed captured sink then drops
 	// that stale callback instead of publishing it into the new attempt.
 	sender.warningSink = s.Proc.GetWarningSink()
+	if requiresBoundProtocol {
+		if err = sender.confirmProtocolOnStream(defines.MORPCVersion96); err != nil {
+			return sender, err
+		}
+	}
 
 	debugMsg := ""
 	_, sub_sql, exist := fault.TriggerFault("inject_send_pipeline")
@@ -243,6 +251,17 @@ func prepareRemoteRunSendingData(
 	remoteFragmentCounts map[string]uint32,
 	remoteExecutionID uuid.UUID,
 ) (scopeData []byte, withoutOutput bool, processData []byte, folded bool, err error) {
+	return prepareRemoteRunSendingDataWithVectorProtocol(sqlStr, s, proc, remoteFragmentCounts, remoteExecutionID, nil)
+}
+
+func prepareRemoteRunSendingDataWithVectorProtocol(
+	sqlStr string,
+	s *Scope,
+	proc *process.Process,
+	remoteFragmentCounts map[string]uint32,
+	remoteExecutionID uuid.UUID,
+	requiresBoundProtocol *bool,
+) (scopeData []byte, withoutOutput bool, processData []byte, folded bool, err error) {
 	// The output dispatch executes on the initiating CN and is stripped from
 	// the encoded scope below. Validate its consumers before losing that edge.
 	if queryNeedsGroupingTransport(s.Plan.GetQuery()) {
@@ -270,7 +289,7 @@ func prepareRemoteRunSendingData(
 	}
 
 	// Encode the ScopeList which need to be sent.
-	if scopeData, err = encodeRemoteScope(encodedScope, proc); err != nil {
+	if scopeData, err = encodeRemoteScopeWithVectorProtocol(encodedScope, proc, requiresBoundProtocol); err != nil {
 		return nil, false, nil, false, err
 	}
 
@@ -598,6 +617,42 @@ func (sender *messageSenderOnClient) requestStreamProtocols(message *pipeline.Me
 	message.RequestedTeardownMode = pipeline.StreamTeardownMode_FinishAck
 	message.RequestedBatchCreditCount = pipelineBatchCreditCount
 	message.RequestedBatchCreditBytes = pipelineBatchCreditBytes
+}
+
+// The capability query uses a different RPC connection. Confirm on the stream
+// that will carry the pipeline so a replacement old CN cannot run partition zero.
+func (sender *messageSenderOnClient) confirmProtocolOnStream(minimum int64) error {
+	ctx, cancel := context.WithTimeout(sender.ctx, 5*time.Second)
+	defer cancel()
+	message := cnclient.AcquireMessage()
+	message.SetID(sender.streamSender.ID())
+	message.SetMessageType(pipeline.Method_PipelineProtocolCheck)
+	message.ProtocolVersion = minimum
+	if err := sender.streamSender.Send(ctx, message); err != nil {
+		return err
+	}
+	select {
+	case <-ctx.Done():
+		return ctx.Err()
+	case val, ok := <-sender.receiveCh:
+		if !ok || val == nil {
+			sender.markReceiveClosed()
+			return moerr.NewStreamClosedNoCtx()
+		}
+		response, ok := val.(*pipeline.Message)
+		if ok {
+			if err, hasError := response.TryToGetMoErr(); hasError {
+				return err
+			}
+		}
+		if !ok || response.GetID() != sender.streamSender.ID() ||
+			response.GetCmd() != pipeline.Method_PipelineProtocolCheck ||
+			response.GetSid() != pipeline.Status_Last ||
+			response.GetProtocolVersion() < minimum {
+			return moerr.NewNotSupportedNoCtx("remote pipeline stream does not support vector partition zero")
+		}
+		return nil
+	}
 }
 
 func (sender *messageSenderOnClient) sendPipeline(

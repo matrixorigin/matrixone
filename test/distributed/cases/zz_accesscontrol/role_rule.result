@@ -71,6 +71,10 @@ set enable_remap_hint = 1;
 select * from db1.t1;
 ➤ a[4,32,0]  ¦  age[4,32,0]  𝄀
 100  ¦  30
+set enable_remap_hint = 0;
+select * from db1.t1;
+➤ a[4,32,0]  ¦  age[4,32,0]  𝄀
+100  ¦  30
 create database db2;
 create table db2.t2(a int, age int);
 insert into db2.t2 values (10,10),(20,35),(200,60);

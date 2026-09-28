@@ -361,6 +361,12 @@ func (s *Scope) Run(c *Compile) (err error) {
 		}
 		if p != nil {
 			p.Cleanup(s.Proc, err != nil, c.isPrepare, err)
+			// The pipeline owns and closes the execution reader. A prepared
+			// scope is retained for reuse, so do not keep its closed reader
+			// (and the reader's snapshot) reachable until the next EXECUTE.
+			if s.DataSource != nil && !s.DataSource.isConst {
+				s.DataSource.R = nil
+			}
 		}
 	}()
 
@@ -2215,6 +2221,7 @@ func (s *Scope) buildVectorIndexReaders(runtimeFilters []receivedRuntimeFilter) 
 	if err != nil {
 		return nil, err
 	}
+	identity.IsRemote = s.IsRemote
 	req, hasQuery, err := vectorscan.RequestFromScalar(
 		spec, identity, membership, hasMembership, membershipRequired)
 	if err != nil {

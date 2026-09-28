@@ -141,27 +141,35 @@ func cjkToken(st *simpleState, pos int, rune rune, yield func(Token, error) bool
 	}
 }
 
-func outputLatin(st *simpleState, pos int, yield func(Token, error) bool) {
-	var bs []byte
-	if pos <= st.begin+MAX_TOKEN_SIZE {
-		bs = st.input[st.begin:pos]
-	} else {
-		if st.input[st.begin+MAX_TOKEN_SIZE-1] <= 127 {
-			// last character is ascii
-			bs = st.input[st.begin : st.begin+MAX_TOKEN_SIZE]
-		} else {
-			// find the leading byte
-			n := 1
-			for i := range 4 {
-				// leading byte must have value at least 192 (binary 11000000)
-				if st.input[st.begin+MAX_TOKEN_SIZE-i-1] >= 192 {
-					break
-				}
-				n++
-			}
-			bs = st.input[st.begin : st.begin+MAX_TOKEN_SIZE-n]
-		}
+// TruncateLatinToken caps a Latin run at MAX_TOKEN_SIZE bytes using the exact byte-boundary rule
+// SimpleTokenizer applies when it stores a token: if the last kept byte is ASCII, keep MAX_TOKEN_SIZE
+// bytes; otherwise walk back to the leading byte of the last multi-byte char and drop it. This is NOT
+// a clean UTF-8-boundary truncation (truncateUTF8) — when the cap lands one byte past a complete
+// multi-byte char it still drops that char, so e.g. `a`+12×`я` (25B) stores `a`+10×`я` (21B), not 23B.
+// A query token built outside the tokenizer (fulltext2's ngramPhraseSlots) must reproduce this rule
+// byte-for-byte or NL/BM25/quoted-boolean look up a token the index never stored (#29276).
+func TruncateLatinToken(bs []byte) []byte {
+	if len(bs) <= MAX_TOKEN_SIZE {
+		return bs
 	}
+	if bs[MAX_TOKEN_SIZE-1] <= 127 {
+		// last character is ascii
+		return bs[:MAX_TOKEN_SIZE]
+	}
+	// find the leading byte
+	n := 1
+	for i := range 4 {
+		// leading byte must have value at least 192 (binary 11000000)
+		if bs[MAX_TOKEN_SIZE-i-1] >= 192 {
+			break
+		}
+		n++
+	}
+	return bs[:MAX_TOKEN_SIZE-n]
+}
+
+func outputLatin(st *simpleState, pos int, yield func(Token, error) bool) {
+	bs := TruncateLatinToken(st.input[st.begin:pos])
 
 	ls := strings.ToLower(string(bs))
 	token := Token{}

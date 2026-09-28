@@ -1740,8 +1740,10 @@ func (s *TableChangeStream) handleStaleRead(ctx context.Context, txnOp client.Tx
 		)
 	}
 
-	// If startTs is set and noFull is false, StaleRead is fatal (non-retryable)
-	if !s.noFull && !s.startTs.IsEmpty() {
+	// A durable start timestamp is the activation boundary for both explicit
+	// starts and NoFull tasks. Advancing it to a later recovery snapshot would
+	// permanently skip commits in the gap, so fail closed when the range is stale.
+	if !s.startTs.IsEmpty() {
 		return moerr.NewInternalErrorf(
 			ctx,
 			"CDC tableChangeStream %s stale read with startTs %s set, cannot recover",

@@ -7417,6 +7417,73 @@ func TestRangeSharedHolderPromotionUpdatesBothEndpoints(t *testing.T) {
 	)
 }
 
+func TestWriterFairSharedRowWaitsBehindQueuedWriter(t *testing.T) {
+	runLockServiceTests(
+		t,
+		[]string{"writer-fair-shared-row"},
+		func(_ *lockTableAllocator, services []*service) {
+			s := services[0]
+			ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
+			defer cancel()
+
+			const table = uint64(28079)
+			row := []byte("snapshot-gate")
+			holder1 := []byte("reader-holder-1")
+			holder2 := []byte("reader-holder-2")
+			writerTxn := []byte("queued-writer")
+			lateReaderTxn := []byte("late-reader")
+			_, err := s.Lock(ctx, table, [][]byte{row}, holder1, newTestRowSharedOptions())
+			require.NoError(t, err)
+			_, err = s.Lock(ctx, table, [][]byte{row}, holder2, newTestRowSharedOptions())
+			require.NoError(t, err)
+
+			writerDone := make(chan error, 1)
+			go func() {
+				_, lockErr := s.Lock(ctx, table, [][]byte{row}, writerTxn, newTestRowExclusiveOptions())
+				writerDone <- lockErr
+			}()
+			waitWaiters(t, s, table, row, 1)
+
+			fairReader := newTestRowSharedOptions()
+			fairReader.WriterFair = true
+			readerDone := make(chan error, 1)
+			go func() {
+				_, lockErr := s.Lock(ctx, table, [][]byte{row}, lateReaderTxn, fairReader)
+				readerDone <- lockErr
+			}()
+			waitWaiters(t, s, table, row, 2)
+
+			require.NoError(t, s.Unlock(ctx, holder1, timestamp.Timestamp{}))
+			select {
+			case lockErr := <-writerDone:
+				t.Fatalf("writer acquired while a Shared holder remained: %v", lockErr)
+			case <-time.After(20 * time.Millisecond):
+			}
+			require.NoError(t, s.Unlock(ctx, holder2, timestamp.Timestamp{}))
+			select {
+			case lockErr := <-writerDone:
+				require.NoError(t, lockErr)
+			case <-ctx.Done():
+				t.Fatalf("writer did not acquire after readers released: %v", ctx.Err())
+			}
+			select {
+			case lockErr := <-readerDone:
+				t.Fatalf("late reader bypassed queued writer: %v", lockErr)
+			case <-time.After(20 * time.Millisecond):
+			}
+
+			require.NoError(t, s.Unlock(ctx, writerTxn, timestamp.Timestamp{}))
+			select {
+			case lockErr := <-readerDone:
+				require.NoError(t, lockErr)
+			case <-ctx.Done():
+				t.Fatalf("late reader did not acquire after writer released: %v", ctx.Err())
+			}
+			require.NoError(t, s.Unlock(ctx, lateReaderTxn, timestamp.Timestamp{}))
+		},
+	)
+}
+
 func TestProxyHandoffBookkeepingFailureLeavesSourceRetryable(t *testing.T) {
 	runLockServiceTests(
 		t,

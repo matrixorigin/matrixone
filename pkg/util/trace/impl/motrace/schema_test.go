@@ -16,10 +16,15 @@ package motrace
 
 import (
 	"context"
+	"errors"
 	"strings"
 	"sync"
 	"testing"
 
+	"github.com/matrixorigin/matrixone/pkg/catalog"
+	"github.com/matrixorigin/matrixone/pkg/common/mpool"
+	"github.com/matrixorigin/matrixone/pkg/container/types"
+	"github.com/matrixorigin/matrixone/pkg/util/executor"
 	ie "github.com/matrixorigin/matrixone/pkg/util/internalExecutor"
 	"github.com/stretchr/testify/require"
 )
@@ -146,6 +151,68 @@ func TestGetSchemaForAccount(t *testing.T) {
 			//	found = true
 			//}
 			//require.Equal(t, true, found)
+		})
+	}
+}
+
+func TestSchemaBootstrapPhases(t *testing.T) {
+	ctx := t.Context()
+	var statements []string
+	txn := executor.NewMemTxnExecutor(func(sql string) (executor.Result, error) {
+		statements = append(statements, sql)
+		return executor.Result{}, nil
+	}, nil)
+	require.NoError(t, InitSchemaTablesWithTxn(ctx, txn))
+	require.Len(t, statements, 1+len(tables))
+	for _, sql := range statements {
+		require.NotContains(t, sql, "CREATE VIEW")
+	}
+	statements = nil
+	require.NoError(t, InitSchemaWithTxn(ctx, txn))
+	require.Len(t, statements, 1+len(tables)+2*len(views))
+
+	for _, tc := range []struct {
+		name, kind           string
+		lookupErr, createErr error
+		wantCreates          int
+	}{
+		{name: "missing", wantCreates: len(views)},
+		{name: "existing release views", kind: catalog.SystemViewRel},
+		{name: "wrong object kind", kind: catalog.SystemOrdinaryRel},
+		{name: "lookup failure", lookupErr: errors.New("lookup failed")},
+		{name: "authoring rejected", createErr: errors.New("protocol version 97"), wantCreates: 1},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			pool := mpool.MustNewZero()
+			creates := 0
+			txn := executor.NewMemTxnExecutor(func(sql string) (executor.Result, error) {
+				if strings.HasPrefix(sql, "select relkind") {
+					require.Contains(t, sql, "account_id = 0")
+					if tc.kind == "" {
+						return executor.Result{}, tc.lookupErr
+					}
+					result := executor.NewMemResult([]types.Type{types.T_varchar.ToType()}, pool)
+					result.NewBatchWithRowCount(1)
+					executor.AppendStringRows(result, 0, []string{tc.kind})
+					return result.GetResult(), nil
+				}
+				require.Contains(t, sql, "CREATE VIEW IF NOT EXISTS")
+				creates++
+				return executor.Result{}, tc.createErr
+			}, nil)
+			err := InitSchemaViewsWithTxn(ctx, txn)
+			switch {
+			case tc.lookupErr != nil:
+				require.ErrorIs(t, err, tc.lookupErr)
+			case tc.createErr != nil:
+				require.ErrorIs(t, err, tc.createErr)
+			case tc.kind == catalog.SystemOrdinaryRel:
+				require.ErrorContains(t, err, "non-view object")
+			default:
+				require.NoError(t, err)
+			}
+			require.Equal(t, tc.wantCreates, creates)
+			require.Zero(t, pool.CurrNB(), "catalog lookup results must be released")
 		})
 	}
 }

@@ -1165,7 +1165,9 @@ func (c *Compile) buildRetryCompile(rebuildPlan bool) (*Compile, error) {
 
 	var e error
 	runC := NewCompile(c.addr, c.db, c.sql, c.tenant, c.uid, c.e, c.proc, c.stmt, c.isInternal, c.cnLabel, c.startAt)
+	runC.preparedJoinDiagnosticFree = c.preparedJoinDiagnosticFree
 	runC.groupConcatMaxLenFloor = c.groupConcatMaxLenFloor
+	runC.SetPreparedParamValues(c.preparedParamValues)
 	runC.inheritTemporaryDDLPolicy(c)
 	runC.inheritLoadUniqueIndexPromotion(c)
 	c.bindRetryPlanGeneration(runC, rebuildPlan)
@@ -1187,12 +1189,19 @@ func (c *Compile) buildRetryCompile(rebuildPlan bool) (*Compile, error) {
 	}()
 	planForRetry := c.pn
 	if rebuildPlan {
+		runC.preparedJoinDiagnosticFree = false
 		planForRetry, e = c.buildPlanFunc(topContext)
 		if e != nil {
 			return nil, e
 		}
 		if e = c.validateRetryResultMetadata(topContext, planForRetry); e != nil {
 			return nil, e
+		}
+		if c.preparedJoinDiagnosticFree {
+			runC.preparedJoinDiagnosticFree, e = plan2.ProbePreparedJoinParameterDiagnostics(c.proc, planForRetry)
+			if e != nil {
+				return nil, e
+			}
 		}
 	}
 	if e = runC.Compile(topContext, planForRetry, c.fill); e != nil {
@@ -1203,6 +1212,7 @@ func (c *Compile) buildRetryCompile(rebuildPlan bool) (*Compile, error) {
 		// after physical compilation succeeds. A subsequent ordinary retry must
 		// inherit this generation rather than the one that first hit the fence.
 		c.pn = planForRetry
+		c.preparedJoinDiagnosticFree = runC.preparedJoinDiagnosticFree
 		c.inheritPlanSnapshot(runC)
 		// Update c.anal.qry to point to the new plan's Query. This ensures
 		// fillPlanNodeAnalyzeInfo uses the correct nodes.

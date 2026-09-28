@@ -279,6 +279,12 @@ message PreparedNumericMetadata {
   // expression needed to recompute a runtime string domain after derived-column
   // or scalar-subquery flattening without adding another pointer to every Expr.
   Expr string_domain_source = 11;
+  // IFNULL is lowered to CASE, but its reconciled common value remains a
+  // value-producing boundary for source-dependent integer consumers.
+  bool ifnull_common_value = 12;
+  // A selector inlined from a projected column owns its reconciled result
+  // domain; integer consumers must not reinterpret its individual arms.
+  bool projected_common_value = 13;
 }
 
 message Expr {

@@ -36,6 +36,7 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/lockservice"
 	lockpb "github.com/matrixorigin/matrixone/pkg/pb/lock"
 	"github.com/matrixorigin/matrixone/pkg/pb/metadata"
+	"github.com/matrixorigin/matrixone/pkg/pb/pipeline"
 	"github.com/matrixorigin/matrixone/pkg/pb/plan"
 	statspb "github.com/matrixorigin/matrixone/pkg/pb/statsinfo"
 	"github.com/matrixorigin/matrixone/pkg/pb/timestamp"
@@ -77,6 +78,37 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/vm/message"
 	"github.com/matrixorigin/matrixone/pkg/vm/process"
 )
+
+func TestBroadcastJoinUsesHashAfterPreparedDiagnosticProof(t *testing.T) {
+	ctx := plan2.NewMockCompilerContext(true)
+	proc := ctx.GetProcess()
+	params := vector.NewVec(types.T_text.ToType())
+	defer func() { proc.SetPrepareParams(nil); params.Free(proc.Mp()) }()
+	require.NoError(t, vector.AppendBytes(params, []byte("00:00:01"), false, proc.Mp()))
+	proc.SetPrepareParams(params)
+
+	bind := func(name string, args ...*plan.Expr) *plan.Expr {
+		expr, err := plan2.BindFuncExprImplByPlanExpr(ctx.GetContext(), name, args)
+		require.NoError(t, err)
+		return expr
+	}
+	intType := plan.Type{Id: int32(types.T_int64)}
+	timeType := plan.Type{Id: int32(types.T_time)}
+	leftID, rightID := plan2.GetColExpr(intType, 0, 0), plan2.GetColExpr(intType, 1, 0)
+	leftTime, rightTime := plan2.GetColExpr(timeType, 0, 1), plan2.GetColExpr(timeType, 1, 1)
+	param := &plan.Expr{Typ: plan.Type{Id: int32(types.T_varchar)}, Expr: &plan.Expr_P{P: &plan.ParamRef{Pos: 0}}}
+	guard := bind("case", bind(">", rightID, plan2.MakePlan2Int64ConstExprWithType(0)),
+		bind("time", param), rightTime)
+	node := &plan.Node{JoinType: plan.Node_INNER, OnList: []*plan.Expr{
+		bind("=", leftID, rightID), bind("=", leftTime, guard),
+	}}
+	c := &Compile{proc: proc}
+	require.False(t, c.broadcastJoinUsesHash(node), "unproved guarded ON retains LoopJoin")
+	c.SetPreparedJoinDiagnosticFree(true)
+	require.True(t, c.broadcastJoinUsesHash(node), "current clean binding permits HashJoin")
+	c.SetPreparedJoinDiagnosticFree(false)
+	require.False(t, c.broadcastJoinUsesHash(node), "a subsequent execution must not inherit proof")
+}
 
 func TestHasOrderedGroupConcat(t *testing.T) {
 	ordered := &plan.Node{
@@ -169,7 +201,7 @@ func TestFilterScanStorageExprsExcludesVolatilePredicates(t *testing.T) {
 	}}}}
 	stable := plan2.MakePlan2Int64ConstExprWithType(1)
 
-	require.Equal(t, []*plan.Expr{stable}, filterScanStorageExprs([]*plan.Expr{stable, volatile}))
+	require.Equal(t, []*plan.Expr{stable}, filterScanStorageExprs(nil, []*plan.Expr{stable, volatile}))
 }
 
 func TestCompileRunPreservesBinaryPrepareParamAcrossRetries(t *testing.T) {
@@ -1161,6 +1193,17 @@ func newTestTxnClientAndOpWithIsolation(
 	isolation txn.TxnIsolation,
 	workspaces ...client.Workspace,
 ) (client.TxnClient, client.TxnOperator) {
+	return newTestTxnClientAndOpWithModeIsolation(
+		ctrl, txn.TxnMode_Optimistic, isolation, workspaces...,
+	)
+}
+
+func newTestTxnClientAndOpWithModeIsolation(
+	ctrl *gomock.Controller,
+	mode txn.TxnMode,
+	isolation txn.TxnIsolation,
+	workspaces ...client.Workspace,
+) (client.TxnClient, client.TxnOperator) {
 	txnOperator := mock_frontend.NewMockTxnOperator(ctrl)
 	workspace := client.Workspace(&Ws{})
 	if len(workspaces) > 0 {
@@ -1169,7 +1212,7 @@ func newTestTxnClientAndOpWithIsolation(
 	txnOperator.EXPECT().Commit(gomock.Any()).Return(nil).AnyTimes()
 	txnOperator.EXPECT().Rollback(gomock.Any()).Return(nil).AnyTimes()
 	txnOperator.EXPECT().GetWorkspace().Return(workspace).AnyTimes()
-	txnOperator.EXPECT().Txn().Return(txn.TxnMeta{Isolation: isolation}).AnyTimes()
+	txnOperator.EXPECT().Txn().Return(txn.TxnMeta{Mode: mode, Isolation: isolation}).AnyTimes()
 	txnOperator.EXPECT().TxnOptions().Return(txn.TxnOptions{}).AnyTimes()
 	txnOperator.EXPECT().NextSequence().Return(uint64(0)).AnyTimes()
 	txnOperator.EXPECT().TryEnterRunSqlWithTokenAndSQL(gomock.Any(), gomock.Any()).Return(uint64(1), nil).AnyTimes()
@@ -1742,12 +1785,23 @@ func TestPreferPrimaryScopeResult(t *testing.T) {
 	cancelRemoteQuery()
 	defer cancelRemotePipeline(nil)
 
+	// A reader's cancellation, wrapped by its library, as it reaches the
+	// scheduler converted locally or after crossing RPC from a remote scope
+	// (CI flake in load_data_parquet, #29315).
+	readerCanceled := fmt.Errorf("reading magic footer of parquet file: %w (read: 0)", context.Canceled)
+	convertedReaderCanceled := moerr.ConvertGoError(context.Background(), readerCanceled)
+	remoteMsg := &pipeline.Message{Err: pipeline.EncodedMessageError(context.Background(), readerCanceled)}
+	remoteReaderCanceled, ok := remoteMsg.TryToGetMoErr()
+	require.True(t, ok)
+
 	tests := []struct {
 		name      string
 		current   scopeRunResult
 		candidate scopeRunResult
 		want      error
 	}{
+		{name: "converted reader cancellation resolves to execution error", current: scopeRunResult{err: convertedReaderCanceled, ctx: internalCancelCtx}, candidate: scopeRunResult{err: executionErr}, want: executionErr},
+		{name: "remote reader cancellation resolves to execution error", current: scopeRunResult{err: remoteReaderCanceled, ctx: internalCancelCtx}, candidate: scopeRunResult{err: executionErr}, want: executionErr},
 		{name: "first error", candidate: scopeRunResult{err: cleanupErr}, want: cleanupErr},
 		{name: "execution error replaces cleanup fallback", current: scopeRunResult{err: cleanupErr}, candidate: scopeRunResult{err: executionErr}, want: executionErr},
 		{name: "joined execution error replaces cleanup fallback", current: scopeRunResult{err: cleanupErr}, candidate: scopeRunResult{err: joinedExecutionErr}, want: joinedExecutionErr},
@@ -1759,6 +1813,9 @@ func TestPreferPrimaryScopeResult(t *testing.T) {
 		{name: "unresolved interrupted sibling is secondary", current: scopeRunResult{err: cleanupErr}, candidate: scopeRunResult{err: queryInterrupted}, want: cleanupErr},
 		{name: "unresolved joined cancellation is secondary", current: scopeRunResult{err: cleanupErr}, candidate: scopeRunResult{err: joinedCancellationErr}, want: cleanupErr},
 		{name: "internally canceled sibling resolves to execution error", current: scopeRunResult{err: context.Canceled, ctx: internalCancelCtx}, candidate: scopeRunResult{err: executionErr}, want: executionErr},
+		// A reader library's wrapped cancellation (as external readers now
+		// return it, see convertReaderError) is still the sibling's cancellation.
+		{name: "wrapped reader cancellation resolves to execution error", current: scopeRunResult{err: fmt.Errorf("reading magic footer of parquet file: %w (read: 0)", context.Canceled), ctx: internalCancelCtx}, candidate: scopeRunResult{err: executionErr}, want: executionErr},
 		{name: "join map cancellation resolves to execution error", current: scopeRunResult{err: joinMapCancellationErr, ctx: internalCancelCtx}, candidate: scopeRunResult{err: executionErr}, want: executionErr},
 		{name: "normal internal cancellation is secondary", current: scopeRunResult{err: context.Canceled, ctx: internalNormalCancelCtx, queryCtx: activeQueryCtx}, candidate: scopeRunResult{err: executionErr}, want: executionErr},
 		{name: "internally interrupted sibling resolves to execution error", current: scopeRunResult{err: queryInterrupted, ctx: internalCancelCtx}, candidate: scopeRunResult{err: executionErr}, want: executionErr},

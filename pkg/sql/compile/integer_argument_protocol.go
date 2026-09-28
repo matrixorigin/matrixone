@@ -31,10 +31,14 @@ func (c *Compile) constrainIntegerArgumentWorkers(qry *plan.Query) error {
 		return nil
 	}
 	features, err := plan.RequiredRemoteExpressionFeatures(qry)
-	if err != nil || !features.IntegerParameterCoercion {
+	if err != nil || (!features.IntegerParameterCoercion && !features.SpecialIntegerConsumers) {
 		return err
 	}
-	supported, err := remoteWorkersSupportProtocol(c.proc, c.cnList, defines.MORPCVersion85)
+	version := defines.MORPCVersion85
+	if features.SpecialIntegerConsumers {
+		version = defines.MORPCVersion98
+	}
+	supported, err := remoteWorkersSupportProtocol(c.proc, c.cnList, version)
 	if err != nil {
 		return err
 	}
@@ -50,12 +54,20 @@ func validateIntegerArgumentDestination(proc *process.Process, p *pipeline.Pipel
 	if p == nil || p.Node == nil {
 		return moerr.NewNotSupportedNoCtx("integer parameter coercion requires a versioned remote destination")
 	}
-	supported, err := remoteWorkersSupportProtocol(proc, engine.Nodes{{Id: p.Node.Id, Addr: p.Node.Addr}}, defines.MORPCVersion85)
+	features, err := plan.RequiredRemoteExpressionFeatures(p)
+	if err != nil {
+		return err
+	}
+	version := defines.MORPCVersion85
+	if features.SpecialIntegerConsumers {
+		version = defines.MORPCVersion98
+	}
+	supported, err := remoteWorkersSupportProtocol(proc, engine.Nodes{{Id: p.Node.Id, Addr: p.Node.Addr}}, version)
 	if err != nil {
 		return err
 	}
 	if !supported {
-		return moerr.NewNotSupportedNoCtx("remote destination does not support integer parameter coercion (MORPC version 85)")
+		return moerr.NewNotSupportedNoCtxf("remote destination does not support integer parameter execution (MORPC version %d)", version)
 	}
 	return nil
 }

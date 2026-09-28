@@ -44,7 +44,8 @@ select cast('1abc' as double);
 ➤ cast(1abc as double)[8,54,0]  𝄀
 1.0
 select cast(X'' as double);
-invalid input: "" is invalid numeric string
+➤ cast(0x as double)[8,53,31]  𝄀
+0.0
 select cast(_binary 'this-is-a-very-long-string' as double);
 ➤ cast(this-is-a-very-long-string as double)[8,54,0]  𝄀
 0.0
@@ -376,7 +377,8 @@ select (_binary X'31' | NULL) + 0;
 ➤ (0x31 | null) + 0[-5,64,0]  𝄀
 null
 SELECT CAST(X'' AS SIGNED);
-invalid argument cast to int, bad value []
+➤ cast(0x as signed)[-5,64,0]  𝄀
+0
 SELECT CAST(X'11111111111111111111111111' AS SIGNED);
 Data truncation: data out of range: data type int, 
 select CAST(0x8fffffffffffffff as signed);
