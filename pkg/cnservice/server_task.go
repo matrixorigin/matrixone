@@ -398,14 +398,36 @@ func (s *service) registerExecutorsLocked() {
 		task.TaskCode_DataBranchLineageGC,
 		compile.DataBranchLineageGCExecutor(s.sqlExecutor),
 	)
-	ctx := defines.AttachAccount(
-		context.Background(), catalog.System_Account, catalog.System_User, catalog.System_Role,
-	)
-	if err := ts.CreateCronTask(
-		ctx,
-		databranchutils.LineageGCTaskMetadata(),
-		databranchutils.LineageGCTaskCronExpr,
-	); err != nil {
-		s.logger.Error("failed to create data branch lineage GC task", zap.Error(err))
+	// Register outside task.Lock and the heartbeat/startup command paths. The
+	// stopper owns both retries and cancellation before task storage is closed.
+	if err := s.stopper.RunNamedTask("register lineage GC cron", func(ctx context.Context) {
+		ticker := time.NewTicker(10 * time.Second)
+		defer ticker.Stop()
+		s.registerLineageGCCron(ctx, ts, ticker.C)
+	}); err != nil {
+		if !s.viewMetadataGenerationRevoked.Load() {
+			s.logger.Error("failed to start lineage GC cron registration", zap.Error(err))
+		}
+	}
+}
+
+func (s *service) registerLineageGCCron(ctx context.Context, ts taskservice.TaskService, retry <-chan time.Time) {
+	for {
+		if ctx.Err() != nil || !s.task.runnerReady.Load() || s.viewMetadataGenerationRevoked.Load() {
+			return
+		}
+		attempt, cancel := context.WithTimeout(ctx, 30*time.Second)
+		attempt = defines.AttachAccount(attempt, catalog.System_Account, catalog.System_User, catalog.System_Role)
+		err := ts.CreateCronTask(attempt, databranchutils.LineageGCTaskMetadata(), databranchutils.LineageGCTaskCronExpr)
+		cancel()
+		if err == nil || ctx.Err() != nil {
+			return
+		}
+		s.logger.Warn("failed to register lineage GC cron; retrying", zap.Error(err))
+		select {
+		case <-ctx.Done():
+			return
+		case <-retry:
+		}
 	}
 }

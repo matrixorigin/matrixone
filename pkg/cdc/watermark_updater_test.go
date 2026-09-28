@@ -74,6 +74,13 @@ type blockingErrorWatermarkExecutor struct {
 	startOnce    sync.Once
 }
 
+type blockingProgressWatermarkExecutor struct {
+	writeStarted chan struct{}
+	releaseWrite chan struct{}
+	durable      atomic.Bool
+	startOnce    sync.Once
+}
+
 type watermarkProgressExecutor struct {
 	watermark  string
 	generation string
@@ -210,6 +217,30 @@ func (m *blockingErrorWatermarkExecutor) Query(
 }
 
 func (m *blockingErrorWatermarkExecutor) ApplySessionOverride(_ ie.SessionOverrideOptions) {}
+
+func (m *blockingProgressWatermarkExecutor) Exec(
+	_ context.Context,
+	sql string,
+	_ ie.SessionOverrideOptions,
+) error {
+	if !strings.Contains(sql, "`mo_catalog`.`mo_cdc_watermark`") || !strings.Contains(sql, "owner_generation") {
+		return fmt.Errorf("expected guarded watermark write, got %q", sql)
+	}
+	m.startOnce.Do(func() { close(m.writeStarted) })
+	<-m.releaseWrite
+	m.durable.Store(true)
+	return nil
+}
+
+func (*blockingProgressWatermarkExecutor) Query(
+	context.Context,
+	string,
+	ie.SessionOverrideOptions,
+) ie.InternalExecResult {
+	return &InternalExecResultForTest{}
+}
+
+func (*blockingProgressWatermarkExecutor) ApplySessionOverride(ie.SessionOverrideOptions) {}
 
 func (m *failAddWatermarkExecutor) Exec(_ context.Context, sql string, _ ie.SessionOverrideOptions) error {
 	if strings.HasPrefix(sql, "INSERT INTO `mo_catalog`.`mo_cdc_watermark`") {
@@ -813,6 +844,75 @@ func TestWatermarkUpdater_ForceFlushWaitsForSameBatchErrorWrite(t *testing.T) {
 	}
 	require.NoError(t, barrierJob.GetResult().Err)
 	require.NoError(t, errorJob.GetResult().Err)
+}
+
+func TestWatermarkUpdater_ForceFlushWaitsForEarlierGuardedProgressWrite(t *testing.T) {
+	exec := &blockingProgressWatermarkExecutor{
+		writeStarted: make(chan struct{}),
+		releaseWrite: make(chan struct{}),
+	}
+	updater := NewCDCWatermarkUpdater(t.Name(), exec, WithCronJobInterval(time.Hour))
+	// Observe each queue admission before checking completion; the blocking
+	// executor then controls the exact persistence phase without a scheduler sleep.
+	admitted := make(chan struct{}, 2)
+	schedule := updater.customized.scheduleJobWithContext
+	updater.customized.scheduleJobWithContext = func(ctx context.Context, job *UpdaterJob) error {
+		err := schedule(ctx, job)
+		if err == nil {
+			admitted <- struct{}{}
+		}
+		return err
+	}
+	updater.Start()
+	defer updater.Stop()
+	var releaseOnce sync.Once
+	release := func() { releaseOnce.Do(func() { close(exec.releaseWrite) }) }
+	defer release()
+
+	ctx, cancel := context.WithTimeout(context.Background(), time.Second)
+	defer cancel()
+	key := WatermarkKey{AccountId: 1, TaskId: "takeover", DBName: "db", TableName: "table"}
+	fence := NewOwnerFenceForGeneration(time.UnixMicro(20), func(context.Context) error { return nil })
+	checkpoint := types.BuildTS(30, 1)
+	require.NoError(t, updater.UpdateWatermarkOnly(
+		WithWatermarkOwnerFence(ctx, fence, 11), &key, &checkpoint))
+
+	firstDone := make(chan error, 1)
+	go func() { firstDone <- updater.ForceFlush(ctx) }()
+	select {
+	case <-exec.writeStarted:
+	case <-ctx.Done():
+		t.Fatal("guarded checkpoint write did not reach the executor")
+	}
+	<-admitted
+	secondDone := make(chan error, 1)
+	go func() { secondDone <- updater.ForceFlush(ctx) }()
+	select {
+	case <-admitted:
+	case <-ctx.Done():
+		t.Fatal("second ForceFlush was not admitted")
+	}
+	require.False(t, exec.durable.Load())
+	select {
+	case err := <-secondDone:
+		t.Fatalf("ForceFlush returned before the earlier guarded write committed: %v", err)
+	case <-time.After(20 * time.Millisecond):
+	}
+
+	release()
+	select {
+	case err := <-firstDone:
+		require.NoError(t, err)
+	case <-ctx.Done():
+		t.Fatal("first ForceFlush did not finish after the guarded write")
+	}
+	select {
+	case err := <-secondDone:
+		require.NoError(t, err)
+	case <-ctx.Done():
+		t.Fatal("second ForceFlush did not finish after the guarded write")
+	}
+	require.True(t, exec.durable.Load())
 }
 
 func TestWatermarkUpdater_CommitCircuitBreaker(t *testing.T) {

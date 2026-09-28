@@ -25,6 +25,7 @@ import (
 
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
 	"github.com/matrixorigin/matrixone/pkg/common/mpool"
+	"github.com/matrixorigin/matrixone/pkg/container/types"
 	"github.com/matrixorigin/matrixone/pkg/pb/timestamp"
 	"github.com/matrixorigin/matrixone/pkg/pb/txn"
 	"github.com/matrixorigin/matrixone/pkg/sql/parsers"
@@ -428,10 +429,8 @@ func TestInternalCompilerContextDropTableIfExistsExpectedEOBNoop(t *testing.T) {
 	require.Nil(t, drop.GetTableDef())
 }
 
-// CTAS follow-up SQL is a replay of the user's own statement, so a variable
-// that shaped the plan of that statement must shape the replay identically.
-// Internal SQL with no attached frontend context has no user session whose
-// variables could apply and keeps answering nil.
+// Internal SQL must inherit variables that shape the user's plan, whether it
+// carries the frontend compiler context (CTAS) or its session resolver (ALTER).
 func TestCompilerContextResolveVariableDelegatesToAttachedSession(t *testing.T) {
 	type resolved struct {
 		name               string
@@ -446,6 +445,13 @@ func TestCompilerContextResolveVariableDelegatesToAttachedSession(t *testing.T) 
 		}
 		return nil, moerr.NewInternalErrorNoCtx("unexpected variable")
 	}
+	delegate.ResolveVariableTypeFunc = func(name string, isSystemVar, isGlobalVar bool) (plan.Type, error) {
+		seen = append(seen, resolved{name, isSystemVar, isGlobalVar})
+		if name == "fraction" {
+			return plan.Type{Id: int32(types.T_float64)}, nil
+		}
+		return plan.Type{}, moerr.NewInternalErrorNoCtx("unexpected variable type")
+	}
 
 	attached := &compilerContext{
 		ctx:  attachInternalExecutorCompilerContext(context.Background(), delegate),
@@ -455,6 +461,14 @@ func TestCompilerContextResolveVariableDelegatesToAttachedSession(t *testing.T) 
 	require.NoError(t, err)
 	require.Equal(t, "ONLY_FULL_GROUP_BY,ENABLE_BOOL_SUMAVG", value)
 	require.Equal(t, []resolved{{"sql_mode", true, false}}, seen)
+	declared, err := attached.ResolveVariableType("fraction", false, false)
+	require.NoError(t, err)
+	require.Equal(t, int32(types.T_float64), declared.Id)
+	require.Equal(t, []resolved{{"sql_mode", true, false}, {"fraction", false, false}}, seen)
+	attached.proc.SetResolveVariableFunc(func(string, bool, bool) (interface{}, error) {
+		t.Fatal("frontend delegate should take precedence over process resolver")
+		return nil, nil
+	})
 
 	// An error from the session must reach the caller rather than being
 	// flattened into the nil default, which would silently compile the replay
@@ -462,10 +476,44 @@ func TestCompilerContextResolveVariableDelegatesToAttachedSession(t *testing.T) 
 	_, err = attached.ResolveVariable("other", true, false)
 	require.Error(t, err)
 
+	processOnly := &compilerContext{ctx: context.Background(), proc: testutil.NewProcess(t)}
+	var processSeen []resolved
+	processOnly.proc.SetResolveVariableFunc(func(name string, system, global bool) (interface{}, error) {
+		processSeen = append(processSeen, resolved{name, system, global})
+		if name == "div_precision_increment" {
+			return int64(10), nil
+		}
+		return nil, moerr.NewInternalErrorNoCtx("resolver failed")
+	})
+	value, err = processOnly.ResolveVariable("div_precision_increment", true, false)
+	require.NoError(t, err)
+	require.Equal(t, int64(10), value)
+	// Internal SQL callers can install a resolver for only a subset of
+	// session variables. Unrelated planner lookups retain their nil default.
+	value, err = processOnly.ResolveVariable("foreign_key_checks", true, false)
+	require.NoError(t, err)
+	require.Nil(t, value)
+	value, err = processOnly.ResolveVariable("other", false, true)
+	require.NoError(t, err)
+	require.Nil(t, value)
+	require.Equal(t, []resolved{{"div_precision_increment", true, false}}, processSeen)
+
+	// An actual error resolving the required precision setting must propagate.
+	_, err = processOnly.ResolveVariable("div_precision_increment", false, true)
+	require.NoError(t, err)
+	processOnly.proc.SetResolveVariableFunc(func(string, bool, bool) (interface{}, error) {
+		return nil, moerr.NewInternalErrorNoCtx("precision resolver failed")
+	})
+	_, err = processOnly.ResolveVariable("div_precision_increment", true, false)
+	require.ErrorContains(t, err, "precision resolver failed")
+
 	detached := &compilerContext{ctx: context.Background(), proc: testutil.NewProcess(t)}
 	value, err = detached.ResolveVariable("sql_mode", true, false)
 	require.NoError(t, err)
 	require.Nil(t, value)
+	declared, err = detached.ResolveVariableType("fraction", false, false)
+	require.NoError(t, err)
+	require.Equal(t, plan.Type{}, declared)
 
 	// A context attaching the same compilerContext must not recurse.
 	selfAttached := &compilerContext{proc: testutil.NewProcess(t)}
@@ -473,4 +521,7 @@ func TestCompilerContextResolveVariableDelegatesToAttachedSession(t *testing.T) 
 	value, err = selfAttached.ResolveVariable("sql_mode", true, false)
 	require.NoError(t, err)
 	require.Nil(t, value)
+	declared, err = selfAttached.ResolveVariableType("fraction", false, false)
+	require.NoError(t, err)
+	require.Equal(t, plan.Type{}, declared)
 }

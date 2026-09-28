@@ -38,6 +38,7 @@ import (
 
 var _ plan.CompilerContext = new(compilerContext)
 var _ plan.TableDefStatsCompilerContext = new(compilerContext)
+var _ plan.UserVariableTypeResolver = new(compilerContext)
 
 type compilerContext struct {
 	ctx                context.Context
@@ -513,12 +514,28 @@ func (c *compilerContext) ResolveVariable(varName string, isSystemVar bool, isGl
 	// silently compiles the replay under different rules than the statement
 	// the user ran.
 	//
-	// Internal SQL with no attached frontend context keeps the nil default: it
-	// has no user session whose variables could apply.
+	// Internal SQL may instead carry the session resolver on its process, as
+	// ALTER TABLE does when it compiles the replacement table definition. That
+	// resolver can be partial, so only request the variable needed for the
+	// persisted division binding from it.
 	if delegate := getInternalExecutorCompilerContext(c.ctx); delegate != nil && delegate != c {
 		return delegate.ResolveVariable(varName, isSystemVar, isGlobalVar)
 	}
+	if isSystemVar && !isGlobalVar && strings.EqualFold(varName, "div_precision_increment") && c.proc != nil {
+		if resolve := c.proc.GetResolveVariableFunc(); resolve != nil {
+			return resolve(varName, isSystemVar, isGlobalVar)
+		}
+	}
 	return nil, nil
+}
+
+func (c *compilerContext) ResolveVariableType(varName string, isSystemVar, isGlobalVar bool) (plan.Type, error) {
+	if delegate := getInternalExecutorCompilerContext(c.ctx); delegate != nil && delegate != c {
+		if resolver, ok := delegate.(plan.UserVariableTypeResolver); ok {
+			return resolver.ResolveVariableType(varName, isSystemVar, isGlobalVar)
+		}
+	}
+	return plan.Type{}, nil
 }
 
 func (c *compilerContext) SetBuildingAlterView(yesOrNo bool, dbName, viewName string) {

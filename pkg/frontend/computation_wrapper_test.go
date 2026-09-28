@@ -43,6 +43,7 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/sql/parsers/dialect/mysql"
 	"github.com/matrixorigin/matrixone/pkg/sql/parsers/tree"
 	plan2 "github.com/matrixorigin/matrixone/pkg/sql/plan"
+	"github.com/matrixorigin/matrixone/pkg/sql/plan/function"
 	"github.com/matrixorigin/matrixone/pkg/sql/schedule"
 	"github.com/matrixorigin/matrixone/pkg/testutil"
 	util2 "github.com/matrixorigin/matrixone/pkg/util"
@@ -321,7 +322,9 @@ func newPreparedExecuteEnvForSQLWithCompilerContext(
 		NativeMode:                 ses.sqlModeHasMatrixOneNative(),
 		OnlyFullGroupBy:            ses.sqlModeHasOnlyFullGroupBy(),
 		BoolSumAvg:                 ses.sqlModeHasEnableBoolSumAvg(),
+		divPrecisionIncrement:      ses.currentDivPrecisionIncrement(),
 		sqlModeFlagsSet:            true,
+		divPrecisionIncrementSet:   true,
 		getFromSendLongData:        make(map[int]struct{}),
 		protocolVersion:            currentProtocolVersion(proc),
 		directResultParamPositions: plan2.PreparedPlanDirectResultParamPositions(preparePlan.GetDcl().GetPrepare().Plan),
@@ -4130,6 +4133,9 @@ func TestCOMStmtCharRuntimeCacheSeparatesEffectiveIntegerDomains(t *testing.T) {
 		t.Run(scenario.name, func(t *testing.T) {
 			ses, prepareStmt, cw, execCtx := newPreparedExecuteEnvForSQL(
 				t, uint32(230+i), "select char(?)")
+			prepareStmt.numericOverloadParamPositions = plan2.PreparedPlanNumericFallbackParamPositions(
+				prepareStmt.PreparePlan.GetDcl().GetPrepare().Plan)
+			require.Equal(t, []int32{0}, prepareStmt.numericOverloadParamPositions)
 			defer func() {
 				cw.proc.SetPrepareParams(nil)
 				prepareStmt.Close()
@@ -4144,8 +4150,8 @@ func TestCOMStmtCharRuntimeCacheSeparatesEffectiveIntegerDomains(t *testing.T) {
 				require.NoError(t, vector.AppendBytes(params, []byte(value), false, cw.proc.Mp()))
 				prepareStmt.params = params
 				// VAR_STRING is the real COM_STMT text shape: it has no numeric
-				// PrepareParamKind or RuntimeType, so CHAR must classify the value
-				// from the payload itself.
+				// PrepareParamKind or RuntimeType. CHAR keeps it as text and
+				// evaluates its signed/unsigned prefix through private CAST7.
 				prepareStmt.ParamTypes = []byte{byte(defines.MYSQL_TYPE_VAR_STRING), 0}
 			}
 			evaluate := func(runtimePlan *plan.Plan) []byte {
@@ -5560,6 +5566,24 @@ func TestInitExecuteStmtParamRebuildsPreparedPlanWhenNoUnsignedSubtractionChange
 	require.NoError(t, err)
 	require.False(t, prepareStmt.NoUnsignedSubtraction)
 	require.NotSame(t, rebuiltPlan, prepareStmt.PreparePlan)
+}
+
+func TestInitExecuteStmtParamRebuildsPreparedPlanWhenDivPrecisionIncrementChanges(t *testing.T) {
+	ses, prepareStmt, cw, execCtx := newPreparedExecuteEnv(t, 113)
+	defer prepareStmt.Close()
+
+	execCtx.reqCtx = defines.AttachAccountId(execCtx.reqCtx, catalog.System_Account)
+	require.Equal(t, int64(function.DefaultDivPrecisionIncrement), prepareStmt.divPrecisionIncrement)
+	originalPlan := prepareStmt.PreparePlan
+	require.NoError(t, ses.SetSessionSysVar(execCtx.reqCtx, "div_precision_increment", int64(10)))
+
+	retComp, retPlan, retStmt, _, _, err := initExecuteStmtParam(execCtx, ses, cw, nil, prepareStmt.Name)
+	require.NoError(t, err)
+	require.Nil(t, retComp)
+	require.NotNil(t, retPlan)
+	require.NotNil(t, retStmt)
+	require.Equal(t, int64(10), prepareStmt.divPrecisionIncrement)
+	require.NotSame(t, originalPlan, prepareStmt.PreparePlan)
 }
 
 func TestInitExecuteStmtParamRebuildsPlanInvalidatedDuringRun(t *testing.T) {

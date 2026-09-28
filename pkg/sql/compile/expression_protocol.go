@@ -16,15 +16,19 @@ package compile
 
 import (
 	"context"
-	"github.com/matrixorigin/matrixone/pkg/clusterservice"
 	"time"
 
+	"github.com/matrixorigin/matrixone/pkg/clusterservice"
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
 	"github.com/matrixorigin/matrixone/pkg/pb/metadata"
 	querypb "github.com/matrixorigin/matrixone/pkg/pb/query"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine"
 	"github.com/matrixorigin/matrixone/pkg/vm/process"
 )
+
+// A timeout cause must not report an error when a probe succeeds.
+var errRemoteCapabilityProbeTimeout = moerr.NewInternalError(
+	moerr.NoReportContext(), "remote capability probe timed out")
 
 // Probe the selected workers as well as the coordinator's rollout gate.
 // Capabilities are not cached across executions or sender checks.
@@ -43,7 +47,7 @@ func remoteWorkersSupportProtocol(proc *process.Process, workers engine.Nodes, m
 	if !known || version < minimum {
 		return false, nil
 	}
-	ctx, cancel := context.WithTimeoutCause(parent, 5*time.Second, moerr.NewInternalError(parent, "remote expression capability probe timed out"))
+	ctx, cancel := context.WithTimeoutCause(parent, 5*time.Second, errRemoteCapabilityProbeTimeout)
 	defer cancel()
 	for _, worker := range workers {
 		if worker.Addr == "" || proc.GetQueryClient() == nil {

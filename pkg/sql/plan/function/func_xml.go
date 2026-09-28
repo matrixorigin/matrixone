@@ -125,7 +125,7 @@ func executeXMLFunction(parameters []*vector.Vector, result vector.FunctionResul
 		if err != nil {
 			return err
 		}
-		if update && program.count {
+		if update && program.left != nil {
 			if err = rs.AppendBytes(nil, true); err != nil {
 				return err
 			}

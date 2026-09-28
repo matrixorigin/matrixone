@@ -752,6 +752,17 @@ func TestCDCNoFullPublicLifecycle(t *testing.T) {
 // is held.  B must consume the existing checkpoint and A must not erase or
 // regress B's owner generation after its delayed cleanup returns.
 func TestCDCNoFullPublicTakeoverLifecycle(t *testing.T) {
+	// This scenario adds CNs to the shared fixture. Give each run a fresh
+	// generation, including the updater's internal executor bound to CN A.
+	require.NoError(t, embed.CloseSingleCNBaseClusterTests())
+	cdc.ResetCDCWatermarkUpdaterForTest()
+	t.Cleanup(func() {
+		if err := embed.CloseSingleCNBaseClusterTests(); err != nil {
+			t.Errorf("close CDC takeover fixture: %v", err)
+			return
+		}
+		cdc.ResetCDCWatermarkUpdaterForTest()
+	})
 	runSQLIntegration(t,
 		func(c embed.Cluster) {
 			ctx, cancel := context.WithTimeout(context.Background(), 240*time.Second)
@@ -771,7 +782,7 @@ func TestCDCNoFullPublicTakeoverLifecycle(t *testing.T) {
 			secondRelease := make(chan struct{})
 			freshEntered := make(chan struct{})
 			freshRelease := make(chan struct{})
-			cancelEntered := make(chan struct{})
+			cancelEntered := make(chan bool, 2)
 			cancelRelease := make(chan struct{})
 			cancelCompleted := make(chan error, 1)
 			bCancelDone := make(chan struct{})
@@ -779,7 +790,7 @@ func TestCDCNoFullPublicTakeoverLifecycle(t *testing.T) {
 			var bCancelErrMu sync.Mutex
 			var cancelCompletionCount atomic.Int32
 			var phase atomic.Int32
-			var firstEnteredOnce, secondEnteredOnce, freshEnteredOnce, cancelEnteredOnce sync.Once
+			var firstEnteredOnce, secondEnteredOnce, freshEnteredOnce sync.Once
 			var firstReleaseOnce, secondReleaseOnce, freshReleaseOnce, cancelReleaseOnce sync.Once
 			releaseFirst := func() { firstReleaseOnce.Do(func() { close(firstRelease) }) }
 			releaseSecond := func() { secondReleaseOnce.Do(func() { close(secondRelease) }) }
@@ -797,17 +808,19 @@ func TestCDCNoFullPublicTakeoverLifecycle(t *testing.T) {
 					phase.Store(3)
 				case 4:
 					freshEnteredOnce.Do(func() { close(freshEntered) })
-					// C's admission is deliberately held until B's runner-selected
-					// cancellation has returned. This freezes the surviving B
-					// checkpoint before C initializes its first reader.
-					<-bCancelDone
+					// The test releases C only after observing B's cancellation
+					// and sampling its checkpoint. The same release unblocks C
+					// if an assertion fails before then.
 					<-freshRelease
 					phase.Store(5)
 				}
 			})
 			defer restoreAdmission()
-			restoreCancel := frontend.SetCDCTestCancelHookForTest(func() {
-				cancelEnteredOnce.Do(func() { close(cancelEntered) })
+			restoreCancel := frontend.SetCDCTestCancelHookForTest(func(producersStopped bool) {
+				select {
+				case cancelEntered <- producersStopped:
+				default:
+				}
 				<-cancelRelease
 			})
 			defer restoreCancel()
@@ -851,7 +864,8 @@ func TestCDCNoFullPublicTakeoverLifecycle(t *testing.T) {
 			})
 			defer restoreBoundary()
 
-			var sqlExec = testutils.GetSQLExecutor(cnA)
+			cnAExec := testutils.GetSQLExecutor(cnA)
+			var sqlExec = cnAExec
 			dbName := strings.ToLower(testutils.GetDatabaseName(t))
 			sinkDBName := dbName + "_takeover_sink"
 			tableName := "cdc_takeover_source"
@@ -890,8 +904,8 @@ func TestCDCNoFullPublicTakeoverLifecycle(t *testing.T) {
 			waitTarget := func(id int) bool {
 				return countRows(fmt.Sprintf("select count(*) from %s.%s where id=%d", sinkDBName, tableName, id)) > 0
 			}
-			readWatermark := func() (types.TS, uint64, bool, error) {
-				res, queryErr := sqlExec.Exec(ctx,
+			readWatermarkFrom := func(queryCtx context.Context, queryExec executor.SQLExecutor) (types.TS, uint64, bool, error) {
+				res, queryErr := queryExec.Exec(queryCtx,
 					"select owner_generation, watermark from mo_catalog.mo_cdc_watermark where task_id = (select task_id from mo_catalog.mo_cdc_task where task_name='"+taskName+"') and db_name='"+dbName+"' and table_name='"+tableName+"'",
 					executor.Options{})
 				if queryErr != nil {
@@ -912,6 +926,32 @@ func TestCDCNoFullPublicTakeoverLifecycle(t *testing.T) {
 				}
 				parsed, parseErr := frontend.CDCStrToTS(watermark)
 				return parsed, generation, true, parseErr
+			}
+			readWatermark := func() (types.TS, uint64, bool, error) {
+				return readWatermarkFrom(ctx, sqlExec)
+			}
+			flushWatermarks := func(cnID string) {
+				t.Helper()
+				flushCtx, flushCancel := context.WithTimeout(ctx, 30*time.Second)
+				defer flushCancel()
+				require.NoError(t, cdc.GetCDCWatermarkUpdater(cnID, nil).ForceFlush(flushCtx))
+			}
+			waitWatermarkVisible := func(reader executor.SQLExecutor, expected types.TS, generation uint64, cn string) {
+				t.Helper()
+				pollCtx, pollCancel := context.WithTimeout(ctx, 30*time.Second)
+				defer pollCancel()
+				for {
+					got, owner, exists, readErr := readWatermarkFrom(pollCtx, reader)
+					if readErr == nil && exists && owner == generation && got == expected {
+						return
+					}
+					select {
+					case <-pollCtx.Done():
+						t.Fatalf("CN %s did not observe final checkpoint before claiming ownership: checkpoint=%s generation=%d found=%t err=%v: %v",
+							cn, got.ToString(), owner, exists, readErr, pollCtx.Err())
+					case <-time.After(200 * time.Millisecond):
+					}
+				}
 			}
 			readTaskStart := func() (types.TS, error) {
 				res, queryErr := sqlExec.Exec(ctx,
@@ -1037,14 +1077,18 @@ func TestCDCNoFullPublicTakeoverLifecycle(t *testing.T) {
 
 			// A has lost the claim, but its runner-selected cancellation is held.
 			select {
-			case <-cancelEntered:
+			case producersStopped := <-cancelEntered:
+				require.True(t, producersStopped, "CN A must stop callbacks and readers before checkpoint sampling")
 			case <-ctx.Done():
 				t.Fatal("CN A did not enter delayed claim-loss cleanup")
 			}
-			// stopAllReaders has completed before the cancel barrier. Re-read the
-			// durable row at that linearization point so B is compared with A's
-			// final committed checkpoint, not an earlier polling sample.
-			checkpointA, generationA, found, err = readWatermark()
+			// All A producers have stopped. Drain the updater before sampling:
+			// an earlier flush can pass its owner check but commit after the
+			// cancellation hook, changing the durable checkpoint underneath us.
+			flushWatermarks(cnA.ServiceID())
+			// Read A's final checkpoint through A: B's catalog view can still be
+			// behind A's commits when its task service observes the new claim.
+			checkpointA, generationA, found, err = readWatermarkFrom(ctx, cnAExec)
 			require.NoError(t, err)
 			require.True(t, found)
 			require.True(t, checkpointA.GT(&creationStart),
@@ -1057,12 +1101,11 @@ func TestCDCNoFullPublicTakeoverLifecycle(t *testing.T) {
 			case <-ctx.Done():
 				t.Fatal("CN B did not reach replacement admission")
 			}
-			checkpointBeforeB, _, found, err := readWatermark()
-			require.NoError(t, err)
-			require.True(t, found)
-			// The admission barrier runs before B's owner claim. The durable
-			// generation is checked after B has collected and flushed W below.
-			require.Equal(t, checkpointA, checkpointBeforeB)
+			// The admission barrier runs before B's owner claim. Wait for B to
+			// observe A's final committed row before comparing them; a single
+			// cross-CN catalog read may still return an older visible version.
+			waitWatermarkVisible(sqlExec, checkpointA, generationA, "B")
+			checkpointBeforeB := checkpointA
 			mustExec(dbName, "insert into "+tableName+" values (3, 'after_takeover')")
 			// Capture a real source transaction snapshot that demonstrably sees
 			// the post-takeover row.  B's durable checkpoint must reach this
@@ -1101,6 +1144,18 @@ func TestCDCNoFullPublicTakeoverLifecycle(t *testing.T) {
 				checkpointB, generationAfterB, found, readErr = readWatermark()
 				return readErr == nil && found && generationAfterB > generationA && checkpointB.GE(&row3Snapshot)
 			}, 30*time.Second, 200*time.Millisecond)
+			// B is still live. Force the delayed A cleanup to race with a real
+			// later B checkpoint, rather than treating this sample as final.
+			var advancedCheckpointB types.TS
+			require.Eventually(t, func() bool {
+				got, generation, exists, readErr := readWatermark()
+				if readErr != nil || !exists || generation != generationAfterB || !got.GT(&checkpointB) {
+					return false
+				}
+				advancedCheckpointB = got
+				return true
+			}, 30*time.Second, 200*time.Millisecond,
+				"CN B did not advance its durable checkpoint before A's delayed cleanup")
 
 			// Let A's delayed runner cleanup return only after B has committed W,
 			// and join the actual cancellation completion rather than merely
@@ -1114,14 +1169,14 @@ func TestCDCNoFullPublicTakeoverLifecycle(t *testing.T) {
 			}
 			require.Eventually(t, func() bool {
 				got, generation, found, readErr := readWatermark()
-				return readErr == nil && found && generation == generationAfterB && got == checkpointB
+				return readErr == nil && found && generation == generationAfterB && got.GE(&advancedCheckpointB)
 			}, 30*time.Second, 200*time.Millisecond)
 
 			// Add a fresh CN C after A has fully returned. Transfer the durable
 			// running claim to C so a new executor/reader, rather than B's existing
 			// reader, proves recovery from B's post-takeover checkpoint.
 			phase.Store(4)
-			require.NoError(t, c.StartNewCNService(2))
+			require.NoError(t, c.StartNewCNService(1))
 			cnC, err := c.GetCNService(2)
 			require.NoError(t, err)
 			if w, ok := any(c).(interface {
@@ -1138,6 +1193,17 @@ func TestCDCNoFullPublicTakeoverLifecycle(t *testing.T) {
 			// enough for the test/UT watchdog to fire before the replacement reader
 			// reaches its admission barrier.
 			var freshScanDone chan error
+			defer func() {
+				if freshScanDone == nil {
+					return
+				}
+				releaseFresh()
+				select {
+				case <-freshScanDone:
+				case <-time.After(30 * time.Second):
+					t.Error("CN C detector scan did not finish during cleanup")
+				}
+			}()
 			for attempts := 0; ; attempts++ {
 				freshScanDone = make(chan error, 1)
 				go func(done chan error) { done <- cdc.RunTableDetectorScanForTest(cnC.ServiceID()) }(freshScanDone)
@@ -1145,6 +1211,7 @@ func TestCDCNoFullPublicTakeoverLifecycle(t *testing.T) {
 				case <-freshEntered:
 					goto freshAdmissionEntered
 				case scanErr := <-freshScanDone:
+					freshScanDone = nil
 					if scanErr != nil && attempts%10 == 0 {
 						t.Logf("CN C detector scan retry %d: %v", attempts, scanErr)
 					}
@@ -1165,18 +1232,34 @@ func TestCDCNoFullPublicTakeoverLifecycle(t *testing.T) {
 			case <-ctx.Done():
 				t.Fatal("CN B cancellation did not complete before C admission")
 			}
-			freshStart, _, found, err := readWatermark()
+			select {
+			case producersStopped := <-cancelEntered:
+				require.True(t, producersStopped, "CN B must stop callbacks and readers before checkpoint sampling")
+			case <-ctx.Done():
+				t.Fatal("CN B did not stop its producers before C admission")
+			}
+			// B's cancellation schedules cache eviction asynchronously. Drain any
+			// earlier B write before sampling the durable row for C.
+			flushWatermarks(cnB.ServiceID())
+			// The updater writes through A's internal executor. Read the final
+			// committed tuple there, then wait for C's catalog view to catch up.
+			freshStart, finalGeneration, found, err := readWatermarkFrom(ctx, cnAExec)
 			require.NoError(t, err)
 			require.True(t, found)
-			// B may have one final asynchronous watermark flush in flight when
-			// its cancellation completion is published. Re-read the durable row
-			// at C's admission boundary and use that value as the recovery oracle;
-			// it must never move backwards from the checkpoint B had committed.
-			require.True(t, freshStart.GE(&checkpointB),
+			require.Equal(t, generationAfterB, finalGeneration,
+				"B's final checkpoint must retain its owner generation before C claims")
+			require.True(t, freshStart.GE(&advancedCheckpointB),
 				"fresh reader must not observe a checkpoint older than B's durable progress")
+			waitWatermarkVisible(sqlExec, freshStart, finalGeneration, "C")
 			captureFresh.Store(true)
 			releaseFresh()
-			require.NoError(t, <-freshScanDone)
+			select {
+			case scanErr := <-freshScanDone:
+				freshScanDone = nil
+				require.NoError(t, scanErr)
+			case <-ctx.Done():
+				t.Fatal("CN C detector scan did not finish after admission")
+			}
 			select {
 			case actualStart := <-freshBoundary:
 				require.Equal(t, freshStart, actualStart,

@@ -3,6 +3,15 @@ ExtractValue('<a id="7"/>', '/a/@id') AS attr,
 ExtractValue('<a><b/><b/></a>', 'count(/a/b)') AS count_nodes;
 ➤ multi[-1,536870911,0]  ¦  attr[-1,536870911,0]  ¦  count_nodes[-1,536870911,0]  𝄀
 1 2  ¦  7  ¦  2
+SELECT ExtractValue('<a><b>1</b><b>2</b></a>', 'sum(/a/b)') AS sum_nodes,
+ExtractValue('<a><b>1</b><b>2</b></a>', 'count(/a/b)=2') AS count_equals,
+ExtractValue('<a><b>1</b><b>2</b></a>', '/a/b[position()=last()]') AS last_child;
+➤ sum_nodes[-1,536870911,0]  ¦  count_equals[-1,536870911,0]  ¦  last_child[-1,536870911,0]  𝄀
+3  ¦  1  ¦  2
+SELECT ExtractValue('<a>1000000000000000.1</a>', 'sum(/a)') AS large_fraction,
+ExtractValue(CONCAT('<a>', CHAR(11), '2</a>'), 'sum(/a)') AS numeric_whitespace;
+➤ large_fraction[-1,536870911,0]  ¦  numeric_whitespace[-1,536870911,0]  𝄀
+1000000000000000.1  ¦  2
 SELECT ExtractValue('<a>x<b>y</b>z</a>', '/a') AS direct_text,
 ExtractValue('<a>x<b>y</b>z</a>', '/a/text()') AS explicit_text,
 ExtractValue('<a>x<b>y</b>z</a>', '/a|/a/b') AS union_text;
@@ -23,6 +32,20 @@ SELECT ExtractValue('<a><b>1</b><b>2</b></a><a><b>3</b><b>4</b></a>', '/a/b[1]')
 ExtractValue('<a><b k="X">yes</b></a>', '/a/b[@k="x"]') AS predicate;
 ➤ per_parent[-1,536870911,0]  ¦  predicate[-1,536870911,0]  𝄀
 1 3  ¦  yes
+SELECT ExtractValue('<r><a><b>1</b><b>2</b></a><a><b>3</b><b>4</b></a></r>', '/r/a/b[position()=last()]') = '' AS whole_step_last,
+ExtractValue('<r><a><b>1</b><b>2</b></a><a><b>3</b><b>4</b></a></r>', '/r/a/b[1][position()=last()]') AS filtered_last,
+ExtractValue('<a>1.234567890123456e-6</a>', 'sum(/a)') AS scientific_sum;
+➤ whole_step_last[-7,1,0]  ¦  filtered_last[-1,536870911,0]  ¦  scientific_sum[-1,536870911,0]  𝄀
+1  ¦  3  ¦  1.234567890123456e-6
+SELECT ExtractValue('<a><a><b>1</b></a></a>', 'count(//a//b)') AS overlapping_count,
+ExtractValue('<a><a><b>1</b></a></a>', 'sum(//a//b)') AS overlapping_sum,
+ExtractValue('<a><a><b>1</b></a></a>', 'sum(//a//b|//a//b)') AS union_sum;
+➤ overlapping_count[-1,536870911,0]  ¦  overlapping_sum[-1,536870911,0]  ¦  union_sum[-1,536870911,0]  𝄀
+2  ¦  2  ¦  1
+SELECT ExtractValue('<r><a><a><b>1</b></a></a><a><b>2</b></a></r>', '//a/*[1][position()=last()]') AS ordered_predicate,
+ExtractValue('<r><a><a><b>1</b></a></a><a><b>2</b></a></r>', '//a//b[1][2]') AS second_occurrence;
+➤ ordered_predicate[-1,536870911,0]  ¦  second_occurrence[-1,536870911,0]  𝄀
+1  ¦  2
 SELECT ExtractValue('<a>x<b>y</b>z</a>', '//text()') AS all_text,
 ExtractValue('<a>x<b>y</b>z</a>', '/a//text()') AS descendants,
 ExtractValue('<a>x<b>y</b>z</a>', '/a/text()') AS direct_text;
@@ -38,6 +61,16 @@ UpdateXML('<a><b>1</b><b>2</b></a>', '/a/b', '<c/>') AS multiple_unchanged,
 UpdateXML('<a/>', '/missing', '<c/>') AS missing_unchanged;
 ➤ replaced[-1,536870911,0]  ¦  multiple_unchanged[-1,536870911,0]  ¦  missing_unchanged[-1,536870911,0]  𝄀
 <a><c>2</c></a>  ¦  <a><b>1</b><b>2</b></a>  ¦  <a/>
+SELECT UpdateXML('<r><a><b>1</b><b>2</b></a><a><b>3</b><b>4</b></a></r>', '/r/a/b[1][position()=last()]', '<c/>') AS filtered_update;
+➤ filtered_update[-1,536870911,0]  𝄀
+<r><a><b>1</b><b>2</b></a><a><c/><b>4</b></a></r>
+SELECT UpdateXML('<a><a><b>1</b></a></a>', '//a//b', '<c/>') AS overlapping_unchanged,
+UpdateXML('<a><a><b>1</b></a></a>', '//a//b|//a//b', '<c/>') AS union_single;
+➤ overlapping_unchanged[-1,536870911,0]  ¦  union_single[-1,536870911,0]  𝄀
+<a><a><b>1</b></a></a>  ¦  <a><a><c/></a></a>
+SELECT UpdateXML('<r><a><a><b>1</b></a></a><a><b>2</b></a></r>', '//a/*[1][position()=last()]', '<c/>') AS ordered_update;
+➤ ordered_update[-1,536870911,0]  𝄀
+<r><a><a><c/></a></a><a><b>2</b></a></r>
 SELECT UpdateXML('<a k="7"><b/></a>', '/a/@k', 'z') AS attribute_span,
 UpdateXML('<a />', '/a', 'not xml') AS raw_replacement,
 UpdateXML('<a/>', '/', 'raw') AS document_replacement,
@@ -73,7 +106,7 @@ SELECT UpdateXML('<a/>', '[', NULL);
 not supported: XPATH syntax error or unsupported XPath feature
 SELECT ExtractValue('<a>', '[');
 not supported: XPATH syntax error or unsupported XPath feature
-SELECT ExtractValue('<a/>', 'sum(/a)');
+SELECT ExtractValue('<a/>', 'sum()');
 not supported: XPATH syntax error or unsupported XPath feature
 SELECT UpdateXML('<a>x</a>', '/a/text()', 'Q') AS root_text;
 ➤ root_text[-1,536870911,0]  𝄀
