@@ -80,6 +80,17 @@ func TestTableDumpExactBaseSpecialIntegerBindings(t *testing.T) {
 	}
 }
 
+func TestTableDumpLegacyTimeWidthCompatibility(t *testing.T) {
+	old := &planpb.Expr{Typ: planpb.Type{Id: int32(types.T_time), Scale: 2}}
+	rebound := &planpb.Expr{Typ: planpb.Type{Id: int32(types.T_time), Width: 2, Scale: 2}}
+	require.True(t, sameTableDumpBoundExpression(old, rebound))
+	rebound.Typ.Scale = 3
+	require.False(t, sameTableDumpBoundExpression(old, rebound))
+	rebound.Typ.Scale = 2
+	rebound.Typ.Width = 4
+	require.False(t, sameTableDumpBoundExpression(old, rebound))
+}
+
 func TestTableDumpLegacySpecialIntegerBindings(t *testing.T) {
 	compiler := NewMockCompilerContext(false)
 	compiler.tables["t"] = &planpb.TableDef{Name: "t"}

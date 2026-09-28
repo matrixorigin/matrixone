@@ -290,6 +290,8 @@ type Compile struct {
 	// Semantic values for a prepared CTAS follow-up INSERT. SQL text transport
 	// alone cannot recover the source type of each original parameter.
 	preparedParamValues []any
+	// Proof belongs to this bound execution and physical plan generation.
+	preparedJoinDiagnosticFree bool
 
 	execType plan2.ExecType
 

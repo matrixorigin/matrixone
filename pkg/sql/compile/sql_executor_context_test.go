@@ -25,6 +25,7 @@ import (
 
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
 	"github.com/matrixorigin/matrixone/pkg/common/mpool"
+	"github.com/matrixorigin/matrixone/pkg/container/types"
 	"github.com/matrixorigin/matrixone/pkg/defines"
 	"github.com/matrixorigin/matrixone/pkg/pb/timestamp"
 	"github.com/matrixorigin/matrixone/pkg/pb/txn"
@@ -588,6 +589,13 @@ func TestCompilerContextResolveVariableDelegatesToAttachedSession(t *testing.T) 
 		}
 		return nil, moerr.NewInternalErrorNoCtx("unexpected variable")
 	}
+	delegate.ResolveVariableTypeFunc = func(name string, isSystemVar, isGlobalVar bool) (plan.Type, error) {
+		seen = append(seen, resolved{name, isSystemVar, isGlobalVar})
+		if name == "fraction" {
+			return plan.Type{Id: int32(types.T_float64)}, nil
+		}
+		return plan.Type{}, moerr.NewInternalErrorNoCtx("unexpected variable type")
+	}
 
 	attached := &compilerContext{
 		ctx:  attachInternalExecutorCompilerContext(context.Background(), delegate),
@@ -597,6 +605,10 @@ func TestCompilerContextResolveVariableDelegatesToAttachedSession(t *testing.T) 
 	require.NoError(t, err)
 	require.Equal(t, "ONLY_FULL_GROUP_BY,ENABLE_BOOL_SUMAVG", value)
 	require.Equal(t, []resolved{{"sql_mode", true, false}}, seen)
+	declared, err := attached.ResolveVariableType("fraction", false, false)
+	require.NoError(t, err)
+	require.Equal(t, int32(types.T_float64), declared.Id)
+	require.Equal(t, []resolved{{"sql_mode", true, false}, {"fraction", false, false}}, seen)
 	attached.proc.SetResolveVariableFunc(func(string, bool, bool) (interface{}, error) {
 		t.Fatal("frontend delegate should take precedence over process resolver")
 		return nil, nil
@@ -643,6 +655,9 @@ func TestCompilerContextResolveVariableDelegatesToAttachedSession(t *testing.T) 
 	value, err = detached.ResolveVariable("sql_mode", true, false)
 	require.NoError(t, err)
 	require.Nil(t, value)
+	declared, err = detached.ResolveVariableType("fraction", false, false)
+	require.NoError(t, err)
+	require.Equal(t, plan.Type{}, declared)
 
 	// A context attaching the same compilerContext must not recurse.
 	selfAttached := &compilerContext{proc: testutil.NewProcess(t)}
@@ -650,4 +665,7 @@ func TestCompilerContextResolveVariableDelegatesToAttachedSession(t *testing.T) 
 	value, err = selfAttached.ResolveVariable("sql_mode", true, false)
 	require.NoError(t, err)
 	require.Nil(t, value)
+	declared, err = selfAttached.ResolveVariableType("fraction", false, false)
+	require.NoError(t, err)
+	require.Equal(t, plan.Type{}, declared)
 }

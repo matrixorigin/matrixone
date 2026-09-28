@@ -346,7 +346,7 @@ func TestNonEqAggregateFallbackRejectsBypassedBoundariesBeforeAppend(t *testing.
 			test.set(builder.qry.Nodes[index])
 			before := len(builder.qry.Nodes)
 			_, _, err := builder.flattenScalarSubqueryWithNonEqAgg(0, 3, subCtx, nil, ctx,
-				&planpb.SubqueryRef{Typ: planpb.SubqueryRef_SCALAR})
+				&planpb.SubqueryRef{Typ: planpb.SubqueryRef_SCALAR}, nil)
 			require.ErrorContains(t, err, "pagination in non-equality correlated aggregate")
 			require.Len(t, builder.qry.Nodes, before)
 		})
@@ -374,7 +374,7 @@ func TestNonEqAggregateFallbackRejectsBypassedBoundariesBeforeAppend(t *testing.
 			}
 			before := len(builder.qry.Nodes)
 			_, _, err := builder.flattenScalarSubqueryWithNonEqAgg(outerID, 3, subCtx, nil, ctx,
-				&planpb.SubqueryRef{Typ: planpb.SubqueryRef_SCALAR})
+				&planpb.SubqueryRef{Typ: planpb.SubqueryRef_SCALAR}, nil)
 			if test.outer {
 				require.ErrorContains(t, err, "outer composition cannot be safely decorrelated")
 			} else {
