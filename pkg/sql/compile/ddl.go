@@ -6459,6 +6459,9 @@ func (s *Scope) CreateCDC(c *Compile) error {
 				}
 			}
 		}
+		if err = validateCDCTargetIdentityCatalog(ctx, tx); err != nil {
+			return 0, err
+		}
 
 		var (
 			insertSql    string
@@ -7122,7 +7125,11 @@ func (opts *CDCCreateTaskOptions) ValidateAndFill(
 	if sourcePattern {
 		extraOpts[cdc.CDCTaskExtraOptions_SourcePatternProtocol] = cdc.CDCSourcePatternProtocolV1
 	}
-	extraOpts[cdc.CDCTaskExtraOptions_GenerationProtocol] = cdc.CDCGenerationAwareProtocolV1
+	if compileProtocolVersion(c) < defines.MORPCVersion97 {
+		return moerr.NewNotSupportedf(ctx,
+			"CDC target identity requires all CNs to support protocol version %d", defines.MORPCVersion97)
+	}
+	extraOpts[cdc.CDCTaskExtraOptions_GenerationProtocol] = cdc.CDCGenerationAwareProtocolV2
 	if err = validateStableInitialSnapshotCompileProtocol(ctx, c, true); err != nil {
 		return
 	}
@@ -7140,6 +7147,37 @@ func (opts *CDCCreateTaskOptions) ValidateAndFill(
 	opts.ExtraOpts = string(extraOptsBytes)
 
 	return
+}
+
+func compileProtocolVersion(c *Compile) int64 {
+	if c == nil || c.proc == nil {
+		return defines.MORPCLatestVersion
+	}
+	if rt := moruntime.ServiceRuntime(c.proc.GetService()); rt != nil {
+		if value, ok := rt.GetGlobalVariables(moruntime.MOProtocolVersion); ok {
+			if version, valid := value.(int64); valid {
+				return version
+			}
+		}
+	}
+	return defines.MORPCVersion4
+}
+
+func validateCDCTargetIdentityCatalog(ctx context.Context, tx taskservice.SqlExecutor) error {
+	rows, err := tx.QueryContext(ctx,
+		"SELECT pending_source_table_id, target_identity FROM mo_catalog.mo_cdc_watermark LIMIT 0")
+	if err != nil {
+		return moerr.NewNotSupportedf(ctx,
+			"CDC target identity catalog columns are not available: %v", err)
+	}
+	defer rows.Close()
+	if rows.Next() {
+		return moerr.NewInternalError(ctx, "CDC target identity catalog probe unexpectedly returned a row")
+	}
+	if err = rows.Err(); err != nil {
+		return err
+	}
+	return nil
 }
 
 func validateStableInitialSnapshotCompileProtocol(
