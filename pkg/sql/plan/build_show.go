@@ -672,14 +672,16 @@ func buildShowColumns(stmt *tree.ShowColumns, ctx CompilerContext) (*Plan, error
 	}
 
 	var viewDependencies []*ObjectRef
+	var viewMetadataDependsOnUdf bool
 	if tableDef.ViewSql != nil && tableDef.ViewSql.View != "" &&
 		!slices.Contains(catalog.SystemDatabases, strings.ToLower(dbName)) {
-		columns, dependencies, err := viewDescriptionRelation(ctx, tableDef, accountId, dbName, tblName)
+		columns, dependencies, dependsOnUdf, err := viewDescriptionRelation(ctx, tableDef, accountId, dbName, tblName)
 		if err != nil {
 			return nil, err
 		}
 		sql = strings.Replace(sql, "FROM "+MO_CATALOG_DB_NAME+".mo_columns col", "FROM "+columns+" col", 1)
 		viewDependencies = appendPrepareSchemas(dependencies, prepareSchemaRefWithSnapshot(obj, tableDef, nil))
+		viewMetadataDependsOnUdf = dependsOnUdf
 	}
 
 	var result *Plan
@@ -697,6 +699,7 @@ func buildShowColumns(stmt *tree.ShowColumns, ctx CompilerContext) (*Plan, error
 	}
 	result.GetQuery().CatalogDependencies = appendPrepareSchemas(
 		result.GetQuery().CatalogDependencies, viewDependencies...)
+	result.GetQuery().ViewMetadataDependsOnUdf = viewMetadataDependsOnUdf
 	return result, nil
 }
 

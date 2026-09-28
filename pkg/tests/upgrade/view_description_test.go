@@ -369,6 +369,7 @@ func TestViewDescriptionUdfDatabaseContext(t *testing.T) {
 		require.NoError(t, err)
 		_, err = definition.ExecContext(ctx, "create view v as select f_answer() as answer")
 		require.NoError(t, err)
+		expectedType := "BIGINT"
 		checkShow := func(query string) {
 			t.Helper()
 			rows, queryErr := definition.QueryContext(ctx, query)
@@ -385,7 +386,7 @@ func TestViewDescriptionUdfDatabaseContext(t *testing.T) {
 			}
 			require.NoError(t, rows.Scan(targets...))
 			require.Equal(t, "answer", values[0].String)
-			require.Equal(t, "BIGINT", strings.ToUpper(values[1].String))
+			require.Equal(t, expectedType, strings.ToUpper(values[1].String))
 			require.False(t, rows.Next())
 			require.NoError(t, rows.Err())
 		}
@@ -409,6 +410,10 @@ func TestViewDescriptionUdfDatabaseContext(t *testing.T) {
 		}()
 		_, err = definition.ExecContext(ctx, "use view_description_udf_caller")
 		require.NoError(t, err)
+		_, err = definition.ExecContext(ctx, "prepare view_udf_columns from 'show columns from view_description_udf.v'")
+		require.NoError(t, err)
+		defer definition.ExecContext(ctx, "deallocate prepare view_udf_columns")
+		checkShow("execute view_udf_columns")
 		prepared, err := definition.PrepareContext(ctx, "show columns from view_description_udf.v")
 		require.NoError(t, err)
 		defer prepared.Close()
@@ -418,7 +423,7 @@ func TestViewDescriptionUdfDatabaseContext(t *testing.T) {
 			require.NoError(t, prepared.QueryRowContext(ctx).Scan(
 				&field, &typ, &nullable, &key, &defaultValue, &extra, &comment))
 			require.Equal(t, "answer", field.String)
-			require.Equal(t, "BIGINT", strings.ToUpper(typ.String))
+			require.Equal(t, expectedType, strings.ToUpper(typ.String))
 		}
 		checkShow("desc view_description_udf.v")
 		checkPrepared()
@@ -434,7 +439,41 @@ func TestViewDescriptionUdfDatabaseContext(t *testing.T) {
 		require.NoError(t, db.QueryRowContext(ctx, query).Scan(&count))
 		require.Equal(t, 1, count, "a caller without a default database must also resolve the View UDF")
 
+		_, err = definition.ExecContext(ctx, "use view_description_udf")
+		require.NoError(t, err)
+		_, err = definition.ExecContext(ctx, "drop function f_answer()")
+		require.NoError(t, err)
+		_, err = definition.ExecContext(ctx,
+			"create function f_answer() returns varchar(9) language sql as 'repeat(\"x\",9)'")
+		require.NoError(t, err)
+		_, err = definition.ExecContext(ctx, "use mo_catalog")
+		require.NoError(t, err)
+		expectedType = "VARCHAR(9)"
+		checkShow("show full columns from view_description_udf.v")
+		checkShow("execute view_udf_columns")
+		checkPrepared()
+
 		for _, callerDatabase := range []string{"view_description_udf", catalog.MO_CATALOG, ""} {
+			for _, statement := range []string{
+				"desc view_description_udf.v", "show full columns from view_description_udf.v",
+			} {
+				result, execErr := testutils.GetSQLExecutor(cn).Exec(ctx, statement,
+					executor.Options{}.WithDatabase(callerDatabase).WithAccountID(0))
+				require.NoError(t, execErr, "internal %q without frontend delegate: database %q", statement, callerDatabase)
+				func() {
+					defer result.Close()
+					var found bool
+					result.ReadRows(func(n int, cols []*vector.Vector) bool {
+						require.Equal(t, 1, n)
+						require.Equal(t, "answer", executor.GetStringRows(cols[0])[0])
+						require.Equal(t, expectedType, strings.ToUpper(executor.GetStringRows(cols[1])[0]))
+						found = true
+						return true
+					})
+					require.True(t, found)
+				}()
+			}
+
 			result, execErr := testutils.GetSQLExecutor(cn).Exec(ctx, query,
 				executor.Options{}.WithDatabase(callerDatabase).WithAccountID(0))
 			require.NoError(t, execErr, "internal executor without frontend delegate: database %q", callerDatabase)

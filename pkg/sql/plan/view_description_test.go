@@ -25,6 +25,16 @@ import (
 	"github.com/stretchr/testify/require"
 )
 
+func TestViewMetadataUdfRebindFlagSurvivesPlanCopyAndWire(t *testing.T) {
+	query := &planpb.Query{ViewMetadataDependsOnUdf: true}
+	require.True(t, DeepCopyQuery(query).GetViewMetadataDependsOnUdf())
+	data, err := query.Marshal()
+	require.NoError(t, err)
+	var decoded planpb.Query
+	require.NoError(t, decoded.Unmarshal(data))
+	require.True(t, decoded.GetViewMetadataDependsOnUdf())
+}
+
 func TestDescribeViewColumnsUsesCurrentDefinition(t *testing.T) {
 	ctx := NewMockCompilerContext(false)
 	ctx.GetAccountIdFunc = func() (uint32, error) { return 42, nil }

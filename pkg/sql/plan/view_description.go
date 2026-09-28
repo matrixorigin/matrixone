@@ -36,6 +36,7 @@ const MaxViewMetadataColumns = 4096
 type viewDescriptionDependencyContext struct {
 	CompilerContext
 	refs               []*ObjectRef
+	dependsOnUdf       bool
 	publisherBinding   bool
 	publisherAccountID uint32
 }
@@ -46,10 +47,17 @@ type viewDescriptionDependencyContext struct {
 func (c *viewDescriptionDependencyContext) ResolveViewUdf(
 	name string, args []*Expr, database string,
 ) (*function.Udf, error) {
+	var udf *function.Udf
+	var err error
 	if resolver, ok := c.CompilerContext.(ViewUdfResolver); ok {
-		return resolver.ResolveViewUdf(name, args, database)
+		udf, err = resolver.ResolveViewUdf(name, args, database)
+	} else {
+		udf, err = c.CompilerContext.ResolveUdf(name, args)
 	}
-	return c.CompilerContext.ResolveUdf(name, args)
+	if err == nil && udf != nil {
+		c.dependsOnUdf = true
+	}
+	return udf, err
 }
 
 func (c *viewDescriptionDependencyContext) record(obj *ObjectRef, def *TableDef, snapshot *Snapshot) {
@@ -100,20 +108,20 @@ func (c *viewDescriptionDependencyContext) ResolveViewDependencyAccount(
 // View column snapshot, and no generated definition is written back.
 func viewDescriptionRelation(
 	ctx CompilerContext, def *TableDef, accountID uint32, databaseName, viewName string,
-) (string, []*ObjectRef, error) {
-	if sub := ctx.GetQueryingSubscription(); sub != nil {
-		provider, ok := ctx.(ViewDescriptionContextProvider)
-		if !ok {
-			return "", nil, moerr.NewNotSupported(ctx.GetContext(), "subscription View description requires an isolated binding context")
-		}
+) (string, []*ObjectRef, bool, error) {
+	if provider, ok := ctx.(ViewDescriptionContextProvider); ok {
 		child, cleanup, err := provider.NewViewDescriptionCompilerContext(ctx.GetContext())
 		if err != nil {
-			return "", nil, err
+			return "", nil, false, err
 		}
 		defer cleanup()
-		child.SetContext(defines.AttachAccountId(child.GetContext(), accountID))
-		child.SetQueryingSubscription(sub)
+		if sub := ctx.GetQueryingSubscription(); sub != nil {
+			child.SetContext(defines.AttachAccountId(child.GetContext(), accountID))
+			child.SetQueryingSubscription(sub)
+		}
 		ctx = child
+	} else if ctx.GetQueryingSubscription() != nil {
+		return "", nil, false, moerr.NewNotSupported(ctx.GetContext(), "subscription View description requires an isolated binding context")
 	}
 	dependencies := &viewDescriptionDependencyContext{CompilerContext: ctx}
 	if ctx.GetQueryingSubscription() != nil {
@@ -122,23 +130,23 @@ func viewDescriptionRelation(
 	}
 	cols, err := DescribeViewColumns(dependencies, def.ViewSql.View)
 	if err != nil {
-		return "", nil, err
+		return "", nil, false, err
 	}
 	if len(cols) > MaxViewMetadataColumns {
-		return "", nil, moerr.NewInternalError(ctx.GetContext(), "View metadata exceeds its column budget")
+		return "", nil, false, moerr.NewInternalError(ctx.GetContext(), "View metadata exceeds its column budget")
 	}
 	if len(cols) == 0 {
-		return "", nil, moerr.NewInternalError(ctx.GetContext(), "View has no output columns")
+		return "", nil, false, moerr.NewInternalError(ctx.GetContext(), "View has no output columns")
 	}
 	rows := make([]string, 0, len(cols))
 	for i, col := range cols {
 		if err := ctx.GetContext().Err(); err != nil {
-			return "", nil, err
+			return "", nil, false, err
 		}
 		typ := MakeTypeByPlan2Type(col.Typ)
 		typeBytes, err := types.Encode(&typ)
 		if err != nil {
-			return "", nil, err
+			return "", nil, false, err
 		}
 		defaultDef := col.Default
 		if defaultDef == nil {
@@ -146,7 +154,7 @@ func viewDescriptionRelation(
 		}
 		defaultBytes, err := types.Encode(defaultDef)
 		if err != nil {
-			return "", nil, err
+			return "", nil, false, err
 		}
 		notNull := 0
 		if col.Typ.NotNullable {
@@ -160,5 +168,5 @@ func viewDescriptionRelation(
 	}
 	return "(select * from (values " + strings.Join(rows, ",") + ") as view_columns(" +
 		"account_id,att_relname_id,att_database,att_relname,attname,attnum,atttyp,attr_enum,attnotnull," +
-		"att_default,att_is_hidden,att_is_auto_increment,attr_has_generated,attr_generated,att_comment))", dependencies.refs, nil
+		"att_default,att_is_hidden,att_is_auto_increment,attr_has_generated,attr_generated,att_comment))", dependencies.refs, dependencies.dependsOnUdf, nil
 }

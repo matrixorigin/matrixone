@@ -4296,6 +4296,9 @@ func checkModify(plan0 *plan.Plan, resolveFn func(string, string, *plan2.Snapsho
 	}
 	switch p := plan0.Plan.(type) {
 	case *plan.Plan_Query:
+		if p.Query.GetViewMetadataDependsOnUdf() {
+			return true, nil
+		}
 		for i := range p.Query.Nodes {
 			if def := p.Query.Nodes[i].TableDef; def != nil {
 				flag, err := checkFn(p.Query.Nodes[i].ObjRef, def)
