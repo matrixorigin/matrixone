@@ -45,6 +45,7 @@ func TestDoCheckUpgradeQueuesStatisticsRefresh(t *testing.T) {
 		name    string
 		version string
 		offset  uint32
+		pending bool
 		upgrade bool
 		via407  bool
 	}{
@@ -54,7 +55,9 @@ func TestDoCheckUpgradeQueuesStatisticsRefresh(t *testing.T) {
 		{name: "4.0.6", version: "4.0.6", offset: v4_0_6.Handler.Metadata().VersionOffset, upgrade: true, via407: true},
 		{name: "old_4.0.7", version: "4.0.7", upgrade: true},
 		{name: "4.0.7_offset_1", version: "4.0.7", offset: 1, upgrade: true},
+		{name: "old_4.0.8", version: final.Version, offset: 1, upgrade: true},
 		{name: "current_4.0.8", version: final.Version, offset: final.VersionOffset},
+		{name: "resume_4.0.8", version: final.Version, offset: final.VersionOffset, pending: true},
 	} {
 		t.Run(test.name, func(t *testing.T) {
 			runtime.RunTest("", func(runtime.Runtime) {
@@ -72,7 +75,11 @@ func TestDoCheckUpgradeQueuesStatisticsRefresh(t *testing.T) {
 						res.NewBatchWithRowCount(1)
 						require.NoError(t, executor.AppendStringRows(res, 0, []string{test.version}))
 						require.NoError(t, executor.AppendFixedRows(res, 1, []uint32{test.offset}))
-						require.NoError(t, executor.AppendFixedRows(res, 2, []int32{versions.StateReady}))
+						state := versions.StateReady
+						if test.pending {
+							state = versions.StateCreated
+						}
+						require.NoError(t, executor.AppendFixedRows(res, 2, []int32{state}))
 						return res.GetResult(), nil
 					case strings.HasPrefix(sql, "select version from mo_version"):
 						return newBootstrapStringResult(test.version), nil

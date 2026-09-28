@@ -32,12 +32,16 @@ func TestRelease42ViewMetadataUpgrade(t *testing.T) {
 		name    string
 		present [2]bool
 		fail    string
+		failAt  int
 	}{
 		{name: "release42_missing"},
 		{name: "partial", present: [2]bool{true, false}},
+		{name: "only_refresh", present: [2]bool{false, true}},
 		{name: "current", present: [2]bool{true, true}},
 		{name: "check_error", fail: "check"},
 		{name: "create_error", fail: "create"},
+		{name: "refresh_check_error", fail: "check", failAt: 1},
+		{name: "refresh_create_error", fail: "create", failAt: 1},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			runtime.RunTest("", func(runtime.Runtime) {
@@ -50,7 +54,7 @@ func TestRelease42ViewMetadataUpgrade(t *testing.T) {
 					for i, table := range tables {
 						if strings.HasPrefix(sql, "SELECT reldatabase, relname, account_id") && strings.Contains(sql, "relname = '"+table+"'") {
 							require.Contains(t, sql, "account_id = 0")
-							if tc.fail == "check" {
+							if tc.fail == "check" && i == tc.failAt {
 								failed = true
 								return executor.Result{}, injected
 							}
@@ -61,7 +65,7 @@ func TestRelease42ViewMetadataUpgrade(t *testing.T) {
 						}
 						if sql == ddls[i] {
 							require.False(t, present[i], "existing metadata must not be recreated")
-							if tc.fail == "create" {
+							if tc.fail == "create" && i == tc.failAt {
 								failed = true
 								return executor.Result{}, injected
 							}
