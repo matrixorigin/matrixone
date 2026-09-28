@@ -184,12 +184,14 @@ func TestRequiresMORPCVersion30NumericPrefix(t *testing.T) {
 
 func TestRequiredRemoteExpressionFeaturesDetectsStatementDigestText(t *testing.T) {
 	for _, test := range []struct {
-		name       string
-		id         int64
-		objectName string
-		wantText   bool
+		name         string
+		id           int64
+		objectName   string
+		wantText     bool
+		wantInterval bool
 	}{
-		{name: "text", id: 583, objectName: "statement_digest_text", wantText: true},
+		{name: "text", id: 584, objectName: "statement_digest_text", wantText: true},
+		{name: "interval", id: 583, objectName: "to_interval_microsecond", wantInterval: true},
 		{name: "main JSON storage size", id: 579, objectName: "json_storage_size"},
 		{name: "main JSON storage free", id: 580, objectName: "json_storage_free"},
 	} {
@@ -200,6 +202,7 @@ func TestRequiredRemoteExpressionFeaturesDetectsStatementDigestText(t *testing.T
 			features, err := RequiredRemoteExpressionFeatures(&struct{ Expr *Expr }{Expr: expr})
 			require.NoError(t, err)
 			require.Equal(t, test.wantText, features.StatementDigestText)
+			require.Equal(t, test.wantInterval, features.NormalizedIntervalUnits)
 			if test.wantText {
 				require.True(t, features.Any())
 			}
