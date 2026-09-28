@@ -161,7 +161,7 @@ func jsonEqualProbe(col int32, tag string, lit *plan.Literal, isString bool) (js
 	}
 	return jsonProbe{
 		ColPos: col, Tag: tag,
-		Terms: []string{fulltext2.JSONFloatTerm(tag, f)},
+		Terms: fulltext2.JSONNumericEqualProbeTerms(tag, f),
 	}, true
 }
 
@@ -186,13 +186,17 @@ func jsonEqualProbe(col int32, tag string, lit *plan.Literal, isString bool) (js
 // the inclusive bound keeps the row). So a truncated bound never excludes a
 // qualifying document.
 func jsonRangeProbe(col int32, tag string, lit *plan.Literal, op string, isString bool) (jsonProbe, bool) {
-	var bound, loAll, hiAll string
+	// loBound is the term used when this value is a lower bound (> / >=); hiBound when it is an upper
+	// bound (< / <=). They differ only at numeric zero: a lower bound uses the legacy -0.0 key so the
+	// range also covers a document persisted with a -0.0 leaf before #29279 (see JSONFloatLowerBoundTerm).
+	var loBound, hiBound, loAll, hiAll string
 	if isString {
 		s, ok := lit.Value.(*plan.Literal_Sval)
 		if !ok {
 			return jsonProbe{}, false
 		}
-		bound = fulltext2.JSONStringTerm(tag, s.Sval)
+		loBound = fulltext2.JSONStringTerm(tag, s.Sval)
+		hiBound = loBound
 		loAll, hiAll = fulltext2.JSONStringTermBounds(tag)
 	} else {
 		f, ok := litAsFloat(lit)
@@ -203,16 +207,17 @@ func jsonRangeProbe(col int32, tag string, lit *plan.Literal, op string, isStrin
 		if math.IsNaN(f) {
 			return jsonProbe{}, false
 		}
-		bound = fulltext2.JSONFloatTerm(tag, f)
+		loBound = fulltext2.JSONFloatLowerBoundTerm(tag, f)
+		hiBound = fulltext2.JSONFloatTerm(tag, f)
 		loAll, hiAll = fulltext2.JSONNumericTermBounds(tag)
 	}
 
 	var r jsonTermRange
 	switch op {
 	case ">", ">=":
-		r = jsonTermRange{Lo: bound, Hi: hiAll}
+		r = jsonTermRange{Lo: loBound, Hi: hiAll}
 	case "<", "<=":
-		r = jsonTermRange{Lo: loAll, Hi: bound}
+		r = jsonTermRange{Lo: loAll, Hi: hiBound}
 	default:
 		return jsonProbe{}, false
 	}
