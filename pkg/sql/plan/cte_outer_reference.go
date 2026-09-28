@@ -18,7 +18,6 @@ import (
 	"sort"
 
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
-	"github.com/matrixorigin/matrixone/pkg/container/types"
 	"github.com/matrixorigin/matrixone/pkg/pb/plan"
 )
 
@@ -30,6 +29,7 @@ type localCTEDomain struct {
 	outerID  int32
 	ctx      *BindContext
 	subType  plan.SubqueryRef_Type
+	guarded  bool
 	values   []*plan.Expr
 	params   map[[2]int32]int
 	equality *plan.Expr
@@ -38,7 +38,7 @@ type localCTEDomain struct {
 }
 
 func (builder *QueryBuilder) parameterizeLocalCTEs(
-	outerID, subID int32, ctx *BindContext, subType plan.SubqueryRef_Type,
+	outerID, subID int32, ctx *BindContext, subType plan.SubqueryRef_Type, guarded bool,
 ) (int32, error) {
 	if len(builder.localCTERoots) == 0 {
 		return subID, nil
@@ -47,7 +47,7 @@ func (builder *QueryBuilder) parameterizeLocalCTEs(
 	var admit func(int32) error
 	admit = func(id int32) error {
 		if builder.localCTERoots[id] {
-			d := &localCTEDomain{builder: builder, outerID: outerID, ctx: ctx, subType: subType,
+			d := &localCTEDomain{builder: builder, outerID: outerID, ctx: ctx, subType: subType, guarded: guarded,
 				params: make(map[[2]int32]int), nodes: make(map[int32]bool), scans: make(map[int32][]*plan.Expr)}
 			d.collect(id)
 			needsDomain := false
@@ -309,13 +309,14 @@ func (d *localCTEDomain) admit() error {
 		default:
 			return d.unsupported("producer operator " + n.NodeType.String())
 		}
+		// The producer is evaluated for the replayed outer domain before
+		// CASE (or another consumer) decides which rows use this CTE.
+		// Volatility alone cannot prove an expression is total: ABS on
+		// MinInt64, arithmetic overflow and casts can all fail.
+		if d.guarded && !localCTEProducerReplaySafe(n) {
+			return d.unsupported("producer expression may fail outside the consumer evaluation domain")
+		}
 		for _, e := range localCTENodeExprs(n) {
-			// The replayed producer can run before a scalar consumer's CASE
-			// chooses its branch. A row-dependent cast may fail on a row
-			// that would never have evaluated the original subquery.
-			if !localCTEProducerTextCastsAreTotal(e) {
-				return d.unsupported("producer text cast can fail outside the consumer evaluation domain")
-			}
 			valid := true
 			walkLocalCTEExpr(e, func(x *plan.Expr) {
 				switch v := x.Expr.(type) {
@@ -348,26 +349,32 @@ func (d *localCTEDomain) admit() error {
 	return nil
 }
 
-// A text cast can fail for an arbitrary row even when it is deterministic.
-// Producer replay happens before the scalar consumer chooses a CASE branch;
-// keep casts with unproven string domains out of that eager evaluation path.
-func localCTEProducerTextCastsAreTotal(expr *plan.Expr) bool {
-	total := true
-	walkLocalCTEExpr(expr, func(e *plan.Expr) {
-		fn := e.GetF()
-		if fn == nil || fn.Func == nil || fn.Func.ObjName != "cast" {
-			return
+// Reuse the totality proof from aggregate truncation safety, but replace
+// correlated references with typed columns only in a read-only proof copy.
+// Consumer-dependent evaluation is not safe for unproven producer functions.
+func localCTEProducerReplaySafe(n *plan.Node) bool {
+	proof := func(expr *plan.Expr) *plan.Expr {
+		copy := DeepCopyExpr(expr)
+		walkLocalCTEExpr(copy, func(e *plan.Expr) {
+			if corr := e.GetCorr(); corr != nil {
+				e.Expr = &plan.Expr_Col{Col: &plan.ColRef{RelPos: corr.RelPos, ColPos: corr.ColPos}}
+			}
+		})
+		return copy
+	}
+	for _, expr := range n.ProjectList {
+		if expr.GetP() == nil && !isTruncationSafeRowExpr(proof(expr)) {
+			return false
 		}
-		if len(fn.Args) != 2 || fn.Args[1].GetT() == nil {
-			total = false
-			return
+	}
+	for _, predicates := range [][]*plan.Expr{n.FilterList, n.OnList} {
+		for _, expr := range predicates {
+			if !isTruncationSafePredicateExpr(proof(expr)) {
+				return false
+			}
 		}
-		if types.T(fn.Args[0].Typ.Id).IsMySQLString() &&
-			!singleRowCastIsTotal(fn.Args[0].Typ, e.Typ) {
-			total = false
-		}
-	})
-	return total
+	}
+	return true
 }
 
 // A bound literal/parameter cast has a statement-constant value (or error).

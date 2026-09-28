@@ -328,13 +328,38 @@ from guarded_values p order by p.id;
 -- Ordinary scalar subqueries preserve the same inactive/active CASE domain.
 select p.id, case when p.id=1 then 0 else (select cast(p.val as signed)) end as c
 from guarded_values p order by p.id;
--- Filtering out bad rows does not prove the text column's entire type
--- domain cast-safe; a total producer cast remains supported instead.
+-- A filtered, unguarded consumer evaluates only surviving rows;
+-- the same producer is safe when all evaluated values are valid.
 select p.id, (with q(n) as (select cast(p.val as signed)) select n from q) as c
 from guarded_values p where p.id=2;
 select p.id, (with q(n) as (select cast(p.id as signed)) select n from q) as c
 from guarded_values p where p.id=2;
 drop table guarded_values;
+
+-- Outer columns in ordinary COUNT HAVING must be rebound above the
+-- aggregate's LEFT JOIN, including empty input and HAVING-deleted rows.
+create table having_keys(id int primary key, k int);
+insert into having_keys values (1,1),(2,1),(3,0);
+select p.id, (select count(*) from having_keys a where a.id=p.id and a.id<2
+              having count(*)=p.k) as c
+from having_keys p order by p.id;
+select p.id, (select count(*) from having_keys a where a.id=p.id and a.id<2
+              having count(*) in (p.k,2)) as c
+from having_keys p order by p.id;
+drop table having_keys;
+
+-- Non-total functions cannot run over outer rows whose CASE arm skips the
+-- CTE producer. The ordinary scalar controls must still produce (1,0),(2,2).
+create table guarded_abs(id int primary key, v bigint);
+insert into guarded_abs values (1,-9223372036854775808),(2,2);
+select p.id, case when p.id=1 then 0 else
+  (with q(n) as (select abs(p.v)) select n from q) end as c
+from guarded_abs p order by p.id;
+select p.id, case when p.id=1 then 0 else (select abs(p.v)) end as c
+from guarded_abs p order by p.id;
+select p.id, (with q(n) as (select abs(p.v)) select n from q) as c
+from guarded_abs p where p.id=2;
+drop table guarded_abs;
 
 -- Empty outer input starts no parameter partitions.
 select p.id,

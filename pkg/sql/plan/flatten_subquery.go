@@ -284,13 +284,13 @@ func (builder *QueryBuilder) flattenSubqueriesWithConsumer(
 	nodeID int32, expr *plan.Expr, ctx *BindContext,
 	nullResultRejected bool, consumer existentialConsumer,
 ) (int32, *plan.Expr, error) {
-	nodeID, expr, _, err := builder.flattenSubqueriesWithConsumerAndChange(nodeID, expr, ctx, nullResultRejected, consumer)
+	nodeID, expr, _, err := builder.flattenSubqueriesWithConsumerAndChange(nodeID, expr, ctx, nullResultRejected, consumer, false)
 	return nodeID, expr, err
 }
 
 func (builder *QueryBuilder) flattenSubqueriesWithConsumerAndChange(
 	nodeID int32, expr *plan.Expr, ctx *BindContext,
-	nullResultRejected bool, consumer existentialConsumer,
+	nullResultRejected bool, consumer existentialConsumer, guarded bool,
 ) (int32, *plan.Expr, bool, error) {
 	memoID := expr.AuxId
 	if memoID < 0 && ctx != nil && ctx.flattenedVolatileExprs != nil {
@@ -321,7 +321,7 @@ func (builder *QueryBuilder) flattenSubqueriesWithConsumerAndChange(
 			sub := *exprImpl.F.Args[0].GetSub()
 			if sc := builder.ctxByNode[sub.NodeId]; sc != nil && builder.pendingExistentials[sc.existentialBlock] != nil {
 				sub.Typ = plan.SubqueryRef_NOT_EXISTS
-				nodeID, expr, err = builder.flattenSubqueryWithConsumer(nodeID, &sub, ctx, nullResultRejected, consumer)
+				nodeID, expr, err = builder.flattenSubqueryWithConsumer(nodeID, &sub, ctx, nullResultRejected, consumer, guarded)
 				affected = true
 				break
 			}
@@ -329,10 +329,19 @@ func (builder *QueryBuilder) flattenSubqueriesWithConsumerAndChange(
 			// the child's memo/metadata restoration as well as the NOT.
 		}
 		childNullResultRejected := nullResultRejected && nullPropagatesThroughDeepScalarConsumer(exprImpl.F.Func)
+		childGuarded := guarded
+		if exprImpl.F.Func != nil {
+			switch exprImpl.F.Func.ObjName {
+			case "case", "if", "ifnull", "coalesce", "nullif", "and", "or":
+				// Any branch may skip a scalar subquery. Producer replay
+				// cannot evaluate unproven expressions for those rows.
+				childGuarded = true
+			}
+		}
 		for i, arg := range exprImpl.F.Args {
 			var childAffected bool
 			nodeID, exprImpl.F.Args[i], childAffected, err = builder.flattenSubqueriesWithConsumerAndChange(
-				nodeID, arg, ctx, childNullResultRejected, existentialIneligible)
+				nodeID, arg, ctx, childNullResultRejected, existentialIneligible, childGuarded)
 			if err != nil {
 				return 0, nil, false, err
 			}
@@ -358,7 +367,7 @@ func (builder *QueryBuilder) flattenSubqueriesWithConsumerAndChange(
 			// predicate's null-rejection optimization.
 			var childAffected bool
 			nodeID, exprImpl.List.List[i], childAffected, err = builder.flattenSubqueriesWithConsumerAndChange(
-				nodeID, item, ctx, false, existentialIneligible)
+				nodeID, item, ctx, false, existentialIneligible, true)
 			if err != nil {
 				return 0, nil, false, err
 			}
@@ -366,7 +375,7 @@ func (builder *QueryBuilder) flattenSubqueriesWithConsumerAndChange(
 		}
 
 	case *plan.Expr_Sub:
-		nodeID, expr, err = builder.flattenSubqueryWithConsumer(nodeID, exprImpl.Sub, ctx, nullResultRejected, consumer)
+		nodeID, expr, err = builder.flattenSubqueryWithConsumer(nodeID, exprImpl.Sub, ctx, nullResultRejected, consumer, guarded)
 		affected = true
 	}
 	if err == nil && memoID < 0 && ctx != nil {
@@ -392,12 +401,12 @@ func (builder *QueryBuilder) flattenSubquery(
 	ctx *BindContext,
 	nullResultRejected bool,
 ) (int32, *plan.Expr, error) {
-	return builder.flattenSubqueryWithConsumer(nodeID, subquery, ctx, nullResultRejected, existentialIneligible)
+	return builder.flattenSubqueryWithConsumer(nodeID, subquery, ctx, nullResultRejected, existentialIneligible, false)
 }
 
 func (builder *QueryBuilder) flattenSubqueryWithConsumer(
 	nodeID int32, subquery *plan.SubqueryRef, ctx *BindContext,
-	nullResultRejected bool, consumer existentialConsumer,
+	nullResultRejected bool, consumer existentialConsumer, guarded bool,
 ) (int32, *plan.Expr, error) {
 	if id, expr, handled, err := builder.tryDeepExistential(nodeID, subquery, ctx, consumer); handled {
 		return id, expr, err
@@ -421,7 +430,7 @@ func (builder *QueryBuilder) flattenSubqueryWithConsumer(
 	var scalarPerOuterOrderKey *plan.Expr
 	var scalarProjectionStatus scalarProjectionNormalization
 	var err error
-	subID, err = builder.parameterizeLocalCTEs(nodeID, subID, ctx, subquery.Typ)
+	subID, err = builder.parameterizeLocalCTEs(nodeID, subID, ctx, subquery.Typ, guarded)
 	if err != nil {
 		return 0, nil, err
 	}
@@ -2982,6 +2991,14 @@ func replaceCountHavingResult(expr *plan.Expr, aggregateTag int32, result *plan.
 			return nil, false
 		}
 		return DeepCopyExpr(result), true
+	}
+	if corr := expr.GetCorr(); corr != nil {
+		// HAVING now runs above the join: its immediate outer reference
+		// belongs to this query block, including when nested in an IN list.
+		if corr.Depth != 1 {
+			return nil, false
+		}
+		return GetColExpr(expr.Typ, corr.RelPos, corr.ColPos), true
 	}
 	copy := DeepCopyExpr(expr)
 	if f := copy.GetF(); f != nil {

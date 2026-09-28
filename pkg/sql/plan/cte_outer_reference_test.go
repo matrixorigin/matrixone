@@ -32,6 +32,12 @@ func TestLocalCTEOuterReferencesExecutablePlan(t *testing.T) {
 		sql  string
 	}{
 		{
+			name: "ordinary count having outer reference",
+			sql: `select p.n_nationkey, (select count(*) from tpch.nation a
+				where a.n_nationkey=p.n_nationkey having count(*)=p.n_regionkey)
+				from tpch.nation p`,
+		},
+		{
 			name: "ordinary count having multiple conjuncts",
 			sql: `select p.n_nationkey, (select count(*) from tpch.nation a
 				where a.n_nationkey=p.n_nationkey having count(*)>0 and count(*)<2)
@@ -48,6 +54,16 @@ func TestLocalCTEOuterReferencesExecutablePlan(t *testing.T) {
 			sql: `select p.n_nationkey, (with q(n) as
 				(select p.n_nationkey from tpch.nation a where a.n_nationkey=p.n_nationkey)
 				select count(*) from q having count(*)>0 and count(*)<2) from tpch.nation p`,
+		},
+		{
+			name: "unguarded producer cast on filtered domain",
+			sql: `select (with q(n) as (select cast(p.n_name as signed)) select n from q)
+				from tpch.nation p where p.n_nationkey=2`,
+		},
+		{
+			name: "unguarded producer abs on filtered domain",
+			sql: `select (with q(n) as (select abs(p.n_regionkey)) select n from q)
+				from tpch.nation p where p.n_nationkey=2`,
 		},
 		{
 			name: "safe producer cast",
@@ -266,7 +282,7 @@ func TestLocalCTEDomainAdmissionIsAtomic(t *testing.T) {
 	builder.localCTERoots = map[int32]bool{good: true, bad: true}
 	before, err := builder.qry.Marshal()
 	require.NoError(t, err)
-	_, err = builder.parameterizeLocalCTEs(outerID, root, ctx, planpb.SubqueryRef_SCALAR)
+	_, err = builder.parameterizeLocalCTEs(outerID, root, ctx, planpb.SubqueryRef_SCALAR, false)
 	require.ErrorContains(t, err, "producer contains pagination")
 	after, err := builder.qry.Marshal()
 	require.NoError(t, err)
@@ -410,6 +426,26 @@ func TestLocalCTEOuterReferencesRejectUnsafeDomains(t *testing.T) {
 				select n from q) from tpch.nation p`,
 		},
 		{
+			name: "guarded recursive member arithmetic needs totality proof",
+			sql: `select p.n_nationkey, case when p.n_nationkey=1 then 0 else
+				(with recursive r(n) as (
+					select p.n_regionkey union all select n-1 from r where n>1
+				) select count(*) from r) end from tpch.nation p`,
+		},
+		{
+			name: "guarded chained producer arithmetic needs totality proof",
+			sql: `select case when p.n_nationkey=1 then 0 else
+				(with q(n) as (select p.n_regionkey),
+				r(n) as (select n+1 from q) select n from r) end
+				from tpch.nation p`,
+		},
+		{
+			name: "throwing producer abs in inactive case",
+			sql: `select p.n_nationkey, case when p.n_nationkey=1 then 0 else
+				(with q(n) as (select abs(p.n_regionkey)) select n from q) end
+				from tpch.nation p`,
+		},
+		{
 			name: "throwing producer cast in inactive case",
 			sql: `select p.n_nationkey, case when p.n_nationkey=1 then 0 else
 				(with q(n) as (select cast(p.n_name as signed)) select n from q) end
@@ -420,11 +456,6 @@ func TestLocalCTEOuterReferencesRejectUnsafeDomains(t *testing.T) {
 			sql: `select p.n_nationkey, case when p.n_nationkey=1 then
 				(with q(n) as (select cast(p.n_name as signed)) select n from q) else 0 end
 				from tpch.nation p`,
-		},
-		{
-			name: "throwing producer cast on filtered domain",
-			sql: `select (with q(n) as (select cast(p.n_name as signed)) select n from q)
-				from tpch.nation p where p.n_nationkey=2`,
 		},
 		{
 			name: "volatile producer",
