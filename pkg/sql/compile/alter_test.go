@@ -2861,51 +2861,6 @@ func TestCompactExpiredAlterDataBranchLineage(t *testing.T) {
 	}
 }
 
-func TestCompactExpiredAlterDataBranchLineageWithExecutor(t *testing.T) {
-	now := time.Date(2026, time.July, 17, 12, 0, 0, 0, time.UTC)
-	cloneTS := now.Add(-48 * time.Hour).UnixNano()
-	ctrl := gomock.NewController(t)
-	c := newAlterCopyPrecheckCompile(t, ctrl, &alterCopyInsertSpyExecutor{})
-	mp := c.proc.Mp()
-
-	metadataSQL := fmt.Sprintf(
-		"select table_id, p_table_id, clone_ts, creator, level, table_deleted from %s.%s",
-		catalog.MO_CATALOG, catalog.MO_BRANCH_METADATA,
-	)
-	results := map[string]executor.Result{
-		databranchutils.LineageOwnerLifecycleLockSQL(): {},
-		metadataSQL: newAlterLineageMetadataResult(
-			t, mp, []uint64{2}, []uint64{1}, []int64{cloneTS},
-			[]uint64{uint64(catalog.System_Account)}, []string{databranchutils.AlterLineageLevel}, []bool{false},
-		),
-		alterDataBranchLineageEdgeSQL(): newAlterLineageEdgeResult(
-			t, mp, []string{databranchutils.BranchSnapshotName(2)}, []int64{cloneTS},
-			[]string{"tenant"}, []string{"db"}, []string{"tbl"}, []uint64{1},
-		),
-		alterDataBranchSnapshotSourceSQL(): newAlterLineageSnapshotSourceResult(t, mp, nil, nil, nil, nil, nil, nil),
-		alterDataBranchPitrSourceSQL(): newAlterLineagePitrSourceResult(
-			t, mp, []string{"table"}, []string{"tenant"}, []string{"db"}, []string{"tbl"},
-			[]uint64{1}, []uint8{24}, []string{"h"},
-		),
-	}
-	var executed []string
-	sqlExecutor := executor.NewMemExecutor(func(sql string) (executor.Result, error) {
-		executed = append(executed, sql)
-		return results[sql], nil
-	})
-
-	require.NoError(t, compactExpiredAlterDataBranchLineageWithExecutor(context.Background(), sqlExecutor, now))
-	require.Equal(t, []string{
-		metadataSQL,
-		alterDataBranchLineageEdgeSQL(),
-		alterDataBranchSnapshotSourceSQL(),
-		alterDataBranchPitrSourceSQL(),
-		databranchutils.LineageOwnerLifecycleLockSQL(),
-		"delete from mo_catalog.mo_snapshots where kind = 'branch' and sname in ('__mo_branch_2')",
-		"delete from mo_catalog.mo_branch_metadata where table_id in (2) and (level = 'alter' or level like 'alter:%')",
-	}, executed)
-}
-
 func TestCompactExpiredAlterDataBranchLineageWithExecutorStopsOnLifecycleGateError(t *testing.T) {
 	now := time.Date(2026, time.July, 17, 12, 0, 0, 0, time.UTC)
 	ctrl := gomock.NewController(t)
@@ -2919,10 +2874,12 @@ func TestCompactExpiredAlterDataBranchLineageWithExecutorStopsOnLifecycleGateErr
 	var executed []string
 	sqlExecutor := executor.NewMemExecutor(func(sql string) (executor.Result, error) {
 		executed = append(executed, sql)
-		if sql == databranchutils.LineageOwnerLifecycleLockSQL() {
+		if sql == catalog.SnapshotLifecycleGateSQL {
 			return executor.Result{}, wantErr
 		}
 		switch sql {
+		case catalog.FeatureRegistryCatalogSharedGateSQL:
+			return newAlterCopyFixedResult(t, mp, types.T_uint64.ToType(), []uint64{272476}), nil
 		case metadataSQL:
 			return newAlterLineageMetadataResult(
 				t, mp, []uint64{2}, []uint64{1}, []int64{now.Add(-48 * time.Hour).UnixNano()},
@@ -2948,7 +2905,8 @@ func TestCompactExpiredAlterDataBranchLineageWithExecutorStopsOnLifecycleGateErr
 		alterDataBranchLineageEdgeSQL(),
 		alterDataBranchSnapshotSourceSQL(),
 		alterDataBranchPitrSourceSQL(),
-		databranchutils.LineageOwnerLifecycleLockSQL(),
+		catalog.FeatureRegistryCatalogSharedGateSQL,
+		catalog.SnapshotLifecycleGateSQL,
 	}, executed)
 }
 
@@ -2966,6 +2924,25 @@ type lineageGCTestExecutor struct {
 	rolledBack          int
 	execCtxs            []context.Context
 	waitForContextEnd   bool
+	frontierErr         error
+	frontierCalls       int
+	registryID          uint64
+}
+
+type lineageGCTestFrontierExecutor struct {
+	executor.SQLExecutor
+	frontierErr   error
+	frontierCalls int
+}
+
+func (e *lineageGCTestFrontierExecutor) advanceLineageGCAppliedSnapshot(context.Context, client.TxnOperator) error {
+	e.frontierCalls++
+	return e.frontierErr
+}
+
+func (e *lineageGCTestExecutor) advanceLineageGCAppliedSnapshot(context.Context, client.TxnOperator) error {
+	e.frontierCalls++
+	return e.frontierErr
 }
 
 type lineageGCTestTxnExecutor struct {
@@ -2991,6 +2968,19 @@ func (e *lineageGCTestTxnExecutor) Exec(
 		catalog.MO_CATALOG, catalog.MO_BRANCH_METADATA,
 	)
 	switch sql {
+	case catalog.FeatureRegistryCatalogSharedGateSQL:
+		if e.owner.registryID == 0 {
+			e.owner.registryID = 272476
+		}
+		return newAlterCopyFixedResult(e.owner.t, e.owner.mp, types.T_uint64.ToType(), []uint64{e.owner.registryID}), nil
+	case catalog.SnapshotLifecycleGateSQL:
+		if e.owner.onGate != nil {
+			e.owner.onGate()
+		}
+		if e.owner.gateErr != nil {
+			return executor.Result{}, e.owner.gateErr
+		}
+		return newAlterCopyFixedResult(e.owner.t, e.owner.mp, types.T_uint64.ToType(), []uint64{1}), nil
 	case metadataSQL:
 		rowCount := len(e.owner.remaining)
 		parents := make([]uint64, rowCount)
@@ -3014,10 +3004,7 @@ func (e *lineageGCTestTxnExecutor) Exec(
 	case alterDataBranchPitrSourceSQL():
 		return newAlterLineagePitrSourceResult(e.owner.t, e.owner.mp, nil, nil, nil, nil, nil, nil, nil), nil
 	case databranchutils.LineageOwnerLifecycleLockSQL():
-		if e.owner.onGate != nil {
-			e.owner.onGate()
-		}
-		return executor.Result{}, e.owner.gateErr
+		return executor.Result{}, nil
 	default:
 		if strings.HasPrefix(sql, "delete from mo_catalog.mo_branch_metadata") {
 			e.deleteCount = min(e.owner.expectedBatchSize, len(e.owner.remaining))
@@ -3075,6 +3062,70 @@ func newLineageGCTestExecutor(
 	}
 }
 
+func TestDataBranchLineageGCRejectsStaleDiscovery(t *testing.T) {
+	now := time.Date(2026, time.July, 17, 12, 0, 0, 0, time.UTC)
+	cloneTS := now.Add(-48 * time.Hour).UnixNano()
+	ctrl := gomock.NewController(t)
+	c := newAlterCopyPrecheckCompile(t, ctrl, &alterCopyInsertSpyExecutor{})
+	mp := c.proc.Mp()
+	metadataSQL := fmt.Sprintf("select table_id, p_table_id, clone_ts, creator, level, table_deleted from %s.%s",
+		catalog.MO_CATALOG, catalog.MO_BRANCH_METADATA)
+	for _, tc := range []struct {
+		name         string
+		swapRegistry bool
+	}{
+		{name: "late PITR protects old edge"},
+		{name: "replaced registry invalidates lock", swapRegistry: true},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			gateReached := false
+			deletes := 0
+			base := executor.NewMemExecutor(func(sql string) (executor.Result, error) {
+				switch sql {
+				case metadataSQL:
+					return newAlterLineageMetadataResult(t, mp, []uint64{2}, []uint64{1}, []int64{cloneTS},
+						[]uint64{uint64(catalog.System_Account)}, []string{databranchutils.AlterLineageLevel}, []bool{false}), nil
+				case alterDataBranchLineageEdgeSQL():
+					return newAlterLineageEdgeResult(t, mp, []string{databranchutils.BranchSnapshotName(2)}, []int64{cloneTS},
+						[]string{"tenant"}, []string{"db"}, []string{"tbl"}, []uint64{1}), nil
+				case alterDataBranchSnapshotSourceSQL():
+					return newAlterLineageSnapshotSourceResult(t, mp, nil, nil, nil, nil, nil, nil), nil
+				case alterDataBranchPitrSourceSQL():
+					if gateReached && !tc.swapRegistry {
+						return newAlterLineagePitrSourceResult(t, mp, []string{"table"}, []string{"tenant"},
+							[]string{"db"}, []string{"tbl"}, []uint64{1}, []uint8{72}, []string{"h"}), nil
+					}
+					return newAlterLineagePitrSourceResult(t, mp, nil, nil, nil, nil, nil, nil, nil), nil
+				case catalog.FeatureRegistryCatalogSharedGateSQL:
+					id := uint64(272476)
+					if gateReached && tc.swapRegistry {
+						id++
+					}
+					return newAlterCopyFixedResult(t, mp, types.T_uint64.ToType(), []uint64{id}), nil
+				case catalog.SnapshotLifecycleGateSQL:
+					gateReached = true
+					return newAlterCopyFixedResult(t, mp, types.T_uint64.ToType(), []uint64{1}), nil
+				default:
+					if strings.HasPrefix(sql, "delete from mo_catalog.") {
+						deletes++
+					}
+					return executor.Result{}, nil
+				}
+			})
+			withFrontier := &lineageGCTestFrontierExecutor{SQLExecutor: base}
+			err := compactExpiredAlterDataBranchLineageWithExecutor(context.Background(), withFrontier, now)
+			if tc.swapRegistry {
+				require.True(t, moerr.IsMoErrCode(err, moerr.ErrTxnNeedRetryWithDefChanged), "%v", err)
+			} else {
+				require.NoError(t, err)
+			}
+			require.True(t, gateReached, "ungated plan must contain a candidate")
+			require.Equal(t, 1, withFrontier.frontierCalls)
+			require.Zero(t, deletes, "a stale plan must never delete a protected edge")
+		})
+	}
+}
+
 func TestDataBranchLineageGCExecutorMakesDurableProgressAcrossRuns(t *testing.T) {
 	const batchSize = 2
 	spyExec := newLineageGCTestExecutor(t, []uint64{1, 2, 3, 4, 5}, batchSize)
@@ -3100,19 +3151,22 @@ func TestDataBranchLineageGCExecutorMakesDurableProgressAcrossRuns(t *testing.T)
 		require.True(t, spyExec.opts[txnIndex].HasLockWaitTimeout())
 		require.Equal(t, dataBranchLineageGCLockWaitTimeout, spyExec.opts[txnIndex].LockWaitTimeout())
 		require.True(t, spyExec.opts[txnIndex].HasTxnIsolation())
-		require.Equal(t, txn.TxnIsolation_SI, spyExec.opts[txnIndex].TxnIsolation())
+		require.Equal(t, txn.TxnIsolation_RC, spyExec.opts[txnIndex].TxnIsolation())
 		require.True(t, spyExec.opts[txnIndex].HasTxnMode())
 		require.Equal(t, txn.TxnMode_Pessimistic, spyExec.opts[txnIndex].TxnMode())
-		gateIndex := slices.Index(sqls, gateSQL)
+		gateIndex := slices.Index(sqls, catalog.SnapshotLifecycleGateSQL)
 		if gateIndex < 0 {
 			// The final empty discovery transaction performs no mutation.
 			require.Len(t, sqls, 1)
 			continue
 		}
-		require.Equal(t, 4, gateIndex, "unbounded discovery must precede lifecycle admission")
+		require.Equal(t, 5, gateIndex, "provisional discovery precedes C/G admission")
+		require.Equal(t, catalog.FeatureRegistryCatalogSharedGateSQL, sqls[4])
 		require.Equal(t, lock.WaitPolicy_FastFail, spyExec.statementOpts[txnIndex][gateIndex].WaitPolicy())
-		require.Len(t, sqls[gateIndex+1:], 2, "only the bounded delete pair may execute while owning the gate")
-		metadataDeletes = append(metadataDeletes, sqls[gateIndex+2])
+		require.Equal(t, catalog.FeatureRegistryCatalogSharedGateSQL, sqls[6])
+		require.Equal(t, gateSQL, sqls[11], "retain the explicit-branch MVCC validation write")
+		require.Len(t, sqls[gateIndex+1:], 8, "authoritative rescan and bounded deletion")
+		metadataDeletes = append(metadataDeletes, sqls[13])
 	}
 	require.Equal(t, []string{
 		"delete from mo_catalog.mo_branch_metadata where table_id in (1,2) and (level = 'alter' or level like 'alter:%')",
@@ -3121,7 +3175,7 @@ func TestDataBranchLineageGCExecutorMakesDurableProgressAcrossRuns(t *testing.T)
 	}, metadataDeletes)
 }
 
-func TestDataBranchLineageGCExecutorScansOnceAndBoundsMutationAtScale(t *testing.T) {
+func TestDataBranchLineageGCExecutorRechecksAndBoundsMutationAtScale(t *testing.T) {
 	const candidateCount = 2049
 	remaining := make([]uint64, candidateCount)
 	for i := range remaining {
@@ -3132,8 +3186,8 @@ func TestDataBranchLineageGCExecutorScansOnceAndBoundsMutationAtScale(t *testing
 	require.NoError(t, dataBranchLineageGCExecutor(spyExec, dataBranchLineageGCBatchSize)(context.Background(), nil))
 	require.Len(t, spyExec.transactions, 1,
 		"one invocation must not amplify full-catalog discovery across batches")
-	require.Len(t, spyExec.transactions[0], 7,
-		"one fixed-SI discovery, one gate write, and one delete pair are the complete work unit")
+	require.Len(t, spyExec.transactions[0], 14,
+		"one provisional scan, one authoritative scan and one bounded delete pair")
 	require.Len(t, spyExec.committedBatchSizes, 1)
 	require.Equal(t, dataBranchLineageGCBatchSize, spyExec.committedBatchSizes[0])
 	require.Len(t, spyExec.remaining, candidateCount-dataBranchLineageGCBatchSize)
@@ -3161,9 +3215,9 @@ func TestDataBranchLineageGCExecutorDefersAfterContentionRollback(t *testing.T) 
 		require.NoError(t, dataBranchLineageGCExecutor(spyExec, 1)(context.Background(), nil))
 		require.Equal(t, 1, spyExec.rolledBack)
 		require.Equal(t, []uint64{1}, spyExec.remaining)
-		require.Equal(t, databranchutils.LineageOwnerLifecycleLockSQL(), spyExec.transactions[0][4])
-		require.Len(t, spyExec.transactions[0], 5)
-		require.Equal(t, lock.WaitPolicy_FastFail, spyExec.statementOpts[0][4].WaitPolicy())
+		require.Equal(t, catalog.SnapshotLifecycleGateSQL, spyExec.transactions[0][5])
+		require.Len(t, spyExec.transactions[0], 6)
+		require.Equal(t, lock.WaitPolicy_FastFail, spyExec.statementOpts[0][5].WaitPolicy())
 	}
 }
 
@@ -3290,30 +3344,32 @@ func TestCompactExpiredAlterDataBranchLineageWithExecutorPropagatesDeleteError(t
 		"select table_id, p_table_id, clone_ts, creator, level, table_deleted from %s.%s",
 		catalog.MO_CATALOG, catalog.MO_BRANCH_METADATA,
 	)
-	results := map[string]executor.Result{
-		databranchutils.LineageOwnerLifecycleLockSQL(): {},
-		metadataSQL: newAlterLineageMetadataResult(
-			t, mp, []uint64{2}, []uint64{1}, []int64{cloneTS},
-			[]uint64{uint64(catalog.System_Account)}, []string{databranchutils.AlterLineageLevel}, []bool{false},
-		),
-		alterDataBranchLineageEdgeSQL(): newAlterLineageEdgeResult(
-			t, mp, []string{databranchutils.BranchSnapshotName(2)}, []int64{cloneTS},
-			[]string{"tenant"}, []string{"db"}, []string{"tbl"}, []uint64{1},
-		),
-		alterDataBranchSnapshotSourceSQL(): newAlterLineageSnapshotSourceResult(t, mp, nil, nil, nil, nil, nil, nil),
-		alterDataBranchPitrSourceSQL(): newAlterLineagePitrSourceResult(
-			t, mp, []string{"table"}, []string{"tenant"}, []string{"db"}, []string{"tbl"},
-			[]uint64{1}, []uint8{24}, []string{"h"},
-		),
-	}
 	wantErr := errors.New("delete failed")
 	snapshotDeleteSQL := "delete from mo_catalog.mo_snapshots where kind = 'branch' and sname in ('__mo_branch_2')"
-	sqlExecutor := executor.NewMemExecutor(func(sql string) (executor.Result, error) {
-		if sql == snapshotDeleteSQL {
+	baseExecutor := executor.NewMemExecutor(func(sql string) (executor.Result, error) {
+		switch sql {
+		case catalog.FeatureRegistryCatalogSharedGateSQL:
+			return newAlterCopyFixedResult(t, mp, types.T_uint64.ToType(), []uint64{272476}), nil
+		case catalog.SnapshotLifecycleGateSQL:
+			return newAlterCopyFixedResult(t, mp, types.T_uint64.ToType(), []uint64{1}), nil
+		case metadataSQL:
+			return newAlterLineageMetadataResult(t, mp, []uint64{2}, []uint64{1}, []int64{cloneTS},
+				[]uint64{uint64(catalog.System_Account)}, []string{databranchutils.AlterLineageLevel}, []bool{false}), nil
+		case alterDataBranchLineageEdgeSQL():
+			return newAlterLineageEdgeResult(t, mp, []string{databranchutils.BranchSnapshotName(2)}, []int64{cloneTS},
+				[]string{"tenant"}, []string{"db"}, []string{"tbl"}, []uint64{1}), nil
+		case alterDataBranchSnapshotSourceSQL():
+			return newAlterLineageSnapshotSourceResult(t, mp, nil, nil, nil, nil, nil, nil), nil
+		case alterDataBranchPitrSourceSQL():
+			return newAlterLineagePitrSourceResult(t, mp, []string{"table"}, []string{"tenant"}, []string{"db"}, []string{"tbl"},
+				[]uint64{1}, []uint8{24}, []string{"h"}), nil
+		case snapshotDeleteSQL:
 			return executor.Result{}, wantErr
+		default:
+			return executor.Result{}, nil
 		}
-		return results[sql], nil
 	})
+	sqlExecutor := &lineageGCTestFrontierExecutor{SQLExecutor: baseExecutor}
 
 	require.ErrorIs(t,
 		compactExpiredAlterDataBranchLineageWithExecutor(context.Background(), sqlExecutor, now),

@@ -91,34 +91,12 @@ func ViewMetadataRefreshEnabled(string) bool {
 	return false
 }
 
-// viewMetadataRefreshAvailable closes the capability-disabled window before a
-// lifecycle DDL is allowed to skip incremental maintenance. The marker writes
-// use the caller's DDL transaction, so a fast false-to-true capability change
-// cannot make an untracked mutation visible without a durable revalidation.
+// The inactive View lifecycle has no online activation path. A future
+// activation must rebuild under maintenance before changing this capability.
+// Writing its revalidation marker on every DDL would retain the global
+// SNAPSHOT lock even though no reader consumes incremental View metadata.
 func (c *Compile) viewMetadataRefreshAvailable() (bool, error) {
-	if viewMetadataRefreshEnabled(c.proc.GetService()) {
-		return true, nil
-	}
-	if err := c.requireViewMetadataRevalidationInTxn(); err != nil {
-		// During an offset upgrade the SQL listener can become available before
-		// the lifecycle tables. Preserve the pre-feature behavior only for this
-		// typed catalog-readiness condition; every other failure aborts the DDL.
-		if moerr.IsMoErrCode(err, moerr.ErrNoSuchTable) ||
-			moerr.IsMoErrCode(err, moerr.ErrBadDB) {
-			return false, nil
-		}
-		return false, err
-	}
-	return false, nil
-}
-
-func (c *Compile) requireViewMetadataRevalidationInTxn() error {
-	for _, statement := range viewMetadataRequireRevalidationSQL() {
-		if err := c.runSqlWithSystemTenant(statement); err != nil {
-			return err
-		}
-	}
-	return nil
+	return viewMetadataRefreshEnabled(c.proc.GetService()), nil
 }
 
 func restoreInvalidatesViewMetadata(ctx context.Context) bool {

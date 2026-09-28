@@ -2797,11 +2797,10 @@ func TestPitrGranularitySqlEscapesStringLiterals(t *testing.T) {
 	require.Contains(t, tbl, "account_id = 9")
 }
 
-// TestDropDatabase_SnapshotAdvance verifies that DropDatabase safely advances
-// the workspace snapshot after acquiring the exclusive lock. This prevents a
-// concurrent CLONE from leaving orphan records and keeps transaction-local
-// tombstones valid at the new snapshot.
-func TestDropDatabase_SnapshotAdvance(t *testing.T) {
+// TestDropDatabaseKeepsFixedSISnapshot preserves the fixed-SI snapshot on the
+// legacy path. RC admission and its frontier are covered by lifecycle tests
+// and public-SQL concurrency checks.
+func TestDropDatabaseKeepsFixedSISnapshot(t *testing.T) {
 	stubPublicationGuardForDropTests(t)
 	dropDbDef := &plan2.DropDatabase{
 		IfExists:   false,
@@ -2826,84 +2825,7 @@ func TestDropDatabase_SnapshotAdvance(t *testing.T) {
 
 	origSnapshotTS := timestamp.Timestamp{PhysicalTime: 100}
 
-	// Test 1: Pessimistic + RC advances the workspace with HLC Now and keeps
-	// the advanced snapshot after DropDatabase returns.
-	t.Run("advance_rc_workspace", func(t *testing.T) {
-		ctrl := gomock.NewController(t)
-		defer ctrl.Finish()
-
-		proc := testutil.NewProcess(t)
-		var advancedSnapshotTS timestamp.Timestamp
-		fkChecked := false
-		installDropDDLExecutor(t, proc, executor.NewMemExecutor(func(sql string) (executor.Result, error) {
-			if sql == dropDbDef.CheckFKSql {
-				assert.True(t, origSnapshotTS.Less(advancedSnapshotTS), "RC snapshot must advance before the FK check")
-				fkChecked = true
-			}
-			return executor.Result{}, nil
-		}))
-		proc.Base.SessionInfo.Buf = buffer.New()
-		ctx := defines.AttachAccountId(context.Background(), sysAccountId)
-		proc.Ctx = ctx
-		proc.ReplaceTopCtx(ctx)
-		// Use a real TxnMeta so the workspace can simulate snapshot advancement.
-		txnMeta := txn.TxnMeta{
-			Mode:       txn.TxnMode_Pessimistic,
-			Isolation:  txn.TxnIsolation_RC,
-			SnapshotTS: origSnapshotTS,
-		}
-
-		txnOp := mock_frontend.NewMockTxnOperator(ctrl)
-		txnOp.EXPECT().Commit(gomock.Any()).Return(nil).AnyTimes()
-		txnOp.EXPECT().Rollback(gomock.Any()).Return(nil).AnyTimes()
-		ws := &Ws{advanceSnapshot: func(_ context.Context, ts timestamp.Timestamp) error {
-			assert.True(t, origSnapshotTS.Less(ts),
-				"AdvanceSnapshot should be called with HLC Now > origSnapshotTS")
-			txnMeta.SnapshotTS = ts
-			advancedSnapshotTS = ts
-			return nil
-		}}
-		txnOp.EXPECT().GetWorkspace().Return(ws).AnyTimes()
-		txnOp.EXPECT().Txn().Return(txnMeta).AnyTimes()
-		txnOp.EXPECT().TxnOptions().Return(txn.TxnOptions{}).AnyTimes()
-		txnOp.EXPECT().NextSequence().Return(uint64(0)).AnyTimes()
-		txnOp.EXPECT().TryEnterRunSqlWithTokenAndSQL(gomock.Any(), gomock.Any()).Return(uint64(1), nil).AnyTimes()
-		txnOp.EXPECT().ExitRunSqlWithToken(gomock.Any()).Return().AnyTimes()
-		txnOp.EXPECT().Snapshot().Return(txn.CNTxnSnapshot{}, nil).AnyTimes()
-		txnOp.EXPECT().Status().Return(txn.TxnStatus_Active).AnyTimes()
-		proc.Base.TxnOperator = txnOp
-
-		mockDb := mock_frontend.NewMockDatabase(ctrl)
-		mockDb.EXPECT().IsSubscription(gomock.Any()).Return(false).AnyTimes()
-		// Return non-numeric string to skip CCPR check (strconv.ParseUint will fail)
-		mockDb.EXPECT().GetDatabaseId(gomock.Any()).Return("invalid").AnyTimes()
-		// Relations returns an error to stop execution after the snapshot advance.
-		mockDb.EXPECT().Relations(gomock.Any()).DoAndReturn(
-			func(_ context.Context) ([]string, error) {
-				assert.True(t, fkChecked, "incoming FK check must precede table work")
-				assert.Equal(t, advancedSnapshotTS, txnMeta.SnapshotTS,
-					"Relations must run while DropDatabase is using the advanced SnapshotTS")
-				return nil, moerr.NewInternalErrorNoCtx("stop here")
-			}).AnyTimes()
-
-		eng := mock_frontend.NewMockEngine(ctrl)
-		eng.EXPECT().Database(gomock.Any(), "test_db", gomock.Any()).Return(mockDb, nil).AnyTimes()
-
-		lockMoDb := gostub.Stub(&lockMoDatabase, func(_ *Compile, _ string, _ lock.LockMode) error {
-			return nil
-		})
-		defer lockMoDb.Reset()
-
-		c := NewCompile("test", "test", "drop database test_db", "", "", eng, proc, nil, false, nil, time.Now())
-		err := s.DropDatabase(c)
-		// DropDatabase errors at Relations(), after the snapshot behavior has
-		// already been observed.
-		assert.Error(t, err)
-		assert.Equal(t, advancedSnapshotTS, txnMeta.SnapshotTS,
-			"SnapshotTS must remain advanced after DropDatabase returns")
-	})
-
-	// Test 2: non-RC transactions must not advance the workspace snapshot.
+	// Fixed-snapshot transactions must not advance the workspace snapshot.
 	t.Run("skip_advance_for_non_rc", func(t *testing.T) {
 		ctrl := gomock.NewController(t)
 		defer ctrl.Finish()
@@ -3025,7 +2947,7 @@ func TestDropDatabaseSkipsDeletedRelationsWhenCollectingTables(t *testing.T) {
 	proc.ReplaceTopCtx(ctx)
 	installDDLLineageLifecycleTestExecutor(t, proc)
 
-	txnMeta := txn.TxnMeta{Mode: txn.TxnMode_Pessimistic, Isolation: txn.TxnIsolation_RC}
+	txnMeta := txn.TxnMeta{Mode: txn.TxnMode_Pessimistic, Isolation: txn.TxnIsolation_SI}
 	txnOp := mock_frontend.NewMockTxnOperator(ctrl)
 	txnOp.EXPECT().Txn().Return(txnMeta).AnyTimes()
 	txnOp.EXPECT().SnapshotTS().Return(timestamp.Timestamp{}).AnyTimes()
@@ -3122,7 +3044,7 @@ func TestDropDatabaseSkipsForeignKeyCleanupWhenIgnored(t *testing.T) {
 	proc.ReplaceTopCtx(ctx)
 	installDDLLineageLifecycleTestExecutor(t, proc)
 
-	txnMeta := txn.TxnMeta{Mode: txn.TxnMode_Pessimistic, Isolation: txn.TxnIsolation_RC}
+	txnMeta := txn.TxnMeta{Mode: txn.TxnMode_Pessimistic, Isolation: txn.TxnIsolation_SI}
 	txnOp := mock_frontend.NewMockTxnOperator(ctrl)
 	txnOp.EXPECT().Txn().Return(txnMeta).AnyTimes()
 	txnOp.EXPECT().SnapshotTS().Return(timestamp.Timestamp{}).AnyTimes()
@@ -3178,7 +3100,7 @@ func TestDropDatabaseReturnsInternalRelationErrorWhenCollectingTables(t *testing
 	proc.ReplaceTopCtx(ctx)
 	installDDLLineageLifecycleTestExecutor(t, proc)
 
-	txnMeta := txn.TxnMeta{Mode: txn.TxnMode_Pessimistic, Isolation: txn.TxnIsolation_RC}
+	txnMeta := txn.TxnMeta{Mode: txn.TxnMode_Pessimistic, Isolation: txn.TxnIsolation_SI}
 	txnOp := mock_frontend.NewMockTxnOperator(ctrl)
 	txnOp.EXPECT().Txn().Return(txnMeta).AnyTimes()
 	txnOp.EXPECT().SnapshotTS().Return(timestamp.Timestamp{}).AnyTimes()
@@ -3275,7 +3197,7 @@ func TestDropDatabaseLookupErrorIsNotMissing(t *testing.T) {
 			proc.ReplaceTopCtx(ctx)
 			installDDLLineageLifecycleTestExecutor(t, proc)
 
-			meta := txn.TxnMeta{Mode: txn.TxnMode_Pessimistic, Isolation: txn.TxnIsolation_RC}
+			meta := txn.TxnMeta{Mode: txn.TxnMode_Pessimistic, Isolation: txn.TxnIsolation_SI}
 			op := mock_frontend.NewMockTxnOperator(ctrl)
 			op.EXPECT().Txn().Return(meta).AnyTimes()
 			op.EXPECT().SnapshotTS().Return(timestamp.Timestamp{}).AnyTimes()
@@ -3515,6 +3437,7 @@ func TestDropTableSingleSkipsMissingFkTables(t *testing.T) {
 	c := NewCompile("test", "test", "drop table test_tbl", "", "", eng, proc, nil, false, nil, time.Now())
 	c.disableLock = true
 	s := &Scope{}
+	lifecycleAdmitted := true // This test targets cleanup after admission.
 	err := s.dropTableSingle(c, &plan2.DropTable{
 		Database:             catalog.MO_CATALOG,
 		Table:                "test_tbl",
@@ -3523,7 +3446,7 @@ func TestDropTableSingleSkipsMissingFkTables(t *testing.T) {
 		TableDef:             &plan2.TableDef{},
 		ForeignTbl:           []uint64{42},
 		FkChildTblsReferToMe: []uint64{43},
-	}, new(bool))
+	}, &lifecycleAdmitted)
 	require.NoError(t, err)
 }
 
