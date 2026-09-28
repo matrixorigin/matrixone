@@ -297,6 +297,19 @@ execution. The proof reaches physical compilation and retry, and is renewed on
 each execution. Neither the proof nor the specialized plan is published into
 the reusable prepared-plan cache, and probing publishes no statement warning.
 
+Proposed amendment for issue #29429 (subject to its design review): an
+additional optimized *parameterized template* may be built from the original
+PREPARE statement while no execution parameter values are attached. It carries
+no binding proof or value-derived plan state. Each EXECUTE must prove the
+current binding diagnostic-free against the conservative owners and the
+optimized template's diagnostic expressions before selecting that template;
+otherwise the conservative plan retains the original diagnostic owner. The
+one-entry runtime compile cache may hold a compile of the verified template,
+subject to existing generation, session-semantic, and value-sensitive-feature
+invalidation. This does not authorize caching an execution-local specialized
+plan or its proof. The full admission and validation contract is in
+`docs/design/prepared-filter-diagnostic-performance.md`.
+
 Keeping all eligible hash keys avoids a potentially quadratic intermediate
 result when a prepared temporal key accompanies a duplicate key. The
 conservative diagnostic boundary limits join reordering and early filtering
