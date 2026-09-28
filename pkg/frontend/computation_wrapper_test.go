@@ -6893,6 +6893,8 @@ func TestPreparedBinaryIntegerCastDiagnosticProofBoundary(t *testing.T) {
 		{"long data", "1", defines.MYSQL_TYPE_LONG, false, types.T_int32, false, true, true, false},
 		{"sql prepare", "1", defines.MYSQL_TYPE_LONG, false, types.T_int32, false, false, false, false},
 		{"null", "", defines.MYSQL_TYPE_LONG, false, types.T_int32, true, false, true, true},
+		{"null unknown packet source", "", defines.MYSQL_TYPE_VAR_STRING, false, types.T_int32, true, false, true, false},
+		{"null noninteger target", "", defines.MYSQL_TYPE_LONG, false, types.T_date, true, false, true, false},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			param := &plan.Expr{Typ: plan.Type{Id: int32(types.T_text)}, Expr: &plan.Expr_P{P: &plan.ParamRef{Pos: 0}}}
@@ -6911,6 +6913,153 @@ func TestPreparedBinaryIntegerCastDiagnosticProofBoundary(t *testing.T) {
 				prepared.getFromSendLongData = map[int]struct{}{0: {}}
 			}
 			require.Equal(t, tc.want, preparedBinaryIntegerCastDiagnosticFree(prepared, cast, tc.binary))
+		})
+	}
+}
+
+func TestPreparedBinaryIntegerSerialDiagnosticProofBoundary(t *testing.T) {
+	proc := testutil.NewProcess(t)
+	t.Cleanup(proc.Free)
+	params := vector.NewVec(types.T_text.ToType())
+	require.NoError(t, vector.AppendBytes(params, []byte("1"), false, proc.Mp()))
+	require.NoError(t, vector.AppendBytes(params, []byte("2"), false, proc.Mp()))
+	t.Cleanup(func() { params.Free(proc.Mp()) })
+	prepared := &PrepareStmt{
+		params: params,
+		ParamTypes: []byte{
+			byte(defines.MYSQL_TYPE_LONG), 0,
+			byte(defines.MYSQL_TYPE_LONG), 0,
+		},
+	}
+	castAt := func(position int32, targetType types.T) *plan.Expr {
+		param := &plan.Expr{Typ: plan.Type{Id: int32(types.T_text)},
+			Expr: &plan.Expr_P{P: &plan.ParamRef{Pos: position}}}
+		target := &plan.Expr{Typ: plan.Type{Id: int32(targetType)},
+			Expr: &plan.Expr_T{T: &plan.TargetType{}}}
+		cast, err := plan2.BindFuncExprImplByPlanExpr(context.Background(), "cast", []*plan.Expr{param, target})
+		require.NoError(t, err)
+		return cast
+	}
+	for _, name := range []string{"serial", "serial_full"} {
+		t.Run(name, func(t *testing.T) {
+			first, second := castAt(0, types.T_int32), castAt(1, types.T_int32)
+			serial, err := plan2.BindFuncExprImplByPlanExpr(context.Background(), name, []*plan.Expr{first, second})
+			require.NoError(t, err)
+			check := func(want bool) {
+				require.Equal(t, want, preparedBinaryIntegerCastDiagnosticFree(prepared, serial, true))
+			}
+			check(true)
+			require.NoError(t, vector.SetStringAt(params, 1, "invalid", proc.Mp()))
+			check(false)
+			require.NoError(t, vector.SetStringAt(params, 1, "2", proc.Mp()))
+			prepared.getFromSendLongData = map[int]struct{}{1: {}}
+			check(false)
+			prepared.getFromSendLongData = nil
+			params.GetNulls().Add(1)
+			check(true)
+			serial.GetF().Args[1] = castAt(1, types.T_date)
+			check(false)
+			serial.GetF().Args[1] = second
+			prepared.ParamTypes[2] = byte(defines.MYSQL_TYPE_VAR_STRING)
+			check(false)
+			prepared.ParamTypes[2] = byte(defines.MYSQL_TYPE_LONG)
+			params.GetNulls().Del(1)
+			check(true)
+			require.NoError(t, vector.SetStringAt(params, 1, "02", proc.Mp()))
+			check(false)
+			require.NoError(t, vector.SetStringAt(params, 1, "2", proc.Mp()))
+			prepared.ParamTypes[3] = 0x80
+			check(false)
+			prepared.ParamTypes[3] = 0
+			serial.GetF().Args[0].GetF().SyntaxExplicitCast = true
+			check(false)
+			serial.GetF().Args[0] = first.GetF().Args[0]
+			check(false)
+			serial.GetF().Args[0] = castAt(0, types.T_int16)
+			check(false)
+			serial.GetF().Args[0] = first
+			serial.GetF().Args[0].GetF().SyntaxExplicitCast = false
+			check(true)
+		})
+	}
+}
+
+func TestPreparedCompositeIntegerDiagnosticProofUsesDecodedBinaryBinding(t *testing.T) {
+	const query = "select ?, ?"
+	ses, prepared, cw, execCtx := newPreparedExecuteEnvForSQL(t, 29432, query)
+	proto, _, scratch := newBinaryPrepareProtocolTestCase(t, query)
+	t.Cleanup(func() {
+		cw.proc.SetPrepareParams(nil)
+		prepared.Close()
+		scratch.Close()
+	})
+	castAt := func(position int32) *plan.Expr {
+		param := &plan.Expr{Typ: plan.Type{Id: int32(types.T_text)},
+			Expr: &plan.Expr_P{P: &plan.ParamRef{Pos: position}}}
+		target := &plan.Expr{Typ: plan.Type{Id: int32(types.T_int32)},
+			Expr: &plan.Expr_T{T: &plan.TargetType{}}}
+		cast, err := plan2.BindFuncExprImplByPlanExpr(context.Background(), "cast", []*plan.Expr{param, target})
+		require.NoError(t, err)
+		return cast
+	}
+	serial, err := plan2.BindFuncExprImplByPlanExpr(
+		context.Background(), "serial", []*plan.Expr{castAt(0), castAt(1)})
+	require.NoError(t, err)
+
+	packet := func(secondType defines.MysqlType, secondValue uint32, textValue string, isNull bool) []byte {
+		data := make([]byte, 11+4+9+len(textValue))
+		copy(data, []byte{
+			0, 1, 0, 0, 0, // cursor and iteration count
+			0, 1, // NULL bitmap and fresh parameter types
+			byte(defines.MYSQL_TYPE_LONG), 0, byte(secondType), 0,
+		})
+		if isNull {
+			data[5] = 0x02
+		}
+		binary.LittleEndian.PutUint32(data[11:15], 1)
+		pos := 15
+		if !isNull {
+			if secondType == defines.MYSQL_TYPE_LONG {
+				binary.LittleEndian.PutUint32(data[pos:pos+4], secondValue)
+				pos += 4
+			} else {
+				pos = proto.writeStringLenEnc(data, pos, textValue)
+			}
+		}
+		return data[:pos]
+	}
+	for _, tc := range []struct {
+		name       string
+		packet     []byte
+		wantProof  bool
+		wantProbe  bool
+		wantSecond string
+	}{
+		{"safe first", packet(defines.MYSQL_TYPE_LONG, 2, "", false), true, true, "2"},
+		{"text warning", packet(defines.MYSQL_TYPE_VAR_STRING, 0, "invalid", false), false, false, "invalid"},
+		{"unknown NULL", packet(defines.MYSQL_TYPE_NULL, 0, "", true), false, true, ""},
+		{"safe after fallback", packet(defines.MYSQL_TYPE_LONG, 3, "", false), true, true, "3"},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			require.NoError(t, proto.ParseExecuteData(execCtx.reqCtx, cw.proc, prepared, tc.packet, 0))
+			defer prepared.clearBinaryParamState(cw.proc)
+			require.Equal(t, tc.wantSecond, prepared.params.GetStringAt(1))
+			_, executionPlan, stmt, _, owned, err := initExecuteStmtParam(
+				execCtx, ses, cw, nil, prepared.Name)
+			if owned && stmt != nil {
+				defer stmt.Free()
+			}
+			require.NoError(t, err)
+			require.NotNil(t, executionPlan)
+			require.Equal(t, tc.wantProof,
+				preparedBinaryIntegerCastDiagnosticFree(prepared, serial, true))
+			free, err := plan2.ProbePreparedDiagnosticCandidatesWithProof(
+				cw.proc, []*plan.Expr{serial},
+				func(expr *plan.Expr) bool {
+					return preparedBinaryIntegerCastDiagnosticFree(prepared, expr, true)
+				})
+			require.NoError(t, err)
+			require.Equal(t, tc.wantProbe, free)
 		})
 	}
 }

@@ -39,4 +39,22 @@ execute join_key using @key;
 show count(*) warnings;
 deallocate prepare join_key;
 
+create table lookup_composite(k1 int, k2 int, value varchar(12), primary key(k1, k2));
+insert into lookup_composite values (1, 2, 'two'), (1, 3, 'three');
+prepare composite_key from 'select value from lookup_composite where k1 = ? and k2 = ?';
+set @first = 1;
+set @second = 2;
+execute composite_key using @first, @second;
+show count(*) warnings;
+set @second = 'invalid';
+execute composite_key using @first, @second;
+show count(*) warnings;
+set @second = null;
+execute composite_key using @first, @second;
+show count(*) warnings;
+set @second = 3;
+execute composite_key using @first, @second;
+show count(*) warnings;
+deallocate prepare composite_key;
+
 drop database issue_29429_prepared_filter;

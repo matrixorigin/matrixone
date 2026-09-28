@@ -9,7 +9,7 @@
 - 问题：[issue #29429](https://github.com/matrixorigin/matrixone/issues/29429)，尤其是 [root-cause update](https://github.com/matrixorigin/matrixone/issues/29429#issuecomment-5872195452)。
 - 引入提交：`a99db843c7b4630a86883addc9424433d93fc2d2`，PR #28851。
 - 相邻正常版本：`1575e70c3db676d3ed00abc080aadc029b0e1435`。
-- 实验补丁基于 main `1ded9fc914803cb2ffc1215be353703d640b3f02`，工作树 `/home/xupeng/mo-worktrees/issue-29429-main-fix`。
+- 初期实验基于 main `1ded9fc914803cb2ffc1215be353703d640b3f02`；当前修复已 rebase 到 `a543410f76`，工作树 `/home/xupeng/mo-worktrees/issue-29429-main-fix`。
 - 本文以单 CN、server-side prepare、TPCC 10 仓 10 并发作性能验收；物理 remote scope 的过滤传播也属于正确性闭包。问题本身不要求多 CN 才能出现。
 
 核心缺陷是**把 prepare 时“这个转换可能产生诊断”的静态属性，当作 execute 时“本次绑定不能下推”的最终结论**。当前绑定的安全证明没有统一覆盖关系优化、reader filter、block filter 和物理编译。恢复路径又依赖全量重规划，引入了新的执行开销。
@@ -142,7 +142,9 @@ PREPARE generation 还记录当时的全局及语句级 `optimizer_hints`。懒�
 
 证明至少受 plan generation、binding generation 和所依赖的会话语义约束。retry 若重绑定、重规划或改变这些依赖就重新证明；reset/free 不保留旧证明。一个布尔 proof 只授权本次选择的整份计划中已登记的诊断候选；它不表示任何未登记表达式安全。若安全模板在本次证明后才生成，先完成第二列表的探测再执行；不能用首轮保守证明提前授权它。
 
-不能把“packet 来源为整数”直接当作所有 CAST 安全；有符号性、范围、窄化、scale 等仍须匹配。对于协议已成功解码并规范化的 COM_STMT_EXECUTE 整数参数，可加严格的类型快速证明：候选必须恰好为隐式 `CAST(ParamRef AS integer)`，协议来源是已解码的有符号 SHORT/LONG/LONGLONG 或无符号对应类型，目标整数与来源同符号且宽度不小于来源；NULL 无转换诊断。该集合内的转换保持整数值不变，也不会产生截断/溢出/格式告警，故只对这类候选跳过表达式求值。协议类型和 unsigned 位必须由 frontend 从本次成功解码的 `PrepareStmt.ParamTypes` 按参数位置显式传入探测；`Process.GetPrepareParamKind` 不含宽度/符号，普通整数参数的 `GetPrepareParamType` 仍为 `T_any`，两者均不能替代该来源。还须对本次参数原始字节做无分配的十进制解析与规范格式往返校验：以协议来源的固定位宽解析，要求完整消耗、范围内且字节恰好等于对应的规范十进制格式；这使内部手工构造的参数即使错误地搭配整数 `ParamTypes` 也无法取得证明。按本次 `getFromSendLongData` 集合逐位置排除 long data。仅使用整数 OID 的固定位宽，不把 `Type.Width` 显示元数据当作值域。解析失败或元数据缺失一律回退到现有隔离求值；跨 execute 不保存任何通过状态。TINY 的布尔兼容启发式、BIT/YEAR、SEND_LONG_DATA、SQL PREPARE 变量、未知来源类型、不同符号、缩窄、浮点/小数/日期及复合表达式仍使用现有隔离转换探测。快速证明每次绑定读取本次协议类型，不缓存 proof；需要类型边界、NULL、非法文本、宽度/符号反例及实际 SQL 对照测试。若 CPU 降低但 TPCC 吞吐无改善，移除此优化，不扩大准入。
+不能把“packet 来源为整数”直接当作所有 CAST 安全；有符号性、范围、窄化、scale 等仍须匹配。对于协议已成功解码并规范化的 COM_STMT_EXECUTE 整数参数，可加严格的类型快速证明：候选必须恰好为隐式 `CAST(ParamRef AS integer)`，协议来源是已解码的有符号 SHORT/LONG/LONGLONG 或无符号对应类型，目标整数与来源同符号且宽度不小于来源；NULL 无转换诊断。该集合内的转换保持整数值不变，也不会产生截断/溢出/格式告警，故只对这类候选跳过表达式求值。协议类型和 unsigned 位必须由 frontend 从本次成功解码的 `PrepareStmt.ParamTypes` 按参数位置显式传入探测；`Process.GetPrepareParamKind` 不含宽度/符号，普通整数参数的 `GetPrepareParamType` 仍为 `T_any`，两者均不能替代该来源。还须对本次参数原始字节做无分配的十进制解析与规范格式往返校验：以协议来源的固定位宽解析，要求完整消耗、范围内且字节恰好等于对应的规范十进制格式；这使内部手工构造的参数即使错误地搭配整数 `ParamTypes` 也无法取得证明。按本次 `getFromSendLongData` 集合逐位置排除 long data。仅使用整数 OID 的固定位宽，不把 `Type.Width` 显示元数据当作值域。解析失败或元数据缺失一律回退到现有隔离求值；跨 execute 不保存任何通过状态。TINY 的布尔兼容启发式、BIT/YEAR、SEND_LONG_DATA、SQL PREPARE 变量、未知来源类型、不同符号、缩窄、浮点/小数/日期及下述白名单之外的复合表达式仍使用现有隔离转换探测。快速证明每次绑定读取本次协议类型，不缓存 proof；需要类型边界、NULL、非法文本、宽度/符号反例及实际 SQL 对照测试。若 CPU 降低但 TPCC 吞吐无改善，移除此优化，不扩大准入。
+
+后续固定 JDBC 参数序列定位到复合主键候选：`serial(CAST(? AS INT), CAST(? AS INT))` 在同一绑定中分别出现在保守与安全模板，根节点不是裸 CAST，现有快速证明会对整个 `serial` 做两次隔离求值。仅对 `serial` / `serial_full` 且**每个参数都恰为上述直接隐式整数 CAST** 的表达式，允许逐个 CAST 使用同一次绑定的字节/来源类型证明，并省略对外层编码函数的推测求值；任何其他参数形状、显式 CAST、未知类型、NULL 之外的非法转换均回退原探测。两个模板仍各自按本次绑定验证，证明不跨 EXECUTE 缓存。`serial`/`serial_full` 对已类型化整数的编码本身不产生 SQL 转换诊断；其类型支持由计划绑定保证，实际执行仍会构造键并传播内部/资源错误。该扩展只消除诊断探测重复编码，不改变实际查询谓词、结果或存储准入。需要覆盖两种编码函数、多参数中单个 warning/NULL/long data、显式 CAST 和非整数参数反例；用固定输入 JDBC 点查/JOIN 与同步落盘的 10W10T 配对重新验收。若无清晰收益或吞吐仍低于 parent，撤回此扩展或继续定位其他路径。
 
 ### 5.3 消费者使用同一结论，避免阶段错位
 
@@ -250,7 +252,7 @@ generation change / close -> 清除关联 metadata、模板和 compile cache
 
 已实现按绑定 generation 重新证明的诊断安全谓词、reader/block 共同准入、普通扫描的 block 谓词补全、无绑定构造并审核的关系安全模板、严格限定的二进制整数快速证明，以及执行局部 Scope 的远端 block 谓词选择。单表 scan 保留原参数化计划；需要关系结构变化时才构建无绑定模板。模板仅在物理编译成功后发布，拒绝准入的 generation 不再反复重建。全局及语句级 optimizer hint 在 PREPARE 时记录；延迟构建时若改变，则保守执行。
 
-单元测试覆盖合法/非法/NULL 绑定切换、真实 PREPARE/EXECUTE 值与 warning、无绑定模板 ParamRef 和静态准入、整数类型边界、block hint、远端 Scope 的空/非空筛选，以及缓存生命周期。最终生产代码的 `pkg/frontend`、`pkg/sql/plan` 与 `pkg/sql/compile` 全包测试、`go vet` 及用 Go 1.26.4 构建的 `golangci-lint` 增量检查均通过；最终二进制 SHA256 为 `8e724bb3ba4604b69c7bd7af061eca975409cf44391c341f3ba393a8e3576bed`，与同步配对压测使用的 fix13 二进制完全一致。新增 BVT 的 safe → warning → NULL → safe、scan/JOIN 与清理结果，在该最终二进制的全新单 CN 中连续两次、全新同进程双 CN 的每个 CN 中连续两次均为 34/34 成功；双 CN 结果只证明该拓扑和用例下的实际 SQL 行为，不代表独立进程的所有远端调度。
+单元测试覆盖合法/非法/NULL 绑定切换、真实 PREPARE/EXECUTE 值与 warning、无绑定模板 ParamRef 和静态准入、整数类型边界、block hint、远端 Scope 的空/非空筛选，以及缓存生命周期。fix13 代码的 `pkg/frontend`、`pkg/sql/plan` 与 `pkg/sql/compile` 全包测试、`go vet` 及用 Go 1.26.4 构建的 `golangci-lint` 增量检查均通过；同步配对压测使用的 fix13 二进制 SHA256 为 `8e724bb3ba4604b69c7bd7af061eca975409cf44391c341f3ba393a8e3576bed`。新增 BVT 的 safe → warning → NULL → safe、scan/JOIN 与清理结果，在该二进制的全新单 CN 中连续两次、全新同进程双 CN 的每个 CN 中连续两次均为 34/34 成功；双 CN 结果只证明该拓扑和用例下的实际 SQL 行为，不代表独立进程的所有远端调度。补丁之后无冲突 rebase 到 `a543410f76`，两个上游提交只改 fulltext/vector；相关三包测试和新二进制的单 CN BVT 34/34 再次通过。
 
 fix11 阶段的干净 NVMe 10 仓 10 并发两分钟运行分别为 5929.05、5028.30、4572.19 tpmC，均 0 事务错误；相邻 parent 四轮为 4915.80、5782.55、5715.16、4610.70 tpmC，均 0 错误。两组波动重叠，第三轮 fix11 比 parent 最低值低约 0.8%，因此这些非配对数据尚不足以宣称达到吞吐门槛。
 
@@ -258,6 +260,30 @@ fix13 首次六轮交替配对的 parent 为 5156.49、6019.53、5603.66 tpmC，
 
 按相同顺序重跑六轮，每轮从版本兼容的不可变 10 仓快照复制到新目录，先 `sync -f` 再启动服务和两分钟压测；各轮同步后的 Dirty 为 144–1160 kB，Writeback 为 0–160 kB。三组 parent 为 5890.13、5823.96、6302.09 tpmC，fix13 为 5641.21、5813.17、6591.57 tpmC，全部 0 事务错误。均值分别为 6005.39 和 6015.32 tpmC，比值 100.17%；逐组比值为 95.77%、99.81%、104.59%。前 20 秒 NVMe `w_await` 的 parent/fix 分别为 1.35/1.40、1.29/1.36、1.44/1.33 ms，消除了早期明显不均衡的写回。该结果支持吞吐恢复到同一水平，0.17% 小于轮间波动，不能解释为确定性提速。CPU profile 独立于性能轮次，仅作热点定位；`Filter.Call` 的累计样本包含其子算子的扫描成本，不能当作额外 CPU 加总。
 
-实验性结构等价候选去重（fix14）另以同一主线快照、每轮 `sync -f` 做了三组相邻 A/B：fix13 为 5232.85、5588.52、6316.49 tpmC，fix14 为 6188.37、5169.12、5275.61 tpmC，全部 0 错。均值 fix13 5712.62、fix14 5544.37，fix14/fix13 为 97.05%；逐组方向相反，无法证明该额外优化有收益。最终代码撤回了结构去重，保留已与 parent 配对验证的 fix13。
+实验性结构等价候选去重（fix14）另以同一主线快照、每轮 `sync -f` 做了三组相邻 A/B：fix13 为 5232.85、5588.52、6316.49 tpmC，fix14 为 6188.37、5169.12、5275.61 tpmC，全部 0 错。均值 fix13 5712.62、fix14 5544.37，fix14/fix13 为 97.05%；逐组方向相反，无法证明该额外优化有收益。代码撤回了结构去重。
+
+rebase 后的交付二进制 SHA256 为 `d3fd1d269ad7e6d20cde859811814ad7ffb56d49cfe6fb26b9db0c83d1561931`。再做三组同步落盘、干净快照的 parent/fix 交替对照，parent 6557.35/5682.15/6203.31，fix 5856.60/5779.74/5869.87 tpmC，均 0 错；均值 6147.60/5835.40，fix/parent 为 94.92%，**未达到吞吐验收门槛**。单组在 `sync -f` 后额外用 `POSIX_FADV_DONTNEED` 将两版复制数据的驻留页从约 685 MB 清到 0，parent 6533.72、fix 5763.26 tpmC，0 错；整盘读量约 33.1/47.7 GB，写等待接近。该单组确认复制预热不能单独解释差距，但整盘读量不是 SQL 级扫描计数。固定 JDBC server-side prepare 的相同整数参数序列在两组独立新快照上测得 stock 点查 parent/fix 分别 1.496/1.623 与 1.463/1.468 ms/次，customer/warehouse JOIN 为 0.361/0.467 与 0.358/0.443 ms/次；JOIN 有重复的额外成本。`EXPLAIN VERBOSE FORCE EXECUTE` 的两版逻辑计划相同；调试日志确认复合主键的 `serial(CAST(?), CAST(?))` 在每次绑定无法命中裸 CAST 快证，保守及安全模板分别做一次隔离求值。
+
+严格限定的 `serial`/`serial_full` 整数参数快速证明消除了该重复隔离求值。真实 JDBC 二进制 prepared handle 的 safe→invalid→NULL→safe 序列在旧补丁和新优化上的行、告警次数完全一致，新增 BVT 的 SQL PREPARE 控制组在旧、新二进制分别为 51/51 与连续两次 51/51。旧补丁与新优化在同一 main 快照、每轮 `sync -f` 并将初始数据文件缓存清零后，按旧/新/新/旧/旧/新交叉跑三组两分钟 10 仓 10 并发：旧为 6852.14/5689.54/5828.81，新为 5878.39/6333.64/6582.75 tpmC，全部 0 错；均值 6123.50/6264.93，新/旧为 102.31%，但逐组方向不一致。对应六轮整盘 NVMe 读取量为旧 23.38/47.88/48.42 GiB、新 48.22/31.30/17.92 GiB；随机输入与 I/O 波动盖过小幅吞吐差异，不能把 2.31% 当作确定性提速。
+
+另用同样的全新快照各跑一轮两分钟 TPCC，在中间采集相同 60 秒 CPU profile：旧补丁与新优化分别完成 14,202/15,324 个事务，CPU 总样本 394.63/408.21 秒；`ProbePreparedDiagnosticCandidatesWithProof` 累计 10.67/1.60 秒（占总样本 2.70%/0.39%），`initExecuteStmtParamWithResolverInSession` 累计 34.27/26.83 秒，`TableScan.Call` 累计 118.77/121.36 秒。每完成事务的证明 CPU 样本约 0.75/0.10 ms，直接验证重复隔离求值的稳态热点已消除；采样轮次的 NVMe 读量仍为 34.05/20.19 GiB，不将总吞吐差额完全归因于证明优化。
+
+对退化前直接 parent 版本 `1575e70c3d` 与复合键优化版再做三组交叉，沿用每轮全新数据副本、`sync -f`、`POSIX_FADV_DONTNEED`、10 仓 10 并发两分钟。parent 为 5769.84/5780.03/7096.99，优化版为 6920.98/5116.77/5878.75 tpmC，全部 0 错；均值 6215.62/5972.17，优化版为 parent 的 **96.08%**，目前**不能认定达到性能验收门槛**。对应 parent 的 NVMe 总读量为 45.88/45.95/7.36 GiB，优化版为 20.75/55.48/48.62 GiB；第三轮 parent 也出现低读量高吞吐，说明这类波动不只发生在补丁版，但总盘读量尚未归因到具体 SQL 或计划。
+
+为减少 workload 随机输入变化，另造仅供本地测量的 BenchmarkSQL JAR，将 `io.mo.jTPCCRandom` 的 `System.nanoTime()` 种子入口替换为固定起点的原子递增种子，事务逻辑及比例保持原版；原始 JAR SHA256 为 `6d3b9549b4cfe435085aa0db817faa6068d93c5ea5576d4cdf8f91c105232b2e`，测量 JAR 为 `167a124cd7fc8ecf8f975915bcd3b3b7944642395fe0672c4ca4e63a015b3ab2`。这固定 PRNG 初始序列，不固定线程调度。最终修复二进制 SHA256 `938d5bb3890240af1bfe779d4ded50b62d8ac732e5ef05837494097b29d52b82` 的两轮同版本、干净快照校准为 5922.86/5751.51 tpmC，NVMe 读量 47.68/45.10 GiB，均 0 错；比此前随机种子轮次稳定，但仍存在约 3% 吞吐差。
+
+随后用该 JAR 和最终二进制，对退化前直接 parent 做三组交叉顺序 `parent→fix / fix→parent / parent→fix`。每轮复制兼容版本的不可变 10 仓初始快照到全新 NVMe 目录，`sync -f` 并清除数据文件页缓存后启动全新服务及 BenchmarkSQL，10 终端、2 分钟。结果如下；NVMe 读量为整盘监控值，不能直接等同 SQL 扫描量。
+
+| 组 | parent tpmC | fix tpmC | parent NVMe 读 GiB | fix NVMe 读 GiB | 事务错误 |
+| --- | ---: | ---: | ---: | ---: | ---: |
+| 1 | 5786.94 | 5764.79 | 45.75 | 45.99 | 0 / 0 |
+| 2 | 5596.39 | 5701.52 | 43.98 | 44.78 | 0 / 0 |
+| 3 | 5772.13 | 5764.99 | 45.34 | 46.44 | 0 / 0 |
+
+均值 parent **5718.49**、fix **5743.77 tpmC**，fix/parent **100.44%**。相邻组方向有正有负，0.44% 小于轮间波动；结合低于 1.1 GiB 的逐组 NVMe 读量差与 0 错误，该对照支持“恢复到退化前水平”，不支持“稳定提速”。此前随机种子的三组 96.08% 结果保留为波动/方法边界，不能隐藏或用事后调整替代。
+
+增量复审指出 NULL 形状在检查来源和目标类型前获准的问题；现已先验证协议 SHORT/LONG/LONGLONG、目标整数 OID、符号、位宽和 long data，再对 NULL 快证。新增负向 UT、真实 COM_STMT_EXECUTE 解码→`initExecuteStmtParam`→候选探测的同 handle safe→invalid→NULL→safe 测试均通过，`pkg/frontend` 全包测试、该包 `go vet` 和 Go 1.26.4 `golangci-lint` 增量检查通过。测试中复合 `serial` 候选为手工构造；自动收集和实际行/告警由独立真实 JDBC 复合主键 SQL 验证，BVT 的 SQL PREPARE 控制组不触发二进制快证。代码正确性复审 PASS。
+
+最终二进制还在新建同进程双 CN 集群上执行新增 BVT，CN1/CN2 各连续两次均为 51/51，通过且无忽略。真实 JDBC `useServerPrepStmts=true` 的同一二进制 prepared handle 在两个 CN 上分别执行 safe→invalid→NULL→safe，行集合依次为 `[two]`、`[three,two]`、`[]`、`[three]`，warning 数依次为 0、4、2、0；两端一致。该结果覆盖实际参数解码与复合键表达式路径；仍只代表本地同进程双 CN 拓扑。
 
 本地证据目录：`/mnt/nvme/issue-29429-perf`，包括两版快照、二进制、BVT 日志、单独的 60 秒 profile、`paired-final` 未同步轮次和 `paired-synced` 同步轮次的脚本及输出；早期非 NVMe 探索保存在 `/home/xupeng/issue-29429-exact`、`/home/xupeng/issue-29429-main-bench`。

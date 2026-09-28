@@ -1094,11 +1094,36 @@ func binaryProtocolPrepareParamKind(
 	}
 }
 
-// preparedBinaryIntegerCastDiagnosticFree proves one current binary binding
-// without evaluating a CAST. The protocol type supplies width and sign; an
-// exact parse of the normalized parameter bytes prevents stale or manually
-// constructed metadata from authorizing an arbitrary text value.
+// preparedBinaryIntegerCastDiagnosticFree proves direct implicit integer
+// casts, including a composite-key serial whose every argument is such a
+// cast. Serializing already typed integers adds no SQL conversion diagnostic;
+// the actual query still evaluates the serial expression and propagates its
+// errors. Any unsupported argument leaves the whole candidate to the normal
+// isolated probe.
 func preparedBinaryIntegerCastDiagnosticFree(
+	prepareStmt *PrepareStmt, expr *plan.Expr, binaryExecute bool,
+) bool {
+	if expr != nil {
+		if fn := expr.GetF(); fn != nil && fn.Func != nil &&
+			(fn.Func.Obj == function.SerialFunctionEncodeID ||
+				fn.Func.Obj == function.SerialFullFunctionEncodeID) {
+			if len(fn.Args) == 0 {
+				return false
+			}
+			for _, arg := range fn.Args {
+				if !preparedDirectBinaryIntegerCastDiagnosticFree(prepareStmt, arg, binaryExecute) {
+					return false
+				}
+			}
+			return true
+		}
+	}
+	return preparedDirectBinaryIntegerCastDiagnosticFree(prepareStmt, expr, binaryExecute)
+}
+
+// The packet type supplies width and sign. Parsing the normalized bytes and
+// checking the canonical representation also rejects stale/manual metadata.
+func preparedDirectBinaryIntegerCastDiagnosticFree(
 	prepareStmt *PrepareStmt, expr *plan.Expr, binaryExecute bool,
 ) bool {
 	if !binaryExecute || prepareStmt == nil || prepareStmt.params == nil {
@@ -1110,9 +1135,6 @@ func preparedBinaryIntegerCastDiagnosticFree(
 	}
 	if _, longData := prepareStmt.getFromSendLongData[int(position)]; longData {
 		return false
-	}
-	if prepareStmt.params.IsNull(uint64(position)) {
-		return true
 	}
 	var sourceBits int
 	switch defines.MysqlType(prepareStmt.ParamTypes[int(position)*2]) {
@@ -1150,6 +1172,9 @@ func preparedBinaryIntegerCastDiagnosticFree(
 	}
 	if sourceUnsigned != targetUnsigned || targetBits < sourceBits {
 		return false
+	}
+	if prepareStmt.params.IsNull(uint64(position)) {
+		return true
 	}
 	raw := prepareStmt.params.GetRawBytesAt(int(position))
 	var formatted [24]byte
