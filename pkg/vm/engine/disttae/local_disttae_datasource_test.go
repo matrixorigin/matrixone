@@ -463,6 +463,77 @@ func TestLocalDatasourceWorkspaceDeleteEntriesMergesLargeDeleteSet(t *testing.T)
 	}
 }
 
+func TestLocalDatasourceWorkspaceDeleteEntriesMergesHotBlock(t *testing.T) {
+	ctx, cancel := context.WithTimeout(context.Background(), time.Minute*5)
+	defer cancel()
+
+	txnOp, closeFunc := client.NewTestTxnOperator(ctx)
+	defer closeFunc()
+
+	oid := types.NewObjectid()
+	blk := types.NewBlockidWithObjectID(&oid, 1)
+	otherBlk := types.NewBlockidWithObjectID(&oid, 2)
+	writes := make([]Entry, 0, mergeWorkspaceDeleteEntriesForBlockThreshold+1)
+	for i := mergeWorkspaceDeleteEntriesForBlockThreshold - 1; i >= 0; i-- {
+		writes = append(writes, Entry{
+			typ:        DELETE,
+			databaseId: 11,
+			tableId:    22,
+			bat:        newWorkspaceDeleteBatch(t, []types.Rowid{types.NewRowid(&blk, uint32(i))}),
+		})
+	}
+	writes = append(writes, Entry{
+		typ:        DELETE,
+		databaseId: 11,
+		tableId:    22,
+		bat:        newWorkspaceDeleteBatch(t, []types.Rowid{types.NewRowid(&otherBlk, 7)}),
+	})
+	txn := &Transaction{op: txnOp, writes: writes}
+	txnOp.AddWorkspace(txn)
+	ls := &LocalDisttaeDataSource{
+		ctx:       ctx,
+		txnOffset: mergeWorkspaceDeleteEntriesForBlockThreshold - 1,
+		table: &txnTable{
+			db:      &txnDatabase{databaseId: 11, op: txnOp},
+			tableId: 22,
+		},
+	}
+
+	require.Len(t, ls.workspaceDeleteEntriesForBlockLocked(&blk), mergeWorkspaceDeleteEntriesForBlockThreshold-1)
+	require.Equal(t, []int64{0}, ls.applyWorkspaceEntryDeletes(&blk, []int64{0}, nil))
+	ls.txnOffset = len(txn.writes)
+	blockEntries := ls.workspaceDeleteEntriesForBlockLocked(&blk)
+	require.Len(t, blockEntries, 1)
+	require.Len(t, blockEntries[0].rowIds, mergeWorkspaceDeleteEntriesForBlockThreshold)
+	require.True(t, slices.IsSortedFunc(blockEntries[0].rowIds, func(a, b types.Rowid) int { return a.Compare(&b) }))
+	require.Len(t, ls.workspaceDeleteEntriesForBlockLocked(&blk), 1)
+	require.Equal(t, []int64{mergeWorkspaceDeleteEntriesForBlockThreshold},
+		ls.applyWorkspaceEntryDeletes(&blk, []int64{0, 1, mergeWorkspaceDeleteEntriesForBlockThreshold - 1, mergeWorkspaceDeleteEntriesForBlockThreshold}, nil))
+	require.Empty(t, ls.applyWorkspaceEntryDeletes(&otherBlk, []int64{7}, nil))
+}
+
+func TestLocalDatasourceWorkspaceDeleteEntriesKeepsLargeBlockBatches(t *testing.T) {
+	oid := types.NewObjectid()
+	blk := types.NewBlockidWithObjectID(&oid, 1)
+	rows := make([]types.Rowid, maxMergedWorkspaceDeleteRowsPerBlock+1)
+	for i := range rows {
+		rows[i] = types.NewRowid(&blk, uint32(i))
+	}
+	ls := &LocalDisttaeDataSource{txnOffset: 1}
+	ls.workspaceDeletes.initialized = true
+	ls.workspaceDeletes.txnOffset = 1
+	ls.workspaceDeletes.entries = make([]workspaceDeleteEntry, mergeWorkspaceDeleteEntriesForBlockThreshold)
+	ls.workspaceDeletes.entries[0] = workspaceDeleteEntry{rowIds: rows, sorted: true}
+	for i := 1; i < len(ls.workspaceDeletes.entries); i++ {
+		ls.workspaceDeletes.entries[i] = workspaceDeleteEntry{
+			rowIds: []types.Rowid{types.NewRowid(&blk, uint32(len(rows)+i))},
+			sorted: true,
+		}
+	}
+
+	require.Len(t, ls.workspaceDeleteEntriesForBlockLocked(&blk), mergeWorkspaceDeleteEntriesForBlockThreshold)
+}
+
 func TestLocalDatasourceWorkspaceDeleteEntriesInvalidatesCacheWhenTxnOffsetChanges(t *testing.T) {
 	ctx, cancel := context.WithTimeout(context.Background(), time.Minute*5)
 	defer cancel()
