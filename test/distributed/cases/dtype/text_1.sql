@@ -227,6 +227,8 @@ select cast(col9 as double) from t8;
 delete from t8 where col9 is not NULL;
 
 insert into t8(col9) values ('1000000000000000000000000000000000000000');
+set @text_1_saved_sql_mode = @@session.sql_mode;
+set session sql_mode = concat_ws(',', nullif(@text_1_saved_sql_mode, ''), 'MYSQL_NUMERIC_COMPATIBILITY');
 select cast(col9 as float) from t8;
 select cast(col9 as double) from t8;
 delete from t8 where col9 is not NULL;
@@ -235,6 +237,8 @@ insert into t8(col9) values (1000000000000000000000000000000000000000);
 select cast(col9 as float) from t8;
 select cast(col9 as double) from t8;
 delete from t8 where col9 is not NULL;
+set session sql_mode = @text_1_saved_sql_mode;
+set @text_1_saved_sql_mode = NULL;
 
 -------------------------------------------
 
@@ -432,4 +436,3 @@ select * from t11 right join t12 on t11.a!=t12.b;
 
 select * from t11 union select * from t12 order by a;
 select * from t11 union all select * from t12 order by a;
-
