@@ -96,4 +96,63 @@ insert into docs values (4, NULL, 'nullnote', 13)
     on duplicate key update body = values(body), notes = values(notes), payload = values(payload);
 select id from docs where match(body) against('nullvalue') order by id;
 
+-- One batch combines an equal conflict, a changed conflict, and a new row.
+-- Both assignments mention both indexes; eligibility depends on final bytes.
+insert into docs values (11, 'stablebody', 'stablenote', 1), (12, 'priorbody', 'priornote', 2);
+insert into docs values (11, 'stablebody', 'stablenote', 11), (12, 'changedbody', 'changednotes', 12), (13, 'freshbody', 'freshnotes', 13) on duplicate key update body = values(body), notes = values(notes), payload = values(payload);
+select id, body, notes, payload from docs where id >= 11 order by id;
+select id from docs where match(body) against('stablebody') order by id;
+select id from docs where match(body) against('changedbody') order by id;
+select id from docs where match(body) against('freshbody') order by id;
+select id from docs where match(notes) against('stablenote') order by id;
+select id from docs where match(notes) against('changednotes') order by id;
+select id from docs where match(notes) against('freshnotes') order by id;
+select id from docs where match(body) against('priorbody') order by id;
+select id from docs where match(notes) against('priornote') order by id;
+
+-- Independent indexes must make asymmetric decisions, then exchange roles.
+insert into docs values (11, 'stablebody', 'asymmetricnote', 21) on duplicate key update body = values(body), notes = values(notes), payload = values(payload);
+select id from docs where match(body) against('stablebody') order by id;
+select id from docs where match(notes) against('stablenote') order by id;
+select id from docs where match(notes) against('asymmetricnote') order by id;
+insert into docs values (11, 'asymmetricbody', 'asymmetricnote', 22) on duplicate key update body = values(body), notes = values(notes), payload = values(payload);
+select id, body, notes, payload from docs where id = 11;
+select id from docs where match(body) against('stablebody') order by id;
+select id from docs where match(body) against('asymmetricbody') order by id;
+select id from docs where match(notes) against('asymmetricnote') order by id;
+
+-- Equal long prefixes must not hide a changed final token beyond 4 KiB.
+insert into docs values (14, 'tailbody', concat(repeat('prefix ', 600), 'oldtailtoken'), 30);
+insert into docs values (14, 'tailbody', concat(repeat('prefix ', 600), 'newtailtoken'), 31) on duplicate key update body = values(body), notes = values(notes), payload = values(payload);
+select id, length(notes) as notes_len, hex(notes) = hex(concat(repeat('prefix ', 600), 'newtailtoken')) as exact_bytes, payload from docs where id = 14;
+select id from docs where match(notes) against('oldtailtoken') order by id;
+select id from docs where match(notes) against('newtailtoken') order by id;
+select id from docs where match(body) against('tailbody') order by id;
+
+-- Roll back changes to both indexes, including the long tail and a fresh row.
+begin;
+insert into docs values (11, 'abortbody', 'abortnote', 41), (14, 'aborttailbody', concat(repeat('prefix ', 600), 'aborttailtoken'), 42), (15, 'abortfreshbody', 'abortfreshnote', 43) on duplicate key update body = values(body), notes = values(notes), payload = values(payload);
+rollback;
+select id, body, payload from docs where id >= 11 order by id;
+select id, length(notes) as notes_len, hex(notes) = hex(concat(repeat('prefix ', 600), 'newtailtoken')) as exact_bytes from docs where id = 14;
+select id from docs where match(body) against('abortbody') order by id;
+select id from docs where match(body) against('aborttailbody') order by id;
+select id from docs where match(body) against('abortfreshbody') order by id;
+select id from docs where match(notes) against('abortnote') order by id;
+select id from docs where match(notes) against('aborttailtoken') order by id;
+select id from docs where match(notes) against('abortfreshnote') order by id;
+select id from docs where match(body) against('asymmetricbody') order by id;
+select id from docs where match(body) against('tailbody') order by id;
+select id from docs where match(notes) against('asymmetricnote') order by id;
+select id from docs where match(notes) against('newtailtoken') order by id;
+
+-- Replay both final indexed values while changing payload; no extra document.
+insert into docs values (11, 'asymmetricbody', 'asymmetricnote', 51), (14, 'tailbody', concat(repeat('prefix ', 600), 'newtailtoken'), 52) on duplicate key update body = values(body), notes = values(notes), payload = values(payload);
+select id, payload from docs where id in (11, 14) order by id;
+select count(*) as document_count from docs where id >= 11;
+select id from docs where match(body) against('asymmetricbody') order by id;
+select id from docs where match(body) against('tailbody') order by id;
+select id from docs where match(notes) against('asymmetricnote') order by id;
+select id from docs where match(notes) against('newtailtoken') order by id;
+
 drop database issue28494_fulltext;
