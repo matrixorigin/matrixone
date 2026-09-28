@@ -1561,39 +1561,90 @@ func TestVarExpressionExecutor(t *testing.T) {
 	require.Equal(t, int64(67890), vector.MustFixedColNoTypeCheck[int64](vec)[0])
 }
 
-func TestVarExpressionExecutorPreservesBinaryStringMetadataOnReuse(t *testing.T) {
-	proc := testutil.NewProcess(t)
-	value := "\xe4\xbd\xa0"
-	runtimeDomain := types.RuntimeStringBinary
-	proc.SetResolveVariableFunc(func(string, bool, bool) (interface{}, error) {
-		return value, nil
-	})
-	proc.SetResolveVariableStringDomainFunc(func(string, bool, bool) (types.RuntimeStringDomain, error) {
-		return runtimeDomain, nil
-	})
+func TestVarExpressionExecutorPreservesBoundStringDomainOnReuse(t *testing.T) {
+	for _, tc := range []struct {
+		name   string
+		typ    types.Type
+		binary bool
+	}{
+		{"text", types.T_varchar.ToType(), false},
+		{"binary", types.T_blob.ToType(), true},
+		{"binary charset on varchar", types.NewWithCharset(types.T_varchar, 0, 0, types.CharsetBinary), true},
+		{"text charset on varbinary", types.NewWithCharset(types.T_varbinary, 0, 0, types.CharsetUTF8), false},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			proc := testutil.NewProcess(t)
+			var value any = "你"
+			var resolveErr error
+			runtimeDomain := types.RuntimeStringBinary
+			proc.SetResolveVariableFunc(func(string, bool, bool) (interface{}, error) {
+				return value, resolveErr
+			})
+			proc.SetResolveVariableStringDomainFunc(func(string, bool, bool) (types.RuntimeStringDomain, error) {
+				return runtimeDomain, nil
+			})
+			executor, err := NewExpressionExecutor(proc, &plan.Expr{
+				Expr: &plan.Expr_V{V: &plan.VarRef{Name: "domain_var"}},
+				Typ:  plan.Type{Id: int32(tc.typ.Oid), Width: tc.typ.Width, Charset: uint32(tc.typ.Charset)},
+			})
+			require.NoError(t, err)
+			t.Cleanup(func() {
+				executor.Free()
+				require.Zero(t, proc.Mp().CurrNB())
+			})
 
-	executor, err := NewExpressionExecutor(proc, &plan.Expr{
-		Expr: &plan.Expr_V{V: &plan.VarRef{Name: "domain_var"}},
-		Typ:  plan.Type{Id: int32(types.T_varchar)},
-	})
-	require.NoError(t, err)
-	t.Cleanup(executor.Free)
+			input := batch.New(nil)
+			input.SetRowCount(2)
+			for _, step := range []struct {
+				value  any
+				domain types.RuntimeStringDomain
+			}{
+				{"你", types.RuntimeStringBinary},
+				{"text", types.RuntimeStringText},
+				{nil, types.RuntimeStringText},
+				{nil, types.RuntimeStringBinary},
+				{[]byte("你"), types.RuntimeStringBinary},
+				{"你", types.RuntimeStringInherit},
+			} {
+				value, runtimeDomain = step.value, step.domain
+				vec, err := executor.Eval(proc, []*batch.Batch{input}, nil)
+				require.NoError(t, err)
+				require.Equal(t, 2, vec.Length())
+				require.Equal(t, tc.typ, *vec.GetType())
+				for row := 0; row < 2; row++ {
+					if value != nil {
+						require.Equal(t, tc.binary, vec.GetIsBinaryStringAt(row))
+					}
+					wantDomain := types.RuntimeStringInherit
+					if value != nil && tc.typ.Oid == types.T_varbinary && !tc.binary {
+						wantDomain = types.RuntimeStringText
+					}
+					require.Equal(t, wantDomain, vec.GetRuntimeStringDomainAt(row))
+					require.Equal(t, types.StringSourceUserVariable, vec.GetStringSourceAt(row))
+				}
+				require.Equal(t, value == nil, vec.IsConstNull())
+				if value != nil {
+					want := "你"
+					if value == "text" {
+						want = "text"
+					}
+					require.Equal(t, want, vec.GetStringAt(1))
+				}
+			}
 
-	input := batch.New(nil)
-	input.SetRowCount(2)
-	vec, err := executor.Eval(proc, []*batch.Batch{input}, nil)
-	require.NoError(t, err)
-	require.True(t, vec.GetBinaryStringMetadataAt(0))
-	require.True(t, vec.GetBinaryStringMetadataAt(1))
-	require.Equal(t, types.StringSourceUserVariable, vec.GetStringSourceAt(0))
-
-	runtimeDomain = types.RuntimeStringText
-	value = "text"
-	vec, err = executor.Eval(proc, []*batch.Batch{input}, nil)
-	require.NoError(t, err)
-	require.Equal(t, types.RuntimeStringText, vec.GetRuntimeStringDomainAt(0),
-		"a reused variable vector must replace the preceding binary override")
-	require.Equal(t, "text", vec.GetStringAt(1))
+			resolveErr = moerr.NewInternalErrorNoCtx("variable resolver failed")
+			masked, err := executor.Eval(proc, []*batch.Batch{input}, []bool{false, false})
+			require.NoError(t, err)
+			require.True(t, masked.IsConstNull())
+			_, err = executor.Eval(proc, []*batch.Batch{input}, nil)
+			require.ErrorIs(t, err, resolveErr)
+			resolveErr = nil
+			vec, err := executor.Eval(proc, []*batch.Batch{input}, nil)
+			require.NoError(t, err)
+			require.Equal(t, "你", vec.GetStringAt(0))
+			require.Equal(t, tc.binary, vec.GetIsBinaryStringAt(0))
+		})
+	}
 }
 
 func TestParamExpressionExecutorMatchesBatchRowCount(t *testing.T) {

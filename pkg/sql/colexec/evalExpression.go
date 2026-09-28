@@ -843,7 +843,19 @@ func (expr *VarExpressionExecutor) Eval(proc *process.Process, batches []*batch.
 		}
 	}
 	runtimeDomain := types.RuntimeStringInherit
-	if resolveStringDomain := proc.GetResolveVariableStringDomainFunc(); resolveStringDomain != nil {
+	// A user-variable string expression owns the charset captured by the
+	// binder. Reading the current assignment's override here would change a
+	// prepared expression's meaning after SET. Parameters have a different
+	// owner and continue to carry their per-execution domains.
+	if !expr.system && expr.typ.Oid.IsMySQLString() {
+		// Vectors retain the binary-OID fallback for legacy consumers. A text
+		// binding over a binary container therefore needs an explicit override,
+		// derived from the bound charset rather than the current assignment.
+		if types.StaticStringDomain(expr.typ) == types.StringDomainText &&
+			types.CharsetType(expr.typ.Oid) == types.CharsetBinary {
+			runtimeDomain = types.RuntimeStringText
+		}
+	} else if resolveStringDomain := proc.GetResolveVariableStringDomainFunc(); resolveStringDomain != nil {
 		runtimeDomain, err = resolveStringDomain(expr.name, expr.system, expr.global)
 		if err != nil {
 			return nil, err

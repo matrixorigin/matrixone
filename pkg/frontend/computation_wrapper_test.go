@@ -6489,6 +6489,112 @@ func TestInitExecuteStmtParamSpecializesCOMStmtBinaryFunction(t *testing.T) {
 	require.True(t, value.GetIsBinaryStringAt(0))
 }
 
+func TestPreparedUserVariableStringDomainIsBoundPerStatement(t *testing.T) {
+	for _, tc := range []struct {
+		name   string
+		typ    types.Type
+		domain types.RuntimeStringDomain
+		binary bool
+	}{
+		{"text", types.T_text.ToType(), types.RuntimeStringInherit, false},
+		{"binary", types.T_blob.ToType(), types.RuntimeStringInherit, true},
+		{"selected binary", types.T_text.ToType(), types.RuntimeStringBinary, true},
+		{"selected text", types.T_blob.ToType(), types.RuntimeStringText, false},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			ses, scratch, cw, execCtx := newPreparedExecuteEnv(t, 124)
+			t.Cleanup(func() {
+				cw.proc.SetPrepareParams(nil)
+				scratch.Close()
+				ses.Close()
+			})
+			assign := func(typ types.Type, domain types.RuntimeStringDomain, value any) {
+				t.Helper()
+				require.NoError(t, ses.setUserDefinedVarWithTypeAndKindAndReplayability(
+					"bound_s", value, "", false,
+					plan.Type{Id: int32(typ.Oid), Charset: uint32(typ.Charset)},
+					vector.PrepareParamNone, false, domain))
+			}
+			bind := func() *plan.Plan {
+				t.Helper()
+				stmt := tree.NewPrepareString("bound_variable", "select char_length(@bound_s), hex(left(@bound_s,1)), ord(@bound_s), @bound_s+0, "+
+					"char_length(coalesce(@bound_s,NULL)), hex(left(case when @bound_s is null then null else @bound_s end,1))")
+				defer stmt.Free()
+				prepared, err := buildPlan(execCtx.reqCtx, ses, ses.txnCompileCtx, stmt)
+				require.NoError(t, err)
+				return prepared.GetDcl().GetPrepare().Plan
+			}
+			check := func(p *plan.Plan, binary, isNull bool) {
+				t.Helper()
+				q := p.GetQuery()
+				projects := q.Nodes[q.Steps[len(q.Steps)-1]].ProjectList
+				require.Len(t, projects, 6)
+				for i, project := range projects {
+					func() {
+						executor, err := colexec.NewExpressionExecutor(cw.proc, project)
+						require.NoError(t, err)
+						defer executor.Free()
+						value, err := executor.Eval(cw.proc, []*batch.Batch{batch.EmptyForConstFoldBatch}, nil)
+						require.NoError(t, err)
+						require.Equal(t, isNull, value.GetNulls().Contains(0))
+						if isNull {
+							return
+						}
+						switch i {
+						case 0, 4:
+							want := int64(1)
+							if binary {
+								want = 3
+							}
+							require.Equal(t, want, vector.GetFixedAtNoTypeCheck[int64](value, 0))
+						case 1, 5:
+							want := "E4BDA0"
+							if binary {
+								want = "E4"
+							}
+							require.Equal(t, want, value.GetStringAt(0))
+						case 2:
+							want := int64(0xe4bda0)
+							if binary {
+								want = 0xe4
+							}
+							require.Equal(t, want, vector.GetFixedAtNoTypeCheck[int64](value, 0))
+						case 3:
+							require.Equal(t, float64(0), vector.GetFixedAtNoTypeCheck[float64](value, 0))
+						}
+					}()
+				}
+			}
+
+			assign(tc.typ, tc.domain, "你")
+			first := bind()
+			original := first.String()
+			check(first, tc.binary, false)
+			opposite := types.T_blob.ToType()
+			if tc.binary {
+				opposite = types.T_text.ToType()
+			}
+			assign(opposite, types.RuntimeStringInherit, "你")
+			check(first, tc.binary, false)
+			second := bind()
+			check(second, !tc.binary, false)
+			check(first, tc.binary, false)
+			require.Equal(t, original, first.String())
+			current, err := ses.GetUserDefinedVar("bound_s")
+			require.NoError(t, err)
+			require.Equal(t, int32(opposite.Oid), current.Type.Id)
+			require.Equal(t, uint32(opposite.Charset), current.Type.Charset)
+			require.Equal(t, types.RuntimeStringInherit, current.RuntimeStringDomain)
+			assign(opposite, types.RuntimeStringInherit, nil)
+			check(first, tc.binary, true)
+			check(second, !tc.binary, true)
+			assign(tc.typ, tc.domain, "你")
+			check(first, tc.binary, false)
+			check(second, !tc.binary, false)
+		})
+	}
+}
+
 func TestBuildExecuteUserParamsPreservesExplicitTextOverride(t *testing.T) {
 	ses, prepareStmt, cw, _ := newPreparedExecuteEnv(t, 123)
 	defer prepareStmt.Close()

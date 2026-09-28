@@ -384,6 +384,28 @@ func (b *baseBinder) baseBindVar(astExpr *tree.VarExpr, depth int32, isRoot bool
 		if resolved, ok := b.resolveUserVariableType(astExpr); ok {
 			typ = makeTypeByPlan2Type(resolved)
 		}
+		if typ.Oid.IsMySQLString() && b.builder != nil && b.builder.compCtx != nil {
+			if resolver, ok := b.builder.compCtx.(UserVariableStringDomainResolver); ok {
+				domain, resolveErr := resolver.ResolveVariableStringDomain(astExpr.Name, false, astExpr.Global)
+				if resolveErr != nil {
+					return nil, resolveErr
+				}
+				// Freeze the value's effective charset, not its storage container's
+				// default. Later assignments must not change this expression's
+				// contract, and other statements must retain their own bindings.
+				switch domain {
+				case types.RuntimeStringInherit:
+				case types.RuntimeStringBinary:
+					typ.Charset = types.CharsetBinary
+				case types.RuntimeStringText:
+					if typ.Charset == types.CharsetBinary {
+						typ.Charset = types.CharsetUTF8
+					}
+				default:
+					return nil, moerr.NewInvalidInputf(b.GetContext(), "invalid user variable string domain %d", domain)
+				}
+			}
+		}
 	}
 	variable := &Expr{
 		Typ: makePlan2Type(&typ),
