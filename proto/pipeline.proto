@@ -801,6 +801,16 @@ message SessionInfo {
   bool default_week_format_set = 21;
   // Effective locale captured for locale-sensitive temporal functions.
   string lc_time_names = 22;
+  // Explicitly enables MySQL's permissive string-to-floating-number prefix
+  // conversion for a sender using the current transport contract. Older
+  // payloads omit the separate contract marker below; receivers must not infer
+  // an explicit MySQL opt-in from that absence.
+  bool mysql_numeric_compatibility_mode = 24;
+  // Sender-side contract marker for strict-by-default string numeric
+  // conversion. New senders set this to 1; a zero value identifies a legacy
+  // payload whose strict-sensitive remote execution must fail closed until the
+  // sender contract is known.
+  uint32 numeric_compatibility_contract_version = 25;
 }
 
 message SessionLoggerInfo {
