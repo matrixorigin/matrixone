@@ -89,6 +89,13 @@ func TestLockProtocolCapabilitiesFollowProtocolVersion(t *testing.T) {
 		require.NoError(t, checkMethodVersion(context.Background(), "", &pb.Request{
 			Method: pb.Method_LockWriterFair,
 		}))
+		for _, method := range []pb.Method{pb.Method_BeginDrain, pb.Method_QueryDrain} {
+			require.Error(t, checkMethodVersion(context.Background(), "", &pb.Request{Method: method}))
+		}
+		rt.SetGlobalVariables(moruntime.MOProtocolVersion, defines.MORPCVersion100)
+		for _, method := range []pb.Method{pb.Method_BeginDrain, pb.Method_QueryDrain} {
+			require.NoError(t, checkMethodVersion(context.Background(), "", &pb.Request{Method: method}))
+		}
 
 		s := &service{
 			serviceID: "",
@@ -138,6 +145,19 @@ func TestOwnerLocalSnapshotRejectsTablesOwnedByAnotherService(t *testing.T) {
 	l, err = s.getOwnerLocalSnapshotLockTable(context.Background(), 1, 26710)
 	require.Error(t, err)
 	require.Nil(t, l)
+}
+
+type emptyBindResponseClient struct{ Client }
+
+func (*emptyBindResponseClient) Send(context.Context, *pb.Request) (*pb.Response, error) {
+	return acquireResponse(), nil
+}
+
+func TestGetBindResponseRejectsEmptyOwner(t *testing.T) {
+	bind, _, err := getLockTableBindWithContext(context.Background(), &emptyBindResponseClient{},
+		0, 42, 42, "requester", pb.Sharding_None)
+	require.ErrorIs(t, err, ErrLockTableBindChanged)
+	require.False(t, bind.Valid)
 }
 
 func TestLockBlockedOnRemote(t *testing.T) {

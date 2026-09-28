@@ -20,9 +20,33 @@ import (
 	"testing"
 	"time"
 
+	"github.com/matrixorigin/matrixone/pkg/common/moerr"
 	"github.com/matrixorigin/matrixone/pkg/common/morpc"
 	pb "github.com/matrixorigin/matrixone/pkg/pb/lock"
 )
+
+func TestGetBindRejectsInvalidAllocatorResult(t *testing.T) {
+	runLockTableAllocatorTest(t, time.Hour, func(a *lockTableAllocator) {
+		const serviceID = "1234567890123456789bind-owner"
+		binds := a.registerService(serviceID)
+		if !a.canGetBind(serviceID) {
+			t.Fatal("initial bind admission failed")
+		}
+		// Model the revocation between the admission check and Get. A
+		// disabled bind still passes the old status-only check, but Get must
+		// not turn its empty result into a successful RPC response.
+		binds.disable()
+		req := &pb.Request{Method: pb.Method_GetBind}
+		req.GetBind.ServiceID = serviceID
+		req.GetBind.Table = 42
+		resp := &pb.Response{Method: pb.Method_GetBind}
+		cs := &testClientSession{ctx: context.Background()}
+		a.handleGetBind(context.Background(), nil, req, resp, cs)
+		if !cs.writeCalled || !moerr.IsMoErrCode(resp.UnwrapError(), moerr.ErrNewTxnInCNRollingRestart) {
+			t.Fatalf("invalid bind was reported as success: response=%+v", resp.GetBind)
+		}
+	})
+}
 
 func TestInstanceBoundDrainColdCNNeedsFreshHeartbeat(t *testing.T) {
 	runLockTableAllocatorTest(t, time.Hour, func(a *lockTableAllocator) {

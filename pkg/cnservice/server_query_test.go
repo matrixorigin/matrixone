@@ -50,6 +50,7 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/lockservice"
 	"github.com/matrixorigin/matrixone/pkg/objectio"
 	"github.com/matrixorigin/matrixone/pkg/pb/lock"
+	"github.com/matrixorigin/matrixone/pkg/pb/metadata"
 	"github.com/matrixorigin/matrixone/pkg/pb/query"
 	"github.com/matrixorigin/matrixone/pkg/pb/statsinfo"
 	"github.com/matrixorigin/matrixone/pkg/pb/task"
@@ -675,6 +676,26 @@ func Test_service_handleGetPipelineInfo(t *testing.T) {
 			require.Equalf(t, tt.want, tt.args.resp,
 				"handleGetPipelineInfo(%v, %v, %v, %v)", tt.args.ctx, tt.args.req, tt.args.resp, nil)
 		})
+	}
+}
+
+func TestGetLockServiceIdentityDoesNotEnumerateLocks(t *testing.T) {
+	ctl := gomock.NewController(t)
+	lockSvc := mock_lock.NewMockLockService(ctl)
+	lockSvc.EXPECT().GetServiceID().Return("1234567890123456789cn").Times(2)
+	// The identity-only request must not call IterLocks. A legacy request
+	// still does, so its diagnostic lock-list behavior remains unchanged.
+	lockSvc.EXPECT().IterLocks(gomock.Any()).Times(1)
+	s := &service{metadata: metadata.CNStore{UUID: "cn"}, lockService: lockSvc}
+	for _, identityOnly := range []bool{true, false} {
+		resp := &query.Response{}
+		err := s.handleGetLockInfo(context.Background(), &query.Request{
+			GetLockInfoRequest: &query.GetLockInfoRequest{IdentityOnly: identityOnly},
+		}, resp, nil)
+		require.NoError(t, err)
+		require.Equal(t, "cn", resp.GetLockInfoResponse.CnId)
+		require.Equal(t, "1234567890123456789cn", resp.GetLockInfoResponse.LockServiceID)
+		require.Empty(t, resp.GetLockInfoResponse.LockInfoList)
 	}
 }
 

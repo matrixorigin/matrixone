@@ -452,6 +452,9 @@ message TraceSpanResponse {
 }
 
 message GetLockInfoRequest{
+  // IdentityOnly avoids enumerating and copying all local locks when a
+  // controller only needs the current lock-service incarnation.
+  bool IdentityOnly = 1;
 }
 
 message LockInfo{

@@ -1541,6 +1541,12 @@ func (l *lockTableAllocator) handleGetBind(
 		req.GetBind.Table,
 		req.GetBind.OriginTable,
 		req.GetBind.Sharding)
+	// Admission can be revoked between canGetBind and Get. In that case Get
+	// returns an invalid bind; it must never be sent as a successful binding.
+	if !resp.GetBind.LockTable.Valid || resp.GetBind.LockTable.ServiceID == "" {
+		writeResponse(l.logger, cancel, resp, moerr.NewNewTxnInCNRollingRestart(), cs)
+		return
+	}
 	writeResponse(l.logger, cancel, resp, nil, cs)
 }
 

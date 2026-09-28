@@ -389,7 +389,13 @@ func waitISCPExecutorRuntime(ctx context.Context, cnUUID string) (*iscp.ISCPTask
 
 // handleGetLockInfo sends the lock info on current cn to another cn that needs.
 func (s *service) handleGetLockInfo(ctx context.Context, req *query.Request, resp *query.Response, _ *morpc.Buffer) error {
-	resp.GetLockInfoResponse = new(query.GetLockInfoResponse)
+	resp.GetLockInfoResponse = &query.GetLockInfoResponse{
+		CnId:          s.metadata.UUID,
+		LockServiceID: s.lockService.GetServiceID(),
+	}
+	if req.GetLockInfoRequest != nil && req.GetLockInfoRequest.IdentityOnly {
+		return nil
+	}
 
 	//get lock info from lock service in current cn
 	locks := make([]*query.LockInfo, 0)
@@ -419,8 +425,6 @@ func (s *service) handleGetLockInfo(ctx context.Context, req *query.Request, res
 	s.lockService.IterLocks(getAllLocks)
 
 	// fill the response
-	resp.GetLockInfoResponse.CnId = s.metadata.UUID
-	resp.GetLockInfoResponse.LockServiceID = s.lockService.GetServiceID()
 	resp.GetLockInfoResponse.LockInfoList = locks
 	return nil
 }

@@ -104,6 +104,8 @@ var methodVersions = map[pb.Method]int64{
 	pb.Method_GetTxnWaitingListOnLockTable: defines.MORPCVersion28,
 	pb.Method_KeepRemoteLock:               defines.MORPCVersion1,
 	pb.Method_GetBind:                      defines.MORPCVersion1,
+	pb.Method_BeginDrain:                   defines.MORPCVersion100,
+	pb.Method_QueryDrain:                   defines.MORPCVersion100,
 	pb.Method_KeepLockTableBind:            defines.MORPCVersion1,
 	pb.Method_ForwardUnlock:                defines.MORPCVersion1,
 	pb.Method_SetRestartService:            defines.MORPCVersion2,
@@ -1305,6 +1307,11 @@ func getLockTableBindWithContext(
 	}
 	defer releaseResponse(resp)
 	v := resp.GetBind.LockTable
+	// An older allocator or a drain racing admission can return an empty bind.
+	// Do not publish it as a lock-table owner, even if the RPC itself succeeded.
+	if !v.Valid || v.ServiceID == "" || v.Group != group || v.Table != tableID {
+		return pb.LockTable{}, allocatorState{}, ErrLockTableBindChanged
+	}
 	return v, allocatorState{
 		id:      resp.GetBind.AllocatorID,
 		version: resp.GetBind.AllocatorVersion,
