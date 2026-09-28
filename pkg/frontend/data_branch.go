@@ -717,7 +717,7 @@ func dataBranchCreateDatabase(
 		err = admitErr
 		return
 	}
-	current, readErr := collectCloneDatabaseSource(execCtx.reqCtx, ses, bh, &stmt.CloneDatabase, &cloneDatabaseAccountResolution{opAccountId: source.opAccountId, toAccountId: source.toAccountId, snapshot: source.snapshot})
+	current, readErr := collectCloneDatabaseSource(execCtx.reqCtx, ses, bh, &stmt.CloneDatabase, &cloneDatabaseAccountResolution{opAccountId: source.opAccountId, toAccountId: source.toAccountId, snapshot: source.requestSnapshot})
 	if readErr != nil {
 		err = readErr
 		return

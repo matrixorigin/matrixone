@@ -81,7 +81,7 @@ func (c *Compile) admitLifecycleRC(names []lifecycleDatabaseName) error {
 	}
 	_, err = lockop.LockRowsForAdmissionWithContext(systemCtx, c.e, c.proc,
 		registry.GetTableID(systemCtx), registryKeys, 0, *registryKeys.Vecs[0].GetType(),
-		lock.LockMode_Shared, catalog.System_Account)
+		lock.LockMode_Exclusive, catalog.System_Account)
 	registryKeys.Vecs[0].Free(c.proc.Mp())
 	if err != nil {
 		return err
