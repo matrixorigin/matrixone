@@ -303,7 +303,7 @@ func createPublication(ctx context.Context, bh BackgroundExec, cp *tree.CreatePu
 				}
 			}
 		}
-		if ctx, dbId, dbType, err = resolvePublicationDatabaseByName(ctx, bh, dbName, targetAccountIDs); err != nil {
+		if ctx, dbId, _, err = resolvePublicationDatabaseByName(ctx, bh, dbName, targetAccountIDs); err != nil {
 			return
 		}
 		if dbType, err = lockPublicationDatabase(ctx, bh, dbName, dbId); err != nil {
@@ -522,7 +522,7 @@ func doAlterPublication(ctx context.Context, ses *Session, ap *tree.AlterPublica
 
 		if ap.DbName == "" {
 			var databaseAccountID uint32
-			if databaseAccountID, dbType, err = getDbAccountIdAndTypeById(ctx, bh, dbName, pub.DbId); err != nil {
+			if databaseAccountID, _, err = getDbAccountIdAndTypeById(ctx, bh, dbName, pub.DbId); err != nil {
 				return err
 			}
 			dbId = pub.DbId
@@ -535,7 +535,7 @@ func doAlterPublication(ctx context.Context, ses *Session, ap *tree.AlterPublica
 				}
 				slices.Sort(targetAccountIDs)
 			}
-			if databaseCtx, dbId, dbType, err = resolvePublicationDatabaseByName(ctx, bh, dbName, targetAccountIDs); err != nil {
+			if databaseCtx, dbId, _, err = resolvePublicationDatabaseByName(ctx, bh, dbName, targetAccountIDs); err != nil {
 				return err
 			}
 		}
