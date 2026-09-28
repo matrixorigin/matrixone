@@ -102,9 +102,9 @@ func marshalRemoteBatch(proc *process.Process, bat *batch.Batch, buf *bytes.Buff
 	if bat == nil {
 		return nil, moerr.NewInvalidInputNoCtx("cannot marshal a nil remote batch")
 	}
-	if bat.HasNumericBinaryLiteralMetadata() && remoteBatchWireVersion(proc) < defines.MORPCVersion100 {
+	if bat.HasNumericBinaryLiteralMetadata() && remoteBatchWireVersion(proc) < defines.MORPCVersion101 {
 		return nil, moerr.NewInvalidStateNoCtx(
-			"numeric binary-literal provenance requires MORPCVersion100 for remote dispatch")
+			"numeric binary-literal provenance requires MORPCVersion101 for remote dispatch")
 	}
 	if bat.HasGrouping() && remoteBatchWireVersion(proc) < defines.MORPCVersion87 {
 		return nil, moerr.NewInvalidStateNoCtx(

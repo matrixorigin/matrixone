@@ -1083,7 +1083,7 @@ func TestMessageReceiverSendBatchPreservesMetadataAndRejectsOldProtocol(t *testi
 	require.Equal(t, types.StringSourceSQLPrepare, decodedWithSources.Vecs[0].GetStringSourceAt(1))
 }
 
-func TestMessageReceiverSendBatchRequiresV100ForNumericBinaryLiteralProvenance(t *testing.T) {
+func TestMessageReceiverSendBatchRequiresV101ForNumericBinaryLiteralProvenance(t *testing.T) {
 	runtime := rt.ServiceRuntime("")
 	original, hadOriginal := runtime.GetGlobalVariables(rt.MOProtocolVersion)
 	t.Cleanup(func() {
@@ -1113,8 +1113,11 @@ func TestMessageReceiverSendBatchRequiresV100ForNumericBinaryLiteralProvenance(t
 		maxMessageSize:  1 << 20,
 	}
 	runtime.SetGlobalVariables(rt.MOProtocolVersion, defines.MORPCVersion99)
-	require.ErrorContains(t, receiver.sendBatch(bat), "MORPCVersion100",
-		"the sender must reject a pre-v100 downgrade before writing a batch")
+	require.ErrorContains(t, receiver.sendBatch(bat), "MORPCVersion101",
+		"the sender must reject a pre-v101 downgrade before writing a batch")
+	runtime.SetGlobalVariables(rt.MOProtocolVersion, defines.MORPCVersion100)
+	require.ErrorContains(t, receiver.sendBatch(bat), "MORPCVersion101",
+		"the sender must reject a v100 downgrade before writing a batch")
 
 	var sent *pipeline.Message
 	session.EXPECT().Write(gomock.Any(), gomock.Any()).DoAndReturn(
@@ -1122,7 +1125,7 @@ func TestMessageReceiverSendBatchRequiresV100ForNumericBinaryLiteralProvenance(t
 			sent = message.(*pipeline.Message)
 			return nil
 		})
-	runtime.SetGlobalVariables(rt.MOProtocolVersion, defines.MORPCVersion100)
+	runtime.SetGlobalVariables(rt.MOProtocolVersion, defines.MORPCVersion101)
 	require.NoError(t, receiver.sendBatch(bat))
 	require.NotNil(t, sent)
 	decoded := batch.NewOffHeapEmpty()
