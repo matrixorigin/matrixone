@@ -68,6 +68,10 @@ message LockOptions {
   // predates transaction creation. Otherwise, and for older senders, the lock
   // service falls back to SnapShotTs.
   timestamp.Timestamp PlanSnapshotTs    = 12;
+  // WriterFair prevents a Shared row request from bypassing an already queued
+  // Exclusive waiter. It is opt-in because ordinary Shared locks rely on
+  // reader barging for throughput. Range locking retains its merge semantics.
+  bool                WriterFair        = 13;
 }
 
 // LockTable describes which CN manages a Table's Locks.
@@ -138,6 +142,10 @@ enum Method {
   // BatchUnlock releases several physical tables owned by the same lock
   // service in one transaction-closure admission.
   BatchUnlock = 21;
+  // LockWriterFair admits an opted-in Shared row lock only on owners that
+  // understand writer fairness. An older owner rejects this method before
+  // admission, allowing the caller to retry the request as Exclusive.
+  LockWriterFair = 22;
 }
 
 enum Status {

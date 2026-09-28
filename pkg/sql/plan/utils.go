@@ -1080,9 +1080,9 @@ func PreparedPlanNumericFallbackParamPositions(preparePlan *Plan) []int32 {
 		_ = plan.VisitExpressionsInOwner(node, func(expr *plan.Expr) error {
 			fn := expr.GetF()
 			_ = plan.VisitExprTree(expr, func(nested *plan.Expr) error {
-				if isIntegerArgumentCast(nested) {
+				for _, source := range integerArgumentSources(nested) {
 					collectPreparedIntegerArgumentParamPositions(
-						query, int32(nodeID), nested.GetF().Args[0], positions,
+						query, int32(nodeID), source, positions,
 						make(map[[2]int32]struct{}), nil)
 				}
 				return nil
@@ -1180,7 +1180,7 @@ func collectPreparedIntegerArgumentParamPositions(
 		// even when flattening replaced its marker with a ColRef.
 		sources[expr] = struct{}{}
 	}
-	_ = plan.VisitExprTree(expr, func(nested *plan.Expr) error {
+	visitPreparedIntegerValueExpr(expr, func(nested *plan.Expr) {
 		if sources != nil && (nested.GetP() != nil || nested.GetF() != nil || nested.GetW() != nil) {
 			// Every expression on this selected-value path belongs to the integer
 			// source contract. Flattening may have replaced its marker with a
@@ -1189,11 +1189,11 @@ func collectPreparedIntegerArgumentParamPositions(
 		}
 		col := nested.GetCol()
 		if col == nil || col.ColPos < 0 {
-			return nil
+			return
 		}
 		node := query.Nodes[nodeID]
 		if node == nil {
-			return nil
+			return
 		}
 		// Aggregate and window outputs refer to local value producers, not
 		// ordinary child projections. Resolve those producers before walking
@@ -1219,7 +1219,7 @@ func collectPreparedIntegerArgumentParamPositions(
 				visited[key] = struct{}{}
 				collectPreparedIntegerArgumentParamPositions(query, nodeID, producer, positions, visited, sources)
 			}
-			return nil
+			return
 		}
 		// AGG emits grouping columns as negative-relation ColRefs. Their value
 		// lineage is the corresponding GROUP BY expression on this node, not a
@@ -1234,7 +1234,7 @@ func collectPreparedIntegerArgumentParamPositions(
 				collectPreparedIntegerArgumentParamPositions(
 					query, nodeID, node.GroupBy[col.ColPos], positions, visited, sources)
 			}
-			return nil
+			return
 		}
 		// A set output represents the same ordinal in every branch. RelPos=0
 		// is an output encoding, not proof that only the left input contributes.
@@ -1276,8 +1276,94 @@ func collectPreparedIntegerArgumentParamPositions(
 			collectPreparedIntegerArgumentParamPositions(
 				query, childID, child.ProjectList[col.ColPos], positions, visited, sources)
 		}
-		return nil
 	})
+}
+
+// Visit only value-producing descendants of an integer source. CASE/IF
+// conditions choose a result but do not supply its integer domain. A NULLIF
+// comparison's marker must not acquire its result's integer conversion.
+func visitPreparedIntegerValueExpr(expr *plan.Expr, visit func(*plan.Expr)) {
+	if expr == nil {
+		return
+	}
+	visit(expr)
+	if lit := expr.GetLit(); lit != nil {
+		visitPreparedIntegerValueExpr(lit.Src, visit)
+	}
+	if fn := expr.GetF(); fn != nil {
+		for i, arg := range fn.Args {
+			if isIntegerSelector(expr) {
+				if fn.Func.ObjName == "case" && i%2 == 0 && i != len(fn.Args)-1 {
+					continue
+				}
+				if fn.Func.ObjName != "case" && i == 0 {
+					continue
+				}
+			}
+			visitPreparedIntegerValueExpr(arg, visit)
+		}
+	}
+	if list := expr.GetList(); list != nil {
+		for _, item := range list.List {
+			visitPreparedIntegerValueExpr(item, visit)
+		}
+	}
+	if sub := expr.GetSub(); sub != nil {
+		visitPreparedIntegerValueExpr(sub.Child, visit)
+	}
+	if window := expr.GetW(); window != nil {
+		visitPreparedIntegerValueExpr(window.WindowFunc, visit)
+		for _, item := range window.PartitionBy {
+			visitPreparedIntegerValueExpr(item, visit)
+		}
+		for _, order := range window.OrderBy {
+			if order != nil {
+				visitPreparedIntegerValueExpr(order.Expr, visit)
+			}
+		}
+		if window.Frame != nil {
+			if window.Frame.Start != nil {
+				visitPreparedIntegerValueExpr(window.Frame.Start.Val, visit)
+			}
+			if window.Frame.End != nil {
+				visitPreparedIntegerValueExpr(window.Frame.End.Val, visit)
+			}
+		}
+	}
+}
+
+func preparedComparisonHasNumericLiteral(expr *plan.Expr) bool {
+	fn := expr.GetF()
+	if fn == nil || fn.Func == nil || fn.Func.ObjName != "=" || len(fn.Args) != 2 {
+		return false
+	}
+	for _, arg := range fn.Args {
+		if lit := arg.GetLit(); lit != nil && !lit.Isnull {
+			typ := types.T(arg.Typ.Id)
+			if typ.IsInteger() || typ.IsFloat() || typ.IsDecimal() {
+				return true
+			}
+		}
+	}
+	return false
+}
+
+func preparedNullValueExpr(expr *plan.Expr) bool {
+	if expr.GetLit().GetIsnull() {
+		return true
+	}
+	fn := expr.GetF()
+	return fn != nil && fn.Func != nil && fn.Func.ObjName == "cast" && len(fn.Args) == 2 &&
+		preparedNullValueExpr(fn.Args[0])
+}
+
+func preparedComparisonUsesResultMarker(positions map[int32]struct{}, result *plan.Expr) bool {
+	for position := range preparedNumericValueParamPositions(result) {
+		if _, ok := positions[position]; ok {
+			return true
+		}
+	}
+	return false
 }
 
 // PreparedPlanBitCountFallbackParamPositions returns unresolved BIT_COUNT
@@ -1454,6 +1540,8 @@ func copyPreparedNumericMetadata(metadata *plan.PreparedNumericMetadata) *plan.P
 		ProvisionalResultPeerWidth:  metadata.ProvisionalResultPeerWidth,
 		ProvisionalResultPeerScale:  metadata.ProvisionalResultPeerScale,
 		StringDomainSource:          DeepCopyExpr(metadata.StringDomainSource),
+		IfnullCommonValue:           metadata.IfnullCommonValue,
+		ProjectedCommonValue:        metadata.ProjectedCommonValue,
 	}
 }
 
@@ -2138,6 +2226,9 @@ func constantFoldWithPreparedExactSource(
 		fn.Args[i] = foldExpr
 		isVec = isVec || foldExpr.GetVec() != nil
 	}
+	if preservePreparedExactSource && rule.ContainsSqlModeDependentTemporalCall(expr) {
+		return expr, nil
+	}
 	if f.IsAgg() || f.IsWin() {
 		return expr, nil
 	}
@@ -2151,11 +2242,14 @@ func constantFoldWithPreparedExactSource(
 		return expr, nil
 	}
 
-	vec, free, err := colexec.GetReadonlyResultFromExpression(proc, expr, []*batch.Batch{bat})
+	vec, free, warned, err := rule.EvaluateConstantExpression(proc, expr, bat)
 	if err != nil {
 		return nil, err
 	}
 	defer free()
+	if warned {
+		return expr, nil
+	}
 
 	if isVec {
 		requiresDecimalProvenance, err := plan.RequiresMORPCVersion89DecimalLiteralSemantics(fn.Args)
@@ -2197,6 +2291,12 @@ func constantFoldWithPreparedExactSource(
 		c.StringSource = uint32(source) + 1
 	}
 	rule.MarkFoldedLiteralSerialized(overloadID, fn.Args, c)
+	// This annotation is itself PREPARE provenance. An enclosing expression
+	// can contain only ColRefs after relational binding, so a marker scan alone
+	// cannot decide whether a later fold must retain the peer's exact source.
+	if source, ok := rule.ProvisionalPreparedExactPeerSource(expr); ok {
+		c.Src = source
+	}
 	ec := &plan.Expr_Lit{
 		Lit: c,
 	}
@@ -4172,6 +4272,7 @@ func PreparedPlanRuntimeSpecializationRequirements(preparePlan *Plan) (needs boo
 		directResult: false,
 		skipExprs:    preparedDMLWriteExpressions(query),
 		seen:         make(map[*plan.Expr]struct{}),
+		query:        query,
 	}
 	if err := NewVisitPlan(scanPlan, []VisitPlanRule{rule}).Visit(context.Background()); err != nil {
 		// The scan is an optimization only. Preserve correctness if a newly
@@ -4340,6 +4441,8 @@ type preparedRuntimeSpecializationScanRule struct {
 	integerAssignments []int32
 	skipExprs          map[*plan.Expr]struct{}
 	seen               map[*plan.Expr]struct{}
+	query              *plan.Query
+	node               *plan.Node
 }
 
 type preparedRuntimeTextComparisonScanRule struct {
@@ -4547,6 +4650,7 @@ func (rule *preparedRuntimeTextComparisonScanRule) paramTypeIsText(position int)
 }
 
 func (rule *preparedRuntimeSpecializationScanRule) MatchNode(node *Node) bool {
+	rule.node = node
 	if node.NodeType == plan.Node_FUNCTION_SCAN && node.TableDef != nil &&
 		node.TableDef.TblFunc != nil && node.TableDef.TblFunc.Name == "generate_series" &&
 		len(node.TblFuncExprList) > 0 {
@@ -4589,6 +4693,13 @@ func (rule *preparedRuntimeSpecializationScanRule) scanExpr(expr *plan.Expr, roo
 		return
 	}
 	rule.seen[expr] = struct{}{}
+	if expr.GetPreparedNumeric().GetProvisionalResultCast() {
+		// The parameter can be behind a surviving relational projection.
+		// Its consumer still owns an execute-time overload even when this
+		// expression no longer contains the marker itself.
+		rule.needs = true
+		return
+	}
 	if pos, ok := directIntegerAssignmentParam(expr); ok {
 		rule.integerAssignments = append(rule.integerAssignments, int32(pos))
 		return
@@ -4604,6 +4715,16 @@ func (rule *preparedRuntimeSpecializationScanRule) scanExpr(expr *plan.Expr, roo
 			return
 		}
 		name := strings.ToLower(exprImpl.F.Func.GetObjName())
+		for i, arg := range exprImpl.F.Args {
+			if !preparedProjectedValueOperand(name, i, len(exprImpl.F.Args)) || arg.GetCol() == nil {
+				continue
+			}
+			if _, ok := preparedProjectedParamPosition(rule.query, rule.node, arg,
+				make(map[preparedSetOperationNullKey]bool), true); ok {
+				rule.needs = true
+				return
+			}
+		}
 		if isPreparedGeometrySRIDFunction(name) && len(exprImpl.F.Args) >= 2 {
 			if len(preparedGeometrySRIDParamPositionsInExpr(exprImpl.F.Args[len(exprImpl.F.Args)-1])) > 0 {
 				rule.needs = true
@@ -7211,7 +7332,7 @@ func replaceParamValsWithSelection(
 		}
 	}
 	projectionSpecialized, err := refreshPreparedPlanProjectionTypes(
-		ctx, plan0, originalSetOperationTypes, originalSetOperationInputTypes)
+		ctx, plan0, originalSetOperationTypes, originalSetOperationInputTypes, paramRule)
 	if err != nil {
 		return false, err
 	}
@@ -7377,6 +7498,132 @@ func attachPreparedRuntimeParamSource(expr, source *Expr) bool {
 
 type preparedPlanColumnTypeResolver func(*plan.ColRef, plan.Type) (plan.Type, bool)
 
+// A projected parameter is an exact value source only through transparent
+// output edges. A string-domain witness merely summarizes possible domains;
+// set operations, joins and computed outputs own their values independently.
+func preparedProjectedParamPosition(
+	query *plan.Query, node *plan.Node, expr *plan.Expr,
+	visited map[preparedSetOperationNullKey]bool,
+	allowJoin bool,
+) (int32, bool) {
+	if expr == nil || node == nil {
+		return 0, false
+	}
+	if param := expr.GetP(); param != nil {
+		return param.Pos, true
+	}
+	if fn := expr.GetF(); fn != nil && expr.GetPreparedNumeric().GetProvisionalResultCast() &&
+		!isExplicitPreparedCast(expr) && len(fn.Args) > 0 {
+		return preparedProjectedParamPosition(query, node, fn.Args[0], visited, allowJoin)
+	}
+	col := expr.GetCol()
+	if col == nil || col.ColPos < 0 || col.RelPos < 0 || int(col.RelPos) >= len(node.Children) {
+		return 0, false
+	}
+	return preparedProjectedOutputParamPosition(query, node.Children[col.RelPos], col.ColPos, visited, allowJoin)
+}
+
+func preparedProjectedOutputParamPosition(
+	query *plan.Query, nodeID, colPos int32,
+	visited map[preparedSetOperationNullKey]bool,
+	allowJoin bool,
+) (int32, bool) {
+	if query == nil || nodeID < 0 || int(nodeID) >= len(query.Nodes) || colPos < 0 {
+		return 0, false
+	}
+	key := preparedSetOperationNullKey{nodeID: nodeID, colPos: colPos}
+	if visited[key] {
+		return 0, false
+	}
+	visited[key] = true
+	defer delete(visited, key)
+	node := query.Nodes[nodeID]
+	if node == nil {
+		return 0, false
+	}
+	switch node.NodeType {
+	case plan.Node_PROJECT, plan.Node_FILTER, plan.Node_MATERIAL,
+		plan.Node_PARTITION, plan.Node_SORT, plan.Node_DISTINCT, plan.Node_SAMPLE:
+	case plan.Node_JOIN, plan.Node_APPLY:
+		if !allowJoin {
+			return 0, false
+		}
+	case plan.Node_AGG:
+		if !allowJoin || int(colPos) >= len(node.ProjectList) {
+			return 0, false
+		}
+		col := node.ProjectList[colPos].GetCol()
+		if col == nil || col.RelPos != -1 || col.ColPos < 0 || int(col.ColPos) >= len(node.GroupBy) {
+			return 0, false
+		}
+		return preparedProjectedParamPosition(query, node, node.GroupBy[col.ColPos], visited, allowJoin)
+	default:
+		return 0, false
+	}
+	if int(colPos) < len(node.ProjectList) && node.ProjectList[colPos] != nil {
+		return preparedProjectedParamPosition(query, node, node.ProjectList[colPos], visited, allowJoin)
+	}
+	if len(node.Children) == 1 {
+		return preparedProjectedOutputParamPosition(query, node.Children[0], colPos, visited, allowJoin)
+	}
+	return 0, false
+}
+
+type preparedPlanColumnParamResolver func(*plan.ColRef) (pos int32, domain, exact bool)
+
+// PREPARE need not insert a cast when projected TEXT markers meet in the same
+// value consumer. Their source domains still determine that consumer's overload.
+func preparedProjectedValueOperand(name string, argIndex, argCount int) bool {
+	name = canonicalPreparedResultFunctionName(strings.ToLower(name))
+	if isPreparedNumericComparison(name) {
+		return true
+	}
+	switch name {
+	case "field", "greatest", "least", "coalesce":
+		return true
+	case "between", "not_between":
+		return argCount == 3
+	case "in", "not_in":
+		return argIndex == 0
+	case "if", "ifnull", "case":
+		return preparedSQLExecuteNumericResultValueArg(name, argIndex, argCount)
+	default:
+		return false
+	}
+}
+
+func recoverPreparedProjectedValueOperand(
+	ctx context.Context,
+	source *plan.Expr,
+	resolveColumnParam preparedPlanColumnParamResolver,
+	paramRule *ResetParamRefRule,
+) (*plan.Expr, bool, error) {
+	if source == nil || source.GetCol() == nil || !types.T(source.Typ.Id).IsMySQLString() {
+		return source, false, nil
+	}
+	pos, domain, exact := resolveColumnParam(source.GetCol())
+	if !domain {
+		return source, false, nil
+	}
+	runtimeSource, known, err := paramRule.preparedRuntimeSourceExpr(int(pos), false)
+	if err != nil || !known {
+		return source, false, err
+	}
+	if exact && types.T(runtimeSource.Typ.Id) == types.T_any && runtimeSource.GetLit().GetIsnull() {
+		return runtimeSource, true, nil
+	}
+	if types.T(runtimeSource.Typ.Id) == types.T_any {
+		return source, false, nil
+	}
+	target := runtimeSource.Typ
+	target.NotNullable = source.Typ.NotNullable
+	if reflect.DeepEqual(source.Typ, target) {
+		return source, false, nil
+	}
+	recovered, err := appendCastBeforeExpr(ctx, source, target)
+	return recovered, err == nil, err
+}
+
 // refreshPreparedPlanProjectionExprType propagates execute-time source types
 // through one plan expression. When an input domain changes, its enclosing
 // function must be rebound too; otherwise the plan can pair a runtime vector
@@ -7385,6 +7632,8 @@ func refreshPreparedPlanProjectionExprType(
 	ctx context.Context,
 	expr *plan.Expr,
 	resolveColumnType preparedPlanColumnTypeResolver,
+	resolveColumnParam preparedPlanColumnParamResolver,
+	paramRule *ResetParamRefRule,
 ) (bool, error) {
 	if expr == nil {
 		return false, nil
@@ -7421,7 +7670,7 @@ func refreshPreparedPlanProjectionExprType(
 				// rebinding the conversion until the aggregate can choose again
 				// between its numeric and binary input domains.
 				argChanged, err := refreshPreparedPlanProjectionExprType(
-					ctx, arg.GetF().Args[0], resolveColumnType)
+					ctx, arg.GetF().Args[0], resolveColumnType, resolveColumnParam, paramRule)
 				if err != nil {
 					return false, err
 				}
@@ -7429,11 +7678,66 @@ func refreshPreparedPlanProjectionExprType(
 				bitwiseAggregateSourceChanged = bitwiseAggregateSourceChanged || argChanged
 				continue
 			}
-			argChanged, err := refreshPreparedPlanProjectionExprType(ctx, arg, resolveColumnType)
+			argChanged, err := refreshPreparedPlanProjectionExprType(ctx, arg, resolveColumnType, resolveColumnParam, paramRule)
 			if err != nil {
 				return false, err
 			}
 			changed = changed || argChanged
+			if !preparedProjectedValueOperand(functionName, i, len(exprImpl.F.Args)) {
+				continue
+			}
+			recovered, recoveredChanged, err := recoverPreparedProjectedValueOperand(
+				ctx, arg, resolveColumnParam, paramRule)
+			if err != nil {
+				return false, err
+			}
+			if recoveredChanged {
+				exprImpl.F.Args[i] = recovered
+				changed = true
+			}
+		}
+
+		// This envelope was selected for an unresolved source, not requested by
+		// SQL. Only a transparent projected marker can provide its runtime domain;
+		// a set/common-result column must use its producer's reconciled type.
+		if expr.GetPreparedNumeric().GetProvisionalResultCast() && functionName == "cast" &&
+			!isExplicitPreparedCast(expr) && len(exprImpl.F.Args) == 2 {
+			source, _, err := recoverPreparedProjectedValueOperand(
+				ctx, exprImpl.F.Args[0], resolveColumnParam, paramRule)
+			if err != nil {
+				return false, err
+			}
+			*expr = *source
+			return true, nil
+		}
+
+		// A grouped subquery may acquire its numeric domain only after the
+		// projection refresh. Reconcile IFNULL's common value from those
+		// refreshed sources rather than retaining PREPARE's TEXT envelopes.
+		if (expr.GetPreparedNumeric().GetIfnullCommonValue() || expr.GetPreparedNumeric().GetProjectedCommonValue()) &&
+			types.T(expr.Typ.Id).IsMySQLString() &&
+			len(exprImpl.F.Args) == 3 {
+			args := DeepCopyExprList(exprImpl.F.Args)
+			for _, i := range []int{1, 2} {
+				args[i] = stripIntegerSelectionReconciliation(args[i])
+				if args[i].GetPreparedNumeric().GetProvisionalResultPeer() {
+					var err error
+					args[i], err = restorePreparedResultPeer(ctx, args[i])
+					if err != nil {
+						return false, err
+					}
+				}
+			}
+			bound, err := BindFuncExprImplByPlanExpr(ctx, functionName, args)
+			if err != nil {
+				return false, err
+			}
+			if !types.T(bound.Typ.Id).IsMySQLString() {
+				preserveReboundFunctionMetadata(exprImpl.F, bound.GetF())
+				expr.Typ = bound.Typ
+				expr.Expr = bound.Expr
+				return true, nil
+			}
 		}
 
 		argsChanged := false
@@ -7443,13 +7747,33 @@ func refreshPreparedPlanProjectionExprType(
 				break
 			}
 		}
-		if (!argsChanged && !bitwiseAggregateSourceChanged) || exprImpl.F.Func == nil || functionName == "" ||
-			isExplicitPreparedCast(expr) {
+		staleTextIntegerCast := false
+		if isIntegerArgumentCast(expr) && len(exprImpl.F.Args) == 2 && exprImpl.F.Func != nil {
+			_, overload := function.DecodeOverloadID(exprImpl.F.Func.Obj)
+			staleTextIntegerCast = overload == function.TextIntegerBitsCastOverload &&
+				types.T(exprImpl.F.Args[0].Typ.Id) != types.T_any &&
+				!types.T(exprImpl.F.Args[0].Typ.Id).IsMySQLString()
+		}
+		if (!changed && !argsChanged && !bitwiseAggregateSourceChanged && !staleTextIntegerCast) ||
+			exprImpl.F.Func == nil || functionName == "" || (isExplicitPreparedCast(expr) && !staleTextIntegerCast) {
 			return changed, nil
 		}
 
 		originalType := expr.Typ
 		rebindArgs := DeepCopyExprList(exprImpl.F.Args)
+		for i, arg := range rebindArgs {
+			if arg.GetPreparedNumeric().GetProvisionalResultPeer() {
+				if source, ok := provisionalNumericPeerSource(arg); ok {
+					rebindArgs[i] = source
+				} else {
+					var err error
+					rebindArgs[i], err = restorePreparedResultPeer(ctx, arg)
+					if err != nil {
+						return false, err
+					}
+				}
+			}
+		}
 		if isPreparedBitwiseAggregate(functionName) && len(rebindArgs) > 0 &&
 			isBitwiseAggregatePrivateCast(rebindArgs[0]) {
 			// Re-run the aggregate binder against the refreshed source domain.
@@ -7457,13 +7781,26 @@ func refreshPreparedPlanProjectionExprType(
 			// their native byte-oriented path.
 			rebindArgs[0] = DeepCopyExpr(rebindArgs[0].GetF().Args[0])
 		}
-		rebound, err := bindPreparedFuncExprImplByPlanExpr(
-			ctx,
-			expr,
-			functionName,
-			rebindArgs,
-			nil,
-		)
+		if (functionName == "in" || functionName == "not_in") && len(rebindArgs) == 2 &&
+			rebindArgs[1].GetVec() != nil {
+			values, ok := materializeInRHSValues(rebindArgs[1], nil)
+			if !ok || len(values) == 0 {
+				return false, moerr.NewInternalError(ctx, "cannot decode prepared IN value list")
+			}
+			rebindArgs[1].Expr = &plan.Expr_List{List: &plan.ExprList{List: values}}
+		}
+		var rebound *plan.Expr
+		var err error
+		if staleTextIntegerCast {
+			// A projected aggregate can change from provisional TEXT to a
+			// numeric domain after its producer has been specialized. CAST7
+			// is text-only; select the numeric integer conversion here.
+			target := function.IntegerBitSourceTarget(types.T(rebindArgs[0].Typ.Id), rebindArgs[0].GetLit().GetIsBin())
+			rebound, err = appendIntegerArgument(ctx, rebindArgs[0], target, false)
+		}
+		if rebound == nil && err == nil {
+			rebound, err = bindPreparedFuncExprImplByPlanExpr(ctx, expr, functionName, rebindArgs, nil)
+		}
 		if err != nil {
 			return false, err
 		}
@@ -7475,14 +7812,14 @@ func refreshPreparedPlanProjectionExprType(
 		}
 		expr.Typ = rebound.Typ
 		expr.Expr = rebound.Expr
-		return changed || !reflect.DeepEqual(expr.Typ, originalType) || argsChanged, nil
+		return changed || !reflect.DeepEqual(expr.Typ, originalType) || argsChanged || staleTextIntegerCast, nil
 
 	case *plan.Expr_List:
 		if exprImpl.List == nil {
 			return false, nil
 		}
 		for _, item := range exprImpl.List.List {
-			itemChanged, err := refreshPreparedPlanProjectionExprType(ctx, item, resolveColumnType)
+			itemChanged, err := refreshPreparedPlanProjectionExprType(ctx, item, resolveColumnType, resolveColumnParam, paramRule)
 			if err != nil {
 				return false, err
 			}
@@ -7494,7 +7831,7 @@ func refreshPreparedPlanProjectionExprType(
 			return false, nil
 		}
 		if exprImpl.W.WindowFunc != nil {
-			windowFuncChanged, err := refreshPreparedPlanProjectionExprType(ctx, exprImpl.W.WindowFunc, resolveColumnType)
+			windowFuncChanged, err := refreshPreparedPlanProjectionExprType(ctx, exprImpl.W.WindowFunc, resolveColumnType, resolveColumnParam, paramRule)
 			if err != nil {
 				return false, err
 			}
@@ -7505,7 +7842,7 @@ func refreshPreparedPlanProjectionExprType(
 			}
 		}
 		for _, item := range exprImpl.W.PartitionBy {
-			itemChanged, err := refreshPreparedPlanProjectionExprType(ctx, item, resolveColumnType)
+			itemChanged, err := refreshPreparedPlanProjectionExprType(ctx, item, resolveColumnType, resolveColumnParam, paramRule)
 			if err != nil {
 				return false, err
 			}
@@ -7515,7 +7852,7 @@ func refreshPreparedPlanProjectionExprType(
 			if order == nil {
 				continue
 			}
-			orderChanged, err := refreshPreparedPlanProjectionExprType(ctx, order.Expr, resolveColumnType)
+			orderChanged, err := refreshPreparedPlanProjectionExprType(ctx, order.Expr, resolveColumnType, resolveColumnParam, paramRule)
 			if err != nil {
 				return false, err
 			}
@@ -7526,7 +7863,7 @@ func refreshPreparedPlanProjectionExprType(
 				if bound == nil {
 					continue
 				}
-				boundChanged, err := refreshPreparedPlanProjectionExprType(ctx, bound.Val, resolveColumnType)
+				boundChanged, err := refreshPreparedPlanProjectionExprType(ctx, bound.Val, resolveColumnType, resolveColumnParam, paramRule)
 				if err != nil {
 					return false, err
 				}
@@ -7771,7 +8108,11 @@ func preparedSetOperationCommonType(
 		hasDecimalInput = hasDecimalInput || typ.Oid.IsDecimal()
 	}
 	if len(argTypes) == 0 {
-		return types.Type{}, false, nil
+		// Domainless NULLs have no common value domain to infer. Keep the
+		// prepared set's physical output type so no ANY vector reaches a set
+		// operator or spool; a consumer can still treat every value as NULL.
+		original := makeTypeByPlan2Expr(&plan.Expr{Typ: currentOutputType})
+		return original, original.Oid != types.T_any, nil
 	}
 	if pureCharType, ok := setOperationPureCharCommonType(argTypes); ok {
 		return pureCharType, true, nil
@@ -8065,6 +8406,7 @@ func reconcilePreparedSetOperationInputs(
 	childProjectLists [][]*plan.Expr,
 	originalOutputTypes map[*plan.Node][]plan.Type,
 	originalInputTypes map[preparedSetOperationInputKey]plan.Type,
+	paramRule *ResetParamRefRule,
 ) (bool, []bool, error) {
 	if !isPreparedSetOperationNode(node.NodeType) || len(node.Children) < 2 || len(node.ProjectList) == 0 {
 		return false, nil, nil
@@ -8103,6 +8445,17 @@ func reconcilePreparedSetOperationInputs(
 					return false, nil, err
 				}
 				sourceExpressions[branchIdx][colPos] = source
+			}
+			if pos, direct := paramRule.setArmParam[preparedSetOperationInputKey{
+				node: node, branchIdx: branchIdx, colPos: colPos,
+			}]; direct {
+				if source, known, err := paramRule.preparedRuntimeSourceExpr(int(pos), false); err != nil {
+					return false, nil, err
+				} else if known {
+					sourceExpressions[branchIdx][colPos] = source
+					pureNullColumns[branchIdx][colPos] = types.T(source.Typ.Id) == types.T_any &&
+						source.GetLit().GetIsnull()
+				}
 			}
 			if colPos < len(node.ProjectList) && sourceExpressions[branchIdx][colPos] != nil {
 				originalType, ok := originalInputTypes[preparedSetOperationInputKey{
@@ -8294,6 +8647,7 @@ func refreshPreparedPlanProjectionTypes(
 	plan0 *Plan,
 	originalSetOperationTypes map[*plan.Node][]plan.Type,
 	originalSetOperationInputTypes map[preparedSetOperationInputKey]plan.Type,
+	paramRule *ResetParamRefRule,
 ) (bool, error) {
 	query := plan0.GetQuery()
 	if query == nil {
@@ -8329,7 +8683,7 @@ func refreshPreparedPlanProjectionTypes(
 		}
 		setOperationSpecialized, _, err := reconcilePreparedSetOperationInputs(
 			ctx, query, node, childProjectLists, originalSetOperationTypes,
-			originalSetOperationInputTypes,
+			originalSetOperationInputTypes, paramRule,
 		)
 		if err != nil {
 			return err
@@ -8407,8 +8761,19 @@ func refreshPreparedPlanProjectionTypes(
 			}
 			return childProjectList[col.ColPos].Typ, true
 		}
+		resolveColumnParam := func(col *plan.ColRef) (int32, bool, bool) {
+			if col == nil || col.RelPos < 0 || int(col.RelPos) >= len(node.Children) {
+				return 0, false, false
+			}
+			key := preparedSetOperationNullKey{
+				nodeID: node.Children[col.RelPos], colPos: col.ColPos,
+			}
+			pos, domain := paramRule.projectedParamDomain[key]
+			_, exact := paramRule.exactProjectedParam[key]
+			return pos, domain, exact
+		}
 		refreshExpr := func(expr *plan.Expr) error {
-			changed, err := refreshPreparedPlanProjectionExprType(ctx, expr, resolveColumnType)
+			changed, err := refreshPreparedPlanProjectionExprType(ctx, expr, resolveColumnType, resolveColumnParam, paramRule)
 			specialized = specialized || changed
 			return err
 		}

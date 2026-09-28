@@ -420,14 +420,14 @@ func Test_GetFunctionByName(t *testing.T) {
 			shouldErr:  false,
 			requireFid: DIV, requireOid: 0,
 			shouldCast: true, requireTyp: []types.Type{types.T_decimal128.ToType(), types.T_decimal128.ToType()},
-			requireRet: types.New(types.T_decimal128, 38, 6),
+			requireRet: types.New(types.T_decimal128, 24, 4),
 		},
 		{
 			name: "/", args: []types.Type{types.T_int64.ToType(), types.T_uint64.ToType()},
 			shouldErr:  false,
 			requireFid: DIV, requireOid: 0,
 			shouldCast: true, requireTyp: []types.Type{types.T_decimal128.ToType(), types.T_decimal128.ToType()},
-			requireRet: types.New(types.T_decimal128, 38, 6),
+			requireRet: types.New(types.T_decimal128, 23, 4),
 		},
 
 		{
@@ -610,6 +610,29 @@ func TestMakeTimeReturnScale(t *testing.T) {
 	})
 	require.NoError(t, err)
 	require.Equal(t, types.T_time.ToTypeWithScale(6), defaultFloatResult.retType)
+
+	variableFloatResult, err := GetFunctionByName(proc.Ctx, "maketime", []types.Type{
+		types.T_int64.ToType(), types.T_int64.ToType(), types.T_float64.ToType(),
+	})
+	require.NoError(t, err)
+	require.Equal(t, types.T_time.ToTypeWithScale(6), variableFloatResult.retType,
+		"a FLOAT variable can contain fractional seconds even when its plan Scale is zero")
+}
+
+func TestTimeArithmeticFloatDurationKeepsFractionalPrecision(t *testing.T) {
+	proc := testutil.NewProcess(t)
+	for _, name := range []string{"addtime", "subtime"} {
+		for _, floatType := range []types.T{types.T_float32, types.T_float64} {
+			result, err := GetFunctionByName(proc.Ctx, name, []types.Type{
+				types.T_time.ToType(), floatType.ToType(),
+			})
+			require.NoError(t, err)
+			require.True(t, result.needCast)
+			require.Equal(t, types.T_varchar, result.targetTypes[1].Oid)
+			require.Equal(t, int32(6), result.targetTypes[1].Scale)
+			require.Equal(t, int32(6), result.retType.Scale)
+		}
+	}
 }
 
 func TestSecToTimeReturnScale(t *testing.T) {
@@ -643,6 +666,12 @@ func TestSecToTimeReturnScale(t *testing.T) {
 	})
 	require.NoError(t, err)
 	require.Equal(t, types.T_time.ToTypeWithScale(6), floatResult.retType)
+
+	variableFloatResult, err := GetFunctionByName(proc.Ctx, "sec_to_time", []types.Type{
+		types.T_float64.ToType(),
+	})
+	require.NoError(t, err)
+	require.Equal(t, types.T_time.ToTypeWithScale(6), variableFloatResult.retType)
 }
 
 func TestUnixTimestampTemporalReturnScale(t *testing.T) {
@@ -669,6 +698,15 @@ func TestUnixTimestampTemporalReturnScale(t *testing.T) {
 	require.True(t, fractionalDatetimeResult.needCast)
 	require.Equal(t, []types.Type{types.T_timestamp.ToTypeWithScale(6)}, fractionalDatetimeResult.targetTypes)
 	require.Equal(t, types.New(types.T_decimal128, 38, 6), fractionalDatetimeResult.retType)
+}
+
+func requireLegacyMakeTimeSignature(t *testing.T, args []types.T) {
+	t.Helper()
+	signatures := make([][]types.T, 0, MakeTimeIntegerFloatOverload)
+	for _, ov := range allSupportedFunctions[MAKETIME].Overloads[:MakeTimeIntegerFloatOverload] {
+		signatures = append(signatures, ov.args)
+	}
+	require.Contains(t, signatures, args)
 }
 
 func TestMakeTimeDecimalHourMinuteUseExactOverloads(t *testing.T) {
@@ -703,7 +741,12 @@ func TestMakeTimeDecimalHourMinuteUseExactOverloads(t *testing.T) {
 		require.True(t, result.needCast)
 		selected, err := GetFunctionById(proc.Ctx, result.GetEncodedOverloadID())
 		require.NoError(t, err)
-		require.Equal(t, test.args, selected.args)
+		requireLegacyMakeTimeSignature(t, test.args)
+		second := types.T_varchar
+		if test.inputs[2].Oid.IsInteger() {
+			second = types.T_int64
+		}
+		require.Equal(t, []types.T{types.T_int64, types.T_int64, second}, selected.args)
 	}
 }
 
@@ -736,7 +779,8 @@ func TestMakeTimeDecimal256OverloadMatrix(t *testing.T) {
 				require.NoError(t, err)
 				selected, err := GetFunctionById(proc.Ctx, result.GetEncodedOverloadID())
 				require.NoError(t, err)
-				require.Equal(t, []types.T{hour.target, minute.target, second.target}, selected.args)
+				requireLegacyMakeTimeSignature(t, []types.T{hour.target, minute.target, second.target})
+				require.Equal(t, []types.T{types.T_int64, types.T_int64, second.input.Oid}, selected.args)
 			}
 		}
 	}
@@ -753,8 +797,8 @@ func TestMakeTimeStringSecondUsesExactOverload(t *testing.T) {
 	require.NoError(t, err)
 	require.True(t, result.needCast)
 	require.Len(t, result.targetTypes, 3)
-	require.Equal(t, types.T_float64, result.targetTypes[0].Oid)
-	require.Equal(t, types.T_float64, result.targetTypes[1].Oid)
+	require.Equal(t, types.T_int64, result.targetTypes[0].Oid)
+	require.Equal(t, types.T_int64, result.targetTypes[1].Oid)
 	require.Equal(t, types.T_varchar, result.targetTypes[2].Oid)
 	require.Equal(t, int32(-1), result.targetTypes[2].Scale)
 	require.Equal(t, types.T_time.ToTypeWithScale(6), result.retType)
@@ -1097,8 +1141,6 @@ func TestMakeTimeStringArgumentTargets(t *testing.T) {
 		name         string
 		inputs       []types.Type
 		overloadArgs []types.T
-		needCast     bool
-		targets      []types.Type
 		returnType   types.Type
 	}{
 		{
@@ -1115,11 +1157,7 @@ func TestMakeTimeStringArgumentTargets(t *testing.T) {
 				types.T_varchar.ToType(), types.T_varchar.ToType(), types.T_varchar.ToType(),
 			},
 			overloadArgs: []types.T{types.T_varchar, types.T_varchar, types.T_varchar},
-			needCast:     true,
-			targets: []types.Type{
-				types.T_varchar.ToType(), types.T_varchar.ToType(), types.T_varchar.ToTypeWithScale(-1),
-			},
-			returnType: types.T_time.ToTypeWithScale(6),
+			returnType:   types.T_time.ToTypeWithScale(6),
 		},
 		{
 			name: "only hour is varchar",
@@ -1127,7 +1165,7 @@ func TestMakeTimeStringArgumentTargets(t *testing.T) {
 				types.T_varchar.ToType(), scaledFloat, scaledFloat,
 			},
 			overloadArgs: []types.T{types.T_varchar, types.T_float64, types.T_float64},
-			returnType:   types.T_time.ToTypeWithScale(1),
+			returnType:   types.T_time.ToTypeWithScale(6),
 		},
 		{
 			name: "only minute is varchar",
@@ -1135,7 +1173,7 @@ func TestMakeTimeStringArgumentTargets(t *testing.T) {
 				scaledFloat, types.T_varchar.ToType(), scaledFloat,
 			},
 			overloadArgs: []types.T{types.T_float64, types.T_varchar, types.T_float64},
-			returnType:   types.T_time.ToTypeWithScale(1),
+			returnType:   types.T_time.ToTypeWithScale(6),
 		},
 	}
 
@@ -1143,13 +1181,18 @@ func TestMakeTimeStringArgumentTargets(t *testing.T) {
 		t.Run(test.name, func(t *testing.T) {
 			result, err := GetFunctionByName(proc.Ctx, "maketime", test.inputs)
 			require.NoError(t, err)
-			require.Equal(t, test.needCast, result.needCast)
-			require.Equal(t, test.targets, result.targetTypes)
+			requireLegacyMakeTimeSignature(t, test.overloadArgs)
+			require.True(t, result.needCast)
+			targets := []types.Type{types.T_int64.ToType(), types.T_int64.ToType(), test.inputs[2]}
+			if targets[2].Oid == types.T_varchar {
+				targets[2].Scale = -1
+			}
+			require.Equal(t, targets, result.targetTypes)
 			require.Equal(t, test.returnType, result.retType)
 
 			selected, err := GetFunctionById(proc.Ctx, result.GetEncodedOverloadID())
 			require.NoError(t, err)
-			require.Equal(t, test.overloadArgs, selected.args)
+			require.Equal(t, []types.T{types.T_int64, types.T_int64, targets[2].Oid}, selected.args)
 		})
 	}
 }
@@ -1170,7 +1213,15 @@ func TestMakeTimeBinaryArgumentsUseNumericOverloads(t *testing.T) {
 			result, err := GetFunctionByName(proc.Ctx, "maketime", inputs)
 			require.NoError(t, err)
 			require.True(t, result.needCast)
-			require.Equal(t, types.T_int64, result.targetTypes[position].Oid)
+			if position == 2 {
+				// Seconds are not an integer parameter. Binary strings may
+				// contain fractions and require the floating numeric path.
+				require.Equal(t, types.T_float64, result.targetTypes[position].Oid)
+				require.Equal(t, int32(-1), result.targetTypes[position].Scale)
+				require.Equal(t, types.T_time.ToTypeWithScale(6), result.retType)
+			} else {
+				require.Equal(t, types.T_int64, result.targetTypes[position].Oid)
+			}
 		}
 	}
 }
@@ -1334,6 +1385,100 @@ func TestDeduceNotNullableKeepsNullSynthesizingFunctionsNullable(t *testing.T) {
 			}
 			require.False(t, DeduceNotNullable(EncodeOverloadID(tt.fid, 0), args))
 		})
+	}
+}
+
+func TestTypedDateConversionNullability(t *testing.T) {
+	for _, sourceType := range []types.T{types.T_date, types.T_datetime} {
+		source := &plan.Expr{Typ: plan.Type{Id: int32(sourceType), NotNullable: true}}
+		target := &plan.Expr{Typ: plan.Type{Id: int32(types.T_date), NotNullable: true}}
+		dateOverload := int32(0)
+		if sourceType == types.T_datetime {
+			dateOverload = 2
+		}
+		require.False(t, DeduceNotNullable(EncodeOverloadID(DATE, dateOverload), []*plan.Expr{source}))
+		require.False(t, DeduceNotNullable(EncodeOverloadID(CAST, 1), []*plan.Expr{source, target}))
+		require.True(t, DeduceNotNullable(EncodeOverloadID(CAST, 0), []*plan.Expr{source, target}))
+		require.True(t, DeduceNotNullable(EncodeOverloadID(CAST, 3), []*plan.Expr{source, target}))
+	}
+	dateSource := &plan.Expr{Typ: plan.Type{Id: int32(types.T_date), NotNullable: true}}
+	datetimeTarget := &plan.Expr{Typ: plan.Type{Id: int32(types.T_datetime), NotNullable: true}}
+	require.True(t, DeduceNotNullable(EncodeOverloadID(CAST, 1), []*plan.Expr{dateSource, datetimeTarget}))
+	dateSource.Typ.NotNullable = false
+	require.False(t, DeduceNotNullable(EncodeOverloadID(CAST, 1), []*plan.Expr{dateSource, datetimeTarget}))
+}
+
+func TestTemporalArithmeticOverflowNullability(t *testing.T) {
+	notNull := &plan.Expr{Typ: plan.Type{NotNullable: true}}
+	for _, tt := range []struct {
+		name        string
+		fid         int32
+		first, last int32
+	}{
+		{"addtime", ADDTIME, 0, 5},
+		{"addtime new", ADDTIME, 9, 11},
+		{"subtime", SUBTIME, 0, 5},
+		{"subtime new", SUBTIME, 11, 15},
+		{"timediff", TIMEDIFF, 0, 8},
+		{"date_add", DATE_ADD, 0, 15},
+		{"date_sub", DATE_SUB, 0, 15},
+		{"maketime", MAKETIME, 0, 38},
+		{"timestampadd", TIMESTAMPADD, 0, 7},
+	} {
+		t.Run(tt.name, func(t *testing.T) {
+			for id := tt.first; id <= tt.last; id++ {
+				op, err := GetFunctionById(t.Context(), EncodeOverloadID(tt.fid, id))
+				require.NoError(t, err)
+				args := make([]*plan.Expr, len(op.args))
+				for i := range args {
+					args[i] = notNull
+				}
+				require.False(t, DeduceNotNullable(EncodeOverloadID(tt.fid, id), args), "overload %d", id)
+			}
+		})
+	}
+	for _, tt := range []struct {
+		fid int32
+		ids []int32
+	}{
+		{ADDTIME, []int32{6, 7, 8}},
+		{SUBTIME, []int32{6, 7, 8, 9, 10}},
+	} {
+		for _, id := range tt.ids {
+			op, err := GetFunctionById(t.Context(), EncodeOverloadID(tt.fid, id))
+			require.NoError(t, err)
+			args := make([]*plan.Expr, len(op.args))
+			for i := range args {
+				args[i] = notNull
+			}
+			require.True(t, DeduceNotNullable(EncodeOverloadID(tt.fid, id), args), "legacy overload %d", id)
+		}
+	}
+}
+
+func TestTemporalExtractionNullability(t *testing.T) {
+	// Enumerate registered overloads so text aliases and optional WEEK modes
+	// cannot silently inherit a stronger guarantee than their executor.
+	for _, fid := range []int32{EXTRACT, YEAR, MONTH, QUARTER, DAY, DAYOFMONTH,
+		HOUR, MINUTE, SECOND, MICROSECOND, WEEK, WEEKOFYEAR, WEEKDAY, YEARWEEK,
+		DAYOFWEEK, DAYOFYEAR, DAYNAME, MONTHNAME, FROM_DAYS} {
+		for _, op := range allSupportedFunctions[fid].Overloads {
+			args := make([]*plan.Expr, len(op.args))
+			for i, typ := range op.args {
+				args[i] = &plan.Expr{Typ: plan.Type{Id: int32(typ), NotNullable: true}}
+			}
+			want := false
+			switch fid {
+			case EXTRACT:
+				want = op.overloadId < 5 // persisted legacy executors
+			case YEAR, MONTH, QUARTER, DAY, DAYOFMONTH, HOUR, MINUTE, SECOND, MICROSECOND:
+				want = !op.args[0].IsMySQLString()
+			}
+			id := EncodeOverloadID(fid, int32(op.overloadId))
+			require.Equal(t, want, DeduceNotNullable(id, args), "function %d overload %d", fid, op.overloadId)
+			args[0].Typ.NotNullable = false
+			require.False(t, DeduceNotNullable(id, args), "nullable input: function %d overload %d", fid, op.overloadId)
+		}
 	}
 }
 
