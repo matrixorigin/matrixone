@@ -633,6 +633,8 @@ func Test_handleCreateCdc(t *testing.T) {
 	db, mock, err := sqlmock.New()
 	assert.NoError(t, err)
 
+	mock.ExpectQuery("SELECT pending_source_table_id, target_identity FROM mo_catalog.mo_cdc_watermark LIMIT 0").
+		WillReturnRows(sqlmock.NewRows([]string{"pending_source_table_id", "target_identity"}))
 	sql4 := "INSERT INTO mo_catalog.mo_cdc_task .*"
 	mock.ExpectExec(sql4).WillReturnResult(sqlmock.NewResult(1, 1))
 
@@ -1533,6 +1535,8 @@ func TestRegisterCdcExecutor(t *testing.T) {
 			cdc.CDCTaskExtraOptions_GenerationProtocol, cdc.CDCGenerationAwareProtocolV2,
 		),
 	))
+	mock.ExpectQuery("SELECT pending_source_table_id, target_identity FROM mo_catalog.mo_cdc_watermark LIMIT 0").
+		WillReturnRows(sqlmock.NewRows([]string{"pending_source_table_id", "target_identity"}))
 
 	sql7 := "UPDATE `mo_catalog`.`mo_cdc_task` SET state = 'running', err_msg = '' WHERE 1=1 AND account_id = 0 AND task_id = '00000000-0000-0000-0000-000000000000' AND state = 'running'"
 	mock.ExpectExec(sql7).WillReturnResult(sqlmock.NewResult(1, 1))

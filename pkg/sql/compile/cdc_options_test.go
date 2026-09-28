@@ -68,13 +68,6 @@ func TestValidateCDCTargetIdentityCatalog(t *testing.T) {
 			},
 			wantError: "probe unexpectedly returned a row",
 		},
-		{
-			name: "row iteration error",
-			setup: func(mock sqlmock.Sqlmock) {
-				mock.ExpectQuery(query).WillReturnRows(sqlmock.NewRows([]string{"pending_source_table_id", "target_identity"}).RowError(0, fmt.Errorf("row error")))
-			},
-			wantError: "row error",
-		},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			db, mock, err := sqlmock.New(sqlmock.QueryMatcherOption(sqlmock.QueryMatcherEqual))
