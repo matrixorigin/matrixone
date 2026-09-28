@@ -16,6 +16,7 @@ package multi_update
 
 import (
 	"bytes"
+	"fmt"
 	"testing"
 
 	"github.com/matrixorigin/matrixone/pkg/catalog"
@@ -23,8 +24,10 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/container/batch"
 	"github.com/matrixorigin/matrixone/pkg/container/types"
 	"github.com/matrixorigin/matrixone/pkg/container/vector"
+	"github.com/matrixorigin/matrixone/pkg/pb/partition"
 	"github.com/matrixorigin/matrixone/pkg/pb/plan"
 	"github.com/matrixorigin/matrixone/pkg/sql/features"
+	sqlplan "github.com/matrixorigin/matrixone/pkg/sql/plan"
 	"github.com/matrixorigin/matrixone/pkg/testutil"
 	"github.com/stretchr/testify/require"
 )
@@ -650,4 +653,49 @@ func TestMultiUpdateCtxClonePartitionCols(t *testing.T) {
 	require.NotSame(t, original.TableDef, cloned.TableDef)
 	cloned.ObjRef.ObjName = "modified"
 	require.Equal(t, "t1", original.ObjRef.ObjName, "original ObjRef should be unchanged")
+}
+
+func TestPartitionUpdatePrunesAbsoluteColumnAfterRowID(t *testing.T) {
+	for _, rowIDFirst := range []bool{false, true} {
+		t.Run(fmt.Sprint(rowIDFirst), func(t *testing.T) {
+			proc := testutil.NewProcess(t)
+			defer proc.Free()
+			input := batch.NewWithSize(3)
+			defer input.Clean(proc.Mp())
+			input.Vecs[0] = vector.NewVec(types.T_int64.ToType())
+			if rowIDFirst {
+				input.Vecs[0] = vector.NewVec(types.T_Rowid.ToType())
+			}
+			input.Vecs[1] = vector.NewVec(types.T_int64.ToType())
+			input.Vecs[2] = vector.NewVec(types.T_int32.ToType())
+			for _, key := range []int32{1, 2, 1} {
+				if rowIDFirst {
+					require.NoError(t, vector.AppendFixed(input.Vecs[0], types.Rowid{}, false, proc.Mp()))
+				} else {
+					require.NoError(t, vector.AppendFixed(input.Vecs[0], int64(99), false, proc.Mp()))
+				}
+				require.NoError(t, vector.AppendFixed(input.Vecs[1], int64(99), false, proc.Mp()))
+				require.NoError(t, vector.AppendFixed(input.Vecs[2], key, false, proc.Mp()))
+			}
+			input.SetRowCount(3)
+			meta := partition.PartitionMetadata{}
+			for _, key := range []int32{1, 2} {
+				col := &plan.Expr{Typ: plan.Type{Id: int32(types.T_int32)}, Expr: &plan.Expr_Col{Col: &plan.ColRef{ColPos: 0}}}
+				value := &plan.Expr{Typ: col.Typ, Expr: &plan.Expr_Lit{Lit: &plan.Literal{Value: &plan.Literal_I32Val{I32Val: key}}}}
+				expr, err := sqlplan.BindFuncExprImplByPlanExpr(proc.Ctx, "=", []*plan.Expr{col, value})
+				require.NoError(t, err)
+				withRowID := sqlplan.DeepCopyExpr(expr)
+				withRowID.GetF().Args[0].GetCol().ColPos = 1
+				meta.Partitions = append(meta.Partitions, partition.Partition{PartitionID: uint64(key), Expr: expr, ExprWithRowID: withRowID})
+			}
+			require.NotPanics(t, func() {
+				result, err := prunePartitionUpdate(proc, input, meta, 2)
+				require.NoError(t, err)
+				defer result.Close()
+				counts := map[uint64]int{}
+				result.Iter(func(p partition.Partition, b *batch.Batch) bool { counts[p.PartitionID] = b.RowCount(); return true })
+				require.Equal(t, map[uint64]int{1: 2, 2: 1}, counts)
+			})
+		})
+	}
 }

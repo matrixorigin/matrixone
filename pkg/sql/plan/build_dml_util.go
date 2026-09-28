@@ -4748,7 +4748,8 @@ func appendDeleteIndexTablePlanWithRoute(
 		return -1, -1, moerr.NewInternalError(builder.GetContext(),
 			"partitioned index delete is missing its projected source")
 	}
-	firstCol := outputNode.ProjectList[0].GetCol()
+	projection := getProjectionByLastNodeWithTag(builder, lastNodeId, 0)
+	firstCol := projection[0].GetCol()
 	if firstCol == nil {
 		return -1, -1, moerr.NewInternalError(builder.GetContext(),
 			"partitioned index delete source is not column projected")
@@ -4757,8 +4758,14 @@ func appendDeleteIndexTablePlanWithRoute(
 	if err != nil {
 		return -1, -1, err
 	}
-	routePos := int32(len(outputNode.ProjectList))
-	outputNode.ProjectList = append(outputNode.ProjectList, routeExpr)
+	routePos := int32(len(projection))
+	projection = append(projection, routeExpr)
+	// The join has already forwarded the complete parent row. Compute the
+	// route above it; JOIN result expressions themselves must remain columns.
+	lastNodeId = builder.appendNode(&plan.Node{
+		NodeType: plan.Node_PROJECT, Children: []int32{lastNodeId},
+		ProjectList: projection, BindingTags: slices.Clone(outputNode.BindingTags),
+	}, bindCtx)
 	return lastNodeId, routePos, nil
 }
 
@@ -7864,13 +7871,33 @@ func buildDeleteRowsFullTextIndex(ctx CompilerContext, builder *QueryBuilder, bi
 		},
 		)
 		routePos := int32(-1)
+		var routedProjection []*Expr
 		if partitioned {
 			routeExpr, routeErr := buildPartitionRouteExpr(builder.GetContext(), delCtx.tableDef, 1)
 			if routeErr != nil {
 				return -1, -1, -1, Type{}, -1, routeErr
 			}
-			routePos = int32(len(projectList))
-			projectList = append(projectList, routeExpr)
+			// JOIN results must be column references. Forward the route inputs
+			// through the join and evaluate the ordinal in a separate PROJECT.
+			routedProjection = make([]*Expr, len(projectList), len(projectList)+1)
+			for i, expr := range projectList {
+				routedProjection[i] = &Expr{Typ: expr.Typ, Expr: &plan.Expr_Col{Col: &plan.ColRef{ColPos: int32(i)}}}
+			}
+			routeInputs := make(map[int32]int32)
+			_ = plan.VisitExprTree(routeExpr, func(expr *Expr) error {
+				if col := expr.GetCol(); col != nil {
+					pos, ok := routeInputs[col.ColPos]
+					if !ok {
+						pos = int32(len(projectList))
+						routeInputs[col.ColPos] = pos
+						projectList = append(projectList, DeepCopyExpr(expr))
+					}
+					col.RelPos, col.ColPos = 0, pos
+				}
+				return nil
+			})
+			routePos = int32(len(routedProjection))
+			routedProjection = append(routedProjection, routeExpr)
 		}
 
 		rfBuildExpr := &plan.Expr{
@@ -7905,6 +7932,12 @@ func buildDeleteRowsFullTextIndex(ctx CompilerContext, builder *QueryBuilder, bi
 			joinNode.RuntimeFilterBuildList = []*plan.RuntimeFilterSpec{buildSpec}
 		}
 		lastNodeId = builder.appendNode(joinNode, bindCtx)
+
+		if routedProjection != nil {
+			lastNodeId = builder.appendNode(&plan.Node{
+				NodeType: plan.Node_PROJECT, Children: []int32{lastNodeId}, ProjectList: routedProjection,
+			}, bindCtx)
+		}
 
 		deleteIdx := 0
 		retPkPos := deleteIdx + 2

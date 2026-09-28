@@ -1214,6 +1214,20 @@ func (builder *QueryBuilder) bindUpdate(stmt *tree.Update, bindCtx *BindContext)
 			}
 		}
 		aliasIdxNeedConstraintCheck[i] = append([]bool(nil), idxNeedUpdate[i]...)
+		if features.IsPartitioned(tableDef.FeatureFlag) && partitionColumnsUpdated(tableDef, assignedColsByTarget[i]) {
+			for _, idx := range inlineIrregularIndexes[i] {
+				if catalog.IsFullTextIndexAlgo(idx.IndexAlgo) {
+					// Key values did not necessarily change, but their physical
+					// indexes must move with the parent. Keep constraint eligibility
+					// separate from this storage-maintenance requirement.
+					for j := range idxNeedUpdate[i] {
+						updatePkOrUk = true // prepare the regular-index row image and scans
+						idxNeedUpdate[i][j] = true
+					}
+					break
+				}
+			}
+		}
 	}
 	coalesceRepeatedPhysicalTargetRegularIndexes(dmlCtx, idxNeedUpdate)
 

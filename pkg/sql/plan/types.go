@@ -619,9 +619,6 @@ type QueryBuilder struct {
 	// so positions recorded pre-prune (e.g. the REPLACE old-PK key) must be remapped
 	// through this map before use.
 	sinkColRef map[[2]int32]int
-	// irregularMaintRouteRefs keeps old-row partition ordinals alive through
-	// column pruning until the post-createQuery maintenance branches are built.
-	irregularMaintRouteRefs map[[2]int32]struct{}
 
 	// cteRefs contains only non-recursive CTEs that were actually bound. It is
 	// populated lazily so unused CTE bodies retain their existing lazy-binding

@@ -1113,10 +1113,40 @@ func (builder *QueryBuilder) appendDedupAndMultiUpdateNodesForBindReplace(
 			finalProjList = append(finalProjList, routeExpr)
 		}
 		oldParentColFinalPos[tableDef.Pkey.PkeyColName] = replaceOldPkPos
+		var partitionCols []plan.ColRef
+		if partitionedFulltext {
+			keyName := getPartitionColName(tableDef.Partition.PartitionDefs[0].Def)
+			oldPos, ok := oldColName2Idx[tableDef.Name+"."+keyName]
+			if !ok {
+				return 0, moerr.NewInternalError(builder.GetContext(), "cannot locate old partition key for FULLTEXT REPLACE")
+			}
+			keyPos := tableDef.Name2ColIndex[keyName]
+			oldKey := &plan.Expr{Typ: tableDef.Cols[keyPos].Typ, Expr: &plan.Expr_Col{Col: &plan.ColRef{RelPos: oldPos[0], ColPos: oldPos[1]}}}
+			newKey := DeepCopyExpr(finalProjList[keyPos])
+			isNew, routeErr := BindFuncExprImplByPlanExpr(builder.GetContext(), "isnull", []*plan.Expr{DeepCopyExpr(finalProjList[deleteCols[0].ColPos])})
+			if routeErr != nil {
+				return 0, routeErr
+			}
+			deleteKey, routeErr := BindFuncExprImplByPlanExpr(builder.GetContext(), "if", []*plan.Expr{isNew, DeepCopyExpr(newKey), DeepCopyExpr(oldKey)})
+			if routeErr != nil {
+				return 0, routeErr
+			}
+			isDeleteOnly, routeErr := BindFuncExprImplByPlanExpr(builder.GetContext(), "isnull", []*plan.Expr{DeepCopyExpr(finalProjList[newPkIdx])})
+			if routeErr != nil {
+				return 0, routeErr
+			}
+			insertKey, routeErr := BindFuncExprImplByPlanExpr(builder.GetContext(), "if", []*plan.Expr{isDeleteOnly, oldKey, newKey})
+			if routeErr != nil {
+				return 0, routeErr
+			}
+			partitionCols = []plan.ColRef{{RelPos: finalProjTag, ColPos: int32(len(finalProjList))}, {RelPos: finalProjTag, ColPos: int32(len(finalProjList) + 1)}}
+			finalProjList = append(finalProjList, deleteKey, insertKey)
+		}
 		updateCtxList = append(updateCtxList, &plan.UpdateCtx{
 			ObjRef:                objRef,
 			TableDef:              tableDef,
 			InsertCols:            insertCols,
+			PartitionCols:         partitionCols,
 			DeleteCols:            deleteCols,
 			SkipInsertOnNullPk:    true,
 			InsertPkColIdx:        insertPkColIdx,

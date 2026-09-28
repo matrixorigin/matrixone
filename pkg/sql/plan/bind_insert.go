@@ -768,7 +768,7 @@ func (builder *QueryBuilder) appendOnDupIrregularMaintSource(
 ) (int32, error) {
 	sinkID := appendSinkNodeWithTag(builder, bindCtx, finalProjNodeID, finalProjTag)
 	joinStep := builder.appendStep(sinkID)
-	builder.preserveIrregularMaintRoute(joinStep, deleteRoutePos)
+	builder.preserveIrregularMaintSource(joinStep)
 	maintStep := joinStep
 	if targetRowNumberPos >= 0 {
 		selectedScanID := builder.appendTaggedSinkScan(bindCtx, joinStep, finalProjTag)
@@ -779,11 +779,11 @@ func (builder *QueryBuilder) appendOnDupIrregularMaintSource(
 			return 0, err
 		}
 		selectedID := builder.appendNode(&plan.Node{
-			NodeType: plan.Node_FILTER, Children: []int32{selectedScanID}, FilterList: []*plan.Expr{selected},
+			NodeType: plan.Node_FILTER, BindingTags: []int32{finalProjTag}, Children: []int32{selectedScanID}, FilterList: []*plan.Expr{selected},
 		}, bindCtx)
 		selectedSinkID := appendSinkNodeWithTag(builder, bindCtx, selectedID, finalProjTag)
 		maintStep = builder.appendStep(selectedSinkID)
-		builder.preserveIrregularMaintRoute(maintStep, deleteRoutePos)
+		builder.preserveIrregularMaintSource(maintStep)
 	}
 	insertOnlyBaseStep := maintStep
 	// A changed-row derivative is useful only to affected indexes. Creating it
@@ -807,8 +807,9 @@ func (builder *QueryBuilder) appendOnDupIrregularMaintSource(
 				"ON DUPLICATE KEY UPDATE cannot locate the physical-change marker for irregular index maintenance")
 		}
 		changedID := builder.appendNode(&plan.Node{
-			NodeType: plan.Node_FILTER,
-			Children: []int32{changedScanID},
+			NodeType:    plan.Node_FILTER,
+			BindingTags: []int32{finalProjTag},
+			Children:    []int32{changedScanID},
 			FilterList: []*plan.Expr{{
 				Typ: changedScan.ProjectList[physicalChangedPos].Typ,
 				Expr: &plan.Expr_Col{Col: &plan.ColRef{
@@ -819,7 +820,7 @@ func (builder *QueryBuilder) appendOnDupIrregularMaintSource(
 		}, bindCtx)
 		changedSinkID := appendSinkNodeWithTag(builder, bindCtx, changedID, finalProjTag)
 		maintStep = builder.appendStep(changedSinkID)
-		builder.preserveIrregularMaintRoute(maintStep, deleteRoutePos)
+		builder.preserveIrregularMaintSource(maintStep)
 	}
 
 	insertOnlyStep := int32(-1)
@@ -846,11 +847,11 @@ func (builder *QueryBuilder) appendOnDupIrregularMaintSource(
 			return 0, err
 		}
 		newRowsID := builder.appendNode(&plan.Node{
-			NodeType: plan.Node_FILTER, Children: []int32{newRowsScanID}, FilterList: []*plan.Expr{isNewRow},
+			NodeType: plan.Node_FILTER, BindingTags: []int32{finalProjTag}, Children: []int32{newRowsScanID}, FilterList: []*plan.Expr{isNewRow},
 		}, bindCtx)
 		newRowsSinkID := appendSinkNodeWithTag(builder, bindCtx, newRowsID, finalProjTag)
 		insertOnlyStep = builder.appendStep(newRowsSinkID)
-		builder.preserveIrregularMaintRoute(insertOnlyStep, deleteRoutePos)
+		builder.preserveIrregularMaintSource(insertOnlyStep)
 	}
 
 	valueChangedSteps := make(map[string]int32, len(valueChangeMarkerPosByGroup))
@@ -893,11 +894,11 @@ func (builder *QueryBuilder) appendOnDupIrregularMaintSource(
 			return 0, err
 		}
 		changedRowsID := builder.appendNode(&plan.Node{
-			NodeType: plan.Node_FILTER, Children: []int32{changedRowsScanID}, FilterList: []*plan.Expr{eligible},
+			NodeType: plan.Node_FILTER, BindingTags: []int32{finalProjTag}, Children: []int32{changedRowsScanID}, FilterList: []*plan.Expr{eligible},
 		}, bindCtx)
 		changedRowsSinkID := appendSinkNodeWithTag(builder, bindCtx, changedRowsID, finalProjTag)
 		valueChangedSteps[groupKey] = builder.appendStep(changedRowsSinkID)
-		builder.preserveIrregularMaintRoute(valueChangedSteps[groupKey], deleteRoutePos)
+		builder.preserveIrregularMaintSource(valueChangedSteps[groupKey])
 	}
 
 	maintTableDef := *tableDef
@@ -3006,6 +3007,16 @@ func (builder *QueryBuilder) appendDedupAndMultiUpdateNodesForBindInsert(
 		selectTag = selectNode.BindingTags[0]
 	}
 
+	moveFulltextPartition := false
+	if onDupAction == plan.Node_UPDATE && features.IsPartitioned(tableDef.FeatureFlag) &&
+		partitionColumnsUpdated(tableDef, possiblyChangedCols) {
+		for _, idx := range irregularIndexes {
+			if catalog.IsFullTextIndexAlgo(idx.IndexAlgo) {
+				moveFulltextPartition = true
+				break
+			}
+		}
+	}
 	idxNeedUpdate := make([]bool, len(tableDef.Indexes))
 	for i, idxDef := range tableDef.Indexes {
 		for _, part := range idxDef.Parts {
@@ -3017,6 +3028,13 @@ func (builder *QueryBuilder) appendDedupAndMultiUpdateNodesForBindInsert(
 					break
 				}
 			}
+		}
+	}
+
+	if moveFulltextPartition {
+		// Even an unchanged regular index key moves to another physical table.
+		for i := range idxNeedUpdate {
+			idxNeedUpdate[i] = true
 		}
 	}
 
@@ -3923,6 +3941,8 @@ func (builder *QueryBuilder) appendDedupAndMultiUpdateNodesForBindInsert(
 	delColName2Idx := make(map[string][2]int32)
 	valueChangeMarkerPosByGroup := make(map[string]int32, len(irregularValueChangeFilters))
 	oldPartitionRoutePos := int32(-1)
+	oldPartitionKeyPos := int32(-1)
+	partitionKeyName := ""
 
 	if newProjLen > len(selectNode.ProjectList) {
 		newProjList := make([]*plan.Expr, 0, newProjLen)
@@ -4019,7 +4039,7 @@ func (builder *QueryBuilder) appendDedupAndMultiUpdateNodesForBindInsert(
 
 		// append projections for secondary index tables
 		for i, idxDef := range tableDef.Indexes {
-			if idxDef.Unique {
+			if idxDef.Unique && !idxNeedUpdate[i] {
 				continue
 			}
 
@@ -4043,7 +4063,11 @@ func (builder *QueryBuilder) appendDedupAndMultiUpdateNodesForBindInsert(
 						return nil, err
 					}
 				}
-				return BindFuncExprImplByPlanExpr(builder.GetContext(), "serial_full", args)
+				funcName := "serial_full"
+				if idxDef.Unique {
+					funcName = "serial"
+				}
+				return BindFuncExprImplByPlanExpr(builder.GetContext(), funcName, args)
 			}
 
 			projForAppendAllInputRows := func() error {
@@ -4061,7 +4085,18 @@ func (builder *QueryBuilder) appendDedupAndMultiUpdateNodesForBindInsert(
 			}
 
 			if idxNeedUpdate[i] {
-				if err := projForAppendAllInputRows(); err != nil {
+				if idxDef.Unique {
+					// Dedup has already checked the incoming keys. A partition move
+					// must now reinsert the unchanged key into its new physical index.
+					appendedUniqueProjs[idxTableName+"."+catalog.IndexTablePrimaryColName] = &plan.Expr{
+						Typ: selectNode.ProjectList[pkPos].Typ, Expr: &plan.Expr_Col{Col: &plan.ColRef{RelPos: selectTag, ColPos: pkPos}},
+					}
+					idxExpr, err := serialIdxPkExpr(idxDef)
+					if err != nil {
+						return 0, err
+					}
+					appendedUniqueProjs[idxTableName+"."+catalog.IndexTableIndexColName] = idxExpr
+				} else if err := projForAppendAllInputRows(); err != nil {
 					return 0, err
 				}
 
@@ -4115,7 +4150,11 @@ func (builder *QueryBuilder) appendDedupAndMultiUpdateNodesForBindInsert(
 						}
 					}
 
-					delIdxExpr, _ = BindFuncExprImplByPlanExpr(builder.GetContext(), "serial_full", delArgs)
+					funcName := "serial_full"
+					if idxDef.Unique {
+						funcName = "serial"
+					}
+					delIdxExpr, _ = BindFuncExprImplByPlanExpr(builder.GetContext(), funcName, delArgs)
 				}
 				delColName2Idx[idxTableName+"."+catalog.IndexTableIndexColName] = [2]int32{finalProjTag, int32(len(newProjList))}
 				newProjList = append(newProjList, delIdxExpr)
@@ -4173,6 +4212,29 @@ func (builder *QueryBuilder) appendDedupAndMultiUpdateNodesForBindInsert(
 			}
 			oldPartitionRoutePos = int32(len(newProjList))
 			newProjList = append(newProjList, routeExpr)
+		}
+
+		if moveFulltextPartition {
+			partitionKeyName = getPartitionColName(tableDef.Partition.PartitionDefs[0].Def)
+			keyPos, ok := tableDef.Name2ColIndex[partitionKeyName]
+			if !ok {
+				return 0, moerr.NewInternalError(builder.GetContext(), "cannot locate old partition key for FULLTEXT ODKU")
+			}
+			oldKey := &plan.Expr{Typ: tableDef.Cols[keyPos].Typ, Expr: &plan.Expr_Col{Col: &plan.ColRef{RelPos: scanTag, ColPos: keyPos}}}
+			newKey := &plan.Expr{Typ: oldKey.Typ, Expr: &plan.Expr_Col{Col: &plan.ColRef{RelPos: selectTag, ColPos: colName2Idx[tableDef.Name+"."+partitionKeyName]}}}
+			rowIDPos := tableDef.Name2ColIndex[catalog.Row_ID]
+			isNew, routeErr := BindFuncExprImplByPlanExpr(builder.GetContext(), "isnull", []*plan.Expr{
+				{Typ: tableDef.Cols[rowIDPos].Typ, Expr: &plan.Expr_Col{Col: &plan.ColRef{RelPos: scanTag, ColPos: rowIDPos}}},
+			})
+			if routeErr != nil {
+				return 0, routeErr
+			}
+			oldKey, routeErr = BindFuncExprImplByPlanExpr(builder.GetContext(), "if", []*plan.Expr{isNew, newKey, oldKey})
+			if routeErr != nil {
+				return 0, routeErr
+			}
+			oldPartitionKeyPos = int32(len(newProjList))
+			newProjList = append(newProjList, oldKey)
 		}
 
 		selectTag = finalProjTag
@@ -4364,6 +4426,13 @@ func (builder *QueryBuilder) appendDedupAndMultiUpdateNodesForBindInsert(
 
 		deleteCols[1].RelPos = selectTag
 		deleteCols[1].ColPos = colName2Idx[tableDef.Name+"."+tableDef.Pkey.PkeyColName]
+	}
+
+	if oldPartitionKeyPos >= 0 {
+		updateCtx.PartitionCols = []plan.ColRef{
+			{RelPos: selectTag, ColPos: oldPartitionKeyPos},
+			{RelPos: selectTag, ColPos: colName2Idx[tableDef.Name+"."+partitionKeyName]},
+		}
 	}
 
 	dmlNode.UpdateCtxList = append(dmlNode.UpdateCtxList, updateCtx)

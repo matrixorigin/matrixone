@@ -3761,14 +3761,17 @@ func (builder *QueryBuilder) markSinkProject(nodeID int32, step int32, colRefBoo
 	}
 }
 
-func (builder *QueryBuilder) preserveIrregularMaintRoute(step, colPos int32) {
-	if step < 0 || colPos < 0 {
+// preserveIrregularMaintSource keeps the positional row image consumed by
+// maintenance branches that are appended after createQuery. Keeping only the
+// route drops document columns before the tokenizer and old-key join exist.
+func (builder *QueryBuilder) preserveIrregularMaintSource(step int32) {
+	if step < 0 {
 		return
 	}
-	if builder.irregularMaintRouteRefs == nil {
-		builder.irregularMaintRouteRefs = make(map[[2]int32]struct{})
+	if builder.preserveSinkProjection == nil {
+		builder.preserveSinkProjection = make(map[int32]struct{})
 	}
-	builder.irregularMaintRouteRefs[[2]int32{step, colPos}] = struct{}{}
+	builder.preserveSinkProjection[builder.qry.Steps[step]] = struct{}{}
 }
 
 func (builder *QueryBuilder) rewriteStarApproxCount(nodeID int32) {
@@ -4015,9 +4018,6 @@ func (builder *QueryBuilder) createQuery() (*Query, error) {
 	for i := range builder.qry.Steps {
 		rootID := builder.qry.Steps[i]
 		builder.markSinkProject(rootID, int32(i), colRefBool)
-	}
-	for ref := range builder.irregularMaintRouteRefs {
-		colRefBool[ref] = true
 	}
 
 	for i := len(builder.qry.Steps) - 1; i >= 0; i-- {

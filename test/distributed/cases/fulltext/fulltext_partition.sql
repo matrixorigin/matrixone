@@ -61,18 +61,22 @@ insert into ft_join_none values (999);
 delete d from ft_part d join ft_join_none s on d.id = s.id;
 select id from ft_part where match(body) against('theta') order by id;
 
-create table ft_range(id int primary key, bucket int, body text, fulltext fti_range(body))
+create table ft_range(id int primary key, bucket int, code int unique, body text, fulltext fti_range(body))
 partition by range(bucket)(partition r0 values less than (10), partition r1 values less than maxvalue);
-insert into ft_range values (101, 1, 'range alpha alpha'), (102, 20, 'range beta');
+insert into ft_range values (101, 1, 10, 'range alpha alpha'), (102, 20, 20, 'range beta');
 select id from ft_range where match(body) against('alpha') order by id;
 update ft_range set bucket = 20 where id = 101;
 select id, bucket from ft_range where match(body) against('alpha') order by id;
-insert into ft_range values (101, 1, 'range alpha alpha') on duplicate key update bucket = values(bucket);
+insert into ft_range values (101, 1, 10, 'range alpha alpha') on duplicate key update bucket = values(bucket);
 select id, bucket from ft_range where match(body) against('alpha') order by id;
 update ft_range set bucket = 20, body = 'range moved' where id = 101;
 select id from ft_range where match(body) against('alpha') order by id;
 select id from ft_range where match(body) against('moved') order by id;
 
+select id from ft_range where code = 10;
+delete from ft_range where id = 101;
+select id from ft_range where code = 10;
+select id from ft_range where match(body) against('moved') order by id;
 create table ft_list(id int primary key, bucket int, body text, fulltext fti_list(body))
 partition by list(bucket)(partition l0 values in (1, 3), partition l1 values in (2, 4));
 insert into ft_list values (201, 1, 'list alpha alpha'), (202, 2, 'list beta');

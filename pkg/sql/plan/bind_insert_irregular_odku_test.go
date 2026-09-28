@@ -306,6 +306,16 @@ func TestPartitionedFulltextMaintenanceRebuildsWhenPartitionColumnChanges(t *tes
 		"update constraint_test.docs_ft set payload = payload + 1 where id = 1")
 	require.NoError(t, err)
 
+	// Maintenance consumers are appended after column pruning. Their source
+	// must retain the parent row as well as the trailing old-partition route.
+	for _, step := range logicPlan.GetQuery().Steps {
+		node := logicPlan.GetQuery().Nodes[step]
+		if node.NodeType == planpb.Node_SINK {
+			require.GreaterOrEqual(t, len(node.ProjectList), len(base.Cols)-1,
+				"late FULLTEXT maintenance must retain the complete parent row image")
+		}
+	}
+
 	var maintenance int
 	for _, node := range logicPlan.GetQuery().Nodes {
 		if node == nil || node.NodeType != planpb.Node_MULTI_UPDATE {
@@ -358,12 +368,101 @@ func TestPartitionedFulltextMaintenanceRebuildsWhenPartitionColumnChanges(t *tes
 
 }
 
+func TestPartitionedFulltextConflictDMLKeepsOldAndNewPartitionKeys(t *testing.T) {
+	for _, sql := range []string{
+		"insert into constraint_test.docs_ft(id, body, payload, embedding) values (1, 'incoming', 1, '[1,2,3]') on duplicate key update payload = values(payload)",
+		"replace into constraint_test.docs_ft(id, body, payload, embedding) values (1, 'incoming', 1, '[1,2,3]')",
+	} {
+		t.Run(sql, func(t *testing.T) {
+			mock := NewMockOptimizer(true)
+			base := mock.ctxt.tables["docs_ft"]
+			base.FeatureFlag |= features.Partitioned
+			cond, err := BindFuncExprImplByPlanExpr(mock.ctxt.GetContext(), ">=", []*Expr{
+				{Typ: base.Cols[2].Typ, Expr: &planpb.Expr_Col{Col: &planpb.ColRef{Name: "payload", ColPos: 2}}},
+				makePlan2Int32ConstExprWithType(0),
+			})
+			require.NoError(t, err)
+			base.Partition = &planpb.Partition{PartitionDefs: []*planpb.PartitionDef{
+				{Def: cond}, {Def: makePlan2BoolConstExprWithType(false)},
+			}}
+			logicPlan, err := runOneStmt(mock, t, sql)
+			require.NoError(t, err)
+			var parents int
+			for _, node := range logicPlan.GetQuery().Nodes {
+				if node == nil || node.NodeType != planpb.Node_MULTI_UPDATE {
+					continue
+				}
+				for _, ctx := range node.UpdateCtxList {
+					if ctx.TableDef.TblId != base.TblId || ctx.PartitionIndexCtx != nil {
+						continue
+					}
+					parents++
+					require.Len(t, ctx.PartitionCols, 2, "conflict DML must delete from the old partition and insert into the new partition")
+					require.NotEqual(t, ctx.PartitionCols[0].ColPos, ctx.PartitionCols[1].ColPos)
+				}
+			}
+			require.Equal(t, 1, parents)
+			for _, step := range logicPlan.GetQuery().Steps {
+				node := logicPlan.GetQuery().Nodes[step]
+				if node.NodeType == planpb.Node_SINK {
+					for i, expr := range node.ProjectList {
+						require.Equal(t, int32(i), expr.GetCol().ColPos, "maintenance sinks must preserve the positional row image")
+					}
+				}
+			}
+		})
+	}
+}
+
+func TestPartitionedFulltextKeyMovesKeepRegularIndexes(t *testing.T) {
+	for _, sql := range []string{
+		"update constraint_test.docs_ft_dual set summary = 'new' where id = 1",
+		"insert into constraint_test.docs_ft_dual(id, body, summary, payload) values (1, 'body', 'new', 7) on duplicate key update summary = values(summary)",
+	} {
+		t.Run(sql, func(t *testing.T) {
+			mock := NewMockOptimizer(true)
+			base := mock.ctxt.tables["docs_ft_dual"]
+			base.FeatureFlag |= features.Partitioned
+			cond, err := BindFuncExprImplByPlanExpr(mock.ctxt.GetContext(), "=", []*Expr{
+				{Typ: base.Cols[2].Typ, Expr: &planpb.Expr_Col{Col: &planpb.ColRef{Name: "summary", ColPos: 2}}},
+				makePlan2StringConstExprWithType("old"),
+			})
+			require.NoError(t, err)
+			other, err := BindFuncExprImplByPlanExpr(mock.ctxt.GetContext(), "not", []*Expr{DeepCopyExpr(cond)})
+			require.NoError(t, err)
+			base.Partition = &planpb.Partition{PartitionDefs: []*planpb.PartitionDef{{Def: cond}, {Def: other}}}
+			logicPlan, err := runOneStmt(mock, t, sql)
+			require.NoError(t, err)
+			var indexes int
+			for _, node := range logicPlan.GetQuery().Nodes {
+				if node == nil || node.NodeType != planpb.Node_MULTI_UPDATE {
+					continue
+				}
+				for _, ctx := range node.UpdateCtxList {
+					if ctx.TableDef.Name != catalog.UniqueIndexTableNamePrefix+"docs-ft-dual-payload" {
+						continue
+					}
+					indexes++
+					require.Len(t, ctx.InsertCols, 2)
+					require.Len(t, ctx.DeleteCols, 2, "unchanged keys must move with their parent row")
+				}
+			}
+			require.Equal(t, 1, indexes)
+		})
+	}
+}
+
 func TestPartitionedFulltextDMLShapesBuildRoutedMaintenance(t *testing.T) {
 	mock := NewMockOptimizer(true)
 	base := mock.ctxt.tables["docs_ft"]
 	base.FeatureFlag |= features.Partitioned
+	cond, err := BindFuncExprImplByPlanExpr(mock.ctxt.GetContext(), ">=", []*Expr{
+		{Typ: base.Cols[0].Typ, Expr: &planpb.Expr_Col{Col: &planpb.ColRef{Name: "id", ColPos: 0}}},
+		makePlan2Int32ConstExprWithType(0),
+	})
+	require.NoError(t, err)
 	base.Partition = &planpb.Partition{PartitionDefs: []*planpb.PartitionDef{
-		{Def: makePlan2BoolConstExprWithType(true)},
+		{Def: cond},
 		{Def: makePlan2BoolConstExprWithType(false)},
 	}}
 
@@ -376,6 +475,13 @@ func TestPartitionedFulltextDMLShapesBuildRoutedMaintenance(t *testing.T) {
 		t.Run(sql, func(t *testing.T) {
 			logicPlan, err := runOneStmt(mock, t, sql)
 			require.NoError(t, err)
+			for _, node := range logicPlan.GetQuery().Nodes {
+				if node != nil && node.NodeType == planpb.Node_JOIN {
+					for _, expr := range node.ProjectList {
+						require.NotNil(t, expr.GetCol(), "join results must be column references; evaluate routes in a projection")
+					}
+				}
+			}
 			var routed int
 			for _, node := range logicPlan.GetQuery().Nodes {
 				if node == nil || node.NodeType != planpb.Node_MULTI_UPDATE {
@@ -415,6 +521,11 @@ func TestPartitionedFulltextDeleteRoutesRegularHiddenIndexes(t *testing.T) {
 	for _, node := range logicPlan.GetQuery().Nodes {
 		if node == nil {
 			continue
+		}
+		if node.NodeType == planpb.Node_JOIN {
+			for _, expr := range node.ProjectList {
+				require.NotNil(t, expr.GetCol(), "regular-index route must be evaluated outside JOIN")
+			}
 		}
 		if node.NodeType == planpb.Node_DELETE && node.DeleteCtx != nil && node.DeleteCtx.TableDef != nil {
 			require.NotEqual(t, uniqueIndexName, node.DeleteCtx.TableDef.Name,
