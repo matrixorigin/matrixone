@@ -725,6 +725,15 @@ func (builder *QueryBuilder) flattenSubqueryWithConsumer(
 			joinType = plan.Node_LEFT
 		}
 
+		// A rank-filtered aggregate spine can delete the result row.
+		// Do not infer an empty-input reconstruction from a successful
+		// projection rewrite when the upstream spine proof is incomplete.
+		if wrappedAggregate && preserveAggregateSpine && !aggregateSpineCandidate &&
+			builder.findAggrCount(subCtx.aggregates) &&
+			builder.qry.Nodes[subID].NodeType == plan.Node_WINDOW && len(builder.qry.Nodes[subID].FilterList) > 0 {
+			return 0, nil, moerr.NewNYI(builder.GetContext(),
+				"correlated aggregate spine cannot preserve empty-input rows")
+		}
 		var postJoinProjections []*plan.Expr
 		var finalizeProjection bool
 		if !aggregateRowUnsafe {
@@ -732,7 +741,7 @@ func (builder *QueryBuilder) flattenSubqueryWithConsumer(
 				subID, postJoinProjections, err = builder.prepareCorrelatedAggregateSpine(
 					aggregateSpine, subCtx.results, joinPreds)
 				finalizeProjection = err == nil
-			} else if subquery.Child == nil {
+			} else if subquery.Child == nil && !(wrappedAggregate && preserveAggregateSpine) {
 				var postJoinProjection *plan.Expr
 				postJoinProjection, finalizeProjection, err =
 					builder.prepareScalarValueAggregateProjection(subID, subCtx, joinPreds)
@@ -747,7 +756,7 @@ func (builder *QueryBuilder) flattenSubqueryWithConsumer(
 				}
 			} else {
 				subID, postJoinProjections, finalizeProjection, err = builder.prepareCorrelatedScalarAggregatePostJoinProjection(
-					subID, subCtx, joinPreds, correlatedHaving, true)
+					subID, subCtx, joinPreds, correlatedHaving, subquery.Child != nil)
 			}
 		}
 		if err != nil {
@@ -4010,7 +4019,10 @@ func (builder *QueryBuilder) detachCorrelatedCountHaving(root int32, ctx *BindCo
 			}
 			if len(ctx.results) != 1 ||
 				!builder.scalarCountHavingProjection(root, ctx.results[0], ctx.aggregateTag) {
-				return nil, moerr.NewNYI(builder.GetContext(), "correlated local CTE: COUNT HAVING projection is not the aggregate result")
+				// A CTE aggregate behind an outer consumer is not the
+				// scalar result. Leave its HAVING attached; the aggregate
+				// spine must prove any row-removal reconstruction instead.
+				return nil, nil
 			}
 			// Validate every conjunct before detaching any filter: both ordinary
 			// scalar queries and local CTE consumers can carry a bound IN list.
