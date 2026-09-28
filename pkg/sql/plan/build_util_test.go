@@ -802,7 +802,7 @@ func TestBuildDefaultExprBinaryLiteralRoundTrip(t *testing.T) {
 			typ, err := getTypeFromAst(context.Background(), colDef.Type)
 			require.NoError(t, err)
 
-			def, err := buildDefaultExpr(colDef, typ, proc)
+			def, err := buildDefaultExpr(context.Background(), colDef, typ, proc)
 			require.NoError(t, err)
 			require.True(t, def.Expr.GetLit().GetIsBin())
 			require.Equal(t, plan.StringLiteralForm_STRING_LITERAL_BINARY_INTRODUCER,
