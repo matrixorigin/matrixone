@@ -2802,6 +2802,7 @@ func TestPitrGranularitySqlEscapesStringLiterals(t *testing.T) {
 // concurrent CLONE from leaving orphan records and keeps transaction-local
 // tombstones valid at the new snapshot.
 func TestDropDatabase_SnapshotAdvance(t *testing.T) {
+	stubPublicationGuardForDropTests(t)
 	dropDbDef := &plan2.DropDatabase{
 		IfExists: false,
 		Database: "test_db",
@@ -2835,6 +2836,7 @@ func TestDropDatabase_SnapshotAdvance(t *testing.T) {
 		ctx := defines.AttachAccountId(context.Background(), sysAccountId)
 		proc.Ctx = ctx
 		proc.ReplaceTopCtx(ctx)
+		installDDLLineageLifecycleTestExecutor(t, proc)
 
 		// Use a real TxnMeta so the workspace can simulate snapshot advancement.
 		txnMeta := txn.TxnMeta{
@@ -2903,6 +2905,7 @@ func TestDropDatabase_SnapshotAdvance(t *testing.T) {
 		ctx := defines.AttachAccountId(context.Background(), sysAccountId)
 		proc.Ctx = ctx
 		proc.ReplaceTopCtx(ctx)
+		installDDLLineageLifecycleTestExecutor(t, proc)
 
 		txnMeta := txn.TxnMeta{
 			Mode:       txn.TxnMode_Optimistic,
@@ -2997,6 +3000,7 @@ func TestRemoveFkeysRelationshipsSkipsDeletedRelationsDuringDropDatabase(t *test
 }
 
 func TestDropDatabaseSkipsDeletedRelationsWhenCollectingTables(t *testing.T) {
+	stubPublicationGuardForDropTests(t)
 	ctrl := gomock.NewController(t)
 	defer ctrl.Finish()
 
@@ -3090,6 +3094,7 @@ func TestDropDatabaseSkipsDeletedRelationsWhenCollectingTables(t *testing.T) {
 }
 
 func TestDropDatabaseSkipsForeignKeyCleanupWhenIgnored(t *testing.T) {
+	stubPublicationGuardForDropTests(t)
 	ctrl := gomock.NewController(t)
 	defer ctrl.Finish()
 
@@ -3143,6 +3148,7 @@ func TestDropDatabaseSkipsForeignKeyCleanupWhenIgnored(t *testing.T) {
 }
 
 func TestDropDatabaseReturnsInternalRelationErrorWhenCollectingTables(t *testing.T) {
+	stubPublicationGuardForDropTests(t)
 	ctrl := gomock.NewController(t)
 	defer ctrl.Finish()
 
@@ -3216,6 +3222,13 @@ func TestDropDatabaseReturnsInternalRelationErrorWhenCollectingTables(t *testing
 
 	c := NewCompile("test", "test", "drop database acc_test02", "", "", eng, proc, nil, false, nil, time.Now())
 	require.ErrorIs(t, s.DropDatabase(c), relationErr)
+}
+
+func stubPublicationGuardForDropTests(t *testing.T) {
+	t.Helper()
+	stub := gostub.Stub(&ensureDatabaseNotPublished,
+		func(_ *Compile, _ engine.Database, _ string) error { return nil })
+	t.Cleanup(stub.Reset)
 }
 
 func TestRemoveFkeysRelationshipsSkipsDeletedChildTableIds(t *testing.T) {

@@ -205,6 +205,16 @@ func (s *Scope) DropDatabase(c *Compile) error {
 			return err
 		}
 	}
+	db, err = c.e.Database(c.proc.Ctx, dbName, txnOp)
+	if err != nil {
+		if s.Plan.GetDdl().GetDropDatabase().GetIfExists() {
+			return nil
+		}
+		return moerr.NewErrDropNonExistsDB(c.proc.Ctx, dbName)
+	}
+	if err := ensureDatabaseNotPublished(c, db, dbName); err != nil {
+		return err
+	}
 
 	// handle sub
 	if db.IsSubscription(c.proc.Ctx) {
@@ -225,10 +235,7 @@ func (s *Scope) DropDatabase(c *Compile) error {
 		}
 	}
 
-	database, err := c.e.Database(c.proc.Ctx, dbName, c.proc.GetTxnOperator())
-	if err != nil {
-		return err
-	}
+	database := db
 	relations, err := database.Relations(c.proc.Ctx)
 	if err != nil {
 		return err
@@ -332,7 +339,13 @@ func (s *Scope) DropDatabase(c *Compile) error {
 	}
 
 	// 1.delete all index object record under the database from mo_catalog.mo_indexes
-	deleteSql := fmt.Sprintf(deleteMoIndexesWithDatabaseIdFormat, s.Plan.GetDdl().GetDropDatabase().GetDatabaseId())
+	// The planned ID can be stale if a same-name database was replaced while
+	// waiting for the catalog lock. Clean up the identity actually deleted.
+	indexDatabaseID, err := strconv.ParseUint(database.GetDatabaseId(c.proc.Ctx), 10, 64)
+	if err != nil {
+		return err
+	}
+	deleteSql := fmt.Sprintf(deleteMoIndexesWithDatabaseIdFormat, indexDatabaseID)
 	if err = c.runSqlWithOptions(
 		deleteSql, executor.StatementOption{}.WithDisableLog(),
 	); err != nil {
@@ -387,6 +400,36 @@ func (s *Scope) DropDatabase(c *Compile) error {
 	}
 
 	c.setAffectedRows(uint64(len(deleteTables)))
+	return nil
+}
+
+// Publication writers hold a shared lock on the same catalog key until
+// commit. This probe runs after DROP's exclusive lock and RC snapshot advance,
+// so it sees cross-account references and a fresh physical database identity.
+var ensureDatabaseNotPublished = func(c *Compile, db engine.Database, dbName string) error {
+	if db.IsSubscription(c.proc.Ctx) || needSkipDbs[dbName] {
+		return nil
+	}
+	dbID, err := strconv.ParseUint(db.GetDatabaseId(c.proc.Ctx), 10, 64)
+	if err != nil {
+		return err
+	}
+	res, err := c.runSqlWithResult(
+		fmt.Sprintf("select 1 from mo_catalog.mo_pubs where database_id = %d limit 1", dbID),
+		int32(catalog.System_Account),
+	)
+	if err != nil {
+		return err
+	}
+	publishing := false
+	res.ReadRows(func(n int, _ []*vector.Vector) bool {
+		publishing = publishing || n > 0
+		return false
+	})
+	res.Close()
+	if publishing {
+		return moerr.NewInternalErrorf(c.proc.Ctx, "can not drop database '%v' which is publishing", dbName)
+	}
 	return nil
 }
 

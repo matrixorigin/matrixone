@@ -34,6 +34,7 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/container/types"
 	"github.com/matrixorigin/matrixone/pkg/container/vector"
 	"github.com/matrixorigin/matrixone/pkg/defines"
+	"github.com/matrixorigin/matrixone/pkg/pb/lock"
 	"github.com/matrixorigin/matrixone/pkg/pb/plan"
 	"github.com/matrixorigin/matrixone/pkg/publication"
 	"github.com/matrixorigin/matrixone/pkg/sql/compile"
@@ -213,7 +214,7 @@ func doCreatePublication(ctx context.Context, ses *Session, cp *tree.CreatePubli
 		v2.CreatePubHistogram.Observe(time.Since(start).Seconds())
 	}()
 
-	bh := ses.GetBackgroundExec(ctx)
+	bh := ses.GetBackgroundExec(ctx, &BackgroundExecOption{forcePessimisticRC: true})
 	defer bh.Close()
 
 	tenantInfo := ses.GetTenantInfo()
@@ -303,6 +304,9 @@ func createPublication(ctx context.Context, bh BackgroundExec, cp *tree.CreatePu
 			}
 		}
 		if ctx, dbId, dbType, err = resolvePublicationDatabaseByName(ctx, bh, dbName, targetAccountIDs); err != nil {
+			return
+		}
+		if dbType, err = lockPublicationDatabase(ctx, bh, dbName, dbId); err != nil {
 			return
 		}
 		if !isUserDatabaseType(dbType, currentProtocolVersionForService(bh.Service())) {
@@ -534,6 +538,9 @@ func doAlterPublication(ctx context.Context, ses *Session, ap *tree.AlterPublica
 			if databaseCtx, dbId, dbType, err = resolvePublicationDatabaseByName(ctx, bh, dbName, targetAccountIDs); err != nil {
 				return err
 			}
+		}
+		if dbType, err = lockPublicationDatabase(databaseCtx, bh, dbName, dbId); err != nil {
+			return err
 		}
 		if !isUserDatabaseType(dbType, currentProtocolVersionForService(bh.Service())) {
 			return moerr.NewInternalErrorf(ctx, "database '%s' is not a user database", dbName)
@@ -2369,6 +2376,52 @@ func resolvePublicationDatabaseByName(
 		}
 	}
 	return
+}
+
+// lockPublicationDatabase pins the resolved physical source until the
+// publication transaction commits. DROP DATABASE takes the same catalog key
+// exclusively, then checks publication references after refreshing its RC
+// snapshot. A replacement under the same name must not inherit this reference.
+var lockPublicationDatabase = func(
+	ctx context.Context,
+	bh BackgroundExec,
+	dbName string,
+	expectedID uint64,
+) (dbType string, err error) {
+	accountID, err := defines.GetAccountId(ctx)
+	if err != nil {
+		return "", err
+	}
+	back, ok := bh.(*backExec)
+	if !ok || back.backSes.upstream == nil {
+		return "", moerr.NewInternalError(ctx, "publication database lock requires a session-backed executor")
+	}
+	if err = lockDatabaseCatalogRow(ctx, back.backSes.upstream, bh, accountID, dbName, lock.LockMode_Shared); err != nil {
+		return "", err
+	}
+	sql, err := getSqlForGetDbIdAndType(ctx, dbName, true, uint64(accountID))
+	if err != nil {
+		return "", err
+	}
+	bh.ClearExecResultSet()
+	if err = bh.Exec(ctx, sql); err != nil {
+		return "", err
+	}
+	erArray, err := getResultSet(ctx, bh)
+	if err != nil {
+		return "", err
+	}
+	if !execResultArrayHasData(erArray) {
+		return "", moerr.NewInternalErrorf(ctx, "database '%s' does not exist", dbName)
+	}
+	id, err := erArray[0].GetUint64(ctx, 0, 0)
+	if err != nil {
+		return "", err
+	}
+	if id != expectedID {
+		return "", moerr.NewTxnNeedRetryWithDefChanged(ctx)
+	}
+	return erArray[0].GetString(ctx, 0, 1)
 }
 
 // getDbAccountIdAndTypeById resolves the exact database row already owned by a

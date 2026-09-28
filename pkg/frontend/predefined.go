@@ -178,7 +178,8 @@ var (
     		owner int unsigned,
     		creator int unsigned,
     		comment text,
-			primary key (account_id, pub_name)
+			primary key (account_id, pub_name),
+			key idx_mo_pubs_database_id (database_id)
 	)`
 
 	MoCatalogMoSubsDDL = `create table mo_catalog.mo_subs (
