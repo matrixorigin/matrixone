@@ -261,7 +261,7 @@ func TestLocalCTEOuterReferencesExecutablePlan(t *testing.T) {
 				on a.n_nationkey=b.n_nationkey) select n from q limit 1) from tpch.nation p`,
 		},
 		{
-			name: "recursive ancestor predicate",
+			name: "recursive ancestor predicate without skipped conjunct",
 			sql: `select p.n_nationkey from tpch.nation p where not exists (
 				with recursive ancestors as (
 					select a.* from tpch.nation a where a.n_nationkey=p.n_regionkey
@@ -269,7 +269,7 @@ func TestLocalCTEOuterReferencesExecutablePlan(t *testing.T) {
 					select a.* from tpch.nation a join ancestors
 						on ancestors.n_regionkey=a.n_nationkey
 				) select * from ancestors where n_name='inactive'
-			) and p.n_name='active'`,
+			)`,
 		},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
@@ -466,6 +466,24 @@ func TestLocalCTEOuterReferencesRejectUnsafeDomains(t *testing.T) {
 			name: "explicit values expression executor",
 			sql: `select (with q(n) as (select p.n_regionkey+v.x from (values row(rand())) v(x))
 				select n from q) from tpch.nation p`,
+		},
+		{
+			name: "split where cannot prove recursive producer terminates on skipped partition",
+			sql: `select p.n_nationkey from tpch.nation p where not exists (
+				with recursive ancestors as (
+					select a.* from tpch.nation a where a.n_nationkey=p.n_regionkey
+					union all
+					select a.* from tpch.nation a join ancestors
+						on ancestors.n_regionkey=a.n_nationkey
+				) select * from ancestors where n_name='inactive'
+			) and p.n_name='active'`,
+		},
+		{
+			name: "guarded recursive operator can fail on skipped partition",
+			sql: `select p.n_nationkey, case when p.n_nationkey=2 then
+				(with recursive r(n) as (
+					select p.n_nationkey union all select n from r where n=1
+				) select count(*) from r) else 0 end from tpch.nation p`,
 		},
 		{
 			name: "guarded recursive member arithmetic needs totality proof",

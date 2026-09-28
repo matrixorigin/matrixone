@@ -310,6 +310,11 @@ func (d *localCTEDomain) admit() error {
 			if len(n.BindingTags) != 1 || len(n.SourceStep) == 0 {
 				return d.unsupported("recursive scan has no producer binding")
 			}
+			// Expression totality cannot prove recursive termination: an
+			// unconsumed outer partition can still hit the recursion cap.
+			if d.guarded && (n.NodeType == plan.Node_RECURSIVE_SCAN || n.NodeType == plan.Node_RECURSIVE_CTE) {
+				return d.unsupported("recursive producer may fail outside the consumer evaluation domain")
+			}
 		default:
 			return d.unsupported("producer operator " + n.NodeType.String())
 		}

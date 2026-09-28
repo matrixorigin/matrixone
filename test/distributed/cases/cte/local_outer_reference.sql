@@ -18,7 +18,16 @@ select p.id,
         ) select count(*) from r) as depth
 from pages p order by p.id;
 
--- Each row checks only its own ancestors.
+-- Each row checks only its own ancestors when every row consumes the CTE.
+select p.id from pages p where not exists (
+  with recursive ancestors as (
+    select a.* from pages a where a.id=p.parent_id
+    union all
+    select a.* from pages a join ancestors on ancestors.parent_id=a.id
+  ) select * from ancestors where active=0
+) order by p.id;
+-- A sibling conjunct may skip partitions; recursive operator termination
+-- cannot be proved for those rows even if these fixture rows are acyclic.
 select p.id from pages p where not exists (
   with recursive ancestors as (
     select a.* from pages a where a.id=p.parent_id
@@ -428,6 +437,28 @@ select p.id, (with q(n) as (select p.v) select n from q) as c
 from guarded_abs p where p.id=2 order by p.id desc limit 1;
 select p.id, (with q(n) as (select p.v) select n from q) as c
 from guarded_abs p order by p.id desc limit 1;
+-- Recursive operator failure is not an expression-level error. An unused
+-- partition (id=1) would hit the depth cap before the CASE is evaluated.
+select p.id, case when p.id=2 then
+  (with recursive q(n) as (
+    select p.id union all select n from q where n=1
+  ) select count(*) from q) else 0 end as c
+from guarded_abs p order by p.id;
+-- The same CTE terminates when the real outer domain contains only id=2.
+select p.id, (with recursive q(n) as (
+  select p.id union all select n from q where n=1
+) select count(*) from q) as c
+from guarded_abs p where p.id=2;
+-- A demanded id=1 must still raise the recursion limit error.
+select p.id, (with recursive q(n) as (
+  select p.id union all select n from q where n=1
+) select count(*) from q) as c
+from guarded_abs p where p.id=1;
+-- The active error must not poison the next query.
+select p.id from guarded_abs p where p.id=2;
+select p.id, case when p.id=2 then
+  (select count(*) from guarded_abs a where a.id=p.id) else 0 end as c
+from guarded_abs p order by p.id;
 drop table guarded_abs;
 
 -- Empty outer input starts no parameter partitions.

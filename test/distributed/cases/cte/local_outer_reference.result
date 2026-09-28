@@ -31,10 +31,19 @@ select a.* from pages a where a.id=p.parent_id
 union all
 select a.* from pages a join ancestors on ancestors.parent_id=a.id
 ) select * from ancestors where active=0
-) and active=1 order by p.id;
+) order by p.id;
 ➤ id[4,32,0]  𝄀
 1  𝄀
+2  𝄀
 5
+select p.id from pages p where not exists (
+with recursive ancestors as (
+select a.* from pages a where a.id=p.parent_id
+union all
+select a.* from pages a join ancestors on ancestors.parent_id=a.id
+) select * from ancestors where active=0
+) and active=1 order by p.id;
+correlated local CTE: recursive producer may fail outside the consumer evaluation domain is not yet implemented
 select p.id,
 (with recursive r(n) as (
 select a.id from pages a where a.id=p.parent_id
@@ -585,6 +594,32 @@ select p.id, (with q(n) as (select p.v) select n from q) as c
 from guarded_abs p order by p.id desc limit 1;
 ➤ id[4,32,0]  ¦  c[-5,64,0]  𝄀
 2  ¦  2
+select p.id, case when p.id=2 then
+(with recursive q(n) as (
+select p.id union all select n from q where n=1
+) select count(*) from q) else 0 end as c
+from guarded_abs p order by p.id;
+correlated local CTE: recursive producer may fail outside the consumer evaluation domain is not yet implemented
+select p.id, (with recursive q(n) as (
+select p.id union all select n from q where n=1
+) select count(*) from q) as c
+from guarded_abs p where p.id=2;
+➤ id[4,32,0]  ¦  c[-5,64,0]  𝄀
+2  ¦  1
+select p.id, (with recursive q(n) as (
+select p.id union all select n from q where n=1
+) select count(*) from q) as c
+from guarded_abs p where p.id=1;
+recursive level out of range
+select p.id from guarded_abs p where p.id=2;
+➤ id[4,32,0]  𝄀
+2
+select p.id, case when p.id=2 then
+(select count(*) from guarded_abs a where a.id=p.id) else 0 end as c
+from guarded_abs p order by p.id;
+➤ id[4,32,0]  ¦  c[-5,64,0]  𝄀
+1  ¦  0  𝄀
+2  ¦  1
 drop table guarded_abs;
 select p.id,
 (with recursive r(n) as (
