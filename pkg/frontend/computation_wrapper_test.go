@@ -6349,6 +6349,13 @@ func TestInitExecuteStmtParamKeepsConcreteTypeForMemberOf(t *testing.T) {
 	require.Equal(t, vector.PrepareParamFloat, cw.proc.GetPrepareParamKind(0))
 }
 
+func TestPreparedViewMetadataUdfRebuildsEveryExecute(t *testing.T) {
+	udfPlan := &plan.Plan{Plan: &plan.Plan_Query{Query: &plan.Query{ViewMetadataDependsOnUdf: true}}}
+	require.True(t, shouldRebuildPreparePlan(false, udfPlan))
+	ordinaryPlan := &plan.Plan{Plan: &plan.Plan_Query{Query: &plan.Query{}}}
+	require.False(t, shouldRebuildPreparePlan(false, ordinaryPlan))
+}
+
 func TestPreparedNullBlobRetainsBinaryProtocolType(t *testing.T) {
 	_, prepareStmt, cw, _ := newPreparedExecuteEnvForSQL(t, 122, "select ?")
 	defer prepareStmt.Close()
