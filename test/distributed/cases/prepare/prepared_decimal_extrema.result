@@ -143,6 +143,48 @@ EXECUTE pl_cast USING @p;
 ➤ id[4,32,0]  𝄀
 1  𝄀
 2
+PREPARE pc_typed FROM 'SELECT id FROM t WHERE COALESCE(?,CAST(? AS DECIMAL(38,10)))=d ORDER BY id';
+PREPARE pg_typed FROM 'SELECT id FROM t WHERE GREATEST(?,CAST(? AS DECIMAL(38,10)))=d ORDER BY id';
+PREPARE pg_nested FROM 'SELECT id FROM t WHERE GREATEST(?,COALESCE(?,d))=d ORDER BY id';
+EXECUTE pc_typed USING @p,@p;
+➤ id[4,32,0]  𝄀
+2
+EXECUTE pg_typed USING @p,@p;
+➤ id[4,32,0]  𝄀
+2
+EXECUTE pg_nested USING @p,@p;
+➤ id[4,32,0]  𝄀
+2
+PREPARE pg_width FROM 'SELECT id FROM t WHERE GREATEST(d,?)=CAST(9007199254740992.0000000002 AS DECIMAL(38,10)) ORDER BY id';
+PREPARE pc_width FROM 'SELECT id FROM t WHERE COALESCE(d,?)=CAST(9007199254740992.0000000002 AS DECIMAL(38,10)) ORDER BY id';
+SET @tiny='1e-48';
+EXECUTE pg_width USING @tiny;
+➤ id[4,32,0]  𝄀
+2
+EXECUTE pc_width USING @tiny;
+➤ id[4,32,0]  𝄀
+2
+SET @tiny='1e-49';
+EXECUTE pg_width USING @tiny;
+➤ id[4,32,0]  𝄀
+2
+EXECUTE pc_width USING @tiny;
+➤ id[4,32,0]  𝄀
+2
+SET @tiny='1e-1000';
+EXECUTE pg_width USING @tiny;
+➤ id[4,32,0]  𝄀
+2
+EXECUTE pc_width USING @tiny;
+➤ id[4,32,0]  𝄀
+2
+SET @tiny='1e1000';
+EXECUTE pg_width USING @tiny;
+invalid input: 1e1000 beyond the range, can't be converted to Decimal256(76,48).
+SET @tiny='1e-48';
+EXECUTE pg_width USING @tiny;
+➤ id[4,32,0]  𝄀
+2
 SET @small='2';
 PREPARE p_char_peer FROM 'SELECT GREATEST(CAST(1 AS DECIMAL(10,0)),?,CAST(10 AS CHAR)) AS g';
 PREPARE p_char_marker FROM 'SELECT GREATEST(CAST(1 AS DECIMAL(10,0)),CAST(? AS CHAR),CAST(10 AS DECIMAL(10,0))) AS g';
@@ -169,6 +211,11 @@ DEALLOCATE PREPARE pg_multi;
 DEALLOCATE PREPARE pl_multi;
 DEALLOCATE PREPARE pg_cast;
 DEALLOCATE PREPARE pl_cast;
+DEALLOCATE PREPARE pc_typed;
+DEALLOCATE PREPARE pg_typed;
+DEALLOCATE PREPARE pg_nested;
+DEALLOCATE PREPARE pg_width;
+DEALLOCATE PREPARE pc_width;
 DEALLOCATE PREPARE p_char_peer;
 DEALLOCATE PREPARE p_char_marker;
 DEALLOCATE PREPARE p_float_peer;

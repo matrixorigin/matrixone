@@ -351,4 +351,32 @@ func TestPreparedCommonValueStringMarkerWithFixedDecimalPeer(t *testing.T) {
 			}
 		})
 	}
+	for _, tc := range []struct {
+		name, expr string
+	}{
+		{"explicit typed peer", "coalesce(?, cast(? as decimal(38,10)))"},
+		{"nested fixed peer", "greatest(?, coalesce(?, cast(1 as decimal(38,10))))"},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			prepared, err := runOneStmt(NewMockOptimizer(false), t,
+				"prepare p from 'select "+tc.expr+" = cast(9007199254740992.0000000002 as decimal(38,10))'")
+			require.NoError(t, err)
+			template := prepared.GetDcl().GetPrepare().Plan
+			before := template.String()
+			values := []any{ParamValue{Value: "9007199254740992.0000000002", SourceType: types.T_varchar.ToType(),
+				HasSourceType: true, EnableNumericPrefix: true},
+				ParamValue{Value: "9007199254740992.0000000002", SourceType: types.T_varchar.ToType(),
+					HasSourceType: true, EnableNumericPrefix: true}}
+			require.True(t, PreparedPlanNeedsNumericPrefixSpecialization(template, values))
+			filled, specialized, err := FillValuesOfParamsInPlanWithSpecialization(context.Background(), template, values)
+			require.NoError(t, err)
+			require.True(t, specialized)
+			require.Equal(t, before, template.String())
+			comparison := findPlanFunctionExpr(filled, "=")
+			require.NotNil(t, comparison)
+			for _, arg := range comparison.GetF().Args {
+				require.True(t, types.T(arg.Typ.Id).IsDecimal(), comparison.String())
+			}
+		})
+	}
 }

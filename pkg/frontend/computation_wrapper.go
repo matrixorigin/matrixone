@@ -17,6 +17,7 @@ package frontend
 import (
 	"bytes"
 	"context"
+	"crypto/sha256"
 	"fmt"
 	"maps"
 	"slices"
@@ -2359,6 +2360,12 @@ func preparedRuntimeSemanticKey(paramVals []any) string {
 		}
 		fmt.Fprintf(&key, "%d:%d:%d:%d:%d:%d;", i, param.PrepareParamKind,
 			runtimeType.Oid, runtimeType.Charset, runtimeType.Width, runtimeType.Scale)
+		if param.EnableNumericPrefix && runtimeType.Oid.IsFloat() {
+			// Out-of-range DECIMAL prefixes can be folded to a value-specific
+			// zero or error during specialization. A type-only cache key would
+			// reuse that result for a different prefix in the FLOAT64 domain.
+			fmt.Fprintf(&key, "float-prefix:%x;", sha256.Sum256([]byte(rawValue)))
+		}
 		fmt.Fprintf(&key, "binary:%t;domain:%d;", param.IsBinaryString, param.RuntimeStringDomain)
 		charSourceRelevant := param.IsBinaryProtocol || param.HasSourceType ||
 			(param.HasRuntimeType && types.T(param.RuntimeType.Oid).IsMySQLString())

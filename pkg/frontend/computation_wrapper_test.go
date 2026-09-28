@@ -4119,6 +4119,15 @@ func TestPreparedRuntimeSemanticKeyKeepsValueAndSQLSourceDomains(t *testing.T) {
 	}}
 	require.NotEqual(t, preparedRuntimeSemanticKey(complete), preparedRuntimeSemanticKey(suffix),
 		"CHAR's exact numeric and prefix-string paths must not share a cached plan")
+
+	extreme := func(value string) []any {
+		return []any{plan2.ParamValue{Value: value, EnableNumericPrefix: true}}
+	}
+	require.NotEqual(t, preparedRuntimeSemanticKey(extreme("1e-1000")),
+		preparedRuntimeSemanticKey(extreme("1e1000")),
+		"out-of-range numeric prefixes may fold to value-specific constants")
+	require.Equal(t, preparedRuntimeSemanticKey(extreme("1e-1000")),
+		preparedRuntimeSemanticKey(extreme("1e-1000")))
 }
 
 func TestCOMStmtCharRuntimeCacheSeparatesEffectiveIntegerDomains(t *testing.T) {

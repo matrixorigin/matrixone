@@ -69,6 +69,34 @@ PREPARE pl_cast FROM 'SELECT id FROM t WHERE LEAST(d,CAST(? AS DECIMAL(38,10)))=
 EXECUTE pg_cast USING @p;
 EXECUTE pl_cast USING @p;
 
+-- A typed marker and a nested common-value result retain their DECIMAL peer.
+PREPARE pc_typed FROM 'SELECT id FROM t WHERE COALESCE(?,CAST(? AS DECIMAL(38,10)))=d ORDER BY id';
+PREPARE pg_typed FROM 'SELECT id FROM t WHERE GREATEST(?,CAST(? AS DECIMAL(38,10)))=d ORDER BY id';
+PREPARE pg_nested FROM 'SELECT id FROM t WHERE GREATEST(?,COALESCE(?,d))=d ORDER BY id';
+EXECUTE pc_typed USING @p,@p;
+EXECUTE pg_typed USING @p,@p;
+EXECUTE pg_nested USING @p,@p;
+
+-- A tiny text marker must not turn the DECIMAL column into FLOAT when the
+-- combined declared precision exceeds Decimal256's width.
+PREPARE pg_width FROM 'SELECT id FROM t WHERE GREATEST(d,?)=CAST(9007199254740992.0000000002 AS DECIMAL(38,10)) ORDER BY id';
+PREPARE pc_width FROM 'SELECT id FROM t WHERE COALESCE(d,?)=CAST(9007199254740992.0000000002 AS DECIMAL(38,10)) ORDER BY id';
+SET @tiny='1e-48';
+EXECUTE pg_width USING @tiny;
+EXECUTE pc_width USING @tiny;
+SET @tiny='1e-49';
+EXECUTE pg_width USING @tiny;
+EXECUTE pc_width USING @tiny;
+SET @tiny='1e-1000';
+EXECUTE pg_width USING @tiny;
+EXECUTE pc_width USING @tiny;
+-- The next value has the same inferred FLOAT64 category. A cached zero from
+-- the previous execution must not suppress this overflow error.
+SET @tiny='1e1000';
+EXECUTE pg_width USING @tiny;
+SET @tiny='1e-48';
+EXECUTE pg_width USING @tiny;
+
 -- A concrete string, explicit CHAR marker, or FLOAT peer does not establish
 -- the fixed DECIMAL-only context for the text parameter.
 SET @small='2';
@@ -92,6 +120,11 @@ DEALLOCATE PREPARE pg_multi;
 DEALLOCATE PREPARE pl_multi;
 DEALLOCATE PREPARE pg_cast;
 DEALLOCATE PREPARE pl_cast;
+DEALLOCATE PREPARE pc_typed;
+DEALLOCATE PREPARE pg_typed;
+DEALLOCATE PREPARE pg_nested;
+DEALLOCATE PREPARE pg_width;
+DEALLOCATE PREPARE pc_width;
 DEALLOCATE PREPARE p_char_peer;
 DEALLOCATE PREPARE p_char_marker;
 DEALLOCATE PREPARE p_float_peer;
