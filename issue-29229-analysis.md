@@ -76,4 +76,11 @@ Local focused tests passed for both packages:
     go test ./pkg/sql/plan ./pkg/sql/colexec/external \
       -run 'Test.*(Parquet|LoadExternalStats|ApplyLoadAssignmentCasts)' -count=1
 
-The combined candidate has not yet been validated by a new full COS/TKE run.
+The combined candidate was validated by COS/TKE load-only run 36366084312 at
+commit 9494371491. The same one-year table and
+`mo-big-data/parquet_type_conversion_100M_merged.parquet` completed
+successfully in 1688629.16 ms (about 28 minutes 9 seconds), with one passed
+table and no failed tables. This is about 38% faster than the e5 baseline in
+the recorded runs. Since TKE resource and COS conditions vary between runs,
+this result confirms the fix under the reproduced workflow but is not a
+controlled per-change benchmark.
