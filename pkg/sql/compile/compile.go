@@ -1439,6 +1439,9 @@ func (c *Compile) compileQuery(qry *plan.Query) ([]*Scope, error) {
 	if err = c.constrainIPFunctionWorkers(qry); err != nil {
 		return nil, err
 	}
+	if err = c.constrainCRC32JSONWorkers(qry); err != nil {
+		return nil, err
+	}
 	if err = c.constrainStringNumericResultWorkers(qry); err != nil {
 		return nil, err
 	}

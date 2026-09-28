@@ -8970,13 +8970,20 @@ func Md5(parameters []*vector.Vector, result vector.FunctionResultWrapper, proc 
 }
 
 type crc32ExecContext struct {
-	hah hash.Hash32
+	jsonText bool
+	hah      hash.Hash32
 }
 
 func newCrc32ExecContext() *crc32ExecContext {
 	return &crc32ExecContext{
 		hah: crc32.NewIEEE(),
 	}
+}
+
+func newCrc32JSONTextExecContext() *crc32ExecContext {
+	ctx := newCrc32ExecContext()
+	ctx.jsonText = true
+	return ctx
 }
 
 func (content *crc32ExecContext) builtInCrc32(parameters []*vector.Vector, result vector.FunctionResultWrapper, proc *process.Process, length int, selectList *FunctionSelectList) error {
@@ -8999,7 +9006,7 @@ func builtInCrc32Result[Tr types.FixedSizeTExceptStrType](
 	selectList *FunctionSelectList,
 	toResult func(uint32) Tr,
 ) error {
-	isJSON := parameters[0].GetType().Oid == types.T_json
+	isJSON := content.jsonText && parameters[0].GetType().Oid == types.T_json
 	return opUnaryBytesToFixedWithErrorCheck[Tr](
 		parameters,
 		result, proc, length, func(v []byte) (Tr, error) {

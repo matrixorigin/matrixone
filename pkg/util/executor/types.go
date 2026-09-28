@@ -106,6 +106,7 @@ type StatementOption struct {
 	keepAutoIncrement        uint64
 	keepLogicalId            uint64
 	keepRelKind              string
+	crc32CopyExpressions     *plan.TableDef
 	hasKeepRelKind           bool
 	disableLock              bool
 	allowMoColumnsUpdate     bool

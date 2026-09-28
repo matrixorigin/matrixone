@@ -2383,6 +2383,7 @@ func buildCreateTable(
 	stmt *tree.CreateTable,
 	cloneStmt *tree.CloneTable,
 	isPrepareStmt bool,
+	copySources ...*TableDef,
 ) (*Plan, error) {
 	tableName := string(stmt.Table.ObjectName)
 	if err := validateCreateTableIdentifier(ctx, tableName); err != nil {
@@ -2500,7 +2501,11 @@ func buildCreateTable(
 			// `CREATE TABLE IF NOT EXISTS T LIKE S` errors with "table already
 			// exists" when T exists instead of being a no-op (issue #25119).
 			stmtLike.IfNotExists = stmt.IfNotExists
-			p, err := buildCreateTable(ctx, stmtLike, nil, isPrepareStmt)
+			var copySource *TableDef
+			if tableHasLegacyCRC32(tableDef) {
+				copySource = tableDef
+			}
+			p, err := buildCreateTable(ctx, stmtLike, nil, isPrepareStmt, copySource)
 			if err != nil {
 				return nil, err
 			}
@@ -2567,7 +2572,7 @@ func buildCreateTable(
 		}
 	}
 
-	if err = buildTableDefs(stmt, ctx, createTable, asSelectCols); err != nil {
+	if err = buildTableDefs(stmt, ctx, createTable, asSelectCols, copySources...); err != nil {
 		return nil, err
 	}
 
@@ -3124,7 +3129,7 @@ func makeClusterTableAttributeDefault(colType plan.Type) *plan.Default {
 	}
 }
 
-func buildTableDefs(stmt *tree.CreateTable, ctx CompilerContext, createTable *plan.CreateTable, asSelectCols []*ColDef) error {
+func buildTableDefs(stmt *tree.CreateTable, ctx CompilerContext, createTable *plan.CreateTable, asSelectCols []*ColDef, copySources ...*TableDef) error {
 	// all below fields' key is lower case
 	// Keep the SELECT output schema in its original coordinate system. The
 	// explicit column pass may replace matching entries in asSelectCols, but
@@ -3306,7 +3311,7 @@ func buildTableDefs(stmt *tree.CreateTable, ctx CompilerContext, createTable *pl
 			if isGenerated {
 				// Build generated column expression using the full column list
 				// so that base columns defined later can be referenced (forward reference).
-				generatedCol, err = buildGeneratedExpr(def, colType, allColDefs, ctx.GetProcess())
+				generatedCol, err = buildGeneratedExpr(def, colType, allColDefs, ctx.GetProcess(), crc32CopyColumn(ctx.GetContext(), colName, copySources...))
 				if err != nil {
 					return err
 				}
@@ -3325,7 +3330,7 @@ func buildTableDefs(stmt *tree.CreateTable, ctx CompilerContext, createTable *pl
 					OriginString: "",
 				}
 			} else {
-				defaultValue, err = buildDefaultExprWithColumns(def, colType, ctx.GetProcess(), allColDefs)
+				defaultValue, err = buildDefaultExprWithColumns(def, colType, ctx.GetProcess(), allColDefs, crc32CopyColumn(ctx.GetContext(), colName, copySources...))
 				if err != nil {
 					return err
 				}
@@ -3333,7 +3338,7 @@ func buildTableDefs(stmt *tree.CreateTable, ctx CompilerContext, createTable *pl
 					return moerr.NewInvalidInputf(ctx.GetContext(), "invalid default value for '%s'", colNameOrigin)
 				}
 
-				onUpdateExpr, err = buildOnUpdate(def, colType, ctx.GetProcess())
+				onUpdateExpr, err = buildOnUpdate(def, colType, ctx.GetProcess(), crc32CopyColumn(ctx.GetContext(), colName, copySources...))
 				if err != nil {
 					return err
 				}
@@ -4020,6 +4025,27 @@ func appendCheckDef(
 ) error {
 	if err := requireCheckConstraintProtocol(ctx.GetContext(), ctx.GetProcess()); err != nil {
 		return err
+	}
+	if source, _ := ctx.GetContext().Value(defines.CRC32CopyExpressionsKey{}).(*plan.TableDef); source != nil {
+		for _, check := range source.Checks {
+			if check.Name == name && containsLegacyCRC32(check.Check) {
+				if err := RequirePersistedIPFunctionProtocolForAuthoring(ctx.GetContext(), ctx.GetProcess(), check.Check); err != nil {
+					return err
+				}
+				if err := validateCheckExpr(ctx.GetContext(), tableDef, check.Check, columnPos); err != nil {
+					return err
+				}
+				for _, existing := range tableDef.Checks {
+					if existing.Name == name {
+						return moerr.NewInvalidInputf(ctx.GetContext(), "duplicate check constraint name '%s'", name)
+					}
+				}
+				owned := *check
+				owned.Check = DeepCopyExpr(check.Check)
+				tableDef.Checks = append(tableDef.Checks, &owned)
+				return nil
+			}
+		}
 	}
 	colNames := make([]string, 0, len(tableDef.Cols))
 	colTypes := make([]plan.Type, 0, len(tableDef.Cols))

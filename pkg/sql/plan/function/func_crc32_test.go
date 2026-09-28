@@ -118,7 +118,7 @@ func TestCRC32JSONUsesSerializedText(t *testing.T) {
 		},
 		NewFunctionTestResult(types.T_uint32.ToType(), false, expected,
 			[]bool{false, false, false, false, false, false, false, true}),
-		newCrc32ExecContext().builtInCrc32,
+		newCrc32JSONTextExecContext().builtInCrc32,
 	)
 	succeed, info := testCase.Run()
 	require.True(t, succeed, info)
@@ -135,7 +135,7 @@ func TestCRC32PreservesTextAndBinaryBytes(t *testing.T) {
 		},
 		NewFunctionTestResult(types.T_uint32.ToType(), false,
 			[]uint32{2363233923, 3030484594, 0}, nil),
-		newCrc32ExecContext().builtInCrc32,
+		newCrc32JSONTextExecContext().builtInCrc32,
 	)
 	succeed, info := textCase.Run()
 	require.True(t, succeed, info)
@@ -147,7 +147,7 @@ func TestCRC32PreservesTextAndBinaryBytes(t *testing.T) {
 		},
 		NewFunctionTestResult(types.T_uint32.ToType(), false,
 			[]uint32{1826356594, 3523407757, 4278190080, 0}, nil),
-		newCrc32ExecContext().builtInCrc32,
+		newCrc32JSONTextExecContext().builtInCrc32,
 	)
 	succeed, info = binaryCase.Run()
 	require.True(t, succeed, info)
@@ -165,7 +165,7 @@ func TestCRC32JSONConstSelectionAndContextReuse(t *testing.T) {
 		},
 		NewFunctionTestResult(types.T_uint32.ToType(), false,
 			[]uint32{4128176518, 4128176518, 4128176518}, nil),
-		newCrc32ExecContext().builtInCrc32,
+		newCrc32JSONTextExecContext().builtInCrc32,
 	)
 	succeed, info := constCase.Run()
 	require.True(t, succeed, info)
@@ -177,7 +177,7 @@ func TestCRC32JSONConstSelectionAndContextReuse(t *testing.T) {
 		},
 		NewFunctionTestResult(types.T_uint32.ToType(), false,
 			[]uint32{0, 0, 0}, []bool{true, true, true}),
-		newCrc32ExecContext().builtInCrc32,
+		newCrc32JSONTextExecContext().builtInCrc32,
 	)
 	succeed, info = constNullCase.Run()
 	require.True(t, succeed, info)
@@ -192,7 +192,7 @@ func TestCRC32JSONConstSelectionAndContextReuse(t *testing.T) {
 		},
 		NewFunctionTestResult(types.T_uint32.ToType(), false,
 			[]uint32{0, 4261170317, 4128176518}, []bool{true, false, false}),
-		newCrc32ExecContext().builtInCrc32,
+		newCrc32JSONTextExecContext().builtInCrc32,
 	).WithSelectList(&FunctionSelectList{AnyNull: true, SelectList: []bool{false, true, true}})
 	stored, null := vector.GenerateFunctionStrParameter(selectionCase.parameters[0]).GetStrValue(0)
 	require.False(t, null)
@@ -202,7 +202,7 @@ func TestCRC32JSONConstSelectionAndContextReuse(t *testing.T) {
 
 	// One executor context is reused across batches. Reset must prevent the
 	// checksum from carrying bytes from a prior invocation.
-	contextFn := newCrc32ExecContext().builtInCrc32
+	contextFn := newCrc32JSONTextExecContext().builtInCrc32
 	for _, test := range []struct {
 		name string
 		text string
@@ -247,7 +247,7 @@ func TestCRC32JSONLongSerializedValues(t *testing.T) {
 		proc,
 		[]FunctionTestInput{NewFunctionTestInput(types.T_json.ToType(), encoded, nil)},
 		NewFunctionTestResult(types.T_uint32.ToType(), false, expected, nil),
-		newCrc32ExecContext().builtInCrc32,
+		newCrc32JSONTextExecContext().builtInCrc32,
 	)
 	succeed, info := testCase.Run()
 	require.True(t, succeed, info)
@@ -269,6 +269,57 @@ func TestCRC32JSONPropagatesMarshalError(t *testing.T) {
 	result := vector.NewFunctionResultWrapper(types.T_uint32.ToType(), proc.Mp())
 	defer result.Free()
 	require.NoError(t, result.PreExtendAndReset(1))
-	err := newCrc32ExecContext().builtInCrc32([]*vector.Vector{input}, result, proc, 1, nil)
+	err := newCrc32JSONTextExecContext().builtInCrc32([]*vector.Vector{input}, result, proc, 1, nil)
 	require.Error(t, err)
+}
+
+func TestCRC32ExecutionIdentityPreservesLegacyJSON(t *testing.T) {
+	proc := testutil.NewProcess(t)
+	defer proc.Free()
+	encoded := makeJSONEncodedFromText(t, []string{`{"t1":"a"}`}, nil)
+	for _, tc := range []struct {
+		name     string
+		overload int32
+		want     uint64
+	}{
+		{"legacy", CRC32LegacyOverload, 3719146973},
+		{"text", CRC32JSONTextOverload, 4012824821},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			f, err := GetFunctionById(proc.Ctx, EncodeOverloadID(CRC32, tc.overload))
+			require.NoError(t, err)
+			run := NewFunctionTestCase(proc, []FunctionTestInput{NewFunctionTestInput(types.T_json.ToType(), encoded, nil)}, NewFunctionTestResult(types.T_uint64.ToType(), false, []uint64{tc.want}, nil), fEvalFn(f.newOp()))
+			ok, info := run.Run()
+			require.True(t, ok, info)
+		})
+	}
+	for _, tc := range []struct {
+		typ      types.T
+		overload int32
+	}{
+		{types.T_json, CRC32JSONTextOverload}, {types.T_any, CRC32JSONTextOverload},
+		{types.T_varchar, CRC32LegacyOverload}, {types.T_varbinary, CRC32LegacyOverload}, {types.T_int64, CRC32LegacyOverload},
+	} {
+		resolved, err := GetFunctionByName(proc.Ctx, "crc32", []types.Type{tc.typ.ToType()})
+		require.NoError(t, err)
+		require.Equal(t, EncodeOverloadID(CRC32, tc.overload), resolved.GetEncodedOverloadID())
+	}
+}
+
+func TestCRC32LegacyJSONShapesAndReuse(t *testing.T) {
+	proc := testutil.NewProcess(t)
+	defer proc.Free()
+	values := []string{`{"b":2,"a":1}`, `[1,true,"x"]`, `1`, `"x"`, `true`, `false`, `null`, `"` + strings.Repeat("x", 4096) + `"`, ""}
+	nulls := []bool{false, false, false, false, false, false, false, false, true}
+	encoded := makeJSONEncodedFromText(t, values, nulls)
+	want := make([]uint32, len(encoded))
+	for i := range encoded {
+		want[i] = stdcrc32.ChecksumIEEE([]byte(encoded[i]))
+	}
+	ctx := newCrc32ExecContext()
+	for i := 0; i < 2; i++ {
+		c := NewFunctionTestCase(proc, []FunctionTestInput{NewFunctionTestInput(types.T_json.ToType(), encoded, nulls)}, NewFunctionTestResult(types.T_uint32.ToType(), false, want, nulls), ctx.builtInCrc32)
+		ok, info := c.Run()
+		require.True(t, ok, info)
+	}
 }

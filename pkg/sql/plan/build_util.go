@@ -658,7 +658,16 @@ func buildDefaultExprWithColumns(
 	typ plan.Type,
 	proc *process.Process,
 	columns []*ColDef,
+	sources ...*ColDef,
 ) (*plan.Default, error) {
+	if source := crc32SourceColumn(proc.Ctx, col.Name.ColName(), sources); source != nil && preserveCRC32Default(source.Default) {
+		value := *source.Default
+		value.Expr = DeepCopyExpr(value.Expr)
+		if err := RequirePersistedIPFunctionProtocolForAuthoring(proc.Ctx, proc, value.Expr); err != nil {
+			return nil, err
+		}
+		return &value, nil
+	}
 	nullAbility := true
 	var expr tree.Expr = nil
 	for _, attr := range col.Attributes {
@@ -745,7 +754,11 @@ func buildDefaultExprWithColumns(
 		return nil, mapDDLAssignmentCastError(proc.Ctx, typ, colNameOrigin, err)
 	}
 
-	if lit := newExpr.GetLit(); lit != nil && exprContainsHexOverload(defaultExpr, 0) {
+	crc32Text, err := plan.RequiresMORPCVersion94CRC32JSONTextBytes(defaultExpr)
+	if err != nil {
+		return nil, err
+	}
+	if lit := newExpr.GetLit(); lit != nil && (exprContainsHexOverload(defaultExpr, 0) || crc32Text) {
 		// Preserve resolved types rather than reparsing display SQL after upgrade.
 		lit.Src = DeepCopyExpr(defaultExpr)
 	}
@@ -776,7 +789,15 @@ func requireExpressionDefaultProtocol(proc *process.Process) error {
 		"column-reference defaults require all CNs to support protocol version 60")
 }
 
-func buildOnUpdate(col *tree.ColumnTableDef, typ plan.Type, proc *process.Process) (*plan.OnUpdate, error) {
+func buildOnUpdate(col *tree.ColumnTableDef, typ plan.Type, proc *process.Process, sources ...*ColDef) (*plan.OnUpdate, error) {
+	if source := crc32SourceColumn(proc.Ctx, col.Name.ColName(), sources); source != nil && source.OnUpdate != nil && containsLegacyCRC32(source.OnUpdate.Expr) {
+		value := *source.OnUpdate
+		value.Expr = DeepCopyExpr(value.Expr)
+		if err := RequirePersistedIPFunctionProtocolForAuthoring(proc.Ctx, proc, value.Expr); err != nil {
+			return nil, err
+		}
+		return &value, nil
+	}
 	var expr tree.Expr = nil
 
 	for _, attr := range col.Attributes {
@@ -839,7 +860,15 @@ func getColumnNullAbility(col *tree.ColumnTableDef) bool {
 	return true
 }
 
-func buildGeneratedExpr(col *tree.ColumnTableDef, typ plan.Type, existingCols []*ColDef, proc *process.Process) (*plan.GeneratedCol, error) {
+func buildGeneratedExpr(col *tree.ColumnTableDef, typ plan.Type, existingCols []*ColDef, proc *process.Process, sources ...*ColDef) (*plan.GeneratedCol, error) {
+	if source := crc32SourceColumn(proc.Ctx, col.Name.ColName(), sources); source != nil && source.GeneratedCol != nil && containsLegacyCRC32(source.GeneratedCol.Expr) {
+		value := *source.GeneratedCol
+		value.Expr = DeepCopyExpr(value.Expr)
+		if err := RequirePersistedIPFunctionProtocolForAuthoring(proc.Ctx, proc, value.Expr); err != nil {
+			return nil, err
+		}
+		return &value, nil
+	}
 	var genAttr *tree.AttributeGeneratedAlways
 	for _, attr := range col.Attributes {
 		if ga, ok := attr.(*tree.AttributeGeneratedAlways); ok {

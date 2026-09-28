@@ -363,9 +363,9 @@ const (
 // SpatialDistanceSemantics requires MORPC v90 because geodetic
 // ST_FRECHETDISTANCE/ST_HAUSDORFFDISTANCE change the meaning of existing
 // overloads and the distance family adds length-unit overloads.
-// CRC32JSONTextBytes requires MORPC v94 because CRC32's existing JSON
-// overload keeps its function identity while changing its input contract from
-// the internal binary representation to normalized JSON text bytes.
+// CRC32JSONTextBytes requires MORPC v94 for the new CRC32 JSON-text execution
+// identity. Legacy catalog and wire expressions retain binary JSON hashing
+// under overload zero.
 type RemoteExpressionFeatures struct {
 	NumericPrefix                   bool
 	JSONComparisonParam             bool
@@ -904,19 +904,21 @@ func RequiredRemoteExpressionFeatures(owner any) (features RemoteExpressionFeatu
 	return
 }
 
-// isCRC32JSONTextBytes identifies the existing CRC32 overload when its input
-// remains JSON at the serialized expression boundary. Plain text/binary CRC32
-// calls retain their historical bytes and are therefore still compatible with
-// pre-v86 workers.
+// CRC32 execution identities are shared with the function registry. Catalog and
+// wire expressions retain the identity selected by their original binder.
+const (
+	CRC32LegacyOverload   = 0
+	CRC32JSONTextOverload = 1
+)
+
+// isCRC32JSONTextBytes also protects unresolved prepared arguments: the wire
+// identity, not a parameter's current type, determines receiver capability.
 func isCRC32JSONTextBytes(expr *Expr) bool {
 	if expr == nil {
 		return false
 	}
 	fn := expr.GetF()
-	if fn == nil || fn.Func == nil || int32(fn.Func.Obj>>32) != crc32FunctionID {
-		return false
-	}
-	return len(fn.Args) > 0 && fn.Args[0] != nil && fn.Args[0].Typ.Id == planJSONTypeID
+	return fn != nil && fn.Func != nil && int32(fn.Func.Obj>>32) == crc32FunctionID && int32(fn.Func.Obj) == CRC32JSONTextOverload
 }
 
 // RequiresMORPCVersion94CRC32JSONTextBytes reports whether an owner contains

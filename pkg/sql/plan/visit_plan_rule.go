@@ -3223,6 +3223,13 @@ func (rule *ResetParamRefRule) applyExpr(e *plan.Expr) (*plan.Expr, error) {
 			if err != nil {
 				return nil, err
 			}
+			// Rebinding parameters must not opt a serialized legacy CRC32
+			// expression into JSON text hashing. New unresolved bindings already
+			// carry the new identity; overload zero remains an old contract.
+			if originalFuncObj == planfunction.EncodeOverloadID(planfunction.CRC32, planfunction.CRC32LegacyOverload) && rewritten.GetF() != nil {
+				rewritten.GetF().Func.Obj = originalFuncObj
+				rewritten.Typ = originalTyp
+			}
 			preserveReboundFunctionMetadata(exprImpl.F, rewritten.GetF())
 			if restored, restoredChanged, restoreErr := rule.restorePreparedTemporalNullEnvelope(
 				functionName, originalTyp, originalArgs, rewritten,

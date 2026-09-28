@@ -1509,7 +1509,7 @@ func TestRemoteExpressionProtocolValidation(t *testing.T) {
 			Typ: planpb.Type{Id: int32(types.T_uint64)},
 			Expr: &planpb.Expr_F{F: &planpb.Function{
 				Func: &planpb.ObjectRef{
-					Obj:     planfunction.EncodeOverloadID(planfunction.CRC32, 0),
+					Obj:     planfunction.EncodeOverloadID(planfunction.CRC32, planfunction.CRC32JSONTextOverload),
 					ObjName: "crc32",
 				},
 				Args: []*planpb.Expr{jsonInput},
@@ -1540,7 +1540,7 @@ func TestRemoteExpressionProtocolValidation(t *testing.T) {
 		require.True(t, moerr.IsMoErrCode(err, moerr.ErrNotSupported))
 		client.version = defines.MORPCVersion93
 		_, err = encodeRemoteScope(scope, c.proc)
-		require.ErrorContains(t, err, "CRC32 JSON text-byte semantics require MORPC protocol version 94")
+		require.ErrorContains(t, err, "CRC32 JSON text-byte semantics")
 
 		rt.SetGlobalVariables(moruntime.MOProtocolVersion, defines.MORPCVersion94)
 		require.NoError(t, validateRemoteExpressionPipelineProtocol(proc, remotePipeline))
