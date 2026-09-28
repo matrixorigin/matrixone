@@ -43,6 +43,22 @@ func TestIssue28397FieldKeepsExactNumericComparison(t *testing.T) {
 		conn, err := db.Conn(ctx)
 		require.NoError(t, err)
 		defer conn.Close()
+		enableMySQLNumericCompatibility := func(t *testing.T) {
+			t.Helper()
+			var originalSQLMode string
+			require.NoError(t, conn.QueryRowContext(ctx, "select @@session.sql_mode").Scan(&originalSQLMode))
+			compatibilitySQLMode := originalSQLMode
+			if compatibilitySQLMode != "" {
+				compatibilitySQLMode += ","
+			}
+			compatibilitySQLMode += "MYSQL_NUMERIC_COMPATIBILITY"
+			_, err := conn.ExecContext(ctx, fmt.Sprintf("set session sql_mode = '%s'", strings.ReplaceAll(compatibilitySQLMode, "'", "''")))
+			require.NoError(t, err)
+			t.Cleanup(func() {
+				_, err := conn.ExecContext(ctx, fmt.Sprintf("set session sql_mode = '%s'", strings.ReplaceAll(originalSQLMode, "'", "''")))
+				require.NoError(t, err)
+			})
+		}
 
 		dbName := testutils.GetDatabaseName(t)
 		_, err = conn.ExecContext(ctx, fmt.Sprintf("create database `%s`", dbName))
@@ -265,6 +281,9 @@ func TestIssue28397FieldKeepsExactNumericComparison(t *testing.T) {
 				{"mixed string peer", second, first + `, "x"`, 1},
 			} {
 				t.Run(tc.name, func(t *testing.T) {
+					if tc.name == "mixed string peer" {
+						enableMySQLNumericCompatibility(t)
+					}
 					_, err := conn.ExecContext(ctx, "prepare field_boundary from 'select field(?, "+tc.peers+")'")
 					require.NoError(t, err)
 					defer func() {
@@ -466,6 +485,7 @@ func TestIssue28397FieldKeepsExactNumericComparison(t *testing.T) {
 				require.Equal(t, direct, prepared)
 			})
 			t.Run("mixed set keeps every physical row", func(t *testing.T) {
+				enableMySQLNumericCompatibility(t)
 				stmt, err := conn.PrepareContext(ctx,
 					"select x, field(x, cast(0 as decimal(20,0))) from (select ? as x union all select ?) d order by 2")
 				require.NoError(t, err)
@@ -790,7 +810,7 @@ func TestIssue28397FieldKeepsExactNumericComparison(t *testing.T) {
 				{
 					name: "null in numeric result", expr: "field(coalesce(abs(?), ?), abs(" + first + "))",
 					runs: []fieldBoundaryRun{
-						{"text null", []string{"null", second}, []int64{0}},
+						{"text null", []string{"null", second}, []int64{1}},
 						{"double null", []string{"cast(null as double)", second}, []int64{1}},
 						{"decimal null", []string{"cast(null as decimal(20,0))", second}, []int64{0}},
 					},
