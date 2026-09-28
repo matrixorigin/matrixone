@@ -4146,6 +4146,10 @@ func (mp *MysqlProtocolImpl) receiveExtraInfo(rs *Conn) {
 		}
 		return
 	}
+	if len(i.Salt) != 20 {
+		mp.ses.Error(mp.ctx, "invalid proxy salt length", zap.Int("length", len(i.Salt)))
+		return
+	}
 
 	// must from proxy if extraInfo is received
 	mp.GetSession().fromProxy = true

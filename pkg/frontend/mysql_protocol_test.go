@@ -54,6 +54,7 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/logutil"
 	"github.com/matrixorigin/matrixone/pkg/pb/metadata"
 	planPb "github.com/matrixorigin/matrixone/pkg/pb/plan"
+	"github.com/matrixorigin/matrixone/pkg/pb/proxy"
 	"github.com/matrixorigin/matrixone/pkg/pb/txn"
 	"github.com/matrixorigin/matrixone/pkg/perfcounter"
 	"github.com/matrixorigin/matrixone/pkg/sql/colexec"
@@ -130,6 +131,56 @@ func TestMysqlProtocolReceiveExtraInfoLogLevel(t *testing.T) {
 		require.Len(t, entries, 1)
 		require.Equal(t, zap.ErrorLevel, entries[0].Level)
 	})
+}
+
+func TestMysqlProtocolReceiveExtraInfoSaltValidation(t *testing.T) {
+	originalSalt := []byte("01234567890123456789")
+	tests := []struct {
+		name      string
+		wire      []byte
+		info      proxy.ExtraInfo
+		validSalt bool
+	}{
+		{name: "empty extra info", wire: []byte{0, 0}},
+		{name: "short salt", info: proxy.ExtraInfo{Salt: []byte("12345678"), ConnectionID: 99, InternalConn: true}},
+		{name: "valid salt", info: proxy.ExtraInfo{Salt: []byte("12345678901234567890"), ConnectionID: 99, InternalConn: true}, validSalt: true},
+	}
+
+	for _, tc := range tests {
+		t.Run(tc.name, func(t *testing.T) {
+			wire := tc.wire
+			if wire == nil {
+				var err error
+				wire, err = tc.info.Encode()
+				require.NoError(t, err)
+			}
+			conn := &Conn{conn: &testConn{data: wire}}
+			ses, logs := newObservedProtocolSession()
+			proto := &MysqlProtocolImpl{
+				ctx:          context.Background(),
+				ses:          ses,
+				tcpConn:      conn,
+				salt:         append([]byte(nil), originalSalt...),
+				connectionID: 42,
+				io:           gIO,
+				SV:           &config.FrontendParameters{},
+			}
+
+			proto.receiveExtraInfo(conn)
+			if tc.validSalt {
+				require.Equal(t, tc.info.Salt, proto.GetSalt())
+				require.Equal(t, tc.info.ConnectionID, proto.connectionID)
+				require.True(t, ses.fromProxy)
+				require.Equal(t, ConnTypeInternal, ses.connType)
+			} else {
+				require.Equal(t, originalSalt, proto.GetSalt())
+				require.Equal(t, uint32(42), proto.connectionID)
+				require.False(t, ses.fromProxy)
+				require.Len(t, logs.FilterMessage("invalid proxy salt length").All(), 1)
+			}
+			require.NotEmpty(t, proto.makeHandshakeV10Payload())
+		})
+	}
 }
 
 func registerConn(clientConn net.Conn) {
