@@ -510,7 +510,7 @@ func TestBuildSQLJSONPlanCoversOperatorDetails(t *testing.T) {
 			{NodeId: 3, NodeType: plan.Node_SORT, Children: []int32{4}, OrderBy: []*plan.OrderBySpec{orderBy(plan.OrderBySpec_ASC | plan.OrderBySpec_NULLS_FIRST | plan.OrderBySpec_UNIQUE)}, Limit: value(8), Offset: value(9)},
 			{NodeId: 4, NodeType: plan.Node_WINDOW, Children: []int32{5}, WinSpecList: []*plan.Expr{window}},
 			{NodeId: 5, NodeType: plan.Node_TIME_WINDOW, Children: []int32{6}, TimeWindowPartitionBy: []*plan.Expr{value(10)}, Interval: value(11), Sliding: value(12), Timestamp: value(13), WEnd: value(14), GapFillStart: value(15), GapFillEnd: value(16)},
-			{NodeId: 6, NodeType: plan.Node_FILL, Children: []int32{7}, FillVal: []*plan.Expr{value(17)}},
+			{NodeId: 6, NodeType: plan.Node_FILL, FillType: plan.Node_VALUE, Children: []int32{7}, FillVal: []*plan.Expr{value(17)}},
 			{NodeId: 7, NodeType: plan.Node_PARTITION, Children: []int32{8}, OrderBy: []*plan.OrderBySpec{orderBy(plan.OrderBySpec_DESC)}, Limit: value(18), Offset: value(19)},
 			{NodeId: 8, NodeType: plan.Node_PROJECT, Children: []int32{9}, ProjectList: []*plan.Expr{value(20)}},
 			{NodeId: 9, NodeType: plan.Node_VALUE_SCAN, Children: []int32{10}, ProjectList: []*plan.Expr{value(21)}},
@@ -557,7 +557,7 @@ func TestBuildSQLJSONPlanCoversOperatorDetails(t *testing.T) {
 	require.Len(t, byID["3"].OrderBySpecs, 1)
 	require.Len(t, byID["4"].Windows, 1)
 	require.Len(t, byID["5"].Expressions, 7)
-	require.Equal(t, []string{"17"}, byID["6"].Expressions)
+	require.Equal(t, []string{"fill_type=VALUE", "fill_value[0]=17"}, byID["6"].Expressions)
 	require.Equal(t, "18", byID["7"].Limit)
 	require.Equal(t, []string{"28"}, byID["16"].Expressions)
 	require.Equal(t, []string{"29"}, byID["17"].Expressions)

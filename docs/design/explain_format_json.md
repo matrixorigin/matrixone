@@ -154,6 +154,11 @@ The following mappings are normative for schema version 1:
   `recursive_union_mode=ALL` in `node.expressions`, directly from
   `RecursiveUnionDistinct`. Both values are explicit; a missing boolean does
   not stand in for ALL. Ordinary CTE and UNION nodes retain their mappings.
+- A `FILL` node records `fill_type=<NONE|PREV|NEXT|NULL|VALUE|LINEAR>`,
+  followed by `fill_target[i]=<expression>` from its optimized `AggList` and
+  `fill_value[i]=<expression>` from `FillVal`, in their original order.
+  Empty target/value lists add no entries. Unknown modes and missing required
+  expressions are errors; the renderer never rebuilds pre-pruning targets.
 - Statistics are copied only when finite. The source `Stats` object is never
   cleaned or rewritten as part of serialization.
 

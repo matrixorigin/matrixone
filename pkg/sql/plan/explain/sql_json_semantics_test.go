@@ -266,3 +266,72 @@ func TestSQLJSONPlannerRecursiveUnionMode(t *testing.T) {
 		}
 	}
 }
+
+func TestSQLJSONPlannerFillRoles(t *testing.T) {
+	for _, mode := range []string{"prev", "next", "linear", "value, 7", "value, 8"} {
+		t.Run(mode, func(t *testing.T) {
+			queryPlan, err := buildOneStmt(planpkg.NewMockOptimizer(false), t,
+				"select c from (select _wstart as a, max(val) as b, min(val) as c from "+twTable+" interval(updated_at, 5, second) fill("+mode+")) x")
+			require.NoError(t, err)
+			query := queryPlan.GetQuery()
+			var fill *plan.Node
+			for _, node := range reachablePlanNodes(query) {
+				if node.NodeType == plan.Node_FILL {
+					fill = node
+				}
+			}
+			require.NotNil(t, fill)
+			require.Len(t, fill.AggList, 1)
+			require.Equal(t, "min", fill.AggList[0].GetF().Func.ObjName)
+			data, err := BuildSQLJSONPlan(t.Context(), query)
+			require.NoError(t, err)
+			var doc struct {
+				MatrixOne sqlJSONMatrixOne `json:"matrixone"`
+			}
+			require.NoError(t, json.Unmarshal(data, &doc))
+			found := false
+			for _, node := range doc.MatrixOne.Nodes {
+				if node.ID != fmt.Sprint(fill.NodeId) {
+					continue
+				}
+				found = true
+				require.Len(t, node.Expressions, 1+len(fill.AggList)+len(fill.FillVal))
+				require.Equal(t, "fill_type="+strings.ToUpper(strings.Split(mode, ",")[0]), node.Expressions[0])
+				require.Contains(t, node.Expressions[1], "fill_target[0]=min(")
+				require.NotContains(t, strings.Join(node.Expressions, "\n"), "max(")
+				if mode == "linear" {
+					require.Len(t, fill.FillVal, 1)
+					require.Contains(t, node.Expressions[2], "fill_value[0]=")
+				}
+				if strings.HasPrefix(mode, "value") {
+					require.Contains(t, node.Expressions[2], strings.TrimSpace(strings.Split(mode, ",")[1]))
+				}
+			}
+			require.True(t, found)
+		})
+	}
+}
+
+func TestSQLJSONFillBoundaryRoles(t *testing.T) {
+	for _, mode := range []plan.Node_FillType{plan.Node_NONE, plan.Node_NULL, plan.Node_PREV, plan.Node_NEXT, plan.Node_VALUE, plan.Node_LINEAR} {
+		t.Run(mode.String(), func(t *testing.T) {
+			node := &plan.Node{NodeType: plan.Node_FILL, FillType: mode, AggList: []*plan.Expr{sqlJSONTestInt32(1), sqlJSONTestInt32(2)}, FillVal: []*plan.Expr{sqlJSONTestInt32(7)}}
+			data, err := BuildSQLJSONPlan(t.Context(), &plan.Query{Nodes: []*plan.Node{node}, Steps: []int32{0}})
+			require.NoError(t, err)
+			var doc struct {
+				MatrixOne sqlJSONMatrixOne `json:"matrixone"`
+			}
+			require.NoError(t, json.Unmarshal(data, &doc))
+			require.Equal(t, []string{"fill_type=" + mode.String(), "fill_target[0]=1", "fill_target[1]=2", "fill_value[0]=7"}, doc.MatrixOne.Nodes[0].Expressions)
+		})
+	}
+	for _, node := range []*plan.Node{
+		{NodeType: plan.Node_FILL, FillType: plan.Node_FillType(99)},
+		{NodeType: plan.Node_FILL, AggList: []*plan.Expr{nil}},
+		{NodeType: plan.Node_FILL, FillVal: []*plan.Expr{nil}},
+	} {
+		data, err := BuildSQLJSONPlan(t.Context(), &plan.Query{Nodes: []*plan.Node{node}, Steps: []int32{0}})
+		require.Error(t, err)
+		require.Empty(t, data)
+	}
+}

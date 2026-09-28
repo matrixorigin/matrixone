@@ -370,8 +370,7 @@ func (b *sqlJSONPlanBuilder) addNodeDetails(item *sqlJSONNode, node *plan.Node) 
 			return err
 		}
 	case plan.Node_FILL:
-		var err error
-		item.Expressions, err = sqlJSONExprValues(b.ctx, node.FillVal, &b.textOpts)
+		item.Expressions, err = sqlJSONFillExpressions(b.ctx, node, &b.textOpts)
 		if err != nil {
 			return err
 		}
@@ -570,6 +569,34 @@ func sqlJSONExprList(ctx context.Context, exprs []*plan.Expr, options *ExplainOp
 		return "", err
 	}
 	return strings.Join(values, ", "), nil
+}
+
+func sqlJSONFillExpressions(ctx context.Context, node *plan.Node, options *ExplainOptions) ([]string, error) {
+	switch node.FillType {
+	case plan.Node_NONE, plan.Node_PREV, plan.Node_NEXT, plan.Node_NULL, plan.Node_VALUE, plan.Node_LINEAR:
+	default:
+		return nil, moerr.NewInvalidInputf(ctx, "fill node has unknown mode %d", node.FillType)
+	}
+	values := make([]string, 0, 1+len(node.AggList)+len(node.FillVal))
+	values = append(values, "fill_type="+node.FillType.String())
+	for _, role := range []struct {
+		name  string
+		exprs []*plan.Expr
+	}{
+		{"fill_target", node.AggList}, {"fill_value", node.FillVal},
+	} {
+		for i, expr := range role.exprs {
+			if expr == nil {
+				return nil, moerr.NewInvalidInputf(ctx, "%s[%d] expression is missing", role.name, i)
+			}
+			value, err := sqlJSONExpr(ctx, expr, options)
+			if err != nil {
+				return nil, err
+			}
+			values = append(values, role.name+"["+strconv.Itoa(i)+"]="+value)
+		}
+	}
+	return values, nil
 }
 
 func sqlJSONSampleExpressions(ctx context.Context, spec *plan.SampleFuncSpec) ([]string, error) {

@@ -82,6 +82,21 @@ explain format=json select id, tag from vectors_include order by l2_distance(v,'
 drop table vectors_include;
 set probe_limit=default;
 
+-- FILL preserves mode and the targets remaining after projection pruning.
+create table fill_values(ts timestamp, v int);
+insert into fill_values values ('2024-01-01 00:00:00',1),('2024-01-01 00:00:10',3);
+-- @regex("(?s)fill_type=PREV.*fill_target.*min",true)
+explain format=json select c from (select _wstart as a, max(v) as b, min(v) as c from fill_values interval(ts, 5, second) fill(prev)) x;
+-- @regex("(?s)fill_type=NEXT.*fill_target.*min",true)
+explain format=json select c from (select _wstart as a, max(v) as b, min(v) as c from fill_values interval(ts, 5, second) fill(next)) x;
+-- @regex("(?s)fill_type=LINEAR.*fill_target.*min.*fill_value",true)
+explain format=json select c from (select _wstart as a, max(v) as b, min(v) as c from fill_values interval(ts, 5, second) fill(linear)) x;
+-- @regex("(?s)fill_type=VALUE.*fill_target.*min.*fill_value.*7",true)
+explain format=json select min(v) from fill_values interval(ts, 5, second) fill(value, 7);
+-- @regex("(?s)fill_type=VALUE.*fill_target.*min.*fill_value.*8",true)
+explain format=json select min(v) from fill_values interval(ts, 5, second) fill(value, 8);
+drop table fill_values;
+
 -- ANALYZE FALSE is normalized to ordinary JSON EXPLAIN and must not start a runner.
 -- @regex("(?s)query_block.*matrixone.*schema_version",true)
 explain (analyze false, format json) select * from t;
