@@ -177,9 +177,15 @@ The capability must cover these existing MatrixOne rules:
   `result_scale = min(s1+s2, max(12, s1, s2))`. A widened result precision is
   `min(p1+p2, 65)`; narrower multiplication currently publishes a
   `DECIMAL128(38,result_scale)` result.
-- Division uses
-  `result_scale = max(s1, min(12, s1+6))` and publishes precision 38 or 65
-  according to the selected MatrixOne physical result domain.
+- Exact `/` division is bound using the statement's
+  `div_precision_increment` (default 4, range 0..30). For decimal operands,
+  MatrixOne derives `precision = min(65, left_precision + right_scale +
+  increment)` and `scale = min(30, left_scale + increment)`, then raises
+  precision to scale if necessary. It selects `DECIMAL256` when either
+  effective operand is `DECIMAL256` or precision exceeds 38; otherwise the
+  result is `DECIMAL128`. Integer or temporal operands use MatrixOne's
+  original-to-effective decimal operand rules before these bounds are applied.
+  This describes MO binding, not a formula Sirius should rerun.
 - `SUM(DECIMAL(p,s))` preserves scale and reserves 22 aggregate digits:
   precision is `min(p+22,65)`. It promotes to `DECIMAL256` when precision
   exceeds 38.
@@ -191,9 +197,12 @@ The capability must cover these existing MatrixOne rules:
   must compare exact values after MatrixOne's scale alignment. Casts, `CASE`,
   grouping, joins, and sort keys retain the exact bound operand/result types.
 
-These formulas document current behavior and its counterexamples. The emitted
-plan still carries the result type explicitly, and Sirius must reject a
-signature whose declared result disagrees with it.
+These rules document current behavior and its counterexamples. The emitted
+plan carries the MO-bound result type and operand casts explicitly. Sirius
+must use and validate that exact physical width, precision, scale, and
+nullability; it neither reads `div_precision_increment` nor derives a new
+division result type from the operands. MO has already applied the session
+setting before export, so no runtime session carrier is needed for division.
 
 ### 4.2 Rounding
 
@@ -249,7 +258,10 @@ SQL mode. A NULL operand or masked row also produces NULL without evaluating
 division. INSERT, UPDATE, and IGNORE are rejected before native preparation;
 their different division-by-zero behavior remains owned by MatrixOne.
 
-The result uses the scale formula above and half-away-from-zero rounding.
+The result uses the MO-bound result scale and half-away-from-zero rounding.
+The native division kernel takes that scale from the validated plan/result
+descriptor, including when the scale-30 cap places it below an input scale;
+it must not round first at a different intermediate scale.
 Current MatrixOne Decimal256 division runs through `decimal256BatchArith`,
 which checks the declared result precision after the physical kernel; Sirius
 must perform the same check before publishing a scalar result.
@@ -351,7 +363,10 @@ numeric admission behavior remain unchanged during coexistence.
 | Signed tie rounding | `1.25`, `-1.25` reduced to scale one | `1.3`, `-1.3`. |
 | Multiply result domain | 38-digit value times a 20-digit value | Exact widened result or declared-precision overflow at the same boundary as MO. |
 | Raw product wider than 256 bits | `DECIMAL(41,30)` `10000000000 * 10000000000` | The 512-bit scratch product scales to the valid coefficient `10^50`; no premature overflow. A scaled result outside signed 256 bits still fails. |
-| Division scale | `DECIMAL(...,2) 1.00 / 8` | Value `0.12500000` with the planned scale eight. |
+| Division setting and bound result | Two `DECIMAL(10,2)` columns containing `1.00` and `3.00`, under `div_precision_increment` 0, 4, 10, and 30 | Respectively `DECIMAL128(12,2)` = `0.33`, `DECIMAL128(16,6)` = `0.333333`, `DECIMAL128(22,12)` = `0.333333333333`, and `DECIMAL256(42,30)` = `0.333333333333333333333333333333`; values and metadata match MO. |
+| Prepared division after setting change | Re-execute one prepared division after changing the increment from 4 to 10 and 30 | Each execution uses its newly MO-bound result type and value; Sirius does not read a runtime session variable or reuse stale scale metadata. |
+| Division scale cap below input | With increment 0, a `DECIMAL128(38,37)` or `DECIMAL256(65,40)` value `0.1` divided by `2` | MO binds respectively `DECIMAL128(38,30)` and `DECIMAL256(65,30)`, below the left input scale; one rounded division yields `0.050000000000000000000000000000`. |
+| Division precision cap | `DECIMAL256(50,10)` divided by an integer with increment 30 | MO binds `DECIMAL256(65,30)`; Sirius accepts that exact type rather than inferring a wider result. |
 | Division by zero and admission | `SELECT 1/0`; `NULL/0`; masked `1/0`; attempted embedded INSERT/UPDATE/IGNORE | SELECT/NULL/masked cases are NULL; DML is rejected before native preparation and readers. |
 | Decimal256 division precision | A quotient whose rounded coefficient has one digit beyond the declared precision | The physical quotient fits, but the same `ErrOutOfRange` as current MatrixOne is returned before publication. |
 | Aggregate cancellation | `max + max - max - max` across separate partial states | Exact zero independent of merge order. |
@@ -366,6 +381,12 @@ errors, NULLs, and client metadata captured independently from Sirius. The
 white-box oracle inspects bound MatrixOne expression types and decoded
 Substrait extension types. Expected results must not be computed by the Sirius
 kernel under test.
+Division acceptance reuses the existing `TestDecimalDivisionTypeUsesPrecisionIncrement`,
+`TestDecimalDivisionExecutionUsesBoundResultScale`,
+`TestDecimal256DivisionExecutionUsesBoundResultScale`,
+`TestDecimalDivisionScaleCapBelowInputScale`, and
+`TestDecimal256DivisionDeclaredPrecision` cases, plus the public
+`issue_28594_div_precision` BVT's per-setting values and result metadata.
 
 ## 7. Resource and performance contract
 
