@@ -127,6 +127,12 @@ func NormalizeStatementDigest(ctx context.Context, sql, sqlMode string, maxDiges
 		}
 
 		rawSource := digestSQL[scanner.PrePos:scanner.Pos]
+		if typ == STRING {
+			quoteStart := skipDigestWhitespaceAndComments(rawSource, 0)
+			if _, quoted, _ := digestDollarQuotedEnd(rawSource, quoteStart); quoted {
+				return "", moerr.NewParseError(ctx, "dollar-quoted strings are not permitted")
+			}
+		}
 		charsetIntroducer := typ == ID && isDigestCharsetName(value)
 		if charsetIntroducer {
 			nextPos := skipDigestWhitespaceAndComments(digestSQL, scanner.Pos)

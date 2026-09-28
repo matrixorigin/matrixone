@@ -32,6 +32,7 @@ func TestNormalizeStatementDigest(t *testing.T) {
 		{sql: "  select 2 /* comment */ where 10=20; -- tail\n", max: 1024, want: "SELECT ? WHERE ? = ?"},
 		{sql: "SELECT * FROM t WHERE id IN (1,2,3)", max: 1024, want: "SELECT * FROM `t` WHERE `id` IN (...)"},
 		{sql: "SELECT -1, +2", max: 1024, want: "SELECT ?, ..."},
+		{sql: "SELECT '$tag$abc$tag$'", max: 1024, want: "SELECT ?"},
 		{sql: `SELECT "column" FROM t`, mode: "ANSI_QUOTES", max: 1024, want: "SELECT `column` FROM `t`"},
 		{sql: "SELECT 1;", max: 4, want: "SELECT ?"},
 		{sql: "SELECT 1", max: 0, want: ""},
@@ -43,7 +44,7 @@ func TestNormalizeStatementDigest(t *testing.T) {
 }
 
 func TestNormalizeStatementDigestRejectsInvalidStatements(t *testing.T) {
-	for _, sql := range []string{"", "/* only a comment */", "SELECT ?", "SELECT 1; SELECT 2", "SELECT 'unterminated"} {
+	for _, sql := range []string{"", "/* only a comment */", "SELECT ?", "SELECT 1; SELECT 2", "SELECT 'unterminated", "SELECT $tag$abc$tag$", "SELECT /* comment */ $tag$abc$tag$"} {
 		_, err := NormalizeStatementDigest(context.Background(), sql, "", 1024)
 		require.Error(t, err, sql)
 	}
@@ -51,6 +52,12 @@ func TestNormalizeStatementDigestRejectsInvalidStatements(t *testing.T) {
 
 func TestNormalizeStatementDigestRejectsMalformedInputAfterTruncation(t *testing.T) {
 	_, err := NormalizeStatementDigest(context.Background(), "SELECT 1, _utf8", "", 4)
+	require.Error(t, err)
+
+	// MySQL 8.4 permits dollar-quoted strings only in stored-program routine
+	// bodies, not as ordinary expression literals. Reject them even when
+	// max_digest_length would otherwise stop collection before the token.
+	_, err = NormalizeStatementDigest(context.Background(), "SELECT 1, $$/*!80000 1 */$$", "", 4)
 	require.Error(t, err)
 
 	_, err = NormalizeStatementDigest(context.Background(), string([]byte{'S', 'E', 'L', 'E', 'C', 'T', ' ', 0xff}), "", 1024)
