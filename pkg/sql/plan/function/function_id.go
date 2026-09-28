@@ -894,6 +894,7 @@ var functionIdRegister = map[string]int32{
 
 	"format_bytes":            FORMAT_BYTES,
 	"format_pico_time":        FORMAT_PICO_TIME,
+	"statement_digest_text":   STATEMENT_DIGEST_TEXT,
 	"to_interval_microsecond": TO_INTERVAL_MICROSECOND,
 	"to_calendar_interval":    TO_CALENDAR_INTERVAL,
 	"extractvalue":            EXTRACTVALUE,
