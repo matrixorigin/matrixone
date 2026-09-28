@@ -2199,7 +2199,7 @@ func TestBoundFlowControlAfterImplicitStringCastFoldRetainsHexBitNumericRows(t *
 					features, err := planpb.RequiredRemoteExpressionFeatures(folded)
 					require.NoError(t, err)
 					require.True(t, features.NumericBinaryLiteralProvenance,
-						"the actual binder/folded CASE/IF plan must request its v100 row-marker trailer")
+						"the actual binder/folded CASE/IF plan must request its v101 row-marker trailer")
 
 					executor, err := colexec.NewExpressionExecutor(proc, folded)
 					require.NoError(t, err)
@@ -2258,7 +2258,7 @@ func TestBoundFlowControlAfterImplicitStringCastFoldRetainsHexBitNumericRows(t *
 			features, err := planpb.RequiredRemoteExpressionFeatures(cast)
 			require.NoError(t, err)
 			require.True(t, features.NumericBinaryLiteralProvenance,
-				"pre-v100 executors drop flow-control marker values, including uniform and NULL-fallback rows")
+				"pre-v101 executors drop flow-control marker values, including uniform and NULL-fallback rows")
 
 			executor, err := colexec.NewExpressionExecutor(proc, cast)
 			require.NoError(t, err)
