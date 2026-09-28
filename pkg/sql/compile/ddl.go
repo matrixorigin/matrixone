@@ -156,6 +156,9 @@ func (s *Scope) DropDatabase(c *Compile) error {
 	dbName := s.Plan.GetDdl().GetDropDatabase().GetDatabase()
 	db, err := c.e.Database(c.proc.Ctx, dbName, c.proc.GetTxnOperator())
 	if err != nil {
+		if !moerr.IsMoErrCode(err, moerr.OkExpectedEOB) {
+			return err
+		}
 		if s.Plan.GetDdl().GetDropDatabase().GetIfExists() {
 			return nil
 		}
@@ -207,6 +210,9 @@ func (s *Scope) DropDatabase(c *Compile) error {
 	}
 	db, err = c.e.Database(c.proc.Ctx, dbName, txnOp)
 	if err != nil {
+		if !moerr.IsMoErrCode(err, moerr.OkExpectedEOB) {
+			return err
+		}
 		if s.Plan.GetDdl().GetDropDatabase().GetIfExists() {
 			return nil
 		}

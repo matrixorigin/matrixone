@@ -286,6 +286,14 @@ func runIssue28742CanceledRestoreWithMetadataProbe(
 	}
 
 	cancelRestore()
+	// Keep the barrier installed until the server has observed cancellation.
+	// Releasing it immediately can let restore create an account before its
+	// request context is canceled, even though ExecContext already returned.
+	require.Eventually(t, func() bool {
+		waiters, _, exists := fault.TriggerFault(restoreGateWaiters)
+		return exists && waiters == 0
+	}, 30*time.Second, 10*time.Millisecond,
+		"canceled restore did not leave the lifecycle barrier")
 	_, err = fault.RemoveFaultPoint(parent, restoreGate)
 	require.NoError(t, err)
 	select {
