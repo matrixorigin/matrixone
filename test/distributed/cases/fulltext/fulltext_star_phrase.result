@@ -39,6 +39,12 @@ select id from lat where match(body) against('abcdefghijklmnopqrstuvw*' in boole
 ➤ id[4,32,0]  𝄀
 1  𝄀
 2
+create table cyr(id int primary key, body varchar(200));
+insert into cyr values (1,'aяяяяяяяяяяяя'),(2,'other');
+create fulltext index fi on cyr(body) with parser ngram;
+select id from cyr where match(body) against('aяяяяяяяяяяяя*' in boolean mode) order by id;
+➤ id[4,32,0]  𝄀
+1
 create table jb(id int primary key, body varchar(200));
 insert into jb values (1,'苹果香蕉'),(2,'苹果香蕉西瓜'),(3,'苹果甜瓜');
 create fulltext index fi on jb(body) with parser gojieba;

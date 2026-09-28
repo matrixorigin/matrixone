@@ -38,6 +38,14 @@ select id from lat where match(body) against('abcdefghijklmnopqrstuvwxyz*' in bo
 -- exact-cap 23-char stem behaves the same.
 select id from lat where match(body) against('abcdefghijklmnopqrstuvw*' in boolean mode) order by id;
 
+-- #29273: outputLatin caps a MULTI-BYTE Latin token on its own boundary (dropping a rune that straddles
+-- the 23-byte cap), NOT a clean UTF-8 boundary. The star prefix must reproduce that exact boundary, so
+-- a >23-byte Cyrillic stem with trailing * still finds the row (a clean 23-byte cut would miss it).
+create table cyr(id int primary key, body varchar(200));
+insert into cyr values (1,'aяяяяяяяяяяяя'),(2,'other');
+create fulltext index fi on cyr(body) with parser ngram;
+select id from cyr where match(body) against('aяяяяяяяяяяяя*' in boolean mode) order by id;
+
 -- gojieba: last dictionary word becomes the prefix; 苹果香蕉* -> 苹果 + 香蕉*.
 create table jb(id int primary key, body varchar(200));
 insert into jb values (1,'苹果香蕉'),(2,'苹果香蕉西瓜'),(3,'苹果甜瓜');

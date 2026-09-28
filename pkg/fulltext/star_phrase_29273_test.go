@@ -73,8 +73,10 @@ func TestStarPhraseAllGenSites(t *testing.T) {
 	wantPhrase(collectSQL(ns))
 }
 
-// #29273: truncateStarPrefix caps an over-long Latin star prefix at the stored-token byte limit on a
-// rune boundary; short/CJK prefixes pass through untouched.
+// #29273: a star prefix must be capped EXACTLY the way the selected parser stored the token, so
+// prefix_eq matches. For SimpleTokenizer (default/ngram) that is outputLatin's boundary, which drops a
+// trailing multi-byte char straddling the 23-byte cap -- NOT a clean UTF-8 truncation. Short/CJK
+// prefixes pass through untouched.
 func TestTruncateStarPrefix(t *testing.T) {
 	require.Equal(t, "abc", truncateStarPrefix("abc", ""))
 	require.Equal(t, strings.Repeat("a", tokenizer.MAX_TOKEN_SIZE),
@@ -82,10 +84,29 @@ func TestTruncateStarPrefix(t *testing.T) {
 	require.Equal(t, strings.Repeat("b", tokenizer.MAX_TOKEN_SIZE),
 		truncateStarPrefix(strings.Repeat("b", 30), ""))
 	require.Equal(t, "蕉", truncateStarPrefix("蕉", ""))
-	// 12 x 2-byte rune (24 bytes) must cap on a rune boundary, never mid-rune.
-	got := truncateStarPrefix(strings.Repeat("é", 12), "")
-	require.LessOrEqual(t, len(got), tokenizer.MAX_TOKEN_SIZE)
-	require.True(t, utf8.ValidString(got))
+
+	// The truncation must equal what the index actually stored (SimpleTokenizer.outputLatin), byte for
+	// byte: a multi-byte rune split by the 23-byte cap is DROPPED, not kept as a longer clean-UTF-8
+	// prefix that no stored token can start with. é×12 (24B) -> é×11 (22B); a+12×я (25B) -> a+10×я
+	// (21B). A clean 23-byte cut (a+11×я) would prefix_eq a token the index never stored -> miss.
+	require.Equal(t, strings.Repeat("é", 11), truncateStarPrefix(strings.Repeat("é", 12), ""))
+	require.Equal(t, "a"+strings.Repeat("я", 10), truncateStarPrefix("a"+strings.Repeat("я", 12), ""))
+	require.NotEqual(t, "a"+strings.Repeat("я", 11), truncateStarPrefix("a"+strings.Repeat("я", 12), ""),
+		"must not keep the clean-UTF-8 23-byte prefix the index never stored (#29273)")
+	require.True(t, utf8.ValidString(truncateStarPrefix("a"+strings.Repeat("я", 12), "")))
+
+	// End-to-end: the capped prefix must be exactly the token SimpleTokenizer persisted for that run.
+	tok := tokenizer.NewSimpleTokenizer()
+	for _, run := range []string{"a" + strings.Repeat("я", 12), strings.Repeat("é", 12)} {
+		var stored string
+		for tk, terr := range tok.Tokenize([]byte(run)) {
+			require.NoError(t, terr, run)
+			n := tk.TokenBytes[0]
+			stored = string(tk.TokenBytes[1 : n+1])
+			break // first (and only) Latin token for this run
+		}
+		require.Equal(t, stored, truncateStarPrefix(run, ""), "run=%q", run)
+	}
 
 	// json_value stores each value verbatim up to 127 bytes, so its prefix keeps the whole stem (a
 	// 26-byte Latin prefix must NOT be cut to 23 -- that would match sibling values), and only caps

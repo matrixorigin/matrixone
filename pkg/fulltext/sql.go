@@ -26,10 +26,13 @@ import (
 
 // truncateStarPrefix caps a `word*` prefix at the stored-token byte limit of the selected parser, so
 // a stem longer than the cap prefix-matches the truncated token the index actually stored instead of
-// a string no token can start with (#29273). SimpleTokenizer (default/ngram) caps Latin tokens at 23
-// bytes on a UTF-8 boundary; json_value stores each value verbatim capped at 127 bytes (raw byte cut,
-// bytejson.fillToken), so it must use the 127-byte cap — the 23-byte cap would match too many values.
-// No-op for CJK trigram tails (well under either cap).
+// a string no token can start with (#29273). json_value stores each value verbatim capped at 127
+// bytes (raw byte cut, bytejson.fillToken). Every other parser stores Latin tokens through
+// SimpleTokenizer.outputLatin, whose 23-byte cap is NOT a clean UTF-8 boundary: it drops a trailing
+// multi-byte char whose bytes straddle the cap (`a`+12×`я` -> `a`+10×`я`, 21B, not 23B). A clean
+// UTF-8 truncation would keep 23B and prefix_eq a token the index never stored, missing the row, so
+// reuse tokenizer.TruncateLatinToken which reproduces outputLatin's boundary exactly. No-op for CJK
+// trigram tails and short gojieba words (well under the cap; ASCII truncation is identical either way).
 func truncateStarPrefix(prefix, parser string) string {
 	if parser == "json_value" {
 		if len(prefix) <= bytejson.MAX_TOKEN_SIZE {
@@ -37,14 +40,7 @@ func truncateStarPrefix(prefix, parser string) string {
 		}
 		return prefix[:bytejson.MAX_TOKEN_SIZE]
 	}
-	if len(prefix) <= tokenizer.MAX_TOKEN_SIZE {
-		return prefix
-	}
-	n := tokenizer.MAX_TOKEN_SIZE
-	for n > 0 && prefix[n]&0xC0 == 0x80 {
-		n--
-	}
-	return prefix[:n]
+	return string(tokenizer.TruncateLatinToken([]byte(prefix)))
 }
 
 /*
