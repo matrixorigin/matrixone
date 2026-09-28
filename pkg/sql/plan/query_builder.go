@@ -5994,6 +5994,13 @@ func (builder *QueryBuilder) bindSelect(stmt *tree.Select, ctx *BindContext, isR
 			return
 		}
 	}
+	// SELECT projection subqueries are flattened before this pagination is
+	// attached to their plan. The cloned CTE domain may otherwise evaluate a
+	// row that the final Top never consumes. Keep the demand scoped to this
+	// bind rather than relying on the not-yet-present node.Limit/Offset.
+	previousPagination := ctx.outerPaginationPending
+	ctx.outerPaginationPending = previousPagination || boundCountExpr != nil || boundOffsetExpr != nil || rankOption != nil
+	defer func() { ctx.outerPaginationPending = previousPagination }()
 
 	// Keep the lock target collection in bindSelectClause, but attach the
 	// LOCK_OP only after any row-level HAVING rewrite has been applied.  A
@@ -13215,7 +13222,7 @@ func (builder *QueryBuilder) buildJoinTable(tbl *tree.JoinTableExpr, ctx *BindCo
 			for i, cond := range joinConds {
 				leftChildID, rightChildID, joinConds[i], err = builder.flattenOuterJoinConditionSubqueries(
 					leftChildID, rightChildID, cond,
-					leftCtx, rightCtx, leftTags, rightTags, defaultSide, true,
+					leftCtx, rightCtx, leftTags, rightTags, defaultSide, true, len(joinConds) > 1,
 				)
 				if err != nil {
 					return 0, err

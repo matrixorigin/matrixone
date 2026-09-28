@@ -397,6 +397,35 @@ select p.id from guarded_abs p where p.id=2 and
 -- A safe producer is still available after the same WHERE split.
 select p.id from guarded_abs p where p.id=2 and
   (with q(n) as (select p.v) select n from q)>0;
+-- A LEFT JOIN ON CASE may skip a correlated scalar subquery. The replay
+-- domain cannot evaluate either a throwing producer or consumer eagerly.
+select p.id, b.id from guarded_abs p left join guarded_abs b on
+  case when p.id=1 then false else
+    (with q(n) as (select abs(p.v)) select n from q)>0 end
+order by p.id, b.id;
+select p.id, b.id from guarded_abs p left join guarded_abs b on
+  case when p.id=1 then false else
+    (with q(n) as (select p.v) select abs(n) from q)>0 end
+order by p.id, b.id;
+select p.id, b.id from guarded_abs p left join guarded_abs b on
+  case when p.id=1 then false else
+    (with q(n) as (select p.v) select n from q)>0 end
+order by p.id, b.id;
+select p.id, b.id from guarded_abs p left join guarded_abs b on
+  case when p.id=1 then false else (select abs(p.v))>0 end
+order by p.id, b.id;
+-- The outer Top is not yet attached when projection subqueries are flattened.
+-- Unsafe CTEs must be rejected, not evaluated for rows pagination skips.
+select p.id, (with q(n) as (select abs(p.v)) select n from q) as c
+from guarded_abs p order by p.id desc limit 1;
+select p.id, (with q(n) as (select p.v) select abs(n) from q) as c
+from guarded_abs p order by p.id limit 1 offset 1;
+select p.id, (with q(n) as (select abs(p.v)) select n from q) as c
+from guarded_abs p order by p.id limit 0;
+select p.id, (with q(n) as (select abs(p.v)) select n from q) as c
+from guarded_abs p where p.id=2 order by p.id desc limit 1;
+select p.id, (with q(n) as (select p.v) select n from q) as c
+from guarded_abs p order by p.id desc limit 1;
 drop table guarded_abs;
 
 -- Empty outer input starts no parameter partitions.

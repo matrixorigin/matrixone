@@ -77,16 +77,17 @@ func (builder *QueryBuilder) flattenOuterJoinConditionSubqueries(
 	leftCtx, rightCtx *BindContext,
 	leftTags, rightTags map[int32]bool,
 	defaultSide int8,
-	nullResultRejected bool,
+	nullResultRejected, guarded bool,
 ) (int32, int32, *plan.Expr, error) {
 	var err error
 
 	switch exprImpl := expr.Expr.(type) {
 	case *plan.Expr_F:
 		childNullResultRejected := nullResultRejected && nullPropagatesThroughDeepScalarConsumer(exprImpl.F.Func)
+		childGuarded := guarded || conditionallyEvaluatesScalarArgument(exprImpl.F.Func)
 		for i, arg := range exprImpl.F.Args {
 			leftID, rightID, exprImpl.F.Args[i], err = builder.flattenOuterJoinConditionSubqueries(
-				leftID, rightID, arg, leftCtx, rightCtx, leftTags, rightTags, defaultSide, childNullResultRejected)
+				leftID, rightID, arg, leftCtx, rightCtx, leftTags, rightTags, defaultSide, childNullResultRejected, childGuarded)
 			if err != nil {
 				return 0, 0, nil, err
 			}
@@ -95,7 +96,7 @@ func (builder *QueryBuilder) flattenOuterJoinConditionSubqueries(
 	case *plan.Expr_List:
 		for i, item := range exprImpl.List.List {
 			leftID, rightID, exprImpl.List.List[i], err = builder.flattenOuterJoinConditionSubqueries(
-				leftID, rightID, item, leftCtx, rightCtx, leftTags, rightTags, defaultSide, nullResultRejected)
+				leftID, rightID, item, leftCtx, rightCtx, leftTags, rightTags, defaultSide, nullResultRejected, true)
 			if err != nil {
 				return 0, 0, nil, err
 			}
@@ -120,9 +121,9 @@ func (builder *QueryBuilder) flattenOuterJoinConditionSubqueries(
 		}
 
 		if side&JoinSideLeft != 0 {
-			leftID, expr, err = builder.flattenSubquery(leftID, exprImpl.Sub, leftCtx, nullResultRejected)
+			leftID, expr, err = builder.flattenSubqueryWithConsumer(leftID, exprImpl.Sub, leftCtx, nullResultRejected, existentialIneligible, guarded)
 		} else {
-			rightID, expr, err = builder.flattenSubquery(rightID, exprImpl.Sub, rightCtx, nullResultRejected)
+			rightID, expr, err = builder.flattenSubqueryWithConsumer(rightID, exprImpl.Sub, rightCtx, nullResultRejected, existentialIneligible, guarded)
 		}
 	}
 
@@ -298,8 +299,21 @@ func (builder *QueryBuilder) flattenSubqueriesWithConsumerGuarded(
 	nodeID int32, expr *plan.Expr, ctx *BindContext,
 	nullResultRejected bool, consumer existentialConsumer, guarded bool,
 ) (int32, *plan.Expr, error) {
+	guarded = guarded || ctx != nil && ctx.outerPaginationPending
 	nodeID, expr, _, err := builder.flattenSubqueriesWithConsumerAndChange(nodeID, expr, ctx, nullResultRejected, consumer, guarded)
 	return nodeID, expr, err
+}
+
+func conditionallyEvaluatesScalarArgument(fn *plan.ObjectRef) bool {
+	if fn == nil {
+		return false
+	}
+	switch fn.ObjName {
+	case "case", "if", "ifnull", "coalesce", "nullif", "and", "or":
+		return true
+	default:
+		return false
+	}
 }
 
 func (builder *QueryBuilder) flattenSubqueriesWithConsumerAndChange(
@@ -343,15 +357,9 @@ func (builder *QueryBuilder) flattenSubqueriesWithConsumerAndChange(
 			// the child's memo/metadata restoration as well as the NOT.
 		}
 		childNullResultRejected := nullResultRejected && nullPropagatesThroughDeepScalarConsumer(exprImpl.F.Func)
-		childGuarded := guarded
-		if exprImpl.F.Func != nil {
-			switch exprImpl.F.Func.ObjName {
-			case "case", "if", "ifnull", "coalesce", "nullif", "and", "or":
-				// Any branch may skip a scalar subquery. Producer replay
-				// cannot evaluate unproven expressions for those rows.
-				childGuarded = true
-			}
-		}
+		// Any branch may skip a scalar subquery. Producer replay must be
+		// total on rows outside the branch's actual evaluation domain.
+		childGuarded := guarded || conditionallyEvaluatesScalarArgument(exprImpl.F.Func)
 		for i, arg := range exprImpl.F.Args {
 			var childAffected bool
 			nodeID, exprImpl.F.Args[i], childAffected, err = builder.flattenSubqueriesWithConsumerAndChange(

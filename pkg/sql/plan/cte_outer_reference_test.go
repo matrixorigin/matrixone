@@ -76,6 +76,17 @@ func TestLocalCTEOuterReferencesExecutablePlan(t *testing.T) {
 				from tpch.nation p where p.n_nationkey=2`,
 		},
 		{
+			name: "paginated safe local producer",
+			sql: `select p.n_nationkey, (with q(n) as (select p.n_regionkey) select n from q)
+				from tpch.nation p order by p.n_nationkey desc limit 1`,
+		},
+		{
+			name: "outer join on safe local producer",
+			sql: `select p.n_nationkey, b.n_nationkey from tpch.nation p
+				left join tpch.nation b on case when p.n_nationkey=1 then false else
+				(with q(n) as (select p.n_regionkey) select n from q)>0 end`,
+		},
+		{
 			name: "unguarded producer abs on filtered domain",
 			sql: `select (with q(n) as (select abs(p.n_regionkey)) select n from q)
 				from tpch.nation p where p.n_nationkey=2`,
@@ -496,6 +507,28 @@ func TestLocalCTEOuterReferencesRejectUnsafeDomains(t *testing.T) {
 			name: "split where conjuncts reversed",
 			sql: `select p.n_nationkey from tpch.nation p where
 				(with q(n) as (select abs(p.n_regionkey)) select n from q)>0 and p.n_nationkey=2`,
+		},
+		{
+			name: "outer join on conditional producer abs",
+			sql: `select p.n_nationkey, b.n_nationkey from tpch.nation p
+				left join tpch.nation b on case when p.n_nationkey=1 then false else
+				(with q(n) as (select abs(p.n_regionkey)) select n from q)>0 end`,
+		},
+		{
+			name: "outer join on conditional consumer abs",
+			sql: `select p.n_nationkey, b.n_nationkey from tpch.nation p
+				left join tpch.nation b on case when p.n_nationkey=1 then false else
+				(with q(n) as (select p.n_regionkey) select abs(n) from q)>0 end`,
+		},
+		{
+			name: "outer limit skips throwing producer",
+			sql: `select p.n_nationkey, (with q(n) as (select abs(p.n_regionkey)) select n from q)
+				from tpch.nation p order by p.n_nationkey desc limit 1`,
+		},
+		{
+			name: "outer offset skips throwing consumer",
+			sql: `select p.n_nationkey, (with q(n) as (select p.n_regionkey) select abs(n) from q)
+				from tpch.nation p order by p.n_nationkey limit 1 offset 1`,
 		},
 		{
 			name: "throwing producer abs in inactive case",
