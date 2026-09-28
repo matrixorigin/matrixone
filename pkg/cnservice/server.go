@@ -464,6 +464,23 @@ func (s *service) Start() (err error) {
 		return err
 	}
 	if err = s.startUnlessViewMetadataGenerationRevoked(func() error {
+		ctx, cancel := context.WithTimeoutCause(context.Background(), 5*time.Minute, moerr.CauseBootstrap)
+		defer cancel()
+		if s.pu != nil {
+			ctx = context.WithValue(ctx, config.ParameterUnitKey, s.pu)
+		}
+		complete, err := bootstrap.SystemViewsExist(ctx, s.sqlExecutor)
+		if err != nil || complete {
+			return err
+		}
+		if err = s.waitForViewMetadataAdmissionHandoff(false, uint64(defines.MORPCVersion98)); err != nil {
+			return err
+		}
+		return bootstrap.InitSystemViews(ctx, s.sqlExecutor)
+	}); err != nil {
+		return err
+	}
+	if err = s.startUnlessViewMetadataGenerationRevoked(func() error {
 		return s.startSiriusRuntime(context.Background())
 	}); err != nil {
 		return err
@@ -707,17 +724,18 @@ func (s *service) SessionMgr() *queryservice.SessionManager {
 	return s.sessionMgr
 }
 
-func (s *service) CheckTenantUpgrade(_ context.Context, tenantID int64) error {
+func (s *service) CheckTenantUpgrade(ctx context.Context, tenantID int64) error {
 	s.bootstrapMu.RLock()
 	defer s.bootstrapMu.RUnlock()
 	if s.bootstrapService == nil {
 		return moerr.NewInvalidStateNoCtx("bootstrap service is closed")
 	}
-	finalVersion := s.bootstrapService.GetFinalVersion()
 	tenantFetchFunc := func() (int32, string, error) {
-		return int32(tenantID), finalVersion, nil
+		// Bootstrap reads the account's persisted version. The CN's final
+		// version does not describe accounts created by another, older CN.
+		return int32(tenantID), "", nil
 	}
-	ctx, cancel := context.WithTimeoutCause(context.Background(), time.Second*30, moerr.CauseCheckTenantUpgrade)
+	ctx, cancel := context.WithTimeoutCause(ctx, time.Second*30, moerr.CauseCheckTenantUpgrade)
 	defer cancel()
 	if _, err := s.bootstrapService.MaybeUpgradeTenant(ctx, tenantFetchFunc, nil); err != nil {
 		return moerr.AttachCause(ctx, err)
@@ -814,6 +832,12 @@ func (s *service) handleRequest(
 			value.Cancel()
 		}
 		return moerr.NewServiceUnavailableNoCtx("CN pipeline service is closing")
+	}
+	if s.cfg != nil {
+		handlerCtx = morpc.ContextWithMaxMessageSize(
+			handlerCtx,
+			uint64(s.cfg.RPC.MaxMessageSize),
+		)
 	}
 	owned := true
 	cancelOwned := value.Cancel != nil

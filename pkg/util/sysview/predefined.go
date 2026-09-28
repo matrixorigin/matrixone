@@ -592,6 +592,9 @@ var (
 		"LEFT JOIN mo_catalog.mo_user usr ON tbl.creator = usr.user_id " +
 		"WHERE tbl.account_id = current_account_id() and tbl.relkind = 'v' and tbl.reldatabase != 'information_schema'"
 
+	// Legacy mo_indexes rows encode the default B-tree algorithm as either NULL
+	// or an empty string. Normalize that representation at the MySQL-compatible
+	// information_schema boundary so ORM filters on INDEX_TYPE remain effective.
 	InformationSchemaStatisticsDDL = fmt.Sprintf("CREATE VIEW information_schema.`STATISTICS` AS "+informationSchemaMetadataVisibilityCTE()+
 		"select 'def' AS `TABLE_CATALOG`,"+
 		"`tbl`.`reldatabase` AS `TABLE_SCHEMA`,"+
@@ -606,7 +609,7 @@ var (
 		"NULL AS `SUB_PART`,"+
 		"NULL AS `PACKED`,"+
 		"if((`tcl`.`attnotnull` = 0),'YES','') AS `NULLABLE`,"+
-		"`idx`.`algo` AS `INDEX_TYPE`,"+
+		"coalesce(nullif(`idx`.`algo`, ''), 'BTREE') AS `INDEX_TYPE`,"+
 		"if(((`idx`.`type` = 'PRIMARY') or (`idx`.`type` = 'UNIQUE')),'','') AS `COMMENT`,"+
 		"`idx`.`comment` AS `INDEX_COMMENT`,"+
 		"if(`idx`.`is_visible`,'YES','NO') AS `IS_VISIBLE`,"+

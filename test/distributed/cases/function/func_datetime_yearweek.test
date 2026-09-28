@@ -57,3 +57,29 @@ SELECT YEARWEEK('2008-12-15') AS dec_week;
 SELECT YEARWEEK('2008-06-15') AS current_yearweek;
 SELECT YEARWEEK(DATE_ADD('1987-01-01', INTERVAL 7 DAY)) AS week_after;
 
+# Explicit WEEK/YEARWEEK modes are row-dependent expressions.
+CREATE TABLE temporal_week_modes(
+    id INT,
+    d DATE,
+    dt DATETIME,
+    ts TIMESTAMP,
+    s VARCHAR(32),
+    mode INT
+);
+INSERT INTO temporal_week_modes VALUES
+    (1, '2008-01-01', '2008-01-01 00:00:00', '2008-01-01 00:00:00', '2008-01-01', 0),
+    (2, '2008-01-01', '2008-01-01 00:00:00', '2008-01-01 00:00:00', '2008-01-01', 1),
+    (3, '2008-01-01', '2008-01-01 00:00:00', '2008-01-01 00:00:00', '2008-01-01', 3),
+    (4, '2008-01-01', '2008-01-01 00:00:00', '2008-01-01 00:00:00', '2008-01-01', -1),
+    (5, '2008-01-01', '2008-01-01 00:00:00', '2008-01-01 00:00:00', '2008-01-01', 8),
+    (6, '2008-01-01', '2008-01-01 00:00:00', '2008-01-01 00:00:00', '2008-01-01', NULL);
+SELECT id,
+       WEEK(d, mode) AS week_by_date,
+       WEEK(dt, mode) AS week_by_datetime,
+       YEARWEEK(d, mode) AS yearweek_by_date,
+       YEARWEEK(dt, mode) AS yearweek_by_datetime,
+       YEARWEEK(ts, mode) AS yearweek_by_timestamp,
+       YEARWEEK(s, mode) AS yearweek_by_string
+FROM temporal_week_modes
+ORDER BY id;
+DROP TABLE temporal_week_modes;

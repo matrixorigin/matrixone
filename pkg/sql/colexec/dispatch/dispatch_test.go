@@ -49,6 +49,30 @@ type emptyDispatchChild struct {
 	called chan struct{}
 }
 
+func TestMarshalRemoteBatchGroupingProtocolGate(t *testing.T) {
+	proc := testutil.NewProcess(t)
+	defer proc.Free()
+	bat := batch.NewWithSize(1)
+	bat.Vecs[0] = vector.NewRollupConst(types.T_int32.ToType(), 2, proc.Mp())
+	bat.SetRowCount(2)
+	defer bat.Clean(proc.Mp())
+	runtime := moruntime.ServiceRuntime(proc.GetService())
+	original, _ := runtime.GetGlobalVariables(moruntime.MOProtocolVersion)
+	t.Cleanup(func() { runtime.SetGlobalVariables(moruntime.MOProtocolVersion, original) })
+	for _, version := range []any{nil, "unknown", int64(86)} {
+		runtime.SetGlobalVariables(moruntime.MOProtocolVersion, version)
+		_, err := marshalRemoteBatch(proc, bat, &bytes.Buffer{})
+		require.ErrorContains(t, err, "MORPCVersion87")
+	}
+	runtime.SetGlobalVariables(moruntime.MOProtocolVersion, int64(87))
+	data, err := marshalRemoteBatch(proc, bat, &bytes.Buffer{})
+	require.NoError(t, err)
+	decoded := batch.NewOffHeapEmpty()
+	defer decoded.Clean(proc.Mp())
+	require.NoError(t, decoded.UnmarshalBinaryForPipeline(data, proc.Mp()))
+	require.Equal(t, 2, decoded.Vecs[0].GetGrouping().Count())
+}
+
 func TestMarshalRemoteBatchExplicitTextProtocolGate(t *testing.T) {
 	proc := testutil.NewProcess(t)
 	defer proc.Free()

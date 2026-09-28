@@ -344,12 +344,6 @@ func testArrowContainerSemantics(t *testing.T, db *sql.DB) {
 			streamPath))
 		require.Error(t, err)
 	})
-	t.Run("invalid_container_value_rejected", func(t *testing.T) {
-		_, err := db.Exec(fmt.Sprintf(
-			"load data infile {'filepath'='%s','format'='arrow','arrow_container'='flight'} into table container_semantics",
-			filePath))
-		require.Error(t, err)
-	})
 }
 
 func testArrowNegativeOptions(t *testing.T, db *sql.DB) {

@@ -46,6 +46,7 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/txn/service"
 	"github.com/matrixorigin/matrixone/pkg/util"
 	"github.com/matrixorigin/matrixone/pkg/util/address"
+	"github.com/matrixorigin/matrixone/pkg/util/fault"
 	"github.com/matrixorigin/matrixone/pkg/util/status"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/common"
 )
@@ -53,6 +54,10 @@ import (
 var (
 	retryCreateStorageInterval = time.Second * 5
 )
+
+// FJ_TNStoreHandlersDrained is triggered after all accepted TN handlers have
+// left the active set and before replica, WAL, and storage teardown starts.
+const FJ_TNStoreHandlersDrained = "fj/tn/store/handlers-drained"
 
 // txnServerLifecycle is deliberately kept private so adding the ordered
 // shutdown hooks does not change the public rpc.TxnServer contract. The
@@ -378,6 +383,7 @@ func (s *store) close() error {
 	if err != nil {
 		return err
 	}
+	fault.TriggerFault(FJ_TNStoreHandlersDrained)
 
 	// No handler can acquire a replica after the drain gate. It is now safe to
 	// cancel replica start contexts and close their storage.

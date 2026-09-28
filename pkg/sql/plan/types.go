@@ -408,7 +408,11 @@ type QueryBuilder struct {
 	// detached CTE contexts cannot lose the private system-function owner.
 	persistedViewTarget string
 
-	ctxByNode               []*BindContext
+	ctxByNode []*BindContext
+	// Synthetic scalar reaggregations preserve earlier scalar outputs as
+	// grouping keys. Each alias keeps its original column identity through
+	// final column pruning without changing the executable plan format.
+	scalarReaggAliases      map[int32][]scalarReaggAlias
 	headingProvenanceByNode map[int32]headingProvenanceMap
 	windowValidationScans   []*plan.Node
 	nameByColRef            map[[2]int32]string
@@ -475,6 +479,9 @@ type QueryBuilder struct {
 	nextBindTag      int32
 	nextMsgTag       int32
 	nextSQLUdfCallID uint64
+	// Negative AuxIds identify memoized expression sources across every bind
+	// context that can contribute expressions to this query.
+	nextVolatileExprMemoID int32
 
 	isPrepareStatement     bool
 	mysqlCompatible        bool
@@ -484,6 +491,7 @@ type QueryBuilder struct {
 	// window, PREPARE) reads the same decision.
 	boolSumAvgCompat      bool
 	noUnsignedSubtraction bool
+	divPrecisionIncrement int32
 	isForUpdate           bool // if it's a query plan for update
 	isRestore             bool
 	isRestoreByTs         bool
@@ -890,6 +898,11 @@ type BindContext struct {
 	// VIEW definition. Ordinary SELECT planning must not clone its select list
 	// just to support view metadata persistence.
 	captureViewStarExpansion bool
+	// persistedExpressionProtocolRequirement is shared by the root view bind
+	// context and all nested query blocks. It records protocol-sensitive
+	// expressions immediately after function binding, before a bind-time fold
+	// can erase the function from the persisted plan.
+	persistedExpressionProtocolRequirement *int64
 	// expandedSelectLists records the expanded output for each SELECT clause
 	// participating in a view definition, including UNION branches.
 	expandedSelectLists map[*tree.SelectClause]tree.SelectExprs
@@ -944,7 +957,6 @@ type BindContext struct {
 	projectByExpr          map[string]int32
 	timeByAst              map[string]int32
 	whereFilters           []*plan.Expr
-	volatileExprMemoID     int32
 	flattenedVolatileExprs map[int32]*plan.Expr
 	// gapFillWhereFilters preserves the complete bound WHERE tree before
 	// subqueries are flattened into joins. Bounded GAPFILL inference must see
@@ -1097,19 +1109,34 @@ type Binder interface {
 }
 
 type baseBinder struct {
-	sysCtx                           context.Context
-	builder                          *QueryBuilder
-	ctx                              *BindContext
-	impl                             Binder
-	boundCols                        []boundColumn
+	sysCtx    context.Context
+	builder   *QueryBuilder
+	ctx       *BindContext
+	impl      Binder
+	boundCols []boundColumn
+	// Catalog FORMAT must choose its legacy string contract before binding
+	// precision: some historical source types (e.g. DATE) cannot cast to INT64.
+	persistedFormatCompatibility bool
+	// Integer consumers own the source domain of their operands. An enclosing
+	// default/assignment target must not pre-convert their numeric literals.
+	integerArgumentSourceContext     bool
 	numericParamType                 *Type
 	numericSubqueryTarget            *Type
 	numericFunctionTarget            bool
 	mysqlSpecialTargetType           *Type
 	allowCanonicalNameConstValueCast bool
 	bindRawMySQLSpecialType          bool
-	subqueryInAggregateInput         bool
-	aggregateInputCorrelation        bool
+	// suppressDefaultValueBindType prevents a destination column type from
+	// changing the type of a nested literal while a function-specific binder
+	// resolves that literal.  Some functions, such as INET_NTOA, have a
+	// string-valued result but still preserve native numeric input overloads.
+	suppressDefaultValueBindType bool
+	// inetNtoaNumericLiteralContext preserves HEX/BIT literal provenance until
+	// INET_NTOA can select its numeric overload.  Those literals are otherwise
+	// materialized as binary strings by the generic literal binder.
+	inetNtoaNumericLiteralContext bool
+	subqueryInAggregateInput      bool
+	aggregateInputCorrelation     bool
 }
 
 type boundColumn struct {

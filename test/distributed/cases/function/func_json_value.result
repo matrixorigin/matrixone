@@ -217,3 +217,68 @@ select id from json_value_generated_idx force index(extracted_idx) where extract
 id
 3
 drop table json_value_generated_idx;
+select json_value('{"t":"2024-01-02 12:34:56"}', '$.t' returning time(6) null on error) as t;
+t
+null
+select json_value('{"t":"2024-01-02 12:34:56"}', '$.t' returning time(6) default '01:02:03' on error) as t;
+t
+01:02:03
+select json_value('{"t":"2024-01-02 12:34:56"}', '$.t' returning time(6) error on error) as t;
+invalid argument parsetime, bad value 2024-01-02 12:34:56
+select json_value('{"d":"2024-01-02 00:00:00"}', '$.d' returning date null on error) as d;
+d
+null
+select json_value('{"d":"2024-01-02 12:34:56"}', '$.d' returning date error on error) as d;
+invalid argument parsedate, bad value 2024-01-02 12:34:56
+select json_value('"12:34:56"', '$' returning time(6) default '2024-01-02 12:34:56' on empty);
+invalid argument parsetime, bad value 2024-01-02 12:34:56
+select json_value('"12:34:56"', '$' returning time(6) default '2024-01-02 12:34:56' on error);
+invalid argument parsetime, bad value 2024-01-02 12:34:56
+select json_value('"2024-01-02"', '$' returning date default '2024-01-02 12:34:56' on empty);
+invalid argument parsedate, bad value 2024-01-02 12:34:56
+select json_value('"2024-01-02"', '$' returning date default '2024-01-02 12:34:56' on error);
+invalid argument parsedate, bad value 2024-01-02 12:34:56
+select json_value(null, '$[' returning time(6) null on error);
+invalid argument json_value, bad value invalid path expression
+select json_value(null, '$[') as legacy_null;
+legacy_null
+null
+create table json_value_temporal (id int primary key, doc json, text_doc varchar(100), t time(6) generated always as (json_value(doc, '$.t' returning time(6) default '01:02:03' on error)) stored, key t_idx(t));
+insert into json_value_temporal(id, doc, text_doc) values (1, '{"t":"2024-01-02 12:34:56"}', '{"t":"2024-01-02 12:34:56"}'), (2, '{"t":"12:34:56"}', '{"t":"12:34:56"}');
+select id, t, json_value(text_doc, '$.t' returning time(6) default '01:02:03' on error) as text_t from json_value_temporal order by id;
+id	t	text_t
+1	01:02:03	01:02:03
+2	12:34:56	12:34:56
+select id from json_value_temporal force index(t_idx) where t = '01:02:03';
+id
+1
+create view json_value_temporal_view as select id, json_value(doc, '$.t' returning time(6) null on error) as t from json_value_temporal;
+select id, t from json_value_temporal_view order by id;
+id	t
+1	null
+2	12:34:56
+alter view json_value_temporal_view as select id, json_value(doc, '$.t' returning time(6) default '01:02:03' on error) as t from json_value_temporal;
+select id, t from json_value_temporal_view order by id;
+id	t
+1	01:02:03
+2	12:34:56
+drop view json_value_temporal_view;
+drop table json_value_temporal;
+prepare json_value_time_stmt from 'select json_value(?, ''$.t'' returning time(6) default ''01:02:03'' on error) as t';
+set @json_value_time_doc = '{"t":"2024-01-02 12:34:56"}';
+execute json_value_time_stmt using @json_value_time_doc;
+t
+01:02:03
+set @json_value_time_doc = '{"t":"12:34:56"}';
+execute json_value_time_stmt using @json_value_time_doc;
+t
+12:34:56
+deallocate prepare json_value_time_stmt;
+prepare json_value_bad_default from 'select json_value(''"2024-01-02"'', ''$'' returning date default ''2024-01-02 12:34:56'' on empty)';
+invalid argument parsedate, bad value 2024-01-02 12:34:56
+prepare json_value_bad_default from 'select json_value(''"2024-01-02"'', ''$'' returning date default ''2024-01-02 12:34:56'' on error)';
+invalid argument parsedate, bad value 2024-01-02 12:34:56
+prepare json_value_bad_default from 'select json_value(''"12:34:56"'', ''$'' returning time(6) default ''2024-01-02 12:34:56'' on empty)';
+invalid argument parsetime, bad value 2024-01-02 12:34:56
+prepare json_value_bad_default from 'select json_value(''"12:34:56"'', ''$'' returning time(6) default ''2024-01-02 12:34:56'' on error)';
+invalid argument parsetime, bad value 2024-01-02 12:34:56

@@ -79,6 +79,43 @@ func TestIndexOnlyScanGuard_RandomRangesScenario(t *testing.T) {
 	assert.True(t, oomRejectNew, "new guard should also reject non-selective scan (selectivity >= 0.3)")
 }
 
+func TestCheckIndexFilterRejectsSignedZeroFloatColumns(t *testing.T) {
+	floatTypes := []types.T{types.T_float32, types.T_float64}
+	for _, typ := range floatTypes {
+		t.Run(typ.String(), func(t *testing.T) {
+			planType := planpb.Type{Id: int32(typ)}
+			orFilter := makeOrFilterExpr(
+				makeParamRangeFilterExpr(0, 1, ">=", 0),
+				makeParamRangeFilterExpr(0, 1, "<", 1),
+			)
+			setIndexFilterArgumentType(orFilter.GetF().Args[0], planType)
+			setIndexFilterArgumentType(orFilter.GetF().Args[1], planType)
+			filters := []*planpb.Expr{
+				makeEqFilterExpr(1),
+				makeParamInFilterExpr(0, 1, 2),
+				makeParamBetweenFilterExpr(0, 1, 0, 1),
+				makeParamRangeFilterExpr(0, 1, ">=", 0),
+				orFilter,
+			}
+			inRange := makeParamBetweenFilterExpr(0, 1, 0, 1)
+			inRange.GetF().Func.ObjName = "in_range"
+			filters = append(filters, inRange)
+
+			for _, filter := range filters {
+				setIndexFilterArgumentType(filter, planType)
+				filterType, col := checkIndexFilter(filter.GetF())
+				require.Equal(t, UnsupportedIndexCondition, filterType)
+				require.Nil(t, col)
+			}
+		})
+	}
+
+	intFilter := makeEqFilterExpr(1)
+	filterType, col := checkIndexFilter(intFilter.GetF())
+	require.Equal(t, EqualIndexCondition, filterType)
+	require.NotNil(t, col)
+}
+
 func TestIndexHintNonExecutingConsumers(t *testing.T) {
 	for _, prefix := range []string{"explain ", "create view v as ", "create table ctas as "} {
 		t.Run(prefix, func(t *testing.T) {
@@ -5257,23 +5294,22 @@ func TestFullTextJoinRewriteBothChildren(t *testing.T) {
 	require.False(t, nodeHasFullTextMatchFilter(builder.qry.Nodes[rightScanID]))
 }
 
-func TestFullTextJoinRewriteSkipsOuterJoins(t *testing.T) {
+// A WHERE MATCH on the ROW-PRESERVED child of an outer join is now served (#20687): the match is a
+// pure filter on that input's own columns, so it is rewritten to the fulltext index-scan join --
+// matchers of the preserved input, null-extending the other side -- exactly as the WHERE that placed
+// it there. This shape previously skipped the rewrite and failed with 20105 at execution.
+func TestFullTextJoinRewriteServesOuterJoinPreservedChild(t *testing.T) {
 	tests := []struct {
 		name          string
 		joinType      planpb.Node_JoinType
 		leftFullText  bool
 		rightFullText bool
+		preservedIdx  int
 	}{
-		{
-			name:         "left join preserved left child",
-			joinType:     planpb.Node_LEFT,
-			leftFullText: true,
-		},
-		{
-			name:          "right join preserved right child",
-			joinType:      planpb.Node_RIGHT,
-			rightFullText: true,
-		},
+		{name: "left join preserved left child", joinType: planpb.Node_LEFT, leftFullText: true, preservedIdx: 0},
+		{name: "right join preserved right child", joinType: planpb.Node_RIGHT, rightFullText: true, preservedIdx: 1},
+		// SINGLE (scalar subquery): the outer query is child 0, the preserved side (IsRightJoin=false).
+		{name: "single join preserved outer child", joinType: planpb.Node_SINGLE, leftFullText: true, preservedIdx: 0},
 	}
 
 	for _, tt := range tests {
@@ -5285,16 +5321,17 @@ func TestFullTextJoinRewriteSkipsOuterJoins(t *testing.T) {
 			newID, err := builder.applyIndicesForJoins(joinID, joinNode, map[[2]int32]int{}, map[[2]int32]*planpb.Expr{})
 			require.NoError(t, err)
 			require.Equal(t, joinID, newID)
-			require.Equal(t, leftScanID, joinNode.Children[0])
-			require.Equal(t, rightScanID, joinNode.Children[1])
-			require.Equal(t, 0, countFullTextFunctionScans(builder, joinID))
 
-			if tt.leftFullText {
-				require.True(t, nodeHasFullTextMatchFilter(builder.qry.Nodes[leftScanID]))
+			scanID := leftScanID
+			if tt.preservedIdx == 1 {
+				scanID = rightScanID
 			}
-			if tt.rightFullText {
-				require.True(t, nodeHasFullTextMatchFilter(builder.qry.Nodes[rightScanID]))
-			}
+			require.Equal(t, 1, countFullTextFunctionScans(builder, joinID),
+				"the preserved-side MATCH must be served by one fulltext index scan")
+			require.NotEqual(t, scanID, joinNode.Children[tt.preservedIdx],
+				"the preserved child must be reparented onto the index-scan join")
+			require.False(t, nodeHasFullTextMatchFilter(builder.qry.Nodes[scanID]),
+				"the raw fulltext_match must be removed from the base scan after the rewrite")
 		})
 	}
 }

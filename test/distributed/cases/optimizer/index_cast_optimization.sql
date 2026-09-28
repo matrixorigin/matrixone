@@ -51,9 +51,10 @@ EXPLAIN SELECT * FROM t_float32 WHERE val = 9.0;
 -- @separator:table
 EXPLAIN SELECT * FROM t_float32 WHERE val = 9;
 
--- Should NOT have cast on column: FLOAT32 >= INT
+-- FLOAT32 range predicates stay on the table scan because index-key ordering
+-- does not preserve SQL equality for signed zero.
 -- @separator:table
--- @regex("Index Table Scan.*idx_val",true)
+-- @regex("Table Scan.*t_float32",true)
 EXPLAIN SELECT * FROM t_float32 WHERE val >= 9;
 
 -- Verify results

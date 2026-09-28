@@ -13,6 +13,10 @@ but does not replace, the original
 implemented by PR
 [#27864](https://github.com/matrixorigin/matrixone/pull/27864).
 
+The later [`ordered-set window` design](20260919-ordered-set-window-functions.md)
+adds `OVER (...)` support; window forms listed as out of scope below describe
+the boundary of this original revision.
+
 The extension crosses the SQL binder, prepared-statement compile caches,
 aggregate construction and retained state, distributed partial-state exchange,
 and the configured MORPC compatibility boundary. The exact revision of this

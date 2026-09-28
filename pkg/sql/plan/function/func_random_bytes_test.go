@@ -34,21 +34,21 @@ func TestRandomBytesTypeCheckAcceptsMysqlCoercibleArguments(t *testing.T) {
 		typ      types.Type
 		overload int32
 	}{
-		{typ: types.T_any.ToType(), overload: 2},
-		{typ: types.T_bool.ToType(), overload: 2},
-		{typ: types.T_int8.ToType(), overload: 2},
+		{typ: types.T_any.ToType(), overload: 0},
+		{typ: types.T_bool.ToType(), overload: 0},
+		{typ: types.T_int8.ToType(), overload: 0},
 		{typ: types.T_int64.ToType(), overload: 0},
-		{typ: types.T_uint64.ToType(), overload: 1},
-		{typ: types.T_float64.ToType(), overload: 2},
-		{typ: types.T_decimal64.ToType(), overload: 2},
-		{typ: types.T_varchar.ToType(), overload: 2},
-		{typ: types.T_binary.ToType(), overload: 2},
-		{typ: types.T_year.ToType(), overload: 2},
+		{typ: types.T_uint64.ToType(), overload: 0},
+		{typ: types.T_float64.ToType(), overload: 0},
+		{typ: types.T_decimal64.ToType(), overload: 0},
+		{typ: types.T_varchar.ToType(), overload: 0},
+		{typ: types.T_binary.ToType(), overload: 0},
+		{typ: types.T_year.ToType(), overload: 0},
 	} {
 		resolved, err := GetFunctionByName(ctx, "random_bytes", []types.Type{tc.typ})
 		require.NoError(t, err, tc.typ)
 		require.Equal(t, tc.overload, resolved.overloadId, tc.typ)
-		require.False(t, resolved.needCast, tc.typ)
+		require.Equal(t, tc.typ.Oid != types.T_int64, resolved.needCast, tc.typ)
 		require.Equal(t, types.T_blob, resolved.retType.Oid, tc.typ)
 	}
 

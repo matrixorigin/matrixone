@@ -35,14 +35,35 @@ import (
 )
 
 func remoteIPProtocolPipeline(functionID, overloadID int32) *pipeline.Pipeline {
+	return remoteIPProtocolPipelineWithType(functionID, overloadID, 10)
+}
+
+func remoteIPProtocolPipelineWithType(functionID, overloadID, resultType int32) *pipeline.Pipeline {
 	return &pipeline.Pipeline{InstructionList: []*pipeline.Instruction{{
 		ProjectList: []*planpb.Expr{{
-			Typ: planpb.Type{Id: 10},
+			Typ: planpb.Type{Id: resultType},
 			Expr: &planpb.Expr_F{F: &planpb.Function{
 				Func: &planpb.ObjectRef{
 					Obj:     function.EncodeOverloadID(functionID, overloadID),
 					ObjName: "ip-function",
 				},
+			}},
+		}},
+	}}}
+}
+
+func remoteExpressionResultContractPipeline(
+	functionID int32, name string, resultType planpb.Type, args []*planpb.Expr,
+) *pipeline.Pipeline {
+	return &pipeline.Pipeline{InstructionList: []*pipeline.Instruction{{
+		ProjectList: []*planpb.Expr{{
+			Typ: resultType,
+			Expr: &planpb.Expr_F{F: &planpb.Function{
+				Func: &planpb.ObjectRef{
+					Obj:     function.EncodeOverloadID(functionID, 0),
+					ObjName: name,
+				},
+				Args: args,
 			}},
 		}},
 	}}}
@@ -58,7 +79,14 @@ func TestRemoteIPFunctionProtocolValidation(t *testing.T) {
 		if hadPrevious {
 			rt.SetGlobalVariables(runtime.MOProtocolVersion, previous)
 		} else {
-			for _, value := range []int64{defines.MORPCVersion70, defines.MORPCVersion71, defines.MORPCVersion72} {
+			for _, value := range []int64{
+				defines.MORPCVersion70,
+				defines.MORPCVersion71,
+				defines.MORPCVersion72,
+				defines.MORPCVersion84,
+				defines.MORPCVersion85,
+				defines.MORPCVersion86,
+			} {
 				rt.CompareAndDeleteGlobalVariables(runtime.MOProtocolVersion, value)
 			}
 		}
@@ -72,6 +100,7 @@ func TestRemoteIPFunctionProtocolValidation(t *testing.T) {
 		function.IS_IPV4,
 		function.IS_IPV6,
 		function.IS_IPV4_COMPAT,
+		function.IS_IPV4_MAPPED,
 	} {
 		t.Run("function-"+strconv.Itoa(int(functionID)), func(t *testing.T) {
 			remotePipeline := remoteIPProtocolPipeline(functionID, 0)
@@ -90,7 +119,7 @@ func TestRemoteIPFunctionProtocolValidation(t *testing.T) {
 		})
 	}
 
-	t.Run("new INET_NTOA overload", func(t *testing.T) {
+	t.Run("last native INET_NTOA overload", func(t *testing.T) {
 		rt.SetGlobalVariables(runtime.MOProtocolVersion, defines.MORPCVersion70)
 		err := validateRemoteExpressionPipelineProtocol(proc, remoteIPProtocolPipeline(function.INET_NTOA, 8))
 		require.ErrorContains(t, err, "corrected IP function semantics require MORPC protocol version 72")
@@ -99,9 +128,79 @@ func TestRemoteIPFunctionProtocolValidation(t *testing.T) {
 		require.ErrorContains(t, err, "corrected IP function semantics require MORPC protocol version 72")
 	})
 
+	t.Run("changed result contracts require v86", func(t *testing.T) {
+		for _, tc := range []struct {
+			name       string
+			functionID int32
+			overloadID int32
+			resultType int32
+		}{
+			{name: "TO_BASE64 binary", functionID: function.TO_BASE64, overloadID: 3, resultType: 61},
+			{name: "INET_NTOA dynamic", functionID: function.INET_NTOA, overloadID: 9, resultType: 61},
+			{name: "IS_IPV4 INT32", functionID: function.IS_IPV4, overloadID: 0, resultType: 22},
+			{name: "IS_IPV4_MAPPED INT32", functionID: function.IS_IPV4_MAPPED, overloadID: 0, resultType: 22},
+		} {
+			t.Run(tc.name, func(t *testing.T) {
+				remotePipeline := remoteIPProtocolPipelineWithType(tc.functionID, tc.overloadID, tc.resultType)
+				rt.SetGlobalVariables(runtime.MOProtocolVersion, defines.MORPCVersion85)
+				err := validateRemoteExpressionPipelineProtocol(proc, remotePipeline)
+				require.ErrorContains(t, err, "expression result contracts require MORPC protocol version 86")
+				rt.SetGlobalVariables(runtime.MOProtocolVersion, defines.MORPCVersion86)
+				require.NoError(t, validateRemoteExpressionPipelineProtocol(proc, remotePipeline))
+			})
+		}
+	})
+
 	t.Run("ordinary function is not fenced", func(t *testing.T) {
 		rt.SetGlobalVariables(runtime.MOProtocolVersion, defines.MORPCVersion70)
 		require.NoError(t, validateRemoteExpressionPipelineProtocol(proc, remoteIPProtocolPipeline(function.ABS, 0)))
+	})
+
+	t.Run("metadata result contracts require v86", func(t *testing.T) {
+		cases := []struct {
+			name       string
+			functionID int32
+			function   string
+			resultType planpb.Type
+			args       []*planpb.Expr
+		}{
+			{
+				name:       "bounded substring",
+				functionID: function.SUBSTRING,
+				function:   "substring",
+				resultType: planpb.Type{Id: 61, Width: 7},
+				args: []*planpb.Expr{
+					{Typ: planpb.Type{Id: 61, Width: 64}},
+					{Typ: planpb.Type{Id: 23}, Expr: &planpb.Expr_Lit{Lit: &planpb.Literal{
+						Value: &planpb.Literal_I32Val{I32Val: 2},
+					}}},
+					{Typ: planpb.Type{Id: 23}, Expr: &planpb.Expr_Lit{Lit: &planpb.Literal{
+						Value: &planpb.Literal_I32Val{I32Val: 7},
+					}}},
+				},
+			},
+			{
+				name:       "fractional coalesce",
+				functionID: function.COALESCE,
+				function:   "coalesce",
+				resultType: planpb.Type{Id: 51, Width: 6, Scale: 6},
+				args: []*planpb.Expr{
+					{Typ: planpb.Type{Id: 51, Scale: 0}},
+					{Typ: planpb.Type{Id: 51, Scale: 6}},
+				},
+			},
+		}
+		for _, tc := range cases {
+			t.Run(tc.name, func(t *testing.T) {
+				remotePipeline := remoteExpressionResultContractPipeline(
+					tc.functionID, tc.function, tc.resultType, tc.args)
+				rt.SetGlobalVariables(runtime.MOProtocolVersion, defines.MORPCVersion85)
+				err := validateRemoteExpressionPipelineProtocol(proc, remotePipeline)
+				require.ErrorContains(t, err, "expression result contracts require MORPC protocol version 86")
+				rt.SetGlobalVariables(runtime.MOProtocolVersion, defines.MORPCVersion86)
+				require.NoError(t, validateRemoteExpressionPipelineProtocol(proc, remotePipeline))
+			})
+		}
 	})
 }
 
@@ -147,4 +246,46 @@ func TestIPFunctionDestinationProtocolValidation(t *testing.T) {
 	require.NoError(t, err)
 	require.NotEmpty(t, data)
 	require.Equal(t, client.calls, client.releases)
+}
+
+func TestExpressionResultContractDestinationProtocolValidation(t *testing.T) {
+	c, client := expressionProtocolTestCompile(t)
+	c.proc.Base.QueryClient = client
+
+	remotePipeline := remoteIPProtocolPipelineWithType(function.TO_BASE64, 3, 61)
+	remotePipeline.Node = &pipeline.NodeInfo{Id: "old-worker", Addr: "remote:6001"}
+	client.version = defines.MORPCVersion85
+	err := validateIPFunctionDestination(c.proc, remotePipeline)
+	require.ErrorContains(t, err, "MORPC version 86")
+
+	client.version = defines.MORPCVersion86
+	require.NoError(t, validateIPFunctionDestination(c.proc, remotePipeline))
+
+	t.Run("mixed temporal conditional", func(t *testing.T) {
+		expr, err := plan2.BindFuncExprImplByPlanExpr(context.Background(), "if", []*planpb.Expr{
+			{Typ: planpb.Type{Id: int32(types.T_bool)}, Expr: &planpb.Expr_Col{Col: &planpb.ColRef{ColPos: 0}}},
+			{Typ: planpb.Type{Id: int32(types.T_timestamp), Width: 6, Scale: 6}, Expr: &planpb.Expr_Col{Col: &planpb.ColRef{ColPos: 1}}},
+			{Typ: planpb.Type{Id: int32(types.T_datetime), Width: 3, Scale: 3}, Expr: &planpb.Expr_Col{Col: &planpb.ColRef{ColPos: 2}}},
+		})
+		require.NoError(t, err)
+		op := projection.NewArgument()
+		defer op.Release()
+		op.ProjectList = []*planpb.Expr{expr}
+		scope := &Scope{
+			Magic:    Remote,
+			Proc:     c.proc,
+			NodeInfo: engine.Node{Id: "old-worker", Addr: "remote:6001"},
+			RootOp:   op,
+		}
+		client.version = defines.MORPCVersion85
+		_, err = encodeRemoteScope(scope, c.proc)
+		require.ErrorContains(t, err, "remote destination")
+		client.version = defines.MORPCVersion86
+		data, err := encodeRemoteScope(scope, c.proc)
+		require.NoError(t, err)
+		require.NotEmpty(t, data)
+		wire := new(pipeline.Pipeline)
+		require.NoError(t, wire.Unmarshal(data))
+		require.NoError(t, validateRemoteExpressionPipelineProtocol(c.proc, wire))
+	})
 }

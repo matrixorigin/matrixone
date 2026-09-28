@@ -188,7 +188,7 @@ insert into categories (category_id, category_name) values
 (2, 'Books');
 select * from categories;
 
--- @bvt:issue#20000
+-- Regression for #20000 / #29096: JOIN/ENUM ROLLUP without GROUPING projections.
 select
     year(o.order_date) as order_year,
     month(o.order_date) as order_month,
@@ -219,7 +219,6 @@ order by
     order_month,
     c.city,
     cat.category_name;
--- @bvt:issue
 
 select
     year(o.order_date) as order_year,

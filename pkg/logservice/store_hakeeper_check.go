@@ -349,6 +349,11 @@ func (l *store) hakeeperCheck() *pb.CheckerState {
 		err = moerr.AttachCause(ctx, err)
 		l.runtime.Logger().Debug("view metadata admission activation deferred", zap.Error(err))
 	}
+	if l.catalogExecutor.enabled {
+		if err := l.reconcileCatalogMembership(ctx, nil); err != nil {
+			l.runtime.Logger().Debug("catalog membership reconciliation deferred", zap.Error(err))
+		}
+	}
 	cancel()
 
 	switch state.State {

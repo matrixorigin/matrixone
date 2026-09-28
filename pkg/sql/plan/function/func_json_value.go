@@ -120,7 +120,7 @@ func decodeJSONValueStoredAdmitted(data []byte) (value bytejson.ByteJson, err er
 		return bytejson.Null, err
 	}
 	// Admission owns the complete stored-layout validation for immutable
-	// T_json vectors. Keep a lightweight shape check at this executor boundary
+	// T_json vectors. Keep a recursive shape check at this executor boundary
 	// as well: a remote or otherwise mutable vector must not turn a malformed
 	// descendant into an ordinary path miss and silently bypass ON ERROR.
 	if !bytejson.IsValidByteJson(value) {
@@ -863,7 +863,7 @@ func parseJSONValueTime(e jsonValueExtracted, target types.Type) (types.Time, er
 	if err := rejectJSONValueZeroDatetime(s); err != nil {
 		return 0, err
 	}
-	return types.ParseTime(s, target.Scale)
+	return types.ParseTimeWithoutDate(s, target.Scale)
 }
 
 func parseJSONValueDatetime(e jsonValueExtracted, target types.Type) (types.Datetime, error) {

@@ -1949,6 +1949,45 @@ func TestJsonValueReturningAndResponses(t *testing.T) {
 
 // The binder supplies separate typed defaults at positions 4 and 6. Using
 // equal defaults here would hide a crossed ON EMPTY/ON ERROR selection.
+func TestJsonValueTemporalLossResponsePolicies(t *testing.T) {
+	for _, target := range []types.Type{types.T_date.ToType(), types.New(types.T_time, 0, 6)} {
+		for _, docType := range []types.T{types.T_varchar, types.T_json} {
+			for _, policy := range []int64{jsonValueNullResponse, jsonValueDefaultResponse, jsonValueErrorResponse} {
+				t.Run(fmt.Sprintf("%s/%s/policy%d", target, docType, policy), func(t *testing.T) {
+					proc := testutil.NewProcess(t)
+					document := `{"v":"2024-01-02 12:34:56"}`
+					if docType == types.T_json {
+						document = mustJsonBinaryString(t, document)
+					}
+					var defaults any = []types.Date{types.DateFromCalendar(2000, 1, 1)}
+					if target.Oid == types.T_time {
+						defaults = []types.Time{types.TimeFromClock(false, 1, 2, 3, 0)}
+					}
+					inputs := []FunctionTestInput{
+						NewFunctionTestInput(docType.ToType(), []string{document}, nil),
+						NewFunctionTestConstInput(types.T_varchar.ToType(), []string{"$.v"}, nil),
+						NewFunctionTestConstInput(target, defaults, []bool{true}),
+						NewFunctionTestConstInput(types.T_int64.ToType(), []int64{jsonValueErrorResponse}, nil),
+						NewFunctionTestConstInput(target, defaults, nil),
+						NewFunctionTestConstInput(types.T_int64.ToType(), []int64{policy}, nil),
+						NewFunctionTestConstInput(target, defaults, nil),
+					}
+					fc := NewFunctionTestCase(proc, inputs,
+						NewFunctionTestResult(target, policy == jsonValueErrorResponse, defaults, []bool{policy == jsonValueNullResponse}), JsonValue)
+					t.Cleanup(func() {
+						fc.result.Free()
+						for _, v := range fc.parameters {
+							v.Free(proc.Mp())
+						}
+					})
+					ok, info := fc.Run()
+					require.True(t, ok, info)
+				})
+			}
+		}
+	}
+}
+
 func TestJsonValueDistinctResponseDefaults(t *testing.T) {
 	for _, target := range []types.Type{types.T_int64.ToType(), types.T_varchar.ToType(), types.T_json.ToType()} {
 		for _, emptyNull := range []bool{false, true} {

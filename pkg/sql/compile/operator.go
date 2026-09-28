@@ -70,6 +70,7 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/sql/colexec/mergerecursive"
 	"github.com/matrixorigin/matrixone/pkg/sql/colexec/mergetop"
 	"github.com/matrixorigin/matrixone/pkg/sql/colexec/minus"
+	"github.com/matrixorigin/matrixone/pkg/sql/colexec/minusall"
 	"github.com/matrixorigin/matrixone/pkg/sql/colexec/mongoscan"
 	"github.com/matrixorigin/matrixone/pkg/sql/colexec/multi_update"
 	"github.com/matrixorigin/matrixone/pkg/sql/colexec/offset"
@@ -178,6 +179,8 @@ func dupOperatorWithContext(sourceOp vm.Operator, index int, maxParallel int, du
 		op.NeedAllocateSels = t.NeedAllocateSels
 		op.IsShuffle = t.IsShuffle
 		op.Conditions = t.Conditions
+		op.OwnsConstantFilterDiagnostics = t.OwnsConstantFilterDiagnostics
+		op.JoinDiagnostic = t.JoinDiagnostic
 		op.JoinMapTag = t.JoinMapTag
 		op.JoinMapRefCnt = t.JoinMapRefCnt
 		if t.IsShuffle && t.ShuffleIdx == -1 {
@@ -222,6 +225,8 @@ func dupOperatorWithContext(sourceOp vm.Operator, index int, maxParallel int, du
 		op.JoinType = t.JoinType
 		op.IsRightJoin = t.IsRightJoin
 		op.NonEqCond = t.NonEqCond
+		op.OwnsConstantFilterDiagnostics = t.OwnsConstantFilterDiagnostics
+		op.JoinDiagnostic = t.JoinDiagnostic
 		op.ResultCols = t.ResultCols
 		op.LeftTypes = t.LeftTypes
 		op.RightTypes = t.RightTypes
@@ -258,6 +263,7 @@ func dupOperatorWithContext(sourceOp vm.Operator, index int, maxParallel int, du
 		op.LeftTypes = t.LeftTypes
 		op.RightTypes = t.RightTypes
 		op.NonEqCond = t.NonEqCond
+		op.OwnsConstantFilterDiagnostics = t.OwnsConstantFilterDiagnostics
 		op.JoinMapTag = t.JoinMapTag
 		op.JoinType = t.JoinType
 		op.MarkPos = t.MarkPos
@@ -325,6 +331,7 @@ func dupOperatorWithContext(sourceOp vm.Operator, index int, maxParallel int, du
 		op.FilterExprs = t.FilterExprs
 		op.RuntimeFilterExprs = t.RuntimeFilterExprs
 		op.IsAssert = t.IsAssert
+		op.OwnsConstantCastWarnings = t.OwnsConstantCastWarnings
 		op.SetInfo(&info)
 		return op
 	case vm.Top:
@@ -384,6 +391,12 @@ func dupOperatorWithContext(sourceOp vm.Operator, index int, maxParallel int, du
 	case vm.Minus: // 2
 		t := sourceOp.(*minus.Minus)
 		op := minus.NewArgument()
+		op.KeyExprs = t.KeyExprs
+		op.SetInfo(&info)
+		return op
+	case vm.MinusAll:
+		t := sourceOp.(*minusall.MinusAll)
+		op := minusall.NewArgument()
 		op.KeyExprs = t.KeyExprs
 		op.SetInfo(&info)
 		return op
@@ -1538,6 +1551,10 @@ func constructHashJoin(node, left *plan.Node, left_types, right_types []types.Ty
 	arg.RightTypes = right_types
 	arg.ResultCols = result
 	arg.NonEqCond = nonEqCond
+	arg.OwnsConstantFilterDiagnostics = containsStatementInvariantDiagnosticInList(proc, node.OnList)
+	if arg.OwnsConstantFilterDiagnostics {
+		arg.JoinDiagnostic = new(colexec.DeferredJoinDiagnostic)
+	}
 	arg.EqConds = constructJoinConditions(eqConds, proc)
 	arg.RuntimeFilterSpecs = node.RuntimeFilterBuildList
 	arg.HashOnPK = node.Stats.HashmapStats != nil && node.Stats.HashmapStats.HashOnPK
@@ -2171,6 +2188,9 @@ func evaluateAggregateConfigString(proc *process.Process, expr *plan.Expr) (stri
 		return "", err
 	}
 	defer free()
+	if vec.Length() == 0 || vec.IsConstNull() || vec.IsNull(0) {
+		return "", nil
+	}
 	return vec.GetStringAt(0), nil
 }
 
@@ -2493,6 +2513,7 @@ func constructLoopJoin(node *plan.Node, leftTypes, rightTypes []types.Type, proc
 	arg.LeftTypes = leftTypes
 	arg.RightTypes = rightTypes
 	arg.NonEqCond = colexec.RewriteFilterExprList(node.OnList)
+	arg.OwnsConstantFilterDiagnostics = containsStatementInvariantDiagnosticInList(proc, node.OnList)
 	arg.JoinType = node.JoinType
 	for i := range node.SendMsgList {
 		if node.SendMsgList[i].MsgType == int32(message.MsgJoinMap) {
@@ -2574,6 +2595,8 @@ func constructBroadcastHashBuild(op vm.Operator, proc *process.Process, mcpu int
 			buildConditions = arg.EqConds[0]
 		}
 		ret.Conditions = rewriteJoinExprToHashBuildExpr(buildConditions)
+		ret.OwnsConstantFilterDiagnostics = arg.JoinDiagnostic != nil
+		ret.JoinDiagnostic = arg.JoinDiagnostic
 
 		ret.NeedBatches = arg.NeedBuildBatches()
 
@@ -3126,18 +3149,7 @@ func validateOrderedPercentileExpr(expr *plan.Expr, name string) error {
 }
 
 func isPercentileConfigExpr(expr *plan.Expr) bool {
-	if expr == nil {
-		return false
-	}
-	if rule.IsConstant(expr, true) || expr.GetP() != nil {
-		return true
-	}
-	// CAST cannot be folded by the generic rule, but the binder inserts this
-	// exact shape to give a TEXT-backed prepared marker its numeric p type.
-	fn := expr.GetF()
-	return fn != nil && fn.Func != nil && fn.Func.GetObjName() == "cast" &&
-		len(fn.Args) == 2 && isPercentileConfigExpr(fn.Args[0]) &&
-		rule.IsConstant(fn.Args[1], true)
+	return plan2.IsPercentileConfigExpr(expr)
 }
 
 // getPercentileConfig extracts the percentile value from a vector for

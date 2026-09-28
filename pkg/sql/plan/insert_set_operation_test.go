@@ -37,6 +37,8 @@ func TestDirectInsertSetOperationSources(t *testing.T) {
 		{name: "intersect all", operator: "intersect all", nodeType: planpb.Node_INTERSECT_ALL},
 		{name: "except", operator: "except", nodeType: planpb.Node_MINUS},
 		{name: "minus", operator: "minus", nodeType: planpb.Node_MINUS},
+		{name: "except all", operator: "except all", nodeType: planpb.Node_MINUS_ALL},
+		{name: "minus all", operator: "minus all", nodeType: planpb.Node_MINUS_ALL},
 	}
 
 	for _, test := range tests {

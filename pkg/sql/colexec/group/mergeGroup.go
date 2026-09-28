@@ -36,6 +36,10 @@ func (mergeGroup *MergeGroup) Prepare(proc *process.Process) error {
 		!proc.GroupConcatSourceRowProvenanceTrusted()
 	mergeGroup.ctr.prepareParamKind.Reset(mergeGroup.Aggs)
 	mergeGroup.ctr.aggExprs = mergeGroup.Aggs
+	mergeGroup.ctr.warningRetentionLimit = process.WarningDiagnosticRetentionLimitForProcess(proc)
+	mergeGroup.ctr.warningRetentionSet = true
+	mergeGroup.ctr.groupConcatWarnings.SetWarningBudget(
+		process.WarningDiagnosticBudgetForProcess(proc))
 	mergeGroup.ctr.prepareParamKindWireV1 = prepareParamKindWireV1Enabled(proc) &&
 		hasPrepareParamKindPreservingAgg(mergeGroup.Aggs)
 	mergeGroup.ctr.mp = mpool.MustNewNoLock("merge_group_mpool")
@@ -63,6 +67,9 @@ func (mergeGroup *MergeGroup) Prepare(proc *process.Process) error {
 	mergeGroup.ctr.legacyApproxPercentileState = useLegacyApproxPercentileStateForRemote(proc)
 	mergeGroup.ctr.legacyHLLState = useLegacyHLLStateForRemote(proc)
 	mergeGroup.ctr.floatZeroHLLState = useFloatZeroHLLStateForRemote(proc)
+	mergeGroup.ctr.legacyVectorHLLState = useLegacyVectorHLLStateForRemote(proc)
+	mergeGroup.ctr.legacyTextHLLAddState = useLegacyTextHLLAddStateForRemote(proc)
+	mergeGroup.ctr.legacyFloatHLLAddState = useLegacyFloatHLLAddStateForRemote(proc)
 	// MergeGroup is a receiver. It canonicalizes legacy producer payloads into
 	// the current in-memory DISTINCT domain, so its destination uses the modern
 	// key policy even when the incoming peer is below v79.

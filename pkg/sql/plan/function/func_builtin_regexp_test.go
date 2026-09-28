@@ -1168,21 +1168,22 @@ func TestRegexpFunctionsPreserveBinaryOverloadDomain(t *testing.T) {
 		int64Type := types.T_int64.ToType()
 		int8Type := types.T_int8.ToType()
 		for _, tc := range []struct {
-			name string
-			args []types.Type
+			name     string
+			args     []types.Type
+			wantCast bool
 		}{
 			{name: "ord", args: []types.Type{subject}},
 			{name: "regexp_instr", args: []types.Type{subject, subject}},
 			{name: "regexp_substr", args: []types.Type{subject, subject}},
 			{name: "regexp_replace", args: []types.Type{subject, subject, subject}},
-			{name: "regexp_instr", args: []types.Type{subject, subject, int64Type, int64Type, int8Type, text}},
+			{name: "regexp_instr", args: []types.Type{subject, subject, int64Type, int64Type, int8Type, text}, wantCast: true},
 			{name: "regexp_substr", args: []types.Type{subject, subject, int64Type, int64Type, text}},
 			{name: "regexp_replace", args: []types.Type{subject, subject, subject, int64Type, int64Type, text}},
 		} {
 			resolved, err := GetFunctionByName(context.Background(), tc.name, tc.args)
 			require.NoError(t, err)
 			_, needsCast := resolved.ShouldDoImplicitTypeCast()
-			require.False(t, needsCast, "%s(%s)", tc.name, oid)
+			require.Equal(t, tc.wantCast, needsCast, "%s(%s)", tc.name, oid)
 			if tc.name == "regexp_substr" || tc.name == "regexp_replace" {
 				require.Equal(t, types.StringDomainBinary, types.StaticStringDomain(resolved.GetReturnType()))
 			}

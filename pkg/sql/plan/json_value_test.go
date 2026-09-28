@@ -68,6 +68,19 @@ func TestJSONValueBindingContract(t *testing.T) {
 		require.Error(t, err)
 	})
 
+	for _, prepare := range []bool{false, true} {
+		for _, policy := range []string{"empty", "error"} {
+			for _, target := range []string{"date", "time(6)"} {
+				valid := "2024-01-02"
+				if target == "time(6)" {
+					valid = "12:34:56"
+				}
+				_, err := bind("select json_value('\""+valid+"\"', '$' returning "+target+" default '2024-01-02 12:34:56' on "+policy+")", prepare)
+				require.Error(t, err, "invalid unused %s default on %s; prepare=%v", target, policy, prepare)
+			}
+		}
+	}
+
 	t.Run("prepared document and path remain parameters", func(t *testing.T) {
 		expr, err := bind(`select json_value(?, ? returning char(12))`, true)
 		require.NoError(t, err)
@@ -108,10 +121,10 @@ func TestJSONValueProtocolGatePreservesLegacyPlans(t *testing.T) {
 	require.NoError(t, err)
 	require.Len(t, legacy.GetF().Args, 2)
 
-	_, err = bind(defines.MORPCVersion84, `select json_value('1', '$' returning unsigned)`)
-	require.ErrorContains(t, err, "MORPC protocol version 85")
+	_, err = bind(defines.MORPCVersion99, `select json_value('1', '$' returning unsigned)`)
+	require.ErrorContains(t, err, "MORPC protocol version 100")
 
-	contract, err := bind(defines.MORPCVersion85, `select json_value('1', '$' returning unsigned)`)
+	contract, err := bind(defines.MORPCVersion100, `select json_value('1', '$' returning unsigned)`)
 	require.NoError(t, err)
 	require.Len(t, contract.GetF().Args, 7)
 }
@@ -332,6 +345,8 @@ func TestJSONValueDefaultValidationMatrix(t *testing.T) {
 		{"date datetime is not truncated", "2024-01-02 12:34:56", types.New(types.T_date, 0, 0)},
 		{"date iso datetime is not truncated", "2024-01-02T12:34:56", types.New(types.T_date, 0, 0)},
 		{"date zero", "0000-00-00", types.New(types.T_date, 0, 0)},
+		{"time datetime loses date", "2024-01-02 12:34:56", types.New(types.T_time, 0, 6)},
+		{"time midnight loses date", "2024-01-02 00:00:00", types.New(types.T_time, 0, 6)},
 		{"time invalid", "not-a-time", types.New(types.T_time, 0, 3)},
 		{"time excess fractional precision", "12:34:56.1234", types.New(types.T_time, 0, 3)},
 		{"time zero datetime", "0000-00-00 00:00:00", types.New(types.T_time, 0, 3)},

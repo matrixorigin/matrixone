@@ -186,3 +186,140 @@ func TestFullTextCorrelatedScalarSubqueryRightSwappedSingle(t *testing.T) {
 	require.Equal(t, 1, countReachableFullTextScans(builder.qry),
 		"the right-swapped SINGLE's null-extending child 0 must be rewritten to a fulltext index scan")
 }
+
+// #29079: a top-level indexed MATCH is rejected (20105) when the query block also has a
+// NOT EXISTS (ANTI join) or correlated EXISTS (MARK join). The MATCH sits on the PRESERVED
+// (driving) side of that join -- the outer WHERE's pure filter on the fulltext relation -- so
+// driving it is row-equivalent. These pin the ANTI/MARK preserved-child relaxation; the last one
+// pins the safety invariant that the PROBE side is never driven.
+
+// TestFullTextNotExistsAntiJoinPreservedChild: `docs WHERE match(...) AND NOT EXISTS(q)` flattens
+// to docs(match) ANTI JOIN q, with the match on the preserved child 0.
+func TestFullTextNotExistsAntiJoinPreservedChild(t *testing.T) {
+	builder := NewQueryBuilder(planpb.Query_SELECT, newFullTextJoinMockCompilerContext(), false, true)
+	ctx := NewBindContext(builder, nil)
+
+	matchScanID, _ := matchScanWithFulltextIndex(builder, ctx)
+	qDef := makeFullTextJoinTestTableDef("q", false)
+	qTag := builder.genNewBindTag()
+	qScanID := builder.appendNode(makeJoinIndexTestScan(qDef, qTag), ctx)
+
+	joinID := builder.appendNode(&planpb.Node{
+		NodeType: planpb.Node_JOIN,
+		JoinType: planpb.Node_ANTI, // docs(match) preserved at child 0; q is the probe at child 1
+		Children: []int32{matchScanID, qScanID},
+	}, ctx)
+	projTag := builder.genNewBindTag()
+	projID := builder.appendNode(&planpb.Node{
+		NodeType: planpb.Node_PROJECT, Children: []int32{joinID}, BindingTags: []int32{projTag},
+	}, ctx)
+
+	newID, err := builder.applyIndices(projID, map[[2]int32]int{}, map[[2]int32]*planpb.Expr{})
+	require.NoError(t, err)
+	builder.qry.Steps = []int32{newID}
+
+	require.Zero(t, countReachableFullTextMatches(builder.qry),
+		"NOT EXISTS must not leave the MATCH unrewritten (#29079)")
+	require.Equal(t, 1, countReachableFullTextScans(builder.qry),
+		"the ANTI join's preserved child must be served by a fulltext index scan")
+}
+
+// TestFullTextCorrelatedExistsMarkJoinPreservedChild: `docs WHERE match(...) AND EXISTS(q WHERE
+// q.n < docs.id)` flattens to docs(match) MARK JOIN q, with the match on the preserved child 0.
+func TestFullTextCorrelatedExistsMarkJoinPreservedChild(t *testing.T) {
+	builder := NewQueryBuilder(planpb.Query_SELECT, newFullTextJoinMockCompilerContext(), false, true)
+	ctx := NewBindContext(builder, nil)
+
+	matchScanID, _ := matchScanWithFulltextIndex(builder, ctx)
+	qDef := makeFullTextJoinTestTableDef("q", false)
+	qTag := builder.genNewBindTag()
+	qScanID := builder.appendNode(makeJoinIndexTestScan(qDef, qTag), ctx)
+
+	joinID := builder.appendNode(&planpb.Node{
+		NodeType: planpb.Node_JOIN,
+		JoinType: planpb.Node_MARK, // docs(match) preserved/marked at child 0; q is the probe at child 1
+		Children: []int32{matchScanID, qScanID},
+	}, ctx)
+	projTag := builder.genNewBindTag()
+	projID := builder.appendNode(&planpb.Node{
+		NodeType: planpb.Node_PROJECT, Children: []int32{joinID}, BindingTags: []int32{projTag},
+	}, ctx)
+
+	newID, err := builder.applyIndices(projID, map[[2]int32]int{}, map[[2]int32]*planpb.Expr{})
+	require.NoError(t, err)
+	builder.qry.Steps = []int32{newID}
+
+	require.Zero(t, countReachableFullTextMatches(builder.qry),
+		"correlated EXISTS must not leave the MATCH unrewritten (#29079)")
+	require.Equal(t, 1, countReachableFullTextScans(builder.qry),
+		"the MARK join's preserved child must be served by a fulltext index scan")
+}
+
+// TestFullTextAntiRightSwappedPreservesChild1: an ANTI join right-swapped by swapJoinChildren
+// (IsRightJoin=true) moves the preserved side to child 1; eligibility must follow IsRightJoin, not
+// a hard-coded index.
+func TestFullTextAntiRightSwappedPreservesChild1(t *testing.T) {
+	builder := NewQueryBuilder(planpb.Query_SELECT, newFullTextJoinMockCompilerContext(), false, true)
+	ctx := NewBindContext(builder, nil)
+
+	qDef := makeFullTextJoinTestTableDef("q", false)
+	qTag := builder.genNewBindTag()
+	qScanID := builder.appendNode(makeJoinIndexTestScan(qDef, qTag), ctx)
+	matchScanID, _ := matchScanWithFulltextIndex(builder, ctx)
+
+	joinID := builder.appendNode(&planpb.Node{
+		NodeType:    planpb.Node_JOIN,
+		JoinType:    planpb.Node_ANTI,
+		IsRightJoin: true, // right-swapped: preserved docs(match) is now child 1, probe q at child 0
+		Children:    []int32{qScanID, matchScanID},
+	}, ctx)
+	projTag := builder.genNewBindTag()
+	projID := builder.appendNode(&planpb.Node{
+		NodeType: planpb.Node_PROJECT, Children: []int32{joinID}, BindingTags: []int32{projTag},
+	}, ctx)
+
+	newID, err := builder.applyIndices(projID, map[[2]int32]int{}, map[[2]int32]*planpb.Expr{})
+	require.NoError(t, err)
+	builder.qry.Steps = []int32{newID}
+
+	require.Zero(t, countReachableFullTextMatches(builder.qry),
+		"right-swapped ANTI must serve the MATCH on its preserved child 1 (#29079)")
+	require.Equal(t, 1, countReachableFullTextScans(builder.qry),
+		"the right-swapped ANTI's preserved child 1 must be rewritten to a fulltext index scan")
+}
+
+// TestFullTextAntiProbeSideNotDriven pins the safety invariant of the join-children path: it drives
+// only the preserved side of an ANTI/MARK join, never the probe side (filtering the anti/mark probe
+// is not a pure filter under null-aware NOT IN / three-valued MARK). Here a bare match scan sits as
+// the ANTI probe child, so the join-children rewrite leaves it untouched. A real subquery
+// (`NOT EXISTS(SELECT 1 FROM ftdocs WHERE MATCH ...)`) carries its own PROJECT above the scan and is
+// served by that subquery's own scan-level rewrite instead -- this test guards against a future
+// change that naively marks both ANTI/MARK children eligible.
+func TestFullTextAntiProbeSideNotDriven(t *testing.T) {
+	builder := NewQueryBuilder(planpb.Query_SELECT, newFullTextJoinMockCompilerContext(), false, true)
+	ctx := NewBindContext(builder, nil)
+
+	outerDef := makeFullTextJoinTestTableDef("outer", false)
+	outerTag := builder.genNewBindTag()
+	outerScanID := builder.appendNode(makeJoinIndexTestScan(outerDef, outerTag), ctx)
+	matchScanID, _ := matchScanWithFulltextIndex(builder, ctx)
+
+	joinID := builder.appendNode(&planpb.Node{
+		NodeType: planpb.Node_JOIN,
+		JoinType: planpb.Node_ANTI, // outer preserved at child 0; match scan is the PROBE at child 1
+		Children: []int32{outerScanID, matchScanID},
+	}, ctx)
+	projTag := builder.genNewBindTag()
+	projID := builder.appendNode(&planpb.Node{
+		NodeType: planpb.Node_PROJECT, Children: []int32{joinID}, BindingTags: []int32{projTag},
+	}, ctx)
+
+	newID, err := builder.applyIndices(projID, map[[2]int32]int{}, map[[2]int32]*planpb.Expr{})
+	require.NoError(t, err)
+	builder.qry.Steps = []int32{newID}
+
+	require.Equal(t, 1, countReachableFullTextMatches(builder.qry),
+		"a MATCH on the ANTI probe side must be left unrewritten (driving it is not a pure filter)")
+	require.Zero(t, countReachableFullTextScans(builder.qry),
+		"the probe-side MATCH must not be served by a fulltext index scan")
+}

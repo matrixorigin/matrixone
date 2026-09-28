@@ -828,6 +828,7 @@ type service struct {
 	appliedCommandIDs               map[logservice.ScheduleCommandIdentity]struct{}
 	lastCommandHash                 [32]byte
 	legacyDedupeArmed               bool
+	catalogMetadataParticipant      logservicepb.CatalogMetadataParticipant
 	viewMetadataAdmissionGeneration uint64
 	viewMetadataAdmissionMu         sync.Mutex
 	viewMetadataAdmissionMuWaiters  atomic.Int32

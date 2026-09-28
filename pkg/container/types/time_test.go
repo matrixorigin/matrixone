@@ -77,7 +77,7 @@ func TestTime_StringAndString2(t *testing.T) {
 
 func TestMySQLTimeRange(t *testing.T) {
 	columnMax := TimeFromClock(false, 838, 59, 59, 0)
-	functionMax := TimeFromClock(false, 838, 59, 59, 999999)
+	functionMax := columnMax
 	require.Equal(t, columnMax, MySQLTimeMax)
 	require.Equal(t, functionMax, MySQLTimeFunctionMax)
 	require.True(t, IsMySQLTime(columnMax))
@@ -98,8 +98,8 @@ func TestMySQLTimeRange(t *testing.T) {
 	require.Equal(t, functionMax, ClampMySQLTimeFunctionForScale(functionMax+1, 6))
 	require.Equal(t, -functionMax, ClampMySQLTimeFunctionForScale(-functionMax-1, 6))
 	require.Equal(t, columnMax, MySQLTimeFunctionMaxForScale(0))
-	require.Equal(t, TimeFromClock(false, 838, 59, 59, 900000), MySQLTimeFunctionMaxForScale(1))
-	require.Equal(t, TimeFromClock(false, 838, 59, 59, 999000), MySQLTimeFunctionMaxForScale(3))
+	require.Equal(t, columnMax, MySQLTimeFunctionMaxForScale(1))
+	require.Equal(t, columnMax, MySQLTimeFunctionMaxForScale(3))
 	require.Equal(t, functionMax, MySQLTimeFunctionMaxForScale(6))
 }
 
@@ -851,5 +851,33 @@ func TestTime_ToDecimal_ScaleGreaterThan6(t *testing.T) {
 				}, "ToDecimal128 should not panic with scale > 6")
 			}
 		})
+	}
+}
+
+func TestParseTimeWithoutDate(t *testing.T) {
+	for _, input := range []string{"2024-01-02 12:34:56", " 2024-01-02 00:00:00.000000 ", "0000-00-00 00:00:00"} {
+		_, err := ParseTimeWithoutDate(input, 6)
+		require.Error(t, err, input)
+	}
+	// The ordinary parser intentionally retains its datetime-to-time cast.
+	ordinary, err := ParseTime("2024-01-02 12:34:56", 6)
+	require.NoError(t, err)
+	require.Equal(t, "12:34:56.000000", ordinary.String2(6))
+	for _, tc := range []struct{ input, want string }{
+		{"12:34:56.123456", "12:34:56.123456"},
+		{" -12:34:56 ", "-12:34:56.000000"},
+		{"2 03:04:05", "51:04:05.000000"},
+		{"-2 03:04:05", "-51:04:05.000000"},
+		{"123456", "12:34:56.000000"},
+		{"00:00:00", "00:00:00.000000"},
+		{"2562047787:59:59.999999", "2562047787:59:59.999999"},
+	} {
+		got, err := ParseTimeWithoutDate(tc.input, 6)
+		require.NoError(t, err, tc.input)
+		require.Equal(t, tc.want, got.String2(6))
+	}
+	for _, input := range []string{"2024-01-02T12:34:56", "12:60:00", "2562047788:00:00", "not-a-time"} {
+		_, err := ParseTimeWithoutDate(input, 6)
+		require.Error(t, err, input)
 	}
 }

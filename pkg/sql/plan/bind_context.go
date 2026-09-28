@@ -54,9 +54,14 @@ func NewBindContext(builder *QueryBuilder, parent *BindContext) *BindContext {
 
 	if builder != nil {
 		bc.lower = builder.compCtx.GetLowerCaseTableNames()
+		if parent == nil && builder.persistedViewTarget != "" {
+			requiredProtocol := int64(0)
+			bc.persistedExpressionProtocolRequirement = &requiredProtocol
+		}
 	}
 
 	if parent != nil {
+		bc.persistedExpressionProtocolRequirement = parent.persistedExpressionProtocolRequirement
 		bc.existentialBlock = parent.existentialBlock
 		bc.subqueryNestingDepth = parent.subqueryNestingDepth
 		bc.lower = parent.lower

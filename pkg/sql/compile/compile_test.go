@@ -36,12 +36,14 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/lockservice"
 	lockpb "github.com/matrixorigin/matrixone/pkg/pb/lock"
 	"github.com/matrixorigin/matrixone/pkg/pb/metadata"
+	"github.com/matrixorigin/matrixone/pkg/pb/pipeline"
 	"github.com/matrixorigin/matrixone/pkg/pb/plan"
 	statspb "github.com/matrixorigin/matrixone/pkg/pb/statsinfo"
 	"github.com/matrixorigin/matrixone/pkg/pb/timestamp"
 	"github.com/matrixorigin/matrixone/pkg/perfcounter"
 	"github.com/matrixorigin/matrixone/pkg/sql/colexec/lockop"
 	offsetop "github.com/matrixorigin/matrixone/pkg/sql/colexec/offset"
+	"github.com/matrixorigin/matrixone/pkg/sql/colexec/output"
 	"github.com/matrixorigin/matrixone/pkg/txn/client"
 	"github.com/matrixorigin/matrixone/pkg/txn/rpc"
 
@@ -76,6 +78,37 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/vm/message"
 	"github.com/matrixorigin/matrixone/pkg/vm/process"
 )
+
+func TestBroadcastJoinUsesHashAfterPreparedDiagnosticProof(t *testing.T) {
+	ctx := plan2.NewMockCompilerContext(true)
+	proc := ctx.GetProcess()
+	params := vector.NewVec(types.T_text.ToType())
+	defer func() { proc.SetPrepareParams(nil); params.Free(proc.Mp()) }()
+	require.NoError(t, vector.AppendBytes(params, []byte("00:00:01"), false, proc.Mp()))
+	proc.SetPrepareParams(params)
+
+	bind := func(name string, args ...*plan.Expr) *plan.Expr {
+		expr, err := plan2.BindFuncExprImplByPlanExpr(ctx.GetContext(), name, args)
+		require.NoError(t, err)
+		return expr
+	}
+	intType := plan.Type{Id: int32(types.T_int64)}
+	timeType := plan.Type{Id: int32(types.T_time)}
+	leftID, rightID := plan2.GetColExpr(intType, 0, 0), plan2.GetColExpr(intType, 1, 0)
+	leftTime, rightTime := plan2.GetColExpr(timeType, 0, 1), plan2.GetColExpr(timeType, 1, 1)
+	param := &plan.Expr{Typ: plan.Type{Id: int32(types.T_varchar)}, Expr: &plan.Expr_P{P: &plan.ParamRef{Pos: 0}}}
+	guard := bind("case", bind(">", rightID, plan2.MakePlan2Int64ConstExprWithType(0)),
+		bind("time", param), rightTime)
+	node := &plan.Node{JoinType: plan.Node_INNER, OnList: []*plan.Expr{
+		bind("=", leftID, rightID), bind("=", leftTime, guard),
+	}}
+	c := &Compile{proc: proc}
+	require.False(t, c.broadcastJoinUsesHash(node), "unproved guarded ON retains LoopJoin")
+	c.SetPreparedJoinDiagnosticFree(true)
+	require.True(t, c.broadcastJoinUsesHash(node), "current clean binding permits HashJoin")
+	c.SetPreparedJoinDiagnosticFree(false)
+	require.False(t, c.broadcastJoinUsesHash(node), "a subsequent execution must not inherit proof")
+}
 
 func TestHasOrderedGroupConcat(t *testing.T) {
 	ordered := &plan.Node{
@@ -168,7 +201,7 @@ func TestFilterScanStorageExprsExcludesVolatilePredicates(t *testing.T) {
 	}}}}
 	stable := plan2.MakePlan2Int64ConstExprWithType(1)
 
-	require.Equal(t, []*plan.Expr{stable}, filterScanStorageExprs([]*plan.Expr{stable, volatile}))
+	require.Equal(t, []*plan.Expr{stable}, filterScanStorageExprs(nil, []*plan.Expr{stable, volatile}))
 }
 
 func TestCompileRunPreservesBinaryPrepareParamAcrossRetries(t *testing.T) {
@@ -452,6 +485,30 @@ func TestSQLSelectLimitResolverFailureReleasesCompileStepsTree(t *testing.T) {
 	for _, owner := range owners {
 		require.True(t, owner.released)
 	}
+}
+
+func TestCompileStepsDoesNotGiveOutputAdaptiveRetryOwnership(t *testing.T) {
+	c := NewMockCompile(t)
+	c.anal = &AnalyzeModule{}
+	input := newScope(Normal)
+	input.NodeInfo.Mcpu = 1
+	input.Proc = c.proc.NewNoContextChildProc(0)
+	input.setRootOperator(projection.NewArgument())
+	qry := &plan.Query{
+		StmtType: plan.Query_SELECT,
+		Steps:    []int32{0},
+		Nodes: []*plan.Node{{
+			NodeId:     0,
+			NodeType:   plan.Node_SORT,
+			RankOption: &plan.RankOption{Mode: "auto"},
+		}},
+	}
+	compiled, err := c.compileSteps(qry, []*Scope{input}, 0)
+	require.NoError(t, err)
+	require.Len(t, compiled, 1)
+	out, ok := compiled[0].RootOp.(*output.Output)
+	require.True(t, ok)
+	require.False(t, out.IsAdaptive)
 }
 
 func TestCompileStepsKeepsOutputOnCurrentCNForSingleRemoteScope(t *testing.T) {
@@ -1136,6 +1193,17 @@ func newTestTxnClientAndOpWithIsolation(
 	isolation txn.TxnIsolation,
 	workspaces ...client.Workspace,
 ) (client.TxnClient, client.TxnOperator) {
+	return newTestTxnClientAndOpWithModeIsolation(
+		ctrl, txn.TxnMode_Optimistic, isolation, workspaces...,
+	)
+}
+
+func newTestTxnClientAndOpWithModeIsolation(
+	ctrl *gomock.Controller,
+	mode txn.TxnMode,
+	isolation txn.TxnIsolation,
+	workspaces ...client.Workspace,
+) (client.TxnClient, client.TxnOperator) {
 	txnOperator := mock_frontend.NewMockTxnOperator(ctrl)
 	workspace := client.Workspace(&Ws{})
 	if len(workspaces) > 0 {
@@ -1144,7 +1212,7 @@ func newTestTxnClientAndOpWithIsolation(
 	txnOperator.EXPECT().Commit(gomock.Any()).Return(nil).AnyTimes()
 	txnOperator.EXPECT().Rollback(gomock.Any()).Return(nil).AnyTimes()
 	txnOperator.EXPECT().GetWorkspace().Return(workspace).AnyTimes()
-	txnOperator.EXPECT().Txn().Return(txn.TxnMeta{Isolation: isolation}).AnyTimes()
+	txnOperator.EXPECT().Txn().Return(txn.TxnMeta{Mode: mode, Isolation: isolation}).AnyTimes()
 	txnOperator.EXPECT().TxnOptions().Return(txn.TxnOptions{}).AnyTimes()
 	txnOperator.EXPECT().NextSequence().Return(uint64(0)).AnyTimes()
 	txnOperator.EXPECT().TryEnterRunSqlWithTokenAndSQL(gomock.Any(), gomock.Any()).Return(uint64(1), nil).AnyTimes()
@@ -1472,6 +1540,7 @@ func TestFrozenResultMetadataAcceptsEquivalentVectorAccessPath(t *testing.T) {
 		vectorSpec := &plan.VectorIndexScan{
 			SourceTable:    &plan.ObjectRef{SchemaName: "source_db", ObjName: "source_table"},
 			SourceTableDef: sourceTable,
+			Index:          &plan.IndexDef{IndexAlgo: catalog.MoIndexIvfFlatAlgo.ToString()},
 			IncludedColumns: []string{
 				"category",
 				"payload",
@@ -1716,12 +1785,23 @@ func TestPreferPrimaryScopeResult(t *testing.T) {
 	cancelRemoteQuery()
 	defer cancelRemotePipeline(nil)
 
+	// A reader's cancellation, wrapped by its library, as it reaches the
+	// scheduler converted locally or after crossing RPC from a remote scope
+	// (CI flake in load_data_parquet, #29315).
+	readerCanceled := fmt.Errorf("reading magic footer of parquet file: %w (read: 0)", context.Canceled)
+	convertedReaderCanceled := moerr.ConvertGoError(context.Background(), readerCanceled)
+	remoteMsg := &pipeline.Message{Err: pipeline.EncodedMessageError(context.Background(), readerCanceled)}
+	remoteReaderCanceled, ok := remoteMsg.TryToGetMoErr()
+	require.True(t, ok)
+
 	tests := []struct {
 		name      string
 		current   scopeRunResult
 		candidate scopeRunResult
 		want      error
 	}{
+		{name: "converted reader cancellation resolves to execution error", current: scopeRunResult{err: convertedReaderCanceled, ctx: internalCancelCtx}, candidate: scopeRunResult{err: executionErr}, want: executionErr},
+		{name: "remote reader cancellation resolves to execution error", current: scopeRunResult{err: remoteReaderCanceled, ctx: internalCancelCtx}, candidate: scopeRunResult{err: executionErr}, want: executionErr},
 		{name: "first error", candidate: scopeRunResult{err: cleanupErr}, want: cleanupErr},
 		{name: "execution error replaces cleanup fallback", current: scopeRunResult{err: cleanupErr}, candidate: scopeRunResult{err: executionErr}, want: executionErr},
 		{name: "joined execution error replaces cleanup fallback", current: scopeRunResult{err: cleanupErr}, candidate: scopeRunResult{err: joinedExecutionErr}, want: joinedExecutionErr},
@@ -1733,6 +1813,9 @@ func TestPreferPrimaryScopeResult(t *testing.T) {
 		{name: "unresolved interrupted sibling is secondary", current: scopeRunResult{err: cleanupErr}, candidate: scopeRunResult{err: queryInterrupted}, want: cleanupErr},
 		{name: "unresolved joined cancellation is secondary", current: scopeRunResult{err: cleanupErr}, candidate: scopeRunResult{err: joinedCancellationErr}, want: cleanupErr},
 		{name: "internally canceled sibling resolves to execution error", current: scopeRunResult{err: context.Canceled, ctx: internalCancelCtx}, candidate: scopeRunResult{err: executionErr}, want: executionErr},
+		// A reader library's wrapped cancellation (as external readers now
+		// return it, see convertReaderError) is still the sibling's cancellation.
+		{name: "wrapped reader cancellation resolves to execution error", current: scopeRunResult{err: fmt.Errorf("reading magic footer of parquet file: %w (read: 0)", context.Canceled), ctx: internalCancelCtx}, candidate: scopeRunResult{err: executionErr}, want: executionErr},
 		{name: "join map cancellation resolves to execution error", current: scopeRunResult{err: joinMapCancellationErr, ctx: internalCancelCtx}, candidate: scopeRunResult{err: executionErr}, want: executionErr},
 		{name: "normal internal cancellation is secondary", current: scopeRunResult{err: context.Canceled, ctx: internalNormalCancelCtx, queryCtx: activeQueryCtx}, candidate: scopeRunResult{err: executionErr}, want: executionErr},
 		{name: "internally interrupted sibling resolves to execution error", current: scopeRunResult{err: queryInterrupted, ctx: internalCancelCtx}, candidate: scopeRunResult{err: executionErr}, want: executionErr},
@@ -2394,6 +2477,106 @@ func TestCompileShuffleGroupGatesHLLByProtocolVersion(t *testing.T) {
 	rt.SetGlobalVariables(runtime.MOProtocolVersion, defines.MORPCVersion77)
 	require.True(t, c.supportsRemoteHLL())
 	require.True(t, c.canCompileShuffleGroup(aggNode))
+
+	vectorHLL := &plan.Expr{
+		Expr: &plan.Expr_F{F: &plan.Function{
+			Func: &plan.ObjectRef{ObjName: "hll_add_agg"},
+			Args: []*plan.Expr{{Typ: plan.Type{Id: int32(types.T_array_float32)}}},
+		}},
+	}
+	aggNode.AggList = []*plan.Expr{vectorHLL}
+	rt.SetGlobalVariables(runtime.MOProtocolVersion, defines.MORPCVersion87)
+	require.False(t, c.supportsRemoteCanonicalHLLAdd())
+	require.False(t, c.canCompileShuffleGroup(aggNode),
+		"vector HLL_ADD_AGG must stay local before MORPC v88")
+	rt.SetGlobalVariables(runtime.MOProtocolVersion, defines.MORPCVersion88)
+	require.True(t, c.supportsRemoteCanonicalHLLAdd())
+	require.True(t, c.canCompileShuffleGroup(aggNode))
+}
+
+func TestCompileShuffleGroupGatesCanonicalHLLAddByProtocolVersion(t *testing.T) {
+	c := newCompileForShuffleGroupTest(t)
+	aggNode, nodes := newShuffleGroupTestNodes(16)
+	rt := runtime.ServiceRuntime(c.proc.GetService())
+	defer rt.SetGlobalVariables(runtime.MOProtocolVersion, defines.MORPCLatestVersion)
+
+	for _, tc := range []struct {
+		name      string
+		typ       types.Type
+		canonical bool
+	}{
+		{name: "char", typ: types.New(types.T_char, 4, 0), canonical: true},
+		{name: "json", typ: types.T_json.ToType(), canonical: true},
+		{name: "varchar-control", typ: types.New(types.T_varchar, 4, 0)},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			arg := &plan.Expr{Typ: plan.Type{
+				Id:    int32(tc.typ.Oid),
+				Width: tc.typ.Width,
+				Scale: tc.typ.Scale,
+			}}
+			aggNode.AggList = []*plan.Expr{{
+				Expr: &plan.Expr_F{F: &plan.Function{
+					Func: &plan.ObjectRef{ObjName: "hll_add_agg"},
+					Args: []*plan.Expr{arg},
+				}},
+			}}
+
+			rt.SetGlobalVariables(runtime.MOProtocolVersion, defines.MORPCVersion87)
+			require.Equal(t, tc.canonical, hasCanonicalHLLAddAggregate(aggNode))
+			require.Equal(t, !tc.canonical, c.canCompileShuffleGroup(aggNode))
+			if tc.canonical {
+				local := c.compileGroupWithoutShuffle(
+					aggNode,
+					[]*Scope{newShuffleGroupInputScope(t, 1)},
+					nodes,
+					false,
+				)
+				require.Len(t, local, 1)
+				require.True(t, local[0].RootOp.(*group.Group).NeedEval)
+			}
+
+			rt.SetGlobalVariables(runtime.MOProtocolVersion, defines.MORPCVersion88)
+			require.True(t, c.supportsRemoteCanonicalHLLAdd())
+			require.Equal(t, !tc.canonical, c.canCompileShuffleGroup(aggNode))
+			rt.SetGlobalVariables(runtime.MOProtocolVersion, defines.MORPCVersion90)
+			require.False(t, c.supportsRemoteCanonicalTextHLLAdd())
+			require.Equal(t, !tc.canonical, c.canCompileShuffleGroup(aggNode))
+			rt.SetGlobalVariables(runtime.MOProtocolVersion, defines.MORPCVersion91)
+			require.True(t, c.supportsRemoteCanonicalTextHLLAdd())
+			require.True(t, c.canCompileShuffleGroup(aggNode))
+		})
+	}
+}
+
+func TestCompileShuffleGroupGatesScalarFloatHLLAddByProtocolVersion(t *testing.T) {
+	c := newCompileForShuffleGroupTest(t)
+	aggNode, _ := newShuffleGroupTestNodes(16)
+	rt := runtime.ServiceRuntime(c.proc.GetService())
+	defer rt.SetGlobalVariables(runtime.MOProtocolVersion, defines.MORPCLatestVersion)
+
+	makeAgg := func(typ types.T) *plan.Expr {
+		return &plan.Expr{
+			Expr: &plan.Expr_F{F: &plan.Function{
+				Func: &plan.ObjectRef{ObjName: "hll_add_agg"},
+				Args: []*plan.Expr{{Typ: plan.Type{Id: int32(typ)}}},
+			}},
+		}
+	}
+	aggNode.AggList = []*plan.Expr{makeAgg(types.T_float32)}
+	require.Equal(t, defines.MORPCVersion92, canonicalHLLAddRequiredVersion(aggNode))
+	for _, version := range []int64{defines.MORPCVersion91, defines.MORPCVersion92} {
+		rt.SetGlobalVariables(runtime.MOProtocolVersion, version)
+		require.Equal(t, version >= defines.MORPCVersion92,
+			c.supportsRemoteCanonicalFloatHLLAdd())
+		require.Equal(t, version >= defines.MORPCVersion92,
+			c.canCompileShuffleGroup(aggNode))
+	}
+
+	// The requirement is the maximum across all HLL_ADD_AGG expressions; a
+	// later scalar FLOAT must not be hidden by an earlier CHAR expression.
+	aggNode.AggList = []*plan.Expr{makeAgg(types.T_char), makeAgg(types.T_float64)}
+	require.Equal(t, defines.MORPCVersion92, canonicalHLLAddRequiredVersion(aggNode))
 }
 
 func TestCompileShuffleGroupGatesAggregateWireByProtocolVersion(t *testing.T) {

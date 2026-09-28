@@ -207,15 +207,15 @@ select count(inner_product(vecf32_5,vecf32_5)) from vtab32;
 select sin(inner_product(vecf64_3,vecf64_3)) from vtab64;
 ➤ sin(inner_product(vecf64_3, vecf64_3))[8,54,0]  𝄀
 null  𝄀
--0.9755987723676985  𝄀
-0.7452402411356782  𝄀
--0.8032593470483471
+-0.9755987766161661  𝄀
+0.7646092834977731  𝄀
+-0.8032593455871644
 select cos(inner_product(vecf64_5,vecf64_5)) from vtab64;
 ➤ cos(inner_product(vecf64_5, vecf64_5))[8,54,0]  𝄀
 null  𝄀
 null  𝄀
-0.4932042277813813  𝄀
-0.7817683693215783
+0.0739509745349585  𝄀
+0.7808763613980533
 select inner_product(normalize_l2(vecf32_3),normalize_l2(vecf32_3)), inner_product(normalize_l2(vecf32_5),normalize_l2(vecf32_5)),  inner_product(normalize_l2(vecf32_3),normalize_l2(vecf32_3)) - inner_product(normalize_l2(vecf32_5),normalize_l2(vecf32_5)) from vtab32;
 ➤ inner_product(normalize_l2(vecf32_3), normalize_l2(vecf32_3))[8,54,0]  ¦  inner_product(normalize_l2(vecf32_5), normalize_l2(vecf32_5))[8,54,0]  ¦  inner_product(normalize_l2(vecf32_3), normalize_l2(vecf32_3)) - inner_product(normalize_l2(vecf32_5), normalize_l2(vecf32_5))[8,54,0]  𝄀
 null  ¦  null  ¦  null  𝄀
@@ -890,7 +890,12 @@ null  𝄀
 null  𝄀
 null
 select subvector(c2,8,"a") from vector_01;
-invalid argument cast to int, bad value a
+➤ subvector(c2, 8, a)[12,65535,0]  𝄀
+[]  𝄀
+[]  𝄀
+[]  𝄀
+[]  𝄀
+[]
 select subvector(c2,NULL,NULL) from vector_01;
 ➤ subvector(c2, null, null)[12,65535,0]  𝄀
 null  𝄀

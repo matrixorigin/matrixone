@@ -15,12 +15,13 @@
 package logtailreplay
 
 import (
+	"fmt"
+	"testing"
+
 	"github.com/matrixorigin/matrixone/pkg/common/mpool"
 	"github.com/matrixorigin/matrixone/pkg/container/batch"
 	"github.com/matrixorigin/matrixone/pkg/container/vector"
 	"github.com/stretchr/testify/assert"
-	"math/rand"
-	"testing"
 
 	"github.com/matrixorigin/matrixone/pkg/container/types"
 	"github.com/matrixorigin/matrixone/pkg/objectio"
@@ -216,45 +217,31 @@ func TestPartitionState_CollectObjectsBetweenInProgress(t *testing.T) {
 		})
 	}
 
-	// random check
-	{
-		//name := []string{"t1", "t2", "t3", "t4", "t5", "t6"}
-		tss := []types.TS{t1, t2, t3, t4, t5, t6}
-		for i := 0; i < 100000; i++ {
-			x := rand.Int() % (len(tss) - 1)
-			y := rand.Int()%(len(tss)-x) + x
-
-			tx := tss[x]
-			ty := tss[y]
-
-			require.True(t, ty.GE(&tx))
-
-			inserted, deleted := pState.CollectObjectsBetween(tx, ty)
-			for _, ss := range inserted {
-				obj, ok := pState.GetObject(*ss.ObjectShortName())
-				require.True(t, ok)
-
-				if obj.DeleteTime.IsEmpty() {
-					ok = obj.CreateTime.GT(&tx) && obj.CreateTime.LE(&ty)
-					require.True(t, ok)
-				} else {
-					ok = obj.CreateTime.GT(&tx) && obj.CreateTime.LE(&ty) && obj.DeleteTime.GT(&ty)
-					require.True(t, ok)
+	// Six timestamps have only 21 ordered windows, including empty windows.
+	// Exhaust them instead of drawing the same 20 windows 100,000 times (the
+	// old random start excluded t6). Check complete sets, not just predicates
+	// on returned objects: silently omitting an object must also fail.
+	tss := []types.TS{t1, t2, t3, t4, t5, t6}
+	objects := []objectio.ObjectEntry{obj1, obj2, obj3, obj4, obj5, obj6}
+	for x, tx := range tss {
+		for y := x; y < len(tss); y++ {
+			t.Run(fmt.Sprintf("window_t%d_t%d", x+1, y+1), func(t *testing.T) {
+				ty := tss[y]
+				var wantInserted, wantDeleted []objectio.ObjectStats
+				for _, obj := range objects {
+					if obj.CreateTime.GT(&tx) && obj.CreateTime.LE(&ty) &&
+						(obj.DeleteTime.IsEmpty() || obj.DeleteTime.GT(&ty)) {
+						wantInserted = append(wantInserted, obj.ObjectStats)
+					}
+					if obj.CreateTime.LE(&tx) && !obj.DeleteTime.IsEmpty() &&
+						obj.DeleteTime.GT(&tx) && obj.DeleteTime.LE(&ty) {
+						wantDeleted = append(wantDeleted, obj.ObjectStats)
+					}
 				}
-			}
-
-			for _, ss := range deleted {
-				obj, ok := pState.GetObject(*ss.ObjectShortName())
-				require.True(t, ok)
-
-				require.False(t, obj.DeleteTime.IsEmpty())
-
-				ok = obj.CreateTime.LE(&tx) && obj.DeleteTime.GT(&tx) && obj.DeleteTime.LE(&ty)
-				require.True(t, ok)
-			}
-
-			//fmt.Println(name[x], name[y], len(inserted), len(deleted))
-
+				inserted, deleted := pState.CollectObjectsBetween(tx, ty)
+				require.ElementsMatch(t, wantInserted, inserted)
+				require.ElementsMatch(t, wantDeleted, deleted)
+			})
 		}
 	}
 }

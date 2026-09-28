@@ -16,7 +16,9 @@ package compile
 
 import (
 	"context"
+	"encoding/json"
 	"errors"
+	"strings"
 	"sync"
 	"testing"
 	"time"
@@ -727,6 +729,86 @@ func TestMessageReceiverSendBatchUsesNegotiatedCredits(t *testing.T) {
 	require.NoError(t, flow.acknowledge(sent.GetBatchSequence()))
 }
 
+func TestMessageReceiverSendEndMessageBoundsWarningPayload(t *testing.T) {
+	const bodyLimit = 16 * 1024
+	const total = 10
+	warnings := make([]remoteWarningDiagnostic, total)
+	for i := range warnings {
+		warnings[i] = remoteWarningDiagnostic{
+			Code:    1292,
+			Message: strings.Repeat("x", process.WarningDiagnosticMaxMessageBytes),
+		}
+	}
+
+	ctrl := gomock.NewController(t)
+	session := mock_morpc.NewMockClientSession(ctrl)
+	var sent *pipeline.Message
+	session.EXPECT().Write(gomock.Any(), gomock.Any()).DoAndReturn(
+		func(_ context.Context, message any) error {
+			sent = message.(*pipeline.Message)
+			return nil
+		})
+	receiver := &messageReceiverOnServer{
+		messageCtx:         context.Background(),
+		clientSession:      session,
+		messageAcquirer:    func() morpc.Message { return &pipeline.Message{} },
+		maxMessageSize:     bodyLimit,
+		warningCount:       total,
+		warningDiagnostics: warnings,
+	}
+
+	require.NoError(t, receiver.sendEndMessage())
+	require.NotNil(t, sent)
+	require.Less(t, sent.ProtoSize(), bodyLimit)
+	var envelope remoteTerminalEnvelope
+	require.NoError(t, json.Unmarshal(sent.GetAnalyse(), &envelope))
+	require.Equal(t, uint64(total), envelope.WarningCount)
+	require.NotEmpty(t, envelope.WarningDiagnostics)
+	require.Less(t, len(envelope.WarningDiagnostics), total)
+	require.Equal(t, warnings[0], envelope.WarningDiagnostics[0])
+}
+
+func TestMessageReceiverTerminalUsesConfiguredRPCBodyLimit(t *testing.T) {
+	const bodyLimit = 16 * 1024
+	const total = 10
+	warnings := make([]remoteWarningDiagnostic, total)
+	for i := range warnings {
+		warnings[i] = remoteWarningDiagnostic{
+			Code:    1292,
+			Message: strings.Repeat("x", process.WarningDiagnosticMaxMessageBytes),
+		}
+	}
+
+	receiver := &messageReceiverOnServer{
+		messageCtx:         morpc.ContextWithMaxMessageSize(context.Background(), bodyLimit),
+		maxMessageSize:     maxMessageSizeToMoRpc,
+		warningCount:       total,
+		warningDiagnostics: warnings,
+	}
+	message := &pipeline.Message{
+		Sid: pipeline.Status_MessageEnd,
+		Cmd: pipeline.Method_PipelineMessage,
+		Id:  1,
+	}
+	require.NoError(t, receiver.setTerminalAnalysis(message))
+
+	// Exercise the same codec validation used by production MORPC instead of
+	// relying on a mock ClientSession.Write implementation.
+	codec := morpc.NewMessageCodec(
+		"",
+		func() morpc.Message { return &pipeline.Message{} },
+		morpc.WithCodecMaxBodySize(bodyLimit),
+	)
+	require.NoError(t, codec.Valid(message))
+	require.Less(t, message.ProtoSize(), bodyLimit)
+
+	var envelope remoteTerminalEnvelope
+	require.NoError(t, json.Unmarshal(message.GetAnalyse(), &envelope))
+	require.Equal(t, uint64(total), envelope.WarningCount)
+	require.NotEmpty(t, envelope.WarningDiagnostics)
+	require.Less(t, len(envelope.WarningDiagnostics), total)
+}
+
 type observedDoneContext struct {
 	context.Context
 	entered chan struct{}
@@ -868,6 +950,7 @@ func TestRemoteNotifyCancellationReleasesCreditWaitAndRegistration(t *testing.T)
 			require.NoError(t, handlePipelineBatchAck(&pipeline.Message{Id: id, BatchAckSequence: 1}, session))
 		})
 	}
+
 }
 
 func TestMessageReceiverSendBatchOldProtocolDropsStringSourceOnly(t *testing.T) {
@@ -998,6 +1081,39 @@ func TestMessageReceiverSendBatchPreservesMetadataAndRejectsOldProtocol(t *testi
 	require.NoError(t, decodedWithSources.UnmarshalBinaryWithPrepareParamKinds(sent.Data, mp))
 	require.Equal(t, types.StringSourceCOMStmt, decodedWithSources.Vecs[0].GetStringSourceAt(0))
 	require.Equal(t, types.StringSourceSQLPrepare, decodedWithSources.Vecs[0].GetStringSourceAt(1))
+}
+
+func TestMessageReceiverSendBatchPreservesGrouping(t *testing.T) {
+	runtime := rt.ServiceRuntime("")
+	original, _ := runtime.GetGlobalVariables(rt.MOProtocolVersion)
+	t.Cleanup(func() { runtime.SetGlobalVariables(rt.MOProtocolVersion, original) })
+	mp := mpool.MustNewZero()
+	t.Cleanup(func() { require.Zero(t, mp.CurrNB()) })
+	bat := batch.NewWithSize(1)
+	t.Cleanup(func() { bat.Clean(mp) })
+	bat.Vecs[0] = vector.NewRollupConst(types.T_int32.ToType(), 2, mp)
+	bat.SetRowCount(2)
+	ctrl := gomock.NewController(t)
+	session := mock_morpc.NewMockClientSession(ctrl)
+	receiver := &messageReceiverOnServer{
+		messageCtx: context.Background(), connectionCtx: context.Background(),
+		clientSession: session, messageAcquirer: func() morpc.Message { return &pipeline.Message{} },
+		maxMessageSize: 1 << 20,
+	}
+	for _, version := range []any{nil, "unknown", int64(86)} {
+		runtime.SetGlobalVariables(rt.MOProtocolVersion, version)
+		require.ErrorContains(t, receiver.sendBatch(bat), "MORPCVersion87")
+	}
+	session.EXPECT().Write(gomock.Any(), gomock.Any()).DoAndReturn(
+		func(_ context.Context, message any) error {
+			decoded, err := decodeBatch(mp, message.(*pipeline.Message).Data)
+			require.NoError(t, err)
+			defer decoded.Clean(mp)
+			require.Equal(t, 2, decoded.Vecs[0].GetGrouping().Count())
+			return nil
+		})
+	runtime.SetGlobalVariables(rt.MOProtocolVersion, int64(87))
+	require.NoError(t, receiver.sendBatch(bat))
 }
 
 func TestMessageReceiverSendFragmentedBatchRollsBackCreditOnWriteFailure(t *testing.T) {

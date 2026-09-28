@@ -148,6 +148,10 @@ func TestJSONValueNumericConvertersCoverSourceDomains(t *testing.T) {
 }
 
 func TestJSONValueTemporalConversionBoundaries(t *testing.T) {
+	for _, input := range []string{`"2024-01-02 12:34:56"`, `"2024-01-02 00:00:00.000000"`} {
+		_, err := parseJSONValueTime(jsonValueTestExtracted(t, input), types.New(types.T_time, 0, 6))
+		require.Error(t, err, "TIME must not discard the date: %s", input)
+	}
 	_, err := parseJSONValueDate(jsonValueTestExtracted(t, `"0000-00-00"`), types.T_date.ToType())
 	require.Error(t, err)
 

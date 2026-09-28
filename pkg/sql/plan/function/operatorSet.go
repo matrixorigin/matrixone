@@ -251,6 +251,35 @@ func coalesceBinaryStringResult(overloads []overload, inputs []types.Type) (chec
 	return newCheckResultWithFailure(failedFunctionParametersWrong), true
 }
 
+// caseVectorCommonType returns the complete vector result type when at least
+// one CASE value branch is a vector. Vector CASE branches deliberately use a
+// stricter contract than IF: every concrete value branch must have the same
+// vector OID and declared dimension. Untyped NULL branches are cast to the
+// selected vector type.
+func caseVectorCommonType(source []types.Type) (retType types.Type, hasVector, valid bool) {
+	for i := range source {
+		if source[i].Oid.IsArrayRelate() {
+			retType = source[i]
+			hasVector = true
+			break
+		}
+	}
+	if !hasVector {
+		return types.Type{}, false, false
+	}
+
+	for i := range source {
+		if source[i].Oid == types.T_any {
+			continue
+		}
+		if !source[i].Oid.IsArrayRelate() ||
+			source[i].Oid != retType.Oid || source[i].Width != retType.Width {
+			return types.Type{}, true, false
+		}
+	}
+	return retType, true, true
+}
+
 // caseCheck check `case X then Y case X1 then Y1 ... (else Z)`
 func caseCheck(_ []overload, inputs []types.Type) checkResult {
 	l := len(inputs)
@@ -310,6 +339,31 @@ func caseCheck(_ []overload, inputs []types.Type) checkResult {
 		}
 		if l%2 == 1 {
 			source = append(source, inputs[l-1])
+		}
+
+		if vectorType, hasVector, valid := caseVectorCommonType(source); hasVector {
+			if !valid {
+				return newCheckResultWithFailure(failedFunctionParametersWrong)
+			}
+			finalTypes := make([]types.Type, len(inputs))
+			shouldCast := needCast
+			for i := range finalTypes {
+				if i%2 == 0 && !(len(inputs)%2 == 1 && i == len(inputs)-1) {
+					finalTypes[i] = types.T_bool.ToType()
+					if inputs[i].Oid != types.T_bool {
+						shouldCast = true
+					}
+				} else {
+					finalTypes[i] = vectorType
+					if inputs[i] != vectorType {
+						shouldCast = true
+					}
+				}
+			}
+			if !shouldCast {
+				return newCheckResultWithSuccess(0)
+			}
+			return newCheckResultWithCast(0, finalTypes)
 		}
 
 		if retType, ok := binaryStringCommonType(source); ok {
@@ -390,6 +444,7 @@ func caseCheck(_ []overload, inputs []types.Type) checkResult {
 				} else if retType.Oid.IsMySQLString() {
 					retType = commonConditionalStringType(retType, source)
 				}
+				retType = commonTemporalType(retType, source)
 				minCost = cost
 			}
 		}
@@ -397,7 +452,8 @@ func caseCheck(_ []overload, inputs []types.Type) checkResult {
 			return newCheckResultWithFailure(failedFunctionParametersWrong)
 		}
 		finalTypes := make([]types.Type, len(inputs))
-		shouldCast := needCast || retType.Oid.IsMySQLString() || needDecimalMetadataCast(source, retType)
+		shouldCast := needCast || retType.Oid.IsMySQLString() ||
+			needDecimalMetadataCast(source, retType) || needTemporalMetadataCast(source, retType)
 		for i := range finalTypes {
 			if i%2 == 0 && !(len(inputs)%2 == 1 && i == len(inputs)-1) {
 				finalTypes[i] = types.T_bool.ToType()
@@ -462,17 +518,11 @@ func caseFn(parameters []*vector.Vector, result vector.FunctionResultWrapper, pr
 		return generalCaseFn[types.Decimal256](parameters, result, proc, length, selectList)
 	case types.T_enum:
 		return generalCaseFn[types.Enum](parameters, result, proc, length, selectList)
-	case types.T_char:
-		return strCaseFn(parameters, result, proc, length, selectList)
-	case types.T_varchar:
-		return strCaseFn(parameters, result, proc, length, selectList)
-	case types.T_binary, types.T_varbinary:
-		return strCaseFn(parameters, result, proc, length, selectList)
-	case types.T_blob:
-		return strCaseFn(parameters, result, proc, length, selectList)
-	case types.T_text, types.T_datalink:
-		return strCaseFn(parameters, result, proc, length, selectList)
-	case types.T_json:
+	case types.T_char, types.T_varchar, types.T_binary, types.T_varbinary,
+		types.T_blob, types.T_text, types.T_datalink, types.T_json,
+		types.T_array_float32, types.T_array_float64,
+		types.T_array_bf16, types.T_array_float16,
+		types.T_array_int8, types.T_array_uint8:
 		return strCaseFn(parameters, result, proc, length, selectList)
 	}
 	panic("unreached code")
@@ -637,31 +687,9 @@ func iffCheck(_ []overload, inputs []types.Type) checkResult {
 			}
 			return newCheckResultWithSuccess(0)
 		}
-		if source[0].Oid.IsArrayRelate() || source[1].Oid.IsArrayRelate() {
-			vectorIdx := 0
-			if !source[0].Oid.IsArrayRelate() {
-				vectorIdx = 1
-			}
-			otherIdx := 1 - vectorIdx
-			if !source[otherIdx].Oid.IsArrayRelate() &&
-				source[otherIdx].Oid != types.T_any &&
-				!source[otherIdx].Oid.IsMySQLString() {
+		if retType, hasVector, ok := conditionalVectorType(source); hasVector {
+			if !ok {
 				return newCheckResultWithFailure(failedFunctionParametersWrong)
-			}
-			retType := source[vectorIdx]
-			if source[otherIdx].Oid.IsArrayRelate() {
-				if source[0].Width != source[1].Width {
-					return newCheckResultWithFailure(failedFunctionParametersWrong)
-				}
-				switch {
-				case source[0].Oid == source[1].Oid:
-					retType = source[0]
-				case source[0].Oid == types.T_array_float32 && source[1].Oid == types.T_array_float64,
-					source[0].Oid == types.T_array_float64 && source[1].Oid == types.T_array_float32:
-					retType = types.New(types.T_array_float64, source[0].Width, 0)
-				default:
-					return newCheckResultWithFailure(failedFunctionParametersWrong)
-				}
 			}
 			finalTypes := []types.Type{conditionType, retType, retType}
 			if needCast || source[0] != retType || source[1] != retType {
@@ -730,6 +758,7 @@ func iffCheck(_ []overload, inputs []types.Type) checkResult {
 				} else if retType.Oid.IsMySQLString() {
 					retType = commonConditionalStringType(retType, source)
 				}
+				retType = commonTemporalType(retType, source)
 				minCost = cost
 			}
 		}
@@ -738,7 +767,8 @@ func iffCheck(_ []overload, inputs []types.Type) checkResult {
 			return newCheckResultWithFailure(failedFunctionParametersWrong)
 		}
 		finalTypes := []types.Type{conditionType, retType, retType}
-		shouldCast := needCast || retType.Oid.IsMySQLString() || needDecimalMetadataCast(source, retType)
+		shouldCast := needCast || retType.Oid.IsMySQLString() ||
+			needDecimalMetadataCast(source, retType) || needTemporalMetadataCast(source, retType)
 		for i := range inputs {
 			if inputs[i].Oid != finalTypes[i].Oid {
 				shouldCast = true

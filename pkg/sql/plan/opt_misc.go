@@ -225,7 +225,7 @@ func (builder *QueryBuilder) canRemoveProject(parentType plan.Node_NodeType, nod
 	if parentType == plan.Node_DISTINCT || parentType == plan.Node_UNKNOWN {
 		return false
 	}
-	if parentType == plan.Node_UNION || parentType == plan.Node_UNION_ALL {
+	if parentType == plan.Node_UNION || parentType == plan.Node_UNION_ALL || parentType == plan.Node_ADAPTIVE_TOP {
 		return false
 	}
 	if parentType == plan.Node_MINUS || parentType == plan.Node_MINUS_ALL {
@@ -446,7 +446,11 @@ func replaceColumnsForExpr(expr *plan.Expr, projMap map[[2]int32]*plan.Expr) *pl
 		}
 		mapID := [2]int32{ne.Col.RelPos, ne.Col.ColPos}
 		if projExpr, ok := projMap[mapID]; ok {
-			return DeepCopyExpr(projExpr)
+			inlined := DeepCopyExpr(projExpr)
+			if isIntegerSelector(inlined) || projectedExplicitFloatValue(inlined) {
+				ensurePreparedNumericMetadata(inlined).ProjectedCommonValue = true
+			}
+			return inlined
 		}
 
 	case *plan.Expr_F:
@@ -490,6 +494,18 @@ func replaceColumnsForExpr(expr *plan.Expr, projMap map[[2]int32]*plan.Expr) *pl
 		}
 	}
 	return expr
+}
+
+// A projected explicit CAST has already established the column's DOUBLE
+// domain. Inlining it must not turn that value boundary into a consumer's
+// direct CAST, whose integer conversion deliberately truncates.
+func projectedExplicitFloatValue(expr *plan.Expr) bool {
+	fn := expr.GetF()
+	if fn == nil || fn.Func == nil || fn.Func.ObjName != "cast" || !types.T(expr.Typ.Id).IsFloat() {
+		return false
+	}
+	_, overload := function.DecodeOverloadID(fn.Func.Obj)
+	return fn.SyntaxExplicitCast || overload == 1
 }
 
 func (builder *QueryBuilder) swapJoinChildren(nodeID int32) {
@@ -735,6 +751,9 @@ func (builder *QueryBuilder) removeEffectlessLeftJoins(nodeID int32, tagCnt map[
 
 	//reuse hash on primary key logic
 	if !node.Stats.HashmapStats.HashOnPK {
+		goto END
+	}
+	if builder.joinOwnsConstantDiagnostic(node) || builder.subtreeOwnsConstantDiagnostic(node.Children[1]) {
 		goto END
 	}
 
@@ -1211,11 +1230,11 @@ func (builder *QueryBuilder) rewriteEffectlessAggToProjectImpl(
 		return
 	}
 	scan := builder.qry.Nodes[node.Children[0]]
-	if scan.NodeType != plan.Node_TABLE_SCAN || scan.TableDef == nil || scan.TableDef.Pkey == nil {
+	if scan.NodeType != plan.Node_TABLE_SCAN || scan.TableDef == nil {
 		return
 	}
-	pkPositions, ok := sqlEqualityCompatiblePrimaryKeyColumnPositions(scan.TableDef)
-	if !ok || len(scan.BindingTags) != 1 {
+	uniqueKeys := sqlEqualityCompatibleScanUniqueKeys(scan.TableDef)
+	if len(uniqueKeys) == 0 || len(scan.BindingTags) != 1 {
 		return
 	}
 	seenBindingTags := map[int32]struct{}{scan.BindingTags[0]: {}}
@@ -1239,17 +1258,29 @@ func (builder *QueryBuilder) rewriteEffectlessAggToProjectImpl(
 			groupCol = append(groupCol, col.ColPos)
 		}
 	}
-	for _, pk := range pkPositions {
-		found := false
-		for _, group := range groupCol {
-			if group == pk {
-				found = true
+	containsCompleteUniqueKey := false
+	for _, key := range uniqueKeys {
+		complete := true
+		for _, keyColumn := range key.columnPositions {
+			found := false
+			for _, group := range groupCol {
+				if group == keyColumn {
+					found = true
+					break
+				}
+			}
+			if !found {
+				complete = false
 				break
 			}
 		}
-		if !found {
-			return
+		if complete {
+			containsCompleteUniqueKey = true
+			break
 		}
+	}
+	if !containsCompleteUniqueKey {
+		return
 	}
 	if limitDemand {
 		for _, expr := range node.GroupBy {

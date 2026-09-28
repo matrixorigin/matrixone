@@ -228,6 +228,65 @@ func ensureReaders(readers []engine.Reader, num int) []engine.Reader {
 	return readers
 }
 
+// buildPartitionBlockReaders takes ownership of every reader returned by build,
+// including partial results returned with an error. Sources and tombstones are
+// borrowed; closing readers releases their filter shares, not shared ranges.
+func buildPartitionBlockReaders(
+	ctx context.Context,
+	parts []engine.RelData,
+	num int,
+	build func(engine.RelData) ([]engine.Reader, error),
+) (_ []engine.Reader, err error) {
+	if num <= 0 {
+		return nil, moerr.NewInvalidInputNoCtx("partition block reader count must be positive")
+	}
+	var readers []engine.Reader
+	defer func() {
+		if err != nil {
+			for _, reader := range readers {
+				if reader != nil {
+					_ = reader.Close()
+				}
+			}
+		}
+	}()
+	for _, part := range parts {
+		if err := ctx.Err(); err != nil {
+			return nil, err
+		}
+		child, buildErr := build(part)
+		readers = append(readers, child...)
+		if buildErr != nil {
+			return nil, buildErr
+		}
+		if err := ctx.Err(); err != nil {
+			return nil, err
+		}
+		if len(child) != num {
+			return nil, moerr.NewInternalErrorNoCtx("partition block reader count mismatch")
+		}
+		for _, reader := range child {
+			if reader == nil {
+				return nil, moerr.NewInternalErrorNoCtx("nil partition block reader")
+			}
+		}
+	}
+	if err := ctx.Err(); err != nil {
+		return nil, err
+	}
+	if len(readers) == 0 {
+		return ensureReaders(nil, num), nil
+	}
+	// Every child contributes num readers. Contiguous groups match the
+	// existing partition reader consolidation and always yield exactly num.
+	step := len(readers) / num
+	merged := make([]engine.Reader, num)
+	for i := range merged {
+		merged[i] = readutil.NewMergeReader(readers[i*step : (i+1)*step])
+	}
+	return merged, nil
+}
+
 func (t *combinedTxnTable) BuildShardingReaders(
 	ctx context.Context,
 	proc any,

@@ -106,9 +106,16 @@ func (ctl *replayCtl) Stop() (err error) {
 	return
 }
 
-func (ctl *replayCtl) StopForWrite() (err error) {
+func (ctl *replayCtl) StopForWrite(ctx context.Context) (err error) {
 	ctl.mode.Store(int32(driver.ReplayMode_ReplayForWrite))
-	ctl.Wait()
+	select {
+	case <-ctl.doneCh:
+	case <-ctx.Done():
+		if ctl.causeCancel != nil {
+			ctl.causeCancel(ctx.Err())
+		}
+		return ctx.Err()
+	}
 	// here cancel has no effect, just close the channel
 	if ctl.causeCancel != nil {
 		ctl.causeCancel(nil)

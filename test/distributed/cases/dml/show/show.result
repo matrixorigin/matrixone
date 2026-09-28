@@ -415,8 +415,8 @@ PRIMARY KEY  (h1,u1)
 );
 show INDEX FROM show_02;
 ➤ Table[12,-1,0]  ¦  Non_unique[-5,64,0]  ¦  Key_name[12,-1,0]  ¦  Seq_in_index[4,32,0]  ¦  Column_name[12,-1,0]  ¦  Collation[12,-1,0]  ¦  Cardinality[-5,64,0]  ¦  Sub_part[12,-1,0]  ¦  Packed[12,-1,0]  ¦  Null[12,-1,0]  ¦  Index_type[12,-1,0]  ¦  Comment[1,0,0]  ¦  Index_comment[12,-1,0]  ¦  Index_params[12,-1,0]  ¦  Visible[12,-1,0]  ¦  Expression[12,-1,0]  𝄀
-show_02  ¦  0  ¦  PRIMARY  ¦  1  ¦  h1  ¦  A  ¦  0  ¦  NULL  ¦  NULL  ¦    ¦    ¦    ¦    ¦    ¦  YES  ¦  h1  𝄀
-show_02  ¦  0  ¦  PRIMARY  ¦  2  ¦  u1  ¦  A  ¦  0  ¦  NULL  ¦  NULL  ¦    ¦    ¦    ¦    ¦    ¦  YES  ¦  u1
+show_02  ¦  0  ¦  PRIMARY  ¦  1  ¦  h1  ¦  A  ¦  0  ¦  NULL  ¦  NULL  ¦    ¦  BTREE  ¦    ¦    ¦    ¦  YES  ¦  h1  𝄀
+show_02  ¦  0  ¦  PRIMARY  ¦  2  ¦  u1  ¦  A  ¦  0  ¦  NULL  ¦  NULL  ¦    ¦  BTREE  ¦    ¦    ¦    ¦  YES  ¦  u1
 DROP TABLE show_02;
 DROP TABLE IF EXISTS show_03;
 CREATE TABLE show_03(a int, b int);
@@ -430,7 +430,7 @@ show_03  ¦  CREATE TABLE `show_03` (
 )
 show INDEX FROM show_03;
 ➤ Table[12,-1,0]  ¦  Non_unique[-5,64,0]  ¦  Key_name[12,-1,0]  ¦  Seq_in_index[4,32,0]  ¦  Column_name[12,-1,0]  ¦  Collation[12,-1,0]  ¦  Cardinality[-5,64,0]  ¦  Sub_part[12,-1,0]  ¦  Packed[12,-1,0]  ¦  Null[12,-1,0]  ¦  Index_type[12,-1,0]  ¦  Comment[1,0,0]  ¦  Index_comment[12,-1,0]  ¦  Index_params[12,-1,0]  ¦  Visible[12,-1,0]  ¦  Expression[12,-1,0]  𝄀
-show_03  ¦  0  ¦  x  ¦  1  ¦  a  ¦  A  ¦  0  ¦  NULL  ¦  NULL  ¦  YES  ¦    ¦    ¦  x  ¦    ¦  YES  ¦  a
+show_03  ¦  0  ¦  x  ¦  1  ¦  a  ¦  A  ¦  0  ¦  NULL  ¦  NULL  ¦  YES  ¦  BTREE  ¦    ¦  x  ¦    ¦  YES  ¦  a
 DROP TABLE show_03;
 CREATE TABLE show_04(a int, b int, unique key(a));
 show CREATE TABLE show_04;
@@ -443,8 +443,8 @@ show_04  ¦  CREATE TABLE `show_04` (
 CREATE INDEX b ON show_04(b);
 show INDEX FROM show_04;
 ➤ Table[12,-1,0]  ¦  Non_unique[-5,64,0]  ¦  Key_name[12,-1,0]  ¦  Seq_in_index[4,32,0]  ¦  Column_name[12,-1,0]  ¦  Collation[12,-1,0]  ¦  Cardinality[-5,64,0]  ¦  Sub_part[12,-1,0]  ¦  Packed[12,-1,0]  ¦  Null[12,-1,0]  ¦  Index_type[12,-1,0]  ¦  Comment[1,0,0]  ¦  Index_comment[12,-1,0]  ¦  Index_params[12,-1,0]  ¦  Visible[12,-1,0]  ¦  Expression[12,-1,0]  𝄀
-show_04  ¦  0  ¦  a  ¦  1  ¦  a  ¦  A  ¦  0  ¦  NULL  ¦  NULL  ¦  YES  ¦    ¦    ¦    ¦    ¦  YES  ¦  a  𝄀
-show_04  ¦  1  ¦  b  ¦  1  ¦  b  ¦  A  ¦  0  ¦  NULL  ¦  NULL  ¦  YES  ¦    ¦    ¦    ¦    ¦  YES  ¦  b
+show_04  ¦  0  ¦  a  ¦  1  ¦  a  ¦  A  ¦  0  ¦  NULL  ¦  NULL  ¦  YES  ¦  BTREE  ¦    ¦    ¦    ¦  YES  ¦  a  𝄀
+show_04  ¦  1  ¦  b  ¦  1  ¦  b  ¦  A  ¦  0  ¦  NULL  ¦  NULL  ¦  YES  ¦  BTREE  ¦    ¦    ¦    ¦  YES  ¦  b
 DROP TABLE show_04;
 DROP DATABASE test;
 create database test;
@@ -488,9 +488,9 @@ INDEX (col2,col3)
 );
 show index from t1;
 ➤ Table[12,-1,0]  ¦  Non_unique[-5,64,0]  ¦  Key_name[12,-1,0]  ¦  Seq_in_index[4,32,0]  ¦  Column_name[12,-1,0]  ¦  Collation[12,-1,0]  ¦  Cardinality[-5,64,0]  ¦  Sub_part[12,-1,0]  ¦  Packed[12,-1,0]  ¦  Null[12,-1,0]  ¦  Index_type[12,-1,0]  ¦  Comment[1,0,0]  ¦  Index_comment[12,-1,0]  ¦  Index_params[12,-1,0]  ¦  Visible[12,-1,0]  ¦  Expression[12,-1,0]  𝄀
-t1  ¦  1  ¦  col2  ¦  1  ¦  col2  ¦  A  ¦  0  ¦  NULL  ¦  NULL  ¦    ¦    ¦    ¦    ¦    ¦  YES  ¦  col2  𝄀
-t1  ¦  1  ¦  col2  ¦  2  ¦  col3  ¦  A  ¦  0  ¦  NULL  ¦  NULL  ¦    ¦    ¦    ¦    ¦    ¦  YES  ¦  col3  𝄀
-t1  ¦  0  ¦  PRIMARY  ¦  1  ¦  col1  ¦  A  ¦  0  ¦  NULL  ¦  NULL  ¦    ¦    ¦    ¦    ¦    ¦  YES  ¦  col1
+t1  ¦  1  ¦  col2  ¦  1  ¦  col2  ¦  A  ¦  0  ¦  NULL  ¦  NULL  ¦    ¦  BTREE  ¦    ¦    ¦    ¦  YES  ¦  col2  𝄀
+t1  ¦  1  ¦  col2  ¦  2  ¦  col3  ¦  A  ¦  0  ¦  NULL  ¦  NULL  ¦    ¦  BTREE  ¦    ¦    ¦    ¦  YES  ¦  col3  𝄀
+t1  ¦  0  ¦  PRIMARY  ¦  1  ¦  col1  ¦  A  ¦  0  ¦  NULL  ¦  NULL  ¦    ¦  BTREE  ¦    ¦    ¦    ¦  YES  ¦  col1
 drop table t1;
 drop table if exists t2;
 CREATE TABLE t2 (
@@ -501,8 +501,8 @@ col4 INT NOT NULL
 );
 show index from t2;
 ➤ Table[12,-1,0]  ¦  Non_unique[-5,64,0]  ¦  Key_name[12,-1,0]  ¦  Seq_in_index[4,32,0]  ¦  Column_name[12,-1,0]  ¦  Collation[12,-1,0]  ¦  Cardinality[-5,64,0]  ¦  Sub_part[12,-1,0]  ¦  Packed[12,-1,0]  ¦  Null[12,-1,0]  ¦  Index_type[12,-1,0]  ¦  Comment[1,0,0]  ¦  Index_comment[12,-1,0]  ¦  Index_params[12,-1,0]  ¦  Visible[12,-1,0]  ¦  Expression[12,-1,0]  𝄀
-t2  ¦  0  ¦  col2  ¦  1  ¦  col2  ¦  A  ¦  0  ¦  NULL  ¦  NULL  ¦    ¦    ¦    ¦    ¦    ¦  YES  ¦  col2  𝄀
-t2  ¦  0  ¦  PRIMARY  ¦  1  ¦  col1  ¦  A  ¦  0  ¦  NULL  ¦  NULL  ¦    ¦    ¦    ¦    ¦    ¦  YES  ¦  col1
+t2  ¦  0  ¦  col2  ¦  1  ¦  col2  ¦  A  ¦  0  ¦  NULL  ¦  NULL  ¦    ¦  BTREE  ¦    ¦    ¦    ¦  YES  ¦  col2  𝄀
+t2  ¦  0  ¦  PRIMARY  ¦  1  ¦  col1  ¦  A  ¦  0  ¦  NULL  ¦  NULL  ¦    ¦  BTREE  ¦    ¦    ¦    ¦  YES  ¦  col1
 drop table t2;
 drop table if exists t3;
 CREATE TABLE t3 (
@@ -515,10 +515,10 @@ UNIQUE KEY (col1, col3)
 );
 show index from t3;
 ➤ Table[12,-1,0]  ¦  Non_unique[-5,64,0]  ¦  Key_name[12,-1,0]  ¦  Seq_in_index[4,32,0]  ¦  Column_name[12,-1,0]  ¦  Collation[12,-1,0]  ¦  Cardinality[-5,64,0]  ¦  Sub_part[12,-1,0]  ¦  Packed[12,-1,0]  ¦  Null[12,-1,0]  ¦  Index_type[12,-1,0]  ¦  Comment[1,0,0]  ¦  Index_comment[12,-1,0]  ¦  Index_params[12,-1,0]  ¦  Visible[12,-1,0]  ¦  Expression[12,-1,0]  𝄀
-t3  ¦  0  ¦  col1  ¦  1  ¦  col1  ¦  A  ¦  0  ¦  NULL  ¦  NULL  ¦    ¦    ¦    ¦    ¦    ¦  YES  ¦  col1  𝄀
-t3  ¦  0  ¦  col1_2  ¦  1  ¦  col1  ¦  A  ¦  0  ¦  NULL  ¦  NULL  ¦    ¦    ¦    ¦    ¦    ¦  YES  ¦  col1  𝄀
-t3  ¦  0  ¦  col1_2  ¦  2  ¦  col3  ¦  A  ¦  0  ¦  NULL  ¦  NULL  ¦    ¦    ¦    ¦    ¦    ¦  YES  ¦  col3  𝄀
-t3  ¦  0  ¦  PRIMARY  ¦  1  ¦  col1  ¦  A  ¦  0  ¦  NULL  ¦  NULL  ¦    ¦    ¦    ¦    ¦    ¦  YES  ¦  col1
+t3  ¦  0  ¦  col1  ¦  1  ¦  col1  ¦  A  ¦  0  ¦  NULL  ¦  NULL  ¦    ¦  BTREE  ¦    ¦    ¦    ¦  YES  ¦  col1  𝄀
+t3  ¦  0  ¦  col1_2  ¦  1  ¦  col1  ¦  A  ¦  0  ¦  NULL  ¦  NULL  ¦    ¦  BTREE  ¦    ¦    ¦    ¦  YES  ¦  col1  𝄀
+t3  ¦  0  ¦  col1_2  ¦  2  ¦  col3  ¦  A  ¦  0  ¦  NULL  ¦  NULL  ¦    ¦  BTREE  ¦    ¦    ¦    ¦  YES  ¦  col3  𝄀
+t3  ¦  0  ¦  PRIMARY  ¦  1  ¦  col1  ¦  A  ¦  0  ¦  NULL  ¦  NULL  ¦    ¦  BTREE  ¦    ¦    ¦    ¦  YES  ¦  col1
 drop table t3;
 drop database test;
 drop database if exists test;

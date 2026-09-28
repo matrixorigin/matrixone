@@ -249,7 +249,7 @@ check_time  ¦  TIMESTAMP(0)  ¦  YES  ¦    ¦  null  ¦    ¦    𝄀
 table_collation  ¦  VARCHAR(18)  ¦  NO  ¦    ¦  null  ¦    ¦    𝄀
 checksum  ¦  BIGINT  ¦  YES  ¦    ¦  null  ¦    ¦    𝄀
 create_options  ¦  VARCHAR(256)  ¦  YES  ¦    ¦  null  ¦    ¦    𝄀
-table_comment  ¦  TEXT(0)  ¦  YES  ¦    ¦  null  ¦    ¦  
+table_comment  ¦  TEXT  ¦  YES  ¦    ¦  null  ¦    ¦  
 show columns from `PARTITIONS`;
 [unknown result because it is related to issue#16438]
 use mo_catalog;

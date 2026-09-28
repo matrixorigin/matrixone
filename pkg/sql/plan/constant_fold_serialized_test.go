@@ -24,9 +24,11 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/container/batch"
 	"github.com/matrixorigin/matrixone/pkg/container/types"
 	"github.com/matrixorigin/matrixone/pkg/container/vector"
+	"github.com/matrixorigin/matrixone/pkg/defines"
 	planpb "github.com/matrixorigin/matrixone/pkg/pb/plan"
 	"github.com/matrixorigin/matrixone/pkg/sql/colexec"
 	"github.com/matrixorigin/matrixone/pkg/sql/parsers/dialect/mysql"
+	"github.com/matrixorigin/matrixone/pkg/sql/parsers/tree"
 	"github.com/matrixorigin/matrixone/pkg/sql/plan/function"
 	"github.com/matrixorigin/matrixone/pkg/sql/plan/rule"
 	"github.com/matrixorigin/matrixone/pkg/testutil"
@@ -628,6 +630,31 @@ func TestConstantFoldPreservesSelectedStringDomain(t *testing.T) {
 			}
 		})
 	}
+}
+
+func TestConstantFoldDynamicIPFunctionLosesFunctionNode(t *testing.T) {
+	ctx := NewMockCompilerContext(true)
+	stmt, err := mysql.ParseOne(t.Context(), "select inet_ntoa('1.6')", 1)
+	require.NoError(t, err)
+	defer stmt.Free()
+
+	ast := stmt.(*tree.Select).Select.(*tree.SelectClause).Exprs[0].Expr
+	binder := NewGeneratedColBinder(ctx.GetProcess().Ctx, nil, nil)
+	bound, err := binder.BindExpr(ast, 0, false)
+	require.NoError(t, err)
+	require.NotNil(t, bound.GetF(), "the pre-optimization plan must retain the dynamic overload")
+	requiredBefore, err := RequiredPersistedExpressionProtocolVersion(bound)
+	require.NoError(t, err)
+	require.Equal(t, int64(defines.MORPCVersion86), requiredBefore)
+
+	folded, err := ConstantFold(
+		batch.EmptyForConstFoldBatch, DeepCopyExpr(bound), ctx.GetProcess(), false, true)
+	require.NoError(t, err)
+	require.NotNil(t, folded.GetLit(), "the optimizer can fold the constant dynamic overload")
+	requiredAfter, err := RequiredPersistedExpressionProtocolVersion(folded)
+	require.NoError(t, err)
+	require.Zero(t, requiredAfter,
+		"the folded literal no longer exposes the function node; view DDL must retain the pre-fold requirement")
 }
 
 func findFirstLiteralVecExpr(query *planpb.Query) *planpb.Expr {

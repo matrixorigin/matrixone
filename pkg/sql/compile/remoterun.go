@@ -58,6 +58,7 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/sql/colexec/mergerecursive"
 	"github.com/matrixorigin/matrixone/pkg/sql/colexec/mergetop"
 	"github.com/matrixorigin/matrixone/pkg/sql/colexec/minus"
+	"github.com/matrixorigin/matrixone/pkg/sql/colexec/minusall"
 	"github.com/matrixorigin/matrixone/pkg/sql/colexec/mongoscan"
 	"github.com/matrixorigin/matrixone/pkg/sql/colexec/multi_update"
 	"github.com/matrixorigin/matrixone/pkg/sql/colexec/offset"
@@ -112,8 +113,18 @@ func encodeScope(s *Scope) ([]byte, error) {
 }
 
 func encodeRemoteScope(s *Scope, proc *process.Process) ([]byte, error) {
+	return encodeRemoteScopeWithVectorProtocol(s, proc, nil)
+}
+
+func encodeRemoteScopeWithVectorProtocol(s *Scope, proc *process.Process, requiresBoundProtocol *bool) ([]byte, error) {
 	p, err := fillPipeline(s)
 	if err != nil {
+		return nil, err
+	}
+	if err = validateVectorPartitionDestinationWithResult(proc, p, requiresBoundProtocol); err != nil {
+		return nil, err
+	}
+	if err = validateGroupingTransportDestinations(proc, p); err != nil {
 		return nil, err
 	}
 	if err = validateRemoteStringProvenancePipelineProtocol(proc, p); err != nil {
@@ -136,7 +147,28 @@ func encodeRemoteScope(s *Scope, proc *process.Process) ([]byte, error) {
 			return nil, err
 		}
 	}
-	if features.IPFunctionSemantics {
+	if features.IntegerParameterCoercion || features.SpecialIntegerConsumers {
+		if err = validateIntegerArgumentDestination(proc, p); err != nil {
+			return nil, err
+		}
+	}
+	if features.PreparedPrecisionScalar {
+		if err = validatePreparedPrecisionDestination(proc, p); err != nil {
+			return nil, err
+		}
+	}
+	if features.DecimalDivisionSemantics {
+		if err = validateDecimalDivisionDestination(proc, p); err != nil {
+			return nil, err
+		}
+	}
+	if required := temporalExpressionProtocolVersion(features); required != 0 {
+		if err = validateTemporalResultDestination(proc, p, required); err != nil {
+			return nil, err
+		}
+	}
+	if features.IPFunctionSemantics || features.TOBase64ResultContracts || features.IPFunctionResultContracts ||
+		features.ExpressionResultMetadataContracts {
 		if err = validateIPFunctionDestination(proc, p); err != nil {
 			return nil, err
 		}
@@ -148,6 +180,16 @@ func encodeRemoteScope(s *Scope, proc *process.Process) ([]byte, error) {
 	}
 	if features.BoundedConditionalStringDomains {
 		if err = validateBoundedConditionalStringDestination(proc, p); err != nil {
+			return nil, err
+		}
+	}
+	if features.SpatialDistanceSemantics {
+		if err = validateSpatialDistanceDestination(proc, p); err != nil {
+			return nil, err
+		}
+	}
+	if features.DecimalLiteralSemantics {
+		if err = validateDecimalLiteralDestination(proc, p); err != nil {
 			return nil, err
 		}
 	}
@@ -260,6 +302,9 @@ func decodeScope(data []byte, proc *process.Process, isRemote bool, eng engine.E
 		return nil, err
 	}
 	if isRemote {
+		if err = validateRemoteVectorPartitionProtocol(proc, p); err != nil {
+			return nil, err
+		}
 		if err = validateRemoteStringProvenancePipelineProtocol(proc, p); err != nil {
 			return nil, err
 		}
@@ -571,6 +616,14 @@ func generateScope(proc *process.Process, p *pipeline.Pipeline, ctx *scopeContex
 	}
 
 	s = newScope(magicType(p.GetPipelineType()))
+	for parent := ctx; parent != nil; parent = parent.parent {
+		if parent.plan != nil {
+			if queryNeedsGroupingTransport(parent.plan.GetQuery()) {
+				s.Plan = parent.plan
+			}
+			break
+		}
+	}
 	s.IsEnd = p.IsEnd
 	s.IsLoad = p.IsLoad
 	s.IsRemote = isRemote
@@ -662,8 +715,37 @@ func fillInstructionsForScope(s *Scope, ctx *scopeContext, p *pipeline.Pipeline,
 		if err != nil {
 			return err
 		}
+		switch ins.OpType() {
+		case vm.Minus, vm.MinusAll, vm.Intersect, vm.IntersectAll:
+			if err := s.restoreBinarySetChildren(ins); err != nil {
+				ins.Release()
+				return err
+			}
+			continue
+		}
 		s.doSetRootOperator(ins)
 	}
+	return nil
+}
+
+// restoreBinarySetChildren reverses the fixed post-order wire shape emitted by
+// both set-operation compiler paths: left merge, right merge, binary operator.
+// The legacy decoder otherwise rebuilds instructions as a unary chain. This
+// also applies to a distinct or intersect ancestor of a nested MINUS ALL.
+func (s *Scope) restoreBinarySetChildren(op vm.Operator) error {
+	right := s.RootOp
+	if right == nil || right.OpType() != vm.Merge || right.GetOperatorBase().NumChildren() != 1 {
+		return moerr.NewInternalErrorNoCtxf("invalid remote binary set operator %v right input", op.OpType())
+	}
+	left := right.GetOperatorBase().GetChildren(0)
+	if left == nil || left.OpType() != vm.Merge || left.GetOperatorBase().NumChildren() != 0 {
+		return moerr.NewInternalErrorNoCtxf("invalid remote binary set operator %v left input", op.OpType())
+	}
+	right.GetOperatorBase().SetChild(nil, 0)
+	right.GetOperatorBase().ResetChildren()
+	op.AppendChild(left)
+	op.AppendChild(right)
+	s.RootOp = op
 	return nil
 }
 
@@ -941,6 +1023,8 @@ func convertToPipelineInstruction(op vm.Operator, proc *process.Process, ctx *sc
 	case *intersect.Intersect:
 		in.SetOp = &pipeline.SetOp{KeyExprs: t.KeyExprs}
 	case *minus.Minus:
+		in.SetOp = &pipeline.SetOp{KeyExprs: t.KeyExprs}
+	case *minusall.MinusAll:
 		in.SetOp = &pipeline.SetOp{KeyExprs: t.KeyExprs}
 	case *intersectall.IntersectAll:
 		in.SetOp = &pipeline.SetOp{KeyExprs: t.KeyExprs}
@@ -1596,6 +1680,12 @@ func convertToVmOperator(opr *pipeline.Instruction, ctx *scopeContext, eng engin
 			arg.KeyExprs = setOp.GetKeyExprs()
 		}
 		op = arg
+	case vm.MinusAll:
+		arg := minusall.NewArgument()
+		if setOp := opr.GetSetOp(); setOp != nil {
+			arg.KeyExprs = setOp.GetKeyExprs()
+		}
+		op = arg
 	case vm.Connector:
 		t := opr.GetConnect()
 		op = connector.NewArgument().
@@ -1992,6 +2082,24 @@ func validateRemoteAggregateProtocol(
 				"HLL remote execution requires MORPC protocol version 77",
 			)
 		}
+		if agg.GetAggID() == aggexec.AggIdOfHllAdd && len(agg.GetArgExpressions()) > 0 {
+			typ := types.T(agg.GetArgExpressions()[0].Typ.Id)
+			if isCanonicalVectorHLLAddType(typ) &&
+				(proc == nil || !supportsRemoteCanonicalHLLAdd(proc.GetService())) {
+				return moerr.NewNotSupportedNoCtx(
+					"canonical vector HLL_ADD_AGG remote execution requires MORPC protocol version 88")
+			}
+			if isCanonicalTextHLLAddType(typ) &&
+				(proc == nil || !supportsRemoteCanonicalTextHLLAdd(proc.GetService())) {
+				return moerr.NewNotSupportedNoCtx(
+					"canonical JSON/CHAR HLL_ADD_AGG remote execution requires MORPC protocol version 91")
+			}
+			if isCanonicalFloatHLLAddType(typ) &&
+				(proc == nil || !supportsRemoteCanonicalFloatHLLAdd(proc.GetService())) {
+				return moerr.NewNotSupportedNoCtx(
+					"canonical FLOAT HLL_ADD_AGG remote execution requires MORPC protocol version 92")
+			}
+		}
 		if agg.GetConfigType() == plan.AggregateConfigType_AGG_CONFIG_GROUP_CONCAT_ORDER {
 			if proc == nil || !supportsRemoteOrderedAggregates(proc.GetService()) {
 				return moerr.NewNotSupportedNoCtx(
@@ -2169,9 +2277,32 @@ func validateRemoteExpressionPipelineProtocol(
 	if !features.Any() {
 		return nil
 	}
+	if features.InvalidTemporalResultContract {
+		return moerr.NewNotSupportedNoCtx("temporal result vector contract mismatch is incompatible with this CN")
+	}
+	if features.LegacyIntervalUnits {
+		return moerr.NewNotSupportedNoCtx("legacy interval unit contract requires rebinding")
+	}
+	if features.WeekSessionDefault && (proc == nil ||
+		(proc.GetResolveVariableFunc() == nil && !proc.GetSessionInfo().DefaultWeekFormatSet)) {
+		return moerr.NewNotSupportedNoCtx("remote WEEK requires a default_week_format session snapshot")
+	}
 	protocolVersion, hasProtocolVersion := int64(0), false
 	if proc != nil {
 		protocolVersion, hasProtocolVersion = remoteMORPCProtocolVersion(proc.GetService())
+	}
+	if features.IntegerParameterCoercion && (!hasProtocolVersion || protocolVersion < defines.MORPCVersion85) {
+		return moerr.NewNotSupportedNoCtx("integer parameter coercion requires MORPC protocol version 85")
+	}
+	if features.SpecialIntegerConsumers && (!hasProtocolVersion || protocolVersion < defines.MORPCVersion98) {
+		return moerr.NewNotSupportedNoCtx("special integer consumers require MORPC protocol version 98")
+	}
+	if features.PreparedPrecisionScalar && (!hasProtocolVersion || protocolVersion < defines.MORPCVersion95) {
+		return moerr.NewNotSupportedNoCtx("prepared scalar precision requires MORPC protocol version 95")
+	}
+	if (features.TemporalResultContracts || features.NormalizedIntervalUnits || features.WeekSessionDefault) &&
+		(!hasProtocolVersion || protocolVersion < defines.MORPCVersion98) {
+		return moerr.NewNotSupportedNoCtx("temporal expression contracts require MORPC protocol version 98")
 	}
 	if features.NumericPrefix &&
 		(!hasProtocolVersion || protocolVersion < defines.MORPCVersion30) {
@@ -2227,6 +2358,12 @@ func validateRemoteExpressionPipelineProtocol(
 			"bounded conditional string domains require MORPC protocol version 83",
 		)
 	}
+	if features.DecimalLiteralSemantics &&
+		(!hasProtocolVersion || protocolVersion < defines.MORPCVersion89) {
+		return moerr.NewNotSupportedNoCtx(
+			"exact DECIMAL256 literal semantics require MORPC protocol version 89",
+		)
+	}
 	if features.IPFunctionSemantics &&
 		(!hasProtocolVersion || protocolVersion < defines.MORPCVersion72) {
 		return moerr.NewNotSupportedNoCtx(
@@ -2234,9 +2371,22 @@ func validateRemoteExpressionPipelineProtocol(
 		)
 	}
 	if features.JSONValueContract &&
-		(!hasProtocolVersion || protocolVersion < defines.MORPCVersion85) {
+		(!hasProtocolVersion || protocolVersion < defines.MORPCVersion100) {
 		return moerr.NewNotSupportedNoCtx(
-			"seven-argument JSON_VALUE plans require MORPC protocol version 85",
+			"seven-argument JSON_VALUE plans require MORPC protocol version 100",
+		)
+	}
+	if features.ExpressionResultMetadataContracts || features.TOBase64ResultContracts || features.IPFunctionResultContracts {
+		if !hasProtocolVersion || protocolVersion < defines.MORPCVersion86 {
+			return moerr.NewNotSupportedNoCtx(
+				"expression result contracts require MORPC protocol version 86",
+			)
+		}
+	}
+	if features.SpatialDistanceSemantics &&
+		(!hasProtocolVersion || protocolVersion < defines.MORPCVersion90) {
+		return moerr.NewNotSupportedNoCtx(
+			"geodetic spatial-distance semantics require MORPC protocol version 90",
 		)
 	}
 	return nil
@@ -2793,7 +2943,7 @@ func convertToResultPos(relList, colList []int32) []colexec.ResultPos {
 // func decodeBatch(proc *process.Process, data []byte) (*batch.Batch, error) {
 func decodeBatch(mp *mpool.MPool, data []byte) (*batch.Batch, error) {
 	bat := batch.NewOffHeapEmpty()
-	if err := bat.UnmarshalBinaryWithPrepareParamKinds(data, mp); err != nil {
+	if err := bat.UnmarshalBinaryForPipeline(data, mp); err != nil {
 		bat.Clean(mp)
 		return nil, err
 	}

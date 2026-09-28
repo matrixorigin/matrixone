@@ -591,6 +591,7 @@ func (e *Engine) GetRelationById(ctx context.Context, op client.TxnOperator, tab
 	accountId, _ := defines.GetAccountId(ctx)
 	txn := op.GetWorkspace().(*Transaction)
 	dbName, tableName, deleted := txn.tableOps.queryNameByTid(tableId)
+	latestCatalogFallback := false
 	if tableName == "" && deleted {
 		return "", "", nil, moerr.NewInternalErrorf(ctx, "can not find table by id %d: accountId: %d. Deleted in txn", tableId, accountId)
 	}
@@ -601,8 +602,11 @@ func (e *Engine) GetRelationById(ctx context.Context, op client.TxnOperator, tab
 		cacheItem := cache.GetTableByIdAndTime(accountId, 0 /*db is not specified */, tableId, txn.op.SnapshotTS())
 		if cacheItem == nil {
 			latest := cache.GetTableById(accountId, 0, tableId)
-			if latest != nil && latest.Kind == catalog.SystemTemporaryTable && defines.IsTempTableName(latest.Name) {
+			if latest != nil && isSessionTemporaryCatalogItem(
+				cache, latest, accountId, latest.DatabaseId, latest.DatabaseName,
+			) {
 				cacheItem = latest
+				latestCatalogFallback = true
 			}
 		}
 		if cacheItem != nil {
@@ -680,6 +684,19 @@ func (e *Engine) GetRelationById(ctx context.Context, op client.TxnOperator, tab
 			zap.Error(err),
 		)
 		return "", "", nil, err
+	}
+	if latestCatalogFallback {
+		var resolvedTableID uint64
+		if txnTable != nil {
+			resolvedTableID = txnTable.GetTableID(ctx)
+		}
+		if resolvedTableID != tableId {
+			return "", "", nil, moerr.NewInternalErrorf(
+				ctx,
+				"can not find table by id %d: accountId: %d. latest catalog name resolved to table id %d",
+				tableId, accountId, resolvedTableID,
+			)
+		}
 	}
 
 	return dbName, tableName, txnTable, nil
@@ -1161,6 +1178,39 @@ func (e *Engine) BuildBlockReaders(
 	filterHint ...engine.FilterHint) ([]engine.Reader, error) {
 	var rds []engine.Reader
 	proc := p.(*process.Process)
+	if combined, ok := relData.(*CombinedRelData); ok {
+		if num <= 0 {
+			return nil, moerr.NewInvalidInputNoCtx("partition block reader count must be positive")
+		}
+		if err := ctx.Err(); err != nil {
+			return nil, err
+		}
+		if combined.DataCnt() == 0 {
+			return ensureReaders(nil, num), nil
+		}
+		hint := engine.FilterHint{}
+		if len(filterHint) > 0 {
+			hint = filterHint[0]
+		}
+		// Decode once. Recursive ordinary builders borrow this root and give
+		// each reader its own share; only this frame owns the decoded root.
+		hint, filter, owned, err := prepareMembershipFilter(hint, docfilter.AdmissionForService(e.service))
+		if err != nil {
+			return nil, err
+		}
+		if owned {
+			defer filter.Free()
+		}
+		if hint.BF != nil && filter == nil {
+			return nil, moerr.NewInvalidInputNoCtx("partition block readers require a shareable membership filter")
+		}
+		// CombinedRelData is a partition-to-range mapping, not a splittable
+		// block list. Keep each child's shipped tombstones and the caller's
+		// snapshot on the remote reader path, without a local relation reader.
+		return buildPartitionBlockReaders(ctx, combined.tables, num, func(data engine.RelData) ([]engine.Reader, error) {
+			return e.BuildBlockReaders(ctx, proc, ts, expr, def, data, num, hint)
+		})
+	}
 	blkCnt := relData.DataCnt()
 	newNum := num
 	if blkCnt < num {

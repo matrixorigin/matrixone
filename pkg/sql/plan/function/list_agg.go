@@ -523,35 +523,37 @@ var supportedAggInNewFramework = []FuncNew{
 			}
 
 			// check Arg[0]: must be numeric (same as median)
-			t0 := inputs[0]
-			if t0.Oid == types.T_any {
-				// cast to first supported type
-				return newCheckResultWithCast(0, []types.Type{aggexec.MedianSupportedType[0].ToType(), types.T_float64.ToType()})
-			}
-
-			supported := false
-			for _, st := range aggexec.MedianSupportedType {
-				if t0.Oid == st {
-					supported = true
-					break
+			finalTypes := append([]types.Type(nil), inputs...)
+			needCast := false
+			if finalTypes[0].Oid == types.T_any {
+				finalTypes[0] = aggexec.MedianSupportedType[0].ToType()
+				needCast = true
+			} else {
+				supported := false
+				for _, st := range aggexec.MedianSupportedType {
+					if finalTypes[0].Oid == st {
+						supported = true
+						break
+					}
 				}
-			}
-			if !supported {
-				return newCheckResultWithFailure(failedAggParametersWrong)
+				if !supported {
+					return newCheckResultWithFailure(failedAggParametersWrong)
+				}
 			}
 
 			// check Arg[1]: must be a supported integer, float, or decimal type
-			t1 := inputs[1]
-			if t1.Oid == types.T_any {
-				return newCheckResultWithCast(0, []types.Type{inputs[0], types.T_float64.ToType()})
-			}
-
-			switch t1.Oid {
+			switch finalTypes[1].Oid {
+			case types.T_any:
+				finalTypes[1] = types.T_float64.ToType()
+				needCast = true
 			case types.T_int32, types.T_int64, types.T_float32, types.T_float64, types.T_decimal64, types.T_decimal128:
 			default:
 				return newCheckResultWithFailure(failedAggParametersWrong)
 			}
 
+			if needCast {
+				return newCheckResultWithCast(0, finalTypes)
+			}
 			return newCheckResultWithSuccess(0)
 		},
 
@@ -764,6 +766,9 @@ func typeInList(typ types.T, supported []types.T) bool {
 // widened. Bind through the existing UINT64 aggregate instead of changing the
 // interpretation of old BIT partial states or treating BIT width as precision.
 func sumAvgTypeCheck(inputs []types.Type) checkResult {
+	if len(inputs) == 1 && inputs[0].Oid == types.T_enum {
+		return newCheckResultWithCast(0, []types.Type{types.T_uint16.ToType()})
+	}
 	if len(inputs) == 1 && inputs[0].Oid == types.T_bit {
 		return newCheckResultWithCast(0, []types.Type{types.T_uint64.ToType()})
 	}

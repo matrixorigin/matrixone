@@ -21,10 +21,13 @@ import (
 	"io"
 	"net/http"
 	"net/http/httptest"
+	"strconv"
 	"strings"
+	"sync"
 	"testing"
 	"time"
 
+	"github.com/aws/aws-sdk-go-v2/aws"
 	"github.com/stretchr/testify/require"
 
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
@@ -131,6 +134,22 @@ func Test_NewAwsSDKv2(t *testing.T) {
 
 	_, err = NewAwsSDKv2(ctx, args, nil)
 	require.Error(t, err)
+}
+
+func TestNewAwsSDKv2UsesCompatibilityChecksumPolicy(t *testing.T) {
+	sdk, err := NewAwsSDKv2(context.Background(), ObjectStorageArguments{
+		Bucket:             "bucket",
+		Endpoint:           "http://127.0.0.1:1",
+		Region:             "us-east-1",
+		KeyID:              "id",
+		KeySecret:          "secret",
+		NoBucketValidation: true,
+	}, nil)
+	require.NoError(t, err)
+	require.Equal(t, aws.RequestChecksumCalculationWhenRequired,
+		sdk.client.Options().RequestChecksumCalculation)
+	require.Equal(t, aws.ResponseChecksumValidationWhenRequired,
+		sdk.client.Options().ResponseChecksumValidation)
 }
 
 func TestAwsSDKv2BasicObjectOperations(t *testing.T) {
@@ -277,6 +296,119 @@ func TestAwsSDKv2WriteUnknownSizeMultipartCompletes(t *testing.T) {
 	require.NoError(t, err)
 	require.Equal(t, 1, uploadedParts)
 	require.True(t, completed)
+}
+
+func TestAwsSDKv2WriteUnknownSizeEmptyCreatesObject(t *testing.T) {
+	var activeUploads, putCount int
+	var putBytes int
+	objects := make(map[string]int)
+	var mu sync.Mutex
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		switch {
+		case r.Method == http.MethodPost && strings.Contains(r.URL.RawQuery, "uploads"):
+			mu.Lock()
+			activeUploads++
+			mu.Unlock()
+			w.Header().Set("Content-Type", "application/xml")
+			_, _ = io.WriteString(w, `<CreateMultipartUploadResult><UploadId>empty-upload</UploadId></CreateMultipartUploadResult>`)
+		case r.Method == http.MethodDelete && strings.Contains(r.URL.RawQuery, "uploadId=empty-upload"):
+			mu.Lock()
+			activeUploads--
+			mu.Unlock()
+			w.WriteHeader(http.StatusNoContent)
+		case r.Method == http.MethodPut && !strings.Contains(r.URL.RawQuery, "uploadId="):
+			if r.URL.Path == "/bucket/fail-empty" {
+				w.WriteHeader(http.StatusForbidden)
+				return
+			}
+			data, err := io.ReadAll(r.Body)
+			if err != nil {
+				w.WriteHeader(http.StatusInternalServerError)
+				return
+			}
+			mu.Lock()
+			putCount++
+			putBytes += len(data)
+			objects[r.URL.Path] = len(data)
+			mu.Unlock()
+			w.WriteHeader(http.StatusOK)
+		case r.Method == http.MethodHead:
+			mu.Lock()
+			size, exists := objects[r.URL.Path]
+			mu.Unlock()
+			if !exists {
+				w.WriteHeader(http.StatusNotFound)
+				return
+			}
+			w.Header().Set("Content-Length", strconv.Itoa(size))
+		default:
+			w.WriteHeader(http.StatusNotFound)
+		}
+	}))
+	defer server.Close()
+
+	sdk := newTestAWSClient(t, server)
+	require.NoError(t, sdk.Write(context.Background(), "empty", bytes.NewReader(nil), nil, nil))
+	exists, err := sdk.Exists(context.Background(), "empty")
+	require.NoError(t, err)
+	require.True(t, exists, "success must mean the zero-byte object exists")
+	fs := &S3FS{name: "s3", storage: sdk, rawStorage: sdk, ioMerger: NewIOMerger(), asyncUpdate: true, parallelMode: ParallelOff}
+	vector := IOVector{FilePath: "from-fs", Entries: []IOEntry{{Offset: 0, Size: -1, ReaderForWrite: bytes.NewReader(nil)}}}
+	require.NoError(t, fs.Write(context.Background(), vector))
+	entry, err := fs.StatFile(context.Background(), "from-fs")
+	require.NoError(t, err)
+	require.Zero(t, entry.Size)
+	require.True(t, moerr.IsMoErrCode(fs.Write(context.Background(), vector), moerr.ErrFileAlreadyExists))
+	require.Error(t, sdk.Write(context.Background(), "fail-empty", bytes.NewReader(nil), nil, nil))
+	exists, err = sdk.Exists(context.Background(), "fail-empty")
+	require.NoError(t, err)
+	require.False(t, exists)
+	require.ErrorIs(t, sdk.Write(context.Background(), "reader-failure", errReader{}, nil, nil), io.ErrShortWrite)
+	mu.Lock()
+	defer mu.Unlock()
+	require.Equal(t, 2, putCount)
+	require.Zero(t, putBytes)
+	require.Zero(t, activeUploads, "empty writes must not leak multipart uploads")
+}
+
+func TestAwsSDKv2WriteUnknownSizePartFailureAborts(t *testing.T) {
+	var mu sync.Mutex
+	var created, aborted, completed int
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		mu.Lock()
+		defer mu.Unlock()
+		switch {
+		case r.Method == http.MethodPost && strings.Contains(r.URL.RawQuery, "uploads"):
+			created++
+			w.Header().Set("Content-Type", "application/xml")
+			_, _ = io.WriteString(w, `<CreateMultipartUploadResult><UploadId>failed-upload</UploadId></CreateMultipartUploadResult>`)
+		case r.Method == http.MethodPut && strings.Contains(r.URL.RawQuery, "partNumber="):
+			w.WriteHeader(http.StatusForbidden)
+		case r.Method == http.MethodDelete && strings.Contains(r.URL.RawQuery, "uploadId=failed-upload"):
+			aborted++
+			w.WriteHeader(http.StatusNoContent)
+		case r.Method == http.MethodPost && strings.Contains(r.URL.RawQuery, "uploadId=failed-upload"):
+			completed++
+		default:
+			w.WriteHeader(http.StatusNotFound)
+		}
+	}))
+	defer server.Close()
+
+	sdk := newTestAWSClient(t, server)
+	err := sdk.Write(context.Background(), "failed", strings.NewReader("non-empty"), nil, nil)
+	require.Error(t, err)
+	mu.Lock()
+	defer mu.Unlock()
+	require.Equal(t, 1, created)
+	require.Equal(t, 1, aborted)
+	require.Zero(t, completed)
+}
+
+func TestAwsSDKv2WriteUnknownSizeCanceledBeforeRead(t *testing.T) {
+	ctx, cancel := context.WithCancel(context.Background())
+	cancel()
+	require.ErrorIs(t, (&AwsSDKv2{}).Write(ctx, "canceled", errReader{}, nil, nil), context.Canceled)
 }
 
 func TestAwsSDKv2ConstructorCredentialsAndRetryer(t *testing.T) {

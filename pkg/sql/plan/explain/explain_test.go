@@ -32,6 +32,19 @@ import (
 	"github.com/stretchr/testify/require"
 )
 
+func TestGetNodeBasicInfoAdaptiveTop(t *testing.T) {
+	for _, verbose := range []bool{false, true} {
+		node := &plan2.Node{NodeType: plan2.Node_ADAPTIVE_TOP, NodeId: 3}
+		got, err := NewNodeDescriptionImpl(node).GetNodeBasicInfo(context.Background(),
+			&ExplainOptions{Format: EXPLAIN_FORMAT_TEXT, Verbose: verbose})
+		require.NoError(t, err)
+		require.Contains(t, got, "Adaptive Top")
+		if verbose {
+			require.Contains(t, got, "[3]")
+		}
+	}
+}
+
 func TestGetNodeBasicInfoApplyType(t *testing.T) {
 	tests := []struct {
 		name      string

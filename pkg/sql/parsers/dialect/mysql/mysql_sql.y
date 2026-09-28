@@ -12896,6 +12896,10 @@ search_pattern:
     {
         $$ = tree.NewParamExpr(yylex.(*Lexer).GetParamIndex())
     }
+|   ident
+    {
+        $$ = tree.NewUnresolvedName($1)
+    }
 
 function_call_window:
 	RANK '(' ')' window_spec
@@ -13529,9 +13533,30 @@ window_definition:
 function_call_aggregate:
     GROUP_CONCAT '(' func_type_opt expression_list order_by_opt separator_opt ')' within_group_opt window_spec_opt
 	    {
-	        name := tree.NewUnresolvedColName($1)
+	        functionName := $1
+	        arguments := $4
+	        separator := tree.Expr(tree.NewNumVal($6, $6, false, tree.P_char))
+	        if strings.EqualFold(functionName, "listagg") {
+	            // LISTAGG is a compatibility surface over GROUP_CONCAT. Keep the
+	            // spelling in FuncName for deparsing, but bind the canonical name.
+	            functionName = "group_concat"
+	            if len(arguments) < 1 || len(arguments) > 2 {
+	                yylex.Error("listagg requires one value and an optional delimiter")
+	                return 1
+	            }
+	            if len(arguments) == 2 {
+	                literal, ok := arguments[1].(*tree.NumVal)
+	                if !ok || (literal.ValType != tree.P_char && literal.ValType != tree.P_null) {
+	                    yylex.Error("listagg delimiter must be a string literal or NULL")
+	                    return 1
+	                }
+	                separator = arguments[1]
+	                arguments = arguments[:1]
+	            }
+	        }
+	        name := tree.NewUnresolvedColName(functionName)
 	        if $5 != nil && $8 != nil {
-	            yylex.Error("group_concat cannot use both ORDER BY and WITHIN GROUP ORDER BY")
+	            yylex.Error($1 + " cannot use both ORDER BY and WITHIN GROUP ORDER BY")
 	            return 1
 	        }
 	        orderBy := $5
@@ -13541,7 +13566,7 @@ function_call_aggregate:
         $$ = &tree.FuncExpr{
             Func: tree.FuncName2ResolvableFunctionReference(name),
             FuncName: tree.NewCStr($1, 1),
-            Exprs: append($4,tree.NewNumVal($6, $6, false, tree.P_char)),
+            Exprs: append(arguments, separator),
             Type: $3,
             WindowSpec: $9,
             OrderBy: orderBy,
@@ -13828,7 +13853,13 @@ function_call_aggregate:
     }
 |   JSON_ARRAYAGG '(' func_type_opt expression ')' window_spec_opt
     {
-        name := tree.NewUnresolvedColName($1)
+	    functionName := $1
+	    if strings.EqualFold(functionName, "array_agg") {
+	        // MatrixOne has no general SQL ARRAY value. ARRAY_AGG deliberately
+	        // adopts JSON_ARRAYAGG's JSON return contract instead.
+	        functionName = "json_arrayagg"
+	    }
+	    name := tree.NewUnresolvedColName(functionName)
         $$ = &tree.FuncExpr{
             Func: tree.FuncName2ResolvableFunctionReference(name),
             FuncName: tree.NewCStr($1, 1),

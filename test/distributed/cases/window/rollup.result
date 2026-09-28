@@ -320,7 +320,18 @@ order_year,
 order_month,
 c.city,
 cat.category_name;
-[unknown result because it is related to issue#20000]
+order_year    order_month    city    category_name    total_sales
+null    null    null    null    139.95
+2024    null    null    null    139.95
+2024    1    null    null    139.95
+2024    1    null    Books    49.99
+2024    1    null    Electronics    89.96
+2024    1    Chicago    Books    49.99
+2024    1    Chicago    Books    49.99
+2024    1    Chicago    Books    49.99
+2024    1    New York    Electronics    89.96
+2024    1    New York    Electronics    89.96
+2024    1    New York    Electronics    89.96
 select
 year(o.order_date) as order_year,
 month(o.order_date) as order_month,

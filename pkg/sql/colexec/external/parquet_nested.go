@@ -121,7 +121,8 @@ func projectParquetRowGroup(
 	}, nil
 }
 
-// getDataByRow reads data row by row (used when has nested columns)
+// getDataByRow reads data row by row when all projected physical columns are
+// nested. Mixed nested/scalar projections use getDataByRowAndPage below.
 func (h *ParquetHandler) getDataByRow(bat *batch.Batch, param *ExternalParam, proc *process.Process) error {
 	_, span := trace.Start(proc.Ctx, "ParquetHandler.getDataByRow")
 	defer span.End()
@@ -153,6 +154,9 @@ func (h *ParquetHandler) getDataByRow(bat *batch.Batch, param *ExternalParam, pr
 	batchBoundary := false
 	checkpoints := make([]vector.AppendCheckpoint, len(bat.Vecs))
 	for rowsRead < batchLimit && !h.parquetBatchAtByteBudget(bat, rowsRead, param) {
+		if err := context.Cause(proc.Ctx); err != nil {
+			return err
+		}
 		toRead := nextParquetBatchRows(rowsRead, min(len(rowBuf), batchLimit-rowsRead), h.estimatedBatchSize(bat, rowsRead, param), param.maxBatchSize)
 		n, err := h.rowReader.ReadRows(rowBuf[:toRead])
 		if err != nil && !errors.Is(err, io.EOF) {
@@ -167,12 +171,20 @@ func (h *ParquetHandler) getDataByRow(bat *batch.Batch, param *ExternalParam, pr
 			eof = true
 		}
 		for _, row := range rowBuf[:n] {
+			if err := context.Cause(proc.Ctx); err != nil {
+				return err
+			}
 			for colIdx, vec := range bat.Vecs {
 				if vec != nil {
 					checkpoints[colIdx] = vec.MakeAppendCheckpoint()
 				}
 			}
 			if err := h.processRow(row, bat, param, proc); err != nil {
+				for colIdx, vec := range bat.Vecs {
+					if vec != nil {
+						vec.RollbackAppend(checkpoints[colIdx], 1)
+					}
+				}
 				return err
 			}
 			if h.parquetBatchAtByteBudget(bat, rowsRead+1, param) {
@@ -214,11 +226,204 @@ func (h *ParquetHandler) getDataByRow(bat *batch.Batch, param *ExternalParam, pr
 	return nil
 }
 
+// getDataByRowAndPage combines the two Parquet readers when a projection has
+// both nested and scalar columns. The row reader is restricted to nested
+// columns so it can reconstruct LIST values that span data pages, while scalar
+// columns continue to use the vectorized page mappers.
+func (h *ParquetHandler) getDataByRowAndPage(bat *batch.Batch, param *ExternalParam, proc *process.Process) error {
+	_, span := trace.Start(proc.Ctx, "ParquetHandler.getDataByRowAndPage")
+	defer span.End()
+
+	rowModeStart := time.Now()
+	defer func() {
+		param.addParquetProfile(process.ParquetProfileStats{
+			RowModeTime: time.Since(rowModeStart).Nanoseconds(),
+		})
+	}()
+
+	if h.batchCnt <= 0 {
+		bat.SetRowCount(0)
+		return nil
+	}
+	if h.rowReader == nil {
+		return moerr.NewInternalError(proc.Ctx, "parquet hybrid mode has no row reader")
+	}
+
+	batchLimit := int(h.batchCnt)
+	rowStart := h.offset
+	if err := h.rowReader.SeekToRow(rowStart); err != nil {
+		return moerr.ConvertGoError(param.Ctx, err)
+	}
+
+	// Keep row-reader lookahead bounded. If the byte budget accepts fewer rows
+	// than were decoded, the reader is rewound to the accepted boundary below.
+	const maxReadRows = 1024
+	rowBuf := make([]parquet.Row, min(batchLimit, maxReadRows))
+	length := 0
+	eof := false
+	batchBoundary := false
+
+	rollbackRows := func(checkpoints []vector.AppendCheckpoint, attemptedRows int) {
+		for colIdx, vec := range bat.Vecs {
+			if vec != nil {
+				vec.RollbackAppend(checkpoints[colIdx], attemptedRows)
+			}
+		}
+	}
+
+	for length < batchLimit && !h.parquetBatchAtByteBudget(bat, length, param) {
+		available := int64(batchLimit - length)
+		for _, colIdx := range h.dataColIndices {
+			eofPage, err := h.ensureCurrentPage(colIdx, param)
+			if err != nil {
+				return err
+			}
+			if eofPage {
+				if err := validateParquetPageModeEOF(param.Ctx, h.offset+int64(length), h.rowGroupRows); err != nil {
+					return h.closePagesOnError(param.Ctx, err)
+				}
+				available = 0
+				break
+			}
+			page := h.currentPage[colIdx]
+			if err := validateParquetPageRows(param.Ctx, page.NumRows(), h.pageOffset[colIdx],
+				h.offset+int64(length), h.rowGroupRows); err != nil {
+				return h.closePagesOnError(param.Ctx, err)
+			}
+			if len(page.RepetitionLevels()) != 0 && !h.mappers[colIdx].allowRepetition {
+				return h.closePagesOnError(param.Ctx, moerr.NewNYI(param.Ctx, "page has repetition"))
+			}
+			available = min(available, page.NumRows()-h.pageOffset[colIdx])
+		}
+		if available <= 0 {
+			break
+		}
+
+		toRead := int64(nextParquetBatchRows(length, int(available),
+			h.estimatedBatchSize(bat, length, param), param.maxBatchSize))
+		if length > 0 && param.maxBatchSize > 0 && len(h.budgetColIndices) > 0 {
+			remainingBudget := parquetRemainingBudget(h.estimatedBatchSize(bat, length, param), param.maxBatchSize)
+			toRead = min(toRead, h.rowsToSourceBudget(toRead, remainingBudget))
+		}
+		toRead = min(toRead, int64(len(rowBuf)))
+		if toRead <= 0 {
+			break
+		}
+
+		n, readErr := h.rowReader.ReadRows(rowBuf[:toRead])
+		if readErr != nil && !errors.Is(readErr, io.EOF) {
+			return moerr.ConvertGoError(param.Ctx, readErr)
+		}
+		if errors.Is(readErr, io.EOF) {
+			eof = true
+		}
+		if n < 0 || n > int(toRead) {
+			return moerr.NewInvalidInputf(param.Ctx,
+				"malformed parquet row reader: returned %d rows for buffer of %d", n, toRead)
+		}
+		if n == 0 {
+			break
+		}
+		if int64(n) > available {
+			return h.closePagesOnError(param.Ctx, moerr.NewInvalidInputf(param.Ctx,
+				"parquet row reader returned %d rows, but scalar pages have only %d rows available", n, available))
+		}
+
+		checkpoints := make([]vector.AppendCheckpoint, len(bat.Vecs))
+		for colIdx, vec := range bat.Vecs {
+			if vec != nil {
+				checkpoints[colIdx] = vec.MakeAppendCheckpoint()
+			}
+		}
+		batchBytesBefore := h.physicalBatchSize(bat)
+		for _, row := range rowBuf[:n] {
+			if err := context.Cause(proc.Ctx); err != nil {
+				rollbackRows(checkpoints, n)
+				return err
+			}
+			if err := h.processNestedRow(row, bat, param, proc); err != nil {
+				rollbackRows(checkpoints, n)
+				return err
+			}
+		}
+		if _, err := h.mapCurrentPageRows(bat, param, proc, int64(n)); err != nil {
+			rollbackRows(checkpoints, n)
+			return h.closePagesOnError(param.Ctx, err)
+		}
+
+		accepted := n
+		if h.parquetBatchAtByteBudget(bat, length+n, param) {
+			acceptedRows := h.parquetRowsToByteBudget(
+				bat, length, length+n, batchBytesBefore, param)
+			accepted = acceptedRows - length
+			if accepted < 0 {
+				accepted = 0
+			}
+			if accepted < n {
+				rollbackRows(checkpoints, n)
+				if accepted > 0 {
+					for _, row := range rowBuf[:accepted] {
+						if err := h.processNestedRow(row, bat, param, proc); err != nil {
+							rollbackRows(checkpoints, accepted)
+							return err
+						}
+					}
+					if _, err := h.mapCurrentPageRows(bat, param, proc, int64(accepted)); err != nil {
+						rollbackRows(checkpoints, accepted)
+						return h.closePagesOnError(param.Ctx, err)
+					}
+				}
+				// The row reader has already decoded n rows. Rewind the unread
+				// suffix so the next batch starts at the same logical row as the
+				// scalar page offsets.
+				if err := h.rowReader.SeekToRow(rowStart + int64(length+accepted)); err != nil {
+					rollbackRows(checkpoints, accepted)
+					return moerr.ConvertGoError(param.Ctx, err)
+				}
+				batchBoundary = true
+			}
+		}
+
+		h.advanceCurrentPages(int64(accepted))
+		length += accepted
+		if accepted < n || h.parquetBatchAtByteBudget(bat, length, param) {
+			batchBoundary = true
+		}
+		if n < int(toRead) || eof || batchBoundary {
+			break
+		}
+	}
+
+	if eof && !batchBoundary {
+		if err := validateParquetRowModeEOF(param.Ctx, h.offset+int64(length), h.rowGroupRows); err != nil {
+			h.cleanup()
+			return err
+		}
+	}
+
+	bat.SetRowCount(length)
+	h.offset += int64(length)
+	finish := (eof && length == 0) || h.isFinished()
+	if finish {
+		h.cleanup()
+		if err := h.closePages(param.Ctx); err != nil {
+			return err
+		}
+	}
+	return nil
+}
+
 // cleanup releases resources
 func (h *ParquetHandler) cleanup() {
 	if h.rowReader != nil {
 		h.rowReader.Close()
 		h.rowReader = nil
+	}
+	for _, mapper := range h.mappers {
+		if mapper != nil && mapper.rowBuffer != nil {
+			mapper.rowBuffer.Reset()
+			mapper.rowBuffer = nil
+		}
 	}
 }
 
@@ -232,13 +437,28 @@ func (h *ParquetHandler) processRow(row parquet.Row, bat *batch.Batch, param *Ex
 		def := param.Cols[colIdx]
 
 		if !col.Leaf() {
-			if err := h.processNestedValue(row, col, vec, def, proc); err != nil {
+			if err := h.processNestedValue(row, col, h.mappers[colIdx], vec, def, proc); err != nil {
 				return err
 			}
 		} else {
-			if err := h.processLeafValue(row, col, vec, def, proc); err != nil {
+			if err := h.processLeafValue(row, col, vec, def, proc, h.mappers[colIdx]); err != nil {
 				return err
 			}
+		}
+	}
+	return nil
+}
+
+// processNestedRow materializes only nested columns. Scalar leaf columns are
+// populated by the page mapper in the hybrid path.
+func (h *ParquetHandler) processNestedRow(row parquet.Row, bat *batch.Batch, param *ExternalParam, proc *process.Process) error {
+	for _, colIdx := range h.nestedColIndices {
+		col := h.cols[colIdx]
+		if col == nil || param.Cols[colIdx].Hidden || h.mappers[colIdx] == nil {
+			continue
+		}
+		if err := h.processNestedValue(row, col, h.mappers[colIdx], bat.Vecs[colIdx], param.Cols[colIdx], proc); err != nil {
+			return err
 		}
 	}
 	return nil
@@ -251,6 +471,7 @@ func (h *ParquetHandler) processLeafValue(
 	vec *vector.Vector,
 	def *plan.ColDef,
 	proc *process.Process,
+	mapper ...*columnMapper,
 ) error {
 	colIndex := col.Index()
 	var value parquet.Value
@@ -274,7 +495,73 @@ func (h *ParquetHandler) processLeafValue(
 		return appendNull(vec, def, proc)
 	}
 
+	if !canAppendParquetRowLeafDirectly(types.T(def.Typ.Id), col.Type()) {
+		if len(mapper) == 0 || mapper[0] == nil || mapper[0].mapper == nil {
+			return moerr.NewNYIf(proc.Ctx, "row mode convert to %s", types.T(def.Typ.Id).String())
+		}
+		return mapParquetRowLeafWithPageMapper(value, col, mapper[0], vec, proc)
+	}
 	return appendLeafValue(value, col, vec, def, proc)
+}
+
+func canAppendParquetRowLeafDirectly(targetType types.T, sourceType parquet.Type) bool {
+	sourceKind := sourceType.Kind()
+	simpleScalar := sourceKind == parquet.Boolean ||
+		sourceKind == parquet.Int32 ||
+		sourceKind == parquet.Int64 ||
+		sourceKind == parquet.Float ||
+		sourceKind == parquet.Double
+	switch targetType {
+	case types.T_bool,
+		types.T_int8, types.T_int16, types.T_int32, types.T_int64,
+		types.T_uint8, types.T_uint16, types.T_uint32, types.T_uint64,
+		types.T_float32, types.T_float64:
+		return simpleScalar
+	case types.T_char, types.T_varchar, types.T_text, types.T_blob,
+		types.T_binary, types.T_varbinary:
+		return isPlainStringLikeType(sourceType)
+	default:
+		return false
+	}
+}
+
+func mapParquetRowLeafWithPageMapper(
+	value parquet.Value,
+	col *parquet.Column,
+	mapper *columnMapper,
+	vec *vector.Vector,
+	proc *process.Process,
+) error {
+	if mapper.rowBuffer == nil {
+		schema := parquet.NewSchema("row", parquet.Group{col.Name(): col})
+		mapper.rowBuffer = parquet.NewBuffer(schema)
+	} else {
+		mapper.rowBuffer.Reset()
+	}
+	localValue := value.Level(0, value.DefinitionLevel(), 0)
+	if _, err := mapper.rowBuffer.WriteRows([]parquet.Row{{localValue}}); err != nil {
+		return moerr.ConvertGoError(proc.Ctx, err)
+	}
+	chunks := mapper.rowBuffer.ColumnChunks()
+	if len(chunks) != 1 {
+		return moerr.NewInternalErrorf(proc.Ctx,
+			"row mode leaf projection for %s produced %d chunks", col.Name(), len(chunks))
+	}
+	pages := chunks[0].Pages()
+	page, err := pages.ReadPage()
+	if err != nil {
+		_ = pages.Close()
+		return moerr.ConvertGoError(proc.Ctx, err)
+	}
+	mapErr := mapper.mapping(page, proc, vec)
+	closeErr := pages.Close()
+	if mapErr != nil {
+		return mapErr
+	}
+	if closeErr != nil {
+		return moerr.ConvertGoError(proc.Ctx, closeErr)
+	}
+	return nil
 }
 
 func validateParquetLeafValue(ctx context.Context, col *parquet.Column, value parquet.Value) (bool, error) {
@@ -424,6 +711,7 @@ func parquetRowValueToUint64(ctx context.Context, st parquet.Type, v parquet.Val
 func (h *ParquetHandler) processNestedValue(
 	row parquet.Row,
 	col *parquet.Column,
+	mapper *columnMapper,
 	vec *vector.Vector,
 	def *plan.ColDef,
 	proc *process.Process,
@@ -433,6 +721,9 @@ func (h *ParquetHandler) processNestedValue(
 		return err
 	}
 
+	if mapper != nil && mapper.listValuesMapper != nil {
+		return mapper.listValuesMapper(mapper, colValues, 1, proc, vec)
+	}
 	if isNestedColumnNull(colValues, col) {
 		return appendNull(vec, def, proc)
 	}
