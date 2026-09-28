@@ -131,7 +131,11 @@ const (
 	MORPCVersion93     int64 = 93 // session LAST_INSERT_ID connection migration state
 	MORPCVersion94     int64 = 94 // lossless physical/logical NoFull CDC start watermark
 	MORPCVersion95     int64 = 95 // prepared scalar precision execution across CNs
-	MORPCLatestVersion       = MORPCVersion95
+	MORPCVersion96     int64 = 96 // coordinator-independent vector scan object partitions
+	MORPCVersion97     int64 = 97 // decimal division result semantics across CNs
+	MORPCVersion98     int64 = 98 // canonical FORMAT precision and MAKEDATE/MAKETIME integer signatures
+	MORPCVersion99     int64 = 99 // owner-atomic writer-fair row-lock admission
+	MORPCLatestVersion       = MORPCVersion99
 )
 
 // DefaultLockWaitTimeoutSeconds is shared by the frontend default and by

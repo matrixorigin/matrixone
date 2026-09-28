@@ -18,6 +18,13 @@ import (
 	"github.com/prometheus/client_golang/prometheus"
 )
 
+var MemObjectIOPooledSerialBytesGauge = prometheus.NewGauge(prometheus.GaugeOpts{
+	Namespace: "mo",
+	Subsystem: "mem",
+	Name:      "objectio_pooled_serial_bytes",
+	Help:      "Retained Go-heap serialization-buffer capacity in pooled object writers.",
+})
+
 var (
 	memMPoolAllocatedSizeGauge = prometheus.NewGaugeVec(
 		prometheus.GaugeOpts{

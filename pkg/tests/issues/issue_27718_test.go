@@ -397,4 +397,66 @@ func runIssue27718SnapshotQuotaMode(
 	for _, name := range unlimitedSnapshots {
 		execSQLRequire(t, ctx, tenantDB, "drop snapshot "+name)
 	}
+
+	// Sys-on-behalf and the target tenant publish to different physical
+	// mo_snapshots catalogs but compete for the same final ACCOUNT slot.
+	execSQLRequire(t, ctx, sysDB, fmt.Sprintf(
+		"select mo_feature_limit_upsert(%d, 'snapshot', 'account', 1)", accountID))
+	sysName, tenantName := prefix+"_sysaccount", prefix+"_selfaccount"
+	type accountCreateResult struct {
+		name string
+		err  error
+	}
+	start := make(chan struct{})
+	results := make(chan accountCreateResult, 2)
+	accountCtx, cancel := context.WithTimeout(ctx, 30*time.Second)
+	defer cancel()
+	go func() {
+		<-start
+		_, createErr := sysDB.ExecContext(accountCtx,
+			fmt.Sprintf("create snapshot %s for account %s", sysName, accountName))
+		results <- accountCreateResult{name: sysName, err: createErr}
+	}()
+	go func() {
+		<-start
+		_, createErr := connections[1].ExecContext(accountCtx,
+			fmt.Sprintf("create snapshot %s for account", tenantName))
+		results <- accountCreateResult{name: tenantName, err: createErr}
+	}()
+	close(start)
+	var winner string
+	for range 2 {
+		select {
+		case result := <-results:
+			if result.err == nil {
+				require.Empty(t, winner, "only one physical catalog may consume the account slot")
+				winner = result.name
+			} else {
+				require.Contains(t, result.err.Error(),
+					"feature SNAPSHOT with scope account has reached the limit of 1")
+				require.NotContains(t, strings.ToLower(result.err.Error()), "txn need retry")
+			}
+		case <-accountCtx.Done():
+			t.Fatal("cross-catalog account snapshot creator did not finish")
+		}
+	}
+	require.NotEmpty(t, winner)
+	for _, physical := range []struct {
+		db   *sql.DB
+		name string
+	}{
+		{db: sysDB, name: sysName},
+		{db: tenantDBs[1], name: tenantName},
+	} {
+		var count int
+		require.NoError(t, physical.db.QueryRowContext(ctx,
+			"select count(*) from mo_catalog.mo_snapshots where sname = ? and account_name = ? and obj_id = ?",
+			physical.name, accountName, accountID).Scan(&count))
+		if physical.name == winner {
+			require.Equal(t, 1, count)
+			execSQLRequire(t, ctx, physical.db, "drop snapshot "+winner)
+		} else {
+			require.Zero(t, count)
+		}
+	}
 }

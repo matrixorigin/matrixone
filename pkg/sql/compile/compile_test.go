@@ -79,6 +79,37 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/vm/process"
 )
 
+func TestBroadcastJoinUsesHashAfterPreparedDiagnosticProof(t *testing.T) {
+	ctx := plan2.NewMockCompilerContext(true)
+	proc := ctx.GetProcess()
+	params := vector.NewVec(types.T_text.ToType())
+	defer func() { proc.SetPrepareParams(nil); params.Free(proc.Mp()) }()
+	require.NoError(t, vector.AppendBytes(params, []byte("00:00:01"), false, proc.Mp()))
+	proc.SetPrepareParams(params)
+
+	bind := func(name string, args ...*plan.Expr) *plan.Expr {
+		expr, err := plan2.BindFuncExprImplByPlanExpr(ctx.GetContext(), name, args)
+		require.NoError(t, err)
+		return expr
+	}
+	intType := plan.Type{Id: int32(types.T_int64)}
+	timeType := plan.Type{Id: int32(types.T_time)}
+	leftID, rightID := plan2.GetColExpr(intType, 0, 0), plan2.GetColExpr(intType, 1, 0)
+	leftTime, rightTime := plan2.GetColExpr(timeType, 0, 1), plan2.GetColExpr(timeType, 1, 1)
+	param := &plan.Expr{Typ: plan.Type{Id: int32(types.T_varchar)}, Expr: &plan.Expr_P{P: &plan.ParamRef{Pos: 0}}}
+	guard := bind("case", bind(">", rightID, plan2.MakePlan2Int64ConstExprWithType(0)),
+		bind("time", param), rightTime)
+	node := &plan.Node{JoinType: plan.Node_INNER, OnList: []*plan.Expr{
+		bind("=", leftID, rightID), bind("=", leftTime, guard),
+	}}
+	c := &Compile{proc: proc}
+	require.False(t, c.broadcastJoinUsesHash(node), "unproved guarded ON retains LoopJoin")
+	c.SetPreparedJoinDiagnosticFree(true)
+	require.True(t, c.broadcastJoinUsesHash(node), "current clean binding permits HashJoin")
+	c.SetPreparedJoinDiagnosticFree(false)
+	require.False(t, c.broadcastJoinUsesHash(node), "a subsequent execution must not inherit proof")
+}
+
 func TestHasOrderedGroupConcat(t *testing.T) {
 	ordered := &plan.Node{
 		AggList: []*plan.Expr{{
@@ -170,7 +201,7 @@ func TestFilterScanStorageExprsExcludesVolatilePredicates(t *testing.T) {
 	}}}}
 	stable := plan2.MakePlan2Int64ConstExprWithType(1)
 
-	require.Equal(t, []*plan.Expr{stable}, filterScanStorageExprs([]*plan.Expr{stable, volatile}))
+	require.Equal(t, []*plan.Expr{stable}, filterScanStorageExprs(nil, []*plan.Expr{stable, volatile}))
 }
 
 func TestCompileRunPreservesBinaryPrepareParamAcrossRetries(t *testing.T) {
@@ -1162,6 +1193,17 @@ func newTestTxnClientAndOpWithIsolation(
 	isolation txn.TxnIsolation,
 	workspaces ...client.Workspace,
 ) (client.TxnClient, client.TxnOperator) {
+	return newTestTxnClientAndOpWithModeIsolation(
+		ctrl, txn.TxnMode_Optimistic, isolation, workspaces...,
+	)
+}
+
+func newTestTxnClientAndOpWithModeIsolation(
+	ctrl *gomock.Controller,
+	mode txn.TxnMode,
+	isolation txn.TxnIsolation,
+	workspaces ...client.Workspace,
+) (client.TxnClient, client.TxnOperator) {
 	txnOperator := mock_frontend.NewMockTxnOperator(ctrl)
 	workspace := client.Workspace(&Ws{})
 	if len(workspaces) > 0 {
@@ -1170,7 +1212,7 @@ func newTestTxnClientAndOpWithIsolation(
 	txnOperator.EXPECT().Commit(gomock.Any()).Return(nil).AnyTimes()
 	txnOperator.EXPECT().Rollback(gomock.Any()).Return(nil).AnyTimes()
 	txnOperator.EXPECT().GetWorkspace().Return(workspace).AnyTimes()
-	txnOperator.EXPECT().Txn().Return(txn.TxnMeta{Isolation: isolation}).AnyTimes()
+	txnOperator.EXPECT().Txn().Return(txn.TxnMeta{Mode: mode, Isolation: isolation}).AnyTimes()
 	txnOperator.EXPECT().TxnOptions().Return(txn.TxnOptions{}).AnyTimes()
 	txnOperator.EXPECT().NextSequence().Return(uint64(0)).AnyTimes()
 	txnOperator.EXPECT().TryEnterRunSqlWithTokenAndSQL(gomock.Any(), gomock.Any()).Return(uint64(1), nil).AnyTimes()

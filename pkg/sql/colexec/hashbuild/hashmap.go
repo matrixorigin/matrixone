@@ -72,6 +72,7 @@ type HashmapBuilder struct {
 	DelRows                   *bitmap.Bitmap
 	budget                    *process.ExecutionResourceGeneration
 	keyExprs                  []*plan.Expr
+	joinDiagnostic            *colexec.DeferredJoinDiagnostic
 	// retainedSpillTailSelected is the logical spill materialization of the
 	// one partial CopyIntoBatches tail. It avoids rescanning that growing tail.
 	retainedSpillTailSelected uint64
@@ -183,6 +184,7 @@ func (hb *HashmapBuilder) Prepare(
 	dedupDeleteMarkerColIdx int32,
 	dedupDeleteKeepColIdxList []int32,
 	proc *process.Process,
+	foldOwnedConstantCasts ...bool,
 ) error {
 	if len(hb.executors) == 0 {
 		needDupVec := false
@@ -196,11 +198,13 @@ func (hb *HashmapBuilder) Prepare(
 			}
 			keyWidth += width
 		}
-		executors, err := newExpressionExecutorsWithCapacityClass(
+		executors, err := newExpressionExecutorsWithCapacityClassAndDiagnostic(
 			proc,
 			keyCols,
 			hb.mapAllocationAccount,
 			hb.recoveryCapacityClass,
+			len(foldOwnedConstantCasts) > 0 && foldOwnedConstantCasts[0],
+			hb.joinDiagnostic,
 		)
 		if err != nil {
 			return err

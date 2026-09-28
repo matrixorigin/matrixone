@@ -50,10 +50,12 @@ func checkSnapshotQuota(
 	ctx context.Context,
 	ses *Session,
 	bh BackgroundExec,
+	accountName string,
+	accountID uint32,
 	increment int64,
 	level string,
 ) (err error) {
-	return featureLimitChecker(ctx, ses, bh, featureCodeSnapshot, level, increment)
+	return featureLimitCheckerForAccount(ctx, ses, bh, featureCodeSnapshot, level, accountName, accountID, increment)
 }
 
 func checkBranchQuotaForAccount(
@@ -81,26 +83,6 @@ func branchQuotaUsageSQL(accountID uint32) string {
 	)
 }
 
-func featureLimitChecker(
-	ctx context.Context,
-	ses *Session,
-	bh BackgroundExec,
-	featureCode string,
-	featureScope string,
-	increment int64,
-) (err error) {
-	return featureLimitCheckerForAccount(
-		ctx,
-		ses,
-		bh,
-		featureCode,
-		featureScope,
-		ses.GetTenantInfo().Tenant,
-		ses.GetTenantInfo().TenantID,
-		increment,
-	)
-}
-
 func featureLimitCheckerForAccount(
 	ctx context.Context,
 	ses *Session,
@@ -112,10 +94,8 @@ func featureLimitCheckerForAccount(
 	increment int64,
 ) (err error) {
 	var (
-		limitQuota  int64
-		sql         string
-		sqlRet      executor.Result
-		lockingRead bool
+		limitQuota int64
+		sqlRet     executor.Result
 	)
 
 	defer func() {
@@ -171,28 +151,25 @@ func featureLimitCheckerForAccount(
 	}
 
 	if featureCode == featureCodeSnapshot {
-		// Exclude branch-managed rows from the per-account snapshot
-		// quota — those are internal protection entries inserted by
-		// `DATA BRANCH CREATE` and must not count against user quota
-		// (design §7.3 / review PR#24313 blocking issue #2).
-		sql = fmt.Sprintf(
-			"select count(*) from %s.%s where account_name = '%s' and level = '%s' and kind != '%s'",
-			catalog.MO_CATALOG, catalog.MO_SNAPSHOTS, accName, featureScope,
-			databranchutils.BranchSnapshotKind,
-		)
+		pinned, countErr := snapshotQuotaUsage(ctx, ses, bh, accName, accId, featureScope)
+		if countErr != nil {
+			return countErr
+		}
+		if pinned+increment > limitQuota {
+			return moerr.NewInternalErrorNoCtxf(
+				"feature %s with scope %s has reached the limit of %d",
+				featureCode, featureScope, limitQuota,
+			)
+		}
+		return nil
 	} else if featureCode == featureCodeBranch {
 		ctx = defines.AttachAccountId(ctx, sysAccountID)
-		lockingRead = true
-		sql = branchQuotaUsageSQL(accId)
+		sql := branchQuotaUsageSQL(accId)
+		sqlRet, err = runSqlWithBackExec(ctx, ses, bh, sql)
 	} else {
 		return moerr.NewInternalErrorNoCtxf("no such feature %s with scope %s", featureCode, featureScope)
 	}
 
-	if lockingRead {
-		sqlRet, err = runSqlWithBackExec(ctx, ses, bh, sql)
-	} else {
-		sqlRet, err = runSql(ctx, ses, bh, sql, nil, nil)
-	}
 	if err != nil {
 		return err
 	}
@@ -211,6 +188,46 @@ func featureLimitCheckerForAccount(
 	}
 
 	return nil
+}
+
+// snapshotQuotaUsage charges ACCOUNT snapshots to their target even when sys
+// stores an on-behalf row in its own physical catalog. Local rows are matched
+// by name so historical publication snapshots with a wrong obj_id still count.
+func snapshotQuotaUsage(
+	ctx context.Context,
+	ses *Session,
+	bh BackgroundExec,
+	accountName string,
+	accountID uint32,
+	level string,
+) (int64, error) {
+	count := func(storageID uint32, sysOnBehalf bool) (int64, error) {
+		predicate := fmt.Sprintf(
+			"account_name = '%s' and level = '%s' and kind != '%s'",
+			strings.ReplaceAll(accountName, "'", "''"), level, databranchutils.BranchSnapshotKind,
+		)
+		if sysOnBehalf {
+			predicate += fmt.Sprintf(" and obj_id = %d", accountID)
+		}
+		sql := fmt.Sprintf("select count(*) from %s.%s where %s", catalog.MO_CATALOG, catalog.MO_SNAPSHOTS, predicate)
+		result, err := runSql(defines.AttachAccountId(ctx, storageID), ses, bh, sql, nil, nil)
+		if err != nil {
+			result.Close()
+			return 0, err
+		}
+		defer result.Close()
+		if len(result.Batches) == 0 || result.Batches[0].RowCount() == 0 {
+			return 0, nil
+		}
+		return vector.GetFixedAtNoTypeCheck[int64](result.Batches[0].Vecs[0], 0), nil
+	}
+
+	local, err := count(accountID, false)
+	if err != nil || accountID == sysAccountID || level != "account" {
+		return local, err
+	}
+	sysHeld, err := count(sysAccountID, true)
+	return local + sysHeld, err
 }
 
 func checkBranchQuotaTxn(bh BackgroundExec) error {

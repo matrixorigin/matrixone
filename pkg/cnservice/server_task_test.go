@@ -17,6 +17,7 @@ package cnservice
 import (
 	"context"
 	"errors"
+	"sync/atomic"
 	"testing"
 	"time"
 
@@ -24,7 +25,10 @@ import (
 	"github.com/stretchr/testify/require"
 	"go.uber.org/zap"
 
+	"github.com/matrixorigin/matrixone/pkg/catalog"
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
+	"github.com/matrixorigin/matrixone/pkg/common/stopper"
+	"github.com/matrixorigin/matrixone/pkg/defines"
 	"github.com/matrixorigin/matrixone/pkg/logservice"
 	pb "github.com/matrixorigin/matrixone/pkg/pb/logservice"
 	"github.com/matrixorigin/matrixone/pkg/pb/task"
@@ -193,6 +197,124 @@ var _ taskservice.TaskService = new(testTS)
 type testTS struct {
 	cronTasks []task.TaskMetadata
 	cronExprs []string
+	created   chan struct{}
+}
+
+type controlledCronTaskService struct {
+	*testTS
+	create func(context.Context, task.TaskMetadata, string) error
+}
+
+func (ts *controlledCronTaskService) CreateCronTask(ctx context.Context, metadata task.TaskMetadata, expr string) error {
+	return ts.create(ctx, metadata, expr)
+}
+
+func TestLineageGCCronRegistrationDoesNotBlockCNClose(t *testing.T) {
+	entered := make(chan context.Context, 1)
+	release := make(chan struct{})
+	t.Cleanup(func() { close(release) })
+	ts := &controlledCronTaskService{testTS: &testTS{}}
+	ts.create = func(ctx context.Context, _ task.TaskMetadata, _ string) error {
+		entered <- ctx
+		select {
+		case <-ctx.Done():
+			return ctx.Err()
+		case <-release:
+			return context.Canceled
+		}
+	}
+	s := &service{cfg: &Config{}, logger: zap.NewNop(), stopper: stopper.NewStopper(t.Name())}
+	s.task.runner = &testRunner{}
+	s.task.holder = &testHolder{ts: ts}
+	s.task.runnerReady.Store(true)
+	// This is also the Start path: registration must return without waiting for
+	// storage while Start holds lifecycleMu.
+	registered := make(chan struct{})
+	go func() { s.registerExecutorsLocked(); close(registered) }()
+	select {
+	case ctx := <-entered:
+		account, err := defines.GetAccountId(ctx)
+		require.NoError(t, err)
+		require.Equal(t, catalog.System_Account, account)
+	case <-time.After(2 * time.Second):
+		t.Fatal("cron registration did not start")
+	}
+	select {
+	case <-registered:
+	case <-time.After(2 * time.Second):
+		t.Fatal("startup blocked on cron registration")
+	}
+	closed := make(chan struct{})
+	go func() { s.stopper.Stop(); close(closed) }()
+	select {
+	case <-closed:
+	case <-time.After(2 * time.Second):
+		t.Fatal("CN close did not cancel cron registration")
+	}
+}
+
+func TestLineageGCCronRegistrationRetriesAndStops(t *testing.T) {
+	var attempts atomic.Int32
+	attempted := make(chan int32, 3)
+	ts := &controlledCronTaskService{testTS: &testTS{}}
+	ts.create = func(ctx context.Context, metadata task.TaskMetadata, expr string) error {
+		account, err := defines.GetAccountId(ctx)
+		if err != nil || account != catalog.System_Account || metadata.ID != "data_branch_lineage_gc" || expr != "0 */5 * * * *" {
+			return errors.New("invalid lineage cron registration")
+		}
+		attempt := attempts.Add(1)
+		attempted <- attempt
+		if attempt == 1 {
+			return errors.New("temporary storage failure")
+		}
+		return nil
+	}
+	s := &service{logger: zap.NewNop()}
+	s.task.runnerReady.Store(true)
+	ticks := make(chan time.Time)
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+	done := make(chan struct{})
+	go func() { s.registerLineageGCCron(ctx, ts, ticks); close(done) }()
+	select {
+	case <-attempted:
+	case <-time.After(2 * time.Second):
+		t.Fatal("first registration did not start")
+	}
+	select {
+	case ticks <- time.Now():
+	case <-time.After(2 * time.Second):
+		t.Fatal("failed registration did not enter bounded retry wait")
+	}
+	select {
+	case <-done:
+	case <-time.After(2 * time.Second):
+		t.Fatal("successful retry did not finish")
+	}
+	require.Equal(t, int32(2), <-attempted)
+	require.Equal(t, int32(2), attempts.Load())
+
+	// A permanently failing registration must also leave its retry wait when
+	// the CN lifetime ends, without needing another timer tick.
+	ts.create = func(context.Context, task.TaskMetadata, string) error {
+		attempted <- attempts.Add(1)
+		return errors.New("storage unavailable")
+	}
+	ctx2, cancel2 := context.WithCancel(context.Background())
+	done2 := make(chan struct{})
+	go func() { s.registerLineageGCCron(ctx2, ts, make(chan time.Time)); close(done2) }()
+	select {
+	case <-attempted:
+	case <-time.After(2 * time.Second):
+		cancel2()
+		t.Fatal("failed registration did not start")
+	}
+	cancel2()
+	select {
+	case <-done2:
+	case <-time.After(2 * time.Second):
+		t.Fatal("retry wait ignored CN cancellation")
+	}
 }
 
 func (ts *testTS) Close() error {
@@ -213,6 +335,9 @@ func (ts *testTS) CreateBatch(ctx context.Context, metadata []task.TaskMetadata)
 func (ts *testTS) CreateCronTask(ctx context.Context, metadata task.TaskMetadata, cronExpr string) error {
 	ts.cronTasks = append(ts.cronTasks, metadata)
 	ts.cronExprs = append(ts.cronExprs, cronExpr)
+	if ts.created != nil {
+		ts.created <- struct{}{}
+	}
 	return nil
 }
 
@@ -350,14 +475,22 @@ func Test_registerExecutorsLocked(t *testing.T) {
 		sqlExecutor:     exec,
 	}
 	sv.task.runner = run
+	sv.stopper = stopper.NewStopper(t.Name())
+	sv.task.runnerReady.Store(true)
+	t.Cleanup(sv.stopper.Stop)
 
-	ts := &testTS{}
+	ts := &testTS{created: make(chan struct{}, 1)}
 
 	sv.task.holder = &testHolder{
 		ts: ts,
 	}
 
 	sv.registerExecutorsLocked()
+	select {
+	case <-ts.created:
+	case <-time.After(2 * time.Second):
+		t.Fatal("lineage GC cron was not registered")
+	}
 	require.NotNil(t, run.GetExecutor(task.TaskCode_DataBranchLineageGC))
 	require.Len(t, ts.cronTasks, 1)
 	assert.Equal(t, task.TaskCode_DataBranchLineageGC, ts.cronTasks[0].Executor)

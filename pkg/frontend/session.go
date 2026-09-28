@@ -1432,6 +1432,25 @@ func (ses *Session) sqlModeHasNoUnsignedSubtraction() bool {
 	return ok && mysql.HasSQLMode(mode, "NO_UNSIGNED_SUBTRACTION")
 }
 
+func (ses *Session) currentDivPrecisionIncrement() int64 {
+	return int64(sessionDivPrecisionIncrement(ses))
+}
+
+func sessionDivPrecisionIncrement(ses FeSession) int32 {
+	if ses == nil {
+		return function.DefaultDivPrecisionIncrement
+	}
+	value, err := ses.GetSessionSysVar("div_precision_increment")
+	if err != nil {
+		return function.DefaultDivPrecisionIncrement
+	}
+	increment, ok := value.(int64)
+	if !ok {
+		return function.DefaultDivPrecisionIncrement
+	}
+	return int32(increment)
+}
+
 func (ses *Session) sqlModeHasIgnoreSpace() bool {
 	if ses == nil {
 		return false
@@ -3686,6 +3705,10 @@ func (ses *Session) getGlobalSysVars(ctx context.Context, bh BackgroundExec) (gS
 	var aliasIsolationValue interface{}
 	var hasCanonicalIsolation bool
 	var hasAliasIsolation bool
+	var canonicalReadOnlyValue interface{}
+	var aliasReadOnlyValue interface{}
+	var hasCanonicalReadOnly bool
+	var hasAliasReadOnly bool
 
 	for _, execResult := range execResults {
 		for i := uint64(0); i < execResult.GetRowCount(); i++ {
@@ -3714,6 +3737,16 @@ func (ses *Session) getGlobalSysVars(ctx context.Context, bh BackgroundExec) (gS
 					}
 					continue
 				}
+				if isTransactionReadOnlySystemVariable(varName) {
+					if varName == transactionReadOnlySystemVariable {
+						canonicalReadOnlyValue = val
+						hasCanonicalReadOnly = true
+					} else {
+						aliasReadOnlyValue = val
+						hasAliasReadOnly = true
+					}
+					continue
+				}
 				gSysVars[varName] = val
 			}
 		}
@@ -3736,6 +3769,20 @@ func (ses *Session) getGlobalSysVars(ctx context.Context, bh BackgroundExec) (gS
 		}
 		gSysVars[transactionIsolationSystemVariable] = normalized
 		gSysVars[transactionIsolationSystemVariableAlias] = normalized
+	}
+
+	// New writes are canonical. Preserve compatibility with old catalogs that
+	// contain only tx_read_only, while making a canonical row authoritative if
+	// both forms happen to exist.
+	var catalogReadOnlyValue interface{}
+	if hasCanonicalReadOnly {
+		catalogReadOnlyValue = canonicalReadOnlyValue
+	} else if hasAliasReadOnly {
+		catalogReadOnlyValue = aliasReadOnlyValue
+	}
+	if catalogReadOnlyValue != nil {
+		gSysVars[transactionReadOnlySystemVariable] = catalogReadOnlyValue
+		gSysVars[transactionReadOnlySystemVariableAlias] = catalogReadOnlyValue
 	}
 
 	return

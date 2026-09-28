@@ -27,12 +27,57 @@ import (
 	"github.com/stretchr/testify/require"
 )
 
+func cleanupXMLFunctionTestCase(t *testing.T, fc *FunctionTestCase) {
+	t.Helper()
+	t.Cleanup(func() {
+		for _, input := range fc.parameters {
+			input.Free(fc.proc.Mp())
+		}
+		fc.result.Free()
+	})
+}
+
 func TestXMLExtractionOracle(t *testing.T) {
 	for _, tc := range []struct{ xml, path, want string }{
 		{`<a><b>1</b></a>`, `/a/b`, `1`},
 		{`<a><b>1</b><b>2</b></a>`, `/a/b`, `1 2`},
 		{`<a id="7"/>`, `/a/@id`, `7`},
 		{`<a><b/><b/></a>`, `count(/a/b)`, `2`},
+		{`<a><b>1</b><b>2</b></a>`, `sum(/a/b)`, `3`},
+		{`<a><b>1</b><b>2</b></a>`, `count(/a/b)=2`, `1`},
+		{`<a><b>1</b><b>2</b></a>`, `count(/a/b)!=2`, `0`},
+		{`<a><b>1</b><b>2</b></a>`, `sum(/a/b)>2`, `1`},
+		{`<a><b>1</b><b>2</b></a>`, `sum(/a/b)=count(/a/b)`, `0`},
+		{`<a><a><b>1</b></a></a>`, `count(//a//b)`, `2`},
+		{`<a><a><b>1</b></a></a>`, `sum(//a//b)`, `2`},
+		{`<a><a><b>1</b></a></a>`, `sum(//a//b|//a//b)`, `1`},
+		{`<a><a><b>1</b></a></a>`, `//a//b`, `1`},
+		{`<r><a><a><b>1</b></a></a><a><b>2</b></a></r>`, `//a/*[1][position()=last()]`, `1`},
+		{`<r><a><a><b>1</b></a></a><a><b>2</b></a></r>`, `//a//b[1][2]`, `2`},
+		{`<r><a><a><b>1</b></a></a><a><b>2</b></a></r>`, `count(//a/..)`, `2`},
+		{`<r><a><a><b>1</b></a></a><a><b>2</b></a></r>`, `count(//a//..)`, `4`},
+		{`<a/>`, `9007199254740993=9007199254740992`, `0`},
+		{`<a/>`, `9007199254740993`, `9007199254740993`},
+		{`<a/>`, `0002`, `2`},
+		{`<a>1e20</a>`, `sum(/a)`, `1e20`},
+		{`<a>1e-20</a>`, `sum(/a)`, `1e-20`},
+		{`<a>1000000000000000.1</a>`, `sum(/a)`, `1000000000000000.1`},
+		{`<a>-1000000000000000.1</a>`, `sum(/a)`, `-1000000000000000.1`},
+		{`<a>1e15</a>`, `sum(/a)`, `1e15`},
+		{`<a>1e-15</a>`, `sum(/a)`, `0.000000000000001`},
+		{`<a>1e-16</a>`, `sum(/a)`, `1e-16`},
+		// MySQL's DOUBLE result width changes both notation and last digits.
+		{`<a>1.234567890123456e-6</a>`, `sum(/a)`, `1.234567890123456e-6`},
+		{`<a>2.2250738585072014e-308</a>`, `sum(/a)`, `2.225073858507201e-308`},
+		{`<a>1.7976931348623157e308</a>`, `sum(/a)`, `1.7976931348623157e308`},
+		{"<a>\v2</a>", `sum(/a)`, `2`},
+		{"<a>\f2</a>", `sum(/a)`, `2`},
+		{"<a k=\"\v2\"/>", `sum(/a/@k)`, `2`},
+		{"<a k=\"\f2\"/>", `sum(/a/@k)`, `2`},
+		{"<a>\v2</a>", `/a`, "\v2"},
+		{"<a k=\"\f2\"/>", `/a/@k`, "\f2"},
+		{`<a><b>1<c>2</c>3</b></a>`, `sum(/a/b)`, `4`},
+		{`<a/>`, `sum(/a/b)`, `0`},
 		{`<a>x<b>y</b>z</a>`, `/a`, `x z`},
 		{`<a>x<b>y</b>z</a>`, `/a/text()`, `x z`},
 		{`<a>x<b>y</b>z</a>`, `//text()`, `x y z`},
@@ -58,7 +103,17 @@ func TestXMLExtractionOracle(t *testing.T) {
 		{`<p:a xmlns:p="u">x</p:a>`, `/p:a`, `x`},
 		{`<a p:id="7"/>`, `/a/@p:id`, `7`},
 		{`<a><b>1</b><b>2</b></a><a><b>3</b><b>4</b></a>`, `/a/b[1]`, `1 3`},
-		{`<a><b>1</b><b>2</b></a><a><b>3</b></a>`, `//b[last()]`, `2 3`},
+		{`<a><b>1</b><b>2</b></a><a><b>3</b></a>`, `//b[last()]`, ``},
+		{`<a><b>1</b><b>2</b></a>`, `/a/b[position()=last()]`, `2`},
+		{`<a><b>1</b><b>2</b><b>3</b></a>`, `/a/b[position()<last()]`, `1 2`},
+		{`<a><b>1</b><b>2</b></a><a><b>3</b><b>4</b></a>`, `/a/b[position()=last()]`, ``},
+		// Axis positions start per parent; last() sees the whole step's input.
+		{`<r><a><b>1</b><b>2</b></a><a><b>3</b><b>4</b></a></r>`, `/r/a/b[last()]`, ``},
+		{`<r><a><b>1</b><b>2</b></a><a><b>3</b><b>4</b></a></r>`, `/r/a/b[1][position()=last()]`, `3`},
+		{`<r><a><b>1</b><b>2</b></a><a><b>3</b><b>4</b></a></r>`, `/r/a/b[position()!=last()][position()=last()]`, `4`},
+		{`<r><a><b k="x">1</b><b>2</b></a><a><b k="y">3</b><b>4</b></a></r>`, `/r/a/b[@k][position()=last()]`, `3`},
+		{`<r><a><b k="x">1</b><b>2</b></a><a><b k="y">3</b><b>4</b></a></r>`, `/r/a/b[@k][position()=2]`, `3`},
+		{`<r><a><b>1</b><a><b>2</b></a></a><a><b>3</b></a></r>`, `count(//a//b[position()=last()])`, `0`},
 		{`<a><b k="X">yes</b><b>no</b></a>`, `/a/b[@k="x"]`, `yes`},
 		{`<a><b k="x">1</b><b k="y">2</b></a>`, `a/b[@k][position()=2]`, `2`},
 		{`<a><b k="x">1</b><b k="y">2</b></a>`, `a/b[@k][1][@k='x']`, `1`},
@@ -126,6 +181,33 @@ func TestXMLRegistration(t *testing.T) {
 	}
 }
 
+func TestXMLScalarPublicEntrypoints(t *testing.T) {
+	proc := testutil.NewProcess(t)
+	defer proc.Free()
+	const twoChildren = `<a><b>1</b><b>2</b></a>`
+	for _, tc := range []struct{ xml, path, want string }{
+		{twoChildren, `sum(/a/b)`, `3`},
+		{twoChildren, `count(/a/b)=2`, `1`},
+		{twoChildren, `sum(/a/b)>=4`, `0`},
+		{twoChildren, `9007199254740993=9007199254740992`, `0`},
+		{twoChildren, `9007199254740993`, `9007199254740993`},
+		{twoChildren, `sum(/a/b)=3`, `1`},
+		{twoChildren, `/a/b[position()=last()]`, `2`},
+		{`<a>1000000000000000.1</a>`, `sum(/a)`, `1000000000000000.1`},
+		{"<a>\v2</a>", `sum(/a)`, `2`},
+	} {
+		t.Run(tc.path+"/"+tc.xml, func(t *testing.T) {
+			fc := NewFunctionTestCase(proc, []FunctionTestInput{
+				NewFunctionTestInput(types.T_varchar.ToType(), []string{tc.xml}, nil),
+				NewFunctionTestConstInput(types.T_varchar.ToType(), []string{tc.path}, nil),
+			}, NewFunctionTestResult(types.T_varchar.ToType(), false, []string{tc.want}, nil), ExtractValue)
+			cleanupXMLFunctionTestCase(t, &fc)
+			ok, info := fc.Run()
+			require.True(t, ok, info)
+		})
+	}
+}
+
 func TestXMLUpdateOracle(t *testing.T) {
 	proc := testutil.NewProcess(t)
 	defer proc.Free()
@@ -133,6 +215,13 @@ func TestXMLUpdateOracle(t *testing.T) {
 		{`<a><b>1</b></a>`, `/a/b`, `<c>2</c>`, `<a><c>2</c></a>`},
 		{`<a><b>1</b><b>2</b></a>`, `/a/b`, `<c/>`, `<a><b>1</b><b>2</b></a>`},
 		{`<a><b>1</b></a>`, `/a/c`, `<c/>`, `<a><b>1</b></a>`},
+		{`<a><b>1</b><b>2</b></a>`, `/a/b[position()=last()]`, `<c/>`, `<a><b>1</b><c/></a>`},
+		{`<r><a><b>1</b><b>2</b></a><a><b>3</b><b>4</b></a></r>`, `/r/a/b[position()=last()]`, `<c/>`, `<r><a><b>1</b><b>2</b></a><a><b>3</b><b>4</b></a></r>`},
+		{`<r><a><b>1</b><b>2</b></a><a><b>3</b><b>4</b></a></r>`, `/r/a/b[1][position()=last()]`, `<c/>`, `<r><a><b>1</b><b>2</b></a><a><c/><b>4</b></a></r>`},
+		{`<a><a><b>1</b></a></a>`, `//a//b`, `<c/>`, `<a><a><b>1</b></a></a>`},
+		{`<a><a><b>1</b></a></a>`, `//a//b|//a//b`, `<c/>`, `<a><a><c/></a></a>`},
+		{`<r><a><a><b>1</b></a></a><a><b>2</b></a></r>`, `//a/*[1][position()=last()]`, `<c/>`, `<r><a><a><c/></a></a><a><b>2</b></a></r>`},
+		{"<a>\v2<b/></a>", `/a/b`, `<c/>`, "<a>\v2<c/></a>"},
 		{`<a k="7"><b/></a>`, `/a/@k`, `z`, `<a z><b/></a>`},
 		{`<a />`, `/a`, `not xml`, `not xml`},
 		{`<a/>`, `/`, `raw`, `raw`},
@@ -150,6 +239,7 @@ func TestXMLUpdateOracle(t *testing.T) {
 				NewFunctionTestConstInput(types.T_varchar.ToType(), []string{tc.path}, nil),
 				NewFunctionTestInput(types.T_varchar.ToType(), []string{tc.replacement}, nil),
 			}, NewFunctionTestResult(types.T_varchar.ToType(), false, []string{tc.want}, nil), UpdateXML)
+			cleanupXMLFunctionTestCase(t, &fc)
 			ok, info := fc.Run()
 			require.True(t, ok, info)
 		})
@@ -158,7 +248,7 @@ func TestXMLUpdateOracle(t *testing.T) {
 
 func TestXMLUpdateTextTargets(t *testing.T) {
 	proc := testutil.NewProcess(t)
-	defer proc.Free()
+	t.Cleanup(proc.Free)
 	for _, tc := range []struct {
 		name, xml, path, want string
 	}{
@@ -183,6 +273,7 @@ func TestXMLUpdateTextTargets(t *testing.T) {
 				NewFunctionTestConstInput(types.T_varchar.ToType(), []string{tc.path}, nil),
 				NewFunctionTestInput(types.T_varchar.ToType(), []string{"q"}, nil),
 			}, NewFunctionTestResult(types.T_varchar.ToType(), false, []string{tc.want}, nil), UpdateXML)
+			cleanupXMLFunctionTestCase(t, &fc)
 			ok, info := fc.Run()
 			require.True(t, ok, info)
 		})
@@ -203,6 +294,10 @@ func TestXMLUpdateTextTargets(t *testing.T) {
 }
 
 func TestXMLMalformedAndUnsupported(t *testing.T) {
+	for _, s := range []string{"/a[\v]", "/a[\f]"} {
+		_, err := compileXMLXPath(context.Background(), s)
+		require.Error(t, err)
+	}
 	for _, s := range []string{`<a>`, `<a></b>`, `<a/><b`, `<a x='1' x='2'/>`, `<a x=1/>`, `<a x='<'>`, `<!DOCTYPE a><a/>`, `<a>\x00</a>`} {
 		if s == `<a>\x00</a>` {
 			s = "<a>\x00</a>"
@@ -210,7 +305,7 @@ func TestXMLMalformedAndUnsupported(t *testing.T) {
 		_, err := parseXMLFragment(context.Background(), s)
 		require.ErrorIs(t, err, errXMLMalformed, s)
 	}
-	for _, s := range []string{"", "[", "/a[", "//", "/a/", "/a[0]", "/a[-1]", "/a/ancestor::b", "sum(/a)", "1+2", "true()", "$x", "count(/a/text())", "count(//text())", "count(/a|/a//text())", "/a[text()='x']", "/a/@", "/:a", "/a:", "/a:b:c", "/a::b", "/p:1a", "/p:-a", "/a/@:k", "/a/@k:", "/a/@p:k:q", "/a[@:k]", "/a[@p:k:q='v']", "/a[:b='v']", "/a[p:b:c='v']", "/*:a", "/p:*", "/a/@p:*", "/a[@p:*='v']", "/a/text()[1]"} {
+	for _, s := range []string{"", "[", "/a[", "//", "/a/", "/a[0]", "/a[-1]", "/a/ancestor::b", "sum()", "sum(/a", "sum (/a)", "sum(/a/text())", "count(/a)=/a", "count(/a)=2e0", "count(/a)=+2", "count(/a)=2.5", ".5", "2.5", "9223372036854775808>0", "-9223372036854775808", "-9223372036854775808<0", "1.234567890123456789", "/a[position()=]", "/a[position()=+1]", "/a[position()=2e0]", "/a[position()=2.5]", "/a[position()>-9223372036854775808]", "1+2", "true()", "$x", "count(/a/text())", "count(//text())", "count(/a|/a//text())", "/a[text()='x']", "/a/@", "/:a", "/a:", "/a:b:c", "/a::b", "/p:1a", "/p:-a", "/a/@:k", "/a/@k:", "/a/@p:k:q", "/a[@:k]", "/a[@p:k:q='v']", "/a[:b='v']", "/a[p:b:c='v']", "/*:a", "/p:*", "/a/@p:*", "/a[@p:*='v']", "/a/text()[1]"} {
 		_, err := compileXMLXPath(context.Background(), s)
 		require.Error(t, err, s)
 	}
@@ -247,11 +342,23 @@ func TestXMLLimitsAndCancellation(t *testing.T) {
 }
 
 func TestXMLRepeatedPredicatesConsumeWork(t *testing.T) {
-	// Both inputs fit all admission limits, but positional predicates must
-	// consume work too: this would otherwise execute 30 million iterations.
-	p, err := compileXMLXPath(context.Background(), "//b"+strings.Repeat("[1]", 1000))
+	// Every filter retains the candidate set, so the bounded evaluator must
+	// stop before 30 million predicate checks.
+	p, err := compileXMLXPath(context.Background(), "//b"+strings.Repeat("[position()>=1]", 1000))
 	require.NoError(t, err)
 	d, err := parseXMLFragment(context.Background(), strings.Repeat("<a><b/></a>", 30000))
+	require.NoError(t, err)
+	_, err = d.evaluate(p)
+	require.ErrorContains(t, err, "resource limit")
+	require.Equal(t, xmlWorkLimit, d.budget.work)
+}
+
+func TestXMLOverlappingContextsConsumeWork(t *testing.T) {
+	// Descendant axes can multiply occurrences even when the document is small.
+	// The per-row work limit must stop that expansion before it can grow freely.
+	p, err := compileXMLXPath(context.Background(), `//a//a//a//a//b`)
+	require.NoError(t, err)
+	d, err := parseXMLFragment(context.Background(), strings.Repeat(`<a>`, 64)+`<b/>`+strings.Repeat(`</a>`, 64))
 	require.NoError(t, err)
 	_, err = d.evaluate(p)
 	require.ErrorContains(t, err, "resource limit")
@@ -307,6 +414,14 @@ func TestXMLVectorWarningsMasksAndReuse(t *testing.T) {
 	require.Equal(t, "1", result.GetResultVector().GetStringAt(0))
 	require.NoError(t, result.PreExtendAndReset(0))
 	require.NoError(t, ExtractValue([]*vector.Vector{docs, path}, result, proc, 0, nil))
+	badNUL, err := vector.NewConstBytes(types.T_varchar.ToType(), []byte("<a>\x002</a>"), 1, proc.Mp())
+	require.NoError(t, err)
+	defer badNUL.Free(proc.Mp())
+	require.NoError(t, result.PreExtendAndReset(1))
+	require.NoError(t, ExtractValue([]*vector.Vector{badNUL, path}, result, proc, 1, nil))
+	require.True(t, result.GetResultVector().IsNull(0))
+	require.Equal(t, uint64(2), sink.total)
+	require.Equal(t, uint16(1525), sink.records[1].code)
 }
 
 func TestXMLWarningRetentionUsesProcessLimits(t *testing.T) {
