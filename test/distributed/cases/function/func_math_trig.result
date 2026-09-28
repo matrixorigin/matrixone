@@ -1,3 +1,5 @@
+SET @func_math_trig_saved_sql_mode = @@session.sql_mode;
+SET SESSION sql_mode = CONCAT_WS(',', NULLIF(@func_math_trig_saved_sql_mode, ''), 'MYSQL_NUMERIC_COMPATIBILITY');
 SELECT SIN(PI());
 ➤ SIN(PI())[8,54,0]  𝄀
 1.2246467991473515E-16
@@ -452,3 +454,5 @@ null
 SELECT atan(1.1e5);
 ➤ atan(1.1e5)[8,54,0]  𝄀
 1.570787235885806
+SET SESSION sql_mode = @func_math_trig_saved_sql_mode;
+SET @func_math_trig_saved_sql_mode = NULL;

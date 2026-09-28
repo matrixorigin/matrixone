@@ -22,6 +22,8 @@ select (CASE "two" when "one" then "1" WHEN "two" then "2" END) | 0;
 select (CASE "two" when "one" then 1.00 WHEN "two" then 2.00 END) +0.0;
 ➤ (case two when one then 1.00 when two then 2.00 end) + 0.0[3,18,2]  𝄀
 2.00
+set @case_when_saved_sql_mode = @@session.sql_mode;
+set session sql_mode = concat_ws(',', nullif(@case_when_saved_sql_mode, ''), 'MYSQL_NUMERIC_COMPATIBILITY');
 select case 1/0 when "a" then "true" else "false" END;
 ➤ case 1 / 0 when a then true else false end[12,5,0]  𝄀
 false
@@ -34,6 +36,8 @@ null
 select (case 1/0 when "a" then "true" END) + 0.0;
 ➤ (case 1 / 0 when a then true end) + 0.0[8,53,31]  𝄀
 null
+set session sql_mode = @case_when_saved_sql_mode;
+set @case_when_saved_sql_mode = NULL;
 select case when 1>0 then "TRUE" else "FALSE" END;
 ➤ case when 1 > 0 then TRUE else FALSE end[12,5,0]  𝄀
 TRUE

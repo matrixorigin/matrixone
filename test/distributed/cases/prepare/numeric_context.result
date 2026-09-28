@@ -49,6 +49,8 @@ EXECUTE p_mod USING @a;
 ➤ cast(MOD(?, 2) as signed)[-5,64,0]  𝄀
 1
 DEALLOCATE PREPARE p_mod;
+SET @numeric_context_saved_sql_mode = @@session.sql_mode;
+SET SESSION sql_mode = CONCAT_WS(',', NULLIF(@numeric_context_saved_sql_mode, ''), 'MYSQL_NUMERIC_COMPATIBILITY');
 PREPARE p_bool FROM 'SELECT CAST(? AS DOUBLE) AS d, ROUND(SIN(?),12) AS s, ROUND(ACOS(?),12) AS a';
 SET @bool_math = TRUE;
 EXECUTE p_bool USING @bool_math, @bool_math, @bool_math;
@@ -71,6 +73,8 @@ EXECUTE p_bool USING @bool_math, @bool_math, @bool_math;
 ➤ d[8,64,0]  ¦  s[8,64,0]  ¦  a[8,64,0]  𝄀
 1  ¦  0.841470984808  ¦  0
 DEALLOCATE PREPARE p_bool;
+SET SESSION sql_mode = @numeric_context_saved_sql_mode;
+SET @numeric_context_saved_sql_mode = NULL;
 PREPARE p_bool_int FROM 'SELECT ABS(?) AS a, ROUND(?) AS r, SIGN(?) AS s';
 EXECUTE p_bool_int USING @bool_math, @bool_math, @bool_math;
 ➤ a[-5,64,0]  ¦  r[-5,64,0]  ¦  s[-5,64,0]  𝄀

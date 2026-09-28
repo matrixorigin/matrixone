@@ -365,6 +365,9 @@ func (v *Vector) hasBackingStorage() bool {
 		(v.textStringRows != nil &&
 			(v.textStringRows.Size() != 0 ||
 				v.textStringRows.ExternalStorageCapacity() != 0)) ||
+		(v.numericBinaryLiteralRows != nil &&
+			(v.numericBinaryLiteralRows.Size() != 0 ||
+				v.numericBinaryLiteralRows.ExternalStorageCapacity() != 0)) ||
 		v.nsp.GetBitmap().Size() != 0 ||
 		v.gsp.GetBitmap().Size() != 0 ||
 		v.nsp.GetBitmap().ExternalStorageCapacity() != 0 ||
@@ -383,6 +386,7 @@ func (v *Vector) hasOwnedBackingStorage() bool {
 		cap(v.stringSources) != 0 ||
 		(v.binaryStringRows != nil && v.binaryStringRows.ExternalStorageCapacity() != 0) ||
 		(v.textStringRows != nil && v.textStringRows.ExternalStorageCapacity() != 0) ||
+		(v.numericBinaryLiteralRows != nil && v.numericBinaryLiteralRows.ExternalStorageCapacity() != 0) ||
 		v.nsp.GetBitmap().ExternalStorageCapacity() != 0 ||
 		v.gsp.GetBitmap().ExternalStorageCapacity() != 0
 }
@@ -408,6 +412,9 @@ func (v *Vector) SetAllocationAccount(
 		if v.textStringRows != nil {
 			v.textStringRows.ReleaseExternalStorage()
 		}
+		if v.numericBinaryLiteralRows != nil {
+			v.numericBinaryLiteralRows.ReleaseExternalStorage()
+		}
 	}
 	v.allocationAccount = selection
 	if selection != nil {
@@ -418,6 +425,9 @@ func (v *Vector) SetAllocationAccount(
 		}
 		if v.textStringRows != nil {
 			v.textStringRows.InstallExternalStorage(nil)
+		}
+		if v.numericBinaryLiteralRows != nil {
+			v.numericBinaryLiteralRows.InstallExternalStorage(nil)
 		}
 	}
 	return nil
@@ -433,7 +443,8 @@ func (v *Vector) ensureBitmapCapacity(rows int, mp *mpool.MPool) error {
 	requiredWords := (rows + 63) / 64
 	if requiredWords <= v.nsp.GetBitmap().ExternalStorageCapacity() &&
 		requiredWords <= v.gsp.GetBitmap().ExternalStorageCapacity() &&
-		(v.binaryStringRows == nil || requiredWords <= v.binaryStringRows.ExternalStorageCapacity()) {
+		(v.binaryStringRows == nil || requiredWords <= v.binaryStringRows.ExternalStorageCapacity()) &&
+		(v.numericBinaryLiteralRows == nil || requiredWords <= v.numericBinaryLiteralRows.ExternalStorageCapacity()) {
 		// textStringRows is allocated together with binaryStringRows.
 		if v.textStringRows == nil || requiredWords <= v.textStringRows.ExternalStorageCapacity() {
 			return nil
@@ -468,6 +479,11 @@ func (v *Vector) ensureBitmapCapacity(rows int, mp *mpool.MPool) error {
 	}
 	if v.binaryStringRows != nil {
 		if err := v.ensureBinaryStringCapacity(rows, mp); err != nil {
+			return err
+		}
+	}
+	if v.numericBinaryLiteralRows != nil {
+		if err := v.ensureNumericBinaryLiteralCapacity(rows, mp); err != nil {
 			return err
 		}
 	}
@@ -525,6 +541,38 @@ func (v *Vector) ensureBinaryStringCapacity(rows int, mp *mpool.MPool) error {
 	}
 	if cap(textStorage) > 0 {
 		previous := v.textStringRows.InstallExternalStorage(textStorage)
+		mpool.FreeSlice(mp, previous)
+	}
+	return nil
+}
+
+func (v *Vector) ensureNumericBinaryLiteralCapacity(rows int, mp *mpool.MPool) error {
+	if !v.IsConst() && rows < v.Capacity() {
+		rows = v.Capacity()
+	}
+	if rows < 0 || rows > math.MaxInt-63 {
+		return mpool.ErrAllocationAccountInvalid
+	}
+	if v.numericBinaryLiteralRows == nil {
+		v.numericBinaryLiteralRows = &bitmap.Bitmap{}
+		if v.allocationAccount != nil {
+			v.numericBinaryLiteralRows.InstallExternalStorage(nil)
+		}
+	}
+	if v.allocationAccount == nil {
+		return nil
+	}
+	if mp == nil {
+		return mpool.ErrAllocationAccountInvalid
+	}
+	storage, err := v.allocateBitmapGrowth(
+		v.numericBinaryLiteralRows, rows, mp, v.allocationAccount.nullsSite,
+	)
+	if err != nil {
+		return err
+	}
+	if cap(storage) > 0 {
+		previous := v.numericBinaryLiteralRows.InstallExternalStorage(storage)
 		mpool.FreeSlice(mp, previous)
 	}
 	return nil
@@ -616,6 +664,7 @@ func (v *Vector) freeBitmapStorage(mp *mpool.MPool) {
 		v.gsp.GetBitmap(),
 		v.binaryStringRows,
 		v.textStringRows,
+		v.numericBinaryLiteralRows,
 	} {
 		if value == nil {
 			continue
