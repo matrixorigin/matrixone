@@ -843,21 +843,22 @@ func DeepCopyQuery(qry *plan.Query) *plan.Query {
 		}
 	}
 	newQry := &plan.Query{
-		StmtType:            qry.StmtType,
-		Steps:               slices.Clone(qry.Steps),
-		Nodes:               make([]*plan.Node, len(qry.Nodes)),
-		Params:              DeepCopyExprList(qry.Params),
-		Headings:            slices.Clone(qry.Headings),
-		LoadTag:             qry.LoadTag,
-		LoadWriteS3:         qry.LoadWriteS3,
-		BackgroundQueries:   backgroundQueries,
-		MaxDop:              qry.MaxDop,
-		HasForeignKeyAction: qry.HasForeignKeyAction,
-		HasReturning:        qry.HasReturning,
-		ReturningStep:       qry.ReturningStep,
-		ApplySqlSelectLimit: qry.ApplySqlSelectLimit,
-		DetectSqls:          slices.Clone(qry.DetectSqls),
-		CatalogDependencies: make([]*plan.ObjectRef, len(qry.CatalogDependencies)),
+		StmtType:                 qry.StmtType,
+		Steps:                    slices.Clone(qry.Steps),
+		Nodes:                    make([]*plan.Node, len(qry.Nodes)),
+		Params:                   DeepCopyExprList(qry.Params),
+		Headings:                 slices.Clone(qry.Headings),
+		LoadTag:                  qry.LoadTag,
+		LoadWriteS3:              qry.LoadWriteS3,
+		BackgroundQueries:        backgroundQueries,
+		MaxDop:                   qry.MaxDop,
+		HasForeignKeyAction:      qry.HasForeignKeyAction,
+		HasReturning:             qry.HasReturning,
+		ReturningStep:            qry.ReturningStep,
+		ApplySqlSelectLimit:      qry.ApplySqlSelectLimit,
+		DetectSqls:               slices.Clone(qry.DetectSqls),
+		CatalogDependencies:      make([]*plan.ObjectRef, len(qry.CatalogDependencies)),
+		ViewMetadataDependsOnUdf: qry.ViewMetadataDependsOnUdf,
 	}
 	for idx, node := range qry.Nodes {
 		newQry.Nodes[idx] = DeepCopyNode(node)
