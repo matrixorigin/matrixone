@@ -766,6 +766,11 @@ func preparedNumericPrefixPositionContext(
 			hasRuntimeDecimal = hasRuntimeDecimal || kind == types.StringConversionDecimal
 			continue
 		}
+		if isPreparedCommonValueFunction(name) {
+			if peer, ok := provisionalNumericPeerSource(source); ok {
+				source = peer
+			}
+		}
 		if source == nil {
 			continue
 		}
@@ -797,6 +802,36 @@ func preparedNumericPrefixPositionContext(
 		}
 	}
 	return hasEligibleParam && (hasDecimalPeer || hasRuntimeDecimal) && !hasFloatPeer && !hasCommonValueBoundary
+}
+
+// A prepared common-value call can use the numeric prefix of a text parameter when
+// a fixed DECIMAL operand establishes its result domain. Other string and
+// FLOAT operands keep their normal mixed-type semantics.
+func preparedCommonValueFixedDecimalPeer(name string, args []*plan.Expr, positions map[int]bool) bool {
+	if !isPreparedCommonValueFunction(name) || len(positions) == 0 {
+		return false
+	}
+	hasParam, hasDecimalPeer := false, false
+	for _, arg := range args {
+		if pos, ok := preparedParamPosition(arg); ok && positions[pos] &&
+			preparedParamCastAllowsNumericPrefix(arg) {
+			hasParam = true
+			continue
+		}
+		source := unwrapPreparedImplicitCast(arg, false)
+		if peer, ok := provisionalNumericPeerSource(source); ok {
+			source = peer
+		}
+		if source == nil {
+			continue
+		}
+		oid := types.T(source.Typ.Id)
+		if oid.IsFloat() || !preparedNumericCommonOperandType(oid) {
+			return false
+		}
+		hasDecimalPeer = hasDecimalPeer || oid.IsDecimal() && !preparedExprContainsParam(arg)
+	}
+	return hasParam && hasDecimalPeer
 }
 
 func preparedParamCastAllowsNumericPrefix(expr *plan.Expr) bool {
@@ -2734,6 +2769,8 @@ func (rule *ResetParamRefRule) applyExpr(e *plan.Expr) (*plan.Expr, error) {
 			}
 		}
 		functionName = strings.ToLower(functionName)
+		fixedDecimalCommonValue := preparedCommonValueFixedDecimalPeer(
+			functionName, originalArgs, rule.numericPrefixParamPositions)
 		var temporalPeer types.Type
 		hasTemporalPeer := false
 		if isPreparedTemporalIntegerArithmetic(functionName) {
@@ -2846,6 +2883,7 @@ func (rule *ResetParamRefRule) applyExpr(e *plan.Expr) (*plan.Expr, error) {
 			// provisional comparison operand; keep that consumer's domain.
 			variadicSource := false
 			if hasParamPos && !isExplicitPreparedCast(arg) &&
+				!(fixedDecimalCommonValue && rule.numericPrefixParamPositions[paramPos]) &&
 				(implicitParamCast || types.T(arg.Typ.Id).IsMySQLString() || types.T(arg.Typ.Id) == types.T_any) &&
 				(functionName == "field" || functionName == "greatest" || functionName == "least") &&
 				paramPos < len(rule.paramValues) {
@@ -2908,7 +2946,7 @@ func (rule *ResetParamRefRule) applyExpr(e *plan.Expr) (*plan.Expr, error) {
 				paramPos < len(rule.sqlExecuteStringBackedParams) && rule.sqlExecuteStringBackedParams[paramPos])
 			// Common results preserve concrete SQL strings, including typed NULL.
 			// Prefix eligibility belongs to transport-only text and numeric consumers.
-			if hasParamPos && isPreparedCommonValueFunction(functionName) && paramPos < len(rule.paramValues) {
+			if hasParamPos && isPreparedCommonValueFunction(functionName) && !fixedDecimalCommonValue && paramPos < len(rule.paramValues) {
 				if param, ok := rule.paramValues[paramPos].(ParamValue); ok && !param.IsBinaryProtocol &&
 					param.HasSourceType && param.SourceType.Oid.IsMySQLString() {
 					prefixEligibleOccurrence = false
@@ -3357,6 +3395,16 @@ func (rule *ResetParamRefRule) applyExpr(e *plan.Expr) (*plan.Expr, error) {
 			}
 			rule.specialized = true
 			return explicit, nil
+		}
+		if fixedDecimalCommonValue {
+			for i, original := range originalArgs {
+				if source, ok := provisionalNumericPeerSource(original); ok &&
+					!preparedExprContainsParam(original) {
+					boundArgs[i] = source
+					needResetFunction = true
+					compareArgTypes = true
+				}
+			}
 		}
 		variadicStringBoundary := false
 		if functionName == "greatest" || functionName == "least" {

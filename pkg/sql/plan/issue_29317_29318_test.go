@@ -317,3 +317,38 @@ func TestPreparedVariadicRuntimeSourceDomains(t *testing.T) {
 		})
 	}
 }
+
+func TestPreparedCommonValueStringMarkerWithFixedDecimalPeer(t *testing.T) {
+	for _, name := range []string{"coalesce", "greatest", "least"} {
+		t.Run(name, func(t *testing.T) {
+			prepared, err := runOneStmt(NewMockOptimizer(false), t,
+				"prepare p from 'select "+name+"(?, cast(9007199254740992.0000000001 as decimal(38,10))) = cast(9007199254740992.0000000002 as decimal(38,10))'")
+			require.NoError(t, err)
+			template := prepared.GetDcl().GetPrepare().Plan
+			before := template.String()
+			values := []any{ParamValue{
+				Value: "9007199254740992.0000000002", SourceType: types.T_varchar.ToType(),
+				HasSourceType: true, EnableNumericPrefix: true,
+			}}
+			require.True(t, PreparedPlanNeedsNumericPrefixSpecialization(template, values))
+			filled, specialized, err := FillValuesOfParamsInPlanWithSpecialization(
+				context.Background(), template, values)
+			require.NoError(t, err)
+			require.True(t, specialized)
+			require.Equal(t, before, template.String(), "cached PREPARE template changed")
+			extrema := findPlanFunctionExpr(filled, name)
+			require.NotNil(t, extrema)
+			require.Equal(t, int32(types.T_decimal128), extrema.Typ.Id, extrema.String())
+			require.Equal(t, int32(38), extrema.Typ.Width, extrema.String())
+			require.Equal(t, int32(10), extrema.Typ.Scale, extrema.String())
+			for _, arg := range extrema.GetF().Args {
+				require.Equal(t, int32(types.T_decimal128), arg.Typ.Id, extrema.String())
+			}
+			comparison := findPlanFunctionExpr(filled, "=")
+			require.NotNil(t, comparison)
+			for _, arg := range comparison.GetF().Args {
+				require.Equal(t, int32(types.T_decimal128), arg.Typ.Id, comparison.String())
+			}
+		})
+	}
+}
