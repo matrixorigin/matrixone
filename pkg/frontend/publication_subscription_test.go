@@ -16,6 +16,7 @@ package frontend
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"strings"
 	"testing"
@@ -47,6 +48,54 @@ func TestIsUserDatabaseType(t *testing.T) {
 	}
 	require.False(t, isUserDatabaseType(catalog.SystemDBTypeDataBranch, defines.MORPCVersion74))
 	require.True(t, isUserDatabaseType(catalog.SystemDBTypeDataBranch, defines.MORPCVersion75))
+}
+
+func TestPublicationMutationUsesLifecycleOwnerTxn(t *testing.T) {
+	for _, testCase := range []struct {
+		name string
+		run  func(context.Context, *Session) error
+	}{
+		{
+			name: "alter",
+			run: func(ctx context.Context, ses *Session) error {
+				return doAlterPublication(ctx, ses, &tree.AlterPublication{})
+			},
+		},
+		{
+			name: "drop",
+			run: func(ctx context.Context, ses *Session) error {
+				return doDropPublication(ctx, ses, &tree.DropPublication{})
+			},
+		},
+	} {
+		t.Run(testCase.name, func(t *testing.T) {
+			ctrl := gomock.NewController(t)
+			ctx := context.Background()
+			ses := newTestSession(t, ctrl)
+			defer ses.Close()
+			ses.SetTenantInfo(&TenantInfo{
+				Tenant:      sysAccountName,
+				DefaultRole: moAdminRoleName,
+			})
+			bh := &backgroundExecTest{}
+			bh.init()
+			beginErr := errors.New("begin failed")
+			bh.sql2err["begin;"] = beginErr
+			oldNewBackgroundExec := NewBackgroundExec
+			defer func() { NewBackgroundExec = oldNewBackgroundExec }()
+			forcedPessimisticRC := false
+			NewBackgroundExec = func(_ context.Context, _ FeSession, opts ...*BackgroundExecOption) BackgroundExec {
+				for _, opt := range opts {
+					forcedPessimisticRC = forcedPessimisticRC || opt != nil && opt.forcePessimisticRC
+				}
+				return bh
+			}
+
+			err := testCase.run(ctx, ses)
+			require.ErrorIs(t, err, beginErr)
+			require.True(t, forcedPessimisticRC)
+		})
+	}
 }
 
 func Test_doCreatePublication(t *testing.T) {
@@ -793,6 +842,36 @@ func TestGetSqlForGetDbIdAndType(t *testing.T) {
 		require.Equal(t, k.err, err != nil)
 		require.Equal(t, k.want, sql)
 	}
+}
+
+func TestShowPublicationsEmptyResultMetadata(t *testing.T) {
+	ctrl := gomock.NewController(t)
+	pu := config.NewParameterUnit(&config.FrontendParameters{}, nil, nil, nil)
+	pu.SV.SetDefaultValues()
+	setPu("", pu)
+	ctx := context.WithValue(t.Context(), config.ParameterUnitKey, pu)
+	ctx = defines.AttachAccount(ctx, sysAccountID, rootID, moAdminRoleID)
+	ses := newSes(nil, ctrl)
+	ses.tenant = &TenantInfo{Tenant: sysAccountName, TenantID: sysAccountID}
+
+	bh := mock_frontend.NewMockBackgroundExec(ctrl)
+	stub := gostub.StubFunc(&NewBackgroundExec, bh)
+	t.Cleanup(stub.Reset)
+	bh.EXPECT().Close()
+	bh.EXPECT().ClearExecResultSet().Times(2)
+	bh.EXPECT().Exec(gomock.Any(), gomock.Any()).Return(nil).Times(2)
+	result := mock_frontend.NewMockExecResult(ctrl)
+	result.EXPECT().GetRowCount().Return(uint64(0)).AnyTimes()
+	bh.EXPECT().GetExecResultSet().Return([]interface{}{result}).Times(2)
+
+	require.NoError(t, doShowPublications(ctx, ses, &tree.ShowPublications{}))
+	require.Empty(t, ses.mrs.Data)
+	require.Len(t, ses.mrs.Columns, 8)
+	for i, name := range []string{"publication", "database", "tables", "sub_account", "subscribed_accounts", "create_time", "update_time", "comments"} {
+		require.Equal(t, name, ses.mrs.Columns[i].Name())
+	}
+	require.Equal(t, defines.MYSQL_TYPE_BLOB, ses.mrs.Columns[2].ColumnType())
+	require.Equal(t, defines.MYSQL_TYPE_TIMESTAMP, ses.mrs.Columns[5].ColumnType())
 }
 
 func Test_doShowSubscriptions(t *testing.T) {

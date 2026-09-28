@@ -266,6 +266,47 @@ func (idx *IvfflatSearchIndex[T]) loadQuantizeBounds(proc *sqlexec.SqlProcess, t
 	return nil
 }
 
+// probeCentroids ranks the centroids for query and returns their ids, dropping any the index
+// could not rank.
+//
+// cuVS marks a slot it could not fill with -1, and not only when more centroids were asked for
+// than exist: a query whose candidate distances all leave the element domain gets -1 back with an
+// ordinary finite distance beside it. -1 is not a centroid id, and passing it on would put "IN
+// (-1)" in the entries scan -- a silent empty result rather than an error. The Go index refuses
+// to emit one itself, so this only ever fires for the device index.
+func (idx *IvfflatSearchIndex[T]) probeCentroids(sqlproc *sqlexec.SqlProcess, query []T, limit, nlists uint) ([]int64, error) {
+	if limit == 0 {
+		limit = 1
+	}
+	if nlists > 0 && limit > nlists {
+		limit = nlists
+	}
+	queries := [][]T{query}
+	rt := vectorindex.RuntimeConfig{Limit: limit, NThreads: 1}
+	anykeys, _, err := idx.Centroids.Search(sqlproc, queries, rt)
+	if err != nil {
+		return nil, err
+	}
+	keys, ok := anykeys.([]int64)
+	if !ok {
+		return nil, moerr.NewInternalErrorNoCtx("ivfflat: ranked centroid ids are not []int64")
+	}
+
+	// compacted in place: keys is not retained by the callee, and the write index trails the read
+	n := 0
+	for _, k := range keys {
+		if k < 0 {
+			continue
+		}
+		keys[n] = k
+		n++
+	}
+	if n == 0 {
+		return nil, moerr.NewInternalErrorNoCtx("ivfflat: no nearest centroid for query; every candidate distance is out of range")
+	}
+	return keys[:n], nil
+}
+
 func (idx *IvfflatSearchIndex[T]) rankCentroids(sqlproc *sqlexec.SqlProcess, query []T, idxcfg vectorindex.IndexConfig) ([]int64, error) {
 	if idx.Centroids == nil {
 		// empty index has id = 1
@@ -276,18 +317,7 @@ func (idx *IvfflatSearchIndex[T]) rankCentroids(sqlproc *sqlexec.SqlProcess, que
 	if limit == 0 {
 		limit = 1
 	}
-	queries := [][]T{query}
-	rt := vectorindex.RuntimeConfig{Limit: limit, NThreads: 1}
-	keys, _, err := idx.Centroids.Search(sqlproc, queries, rt)
-	if err != nil {
-		return nil, err
-	}
-
-	ranked, ok := keys.([]int64)
-	if !ok {
-		return nil, moerr.NewInternalErrorNoCtx("ivfflat: ranked centroid ids are not []int64")
-	}
-	return ranked, nil
+	return idx.probeCentroids(sqlproc, query, limit, idxcfg.Ivfflat.Lists)
 }
 
 func (idx *IvfflatSearchIndex[T]) findCentroids(sqlproc *sqlexec.SqlProcess, query []T, idxcfg vectorindex.IndexConfig, probe uint, _ int64) ([]int64, error) {
@@ -301,14 +331,7 @@ func (idx *IvfflatSearchIndex[T]) findCentroids(sqlproc *sqlexec.SqlProcess, que
 		probe = idxcfg.Ivfflat.Lists
 	}
 
-	rtprobe := probe
-	queries := [][]T{query}
-	rt := vectorindex.RuntimeConfig{Limit: rtprobe, NThreads: 1}
-	keys, _, err := idx.Centroids.Search(sqlproc, queries, rt)
-	if err != nil {
-		return nil, err
-	}
-	return keys.([]int64), nil
+	return idx.probeCentroids(sqlproc, query, probe, idxcfg.Ivfflat.Lists)
 }
 
 /*
@@ -735,6 +758,18 @@ func (idx *IvfflatSearchIndex[T]) Search(
 	rt vectorindex.RuntimeConfig,
 	_ int64,
 ) (keys any, distances []float64, err error) {
+
+	// usearch/cuvs and the entries SQL compute distances in float32, so a float64 base can hold a
+	// finite value whose distance overflows float32 and saturates to +/-Inf. Serving that would
+	// silently corrupt the value, Top-K order, and any outer predicate (#29040 / #29050), so fail
+	// fast. Named returns let one deferred check cover every return path; HasFloat64DistanceOverflow
+	// fast-returns for a non-float64 base.
+	defer func() {
+		if err == nil && metric.HasFloat64DistanceOverflow[T](distances) {
+			keys, distances, err = nil, nil, moerr.NewInternalErrorNoCtx(
+				"vector distance exceeds the float32 range the vector index computes in; a float64 vector of this magnitude is unsupported -- use a smaller-magnitude/normalized column or the exact scalar path")
+		}
+	}()
 
 	if sqlproc != nil {
 		prevRuntimeFilterData := sqlproc.IvfRuntimeFilterData

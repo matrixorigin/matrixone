@@ -1,29 +1,29 @@
 SELECT hex(NULL);
-hex(null)
+➤ hex(null)[-1,16383,0]  𝄀
 null
 SELECT hex(0);
-hex(0)
+➤ hex(0)[12,16,0]  𝄀
 0
 SELECT hex(9223372036854775807);
-hex(9223372036854775807)
+➤ hex(9223372036854775807)[12,16,0]  𝄀
 7FFFFFFFFFFFFFFF
 SELECT hex(-255);
-hex(-255)
+➤ hex(-255)[12,16,0]  𝄀
 FFFFFFFFFFFFFF01
 SELECT hex("你好。");
-hex(你好。)
+➤ hex(你好。)[12,24,0]  𝄀
 E4BDA0E5A5BDE38082
 SELECT hex("おはようございます");
-hex(おはようございます)
+➤ hex(おはようございます)[12,72,0]  𝄀
 E3818AE381AFE38288E38186E38194E38196E38184E381BEE38199
 SELECT hex("-255");
-hex(-255)
+➤ hex(-255)[12,32,0]  𝄀
 2D323535
 SELECT hex(0x62);
-hex(0x62)
+➤ hex(0x62)[12,8,0]  𝄀
 62
 SELECT hex(b'1101100');
-hex(0b1101100)
+➤ hex(0b1101100)[12,8,0]  𝄀
 6C
 drop database if exists hex_issue_28457;
 create database hex_issue_28457;
@@ -53,8 +53,8 @@ f float,
 d double
 );
 insert into hex_numeric_source values
-(1, true, 15.5, 9007199254740993, 9223372036854775808, 14.5, 15.5),
-(2, false, -15.5, -9223372036854775809, -9223372036854775809, -14.5, -15.5),
+(1, true, 15.5, 9007199254740993, 9223372036854775807, 14.5, 15.5),
+(2, false, -15.5, -9223372036854775808, -9223372036854775808, -14.5, -15.5),
 (3, null, null, null, null, null, null);
 select id, hex(b), hex(d64), hex(d128), hex(d256), hex(f), hex(d)
 from hex_numeric_source order by id;
@@ -70,6 +70,12 @@ select * from hex_numeric_ctas order by id;
 ➤ id[4,32,0]  ¦  hb[12,16,0]  ¦  hd64[12,16,0]  ¦  hd128[12,16,0]  ¦  hd256[12,16,0]  ¦  hf[12,16,0]  ¦  hd[12,16,0]  𝄀
 1  ¦  1  ¦  10  ¦  20000000000001  ¦  7FFFFFFFFFFFFFFF  ¦  E  ¦  10  𝄀
 2  ¦  0  ¦  FFFFFFFFFFFFFFF0  ¦  8000000000000000  ¦  8000000000000000  ¦  FFFFFFFFFFFFFFF2  ¦  FFFFFFFFFFFFFFF0
+select hex(cast('9223372036854775808' as decimal(65,0)));
+Data truncation: data out of range: data type int64, integer argument
+select hex(cast('-9223372036854775809' as decimal(38,0)));
+Data truncation: data out of range: data type int64, integer argument
+select hex(cast('-9223372036854775809' as decimal(65,0)));
+Data truncation: data out of range: data type int64, integer argument
 prepare hex_runtime from 'select hex(?)';
 set @hex_arg = 15.5;
 execute hex_runtime using @hex_arg;
@@ -93,7 +99,7 @@ execute hex_runtime using @hex_arg;
 10
 set @hex_arg = null;
 execute hex_runtime using @hex_arg;
-➤ hex(?)[-1,16383,0]  𝄀
+➤ hex(?)[12,16,0]  𝄀
 null
 deallocate prepare hex_runtime;
 prepare hex_explicit_real from 'select hex(cast(? as double))';
