@@ -708,6 +708,12 @@ func requiresPessimisticObjectLifecycleTxn(
 	defaultDatabase string,
 ) bool {
 	switch st := stmt.(type) {
+	case *tree.CreateTable:
+		// Persistent table creation changes the catalog name-to-ID mapping and
+		// must participate in the same pessimistic lifecycle protocol as CDC
+		// target/source guards. Session temporary tables are connection-local
+		// and do not need the persistent catalog barrier.
+		return !st.Temporary
 	case *tree.TruncateTable, *tree.CreatePitr, *tree.DropPitr, *tree.AlterPitr,
 		*tree.DropDatabase, *tree.DropView, *tree.DropSequence, *tree.AlterView,
 		*tree.AlterSequence, *tree.DataBranchDeleteTable, *tree.DataBranchDeleteDatabase,

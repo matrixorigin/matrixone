@@ -35,6 +35,7 @@ import (
 )
 
 func TestCDCTargetGenerationVerificationOnMO(t *testing.T) {
+	defer func() { require.NoError(t, CloseSingleCNBaseClusterTests()) }()
 	RunSingleCNBaseClusterTests(t, func(cluster Cluster) {
 		cn, err := cluster.GetCNService(0)
 		require.NoError(t, err)
@@ -111,6 +112,7 @@ func TestCDCTargetGenerationVerificationOnMO(t *testing.T) {
 }
 
 func TestCDCTenantCatalogGuardBlocksOtherCNDrop(t *testing.T) {
+	defer func() { require.NoError(t, CloseBaseClusterTests()) }()
 	RunBaseClusterTests(t, func(cluster Cluster) {
 		ports := make([]int, 2)
 		for i := range ports {
@@ -209,6 +211,7 @@ func execSQL(ctx context.Context, db *sql.DB, query string) error {
 }
 
 func TestCDCEndTsWildcardLateTableOnMO(t *testing.T) {
+	defer func() { require.NoError(t, CloseSingleCNBaseClusterTests()) }()
 	RunSingleCNBaseClusterTests(t, func(cluster Cluster) {
 		cn, err := cluster.GetCNService(0)
 		require.NoError(t, err)
@@ -311,6 +314,7 @@ func TestCDCEndTsWildcardLateTableOnMO(t *testing.T) {
 }
 
 func TestCDCGenerationReplacementOnMO(t *testing.T) {
+	defer func() { require.NoError(t, CloseSingleCNBaseClusterTests()) }()
 	RunSingleCNBaseClusterTests(t, func(cluster Cluster) {
 		cn, err := cluster.GetCNService(0)
 		require.NoError(t, err)
@@ -517,6 +521,7 @@ func TestCDCGenerationReplacementOnMO(t *testing.T) {
 }
 
 func TestCDCFirstAckHoldsSourceGenerationAcrossCN(t *testing.T) {
+	defer func() { require.NoError(t, CloseBaseClusterTests()) }()
 	RunBaseClusterTests(t, func(cluster Cluster) {
 		ports := make([]int, 2)
 		for i := range ports {

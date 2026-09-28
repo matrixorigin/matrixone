@@ -1126,6 +1126,11 @@ func (tie *testIE) Query(ctx context.Context, s string, options ie.SessionOverri
 		} else {
 			panic(fmt.Sprintf("invalid idx: %d", idx))
 		}
+	} else if strings.Contains(strings.ToLower(s), "select pending_source_table_id, target_identity from mo_catalog.mo_cdc_watermark limit 0") {
+		// Capability probes intentionally return an empty result set. Keep the
+		// row-bearing fixture strict for all other queries, while allowing this
+		// zero-row probe to exercise the production empty-result path.
+		return &testIER{rows: rows, sqlIdx: idx}
 	} else {
 		panic("must have data")
 	}
@@ -1163,6 +1168,9 @@ func (tier *testIER) Column(ctx context.Context, u uint64) (string, uint8, bool,
 }
 
 func (tier *testIER) RowCount() uint64 {
+	if len(tier.rowValues) == 0 {
+		return 0
+	}
 	return 1
 }
 
