@@ -200,22 +200,6 @@ func TestPreparedStringMathRoleDiscoveryAcrossExpressionContainers(t *testing.T)
 			want: map[int]bool{16: false},
 		},
 		{
-			name: "window-value-and-controls-have-separate-roles",
-			expr: stringMath("abs", &planpb.Expr{Expr: &planpb.Expr_W{W: &planpb.WindowSpec{
-				WindowFunc: stringMath("abs", position(18)),
-				PartitionBy: []*planpb.Expr{
-					position(19),
-					stringMath("abs", position(20)),
-				},
-				OrderBy: []*planpb.OrderBySpec{{Expr: position(21)}},
-				Frame: &planpb.FrameClause{Start: &planpb.FrameBound{
-					Type: planpb.FrameBound_PRECEDING,
-					Val:  position(22),
-				}},
-			}}}),
-			want: map[int]bool{18: true, 19: false, 20: true, 21: false, 22: false},
-		},
-		{
 			name: "planner-bound-implicit-cast",
 			expr: benchmarkStringMathBind("abs", []*planpb.Expr{position(23)}),
 			want: map[int]bool{23: true},
@@ -243,14 +227,18 @@ func TestPreparedStringMathRoleDiscoveryAcrossExpressionContainers(t *testing.T)
 			want: map[int]bool{11: true, 12: false, -1: false},
 		},
 		{
-			name: "window",
-			expr: stringMath("round", benchmarkStringMathDecimalColumn(), &planpb.Expr{Expr: &planpb.Expr_W{W: &planpb.WindowSpec{
+			name: "window-value-and-control-roles",
+			expr: stringMath("abs", stringMath("round", benchmarkStringMathDecimalColumn(), &planpb.Expr{Expr: &planpb.Expr_W{W: &planpb.WindowSpec{
 				WindowFunc: stringMath("abs", position(4)),
 				PartitionBy: []*planpb.Expr{
+					position(19),
 					stringMath("round", benchmarkStringMathDecimalColumn(), position(5)),
 					stringMath("abs", position(9)),
 				},
-				OrderBy: []*planpb.OrderBySpec{{Expr: stringMath("abs", position(6))}},
+				OrderBy: []*planpb.OrderBySpec{
+					{Expr: position(21)},
+					{Expr: stringMath("abs", position(6))},
+				},
 				Frame: &planpb.FrameClause{
 					Type: planpb.FrameClause_ROWS,
 					Start: &planpb.FrameBound{
@@ -258,19 +246,23 @@ func TestPreparedStringMathRoleDiscoveryAcrossExpressionContainers(t *testing.T)
 						Val: stringMath("coalesce",
 							stringMath("round", benchmarkStringMathDecimalColumn(), position(7)),
 							stringMath("abs", position(10)),
+							position(22),
 						),
 					},
 					End: &planpb.FrameBound{
 						Type: planpb.FrameBound_FOLLOWING,
-						Val:  stringMath("abs", position(8)),
+						Val: stringMath("coalesce",
+							stringMath("abs", position(8)),
+							position(23),
+						),
 					},
 				},
-			}}}),
-			// Window values/order keys and frame/partition controls must be
-			// traversed independently while preserving each function's role. The
-			// window is nested under ROUND's control argument so both containment
-			// and role-discovery walkers must cross every window container.
-			want: map[int]bool{4: true, 5: false, 6: true, 7: false, 8: true, 9: true, 10: true, -1: false},
+			}}})),
+			// The window is nested under ROUND's precision argument and that ROUND
+			// is nested under ABS. Bare window controls stay non-value positions,
+			// while nested ABS values and ROUND precision positions keep their own
+			// roles across every window container.
+			want: map[int]bool{4: true, 5: false, 6: true, 7: false, 8: true, 9: true, 10: true, 19: false, 21: false, 22: false, 23: false, -1: false},
 		},
 	}
 
