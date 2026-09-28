@@ -267,7 +267,10 @@ func TestUnaryInactiveExecutionContracts(t *testing.T) {
 						if bytesInput {
 							return opUnaryBytesToFixedWithErrorCheck(parameters, result, p, n, func(v []byte) (int64, error) { calls++; return 0, moerr.NewInvalidInputNoCtx("inactive row evaluated") }, s)
 						}
-						return opUnaryStrToFixedWithErrorCheck(parameters, result, p, n, func(v string) (int64, error) { calls++; return 0, moerr.NewInvalidInputNoCtx("inactive row evaluated") }, s)
+						return opUnaryStrToFixedWithErrorCheck(parameters, result, p, n, func(v string, _ uint64) (int64, error) {
+							calls++
+							return 0, moerr.NewInvalidInputNoCtx("inactive row evaluated")
+						}, s)
 					}
 					fc := NewFunctionTestCase(proc, []FunctionTestInput{NewFunctionTestConstInput(types.T_varchar.ToType(), []string{"bad"}, nil)}, NewFunctionTestResult(types.T_int64.ToType(), false, []int64{0, 0}, nil), fn).WithSelectList(selection)
 					t.Cleanup(fc.Free)
@@ -332,7 +335,7 @@ func TestUnaryStringErrorPreservesAdmissionAndReuse(t *testing.T) {
 	var visited []string
 	fail := true
 	fn := func(parameters []*vector.Vector, result vector.FunctionResultWrapper, p *process.Process, length int, selection *FunctionSelectList) error {
-		observed = opUnaryStrToFixedWithErrorCheck(parameters, result, p, length, func(v string) (int64, error) {
+		observed = opUnaryStrToFixedWithErrorCheck(parameters, result, p, length, func(v string, _ uint64) (int64, error) {
 			visited = append(visited, v)
 			if fail && v == "failure" {
 				return 99, sentinel

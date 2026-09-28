@@ -13,7 +13,11 @@ select field('', '', '\r', '\n');
 
 
 select field(1, '1', 1);
+SET @func_field_saved_sql_mode = @@session.sql_mode;
+SET SESSION sql_mode = CONCAT_WS(',', NULLIF(@func_field_saved_sql_mode, ''), 'MYSQL_NUMERIC_COMPATIBILITY');
 select field(1, 'true');
+SET SESSION sql_mode = @func_field_saved_sql_mode;
+SET @func_field_saved_sql_mode = NULL;
 
 
 select field(1, 1, 2, 3-2);

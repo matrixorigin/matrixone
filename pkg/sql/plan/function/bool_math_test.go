@@ -26,6 +26,9 @@ import (
 
 func TestPreparedBooleanFloatCast(t *testing.T) {
 	proc := testutil.NewProcess(t)
+	// The ordinary text row below intentionally uses MySQL's prefix behavior
+	// ("true" becomes zero), while Boolean-provenance rows are restored as 1/0.
+	proc.GetSessionInfo().MySQLNumericCompatibilityMode = true
 	for _, target := range []types.T{types.T_float32, types.T_float64} {
 		t.Run(target.String(), func(t *testing.T) {
 			var empty, want any = []float64{}, []float64{1, 0, 0, 1, 0, 0}

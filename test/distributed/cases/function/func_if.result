@@ -323,6 +323,8 @@ SELECT IF(X'10', 'T', 'F') AS if_raw_binary_byte_true;
 T
 SELECT IF(CAST('0x10' AS BINARY(8)), 'T', 'F') AS if_fixed_binary_padding_error;
 invalid input: "10\x00\x00\x00\x00" is invalid numeric string
+SET @if_compat_saved_sql_mode = @@session.sql_mode;
+SET SESSION sql_mode = CONCAT_WS(',', NULLIF(@if_compat_saved_sql_mode, ''), 'MYSQL_NUMERIC_COMPATIBILITY');
 SELECT IF('1abc', 'T', 'F') AS if_decimal_prefix_default_true;
 ➤ if_decimal_prefix_default_true[12,1,0]  𝄀
 T
@@ -376,6 +378,8 @@ PREPARE if_mode_parameter FROM 'SELECT IF(?, ''T'', ''F'') AS prepared_if_parame
 EXECUTE if_mode_parameter USING @if_mode_value;
 ➤ prepared_if_parameter[12,1,0]  𝄀
 T
+SET SESSION sql_mode = @if_compat_saved_sql_mode;
+SET @if_compat_saved_sql_mode = NULL;
 SET SESSION sql_mode = 'MATRIXONE_NATIVE';
 SELECT IF('0x10', 'T', 'F') AS if_hex_native_true;
 ➤ if_hex_native_true[12,1,0]  𝄀
@@ -428,7 +432,7 @@ EXECUTE if_mode_literal;
 invalid input: "1abc" is invalid numeric string
 EXECUTE if_mode_parameter USING @if_mode_value;
 invalid input: "1eabc" is invalid numeric string
-SET SESSION sql_mode = '';
+SET SESSION sql_mode = 'MYSQL_NUMERIC_COMPATIBILITY';
 SELECT IF('1abc', 'T', 'F') AS if_decimal_prefix_after_reset_true;
 ➤ if_decimal_prefix_after_reset_true[12,1,0]  𝄀
 T
@@ -441,6 +445,7 @@ T
 EXECUTE if_mode_parameter USING @if_mode_value;
 ➤ prepared_if_parameter[12,1,0]  𝄀
 T
+SET SESSION sql_mode = '';
 DEALLOCATE PREPARE if_mode_literal;
 DEALLOCATE PREPARE if_mode_parameter;
 SET SESSION sql_mode = default;

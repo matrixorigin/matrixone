@@ -1415,6 +1415,7 @@ func initExecuteStmtParamWithResolverInSession(
 	previousGroupConcatMaxLenFloor := prepareStmt.groupConcatMaxLenFloor
 	currentSQLMode := sessionSQLMode(owner)
 	currentNativeMode := mysql.HasMatrixOneNativeSQLMode(currentSQLMode)
+	currentMySQLNumericCompatibilityMode := mysql.HasMySQLNumericCompatibilitySQLMode(currentSQLMode)
 	currentOnlyFullGroupBy := mysql.HasSQLMode(currentSQLMode, "ONLY_FULL_GROUP_BY")
 	currentBoolSumAvg := mysql.HasEnableBoolSumAvgSQLMode(currentSQLMode)
 	currentNoUnsignedSubtraction := mysql.HasSQLMode(currentSQLMode, "NO_UNSIGNED_SUBTRACTION")
@@ -1474,6 +1475,7 @@ func initExecuteStmtParamWithResolverInSession(
 	// value, while subscription metadata plans expand the current visible
 	// subscription set. Rebuild both classes on every EXECUTE.
 	modeMismatch := prepareStmt.NativeMode != currentNativeMode ||
+		prepareStmt.MySQLNumericCompatibilityMode != currentMySQLNumericCompatibilityMode ||
 		prepareStmt.sqlModeFlagsSet && (prepareStmt.OnlyFullGroupBy != currentOnlyFullGroupBy ||
 			prepareStmt.BoolSumAvg != currentBoolSumAvg ||
 			prepareStmt.NoUnsignedSubtraction != currentNoUnsignedSubtraction) ||
@@ -1600,6 +1602,7 @@ func initExecuteStmtParamWithResolverInSession(
 			}
 		}
 		prepareStmt.NativeMode = currentNativeMode
+		prepareStmt.MySQLNumericCompatibilityMode = currentMySQLNumericCompatibilityMode
 		prepareStmt.OnlyFullGroupBy = currentOnlyFullGroupBy
 		prepareStmt.Ts = prepareTs
 		prepareStmt.tempTableVersion = currentTempTableVersion

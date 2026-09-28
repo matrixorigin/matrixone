@@ -1,4 +1,7 @@
-#0.5 ASIN和ATAN2暂时未实现
+# These legacy math cases intentionally exercise MySQL numeric-prefix
+# conversion for string arguments; opt into it explicitly.
+SET @func_math_trig_saved_sql_mode = @@session.sql_mode;
+SET SESSION sql_mode = CONCAT_WS(',', NULLIF(@func_math_trig_saved_sql_mode, ''), 'MYSQL_NUMERIC_COMPATIBILITY');
 
 #SELECT, 嵌套
 SELECT SIN(PI());
@@ -217,3 +220,5 @@ SELECT cot(0.7e5);
 SELECT acos(1.1e5);
 SELECT atan(1.1e5);
 #SELECT atan2(1.1e5,0.5e4);
+SET SESSION sql_mode = @func_math_trig_saved_sql_mode;
+SET @func_math_trig_saved_sql_mode = NULL;
