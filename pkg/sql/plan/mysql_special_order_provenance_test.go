@@ -404,6 +404,26 @@ func TestMySQLSpecialNumericAggregateIdentity(t *testing.T) {
 	require.Error(t, err, "ordinary VARCHAR aggregate rejection remains unchanged")
 }
 
+func TestPreparedMySQLSpecialNumericAggregateIdentity(t *testing.T) {
+	for _, sql := range []string{
+		"select sum(e), avg(e), sum(s), avg(s) from enum_order_t",
+		"select sum(e), avg(s) from enum_order_t where id = ?",
+		"select sum(distinct e), avg(distinct s) from enum_order_t",
+		"select sum(e), avg(s) from (select e, s from enum_order_t) d",
+	} {
+		t.Run(sql, func(t *testing.T) {
+			p, err := runOneStmt(newMySQLSpecialOrderMock(), t, "prepare stmt1 from '"+sql+"'")
+			require.NoError(t, err)
+			require.NotNil(t, p.GetDcl().GetPrepare())
+			for _, name := range []string{"sum", "avg"} {
+				fn := findPlanFunctionExpr(p.GetDcl().GetPrepare().Plan, name)
+				require.NotNil(t, fn)
+				require.Contains(t, []int32{int32(types.T_uint16), int32(types.T_uint64)}, fn.GetF().Args[0].Typ.Id)
+			}
+		})
+	}
+}
+
 func TestCanonicalSetCastThroughResultProjection(t *testing.T) {
 	for _, target := range []string{"unsigned", "decimal(10,2)", "double"} {
 		for _, source := range []string{

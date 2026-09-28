@@ -62,6 +62,11 @@ func (c *clientConn) migrateConnFromContext(
 	if r == nil {
 		return nil, moerr.NewInternalError(parent, "bad response")
 	}
+	if !r.PreparedStmtCursorsChecked {
+		// An older CN cannot attest that its prepared statements are free of
+		// active cursors. Their retained results are absent from the snapshot.
+		return nil, moerr.GetOkExpectedNotSafeToStartTransfer()
+	}
 	if !r.LastInsertIDExported {
 		// A legacy source cannot distinguish an authoritative zero from a
 		// missing LAST_INSERT_ID snapshot. Keep the source session in place

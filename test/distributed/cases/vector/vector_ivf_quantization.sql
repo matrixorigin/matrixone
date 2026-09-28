@@ -37,11 +37,15 @@ insert into qrange values
     (3,'[1,1,0]'),
     (4,'[0.011764706,0.003921569,0.003921569]');
 create index qrangei8 using ivfflat on qrange(v) lists=1 op_type 'vector_l2_ops' quantization 'int8';
+-- Thresholds must NOT equal any row's exact distance: this is an int8-quantized index whose
+-- range check computes a distance up to ~1 float32 ULP from the exact scalar, so a boundary-exact
+-- threshold makes a row's membership depend on the index-vs-brute-force path and flakes. Pick values
+-- strictly between rows -- dists are a1=0, a4=0.0130, a2=0.0296, a3=1.4142.
 select a from qrange
-where l2_distance(v,'[0,0,0]') <= 0.02960719386380686
+where l2_distance(v,'[0,0,0]') <= 0.5
 order by l2_distance(v,'[0,0,0]') limit 10;
 select a from qrange
-where l2_distance(v,'[0,0,0]') >= 0.013006371726883922
+where l2_distance(v,'[0,0,0]') >= 0.02
 order by l2_distance(v,'[0,0,0]') limit 10;
 create table q64(a int primary key, v vecf64(4));
 insert into q64 values (1,'[1,1,1,1]'),(2,'[3,3,3,3]'),(3,'[5,5,5,5]'),(4,'[50,50,50,50]'),(5,'[52,52,52,52]'),(6,'[54,54,54,54]');

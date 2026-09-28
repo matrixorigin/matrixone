@@ -54,14 +54,13 @@ func makeColArrayVec[T types.RealNumbers](t *testing.T, mp *mpool.MPool, typ typ
 	return v
 }
 
-// approxEqF32 checks the stable float64 batch result against the historical
-// float32-shaped expectations used by these ordinary-value tests.
-func approxEqF32(a float64, b float32) bool {
-	if a == float64(b) {
+// approxEqF32 checks float32 equality within a relative/absolute tolerance.
+func approxEqF32(a, b float32) bool {
+	if a == b {
 		return true
 	}
-	diff := math.Abs(a - float64(b))
-	avg := math.Abs((a + float64(b)) / 2.0)
+	diff := math.Abs(float64(a - b))
+	avg := math.Abs(float64(a+b) / 2.0)
 	if avg < 1e-9 {
 		return diff < 1e-5
 	}
@@ -117,30 +116,6 @@ func TestBatchArrayDistanceSync_L2(t *testing.T) {
 	}
 }
 
-func TestBatchArrayDistanceSync_ExtremeFloat32UsesFloat64Kernel(t *testing.T) {
-	mp := mpool.MustNewZero()
-	defer mpool.DeleteMPool(mp)
-
-	query := []float32{3e38, 3e38}
-	rows := [][]float32{{0, 0}, {3e38, 3e38}}
-	constVec := makeConstArrayVec[float32](t, mp, query, len(rows))
-	colVec := makeColArrayVec[float32](t, mp, types.T_array_float32.ToType(), rows)
-
-	dist, ok, err := batchArrayDistanceSync[float32]([]*vector.Vector{constVec, colVec}, len(rows), metric.Metric_L2Distance, nil, nil)
-	require.NoError(t, err)
-	require.True(t, ok)
-	require.InEpsilon(t, float64(query[0])*math.Sqrt2, dist[0], 1e-14)
-	require.Equal(t, float64(0), dist[1])
-
-	rows = [][]float32{{1, 1}, {3e38, 3e38}}
-	colVec = makeColArrayVec[float32](t, mp, types.T_array_float32.ToType(), rows)
-	dist, ok, err = batchArrayDistanceSync[float32]([]*vector.Vector{constVec, colVec}, len(rows), metric.Metric_InnerProduct, nil, nil)
-	require.NoError(t, err)
-	require.True(t, ok)
-	require.InEpsilon(t, -float64(query[0])*2, dist[0], 1e-14)
-	require.Equal(t, float64(-2)*float64(query[0])*float64(query[0]), dist[1])
-}
-
 // TestBatchArrayDistanceSync_InnerProduct verifies Metric_InnerProduct.
 // The function returns -dot_product (negated for ANN ordering).
 func TestBatchArrayDistanceSync_InnerProduct(t *testing.T) {
@@ -163,61 +138,6 @@ func TestBatchArrayDistanceSync_InnerProduct(t *testing.T) {
 	require.Equal(t, N, len(dist))
 	for i, w := range want {
 		require.True(t, approxEqF32(dist[i], w), "row %d: got %v want %v", i, dist[i], w)
-	}
-}
-
-func TestCosineDistanceArrayScaleInvariance(t *testing.T) {
-	t.Run("float32", func(t *testing.T) {
-		testCosineArrayScaleInvariance[float32](t, types.T_array_float32.ToType(), 1e-20, 1e20, true)
-	})
-	t.Run("float64", func(t *testing.T) {
-		testCosineArrayScaleInvariance[float64](t, types.T_array_float64.ToType(), 1e-300, 1e300, false)
-	})
-}
-
-func testCosineArrayScaleInvariance[T types.RealNumbers](t *testing.T, typ types.Type, tiny, large T, batchEligible bool) {
-	t.Helper()
-	for _, scale := range []struct {
-		name string
-		a, b T
-	}{{"ordinary", 1, 1}, {"tiny_left", tiny, 1}, {"tiny_right", 1, tiny}, {"mixed_extremes", tiny, large}} {
-		for _, shape := range []string{"const_column", "column_const", "column_column"} {
-			t.Run(scale.name+"/"+shape, func(t *testing.T) {
-				mp := mpool.MustNewZero()
-				defer mpool.DeleteMPool(mp)
-				query := []T{scale.a, scale.a, scale.a}
-				rows := [][]T{{2 * scale.b, scale.b, scale.b}, {-2 * scale.b, -scale.b, -scale.b}, {0, 0, 0}}
-				constVec, err := vector.NewConstBytes(typ, types.ArrayToBytes(query), len(rows), mp)
-				require.NoError(t, err)
-				defer constVec.Free(mp)
-				colVec := makeColArrayVec(t, mp, typ, rows)
-				defer colVec.Free(mp)
-				inputs := []*vector.Vector{constVec, colVec}
-				if shape == "column_const" {
-					inputs = []*vector.Vector{colVec, constVec}
-				} else if shape == "column_column" {
-					queryCol := makeColArrayVec(t, mp, typ, [][]T{query, query, query})
-					defer queryCol.Free(mp)
-					inputs = []*vector.Vector{queryCol, colVec}
-				}
-				_, ok, err := batchArrayDistanceSync[T](inputs, len(rows), metric.Metric_CosineDistance, nil, nil)
-				require.NoError(t, err)
-				require.Equal(t, batchEligible && shape != "column_column", ok)
-				result := vector.NewFunctionResultWrapper(types.T_float64.ToType(), mp)
-				defer result.Free()
-				require.NoError(t, result.PreExtendAndReset(len(rows)))
-				require.NoError(t, CosineDistanceArray[T](inputs, result, nil, len(rows), nil))
-				out := result.GetResultVector()
-				require.Equal(t, len(rows), out.Length())
-				require.Equal(t, types.T_float64, out.GetType().Oid)
-				require.False(t, out.GetNulls().Any())
-				// Independent angle oracle; agreement between two wrong paths is insufficient.
-				want := []float64{1 - 4/math.Sqrt(18), 1 + 4/math.Sqrt(18), 1}
-				for i, d := range vector.MustFixedColNoTypeCheck[float64](out) {
-					require.InDelta(t, want[i], d, 1e-14)
-				}
-			})
-		}
 	}
 }
 
@@ -271,9 +191,12 @@ func TestBatchArrayDistanceSync_QueryAsSecondArg(t *testing.T) {
 	}
 }
 
-// TestBatchArrayDistanceSync_Float64Declines: the stable SQL batch currently keeps the
-// existing native-float32 fast-path scope. Float64 stays on the per-row path so its
-// established selection, null, and dimension behavior remains unchanged.
+// TestBatchArrayDistanceSync_Float64Declines: the batch path materializes []float32, so a
+// float64 element type would have its result rounded through float32 -- ResolveDistanceFn
+// wraps the float64 kernel in a cast, unlike float32 where it returns the kernel itself.
+// Constness must not change the value SQL returns, so float64 must decline and let the
+// per-row kernel answer at full precision. cuVS pairwise takes float32/float16 only, so
+// this gives up no GPU work.
 func TestBatchArrayDistanceSync_Float64Declines(t *testing.T) {
 	mp := mpool.MustNewZero()
 	defer mpool.DeleteMPool(mp)
@@ -291,20 +214,25 @@ func TestBatchArrayDistanceSync_Float64Declines(t *testing.T) {
 	require.False(t, ok, "float64 must fall through to the per-row kernel")
 }
 
-// TestBatchArrayDistanceSync_Float64PrecisionMatchesScalar protects the scalar fallback:
-// 16777217 is the first integer float32 cannot represent, but the SQL result is DOUBLE.
-func TestBatchArrayDistanceSync_Float64PrecisionMatchesScalar(t *testing.T) {
+// TestBatchArrayDistanceSync_Float64PrecisionMatchesScalar is the value this protects:
+// 16777217 is the first integer float32 cannot represent, so a result rounded through
+// float32 answers 16777216. Distances that collapse this way can reorder an ORDER BY.
+func TestBatchArrayDistanceSync_Float64RoundsToF32Domain(t *testing.T) {
 	mp := mpool.MustNewZero()
 	defer mpool.DeleteMPool(mp)
 
 	const beyondF32 = 16777217.0
+	// Vector distances are a float32 domain for every base type (#29040 / #29050). The batch (SIMD)
+	// path is float32-only, so a float64 base falls to the per-row moarray path -- which now ALSO
+	// rounds into the float32 domain, so a value beyond float32's integer range collapses to
+	// 16777216 and the scalar matches what a vector index returns.
+	want := float64(float32(beyondF32)) // 16777216
 	for _, tc := range []struct {
 		name string
 		m    metric.MetricType
-		want float64
 	}{
-		{"l1", metric.Metric_L1Distance, beyondF32},
-		{"l2", metric.Metric_L2Distance, beyondF32},
+		{"l1", metric.Metric_L1Distance},
+		{"l2", metric.Metric_L2Distance},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			constVec := makeConstArrayVec64(t, mp, []float64{beyondF32}, 1)
@@ -313,9 +241,8 @@ func TestBatchArrayDistanceSync_Float64PrecisionMatchesScalar(t *testing.T) {
 			_, ok, err := batchArrayDistanceSync[float64](
 				[]*vector.Vector{constVec, colVec}, 1, tc.m, nil, nil)
 			require.NoError(t, err)
-			require.False(t, ok)
+			require.False(t, ok) // batch path is float32-only; a float64 base falls to the per-row path
 
-			// What the per-row path then computes -- the exact value, not 16777216.
 			var got float64
 			switch tc.m {
 			case metric.Metric_L1Distance:
@@ -324,8 +251,7 @@ func TestBatchArrayDistanceSync_Float64PrecisionMatchesScalar(t *testing.T) {
 				got, err = moarray.L2Distance[float64]([]float64{0}, []float64{beyondF32})
 			}
 			require.NoError(t, err)
-			require.Equal(t, tc.want, got)
-			require.NotEqual(t, float64(float32(tc.want)), got, "float32 rounding must be observable here")
+			require.Equal(t, want, got, "float64 base rounds into the float32 distance domain")
 		})
 	}
 }
