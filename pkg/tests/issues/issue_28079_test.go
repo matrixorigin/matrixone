@@ -331,9 +331,15 @@ func TestIssue28079ConcurrentCreateAccountsShareLifecycleGate(t *testing.T) {
 		cancelCreates()
 
 		var created int
-		require.NoError(t, db0.QueryRowContext(ctx,
-			"select count(*) from mo_catalog.mo_account where account_name in (?, ?)",
-			accountA, accountB).Scan(&created))
+		var queryErr error
+		require.Eventually(t, func() bool {
+			queryErr = db0.QueryRowContext(ctx,
+				"select count(*) from mo_catalog.mo_account where account_name in (?, ?)",
+				accountA, accountB).Scan(&created)
+			return queryErr == nil && created == len(accounts)
+		}, 30*time.Second, 10*time.Millisecond,
+			"CREATE ACCOUNT rows did not become visible after both transactions completed")
+		require.NoError(t, queryErr)
 		require.Equal(t, len(accounts), created)
 		require.Eventually(t, func() bool {
 			snapshot := issue28079GateState(
