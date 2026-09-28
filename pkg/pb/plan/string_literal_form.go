@@ -1063,9 +1063,9 @@ func isCRC32JSONTextBytes(expr *Expr) bool {
 	return fn != nil && fn.Func != nil && int32(fn.Func.Obj>>32) == crc32FunctionID && int32(fn.Func.Obj) == CRC32JSONTextOverload
 }
 
-// RequiresMORPCVersion100CRC32JSONTextBytes reports whether an owner contains
+// RequiresMORPCVersion101CRC32JSONTextBytes reports whether an owner contains
 // the normalized-JSON-text CRC32 contract introduced by the CRC32 JSON fix.
-func RequiresMORPCVersion100CRC32JSONTextBytes(owner any) (bool, error) {
+func RequiresMORPCVersion101CRC32JSONTextBytes(owner any) (bool, error) {
 	features, err := RequiredRemoteExpressionFeatures(owner)
 	return features.CRC32JSONTextBytes, err
 }

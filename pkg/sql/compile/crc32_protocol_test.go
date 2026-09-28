@@ -62,7 +62,17 @@ func TestCRC32JSONDestinationProtocolValidation(t *testing.T) {
 	_, err := encodeRemoteScope(scope, c.proc)
 	require.ErrorContains(t, err, "remote destination")
 
+	// MORPC v100 is already occupied by the View metadata contract and must not
+	// admit the distinct CRC32 JSON text-byte identity.
 	client.version = defines.MORPCVersion100
+	c.execType = plan2.ExecTypeAP_MULTICN
+	c.cnList = engine.Nodes{{Id: "old-worker", Addr: "remote:6001", Mcpu: 4}}
+	require.NoError(t, c.constrainCRC32JSONWorkers(&planpb.Query{
+		Nodes: []*planpb.Node{{ProjectList: []*planpb.Expr{expr}}},
+	}))
+	require.Equal(t, plan2.ExecTypeAP_ONECN, c.execType)
+
+	client.version = defines.MORPCVersion101
 	c.execType = plan2.ExecTypeAP_MULTICN
 	c.cnList = engine.Nodes{{Id: "old-worker", Addr: "remote:6001", Mcpu: 4}}
 	require.NoError(t, c.constrainCRC32JSONWorkers(&planpb.Query{

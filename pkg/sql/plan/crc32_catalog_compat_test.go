@@ -181,7 +181,7 @@ func TestCRC32PersistedDDLAdmissionBeforeFold(t *testing.T) {
 		`create view crc32_gate_view as select crc32(cast('{"a":1}' as json)) as c`,
 	} {
 		_, err := runOneStmt(mock, t, sql)
-		require.ErrorContains(t, err, "protocol version 100", sql)
+		require.ErrorContains(t, err, "protocol version 101", sql)
 	}
 }
 
@@ -291,7 +291,7 @@ func TestCRC32FoldedDefaultRetainsCapability(t *testing.T) {
 	require.NoError(t, err)
 	require.NotNil(t, got.Expr.GetLit())
 	require.Equal(t, uint64(4012824821), got.Expr.GetLit().GetU64Val())
-	required, err := planpb.RequiresMORPCVersion100CRC32JSONTextBytes(got)
+	required, err := planpb.RequiresMORPCVersion101CRC32JSONTextBytes(got)
 	require.NoError(t, err)
 	require.True(t, required)
 }

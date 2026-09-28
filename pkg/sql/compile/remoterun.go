@@ -2389,9 +2389,9 @@ func validateRemoteExpressionPipelineProtocol(
 		)
 	}
 	if features.CRC32JSONTextBytes &&
-		(!hasProtocolVersion || protocolVersion < defines.MORPCVersion100) {
+		(!hasProtocolVersion || protocolVersion < defines.MORPCVersion101) {
 		return moerr.NewNotSupportedNoCtx(
-			"CRC32 JSON text-byte semantics require MORPC protocol version 100",
+			"CRC32 JSON text-byte semantics require MORPC protocol version 101",
 		)
 	}
 	return nil

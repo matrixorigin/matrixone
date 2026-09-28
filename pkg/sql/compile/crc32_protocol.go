@@ -25,7 +25,7 @@ import (
 )
 
 // constrainCRC32JSONWorkers keeps changed CRC32 JSON expressions
-// on one CN while a rolling cluster still contains workers below MORPC v100.
+// on one CN while a rolling cluster still contains workers below MORPC v101.
 // The capability probe is performed once per compile and has no per-row cost.
 func (c *Compile) constrainCRC32JSONWorkers(qry *plan.Query) error {
 	features, err := plan.RequiredRemoteExpressionFeatures(qry)
@@ -33,13 +33,13 @@ func (c *Compile) constrainCRC32JSONWorkers(qry *plan.Query) error {
 		return err
 	}
 	version, known := remoteMORPCProtocolVersion(c.proc.GetService())
-	if !known || version < defines.MORPCVersion100 {
-		return moerr.NewNotSupportedNoCtx("CRC32 JSON text-byte semantics require MORPC protocol version 100")
+	if !known || version < defines.MORPCVersion101 {
+		return moerr.NewNotSupportedNoCtx("CRC32 JSON text-byte semantics require MORPC protocol version 101")
 	}
 	if c.execType != plan2.ExecTypeAP_MULTICN {
 		return nil
 	}
-	supported, err := remoteWorkersSupportProtocol(c.proc, c.cnList, defines.MORPCVersion100)
+	supported, err := remoteWorkersSupportProtocol(c.proc, c.cnList, defines.MORPCVersion101)
 	if err != nil {
 		return err
 	}
@@ -61,13 +61,13 @@ func validateCRC32JSONDestination(proc *process.Process, p *pipeline.Pipeline) e
 		)
 	}
 	supported, err := remoteWorkersSupportProtocol(proc,
-		engine.Nodes{{Id: p.Node.Id, Addr: p.Node.Addr}}, defines.MORPCVersion100)
+		engine.Nodes{{Id: p.Node.Id, Addr: p.Node.Addr}}, defines.MORPCVersion101)
 	if err != nil {
 		return err
 	}
 	if !supported {
 		return moerr.NewNotSupportedNoCtx(
-			"remote destination does not support CRC32 JSON text-byte semantics (MORPC version 100)",
+			"remote destination does not support CRC32 JSON text-byte semantics (MORPC version 101)",
 		)
 	}
 	return nil

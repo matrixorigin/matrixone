@@ -29,11 +29,8 @@ import (
 
 // Internal ALTER COPY and catalog LIKE/CLONE supply this execution-owned schema. SQL dump/replay
 // remains new DDL. Never infer a legacy algorithm from display SQL or row values.
-func crc32CopyColumn(ctx context.Context, name string, sources ...*planpb.TableDef) *planpb.ColDef {
+func crc32CopyColumn(ctx context.Context, name string) *planpb.ColDef {
 	def, _ := ctx.Value(defines.CRC32CopyExpressionsKey{}).(*planpb.TableDef)
-	if len(sources) > 0 && sources[0] != nil {
-		def = sources[0]
-	}
 	if def == nil {
 		return nil
 	}

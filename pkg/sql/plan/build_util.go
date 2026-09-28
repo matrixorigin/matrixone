@@ -755,7 +755,7 @@ func buildDefaultExprWithColumns(
 		return nil, mapDDLAssignmentCastError(bindCtx, typ, colNameOrigin, err)
 	}
 
-	crc32Text, err := plan.RequiresMORPCVersion100CRC32JSONTextBytes(defaultExpr)
+	crc32Text, err := plan.RequiresMORPCVersion101CRC32JSONTextBytes(defaultExpr)
 	if err != nil {
 		return nil, err
 	}

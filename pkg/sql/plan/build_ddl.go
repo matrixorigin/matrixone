@@ -2549,7 +2549,6 @@ func buildCreateTable(
 	stmt *tree.CreateTable,
 	cloneStmt *tree.CloneTable,
 	isPrepareStmt bool,
-	copySources ...*TableDef,
 ) (*Plan, error) {
 	tableName := string(stmt.Table.ObjectName)
 	if err := validateCreateTableIdentifier(ctx, tableName); err != nil {
@@ -2741,7 +2740,7 @@ func buildCreateTable(
 		}
 	}
 
-	if err = buildTableDefs(stmt, ctx, createTable, asSelectCols, copySources...); err != nil {
+	if err = buildTableDefs(stmt, ctx, createTable, asSelectCols); err != nil {
 		return nil, err
 	}
 
@@ -3298,7 +3297,7 @@ func makeClusterTableAttributeDefault(colType plan.Type) *plan.Default {
 	}
 }
 
-func buildTableDefs(stmt *tree.CreateTable, ctx CompilerContext, createTable *plan.CreateTable, asSelectCols []*ColDef, copySources ...*TableDef) error {
+func buildTableDefs(stmt *tree.CreateTable, ctx CompilerContext, createTable *plan.CreateTable, asSelectCols []*ColDef) error {
 	replay := ddlReplayForTable(ctx.GetContext(), string(stmt.Table.ObjectName))
 	// all below fields' key is lower case
 	// Keep the SELECT output schema in its original coordinate system. The
@@ -3488,7 +3487,7 @@ func buildTableDefs(stmt *tree.CreateTable, ctx CompilerContext, createTable *pl
 				if preserved != nil && preserved.generated != nil {
 					generatedCol = proto.Clone(preserved.generated).(*plan.GeneratedCol)
 				} else {
-					generatedCol, err = buildGeneratedExpr(ddlExpressionContext(ctx, ctx.GetProcess().Ctx), def, colType, allColDefs, ctx.GetProcess(), crc32CopyColumn(ctx.GetContext(), colName, copySources...))
+					generatedCol, err = buildGeneratedExpr(ddlExpressionContext(ctx, ctx.GetProcess().Ctx), def, colType, allColDefs, ctx.GetProcess(), crc32CopyColumn(ctx.GetContext(), colName))
 				}
 				if err != nil {
 					return err
@@ -3511,7 +3510,7 @@ func buildTableDefs(stmt *tree.CreateTable, ctx CompilerContext, createTable *pl
 				if preserved != nil && preserved.defaultExpr != nil {
 					defaultValue = proto.Clone(preserved.defaultExpr).(*plan.Default)
 				} else {
-					defaultValue, err = buildDefaultExprWithColumns(ddlExpressionContext(ctx, ctx.GetProcess().Ctx), def, colType, ctx.GetProcess(), allColDefs, crc32CopyColumn(ctx.GetContext(), colName, copySources...))
+					defaultValue, err = buildDefaultExprWithColumns(ddlExpressionContext(ctx, ctx.GetProcess().Ctx), def, colType, ctx.GetProcess(), allColDefs, crc32CopyColumn(ctx.GetContext(), colName))
 				}
 				if err != nil {
 					return err
@@ -3523,7 +3522,7 @@ func buildTableDefs(stmt *tree.CreateTable, ctx CompilerContext, createTable *pl
 				if preserved != nil && preserved.onUpdate != nil {
 					onUpdateExpr = proto.Clone(preserved.onUpdate).(*plan.OnUpdate)
 				} else {
-					onUpdateExpr, err = buildOnUpdate(ddlExpressionContext(ctx, ctx.GetProcess().Ctx), def, colType, ctx.GetProcess(), crc32CopyColumn(ctx.GetContext(), colName, copySources...))
+					onUpdateExpr, err = buildOnUpdate(ddlExpressionContext(ctx, ctx.GetProcess().Ctx), def, colType, ctx.GetProcess(), crc32CopyColumn(ctx.GetContext(), colName))
 				}
 				if err != nil {
 					return err
