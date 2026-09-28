@@ -13,6 +13,14 @@ explain format=json with c as (select id from t) select * from c;
 EXPLAIN
 explain format=json select id, row_number() over (order by id) as rn from t;
 EXPLAIN
+explain format=json with recursive r(n) as (select 1 union select n+1 from r where n<10) select * from r;
+EXPLAIN
+explain format=json with recursive r(n) as (select 1 union all select n+1 from r where n<10) select * from r;
+EXPLAIN
+prepare e28301_recursive from 'explain format=json with recursive r(n) as (select 1 union all select n+1 from r where n<10) select * from r';
+execute e28301_recursive;
+EXPLAIN
+deallocate prepare e28301_recursive;
 explain format=json select id, sum(distinct v), sum(id) from t group by id;
 EXPLAIN
 explain format=json select id, sample(v + 1, 1 rows) from t group by id;

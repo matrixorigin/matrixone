@@ -150,6 +150,10 @@ The following mappings are normative for schema version 1:
   is emitted as an `assignments` entry, so a plan for `SET v = 2` includes a
   value of `2`; unchanged columns remain visible as their row-image
   expressions. An unresolved required row-image reference is an SQL error.
+- A `RECURSIVE_CTE` node records `recursive_union_mode=DISTINCT` or
+  `recursive_union_mode=ALL` in `node.expressions`, directly from
+  `RecursiveUnionDistinct`. Both values are explicit; a missing boolean does
+  not stand in for ALL. Ordinary CTE and UNION nodes retain their mappings.
 - Statistics are copied only when finite. The source `Stats` object is never
   cleaned or rewritten as part of serialization.
 

@@ -375,6 +375,12 @@ func (b *sqlJSONPlanBuilder) addNodeDetails(item *sqlJSONNode, node *plan.Node) 
 		if err != nil {
 			return err
 		}
+	case plan.Node_RECURSIVE_CTE:
+		mode := "ALL"
+		if node.RecursiveUnionDistinct {
+			mode = "DISTINCT"
+		}
+		item.Expressions = []string{"recursive_union_mode=" + mode}
 	case plan.Node_SAMPLE:
 		item.Expressions, err = sqlJSONSampleExpressions(b.ctx, node.SampleFunc)
 		if err != nil {

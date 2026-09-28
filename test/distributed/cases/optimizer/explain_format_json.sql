@@ -23,6 +23,16 @@ explain format=json with c as (select id from t) select * from c;
 -- @regex("(?s)matrixone.*operator.*Window",true)
 explain format=json select id, row_number() over (order by id) as rn from t;
 
+-- Recursive UNION mode is explicit for both values of the distinct flag.
+-- @regex("(?s)recursive_union_mode=DISTINCT",true)
+explain format=json with recursive r(n) as (select 1 union select n+1 from r where n<10) select * from r;
+-- @regex("(?s)recursive_union_mode=ALL",true)
+explain format=json with recursive r(n) as (select 1 union all select n+1 from r where n<10) select * from r;
+prepare e28301_recursive from 'explain format=json with recursive r(n) as (select 1 union all select n+1 from r where n<10) select * from r';
+-- @regex("(?s)recursive_union_mode=ALL",true)
+execute e28301_recursive;
+deallocate prepare e28301_recursive;
+
 -- Aggregate layout must preserve DISTINCT and the non-DISTINCT control.
 -- @regex("(?s)operator.*Agg.*aggregate.*DISTINCT.*sum",true)
 explain format=json select id, sum(distinct v), sum(id) from t group by id;

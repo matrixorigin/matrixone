@@ -215,3 +215,54 @@ func TestSQLJSONPlannerVectorLiteral(t *testing.T) {
 		})
 	}
 }
+
+func TestSQLJSONPlannerRecursiveUnionMode(t *testing.T) {
+	for _, tc := range []struct {
+		union, mode string
+		distinct    bool
+	}{{"union", "DISTINCT", true}, {"union all", "ALL", false}} {
+		t.Run(tc.mode, func(t *testing.T) {
+			stmt, err := mysql.ParseOne(t.Context(), "with recursive r(n) as (select 1 "+tc.union+" select n+1 from r where n<10) select * from r", 1)
+			require.NoError(t, err)
+			query, err := planpkg.NewBaseOptimizer(planpkg.NewMockCompilerContext(true)).Optimize(stmt, false)
+			require.NoError(t, err)
+			var recursive *plan.Node
+			for _, node := range query.Nodes {
+				if node.NodeType == plan.Node_RECURSIVE_CTE {
+					require.Nil(t, recursive)
+					recursive = node
+				}
+			}
+			require.NotNil(t, recursive, "public SQL must reach RECURSIVE_CTE")
+			require.Equal(t, tc.distinct, recursive.RecursiveUnionDistinct)
+			data, err := BuildSQLJSONPlan(t.Context(), query)
+			require.NoError(t, err)
+			var doc struct {
+				MatrixOne sqlJSONMatrixOne `json:"matrixone"`
+			}
+			require.NoError(t, json.Unmarshal(data, &doc))
+			found := false
+			ids := make(map[string]bool)
+			for _, node := range doc.MatrixOne.Nodes {
+				ids[node.ID] = true
+				if node.ID == fmt.Sprint(recursive.NodeId) {
+					found = true
+					require.Contains(t, node.Expressions, "recursive_union_mode="+tc.mode)
+					require.Equal(t, recursive.SourceStep, node.SourceSteps)
+				}
+			}
+			require.True(t, found)
+			for _, edge := range doc.MatrixOne.Edges {
+				require.True(t, ids[edge.From] && ids[edge.To])
+			}
+			for _, step := range doc.MatrixOne.Steps {
+				require.True(t, ids[step.Root])
+			}
+		})
+	}
+	for _, node := range buildPlannerSQLJSONNodes(t, "with c as (select n_name from nation) select * from c") {
+		for _, expr := range node.Expressions {
+			require.NotContains(t, expr, "recursive_union_mode=")
+		}
+	}
+}
