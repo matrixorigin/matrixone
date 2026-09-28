@@ -4465,6 +4465,9 @@ func (v *Vector) propagateNumericBinaryLiteralAll(w *Vector, oldLength int, mp *
 }
 
 func (v *Vector) preflightNumericBinaryLiteralAppendAll(finalLength int, w *Vector, mp *mpool.MPool) error {
+	if !w.HasIsBinMetadata() && !v.HasIsBinMetadata() {
+		return nil
+	}
 	marked, unmarked := false, false
 	for row := 0; row < w.length; row++ {
 		if w.IsNull(uint64(row)) {
