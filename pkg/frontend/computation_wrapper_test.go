@@ -6507,6 +6507,8 @@ func TestPreparedUserVariableStringDomainIsBoundPerStatement(t *testing.T) {
 		{"binary", types.T_blob.ToType(), types.RuntimeStringInherit, true},
 		{"selected binary", types.T_text.ToType(), types.RuntimeStringBinary, true},
 		{"selected text", types.T_blob.ToType(), types.RuntimeStringText, false},
+		{"selected text on binary varchar", types.NewWithCharset(types.T_varchar, 8, 0, types.CharsetBinary), types.RuntimeStringText, false},
+		{"selected binary retains text collation", types.NewWithCharset(types.T_varchar, 8, 0, types.CharsetUTF8MB4Bin), types.RuntimeStringBinary, true},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			ses, scratch, cw, execCtx := newPreparedExecuteEnv(t, 124)
@@ -6525,17 +6527,18 @@ func TestPreparedUserVariableStringDomainIsBoundPerStatement(t *testing.T) {
 			bind := func() *plan.Plan {
 				t.Helper()
 				stmt := tree.NewPrepareString("bound_variable", "select char_length(@bound_s), hex(left(@bound_s,1)), ord(@bound_s), @bound_s+0, "+
-					"char_length(coalesce(@bound_s,NULL)), hex(left(case when @bound_s is null then null else @bound_s end,1))")
+					"char_length(coalesce(@bound_s,NULL)), hex(left(case when @bound_s is null then null else @bound_s end,1)), "+
+					"charset(@bound_s), collation(@bound_s)")
 				defer stmt.Free()
 				prepared, err := buildPlan(execCtx.reqCtx, ses, ses.txnCompileCtx, stmt)
 				require.NoError(t, err)
 				return prepared.GetDcl().GetPrepare().Plan
 			}
-			check := func(p *plan.Plan, binary, isNull bool) {
+			check := func(p *plan.Plan, staticType types.Type, binary, isNull bool) {
 				t.Helper()
 				q := p.GetQuery()
 				projects := q.Nodes[q.Steps[len(q.Steps)-1]].ProjectList
-				require.Len(t, projects, 6)
+				require.Len(t, projects, 8)
 				for i, project := range projects {
 					func() {
 						executor, err := colexec.NewExpressionExecutor(cw.proc, project)
@@ -6543,8 +6546,8 @@ func TestPreparedUserVariableStringDomainIsBoundPerStatement(t *testing.T) {
 						defer executor.Free()
 						value, err := executor.Eval(cw.proc, []*batch.Batch{batch.EmptyForConstFoldBatch}, nil)
 						require.NoError(t, err)
-						require.Equal(t, isNull, value.GetNulls().Contains(0))
-						if isNull {
+						require.Equal(t, isNull && i < 6, value.GetNulls().Contains(0))
+						if isNull && i < 6 {
 							return
 						}
 						switch i {
@@ -6568,6 +6571,18 @@ func TestPreparedUserVariableStringDomainIsBoundPerStatement(t *testing.T) {
 							require.Equal(t, want, vector.GetFixedAtNoTypeCheck[int64](value, 0))
 						case 3:
 							require.Equal(t, float64(0), vector.GetFixedAtNoTypeCheck[float64](value, 0))
+						case 6, 7:
+							want := "binary"
+							if types.StaticStringDomain(staticType) == types.StringDomainText {
+								want = "utf8mb4"
+								if i == 7 {
+									want = "utf8mb4_general_ci"
+									if staticType.Charset == types.CharsetUTF8MB4Bin {
+										want = "utf8mb4_bin"
+									}
+								}
+							}
+							require.Equal(t, want, value.GetStringAt(0))
 						}
 					}()
 				}
@@ -6576,16 +6591,16 @@ func TestPreparedUserVariableStringDomainIsBoundPerStatement(t *testing.T) {
 			assign(tc.typ, tc.domain, "你")
 			first := bind()
 			original := first.String()
-			check(first, tc.binary, false)
+			check(first, tc.typ, tc.binary, false)
 			opposite := types.T_blob.ToType()
 			if tc.binary {
 				opposite = types.T_text.ToType()
 			}
 			assign(opposite, types.RuntimeStringInherit, "你")
-			check(first, tc.binary, false)
+			check(first, tc.typ, tc.binary, false)
 			second := bind()
-			check(second, !tc.binary, false)
-			check(first, tc.binary, false)
+			check(second, opposite, !tc.binary, false)
+			check(first, tc.typ, tc.binary, false)
 			require.Equal(t, original, first.String())
 			current, err := ses.GetUserDefinedVar("bound_s")
 			require.NoError(t, err)
@@ -6593,11 +6608,11 @@ func TestPreparedUserVariableStringDomainIsBoundPerStatement(t *testing.T) {
 			require.Equal(t, uint32(opposite.Charset), current.Type.Charset)
 			require.Equal(t, types.RuntimeStringInherit, current.RuntimeStringDomain)
 			assign(opposite, types.RuntimeStringInherit, nil)
-			check(first, tc.binary, true)
-			check(second, !tc.binary, true)
+			check(first, tc.typ, tc.binary, true)
+			check(second, opposite, !tc.binary, true)
 			assign(tc.typ, tc.domain, "你")
-			check(first, tc.binary, false)
-			check(second, !tc.binary, false)
+			check(first, tc.typ, tc.binary, false)
+			check(second, opposite, !tc.binary, false)
 		})
 	}
 }

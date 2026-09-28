@@ -380,40 +380,38 @@ func (b *baseBinder) baseBindParam(astExpr *tree.ParamExpr, depth int32, isRoot 
 
 func (b *baseBinder) baseBindVar(astExpr *tree.VarExpr, depth int32, isRoot bool) (expr *plan.Expr, err error) {
 	typ := types.T_text.ToType()
+	var boundStringDomain uint32
 	if !astExpr.System {
 		if resolved, ok := b.resolveUserVariableType(astExpr); ok {
 			typ = makeTypeByPlan2Type(resolved)
 		}
-		if typ.Oid.IsMySQLString() && b.builder != nil && b.builder.compCtx != nil {
-			if resolver, ok := b.builder.compCtx.(UserVariableStringDomainResolver); ok {
-				domain, resolveErr := resolver.ResolveVariableStringDomain(astExpr.Name, false, astExpr.Global)
-				if resolveErr != nil {
-					return nil, resolveErr
-				}
-				// Freeze the value's effective charset, not its storage container's
-				// default. Later assignments must not change this expression's
-				// contract, and other statements must retain their own bindings.
-				switch domain {
-				case types.RuntimeStringInherit:
-				case types.RuntimeStringBinary:
-					typ.Charset = types.CharsetBinary
-				case types.RuntimeStringText:
-					if typ.Charset == types.CharsetBinary {
-						typ.Charset = types.CharsetUTF8
+		if typ.Oid.IsMySQLString() {
+			domain := types.RuntimeStringInherit
+			if b.builder != nil && b.builder.compCtx != nil {
+				if resolver, ok := b.builder.compCtx.(UserVariableStringDomainResolver); ok {
+					domain, err = resolver.ResolveVariableStringDomain(astExpr.Name, false, astExpr.Global)
+					if err != nil {
+						return nil, err
 					}
-				default:
-					return nil, moerr.NewInvalidInputf(b.GetContext(), "invalid user variable string domain %d", domain)
 				}
 			}
+			if !domain.Valid() {
+				return nil, moerr.NewInvalidInputf(b.GetContext(), "invalid user variable string domain %d", domain)
+			}
+			// Freeze the row override separately: CHARSET/COLLATION and result
+			// metadata still belong to the unmodified static assignment type.
+			// Zero is reserved for legacy plans, not for a frozen INHERIT.
+			boundStringDomain = uint32(domain) + 1
 		}
 	}
 	variable := &Expr{
 		Typ: makePlan2Type(&typ),
 		Expr: &plan.Expr_V{
 			V: &plan.VarRef{
-				Name:   astExpr.Name,
-				System: astExpr.System,
-				Global: astExpr.Global,
+				Name:              astExpr.Name,
+				System:            astExpr.System,
+				Global:            astExpr.Global,
+				BoundStringDomain: boundStringDomain,
 			},
 		},
 	}

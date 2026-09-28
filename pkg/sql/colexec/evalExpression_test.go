@@ -1565,12 +1565,15 @@ func TestVarExpressionExecutorPreservesBoundStringDomainOnReuse(t *testing.T) {
 	for _, tc := range []struct {
 		name   string
 		typ    types.Type
+		domain types.RuntimeStringDomain
 		binary bool
 	}{
-		{"text", types.T_varchar.ToType(), false},
-		{"binary", types.T_blob.ToType(), true},
-		{"binary charset on varchar", types.NewWithCharset(types.T_varchar, 0, 0, types.CharsetBinary), true},
-		{"text charset on varbinary", types.NewWithCharset(types.T_varbinary, 0, 0, types.CharsetUTF8), false},
+		{"text", types.T_varchar.ToType(), types.RuntimeStringInherit, false},
+		{"binary", types.T_blob.ToType(), types.RuntimeStringInherit, true},
+		{"binary charset on varchar", types.NewWithCharset(types.T_varchar, 0, 0, types.CharsetBinary), types.RuntimeStringInherit, true},
+		{"text charset on varbinary", types.NewWithCharset(types.T_varbinary, 0, 0, types.CharsetUTF8), types.RuntimeStringInherit, false},
+		{"bound text on binary charset", types.NewWithCharset(types.T_varchar, 0, 0, types.CharsetBinary), types.RuntimeStringText, false},
+		{"bound binary on text", types.T_varchar.ToType(), types.RuntimeStringBinary, true},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			proc := testutil.NewProcess(t)
@@ -1580,11 +1583,13 @@ func TestVarExpressionExecutorPreservesBoundStringDomainOnReuse(t *testing.T) {
 			proc.SetResolveVariableFunc(func(string, bool, bool) (interface{}, error) {
 				return value, resolveErr
 			})
+			domainCalls := 0
 			proc.SetResolveVariableStringDomainFunc(func(string, bool, bool) (types.RuntimeStringDomain, error) {
-				return runtimeDomain, nil
+				domainCalls++
+				return runtimeDomain, moerr.NewInternalErrorNoCtx("a bound variable must not resolve the current domain")
 			})
 			executor, err := NewExpressionExecutor(proc, &plan.Expr{
-				Expr: &plan.Expr_V{V: &plan.VarRef{Name: "domain_var"}},
+				Expr: &plan.Expr_V{V: &plan.VarRef{Name: "domain_var", BoundStringDomain: uint32(tc.domain) + 1}},
 				Typ:  plan.Type{Id: int32(tc.typ.Oid), Width: tc.typ.Width, Charset: uint32(tc.typ.Charset)},
 			})
 			require.NoError(t, err)
@@ -1616,8 +1621,11 @@ func TestVarExpressionExecutorPreservesBoundStringDomainOnReuse(t *testing.T) {
 						require.Equal(t, tc.binary, vec.GetIsBinaryStringAt(row))
 					}
 					wantDomain := types.RuntimeStringInherit
-					if value != nil && tc.typ.Oid == types.T_varbinary && !tc.binary {
-						wantDomain = types.RuntimeStringText
+					if value != nil {
+						wantDomain = tc.domain
+						if tc.typ.Oid == types.T_varbinary && !tc.binary {
+							wantDomain = types.RuntimeStringText
+						}
 					}
 					require.Equal(t, wantDomain, vec.GetRuntimeStringDomainAt(row))
 					require.Equal(t, types.StringSourceUserVariable, vec.GetStringSourceAt(row))
@@ -1632,6 +1640,7 @@ func TestVarExpressionExecutorPreservesBoundStringDomainOnReuse(t *testing.T) {
 				}
 			}
 
+			executor.ResetForNextQuery()
 			resolveErr = moerr.NewInternalErrorNoCtx("variable resolver failed")
 			masked, err := executor.Eval(proc, []*batch.Batch{input}, []bool{false, false})
 			require.NoError(t, err)
@@ -1643,6 +1652,7 @@ func TestVarExpressionExecutorPreservesBoundStringDomainOnReuse(t *testing.T) {
 			require.NoError(t, err)
 			require.Equal(t, "你", vec.GetStringAt(0))
 			require.Equal(t, tc.binary, vec.GetIsBinaryStringAt(0))
+			require.Zero(t, domainCalls)
 		})
 	}
 }

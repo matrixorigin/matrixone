@@ -31,4 +31,26 @@ execute bound_domain_marker using @bound_domain_s, @bound_domain_s;
 deallocate prepare bound_domain_marker;
 deallocate prepare bound_domain_text;
 deallocate prepare bound_domain_binary;
+
+-- 静态 binary 身份与选中行的 text 域独立冻结，不能用后者改写 CHARSET。
+set @bound_domain_s = if(false, X'ff', '你a');
+prepare bound_selected_text from 'select charset(@bound_domain_s), collation(@bound_domain_s), char_length(@bound_domain_s), hex(left(@bound_domain_s, 1))';
+execute bound_selected_text;
+set @bound_domain_s = X'e4bda061';
+execute bound_selected_text;
+select charset(@bound_domain_s), char_length(@bound_domain_s), hex(left(@bound_domain_s, 1));
+prepare bound_selected_binary from 'select charset(@bound_domain_s), collation(@bound_domain_s), char_length(@bound_domain_s), hex(left(@bound_domain_s, 1))';
+execute bound_selected_binary;
+set @bound_domain_s = if(false, X'ff', '你a');
+execute bound_selected_binary;
+execute bound_selected_text;
+select charset(@bound_domain_s), char_length(@bound_domain_s), hex(left(@bound_domain_s, 1));
+set @bound_domain_s = NULL;
+execute bound_selected_text;
+execute bound_selected_binary;
+set @bound_domain_s = '你a';
+execute bound_selected_text;
+execute bound_selected_binary;
+deallocate prepare bound_selected_text;
+deallocate prepare bound_selected_binary;
 set @bound_domain_s = NULL;

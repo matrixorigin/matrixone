@@ -374,14 +374,20 @@ func newExpressionExecutorWithAllocation(
 		typ := types.NewWithCharset(
 			types.T(planExpr.Typ.Id), planExpr.Typ.Width, planExpr.Typ.Scale, uint8(planExpr.Typ.Charset),
 		)
+		// Validate the full wire value before converting to the uint8 domain.
+		if t.V.BoundStringDomain > uint32(types.RuntimeStringBinary)+1 ||
+			(t.V.BoundStringDomain != 0 && (t.V.System || !typ.Oid.IsMySQLString())) {
+			return nil, moerr.NewInvalidInputf(proc.Ctx, "invalid bound user variable string domain %d", t.V.BoundStringDomain)
+		}
 		ve := NewVarExpressionExecutor()
 		*ve = VarExpressionExecutor{
-			mp:         proc.Mp(),
-			name:       t.V.Name,
-			system:     t.V.System,
-			global:     t.V.Global,
-			typ:        typ,
-			allocation: selection,
+			mp:                proc.Mp(),
+			name:              t.V.Name,
+			system:            t.V.System,
+			global:            t.V.Global,
+			typ:               typ,
+			boundStringDomain: t.V.BoundStringDomain,
+			allocation:        selection,
 		}
 		return ve, nil
 
@@ -806,10 +812,11 @@ type VarExpressionExecutor struct {
 	maskedNull *vector.Vector
 	vec        *vector.Vector
 
-	name   string
-	system bool
-	global bool
-	typ    types.Type
+	name              string
+	system            bool
+	global            bool
+	typ               types.Type
+	boundStringDomain uint32
 }
 
 func (expr *VarExpressionExecutor) Eval(proc *process.Process, batches []*batch.Batch, selectList []bool) (*vector.Vector, error) {
@@ -843,15 +850,14 @@ func (expr *VarExpressionExecutor) Eval(proc *process.Process, batches []*batch.
 		}
 	}
 	runtimeDomain := types.RuntimeStringInherit
-	// A user-variable string expression owns the charset captured by the
-	// binder. Reading the current assignment's override here would change a
-	// prepared expression's meaning after SET. Parameters have a different
-	// owner and continue to carry their per-execution domains.
-	if !expr.system && expr.typ.Oid.IsMySQLString() {
-		// Vectors retain the binary-OID fallback for legacy consumers. A text
-		// binding over a binary container therefore needs an explicit override,
-		// derived from the bound charset rather than the current assignment.
-		if types.StaticStringDomain(expr.typ) == types.StringDomainText &&
+	// The binding owns both the static type and its independent row override.
+	// Later SET statements change only the value, not either binding axis.
+	if expr.boundStringDomain != 0 {
+		runtimeDomain = types.RuntimeStringDomain(expr.boundStringDomain - 1)
+		// Preserve explicit text charsets over the vector's legacy binary-OID
+		// fallback without rewriting the expression's static identity.
+		if runtimeDomain == types.RuntimeStringInherit &&
+			types.StaticStringDomain(expr.typ) == types.StringDomainText &&
 			types.CharsetType(expr.typ.Oid) == types.CharsetBinary {
 			runtimeDomain = types.RuntimeStringText
 		}

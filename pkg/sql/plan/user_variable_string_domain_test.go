@@ -35,16 +35,16 @@ func (c *variableStringDomainContext) ResolveVariableStringDomain(string, bool, 
 
 func TestBindUserVariableCapturesEffectiveStringDomain(t *testing.T) {
 	for _, tc := range []struct {
-		name    string
-		typ     types.Type
-		domain  types.RuntimeStringDomain
-		charset uint8
+		name   string
+		typ    types.Type
+		domain types.RuntimeStringDomain
 	}{
-		{"inherit text", types.T_text.ToType(), types.RuntimeStringInherit, types.CharsetUTF8},
-		{"inherit binary", types.T_blob.ToType(), types.RuntimeStringInherit, types.CharsetBinary},
-		{"binary value on text type", types.T_text.ToType(), types.RuntimeStringBinary, types.CharsetBinary},
-		{"text value on binary type", types.T_blob.ToType(), types.RuntimeStringText, types.CharsetUTF8},
-		{"keep text collation", types.NewWithCharset(types.T_varchar, 16, 0, types.CharsetUTF8MB4Bin), types.RuntimeStringText, types.CharsetUTF8MB4Bin},
+		{"inherit text", types.T_text.ToType(), types.RuntimeStringInherit},
+		{"inherit binary", types.T_blob.ToType(), types.RuntimeStringInherit},
+		{"binary value on text type", types.T_text.ToType(), types.RuntimeStringBinary},
+		{"text value on binary type", types.T_blob.ToType(), types.RuntimeStringText},
+		{"text value on binary charset", types.NewWithCharset(types.T_varchar, 16, 0, types.CharsetBinary), types.RuntimeStringText},
+		{"keep text collation", types.NewWithCharset(types.T_varchar, 16, 0, types.CharsetUTF8MB4Bin), types.RuntimeStringBinary},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			assigned := makePlan2Type(&tc.typ)
@@ -53,20 +53,30 @@ func TestBindUserVariableCapturesEffectiveStringDomain(t *testing.T) {
 			binder := &baseBinder{builder: &QueryBuilder{compCtx: ctx}}
 			first, err := binder.baseBindVar(&tree.VarExpr{Name: "s"}, 0, true)
 			require.NoError(t, err)
-			require.Equal(t, uint32(tc.charset), first.Typ.Charset)
-			require.Equal(t, assigned.Id, first.Typ.Id)
-			require.Equal(t, assigned.Width, first.Typ.Width)
+			require.Equal(t, assigned, first.Typ, "the static type and effective row domain are independent")
+			require.Equal(t, uint32(tc.domain)+1, first.GetV().BoundStringDomain)
 			require.Equal(t, makePlan2Type(&tc.typ), assigned, "binding must not rewrite the assignment")
 
-			// A new statement binds the new value, without changing the old plan.
 			ctx.domain = types.RuntimeStringBinary
-			if tc.charset == types.CharsetBinary {
+			if tc.domain == types.RuntimeStringBinary {
 				ctx.domain = types.RuntimeStringText
 			}
 			second, err := binder.baseBindVar(&tree.VarExpr{Name: "s"}, 0, true)
 			require.NoError(t, err)
-			require.NotEqual(t, first.Typ.Charset, second.Typ.Charset)
-			require.Equal(t, uint32(tc.charset), first.Typ.Charset)
+			require.Equal(t, first.Typ, second.Typ)
+			require.NotEqual(t, first.GetV().BoundStringDomain, second.GetV().BoundStringDomain)
+			require.Equal(t, uint32(tc.domain)+1, first.GetV().BoundStringDomain)
+
+			copy := DeepCopyExpr(first)
+			require.NotSame(t, first.GetV(), copy.GetV())
+			payload, err := copy.Marshal()
+			require.NoError(t, err)
+			var restored Expr
+			require.NoError(t, restored.Unmarshal(payload))
+			require.Equal(t, assigned, restored.Typ)
+			require.Equal(t, first.GetV(), restored.GetV())
+			copy.GetV().BoundStringDomain = second.GetV().BoundStringDomain
+			require.Equal(t, uint32(tc.domain)+1, first.GetV().BoundStringDomain)
 		})
 	}
 }
@@ -88,10 +98,21 @@ func TestBindUserVariableStringDomainErrorsAndNonStringControls(t *testing.T) {
 	for _, oid := range []types.T{types.T_int64, types.T_bit, types.T_json} {
 		assigned = makeSimplePlan2Type(oid)
 		expr, err := binder.baseBindVar(&tree.VarExpr{Name: "s"}, 0, true)
-		require.NoError(t, err, "non-string variables must not use the string-domain resolver")
+		require.NoError(t, err)
 		require.Equal(t, assigned, expr.Typ)
+		require.Zero(t, expr.GetV().BoundStringDomain)
 	}
 	expr, err := binder.baseBindVar(&tree.VarExpr{Name: "version", System: true}, 0, true)
 	require.NoError(t, err)
 	require.Equal(t, makeSimplePlan2Type(types.T_text), expr.Typ)
+	require.Zero(t, expr.GetV().BoundStringDomain)
+
+	// Optional contexts still create a frozen INHERIT binding, not a legacy
+	// expression whose domain would be read again on every execution.
+	binder.builder.compCtx = &ctx.MockCompilerContext
+	assigned = makeSimplePlan2Type(types.T_text)
+	expr, err = binder.baseBindVar(&tree.VarExpr{Name: "s"}, 0, true)
+	require.NoError(t, err)
+	require.Equal(t, assigned, expr.Typ)
+	require.Equal(t, uint32(1), expr.GetV().BoundStringDomain)
 }

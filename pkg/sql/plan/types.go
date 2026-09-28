@@ -345,8 +345,9 @@ type UserVariableTypeResolver interface {
 }
 
 // UserVariableStringDomainResolver exposes the assigned value's domain override
-// at binding time. A variable expression captures the effective domain in its
-// own Type; it does not rewrite the session value or EXECUTE USING parameters.
+// at binding time. A variable expression captures that domain in its VarRef,
+// independently of its static Type. It does not rewrite the session value or
+// EXECUTE USING parameters.
 type UserVariableStringDomainResolver interface {
 	ResolveVariableStringDomain(varName string, isSystemVar, isGlobalVar bool) (types.RuntimeStringDomain, error)
 }
