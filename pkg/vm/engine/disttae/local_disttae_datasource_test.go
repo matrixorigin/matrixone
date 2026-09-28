@@ -515,23 +515,34 @@ func TestLocalDatasourceWorkspaceDeleteEntriesMergesHotBlock(t *testing.T) {
 func TestLocalDatasourceWorkspaceDeleteEntriesKeepsLargeBlockBatches(t *testing.T) {
 	oid := types.NewObjectid()
 	blk := types.NewBlockidWithObjectID(&oid, 1)
-	rows := make([]types.Rowid, maxMergedWorkspaceDeleteRowsPerBlock+1)
-	for i := range rows {
-		rows[i] = types.NewRowid(&blk, uint32(i))
+	for _, tc := range []struct {
+		name       string
+		totalRows  int
+		wantGroups int
+	}{
+		{name: "at cap", totalRows: maxMergedWorkspaceDeleteRowsPerBlock, wantGroups: 1},
+		{name: "above cap", totalRows: maxMergedWorkspaceDeleteRowsPerBlock + 1, wantGroups: mergeWorkspaceDeleteEntriesForBlockThreshold},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			ls := &LocalDisttaeDataSource{txnOffset: 1}
+			ls.workspaceDeletes.initialized = true
+			ls.workspaceDeletes.txnOffset = 1
+			ls.workspaceDeletes.entries = make([]workspaceDeleteEntry, mergeWorkspaceDeleteEntriesForBlockThreshold)
+			firstRows := tc.totalRows - len(ls.workspaceDeletes.entries) + 1
+			rows := make([]types.Rowid, firstRows)
+			for i := range rows {
+				rows[i] = types.NewRowid(&blk, uint32(i))
+			}
+			ls.workspaceDeletes.entries[0] = workspaceDeleteEntry{rowIds: rows, sorted: true}
+			for i := 1; i < len(ls.workspaceDeletes.entries); i++ {
+				ls.workspaceDeletes.entries[i] = workspaceDeleteEntry{
+					rowIds: []types.Rowid{types.NewRowid(&blk, uint32(len(rows)+i))},
+					sorted: true,
+				}
+			}
+			require.Len(t, ls.workspaceDeleteEntriesForBlockLocked(&blk, true), tc.wantGroups)
+		})
 	}
-	ls := &LocalDisttaeDataSource{txnOffset: 1}
-	ls.workspaceDeletes.initialized = true
-	ls.workspaceDeletes.txnOffset = 1
-	ls.workspaceDeletes.entries = make([]workspaceDeleteEntry, mergeWorkspaceDeleteEntriesForBlockThreshold)
-	ls.workspaceDeletes.entries[0] = workspaceDeleteEntry{rowIds: rows, sorted: true}
-	for i := 1; i < len(ls.workspaceDeletes.entries); i++ {
-		ls.workspaceDeletes.entries[i] = workspaceDeleteEntry{
-			rowIds: []types.Rowid{types.NewRowid(&blk, uint32(len(rows)+i))},
-			sorted: true,
-		}
-	}
-
-	require.Len(t, ls.workspaceDeleteEntriesForBlockLocked(&blk, true), mergeWorkspaceDeleteEntriesForBlockThreshold)
 }
 
 func TestLocalDatasourceWorkspaceDeleteColdReadsKeepBatches(t *testing.T) {
