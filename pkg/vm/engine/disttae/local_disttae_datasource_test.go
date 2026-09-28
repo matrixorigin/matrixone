@@ -381,13 +381,13 @@ func TestLocalDatasourceWorkspaceDeleteEntriesSortsWithoutMutatingBatch(t *testi
 		require.True(t, entry.sorted)
 		require.True(t, slices.IsSortedFunc(entry.rowIds, func(a, b types.Rowid) int { return a.Compare(&b) }))
 	}
-	blkEntries := ls.workspaceDeleteEntriesForBlockLocked(&blk)
+	blkEntries := ls.workspaceDeleteEntriesForBlockLocked(&blk, true)
 	require.Len(t, blkEntries, 1)
 	require.Equal(t, []types.Rowid{types.NewRowid(&blk, 1), types.NewRowid(&blk, 3)}, blkEntries[0].rowIds)
-	blk2Entries := ls.workspaceDeleteEntriesForBlockLocked(&blk2)
+	blk2Entries := ls.workspaceDeleteEntriesForBlockLocked(&blk2, true)
 	require.Len(t, blk2Entries, 1)
 	require.Equal(t, rows2, blk2Entries[0].rowIds)
-	require.Empty(t, ls.workspaceDeleteEntriesForBlockLocked(&blk3))
+	require.Empty(t, ls.workspaceDeleteEntriesForBlockLocked(&blk3, true))
 	require.Equal(t, []int64{4}, ls.applyWorkspaceEntryDeletes(&blk, []int64{1, 3, 4}, nil))
 	require.Equal(t, []int64{4}, ls.applyWorkspaceEntryDeletes(&blk2, []int64{2, 4}, nil))
 	require.Equal(t, []int64{1, 4}, ls.applyWorkspaceEntryDeletes(&blk3, []int64{1, 4}, nil))
@@ -448,14 +448,14 @@ func TestLocalDatasourceWorkspaceDeleteEntriesMergesLargeDeleteSet(t *testing.T)
 	require.Len(t, entries[0].rowIds, mergeWorkspaceDeleteEntriesThreshold+1)
 	require.True(t, slices.IsSortedFunc(entries[0].rowIds, func(a, b types.Rowid) int { return a.Compare(&b) }))
 
-	blkEntries := ls.workspaceDeleteEntriesForBlockLocked(&blk)
+	blkEntries := ls.workspaceDeleteEntriesForBlockLocked(&blk, true)
 	require.Len(t, blkEntries, 1)
 	require.True(t, blkEntries[0].sorted)
 	for _, rowID := range blkEntries[0].rowIds {
 		require.Equal(t, blk, *rowID.BorrowBlockID())
 	}
 
-	blk2Entries := ls.workspaceDeleteEntriesForBlockLocked(&blk2)
+	blk2Entries := ls.workspaceDeleteEntriesForBlockLocked(&blk2, true)
 	require.Len(t, blk2Entries, 1)
 	require.True(t, blk2Entries[0].sorted)
 	for _, rowID := range blk2Entries[0].rowIds {
@@ -499,14 +499,14 @@ func TestLocalDatasourceWorkspaceDeleteEntriesMergesHotBlock(t *testing.T) {
 		},
 	}
 
-	require.Len(t, ls.workspaceDeleteEntriesForBlockLocked(&blk), mergeWorkspaceDeleteEntriesForBlockThreshold-1)
+	require.Len(t, ls.workspaceDeleteEntriesForBlockLocked(&blk, true), mergeWorkspaceDeleteEntriesForBlockThreshold-1)
 	require.Equal(t, []int64{0}, ls.applyWorkspaceEntryDeletes(&blk, []int64{0}, nil))
 	ls.txnOffset = len(txn.writes)
-	blockEntries := ls.workspaceDeleteEntriesForBlockLocked(&blk)
+	blockEntries := ls.workspaceDeleteEntriesForBlockLocked(&blk, true)
 	require.Len(t, blockEntries, 1)
 	require.Len(t, blockEntries[0].rowIds, mergeWorkspaceDeleteEntriesForBlockThreshold)
 	require.True(t, slices.IsSortedFunc(blockEntries[0].rowIds, func(a, b types.Rowid) int { return a.Compare(&b) }))
-	require.Len(t, ls.workspaceDeleteEntriesForBlockLocked(&blk), 1)
+	require.Len(t, ls.workspaceDeleteEntriesForBlockLocked(&blk, true), 1)
 	require.Equal(t, []int64{mergeWorkspaceDeleteEntriesForBlockThreshold},
 		ls.applyWorkspaceEntryDeletes(&blk, []int64{0, 1, mergeWorkspaceDeleteEntriesForBlockThreshold - 1, mergeWorkspaceDeleteEntriesForBlockThreshold}, nil))
 	require.Empty(t, ls.applyWorkspaceEntryDeletes(&otherBlk, []int64{7}, nil))
@@ -531,7 +531,39 @@ func TestLocalDatasourceWorkspaceDeleteEntriesKeepsLargeBlockBatches(t *testing.
 		}
 	}
 
-	require.Len(t, ls.workspaceDeleteEntriesForBlockLocked(&blk), mergeWorkspaceDeleteEntriesForBlockThreshold)
+	require.Len(t, ls.workspaceDeleteEntriesForBlockLocked(&blk, true), mergeWorkspaceDeleteEntriesForBlockThreshold)
+}
+
+func TestLocalDatasourceWorkspaceDeleteColdReadsKeepBatches(t *testing.T) {
+	oid := types.NewObjectid()
+	blk := types.NewBlockidWithObjectID(&oid, 1)
+	entries := make([]workspaceDeleteEntry, mergeWorkspaceDeleteEntriesForBlockThreshold)
+	for i := range entries {
+		rows := make([]types.Rowid, 32)
+		for j := range rows {
+			rows[j] = types.NewRowid(&blk, uint32((len(entries)-1-i)*len(rows)+j))
+		}
+		entries[i] = workspaceDeleteEntry{rowIds: rows, sorted: true}
+	}
+	ls := &LocalDisttaeDataSource{txnOffset: 1}
+	ls.rc.WorkspaceLocked = true
+	ls.workspaceDeletes.initialized = true
+	ls.workspaceDeletes.txnOffset = 1
+	ls.workspaceDeletes.entries = entries
+	ls.workspaceDeletes.byBlock = map[objectio.Blockid][]workspaceDeleteEntry{blk: entries}
+
+	mask := objectio.GetReusableBitmap()
+	defer mask.Release()
+	ls.applyWorkspaceEntryDeletes(&blk, nil, &mask)
+	require.True(t, mask.Contains(0))
+	require.True(t, mask.Contains(4095))
+	require.Len(t, ls.workspaceDeletes.byBlock[blk], len(entries))
+
+	require.Equal(t, []int64{4096}, ls.applyWorkspaceEntryDeletes(&blk, []int64{0, 4096}, nil))
+	require.Len(t, ls.workspaceDeletes.byBlock[blk], len(entries))
+
+	require.Empty(t, ls.applyWorkspaceEntryDeletes(&blk, []int64{4064}, nil))
+	require.Len(t, ls.workspaceDeletes.byBlock[blk], len(entries))
 }
 
 func TestLocalDatasourceWorkspaceDeleteEntriesInvalidatesCacheWhenTxnOffsetChanges(t *testing.T) {
@@ -578,8 +610,8 @@ func TestLocalDatasourceWorkspaceDeleteEntriesInvalidatesCacheWhenTxnOffsetChang
 		},
 	}
 
-	require.Equal(t, []workspaceDeleteEntry{{rowIds: []types.Rowid{row}, sorted: true}}, ls.workspaceDeleteEntriesForBlockLocked(&blk))
-	require.Empty(t, ls.workspaceDeleteEntriesForBlockLocked(&blk2))
+	require.Equal(t, []workspaceDeleteEntry{{rowIds: []types.Rowid{row}, sorted: true}}, ls.workspaceDeleteEntriesForBlockLocked(&blk, true))
+	require.Empty(t, ls.workspaceDeleteEntriesForBlockLocked(&blk2, true))
 	require.Equal(t, 1, ls.workspaceDeletes.txnOffset)
 	require.NotNil(t, ls.workspaceDeletes.byBlock)
 
@@ -590,8 +622,8 @@ func TestLocalDatasourceWorkspaceDeleteEntriesInvalidatesCacheWhenTxnOffsetChang
 	// Changing txnOffset must invalidate the block index built for the previous
 	// view of txn writes, otherwise later deletes can be silently skipped.
 	require.Nil(t, ls.workspaceDeletes.byBlock)
-	require.Equal(t, []workspaceDeleteEntry{{rowIds: []types.Rowid{row2}, sorted: true}}, ls.workspaceDeleteEntriesForBlockLocked(&blk2))
-	require.Equal(t, []workspaceDeleteEntry{{rowIds: []types.Rowid{row}, sorted: true}}, ls.workspaceDeleteEntriesForBlockLocked(&blk))
+	require.Equal(t, []workspaceDeleteEntry{{rowIds: []types.Rowid{row2}, sorted: true}}, ls.workspaceDeleteEntriesForBlockLocked(&blk2, true))
+	require.Equal(t, []workspaceDeleteEntry{{rowIds: []types.Rowid{row}, sorted: true}}, ls.workspaceDeleteEntriesForBlockLocked(&blk, true))
 }
 
 func newWorkspaceDeleteBatch(t *testing.T, rows []types.Rowid) *batch.Batch {
