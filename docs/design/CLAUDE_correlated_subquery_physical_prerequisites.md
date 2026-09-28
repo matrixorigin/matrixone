@@ -34,7 +34,7 @@ JoinMap 通过当前 CN 的 MessageBoard 交接，不能把远端 HashBuild 直�
 
 - 单 probe + 单 remote build、地址不同：先归并到协调 CN，再构造 JOIN/build。
 - 本地 SINK_SCAN 或 foreign 执行依赖：广播阶段保留其 owner，扫描仍可远端执行。
-- 已共址的单 CN、同一 remote CN、普通可搬移 local build，以及普通多 probe 广播保持现有路径。
+- 所有根 scope 已位于当前 CN 时保留原路径，包括本地并行与多 probe SINK；共址不要求单 scope/Mcpu=1。同一 remote CN、普通可搬移 local build，以及普通多 probe 广播也保持现有路径。
 - ASOF build-left 同样使用该边界，交换后的真实 probe/build 才是判断输入。
 - 原有 owner-aware shuffle Source 路径不被广播修复无条件降级。
 
@@ -50,7 +50,7 @@ JoinMap 通过当前 CN 的 MessageBoard 交接，不能把远端 HashBuild 直�
 
 ## 验证与测试架构
 
-- 轻量 typed-scope UT：共址/异址、local sink、多个 probe、WINDOW 两侧；实际调用 `compileJoin` 验证该阶段 shuffle 被关闭且扫描地址保留，另保留普通安全路径对照。
+- 轻量 typed-scope UT：共址/异址、local sink、本地并行/多个 probe、WINDOW 两侧及已共址并行对照；实际调用 `compileJoin` 验证该阶段 shuffle 被关闭且扫描地址保留，另保留普通安全路径对照。
 - 单独 `multicn` 测试进程：一个两 CN fixture，两个表共 7 行。入口 CN 在查询期间 draining，强制扫描到另一 CN；比对完整结果、LIMIT 1、空输入和 PHYPLAN 远端地址。DDL/清理前恢复入口 CN；SQL 连接、全局测试开关及 cluster 均注册清理。
 - 独立子包是必要的隔离边界：共享单 CN 集成包已经持有进程内完整 cluster 准入，不能在其内部再启动第二个完整 cluster，也不应为该测试销毁共享 fixture。首次全包执行暴露这一约束，已据此调整。
 - 公共 BVT：`test/distributed/cases/join/coordinator_stage.sql`，覆盖相同语义、prepare 重用和空输入。结果经 mo-tester 生成、人工核对、同实例普通比较复跑，并检查 schema 清理。

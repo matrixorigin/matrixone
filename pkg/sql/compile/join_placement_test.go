@@ -29,10 +29,12 @@ func TestBroadcastJoinInputColocation(t *testing.T) {
 	nodes := engine.Nodes{{Id: "local", Addr: "local:6001", Mcpu: 1}, {Id: "remote", Addr: "remote:6001", Mcpu: 1}, {Id: "other", Addr: "other:6001", Mcpu: 1}}
 	for _, tc := range []struct {
 		name                      string
-		probe, build              int
+		probe, build, probeCPU    int
 		sink, multiple, wantLocal bool
 	}{
 		{name: "already local", wantLocal: true},
+		{name: "local parallel sink", probeCPU: 4, sink: true},
+		{name: "multiple local sink probes", sink: true, multiple: true},
 		{name: "same remote", probe: 1, build: 1},
 		{name: "remote build local probe", build: 1, wantLocal: true},
 		{name: "different remote build", probe: 1, build: 2, wantLocal: true},
@@ -59,7 +61,11 @@ func TestBroadcastJoinInputColocation(t *testing.T) {
 			if tc.multiple {
 				probe = append(probe, makeScope(tc.probe, false))
 			}
+			if tc.probeCPU != 0 {
+				probe[0].NodeInfo.Mcpu = tc.probeCPU
+			}
 			oldProbe, oldBuild := probe[0], build[0]
+			oldProbeCount, oldCPU := len(probe), probe[0].NodeInfo.Mcpu
 			probe, build = c.colocateBroadcastJoinInputs(probe, build)
 			if tc.wantLocal {
 				require.True(t, c.scopesRunOnCoordinator(probe))
@@ -71,6 +77,8 @@ func TestBroadcastJoinInputColocation(t *testing.T) {
 					require.Contains(t, build[0].PreScopes, oldBuild)
 				}
 			} else {
+				require.Len(t, probe, oldProbeCount)
+				require.Equal(t, oldCPU, probe[0].NodeInfo.Mcpu)
 				require.Same(t, oldProbe, probe[0])
 				require.Same(t, oldBuild, build[0])
 			}
@@ -117,13 +125,15 @@ func TestJoinWindowStagePlacement(t *testing.T) {
 		s.setRootOperator(merge.NewArgument())
 		return s
 	}
-	local, remote := makeScope(0), makeScope(1)
-	defer ReleaseScopes([]*Scope{local, remote})
+	local, remote, parallel := makeScope(0), makeScope(1), makeScope(0)
+	parallel.NodeInfo.Mcpu = 4
+	defer ReleaseScopes([]*Scope{local, remote, parallel})
 	node := newShuffleJoinTestNode(1)
 	node.Stats.HashmapStats.Shuffle = false
 	require.False(t, c.joinNeedsLocalWindow(node, []*Scope{local}, []*Scope{remote}))
 	local.setRootOperator(windowop.NewArgument())
 	require.False(t, c.joinNeedsLocalWindow(node, []*Scope{local}, []*Scope{local}))
+	require.False(t, c.joinNeedsLocalWindow(node, []*Scope{parallel}, []*Scope{local}))
 	require.True(t, c.joinNeedsLocalWindow(node, []*Scope{local}, []*Scope{remote}))
 	require.True(t, c.joinNeedsLocalWindow(node, []*Scope{remote}, []*Scope{local}))
 	node.Stats.HashmapStats.Shuffle = true

@@ -19,10 +19,23 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/vm"
 )
 
+// CN ownership, not local worker count, determines colocation. This differs
+// from scopesRunOnCoordinator, which requires one single-worker pipeline.
+func (c *Compile) joinInputsOnCoordinator(probe, build []*Scope) bool {
+	for _, scopes := range [2][]*Scope{probe, build} {
+		for _, scope := range scopes {
+			if !sameExecutionAddr(scope.NodeInfo.Addr, c.addr) {
+				return false
+			}
+		}
+	}
+	return true
+}
+
 // A WINDOW scope cannot be encoded remotely. Preserve its coordinator stage
 // before either broadcast or shuffle attaches it to a different scope tree.
 func (c *Compile) joinNeedsLocalWindow(node *plan.Node, probe, build []*Scope) bool {
-	if !node.Stats.HashmapStats.Shuffle && c.scopesRunOnCoordinator(probe) && c.scopesRunOnCoordinator(build) {
+	if !node.Stats.HashmapStats.Shuffle && c.joinInputsOnCoordinator(probe, build) {
 		return false
 	}
 	return scopesContainOperator(probe, vm.Window) || scopesContainOperator(build, vm.Window)
@@ -35,7 +48,8 @@ func (c *Compile) joinNeedsLocalWindow(node *plan.Node, probe, build []*Scope) b
 // attaching such a build below a remote probe does not relocate that state.
 // Shuffle has its own owner-aware stage placement and does not use this path.
 func (c *Compile) colocateBroadcastJoinInputs(probe, build []*Scope) ([]*Scope, []*Scope) {
-	if c.scopesRunOnCoordinator(probe) && c.scopesRunOnCoordinator(build) {
+	// Preserve already-local parallel pipelines and their probe fanout.
+	if c.joinInputsOnCoordinator(probe, build) {
 		return probe, build
 	}
 	_, hasLocalInput := sinkScanDependencyNode(probe, build)
