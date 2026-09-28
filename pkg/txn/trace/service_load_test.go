@@ -43,7 +43,7 @@ func Test_writeToMO(t *testing.T) {
 		clock:    clock.NewHLCClock(func() int64 { return 0 }, 0),
 		executor: exec,
 	}
-	err := serv.writeToMO(loadAction{
+	err := serv.writeToMO(context.Background(), loadAction{
 		sql: "insert into t1 values (1)",
 	})
 	assert.Error(t, err)
@@ -98,7 +98,7 @@ func Test_writeToS3(t *testing.T) {
 	err = os.WriteFile(tPath, []byte("abc"), 0755)
 	assert.NoError(t, err)
 
-	err = serv.writeToS3(loadAction{
+	err = serv.writeToS3(context.Background(), loadAction{
 		file: tPath,
 	})
 	assert.NoError(t, err)

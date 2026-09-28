@@ -97,27 +97,34 @@ func ConstructBlockPKFilter(
 		disjuncts = []BasePKFilter{basePKFilter}
 	}
 
+	// BasePKFilter's zero Op is EQUAL. When the planner cannot materialize a
+	// predicate (for example, an internal raw prefix literal), an invalid base
+	// filter must therefore not be handed to the search-function builder: it
+	// would be mistaken for an empty equality and intersect every membership
+	// hit away. With a membership filter, fail open to the membership search.
 	var (
-		sortedMissing bool
-		unsMissing    bool
+		sortedMissing = !basePKFilter.Valid
+		unsMissing    = !basePKFilter.Valid
 		sortedFuncs   []func(*vector.Vector) []int64
 		unsFuncs      []func(*vector.Vector) []int64
 	)
 
-	for idx := range disjuncts {
-		sortedFunc, unsortedFunc, err := buildBlockPKSearchFuncs(disjuncts[idx])
-		if err != nil {
-			return objectio.BlockReadFilter{}, err
-		}
-		if sortedFunc == nil {
-			sortedMissing = true
-		} else {
-			sortedFuncs = append(sortedFuncs, sortedFunc)
-		}
-		if unsortedFunc == nil {
-			unsMissing = true
-		} else {
-			unsFuncs = append(unsFuncs, unsortedFunc)
+	if basePKFilter.Valid {
+		for idx := range disjuncts {
+			sortedFunc, unsortedFunc, err := buildBlockPKSearchFuncs(disjuncts[idx])
+			if err != nil {
+				return objectio.BlockReadFilter{}, err
+			}
+			if sortedFunc == nil {
+				sortedMissing = true
+			} else {
+				sortedFuncs = append(sortedFuncs, sortedFunc)
+			}
+			if unsortedFunc == nil {
+				unsMissing = true
+			} else {
+				unsFuncs = append(unsFuncs, unsortedFunc)
+			}
 		}
 	}
 

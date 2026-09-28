@@ -46,9 +46,12 @@ type container struct {
 	freeBats       []*batch.Batch
 	i              int
 	recursiveLevel int
-	hashTable      *hashmap.StrHashMap
-	insertedRows   []int64
-	memory         cteaccount.Accountant
+	// hasRecursiveRows tracks whether the current recursive round added rows
+	// to the CTE frontier. It spans all sender Last markers in that round.
+	hasRecursiveRows bool
+	hashTable        *hashmap.StrHashMap
+	insertedRows     []int64
+	memory           cteaccount.Accountant
 }
 
 type MergeCTE struct {
@@ -112,6 +115,7 @@ func (mergeCTE *MergeCTE) Reset(proc *process.Process, pipelineFailed bool, err 
 	ctr.i = 0
 	ctr.last = false
 	ctr.recursiveLevel = 0
+	ctr.hasRecursiveRows = false
 	ctr.cleanHashTable()
 }
 
@@ -127,6 +131,7 @@ func (mergeCTE *MergeCTE) Free(proc *process.Process, pipelineFailed bool, err e
 	ctr.bats = nil
 	ctr.freeBats = nil
 	ctr.i = 0
+	ctr.hasRecursiveRows = false
 	ctr.cleanHashTable()
 }
 

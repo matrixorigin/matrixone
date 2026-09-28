@@ -50,6 +50,37 @@ func TestParsePatternInNLModeNgramUnchanged(t *testing.T) {
 	assert.Equal(t, STAR, ps[0].Operator)
 }
 
+// #29288: BOOLEAN mode dropped a final one-rune term after whitespace (it starts and ends on the
+// last rune, so it never reached the flush the multi-rune final term uses). MATCH then missed
+// documents that term would return, breaking the boolean-OR superset property.
+func TestParsePatternBooleanFinalOneRuneTerm(t *testing.T) {
+	b := func(p string) []string {
+		ps, err := ParsePattern(p, int64(tree.FULLTEXT_BOOLEAN), "")
+		require.Nil(t, err, p)
+		return collectTexts(ps)
+	}
+
+	// The dropped-term cases: the trailing single rune (CJK / latin / wildcard) is now kept.
+	assert.Equal(t, []string{"nope", "蕉"}, b("nope 蕉"))
+	assert.Equal(t, []string{"apple", "a"}, b("apple a"))
+	assert.Equal(t, []string{"apple", "*"}, b("apple *"))
+
+	// `nope 蕉` must be a superset of `蕉` (boolean OR).
+	assert.Subset(t, b("nope 蕉"), b("蕉"))
+
+	// Controls: a lone single rune, a multi-rune final term (must not double-emit), and a trailing
+	// bracket group are unchanged.
+	assert.Equal(t, []string{"蕉"}, b("蕉"))
+	assert.Equal(t, []string{"nope", "xy"}, b("nope xy"))
+	assert.Len(t, b("apple (a b)"), 2)
+
+	// The final `*` keeps its STAR operator.
+	ps, err := ParsePattern("apple *", int64(tree.FULLTEXT_BOOLEAN), "")
+	require.Nil(t, err)
+	require.Len(t, ps, 2)
+	assert.Equal(t, STAR, ps[1].Operator)
+}
+
 func TestParsePatternRoutesByParser(t *testing.T) {
 	// gojieba: "苹果香蕉" segments cleanly into two TEXT tokens.
 	ps, err := ParsePattern("苹果香蕉", int64(tree.FULLTEXT_NL), "gojieba")

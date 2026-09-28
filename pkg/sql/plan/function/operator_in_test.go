@@ -18,6 +18,7 @@ import (
 	"testing"
 
 	"github.com/matrixorigin/matrixone/pkg/container/types"
+	"github.com/matrixorigin/matrixone/pkg/container/vector"
 	"github.com/matrixorigin/matrixone/pkg/testutil"
 	"github.com/stretchr/testify/require"
 )
@@ -134,6 +135,111 @@ func TestOperatorFixedInConstNullListUsesThreeValuedLogic(t *testing.T) {
 	)
 
 	ok, errInfo := tc.Run()
+	require.True(t, ok, errInfo)
+}
+
+func TestOperatorBitInAndNotInUseUnsignedThreeValuedLogic(t *testing.T) {
+	proc := testutil.NewProcess(t)
+	bitType := types.New(types.T_bit, 64, 0)
+	highBit := uint64(1) << 63
+	maxBit := ^uint64(0)
+	left := []uint64{0, 1, highBit, maxBit, 42, 0}
+	leftNulls := []bool{false, false, false, false, false, true}
+
+	for _, test := range []struct {
+		name      string
+		right     []uint64
+		rightNull []bool
+		inValues  []bool
+		inNulls   []bool
+		notValues []bool
+		notNulls  []bool
+	}{
+		{
+			name:      "non-null list",
+			right:     []uint64{1, highBit, maxBit, maxBit},
+			inValues:  []bool{false, true, true, true, false, false},
+			inNulls:   []bool{false, false, false, false, false, true},
+			notValues: []bool{true, false, false, false, true, false},
+			notNulls:  []bool{false, false, false, false, false, true},
+		},
+		{
+			name:      "nullable list",
+			right:     []uint64{1, highBit, maxBit, 0},
+			rightNull: []bool{false, false, false, true},
+			inValues:  []bool{false, true, true, true, false, false},
+			inNulls:   []bool{true, false, false, false, true, true},
+			notValues: []bool{false, false, false, false, false, false},
+			notNulls:  []bool{true, false, false, false, true, true},
+		},
+	} {
+		t.Run(test.name, func(t *testing.T) {
+			inputs := []FunctionTestInput{
+				NewFunctionTestInput(bitType, left, leftNulls),
+				NewFunctionTestInput(bitType, test.right, test.rightNull),
+			}
+			inCase := NewFunctionTestCase(
+				proc,
+				inputs,
+				NewFunctionTestResult(types.T_bool.ToType(), false, test.inValues, test.inNulls),
+				newOpOperatorFixedIn[uint64]().operatorIn,
+			)
+			ok, errInfo := inCase.Run()
+			require.True(t, ok, errInfo)
+
+			for _, registered := range []struct {
+				name   string
+				values []bool
+				nulls  []bool
+			}{
+				{name: InFunctionName, values: test.inValues, nulls: test.inNulls},
+				{name: "not_in", values: test.notValues, nulls: test.notNulls},
+			} {
+				resolved, err := GetFunctionByName(
+					proc.Ctx,
+					registered.name,
+					[]types.Type{bitType, bitType},
+				)
+				require.NoError(t, err, registered.name)
+				_, shouldCast := resolved.ShouldDoImplicitTypeCast()
+				require.False(t, shouldCast, registered.name)
+
+				out, err := RunFunctionDirectly(
+					proc,
+					resolved.GetEncodedOverloadID(),
+					inCase.parameters,
+					len(left),
+				)
+				require.NoError(t, err, registered.name)
+				require.NotNil(t, out, registered.name)
+				defer out.Free(proc.Mp())
+				require.Equal(t, registered.values, vector.MustFixedColWithTypeCheck[bool](out), registered.name)
+				for row, wantNull := range registered.nulls {
+					require.Equal(t, wantNull, out.GetNulls().Contains(uint64(row)), registered.name)
+				}
+			}
+
+			notInCase := NewFunctionTestCase(
+				proc,
+				inputs,
+				NewFunctionTestResult(types.T_bool.ToType(), false, test.notValues, test.notNulls),
+				newOpOperatorFixedIn[uint64]().operatorNotIn,
+			)
+			ok, errInfo = notInCase.Run()
+			require.True(t, ok, errInfo)
+		})
+	}
+
+	constNullIn := NewFunctionTestCase(
+		proc,
+		[]FunctionTestInput{
+			NewFunctionTestInput(bitType, []uint64{0, 1, maxBit}, nil),
+			NewFunctionTestConstInput(bitType, []uint64{0}, []bool{true}),
+		},
+		NewFunctionTestResult(types.T_bool.ToType(), false, []bool{false, false, false}, []bool{true, true, true}),
+		newOpOperatorFixedIn[uint64]().operatorIn,
+	)
+	ok, errInfo := constNullIn.Run()
 	require.True(t, ok, errInfo)
 }
 

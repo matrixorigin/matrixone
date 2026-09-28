@@ -565,6 +565,10 @@ func makeAggExecutors(timeWin *TimeWin, proc *process.Process, growFirstGroup bo
 		if err != nil {
 			return nil, err
 		}
+		aggexec.ConfigureGroupConcatWarningRetention(
+			aggs[i], process.WarningDiagnosticRetentionLimitForProcess(proc))
+		aggexec.ConfigureGroupConcatWarningBudget(
+			aggs[i], process.WarningDiagnosticBudgetForProcess(proc))
 		aggexec.ConfigureGroupConcatTimeZone(aggs[i], proc.Base.SessionInfo.TimeZone)
 		aggexec.ConfigureJSONAggregateOpaqueProtocol(
 			aggs[i], jsonAggregateOpaqueProtocolVersion(proc))

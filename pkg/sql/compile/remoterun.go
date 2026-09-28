@@ -58,6 +58,7 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/sql/colexec/mergerecursive"
 	"github.com/matrixorigin/matrixone/pkg/sql/colexec/mergetop"
 	"github.com/matrixorigin/matrixone/pkg/sql/colexec/minus"
+	"github.com/matrixorigin/matrixone/pkg/sql/colexec/minusall"
 	"github.com/matrixorigin/matrixone/pkg/sql/colexec/mongoscan"
 	"github.com/matrixorigin/matrixone/pkg/sql/colexec/multi_update"
 	"github.com/matrixorigin/matrixone/pkg/sql/colexec/offset"
@@ -115,8 +116,15 @@ func encodeScope(s *Scope) ([]byte, error) {
 }
 
 func encodeRemoteScope(s *Scope, proc *process.Process) ([]byte, error) {
+	return encodeRemoteScopeWithVectorProtocol(s, proc, nil)
+}
+
+func encodeRemoteScopeWithVectorProtocol(s *Scope, proc *process.Process, requiresBoundProtocol *bool) ([]byte, error) {
 	p, err := fillPipeline(s)
 	if err != nil {
+		return nil, err
+	}
+	if err = validateVectorPartitionDestinationWithResult(proc, p, requiresBoundProtocol); err != nil {
 		return nil, err
 	}
 	if err = validateGroupingTransportDestinations(proc, p); err != nil {
@@ -145,8 +153,23 @@ func encodeRemoteScope(s *Scope, proc *process.Process) ([]byte, error) {
 			return nil, err
 		}
 	}
-	if features.IntegerParameterCoercion {
+	if features.IntegerParameterCoercion || features.SpecialIntegerConsumers {
 		if err = validateIntegerArgumentDestination(proc, p); err != nil {
+			return nil, err
+		}
+	}
+	if features.PreparedPrecisionScalar {
+		if err = validatePreparedPrecisionDestination(proc, p); err != nil {
+			return nil, err
+		}
+	}
+	if features.DecimalDivisionSemantics {
+		if err = validateDecimalDivisionDestination(proc, p); err != nil {
+			return nil, err
+		}
+	}
+	if required := temporalExpressionProtocolVersion(features); required != 0 {
+		if err = validateTemporalResultDestination(proc, p, required); err != nil {
 			return nil, err
 		}
 	}
@@ -285,6 +308,9 @@ func decodeScope(data []byte, proc *process.Process, isRemote bool, eng engine.E
 		return nil, err
 	}
 	if isRemote {
+		if err = validateRemoteVectorPartitionProtocol(proc, p); err != nil {
+			return nil, err
+		}
 		if err = validateRemoteStringProvenancePipelineProtocol(proc, p); err != nil {
 			return nil, err
 		}
@@ -698,8 +724,37 @@ func fillInstructionsForScope(s *Scope, ctx *scopeContext, p *pipeline.Pipeline,
 		if err != nil {
 			return err
 		}
+		switch ins.OpType() {
+		case vm.Minus, vm.MinusAll, vm.Intersect, vm.IntersectAll:
+			if err := s.restoreBinarySetChildren(ins); err != nil {
+				ins.Release()
+				return err
+			}
+			continue
+		}
 		s.doSetRootOperator(ins)
 	}
+	return nil
+}
+
+// restoreBinarySetChildren reverses the fixed post-order wire shape emitted by
+// both set-operation compiler paths: left merge, right merge, binary operator.
+// The legacy decoder otherwise rebuilds instructions as a unary chain. This
+// also applies to a distinct or intersect ancestor of a nested MINUS ALL.
+func (s *Scope) restoreBinarySetChildren(op vm.Operator) error {
+	right := s.RootOp
+	if right == nil || right.OpType() != vm.Merge || right.GetOperatorBase().NumChildren() != 1 {
+		return moerr.NewInternalErrorNoCtxf("invalid remote binary set operator %v right input", op.OpType())
+	}
+	left := right.GetOperatorBase().GetChildren(0)
+	if left == nil || left.OpType() != vm.Merge || left.GetOperatorBase().NumChildren() != 0 {
+		return moerr.NewInternalErrorNoCtxf("invalid remote binary set operator %v left input", op.OpType())
+	}
+	right.GetOperatorBase().SetChild(nil, 0)
+	right.GetOperatorBase().ResetChildren()
+	op.AppendChild(left)
+	op.AppendChild(right)
+	s.RootOp = op
 	return nil
 }
 
@@ -980,6 +1035,8 @@ func convertToPipelineInstruction(op vm.Operator, proc *process.Process, ctx *sc
 	case *intersect.Intersect:
 		in.SetOp = &pipeline.SetOp{KeyExprs: t.KeyExprs}
 	case *minus.Minus:
+		in.SetOp = &pipeline.SetOp{KeyExprs: t.KeyExprs}
+	case *minusall.MinusAll:
 		in.SetOp = &pipeline.SetOp{KeyExprs: t.KeyExprs}
 	case *intersectall.IntersectAll:
 		in.SetOp = &pipeline.SetOp{KeyExprs: t.KeyExprs}
@@ -1638,6 +1695,12 @@ func convertToVmOperator(opr *pipeline.Instruction, ctx *scopeContext, eng engin
 			arg.KeyExprs = setOp.GetKeyExprs()
 		}
 		op = arg
+	case vm.MinusAll:
+		arg := minusall.NewArgument()
+		if setOp := opr.GetSetOp(); setOp != nil {
+			arg.KeyExprs = setOp.GetKeyExprs()
+		}
+		op = arg
 	case vm.Connector:
 		t := opr.GetConnect()
 		op = connector.NewArgument().
@@ -2229,12 +2292,32 @@ func validateRemoteExpressionPipelineProtocol(
 	if !features.Any() {
 		return nil
 	}
+	if features.InvalidTemporalResultContract {
+		return moerr.NewNotSupportedNoCtx("temporal result vector contract mismatch is incompatible with this CN")
+	}
+	if features.LegacyIntervalUnits {
+		return moerr.NewNotSupportedNoCtx("legacy interval unit contract requires rebinding")
+	}
+	if features.WeekSessionDefault && (proc == nil ||
+		(proc.GetResolveVariableFunc() == nil && !proc.GetSessionInfo().DefaultWeekFormatSet)) {
+		return moerr.NewNotSupportedNoCtx("remote WEEK requires a default_week_format session snapshot")
+	}
 	protocolVersion, hasProtocolVersion := int64(0), false
 	if proc != nil {
 		protocolVersion, hasProtocolVersion = remoteMORPCProtocolVersion(proc.GetService())
 	}
 	if features.IntegerParameterCoercion && (!hasProtocolVersion || protocolVersion < defines.MORPCVersion85) {
 		return moerr.NewNotSupportedNoCtx("integer parameter coercion requires MORPC protocol version 85")
+	}
+	if features.SpecialIntegerConsumers && (!hasProtocolVersion || protocolVersion < defines.MORPCVersion98) {
+		return moerr.NewNotSupportedNoCtx("special integer consumers require MORPC protocol version 98")
+	}
+	if features.PreparedPrecisionScalar && (!hasProtocolVersion || protocolVersion < defines.MORPCVersion95) {
+		return moerr.NewNotSupportedNoCtx("prepared scalar precision requires MORPC protocol version 95")
+	}
+	if (features.TemporalResultContracts || features.NormalizedIntervalUnits || features.WeekSessionDefault) &&
+		(!hasProtocolVersion || protocolVersion < defines.MORPCVersion98) {
+		return moerr.NewNotSupportedNoCtx("temporal expression contracts require MORPC protocol version 98")
 	}
 	if features.NumericPrefix &&
 		(!hasProtocolVersion || protocolVersion < defines.MORPCVersion30) {

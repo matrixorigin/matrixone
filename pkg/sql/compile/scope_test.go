@@ -561,6 +561,110 @@ func TestScopeResetKeepsReusableRelationHandle(t *testing.T) {
 	require.Same(t, rel, s.DataSource.Rel)
 }
 
+func TestPreparedScopeRunReleasesCompletedReader(t *testing.T) {
+	for _, outcome := range []string{"success", "read error", "read panic"} {
+		t.Run(outcome, func(t *testing.T) {
+			proc := testutil.NewProcess(t)
+			proc.BuildPipelineContext(context.Background())
+			reader := &mockReaderForParallelOrderBy{}
+			rel := &mockRelationForMembershipFilter{}
+			scan := table_scan.NewArgument()
+			scope := &Scope{
+				RootOp: scan,
+				Proc:   proc,
+				DataSource: &Source{
+					R:   reader,
+					Rel: rel,
+				},
+			}
+			reader.onRead = func() {
+				require.Same(t, reader, scope.DataSource.R, "reader must remain live during execution")
+				if outcome == "read panic" {
+					panic("read panic")
+				}
+			}
+			if outcome == "read error" {
+				reader.readErr = moerr.NewInternalErrorNoCtx("read error")
+			}
+			compile := &Compile{proc: proc, isPrepare: true}
+			err := scope.Run(compile)
+			if outcome == "success" {
+				require.NoError(t, err)
+			} else {
+				require.ErrorContains(t, err, outcome)
+			}
+			require.Equal(t, 1, reader.closeCalls)
+			require.Nil(t, scan.Reader)
+			require.Nil(t, scope.DataSource.R)
+			require.Same(t, rel, scope.DataSource.Rel)
+		})
+	}
+}
+
+func TestPreparedScopeRunReleasesBuiltReader(t *testing.T) {
+	for _, parallel := range []bool{false, true} {
+		name := "direct"
+		if parallel {
+			name = "parallel single reader"
+		}
+		t.Run(name, func(t *testing.T) {
+			proc := testutil.NewProcess(t)
+			proc.BuildPipelineContext(context.Background())
+			reader := &mockReaderForParallelOrderBy{}
+			rel := &mockRelationForParallelOrderBy{readers: []engine.Reader{reader}}
+			scope := &Scope{
+				RootOp:   table_scan.NewArgument(),
+				Proc:     proc,
+				NodeInfo: engine.Node{Mcpu: 1},
+				DataSource: &Source{
+					Rel:        rel,
+					FilterList: []*plan.Expr{plan2.MakeFalseExpr()},
+				},
+			}
+			reader.onRead = func() {
+				require.Same(t, reader, scope.DataSource.R)
+			}
+			compile := &Compile{proc: proc, isPrepare: true}
+			var err error
+			if parallel {
+				err = scope.ParallelRun(compile)
+			} else {
+				err = scope.Run(compile)
+			}
+			require.NoError(t, err)
+			require.Equal(t, 1, reader.closeCalls)
+			require.Nil(t, scope.DataSource.R)
+			require.Same(t, rel, scope.DataSource.Rel)
+		})
+	}
+}
+
+func TestPreparedParallelWorkersReleaseBuiltReaders(t *testing.T) {
+	c := NewMockCompile(t)
+	c.isPrepare = true
+	readers := []*mockReaderForParallelOrderBy{{}, {}}
+	source := &Scope{
+		RootOp:   table_scan.NewArgument(),
+		Proc:     c.proc,
+		NodeInfo: engine.Node{Mcpu: 2},
+		DataSource: &Source{
+			Rel: &mockRelationForParallelOrderBy{readers: []engine.Reader{
+				readers[0], readers[1],
+			}},
+			FilterList: []*plan.Expr{plan2.MakeFalseExpr()},
+		},
+	}
+	parallel, err := buildScanParallelRun(source, c)
+	require.NoError(t, err)
+	require.Len(t, parallel.PreScopes, 2)
+	for i, worker := range parallel.PreScopes {
+		require.Same(t, readers[i], worker.DataSource.R)
+		require.NoError(t, worker.Run(c))
+		require.Equal(t, 1, readers[i].closeCalls)
+		require.Nil(t, worker.DataSource.R)
+	}
+}
+
 func TestLockMetaResetKeepsReusableRelationHandles(t *testing.T) {
 	l := NewLockMeta()
 	databaseRel := &mockRelationForMembershipFilter{}
@@ -2896,14 +3000,21 @@ func (m *mockRelationForMembershipFilter) BuildReaders(
 type mockReaderForParallelOrderBy struct {
 	orderByCalls int
 	orderBy      []*plan.OrderBySpec
+	closeCalls   int
+	onRead       func()
+	readErr      error
 }
 
 func (m *mockReaderForParallelOrderBy) Close() error {
+	m.closeCalls++
 	return nil
 }
 
 func (m *mockReaderForParallelOrderBy) Read(context.Context, []string, *plan.Expr, *mpool.MPool, *batch.Batch) (bool, error) {
-	return true, nil
+	if m.onRead != nil {
+		m.onRead()
+	}
+	return true, m.readErr
 }
 
 func (m *mockReaderForParallelOrderBy) SetOrderBy(orderBy []*plan.OrderBySpec) {

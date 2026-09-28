@@ -76,12 +76,12 @@ func TestJSONAggregateOpaqueRejectsPreviousCapability(t *testing.T) {
 	rt := moruntime.ServiceRuntime(c.proc.GetService())
 	worker := engine.Nodes{{Id: "old-worker", Addr: "remote:6001", Mcpu: 4}}
 
-	// Current main v82/v83/v84 do not include this aggregate executor. The gate
+	// The original base v93, collision v94, and cumulative predecessor v99 do not include this aggregate executor. The gate
 	// must not reuse a version already assigned to another wire contract.
 	for _, version := range []int64{
-		defines.MORPCVersion82,
-		defines.MORPCVersion83,
-		defines.MORPCVersion84,
+		defines.MORPCVersion93,
+		defines.MORPCVersion94,
+		defines.MORPCVersion99,
 	} {
 		client.version = version
 		c.execType = plan2.ExecTypeAP_MULTICN
@@ -111,9 +111,9 @@ func TestJSONAggregateOpaqueRejectsPreviousCapability(t *testing.T) {
 	// The receiver-side gates must reject the same lowered plan from either
 	// current-main capability.
 	for _, version := range []int64{
-		defines.MORPCVersion82,
-		defines.MORPCVersion83,
-		defines.MORPCVersion84,
+		defines.MORPCVersion93,
+		defines.MORPCVersion94,
+		defines.MORPCVersion99,
 	} {
 		rt.SetGlobalVariables(moruntime.MOProtocolVersion, version)
 		require.ErrorContains(t,
@@ -125,7 +125,7 @@ func TestJSONAggregateOpaqueRejectsPreviousCapability(t *testing.T) {
 			fmt.Sprintf("MORPC protocol version %d", jsonAggregateOpaqueCapabilityVersion))
 	}
 
-	// A v85 peer is admitted by every boundary, proving the new gate matches
+	// A candidate peer is admitted by every boundary, proving the new gate matches
 	// the aggregate implementation carried by this branch.
 	client.version = jsonAggregateOpaqueCapabilityVersion
 	rt.SetGlobalVariables(moruntime.MOProtocolVersion, jsonAggregateOpaqueCapabilityVersion)
@@ -138,7 +138,7 @@ func TestJSONAggregateOpaqueRejectsPreviousCapability(t *testing.T) {
 		[]aggexec.AggFuncExecExpression{jsonAggregateOpaqueTestAgg()}))
 }
 
-func TestJSONAggregateOpaqueRealMixedVersionPeer(t *testing.T) {
+func TestJSONAggregateOpaqueQueryServiceCapabilityProbe(t *testing.T) {
 	c := NewMockCompile(t)
 	c.addr = "local:6001"
 	c.ncpu = 4
@@ -147,9 +147,9 @@ func TestJSONAggregateOpaqueRealMixedVersionPeer(t *testing.T) {
 	oldVersion, _ := rt.GetGlobalVariables(moruntime.MOProtocolVersion)
 	oldCluster, hadCluster := rt.GetGlobalVariables(moruntime.ClusterService)
 
-	workerID := "json-aggregate-opaque-real-peer"
-	workerPipelineAddress := "json-aggregate-opaque-real-peer:pipeline"
-	workerQueryAddress := "unix:///tmp/mo-json-opaque-real-peer.sock"
+	workerID := "json-aggregate-opaque-capability-peer"
+	workerPipelineAddress := "json-aggregate-opaque-capability-peer:pipeline"
+	workerQueryAddress := "unix:///tmp/mo-json-opaque-capability-peer.sock"
 	require.NoError(t, os.RemoveAll(workerQueryAddress[len("unix://"):]))
 	workerRT := moruntime.ServiceRuntime(workerID)
 	if workerRT == nil {
@@ -157,7 +157,7 @@ func TestJSONAggregateOpaqueRealMixedVersionPeer(t *testing.T) {
 		workerRT = moruntime.ServiceRuntime(workerID)
 	}
 	oldWorkerVersion, hadWorkerVersion := workerRT.GetGlobalVariables(moruntime.MOProtocolVersion)
-	workerRT.SetGlobalVariables(moruntime.MOProtocolVersion, defines.MORPCVersion84)
+	workerRT.SetGlobalVariables(moruntime.MOProtocolVersion, defines.MORPCVersion99)
 
 	cluster := clusterservice.NewMOCluster(
 		coordinatorService,
@@ -203,9 +203,9 @@ func TestJSONAggregateOpaqueRealMixedVersionPeer(t *testing.T) {
 		}
 	})
 
-	// This is a real query-service MORPC peer. Its advertised v84 is the
-	// current-main capability boundary, so the coordinator must fail closed
-	// and fall back to one CN instead of trusting a local mock response.
+	// This same-binary QueryService probe checks real capability RPC routing.
+	// It does not execute an old decoder or an aggregate pipeline. The v99
+	// response must keep opaque aggregation local.
 	supported, err := remoteWorkersSupportProtocol(
 		c.proc, worker, jsonAggregateOpaqueCapabilityVersion)
 	require.NoError(t, err)
@@ -227,11 +227,11 @@ func TestJSONAggregateOpaqueRealMixedVersionPeer(t *testing.T) {
 	_, err = encodeRemoteScope(scope, c.proc)
 	require.ErrorContains(t, err, fmt.Sprintf("MORPC protocol version %d", jsonAggregateOpaqueCapabilityVersion))
 
-	// Rolling the same live peer to v85 makes the real destination probe and
+	// Rolling the same live peer to the candidate capability makes the real destination probe and
 	// placement admission succeed. The receiver-local gate is checked at both
 	// advertised versions as well.
 	workerRT.SetGlobalVariables(moruntime.MOProtocolVersion, jsonAggregateOpaqueCapabilityVersion)
-	rt.SetGlobalVariables(moruntime.MOProtocolVersion, defines.MORPCVersion84)
+	rt.SetGlobalVariables(moruntime.MOProtocolVersion, defines.MORPCVersion99)
 	wire := jsonAggregateOpaqueTestPipeline()
 	require.ErrorContains(t,
 		validateJSONAggregateOpaquePipelineProtocol(c.proc, wire),

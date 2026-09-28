@@ -2119,7 +2119,9 @@ func ParseDecimal64(x string, width, scale int32) (y Decimal64, err error) {
 		}
 	}
 	if y.Sign() {
-		if y.Less(Decimal64(Pow10[width]).Minus()) {
+		// DECIMAL(p,s) is bounded by -10^p < value < 10^p. The
+		// negative endpoint itself is out of range, just like +10^p.
+		if !Decimal64(Pow10[width]).Minus().Less(y) {
 			err = moerr.NewInvalidInputNoCtxf("%s beyond the range, can't be converted to Decimal64(%d,%d).", x, width, scale)
 			return
 		}
@@ -2462,7 +2464,7 @@ func ParseDecimal128(x string, width, scale int32) (y Decimal128, err error) {
 		z, _ = Decimal128{Pow10[19], 0}.Mul128(Decimal128{Pow10[width-19], 0})
 	}
 	if y.Sign() {
-		if y.Less(z.Minus()) {
+		if !z.Minus().Less(y) {
 			err = moerr.NewInvalidInputNoCtxf("%s beyond the range, can't be converted to Decimal128(%d,%d).", x, width, scale)
 			return
 		}
@@ -2523,7 +2525,7 @@ func ParseDecimal256(x string, width, scale int32) (y Decimal256, err error) {
 		return
 	}
 	if y.Sign() {
-		if y.Less(z.Minus()) {
+		if !z.Minus().Less(y) {
 			err = moerr.NewInvalidInputNoCtxf("%s beyond the range, can't be converted to Decimal256(%d,%d).", x, width, scale)
 			return
 		}
