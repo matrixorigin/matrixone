@@ -8548,7 +8548,7 @@ func supportsMultiSourceISCP(service string) bool {
 		return false
 	}
 	protocolVersion, ok := version.(int64)
-	return ok && protocolVersion >= defines.MORPCVersion74
+	return ok && protocolVersion >= defines.MORPCVersion100
 }
 
 func (c *Compile) supportsRemotePartitionTopNWithTies() bool {

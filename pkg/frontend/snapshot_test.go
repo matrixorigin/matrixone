@@ -230,8 +230,7 @@ func setCurrentRestoreObject(
 
 func TestMaterializedViewRestoreClassification(t *testing.T) {
 	sql := buildTableInfoListSQL("db", "mv", 42, 7)
-	require.Contains(t, sql, "then 'MATERIALIZED VIEW'")
-	require.Contains(t, sql, "then 'm' else relkind")
+	require.NotContains(t, sql, "create materialized view")
 
 	mv := &tableInfo{
 		typ:     materializedView,
@@ -244,6 +243,12 @@ func TestMaterializedViewRestoreClassification(t *testing.T) {
 	require.True(t, isViewLike(mv))
 	require.True(t, isMaterializedViewState(&tableInfo{tblName: "__mo_mv_state_mv"}))
 	require.False(t, isMaterializedViewState(&tableInfo{tblName: "mv"}))
+	require.Equal(t, "drop materialized view if exists `mv`", dropRestoreViewIfExistsSQL(mv))
+
+	ordinary := &tableInfo{typ: view, tblName: "v", viewDef: `{"Stmt":"create view v as select 'create materialized view x'"}`}
+	_, ok = materializedViewCreateSQL(ordinary)
+	require.False(t, ok)
+	require.Equal(t, "drop view if exists `v`", dropRestoreViewIfExistsSQL(ordinary))
 }
 
 func TestRestoreSequenceState(t *testing.T) {

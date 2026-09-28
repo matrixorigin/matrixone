@@ -1970,7 +1970,7 @@ func restoreViewsWithPitr(
 				continue
 			}
 
-			if err = bh.Exec(ctx, dropViewIfExistsSQL(tblInfo.tblName)); err != nil {
+			if err = bh.Exec(ctx, dropRestoreViewIfExistsSQL(tblInfo)); err != nil {
 				return err
 			}
 

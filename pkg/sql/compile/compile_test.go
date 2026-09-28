@@ -2682,7 +2682,9 @@ func TestMultiSourceISCPGatedByProtocolVersion(t *testing.T) {
 		"MV capability must not reuse the typed BIN/CONV protocol")
 	rt.SetGlobalVariables(runtime.MOProtocolVersion, defines.MORPCVersion72)
 	require.False(t, supportsMultiSourceISCP(service))
-	rt.SetGlobalVariables(runtime.MOProtocolVersion, defines.MORPCVersion74)
+	rt.SetGlobalVariables(runtime.MOProtocolVersion, defines.MORPCVersion99)
+	require.False(t, supportsMultiSourceISCP(service), "the MV capability must be newer than the current predecessor")
+	rt.SetGlobalVariables(runtime.MOProtocolVersion, defines.MORPCVersion100)
 	require.True(t, supportsMultiSourceISCP(service))
 
 	rt.SetGlobalVariables(runtime.MOProtocolVersion, defines.MORPCVersion29)

@@ -220,6 +220,13 @@ func dropViewIfExistsSQL(viewName string) string {
 	return "drop view if exists " + quoteIdentifierForSQL(viewName)
 }
 
+func dropRestoreViewIfExistsSQL(tblInfo *tableInfo) string {
+	if _, ok := materializedViewCreateSQL(tblInfo); ok {
+		return "drop materialized view if exists " + quoteIdentifierForSQL(tblInfo.tblName)
+	}
+	return dropViewIfExistsSQL(tblInfo.tblName)
+}
+
 type snapshotRecord struct {
 	snapshotId   string
 	snapshotName string
@@ -1742,7 +1749,7 @@ func restoreViews(
 				continue
 			}
 
-			if err = bh.Exec(toCtx, dropViewIfExistsSQL(tblInfo.tblName)); err != nil {
+			if err = bh.Exec(toCtx, dropRestoreViewIfExistsSQL(tblInfo)); err != nil {
 				return err
 			}
 
@@ -2463,12 +2470,14 @@ func showFullTables(
 
 	ans := make([]*tableInfo, len(colsList))
 	for i, cols := range colsList {
+		typ := tableType(cols[1])
+		relKind := cols[2]
+		if relKind == catalog.SystemViewRel && isMaterializedViewDefinition(cols[3]) {
+			typ = materializedView
+			relKind = catalog.SystemMaterializedRel
+		}
 		ans[i] = &tableInfo{
-			dbName:  dbName,
-			tblName: cols[0],
-			typ:     tableType(cols[1]),
-			relKind: cols[2],
-			viewDef: cols[3],
+			dbName: dbName, tblName: cols[0], typ: typ, relKind: relKind, viewDef: cols[3],
 		}
 	}
 
@@ -2486,14 +2495,10 @@ func buildTableInfoListSQL(dbName string, tblName string, ts int64, accountId ui
 	}
 	whereClause := buildTableInfoListWhereClause(dbName, tblName, accountId)
 	sql := fmt.Sprintf(
-		"select relname, case when relkind = %s and lower(viewdef) like '%%create materialized view %%' then 'MATERIALIZED VIEW' when relkind = %s then 'VIEW' when relkind = %s then 'CLUSTER TABLE' else 'BASE TABLE' end as table_type, case when relkind = %s and lower(viewdef) like '%%create materialized view %%' then 'm' else relkind end, viewdef from %s.mo_tables%s where %s",
-		quoteSQLStringLiteral(catalog.SystemViewRel),
+		"select relname, case when relkind = %s then 'VIEW' when relkind = %s then 'CLUSTER TABLE' else 'BASE TABLE' end as table_type, relkind, viewdef from %s.mo_tables%s where %s",
 		quoteSQLStringLiteral(catalog.SystemViewRel),
 		quoteSQLStringLiteral(catalog.SystemClusterRel),
-		quoteSQLStringLiteral(catalog.SystemViewRel),
-		moCatalog,
-		snapshotSpec,
-		whereClause,
+		moCatalog, snapshotSpec, whereClause,
 	)
 	sql += fmt.Sprintf(" order by %s", catalog.SystemRelAttr_Name)
 	return sql
@@ -2623,7 +2628,7 @@ func isMaterializedViewState(tblInfo *tableInfo) bool {
 }
 
 func materializedViewCreateSQL(tblInfo *tableInfo) (string, bool) {
-	if tblInfo == nil || tblInfo.typ != materializedView {
+	if tblInfo == nil || !isMaterializedViewDefinition(tblInfo.viewDef) {
 		return "", false
 	}
 	var data struct{ Stmt string }
@@ -2635,6 +2640,14 @@ func materializedViewCreateSQL(tblInfo *tableInfo) (string, bool) {
 		return "", false
 	}
 	return stmt, true
+}
+
+func isMaterializedViewDefinition(viewDef string) bool {
+	var data struct{ Stmt string }
+	if json.Unmarshal([]byte(viewDef), &data) != nil {
+		return false
+	}
+	return strings.HasPrefix(strings.ToLower(strings.TrimSpace(data.Stmt)), "create materialized view ")
 }
 
 func getCreateSequenceSQL(

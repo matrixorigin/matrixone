@@ -44,6 +44,14 @@ const viewRefreshStatusRunning = catalog.ViewRefreshStatusRunning
 const viewRefreshStatusInvalid = catalog.ViewRefreshStatusInvalid
 const viewRefreshStatusDiscovering = catalog.ViewRefreshStatusDiscovering
 
+func isMaterializedViewDefinition(viewDef string) bool {
+	var data struct{ Stmt string }
+	if json.Unmarshal([]byte(viewDef), &data) != nil {
+		return false
+	}
+	return strings.HasPrefix(strings.ToLower(strings.TrimSpace(data.Stmt)), "create materialized view ")
+}
+
 const viewMetadataRecoveryPageSize = 32
 
 var viewMetadataSynchronousRefreshBudget = 0
@@ -605,6 +613,7 @@ type legacyViewCandidate struct {
 	databaseName  string
 	relationName  string
 	relationKind  string
+	viewDef       string
 	missingState  bool
 	refreshStatus string
 }
@@ -1103,9 +1112,8 @@ func discoverLegacyViewPage(
 	escape := sqlquote.EscapeString
 	page, err := sqlExecutor.Exec(proc.Ctx, fmt.Sprintf(
 		"select t.account_id,t.reldatabase_id,t.rel_id,t.rel_logical_id,t.reldatabase,t.relname,"+
-			"t.relkind,r.target_relation_id,r.status from %s.%s t left join %s.%s r "+
+			"t.relkind,t.viewdef,r.target_relation_id,r.status from %s.%s t left join %s.%s r "+
 			"on t.account_id=r.account_id and t.rel_id=r.target_relation_id where t.relkind='%s' "+
-			"and lower(coalesce(t.viewdef,'')) not like '%%create materialized view %%' "+
 			"and t.relname not like '__mo_mv_state_%%' and t.reldatabase not in ('%s') and "+
 			"(t.account_id>%d or (t.account_id=%d and t.reldatabase>'%s') or "+
 			"(t.account_id=%d and t.reldatabase='%s' and t.relname>'%s')) "+
@@ -1126,14 +1134,18 @@ func discoverLegacyViewPage(
 		logicalIDs := vector.MustFixedColNoTypeCheck[uint64](columns[3])
 		for row := range rows {
 			refreshStatus := ""
-			if !columns[8].IsNull(uint64(row)) {
-				refreshStatus = columns[8].GetStringAt(row)
+			viewDef := ""
+			if !columns[7].IsNull(uint64(row)) {
+				viewDef = columns[7].GetStringAt(row)
+			}
+			if !columns[9].IsNull(uint64(row)) {
+				refreshStatus = columns[9].GetStringAt(row)
 			}
 			candidates = append(candidates, legacyViewCandidate{
 				accountID: accounts[row], databaseID: databaseIDs[row], relationID: relationIDs[row],
 				logicalID: logicalIDs[row], databaseName: columns[4].GetStringAt(row),
 				relationName: columns[5].GetStringAt(row), relationKind: columns[6].GetStringAt(row),
-				missingState: columns[7].IsNull(uint64(row)), refreshStatus: refreshStatus,
+				viewDef: viewDef, missingState: columns[8].IsNull(uint64(row)), refreshStatus: refreshStatus,
 			})
 		}
 		return true
@@ -1143,6 +1155,9 @@ func discoverLegacyViewPage(
 	for index := range candidates {
 		candidate := &candidates[index]
 		if candidate.relationKind != catalog.SystemViewRel {
+			continue
+		}
+		if isMaterializedViewDefinition(candidate.viewDef) {
 			continue
 		}
 		if candidate.missingState {

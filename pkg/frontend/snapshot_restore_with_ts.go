@@ -791,7 +791,7 @@ func restoreViewsFromTS(
 				continue
 			}
 
-			if err = bh.Exec(toCtx, dropViewIfExistsSQL(tblInfo.tblName)); err != nil {
+			if err = bh.Exec(toCtx, dropRestoreViewIfExistsSQL(tblInfo)); err != nil {
 				return err
 			}
 
