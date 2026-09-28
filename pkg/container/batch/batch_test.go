@@ -933,7 +933,7 @@ func TestNumericBinaryLiteralMetadataTransportV3(t *testing.T) {
 	var downgraded bytes.Buffer
 	bytesBeforeDowngrade := mp.CurrNB()
 	_, err = source.MarshalBinaryWithPrepareParamKindsForProtocol(&downgraded, true, false)
-	require.ErrorContains(t, err, "requires MORPC protocol version 100",
+	require.ErrorContains(t, err, "requires MORPC protocol version 101",
 		"a downgrade must fail closed instead of silently dropping numeric provenance")
 	require.Equal(t, bytesBeforeDowngrade, mp.CurrNB(),
 		"failed downgrade must not allocate or mutate vector-owned metadata")

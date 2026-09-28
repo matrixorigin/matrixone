@@ -71,9 +71,12 @@ func TestPreparedPrecisionProtocolPlacementAndSend(t *testing.T) {
 	place(defines.MORPCVersion95)
 	require.Equal(t, plan2.ExecTypeAP_MULTICN, c.execType)
 	_, err = encodeRemoteScope(scope, c.proc)
-	require.ErrorContains(t, err, "version 100",
-		"the overlapping strict math contract has a later independent v100 fence")
+	require.ErrorContains(t, err, "version 101",
+		"the overlapping strict math contract has a later independent v101 fence")
 	place(defines.MORPCVersion100)
+	_, err = encodeRemoteScope(scope, c.proc)
+	require.ErrorContains(t, err, "version 101")
+	place(defines.MORPCVersion101)
 	require.Equal(t, plan2.ExecTypeAP_MULTICN, c.execType)
 	_, err = encodeRemoteScope(scope, c.proc)
 	require.NoError(t, err)
@@ -91,12 +94,14 @@ func TestPreparedPrecisionProtocolPlacementAndSend(t *testing.T) {
 	_, err = decodeScope(data, c.proc, true, nil)
 	require.ErrorContains(t, err, "version 95")
 	rt.SetGlobalVariables(moruntime.MOProtocolVersion, defines.MORPCVersion95)
-	require.ErrorContains(t, validateRemoteExpressionPipelineProtocol(c.proc, p), "version 100")
+	require.ErrorContains(t, validateRemoteExpressionPipelineProtocol(c.proc, p), "version 101")
 	_, err = decodeScope(data, c.proc, true, nil)
-	require.ErrorContains(t, err, "version 100")
+	require.ErrorContains(t, err, "version 101")
 	rt.SetGlobalVariables(moruntime.MOProtocolVersion, defines.MORPCVersion99)
-	require.ErrorContains(t, validateRemoteExpressionPipelineProtocol(c.proc, p), "version 100")
+	require.ErrorContains(t, validateRemoteExpressionPipelineProtocol(c.proc, p), "version 101")
 	rt.SetGlobalVariables(moruntime.MOProtocolVersion, defines.MORPCVersion100)
+	require.ErrorContains(t, validateRemoteExpressionPipelineProtocol(c.proc, p), "version 101")
+	rt.SetGlobalVariables(moruntime.MOProtocolVersion, defines.MORPCVersion101)
 	require.NoError(t, validateRemoteExpressionPipelineProtocol(c.proc, p))
 }
 

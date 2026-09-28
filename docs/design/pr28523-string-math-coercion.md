@@ -67,7 +67,7 @@ string overloads use the same effective-mode decision.
   and remote pipeline transport. It is not stored in stable vector bytes or
   ordinary materialized table columns. The versioned batch metadata trailer is
   the transport owner; the ordinary runtime-domain sidecar remains separate.
-- Provenance-sensitive flow-control output is fenced at MORPC v100 in every SQL
+- Provenance-sensitive flow-control output is fenced at MORPC v101 in every SQL
   mode when it can select a non-NULL HEX/BIT value. This includes mixed rows,
   uniformly marked results, and marked-plus-NULL results: older flow-control
   executors can drop the marker even when no mixed-row bitmap is needed.
@@ -85,9 +85,9 @@ accounts.
 
 MORPC v93 belongs to the existing `LAST_INSERT_ID` connection-migration
 contract. Changed string-numeric and flow-control provenance behavior uses the
-separate v100 boundary. Placement falls back to local execution when a worker
+separate v101 boundary. Placement falls back to local execution when a worker
 is too old or has unknown capability; sender preflight rejects a destination
-downgrade; and receivers fail closed on pre-v100 or legacy session contracts.
+downgrade; and receivers fail closed on pre-v101 or legacy session contracts.
 
 ## Ownership and correctness decisions
 
@@ -152,7 +152,7 @@ function-wide zonemap optimization is included.
 | Roles and boundaries | Value/control argument tests; precision remains `INT64`; nested ownership; explicit CAST stops provenance; unknown/non-owning function controls |
 | HEX/BIT row provenance | CASE/IF/COALESCE tests for mixed, uniform, marked-plus-NULL, text, ordinary BINARY, explicit casts, and nested/implicit casts; selected-row/vector/batch lifecycle tests |
 | Wire lifecycle | Batch v1/v2/v3 round trips, malformed/truncated rejection, legacy sender, stale/reused vector reset, and remote trailer tests |
-| Mixed-version admission | v99 local fallback plus destination and receiver rejection; v100 placement/send/receive acceptance; default/MySQL/native modes; legacy-session rejection |
+| Mixed-version admission | v99/v100 local fallback plus destination and receiver rejection; v101 placement/send/receive acceptance; default/MySQL/native modes; legacy-session rejection |
 | Prepared-plan reuse | Type changes, error-to-success, NULL-to-success, and restoration of the cached base plan |
 | Numeric correctness and pruning | Integer/DECIMAL/FLOAT source controls; zonemap endpoint traps must not prune matching rows |
 | Resource/performance | Allocation-failure atomicity, vector reset/cleanup/accounting, focused race checks where shared-state risk applies, and plan/bitmap performance tests |
