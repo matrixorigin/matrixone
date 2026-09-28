@@ -1,0 +1,29 @@
+[workspace]
+name = "matrixone-gpu"
+channels = ["rapidsai", "conda-forge"]
+platforms = [{ name = "linux-64-cuda13", platform = "linux-64", cuda = "13.3", glibc = "2.28" }]
+requires-pixi = ">=0.71"
+
+[dependencies]
+make = "*"
+cmake = ">=4.0"
+ninja = "*"
+patchelf = "*"
+gcc_linux-64 = "14.*"
+gxx_linux-64 = "14.*"
+sysroot_linux-64 = "2.28.*"
+cuda-version = "13.3.*"
+cuda-nvcc = "13.3.*"
+cuda-cudart-dev = "*"
+cuda-nvrtc-dev = "*"
+cuda-nvtx-dev = "*"
+cuda-profiler-api = "*"
+libcublas-dev = "*"
+libcurand-dev = "*"
+libcusolver-dev = "*"
+libcusparse-dev = "*"
+libnvjitlink-dev = "*"
+libcuvs = "==26.08.01"
+libraft = "26.08.*"
+librmm = "26.08.*"
+nccl = ">=2.19"
