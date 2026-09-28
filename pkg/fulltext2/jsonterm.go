@@ -220,6 +220,39 @@ func JSONEqualProbeTerms(tag, value string) []string {
 	return []string{JSONStringTerm(tag, value)}
 }
 
+// jsonNegZeroTerm is the numeric term a NEGATIVE-zero leaf produced before #29279 canonicalized
+// writes to +0.0. EncodeFloat64 keeps the sign bit, so this packs just BELOW the +0.0 key
+// (adjacent: ...7fff... vs ...8000...). Reads use it to stay compatible with segments persisted
+// under the old encoding.
+func jsonNegZeroTerm(tag string) string {
+	return packProbe(func(p *types.Packer) {
+		p.EncodeStringType([]byte(tag))
+		p.EncodeFloat64(math.Copysign(0, -1))
+	})
+}
+
+// JSONNumericEqualProbeTerms returns the term(s) for json_extract_float64(col,tag) = value. For
+// zero it returns BOTH zero keys -- the canonical +0.0 (what new writes persist) and the legacy
+// -0.0 -- so equality reaches a document persisted under either encoding (#29279). -0.0 == 0, so
+// value==0 covers a -0.0 literal too.
+func JSONNumericEqualProbeTerms(tag string, value float64) []string {
+	if value == 0 {
+		return []string{JSONFloatTerm(tag, 0), jsonNegZeroTerm(tag)}
+	}
+	return []string{JSONFloatTerm(tag, value)}
+}
+
+// JSONFloatLowerBoundTerm is the inclusive lower-bound term of a numeric range at value. At zero it
+// returns the legacy -0.0 key (the lower of the two adjacent zero keys) so a `>= 0` / `> 0` range
+// also covers a document that persisted a -0.0 leaf before #29279; the retained predicate re-checks
+// the boundary. The upper bound at zero needs no such widening: +0.0 already sorts above -0.0.
+func JSONFloatLowerBoundTerm(tag string, value float64) string {
+	if value == 0 {
+		return jsonNegZeroTerm(tag)
+	}
+	return JSONFloatTerm(tag, value)
+}
+
 // JSONNumericTermBounds returns the term range covering EVERY numeric leaf
 // under tag: ±Inf are the extreme float64 values, so the packed bounds bracket
 // every finite value the encoder can produce. An open-ended comparison
