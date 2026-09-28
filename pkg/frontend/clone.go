@@ -878,7 +878,16 @@ func handleCloneDatabaseWithSource(
 	if resolvedSource != nil {
 		source = *resolvedSource
 	} else {
+		// Plain CLONE and DATA BRANCH authorize the same resolved source set.
+		if !skipDataBranchPrivilegeCheck(ses) {
+			if _, err = authenticateDataBranchCreateDatabase(reqCtx, ses, &tree.DataBranchCreateDatabase{CloneDatabase: *stmt}); err != nil {
+				return
+			}
+		}
 		if source, err = collectCloneDatabaseSource(reqCtx, ses, bh, stmt); err != nil {
+			return
+		}
+		if _, err = authenticateDataBranchCreateDatabaseSourceTables(reqCtx, ses, &tree.DataBranchCreateDatabase{CloneDatabase: *stmt}, source); err != nil {
 			return
 		}
 	}

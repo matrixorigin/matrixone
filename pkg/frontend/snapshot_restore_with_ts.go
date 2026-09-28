@@ -431,7 +431,7 @@ func restoreDatabaseFromTS(
 
 		// create db with publication
 		getLogger(sid).Info(fmt.Sprintf("[%d:%d] start to create db with pub: %v, create db sql: %s", restoreAccount, snapshotTs, dbName, createDbSql))
-		if err = bh.Exec(toCtx, createDbSql); err != nil {
+		if err = execRestoreCreateDatabase(toCtx, bh, dbName, createDbSql); err != nil {
 			return
 		}
 
@@ -440,7 +440,7 @@ func restoreDatabaseFromTS(
 		createDbSql = createDatabaseIfNotExistsSQL(dbName)
 		// create db
 		getLogger(sid).Info(fmt.Sprintf("[%d:%d] start to create db: %v, create db sql: %s", restoreAccount, snapshotTs, dbName, createDbSql))
-		if err = bh.Exec(toCtx, createDbSql); err != nil {
+		if err = execRestoreCreateDatabase(toCtx, bh, dbName, createDbSql); err != nil {
 			return
 		}
 	}
@@ -531,6 +531,10 @@ func recreateTableFromTS(
 	getLogger(sid).Info(fmt.Sprintf("[%d:%d] start to restore table: %v, restore timestamp: %d", restoreAccount, snapshotTs, tblInfo.tblName, snapshotTs))
 
 	ctx = defines.AttachAccountId(ctx, toAccountId)
+	ctx, err = restoreDDLContext(ctx, tblInfo.dbName, tblInfo.tblName)
+	if err != nil {
+		return err
+	}
 	if err = bh.Exec(ctx, useDatabaseSQL(tblInfo.dbName)); err != nil {
 		return
 	}

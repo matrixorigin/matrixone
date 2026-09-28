@@ -721,6 +721,14 @@ func execInFrontend(ses *Session, execCtx *ExecCtx) (stats statistic.StatsArray,
 		}
 
 	case *tree.CloneTable:
+		if !skipDataBranchPrivilegeCheck(ses) {
+			_, err = authenticateDataBranchCreateTable(execCtx.reqCtx, ses, &tree.DataBranchCreateTable{
+				SrcTable: st.SrcTable, CreateTable: st.CreateTable, ToAccountOpt: st.ToAccountOpt,
+			})
+			if err != nil {
+				return
+			}
+		}
 		ses.EnterFPrint(FPCloneTable)
 		defer ses.ExitFPrint(FPCloneTable)
 		if _, err = handleCloneTable(execCtx, ses, st, nil, nil); err != nil {

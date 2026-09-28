@@ -365,7 +365,7 @@ func (cwft *TxnComputationWrapper) Compile(any any, fill func(*batch.Batch, *per
 				cwft.stmtBorrowed = false
 			}
 			if !cwft.ses.IsBackgroundSession() {
-				authStats, err := authenticatePreparedDDLOwnerStatement(execCtx.reqCtx, owner, stmt, plan)
+				authStats, err := authenticateUserCanExecutePrepareOrExecute(execCtx.reqCtx, owner, stmt, plan)
 				if err != nil {
 					return nil, err
 				}
@@ -398,7 +398,7 @@ func (cwft *TxnComputationWrapper) Compile(any any, fill func(*batch.Batch, *per
 				cwft.stmtBorrowed = false
 			}
 			if !cwft.ses.IsBackgroundSession() {
-				authStats, err := authenticatePreparedDDLOwnerStatement(
+				authStats, err := authenticateUserCanExecutePrepareOrExecute(
 					execCtx.reqCtx, owner, stmt, cwft.plan)
 				if err != nil {
 					return nil, err
@@ -459,13 +459,6 @@ func (cwft *TxnComputationWrapper) Compile(any any, fill func(*batch.Batch, *per
 			cwft.compile = retComp
 		}
 
-		//check privilege
-		/* prepare not need check privilege
-		   err = authenticateUserCanExecutePrepareOrExecute(requestCtx, cwft.ses, prepareStmt.PrepareStmt, newPlan)
-		   if err != nil {
-		   	return nil, err
-		   }
-		*/
 	} else {
 		cwft.compile, err = createCompile(
 			execCtx,
@@ -486,17 +479,6 @@ func (cwft *TxnComputationWrapper) Compile(any any, fill func(*batch.Batch, *per
 	}
 
 	return cwft.compile, err
-}
-
-func authenticatePreparedDDLOwnerStatement(reqCtx context.Context, ses *Session, stmt tree.Statement, p *plan.Plan) (statistic.StatsArray, error) {
-	var stats statistic.StatsArray
-	stats.Reset()
-	switch stmt.(type) {
-	case *tree.CreateDatabase, *tree.CreateTable:
-		return authenticateUserCanExecutePrepareOrExecute(reqCtx, ses, stmt, p)
-	default:
-		return stats, nil
-	}
 }
 
 func (cwft *TxnComputationWrapper) RecordExecPlan(ctx context.Context, phyPlan *models.PhyPlan) error {

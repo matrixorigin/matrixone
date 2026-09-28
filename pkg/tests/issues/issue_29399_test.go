@@ -235,8 +235,11 @@ func TestIssue29399AccountPITRRebindsPrivileges(t *testing.T) {
 		).Scan(&restoredPrivilegeID))
 		require.Equal(t, restoredLogicalID, restoredPrivilegeID)
 
+		// Keep the reader on another CN to cover remote revocation and restore.
+		readerCN, err := c.GetCNService(1)
+		require.NoError(t, err)
 		readerDB, err := sql.Open("mysql", fmt.Sprintf(
-			"%s#pitr_user#pitr_reader:111@tcp(127.0.0.1:%d)/", accountName, port,
+			"%s#pitr_user#pitr_reader:111@tcp(127.0.0.1:%d)/", accountName, readerCN.GetServiceConfig().CN.Frontend.Port,
 		))
 		require.NoError(t, err)
 		defer readerDB.Close()
@@ -246,5 +249,36 @@ func TestIssue29399AccountPITRRebindsPrivileges(t *testing.T) {
 		require.Equal(t, 1, count)
 		_, err = readerDB.ExecContext(ctx, "delete from `"+databaseName+"`.orders")
 		require.ErrorContains(t, err, "do not have privilege")
+
+		// Binary prepared execution must reauthorize on the same connection,
+		// including after catalog recreation. Preparing is not a durable grant.
+		reader, err := readerDB.Conn(ctx)
+		require.NoError(t, err)
+		defer reader.Close()
+		execSQLRequire(t, ctx, adminDB, "grant delete on table `"+databaseName+"`.orders to pitr_reader")
+		prepared, err := reader.PrepareContext(ctx, "delete from `"+databaseName+"`.orders where id = ?")
+		require.NoError(t, err)
+		defer prepared.Close()
+		_, err = prepared.ExecContext(ctx, -1)
+		require.NoError(t, err)
+		execSQLRequire(t, ctx, adminDB, "revoke delete on table `"+databaseName+"`.orders from pitr_reader")
+		_, err = prepared.ExecContext(ctx, -1)
+		require.ErrorContains(t, err, "do not have privilege")
+
+		for _, scope := range []string{"database `" + databaseName + "` table orders", "database `" + databaseName + "`"} {
+			for range 2 {
+				execSQLRequire(t, ctx, adminDB, "restore "+scope+" from pitr "+pitrName+" '"+restoreAt+"'")
+				require.NoError(t, reader.QueryRowContext(ctx, "select count(*) from `"+databaseName+"`.orders").Scan(&count))
+				require.Equal(t, 1, count)
+				_, err = prepared.ExecContext(ctx, -1)
+				require.ErrorContains(t, err, "do not have privilege", "partial PITR resurrected a revoked grant")
+			}
+		}
+		execSQLRequire(t, ctx, adminDB, "grant delete on table `"+databaseName+"`.orders to pitr_reader")
+		_, err = prepared.ExecContext(ctx, -1)
+		require.NoError(t, err)
+		execSQLRequire(t, ctx, adminDB, "restore from pitr "+pitrName+" '"+restoreAt+"'")
+		_, err = prepared.ExecContext(ctx, -1)
+		require.ErrorContains(t, err, "do not have privilege", "account PITR left a stale prepared privilege")
 	})
 }

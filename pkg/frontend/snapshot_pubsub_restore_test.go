@@ -48,6 +48,8 @@ func TestRestoreSubscriptionPropagatesErrors(t *testing.T) {
 		accountSQL,
 		"select 1 from mo_catalog.mo_columns where att_database = 'mo_catalog' and att_relname = 'mo_pubs' and attname = 'account_name'",
 		fmt.Sprintf(getPubInfoSql, 30) + " and pub_name = 'p'",
+		"select datname, '', cast(creator as char), cast(owner as char) from mo_catalog.mo_database {MO_TS = 42} where account_id = 10",
+		"select reldatabase, relname, cast(creator as char), cast(owner as char) from mo_catalog.mo_tables {MO_TS = 42} where account_id = 10",
 		"create database subdb from publisher publication p",
 	}
 	fixture := func() *subscriptionRestoreExec {
@@ -58,6 +60,8 @@ func TestRestoreSubscriptionPropagatesErrors(t *testing.T) {
 			{{int64(30), "open", uint64(0)}},
 			{{int64(1)}},
 			{{int64(30), "publisher", "p", "app", uint64(300), "*", "subscriber", "", nil, uint64(2), uint64(0), ""}},
+			{{"subdb", "", "2", "2"}},
+			{{"subdb", "t", "2", "2"}},
 		}
 		for i, row := range rows {
 			names := make([]string, len(row[0]))
@@ -65,7 +69,7 @@ func TestRestoreSubscriptionPropagatesErrors(t *testing.T) {
 		}
 		return &subscriptionRestoreExec{backgroundExecTest: bh}
 	}
-	record := NewSubDbRestoreRecord("subdb", 10, 20, queries[4], 42)
+	record := NewSubDbRestoreRecord("subdb", 10, 20, queries[6], 42)
 	t.Run("source metadata and target creation", func(t *testing.T) {
 		bh := fixture()
 		require.NoError(t, restoreToSubDb(ctx, "", bh, "s", record))
@@ -91,7 +95,7 @@ func TestRestoreSubscriptionPropagatesErrors(t *testing.T) {
 			require.False(t, exists)
 			bh.executedSQLs = nil
 			require.NoError(t, restoreToSubDb(ctx, "", bh, "s", record))
-			require.NotContains(t, bh.executedSQLs, queries[4])
+			require.NotContains(t, bh.executedSQLs, queries[6])
 		})
 	}
 	t.Run("missing snapshot subscription metadata is not absent publication", func(t *testing.T) {

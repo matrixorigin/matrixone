@@ -700,6 +700,19 @@ func doRestoreSnapshot(ctx context.Context, ses *Session, stmt *tree.RestoreSnap
 		return
 	}
 
+	ownershipCtx, err := prepareRestoreOwnership(ctx, bh, snapshot.ts, restoreAccount, toAccountId, dbName, tblName)
+	if err != nil {
+		return stats, err
+	}
+	ctx = ownershipCtx
+	var partialPrivileges *partialRestorePrivileges
+	if stmt.Level == tree.RESTORELEVELDATABASE || stmt.Level == tree.RESTORELEVELTABLE {
+		partialPrivileges, err = capturePartialRestorePrivileges(ctx, bh, toAccountId, dbName, tblName)
+		if err != nil {
+			return stats, err
+		}
+	}
+
 	// drop foreign key related tables first
 	if err = deleteCurFkTables(ctx, ses.GetService(), bh, dbName, tblName, toAccountId); err != nil {
 		return
@@ -815,6 +828,11 @@ func doRestoreSnapshot(ctx context.Context, ses *Session, stmt *tree.RestoreSnap
 
 	if stmt.Level == tree.RESTORELEVELACCOUNT {
 		if err = restoreAccountPrivileges(ctx, bh, snapshot.ts, restoreAccount, toAccountId); err != nil {
+			return stats, err
+		}
+	}
+	if partialPrivileges != nil {
+		if err = partialPrivileges.rebind(ctx, bh); err != nil {
 			return stats, err
 		}
 	}
@@ -1233,7 +1251,7 @@ func restoreToDatabaseOrTable(
 
 		// create db with publication
 		getLogger(sid).Debug(fmt.Sprintf("[%s] start to create db with pub: %v, create db sql: %s", snapshotName, dbName, createDbSql))
-		if err = bh.Exec(toCtx, createDbSql); err != nil {
+		if err = execRestoreCreateDatabase(toCtx, bh, dbName, createDbSql); err != nil {
 			return
 		}
 
@@ -1242,7 +1260,7 @@ func restoreToDatabaseOrTable(
 		createDbSql = createDatabaseIfNotExistsSQL(dbName)
 		// create db
 		getLogger(sid).Debug(fmt.Sprintf("[%s] start to create db: %v, create db sql: %s", snapshotName, dbName, createDbSql))
-		if err = bh.Exec(toCtx, createDbSql); err != nil {
+		if err = execRestoreCreateDatabase(toCtx, bh, dbName, createDbSql); err != nil {
 			return
 		}
 	}
@@ -1379,8 +1397,12 @@ func restoreToSubDb(
 	}
 
 	targetCtx := defines.AttachAccountId(ctx, subDb.targetAccount)
+	targetCtx, err = prepareRestoreOwnership(targetCtx, bh, subDb.snapshotTs, subDb.sourceAccount, subDb.targetAccount, "", "")
+	if err != nil {
+		return err
+	}
 	getLogger(sid).Debug(fmt.Sprintf("[%s] account %d start to create sub db: %v, create db sql: %s", snapshotName, subDb.targetAccount, subDb.dbName, subDb.createSql))
-	if err = bh.Exec(targetCtx, subDb.createSql); err != nil {
+	if err = execRestoreCreateDatabase(targetCtx, bh, subDb.dbName, subDb.createSql); err != nil {
 		return
 	}
 
@@ -1617,6 +1639,10 @@ func recreateTable(
 		// skip restore the table which is master table
 		getLogger(sid).Debug(fmt.Sprintf("[%s] skip restore master table: %v.%v", snapshotName, tblInfo.dbName, tblInfo.tblName))
 		return
+	}
+	ctx, err = restoreDDLContext(ctx, tblInfo.dbName, tblInfo.tblName)
+	if err != nil {
+		return err
 	}
 
 	if err = bh.Exec(ctx, useDatabaseSQL(tblInfo.dbName)); err != nil {
@@ -2179,6 +2205,10 @@ func parseViewCreateSQLForRestore(ctx context.Context, tblInfo *tableInfo, lower
 }
 
 func executeViewCreateSQLForRestore(ctx context.Context, bh BackgroundExec, tblInfo *tableInfo) error {
+	ctx, err := restoreDDLContext(ctx, tblInfo.dbName, tblInfo.tblName)
+	if err != nil {
+		return err
+	}
 	parserSQLMode, err := viewParserSQLModeForRestore(tblInfo.viewDef)
 	if err != nil {
 		return err
@@ -2900,6 +2930,11 @@ func restoreAccountUsingClusterSnapshotToNew(ctx context.Context,
 
 	getLogger(ses.GetService()).Debug(fmt.Sprintf("[%s] start to restore dropped account: %v, account id: %d to new account id: %d, restore timestamp: %d", snapshotName, account.accountName, account.accountId, toAccountId, snapshotTs))
 	fromAccount := account.accountId
+	ownershipCtx, err := prepareRestoreOwnership(ctx, bh, snapshotTs, uint32(fromAccount), uint32(toAccountId), "", "")
+	if err != nil {
+		return err
+	}
+	ctx = ownershipCtx
 
 	// drop foreign key related tables first
 	if isNeedToCleanToDatabase {
