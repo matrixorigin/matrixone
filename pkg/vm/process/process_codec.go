@@ -51,10 +51,6 @@ func MockProcessInfoWithPro(
 func (proc *Process) BuildProcessInfo(
 	sql string,
 ) (pipeline.ProcessInfo, error) {
-	return proc.buildProcessInfo(sql)
-}
-
-func (proc *Process) buildProcessInfo(sql string) (pipeline.ProcessInfo, error) {
 	procInfo := pipeline.ProcessInfo{}
 	{
 		procInfo.Id = proc.QueryId()
@@ -166,24 +162,25 @@ func (proc *Process) buildProcessInfo(sql string) (pipeline.ProcessInfo, error) 
 		if err != nil {
 			return procInfo, err
 		}
+
 		procInfo.SessionInfo = pipeline.SessionInfo{
-			User:                               proc.Base.SessionInfo.GetUser(),
-			Host:                               proc.Base.SessionInfo.GetHost(),
-			Role:                               proc.Base.SessionInfo.GetRole(),
-			ConnectionId:                       proc.Base.SessionInfo.GetConnectionID(),
-			Database:                           proc.Base.SessionInfo.GetDatabase(),
-			Version:                            proc.Base.SessionInfo.GetVersion(),
-			TimeZone:                           timeBytes,
-			TimeZoneName:                       TimeZoneLocationName(loc),
-			QueryId:                            proc.Base.SessionInfo.QueryId,
-			LockWaitTimeout:                    resolveLockWaitTimeoutSeconds(proc),
-			LockWaitTimeoutSet:                 proc.Base.SessionInfo.LockWaitTimeoutSet,
-			MatrixoneNativeMode:                proc.Base.SessionInfo.MatrixOneNativeMode,
-			SqlMode:                            resolveSqlMode(proc),
-			AutoIncrementIncrement:             proc.Base.SessionInfo.AutoIncrementIncrement,
-			AutoIncrementOffset:                proc.Base.SessionInfo.AutoIncrementOffset,
-			MaxErrorCount:                      uint32(maxErrorCount),
-			MaxErrorCountSet:                   maxErrorCountSet,
+			User:                   proc.Base.SessionInfo.GetUser(),
+			Host:                   proc.Base.SessionInfo.GetHost(),
+			Role:                   proc.Base.SessionInfo.GetRole(),
+			ConnectionId:           proc.Base.SessionInfo.GetConnectionID(),
+			Database:               proc.Base.SessionInfo.GetDatabase(),
+			Version:                proc.Base.SessionInfo.GetVersion(),
+			TimeZone:               timeBytes,
+			TimeZoneName:           TimeZoneLocationName(loc),
+			QueryId:                proc.Base.SessionInfo.QueryId,
+			LockWaitTimeout:        resolveLockWaitTimeoutSeconds(proc),
+			LockWaitTimeoutSet:     proc.Base.SessionInfo.LockWaitTimeoutSet,
+			MatrixoneNativeMode:    proc.Base.SessionInfo.MatrixOneNativeMode,
+			SqlMode:                resolveSqlMode(proc),
+			AutoIncrementIncrement: proc.Base.SessionInfo.AutoIncrementIncrement,
+			AutoIncrementOffset:    proc.Base.SessionInfo.AutoIncrementOffset,
+			MaxErrorCount:          uint32(maxErrorCount),
+			MaxErrorCountSet:       maxErrorCountSet,
 		}
 		weekMode, weekModeSet, err := ResolveDefaultWeekFormatMode(proc)
 		if err != nil {
@@ -529,17 +526,27 @@ func resolveSqlMode(proc *Process) string {
 		if v, err := f("sql_mode", true, false); err == nil {
 			if s, ok := v.(string); ok {
 				if s == "" {
+					// Internal/background processes can retain a resolver from the
+					// executor that supplied the process. An empty value from that
+					// resolver is a compiled default, not an instruction to discard
+					// the session snapshot captured for remote execution. Keep an
+					// explicit empty sentinel as non-strict, but preserve any other
+					// snapshot so a second CN forward cannot silently lose strict
+					// assignment-cast behavior.
 					if proc.Base != nil && !proc.Base.IsFrontend {
 						if snapshot := proc.Base.SessionInfo.SqlMode; snapshot != "" {
 							return snapshot
 						}
 					}
-					return EmptySqlModeSentinel
+					return EmptySqlModeSentinel // explicitly non-strict
 				}
 				return s
 			}
 		}
 	}
+	// Resolver is nil on a remote CN (no session). Fall back to the sql_mode
+	// captured from the upstream CN so it survives a second forward
+	// (encode -> decode -> encode); otherwise the next hop defaults to strict.
 	if proc.Base == nil {
 		return ""
 	}

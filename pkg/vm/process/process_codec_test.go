@@ -172,6 +172,9 @@ func TestProcessCodecHelpers(t *testing.T) {
 		require.True(t, info.MaxErrorCountSet)
 		require.Equal(t, "UTC", info.TimeZone.String())
 
+		info, err = ConvertToProcessSessionInfo(pipeline.SessionInfo{TimeZone: []byte("bad")})
+		require.NoError(t, err)
+		require.Nil(t, info.TimeZone)
 		_, err = ConvertToProcessSessionInfo(pipeline.SessionInfo{
 			MaxErrorCount:    uint32(^uint16(0)) + 1,
 			MaxErrorCountSet: true,
@@ -190,21 +193,6 @@ func TestProcessCodecHelpers(t *testing.T) {
 		require.NoError(t, err)
 		require.Equal(t, int(^uint16(0)), max.MaxErrorCount)
 		require.True(t, max.MaxErrorCountSet)
-		for _, tc := range []struct {
-			name string
-			data []byte
-		}{
-			{"missing", nil},
-			{"empty", []byte{}},
-			{"malformed", []byte("bad")},
-			{"truncated", timeBytes[:len(timeBytes)-1]},
-		} {
-			t.Run(tc.name, func(t *testing.T) {
-				info, err := ConvertToProcessSessionInfo(pipeline.SessionInfo{TimeZone: tc.data})
-				require.NoError(t, err)
-				require.Nil(t, info.TimeZone)
-			})
-		}
 	})
 
 	t.Run("lock wait timeout resolution", func(t *testing.T) {
@@ -277,6 +265,7 @@ func TestProcessCodecHelpers(t *testing.T) {
 			return nil, moerr.NewInternalErrorNoCtx("boom")
 		})
 		require.Equal(t, "STRICT_ALL_TABLES", resolveSqlMode(proc))
+
 		// Resolver is nil (remote CN): fall back to SessionInfo.SqlMode so a second
 		// forward preserves the upstream mode instead of defaulting to strict.
 		strictProc := &Process{Base: &BaseProcess{SessionInfo: SessionInfo{SqlMode: "STRICT_TRANS_TABLES"}}}

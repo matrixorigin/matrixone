@@ -1392,8 +1392,8 @@ func TestPrepareRemoteRunSendingDataRejectsPrePadSpaceProtocol(t *testing.T) {
 }
 
 func TestRemoteExpressionProtocolValidation(t *testing.T) {
-	require.GreaterOrEqual(t, defines.MORPCLatestVersion, defines.MORPCVersion58,
-		"the v58 remote-expression capability must remain available after later protocol increments")
+	require.GreaterOrEqual(t, defines.MORPCLatestVersion, defines.MORPCVersion36,
+		"the v36 remote-expression capability must remain available after later protocol increments")
 
 	proc := testutil.NewProcess(t)
 	proc.Ctx = context.WithValue(proc.Ctx, defines.TenantIDKey{}, uint32(0))

@@ -32,7 +32,6 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/container/batch"
 	"github.com/matrixorigin/matrixone/pkg/defines"
 	"github.com/matrixorigin/matrixone/pkg/pb/pipeline"
-	"github.com/matrixorigin/matrixone/pkg/pb/plan"
 	"github.com/matrixorigin/matrixone/pkg/sql/colexec/connector"
 	"github.com/matrixorigin/matrixone/pkg/sql/colexec/dispatch"
 	"github.com/matrixorigin/matrixone/pkg/sql/colexec/value_scan"
@@ -290,10 +289,7 @@ func prepareRemoteRunSendingDataWithVectorProtocol(
 	}
 
 	// Encode the ScopeList which need to be sent.
-	var features plan.RemoteExpressionFeatures
-	if scopeData, features, err = encodeRemoteScopeWithFeaturesAndVectorProtocol(
-		encodedScope, proc, requiresBoundProtocol,
-	); err != nil {
+	if scopeData, err = encodeRemoteScopeWithVectorProtocol(encodedScope, proc, requiresBoundProtocol); err != nil {
 		return nil, false, nil, false, err
 	}
 
