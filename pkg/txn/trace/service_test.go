@@ -58,7 +58,7 @@ func TestBoundedTraceBufferDrainsBeyondCapacity(t *testing.T) {
 	svc, err := NewService(t.TempDir(), "", nil, clock.NewHLCClock(func() int64 { return 0 }, 0), exec,
 		WithBufferSize(capacity), WithEnable(true, nil), WithFlushBytes(flushBytes-1),
 		func(s *service) {
-			s.options.writeFunc = func(action loadAction) error {
+			s.options.writeFunc = func(_ context.Context, action loadAction) error {
 				data, err := os.ReadFile(action.file)
 				if err != nil {
 					return err
@@ -121,7 +121,7 @@ func testBoundedTraceBufferBackpressure(t *testing.T) {
 	svc, err := NewService(t.TempDir(), "", nil, clock.NewHLCClock(func() int64 { return 0 }, 0), exec,
 		WithBufferSize(capacity), WithEnable(true, nil), WithFlushBytes(1),
 		func(s *service) {
-			s.options.writeFunc = func(action loadAction) error {
+			s.options.writeFunc = func(_ context.Context, action loadAction) error {
 				data, err := os.ReadFile(action.file)
 				if err != nil {
 					return err

@@ -276,9 +276,24 @@ func (c *Compile) alterTableHasLatestHistoricalBranchSource(
 }
 
 func (c *Compile) lockDataBranchLineageOwnerLifecycle() error {
+	txnOp := c.proc.GetTxnOperator()
+	if txnOp == nil || !txnOp.Txn().IsPessimistic() {
+		return moerr.NewInternalError(c.proc.Ctx,
+			"data branch lineage lifecycle writer requires a pessimistic transaction")
+	}
 	return databranchutils.LockLineageOwnerLifecycle(func(sql string) error {
 		return c.runSqlWithAccountId(sql, int32(catalog.System_Account))
 	})
+}
+
+// lockDataBranchLineageOwnerLifecyclePessimistic takes the lifecycle row lock
+// before acquiring table locks. The later write barrier remains after any RC
+// snapshot advancement so lineage publication uses the refreshed snapshot.
+func (c *Compile) lockDataBranchLineageOwnerLifecyclePessimistic() error {
+	return c.runSqlWithAccountId(
+		databranchutils.LineageOwnerLifecyclePessimisticLockSQL(),
+		int32(catalog.System_Account),
+	)
 }
 
 func (c *Compile) prepareAlterDataBranchLineage(
@@ -1164,6 +1179,13 @@ func (s *Scope) alterTableCopy(c *Compile, cleanup *alterAutoIncrementResetClean
 	}()
 	if lineageTxnOp.Txn().IsPessimistic() {
 		var retryErr error
+		if !isTemp {
+			// TRUNCATE, DROP TABLE, and DROP ACCOUNT enter this lifecycle
+			// before locking table metadata. Use the same order for COPY ALTER.
+			if err = c.lockDataBranchLineageOwnerLifecyclePessimistic(); err != nil {
+				return err
+			}
+		}
 		// 0. lock origin database metadata in catalog
 		if err = lockMoDatabase(c, dbName, lock.LockMode_Shared); err != nil {
 			return err
@@ -1335,7 +1357,16 @@ func (s *Scope) alterTableCopy(c *Compile, cleanup *alterAutoIncrementResetClean
 	// those relationships are reconciled after the source relation is replaced.
 	// Get logicalId from tableDef and pass it when creating the temporary table.
 	createTmpOpts := alterCopyCreateOptions(qry)
-	err = c.runSqlWithOptions(qry.CreateTmpTableSql, createTmpOpts)
+	err = func() error {
+		originalCtx := c.proc.Ctx
+		baseCtx := originalCtx
+		if baseCtx == nil {
+			baseCtx = c.proc.GetTopContext()
+		}
+		c.proc.Ctx = plan2.WithPersistedDDLReplay(baseCtx, qry.TableDef, qry.CopyTableDef)
+		defer func() { c.proc.Ctx = originalCtx }()
+		return c.runSqlWithOptions(qry.CreateTmpTableSql, createTmpOpts)
+	}()
 	if err != nil {
 		c.proc.Error(c.proc.Ctx, "Create copy table for alter table",
 			zap.String("databaseName", dbName),

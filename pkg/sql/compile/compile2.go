@@ -263,6 +263,7 @@ func (c *Compile) Compile(
 		c.appendUnresolvedIndexHintMetaTables(queryPlan.GetQuery())
 		fault.TriggerFaultWithContext(c.proc.Ctx, unresolvedIndexHintPlanCompiledFault)
 	}
+	triggerStatementPlanCompiledFault(c.proc.Ctx, queryPlan)
 	// todo: this is redundant.
 	for _, s := range c.scopes {
 		if len(s.NodeInfo.Addr) == 0 {
@@ -276,6 +277,21 @@ func (c *Compile) Compile(
 const unresolvedFullTextPlanCompiledFault = "unresolved-fulltext-plan-compiled"
 
 const unresolvedIndexHintPlanCompiledFault = "unresolved-index-hint-plan-compiled"
+
+const createIndexPlanCompiledFault = "create-index-plan-compiled"
+
+// triggerStatementPlanCompiledFault exposes a deterministic boundary between
+// planning and pre-pipeline locking for cross-CN schema-change tests. Fault
+// injection is disabled in production, so ordinary compilation pays only the
+// enabled-state check.
+func triggerStatementPlanCompiledFault(ctx context.Context, queryPlan *plan.Plan) {
+	if !fault.Status() || queryPlan == nil {
+		return
+	}
+	if queryPlan.GetDdl().GetCreateIndex() != nil {
+		fault.TriggerFaultWithContext(ctx, createIndexPlanCompiledFault)
+	}
+}
 
 // selectMetaLockRequirement reports whether a SELECT must validate its table
 // definitions against mo_tables before execution. An unresolved fulltext
@@ -1162,7 +1178,9 @@ func (c *Compile) buildRetryCompile(rebuildPlan bool) (*Compile, error) {
 
 	var e error
 	runC := NewCompile(c.addr, c.db, c.sql, c.tenant, c.uid, c.e, c.proc, c.stmt, c.isInternal, c.cnLabel, c.startAt)
+	runC.preparedJoinDiagnosticFree = c.preparedJoinDiagnosticFree
 	runC.groupConcatMaxLenFloor = c.groupConcatMaxLenFloor
+	runC.SetPreparedParamValues(c.preparedParamValues)
 	runC.inheritTemporaryDDLPolicy(c)
 	runC.inheritLoadUniqueIndexPromotion(c)
 	c.bindRetryPlanGeneration(runC, rebuildPlan)
@@ -1184,12 +1202,19 @@ func (c *Compile) buildRetryCompile(rebuildPlan bool) (*Compile, error) {
 	}()
 	planForRetry := c.pn
 	if rebuildPlan {
+		runC.preparedJoinDiagnosticFree = false
 		planForRetry, e = c.buildPlanFunc(topContext)
 		if e != nil {
 			return nil, e
 		}
 		if e = c.validateRetryResultMetadata(topContext, planForRetry); e != nil {
 			return nil, e
+		}
+		if c.preparedJoinDiagnosticFree {
+			runC.preparedJoinDiagnosticFree, e = plan2.ProbePreparedJoinParameterDiagnostics(c.proc, planForRetry)
+			if e != nil {
+				return nil, e
+			}
 		}
 	}
 	if e = runC.Compile(topContext, planForRetry, c.fill); e != nil {
@@ -1200,6 +1225,7 @@ func (c *Compile) buildRetryCompile(rebuildPlan bool) (*Compile, error) {
 		// after physical compilation succeeds. A subsequent ordinary retry must
 		// inherit this generation rather than the one that first hit the fence.
 		c.pn = planForRetry
+		c.preparedJoinDiagnosticFree = runC.preparedJoinDiagnosticFree
 		c.inheritPlanSnapshot(runC)
 		// Update c.anal.qry to point to the new plan's Query. This ensures
 		// fillPlanNodeAnalyzeInfo uses the correct nodes.

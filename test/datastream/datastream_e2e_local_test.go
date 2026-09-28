@@ -556,10 +556,11 @@ func TestDatastreamThroughMatrixOne(t *testing.T) {
 }
 
 // TestConnectorJConnectionPoolReset runs the exact Connector/J pooled-borrow
-// API from #27644 against a reachable MatrixOne. The Java probe uses
-// MysqlConnectionPoolDataSource rather than a synthetic packet client. It runs
-// the Connector/J 8.0.15 COM_CHANGE_USER fallback and 8.4/9.7
-// COM_RESET_CONNECTION paths on repeated logical borrows.
+// API from #27644 and the setReadOnly compatibility path from #29185 against
+// a reachable MatrixOne. The Java probe uses MysqlConnectionPoolDataSource
+// rather than a synthetic packet client. It runs the Connector/J 8.0.15
+// COM_CHANGE_USER fallback and 8.3/8.4/9.7 COM_RESET_CONNECTION paths on
+// repeated logical borrows.
 func TestConnectorJConnectionPoolReset(t *testing.T) {
 	required := os.Getenv("MO_CONNECTORJ_POOL_RESET_REQUIRED") == "1"
 	if _, err := exec.LookPath("java"); err != nil {
@@ -594,6 +595,7 @@ func TestConnectorJConnectionPoolReset(t *testing.T) {
 		jar  string
 	}{
 		{name: "8.0.15", jar: filepath.Join(repoRoot(t), "xtool/jstfu/target/dependency/mysql-connector-java-8.0.15.jar")},
+		{name: "8.3.0", jar: filepath.Join(repoRoot(t), "xtool/jstfu/target/dependency/mysql-connector-j-8.3.0.jar")},
 		{name: "8.4", jar: filepath.Join(repoRoot(t), "xtool/jstfu/target/dependency/mysql-connector-j-8.4.0.jar")},
 		{name: "9.7", jar: filepath.Join(repoRoot(t), "xtool/jstfu/target/dependency/mysql-connector-j-9.7.0.jar")},
 	}

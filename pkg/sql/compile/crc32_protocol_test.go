@@ -54,7 +54,7 @@ func TestCRC32JSONDestinationProtocolValidation(t *testing.T) {
 	c.proc.Base.QueryClient = client
 	c.execType = plan2.ExecTypeAP_MULTICN
 	c.cnList = engine.Nodes{{Id: "old-worker", Addr: "remote:6001", Mcpu: 4}}
-	client.version = defines.MORPCVersion93
+	client.version = defines.MORPCVersion99
 	require.NoError(t, c.constrainCRC32JSONWorkers(&planpb.Query{
 		Nodes: []*planpb.Node{{ProjectList: []*planpb.Expr{expr}}},
 	}))
@@ -62,7 +62,7 @@ func TestCRC32JSONDestinationProtocolValidation(t *testing.T) {
 	_, err := encodeRemoteScope(scope, c.proc)
 	require.ErrorContains(t, err, "remote destination")
 
-	client.version = defines.MORPCVersion94
+	client.version = defines.MORPCVersion100
 	c.execType = plan2.ExecTypeAP_MULTICN
 	c.cnList = engine.Nodes{{Id: "old-worker", Addr: "remote:6001", Mcpu: 4}}
 	require.NoError(t, c.constrainCRC32JSONWorkers(&planpb.Query{
@@ -73,7 +73,7 @@ func TestCRC32JSONDestinationProtocolValidation(t *testing.T) {
 	require.NoError(t, err)
 	require.NotEmpty(t, data)
 	// A downgrade after successful planning must fail at the send boundary.
-	client.version = defines.MORPCVersion93
+	client.version = defines.MORPCVersion99
 	_, err = encodeRemoteScope(scope, c.proc)
 	require.ErrorContains(t, err, "remote destination")
 	// The old identity remains dispatchable to an actual old peer.

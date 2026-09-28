@@ -962,3 +962,46 @@ func TestCRC32ExecutionIdentityProtocolRoundTrip(t *testing.T) {
 		}
 	}
 }
+
+func TestTemporalConversionProtocolSourceMatrix(t *testing.T) {
+	column := func(id int32) *Expr {
+		return &Expr{Typ: Type{Id: id}, Expr: &Expr_Col{Col: &ColRef{ColPos: 0}}}
+	}
+	literal := func(form StringLiteralForm) *Expr {
+		return &Expr{Typ: Type{Id: planVarcharTypeID}, Expr: &Expr_Lit{Lit: &Literal{
+			Value: &Literal_Sval{Sval: ""}, LiteralForm: form,
+			IsBin: form == StringLiteralForm_STRING_LITERAL_HEX || form == StringLiteralForm_STRING_LITERAL_BIT,
+		}}}
+	}
+	cast := func(source *Expr, result, overload int32) *Expr {
+		return &Expr{Typ: Type{Id: result}, Expr: &Expr_F{F: &Function{
+			Func: &ObjectRef{Obj: int64(21)<<32 | int64(overload)},
+			Args: []*Expr{source, {Typ: Type{Id: result}, Expr: &Expr_T{T: &TargetType{}}}},
+		}}}
+	}
+	for _, tc := range []struct {
+		name string
+		expr *Expr
+		want bool
+	}{
+		{"text to date", cast(column(planVarcharTypeID), planDateTypeID, 0), true},
+		{"numeric to time", cast(column(planInt64TypeID), planTimeTypeID, 0), true},
+		{"typed date explicit without syntax bit", cast(column(planDateTypeID), planDateTypeID, 1), true},
+		{"typed datetime explicit without syntax bit", cast(column(planDatetimeTypeID), planDateTypeID, 1), true},
+		{"typed date legacy cast", cast(column(planDateTypeID), planDateTypeID, 0), false},
+		{"typed datetime legacy cast", cast(column(planDatetimeTypeID), planDateTypeID, 0), false},
+		{"typed date assignment cast", cast(column(planDateTypeID), planDateTypeID, 3), false},
+		{"typed datetime explicit to datetime", cast(column(planDatetimeTypeID), planDatetimeTypeID, 1), false},
+		{"hex to signed", cast(literal(StringLiteralForm_STRING_LITERAL_HEX), planInt64TypeID, 0), true},
+		{"bit to double", cast(literal(StringLiteralForm_STRING_LITERAL_BIT), 31, 0), true},
+		{"ordinary text to signed", cast(literal(StringLiteralForm_STRING_LITERAL_TEXT), planInt64TypeID, 0), false},
+		{"binary payload to signed", cast(literal(StringLiteralForm_STRING_LITERAL_BINARY_INTRODUCER), planInt64TypeID, 0), false},
+		{"numeric to date", cast(column(planInt64TypeID), planDateTypeID, 0), false},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			features, err := RequiredRemoteExpressionFeatures(tc.expr)
+			require.NoError(t, err)
+			require.Equal(t, tc.want, features.TemporalResultContracts)
+		})
+	}
+}

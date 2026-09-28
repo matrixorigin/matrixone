@@ -83,7 +83,7 @@ func TestCRC32JSONBinaryPrepared(t *testing.T) {
 			}
 			value, ok := rt.GetGlobalVariables(moruntime.PersistedExpressionProtocolAuthoringFloor)
 			floor, valid := value.(int64)
-			return ok && valid && floor >= defines.MORPCVersion94
+			return ok && valid && floor >= defines.MORPCVersion100
 		}, 90*time.Second, 100*time.Millisecond, "durable CRC32 catalog authoring admission did not complete")
 		exec("create table generated_crc(id int primary key,j json,c bigint unsigned generated always as (crc32(j)) stored,index idx_crc(c))")
 		exec(`insert into generated_crc(id,j) values(1,'{"t1":"a"}')`)

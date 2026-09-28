@@ -187,6 +187,51 @@ func fixedTypeMatch(overloads []overload, inputs []types.Type) checkResult {
 	return fixedTypeMatchExcept(overloads, inputs, -1)
 }
 
+// Persisted 4.2 expressions keep overloads 0..4 and their original physical
+// results. Only newly bound EXTRACT expressions select the numeric results.
+func extractNumericTypeMatch(overloads []overload, inputs []types.Type) checkResult {
+	// A marker or text column must reach the same tolerant parser as a
+	// VARCHAR literal. Choosing DATETIME by overload order would reject
+	// durations and partial/zero calendars before EXTRACT sees them.
+	if len(inputs) == 2 && (inputs[1].Oid.IsMySQLString() || inputs[1].Oid == types.T_any) {
+		r := fixedTypeMatch(overloads[8:9], inputs)
+		if r.status == succeedMatched || r.status == succeedWithCast {
+			r.idx += 8
+		}
+		return r
+	}
+	r := fixedTypeMatch(overloads[5:], inputs)
+	if r.status == succeedMatched || r.status == succeedWithCast {
+		r.idx += 5
+	}
+	return r
+}
+
+func addTimeTypeMatch(overloads []overload, inputs []types.Type) checkResult {
+	return timeArithmeticTypeMatch(overloads, inputs, 9)
+}
+
+func subTimeTypeMatch(overloads []overload, inputs []types.Type) checkResult {
+	return timeArithmeticTypeMatch(overloads, inputs, 11)
+}
+
+func timeArithmeticTypeMatch(overloads []overload, inputs []types.Type, legacyCount int) checkResult {
+	r := fixedTypeMatch(overloads[:legacyCount], inputs)
+	if len(inputs) == 2 && (inputs[1].Oid == types.T_float32 || inputs[1].Oid == types.T_float64) &&
+		r.status == succeedWithCast && len(r.finalType) == 2 &&
+		(r.finalType[1].Oid == types.T_varchar || r.finalType[1].Oid == types.T_char) {
+		// FLOAT has no declared decimal scale, but its duration can carry
+		// microseconds. The implicit text cast must not force FSP 0.
+		r.finalType[1].Scale = 6
+	}
+	if (r.status == succeedMatched || r.status == succeedWithCast) && r.idx >= 6 {
+		// The input signatures are unchanged; string results are appended
+		// after the legacy DATETIME-producing string overloads.
+		r.idx += legacyCount - 6
+	}
+	return r
+}
+
 // inetNtoaTypeMatch keeps native numeric inputs on their existing, allocation-
 // free executors while routing value-domain inputs through INET_NTOA's local
 // dynamic executor. This is deliberately a function-local matcher: adding
@@ -418,23 +463,6 @@ func fixedTypeMatchWithBoolNumericCast(overloads []overload, inputs []types.Type
 // return-type derivation.
 func stringDomainFixedTypeMatch(overloads []overload, inputs []types.Type) checkResult {
 	return stringDomainFixedTypeMatchIf(overloads, inputs, func(oid types.T) bool { return oid.IsMySQLString() })
-}
-
-// hexTypeMatch keeps HEX's byte-preserving string domains while treating BOOL
-// as the numeric value 0/1. BOOL must not be added to the global implicit-cast
-// lattice because unrelated string/binary functions intentionally stringify it.
-func hexTypeMatch(overloads []overload, inputs []types.Type) checkResult {
-	if len(inputs) == 1 {
-		switch inputs[0].Oid {
-		case types.T_bool:
-			return fixedTypeMatchWithBoolNumericCast(overloads, inputs)
-		case types.T_float32:
-			return newCheckResultWithSuccess(HexFloat32Overload)
-		case types.T_float64:
-			return newCheckResultWithSuccess(HexFloat64Overload)
-		}
-	}
-	return stringDomainFixedTypeMatch(overloads, inputs)
 }
 
 // spatialDistanceTypeMatch keeps the historical integer third argument for

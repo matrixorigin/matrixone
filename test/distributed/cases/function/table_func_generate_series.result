@@ -290,6 +290,38 @@ nth    f64
 8    0.6296099782367262
 9    1.565520076524086
 10    -0.834259977430416
+select nth from generate_random_int64(3, 42, 'int64n', 100) t order by nth;
+nth
+1
+2
+3
+select i64 from generate_random_int64(3, 42, 'int64n', 100) t order by nth;
+i64
+75
+11
+60
+select count(*) as n from generate_random_int64(3, 42, 'int64n', 100) t;
+n
+3
+select min(i64) = 11 and max(i64) = 75 as values_ok from generate_random_int64(3, 42, 'int64n', 100) t;
+values_ok
+1
+select nth from generate_random_float64(3, 42, 'normal') t order by nth;
+nth
+1
+2
+3
+select f64 from generate_random_float64(3, 42, 'normal') t order by nth;
+f64
+1.5536305584564762
+0.12525608682704692
+-0.4943748127704828
+select count(*) as n from generate_random_float64(3, 42, 'normal') t;
+n
+3
+select min(f64) < -0.49 and max(f64) > 1.55 as values_ok from generate_random_float64(3, 42, 'normal') t;
+values_ok
+1
 drop table if exists issue_26431;
 create table issue_26431(i int primary key);
 insert into issue_26431 values (1), (2), (3);

@@ -509,13 +509,13 @@ func getCloneMutationExecutor(
 	if useTxnHandler {
 		return getLineageOwnerMutationExecutor(
 			ctx, ses, false,
-			ses.GetTxnHandler().OptionBitsIsSet(OPTION_BEGIN), false,
+			ses.GetTxnHandler().OptionBitsIsSet(OPTION_BEGIN), true,
 			getBackExecutorWithTxnHandler, opts...,
 		)
 	}
 	return getLineageOwnerMutationExecutor(
 		ctx, ses, false,
-		ses.proc.GetTxnOperator().TxnOptions().ByBegin, false,
+		ses.proc.GetTxnOperator().TxnOptions().ByBegin, true,
 		getBackExecutor, opts...,
 	)
 }
@@ -985,7 +985,12 @@ func diffMergeAgency(
 	// lineage-owner lifecycle before resolving either endpoint, so their nested
 	// DDL follows the same lineage -> view-metadata -> object lock order as
 	// ordinary DROP, clone, and restore paths.
-	bh, deferred, err = getDataBranchMutationExecutor(execCtx.reqCtx, ses, false)
+	bh, deferred, err = getDataBranchMutationExecutor(
+		execCtx.reqCtx,
+		ses,
+		false,
+		&BackgroundExecOption{forcePessimisticRC: true},
+	)
 	if err != nil {
 		return
 	}

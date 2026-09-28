@@ -52,7 +52,7 @@ func TestCRC32CopyRetainsBoundGeneratedIdentity(t *testing.T) {
 	defer stmt.Free()
 	col := stmt.(*tree.CreateTable).Defs[1].(*tree.ColumnTableDef)
 	proc.Ctx = context.WithValue(proc.Ctx, defines.CRC32CopyExpressionsKey{}, owner)
-	got, err := buildGeneratedExpr(col, typ, owner.Cols, proc)
+	got, err := buildGeneratedExpr(proc.Ctx, col, typ, owner.Cols, proc)
 	require.NoError(t, err)
 	require.True(t, containsLegacyCRC32(got.Expr))
 	got.Expr.GetF().Func.Obj = function.EncodeOverloadID(function.CRC32, function.CRC32JSONTextOverload)
@@ -72,7 +72,7 @@ func TestCRC32CopyRetainsBoundGeneratedIdentity(t *testing.T) {
 	}
 
 	proc.Ctx = context.Background()
-	got, err = buildGeneratedExpr(col, typ, owner.Cols, proc)
+	got, err = buildGeneratedExpr(proc.Ctx, col, typ, owner.Cols, proc)
 	require.NoError(t, err)
 	features, err := planpb.RequiredRemoteExpressionFeatures(got)
 	require.NoError(t, err)
@@ -167,12 +167,12 @@ func TestCRC32PersistedDDLAdmissionBeforeFold(t *testing.T) {
 	proc := mock.ctxt.GetProcess()
 	rt := moruntime.ServiceRuntime(proc.GetService())
 	saved, present := rt.GetGlobalVariables(moruntime.MOProtocolVersion)
-	rt.SetGlobalVariables(moruntime.MOProtocolVersion, int64(defines.MORPCVersion93))
+	rt.SetGlobalVariables(moruntime.MOProtocolVersion, int64(defines.MORPCVersion99))
 	t.Cleanup(func() {
 		if present {
 			rt.SetGlobalVariables(moruntime.MOProtocolVersion, saved)
 		} else {
-			rt.CompareAndDeleteGlobalVariables(moruntime.MOProtocolVersion, int64(defines.MORPCVersion93))
+			rt.CompareAndDeleteGlobalVariables(moruntime.MOProtocolVersion, int64(defines.MORPCVersion99))
 		}
 	})
 	for _, sql := range []string{
@@ -181,7 +181,7 @@ func TestCRC32PersistedDDLAdmissionBeforeFold(t *testing.T) {
 		`create view crc32_gate_view as select crc32(cast('{"a":1}' as json)) as c`,
 	} {
 		_, err := runOneStmt(mock, t, sql)
-		require.ErrorContains(t, err, "protocol version 94", sql)
+		require.ErrorContains(t, err, "protocol version 100", sql)
 	}
 }
 
@@ -256,7 +256,7 @@ func TestCRC32CopyPreservesFoldedDefaultWithoutSource(t *testing.T) {
 	require.NoError(t, err)
 	defer stmt.Free()
 	col := stmt.(*tree.CreateTable).Defs[0].(*tree.ColumnTableDef)
-	got, err := buildDefaultExprWithColumns(col, typ, proc, nil, source)
+	got, err := buildDefaultExprWithColumns(proc.Ctx, col, typ, proc, nil, source)
 	require.NoError(t, err)
 	require.Equal(t, uint64(3719146973), got.Expr.GetLit().GetU64Val())
 	require.NotSame(t, source.Default.Expr, got.Expr)
@@ -287,11 +287,11 @@ func TestCRC32FoldedDefaultRetainsCapability(t *testing.T) {
 	require.NoError(t, err)
 	defer stmt.Free()
 	col := stmt.(*tree.CreateTable).Defs[0].(*tree.ColumnTableDef)
-	got, err := buildDefaultExprWithColumns(col, planpb.Type{Id: int32(types.T_uint64)}, proc, nil)
+	got, err := buildDefaultExprWithColumns(proc.Ctx, col, planpb.Type{Id: int32(types.T_uint64)}, proc, nil)
 	require.NoError(t, err)
 	require.NotNil(t, got.Expr.GetLit())
 	require.Equal(t, uint64(4012824821), got.Expr.GetLit().GetU64Val())
-	required, err := planpb.RequiresMORPCVersion94CRC32JSONTextBytes(got)
+	required, err := planpb.RequiresMORPCVersion100CRC32JSONTextBytes(got)
 	require.NoError(t, err)
 	require.True(t, required)
 }

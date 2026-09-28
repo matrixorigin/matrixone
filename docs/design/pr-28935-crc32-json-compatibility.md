@@ -10,7 +10,7 @@ PR data.
 | Identity | Binding and execution |
 | --- | --- |
 | CRC32 overload 0 | Existing catalog/wire expressions hash binary JSON; ordinary non-JSON calls retain their original bytes and scalar casts. |
-| CRC32 overload 1 | New JSON or unresolved bindings hash normalized MarshalJSON bytes for JSON; requires MORPC v94. |
+| CRC32 overload 1 | New JSON or unresolved bindings hash normalized MarshalJSON bytes for JSON; requires MORPC v100. |
 
 The result stays UINT64; the executor also retains the historic UINT32 wrapper.
 A stored legacy generated value can intentionally differ from a freshly bound
@@ -20,7 +20,7 @@ INSERT, UPDATE, REPLACE, ODKU, prepared rebinding and index maintenance.
 ## Boundaries
 
 Placement checks workers and falls back to one CN. Sending rechecks the actual
-worker at v94; receiving checks the new identity. Old coordinators send identity
+worker at v100; receiving checks the new identity. Old coordinators send identity
 0, which new workers still implement. Unknown capabilities fail closed.
 
 Catalog read and authoring use the existing separate durable admission floors.
@@ -39,12 +39,13 @@ is not a lossless way to preserve a legacy generated expression's algorithm.
 
 ## Upgrade and rollback
 
-Supported sources are main v93 and supported released versions, not earlier
-unmerged v86/v94 experiment binaries that changed overload 0 in place. Such data
+Supported sources include main through v99 and supported released versions, not
+earlier unmerged experiment binaries that changed overload 0 in place. Such data
 cannot be distinguished by identity and must not be admitted as a supported
-upgrade source. The complete main v93 implementation is present in the base.
+upgrade source. The integration preserves main protocols v94 through v99 and assigns this
+new execution identity to v100.
 
-Publishing new persisted expressions requires the durable v94 authoring barrier.
+Publishing new persisted expressions requires the durable v100 authoring barrier.
 Once the durable floor is raised, old CNs must stay excluded, including after
 restart. A failed activation does not imply the floor can be lowered. Rollback
 must respect the existing admission mechanism; this change adds no floor reset.
@@ -60,7 +61,10 @@ Real two-binary rolling upgrade, persistent old-table DML after restart and
 post-floor downgrade rejection remain separate environment acceptance tests;
 mock version values and same-version CI do not prove them.
 
-## Validation on 2026-09-28
+## Validation before main integration on 2026-09-28
+
+The following results apply to `29d9d489`, before the main integration and
+protocol reassignment. Integration validation is recorded separately.
 
 - PASS: complete function, plan codec, planner, compiler and executor utility
   package tests (6,528 top-level tests). Compiler tests use GOMAXPROCS=4;

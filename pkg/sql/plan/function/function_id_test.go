@@ -146,6 +146,52 @@ func TestInOverloadWireIDsRemainAppendOnly(t *testing.T) {
 	require.NoError(t, err)
 	_, enumIndex := DecodeOverloadID(enumResult.GetEncodedOverloadID())
 	require.Equal(t, int32(len(existing)), enumIndex)
+
+	for _, width := range []int32{1, 8, 16, 64} {
+		bitType := types.New(types.T_bit, width, 0)
+		bitResult, err := GetFunctionByName(
+			context.Background(),
+			InFunctionName,
+			[]types.Type{bitType, bitType},
+		)
+		require.NoError(t, err, bitType.String())
+		_, bitIndex := DecodeOverloadID(bitResult.GetEncodedOverloadID())
+		require.Equal(t, enumIndex+1, bitIndex, bitType.String())
+		_, shouldCast := bitResult.ShouldDoImplicitTypeCast()
+		require.False(t, shouldCast, bitType.String())
+	}
+}
+
+func TestNotInOverloadWireIDsRemainAppendOnly(t *testing.T) {
+	for _, test := range []struct {
+		typ      types.T
+		wantID   int32
+		bitWidth int32
+	}{
+		{typ: types.T_uint8, wantID: 0},
+		{typ: types.T_year, wantID: 25},
+		{typ: types.T_bit, wantID: 26, bitWidth: 1},
+		{typ: types.T_bit, wantID: 26, bitWidth: 8},
+		{typ: types.T_bit, wantID: 26, bitWidth: 16},
+		{typ: types.T_bit, wantID: 26, bitWidth: 64},
+	} {
+		typ := test.typ.ToType()
+		if test.typ == types.T_bit {
+			typ = types.New(types.T_bit, test.bitWidth, 0)
+		}
+		result, err := GetFunctionByName(
+			context.Background(),
+			"not_in",
+			[]types.Type{typ, typ},
+		)
+		require.NoError(t, err, typ.String())
+		_, gotID := DecodeOverloadID(result.GetEncodedOverloadID())
+		require.Equal(t, test.wantID, gotID, typ.String())
+		if test.typ == types.T_bit {
+			_, shouldCast := result.ShouldDoImplicitTypeCast()
+			require.False(t, shouldCast)
+		}
+	}
 }
 
 // all fixed function ids defined at 2024-12-12
@@ -764,9 +810,10 @@ var predefinedFunids = map[int]int{
 	JSON_STORAGE_FREE:              580,
 	// FUNCTION_END_NUMBER is not a function, just a flag to record the max number of function.
 	// TODO: every one should put the new function id in front of this one if you want to make a new function.
-	EXTRACTVALUE:        581,
-	UPDATEXML:           582,
-	FUNCTION_END_NUMBER: 583,
+	EXTRACTVALUE:            581,
+	UPDATEXML:               582,
+	TO_INTERVAL_MICROSECOND: 583,
+	FUNCTION_END_NUMBER:     584,
 }
 
 func Test_funids(t *testing.T) {
