@@ -24,6 +24,7 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/container/types"
 	"github.com/matrixorigin/matrixone/pkg/container/vector"
 	"github.com/matrixorigin/matrixone/pkg/partitionprune"
+	"github.com/matrixorigin/matrixone/pkg/partitionservice"
 	"github.com/matrixorigin/matrixone/pkg/pb/partition"
 	"github.com/matrixorigin/matrixone/pkg/pb/plan"
 	"github.com/matrixorigin/matrixone/pkg/sql/features"
@@ -369,7 +370,7 @@ func (op *PartitionMultiUpdate) writeTarget(
 	if len(contexts[0].PartitionCols) > 0 {
 		pos = int32(contexts[0].PartitionCols[0])
 	}
-	res, err := partitionprune.Prune(proc, filtered, target.meta, pos)
+	res, err := prunePartitionUpdate(proc, filtered, target.meta, pos)
 	if err != nil {
 		return err
 	}
@@ -632,6 +633,16 @@ func clonePartitionPhaseContexts(
 	return cloned
 }
 
+func prunePartitionUpdate(proc *process.Process, input *batch.Batch, meta partition.PartitionMetadata, partitionCol int32) (partitionservice.PruneResult, error) {
+	// MULTI_UPDATE column references are absolute after planner remapping.
+	// Prune's legacy rowid-leading layout adds one to an explicit position;
+	// translate only at this boundary so an index join cannot shift it twice.
+	if partitionCol > 0 && len(input.Vecs) > 0 && input.Vecs[0].GetType().Oid == types.T_Rowid {
+		partitionCol--
+	}
+	return partitionprune.Prune(proc, input, meta, partitionCol)
+}
+
 func (op *PartitionMultiUpdate) writePartitionPhase(
 	proc *process.Process,
 	target *partitionUpdateTarget,
@@ -639,7 +650,7 @@ func (op *PartitionMultiUpdate) writePartitionPhase(
 	partitionCol int,
 	input *batch.Batch,
 ) error {
-	res, err := partitionprune.Prune(proc, input, target.meta, int32(partitionCol))
+	res, err := prunePartitionUpdate(proc, input, target.meta, int32(partitionCol))
 	if err != nil {
 		return err
 	}
