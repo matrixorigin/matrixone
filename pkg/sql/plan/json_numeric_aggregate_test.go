@@ -256,7 +256,10 @@ func TestJSONNumericAggregateWindowUsesDoubleDomain(t *testing.T) {
 					require.Equal(t, int32(types.T_float64), window.WindowFunc.Typ.Id)
 					require.Len(t, fn.Args, 1)
 					require.Equal(t, int32(types.T_float64), fn.Args[0].Typ.Id)
-					require.True(t, isCastOverload(fn.Args[0], 0))
+					require.NotNil(t, fn.Args[0].GetF())
+					require.Equal(t, "json_agg_to_double", fn.Args[0].GetF().Func.ObjName)
+					require.Len(t, fn.Args[0].GetF().Args, 1)
+					require.Equal(t, int32(types.T_json), fn.Args[0].GetF().Args[0].Typ.Id)
 				}
 			}
 			require.True(t, found, "window function %s was not found", name)

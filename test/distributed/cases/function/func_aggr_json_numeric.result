@@ -53,4 +53,10 @@ INSERT INTO json_numeric_agg_mysql VALUES (1, 'true'), (2, 'false'), (3, '"12x"'
 SELECT SUM(j), AVG(j) FROM json_numeric_agg_mysql;
 ➤ SUM(j)[8,54,0]  ¦  AVG(j)[8,54,0]  𝄀
 13  ¦  2.6
+SELECT SUM(j) FROM json_numeric_agg_mysql WHERE id = 3;
+➤ SUM(j)[8,54,0]  𝄀
+12
+SHOW WARNINGS;
+➤ Level[12,0,0]  ¦  Code[5,0,0]  ¦  Message[12,0,0]  𝄀
+Warning  ¦  1292  ¦  Truncated incorrect DOUBLE value: '12x'
 DROP TABLE json_numeric_agg_mysql;

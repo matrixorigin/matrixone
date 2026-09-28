@@ -164,9 +164,6 @@ func TestJSONNumericAggExecUsesExistingCastDomain(t *testing.T) {
 				if expectation.name == "var_pop" || expectation.name == "stddev_pop" {
 					input.want = 0
 				}
-				if expectation.name == "var_samp" || expectation.name == "stddev_samp" {
-					require.Fail(t, "singleton sample aggregate must return SQL NULL")
-				}
 				require.InDelta(t, input.want, got, 1e-14)
 			})
 		}
@@ -311,23 +308,32 @@ func TestJSONNumericAggMySQLWarningConversion(t *testing.T) {
 		mpool.DeleteMPool(mp)
 	})
 	cases := []struct {
-		text string
-		want float64
+		text     string
+		want     float64
+		warnings int
 	}{
 		{text: `true`, want: 1},
 		{text: `false`, want: 0},
-		{text: `"12x"`, want: 12},
-		{text: `null`, want: 0},
-		{text: `[1]`, want: 0},
-		{text: `{"v":1}`, want: 0},
+		{text: `"12x"`, want: 12, warnings: 1},
+		{text: `"12"`, want: 12},
+		{text: `" 12 "`, want: 12},
+		{text: `null`, want: 0, warnings: 1},
+		{text: `[1]`, want: 0, warnings: 1},
+		{text: `{"v":1}`, want: 0, warnings: 1},
 	}
 	for _, tc := range cases {
 		t.Run(tc.text, func(t *testing.T) {
+			session := &numericWarningSession{}
+			proc.Session = session
 			values, err := castJSONNumericAggInput(t, proc, []string{tc.text}, nil)
 			require.NoError(t, err)
 			defer values.Free(proc.Mp())
 			require.False(t, values.IsNull(0))
 			require.InDelta(t, tc.want, vector.GetFixedAtNoTypeCheck[float64](values, 0), 1e-14)
+			require.Len(t, session.warnings, tc.warnings)
+			if tc.warnings > 0 {
+				require.Contains(t, session.warnings[0].msg, "Truncated incorrect DOUBLE value")
+			}
 		})
 	}
 }

@@ -3068,6 +3068,7 @@ func jsonAggToFloat64(bj bytejson.ByteJson, proc *process.Process) (float64, boo
 			emit(fmt.Sprintf("Truncated incorrect DOUBLE value: '%s'", s))
 			return 0, true
 		}
+		appendNumericCoercionWarning(proc, s)
 		return f, false
 	case bytejson.TpCodeLiteral:
 		if len(bj.Data) == 0 {

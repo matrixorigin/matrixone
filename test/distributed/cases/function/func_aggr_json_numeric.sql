@@ -32,4 +32,6 @@ DROP TABLE IF EXISTS json_numeric_agg_mysql;
 CREATE TABLE json_numeric_agg_mysql (id INT, j JSON);
 INSERT INTO json_numeric_agg_mysql VALUES (1, 'true'), (2, 'false'), (3, '"12x"'), (4, '[1]'), (5, 'null');
 SELECT SUM(j), AVG(j) FROM json_numeric_agg_mysql;
+SELECT SUM(j) FROM json_numeric_agg_mysql WHERE id = 3;
+SHOW WARNINGS;
 DROP TABLE json_numeric_agg_mysql;
