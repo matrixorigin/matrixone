@@ -167,6 +167,20 @@ EXECUTE pc_abs_nested USING @p,@p;
 EXECUTE pg_arith_nested USING @p,@p;
 ➤ id[4,32,0]  𝄀
 2
+SET @decimal_null=CAST(NULL AS DECIMAL(20,0)), @text_peer='abc';
+PREPARE pc_string_peer FROM 'SELECT COALESCE(?, ?, d) AS c FROM t WHERE id=2';
+PREPARE pg_string_peer FROM 'SELECT GREATEST(d, ?, CAST(9007199254740992 AS DECIMAL(20,0))) AS g FROM t WHERE id=2';
+EXECUTE pc_string_peer USING @decimal_null,@text_peer;
+➤ c[12,65535,0]  𝄀
+abc
+EXECUTE pg_string_peer USING @text_peer;
+➤ g[-1,16383,0]  𝄀
+abc
+SET @char_null=CAST(NULL AS CHAR);
+PREPARE pc_char_null FROM 'SELECT COALESCE(?,d) AS c FROM t WHERE id=2';
+EXECUTE pc_char_null USING @char_null;
+➤ c[12,65535,0]  𝄀
+9007199254740992.0000000002
 PREPARE pg_width FROM 'SELECT id FROM t WHERE GREATEST(d,?)=CAST(9007199254740992.0000000002 AS DECIMAL(38,10)) ORDER BY id';
 PREPARE pc_width FROM 'SELECT id FROM t WHERE COALESCE(d,?)=CAST(9007199254740992.0000000002 AS DECIMAL(38,10)) ORDER BY id';
 SET @tiny='1e-48';
@@ -234,6 +248,9 @@ DEALLOCATE PREPARE pg_nested;
 DEALLOCATE PREPARE pg_abs_nested;
 DEALLOCATE PREPARE pc_abs_nested;
 DEALLOCATE PREPARE pg_arith_nested;
+DEALLOCATE PREPARE pc_string_peer;
+DEALLOCATE PREPARE pg_string_peer;
+DEALLOCATE PREPARE pc_char_null;
 DEALLOCATE PREPARE pg_width;
 DEALLOCATE PREPARE pl_wide;
 DEALLOCATE PREPARE pc_width;

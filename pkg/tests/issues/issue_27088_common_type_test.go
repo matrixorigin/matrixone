@@ -669,10 +669,10 @@ func TestIssue27088PreparedDecimalCommonType(t *testing.T) {
 			mustExec(t, ctx, conn, `prepare issue27088_set_outer from
 				'set @issue27088_outer_out = coalesce(?, (select cast(1 as decimal(38,10))))'`)
 			defer func() { _, _ = conn.ExecContext(context.Background(), "deallocate prepare issue27088_set_outer") }()
-			for _, tc := range []struct{ source, directWant, preparedWant string }{
-				{"'12.5tail'", "12.5tail", "12.5000000000"},
-				{"'tail'", "tail", "0.0000000000"},
-				{"null", "1.0000000000", "1.0000000000"},
+			for _, tc := range []struct{ source, directWant, preparedWant, preparedType string }{
+				{"'12.5tail'", "12.5tail", "12.5000000000", "DECIMAL"},
+				{"'tail'", "tail", "tail", "VARCHAR"},
+				{"null", "1.0000000000", "1.0000000000", "DECIMAL"},
 			} {
 				mustExec(t, ctx, conn, "set @issue27088_outer_value = "+tc.source)
 				direct, _ := readResult(t,
@@ -681,7 +681,7 @@ func TestIssue27088PreparedDecimalCommonType(t *testing.T) {
 				mustExec(t, ctx, conn, "execute issue27088_set_outer using @issue27088_outer_value")
 				prepared, preparedType := readResult(t, "select @issue27088_outer_out")
 				require.Equal(t, tc.preparedWant, prepared)
-				require.Equal(t, "DECIMAL", preparedType)
+				require.Equal(t, tc.preparedType, preparedType)
 			}
 		})
 
