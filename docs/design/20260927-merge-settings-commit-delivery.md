@@ -21,13 +21,15 @@ Each commit attempt now owns its ordered callbacks. They run on the original
 request goroutine only after a successful `txn.Wait`, before `TxnMgr.DeleteTxn`
 releases the transaction from controller tracking. Failed/retried attempts
 discard their callbacks. A callback may wait for the scheduler queue without
-occupying the shared TN apply-worker pool. Stop-aware generation sends release
-blocked producers during close. Same-transaction table registration is queued
-by `ApplyCommit` before its settings callbacks; a repeated metadata event for
-the same table ID preserves the supporter and setting.
-The scheduler allocates its first stop-aware generation at construction, so
-catalog notifications made after the notifier is attached but before `Start`
-are retained and remain cancellable if a producer is blocked at shutdown.
+occupying the shared TN apply-worker pool. Same-transaction table registration
+is queued by `ApplyCommit` before its settings callbacks; a repeated metadata
+event for the same table ID preserves the supporter and setting.
+
+The scheduler allocates its first generation at construction, so catalog
+notifications made after the notifier is attached but before the first `Start`
+are retained for delivery when it starts. Once started, `Stop` closes that
+generation and releases blocked producers. `Stop` before the first `Start`
+does not close the initial generation or unblock a full queue.
 
 Each setting notification carries its TN commit timestamp. The scheduler
 retains the latest timestamp in the existing per-table supporter and rejects
@@ -68,5 +70,5 @@ The scheduler stores one `types.TS` per active table supporter and performs
 one comparison per settings notification. No catalog read is added to a
 settings commit. Queue sends remain bounded by the existing 4096 messages and
 can block a settings request until capacity is available or the scheduler
-stops. The replay-to-write bootstrap defect is a separate recovery boundary
-tracked in #29415.
+stops after its first `Start`. The replay-to-write bootstrap defect is a
+separate recovery boundary tracked in #29415.
