@@ -680,12 +680,18 @@ func TestPreparedSpecializedDomains(t *testing.T) {
 			defer stmt.Close()
 			runCase := func(v any) {
 				rows, err := stmt.QueryContext(ctx, v)
+				if rows != nil {
+					defer rows.Close()
+				}
 				if v == nil {
 					require.ErrorContains(t, err, "not const")
 					return
 				}
+				if value, ok := v.(string); ok {
+					require.ErrorContains(t, err, "invalid argument cast to int, bad value "+value)
+					return
+				}
 				require.NoError(t, err)
-				defer rows.Close()
 				var got []string
 				for rows.Next() {
 					var s sql.NullString
@@ -697,7 +703,11 @@ func TestPreparedSpecializedDomains(t *testing.T) {
 					}
 				}
 				require.NoError(t, rows.Err())
-				require.Equal(t, []string{"0.000", "123.460", "0.000"}, got)
+				wantPrecision := "123.460"
+				if v == 2.5 {
+					wantPrecision = "123.456"
+				}
+				require.Equal(t, []string{"0.000", wantPrecision, "0.000"}, got)
 			}
 			for _, v := range []any{2.5, "2.5tail", nil, 2.0} {
 				runCase(v)

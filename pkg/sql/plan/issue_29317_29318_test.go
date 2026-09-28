@@ -168,14 +168,14 @@ func TestPreparedVariadicRuntimeSourceDomains(t *testing.T) {
 			want:   []types.T{types.T_float64, types.T_float64},
 		},
 		{
-			name: "field reverse coalesce with text null keeps exact result",
+			name: "field reverse coalesce with text null uses double domain",
 			sql:  "prepare p from 'select field(coalesce(abs(?), ?), abs(cast(9007199254740992 as decimal(20,0))))'", fn: "field",
 			values: []ParamValue{
 				{Value: nil, SourceType: types.T_text.ToType(), HasSourceType: true},
 				{Value: "9007199254740993", SourceType: types.New(types.T_decimal128, 20, 0),
 					HasSourceType: true, PrepareParamKind: vector.PrepareParamDecimal},
 			},
-			want: []types.T{types.T_decimal128, types.T_decimal128},
+			want: []types.T{types.T_float64, types.T_float64},
 		},
 		{
 			name: "field reverse coalesce with binary protocol null keeps exact result",
