@@ -17,6 +17,7 @@ package compile
 import (
 	"reflect"
 
+	"github.com/matrixorigin/matrixone/pkg/common/moerr"
 	"github.com/matrixorigin/matrixone/pkg/container/batch"
 	"github.com/matrixorigin/matrixone/pkg/pb/pipeline"
 	"github.com/matrixorigin/matrixone/pkg/pb/plan"
@@ -48,6 +49,54 @@ type lockRowsExpressionsGetter interface {
 
 type lockRowsExpressionsRewriter interface {
 	RewriteLockRowsExpressions(func(*plan.Expr) (*plan.Expr, bool, error)) (bool, error)
+}
+
+// A remote worker has no access to the coordinator's variable binding. Only
+// the already-folded value and its existing literal domain may cross this
+// boundary. Qry and the duplicated logical filter/project lists are retained
+// plan metadata. Check the source fields reconstructed by generateScope plus
+// the schema and vector-scan contracts consumed by remote readers.
+func hasExecutableBoundStringVariable(owner any) bool {
+	found := false
+	_ = plan.VisitExpressionsInOwner(owner, func(root *plan.Expr) error {
+		return plan.VisitExprTree(root, func(expr *plan.Expr) error {
+			found = found || expr.GetV().GetBoundStringDomain() != 0
+			return nil
+		})
+	})
+	// Unlike migration admission, do not follow PreparedNumeric's compact
+	// StringDomainSource witnesses: workers never evaluate those planner-only
+	// expressions. The executable producer is checked separately above.
+	return found
+}
+
+func validateRemoteBoundStringVariables(p *pipeline.Pipeline) error {
+	if p == nil {
+		return nil
+	}
+	bound := hasExecutableBoundStringVariable(p.InstructionList)
+	if source := p.DataSource; source != nil {
+		bound = bound || hasExecutableBoundStringVariable(source.Expr) ||
+			hasExecutableBoundStringVariable(source.RuntimeFilterProbeList) ||
+			hasExecutableBoundStringVariable(source.TableDef)
+		if node := source.Node; node != nil {
+			bound = bound || hasExecutableBoundStringVariable(node.BlockFilterList) ||
+				hasExecutableBoundStringVariable(node.IndexReaderParam) ||
+				hasExecutableBoundStringVariable(node.VectorIndexScan)
+			if node.TableDef != source.TableDef {
+				bound = bound || hasExecutableBoundStringVariable(node.TableDef)
+			}
+		}
+	}
+	if bound {
+		return moerr.NewNotSupportedNoCtx("bound user-variable strings must be folded before remote execution")
+	}
+	for _, child := range p.Children {
+		if err := validateRemoteBoundStringVariables(child); err != nil {
+			return err
+		}
+	}
+	return nil
 }
 
 func scopeContainsVarExpr(s *Scope) bool {
