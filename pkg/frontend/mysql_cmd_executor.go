@@ -1324,6 +1324,142 @@ func handleCmdFieldList(ses FeSession, execCtx *ExecCtx, icfl *InternalCmdFieldL
 	return err
 }
 
+// staticSetExprValue recognizes only literal SET expressions. Keeping this
+// deliberately small lets transaction-characteristic preflight validate
+// obvious failures without evaluating user variables, parameters, subqueries,
+// or functions ahead of their original order.
+func staticSetExprValue(expr tree.Expr) (value interface{}, static bool, isDefault bool) {
+	switch v := expr.(type) {
+	case *tree.DefaultVal:
+		return nil, true, true
+	case *tree.NumVal:
+		switch v.ValType {
+		case tree.P_bool:
+			return v.Bool(), true, false
+		case tree.P_int64:
+			value, _ = v.Int64()
+			return value, true, false
+		case tree.P_uint64:
+			value, _ = v.Uint64()
+			return value, true, false
+		case tree.P_float64:
+			value, _ = v.Float64()
+			return value, true, false
+		case tree.P_null:
+			return nil, true, false
+		case tree.P_char:
+			return v.String(), true, false
+		default:
+			return nil, false, false
+		}
+	default:
+		return nil, false, false
+	}
+}
+
+func transactionReadOnlyBooleanValue(expr tree.Expr) (int64, bool) {
+	value, ok := expr.(*tree.NumVal)
+	if !ok || value.ValType != tree.P_bool {
+		return 0, false
+	}
+	if value.Bool() {
+		return 1, true
+	}
+	return 0, true
+}
+
+// validateTransactionAssignmentScopes rejects unsupported transaction
+// characteristic scopes before any assignment in the SET list is applied.
+// In particular, an unqualified @@transaction_read_only must not silently
+// become a SESSION assignment.
+func validateTransactionAssignmentScopes(
+	ctx context.Context,
+	sv *tree.SetVar,
+) error {
+	for _, assign := range sv.Assignments {
+		if scope, ok := transactionIsolationAssignmentScope(assign); ok {
+			switch scope {
+			case tree.TransactionScopeNext, tree.TransactionScopeSession, tree.TransactionScopeGlobal:
+			default:
+				return moerr.NewInvalidInputf(ctx, "unsupported transaction scope %d", scope)
+			}
+		}
+		if scope, ok := transactionReadOnlyAssignmentScope(assign); ok {
+			switch scope {
+			case tree.TransactionScopeSession, tree.TransactionScopeGlobal:
+			case tree.TransactionScopeNext:
+				return moerr.NewNotSupported(ctx,
+					"transaction access mode is only supported for SESSION scope")
+			default:
+				return moerr.NewInvalidInputf(ctx, "unsupported transaction scope %d", scope)
+			}
+		}
+	}
+	return nil
+}
+
+// validateStaticTransactionAssignments is a bounded atomicity guard. It
+// prevalidates a leading run of literal/DEFAULT assignments so a mixed SET
+// cannot first change read-only state and then fail on an obviously unsupported
+// isolation level. Unrelated literal assignments remain part of that prefix;
+// the first dynamic expression ends preflight, preserving expression
+// evaluation order for the wider SET language instead of attempting general
+// SET atomicity here.
+func validateStaticTransactionAssignments(
+	ctx context.Context,
+	ses *Session,
+	sv *tree.SetVar,
+	activeTxnAtStart bool,
+) error {
+	for _, assign := range sv.Assignments {
+		value, static, isDefault := staticSetExprValue(assign.Value)
+		if !static {
+			return nil
+		}
+
+		isolationScope, isolation := transactionIsolationAssignmentScope(assign)
+		readOnlyScope, readOnly := transactionReadOnlyAssignmentScope(assign)
+		if !isolation && !readOnly {
+			continue
+		}
+		if (isolation && isolationScope == tree.TransactionScopeGlobal) ||
+			(readOnly && readOnlyScope == tree.TransactionScopeGlobal) {
+			if err := doCheckRole(ctx, ses); err != nil {
+				return err
+			}
+		}
+		if isDefault {
+			if isolation && isolationScope == tree.TransactionScopeNext && activeTxnAtStart {
+				return moerr.NewCantChangeTxCharacteristics(ctx)
+			}
+			continue
+		}
+		if readOnly {
+			if normalized, ok := transactionReadOnlyBooleanValue(assign.Value); ok {
+				value = normalized
+			}
+		}
+		def, ok := gSysVarsDefs[assign.Name]
+		if !ok {
+			return moerr.NewInternalErrorf(ctx,
+				"transaction system variable %q is not registered", assign.Name)
+		}
+		converted, err := def.GetType().Convert(value)
+		if err != nil {
+			return err
+		}
+		if isolation {
+			if _, err = txnIsolationFromSystemValue(ctx, converted); err != nil {
+				return err
+			}
+			if isolationScope == tree.TransactionScopeNext && activeTxnAtStart {
+				return moerr.NewCantChangeTxCharacteristics(ctx)
+			}
+		}
+	}
+	return nil
+}
+
 func doSetVar(
 	ses *Session,
 	execCtx *ExecCtx,
@@ -1337,6 +1473,19 @@ func doSetVar(
 				return moerr.NewNotSupported(execCtx.reqCtx,
 					"prepared multi-assignment SET supports user variables only")
 			}
+		}
+	}
+	if err := validateTransactionAssignmentScopes(execCtx.reqCtx, sv); err != nil {
+		return err
+	}
+	if !preparedExpression {
+		if err := validateStaticTransactionAssignments(
+			execCtx.reqCtx,
+			ses,
+			sv,
+			execCtx.txnOpt.activeTxnAtStartKnown && execCtx.txnOpt.activeTxnAtStart,
+		); err != nil {
+			return err
 		}
 	}
 
@@ -1416,15 +1565,26 @@ func doSetVar(
 		}
 
 		if systemVar, exists := gSysVarsDefs[assign.Name]; exists {
-			if isDefault, isBool := value.(bool); isBool && isDefault {
+			_, isDefault := assign.Value.(*tree.DefaultVal)
+			if isDefault {
 				if scope, isTxnIsolation := transactionIsolationAssignmentScope(assign); isTxnIsolation {
 					value, evalErr = transactionIsolationDefaultValue(
 						execCtx.reqCtx, ses, scope)
 					if evalErr != nil {
 						return evaluatedAssignment{}, evalErr
 					}
+				} else if scope, isTxnReadOnly := transactionReadOnlyAssignmentScope(assign); isTxnReadOnly {
+					value, evalErr = transactionReadOnlyDefaultValue(
+						execCtx.reqCtx, ses, scope)
+					if evalErr != nil {
+						return evaluatedAssignment{}, evalErr
+					}
 				} else {
 					value = systemVar.Default
+				}
+			} else if _, isTxnReadOnly := transactionReadOnlyAssignmentScope(assign); isTxnReadOnly {
+				if boolValue, isBool := transactionReadOnlyBooleanValue(assign.Value); isBool {
+					value = boolValue
 				}
 			}
 		}
@@ -1575,6 +1735,19 @@ func doSetVar(
 				ses.markMigrationSystemVarReplayable(
 					migrationNextTxnIsolationKey, !preparedExpression && sql != "" && execCtx.singleStatementQuery)
 				return nil
+			case tree.TransactionScopeSession:
+				return setVarFunc(true, false, name, value, sql)
+			case tree.TransactionScopeGlobal:
+				return setVarFunc(true, true, name, value, sql)
+			default:
+				return moerr.NewInvalidInputf(execCtx.reqCtx,
+					"unsupported transaction scope %d", scope)
+			}
+		} else if scope, isTxnReadOnly := transactionReadOnlyAssignmentScope(assign); isTxnReadOnly {
+			switch scope {
+			case tree.TransactionScopeNext:
+				return moerr.NewNotSupported(execCtx.reqCtx,
+					"transaction access mode is only supported for SESSION scope")
 			case tree.TransactionScopeSession:
 				return setVarFunc(true, false, name, value, sql)
 			case tree.TransactionScopeGlobal:
@@ -1764,42 +1937,61 @@ func handleSetTransaction(ses *Session, execCtx *ExecCtx, stmt *tree.SetTransact
 		}
 	}
 
+	var accessMode string
+	var readOnly int64
 	if accessCharacteristic != nil {
-		var accessMode string
 		switch accessCharacteristic.Access {
 		case tree.ACCESS_MODE_READ_ONLY:
 			accessMode = "READ ONLY"
+			readOnly = 1
 		case tree.ACCESS_MODE_READ_WRITE:
 			accessMode = "READ WRITE"
 		default:
 			return moerr.NewInvalidInputf(execCtx.reqCtx,
 				"unsupported transaction access mode %d", accessCharacteristic.Access)
 		}
-		return moerr.NewNotSupported(execCtx.reqCtx,
-			"transaction access mode "+accessMode+" is not supported")
-	}
-	if isolationCharacteristic == nil {
-		return moerr.NewInvalidInput(execCtx.reqCtx,
-			"transaction characteristic list must not be empty")
+		if stmt.Scope != tree.TransactionScopeSession {
+			return moerr.NewNotSupported(execCtx.reqCtx,
+				"transaction access mode "+accessMode+" is only supported for SESSION scope")
+		}
 	}
 
 	var value string
 	var isolation pbtxn.TxnIsolation
-	switch isolationCharacteristic.Isolation {
-	case tree.ISOLATION_LEVEL_REPEATABLE_READ:
-		value = "REPEATABLE-READ"
-		isolation = pbtxn.TxnIsolation_SI
-	case tree.ISOLATION_LEVEL_READ_COMMITTED:
-		value = "READ-COMMITTED"
-		isolation = pbtxn.TxnIsolation_RC
-	case tree.ISOLATION_LEVEL_READ_UNCOMMITTED:
-		return moerr.NewNotSupported(execCtx.reqCtx,
-			"transaction isolation level READ-UNCOMMITTED is not supported")
-	case tree.ISOLATION_LEVEL_SERIALIZABLE:
-		return moerr.NewNotSupported(execCtx.reqCtx,
-			"transaction isolation level SERIALIZABLE is not supported")
-	default:
-		return moerr.NewInvalidInputf(execCtx.reqCtx, "unsupported transaction isolation level %d", isolationCharacteristic.Isolation)
+	if isolationCharacteristic != nil {
+		switch isolationCharacteristic.Isolation {
+		case tree.ISOLATION_LEVEL_REPEATABLE_READ:
+			value = "REPEATABLE-READ"
+			isolation = pbtxn.TxnIsolation_SI
+		case tree.ISOLATION_LEVEL_READ_COMMITTED:
+			value = "READ-COMMITTED"
+			isolation = pbtxn.TxnIsolation_RC
+		case tree.ISOLATION_LEVEL_READ_UNCOMMITTED:
+			return moerr.NewNotSupported(execCtx.reqCtx,
+				"transaction isolation level READ-UNCOMMITTED is not supported")
+		case tree.ISOLATION_LEVEL_SERIALIZABLE:
+			return moerr.NewNotSupported(execCtx.reqCtx,
+				"transaction isolation level SERIALIZABLE is not supported")
+		default:
+			return moerr.NewInvalidInputf(execCtx.reqCtx, "unsupported transaction isolation level %d", isolationCharacteristic.Isolation)
+		}
+	}
+
+	if accessCharacteristic != nil {
+		// Connector/J uses SET SESSION TRANSACTION READ ONLY/READ WRITE for
+		// Connection.setReadOnly. Keep both MySQL spellings synchronized so
+		// frameworks that inspect either variable observe the negotiated mode.
+		if err := ses.SetSessionSysVar(
+			execCtx.reqCtx, transactionReadOnlySystemVariable, readOnly); err != nil {
+			return err
+		}
+	}
+	if isolationCharacteristic == nil {
+		if accessCharacteristic == nil {
+			return moerr.NewInvalidInput(execCtx.reqCtx,
+				"transaction characteristic list must not be empty")
+		}
+		return nil
 	}
 
 	switch stmt.Scope {
@@ -1890,7 +2082,7 @@ func doShowErrors(ses *Session, execCtx *ExecCtx) error {
 
 	info := ses.diagnosticsSnapshot()
 	var skipped, added uint64
-	for i := info.length() - 1; i >= 0; i-- {
+	for i := 0; i < info.length(); i++ {
 		level := "Error"
 		if i < len(info.levels) && info.levels[i] != "" {
 			level = info.levels[i]
@@ -2015,8 +2207,12 @@ func resetDiagnosticsForStatement(ses *Session, execCtx *ExecCtx, input *UserInp
 		}
 	}
 	if isTopLevelClientStatement(ses, execCtx, input) && !isDiagnosticsStatement(stmt) {
-		ses.resetDiagnostics()
+		limit := ses.beginWarningDiagnostics()
+		execCtx.reqCtx = process.ContextWithWarningRetentionLimit(execCtx.reqCtx, limit)
 		beginJSONMergeWarningStatement(ses, execCtx, input, stmt)
+		if execCtx.proc != nil {
+			execCtx.proc.ReplaceTopCtx(execCtx.reqCtx)
+		}
 	}
 }
 
@@ -2896,23 +3092,25 @@ func createPrepareStmtInSession(
 	fixedIntegerParamPositions, hasPaginationParams, hasLagLeadParams :=
 		preparedFixedIntegerParamPositions(prepareControl.Plan)
 	prepareStmt := &PrepareStmt{
-		groupConcatMaxLenFloor: groupConcatFloor,
-		Name:                   preparePlan.GetDcl().GetPrepare().GetName(),
-		Sql:                    originSQL,
-		compile:                comp,
-		PreparePlan:            preparePlan,
-		PrepareStmt:            saveStmt,
-		NativeMode:             owner.sqlModeHasMatrixOneNative(),
-		OnlyFullGroupBy:        owner.sqlModeHasOnlyFullGroupBy(),
-		BoolSumAvg:             owner.sqlModeHasEnableBoolSumAvg(),
-		NoUnsignedSubtraction:  owner.sqlModeHasNoUnsignedSubtraction(),
-		sqlModeFlagsSet:        true,
-		remapDb:                maps.Clone(execCtx.remapDb),
-		defaultDatabase:        executionSes.GetTxnCompileCtx().GetDatabase(),
-		tempTableVersion:       owner.GetTempTableVersion(),
-		ddlVersion:             owner.getDDLVersion(),
-		cloneSQL:               cloneSQL,
-		protocolVersion:        protocolVersion,
+		groupConcatMaxLenFloor:   groupConcatFloor,
+		Name:                     preparePlan.GetDcl().GetPrepare().GetName(),
+		Sql:                      originSQL,
+		compile:                  comp,
+		PreparePlan:              preparePlan,
+		PrepareStmt:              saveStmt,
+		NativeMode:               owner.sqlModeHasMatrixOneNative(),
+		OnlyFullGroupBy:          owner.sqlModeHasOnlyFullGroupBy(),
+		BoolSumAvg:               owner.sqlModeHasEnableBoolSumAvg(),
+		NoUnsignedSubtraction:    owner.sqlModeHasNoUnsignedSubtraction(),
+		divPrecisionIncrement:    owner.currentDivPrecisionIncrement(),
+		sqlModeFlagsSet:          true,
+		divPrecisionIncrementSet: true,
+		remapDb:                  maps.Clone(execCtx.remapDb),
+		defaultDatabase:          executionSes.GetTxnCompileCtx().GetDatabase(),
+		tempTableVersion:         owner.GetTempTableVersion(),
+		ddlVersion:               owner.getDDLVersion(),
+		cloneSQL:                 cloneSQL,
+		protocolVersion:          protocolVersion,
 		numericOverloadParamPositions: plan2.PreparedPlanNumericFallbackParamPositions(
 			prepareControl.Plan),
 		bitCountOverloadParamPositions: plan2.PreparedPlanBitCountFallbackParamPositions(
@@ -2936,6 +3134,7 @@ func createPrepareStmtInSession(
 	}
 	prepareStmt.refreshNumericPrefixConsumer(
 		prepareControl.Plan, len(prepareControl.ParamTypes))
+	prepareStmt.refreshGenerateSeriesParamMetadata(prepareControl.Plan)
 	prepareStmt.refreshGeometrySRIDParamPositions(prepareControl.Plan)
 	prepareStmt.directResultParamPositions = plan2.PreparedPlanDirectResultParamPositions(prepareControl.Plan)
 	prepareStmt.directResultParamPositionsSet = true
@@ -3141,7 +3340,10 @@ func handleCreateAccount(ses FeSession, execCtx *ExecCtx, ca *tree.CreateAccount
 		return b.err
 	}
 
-	bh := ses.GetBackgroundExec(execCtx.reqCtx)
+	bh := ses.GetBackgroundExec(
+		execCtx.reqCtx,
+		&BackgroundExecOption{forcePessimisticRC: true},
+	)
 	defer bh.Close()
 
 	err = bh.Exec(execCtx.reqCtx, "begin;")
@@ -3638,6 +3840,16 @@ func doShowCollation(ses *Session, execCtx *ExecCtx, proc *process.Process, sc *
 }
 
 func handleShowPublications(ses FeSession, execCtx *ExecCtx, sp *tree.ShowPublications) error {
+	if sp.Like != nil {
+		if _, parameterized := sp.Like.Right.(*tree.ParamExpr); parameterized {
+			// SQL EXECUTE can leave its owned parameter vector on the session
+			// process. A bare SHOW must never borrow that previous binding.
+			cw, ok := execCtx.cw.(*TxnComputationWrapper)
+			if !ok || !cw.ifIsExeccute {
+				return moerr.NewInvalidInput(execCtx.reqCtx, "SHOW PUBLICATIONS LIKE parameter requires prepared execution")
+			}
+		}
+	}
 	return doShowPublications(execCtx.reqCtx, ses.(*Session), sp)
 }
 
@@ -4084,6 +4296,9 @@ func checkModify(plan0 *plan.Plan, resolveFn func(string, string, *plan2.Snapsho
 	}
 	switch p := plan0.Plan.(type) {
 	case *plan.Plan_Query:
+		if p.Query.GetViewMetadataDependsOnUdf() {
+			return true, nil
+		}
 		for i := range p.Query.Nodes {
 			if def := p.Query.Nodes[i].TableDef; def != nil {
 				flag, err := checkFn(p.Query.Nodes[i].ObjRef, def)
@@ -4396,10 +4611,33 @@ func refreshStatementScopedSessionInfo(ses FeSession, proc *process.Process) {
 	if proc == nil || proc.Base == nil {
 		return
 	}
+	limit, ok := process.WarningRetentionLimitFromContext(proc.GetTopContext())
+	if !ok {
+		limit, ok = resolveSessionWarningRetentionLimit(ses)
+	}
+	if ok {
+		proc.Base.SessionInfo.MaxErrorCount = limit
+		proc.Base.SessionInfo.MaxErrorCountSet = true
+	}
 	proc.Base.SessionInfo.AutoIncrementIncrement = resolvePositiveSessionUint64(
 		ses, "auto_increment_increment", proc.Base.SessionInfo.AutoIncrementIncrement)
 	proc.Base.SessionInfo.AutoIncrementOffset = resolvePositiveSessionUint64(
 		ses, "auto_increment_offset", proc.Base.SessionInfo.AutoIncrementOffset)
+}
+
+func resolveSessionWarningRetentionLimit(ses FeSession) (int, bool) {
+	if ses == nil {
+		return process.WarningDiagnosticDefaultRetentionLimit, true
+	}
+	value, err := ses.GetSessionSysVar("max_error_count")
+	if err != nil {
+		return process.WarningDiagnosticDefaultRetentionLimit, true
+	}
+	limit, ok := sessionWarningRetentionLimit(value)
+	if !ok {
+		return process.WarningDiagnosticDefaultRetentionLimit, true
+	}
+	return limit, true
 }
 
 func resolvePositiveSessionUint64(ses FeSession, name string, previous uint64) uint64 {
@@ -5172,6 +5410,9 @@ func executeStmtWithWorkspace(ses FeSession,
 	execCtx.txnOpt.forcePessimisticObjectLifecycle = requiresPessimisticObjectLifecycleTxn(
 		ses, effectiveStmt, effectiveDefaultDatabase,
 	)
+	execCtx.txnOpt.forcePessimisticLifecycleMode = requiresPessimisticLifecycleModeTxn(
+		ses, effectiveStmt, effectiveDefaultDatabase,
+	)
 	execCtx.txnOpt.activeTxnAtStart = ses.GetTxnHandler().InActiveTxn()
 	execCtx.txnOpt.activeTxnAtStartKnown = true
 	switch execCtx.stmt.(type) {
@@ -5673,6 +5914,7 @@ func doComQuery(ses *Session, execCtx *ExecCtx, input *UserInput) (retErr error)
 		StorageEngine:          pu.StorageEngine,
 		LastInsertID:           ses.GetLastInsertID(),
 		SqlHelper:              ses.GetSqlHelper(),
+		CompilerContext:        ses.txnCompileCtx,
 		Buf:                    ses.GetBuffer(),
 		LogLevel:               zapcore.InfoLevel, //TODO: need set by session level config
 		SessionId:              ses.GetSessId(),
@@ -5777,9 +6019,11 @@ func doComQuery(ses *Session, execCtx *ExecCtx, input *UserInput) (retErr error)
 
 	ParseDuration := time.Since(beginInstant)
 	recordParseError := func(errorInput *UserInput, parseErr error) error {
-		if isTopLevelClientStatement(ses, execCtx, errorInput) {
-			ses.resetDiagnostics()
-		}
+		// There is no AST on this path, but it is still a statement boundary:
+		// capture the limit in the request context so any later error handling
+		// or internal work observes the same generation. The helper itself keeps
+		// internal and diagnostic inputs outside the client boundary.
+		resetDiagnosticsForStatement(ses, execCtx, errorInput, nil)
 		statsInfo.ParseStage.ParseDuration = time.Since(beginInstant)
 		diagnosticErr := redactStatementErrorForLogging(parseErr, errorInput.getSql())
 		var recordErr error
@@ -5949,15 +6193,20 @@ func doComQuery(ses *Session, execCtx *ExecCtx, input *UserInput) (retErr error)
 		// packet, so clear it before executing each statement while leaving the
 		// session-visible LAST_INSERT_ID state in LastInsertID untouched.
 		proc.SetStatementLastInsertID(0)
-		// SET statements in the same COM_QUERY execute after the wrappers were
-		// planned.  Refresh the runtime snapshot immediately before each
-		// statement so the remote PRE_INSERT path observes the session values
-		// established by earlier statements in the request.
-		refreshStatementScopedSessionInfo(ses, proc)
 		if isTopLevelClientStatement(ses, execCtx, currentInput) {
 			execCtx.captureDiagnosticCountsSnapshot(ses)
 		}
+		// Freeze the diagnostic capacity before executing the statement.  In a
+		// multi-assignment SET, a later RHS may execute an internal SELECT after
+		// an earlier assignment has changed max_error_count; the context snapshot
+		// must keep that nested execution on the capacity chosen at this boundary.
 		resetDiagnosticsForStatement(ses, execCtx, currentInput, diagnosticStmt)
+		// SET statements in the same COM_QUERY execute after the wrappers were
+		// planned.  Refresh the runtime snapshot immediately before each
+		// statement so the remote PRE_INSERT path observes the session values
+		// established by earlier statements in the request.  The diagnostic
+		// capacity comes from the immutable statement context above.
+		refreshStatementScopedSessionInfo(ses, proc)
 		removePrepareStmtForReplacement(ses, stmt)
 		var err2 error
 		execCtx.reqCtx, err2 = RecordStatement(execCtx.reqCtx, ses, proc, cw, beginInstant, currentSQLRecord, sqlType, singleStatement)
@@ -6343,7 +6592,7 @@ func ExecRequest(ses *Session, execCtx *ExecCtx, req *Request) (resp *Response, 
 		// SQL mode current for each staged statement.
 		rewritePolicy, rewriteErr := captureRewritePolicy(execCtx.reqCtx, ses)
 		if rewriteErr != nil {
-			ses.resetDiagnostics()
+			ses.beginWarningDiagnostics()
 			markRowCountFailed(ses, ses.GetProc())
 			resp = NewGeneralErrorResponse(COM_QUERY, ses.GetTxnHandler().GetServerStatus(), rewriteErr)
 			return resp, nil
@@ -6404,7 +6653,7 @@ func ExecRequest(ses *Session, execCtx *ExecCtx, req *Request) (resp *Response, 
 					execCtx.reqCtx, sql, sessionSQLModeForParser(ses))
 			}
 			if rewriteErr != nil {
-				ses.resetDiagnostics()
+				ses.beginWarningDiagnostics()
 				markRowCountFailed(ses, ses.GetProc())
 				resp = NewGeneralErrorResponse(COM_STMT_PREPARE, ses.GetTxnHandler().GetServerStatus(), rewriteErr)
 				return resp, nil
@@ -6414,7 +6663,7 @@ func ExecRequest(ses *Session, execCtx *ExecCtx, req *Request) (resp *Response, 
 			}
 		}
 		if err = validateNativePrepareJSONHints(execCtx.reqCtx, sql, parserLowerCaseTableNames(ses)); err != nil {
-			ses.resetDiagnostics()
+			ses.beginWarningDiagnostics()
 			markRowCountFailed(ses, ses.GetProc())
 			resp = NewGeneralErrorResponse(COM_STMT_PREPARE, ses.GetTxnHandler().GetServerStatus(), err)
 			return resp, nil
@@ -6448,7 +6697,7 @@ func ExecRequest(ses *Session, execCtx *ExecCtx, req *Request) (resp *Response, 
 		var prepareStmt *PrepareStmt
 		sql, prepareStmt, err = parseStmtExecute(execCtx.reqCtx, ses, req.GetData().([]byte))
 		if err != nil {
-			ses.resetDiagnostics()
+			ses.beginWarningDiagnostics()
 			if prepareStmt != nil {
 				prepareStmt.closeCursor()
 				prepareStmt.clearBinaryParamState(ses.GetProc())
@@ -6465,6 +6714,7 @@ func ExecRequest(ses *Session, execCtx *ExecCtx, req *Request) (resp *Response, 
 		prepareStmt.closeCursor()
 		if cursorRequested {
 			if _, ok := prepareStmt.PrepareStmt.(*tree.Select); !ok {
+				ses.beginWarningDiagnostics()
 				prepareStmt.clearBinaryParamState(ses.GetProc())
 				markRowCountFailed(ses, ses.GetProc())
 				return NewGeneralErrorResponse(COM_STMT_EXECUTE, ses.GetTxnHandler().GetServerStatus(),

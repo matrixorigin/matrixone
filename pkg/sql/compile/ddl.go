@@ -156,6 +156,9 @@ func (s *Scope) DropDatabase(c *Compile) error {
 	dbName := s.Plan.GetDdl().GetDropDatabase().GetDatabase()
 	db, err := c.e.Database(c.proc.Ctx, dbName, c.proc.GetTxnOperator())
 	if err != nil {
+		if !moerr.IsMoErrCode(err, moerr.OkExpectedEOB) {
+			return err
+		}
 		if s.Plan.GetDdl().GetDropDatabase().GetIfExists() {
 			return nil
 		}
@@ -205,6 +208,19 @@ func (s *Scope) DropDatabase(c *Compile) error {
 			return err
 		}
 	}
+	db, err = c.e.Database(c.proc.Ctx, dbName, txnOp)
+	if err != nil {
+		if !moerr.IsMoErrCode(err, moerr.OkExpectedEOB) {
+			return err
+		}
+		if s.Plan.GetDdl().GetDropDatabase().GetIfExists() {
+			return nil
+		}
+		return moerr.NewErrDropNonExistsDB(c.proc.Ctx, dbName)
+	}
+	if err := ensureDatabaseNotPublished(c, db, dbName); err != nil {
+		return err
+	}
 
 	// handle sub
 	if db.IsSubscription(c.proc.Ctx) {
@@ -225,10 +241,7 @@ func (s *Scope) DropDatabase(c *Compile) error {
 		}
 	}
 
-	database, err := c.e.Database(c.proc.Ctx, dbName, c.proc.GetTxnOperator())
-	if err != nil {
-		return err
-	}
+	database := db
 	relations, err := database.Relations(c.proc.Ctx)
 	if err != nil {
 		return err
@@ -310,6 +323,13 @@ func (s *Scope) DropDatabase(c *Compile) error {
 		); err != nil {
 			return err
 		}
+		// Keep this point after the nested DROP: a canceled database DROP must
+		// roll back both its catalog writes and its external table actions.
+		if _, _, ok := fault.TriggerFaultWithContext(c.proc.Ctx, "drop_database_after_table"); ok {
+			if err := c.proc.Ctx.Err(); err != nil {
+				return err
+			}
+		}
 	}
 
 	sql := s.Plan.GetDdl().GetDropDatabase().GetCheckFKSql()
@@ -325,7 +345,13 @@ func (s *Scope) DropDatabase(c *Compile) error {
 	}
 
 	// 1.delete all index object record under the database from mo_catalog.mo_indexes
-	deleteSql := fmt.Sprintf(deleteMoIndexesWithDatabaseIdFormat, s.Plan.GetDdl().GetDropDatabase().GetDatabaseId())
+	// The planned ID can be stale if a same-name database was replaced while
+	// waiting for the catalog lock. Clean up the identity actually deleted.
+	indexDatabaseID, err := strconv.ParseUint(database.GetDatabaseId(c.proc.Ctx), 10, 64)
+	if err != nil {
+		return err
+	}
+	deleteSql := fmt.Sprintf(deleteMoIndexesWithDatabaseIdFormat, indexDatabaseID)
 	if err = c.runSqlWithOptions(
 		deleteSql, executor.StatementOption{}.WithDisableLog(),
 	); err != nil {
@@ -380,6 +406,36 @@ func (s *Scope) DropDatabase(c *Compile) error {
 	}
 
 	c.setAffectedRows(uint64(len(deleteTables)))
+	return nil
+}
+
+// Publication writers hold a shared lock on the same catalog key until
+// commit. This probe runs after DROP's exclusive lock and RC snapshot advance,
+// so it sees cross-account references and a fresh physical database identity.
+var ensureDatabaseNotPublished = func(c *Compile, db engine.Database, dbName string) error {
+	if db.IsSubscription(c.proc.Ctx) || needSkipDbs[dbName] {
+		return nil
+	}
+	dbID, err := strconv.ParseUint(db.GetDatabaseId(c.proc.Ctx), 10, 64)
+	if err != nil {
+		return err
+	}
+	res, err := c.runSqlWithResult(
+		fmt.Sprintf("select 1 from mo_catalog.mo_pubs where database_id = %d limit 1", dbID),
+		int32(catalog.System_Account),
+	)
+	if err != nil {
+		return err
+	}
+	publishing := false
+	res.ReadRows(func(n int, _ []*vector.Vector) bool {
+		publishing = publishing || n > 0
+		return false
+	})
+	res.Close()
+	if publishing {
+		return moerr.NewInternalErrorf(c.proc.Ctx, "can not drop database '%v' which is publishing", dbName)
+	}
 	return nil
 }
 
@@ -677,6 +733,18 @@ func foreignKeyParentIDs(fkeys []*plan.ForeignKeyDef) map[uint64]struct{} {
 	return parents
 }
 
+func alterTableAddsForeignKey(actions []*plan.AlterTable_Action) bool {
+	for _, action := range actions {
+		if action == nil {
+			continue
+		}
+		if _, ok := action.Action.(*plan.AlterTable_Action_AddFk); ok {
+			return true
+		}
+	}
+	return false
+}
+
 func (s *Scope) AlterTableInplace(c *Compile) (err error) {
 	cleanup := newAlterAutoIncrementResetCleanup(c)
 	defer cleanup.finish(&err)
@@ -788,8 +856,14 @@ func (s *Scope) alterTableInplace(c *Compile, cleanup *alterAutoIncrementResetCl
 			retryErr = moerr.NewTxnNeedRetryWithDefChanged(c.proc.Ctx)
 		}
 
-		// 2. lock origin table
-		if err = lockTable(c.proc.Ctx, c.e, c.proc, rel, dbName, true); err != nil {
+		// 2. lock origin table. ADD FOREIGN KEY validates existing child rows,
+		// so it opts into advancing the RC snapshot through the latest child
+		// commit after acquiring the table lock.
+		lockOriginTable := lockTable
+		if alterTableAddsForeignKey(qry.Actions) {
+			lockOriginTable = lockTableForSnapshotRefresh
+		}
+		if err = lockOriginTable(c.proc.Ctx, c.e, c.proc, rel, dbName, true); err != nil {
 			if !moerr.IsMoErrCode(err, moerr.ErrTxnNeedRetry) &&
 				!moerr.IsMoErrCode(err, moerr.ErrTxnNeedRetryWithDefChanged) {
 				return err
@@ -829,7 +903,13 @@ func (s *Scope) alterTableInplace(c *Compile, cleanup *alterAutoIncrementResetCl
 			}
 		}
 
-		// 3. lock foreign key's table
+		// 3. Lock every foreign-key parent in both the catalog and the data
+		// keyspace. The child table lock above serializes child writes with FK
+		// validation; the parent data lock is equally necessary to serialize a
+		// concurrent parent delete. These validation locks opt into advancing an
+		// RC snapshot past commits that completed before each lock was granted, so
+		// the later detect SQL validates the exact locked state.
+		lockedForeignKeyParents := make(map[string]struct{})
 		for _, action := range qry.Actions {
 			if action == nil {
 				continue
@@ -857,15 +937,35 @@ func (s *Scope) alterTableInplace(c *Compile, cleanup *alterAutoIncrementResetCl
 					}
 				}
 			case *plan.AlterTable_Action_AddFk:
-				// lock fk table
-				if !(act.AddFk.DbName != dbName && act.AddFk.TableName != tblName) { //skip self ref foreign key
-					if err = lockMoTable(c, act.AddFk.DbName, act.AddFk.TableName, lock.LockMode_Exclusive); err != nil {
-						if !moerr.IsMoErrCode(err, moerr.ErrTxnNeedRetry) &&
-							!moerr.IsMoErrCode(err, moerr.ErrTxnNeedRetryWithDefChanged) {
-							return err
-						}
-						retryErr = moerr.NewTxnNeedRetryWithDefChangedNoCtx()
+				parentDB, parentTable := act.AddFk.DbName, act.AddFk.TableName
+				if parentDB == dbName && parentTable == tblName { // child lock already covers self references
+					continue
+				}
+				parentKey := parentDB + "\x00" + parentTable
+				if _, ok := lockedForeignKeyParents[parentKey]; ok {
+					continue
+				}
+				lockedForeignKeyParents[parentKey] = struct{}{}
+
+				if err = lockMoTable(c, parentDB, parentTable, lock.LockMode_Exclusive); err != nil {
+					if !moerr.IsMoErrCode(err, moerr.ErrTxnNeedRetry) &&
+						!moerr.IsMoErrCode(err, moerr.ErrTxnNeedRetryWithDefChanged) {
+						return err
 					}
+					retryErr = moerr.NewTxnNeedRetryWithDefChangedNoCtx()
+				}
+				// FOREIGN_KEY_CHECKS=0 permits a forward reference whose parent
+				// does not exist yet. Its catalog key is still serialized above,
+				// but there is no parent data keyspace to lock.
+				if act.AddFk.Fkey.ForeignTbl == 0 {
+					continue
+				}
+				if err = lockAlterForeignKeyParentTable(c, parentDB, parentTable); err != nil {
+					if !moerr.IsMoErrCode(err, moerr.ErrTxnNeedRetry) &&
+						!moerr.IsMoErrCode(err, moerr.ErrTxnNeedRetryWithDefChanged) {
+						return err
+					}
+					retryErr = moerr.NewTxnNeedRetryWithDefChangedNoCtx()
 				}
 			}
 		}
@@ -2312,7 +2412,18 @@ func (c *Compile) populateCreatedTable(qry *plan.CreateTable, isTemp bool, dbNam
 		if !numericPrefixPlan {
 			clear(numericPrefixPositions)
 		}
-		if params := c.proc.GetPrepareParams(); c.pn.IsPrepare && params != nil && params.Length() > 0 {
+		params := c.proc.GetPrepareParams()
+		transportCount := 0
+		if params != nil {
+			transportCount = params.Length()
+		}
+		if len(c.preparedParamValues) > 0 &&
+			(!c.pn.IsPrepare || transportCount != len(c.preparedParamValues)) {
+			return moerr.NewInternalErrorf(c.proc.Ctx,
+				"CTAS prepared parameter count mismatch: semantic=%d, transport=%d",
+				len(c.preparedParamValues), transportCount)
+		}
+		if c.pn.IsPrepare && params != nil && params.Length() > 0 {
 			values := make([]string, params.Length())
 			nulls := make([]bool, params.Length())
 			for i := range values {
@@ -2327,6 +2438,21 @@ func (c *Compile) populateCreatedTable(qry *plan.CreateTable, isTemp bool, dbNam
 				}
 			}
 			statementOption = statementOption.WithParamsAndNulls(values, nulls)
+			if len(c.preparedParamValues) > 0 {
+				semantic := make([]executor.ParamValue, len(values))
+				for i, value := range c.preparedParamValues {
+					param, ok := value.(plan2.ParamValue)
+					if !ok {
+						return moerr.NewInternalErrorf(c.proc.Ctx,
+							"CTAS prepared parameter %d has no semantic value", i)
+					}
+					if numericPrefixPositions[i] && !nulls[i] {
+						param.Value = values[i]
+					}
+					semantic[i] = param
+				}
+				statementOption = statementOption.WithPreparedParamValues(semantic)
+			}
 		}
 		res, err := func() (executor.Result, error) {
 			oldCtx := c.proc.Ctx
@@ -3738,6 +3864,13 @@ func (s *Scope) TruncateTable(c *Compile) error {
 	}
 
 	if !isTemp && c.proc.GetTxnOperator().Txn().IsPessimistic() {
+		// DROP ACCOUNT takes the SNAPSHOT lifecycle lock before cleaning up
+		// cluster tables. Take the same row lock before the table locks to
+		// prevent an inverted lock order. Keep the later write barrier after
+		// snapshot advancement for lineage publication.
+		if err := c.lockDataBranchLineageOwnerLifecyclePessimistic(); err != nil {
+			return err
+		}
 		var err error
 		if e := lockMoTable(c, db, table, lock.LockMode_Exclusive); e != nil {
 			if !moerr.IsMoErrCode(e, moerr.ErrTxnNeedRetry) &&
@@ -5378,6 +5511,30 @@ func doLockTable(
 	return err
 }
 
+func doLockTableForSnapshotRefresh(
+	ctx context.Context,
+	eng engine.Engine,
+	proc *process.Process,
+	rel engine.Relation,
+	defChanged bool) error {
+	id := rel.GetTableID(ctx)
+	defs, err := rel.GetPrimaryKeys(ctx)
+	if err != nil {
+		return err
+	}
+	if len(defs) != 1 {
+		panic("invalid primary keys")
+	}
+	return lockop.LockTableForSnapshotRefreshWithContext(
+		ctx,
+		eng,
+		proc,
+		id,
+		defs[0].Type,
+		lock.LockMode_Exclusive,
+		defChanged)
+}
+
 var lockTable = func(
 	ctx context.Context,
 	eng engine.Engine,
@@ -5387,6 +5544,29 @@ var lockTable = func(
 	defChanged bool,
 ) error {
 	return doLockTable(eng, proc, rel, defChanged)
+}
+
+var lockTableForSnapshotRefresh = func(
+	ctx context.Context,
+	eng engine.Engine,
+	proc *process.Process,
+	rel engine.Relation,
+	dbName string,
+	defChanged bool,
+) error {
+	return doLockTableForSnapshotRefresh(ctx, eng, proc, rel, defChanged)
+}
+
+func lockAlterForeignKeyParentTable(c *Compile, dbName, tableName string) error {
+	db, err := c.e.Database(c.proc.Ctx, dbName, c.proc.GetTxnOperator())
+	if err != nil {
+		return err
+	}
+	rel, err := db.Relation(c.proc.Ctx, tableName, nil)
+	if err != nil {
+		return err
+	}
+	return lockTableForSnapshotRefresh(c.proc.Ctx, c.e, c.proc, rel, dbName, true)
 }
 
 // lockIndexTable
@@ -6218,8 +6398,23 @@ func CheckSysMoCatalogPitrResult(
 		return false, false, 0, "", moerr.NewInternalErrorf(ctx, "unexpected sys_mo_catalog_pitr result columns")
 	}
 	if vecs[0].Length() > 0 {
-		col := vector.MustFixedColNoTypeCheck[uint64](vecs[0])
-		oldLength = col[0]
+		// pitr_length is stored as TINYINT UNSIGNED in mo_pitr, while
+		// white-box callers may provide a wider unsigned vector. Read the
+		// concrete vector type instead of assuming uint64; the race build
+		// deliberately checks this assertion and otherwise panics on a real
+		// CREATE PITR result.
+		switch vecs[0].GetType().Oid {
+		case types.T_uint8:
+			oldLength = uint64(vector.GetFixedAtNoTypeCheck[uint8](vecs[0], 0))
+		case types.T_uint16:
+			oldLength = uint64(vector.GetFixedAtNoTypeCheck[uint16](vecs[0], 0))
+		case types.T_uint32:
+			oldLength = uint64(vector.GetFixedAtNoTypeCheck[uint32](vecs[0], 0))
+		case types.T_uint64:
+			oldLength = vector.GetFixedAtNoTypeCheck[uint64](vecs[0], 0)
+		default:
+			return false, false, 0, "", moerr.NewInternalErrorf(ctx, "unexpected PITR length type %s", vecs[0].GetType().Oid.OidString())
+		}
 	}
 	if vecs[1].Length() > 0 {
 		col := vector.MustFixedColNoTypeCheck[types.Varlena](vecs[1])
@@ -6560,7 +6755,10 @@ const (
 
 func (opts *CDCCreateTaskOptions) BuildTaskMetadata() task.TaskMetadata {
 	executor := task.TaskCode_InitCdc
-	if !opts.NoFull && cdc.UsesStableEpochInitialSnapshot(opts.ExtraOpts) {
+	switch {
+	case opts.NoFull && cdc.UsesLosslessNoFullStart(opts.ExtraOpts):
+		executor = task.TaskCode_InitCdcLosslessStart
+	case !opts.NoFull && cdc.UsesStableEpochInitialSnapshot(opts.ExtraOpts):
 		executor = task.TaskCode_InitCdcStableEpoch
 	}
 	return task.TaskMetadata{
@@ -6741,25 +6939,36 @@ type CDCUserInfo struct {
 }
 
 type CDCCreateTaskOptions struct {
-	TaskName     string
-	TaskId       string
-	UserInfo     *CDCUserInfo
-	Exclude      string
-	StartTs      string
-	EndTs        string
-	MaxSqlLength int64
-	PitrTables   string // json encoded pitr tables: cdc2.PatternTuples
-	SrcUri       string // json encoded source uri: cdc2.UriInfo
-	SrcUriInfo   cdc.UriInfo
-	SinkUri      string // json encoded sink uri: cdc2.UriInfo
-	SinkUriInfo  cdc.UriInfo
-	ExtraOpts    string // json encoded extra opts: map[string]any
-	SinkType     string
-	NoFull       bool
-	ConfigFile   string
+	TaskName            string
+	TaskId              string
+	UserInfo            *CDCUserInfo
+	Exclude             string
+	StartTs             string
+	EndTs               string
+	MaxSqlLength        int64
+	PitrTables          string // json encoded pitr tables: cdc2.PatternTuples
+	SrcUri              string // json encoded source uri: cdc2.UriInfo
+	SrcUriInfo          cdc.UriInfo
+	SinkUri             string // json encoded sink uri: cdc2.UriInfo
+	SinkUriInfo         cdc.UriInfo
+	ExtraOpts           string // json encoded extra opts: map[string]any
+	SinkType            string
+	NoFull              bool
+	startTsFromSnapshot bool
+	ConfigFile          string
 
 	// control options
 	UseConsole bool
+}
+
+func setNoFullStartTS(opts *CDCCreateTaskOptions, txnOp client.TxnOperator) {
+	if txnOp != nil && opts.NoFull && opts.StartTs == "" {
+		snapshotTS := txnOp.SnapshotTS()
+		if !snapshotTS.IsEmpty() {
+			opts.StartTs = snapshotTS.DebugString()
+			opts.startTsFromSnapshot = true
+		}
+	}
 }
 
 func (opts *CDCCreateTaskOptions) ValidateAndFill(
@@ -6918,6 +7127,11 @@ func (opts *CDCCreateTaskOptions) ValidateAndFill(
 		return
 	}
 
+	// A NoFull task starts asynchronously. Persist the CREATE transaction's
+	// snapshot as its incremental start point so a later executor startup cannot
+	// move the watermark past commits made after CREATE CDC returns.
+	setNoFullStartTS(opts, c.proc.GetTxnOperator())
+
 	// fill default value for additional opts
 	if _, ok := extraOpts[cdc.CDCTaskExtraOptions_InitSnapshotSplitTxn]; !ok {
 		extraOpts[cdc.CDCTaskExtraOptions_InitSnapshotSplitTxn] = cdc.CDCDefaultTaskExtra_InitSnapshotSplitTxn
@@ -6928,13 +7142,17 @@ func (opts *CDCCreateTaskOptions) ValidateAndFill(
 	if _, ok := extraOpts[cdc.CDCTaskExtraOptions_MaxSqlLength]; !ok {
 		extraOpts[cdc.CDCTaskExtraOptions_MaxSqlLength] = cdc.CDCDefaultTaskExtra_MaxSQLLen
 	}
-	// Only full snapshots need the stable-epoch capability fence. NoFull tasks
-	// remain eligible for legacy executors because they cannot partially commit
-	// an initial snapshot.
+	if opts.NoFull && opts.startTsFromSnapshot {
+		extraOpts[cdc.CDCTaskExtraOptions_InitialSnapshotProtocol] = cdc.CDCInitialSnapshotProtocolNoFullHLC
+	}
 	if !opts.NoFull {
 		cdc.FinalizeInitialSnapshotOptions(extraOpts)
 		_, stable := extraOpts[cdc.CDCTaskExtraOptions_InitialSnapshotProtocol]
 		if err = validateStableInitialSnapshotCompileProtocol(ctx, c, stable); err != nil {
+			return
+		}
+	} else if opts.startTsFromSnapshot {
+		if err = validateLosslessNoFullStartCompileProtocol(ctx, c); err != nil {
 			return
 		}
 	}
@@ -6965,6 +7183,20 @@ func validateStableInitialSnapshotCompileProtocol(
 		}
 	}
 	return cdc.ValidateStableInitialSnapshotProtocol(ctx, stable, protocolVersion)
+}
+
+func validateLosslessNoFullStartCompileProtocol(ctx context.Context, c *Compile) error {
+	protocolVersion := int64(defines.MORPCVersion4)
+	if c != nil && c.proc != nil {
+		if rt := moruntime.ServiceRuntime(c.proc.GetService()); rt != nil {
+			if value, ok := rt.GetGlobalVariables(moruntime.MOProtocolVersion); ok {
+				if version, valid := value.(int64); valid {
+					protocolVersion = version
+				}
+			}
+		}
+	}
+	return cdc.ValidateLosslessNoFullStartProtocol(ctx, protocolVersion)
 }
 
 func CDCStrToTime(tsStr string, tz *time.Location) (ts time.Time, err error) {
