@@ -68,6 +68,25 @@ func TestLocalCTEOuterReferencesExecutablePlan(t *testing.T) {
 				select abs(n) from q where p.n_nationkey=2) from tpch.nation p`,
 		},
 		{
+			name: "distinct consumer demand preserves identity",
+			sql: `select p.n_nationkey, (with q(n) as (select p.n_regionkey)
+				select abs(n) from (select distinct n from q) d where p.n_nationkey=2)
+				from tpch.nation p`,
+		},
+		{
+			name: "paginated consumer demand preserves filter order",
+			sql: `select p.n_nationkey, (with q(n) as (select p.n_regionkey)
+				select abs(n) from (select n from q limit 1) d where p.n_nationkey=2 or n>0)
+				from tpch.nation p`,
+		},
+		{
+			name: "distinct consumer text physical keys preserve identity",
+			sql: `select p.n_nationkey, (with q(n) as
+				(select cast(2 as char(5)) from tpch.nation a where p.n_nationkey>0)
+				select cast(n as signed) from (select distinct n from q) d where p.n_nationkey>0)
+				from tpch.nation p`,
+		},
+		{
 			name: "mixed consumer predicate stays below projection",
 			sql: `select p.n_nationkey, (with q(n) as (select p.n_regionkey)
 				select abs(n) from q where p.n_nationkey=2 or n>0) from tpch.nation p`,

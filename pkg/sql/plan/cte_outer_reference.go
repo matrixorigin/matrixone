@@ -235,8 +235,9 @@ func (d *localCTEDomain) admitConsumer(root int32) error {
 	return visit(root, false, false, false, false, false, false)
 }
 
-// A filter above aggregation is HAVING, not a demand predicate on CTE rows.
-// Do not move it or project the payload through a cardinality boundary.
+// An outer-only predicate selects whole identity partitions. It commutes
+// with per-identity pagination and pure DISTINCT, but not with an implicit
+// aggregate's empty result row. Keep true aggregate/HAVING boundaries intact.
 func (d *localCTEDomain) consumerFilterReadsCTE(id int32) bool {
 	if d.nodes[id] {
 		return true
@@ -246,8 +247,8 @@ func (d *localCTEDomain) consumerFilterReadsCTE(id int32) bool {
 		return false
 	}
 	switch n.NodeType {
-	case plan.Node_PROJECT, plan.Node_FILTER, plan.Node_SORT:
-		return n.Limit == nil && n.Offset == nil && d.consumerFilterReadsCTE(n.Children[0])
+	case plan.Node_PROJECT, plan.Node_FILTER, plan.Node_SORT, plan.Node_DISTINCT:
+		return d.consumerFilterReadsCTE(n.Children[0])
 	default:
 		return false
 	}
@@ -758,9 +759,9 @@ func (d *localCTEDomain) lowerTree(id int32, force bool) (int32, []*plan.Expr) {
 	return id, values
 }
 
-// Forward the domain payload only through transparent consumer projections.
-// WHERE now reads local columns and cannot be pulled above a throwing SELECT
-// expression by generic correlated-predicate decorrelation.
+// Forward the domain payload through consumer projections, DISTINCT, and
+// existing per-identity pagination. WHERE reads local columns and cannot be
+// pulled above a throwing SELECT expression by correlated-predicate decorrelation.
 func (d *localCTEDomain) lowerConsumerFilters(id, root int32, values []*plan.Expr) []*plan.Expr {
 	if id == root {
 		return values
@@ -785,6 +786,18 @@ func (d *localCTEDomain) lowerConsumerFilters(id, root int32, values []*plan.Exp
 	switch n.NodeType {
 	case plan.Node_PROJECT:
 		return d.appendPayload(n, payload)
+	case plan.Node_DISTINCT:
+		// rewriteDistinctToAGG groups the child projection, including the
+		// identity payload. PAD SPACE uses an explicit physical-key list;
+		// extend that list too, or equal text would merge different rows.
+		if len(n.PhysicalEqualityKeyList) > 0 {
+			project := d.builder.qry.Nodes[n.Children[0]]
+			for _, value := range payload {
+				n.PhysicalEqualityKeyList = append(n.PhysicalEqualityKeyList,
+					DeepCopyExpr(project.ProjectList[value.GetCol().ColPos]))
+			}
+		}
+		return payload
 	case plan.Node_FILTER, plan.Node_SORT:
 		return payload
 	default:

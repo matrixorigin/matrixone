@@ -349,6 +349,13 @@ select p.id, (with q(n) as (select p.val)
   select cast(n as signed) from q where p.id=2) as c from guarded_values p order by p.id;
 select p.id, (with q(n) as (select p.val)
   select cast(n as signed) from q where p.id=1) as c from guarded_values p order by p.id;
+-- DISTINCT and pagination must not lift WHERE above the CAST projection.
+select p.id, (with q(n) as (select p.val)
+  select cast(n as signed) from (select distinct n from q) d where p.id=2) as c
+from guarded_values p order by p.id;
+select p.id, (with q(n) as (select p.val)
+  select cast(n as signed) from (select n from q limit 1) d where p.id=2) as c
+from guarded_values p order by p.id;
 drop table guarded_values;
 
 -- Outer columns in ordinary COUNT HAVING must be rebound above the
@@ -470,6 +477,32 @@ select p.id, (with q(n) as (select p.v)
 -- COUNT retains its empty group even when no producer partition is demanded.
 select p.id, (with q(n) as (select abs(p.v))
   select count(*) from q where p.id=2) as c from guarded_abs p order by p.id;
+-- Wrappers preserve the WHERE/projection order and per-row identity.
+select p.id, (with q(n) as (select p.v from guarded_abs a)
+  select abs(n) from (select distinct n from q) d where p.id=2) as c
+from guarded_abs p order by p.id;
+select p.id, (with q(n) as (select p.v)
+  select abs(n) from (select n from q limit 1) d where p.id=2) as c
+from guarded_abs p order by p.id;
+select p.id, (with q(n) as (select p.v)
+  select abs(n) from (select distinct n from q) d where p.id=2 or n>0) as c
+from guarded_abs p order by p.id;
+select p.id, (with q(n) as (select p.v)
+  select abs(n) from (select n from q limit 1) d where p.id=2 or n>0) as c
+from guarded_abs p order by p.id;
+-- Equal text and duplicate source rows must not merge different outer rows
+-- through DISTINCT's PAD SPACE physical equality keys.
+select p.id, (with q(n) as (select cast(2 as char(5)) from guarded_abs a where p.id>0)
+  select cast(n as signed) from (select distinct n from q) d where p.id>0) as c
+from guarded_abs p order by p.id;
+-- LIMIT removes rows before a CTE-dependent WHERE; do not push that WHERE
+-- below pagination. An offset beyond the single row yields scalar NULL.
+select p.id, (with q(n) as (select a.id from guarded_abs a where p.id>0)
+  select abs(n) from (select n from q order by n limit 1) d where p.id=2 or n=2) as c
+from guarded_abs p order by p.id;
+select p.id, (with q(n) as (select p.v)
+  select abs(n) from (select n from q limit 1 offset 1) d where p.id=2) as c
+from guarded_abs p order by p.id;
 -- NULL demand removes every partition, but does not remove COUNT's empty row.
 select p.id, (with q(n) as (select abs(p.v))
   select count(*) from q where p.id=null) as c from guarded_abs p order by p.id;
