@@ -35,7 +35,7 @@ func TestNormalizeStatementDigest(t *testing.T) {
 		{sql: `SELECT @'secret', @@session.sql_mode, @name`, max: 1024, want: "SELECT @? , @@SESSION . `sql_mode` , @?"},
 		{sql: `SELECT @'secret', @"name"`, mode: "ANSI_QUOTES", max: 1024, want: "SELECT @? , @`name`"},
 		{sql: "SELECT _utf8mb4 X'4142'", max: 1024, want: "SELECT (_charset) ?"},
-		{sql: "SELECT _binary B'01', _latin1 0x41, _ascii 0b01, N'x'", max: 1024, want: "SELECT (_charset) ? , (_charset) ? , (_charset) ? , ?"},
+		{sql: "SELECT _binary B'01', _latin1 0x41, _ascii 0b01, N'x'", max: 1024, want: "SELECT (_charset) ? , (_charset) ? , (_charset) ?, ..."},
 		{sql: "SELECT * FROM t WHERE (a,b) IN ((1,2),(3,4))", max: 1024, want: "SELECT * FROM `t` WHERE ( `a` , `b` ) IN ( (...) /* , ... */ )"},
 		{sql: "SELECT ROW(1,2)", max: 1024, want: "SELECT ROW (...)"},
 		{sql: "CREATE TABLE t (a INT NULL, b INT NOT NULL DEFAULT NULL, c INT DEFAULT 1 + NULL)", max: 1024, want: "CREATE TABLE `t` ( `a` INTEGER NULL , `b` INTEGER NOT NULL DEFAULT ? , `c` INTEGER DEFAULT ? + ? )"},
