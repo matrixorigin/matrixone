@@ -2074,6 +2074,21 @@ func TestPreparedMathStringValueAndPrecisionRoles(t *testing.T) {
 			require.Equal(t, directResult.value, boundResult.value)
 		})
 	}
+	t.Run("ceil precision explicit char remains strict", func(t *testing.T) {
+		prepared, err := runOneStmt(NewMockOptimizer(false), t,
+			"prepare stmt_ceil_explicit_char from 'select ceil(123.456, cast(? as char))'")
+		require.NoError(t, err)
+		filled, _, err := FillValuesOfParamsInPlanWithSpecialization(ctx,
+			prepared.GetDcl().GetPrepare().Plan, []any{ParamValue{
+				Value: "2.5", SourceType: types.New(types.T_decimal64, 2, 1), HasSourceType: true,
+			}})
+		require.NoError(t, err)
+		ceil := findPlanFunctionExpr(filled, "ceil")
+		require.NotNil(t, ceil, filled.String())
+		require.True(t, isExplicitPreparedCast(ceil.GetF().Args[1].GetF().Args[0]), filled.String())
+		_, err = eval(t, ceil)
+		require.ErrorContains(t, err, "invalid argument cast to int, bad value 2.5")
+	})
 }
 
 func TestBindFuncExprImplByPlanExpr_CaseDifferentDecimalScale(t *testing.T) {
