@@ -17,6 +17,7 @@ package frontend
 import (
 	"bytes"
 	"context"
+	"crypto/sha256"
 	"fmt"
 	"maps"
 	"slices"
@@ -2359,6 +2360,21 @@ func preparedRuntimeSemanticKey(paramVals []any) string {
 		}
 		fmt.Fprintf(&key, "%d:%d:%d:%d:%d:%d;", i, param.PrepareParamKind,
 			runtimeType.Oid, runtimeType.Charset, runtimeType.Width, runtimeType.Scale)
+		if param.EnableNumericPrefix && runtimeType.Oid.IsFloat() &&
+			(!param.HasRuntimeType || param.RuntimeType.Oid == types.T_text) {
+			// Out-of-range DECIMAL prefixes can be folded to a value-specific
+			// zero or error during specialization. A concrete runtime FLOAT
+			// instead retains its ParamRef and does not depend on its spelling.
+			fmt.Fprintf(&key, "float-prefix:%x;", sha256.Sum256([]byte(rawValue)))
+		}
+		if param.EnableNumericPrefix && !param.IsBinaryProtocol && param.HasSourceType &&
+			param.SourceType.Oid.IsMySQLString() && param.Value != nil {
+			// Common-value functions keep a concrete SQL string when it has no
+			// numeric prefix. That branch is independent of the inferred prefix
+			// type, which can be identical for "abc" and "0xx".
+			_, hasPrefix := function.GetNumericStringPrefix(rawValue)
+			fmt.Fprintf(&key, "sql-string-prefix:%t;", hasPrefix)
+		}
 		fmt.Fprintf(&key, "binary:%t;domain:%d;", param.IsBinaryString, param.RuntimeStringDomain)
 		charSourceRelevant := param.IsBinaryProtocol || param.HasSourceType ||
 			(param.HasRuntimeType && types.T(param.RuntimeType.Oid).IsMySQLString())
