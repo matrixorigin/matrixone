@@ -48,20 +48,39 @@ func validateMaterializedViewQuery(ctx context.Context, stmt *tree.Select) error
 		case *tree.Subquery, *tree.VarExpr, *tree.ParamExpr:
 			err = unsupported()
 		case *tree.CastExpr:
-			// A TIMESTAMP-to-DATE cast uses the session timezone. Refresh
+			// The AST does not retain the source column type here. A cast from
+			// TIMESTAMP to DATE/DATETIME/string can therefore be timezone
+			// sensitive while looking identical to a numeric cast. Refresh
 			// workers do not inherit the defining session's timezone.
-			if target, ok := node.Type.(*tree.T); ok && target.InternalType.Oid == uint32(types.T_date) {
-				err = unsupported()
-			}
+			err = unsupported()
+		case *tree.IntervalExpr:
+			// TIMESTAMP +/- INTERVAL uses the session timezone for calendar
+			// arithmetic and must not run in a differently configured worker.
+			err = unsupported()
 		case *tree.FuncExpr:
 			name := materializedViewIncrementalFunctionName(node)
-			if name == "date_trunc" || function.GetFunctionIsVolatileOrRealTimeRelatedByName(name) {
+			if materializedViewTimezoneSensitiveFunction(name) || function.GetFunctionIsVolatileOrRealTimeRelatedByName(name) {
 				err = unsupported()
 			}
 		}
 		return err == nil
 	})
 	return err
+}
+
+func materializedViewTimezoneSensitiveFunction(name string) bool {
+	switch name {
+	case "date_trunc", "date_format", "to_date", "str_to_date",
+		"unix_timestamp", "from_unixtime", "timestampadd", "timestampdiff",
+		"date_add", "date_sub", "adddate", "subdate", "addtime", "subtime",
+		"extract", "year", "yearweek", "quarter", "month", "week",
+		"day", "dayofmonth", "dayofweek", "dayofyear", "hour", "minute",
+		"second", "microsecond", "time", "ts_to_time", "convert_tz",
+		"weekday", "weekofyear", "dayname", "monthname", "last_day":
+		return true
+	default:
+		return false
+	}
 }
 
 func buildMaterializedViewDefinition(ctx CompilerContext, stmt *tree.CreateView, createView *plan.CreateView) error {
