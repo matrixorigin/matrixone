@@ -4437,6 +4437,8 @@ func TestCdcTask_retrieveCdcTask(t *testing.T) {
 		db:     db,
 		genIdx: genIdx,
 	}
+	mock.ExpectQuery(regexp.QuoteMeta("SELECT pending_source_table_id, target_identity FROM mo_catalog.mo_cdc_watermark LIMIT 0")).
+		WillReturnRows(sqlmock.NewRows([]string{"pending_source_table_id", "target_identity"}))
 
 	tests := []struct {
 		name    string
