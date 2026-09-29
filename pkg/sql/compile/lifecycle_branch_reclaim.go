@@ -136,7 +136,10 @@ func (c *Compile) prepareBranchReclaimRC(deadTIDs []uint64, exclusiveSnapshotGat
 		); err != nil {
 			return err
 		}
-		if exclusiveSnapshotGate {
+		// A different admitted component may require G exclusive. Do not
+		// rescan the ALTER catalog for this member unless its own current
+		// component still contains ALTER lineage.
+		if exclusiveSnapshotGate && dag.ComponentsHaveAlterLineage(selected) {
 			removed, err := c.compactExpiredAlterDataBranchLineageRC(selected)
 			if err != nil {
 				return err
