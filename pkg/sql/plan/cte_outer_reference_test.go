@@ -442,6 +442,45 @@ func TestPreparedLocalCTEOuterReferences(t *testing.T) {
 	}
 }
 
+func TestLocalCTEVariableDemandPreservesReferences(t *testing.T) {
+	for _, tc := range []struct {
+		sqlVar         string
+		name           string
+		system, global bool
+	}{
+		{"@demand", "demand", false, false},
+		{"@@session.auto_increment_increment", "auto_increment_increment", true, false},
+		{"@@global.auto_increment_increment", "auto_increment_increment", true, true},
+	} {
+		t.Run(tc.sqlVar, func(t *testing.T) {
+			sql := `select p.n_nationkey, (with recursive q(n) as (
+				select p.n_nationkey union all select n from q where n=1)
+				select count(*) from q where p.n_nationkey=` + tc.sqlVar + `) from tpch.nation p`
+			logicPlan, err := runOneStmt(NewMockOptimizer(false), t, sql)
+			require.NoError(t, err)
+			query := logicPlan.GetQuery()
+			assertReachablePlanHasNoCorrelatedExpr(t, query)
+			found := false
+			for _, node := range query.Nodes {
+				if !node.FilterIsBarrier {
+					continue
+				}
+				for _, filter := range node.FilterList {
+					walkLocalCTEExpr(filter, func(e *planpb.Expr) {
+						if v := e.GetV(); v != nil {
+							require.Equal(t, tc.name, v.Name)
+							require.Equal(t, tc.system, v.System)
+							require.Equal(t, tc.global, v.Global)
+							found = true
+						}
+					})
+				}
+			}
+			require.True(t, found, "replay filter must retain the variable's runtime scope")
+		})
+	}
+}
+
 func TestLocalCTEWidenedAbsProof(t *testing.T) {
 	for _, typ := range []types.T{types.T_int8, types.T_int16, types.T_int32, types.T_int64} {
 		expr, err := BindFuncExprImplByPlanExpr(context.Background(), "abs", []*planpb.Expr{
@@ -591,6 +630,12 @@ func TestLocalCTEOuterReferencesRejectUnsafeDomains(t *testing.T) {
 			name: "explicit values expression executor",
 			sql: `select (with q(n) as (select p.n_regionkey+v.x from (values row(rand())) v(x))
 				select n from q) from tpch.nation p`,
+		},
+		{
+			name: "variable demand cannot cross a failing seed input",
+			sql: `select p.n_nationkey, (with q(n) as (
+				select p.n_nationkey where cast(p.n_name as signed)>0)
+				select n from q where p.n_nationkey=@demand) from tpch.nation p`,
 		},
 		{
 			name: "unproven outer demand cannot start recursive replay",

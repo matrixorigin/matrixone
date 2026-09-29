@@ -613,6 +613,71 @@ select p.id from guarded_abs p where p.id=2;
 select p.id, case when p.id=2 then
   (select count(*) from guarded_abs a where a.id=p.id) else 0 end as c
 from guarded_abs p order by p.id;
+-- Variables are runtime demand inputs, not a reason to skip domain admission.
+set @cte_demand=2;
+select p.id, (with q(n) as (select abs(p.v))
+select n from q where p.id=@cte_demand) as c from guarded_abs p order by p.id;
+select p.id, (with recursive q(n) as (
+  select p.id union all select n from q where n=1
+) select count(*) from q where p.id=@cte_demand) as c
+from guarded_abs p order by p.id;
+set @cte_demand=null;
+select p.id, (with recursive q(n) as (
+  select p.id union all select n from q where n=1
+) select count(*) from q where p.id=@cte_demand) as c
+from guarded_abs p order by p.id;
+set @cte_demand=1;
+select p.id, (with recursive q(n) as (
+  select p.id union all select n from q where n=1
+) select count(*) from q where p.id=@cte_demand) as c
+from guarded_abs p order by p.id;
+set @cte_demand=2;
+select p.id, (with recursive q(n) as (
+  select p.id union all select n from q where n=1
+) select n from (select distinct n from q) d where p.id=@cte_demand) as c
+from guarded_abs p order by p.id;
+select p.id, (with recursive q(n) as (
+  select p.id union all select n from q where n=1
+) select n from (select n,row_number() over(order by n) rn from q) d where p.id=@cte_demand) as c
+from guarded_abs p order by p.id;
+-- Runtime conversion is not demanded for an empty seed.
+set @cte_demand='bad';
+select p.id, (with recursive q(n) as (
+  select p.id where p.id<0 union all select n from q where n=1
+) select count(*) from q where p.id=@cte_demand) as c
+from guarded_abs p order by p.id;
+select p.id, (with recursive q(n) as (
+  select p.id union all select n from q where n=1
+) select count(*) from q where p.id=@cte_demand) as c
+from guarded_abs p order by p.id;
+set @cte_demand=2;
+-- Reuse one plan: the variable must not be frozen at PREPARE time.
+prepare variable_demand from 'select p.id, (with recursive q(n) as (select p.id union all select n from q where n=1) select count(*) from q where p.id=@cte_demand) as c from guarded_abs p order by p.id';
+execute variable_demand;
+set @cte_demand=null;
+execute variable_demand;
+set @cte_demand=1;
+execute variable_demand;
+set @cte_demand=2;
+execute variable_demand;
+deallocate prepare variable_demand;
+set @saved_increment=@@session.auto_increment_increment;
+set session auto_increment_increment=2;
+select p.id, (with recursive q(n) as (
+  select p.id union all select n from q where n=1
+) select count(*) from q where p.id=@@session.auto_increment_increment) as c
+from guarded_abs p order by p.id;
+select p.id, (with recursive q(n) as (
+  select p.id union all select n from q where n=1
+) select n from (select distinct n from q) d where p.id=@@session.auto_increment_increment) as c
+from guarded_abs p order by p.id;
+select p.id, (with recursive q(n) as (
+  select p.id union all select n from q where n=1
+) select n from (select n,row_number() over(order by n) rn from q) d where p.id=@@session.auto_increment_increment) as c
+from guarded_abs p order by p.id;
+set session auto_increment_increment=@saved_increment;
+set @saved_increment=null;
+set @cte_demand=null;
 -- INT32_MIN is representable after the ABS widening.
 insert into guarded_abs values (-2147483648,0);
 select p.id, (with recursive q(n) as (

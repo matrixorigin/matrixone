@@ -33,14 +33,17 @@ type localCTEDomain struct {
 	guarded bool
 	// Outer-only consumer WHERE predicates constrain replay before producer
 	// expressions run; the original consumer predicate is retained as well.
-	demandFilters   []*plan.Expr
-	consumerRoot    int32
-	consumerFilters map[int32]bool
-	values          []*plan.Expr
-	params          map[[2]int32]int
-	equality        *plan.Expr
-	nodes           map[int32]bool
-	scans           map[int32][]*plan.Expr
+	demandFilters []*plan.Expr
+	// Runtime variable reads/conversions must not run for empty seeds.
+	variableDemand         []*plan.Expr
+	variableDemandProjects map[int32]bool
+	consumerRoot           int32
+	consumerFilters        map[int32]bool
+	values                 []*plan.Expr
+	params                 map[[2]int32]int
+	equality               *plan.Expr
+	nodes                  map[int32]bool
+	scans                  map[int32][]*plan.Expr
 }
 
 // Limit demand-domain preparation to local CTE consumers; ordinary subqueries
@@ -100,6 +103,9 @@ func (builder *QueryBuilder) parameterizeLocalCTEs(
 					return err
 				}
 				if err := d.admit(); err != nil {
+					return err
+				}
+				if err := d.admitVariableDemand(id); err != nil {
 					return err
 				}
 				domains[id] = d
@@ -206,7 +212,13 @@ func (d *localCTEDomain) admitConsumer(root int32) error {
 						d.consumerFilters[id] = true
 					}
 					if demand := d.outerOnlyDemand(cond); demand != nil {
-						d.demandFilters = append(d.demandFilters, demand)
+						variable := false
+						walkLocalCTEExpr(demand, func(e *plan.Expr) { variable = variable || e.GetV() != nil })
+						if variable {
+							d.variableDemand = append(d.variableDemand, demand)
+						} else {
+							d.demandFilters = append(d.demandFilters, demand)
+						}
 					}
 				}
 			}
@@ -264,6 +276,7 @@ func (d *localCTEDomain) outerOnlyDemand(expr *plan.Expr) *plan.Expr {
 	}
 	copy := DeepCopyExpr(expr)
 	valid := true
+	readsCTE := false
 	walkLocalCTEExpr(copy, func(e *plan.Expr) {
 		switch x := e.Expr.(type) {
 		case *plan.Expr_Corr:
@@ -272,25 +285,38 @@ func (d *localCTEDomain) outerOnlyDemand(expr *plan.Expr) *plan.Expr {
 				return
 			}
 			e.Expr = &plan.Expr_Col{Col: &plan.ColRef{RelPos: x.Corr.RelPos, ColPos: x.Corr.ColPos}}
-		case *plan.Expr_Lit, *plan.Expr_T, *plan.Expr_P, *plan.Expr_F, *plan.Expr_List:
+		case *plan.Expr_Lit, *plan.Expr_T, *plan.Expr_P, *plan.Expr_V, *plan.Expr_F, *plan.Expr_List:
+		case *plan.Expr_Col:
+			// A mixed predicate requires CTE rows before it can decide demand.
+			readsCTE = true
+			valid = false
 		default:
 			valid = false
 		}
 	})
 	if !valid {
+		if !readsCTE {
+			// Unknown outer-only expression variants must not bypass the
+			// same protection as a failed totality proof below.
+			d.guarded = true
+		}
 		return nil
 	}
 	// Without a conditional consumer, this outer-only WHERE is the demand
-	// predicate itself. Statement-constant parameter conversions must retain
+	// predicate itself. Parameter and variable inputs/conversions must retain
 	// their runtime value/error, not be required to fit every possible type
 	// value at PREPARE time. Conditional consumers still require totality.
 	proof := copy
 	if !d.guarded {
 		proof = DeepCopyExpr(copy)
 		walkLocalCTEExpr(proof, func(e *plan.Expr) {
+			if e.GetP() != nil || e.GetV() != nil {
+				e.Expr = &plan.Expr_Lit{Lit: &plan.Literal{Isnull: true}}
+				return
+			}
 			fn := e.GetF()
 			if fn != nil && fn.Func != nil && fn.Func.ObjName == "cast" && len(fn.Args) == 2 &&
-				fn.Args[0].GetP() != nil && fn.Args[1].GetT() != nil {
+				(fn.Args[0].GetP() != nil || fn.Args[0].GetV() != nil) && fn.Args[1].GetT() != nil {
 				e.Expr = &plan.Expr_Lit{Lit: &plan.Literal{Isnull: true}}
 			}
 		})
@@ -303,6 +329,65 @@ func (d *localCTEDomain) outerOnlyDemand(expr *plan.Expr) *plan.Expr {
 		return nil
 	}
 	return copy
+}
+
+// Evaluate variable demand after the seed's row selection but before its
+// projection. Hoisting a possibly failing variable conversion into cloneDomain
+// would introduce errors for empty seeds. Only total work may precede this
+// barrier; source-step producers receive their own barrier before projection.
+func (d *localCTEDomain) admitVariableDemand(root int32) error {
+	if len(d.variableDemand) == 0 {
+		return nil
+	}
+	d.variableDemandProjects = make(map[int32]bool)
+	var safeInput func(int32) bool
+	safeInput = func(id int32) bool {
+		n := d.builder.qry.Nodes[id]
+		if !localCTEReplaySafeNode(n, true) {
+			return false
+		}
+		if n.RowsetData != nil {
+			for _, column := range n.RowsetData.Cols {
+				for _, row := range column.Data {
+					if !localCTEReplaySafeNode(&plan.Node{ProjectList: []*plan.Expr{row.Expr}}, true) {
+						return false
+					}
+				}
+			}
+		}
+		for _, child := range n.Children {
+			if !safeInput(child) {
+				return false
+			}
+		}
+		return true
+	}
+	mark := func(id int32) error {
+		n := d.builder.qry.Nodes[id]
+		if n.NodeType != plan.Node_PROJECT || len(n.Children) != 1 || n.Limit != nil || n.Offset != nil ||
+			!safeInput(n.Children[0]) {
+			return d.unsupported("variable demand needs a total seed input before projection")
+		}
+		d.variableDemandProjects[id] = true
+		return nil
+	}
+	for id := range d.nodes {
+		n := d.builder.qry.Nodes[id]
+		if n.NodeType == plan.Node_SINK && !n.RecursiveCte && !n.RecursiveSink {
+			if err := mark(n.Children[0]); err != nil {
+				return err
+			}
+		}
+	}
+	if len(d.builder.qry.Nodes[root].SourceStep) == 0 {
+		if err := mark(root); err != nil {
+			return err
+		}
+	}
+	if len(d.variableDemandProjects) == 0 {
+		return d.unsupported("variable demand has no seed evaluation barrier")
+	}
+	return nil
 }
 
 func (d *localCTEDomain) collect(id int32) {
@@ -781,7 +866,7 @@ func (d *localCTEDomain) lowerTree(id int32, force bool) (int32, []*plan.Expr) {
 		child, v := d.lowerTree(n.Children[0], force)
 		n.Children[0], values = child, v
 	}
-	needs := force
+	needs := force || d.variableDemandProjects[id]
 	for _, e := range localCTENodeExprs(n) {
 		needs = needs || hasCorrCol(e)
 	}
@@ -802,6 +887,18 @@ func (d *localCTEDomain) lowerTree(id int32, force bool) (int32, []*plan.Expr) {
 		}
 	}
 	if len(values) > 0 {
+		if d.variableDemandProjects[id] {
+			filters := DeepCopyExprList(d.variableDemand)
+			for _, filter := range filters {
+				walkLocalCTEExpr(filter, func(e *plan.Expr) {
+					if col := e.GetCol(); col != nil {
+						*e = *DeepCopyExpr(values[d.params[[2]int32{col.RelPos, col.ColPos}]])
+					}
+				})
+			}
+			n.Children[0] = b.appendNode(&plan.Node{NodeType: plan.Node_FILTER, Children: []int32{n.Children[0]},
+				FilterList: filters, FilterIsBarrier: true}, b.ctxByNode[n.NodeId])
+		}
 		d.replace(n, values)
 		if n.NodeType == plan.Node_PROJECT || n.NodeType == plan.Node_SINK {
 			values = d.appendPayload(n, values)

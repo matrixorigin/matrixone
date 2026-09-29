@@ -872,6 +872,107 @@ from guarded_abs p order by p.id;
 ➤ id[4,32,0]  ¦  c[-5,64,0]  𝄀
 1  ¦  0  𝄀
 2  ¦  1
+set @cte_demand=2;
+select p.id, (with q(n) as (select abs(p.v))
+select n from q where p.id=@cte_demand) as c from guarded_abs p order by p.id;
+➤ id[4,32,0]  ¦  c[-5,64,0]  𝄀
+1  ¦  null  𝄀
+2  ¦  2
+select p.id, (with recursive q(n) as (
+select p.id union all select n from q where n=1
+) select count(*) from q where p.id=@cte_demand) as c
+from guarded_abs p order by p.id;
+➤ id[4,32,0]  ¦  c[-5,64,0]  𝄀
+1  ¦  0  𝄀
+2  ¦  1
+set @cte_demand=null;
+select p.id, (with recursive q(n) as (
+select p.id union all select n from q where n=1
+) select count(*) from q where p.id=@cte_demand) as c
+from guarded_abs p order by p.id;
+➤ id[4,32,0]  ¦  c[-5,64,0]  𝄀
+1  ¦  0  𝄀
+2  ¦  0
+set @cte_demand=1;
+select p.id, (with recursive q(n) as (
+select p.id union all select n from q where n=1
+) select count(*) from q where p.id=@cte_demand) as c
+from guarded_abs p order by p.id;
+recursive level out of range
+set @cte_demand=2;
+select p.id, (with recursive q(n) as (
+select p.id union all select n from q where n=1
+) select n from (select distinct n from q) d where p.id=@cte_demand) as c
+from guarded_abs p order by p.id;
+➤ id[4,32,0]  ¦  c[4,32,0]  𝄀
+1  ¦  null  𝄀
+2  ¦  2
+select p.id, (with recursive q(n) as (
+select p.id union all select n from q where n=1
+) select n from (select n,row_number() over(order by n) rn from q) d where p.id=@cte_demand) as c
+from guarded_abs p order by p.id;
+➤ id[4,32,0]  ¦  c[4,32,0]  𝄀
+1  ¦  null  𝄀
+2  ¦  2
+set @cte_demand='bad';
+select p.id, (with recursive q(n) as (
+select p.id where p.id<0 union all select n from q where n=1
+) select count(*) from q where p.id=@cte_demand) as c
+from guarded_abs p order by p.id;
+➤ id[4,32,0]  ¦  c[-5,64,0]  𝄀
+1  ¦  0  𝄀
+2  ¦  0
+select p.id, (with recursive q(n) as (
+select p.id union all select n from q where n=1
+) select count(*) from q where p.id=@cte_demand) as c
+from guarded_abs p order by p.id;
+invalid argument cast to int, bad value bad
+set @cte_demand=2;
+prepare variable_demand from 'select p.id, (with recursive q(n) as (select p.id union all select n from q where n=1) select count(*) from q where p.id=@cte_demand) as c from guarded_abs p order by p.id';
+execute variable_demand;
+➤ id[4,32,0]  ¦  c[-5,64,0]  𝄀
+1  ¦  0  𝄀
+2  ¦  1
+set @cte_demand=null;
+execute variable_demand;
+➤ id[4,32,0]  ¦  c[-5,64,0]  𝄀
+1  ¦  0  𝄀
+2  ¦  0
+set @cte_demand=1;
+execute variable_demand;
+recursive level out of range
+set @cte_demand=2;
+execute variable_demand;
+➤ id[4,32,0]  ¦  c[-5,64,0]  𝄀
+1  ¦  0  𝄀
+2  ¦  1
+deallocate prepare variable_demand;
+set @saved_increment=@@session.auto_increment_increment;
+set session auto_increment_increment=2;
+select p.id, (with recursive q(n) as (
+select p.id union all select n from q where n=1
+) select count(*) from q where p.id=@@session.auto_increment_increment) as c
+from guarded_abs p order by p.id;
+➤ id[4,32,0]  ¦  c[-5,64,0]  𝄀
+1  ¦  0  𝄀
+2  ¦  1
+select p.id, (with recursive q(n) as (
+select p.id union all select n from q where n=1
+) select n from (select distinct n from q) d where p.id=@@session.auto_increment_increment) as c
+from guarded_abs p order by p.id;
+➤ id[4,32,0]  ¦  c[4,32,0]  𝄀
+1  ¦  null  𝄀
+2  ¦  2
+select p.id, (with recursive q(n) as (
+select p.id union all select n from q where n=1
+) select n from (select n,row_number() over(order by n) rn from q) d where p.id=@@session.auto_increment_increment) as c
+from guarded_abs p order by p.id;
+➤ id[4,32,0]  ¦  c[4,32,0]  𝄀
+1  ¦  null  𝄀
+2  ¦  2
+set session auto_increment_increment=@saved_increment;
+set @saved_increment=null;
+set @cte_demand=null;
 insert into guarded_abs values (-2147483648,0);
 select p.id, (with recursive q(n) as (
 select p.id union all select n from q where n=1
