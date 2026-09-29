@@ -124,6 +124,13 @@ func (b *baseBinder) bindIntegerSourceAst(ast tree.Expr, depth int32, target typ
 	if function.IntegerArgumentSourceDependent(name, position) {
 		return appendSourceDependentIntegerArgument(b.GetContext(), source, name, position)
 	}
+	if nativeTarget, native := function.IntegerArgumentNativeOrdinaryCastTarget(name, position, types.T(source.Typ.Id)); native {
+		return appendIntegerArgument(b.GetContext(), source, nativeTarget, false)
+	}
+	if ordinaryTarget, ordinary := function.IntegerArgumentOrdinaryCastTarget(name, position); ordinary {
+		typ := ordinaryTarget.ToType()
+		return appendCastBeforeExpr(b.GetContext(), source, makePlan2Type(&typ))
+	}
 	return appendIntegerArgument(b.GetContext(), source, target, false)
 }
 
