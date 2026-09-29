@@ -6076,6 +6076,14 @@ func (v *Vector) Shrink(sels []int64, negate bool) {
 		shrinkFixed[float32](v, sels, negate)
 	case types.T_float64:
 		shrinkFixed[float64](v, sels, negate)
+	case types.T_bf16:
+		shrinkFixed[types.BF16](v, sels, negate)
+	case types.T_float16:
+		shrinkFixed[types.Float16](v, sels, negate)
+	case types.T_float8:
+		shrinkFixed[types.Float8](v, sels, negate)
+	case types.T_float4:
+		shrinkFixed[types.Float4](v, sels, negate)
 	case types.T_char, types.T_varchar, types.T_binary, types.T_varbinary, types.T_json, types.T_blob, types.T_text,
 		types.T_array_float32, types.T_array_float64, types.T_array_bf16, types.T_array_float16, types.T_array_int8, types.T_array_uint8, types.T_datalink, types.T_geometry, types.T_geometry32:
 		// XXX shrink varlena, but did not shrink area.  For our vector, this
@@ -6161,6 +6169,14 @@ func (v *Vector) ShrinkByMask(sels *bitmap.Bitmap, negate bool, offset uint64) {
 		shrinkFixedByMask[float32](v, sels, negate, offset)
 	case types.T_float64:
 		shrinkFixedByMask[float64](v, sels, negate, offset)
+	case types.T_bf16:
+		shrinkFixedByMask[types.BF16](v, sels, negate, offset)
+	case types.T_float16:
+		shrinkFixedByMask[types.Float16](v, sels, negate, offset)
+	case types.T_float8:
+		shrinkFixedByMask[types.Float8](v, sels, negate, offset)
+	case types.T_float4:
+		shrinkFixedByMask[types.Float4](v, sels, negate, offset)
 	case types.T_char, types.T_varchar, types.T_binary, types.T_varbinary, types.T_json, types.T_blob, types.T_text,
 		types.T_array_float32, types.T_array_float64, types.T_array_bf16, types.T_array_float16, types.T_array_int8, types.T_array_uint8, types.T_datalink, types.T_geometry, types.T_geometry32:
 		// XXX shrink varlena, but did not shrink area.  For our vector, this
@@ -6522,6 +6538,14 @@ func (v *Vector) Shuffle(sels []int64, mp *mpool.MPool) (err error) {
 		err = shuffleFixedNoTypeCheck[float32](v, sels, mp)
 	case types.T_float64:
 		err = shuffleFixedNoTypeCheck[float64](v, sels, mp)
+	case types.T_bf16:
+		err = shuffleFixedNoTypeCheck[types.BF16](v, sels, mp)
+	case types.T_float16:
+		err = shuffleFixedNoTypeCheck[types.Float16](v, sels, mp)
+	case types.T_float8:
+		err = shuffleFixedNoTypeCheck[types.Float8](v, sels, mp)
+	case types.T_float4:
+		err = shuffleFixedNoTypeCheck[types.Float4](v, sels, mp)
 	case types.T_char, types.T_varchar, types.T_binary, types.T_varbinary, types.T_json, types.T_blob, types.T_text,
 		types.T_array_float32, types.T_array_float64, types.T_array_bf16, types.T_array_float16, types.T_array_int8, types.T_array_uint8, types.T_datalink, types.T_geometry, types.T_geometry32:
 		err = shuffleFixedNoTypeCheck[types.Varlena](v, sels, mp)
@@ -6644,6 +6668,14 @@ func (v *Vector) ShuffleWithBuf(sels []int64, mp *mpool.MPool, buf *[]byte) (err
 		err = shuffleFixedNoTypeCheckWithBuf[float32](v, sels, buf)
 	case types.T_float64:
 		err = shuffleFixedNoTypeCheckWithBuf[float64](v, sels, buf)
+	case types.T_bf16:
+		err = shuffleFixedNoTypeCheckWithBuf[types.BF16](v, sels, buf)
+	case types.T_float16:
+		err = shuffleFixedNoTypeCheckWithBuf[types.Float16](v, sels, buf)
+	case types.T_float8:
+		err = shuffleFixedNoTypeCheckWithBuf[types.Float8](v, sels, buf)
+	case types.T_float4:
+		err = shuffleFixedNoTypeCheckWithBuf[types.Float4](v, sels, buf)
 	case types.T_char, types.T_varchar, types.T_binary, types.T_varbinary, types.T_json, types.T_blob, types.T_text,
 		types.T_array_float32, types.T_array_float64, types.T_array_bf16, types.T_array_float16, types.T_array_int8, types.T_array_uint8, types.T_datalink, types.T_geometry, types.T_geometry32:
 		err = shuffleFixedNoTypeCheckWithBuf[types.Varlena](v, sels, buf)
@@ -8862,6 +8894,14 @@ func (v *Vector) String() string {
 		return vecToString[float32](v)
 	case types.T_float64:
 		return vecToString[float64](v)
+	case types.T_bf16:
+		return vecToString[types.BF16](v)
+	case types.T_float16:
+		return vecToString[types.Float16](v)
+	case types.T_float8:
+		return vecToString[types.Float8](v)
+	case types.T_float4:
+		return vecToString[types.Float4](v)
 	case types.T_date:
 		return vecToString[types.Date](v)
 	case types.T_datetime:
@@ -9105,6 +9145,14 @@ func (v *Vector) RowToString(idx int) string {
 		return implFixedRowToString[float32](v, idx)
 	case types.T_float64:
 		return implFixedRowToString[float64](v, idx)
+	case types.T_bf16:
+		return implFixedRowToString[types.BF16](v, idx)
+	case types.T_float16:
+		return implFixedRowToString[types.Float16](v, idx)
+	case types.T_float8:
+		return implFixedRowToString[types.Float8](v, idx)
+	case types.T_float4:
+		return implFixedRowToString[types.Float4](v, idx)
 	case types.T_date:
 		return implFixedRowToString[types.Date](v, idx)
 	case types.T_year:
@@ -9329,6 +9377,14 @@ func AppendAny(vec *Vector, val any, isNull bool, mp *mpool.MPool) error {
 		return appendOneFixed(vec, val.(float32), false, mp)
 	case types.T_float64:
 		return appendOneFixed(vec, val.(float64), false, mp)
+	case types.T_bf16:
+		return appendOneFixed(vec, val.(types.BF16), false, mp)
+	case types.T_float16:
+		return appendOneFixed(vec, val.(types.Float16), false, mp)
+	case types.T_float8:
+		return appendOneFixed(vec, val.(types.Float8), false, mp)
+	case types.T_float4:
+		return appendOneFixed(vec, val.(types.Float4), false, mp)
 	case types.T_date:
 		return appendOneFixed(vec, val.(types.Date), false, mp)
 	case types.T_year:
