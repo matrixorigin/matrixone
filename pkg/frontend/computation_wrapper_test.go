@@ -4119,6 +4119,53 @@ func TestPreparedRuntimeSemanticKeyKeepsValueAndSQLSourceDomains(t *testing.T) {
 	}}
 	require.NotEqual(t, preparedRuntimeSemanticKey(complete), preparedRuntimeSemanticKey(suffix),
 		"CHAR's exact numeric and prefix-string paths must not share a cached plan")
+	concreteText := func(value string) []any {
+		return []any{plan2.ParamValue{Value: value, SourceType: types.T_varchar.ToType(),
+			HasSourceType: true, EnableNumericPrefix: true}}
+	}
+	require.NotEqual(t, preparedRuntimeSemanticKey(concreteText("abc")),
+		preparedRuntimeSemanticKey(concreteText("0xx")),
+		"concrete SQL strings with and without a numeric prefix take different common-value paths")
+	require.Equal(t, preparedRuntimeSemanticKey(concreteText("0xx")),
+		preparedRuntimeSemanticKey(concreteText("0tail")),
+		"the spelling of equal-domain numeric prefixes need not split the cache")
+
+	extreme := func(value string) []any {
+		return []any{plan2.ParamValue{Value: value, EnableNumericPrefix: true}}
+	}
+	require.NotEqual(t, preparedRuntimeSemanticKey(extreme("1e-1000")),
+		preparedRuntimeSemanticKey(extreme("1e1000")),
+		"out-of-range numeric prefixes may fold to value-specific constants")
+	require.Equal(t, preparedRuntimeSemanticKey(extreme("1e-1000")),
+		preparedRuntimeSemanticKey(extreme("1e-1000")))
+}
+
+func TestPreparedOrdinaryFloatRuntimeCacheReusesCompile(t *testing.T) {
+	ses, prepared, cw, ec := newPreparedExecuteEnvForSQL(t, 29428, "select abs(?)")
+	t.Cleanup(func() {
+		cw.releaseRuntimeCacheRetiredCompiles()
+		cw.proc.SetPrepareParams(nil)
+		prepared.Close()
+	})
+	prepared.ParamTypes = []byte{byte(defines.MYSQL_TYPE_DOUBLE), 0}
+	execute := func(value string) (*plan.Plan, *compile.Compile) {
+		cw.proc.SetPrepareParams(nil)
+		if prepared.params != nil {
+			prepared.params.Free(cw.proc.Mp())
+		}
+		prepared.params = vector.NewVec(types.T_text.ToType())
+		require.NoError(t, vector.AppendBytes(prepared.params, []byte(value), false, cw.proc.Mp()))
+		cached, executionPlan, _, _, _, err := initExecuteStmtParam(ec, ses, cw, nil, prepared.Name)
+		require.NoError(t, err)
+		return executionPlan, cached
+	}
+	first, _ := execute("-1.5")
+	require.Same(t, first, cw.runtimeCachePlan)
+	cached := compile.NewCompile("", "", prepared.Sql, "", "", nil, cw.proc, prepared.PrepareStmt, false, nil, time.Now())
+	require.True(t, cw.installRuntimeCacheCandidate(cached))
+	second, reused := execute("-2.5")
+	require.Same(t, first, second)
+	require.Same(t, cached, reused)
 }
 
 func TestCOMStmtCharRuntimeCacheSeparatesEffectiveIntegerDomains(t *testing.T) {

@@ -424,8 +424,11 @@ func initL2NormArrayTestCase() []tcTemp {
 					[][]float32{{1, 2, 3}, {4, 5, 6}},
 					[]bool{false, false}),
 			},
+			// l2_norm is a DOUBLE function accumulated in float64 (#29083), so a VECF32 whose
+			// elements are exactly representable (1..6) yields the SAME value as the VECF64 case,
+			// not the older, less accurate float32-reduced result.
 			expect: NewFunctionTestResult(types.T_float64.ToType(), false,
-				[]float64{3.741657257080078, 8.774964332580566},
+				[]float64{3.741657386773941, 8.774964387392124},
 				[]bool{false, false}),
 		},
 		{
