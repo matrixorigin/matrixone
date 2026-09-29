@@ -60,6 +60,16 @@ func TestOptionsTxnIsolation(t *testing.T) {
 	require.Len(t, opts.ExtraTxnOptions(), 1)
 }
 
+func TestOptionsTxnMode(t *testing.T) {
+	var opts Options
+	require.False(t, opts.HasTxnMode())
+
+	opts = opts.WithTxnMode(txn.TxnMode_Pessimistic)
+	require.True(t, opts.HasTxnMode())
+	require.Equal(t, txn.TxnMode_Pessimistic, opts.TxnMode())
+	require.Len(t, opts.ExtraTxnOptions(), 1)
+}
+
 func TestStatementOptionParamsPreserveNulls(t *testing.T) {
 	mp := mpool.MustNewZero()
 	vec := StatementOption{}.

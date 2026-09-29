@@ -15,6 +15,7 @@
 package plan
 
 import (
+	"fmt"
 	"sort"
 	"testing"
 
@@ -371,6 +372,132 @@ func associativityStats(outcnt, selectivity float64) *planpb.Stats {
 			HashmapSize: 1,
 		},
 	}
+}
+
+func TestJoinRewritesPreserveDiagnosticInputs(t *testing.T) {
+	for _, rule := range []string{"associate-right", "associate-left", "semi", "anti"} {
+		for _, diagnostic := range []bool{false, true} {
+			t.Run(fmt.Sprintf("%s/diagnostic=%t", rule, diagnostic), func(t *testing.T) {
+				builder := newOuterJoinAssociativityBuilder(true, false)
+				builder.qry.Nodes[3].JoinType = planpb.Node_INNER
+				builder.qry.Nodes[2].Stats.Selectivity = 0.1
+				builder.qry.Nodes[4].OnList = []*planpb.Expr{associativityEqExpr(2, 3)}
+				switch rule {
+				case "associate-right":
+					builder.qry.Nodes[4].Children = []int32{0, 3}
+					builder.qry.Nodes[3].Children = []int32{1, 2}
+					builder.qry.Nodes[4].OnList = []*planpb.Expr{associativityEqExpr(1, 2)}
+					builder.qry.Nodes[3].OnList = []*planpb.Expr{associativityEqExpr(2, 3)}
+					builder.qry.Nodes[1].TableDef.Pkey = &planpb.PrimaryKeyDef{PkeyColName: "id", Names: []string{"id"}}
+					builder.qry.Nodes[1].Stats.Outcnt = 10
+					builder.qry.Nodes[2].Stats.Selectivity = 1
+				case "semi":
+					builder.qry.Nodes[4].JoinType = planpb.Node_SEMI
+				case "anti":
+					builder.qry.Nodes[4].JoinType = planpb.Node_ANTI
+				}
+				if diagnostic {
+					addStatementDiagnosticToJoin(t, builder, 3)
+				}
+				var root int32
+				switch rule {
+				case "associate-right":
+					root = builder.applyAssociativeLawRule1(4)
+				case "associate-left":
+					root = builder.applyAssociativeLawRule2(4)
+				default:
+					root = builder.pushdownSemiAntiJoins(4)
+				}
+				if diagnostic {
+					require.Equal(t, int32(4), root)
+					if rule == "associate-right" {
+						require.Equal(t, []int32{1, 2}, builder.qry.Nodes[3].Children)
+					} else {
+						require.Equal(t, []int32{0, 1}, builder.qry.Nodes[3].Children)
+					}
+				} else {
+					require.Equal(t, int32(3), root, "the control must reach the actual rewrite")
+				}
+			})
+		}
+	}
+}
+
+func addStatementDiagnosticToJoin(t *testing.T, builder *QueryBuilder, id int32) {
+	t.Helper()
+	condition := builder.qry.Nodes[id].OnList[0]
+	parameter := &planpb.Expr{Typ: planpb.Type{Id: int32(types.T_int64)}, Expr: &planpb.Expr_P{P: &planpb.ParamRef{}}}
+	period, err := BindFuncExprImplByPlanExpr(builder.GetContext(), "period_diff", []*planpb.Expr{parameter, MakePlan2Int64ConstExprWithType(202401)})
+	require.NoError(t, err)
+	right, err := BindFuncExprImplByPlanExpr(builder.GetContext(), "+", []*planpb.Expr{condition.GetF().Args[1], period})
+	require.NoError(t, err)
+	condition.GetF().Args[1] = right
+	require.True(t, builder.joinOwnsConstantDiagnostic(builder.qry.Nodes[id]))
+}
+
+func TestDiagnosticJoinKeepsFilterAndLifetimeBoundaries(t *testing.T) {
+	for _, diagnostic := range []bool{false, true} {
+		for _, rule := range []string{"filter-inner", "filter-left", "remove-left", "remove-subtree", "top-left"} {
+			t.Run(fmt.Sprintf("%s/diagnostic=%t", rule, diagnostic), func(t *testing.T) {
+				builder := newOuterJoinAssociativityBuilder(true, false)
+				if diagnostic {
+					addStatementDiagnosticToJoin(t, builder, 3)
+				}
+				join := builder.qry.Nodes[3]
+				switch rule {
+				case "filter-inner", "filter-left":
+					if rule == "filter-inner" {
+						join.JoinType = planpb.Node_INNER
+					}
+					filter, err := BindFuncExprImplByPlanExpr(builder.GetContext(), "=", []*planpb.Expr{
+						GetColExpr(planpb.Type{Id: int32(types.T_int64)}, 1, 0), MakePlan2Int64ConstExprWithType(-1),
+					})
+					require.NoError(t, err)
+					_, remaining := builder.pushdownFilters(3, []*planpb.Expr{filter}, false)
+					if diagnostic {
+						require.Equal(t, []*planpb.Expr{filter}, remaining)
+						require.Empty(t, builder.qry.Nodes[0].FilterList)
+					} else {
+						require.Empty(t, remaining)
+						require.NotEmpty(t, builder.qry.Nodes[0].FilterList)
+					}
+				case "remove-left":
+					join.Stats.HashmapStats.HashOnPK = true
+					root := builder.removeEffectlessLeftJoins(3, map[int32]int{1: 1})
+					if diagnostic {
+						require.Equal(t, int32(3), root)
+					} else {
+						require.Equal(t, int32(0), root)
+					}
+				case "remove-subtree":
+					join.JoinType = planpb.Node_INNER
+					parent := builder.qry.Nodes[4]
+					parent.JoinType = planpb.Node_LEFT
+					parent.Children = []int32{2, 3}
+					parent.Stats.HashmapStats.HashOnPK = true
+					root := builder.removeEffectlessLeftJoins(4, map[int32]int{3: 1})
+					if diagnostic {
+						require.Equal(t, int32(4), root)
+					} else {
+						require.Equal(t, int32(2), root)
+					}
+				case "top-left":
+					builder.qry.Nodes[4] = &planpb.Node{
+						NodeId: 4, NodeType: planpb.Node_SORT, Children: []int32{3},
+						Limit:   makePlan2Uint64ConstExprWithType(1),
+						OrderBy: []*planpb.OrderBySpec{{Expr: GetColExpr(planpb.Type{Id: int32(types.T_int64)}, 1, 0)}},
+					}
+					builder.pushdownTopThroughLeftJoin(4)
+					if diagnostic {
+						require.Equal(t, int32(0), join.Children[0])
+					} else {
+						require.NotEqual(t, int32(0), join.Children[0])
+					}
+				}
+			})
+		}
+	}
+
 }
 
 func reachableJoinHasChildTableSets(

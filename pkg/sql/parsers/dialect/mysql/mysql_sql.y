@@ -12884,6 +12884,10 @@ search_pattern:
     {
         $$ = tree.NewParamExpr(yylex.(*Lexer).GetParamIndex())
     }
+|   ident
+    {
+        $$ = tree.NewUnresolvedName($1)
+    }
 
 function_call_window:
 	RANK '(' ')' window_spec

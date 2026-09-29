@@ -513,8 +513,23 @@ func (exec *txnExecutor) Exec(
 		proc.Free()
 	}()
 
-	compileContext := exec.s.getCompileContext(exec.ctx, proc, exec.getDatabase(), lower)
-	compileContext.SetRootSql(sql)
+	newCompileContext := func(ctx context.Context) *compilerContext {
+		cc := exec.s.getCompileContext(ctx, proc, exec.getDatabase(), lower)
+		if statementOption.AllowMoColumnsUpdate() {
+			cc.SetContext(context.WithValue(cc.GetContext(), defines.MoColumnsUpdateKey{}, true))
+		}
+		cc.SetRootSql(sql)
+		return cc
+	}
+	compileContext := newCompileContext(exec.ctx)
+	proc.Base.SessionInfo.CompilerContext = compileContext
+	buildPlan := func(ctx *compilerContext, prepared bool) (*plan.Plan, error) {
+		pn, err := plan.BuildPlan(ctx, stmts[0], prepared)
+		if err == nil && statementOption.AllowMoColumnsUpdate() {
+			markMoColumnsUpdatePlan(pn)
+		}
+		return pn, err
+	}
 
 	var pn *plan.Plan
 
@@ -537,18 +552,18 @@ func (exec *txnExecutor) Exec(
 			return executor.Result{}, err
 		}
 	default:
-		pn, err = plan.BuildPlan(compileContext, stmt, prepared)
+		pn, err = buildPlan(compileContext, prepared)
 	}
 
 	if err != nil {
 		return executor.Result{}, err
 	}
-	if statementOption.AllowMoColumnsUpdate() {
-		markMoColumnsUpdatePlan(pn)
-	}
-
 	if prepared {
 		_, _, err := plan.ResetPreparePlan(compileContext, pn)
+		if err != nil {
+			return executor.Result{}, err
+		}
+		pn, err = specializeInternalPreparedPlan(exec.ctx, pn, statementOption.PreparedParamValues())
 		if err != nil {
 			return executor.Result{}, err
 		}
@@ -569,10 +584,7 @@ func (exec *txnExecutor) Exec(
 
 	if prepared {
 		c.SetBuildPlanFunc(func(ctx context.Context) (*plan.Plan, error) {
-			pn, err := plan.BuildPlan(
-				exec.s.getCompileContext(ctx, proc, exec.getDatabase(), lower),
-				stmts[0], true,
-			)
+			pn, err := buildPlan(newCompileContext(ctx), true)
 			if err != nil {
 				return pn, err
 			}
@@ -580,13 +592,11 @@ func (exec *txnExecutor) Exec(
 			if err != nil {
 				return pn, err
 			}
-			return pn, nil
+			return specializeInternalPreparedPlan(ctx, pn, statementOption.PreparedParamValues())
 		})
 	} else {
 		c.SetBuildPlanFunc(func(ctx context.Context) (*plan.Plan, error) {
-			return plan.BuildPlan(
-				exec.s.getCompileContext(ctx, proc, exec.getDatabase(), lower),
-				stmts[0], false)
+			return buildPlan(newCompileContext(ctx), false)
 		})
 	}
 
@@ -708,6 +718,30 @@ func publishInternalExecutorStreamResult(
 		result.Close()
 		return execCtx.Err()
 	}
+}
+
+// The internal executor reparses CTAS population SQL. Apply the same prepared
+// specialization used by the frontend after each plan build, including retry
+// rebuilds, so parameter source domains survive that reparse.
+func specializeInternalPreparedPlan(
+	ctx context.Context, pn *plan.Plan, values []executor.ParamValue,
+) (*plan.Plan, error) {
+	if len(values) == 0 {
+		return pn, nil
+	}
+	params := make([]any, len(values))
+	for i := range values {
+		params[i] = values[i]
+	}
+	specialized, changed, err := plan.FillValuesOfParamsInPlanWithSpecializationPreservingDMLWrites(
+		ctx, pn, params)
+	if err != nil {
+		return nil, err
+	}
+	if changed {
+		return specialized, nil
+	}
+	return pn, nil
 }
 
 func (exec *txnExecutor) LockTable(table string) error {

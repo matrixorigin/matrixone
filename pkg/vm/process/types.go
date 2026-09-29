@@ -135,12 +135,20 @@ type SessionInfo struct {
 	// SqlMode is captured on the initiating CN and used when a remote process has
 	// no session variable resolver.
 	SqlMode string
+	// Captured per execution for one-argument WEEK on remote/forwarded CNs.
+	DefaultWeekFormat    uint8
+	DefaultWeekFormatSet bool
 	// AutoIncrementIncrement and AutoIncrementOffset are captured on the
 	// initiating CN and used by remote PRE_INSERT operators.  They are
 	// statement-scoped; zero means the default value one for compatibility with
 	// old process payloads and internal/background processes.
 	AutoIncrementIncrement uint64
 	AutoIncrementOffset    uint64
+	// MaxErrorCount is the statement-scoped capacity for retained diagnostic
+	// records. MaxErrorCountSet distinguishes an explicit zero from an older
+	// ProcessInfo payload which did not carry this field.
+	MaxErrorCount    int
+	MaxErrorCountSet bool
 	// ApplySQLSelectLimit distinguishes client statements from frontend
 	// background SQL, which may inherit a session-variable resolver but must not
 	// be affected by a client's row cap.
@@ -164,9 +172,12 @@ type SessionInfo struct {
 	SeqAddValues      map[uint64]string
 	SeqLastValue      []string
 	SqlHelper         sqlHelper
-	Buf               *buffer.Buffer
-	LogLevel          zapcore.Level
-	SessionId         uuid.UUID
+	// CompilerContext is request-local and never serialized. Origin-only metadata
+	// operators use it to bind View definitions in the executing transaction.
+	CompilerContext any
+	Buf             *buffer.Buffer
+	LogLevel        zapcore.Level
+	SessionId       uuid.UUID
 }
 
 type Session interface {
@@ -476,6 +487,8 @@ type BaseProcess struct {
 	messageBoard                        *message.MessageBoard
 	executionResourceBudgetMu           sync.Mutex
 	executionResourceBudget             *ExecutionResourceGeneration
+	warningDiagnosticBudgetMu           sync.Mutex
+	warningDiagnosticBudget             *WarningDiagnosticBudget
 	cteMemoryBudgetMu                   sync.Mutex
 	cteMemoryBudget                     *CTEMemoryBudget
 	logger                              *log.MOLogger
@@ -639,6 +652,9 @@ func (proc *Process) SetStmtProfile(sp *StmtProfile) {
 		proc.Base.executionResourceBudget = nil
 	}
 	proc.Base.executionResourceBudgetMu.Unlock()
+	proc.Base.warningDiagnosticBudgetMu.Lock()
+	proc.Base.warningDiagnosticBudget = nil
+	proc.Base.warningDiagnosticBudgetMu.Unlock()
 	proc.Base.cteMemoryBudgetMu.Lock()
 	if proc.Base.cteMemoryBudget != nil {
 		proc.Base.cteMemoryBudget.Close()

@@ -687,45 +687,36 @@ func TestLocalDisttaeDataSource_getBlockZMs(t *testing.T) {
 	// This simulates the bug scenario where ColPos=8 would incorrectly point to remark
 	// but we should find created_at by name.
 	// With empty rangeSlice, getBlockZMs should complete without trying to load blocks
-	require.NotPanics(t, func() {
-		ls.getBlockZMs()
-	}, "getBlockZMs should find created_at by name, not panic on column lookup")
+	zms, err := ls.getBlockZMs(ctx)
+	require.NoError(t, err)
 
 	// Verify that blockZMS was initialized (even if empty)
-	require.NotNil(t, ls.blockZMS, "blockZMS should be initialized")
-	require.Equal(t, 0, len(ls.blockZMS), "blockZMS should be empty when rangeSlice is empty")
+	require.NotNil(t, zms)
+	require.Empty(t, zms)
 
 	// Test case 2: Test with simple column name (without table prefix)
 	ls.OrderBy[0].Expr.Expr.(*plan.Expr_Col).Col.Name = "created_at"
 	ls.OrderBy[0].Expr.Expr.(*plan.Expr_Col).Col.ColPos = 8 // Still wrong ColPos
-	ls.blockZMS = nil
-	require.NotPanics(t, func() {
-		ls.getBlockZMs()
-	}, "getBlockZMs should work with simple column name")
+	_, err = ls.getBlockZMs(ctx)
+	require.NoError(t, err)
 
 	// Test case 3: Test fallback to ColPos when name lookup fails
 	ls.OrderBy[0].Expr.Expr.(*plan.Expr_Col).Col.Name = "nonexistent_column"
 	ls.OrderBy[0].Expr.Expr.(*plan.Expr_Col).Col.ColPos = 9 // Valid ColPos as fallback (points to created_at)
-	ls.blockZMS = nil
-	require.NotPanics(t, func() {
-		ls.getBlockZMs()
-	}, "getBlockZMs should fallback to ColPos when name lookup fails")
+	_, err = ls.getBlockZMs(ctx)
+	require.NoError(t, err)
 
-	// Test case 4: Test panic when both name lookup and ColPos fail
+	// Test case 4: Report a plan error when both name lookup and ColPos fail
 	ls.OrderBy[0].Expr.Expr.(*plan.Expr_Col).Col.Name = "nonexistent_column"
 	ls.OrderBy[0].Expr.Expr.(*plan.Expr_Col).Col.ColPos = 999 // Invalid ColPos
-	ls.blockZMS = nil
-	require.Panics(t, func() {
-		ls.getBlockZMs()
-	}, "getBlockZMs should panic when both name lookup and ColPos fail")
+	_, err = ls.getBlockZMs(ctx)
+	require.ErrorContains(t, err, "cannot find column for ORDER BY")
 
 	// Test case 5: Test with Name2ColIndex (O(1) lookup)
 	ls.OrderBy[0].Expr.Expr.(*plan.Expr_Col).Col.Name = "created_at"
 	ls.OrderBy[0].Expr.Expr.(*plan.Expr_Col).Col.ColPos = 8 // Wrong ColPos
-	ls.blockZMS = nil
-	require.NotPanics(t, func() {
-		ls.getBlockZMs()
-	}, "getBlockZMs should use Name2ColIndex for O(1) lookup")
+	_, err = ls.getBlockZMs(ctx)
+	require.NoError(t, err)
 }
 
 // TestLocalDisttaeDataSource_getBlockZMs_ColumnNameExtraction tests column name extraction
@@ -780,11 +771,10 @@ func TestLocalDisttaeDataSource_getBlockZMs_ColumnNameExtraction(t *testing.T) {
 
 	// Should extract "created_at" from "db.table.created_at"
 	// Since rangeSlice is empty, getBlockZMs should complete without trying to load blocks
-	require.NotPanics(t, func() {
-		ls.getBlockZMs()
-	}, "getBlockZMs should extract column name from qualified name and handle empty rangeSlice")
+	zms, err := ls.getBlockZMs(ctx)
+	require.NoError(t, err)
 
 	// Verify that blockZMS was initialized (even if empty)
-	require.NotNil(t, ls.blockZMS, "blockZMS should be initialized")
-	require.Equal(t, 0, len(ls.blockZMS), "blockZMS should be empty when rangeSlice is empty")
+	require.NotNil(t, zms)
+	require.Empty(t, zms)
 }

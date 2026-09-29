@@ -345,6 +345,12 @@ func CDCStrToTS(tsStr string) (types.TS, error) {
 	if tsStr == "" {
 		return types.TS{}, nil
 	}
+	// Automatically persisted CDC start points use the lossless HLC debug
+	// format (physical-logical). Keep accepting the historical wall-clock
+	// format for user-supplied StartTs and existing task rows.
+	if ts, err := timestamp.ParseTimestamp(tsStr); err == nil {
+		return types.TimestampToTS(ts), nil
+	}
 	t, err := CDCStrToTime(tsStr, nil)
 	if err != nil {
 		return types.TS{}, err

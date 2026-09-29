@@ -90,6 +90,8 @@ func emptyCastTargetValues(typ types.Type) any {
 		return []types.Datetime{}
 	case types.T_timestamp:
 		return []types.Timestamp{}
+	case types.T_time:
+		return []types.Time{}
 	default:
 		panic("unsupported assignment-ignore target type")
 	}
@@ -244,6 +246,30 @@ func TestAssignmentIgnoreAdjustsLexicalNumericAndTemporalValues(t *testing.T) {
 		require.Equal(t, []numericWarning{{code: moerr.ER_WARN_DATA_OUT_OF_RANGE}},
 			stripWarningMessages(session.warnings))
 	})
+}
+
+func TestAssignmentIgnoreTimeKeepsValidPrefix(t *testing.T) {
+	result, session, err := runAssignmentIgnoreStringCast(
+		t, types.T_varchar.ToType(), types.T_time.ToTypeWithScale(6),
+		[]string{"01:02:03.456789tail", "tail"}, nil, false)
+	require.NoError(t, err)
+	require.Equal(t, []types.Time{types.TimeFromClock(false, 1, 2, 3, 456789), 0},
+		vector.MustFixedColWithTypeCheck[types.Time](result))
+	require.False(t, result.GetNulls().Contains(0))
+	require.False(t, result.GetNulls().Contains(1))
+	require.Equal(t, []numericWarning{
+		{code: moerr.WARN_DATA_TRUNCATED},
+		{code: moerr.WARN_DATA_TRUNCATED},
+	}, stripWarningMessages(session.warnings))
+}
+
+func TestAssignmentIgnoreEmptyTimeIsZeroWithWarning(t *testing.T) {
+	result, session, err := runAssignmentIgnoreStringCast(
+		t, types.T_varchar.ToType(), types.T_time.ToTypeWithScale(6), []string{""}, nil, false)
+	require.NoError(t, err)
+	require.Equal(t, []types.Time{0}, vector.MustFixedColWithTypeCheck[types.Time](result))
+	require.False(t, result.GetNulls().Contains(0))
+	require.Equal(t, []numericWarning{{code: moerr.WARN_DATA_TRUNCATED}}, stripWarningMessages(session.warnings))
 }
 
 func TestAssignmentIgnoreDecimalClassification(t *testing.T) {

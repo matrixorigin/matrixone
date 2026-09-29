@@ -1181,6 +1181,9 @@ func (l *localLockTable) handleLockConflictLocked(
 
 	c.w.conflictKey.Store(&key)
 	c.w.lt.Store(l)
+	// Queue admission checks the requested mode for opt-in writer fairness.
+	// Set it before publication for both synchronous and asynchronous waits.
+	c.w.lockWaitMode = c.opts.Mode
 	clear(c.w.waitFor)
 	c.w.waitFor = c.w.waitFor[:0]
 	waitForSharedHolderChange :=

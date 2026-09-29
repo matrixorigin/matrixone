@@ -306,12 +306,12 @@ order by
 o_year
 ;
 o_year    mkt_share
-1995    0.0
-1996    0.0
+1995    0.00000000
+1996    0.00000000
 select * from result_scan(last_query_id()) as u;
 o_year    mkt_share
-1995    0.0
-1996    0.0
+1995    0.00000000
+1996    0.00000000
 /* save_result */select
 nation,
 o_year,
@@ -704,10 +704,10 @@ l_partkey = p_partkey
 and l_shipdate >= date '1996-04-01'
 and l_shipdate < date '1996-04-01' + interval '1' month;
 promo_revenue
-17.68284163936513
+17.6828416394
 select * from result_scan(last_query_id()) as u;
 promo_revenue
-17.68284163936513
+17.6828416394
 with q15_revenue0 as (
 select
 l_suppkey as supplier_no,

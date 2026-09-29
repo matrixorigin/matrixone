@@ -213,31 +213,44 @@ func (st *genRandomState) call(tf *TableFunction, proc *process.Process) (vm.Cal
 		cnt = st.total - st.next
 	}
 
-	switch st.method {
-	case rMethodInt64:
-		for i := int64(0); i < cnt; i++ {
-			vector.AppendFixed(st.batch.Vecs[0], st.next+i+1, false, proc.Mp())
-			vector.AppendFixed(st.batch.Vecs[1], st.r.Int63(), false, proc.Mp())
+	nthPos := vectorSearchAttrPos(st.batch.Attrs, "nth")
+	valueName := "f64"
+	if st.genInt64 {
+		valueName = "i64"
+	}
+	valuePos := vectorSearchAttrPos(st.batch.Attrs, valueName)
+	for i := int64(0); i < cnt; i++ {
+		if nthPos >= 0 {
+			if err := vector.AppendFixed(st.batch.Vecs[nthPos], st.next+i+1, false, proc.Mp()); err != nil {
+				return vm.CallResult{}, err
+			}
 		}
-	case rMethodInt64N:
-		for i := int64(0); i < cnt; i++ {
-			vector.AppendFixed(st.batch.Vecs[0], st.next+i+1, false, proc.Mp())
-			vector.AppendFixed(st.batch.Vecs[1], st.r.Int63n(st.iMax), false, proc.Mp())
+		// Advance the generator even when its value column was pruned, so
+		// subsequent batches have the same seeded sequence for every layout.
+		var intValue int64
+		var floatValue float64
+		switch st.method {
+		case rMethodInt64:
+			intValue = st.r.Int63()
+		case rMethodInt64N:
+			intValue = st.r.Int63n(st.iMax)
+		case rMethodFloat64:
+			floatValue = st.r.Float64()
+		case rMethodExpFloat64:
+			floatValue = st.r.ExpFloat64()
+		case rMethodNormalFloat64:
+			floatValue = st.r.NormFloat64()
 		}
-	case rMethodFloat64:
-		for i := int64(0); i < cnt; i++ {
-			vector.AppendFixed(st.batch.Vecs[0], st.next+i+1, false, proc.Mp())
-			vector.AppendFixed(st.batch.Vecs[1], st.r.Float64(), false, proc.Mp())
-		}
-	case rMethodExpFloat64:
-		for i := int64(0); i < cnt; i++ {
-			vector.AppendFixed(st.batch.Vecs[0], st.next+i+1, false, proc.Mp())
-			vector.AppendFixed(st.batch.Vecs[1], st.r.ExpFloat64(), false, proc.Mp())
-		}
-	case rMethodNormalFloat64:
-		for i := int64(0); i < cnt; i++ {
-			vector.AppendFixed(st.batch.Vecs[0], st.next+i+1, false, proc.Mp())
-			vector.AppendFixed(st.batch.Vecs[1], st.r.NormFloat64(), false, proc.Mp())
+		if valuePos >= 0 {
+			var err error
+			if st.genInt64 {
+				err = vector.AppendFixed(st.batch.Vecs[valuePos], intValue, false, proc.Mp())
+			} else {
+				err = vector.AppendFixed(st.batch.Vecs[valuePos], floatValue, false, proc.Mp())
+			}
+			if err != nil {
+				return vm.CallResult{}, err
+			}
 		}
 	}
 

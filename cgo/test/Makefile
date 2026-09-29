@@ -1,17 +1,16 @@
 UNAME_S := $(shell uname -s)
+TEST_CC = $(CC)
 
 ifeq ($(MO_CL_CUDA),1)
-        ifeq ($(CONDA_PREFIX),)
-                $(error CONDA_PREFIX env variable not found. Please activate your conda environment.)
-        endif
-        CC = /usr/local/cuda/bin/nvcc
+	include ../gpu-toolchain.mk
+	TEST_CC = $(MO_GPU_NVCC) -ccbin $(MO_GPU_CXX)
 	COMPILER_FLAGS := -Xcompiler "-Wall -Werror"
 	# When using nvcc to link, we need to pass the libraries and rpath
 	LINKER_FLAGS := -Xlinker "-rpath=$(shell realpath ..)"
 	# We must also include the cuVS and other deps that libmo.so needs if linked statically, 
 	# but since libmo.so is shared, we just need to link against it.
-	LIBS += -L.. -lmo -L../../thirdparties/install/lib -lusearch_c -L$(CUDA_PATH)/lib64/stubs -lcuda -L$(CUDA_PATH)/lib64 -lcudart
-	LIBS += -L$(CONDA_PREFIX)/lib -lcuvs -lcuvs_c -ldl -lrmm -lpthread  -lgomp
+	LIBS += -L.. -lmo -L../../thirdparties/install/lib -lusearch_c $(MO_GPU_LDFLAGS)
+	LIBS += -ldl -lrmm -lpthread -lgomp
 	LIBS += -Xlinker -lpthread -Xlinker -lm
 else
 	COMPILER_FLAGS := -Wall -Werror
@@ -26,35 +25,36 @@ else
 	endif
 endif
 
-CFLAGS := -I.. -g -I../../thirdparties/install/include $(COMPILER_FLAGS)
+CFLAGS := -I.. -g -I../../thirdparties/install/include $(COMPILER_FLAGS) $(MO_GPU_CFLAGS)
 LDFLAGS := $(LIBS) -lroaring $(LINKER_FLAGS)
 
 ifeq ($(MO_CL_CUDA),1)
-all: test_add.exe test_bloom.exe test_varlena.exe test_cbitmap.exe test_croaring.exe
+# test_xcall_cuda compares the C loop against the CUDA kernel, so it only exists in a CUDA build.
+all: test_add.exe test_bloom.exe test_varlena.exe test_cbitmap.exe test_croaring.exe test_xcall_cuda.exe
 else
-all: test_add.exe test_bloom.exe test_varlena.exe test_cbitmap.exe test_croaring.exe test_xcall.exe
+all: test_add.exe test_bloom.exe test_varlena.exe test_cbitmap.exe test_croaring.exe
 endif
 
+test_xcall_cuda.exe: test_xcall_cuda.c ../xcall.h
+	$(TEST_CC) $(CFLAGS) -DMO_CL_CUDA -o $@ test_xcall_cuda.c $(LDFLAGS)
+
 test_add.exe: test_add.c
-	$(CC) $(CFLAGS) -o $@ test_add.c $(LDFLAGS)
+	$(TEST_CC) $(CFLAGS) -o $@ test_add.c $(LDFLAGS)
 
 test_cbitmap.exe: test_cbitmap.c
-	$(CC) $(CFLAGS) -o $@ test_cbitmap.c $(LDFLAGS)
+	$(TEST_CC) $(CFLAGS) -o $@ test_cbitmap.c $(LDFLAGS)
 
 test_croaring.exe: test_croaring.c
-	$(CC) $(CFLAGS) -o $@ test_croaring.c $(LDFLAGS)
+	$(TEST_CC) $(CFLAGS) -o $@ test_croaring.c $(LDFLAGS)
 
 test_bloom.exe: test_bloom.c
-	$(CC) $(CFLAGS) -o $@ test_bloom.c $(LDFLAGS)
+	$(TEST_CC) $(CFLAGS) -o $@ test_bloom.c $(LDFLAGS)
 
 test_varlena.exe: varlena_test.c
-	$(CC) $(CFLAGS) -o $@ varlena_test.c $(LDFLAGS)
-
-test_xcall.exe: test_xcall.c ../xcall.c ../xcall.h
-	$(CC) $(CFLAGS) -O3 -fno-fast-math -o $@ test_xcall.c ../xcall.c -lm
+	$(TEST_CC) $(CFLAGS) -o $@ varlena_test.c $(LDFLAGS)
 
 bloom_whole_test.exe: bloom_whole_test.c 
-	$(CC) $(CFLAGS) $(NVCC_FLAGS) -o bloom_whole_test.exe bloom_whole_test.c $(LDFLAGS)
+	$(TEST_CC) $(CFLAGS) $(NVCC_FLAGS) -o bloom_whole_test.exe bloom_whole_test.c $(LDFLAGS)
 
 clean:
 	rm -f *.o *.exe
