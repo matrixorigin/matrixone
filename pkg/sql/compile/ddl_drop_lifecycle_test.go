@@ -129,13 +129,13 @@ func TestDropDatabaseRelationsStopsAfterMemberFailure(t *testing.T) {
 		})
 	}
 	tables := []*plan.DropTable{
-		{Database: "db", Table: "first", TableId: 1, UpdateFkSqls: []string{dropDatabaseTableFkCleanupSQL("db", "first")}, TableDef: &plan.TableDef{TblId: 1, Name: "first"}},
-		{Database: "db", Table: "second", TableId: 2, UpdateFkSqls: []string{dropDatabaseTableFkCleanupSQL("db", "second")}, TableDef: &plan.TableDef{TblId: 2, Name: "second"}},
+		{Database: "db", Table: "first", TableId: 1, TableDef: &plan.TableDef{TblId: 1, Name: "first"}},
+		{Database: "db", Table: "second", TableId: 2, TableDef: &plan.TableDef{TblId: 2, Name: "second"}},
 		{Database: "db", Table: "third", TableId: 3, TableDef: &plan.TableDef{TblId: 3, Name: "third"}},
 	}
 	err := c.dropDatabaseRelations(db, tables, resolved, true)
 	require.ErrorIs(t, err, wantErr)
-	require.Equal(t, 2, fkCleanups)
+	require.Zero(t, fkCleanups)
 	require.Equal(t, 1, mergeCleanups)
 	require.Same(t, originalCtx, c.proc.Ctx)
 	require.False(t, c.ignorePublish)
@@ -180,13 +180,6 @@ func TestDropDatabasePhysicalTemporaryRunsAllocatorCleanup(t *testing.T) {
 		TableDef: def,
 	}}
 	require.NoError(t, c.dropDatabaseRelations(db, tables, map[string]engine.Relation{def.Name: rel}, true))
-}
-
-func TestDropDatabaseTableFkCleanupSQLEscapesNames(t *testing.T) {
-	require.Equal(t,
-		"delete from `mo_catalog`.`mo_foreign_keys` where db_name = 'db\\'name' and table_name = 'table\\\\name'",
-		dropDatabaseTableFkCleanupSQL("db'name", `table\name`),
-	)
 }
 
 func TestDropTableLifecycleAdmission(t *testing.T) {
@@ -397,6 +390,54 @@ func TestDropDatabaseSelectsParentOwnedTables(t *testing.T) {
 	c.pn = pn
 	require.ErrorIs(t, (&Scope{Plan: pn}).DropDatabase(c), stopErr)
 	require.Equal(t, []string{"parent", "legacy_lookalike", "shadowed", "temporary", "tail"}, dropped)
+}
+
+func TestDropDatabaseRejectsSparseIndexMetadataBeforeDeletion(t *testing.T) {
+	for _, tc := range []struct {
+		name        string
+		defs        []engine.TableDef
+		planIndexes []*plan.IndexDef
+	}{
+		{
+			name: "engine index",
+			defs: []engine.TableDef{&engine.ConstraintDef{Cts: []engine.Constraint{
+				&engine.IndexDef{Indexes: []*plan.IndexDef{{IndexTableName: "valid"}, nil}},
+			}}},
+		},
+		{
+			name:        "plan index",
+			planIndexes: []*plan.IndexDef{{IndexTableName: "valid"}, nil},
+		},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			ctrl := gomock.NewController(t)
+			exec := &dropDDLExecutor{exec: func(context.Context, string, executor.Options) (executor.Result, error) {
+				return executor.Result{}, nil
+			}}
+			c, eng := newDropDDLCompile(t, ctrl, exec)
+			c.proc.Ctx = context.WithValue(c.proc.Ctx, defines.IgnoreForeignKey{}, true)
+			stubs := gostub.Stub(&lockMoDatabase, func(*Compile, string, lock.LockMode) error { return nil })
+			t.Cleanup(stubs.Reset)
+			db := mock_frontend.NewMockDatabase(ctrl)
+			eng.EXPECT().Database(gomock.Any(), "db", c.proc.GetTxnOperator()).Return(db, nil).AnyTimes()
+			db.EXPECT().IsSubscription(gomock.Any()).Return(false).AnyTimes()
+			db.EXPECT().GetDatabaseId(gomock.Any()).Return("42").AnyTimes()
+			db.EXPECT().Relations(gomock.Any()).Return([]string{"parent"}, nil)
+			rel := mock_frontend.NewMockRelation(ctrl)
+			db.EXPECT().Relation(gomock.Any(), "parent", nil).Return(rel, nil)
+			rel.EXPECT().GetExtraInfo().Return(&api.SchemaExtra{}).AnyTimes()
+			rel.EXPECT().TableDefs(gomock.Any()).Return(tc.defs, nil)
+			if tc.planIndexes != nil {
+				rel.EXPECT().GetTableID(gomock.Any()).Return(uint64(7))
+				rel.EXPECT().GetTableDef(gomock.Any()).Return(&plan.TableDef{Name: "parent", Indexes: tc.planIndexes})
+			}
+			pn := &plan.Plan{Plan: &plan.Plan_Ddl{Ddl: &plan.DataDefinition{DdlType: plan.DataDefinition_DROP_DATABASE,
+				Definition: &plan.DataDefinition_DropDatabase{DropDatabase: &plan.DropDatabase{Database: "db", DatabaseId: 42}},
+			}}}
+			c.pn = pn
+			require.ErrorContains(t, (&Scope{Plan: pn}).DropDatabase(c), "nil index metadata")
+		})
+	}
 }
 
 func TestDropDatabaseRejectsIncomingFKBeforeTableWork(t *testing.T) {

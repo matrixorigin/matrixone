@@ -295,7 +295,10 @@ func (s *Scope) DropDatabase(c *Compile) error {
 		constrain := GetConstraintDefFromTableDefs(defs)
 		for _, ct := range constrain.Cts {
 			if ds, ok := ct.(*engine.IndexDef); ok {
-				for _, d := range ds.Indexes {
+				for pos, d := range ds.Indexes {
+					if d == nil {
+						return moerr.NewInternalErrorf(c.proc.Ctx, "nil index metadata for table %q at position %d", r, pos)
+					}
 					ignoreTables[d.IndexTableName] = struct{}{}
 				}
 			}
@@ -310,13 +313,10 @@ func (s *Scope) DropDatabase(c *Compile) error {
 			TableDef: tableDef,
 		}
 		if tableDef != nil {
-			// Match the DROP TABLE planner's session-resolved IsTemporary bit.
-			// A physical temporary descriptor has a system-temporary relkind but
-			// keeps this bit clear, so it still gets allocator and storage cleanup.
-			if !tableDef.GetIsTemporary() {
-				dropTable.UpdateFkSqls = []string{dropDatabaseTableFkCleanupSQL(dbName, r)}
-			}
-			for _, indexDef := range tableDef.Indexes {
+			for pos, indexDef := range tableDef.Indexes {
+				if indexDef == nil {
+					return moerr.NewInternalErrorf(c.proc.Ctx, "nil index metadata for table %q at position %d", r, pos)
+				}
 				if indexDef.TableExist {
 					dropTable.IndexTableNames = append(dropTable.IndexTableNames, indexDef.IndexTableName)
 				}
@@ -492,20 +492,6 @@ func (c *Compile) dropDatabaseRelations(
 		}
 	}
 	return nil
-}
-
-func dropDatabaseTableFkCleanupSQL(dbName, tableName string) string {
-	return fmt.Sprintf(
-		"delete from `%s`.`%s` where db_name = %s and table_name = %s",
-		catalog.MO_CATALOG,
-		catalog.MOForeignKeys,
-		dropDatabaseTableFkSQLLiteral(dbName),
-		dropDatabaseTableFkSQLLiteral(tableName),
-	)
-}
-
-func dropDatabaseTableFkSQLLiteral(value string) string {
-	return "'" + strings.NewReplacer(`\`, `\\`, `'`, `\'`).Replace(value) + "'"
 }
 
 func logAndSkipMissingRelationByNameForDropDatabase(c *Compile, dbName, rel, msg string, err error) bool {

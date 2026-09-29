@@ -61,6 +61,9 @@ drop database fk_foreign_key_checks3_db0;
 create database fk_foreign_key_checks3_db0;
 create table fk_foreign_key_checks3_db0.unrelated(a int);
 drop database fk_foreign_key_checks3_db0;
+create database fk_foreign_key_checks3_db0;
+create view fk_foreign_key_checks3_db0.t2 as select 1 as a;
+drop database fk_foreign_key_checks3_db0;
 select count(*) = 2 as deferred_fks from mo_catalog.mo_foreign_keys where db_name = 'fk_foreign_key_checks3';
 
 --no error

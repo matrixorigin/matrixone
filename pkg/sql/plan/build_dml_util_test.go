@@ -221,7 +221,7 @@ func TestGetSqlForCheckHasDBRefersToEscapesStringLiterals(t *testing.T) {
 	require.Contains(t, sql, "refer_db_name = 'db\\'name'")
 	require.Contains(t, sql, "db_name != 'db\\'name'")
 	require.Contains(t, sql, "refer_table_name in (select relname from `mo_catalog`.`mo_tables`")
-	require.Contains(t, sql, "account_id = current_account_id() and reldatabase = 'db\\'name'")
+	require.Contains(t, sql, "account_id = current_account_id() and reldatabase = 'db\\'name' and relkind != '"+catalog.SystemViewRel+"'")
 }
 
 func TestGetSqlForTransferAlterCopyFk(t *testing.T) {
@@ -296,7 +296,7 @@ func TestFkCatalogMutationSqlEscapesIdentifiers(t *testing.T) {
 	require.Equal(t,
 		"select count(*) > 0 from `mo_catalog`.`mo_foreign_keys` where refer_db_name = 'db\\'name\\\\part' and db_name != 'db\\'name\\\\part' "+
 			"and refer_table_name in (select relname from `mo_catalog`.`mo_tables` "+
-			"where account_id = current_account_id() and reldatabase = 'db\\'name\\\\part');",
+			"where account_id = current_account_id() and reldatabase = 'db\\'name\\\\part' and relkind != '"+catalog.SystemViewRel+"');",
 		getSqlForCheckHasDBRefersTo(db))
 }
 
