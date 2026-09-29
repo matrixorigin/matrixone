@@ -251,6 +251,7 @@ func (db *txnDatabase) deleteTable(ctx context.Context, name string, forAlter bo
 	if err != nil {
 		return nil, err
 	}
+	defer res.Close()
 	if len(res.Batches) != 1 || res.Batches[0].Vecs[0].Length() != 1 {
 		logutil.Error(
 			"FIND_TABLE deleteTableError",
@@ -272,6 +273,7 @@ func (db *txnDatabase) deleteTable(ctx context.Context, name string, forAlter bo
 	if err != nil {
 		return nil, err
 	}
+	defer res.Close()
 	for _, b := range res.Batches {
 		for i, v := 0, b.Vecs[0]; i < v.Length(); i++ {
 			rowids = append(rowids, vector.GetFixedAtNoTypeCheck[types.Rowid](v, i))

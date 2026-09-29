@@ -54,7 +54,7 @@ func TestDataBranchDeletePrivateOwnerForcesPessimisticRC(t *testing.T) {
 	ses := newTestSession(t, ctrl)
 	t.Cleanup(ses.Close)
 	txnOp := mock_frontend.NewMockTxnOperator(ctrl)
-	txnOp.EXPECT().TxnOptions().Return(txn.TxnOptions{}).Times(6)
+	txnOp.EXPECT().TxnOptions().Return(txn.TxnOptions{}).Times(4)
 	ses.proc.Base.TxnOperator = txnOp
 
 	beginErr := errors.New("begin failed")
@@ -232,7 +232,7 @@ func TestInstallDataBranchCloneContextRestoresRequestContext(t *testing.T) {
 
 func TestBranchQuotaUsageSQLUsesTargetOwnerAndExcludesRootAlterLineage(t *testing.T) {
 	require.Equal(t,
-		"select count(*) from mo_catalog.mo_branch_metadata b join mo_catalog.mo_tables t on b.table_id = t.rel_id where t.account_id = 7 and b.table_deleted = false and b.level != 'alter' for update",
+		"select count(*) from mo_catalog.mo_branch_metadata b join mo_catalog.mo_tables t on b.table_id = t.rel_id where t.account_id = 7 and b.table_deleted = false and b.level != 'alter'",
 		branchQuotaUsageSQL(7),
 	)
 }
