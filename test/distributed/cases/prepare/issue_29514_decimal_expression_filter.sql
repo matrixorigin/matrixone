@@ -108,6 +108,46 @@ deallocate prepare scalar_cast_peer;
 deallocate prepare derived_cast_peer;
 deallocate prepare precision_cast_peer;
 
+-- #29517: complete text parameters inside explicit DOUBLE casts can be
+-- folded for the uniqueness proof; partial numeric text must retain warnings.
+set @v = '54321';
+prepare text_cast_peer from 'select count(*) from t where d = cast(? as double)';
+-- @ignore:0
+explain analyze force execute text_cast_peer using @v;
+execute text_cast_peer using @v;
+prepare text_scalar_cast_peer from 'select count(*) from t where d = (select cast(? as double))';
+-- @ignore:0
+explain analyze force execute text_scalar_cast_peer using @v;
+execute text_scalar_cast_peer using @v;
+prepare text_derived_cast_peer from 'select count(*) from t join (select cast(? as double) as v) x on t.d = x.v';
+-- @ignore:0
+explain analyze force execute text_derived_cast_peer using @v;
+execute text_derived_cast_peer using @v;
+prepare text_abs_cast_peer from 'select count(*) from t where d = abs(cast(? as double))';
+execute text_abs_cast_peer using @v;
+set @v = ' 54321 ';
+execute text_cast_peer using @v;
+set @v = '+54321';
+execute text_cast_peer using @v;
+set @v = '5.4321e4';
+execute text_cast_peer using @v;
+set @v = '0.104';
+-- @ignore:0
+explain analyze force execute text_cast_peer using @v;
+execute text_cast_peer using @v;
+set @v = '54321junk';
+execute text_cast_peer using @v;
+show warnings;
+set @v = 'abc';
+execute text_cast_peer using @v;
+show warnings;
+set @v = null;
+execute text_cast_peer using @v;
+deallocate prepare text_cast_peer;
+deallocate prepare text_scalar_cast_peer;
+deallocate prepare text_derived_cast_peer;
+deallocate prepare text_abs_cast_peer;
+
 create table wide(d decimal(20,0));
 insert into wide values (9007199254740992), (9007199254740993);
 select count(*) from wide where d = (select cast(9007199254740992 as double));
@@ -123,5 +163,9 @@ set @v = cast(9007199254740992 as double);
 prepare wide_cast_peer from 'select count(*) from wide where d = cast(? as double)';
 execute wide_cast_peer using @v;
 deallocate prepare wide_cast_peer;
+set @v = '9007199254740992';
+prepare wide_text_cast_peer from 'select count(*) from wide where d = cast(? as double)';
+execute wide_text_cast_peer using @v;
+deallocate prepare wide_text_cast_peer;
 
 drop database issue_29514_decimal_expr;

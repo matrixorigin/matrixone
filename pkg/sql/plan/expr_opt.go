@@ -74,17 +74,28 @@ func (builder *QueryBuilder) decimalFloatPeerValue(expr *plan.Expr) (float64, bo
 	substitute = func(current *plan.Expr) bool {
 		if param := current.GetP(); param != nil {
 			binding, ok := state.bindingForPosition(param.Pos)
-			if !ok || binding.Type.Oid != types.T_float64 ||
-				current.Typ.Id != int32(types.T_float64) {
-				return false
-			}
-			bound, ok := preparedBoundDoubleValue(builder.GetContext(), current)
 			if !ok {
 				return false
 			}
-			current.Expr = &plan.Expr_Lit{Lit: &plan.Literal{Value: &plan.Literal_Dval{Dval: bound}}}
-			current.Typ = makeSimplePlan2Type(types.T_float64)
-			return true
+			if binding.Type.Oid == types.T_float64 && current.Typ.Id == int32(types.T_float64) {
+				bound, ok := preparedBoundDoubleValue(builder.GetContext(), current)
+				if !ok {
+					return false
+				}
+				current.Expr = &plan.Expr_Lit{Lit: &plan.Literal{Value: &plan.Literal_Dval{Dval: bound}}}
+				current.Typ = makeSimplePlan2Type(types.T_float64)
+				return true
+			}
+			if binding.Type.Oid.IsMySQLString() && types.T(current.Typ.Id).IsMySQLString() {
+				raw, present := preparedConfigurationValue(builder.GetContext(), current)
+				value, isText := raw.(string)
+				if !present || !isText || !PreparedNumericStringIsComplete(value) {
+					return false
+				}
+				current.Expr = &plan.Expr_Lit{Lit: &plan.Literal{Value: &plan.Literal_Sval{Sval: value}}}
+				return true
+			}
+			return false
 		}
 		if fn := current.GetF(); fn != nil {
 			for _, arg := range fn.Args {
