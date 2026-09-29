@@ -323,6 +323,62 @@ endif
 
 ifneq ($(MO_GPU_CUDA_STUB_DIRS),)
   LIBRARIES += $(addprefix -L,$(MO_GPU_CUDA_STUB_DIRS)) -lcuda
+else ifeq ($(TARGET_OS),darwin)
+  ALL_LDFLAGS += -Xcompiler -F/Library/Frameworks -Xlinker -framework -Xlinker CUDA
+else
+  ifeq ($(TARGET_ARCH),x86_64)
+    CUDA_SEARCH_PATH ?= $(CUDA_PATH)/lib64/stubs
+    CUDA_SEARCH_PATH += $(CUDA_PATH)/lib/stubs
+    CUDA_SEARCH_PATH += $(CUDA_PATH)/targets/x86_64-linux/lib/stubs
+  endif
+
+  ifeq ($(TARGET_ARCH)-$(TARGET_OS),armv7l-linux)
+    CUDA_SEARCH_PATH ?= $(CUDA_PATH)/targets/armv7-linux-gnueabihf/lib/stubs
+  endif
+
+  ifeq ($(TARGET_ARCH)-$(TARGET_OS),aarch64-linux)
+    CUDA_SEARCH_PATH ?= $(CUDA_PATH)/targets/aarch64-linux/lib/stubs
+  endif
+
+  ifeq ($(TARGET_ARCH)-$(TARGET_OS),sbsa-linux)
+    CUDA_SEARCH_PATH ?= $(CUDA_PATH)/targets/sbsa-linux/lib/stubs
+  endif
+
+  ifeq ($(TARGET_ARCH)-$(TARGET_OS),armv7l-android)
+    CUDA_SEARCH_PATH ?= $(CUDA_PATH)/targets/armv7-linux-androideabi/lib/stubs
+  endif
+
+  ifeq ($(TARGET_ARCH)-$(TARGET_OS),aarch64-android)
+    CUDA_SEARCH_PATH ?= $(CUDA_PATH)/targets/aarch64-linux-androideabi/lib/stubs
+  endif
+
+  ifeq ($(TARGET_ARCH)-$(TARGET_OS),armv7l-qnx)
+    CUDA_SEARCH_PATH ?= $(CUDA_PATH)/targets/ARMv7-linux-QNX/lib/stubs
+  endif
+
+  ifeq ($(TARGET_ARCH)-$(TARGET_OS),aarch64-qnx)
+    CUDA_SEARCH_PATH ?= $(CUDA_PATH)/targets/aarch64-qnx/lib/stubs
+    ifdef TARGET_OVERRIDE
+        CUDA_SEARCH_PATH := $(CUDA_PATH)/targets/$(TARGET_OVERRIDE)/lib/stubs
+    endif
+  endif
+
+  ifeq ($(TARGET_ARCH),ppc64le)
+    CUDA_SEARCH_PATH ?= $(CUDA_PATH)/targets/ppc64le-linux/lib/stubs
+  endif
+
+  ifeq ($(HOST_ARCH),ppc64le)
+    CUDA_SEARCH_PATH += $(CUDA_PATH)/lib64/stubs
+  endif
+
+  CUDALIB ?= $(shell find -L $(CUDA_SEARCH_PATH) -maxdepth 1 -name libcuda.so 2> /dev/null)
+  ifeq ("$(CUDALIB)","")
+    $(info >>> WARNING - libcuda.so not found, CUDA Driver is not installed.  Please re-install the driver. <<<)
+    SAMPLE_ENABLED := 0
+  else
+    CUDALIB := $(shell echo $(CUDALIB) | sed "s/ .*//" | sed "s/\/libcuda.so//" )
+    LIBRARIES += -L$(CUDALIB) -lcuda
+  endif
 endif
 
 ALL_CCFLAGS += --threads 0 --std=c++11

@@ -374,7 +374,7 @@ Guardrails:
 - Use the top-level build owner. It content-binds and atomically stages
   `mocl_kernel64.fatbin` beside `mo-service`; direct `make -C cgo` does not
   produce a complete distributable GPU generation.
-- Use parallel `make` jobs. The cuVS/CUDA objects dominate a GPU build and a single-threaded `make` stalls the edit-build-test loop for minutes at a time.
+- Always pass `-j8`. The cuVS/CUDA objects dominate a GPU build and a single-threaded `make` stalls the edit-build-test loop for minutes at a time.
 
 The `gpu` tag gates index-plugin registration. CAGRA and IVF-PQ register only under `//go:build gpu` (`pkg/indexplugin/all/all_gpu.go`). On a CPU binary their plugins are absent from the registry, so `CREATE INDEX ... USING ivfpq|cagra` fails cleanly at plan-build with `unsupported index type: <algo>` before hidden table creation. Do not move those imports into `all.go`.
 
@@ -418,7 +418,7 @@ Two consequences for anyone running GPU tests:
    forbidden there for reasons that apply verbatim here, and `git checkout HEAD~1 -- <paths>`
    is worse: it rewrites the index AND the working tree, so an interrupted or mistyped
    invocation silently discards uncommitted work. A GPU build in the worktree needs its own
-   Pixi-activated `MO_CL_CUDA=1 make -j8 cgo`, since `cgo/libmo.so` is a build artifact and is not checked
+   `MO_CL_CUDA=1 make -j8 cgo`, since `cgo/libmo.so` is a build artifact and is not checked
    out with it.
 
    Once the failure is shown to predate your change, find out who owns it before touching it:
