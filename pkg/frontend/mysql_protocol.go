@@ -35,6 +35,7 @@ import (
 	"golang.org/x/exp/slices"
 
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
+	"github.com/matrixorigin/matrixone/pkg/common/mpool"
 	util2 "github.com/matrixorigin/matrixone/pkg/common/util"
 	"github.com/matrixorigin/matrixone/pkg/config"
 	"github.com/matrixorigin/matrixone/pkg/container/batch"
@@ -434,7 +435,10 @@ func (mp *MysqlProtocolImpl) Write(execCtx *ExecCtx, crs *perfcounter.CounterSet
 }
 
 func (mp *MysqlProtocolImpl) WriteHandshake() error {
-	hsV10pkt := mp.makeHandshakeV10Payload()
+	hsV10pkt, err := mp.makeHandshakeV10Payload()
+	if err != nil {
+		return err
+	}
 	return mp.writePackets(hsV10pkt)
 }
 
@@ -852,6 +856,7 @@ func (mp *MysqlProtocolImpl) SendPrepareResponse(ctx context.Context, stmt *Prep
 	paramTypes := dcPrepare.Prepare.ParamTypes
 	numParams := len(paramTypes)
 	columns := getPreparedResultColumns(stmt, sessionTxnHaveDDL(mp.GetSession()))
+	directIntegerLengths := directIntegerResultLengths(stmt.PrepareStmt, columns)
 	numColumns := len(columns)
 
 	var data []byte
@@ -899,6 +904,7 @@ func (mp *MysqlProtocolImpl) SendPrepareResponse(ctx context.Context, stmt *Prep
 			if err != nil {
 				return err
 			}
+			applyDirectIntegerResultMetadata(column, directIntegerLengths, i)
 			colDefPacket, err := mp.SendColumnDefinitionPacket(ctx, column, cmd)
 			if err != nil {
 				return err
@@ -924,7 +930,6 @@ func (mp *MysqlProtocolImpl) SendPrepareResponse(ctx context.Context, stmt *Prep
 }
 
 func (mp *MysqlProtocolImpl) ParseSendLongData(ctx context.Context, proc *process.Process, stmt *PrepareStmt, data []byte, pos int) error {
-	var err error
 	stmt.proc = proc
 	dcPrepare, ok := stmt.PreparePlan.GetDcl().Control.(*planPb.DataControl_Prepare)
 	if !ok {
@@ -941,37 +946,34 @@ func (mp *MysqlProtocolImpl) ParseSendLongData(ctx context.Context, proc *proces
 		return moerr.NewInternalErrorf(ctx, "get param index out of range. get %d, param length is %d", paramIdx, numParams)
 	}
 
-	if stmt.params == nil {
-		stmt.params = vector.NewVec(types.T_text.ToType())
-		for i := 0; i < numParams; i++ {
-			err = vector.AppendBytes(stmt.params, []byte{}, false, proc.GetMPool())
-			if err != nil {
-				return err
-			}
-		}
-	}
-
 	length := len(data) - pos
 	val, _, ok := mp.readCountOfBytes(data, pos, length)
 	if !ok {
 		return moerr.NewInvalidInput(ctx, "mysql protocol error, malformed packet")
 	}
-	if stmt.getFromSendLongData == nil {
-		stmt.getFromSendLongData = make(map[int]struct{})
-	}
-	if _, ok := stmt.getFromSendLongData[int(paramIdx)]; ok {
-		val = append(append([]byte(nil), stmt.params.GetBytesAt(int(paramIdx))...), val...)
-	}
-	if err = util.SetAnyToStringVector(proc, val, stmt.params, int(paramIdx)); err != nil {
+	allowed, err := mp.GetSession().GetSessionSysVar("max_allowed_packet")
+	if err != nil {
 		return err
 	}
-	stmt.getFromSendLongData[int(paramIdx)] = struct{}{}
-	return nil
+	limit, ok := allowed.(int64)
+	if !ok {
+		return moerr.NewInternalErrorf(ctx, "invalid max_allowed_packet value %T", allowed)
+	}
+	return stmt.appendLongData(ctx, proc, int(paramIdx), val, limit)
 }
 
 func (mp *MysqlProtocolImpl) ParseExecuteData(ctx context.Context, proc *process.Process, stmt *PrepareStmt, data []byte, pos int) error {
 	var err error
+	// The fixed part after the statement id contains the cursor flag and the
+	// four-byte iteration count. Check it before changing statement state; a
+	// zero-parameter EXECUTE has no later reads to catch a truncated count.
+	if pos < 0 || pos > len(data) || len(data)-pos < 5 {
+		return moerr.NewInvalidInput(ctx, "mysql protocol error, malformed packet")
+	}
 	stmt.proc = proc
+	if stmt.longDataErr != nil {
+		return stmt.longDataErr
+	}
 	dcPrepare, ok := stmt.PreparePlan.GetDcl().Control.(*planPb.DataControl_Prepare)
 	if !ok {
 		return moerr.NewInternalError(ctx, "can not get Prepare plan in prepareStmt")
@@ -1008,6 +1010,8 @@ func (mp *MysqlProtocolImpl) ParseExecuteData(ctx context.Context, proc *process
 	pos += 4
 
 	if numParams > 0 {
+		paramTypes := stmt.ParamTypes
+		newParamTypes := false
 		var nullBitmaps []byte
 		nullBitmapLen := (numParams + 7) >> 3
 		nullBitmaps, pos, ok = mp.readCountOfBytes(data, pos, nullBitmapLen)
@@ -1021,22 +1025,33 @@ func (mp *MysqlProtocolImpl) ParseExecuteData(ctx context.Context, proc *process
 		if !ok {
 			return moerr.NewInvalidInput(ctx, "mysql protocol error, malformed packet")
 		}
-		if newParamBoundFlag == 1 {
-
-			// Just the first StmtExecute packet contain parameters type,
-			// we need save it for further use.
-			stmt.ParamTypes, pos, ok = mp.readCountOfBytes(data, pos, numParams<<1)
-
+		if newParamBoundFlag != 0 {
+			// MySQL treats every nonzero flag as a new type vector. Decode into
+			// local state first so a malformed packet cannot discard the types
+			// saved by the previous successful EXECUTE.
+			paramTypes, pos, ok = mp.readCountOfBytes(data, pos, numParams<<1)
 			if !ok {
 				return moerr.NewInvalidInput(ctx, "mysql protocol error, malformed packet")
 			}
+			newParamTypes = true
 		}
 
 		// get paramters and set value to session variables
 		for i := 0; i < numParams; i++ {
-			// if params had received via COM_STMT_SEND_LONG_DATA, use them directly(we set the params when deal with COM_STMT_SEND_LONG_DATA).
+			// Materialize each streamed parameter only once. Long data takes
+			// precedence over the execute NULL bitmap, including an empty chunk.
 			// ref https://dev.mysql.com/doc/internals/en/com-stmt-send-long-data.html
 			if _, ok := stmt.getFromSendLongData[i]; ok {
+				value := stmt.longDataBuffers[i]
+				if len(value) > types.VarlenaInlineSize &&
+					int64(len(stmt.params.GetArea()))+int64(len(value)) > mpool.MaxAllocationSize() {
+					return moerr.NewInvalidInput(ctx, "prepared parameter vector area exceeds allocation limit")
+				}
+				if err = vector.SetBytesAt(stmt.params, i, value, proc.Mp()); err != nil {
+					return err
+				}
+				stmt.params.GetNulls().Unset(uint64(i))
+				stmt.releaseLongDataBuffer(i)
 				continue
 			}
 
@@ -1048,12 +1063,12 @@ func (mp *MysqlProtocolImpl) ParseExecuteData(ctx context.Context, proc *process
 				continue
 			}
 
-			if (i<<1)+1 >= len(stmt.ParamTypes) {
+			if (i<<1)+1 >= len(paramTypes) {
 				return moerr.NewInvalidInput(ctx, "mysql protocol error, malformed packet")
 
 			}
-			tp := stmt.ParamTypes[i<<1]
-			isUnsigned := (stmt.ParamTypes[(i<<1)+1] & 0x80) > 0
+			tp := paramTypes[i<<1]
+			isUnsigned := (paramTypes[(i<<1)+1] & 0x80) > 0
 
 			switch defines.MysqlType(tp) {
 			case defines.MYSQL_TYPE_NULL:
@@ -1236,6 +1251,9 @@ func (mp *MysqlProtocolImpl) ParseExecuteData(ctx context.Context, proc *process
 			if err != nil {
 				return err
 			}
+		}
+		if newParamTypes {
+			stmt.ParamTypes = bytes.Clone(paramTypes)
 		}
 	}
 
@@ -1822,7 +1840,18 @@ func (mp *MysqlProtocolImpl) Authenticate(ctx context.Context) error {
 
 // the server makes a handshake v10 packet
 // return handshake packet
-func (mp *MysqlProtocolImpl) makeHandshakeV10Payload() []byte {
+func (mp *MysqlProtocolImpl) makeHandshakeV10Payload() ([]byte, error) {
+	mp.m.Lock()
+	closed := mp.quit.Load()
+	salt := append([]byte(nil), mp.salt...)
+	mp.m.Unlock()
+	if closed {
+		return nil, moerr.NewInternalErrorNoCtx("connection closed before handshake")
+	}
+	if len(salt) != 20 {
+		return nil, moerr.NewInternalErrorNoCtxf("invalid handshake salt length: %d", len(salt))
+	}
+
 	var data = make([]byte, HeaderOffset+256)
 	var pos = HeaderOffset
 	//int<1> protocol version
@@ -1834,7 +1863,7 @@ func (mp *MysqlProtocolImpl) makeHandshakeV10Payload() []byte {
 	pos = mp.io.WriteUint32(data, pos, mp.ConnectionID())
 
 	//string[8] auth-plugin-data-part-1
-	pos = mp.writeCountOfBytes(data, pos, mp.GetSalt()[0:8])
+	pos = mp.writeCountOfBytes(data, pos, salt[:8])
 
 	//int<1> filler 0
 	pos = mp.io.WriteUint8(data, pos, 0)
@@ -1854,7 +1883,7 @@ func (mp *MysqlProtocolImpl) makeHandshakeV10Payload() []byte {
 	if (DefaultCapability & CLIENT_PLUGIN_AUTH) != 0 {
 		//int<1>              length of auth-plugin-data
 		//set 21 always
-		pos = mp.io.WriteUint8(data, pos, uint8(len(mp.GetSalt())+1))
+		pos = mp.io.WriteUint8(data, pos, uint8(len(salt)+1))
 	} else {
 		//int<1>              [00]
 		//set 0 always
@@ -1866,7 +1895,7 @@ func (mp *MysqlProtocolImpl) makeHandshakeV10Payload() []byte {
 
 	if (DefaultCapability & CLIENT_SECURE_CONNECTION) != 0 {
 		//string[$len]   auth-plugin-data-part-2 ($len=MAX(13, length of auth-plugin-data - 8))
-		pos = mp.writeCountOfBytes(data, pos, mp.GetSalt()[8:])
+		pos = mp.writeCountOfBytes(data, pos, salt[8:])
 		pos = mp.io.WriteUint8(data, pos, 0)
 	}
 
@@ -1875,7 +1904,7 @@ func (mp *MysqlProtocolImpl) makeHandshakeV10Payload() []byte {
 		pos = mp.writeStringNUL(data, pos, AuthNativePassword)
 	}
 
-	return data[:pos]
+	return data[:pos], nil
 }
 
 // the server analyses handshake response41 info from the client
@@ -2437,7 +2466,7 @@ func (mp *MysqlProtocolImpl) makeColumnDefinition41Payload(column *MysqlColumn, 
 	return data[:pos]
 }
 
-func (mp *MysqlProtocolImpl) MakeColumnDefData(ctx context.Context, columns []*planPb.ColDef) ([][]byte, error) {
+func (mp *MysqlProtocolImpl) MakeColumnDefData(ctx context.Context, columns []*planPb.ColDef, directIntegerLengths ...uint32) ([][]byte, error) {
 	numColumns := len(columns)
 	colDefData := make([][]byte, 0, numColumns)
 	for i := 0; i < numColumns; i++ {
@@ -2445,6 +2474,7 @@ func (mp *MysqlProtocolImpl) MakeColumnDefData(ctx context.Context, columns []*p
 		if err != nil {
 			return nil, err
 		}
+		applyDirectIntegerResultMetadata(column, directIntegerLengths, i)
 		colDefPacket := mp.makeColumnDefinition41Payload(column, int(COM_STMT_PREPARE))
 		colDefData = append(colDefData, colDefPacket)
 	}
@@ -4081,7 +4111,7 @@ func (mp *MysqlProtocolImpl) writePackets(payload []byte) error {
 }
 
 // MakeHandshakePayload exposes (*MysqlProtocolImpl).makeHandshakeV10Payload() function.
-func (mp *MysqlProtocolImpl) MakeHandshakePayload() []byte {
+func (mp *MysqlProtocolImpl) MakeHandshakePayload() ([]byte, error) {
 	return mp.makeHandshakeV10Payload()
 }
 
@@ -4128,6 +4158,10 @@ func (mp *MysqlProtocolImpl) receiveExtraInfo(rs *Conn) {
 			mp.ses.Error(mp.ctx, "failed to get extra info",
 				zap.Error(err))
 		}
+		return
+	}
+	if len(i.Salt) != 20 {
+		mp.ses.Error(mp.ctx, "invalid proxy salt length", zap.Int("length", len(i.Salt)))
 		return
 	}
 

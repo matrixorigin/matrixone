@@ -29,6 +29,11 @@ import (
 // must remain alive so recovery can determine any unknown commit outcome.
 var ErrTxnDrainTimeout = moerr.NewInternalErrorNoCtx("txn rpc drain timeout")
 
+// FJ_TxnServerDrainWithActiveHandler is a test-only boundary reached after the
+// transaction server has quiesced and begun draining a non-empty set of
+// accepted handlers. It is inert unless fault injection installs the point.
+const FJ_TxnServerDrainWithActiveHandler = "fj/txn/rpc/drain-with-active-handler"
+
 // Config config
 type Config = morpc.Config
 

@@ -87,8 +87,12 @@ func (intersect *Intersect) Call(proc *process.Process) (vm.CallResult, error) {
 // build hash table
 func (intersect *Intersect) buildHashTable(proc *process.Process, analyzer process.Analyzer, idx int) error {
 	ctr := &intersect.ctr
+	child, err := vm.GetChild(intersect, idx)
+	if err != nil {
+		return err
+	}
 	for {
-		input, err := vm.ChildrenCall(intersect.GetChildren(idx), proc, analyzer)
+		input, err := vm.ChildrenCall(child, proc, analyzer)
 		if err != nil {
 			return err
 		}
@@ -139,8 +143,12 @@ func (intersect *Intersect) buildHashTable(proc *process.Process, analyzer proce
 
 func (intersect *Intersect) probeHashTable(proc *process.Process, analyzer process.Analyzer, idx int, result *vm.CallResult) (bool, error) {
 	ctr := &intersect.ctr
+	child, err := vm.GetChild(intersect, idx)
+	if err != nil {
+		return false, err
+	}
 	for {
-		input, err := vm.ChildrenCall(intersect.GetChildren(idx), proc, analyzer)
+		input, err := vm.ChildrenCall(child, proc, analyzer)
 		if err != nil {
 			return false, err
 		}

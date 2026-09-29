@@ -568,6 +568,6 @@ func (ip *internalProtocol) WriteLocalInfileRequest(filename string) error {
 	return nil
 }
 
-func (ip *internalProtocol) MakeColumnDefData(ctx context.Context, columns []*planPb.ColDef) ([][]byte, error) {
+func (ip *internalProtocol) MakeColumnDefData(ctx context.Context, columns []*planPb.ColDef, directIntegerLengths ...uint32) ([][]byte, error) {
 	return nil, nil
 }

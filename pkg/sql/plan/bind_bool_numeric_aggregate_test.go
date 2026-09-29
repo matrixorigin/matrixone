@@ -15,6 +15,7 @@
 package plan
 
 import (
+	"context"
 	"testing"
 
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
@@ -151,6 +152,29 @@ func TestBoolNumericAggregateBindsAsTinyint(t *testing.T) {
 		_, err := buildOneQuery(t, boolSumAvgMockContext(true),
 			"select sum(n_nationkey <> 0) over () from nation", mode.prepare)
 		require.NoError(t, err, mode.name)
+	}
+}
+
+func TestBoolNumericAggregatePreparedMarkerKeepsAdapter(t *testing.T) {
+	mock := NewMockOptimizer(false)
+	mock.ctxt.SetSqlModeOverride("ONLY_FULL_GROUP_BY," + mysql.SQLModeEnableBoolSumAvg)
+	for _, aggregate := range []string{"sum", "avg"} {
+		t.Run(aggregate, func(t *testing.T) {
+			statement, err := runOneStmt(mock, t,
+				"prepare bool_aggregate from 'select "+aggregate+"(? like ''____'') from nation'")
+			require.NoError(t, err)
+			prepared := statement.GetDcl().GetPrepare().Plan
+			arg := firstAggregate(t, prepared).GetF().Args[0]
+			require.Equal(t, types.T_int8, types.T(arg.Typ.Id))
+			require.False(t, arg.GetPreparedNumeric().GetProvisionalResultCast(), "aggregate-owned BOOL adapter must survive EXECUTE")
+			snapshot := prepared.String()
+			filled, specialized, err := FillValuesOfParamsInPlanWithSpecialization(
+				context.Background(), prepared, []any{ParamValue{Value: "abcd"}})
+			require.NoError(t, err)
+			require.False(t, specialized, "this BOOL predicate needs no overload specialization")
+			require.Equal(t, snapshot, prepared.String(), "cached PREPARE template changed")
+			require.Equal(t, []types.T{types.T_int8}, aggregateArgTypes(t, filled))
+		})
 	}
 }
 

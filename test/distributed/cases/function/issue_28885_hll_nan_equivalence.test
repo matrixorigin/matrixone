@@ -1,6 +1,6 @@
--- #28885: SQL-equivalent floating-point values must share the
--- APPROX_COUNT_DISTINCT key, while persisted HLL_ADD_AGG keeps its v2 raw
--- value contract.
+-- #28885: SQL-equivalent floating-point values must share the key in both
+-- APPROX_COUNT_DISTINCT and newly constructed HLL_ADD_AGG states. Existing
+-- persisted v2 states retain their raw-value wire domain.
 drop table if exists issue_28885_hll_nan_equivalence;
 create table issue_28885_hll_nan_equivalence(v double);
 insert into issue_28885_hll_nan_equivalence values
@@ -12,7 +12,7 @@ insert into issue_28885_hll_nan_equivalence values
 
 select count(distinct v) as exact_count,
        approx_count_distinct(v) as approx_count,
-       hll_cardinality(hll_add_agg(v)) as legacy_hll_count
+       hll_cardinality(hll_add_agg(v)) as hll_count
 from issue_28885_hll_nan_equivalence;
 
 drop table issue_28885_hll_nan_equivalence;
@@ -28,7 +28,7 @@ insert into issue_28885_hll_nan_equivalence_float values
 
 select count(distinct v) as exact_count,
        approx_count_distinct(v) as approx_count,
-       hll_cardinality(hll_add_agg(v)) as legacy_hll_count
+       hll_cardinality(hll_add_agg(v)) as hll_count
 from issue_28885_hll_nan_equivalence_float;
 
 drop table issue_28885_hll_nan_equivalence_float;

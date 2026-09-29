@@ -292,3 +292,18 @@ FROM i18n_texts
 GROUP BY text_key;
 drop table i18n_texts;
 drop database test_json;
+
+# Prepared aggregate value parameters keep their execute-time JSON atom type.
+SET @agg_decimal = CAST('123.4500' AS DECIMAL(20,4));
+SET @agg_json = CAST('{"a":1}' AS JSON);
+SET @agg_text = 'plain';
+PREPARE typed_array FROM 'SELECT JSON_TYPE(JSON_EXTRACT(JSON_ARRAYAGG(?),''$[0]'')) AS atom_type';
+EXECUTE typed_array USING @agg_decimal;
+EXECUTE typed_array USING @agg_json;
+EXECUTE typed_array USING @agg_text;
+DEALLOCATE PREPARE typed_array;
+PREPARE typed_object FROM 'SELECT JSON_TYPE(JSON_EXTRACT(JSON_OBJECTAGG(''k'',?),''$.k'')) AS atom_type';
+EXECUTE typed_object USING @agg_decimal;
+EXECUTE typed_object USING @agg_json;
+EXECUTE typed_object USING @agg_text;
+DEALLOCATE PREPARE typed_object;

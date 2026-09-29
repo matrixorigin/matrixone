@@ -23,6 +23,7 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/common/docfilter"
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
 	"github.com/matrixorigin/matrixone/pkg/common/sqlquote"
+	"github.com/matrixorigin/matrixone/pkg/container/batch"
 	"github.com/matrixorigin/matrixone/pkg/container/types"
 	"github.com/matrixorigin/matrixone/pkg/fulltext2"
 	"github.com/matrixorigin/matrixone/pkg/pb/plan"
@@ -317,6 +318,131 @@ func (builder *QueryBuilder) applyIndicesForAggUsingFullTextIndex(nodeID int32, 
 			aggNode.GroupBy[i] = replaceScoreFnInExprBy(aggNode.GroupBy[i], rewriter)
 		}
 	}
+
+	return nodeID, nil
+}
+
+// resolveScanNodeUnderWindow finds the base TABLE_SCAN carrying the WHERE-clause MATCH beneath a
+// WINDOW node. OVER(PARTITION BY ...) makes the binder insert a Node_PARTITION between the window
+// and the scan (appendWindowNode), and a single-input PROJECT may also sit in between; both are
+// passthroughs to descend. A WINDOW child that is itself a WINDOW is NOT descended: stacked
+// windows are rewritten innermost-first by post-order recursion.
+func (builder *QueryBuilder) resolveScanNodeUnderWindow(node *plan.Node) *plan.Node {
+	for node != nil {
+		switch {
+		case node.NodeType == plan.Node_TABLE_SCAN:
+			if node.TableDef != nil && node.TableDef.Indexes != nil {
+				return node
+			}
+			return nil
+		case (node.NodeType == plan.Node_PARTITION || node.NodeType == plan.Node_PROJECT) && len(node.Children) == 1:
+			node = builder.qry.Nodes[node.Children[0]]
+		default:
+			return nil
+		}
+	}
+	return nil
+}
+
+// rewriteWindowMatchesFromServed replaces a fulltext_match inside a WINDOW's own spec (a
+// window-function argument or its OVER clause in WinSpecList), inside the WINDOW's post-evaluation
+// FilterList (a predicate that survives predicate-pushdown onto the window because it also
+// references a window column, e.g. `rn = 1 OR score > 0` -- Node_WINDOW runs compileRestrict on it
+// AFTER compileWin), and inside the PARTITION node the binder places under it for
+// OVER(PARTITION BY ...), with the score column of an index scan already served
+// (builder.ftJoinServed). servedFullTextScoreSameTable is binding-tag-aware, so a MATCH no served
+// scan answers is left intact and still raises 20105.
+func (builder *QueryBuilder) rewriteWindowMatchesFromServed(windowNode *plan.Node) {
+	if windowNode == nil || len(builder.ftJoinServed) == 0 {
+		return
+	}
+	rewriter := func(fn *plan.Function) *plan.Expr {
+		return builder.servedFullTextScoreSameTable(fn, builder.ftJoinServed)
+	}
+	for i := range windowNode.WinSpecList {
+		if exprCallsFunc(windowNode.WinSpecList[i], "fulltext_match") {
+			windowNode.WinSpecList[i] = replaceScoreFnInExprBy(windowNode.WinSpecList[i], rewriter)
+		}
+	}
+	builder.rewriteServedMatchesInFilterList(windowNode)
+	if len(windowNode.Children) == 1 {
+		if child := builder.qry.Nodes[windowNode.Children[0]]; child != nil && child.NodeType == plan.Node_PARTITION {
+			for _, ob := range child.OrderBy {
+				if ob != nil && exprCallsFunc(ob.Expr, "fulltext_match") {
+					ob.Expr = replaceScoreFnInExprBy(ob.Expr, rewriter)
+				}
+			}
+		}
+	}
+}
+
+// rewriteServedMatchesInFilterList rewrites every served fulltext_match in a node's FilterList to the
+// score column of the index scan that answers it (builder.ftJoinServed), binding-tag-aware. It backs
+// two post-window predicates: the WINDOW's own FilterList (a predicate kept on the window because it
+// also references a window column, e.g. `rn = 1 OR score > 0`) and the independent Node_FILTER that
+// predicate pushdown may leave ABOVE a WINDOW -- a `score > 0` it cannot move below the window because
+// it neither references a window column nor pushes onto the partition keys. The node keeps its place,
+// so evaluation stays post-window. A MATCH no served scan answers is left intact and still raises
+// 20105 (#28974 P2).
+func (builder *QueryBuilder) rewriteServedMatchesInFilterList(node *plan.Node) {
+	if node == nil || len(builder.ftJoinServed) == 0 {
+		return
+	}
+	rewriter := func(fn *plan.Function) *plan.Expr {
+		return builder.servedFullTextScoreSameTable(fn, builder.ftJoinServed)
+	}
+	for i := range node.FilterList {
+		if exprCallsFunc(node.FilterList[i], "fulltext_match") {
+			node.FilterList[i] = replaceScoreFnInExprBy(node.FilterList[i], rewriter)
+		}
+	}
+}
+
+// applyIndicesForWindowUsingFullTextIndex rewrites a WINDOW -> [PARTITION ->] SCAN(MATCH) shape
+// (#28974). The scan carries the WHERE-clause fulltext_match; build the index-scan join for those
+// MATCHes and reparent the scan's immediate parent onto it, mirroring the aggregate path.
+func (builder *QueryBuilder) applyIndicesForWindowUsingFullTextIndex(nodeID int32, windowNode *plan.Node, scanNode *plan.Node,
+	filterids []int32, filterIndexDefs []*plan.IndexDef,
+	wrappedExprs []*plan.Expr, wrappedIndexDefs []*plan.IndexDef,
+	colRefCnt map[[2]int32]int, idxColMap map[[2]int32]*plan.Expr) (int32, error) {
+	var err error
+
+	projids := make([]int32, 0)
+	projIndexDefs := make([]*plan.IndexDef, 0)
+	eqmap := make(map[int32]int32)
+
+	idxID, _, _, served, err := builder.applyJoinFullTextIndices(nodeID, nil, scanNode,
+		scanNode.Limit, scanNode.Offset, filterids, filterIndexDefs, projids, projIndexDefs,
+		wrappedExprs, wrappedIndexDefs, eqmap, colRefCnt, idxColMap)
+	if err != nil {
+		return -1, err
+	}
+	joinNode := builder.qry.Nodes[idxID]
+	joinNode.Limit = DeepCopyExpr(scanNode.Limit)
+	joinNode.Offset = DeepCopyExpr(scanNode.Offset)
+	scanNode.Limit = nil
+	scanNode.Offset = nil
+
+	// Reparent the scan's immediate parent onto the index-scan join. With OVER(PARTITION BY ...) a
+	// Node_PARTITION (and any single-input PROJECT) sits between the window and the scan, so the
+	// join must attach below it -- hardcoding windowNode.Children[0] would drop the partition.
+	for parent := windowNode; parent != nil; {
+		childID := parent.Children[0]
+		if childID == scanNode.NodeId {
+			parent.Children[0] = idxID
+			break
+		}
+		parent = builder.qry.Nodes[childID]
+	}
+
+	// Publish the served scores so the PROJECT/SORT above the window (resolveProjectMatchesOverJoin)
+	// and any stacked outer window resolve a MATCH they carry to the score column instead of leaving
+	// a raw fulltext_match that reaches execution as 20105.
+	builder.ftJoinServed = append(builder.ftJoinServed, served...)
+
+	// This window's own spec, and the partition node between it and the scan, may reference the
+	// MATCHes just served.
+	builder.rewriteWindowMatchesFromServed(windowNode)
 
 	return nodeID, nil
 }
@@ -1428,34 +1554,76 @@ func (builder *QueryBuilder) scanHasMatchedFullTextFilter(node *plan.Node) bool 
 	return len(wrapped) > 0
 }
 
+// antiMarkPreservesChild reports whether childIdx is the PRESERVED (driving) side of an ANTI or
+// MARK join -- the side whose rows pass through carrying their own columns (`A` in `A ANTI/MARK JOIN
+// B`), as opposed to the probe side `B` that only supplies the existence/mark check. A fulltext
+// MATCH on the preserved side is the outer query's WHERE filter on the driving relation and is safe
+// to drive; a MATCH on the probe side is part of the existence condition and must not be driven
+// (see applyFullTextFiltersForJoinChildren). swapJoinChildren physically swaps the two children when
+// IsRightJoin is set (keeping the JoinType), moving the preserved side from child 0 to child 1, so
+// the index is derived from IsRightJoin rather than hard-coded. MARK is never right-swapped today
+// (determineBuildAndProbeSide leaves its IsRightJoin false); the IsRightJoin branch keeps this
+// correct if that ever changes.
+func antiMarkPreservesChild(node *plan.Node, childIdx int) bool {
+	if node == nil || node.NodeType != plan.Node_JOIN {
+		return false
+	}
+	switch node.JoinType {
+	case plan.Node_ANTI, plan.Node_MARK:
+		if node.IsRightJoin {
+			return childIdx == 1
+		}
+		return childIdx == 0
+	}
+	return false
+}
+
 func (builder *QueryBuilder) applyFullTextFiltersForJoinChildren(nodeID int32, joinNode *plan.Node,
 	colRefCnt map[[2]int32]int, idxColMap map[[2]int32]*plan.Expr) (bool, error) {
 	// The per-child rewrite replaces a scan's `WHERE match` with an INNER join to the
 	// fulltext-index result on the pk/doc_id. Fulltext search yields one row per matching
 	// doc, so that join is 1:1 and ROW-EQUIVALENT to the filter it replaces.
 	//
-	// A child is eligible iff rewriting it cannot change the enclosing join's
-	// row-preservation:
+	// A fulltext_match on a scan's FilterList is a pure filter on that input's own columns, so
+	// re-expressing it as the 1-row-per-pk semi-join is ROW-EQUIVALENT to the WHERE that placed it
+	// there -- on EITHER side of a join, whether the input is null-extending or row-preserved:
 	//   - INNER/SEMI: neither input is row-preserving, so both are eligible.
-	//   - outer joins (LEFT/RIGHT/SINGLE/OUTER): only the NULL-EXTENDING (non-preserved)
-	//     child. That is where a scalar subquery's match lands -- correlated
-	//     `select (select count(*) ... where match(...))` decorrelates to AGG over
-	//     `outer LEFT/SINGLE JOIN docs(match)` with docs as the non-preserved child (#27962).
+	//   - LEFT/RIGHT/SINGLE: both children are eligible.
+	//       * the NULL-EXTENDING child carries a decorrelated subquery's own filter -- correlated
+	//         `select (select count(*) ... where match(...))` decorrelates to AGG over
+	//         `outer LEFT/SINGLE JOIN docs(match)` with docs as the non-preserved child (#27962);
+	//       * the ROW-PRESERVED child carries the outer query's WHERE MATCH, which filters the
+	//         preserved input BEFORE the outer join exactly as the WHERE did. `A LEFT JOIN B WHERE
+	//         match(A.x)` becomes `(A INNER JOIN A_ft) LEFT JOIN B`: A's matchers, null-extending B
+	//         where B is absent -- the row-preserving matcher with no partner is kept, not dropped.
+	//         This shape was unsupported and failed with 20105 (#20687).
+	//   - ANTI/MARK: only the PRESERVED (driving) child is eligible, never the probe child. A
+	//     `docs WHERE match(...) [AND] NOT EXISTS/EXISTS(subquery on q)` flattens to
+	//     `docs ANTI/MARK JOIN q` with the outer WHERE MATCH on the preserved docs side. That MATCH
+	//     is a pure filter on the driving relation, independent of the existence check on q:
+	//     `(docs WHERE match) ANTI/MARK JOIN q` == `(docs ANTI/MARK JOIN q) filtered by match`, so
+	//     driving it (INNER join to the 1-row-per-pk fulltext result) is row-equivalent (#29079).
+	//     The PROBE child stays ineligible: filtering it changes null-aware ANTI (`NOT IN` with a
+	//     NULL probe) and three-valued MARK results, which is not a pure filter.
+	//   - DEDUP keeps the conservative null-extending-only gate, and ASOF/ASOF_LEFT too (filtering
+	//     the nearest-match input would change which row is "nearest"). FULL OUTER does not exist in
+	//     MO (its filters never reach a child scan), so it is not listed.
 	//
-	// Critically, applyIndices runs AFTER determineBuildAndProbeSide + swapJoinChildren, which
-	// can physically swap the children and convert LEFT->RIGHT (IsRightJoin) based on input-size
-	// statistics. So the non-preserved child is NOT a fixed index -- it is whatever
-	// nodeNullExtendsChild reports for the POST-SWAP shape (RIGHT -> child 0; right-swapped
-	// SINGLE -> child 0). Hard-coding child 1 made the fix stats-dependent: a swapped plan left
-	// the match unrewritten and failed with 20105 (#27952). The preserved child is never
-	// null-extending, so it stays untouched (TestFullTextJoinRewriteSkipsOuterJoins).
+	// Because both children of these outer joins are eligible, the rewrite is robust to
+	// determineBuildAndProbeSide + swapJoinChildren, which run BEFORE applyIndices and can physically
+	// swap the children and convert LEFT->RIGHT (IsRightJoin) by input-size stats: whichever physical
+	// index the match lands on is served (the earlier child-1 hard-coding was stats-dependent, #27952).
+	// The loop only rewrites a child that actually carries a fulltext filter (ok=false otherwise).
 	if joinNode == nil {
 		return false, nil
 	}
 	eligible := func(i int) bool {
 		switch joinNode.JoinType {
-		case plan.Node_INNER, plan.Node_SEMI:
+		case plan.Node_INNER, plan.Node_SEMI,
+			plan.Node_LEFT, plan.Node_RIGHT, plan.Node_SINGLE:
 			return true
+		case plan.Node_ANTI, plan.Node_MARK:
+			return antiMarkPreservesChild(joinNode, i)
 		default:
 			return nodeNullExtendsChild(joinNode, i)
 		}
@@ -1887,6 +2055,53 @@ func collectNestedFullTextMatches(expr *plan.Expr, out []*plan.Expr) []*plan.Exp
 // comparison against a constant tells us anything about index membership; a wrapper that is
 // not order-preserving (negation, subtraction from a constant) must not qualify, because it
 // can make the predicate TRUE for a document the index never returns.
+// unwrapMonotoneScalar strips order-preserving scalar wrappers (round, cast, floor, ceil) and
+// returns the inner expression. Used to see through the cast a comparison inserts around an
+// aggregate result before matching the aggregate itself.
+// castPreservesZero reports whether cast(x AS t) maps a zero relevance to a deterministic numeric
+// zero and preserves ordering. It holds ONLY for casts to a plain numeric type. A cast to YEAR maps
+// 0 to 2000 (the two-digit-year rule), and a cast to CHAR/VARCHAR yields the string "0" that a
+// later cast can turn non-zero -- CAST(CAST(0 AS CHAR) AS YEAR) = 2000; temporal, bool and bit
+// casts are likewise not zero-preserving. The drop-safety and HAVING-membership analyses below must
+// NOT see through such a cast: a dropped non-matching row (relevance 0) whose wrapped value is not
+// zero would change a SUM/MAX or wrongly satisfy a `> 0` membership predicate.
+func castPreservesZero(t plan.Type) bool {
+	switch types.T(t.Id) {
+	case types.T_int8, types.T_int16, types.T_int32, types.T_int64,
+		types.T_uint8, types.T_uint16, types.T_uint32, types.T_uint64,
+		types.T_float32, types.T_float64,
+		types.T_decimal64, types.T_decimal128:
+		return true
+	default:
+		return false
+	}
+}
+
+func unwrapMonotoneScalar(expr *plan.Expr) *plan.Expr {
+	for expr != nil {
+		fn := expr.GetF()
+		if fn == nil || fn.Func == nil {
+			return expr
+		}
+		switch fn.Func.ObjName {
+		case "round", "cast", "floor", "ceil":
+			if len(fn.Args) == 0 {
+				return expr
+			}
+			// A cast to a type that does not preserve zero (YEAR, CHAR, ...) is not
+			// order-preserving through zero; stop here so the caller cannot mistake the
+			// wrapped aggregate for a bare one and infer membership it does not have.
+			if fn.Func.ObjName == "cast" && !castPreservesZero(expr.Typ) {
+				return expr
+			}
+			expr = fn.Args[0]
+		default:
+			return expr
+		}
+	}
+	return expr
+}
+
 func monotoneWrappedFullTextMatch(expr *plan.Expr) *plan.Expr {
 	if expr == nil {
 		return nil
@@ -1902,9 +2117,66 @@ func monotoneWrappedFullTextMatch(expr *plan.Expr) *plan.Expr {
 		if len(fn.Args) == 0 {
 			return nil
 		}
+		// A cast to a non-zero-preserving type (YEAR, CHAR, ...) is not order-preserving
+		// through zero, so a `wrapped(match) > const` predicate can be TRUE for a document the
+		// index never returns; do not discover the MATCH through it.
+		if fn.Func.ObjName == "cast" && !castPreservesZero(expr.Typ) {
+			return nil
+		}
 		return monotoneWrappedFullTextMatch(fn.Args[0])
 	}
 	return nil
+}
+
+// wrappedMatchDropSafe finds the fulltext_match inside expr AND proves the wrapper is invariant to
+// dropping a non-matching row. Driving the index INNER-joins the matchers before aggregation, so a
+// non-matching row (relevance 0) is removed; its wrapped value must therefore be a deterministic,
+// non-NULL zero -- the identity for SUM and <= any positive matched relevance for MAX.
+//
+// This is DISTINCT from monotoneWrappedFullTextMatch, which only discovers the nested MATCH: that
+// discovery follows argument 0 and ignores a wrapper's other arguments and NULL behaviour. round
+// takes a per-row `digits` (round(score, digits) returns NULL when digits is NULL). If digits is a
+// column or nullable, a dropped non-matching row can map to a non-NULL 0 while the kept rows map to
+// NULL -- e.g. a group with (body='alpha', digits=NULL) kept and (body='beta', digits=0) dropped
+// turns SUM([NULL,0])=0 into SUM([NULL])=NULL, silently losing the group. So every argument other
+// than the wrapped value must be a constant, non-NULL literal. floor/ceil take only the value and
+// map 0 -> non-NULL 0. A cast is drop-safe ONLY when its target type preserves zero (a plain
+// numeric type): CAST(0 AS YEAR)=2000 and CAST(CAST(0 AS CHAR) AS YEAR)=2000 map a dropped
+// non-matching row to a non-zero value, changing the aggregate, so castPreservesZero gates it.
+// Returns (match, true) only when the whole chain is drop-safe.
+func wrappedMatchDropSafe(expr *plan.Expr) (*plan.Expr, bool) {
+	for expr != nil {
+		fn := expr.GetF()
+		if fn == nil || fn.Func == nil {
+			return nil, false
+		}
+		switch fn.Func.ObjName {
+		case "fulltext_match":
+			return expr, true
+		case "floor", "ceil", "cast":
+			if len(fn.Args) == 0 {
+				return nil, false
+			}
+			if fn.Func.ObjName == "cast" && !castPreservesZero(expr.Typ) {
+				return nil, false
+			}
+			expr = fn.Args[0]
+		case "round":
+			if len(fn.Args) == 0 {
+				return nil, false
+			}
+			for _, extra := range fn.Args[1:] {
+				lit := extra.GetLit()
+				if lit == nil || lit.Isnull {
+					return nil, false
+				}
+			}
+			expr = fn.Args[0]
+		default:
+			return nil, false
+		}
+	}
+	return nil, false
 }
 
 // nonNegativeConstValue returns the numeric value of a non-negative literal.
@@ -2400,6 +2672,261 @@ func (builder *QueryBuilder) getWrappedFullTextMatches(projNode, scanNode *plan.
 		idx := builder.findMatchFullTextIndex(fn, scanNode)
 		if idx == nil {
 			continue // no index can serve it: leave it to throw, as it does today
+		}
+		seen = append(seen, fn)
+		exprs = append(exprs, cand)
+		idxdefs = append(idxdefs, idx)
+	}
+	return exprs, idxdefs
+}
+
+// fullTextDriverFuncs returns the fulltext_match functions that already drive a stream -- the bare
+// scan-filter matches (filterids) and the wrapped ones -- so a later collector can dedup an
+// aggregate copy of one against them instead of building a second scan.
+func fullTextDriverFuncs(scanNode *plan.Node, filterids []int32, wrappedExprs []*plan.Expr) []*plan.Function {
+	funcs := make([]*plan.Function, 0, len(filterids)+len(wrappedExprs))
+	if scanNode != nil {
+		for _, id := range filterids {
+			if id >= 0 && int(id) < len(scanNode.FilterList) {
+				if fn := scanNode.FilterList[id].GetF(); fn != nil {
+					funcs = append(funcs, fn)
+				}
+			}
+		}
+	}
+	for _, e := range wrappedExprs {
+		if fn := e.GetF(); fn != nil {
+			funcs = append(funcs, fn)
+		}
+	}
+	return funcs
+}
+
+// exprContainsFullTextMatch reports whether a fulltext_match appears anywhere in a scalar expr.
+func exprContainsFullTextMatch(expr *plan.Expr) bool {
+	if expr == nil {
+		return false
+	}
+	fn := expr.GetF()
+	if fn == nil || fn.Func == nil {
+		return false
+	}
+	if fn.Func.ObjName == "fulltext_match" {
+		return true
+	}
+	for _, a := range fn.Args {
+		if exprContainsFullTextMatch(a) {
+			return true
+		}
+	}
+	return false
+}
+
+// aggOutputInvariantToMatcherFilter reports whether driving the index from an aggregate HAVING is
+// result-preserving: since driving drops each group's non-matching rows before aggregation, EVERY
+// aggregate must be a MAX/SUM of one of the driver matches (its value is unchanged by an absent/0
+// relevance) and no grouping key may itself be a match. A COUNT(*), AVG, or aggregate over another
+// column or a different match would be computed over matchers only and silently wrong for a
+// multi-row group, so those queries are left at 20105.
+func (builder *QueryBuilder) aggOutputInvariantToMatcherFilter(aggNode *plan.Node, drivers []*plan.Expr) bool {
+	if aggNode == nil || len(aggNode.AggList) == 0 {
+		return false
+	}
+	for _, agg := range aggNode.AggList {
+		fn := agg.GetF()
+		if fn == nil || fn.Func == nil || !safeAggForFullTextDriver(fn.Func.ObjName) || len(fn.Args) != 1 {
+			return false
+		}
+		m, safe := wrappedMatchDropSafe(fn.Args[0])
+		if m == nil || !safe {
+			return false
+		}
+		mfn := m.GetF()
+		ok := false
+		for _, d := range drivers {
+			if df := d.GetF(); df != nil && builder.equalsFullTextMatchFunc(mfn, df) {
+				ok = true
+				break
+			}
+		}
+		if !ok {
+			return false
+		}
+	}
+	for _, g := range aggNode.GroupBy {
+		if exprContainsFullTextMatch(g) {
+			return false
+		}
+	}
+	return true
+}
+
+// safeAggForFullTextDriver reports whether an aggregate over a fulltext_match can drive the index
+// from a membership-implying HAVING. Driving INNER-joins the scan to the matching rows BEFORE
+// aggregation, so it is result-preserving only when the aggregate's value over the whole group
+// equals its value over the matching rows alone: MAX and SUM qualify (a non-matching row contributes
+// an absent/0 relevance, changing neither the max nor the sum). MIN/AVG/COUNT do NOT -- MIN(match)>0
+// means EVERY row in the group matches, and AVG/COUNT change value once the non-matchers are dropped
+// -- so those are left to raise 20105 rather than being silently filtered to matchers.
+func safeAggForFullTextDriver(name string) bool {
+	return name == "max" || name == "sum"
+}
+
+// getFullTextMatchFromAggHaving collects the fulltext_match inside a MAX/SUM aggregate that a
+// membership-implying HAVING predicate (`agg(match) > c`, `agg(match) >= c` with c making relevance 0
+// fail) proves must be present, so a grouped query whose ONLY match is the aggregate itself can drive
+// the index scan (#29065). Without this the aggregate MATCH is only a consumer -- with no scan-level
+// or projected driver `served` is empty and the raw fulltext_match reaches execution as 20105.
+//
+// The HAVING references the aggregate either as a colref to AggList output or inline; both resolve to
+// AggList[k] = safeAgg(monotone(match)). Returned matches are fed as drivers alongside the wrapped
+// ones; applyIndicesForAggUsingFullTextIndex rewrites the AggList arg to the served score and the
+// HAVING colref then resolves to it. `existing` are the matches that already drive a stream (scan
+// filters + wrapped), so an aggregate copy of one reuses it instead of building a second scan.
+func (builder *QueryBuilder) getFullTextMatchFromAggHaving(havingPreds []*plan.Expr, aggNode, scanNode *plan.Node,
+	existing []*plan.Function) ([]*plan.Expr, []*plan.IndexDef) {
+	if aggNode == nil || scanNode == nil || len(aggNode.BindingTags) < 2 {
+		return nil, nil
+	}
+	aggTag := aggNode.BindingTags[1]
+
+	// The match inside a safe aggregate, whether the HAVING holds the aggregate inline or a colref
+	// to the AggList output it produces. The comparison casts the aggregate result to compare
+	// against the constant, so strip the order-preserving scalar wrappers (cast/round/floor/ceil)
+	// that sit between the comparison and the aggregate first.
+	matchForAggExpr := func(e *plan.Expr) *plan.Expr {
+		e = unwrapMonotoneScalar(e)
+		aggfn := e.GetF()
+		if aggfn == nil {
+			if col := e.GetCol(); col != nil && col.RelPos == aggTag &&
+				col.ColPos >= 0 && int(col.ColPos) < len(aggNode.AggList) {
+				aggfn = unwrapMonotoneScalar(aggNode.AggList[col.ColPos]).GetF()
+			}
+		}
+		if aggfn == nil || aggfn.Func == nil || !safeAggForFullTextDriver(aggfn.Func.ObjName) || len(aggfn.Args) != 1 {
+			return nil
+		}
+		return monotoneWrappedFullTextMatch(aggfn.Args[0])
+	}
+
+	candidates := make([]*plan.Expr, 0)
+	var walk func(expr *plan.Expr)
+	walk = func(expr *plan.Expr) {
+		fn := expr.GetF()
+		if fn == nil || fn.Func == nil {
+			return
+		}
+		switch fn.Func.ObjName {
+		case "and":
+			for _, arg := range fn.Args {
+				walk(arg)
+			}
+		case ">", ">=", "<", "<=":
+			if len(fn.Args) != 2 {
+				return
+			}
+			op := fn.Func.ObjName
+			aggSide, constSide := fn.Args[0], fn.Args[1]
+			if matchForAggExpr(aggSide) == nil {
+				// reversed form `0 < agg(match)` is `agg(match) > 0`
+				aggSide, constSide = fn.Args[1], fn.Args[0]
+				switch op {
+				case "<":
+					op = ">"
+				case "<=":
+					op = ">="
+				default:
+					return
+				}
+			}
+			m := matchForAggExpr(aggSide)
+			if m == nil {
+				return
+			}
+			// The threshold may be a wrapped constant expression, e.g. FLOOR(1e-1). Reading the
+			// wrapper INPUT (unwrapMonotoneScalar) is wrong -- it is order-preserving but not
+			// value-preserving: FLOOR(1e-1) unwraps to 0.1, yet its effective value is FLOOR(0.1)=0.
+			// A `>=` with an effective threshold of 0 admits zero-score groups, so treating it as a
+			// positive threshold would insert the aggregate-preceding INNER JOIN and drop those
+			// groups (#29065). Evaluate the full constant instead. A value-preserving cast still
+			// folds to its literal; a non-constant (e.g. prepared `?`) does not fold and is left to
+			// the runtime score guard.
+			folded, ferr := ConstantFold(batch.EmptyForConstFoldBatch, DeepCopyExpr(constSide),
+				builder.compCtx.GetProcess(), false, false)
+			if ferr != nil {
+				return
+			}
+			c, ok := nonNegativeConstValue(folded)
+			if !ok {
+				return
+			}
+			// score > c (c >= 0) or score >= c (c > 0): a relevance of 0 fails both, so the
+			// predicate implies membership. `< / <=` and `>= 0` do not and are left to 20105.
+			if op == ">" || (op == ">=" && c > 0) {
+				candidates = append(candidates, m)
+			}
+		}
+	}
+	for _, pred := range havingPreds {
+		walk(pred)
+	}
+	if len(candidates) == 0 {
+		return nil, nil
+	}
+
+	// Multiple DISTINCT aggregate MATCHes are NOT result-preserving. applyJoinFullTextIndices
+	// INNER-joins each driver's index stream by doc_id, so driving would require a SINGLE document
+	// to match every pattern -- whereas `HAVING MAX(match(alpha))>0 AND MAX(match(beta))>0` only
+	// requires each pattern to occur on SOME (possibly different) row of the group. A group with
+	// one row matching alpha and another matching beta satisfies the HAVING but has an empty
+	// doc-id intersection, so the group would be silently dropped. Drive only when every aggregate
+	// candidate is the SAME MATCH; otherwise leave the query at 20105 (#29065).
+	var first *plan.Function
+	for _, cand := range candidates {
+		fn := cand.GetF()
+		if fn == nil {
+			continue
+		}
+		if first == nil {
+			first = fn
+			continue
+		}
+		if !builder.equalsFullTextMatchFunc(first, fn) {
+			return nil, nil
+		}
+	}
+
+	// Driving INNER-joins the scan to the matchers BEFORE aggregation, dropping every non-matching
+	// row from each group. That is result-preserving ONLY if no output depends on those rows: every
+	// aggregate must be a MAX/SUM of a driver match (whose value ignores an absent/0 relevance), and
+	// no grouping key may be a match. Any other aggregate -- COUNT(*), AVG, or an aggregate over
+	// another column or a different match -- would be silently computed over matchers only, so bail
+	// and leave the query at 20105 rather than return wrong rows for a multi-row group (#29065).
+	if !builder.aggOutputInvariantToMatcherFilter(aggNode, candidates) {
+		return nil, nil
+	}
+
+	seen := append([]*plan.Function(nil), existing...)
+	exprs := make([]*plan.Expr, 0, len(candidates))
+	idxdefs := make([]*plan.IndexDef, 0, len(candidates))
+	for _, cand := range candidates {
+		fn := cand.GetF()
+		if fn == nil || len(fn.Args) < 2 {
+			continue
+		}
+		dup := false
+		for _, s := range seen {
+			if builder.equalsFullTextMatchFunc(fn, s) {
+				dup = true
+				break
+			}
+		}
+		if dup {
+			continue
+		}
+		idx := builder.findMatchFullTextIndex(fn, scanNode)
+		if idx == nil {
+			continue
 		}
 		seen = append(seen, fn)
 		exprs = append(exprs, cand)

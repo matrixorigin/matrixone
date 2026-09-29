@@ -492,7 +492,7 @@ TEST(GpuIvfPqRecall, Int8VsUint8SignedDataHalf) {
     ASSERT_TRUE(mism == 0);     // uint8 codes must equal int8 codes + 128
 }
 
-TEST(GpuIvfPqTest, ParallelAddChunkWithOffset) {
+TEST(GpuIvfPqTest, ParallelAddChunkWithIds) {
     const uint32_t dimension = 16;
     const uint64_t count_per_chunk = 500;
     const uint64_t total_count = count_per_chunk * 2;
@@ -506,8 +506,8 @@ TEST(GpuIvfPqTest, ParallelAddChunkWithOffset) {
             chunk1[i * dimension + j] = (float)rand() / RAND_MAX;
             chunk2[i * dimension + j] = (float)rand() / RAND_MAX;
         }
-        ids1[i] = (int64_t)i;
-        ids2[i] = (int64_t)(i + count_per_chunk);
+        ids1[i] = (int64_t)(1000 + count_per_chunk - 1 - i);
+        ids2[i] = (int64_t)(5000 + count_per_chunk - 1 - i);
     }
 
     std::vector<int> devices = {0};
@@ -516,8 +516,8 @@ TEST(GpuIvfPqTest, ParallelAddChunkWithOffset) {
     gpu_ivf_pq_t<float, float> index(total_count, dimension, DistanceType_L2Expanded, bp, devices, 1, DistributionMode_SINGLE_GPU);
     index.start();
 
-    std::thread t1([&]() { index.add_chunk(chunk1.data(), count_per_chunk, 0, ids1.data()); });
-    std::thread t2([&]() { index.add_chunk(chunk2.data(), count_per_chunk, count_per_chunk, ids2.data()); });
+    std::thread t1([&]() { index.add_chunk(chunk1.data(), count_per_chunk, -1, ids1.data()); });
+    std::thread t2([&]() { index.add_chunk(chunk2.data(), count_per_chunk, -1, ids2.data()); });
     t1.join();
     t2.join();
 
@@ -527,7 +527,7 @@ TEST(GpuIvfPqTest, ParallelAddChunkWithOffset) {
     ivf_pq_search_params_t sp = ivf_pq_search_params_default();
     auto result = index.search(queries.data(), 1, dimension, 5, sp);
 
-    ASSERT_EQ(result.neighbors[0], (int64_t)count_per_chunk);
+    ASSERT_EQ(result.neighbors[0], ids2[0]);
 
     index.destroy();
 }

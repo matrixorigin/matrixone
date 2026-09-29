@@ -65,6 +65,38 @@ func TestExplicitCastProvenanceUsesLegacyOverload(t *testing.T) {
 	require.True(t, DeepCopyExpr(roundTrip).GetF().GetSyntaxExplicitCast())
 }
 
+func TestTypedDateExplicitCastRetainsProtocolAndNullabilityAfterSerialization(t *testing.T) {
+	for _, sourceType := range []types.T{types.T_date, types.T_datetime} {
+		t.Run(sourceType.String(), func(t *testing.T) {
+			opt := NewMockOptimizer(false)
+			ctx := opt.CurrentContext().(*MockCompilerContext)
+			source := ctx.tables["lineitem"].Cols[ctx.tables["lineitem"].Name2ColIndex["l_shipdate"]]
+			source.Typ.Id = int32(sourceType)
+			source.Typ.NotNullable = true
+			p, err := runOneStmt(opt, t, "select cast(l_shipdate as date) from lineitem")
+			require.NoError(t, err)
+			expr := findPlanFunctionExpr(p, "cast")
+			require.NotNil(t, expr)
+			_, overload := function.DecodeOverloadID(expr.GetF().Func.Obj)
+			require.Equal(t, int32(1), overload)
+			require.True(t, expr.GetF().GetSyntaxExplicitCast())
+			require.False(t, expr.Typ.NotNullable)
+			require.False(t, expr.GetF().Args[1].Typ.NotNullable)
+			wire, err := expr.Marshal()
+			require.NoError(t, err)
+			decoded := &Expr{}
+			require.NoError(t, decoded.Unmarshal(wire))
+			decoded.GetF().SyntaxExplicitCast = false // old serialized CAST1 has no syntax provenance
+			for _, candidate := range []*Expr{decoded, DeepCopyExpr(decoded)} {
+				floor, err := RequiredPersistedExpressionProtocolVersion(candidate)
+				require.NoError(t, err)
+				require.Equal(t, defines.MORPCVersion98, floor)
+				require.False(t, candidate.Typ.NotNullable)
+			}
+		})
+	}
+}
+
 func TestHexExplicitRealCastUsesTruncatingOverload(t *testing.T) {
 	ctx := context.Background()
 	for _, tc := range []struct {
@@ -93,7 +125,13 @@ func TestHexExplicitRealCastUsesTruncatingOverload(t *testing.T) {
 			hexExpr, err := BindFuncExprImplByPlanExpr(ctx, "hex", []*Expr{explicit})
 			require.NoError(t, err)
 			_, overloadID := function.DecodeOverloadID(hexExpr.GetF().GetFunc().GetObj())
-			require.Equal(t, tc.overloadID, overloadID)
+			require.Equal(t, int32(2), overloadID)
+			conversion := hexExpr.GetF().Args[0]
+			_, conversionID := function.DecodeOverloadID(conversion.GetF().Func.Obj)
+			require.Equal(t, function.TruncatedIntegerArgumentCastOverload, conversionID)
+			require.Same(t, explicit, conversion.GetF().Args[0])
+			_, err = function.GetFunctionById(ctx, function.EncodeOverloadID(function.HEX, tc.overloadID))
+			require.NoError(t, err, "legacy explicit REAL identities remain executable")
 		})
 	}
 
@@ -101,7 +139,9 @@ func TestHexExplicitRealCastUsesTruncatingOverload(t *testing.T) {
 		ctx, "hex", []*Expr{MakePlan2Float64ConstExprWithType(15.5)})
 	require.NoError(t, err)
 	_, overloadID := function.DecodeOverloadID(ordinary.GetF().GetFunc().GetObj())
-	require.Equal(t, int32(function.HexFloat64Overload), overloadID)
+	require.Equal(t, int32(2), overloadID)
+	_, conversionID := function.DecodeOverloadID(ordinary.GetF().Args[0].GetF().Func.Obj)
+	require.Equal(t, function.IntegerArgumentCastOverload, conversionID)
 }
 
 func TestCharComparisonUsesDedicatedCastOverload(t *testing.T) {

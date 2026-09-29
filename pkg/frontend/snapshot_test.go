@@ -612,6 +612,43 @@ func TestLockViewMetadataLifecycleUsesSystemContextWithoutMutatingCaller(t *test
 	require.Equal(t, callerAccountID, afterAccountID)
 }
 
+func TestSharedLifecycleLocksAcquireLocalGateBeforeSQL(t *testing.T) {
+	callerCtx := defines.AttachAccountId(context.Background(), 42)
+	var acquired [][]accountLifecycleGate
+	originalAcquire := acquireAccountLifecycleSharedGates
+	acquireAccountLifecycleSharedGates = func(
+		_ context.Context,
+		_ *Session,
+		_ BackgroundExec,
+		gates ...accountLifecycleGate,
+	) error {
+		acquired = append(acquired, append([]accountLifecycleGate(nil), gates...))
+		return nil
+	}
+	t.Cleanup(func() { acquireAccountLifecycleSharedGates = originalAcquire })
+
+	snapshotExec := &backgroundExecTest{}
+	snapshotExec.init()
+	require.NoError(t, lockSnapshotLifecycleShared(callerCtx, nil, snapshotExec))
+	require.Equal(t, []string{catalog.SnapshotLifecycleSharedGateSQL}, snapshotExec.executedSQLs)
+	require.Equal(t, []bool{false}, snapshotExec.lockWriterFair)
+
+	viewExec := &backgroundExecTest{}
+	viewExec.init()
+	require.NoError(t, lockViewMetadataLifecycleShared(callerCtx, nil, viewExec))
+	require.Equal(t,
+		[]string{catalog.SnapshotLifecycleSharedGateSQL, catalog.ViewMetadataLifecycleSharedGateSQL},
+		viewExec.executedSQLs)
+	require.Equal(t, []bool{false, false}, viewExec.lockWriterFair)
+	require.Equal(t, [][]accountLifecycleGate{
+		{accountLifecycleSnapshotGate},
+		{accountLifecycleSnapshotGate, accountLifecycleViewGate},
+	}, acquired)
+
+	require.False(t, defines.IsLockWriterFair(callerCtx),
+		"the lifecycle helper must not mutate the caller context")
+}
+
 type failViewMutationBackgroundExec struct {
 	*backgroundExecTest
 	err error
@@ -2902,6 +2939,46 @@ func Test_getAccountFromPublication(t *testing.T) {
 	})
 }
 
+func TestLockedPublicationRejectsRetiredSubscriber(t *testing.T) {
+	const (
+		liveSQL = "select account_id from mo_catalog.mo_account where account_name = 'subscriber'"
+		pubSQL  = "SELECT account_id, account_name, pub_name, database_name, database_id, table_list, account_list \n" +
+			"\t\t\tFROM mo_catalog.mo_pubs \n" +
+			"\t\t\tWHERE account_name = 'publisher' AND pub_name = 'pub' for update"
+	)
+	for _, test := range []struct {
+		name       string
+		liveID     uint64
+		liveExists bool
+		wantError  bool
+	}{
+		{name: "same generation", liveID: 27, liveExists: true},
+		{name: "recreated name", liveID: 28, liveExists: true, wantError: true},
+		{name: "dropped name", wantError: true},
+	} {
+		t.Run(test.name, func(t *testing.T) {
+			bh := &backgroundExecTest{}
+			bh.init()
+			if test.liveExists {
+				bh.sql2result[liveSQL] = newMrsForCheckTenant([][]interface{}{{test.liveID, "subscriber", "open", 0}})
+			} else {
+				bh.sql2result[liveSQL] = newMrsForCheckTenant(nil)
+			}
+			bh.sql2result[pubSQL] = newMrsForPublicationInfo(100, "publisher", "pub", "db", 1, "*", "all")
+			publisherID, _, err := lockAccountFromPublication(t.Context(), bh, "publisher", "pub", "subscriber", 27)
+			if test.wantError {
+				require.ErrorContains(t, err, "session is no longer active")
+				require.Equal(t, []string{liveSQL}, bh.executedSQLs)
+			} else {
+				require.NoError(t, err)
+				require.Equal(t, uint64(100), publisherID)
+				require.Equal(t, []string{liveSQL, pubSQL}, bh.executedSQLs)
+			}
+			require.Equal(t, uint32(sysAccountID), bh.executionAccountIDs[0])
+		})
+	}
+}
+
 // newMrsForMoIndexes creates a MysqlResultSet for mo_indexes query
 // columns: table_id, name, algo_table_type, index_table_name
 func newMrsForMoIndexes(records [][]interface{}) *MysqlResultSet {
@@ -3238,6 +3315,47 @@ func TestRestoreSnapshotUsesLifecycleOwnerTxn(t *testing.T) {
 	_, err := doRestoreSnapshot(ctx, ses, &tree.RestoreSnapShot{})
 	require.ErrorIs(t, err, beginErr)
 	require.True(t, forcedPessimisticRC)
+}
+
+func TestDropSnapshotUsesLifecycleOwnerTxn(t *testing.T) {
+	ctrl := gomock.NewController(t)
+	ctx := context.Background()
+	ses := newTestSession(t, ctrl)
+	defer ses.Close()
+	ses.SetTenantInfo(&TenantInfo{
+		Tenant:      sysAccountName,
+		DefaultRole: moAdminRoleName,
+	})
+	bh := &backgroundExecTest{}
+	bh.init()
+	beginErr := errors.New("begin failed")
+	bh.sql2err["begin;"] = beginErr
+	oldNewBackgroundExec := NewBackgroundExec
+	defer func() { NewBackgroundExec = oldNewBackgroundExec }()
+	forcedPessimisticRC := false
+	NewBackgroundExec = func(_ context.Context, _ FeSession, opts ...*BackgroundExecOption) BackgroundExec {
+		for _, opt := range opts {
+			forcedPessimisticRC = forcedPessimisticRC || opt != nil && opt.forcePessimisticRC
+		}
+		return bh
+	}
+
+	err := doDropSnapshot(ctx, ses, &tree.DropSnapShot{})
+	require.ErrorIs(t, err, beginErr)
+	require.True(t, forcedPessimisticRC)
+}
+
+func TestValidateAccountLifecycleTxnRejectsOptimistic(t *testing.T) {
+	ctrl := gomock.NewController(t)
+	txnOp := mock_frontend.NewMockTxnOperator(ctrl)
+	txnOp.EXPECT().Txn().Return(txn.TxnMeta{Mode: txn.TxnMode_Optimistic})
+
+	err := validateAccountLifecycleTxn(context.Background(), txnOp)
+	require.ErrorContains(t, err, "require a pessimistic transaction")
+
+	txnOp.EXPECT().Txn().Return(txn.TxnMeta{Mode: txn.TxnMode_Pessimistic})
+	require.NoError(t, validateAccountLifecycleTxn(context.Background(), txnOp))
+	require.Error(t, validateAccountLifecycleTxn(context.Background(), nil))
 }
 
 func TestDataBranchAuditFkDepsEscapesQuotedNames(t *testing.T) {

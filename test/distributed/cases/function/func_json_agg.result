@@ -356,3 +356,28 @@ welcome_message  ¦  {"en": "Welcome to our application", "es": "Bienvenido a nu
 login_button  ¦  {"en": "Login", "es": "Iniciar sesión", "zh": "登录"}
 drop table i18n_texts;
 drop database test_json;
+SET @agg_decimal = CAST('123.4500' AS DECIMAL(20,4));
+SET @agg_json = CAST('{"a":1}' AS JSON);
+SET @agg_text = 'plain';
+PREPARE typed_array FROM 'SELECT JSON_TYPE(JSON_EXTRACT(JSON_ARRAYAGG(?),''$[0]'')) AS atom_type';
+EXECUTE typed_array USING @agg_decimal;
+➤ atom_type[12,65535,0]  𝄀
+DECIMAL
+EXECUTE typed_array USING @agg_json;
+➤ atom_type[12,65535,0]  𝄀
+OBJECT
+EXECUTE typed_array USING @agg_text;
+➤ atom_type[12,65535,0]  𝄀
+STRING
+DEALLOCATE PREPARE typed_array;
+PREPARE typed_object FROM 'SELECT JSON_TYPE(JSON_EXTRACT(JSON_OBJECTAGG(''k'',?),''$.k'')) AS atom_type';
+EXECUTE typed_object USING @agg_decimal;
+➤ atom_type[12,65535,0]  𝄀
+DECIMAL
+EXECUTE typed_object USING @agg_json;
+➤ atom_type[12,65535,0]  𝄀
+OBJECT
+EXECUTE typed_object USING @agg_text;
+➤ atom_type[12,65535,0]  𝄀
+STRING
+DEALLOCATE PREPARE typed_object;

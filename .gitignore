@@ -16,6 +16,7 @@
 *.swp
 *.fatbin
 *.py
+!cgo/test_gpu_toolchain.py
 !pkg/iceberg/metadata/testdata/generate_golden_vectors.py
 !optools/iceberg_external_runner.py
 !optools/summarize_ut_setup.py
@@ -23,12 +24,16 @@
 !suites/scenarios/14_issue_regression/issue_25599_proxy_disconnect_cancel.py
 !suites/scenarios/14_issue_regression/issue_25599_proxy_disconnect_cancel_test.py
 !optools/mongodb_changed_files.py
+!optools/gpu/sync_sirius_mo.py
+!optools/gpu/test_sync_sirius_mo.py
+!optools/images/gpu/test_stage_runtime_libs.py
 !test/mongodb/compare_results.py
 !test/mongodb/test_changes.py
 !test/mongodb/test_compare_results.py
 *.sh
 !etc/launch-minio-local/tier-b/seed-nyc-tlc-iceberg.sh
 !optools/jstfu_bvt.sh
+!optools/images/gpu/stage-runtime-libs.sh
 bin/
 y.go
 *.output

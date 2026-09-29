@@ -126,7 +126,11 @@ func (s *service) ClearStatementFilters() error {
 }
 
 func (s *service) RefreshStatementFilters() error {
-	ctx, cancel := context.WithTimeoutCause(context.Background(), 30*time.Second, moerr.CauseRefreshStatementFilters)
+	return s.refreshStatementFilters(context.Background())
+}
+
+func (s *service) refreshStatementFilters(ctx context.Context) error {
+	ctx, cancel := context.WithTimeoutCause(ctx, 30*time.Second, moerr.CauseRefreshStatementFilters)
 	defer cancel()
 
 	var filters []StatementFilter

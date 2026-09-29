@@ -20,6 +20,7 @@ import (
 	"testing"
 
 	"github.com/matrixorigin/matrixone/pkg/common/runtime"
+	"github.com/matrixorigin/matrixone/pkg/container/types"
 	"github.com/matrixorigin/matrixone/pkg/defines"
 	planpb "github.com/matrixorigin/matrixone/pkg/pb/plan"
 	"github.com/matrixorigin/matrixone/pkg/sql/internal/materialized"
@@ -98,6 +99,71 @@ func TestRecursiveUnionRejectsMixedModes(t *testing.T) {
 		)
 		select * from r`)
 	require.ErrorContains(t, err, "mixing UNION ALL and UNION DISTINCT")
+}
+
+func TestRecursiveCteAggregateQueryBlockScope(t *testing.T) {
+	for _, test := range []struct {
+		name      string
+		sql       string
+		wantError string
+	}{
+		{
+			name: "independent scalar aggregate in predicate",
+			sql: `with recursive r(n) as (
+				select 1
+				union all
+				select n + 1 from r
+				where n < (select max(a) from cte_test.t1)
+			) select * from r`,
+		},
+		{
+			name: "independent scalar aggregate in projection",
+			sql: `with recursive r(n, total) as (
+				select 1, 0
+				union all
+				select n + 1, (select count(*) from cte_test.t1)
+				from r where n < 3
+			) select * from r`,
+		},
+		{
+			name: "correlated scalar aggregate in projection",
+			sql: `with recursive r(n, total) as (
+				select 1, 0
+				union all
+				select n + 1, (select count(*) from cte_test.t1 where a = r.n)
+				from r where n < 3
+			) select * from r`,
+		},
+		{
+			name: "nested scalar subquery in aggregate input",
+			sql: `with recursive r(n, total) as (
+				select 1, 0
+				union all
+				select n + 1,
+					   (select max(a + (select count(*) from cte_test.t1))
+						from cte_test.t1)
+				from r where n < 2
+			) select * from r`,
+		},
+		{
+			name: "aggregate directly in recursive member remains rejected",
+			sql: `with recursive r(n) as (
+				select 1
+				union all
+				select max(n) from r where n < 3
+			) select * from r`,
+			wantError: "not support aggregate function recursive cte",
+		},
+	} {
+		t.Run(test.name, func(t *testing.T) {
+			_, err := runOneStmt(NewMockOptimizer(false), t, test.sql)
+			if test.wantError == "" {
+				require.NoError(t, err)
+				return
+			}
+			require.ErrorContains(t, err, test.wantError)
+		})
+	}
 }
 
 func TestRecursiveCteConsumerAliases(t *testing.T) {
@@ -302,6 +368,31 @@ func TestRecursiveCteStringAnchorUsesAssignmentCast(t *testing.T) {
 			}
 		})
 	}
+}
+
+func TestRecursiveCteDecimalAnchorKeepsCheckedCast(t *testing.T) {
+	logicPlan, err := runOneStmt(NewMockOptimizer(false), t, `
+		with recursive r(n) as (
+			select cast(999.99 as decimal(5, 2))
+			union all
+			select n + 0.01 from r where n < 1000
+		)
+		select n from r`)
+	require.NoError(t, err)
+
+	var found bool
+	for _, node := range logicPlan.GetQuery().Nodes {
+		for _, expr := range node.ProjectList {
+			fn := expr.GetF()
+			if fn == nil || fn.Func == nil || fn.Func.ObjName != "cast" {
+				continue
+			}
+			if expr.Typ.Id == int32(types.T_decimal64) && expr.Typ.Width == 5 && expr.Typ.Scale == 2 {
+				found = true
+			}
+		}
+	}
+	require.True(t, found, "recursive member must retain the checked cast to its decimal anchor type")
 }
 
 func recursivePlanFunctionNames(logicPlan *planpb.Plan) map[string]struct{} {

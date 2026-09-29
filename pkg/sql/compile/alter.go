@@ -276,9 +276,24 @@ func (c *Compile) alterTableHasLatestHistoricalBranchSource(
 }
 
 func (c *Compile) lockDataBranchLineageOwnerLifecycle() error {
+	txnOp := c.proc.GetTxnOperator()
+	if txnOp == nil || !txnOp.Txn().IsPessimistic() {
+		return moerr.NewInternalError(c.proc.Ctx,
+			"data branch lineage lifecycle writer requires a pessimistic transaction")
+	}
 	return databranchutils.LockLineageOwnerLifecycle(func(sql string) error {
 		return c.runSqlWithAccountId(sql, int32(catalog.System_Account))
 	})
+}
+
+// lockDataBranchLineageOwnerLifecyclePessimistic takes the lifecycle row lock
+// before acquiring table locks. The later write barrier remains after any RC
+// snapshot advancement so lineage publication uses the refreshed snapshot.
+func (c *Compile) lockDataBranchLineageOwnerLifecyclePessimistic() error {
+	return c.runSqlWithAccountId(
+		databranchutils.LineageOwnerLifecyclePessimisticLockSQL(),
+		int32(catalog.System_Account),
+	)
 }
 
 func (c *Compile) prepareAlterDataBranchLineage(
@@ -785,6 +800,15 @@ func isAlterAffectedPluginIndex(indexDef *plan.IndexDef, affected []string) bool
 	return false
 }
 
+func isAlterRebuiltPluginIndex(
+	indexDef *plan.IndexDef,
+	affected []string,
+	newPluginIndexes map[string]bool,
+) bool {
+	return indexDef != nil &&
+		(newPluginIndexes[indexDef.IndexName] || isAlterAffectedPluginIndex(indexDef, affected))
+}
+
 func isAlterAffectedColumnName(affected []string, name string) bool {
 	if slices.Contains(affected, name) {
 		return true
@@ -796,7 +820,7 @@ func isAlterAffectedColumnName(affected []string, name string) bool {
 func alterCopyStatementOption(alterOpt *plan.AlterCopyOpt) executor.StatementOption {
 	opt := executor.StatementOption{}
 	if alterOpt != nil &&
-		(alterOpt.SkipPkDedup || len(alterOpt.SkipUniqueIdxDedup) > 0) {
+		(alterOpt.SkipPkDedup || len(alterOpt.SkipUniqueIdxDedup) > 0 || len(alterOpt.NewPluginIndexes) > 0) {
 		opt = opt.WithAlterCopyOpt(alterOpt)
 	}
 	return opt
@@ -1007,6 +1031,12 @@ func cloneAlterCopyOpt(opt *plan.AlterCopyOpt) *plan.AlterCopyOpt {
 			clone.SkipIndexesCopy[k] = v
 		}
 	}
+	if opt.NewPluginIndexes != nil {
+		clone.NewPluginIndexes = make(map[string]bool, len(opt.NewPluginIndexes))
+		for k, v := range opt.NewPluginIndexes {
+			clone.NewPluginIndexes[k] = v
+		}
+	}
 	return &clone
 }
 
@@ -1149,6 +1179,13 @@ func (s *Scope) alterTableCopy(c *Compile, cleanup *alterAutoIncrementResetClean
 	}()
 	if lineageTxnOp.Txn().IsPessimistic() {
 		var retryErr error
+		if !isTemp {
+			// TRUNCATE, DROP TABLE, and DROP ACCOUNT enter this lifecycle
+			// before locking table metadata. Use the same order for COPY ALTER.
+			if err = c.lockDataBranchLineageOwnerLifecyclePessimistic(); err != nil {
+				return err
+			}
+		}
 		// 0. lock origin database metadata in catalog
 		if err = lockMoDatabase(c, dbName, lock.LockMode_Shared); err != nil {
 			return err
@@ -1320,7 +1357,16 @@ func (s *Scope) alterTableCopy(c *Compile, cleanup *alterAutoIncrementResetClean
 	// those relationships are reconciled after the source relation is replaced.
 	// Get logicalId from tableDef and pass it when creating the temporary table.
 	createTmpOpts := alterCopyCreateOptions(qry)
-	err = c.runSqlWithOptions(qry.CreateTmpTableSql, createTmpOpts)
+	err = func() error {
+		originalCtx := c.proc.Ctx
+		baseCtx := originalCtx
+		if baseCtx == nil {
+			baseCtx = c.proc.GetTopContext()
+		}
+		c.proc.Ctx = plan2.WithPersistedDDLReplay(baseCtx, qry.TableDef, qry.CopyTableDef)
+		defer func() { c.proc.Ctx = originalCtx }()
+		return c.runSqlWithOptions(qry.CreateTmpTableSql, createTmpOpts)
+	}()
 	if err != nil {
 		c.proc.Error(c.proc.Ctx, "Create copy table for alter table",
 			zap.String("databaseName", dbName),
@@ -1529,16 +1575,16 @@ func (s *Scope) alterTableCopy(c *Compile, cleanup *alterAutoIncrementResetClean
 		var idxcronCctx *pluginCompileCtx
 		for _, indexDef := range newTableDef.Indexes {
 
-			// DO NOT check SkipIndexesCopy here.  SkipIndexesCopy only valids for the unique/master/regular index.
-			// Fulltext/HNSW/Ivfflat indexes are always "unaffected" in skipIndexesCopy
-			// check affectedCols to see it is affected or not.  If affected is true, it means the secondary index
-			// are cloned in cloneUnaffectedIndexes().  Otherwise, build the index again.
+			// Do not use SkipIndexesCopy to choose the plugin path here. It is
+			// computed from source indexes for regular/unique clone decisions.
+			// Existing plugin indexes rebuild when their indexed columns changed;
+			// newly added plugin indexes rebuild by explicit logical identity.
 
 			if !indexDef.Unique && indexplugin.IsPluginAlgo(indexDef.IndexAlgo) {
 				// vector (ivf/hnsw/cagra/ivfpq) or fulltext index
 
-				if !isAlterAffectedPluginIndex(indexDef, qry.AffectedCols) {
-					// column not affected means index already cloned in cloneUnaffectedIndexes()
+				if !isAlterRebuiltPluginIndex(indexDef, qry.AffectedCols, qry.Options.NewPluginIndexes) {
+					// An unchanged source index was cloned by cloneUnaffectedIndexes.
 
 					if unaffectedIndexProcessed[indexDef.IndexName] {
 						// unaffectedIndex already processed.

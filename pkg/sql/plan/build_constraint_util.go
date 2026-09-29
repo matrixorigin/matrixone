@@ -460,6 +460,9 @@ func getUpdateTableInfo(ctx CompilerContext, stmt *tree.Update) (*dmlTableInfo, 
 		}
 		idx := tblInfo.alias[alias]
 		tblDef := tblInfo.tableDefs[idx]
+		if err := checkCatalogDMLTarget(ctx.GetContext(), tblInfo.objRef[idx], true); err != nil {
+			return nil, err
+		}
 		newTblInfo.objRef = append(newTblInfo.objRef, tblInfo.objRef[idx])
 		newTblInfo.tableDefs = append(newTblInfo.tableDefs, tblDef)
 		newTblInfo.isClusterTable = append(newTblInfo.isClusterTable, tblInfo.isClusterTable[idx])
@@ -569,6 +572,11 @@ func setTableExprToDmlTableInfo(ctx CompilerContext, tbl tree.TableExpr, tblInfo
 	}
 	if tableDef == nil {
 		return moerr.NewNoSuchTable(ctx.GetContext(), dbName, tblName)
+	}
+	if tblInfo.typ != "update" {
+		if err := checkCatalogDMLTarget(ctx.GetContext(), obj, false); err != nil {
+			return err
+		}
 	}
 	if err := validateTableIndexDefinitions(tableDef); err != nil {
 		return err
@@ -1182,28 +1190,32 @@ func initInsertStmt(builder *QueryBuilder, bindCtx *BindContext, stmt *tree.Inse
 	return existAutoPkCol, insertWithoutUniqueKeyMap, ifInsertFromUniqueColMap, nil
 }
 
-func deleteToSelect(builder *QueryBuilder, bindCtx *BindContext, node *tree.Delete, haveConstraint bool, tblInfo *dmlTableInfo) (int32, error) {
+func deleteToSelect(builder *QueryBuilder, bindCtx *BindContext, node *tree.Delete, haveConstraint bool, tblInfo *dmlTableInfo) (int32, []map[string]int32, error) {
 	var selectList []tree.SelectExpr
 	fromTables := &tree.From{}
+	colName2Idx := make([]map[string]int32, len(tblInfo.tableDefs))
 
 	getResolveExpr := func(alias string) {
 		var ret *tree.UnresolvedName
+		defIdx := tblInfo.alias[alias]
+		colName2Idx[defIdx] = make(map[string]int32)
 		if haveConstraint {
-			defIdx := tblInfo.alias[alias]
 			for _, col := range tblInfo.tableDefs[defIdx].Cols {
+				colName2Idx[defIdx][col.Name] = int32(len(selectList))
 				ret = tree.NewUnresolvedName(tree.NewCStr(alias, bindCtx.lower), tree.NewCStr(col.Name, 1))
 				selectList = append(selectList, tree.SelectExpr{
 					Expr: ret,
 				})
 			}
 		} else {
-			defIdx := tblInfo.alias[alias]
+			colName2Idx[defIdx][catalog.Row_ID] = int32(len(selectList))
 			ret = tree.NewUnresolvedName(tree.NewCStr(alias, bindCtx.lower), tree.NewCStr(catalog.Row_ID, 1))
 			selectList = append(selectList, tree.SelectExpr{
 				Expr: ret,
 			})
 			pkName := getTablePriKeyName(tblInfo.tableDefs[defIdx].Pkey)
 			if pkName != "" {
+				colName2Idx[defIdx][pkName] = int32(len(selectList))
 				ret = tree.NewUnresolvedName(tree.NewCStr(alias, bindCtx.lower), tree.NewCStr(pkName, 1))
 				selectList = append(selectList, tree.SelectExpr{
 					Expr: ret,
@@ -1248,7 +1260,8 @@ func deleteToSelect(builder *QueryBuilder, bindCtx *BindContext, node *tree.Dele
 	// sql := ftCtx.String()
 	// fmt.Print(sql)
 
-	return builder.bindSelect(astSelect, bindCtx, false)
+	lastNodeID, err := builder.bindSelect(astSelect, bindCtx, false)
+	return lastNodeID, colName2Idx, err
 }
 
 func checkNotNull(ctx context.Context, expr *Expr, tableDef *TableDef, col *ColDef) error {

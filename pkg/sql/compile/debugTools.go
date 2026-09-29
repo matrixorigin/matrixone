@@ -60,6 +60,7 @@ var debugInstructionNames = map[vm.OpType]string{
 	vm.External:                "external",
 	vm.MongoScan:               "mongodb scan",
 	vm.Minus:                   "minus",
+	vm.MinusAll:                "minus all",
 	vm.Intersect:               "intersect",
 	vm.IntersectAll:            "intersect all",
 	vm.UnionAll:                "union all",

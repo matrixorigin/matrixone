@@ -73,6 +73,7 @@ func resolvesUdfInCallerTxn(ctx context.Context) bool {
 type TxnCompilerContext struct {
 	dbName               string
 	buildAlterView       bool
+	viewBinding          bool
 	dbOfView, nameOfView string
 	sub                  *plan.SubscriptionMeta
 	snapshot             *plan2.Snapshot
@@ -83,6 +84,42 @@ type TxnCompilerContext struct {
 	// cached backExec for subscription meta queries, reused within the same transaction
 	cachedBackExec BackgroundExec
 	mu             sync.Mutex
+}
+
+// NewViewDescriptionCompilerContext returns an isolated mutable binder context
+// while borrowing the same session, process and transaction.
+func (tcc *TxnCompilerContext) NewViewDescriptionCompilerContext(
+	ctx context.Context,
+) (plan2.CompilerContext, func(), error) {
+	tcc.mu.Lock()
+	if tcc.execCtx == nil {
+		tcc.mu.Unlock()
+		return nil, nil, moerr.NewInternalError(ctx, "session compiler context is unavailable")
+	}
+	execCopy := *tcc.execCtx
+	execCopy.reqCtx = ctx
+	if execCopy.proc != nil {
+		execCopy.proc = execCopy.proc.NewViewBindingProcess(ctx)
+	}
+	child := InitTxnCompilerContext(tcc.dbName)
+	child.buildAlterView, child.dbOfView, child.nameOfView = tcc.buildAlterView, tcc.dbOfView, tcc.nameOfView
+	child.viewBinding = true
+	child.snapshot = plan2.DeepCopySnapshot(tcc.snapshot)
+	if tcc.sub != nil {
+		subCopy := *tcc.sub
+		child.sub = &subCopy
+	}
+	tcc.mu.Unlock()
+	child.SetExecCtx(&execCopy)
+	if execCopy.proc != nil {
+		execCopy.proc.GetSessionInfo().CompilerContext = child
+	}
+	return child, func() {
+		child.Close()
+		if execCopy.proc != nil {
+			execCopy.proc.Free()
+		}
+	}, nil
 }
 
 func (tcc *TxnCompilerContext) Close() {
@@ -345,6 +382,10 @@ func (tcc *TxnCompilerContext) GetContext() context.Context {
 
 func (tcc *TxnCompilerContext) SetContext(ctx context.Context) {
 	tcc.execCtx.reqCtx = ctx
+	if tcc.viewBinding && tcc.execCtx.proc != nil {
+		tcc.execCtx.proc.ReplaceTopCtx(ctx)
+		tcc.execCtx.proc.Ctx = ctx
+	}
 }
 
 func (tcc *TxnCompilerContext) DatabaseExists(name string, snapshot *plan2.Snapshot) bool {
@@ -623,6 +664,10 @@ func (tcc *TxnCompilerContext) ResolveById(tableId uint64, snapshot *plan2.Snaps
 
 func (tcc *TxnCompilerContext) ResolveSubscriptionTableById(tableId uint64, subMeta *plan.SubscriptionMeta) (*plan2.ObjectRef, *plan2.TableDef, error) {
 	txn := tcc.GetTxnHandler().GetTxn()
+	snapshot := tcc.GetSnapshot()
+	if plan2.IsSnapshotValid(snapshot) && snapshot.TS.Less(txn.Txn().SnapshotTS) {
+		txn = txn.CloneSnapshotOp(*snapshot.TS)
+	}
 
 	pubContext := tcc.execCtx.reqCtx
 	if subMeta != nil {
@@ -643,7 +688,7 @@ func (tcc *TxnCompilerContext) ResolveSubscriptionTableById(tableId uint64, subM
 		Obj:        returnTableID,
 	}
 	tableDef := plan2.CloneTableDefForPlan(table.GetTableDef(pubContext), true)
-	if err := tcc.recoverLegacyTinyText(pubContext, dbName, tableDef, subMeta, nil); err != nil {
+	if err := tcc.recoverLegacyTinyText(pubContext, dbName, tableDef, subMeta, snapshot); err != nil {
 		return nil, nil, err
 	}
 	return obj, tableDef, nil
@@ -783,7 +828,15 @@ func (tcc *TxnCompilerContext) ResolveIndexTableByRef(
 	return obj, tableDef, nil
 }
 
-func (tcc *TxnCompilerContext) ResolveUdf(name string, args []*plan.Expr) (udf *function.Udf, err error) {
+func (tcc *TxnCompilerContext) ResolveUdf(name string, args []*plan.Expr) (*function.Udf, error) {
+	return tcc.resolveUdfInDatabase(name, args, tcc.DefaultDatabase())
+}
+
+func (tcc *TxnCompilerContext) ResolveViewUdf(name string, args []*plan.Expr, database string) (*function.Udf, error) {
+	return tcc.resolveUdfInDatabase(name, args, database)
+}
+
+func (tcc *TxnCompilerContext) resolveUdfInDatabase(name string, args []*plan.Expr, database string) (udf *function.Udf, err error) {
 	var matchNum int
 	var argstr string
 	var argTypeStr string
@@ -830,7 +883,14 @@ func (tcc *TxnCompilerContext) ResolveUdf(name string, args []*plan.Expr) (udf *
 		}
 	}
 
-	queryCtx, sql := udfCatalogLookup(ctx, tcc.GetSnapshot(), name, tcc.DefaultDatabase())
+	snapshot := tcc.GetSnapshot()
+	if sub := tcc.GetQueryingSubscription(); sub != nil && snapshot != nil {
+		// The subscriber owns the snapshot name; publisher UDFs live in the
+		// publisher catalog at that historical timestamp.
+		snapshot = plan2.DeepCopySnapshot(snapshot)
+		snapshot.Tenant = &plan.SnapshotTenant{TenantID: uint32(sub.AccountId)}
+	}
+	queryCtx, sql := udfCatalogLookup(ctx, snapshot, name, database)
 	bh.ClearExecResultSet()
 	err = bh.Exec(queryCtx, sql)
 	if err != nil {
@@ -1384,6 +1444,9 @@ func (tcc *TxnCompilerContext) GetQueryResultMeta(uuid string) ([]*plan.ColDef, 
 }
 
 func (tcc *TxnCompilerContext) GetSubscriptionMeta(dbName string, snapshot *plan2.Snapshot) (*plan.SubscriptionMeta, error) {
+	if sub := tcc.GetQueryingSubscription(); sub != nil && strings.EqualFold(dbName, sub.DbName) {
+		return sub, nil
+	}
 	start := time.Now()
 	defer func() {
 		v2.GetSubMetaDurationHistogram.Observe(time.Since(start).Seconds())

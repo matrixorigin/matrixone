@@ -17,6 +17,7 @@ package frontend
 import (
 	"bytes"
 	"context"
+	"crypto/sha256"
 	"fmt"
 	"maps"
 	"slices"
@@ -90,6 +91,7 @@ type TxnComputationWrapper struct {
 	// a direct projected binary parameter. Compile retry must replay the same
 	// admission without rescanning the prepared plan.
 	runtimeDirectResultSpecialization bool
+	preparedJoinDiagnosticFree        bool
 	// runtimeCacheTarget/runtimeCacheKey/runtimeCachePlan stage a candidate
 	// specialization outside the live PrepareStmt cache. The candidate is
 	// installed only after its Compile succeeds, so a failed replacement leaves
@@ -249,6 +251,7 @@ func (cwft *TxnComputationWrapper) Clear() {
 	cwft.runResult = nil
 	cwft.paramVals = nil
 	cwft.runtimeDirectResultSpecialization = false
+	cwft.preparedJoinDiagnosticFree = false
 	cwft.prepareName = ""
 	cwft.binaryPrepare = false
 	cwft.preparedStmt = nil
@@ -286,13 +289,14 @@ func (cwft *TxnComputationWrapper) GetProcess() *process.Process {
 	return cwft.proc
 }
 
-func columnsToMysqlColumns(ctx context.Context, cols []*plan2.ColDef) ([]interface{}, error) {
+func columnsToMysqlColumns(ctx context.Context, cols []*plan2.ColDef, directIntegerLengths ...uint32) ([]interface{}, error) {
 	columns := make([]interface{}, len(cols))
 	for i, col := range cols {
 		c, err := colDef2MysqlColumn(ctx, col)
 		if err != nil {
 			return nil, err
 		}
+		applyDirectIntegerResultMetadata(c, directIntegerLengths, i)
 		columns[i] = c
 	}
 	return columns, nil
@@ -304,7 +308,7 @@ func (cwft *TxnComputationWrapper) getColumnsWithResultColumns(ctx context.Conte
 		overlayPreparedGroupConcatResultMetadata(
 			cwft.plan.GetQuery(), cols, cwft.preparedStmt.groupConcatMaxLenFloor)
 	}
-	columns, err := columnsToMysqlColumns(ctx, cols)
+	columns, err := columnsToMysqlColumns(ctx, cols, directIntegerResultLengths(cwft.GetAst(), cols)...)
 	return columns, cols, err
 }
 
@@ -336,7 +340,7 @@ func (cwft *TxnComputationWrapper) GetColumns(ctx context.Context) ([]interface{
 			}
 		}
 	}
-	return columnsToMysqlColumns(ctx, cols)
+	return columnsToMysqlColumns(ctx, cols, directIntegerResultLengths(cwft.GetAst(), cols)...)
 }
 
 func (cwft *TxnComputationWrapper) GetServerStatus() uint16 {
@@ -420,10 +424,17 @@ func (cwft *TxnComputationWrapper) Compile(any any, fill func(*batch.Batch, *per
 			return nil, err
 		}
 		if preparedExprRetry != nil {
+			bindingCtx := function.WithNoUnsignedSubtraction(
+				execCtx.reqCtx, mysql.HasSQLMode(sessionSQLMode(cwft.ses), "NO_UNSIGNED_SUBTRACTION"))
+			bindingCtx = function.WithDivPrecisionIncrement(
+				bindingCtx, sessionDivPrecisionIncrement(cwft.ses))
 			runtimePlan, _, specializationErr := plan2.FillValuesOfParamsInPlanWithSpecialization(
-				function.WithNoUnsignedSubtraction(execCtx.reqCtx, mysql.HasSQLMode(sessionSQLMode(cwft.ses), "NO_UNSIGNED_SUBTRACTION")), cwft.plan, preparedExprRetry.paramVals)
+				bindingCtx, cwft.plan, preparedExprRetry.paramVals)
 			if specializationErr != nil {
 				return nil, specializationErr
+			}
+			if err = plan2.RefreshPreparedCTASInferredColumns(execCtx.reqCtx, runtimePlan, cwft.plan, cwft.stmt); err != nil {
+				return nil, err
 			}
 			cwft.plan = runtimePlan
 		}
@@ -546,6 +557,8 @@ func (cwft *TxnComputationWrapper) Compile(any any, fill func(*batch.Batch, *per
 			cwft.ses.SetData(nil)
 		case *tree.SetVar, *tree.ShowVariables, *tree.ShowErrors, *tree.ShowWarnings,
 			*tree.CreateAccount, *tree.AlterAccount, *tree.DropAccount, *tree.AnalyzeStmt,
+			*tree.CreatePublication, *tree.AlterPublication, *tree.DropPublication,
+			*tree.ShowPublications, *tree.ShowPublicationCoverage,
 			*tree.DataBranchCreateTable, *tree.DataBranchCreateDatabase,
 			*tree.DataBranchDiff, *tree.DataBranchMerge, *tree.DataBranchPick,
 			*tree.DataBranchDeleteTable, *tree.DataBranchDeleteDatabase:
@@ -561,6 +574,7 @@ func (cwft *TxnComputationWrapper) Compile(any any, fill func(*batch.Batch, *per
 				cwft.paramVals,
 				execCtx.input != nil && execCtx.input.isBinaryProtExecute,
 				cwft.runtimeDirectResultSpecialization,
+				cwft.preparedJoinDiagnosticFree,
 			)
 			var planSnapshotTS *timestamp.Timestamp
 			if cwft.preparedStmt != nil {
@@ -608,6 +622,7 @@ func (cwft *TxnComputationWrapper) Compile(any any, fill func(*batch.Batch, *per
 					cwft.paramVals,
 					execCtx.input != nil && execCtx.input.isBinaryProtExecute,
 					cwft.runtimeDirectResultSpecialization,
+					cwft.preparedJoinDiagnosticFree,
 				),
 				cwft.preparedStmt.defaultDatabase,
 				true,
@@ -624,6 +639,9 @@ func (cwft *TxnComputationWrapper) Compile(any any, fill func(*batch.Batch, *per
 				cwft.ses.GetSql(),
 			); err != nil {
 				return nil, err
+			}
+			if preparedCTASNeedsSemanticParams(cwft.stmt) {
+				retComp.SetPreparedParamValues(cwft.paramVals)
 			}
 			cwft.compile = retComp
 		}
@@ -868,6 +886,21 @@ func rebuildPreparePlan(
 		return err
 	})
 	return newPlan, err
+}
+
+func withPreparedJoinDiagnosticFreeContext(
+	ctx context.Context,
+	compilerCtx plan2.CompilerContext,
+	build func() (*plan2.Plan, error),
+) (*plan2.Plan, error) {
+	previousCtx := compilerCtx.GetContext()
+	planningCtx := previousCtx
+	if planningCtx == nil {
+		planningCtx = ctx
+	}
+	compilerCtx.SetContext(plan2.WithPreparedJoinDiagnosticFree(planningCtx))
+	defer compilerCtx.SetContext(previousCtx)
+	return build()
 }
 
 // initExecuteStmtParam replaces the plan of the EXECUTE by the plan generated by
@@ -1395,6 +1428,9 @@ func initExecuteStmtParamWithResolverInSession(
 	if err != nil {
 		return nil, nil, nil, "", false, err
 	}
+	if prepareStmt.longDataErr != nil {
+		return nil, nil, nil, "", false, prepareStmt.longDataErr
+	}
 	cwft.preparedStmt = prepareStmt
 	// Carry the binding database through execute-time authorization, lifecycle
 	// admission, and ownership cleanup. All three must address the same object.
@@ -1416,7 +1452,9 @@ func initExecuteStmtParamWithResolverInSession(
 	currentOnlyFullGroupBy := owner.sqlModeHasOnlyFullGroupBy()
 	currentBoolSumAvg := owner.sqlModeHasEnableBoolSumAvg()
 	currentNoUnsignedSubtraction := owner.sqlModeHasNoUnsignedSubtraction()
+	currentDivPrecisionIncrement := owner.currentDivPrecisionIncrement()
 	reqCtx = function.WithNoUnsignedSubtraction(reqCtx, currentNoUnsignedSubtraction)
+	reqCtx = function.WithDivPrecisionIncrement(reqCtx, int32(currentDivPrecisionIncrement))
 
 	// TODO check if schema change, obj.Obj is zero all the time in 0.6
 	eng := cwft.proc.Base.SessionInfo.StorageEngine
@@ -1465,7 +1503,9 @@ func initExecuteStmtParamWithResolverInSession(
 	modeMismatch := prepareStmt.NativeMode != currentNativeMode ||
 		prepareStmt.sqlModeFlagsSet && (prepareStmt.OnlyFullGroupBy != currentOnlyFullGroupBy ||
 			prepareStmt.BoolSumAvg != currentBoolSumAvg ||
-			prepareStmt.NoUnsignedSubtraction != currentNoUnsignedSubtraction)
+			prepareStmt.NoUnsignedSubtraction != currentNoUnsignedSubtraction) ||
+		prepareStmt.divPrecisionIncrementSet &&
+			prepareStmt.divPrecisionIncrement != currentDivPrecisionIncrement
 	protocolVersion := currentProtocolVersion(cwft.proc)
 	protocolMismatch := prepareStmt.protocolVersion != 0 &&
 		prepareStmt.protocolVersion != protocolVersion
@@ -1510,7 +1550,7 @@ func initExecuteStmtParamWithResolverInSession(
 		if executionSes.IsBackgroundSession() {
 			resper = owner.GetResponser()
 		}
-		newColDefData, err := resper.MysqlRrWr().MakeColumnDefData(reqCtx, columns)
+		newColDefData, err := resper.MysqlRrWr().MakeColumnDefData(reqCtx, columns, directIntegerResultLengths(prepareStmt.PrepareStmt, columns)...)
 		if err != nil {
 			return nil, nil, nil, "", false, err
 		}
@@ -1529,6 +1569,7 @@ func initExecuteStmtParamWithResolverInSession(
 			newPreparePlan.Plan, len(newPreparePlan.ParamTypes))
 		prepareStmt.numericOverloadParamPositions = plan2.PreparedPlanNumericFallbackParamPositions(
 			newPreparePlan.Plan)
+		prepareStmt.refreshGenerateSeriesParamMetadata(newPreparePlan.Plan)
 		prepareStmt.bitCountOverloadParamPositions = plan2.PreparedPlanBitCountFallbackParamPositions(
 			newPreparePlan.Plan)
 		prepareStmt.conversionParamPositions = plan2.PreparedPlanConversionParamPositions(
@@ -1553,7 +1594,9 @@ func initExecuteStmtParamWithResolverInSession(
 		prepareStmt.OnlyFullGroupBy = currentOnlyFullGroupBy
 		prepareStmt.BoolSumAvg = currentBoolSumAvg
 		prepareStmt.NoUnsignedSubtraction = currentNoUnsignedSubtraction
+		prepareStmt.divPrecisionIncrement = currentDivPrecisionIncrement
 		prepareStmt.sqlModeFlagsSet = true
+		prepareStmt.divPrecisionIncrementSet = true
 		prepareStmt.Ts = prepareTs
 		prepareStmt.tempTableVersion = currentTempTableVersion
 		prepareStmt.ddlVersion = currentDDLVersion
@@ -1576,7 +1619,7 @@ func initExecuteStmtParamWithResolverInSession(
 			if executionSes.IsBackgroundSession() {
 				resper = owner.GetResponser()
 			}
-			newColDefData, metadataErr := resper.MysqlRrWr().MakeColumnDefData(reqCtx, columns)
+			newColDefData, metadataErr := resper.MysqlRrWr().MakeColumnDefData(reqCtx, columns, directIntegerResultLengths(prepareStmt.PrepareStmt, columns)...)
 			if metadataErr != nil {
 				return nil, nil, nil, "", false, metadataErr
 			}
@@ -1810,7 +1853,7 @@ func initExecuteStmtParamWithResolverInSession(
 			cwft.paramVals, err = preparedParamValues(
 				cwft.proc, prepareStmt.ParamTypes,
 				prepareStmt.inetNtoaParamPositions,
-				prepareStmt.numericOverloadParamPositions)
+				prepareStmt.temporalRuntimeParamPositions)
 			if err != nil {
 				return nil, nil, nil, originSQL, false, err
 			}
@@ -1850,9 +1893,15 @@ func initExecuteStmtParamWithResolverInSession(
 		if len(execPlan.Args) != numParams {
 			return nil, nil, nil, originSQL, false, moerr.NewInvalidInput(reqCtx, "Incorrect arguments to EXECUTE")
 		}
+		showPublicationPatternPositions := []int32(nil)
+		if show, ok := prepareStmt.PrepareStmt.(*tree.ShowPublications); ok && show.Like != nil {
+			if _, parameterized := show.Like.Right.(*tree.ParamExpr); parameterized {
+				showPublicationPatternPositions = []int32{0}
+			}
+		}
 		params, paramVals, paramIsBin, paramBinaryString, paramKinds, paramTypes, err := buildExecuteUserParamsWithMemberOfPositions(
 			cwft.proc, execPlan.Args, prepareStmt.jsonComparisonParamPositions,
-			prepareStmt.jsonMemberOfParamPositions, prepareStmt.inetNtoaParamPositions)
+			prepareStmt.jsonMemberOfParamPositions, prepareStmt.inetNtoaParamPositions, showPublicationPatternPositions)
 		if err != nil {
 			return nil, nil, nil, originSQL, false, err
 		}
@@ -1924,6 +1973,14 @@ func initExecuteStmtParamWithResolverInSession(
 		}
 	}
 
+	// Candidate discovery is cached with the conservative prepared generation.
+	// The proof and execution-local replan follow runtime binding below, so an
+	// unrelated specialized parameter cannot invalidate a safe JOIN operand.
+	if prepareStmt.joinDiagnosticCandidatePlan != executionPlan {
+		prepareStmt.joinDiagnosticCandidatePlan = executionPlan
+		prepareStmt.joinDiagnosticCandidate = plan2.PreparedPlanHasJoinParameterDiagnostic(executionPlan)
+	}
+
 	// Static binary specialization, numeric-prefix consumers, and direct numeric
 	// result markers enter the same bounded one-category cache. The copied plan
 	// keeps typed ParamRefs, so values in a stable runtime domain reuse its compile
@@ -1944,7 +2001,8 @@ func initExecuteStmtParamWithResolverInSession(
 	// cannot be read or installed, so leave its bounded previous category dormant
 	// instead of scanning an ordinary prepared DML on every EXECUTE.
 	runtimeCacheEligible := !runtimeSpecializationCandidate ||
-		(shouldCachePreparedRuntimeSpecialization(preparePlan.Plan) &&
+		(!prepareStmt.parameterizedGenerateSeries &&
+			shouldCachePreparedRuntimeSpecialization(preparePlan.Plan) &&
 			shouldCachePreparedRuntimeSpecialization(executionPlan))
 	if !runtimeCacheEligible {
 		prepareStmt.clearRuntimeSpecializationCache()
@@ -1993,21 +2051,82 @@ func initExecuteStmtParamWithResolverInSession(
 		return nil, nil, nil, originSQL, false, err
 	}
 	if runtimePlanApplied {
-		executionPlan = runtimePlan
-		if binaryExecute {
-			columns := getPreparedResultColumnsForWithGroupConcatMaxLen(
-				prepareStmt.PrepareStmt, runtimePlan, sessionTxnHaveDDL(executionSes),
-				groupConcatMaxLenFloor)
-			resper := execCtx.resper
-			if executionSes.IsBackgroundSession() {
-				resper = owner.GetResponser()
-			}
-			colDefData, metadataErr := resper.MysqlRrWr().MakeColumnDefData(reqCtx, columns)
-			if metadataErr != nil {
-				return nil, nil, nil, originSQL, false, metadataErr
-			}
-			execCtx.prepareColDef = colDefData
+		if err = plan2.RefreshPreparedCTASInferredColumns(reqCtx, runtimePlan, executionPlan, prepareStmt.PrepareStmt); err != nil {
+			return nil, nil, nil, originSQL, false, err
 		}
+		executionPlan = runtimePlan
+	}
+	// A proof belongs to this parameter binding and this plan generation. The
+	// conservative plan is already runnable, including any runtime cache hit.
+	// Probe it before rebuilding: a relaxed optimizer can remove the expression
+	// whose warning would have prevented the rewrite.
+	if prepareStmt.joinDiagnosticCandidate {
+		templateFree, probeErr := plan2.ProbePreparedJoinParameterDiagnostics(cwft.proc, preparePlan.Plan)
+		if probeErr != nil {
+			return nil, nil, nil, originSQL, false, probeErr
+		}
+		if templateFree {
+			runtimeFree, probeErr := plan2.ProbePreparedJoinParameterDiagnostics(cwft.proc, executionPlan)
+			if probeErr != nil {
+				return nil, nil, nil, originSQL, false, probeErr
+			}
+			if runtimeFree {
+				compilerCtx := executionSes.GetTxnCompileCtx()
+				localPlan, buildErr := withPreparedJoinDiagnosticFreeContext(reqCtx, compilerCtx, func() (*plan2.Plan, error) {
+					return rebuildPreparePlan(execCtx, executionSes, prepareStmt, buildPlan)
+				})
+				if buildErr != nil {
+					return nil, nil, nil, originSQL, false, buildErr
+				}
+				if localPlan == nil || localPlan.GetDcl().GetPrepare() == nil ||
+					localPlan.GetDcl().GetPrepare().Plan == nil {
+					return nil, nil, nil, originSQL, false,
+						moerr.NewInternalError(reqCtx, "execution-local prepared JOIN replan is missing its query")
+				}
+				if slices.Equal(localPlan.GetDcl().GetPrepare().ParamTypes, preparePlan.ParamTypes) {
+					localQuery := localPlan.GetDcl().GetPrepare().Plan
+					localRuntime, localSpecialized, localApplied, specializeErr := specializePreparedExecutionPlan(
+						reqCtx, localQuery, cwft.paramVals, binaryExecute,
+						runtimeNumericOverloadCandidate, runtimeDirectResultCandidate, needsRuntimeSpecialization,
+						runtimeDirectResultPositions, true, runtimeTextComparisonSpecialization)
+					if specializeErr != nil {
+						return nil, nil, nil, originSQL, false, specializeErr
+					}
+					if localApplied {
+						if err = plan2.RefreshPreparedCTASInferredColumns(reqCtx, localRuntime, localQuery, prepareStmt.PrepareStmt); err != nil {
+							return nil, nil, nil, originSQL, false, err
+						}
+						localQuery = localRuntime
+					}
+					localFree, probeErr := plan2.ProbePreparedJoinParameterDiagnostics(cwft.proc, localQuery)
+					if probeErr != nil {
+						return nil, nil, nil, originSQL, false, probeErr
+					}
+					if localFree {
+						executionPlan = localQuery
+						runtimePlanApplied = true
+						runtimeSpecialized = runtimeSpecialized || localSpecialized
+						cwft.preparedJoinDiagnosticFree = true
+						cwft.discardRuntimeCacheCandidate()
+						cachedRuntimeCompile = nil
+					}
+				}
+			}
+		}
+	}
+	if binaryExecute && runtimePlanApplied {
+		columns := getPreparedResultColumnsForWithGroupConcatMaxLen(
+			prepareStmt.PrepareStmt, executionPlan, sessionTxnHaveDDL(executionSes),
+			groupConcatMaxLenFloor)
+		resper := execCtx.resper
+		if executionSes.IsBackgroundSession() {
+			resper = owner.GetResponser()
+		}
+		colDefData, metadataErr := resper.MysqlRrWr().MakeColumnDefData(reqCtx, columns, directIntegerResultLengths(prepareStmt.PrepareStmt, columns)...)
+		if metadataErr != nil {
+			return nil, nil, nil, originSQL, false, metadataErr
+		}
+		execCtx.prepareColDef = colDefData
 	}
 
 	// A cached prepared Compile already owns a materialized worker topology.
@@ -2022,7 +2141,8 @@ func initExecuteStmtParamWithResolverInSession(
 	retComp := prepareStmt.compile
 	if cachedRuntimeCompile != nil {
 		retComp = cachedRuntimeCompile
-	} else if runtimePlanApplied || runtimeSpecialized || prepareStmt.hasPaginationParams {
+	} else if runtimePlanApplied || runtimeSpecialized || prepareStmt.hasPaginationParams ||
+		cwft.preparedJoinDiagnosticFree {
 		// The cached compile was built from the prepare-time parameter types and
 		// cannot execute a plan whose overloads, result metadata, or pagination
 		// values must be rebound for this execution. An AP runtime cache hit
@@ -2240,6 +2360,21 @@ func preparedRuntimeSemanticKey(paramVals []any) string {
 		}
 		fmt.Fprintf(&key, "%d:%d:%d:%d:%d:%d;", i, param.PrepareParamKind,
 			runtimeType.Oid, runtimeType.Charset, runtimeType.Width, runtimeType.Scale)
+		if param.EnableNumericPrefix && runtimeType.Oid.IsFloat() &&
+			(!param.HasRuntimeType || param.RuntimeType.Oid == types.T_text) {
+			// Out-of-range DECIMAL prefixes can be folded to a value-specific
+			// zero or error during specialization. A concrete runtime FLOAT
+			// instead retains its ParamRef and does not depend on its spelling.
+			fmt.Fprintf(&key, "float-prefix:%x;", sha256.Sum256([]byte(rawValue)))
+		}
+		if param.EnableNumericPrefix && !param.IsBinaryProtocol && param.HasSourceType &&
+			param.SourceType.Oid.IsMySQLString() && param.Value != nil {
+			// Common-value functions keep a concrete SQL string when it has no
+			// numeric prefix. That branch is independent of the inferred prefix
+			// type, which can be identical for "abc" and "0xx".
+			_, hasPrefix := function.GetNumericStringPrefix(rawValue)
+			fmt.Fprintf(&key, "sql-string-prefix:%t;", hasPrefix)
+		}
 		fmt.Fprintf(&key, "binary:%t;domain:%d;", param.IsBinaryString, param.RuntimeStringDomain)
 		charSourceRelevant := param.IsBinaryProtocol || param.HasSourceType ||
 			(param.HasRuntimeType && types.T(param.RuntimeType.Oid).IsMySQLString())
@@ -2448,22 +2583,26 @@ type preparedExecutionRetry struct {
 	paramVals                  []any
 	binaryExecute              bool
 	directResultSpecialization bool
+	diagnosticFreeJoin         bool
 }
 
 func newPreparedExecutionRetry(
 	paramVals []any,
 	binaryExecute bool,
-	directResultSpecialization ...bool,
+	flags ...bool,
 ) *preparedExecutionRetry {
-	if len(paramVals) == 0 {
+	if len(paramVals) == 0 && (len(flags) < 2 || !flags[1]) {
 		return nil
 	}
 	retry := &preparedExecutionRetry{
 		paramVals:     append([]any(nil), paramVals...),
 		binaryExecute: binaryExecute,
 	}
-	if len(directResultSpecialization) > 0 {
-		retry.directResultSpecialization = directResultSpecialization[0]
+	if len(flags) > 0 {
+		retry.directResultSpecialization = flags[0]
+	}
+	if len(flags) > 1 {
+		retry.diagnosticFreeJoin = flags[1]
 	}
 	return retry
 }
@@ -3072,9 +3211,12 @@ func buildExecuteUserParamsWithMemberOfPositions(
 	paramDomains := make([]types.RuntimeStringDomain, len(args))
 	effectiveParamDomains := make([]types.RuntimeStringDomain, len(args))
 	paramKinds = make([]vector.PrepareParamKind, len(args))
-	var inetNtoaPositions []int32
+	var inetNtoaPositions, showPublicationPatternPositions []int32
 	if len(inetNtoaPositionsArg) > 0 {
 		inetNtoaPositions = inetNtoaPositionsArg[0]
+	}
+	if len(inetNtoaPositionsArg) > 1 {
+		showPublicationPatternPositions = inetNtoaPositionsArg[1]
 	}
 	for i, arg := range args {
 		exprImpl := arg.Expr.(*plan.Expr_V)
@@ -3136,6 +3278,19 @@ func buildExecuteUserParamsWithMemberOfPositions(
 			if err != nil {
 				return
 			}
+		}
+		if _, relevant := slices.BinarySearch(showPublicationPatternPositions, int32(i)); relevant {
+			// SQL EXECUTE transports all bindings as text. Preserve the
+			// assignment-time type so frontend SHOW applies the same type
+			// check as COM_STMT_EXECUTE rather than trusting that vector.
+			concreteType := resolvedSourceType.Oid
+			if concreteType == types.T_any {
+				concreteType = types.T(inferUserDefinedVarType(param).Id)
+			}
+			if paramTypes == nil {
+				paramTypes = make([]types.T, len(args))
+			}
+			paramTypes[i] = concreteType
 		}
 		if _, relevant := slices.BinarySearch(typedPositions, int32(i)); relevant {
 			var concreteType types.T
@@ -3271,14 +3426,28 @@ func shouldCachePreparedRuntimeSpecialization(p *plan.Plan) bool {
 	return !plan2.PreparedPlanHasPercentileParams(p)
 }
 
+func (prepareStmt *PrepareStmt) refreshGenerateSeriesParamMetadata(p *plan.Plan) {
+	endpoints, parameterized := plan2.PreparedPlanGenerateSeriesParameterInfo(p)
+	prepareStmt.parameterizedGenerateSeries = parameterized
+	positions := slices.Concat(prepareStmt.numericOverloadParamPositions, endpoints)
+	slices.Sort(positions)
+	prepareStmt.temporalRuntimeParamPositions = slices.Compact(positions)
+}
+
 func shouldRebuildPreparePlan(schemaChanged bool, p *plan.Plan) bool {
 	if schemaChanged || p == nil {
 		return schemaChanged
 	}
 	query := p.GetQuery()
 	return query != nil && (query.GetHasForeignKeyAction() ||
+		query.GetViewMetadataDependsOnUdf() ||
 		plan2.PreparedPlanDependsOnSubscriptionMetadata(p) ||
 		plan2.PreparedPlanDependsOnIndexCoverage(p))
+}
+
+func preparedCTASNeedsSemanticParams(stmt tree.Statement) bool {
+	ctas, ok := stmt.(*tree.CreateTable)
+	return ok && ctas.IsAsSelect
 }
 
 func createCompile(
@@ -3366,6 +3535,12 @@ func createCompile(
 		getStatementStartAt(execCtx.reqCtx),
 	)
 	retCompile.SetIsPrepare(isPrepare)
+	if preparedRetry != nil {
+		retCompile.SetPreparedJoinDiagnosticFree(preparedRetry.diagnosticFreeJoin)
+	}
+	if preparedRetry != nil && preparedCTASNeedsSemanticParams(stmt) {
+		retCompile.SetPreparedParamValues(preparedRetry.paramVals)
+	}
 	retCompile.SetGroupConcatMaxLenFloor(groupConcatMaxLenFloor)
 	if schedulingSQLMode != nil {
 		retCompile.SetQuerySchedulingIntent(querySchedulingIntentForStatementWithSQLMode(
@@ -3443,6 +3618,7 @@ func buildPlanForCompileRetry(
 ) (*plan2.Plan, error) {
 	if ses != nil {
 		ctx = function.WithNoUnsignedSubtraction(ctx, mysql.HasSQLMode(sessionSQLMode(ses), "NO_UNSIGNED_SUBTRACTION"))
+		ctx = function.WithDivPrecisionIncrement(ctx, sessionDivPrecisionIncrement(ses))
 	}
 	// No permission verification is required when retry execute buildPlan.
 	retryPlan, err := buildPlanWithPrepareMode(
@@ -3453,8 +3629,9 @@ func buildPlanForCompileRetry(
 	// Forced SET-expression plans were already normalized from the parser's
 	// global one-based ordinals. Generic prepared plans retain the existing
 	// compacting normalization path.
+	var retryParamTypes []int32
 	if retryPlan.IsPrepare && !forcePrepare {
-		_, _, err = plan2.ResetPreparePlan(compilerContext, retryPlan)
+		_, retryParamTypes, err = plan2.ResetPreparePlan(compilerContext, retryPlan)
 	}
 	if err != nil {
 		return nil, err
@@ -3465,8 +3642,14 @@ func buildPlanForCompileRetry(
 	if forcePrepare {
 		runtimePlan, _, err := plan2.FillValuesOfParamsInPlanWithSpecialization(
 			ctx, retryPlan, preparedRetry.paramVals)
-		return runtimePlan, err
+		if err != nil {
+			return nil, err
+		}
+		return runtimePlan, plan2.RefreshPreparedCTASInferredColumns(ctx, runtimePlan, retryPlan, stmt)
 	}
+	// Definition-change retry starts from a fresh conservative generation. An
+	// earlier execution's proof is only a request to try the optimization, not
+	// authority to relax this new generation before it is bound and checked.
 	runtimePlan, _, applied, err := specializePreparedExecutionPlan(
 		ctx, retryPlan, preparedRetry.paramVals, preparedRetry.binaryExecute,
 		len(plan2.PreparedPlanNumericFallbackParamPositions(retryPlan)) > 0,
@@ -3474,10 +3657,64 @@ func buildPlanForCompileRetry(
 	if err != nil {
 		return nil, err
 	}
+	conservativePlan := retryPlan
 	if applied {
-		return runtimePlan, nil
+		if err = plan2.RefreshPreparedCTASInferredColumns(ctx, runtimePlan, retryPlan, stmt); err != nil {
+			return nil, err
+		}
+		conservativePlan = runtimePlan
 	}
-	return retryPlan, nil
+	if preparedRetry.diagnosticFreeJoin && plan2.PreparedPlanHasJoinParameterDiagnostic(retryPlan) {
+		proc := compilerContext.GetProcess()
+		templateFree, probeErr := plan2.ProbePreparedJoinParameterDiagnostics(proc, retryPlan)
+		if probeErr != nil {
+			return nil, probeErr
+		}
+		if templateFree {
+			runtimeFree, probeErr := plan2.ProbePreparedJoinParameterDiagnostics(proc, conservativePlan)
+			if probeErr != nil {
+				return nil, probeErr
+			}
+			if runtimeFree {
+				localPlan, buildErr := withPreparedJoinDiagnosticFreeContext(ctx, compilerContext, func() (*plan2.Plan, error) {
+					return buildPlanWithPrepareMode(ctx, ses, compilerContext, stmt, forcePrepare)
+				})
+				if buildErr != nil {
+					return nil, buildErr
+				}
+				if localPlan.IsPrepare {
+					var localParamTypes []int32
+					if _, localParamTypes, err = plan2.ResetPreparePlan(compilerContext, localPlan); err != nil {
+						return nil, err
+					}
+					if !slices.Equal(localParamTypes, retryParamTypes) {
+						return conservativePlan, nil
+					}
+				}
+				localRuntime, _, localApplied, specializeErr := specializePreparedExecutionPlan(
+					ctx, localPlan, preparedRetry.paramVals, preparedRetry.binaryExecute,
+					len(plan2.PreparedPlanNumericFallbackParamPositions(localPlan)) > 0,
+					preparedRetry.directResultSpecialization, false, nil, false, false)
+				if specializeErr != nil {
+					return nil, specializeErr
+				}
+				if localApplied {
+					if err = plan2.RefreshPreparedCTASInferredColumns(ctx, localRuntime, localPlan, stmt); err != nil {
+						return nil, err
+					}
+					localPlan = localRuntime
+				}
+				localFree, probeErr := plan2.ProbePreparedJoinParameterDiagnostics(proc, localPlan)
+				if probeErr != nil {
+					return nil, probeErr
+				}
+				if localFree {
+					return localPlan, nil
+				}
+			}
+		}
+	}
+	return conservativePlan, nil
 }
 
 func preparedExecutionBuildPlanFunc(
