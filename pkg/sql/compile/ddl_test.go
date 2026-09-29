@@ -2733,6 +2733,7 @@ func TestPitrGranularitySqlEscapesStringLiterals(t *testing.T) {
 // concurrent CLONE from leaving orphan records and keeps transaction-local
 // tombstones valid at the new snapshot.
 func TestDropDatabase_SnapshotAdvance(t *testing.T) {
+	stubPublicationGuardForDropTests(t)
 	dropDbDef := &plan2.DropDatabase{
 		IfExists: false,
 		Database: "test_db",
@@ -2766,6 +2767,7 @@ func TestDropDatabase_SnapshotAdvance(t *testing.T) {
 		ctx := defines.AttachAccountId(context.Background(), sysAccountId)
 		proc.Ctx = ctx
 		proc.ReplaceTopCtx(ctx)
+		installDDLLineageLifecycleTestExecutor(t, proc)
 
 		// Use a real TxnMeta so the workspace can simulate snapshot advancement.
 		txnMeta := txn.TxnMeta{
@@ -2834,6 +2836,7 @@ func TestDropDatabase_SnapshotAdvance(t *testing.T) {
 		ctx := defines.AttachAccountId(context.Background(), sysAccountId)
 		proc.Ctx = ctx
 		proc.ReplaceTopCtx(ctx)
+		installDDLLineageLifecycleTestExecutor(t, proc)
 
 		txnMeta := txn.TxnMeta{
 			Mode:       txn.TxnMode_Optimistic,
@@ -2928,6 +2931,7 @@ func TestRemoveFkeysRelationshipsSkipsDeletedRelationsDuringDropDatabase(t *test
 }
 
 func TestDropDatabaseSkipsDeletedRelationsWhenCollectingTables(t *testing.T) {
+	stubPublicationGuardForDropTests(t)
 	ctrl := gomock.NewController(t)
 	defer ctrl.Finish()
 
@@ -3021,6 +3025,7 @@ func TestDropDatabaseSkipsDeletedRelationsWhenCollectingTables(t *testing.T) {
 }
 
 func TestDropDatabaseSkipsForeignKeyCleanupWhenIgnored(t *testing.T) {
+	stubPublicationGuardForDropTests(t)
 	ctrl := gomock.NewController(t)
 	defer ctrl.Finish()
 
@@ -3074,6 +3079,7 @@ func TestDropDatabaseSkipsForeignKeyCleanupWhenIgnored(t *testing.T) {
 }
 
 func TestDropDatabaseReturnsInternalRelationErrorWhenCollectingTables(t *testing.T) {
+	stubPublicationGuardForDropTests(t)
 	ctrl := gomock.NewController(t)
 	defer ctrl.Finish()
 
@@ -3147,6 +3153,81 @@ func TestDropDatabaseReturnsInternalRelationErrorWhenCollectingTables(t *testing
 
 	c := NewCompile("test", "test", "drop database acc_test02", "", "", eng, proc, nil, false, nil, time.Now())
 	require.ErrorIs(t, s.DropDatabase(c), relationErr)
+}
+
+func stubPublicationGuardForDropTests(t *testing.T) {
+	t.Helper()
+	stub := gostub.Stub(&ensureDatabaseNotPublished,
+		func(_ *Compile, _ engine.Database, _ string) error { return nil })
+	t.Cleanup(stub.Reset)
+}
+
+func TestDropDatabaseLookupErrorIsNotMissing(t *testing.T) {
+	for _, tc := range []struct {
+		name      string
+		postLock  bool
+		ifExists  bool
+		lookupErr error
+	}{
+		{"initial_timeout", false, false, context.DeadlineExceeded},
+		{"initial_timeout_if_exists", false, true, context.DeadlineExceeded},
+		{"post_lock_timeout", true, false, context.DeadlineExceeded},
+		{"post_lock_timeout_if_exists", true, true, context.DeadlineExceeded},
+		{"initial_missing", false, false, moerr.GetOkExpectedEOB()},
+		{"initial_missing_if_exists", false, true, moerr.GetOkExpectedEOB()},
+		{"post_lock_missing", true, false, moerr.GetOkExpectedEOB()},
+		{"post_lock_missing_if_exists", true, true, moerr.GetOkExpectedEOB()},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			ctrl := gomock.NewController(t)
+			proc := testutil.NewProcess(t)
+			proc.Base.SessionInfo.Buf = buffer.New()
+			ctx := defines.AttachAccountId(context.Background(), sysAccountId)
+			proc.Ctx = ctx
+			proc.ReplaceTopCtx(ctx)
+			installDDLLineageLifecycleTestExecutor(t, proc)
+
+			meta := txn.TxnMeta{Mode: txn.TxnMode_Pessimistic, Isolation: txn.TxnIsolation_RC}
+			op := mock_frontend.NewMockTxnOperator(ctrl)
+			op.EXPECT().Txn().Return(meta).AnyTimes()
+			op.EXPECT().SnapshotTS().Return(timestamp.Timestamp{}).AnyTimes()
+			op.EXPECT().TxnRef().Return(&meta).AnyTimes()
+			op.EXPECT().GetWorkspace().Return(&Ws{}).AnyTimes()
+			proc.Base.TxnOperator = op
+
+			eng := mock_frontend.NewMockEngine(ctrl)
+			if tc.postLock {
+				db := mock_frontend.NewMockDatabase(ctrl)
+				db.EXPECT().IsSubscription(gomock.Any()).Return(false)
+				db.EXPECT().GetDatabaseId(gomock.Any()).Return("invalid")
+				gomock.InOrder(
+					eng.EXPECT().Database(gomock.Any(), "review_db", gomock.Any()).Return(db, nil),
+					eng.EXPECT().Database(gomock.Any(), "review_db", gomock.Any()).Return(nil, tc.lookupErr),
+				)
+			} else {
+				eng.EXPECT().Database(gomock.Any(), "review_db", gomock.Any()).Return(nil, tc.lookupErr)
+			}
+			stub := gostub.Stub(&lockMoDatabase, func(*Compile, string, lock.LockMode) error { return nil })
+			t.Cleanup(stub.Reset)
+
+			pn := &plan2.Plan{Plan: &plan2.Plan_Ddl{Ddl: &plan2.DataDefinition{
+				DdlType: plan2.DataDefinition_DROP_DATABASE,
+				Definition: &plan2.DataDefinition_DropDatabase{DropDatabase: &plan2.DropDatabase{
+					Database: "review_db", IfExists: tc.ifExists,
+				}},
+			}}}
+			scope := &Scope{Magic: DropDatabase, Plan: pn}
+			c := NewCompile("test", "test", "drop database review_db", "", "", eng, proc, nil, false, nil, time.Now())
+			err := scope.DropDatabase(c)
+			if tc.lookupErr == context.DeadlineExceeded {
+				require.ErrorIs(t, err, tc.lookupErr)
+			} else if tc.ifExists {
+				require.NoError(t, err)
+			} else {
+				require.True(t, moerr.IsMoErrCode(err, moerr.ErrDropNonExistsDB), "unexpected error: %v", err)
+			}
+		})
+	}
 }
 
 func TestRemoveFkeysRelationshipsSkipsDeletedChildTableIds(t *testing.T) {

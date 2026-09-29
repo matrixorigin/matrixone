@@ -308,39 +308,33 @@ func doCreateSnapshot(ctx context.Context, ses *Session, stmt *tree.CreateSnapSh
 
 	tenantInfo := ses.GetTenantInfo()
 	currentAccount := tenantInfo.GetTenant()
+	ownerAccountID := tenantInfo.GetTenantID()
 	snapshotLevel = stmt.Object.SLevel.Level
 
 	pubAccountName := string(stmt.Object.AccountName)
 	pubName := string(stmt.Object.PubName)
 
-	if len(pubAccountName) > 0 && len(pubName) > 0 {
-		accountID, accountName, err := getAccountFromPublication(ctx, bh, pubAccountName, pubName, currentAccount)
-		if err != nil {
+	fromPublication := pubAccountName != "" && pubName != ""
+	snapshotName = string(stmt.Name)
+	checkAccessAndName := func() error {
+		if err := doCheckCreateSnapshotPriv(ctx, currentAccount, stmt); err != nil {
 			return err
 		}
-		currentAccount = accountName
-		ctx = defines.AttachAccountId(ctx, uint32(accountID))
-	}
-	// 1.check create snapshot priv
-	err = doCheckCreateSnapshotPriv(ctx, currentAccount, stmt)
-	if err != nil {
-		return err
-	}
-
-	// 2. check snapshot exists or not
-	snapshotName = string(stmt.Name)
-	snapshotExist, err = checkSnapShotExistOrNot(ctx, bh, snapshotName)
-	if err != nil {
-		return err
-	}
-	if snapshotExist {
-		if !stmt.IfNotExists {
+		var checkErr error
+		snapshotExist, checkErr = checkSnapShotExistOrNot(ctx, bh, snapshotName)
+		if checkErr != nil {
+			return checkErr
+		}
+		if snapshotExist && !stmt.IfNotExists {
 			return moerr.NewInternalErrorf(ctx, "snapshot %s already exists", snapshotName)
-		} else {
-			return nil
+		}
+		return nil
+	}
+	if !fromPublication {
+		if err = checkAccessAndName(); err != nil || snapshotExist {
+			return err
 		}
 	}
-
 	// Install the quota/catalog frontier before the lifecycle write. Advancing
 	// the transaction snapshot after that write can expose both workspace
 	// versions of the feature-registry gate row to the quota query.
@@ -354,11 +348,59 @@ func doCreateSnapshot(ctx context.Context, ses *Session, stmt *tree.CreateSnapSh
 	if err != nil {
 		return err
 	}
+	if fromPublication {
+		// A revoke or drop/recreate can commit while this request waits for
+		// the gate. Resolve membership and the publisher generation afterwards.
+		accountID, accountName, pubErr := lockAccountFromPublication(
+			ctx, bh, pubAccountName, pubName, tenantInfo.GetTenant(), tenantInfo.GetTenantID(),
+		)
+		if pubErr != nil {
+			return pubErr
+		}
+		currentAccount = accountName
+		ownerAccountID = uint32(accountID)
+		ctx = defines.AttachAccountId(ctx, ownerAccountID)
+		if err = checkAccessAndName(); err != nil || snapshotExist {
+			return err
+		}
+	}
+	if snapshotLevel == tree.SNAPSHOTLEVELACCOUNT {
+		snapshotForAccount = string(stmt.Object.ObjName)
+		if snapshotForAccount == "" {
+			snapshotForAccount = currentAccount
+		}
+		if currentAccount == sysAccountName && snapshotForAccount != sysAccountName {
+			lookupSQL, lookupErr := getSqlForCheckTenant(ctx, snapshotForAccount)
+			if lookupErr != nil {
+				return lookupErr
+			}
+			bh.ClearExecResultSet()
+			if err = bh.Exec(ctx, lookupSQL); err != nil {
+				return err
+			}
+			results, lookupErr := getResultSet(ctx, bh)
+			if lookupErr != nil {
+				return lookupErr
+			}
+			if !execResultArrayHasData(results) {
+				return moerr.NewInternalErrorf(ctx, "account %s does not exist", snapshotForAccount)
+			}
+			accountID, lookupErr := results[0].GetUint64(ctx, 0, 0)
+			if lookupErr != nil {
+				return lookupErr
+			}
+			ownerAccountID = uint32(accountID)
+		}
+	}
 	// Keep quota admission and snapshot publication in the same serialized
 	// transaction. Otherwise concurrent creators can all observe the old count
 	// before any of them publishes its mo_snapshots row.
 	if snapshotLevel != tree.SNAPSHOTLEVELCLUSTER {
-		if err = checkSnapshotQuota(ctx, ses, bh, 1, snapshotLevel.String()); err != nil {
+		ownerName := currentAccount
+		if snapshotLevel == tree.SNAPSHOTLEVELACCOUNT {
+			ownerName = snapshotForAccount
+		}
+		if err = checkSnapshotQuota(ctx, ses, bh, ownerName, ownerAccountID, 1, snapshotLevel.String()); err != nil {
 			return err
 		}
 	}
@@ -401,51 +443,7 @@ func doCreateSnapshot(ctx context.Context, ses *Session, stmt *tree.CreateSnapSh
 			return err
 		}
 	case tree.SNAPSHOTLEVELACCOUNT:
-		snapshotForAccount = string(stmt.Object.ObjName)
-		if len(snapshotForAccount) == 0 {
-			snapshotForAccount = currentAccount
-		}
-		// check account exists or not and get accountId
-		getAccountIdFunc := func(accountName string) (accountId uint64, rtnErr error) {
-			var erArray []ExecResult
-			sql, rtnErr = getSqlForCheckTenant(ctx, accountName)
-			if rtnErr != nil {
-				return 0, rtnErr
-			}
-			bh.ClearExecResultSet()
-			rtnErr = bh.Exec(ctx, sql)
-			if rtnErr != nil {
-				return 0, rtnErr
-			}
-
-			erArray, rtnErr = getResultSet(ctx, bh)
-			if rtnErr != nil {
-				return 0, rtnErr
-			}
-
-			if execResultArrayHasData(erArray) {
-				for i := uint64(0); i < erArray[0].GetRowCount(); i++ {
-					accountId, rtnErr = erArray[0].GetUint64(ctx, i, 0)
-					if rtnErr != nil {
-						return 0, rtnErr
-					}
-				}
-			} else {
-				return 0, moerr.NewInternalErrorf(ctx, "account %s does not exist", accountName)
-			}
-			return accountId, rtnErr
-		}
-
-		// if sys tenant create snapshots for other tenant, get the account id
-		// otherwise, get the account id from tenantInfo
-		if currentAccount == sysAccountName && currentAccount != snapshotForAccount {
-			objId, err = getAccountIdFunc(snapshotForAccount)
-			if err != nil {
-				return err
-			}
-		} else {
-			objId = uint64(tenantInfo.GetTenantID())
-		}
+		objId = uint64(ownerAccountID)
 
 		sql, err = getSqlForCreateSnapshot(
 			ctx,
@@ -644,7 +642,7 @@ func doDropSnapshot(ctx context.Context, ses *Session, stmt *tree.DropSnapShot) 
 	if len(pubAccountName) > 0 && len(pubName) > 0 {
 		tenantInfo := ses.GetTenantInfo()
 		currentAccount := tenantInfo.GetTenant()
-		accountID, _, err := getAccountFromPublication(ctx, bh, pubAccountName, pubName, currentAccount)
+		accountID, _, err := lockAccountFromPublication(ctx, bh, pubAccountName, pubName, currentAccount, tenantInfo.GetTenantID())
 		if err != nil {
 			return err
 		}
@@ -4093,6 +4091,17 @@ func restorePubsWithSnapshotName(
 	if pubInfos, err = getAllPubInfosBySnapshotName(ctx, bh, snapshotName, restoreTs); err != nil {
 		return
 	}
+	// Recreating a dropped account commits its own background transaction.
+	// Publication replay must start a transaction before taking its database
+	// lock, so the lock remains held through the publication catalog write.
+	if len(pubInfos) > 0 {
+		back := bh.(*backExec)
+		if back.backSes.GetTxnHandler().GetTxn() == nil {
+			if err = bh.Exec(ctx, "begin;"); err != nil {
+				return err
+			}
+		}
+	}
 
 	return createPubs(ctx, sid, bh, snapshotName, restoreTs, pubInfos)
 }
@@ -4358,11 +4367,47 @@ func getAccountRecordByTs(ctx context.Context, ses *Session, bh BackgroundExec, 
 }
 
 func getAccountFromPublication(ctx context.Context, bh BackgroundExec, pubAccountName string, pubName string, currentAccount string) (accountID uint64, accountName string, err error) {
+	return resolveAccountFromPublication(ctx, bh, pubAccountName, pubName, currentAccount, false)
+}
+
+func lockAccountFromPublication(ctx context.Context, bh BackgroundExec, pubAccountName string, pubName string, currentAccount string, currentAccountID uint32) (accountID uint64, accountName string, err error) {
+	// DROP/CREATE ACCOUNT shares the outer SNAPSHOT gate with snapshot DDL.
+	// Match the authenticated session's generation after that gate: a retired
+	// session must not inherit a recreated account's publication membership.
+	systemCtx := defines.AttachAccountId(ctx, catalog.System_Account)
+	bh.ClearExecResultSet()
+	query := fmt.Sprintf("select account_id from mo_catalog.mo_account where account_name = '%s'", strings.ReplaceAll(currentAccount, "'", "''"))
+	if err = bh.Exec(systemCtx, query); err != nil {
+		return 0, "", err
+	}
+	results, readErr := getResultSet(systemCtx, bh)
+	if readErr != nil {
+		return 0, "", readErr
+	}
+	if !execResultArrayHasData(results) {
+		return 0, "", moerr.NewInternalErrorf(ctx, "account %s session is no longer active", currentAccount)
+	}
+	liveID, readErr := results[0].GetUint64(systemCtx, 0, 0)
+	if readErr != nil {
+		return 0, "", readErr
+	}
+	if liveID != uint64(currentAccountID) {
+		return 0, "", moerr.NewInternalErrorf(ctx, "account %s session is no longer active", currentAccount)
+	}
+	return resolveAccountFromPublication(ctx, bh, pubAccountName, pubName, currentAccount, true)
+}
+
+func resolveAccountFromPublication(ctx context.Context, bh BackgroundExec, pubAccountName string, pubName string, currentAccount string, lock bool) (accountID uint64, accountName string, err error) {
 	// Query mo_pubs to get publication info and verify permission
 	systemCtx := defines.AttachAccountId(ctx, catalog.System_Account)
 	queryPubSQL := fmt.Sprintf(`SELECT account_id, account_name, pub_name, database_name, database_id, table_list, account_list 
 			FROM mo_catalog.mo_pubs 
 			WHERE account_name = '%s' AND pub_name = '%s'`, strings.ReplaceAll(pubAccountName, "'", "''"), strings.ReplaceAll(pubName, "'", "''"))
+	if lock {
+		// ALTER/DROP PUBLICATION updates this row. Hold its lock through the
+		// snapshot transaction so membership cannot change after authorization.
+		queryPubSQL += " for update"
+	}
 
 	bh.ClearExecResultSet()
 	err = bh.Exec(systemCtx, queryPubSQL)
