@@ -94,6 +94,10 @@ func (group *Group) Prepare(proc *process.Process) (err error) {
 		!proc.GroupConcatSourceRowProvenanceTrusted()
 	group.ctr.prepareParamKind.Reset(group.Aggs)
 	group.ctr.aggExprs = group.Aggs
+	group.ctr.warningRetentionLimit = process.WarningDiagnosticRetentionLimitForProcess(proc)
+	group.ctr.warningRetentionSet = true
+	group.ctr.groupConcatWarnings.SetWarningBudget(
+		process.WarningDiagnosticBudgetForProcess(proc))
 	group.ctr.prepareParamKindWireV1 = prepareParamKindWireV1Enabled(proc) &&
 		hasPrepareParamKindPreservingAgg(group.Aggs)
 	group.ctr.mp = mpool.MustNewNoLock("group_mpool")
@@ -119,6 +123,8 @@ func (group *Group) Prepare(proc *process.Process) (err error) {
 	group.ctr.legacyHLLState = useLegacyHLLStateForRemote(proc)
 	group.ctr.floatZeroHLLState = useFloatZeroHLLStateForRemote(proc)
 	group.ctr.legacyVectorHLLState = useLegacyVectorHLLStateForRemote(proc)
+	group.ctr.legacyTextHLLAddState = useLegacyTextHLLAddStateForRemote(proc)
+	group.ctr.legacyFloatHLLAddState = useLegacyFloatHLLAddStateForRemote(proc)
 	// Freeze the FLOAT DISTINCT key policy before makeAggList creates any
 	// states. A pre-v79 remote producer keeps every legacy float key (including
 	// distinct NaN payloads); local and v79+ execution uses canonical keys.

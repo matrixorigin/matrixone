@@ -18,6 +18,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"runtime"
 	"strings"
 	"sync"
 	"testing"
@@ -687,6 +688,78 @@ func TestSharedTestClusterCloseIfActiveLeavesUnusedFixtureReusable(t *testing.T)
 	})
 	require.Equal(t, 2, initCalls)
 	require.NoError(t, state.CloseIfActive())
+}
+
+func TestSharedTestClusterDisposableGeneration(t *testing.T) {
+	for _, outcome := range []string{"success", "canceled", "partial-setup-goexit"} {
+		t.Run(outcome, func(t *testing.T) {
+			state := SharedTestCluster{}
+			service := &closeTrackingService{}
+			op := &operator{state: started}
+			op.reset.svc = service
+			fixture := &cluster{state: started, services: []*operator{op}}
+			reporter := &syntheticFailureReporter{}
+			ctx, cancel := context.WithCancel(context.Background())
+			defer cancel()
+
+			// Register disposal before Run, as a scenario owning a disposable
+			// generation does. Callback defers and cleanups must run first.
+			require.NoError(t, state.CloseIfActive())
+			reporter.Cleanup(func() {
+				if err := state.CloseIfActive(); err != nil {
+					reporter.Errorf("dispose fixture: %v", err)
+				}
+			})
+			deferred := false
+			cleanupSawLiveFixture := false
+			done := make(chan struct{})
+			go func() {
+				defer close(done)
+				state.Run(reporter, func() (Cluster, error) {
+					return fixture, nil
+				}, func(Cluster) {
+					defer func() { deferred = true }()
+					reporter.Cleanup(func() {
+						cleanupSawLiveFixture = state.cluster == fixture && service.closeCount.Load() == 0
+					})
+					if outcome != "success" {
+						cancel()
+					}
+					if outcome == "partial-setup-goexit" {
+						// Fatal assertions use Goexit after partial setup. The
+						// fixture admission must unwind before scope cleanup.
+						reporter.failed = true
+						runtime.Goexit()
+					}
+				})
+			}()
+			<-done
+			require.True(t, deferred)
+			require.False(t, state.runActive)
+			require.Zero(t, service.closeCount.Load())
+			if outcome != "success" {
+				require.ErrorIs(t, ctx.Err(), context.Canceled)
+			}
+			for i := len(reporter.cleanups) - 1; i >= 0; i-- {
+				reporter.cleanups[i]()
+			}
+			require.True(t, cleanupSawLiveFixture)
+			require.Empty(t, reporter.errors)
+			require.EqualValues(t, 1, service.closeCount.Load())
+			require.Nil(t, state.cluster)
+			require.False(t, state.closed)
+			require.False(t, state.sealed)
+
+			// A subsequent scenario must initialize a new fixture, even after
+			// cancellation or an assertion aborted the previous callback.
+			next := &cluster{}
+			state.Run(panicTestReporter{}, func() (Cluster, error) {
+				return next, nil
+			}, func(c Cluster) { require.Same(t, next, c) })
+			require.NoError(t, state.CloseIfActive())
+			require.EqualValues(t, 1, service.closeCount.Load())
+		})
+	}
 }
 
 func TestSharedTestClusterCloseIfActiveBlocksReuseAfterFailure(t *testing.T) {

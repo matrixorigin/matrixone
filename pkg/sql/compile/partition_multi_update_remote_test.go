@@ -42,7 +42,7 @@ func TestPartitionMultiUpdateRemoteConstructorRoundTrip(t *testing.T) {
 	proc.Base.PartitionService = codecPartitionService{}
 	rt := moruntime.ServiceRuntime(proc.GetService())
 	old, _ := rt.GetGlobalVariables(moruntime.MOProtocolVersion)
-	rt.SetGlobalVariables(moruntime.MOProtocolVersion, defines.MORPCVersion89)
+	rt.SetGlobalVariables(moruntime.MOProtocolVersion, defines.MORPCVersion101)
 	t.Cleanup(func() { rt.SetGlobalVariables(moruntime.MOProtocolVersion, old) })
 	ctx := &scopeContext{id: 1, root: &scopeContext{}, parent: &scopeContext{}, scope: &Scope{Proc: proc}}
 	for _, kind := range []string{"parent", "index", "plain"} {
@@ -148,7 +148,7 @@ func TestPartitionMultiUpdateRemoteProtocol(t *testing.T) {
 				PartitionIndexCtx: &plan.PartitionIndexCtx{PartitionCol: plan.ColRef{ColPos: 2}},
 			}}}
 			op := multi_update.NewPartitionMultiUpdate(raw)
-			rt.SetGlobalVariables(moruntime.MOProtocolVersion, defines.MORPCVersion89)
+			rt.SetGlobalVariables(moruntime.MOProtocolVersion, defines.MORPCVersion101)
 			_, instruction, err := convertToPipelineInstruction(op, proc, ctx, 1)
 			require.NoError(t, err)
 			p := &pipeline.Pipeline{Children: []*pipeline.Pipeline{{InstructionList: []*pipeline.Instruction{instruction}}}}
@@ -157,10 +157,10 @@ func TestPartitionMultiUpdateRemoteProtocol(t *testing.T) {
 			require.NoError(t, err)
 			rt.SetGlobalVariables(moruntime.MOProtocolVersion, defines.MORPCVersion88)
 			_, _, err = convertToPipelineInstruction(op, proc, ctx, 1)
-			require.ErrorContains(t, err, "MORPC protocol version 89")
-			require.ErrorContains(t, validateRemoteStatementLastInsertIDPipelineProtocol(proc, p), "MORPC protocol version 89")
+			require.ErrorContains(t, err, "MORPC protocol version 101")
+			require.ErrorContains(t, validateRemoteStatementLastInsertIDPipelineProtocol(proc, p), "MORPC protocol version 101")
 			_, err = decodeScope(data, proc, true, nil)
-			require.ErrorContains(t, err, "MORPC protocol version 89")
+			require.ErrorContains(t, err, "MORPC protocol version 101")
 			raw.MultiUpdateCtx[0].PartitionIndexCtx = nil
 			_, _, err = convertToPipelineInstruction(raw, proc, ctx, 1)
 			require.NoError(t, err)

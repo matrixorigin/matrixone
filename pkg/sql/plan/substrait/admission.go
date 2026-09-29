@@ -29,16 +29,17 @@ import (
 )
 
 const (
-	ResolvePath             = "/internal/v1/sidecar/read/resolve"
-	MaxLeaseTTL             = 20 * time.Minute
-	MaxManifestBytes        = 64 << 20
-	rollbackCleanupTimeout  = 30 * time.Second
-	resolveAuditTimeout     = 5 * time.Second
-	resolveAuthorityTimeout = 5 * time.Second
-	resolveBudgetTimeout    = 5 * time.Second
-	maxManifestSize         = MaxManifestBytes
-	maxCanonicalSchemaSize  = 1 << 20
-	maxResolveResponseSize  = MaxManifestBytes + maxCanonicalSchemaSize + maxTaeReadSize + 64
+	ResolvePath              = "/internal/v1/sidecar/read/resolve"
+	MaxLeaseTTL              = 20 * time.Minute
+	MaxManifestBytes         = 64 << 20
+	MaxQueryTAEMetadataBytes = 64 << 20
+	rollbackCleanupTimeout   = 30 * time.Second
+	resolveAuditTimeout      = 5 * time.Second
+	resolveAuthorityTimeout  = 5 * time.Second
+	resolveBudgetTimeout     = 5 * time.Second
+	maxManifestSize          = MaxManifestBytes
+	maxCanonicalSchemaSize   = 1 << 20
+	maxResolveResponseSize   = MaxManifestBytes + maxCanonicalSchemaSize + maxTaeReadSize + 64
 	// The bounded body, decoded request fields, and decoded TaeRead coexist until
 	// validation completes. Reserve all of them before the first request read.
 	maxResolveRequestRetainedBytes = 2*(maxResolveRequestSize+1) + maxTaeReadSize
@@ -66,6 +67,13 @@ type SnapshotFacts struct {
 
 type SnapshotProvider interface {
 	PrepareSnapshotRead(context.Context, Read, []byte) (SnapshotFacts, error)
+}
+
+// BoundedSnapshotProvider constructs an embedded TAE manifest within the
+// caller's remaining query-wide metadata budget. Flight retains its existing
+// per-read SnapshotProvider contract.
+type BoundedSnapshotProvider interface {
+	PrepareSnapshotReadBounded(context.Context, Read, []byte, int) (SnapshotFacts, error)
 }
 
 // Protector is the narrow GC-protection seam. Begin must fail if GC is already
@@ -101,6 +109,7 @@ type Lease struct {
 	Wire, Manifest, CanonicalSchema []byte
 	AuthorizedClientSPKIHash        []byte
 	ObjectNames                     []string
+	Consumer                        ReadConsumer
 	Released                        bool
 }
 
@@ -789,11 +798,17 @@ type PendingExecution struct {
 	AccountID uint64
 	QueryID   []byte
 	ReadRefs  [][]byte
+	Consumer  ReadConsumer
 }
 
-// PendingExecutions returns immutable copies of every live execution group.
+// PendingExecutions returns immutable copies of live Flight execution groups.
+// Embedded reads cannot outlive the process and are owned by ReconcileRestart.
 // Released records are cleaned during Replay and are never republished here.
 func (m *LeaseManager) PendingExecutions() []PendingExecution {
+	return m.pendingExecutions(ReadConsumerFlight)
+}
+
+func (m *LeaseManager) pendingExecutions(consumer ReadConsumer) []PendingExecution {
 	if m == nil {
 		return nil
 	}
@@ -808,7 +823,7 @@ func (m *LeaseManager) PendingExecutions() []PendingExecution {
 	}
 	grouped := make(map[executionKey]*PendingExecution)
 	for _, lease := range m.leases {
-		if lease == nil || lease.Read == nil || lease.Released {
+		if lease == nil || lease.Read == nil || lease.Released || lease.Consumer != consumer {
 			continue
 		}
 		groupKey := executionKey{accountID: lease.Read.AccountID, queryID: string(lease.Read.QueryID)}
@@ -817,6 +832,7 @@ func (m *LeaseManager) PendingExecutions() []PendingExecution {
 			pending = &PendingExecution{
 				AccountID: lease.Read.AccountID,
 				QueryID:   append([]byte(nil), lease.Read.QueryID...),
+				Consumer:  consumer,
 			}
 			grouped[groupKey] = pending
 		}
@@ -843,6 +859,10 @@ func validateLease(l *Lease, now uint64, allowReleased bool) error {
 	}
 	if len(l.Wire) == 0 || len(l.Manifest) == 0 || len(l.Manifest) > maxManifestSize || len(l.CanonicalSchema) == 0 || len(l.CanonicalSchema) > maxCanonicalSchemaSize || len(l.AuthorizedClientSPKIHash) != sha256.Size {
 		return moerr.NewInternalErrorNoCtx("invalid lease payload size")
+	}
+	consumer, err := inferReadConsumer(l.AuthorizedClientSPKIHash)
+	if err != nil || consumer != l.Consumer {
+		return moerr.NewInternalErrorNoCtx("lease read consumer marker mismatch")
 	}
 	decoded, err := UnmarshalTaeRead(l.Wire, validationNow)
 	if err != nil || !equalBytes(decoded.ReadRef, l.Read.ReadRef) {
@@ -905,6 +925,7 @@ type AdmissionRequest struct {
 	AccountID                uint64
 	QueryID, SnapshotTS      []byte
 	AuthorizedClientSPKIHash []byte
+	Consumer                 ReadConsumer
 	TTL                      time.Duration
 	// ReadOnly and PriorWrites are transaction facts captured at the compile
 	// cutpoint. They are explicit to prevent accidental admission after writes.
@@ -918,9 +939,18 @@ type AdmissionRequest struct {
 // ExpiresAt are returned from the admission boundary itself so downstream
 // ownership never depends on re-decoding capability wires.
 type AdmittedReads struct {
-	Wires     map[int32][]byte
-	ReadRefs  [][]byte
-	ExpiresAt time.Time
+	Wires            map[int32][]byte
+	EmbeddedTAEReads map[int32]AdmittedTAERead
+	ReadRefs         [][]byte
+	ExpiresAt        time.Time
+}
+
+// AdmittedTAERead is an immutable view of protected embedded metadata. The
+// manifest/schema storage is shared with the lease manager rather than copied;
+// callers must finish native preparation before releasing ReadRef.
+type AdmittedTAERead struct {
+	ReadRef                   []byte
+	Manifest, CanonicalSchema []byte
 }
 
 // Admit performs storage work only after Export has accepted the complete
@@ -937,17 +967,32 @@ func Admit(ctx context.Context, r AdmissionRequest) (map[int32][]byte, error) {
 // logical plan. It publishes all table leases atomically or none of them and
 // returns the immutable cleanup/deadline metadata for the new owner.
 func AdmitReads(ctx context.Context, r AdmissionRequest) (*AdmittedReads, error) {
+	return admitReadsWithMetadataLimit(ctx, r, MaxQueryTAEMetadataBytes)
+}
+
+func admitReadsWithMetadataLimit(ctx context.Context, r AdmissionRequest, metadataLimit int) (*AdmittedReads, error) {
 	if r.Candidate == nil || r.Provider == nil || r.Leases == nil {
 		return nil, moerr.NewInternalErrorNoCtx("substrait: incomplete admission request")
 	}
 	if !r.ReadOnly || r.PriorWrites {
 		return nil, NotEligible(EligibilityTransaction, "transaction is not an admissible read-only snapshot")
 	}
-	if len(r.QueryID) == 0 || len(r.SnapshotTS) != 12 || len(r.AuthorizedClientSPKIHash) != sha256.Size {
+	consumerHash, err := consumerMarker(r.Consumer, r.AuthorizedClientSPKIHash)
+	if len(r.QueryID) == 0 || len(r.SnapshotTS) != 12 || err != nil {
 		return nil, moerr.NewInternalErrorNoCtx("substrait: invalid admission identity")
 	}
 	if r.TTL <= 0 || r.TTL > MaxLeaseTTL {
 		return nil, moerr.NewInternalErrorNoCtx("substrait: lease TTL is outside the supported bound")
+	}
+	var boundedProvider BoundedSnapshotProvider
+	if r.Consumer == ReadConsumerEmbeddedTAE {
+		boundedProvider, _ = r.Provider.(BoundedSnapshotProvider)
+		if boundedProvider == nil {
+			return nil, moerr.NewInternalErrorNoCtx("substrait: embedded TAE admission requires a bounded snapshot provider")
+		}
+		if metadataLimit <= 0 {
+			return nil, moerr.NewInternalErrorNoCtx("substrait: invalid query TAE metadata bound")
+		}
 	}
 	if r.Random == nil {
 		r.Random = rand.Reader
@@ -957,12 +1002,28 @@ func AdmitReads(ctx context.Context, r AdmissionRequest) (*AdmittedReads, error)
 		facts SnapshotFacts
 	}
 	result := &AdmittedReads{}
-	err := r.Leases.acquirePrepared(ctx, func() ([]*Lease, error) {
+	nodeRefs := make(map[int32][]byte)
+	err = r.Leases.acquirePrepared(ctx, func() ([]*Lease, error) {
 		reads := r.Candidate.Reads()
 		prepared := make([]preparedRead, 0, len(reads))
+		metadataBytes := 0
 		for _, read := range reads {
 			read.AccountID = r.AccountID
-			facts, err := r.Provider.PrepareSnapshotRead(ctx, read, r.SnapshotTS)
+			var facts SnapshotFacts
+			var err error
+			if r.Consumer == ReadConsumerEmbeddedTAE {
+				metadataBytes, err = prechargeQueryTAEMetadata(metadataBytes, read, metadataLimit)
+				if err == nil && metadataBytes == metadataLimit {
+					err = notEligiblef(EligibilitySnapshot, "query snapshot metadata exceeds the %d-byte Sirius bound", metadataLimit)
+				}
+				if err == nil {
+					facts, err = boundedProvider.PrepareSnapshotReadBounded(
+						ctx, read, r.SnapshotTS, metadataLimit-metadataBytes,
+					)
+				}
+			} else {
+				facts, err = r.Provider.PrepareSnapshotRead(ctx, read, r.SnapshotTS)
+			}
 			if err != nil {
 				if IsNotEligible(err) {
 					return nil, err
@@ -977,6 +1038,12 @@ func AdmitReads(ctx context.Context, r AdmissionRequest) (*AdmittedReads, error)
 			}
 			if len(facts.Manifest) == 0 || !equalBytes(facts.CanonicalSchema, read.Schema) {
 				return nil, moerr.NewInternalErrorNoCtxf("substrait: table %d schema or manifest mismatch", read.TableID)
+			}
+			if r.Consumer == ReadConsumerEmbeddedTAE {
+				metadataBytes, err = chargeReturnedTAEMetadata(metadataBytes, facts, metadataLimit)
+				if err != nil {
+					return nil, err
+				}
 			}
 			prepared = append(prepared, preparedRead{read: read, facts: facts})
 		}
@@ -1004,16 +1071,84 @@ func AdmitReads(ctx context.Context, r AdmissionRequest) (*AdmittedReads, error)
 			if err != nil {
 				return nil, err
 			}
-			leases = append(leases, &Lease{Read: tr, Wire: wire, Manifest: item.facts.Manifest, CanonicalSchema: item.facts.CanonicalSchema, AuthorizedClientSPKIHash: append([]byte(nil), r.AuthorizedClientSPKIHash...), ObjectNames: item.facts.ObjectNames})
+			leases = append(leases, &Lease{Read: tr, Wire: wire, Manifest: item.facts.Manifest, CanonicalSchema: item.facts.CanonicalSchema, AuthorizedClientSPKIHash: append([]byte(nil), consumerHash...), ObjectNames: item.facts.ObjectNames, Consumer: r.Consumer})
 			result.Wires[item.read.NodeID] = wire
 			result.ReadRefs = append(result.ReadRefs, append([]byte(nil), ref...))
+			nodeRefs[item.read.NodeID] = ref
 		}
 		return leases, nil
 	})
 	if err != nil {
 		return nil, err
 	}
+	if r.Consumer != ReadConsumerEmbeddedTAE {
+		return result, nil
+	}
+	result.EmbeddedTAEReads = make(map[int32]AdmittedTAERead, len(nodeRefs))
+	for nodeID, readRef := range nodeRefs {
+		read, ok := r.Leases.embeddedTAERead(readRef)
+		if !ok {
+			cleanupCtx, cancel := context.WithTimeout(context.Background(), rollbackCleanupTimeout)
+			defer cancel()
+			var cleanupErr error
+			for _, admittedRef := range result.ReadRefs {
+				cleanupErr = errors.Join(cleanupErr, r.Leases.Release(cleanupCtx, admittedRef))
+			}
+			return nil, errors.Join(
+				moerr.NewInternalErrorNoCtx("substrait: admitted embedded TAE metadata is unavailable"),
+				cleanupErr,
+			)
+		}
+		result.EmbeddedTAEReads[nodeID] = read
+	}
 	return result, nil
+}
+
+func chargeTAEMetadata(current, maximum int, amounts ...uint64) (int, error) {
+	if current < 0 || maximum <= 0 || current > maximum {
+		return current, moerr.NewInternalErrorNoCtx("substrait: invalid query TAE metadata accounting")
+	}
+	remaining := uint64(maximum - current)
+	charged := uint64(0)
+	for _, amount := range amounts {
+		if amount > remaining-charged {
+			return current, notEligiblef(EligibilitySnapshot, "query snapshot metadata exceeds the %d-byte Sirius bound", maximum)
+		}
+		charged += amount
+	}
+	return current + int(charged), nil
+}
+
+// prechargeQueryTAEMetadata reserves every descriptor byte known before
+// storage enumeration. This keeps an over-budget read from beginning manifest
+// construction and makes the provider's budget monotonically decrease.
+func prechargeQueryTAEMetadata(current int, read Read, maximum int) (int, error) {
+	if current < 0 || maximum <= 0 || current > maximum {
+		return current, moerr.NewInternalErrorNoCtx("substrait: invalid query TAE metadata accounting")
+	}
+	remaining := maximum - current
+	columns := uint64(len(read.Columns))
+	if columns > uint64(remaining)/128 {
+		return current, notEligiblef(EligibilitySnapshot, "query snapshot metadata exceeds the %d-byte Sirius bound", maximum)
+	}
+	return chargeTAEMetadata(current, maximum, 256, 128*columns, uint64(len(read.Schema)))
+}
+
+// chargeReturnedTAEMetadata defensively verifies a bounded provider's result.
+// Object-name protection descriptors are charged even though their bytes also
+// occur in the manifest.
+func chargeReturnedTAEMetadata(current int, facts SnapshotFacts, maximum int) (int, error) {
+	next, err := chargeTAEMetadata(current, maximum, uint64(len(facts.Manifest)))
+	if err != nil {
+		return current, err
+	}
+	for _, name := range facts.ObjectNames {
+		next, err = chargeTAEMetadata(next, maximum, 16, uint64(len(name)))
+		if err != nil {
+			return current, err
+		}
+	}
+	return next, nil
 }
 
 // ResolveAuditEvent is emitted exactly once before a successful manifest
@@ -1060,12 +1195,11 @@ func ResolveHandler(leases *LeaseManager, now func() time.Time, auditor ResolveA
 			http.Error(w, "protobuf content type required", http.StatusUnsupportedMediaType)
 			return
 		}
-		if r.TLS == nil || len(r.TLS.VerifiedChains) == 0 || len(r.TLS.VerifiedChains[0]) == 0 || len(r.TLS.VerifiedChains[0][0].RawSubjectPublicKeyInfo) == 0 {
-			http.Error(w, "verified client certificate required", http.StatusUnauthorized)
-			return
-		}
-		principalHash := sha256.Sum256(r.TLS.VerifiedChains[0][0].RawSubjectPublicKeyInfo)
 		if leases == nil || auditor == nil {
+			if r.TLS == nil || len(r.TLS.VerifiedChains) == 0 || len(r.TLS.VerifiedChains[0]) == 0 || len(r.TLS.VerifiedChains[0][0].RawSubjectPublicKeyInfo) == 0 {
+				http.Error(w, "verified client certificate required", http.StatusUnauthorized)
+				return
+			}
 			http.Error(w, "resolver unavailable", http.StatusServiceUnavailable)
 			return
 		}
@@ -1101,6 +1235,17 @@ func ResolveHandler(leases *LeaseManager, now func() time.Time, auditor ResolveA
 			http.Error(w, "resolver unavailable", http.StatusServiceUnavailable)
 			return
 		}
+		if ok && lease.Consumer != ReadConsumerFlight {
+			http.Error(w, "read lease not found", http.StatusNotFound)
+			return
+		}
+		// Consumer selection precedes certificate processing so an embedded
+		// marker can never enter Flight's authentication/audit path.
+		if r.TLS == nil || len(r.TLS.VerifiedChains) == 0 || len(r.TLS.VerifiedChains[0]) == 0 || len(r.TLS.VerifiedChains[0][0].RawSubjectPublicKeyInfo) == 0 {
+			http.Error(w, "verified client certificate required", http.StatusUnauthorized)
+			return
+		}
+		principalHash := sha256.Sum256(r.TLS.VerifiedChains[0][0].RawSubjectPublicKeyInfo)
 		if !ok || !equalBytes(lease.AuthorizedClientSPKIHash, principalHash[:]) ||
 			lease.Read.AccountID != tr.AccountID || lease.Read.DatabaseID != tr.DatabaseID || !equalBytes(lease.Read.QueryID, tr.QueryID) ||
 			!equalBytes(lease.Read.SchemaDigest, tr.SchemaDigest) || !equalBytes(lease.Read.ManifestSHA256, tr.ManifestSHA256) ||

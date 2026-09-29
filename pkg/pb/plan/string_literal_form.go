@@ -220,6 +220,77 @@ func RequiresMORPCVersion85ExpressionResultContracts(owner any) (bool, error) {
 	return RequiresMORPCVersion86ExpressionResultContracts(owner)
 }
 
+// RequiresMORPCVersion89DecimalLiteralSemantics reports whether an owner
+// contains a plain decimal literal whose exact normalized binding must not be
+// replayed by a pre-v89 binder.
+func RequiresMORPCVersion89DecimalLiteralSemantics(owner any) (bool, error) {
+	features, err := RequiredRemoteExpressionFeatures(owner)
+	return features.DecimalLiteralSemantics, err
+}
+
+// RequiresMORPCVersion88DecimalLiteralSemantics is retained as a source-level
+// compatibility alias. MORPC v88 is owned by canonical vector HLL keys.
+// Deprecated: use RequiresMORPCVersion89DecimalLiteralSemantics.
+func RequiresMORPCVersion88DecimalLiteralSemantics(owner any) (bool, error) {
+	return RequiresMORPCVersion89DecimalLiteralSemantics(owner)
+}
+
+// RequiresMORPCVersion87DecimalLiteralSemantics is retained as a source-level
+// compatibility alias. Decimal literal admission moved to v89 because v87 and
+// v88 are owned by grouping provenance and canonical vector HLL keys.
+// Deprecated: use RequiresMORPCVersion89DecimalLiteralSemantics.
+func RequiresMORPCVersion87DecimalLiteralSemantics(owner any) (bool, error) {
+	return RequiresMORPCVersion89DecimalLiteralSemantics(owner)
+}
+
+// RequiresMORPCVersion84DecimalLiteralSemantics is retained as a source-level
+// compatibility alias. Decimal literal admission moved to v89 because v84 is
+// already owned by the extended discrete percentile contract on main.
+// Deprecated: use RequiresMORPCVersion89DecimalLiteralSemantics.
+func RequiresMORPCVersion84DecimalLiteralSemantics(owner any) (bool, error) {
+	return RequiresMORPCVersion89DecimalLiteralSemantics(owner)
+}
+
+// RequiresMORPCVersion82DecimalLiteralSemantics is retained as a source-level
+// compatibility alias for callers introduced with the original decimal marker.
+// Deprecated: use RequiresMORPCVersion89DecimalLiteralSemantics.
+func RequiresMORPCVersion82DecimalLiteralSemantics(owner any) (bool, error) {
+	return RequiresMORPCVersion89DecimalLiteralSemantics(owner)
+}
+
+// RequiresMORPCVersion90SpatialDistanceSemantics reports whether an owner
+// contains a spatial-distance expression whose meaning or overload contract
+// changed in MORPC v90. Constant folding must retain such an expression until
+// persisted-expression admission has observed this requirement.
+func RequiresMORPCVersion90SpatialDistanceSemantics(owner any) (bool, error) {
+	features, err := RequiredRemoteExpressionFeatures(owner)
+	return features.SpatialDistanceSemantics, err
+}
+
+// RequiresMORPCVersion89SpatialDistanceSemantics retains the pre-main source alias.
+// Deprecated: use RequiresMORPCVersion90SpatialDistanceSemantics; admission is v90.
+func RequiresMORPCVersion89SpatialDistanceSemantics(owner any) (bool, error) {
+	return RequiresMORPCVersion90SpatialDistanceSemantics(owner)
+}
+
+// RequiresMORPCVersion86SpatialDistanceSemantics retains the original source alias.
+// Deprecated: use RequiresMORPCVersion90SpatialDistanceSemantics; admission is v90.
+func RequiresMORPCVersion86SpatialDistanceSemantics(owner any) (bool, error) {
+	return RequiresMORPCVersion90SpatialDistanceSemantics(owner)
+}
+
+// RequiresMORPCVersion87SpatialDistanceSemantics retains the unmerged stack alias.
+// Deprecated: use RequiresMORPCVersion90SpatialDistanceSemantics; admission is v90.
+func RequiresMORPCVersion87SpatialDistanceSemantics(owner any) (bool, error) {
+	return RequiresMORPCVersion90SpatialDistanceSemantics(owner)
+}
+
+// RequiresMORPCVersion88SpatialDistanceSemantics retains the pre-main source alias.
+// Deprecated: use RequiresMORPCVersion90SpatialDistanceSemantics; admission is v90.
+func RequiresMORPCVersion88SpatialDistanceSemantics(owner any) (bool, error) {
+	return RequiresMORPCVersion90SpatialDistanceSemantics(owner)
+}
+
 const (
 	equalFunctionID                  int32 = 0
 	notEqualFunctionID               int32 = 1
@@ -256,6 +327,8 @@ const (
 	planTimeTypeID                   int32 = 51
 	planDatetimeTypeID               int32 = 52
 	planTimestampTypeID              int32 = 53
+	planInt64TypeID                  int32 = 23
+	planUint32TypeID                 int32 = 27
 	planAnyTypeID                    int32 = 0
 	maxVarcharWidth                  int32 = 65535
 )
@@ -278,6 +351,10 @@ const (
 // vectors to signed INT/ BIGINT or BIGINT UNSIGNED.
 // BoundedConditionalStringDomains requires MORPC v83 because the bounded
 // BINARY/VARBINARY COALESCE overload identities are new to the registry.
+// DecimalLiteralSemantics requires MORPC v89 because plain DECIMAL256
+// literals are normalized and kept exact by the new planner, while older
+// binders can round or reject the same persisted SQL at the Decimal128
+// boundary.
 // TOBase64ResultContracts and IPFunctionResultContracts require MORPC v86:
 // the former changes a VARCHAR result bound and adds binary overloads, while
 // the latter changes IP predicate results to INT32 and adds domain-aware
@@ -285,6 +362,14 @@ const (
 // ExpressionResultMetadataContracts also requires MORPC v86 because bounded
 // character slicing and fractional temporal conditional results change the
 // serialized result metadata consumed by persisted views and remote workers.
+// SpatialDistanceSemantics requires MORPC v90 because geodetic
+// ST_FRECHETDISTANCE/ST_HAUSDORFFDISTANCE change the meaning of existing
+// overloads and the distance family adds length-unit overloads.
+// PreparedPrecisionScalar requires MORPC v95 because older executors lose
+// scalar identity when CEIL/FLOOR precision passes through private CAST 5/6.
+// DecimalDivisionSemantics requires MORPC v97 for new plans because older
+// executors derive the quotient scale from the left operand instead of the
+// result type. Legacy plans remain executable by v97 receivers.
 type RemoteExpressionFeatures struct {
 	NumericPrefix                   bool
 	JSONComparisonParam             bool
@@ -302,6 +387,17 @@ type RemoteExpressionFeatures struct {
 	TOBase64ResultContracts           bool
 	IPFunctionResultContracts         bool
 	ExpressionResultMetadataContracts bool
+	DecimalLiteralSemantics           bool
+	SpatialDistanceSemantics          bool
+	PreparedPrecisionScalar           bool
+	DecimalDivisionSemantics          bool
+	// SpecialIntegerConsumers requires v98 independently of private CASTs.
+	SpecialIntegerConsumers       bool
+	TemporalResultContracts       bool
+	InvalidTemporalResultContract bool
+	NormalizedIntervalUnits       bool
+	LegacyIntervalUnits           bool
+	WeekSessionDefault            bool
 }
 
 func (features RemoteExpressionFeatures) Any() bool {
@@ -319,7 +415,39 @@ func (features RemoteExpressionFeatures) Any() bool {
 		features.IntegerParameterCoercion ||
 		features.TOBase64ResultContracts ||
 		features.IPFunctionResultContracts ||
-		features.ExpressionResultMetadataContracts
+		features.ExpressionResultMetadataContracts ||
+		features.DecimalLiteralSemantics ||
+		features.SpatialDistanceSemantics ||
+		features.PreparedPrecisionScalar ||
+		features.SpecialIntegerConsumers ||
+		features.DecimalDivisionSemantics ||
+		features.TemporalResultContracts ||
+		features.InvalidTemporalResultContract ||
+		features.NormalizedIntervalUnits ||
+		features.LegacyIntervalUnits ||
+		features.WeekSessionDefault
+}
+
+func hasPrivateIntegerPrecisionCast(expr *Expr) bool {
+	if expr == nil {
+		return false
+	}
+	fn := expr.GetF()
+	if fn == nil || fn.Func == nil {
+		return false
+	}
+	if int32(fn.Func.Obj>>32) == 21 {
+		overload := int32(fn.Func.Obj)
+		if overload == 5 || overload == 6 {
+			return true
+		}
+	}
+	for _, arg := range fn.Args {
+		if hasPrivateIntegerPrecisionCast(arg) {
+			return true
+		}
+	}
+	return false
 }
 
 func isBoundedConditionalStringDomain(fn *Function) bool {
@@ -338,16 +466,19 @@ func isBoundedConditionalStringDomain(fn *Function) bool {
 // therefore based on function identity, not on the operand types selected by a
 // particular planner invocation.
 const (
-	remoteIPInet6AtonFunctionID    int32 = 392
-	remoteIPInet6NtoaFunctionID    int32 = 393
-	remoteIPInetAtonFunctionID     int32 = 394
-	remoteIPInetNtoaFunctionID     int32 = 395
-	remoteIPIsIPv4FunctionID       int32 = 396
-	remoteIPIsIPv6FunctionID       int32 = 397
-	remoteIPIsIPv4CompatFunctionID int32 = 398
-	remoteIPIsIPv4MappedFunctionID int32 = 399
-	remoteTOBase64FunctionID       int32 = 213
-	remoteINETNTOAFunctionID       int32 = 395
+	remoteIPInet6AtonFunctionID       int32 = 392
+	remoteIPInet6NtoaFunctionID       int32 = 393
+	remoteIPInetAtonFunctionID        int32 = 394
+	remoteIPInetNtoaFunctionID        int32 = 395
+	remoteIPIsIPv4FunctionID          int32 = 396
+	remoteIPIsIPv6FunctionID          int32 = 397
+	remoteIPIsIPv4CompatFunctionID    int32 = 398
+	remoteIPIsIPv4MappedFunctionID    int32 = 399
+	remoteTOBase64FunctionID          int32 = 213
+	remoteINETNTOAFunctionID          int32 = 395
+	remoteSpatialDistanceFunctionID   int32 = 421
+	remoteFrechetDistanceFunctionID   int32 = 506
+	remoteHausdorffDistanceFunctionID int32 = 507
 )
 
 func isValidIntegerArgumentSource(id, source int32) bool {
@@ -714,9 +845,113 @@ func isExpressionResultMetadataContract(expr *Expr) bool {
 func RequiredRemoteExpressionFeatures(owner any) (features RemoteExpressionFeatures, err error) {
 	err = walkExpressionsInOwner(owner, func(expr *Expr) error {
 		return VisitExprTree(expr, func(current *Expr) error {
+			if !features.DecimalLiteralSemantics {
+				if literal := current.GetLit(); literal != nil {
+					features.DecimalLiteralSemantics = literal.DecimalLiteralRequiresV82
+				}
+				if literalVec := current.GetVec(); literalVec != nil {
+					features.DecimalLiteralSemantics = literalVec.DecimalLiteralRequiresV82
+				}
+			}
 			fn := current.GetF()
 			if fn != nil && fn.Func != nil {
 				id, overload := int32(fn.Func.Obj>>32), int32(fn.Func.Obj)
+				special, err := isSpecialIntegerConsumer(fn, id, overload)
+				if err != nil {
+					return err
+				}
+				features.SpecialIntegerConsumers = features.SpecialIntegerConsumers || special
+				// DIV overload 0 keeps its function identity, but v97 changes
+				// decimal result scale and coefficient interpretation.
+				if id == 13 && overload == 0 &&
+					(current.Typ.Id == 32 || current.Typ.Id == 33 || current.Typ.Id == 34) {
+					features.DecimalDivisionSemantics = true
+				}
+				// Function IDs live in the function registry, which cannot be
+				// imported here because the planner depends on this package.
+				if id == 189 { // legacy TO_INTERVAL: ambiguous across pre-v97 and v97 binaries
+					features.LegacyIntervalUnits = true
+				}
+				if id == 583 { // TO_INTERVAL_MICROSECOND
+					features.NormalizedIntervalUnits = true
+				}
+				if (id == 224 || id == 225) && overload >= 8 && overload <= 15 { // DATE_ADD/SUB raw TIME interval
+					features.NormalizedIntervalUnits = true
+				}
+				if (id == 205 || id == 218 || id == 141) && overload == 2 { // DAY/YEAR/MONTH(VARCHAR) raw field contract
+					features.TemporalResultContracts = true
+				}
+				if id == 216 && (overload == 0 || overload == 1) { // one-arg WEEK
+					features.WeekSessionDefault = true
+				}
+				// Released overloads retain their physical vector ABI. The new
+				// numeric EXTRACT and string ADDTIME/SUBTIME results use appended
+				// identities, so 4.2 catalog expressions remain executable.
+				if id == 208 && overload >= 0 && overload <= 9 {
+					want := planVarcharTypeID
+					if overload == 1 {
+						want = planUint32TypeID
+					}
+					if overload >= 5 {
+						want = planInt64TypeID
+						features.TemporalResultContracts = true
+					}
+					features.InvalidTemporalResultContract = features.InvalidTemporalResultContract || current.Typ.Id != want
+				}
+				if (id == 41 && overload >= 6 && overload <= 11) || (id == 378 && overload >= 6 && overload <= 15) {
+					want := planDatetimeTypeID
+					preparedTime := false
+					if (id == 41 && overload >= 9) || (id == 378 && overload >= 11) {
+						want = planVarcharTypeID
+						// A direct prepared first marker has a TIME(6) result;
+						// its string payload still uses this executor.
+						preparedTime = current.Typ.Id == planTimeTypeID
+						features.TemporalResultContracts = true
+					}
+					features.InvalidTemporalResultContract = features.InvalidTemporalResultContract || (!preparedTime && current.Typ.Id != want)
+				}
+				// A stable physical ABI does not imply stable value/diagnostic
+				// semantics. Newly executing arithmetic must use one final
+				// temporal contract, including on released 4.2 workers.
+				if (id == 41 || id == 378) && overload >= 0 && overload <= 5 {
+					features.TemporalResultContracts = true
+				}
+				switch id {
+				case 93, 94, 95, 224, 225, 250, 364, 373, 375, 376: // differences, arithmetic, construction, periods
+					features.TemporalResultContracts = true
+				case 141, 201, 203, 204, 205, 206, 216, 217, 218, 219, 220, 221, 222, 223,
+					360, 361, 362, 368, 369, 370, 374, 383: // components, zero calendars and week modes
+					features.TemporalResultContracts = true
+				case 187, 188, 196, 197, 251, 363: // parsing, Unix conversion and formatting
+					features.TemporalResultContracts = true
+				}
+
+				// CAST keeps its physical identity. The changed TIME conversion
+				// includes numeric inputs; other temporal casts use the shared
+				// text parser, or (for explicit typed DATE) the zero-date policy.
+				// SQL HEX/BIT literals also changed numeric coercion.
+				if id == 21 && len(fn.Args) > 0 && fn.Args[0] != nil {
+					source := fn.Args[0]
+					if isPlanTemporalType(current.Typ.Id) &&
+						(isPlanStringType(source.Typ.Id) ||
+							(current.Typ.Id == planTimeTypeID && isPlanNumericType(source.Typ.Id)) ||
+							(overload == 1 && current.Typ.Id == planDateTypeID &&
+								(source.Typ.Id == planDateTypeID || source.Typ.Id == planDatetimeTypeID))) {
+						features.TemporalResultContracts = true
+					}
+					if isPlanNumericType(current.Typ.Id) {
+						if lit := source.GetLit(); lit != nil &&
+							(lit.LiteralForm == StringLiteralForm_STRING_LITERAL_HEX ||
+								lit.LiteralForm == StringLiteralForm_STRING_LITERAL_BIT) {
+							features.TemporalResultContracts = true
+						}
+					}
+				}
+
+				if (id == 72 || id == 103) && len(fn.Args) == 2 &&
+					hasPrivateIntegerPrecisionCast(fn.Args[1]) {
+					features.PreparedPrecisionScalar = true
+				}
 				// CAST is stable function ID 21. Match execution identity, not
 				// names or source types; legacy CAST 0..4 remains executable.
 				if id == 21 && overload >= 5 && overload <= 8 {
@@ -780,6 +1015,22 @@ func RequiredRemoteExpressionFeatures(owner any) (features RemoteExpressionFeatu
 			}
 			if !features.IPFunctionSemantics && fn != nil && fn.Func != nil {
 				features.IPFunctionSemantics = isRemoteIPFunction(int32(fn.Func.Obj >> 32))
+			}
+			if !features.SpatialDistanceSemantics && fn != nil && fn.Func != nil {
+				functionID := int32(fn.Func.Obj >> 32)
+				overloadID := int32(fn.Func.Obj)
+				switch functionID {
+				case remoteFrechetDistanceFunctionID, remoteHausdorffDistanceFunctionID:
+					// Overloads 0/1 are the historical planar identities. The
+					// unit overloads 2/3 and the corrected two-argument
+					// geodetic identities 4/5 are v90 contracts.
+					features.SpatialDistanceSemantics = overloadID >= 2 && overloadID <= 5
+				case remoteSpatialDistanceFunctionID:
+					// ST_DISTANCE overloads 4/5 are the new length-unit forms.
+					// Legacy two-argument and explicit-SRID forms retain their
+					// historical wire contract.
+					features.SpatialDistanceSemantics = overloadID == 4 || overloadID == 5
+				}
 			}
 			return nil
 		})
@@ -885,6 +1136,59 @@ func isTypedConversionFunction(function *Function) bool {
 	default:
 		return false
 	}
+}
+
+// Stable execution IDs and type IDs are part of the wire contract. Keep this
+// validation independent of container/types and function (which import plan).
+func isSpecialIntegerConsumer(fn *Function, id, overload int32) (bool, error) {
+	count, integerCount := 0, 0
+	switch {
+	case id == 262 && (overload == 2 || overload == 3): // FORMAT
+		count = int(overload)
+	case id == 202 && overload == 1: // MAKEDATE
+		count, integerCount = 2, 2
+	case id == 373 && overload >= 36 && overload <= 38: // MAKETIME
+		count, integerCount = 3, 2
+	default:
+		return false, nil
+	}
+	if len(fn.Args) != count {
+		return false, moerr.NewInvalidInputNoCtx("invalid special integer consumer arity")
+	}
+	for _, arg := range fn.Args {
+		if arg == nil {
+			return false, moerr.NewInvalidInputNoCtx("missing special integer consumer argument")
+		}
+	}
+	for i := 0; i < integerCount; i++ {
+		if fn.Args[i].Typ.Id != 23 {
+			return false, moerr.NewInvalidInputNoCtx("special integer consumer requires INT64 operands")
+		}
+	}
+	if id == 262 {
+		if fn.Args[1].Typ.Id != 23 {
+			return false, moerr.NewInvalidInputNoCtx("FORMAT precision requires INT64")
+		}
+		if !isPlanNumericType(fn.Args[0].Typ.Id) && !isPlanMySQLStringType(fn.Args[0].Typ.Id) {
+			return false, moerr.NewInvalidInputNoCtx("invalid FORMAT number signature")
+		}
+		if count == 3 && !isPlanMySQLStringType(fn.Args[2].Typ.Id) {
+			return false, moerr.NewInvalidInputNoCtx("invalid FORMAT locale signature")
+		}
+	}
+	if id == 373 {
+		second := int32(31) // FLOAT64
+		if overload == 37 {
+			second = 61
+		} // VARCHAR
+		if overload == 38 {
+			second = 28
+		} // UINT64
+		if fn.Args[2].Typ.Id != second {
+			return false, moerr.NewInvalidInputNoCtx("invalid MAKETIME seconds signature")
+		}
+	}
+	return true, nil
 }
 
 // FORMAT reuses its historical VARCHAR overload IDs for the new typed numeric

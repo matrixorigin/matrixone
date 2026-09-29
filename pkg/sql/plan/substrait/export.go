@@ -184,14 +184,16 @@ func (c *Candidate) Build(readValues map[int32][]byte) ([]byte, error) {
 }
 
 type exporter struct {
-	query        *planpb.Query
-	readValues   map[int32][]byte
-	reads        []Read
-	functions    map[string]uint32
-	validateOnly bool
-	visiting     map[int32]bool
-	readSeen     map[int32]bool
-	stepOrdinal  int32
+	query            *planpb.Query
+	readValues       map[int32][]byte
+	embeddedBindings map[int32]EmbeddedReadBinding
+	reads            []Read
+	functions        map[string]uint32
+	validateOnly     bool
+	visiting         map[int32]bool
+	readSeen         map[int32]bool
+	embeddedReadSeen map[int32]bool
+	stepOrdinal      int32
 }
 
 func (e *exporter) node(id int32) (*spb.Rel, error) {
@@ -218,6 +220,9 @@ func (e *exporter) node(id int32) (*spb.Rel, error) {
 	switch n.NodeType {
 	case planpb.Node_TABLE_SCAN:
 		rel, err = e.read(n)
+		if err == nil && e.embeddedBindings != nil {
+			return rel, nil
+		}
 	case planpb.Node_FILTER:
 		rel, err = e.unary(n)
 		if err == nil {
@@ -610,6 +615,24 @@ func (e *exporter) read(n *planpb.Node) (*spb.Rel, error) {
 				Schema:        schemaBytes,
 			})
 		}
+	}
+	if e.embeddedBindings != nil {
+		if e.embeddedReadSeen == nil {
+			e.embeddedReadSeen = make(map[int32]bool)
+		}
+		if e.embeddedReadSeen[n.NodeId] {
+			return nil, moerr.NewInternalErrorNoCtxf("substrait: embedded read node %d is replayed", n.NodeId)
+		}
+		e.embeddedReadSeen[n.NodeId] = true
+		binding, ok := e.embeddedBindings[n.NodeId]
+		if !ok {
+			return nil, moerr.NewInternalErrorNoCtxf("substrait: missing embedded binding for node %d", n.NodeId)
+		}
+		_, outputSchema, embeddedErr := embeddedMORead(n)
+		if embeddedErr != nil {
+			return nil, embeddedErr
+		}
+		return embeddedNamedRead(binding, outputSchema), nil
 	}
 	value := e.readValues[n.NodeId]
 	if !e.validateOnly && len(value) == 0 {
@@ -1095,6 +1118,7 @@ func literalVectorOptions(encoded *planpb.LiteralVec, expected *planpb.Type) (op
 			return nil, notEligiblef(EligibilityExpression, "folded IN list uses unsupported type %s", values.GetType().Oid.String())
 		}
 		value.IsSerialized = encoded.IsSerialized
+		value.DecimalLiteralRequiresV82 = encoded.DecimalLiteralRequiresV82
 		typ := *expected
 		typ.NotNullable = !value.Isnull
 		options[i] = &planpb.Expr{Typ: typ, Expr: &planpb.Expr_Lit{Lit: value}}
@@ -1103,12 +1127,24 @@ func literalVectorOptions(encoded *planpb.LiteralVec, expected *planpb.Type) (op
 }
 
 func (e *exporter) extractExpr(result *planpb.Expr, call *planpb.Function, inputs []int) (*spb.Expression, error) {
-	if len(call.Args) != 2 || call.Args[0].GetLit() == nil {
+	if len(call.Args) != 2 || call.Args[0].GetLit() == nil || call.Args[1] == nil {
 		return nil, notEligiblef(EligibilityExpression, "extract requires a literal field and one value")
 	}
 	unit := strings.ToLower(call.Args[0].GetLit().GetSval())
 	if unit == "" {
 		return nil, notEligiblef(EligibilityExpression, "extract field is empty")
+	}
+	// Sirius lowers EXTRACT to DuckDB date_part. Only the simple DATE fields
+	// share our contract: WEEK uses ISO weeks there, text has no tolerant
+	// parser, and TIME durations / TIMESTAMP session zones are not equivalent.
+	// Check the literal before either exact or parameterized admission.
+	if types.T(call.Args[1].Typ.Id) != types.T_date {
+		return nil, notEligiblef(EligibilityExpression, "extract requires a DATE value for Sirius")
+	}
+	switch unit {
+	case "year", "month", "day", "quarter":
+	default:
+		return nil, notEligiblef(EligibilityExpression, "extract field %q has no declared Sirius semantic equivalence", unit)
 	}
 	supported, err := hasSemanticCapability(semanticScalar, "extract", call.Func, call.Args, &result.Typ)
 	if err != nil {
@@ -1524,6 +1560,7 @@ type semanticDeclaration struct {
 var semanticDeclarations = []semanticDeclaration{
 	{semanticScalar, function.AND, "and", "and", []types.Type{types.T_bool.ToType(), types.T_bool.ToType()}, "sirius-v1:boolean-three-valued-logic"},
 	{semanticScalar, function.OR, "or", "or", []types.Type{types.T_bool.ToType(), types.T_bool.ToType()}, "sirius-v1:boolean-three-valued-logic"},
+	{semanticScalar, function.EXTRACT, "extract", "extract", []types.Type{types.T_varchar.ToType(), types.T_date.ToType()}, "sirius-v1:extract"},
 	{semanticScalar, function.NOT, "not", "not", []types.Type{types.T_bool.ToType()}, "sirius-v1:boolean-three-valued-logic"},
 	{semanticScalar, function.EQUAL, "=", "equal", []types.Type{types.T_int64.ToType(), types.T_int64.ToType()}, "sirius-v1:signed-i64-comparison"},
 	{semanticScalar, function.NOT_EQUAL, "!=", "not_equal", []types.Type{types.T_int64.ToType(), types.T_int64.ToType()}, "sirius-v1:signed-i64-comparison"},
@@ -1679,7 +1716,7 @@ func hasTPCHSemanticCapability(kind semanticCapabilityKind, name string, ref *pl
 		case "singular_or_list":
 			declared = functionID == function.IN && len(args) >= 2 && (types.T(args[0].Typ.Id) == types.T_int32 || isTPCHStringType(types.T(args[0].Typ.Id)))
 		case "extract":
-			declared = functionID == function.EXTRACT && len(args) == 2 && types.T(args[0].Typ.Id) == types.T_varchar && types.T(args[1].Typ.Id) == types.T_date && types.T(out.Id) == types.T_uint32
+			declared = functionID == function.EXTRACT && len(args) == 2 && types.T(args[0].Typ.Id) == types.T_varchar && types.T(args[1].Typ.Id) == types.T_date && types.T(out.Id) == types.T_int64
 		}
 	case semanticAggregate:
 		switch name {
@@ -1744,11 +1781,15 @@ func hasTPCHSemanticCapability(kind semanticCapabilityKind, name string, ref *pl
 	if int32(result.Oid) != out.Id || !widthMatches || result.Scale != out.Scale {
 		return false, nil
 	}
-	notNullable := semanticNotNullable(resolved.GetEncodedOverloadID(), args)
 	if kind == semanticAggregate && aggregateCanReturnNullOnEmpty(functionID) && !out.NotNullable {
 		return true, nil
 	}
-	return notNullable == out.NotNullable, nil
+	// Constant folding may replace a nullable expression with a non-NULL
+	// literal without strengthening its parent's annotation. Accept either
+	// the original argument contract or the concrete-literal proof; never
+	// strengthen a nullable column or a NULL-synthesizing function.
+	return function.DeduceNotNullable(resolved.GetEncodedOverloadID(), args) == out.NotNullable ||
+		semanticNotNullable(resolved.GetEncodedOverloadID(), args) == out.NotNullable, nil
 }
 
 // Only prove the text subset supported by this exporter. Static VARCHAR alone

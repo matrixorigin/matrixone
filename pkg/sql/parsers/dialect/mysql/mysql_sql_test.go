@@ -5507,6 +5507,8 @@ func TestOrderedSetAggregateDeparseRoundTrip(t *testing.T) {
 	for _, sql := range []string{
 		"select group_concat(v) within group (order by k desc) from t",
 		"select group_concat(v) within /* ordered-set */ group (order by k desc) from t",
+		"select listagg(v, '|') within group (order by k desc) from t",
+		"select listagg(distinct v) within group (order by k) from t",
 		"select percentile_cont(0.95) within group (order by v) from t",
 		"select percentile_cont(0.95) within /* ordered-set */ group (order by v) from t",
 		"select percentile_disc(1) within group (order by v desc) from t",
@@ -5528,10 +5530,48 @@ func TestOrderedSetAggregateDeparseRoundTrip(t *testing.T) {
 	}
 }
 
+func TestArrayAggCompatibilityDeparseRoundTrip(t *testing.T) {
+	for _, sql := range []string{
+		"select array_agg(v) from t",
+		"select array_agg(distinct v) from t",
+		"select array_agg(v) over (partition by g order by k) from t",
+	} {
+		ast, err := ParseOne(t.Context(), sql, 1)
+		require.NoError(t, err, sql)
+
+		formatted := tree.String(ast, dialect.MYSQL)
+		require.Contains(t, strings.ToLower(formatted), "array_agg(")
+		roundTripped, err := ParseOne(t.Context(), formatted, 1)
+		require.NoError(t, err, formatted)
+		require.Equal(t, formatted, tree.String(roundTripped, dialect.MYSQL))
+	}
+}
+
+func TestOrderedCollectionCompatibilityNamesRemainIdentifiers(t *testing.T) {
+	for _, sql := range []string{
+		"select listagg from t",
+		"select array_agg from t",
+	} {
+		_, err := ParseOne(t.Context(), sql, 1)
+		require.NoError(t, err, sql)
+	}
+}
+
 func TestGroupConcatRejectsDoubleOrderBy(t *testing.T) {
 	_, err := ParseOne(context.Background(),
 		"select group_concat(v order by v) within group (order by k) from t", 1)
 	require.ErrorContains(t, err, "group_concat cannot use both ORDER BY and WITHIN GROUP ORDER BY")
+}
+
+func TestListAggRejectsInvalidShape(t *testing.T) {
+	for _, sql := range []string{
+		"select listagg() from t",
+		"select listagg(a, '|', '!') from t",
+		"select listagg(a, lower('|')) from t",
+	} {
+		_, err := ParseOne(t.Context(), sql, 1)
+		require.Error(t, err, sql)
+	}
 }
 
 func TestWithinRemainsIdentifierCompatible(t *testing.T) {
@@ -5692,6 +5732,40 @@ func TestFullTextMatchDeparseRoundTrip(t *testing.T) {
 		ast2, err := ParseOne(ctx, out, 1)
 		require.NoError(t, err, "deparsed SQL must re-parse: "+out)
 		require.Equal(t, out, tree.String(ast2, dialect.MYSQL), "deparse must be idempotent")
+	}
+}
+
+func TestFullTextRoutineVariablePatternRoundTrip(t *testing.T) {
+	for _, sql := range []string{
+		"select id from docs where match(body) against(q)",
+		"select id from docs where match(body) against(q in boolean mode)",
+		"select id from docs where match(body) against(`QueryTerm` in natural language mode)",
+	} {
+		stmt, err := ParseOne(context.Background(), sql, 1)
+		require.NoError(t, err, sql)
+		selectStmt := stmt.(*tree.Select).Select.(*tree.SelectClause)
+		match := selectStmt.Where.Expr.(*tree.FullTextMatchExpr)
+		name, ok := match.Pattern.(*tree.UnresolvedName)
+		require.True(t, ok)
+		require.Equal(t, 1, name.NumParts)
+
+		formatted := tree.String(stmt, dialect.MYSQL)
+		stmt.Free()
+		reparsed, err := ParseOne(context.Background(), formatted, 1)
+		require.NoError(t, err, formatted)
+		require.Equal(t, formatted, tree.String(reparsed, dialect.MYSQL))
+		reparsed.Free()
+	}
+
+	for _, sql := range []string{
+		"select id from docs where match(body) against(t.q)",
+		"select id from docs where match(body) against(@q)",
+		"select id from docs where match(body) against(concat('en', 'gine'))",
+		"select id from docs where match(body) against(sum(id))",
+		"select id from docs where match(body) against(rand())",
+	} {
+		_, err := ParseOne(context.Background(), sql, 1)
+		require.Error(t, err, sql)
 	}
 }
 

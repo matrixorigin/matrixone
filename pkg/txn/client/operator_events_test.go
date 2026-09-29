@@ -125,6 +125,37 @@ func TestDefaultEventCallbacksCopyOnWrite(t *testing.T) {
 	})
 }
 
+func TestStatementScopedClosedCallbacks(t *testing.T) {
+	ctx := context.Background()
+	op := &txnOperator{}
+	op.mu.txn.ID = []byte("statement-callbacks")
+	var called []string
+	callback := func(name string, scoped bool, callbackErr error) TxnEventCallback {
+		return TxnEventCallback{
+			StatementScoped: scoped,
+			Func: func(_ context.Context, _ TxnOperator, event TxnEvent, _ any) error {
+				called = append(called, name+":"+event.Txn.Status.String())
+				return callbackErr
+			},
+		}
+	}
+	op.BeginStatementCallbacks()
+	op.AppendEventCallback(ClosedEvent, callback("A", true, nil))
+	op.BeginStatementCallbacks() // A succeeded; B is a new statement.
+	op.AppendEventCallback(ClosedEvent,
+		callback("B1", true, errors.New("cleanup failed")),
+		callback("global", false, nil),
+		callback("B2", true, nil))
+	require.ErrorContains(t, op.RollbackStatementCallbacks(ctx), "cleanup failed")
+	require.Equal(t, []string{"B1:Aborted", "B2:Aborted"}, called)
+	op.AppendEventCallback(ClosedEvent, callback("retry", true, nil))
+	require.NoError(t, op.triggerEvent(ctx, TxnEvent{Event: ClosedEvent,
+		Txn: txn.TxnMeta{Status: txn.TxnStatus_Committed}}))
+	require.Equal(t, []string{
+		"B1:Aborted", "B2:Aborted", "A:Committed", "global:Committed", "retry:Committed",
+	}, called)
+}
+
 func TestClientClosedEventDefaultsRunBeforeCustomOnce(t *testing.T) {
 	tests := []struct {
 		name    string

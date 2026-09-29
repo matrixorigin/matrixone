@@ -176,15 +176,15 @@ Event_priv  ¦  VARCHAR(10)  ¦  null  ¦  null  𝄀
 Trigger_priv  ¦  VARCHAR(10)  ¦  null  ¦  null  𝄀
 Create_tablespace_priv  ¦  VARCHAR(10)  ¦  null  ¦  null  𝄀
 ssl_type  ¦  VARCHAR(10)  ¦  null  ¦  null  𝄀
-ssl_cipher  ¦  BLOB(0)  ¦  null  ¦  null  𝄀
-x509_issuer  ¦  BLOB(0)  ¦  null  ¦  null  𝄀
-x509_subject  ¦  BLOB(0)  ¦  null  ¦  null  𝄀
+ssl_cipher  ¦  BLOB  ¦  null  ¦  null  𝄀
+x509_issuer  ¦  BLOB  ¦  null  ¦  null  𝄀
+x509_subject  ¦  BLOB  ¦  null  ¦  null  𝄀
 max_questions  ¦  INT UNSIGNED(32)  ¦  null  ¦  null  𝄀
 max_updates  ¦  INT UNSIGNED(32)  ¦  null  ¦  null  𝄀
 max_connections  ¦  INT UNSIGNED(32)  ¦  null  ¦  null  𝄀
 max_user_connections  ¦  INT UNSIGNED(32)  ¦  null  ¦  null  𝄀
 plugin  ¦  CHAR(64)  ¦  null  ¦  null  𝄀
-authentication_string  ¦  TEXT(0)  ¦  null  ¦  null  𝄀
+authentication_string  ¦  TEXT  ¦  null  ¦  null  𝄀
 password_expired  ¦  VARCHAR(10)  ¦  null  ¦  null  𝄀
 password_last_changed  ¦  TIMESTAMP(0)  ¦  null  ¦  null  𝄀
 password_lifetime  ¦  SMALLINT UNSIGNED(16)  ¦  null  ¦  null  𝄀
@@ -660,15 +660,15 @@ Event_priv  ¦  VARCHAR(10)  ¦  NO  ¦    ¦  N  ¦    ¦    𝄀
 Trigger_priv  ¦  VARCHAR(10)  ¦  NO  ¦    ¦  N  ¦    ¦    𝄀
 Create_tablespace_priv  ¦  VARCHAR(10)  ¦  NO  ¦    ¦  N  ¦    ¦    𝄀
 ssl_type  ¦  VARCHAR(10)  ¦  NO  ¦    ¦    ¦    ¦    𝄀
-ssl_cipher  ¦  BLOB(0)  ¦  NO  ¦    ¦  null  ¦    ¦    𝄀
-x509_issuer  ¦  BLOB(0)  ¦  NO  ¦    ¦  null  ¦    ¦    𝄀
-x509_subject  ¦  BLOB(0)  ¦  NO  ¦    ¦  null  ¦    ¦    𝄀
+ssl_cipher  ¦  BLOB  ¦  NO  ¦    ¦  null  ¦    ¦    𝄀
+x509_issuer  ¦  BLOB  ¦  NO  ¦    ¦  null  ¦    ¦    𝄀
+x509_subject  ¦  BLOB  ¦  NO  ¦    ¦  null  ¦    ¦    𝄀
 max_questions  ¦  INT UNSIGNED(32)  ¦  NO  ¦    ¦  0  ¦    ¦    𝄀
 max_updates  ¦  INT UNSIGNED(32)  ¦  NO  ¦    ¦  0  ¦    ¦    𝄀
 max_connections  ¦  INT UNSIGNED(32)  ¦  NO  ¦    ¦  0  ¦    ¦    𝄀
 max_user_connections  ¦  INT UNSIGNED(32)  ¦  NO  ¦    ¦  0  ¦    ¦    𝄀
 plugin  ¦  CHAR(64)  ¦  NO  ¦    ¦  caching_sha2_password  ¦    ¦    𝄀
-authentication_string  ¦  TEXT(0)  ¦  YES  ¦    ¦  null  ¦    ¦    𝄀
+authentication_string  ¦  TEXT  ¦  YES  ¦    ¦  null  ¦    ¦    𝄀
 password_expired  ¦  VARCHAR(10)  ¦  NO  ¦    ¦  N  ¦    ¦    𝄀
 password_last_changed  ¦  TIMESTAMP(0)  ¦  YES  ¦    ¦  null  ¦    ¦    𝄀
 password_lifetime  ¦  SMALLINT UNSIGNED(16)  ¦  YES  ¦    ¦  null  ¦    ¦    𝄀

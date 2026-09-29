@@ -1480,6 +1480,28 @@ func TestNormalizeViewDependencyKeyForRestoreTopology(t *testing.T) {
 	require.Equal(t, genKey("db#part", "view#part"), normalized)
 }
 
+func TestFrontendTextWireResultColumns(t *testing.T) {
+	for _, wireType := range []defines.MysqlType{
+		defines.MYSQL_TYPE_TINY_BLOB, defines.MYSQL_TYPE_BLOB,
+		defines.MYSQL_TYPE_MEDIUM_BLOB, defines.MYSQL_TYPE_LONG_BLOB,
+	} {
+		column := &MysqlColumn{}
+		column.SetName("text_result")
+		column.SetColumnType(wireType)
+		column.SetCharset(charsetVarchar)
+		result, columnTypes, names, err := mysqlColDef2PlanResultColDef([]Column{column})
+		require.NoError(t, err)
+		require.Equal(t, int32(types.T_text), result.ResultCols[0].Typ.Id)
+		require.Equal(t, types.T_text, columnTypes[0].Oid)
+		require.Equal(t, []string{"text_result"}, names)
+		require.Equal(t, wireType, column.ColumnType(), "conversion must not mutate wire metadata")
+
+		column.SetCharset(charsetBinary)
+		_, _, _, err = mysqlColDef2PlanResultColDef([]Column{column})
+		require.Error(t, err, "binary BLOB must not be silently treated as TEXT")
+	}
+}
+
 func Test_convertRowsIntoBatch(t *testing.T) {
 	colMysqlTyps := []defines.MysqlType{
 		defines.MYSQL_TYPE_VAR_STRING,
@@ -2170,19 +2192,23 @@ func TestResultColumnMetadataDistinguishesBlobFromText(t *testing.T) {
 
 func TestMysqlBlobMetadataPreservesKnownAndUnknownBounds(t *testing.T) {
 	for _, tc := range []struct {
-		name   string
-		width  int32
-		length uint32
+		name      string
+		width     int32
+		length    uint32
+		mysqlType defines.MysqlType
 	}{
-		{name: "unknown expression bound", width: 0, length: math.MaxUint32},
-		{name: "N", width: math.MaxUint16, length: math.MaxUint16},
-		{name: "N plus one", width: math.MaxUint16 + 1, length: math.MaxUint16 + 1},
+		{name: "unknown expression bound", width: 0, length: math.MaxUint32, mysqlType: defines.MYSQL_TYPE_BLOB},
+		{name: "tiny", width: types.MaxTinyTextLen, length: types.MaxTinyTextLen, mysqlType: defines.MYSQL_TYPE_TINY_BLOB},
+		{name: "blob", width: types.MaxStringSize, length: types.MaxStringSize, mysqlType: defines.MYSQL_TYPE_BLOB},
+		{name: "medium", width: types.MaxMediumTextLen, length: types.MaxMediumTextLen, mysqlType: defines.MYSQL_TYPE_MEDIUM_BLOB},
+		{name: "long", width: types.MaxLongTextLen, length: types.MaxLongTextLen, mysqlType: defines.MYSQL_TYPE_LONG_BLOB},
+		{name: "N plus one", width: math.MaxUint16 + 1, length: math.MaxUint16 + 1, mysqlType: defines.MYSQL_TYPE_MEDIUM_BLOB},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			col := new(MysqlColumn)
 			require.NoError(t, setMysqlColumnTypeInfo(
 				context.Background(), types.New(types.T_blob, tc.width, 0), col))
-			require.Equal(t, defines.MYSQL_TYPE_BLOB, col.ColumnType())
+			require.Equal(t, tc.mysqlType, col.ColumnType())
 			require.Equal(t, uint16(charsetBinary), col.Charset())
 			require.Equal(t, tc.length, col.Length())
 			require.Equal(t, uint16(defines.BLOB_FLAG|defines.BINARY_FLAG), col.Flag())

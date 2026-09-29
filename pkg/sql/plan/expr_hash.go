@@ -143,6 +143,11 @@ func hashExprInto(h writeByter, expr *plan.Expr) {
 		if v.Vec != nil {
 			writeUint32(h, uint32(v.Vec.Len))
 			writeUint32(h, v.Vec.StringSource)
+			if v.Vec.DecimalLiteralRequiresV82 {
+				writeByte(h, 1)
+			} else {
+				writeByte(h, 0)
+			}
 			writeUint64(h, uint64(len(v.Vec.Data)))
 			_, _ = h.Write(v.Vec.Data)
 		}
@@ -202,6 +207,11 @@ func hashLitInto(h writeByter, typ plan.Type, lit *plan.Literal) {
 		return
 	}
 	writeUint32(h, executableLiteralStringSource(lit))
+	if lit.DecimalLiteralRequiresV82 {
+		writeByte(h, 1)
+	} else {
+		writeByte(h, 0)
+	}
 	if lit.Isnull {
 		writeByte(h, 1)
 		return
@@ -364,7 +374,9 @@ func exprStructuralEqual(a, b *plan.Expr) bool {
 		// IsSerialized is diagnostic provenance and must not affect execution
 		// identity, just like Literal.IsSerialized.
 		return av.Vec.Len == bv.Vec.Len &&
-			av.Vec.StringSource == bv.Vec.StringSource && bytes.Equal(av.Vec.Data, bv.Vec.Data)
+			av.Vec.StringSource == bv.Vec.StringSource &&
+			av.Vec.DecimalLiteralRequiresV82 == bv.Vec.DecimalLiteralRequiresV82 &&
+			bytes.Equal(av.Vec.Data, bv.Vec.Data)
 	default:
 		// Fallback: compare proto bytes.
 		ab, aerr := a.Marshal()
@@ -391,7 +403,9 @@ func literalEqual(typ plan.Type, a, b *plan.Literal) bool {
 	if a == nil || b == nil {
 		return false
 	}
-	if a.Isnull != b.Isnull || executableLiteralStringSource(a) != executableLiteralStringSource(b) {
+	if a.Isnull != b.Isnull ||
+		a.DecimalLiteralRequiresV82 != b.DecimalLiteralRequiresV82 ||
+		executableLiteralStringSource(a) != executableLiteralStringSource(b) {
 		return false
 	}
 	if a.Isnull {

@@ -66,7 +66,8 @@ const (
 
 func isCDCTaskCode(code task.TaskCode) bool {
 	return code == task.TaskCode_InitCdc ||
-		code == task.TaskCode_InitCdcStableEpoch
+		code == task.TaskCode_InitCdcStableEpoch ||
+		code == task.TaskCode_InitCdcLosslessStart
 }
 
 func cdcRestartEventFields(t task.DaemonTask, fields ...zap.Field) []zap.Field {
@@ -241,7 +242,15 @@ func (r *taskRunner) completeDaemonTask(ctx context.Context, dt *daemonTask, cla
 		if isCDCTaskCode(claim.Metadata.Executor) {
 			dt.claimLost.Store(true)
 			if ar := dt.activeRoutine.Load(); ar != nil && *ar != nil {
-				if cancelErr := (*ar).Cancel(); cancelErr != nil {
+				active := *ar
+				cancel := active.Cancel
+				if preserved, ok := active.(ClaimLossActiveRoutine); ok {
+					// Completion after a failed startup is not authorized task
+					// removal. Keep the watermark so a later claim can resume
+					// from the replacement owner's durable progress.
+					cancel = preserved.CancelWithoutWatermarkCleanup
+				}
+				if cancelErr := cancel(); cancelErr != nil {
 					r.logger.Warn("failed to cancel completed daemon execution", zap.Uint64("task ID", claim.ID), zap.Error(cancelErr))
 				}
 			}
@@ -850,6 +859,10 @@ type ActiveRoutine interface {
 	Restart() error
 }
 
+type ClaimLossActiveRoutine interface {
+	CancelWithoutWatermarkCleanup() error
+}
+
 // DaemonTaskClaimUpdater is implemented by executors whose durable side
 // effects are fenced by the daemon claim generation. It is optional so legacy
 // executors keep the existing ActiveRoutine contract.
@@ -1255,6 +1268,7 @@ func (r *taskRunner) pauseTasks(ctx context.Context) []task.DaemonTask {
 		for _, code := range []task.TaskCode{
 			task.TaskCode_InitCdc,
 			task.TaskCode_InitCdcStableEpoch,
+			task.TaskCode_InitCdcLosslessStart,
 		} {
 			localPausedFinalize = append(localPausedFinalize,
 				r.queryDaemonTasks(ctx,
@@ -1268,6 +1282,7 @@ func (r *taskRunner) pauseTasks(ctx context.Context) []task.DaemonTask {
 		for _, code := range []task.TaskCode{
 			task.TaskCode_InitCdc,
 			task.TaskCode_InitCdcStableEpoch,
+			task.TaskCode_InitCdcLosslessStart,
 		} {
 			laggedPausedFinalize = append(laggedPausedFinalize,
 				r.queryDaemonTasks(ctx,
@@ -1367,7 +1382,7 @@ func (r *taskRunner) doSendHeartbeat(ctx context.Context) {
 			// tick. ErrInvalidTask is the explicit taskservice fence: the durable
 			// claim no longer matches this runner/generation and local target work
 			// must stop.
-			if claim.Metadata.Executor == task.TaskCode_InitCdcStableEpoch &&
+			if (claim.Metadata.Executor == task.TaskCode_InitCdcStableEpoch || claim.Metadata.Executor == task.TaskCode_InitCdcLosslessStart) &&
 				moerr.IsMoErrCode(err, moerr.ErrInvalidTask) &&
 				r.relinquishDaemonClaim(dt, claim) {
 				// Relinquish heartbeat ownership before cancellation. Pointer-aware
@@ -1379,7 +1394,11 @@ func (r *taskRunner) doSendHeartbeat(ctx context.Context) {
 					if scheduleErr := r.stopper.RunNamedTask(
 						"cancel-cdc-after-claim-loss",
 						func(context.Context) {
-							if cancelErr := active.Cancel(); cancelErr != nil {
+							cancel := active.Cancel
+							if preserved, ok := active.(ClaimLossActiveRoutine); ok {
+								cancel = preserved.CancelWithoutWatermarkCleanup
+							}
+							if cancelErr := cancel(); cancelErr != nil {
 								r.logger.Error("failed to stop CDC task after heartbeat failure",
 									zap.Uint64("task ID", claim.ID),
 									zap.Error(cancelErr))

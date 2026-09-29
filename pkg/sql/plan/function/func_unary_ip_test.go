@@ -32,6 +32,55 @@ import (
 	"github.com/stretchr/testify/require"
 )
 
+func TestIPPredicatesRegisteredExecutorsCoverSourceFamilies(t *testing.T) {
+	proc := testutil.NewProcess(t)
+	mp := proc.Mp()
+	compatible := string(append(make([]byte, 15), 2))
+	mapped := string([]byte{0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0xff, 0xff, 192, 0, 2, 1})
+
+	tests := []struct {
+		name   string
+		fn     string
+		typ    types.Type
+		values []string
+		want   []int32
+	}{
+		{name: "is_ipv4/char", fn: "is_ipv4", typ: types.T_char.ToType(), values: []string{"127.0.0.1", "bad"}, want: []int32{1, 0}},
+		{name: "is_ipv4/text", fn: "is_ipv4", typ: types.T_text.ToType(), values: []string{"127.0.0.1", "bad"}, want: []int32{1, 0}},
+		{name: "is_ipv6/char", fn: "is_ipv6", typ: types.T_char.ToType(), values: []string{"::1", "127.0.0.1"}, want: []int32{1, 0}},
+		{name: "is_ipv6/text", fn: "is_ipv6", typ: types.T_text.ToType(), values: []string{"::1", "127.0.0.1"}, want: []int32{1, 0}},
+		{name: "is_ipv4_compat/binary", fn: "is_ipv4_compat", typ: types.T_binary.ToType(), values: []string{compatible, "short"}, want: []int32{1, 0}},
+		{name: "is_ipv4_compat/blob", fn: "is_ipv4_compat", typ: types.T_blob.ToType(), values: []string{compatible, "short"}, want: []int32{1, 0}},
+		{name: "is_ipv4_mapped/binary", fn: "is_ipv4_mapped", typ: types.T_binary.ToType(), values: []string{mapped, compatible}, want: []int32{1, 0}},
+		{name: "is_ipv4_mapped/blob", fn: "is_ipv4_mapped", typ: types.T_blob.ToType(), values: []string{mapped, compatible}, want: []int32{1, 0}},
+	}
+	for _, tc := range tests {
+		t.Run(tc.name, func(t *testing.T) {
+			resolved, err := GetFunctionByName(proc.Ctx, tc.fn, []types.Type{tc.typ})
+			require.NoError(t, err)
+			input := newVectorByType(mp, tc.typ, tc.values, nil)
+			t.Cleanup(func() { input.Free(mp) })
+			out, err := RunFunctionDirectly(proc, resolved.GetEncodedOverloadID(), []*vector.Vector{input}, len(tc.values))
+			require.NoError(t, err)
+			t.Cleanup(func() { out.Free(mp) })
+			require.Equal(t, tc.want, vector.MustFixedColWithTypeCheck[int32](out))
+		})
+	}
+}
+
+func TestIPPredicatesRejectUnexpectedResultType(t *testing.T) {
+	proc := testutil.NewProcess(t)
+	mp := proc.Mp()
+	input := newVectorByType(mp, types.T_varchar.ToType(), []string{"127.0.0.1"}, nil)
+	t.Cleanup(func() { input.Free(mp) })
+	result := vector.NewFunctionResultWrapper(types.T_bool.ToType(), mp)
+	t.Cleanup(func() { result.Free() })
+	require.NoError(t, result.PreExtendAndReset(1))
+	err := IsIPv4([]*vector.Vector{input}, result, proc, 1, nil)
+	require.Error(t, err)
+	require.ErrorContains(t, err, "expected INT32 or legacy INT64")
+}
+
 func TestInet6NtoaString(t *testing.T) {
 	tests := []struct {
 		name string

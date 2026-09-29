@@ -1,0 +1,36 @@
+drop database if exists issue_29146;
+create database issue_29146;
+use issue_29146;
+create table src (id int primary key, v int);
+insert into src values (1, 10), (2, 20), (3, 30);
+create table dst (
+id int primary key,
+v int,
+g int generated always as (v + 1) stored,
+index iv(v)
+);
+prepare p from 'insert into dst(id, v) select id, v + ? from src where id <= ?';
+set @delta = 7, @cut = 3;
+execute p using @delta, @cut;
+select id, v, g, v + 1 from dst order by id;
+id	v	g	v + 1
+1	17	18	18
+2	27	28	28
+3	37	38	38
+truncate table dst;
+set @delta = -3, @cut = 2;
+execute p using @delta, @cut;
+select id, v, g, v + 1 from dst order by id;
+id	v	g	v + 1
+1	7	8	8
+2	17	18	18
+truncate table dst;
+begin;
+set @delta = 5, @cut = 3;
+execute p using @delta, @cut;
+rollback;
+select count(*) from dst;
+count(*)
+0
+deallocate prepare p;
+drop database issue_29146;

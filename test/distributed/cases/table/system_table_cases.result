@@ -221,7 +221,7 @@ mo_tables  ¦  CREATE TABLE `mo_tables` (
   `owner` int unsigned DEFAULT NULL,
   `account_id` int unsigned DEFAULT NULL,
   `partitioned` tinyint DEFAULT NULL,
-  `partition_info` blob DEFAULT NULL,
+  `partition_info` longblob DEFAULT NULL,
   `viewdef` varchar(5000) DEFAULT NULL,
   `constraint` varchar(5000) DEFAULT NULL,
   `rel_version` int unsigned DEFAULT NULL,

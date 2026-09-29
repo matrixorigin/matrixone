@@ -68,6 +68,50 @@ execute ordered_percentile_p using @ordered_p;
 ➤ prepared_p[4,32,0]  𝄀
 10
 deallocate prepare ordered_percentile_p;
+prepare ordered_percentile_expr from
+'select g,
+percentile_cont(? / 100.0) within group (order by v) as prepared_cont,
+percentile_disc((? + ?) / 100.0) within group (order by v) as prepared_disc
+from t_ordered_set_bvt group by g order by g';
+set @ordered_cont_pct = 50;
+set @ordered_disc_base = 25;
+set @ordered_disc_delta = 50;
+execute ordered_percentile_expr using
+@ordered_cont_pct, @ordered_disc_base, @ordered_disc_delta;
+➤ g[4,32,0]  ¦  prepared_cont[8,53,31]  ¦  prepared_disc[4,32,0]  𝄀
+1  ¦  20.0  ¦  20  𝄀
+2  ¦  4.0  ¦  8  𝄀
+3  ¦  null  ¦  null
+set @ordered_cont_pct = 150;
+execute ordered_percentile_expr using
+@ordered_cont_pct, @ordered_disc_base, @ordered_disc_delta;
+invalid input: percentile argument of percentile_cont must be finite and in [0,1], got 1.5
+set @ordered_cont_pct = 50;
+execute ordered_percentile_expr using
+@ordered_cont_pct, @ordered_disc_base, @ordered_disc_delta;
+➤ g[4,32,0]  ¦  prepared_cont[8,53,31]  ¦  prepared_disc[4,32,0]  𝄀
+1  ¦  20.0  ¦  20  𝄀
+2  ¦  4.0  ¦  8  𝄀
+3  ¦  null  ¦  null
+deallocate prepare ordered_percentile_expr;
+prepare empty_ordered_percentile_expr from
+'select percentile_cont(? / 100.0) within group (order by v)
+from t_ordered_set_bvt where g = 99';
+set @empty_ordered_pct = 150;
+execute empty_ordered_percentile_expr using @empty_ordered_pct;
+invalid input: percentile argument of percentile_cont must be finite and in [0,1], got 1.5
+deallocate prepare empty_ordered_percentile_expr;
+prepare exact_decimal_percentile_expr from
+'select percentile_disc(cast(? as decimal(19,18))) within group (order by v) as exact_decimal_p
+from t_ordered_set_bvt where g = 1 and sort_key in (1, 2)';
+set @exact_decimal_pct = '0.500000000000000001';
+execute exact_decimal_percentile_expr using @exact_decimal_pct;
+➤ exact_decimal_p[4,32,0]  𝄀
+20
+set @exact_decimal_pct = '1.000000000000000001';
+execute exact_decimal_percentile_expr using @exact_decimal_pct;
+invalid input: percentile argument of percentile_disc must be in [0,1], got 1.000000000000000001
+deallocate prepare exact_decimal_percentile_expr;
 select percentile_disc(0.5) within group (order by cast(v as decimal(38,0))) as p50_disc_dec38
 from t_ordered_set_bvt;
 ➤ p50_disc_dec38[3,38,0]  𝄀

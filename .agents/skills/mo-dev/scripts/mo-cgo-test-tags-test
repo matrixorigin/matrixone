@@ -70,7 +70,27 @@ git -C "$fake" init --quiet
 : > "$fake/mocl_kernel64.fatbin"
 fake_wrapper="$fake/.agents/skills/mo-dev/scripts/mo-cgo-test"
 cp "$wrapper" "$fake_wrapper"
+cp "$script_dir/../../../../cgo/mo-gpu-env" "$fake/cgo/mo-gpu-env"
 chmod +x "$fake_wrapper"
+
+export PIXI_PROJECT_ROOT="$work/pixi-project"
+export PIXI_ENVIRONMENT_NAME=mo
+export CONDA_PREFIX="$PIXI_PROJECT_ROOT/.pixi/envs/mo"
+mkdir -p "$CONDA_PREFIX/conda-meta"
+for gpu_input in pixi.lock \
+    .pixi/envs/mo/bin/x86_64-conda-linux-gnu-cc \
+    .pixi/envs/mo/bin/x86_64-conda-linux-gnu-c++ \
+    .pixi/envs/mo/bin/nvcc \
+    .pixi/envs/mo/targets/x86_64-linux/include/cuda.h \
+    .pixi/envs/mo/targets/x86_64-linux/lib/libcudart.so \
+    .pixi/envs/mo/targets/x86_64-linux/lib/stubs/libcuda.so \
+    .pixi/envs/mo/include/cuvs/core/c_api.h \
+    .pixi/envs/mo/lib/libcuvs.so \
+    .pixi/envs/mo/lib/libcuvs_c.so \
+    .pixi/envs/mo/lib/librmm.so; do
+    mkdir -p "$PIXI_PROJECT_ROOT/$(dirname "$gpu_input")"
+    : >"$PIXI_PROJECT_ROOT/$gpu_input"
+done
 
 cat > "$work/bin/go" <<'STUB'
 #!/bin/sh
@@ -98,7 +118,7 @@ failures=0
 # run_wrapper runs the real wrapper inside the fake repo. It prints the wrapper's combined
 # output and returns its exit status; callers must check that status before parsing.
 run_wrapper() {
-    env MO_CL_CUDA="$MO_CL_CUDA_SETTING" CONDA_PREFIX="$work" PATH="$work/bin:$PATH" \
+    env MO_CL_CUDA="$MO_CL_CUDA_SETTING" PATH="$work/bin:$PATH" \
         sh "$fake_wrapper" "$@" 2>&1
 }
 

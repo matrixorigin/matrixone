@@ -16,8 +16,8 @@ select * from t1;
 4  ¦  Dora  ¦  29
 show index from t1;
 ➤ Table[12,-1,0]  ¦  Non_unique[-5,64,0]  ¦  Key_name[12,-1,0]  ¦  Seq_in_index[4,32,0]  ¦  Column_name[12,-1,0]  ¦  Collation[12,-1,0]  ¦  Cardinality[-5,64,0]  ¦  Sub_part[12,-1,0]  ¦  Packed[12,-1,0]  ¦  Null[12,-1,0]  ¦  Index_type[12,-1,0]  ¦  Comment[1,0,0]  ¦  Index_comment[12,-1,0]  ¦  Index_params[12,-1,0]  ¦  Visible[12,-1,0]  ¦  Expression[12,-1,0]  𝄀
-t1  ¦  0  ¦  PRIMARY  ¦  1  ¦  id  ¦  A  ¦  0  ¦  NULL  ¦  NULL  ¦    ¦    ¦    ¦    ¦    ¦  YES  ¦  id  𝄀
-t1  ¦  0  ¦  idx1  ¦  1  ¦  name  ¦  A  ¦  0  ¦  NULL  ¦  NULL  ¦  YES  ¦    ¦    ¦    ¦    ¦  YES  ¦  name
+t1  ¦  0  ¦  PRIMARY  ¦  1  ¦  id  ¦  A  ¦  0  ¦  NULL  ¦  NULL  ¦    ¦  BTREE  ¦    ¦    ¦    ¦  YES  ¦  id  𝄀
+t1  ¦  0  ¦  idx1  ¦  1  ¦  name  ¦  A  ¦  0  ¦  NULL  ¦  NULL  ¦  YES  ¦  BTREE  ¦    ¦    ¦    ¦  YES  ¦  name
 select name, type, column_name from mo_catalog.mo_indexes where name = 'idx1' and table_id in (select rel_id from mo_catalog.mo_tables where relname = 't1');
 ➤ name[12,-1,0]  ¦  type[12,-1,0]  ¦  column_name[12,-1,0]  𝄀
 idx1  ¦  UNIQUE  ¦  name
@@ -33,10 +33,10 @@ select * from t1;
 4  ¦  Dora  ¦  29
 show index from t1;
 ➤ Table[12,-1,0]  ¦  Non_unique[-5,64,0]  ¦  Key_name[12,-1,0]  ¦  Seq_in_index[4,32,0]  ¦  Column_name[12,-1,0]  ¦  Collation[12,-1,0]  ¦  Cardinality[-5,64,0]  ¦  Sub_part[12,-1,0]  ¦  Packed[12,-1,0]  ¦  Null[12,-1,0]  ¦  Index_type[12,-1,0]  ¦  Comment[1,0,0]  ¦  Index_comment[12,-1,0]  ¦  Index_params[12,-1,0]  ¦  Visible[12,-1,0]  ¦  Expression[12,-1,0]  𝄀
-t1  ¦  0  ¦  PRIMARY  ¦  1  ¦  id  ¦  A  ¦  0  ¦  NULL  ¦  NULL  ¦    ¦    ¦    ¦    ¦    ¦  YES  ¦  id  𝄀
-t1  ¦  0  ¦  idx1  ¦  1  ¦  name  ¦  A  ¦  0  ¦  NULL  ¦  NULL  ¦  YES  ¦    ¦    ¦    ¦    ¦  YES  ¦  name  𝄀
-t1  ¦  1  ¦  idx2  ¦  1  ¦  name  ¦  A  ¦  0  ¦  NULL  ¦  NULL  ¦  YES  ¦    ¦    ¦    ¦    ¦  YES  ¦  name  𝄀
-t1  ¦  1  ¦  idx2  ¦  2  ¦  age  ¦  A  ¦  0  ¦  NULL  ¦  NULL  ¦  YES  ¦    ¦    ¦    ¦    ¦  YES  ¦  age
+t1  ¦  0  ¦  PRIMARY  ¦  1  ¦  id  ¦  A  ¦  0  ¦  NULL  ¦  NULL  ¦    ¦  BTREE  ¦    ¦    ¦    ¦  YES  ¦  id  𝄀
+t1  ¦  0  ¦  idx1  ¦  1  ¦  name  ¦  A  ¦  0  ¦  NULL  ¦  NULL  ¦  YES  ¦  BTREE  ¦    ¦    ¦    ¦  YES  ¦  name  𝄀
+t1  ¦  1  ¦  idx2  ¦  1  ¦  name  ¦  A  ¦  0  ¦  NULL  ¦  NULL  ¦  YES  ¦  BTREE  ¦    ¦    ¦    ¦  YES  ¦  name  𝄀
+t1  ¦  1  ¦  idx2  ¦  2  ¦  age  ¦  A  ¦  0  ¦  NULL  ¦  NULL  ¦  YES  ¦  BTREE  ¦    ¦    ¦    ¦  YES  ¦  age
 select name, type, column_name from mo_catalog.mo_indexes where name = 'idx2' and table_id in (select rel_id from mo_catalog.mo_tables where relname = 't1');
 ➤ name[12,-1,0]  ¦  type[12,-1,0]  ¦  column_name[12,-1,0]  𝄀
 idx2  ¦  MULTIPLE  ¦  name  𝄀
@@ -67,7 +67,7 @@ select * from t2;
 show index from t2;
 ➤ Table[12,-1,0]  ¦  Non_unique[-5,64,0]  ¦  Key_name[12,-1,0]  ¦  Seq_in_index[4,32,0]  ¦  Column_name[12,-1,0]  ¦  Collation[12,-1,0]  ¦  Cardinality[-5,64,0]  ¦  Sub_part[12,-1,0]  ¦  Packed[12,-1,0]  ¦  Null[12,-1,0]  ¦  Index_type[12,-1,0]  ¦  Comment[1,0,0]  ¦  Index_comment[12,-1,0]  ¦  Index_params[12,-1,0]  ¦  Visible[12,-1,0]  ¦  Expression[12,-1,0]  𝄀
 t2  ¦  1  ¦  idx9  ¦  1  ¦  b  ¦  A  ¦  0  ¦  NULL  ¦  NULL  ¦  YES  ¦  ivfflat  ¦    ¦    ¦  {"lists":"1","op_type":"vector_l2_ops"}  ¦  YES  ¦  b  𝄀
-t2  ¦  0  ¦  PRIMARY  ¦  1  ¦  a  ¦  A  ¦  0  ¦  NULL  ¦  NULL  ¦    ¦    ¦    ¦    ¦    ¦  YES  ¦  a
+t2  ¦  0  ¦  PRIMARY  ¦  1  ¦  a  ¦  A  ¦  0  ¦  NULL  ¦  NULL  ¦    ¦  BTREE  ¦    ¦    ¦    ¦  YES  ¦  a
 select name, type, column_name from mo_catalog.mo_indexes where name = 'idx9' and table_id in (select rel_id from mo_catalog.mo_tables where relname = 't2');
 ➤ name[12,-1,0]  ¦  type[12,-1,0]  ¦  column_name[12,-1,0]  𝄀
 idx9  ¦  MULTIPLE  ¦  b  𝄀
@@ -85,7 +85,7 @@ insert into t3 values(2, "[1,2,4]");
 show index from t3;
 ➤ Table[12,-1,0]  ¦  Non_unique[-5,64,0]  ¦  Key_name[12,-1,0]  ¦  Seq_in_index[4,32,0]  ¦  Column_name[12,-1,0]  ¦  Collation[12,-1,0]  ¦  Cardinality[-5,64,0]  ¦  Sub_part[12,-1,0]  ¦  Packed[12,-1,0]  ¦  Null[12,-1,0]  ¦  Index_type[12,-1,0]  ¦  Comment[1,0,0]  ¦  Index_comment[12,-1,0]  ¦  Index_params[12,-1,0]  ¦  Visible[12,-1,0]  ¦  Expression[12,-1,0]  𝄀
 t3  ¦  1  ¦  idx10  ¦  1  ¦  b  ¦  A  ¦  0  ¦  NULL  ¦  NULL  ¦  YES  ¦  ivfflat  ¦    ¦    ¦  {"lists":"1","op_type":"vector_l2_ops"}  ¦  YES  ¦  b  𝄀
-t3  ¦  0  ¦  PRIMARY  ¦  1  ¦  a  ¦  A  ¦  0  ¦  NULL  ¦  NULL  ¦    ¦    ¦    ¦    ¦    ¦  YES  ¦  a
+t3  ¦  0  ¦  PRIMARY  ¦  1  ¦  a  ¦  A  ¦  0  ¦  NULL  ¦  NULL  ¦    ¦  BTREE  ¦    ¦    ¦    ¦  YES  ¦  a
 show create table t3;
 ➤ Table[12,-1,0]  ¦  Create Table[12,-1,0]  𝄀
 t3  ¦  CREATE TABLE `t3` (
@@ -107,7 +107,7 @@ entries
 alter table t3 drop column b;
 show index from t3;
 ➤ Table[12,-1,0]  ¦  Non_unique[-5,64,0]  ¦  Key_name[12,-1,0]  ¦  Seq_in_index[4,32,0]  ¦  Column_name[12,-1,0]  ¦  Collation[12,-1,0]  ¦  Cardinality[-5,64,0]  ¦  Sub_part[12,-1,0]  ¦  Packed[12,-1,0]  ¦  Null[12,-1,0]  ¦  Index_type[12,-1,0]  ¦  Comment[1,0,0]  ¦  Index_comment[12,-1,0]  ¦  Index_params[12,-1,0]  ¦  Visible[12,-1,0]  ¦  Expression[12,-1,0]  𝄀
-t3  ¦  0  ¦  PRIMARY  ¦  1  ¦  a  ¦  A  ¦  0  ¦  NULL  ¦  NULL  ¦    ¦    ¦    ¦    ¦    ¦  YES  ¦  a
+t3  ¦  0  ¦  PRIMARY  ¦  1  ¦  a  ¦  A  ¦  0  ¦  NULL  ¦  NULL  ¦    ¦  BTREE  ¦    ¦    ¦    ¦  YES  ¦  a
 show create table t3;
 ➤ Table[12,-1,0]  ¦  Create Table[12,-1,0]  𝄀
 t3  ¦  CREATE TABLE `t3` (
@@ -131,7 +131,7 @@ insert into tbl values(8, "[130,40,90]");
 create index idx1 using IVFFLAT on tbl(embedding) lists = 2 op_type 'vector_l2_ops';
 show index from tbl;
 ➤ Table[12,-1,0]  ¦  Non_unique[-5,64,0]  ¦  Key_name[12,-1,0]  ¦  Seq_in_index[4,32,0]  ¦  Column_name[12,-1,0]  ¦  Collation[12,-1,0]  ¦  Cardinality[-5,64,0]  ¦  Sub_part[12,-1,0]  ¦  Packed[12,-1,0]  ¦  Null[12,-1,0]  ¦  Index_type[12,-1,0]  ¦  Comment[1,0,0]  ¦  Index_comment[12,-1,0]  ¦  Index_params[12,-1,0]  ¦  Visible[12,-1,0]  ¦  Expression[12,-1,0]  𝄀
-tbl  ¦  0  ¦  PRIMARY  ¦  1  ¦  id  ¦  A  ¦  0  ¦  NULL  ¦  NULL  ¦    ¦    ¦    ¦    ¦    ¦  YES  ¦  id  𝄀
+tbl  ¦  0  ¦  PRIMARY  ¦  1  ¦  id  ¦  A  ¦  0  ¦  NULL  ¦  NULL  ¦    ¦  BTREE  ¦    ¦    ¦    ¦  YES  ¦  id  𝄀
 tbl  ¦  1  ¦  idx1  ¦  1  ¦  embedding  ¦  A  ¦  0  ¦  NULL  ¦  NULL  ¦  YES  ¦  ivfflat  ¦    ¦    ¦  {"lists":"2","op_type":"vector_l2_ops"}  ¦  YES  ¦  embedding
 show create table tbl;
 ➤ Table[12,-1,0]  ¦  Create Table[12,-1,0]  𝄀
@@ -154,7 +154,7 @@ entries
 alter table tbl alter reindex idx1 ivfflat lists=3;
 show index from tbl;
 ➤ Table[12,-1,0]  ¦  Non_unique[-5,64,0]  ¦  Key_name[12,-1,0]  ¦  Seq_in_index[4,32,0]  ¦  Column_name[12,-1,0]  ¦  Collation[12,-1,0]  ¦  Cardinality[-5,64,0]  ¦  Sub_part[12,-1,0]  ¦  Packed[12,-1,0]  ¦  Null[12,-1,0]  ¦  Index_type[12,-1,0]  ¦  Comment[1,0,0]  ¦  Index_comment[12,-1,0]  ¦  Index_params[12,-1,0]  ¦  Visible[12,-1,0]  ¦  Expression[12,-1,0]  𝄀
-tbl  ¦  0  ¦  PRIMARY  ¦  1  ¦  id  ¦  A  ¦  0  ¦  NULL  ¦  NULL  ¦    ¦    ¦    ¦    ¦    ¦  YES  ¦  id  𝄀
+tbl  ¦  0  ¦  PRIMARY  ¦  1  ¦  id  ¦  A  ¦  0  ¦  NULL  ¦  NULL  ¦    ¦  BTREE  ¦    ¦    ¦    ¦  YES  ¦  id  𝄀
 tbl  ¦  1  ¦  idx1  ¦  1  ¦  embedding  ¦  A  ¦  0  ¦  NULL  ¦  NULL  ¦  YES  ¦  ivfflat  ¦    ¦    ¦  {"lists":"3","op_type":"vector_l2_ops"}  ¦  YES  ¦  embedding
 show create table tbl;
 ➤ Table[12,-1,0]  ¦  Create Table[12,-1,0]  𝄀
@@ -178,7 +178,7 @@ alter table tbl add c vecf32(3);
 show index from tbl;
 ➤ Table[12,-1,0]  ¦  Non_unique[-5,64,0]  ¦  Key_name[12,-1,0]  ¦  Seq_in_index[4,32,0]  ¦  Column_name[12,-1,0]  ¦  Collation[12,-1,0]  ¦  Cardinality[-5,64,0]  ¦  Sub_part[12,-1,0]  ¦  Packed[12,-1,0]  ¦  Null[12,-1,0]  ¦  Index_type[12,-1,0]  ¦  Comment[1,0,0]  ¦  Index_comment[12,-1,0]  ¦  Index_params[12,-1,0]  ¦  Visible[12,-1,0]  ¦  Expression[12,-1,0]  𝄀
 tbl  ¦  1  ¦  idx1  ¦  1  ¦  embedding  ¦  A  ¦  0  ¦  NULL  ¦  NULL  ¦  YES  ¦  ivfflat  ¦    ¦    ¦  {"lists":"3","op_type":"vector_l2_ops"}  ¦  YES  ¦  embedding  𝄀
-tbl  ¦  0  ¦  PRIMARY  ¦  1  ¦  id  ¦  A  ¦  0  ¦  NULL  ¦  NULL  ¦    ¦    ¦    ¦    ¦    ¦  YES  ¦  id
+tbl  ¦  0  ¦  PRIMARY  ¦  1  ¦  id  ¦  A  ¦  0  ¦  NULL  ¦  NULL  ¦    ¦  BTREE  ¦    ¦    ¦    ¦  YES  ¦  id
 show create table tbl;
 ➤ Table[12,-1,0]  ¦  Create Table[12,-1,0]  𝄀
 tbl  ¦  CREATE TABLE `tbl` (
@@ -203,7 +203,7 @@ create table tbl(a int primary key,b vecf32(3), c vecf64(5));
 create index idx2 using IVFFLAT on tbl(b) lists = 2 op_type 'vector_l2_ops';
 show index from tbl;
 ➤ Table[12,-1,0]  ¦  Non_unique[-5,64,0]  ¦  Key_name[12,-1,0]  ¦  Seq_in_index[4,32,0]  ¦  Column_name[12,-1,0]  ¦  Collation[12,-1,0]  ¦  Cardinality[-5,64,0]  ¦  Sub_part[12,-1,0]  ¦  Packed[12,-1,0]  ¦  Null[12,-1,0]  ¦  Index_type[12,-1,0]  ¦  Comment[1,0,0]  ¦  Index_comment[12,-1,0]  ¦  Index_params[12,-1,0]  ¦  Visible[12,-1,0]  ¦  Expression[12,-1,0]  𝄀
-tbl  ¦  0  ¦  PRIMARY  ¦  1  ¦  a  ¦  A  ¦  0  ¦  NULL  ¦  NULL  ¦    ¦    ¦    ¦    ¦    ¦  YES  ¦  a  𝄀
+tbl  ¦  0  ¦  PRIMARY  ¦  1  ¦  a  ¦  A  ¦  0  ¦  NULL  ¦  NULL  ¦    ¦  BTREE  ¦    ¦    ¦    ¦  YES  ¦  a  𝄀
 tbl  ¦  1  ¦  idx2  ¦  1  ¦  b  ¦  A  ¦  0  ¦  NULL  ¦  NULL  ¦  YES  ¦  ivfflat  ¦    ¦    ¦  {"lists":"2","op_type":"vector_l2_ops"}  ¦  YES  ¦  b
 show create table tbl;
 ➤ Table[12,-1,0]  ¦  Create Table[12,-1,0]  𝄀
@@ -237,7 +237,7 @@ insert into src1 values (0, 'color is red', 't1'), (1, 'car is yellow', 'crazy c
 create fulltext index ftidx on src1 (body, title);
 show index from src1;
 ➤ Table[12,-1,0]  ¦  Non_unique[-5,64,0]  ¦  Key_name[12,-1,0]  ¦  Seq_in_index[4,32,0]  ¦  Column_name[12,-1,0]  ¦  Collation[12,-1,0]  ¦  Cardinality[-5,64,0]  ¦  Sub_part[12,-1,0]  ¦  Packed[12,-1,0]  ¦  Null[12,-1,0]  ¦  Index_type[12,-1,0]  ¦  Comment[1,0,0]  ¦  Index_comment[12,-1,0]  ¦  Index_params[12,-1,0]  ¦  Visible[12,-1,0]  ¦  Expression[12,-1,0]  𝄀
-src1  ¦  0  ¦  PRIMARY  ¦  1  ¦  id  ¦  A  ¦  0  ¦  NULL  ¦  NULL  ¦    ¦    ¦    ¦    ¦    ¦  YES  ¦  id  𝄀
+src1  ¦  0  ¦  PRIMARY  ¦  1  ¦  id  ¦  A  ¦  0  ¦  NULL  ¦  NULL  ¦    ¦  BTREE  ¦    ¦    ¦    ¦  YES  ¦  id  𝄀
 src1  ¦  1  ¦  ftidx  ¦  1  ¦  body  ¦  A  ¦  0  ¦  NULL  ¦  NULL  ¦  YES  ¦  fulltext  ¦    ¦    ¦    ¦  YES  ¦  body  𝄀
 src1  ¦  1  ¦  ftidx  ¦  2  ¦  title  ¦  A  ¦  0  ¦  NULL  ¦  NULL  ¦  YES  ¦  fulltext  ¦    ¦    ¦    ¦  YES  ¦  title
 select name, type, column_name from mo_catalog.mo_indexes where name = 'ftidx' and table_id in (select rel_id from mo_catalog.mo_tables where relname = 'src1');
@@ -250,7 +250,7 @@ fulltext
 alter table src1 add fulltext index ftidx2 (body);
 show index from src1;
 ➤ Table[12,-1,0]  ¦  Non_unique[-5,64,0]  ¦  Key_name[12,-1,0]  ¦  Seq_in_index[4,32,0]  ¦  Column_name[12,-1,0]  ¦  Collation[12,-1,0]  ¦  Cardinality[-5,64,0]  ¦  Sub_part[12,-1,0]  ¦  Packed[12,-1,0]  ¦  Null[12,-1,0]  ¦  Index_type[12,-1,0]  ¦  Comment[1,0,0]  ¦  Index_comment[12,-1,0]  ¦  Index_params[12,-1,0]  ¦  Visible[12,-1,0]  ¦  Expression[12,-1,0]  𝄀
-src1  ¦  0  ¦  PRIMARY  ¦  1  ¦  id  ¦  A  ¦  0  ¦  NULL  ¦  NULL  ¦    ¦    ¦    ¦    ¦    ¦  YES  ¦  id  𝄀
+src1  ¦  0  ¦  PRIMARY  ¦  1  ¦  id  ¦  A  ¦  0  ¦  NULL  ¦  NULL  ¦    ¦  BTREE  ¦    ¦    ¦    ¦  YES  ¦  id  𝄀
 src1  ¦  1  ¦  ftidx  ¦  1  ¦  body  ¦  A  ¦  0  ¦  NULL  ¦  NULL  ¦  YES  ¦  fulltext  ¦    ¦    ¦    ¦  YES  ¦  body  𝄀
 src1  ¦  1  ¦  ftidx  ¦  2  ¦  title  ¦  A  ¦  0  ¦  NULL  ¦  NULL  ¦  YES  ¦  fulltext  ¦    ¦    ¦    ¦  YES  ¦  title  𝄀
 src1  ¦  1  ¦  ftidx2  ¦  1  ¦  body  ¦  A  ¦  0  ¦  NULL  ¦  NULL  ¦  YES  ¦  fulltext  ¦    ¦    ¦    ¦  YES  ¦  body
@@ -295,7 +295,7 @@ show index from src2;
 ➤ Table[12,-1,0]  ¦  Non_unique[-5,64,0]  ¦  Key_name[12,-1,0]  ¦  Seq_in_index[4,32,0]  ¦  Column_name[12,-1,0]  ¦  Collation[12,-1,0]  ¦  Cardinality[-5,64,0]  ¦  Sub_part[12,-1,0]  ¦  Packed[12,-1,0]  ¦  Null[12,-1,0]  ¦  Index_type[12,-1,0]  ¦  Comment[1,0,0]  ¦  Index_comment[12,-1,0]  ¦  Index_params[12,-1,0]  ¦  Visible[12,-1,0]  ¦  Expression[12,-1,0]  𝄀
 src2  ¦  1  ¦    ¦  1  ¦  title  ¦  A  ¦  0  ¦  NULL  ¦  NULL  ¦  YES  ¦  fulltext  ¦    ¦    ¦    ¦  YES  ¦  title  𝄀
 src2  ¦  1  ¦    ¦  2  ¦  body  ¦  A  ¦  0  ¦  NULL  ¦  NULL  ¦  YES  ¦  fulltext  ¦    ¦    ¦    ¦  YES  ¦  body  𝄀
-src2  ¦  0  ¦  PRIMARY  ¦  1  ¦  id  ¦  A  ¦  0  ¦  NULL  ¦  NULL  ¦    ¦    ¦    ¦    ¦    ¦  YES  ¦  id
+src2  ¦  0  ¦  PRIMARY  ¦  1  ¦  id  ¦  A  ¦  0  ¦  NULL  ¦  NULL  ¦    ¦  BTREE  ¦    ¦    ¦    ¦  YES  ¦  id
 select name, type, column_name from mo_catalog.mo_indexes where table_id in (select rel_id from mo_catalog.mo_tables where relname = 'src2');
 ➤ name[12,-1,0]  ¦  type[12,-1,0]  ¦  column_name[12,-1,0]  𝄀
   ¦  FULLTEXT  ¦  title  𝄀

@@ -847,14 +847,22 @@ const (
 	// logical payload size and currently-supported free-space contract.
 	JSON_STORAGE_SIZE = 579
 	JSON_STORAGE_FREE = 580
+	JSON_DEPTH        = 584
+
+	EXTRACTVALUE            = 581
+	UPDATEXML               = 582
+	TO_INTERVAL_MICROSECOND = 583
 
 	// FUNCTION_END_NUMBER is not a function, just a flag to record the max number of function.
 	// TODO: every one should put the new function id in front of this one if you want to make a new function.
-	FUNCTION_END_NUMBER = 581
+	FUNCTION_END_NUMBER = 585
 )
 
 // functionIdRegister is what function we have registered already.
 var functionIdRegister = map[string]int32{
+	"to_interval_microsecond": TO_INTERVAL_MICROSECOND,
+	"extractvalue":            EXTRACTVALUE,
+	"updatexml":               UPDATEXML,
 	// operators
 	"=":            EQUAL,
 	"<=>":          NULL_SAFE_EQUAL,
@@ -922,6 +930,7 @@ var functionIdRegister = map[string]int32{
 	"min":                          MIN,
 	"sum":                          SUM,
 	"group_concat":                 GROUP_CONCAT,
+	"listagg":                      GROUP_CONCAT,
 	"grouping":                     GROUPING,
 	"avg":                          AVG,
 	"avg_tw_cache":                 AVG_TW_CACHE,
@@ -1132,6 +1141,7 @@ var functionIdRegister = map[string]int32{
 	"json_extract_float64":           JSON_EXTRACT_FLOAT64,
 	"json_object":                    JSON_OBJECT,
 	"json_arrayagg":                  JSON_ARRAYAGG,
+	"array_agg":                      JSON_ARRAYAGG,
 	"json_objectagg":                 JSON_OBJECTAGG,
 	"json_quote":                     JSON_QUOTE,
 	"json_unquote":                   JSON_UNQUOTE,
@@ -1149,6 +1159,7 @@ var functionIdRegister = map[string]int32{
 	"json_length":                    JSON_LENGTH,
 	"json_storage_size":              JSON_STORAGE_SIZE,
 	"json_storage_free":              JSON_STORAGE_FREE,
+	"json_depth":                     JSON_DEPTH,
 	"json_contains":                  JSON_CONTAINS,
 	"json_contains_path":             JSON_CONTAINS_PATH,
 	"json_merge":                     JSON_MERGE_PRESERVE,

@@ -16,6 +16,7 @@ package client
 
 import (
 	"context"
+	"errors"
 	"time"
 
 	"github.com/matrixorigin/matrixone/pkg/pb/txn"
@@ -74,6 +75,11 @@ func (tc *txnOperator) AppendEventCallback(
 	callbacks ...TxnEventCallback) {
 	tc.mu.Lock()
 	defer tc.mu.Unlock()
+	for _, callback := range callbacks {
+		if callback.StatementScoped && event != ClosedEvent {
+			panic("statement-scoped callback requires ClosedEvent")
+		}
+	}
 	if tc.mu.closed {
 		panic("append callback on closed txn")
 	}
@@ -88,6 +94,47 @@ func (tc *txnOperator) AppendEventCallback(
 		}
 	}
 	tc.mu.callbacks.callbacks[event] = append(tc.mu.callbacks.callbacks[event], callbacks...)
+}
+
+func (tc *txnOperator) BeginStatementCallbacks() {
+	tc.mu.Lock()
+	defer tc.mu.Unlock()
+	if tc.mu.callbacks == nil {
+		tc.mu.statementCallbackStart = 0
+		return
+	}
+	tc.mu.statementCallbackStart = len(tc.mu.callbacks.callbacks[ClosedEvent])
+}
+
+func (tc *txnOperator) RollbackStatementCallbacks(ctx context.Context) error {
+	tc.mu.Lock()
+	var detached []TxnEventCallback
+	if tc.mu.callbacks != nil && tc.mu.callbacks.callbacks != nil {
+		callbacks := tc.mu.callbacks.callbacks[ClosedEvent]
+		start := min(tc.mu.statementCallbackStart, len(callbacks))
+		kept := start
+		for _, callback := range callbacks[start:] {
+			if callback.StatementScoped {
+				detached = append(detached, callback)
+			} else {
+				callbacks[kept] = callback
+				kept++
+			}
+		}
+		clear(callbacks[kept:])
+		tc.mu.callbacks.callbacks[ClosedEvent] = callbacks[:kept]
+		tc.mu.statementCallbackStart = kept
+	}
+	meta := tc.mu.txn
+	meta.Status = txn.TxnStatus_Aborted // The detached actions, not the transaction, abort.
+	tc.mu.Unlock()
+
+	event := newEvent(ClosedEvent, meta, 0, nil)
+	var err error
+	for _, callback := range detached {
+		err = errors.Join(err, callback.Func(ctx, tc, event, callback.Value))
+	}
+	return err
 }
 
 func (tc *txnOperator) triggerEvent(ctx context.Context, event TxnEvent) error {

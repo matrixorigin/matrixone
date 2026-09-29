@@ -512,16 +512,16 @@ func TestAnalyzeLoadUniqueIndexPromotionMatchesPlannerShape(t *testing.T) {
 
 func TestLoadLogtailReadBarrierCapabilityUnwrapsEntireEngine(t *testing.T) {
 	direct := &testLoadLogtailBarrierEngine{}
-	got, ok := loadLogtailReadBarrier(direct)
+	got, ok := getLogtailReadBarrier(direct)
 	require.True(t, ok)
 	require.Same(t, direct, got)
 
 	wrapped := &engine.EntireEngine{Engine: &engine.EntireEngine{Engine: direct}}
-	got, ok = loadLogtailReadBarrier(wrapped)
+	got, ok = getLogtailReadBarrier(wrapped)
 	require.True(t, ok)
 	require.Same(t, direct, got)
 
-	_, ok = loadLogtailReadBarrier(&engine.EntireEngine{Engine: newStubEngine()})
+	_, ok = getLogtailReadBarrier(&engine.EntireEngine{Engine: newStubEngine()})
 	require.False(t, ok,
 		"the wrapper method must not make an unsupported underlying engine eligible")
 }

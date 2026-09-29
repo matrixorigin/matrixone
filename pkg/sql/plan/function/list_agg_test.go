@@ -27,6 +27,22 @@ import (
 	"github.com/stretchr/testify/require"
 )
 
+func TestOrderedCollectionCompatibilityAliases(t *testing.T) {
+	listAgg, err := GetFunctionByName(
+		t.Context(), "listagg", []types.Type{types.T_varchar.ToType()})
+	require.NoError(t, err)
+	listAggID, _ := DecodeOverloadID(listAgg.GetEncodedOverloadID())
+	require.Equal(t, int32(GROUP_CONCAT), listAggID)
+	require.Equal(t, types.T_text, listAgg.GetReturnType().Oid)
+
+	arrayAgg, err := GetFunctionByName(
+		t.Context(), "array_agg", []types.Type{types.T_varchar.ToType()})
+	require.NoError(t, err)
+	arrayAggID, _ := DecodeOverloadID(arrayAgg.GetEncodedOverloadID())
+	require.Equal(t, int32(JSON_ARRAYAGG), arrayAggID)
+	require.Equal(t, types.T_json, arrayAgg.GetReturnType().Oid)
+}
+
 func TestJSONObjectAggNumericKeyResolution(t *testing.T) {
 	ctx := context.Background()
 	valueType := types.T_varchar.ToType()
@@ -100,6 +116,23 @@ func TestBitSumAvgUsesExistingUnsignedDomain(t *testing.T) {
 			unsigned, err := GetFunctionByName(context.Background(), name, []types.Type{types.T_uint64.ToType()})
 			require.NoError(t, err)
 			require.Equal(t, unsigned.GetReturnType(), got.GetReturnType())
+		}
+	}
+}
+
+func TestEnumSumAvgUsesOrdinalDomain(t *testing.T) {
+	for _, name := range []string{"sum", "avg"} {
+		got, err := GetFunctionByName(context.Background(), name, []types.Type{types.T_enum.ToType()})
+		require.NoError(t, err)
+		casts, cast := got.ShouldDoImplicitTypeCast()
+		require.True(t, cast)
+		require.Equal(t, []types.Type{types.T_uint16.ToType()}, casts)
+		ordinal, err := GetFunctionByName(context.Background(), name, casts)
+		require.NoError(t, err)
+		require.Equal(t, ordinal.GetReturnType(), got.GetReturnType())
+		for _, inputs := range [][]types.Type{nil, {types.T_enum.ToType(), types.T_enum.ToType()}, {types.T_varchar.ToType()}} {
+			_, err := GetFunctionByName(context.Background(), name, inputs)
+			require.Error(t, err)
 		}
 	}
 }

@@ -44,6 +44,7 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/sql/parsers/dialect/mysql"
 	"github.com/matrixorigin/matrixone/pkg/sql/parsers/tree"
 	plan2 "github.com/matrixorigin/matrixone/pkg/sql/plan"
+	"github.com/matrixorigin/matrixone/pkg/sql/plan/function"
 	"github.com/matrixorigin/matrixone/pkg/txn/client"
 	"github.com/matrixorigin/matrixone/pkg/util"
 	metric "github.com/matrixorigin/matrixone/pkg/util/metric/v2"
@@ -305,19 +306,29 @@ type PrepareStmt struct {
 	OnlyFullGroupBy        bool
 	BoolSumAvg             bool
 	NoUnsignedSubtraction  bool
+	divPrecisionIncrement  int64
 	// sqlModeFlagsSet distinguishes captured disabled modes (OnlyFullGroupBy,
 	// BoolSumAvg) from legacy or minimal in-memory fixtures that predate these
 	// plan dependencies.
 	sqlModeFlagsSet bool
-	ParamTypes      []byte
-	ColDefData      [][]byte
-	IsCloudNonuser  bool
-	proc            *process.Process
-	remapDb         map[string]string
-	defaultDatabase string
+	// divPrecisionIncrementSet distinguishes a captured default value from
+	// legacy and minimal in-memory prepared-statement fixtures.
+	divPrecisionIncrementSet bool
+	ParamTypes               []byte
+	ColDefData               [][]byte
+	IsCloudNonuser           bool
+	proc                     *process.Process
+	remapDb                  map[string]string
+	defaultDatabase          string
 
 	params              *vector.Vector
 	getFromSendLongData map[int]struct{}
+	// COM_STMT_SEND_LONG_DATA owns its chunks until EXECUTE materializes each
+	// parameter once. The pool must be the one that allocated the buffers,
+	// even if a later command uses a different process.
+	longDataBuffers map[int][]byte
+	longDataPool    *mpool.MPool
+	longDataErr     error
 	// cursorRequested is set by the current COM_STMT_EXECUTE packet. The
 	// materialized cursor is kept on the prepared statement because a later
 	// COM_STMT_FETCH only carries the statement id.
@@ -355,6 +366,8 @@ type PrepareStmt struct {
 	// cached capability and refreshes it once before execution.
 	numericPrefixConsumerPlan     *plan.Plan
 	numericPrefixConsumer         bool
+	joinDiagnosticCandidatePlan   *plan.Plan
+	joinDiagnosticCandidate       bool
 	directResultParamPositions    []int32
 	directResultParamPositionsSet bool
 	// fixedIntegerParamPositions identifies parameters with a fixed unsigned-
@@ -384,6 +397,13 @@ type PrepareStmt struct {
 	// runtime integer/decimal domain may require overload rebinding without
 	// rescanning the full plan for every EXECUTE.
 	numericOverloadParamPositions []int32
+	// temporalRuntimeParamPositions combines numeric-function and prepared
+	// GENERATE_SERIES endpoint positions. Only these markers retain a temporal
+	// COM_STMT_EXECUTE packet domain instead of generic text transport.
+	temporalRuntimeParamPositions []int32
+	// A parameterized GENERATE_SERIES can derive DATETIME scale from text
+	// values or an interval step, even when protocol parameter types are stable.
+	parameterizedGenerateSeries bool
 	// bitCountOverloadParamPositions owns BIT_COUNT's asymmetric prepared
 	// contract. Each marker starts with the binary-string default; after an
 	// actual numeric value reparses the statement, later text/BLOB values keep
@@ -422,6 +442,9 @@ type PrepareStmt struct {
 	// EXECUTE.
 	runtimeSpecializationPlan   *plan.Plan
 	runtimeSpecializationNeeded bool
+	// runtimeIntegerAssignmentParams belongs to the same plan generation. These
+	// markers alone do not force specialization for ordinary integer packets.
+	runtimeIntegerAssignmentParams []int32
 }
 
 // preparedStmtCursor is the server-side result retained between
@@ -858,6 +881,8 @@ func (prepareStmt *PrepareStmt) clearRuntimeSpecializationCache() {
 
 func (prepareStmt *PrepareStmt) Close() {
 	prepareStmt.closeCursor()
+	prepareStmt.releaseLongDataBuffers()
+	prepareStmt.longDataErr = nil
 	// Release the runtime compile while the current parameter vector is still
 	// valid; releaseRuntimeCompile temporarily detaches and restores it.
 	prepareStmt.clearRuntimeSpecializationCache()
@@ -887,6 +912,7 @@ func (prepareStmt *PrepareStmt) Close() {
 	prepareStmt.directResultParamPositions = nil
 	prepareStmt.directResultParamPositionsSet = false
 	prepareStmt.remapDb = nil
+	prepareStmt.getFromSendLongData = nil
 }
 
 // invalidateCachedCompile detaches and returns the old cached topology. The
@@ -910,23 +936,30 @@ func (prepareStmt *PrepareStmt) resetBinaryParamState() {
 	if prepareStmt == nil {
 		return
 	}
-	if prepareStmt.params != nil {
-		prepareStmt.params.GetNulls().Reset()
-	}
-	for k := range prepareStmt.getFromSendLongData {
-		delete(prepareStmt.getFromSendLongData, k)
-	}
+	prepareStmt.clearBinaryParamState(prepareStmt.proc)
+	prepareStmt.longDataErr = nil
 }
 
 func (prepareStmt *PrepareStmt) hasPendingLongData() bool {
-	return prepareStmt != nil && len(prepareStmt.getFromSendLongData) > 0
+	return prepareStmt != nil && (len(prepareStmt.getFromSendLongData) > 0 ||
+		len(prepareStmt.longDataBuffers) > 0 || prepareStmt.longDataErr != nil)
 }
 
 func (prepareStmt *PrepareStmt) clearBinaryParamState(proc *process.Process) {
 	if prepareStmt == nil {
 		return
 	}
+	prepareStmt.releaseLongDataBuffers()
+	if proc == nil {
+		proc = prepareStmt.proc
+	}
 	if prepareStmt.params != nil && proc != nil {
+		if prepareStmt.proc != nil && prepareStmt.proc.GetPrepareParams() == prepareStmt.params {
+			prepareStmt.proc.SetPrepareParams(nil)
+		}
+		if proc.GetPrepareParams() == prepareStmt.params {
+			proc.SetPrepareParams(nil)
+		}
 		prepareStmt.params.Free(proc.Mp())
 		prepareStmt.params = nil
 	}
@@ -1770,8 +1803,8 @@ func (ses *Session) SetGlobalSysVar(ctx context.Context, name string, val interf
 	// save to table first
 	canonicalName := canonicalSystemVariableName(name)
 	persistNames := []string{canonicalName}
-	if isTransactionIsolationSystemVariable(name) {
-		persistNames = append(persistNames, transactionIsolationSystemVariableAlias)
+	if alias := transactionSystemVariableAlias(name); alias != "" {
+		persistNames = append(persistNames, alias)
 	}
 	if err = doSetGlobalSystemVariables(ctx, ses, persistNames, val); err != nil {
 		return
@@ -1849,6 +1882,7 @@ func (ses *Session) SetSessionSysVar(ctx context.Context, name string, val inter
 	oldNoUnsignedSubtraction := false
 	oldParserFlags := mysql.SQLModeFlags(0)
 	oldIgnoreSpace := false
+	oldDivPrecisionIncrement := int64(function.DefaultDivPrecisionIncrement)
 	if name == "sql_mode" {
 		oldMatrixOneNative = ses.sqlModeHasMatrixOneNative()
 		oldOnlyFullGroupBy = ses.sqlModeHasOnlyFullGroupBy()
@@ -1857,6 +1891,8 @@ func (ses *Session) SetSessionSysVar(ctx context.Context, name string, val inter
 		oldNoUnsignedSubtraction = ses.sqlModeHasNoUnsignedSubtraction()
 		oldParserFlags = ses.sqlModeParserFlags()
 		oldIgnoreSpace = ses.sqlModeHasIgnoreSpace()
+	} else if name == "div_precision_increment" {
+		oldDivPrecisionIncrement = ses.currentDivPrecisionIncrement()
 	}
 
 	def, ok := gSysVarsDefs[name]
@@ -1921,6 +1957,11 @@ func (ses *Session) SetSessionSysVar(ctx context.Context, name string, val inter
 	if err == nil && name == "sql_mode" {
 		ses.updateSqlModeCaches(oldMatrixOneNative, oldOnlyFullGroupBy, oldBoolSumAvg, oldHighNotPrecedence, oldNoUnsignedSubtraction, oldParserFlags, oldIgnoreSpace, val)
 	}
+	if err == nil && name == "div_precision_increment" {
+		if increment, ok := val.(int64); ok && increment != oldDivPrecisionIncrement {
+			ses.cleanCache()
+		}
+	}
 	if err == nil && setTxnIsolation {
 		if txnHandler := ses.GetTxnHandler(); txnHandler != nil {
 			txnHandler.setSessionTxnIsolation(txnIsolation)
@@ -1934,7 +1975,6 @@ func (ses *Session) SetSessionSysVar(ctx context.Context, name string, val inter
 			ses.rewriteEnabled.Store(on)
 		}
 	}
-
 	// A prepared statement bakes in the rewrite/remap state captured at PREPARE
 	// time (the injected hint and the remapdb applied to its AST). Changing that
 	// state must invalidate the cached prepared statements, otherwise a later
@@ -2173,7 +2213,7 @@ type MysqlWriter interface {
 }
 
 type MysqlHelper interface {
-	MakeColumnDefData(context.Context, []*plan.ColDef) ([][]byte, error)
+	MakeColumnDefData(context.Context, []*plan.ColDef, ...uint32) ([][]byte, error)
 }
 
 type MysqlRrWr interface {

@@ -21,8 +21,10 @@ import (
 	"testing"
 
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
+	moruntime "github.com/matrixorigin/matrixone/pkg/common/runtime"
 	"github.com/matrixorigin/matrixone/pkg/container/types"
 	"github.com/matrixorigin/matrixone/pkg/container/vector"
+	"github.com/matrixorigin/matrixone/pkg/defines"
 	planpb "github.com/matrixorigin/matrixone/pkg/pb/plan"
 	"github.com/matrixorigin/matrixone/pkg/sql/parsers"
 	"github.com/matrixorigin/matrixone/pkg/sql/parsers/dialect"
@@ -56,6 +58,10 @@ func (b *stubWindowBinder) bindPreparedWindowFrameBound(expr tree.Expr, typ *pla
 
 func (b *stubWindowBinder) makeFrameConstValue(expr tree.Expr, typ *planpb.Type) (*planpb.Expr, error) {
 	return b.makeFrameValueFunc(expr, typ)
+}
+
+func (b *stubWindowBinder) mysqlSpecialOrderKey(expr *planpb.Expr, typ *planpb.Type) (*planpb.Expr, error) {
+	return makeMySQLSpecialOrderKey(b.GetContext(), expr, typ)
 }
 
 func (b *stubWindowBinder) GetContext() context.Context {
@@ -1649,6 +1655,30 @@ func TestBindWindowFuncExprValidationAndHelpers(t *testing.T) {
 
 func TestWindowFrameConstValueHelpers(t *testing.T) {
 	proc := testutil.NewProc(t)
+	t.Run("decimal256 singleton retains value and provenance", func(t *testing.T) {
+		source := makePlan2Int64ConstExprWithType(11)
+		source.GetLit().DecimalLiteralRequiresV82 = true
+		got, err := makeWindowFrameConstValue(
+			func(tree.Expr, int32, bool) (*Expr, error) { return source, nil },
+			proc, t.Context(), testNumVal(11),
+			&planpb.Type{Id: int32(types.T_decimal256), Width: 65, Scale: 2},
+		)
+		require.NoError(t, err)
+		require.NotNil(t, got.GetVec())
+		require.Equal(t, int32(1), got.GetVec().Len)
+		var decoded vector.Vector
+		require.NoError(t, decoded.UnmarshalBinary(got.GetVec().Data))
+		require.Equal(t, types.Decimal256FromInt64(1100), vector.GetFixedAtNoTypeCheck[types.Decimal256](&decoded, 0))
+		wire, err := got.Marshal()
+		require.NoError(t, err)
+		var restored planpb.Expr
+		require.NoError(t, restored.Unmarshal(wire))
+		for _, copy := range []*planpb.Expr{got, DeepCopyExpr(got), &restored} {
+			required, err := RequiredPersistedExpressionProtocolVersion(copy)
+			require.NoError(t, err)
+			require.Equal(t, int64(defines.MORPCVersion89), required)
+		}
+	})
 
 	t.Run("typ nil returns bound expr directly", func(t *testing.T) {
 		expected := makePlan2Int64ConstExprWithType(7)
@@ -1677,6 +1707,58 @@ func TestWindowFrameConstValueHelpers(t *testing.T) {
 		)
 		require.NoError(t, err)
 		require.Equal(t, int64(11), got.GetLit().Value.(*planpb.Literal_I64Val).I64Val)
+	})
+
+	t.Run("numeric range bounds preserve decimal protocol provenance", func(t *testing.T) {
+		rt := moruntime.ServiceRuntime(proc.GetService())
+		oldFloor, hadFloor := rt.GetGlobalVariables(moruntime.PersistedExpressionProtocolFloor)
+		t.Cleanup(func() {
+			if hadFloor {
+				rt.SetGlobalVariables(moruntime.PersistedExpressionProtocolFloor, oldFloor)
+			} else if current, ok := rt.GetGlobalVariables(moruntime.PersistedExpressionProtocolFloor); ok {
+				rt.CompareAndDeleteGlobalVariables(moruntime.PersistedExpressionProtocolFloor, current)
+			}
+		})
+
+		for _, bound := range []string{"start", "end"} {
+			t.Run(bound, func(t *testing.T) {
+				source := makePlan2Int64ConstExprWithType(11)
+				source.GetLit().DecimalLiteralRequiresV82 = true
+				got, err := makeWindowFrameConstValue(
+					func(tree.Expr, int32, bool) (*Expr, error) { return source, nil },
+					proc,
+					context.Background(),
+					testNumVal(11),
+					&planpb.Type{Id: int32(types.T_int64)},
+				)
+				require.NoError(t, err)
+				require.True(t, got.GetLit().DecimalLiteralRequiresV82)
+
+				required, err := RequiredPersistedExpressionProtocolVersion(got)
+				require.NoError(t, err)
+				require.Equal(t, int64(defines.MORPCVersion89), required)
+
+				rt.SetGlobalVariables(moruntime.PersistedExpressionProtocolFloor, int64(defines.MORPCVersion88))
+				require.ErrorContains(t, RequirePersistedExpressionProtocol(proc.Ctx, proc, got), "protocol version 89")
+				rt.SetGlobalVariables(moruntime.PersistedExpressionProtocolFloor, int64(defines.MORPCVersion89))
+				require.NoError(t, RequirePersistedExpressionProtocol(proc.Ctx, proc, got))
+			})
+		}
+
+		unmarked, err := makeWindowFrameConstValue(
+			func(tree.Expr, int32, bool) (*Expr, error) {
+				return makePlan2Int64ConstExprWithType(11), nil
+			},
+			proc,
+			context.Background(),
+			testNumVal(11),
+			&planpb.Type{Id: int32(types.T_int64)},
+		)
+		require.NoError(t, err)
+		require.False(t, unmarked.GetLit().DecimalLiteralRequiresV82)
+		required, err := RequiredPersistedExpressionProtocolVersion(unmarked)
+		require.NoError(t, err)
+		require.Zero(t, required)
 	})
 
 	t.Run("interval expr is normalized through helper", func(t *testing.T) {

@@ -153,6 +153,50 @@ select id from t_phase6 where filter_col = 1 order by l2_distance(vec, '[0,0,0]'
 set enable_vector_auto_mode_by_default = 0;
 select id from t_phase6 where filter_col = 1 order by l2_distance(vec, '[0,0,0]') limit 1;
 ➤ id[4,32,0]
+drop table if exists t_bit_pk_retry;
+create table t_bit_pk_retry(id bit(16) primary key, selected int, vec vecf32(2));
+insert into t_bit_pk_retry
+select cast(result as bit(16)), if(result > 195, 1, 0),
+cast(concat('[', result / 1000, ',0]') as vecf32(2))
+from generate_series(1, 200) g;
+create index idx_bit_pk_retry using ivfflat on t_bit_pk_retry(vec) lists=1 op_type 'vector_l2_ops';
+set probe_limit = 1;
+select cast(id as unsigned) from t_bit_pk_retry where selected = 1
+order by l2_distance(vec, '[0,0]') limit 10 by rank with option 'mode=force';
+➤ cast(id as unsigned)[-5,64,0]  𝄀
+196  𝄀
+197  𝄀
+198  𝄀
+199  𝄀
+200
+select cast(id as unsigned) from t_bit_pk_retry where selected = 1
+order by l2_distance(vec, '[0,0]') limit 10 by rank with option 'mode=post';
+➤ cast(id as unsigned)[-5,64,0]
+select cast(id as unsigned) from t_bit_pk_retry where selected = 1
+order by l2_distance(vec, '[0,0]') limit 10 by rank with option 'mode=pre';
+➤ cast(id as unsigned)[-5,64,0]  𝄀
+196  𝄀
+197  𝄀
+198  𝄀
+199  𝄀
+200
+select cast(id as unsigned) from t_bit_pk_retry where selected = 1
+order by l2_distance(vec, '[0,0]') limit 10 by rank with option 'mode=auto';
+➤ cast(id as unsigned)[-5,64,0]  𝄀
+196  𝄀
+197  𝄀
+198  𝄀
+199  𝄀
+200
+select cast(id as unsigned) from t_bit_pk_retry where selected = 1
+order by l2_distance(vec, '[0,0]') limit 10 by rank with option 'mode=include';
+➤ cast(id as unsigned)[-5,64,0]  𝄀
+196  𝄀
+197  𝄀
+198  𝄀
+199  𝄀
+200
+drop table t_bit_pk_retry;
 set probe_limit = 5;
 drop table t_phase6;
 drop database test_retry;

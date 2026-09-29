@@ -18,6 +18,7 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
+	"slices"
 	"strings"
 
 	"github.com/matrixorigin/matrixone/pkg/catalog"
@@ -670,18 +671,40 @@ func buildShowColumns(stmt *tree.ShowColumns, ctx CompilerContext) (*Plan, error
 		sql = fmt.Sprintf(sql, keyStr, MO_CATALOG_DB_NAME, MO_CATALOG_DB_NAME, dbName, tblName)
 	}
 
-	if stmt.Where != nil {
-		return returnByWhereAndBaseSQL(ctx, sql, stmt.Where, ddlType)
+	var viewDependencies []*ObjectRef
+	var viewMetadataDependsOnUdf bool
+	if tableDef.ViewSql != nil && tableDef.ViewSql.View != "" &&
+		!slices.Contains(catalog.SystemDatabases, strings.ToLower(dbName)) {
+		columns, dependencies, dependsOnUdf, err := viewDescriptionRelation(ctx, tableDef, accountId, dbName, tblName)
+		if err != nil {
+			return nil, err
+		}
+		sql = strings.Replace(sql, "FROM "+MO_CATALOG_DB_NAME+".mo_columns col", "FROM "+columns+" col", 1)
+		viewDependencies = dependencies
+		viewMetadataDependsOnUdf = dependsOnUdf
 	}
+	// Even an ordinary table determines plan-time formatting and the metadata
+	// row source. If it is replaced by a View, reusing its catalog-only plan
+	// would bypass on-demand binding and expose the persisted View columns.
+	viewDependencies = appendPrepareSchemas(viewDependencies, prepareSchemaRefWithSnapshot(obj, tableDef, nil))
 
-	if stmt.Like != nil {
-		// append filter [AND ma.attname like stmt.Like] to WHERE clause
+	var result *Plan
+	if stmt.Where != nil {
+		result, err = returnByWhereAndBaseSQL(ctx, sql, stmt.Where, ddlType)
+	} else if stmt.Like != nil {
 		likeExpr := stmt.Like
 		likeExpr.Left = tree.NewUnresolvedColName("attname")
-		return returnByLikeAndSQL(ctx, sql, likeExpr, ddlType)
+		result, err = returnByLikeAndSQL(ctx, sql, likeExpr, ddlType)
+	} else {
+		result, err = returnByRewriteSQL(ctx, sql, ddlType)
 	}
-
-	return returnByRewriteSQL(ctx, sql, ddlType)
+	if err != nil {
+		return nil, err
+	}
+	result.GetQuery().CatalogDependencies = appendPrepareSchemas(
+		result.GetQuery().CatalogDependencies, viewDependencies...)
+	result.GetQuery().ViewMetadataDependsOnUdf = viewMetadataDependsOnUdf
+	return result, nil
 }
 
 func buildShowTableStatus(stmt *tree.ShowTableStatus, ctx CompilerContext) (*Plan, error) {
@@ -897,6 +920,9 @@ func buildShowIndex(stmt *tree.ShowIndex, ctx CompilerContext) (*Plan, error) {
 		}()
 	}
 
+	// Older mo_indexes rows leave algo empty for ordinary, unique, and primary
+	// indexes. SHOW INDEX follows MySQL and exposes those rows as BTREE rather
+	// than leaking the internal empty metadata representation.
 	sql := "select " +
 		"'%s' as `Table`, " +
 		"if(`idx`.`type` IN ('PRIMARY', 'UNIQUE'), 0, 1) as `Non_unique`, " +
@@ -907,7 +933,7 @@ func buildShowIndex(stmt *tree.ShowIndex, ctx CompilerContext) (*Plan, error) {
 		"'NULL' as `Sub_part`, " +
 		"'NULL' as `Packed`, " +
 		"if(`tcl`.`attnotnull` = 0, 'YES', '') as `Null`, " +
-		"`idx`.`algo` as 'Index_type', " +
+		"coalesce(nullif(`idx`.`algo`, ''), 'BTREE') as 'Index_type', " +
 		"'' as `Comment`, " +
 		"`idx`.`comment` as `Index_comment`, " +
 		"`idx`.`algo_params` as `Index_params`, " +

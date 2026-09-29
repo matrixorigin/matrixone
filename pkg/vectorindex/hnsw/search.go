@@ -98,6 +98,17 @@ func (s *HnswSearch[T]) Search(sqlproc *sqlexec.SqlProcess, anyquery any, rt vec
 	if !ok {
 		return nil, nil, moerr.NewInternalErrorNoCtx("query is not []float32")
 	}
+	if s.Idxcfg.Usearch.Metric == metric.MetricTypeToUsearchMetric[metric.Metric_CosineDistance] {
+		// HNSW cosine assumes caller-normalized query vectors. A zero/subnormal query makes usearch's
+		// float32 cosine norm underflow, so it cannot be scored to MO's cosine_distance and the search
+		// heap discards candidates before any transform. Reject it fail-fast -- do NOT modify the
+		// vector (rewriting it would silently disagree with the stored index). A normalized query uses
+		// native cosine ANN (#29082).
+		if norm, ok := metric.CosineVectorL2Norm(query); !ok {
+			return nil, nil, moerr.NewInternalErrorNoCtx(fmt.Sprintf(
+				"hnsw cosine search requires a normalized (non-zero, non-subnormal) query vector; its L2 norm %g underflows the float32 domain the index computes in", norm))
+		}
+	}
 
 	limit := rt.Limit
 
@@ -183,6 +194,15 @@ func (s *HnswSearch[T]) Search(sqlproc *sqlexec.SqlProcess, anyquery any, rt vec
 		reskeys[i] = sr.Id
 		sr.Distance = metric.DistanceTransformHnsw(sr.Distance, metric.DistFuncNameToMetricType[rt.OrigFuncName], s.Idxcfg.Usearch.Metric)
 		resdistances[i] = sr.Distance
+	}
+
+	// usearch returns the distance as float32 (usearch_distance_t), so a float64 base whose distance
+	// overflows float32 saturates to +/-Inf while the exact scalar stays finite -- silently
+	// corrupting the value, Top-K order, and any outer predicate (the derived-table row-loss,
+	// #29040 / #29050). Vector distances are a float32 domain, so fail fast rather than serve it.
+	if metric.HasFloat64DistanceOverflow[T](resdistances) {
+		return nil, nil, moerr.NewInternalError(sqlproc.GetContext(),
+			"vector distance exceeds the float32 range the vector index computes in; a float64 vector of this magnitude is unsupported -- use a smaller-magnitude/normalized column or the exact scalar path")
 	}
 
 	return reskeys, resdistances, nil

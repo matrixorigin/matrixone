@@ -38,14 +38,8 @@
 #
 # make proto-vendor
 #
-# To compile mo-service with GPU support,
-# 1. install CUDA toolkit (version 13.3 or above)
-# 2. install cuVS Go bindings with conda
-#  % conda env create --name go -f optools/images/gpu/go_cuda-133_arch-$(uname -m).yaml
-#  % conda activate go
-# 3. compile matrixone
-#  % cd matrixone
-#  % MO_CL_CUDA=1 make
+# To compile mo-service with GPU support, use the frozen Pixi profile described
+# in optools/gpu/README.md. CPU-only builds do not require Pixi.
 
 # Go toolchain (override with `make GO=/path/to/go ...`); defaults to `go`.
 # Requires Go 1.26+ for the arch-specific SIMD kernels (built by default on x86_64).
@@ -54,7 +48,7 @@ ifeq ($(GO),)
 endif
 
 # where am I
-ROOT_DIR = $(shell dirname $(realpath $(lastword $(MAKEFILE_LIST))))
+ROOT_DIR := $(shell dirname $(realpath $(lastword $(MAKEFILE_LIST))))
 BIN_NAME := mo-service
 # MatrixOne is a single-module repository. Official Make targets must not
 # inherit a parent or user-selected go.work that can replace dependencies.
@@ -271,13 +265,9 @@ ifeq ("$(UNAME_M)", "x86_64")
 endif
 
 ifeq ($(MO_CL_CUDA),1)
-  ifeq ($(CONDA_PREFIX),)
-    $(error CONDA_PREFIX env variable not found.)
-  endif
-	CUVS_CFLAGS := -I$(CONDA_PREFIX)/include
-	CUVS_LDFLAGS := -L$(CONDA_PREFIX)/lib -lcuvs -lcuvs_c
-	CUDA_CFLAGS := -I/usr/local/cuda/include $(CUVS_CFLAGS)
-	CUDA_LDFLAGS := -L/usr/local/cuda/lib64/stubs -lcuda -L/usr/local/cuda/lib64 -lcudart $(CUVS_LDFLAGS) -lstdc++
+	include $(ROOT_DIR)/cgo/gpu-toolchain.mk
+	CUDA_CFLAGS := $(MO_GPU_CFLAGS)
+	CUDA_LDFLAGS := $(MO_GPU_LDFLAGS)
 	TAGS += -tags "gpu"
 endif
 
@@ -532,12 +522,12 @@ UT_SHARD ?= all
 UT_HARD_TIMEOUT ?= 120m
 # Emit one bounded progress heartbeat per interval while UT is running.
 UT_HEARTBEAT_INTERVAL ?= 60
-# Build embedded test packages ahead of their execution while the issues
-# fixture is active. This is bounded cache warming: it never executes a
-# prebuilt test binary, and the authoritative go test still owns every test
-# result. Keep it opt-in until a comparable run proves a critical-path gain
-# without consuming the runner's memory headroom.
-UT_PREBUILD_EMBEDDED ?= 0
+# Build embedded race binaries with one compiler while the exclusive issues
+# fixture runs, then execute those exact binaries serially. Build or admission
+# failures fall back before any prebuilt binary executes.
+UT_PREBUILD_EMBEDDED ?= 1
+UT_PREBUILD_MIN_FREE_KB ?= 6291456
+UT_EMBEDDED_HARD_TIMEOUT_SECONDS ?= 0
 # Reuse released engine slots for plan while resource-heavy work finishes.
 # The heavy process budget is unchanged; set 0 for a sequential A/B baseline.
 UT_OVERLAP_PLAN ?= 1
@@ -549,7 +539,7 @@ UT_OVERLAP_LIGHT_PARALLEL ?= 2
 # Parent cancellation waits long enough for helper-owned child process groups
 # to receive TERM and bounded KILL cleanup in sequence.
 UT_HELPER_TERM_GRACE_TICKS ?= 60
-export UT_SHARD UT_HARD_TIMEOUT UT_HEARTBEAT_INTERVAL UT_PREBUILD_EMBEDDED UT_OVERLAP_PLAN UT_OVERLAP_LIGHT UT_OVERLAP_LIGHT_PARALLEL UT_LIGHT_PARALLEL UT_LINK_PARALLEL UT_HELPER_TERM_GRACE_TICKS
+export UT_SHARD UT_HARD_TIMEOUT UT_HEARTBEAT_INTERVAL UT_PREBUILD_EMBEDDED UT_PREBUILD_MIN_FREE_KB UT_EMBEDDED_HARD_TIMEOUT_SECONDS UT_OVERLAP_PLAN UT_OVERLAP_LIGHT UT_OVERLAP_LIGHT_PARALLEL UT_LIGHT_PARALLEL UT_LINK_PARALLEL UT_HELPER_TERM_GRACE_TICKS
 # Native compilation runs before Go tests, so it can use an explicit UT CPU
 # budget without increasing peak race-test memory. With the default UT value,
 # omit -j and preserve recursive make's jobserver contract: a plain make stays

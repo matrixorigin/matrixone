@@ -332,15 +332,19 @@ func TestSoundexReturnTypePreservesOutputCapacity(t *testing.T) {
 		input     types.Type
 		wantOID   types.T
 		wantWidth int32
+		charset   uint8
 	}{
-		{name: "short input retains four-character minimum", input: types.New(types.T_char, 1, 0), wantOID: types.T_varchar, wantWidth: 4},
-		{name: "varchar boundary", input: types.New(types.T_varchar, types.MaxVarcharLen, 0), wantOID: types.T_varchar, wantWidth: types.MaxVarcharLen},
-		{name: "text at varchar boundary", input: types.New(types.T_text, types.MaxVarcharLen, 0), wantOID: types.T_varchar, wantWidth: types.MaxVarcharLen},
-		{name: "text above varchar boundary", input: types.New(types.T_text, types.MaxVarcharLen+1, 0), wantOID: types.T_text, wantWidth: types.MaxMediumTextLen},
-		{name: "medium text", input: types.New(types.T_text, types.MaxMediumTextLen, 0), wantOID: types.T_text, wantWidth: types.MaxMediumTextLen},
-		{name: "long text", input: types.New(types.T_text, types.MaxLongTextLen, 0), wantOID: types.T_text, wantWidth: types.MaxLongTextLen},
-		{name: "unbounded text", input: types.T_text.ToType(), wantOID: types.T_text, wantWidth: types.MaxLongTextLen},
-		{name: "unknown varchar bound", input: types.New(types.T_varchar, 0, 0), wantOID: types.T_text, wantWidth: types.MaxLongTextLen},
+		{name: "short input retains four-character minimum", input: types.New(types.T_char, 1, 0), wantOID: types.T_varchar, wantWidth: 4, charset: types.CharsetUTF8},
+		{name: "varchar boundary", input: types.New(types.T_varchar, types.MaxVarcharLen, 0), wantOID: types.T_varchar, wantWidth: types.MaxVarcharLen, charset: types.CharsetUTF8},
+		{name: "text at varchar boundary", input: types.New(types.T_text, types.MaxVarcharLen, 0), wantOID: types.T_varchar, wantWidth: types.MaxVarcharLen, charset: types.CharsetUTF8},
+		{name: "text above varchar boundary", input: types.New(types.T_text, types.MaxVarcharLen+1, 0), wantOID: types.T_text, wantWidth: types.MaxMediumTextLen, charset: types.CharsetUTF8},
+		{name: "medium text", input: types.New(types.T_text, types.MaxMediumTextLen, 0), wantOID: types.T_text, wantWidth: types.MaxMediumTextLen, charset: types.CharsetUTF8},
+		{name: "long text", input: types.New(types.T_text, types.MaxLongTextLen, 0), wantOID: types.T_text, wantWidth: types.MaxLongTextLen, charset: types.CharsetUTF8},
+		{name: "unbounded text", input: types.T_text.ToType(), wantOID: types.T_text, wantWidth: types.MaxLongTextLen, charset: types.CharsetUTF8},
+		{name: "unknown varchar bound", input: types.New(types.T_varchar, 0, 0), wantOID: types.T_text, wantWidth: types.MaxLongTextLen, charset: types.CharsetUTF8},
+		{name: "binary short input retains byte domain", input: types.New(types.T_varbinary, 1, 0), wantOID: types.T_varbinary, wantWidth: 4, charset: types.CharsetBinary},
+		{name: "binary input preserves byte capacity", input: types.New(types.T_varbinary, 64, 0), wantOID: types.T_varbinary, wantWidth: 64, charset: types.CharsetBinary},
+		{name: "unbounded binary input remains binary", input: types.T_blob.ToType(), wantOID: types.T_blob, wantWidth: 0, charset: types.CharsetBinary},
 	} {
 		t.Run(test.name, func(t *testing.T) {
 			resolved, err := GetFunctionByName(proc.Ctx, "soundex", []types.Type{test.input})
@@ -348,7 +352,7 @@ func TestSoundexReturnTypePreservesOutputCapacity(t *testing.T) {
 			result := resolved.GetReturnType()
 			require.Equal(t, test.wantOID, result.Oid)
 			require.Equal(t, test.wantWidth, result.Width)
-			require.Equal(t, types.CharsetUTF8, result.Charset)
+			require.Equal(t, test.charset, result.Charset)
 		})
 	}
 }
@@ -845,8 +849,8 @@ func TestStringDomainFunctionsPreserveBinaryInputsBeforeExecution(t *testing.T) 
 		{name: "replace", inputs: []types.Type{
 			types.New(types.T_varbinary, 8, 0), types.New(types.T_varchar, 1, 0), types.New(types.T_varchar, 2, 0),
 		}, wantOID: types.T_varbinary},
-		{name: "quote varbinary", fn: "quote", inputs: []types.Type{types.New(types.T_varbinary, 1, 0)}, wantOID: types.T_varbinary},
-		{name: "quote blob", fn: "quote", inputs: []types.Type{types.T_blob.ToType()}, wantOID: types.T_blob},
+		{name: "quote varbinary", fn: "quote", inputs: []types.Type{types.New(types.T_varbinary, 1, 0)}, wantOID: types.T_varchar},
+		{name: "quote blob", fn: "quote", inputs: []types.Type{types.T_blob.ToType()}, wantOID: types.T_text},
 	} {
 		t.Run(test.name, func(t *testing.T) {
 			fn := test.fn
@@ -861,6 +865,24 @@ func TestStringDomainFunctionsPreserveBinaryInputsBeforeExecution(t *testing.T) 
 			require.Empty(t, casts)
 		})
 	}
+
+	quote, err := GetFunctionByName(proc.Ctx, "quote", []types.Type{types.New(types.T_varbinary, 64, 0)})
+	require.NoError(t, err)
+	require.Equal(t, types.T_varchar, quote.GetReturnType().Oid)
+	require.Equal(t, int32(130), quote.GetReturnType().Width)
+	require.Equal(t, types.CharsetUTF8, quote.GetReturnType().Charset)
+	casts, needCast := quote.ShouldDoImplicitTypeCast()
+	require.False(t, needCast)
+	require.Empty(t, casts)
+
+	soundex, err := GetFunctionByName(proc.Ctx, "soundex", []types.Type{types.New(types.T_varbinary, 64, 0)})
+	require.NoError(t, err)
+	require.Equal(t, types.T_varbinary, soundex.GetReturnType().Oid)
+	require.Equal(t, int32(64), soundex.GetReturnType().Width)
+	require.Equal(t, types.CharsetBinary, soundex.GetReturnType().Charset)
+	casts, needCast = soundex.ShouldDoImplicitTypeCast()
+	require.False(t, needCast)
+	require.Empty(t, casts)
 }
 
 func TestQuotePreservesInvalidUTF8Bytes(t *testing.T) {
@@ -883,8 +905,9 @@ func TestExpandingReturnTypeBounds(t *testing.T) {
 	require.Equal(t, int32(4), quoted.Width)
 
 	quotedBinary := quoteReturnType([]types.Type{types.New(types.T_varbinary, 0, 0)})
-	require.Equal(t, types.T_varbinary, quotedBinary.Oid)
+	require.Equal(t, types.T_varchar, quotedBinary.Oid)
 	require.Equal(t, int32(4), quotedBinary.Width)
+	require.Equal(t, types.CharsetUTF8, quotedBinary.Charset)
 }
 
 func TestPadResultByteLengthEnforcesEncodedBudget(t *testing.T) {

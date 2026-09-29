@@ -33,6 +33,54 @@ import (
 	"github.com/stretchr/testify/require"
 )
 
+// Compare the budget boundary with decoded payload lengths, independently of
+// Page.Slice and parquetDecodedPageSize. Include nulls, empty dictionary values,
+// skewed lengths, nonzero page offsets, and exact budget boundaries.
+func TestParquetDictionarySourceBudgetBoundaries(t *testing.T) {
+	values := []*string{nil}
+	for _, s := range []string{"", "a", strings.Repeat("b", 127), "a", ""} {
+		values = append(values, &s)
+	}
+	values = append(values, nil)
+	rows := make([]parquet.Row, len(values))
+	for i, s := range values {
+		v := parquet.NullValue().Level(0, 0, 0)
+		if s != nil {
+			v = parquet.ByteArrayValue([]byte(*s)).Level(0, 1, 0)
+		}
+		rows[i] = parquet.Row{v}
+	}
+	_, page := writeColumnAndGetPage(t,
+		parquet.Optional(parquet.Encoded(parquet.String(), &parquet.RLEDictionary)), rows)
+	require.NotNil(t, page.Dictionary())
+	h := ParquetHandler{
+		currentPage:      []parquet.Page{page},
+		pageOffset:       []int64{0},
+		budgetColIndices: []int{0},
+	}
+	for off := range values {
+		h.pageOffset[0] = int64(off)
+		for n := 1; n <= len(values)-off; n++ {
+			for budget := uint64(0); budget <= 150; budget++ {
+				want := int64(n)
+				var size uint64
+				for i := 0; i < n; i++ {
+					size++ // optional definition level
+					if s := values[off+i]; s != nil {
+						size += uint64(len(*s))
+					}
+					if size >= budget {
+						want = int64(i + 1)
+						break
+					}
+				}
+				require.Equal(t, want, h.rowsToSourceBudget(int64(n), budget),
+					"offset=%d rows=%d budget=%d", off, n, budget)
+			}
+		}
+	}
+}
+
 func TestParquetReaderBatchByteBudget(t *testing.T) {
 	t.Run("variable width permits only one oversize row", func(t *testing.T) {
 		values := make([]string, 8)

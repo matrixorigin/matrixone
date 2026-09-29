@@ -2692,6 +2692,12 @@ func (b *baseBinder) bindComparisonExpr(astExpr *tree.ComparisonExpr, depth int3
 		return nil, moerr.NewNYIf(b.GetContext(), "'%v'", astExpr)
 	}
 
+	if astExpr.SubOp < tree.ANY {
+		if expr, handled, err := b.bindRowScalarSubqueryComparison(leftAst, rightAst, op, depth); handled {
+			return expr, err
+		}
+	}
+
 	if astExpr.SubOp >= tree.ANY {
 		expr, err := b.impl.BindExpr(astExpr.Right, depth, false)
 		if err != nil {
@@ -2752,6 +2758,89 @@ func (b *baseBinder) bindComparisonExpr(astExpr *tree.ComparisonExpr, depth int3
 		})
 	}
 	return b.bindFuncExprImplByAstExpr(op, args, depth)
+}
+
+// bindRowScalarSubqueryComparison preserves a direct row comparison until the
+// scalar subquery has been decorrelated. A multi-column scalar subquery is
+// represented as TUPLE while binding, but its individual result expressions
+// only become available to the outer expression during subquery flattening.
+func (b *baseBinder) bindRowScalarSubqueryComparison(
+	leftAst, rightAst tree.Expr,
+	op string,
+	depth int32,
+) (*Expr, bool, error) {
+	switch op {
+	case "=", "<>", "<", "<=", ">", ">=", "<=>":
+	default:
+		return nil, false, nil
+	}
+
+	var rowAst, subqueryAst tree.Expr
+	reversed := false
+	if _, ok := leftAst.(*tree.Tuple); ok {
+		if _, ok = rightAst.(*tree.Subquery); ok {
+			rowAst, subqueryAst = leftAst, rightAst
+		}
+	}
+	if rowAst == nil {
+		if _, ok := rightAst.(*tree.Tuple); ok {
+			if _, ok = leftAst.(*tree.Subquery); ok {
+				rowAst, subqueryAst = rightAst, leftAst
+				reversed = true
+			}
+		}
+	}
+	if rowAst == nil {
+		return nil, false, nil
+	}
+
+	row, err := b.impl.BindExpr(rowAst, depth, false)
+	if err != nil {
+		return nil, true, err
+	}
+	subqueryExpr, err := b.impl.BindExpr(subqueryAst, depth, false)
+	if err != nil {
+		return nil, true, err
+	}
+	subquery := subqueryExpr.GetSub()
+	if subquery == nil || subquery.Typ != plan.SubqueryRef_SCALAR {
+		return nil, true, moerr.NewInvalidInput(b.GetContext(), "row comparison requires a scalar subquery")
+	}
+	if err = rejectBoundIntervalFunctionArgs(b.GetContext(), op, []*plan.Expr{row}); err != nil {
+		return nil, true, err
+	}
+	items := row.GetList()
+	if items == nil {
+		return nil, true, moerr.NewInvalidInput(b.GetContext(), "row comparison requires a row constructor")
+	}
+	if len(items.List) != int(subquery.RowSize) {
+		return nil, true, moerr.NewInvalidInputf(
+			b.GetContext(), "subquery should return %d columns", len(items.List))
+	}
+	row, err = b.useStoredMySQLSpecialTypesForNumericSubquery(row, subqueryExpr)
+	if err != nil {
+		return nil, true, err
+	}
+	if reversed {
+		switch op {
+		case "<":
+			op = ">"
+		case "<=":
+			op = ">="
+		case ">":
+			op = "<"
+		case ">=":
+			op = "<="
+		}
+	}
+
+	subquery.Op = op
+	subquery.Child = row
+	subqueryExpr.Typ = plan.Type{
+		Id:          int32(types.T_bool),
+		NotNullable: op == "<=>",
+	}
+	return subqueryExpr, true, nil
 }
 
 func (b *baseBinder) bindWithRawMySQLSpecialTypes(bind func() (*Expr, error)) (*Expr, error) {
@@ -2879,7 +2968,9 @@ func (b *baseBinder) bindTupleInByAst(leftTuple *tree.Tuple, rightTuple *tree.Tu
 			}
 			if eqFunc := eqExpr.GetF(); eqFunc != nil && len(eqFunc.Args) == 2 &&
 				containsVolatileFunction(eqFunc.Args[0]) && b.ctx != nil {
-				b.markTupleVolatileSources(eqFunc.Args[0], &leftMemoIDs[i])
+				if err := b.markTupleVolatileSources(eqFunc.Args[0], &leftMemoIDs[i]); err != nil {
+					return nil, err
+				}
 			}
 			equalities = append(equalities, eqExpr)
 		}
@@ -2902,7 +2993,7 @@ func (b *baseBinder) bindTupleInByAst(leftTuple *tree.Tuple, rightTuple *tree.Tu
 	return newExpr, nil
 }
 
-func (b *baseBinder) markTupleVolatileSources(expr *plan.Expr, memoIDs *[]int32) {
+func (b *baseBinder) markTupleVolatileSources(expr *plan.Expr, memoIDs *[]int32) error {
 	sources := make([]*plan.Expr, 0, 1)
 	collectVolatileFunctionSources(expr, &sources)
 	if len(sources) == 0 {
@@ -2911,12 +3002,16 @@ func (b *baseBinder) markTupleVolatileSources(expr *plan.Expr, memoIDs *[]int32)
 		sources = append(sources, expr)
 	}
 	for len(*memoIDs) < len(sources) {
-		b.ctx.volatileExprMemoID--
-		*memoIDs = append(*memoIDs, b.ctx.volatileExprMemoID)
+		memoID, err := b.allocateVolatileExprMemoID()
+		if err != nil {
+			return err
+		}
+		*memoIDs = append(*memoIDs, memoID)
 	}
 	for i, source := range sources {
 		source.AuxId = (*memoIDs)[i]
 	}
+	return nil
 }
 
 func collectVolatileFunctionSources(expr *plan.Expr, sources *[]*plan.Expr) {
@@ -3126,6 +3221,126 @@ func (b *baseBinder) hasPreparedNumericParamExprs(exprs []tree.Expr, depth int32
 		}
 	}
 	return false, nil
+}
+
+// HAVING and SELECT bind before their aggregate/window nodes are appended.
+// Resolve those output tags from the current binding context during that phase.
+func (b *baseBinder) pendingColumnSource(col *plan.ColRef) *Expr {
+	if b.ctx == nil || col == nil || col.ColPos < 0 {
+		return nil
+	}
+	var outputs []*Expr
+	switch col.RelPos {
+	case b.ctx.groupTag:
+		outputs = b.ctx.groups
+	case b.ctx.aggregateTag:
+		outputs = b.ctx.aggregates
+	case b.ctx.windowTag:
+		outputs = b.ctx.windows
+	}
+	if int(col.ColPos) >= len(outputs) {
+		return nil
+	}
+	source := outputs[col.ColPos]
+	if window := source.GetW(); window != nil {
+		return window.WindowFunc
+	}
+	return source
+}
+
+// A derived column can hide its marker behind a ColRef before the enclosing
+// function is bound. Follow only that column's projection, not unrelated
+// predicates or siblings, when deciding which numeric peers are provisional.
+func (b *baseBinder) preparedExprContainsProjectedParam(expr *Expr) bool {
+	if preparedExprContainsParam(expr) {
+		return true
+	}
+	if expr == nil || b.builder == nil || b.builder.qry == nil {
+		return false
+	}
+	var visited map[[3]int32]struct{}
+	var contains func(*Expr) bool
+	var output func(int32, int32, int32) bool
+	output = func(nodeID, tag, pos int32) bool {
+		if nodeID < 0 || int(nodeID) >= len(b.builder.qry.Nodes) || pos < 0 {
+			return false
+		}
+		if visited == nil {
+			visited = make(map[[3]int32]struct{})
+		}
+		key := [3]int32{nodeID, tag, pos}
+		if _, seen := visited[key]; seen {
+			return false
+		}
+		visited[key] = struct{}{}
+		node := b.builder.qry.Nodes[nodeID]
+		if node == nil {
+			return false
+		}
+		switch node.NodeType {
+		case plan.Node_AGG:
+			if len(node.BindingTags) > 0 && tag == node.BindingTags[0] && int(pos) < len(node.GroupBy) {
+				return contains(node.GroupBy[pos])
+			}
+			if len(node.BindingTags) > 1 && tag == node.BindingTags[1] && int(pos) < len(node.AggList) {
+				return contains(node.AggList[pos])
+			}
+		case plan.Node_WINDOW:
+			if node.WindowIdx == pos && len(node.WinSpecList) > 0 {
+				return contains(node.WinSpecList[0].GetW().GetWindowFunc())
+			}
+			// All windows in a query block share a tag; its map entry is the last window.
+			if len(node.Children) == 1 {
+				return output(node.Children[0], tag, pos)
+			}
+		case plan.Node_PARTITION:
+			if len(node.Children) == 1 {
+				return output(node.Children[0], tag, pos)
+			}
+		}
+		if isPreparedSetOperationNode(node.NodeType) {
+			for _, childID := range node.Children {
+				if childID >= 0 && int(childID) < len(b.builder.qry.Nodes) {
+					child := b.builder.qry.Nodes[childID]
+					if child != nil && int(pos) < len(child.ProjectList) && contains(child.ProjectList[pos]) {
+						return true
+					}
+				}
+			}
+			return false
+		}
+		return int(pos) < len(node.ProjectList) && contains(node.ProjectList[pos])
+	}
+	contains = func(source *Expr) bool {
+		if source == nil {
+			return false
+		}
+		if sub := source.GetSub(); sub != nil && sub.Typ == plan.SubqueryRef_SCALAR {
+			// Only the selected scalar output can own this value. Predicates and
+			// other internal columns are dependencies of the subquery's rows, not
+			// of its result domain.
+			return output(sub.NodeId, -1, 0)
+		}
+		if preparedExprContainsParam(source) {
+			return true
+		}
+		found := false
+		_ = plan.VisitExprTree(source, func(nested *Expr) error {
+			if sub := nested.GetSub(); !found && sub != nil && sub.Typ == plan.SubqueryRef_SCALAR {
+				found = output(sub.NodeId, -1, 0)
+			}
+			if col := nested.GetCol(); !found && col != nil {
+				if nodeID, ok := b.builder.tag2NodeID[col.RelPos]; ok {
+					found = output(nodeID, col.RelPos, col.ColPos)
+				} else if pending := b.pendingColumnSource(col); pending != nil {
+					found = contains(pending)
+				}
+			}
+			return nil
+		})
+		return found
+	}
+	return contains(expr)
 }
 
 func isPreparedNumericAggregate(name string, argCount int) bool {
@@ -3432,9 +3647,9 @@ func containsExplicitFloatCastInSelect(stmt tree.SelectStatement) bool {
 
 // bindPreparedNumericFuncExpr gives prepared numeric function arguments the
 // same static context as prepared arithmetic. SUM/AVG use the inferred numeric
-// domain, NTILE requires an integer domain, CHAR uses an integer domain only
-// for arguments that contain a prepared marker. ParamRef remains TEXT for
-// transport and an explicit cast materializes the computation type.
+// domain and NTILE requires an integer domain. Parameter-owned integer roles
+// instead preserve their source domain through the shared binding path.
+// ParamRef remains TEXT for transport.
 // Non-parameter expressions stay on their original binding path, so ordinary
 // string inputs continue to use their function-specific string semantics.
 func (b *baseBinder) bindPreparedNumericFuncExpr(
@@ -3446,26 +3661,17 @@ func (b *baseBinder) bindPreparedNumericFuncExpr(
 	if b.builder == nil || !b.builder.isPrepareStatement || !ok {
 		return b.bindFuncExprImplByAstExpr(name, astArgs, depth)
 	}
-	if strings.EqualFold(name, "char") {
-		args := make([]*plan.Expr, len(astArgs))
-		for i, astArg := range astArgs {
-			hasPreparedParam, err := b.hasPreparedNumericParamExprs([]tree.Expr{astArg}, depth)
-			if err != nil {
-				return nil, err
-			}
-			if hasPreparedParam {
-				args[i], err = b.bindNumericExprWithContext(astArg, depth, target)
-			} else {
-				args[i], err = b.impl.BindExpr(astArg, depth, false)
-			}
-			if err != nil {
-				return nil, err
-			}
+	if function.IntegerArgumentSourceDependent(name, 0) {
+		return b.bindFuncExprImplByAstExpr(name, astArgs, depth)
+	}
+	if isPreparedNumericAggregate(name, len(astArgs)) {
+		hasParam, err := b.hasPreparedNumericParamExprs(astArgs, depth)
+		if err != nil {
+			return nil, err
 		}
-		return bindBoundFuncExprAndConstFoldWithObserver(
-			b.GetContext(), b.builder.compCtx.GetProcess(), name, args,
-			b.observePersistedExpressionProtocol,
-		)
+		if !hasParam {
+			return b.bindFuncExprImplByAstExpr(name, astArgs, depth)
+		}
 	}
 
 	// Binding can normalize the parsed CAST node in place. Snapshot the user's
@@ -3476,6 +3682,14 @@ func (b *baseBinder) bindPreparedNumericFuncExpr(
 	arg, err := b.bindNumericExprWithContext(astArgs[0], depth, target)
 	if err != nil {
 		return nil, err
+	}
+	if isPreparedNumericAggregate(name, len(astArgs)) {
+		rewritten, err := b.useStoredMySQLSpecialTypesForNumericContractWithProvenance(
+			b.GetContext(), name, []*plan.Expr{arg})
+		if err != nil {
+			return nil, err
+		}
+		arg = rewritten[0]
 	}
 	if (strings.EqualFold(name, "abs") && !hasExplicitFloatCast) ||
 		(strings.EqualFold(name, "sign") && !hasExplicitNumericCast) {
@@ -3521,6 +3735,14 @@ func (b *baseBinder) bindFullTextMatchExpr(astExpr *tree.FullTextMatchExpr, dept
 	if err != nil {
 		return nil, err
 	}
+	if name, ok := astExpr.Pattern.(*tree.UnresolvedName); ok {
+		// A search term is shared by the whole index scan. Only a lexical
+		// stored-procedure variable is safe here; an ordinary column would
+		// make the term depend on the current row.
+		if !isStoredProcedureFullTextPattern(b.GetContext(), name, pattern) {
+			return nil, moerr.NewInvalidInput(b.GetContext(), "AGAINST pattern must be a stored-procedure variable")
+		}
+	}
 	if pattern.Typ.Id != int32(types.T_varchar) {
 		varcharTyp := types.T_varchar.ToType()
 		pattern, err = makePlan2CastExpr(b.GetContext(), pattern, makePlan2Type(&varcharTyp))
@@ -3539,6 +3761,32 @@ func (b *baseBinder) bindFullTextMatchExpr(astExpr *tree.FullTextMatchExpr, dept
 	}
 
 	return BindFuncExprImplByPlanExpr(b.GetContext(), "fulltext_match", args)
+}
+
+func isStoredProcedureFullTextPattern(ctx context.Context, name *tree.UnresolvedName, pattern *plan.Expr) bool {
+	if ctx == nil || name.NumParts != 1 || ctx.Value(defines.InSp{}) != true {
+		return false
+	}
+	scopes, ok := ctx.Value(defines.VarScopeKey{}).(*[]map[string]interface{})
+	if !ok || scopes == nil {
+		return false
+	}
+	variableName := strings.ToLower(name.ColName())
+	found := false
+	for i := len(*scopes) - 1; i >= 0; i-- {
+		if _, found = (*scopes)[i][variableName]; found {
+			break
+		}
+	}
+	if !found {
+		return false
+	}
+	variable := pattern
+	if cast := variable.GetF(); cast != nil && cast.GetFunc() != nil && cast.GetFunc().GetObjName() == "cast" && len(cast.Args) > 0 {
+		variable = cast.Args[0]
+	}
+	ref := variable.GetV()
+	return ref != nil && !ref.System && !ref.Global && ref.Name == variableName
 }
 
 // coerceBoolNumericAggregateArg gives SUM/AVG over a BOOL argument the MySQL
@@ -3570,6 +3818,9 @@ func (b *baseBinder) coerceBoolNumericAggregateArg(
 }
 
 func (b *baseBinder) bindFuncExprImplByAstExpr(name string, astArgs []tree.Expr, depth int32) (*plan.Expr, error) {
+	if name == "format" && b.persistedFormatCompatibility && !function.LegacySpecialConsumers(b.GetContext()) {
+		return b.bindPersistedFormat(astArgs, depth)
+	}
 	if (name == "utc_time" || name == "utc_timestamp") && len(astArgs) == 1 {
 		if _, ok := astArgs[0].(*tree.NumVal); !ok {
 			return nil, invalidUTCFunctionFSPError(b.GetContext(), name)
@@ -3736,10 +3987,26 @@ func (b *baseBinder) bindFuncExprImplByAstExpr(name string, astArgs []tree.Expr,
 				b.suppressDefaultValueBindType = true
 				b.inetNtoaNumericLiteralContext = true
 			}
-			if target, integerContext := function.IntegerArgumentTarget(name, idx); integerContext {
+			if target, integerContext := function.IntegerArgumentTarget(name, idx); integerContext &&
+				!(function.LegacySpecialConsumers(b.GetContext()) && (name == "format" || name == "makedate" || name == "maketime")) {
 				b.numericParamType = nil
 				b.numericSubqueryTarget = nil
 				expr, err = b.bindIntegerArgumentAst(arg, depth, target)
+			} else if function.IntegerArgumentSourceDependent(name, idx) {
+				b.numericParamType = nil
+				b.numericSubqueryTarget = nil
+				if function.IntegerArgumentUsesBitSources(name, idx) {
+					expr, err = b.bindIntegerSourceAst(arg, depth, types.T_int64, name, idx)
+				} else {
+					// A numeric-only role retains ordinary string/array selectors.
+					previous := b.integerArgumentSourceContext
+					b.integerArgumentSourceContext = true
+					expr, err = b.impl.BindExpr(arg, depth, false)
+					b.integerArgumentSourceContext = previous
+					if err == nil {
+						expr, err = b.integerArgumentStorageSource(expr)
+					}
+				}
 			} else {
 				expr, err = b.impl.BindExpr(arg, depth, false)
 			}
@@ -3749,6 +4016,20 @@ func (b *baseBinder) bindFuncExprImplByAstExpr(name string, astArgs []tree.Expr,
 			b.numericSubqueryTarget = subqueryTarget
 			if err != nil {
 				return nil, err
+			}
+			if b.builder != nil && b.builder.isPrepareStatement && len(astArgs) == 1 && idx == 0 &&
+				(name == "hll_cardinality" || name == "hll_merge_agg" || name == "bitmap_or_agg") {
+				if _, directParam := unwrapParenExpr(arg).(*tree.ParamExpr); directParam {
+					binaryType := types.T_varbinary.ToType()
+					// Opaque aggregate states can exceed the SQL VARBINARY(65535)
+					// width. This internal cast chooses the binary domain without
+					// imposing a value-length limit on the prepared parameter.
+					binaryType.Width = 0
+					expr, err = appendCastBeforeExpr(b.GetContext(), expr, makePlan2Type(&binaryType))
+					if err != nil {
+						return nil, err
+					}
+				}
 			}
 			if b.builder != nil && b.builder.isPrepareStatement && name == "bit_count" &&
 				len(astArgs) == 1 {
@@ -3769,15 +4050,15 @@ func (b *baseBinder) bindFuncExprImplByAstExpr(name string, astArgs []tree.Expr,
 	preparedNumericProvenance := false
 	if b.builder != nil && b.builder.isPrepareStatement &&
 		(isNumericContextFunction(name) || supportsGenericNumericFunctionContext(name) ||
-			preparedSQLExecuteNumericResultConsumer(name) || name == "iff") {
+			preparedSQLExecuteNumericResultConsumer(name) || name == "iff" || name == "field") {
 		var err error
 		preparedNumericProvenance, err = b.hasPreparedNumericParamExprs(astArgs, depth)
 		if err != nil {
 			return nil, err
 		}
-		if !preparedNumericProvenance && (preparedSQLExecuteNumericResultConsumer(name) || name == "iff") {
+		if !preparedNumericProvenance && (preparedSQLExecuteNumericResultConsumer(name) || name == "iff" || name == "field") {
 			for _, arg := range args {
-				if preparedExprContainsParam(arg) {
+				if b.preparedExprContainsProjectedParam(arg) {
 					preparedNumericProvenance = true
 					break
 				}
@@ -3795,7 +4076,7 @@ func (b *baseBinder) bindFuncExprImplByAstExpr(name string, astArgs []tree.Expr,
 	preparedPeerSources := make([]*plan.Expr, len(args))
 	if preparedNumericProvenance {
 		for i, arg := range args {
-			if arg == nil || preparedExprContainsParam(arg) {
+			if arg == nil || b.preparedExprContainsProjectedParam(arg) {
 				continue
 			}
 			source := arg
@@ -3902,7 +4183,9 @@ func (b *baseBinder) bindFuncExprImplByAstExpr(name string, astArgs []tree.Expr,
 	}
 	if (name == "in" || name == "not_in") && len(args) == 2 &&
 		containsVolatileFunction(args[0]) && b.ctx != nil {
-		b.markVolatileInLeft(args[0])
+		if err := b.markVolatileInLeft(args[0]); err != nil {
+			return nil, err
+		}
 	}
 	//promote interval expr rewrite here
 	if name == "interval" {
@@ -3975,9 +4258,12 @@ func (b *baseBinder) bindFuncExprImplByAstExpr(name string, astArgs []tree.Expr,
 				}
 			}
 			if isIfNull {
-				e.Typ.NotNullable = args[1].Typ.NotNullable || args[2].Typ.NotNullable
+				if err := b.recordIfNullContract(e, args); err != nil {
+					return nil, err
+				}
+				ensurePreparedNumericMetadata(e).IfnullCommonValue = true
 			}
-			markPreparedResultCastsProvisional(
+			b.markPreparedResultCastsProvisional(
 				b.GetContext(), name, astArgs, preparedPeerSources, e, preparedNumericProvenance)
 			return e, nil
 		}
@@ -3998,7 +4284,10 @@ func (b *baseBinder) bindFuncExprImplByAstExpr(name string, astArgs []tree.Expr,
 			b.GetContext(), name, args, false, nil, nil, findInSetInternalArgs)
 		if err == nil {
 			if isIfNull {
-				builtinExpr.Typ.NotNullable = args[1].Typ.NotNullable || args[2].Typ.NotNullable
+				if err := b.recordIfNullContract(builtinExpr, args); err != nil {
+					return nil, err
+				}
+				ensurePreparedNumericMetadata(builtinExpr).IfnullCommonValue = true
 			}
 			return builtinExpr, nil
 		}
@@ -4025,6 +4314,27 @@ func (b *baseBinder) bindFuncExprImplByAstExpr(name string, astArgs []tree.Expr,
 	}
 
 	return bindFuncExprImplUdf(b, name, udf, astArgs, args, depth)
+}
+
+func (b *baseBinder) recordIfNullContract(expr *plan.Expr, args []*plan.Expr) error {
+	expr.Typ.NotNullable = args[1].Typ.NotNullable || args[2].Typ.NotNullable
+	if b.ctx == nil || !hasSubquery(expr) {
+		return nil
+	}
+	conditionSource, elseSource, ok := ifNullCaseSources(expr.GetF())
+	if !ok {
+		return nil
+	}
+	// IFNULL evaluates its first argument once, but the CASE rewrite binds that
+	// source twice. Give both copies one flattening memo so a scalar subquery is
+	// decorrelated once and both CASE arms consume the same projected value.
+	memoID, err := b.allocateVolatileExprMemoID()
+	if err != nil {
+		return err
+	}
+	conditionSource.AuxId = memoID
+	elseSource.AuxId = memoID
+	return nil
 }
 
 func sequenceFunctionPublicArity(name string) (minArgs, maxArgs int, ok bool) {
@@ -4115,7 +4425,7 @@ func avgIntegerConstantPrecision(astExpr tree.Expr) (int32, bool) {
 	}
 }
 
-func markPreparedResultCastsProvisional(
+func (b *baseBinder) markPreparedResultCastsProvisional(
 	ctx context.Context,
 	name string,
 	astArgs []tree.Expr,
@@ -4152,7 +4462,7 @@ func markPreparedResultCastsProvisional(
 				}
 			}
 		}
-		if i >= len(astArgs) || !preparedSQLExecuteNumericResultValueArg(name, i, len(args)) {
+		if i >= len(astArgs) || (name != "field" && !preparedSQLExecuteNumericResultValueArg(name, i, len(args))) {
 			continue
 		}
 		if _, explicit := unwrapParenExpr(astArgs[i]).(*tree.CastExpr); explicit {
@@ -4160,7 +4470,14 @@ func markPreparedResultCastsProvisional(
 		}
 		fn := arg.GetF()
 		if fn == nil || fn.Func == nil || !strings.EqualFold(fn.Func.GetObjName(), "cast") ||
-			len(fn.Args) == 0 || !preparedExprContainsParam(fn.Args[0]) {
+			len(fn.Args) == 0 || !b.preparedExprContainsProjectedParam(fn.Args[0]) {
+			continue
+		}
+		if b.builder != nil && b.builder.boolSumAvgCompat &&
+			(strings.EqualFold(name, "sum") || strings.EqualFold(name, "avg")) &&
+			types.T(arg.Typ.Id) == types.T_int8 && types.T(fn.Args[0].Typ.Id) == types.T_bool {
+			// This is SUM/AVG's mode-authorized BOOL adapter, not a temporary
+			// cast chosen for the marker's unresolved PREPARE-time domain.
 			continue
 		}
 		// This cast was introduced while the marker still had its prepare-time
@@ -4193,18 +4510,36 @@ func markPreparedTemporalNumericPeer(expr *Expr, temporal Type) {
 	}
 }
 
-func (b *baseBinder) markVolatileInLeft(left *plan.Expr) {
+func (b *baseBinder) allocateVolatileExprMemoID() (int32, error) {
+	if b.builder == nil {
+		return 0, moerr.NewInternalError(b.GetContext(), "memoized expression requires a query builder")
+	}
+	if b.builder.nextVolatileExprMemoID == math.MinInt32 {
+		return 0, moerr.NewInternalError(b.GetContext(), "too many memoized expressions in query")
+	}
+	b.builder.nextVolatileExprMemoID--
+	return b.builder.nextVolatileExprMemoID, nil
+}
+
+func (b *baseBinder) markVolatileInLeft(left *plan.Expr) error {
 	if list := left.GetList(); list != nil {
 		for _, elem := range list.List {
 			if containsVolatileFunction(elem) {
-				b.ctx.volatileExprMemoID--
-				elem.AuxId = b.ctx.volatileExprMemoID
+				memoID, err := b.allocateVolatileExprMemoID()
+				if err != nil {
+					return err
+				}
+				elem.AuxId = memoID
 			}
 		}
-		return
+		return nil
 	}
-	b.ctx.volatileExprMemoID--
-	left.AuxId = b.ctx.volatileExprMemoID
+	memoID, err := b.allocateVolatileExprMemoID()
+	if err != nil {
+		return err
+	}
+	left.AuxId = memoID
+	return nil
 }
 
 func (b *baseBinder) resolvePreparedNumericArgs(name string, args []*Expr) ([]*Expr, error) {
@@ -4566,6 +4901,13 @@ func rewriteFindInSetSetProvenance(
 	if !isSetPlanType(storageType) {
 		return args, false, nil
 	}
+	if bindCtx.mysqlSpecialCanonicalTypeForExpr(args[1]) != nil {
+		bitmap, err := makeCanonicalSetValue(ctx, args[1], storageType)
+		if err != nil {
+			return nil, false, err
+		}
+		return []*Expr{args[0], bitmap, makePlan2StringConstExprWithType(storageType.Enumvalues)}, true, nil
+	}
 	if builder != nil && setTypeHasEmptyMember(storageType) {
 		if bitmap, ok := builder.materializeProjectedSetBitmap(args[1], nil); ok {
 			rewritten := make([]*Expr, 0, 3)
@@ -4740,8 +5082,10 @@ func bindFuncExprAndConstFoldInternal(
 		}
 		fnArgs[1] = arg1
 
-		lit1 := arg1.GetLit()
-		if arg1.Typ.Id == int32(types.T_any) || lit1 == nil {
+		// DECIMAL256 constants can remain executable casts because scalar
+		// Literal has no DECIMAL256 representation. Check constancy rather
+		// than requiring one particular folded representation.
+		if arg1.Typ.Id == int32(types.T_any) || !rule.IsConstant(arg1, false) {
 			return nil, moerr.NewInvalidInput(ctx, "2nd argument of in_range must be constant")
 		}
 
@@ -4751,8 +5095,7 @@ func bindFuncExprAndConstFoldInternal(
 		}
 		fnArgs[2] = arg2
 
-		lit2 := arg2.GetLit()
-		if arg2.Typ.Id == int32(types.T_any) || lit2 == nil {
+		if arg2.Typ.Id == int32(types.T_any) || !rule.IsConstant(arg2, false) {
 			return nil, moerr.NewInvalidInput(ctx, "3rd argument of in_range must be constant")
 		}
 
@@ -4889,7 +5232,7 @@ func validateApproxPercentileArgs(ctx context.Context, args []*Expr) error {
 	}
 	percentile := args[1]
 	if percentile == nil || isNullExpr(percentile) ||
-		(!rule.IsConstant(percentile, false) && !isDirectDynamicParam(percentile)) {
+		!IsPercentileConfigExpr(percentile) {
 		return moerr.NewInvalidInput(ctx,
 			"percentile argument of approx_percentile must be a non-null constant or parameter")
 	}
@@ -4906,20 +5249,71 @@ func validateOrderedPercentileArgs(ctx context.Context, name string, args []*Exp
 	}
 	percentile := args[1]
 	if percentile == nil || isNullExpr(percentile) ||
-		(!rule.IsConstant(percentile, false) && !isDirectDynamicParam(percentile)) {
+		!IsPercentileConfigExpr(percentile) {
 		return moerr.NewInvalidInputf(ctx,
 			"percentile argument of %s must be a non-null constant or parameter", name)
 	}
 	return nil
 }
 
-// normalizePercentileParam gives a bare prepared marker the numeric type used
-// by percentile overloads. Parameter markers have a TEXT transport type while
-// a statement is prepared, but p is numeric configuration that is evaluated
-// once for each EXECUTE.
+// IsPercentileConfigExpr reports whether expr can be evaluated without an
+// input row and is safe to use as execution-invariant percentile
+// configuration. Existing foldable constants remain supported. Prepared
+// expressions deliberately admit only numeric literals, markers, arithmetic,
+// and numeric casts; this excludes columns, variables, subqueries, and
+// unrelated or volatile functions from aggregate configuration.
+func IsPercentileConfigExpr(expr *Expr) bool {
+	if expr == nil {
+		return false
+	}
+	if rule.IsConstant(expr, false) {
+		return true
+	}
+	return isPreparedPercentileExpr(expr)
+}
+
+func isPreparedPercentileExpr(expr *Expr) bool {
+	if expr == nil {
+		return false
+	}
+	switch value := expr.Expr.(type) {
+	case *plan.Expr_P:
+		return true
+	case *plan.Expr_Lit:
+		return !value.Lit.GetIsnull() && makeTypeByPlan2Expr(expr).IsNumeric()
+	case *plan.Expr_F:
+		if value.F == nil || value.F.Func == nil || !makeTypeByPlan2Expr(expr).IsNumeric() {
+			return false
+		}
+		functionID, _ := function.DecodeOverloadID(value.F.Func.GetObj())
+		switch functionID {
+		case function.CAST:
+			return len(value.F.Args) == 2 && isPreparedPercentileExpr(value.F.Args[0]) &&
+				value.F.Args[1].GetT() != nil
+		case function.UNARY_PLUS, function.UNARY_MINUS:
+			return len(value.F.Args) == 1 && isPreparedPercentileExpr(value.F.Args[0])
+		case function.PLUS, function.MINUS, function.MULTI, function.DIV,
+			function.INTEGER_DIV, function.MOD:
+			if len(value.F.Args) != 2 {
+				return false
+			}
+			return isPreparedPercentileExpr(value.F.Args[0]) &&
+				isPreparedPercentileExpr(value.F.Args[1])
+		}
+	}
+	return false
+}
+
+// normalizePercentileParam gives an untyped prepared marker expression a
+// numeric type accepted by the target percentile overload. Preserve supported
+// numeric expression types so exact DECIMAL configuration reaches range
+// validation and the rational percentile codec without FLOAT64 rounding.
 func normalizePercentileParam(ctx context.Context, name string, args []*Expr) error {
 	if (name != NameApproxPercentile && name != NamePercentileCont && name != NamePercentileDisc) ||
-		len(args) != 2 || !isDirectDynamicParam(args[1]) {
+		len(args) != 2 || !isPreparedPercentileExpr(args[1]) || rule.IsConstant(args[1], false) {
+		return nil
+	}
+	if percentileParamTypeSupported(name, makeTypeByPlan2Expr(args[1])) {
 		return nil
 	}
 
@@ -4930,6 +5324,19 @@ func normalizePercentileParam(ctx context.Context, name string, args []*Expr) er
 	}
 	args[1] = percentile
 	return nil
+}
+
+func percentileParamTypeSupported(name string, typ types.Type) bool {
+	if name == NameApproxPercentile {
+		switch typ.Oid {
+		case types.T_int32, types.T_int64, types.T_float32, types.T_float64,
+			types.T_decimal64, types.T_decimal128:
+			return true
+		default:
+			return false
+		}
+	}
+	return typ.IsNumeric() && typ.Oid != types.T_decimal256
 }
 
 // bindMixedInListComparison preserves the scalar comparison domain for a
@@ -5031,15 +5438,28 @@ func (b *baseBinder) annotateStringDomainSource(
 		if b.builder == nil || b.builder.qry == nil {
 			return
 		}
-		nodeID, ok := b.builder.tag2NodeID[col.RelPos]
-		if !ok || nodeID < 0 || int(nodeID) >= len(b.builder.qry.Nodes) {
-			return
+		var source *Expr
+		if b.ctx != nil && col.RelPos == b.ctx.groupTag {
+			source = b.pendingColumnSource(col)
+		} else {
+			nodeID, ok := b.builder.tag2NodeID[col.RelPos]
+			if !ok || nodeID < 0 || int(nodeID) >= len(b.builder.qry.Nodes) {
+				return
+			}
+			node := b.builder.qry.Nodes[nodeID]
+			if node == nil || col.ColPos < 0 {
+				return
+			}
+			outputs := node.ProjectList
+			if node.NodeType == plan.Node_AGG && len(node.BindingTags) > 0 && col.RelPos == node.BindingTags[0] {
+				outputs = node.GroupBy
+			}
+			if int(col.ColPos) >= len(outputs) {
+				return
+			}
+			source = outputs[col.ColPos]
 		}
-		node := b.builder.qry.Nodes[nodeID]
-		if node == nil || col.ColPos < 0 || int(col.ColPos) >= len(node.ProjectList) {
-			return
-		}
-		key := [2]int32{nodeID, col.ColPos}
+		key := [2]int32{col.RelPos, col.ColPos}
 		if witness, ok := memo[key]; ok {
 			if witness != nil {
 				ensurePreparedNumericMetadata(expr).StringDomainSource = DeepCopyExpr(witness)
@@ -5051,7 +5471,6 @@ func (b *baseBinder) annotateStringDomainSource(
 		}
 		visited[key] = struct{}{}
 		defer delete(visited, key)
-		source := node.ProjectList[col.ColPos]
 		if source == nil || source == expr {
 			memo[key] = nil
 			return
@@ -5674,28 +6093,6 @@ func BindFuncExprImplByPlanExpr(ctx context.Context, name string, args []*Expr) 
 	return bindFuncExprImplByPlanExpr(ctx, name, args, true, nil, nil, false)
 }
 
-func hexExplicitRealCastOverload(name string, args []*Expr) (int32, bool) {
-	if name != "hex" || len(args) != 1 || args[0] == nil {
-		return 0, false
-	}
-	cast := args[0].GetF()
-	if cast == nil || cast.GetFunc().GetObjName() != "cast" {
-		return 0, false
-	}
-	_, castOverload := function.DecodeOverloadID(cast.GetFunc().GetObj())
-	if castOverload == 0 && !cast.GetSyntaxExplicitCast() {
-		return 0, false
-	}
-	switch types.T(args[0].Typ.Id) {
-	case types.T_float32:
-		return function.HexExplicitFloat32Overload, true
-	case types.T_float64:
-		return function.HexExplicitFloat64Overload, true
-	default:
-		return 0, false
-	}
-}
-
 func bindPreparedFuncExprImplByPlanExpr(
 	ctx context.Context,
 	originalBoundExpr *Expr,
@@ -5724,9 +6121,20 @@ func bindFuncExprImplByPlanExpr(
 	allowInternalFunctionArgs bool,
 ) (*plan.Expr, error) {
 	var err error
-	args, err = bindIntegerFunctionArguments(ctx, name, args)
-	if err != nil {
-		return nil, err
+	if (strings.EqualFold(name, "extractvalue") || strings.EqualFold(name, "updatexml")) && len(args) >= 2 {
+		if !isXMLXPathConstant(args[1]) {
+			return nil, moerr.NewInvalidInput(ctx, "Only constant XPATH queries are supported")
+		}
+	}
+	// DUMP/LOAD verifies old SQL origins against their historical physical
+	// signature. AST-level suppression alone is insufficient: this second
+	// binding pass would insert new private INT64 casts into the old tree.
+	if !function.LegacySpecialConsumers(ctx) ||
+		(name != "format" && name != "makedate" && name != "maketime") {
+		args, err = bindIntegerFunctionArguments(ctx, name, args)
+		if err != nil {
+			return nil, err
+		}
 	}
 	rejectIntervalArgs := rejectBoundIntervalFunctionArgs
 	if descendFunctions {
@@ -5864,20 +6272,52 @@ func bindFuncExprImplByPlanExpr(
 			return nil, err
 		}
 
-		// Early detection for decimal comparisons
-		if len(args) == 2 {
-			if name == "=" && isDecimalComparisonAlwaysFalse(ctx, args[0], args[1]) {
-				// Equality with incompatible precision is always false
-				return makePlan2BoolConstExprWithType(false), nil
-			}
-			if name == "<>" && isDecimalComparisonAlwaysFalse(ctx, args[0], args[1]) {
-				// Inequality with incompatible precision is always true
-				return makePlan2BoolConstExprWithType(true), nil
+		// A source-scale mismatch can change ordered comparisons as well as
+		// equality. Mark every affected comparison before any narrowing; retain
+		// the legacy constant-folding optimization only for = and <>.
+		if len(args) == 2 && name != "<=>" {
+			markDecimalComparisonProtocolRequirement(nil, args)
+			if name == "=" || name == "<>" {
+				alwaysFalse := isDecimalComparisonAlwaysFalse(ctx, args[0], args[1])
+				columnNotNullable := decimalComparisonColumnIsNotNullable(args)
+				if alwaysFalse && !columnNotNullable {
+					// The legacy binder would fold this comparison, but SQL NULL
+					// semantics require retaining it for a nullable column. Preserve
+					// the decimal fence on the source literal for persisted views.
+					markDecimalComparisonLiteralRequirement(args)
+				}
+				if name == "=" && columnNotNullable && alwaysFalse {
+					// Equality with incompatible precision is always false
+					result := makePlan2BoolConstExprWithType(false)
+					markDecimalComparisonProtocolRequirement(result, args)
+					return result, nil
+				}
+				if name == "<>" && columnNotNullable && alwaysFalse {
+					// Inequality with incompatible precision is always true
+					result := makePlan2BoolConstExprWithType(true)
+					markDecimalComparisonProtocolRequirement(result, args)
+					return result, nil
+				}
 			}
 		}
 	case "date_add", "date_sub":
 		if preparedDateFunctionArgs(originalBoundExpr, name, args) {
 			args[2] = DeepCopyExpr(originalBoundExpr.GetF().Args[2])
+			if args[0].Typ.Id == int32(types.T_time) && types.T(args[1].Typ.Id).IsInteger() {
+				unit, _ := dateFunctionUnitFromPlanExpr(args[2])
+				if isTimeCompoundIntervalUnit(unit) {
+					// An integer COM_STMT_EXECUTE value is a compact compound
+					// spelling. Rebinding directly to the old INT64 overload
+					// would pass MINUTE_SECOND to arithmetic, which only accepts
+					// normalized units. Keep this source on the raw path.
+					args[1], err = appendCastBeforeExpr(ctx, args[1], plan.Type{
+						Id: int32(types.T_varchar), Width: types.MaxVarcharLen,
+					})
+					if err != nil {
+						return nil, err
+					}
+				}
+			}
 			break
 		}
 		// rewrite date_add/date_sub function
@@ -6253,7 +6693,7 @@ func bindFuncExprImplByPlanExpr(
 					orExprList = append(orExprList, rightVal)
 					continue
 				}
-				if checkNoNeedCast(makeTypeByPlan2Expr(rightVal), typLeft, rightVal) || partitionIn {
+				if partitionIn || checkNoNeedCast(makeTypeByPlan2Expr(rightVal), typLeft, rightVal) {
 					inExpr := rightVal
 					// Keep the partition-IN coercion path unchanged. Ordinary IN can
 					// retain an already same-typed constant cast; casting UUID to UUID
@@ -6450,12 +6890,6 @@ func bindFuncExprImplByPlanExpr(
 		return nil, err
 	}
 
-	if overloadID, ok := hexExplicitRealCastOverload(name, args); ok {
-		fGet, err = function.GetFunctionByNameWithOverload(ctx, name, argsType, overloadID)
-		if err != nil {
-			return nil, err
-		}
-	}
 	funcID = fGet.GetEncodedOverloadID()
 	returnType = fGet.GetReturnType()
 	argsCastType, _ = fGet.ShouldDoImplicitTypeCast()
@@ -6713,16 +7147,94 @@ func bindFuncExprImplByPlanExpr(
 				}
 			}
 		}
+		if len(argsType) == 2 && types.T(argsType[0].Oid).IsMySQLString() && types.T(argsType[1].Oid).IsMySQLString() {
+			// String columns and markers can carry any supported fraction. Only
+			// validated literals can narrow the declared TIME precision.
+			sourceArgs := args
+			if originalBoundExpr != nil && originalBoundExpr.GetF() != nil && len(originalBoundExpr.GetF().Args) == 2 {
+				sourceArgs = originalBoundExpr.GetF().Args
+			}
+			fsp := int32(0)
+			for _, arg := range sourceArgs {
+				literalFSP, ok := timediffLiteralFSP(arg)
+				if !ok {
+					fsp = 6
+					break
+				}
+				fsp = max(fsp, literalFSP)
+			}
+			returnType.Scale = fsp
+		}
+
+	case "time":
+		if len(args) == 1 {
+			source := args[0]
+			if originalBoundExpr != nil && originalBoundExpr.Typ.Id == int32(types.T_time) {
+				// A prepared handle keeps its bound result precision across
+				// executions even when the current argument is re-materialized.
+				returnType.Scale = originalBoundExpr.Typ.Scale
+			} else if source.GetP() != nil || argsType[0].Oid == types.T_any {
+				returnType.Scale = 6
+			} else if types.T(argsType[0].Oid).IsMySQLString() {
+				// The value of a string column or marker is unknown at bind time.
+				// A validated literal can advertise its exact fractional width.
+				returnType.Scale = 6
+				if literal := source.GetLit(); literal != nil && !literal.Isnull {
+					if text, ok := literal.GetValue().(*plan.Literal_Sval); ok && strings.TrimSpace(text.Sval) == "" {
+						returnType.Scale = 0
+					} else if fsp, ok := timestampPairLiteralFSP(source, false); ok {
+						returnType.Scale = fsp
+					}
+				}
+			}
+			// CTAS and view DDL use Width when materializing temporal FSP.
+			// Keep it aligned with the result's Scale so fractional values do
+			// not become TIME(0) columns with hidden microseconds.
+			returnType.Width = returnType.Scale
+		}
+
+	case "addtime", "subtime":
+		// A direct prepared parameter has TIME(6) result metadata in MySQL.
+		// Keep the string overload and its physical argument: an implicit cast
+		// would reject invalid values before the function can return NULL.
+		if len(args) == 2 && (args[0].GetP() != nil ||
+			(originalBoundExpr != nil && originalBoundExpr.Typ.Id == int32(types.T_time))) {
+			returnType = types.New(types.T_time, 0, 6)
+		} else if len(args) == 2 && (argsType[0].Oid == types.T_time || argsType[0].Oid == types.T_datetime || argsType[0].Oid == types.T_timestamp) {
+			// A string duration contributes its known literal precision, or
+			// FSP6 when its value is only available during execution.
+			durationFSP := argsType[1].Scale
+			if argsType[1].Oid.IsMySQLString() {
+				durationFSP = 6
+				if literalFSP, ok := timestampPairLiteralFSP(args[1], false); ok {
+					durationFSP = literalFSP
+				}
+			}
+			returnType.Scale = max(returnType.Scale, durationFSP)
+		}
+		if originalBoundExpr != nil {
+			returnType.Scale = max(returnType.Scale, originalBoundExpr.Typ.Scale)
+		}
+		if returnType.Oid == types.T_time || returnType.Oid == types.T_datetime || returnType.Oid == types.T_timestamp {
+			returnType.Scale = min(max(returnType.Scale, 0), 6)
+			returnType.Width = returnType.Scale
+		}
 
 	case "maketime":
 		// Hex and bit literals are represented as VARCHAR literals carrying
-		// IsBin. They are integral seconds, so they retain TIME(0) metadata even
-		// though the VARCHAR seconds overload normally advertises TIME(6).
+		// IsBin. Integral seconds retain TIME(0) metadata even when overload
+		// resolution casts them to FLOAT, whose result advertises TIME(6).
 		if len(args) == 3 {
 			if literal := args[2].GetLit(); literal != nil && literal.IsBin {
 				returnType.Scale = 0
+			} else if types.T(args[2].Typ.Id).IsInteger() {
+				returnType.Scale = 0
 			}
 		}
+		returnType.Width = returnType.Scale
+
+	case "sec_to_time":
+		returnType.Width = returnType.Scale
 
 	case "utc_time", "utc_timestamp":
 		// The overload receives only argument types, while the temporal result
@@ -6822,7 +7334,9 @@ func bindFuncExprImplByPlanExpr(
 			switch inputType.Oid {
 			case types.T_datetime, types.T_timestamp, types.T_time:
 				returnType.Oid, returnType.Scale, returnType.Width = inputType.Oid, inputType.Scale, inputType.Width
-				if unit, known := dateFunctionUnitFromPlanExpr(args[2]); !known || unit == types.MicroSecond {
+				unit, known := dateFunctionUnitFromPlanExpr(args[2])
+				if !known || unit == types.MicroSecond ||
+					(inputType.Oid == types.T_time && argsType[1].Oid != types.T_int64 && unit != types.Hour_Minute) {
 					if returnType.Scale < 6 {
 						returnType.Scale = 6
 					}
@@ -6954,6 +7468,35 @@ func bindFuncExprImplByPlanExpr(
 		},
 		Typ: Typ,
 	}, nil
+}
+
+// XPath configuration is execution-invariant, not merely constant within one
+// vector batch. Prepared markers are rebound on every execution; columns and
+// session variables must not become admissible because a batch has one row.
+func isXMLXPathConstant(expr *Expr) bool {
+	if expr == nil {
+		return false
+	}
+	if expr.GetP() != nil {
+		return true
+	}
+	if rule.IsConstant(expr, false) {
+		return true
+	}
+	f := expr.GetF()
+	if f == nil || f.Func == nil {
+		return false
+	}
+	ov, ok := function.GetFunctionByIdWithoutError(f.Func.Obj)
+	if !ok || ov.CannotFold() || ov.IsRealTimeRelated() {
+		return false
+	}
+	for _, arg := range f.Args {
+		if !isXMLXPathConstant(arg) {
+			return false
+		}
+	}
+	return true
 }
 
 func sameFunctionArgumentTypes(left, right []types.Type) bool {
@@ -7715,6 +8258,28 @@ func timestampPairLiteralFSP(expr *Expr, datetime bool) (int32, bool) {
 	return int32(digits), true
 }
 
+func timediffLiteralFSP(expr *Expr) (int32, bool) {
+	literal := expr.GetLit()
+	if literal == nil || literal.Isnull {
+		return 0, false
+	}
+	value, ok := literal.GetValue().(*plan.Literal_Sval)
+	if !ok {
+		return 0, false
+	}
+	if dot := strings.IndexByte(value.Sval, '.'); dot >= 0 {
+		for i := dot + 1; i < len(value.Sval); i++ {
+			if value.Sval[i] < '0' || value.Sval[i] > '9' {
+				return 0, false
+			}
+		}
+	}
+	if fsp, ok := timestampPairLiteralFSP(expr, false); ok {
+		return fsp, true
+	}
+	return timestampPairLiteralFSP(expr, true)
+}
+
 func timestampAddUnitFromPlanExpr(expr *Expr) (types.IntervalType, bool) {
 	literal := expr.GetLit()
 	if literal == nil || literal.Isnull {
@@ -7751,6 +8316,17 @@ func preparedDateFunctionArgs(original *Expr, name string, args []*Expr) bool {
 	}
 	_, ok := dateFunctionUnitFromPlanExpr(fn.Args[2])
 	return ok
+}
+
+func isTimeCompoundIntervalUnit(unit types.IntervalType) bool {
+	switch unit {
+	case types.Second_MicroSecond, types.Minute_MicroSecond,
+		types.Minute_Second, types.Hour_MicroSecond,
+		types.Hour_Second, types.Hour_Minute:
+		return true
+	default:
+		return false
+	}
 }
 
 func preparedStrToDateArgs(original *Expr, name string, args []*Expr) bool {
@@ -8927,8 +9503,21 @@ func (b *baseBinder) bindNumVal(astExpr *tree.NumVal, typ Type) (*Expr, error) {
 	// for float64, if the number is over 1<<53-1,it will lost, so if typ is float64,
 	// don't cast 0xXXXX as float64, use the uint64
 	returnDecimalExpr := func(val string) (*Expr, error) {
+		canonical := val
+		var normalizedWidth int32
+		if normalized, width, _, ok := normalizePlainDecimalLiteral(val); ok {
+			canonical = normalized
+			normalizedWidth = width
+		}
 		if !typ.IsEmpty() {
-			return appendCastBeforeExpr(b.GetContext(), makePlan2StringConstExprWithType(val), typ)
+			source := canonical
+			isDecimalTarget := types.T(typ.Id).IsDecimal()
+			if !isDecimalTarget {
+				source = val
+			}
+			return appendCastBeforeExpr(b.GetContext(),
+				makePlan2DecimalSourceExpr(source,
+					isDecimalTarget && decimalLiteralRequiresV82(val, canonical, normalizedWidth)), typ)
 		}
 		return makePlan2DecimalExprWithType(b.GetContext(), val)
 	}
@@ -8976,13 +9565,20 @@ func (b *baseBinder) bindNumVal(astExpr *tree.NumVal, typ Type) (*Expr, error) {
 		}
 		return makePlan2Uint64ConstExprWithType(val), nil
 	case tree.P_decimal:
+		sourceLiteral := astExpr.String()
+		literal := sourceLiteral
+		var normalizedWidth int32
+		if canonical, width, _, ok := normalizePlainDecimalLiteral(sourceLiteral); ok {
+			literal = canonical
+			normalizedWidth = width
+		}
 		if !typ.IsEmpty() {
 			if typ.Id == int32(types.T_decimal64) {
-				d64, err := types.ParseDecimal64(astExpr.String(), typ.Width, typ.Scale)
+				d64, err := types.ParseDecimal64(literal, typ.Width, typ.Scale)
 				if err != nil {
 					return nil, err
 				}
-				return &Expr{
+				expr := &Expr{
 					Expr: &plan.Expr_Lit{
 						Lit: &Const{
 							Isnull: false,
@@ -8992,16 +9588,18 @@ func (b *baseBinder) bindNumVal(astExpr *tree.NumVal, typ Type) (*Expr, error) {
 						},
 					},
 					Typ: typ,
-				}, nil
+				}
+				markDecimalLiteralRequiresV82(expr, sourceLiteral, literal, normalizedWidth)
+				return expr, nil
 			}
 			if typ.Id == int32(types.T_decimal128) {
-				d128, err := types.ParseDecimal128(astExpr.String(), typ.Width, typ.Scale)
+				d128, err := types.ParseDecimal128(literal, typ.Width, typ.Scale)
 				if err != nil {
 					return nil, err
 				}
 				a := int64(d128.B0_63)
 				b := int64(d128.B64_127)
-				return &Expr{
+				expr := &Expr{
 					Expr: &plan.Expr_Lit{
 						Lit: &Const{
 							Isnull: false,
@@ -9011,15 +9609,28 @@ func (b *baseBinder) bindNumVal(astExpr *tree.NumVal, typ Type) (*Expr, error) {
 						},
 					},
 					Typ: typ,
-				}, nil
+				}
+				markDecimalLiteralRequiresV82(expr, sourceLiteral, literal, normalizedWidth)
+				return expr, nil
 			}
-			return appendCastBeforeExpr(b.GetContext(), makePlan2StringConstExprWithType(astExpr.String()), typ)
+			source := literal
+			isDecimalTarget := types.T(typ.Id).IsDecimal()
+			if !isDecimalTarget {
+				source = sourceLiteral
+			}
+			return appendCastBeforeExpr(b.GetContext(),
+				makePlan2DecimalSourceExpr(source,
+					isDecimalTarget && decimalLiteralRequiresV82(sourceLiteral, literal, normalizedWidth)), typ)
 		}
 		// Smart type selection for untyped decimal literals
 		// Choose decimal64 if value fits, otherwise decimal128
-		d128, scale, err := types.Parse128(astExpr.String())
+		if isPlainDecimalLiteral(literal) &&
+			decimalLiteralPrecision(literal) > types.T_decimal128.ToType().Width {
+			return makePlan2DecimalExprWithType(b.GetContext(), sourceLiteral)
+		}
+		d128, scale, err := types.Parse128(literal)
 		if err != nil {
-			return makePlan2DecimalExprWithType(b.GetContext(), astExpr.String())
+			return makePlan2DecimalExprWithType(b.GetContext(), sourceLiteral)
 		}
 
 		// Check if value fits in decimal64 (18 digits precision)
@@ -9029,7 +9640,7 @@ func (b *baseBinder) bindNumVal(astExpr *tree.NumVal, typ Type) (*Expr, error) {
 
 		if useDecimal64 {
 			d64 := types.Decimal64(d128.B0_63)
-			return &Expr{
+			expr := &Expr{
 				Expr: &plan.Expr_Lit{
 					Lit: &Const{
 						Isnull: false,
@@ -9044,13 +9655,15 @@ func (b *baseBinder) bindNumVal(astExpr *tree.NumVal, typ Type) (*Expr, error) {
 					Scale:       scale,
 					NotNullable: true,
 				},
-			}, nil
+			}
+			markDecimalLiteralRequiresV82(expr, sourceLiteral, literal, normalizedWidth)
+			return expr, nil
 		}
 
 		// Use decimal128 for higher precision
 		a := int64(d128.B0_63)
 		b := int64(d128.B64_127)
-		return &Expr{
+		expr := &Expr{
 			Expr: &plan.Expr_Lit{
 				Lit: &Const{
 					Isnull: false,
@@ -9065,17 +9678,21 @@ func (b *baseBinder) bindNumVal(astExpr *tree.NumVal, typ Type) (*Expr, error) {
 				Scale:       scale,
 				NotNullable: true,
 			},
-		}, nil
+		}
+		markDecimalLiteralRequiresV82(expr, sourceLiteral, literal, normalizedWidth)
+		return expr, nil
 	case tree.P_float64:
 		originString := astExpr.String()
 		if !typ.IsEmpty() && types.T(typ.Id).IsDecimal() {
 			return returnDecimalExpr(originString)
 		}
-		if !strings.ContainsAny(originString, "eE") {
-			expr, err := returnDecimalExpr(originString)
-			if err == nil {
-				return expr, nil
-			}
+		// A plain decimal is exact SQL numeric syntax. Keep the decimal error
+		// visible when it cannot be represented, instead of silently changing
+		// the value to an approximate float64. Scientific notation retains its
+		// existing float path because its effective decimal precision depends on
+		// the exponent.
+		if isPlainDecimalLiteral(originString) {
+			return returnDecimalExpr(originString)
 		}
 		floatValue, ok := astExpr.Float64()
 		if !ok {
@@ -9209,6 +9826,16 @@ func appendBitwiseAggregateCastBeforeExpr(ctx context.Context, expr *Expr, toTyp
 }
 
 func appendCastBeforeExpr(ctx context.Context, expr *Expr, toType Type, isBin ...bool) (*Expr, error) {
+	if expr != nil && types.T(expr.Typ.Id).IsDateRelate() && types.T(toType.Id) == types.T_decimal256 {
+		// Temporal arithmetic already has exact casts to Decimal128. Preserve
+		// their packed-value and fractional-second rules before widening.
+		intermediate := types.New(types.T_decimal128, 38, max(expr.Typ.Scale, 0))
+		var err error
+		expr, err = appendCastBeforeExprWithOverload(ctx, expr, makePlan2Type(&intermediate), 0)
+		if err != nil {
+			return nil, err
+		}
+	}
 	return appendCastBeforeExprWithOverload(ctx, expr, toType, 0, isBin...)
 }
 
@@ -9216,12 +9843,18 @@ func appendExplicitCastBeforeExpr(ctx context.Context, expr *Expr, toType Type) 
 	return appendCastBeforeExprWithOverload(ctx, expr, toType, 1)
 }
 
-// appendSyntaxExplicitCastBeforeExpr keeps the legacy CAST overload on the
-// wire while recording syntax provenance in an optional protobuf field. Old
-// CNs ignore that field and continue to execute overload 0, while new planners
-// can distinguish this user-written CAST from implicit reconciliation casts.
+// appendSyntaxExplicitCastBeforeExpr records syntax provenance while retaining
+// legacy overload 0 except for typed DATE conversions, which need overload 1's
+// SQL-mode-sensitive zero-date policy.
 func appendSyntaxExplicitCastBeforeExpr(ctx context.Context, expr *Expr, toType Type) (*Expr, error) {
-	cast, err := appendCastBeforeExprWithOverload(ctx, expr, toType, 0)
+	overload := int32(0)
+	if types.T(toType.Id) == types.T_date &&
+		(types.T(expr.Typ.Id) == types.T_date || types.T(expr.Typ.Id) == types.T_datetime) {
+		// The typed zero-date sentinel needs the expression CAST policy. The
+		// existing explicit overload keeps it distinct from assignment casts.
+		overload = 1
+	}
+	cast, err := appendCastBeforeExprWithOverload(ctx, expr, toType, overload)
 	if err != nil {
 		return nil, err
 	}
@@ -9381,19 +10014,20 @@ func appendCastBeforeExprWithOverload(
 	if len(isBin) == 2 && isBin[0] && isBin[1] {
 		typ.Id = int32(types.T_uint64)
 	}
+	targetArg := &Expr{
+		Typ: typ,
+		Expr: &plan.Expr_T{
+			T: &plan.TargetType{},
+		},
+	}
+	args := []*Expr{expr, targetArg}
+	typ.NotNullable = function.DeduceNotNullable(fGet.GetEncodedOverloadID(), args)
+	targetArg.Typ.NotNullable = typ.NotNullable
 	return &Expr{
 		Expr: &plan.Expr_F{
 			F: &plan.Function{
 				Func: getFunctionObjRef(fGet.GetEncodedOverloadID(), "cast"),
-				Args: []*Expr{
-					expr,
-					{
-						Typ: typ,
-						Expr: &plan.Expr_T{
-							T: &plan.TargetType{},
-						},
-					},
-				},
+				Args: args,
 			},
 		},
 		Typ: typ,
@@ -9495,6 +10129,11 @@ func useStoredMySQLSpecialTypesForNumericContract(ctx context.Context, name stri
 	}
 	if !hasSpecialArg {
 		return args
+	}
+	// SUM/AVG have a numeric operand contract even though their VARCHAR
+	// overload is deliberately rejected. Resolve storage before that lookup.
+	if (name == "sum" || name == "avg") && len(args) == 1 {
+		return rawArgs
 	}
 
 	// The display-bound operands describe the contract selected for this SQL
@@ -9784,6 +10423,58 @@ func resetDateFunctionArgs(ctx context.Context, dateExpr *Expr, intervalExpr *Ex
 	if err != nil {
 		return nil, err
 	}
+	if dateExpr.Typ.Id == int32(types.T_time) {
+		// Check the SQL unit before a string or marker can be normalized to
+		// MICROSECOND. Calendar units have no stable TIME result semantics.
+		switch intervalType {
+		case types.MicroSecond, types.Second, types.Minute, types.Hour,
+			types.Second_MicroSecond, types.Minute_MicroSecond,
+			types.Minute_Second, types.Hour_MicroSecond,
+			types.Hour_Second, types.Hour_Minute:
+		default:
+			return nil, moerr.NewInvalidArg(ctx, "time interval unit", intervalType)
+		}
+
+		// Integers use their canonical digit spelling in compound fields.
+		// Other values retain their actual source type for row-wise TIME
+		// normalization, where NULL and overflow diagnostics are distinguishable.
+		switch intervalType {
+		case types.Second_MicroSecond, types.Minute_MicroSecond,
+			types.Minute_Second, types.Hour_MicroSecond,
+			types.Hour_Second, types.Hour_Minute:
+			switch firstExpr.Typ.Id {
+			case int32(types.T_int8), int32(types.T_int16), int32(types.T_int32), int32(types.T_int64),
+				int32(types.T_uint8), int32(types.T_uint16), int32(types.T_uint32), int32(types.T_uint64),
+				int32(types.T_any):
+				firstExpr, err = appendCastBeforeExpr(ctx, firstExpr, plan.Type{
+					Id: int32(types.T_varchar), Width: types.MaxVarcharLen,
+				})
+				if err != nil {
+					return nil, err
+				}
+			}
+		}
+		switch types.T(firstExpr.Typ.Id) {
+		case types.T_char, types.T_varchar, types.T_text,
+			types.T_float32, types.T_float64,
+			types.T_decimal64, types.T_decimal128, types.T_decimal256:
+			return []*Expr{dateExpr, firstExpr, makePlan2Int64ConstExprWithType(int64(intervalType))}, nil
+		}
+	}
+	// DAY can carry a fractional day for these source types. Choose the
+	// result family from the static signature, including whole-valued rows;
+	// neither the spelling of a literal nor a row value may change metadata.
+	if dateExpr.Typ.Id == int32(types.T_date) && intervalType == types.Day {
+		switch types.T(firstExpr.Typ.Id) {
+		case types.T_float32, types.T_float64,
+			types.T_decimal64, types.T_decimal128, types.T_decimal256,
+			types.T_char, types.T_varchar, types.T_text, types.T_any:
+			dateExpr, err = appendCastBeforeExpr(ctx, dateExpr, plan.Type{Id: int32(types.T_datetime), Scale: 6})
+			if err != nil {
+				return nil, err
+			}
+		}
+	}
 
 	if numberExpr, returnType, handled, err := bindStringIntervalExpr(ctx, firstExpr, intervalType); err != nil {
 		return nil, err
@@ -9825,98 +10516,83 @@ func resetDateFunctionArgs(ctx context.Context, dateExpr *Expr, intervalExpr *Ex
 			}
 		}
 	}
+	// Compound numeric fields have the same grammar for every supported
+	// temporal result family. The old fallthrough cast to INT64 discarded the
+	// compound unit and interpreted values such as 1.5 HOUR_SECOND as 2us.
+	switch intervalType {
+	case types.Second_MicroSecond, types.Minute_MicroSecond, types.Minute_Second,
+		types.Hour_MicroSecond, types.Hour_Second, types.Hour_Minute,
+		types.Day_MicroSecond, types.Day_Second, types.Day_Minute, types.Day_Hour,
+		types.Year_Month:
+		switch types.T(firstExpr.Typ.Id) {
+		case types.T_float32, types.T_float64,
+			types.T_decimal64, types.T_decimal128, types.T_decimal256:
+			numberExpr, returnType, err := bindTypedNumericIntervalExpr(ctx, firstExpr, intervalType)
+			if err != nil {
+				return nil, err
+			}
+			return []*Expr{dateExpr, numberExpr, makePlan2Int64ConstExprWithType(int64(returnType))}, nil
+		case types.T_int8, types.T_int16, types.T_int32, types.T_int64,
+			types.T_uint8, types.T_uint16, types.T_uint32, types.T_uint64:
+			stringExpr, err := appendCastBeforeExpr(ctx, firstExpr, plan.Type{
+				Id: int32(types.T_varchar), Width: types.MaxVarcharLen,
+			})
+			if err != nil {
+				return nil, err
+			}
+			numberExpr, returnType, _, err := bindStringIntervalExpr(ctx, stringExpr, intervalType)
+			if err != nil {
+				return nil, err
+			}
+			return []*Expr{dateExpr, numberExpr, makePlan2Int64ConstExprWithType(int64(returnType))}, nil
+		}
+	}
 
-	// For time units (SECOND, MINUTE, HOUR, DAY), we need to handle decimal/float values
-	// by converting them to microseconds. Check if firstExpr is a literal with decimal/float type.
+	// A CAST must contribute its evaluated value. Safe constant decimal
+	// expressions retain exact bind-time folding; overflow is deferred so an
+	// unselected CASE branch cannot fail while binding.
 	isTimeUnit := intervalType == types.Second || intervalType == types.Minute ||
 		intervalType == types.Hour || intervalType == types.Day
 	isDecimalOrFloat := firstExpr.Typ.Id == int32(types.T_decimal64) ||
 		firstExpr.Typ.Id == int32(types.T_decimal128) ||
+		firstExpr.Typ.Id == int32(types.T_decimal256) ||
 		firstExpr.Typ.Id == int32(types.T_float32) ||
 		firstExpr.Typ.Id == int32(types.T_float64)
-
-	// Try to get literal value, either directly or from a cast function
-	var lit *plan.Literal
-	var innerExpr *plan.Expr // The inner expression (for getting scale from cast target type)
-	if firstExpr.GetLit() != nil {
-		lit = firstExpr.GetLit()
-		innerExpr = firstExpr
-	} else if funcExpr, ok := firstExpr.Expr.(*plan.Expr_F); ok && funcExpr.F != nil &&
-		funcExpr.F.Func != nil && funcExpr.F.Func.GetObjName() == "cast" {
-		// Check if it's a cast function with a literal argument
-		if len(funcExpr.F.Args) > 0 && funcExpr.F.Args[0].GetLit() != nil {
-			lit = funcExpr.F.Args[0].GetLit()
-			innerExpr = firstExpr // Use firstExpr to get the scale from the cast target type
+	if isTimeUnit {
+		// Exact constant DECIMAL normalization preserves the established plan
+		// representation and protocol marker. An unrepresentable value must
+		// reach execution so an inactive CASE arm cannot fail during binding.
+		if finalValue, _, handled, err := normalizeDecimalIntervalValue(firstExpr, intervalType); err == nil && handled {
+			return []*Expr{dateExpr, makeDecimalIntervalValueExpr(firstExpr, finalValue),
+				makePlan2Int64ConstExprWithType(int64(types.MicroSecond))}, nil
+		}
+		// Only a genuine FLOAT literal may be folded. Unwrapping a CAST's
+		// child changes the value and is the source of the old -1.5 -> -15s bug.
+		if lit := firstExpr.GetLit(); lit != nil {
+			var value float64
+			var ok bool
+			switch v := lit.Value.(type) {
+			case *plan.Literal_Dval:
+				value, ok = v.Dval, true
+			case *plan.Literal_Fval:
+				value, ok = float64(v.Fval), true
+			}
+			if ok {
+				multiplier, _ := intervalMicrosecondMultiplier(intervalType)
+				microseconds := math.Round(value * float64(multiplier))
+				if microseconds >= math.MinInt64 && microseconds < float64(math.MaxInt64) {
+					return []*Expr{dateExpr, makeDecimalIntervalValueExpr(firstExpr, int64(microseconds)),
+						makePlan2Int64ConstExprWithType(int64(types.MicroSecond))}, nil
+				}
+			}
 		}
 	}
-
-	if isTimeUnit && isDecimalOrFloat && lit != nil {
-		// Extract the value from the literal and convert to microseconds
-		var floatVal float64
-		var hasValue bool
-
-		if !lit.Isnull {
-			if dval, ok := lit.Value.(*plan.Literal_Dval); ok {
-				floatVal = dval.Dval
-				hasValue = true
-			} else if fval, ok := lit.Value.(*plan.Literal_Fval); ok {
-				floatVal = float64(fval.Fval)
-				hasValue = true
-			} else if d64val, ok := lit.Value.(*plan.Literal_Decimal64Val); ok {
-				// Convert decimal64 to float64
-				d64 := types.Decimal64(d64val.Decimal64Val.A)
-				scale := innerExpr.Typ.Scale
-				if scale < 0 {
-					scale = 0
-				}
-				floatVal = types.Decimal64ToFloat64(d64, scale)
-				hasValue = true
-			} else if d128val, ok := lit.Value.(*plan.Literal_Decimal128Val); ok {
-				// Convert decimal128 to float64
-				d128 := types.Decimal128{B0_63: uint64(d128val.Decimal128Val.A), B64_127: uint64(d128val.Decimal128Val.B)}
-				scale := innerExpr.Typ.Scale
-				if scale < 0 {
-					scale = 0
-				}
-				floatVal = types.Decimal128ToFloat64(d128, scale)
-				hasValue = true
-			} else if sval, ok := lit.Value.(*plan.Literal_Sval); ok {
-				// Handle string literal (from cast function's first argument)
-				// Try to parse as decimal128 to get the float value
-				d128, scale, err := types.Parse128(sval.Sval)
-				if err == nil {
-					floatVal = types.Decimal128ToFloat64(d128, scale)
-					hasValue = true
-				}
-			}
+	if (isTimeUnit || intervalType == types.MicroSecond) && isDecimalOrFloat {
+		numberExpr, returnType, err := bindTypedNumericIntervalExpr(ctx, firstExpr, intervalType)
+		if err != nil {
+			return nil, err
 		}
-
-		if hasValue {
-			// Convert to microseconds based on interval type
-			var finalValue int64
-			switch intervalType {
-			case types.Second:
-				// Use math.Round to handle floating point precision issues (e.g., 1.000009 * 1000000 = 1000008.9999999999)
-				finalValue = int64(math.Round(floatVal * float64(types.MicroSecsPerSec)))
-			case types.Minute:
-				// Use math.Round to handle floating point precision issues
-				finalValue = int64(math.Round(floatVal * float64(types.MicroSecsPerSec*types.SecsPerMinute)))
-			case types.Hour:
-				// Use math.Round to handle floating point precision issues
-				finalValue = int64(math.Round(floatVal * float64(types.MicroSecsPerSec*types.SecsPerHour)))
-			case types.Day:
-				// Use math.Round to handle floating point precision issues
-				finalValue = int64(math.Round(floatVal * float64(types.MicroSecsPerSec*types.SecsPerDay)))
-			default:
-				finalValue = int64(floatVal)
-			}
-			return []*Expr{
-				dateExpr,
-				makePlan2Int64ConstExprWithType(finalValue),
-				// Use MicroSecond type since we've converted to microseconds
-				makePlan2Int64ConstExprWithType(int64(types.MicroSecond)),
-			}, nil
-		}
+		return []*Expr{dateExpr, numberExpr, makePlan2Int64ConstExprWithType(int64(returnType))}, nil
 	}
 
 	numberExpr, err := appendCastBeforeExpr(ctx, firstExpr, plan.Type{Id: int32(types.T_int64)})
@@ -9931,6 +10607,22 @@ func resetDateFunctionArgs(ctx context.Context, dateExpr *Expr, intervalExpr *Ex
 	}, nil
 }
 
+func bindTypedNumericIntervalExpr(ctx context.Context, expr *Expr, intervalType types.IntervalType) (*Expr, types.IntervalType, error) {
+	_, normalizedType, err := types.NormalizeInterval("0", intervalType)
+	if err != nil {
+		return nil, types.IntervalTypeInvalid, err
+	}
+	switch intervalType {
+	case types.Second, types.Minute, types.Hour, types.Day,
+		types.Minute_Second, types.Hour_Second, types.Day_Second:
+		normalizedType = types.MicroSecond
+	}
+	numberExpr, err := BindFuncExprImplByPlanExpr(ctx, "to_interval_microsecond", []*Expr{
+		expr, makePlan2Int64ConstExprWithType(int64(intervalType)),
+	})
+	return numberExpr, normalizedType, err
+}
+
 // bindStringIntervalExpr keeps VARCHAR/CHAR/TEXT interval semantics identical for
 // literals and column expressions. Dynamic values are normalized row-by-row at
 // execution time instead of using a normal VARCHAR -> INT64 cast.
@@ -9940,22 +10632,40 @@ func bindStringIntervalExpr(ctx context.Context, expr *Expr, intervalType types.
 		return nil, types.IntervalTypeInvalid, false, nil
 	}
 	if lit := expr.GetLit(); lit != nil {
-		number, normalizedType, err := types.NormalizeInterval(lit.GetSval(), intervalType)
+		if lit.Isnull {
+			null := makePlan2Int64ConstExprWithType(0)
+			null.GetLit().Isnull = true
+			null.Typ.NotNullable = false
+			return null, intervalType, true, nil
+		}
+		number, normalizedType, overflow, err := types.NormalizeIntervalWithOverflow(lit.GetSval(), intervalType)
 		if err != nil {
-			// Existing literal behavior: date functions recognize this marker and
-			// return NULL rather than propagating a parse/cast error.
-			number = math.MaxInt64
-			normalizedType = intervalType
+			if !overflow {
+				null := makePlan2Int64ConstExprWithType(0)
+				null.GetLit().Isnull = true
+				null.Typ.NotNullable = false
+				return null, intervalType, true, nil
+			}
+			// Preserve a provably out-of-domain count until arithmetic can
+			// determine whether the row is active and its base is non-NULL.
+			number, normalizedType = math.MinInt64, intervalType
 		}
 		return makePlan2Int64ConstExprWithType(number), normalizedType, true, nil
 	}
 
-	// The normalized unit depends only on the SQL interval unit, not on a row.
+	// A dynamic expression needs one result unit for every row. Fractional
+	// values of these units normalize to microseconds, so whole values must
+	// use that same unit too.
 	_, normalizedType, err := types.NormalizeInterval("0", intervalType)
 	if err != nil {
 		return nil, types.IntervalTypeInvalid, false, err
 	}
-	numberExpr, err := BindFuncExprImplByPlanExpr(ctx, "to_interval", []*Expr{
+	switch intervalType {
+	case types.Second, types.Minute, types.Hour, types.Day,
+		types.Minute_Second, types.Hour_Second, types.Day_Second:
+		normalizedType = types.MicroSecond
+	}
+	numberExpr, err := BindFuncExprImplByPlanExpr(ctx, "to_interval_microsecond", []*Expr{
 		expr,
 		makePlan2Int64ConstExprWithType(int64(intervalType)),
 	})
@@ -10033,6 +10743,16 @@ func resetIntervalFunctionArgs(ctx context.Context, intervalExpr *Expr) ([]*Expr
 	// by converting them to microseconds. Check if firstExpr is a literal with decimal/float type.
 	isTimeUnit := intervalType == types.Second || intervalType == types.Minute ||
 		intervalType == types.Hour || intervalType == types.Day
+	if isTimeUnit {
+		if finalValue, _, handled, err := normalizeDecimalIntervalValue(firstExpr, intervalType); err != nil {
+			return nil, err
+		} else if handled {
+			return []*Expr{
+				makeDecimalIntervalValueExpr(firstExpr, finalValue),
+				makePlan2Int64ConstExprWithType(int64(types.MicroSecond)),
+			}, nil
+		}
+	}
 	isDecimalOrFloat := firstExpr.Typ.Id == int32(types.T_decimal64) ||
 		firstExpr.Typ.Id == int32(types.T_decimal128) ||
 		firstExpr.Typ.Id == int32(types.T_float32) ||
@@ -10052,7 +10772,6 @@ func resetIntervalFunctionArgs(ctx context.Context, intervalExpr *Expr) ([]*Expr
 				floatVal = float64(fval.Fval)
 				hasValue = true
 			} else if d64val, ok := lit.Value.(*plan.Literal_Decimal64Val); ok {
-				// Convert decimal64 to float64
 				d64 := types.Decimal64(d64val.Decimal64Val.A)
 				scale := firstExpr.Typ.Scale
 				if scale < 0 {
@@ -10061,7 +10780,6 @@ func resetIntervalFunctionArgs(ctx context.Context, intervalExpr *Expr) ([]*Expr
 				floatVal = types.Decimal64ToFloat64(d64, scale)
 				hasValue = true
 			} else if d128val, ok := lit.Value.(*plan.Literal_Decimal128Val); ok {
-				// Convert decimal128 to float64
 				d128 := types.Decimal128{B0_63: uint64(d128val.Decimal128Val.A), B64_127: uint64(d128val.Decimal128Val.B)}
 				scale := firstExpr.Typ.Scale
 				if scale < 0 {
@@ -10092,7 +10810,7 @@ func resetIntervalFunctionArgs(ctx context.Context, intervalExpr *Expr) ([]*Expr
 				finalValue = int64(floatVal)
 			}
 			return []*Expr{
-				makePlan2Int64ConstExprWithType(finalValue),
+				makeDecimalIntervalValueExpr(firstExpr, finalValue),
 				// Use MicroSecond type since we've converted to microseconds
 				makePlan2Int64ConstExprWithType(int64(types.MicroSecond)),
 			}, nil
