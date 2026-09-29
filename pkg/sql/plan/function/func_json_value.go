@@ -39,7 +39,6 @@ type jsonValueState uint8
 
 const (
 	jsonValueSQLNull jsonValueState = iota
-	jsonValuePathNull
 	jsonValueEmpty
 	jsonValueOneValue
 	jsonValueMultiple
@@ -155,7 +154,9 @@ func jsonValueContract(
 		return moerr.NewInvalidArg(jsonValueContext(proc), "json_value arguments", len(ivecs))
 	}
 	target := *ivecs[2].GetType()
-	if target.Oid == types.T_any {
+	implicitText := target.Oid == types.T_any ||
+		(target.Oid == types.T_varchar && target.Width == 512 && target.Charset == types.CharsetUTF8MB4Bin)
+	if implicitText {
 		target = types.NewWithCharset(types.T_varchar, 512, 0, types.CharsetUTF8MB4Bin)
 	}
 	onEmpty := jsonValueResponseMode(ivecs[3])
@@ -164,7 +165,7 @@ func jsonValueContract(
 	switch target.Oid {
 	case types.T_char, types.T_varchar, types.T_text,
 		types.T_binary, types.T_varbinary, types.T_blob:
-		return jsonValueTextResult(ivecs, result, proc, length, selectList, target, onEmpty, onError)
+		return jsonValueTextResult(ivecs, result, proc, length, selectList, target, implicitText, onEmpty, onError)
 	case types.T_json:
 		return jsonValueJSONResult(ivecs, result, proc, length, selectList, onEmpty, onError)
 	case types.T_int8:
@@ -272,19 +273,14 @@ func jsonValueExtractWithStoredValidation(
 			value, decodeErr = decodeJSONValueStoredAdmitted(doc)
 		}
 		if decodeErr != nil {
-			state := jsonValueSourceParseError
-			if bytejson.IsJSONDocumentDepthError(decodeErr) {
-				state = jsonValueHardError
-			}
-			return jsonValueExtracted{state: state, path: pathString, err: decodeErr}
+			return jsonValueExtracted{state: jsonValueHardError, path: pathString, err: decodeErr}
 		}
 	} else {
 		value, err = types.ParseSliceToByteJsonWithDepthLimit(doc, bytejson.JSONDocumentMaxNestingDepth)
 		if err != nil {
-			if bytejson.IsJSONDocumentDepthError(err) {
-				return jsonValueExtracted{state: jsonValueHardError, path: pathString, err: err}
-			}
-			return jsonValueExtracted{state: jsonValueSourceParseError, path: pathString, err: err}
+			// Invalid source JSON is a statement error. ON ERROR applies to
+			// extraction/conversion failures, not malformed input documents.
+			return jsonValueExtracted{state: jsonValueHardError, path: pathString, err: err}
 		}
 	}
 
@@ -371,7 +367,7 @@ func jsonValueExecuteCore(
 
 		extracted := jsonValueExtractAdmitted(doc, path, docType)
 		switch extracted.state {
-		case jsonValueSQLNull, jsonValuePathNull:
+		case jsonValueSQLNull:
 			if err := appendNull(); err != nil {
 				return err
 			}
@@ -470,6 +466,7 @@ func jsonValueTextResult(
 	length int,
 	selectList *FunctionSelectList,
 	target types.Type,
+	implicitText bool,
 	onEmpty, onError int64,
 ) error {
 	rs := vector.MustFunctionResult[types.Varlena](result)
@@ -477,6 +474,11 @@ func jsonValueTextResult(
 	errorDefault := vector.GenerateFunctionStrParameter(ivecs[6])
 	return jsonValueExecuteCore(ivecs, proc, length, selectList, onEmpty, onError,
 		func(extracted jsonValueExtracted) (error, error) {
+			if !implicitText {
+				if err := jsonValueRequireScalar(extracted); err != nil {
+					return err, nil
+				}
+			}
 			value, err := jsonValueTextBytes(extracted.text, target)
 			if err != nil {
 				return err, nil

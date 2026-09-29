@@ -20,16 +20,19 @@ signed literals and are converted and validated while binding/preparing the
 statement. A default NULL, expression, column, or parameter is rejected.
 
 The extraction state is separated from response policy. A row can be SQL NULL,
-path NULL, empty, a single JSON value, multiple values, a document parse error,
-or a hard error. Empty rows use `ON EMPTY`; multiple matches and conversion or
-document errors use `ON ERROR`. Invalid paths and excessive JSON depth are hard
-errors. After the clause-form path check, SQL NULL documents and JSON null
-values return SQL NULL directly.
+path NULL, empty, a single JSON value, multiple values, a document conversion
+error, or a hard error. Empty rows use `ON EMPTY`; multiple matches and value
+conversion errors use `ON ERROR`. Malformed source JSON is a statement error and
+does not enter the `ON ERROR` response policy. Invalid paths and excessive JSON
+depth are hard errors. After the clause-form path check, SQL NULL documents and
+JSON null values return SQL NULL directly.
 
-For a single match, text targets return canonical JSON text (strings are
-unquoted), `RETURNING JSON` preserves JSON values, and numeric/temporal targets
-use strict conversion. A conversion that exceeds the target or loses data is an
-`ON ERROR` event rather than a silently truncated value.
+For a single scalar match, explicit character targets return canonical text
+(strings are unquoted), `RETURNING JSON` preserves JSON values, and
+numeric/temporal targets use strict conversion. The omitted `RETURNING` form
+keeps the legacy text behavior for composite values. A composite value selected
+by an explicit scalar target, or a conversion that exceeds the target or loses
+data, is an `ON ERROR` event rather than a silently truncated value.
 
 ## Plan representation
 
@@ -60,7 +63,8 @@ explicit rebuild procedure.
 ### Versioned compatibility decision (revision 4, 2026-09-28)
 
 Status: independent maintainer approval pending. This revision supersedes
-revision 3/v85; the historical decision is retained below. Approval must identify
+revision 3/v85; superseded details remain in PR history rather than this contract.
+Approval must identify
 this revision's immutable commit and an independent approver. Author replies,
 thread resolution and approvals of earlier revisions do not approve this one.
 
@@ -115,42 +119,6 @@ validation requires a separate provenance/immutability proof and reviewer decisi
 Required independent decision: approve the final capability allocation, strict
 response semantics, sender/receiver and persisted-owner admission, old-node
 rejection and rollback restriction, and retained validation/performance disposition.
-
-### Historical revision 3 (superseded, not an approval record)
-
-Original revision: 3, 2026-09-16
-
-The seven-argument representation is a new wire and persisted-plan contract.
-MORPC version 85 is the first version that may carry JSON_VALUE function ID 462
-with overload index 2. The planner admits `RETURNING`, `ON EMPTY`, and `ON
-ERROR` only when the deployment-wide `MOProtocolVersion` is at least 85; below
-that threshold it returns a not-supported error before publishing the plan.
-An ordinary two-argument call remains the legacy overload and is still allowed
-at version 57. MORPC versions 73 and 74 remain the independent DECIMAL SUM and
-numeric HEX contracts already used by the current `main` branch.
-
-Both remote pipeline boundaries enforce the same contract. The sender and
-receiver expression validators identify overload 2 and reject it when the
-local deployment gate is below version 85 or unavailable. This prevents a new
-sender from sending the plan to an old CN and prevents a current receiver from
-executing a plan after a rollback lowered the gate. The function-ID lookup also
-rejects an out-of-range overload instead of indexing the overload slice.
-
-Creating a view, generated column, index expression, or persisted prepared plan
-that contains overload 2 is therefore a version-85-only operation. The
-catalog-owner admission covers table defaults, generated columns, checks,
-on-update expressions, index tables, and view plans before publication.
-Upgrade all CNs and raise the oldest-live protocol gate to 85 before enabling
-the syntax. Do not lower the gate or roll back to a pre-85 binary while such a plan remains
-persisted; rebuild or remove that metadata first. A legacy two-argument plan
-does not carry this prerequisite and remains readable by older CNs. The
-regression matrix covers sender/receiver rejection below 85, acceptance at 85,
-planner and persisted-owner admission at both thresholds, and the legacy
-two-argument control.
-
-Independent design approval for this revision is still pending. This document
-records the implementation contract and rollback prerequisite; it is not an
-approval record.
 
 ## Required evidence
 

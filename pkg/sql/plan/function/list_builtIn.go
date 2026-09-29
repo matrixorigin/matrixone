@@ -2062,7 +2062,7 @@ var supportedStringBuiltIns = []FuncNew{
 				overloadId: 0,
 				args:       []types.T{types.T_varchar, types.T_varchar},
 				retType: func(parameters []types.Type) types.Type {
-					return types.NewWithCharset(types.T_varchar, 512, 0, types.CharsetUTF8MB4Bin)
+					return types.T_varchar.ToType()
 				},
 				newOp: func() executeLogicOfOverload {
 					return JsonValue
@@ -2072,7 +2072,7 @@ var supportedStringBuiltIns = []FuncNew{
 				overloadId: 1,
 				args:       []types.T{types.T_json, types.T_varchar},
 				retType: func(parameters []types.Type) types.Type {
-					return types.NewWithCharset(types.T_varchar, 512, 0, types.CharsetUTF8MB4Bin)
+					return types.T_varchar.ToType()
 				},
 				newOp: func() executeLogicOfOverload {
 					return JsonValue

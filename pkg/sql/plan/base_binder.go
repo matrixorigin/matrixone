@@ -3270,6 +3270,15 @@ func (b *baseBinder) bindJsonValueExpr(astExpr *tree.FuncExpr, depth int32) (*Ex
 		}
 	}
 	targetPlan := makePlan2Type(&target)
+	targetArgPlan := targetPlan
+	if spec.Returning == nil {
+		// Keep the clause-bearing overload's implicit VARCHAR(512) target
+		// distinguishable from an explicit VARCHAR target at execution time.
+		// The public result type remains targetPlan; T_any is only the internal
+		// overload marker for the omitted RETURNING clause.
+		implicitTarget := types.T_any.ToType()
+		targetArgPlan = makePlan2Type(&implicitTarget)
+	}
 	document, err := b.impl.BindExpr(astExpr.Exprs[0], depth, false)
 	if err != nil {
 		return nil, err
@@ -3279,7 +3288,7 @@ func (b *baseBinder) bindJsonValueExpr(astExpr *tree.FuncExpr, depth int32) (*Ex
 		return nil, err
 	}
 
-	typeExpr := &Expr{Typ: targetPlan, Expr: &plan.Expr_T{T: &plan.TargetType{}}}
+	typeExpr := &Expr{Typ: targetArgPlan, Expr: &plan.Expr_T{T: &plan.TargetType{}}}
 	args := []*Expr{document, path, typeExpr}
 	for _, response := range []*tree.JsonValueResponse{&spec.OnEmpty, &spec.OnError} {
 		mode := response.Mode

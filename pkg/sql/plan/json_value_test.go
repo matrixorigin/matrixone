@@ -45,10 +45,18 @@ func TestJSONValueBindingContract(t *testing.T) {
 		expr, err := bind(`select json_value('{"a":[1]}', '$.a')`, false)
 		require.NoError(t, err)
 		require.Equal(t, int32(types.T_varchar), expr.Typ.Id)
-		require.Equal(t, int32(512), expr.Typ.Width)
-		require.Equal(t, uint32(types.CharsetUTF8MB4Bin), expr.Typ.Charset)
+		require.Equal(t, types.T_varchar.ToType().Width, expr.Typ.Width)
+		require.Equal(t, uint32(types.T_varchar.ToType().Charset), expr.Typ.Charset)
 		require.False(t, expr.Typ.NotNullable)
 		require.Len(t, expr.GetF().Args, 2)
+	})
+
+	t.Run("implicit clause target has a private marker", func(t *testing.T) {
+		expr, err := bind(`select json_value('{"a":[1]}', '$.a' default 'fallback' on empty)`, false)
+		require.NoError(t, err)
+		require.Equal(t, int32(types.T_varchar), expr.Typ.Id)
+		require.Equal(t, int32(512), expr.Typ.Width)
+		require.Equal(t, int32(types.T_any), expr.GetF().Args[2].Typ.Id)
 	})
 
 	t.Run("explicit unsigned default", func(t *testing.T) {
