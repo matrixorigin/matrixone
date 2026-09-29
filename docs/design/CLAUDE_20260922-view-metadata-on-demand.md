@@ -101,7 +101,7 @@ View schema 的 nullability 与 SELECT 外层查询的 null-extension 分开：`
 | `attname, attnum` | 逻辑输出 D，定义名/顺序受 A 约束；raw 行中保存的是 K 副本 |
 | `atttyp, att_length, attnotnull, atthasdef, att_default, att_is_unsigned, attr_enum` | 当前值 D；raw 行中的旧快照 K，不可混入 D |
 | `att_constraint_type, att_is_auto_increment, att_comment, att_is_hidden, attr_has_update, attr_update, attr_is_clusterby, attr_has_generated, attr_generated` | View 展示的默认/空属性由统一 schema 与入口格式器决定；raw 副本 K，不继承源表物理属性 |
-| `att_uniq_name, attisdropped, attr_seqnum, __mo_cpkey` 及隐藏 row ID | K，保留引擎/复制协议原义；不伪造当前 schema 对应的物理行身份 |
+| `att_uniq_name, attisdropped, attr_seqnum, __mo_cpkey_col` 及隐藏 row ID | K，保留引擎/复制协议原义；不伪造当前 schema 对应的物理行身份 |
 
 DESC 的 `Type/Null/Default`、I_S 的数值宽度/scale、MySQL 结果包是不同编码；一致性比较归一化后的类型和 nullability，不要求字面字符串完全相等。View 默认 `7` 与 CTAS 的可执行类型默认 `0` 是已批准的不同契约；表达式 default 的重映射按 #26232，不能强行统一。SHOW 的 Key/Extra 与 SELECT 包来源 flags 也不作逐字等同。
 
