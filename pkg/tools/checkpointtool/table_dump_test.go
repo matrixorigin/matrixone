@@ -66,7 +66,35 @@ func TestFunctionalIndexCheckpointDDL(t *testing.T) {
 	statements, err := buildCreateIndexStatementsFromMoIndexes(indexes, 42, "fi", schema)
 	require.NoError(t, err)
 	require.Equal(t, []string{"ALTER TABLE `fi` ADD KEY `idx`((lower(`name`)));"}, statements)
-	schema.UniqueKeys[0].Expression = ""
+	schema.UniqueKeys[0].Expressions = nil
+	require.Empty(t, RenderCreateTableDDLFromSchema(schema))
+	_, err = buildCreateIndexStatementsFromMoIndexes(indexes, 42, "fi", schema)
+	require.Error(t, err)
+}
+
+func TestFunctionalCompositeIndexCheckpointDDL(t *testing.T) {
+	const first, second = "__mo_fi_a_1", "__mo_fi_a_2"
+	schema := &TableSchema{TableName: "fi", Columns: []TableColumn{{Name: "id", SQLType: "INT", Position: 1}, {Name: "name", SQLType: "VARCHAR(40)", Position: 2}}, UniqueKeys: []TableUniqueKey{{Name: "idx", Columns: []string{"id", first, second}}}}
+	columns := &LogicalTableView{Headers: []string{"object", "block", "row", "att_relname_id", "attname", "att_is_hidden", "attr_generated"}}
+	for _, part := range []struct{ name, expr string }{{first, "lower(`name`)"}, {second, "upper(`name`)"}} {
+		encoded, err := types.Encode(&plan.GeneratedCol{OriginString: part.expr})
+		require.NoError(t, err)
+		columns.Rows = append(columns.Rows, []string{"o", "0", "0", "42", part.name, "1", string(encoded)})
+	}
+	attachFunctionalIndexExpressions(schema, columns, 42)
+	clone := cloneTableSchema(schema)
+	require.Contains(t, RenderCreateTableDDLFromSchema(clone), "KEY `idx`(`id`, (lower(`name`)), (upper(`name`)))")
+	require.NotContains(t, RenderCreateTableDDLFromSchema(clone), "__mo_fi_")
+	indexes := &LogicalTableView{Headers: []string{"object", "block", "row", "table_id", "name", "column_name", "type", "ordinal_position"}, Rows: [][]string{
+		{"o", "0", "0", "42", "idx", second, "INDEX", "3"},
+		{"o", "0", "0", "42", "idx", "id", "INDEX", "1"},
+		{"o", "0", "0", "42", "idx", first, "INDEX", "2"},
+	}}
+	statements, err := buildCreateIndexStatementsFromMoIndexes(indexes, 42, "fi", schema)
+	require.NoError(t, err)
+	require.Equal(t, []string{"ALTER TABLE `fi` ADD KEY `idx`(`id`, (lower(`name`)), (upper(`name`)));"}, statements)
+	delete(schema.UniqueKeys[0].Expressions, second)
+	require.NotEmpty(t, clone.UniqueKeys[0].Expressions[second], "clone owns expression map")
 	require.Empty(t, RenderCreateTableDDLFromSchema(schema))
 	_, err = buildCreateIndexStatementsFromMoIndexes(indexes, 42, "fi", schema)
 	require.Error(t, err)

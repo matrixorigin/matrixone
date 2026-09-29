@@ -365,14 +365,18 @@ func buildAlterTableCopy(stmt *tree.AlterTable, cctx CompilerContext) (*Plan, er
 					if !IndexNamesEqual(index.IndexName, string(option.Name)) {
 						continue
 					}
-					col := functionalIndexColumn(copyTableDef, index)
-					if col == nil {
+					cols := functionalIndexColumns(copyTableDef, index)
+					if len(cols) == 0 {
 						return nil, moerr.NewNotSupported(ctx, "combined COPY DROP INDEX requires a functional index")
 					}
 					copyTableDef.Indexes = append(copyTableDef.Indexes[:i], copyTableDef.Indexes[i+1:]...)
-					err = handleDropColumnPosition(ctx, copyTableDef, col)
-					delete(alterTableCtx.alterColMap, col.Name)
-					delete(alterTableCtx.changColDefMap, col.ColId)
+					for _, col := range cols {
+						if err = handleDropColumnPosition(ctx, copyTableDef, col); err != nil {
+							return nil, err
+						}
+						delete(alterTableCtx.alterColMap, col.Name)
+						delete(alterTableCtx.changColDefMap, col.ColId)
+					}
 					found = true
 					break
 				}

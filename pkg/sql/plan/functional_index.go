@@ -34,9 +34,13 @@ import (
 
 const functionalColumnPrefix = "__mo_fi_"
 
-func functionalColumnName(indexName string) string {
+func functionalColumnName(indexName string, ordinal ...int) string {
 	sum := sha256.Sum256([]byte(indexNameKey(indexName)))
-	return fmt.Sprintf("%s%x", functionalColumnPrefix, sum[:16])
+	name := fmt.Sprintf("%s%x", functionalColumnPrefix, sum[:16])
+	if len(ordinal) != 0 && ordinal[0] != 0 {
+		name += fmt.Sprintf("_%d", ordinal[0])
+	}
+	return name
 }
 
 func hasFunctionalKey(parts []*tree.KeyPart) bool {
@@ -52,16 +56,44 @@ func isFunctionalColumn(col *ColDef) bool {
 	return col != nil && col.Hidden && col.GeneratedCol != nil && strings.HasPrefix(col.Name, functionalColumnPrefix)
 }
 
+// functionalIndexColumn is a presence check, including indexes whose first
+// part is an ordinary column. Consumers rendering/removing keys use all parts.
 func functionalIndexColumn(table *TableDef, index *pb.IndexDef) *ColDef {
-	if table == nil || index == nil || len(index.Parts) == 0 {
+	if table == nil || index == nil {
 		return nil
 	}
-	for _, col := range table.Cols {
-		if isFunctionalColumn(col) && col.Name == index.Parts[0] && col.Name == functionalColumnName(index.IndexName) {
+	for ordinal := range index.Parts {
+		if col := functionalIndexPartColumn(table, index, ordinal); col != nil {
 			return col
 		}
 	}
 	return nil
+}
+
+func functionalIndexPartColumn(table *TableDef, index *pb.IndexDef, ordinal int) *ColDef {
+	if table == nil || index == nil || ordinal < 0 || ordinal >= len(index.Parts) || catalog.IsAlias(index.Parts[ordinal]) {
+		return nil
+	}
+	name := index.Parts[ordinal]
+	for _, col := range table.Cols {
+		if isFunctionalColumn(col) && col.Name == name && name == functionalColumnName(index.IndexName, ordinal) {
+			return col
+		}
+	}
+	return nil
+}
+
+func functionalIndexColumns(table *TableDef, index *pb.IndexDef) []*ColDef {
+	if table == nil || index == nil {
+		return nil
+	}
+	var cols []*ColDef
+	for i := range index.Parts {
+		if col := functionalIndexPartColumn(table, index, i); col != nil {
+			cols = append(cols, col)
+		}
+	}
+	return cols
 }
 
 // functionalExpressionEligible deliberately does not equate foldability with
@@ -141,7 +173,7 @@ func functionalTextType(typ Type) bool {
 	return typ.Id == int32(types.T_varchar) || typ.Id == int32(types.T_char)
 }
 
-// lowerFunctionalIndex appends one index-owned generated value. Ordinary
+// lowerFunctionalIndex lowers each expression to an index-owned generated value. Ordinary
 // generated-column writes and secondary-index maintenance then share exactly
 // the same row expression for backfill and future DML.
 func lowerFunctionalIndex(ctx CompilerContext, table *TableDef, index *tree.Index) (*tree.Index, error) {
@@ -152,9 +184,9 @@ func lowerFunctionalIndex(ctx CompilerContext, table *TableDef, index *tree.Inde
 		return nil, moerr.NewNotSupported(ctx.GetContext(), "functional indexes require ordinary persistent tables")
 	}
 	fail := func() (*tree.Index, error) {
-		return nil, moerr.NewNotSupported(ctx.GetContext(), "functional indexes require a named, single expression ordinary non-unique BTREE index")
+		return nil, moerr.NewNotSupported(ctx.GetContext(), "functional indexes require a named ordinary non-unique BTREE index")
 	}
-	if len(index.KeyParts) != 1 || index.Name == "" ||
+	if index.Name == "" ||
 		(index.KeyType != tree.INDEX_TYPE_INVALID && index.KeyType != tree.INDEX_TYPE_BTREE) {
 		return fail()
 	}
@@ -164,52 +196,65 @@ func lowerFunctionalIndex(ctx CompilerContext, table *TableDef, index *tree.Inde
 			return fail()
 		}
 	}
-	key := index.KeyParts[0]
-	if key.Expr == nil || key.ColName != nil || key.Length != 0 || key.Direction != tree.DefaultDirection {
-		return fail()
+	for _, key := range index.KeyParts {
+		if key == nil || key.Length != 0 || key.Direction != tree.DefaultDirection || (key.Expr != nil && key.ColName != nil) {
+			return fail()
+		}
 	}
 	if err := RequirePersistedProtocolVersionForAuthoring(ctx.GetContext(), ctx.GetProcess(), defines.MORPCVersion101); err != nil {
 		return nil, err
 	}
 	names := make([]string, len(table.Cols))
 	typs := make([]Type, len(table.Cols))
-	name := functionalColumnName(index.Name)
 	for i, col := range table.Cols {
-		if col.Name == name {
-			return nil, moerr.NewInvalidInput(ctx.GetContext(), "functional index backing column already exists")
-		}
 		names[i], typs[i] = col.Name, col.Typ
 	}
-	bindCtx := ddlExpressionContext(ctx, ctx.GetContext())
-	expr, err := NewGeneratedColBinder(bindCtx, names, typs).bindPersistedExpr(key.Expr, 0, false)
-	if err != nil {
-		return nil, err
-	}
-	if !functionalExpressionEligible(expr, table.Cols, make(map[int32]bool)) {
-		return nil, moerr.NewNotSupported(ctx.GetContext(), "functional index expression must have session-independent semantics")
-	}
-	if err := preservePersistedFormatCompatibility(bindCtx, expr); err != nil {
-		return nil, err
-	}
-	if err := checkExprForVolatileFunc(bindCtx, expr); err != nil {
-		return nil, err
-	}
-	if err := checkGeneratedExprReferences(bindCtx, expr, name, table.Cols, make(map[int32]bool)); err != nil {
-		return nil, err
-	}
-	if !types.T(expr.Typ.Id).IsInteger() && !functionalTextType(expr.Typ) {
-		return nil, moerr.NewNotSupported(ctx.GetContext(), "functional index result type")
-	}
-	col := &ColDef{Name: name, OriginName: name, Hidden: true, Typ: expr.Typ,
-		Alg: pb.CompressType_Lz4, Default: &pb.Default{NullAbility: true},
-		GeneratedCol: &pb.GeneratedCol{Expr: expr, OriginString: tree.StringWithOpts(key.Expr, dialect.MYSQL, tree.WithQuoteIdentifier()), IsStored: false}}
-	replacement := &tree.KeyPart{ColName: tree.NewUnresolvedColName(name)}
-	if err := checkIndexColumnSupportability(ctx.GetContext(), col, replacement, "index"); err != nil {
-		return nil, err
-	}
-	table.Cols = append(table.Cols, col)
 	copy := *index
-	copy.KeyParts = []*tree.KeyPart{replacement}
+	copy.KeyParts = append([]*tree.KeyPart(nil), index.KeyParts...)
+	// Bind every expression against the original user schema, not siblings
+	// appended by this index. Publish columns only after all parts validate.
+	added := make([]*ColDef, 0, len(index.KeyParts))
+	for ordinal, key := range index.KeyParts {
+		if key.Expr == nil {
+			continue
+		}
+		name := functionalColumnName(index.Name, ordinal)
+		for _, col := range table.Cols {
+			if col.Name == name {
+				return nil, moerr.NewInvalidInput(ctx.GetContext(), "functional index backing column already exists")
+			}
+		}
+		bindCtx := ddlExpressionContext(ctx, ctx.GetContext())
+		expr, err := NewGeneratedColBinder(bindCtx, names, typs).bindPersistedExpr(key.Expr, 0, false)
+		if err != nil {
+			return nil, err
+		}
+		if !functionalExpressionEligible(expr, table.Cols, make(map[int32]bool)) {
+			return nil, moerr.NewNotSupported(ctx.GetContext(), "functional index expression must have session-independent semantics")
+		}
+		if err := preservePersistedFormatCompatibility(bindCtx, expr); err != nil {
+			return nil, err
+		}
+		if err := checkExprForVolatileFunc(bindCtx, expr); err != nil {
+			return nil, err
+		}
+		if err := checkGeneratedExprReferences(bindCtx, expr, name, table.Cols, make(map[int32]bool)); err != nil {
+			return nil, err
+		}
+		if !types.T(expr.Typ.Id).IsInteger() && !functionalTextType(expr.Typ) {
+			return nil, moerr.NewNotSupported(ctx.GetContext(), "functional index result type")
+		}
+		col := &ColDef{Name: name, OriginName: name, Hidden: true, Typ: expr.Typ,
+			Alg: pb.CompressType_Lz4, Default: &pb.Default{NullAbility: true},
+			GeneratedCol: &pb.GeneratedCol{Expr: expr, OriginString: tree.StringWithOpts(key.Expr, dialect.MYSQL, tree.WithQuoteIdentifier()), IsStored: false}}
+		replacement := &tree.KeyPart{ColName: tree.NewUnresolvedColName(name)}
+		if err := checkIndexColumnSupportability(ctx.GetContext(), col, replacement, "index"); err != nil {
+			return nil, err
+		}
+		added = append(added, col)
+		copy.KeyParts[ordinal] = replacement
+	}
+	table.Cols = append(table.Cols, added...)
 	return &copy, nil
 }
 
@@ -226,19 +271,21 @@ func validateFunctionalTable(ctx context.Context, table *TableDef) error {
 		if !functional {
 			continue
 		}
-		col := functionalIndexColumn(table, index)
-		if col == nil || index.Unique || !catalog.IsRegularIndexAlgo(index.IndexAlgo) || col.GeneratedCol.IsStored ||
-			col.GeneratedCol.Expr == nil || col.GeneratedCol.OriginString == "" ||
-			!sameFunctionalValueType(col.Typ, col.GeneratedCol.Expr.Typ) ||
-			!functionalExpressionEligible(col.GeneratedCol.Expr, table.Cols, make(map[int32]bool)) {
+		if index.Unique || !catalog.IsRegularIndexAlgo(index.IndexAlgo) {
 			return moerr.NewInvalidInput(ctx, "invalid functional index metadata")
 		}
-		for _, part := range index.Parts[1:] {
-			if !catalog.IsAlias(part) {
-				return moerr.NewInvalidInput(ctx, "invalid functional index key parts")
+		for ordinal, part := range index.Parts {
+			if !strings.HasPrefix(catalog.ResolveAlias(part), functionalColumnPrefix) {
+				continue
 			}
+			col := functionalIndexPartColumn(table, index, ordinal)
+			if col == nil || col.GeneratedCol.IsStored || col.GeneratedCol.Expr == nil || col.GeneratedCol.OriginString == "" ||
+				!sameFunctionalValueType(col.Typ, col.GeneratedCol.Expr.Typ) ||
+				!functionalExpressionEligible(col.GeneratedCol.Expr, table.Cols, make(map[int32]bool)) {
+				return moerr.NewInvalidInput(ctx, "invalid functional index metadata")
+			}
+			owners[col.Name]++
 		}
-		owners[col.Name]++
 	}
 	for _, col := range table.Cols {
 		if strings.HasPrefix(col.Name, functionalColumnPrefix) && (!isFunctionalColumn(col) || owners[col.Name] != 1) {
@@ -263,37 +310,38 @@ func (builder *QueryBuilder) addFunctionalIndexFilters(node *pb.Node) {
 	}
 	originals := append([]*Expr(nil), node.FilterList...)
 	for _, index := range node.TableDef.Indexes {
-		col := functionalIndexColumn(node.TableDef, index)
-		if col == nil || !functionalExpressionEligible(col.GeneratedCol.Expr, node.TableDef.Cols, make(map[int32]bool)) {
-			continue
-		}
-		var pos int32 = -1
-		for i, c := range node.TableDef.Cols {
-			if c.Name == col.Name {
-				pos = int32(i)
-			}
-		}
-		for _, filter := range originals {
-			f := filter.GetF()
-			if f == nil || f.Func.ObjName != "=" || len(f.Args) != 2 {
+		for _, col := range functionalIndexColumns(node.TableDef, index) {
+			if col == nil || !functionalExpressionEligible(col.GeneratedCol.Expr, node.TableDef.Cols, make(map[int32]bool)) {
 				continue
 			}
-			for side := 0; side < 2; side++ {
-				constant := f.Args[1-side]
-				if constant.GetLit() == nil || constant.GetLit().Isnull {
+			var pos int32 = -1
+			for i, c := range node.TableDef.Cols {
+				if c.Name == col.Name {
+					pos = int32(i)
+				}
+			}
+			for _, filter := range originals {
+				f := filter.GetF()
+				if f == nil || f.Func.ObjName != "=" || len(f.Args) != 2 {
 					continue
 				}
-				candidate := DeepCopyExpr(f.Args[side])
-				persisted := DeepCopyExpr(col.GeneratedCol.Expr)
-				if !normalizeFunctionalExpression(candidate, node.BindingTags[0]) || !normalizeFunctionalExpression(persisted, 0) ||
-					!functionalExpressionEligible(candidate, node.TableDef.Cols, make(map[int32]bool)) || !proto.Equal(candidate, persisted) {
-					continue
-				}
-				ref := &Expr{Typ: col.Typ, Expr: &pb.Expr_Col{Col: &pb.ColRef{RelPos: node.BindingTags[0], ColPos: pos}}}
-				equality, err := BindFuncExprImplByPlanExpr(builder.GetContext(), "=", []*Expr{ref, DeepCopyExpr(constant)})
-				if err == nil {
-					equality.Selectivity = filter.Selectivity
-					node.FilterList = append(node.FilterList, equality)
+				for side := 0; side < 2; side++ {
+					constant := f.Args[1-side]
+					if constant.GetLit() == nil || constant.GetLit().Isnull {
+						continue
+					}
+					candidate := DeepCopyExpr(f.Args[side])
+					persisted := DeepCopyExpr(col.GeneratedCol.Expr)
+					if !normalizeFunctionalExpression(candidate, node.BindingTags[0]) || !normalizeFunctionalExpression(persisted, 0) ||
+						!functionalExpressionEligible(candidate, node.TableDef.Cols, make(map[int32]bool)) || !proto.Equal(candidate, persisted) {
+						continue
+					}
+					ref := &Expr{Typ: col.Typ, Expr: &pb.Expr_Col{Col: &pb.ColRef{RelPos: node.BindingTags[0], ColPos: pos}}}
+					equality, err := BindFuncExprImplByPlanExpr(builder.GetContext(), "=", []*Expr{ref, DeepCopyExpr(constant)})
+					if err == nil {
+						equality.Selectivity = filter.Selectivity
+						node.FilterList = append(node.FilterList, equality)
+					}
 				}
 			}
 		}

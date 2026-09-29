@@ -87,7 +87,7 @@ func TestFunctionalIndexDDL(t *testing.T) {
 		"create table fi (id int, index bad ((rand())))",
 		"create table fi (ts timestamp, index bad ((cast(ts as char(19)))))",
 		"create table fi (name varchar(40), unique index bad ((lower(name))))",
-		"create table fi (name varchar(40), index bad ((lower(name)), name))",
+		"create table fi (name varchar(40), index bad ((lower(name)), (rand())))",
 		"create table fi (name varchar(40), index bad ((lower(name)) desc))",
 		"create table fi (name varchar(40), index bad ((lower(name))) include(name))",
 		"create table fi (id int auto_increment primary key, index bad ((id+1)))",
@@ -110,4 +110,56 @@ func TestFunctionalIndexDDL(t *testing.T) {
 	rt.SetGlobalVariables(runtime.MOProtocolVersion, defines.MORPCVersion100)
 	_, err = build("create table fi (id int, index idx ((id + 1)))")
 	require.Error(t, err)
+}
+
+func TestFunctionalCompositeIndexDDL(t *testing.T) {
+	ctx := NewMockCompilerContext(false)
+	rt := runtime.ServiceRuntime(ctx.GetProcess().GetService())
+	old, _ := rt.GetGlobalVariables(runtime.MOProtocolVersion)
+	rt.SetGlobalVariables(runtime.MOProtocolVersion, defines.MORPCVersion101)
+	t.Cleanup(func() { rt.SetGlobalVariables(runtime.MOProtocolVersion, old) })
+	build := func(sql string) (*Plan, error) {
+		stmt, err := parsers.ParseOne(t.Context(), dialect.MYSQL, sql, 1)
+		require.NoError(t, err)
+		defer stmt.Free()
+		return BuildPlan(ctx, stmt, false)
+	}
+	for _, parts := range []string{
+		"(lower(name)), (id+1)", "id, (lower(name))", "(lower(name)), id",
+		"(lower(name)), (lower(name))", "id, (lower(name)), (upper(name))",
+	} {
+		t.Run(parts, func(t *testing.T) {
+			p, err := build("create table fi (id int primary key, name varchar(40), index ix (" + parts + "))")
+			require.NoError(t, err)
+			table := p.GetDdl().GetCreateTable().TableDef
+			ctx.tables["fi"] = table
+			ctx.objects["fi"] = &ObjectRef{ObjName: "fi", SchemaName: "tpch"}
+			for _, it := range p.GetDdl().GetCreateTable().IndexTables {
+				ctx.tables[it.Name] = it
+				ctx.objects[it.Name] = &ObjectRef{ObjName: it.Name, SchemaName: "tpch"}
+			}
+			require.NoError(t, validateFunctionalTable(t.Context(), table))
+			cols := functionalIndexColumns(table, table.Indexes[0])
+			require.NotEmpty(t, cols)
+			seen := map[string]bool{}
+			for _, col := range cols {
+				require.False(t, seen[col.Name])
+				seen[col.Name] = true
+			}
+			ddl, _, err := ConstructCreateTableSQL(ctx, table, nil, false, nil)
+			require.NoError(t, err)
+			require.NotContains(t, ddl, functionalColumnPrefix)
+			rebuilt, err := build(ddl)
+			require.NoError(t, err)
+			require.Len(t, functionalIndexColumns(rebuilt.GetDdl().GetCreateTable().TableDef, rebuilt.GetDdl().GetCreateTable().TableDef.Indexes[0]), len(cols))
+			bad := DeepCopyTableDef(table, true)
+			bad.Indexes[0].Parts[0], bad.Indexes[0].Parts[1] = bad.Indexes[0].Parts[1], bad.Indexes[0].Parts[0]
+			require.Error(t, validateFunctionalTable(t.Context(), bad), "backing ownership includes key position")
+			if len(cols) > 1 {
+				bad = DeepCopyTableDef(table, true)
+				functionalIndexColumns(bad, bad.Indexes[0])[1].Typ.Width++
+				require.Error(t, validateFunctionalTable(t.Context(), bad), "validate later expression parts too")
+			}
+		})
+	}
 }

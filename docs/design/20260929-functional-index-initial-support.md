@@ -17,20 +17,25 @@ ALTER TABLE users ADD INDEX name_upper ((upper(name)));
 DROP INDEX name_upper ON users;
 ```
 
-The first increment supports named, single-expression, non-unique ordinary
+The first increment supports named, non-unique ordinary
 BTREE indexes on persistent ordinary tables. The expression allowlist is
 deliberately small: integer `+`, `-`, `*`, `abs`, text `lower`/`upper`, identity
 casts and same-signedness integer widening. Generated-column dependencies must
 pass the same eligibility check recursively. Result types are integers or
 CHAR/VARCHAR. Volatile, temporal/session-dependent, JSON extraction/conversion,
 aggregate, parameter and subquery expressions are not enabled by this change.
-Unique/composite functional keys, directions, prefixes, INCLUDE columns and
+Multiple expressions and mixtures of ordinary columns and expressions are
+supported in key order, including repeated expressions. Ordinary columns keep
+their direct references; only expression parts acquire hidden generated values.
+Unique functional keys, directions, prefixes, INCLUDE columns and
 special index algorithms are unsupported.
 
 ## Ownership and execution
 
-Each functional index owns one hidden virtual generated column named from the
-normalized index name's SHA-256 prefix. Its value is materialized using existing
+Each expression part owns a hidden virtual generated column named from the
+normalized index name's SHA-256 prefix and its zero-based key ordinal. Position
+zero retains the earlier single-expression name; later positions append the
+ordinal. Hidden values are not shared across parts or indexes. Each value is materialized using existing
 generated-column DML machinery; ordinary secondary-index maintenance owns the
 physical index. Explicit INSERT/UPDATE assignments to the reserved internal
 name are rejected, including DEFAULT. SELECT-star and public column metadata
@@ -70,6 +75,13 @@ integration regression covers writes, rollback, prepared insertion, backfill,
 column reorder/type change, SQL mode changes, LIKE cloning, metadata and DROP
 cleanup. Checkpoint tests cover expression rendering and missing-metadata
 rejection; upgrade tests cover version metadata and error propagation.
+
+Composite regressions cover multiple expressions, ordinary-column-first and
+expression-first keys, repeated expressions, index/full-scan agreement, NULL,
+updates and rollback, backfill, COPY type/reorder changes, LIKE cloning and
+removal of every owned hidden column. Checkpoint expression maps are keyed by
+backing column and deep-copied; replay preserves per-key order and rejects any
+missing expression. Both legacy single-expression and new multi-part tests run.
 
 Issue #29300 does not contain the exact failing InvenTree index expression.
 This change therefore supplies the supported functional-index foundation but

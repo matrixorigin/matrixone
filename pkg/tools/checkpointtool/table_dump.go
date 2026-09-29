@@ -22,6 +22,7 @@ import (
 	"errors"
 	"fmt"
 	"io"
+	"maps"
 	"os"
 	"runtime"
 	"sort"
@@ -127,13 +128,13 @@ type TableColumn struct {
 }
 
 type TableUniqueKey struct {
-	Expression string // original expression for a single functional key part
-	Name       string
-	Columns    []string
-	Unique     bool
-	Algo       string
-	AlgoParams string
-	Comment    string
+	Expressions map[string]string // backing column name to original functional key expression
+	Name        string
+	Columns     []string
+	Unique      bool
+	Algo        string
+	AlgoParams  string
+	Comment     string
 }
 
 type TableForeignKey struct {
@@ -247,15 +248,15 @@ type indexDDLColumn struct {
 }
 
 type indexDDLInfo struct {
-	expression string
-	name       string
-	indexType  string
-	algo       string
-	algoParams string
-	comment    string
-	columns    map[string]indexDDLColumn
-	order      int
-	catalogID  uint64
+	expressions map[string]string
+	name        string
+	indexType   string
+	algo        string
+	algoParams  string
+	comment     string
+	columns     map[string]indexDDLColumn
+	order       int
+	catalogID   uint64
 }
 
 type CSVExportOption func(*CSVExportOptions)
@@ -530,7 +531,7 @@ func renderCreateTableDDLFullWithForeignKeysAndClusterBy(tableName string, cols 
 	}
 	for i, key := range uniqueKeys {
 		for _, part := range key.Columns {
-			if strings.HasPrefix(part, "__mo_fi_") && key.Expression == "" {
+			if strings.HasPrefix(part, "__mo_fi_") && key.Expressions[part] == "" {
 				return "" // Never restore a reference to an absent hidden column.
 			}
 		}
@@ -562,8 +563,8 @@ func renderCreateTableDDLFullWithForeignKeysAndClusterBy(tableName string, cols 
 			if i > 0 {
 				sb.WriteString(", ")
 			}
-			if key.Expression != "" {
-				sb.WriteString("(" + key.Expression + ")")
+			if expression := key.Expressions[col]; expression != "" {
+				sb.WriteString("(" + expression + ")")
 			} else {
 				sb.WriteString(quoteDDLIdent(col))
 			}
@@ -817,13 +818,13 @@ func normalizedUniqueKeys(keys []TableUniqueKey) []TableUniqueKey {
 		}
 		seen[signature] = struct{}{}
 		out = append(out, TableUniqueKey{
-			Expression: key.Expression,
-			Name:       name,
-			Columns:    cols,
-			Unique:     key.Unique,
-			Algo:       strings.TrimSpace(key.Algo),
-			AlgoParams: strings.TrimSpace(key.AlgoParams),
-			Comment:    strings.TrimSpace(key.Comment),
+			Expressions: maps.Clone(key.Expressions),
+			Name:        name,
+			Columns:     cols,
+			Unique:      key.Unique,
+			Algo:        strings.TrimSpace(key.Algo),
+			AlgoParams:  strings.TrimSpace(key.AlgoParams),
+			Comment:     strings.TrimSpace(key.Comment),
 		})
 	}
 	return out
@@ -1187,8 +1188,15 @@ func attachFunctionalIndexExpressions(schema *TableSchema, view *LogicalTableVie
 		}
 		for i := range schema.UniqueKeys {
 			key := &schema.UniqueKeys[i]
-			if !key.Unique && len(key.Columns) == 1 && key.Columns[0] == row[namePos] {
-				key.Expression = expression
+			if !key.Unique {
+				for _, part := range key.Columns {
+					if part == row[namePos] {
+						if key.Expressions == nil {
+							key.Expressions = make(map[string]string)
+						}
+						key.Expressions[part] = expression
+					}
+				}
 			}
 		}
 	}
@@ -1674,7 +1682,7 @@ func cloneTableSchema(schema *TableSchema) *TableSchema {
 	if len(schema.UniqueKeys) > 0 {
 		clone.UniqueKeys = make([]TableUniqueKey, len(schema.UniqueKeys))
 		for i, key := range schema.UniqueKeys {
-			clone.UniqueKeys[i].Expression = strings.Clone(key.Expression)
+			clone.UniqueKeys[i].Expressions = maps.Clone(key.Expressions)
 			clone.UniqueKeys[i].Name = strings.Clone(key.Name)
 			clone.UniqueKeys[i].Unique = key.Unique
 			clone.UniqueKeys[i].Algo = strings.Clone(key.Algo)
@@ -4574,12 +4582,15 @@ func buildCreateIndexStatementsFromMoIndexes(
 					continue
 				}
 				for _, key := range schema.UniqueKeys {
-					if key.Name == name && len(key.Columns) == 1 && key.Columns[0] == column {
-						info.expression = key.Expression
+					if key.Name == name {
+						if info.expressions == nil {
+							info.expressions = make(map[string]string)
+						}
+						info.expressions[column] = key.Expressions[column]
 					}
 				}
 			}
-			if info.expression == "" || len(info.columns) != 1 || strings.EqualFold(info.indexType, "UNIQUE") {
+			if info.expressions[column] == "" || strings.EqualFold(info.indexType, "UNIQUE") {
 				return nil, moerr.NewInternalErrorNoCtxf("invalid functional index metadata for %s.%s", tableName, name)
 			}
 		}
@@ -4964,8 +4975,8 @@ func renderCreateIndexStatement(tableName string, info *indexDDLInfo) (string, e
 		if i > 0 {
 			sb.WriteString(", ")
 		}
-		if info.expression != "" {
-			sb.WriteString("(" + info.expression + ")")
+		if expression := info.expressions[col.name]; expression != "" {
+			sb.WriteString("(" + expression + ")")
 		} else {
 			sb.WriteString(quoteDDLIdent(col.name))
 		}

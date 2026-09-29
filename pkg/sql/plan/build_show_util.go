@@ -390,7 +390,7 @@ func constructCreateTableSQL(
 				indexStr += "("
 				rewriteIndexStr += "("
 				i := 0
-				for _, part := range indexdef.Parts {
+				for ordinal, part := range indexdef.Parts {
 					if catalog.IsAlias(part) {
 						continue
 					}
@@ -399,7 +399,7 @@ func constructCreateTableSQL(
 						rewriteIndexStr += ","
 					}
 
-					if col := functionalIndexColumn(tableDef, indexdef); col != nil && part == col.Name {
+					if col := functionalIndexPartColumn(tableDef, indexdef, ordinal); col != nil {
 						if err := validateFunctionalTable(ctx.GetContext(), tableDef); err != nil {
 							return "", nil, err
 						}
