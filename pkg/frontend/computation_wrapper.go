@@ -1954,7 +1954,10 @@ func initExecuteStmtParamWithResolverInSession(
 	if prepareStmt.joinDiagnosticCandidatePlan != executionPlan {
 		prepareStmt.joinDiagnosticCandidatePlan = executionPlan
 		prepareStmt.joinDiagnosticCandidates = plan2.PreparedPlanDiagnosticCandidates(executionPlan)
-		prepareStmt.joinDiagnosticCandidate = len(prepareStmt.joinDiagnosticCandidates) != 0
+		// Prepared EXPLAIN keeps its value-driven binding path. Its display
+		// plan can contain ParamRefs outside the inner statement's bindings;
+		// do not run execution diagnostic probes on that plan.
+		prepareStmt.joinDiagnosticCandidate = len(prepareStmt.joinDiagnosticCandidates) != 0 && !preparedExplain
 		prepareStmt.joinDiagnosticNeedsTemplate =
 			prepareStmt.joinDiagnosticCandidate && plan2.PreparedPlanDiagnosticNeedsTemplate(executionPlan)
 		prepareStmt.diagnosticSafePlan = nil

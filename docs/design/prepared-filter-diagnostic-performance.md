@@ -286,4 +286,6 @@ rebase 后的交付二进制 SHA256 为 `d3fd1d269ad7e6d20cde859811814ad7ffb56d4
 
 最终二进制还在新建同进程双 CN 集群上执行新增 BVT，CN1/CN2 各连续两次均为 51/51，通过且无忽略。真实 JDBC `useServerPrepStmts=true` 的同一二进制 prepared handle 在两个 CN 上分别执行 safe→invalid→NULL→safe，行集合依次为 `[two]`、`[three,two]`、`[]`、`[three]`，warning 数依次为 0、4、2、0；两端一致。该结果覆盖实际参数解码与复合键表达式路径；仍只代表本地同进程双 CN 拓扑。
 
+首次 PR CI 又揭示一个 EXPLAIN 边界：`TestIssue26859BinaryPreparedExplain` 与 `vector_ivf_prepare_dist_range.sql` 的 prepared EXPLAIN 都在新增诊断探测中访问不存在的第二个绑定（`index 1 not exists`）；后者是该组 79,776 条 BVT 中唯一失败的语句，新增 issue BVT 本身为 51/51。EXPLAIN 保持原有按当前值生成展示计划的路径，不对展示计划应用查询执行的诊断候选探测。定向 UT 已在本地复现原错误并在该边界修订后通过；修订后二进制 SHA256 `6b5c258bbb6309097823fb6bc65f6549479f9288999942803d665fa17ae8084c` 在全新双 CN 上分别运行向量 BVT（各 64/64）和 issue BVT（各 51/51）均通过。前述性能压测使用 EXPLAIN 修订前的二进制；该修订只排除 prepared EXPLAIN 的诊断候选，不改变 TPCC 事务查询路径。全套 CI 需随修订提交重新运行。
+
 本地证据目录：`/mnt/nvme/issue-29429-perf`，包括两版快照、二进制、BVT 日志、单独的 60 秒 profile、`paired-final` 未同步轮次和 `paired-synced` 同步轮次的脚本及输出；早期非 NVMe 探索保存在 `/home/xupeng/issue-29429-exact`、`/home/xupeng/issue-29429-main-bench`。
