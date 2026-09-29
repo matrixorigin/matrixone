@@ -14,6 +14,17 @@ explain select id from items order by l2_distance(v, (select v from items ref wh
 explain select id from items order by l2_distance(v, (select v from items ref where ref.id='b')) limit 2;
 select id from items order by l2_distance(v, (select v from items ref where ref.id='b')) limit 2;
 select id from items order by l2_distance(v, (select v from items ref where ref.id='b')) limit 1 offset 1;
+-- Outer pagination remains above the inner Top-K and its lazy selector.
+select * from (select id from items order by l2_distance(v, (select v from items ref where ref.id='b')) limit 2) t limit 0;
+select * from (select id from items order by l2_distance(v, (select v from items ref where ref.id='b')) limit 2) t limit 5 offset 1;
+select count(*) from (select * from (select id from items order by l2_distance(v, (select v from items ref where ref.id='absent')) limit 2) t limit 0) s;
+prepare nested_scalar from 'select * from (select id from items order by l2_distance(v, (select v from items ref where ref.id=?)) limit 2) t limit ? offset 1';
+set @id='b';
+set @k=0;
+execute nested_scalar using @id, @k;
+set @k=5;
+execute nested_scalar using @id, @k;
+deallocate prepare nested_scalar;
 -- An empty scalar returns NULL, not an empty outer relation.
 -- @separator:table
 -- @regex("Scalar Vector Query", true)
@@ -63,6 +74,16 @@ explain select id from items order by l2_distance(v, (select v from items ref wh
 select id from items order by l2_distance(v, (select v from items ref where ref.id=2)) limit 2;
 select id from items where id=1 order by l2_distance(v, (select v from items ref where ref.id=99)) limit 2;
 select count(*) from (select id from items order by l2_distance(v, (select v from items ref where ref.id=99)) limit 2) s;
+-- Outer zero demand must not compile either result branch without its reader.
+select * from (select id from items order by l2_distance(v, (select v from items ref where ref.id=2)) limit 2) t limit 0;
+select * from (select id from items order by l2_distance(v, (select v from items ref where ref.id=2)) limit 2) t limit 5 offset 1;
+prepare nested_hnsw from 'select * from (select id from items order by l2_distance(v, (select v from items ref where ref.id=?)) limit 2) t limit ? offset 1';
+set @id=2;
+set @k=0;
+execute nested_hnsw using @id, @k;
+set @k=5;
+execute nested_hnsw using @id, @k;
+deallocate prepare nested_hnsw;
 -- HNSW output columns must not inherit the vector provider's input types at EXECUTE.
 create table query_vectors(id bigint primary key, v vecf32(3));
 insert into query_vectors values (1,'[1,0,0]'), (2,'[3,0,0]'), (3,null);

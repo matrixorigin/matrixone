@@ -16,11 +16,14 @@ package plan
 
 import (
 	"context"
+	"fmt"
 	"testing"
 
+	"github.com/matrixorigin/matrixone/pkg/container/batch"
 	"github.com/matrixorigin/matrixone/pkg/container/types"
 	"github.com/matrixorigin/matrixone/pkg/pb/plan"
 	"github.com/matrixorigin/matrixone/pkg/sql/parsers/dialect/mysql"
+	"github.com/matrixorigin/matrixone/pkg/testutil"
 	"github.com/stretchr/testify/require"
 )
 
@@ -133,6 +136,78 @@ func TestScalarVectorQueryIndexPublicPlan(t *testing.T) {
 		require.NoError(t, decoded.Unmarshal(wire))
 		require.Equal(t, root.VectorQuerySourceId, decoded.Nodes[decoded.Steps[0]].VectorQuerySourceId)
 	})
+}
+
+func TestScalarVectorQueryNestedPagination(t *testing.T) {
+	for _, hnsw := range []bool{false, true} {
+		key := "'ref'"
+		if hnsw {
+			key = "1"
+		}
+		for _, tc := range []struct {
+			pagination    string
+			limit, offset uint64
+		}{
+			{"limit 0", 0, 0},
+			{"limit 1 offset 1", 1, 1},
+			{"limit 5 offset 1", 5, 1},
+		} {
+			t.Run(fmt.Sprintf("hnsw=%t/%s", hnsw, tc.pagination), func(t *testing.T) {
+				q := scalarVectorPlanFixtureForIndex(t, `select t.id from (select id from scalar_vector_items
+					order by l2_distance(v,(select v from scalar_vector_provider where id=`+key+`)) limit 2) t `+tc.pagination, hnsw)
+				root := q.Nodes[q.Steps[0]]
+				require.Equal(t, plan.Node_PROJECT, root.NodeType, "outer demand must stay outside the selector")
+				require.NotNil(t, root.Limit)
+				require.Equal(t, tc.limit, root.Limit.GetLit().GetU64Val())
+				require.Equal(t, tc.offset, root.Offset.GetLit().GetU64Val())
+				selector := q.Nodes[root.Children[0]]
+				require.Equal(t, plan.Node_VECTOR_QUERY_TOP, selector.NodeType)
+				require.Equal(t, uint64(2), selector.Limit.GetLit().GetU64Val())
+				for _, id := range selector.Children[1:] {
+					require.Nil(t, q.Nodes[id].Limit, "outer pagination must not be copied into a result branch")
+					require.Nil(t, q.Nodes[id].Offset)
+				}
+			})
+		}
+	}
+}
+
+func TestScalarVectorQueryNestedPreparedPagination(t *testing.T) {
+	for _, hnsw := range []bool{false, true} {
+		t.Run(fmt.Sprintf("hnsw=%t", hnsw), func(t *testing.T) {
+			q := scalarVectorPlanFixtureForIndex(t, `prepare p from 'select t.id from (select id from scalar_vector_items
+				order by l2_distance(v,(select v from scalar_vector_provider where id=?)) limit 2) t limit ? offset ?'`, hnsw)
+			p := &plan.Plan{Plan: &plan.Plan_Query{Query: q}}
+			var key any = "ref"
+			if hnsw {
+				key = int64(1)
+			}
+			for _, limit := range []uint64{0, 1, 5, 0} {
+				filled, _, err := FillValuesOfParamsInPlanWithSpecialization(context.Background(), p, []any{key, limit, uint64(1)})
+				require.NoError(t, err)
+				query := filled.GetQuery()
+				root := query.Nodes[query.Steps[0]]
+				require.Equal(t, plan.Node_PROJECT, root.NodeType)
+				proc := testutil.NewProcess(t)
+				for _, pagination := range []struct {
+					expr *plan.Expr
+					want uint64
+				}{{root.Limit, limit}, {root.Offset, 1}} {
+					folded, err := ConstantFold(batch.EmptyForConstFoldBatch, DeepCopyExpr(pagination.expr), proc, false, true)
+					require.NoError(t, err)
+					require.Equal(t, pagination.want, folded.GetLit().GetU64Val())
+				}
+				require.Equal(t, plan.Node_VECTOR_QUERY_TOP, query.Nodes[root.Children[0]].NodeType)
+				cols := GetResultColumnsFromPlan(filled)
+				require.Len(t, cols, 1)
+				wantType := types.T_varchar
+				if hnsw {
+					wantType = types.T_int64
+				}
+				require.Equal(t, int32(wantType), cols[0].Typ.Id)
+			}
+		})
+	}
 }
 
 func TestScalarVectorQueryHnswPreparedProvider(t *testing.T) {

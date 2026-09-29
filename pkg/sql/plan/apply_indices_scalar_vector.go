@@ -106,6 +106,10 @@ func (builder *QueryBuilder) applyScalarVectorIndex(nodeID int32) (int32, error)
 	if ann == nil {
 		return nodeID, nil
 	}
+	// PROJECT pagination belongs to the relation above the inner Top-K.
+	// Keep it outside the selector: copying LIMIT 0 into both branches would
+	// prune their source readers before the selector can be compiled.
+	ann.projNode.Limit, ann.projNode.Offset = nil, nil
 	sourceID := builder.genNewBindTag()
 	sourceTag := builder.genNewBindTag()
 	queryType := vctx.vecArgExpr.Typ
@@ -147,6 +151,7 @@ func (builder *QueryBuilder) applyScalarVectorIndex(nodeID int32) (int32, error)
 
 	exactRoot := builder.copyNode(ctx, nodeID)
 	exact, exactJoin := builder.scalarVectorContext(builder.qry.Nodes[exactRoot])
+	exact.projNode.Limit, exact.projNode.Offset = nil, nil
 	exactJoin.Children[1] = newSource()
 	replace(exactRoot)
 	builder.forceAdaptiveVectorRegion(exact)
@@ -157,11 +162,30 @@ func (builder *QueryBuilder) applyScalarVectorIndex(nodeID int32) (int32, error)
 		ProjectList: []*plan.Expr{DeepCopyExpr(vctx.vecArgExpr)}, BindingTags: []int32{providerTag},
 	}, ctx)
 	annNode := builder.qry.Nodes[annRoot]
-	return builder.appendNode(&plan.Node{
+	selector := &plan.Node{
 		NodeType: plan.Node_VECTOR_QUERY_TOP, VectorQuerySourceId: sourceID,
 		Children: []int32{provider, annRoot, exactRoot}, Limit: DeepCopyExpr(vctx.resultLimit),
 		ProjectList: DeepCopyExprList(annNode.ProjectList), BindingTags: append([]int32(nil), annNode.BindingTags...),
 		Stats: DeepCopyStats(annNode.Stats),
+	}
+	if original.Limit == nil && original.Offset == nil {
+		return builder.appendNode(selector, ctx), nil
+	}
+
+	selectorTag := builder.genNewBindTag()
+	selector.BindingTags = []int32{selectorTag}
+	selectorID := builder.appendNode(selector, ctx)
+	projection := make([]*plan.Expr, len(original.ProjectList))
+	for i, expr := range original.ProjectList {
+		projection[i] = &plan.Expr{Typ: expr.Typ, Expr: &plan.Expr_Col{Col: &plan.ColRef{
+			RelPos: selectorTag, ColPos: int32(i),
+		}}}
+	}
+	return builder.appendNode(&plan.Node{
+		NodeType: plan.Node_PROJECT, Children: []int32{selectorID},
+		ProjectList: projection, BindingTags: append([]int32(nil), original.BindingTags...),
+		Limit: DeepCopyExpr(original.Limit), Offset: DeepCopyExpr(original.Offset),
+		Stats: DeepCopyStats(original.Stats),
 	}, ctx), nil
 }
 

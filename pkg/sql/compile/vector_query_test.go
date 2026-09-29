@@ -67,6 +67,34 @@ func TestScalarVectorQueryCompileLocalSources(t *testing.T) {
 	require.ErrorContains(t, err, "duplicate")
 }
 
+func TestScalarVectorQueryOuterZeroDemand(t *testing.T) {
+	c := NewMockCompile(t)
+	defer c.proc.Free()
+	c.addr = "local:6001"
+	c.cnList = engine.Nodes{{Addr: c.addr, Mcpu: 1}}
+	q := &plan.Query{Nodes: []*plan.Node{
+		{NodeId: 0, NodeType: plan.Node_VALUE_SCAN, ProjectList: []*plan.Expr{plan2.MakePlan2Int64ConstExprWithType(1)}, Stats: plan2.DefaultStats()},
+		{NodeId: 1, NodeType: plan.Node_VECTOR_QUERY_SOURCE, VectorQuerySourceId: 7},
+		{NodeId: 2, NodeType: plan.Node_VECTOR_QUERY_SOURCE, VectorQuerySourceId: 7},
+		{NodeId: 3, NodeType: plan.Node_VECTOR_QUERY_TOP, VectorQuerySourceId: 7, Children: []int32{0, 1, 2}, Limit: plan2.MakePlan2Uint64ConstExprWithType(2)},
+		{NodeId: 4, NodeType: plan.Node_PROJECT, Children: []int32{3}, Limit: plan2.MakePlan2Uint64ConstExprWithType(0)},
+	}, Steps: []int32{4}}
+	c.anal = &AnalyzeModule{qry: q, isFirst: true}
+	c.pn = &plan.Plan{Plan: &plan.Plan_Query{Query: q}}
+	ss, err := c.compilePlanScope(0, 4, q.Nodes)
+	require.NoError(t, err)
+	defer func() {
+		for _, s := range ss {
+			s.FreeOperator(c)
+		}
+		ReleaseScopes(ss)
+	}()
+	require.Len(t, ss, 1)
+	require.Empty(t, ss[0].PreScopes, "zero outer demand must not construct any lazy branch")
+	require.Empty(t, c.materializedSources, "the pruned selector must not allocate a source")
+	require.Empty(t, c.materializedReaderIDs)
+}
+
 func TestScalarVectorQueryLazyScope(t *testing.T) {
 	for _, tc := range []struct {
 		name     string

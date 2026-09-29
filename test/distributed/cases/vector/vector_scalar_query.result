@@ -72,6 +72,24 @@ a
 select id from items order by l2_distance(v, (select v from items ref where ref.id='b')) limit 1 offset 1;
 ➤ id[12,32,0]  𝄀
 a
+select * from (select id from items order by l2_distance(v, (select v from items ref where ref.id='b')) limit 2) t limit 0;
+➤ id[12,32,0]
+select * from (select id from items order by l2_distance(v, (select v from items ref where ref.id='b')) limit 2) t limit 5 offset 1;
+➤ id[12,32,0]  𝄀
+a
+select count(*) from (select * from (select id from items order by l2_distance(v, (select v from items ref where ref.id='absent')) limit 2) t limit 0) s;
+➤ count(*)[-5,64,0]  𝄀
+0
+prepare nested_scalar from 'select * from (select id from items order by l2_distance(v, (select v from items ref where ref.id=?)) limit 2) t limit ? offset 1';
+set @id='b';
+set @k=0;
+execute nested_scalar using @id, @k;
+➤ id[12,32,0]
+set @k=5;
+execute nested_scalar using @id, @k;
+➤ id[12,32,0]  𝄀
+a
+deallocate prepare nested_scalar;
 explain select id from items where id='a' order by l2_distance(v, (select v from items ref where ref.id='absent')) limit 2;
 -- @regex("Scalar Vector Query", true)
 ➤ AP QUERY PLAN ON ONE CN(10 core)[12,-1,0]  𝄀
@@ -209,6 +227,21 @@ select id from items where id=1 order by l2_distance(v, (select v from items ref
 select count(*) from (select id from items order by l2_distance(v, (select v from items ref where ref.id=99)) limit 2) s;
 ➤ count(*)[-5,64,0]  𝄀
 2
+select * from (select id from items order by l2_distance(v, (select v from items ref where ref.id=2)) limit 2) t limit 0;
+➤ id[-5,64,0]
+select * from (select id from items order by l2_distance(v, (select v from items ref where ref.id=2)) limit 2) t limit 5 offset 1;
+➤ id[-5,64,0]  𝄀
+1
+prepare nested_hnsw from 'select * from (select id from items order by l2_distance(v, (select v from items ref where ref.id=?)) limit 2) t limit ? offset 1';
+set @id=2;
+set @k=0;
+execute nested_hnsw using @id, @k;
+➤ id[-5,64,0]
+set @k=5;
+execute nested_hnsw using @id, @k;
+➤ id[-5,64,0]  𝄀
+1
+deallocate prepare nested_hnsw;
 create table query_vectors(id bigint primary key, v vecf32(3));
 insert into query_vectors values (1,'[1,0,0]'), (2,'[3,0,0]'), (3,null);
 prepare scalar_hnsw from 'select id from items order by l2_distance(v, (select v from query_vectors where id=?)) limit ?';
