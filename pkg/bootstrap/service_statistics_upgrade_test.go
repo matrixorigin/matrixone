@@ -364,11 +364,11 @@ func TestMaybeUpgradeTenantDoesNotCacheUncommittedOrFailedChecks(t *testing.T) {
 		failUpgrade    bool
 		ownTxn         bool
 	}{
-		{name: "caller_owned_transaction", version: "4.0.10", ownTxn: true},
-		{name: "catalog_read_failure", version: "4.0.10", fail: true},
+		{name: "caller_owned_transaction", version: "4.0.11", ownTxn: true},
+		{name: "catalog_read_failure", version: "4.0.11", fail: true},
 		{name: "migration_failure", version: "4.0.9", failUpgrade: true},
-		{name: "newer_catalog_version", version: "4.0.11"},
-		{name: "different_cluster_version", version: "4.0.9", clusterVersion: "4.0.11"},
+		{name: "newer_catalog_version", version: "4.0.12"},
+		{name: "different_cluster_version", version: "4.0.9", clusterVersion: "4.0.12"},
 	} {
 		t.Run(test.name, func(t *testing.T) {
 			runtime.RunTest("", func(runtime.Runtime) {
@@ -384,7 +384,7 @@ func TestMaybeUpgradeTenantDoesNotCacheUncommittedOrFailedChecks(t *testing.T) {
 						}
 						return newBootstrapStringResult(test.version), nil
 					case strings.HasPrefix(sql, "select version, version_offset, state from mo_version"):
-						latest := v4_0_10.Handler.Metadata()
+						latest := v4_0_11.Handler.Metadata()
 						if test.clusterVersion != "" {
 							latest.Version = test.clusterVersion
 						}
@@ -403,7 +403,7 @@ func TestMaybeUpgradeTenantDoesNotCacheUncommittedOrFailedChecks(t *testing.T) {
 					if test.ownTxn {
 						txnOp = &testTxnOperator{}
 					}
-					fetch := func() (int32, string, error) { return 11, "4.0.10", nil }
+					fetch := func() (int32, string, error) { return 11, "4.0.11", nil }
 					upgraded, err := b.MaybeUpgradeTenant(t.Context(), fetch, txnOp)
 					if test.ownTxn {
 						require.NoError(t, err)
