@@ -42,15 +42,21 @@ func TestNormalizeStatementDigest(t *testing.T) {
 		{sql: "SELECT ROW('a,b', /* , */ 3)", max: 1024, want: "SELECT ROW (...)"},
 		{sql: "CREATE TABLE t (a INT NULL, b INT NOT NULL DEFAULT NULL, c INT DEFAULT 1 + NULL)", max: 1024, want: "CREATE TABLE `t` ( `a` INTEGER NULL , `b` INTEGER NOT NULL DEFAULT ? , `c` INTEGER DEFAULT ? + ? )"},
 		{sql: "SELECT /*!80000 SQL_NO_CACHE */ 1 /*!90000 + 2 */", max: 1024, want: "SELECT SQL_NO_CACHE ?"},
+		{sql: "SELECT /*!80000 '*/' */", max: 1024, want: "SELECT ?"},
+		{sql: "SELECT /*!80000 1 # ignored */\n + 2 */", max: 1024, want: "SELECT ? + ?"},
 		{sql: "SELECT /*!80000 */ /*+ MAX_EXECUTION_TIME(1000) */ 1", max: 1024, want: "SELECT ?"},
 		{sql: "SELECT CAST('x' AS NCHAR), 'a' SOUNDS LIKE 'b'", max: 1024, want: "SELECT CAST ( ? AS NCHAR ) , ? SOUNDS LIKE ?"},
+		{sql: "SELECT _utf8mb4 /* charset */ -- literal\n X'4142'", max: 1024, want: "SELECT (_charset) ?"},
 		{sql: "SELECT /*+ MAX_EXECUTION_TIME(1000) */ * FROM t WHERE id=1", max: 1024, want: "SELECT /*+ MAX_EXECUTION_TIME (?) */ * FROM `t` WHERE `id` = ?"},
+		{sql: "SELECT /*+ SET_VAR(max_execution_time=1.5) */ 1", max: 1024, want: "SELECT /*+ SET_VAR ( `max_execution_time` = ? ) */ ?"},
 		{sql: "SELECT /*+ QB_NAME(qb) INDEX(t@qb idx) SET_VAR(sort_buffer_size=16M) */ 1", max: 1024, want: "SELECT /*+ QB_NAME ( `qb` ) INDEX ( `t`@`qb` `idx` ) SET_VAR ( `sort_buffer_size` = ? ) */ ?"},
 		{sql: "SELECT /*+ QB_NAME(@qb) SET_VAR(sort_buffer_size=1G) */ 1", max: 1024, want: "SELECT /*+ QB_NAME ( @`qb` ) SET_VAR ( `sort_buffer_size` = ? ) */ ?"},
 		{sql: `SELECT /*+ QB_NAME("qb") */ 1`, mode: "ANSI_QUOTES", max: 1024, want: "SELECT /*+ QB_NAME ( `qb` ) */ ?"},
 		{sql: "SELECT CURRENT_DATE, CURRENT_TIME, CURRENT_TIMESTAMP", max: 1024, want: "SELECT CURDATE , CURTIME , NOW"},
 		{sql: "SELECT NULL, id IS NULL", max: 1024, want: "SELECT ? , `id` IS NULL"},
+		{sql: "SELECT a <=> NULL, a IS NOT NULL FROM t", max: 1024, want: "SELECT `a` <=> ? , `a` IS NOT NULL FROM `t`"},
 		{sql: "SELECT SESSION_USER, SESSION_USER()", max: 1024, want: "SELECT `SESSION_USER` , SYSTEM_USER ( )"},
+		{sql: "SELECT STD(a), VARIANCE(a) FROM t", max: 1024, want: "SELECT STDDEV_POP ( `a` ) , VAR_POP ( `a` ) FROM `t`"},
 		{sql: "SELECT 'a' REGEXP 'b'", max: 1024, want: "SELECT ? RLIKE ?"},
 		{sql: "SELECT '$tag$abc$tag$'", max: 1024, want: "SELECT ?"},
 		{sql: `SELECT "column" FROM t`, mode: "ANSI_QUOTES", max: 1024, want: "SELECT `column` FROM `t`"},
@@ -64,7 +70,7 @@ func TestNormalizeStatementDigest(t *testing.T) {
 }
 
 func TestNormalizeStatementDigestRejectsInvalidStatements(t *testing.T) {
-	for _, sql := range []string{"", "/* only a comment */", "SELECT ?", "SELECT 1; SELECT 2", "SELECT 'unterminated", "SELECT $tag$abc$tag$", "SELECT /* comment */ $tag$abc$tag$"} {
+	for _, sql := range []string{"", "/* only a comment */", "SELECT ?", "SELECT 1; SELECT 2", "SELECT 'unterminated", "SELECT /*!80000 'unterminated */", "SELECT /*!80000 1 # no newline */", "SELECT $tag$abc$tag$", "SELECT /* comment */ $tag$abc$tag$"} {
 		_, err := NormalizeStatementDigest(context.Background(), sql, "", 1024)
 		require.Error(t, err, sql)
 	}
