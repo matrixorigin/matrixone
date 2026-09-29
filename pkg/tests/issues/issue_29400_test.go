@@ -476,7 +476,7 @@ func TestIssue29400DropDatabaseRCReclaimFailureRollsBackWholeDatabase(t *testing
 		defer fault.Disable()
 	}
 	runAuthenticatedClusterTest(t, func(cluster embed.Cluster) {
-		ctx, cancel := context.WithTimeout(t.Context(), 2*time.Minute)
+		ctx, cancel := context.WithTimeout(t.Context(), 5*time.Minute)
 		defer cancel()
 		cn, err := cluster.GetCNService(0)
 		require.NoError(t, err)
@@ -498,11 +498,37 @@ func TestIssue29400DropDatabaseRCReclaimFailureRollsBackWholeDatabase(t *testing
 			"create database " + name,
 			"create table " + name + ".src (id int primary key)",
 			"data branch create table " + name + ".child from " + name + ".src",
-			"create table " + name + ".later (id bigint auto_increment primary key)",
-			"insert into " + name + ".later values (null)",
+			"set experimental_fulltext2_index=1",
+			"create table " + name + ".later (id bigint auto_increment primary key, body text, FULLTEXT2 ft_tail(body))",
+			"insert into " + name + ".later values (null, 'beforemarker')",
 			"create table " + name + ".guard (id int)",
 			"create temporary table " + name + ".tmp (v int)",
 			"insert into " + name + ".tmp values (7)",
+		} {
+			_, err = conn.ExecContext(ctx, query)
+			require.NoError(t, err, query)
+		}
+		var laterID, hiddenID, jobID uint64
+		require.NoError(t, conn.QueryRowContext(ctx,
+			"select rel_id from mo_catalog.mo_tables where reldatabase=? and relname='later'", name).Scan(&laterID))
+		var hiddenName string
+		require.NoError(t, conn.QueryRowContext(ctx,
+			"select index_table_name from mo_catalog.mo_indexes where table_id=? and name='ft_tail' and algo='fulltext2' and algo_table_type='ftv2_index'", laterID).Scan(&hiddenName))
+		require.NoError(t, conn.QueryRowContext(ctx,
+			"select rel_id from mo_catalog.mo_tables where reldatabase=? and relname=?", name, hiddenName).Scan(&hiddenID))
+		var jobCount int
+		require.NoError(t, conn.QueryRowContext(ctx,
+			"select count(*) from mo_catalog.mo_iscp_log where table_id=? and job_name='index_ft_tail' and drop_at is null", laterID).Scan(&jobCount))
+		require.Equal(t, 1, jobCount)
+		require.NoError(t, conn.QueryRowContext(ctx,
+			"select job_id from mo_catalog.mo_iscp_log where table_id=? and job_name='index_ft_tail' and drop_at is null", laterID).Scan(&jobID))
+		tailQuery := fmt.Sprintf("select coalesce(max(chunk_id), -1) from `%s`.`%s` where index_id='cdc_tail' and tag=1", name, hiddenName)
+		var tailBefore int64 = -1
+		require.Eventually(t, func() bool {
+			require.NoError(t, conn.QueryRowContext(ctx, tailQuery).Scan(&tailBefore))
+			return tailBefore >= 0
+		}, 120*time.Second, time.Second, "initial ISCP consumer did not advance")
+		for _, query := range []string{
 			"set mo_rollback_txn_on_error=0",
 			"begin",
 			"insert into " + name + ".guard values (1)",
@@ -538,10 +564,34 @@ func TestIssue29400DropDatabaseRCReclaimFailureRollsBackWholeDatabase(t *testing
 			require.NoError(t, conn.QueryRowContext(ctx, check.query).Scan(&count), check.query)
 			require.Equal(t, check.want, count, check.query)
 		}
-		_, err = conn.ExecContext(ctx, "insert into "+name+".later values (null)")
+		var survivingID uint64
+		require.NoError(t, conn.QueryRowContext(ctx,
+			"select rel_id from mo_catalog.mo_tables where reldatabase=? and relname='later'", name).Scan(&survivingID))
+		require.Equal(t, laterID, survivingID)
+		require.NoError(t, conn.QueryRowContext(ctx,
+			"select rel_id from mo_catalog.mo_tables where reldatabase=? and relname=?", name, hiddenName).Scan(&survivingID))
+		require.Equal(t, hiddenID, survivingID)
+		require.NoError(t, conn.QueryRowContext(ctx,
+			"select count(*) from mo_catalog.mo_iscp_log where table_id=? and job_name='index_ft_tail' and drop_at is null", laterID).Scan(&jobCount))
+		require.Equal(t, 1, jobCount)
+		require.NoError(t, conn.QueryRowContext(ctx,
+			"select job_id from mo_catalog.mo_iscp_log where table_id=? and job_name='index_ft_tail' and drop_at is null", laterID).Scan(&survivingID))
+		require.Equal(t, jobID, survivingID)
+		var tailRestored int64
+		require.NoError(t, conn.QueryRowContext(ctx, tailQuery).Scan(&tailRestored))
+		require.GreaterOrEqual(t, tailRestored, tailBefore, "rolled-back DROP lost preexisting CDC tail")
+		_, err = conn.ExecContext(ctx, "insert into "+name+".later values (null, 'aftermarker')")
 		require.NoError(t, err, "allocator must remain usable after rolled-back database removal")
 		require.NoError(t, conn.QueryRowContext(ctx, "select max(id) from "+name+".later").Scan(&count))
 		require.Greater(t, count, 1)
+		var tailAfter int64 = -1
+		require.Eventually(t, func() bool {
+			require.NoError(t, conn.QueryRowContext(ctx, tailQuery).Scan(&tailAfter))
+			return tailAfter > tailRestored
+		}, 120*time.Second, time.Second, "original ISCP consumer did not advance after rollback: restored=%d after=%d", tailRestored, tailAfter)
+		require.NoError(t, conn.QueryRowContext(ctx,
+			"select job_id from mo_catalog.mo_iscp_log where table_id=? and job_name='index_ft_tail' and drop_at is null", laterID).Scan(&survivingID))
+		require.Equal(t, jobID, survivingID)
 	})
 }
 
