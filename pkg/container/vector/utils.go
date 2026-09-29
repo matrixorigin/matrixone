@@ -250,6 +250,57 @@ func FloatGetMinAndMax[T ~float32 | ~float64](vec *Vector) (
 	return
 }
 
+// LowPrecFloatGetSum sums a low-precision float vector (bf16/float16/float8/float4)
+// by widening each value to float64 via ToFloat32. Raw bits do not order or add as
+// floats, so the widen is mandatory; the result is float64 like FloatGetSum.
+func LowPrecFloatGetSum[T interface{ ToFloat32() float32 }](vec *Vector) (sum float64) {
+	col := MustFixedColNoTypeCheck[T](vec)
+	if vec.HasNull() {
+		for i, v := range col {
+			if vec.IsNull(uint64(i)) {
+				continue
+			}
+			sum += float64(v.ToFloat32())
+		}
+	} else {
+		for _, v := range col {
+			sum += float64(v.ToFloat32())
+		}
+	}
+	return
+}
+
+// LowPrecFloatGetMinAndMax computes the comparable bounds of a low-precision float
+// vector (bf16/float16/float8/float4) by float VALUE, not raw bits (the sign bit
+// makes raw uint order disagree with value order). NaN is skipped like
+// FloatGetMinAndMax; ok=false for an all-NULL/all-NaN vector keeps the zonemap
+// uninitialized rather than publishing poisoned bounds.
+func LowPrecFloatGetMinAndMax[T interface{ ToFloat32() float32 }](vec *Vector) (
+	minv, maxv T,
+	ok bool,
+) {
+	col := MustFixedColNoTypeCheck[T](vec)
+	nulls := vec.GetNulls()
+	var minf, maxf float32
+	for i, value := range col {
+		f := value.ToFloat32()
+		if nulls.Contains(uint64(i)) || math.IsNaN(float64(f)) {
+			continue
+		}
+		if !ok {
+			minv, maxv, minf, maxf, ok = value, value, f, f, true
+			continue
+		}
+		if f < minf {
+			minv, minf = value, f
+		}
+		if f > maxf {
+			maxv, maxf = value, f
+		}
+	}
+	return
+}
+
 func FixedSizeGetMinMax[T types.OrderedT](
 	vec *Vector, comp func(T, T) int64,
 ) (minv, maxv T) {
@@ -421,6 +472,14 @@ func typeCompatible[T any](typ types.Type) bool {
 		return typ.Oid == types.T_float32
 	case float64:
 		return typ.Oid == types.T_float64
+	case types.BF16:
+		return typ.Oid == types.T_bf16
+	case types.Float16:
+		return typ.Oid == types.T_float16
+	case types.Float8:
+		return typ.Oid == types.T_float8
+	case types.Float4:
+		return typ.Oid == types.T_float4
 	case types.Decimal64:
 		return typ.Oid == types.T_decimal64
 	case types.Decimal128:

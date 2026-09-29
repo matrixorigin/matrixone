@@ -10818,6 +10818,18 @@ func (v *Vector) GetSumValue() (ok bool, sumv []byte) {
 	case types.T_float64:
 		sumVal := FloatGetSum[float64](v)
 		sumv = types.EncodeFloat64(&sumVal)
+	case types.T_bf16:
+		sumVal := LowPrecFloatGetSum[types.BF16](v)
+		sumv = types.EncodeFloat64(&sumVal)
+	case types.T_float16:
+		sumVal := LowPrecFloatGetSum[types.Float16](v)
+		sumv = types.EncodeFloat64(&sumVal)
+	case types.T_float8:
+		sumVal := LowPrecFloatGetSum[types.Float8](v)
+		sumv = types.EncodeFloat64(&sumVal)
+	case types.T_float4:
+		sumVal := LowPrecFloatGetSum[types.Float4](v)
+		sumv = types.EncodeFloat64(&sumVal)
 	case types.T_decimal64:
 		sumVal := Decimal64GetSum(v)
 		sumv = types.EncodeDecimal64(&sumVal)
@@ -10924,6 +10936,42 @@ func (v *Vector) GetMinMaxValue() (ok bool, minv, maxv []byte) {
 		}
 		minv = types.EncodeFloat64(&minVal)
 		maxv = types.EncodeFloat64(&maxVal)
+
+	case types.T_bf16:
+		minVal, maxVal, hasComparableValue := LowPrecFloatGetMinAndMax[types.BF16](v)
+		if !hasComparableValue {
+			ok = false
+			return
+		}
+		minv = types.EncodeFixed(minVal)
+		maxv = types.EncodeFixed(maxVal)
+
+	case types.T_float16:
+		minVal, maxVal, hasComparableValue := LowPrecFloatGetMinAndMax[types.Float16](v)
+		if !hasComparableValue {
+			ok = false
+			return
+		}
+		minv = types.EncodeFixed(minVal)
+		maxv = types.EncodeFixed(maxVal)
+
+	case types.T_float8:
+		minVal, maxVal, hasComparableValue := LowPrecFloatGetMinAndMax[types.Float8](v)
+		if !hasComparableValue {
+			ok = false
+			return
+		}
+		minv = types.EncodeFixed(minVal)
+		maxv = types.EncodeFixed(maxVal)
+
+	case types.T_float4:
+		minVal, maxVal, hasComparableValue := LowPrecFloatGetMinAndMax[types.Float4](v)
+		if !hasComparableValue {
+			ok = false
+			return
+		}
+		minv = types.EncodeFixed(minVal)
+		maxv = types.EncodeFixed(maxVal)
 
 	case types.T_date:
 		minVal, maxVal := OrderedGetMinAndMax[types.Date](v)
@@ -11217,12 +11265,23 @@ func compareOrderedRows[T cmp.Ordered](v *Vector, left, right int) int {
 	return cmp.Compare(GetFixedAtNoTypeCheck[T](v, left), GetFixedAtNoTypeCheck[T](v, right))
 }
 
+// compareFloatRows orders two low-precision float rows (bf16/float16/float8/float4)
+// by widened float VALUE. Raw bits do not order floats (the sign bit inverts), so
+// the values are compared through ToFloat32 with cmp.Compare (NaN-aware ordering).
+func compareFloatRows[T interface{ ToFloat32() float32 }](v *Vector, left, right int) int {
+	return cmp.Compare(
+		GetFixedAtNoTypeCheck[T](v, left).ToFloat32(),
+		GetFixedAtNoTypeCheck[T](v, right).ToFloat32(),
+	)
+}
+
 func supportsInplaceSort(oid types.T) bool {
 	switch oid {
 	case types.T_bool, types.T_bit,
 		types.T_int8, types.T_int16, types.T_int32, types.T_int64,
 		types.T_uint8, types.T_uint16, types.T_uint32, types.T_uint64,
 		types.T_float32, types.T_float64,
+		types.T_bf16, types.T_float16, types.T_float8, types.T_float4,
 		types.T_date, types.T_year, types.T_datetime, types.T_time, types.T_timestamp, types.T_enum,
 		types.T_decimal64, types.T_decimal128, types.T_decimal256,
 		types.T_TS, types.T_uuid, types.T_Rowid,
@@ -11269,6 +11328,14 @@ func compareVectorRows(v *Vector, left, right int) int {
 		return compareOrderedRows[float32](v, left, right)
 	case types.T_float64:
 		return compareOrderedRows[float64](v, left, right)
+	case types.T_bf16:
+		return compareFloatRows[types.BF16](v, left, right)
+	case types.T_float16:
+		return compareFloatRows[types.Float16](v, left, right)
+	case types.T_float8:
+		return compareFloatRows[types.Float8](v, left, right)
+	case types.T_float4:
+		return compareFloatRows[types.Float4](v, left, right)
 	case types.T_date:
 		return compareOrderedRows[types.Date](v, left, right)
 	case types.T_year:
@@ -11519,6 +11586,33 @@ func (v *Vector) inplaceSortRowMetadata(compact bool) bool {
 	return true
 }
 
+// sortLowPrecFloatCol sorts a low-precision float column (bf16/float16/float8/float4)
+// by widened float value; raw uint bits do not order floats (the sign bit inverts).
+func sortLowPrecFloatCol[T interface{ ToFloat32() float32 }](v *Vector) {
+	col := MustFixedColNoTypeCheck[T](v)
+	slices.SortFunc(col, func(a, b T) int {
+		return cmp.Compare(a.ToFloat32(), b.ToFloat32())
+	})
+}
+
+// sortAndCompactLowPrecFloatCol sorts by float value then removes value-duplicates.
+// Equality is by ToFloat32 (so +0/-0 collapse and NaN never compacts), matching the
+// native float32 slices.Sort+Compact path.
+func sortAndCompactLowPrecFloatCol[T interface{ ToFloat32() float32 }](v *Vector) {
+	col := MustFixedColNoTypeCheck[T](v)
+	slices.SortFunc(col, func(a, b T) int {
+		return cmp.Compare(a.ToFloat32(), b.ToFloat32())
+	})
+	newCol := slices.CompactFunc(col, func(a, b T) bool {
+		return a.ToFloat32() == b.ToFloat32()
+	})
+	if len(newCol) != len(col) {
+		v.CleanOnlyData()
+		v.SetSorted(true)
+		appendList(v, newCol, nil, nil)
+	}
+}
+
 // InplaceSortAndCompact @todo optimization in the future
 func (v *Vector) InplaceSortAndCompact() {
 	if v.inplaceSortRowMetadata(true) {
@@ -11660,6 +11754,15 @@ func (v *Vector) InplaceSortAndCompact() {
 			v.SetSorted(true)
 			appendList(v, newCol, nil, nil)
 		}
+
+	case types.T_bf16:
+		sortAndCompactLowPrecFloatCol[types.BF16](v)
+	case types.T_float16:
+		sortAndCompactLowPrecFloatCol[types.Float16](v)
+	case types.T_float8:
+		sortAndCompactLowPrecFloatCol[types.Float8](v)
+	case types.T_float4:
+		sortAndCompactLowPrecFloatCol[types.Float4](v)
 
 	case types.T_date:
 		col := MustFixedColNoTypeCheck[types.Date](v)
@@ -11986,6 +12089,15 @@ func (v *Vector) InplaceSort() {
 	case types.T_float64:
 		col := MustFixedColNoTypeCheck[float64](v)
 		slices.Sort(col)
+
+	case types.T_bf16:
+		sortLowPrecFloatCol[types.BF16](v)
+	case types.T_float16:
+		sortLowPrecFloatCol[types.Float16](v)
+	case types.T_float8:
+		sortLowPrecFloatCol[types.Float8](v)
+	case types.T_float4:
+		sortLowPrecFloatCol[types.Float4](v)
 
 	case types.T_date:
 		col := MustFixedColNoTypeCheck[types.Date](v)

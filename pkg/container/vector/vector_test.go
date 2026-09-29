@@ -4797,6 +4797,121 @@ func TestInplaceSortMarksSupportedVectorsSortedWithoutCompacting(t *testing.T) {
 	require.False(t, unsupported.GetSorted())
 }
 
+// lowPrecValueOrderingCase exercises the container ordering/aggregation paths for one
+// low-precision float type, asserting they order/aggregate by FLOAT VALUE, not raw bits.
+func lowPrecValueOrderingCase[T interface {
+	types.FixedSizeT
+	ToFloat32() float32
+}](
+	t *testing.T, oid types.T, from func(float32) T,
+) {
+	mp := mpool.MustNew(t.Name())
+
+	// Values exactly representable in ALL four formats (float4 magnitudes are
+	// {0,.5,1,1.5,2,3,4,6}). Negatives are the discriminator: a negative float's raw
+	// uint bits exceed a positive's, so a bit-wise sort would reverse them.
+	vals := []float32{2.0, -1.0, -3.0, 0.5}
+	wantSorted := []float32{-3.0, -1.0, 0.5, 2.0}
+
+	build := func(fs []float32) *Vector {
+		v := NewVec(oid.ToType())
+		for _, f := range fs {
+			require.NoError(t, AppendFixed(v, from(f), false, mp))
+		}
+		return v
+	}
+	toF := func(v *Vector) []float32 {
+		col := MustFixedColNoTypeCheck[T](v)
+		out := make([]float32, len(col))
+		for i := range col {
+			out[i] = col[i].ToFloat32()
+		}
+		return out
+	}
+
+	// InplaceSort: value order (negatives first), no compaction.
+	v := build(vals)
+	require.True(t, supportsInplaceSort(oid))
+	v.InplaceSort()
+	require.Equal(t, wantSorted, toF(v), "InplaceSort")
+	require.True(t, v.GetSorted())
+	v.Free(mp)
+
+	// compareVectorRows: -3.0 (row 2) < 2.0 (row 0); a raw-bit compare would say the
+	// negative is larger.
+	v = build(vals)
+	require.Less(t, compareVectorRows(v, 2, 0), 0, "compareVectorRows neg<pos")
+	require.Greater(t, compareVectorRows(v, 0, 1), 0, "compareVectorRows 2.0>-1.0")
+	v.Free(mp)
+
+	// InplaceSortAndCompact: dedup by value (+0/-0 collapse; here plain dups).
+	v = build([]float32{1.0, -1.0, 1.0, -1.0})
+	v.InplaceSortAndCompact()
+	require.Equal(t, []float32{-1.0, 1.0}, toF(v), "InplaceSortAndCompact")
+	require.True(t, v.GetSorted())
+	v.Free(mp)
+
+	// GetSumValue: widened float64 sum = 2-1-3+0.5 = -1.5.
+	v = build(vals)
+	ok, sumBytes := v.GetSumValue()
+	require.True(t, ok)
+	require.InDelta(t, -1.5, types.DecodeFloat64(sumBytes), 1e-6, "GetSumValue")
+	v.Free(mp)
+
+	// GetMinMaxValue: by value, min=-3.0 max=2.0.
+	v = build(vals)
+	ok, minBytes, maxBytes := v.GetMinMaxValue()
+	require.True(t, ok)
+	require.Equal(t, float32(-3.0), types.DecodeFixed[T](minBytes).ToFloat32(), "GetMinMaxValue min")
+	require.Equal(t, float32(2.0), types.DecodeFixed[T](maxBytes).ToFloat32(), "GetMinMaxValue max")
+	v.Free(mp)
+}
+
+// TestLowPrecFloatContainerValueOrdering covers the Layer-4 container paths for the
+// scalar low-precision float types (#20567): they must order/aggregate by float value
+// (via ToFloat32), never by the raw uint bits, whose sign bit inverts float order.
+func TestLowPrecFloatContainerValueOrdering(t *testing.T) {
+	t.Run("bf16", func(t *testing.T) {
+		lowPrecValueOrderingCase(t, types.T_bf16, types.BF16FromFloat32)
+	})
+	t.Run("float16", func(t *testing.T) {
+		lowPrecValueOrderingCase(t, types.T_float16, types.Float16FromFloat32)
+	})
+	t.Run("float8", func(t *testing.T) {
+		lowPrecValueOrderingCase(t, types.T_float8, types.Float8FromFloat32)
+	})
+	t.Run("float4", func(t *testing.T) {
+		lowPrecValueOrderingCase(t, types.T_float4, types.Float4FromFloat32)
+	})
+}
+
+// TestLowPrecFloatGetMinMaxSkipsNaN verifies NaN never poisons the zonemap bounds
+// (bf16/float16/float8 have a NaN encoding; float4 has none).
+func TestLowPrecFloatGetMinMaxSkipsNaN(t *testing.T) {
+	mp := mpool.MustNew(t.Name())
+	nan := float32(math.NaN())
+
+	// bf16 with a NaN mixed in: min/max come from the finite values only.
+	v := NewVec(types.T_bf16.ToType())
+	for _, f := range []float32{nan, -2.0, 4.0, nan} {
+		require.NoError(t, AppendFixed(v, types.BF16FromFloat32(f), false, mp))
+	}
+	ok, minB, maxB := v.GetMinMaxValue()
+	require.True(t, ok)
+	require.Equal(t, float32(-2.0), types.DecodeFixed[types.BF16](minB).ToFloat32())
+	require.Equal(t, float32(4.0), types.DecodeFixed[types.BF16](maxB).ToFloat32())
+	v.Free(mp)
+
+	// All-NaN bf16: no comparable value → ok=false, zonemap left uninitialized.
+	v = NewVec(types.T_bf16.ToType())
+	for i := 0; i < 3; i++ {
+		require.NoError(t, AppendFixed(v, types.BF16FromFloat32(nan), false, mp))
+	}
+	ok, _, _ = v.GetMinMaxValue()
+	require.False(t, ok)
+	v.Free(mp)
+}
+
 func TestVarlenaAreaDisjointLifecycle(t *testing.T) {
 	mp := mpool.MustNewZero()
 	defer mpool.DeleteMPool(mp)
