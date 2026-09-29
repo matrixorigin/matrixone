@@ -4580,7 +4580,7 @@ func buildCreateIndexStatementsFromMoIndexes(
 				}
 			}
 			if info.expression == "" || len(info.columns) != 1 || strings.EqualFold(info.indexType, "UNIQUE") {
-				return nil, fmt.Errorf("invalid functional index metadata for %s.%s", tableName, name)
+				return nil, moerr.NewInternalErrorNoCtxf("invalid functional index metadata for %s.%s", tableName, name)
 			}
 		}
 		stmt, err := renderCreateIndexStatement(tableName, byName[name])

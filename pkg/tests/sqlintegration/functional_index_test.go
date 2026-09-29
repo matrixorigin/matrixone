@@ -55,11 +55,13 @@ func TestFunctionalIndexLifecycle(t *testing.T) {
 		exec("delete from t where id=1")
 		exec("rollback")
 		count("select count(*) from t force index(il) where lower(name)='abc'", 2)
-		stmt, err := conn.PrepareContext(ctx, "insert into t values (?,?)")
-		require.NoError(t, err)
-		_, err = stmt.ExecContext(ctx, 4, "ABC")
-		require.NoError(t, err)
-		require.NoError(t, stmt.Close())
+		func() {
+			stmt, err := conn.PrepareContext(ctx, "insert into t values (?,?)")
+			require.NoError(t, err)
+			defer func() { require.NoError(t, stmt.Close()) }()
+			_, err = stmt.ExecContext(ctx, 4, "ABC")
+			require.NoError(t, err)
+		}()
 		exec("create index ip on t ((id+1))")
 		count("select count(*) from t force index(ip) where id+1=5", 1)
 		exec("alter table t add column extra int first")
@@ -69,16 +71,18 @@ func TestFunctionalIndexLifecycle(t *testing.T) {
 		exec("insert into t(id,name) values(5,'ABC')")
 		exec("set sql_mode='STRICT_TRANS_TABLES'")
 		count("select count(*) from t force index(il) where lower(name)='abc'", 4)
-		rows, err := conn.QueryContext(ctx, "explain select id from t force index(il) where lower(name)='abc'")
-		require.NoError(t, err)
 		var lines []string
-		for rows.Next() {
-			var line string
-			require.NoError(t, rows.Scan(&line))
-			lines = append(lines, line)
-		}
-		require.NoError(t, rows.Err())
-		require.NoError(t, rows.Close())
+		func() {
+			rows, err := conn.QueryContext(ctx, "explain select id from t force index(il) where lower(name)='abc'")
+			require.NoError(t, err)
+			defer func() { require.NoError(t, rows.Close()) }()
+			for rows.Next() {
+				var line string
+				require.NoError(t, rows.Scan(&line))
+				lines = append(lines, line)
+			}
+			require.NoError(t, rows.Err())
+		}()
 		require.Contains(t, strings.Join(lines, "\n"), "Index Table Scan on t.il")
 		require.Contains(t, strings.Join(lines, "\n"), "lower(t.name)")
 		count("select count(*) from information_schema.statistics where table_schema='functional_index_lifecycle' and table_name='t' and index_name='il' and column_name is null and expression is not null", 1)

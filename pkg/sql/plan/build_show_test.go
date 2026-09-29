@@ -175,9 +175,28 @@ func TestShowKeysUsesMySQLIndexOrder(t *testing.T) {
 			}
 			require.Len(t, sortNodes, 1)
 			require.Len(t, sortNodes[0].GetOrderBy(), 3)
-			require.Equal(t, "case", sortNodes[0].GetOrderBy()[0].GetExpr().GetF().GetFunc().GetObjName())
-			require.Equal(t, "MIN(idx.id)", sortNodes[0].GetOrderBy()[1].GetExpr().GetCol().GetName())
-			require.Equal(t, "idx.ordinal_position", sortNodes[0].GetOrderBy()[2].GetExpr().GetCol().GetName())
+			// The Expression output introduces a projection below SORT. Resolve
+			// its column references rather than requiring expressions inline.
+			require.Len(t, sortNodes[0].Children, 1)
+			child := logicPlan.GetQuery().GetNodes()[sortNodes[0].Children[0]]
+			orderExpr := func(i int) *plan.Expr {
+				expr := sortNodes[0].GetOrderBy()[i].GetExpr()
+				if child.NodeType == plan.Node_PROJECT && expr.GetCol() != nil {
+					pos := int(expr.GetCol().ColPos)
+					require.GreaterOrEqual(t, pos, 0)
+					require.Less(t, pos, len(child.ProjectList))
+					return child.ProjectList[pos]
+				}
+				return expr
+			}
+			class := orderExpr(0).GetF()
+			require.Equal(t, "case", class.GetFunc().GetObjName())
+			require.Len(t, class.Args, 5)
+			require.Equal(t, int64(0), class.Args[1].GetLit().GetI64Val())
+			require.Equal(t, int64(1), class.Args[3].GetLit().GetI64Val())
+			require.Equal(t, int64(2), class.Args[4].GetLit().GetI64Val())
+			require.Equal(t, "MIN(idx.id)", orderExpr(1).GetCol().GetName())
+			require.Equal(t, "idx.ordinal_position", orderExpr(2).GetCol().GetName())
 		})
 	}
 }
