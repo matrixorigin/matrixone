@@ -16,8 +16,7 @@ execute issue_29314_p using @issue_29314_d, @issue_29314_d;
 123.460  ¦  123.450
 set @issue_29314_d = '2.5tail';
 execute issue_29314_p using @issue_29314_d, @issue_29314_d;
-➤ ceil(123.456, ?)[3,6,3]  ¦  floor(123.456, ?)[3,6,3]  𝄀
-123.460  ¦  123.450
+invalid argument cast to int, bad value 2.5tail
 set @issue_29314_d = 2;
 execute issue_29314_p using @issue_29314_d, @issue_29314_d;
 ➤ ceil(123.456, ?)[3,6,3]  ¦  floor(123.456, ?)[3,6,3]  𝄀

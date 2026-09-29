@@ -3237,6 +3237,17 @@ func (rule *ResetParamRefRule) applyExpr(e *plan.Expr) (*plan.Expr, error) {
 			bitwiseParamCast := isPreparedBitwiseOperator(functionName) &&
 				isPreparedBitwiseParamCast(arg)
 			paramPos, hasParamPos := preparedParamPosition(arg)
+			if !hasParamPos && !isExplicitPreparedCast(arg) {
+				if _, ordinaryPrecision := planfunction.IntegerArgumentOrdinaryCastTarget(functionName, i); ordinaryPrecision {
+					// The execute-time literal may retain its source only through
+					// Literal.Src. Recover it narrowly for CEIL/FLOOR precision; do
+					// not broaden generic CAST0 handling or cross explicit casts.
+					paramPos, hasParamPos = preparedRuntimeSourceParamPosition(arg)
+					if hasParamPos {
+						implicitParamCast = true
+					}
+				}
+			}
 			bareCommonValueNull := commonValueResultArg && hasParamPos &&
 				arg.GetP() != nil && rule.preparedRuntimeParamIsNull(paramPos)
 			if !hasParamPos && implicitParamCast && isPreparedStringMathFunction(functionName) {
@@ -3346,6 +3357,11 @@ func (rule *ResetParamRefRule) applyExpr(e *plan.Expr) (*plan.Expr, error) {
 				sqlExecuteNumericSource != nil &&
 				(paramPos >= len(rule.sqlExecuteStringBackedParams) ||
 					!rule.sqlExecuteStringBackedParams[paramPos])
+			preserveNativeMathPrecision := false
+			if useSQLExecuteControlSource && sqlExecuteNumericSource != nil {
+				_, preserveNativeMathPrecision = planfunction.IntegerArgumentNativeOrdinaryCastTarget(
+					functionName, i, types.T(sqlExecuteNumericSource.Typ.Id))
+			}
 			// A string parameter can be shared by a value occurrence and a
 			// ROUND/TRUNCATE control occurrence. Its per-position DOUBLE source
 			// belongs only to the value occurrence; materialize the original text
@@ -3556,16 +3572,24 @@ func (rule *ResetParamRefRule) applyExpr(e *plan.Expr) (*plan.Expr, error) {
 				numericPrefixArgs[i] = false
 				rule.specialized = true
 			} else if useSQLExecuteControlSource {
-				// Materialize the native source while preserving the precision
-				// argument's prepare-time target type.  BOOL is represented by the
-				// source helper as CAST(BOOL AS INT64), which is exactly the shape
-				// needed by ROUND/TRUNCATE and avoids evaluating the cached
-				// TEXT-to-INT64 cast for TRUE/FALSE.
-				rewrittenArg = DeepCopyExpr(sqlExecuteNumericSource)
-				if !reflect.DeepEqual(rewrittenArg.Typ, arg.Typ) {
-					rewrittenArg, err = makePlan2CastExpr(rule.ctx, rewrittenArg, arg.Typ)
+				// CEIL/FLOOR precision historically uses native integer argument
+				// conversion for numeric sources (DECIMAL half-up, FLOAT ties-even),
+				// while text still follows the ordinary strict INT64 cast below.
+				if target, native := planfunction.IntegerArgumentNativeOrdinaryCastTarget(
+					functionName, i, types.T(sqlExecuteNumericSource.Typ.Id)); native {
+					rewrittenArg, err = appendIntegerArgument(rule.ctx, DeepCopyExpr(sqlExecuteNumericSource), target, false)
 					if err != nil {
 						return nil, err
+					}
+				} else {
+					// ROUND/TRUNCATE retain the prepare-time INT64 cast. BOOL is
+					// represented by the source helper as CAST(BOOL AS INT64).
+					rewrittenArg = DeepCopyExpr(sqlExecuteNumericSource)
+					if !reflect.DeepEqual(rewrittenArg.Typ, arg.Typ) {
+						rewrittenArg, err = makePlan2CastExpr(rule.ctx, rewrittenArg, arg.Typ)
+						if err != nil {
+							return nil, err
+						}
 					}
 				}
 			} else {
@@ -3780,8 +3804,9 @@ func (rule *ResetParamRefRule) applyExpr(e *plan.Expr) (*plan.Expr, error) {
 				// implicit cast node itself is rewritten to the explicit prefix cast
 				// below; unwrapping it here would make the binder promote the column
 				// side to DOUBLE and lose indexability.
-				if !(isPreparedNumericComparison(functionName) && hasParamPos &&
-					rule.numericComparisonTextParamPositions[paramPos]) &&
+				if !preserveNativeMathPrecision &&
+					!(isPreparedNumericComparison(functionName) && hasParamPos &&
+						rule.numericComparisonTextParamPositions[paramPos]) &&
 					(!isPreparedNumericComparison(functionName) || inferText) {
 					if unwrapped, ok := unwrapImplicitPreparedParamCast(rule.ctx, rewrittenArg, inferText); ok {
 						boundArgs[i] = unwrapped
