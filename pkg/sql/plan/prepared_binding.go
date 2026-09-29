@@ -159,6 +159,13 @@ func preparedConfigurationValue(ctx context.Context, expr *Expr) (any, bool) {
 	return value, true
 }
 
+func preparedNumericValueSpelling(value any) string {
+	if bytes, ok := value.([]byte); ok {
+		return string(bytes)
+	}
+	return fmt.Sprint(value)
+}
+
 func preparedSourceBindingAt(ctx context.Context, ordinal int) (PreparedSourceBinding, error) {
 	bindings := preparedSourceBindings(ctx)
 	if ordinal <= 0 || ordinal > len(bindings) {
@@ -348,15 +355,16 @@ func bindPreparedConsumerArguments(ctx context.Context, name string, args []*Exp
 				continue
 			}
 		}
-		if len(args) == 2 && isPreparedNumericComparisonContext(name) &&
-			binding.Type.Oid.IsMySQLString() && args[1-i] != nil &&
-			(types.T(args[1-i].Typ.Id).IsUnsignedInt() || args[1-i].Typ.Id == int32(types.T_bit)) {
-			// A proven integral string must compare in an exact UINT/BIT
-			// domain before the generic matcher can round it through DOUBLE.
+		if len(args) == 2 && isPreparedNumericComparisonContext(name) && args[1-i] != nil &&
+			(types.T(args[1-i].Typ.Id).IsInteger() || args[1-i].Typ.Id == int32(types.T_bit)) &&
+			(binding.Type.Oid.IsMySQLString() ||
+				(binding.Type.Oid.IsFloat() && types.T(args[1-i].Typ.Id).IsSignedInt())) {
+			// A proven integral value can compare in the peer's integer domain
+			// without rounding an indexed column through DOUBLE.
 			// The proof depends on this execution's value, so the existing
 			// binding state keeps the resulting plan out of the type-only cache.
 			if value, present := preparedConfigurationValue(ctx, source); present && value != nil {
-				_, exact, proofErr := preparedComparisonExactIntegerExpr(ctx, fmt.Sprint(value), args[1-i].Typ)
+				_, exact, proofErr := preparedComparisonExactIntegerExpr(ctx, preparedNumericValueSpelling(value), args[1-i].Typ)
 				if proofErr != nil {
 					return nil, proofErr
 				}
@@ -368,16 +376,18 @@ func bindPreparedConsumerArguments(ctx context.Context, name string, args []*Exp
 						unsigned := types.T_uint64.ToType()
 						target = makePlan2Type(&unsigned)
 					}
-					// The proof accepts complete decimal/scientific spellings such
-					// as "100.0" and "1e2". String→UINT's integer parser does
-					// not accept those spellings, while DECIMAL(38,0) parses them
-					// exactly without rounding adjacent values above 2^53.
-					decimalType := types.New(types.T_decimal128, 38, 0)
-					decimalValue, castErr := makePlan2CastExpr(ctx, source, makePlan2Type(&decimalType))
-					if castErr != nil {
-						return nil, castErr
+					converted := source
+					var castErr error
+					if binding.Type.Oid.IsMySQLString() {
+						// Decimal/scientific text needs an exact intermediate parser;
+						// direct string→integer casts reject those spellings.
+						decimalType := types.New(types.T_decimal128, 38, 0)
+						converted, castErr = makePlan2CastExpr(ctx, source, makePlan2Type(&decimalType))
+						if castErr != nil {
+							return nil, castErr
+						}
 					}
-					converted, castErr := makePlan2CastExpr(ctx, decimalValue, target)
+					converted, castErr = makePlan2CastExpr(ctx, converted, target)
 					if castErr != nil {
 						return nil, castErr
 					}
