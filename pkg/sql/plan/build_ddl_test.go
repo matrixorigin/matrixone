@@ -1718,6 +1718,7 @@ func TestMaterializedViewAdmissionTracksAllInputs(t *testing.T) {
 		{"select k from src order by (select max(k) from dim)", false},
 		{"select k,count(*) from src group by k having rand()>0.5", false},
 		{"select cast(ts as date), count(*) from src group by cast(ts as date)", false},
+		{"select date(ts), count(*) from src group by date(ts)", false},
 		{"select date_trunc('day', ts), count(*) from src group by date_trunc('day', ts)", false},
 		{"select from_unixtime(ts), count(*) from src group by from_unixtime(ts)", false},
 		{"select year(ts), count(*) from src group by year(ts)", false},

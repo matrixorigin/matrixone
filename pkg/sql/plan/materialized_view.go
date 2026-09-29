@@ -73,7 +73,7 @@ func materializedViewTimezoneSensitiveFunction(name string) bool {
 	case "date_trunc", "date_format", "to_date", "str_to_date",
 		"unix_timestamp", "from_unixtime", "timestampadd", "timestampdiff",
 		"date_add", "date_sub", "adddate", "subdate", "addtime", "subtime",
-		"extract", "year", "yearweek", "quarter", "month", "week",
+		"extract", "date", "year", "yearweek", "quarter", "month", "week",
 		"day", "dayofmonth", "dayofweek", "dayofyear", "hour", "minute",
 		"second", "microsecond", "time", "ts_to_time", "convert_tz",
 		"weekday", "weekofyear", "dayname", "monthname", "last_day", "interval":
