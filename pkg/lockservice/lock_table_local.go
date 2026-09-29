@@ -151,6 +151,10 @@ func (l *localLockTable) doLock(
 				}
 				c.txn.clearBlocked(old, l.logger)
 			}
+			// The new dependency is now visible without the physical lock-table
+			// mutex. Check it promptly; the periodic checker remains the fallback
+			// when detector admission is busy or traversal is transiently blocked.
+			_ = l.events.addToDeadlockCheck(c.w)
 
 			// we handle remote lock on current rpc io read goroutine, so we can not wait here, otherwise
 			// the rpc will be blocked.
