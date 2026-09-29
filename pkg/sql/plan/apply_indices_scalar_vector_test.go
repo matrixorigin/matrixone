@@ -138,6 +138,40 @@ func TestScalarVectorQueryIndexPublicPlan(t *testing.T) {
 	})
 }
 
+func TestScalarVectorQueryJoinConsumers(t *testing.T) {
+	for _, hnsw := range []bool{false, true} {
+		t.Run(fmt.Sprintf("hnsw=%t", hnsw), func(t *testing.T) {
+			key := "'ref'"
+			if hnsw {
+				key = "1"
+			}
+			// The computed output preserves each inline CTE's PROJECT. A
+			// multiply referenced CTE is materialized and exercises a different
+			// scope boundary, so it is not the regression oracle here.
+			inner := `select concat(id, '') as id from scalar_vector_items order by l2_distance(v,
+				(select v from scalar_vector_provider where id=` + key + `)) limit 2`
+			q := scalarVectorPlanFixtureForIndex(t, `with a as (`+inner+`), b as (`+inner+`)
+				select a.id,b.id from a join b on a.id=b.id order by a.id`, hnsw)
+			require.Len(t, q.Steps, 1, "the CTEs must be inlined, not materialized as producer steps")
+			found := false
+			var visit func(int32)
+			visit = func(id int32) {
+				node := q.Nodes[id]
+				if node.NodeType == plan.Node_JOIN && len(node.Children) == 2 &&
+					q.Nodes[node.Children[0]].NodeType == plan.Node_VECTOR_QUERY_TOP &&
+					q.Nodes[node.Children[1]].NodeType == plan.Node_VECTOR_QUERY_TOP {
+					found = true
+				}
+				for _, child := range node.Children {
+					visit(child)
+				}
+			}
+			visit(q.Steps[0])
+			require.True(t, found, "both JOIN inputs must reach the scalar selector compile boundary")
+		})
+	}
+}
+
 func TestScalarVectorQueryNestedPagination(t *testing.T) {
 	for _, hnsw := range []bool{false, true} {
 		key := "'ref'"

@@ -79,7 +79,10 @@ func (c *Compile) compileVectorQueryTop(step int32, node *plan.Node, nodes []*pl
 	op.SetAnalyzeControl(c.anal.curNodeIdx, c.anal.isFirst)
 	rs.setRootOperator(op)
 	c.anal.isFirst = false
-	return []*Scope{rs}, nil
+	// Keep the selector's three branches in a private scheduling domain.
+	// Consumers (notably JOIN) append independent dependencies to their input
+	// scope; those must start concurrently, not wait for this selector to pull.
+	return []*Scope{c.newMergeScope([]*Scope{rs})}, nil
 }
 
 func (c *Compile) compileVectorQuerySource(node *plan.Node) ([]*Scope, error) {

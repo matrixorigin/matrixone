@@ -15,17 +15,24 @@
 package compile
 
 import (
+	"errors"
 	"math"
 	"sync/atomic"
 	"testing"
 
 	"github.com/matrixorigin/matrixone/pkg/common/mpool"
+	"github.com/matrixorigin/matrixone/pkg/container/batch"
+	"github.com/matrixorigin/matrixone/pkg/container/vector"
 	"github.com/matrixorigin/matrixone/pkg/pb/plan"
+	"github.com/matrixorigin/matrixone/pkg/perfcounter"
 	"github.com/matrixorigin/matrixone/pkg/sql/colexec/merge"
+	"github.com/matrixorigin/matrixone/pkg/sql/colexec/output"
 	"github.com/matrixorigin/matrixone/pkg/sql/colexec/vectorquery"
 	"github.com/matrixorigin/matrixone/pkg/sql/internal/materialized"
 	plan2 "github.com/matrixorigin/matrixone/pkg/sql/plan"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine"
+	"github.com/matrixorigin/matrixone/pkg/vm/message"
+	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 )
 
@@ -51,9 +58,12 @@ func TestScalarVectorQueryCompileLocalSources(t *testing.T) {
 		ReleaseScopes(ss)
 	}()
 	require.Len(t, ss, 1)
-	require.True(t, ss[0].LazyPreScopes)
-	require.Len(t, ss[0].PreScopes, 3)
-	op := ss[0].RootOp.(*vectorquery.VectorQuery)
+	require.False(t, ss[0].LazyPreScopes, "consumers must not append dependencies to the selector's lazy scheduling domain")
+	require.Len(t, ss[0].PreScopes, 1)
+	selector := ss[0].PreScopes[0]
+	require.True(t, selector.LazyPreScopes)
+	require.Len(t, selector.PreScopes, 3)
+	op := selector.RootOp.GetOperatorBase().GetChildren(0).(*vectorquery.VectorQuery)
 	require.Same(t, c.materializedSources[-8], op.Source)
 	require.Equal(t, []int32{1, 2}, c.materializedSinkScanNodes[-8])
 	require.Equal(t, 0, c.materializedReaderIDs[[2]int32{-8, 1}])
@@ -65,6 +75,125 @@ func TestScalarVectorQueryCompileLocalSources(t *testing.T) {
 	clear()
 	_, err = c.compileVectorQueryTop(0, q.Nodes[3], q.Nodes, 3)
 	require.ErrorContains(t, err, "duplicate")
+}
+
+func TestScalarVectorQueryJoinScope(t *testing.T) {
+	for _, tc := range []struct {
+		name         string
+		limit        uint64
+		nullProvider bool
+		outputError  bool
+		cancel       bool
+		want         []int64
+	}{
+		{name: "ann_self_join", limit: 1, want: []int64{1}},
+		{name: "null_fallback", limit: 1, nullProvider: true},
+		{name: "zero_demand"},
+		{name: "consumer_error", limit: 1, outputError: true},
+		{name: "consumer_cancel", limit: 1, cancel: true},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			c := newLazyUnionAllTestCompile(t)
+			c.MessageBoard = message.NewMessageBoard()
+			c.proc.SetMessageBoard(c.MessageBoard)
+			c.addr = "local:6001"
+			c.cnList = engine.Nodes{{Addr: c.addr, Mcpu: 1}}
+			q := &plan.Query{}
+			for i := int32(0); i < 8; i += 4 {
+				value := plan2.MakePlan2Int64ConstExprWithType(1)
+				if tc.nullProvider {
+					value.GetLit().Isnull = true
+				}
+				q.Nodes = append(q.Nodes,
+					&plan.Node{NodeId: i, NodeType: plan.Node_VALUE_SCAN, ProjectList: []*plan.Expr{value}, Stats: plan2.DefaultStats()},
+					&plan.Node{NodeId: i + 1, NodeType: plan.Node_VECTOR_QUERY_SOURCE, VectorQuerySourceId: i},
+					&plan.Node{NodeId: i + 2, NodeType: plan.Node_VECTOR_QUERY_SOURCE, VectorQuerySourceId: i},
+					&plan.Node{NodeId: i + 3, NodeType: plan.Node_VECTOR_QUERY_TOP, VectorQuerySourceId: i, Children: []int32{i, i + 1, i + 2}, Limit: plan2.MakePlan2Uint64ConstExprWithType(tc.limit)},
+				)
+			}
+			c.anal.qry = q
+			c.pn = &plan.Plan{Plan: &plan.Plan_Query{Query: q}}
+			var roots []*Scope
+			var registry *mpool.AllocationAccountRegistry
+			var account *mpool.AllocationAccount
+			var owners []executionAllocationAccountOwner
+			t.Cleanup(func() {
+				for _, root := range roots {
+					root.FreeOperator(c)
+				}
+				c.MessageBoard.CloseAndDrain()
+				for _, source := range c.materializedSources {
+					source.Close()
+				}
+				for _, owner := range owners {
+					assert.NoError(t, owner.ClearAllocationAccount(account))
+				}
+				ReleaseScopes(roots)
+				if account != nil {
+					snapshot, _, err := registry.CompleteTerminal(account)
+					assert.NoError(t, err)
+					assert.Zero(t, snapshot.Used)
+				}
+				c.proc.Free()
+				require.Zero(t, c.proc.Mp().CurrNB())
+			})
+			probe, err := c.compileVectorQueryTop(0, q.Nodes[3], q.Nodes, 3)
+			require.NoError(t, err)
+			roots = append(roots, probe...)
+			build, err := c.compileVectorQueryTop(0, q.Nodes[7], q.Nodes, 7)
+			require.NoError(t, err)
+			roots = append(roots, build...)
+			require.False(t, probe[0].LazyPreScopes)
+			require.False(t, build[0].LazyPreScopes)
+			join := newShuffleJoinTestNode(1)
+			join.Stats.HashmapStats.Shuffle = false
+			join.OnList = []*plan.Expr{makeMarkJoinTestCondition(t, "=", 0, false)}
+			join.ProjectList = []*plan.Expr{makeMarkJoinTestColumn(0, 0, false)}
+			left := &plan.Node{ProjectList: []*plan.Expr{makeMarkJoinTestColumn(0, 0, false)}}
+			right := &plan.Node{ProjectList: []*plan.Expr{makeMarkJoinTestColumn(1, 0, false)}}
+			roots = c.compileJoin(join, left, right, probe, build)
+			require.Len(t, roots, 1)
+			root := roots[0]
+			require.False(t, root.LazyPreScopes)
+			require.Len(t, root.PreScopes, 2, "the build must be a concurrently started sibling of the selector")
+			require.True(t, root.PreScopes[0].LazyPreScopes)
+			require.Len(t, root.PreScopes[0].PreScopes, 3)
+			sentinel := errors.New("join output failed")
+			var got []int64
+			root.setRootOperator(output.NewArgument().WithFunc(func(bat *batch.Batch, _ *perfcounter.CounterSet) error {
+				if bat != nil && bat.RowCount() > 0 {
+					if tc.cancel {
+						c.proc.Cancel(sentinel)
+					}
+					if tc.outputError || tc.cancel {
+						return sentinel
+					}
+					got = append(got, vector.MustFixedColWithTypeCheck[int64](bat.Vecs[0])...)
+				}
+				return nil
+			}))
+			registry, err = mpool.NewAllocationAccountRegistry(1, 1<<14)
+			require.NoError(t, err)
+			account, err = registry.Open(math.MaxInt64)
+			require.NoError(t, err)
+			owners, err = collectAllocationAccountOwners(roots)
+			require.NoError(t, err)
+			_, err = configureAllocationAccountOwners(owners, account)
+			require.NoError(t, err)
+			for _, source := range c.materializedSources {
+				require.NoError(t, source.Begin(c.proc.Mp(), materialized.SpillConfig{AllocationAccount: account}))
+			}
+			c.scopes = roots
+			c.InitPipelineContextToExecuteQuery()
+			err = root.MergeRun(c)
+			if tc.outputError || tc.cancel {
+				require.ErrorIs(t, err, sentinel)
+			} else {
+				require.NoError(t, err)
+				require.Equal(t, tc.want, got)
+			}
+		})
+	}
 }
 
 func TestScalarVectorQueryOuterZeroDemand(t *testing.T) {
