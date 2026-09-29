@@ -50,7 +50,7 @@ func TestNormalizeStatementDigest(t *testing.T) {
 		{sql: `SELECT /*+ QB_NAME("qb") */ 1`, mode: "ANSI_QUOTES", max: 1024, want: "SELECT /*+ QB_NAME ( `qb` ) */ ?"},
 		{sql: "SELECT CURRENT_DATE, CURRENT_TIME, CURRENT_TIMESTAMP", max: 1024, want: "SELECT CURDATE , CURTIME , NOW"},
 		{sql: "SELECT NULL, id IS NULL", max: 1024, want: "SELECT ? , `id` IS NULL"},
-		{sql: "SELECT SESSION_USER, SESSION_USER /* call */ ()", max: 1024, want: "SELECT `SESSION_USER` , SYSTEM_USER ( )"},
+		{sql: "SELECT SESSION_USER, SESSION_USER /* call */ ()", mode: "IGNORE_SPACE", max: 1024, want: "SELECT `SESSION_USER` , SYSTEM_USER ( )"},
 		{sql: "SELECT 'a' REGEXP 'b'", max: 1024, want: "SELECT ? RLIKE ?"},
 		{sql: "SELECT '$tag$abc$tag$'", max: 1024, want: "SELECT ?"},
 		{sql: `SELECT "column" FROM t`, mode: "ANSI_QUOTES", max: 1024, want: "SELECT `column` FROM `t`"},
