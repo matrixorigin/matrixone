@@ -1146,26 +1146,6 @@ func binaryProtocolPrepareParamType(
 	return runtimeType, ok
 }
 
-// binaryProtocolPrepareParamCategoryType classifies a packet from protocol
-// metadata only. It intentionally does not inspect the value: callers that
-// merely choose a text-vs-numeric specialization must not copy or scan a large
-// DECIMAL payload before preparedParamValues performs the single exact scan.
-func binaryProtocolPrepareParamCategoryType(
-	mysqlType defines.MysqlType,
-	isUnsigned bool,
-) (types.Type, bool) {
-	if mysqlType == defines.MYSQL_TYPE_DECIMAL || mysqlType == defines.MYSQL_TYPE_NEWDECIMAL {
-		return types.T_decimal256.ToType(), true
-	}
-	// Category admission must retain temporal protocol domains.  The execute
-	// path uses this OID-only view to decide whether a cached expression needs
-	// rebinding (for example, a DATE packet supplied to an integer-only
-	// function).  The concrete domain is kept out of ParamValue.RuntimeType
-	// below, so it cannot leak into unrelated consumers such as INET_NTOA.
-	runtimeType, _, _, _, ok := binaryProtocolPrepareParamDomains(mysqlType, isUnsigned, "")
-	return runtimeType, ok
-}
-
 func binaryProtocolTemporalMysqlType(mysqlType defines.MysqlType) bool {
 	switch mysqlType {
 	case defines.MYSQL_TYPE_DATE, defines.MYSQL_TYPE_TIME,
@@ -1749,7 +1729,11 @@ func initExecuteStmtParamWithResolverInSession(
 				compiler.SetDatabase(prepareStmt.defaultDatabase)
 				defer compiler.SetDatabase(database)
 				var buildErr error
-				bound, buildErr = buildPreparedBoundQuery(reqCtx, executionSes, planningContext, prepareStmt.PrepareStmt, cwft.paramBindings, cwft.paramVals)
+				planningCtx := reqCtx
+				if strings.IndexByte(originSQL, '@') >= 0 {
+					planningCtx = plan2.WithPreparedVariableStringDomains(reqCtx, preparePlan.Plan)
+				}
+				bound, buildErr = buildPreparedBoundQuery(planningCtx, executionSes, planningContext, prepareStmt.PrepareStmt, cwft.paramBindings, cwft.paramVals)
 				return buildErr
 			})
 			if err != nil {
@@ -1899,6 +1883,7 @@ func (cwft *TxnComputationWrapper) releaseRuntimeCacheRetiredCompiles() {
 type preparedExecutionRetry struct {
 	bindings           []plan2.PreparedSourceBinding
 	paramVals          []any
+	preparedPlan       *plan2.Plan
 	diagnosticFreeJoin bool
 }
 
@@ -2861,6 +2846,7 @@ func buildPlanForCompileRetry(
 		ctx = function.WithDivPrecisionIncrement(ctx, sessionDivPrecisionIncrement(ses))
 	}
 	if preparedRetry != nil && preparedRetry.bindings != nil && !forcePrepare {
+		ctx = plan2.WithPreparedVariableStringDomains(ctx, preparedRetry.preparedPlan)
 		bound, err := buildPreparedBoundQuery(ctx, ses, compilerContext, stmt, preparedRetry.bindings, preparedRetry.paramVals)
 		if err != nil {
 			return nil, err

@@ -429,7 +429,9 @@ func (b *baseBinder) baseBindVar(astExpr *tree.VarExpr, depth int32, isRoot bool
 		}
 		if typ.Oid.IsMySQLString() {
 			domain := types.RuntimeStringInherit
-			if b.builder != nil && b.builder.compCtx != nil {
+			if frozen, ok := preparedVariableStringDomain(b.GetContext(), astExpr.Name); ok {
+				domain = frozen
+			} else if b.builder != nil && b.builder.compCtx != nil {
 				if resolver, ok := b.builder.compCtx.(UserVariableStringDomainResolver); ok {
 					domain, err = resolver.ResolveVariableStringDomain(astExpr.Name, false, astExpr.Global)
 					if err != nil {

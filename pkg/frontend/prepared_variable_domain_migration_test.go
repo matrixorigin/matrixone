@@ -91,6 +91,20 @@ func TestMigrateConnectionFromPreservesPreparedVariableBinding(t *testing.T) {
 					}
 				}()
 			}
+			retryPlan, err := buildPlanForCompileRetry(execCtx.reqCtx, ses, ses.GetTxnCompileCtx(),
+				prepared.PrepareStmt, false, &preparedExecutionRetry{
+					bindings: cw.paramBindings, paramVals: cw.paramVals,
+					preparedPlan: prepared.PreparePlan.GetDcl().GetPrepare().Plan,
+				})
+			require.NoError(t, err)
+			retryQuery := retryPlan.GetQuery()
+			retryProjects := retryQuery.Nodes[retryQuery.Steps[len(retryQuery.Steps)-1]].ProjectList
+			executor, err := colexec.NewExpressionExecutor(cw.proc, retryProjects[1])
+			require.NoError(t, err)
+			defer executor.Free()
+			retryValue, err := executor.Eval(cw.proc, []*batch.Batch{batch.EmptyForConstFoldBatch}, nil)
+			require.NoError(t, err)
+			require.Equal(t, int64(len([]rune(value))), vector.GetFixedAtNoTypeCheck[int64](retryValue, 0))
 		}()
 		require.True(t, plan.HasBoundStringVariable(prepared.PreparePlan), "execution preparation and evaluation must not erase cached bindings")
 		require.Equal(t, original, p.String())

@@ -35,6 +35,45 @@ type PreparedSourceBinding struct {
 }
 
 type preparedSourceBindingsKey struct{}
+type preparedVariableStringDomainsKey struct{}
+
+// WithPreparedVariableStringDomains retains PREPARE-time user-variable row
+// domains while execution-time parameter binding replans the statement.
+func WithPreparedVariableStringDomains(ctx context.Context, prepared *Plan) context.Context {
+	if prepared == nil {
+		return ctx
+	}
+	domains := make(map[string]uint32)
+	var visit func(*Expr) error
+	visit = func(expr *Expr) error {
+		if v := expr.GetV(); v != nil && !v.System && v.BoundStringDomain != 0 {
+			domains[strings.ToLower(v.Name)] = v.BoundStringDomain
+		}
+		if source := expr.GetPreparedNumeric().GetStringDomainSource(); source != nil {
+			return plan.VisitExprTree(source, visit)
+		}
+		return nil
+	}
+	_ = plan.VisitExpressionsInOwner(prepared, func(root *Expr) error {
+		return plan.VisitExprTree(root, visit)
+	})
+	if len(domains) == 0 {
+		return ctx
+	}
+	return context.WithValue(ctx, preparedVariableStringDomainsKey{}, domains)
+}
+
+func preparedVariableStringDomain(ctx context.Context, name string) (types.RuntimeStringDomain, bool) {
+	if ctx == nil {
+		return 0, false
+	}
+	domains, _ := ctx.Value(preparedVariableStringDomainsKey{}).(map[string]uint32)
+	encoded := domains[strings.ToLower(name)]
+	if encoded == 0 {
+		return 0, false
+	}
+	return types.RuntimeStringDomain(encoded - 1), true
+}
 
 // Values are visible only during this binding. Consumers which require a
 // value to determine schema/configuration mark the result value-dependent;

@@ -151,9 +151,14 @@ func (cwft *TxnComputationWrapper) preparedExecutionRetry() *preparedExecutionRe
 	if len(cwft.paramVals) == 0 && !cwft.preparedJoinDiagnosticFree {
 		return nil
 	}
+	var preparedPlan *plan2.Plan
+	if cwft.preparedStmt != nil && strings.IndexByte(cwft.preparedStmt.Sql, '@') >= 0 {
+		preparedPlan = cwft.preparedStmt.PreparePlan.GetDcl().GetPrepare().Plan
+	}
 	return &preparedExecutionRetry{
 		paramVals:          append([]any(nil), cwft.paramVals...),
 		bindings:           append([]plan2.PreparedSourceBinding(nil), cwft.paramBindings...),
+		preparedPlan:       preparedPlan,
 		diagnosticFreeJoin: cwft.preparedJoinDiagnosticFree,
 	}
 }
