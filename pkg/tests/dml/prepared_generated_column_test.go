@@ -16,6 +16,7 @@ package dml
 
 import (
 	"context"
+	"database/sql"
 	"fmt"
 	"testing"
 	"time"
@@ -57,30 +58,33 @@ func TestPreparedInsertSelectGeneratedColumn(t *testing.T) {
 				execSQLDB(t, ctx, db, fmt.Sprintf(
 					"create table %s (id int primary key, v int, g int as (v + 1) stored%s)",
 					table, secondary))
+				var stmt *sql.Stmt
 				if tc.prepared {
-					stmt := "p_" + tc.name
-					execSQLDB(t, ctx, db, fmt.Sprintf(
-						"prepare %s from 'insert into %s(id,v) select id,v+? from src where id<=?'",
-						stmt, table))
-					execSQLDB(t, ctx, db, "set @delta=7,@cut=3")
-					execSQLDB(t, ctx, db, fmt.Sprintf("execute %s using @delta,@cut", stmt))
-					execSQLDB(t, ctx, db, "deallocate prepare "+stmt)
+					// BVT covers SQL PREPARE; this test owns binary protocol reuse.
+					var err error
+					stmt, err = db.PrepareContext(ctx, fmt.Sprintf(
+						"insert into %s(id,v) select id,v+? from src where id<=?", table))
+					require.NoError(t, err)
+					defer stmt.Close()
+					_, err = stmt.ExecContext(ctx, int64(7), int64(3))
+					require.NoError(t, err)
 				} else {
 					execSQLDB(t, ctx, db, fmt.Sprintf(
 						"insert into %s(id,v) select id,v+7 from src where id<=3", table))
 				}
 
-				rows, err := db.QueryContext(ctx, "select id,v,g,v+1 from "+table+" order by id")
-				require.NoError(t, err)
-				defer rows.Close()
-				var got [][4]int
-				for rows.Next() {
-					var row [4]int
-					require.NoError(t, rows.Scan(&row[0], &row[1], &row[2], &row[3]))
-					got = append(got, row)
+				query := "select id,v,g,v+1 from " + table + " order by id"
+				require.Equal(t, [][]string{{"1", "17", "18", "18"}, {"2", "27", "28", "28"}, {"3", "37", "38", "38"}},
+					queryStringRows(t, ctx, db, query))
+				if tc.prepared {
+					// DELETE preserves the table identity so this exercises rebinding,
+					// not the DDL-triggered rebuild covered by the BVT's TRUNCATE.
+					execSQLDB(t, ctx, db, "delete from "+table)
+					_, err := stmt.ExecContext(ctx, int64(-3), int64(2))
+					require.NoError(t, err)
+					require.Equal(t, [][]string{{"1", "7", "8", "8"}, {"2", "17", "18", "18"}},
+						queryStringRows(t, ctx, db, query))
 				}
-				require.NoError(t, rows.Err())
-				require.Equal(t, [][4]int{{1, 17, 18, 18}, {2, 27, 28, 28}, {3, 37, 38, 38}}, got)
 			})
 		}
 	})

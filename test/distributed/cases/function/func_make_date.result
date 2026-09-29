@@ -78,11 +78,10 @@ SELECT MAKEDATE(2024, 29131750000);
 MAKEDATE(2024, 29131750000)
 null
 SELECT MAKEDATE(29131750000111111111, 2024);
-MAKEDATE(29131750000111111111, 2024)
-null
+Data truncation: data out of range: data type int64, integer argument
 SELECT MAKEDATE('2x23', 321);
 MAKEDATE(2x23, 321)
-null
+2002-11-17
 SELECT MAKEDATE(2024, '');
 MAKEDATE(2024, )
 null
@@ -156,7 +155,7 @@ MAKEDATE(2024, 321)
 2024-11-16
 SELECT MAKEDATE('2x23', 321);
 MAKEDATE(2x23, 321)
-null
+2002-11-17
 SELECT MAKEDATE(0b11111100101, 123);
 MAKEDATE(0b11111100101, 123)
 2021-05-03
@@ -188,5 +187,45 @@ SELECT MAKEDATE(29131750000, 2024);
 MAKEDATE(29131750000, 2024)
 null
 SELECT MAKEDATE(29131750000111111111, 2024);
-MAKEDATE(29131750000111111111, 2024)
+Data truncation: data out of range: data type int64, integer argument
+SELECT MAKEDATE(2024, 4294967297), MAKEDATE(2024, 9223372036854775807);
+➤ MAKEDATE(2024, 4294967297)[12,65535,0]  ¦  MAKEDATE(2024, 9223372036854775807)[12,65535,0]  𝄀
+null  ¦  null
+SELECT MAKEDATE(9999,365), MAKEDATE(9999,366), MAKEDATE(10000,1);
+➤ MAKEDATE(9999, 365)[12,65535,0]  ¦  MAKEDATE(9999, 366)[12,65535,0]  ¦  MAKEDATE(10000, 1)[12,65535,0]  𝄀
+9999-12-31  ¦  null  ¦  null
+SELECT MAKEDATE(0,1), MAKEDATE(69,1), MAKEDATE(70,1), MAKEDATE(99,1), MAKEDATE(100,1);
+➤ MAKEDATE(0, 1)[12,65535,0]  ¦  MAKEDATE(69, 1)[12,65535,0]  ¦  MAKEDATE(70, 1)[12,65535,0]  ¦  MAKEDATE(99, 1)[12,65535,0]  ¦  MAKEDATE(100, 1)[12,65535,0]  𝄀
+2000-01-01  ¦  2069-01-01  ¦  1970-01-01  ¦  1999-01-01  ¦  0100-01-01
+SELECT MAKEDATE(2023.5,1.5), MAKEDATE(2024,2.5E0), MAKEDATE(2024,CAST(1.5 AS DOUBLE));
+➤ MAKEDATE(2023.5, 1.5)[12,65535,0]  ¦  MAKEDATE(2024, 2.5e0)[12,65535,0]  ¦  MAKEDATE(2024, cast(1.5 as double))[12,65535,0]  𝄀
+2024-01-02  ¦  2024-01-02  ¦  2024-01-01
+SELECT MAKEDATE(2024,CAST('9223372036854775808' AS UNSIGNED));
+Data truncation: data out of range: data type int64, integer argument
+DROP DATABASE IF EXISTS makedate_integer_contract_db;
+CREATE DATABASE makedate_integer_contract_db;
+USE makedate_integer_contract_db;
+CREATE TABLE makedate_integer_contract(y DECIMAL(10,1), d BIGINT, g VARCHAR(32) GENERATED ALWAYS AS (MAKEDATE(y,d)) STORED);
+INSERT INTO makedate_integer_contract(y,d) VALUES (2023.5,366), (2024,4294967297), (9999,366);
+SELECT y,d,MAKEDATE(y,d),g FROM makedate_integer_contract ORDER BY y,d;
+➤ y[3,10,1]  ¦  d[-5,64,0]  ¦  MAKEDATE(y, d)[12,65535,0]  ¦  g[12,32,0]  𝄀
+2023.5  ¦  366  ¦  2024-12-31  ¦  2024-12-31  𝄀
+2024.0  ¦  4294967297  ¦  null  ¦  null  𝄀
+9999.0  ¦  366  ¦  null  ¦  null
+DROP TABLE makedate_integer_contract;
+PREPARE makedate_integer_stmt FROM 'SELECT MAKEDATE(?,?)';
+SET @makedate_year = 2023.5, @makedate_day = 1.5;
+EXECUTE makedate_integer_stmt USING @makedate_year, @makedate_day;
+➤ MAKEDATE(?, ?)[12,65535,0]  𝄀
+2024-01-02
+SET @makedate_day = NULL;
+EXECUTE makedate_integer_stmt USING @makedate_year, @makedate_day;
+➤ MAKEDATE(?, ?)[12,65535,0]  𝄀
 null
+SET @makedate_year = 2024, @makedate_day = '1.9tail';
+EXECUTE makedate_integer_stmt USING @makedate_year, @makedate_day;
+➤ MAKEDATE(?, ?)[12,65535,0]  𝄀
+2024-01-01
+DEALLOCATE PREPARE makedate_integer_stmt;
+SET @makedate_year = NULL, @makedate_day = NULL;
+DROP DATABASE makedate_integer_contract_db;

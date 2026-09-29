@@ -162,6 +162,16 @@ func truncateUTF8(bs []byte, maxLen int) []byte {
 	return bs[:n]
 }
 
+// TruncateToken caps bs the way SimpleTokenizer stores a Latin token, so a query token built OUTSIDE
+// the tokenizer (fulltext2's ngramPhraseSlots, used by the ngram/default/json parsers) looks up the
+// exact bytes the index persisted. It mirrors SimpleTokenizer.outputLatin's byte-boundary rule — NOT
+// the clean UTF-8 boundary of truncateUTF8 — because outputLatin over-truncates a run whose cap lands
+// just past a complete multi-byte char (see TruncateLatinToken). The jieba path does not use this: it
+// indexes and queries through the jieba tokenizer, which caps with truncateUTF8 on both sides (#29276).
+func TruncateToken(bs []byte) []byte {
+	return TruncateLatinToken(bs)
+}
+
 func (t *JiebaTokenizer) Tokenize(input []byte) iter.Seq2[Token, error] {
 	return func(yield func(Token, error) bool) {
 		if t.jieba == nil || len(input) == 0 {

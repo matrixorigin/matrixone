@@ -108,6 +108,226 @@ func TestSessionStopsWhenTransportDisconnects(t *testing.T) {
 	require.ErrorIs(t, session.sessionCtx.Err(), context.Canceled)
 }
 
+func TestSubscriptionPullCancelsWhenSessionCloses(t *testing.T) {
+	entered := make(chan struct{})
+	logtailer := &controlledLogtailer{
+		tableFn: func(ctx context.Context, _ api.TableID, _, _ timestamp.Timestamp) (logtail.TableLogtail, func(), error) {
+			close(entered)
+			<-ctx.Done()
+			return logtail.TableLogtail{}, nil, ctx.Err()
+		},
+	}
+	server := newUnitLogtailServerWithStart(t, logtailer, false)
+	transport := newCaptureSession()
+	session := server.ssmgr.GetSession(
+		server.rootCtx, server.logger, server.pool.responses, server,
+		newCaptureStream(transport), time.Second, time.Second, time.Hour, time.Hour,
+	)
+	t.Cleanup(session.PostClean)
+	table := mockTable(1, 1, 1)
+	id := MarshalTableID(&table)
+	_, generation := session.RegisterWithGeneration(id, table)
+	errCh := make(chan error, 1)
+	go func() {
+		_, err := server.getSubLogtailPhase(server.rootCtx, subscription{
+			timeout:    10 * time.Second,
+			tableID:    id,
+			generation: generation,
+			req:        &logtail.SubscribeRequest{Table: &table},
+			session:    session,
+		}, timestamp.Timestamp{}, timestamp.Timestamp{PhysicalTime: 1})
+		errCh <- err
+	}()
+	select {
+	case <-entered:
+	case <-time.After(10 * time.Second):
+		t.Fatal("subscription pull did not start")
+	}
+	transport.cancel()
+	select {
+	case err := <-errCh:
+		require.ErrorIs(t, err, context.Canceled)
+	case <-time.After(2 * time.Second):
+		t.Fatal("closing the transport did not cancel the in-flight pull")
+	}
+	require.Equal(t, TableNotFound, session.Unregister(id))
+}
+
+// A slow catalog pull can outlive the CN's subscription attempt. Reconnecting
+// creates a new transport while the old pull still owns a TN worker slot.
+// The controlled collector stands in for the oversized-logtail flush wait;
+// no large catalog or wall-clock timeout is needed to exercise that ordering.
+func TestDisconnectedCatalogPullReleasesWorkerForReconnect(t *testing.T) {
+	oldEntered := make(chan struct{})
+	oldExited := make(chan struct{})
+	releaseOld := make(chan struct{})
+	defer close(releaseOld) // Also unblock an old implementation if an assertion fails.
+	newEntered := make(chan struct{})
+	var calls atomic.Int32
+	logtailer := &controlledLogtailer{
+		tableFn: func(ctx context.Context, table api.TableID, _, to timestamp.Timestamp) (logtail.TableLogtail, func(), error) {
+			call := calls.Add(1)
+			if call == 1 {
+				close(oldEntered)
+				defer close(oldExited)
+				select {
+				case <-ctx.Done():
+					return logtail.TableLogtail{}, nil, ctx.Err()
+				case <-releaseOld:
+					return mockLogtail(table, to), nil, nil
+				}
+			}
+			if call == 2 {
+				close(newEntered)
+			}
+			return mockLogtail(table, to), nil, nil
+		},
+	}
+	server := newUnitLogtailServerWithStart(t, logtailer, false) // One pull worker slot.
+	server.cfg.ResponseSendTimeout = 10 * time.Second
+	require.NoError(t, server.Start())
+	bootstrapped := make(chan struct{})
+	require.NoError(t, logtailer.notify(
+		timestamp.Timestamp{}, timestamp.Timestamp{}, func() { close(bootstrapped) },
+	))
+	select {
+	case <-bootstrapped:
+	case <-time.After(10 * time.Second):
+		t.Fatal("logtail sender did not consume the bootstrap event")
+	}
+	table := mockTable(1, 2, 0) // mo_catalog.mo_tables.
+	req := &logtail.SubscribeRequest{Table: &table}
+
+	oldTransport := newCaptureSession()
+	oldStream := newCaptureStream(oldTransport)
+	oldSession, err := server.getSession(oldStream)
+	require.NoError(t, err)
+	require.NoError(t, server.onSubscription(t.Context(), oldStream, req))
+	select {
+	case <-oldEntered:
+	case <-time.After(10 * time.Second):
+		t.Fatal("old catalog pull did not reach the controlled flush wait")
+	}
+	require.Len(t, server.pullWorkerPool, 1)
+
+	newTransport := newCaptureSession()
+	newStream := newCaptureStream(newTransport)
+	newSession, err := server.getSession(newStream)
+	require.NoError(t, err)
+	require.NoError(t, server.onSubscription(t.Context(), newStream, req))
+	oldTransport.cancel() // CN abandons the old attempt and reconnects.
+
+	select {
+	case <-oldExited:
+	case <-time.After(2 * time.Second):
+		t.Fatal("abandoned catalog pull retained the only TN worker slot")
+	}
+	select {
+	case <-newEntered:
+	case <-time.After(2 * time.Second):
+		t.Fatal("new connection could not start its catalog pull")
+	}
+	require.NotNil(t, receiveCapturedLogtailResponse(t, newTransport).GetSubscribeResponse())
+	require.Zero(t, oldSession.Active())
+	require.Equal(t, 1, newSession.Active())
+}
+
+func TestAbandonedSubscriptionPullReleasesLateCallback(t *testing.T) {
+	for _, phase := range []string{"phase1", "phase2"} {
+		t.Run(phase, func(t *testing.T) {
+			entered := make(chan struct{})
+			release := make(chan struct{})
+			releasePull := sync.OnceFunc(func() { close(release) })
+			var closed atomic.Int32
+			logtailer := &controlledLogtailer{
+				tableFn: func(_ context.Context, table api.TableID, _, to timestamp.Timestamp) (logtail.TableLogtail, func(), error) {
+					close(entered)
+					<-release // Deliberately return success after the transport is closed.
+					return mockLogtail(table, to), func() { closed.Add(1) }, nil
+				},
+			}
+			server := newUnitLogtailServerWithStart(t, logtailer, false)
+			session := server.ssmgr.GetSession(
+				server.rootCtx, server.logger, server.pool.responses, server,
+				newCaptureStream(newCaptureSession()), time.Second, time.Second, time.Hour, time.Hour,
+			)
+			t.Cleanup(session.PostClean)
+			table := mockTable(1, 1, 1)
+			id := MarshalTableID(&table)
+			_, generation := session.RegisterWithGeneration(id, table)
+			from := timestamp.Timestamp{}
+			if phase == "phase2" {
+				from.PhysicalTime = 1
+			}
+			errCh := make(chan error, 1)
+			finished := make(chan struct{})
+			go func() {
+				defer close(finished)
+				_, err := server.getSubLogtailPhase(server.rootCtx, subscription{
+					timeout:    10 * time.Second,
+					tableID:    id,
+					generation: generation,
+					req:        &logtail.SubscribeRequest{Table: &table},
+					session:    session,
+				}, from, timestamp.Timestamp{PhysicalTime: 2})
+				errCh <- err
+			}()
+			// Run before session/server cleanup even if an assertion stops the test.
+			t.Cleanup(func() {
+				releasePull()
+				select {
+				case <-finished:
+				case <-time.After(2 * time.Second):
+					t.Error("abandoned pull goroutine did not exit")
+				}
+			})
+			select {
+			case <-entered:
+			case <-time.After(10 * time.Second):
+				t.Fatal("subscription pull did not start")
+			}
+			session.PostClean()
+			releasePull()
+			select {
+			case err := <-errCh:
+				require.ErrorIs(t, err, context.Canceled)
+			case <-time.After(2 * time.Second):
+				t.Fatal("abandoned pull did not release its result")
+			}
+			require.Equal(t, int32(1), closed.Load())
+			require.Equal(t, TableNotFound, session.Unregister(id))
+		})
+	}
+}
+
+func TestClosedSessionPullSkipsCollector(t *testing.T) {
+	var calls atomic.Int32
+	server := newUnitLogtailServerWithStart(t, &controlledLogtailer{
+		tableFn: func(context.Context, api.TableID, timestamp.Timestamp, timestamp.Timestamp) (logtail.TableLogtail, func(), error) {
+			calls.Add(1)
+			return logtail.TableLogtail{}, nil, nil
+		},
+	}, false)
+	session := server.ssmgr.GetSession(
+		server.rootCtx, server.logger, server.pool.responses, server,
+		newCaptureStream(newCaptureSession()), time.Second, time.Second, time.Hour, time.Hour,
+	)
+	table := mockTable(1, 1, 1)
+	id := MarshalTableID(&table)
+	_, generation := session.RegisterWithGeneration(id, table)
+	session.PostClean()
+	_, err := server.getSubLogtailPhase(server.rootCtx, subscription{
+		timeout:    time.Second,
+		tableID:    id,
+		generation: generation,
+		req:        &logtail.SubscribeRequest{Table: &table},
+		session:    session,
+	}, timestamp.Timestamp{}, timestamp.Timestamp{PhysicalTime: 1})
+	require.ErrorIs(t, err, context.Canceled)
+	require.Zero(t, calls.Load())
+	require.Equal(t, TableNotFound, session.Unregister(id))
+}
+
 func TestPostCleanCancelsBeforeClosingTransport(t *testing.T) {
 	transport := &cancelOrderSession{captureSession: newCaptureSession()}
 	responses := NewLogtailResponsePool()

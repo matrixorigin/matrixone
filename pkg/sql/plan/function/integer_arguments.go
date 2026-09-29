@@ -32,8 +32,11 @@ const (
 type integerParameter struct {
 	position int
 	target   types.T
-	mode     integerParameterMode
-	variadic bool
+	// physicalTarget preserves a legacy executor signature after logical
+	// parameter coercion. Zero means the executor consumes target directly.
+	physicalTarget types.T
+	mode           integerParameterMode
+	variadic       bool
 	// Only roles whose original signatures accepted temporal values opt in.
 	temporal bool
 	uuid     bool
@@ -53,16 +56,26 @@ func integerParameterForPosition(name string, position int) (integerParameter, b
 }
 
 func (p integerParameter) sourceTarget(source types.T, binaryLiteral bool) (types.T, bool) {
-	if p.mode == integerBitPatternParameter && source.IsMySQLString() {
-		return types.T_uint64, true
+	if p.mode == integerBitPatternParameter {
+		return IntegerBitSourceTarget(source, binaryLiteral), true
 	}
-	if p.mode == numericOnlyIntegerParameter && !(source.IsInteger() || source.IsFloat() || source.IsDecimal() || source == types.T_bool || source == types.T_bit || source == types.T_year) {
+	if p.mode == numericOnlyIntegerParameter && !(source.IsInteger() || source.IsFloat() || source.IsDecimal() || source == types.T_bool || source == types.T_bit || source == types.T_year || source == types.T_enum) {
 		return 0, false
 	}
 	if p.mode != fixedIntegerParameter && (source.IsUnsignedInt() || source == types.T_bit || binaryLiteral) {
 		return types.T_uint64, true
 	}
 	return p.target, true
+}
+
+// IntegerBitSourceTarget selects the logical domain for a bit-pattern consumer.
+// A provisional text input cannot freeze an unsigned target when its source
+// later resolves to a signed numeric value.
+func IntegerBitSourceTarget(source types.T, binaryLiteral bool) types.T {
+	if source.IsMySQLString() || source.IsUnsignedInt() || source == types.T_bit || binaryLiteral {
+		return types.T_uint64
+	}
+	return types.T_int64
 }
 
 // IntegerArgumentSourceDependent identifies parameters whose real domain must
@@ -93,6 +106,14 @@ func IntegerArgumentTarget(name string, position int) (types.T, bool) {
 		return 0, false
 	}
 	return parameter.target, true
+}
+
+func IntegerArgumentPhysicalTarget(name string, position int) (types.T, bool) {
+	parameter, ok := integerParameterForPosition(name, position)
+	if !ok || parameter.physicalTarget == 0 {
+		return 0, false
+	}
+	return parameter.physicalTarget, true
 }
 
 func IntegerArgumentUsesExtendedSources(name string, position int) bool {
@@ -168,6 +189,9 @@ func (fn FuncNew) checkArgumentTypes(inputs []types.Type, modes []StringDomainCh
 		}
 		for position := parameter.position; position < end; position++ {
 			source := inputs[position]
+			if parameter.physicalTarget != 0 && source.Oid == parameter.physicalTarget {
+				continue
+			}
 			target, applies := parameter.sourceTarget(source.Oid, false)
 			if !applies {
 				continue

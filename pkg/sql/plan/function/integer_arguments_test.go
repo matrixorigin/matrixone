@@ -21,6 +21,7 @@ import (
 	"testing"
 
 	"github.com/matrixorigin/matrixone/pkg/container/types"
+	"github.com/matrixorigin/matrixone/pkg/container/vector"
 	"github.com/matrixorigin/matrixone/pkg/testutil"
 	"github.com/stretchr/testify/require"
 )
@@ -73,8 +74,28 @@ func TestIntegerArgumentCanonicalBinding(t *testing.T) {
 	require.Error(t, err)
 }
 
+func TestSplitPartReusesLegacyExecutionIdentity(t *testing.T) {
+	for _, source := range []types.T{types.T_int64, types.T_uint64, types.T_float64, types.T_decimal128, types.T_varchar, types.T_any} {
+		resolved, err := GetFunctionByName(context.Background(), "split_part", []types.Type{
+			types.T_varchar.ToType(), types.T_varchar.ToType(), source.ToType(),
+		})
+		require.NoError(t, err, source)
+		_, overload := DecodeOverloadID(resolved.GetEncodedOverloadID())
+		require.Equal(t, int32(0), overload, source)
+		targets, cast := resolved.ShouldDoImplicitTypeCast()
+		require.True(t, cast)
+		require.Equal(t, types.T_uint32, targets[2].Oid)
+	}
+
+	// Persisted plans created before integer-parameter migration retain UINT32.
+	_, err := GetFunctionByNameWithOverload(context.Background(), "split_part", []types.Type{
+		types.T_varchar.ToType(), types.T_varchar.ToType(), types.T_uint32.ToType(),
+	}, 0)
+	require.NoError(t, err)
+}
+
 func TestIntegerArgumentAdditionalSignatures(t *testing.T) {
-	for _, name := range []string{"ceil", "ceiling", "floor", "round", "truncate", "regexp_instr", "regexp_replace", "regexp_substr", "from_days", "week", "yearweek", "sha2", "subvector", "last_query_id", "random_bytes", "timestampadd"} {
+	for _, name := range []string{"period_add", "period_diff", "ceil", "ceiling", "floor", "round", "truncate", "from_days", "week", "yearweek", "timestampadd", "subvector", "last_query_id", "random_bytes", "sha2", "split_part", "regexp_instr", "regexp_replace", "regexp_substr", "format", "makedate", "maketime"} {
 		id, ok := getFunctionIdByNameWithoutErr(name)
 		require.True(t, ok, name)
 		fn := allSupportedFunctions[id]
@@ -192,6 +213,46 @@ func TestIntegerArgumentRealEvaluation(t *testing.T) {
 	u, err := checkedIntegerArgument[uint64](realIntegerArgument(math.Nextafter(0x1p64, 0), false), proc)
 	require.NoError(t, err)
 	require.Equal(t, uint64(18446744073709549568), u)
+}
+
+func TestPrivateIntegerArgumentCastPreservesScalarDomain(t *testing.T) {
+	proc := testutil.NewProcess(t)
+	result := vector.NewFunctionResultWrapper(types.T_int64.ToType(), proc.Mp())
+	defer result.Free()
+	target, err := vector.NewConstFixed(types.T_int64.ToType(), int64(0), 3, proc.Mp())
+	require.NoError(t, err)
+	defer target.Free(proc.Mp())
+	scalar, err := vector.NewConstFixed(types.T_float64.ToType(), 2.5, 3, proc.Mp())
+	require.NoError(t, err)
+	defer scalar.Free(proc.Mp())
+	flat := newVectorByType(proc.Mp(), types.T_float64.ToType(), []float64{2.5, 2.5, 2.5}, nil)
+	defer flat.Free(proc.Mp())
+	for _, tc := range []struct {
+		name    string
+		source  *vector.Vector
+		mask    *FunctionSelectList
+		length  int
+		isConst bool
+	}{
+		{"scalar three rows", scalar, nil, 3, true},
+		{"flat equal values", flat, nil, 3, false},
+		{"scalar partial selection", scalar, &FunctionSelectList{AnyNull: true, SelectList: []bool{true, false, true}}, 3, false},
+		{"scalar zero rows", scalar, nil, 0, false},
+		{"scalar reused", scalar, nil, 3, true},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			require.NoError(t, result.PreExtendAndReset(tc.length))
+			require.NoError(t, NewIntegerArgumentCast([]*vector.Vector{tc.source, target}, result, proc, tc.length, tc.mask))
+			got := result.GetResultVector()
+			require.Equal(t, tc.isConst, got.IsConst())
+			require.Equal(t, tc.length, got.Length())
+			if tc.length > 0 && tc.mask == nil {
+				for i := 0; i < tc.length; i++ {
+					require.Equal(t, int64(2), vector.GetFixedAtNoTypeCheck[int64](got, i))
+				}
+			}
+		})
+	}
 }
 
 func TestIntegerArgumentExactDomains(t *testing.T) {

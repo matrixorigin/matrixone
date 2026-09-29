@@ -273,11 +273,18 @@ func NormalizeL2Array[T types.ArrayElement](parameters []*vector.Vector, result 
 			} else {
 				outArrayF32 = outArrayF32[:len(inArrayF32)]
 			}
-			_ = moarray.NormalizeL2(inArrayF32, outArrayF32)
-			_ = rs.AppendBytes(types.ArrayToBytes[float32](outArrayF32), false)
+			err := moarray.NormalizeL2(inArrayF32, outArrayF32)
+			if err == nil {
+				err = rs.AppendBytes(types.ArrayToBytes[float32](outArrayF32), false)
+			}
 
 			*outArrayF32Ptr = outArrayF32
 			arrayF32Pool.Put(outArrayF32Ptr)
+			if err != nil {
+				// NormalizeL2 leaves normalized untouched when it fails, and the buffer above is
+				// pooled and not zeroed -- appending it would emit an earlier row's vector.
+				return err
+			}
 		case types.T_array_float64:
 			inArrayF64 = types.BytesToArray[float64](data)
 
@@ -289,23 +296,37 @@ func NormalizeL2Array[T types.ArrayElement](parameters []*vector.Vector, result 
 			} else {
 				outArrayF64 = outArrayF64[:len(inArrayF64)]
 			}
-			_ = moarray.NormalizeL2(inArrayF64, outArrayF64)
-			_ = rs.AppendBytes(types.ArrayToBytes[float64](outArrayF64), false)
+			err := moarray.NormalizeL2(inArrayF64, outArrayF64)
+			if err == nil {
+				err = rs.AppendBytes(types.ArrayToBytes[float64](outArrayF64), false)
+			}
 
 			*outArrayF64Ptr = outArrayF64
 			arrayF64Pool.Put(outArrayF64Ptr)
+			if err != nil {
+				// See the float32 case: the pooled buffer holds an earlier row on failure.
+				return err
+			}
 		case types.T_array_bf16:
-			_ = appendNormalizedNarrowArray[types.BF16](rs, data)
+			if err := appendNormalizedNarrowArray[types.BF16](rs, data); err != nil {
+				return err
+			}
 		case types.T_array_float16:
-			_ = appendNormalizedNarrowArray[types.Float16](rs, data)
+			if err := appendNormalizedNarrowArray[types.Float16](rs, data); err != nil {
+				return err
+			}
 		case types.T_array_int8:
 			// A normalized vector is a unit vector, which cannot be represented in
 			// an integer element type (components round to 0/±1 and the norm is no
 			// longer 1), so int8/uint8 normalize_l2 widens the result to vecf32.
 			// The overload's retType is T_array_float32 to match (see list_builtIn).
-			_ = appendNormalizedIntArrayAsFloat32[int8](rs, data)
+			if err := appendNormalizedIntArrayAsFloat32[int8](rs, data); err != nil {
+				return err
+			}
 		case types.T_array_uint8:
-			_ = appendNormalizedIntArrayAsFloat32[uint8](rs, data)
+			if err := appendNormalizedIntArrayAsFloat32[uint8](rs, data); err != nil {
+				return err
+			}
 		}
 
 	}
@@ -320,7 +341,9 @@ func NormalizeL2Array[T types.ArrayElement](parameters []*vector.Vector, result 
 func appendNormalizedNarrowArray[T types.ArrayElement](rs *vector.FunctionResult[types.Varlena], data []byte) error {
 	in := types.ToFloat32Array[T](types.BytesToArray[T](data))
 	out := make([]float32, len(in))
-	_ = moarray.NormalizeL2(in, out)
+	if err := moarray.NormalizeL2(in, out); err != nil {
+		return err
+	}
 	return rs.AppendBytes(types.ArrayToBytes[T](types.FromFloat32Array[T](out)), false)
 }
 
@@ -333,7 +356,9 @@ func appendNormalizedNarrowArray[T types.ArrayElement](rs *vector.FunctionResult
 func appendNormalizedIntArrayAsFloat32[T types.ArrayElement](rs *vector.FunctionResult[types.Varlena], data []byte) error {
 	in := types.ToFloat32Array[T](types.BytesToArray[T](data))
 	out := make([]float32, len(in))
-	_ = moarray.NormalizeL2(in, out)
+	if err := moarray.NormalizeL2(in, out); err != nil {
+		return err
+	}
 	return rs.AppendBytes(types.ArrayToBytes[float32](out), false)
 }
 
@@ -1082,15 +1107,41 @@ func UtcDate(_ []*vector.Vector, result vector.FunctionResultWrapper, proc *proc
 }
 
 func DateToDate(ivecs []*vector.Vector, result vector.FunctionResultWrapper, proc *process.Process, length int, selectList *FunctionSelectList) error {
-	return opUnaryFixedToFixed[types.Date, types.Date](ivecs, result, proc, length, func(v types.Date) types.Date {
-		return v
+	modeChecked, rejectZero := false, false
+	var modeErr error
+	err := opUnaryFixedToFixedWithNullCheck[types.Date, types.Date](ivecs, result, length, func(v types.Date) (types.Date, bool) {
+		if v == types.ZeroDate {
+			if !modeChecked {
+				rejectZero, modeErr = process.ResolveExplicitZeroTemporalCastReturnsNull(proc)
+				modeChecked = true
+			}
+			return v, rejectZero || modeErr != nil
+		}
+		return v, false
 	}, selectList)
+	if modeErr != nil {
+		return modeErr
+	}
+	return err
 }
 
 func DatetimeToDate(ivecs []*vector.Vector, result vector.FunctionResultWrapper, proc *process.Process, length int, selectList *FunctionSelectList) error {
-	return opUnaryFixedToFixed[types.Datetime, types.Date](ivecs, result, proc, length, func(v types.Datetime) types.Date {
-		return v.ToDate()
+	modeChecked, rejectZero := false, false
+	var modeErr error
+	err := opUnaryFixedToFixedWithNullCheck[types.Datetime, types.Date](ivecs, result, length, func(v types.Datetime) (types.Date, bool) {
+		if v == types.ZeroDatetime {
+			if !modeChecked {
+				rejectZero, modeErr = process.ResolveExplicitZeroTemporalCastReturnsNull(proc)
+				modeChecked = true
+			}
+			return v.ToDate(), rejectZero || modeErr != nil
+		}
+		return v.ToDate(), false
 	}, selectList)
+	if modeErr != nil {
+		return modeErr
+	}
+	return err
 }
 
 func TimeToDate(ivecs []*vector.Vector, result vector.FunctionResultWrapper, proc *process.Process, length int, selectList *FunctionSelectList) error {
@@ -1101,13 +1152,47 @@ func TimeToDate(ivecs []*vector.Vector, result vector.FunctionResultWrapper, pro
 
 // DateStringToDate can still speed up if vec is const. but we will do the constant fold. so it does not matter.
 func DateStringToDate(ivecs []*vector.Vector, result vector.FunctionResultWrapper, proc *process.Process, length int, selectList *FunctionSelectList) error {
-	return opUnaryBytesToFixedWithErrorCheck[types.Date](ivecs, result, proc, length, func(v []byte) (types.Date, error) {
-		d, e := types.ParseDatetime(functionUtil.QuickBytesToStr(v), 6)
-		if e != nil {
-			return 0, moerr.NewOutOfRangeNoCtxf("date", "'%s'", v)
+	source := vector.GenerateFunctionStrParameter(ivecs[0])
+	rs := vector.MustFunctionResult[types.Date](result)
+	modeChecked, rejectZero := false, false
+	for i := uint64(0); i < uint64(length); i++ {
+		if functionRowSkipped(selectList, i) {
+			if err := rs.Append(0, true); err != nil {
+				return err
+			}
+			continue
 		}
-		return d.ToDate(), nil
-	}, selectList)
+		value, null := source.GetStrValue(i)
+		if null {
+			if err := rs.Append(0, true); err != nil {
+				return err
+			}
+			continue
+		}
+		parsed, err := types.ParseDatetime(functionUtil.QuickBytesToStr(value), 6)
+		if err != nil {
+			return moerr.NewOutOfRangeNoCtxf("date", "'%s'", value)
+		}
+		if parsed == types.ZeroDatetime {
+			if !modeChecked {
+				rejectZero, err = process.ResolveExplicitZeroTemporalCastReturnsNull(proc)
+				if err != nil {
+					return err
+				}
+				modeChecked = true
+			}
+			if rejectZero {
+				if err := rs.Append(0, true); err != nil {
+					return err
+				}
+				continue
+			}
+		}
+		if err := rs.Append(parsed.ToDate(), false); err != nil {
+			return err
+		}
+	}
+	return nil
 }
 
 func DateToDay(ivecs []*vector.Vector, result vector.FunctionResultWrapper, proc *process.Process, length int, selectList *FunctionSelectList) error {
@@ -1171,6 +1256,8 @@ func parseDateExtractParts(value string) (dateExtractParts, bool) {
 	return parts, true
 }
 
+// Raw field extraction inspects accepted calendar fields without applying the
+// SQL mode policy for converting a zero date into a DATE value.
 func dateStringToFixedWithNullOnError[T types.FixedSizeTExceptStrType](ivecs []*vector.Vector, result vector.FunctionResultWrapper, _ *process.Process, length int, selectList *FunctionSelectList, fn func(dateExtractParts) (T, bool)) error {
 	source := vector.GenerateFunctionStrParameter(ivecs[0])
 	rs := vector.MustFunctionResult[T](result)
@@ -1356,6 +1443,7 @@ func QuoteString(str string) string {
 func Quote(ivecs []*vector.Vector, result vector.FunctionResultWrapper, proc *process.Process, length int, selectList *FunctionSelectList) error {
 	parameter := vector.GenerateFunctionStrParameter(ivecs[0])
 	rs := vector.MustFunctionResult[types.Varlena](result)
+	isUTF8Text := isExplicitUTF8Charset(ivecs[0].GetType().Charset)
 	for row := uint64(0); row < uint64(length); row++ {
 		if selectList != nil && (selectList.IgnoreAllRow() ||
 			(!selectList.ShouldEvalAllRow() && selectList.Contains(row))) {
@@ -1371,8 +1459,20 @@ func Quote(ivecs []*vector.Vector, result vector.FunctionResultWrapper, proc *pr
 			}
 			continue
 		}
-		if ivecs[0].GetIsBinaryStringAt(int(row)) && !utf8.Valid(value) {
-			return moerr.NewCannotConvertString(proc.Ctx, string(value), "binary", "utf8mb4")
+		if !utf8.Valid(value) {
+			isBinary := ivecs[0].GetIsBinaryStringAt(int(row))
+			if isBinary {
+				return moerr.NewCannotConvertString(proc.Ctx, string(value), "binary", "utf8mb4")
+			}
+			if isUTF8Text {
+				// MySQL's text-domain QUOTE returns an empty string for malformed
+				// multibyte input. Keep the binary-domain conversion error above;
+				// SQL EXECUTE markers can be rebound to text without changing bytes.
+				if err := rs.AppendBytes(nil, false); err != nil {
+					return err
+				}
+				continue
+			}
 		}
 		resultBytes := quotedBytesLength(value)
 		if int64(resultBytes) > maxStringFunctionResultLength(result) {
@@ -5582,7 +5682,8 @@ func parseCoordinatePairWithError(point string, errMsg string) (float64, float64
 // soundexCodeMap maps ASCII A-Z to original Soundex digits; '0' means discard.
 const soundexCodeMap = "01230120022455012623010202"
 
-// SoundexString implements MySQL's original Soundex behavior for ASCII input.
+// SoundexString implements MySQL's byte-oriented Soundex behavior for binary
+// strings. Non-ASCII bytes are ignored independently.
 func SoundexString(str string) string {
 	var code strings.Builder
 	firstLetter := true
@@ -5621,12 +5722,107 @@ func SoundexString(str string) string {
 	return code.String()
 }
 
+// soundexTextString implements MySQL 8.0's UTF-8 text path. It preserves the
+// first qualifying non-ASCII character, then emits the usual ASCII Soundex
+// digits. Invalid UTF-8 before the first letter yields empty; invalid UTF-8
+// after it terminates the scan and leaves the result padded.
+func soundexTextString(str string) string {
+	var code strings.Builder
+	firstLetter := true
+	lastCode := byte('0')
+	characters := 0
+	scanFrom := 0
+
+	for i := 0; i < len(str); {
+		start := i
+		r, size := utf8.DecodeRuneInString(str[i:])
+		if r == utf8.RuneError && size == 1 {
+			return ""
+		}
+		i += size
+		if size == 1 {
+			c := str[start]
+			if c >= 'a' && c <= 'z' {
+				c -= 'a' - 'A'
+			}
+			if c < 'A' || c > 'Z' {
+				continue
+			}
+			code.WriteByte(c)
+			lastCode = soundexCodeMap[c-'A']
+		} else {
+			// MySQL 8.0's legacy helper treats every Unicode code point at or
+			// above U+00C0 as alphabetic, and preserves the first one verbatim.
+			if r < 0xC0 {
+				continue
+			}
+			code.WriteString(str[start:i])
+			lastCode = '0'
+		}
+		firstLetter = false
+		characters = 1
+		scanFrom = i
+		break
+	}
+	if firstLetter {
+		return ""
+	}
+
+	for i := scanFrom; i < len(str); {
+		r, size := utf8.DecodeRuneInString(str[i:])
+		if r == utf8.RuneError && size == 1 {
+			break
+		}
+		i += size
+		if size == 1 {
+			c := str[i-size]
+			if c >= 'a' && c <= 'z' {
+				c -= 'a' - 'A'
+			}
+			if c < 'A' || c > 'Z' {
+				continue
+			}
+			r = rune(c)
+		} else if r < 0xC0 {
+			continue
+		}
+
+		codeChar := byte('0')
+		if r >= 'A' && r <= 'Z' {
+			codeChar = soundexCodeMap[byte(r)-'A']
+		}
+		if codeChar != '0' && codeChar != lastCode {
+			code.WriteByte(codeChar)
+			characters++
+			lastCode = codeChar
+		}
+	}
+
+	for characters < 4 {
+		code.WriteByte('0')
+		characters++
+	}
+	return code.String()
+}
+
 func Soundex(ivecs []*vector.Vector, result vector.FunctionResultWrapper, proc *process.Process, length int, selectList *FunctionSelectList) error {
-	return opUnaryBytesToBytes(ivecs, result, proc, length, func(v []byte) []byte {
-		str := functionUtil.QuickBytesToStr(v)
-		soundex := SoundexString(str)
-		return functionUtil.QuickStrToBytes(soundex)
-	}, selectList)
+	textSoundex := SoundexString
+	if isExplicitUTF8Charset(ivecs[0].GetType().Charset) {
+		textSoundex = soundexTextString
+	}
+	return opUnaryBytesToBytesByStringDomain(
+		ivecs,
+		result,
+		proc,
+		length,
+		func(v []byte) []byte {
+			return functionUtil.QuickStrToBytes(textSoundex(functionUtil.QuickBytesToStr(v)))
+		},
+		func(v []byte) []byte {
+			return functionUtil.QuickStrToBytes(SoundexString(functionUtil.QuickBytesToStr(v)))
+		},
+		selectList,
+	)
 }
 
 func ReadFromFile(Filepath string, fs fileservice.FileService) (io.ReadCloser, error) {
@@ -6102,8 +6298,9 @@ func SpaceDecimal256(ivecs []*vector.Vector, result vector.FunctionResultWrapper
 }
 
 func TimeToTime(ivecs []*vector.Vector, result vector.FunctionResultWrapper, proc *process.Process, length int, selectList *FunctionSelectList) error {
+	scale := result.GetResultVector().GetType().Scale
 	return opUnaryFixedToFixed[types.Time, types.Time](ivecs, result, proc, length, func(v types.Time) types.Time {
-		return v
+		return clampPublicTimeResult(proc, v, scale).TruncateToScale(scale)
 	}, selectList)
 }
 
@@ -6114,16 +6311,14 @@ func DateToTime(ivecs []*vector.Vector, result vector.FunctionResultWrapper, pro
 }
 
 func DatetimeToTime(ivecs []*vector.Vector, result vector.FunctionResultWrapper, proc *process.Process, length int, selectList *FunctionSelectList) error {
-	scale := ivecs[0].GetType().Scale
-	result.GetResultVector().SetTypeScale(scale)
+	scale := result.GetResultVector().GetType().Scale
 	return opUnaryFixedToFixed[types.Datetime, types.Time](ivecs, result, proc, length, func(v types.Datetime) types.Time {
 		return v.ToTime(scale)
 	}, selectList)
 }
 
 func TimestampToTime(ivecs []*vector.Vector, result vector.FunctionResultWrapper, proc *process.Process, length int, selectList *FunctionSelectList) error {
-	scale := ivecs[0].GetType().Scale
-	result.GetResultVector().SetTypeScale(scale)
+	scale := result.GetResultVector().GetType().Scale
 	loc := time.Local
 	if proc != nil && proc.GetSessionInfo() != nil && proc.GetSessionInfo().TimeZone != nil {
 		loc = proc.GetSessionInfo().TimeZone
@@ -6139,29 +6334,52 @@ func Int64ToTime(ivecs []*vector.Vector, result vector.FunctionResultWrapper, pr
 		if e != nil {
 			return 0, moerr.NewOutOfRangeNoCtxf("time", "'%d'", v)
 		}
-		return t, nil
+		return clampPublicTimeResult(proc, t, 0), nil
 	}, selectList)
 }
 
 func DateStringToTime(ivecs []*vector.Vector, result vector.FunctionResultWrapper, proc *process.Process, length int, selectList *FunctionSelectList) error {
+	scale := result.GetResultVector().GetType().Scale
 	return opUnaryBytesToFixedWithErrorCheck[types.Time](ivecs, result, proc, length, func(v []byte) (types.Time, error) {
-		t, e := types.ParseTime(string(v), 6)
+		t, e := types.ParseTime(string(v), scale)
 		if e != nil {
 			return 0, moerr.NewOutOfRangeNoCtxf("time", "'%s'", string(v))
 		}
-		return t, nil
+		return clampPublicTimeResult(proc, t, scale), nil
 	}, selectList)
 }
 
 func Decimal128ToTime(ivecs []*vector.Vector, result vector.FunctionResultWrapper, proc *process.Process, length int, selectList *FunctionSelectList) error {
 	scale := ivecs[0].GetType().Scale
+	targetScale := result.GetResultVector().GetType().Scale
 	return opUnaryFixedToFixedWithErrorCheck[types.Decimal128, types.Time](ivecs, result, proc, length, func(v types.Decimal128) (types.Time, error) {
-		t, e := types.ParseDecimal128ToTime(v, scale, 6)
+		t, e := types.ParseTime(v.Format(scale), targetScale)
 		if e != nil {
 			return 0, moerr.NewOutOfRangeNoCtxf("time", "'%s'", v.Format(0))
 		}
-		return t, nil
+		return clampPublicTimeResult(proc, t, targetScale), nil
 	}, selectList)
+}
+
+func Decimal256ToTime(ivecs []*vector.Vector, result vector.FunctionResultWrapper, proc *process.Process, length int, selectList *FunctionSelectList) error {
+	scale := ivecs[0].GetType().Scale
+	targetScale := result.GetResultVector().GetType().Scale
+	return opUnaryFixedToFixedWithErrorCheck[types.Decimal256, types.Time](ivecs, result, proc, length, func(v types.Decimal256) (types.Time, error) {
+		text := v.Format(scale)
+		t, err := types.ParseTime(text, targetScale)
+		if err != nil {
+			return 0, moerr.NewOutOfRangeNoCtxf("time", "'%s'", text)
+		}
+		return clampPublicTimeResult(proc, t, targetScale), nil
+	}, selectList)
+}
+
+func clampPublicTimeResult(proc *process.Process, value types.Time, scale int32) types.Time {
+	clamped := types.ClampMySQLTimeForScale(value, scale)
+	if clamped != value {
+		appendTimeRangeWarning(proc, value, scale)
+	}
+	return clamped
 }
 
 func DateToTimestamp(ivecs []*vector.Vector, result vector.FunctionResultWrapper, proc *process.Process, length int, selectList *FunctionSelectList) error {
@@ -6309,6 +6527,13 @@ func timeStringToFixedWithNullOnError[T types.FixedSizeTExceptStrType](
 			}
 			continue
 		}
+		if clock, ok := zeroCalendarClockForExtract(str, 6); ok {
+			hour, minute, second, _, _ := clock.ClockFormat()
+			if err := rs.Append(fn(uint32(hour), minute, second), false); err != nil {
+				return err
+			}
+			continue
+		}
 
 		hour, minute, second, ok := timeStringToClockForExtract(str)
 		if !ok {
@@ -6323,6 +6548,54 @@ func timeStringToFixedWithNullOnError[T types.FixedSizeTExceptStrType](
 		}
 	}
 	return nil
+}
+
+// A zero calendar cannot be represented as DATETIME, but its valid clock is
+// still a TIME duration. Both unary fields and EXTRACT use this FSP6 rounding
+// path so a carry beyond 23:59:59 agrees across the two SQL forms.
+func zeroCalendarClockForExtract(value string, scale int32) (types.Time, bool) {
+	// HOUR/MINUTE/SECOND normally see TIME strings. Avoid running the date
+	// grammar for those rows; only a leading zero year can be a zero calendar.
+	start := 0
+	for start < len(value) && (value[start] == ' ' || value[start] == '\t') {
+		start++
+	}
+	if start == len(value) || value[start] != '0' {
+		return 0, false
+	}
+	parts, ok := parseDateExtractParts(value)
+	if !ok || parts.year != 0 || parts.month != 0 || parts.day != 0 {
+		return 0, false
+	}
+	trimmed := strings.TrimSpace(value)
+	separator := strings.IndexAny(trimmed, " T")
+	if separator < 0 {
+		return 0, true
+	}
+	clockText := strings.TrimSpace(trimmed[separator+1:])
+	if strings.IndexByte(clockText, ' ') >= 0 {
+		clockText = strings.ReplaceAll(clockText, " ", "")
+	}
+	fields := 0
+	var canonical []byte
+	for i := 0; i < len(clockText) && fields < 2; i++ {
+		ch := clockText[i]
+		if ch >= '0' && ch <= '9' {
+			continue
+		}
+		if ch != ':' {
+			if canonical == nil {
+				canonical = []byte(clockText)
+			}
+			canonical[i] = ':'
+		}
+		fields++
+	}
+	if canonical != nil {
+		clockText = string(canonical)
+	}
+	clock, err := types.ParseTime(clockText, scale)
+	return clock, err == nil
 }
 
 // timeStringToClockForExtract follows MySQL's string-to-TIME coercion for
@@ -9106,9 +9379,9 @@ func isBase64Space(b byte) bool {
 	return b == ' ' || (b >= '\t' && b <= '\r') || b == 0xa0
 }
 
-// VecFromBase64 decodes a base64-encoded string into a vector (vecf32 or vecf64).
+// VecFromBase64 decodes a base64-encoded string into a vector of T elements.
 // The base64 payload must be the raw little-endian bytes of the vector elements,
-// as produced by to_base64(vecf32_col) or to_base64(vecf64_col).
+// as produced by to_base64 on a vector value.
 func VecFromBase64[T types.ArrayElement](parameters []*vector.Vector, result vector.FunctionResultWrapper, proc *process.Process, length int, selectList *FunctionSelectList) error {
 	source := vector.GenerateFunctionStrParameter(parameters[0])
 	rs := vector.MustFunctionResult[types.Varlena](result)
@@ -9160,11 +9433,11 @@ func VecFromBase64[T types.ArrayElement](parameters []*vector.Vector, result vec
 		}
 		n, err := base64.StdEncoding.Decode(buf, data)
 		if err != nil {
-			return moerr.NewInternalErrorNoCtx("vec_from_base64: invalid base64 input")
+			return moerr.NewInvalidInputNoCtx("vec_from_base64: invalid base64 input")
 		}
 
 		if n%elemSize != 0 {
-			return moerr.NewInternalErrorNoCtxf("vec_from_base64: decoded length %d is not a multiple of %d bytes", n, elemSize)
+			return moerr.NewInvalidInputNoCtxf("vec_from_base64: decoded length %d is not a multiple of %d bytes", n, elemSize)
 		}
 
 		if err = rs.AppendBytes(buf[:n], false); err != nil {
@@ -9390,6 +9663,8 @@ func Uncompress(parameters []*vector.Vector, result vector.FunctionResultWrapper
 	source := vector.GenerateFunctionStrParameter(parameters[0])
 	rs := vector.MustFunctionResult[types.Varlena](result)
 	var warnings process.WarningAccumulator
+	warnings.SetWarningRetentionForProcess(proc)
+	defer warnings.Reset()
 
 	rowCount := uint64(length)
 	for i := uint64(0); i < rowCount; i++ {
@@ -9796,6 +10071,8 @@ func uncompressedLengthResult[Tr types.FixedSizeTExceptStrType](parameters []*ve
 	source := vector.GenerateFunctionStrParameter(parameters[0])
 	rs := vector.MustFunctionResult[Tr](result)
 	var warnings process.WarningAccumulator
+	warnings.SetWarningRetentionForProcess(proc)
+	defer warnings.Reset()
 
 	rowCount := uint64(length)
 	for i := uint64(0); i < rowCount; i++ {
@@ -10512,36 +10789,9 @@ func DateStringToQuarter(ivecs []*vector.Vector, result vector.FunctionResultWra
 
 // TODO: I will support template soon.
 func DateStringToMonth(ivecs []*vector.Vector, result vector.FunctionResultWrapper, proc *process.Process, length int, selectList *FunctionSelectList) error {
-	//return opUnaryStrToFixedWithErrorCheck[uint8](ivecs, result, proc, length, func(v string) (uint8, error) {
-	//	d, e := types.ParseDateCast(v)
-	//	if e != nil {
-	//		return 0, e
-	//	}
-	//	return d.Month(), nil
-	//})
-
-	ivec := vector.GenerateFunctionStrParameter(ivecs[0])
-	rs := vector.MustFunctionResult[uint8](result)
-	for i := uint64(0); i < uint64(length); i++ {
-		v, null := ivec.GetStrValue(i)
-		if null {
-			if err := rs.Append(0, true); err != nil {
-				return err
-			}
-		} else {
-			d, e := types.ParseDateCast(functionUtil.QuickBytesToStr(v))
-			if e != nil {
-				if err := rs.Append(0, true); err != nil {
-					return err
-				}
-			} else {
-				if err := rs.Append(d.Month(), false); err != nil {
-					return err
-				}
-			}
-		}
-	}
-	return nil
+	return dateStringToFixedWithNullOnError(ivecs, result, proc, length, selectList, func(parts dateExtractParts) (uint8, bool) {
+		return parts.month, true
+	})
 }
 
 func DateToYear(ivecs []*vector.Vector, result vector.FunctionResultWrapper, proc *process.Process, length int, selectList *FunctionSelectList) error {
@@ -10557,25 +10807,56 @@ func DatetimeToYear(ivecs []*vector.Vector, result vector.FunctionResultWrapper,
 }
 
 func DateStringToYear(ivecs []*vector.Vector, result vector.FunctionResultWrapper, proc *process.Process, length int, selectList *FunctionSelectList) error {
-	return opUnaryStrToFixedWithErrorCheck[int64](ivecs, result, proc, length, func(v string) (int64, error) {
-		d, e := types.ParseDateCast(v)
-		if e != nil {
-			return 0, e
-		}
-		return int64(d.Year()), nil
-	}, selectList)
+	return dateStringToFixedWithNullOnError(ivecs, result, proc, length, selectList, func(parts dateExtractParts) (int64, bool) {
+		return int64(parts.year), true
+	})
+}
+
+// normalizeWeekMode applies the same modulo-eight normalization used by the
+// date implementation for both WEEK and YEARWEEK.  The SQL mode argument may
+// be a vector, so callers must invoke this per row rather than reading row 0.
+func normalizeWeekMode(mode int64) int {
+	mode %= 8
+	if mode < 0 {
+		mode += 8
+	}
+	return int(mode)
+}
+
+func weekModeAt(modes vector.FunctionParameterWrapper[int64], row uint64) int {
+	if modes == nil {
+		return 0
+	}
+	// An explicit NULL mode uses mode 0 regardless of whether it is a
+	// literal or a row-dependent expression.
+	mode, null := modes.GetValue(row)
+	if null {
+		return 0
+	}
+	return normalizeWeekMode(mode)
+}
+
+// getDefaultWeekFormatMode reads the session default at execution time so a
+// prepared one-argument WEEK call observes a later SET default_week_format.
+func getDefaultWeekFormatMode(proc *process.Process) (int, error) {
+	mode, _, err := process.ResolveDefaultWeekFormatMode(proc)
+	return mode, err
 }
 
 func DateToWeek(ivecs []*vector.Vector, result vector.FunctionResultWrapper, proc *process.Process, length int, selectList *FunctionSelectList) error {
 	rs := vector.MustFunctionResult[uint8](result)
 	dates := vector.GenerateFunctionFixedTypeParameter[types.Date](ivecs[0])
-
-	// Get mode (default 0 if not provided)
-	// MySQL uses mode % 8 for out-of-range values
-	mode := 0
-	if len(ivecs) > 1 && !ivecs[1].IsConstNull() {
-		mode = int(vector.MustFixedColWithTypeCheck[int64](ivecs[1])[0])
-		mode = ((mode % 8) + 8) % 8
+	var modes vector.FunctionParameterWrapper[int64]
+	if len(ivecs) > 1 {
+		modes = vector.GenerateFunctionFixedTypeParameter[int64](ivecs[1])
+	}
+	defaultMode := 0
+	if modes == nil {
+		var err error
+		defaultMode, err = getDefaultWeekFormatMode(proc)
+		if err != nil {
+			return err
+		}
 	}
 
 	for i := uint64(0); i < uint64(length); i++ {
@@ -10586,6 +10867,10 @@ func DateToWeek(ivecs []*vector.Vector, result vector.FunctionResultWrapper, pro
 			continue
 		}
 
+		mode := weekModeAt(modes, i)
+		if modes == nil {
+			mode = defaultMode
+		}
 		date, null := dates.GetValue(i)
 		if null || date == types.ZeroDate {
 			if err := rs.Append(0, true); err != nil {
@@ -10605,13 +10890,17 @@ func DateToWeek(ivecs []*vector.Vector, result vector.FunctionResultWrapper, pro
 func DatetimeToWeek(ivecs []*vector.Vector, result vector.FunctionResultWrapper, proc *process.Process, length int, selectList *FunctionSelectList) error {
 	rs := vector.MustFunctionResult[uint8](result)
 	datetimes := vector.GenerateFunctionFixedTypeParameter[types.Datetime](ivecs[0])
-
-	// Get mode (default 0 if not provided)
-	// MySQL uses mode % 8 for out-of-range values
-	mode := 0
-	if len(ivecs) > 1 && !ivecs[1].IsConstNull() {
-		mode = int(vector.MustFixedColWithTypeCheck[int64](ivecs[1])[0])
-		mode = ((mode % 8) + 8) % 8
+	var modes vector.FunctionParameterWrapper[int64]
+	if len(ivecs) > 1 {
+		modes = vector.GenerateFunctionFixedTypeParameter[int64](ivecs[1])
+	}
+	defaultMode := 0
+	if modes == nil {
+		var err error
+		defaultMode, err = getDefaultWeekFormatMode(proc)
+		if err != nil {
+			return err
+		}
 	}
 
 	for i := uint64(0); i < uint64(length); i++ {
@@ -10622,6 +10911,10 @@ func DatetimeToWeek(ivecs []*vector.Vector, result vector.FunctionResultWrapper,
 			continue
 		}
 
+		mode := weekModeAt(modes, i)
+		if modes == nil {
+			mode = defaultMode
+		}
 		dt, null := datetimes.GetValue(i)
 		if null || dt == types.ZeroDatetime {
 			if err := rs.Append(0, true); err != nil {

@@ -3539,10 +3539,14 @@ type testMembershipFilter struct {
 	hits  []uint8
 	calls int
 	exact bool
+	probe func(*vector.Vector)
 }
 
 func (f *testMembershipFilter) Test([]byte) bool { return true }
-func (f *testMembershipFilter) TestVector(*vector.Vector, func(bool, bool, int)) []uint8 {
+func (f *testMembershipFilter) TestVector(v *vector.Vector, _ func(bool, bool, int)) []uint8 {
+	if f.probe != nil {
+		f.probe(v)
+	}
 	f.calls++
 	return f.hits
 }
@@ -4256,4 +4260,71 @@ func TestCompileFilterExpr_PrefixSortedSeekOps(t *testing.T) {
 			require.NotNil(t, seekOp, "seekOp should be set for sorted %s", name)
 		})
 	}
+}
+
+// Raw prefix literals emitted by IVF are not folded constants. An invalid
+// extracted filter must not become an equality against the empty compound key.
+func TestConstructBlockPKFilterInvalidCompositePrefix(t *testing.T) {
+	mp := mpool.MustNew(t.Name())
+	col := &plan.ColDef{Name: "__mo_cpkey_col", Typ: plan.Type{Id: int32(types.T_varchar)}}
+	table := &plan.TableDef{Cols: []*plan.ColDef{col}, Name2ColIndex: map[string]int32{col.Name: 0}, Pkey: &plan.PrimaryKeyDef{PkeyColName: col.Name, CompPkeyCol: col}}
+	expr := MakeFunctionExprForTest("prefix_eq", []*plan.Expr{
+		MakeColExprForTest(0, types.T_varchar, col.Name), plan2.MakePlan2StringConstExprWithType("prefix"),
+	})
+	base, err := ConstructBasePKFilter(expr, table, mp)
+	require.NoError(t, err)
+	require.False(t, base.Valid)
+	require.Equal(t, types.T_varchar, base.Oid)
+	keys := vector.NewVec(types.T_varchar.ToType())
+	defer keys.Free(mp)
+	for _, key := range []string{"prefix-a", "prefix-b", "prefix-c"} {
+		require.NoError(t, vector.AppendBytes(keys, []byte(key), false, mp))
+	}
+	ids := vector.NewVec(types.T_int64.ToType())
+	defer ids.Free(mp)
+	require.NoError(t, vector.AppendFixedList(ids, []int64{7, 11, 19}, nil, mp))
+	for _, exact := range []bool{false, true} {
+		for _, secondary := range []bool{false, true} {
+			t.Run(fmt.Sprintf("exact=%v/secondary=%v", exact, secondary), func(t *testing.T) {
+				vectors := containers.Vectors{*keys}
+				if secondary {
+					vectors = append(vectors, *ids)
+				}
+				bf := &testMembershipFilter{hits: []uint8{1, 0, 1}, exact: exact, probe: func(v *vector.Vector) {
+					if secondary {
+						require.Equal(t, []int64{7, 11, 19}, vector.MustFixedColWithTypeCheck[int64](v))
+					} else {
+						require.Equal(t, "prefix-a", string(v.GetBytesAt(0)))
+					}
+				}}
+				filter, err := ConstructBlockPKFilter(false, base, bf)
+				require.NoError(t, err)
+				if filter.Cleanup != nil {
+					defer filter.Cleanup()
+				}
+				require.True(t, filter.Valid)
+				require.Equal(t, exact, filter.ExactMembership)
+				require.Equal(t, []int64{0, 2}, filter.SortedSearchFunc(vectors))
+				require.Equal(t, []int64{0, 2}, filter.UnSortedSearchFunc(vectors))
+				require.Equal(t, 2, bf.calls)
+			})
+		}
+	}
+}
+
+func TestConstructBlockPKFilterValidEmptyEquality(t *testing.T) {
+	mp := mpool.MustNew(t.Name())
+	keys := vector.NewVec(types.T_varchar.ToType())
+	defer keys.Free(mp)
+	for _, key := range []string{"", "a", "b"} {
+		require.NoError(t, vector.AppendBytes(keys, []byte(key), false, mp))
+	}
+	bf := &testMembershipFilter{hits: []uint8{1, 1, 1}, exact: true}
+	filter, err := ConstructBlockPKFilter(false, BasePKFilter{Valid: true, Oid: types.T_varchar, Op: function.EQUAL, LB: []byte{}}, bf)
+	require.NoError(t, err)
+	if filter.Cleanup != nil {
+		defer filter.Cleanup()
+	}
+	require.Equal(t, []int64{0}, filter.SortedSearchFunc(containers.Vectors{*keys}))
+	require.Equal(t, []int64{0}, filter.UnSortedSearchFunc(containers.Vectors{*keys}))
 }

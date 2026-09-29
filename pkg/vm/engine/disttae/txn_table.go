@@ -1365,8 +1365,8 @@ func (tbl *txnTable) rangesOnePart(
 	if err = ForeachSnapshotObjects(
 		tbl.db.op.SnapshotTS(),
 		func(obj objectio.ObjectEntry, isCommitted bool) (err2 error) {
-			//if need to shuffle objects
-			if plan2.ShouldSkipObjByShuffle(rangesParam.Rsp, &obj.ObjectStats) {
+			// Only the local workspace enumerates uncommitted objects; remote CNs cannot take ownership.
+			if isCommitted && plan2.ShouldSkipObjByShuffle(rangesParam.Rsp, &obj.ObjectStats) {
 				return
 			}
 			var meta objectio.ObjectDataMeta
@@ -2062,7 +2062,7 @@ func (tbl *txnTable) Write(ctx context.Context, bat *batch.Batch) error {
 			tbl.db.databaseId,
 			tbl.tableId,
 			tbl.db.databaseName,
-			tbl.tableName,
+			tbl.writeTableName(ctx),
 			fileName,
 			bat,
 			tbl.getTxn().tnStores[0], tbl.extraInfo.AutoIncrEpoch)

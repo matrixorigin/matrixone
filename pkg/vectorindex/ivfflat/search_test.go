@@ -15,6 +15,7 @@
 package ivfflat
 
 import (
+	"math"
 	"strings"
 	"testing"
 
@@ -352,6 +353,43 @@ func TestIvfSearchSQLIncludesRequestedColumnsAndPushdown(t *testing.T) {
 	require.Equal(t, uint(0), rt.SearchCursor.NextBucketOffset)
 	require.Equal(t, uint(1), rt.SearchCursor.CurrentBucketCount)
 	require.Equal(t, uint(1), rt.SearchCursor.Round)
+}
+
+func TestIvfSearchFloat64Overflow(t *testing.T) {
+	oldRunSQL := runSql
+	defer func() { runSql = oldRunSQL }()
+
+	// The entries SQL computes the distance in float32, so a float64 base whose distance
+	// overflows saturates to +/-Inf. Serving that would silently corrupt the value, Top-K order,
+	// and any outer predicate (#29040 / #29050), so Search must fail fast.
+	runSql = func(sqlproc *sqlexec.SqlProcess, sql string) (executor.Result, error) {
+		bat := batch.NewWithSize(2)
+		bat.Vecs[0] = vector.NewVec(types.T_int64.ToType())
+		bat.Vecs[1] = vector.NewVec(types.T_float64.ToType())
+		require.NoError(t, vector.AppendFixed(bat.Vecs[0], int64(42), false, sqlproc.Proc.Mp()))
+		require.NoError(t, vector.AppendFixed(bat.Vecs[1], math.Inf(1), false, sqlproc.Proc.Mp()))
+		bat.SetRowCount(1)
+		return executor.Result{Mp: sqlproc.Proc.Mp(), Batches: []*batch.Batch{bat}}, nil
+	}
+
+	m := mpool.MustNewZero()
+	proc := testutil.NewProcessWithMPool(t, "", m)
+	sqlproc := sqlexec.NewSqlProcess(proc)
+
+	idxcfg := vectorindex.IndexConfig{}
+	idxcfg.Ivfflat.Metric = uint16(metric.Metric_L2Distance)
+	tblcfg := vectorindex.IndexTableConfig{DbName: "test_db", EntriesTable: "test_entries"}
+	rt := vectorindex.RuntimeConfig{
+		Limit:            5,
+		Probe:            1,
+		OrigFuncName:     "l2_distance",
+		SearchCursor:     &vectorindex.IvfSearchCursor{},
+		SearchRoundLimit: 3,
+	}
+
+	idx := &IvfflatSearchIndex[float64]{Version: 7}
+	_, _, err := idx.Search(sqlproc, idxcfg, tblcfg, []float64{0, 0, 0}, rt, 4)
+	require.Error(t, err)
 }
 
 func TestBuildSearchRoundSQLQuotesIdentifiers(t *testing.T) {

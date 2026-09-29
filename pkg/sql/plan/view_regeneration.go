@@ -22,6 +22,7 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/sql/parsers"
 	"github.com/matrixorigin/matrixone/pkg/sql/parsers/dialect"
 	"github.com/matrixorigin/matrixone/pkg/sql/parsers/tree"
+	"github.com/matrixorigin/matrixone/pkg/sql/plan/function"
 )
 
 // RegeneratedViewDefinition is produced by exactly the same schema generator
@@ -69,6 +70,41 @@ type viewRegenerationContext struct {
 	lowerCaseTableNames int64
 }
 
+// Use the error-returning catalog lookup rather than DatabaseExists: the
+// latter collapses both genuine absence and storage failures into false.
+func (c *viewRegenerationContext) CheckViewDatabase(name string, snapshot *Snapshot) (bool, error) {
+	// Subscription View definitions are rebound in the publisher's isolated
+	// context. A historical snapshot still names the subscriber as its tenant;
+	// GetDatabaseId would otherwise switch back to that tenant and reject a
+	// valid publisher source (or accept an unrelated same-named database).
+	if sub := c.GetQueryingSubscription(); sub != nil && snapshot != nil {
+		snapshot = DeepCopySnapshot(snapshot)
+		snapshot.Tenant = &planpb.SnapshotTenant{TenantID: uint32(sub.AccountId)}
+	}
+	_, err := c.CompilerContext.GetDatabaseId(name, snapshot)
+	if err == nil {
+		return true, nil
+	}
+	if moerr.IsMoErrCode(err, moerr.ErrBadDB) || moerr.IsMoErrCode(err, moerr.OkExpectedEOB) {
+		return false, nil
+	}
+	return false, err
+}
+
+// ViewUdfResolver resolves unqualified functions in the persisted View's
+// definition database without changing the caller's session/default database.
+// The binding context is isolated by the View description provider.
+type ViewUdfResolver interface {
+	ResolveViewUdf(name string, args []*Expr, database string) (*function.Udf, error)
+}
+
+func (c *viewRegenerationContext) ResolveUdf(name string, args []*Expr) (*function.Udf, error) {
+	if resolver, ok := c.CompilerContext.(ViewUdfResolver); ok {
+		return resolver.ResolveViewUdf(name, args, c.defaultDatabase)
+	}
+	return c.CompilerContext.ResolveUdf(name, args)
+}
+
 func (c *viewRegenerationContext) DefaultDatabase() string { return c.defaultDatabase }
 func (c *viewRegenerationContext) GetRootSql() string      { return c.rootSQL }
 func (c *viewRegenerationContext) GetLowerCaseTableNames() int64 {
@@ -98,6 +134,22 @@ func (c *viewRegenerationContext) ResolveViewDependencyAccount(
 // RegenerateViewDefinition parses a persisted View with its original lexical
 // and database context, then delegates to genViewTableDef. Unknown ViewData JSON
 // fields are retained when the dependency snapshot is updated.
+// DescribeViewColumns binds the persisted semantic definition in the caller's
+// catalog context. It never writes the regenerated definition or dependencies.
+func DescribeViewColumns(ctx CompilerContext, persistedViewData string) ([]*planpb.ColDef, error) {
+	if len(persistedViewData) > 16<<20 {
+		return nil, moerr.NewInternalError(ctx.GetContext(), "View definition exceeds metadata binding budget")
+	}
+	if err := ctx.GetContext().Err(); err != nil {
+		return nil, err
+	}
+	regenerated, err := RegenerateViewDefinition(ctx, persistedViewData)
+	if err != nil {
+		return nil, err
+	}
+	return regenerated.TableDef.Cols, nil
+}
+
 func RegenerateViewDefinition(
 	ctx CompilerContext,
 	persistedViewData string,
