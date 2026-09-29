@@ -1,4 +1,5 @@
 select ceil(123.456, 2.5), floor(123.456, 2.5);
+set @issue_29314_saved_sql_mode = @@session.sql_mode;
 prepare issue_29314_p from 'select ceil(123.456, ?), floor(123.456, ?)';
 set @issue_29314_d = 2;
 execute issue_29314_p using @issue_29314_d, @issue_29314_d;
@@ -7,7 +8,10 @@ execute issue_29314_p using @issue_29314_d, @issue_29314_d;
 set @issue_29314_d = 2.5e0;
 execute issue_29314_p using @issue_29314_d, @issue_29314_d;
 set @issue_29314_d = '2.5tail';
+set session sql_mode = concat_ws(',', nullif(@issue_29314_saved_sql_mode, ''), 'MYSQL_NUMERIC_COMPATIBILITY');
 execute issue_29314_p using @issue_29314_d, @issue_29314_d;
+set session sql_mode = @issue_29314_saved_sql_mode;
+set @issue_29314_saved_sql_mode = NULL;
 set @issue_29314_d = 2;
 execute issue_29314_p using @issue_29314_d, @issue_29314_d;
 deallocate prepare issue_29314_p;
