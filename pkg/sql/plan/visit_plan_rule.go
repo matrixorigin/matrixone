@@ -3631,14 +3631,29 @@ func (rule *ResetParamRefRule) applyExpr(e *plan.Expr) (*plan.Expr, error) {
 				numericPrefixArgs[i] = false
 				rule.specialized = true
 			} else if useSQLExecuteControlSource {
-				// Rebuild the ordinary INT64 cast from the current native source;
-				// evaluating the PREPARE-time TEXT cast would use stale input, while
-				// the private integer-argument cast has different FLOAT tie rounding.
+				// Rebuild the precision conversion from the current native source
+				// instead of evaluating stale PREPARE-time TEXT. Parameter provenance
+				// selects the conversion contract below.
 				if target, native := planfunction.IntegerArgumentNativeOrdinaryCastTarget(
 					functionName, i, types.T(sqlExecuteNumericSource.Typ.Id)); native {
-					targetType := target.ToType()
-					rewrittenArg, err = makePlan2CastExpr(
-						rule.ctx, DeepCopyExpr(sqlExecuteNumericSource), makePlan2Type(&targetType))
+					sqlExecuteSource := false
+					if paramPos >= 0 && paramPos < len(rule.paramValues) {
+						if param, ok := rule.paramValues[paramPos].(ParamValue); ok {
+							sqlExecuteSource = !param.IsBinaryProtocol && param.HasSourceType
+						}
+					}
+					if sqlExecuteSource {
+						// SQL EXECUTE user variables preserve their assignment-time
+						// native numeric conversion (including FLOAT ties-to-even).
+						rewrittenArg, err = appendIntegerArgument(
+							rule.ctx, DeepCopyExpr(sqlExecuteNumericSource), target, false)
+					} else {
+						// COM_STMT's packet type owns its ordinary INT64 CAST
+						// rounding even though it uses the same reconstructed source.
+						targetType := target.ToType()
+						rewrittenArg, err = makePlan2CastExpr(
+							rule.ctx, DeepCopyExpr(sqlExecuteNumericSource), makePlan2Type(&targetType))
+					}
 					if err != nil {
 						return nil, err
 					}
