@@ -3790,7 +3790,7 @@ func (b *baseBinder) bindPreparedMathFuncExpr(
 		var bound *plan.Expr
 		var err error
 		if target, ordinaryPrecision := function.IntegerArgumentOrdinaryCastTarget(name, i); ordinaryPrecision {
-			bound, err = b.bindIntegerSourceAst(arg, depth, target, name, i)
+			bound, err = b.bindOrdinaryMathPrecisionAst(arg, depth, target, name, i)
 		} else {
 			bound, err = b.bindNumericExprWithContext(arg, depth, targets[i])
 		}
@@ -4457,7 +4457,7 @@ func (b *baseBinder) bindFuncExprImplByAstExpr(name string, astArgs []tree.Expr,
 			} else if target, ordinaryPrecision := function.IntegerArgumentOrdinaryCastTarget(name, idx); ordinaryPrecision {
 				b.numericParamType = nil
 				b.numericSubqueryTarget = nil
-				expr, err = b.bindIntegerSourceAst(arg, depth, target, name, idx)
+				expr, err = b.bindOrdinaryMathPrecisionAst(arg, depth, target, name, idx)
 			} else if function.IntegerArgumentSourceDependent(name, idx) {
 				b.numericParamType = nil
 				b.numericSubqueryTarget = nil

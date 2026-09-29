@@ -3253,7 +3253,7 @@ func (rule *ResetParamRefRule) applyExpr(e *plan.Expr) (*plan.Expr, error) {
 					// The execute-time literal may retain its source only through
 					// Literal.Src. Recover it narrowly for CEIL/FLOOR precision; do
 					// not broaden generic CAST0 handling or cross explicit casts.
-					paramPos, hasParamPos = preparedRuntimeSourceParamPosition(arg)
+					paramPos, hasParamPos = preparedMathPrecisionSourceParamPosition(arg)
 					if hasParamPos {
 						implicitParamCast = true
 					}

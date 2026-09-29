@@ -6467,7 +6467,7 @@ func preparedParamUsesOrdinaryMathPrecision(plan0 *Plan, position int) bool {
 			if _, ordinaryPrecision := function.IntegerArgumentOrdinaryCastTarget(fn.Func.GetObjName(), i); !ordinaryPrecision {
 				continue
 			}
-			if paramPos, ok := preparedRuntimeSourceParamPosition(arg); ok && paramPos == position {
+			if paramPos, ok := preparedMathPrecisionSourceParamPosition(arg); ok && paramPos == position {
 				found = true
 				return nil
 			}
@@ -6901,6 +6901,17 @@ func replaceParamValsWithSelection(
 				executeSourceType = runtimeType
 				hasExecuteSourceType = true
 			}
+			if !hasExecuteSourceType && param.IsBinaryProtocol && hasRuntimeType &&
+				preparedParamUsesOrdinaryMathPrecision(plan0, i) &&
+				(types.T(runtimeType.Oid).IsInteger() || types.T(runtimeType.Oid).IsFloat() ||
+					types.T(runtimeType.Oid).IsDecimal() || runtimeType.Oid == types.T_bool ||
+					runtimeType.Oid == types.T_bit || runtimeType.Oid == types.T_year ||
+					runtimeType.Oid == types.T_enum) {
+				// Binary-protocol numeric precision parameters can have a concrete
+				// runtime type without SQL EXECUTE's SourceType metadata.
+				executeSourceType = runtimeType
+				hasExecuteSourceType = true
+			}
 			// COM_STMT text parameters may have no decoded RuntimeType metadata.
 			// A marker used by a string-math value still needs an explicit TEXT
 			// source so the execution-time DOUBLE cast is installed; otherwise the
@@ -7242,6 +7253,23 @@ func preparedRuntimeSourceParamPosition(expr *Expr) (int, bool) {
 		return 0, false
 	}
 	return preparedRuntimeSourceParamPosition(fn.Args[0])
+}
+
+func preparedMathPrecisionSourceParamPosition(expr *Expr) (int, bool) {
+	if expr == nil || isExplicitPreparedCast(expr) {
+		return 0, false
+	}
+	if param := expr.GetP(); param != nil {
+		return int(param.Pos), true
+	}
+	if literal := expr.GetLit(); literal != nil && literal.Src != nil {
+		return preparedMathPrecisionSourceParamPosition(literal.Src)
+	}
+	fn := expr.GetF()
+	if fn == nil || fn.Func == nil || !strings.EqualFold(fn.Func.GetObjName(), "cast") || len(fn.Args) == 0 {
+		return 0, false
+	}
+	return preparedMathPrecisionSourceParamPosition(fn.Args[0])
 }
 
 func attachPreparedRuntimeParamSource(expr, source *Expr) bool {
