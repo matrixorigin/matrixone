@@ -451,6 +451,14 @@ func bindIntegerFunctionArguments(ctx context.Context, name string, args []*Expr
 // role retains ordinary reconciliation when the selector produces strings or
 // arrays rather than an integer domain.
 func appendSourceDependentIntegerArgument(ctx context.Context, source *Expr, name string, position int) (*Expr, error) {
+	if name == "char" && source.GetP() != nil && preparedBindingState(ctx) != nil {
+		// CHAR chooses its source domain before the integer/bit-pattern conversion.
+		args, err := bindPreparedConsumerArguments(ctx, name, []*Expr{source})
+		if err != nil {
+			return nil, err
+		}
+		source = args[0]
+	}
 	if raw, ok := storedMySQLSpecialTypeExpr(source); ok {
 		source = raw
 	}

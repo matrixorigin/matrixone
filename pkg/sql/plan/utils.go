@@ -2588,9 +2588,13 @@ func unwrapCast(expr *plan.Expr) *plan.Expr {
 	return expr
 }
 
-func checkNoNeedCast(constT, columnT types.Type, constExpr *plan.Expr) bool {
+func checkNoNeedCast(ctx context.Context, constT, columnT types.Type, constExpr *plan.Expr) bool {
 	if constExpr.GetP() != nil && columnT.IsNumeric() {
-		return true
+		// An unresolved PREPARE marker has a provisional TEXT transport type.
+		// A resolved execution marker must satisfy the same source-domain
+		// constraint as any other non-literal expression.
+		return isUnresolvedPreparedParam(ctx, constExpr) || constT.Eq(columnT) ||
+			integerDomainFits(constT.Oid, columnT.Oid)
 	}
 	// Runtime specialization materializes prepared values as typed constant
 	// casts. When their domain already equals the IN left side, they are safe to
@@ -3660,8 +3664,8 @@ func detectedExprWhetherTimeRelated(expr *plan.Expr) bool {
 	return false
 }
 
-func ResetPreparePlan(ctx CompilerContext, preparePlan *Plan) ([]*plan.ObjectRef, []int32, error) {
-	return resetPreparePlan(ctx, preparePlan, nil)
+func ResetPreparePlan(ctx CompilerContext, preparePlan *Plan, sourceParameterCount ...int) ([]*plan.ObjectRef, []int32, error) {
+	return resetPreparePlan(ctx, preparePlan, nil, sourceParameterCount...)
 }
 
 // NormalizePrepareParamRefs converts the parser's one-based parameter ordinals
@@ -3724,10 +3728,20 @@ func resetPreparePlan(
 	ctx CompilerContext,
 	preparePlan *Plan,
 	transientQuery *Query,
+	sourceParameterCount ...int,
 ) ([]*plan.ObjectRef, []int32, error) {
 	// dcl tcl is not support
 	var schemas []*plan.ObjectRef
 	var paramTypes []int32
+	newParamRule := func() *GetParamRule {
+		rule := NewGetParamRule()
+		if len(sourceParameterCount) != 0 {
+			for ordinal := 1; ordinal <= sourceParameterCount[0]; ordinal++ {
+				rule.params[ordinal] = ordinal - 1
+			}
+		}
+		return rule
+	}
 	resolveIndexDependencies := func(getParamRule *GetParamRule) ([]*plan.ObjectRef, error) {
 		querySchemas := getParamRule.schemas
 		for _, dependency := range getParamRule.indexDependencies {
@@ -3745,7 +3759,7 @@ func resetPreparePlan(
 	}
 	resetQuery := func(query *Query) ([]*plan.ObjectRef, []int32, error) {
 		queryPlan := &Plan{Plan: &plan.Plan_Query{Query: query}}
-		getParamRule := NewGetParamRule()
+		getParamRule := newParamRule()
 		subqueryRoots := newSubqueryRootRule()
 		visitQuery := NewVisitPlan(queryPlan, []VisitPlanRule{getParamRule, subqueryRoots})
 		if err := visitQuery.Visit(ctx.GetContext()); err != nil {
@@ -3823,7 +3837,7 @@ func resetPreparePlan(
 		return querySchemas, getParamRule.paramTypes, nil
 	}
 	resetSetVariables := func(setVars *plan.SetVariables) ([]*plan.ObjectRef, []int32, error) {
-		getParamRule := NewGetParamRule()
+		getParamRule := newParamRule()
 		subqueryRoots := newSubqueryRootRule()
 		for _, item := range setVars.Items {
 			var err error
@@ -4152,11 +4166,11 @@ func FillValuesOfParamsInPlan(ctx context.Context, preparePlan *Plan, paramVals 
 	return filled, err
 }
 
-// ValidatePreparedLagLeadParams validates LAG/LEAD offset markers before the
+// ValidatePreparedWindowParams validates LAG/LEAD/NTH_VALUE markers before the
 // generic expression cast path can discard their protocol source type. This
 // is also called by the cached prepared-execution path, which does not replace
 // ParamRefs in the plan for each execution.
-func ValidatePreparedLagLeadParams(ctx context.Context, preparePlan *Plan, paramVals []any) error {
+func ValidatePreparedWindowParams(ctx context.Context, preparePlan *Plan, paramVals []any) error {
 	if preparePlan == nil || len(paramVals) == 0 {
 		return nil
 	}
@@ -4182,14 +4196,18 @@ func ValidatePreparedLagLeadParams(ctx context.Context, preparePlan *Plan, param
 				continue
 			}
 			name := function.GetFunc().GetObjName()
-			if name != "lag" && name != "lead" {
+			if name != "lag" && name != "lead" && name != "nth_value" {
 				continue
 			}
 			if position, ok := preparedWindowArgumentParamPosition(function.Args[1]); ok {
 				if position < 0 || int(position) >= len(paramVals) {
-					continue
+					return moerr.NewInternalErrorf(ctx, "get prepare params error, index %d not exists", position)
 				}
-				if !isNonNegativePreparedInteger(paramVals[position]) {
+				valid := isNonNegativePreparedInteger(paramVals[position])
+				if name == "nth_value" {
+					valid = isPositivePreparedInteger(paramVals[position])
+				}
+				if !valid {
 					return moerr.NewWrongArguments(ctx, name)
 				}
 			}
@@ -5329,7 +5347,7 @@ func fillValuesOfParamsInPlanWithSpecializationSelected(
 			return nil, false, moerr.NewInvalidInput(ctx, "cannot prepare this DCL statement")
 		}
 	}
-	if err := ValidatePreparedLagLeadParams(ctx, preparePlan, paramVals); err != nil {
+	if err := ValidatePreparedWindowParams(ctx, preparePlan, paramVals); err != nil {
 		return nil, false, err
 	}
 	if err := ValidatePreparedPaginationParams(ctx, preparePlan, paramVals); err != nil {
@@ -7336,22 +7354,7 @@ func replaceParamValsWithSelection(
 			}
 		}
 	}
-	paramRule.validateFunctionArgs = func(name string, args []*Expr) error {
-		if name != "nth_value" || len(args) != 2 {
-			return nil
-		}
-		pos, ok := preparedWindowArgumentParamPosition(args[1])
-		if !ok {
-			return nil
-		}
-		if pos < 0 || int(pos) >= len(paramVals) {
-			return moerr.NewInternalErrorf(ctx, "get prepare params error, index %d not exists", pos)
-		}
-		if !isPositivePreparedInteger(paramVals[pos]) {
-			return moerr.NewWrongArguments(ctx, name)
-		}
-		return nil
-	}
+
 	if setVariables := plan0.GetDcl().GetSetVariables(); setVariables != nil {
 		for _, item := range setVariables.Items {
 			if item.Value != nil {

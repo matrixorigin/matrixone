@@ -310,9 +310,21 @@ func TestPreparedSpecializedDomains(t *testing.T) {
 				"select bitmap_count(bitmap_or_agg(?)) from (select 1) x")
 			require.NoError(t, err)
 			defer stmt.Close()
-			var count uint64
-			require.NoError(t, stmt.QueryRowContext(ctx, bitmap).Scan(&count))
-			require.Equal(t, uint64(40001), count)
+			for _, value := range []any{bitmap, []byte{0}, nil, bitmap} {
+				var count sql.NullInt64
+				err := stmt.QueryRowContext(ctx, value).Scan(&count)
+				if invalid, ok := value.([]byte); ok && len(invalid) == 1 {
+					require.Error(t, err)
+					continue
+				}
+				require.NoError(t, err)
+				if value == nil {
+					require.False(t, count.Valid)
+				} else {
+					require.True(t, count.Valid)
+					require.Equal(t, int64(40001), count.Int64)
+				}
+			}
 		})
 		t.Run("enum_set_aggregate", func(t *testing.T) {
 			exec(t, "create table special(e enum('20','3','z'),s set('x','y'))")

@@ -361,26 +361,6 @@ type PrepareStmt struct {
 	// ordinary COM_STMT executions never scan or copy the cached plan. Direct
 	// result positions identify parameters whose binary runtime type is also the
 	// visible result-column type.
-	// numericPrefixConsumer belongs to numericPrefixConsumerPlan. Prepared plans
-	// are immutable within one generation; replacing the plan invalidates this
-	// cached capability and refreshes it once before execution.
-	numericPrefixConsumerPlan   *plan.Plan
-	numericPrefixConsumer       bool
-	joinDiagnosticCandidatePlan *plan.Plan
-	joinDiagnosticCandidate     bool
-	joinDiagnosticNeedsTemplate bool
-	// Diagnostic candidates belong to the conservative and unbound optimized
-	// plans in this PreparePlan generation. A binding proof is never cached.
-	joinDiagnosticCandidates []*plan.Expr
-	diagnosticSafePlan       *plan.Plan
-	diagnosticSafeCandidates []*plan.Expr
-	// A rejected unbound template is not rebuilt for every safe binding in the
-	// same prepared generation. Reprepare resets this conservative decision.
-	diagnosticSafeRejected bool
-	// The lazy diagnostic template must be planned under the optimizer hints
-	// captured with its conservative PREPARE generation.
-	preparedOptimizerGlobalHints    string
-	preparedOptimizerStatementHints string
 	// Percentile configuration is fixed by a value during compilation. Cache
 	// this static trait with the conservative generation rather than walking
 	// the plan on every EXECUTE.
@@ -404,12 +384,6 @@ type PrepareStmt struct {
 	jsonComparisonParamPositions []int32
 	jsonMemberOfParamPositions   []int32
 	paramConcreteTypes           []types.T
-	// geometrySRID*ParamPositions are computed once per prepared-plan
-	// generation. EXECUTE only encodes the values at these positions; it must
-	// not rediscover geometry dependencies by walking the whole plan.
-	geometrySRIDParamPositions       []int32
-	geometrySRIDSourceParamPositions []int32
-	geometrySRIDPositionsPlan        *plan.Plan
 	// numericOverloadParamPositions is computed from explicit plan metadata
 	// once per prepared-plan generation.  It identifies ABS arguments whose
 	// runtime integer/decimal domain may require overload rebinding without
@@ -453,17 +427,6 @@ type PrepareStmt struct {
 	// EXECUTE must not reinterpret optimizer comments after session sql_mode
 	// changes.
 	schedulingSQLMode string
-
-	// runtimeSpecializationPlan records the plan for which the static
-	// execute-time specialization decision was made. Most prepared DML only
-	// needs parameter values and can reuse the prepare-time compile; keeping the
-	// decision with the plan avoids copying and walking the whole plan on every
-	// EXECUTE.
-	runtimeSpecializationPlan   *plan.Plan
-	runtimeSpecializationNeeded bool
-	// runtimeIntegerAssignmentParams belongs to the same plan generation. These
-	// markers alone do not force specialization for ordinary integer packets.
-	runtimeIntegerAssignmentParams []int32
 }
 
 // preparedStmtCursor is the server-side result retained between
@@ -868,6 +831,7 @@ func (prepareStmt *PrepareStmt) installRuntimeSpecializationCache(
 	key string,
 	runtimePlan *plan.Plan,
 	runtimeCompile *compile.Compile,
+	diagnosticCandidates []*plan.Expr,
 ) *compile.Compile {
 	oldRuntimeCompile := prepareStmt.runtimeCompile
 	// AP scopes contain execution-specific placement and scan state. Cache only
@@ -880,7 +844,7 @@ func (prepareStmt *PrepareStmt) installRuntimeSpecializationCache(
 	}
 	prepareStmt.runtimeSpecializationKey = key
 	prepareStmt.runtimePlan = runtimePlan
-	prepareStmt.runtimeDiagnosticCandidates = plan2.PreparedPlanRuntimeDiagnosticCandidates(runtimePlan)
+	prepareStmt.runtimeDiagnosticCandidates = diagnosticCandidates
 	prepareStmt.runtimeCompile = runtimeCompile
 	if oldRuntimeCompile == runtimeCompile {
 		return nil
@@ -932,13 +896,6 @@ func (prepareStmt *PrepareStmt) Close() {
 	}
 	prepareStmt.directResultParamPositions = nil
 	prepareStmt.directResultParamPositionsSet = false
-	prepareStmt.joinDiagnosticCandidatePlan = nil
-	prepareStmt.joinDiagnosticCandidates = nil
-	prepareStmt.diagnosticSafePlan = nil
-	prepareStmt.diagnosticSafeCandidates = nil
-	prepareStmt.diagnosticSafeRejected = false
-	prepareStmt.preparedOptimizerGlobalHints = ""
-	prepareStmt.preparedOptimizerStatementHints = ""
 	prepareStmt.percentileParamPlan = nil
 	prepareStmt.remapDb = nil
 	prepareStmt.getFromSendLongData = nil

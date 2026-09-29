@@ -36,6 +36,13 @@ func comparisonTypeCastRule(left, right types.Type) (bool, types.Type, types.Typ
 	if isDatetimeTimestampComparison(left, right) {
 		return false, left, right
 	}
+	// Numeric comparison with character text uses a floating-point domain.
+	// The arithmetic coercion table can select the integer operand's type,
+	// which would round fractional text before the comparison.
+	if (isCollatedTextType(left.Oid) && (right.Oid.IsInteger() || right.Oid.IsFloat())) ||
+		(isCollatedTextType(right.Oid) && (left.Oid.IsInteger() || left.Oid.IsFloat())) {
+		return true, types.T_float64.ToType(), types.T_float64.ToType()
+	}
 	hasCast, castLeft, castRight := fixedTypeCastRule1(left, right)
 	if !isCollatedTextType(castLeft.Oid) || !isCollatedTextType(castRight.Oid) {
 		return hasCast, castLeft, castRight
@@ -2074,6 +2081,15 @@ var supportedOperators = []FuncNew{
 					return newCheckResultWithCast(2, integerDomainOperands(inputs))
 				}
 				has, t1, t2 := arithmeticTypeCastRule1(inputs[0], inputs[1])
+				// D64 is a signed coefficient. MUL's D128 result cannot recover
+				// a UINT64/BIT value narrowed before multiplication.
+				wideUnsigned := inputs[0].Oid == types.T_uint64 || inputs[0].Oid == types.T_bit ||
+					inputs[1].Oid == types.T_uint64 || inputs[1].Oid == types.T_bit
+				if wideUnsigned && t1.Oid == types.T_decimal64 && t2.Oid == types.T_decimal64 {
+					t1 = types.New(types.T_decimal128, 38, t1.Scale)
+					t2 = types.New(types.T_decimal128, 38, t2.Scale)
+					has = true
+				}
 				if widened, ok := widenedDecimalArithmeticInputs("*", inputs, []types.Type{t1, t2}); ok {
 					return newCheckResultWithCast(0, widened)
 				}
@@ -2082,13 +2098,12 @@ var supportedOperators = []FuncNew{
 					// D128×D128, downgrade to D64×D64. The d64Mul kernel produces
 					// D128 output so overflow is impossible, and it's ~4× faster
 					// than d128Mul (1 vs 4 hardware MUL instructions).
-					// Exclude uint64 (values > max_int64 can't fit in D64=int64).
+					// Exclude UINT64/BIT (their full domain does not fit in D64).
 					if t1.Oid == types.T_decimal128 && t2.Oid == types.T_decimal128 {
 						i0, i1 := inputs[0].Oid, inputs[1].Oid
 						hasD64 := i0 == types.T_decimal64 || i1 == types.T_decimal64
 						noD128 := i0 != types.T_decimal128 && i1 != types.T_decimal128
-						noU64 := i0 != types.T_uint64 && i1 != types.T_uint64
-						if hasD64 && noD128 && noU64 {
+						if hasD64 && noD128 && !wideUnsigned {
 							t1 = types.T_decimal64.ToType()
 							t2 = types.T_decimal64.ToType()
 							SetTargetScaleFromSource(&inputs[0], &t1)

@@ -60,7 +60,7 @@ func (builder *QueryBuilder) buildGenerateSeries(tbl *tree.TableFunction, ctx *B
 // prepared first argument is specialized at EXECUTE using its runtime type.
 func bindGenerateSeriesArgs(ctx context.Context, exprs []*plan.Expr) ([]*plan.Expr, types.Type, error) {
 	firstType := types.T(exprs[0].Typ.Id)
-	if exprs[0].GetP() != nil {
+	if isUnresolvedPreparedParam(ctx, exprs[0]) {
 		// The SQL PREPARE transport type is TEXT, not the endpoint's domain.
 		// Leave this marker uncoerced so EXECUTE can choose the numeric or
 		// temporal path using the actual parameter type. The provisional
@@ -88,7 +88,20 @@ func bindGenerateSeriesArgs(ctx context.Context, exprs []*plan.Expr) ([]*plan.Ex
 		return exprs, types.T_varchar.ToType(), nil
 	}
 
-	datetimeTyp := types.T_datetime.ToTypeWithScale(generateSeriesDatetimeScale(exprs))
+	scaleExprs := append([]*plan.Expr(nil), exprs...)
+	for i, expr := range exprs {
+		if !types.T(expr.Typ.Id).IsMySQLString() {
+			continue
+		}
+		if value, known := preparedConfigurationValue(ctx, expr); known {
+			if text, ok := value.(string); ok {
+				// This literal is only a schema witness. The executed endpoint
+				// and step retain their original parameter expressions.
+				scaleExprs[i] = MakePlan2StringConstExprWithType(text)
+			}
+		}
+	}
+	datetimeTyp := types.T_datetime.ToTypeWithScale(generateSeriesDatetimeScale(scaleExprs))
 	boundExprs := append([]*plan.Expr(nil), exprs...)
 	endpointCount := min(len(boundExprs), 2)
 	for i := 0; i < endpointCount; i++ {

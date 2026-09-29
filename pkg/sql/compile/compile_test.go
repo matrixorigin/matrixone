@@ -201,8 +201,7 @@ func TestFilterScanStorageExprsExcludesVolatilePredicates(t *testing.T) {
 	}}}}
 	stable := plan2.MakePlan2Int64ConstExprWithType(1)
 
-	filters, err := filterScanStorageExprs(nil, []*plan.Expr{stable, volatile}, false)
-	require.NoError(t, err)
+	filters := filterScanStorageExprs(nil, []*plan.Expr{stable, volatile}, false)
 	require.Equal(t, []*plan.Expr{stable}, filters)
 }
 

@@ -3953,6 +3953,9 @@ func (builder *QueryBuilder) removeUnnecessaryProjections(nodeID int32) int32 {
 }
 
 func (builder *QueryBuilder) createQuery() (*Query, error) {
+	if err := builder.bindPreparedPredicateDiagnostics(); err != nil {
+		return nil, err
+	}
 	if builder.hadPendingExistentials {
 		if err := builder.checkPendingExistentials(); err != nil {
 			return nil, err
@@ -11186,7 +11189,11 @@ func appendSelectListWithGroupingOrder(
 			}
 		case *tree.NumVal:
 			if expr.ValType == tree.P_null {
-				expr.ValType = tree.P_nulltext
+				// Result transport uses TEXT, but the reusable source AST still
+				// denotes untyped NULL (including SET's synthetic SELECT).
+				copy := *expr
+				copy.ValType = tree.P_nulltext
+				expr = &copy
 			}
 
 			if selectExpr.As != nil && !selectExpr.As.Empty() {

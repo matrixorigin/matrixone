@@ -1386,8 +1386,9 @@ func TestCopyBlockFiltersForRemoteRunUsesAdmittedSubset(t *testing.T) {
 	admitted := plan2.MakePlan2Int64ConstExprWithType(7)
 	staleFold := plan2.MakePlan2Int64ConstExprWithType(8)
 	scope := &Scope{DataSource: &Source{
-		node:            &plan.Node{BlockFilterList: []*plan.Expr{admitted}},
-		BlockFilterList: []*plan.Expr{staleFold},
+		node:               &plan.Node{BlockFilterList: []*plan.Expr{admitted}},
+		remoteBlockFilters: []*plan.Expr{admitted},
+		BlockFilterList:    []*plan.Expr{staleFold},
 	}}
 
 	remote := copyBlockFiltersForRemoteRun(scope)
@@ -1396,7 +1397,7 @@ func TestCopyBlockFiltersForRemoteRunUsesAdmittedSubset(t *testing.T) {
 	require.NotSame(t, admitted, remote.DataSource.BlockFilterList[0])
 	require.Same(t, staleFold, scope.DataSource.BlockFilterList[0])
 
-	scope.DataSource.node.BlockFilterList = nil
+	scope.DataSource.remoteBlockFilters = []*plan.Expr{}
 	remote = copyBlockFiltersForRemoteRun(scope)
 	require.NotSame(t, scope, remote)
 	require.Empty(t, remote.DataSource.BlockFilterList)

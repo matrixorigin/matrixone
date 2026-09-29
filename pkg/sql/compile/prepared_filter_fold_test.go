@@ -56,8 +56,7 @@ func TestDiagnosticFilterClassificationExcludesStorageCopy(t *testing.T) {
 		context.Background(), "=", []*planpb.Expr{column, cast})
 	require.NoError(t, err)
 	require.True(t, plan2.ContainsConstantFilterDiagnostic(proc, filter))
-	storageFilters, err := filterScanStorageExprs(proc, []*planpb.Expr{filter}, false)
-	require.NoError(t, err)
+	storageFilters := filterScanStorageExprs(proc, []*planpb.Expr{filter}, false)
 	require.Empty(t, storageFilters)
 	require.True(t, (&Compile{proc: proc}).needsCoordinatorConstantFilterDiagnostic(
 		&planpb.Node{FilterList: []*planpb.Expr{filter}}))
@@ -120,8 +119,7 @@ func TestFilterScanStorageExprsUsesPreparedDiagnosticProof(t *testing.T) {
 			proven, err := plan2.ProbeStatementParameterDiagnosticFree(proc, filter)
 			require.NoError(t, err)
 			require.Equal(t, tc.safe, proven)
-			storageFilters, err := filterScanStorageExprs(proc, []*planpb.Expr{filter}, proven)
-			require.NoError(t, err)
+			storageFilters := filterScanStorageExprs(proc, []*planpb.Expr{filter}, proven)
 			if tc.safe {
 				require.Equal(t, []*planpb.Expr{filter}, storageFilters)
 			} else {

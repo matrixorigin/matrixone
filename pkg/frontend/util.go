@@ -322,11 +322,11 @@ func getExprValueWithPrepareMeta(
 		return nil, plan.Type{}, moerr.NewInternalErrorf(execCtx.reqCtx, "the expr %s does not generate a value", e.String())
 	}
 
-	// for the decimal type, we need the type of expr
-	//!!!NOTE: the type here may be different from the one in the result vector.
+	// Decimal coefficients and NULL transports can lose the logical source
+	// type. Recover it with the assignment binder, preserving typed NULLs.
 	var planExpr *plan.Expr
 	oid := resultVec.GetType().Oid
-	if oid == types.T_decimal64 || oid == types.T_decimal128 || oid == types.T_decimal256 {
+	if oid == types.T_decimal64 || oid == types.T_decimal128 || oid == types.T_decimal256 || resultVec.IsNull(0) {
 		planExpr, err = bindSetVariableResultExpr(
 			e, ses.GetTxnCompileCtx(), preparedExpression)
 		if err != nil {
@@ -353,6 +353,9 @@ func getExprValueWithPrepareMeta(
 		}
 	}
 	resultType := plan2.MakePlan2Type(resultVec.GetType())
+	if resultVec.IsNull(0) {
+		resultType = planExpr.Typ
+	}
 	value, err := getValueFromVector(execCtx.reqCtx, resultVec, ses, planExpr)
 	if err != nil {
 		return nil, plan.Type{}, err
@@ -672,7 +675,7 @@ func bindSetVariableResultExpr(
 	builder := plan2.NewQueryBuilder(
 		plan.Query_SELECT, compilerContext, preparedExpression, false)
 	bindContext := plan2.NewBindContext(builder, nil)
-	binder := plan2.NewSetVarBinder(builder, bindContext)
+	binder := plan2.NewProjectionBinder(builder, bindContext, plan2.NewHavingBinder(builder, bindContext))
 	return binder.BindExpr(e, 0, false)
 }
 

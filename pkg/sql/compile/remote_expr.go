@@ -178,11 +178,11 @@ func copyBlockFiltersForRemoteRun(s *Scope) *Scope {
 	preScopesCopied := false
 	var blockFilters []*plan.Expr
 	if s.DataSource != nil {
-		// DataSource.BlockFilterList contains coordinator-owned Fold IDs after
-		// InitAllDataSource. The scope's plan node contains only the predicates
-		// admitted for this execution, including the empty subset. Never fall
-		// back to folded expressions when the selected subset is empty.
-		if s.DataSource.node != nil {
+		// Fold IDs belong to the coordinator. Send the current raw subset;
+		// a lazy source that has not initialized yet still carries its template.
+		if s.DataSource.remoteBlockFilters != nil {
+			blockFilters = s.DataSource.remoteBlockFilters
+		} else if s.DataSource.node != nil {
 			blockFilters = s.DataSource.node.BlockFilterList
 		} else {
 			blockFilters = s.DataSource.BlockFilterList

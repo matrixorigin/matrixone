@@ -18,7 +18,6 @@ import (
 	"context"
 	"errors"
 
-	"github.com/gogo/protobuf/proto"
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
 	"github.com/matrixorigin/matrixone/pkg/container/batch"
 	"github.com/matrixorigin/matrixone/pkg/container/types"
@@ -27,18 +26,6 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/sql/plan/rule"
 	"github.com/matrixorigin/matrixone/pkg/vm/process"
 )
-
-type preparedJoinDiagnosticFreeKey struct{}
-
-// WithPreparedJoinDiagnosticFree marks one execution-local replan after its
-// normalized prepared ON operands were evaluated without diagnostics.
-func WithPreparedJoinDiagnosticFree(ctx context.Context) context.Context {
-	return context.WithValue(ctx, preparedJoinDiagnosticFreeKey{}, true)
-}
-
-func preparedJoinDiagnosticFree(ctx context.Context) bool {
-	return ctx != nil && ctx.Value(preparedJoinDiagnosticFreeKey{}) == true
-}
 
 // ContainsConstantFilterDiagnostic probes a logical constant under a filter
 // with an isolated warning sink. A diagnostic expression must retain one
@@ -107,12 +94,10 @@ func containsStatementInvariantFilterDiagnostic(proc *process.Process, expr *pla
 	if expr == nil {
 		return false
 	}
+	if function.MayDiagnoseStatementParameter(expr) && !provenFree {
+		return true
+	}
 	if fn := expr.GetF(); fn != nil {
-		if function.MayDiagnoseStatementParameter(expr) {
-			if !provenFree {
-				return true
-			}
-		}
 		if isExecutionConstant(expr) && !function.ContainsRowScopedConversion(expr) {
 			_, free, warned, err := rule.EvaluateConstantExpression(proc, expr, batch.EmptyForConstFoldBatch)
 			if free != nil {
@@ -217,69 +202,6 @@ func preparedPlanDiagnosticCandidates(p *plan.Plan, includeMaterialized bool) []
 // PreparedPlanHasJoinParameterDiagnostic is retained for existing callers.
 func PreparedPlanHasJoinParameterDiagnostic(p *plan.Plan) bool {
 	return len(PreparedPlanDiagnosticCandidates(p)) != 0
-}
-
-// PreparedPlanDiagnosticNeedsTemplate distinguishes a scan predicate that
-// only needs execute-time storage admission from a predicate whose owner must
-// move through the optimizer. The latter needs a separately planned template.
-func PreparedPlanDiagnosticNeedsTemplate(p *plan.Plan) bool {
-	if p == nil || p.GetQuery() == nil {
-		return false
-	}
-	var scanPredicates []*plan.Expr
-	hasJoin := false
-	for _, node := range p.GetQuery().Nodes {
-		if node == nil {
-			continue
-		}
-		if node.NodeType == plan.Node_JOIN {
-			hasJoin = true
-		}
-		if node.NodeType == plan.Node_TABLE_SCAN {
-			for _, exprs := range [...][]*plan.Expr{node.FilterList, node.BlockFilterList} {
-				for _, expr := range exprs {
-					if containsStatementParameterDiagnostic(expr) {
-						scanPredicates = append(scanPredicates, expr)
-					}
-				}
-			}
-		}
-	}
-	if hasJoin {
-		return true
-	}
-	for _, node := range p.GetQuery().Nodes {
-		if node == nil {
-			continue
-		}
-		if node.NodeType != plan.Node_TABLE_SCAN && node.NodeType != plan.Node_VALUE_SCAN {
-			for _, exprs := range [...][]*plan.Expr{node.OnList, node.FilterList, node.BlockFilterList} {
-				for _, expr := range exprs {
-					if !containsStatementParameterDiagnostic(expr) {
-						continue
-					}
-					found := false
-					for _, scanExpr := range scanPredicates {
-						if expr == scanExpr || proto.Equal(expr, scanExpr) {
-							found = true
-							break
-						}
-					}
-					if !found {
-						return true
-					}
-				}
-			}
-		}
-		if node.VectorIndexScan != nil {
-			for _, expr := range node.VectorIndexScan.PreFilters {
-				if containsStatementParameterDiagnostic(expr) {
-					return true
-				}
-			}
-		}
-	}
-	return false
 }
 
 // CompletePreparedDiagnosticBlockFilters restores zone-map pruning for
@@ -392,6 +314,9 @@ func ProbePreparedDiagnosticCandidatesWithProof(
 func PreparedDirectImplicitIntegerCastParam(expr *plan.Expr) (int32, types.T, bool) {
 	if expr == nil {
 		return 0, types.T_any, false
+	}
+	if param := expr.GetP(); param != nil && param.Pos >= 0 && types.T(expr.Typ.Id).IsInteger() {
+		return param.Pos, types.T(expr.Typ.Id), true
 	}
 	fn := expr.GetF()
 	if fn == nil || fn.Func == nil || fn.GetSyntaxExplicitCast() || len(fn.Args) != 2 ||

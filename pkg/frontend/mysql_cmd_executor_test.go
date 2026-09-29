@@ -7660,6 +7660,26 @@ func TestPreparedSetExpressionRetryKeepsGlobalParserOrdinal(t *testing.T) {
 	require.Equal(t, 2, secondParam.Offset)
 }
 
+func TestPreparedQueryRetryKeepsPrunedParserOrdinal(t *testing.T) {
+	ctx := defines.AttachAccountId(context.Background(), catalog.System_Account)
+	ses := newTestSession(t, gomock.NewController(t))
+	defer ses.Close()
+	ses.SetSql("execute p")
+	for _, sql := range []string{
+		"select b from (select ? a, ? b) d",
+		"with d as (select ? a, ? b) select b from d",
+	} {
+		func() {
+			stmt, err := parsers.ParseOne(ctx, dialect.MYSQL, sql, 1)
+			require.NoError(t, err)
+			defer stmt.Free()
+			retryPlan, err := buildPlanForCompileRetry(ctx, ses, plan.NewEmptyCompilerContext(), stmt, false, nil)
+			require.NoError(t, err)
+			require.Equal(t, []int32{1}, queryParamPositions(retryPlan.GetQuery()))
+		}()
+	}
+}
+
 func TestBuildPlanForCompileRetryReappliesPreparedRuntimeSpecialization(t *testing.T) {
 	ctx := defines.AttachAccountId(context.Background(), catalog.System_Account)
 	stmt, err := parsers.ParseOne(ctx, dialect.MYSQL, "select coalesce(?, ?) from dual", 1)
@@ -7677,7 +7697,7 @@ func TestBuildPlanForCompileRetryReappliesPreparedRuntimeSpecialization(t *testi
 			PrepareParamKind:    vector.PrepareParamDecimal,
 			EnableNumericPrefix: true,
 		},
-	}, true)
+	})
 	retryPlan, err := buildPlanForCompileRetry(
 		ctx, nil, plan.NewEmptyCompilerContext(), stmt, true, retry)
 	require.NoError(t, err)
@@ -7722,7 +7742,11 @@ func TestBuildPlanForCompileRetryReprovesPreparedJoin(t *testing.T) {
 	}
 	retry := newPreparedExecutionRetry([]any{
 		plan.ParamValue{Value: "01:00:00"}, plan.ParamValue{Value: int64(1)},
-	}, false, false, true)
+	})
+	retry.bindings = []plan.PreparedSourceBinding{
+		{Position: 0, Type: types.T_text.ToType()},
+		{Position: 1, Type: types.T_int64.ToType()},
+	}
 	safe, err := buildPlanForCompileRetry(ctx, ses, compilerCtx, stmt, false, retry)
 	require.NoError(t, err)
 	require.NotNil(t, safe.GetQuery())
@@ -7742,63 +7766,12 @@ func TestBuildPlanForCompileRetryReprovesPreparedJoin(t *testing.T) {
 	require.Positive(t, scanFilters(again.GetQuery()), "the earlier unsafe retry must not retain its barrier")
 
 	previousCtx := compilerCtx.GetContext()
-	_, err = withPreparedJoinDiagnosticFreeContext(ctx, compilerCtx, func() (*plan.Plan, error) {
-		return nil, moerr.NewInternalErrorNoCtx("injected local replan failure")
-	})
+	invalid, err := parsers.ParseOne(ctx, dialect.MYSQL, "select missing_column", 1)
+	require.NoError(t, err)
+	defer invalid.Free()
+	_, err = buildPreparedBoundQuery(ctx, ses, compilerCtx, invalid, nil, nil)
 	require.Error(t, err)
 	require.Same(t, previousCtx, compilerCtx.GetContext())
-}
-
-func TestPreparedJoinUnboundAssumptionRestoresScanFilter(t *testing.T) {
-	ctx := defines.AttachAccountId(context.Background(), catalog.System_Account)
-	sql := "select count(*) from select_test.bind_select a join select_test.bind_select b on a.a=b.a and a.a=hour(time(?)) where a.a=?"
-	build := func(assumeSafe bool) *plan.Plan {
-		stmt, err := parsers.ParseOne(ctx, dialect.MYSQL, sql, 1)
-		require.NoError(t, err)
-		defer stmt.Free()
-		compilerCtx := plan.NewMockCompilerContext(true)
-		planningCtx := ctx
-		if assumeSafe {
-			planningCtx = plan.WithPreparedJoinDiagnosticFree(ctx)
-		}
-		compilerCtx.SetContext(planningCtx)
-		require.Nil(t, compilerCtx.GetProcess().GetPrepareParams())
-		built, err := plan.BuildPlan(compilerCtx, stmt, true)
-		require.NoError(t, err)
-		return built
-	}
-	conservative := build(false)
-	safe := build(true)
-	countScanFilters := func(built *plan.Plan) int {
-		count := 0
-		for _, node := range built.GetQuery().Nodes {
-			if node.NodeType == plan0.Node_TABLE_SCAN {
-				count += len(node.FilterList)
-			}
-		}
-		return count
-	}
-	require.Zero(t, countScanFilters(conservative))
-	require.Positive(t, countScanFilters(safe))
-	positions := make(map[int32]bool)
-	for _, position := range queryParamPositions(safe.GetQuery()) {
-		positions[position] = true
-	}
-	require.Equal(t, map[int32]bool{1: true, 2: true}, positions)
-}
-
-func TestPreparedSingleTableLockScanNeedsOnlyStorageProof(t *testing.T) {
-	ctx := defines.AttachAccountId(context.Background(), catalog.System_Account)
-	stmt, err := parsers.ParseOne(ctx, dialect.MYSQL,
-		"select a from select_test.bind_select where a=? for update", 1)
-	require.NoError(t, err)
-	defer stmt.Free()
-	compilerCtx := plan.NewMockCompilerContext(true)
-	compilerCtx.SetContext(ctx)
-	built, err := plan.BuildPlan(compilerCtx, stmt, true)
-	require.NoError(t, err)
-	require.True(t, plan.PreparedPlanHasJoinParameterDiagnostic(built))
-	require.False(t, plan.PreparedPlanDiagnosticNeedsTemplate(built), built.String())
 }
 
 func TestBuildPlanForPreparedExpressionRetryPreservesBinaryRuntimeType(t *testing.T) {
@@ -7813,7 +7786,7 @@ func TestBuildPlanForPreparedExpressionRetryPreservesBinaryRuntimeType(t *testin
 			IsBinaryProtocol: true,
 			RuntimeType:      types.T_int64.ToType(),
 			HasRuntimeType:   true,
-		}}, true))
+		}}))
 	require.NoError(t, err)
 	require.Empty(t, queryParamPositions(retryPlan.GetQuery()), retryPlan.String())
 	root := retryPlan.GetQuery().Nodes[retryPlan.GetQuery().Steps[len(retryPlan.GetQuery().Steps)-1]]

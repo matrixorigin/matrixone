@@ -383,6 +383,7 @@ type ViewData struct {
 }
 
 type QueryBuilder struct {
+	preparedBindingProof *bool
 	// Deep existential regions are owned by a SQL block, never by a partially
 	// constructed node. The registry stays nil on the ordinary flattening path.
 	nextExistentialBlock    uint64

@@ -5749,10 +5749,7 @@ func (c *Compile) compileTableScanDataSource(s *Scope) error {
 
 	c.filterExprMu.Lock()
 	defer c.filterExprMu.Unlock()
-	storageFilters, err := filterScanStorageExprs(c.proc, node.FilterList, c.preparedJoinDiagnosticFree)
-	if err != nil {
-		return err
-	}
+	storageFilters := filterScanStorageExprs(c.proc, node.FilterList, c.preparedJoinDiagnosticFree)
 	filters, executors, rebuilt, err := prepareFoldedFilterExprs(
 		c.proc, storageFilters, s.DataSource.FilterList, c.filterExprExes, true)
 	if err != nil {
@@ -5764,19 +5761,16 @@ func (c *Compile) compileTableScanDataSource(s *Scope) error {
 	}
 	s.DataSource.FilterExpr = colexec.RewriteFilterExprList(s.DataSource.FilterList)
 
-	blockFilters, err := filterScanStorageExprs(c.proc, node.BlockFilterList, c.preparedJoinDiagnosticFree)
-	if err != nil {
-		return err
-	}
+	blockFilters := filterScanStorageExprs(c.proc, node.BlockFilterList, c.preparedJoinDiagnosticFree)
 	if c.preparedJoinDiagnosticFree {
 		blockFilters = plan2.CompletePreparedDiagnosticBlockFilters(ctx, node, storageFilters, blockFilters)
 	}
-	// Remote scopes serialize the plan node's raw block predicates because the
-	// folded DataSource expressions contain coordinator-owned Fold IDs. Give this
-	// scope its admitted subset so an excluded diagnostic cannot reappear on CN.
-	selectedNode := *node
-	selectedNode.BlockFilterList = blockFilters
-	s.DataSource.node = &selectedNode
+	// Keep the reusable plan intact. Remote scopes need this execution's raw
+	// subset because the folded list contains coordinator-owned Fold IDs.
+	s.DataSource.remoteBlockFilters = blockFilters
+	if blockFilters == nil {
+		s.DataSource.remoteBlockFilters = []*plan.Expr{}
+	}
 	filters, executors, rebuilt, err = prepareFoldedFilterExprs(
 		c.proc, blockFilters, s.DataSource.BlockFilterList, c.filterExprExes, false)
 	if err != nil {
@@ -5804,7 +5798,7 @@ func (c *Compile) compileTableScanDataSource(s *Scope) error {
 // filterScanStorageExprs excludes row-dependent predicates from the engine
 // reader. The complete node.FilterList remains owned by TableScan or Restrict,
 // so these predicates are still evaluated once at the row-level boundary.
-func filterScanStorageExprs(proc *process.Process, exprs []*plan.Expr, provenFree bool) ([]*plan.Expr, error) {
+func filterScanStorageExprs(proc *process.Process, exprs []*plan.Expr, provenFree bool) []*plan.Expr {
 	var filtered []*plan.Expr
 	for i, expr := range exprs {
 		exclude := plan2.ContainsVolatileFunction(expr) || plan2.ContainsConstantFilterDiagnostic(proc, expr) ||
@@ -5819,9 +5813,9 @@ func filterScanStorageExprs(proc *process.Process, exprs []*plan.Expr, provenFre
 		}
 	}
 	if filtered == nil {
-		return exprs, nil
+		return exprs
 	}
-	return filtered, nil
+	return filtered
 }
 
 func (c *Compile) compileVectorIndexScanDataSource(s *Scope) error {

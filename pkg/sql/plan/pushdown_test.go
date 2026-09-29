@@ -250,11 +250,10 @@ func TestPreparedJoinDiagnosticProofOnlyRelaxesCurrentExecution(t *testing.T) {
 	require.NoError(t, err)
 	require.True(t, ContainsGuardedJoinDiagnosticWithProof(proc, guardedLiteral, safe),
 		"parameter proof cannot suppress an unrelated literal diagnostic")
-	originalContext := ctx.GetContext()
-	ctx.SetContext(WithPreparedJoinDiagnosticFree(originalContext))
+	builder.preparedBindingProof = &safe
 	require.False(t, builder.joinOwnsConstantDiagnostic(builder.qry.Nodes[2]))
 	require.False(t, builder.filterPushdownBarrier(condition))
-	ctx.SetContext(originalContext)
+	builder.preparedBindingProof = nil
 	require.True(t, builder.joinOwnsConstantDiagnostic(builder.qry.Nodes[2]))
 
 	require.NoError(t, vector.SetStringAt(params, 0, "900:00:00", proc.Mp()))

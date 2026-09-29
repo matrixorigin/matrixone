@@ -272,6 +272,30 @@ func TestTemporalNumericTypeCheckUsesDecimal128ForDateTimeAndTimestamp(t *testin
 	}
 }
 
+func TestTemporalArithmeticWithApproximateSources(t *testing.T) {
+	for _, temporal := range []types.T{types.T_date, types.T_time, types.T_datetime, types.T_timestamp, types.T_year} {
+		for _, floating := range []types.T{types.T_float32, types.T_float64, types.T_char, types.T_varchar, types.T_text, types.T_binary, types.T_varbinary, types.T_blob} {
+			for _, inputs := range [][]types.Type{
+				{temporal.ToTypeWithScale(6), floating.ToType()},
+				{floating.ToType(), temporal.ToTypeWithScale(6)},
+			} {
+				for _, operator := range []string{"+", "-", "*", "%", "/", "div"} {
+					resolved, err := GetFunctionByName(context.Background(), operator, inputs)
+					require.NoError(t, err, "%s %v", operator, inputs)
+					want := types.T_float64
+					if operator == "div" {
+						want = types.T_int64
+					}
+					require.Equal(t, want, resolved.retType.Oid)
+					targets, cast := resolved.ShouldDoImplicitTypeCast()
+					require.True(t, cast)
+					require.Equal(t, []types.Type{types.T_float64.ToType(), types.T_float64.ToType()}, targets)
+				}
+			}
+		}
+	}
+}
+
 func TestTemporalNumericCastOverloadSupportsDateAndYearDecimal(t *testing.T) {
 	for _, tc := range []struct {
 		name   string

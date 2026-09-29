@@ -1218,14 +1218,14 @@ func TestCheckNoNeedCastAcceptsSameTypeConstantCastOnly(t *testing.T) {
 	target := types.T_int64.ToType()
 	literalCast, err := appendCastBeforeExpr(ctx, makePlan2Int32ConstExprWithType(7), makePlan2Type(&target))
 	require.NoError(t, err)
-	require.True(t, checkNoNeedCast(target, target, literalCast))
+	require.True(t, checkNoNeedCast(context.Background(), target, target, literalCast))
 
 	columnCast, err := appendCastBeforeExpr(ctx, &plan.Expr{
 		Typ:  plan.Type{Id: int32(types.T_int32)},
 		Expr: &plan.Expr_Col{Col: &plan.ColRef{RelPos: 0, ColPos: 0}},
 	}, makePlan2Type(&target))
 	require.NoError(t, err)
-	require.False(t, checkNoNeedCast(target, target, columnCast))
+	require.False(t, checkNoNeedCast(context.Background(), target, target, columnCast))
 
 	uuidType := types.T_uuid.ToType()
 	uuidCast, err := appendExplicitCastBeforeExpr(
@@ -1234,7 +1234,7 @@ func TestCheckNoNeedCastAcceptsSameTypeConstantCastOnly(t *testing.T) {
 		makePlan2Type(&uuidType),
 	)
 	require.NoError(t, err)
-	require.True(t, checkNoNeedCast(uuidType, uuidType, uuidCast), uuidCast.String())
+	require.True(t, checkNoNeedCast(context.Background(), uuidType, uuidType, uuidCast), uuidCast.String())
 	secondUUIDCast, err := appendExplicitCastBeforeExpr(
 		ctx,
 		makePlan2StringConstExprWithType("00000000-0000-0000-0000-000000000002", false),
@@ -1786,7 +1786,7 @@ func TestCheckNoNeedCastWithTrailingZeros(t *testing.T) {
 			}
 
 			// Test checkNoNeedCast
-			result := checkNoNeedCast(constType, columnType, constExpr)
+			result := checkNoNeedCast(context.Background(), constType, columnType, constExpr)
 
 			t.Logf("ConstValue: %s, ConstScale: %d, ColumnScale: %d", tt.constValue, tt.constScale, tt.columnScale)
 			t.Logf("Expected: %v, Got: %v", tt.expectResult, result)
