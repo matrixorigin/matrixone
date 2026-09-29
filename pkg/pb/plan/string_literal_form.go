@@ -296,7 +296,7 @@ const (
 	notEqualFunctionID               int32 = 1
 	nullSafeEqualFunctionID          int32 = 406
 	internalJSONComparisonFunctionID int32 = 577
-	statementDigestTextFunctionID    int32 = 584
+	statementDigestTextFunctionID    int32 = 585
 	planBooleanTypeID                int32 = 10
 	planJSONTypeID                   int32 = 62
 	binFunctionID                    int32 = 270
@@ -338,7 +338,7 @@ const (
 // capabilities that can make a pipeline unsafe on an older remote worker.
 // NumericPrefix requires MORPC v30. JSONComparisonParam and
 // MixedJSONBooleanEquality require MORPC v36. FormatNumericArguments requires
-// MORPC v59. StatementDigestText requires MORPC v100. TypedConversionFunctions
+// MORPC v59. StatementDigestText requires MORPC v101. TypedConversionFunctions
 // requires MORPC v64 because BIN/CONV
 // overload identities and their fixed-width execution contracts changed in
 // the same release. ASCIIInt32Result requires MORPC v65 because ASCII keeps
