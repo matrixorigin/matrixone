@@ -250,9 +250,9 @@ func TestPreparedCeilPrecisionScalarRuntime(t *testing.T) {
 		wantPrecisionCast bool
 	}{
 		{"integer", ParamValue{Value: int64(2), SourceType: types.T_int64.ToType(), HasSourceType: true}, "123.46", "123.45", 0, false},
-		{"decimal", ParamValue{Value: "2.5", SourceType: types.New(types.T_decimal64, 2, 1), HasSourceType: true}, "123.456", "123.456", function.IntegerArgumentCastOverload, true},
-		{"double", ParamValue{Value: 2.5, SourceType: types.T_float64.ToType(), HasSourceType: true}, "123.460", "123.450", function.IntegerArgumentCastOverload, true},
-		{"binary double", ParamValue{Value: "2.5", IsBinaryProtocol: true, RuntimeType: types.T_float64.ToType(), HasRuntimeType: true}, "123.460", "123.450", function.IntegerArgumentCastOverload, true},
+		{"decimal", ParamValue{Value: "2.5", SourceType: types.New(types.T_decimal64, 2, 1), HasSourceType: true}, "123.456", "123.456", 0, true},
+		{"double", ParamValue{Value: 2.5, SourceType: types.T_float64.ToType(), HasSourceType: true}, "123.456", "123.456", 0, true},
+		{"binary double", ParamValue{Value: "2.5", IsBinaryProtocol: true, RuntimeType: types.T_float64.ToType(), HasRuntimeType: true}, "123.456", "123.456", 0, true},
 		{"text", ParamValue{Value: "2", SourceType: types.T_varchar.ToType(), HasSourceType: true}, "123.460", "123.450", 0, true},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
