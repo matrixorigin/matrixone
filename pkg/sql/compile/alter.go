@@ -1180,10 +1180,18 @@ func (s *Scope) alterTableCopy(c *Compile, cleanup *alterAutoIncrementResetClean
 	if lineageTxnOp.Txn().IsPessimistic() {
 		var retryErr error
 		if !isTemp {
-			// TRUNCATE, DROP TABLE, and DROP ACCOUNT enter this lifecycle
-			// before locking table metadata. Use the same order for COPY ALTER.
-			if err = c.lockDataBranchLineageOwnerLifecyclePessimistic(); err != nil {
-				return err
+			if c.isLifecycleRC() {
+				if dbSource, originRel, err = c.admitBroadTableLifecycleRC(dbName, tblName, oldId, false); err != nil {
+					return err
+				}
+				if plannedID := qry.TableDef.GetTblId(); plannedID != 0 && plannedID != oldId {
+					return moerr.NewTxnNeedRetryWithDefChanged(c.proc.Ctx)
+				}
+			} else {
+				// SI keeps the existing broad lifecycle and fixed snapshot.
+				if err = c.lockDataBranchLineageOwnerLifecyclePessimistic(); err != nil {
+					return err
+				}
 			}
 		}
 		// 0. lock origin database metadata in catalog
@@ -1508,12 +1516,22 @@ func (s *Scope) alterTableCopy(c *Compile, cleanup *alterAutoIncrementResetClean
 	if isTemp {
 		dropSql = "drop temporary table " + sqlquote.QualifiedIdent(dbName, qry.TableDef.Name)
 	}
-	if err := c.runSqlWithOptions(
-		dropSql,
-		// ALTER TABLE COPY replaces the source table internally. It is not a
-		// user-visible DROP TABLE, so keep table-level publications unchanged.
-		executor.StatementOption{}.WithIgnoreForeignKey().WithIgnorePublish(),
-	); err != nil {
+	drop := func() error {
+		return c.runSqlWithOptions(
+			dropSql,
+			// ALTER TABLE COPY replaces the source table internally. It is not a
+			// user-visible DROP TABLE, so keep table-level publications unchanged.
+			executor.StatementOption{}.WithIgnoreForeignKey().WithIgnorePublish(),
+		)
+	}
+	if !isTemp && c.isLifecycleRC() {
+		// G-X and the source table lock are already held. The synchronous
+		// internal DROP must not reacquire C after G or advance its snapshot.
+		err = c.withBroadDropLifecycle(drop)
+	} else {
+		err = drop()
+	}
+	if err != nil {
 		c.proc.Error(c.proc.Ctx, "drop original table for alter table",
 			zap.String("databaseName", dbName),
 			zap.String("origin tableName", qry.GetTableDef().Name),

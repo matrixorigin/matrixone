@@ -74,7 +74,8 @@ func (lp *localLockTableProxy) lock(
 	// requests must retain the remote lock table's full merge and replacement
 	// semantics; routing them through the singleton cache would either panic or
 	// lose transaction-bookkeeping replacement.
-	if options.Mode != pb.LockMode_Shared || len(rows) != 1 {
+	// Exact-row admission must validate the real transaction at its owner.
+	if options.KeepRows || options.Mode != pb.LockMode_Shared || len(rows) != 1 {
 		lp.remote.lock(ctx, txn, rows, options, cb)
 		return
 	}
