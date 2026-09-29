@@ -1131,6 +1131,13 @@ func TestLineageOwnerLifecycleValidationCoversEveryTerminalCommitPath(t *testing
 	}
 	paths := []terminalCommitPath{
 		{
+			name: "implicit commit before rename",
+			run: func(th *TxnHandler, execCtx *ExecCtx) error {
+				execCtx.stmt = &tree.RenameTable{}
+				return th.commitBeforeStatement(execCtx)
+			},
+		},
+		{
 			name: "explicit commit",
 			run: func(th *TxnHandler, execCtx *ExecCtx) error {
 				execCtx.txnOpt.byCommit = true
