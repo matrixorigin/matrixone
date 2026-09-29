@@ -137,8 +137,10 @@ rejection and rollback restriction, and retained validation/performance disposit
 
 ### Revision 4 validation record (2026-09-28)
 
-Code and permanent tests: [e3d5c8b956e8b0ec4d7b0b76066fc2fe12093b36](https://github.com/matrixorigin/matrixone/tree/e3d5c8b956e8b0ec4d7b0b76066fc2fe12093b36).
-The source merges main `b9013dc6bb058ec74935a62ac3a35f57d13c2f98` without rebasing.
+Code and permanent tests: [021c9ba226a0fa2e9eea9e69168556a1e0a4733e](https://github.com/matrixorigin/matrixone/tree/021c9ba226a0fa2e9eea9e69168556a1e0a4733e).
+The candidate integrates main `466eb8ff4f65752ad25d7e19274770459f5ef934`
+in merge commit `29e3dc6091287eb807d2e23bafdc851785360125`, followed by the
+legacy/response-contract repair in the linked commit.
 Allocation was rechecked at main `466eb8ff4f65752ad25d7e19274770459f5ef934`:
 v100 is allocated to on-demand view metadata; v101 is reserved for this
 JSON_VALUE contract after the conflict resolution.
@@ -149,6 +151,7 @@ JSON_VALUE contract after the conflict resolution.
 | Normal owning packages | PASS: types, bytejson, function, plan, pb/plan and parsers/...; native/CGo build completed in the isolated worktree. |
 | Remote boundary | PASS: `TestRemoteExpressionProtocolValidation`, including v100 rejection and v101 admission. Runtime integer tests are not old-binary rollout tests. |
 | Race | PASS: JSON_VALUE and stored-JSON tests in bytejson/function. |
+| Legacy/response contract repair | PASS: legacy two-argument text remains unbounded; malformed source JSON is a statement error; explicit scalar text rejects composite values through `ON ERROR`; implicit clause targets retain `VARCHAR(512)`. |
 | SQL publication | PASS: parser/binder/DDL/catalog paths; failed admission leaves no tables, columns or index metadata; legacy control, generated-column index, read/write separation, failed ALTER VIEW preserving its definition, real CN restart, rebind and subsequent indexed writes. |
 | Prepared protocol | PASS: DATE/TIME NULL/DEFAULT/ERROR, repeated COM_STMT_EXECUTE, and invalid unused DEFAULT rejected by COM_STMT_PREPARE. |
 | Canonical SQL BVT | PASS twice: 117/117 each, zero failures/ignored/abnormal; table and per-case database teardown verified between runs. SQL PREPARE is included. |
