@@ -41,5 +41,25 @@ FROM information_schema.columns
 WHERE table_schema = 'view_metadata_on_demand' AND table_name = 'v'
 ORDER BY ordinal_position;
 
+-- Prepared SHOW must track the target even when it starts as an ordinary table.
+CREATE TABLE metadata_target (code VARCHAR(5));
+PREPARE show_target FROM 'SHOW COLUMNS FROM view_metadata_on_demand.metadata_target';
+EXECUTE show_target;
+-- @session:id=1{
+DROP TABLE view_metadata_on_demand.metadata_target;
+CREATE VIEW view_metadata_on_demand.metadata_target AS
+  SELECT code FROM view_metadata_on_demand.src;
+ALTER TABLE view_metadata_on_demand.src MODIFY COLUMN code VARCHAR(120);
+-- @session}
+EXECUTE show_target;
+SELECT column_name, column_type FROM information_schema.columns
+WHERE table_schema = 'view_metadata_on_demand' AND table_name = 'metadata_target';
+-- @session:id=1{
+DROP VIEW view_metadata_on_demand.metadata_target;
+CREATE TABLE view_metadata_on_demand.metadata_target (code BIGINT);
+-- @session}
+EXECUTE show_target;
+DEALLOCATE PREPARE show_target;
+
 DROP DATABASE view_metadata_on_demand;
 -- @suite
