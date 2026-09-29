@@ -1181,7 +1181,7 @@ func (s *Scope) alterTableCopy(c *Compile, cleanup *alterAutoIncrementResetClean
 		var retryErr error
 		if !isTemp {
 			if c.isLifecycleRC() {
-				if dbSource, originRel, err = c.admitBroadTableLifecycleRC(dbName, tblName, oldId); err != nil {
+				if dbSource, originRel, err = c.admitBroadTableLifecycleRC(dbName, tblName, oldId, false); err != nil {
 					return err
 				}
 				if plannedID := qry.TableDef.GetTblId(); plannedID != 0 && plannedID != oldId {
