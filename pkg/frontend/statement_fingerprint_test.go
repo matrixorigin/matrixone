@@ -18,6 +18,7 @@ import (
 	"context"
 	"crypto/sha256"
 	"encoding/hex"
+	"reflect"
 	"strings"
 	"testing"
 
@@ -101,30 +102,20 @@ func TestFormatStatementFingerprintBoundsAndFailsOpen(t *testing.T) {
 }
 
 func TestFormatStatementFingerprintDoesNotMutateAST(t *testing.T) {
-	stmt, err := parsers.ParseOne(context.Background(), dialect.MYSQL,
-		"select `MiXeD` from `SomeTable` where id = 'value' and @MixedName = 1", 1)
+	const sql = "select `MiXeD` from `SomeTable` where id = 'value' and @MixedName = 1"
+	stmt, err := parsers.ParseOne(context.Background(), dialect.MYSQL, sql, 1)
 	require.NoError(t, err)
 	defer stmt.Free()
+	snapshot, err := parsers.ParseOne(context.Background(), dialect.MYSQL, sql, 1)
+	require.NoError(t, err)
+	defer snapshot.Free()
+	require.True(t, reflect.DeepEqual(snapshot, stmt), "independently parsed ASTs should start structurally equal")
 
-	render := func() string {
-		ctx := tree.NewFmtCtx(
-			dialect.MYSQL,
-			tree.WithQuoteIdentifier(),
-			tree.WithSingleQuoteString(),
-			tree.WithCanonicalUserVariableNames(),
-			tree.WithMaxOutputBytes(maxStatementFingerprintFormattedBytes),
-		)
-		require.True(t, ctx.FormatNode(stmt))
-		require.False(t, ctx.OutputLimitExceeded())
-		return ctx.String()
-	}
-	before := render()
 	fingerprint, attempted := formatStatementFingerprint(context.Background(), stmt)
-	after := render()
 
 	require.True(t, attempted)
 	require.NotEmpty(t, fingerprint)
-	require.Equal(t, before, after, "fingerprinting must not mutate the parsed AST")
+	require.True(t, reflect.DeepEqual(snapshot, stmt), "fingerprinting must not mutate any parsed AST field")
 }
 
 func TestFormatStatementFingerprintCanonicalizesUserVariableCase(t *testing.T) {

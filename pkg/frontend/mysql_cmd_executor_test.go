@@ -5054,7 +5054,7 @@ func Test_GetComputationWrapper_InternalCmds(t *testing.T) {
 	})
 }
 
-func runTestHandle(funName string, t *testing.T, handleFun func(ses *Session) error) {
+func runTestHandle(funName string, t *testing.T, handleFun func(ses *Session) error, ioOptions ...IOSessionOption) {
 	ctx := context.TODO()
 	convey.Convey(fmt.Sprintf("%s succ", funName), t, func() {
 		ctrl := gomock.NewController(t)
@@ -5072,7 +5072,7 @@ func runTestHandle(funName string, t *testing.T, handleFun func(ses *Session) er
 		pu := config.NewParameterUnit(sv, eng, txnClient, nil)
 		pu.SV.SkipCheckUser = true
 		setPu("", pu)
-		ioses, err := NewIOSession(&testConn{}, pu, "")
+		ioses, err := NewIOSessionWithOptions(&testConn{}, pu, "", ioOptions...)
 		convey.So(err, convey.ShouldBeNil)
 		proto := NewMysqlClientProtocol("", 0, ioses, 1024, pu.SV)
 		ses := NewSession(ctx, "", proto, nil)
@@ -5100,6 +5100,85 @@ func Test_HandlePrepareStmt(t *testing.T) {
 		_, err := handlePrepareStmt(ses, ec, stmt, "Prepare stmt1 from select 1, 2")
 		return err
 	})
+}
+
+func TestHandlePrepareStmtCapturesFingerprintBeforePlanning(t *testing.T) {
+	ctx := defines.AttachAccountId(context.Background(), catalog.System_Account)
+	const sql = "prepare fp_stmt from select ? + 0"
+	stmt, err := parsers.ParseOne(ctx, dialect.MYSQL, sql, 1)
+	require.NoError(t, err)
+	defer stmt.Free()
+
+	// This literal is the independent SHA-256 of the expected canonical SQL
+	// bytes, "select ? + 0"; do not derive the oracle with the production helper.
+	const expectedFingerprint = "05513085fe7fd114153fa4a5831e9a63d5e169b95782ce38320d3f8af9088096"
+	const expectedPostPlanningFingerprint = "d27f7aa34ad690e7afb6b41fc09478966397baeef2e99b5cee0a3dcc3fb7b6e6"
+
+	originalBuildPlanWithAuthorization := buildPlanWithAuthorization
+	t.Cleanup(func() {
+		buildPlanWithAuthorization = originalBuildPlanWithAuthorization
+	})
+	plannerCalled := false
+	var plannedAST *tree.Select
+	buildPlanWithAuthorization = func(
+		reqCtx context.Context,
+		ses FeSession,
+		compilerCtx plan.CompilerContext,
+		planned tree.Statement,
+	) (*plan.Plan, error) {
+		prepareStmt, ok := planned.(*tree.PrepareStmt)
+		require.True(t, ok, "handlePrepareStmt must plan the actual PREPARE node")
+		selectStmt, ok := prepareStmt.Stmt.(*tree.Select)
+		require.True(t, ok, "PREPARE body must reach planning as its parsed SELECT AST")
+		plannedAST = selectStmt
+		// This planner-entry mutation distinguishes preplanning capture from a
+		// fingerprint recomputed from the AST after the real planner returns.
+		selectStmt.IsPerform = true
+		plannerCalled = true
+		return originalBuildPlanWithAuthorization(reqCtx, ses, compilerCtx, planned)
+	}
+
+	var preparedOwner *PrepareStmt
+	var ownerSession *Session
+	runTestHandle("prepared fingerprint captured before planning", t, func(ses *Session) error {
+		ownerSession = ses
+		// The prepared owner takes ownership of the inner statement AST. Remove
+		// it at test cleanup so PrepareStmt.Close frees that AST exactly once.
+		t.Cleanup(func() {
+			if ownerSession != nil {
+				ownerSession.RemovePrepareStmt("fp_stmt")
+			}
+		})
+		execCtx := &ExecCtx{
+			reqCtx: ctx,
+			proc:   ses.GetProc(),
+			ses:    ses,
+			resper: ses.respr,
+		}
+		var handleErr error
+		preparedOwner, handleErr = handlePrepareStmt(
+			ses, execCtx, stmt.(*tree.PrepareStmt), sql,
+		)
+		return handleErr
+	}, WithIOSessionAllocator(NewLeakCheckAllocator()))
+
+	require.True(t, plannerCalled, "the test must pass through the real PREPARE planner")
+	require.NotNil(t, preparedOwner)
+	require.True(t, plannedAST.IsPerform, "planner-entry mutation must remain visible after real planning")
+	postPlanningSQL := tree.String(plannedAST, dialect.MYSQL)
+	require.Equal(t, "perform select ? + 0", postPlanningSQL,
+		"the planner-entry AST mutation must change the canonical SQL bytes")
+	postPlanningFingerprint, attempted := formatStatementFingerprint(ctx, plannedAST)
+	require.True(t, attempted)
+	require.Equal(t, expectedPostPlanningFingerprint, postPlanningFingerprint,
+		"the mutated AST must have its independent postplanning canonical hash")
+	require.NotEqual(t, expectedFingerprint, postPlanningFingerprint,
+		"the planner-entry AST mutation must change the fingerprint")
+	require.Same(t, plannedAST, preparedOwner.PrepareStmt,
+		"the retained prepared AST must be the one mutated at planner entry")
+	require.True(t, preparedOwner.statementFingerprintAttempted)
+	require.Equal(t, expectedFingerprint, preparedOwner.statementFingerprint,
+		"PREPARE must retain the independent preplanning fingerprint after the planner mutates its AST")
 }
 
 func TestFailedPrepareReplacementRemovesPreviousStatement(t *testing.T) {
