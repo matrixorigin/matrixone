@@ -18,8 +18,9 @@ document and report its own evidence.
 ## 1. Decision and scope
 
 Embed Sirius and DuckDB statically in `mo-service` through a C ABI and CGo,
-retaining pinned shared GPU dependencies. Use `upstream-dev-merge` synchronized
-with `sirius-db/sirius:dev`, not the legacy engine or a from-scratch port.
+retaining pinned shared GPU dependencies. Use the Sirius commit pinned at
+`third_party/sirius`, integrating the native embedding work with the latest
+`sirius-db/sirius:main`, not the legacy engine or a from-scratch port.
 
 - MO readers are the only embedded input in this milestone. No new TAE or
   directory-lock changes are required for Sirius offload.
