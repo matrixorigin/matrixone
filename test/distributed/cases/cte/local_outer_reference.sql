@@ -355,6 +355,23 @@ from having_keys p order by p.id;
 select p.id, (select count(*) from having_keys a where a.id=p.id and a.id<2
               having count(*) in (p.k,2)) as c
 from having_keys p order by p.id;
+-- Ordinary correlated COUNT HAVING preserves bound user and system variables,
+-- including the empty input and HAVING-deleted result row.
+set @having_limit=1;
+select p.id, (select count(*) from having_keys a where a.id=p.id and a.id<2
+              having count(*)=@having_limit) as c
+from having_keys p order by p.id;
+set @having_limit=0;
+select p.id, (select count(*) from having_keys a where a.id=p.id and a.id<2
+              having count(*)=@having_limit) as c
+from having_keys p order by p.id;
+select p.id, (select count(*) from having_keys a where a.id=p.id and a.id<2
+              having count(*) in (@having_limit,2)) as c
+from having_keys p order by p.id;
+select p.id, (select count(*) from having_keys a where a.id=p.id and a.id<2
+              having count(*) < @@session.cte_max_recursion_depth) as c
+from having_keys p order by p.id;
+set @having_limit=null;
 drop table having_keys;
 
 -- Non-total functions cannot run over outer rows whose CASE arm skips the

@@ -32,6 +32,18 @@ func TestLocalCTEOuterReferencesExecutablePlan(t *testing.T) {
 		sql  string
 	}{
 		{
+			name: "ordinary count having user variable",
+			sql: `select p.n_nationkey, (select count(*) from tpch.nation a
+				where a.n_nationkey=p.n_nationkey having count(*)=@having_limit)
+				from tpch.nation p`,
+		},
+		{
+			name: "ordinary count having system variable",
+			sql: `select p.n_nationkey, (select count(*) from tpch.nation a
+				where a.n_nationkey=p.n_nationkey having count(*)=@@session.auto_increment_increment)
+				from tpch.nation p`,
+		},
+		{
 			name: "ordinary count having outer reference",
 			sql: `select p.n_nationkey, (select count(*) from tpch.nation a
 				where a.n_nationkey=p.n_nationkey having count(*)=p.n_regionkey)

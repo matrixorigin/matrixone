@@ -478,6 +478,37 @@ from having_keys p order by p.id;
 1  ¦  1  𝄀
 2  ¦  null  𝄀
 3  ¦  0
+set @having_limit=1;
+select p.id, (select count(*) from having_keys a where a.id=p.id and a.id<2
+having count(*)=@having_limit) as c
+from having_keys p order by p.id;
+➤ id[4,32,0]  ¦  c[-5,64,0]  𝄀
+1  ¦  1  𝄀
+2  ¦  null  𝄀
+3  ¦  null
+set @having_limit=0;
+select p.id, (select count(*) from having_keys a where a.id=p.id and a.id<2
+having count(*)=@having_limit) as c
+from having_keys p order by p.id;
+➤ id[4,32,0]  ¦  c[-5,64,0]  𝄀
+1  ¦  null  𝄀
+2  ¦  0  𝄀
+3  ¦  0
+select p.id, (select count(*) from having_keys a where a.id=p.id and a.id<2
+having count(*) in (@having_limit,2)) as c
+from having_keys p order by p.id;
+➤ id[4,32,0]  ¦  c[-5,64,0]  𝄀
+1  ¦  null  𝄀
+2  ¦  0  𝄀
+3  ¦  0
+select p.id, (select count(*) from having_keys a where a.id=p.id and a.id<2
+having count(*) < @@session.cte_max_recursion_depth) as c
+from having_keys p order by p.id;
+➤ id[4,32,0]  ¦  c[-5,64,0]  𝄀
+1  ¦  1  𝄀
+2  ¦  0  𝄀
+3  ¦  0
+set @having_limit=null;
 drop table having_keys;
 create table guarded_abs(id int primary key, v bigint);
 insert into guarded_abs values (1,-9223372036854775808),(2,2);

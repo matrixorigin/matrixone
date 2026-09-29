@@ -417,15 +417,6 @@ func (builder *QueryBuilder) flattenSubqueriesWithConsumerAndChange(
 	return nodeID, expr, affected, err
 }
 
-func (builder *QueryBuilder) flattenSubquery(
-	nodeID int32,
-	subquery *plan.SubqueryRef,
-	ctx *BindContext,
-	nullResultRejected bool,
-) (int32, *plan.Expr, error) {
-	return builder.flattenSubqueryWithConsumer(nodeID, subquery, ctx, nullResultRejected, existentialIneligible, false)
-}
-
 func (builder *QueryBuilder) flattenSubqueryWithConsumer(
 	nodeID int32, subquery *plan.SubqueryRef, ctx *BindContext,
 	nullResultRejected bool, consumer existentialConsumer, guarded bool,
@@ -4117,7 +4108,7 @@ func replaceCountHavingResult(expr *plan.Expr, aggregateTag int32, result *plan.
 		return copy, true
 	}
 	switch copy.Expr.(type) {
-	case *plan.Expr_Lit, *plan.Expr_P, *plan.Expr_T:
+	case *plan.Expr_Lit, *plan.Expr_P, *plan.Expr_V, *plan.Expr_T:
 		return copy, true
 	default:
 		return nil, false
