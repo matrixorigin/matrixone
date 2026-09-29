@@ -1026,6 +1026,15 @@ func newCast(parameters []*vector.Vector, result vector.FunctionResultWrapper, p
 		}
 	}
 	from := parameters[0]
+	// Low-precision float types (bf16/float16/float8/float4) bridge through float32.
+	// Route them ahead of the integer/decimal fast-paths below so a low-precision
+	// source or target is never misdispatched into a specialization that lacks it.
+	if isLowPrecFloat(toType.Oid) {
+		return castToLowPrecFloat(parameters, *toType, result, proc, length, selectList)
+	}
+	if isLowPrecFloat(fromType.Oid) {
+		return lowPrecFloatToOthers(proc, from, *toType, result, length, selectList, mode)
+	}
 	if mode.isAssignment() && toType.Oid.IsInteger() {
 		switch fromType.Oid {
 		case types.T_float32:

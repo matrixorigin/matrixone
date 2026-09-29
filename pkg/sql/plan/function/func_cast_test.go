@@ -137,6 +137,100 @@ func TestCastEnumToNumericTypes(t *testing.T) {
 	}
 }
 
+// TestCastLowPrecFloat exercises the bf16/float16/float8/float4 cast bridge (#20567):
+// numeric/string sources round to the low-precision target, and a low-precision source
+// widens back through float32 to numerics and strings. Values are exactly representable
+// in all four formats (float4 magnitudes are {0,.5,1,1.5,2,3,4,6}).
+func TestCastLowPrecFloat(t *testing.T) {
+	proc := testutil.NewProcess(t)
+	f64 := types.T_float64.ToType()
+	vals := []float64{1.5, -2.0, 0.5}
+
+	bf16 := types.T_bf16.ToType()
+	f16 := types.T_float16.ToType()
+	f8 := types.T_float8.ToType()
+	f4 := types.T_float4.ToType()
+
+	// float64 -> each low-precision float.
+	for _, tc := range []struct {
+		name   string
+		target types.Type
+		zero   any
+		want   any
+	}{
+		{"bf16", bf16, []types.BF16{}, []types.BF16{types.BF16FromFloat32(1.5), types.BF16FromFloat32(-2.0), types.BF16FromFloat32(0.5)}},
+		{"float16", f16, []types.Float16{}, []types.Float16{types.Float16FromFloat32(1.5), types.Float16FromFloat32(-2.0), types.Float16FromFloat32(0.5)}},
+		{"float8", f8, []types.Float8{}, []types.Float8{types.Float8FromFloat32(1.5), types.Float8FromFloat32(-2.0), types.Float8FromFloat32(0.5)}},
+		{"float4", f4, []types.Float4{}, []types.Float4{types.Float4FromFloat32(1.5), types.Float4FromFloat32(-2.0), types.Float4FromFloat32(0.5)}},
+	} {
+		t.Run("float64_to_"+tc.name, func(t *testing.T) {
+			tcc := NewFunctionTestCase(proc,
+				[]FunctionTestInput{
+					NewFunctionTestInput(f64, vals, nil),
+					NewFunctionTestInput(tc.target, tc.zero, nil),
+				},
+				NewFunctionTestResult(tc.target, false, tc.want, nil), NewCast)
+			succeed, info := tcc.Run()
+			require.True(t, succeed, info)
+		})
+	}
+
+	// Each low-precision float -> float64 (widened value).
+	for _, tc := range []struct {
+		name  string
+		input FunctionTestInput
+	}{
+		{"bf16", NewFunctionTestInput(bf16, []types.BF16{types.BF16FromFloat32(1.5), types.BF16FromFloat32(-2.0), types.BF16FromFloat32(0.5)}, nil)},
+		{"float16", NewFunctionTestInput(f16, []types.Float16{types.Float16FromFloat32(1.5), types.Float16FromFloat32(-2.0), types.Float16FromFloat32(0.5)}, nil)},
+		{"float8", NewFunctionTestInput(f8, []types.Float8{types.Float8FromFloat32(1.5), types.Float8FromFloat32(-2.0), types.Float8FromFloat32(0.5)}, nil)},
+		{"float4", NewFunctionTestInput(f4, []types.Float4{types.Float4FromFloat32(1.5), types.Float4FromFloat32(-2.0), types.Float4FromFloat32(0.5)}, nil)},
+	} {
+		t.Run(tc.name+"_to_float64", func(t *testing.T) {
+			tcc := NewFunctionTestCase(proc,
+				[]FunctionTestInput{tc.input, NewFunctionTestInput(f64, []float64{}, nil)},
+				NewFunctionTestResult(f64, false, vals, nil), NewCast)
+			succeed, info := tcc.Run()
+			require.True(t, succeed, info)
+		})
+	}
+
+	// Cross-cast float8 -> bf16 (bridges through float32).
+	t.Run("float8_to_bf16", func(t *testing.T) {
+		tcc := NewFunctionTestCase(proc,
+			[]FunctionTestInput{
+				NewFunctionTestInput(f8, []types.Float8{types.Float8FromFloat32(1.5), types.Float8FromFloat32(-2.0), types.Float8FromFloat32(0.5)}, nil),
+				NewFunctionTestInput(bf16, []types.BF16{}, nil),
+			},
+			NewFunctionTestResult(bf16, false,
+				[]types.BF16{types.BF16FromFloat32(1.5), types.BF16FromFloat32(-2.0), types.BF16FromFloat32(0.5)}, nil), NewCast)
+		succeed, info := tcc.Run()
+		require.True(t, succeed, info)
+	})
+
+	// String -> float8, and float8 -> string.
+	t.Run("varchar_to_float8", func(t *testing.T) {
+		tcc := NewFunctionTestCase(proc,
+			[]FunctionTestInput{
+				NewFunctionTestInput(types.T_varchar.ToType(), []string{"1.5", "-2", "0.5"}, nil),
+				NewFunctionTestInput(f8, []types.Float8{}, nil),
+			},
+			NewFunctionTestResult(f8, false,
+				[]types.Float8{types.Float8FromFloat32(1.5), types.Float8FromFloat32(-2.0), types.Float8FromFloat32(0.5)}, nil), NewCast)
+		succeed, info := tcc.Run()
+		require.True(t, succeed, info)
+	})
+	t.Run("float8_to_varchar", func(t *testing.T) {
+		tcc := NewFunctionTestCase(proc,
+			[]FunctionTestInput{
+				NewFunctionTestInput(f8, []types.Float8{types.Float8FromFloat32(1.5), types.Float8FromFloat32(-2.0), types.Float8FromFloat32(0.5)}, nil),
+				NewFunctionTestInput(types.T_varchar.ToType(), []string{}, nil),
+			},
+			NewFunctionTestResult(types.T_varchar.ToType(), false, []string{"1.5", "-2", "0.5"}, nil), NewCast)
+		succeed, info := tcc.Run()
+		require.True(t, succeed, info)
+	})
+}
+
 func TestSignedIntegerToBit64PreservesBitPattern(t *testing.T) {
 	proc := testutil.NewProcess(t)
 	bit64 := types.New(types.T_bit, 64, 0)
