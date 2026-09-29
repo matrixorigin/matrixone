@@ -24,6 +24,18 @@ execute scan_key using @key;
 show count(*) warnings;
 deallocate prepare scan_key;
 
+-- A scalar projection must keep the same numeric comparison domain as a direct marker.
+prepare scan_scalar_key from 'select value from lookup_key where id = (select ?)';
+set @key = '1.5';
+execute scan_scalar_key using @key;
+set @key = '1';
+execute scan_scalar_key using @key;
+set @key = null;
+execute scan_scalar_key using @key;
+set @key = '2';
+execute scan_scalar_key using @key;
+deallocate prepare scan_scalar_key;
+
 prepare join_key from 'select a.value from lookup_key a join lookup_key b on a.id = b.id where a.id = ?';
 set @key = 1;
 execute join_key using @key;

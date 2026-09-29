@@ -2319,27 +2319,6 @@ func (prepareStmt *PrepareStmt) applyBitCountNumericRuntimeTypes(values []any) b
 	return numeric
 }
 
-func binaryProtocolRuntimeParamTypes(paramTypes []byte, params *vector.Vector) []types.Type {
-	if params == nil || params.Length() == 0 {
-		return nil
-	}
-	runtimeTypes := make([]types.Type, params.Length())
-	for i := range runtimeTypes {
-		if i*2+1 >= len(paramTypes) {
-			continue
-		}
-		mysqlType := defines.MysqlType(paramTypes[i*2])
-		if params.IsNull(uint64(i)) && !binaryProtocolPrepareParamIsBinaryString(mysqlType) {
-			continue
-		}
-		isUnsigned := paramTypes[i*2+1]&0x80 != 0
-		if runtimeType, ok := binaryProtocolPrepareParamCategoryType(mysqlType, isUnsigned); ok {
-			runtimeTypes[i] = runtimeType
-		}
-	}
-	return runtimeTypes
-}
-
 // executeUserParamConcreteType returns the assignment-time SQL type carried by
 // the EXECUTE ... USING expression when that width changes JSON comparison
 // semantics. The Go value is only a compatibility fallback for callers which

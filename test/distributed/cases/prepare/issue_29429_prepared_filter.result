@@ -31,6 +31,22 @@ show count(*) warnings;
 ➤ @@session.warning_count[-5,0,0]  𝄀
 0
 deallocate prepare scan_key;
+prepare scan_scalar_key from 'select value from lookup_key where id = (select ?)';
+set @key = '1.5';
+execute scan_scalar_key using @key;
+➤ value[12,12,0]
+set @key = '1';
+execute scan_scalar_key using @key;
+➤ value[12,12,0]  𝄀
+one
+set @key = null;
+execute scan_scalar_key using @key;
+➤ value[12,12,0]
+set @key = '2';
+execute scan_scalar_key using @key;
+➤ value[12,12,0]  𝄀
+two
+deallocate prepare scan_scalar_key;
 prepare join_key from 'select a.value from lookup_key a join lookup_key b on a.id = b.id where a.id = ?';
 set @key = 1;
 execute join_key using @key;

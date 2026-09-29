@@ -4350,6 +4350,67 @@ func (b *baseBinder) bindFuncExprImplByAstExpr(name string, astArgs []tree.Expr,
 			}
 		}
 	}
+	if state := preparedBindingState(b.GetContext()); state != nil &&
+		len(args) == 2 && isPreparedNumericComparisonContext(name) {
+		for i, source := range args {
+			if source == nil || source.GetSub() == nil ||
+				!types.T(source.Typ.Id).IsMySQLString() || args[1-i] == nil {
+				continue
+			}
+			peer := types.T(args[1-i].Typ.Id)
+			if !peer.IsInteger() && !peer.IsFloat() {
+				continue
+			}
+			sub := source.GetSub()
+			if sub.Typ != plan.SubqueryRef_SCALAR || b.builder == nil || b.builder.qry == nil ||
+				sub.NodeId < 0 || int(sub.NodeId) >= len(b.builder.qry.Nodes) {
+				continue
+			}
+			node := b.builder.qry.Nodes[sub.NodeId]
+			if node == nil || len(node.ProjectList) != 1 || node.ProjectList[0].GetP() == nil {
+				continue
+			}
+			pos := node.ProjectList[0].GetP().Pos
+			binding, ok := state.bindingForPosition(pos)
+			if !ok || !binding.Type.Oid.IsMySQLString() {
+				continue
+			}
+			// Integral text that fits the peer must retain the exact integer
+			// comparison. DOUBLE would merge adjacent BIGINT values above 2^53.
+			if peer.IsInteger() && pos >= 0 && int(pos) < len(state.values) {
+				state.valueDependent = true
+				value := state.values[pos]
+				if param, ok := value.(ParamValue); ok {
+					value = param.Value
+					if param.MaterializedValue != "" {
+						value = param.MaterializedValue
+					}
+				}
+				if str, ok := value.(string); ok {
+					str = strings.TrimSpace(str)
+					bits := int(peer.TypeLen() * 8)
+					if bits > 0 {
+						if peer.IsUnsignedInt() {
+							if _, err := strconv.ParseUint(str, 10, bits); err == nil {
+								continue
+							}
+						} else if _, err := strconv.ParseInt(str, 10, bits); err == nil {
+							continue
+						}
+					}
+				}
+			}
+			// The scalar result is sourced from this execution's text marker.
+			// Convert it at the numeric consumer, before the comparison
+			// overload or key lowering can choose a strict integer cast.
+			converted, castErr := makePlan2CastExpr(b.GetContext(), source,
+				makeSimplePlan2Type(types.T_float64))
+			if castErr != nil {
+				return nil, castErr
+			}
+			args[i] = converted
+		}
+	}
 	//promote interval expr rewrite here
 	if name == "interval" {
 		if len(astArgs) == 2 {

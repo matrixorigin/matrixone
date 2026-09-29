@@ -208,13 +208,16 @@ func TestPreparedSpecializedDomains(t *testing.T) {
 				"select case v when 1 then 'yes' else 'no' end from comparison_source",
 				"select (v,w)<(v,0) from comparison_source",
 			} {
-				rows, err := conn.QueryContext(ctx, statement)
-				if rows != nil {
+				err := func() error {
+					rows, err := conn.QueryContext(ctx, statement)
+					if rows == nil {
+						return err
+					}
+					defer rows.Close()
 					for rows.Next() {
 					}
-					err = rows.Err()
-					require.NoError(t, rows.Close())
-				}
+					return rows.Err()
+				}()
 				require.ErrorContains(t, err, "invalid argument cast to int", statement)
 			}
 		})
@@ -232,6 +235,66 @@ func TestPreparedSpecializedDomains(t *testing.T) {
 				exec(t, "deallocate prepare "+tc.name)
 			}
 		})
+		t.Run("projected_text_numeric_comparison", func(t *testing.T) {
+			exec(t, "create table projected_comparison(k bigint primary key)")
+			exec(t, "insert into projected_comparison values(1),(2)")
+			for _, shape := range []struct{ name, predicate string }{
+				{"direct", "k=?"},
+				{"scalar", "k=(select ?)"},
+			} {
+				statement := "select count(*) from projected_comparison where " + shape.predicate
+				for _, binary := range []bool{false, true} {
+					t.Run(fmt.Sprintf("%s/binary=%t", shape.name, binary), func(t *testing.T) {
+						var stmt *sql.Stmt
+						if binary {
+							stmt, err = conn.PrepareContext(ctx, statement)
+							require.NoError(t, err)
+							defer stmt.Close()
+						} else {
+							exec(t, "prepare projected_comparison_stmt from '"+statement+"'")
+							defer conn.ExecContext(ctx, "deallocate prepare projected_comparison_stmt")
+						}
+						for _, value := range []struct {
+							assignment string
+							binary     any
+							want       int
+						}{
+							{"'1.5'", "1.5", 0},
+							{"'1'", "1", 1},
+							{"null", nil, 0},
+							{"'1.5'", "1.5", 0},
+							{"'2'", "2", 1},
+						} {
+							var got int
+							if binary {
+								require.NoError(t, stmt.QueryRowContext(ctx, value.binary).Scan(&got), value)
+							} else {
+								exec(t, "set @projected_comparison_value="+value.assignment)
+								require.Equal(t, [][]string{{fmt.Sprint(value.want)}},
+									query(t, "execute projected_comparison_stmt using @projected_comparison_value"), value)
+								continue
+							}
+							require.Equal(t, value.want, got, value)
+						}
+					})
+				}
+			}
+			exec(t, "create table projected_large_comparison(k bigint primary key)")
+			exec(t, "insert into projected_large_comparison values(9007199254740992),(9007199254740993)")
+			require.Equal(t, [][]string{{"1"}}, query(t,
+				"select count(*) from projected_large_comparison where k=(select '9007199254740993')"))
+			exec(t, "prepare projected_large_stmt from 'select count(*) from projected_large_comparison where k=(select ?)' ")
+			defer conn.ExecContext(ctx, "deallocate prepare projected_large_stmt")
+			exec(t, "set @projected_large_value='9007199254740993'")
+			require.Equal(t, [][]string{{"1"}}, query(t, "execute projected_large_stmt using @projected_large_value"))
+			stmt, err := conn.PrepareContext(ctx,
+				"select count(*) from projected_large_comparison where k=(select ?)")
+			require.NoError(t, err)
+			defer stmt.Close()
+			var got int
+			require.NoError(t, stmt.QueryRowContext(ctx, "9007199254740993").Scan(&got))
+			require.Equal(t, 1, got)
+		})
 		t.Run("between_decimal_precision", func(t *testing.T) {
 			exec(t, `prepare decimal_between from
 				'select cast(''9007199254740992.0000000002'' as decimal(38,10))
@@ -247,7 +310,8 @@ func TestPreparedSpecializedDomains(t *testing.T) {
 			require.Equal(t, [][]string{{"0"}}, query(t, "execute decimal_text_left using @decimal_lower"))
 			exec(t, "prepare lexical_between from 'select ''10'' between ''2'' and ?'")
 			defer conn.ExecContext(ctx, "deallocate prepare lexical_between")
-			require.Equal(t, [][]string{{"0"}}, query(t, "execute lexical_between using @decimal_lower"))
+			exec(t, "set @text_upper='20'")
+			require.Equal(t, [][]string{{"0"}}, query(t, "execute lexical_between using @text_upper"))
 			for _, peer := range []string{"signed", "unsigned"} {
 				exec(t, "prepare integer_bound from 'select ''9007199254740993'' between ? and cast(9007199254740992 as "+peer+")'")
 				require.Equal(t, [][]string{{"0"}}, query(t, "execute integer_bound using @decimal_lower"), peer)
@@ -285,13 +349,16 @@ func TestPreparedSpecializedDomains(t *testing.T) {
 			exec(t, "set @a=cast(1 as unsigned),@b=cast(9 as unsigned),@s=cast(2 as unsigned)")
 			require.Equal(t, [][]string{{"5", "1", "9"}}, query(t, "execute gs_reuse using @a,@b,@s"))
 			exec(t, "set @a=cast(18446744073709551615 as unsigned)")
-			rows, overflowErr := conn.QueryContext(ctx, "execute gs_reuse using @a,@b,@s")
-			if rows != nil {
+			overflowErr := func() error {
+				rows, err := conn.QueryContext(ctx, "execute gs_reuse using @a,@b,@s")
+				if rows == nil {
+					return err
+				}
+				defer rows.Close()
 				for rows.Next() {
 				}
-				overflowErr = rows.Err()
-				require.NoError(t, rows.Close())
-			}
+				return rows.Err()
+			}()
 			require.Error(t, overflowErr, "an unsigned endpoint outside signed BIGINT must not wrap")
 			exec(t, "set @a='2020-01-01',@b='2020-01-03',@s='1 day'")
 			got := query(t, "execute gs_reuse using @a,@b,@s")
