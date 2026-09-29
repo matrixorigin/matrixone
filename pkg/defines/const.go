@@ -93,7 +93,7 @@ const (
 	MORPCVersion55     int64 = 55  // session-owned temporary DDL with transactional data
 	MORPCVersion56     int64 = 56  // session-scoped AUTO_INCREMENT increment/offset and provenance
 	MORPCVersion57     int64 = 57  // Arrow LOAD external-scan pipeline payload
-	MORPCVersion58     int64 = 58  // binary-string semantics and runtime domains
+	MORPCVersion58     int64 = 58  // binary-string function semantics and runtime-domain metadata
 	MORPCVersion59     int64 = 59  // typed numeric FORMAT arguments in remote expressions
 	MORPCVersion60     int64 = 60  // row-dependent expression defaults
 	MORPCVersion61     int64 = 61  // index metadata provenance columns (nrow, build_ts)
@@ -135,8 +135,9 @@ const (
 	MORPCVersion97     int64 = 97  // decimal division result semantics across CNs
 	MORPCVersion98     int64 = 98  // canonical FORMAT precision and MAKEDATE/MAKETIME integer signatures
 	MORPCVersion99     int64 = 99  // owner-atomic writer-fair row-lock admission
-	MORPCVersion100    int64 = 100 // seven-argument JSON_VALUE plan contract
-	MORPCLatestVersion       = MORPCVersion100
+	MORPCVersion100    int64 = 100 // on-demand View metadata column descriptions
+	MORPCVersion101    int64 = 101 // seven-argument JSON_VALUE plan contract
+	MORPCLatestVersion       = MORPCVersion101
 )
 
 // DefaultLockWaitTimeoutSeconds is shared by the frontend default and by

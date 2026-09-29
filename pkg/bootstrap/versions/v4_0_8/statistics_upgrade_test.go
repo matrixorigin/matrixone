@@ -58,6 +58,12 @@ func TestStatisticsUpgradeHandlerLifecycle(t *testing.T) {
 	runtime.RunTest("", func(runtime.Runtime) {
 		ctx := context.Background()
 		txn := newVersionTxnExecutor(t, func(sql string) (executor.Result, error) {
+			if strings.HasPrefix(sql, "select 1 from mo_catalog.mo_pubs p ") {
+				return executor.Result{}, nil
+			}
+			if strings.HasPrefix(sql, "select distinct `idx`.`name`") {
+				return statisticsStringResult(t, "idx_mo_pubs_database_id"), nil
+			}
 			if strings.HasPrefix(sql, "SELECT reldatabase, relname, account_id") {
 				return statisticsStringResult(t, catalog.MO_CATALOG), nil
 			}

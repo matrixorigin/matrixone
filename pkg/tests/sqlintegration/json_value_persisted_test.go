@@ -84,7 +84,7 @@ func TestJSONValuePersistedPublication(t *testing.T) {
 		}
 		for _, statement := range statements {
 			_, err = conn.ExecContext(ctx, statement)
-			require.ErrorContains(t, err, "protocol version 100", statement)
+			require.ErrorContains(t, err, "protocol version 101", statement)
 			var count int
 			require.NoError(t, conn.QueryRowContext(ctx, "select count(*) from mo_catalog.mo_tables where reldatabase='json_value_publication'").Scan(&count))
 			require.Zero(t, count, "failed authoring must not leave tables, views or index tables")
@@ -96,7 +96,7 @@ func TestJSONValuePersistedPublication(t *testing.T) {
 		// Legacy expressions remain publishable at the predecessor floor.
 		_, err = conn.ExecContext(ctx, `create view jv_legacy as select json_value('{"v":1}', '$.v') as v`)
 		require.NoError(t, err)
-		admission.authoring.Store(defines.MORPCVersion100)
+		admission.authoring.Store(defines.MORPCVersion101)
 		for _, statement := range statements {
 			_, err = conn.ExecContext(ctx, statement)
 			require.NoError(t, err, statement)
@@ -111,7 +111,7 @@ func TestJSONValuePersistedPublication(t *testing.T) {
 		require.NoError(t, conn.QueryRowContext(ctx, `select v from jv_view`).Scan(&value))
 		require.Equal(t, int64(1), value)
 		_, err = conn.ExecContext(ctx, `alter view jv_view as select json_value('2', '$' returning signed) as v`)
-		require.ErrorContains(t, err, "protocol version 100")
+		require.ErrorContains(t, err, "protocol version 101")
 		require.NoError(t, conn.QueryRowContext(ctx, `select v from jv_view`).Scan(&value))
 		require.Equal(t, int64(1), value, "failed ALTER must preserve published view")
 

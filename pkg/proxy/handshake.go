@@ -29,7 +29,11 @@ import (
 
 // writeInitialHandshake sends the initial handshake to client.
 func (c *clientConn) writeInitialHandshake() error {
-	return c.mysqlProto.WritePacket(c.mysqlProto.MakeHandshakePayload())
+	payload, err := c.mysqlProto.MakeHandshakePayload()
+	if err != nil {
+		return err
+	}
+	return c.mysqlProto.WritePacket(payload)
 }
 
 // handleHandshakeResp receives login information from client and saves it

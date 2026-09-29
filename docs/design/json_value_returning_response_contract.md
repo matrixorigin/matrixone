@@ -64,18 +64,19 @@ revision 3/v85; the historical decision is retained below. Approval must identif
 this revision's immutable commit and an independent approver. Author replies,
 thread resolution and approvals of earlier revisions do not approve this one.
 
-The current allocation candidate is MORPC v100 for JSON_VALUE function ID 462,
-overload 2. Main at b9013dc6bb058ec74935a62ac3a35f57d13c2f98 already allocates
-v85 through v99 to other capabilities. The final allocation must be coordinated
-and checked again before merge; this document does not reserve a mainline number.
+The current allocation candidate is MORPC v101 for JSON_VALUE function ID 462,
+overload 2. Main at 466eb8ff4f65752ad25d7e19274770459f5ef934 allocates v100 to
+on-demand view metadata and v85 through v99 to other capabilities. The final
+allocation must be coordinated and checked again before merge; this document
+does not reserve a mainline number.
 All gates, tests and this decision must move together if that allocation changes.
 
-The planner requires the deployment-wide MOProtocolVersion to be at least 100
+The planner requires the deployment-wide MOProtocolVersion to be at least 101
 for RETURNING, ON EMPTY or ON ERROR. Bare two-argument calls keep the legacy
 plan and its NULL-document short circuit. In the new clause-bearing contract,
 a non-NULL invalid path is a hard error even when the document is SQL NULL.
 
-Both current sender and receiver validate overload 2 against v100 before remote
+Both current sender and receiver validate overload 2 against v101 before remote
 execution. Those checks do not retrofit an old receiver: the deployment minimum
 and old-node admission must prevent sending the new plan to an old binary.
 Missing runtime capability state rejects new remote plans. Function lookup also
@@ -90,7 +91,7 @@ The SQL grammar rejects JSON_VALUE in ON UPDATE; internal owner-walk coverage
 does not imply SQL support for that combination. Prepared execution is tested separately; a session prepared statement is not
 assumed to be a durable catalog object.
 
-Do not admit pre-v100 CNs after committing a v100 durable floor. The existing
+Do not admit pre-v101 CNs after committing a v101 durable floor. The existing
 floor advances monotonically; deleting views/generated expressions or indexes
 does not by itself lower it. In-place rollback below that floor is unsupported
 unless a separately supported, validated floor-lowering procedure exists.
@@ -170,15 +171,15 @@ approval record.
 
 Code and permanent tests: [e3d5c8b956e8b0ec4d7b0b76066fc2fe12093b36](https://github.com/matrixorigin/matrixone/tree/e3d5c8b956e8b0ec4d7b0b76066fc2fe12093b36).
 The source merges main `b9013dc6bb058ec74935a62ac3a35f57d13c2f98` without rebasing.
-Allocation was rechecked at main `239fe81c82ae07a8c316576cac8555c445c92212`:
-v99 remains the highest landed allocation. v100 remains a candidate requiring
-maintainer coordination, not a reservation made by this document.
+Allocation was rechecked at main `466eb8ff4f65752ad25d7e19274770459f5ef934`:
+v100 is allocated to on-demand view metadata; v101 is reserved for this
+JSON_VALUE contract after the conflict resolution.
 
 | Check | Result and scope |
 | --- | --- |
 | Counterexample before repair | Expected FAIL: TIME lost the date under NULL/DEFAULT/ERROR (varchar and JSON inputs); binding accepted an invalid unused TIME DEFAULT. |
 | Normal owning packages | PASS: types, bytejson, function, plan, pb/plan and parsers/...; native/CGo build completed in the isolated worktree. |
-| Remote boundary | PASS: `TestRemoteExpressionProtocolValidation`, including v99 rejection and v100 admission. Runtime integer tests are not old-binary rollout tests. |
+| Remote boundary | PASS: `TestRemoteExpressionProtocolValidation`, including v100 rejection and v101 admission. Runtime integer tests are not old-binary rollout tests. |
 | Race | PASS: JSON_VALUE and stored-JSON tests in bytejson/function. |
 | SQL publication | PASS: parser/binder/DDL/catalog paths; failed admission leaves no tables, columns or index metadata; legacy control, generated-column index, read/write separation, failed ALTER VIEW preserving its definition, real CN restart, rebind and subsequent indexed writes. |
 | Prepared protocol | PASS: DATE/TIME NULL/DEFAULT/ERROR, repeated COM_STMT_EXECUTE, and invalid unused DEFAULT rejected by COM_STMT_PREPARE. |
@@ -192,7 +193,7 @@ prepare scenario body was 0.040 seconds. Admission is injected through a
 scoped test-only runtime reader, so heartbeat publication cannot overwrite the
 selected state. The SQL-built physical index owner was also checked: it contains materialized
 keys and no JSON_VALUE expression; its generated-column table owner requires
-v100. No new production test hook is added. The constant-folding SQL
+v101. No new production test hook is added. The constant-folding SQL
 counterexample passed the existing unified gate, so no speculative parallel
 gate or observer modification was introduced.
 
