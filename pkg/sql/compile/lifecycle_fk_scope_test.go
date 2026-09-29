@@ -152,6 +152,23 @@ func TestDropLifecycleBranchRootsExcludeForeignKeyDomain(t *testing.T) {
 	require.Equal(t, []uint64{1, 2}, dropLifecycleBranchRoots(domain, nil, "target"))
 }
 
+func TestRemoveCompactedBranchRowsKeepsSurvivingChildLinks(t *testing.T) {
+	dag := databranchutils.BranchReclaimDag{
+		Info: map[uint64]databranchutils.BranchReclaimNode{
+			10: {ParentTableID: 1, Deleted: true},
+			11: {ParentTableID: 10},
+			12: {ParentTableID: 1, Deleted: true},
+			13: {ParentTableID: 1},
+		},
+		Children: map[uint64][]uint64{1: {10, 12, 13}, 10: {11}},
+	}
+	removeCompactedBranchRows(&dag, []uint64{10, 12})
+	require.Equal(t, map[uint64]databranchutils.BranchReclaimNode{
+		11: {ParentTableID: 10}, 13: {ParentTableID: 1},
+	}, dag.Info)
+	require.Equal(t, map[uint64][]uint64{1: {13}, 10: {11}}, dag.Children)
+}
+
 func TestBroadDropLifecycleReceiptIsSynchronous(t *testing.T) {
 	ctrl := gomock.NewController(t)
 	stop := errors.New("target lookup reached without nested admission")

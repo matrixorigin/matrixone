@@ -375,6 +375,101 @@ func TestIssue29400DropDatabaseDoesNotHoldBranchDAGAfterTable(t *testing.T) {
 	})
 }
 
+func TestIssue29400DropTableRCReclaimFailureKeepsTemporaryOrder(t *testing.T) {
+	faultEnabledHere := fault.Enable()
+	if faultEnabledHere {
+		defer fault.Disable()
+	}
+	runAuthenticatedClusterTest(t, func(cluster embed.Cluster) {
+		ctx, cancel := context.WithTimeout(t.Context(), 2*time.Minute)
+		defer cancel()
+		cn, err := cluster.GetCNService(0)
+		require.NoError(t, err)
+		db, err := sql.Open("mysql", issue27487DSN(cn.GetServiceConfig().CN.Frontend.Port))
+		require.NoError(t, err)
+		defer db.Close()
+		conn, err := db.Conn(ctx)
+		require.NoError(t, err)
+		defer conn.Close()
+		const injection = "drop_table_rc_branch_reclaim_mutation_fail"
+		for _, tc := range []struct {
+			name, target string
+			tempFirst    bool
+		}{
+			{name: "persistent_first_mark_failure", target: "update mo_catalog.mo_branch_metadata"},
+			{name: "temporary_first_snapshot_failure", target: "delete from mo_catalog.mo_snapshots", tempFirst: true},
+		} {
+			t.Run(tc.name, func(t *testing.T) {
+				name := "issue_29400_reclaim_" + tc.name
+				defer func() {
+					cleanupCtx, done := context.WithTimeout(context.Background(), 20*time.Second)
+					defer done()
+					_, _ = conn.ExecContext(cleanupCtx, "drop database if exists "+name)
+				}()
+				for _, query := range []string{
+					"drop database if exists " + name,
+					"create database " + name,
+					"create table " + name + ".src (id int primary key)",
+					"data branch create table " + name + ".child from " + name + ".src",
+					"create table " + name + ".later (id int)",
+					"create table " + name + ".guard (id int)",
+					"create temporary table " + name + ".tmp (v int)",
+					"insert into " + name + ".tmp values (7)",
+					"set mo_rollback_txn_on_error=0",
+					"begin",
+					"insert into " + name + ".guard values (1)",
+				} {
+					_, err = conn.ExecContext(ctx, query)
+					require.NoError(t, err, query)
+				}
+				defer func() { _, _ = conn.ExecContext(context.Background(), "rollback") }()
+				var childID uint64
+				require.NoError(t, conn.QueryRowContext(ctx,
+					"select rel_id from mo_catalog.mo_tables where reldatabase=? and relname='child'", name).Scan(&childID))
+				require.NoError(t, fault.AddFaultPoint(ctx, injection, ":::", "echo", 0, tc.target, false))
+				defer func() { _, _ = fault.RemoveFaultPoint(context.Background(), injection) }()
+				members := name + ".child," + name + ".tmp," + name + ".later"
+				if tc.tempFirst {
+					members = name + ".tmp," + name + ".child," + name + ".later"
+				}
+				_, dropErr := conn.ExecContext(ctx, "drop table "+members)
+				require.ErrorContains(t, dropErr, "injected RC branch reclaim mutation failure")
+				_, err = fault.RemoveFaultPoint(ctx, injection)
+				require.NoError(t, err)
+				_, err = conn.ExecContext(ctx, "commit")
+				require.NoError(t, err)
+				var count int
+				for _, check := range []struct {
+					query string
+					want  int
+				}{
+					{"select count(*) from " + name + ".guard", 1},
+					{"select count(*) from mo_catalog.mo_tables where reldatabase='" + name + "' and relname in ('child','later')", 2},
+					{fmt.Sprintf("select count(*) from mo_catalog.mo_branch_metadata where table_id=%d and table_deleted=false", childID), 1},
+					{fmt.Sprintf("select count(*) from mo_catalog.mo_snapshots where sname='__mo_branch_%d'", childID), 1},
+				} {
+					require.NoError(t, conn.QueryRowContext(ctx, check.query).Scan(&count), check.query)
+					require.Equal(t, check.want, count, check.query)
+				}
+				if tc.tempFirst {
+					require.Error(t, conn.QueryRowContext(ctx, "select v from "+name+".tmp").Scan(&count))
+				} else {
+					require.NoError(t, conn.QueryRowContext(ctx, "select v from "+name+".tmp").Scan(&count))
+					require.Equal(t, 7, count)
+					_, err = conn.ExecContext(ctx, "drop temporary table "+name+".tmp")
+					require.NoError(t, err)
+				}
+				_, err = conn.ExecContext(ctx, "create temporary table "+name+".tmp (v int)")
+				require.NoError(t, err, "a later temporary generation must not inherit stale retirement")
+				_, err = conn.ExecContext(ctx, "insert into "+name+".tmp values (9)")
+				require.NoError(t, err)
+				require.NoError(t, conn.QueryRowContext(ctx, "select v from "+name+".tmp").Scan(&count))
+				require.Equal(t, 9, count)
+			})
+		}
+	})
+}
+
 func TestIssue29400BranchDeletePartitionChildrenStayInternal(t *testing.T) {
 	runAuthenticatedClusterTest(t, func(cluster embed.Cluster) {
 		ctx, cancel := context.WithTimeout(context.Background(), 2*time.Minute)

@@ -32,12 +32,13 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/pb/plan"
 	"github.com/matrixorigin/matrixone/pkg/sql/colexec/lockop"
 	"github.com/matrixorigin/matrixone/pkg/util/executor"
+	"github.com/matrixorigin/matrixone/pkg/util/fault"
 )
 
 // prepareBranchReclaimRC pins every touched component before physical DROP
 // work. The returned closure performs the metadata transition after that
 // work, still in the same transaction and under the retained component locks.
-func (c *Compile) prepareBranchReclaimRC(deadTIDs []uint64, exclusiveSnapshotGate bool) (func() error, databranchutils.BranchReclaimDag, error) {
+func (c *Compile) prepareBranchReclaimRC(deadTIDs []uint64, exclusiveSnapshotGate bool) (func([]uint64) error, databranchutils.BranchReclaimDag, error) {
 	if len(deadTIDs) == 0 {
 		return nil, databranchutils.BranchReclaimDag{}, nil
 	}
@@ -85,17 +86,34 @@ func (c *Compile) prepareBranchReclaimRC(deadTIDs []uint64, exclusiveSnapshotGat
 	if err != nil {
 		return nil, databranchutils.BranchReclaimDag{}, err
 	}
+	prepared := make(map[uint64]struct{}, len(present))
+	for _, id := range present {
+		prepared[id] = struct{}{}
+	}
 	batchSize := max(1, int(c.proc.GetLockService().GetConfig().MaxLockRowCount))
-	return func() error {
+	return func(retired []uint64) error {
+		selected := make([]uint64, 0, len(retired))
+		for _, id := range retired {
+			if _, allowed := prepared[id]; allowed {
+				if _, stillPresent := dag.Info[id]; stillPresent {
+					selected = append(selected, id)
+				}
+			}
+		}
+		slices.Sort(selected)
+		selected = slices.Compact(selected)
+		if len(selected) == 0 {
+			return nil
+		}
 		if err := databranchutils.MarkAndReclaimBranchSnapshotsCore(
-			deadTIDs,
+			selected,
 			func() (databranchutils.BranchReclaimDag, error) { return dag, nil },
 			func() error {
-				for start := 0; start < len(present); start += batchSize {
-					end := min(start+batchSize, len(present))
+				for start := 0; start < len(selected); start += batchSize {
+					end := min(start+batchSize, len(selected))
 					if err := c.runExactBranchMutationRC(fmt.Sprintf(
 						"update %s.%s set table_deleted = true where table_id in (%s)",
-						catalog.MO_CATALOG, catalog.MO_BRANCH_METADATA, branchReclaimIDList(present[start:end]),
+						catalog.MO_CATALOG, catalog.MO_BRANCH_METADATA, branchReclaimIDList(selected[start:end]),
 					)); err != nil {
 						return err
 					}
@@ -119,10 +137,37 @@ func (c *Compile) prepareBranchReclaimRC(deadTIDs []uint64, exclusiveSnapshotGat
 			return err
 		}
 		if exclusiveSnapshotGate {
-			return c.compactExpiredAlterDataBranchLineageRC(deadTIDs)
+			removed, err := c.compactExpiredAlterDataBranchLineageRC(selected)
+			if err != nil {
+				return err
+			}
+			removeCompactedBranchRows(&dag, removed)
 		}
 		return nil
 	}, dag, nil
+}
+
+func removeCompactedBranchRows(dag *databranchutils.BranchReclaimDag, ids []uint64) {
+	removed := make(map[uint64]struct{}, len(ids))
+	parents := make(map[uint64]struct{}, len(ids))
+	for _, id := range ids {
+		if node, ok := dag.Info[id]; ok {
+			parents[node.ParentTableID] = struct{}{}
+			removed[id] = struct{}{}
+			delete(dag.Info, id)
+		}
+	}
+	for parent := range parents {
+		children := slices.DeleteFunc(dag.Children[parent], func(id uint64) bool {
+			_, ok := removed[id]
+			return ok
+		})
+		if len(children) == 0 {
+			delete(dag.Children, parent)
+		} else {
+			dag.Children[parent] = children
+		}
+	}
 }
 
 // compactExpiredAlterDataBranchLineageRC finishes the synchronous DROP
@@ -130,10 +175,10 @@ func (c *Compile) prepareBranchReclaimRC(deadTIDs []uint64, exclusiveSnapshotGat
 // the applied RC frontier therefore sees every committed Snapshot/PITR owner.
 // Read the complete ownership graph again after the DROP's own mutations, then
 // lock and delete only the selected primary keys in this same transaction.
-func (c *Compile) compactExpiredAlterDataBranchLineageRC(deadTIDs []uint64) error {
+func (c *Compile) compactExpiredAlterDataBranchLineageRC(deadTIDs []uint64) ([]uint64, error) {
 	dag, err := c.loadAlterDataBranchDAG(false)
 	if err != nil || len(dag.Info) == 0 {
-		return err
+		return nil, err
 	}
 	componentIDs := make(map[uint64]struct{})
 	for _, id := range dag.ComponentsIDs(deadTIDs) {
@@ -141,12 +186,12 @@ func (c *Compile) compactExpiredAlterDataBranchLineageRC(deadTIDs []uint64) erro
 	}
 	edges, err := c.loadAlterDataBranchLineageEdges()
 	if err != nil {
-		return err
+		return nil, err
 	}
 	now := c.proc.GetTxnOperator().SnapshotTS().ToStdTime().UTC()
 	sources, err := c.loadAlterDataBranchHistoricalSources(now)
 	if err != nil {
-		return err
+		return nil, err
 	}
 	plan := databranchutils.ComputeAlterLineageCompactionPlan(dag, edges, sources)
 	selectedIDs := make([]uint64, 0, len(plan.TableIDs))
@@ -158,10 +203,10 @@ func (c *Compile) compactExpiredAlterDataBranchLineageRC(deadTIDs []uint64) erro
 		}
 	}
 	if len(selectedIDs) == 0 {
-		return nil
+		return nil, nil
 	}
 	if err = c.runSqlWithSystemTenant(databranchutils.LineageOwnerLifecycleLockSQL()); err != nil {
-		return err
+		return nil, err
 	}
 	batchSize := min(128, max(1, int(c.proc.GetLockService().GetConfig().MaxLockRowCount)))
 	for start := 0; start < len(selectedIDs); start += batchSize {
@@ -170,33 +215,36 @@ func (c *Compile) compactExpiredAlterDataBranchLineageRC(deadTIDs []uint64) erro
 		for _, id := range selectedIDs[start:min(start+batchSize, len(selectedIDs))] {
 			if err = vector.AppendFixed(keys.Vecs[0], id, false, c.proc.Mp()); err != nil {
 				keys.Vecs[0].Free(c.proc.Mp())
-				return err
+				return nil, err
 			}
 		}
 		_, err = c.lockBranchCatalogRowsRC(catalog.MO_BRANCH_METADATA, keys)
 		keys.Vecs[0].Free(c.proc.Mp())
 		if err != nil {
-			return err
+			return nil, err
 		}
 	}
 	for start := 0; start < len(selectedNames); start += batchSize {
 		if err = c.lockBranchSnapshotNamesRC(selectedNames[start:min(start+batchSize, len(selectedNames))]); err != nil {
-			return err
+			return nil, err
 		}
 	}
 	for start := 0; start < len(selectedIDs); start += batchSize {
 		end := min(start+batchSize, len(selectedIDs))
 		if err = c.runExactBranchMutationRC(databranchutils.BuildAlterLineageSnapshotDeleteSQL(selectedNames[start:end])); err != nil {
-			return err
+			return nil, err
 		}
 		if err = c.runExactBranchMutationRC(databranchutils.BuildAlterLineageMetadataDeleteSQL(selectedIDs[start:end])); err != nil {
-			return err
+			return nil, err
 		}
 	}
-	return nil
+	return selectedIDs, nil
 }
 
 func (c *Compile) runExactBranchMutationRC(sql string) error {
+	if _, target, ok := fault.TriggerFaultWithContext(c.proc.Ctx, "drop_table_rc_branch_reclaim_mutation_fail"); ok && strings.Contains(sql, target) {
+		return moerr.NewInternalErrorNoCtx("injected RC branch reclaim mutation failure")
+	}
 	oldCtx := c.proc.Ctx
 	c.proc.Ctx = lockop.WithExactMutationRows(oldCtx)
 	defer func() { c.proc.Ctx = oldCtx }()

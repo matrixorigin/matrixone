@@ -194,10 +194,11 @@ func (s *Scope) DropDatabase(c *Compile) error {
 		}
 	}
 	deferBranchReclaim := rcAdmission && !c.skipDataBranchReclaim && dbName != catalog.MO_CATALOG
-	var finishBranchReclaim func() error
+	var finishBranchReclaim func([]uint64) error
 	var branchDAG databranchutils.BranchReclaimDag
+	var deadTIDs []uint64
 	if deferBranchReclaim {
-		deadTIDs := make([]uint64, 0, len(dropDomain))
+		deadTIDs = make([]uint64, 0, len(dropDomain))
 		for id, identity := range dropDomain {
 			if id != 0 && identity.database == dbName && identity.databaseID == dbID {
 				deadTIDs = append(deadTIDs, id)
@@ -454,7 +455,7 @@ func (s *Scope) DropDatabase(c *Compile) error {
 		session.RemoveTempTablesByDatabase(dbName)
 	}
 	if finishBranchReclaim != nil {
-		if err = finishBranchReclaim(); err != nil {
+		if err = finishBranchReclaim(deadTIDs); err != nil {
 			return err
 		}
 	}
@@ -530,6 +531,7 @@ func (c *Compile) dropDatabaseRelations(
 			true,
 			database,
 			relation,
+			nil,
 			nil,
 			nil,
 		); err != nil {
@@ -4456,11 +4458,18 @@ func (s *Scope) DropTable(c *Compile) (retErr error) {
 			}
 		}()
 	}
-	var finishBranchReclaim func() error
+	var finishBranchReclaim func([]uint64) error
 	var admitPersistent func() error
+	var reclaimPersistent func(uint64) error
 	if !lifecycleAdmitted && c.isLifecycleRC() {
 		oldSkip := c.skipDataBranchReclaim
 		defer func() { c.skipDataBranchReclaim = oldSkip }()
+		reclaimPersistent = func(id uint64) error {
+			if finishBranchReclaim != nil {
+				return finishBranchReclaim([]uint64{id})
+			}
+			return nil
+		}
 		// The first live persistent member enters this complete-domain
 		// admission at its original per-table boundary. Earlier temporary
 		// and no-op members retain their independent ordered effects.
@@ -4505,19 +4514,16 @@ func (s *Scope) DropTable(c *Compile) (retErr error) {
 		}
 		if err := s.dropTableSingleResolved(
 			c, plan2.DeepCopyDropTable(entry), &lifecycleAdmitted,
-			lifecycleAdmitted, nil, nil, admitPersistent, temporaryRetire,
+			lifecycleAdmitted, nil, nil, admitPersistent, temporaryRetire, reclaimPersistent,
 		); err != nil {
 			return err
 		}
-	}
-	if finishBranchReclaim != nil {
-		return finishBranchReclaim()
 	}
 	return nil
 }
 
 func (s *Scope) dropTableSingle(c *Compile, qry *plan.DropTable, lifecycleAdmitted *bool) error {
-	return s.dropTableSingleResolved(c, qry, lifecycleAdmitted, false, nil, nil, nil, nil)
+	return s.dropTableSingleResolved(c, qry, lifecycleAdmitted, false, nil, nil, nil, nil, nil)
 }
 
 func (s *Scope) dropTableSingleResolved(
@@ -4529,6 +4535,7 @@ func (s *Scope) dropTableSingleResolved(
 	rel engine.Relation,
 	admitPersistent func() error,
 	temporaryRetire *temporaryDropRetireStage,
+	reclaimPersistent func(uint64) error,
 ) error {
 	dbName := qry.GetDatabase()
 	tblName := qry.GetTable()
@@ -4902,7 +4909,11 @@ func (s *Scope) dropTableSingleResolved(
 	// `__mo_branch_*` snapshots. This must run synchronously so drop paths have
 	// identical semantics in the frontend and compile-layer paths (design
 	// §5.3 / §9.2).
-	if !c.skipDataBranchReclaim {
+	if reclaimPersistent != nil && !isTemp {
+		if err = reclaimPersistent(droppedRelationID); err != nil {
+			return err
+		}
+	} else if !c.skipDataBranchReclaim {
 		if err = c.reclaimAndCompactBranchProtectSnapshots([]uint64{tblID}); err != nil {
 			logutil.Error("reclaim branch protect snapshots failed",
 				zap.Uint64("tblID", tblID),
