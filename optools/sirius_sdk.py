@@ -41,7 +41,21 @@ def digest(path):
         return hashlib.file_digest(source, "sha256").hexdigest()
 
 
-def validate(sdk, mode, merged_ref):
+def verify_source_pin(source, revision, mo_root):
+    mo_root = Path(mo_root).resolve()
+    pinned_source = mo_root / "third_party" / "sirius"
+    if source.resolve() != pinned_source.resolve():
+        raise ValueError("Sirius SDK was not built from the MatrixOne submodule")
+    pinned_revision = run(
+        "git", "-C", str(mo_root), "rev-parse", "HEAD:third_party/sirius"
+    ).strip()
+    if revision != pinned_revision:
+        raise ValueError("Sirius SDK does not match the MatrixOne submodule pin")
+    if run("git", "-C", str(source), "rev-parse", "HEAD").strip() != revision:
+        raise ValueError("Sirius SDK source SHA is stale")
+
+
+def validate(sdk, mode, merged_ref, mo_root=None):
     manifest = json.loads((sdk / "link.json").read_text())
     if manifest.get("schema_version") != 1 or manifest.get("abi_version") != 1:
         raise ValueError("Sirius SDK requires schema 1 and ABI 1")
@@ -69,7 +83,9 @@ def validate(sdk, mode, merged_ref):
     revision = manifest["source_revision"]
     if not re.fullmatch(r"[0-9a-f]{40}", revision):
         raise ValueError("Sirius SDK lacks an exact source SHA")
-    if run("git", "-C", str(source), "rev-parse", "HEAD").strip() != revision:
+    if mo_root is not None:
+        verify_source_pin(source, revision, mo_root)
+    elif run("git", "-C", str(source), "rev-parse", "HEAD").strip() != revision:
         raise ValueError("Sirius SDK source SHA is stale")
     dirty = bool(
         run(
@@ -352,7 +368,7 @@ def runtime_libraries(text, allow_missing=False, provider_prefix=None):
 
 
 def prepare(args):
-    manifest = validate(args.sdk, args.mode, args.merged_ref)
+    manifest = validate(args.sdk, args.mode, args.merged_ref, args.mo_root)
     provider = pixi_provider(manifest)
     prefix = Path(provider["prefix"])
     libraries = runtime_libraries(run("ldd", manifest["consumer"]), provider_prefix=prefix)
@@ -372,6 +388,7 @@ def prepare(args):
         "compiler": manifest["compiler"],
         "c_compiler": manifest["c_compiler"],
         "merged_ref": args.merged_ref,
+        "mo_root": str(args.mo_root.resolve()) if args.mo_root is not None else None,
         "sdk_manifest_sha256": digest(args.sdk / "link.json"),
         "artifact_sha256": manifest["artifact_sha256"],
         "runtime_libraries": {
@@ -413,6 +430,27 @@ def package(args):
     if output != binary.parent / "lib":
         raise ValueError("Sirius package output must be binary.parent/lib")
     provenance = json.loads((args.prepared / "provenance.json").read_text())
+    if provenance.get("mo_root") is not None:
+        sdk = Path(provenance["sdk"])
+        if digest(sdk / "link.json") != provenance["sdk_manifest_sha256"]:
+            raise ValueError("Sirius SDK changed while linking")
+        manifest = json.loads((sdk / "link.json").read_text())
+        verify_source_pin(
+            Path(manifest["source_directory"]),
+            manifest["source_revision"],
+            provenance["mo_root"],
+        )
+        if manifest["source_revision"] != provenance["source_revision"]:
+            raise ValueError("Sirius source revision changed while linking")
+        if provenance["mode"] == "release" and run(
+            "git",
+            "-C",
+            manifest["source_directory"],
+            "status",
+            "--porcelain",
+            "--untracked-files=normal",
+        ).strip():
+            raise ValueError("Sirius source became dirty while linking")
     prefix = verify_pixi_provider(provenance["pixi_provider"])
     mo_gpu = provenance.get("mo_gpu")
     gpu_libraries = mo_gpu["runtime_libraries"] if mo_gpu is not None else {}
@@ -502,7 +540,7 @@ def verify_package(args):
     sdk = Path(prepared["sdk"])
     if getattr(args, "sdk", None) is not None and args.sdk.resolve() != sdk:
         raise ValueError("selected Sirius SDK differs from the packaged SDK")
-    validate(sdk, prepared["mode"], prepared["merged_ref"])
+    validate(sdk, prepared["mode"], prepared["merged_ref"], prepared.get("mo_root"))
     if digest(sdk / "link.json") != prepared["sdk_manifest_sha256"]:
         raise ValueError("Sirius SDK changed after package preparation")
     verify_pixi_provider(prepared["pixi_provider"])
@@ -540,6 +578,7 @@ def main():
     p.add_argument("--sdk", type=Path, required=True)
     p.add_argument("--mode", choices=("release", "development"), default="release")
     p.add_argument("--merged-ref", default="")
+    p.add_argument("--mo-root", type=Path)
     p.add_argument("--output", type=Path, required=True)
     p.set_defaults(action=prepare)
     p = commands.add_parser("package")

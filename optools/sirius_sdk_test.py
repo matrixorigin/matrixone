@@ -82,6 +82,29 @@ class SDKTest(unittest.TestCase):
                 with self.assertRaisesRegex(ValueError, "artifact changed"):
                     sirius_sdk.validate(root, "development", "")
 
+    def test_sdk_must_match_matrixone_submodule_pin(self):
+        with tempfile.TemporaryDirectory() as directory:
+            mo_root = Path(directory)
+            source = mo_root / "third_party" / "sirius"
+            source.mkdir(parents=True)
+            self.fixture(source)
+            with patch.object(
+                sirius_sdk, "run", side_effect=["a" * 40, "a" * 40, ""]
+            ) as command:
+                sirius_sdk.validate(source, "development", "", mo_root)
+                self.assertEqual(
+                    command.call_args_list[0].args,
+                    ("git", "-C", str(mo_root), "rev-parse", "HEAD:third_party/sirius"),
+                )
+            with patch.object(sirius_sdk, "run", return_value="b" * 40):
+                with self.assertRaisesRegex(ValueError, "submodule pin"):
+                    sirius_sdk.validate(source, "development", "", mo_root)
+            manifest = json.loads((source / "link.json").read_text())
+            manifest["source_directory"] = str(mo_root / "other-sirius")
+            (source / "link.json").write_text(json.dumps(manifest))
+            with self.assertRaisesRegex(ValueError, "MatrixOne submodule"):
+                sirius_sdk.validate(source, "development", "", mo_root)
+
     def test_manifest_response_mismatch_rejected(self):
         with tempfile.TemporaryDirectory() as directory:
             root = Path(directory)
@@ -407,6 +430,41 @@ class SDKTest(unittest.TestCase):
                     sirius_sdk.verify_package(
                         SimpleNamespace(prepared=args.prepared, output=args.output, sdk=sdk)
                     )
+
+    def test_package_rejects_changed_submodule_pin(self):
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            args, _, _ = self.package_fixture(root)
+            sdk = root / "sdk"
+            (sdk / "link.json").write_text(
+                json.dumps(
+                    {
+                        "source_directory": str(root / "third_party" / "sirius"),
+                        "source_revision": "a" * 40,
+                    }
+                )
+            )
+            provenance_path = args.prepared / "provenance.json"
+            provenance = json.loads(provenance_path.read_text())
+            provenance["mo_root"] = str(root)
+            provenance["source_revision"] = "a" * 40
+            provenance["sdk_manifest_sha256"] = sirius_sdk.digest(sdk / "link.json")
+            provenance_path.write_text(json.dumps(provenance))
+            with patch.object(sirius_sdk, "run", return_value="b" * 40):
+                with self.assertRaisesRegex(ValueError, "submodule pin"):
+                    sirius_sdk.package(args)
+            with patch.object(
+                sirius_sdk, "run", side_effect=["a" * 40, "b" * 40]
+            ):
+                with self.assertRaisesRegex(ValueError, "source SHA is stale"):
+                    sirius_sdk.package(args)
+            provenance["mode"] = "release"
+            provenance_path.write_text(json.dumps(provenance))
+            with patch.object(
+                sirius_sdk, "run", side_effect=["a" * 40, "a" * 40, " M source.cc"]
+            ):
+                with self.assertRaisesRegex(ValueError, "became dirty"):
+                    sirius_sdk.package(args)
 
     def test_package_stages_only_prepared_pixi_gpu_runtime(self):
         with tempfile.TemporaryDirectory() as directory:

@@ -324,7 +324,7 @@ endif
 MO_SERVICE_BUILD=$(GOEXPERIMENT_OPT) $(CGO_OPTS) $(GO) build $(GO_MODULE_MODE) $(TAGS) $(RACE_OPT) $(GOLDFLAGS) $(DEBUG_OPT) $(GOBUILD_OPT) -o $(BIN_NAME) ./cmd/mo-service
 
 define SIRIUS_PREPARE
-$(if $(filter 1,$(MO_SIRIUS)),python3 "$(ROOT_DIR)/optools/sirius_sdk.py" prepare --sdk "$(SIRIUS_SDK)" --mode "$(SIRIUS_BUILD_MODE)" --merged-ref "$(SIRIUS_MERGED_REF)" --output "$(SIRIUS_PREPARED)")
+$(if $(filter 1,$(MO_SIRIUS)),python3 "$(ROOT_DIR)/optools/sirius_sdk.py" prepare --sdk "$(SIRIUS_SDK)" --mode "$(SIRIUS_BUILD_MODE)" --merged-ref "$(SIRIUS_MERGED_REF)" --mo-root "$(ROOT_DIR)" --output "$(SIRIUS_PREPARED)")
 endef
 
 .PHONY: sirius-sdk-prepare

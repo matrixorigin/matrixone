@@ -18,12 +18,13 @@ work through embedded Sirius.
   NVIDIA driver and GPU, and [Pixi](https://pixi.sh). CUDA, cuDF, cuVS, RMM,
   compilers, and `patchelf` come from Sirius's frozen `mo` Pixi environment;
   `/usr/local/cuda` is not required.
-- A clean Sirius checkout at a merged commit on `upstream-dev-merge`. The
-  `SIRIUS_MERGED_REF` used below must contain the exact source revision recorded
-  in the generated SDK. A dirty or unmerged checkout is accepted only with an
-  explicit development build and is not a release artifact.
-- An absolute path to each source checkout. Replace the two paths below with
-  your own, then run the commands from the host; no container rebuild is needed.
+- The Sirius commit pinned by MatrixOne at `third_party/sirius`. For a release,
+  that commit must be merged into `matrixorigin/sirius:upstream-dev-merge`; the
+  `SIRIUS_MERGED_REF` used below must contain the exact SDK source revision.
+  An unmerged pin requires an explicit development build and is not a release
+  artifact.
+- An absolute path to the MatrixOne checkout. Run the commands from the host;
+  no sidecar checkout or container rebuild is needed.
 
 ## Build the combined MO/Sirius binary
 
@@ -31,8 +32,9 @@ First generate the SDK and its C smoke consumer from Sirius. This is a build
 tree artifact, so regenerate it after changing Sirius source or its Pixi lock:
 
 ```sh
-export SIRIUS_SRC=/absolute/path/to/sirius
 export MO_SRC=/absolute/path/to/matrixone
+export SIRIUS_SRC="$MO_SRC/third_party/sirius"
+git -C "$MO_SRC" submodule update --init third_party/sirius
 cd "$SIRIUS_SRC"
 git submodule update --init duckdb substrait cucascade tae-scanner vcpkg
 pixi install --frozen -e mo
@@ -57,7 +59,9 @@ pixi run --frozen -e mo sh -c '
 `make build` builds MO's native dependencies before linking. The
 `build-with-prebuilt-native` target is only for a stage that already has a
 matching `cgo/libmo.so` and `thirdparties/install`; it is not the first-build
-command. CPU-only builds remain unchanged. Selecting `backend="embedded"` in
+command. SDK preparation and packaging reject a source path or revision that
+does not match MO's committed Sirius submodule pin. CPU-only builds remain
+unchanged. Selecting `backend="embedded"` in
 a binary without `MO_SIRIUS=1` returns an explicit configuration error.
 
 The output is `mo-service` with an adjacent `lib/` directory (and MO's normal

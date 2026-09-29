@@ -19,8 +19,8 @@ document and report its own evidence.
 
 Embed Sirius and DuckDB statically in `mo-service` through a C ABI and CGo,
 retaining pinned shared GPU dependencies. Use the Sirius commit pinned at
-`third_party/sirius`, integrating the native embedding work with the latest
-`sirius-db/sirius:main`, not the legacy engine or a from-scratch port.
+`third_party/sirius`, integrating the native embedding work with a reviewed
+`sirius-db/sirius:main` commit, not the legacy engine or a from-scratch port.
 
 - MO readers are the only embedded input in this milestone. No new TAE or
   directory-lock changes are required for Sirius offload.
