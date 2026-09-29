@@ -811,7 +811,7 @@ func TestPreparedCharSourceTypeFromString(t *testing.T) {
 	}{
 		{name: "signed minimum", value: "-9223372036854775808", want: types.T_int64, wantExact: true},
 		{name: "unsigned above signed maximum", value: "9223372036854775809", want: types.T_uint64, wantExact: true},
-		{name: "decimal", value: "65.5e0", want: types.T_decimal64, wantExact: true},
+		{name: "fractional text retains truncation", value: "65.5e0", want: types.T_varchar},
 		{name: "numeric suffix", value: "65.5xyz", want: types.T_varchar},
 		{name: "non-numeric", value: "abc", want: types.T_varchar},
 		{name: "decimal overflow falls back to string", value: strings.Repeat("9", 77), want: types.T_varchar},

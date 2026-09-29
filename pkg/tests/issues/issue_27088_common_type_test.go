@@ -261,7 +261,11 @@ func TestIssue27088PreparedDecimalCommonType(t *testing.T) {
 					queryAndAssert("100.0", 4)
 					queryAndAssert("1e2", 4)
 					if column == "b" {
-						_, queryErr := stmt.QueryContext(ctx, "100.5")
+						rows, queryErr := stmt.QueryContext(ctx, "100.5")
+						if rows != nil {
+							defer rows.Close()
+							require.NoError(t, rows.Err())
+						}
 						require.ErrorContains(t, queryErr, "invalid argument cast to uint64")
 					} else {
 						queryAndAssert("100.5")
@@ -302,7 +306,11 @@ func TestIssue27088PreparedDecimalCommonType(t *testing.T) {
 				querySQLAndAssert(4)
 				mustExec(t, ctx, conn, "set @issue27492_value = '100.5'")
 				if column == "b" {
-					_, queryErr := conn.QueryContext(ctx, "execute "+statementName+" using @issue27492_value")
+					rows, queryErr := conn.QueryContext(ctx, "execute "+statementName+" using @issue27492_value")
+					if rows != nil {
+						defer rows.Close()
+						require.NoError(t, rows.Err())
+					}
 					require.ErrorContains(t, queryErr, "invalid argument cast to uint64")
 				} else {
 					querySQLAndAssert()

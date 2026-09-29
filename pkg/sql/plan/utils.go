@@ -6238,9 +6238,9 @@ func PreparedNumericStringIsComplete(value string) bool {
 }
 
 // PreparedCharSourceTypeFromString returns the effective source domain used by
-// a bare prepared CHAR marker.  A complete numeric lexeme uses the exact
-// integer/DECIMAL type inferred from its value; every other string follows
-// CHAR's VARCHAR prefix parser.  Keeping the fallback type explicit lets the
+// a bare prepared CHAR marker. A complete integer lexeme retains its exact
+// integer type; fractional text follows CHAR's truncating VARCHAR parser.
+// Keeping the fallback type explicit lets the
 // frontend runtime cache distinguish values whose numeric-prefix envelope is
 // equal but whose CHAR signedness differs.
 func PreparedCharSourceTypeFromString(value string) (types.Type, bool) {
@@ -6248,7 +6248,7 @@ func PreparedCharSourceTypeFromString(value string) (types.Type, bool) {
 		return types.T_varchar.ToType(), false
 	}
 	typ, ok := PreparedRuntimeTypeFromString(strings.Trim(value, " \t\n\v\f\r"))
-	if !ok {
+	if !ok || typ.Oid.IsDecimal() || typ.Oid.IsFloat() {
 		return types.T_varchar.ToType(), false
 	}
 	return typ, true

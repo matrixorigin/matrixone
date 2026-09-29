@@ -603,7 +603,7 @@ func TestPreparedExecutionPlanConsumerDomains(t *testing.T) {
 		{name: "json division reversed", sql: "2 / ?", value: "1.6", want: "1.25", source: types.T_json.ToType()},
 		{name: "json integer division", sql: "? div 1", value: "1.6", want: "1", source: types.T_json.ToType()},
 		{name: "json arithmetic SQL null", sql: "? + 0", source: types.T_json.ToType(), null: true},
-		{name: "char exact", sql: "char(?)", value: "65.5", want: "B", source: types.T_varchar.ToType(), dependent: true},
+		{name: "char fractional text truncates", sql: "char(?)", value: "65.5", want: "A", source: types.T_varchar.ToType(), dependent: true},
 		{name: "char suffix", sql: "char(?)", value: "65.5xyz", want: "A", source: types.T_varchar.ToType(), dependent: true},
 		{name: "bit count initial", sql: "bit_count(?)", value: "64", want: "7", source: types.T_varchar.ToType()},
 		{name: "bit count numeric", sql: "bit_count(?)", value: "64", want: "1", source: types.T_int32.ToType(), latch: types.T_int64.ToType()},

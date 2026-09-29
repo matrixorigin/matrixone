@@ -108,6 +108,11 @@ func TestIssue27294PreparedNumericOverloads(t *testing.T) {
 			require.NoError(t, wideRows.Err())
 		}()
 		require.Equal(t, int64(9007199254740993), exact)
+		var prefixResult float64
+		require.NoError(t, wide.QueryRowContext(ctx, "abc").Scan(&prefixResult))
+		var exactText string
+		require.NoError(t, wide.QueryRowContext(ctx, "-9007199254740993").Scan(&exactText))
+		require.Equal(t, "9007199254740993", exactText)
 
 		nestedArithmetic, err := db.PrepareContext(ctx, "select abs(? + 0)")
 		require.NoError(t, err)
@@ -152,6 +157,15 @@ func TestIssue27294PreparedNumericOverloads(t *testing.T) {
 			require.False(t, multiMarkerRows.Next())
 			require.NoError(t, multiMarkerRows.Err())
 		}()
+		// Both executions have the same source types. An integer spelling
+		// must not cache a DOUBLE plan for the later exact-decimal spelling.
+		var discarded string
+		require.NoError(t, multiMarker.QueryRowContext(
+			ctx, int64(-9007199254740993), "0").Scan(&discarded))
+		var fractional string
+		require.NoError(t, multiMarker.QueryRowContext(
+			ctx, int64(-9007199254740993), "0.5").Scan(&fractional))
+		require.Equal(t, "9007199254740992.5", fractional)
 
 		for _, query := range []string{
 			"select abs(if(1, ?, ?))",

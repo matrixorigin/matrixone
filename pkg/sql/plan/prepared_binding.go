@@ -67,6 +67,28 @@ func preparedBindingState(ctx context.Context) *preparedSourceBindingState {
 	return state
 }
 
+// A consumer that asks for exact numeric spelling can choose different
+// overloads for values with the same source type, including failed parses.
+func preparedExactNumericStringType(ctx context.Context, ordinal int) (types.Type, bool) {
+	state := preparedBindingState(ctx)
+	if state == nil || ordinal < 0 || ordinal >= len(state.values) {
+		return types.Type{}, false
+	}
+	value := state.values[ordinal]
+	if param, ok := value.(ParamValue); ok {
+		value = param.Value
+	}
+	spelling, ok := value.(string)
+	if !ok {
+		return types.Type{}, false
+	}
+	state.valueDependent = true
+	if !PreparedNumericStringIsComplete(spelling) {
+		return types.Type{}, false
+	}
+	return PreparedRuntimeTypeFromString(spelling)
+}
+
 func preparedSourceBindings(ctx context.Context) []PreparedSourceBinding {
 	if state := preparedBindingState(ctx); state != nil {
 		return state.bindings
@@ -307,6 +329,42 @@ func bindPreparedConsumerArguments(ctx context.Context, name string, args []*Exp
 				}
 			}
 		}
+		if len(args) == 2 && isPreparedNumericComparisonContext(name) &&
+			binding.Type.Oid.IsMySQLString() && args[1-i] != nil {
+			peer := types.T(args[1-i].Typ.Id)
+			if peer.IsInteger() || peer.IsFloat() {
+				// A text marker compared with a numeric peer keeps its text
+				// source identity, but comparison uses a fractional domain.
+				// Scope this conversion to prepared parameters; ordinary SQL
+				// comparisons retain their established coercion contract.
+				var castErr error
+				args[i], castErr = makePlan2CastExpr(ctx, source,
+					makeSimplePlan2Type(types.T_float64))
+				if castErr != nil {
+					return nil, castErr
+				}
+				continue
+			}
+		}
+		if len(args) == 2 && isPreparedNumericComparisonContext(name) &&
+			binding.Type.IsNumeric() && args[1-i] != nil &&
+			types.T(args[1-i].Typ.Id).IsMySQLString() {
+			// A numeric marker compared with a text expression uses MySQL's
+			// numeric comparison domain. Bind both operands here, where the
+			// parameter source is known, instead of changing plain SQL casts.
+			var castErr error
+			args[i], castErr = makePlan2CastExpr(ctx, source,
+				makeSimplePlan2Type(types.T_float64))
+			if castErr != nil {
+				return nil, castErr
+			}
+			args[1-i], castErr = makePlan2CastExpr(ctx, args[1-i],
+				makeSimplePlan2Type(types.T_float64))
+			if castErr != nil {
+				return nil, castErr
+			}
+			continue
+		}
 		var target types.Type
 		switch {
 		case name == "bit_count" && len(args) == 1:
@@ -314,12 +372,26 @@ func bindPreparedConsumerArguments(ctx context.Context, name string, args []*Exp
 			if target.Oid == types.T_any && (binding.Type.Oid.IsMySQLString() || binding.Type.Oid == types.T_any) {
 				target = types.T_varbinary.ToType()
 			}
+		case name == "ntile" && len(args) == 1 && binding.Type.Oid == types.T_any:
+			// Keep a NULL bucket count executable so NTILE reports its
+			// runtime argument error instead of a binder ANY overload error.
+			target = types.T_int64.ToType()
+		case len(args) == 1 && binding.Type.Oid.IsMySQLString() &&
+			(name == "sum" || name == "avg"):
+			// Aggregates consume the numeric prefix of a text marker. The
+			// source remains text for every other occurrence of the marker.
+			target = types.T_float64.ToType()
 		case len(args) == 1 && binding.Type.Oid.IsMySQLString() &&
 			(name == "abs" || name == "sign" || name == "sleep"):
 			// Prepared string sources can contain fractions. Keep this
 			// conversion at the marker consumer; ordinary string expressions
 			// retain their established overload selection.
 			target = types.T_float64.ToType()
+			if name == "abs" {
+				if exact, ok := preparedExactNumericStringType(ctx, int(source.GetP().Pos)); ok {
+					target = exact
+				}
+			}
 		case binding.NumericType.Oid.IsDecimal() &&
 			(isNumericContextFunction(name) || supportsGenericNumericFunctionContext(name) ||
 				preparedSQLExecuteNumericResultConsumer(name) || isPreparedNumericComparisonContext(name)):

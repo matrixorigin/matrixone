@@ -102,17 +102,17 @@ func preparedExecutionBindingKey(bindings []plan2.PreparedSourceBinding, values 
 	return key.String()
 }
 
-func (stmt *PrepareStmt) rememberBitCountSourceTypes(values []any) {
-	if len(stmt.bitCountOverloadParamPositions) == 0 {
-		stmt.bitCountNumericParamTypes = nil
+func (prepareStmt *PrepareStmt) rememberBitCountSourceTypes(values []any) {
+	if len(prepareStmt.bitCountOverloadParamPositions) == 0 {
+		prepareStmt.bitCountNumericParamTypes = nil
 		return
 	}
-	if len(stmt.bitCountNumericParamTypes) != len(values) {
-		stmt.bitCountNumericParamTypes = make([]types.Type, len(values))
+	if len(prepareStmt.bitCountNumericParamTypes) != len(values) {
+		prepareStmt.bitCountNumericParamTypes = make([]types.Type, len(values))
 	}
-	for _, pos := range stmt.bitCountOverloadParamPositions {
+	for _, pos := range prepareStmt.bitCountOverloadParamPositions {
 		if typ, ok := plan2.PreparedParamValueNumericReprepareType(values[pos]); ok {
-			stmt.bitCountNumericParamTypes[pos] = typ
+			prepareStmt.bitCountNumericParamTypes[pos] = typ
 		}
 	}
 }

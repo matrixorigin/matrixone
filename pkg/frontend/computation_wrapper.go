@@ -1141,62 +1141,6 @@ func applyBinaryDirectResultDecimalTypes(
 	return nil
 }
 
-func filterBinaryNumericPrefixCandidates(
-	preparePlan *plan2.Plan,
-	fixedIntegerPositions []int32,
-	paramVals []any,
-	paramTypes []byte,
-) bool {
-	anyRelevant := false
-	for i := range paramVals {
-		param, ok := paramVals[i].(plan2.ParamValue)
-		if !ok {
-			continue
-		}
-		mysqlTypeEligible := i*2+1 < len(paramTypes) &&
-			binaryProtocolMayNeedNumericPrefix(defines.MysqlType(paramTypes[i*2]))
-		_, fixedInteger := slices.BinarySearch(fixedIntegerPositions, int32(i))
-		if !mysqlTypeEligible || fixedInteger {
-			// Numeric-prefix admission is position-local. A text-capable marker
-			// elsewhere in the plan must not reclassify BLOB values or parameters
-			// with a fixed unsigned-integer contract such as LIMIT/OFFSET.
-			param.EnableNumericPrefix = false
-			param.RetainParamRef = false
-			paramVals[i] = param
-			continue
-		}
-		candidates := append([]any(nil), paramVals...)
-		for candidatePos, value := range candidates {
-			candidate, candidateOK := value.(plan2.ParamValue)
-			if candidateOK {
-				candidate.EnableNumericPrefix = candidatePos == i
-				candidates[candidatePos] = candidate
-			}
-		}
-		relevant := plan2.PreparedPlanNeedsNumericPrefixSpecialization(preparePlan, candidates)
-		if !relevant && preparedPositionHasStaticExactNumericPeer(preparePlan, i) && i*2+1 < len(paramTypes) {
-			mysqlType := defines.MysqlType(paramTypes[i*2])
-			if mysqlType == defines.MYSQL_TYPE_VARCHAR || mysqlType == defines.MYSQL_TYPE_VAR_STRING ||
-				mysqlType == defines.MYSQL_TYPE_STRING {
-				param.PrepareParamKind = vector.PrepareParamDecimal
-				param.RuntimeType = types.T_text.ToType()
-				param.HasRuntimeType = true
-				candidates[i] = param
-				relevant = plan2.PreparedPlanNeedsNumericPrefixSpecialization(preparePlan, candidates)
-			}
-		}
-		param.EnableNumericPrefix = relevant
-		param.RetainParamRef = true
-		if relevant {
-			paramVals[i] = param
-			anyRelevant = true
-		} else {
-			paramVals[i] = param
-		}
-	}
-	return anyRelevant
-}
-
 // preparedFixedIntegerParamPositions returns static execute-time metadata for
 // one prepared-plan generation. LIMIT/OFFSET and LAG/LEAD offsets have the
 // same fixed unsigned-integer contract, so retain one sorted position list for
@@ -1213,62 +1157,6 @@ func (prepareStmt *PrepareStmt) refreshFixedIntegerParamPositions(preparePlan *p
 	prepareStmt.fixedIntegerParamPositions,
 		prepareStmt.hasPaginationParams,
 		prepareStmt.hasLagLeadParams = preparedFixedIntegerParamPositions(preparePlan)
-}
-
-func preparedPositionHasStaticExactNumericPeer(preparePlan *plan2.Plan, position int) bool {
-	found := false
-	_ = plan.VisitExpressionsInOwner(preparePlan, func(expr *plan.Expr) error {
-		fn := expr.GetF()
-		if found || fn == nil {
-			return nil
-		}
-		containsPosition := false
-		hasExactEnvelope := false
-		hasExactSibling := false
-		for _, arg := range fn.Args {
-			argContainsPosition := exprContainsPreparedPosition(arg, position)
-			if argContainsPosition {
-				containsPosition = true
-				_ = plan.VisitExprTree(arg, func(candidate *plan.Expr) error {
-					candidateType := types.T(candidate.Typ.Id)
-					if (candidateType.IsInteger() || candidateType.IsDecimal()) &&
-						exprContainsPreparedPosition(candidate, position) {
-						hasExactEnvelope = true
-					}
-					return nil
-				})
-			} else {
-				argType := types.T(arg.Typ.Id)
-				hasExactSibling = hasExactSibling || argType.IsInteger() || argType.IsDecimal()
-			}
-		}
-		isPrefixFilter := fn.Func != nil && (fn.Func.ObjName == "prefix_eq" || fn.Func.ObjName == "prefix_in" ||
-			fn.Func.ObjName == "prefix_between" || fn.Func.ObjName == "prefix_in_range")
-		found = containsPosition && (hasExactEnvelope || (!isPrefixFilter && hasExactSibling))
-		return nil
-	})
-	return found
-}
-
-func exprContainsPreparedPosition(expr *plan.Expr, position int) bool {
-	found := false
-	_ = plan.VisitExprTree(expr, func(candidate *plan.Expr) error {
-		if param := candidate.GetP(); param != nil && int(param.Pos) == position {
-			found = true
-		}
-		return nil
-	})
-	return found
-}
-
-func binaryProtocolMayNeedNumericPrefix(mysqlType defines.MysqlType) bool {
-	switch mysqlType {
-	case defines.MYSQL_TYPE_DECIMAL, defines.MYSQL_TYPE_NEWDECIMAL, defines.MYSQL_TYPE_NULL,
-		defines.MYSQL_TYPE_VARCHAR, defines.MYSQL_TYPE_VAR_STRING, defines.MYSQL_TYPE_STRING:
-		return true
-	default:
-		return false
-	}
 }
 
 func binaryProtocolPrepareParamType(

@@ -106,7 +106,8 @@ func TestPreparedGeometrySRIDUsesCurrentConfiguration(t *testing.T) {
 					defer free()
 					require.Equal(t, run.null, result.IsNull(0))
 					if !run.null {
-						require.Equal(t, run.want, vector.GetFixedAtNoTypeCheck[int64](result, 0))
+						require.Equal(t, types.T_uint32, result.GetType().Oid)
+						require.Equal(t, run.want, int64(vector.GetFixedAtNoTypeCheck[uint32](result, 0)))
 					}
 				}()
 			}

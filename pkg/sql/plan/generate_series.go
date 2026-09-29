@@ -71,8 +71,12 @@ func bindGenerateSeriesArgs(ctx context.Context, exprs []*plan.Expr) ([]*plan.Ex
 	}
 	if firstType.IsInteger() {
 		boundExprs := append([]*plan.Expr(nil), exprs...)
-		for i := 1; i < len(boundExprs); i++ {
-			if boundExprs[i].GetP() == nil {
+		for i := range boundExprs {
+			// The executor and result column use signed BIGINT. Preserve the
+			// source type until this table-function boundary, then convert each
+			// unsigned endpoint or marker with the normal range check.
+			if !types.T(boundExprs[i].Typ.Id).IsUnsignedInt() &&
+				(i == 0 || boundExprs[i].GetP() == nil) {
 				continue
 			}
 			target := types.T_int64.ToType()

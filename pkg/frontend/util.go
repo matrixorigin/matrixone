@@ -355,6 +355,15 @@ func getExprValueWithPrepareMeta(
 	resultType := plan2.MakePlan2Type(resultVec.GetType())
 	if resultVec.IsNull(0) {
 		resultType = planExpr.Typ
+		// A user-variable NULL is displayed as TEXT by the projection binder,
+		// but SET @dst = @src must copy its logical source domain. In
+		// particular, an untyped NULL must remain ANY for the next consumer.
+		if source, ok := e.(*tree.VarExpr); ok && !source.System {
+			variable, getErr := ses.GetUserDefinedVar(source.Name)
+			if getErr == nil && variable != nil {
+				resultType = variable.Type
+			}
+		}
 	}
 	value, err := getValueFromVector(execCtx.reqCtx, resultVec, ses, planExpr)
 	if err != nil {

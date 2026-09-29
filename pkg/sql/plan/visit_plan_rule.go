@@ -849,7 +849,8 @@ func preparedCommonValueFixedDecimalPeer[P any](name string, args []*plan.Expr, 
 			return false
 		}
 		hasDecimalPeer = hasDecimalPeer || oid.IsDecimal() &&
-			(!preparedExprContainsParam(arg) || isExplicitPreparedCast(source))
+			(!preparedExprContainsParam(arg) || isExplicitPreparedCast(source) ||
+				preparedExprHasFixedDecimalSource(source))
 	}
 	return hasParam && hasDecimalPeer
 }
@@ -2805,7 +2806,8 @@ func preparedRegexpLookupDomains(ctx context.Context, name string, args []*Expr,
 		}
 		if domainless {
 			modes[i] = planfunction.StringDomainCheckDomainless
-		} else if _, direct := preparedParamPosition(args[i]); direct {
+		} else if _, direct := preparedParamPosition(args[i]); direct ||
+			(preparedBindingState(ctx) != nil && preparedRegexpMarkerOperand(args[i])) {
 			modes[i] = planfunction.StringDomainCheckParamMarker
 		}
 		if dynamic {
@@ -2813,6 +2815,23 @@ func preparedRegexpLookupDomains(ctx context.Context, name string, args []*Expr,
 		}
 	}
 	return lookupTypes, modes, nil
+}
+
+func preparedRegexpMarkerOperand(expr *Expr) bool {
+	if expr == nil || isExplicitPreparedCast(expr) {
+		return false
+	}
+	if _, marker := preparedParamPosition(expr); marker {
+		return true
+	}
+	if source := expr.GetPreparedNumeric().GetStringDomainSource(); source != nil {
+		_, marker := preparedParamPosition(source)
+		return marker
+	}
+	if sub := expr.GetSub(); sub != nil {
+		return preparedRegexpMarkerOperand(sub.Child)
+	}
+	return false
 }
 
 func (rule *ResetParamRefRule) resolvePreparedRegexpStringDomainCheckModes(name string,

@@ -36,13 +36,6 @@ func comparisonTypeCastRule(left, right types.Type) (bool, types.Type, types.Typ
 	if isDatetimeTimestampComparison(left, right) {
 		return false, left, right
 	}
-	// Numeric comparison with character text uses a floating-point domain.
-	// The arithmetic coercion table can select the integer operand's type,
-	// which would round fractional text before the comparison.
-	if (isCollatedTextType(left.Oid) && (right.Oid.IsInteger() || right.Oid.IsFloat())) ||
-		(isCollatedTextType(right.Oid) && (left.Oid.IsInteger() || left.Oid.IsFloat())) {
-		return true, types.T_float64.ToType(), types.T_float64.ToType()
-	}
 	hasCast, castLeft, castRight := fixedTypeCastRule1(left, right)
 	if !isCollatedTextType(castLeft.Oid) || !isCollatedTextType(castRight.Oid) {
 		return hasCast, castLeft, castRight

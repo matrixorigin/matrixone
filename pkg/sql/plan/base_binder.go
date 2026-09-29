@@ -1433,7 +1433,14 @@ func (b *baseBinder) numericAstTypesInternalWithHint(
 				// A string source remains a string outside numeric arithmetic.
 				// Here its value needs the surrounding numeric domain, not the
 				// string/string CONCAT overload of '+'.
-				return numericAstTypeScan{hasParam: true, hasParamRef: true, hasStringParam: true}, nil
+				scan := numericAstTypeScan{hasParam: true, hasParamRef: true, hasStringParam: true}
+				if typ, ok := preparedExactNumericStringType(b.GetContext(), expr.Offset-1); ok && typ.Oid.IsDecimal() {
+					// Exact decimal text can participate in an exact arithmetic
+					// context. The helper keeps every lexical decision out of the
+					// type-only cache, including integer and invalid spellings.
+					scan.weakDecimals = []Type{makePlan2Type(&typ)}
+				}
+				return scan, nil
 			}
 			if binding.Type.Oid == types.T_any {
 				return numericAstTypeScan{hasParam: true, hasParamRef: true}, nil
@@ -1735,7 +1742,8 @@ func numericTypeFromAstScan(scan numericAstTypeScan, outer *Type) (Type, bool) {
 		typ := makeTypeByPlan2Type(*outer)
 		outerType = &typ
 	}
-	if scan.hasStringParam && (outerType == nil || !outerType.Oid.IsDecimal()) {
+	activateDecimal := len(scan.weakDecimals) > 0 && shouldActivateWeakDecimal(typesKnown, outerType)
+	if scan.hasStringParam && !activateDecimal && (outerType == nil || !outerType.Oid.IsDecimal()) {
 		approximate := types.T_float64.ToType()
 		return makePlan2Type(&approximate), true
 	}
@@ -4263,7 +4271,7 @@ func (b *baseBinder) bindFuncExprImplByAstExpr(name string, astArgs []tree.Expr,
 	// plan binder loses that query-block boundary. A derived column can have a
 	// binary-shaped common type while still carrying text rows at runtime.
 	b.annotateStringDomainSources(args)
-	if b.builder != nil && b.builder.isPrepareStatement {
+	if b.builder != nil && (b.builder.isPrepareStatement || preparedSourceBindings(b.GetContext()) != nil) {
 		b.markPreparedStringDomainSubquerySources(name, args)
 	}
 	args, coerceErr := b.coerceBoolNumericAggregateArg(name, args)
@@ -4312,6 +4320,34 @@ func (b *baseBinder) bindFuncExprImplByAstExpr(name string, astArgs []tree.Expr,
 		containsVolatileFunction(args[0]) && b.ctx != nil {
 		if err := b.markVolatileInLeft(args[0]); err != nil {
 			return nil, err
+		}
+	}
+	if name == "between" && preparedBetweenHasMixedNumericText(b.GetContext(), args) &&
+		b.builder != nil {
+		// Each comparison needs the same left value. Convert text once only
+		// when both bounds are prepared numeric markers; a fixed peer may
+		// require an exact integer, DECIMAL, or lexical domain instead.
+		boundUsesDouble := func(arg *Expr) bool {
+			if arg == nil || arg.GetP() == nil {
+				return false
+			}
+			binding, ok := preparedBindingState(b.GetContext()).bindingForPosition(arg.GetP().Pos)
+			return ok && binding.Type.IsNumeric() &&
+				!binding.Type.Oid.IsUnsignedInt() && binding.Type.Oid != types.T_bit
+		}
+		if types.T(args[0].Typ.Id).IsMySQLString() &&
+			boundUsesDouble(args[1]) && boundUsesDouble(args[2]) {
+			converted, castErr := makePlan2CastExpr(b.GetContext(), args[0],
+				makeSimplePlan2Type(types.T_float64))
+			if castErr != nil {
+				return nil, castErr
+			}
+			args[0] = converted
+		}
+		if args[0].GetCol() == nil && args[0].GetP() == nil && args[0].GetLit() == nil {
+			if err := b.markVolatileInLeft(args[0]); err != nil {
+				return nil, err
+			}
 		}
 	}
 	//promote interval expr rewrite here
@@ -5755,6 +5791,11 @@ func stringDomainSourceWitness(source *Expr, domains uint8) *Expr {
 	if source == nil || domains == 0 {
 		return nil
 	}
+	if _, marker := preparedParamPosition(source); marker {
+		// A scalar or derived projection of one marker keeps PARAM_ITEM
+		// provenance even when this execution has a concrete binary domain.
+		return DeepCopyExpr(source)
+	}
 	if domains == possibleStringDomainText|possibleStringDomainBinary {
 		if witness, ok := stringDomainSourceFunctionWitness(source); ok {
 			return witness
@@ -6220,6 +6261,43 @@ func BindFuncExprImplByPlanExpr(ctx context.Context, name string, args []*Expr) 
 	return bindFuncExprImplByPlanExpr(ctx, name, args, true, nil, nil, false)
 }
 
+func preparedBetweenHasMixedNumericText(ctx context.Context, args []*Expr) bool {
+	state := preparedBindingState(ctx)
+	if state == nil || len(args) != 3 {
+		return false
+	}
+	hasText, hasNumericMarker := false, false
+	for i, arg := range args {
+		if arg == nil {
+			continue
+		}
+		hasText = hasText || types.T(arg.Typ.Id).IsMySQLString()
+		if i == 0 && arg.AuxId < 0 && arg.Typ.Id == int32(types.T_float64) {
+			if fn := arg.GetF(); fn != nil && fn.Func != nil && fn.Func.ObjName == "cast" &&
+				len(fn.Args) > 0 && types.T(fn.Args[0].Typ.Id).IsMySQLString() {
+				hasText = true
+			}
+		}
+		if marker := arg.GetP(); marker != nil {
+			binding, ok := state.bindingForPosition(marker.Pos)
+			hasNumericMarker = hasNumericMarker || ok && binding.Type.IsNumeric()
+		}
+	}
+	return hasText && hasNumericMarker
+}
+
+func bindBetweenAsComparisons(ctx context.Context, args []*Expr) (*Expr, error) {
+	left, err := BindFuncExprImplByPlanExpr(ctx, ">=", []*Expr{DeepCopyExpr(args[0]), args[1]})
+	if err != nil {
+		return nil, err
+	}
+	right, err := BindFuncExprImplByPlanExpr(ctx, "<=", []*Expr{args[0], args[2]})
+	if err != nil {
+		return nil, err
+	}
+	return BindFuncExprImplByPlanExpr(ctx, "and", []*Expr{left, right})
+}
+
 func bindPreparedFuncExprImplByPlanExpr(
 	ctx context.Context,
 	originalBoundExpr *Expr,
@@ -6247,6 +6325,10 @@ func bindFuncExprImplByPlanExpr(
 	originalBoundExpr *Expr,
 	allowInternalFunctionArgs bool,
 ) (*plan.Expr, error) {
+	if name == "between" && preparedBetweenHasMixedNumericText(ctx, args) &&
+		(!containsVolatileFunction(args[0]) || args[0].AuxId < 0) {
+		return bindBetweenAsComparisons(ctx, args)
+	}
 	var err error
 	args, err = bindPreparedConsumerArguments(ctx, name, args)
 	if err != nil {
@@ -7004,17 +7086,7 @@ func bindFuncExprImplByPlanExpr(
 	}
 	if err != nil {
 		if name == "between" {
-			leftFn, err := BindFuncExprImplByPlanExpr(ctx, ">=", []*plan.Expr{DeepCopyExpr(args[0]), args[1]})
-			if err != nil {
-				return nil, err
-			}
-
-			rightFn, err := BindFuncExprImplByPlanExpr(ctx, "<=", []*plan.Expr{args[0], args[2]})
-			if err != nil {
-				return nil, err
-			}
-
-			return BindFuncExprImplByPlanExpr(ctx, "and", []*plan.Expr{leftFn, rightFn})
+			return bindBetweenAsComparisons(ctx, args)
 		}
 
 		// A not-supported result is also the AST binder's signal to try UDF
@@ -7093,6 +7165,9 @@ func bindFuncExprImplByPlanExpr(
 						// For literals, use checkNoNeedCast to verify range
 						if otherExpr != nil && otherExpr.GetLit() != nil {
 							return checkNoNeedCast(ctx, otherType, colType, otherExpr)
+						}
+						if preparedSourceBindings(ctx) == nil {
+							return true
 						}
 						return colOid == types.T_float64 && otherOid == types.T_float32
 					}
