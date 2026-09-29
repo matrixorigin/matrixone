@@ -90,6 +90,7 @@ type CatalogCache struct {
 //	    . gc by timestamp
 type databaseCache struct {
 	data       *btree.BTreeG[*DatabaseItem]
+	folded     *btree.BTreeG[*DatabaseItem]
 	cpkeyIndex *btree.BTreeG[*DatabaseItem]
 }
 
@@ -100,15 +101,17 @@ type databaseCache struct {
 //	    . gc by timestamp
 type tableCache struct {
 	data       *btree.BTreeG[*TableItem]
+	folded     *btree.BTreeG[*TableItem]
 	cpkeyIndex *btree.BTreeG[*TableItem]
 }
 
 type DatabaseItem struct {
 	// database key
-	AccountId uint32
-	Name      string
-	Ts        timestamp.Timestamp
-	deleted   bool // Mark if it is a delete
+	AccountId  uint32
+	Name       string
+	foldedName string
+	Ts         timestamp.Timestamp
+	deleted    bool // Mark if it is a delete
 
 	// database value
 	Id        uint64
@@ -132,6 +135,7 @@ type TableItem struct {
 	AccountId  uint32
 	DatabaseId uint64
 	Name       string
+	foldedName string
 	Ts         timestamp.Timestamp
 	deleted    bool // Mark if it is a delete
 
@@ -240,6 +244,16 @@ func databaseItemLess(a, b *DatabaseItem) bool {
 	return a.Ts.Greater(b.Ts)
 }
 
+func foldedDatabaseItemLess(a, b *DatabaseItem) bool {
+	if a.AccountId != b.AccountId {
+		return a.AccountId < b.AccountId
+	}
+	if a.foldedName != b.foldedName {
+		return a.foldedName < b.foldedName
+	}
+	return databaseItemLess(a, b)
+}
+
 func tableItemLess(a, b *TableItem) bool {
 	if a.AccountId < b.AccountId {
 		return true
@@ -300,6 +314,19 @@ func tableItemLess(a, b *TableItem) bool {
 	return a.Ts.Greater(b.Ts)
 }
 
+func foldedTableItemLess(a, b *TableItem) bool {
+	if a.AccountId != b.AccountId {
+		return a.AccountId < b.AccountId
+	}
+	if a.DatabaseId != b.DatabaseId {
+		return a.DatabaseId < b.DatabaseId
+	}
+	if a.foldedName != b.foldedName {
+		return a.foldedName < b.foldedName
+	}
+	return tableItemLess(a, b)
+}
+
 func databaseItemCPKeyLess(a, b *DatabaseItem) bool {
 	cmp := bytes.Compare(a.CPKey[:], b.CPKey[:])
 	if cmp < 0 {
@@ -324,6 +351,8 @@ func tableItemCPKeyLess(a, b *TableItem) bool {
 
 // copyTableItem copies src to dst
 func copyTableItem(dst, src *TableItem) {
+	dst.Name = src.Name
+	dst.DatabaseName = src.DatabaseName
 	dst.Id = src.Id
 	dst.Defs = src.Defs
 	dst.Kind = src.Kind

@@ -323,10 +323,28 @@ func lockDatabaseCatalogRow(
 	databaseName string,
 	mode lock.LockMode,
 ) error {
-	lockProc, err := newCloneDatabaseTargetLockProcess(ctx, ses, bh)
-	if err != nil {
-		return err
+	if _, ok := bh.(*backExec); !ok {
+		return moerr.NewInternalError(ctx, "database clone target lock requires a background executor")
 	}
+	if ses == nil {
+		return moerr.NewInternalError(ctx, "database clone target lock requires a session")
+	}
+	return lockDatabaseCatalogRowWithMode(ctx, ses.proc, bh, accountID, databaseName, mode)
+}
+
+func lockDatabaseCatalogRowWithMode(
+	ctx context.Context,
+	outer *process.Process,
+	bh BackgroundExec,
+	accountID uint32,
+	databaseName string,
+	mode lock.LockMode,
+) error {
+	back, ok := bh.(*backExec)
+	if !ok {
+		return moerr.NewInternalError(ctx, "database catalog lock requires a background executor")
+	}
+	lockProc := newCloneLockProcessFromProcess(ctx, outer, back.backSes.GetTxnHandler().GetTxn())
 	defer lockProc.Free()
 
 	targetCtx := defines.AttachAccountId(ctx, accountID)
@@ -360,6 +378,44 @@ func lockDatabaseCatalogRow(
 			lock.Sharding_None,
 			accountID,
 		)
+	})
+}
+
+func lockPublicationTableCatalogRow(
+	ctx context.Context,
+	bh BackgroundExec,
+	accountID uint32,
+	databaseName, tableName string,
+) error {
+	back, ok := bh.(*backExec)
+	if !ok || back.backSes.GetTxnHandler() == nil || back.backSes.GetTxnHandler().GetTxn() == nil {
+		return moerr.NewInternalError(ctx, "publication table lock requires a background transaction")
+	}
+	owner := upstreamUserSession(back.backSes)
+	if owner == nil {
+		return moerr.NewInternalError(ctx, "publication table lock requires a user session")
+	}
+	lockProc := newCloneLockProcessFromProcess(ctx, owner.proc, back.backSes.GetTxnHandler().GetTxn())
+	defer lockProc.Free()
+	ownerCtx := defines.AttachAccountId(ctx, accountID)
+	eng := lockProc.GetSessionInfo().StorageEngine
+	db, err := eng.Database(ownerCtx, catalog.MO_CATALOG, lockProc.GetTxnOperator())
+	if err != nil {
+		return err
+	}
+	relation, err := db.Relation(ownerCtx, catalog.MO_TABLES, nil)
+	if err != nil {
+		return err
+	}
+	lockBatch, err := cloneCatalogLockBatch(lockProc, accountID, databaseName, tableName)
+	if err != nil {
+		return err
+	}
+	defer lockBatch.Vecs[0].Free(lockProc.Mp())
+	return withCloneLockContext(lockProc, ownerCtx, func() error {
+		return lockop.LockRows(eng, lockProc, relation, relation.GetTableID(ownerCtx),
+			lockBatch, 0, *lockBatch.Vecs[0].GetType(), lock.LockMode_Shared,
+			lock.Sharding_None, accountID)
 	})
 }
 
@@ -458,7 +514,10 @@ func newCloneLockProcess(
 	ses *Session,
 	txnOp TxnOperator,
 ) *process.Process {
-	outer := ses.proc
+	return newCloneLockProcessFromProcess(ctx, ses.proc, txnOp)
+}
+
+func newCloneLockProcessFromProcess(ctx context.Context, outer *process.Process, txnOp TxnOperator) *process.Process {
 	lockProc := process.NewTopProcess(
 		ctx,
 		outer.Mp(),
@@ -915,7 +974,10 @@ func handleCloneTable(
 	if stmt.CreateTable.Temporary {
 		tempTargetDB = stmt.CreateTable.Table.SchemaName.String()
 		tempTargetAlias = stmt.CreateTable.Table.ObjectName.String()
-		_, tempTargetExistedBeforeRun = ses.GetTempTable(tempTargetDB, tempTargetAlias)
+		_, tempTargetExistedBeforeRun, err = ses.ResolveTempTable(reqCtx, tempTargetDB, tempTargetAlias)
+		if err != nil {
+			return
+		}
 	}
 
 	oldDefault := bh.(*backExec).backSes.GetDatabaseName()

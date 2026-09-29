@@ -30,6 +30,7 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/catalog"
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
 	"github.com/matrixorigin/matrixone/pkg/common/pubsub"
+	"github.com/matrixorigin/matrixone/pkg/common/sqlquote"
 	"github.com/matrixorigin/matrixone/pkg/defines"
 	indexplugin "github.com/matrixorigin/matrixone/pkg/indexplugin"
 	pbplan "github.com/matrixorigin/matrixone/pkg/pb/plan"
@@ -459,6 +460,13 @@ func doCreateSnapshot(ctx context.Context, ses *Session, stmt *tree.CreateSnapSh
 
 		// Original logic for non-publication snapshot
 		getDatabaseIdFunc := func(dbName string) (dbId uint64, rtnErr error) {
+			if defines.Mode2NameResolutionEnabled(ctx) {
+				physicalDB, _, id, resolveErr := resolveCatalogObjectInBackgroundTxn(ctx, bh, dbName, "")
+				if resolveErr == nil {
+					databaseName = physicalDB
+				}
+				return id, resolveErr
+			}
 			var erArray []ExecResult
 			sql, rtnErr = getSqlForCheckDatabase(ctx, dbName)
 			if rtnErr != nil {
@@ -490,6 +498,9 @@ func doCreateSnapshot(ctx context.Context, ses *Session, stmt *tree.CreateSnapSh
 		objId, err = getDatabaseIdFunc(databaseName)
 		if err != nil {
 			return err
+		}
+		if needSkipDb(databaseName) {
+			return moerr.NewInternalErrorf(ctx, "can not create snapshot for system database %s", databaseName)
 		}
 
 		sql, err = getSqlForCreateSnapshot(
@@ -523,6 +534,13 @@ func doCreateSnapshot(ctx context.Context, ses *Session, stmt *tree.CreateSnapSh
 		}
 		// Original logic for non-publication snapshot
 		getTableIdFunc := func(dbName, tblName string) (tblId uint64, rtnErr error) {
+			if defines.Mode2NameResolutionEnabled(ctx) {
+				physicalDB, physicalTable, id, resolveErr := resolveSnapshotObjectInBackgroundTxn(ctx, bh, dbName, tblName)
+				if resolveErr == nil {
+					databaseName, tableName = physicalDB, physicalTable
+				}
+				return id, resolveErr
+			}
 			var erArray []ExecResult
 			sql, rtnErr = getSqlForCheckDatabaseTable(ctx, dbName, tblName)
 			if rtnErr != nil {
@@ -554,6 +572,9 @@ func doCreateSnapshot(ctx context.Context, ses *Session, stmt *tree.CreateSnapSh
 		objId, err = getTableIdFunc(databaseName, tableName)
 		if err != nil {
 			return err
+		}
+		if needSkipDb(databaseName) {
+			return moerr.NewInternalErrorf(ctx, "can not create snapshot for system table %s.%s", databaseName, tableName)
 		}
 
 		sql, err = getSqlForCreateSnapshot(
@@ -797,6 +818,37 @@ func doRestoreSnapshot(ctx context.Context, ses *Session, stmt *tree.RestoreSnap
 	// check restore priv
 	if err = checkRestorePriv(ctx, ses, snapshot, stmt); err != nil {
 		return stats, err
+	}
+	if defines.Mode2NameResolutionEnabled(ctx) && (stmt.Level == tree.RESTORELEVELDATABASE || stmt.Level == tree.RESTORELEVELTABLE) {
+		var sourceAccount uint32
+		sourceAccount, err = getAccountIdByTS(ctx, bh, snapshot.accountName, snapshot.ts)
+		if err != nil {
+			return stats, err
+		}
+		if sourceAccount != ses.GetTenantInfo().GetTenantID() {
+			return stats, moerr.NewInternalError(ctx, "snapshot source account identity changed")
+		}
+		physicalDB, physicalTable, sourceID, resolveErr := resolveSnapshotObjectAtSnapshot(
+			ctx, bh, sourceAccount, snapshot.ts, dbName, tblName)
+		if resolveErr != nil {
+			return stats, resolveErr
+		}
+		if snapshot.level == tree.SNAPSHOTLEVELDATABASE.String() && stmt.Level == tree.RESTORELEVELTABLE {
+			_, _, sourceID, resolveErr = resolveSnapshotObjectAtSnapshot(
+				ctx, bh, sourceAccount, snapshot.ts, dbName, "")
+			if resolveErr != nil {
+				return stats, resolveErr
+			}
+		}
+		if (snapshot.level == tree.SNAPSHOTLEVELDATABASE.String() && sourceID != snapshot.objId) ||
+			(snapshot.level == tree.SNAPSHOTLEVELTABLE.String() && sourceID != snapshot.objId) {
+			return stats, moerr.NewInternalError(ctx, "snapshot source object identity changed")
+		}
+		if isProtectedRecoveryDatabase(ctx, physicalDB) {
+			return stats, moerr.NewInternalErrorf(ctx, "can't restore db: %v", physicalDB)
+		}
+		dbName, tblName = physicalDB, physicalTable
+		stmt.DatabaseName, stmt.TableName = tree.Identifier(physicalDB), tree.Identifier(physicalTable)
 	}
 	// Validate every database identity before resolving the target account.
 	// Target resolution may create a dropped account, and account restore later
@@ -1092,7 +1144,7 @@ func checkRestorePriv(ctx context.Context, ses *Session, snapshot *snapshotRecor
 		}
 	case tree.RESTORELEVELDATABASE:
 		dbname := string(stmt.DatabaseName)
-		if len(dbname) > 0 && needSkipDb(dbname) {
+		if len(dbname) > 0 && isProtectedRecoveryDatabase(ctx, dbname) {
 			return moerr.NewInternalErrorf(ctx, "can't restore db: %v", dbname)
 		}
 
@@ -1105,12 +1157,12 @@ func checkRestorePriv(ctx context.Context, ses *Session, snapshot *snapshotRecor
 		if string(stmt.AccountName) != ses.GetTenantInfo().GetTenant() {
 			return moerr.NewInternalError(ctx, "can't restore database from other account's snapshot")
 		}
-		if snapshot.level == tree.RESTORELEVELDATABASE.String() && snapshot.databaseName != string(stmt.DatabaseName) {
+		if snapshot.level == tree.RESTORELEVELDATABASE.String() && !sameRecoveryObjectName(ctx, snapshot.databaseName, string(stmt.DatabaseName)) {
 			return moerr.NewInternalErrorf(ctx, "databaseName(%v) does not match snapshot.databaseName(%v)", string(stmt.DatabaseName), snapshot.databaseName)
 		}
 	case tree.RESTORELEVELTABLE:
 		dbname := string(stmt.DatabaseName)
-		if len(dbname) > 0 && needSkipDb(dbname) {
+		if len(dbname) > 0 && isProtectedRecoveryDatabase(ctx, dbname) {
 			return moerr.NewInternalErrorf(ctx, "can't restore db: %v", dbname)
 		}
 		if snapshot.level == tree.RESTORELEVELCLUSTER.String() {
@@ -1119,11 +1171,12 @@ func checkRestorePriv(ctx context.Context, ses *Session, snapshot *snapshotRecor
 		if string(stmt.AccountName) != ses.GetTenantInfo().GetTenant() {
 			return moerr.NewInternalError(ctx, "can't restore table from other account's snapshot")
 		}
-		if snapshot.level == tree.RESTORELEVELDATABASE.String() && snapshot.databaseName != string(stmt.DatabaseName) {
+		if snapshot.level == tree.RESTORELEVELDATABASE.String() && !sameRecoveryObjectName(ctx, snapshot.databaseName, string(stmt.DatabaseName)) {
 			return moerr.NewInternalErrorf(ctx, "databaseName(%v) does not match snapshot.databaseName(%v)", string(stmt.DatabaseName), snapshot.databaseName)
 		}
 		if snapshot.level == tree.RESTORELEVELTABLE.String() {
-			if snapshot.databaseName != string(stmt.DatabaseName) || snapshot.tableName != string(stmt.TableName) {
+			if !sameRecoveryObjectName(ctx, snapshot.databaseName, string(stmt.DatabaseName)) ||
+				!sameRecoveryObjectName(ctx, snapshot.tableName, string(stmt.TableName)) {
 				return moerr.NewInternalErrorf(ctx, "tableName(%v) does not match snapshot.tableName(%v)", string(stmt.TableName), snapshot.tableName)
 			}
 		}
@@ -1210,6 +1263,13 @@ func deleteCurFkTables(
 	getLogger(sid).Debug("start to drop cur fk tables")
 
 	ctx = defines.AttachAccountId(ctx, toAccountId)
+	if dbName != "" {
+		var found bool
+		dbName, tblName, found, err = resolveCurrentRestoreTarget(ctx, bh, dbName, tblName)
+		if err != nil || !found {
+			return err
+		}
+	}
 
 	// get topo sorted tables with foreign key
 	sortedFkTbls, err := fkTablesTopoSort(ctx, bh, nil, dbName, tblName, nil)
@@ -2948,7 +3008,7 @@ func getAccountIdByTS(
 	ctx = defines.AttachAccountId(ctx, catalog.System_Account)
 	sql := fmt.Sprintf(
 		"select account_id from mo_catalog.mo_account {MO_TS = %d} where account_name = '%s'",
-		ts, accountName,
+		ts, sqlquote.EscapeString(accountName),
 	)
 
 	return getAccountIdHelper(ctx, bh, sql, accountName)
@@ -3964,6 +4024,11 @@ func getSnapshotPlanWithSharedBh(ctx context.Context, bh BackgroundExec, fromAcc
 
 // dropDb delete related pubs before drops the database
 func dropDb(ctx context.Context, bh BackgroundExec, dbName string) (err error) {
+	var found bool
+	dbName, _, found, err = resolveCurrentRestoreTarget(ctx, bh, dbName, "")
+	if err != nil || !found {
+		return err
+	}
 	// drop pub first
 	pubInfos, err := getPubInfosByDbname(ctx, bh, dbName)
 	if err != nil {
@@ -3987,6 +4052,12 @@ func checkTableIsMaster(
 	snapshotName string,
 	dbName string,
 	tblName string) (bool, error) {
+	var found bool
+	var err error
+	dbName, tblName, found, err = resolveCurrentRestoreTarget(ctx, bh, dbName, tblName)
+	if err != nil || !found {
+		return false, err
+	}
 	sql := fmt.Sprintf(checkTableIsMasterFormat, quoteSQLStringLiteral(dbName), quoteSQLStringLiteral(tblName))
 	getLogger(sid).Debug(fmt.Sprintf("[%s] check table is master or not sql: %s", snapshotName, sql))
 
@@ -4012,6 +4083,12 @@ func checkDatabaseIsMaster(
 	bh BackgroundExec,
 	snapshotName string,
 	dbName string) (bool, error) {
+	var found bool
+	var err error
+	dbName, _, found, err = resolveCurrentRestoreTarget(ctx, bh, dbName, "")
+	if err != nil || !found {
+		return false, err
+	}
 	sql := fmt.Sprintf(checkDatabaseIsMasterFormat, quoteSQLStringLiteral(dbName), quoteSQLStringLiteral(dbName))
 	getLogger(sid).Debug(fmt.Sprintf("[%s] check database is master or not sql: %s", snapshotName, sql))
 

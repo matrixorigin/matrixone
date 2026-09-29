@@ -28,8 +28,10 @@ import (
 
 	"github.com/matrixorigin/matrixone/pkg/catalog"
 	"github.com/matrixorigin/matrixone/pkg/cdc"
+	"github.com/matrixorigin/matrixone/pkg/common/identifier"
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
 	"github.com/matrixorigin/matrixone/pkg/common/pubsub"
+	moruntime "github.com/matrixorigin/matrixone/pkg/common/runtime"
 	"github.com/matrixorigin/matrixone/pkg/common/sqlquote"
 	"github.com/matrixorigin/matrixone/pkg/container/types"
 	"github.com/matrixorigin/matrixone/pkg/container/vector"
@@ -49,6 +51,14 @@ func sanitizeSQLInput(s string) string {
 	s = strings.ReplaceAll(s, `\`, `\\`)
 	s = strings.ReplaceAll(s, "'", "''")
 	return s
+}
+
+func isSystemPublicationDatabase(ctx context.Context, dbName string) bool {
+	if defines.Mode2NameResolutionEnabled(ctx) {
+		dbName = identifier.Fold(dbName)
+	}
+	_, system := sysDatabases[dbName]
+	return system
 }
 
 const (
@@ -228,6 +238,11 @@ func doCreatePublication(ctx context.Context, ses *Session, cp *tree.CreatePubli
 	defer func() {
 		err = finishTxn(ctx, bh, err)
 	}()
+	if defines.Mode2NameResolutionEnabled(ctx) && compile.ViewMetadataRefreshEnabled(ses.GetService()) {
+		if err = lockViewMetadataLifecycle(ctx, bh); err != nil {
+			return err
+		}
+	}
 
 	ctx = defines.AttachAccount(ctx, tenantInfo.TenantID, tenantInfo.GetUserID(), tenantInfo.GetDefaultRoleID())
 	return createPublication(ctx, bh, cp)
@@ -290,7 +305,7 @@ func createPublication(ctx context.Context, bh BackgroundExec, cp *tree.CreatePu
 
 	// For account level publication, skip database validation
 	if !isAccountLevel {
-		if _, ok := sysDatabases[dbName]; ok {
+		if isSystemPublicationDatabase(ctx, dbName) {
 			err = moerr.NewInternalErrorf(ctx, "Unknown database name '%s', not support publishing system database", dbName)
 			return
 		}
@@ -303,11 +318,16 @@ func createPublication(ctx context.Context, bh BackgroundExec, cp *tree.CreatePu
 				}
 			}
 		}
-		if ctx, dbId, _, err = resolvePublicationDatabaseByName(ctx, bh, dbName, targetAccountIDs); err != nil {
+		if ctx, dbName, dbId, dbType, err = resolvePublicationDatabaseByName(ctx, bh, dbName, targetAccountIDs, defines.Mode2NameResolutionEnabled(ctx)); err != nil {
 			return
 		}
-		if dbType, err = lockPublicationDatabase(ctx, bh, dbName, dbId); err != nil {
-			return
+		if !defines.Mode2NameResolutionEnabled(ctx) {
+			if dbType, err = lockPublicationDatabase(ctx, bh, dbName, dbId); err != nil {
+				return
+			}
+		}
+		if isSystemPublicationDatabase(ctx, dbName) {
+			return moerr.NewInternalErrorf(ctx, "Unknown database name '%s', not support publishing system database", dbName)
 		}
 		if !isUserDatabaseType(dbType, currentProtocolVersionForService(bh.Service())) {
 			return moerr.NewInternalErrorf(ctx, "database '%s' is not a user database", cp.Database)
@@ -324,7 +344,7 @@ func createPublication(ctx context.Context, bh BackgroundExec, cp *tree.CreatePu
 			err = moerr.NewInternalErrorf(ctx, "account level publication (DATABASE *) cannot specify tables")
 			return
 		}
-		if tablesStr, err = genPubTablesStr(ctx, bh, dbName, cp.Table); err != nil {
+		if tablesStr, err = genPubTablesStr(ctx, bh, dbName, dbId, cp.Table); err != nil {
 			return
 		}
 	}
@@ -424,6 +444,11 @@ func doAlterPublication(ctx context.Context, ses *Session, ap *tree.AlterPublica
 	defer func() {
 		err = finishTxn(ctx, bh, err)
 	}()
+	if defines.Mode2NameResolutionEnabled(ctx) && compile.ViewMetadataRefreshEnabled(ses.GetService()) {
+		if err = lockViewMetadataLifecycle(ctx, bh); err != nil {
+			return err
+		}
+	}
 
 	accIdInfoMap, accNameInfoMap, err := getAccounts(ctx, bh, false)
 	if err != nil {
@@ -446,12 +471,13 @@ func doAlterPublication(ctx context.Context, ses *Session, ap *tree.AlterPublica
 		err = moerr.NewInternalErrorf(ctx, "publication '%s' does not exist", pubName)
 		return
 	}
-	if ap.AccountsSet != nil || ap.DbName != "" || len(ap.Table) > 0 {
-		if err = invalidatePublicationViewMetadata(ctx, bh, ses.GetService(), pub); err != nil {
+	var oldDatabaseOwner uint32
+	var oldDatabaseType string
+	if defines.Mode2NameResolutionEnabled(ctx) && pub.DbId != 0 {
+		if oldDatabaseOwner, oldDatabaseType, err = getDbAccountIdAndTypeById(ctx, bh, pub.DbName, pub.DbId, false); err != nil {
 			return err
 		}
 	}
-
 	// alter account
 	var oldSubAccounts, newSubAccounts map[int32]*pubsub.AccountInfo
 	if pub.SubAccountsStr == pubsub.AccountAll {
@@ -516,14 +542,18 @@ func doAlterPublication(ctx context.Context, ses *Session, ap *tree.AlterPublica
 	databaseCtx := ctx
 	var dbId uint64
 	if dbName != pubsub.TableAll {
-		if _, ok := sysDatabases[dbName]; ok {
+		if isSystemPublicationDatabase(ctx, dbName) {
 			return moerr.NewInternalErrorf(ctx, "Unknown database name '%s', not support publishing system database", dbName)
 		}
 
 		if ap.DbName == "" {
 			var databaseAccountID uint32
-			if databaseAccountID, _, err = getDbAccountIdAndTypeById(ctx, bh, dbName, pub.DbId); err != nil {
-				return err
+			if defines.Mode2NameResolutionEnabled(ctx) {
+				databaseAccountID, dbType = oldDatabaseOwner, oldDatabaseType
+			} else {
+				if databaseAccountID, dbType, err = getDbAccountIdAndTypeById(ctx, bh, dbName, pub.DbId, false); err != nil {
+					return err
+				}
 			}
 			dbId = pub.DbId
 			databaseCtx = defines.AttachAccountId(ctx, databaseAccountID)
@@ -535,25 +565,83 @@ func doAlterPublication(ctx context.Context, ses *Session, ap *tree.AlterPublica
 				}
 				slices.Sort(targetAccountIDs)
 			}
-			if databaseCtx, dbId, _, err = resolvePublicationDatabaseByName(ctx, bh, dbName, targetAccountIDs); err != nil {
+			if databaseCtx, dbName, dbId, dbType, err = resolvePublicationDatabaseByName(ctx, bh, dbName, targetAccountIDs, false); err != nil {
 				return err
 			}
 		}
-		if dbType, err = lockPublicationDatabase(databaseCtx, bh, dbName, dbId); err != nil {
-			return err
+		if !defines.Mode2NameResolutionEnabled(ctx) {
+			if dbType, err = lockPublicationDatabase(databaseCtx, bh, dbName, dbId); err != nil {
+				return err
+			}
 		}
 		if !isUserDatabaseType(dbType, currentProtocolVersionForService(bh.Service())) {
 			return moerr.NewInternalErrorf(ctx, "database '%s' is not a user database", dbName)
+		}
+		if isSystemPublicationDatabase(databaseCtx, dbName) {
+			return moerr.NewInternalErrorf(ctx, "Unknown database name '%s', not support publishing system database", dbName)
 		}
 	} else {
 		// Account-level publications have no database catalog row.
 		dbId = 0
 	}
+	if defines.Mode2NameResolutionEnabled(ctx) {
+		type databaseLockTarget struct {
+			owner uint32
+			name  string
+			id    uint64
+		}
+		targets := make([]databaseLockTarget, 0, 2)
+		if pub.DbId != 0 {
+			targets = append(targets, databaseLockTarget{oldDatabaseOwner, pub.DbName, pub.DbId})
+		}
+		if dbId != 0 {
+			owner, ownerErr := defines.GetAccountId(databaseCtx)
+			if ownerErr != nil {
+				return ownerErr
+			}
+			targets = append(targets, databaseLockTarget{owner, dbName, dbId})
+		}
+		slices.SortFunc(targets, func(a, b databaseLockTarget) int {
+			if a.owner < b.owner {
+				return -1
+			}
+			if a.owner > b.owner {
+				return 1
+			}
+			return strings.Compare(a.name, b.name)
+		})
+		for i, target := range targets {
+			if i > 0 && targets[i-1].owner == target.owner && targets[i-1].name == target.name {
+				if targets[i-1].id != target.id {
+					return moerr.NewTxnNeedRetryWithDefChanged(ctx)
+				}
+				continue
+			}
+			if err := lockPublicationDatabaseCatalogRow(ctx, bh, target.owner, target.name); err != nil {
+				return err
+			}
+		}
+		for _, target := range targets {
+			currentID, _, lookupErr := getDbIdAndTypeForAccountUnlocked(ctx, bh, target.name, target.owner)
+			if lookupErr != nil {
+				return lookupErr
+			}
+			if currentID != target.id {
+				return moerr.NewTxnNeedRetryWithDefChanged(ctx)
+			}
+		}
+	}
+
+	if ap.AccountsSet != nil || ap.DbName != "" || len(ap.Table) > 0 {
+		if err = invalidatePublicationViewMetadata(ctx, bh, ses.GetService(), pub); err != nil {
+			return err
+		}
+	}
 
 	// alter tables
 	tablesStr := pub.TablesStr
 	if len(ap.Table) > 0 {
-		if tablesStr, err = genPubTablesStr(databaseCtx, bh, dbName, ap.Table); err != nil {
+		if tablesStr, err = genPubTablesStr(databaseCtx, bh, dbName, dbId, ap.Table); err != nil {
 			return
 		}
 	}
@@ -663,12 +751,22 @@ func doDropPublication(ctx context.Context, ses *Session, dp *tree.DropPublicati
 	defer func() {
 		err = finishTxn(ctx, bh, err)
 	}()
+	if defines.Mode2NameResolutionEnabled(ctx) && compile.ViewMetadataRefreshEnabled(ses.GetService()) {
+		if err = lockViewMetadataLifecycle(ctx, bh); err != nil {
+			return err
+		}
+	}
 
 	pub, err := getPubInfo(ctx, bh, string(dp.Name))
 	if err != nil {
 		return err
 	}
 	if pub != nil {
+		if defines.Mode2NameResolutionEnabled(ctx) && pub.DbId != 0 {
+			if _, _, err = getDbAccountIdAndTypeById(ctx, bh, pub.DbName, pub.DbId, true); err != nil {
+				return err
+			}
+		}
 		if err = invalidatePublicationViewMetadata(ctx, bh, ses.GetService(), pub); err != nil {
 			return err
 		}
@@ -2361,8 +2459,51 @@ func resolvePublicationDatabaseByName(
 	bh BackgroundExec,
 	dbName string,
 	targetAccountIDs []uint32,
-) (databaseCtx context.Context, dbId uint64, dbType string, err error) {
+	lockDatabase bool,
+) (databaseCtx context.Context, physicalName string, dbId uint64, dbType string, err error) {
 	databaseCtx = ctx
+	physicalName = dbName
+	if defines.Mode2NameResolutionEnabled(ctx) {
+		back, ok := bh.(*backExec)
+		if !ok || back.backSes.GetTxnHandler() == nil || back.backSes.GetTxnHandler().GetTxn() == nil {
+			return ctx, "", 0, "", moerr.NewInternalError(ctx,
+				"publication database resolution requires a transaction")
+		}
+		accountID, err := defines.GetAccountId(ctx)
+		if err != nil {
+			return ctx, "", 0, "", err
+		}
+		accounts := append([]uint32{accountID}, targetAccountIDs...)
+		for _, candidateAccount := range accounts {
+			candidateCtx := defines.AttachAccountId(ctx, candidateAccount)
+			db, lookupErr := back.backSes.GetStorage().Database(
+				candidateCtx, dbName, back.backSes.GetTxnHandler().GetTxn())
+			if moerr.IsMoErrCode(lookupErr, moerr.OkExpectedEOB) {
+				continue
+			}
+			if lookupErr != nil {
+				return ctx, "", 0, "", lookupErr
+			}
+			physical := resolvedDatabaseName(db, dbName)
+			var id uint64
+			var typ string
+			if lockDatabase {
+				id, typ, lookupErr = getDbIdAndTypeForAccount(candidateCtx, bh, physical, candidateAccount)
+			} else {
+				id, typ, lookupErr = getDbIdAndTypeForAccountUnlocked(candidateCtx, bh, physical, candidateAccount)
+			}
+			if lookupErr != nil {
+				return ctx, "", 0, "", lookupErr
+			}
+			resolvedID, parseErr := strconv.ParseUint(db.GetDatabaseId(candidateCtx), 10, 64)
+			if parseErr != nil || id != resolvedID {
+				return ctx, "", 0, "", moerr.NewTxnNeedRetryWithDefChanged(ctx)
+			}
+			return candidateCtx, physical, id, typ, nil
+		}
+		return ctx, "", 0, "", moerr.NewInternalErrorf(ctx,
+			"database '%s' does not exist", dbName)
+	}
 	dbId, dbType, err = getDbIdAndType(ctx, bh, dbName)
 	if err == nil {
 		return
@@ -2432,6 +2573,7 @@ func getDbAccountIdAndTypeById(
 	bh BackgroundExec,
 	dbName string,
 	dbId uint64,
+	lockDatabase bool,
 ) (accountId uint32, dbType string, err error) {
 	if err = inputNameIsInvalid(ctx, dbName); err != nil {
 		return
@@ -2462,11 +2604,47 @@ func getDbAccountIdAndTypeById(
 	if dbType, err = erArray[0].GetString(systemCtx, 0, 1); err != nil {
 		return 0, "", err
 	}
+	if lockDatabase && defines.Mode2NameResolutionEnabled(ctx) {
+		ownerID := uint32(accountIdValue)
+		if err := lockPublicationDatabaseCatalogRow(ctx, bh, ownerID, dbName); err != nil {
+			return 0, "", err
+		}
+		bh.ClearExecResultSet()
+		if err := bh.Exec(systemCtx, sql); err != nil {
+			return 0, "", err
+		}
+		current, err := getResultSet(systemCtx, bh)
+		if err != nil {
+			return 0, "", err
+		}
+		if !execResultArrayHasData(current) {
+			return 0, "", moerr.NewTxnNeedRetryWithDefChanged(ctx)
+		}
+		currentOwnerID, err := current[0].GetUint64(systemCtx, 0, 0)
+		if err != nil {
+			return 0, "", err
+		}
+		if currentOwnerID != accountIdValue {
+			return 0, "", moerr.NewTxnNeedRetryWithDefChanged(ctx)
+		}
+		if dbType, err = current[0].GetString(systemCtx, 0, 1); err != nil {
+			return 0, "", err
+		}
+	}
 	return uint32(accountIdValue), dbType, nil
 }
 
 // getDbIdAndTypeForAccount tries to find database in the specified account
 func getDbIdAndTypeForAccount(ctx context.Context, bh BackgroundExec, dbName string, accountId uint32) (dbId uint64, dbType string, err error) {
+	if defines.Mode2NameResolutionEnabled(ctx) {
+		if err = lockPublicationDatabaseCatalogRow(ctx, bh, accountId, dbName); err != nil {
+			return
+		}
+	}
+	return getDbIdAndTypeForAccountUnlocked(ctx, bh, dbName, accountId)
+}
+
+func getDbIdAndTypeForAccountUnlocked(ctx context.Context, bh BackgroundExec, dbName string, accountId uint32) (dbId uint64, dbType string, err error) {
 	sql, err := getSqlForGetDbIdAndType(ctx, dbName, true, uint64(accountId))
 	if err != nil {
 		return
@@ -2500,6 +2678,28 @@ func getDbIdAndTypeForAccount(ctx context.Context, bh BackgroundExec, dbName str
 	return
 }
 
+func lockPublicationDatabaseCatalogRow(ctx context.Context, bh BackgroundExec, accountID uint32, physicalName string) error {
+	back, ok := bh.(*backExec)
+	if !ok || back.backSes.GetTxnHandler() == nil || back.backSes.GetTxnHandler().GetTxn() == nil {
+		return moerr.NewInternalError(ctx, "publication database lock requires a background transaction")
+	}
+	owner := upstreamUserSession(back.backSes)
+	if owner == nil {
+		return moerr.NewInternalError(ctx, "publication database lock requires a user session")
+	}
+	if err := lockDatabaseCatalogRowWithMode(ctx, owner.proc, bh, accountID, physicalName, lock.LockMode_Shared); err != nil {
+		return err
+	}
+	txnOp := back.backSes.GetTxnHandler().GetTxn()
+	if txnOp.Txn().IsPessimistic() && txnOp.Txn().IsRCIsolation() {
+		now, _ := moruntime.ServiceRuntime(bh.Service()).Clock().Now()
+		if err := txnOp.GetWorkspace().AdvanceSnapshot(ctx, now); err != nil {
+			return err
+		}
+	}
+	return nil
+}
+
 func showTablesFromDb(ctx context.Context, bh BackgroundExec, dbName string) (tables map[string]bool, err error) {
 	sql := "show tables from " + sqlquote.Ident(dbName)
 
@@ -2527,16 +2727,18 @@ func showTablesFromDb(ctx context.Context, bh BackgroundExec, dbName string) (ta
 	return
 }
 
-func genPubTablesStr(ctx context.Context, bh BackgroundExec, dbName string, table tree.TableNames) (pubTablesStr string, err error) {
+func genPubTablesStr(ctx context.Context, bh BackgroundExec, dbName string, dbID uint64, table tree.TableNames) (pubTablesStr string, err error) {
 	if len(table) == 1 && string(table[0].ObjectName) == pubsub.TableAll {
 		return pubsub.TableAll, nil
+	}
+	if defines.Mode2NameResolutionEnabled(ctx) {
+		return genMode2PubTablesStr(ctx, bh, dbName, dbID, table)
 	}
 
 	tablesInDb, err := showTablesFromDb(ctx, bh, dbName)
 	if err != nil {
 		return
 	}
-
 	tablesNames := make([]string, 0, len(table))
 	seenTables := make(map[string]struct{}, len(table))
 	for _, tableName := range table {
@@ -2555,6 +2757,81 @@ func genPubTablesStr(ctx context.Context, bh BackgroundExec, dbName string, tabl
 
 	pubTablesStr = strings.Join(tablesNames, pubsub.Sep)
 	return
+}
+
+func genMode2PubTablesStr(ctx context.Context, bh BackgroundExec, physicalDBName string, dbID uint64, names tree.TableNames) (string, error) {
+	back, ok := bh.(*backExec)
+	if !ok || back.backSes.GetTxnHandler() == nil || back.backSes.GetTxnHandler().GetTxn() == nil {
+		return "", moerr.NewInternalError(ctx, "publication table resolution requires a background transaction")
+	}
+	accountID, err := defines.GetAccountId(ctx)
+	if err != nil {
+		return "", err
+	}
+	txnOp := back.backSes.GetTxnHandler().GetTxn()
+	storage := back.backSes.GetStorage()
+	db, err := storage.Database(ctx, physicalDBName, txnOp)
+	if err != nil {
+		return "", err
+	}
+	resolvedDBID, err := strconv.ParseUint(db.GetDatabaseId(ctx), 10, 64)
+	if err != nil || resolvedDBID != dbID {
+		return "", moerr.NewTxnNeedRetryWithDefChanged(ctx)
+	}
+	type selectedTable struct {
+		name string
+		id   uint64
+	}
+	selected := make([]selectedTable, 0, len(names))
+	seenIDs := make(map[uint64]struct{}, len(names))
+	for _, name := range names {
+		rel, lookupErr := db.Relation(ctx, string(name.ObjectName), nil)
+		if lookupErr != nil {
+			return "", lookupErr
+		}
+		physicalName := rel.GetTableName()
+		if physicalName == "" {
+			return "", moerr.NewInternalError(ctx, "publication table has no physical name")
+		}
+		tableID := rel.GetTableID(ctx)
+		if _, duplicate := seenIDs[tableID]; duplicate {
+			continue
+		}
+		seenIDs[tableID] = struct{}{}
+		selected = append(selected, selectedTable{physicalName, tableID})
+	}
+	slices.SortFunc(selected, func(a, b selectedTable) int { return strings.Compare(a.name, b.name) })
+	for _, target := range selected {
+		if err := lockPublicationTableCatalogRow(ctx, bh, accountID, physicalDBName, target.name); err != nil {
+			return "", err
+		}
+	}
+	if txnOp.Txn().IsPessimistic() && txnOp.Txn().IsRCIsolation() {
+		now, _ := moruntime.ServiceRuntime(bh.Service()).Clock().Now()
+		if err := txnOp.GetWorkspace().AdvanceSnapshot(ctx, now); err != nil {
+			return "", err
+		}
+	}
+	db, err = storage.Database(ctx, physicalDBName, txnOp)
+	if err != nil {
+		return "", err
+	}
+	currentDBID, err := strconv.ParseUint(db.GetDatabaseId(ctx), 10, 64)
+	if err != nil || currentDBID != dbID {
+		return "", moerr.NewTxnNeedRetryWithDefChanged(ctx)
+	}
+	physicalNames := make([]string, 0, len(selected))
+	for _, target := range selected {
+		rel, lookupErr := db.Relation(ctx, target.name, nil)
+		if lookupErr != nil {
+			return "", lookupErr
+		}
+		if rel.GetTableID(ctx) != target.id || rel.GetTableName() != target.name {
+			return "", moerr.NewTxnNeedRetryWithDefChanged(ctx)
+		}
+		physicalNames = append(physicalNames, target.name)
+	}
+	return strings.Join(physicalNames, pubsub.Sep), nil
 }
 
 func getSetAccounts(
@@ -2726,12 +3003,18 @@ func getSubscriptionMeta(ctx context.Context, dbName string, ses FeSession, txn 
 		if moerr.IsMoErrCode(err, moerr.OkExpectedEOB) {
 			return nil, nil
 		}
+		if moerr.IsMoErrCode(err, moerr.ErrAmbiguousIdentifier) {
+			return nil, err
+		}
 		ses.Errorf(ctx, "Get Subscription database %s meta error: %s", dbName, err.Error())
 		return nil, moerr.NewNoDB(ctx)
 	}
 
 	if dbMeta.IsSubscription(ctx) {
-		return checkSubscriptionValid(ctx, ses, dbName, bh)
+		// mo_subs.sub_name is exact catalog metadata. The engine has already
+		// selected the unique physical database, so carry that spelling to
+		// both DDL read-only checks and subscription readers.
+		return checkSubscriptionValid(ctx, ses, resolvedDatabaseName(dbMeta, dbName), bh)
 	}
 	return nil, nil
 }
@@ -2836,6 +3119,9 @@ func isDbPublishing(ctx context.Context, dbName string, ses FeSession) (ok bool,
 	if _, isSysDb := sysDatabases[dbName]; isSysDb {
 		return
 	}
+	if defines.Mode2NameResolutionEnabled(ctx) {
+		return isDbPublishingByPhysicalID(ctx, dbName, ses)
+	}
 
 	bh := ses.GetShareTxnBackgroundExec(ctx, false)
 	defer bh.Close()
@@ -2866,6 +3152,62 @@ func isDbPublishing(ctx context.Context, dbName string, ses FeSession) (ok bool,
 	count, err = erArray[0].GetInt64(ctx, 0, 0)
 	ok = count > 0
 	return
+}
+
+func (ses *Session) CheckDatabasePublishing(ctx context.Context, physicalName string) (bool, error) {
+	return isDbPublishing(ctx, physicalName, ses)
+}
+
+// Database IDs are globally allocated. The publication's account_id can be
+// the publisher instead of the account that owns the database row.
+func isDbPublishingByPhysicalID(ctx context.Context, dbName string, ses FeSession) (bool, error) {
+	txnHandler := ses.GetTxnHandler()
+	if txnHandler == nil || txnHandler.GetTxn() == nil {
+		return false, moerr.NewInternalError(ctx, "cannot check publication without a transaction")
+	}
+	db, err := txnHandler.GetStorage().Database(ctx, dbName, txnHandler.GetTxn())
+	if err != nil {
+		return false, err
+	}
+	physicalName := resolvedDatabaseName(db, dbName)
+	databaseID, err := strconv.ParseUint(db.GetDatabaseId(ctx), 10, 64)
+	if err != nil {
+		return false, moerr.NewInternalErrorf(ctx, "invalid database ID for %s", physicalName)
+	}
+	bh := ses.GetShareTxnBackgroundExec(ctx, false)
+	defer bh.Close()
+	sql := fmt.Sprintf(
+		"select database_id, database_name from mo_catalog.mo_pubs where database_id = %d or (database_id = 0 and database_name = '%s')",
+		databaseID, sanitizeSQLInput(physicalName),
+	)
+	systemCtx := defines.AttachAccountId(ctx, catalog.System_Account)
+	bh.ClearExecResultSet()
+	if err := bh.Exec(systemCtx, sql); err != nil {
+		return false, err
+	}
+	results, err := getResultSet(systemCtx, bh)
+	if err != nil {
+		return false, err
+	}
+	found := false
+	for _, result := range results {
+		for row := uint64(0); row < result.GetRowCount(); row++ {
+			storedID, err := result.GetUint64(systemCtx, row, 0)
+			if err != nil {
+				return false, err
+			}
+			storedName, err := result.GetString(systemCtx, row, 1)
+			if err != nil {
+				return false, err
+			}
+			if storedID != databaseID || storedName != physicalName {
+				return false, moerr.NewInternalErrorf(ctx,
+					"publication catalog has inconsistent database identity for %s", physicalName)
+			}
+			found = true
+		}
+	}
+	return found, nil
 }
 
 func dropSubAccountNameInSubAccounts(ctx context.Context, bh BackgroundExec, pubAccountId int32, pubName, subAccountName string) (err error) {

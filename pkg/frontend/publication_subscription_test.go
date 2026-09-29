@@ -261,7 +261,7 @@ func TestGenPubTablesStrDeduplicatesExplicitTables(t *testing.T) {
 	bh.init()
 	bh.sql2result[showTablesSQL] = result
 
-	pubTables, err := genPubTablesStr(ctx, bh, "db", statements[0].(*tree.CreatePublication).Table)
+	pubTables, err := genPubTablesStr(ctx, bh, "db", 0, statements[0].(*tree.CreatePublication).Table)
 	require.NoError(t, err)
 	require.Equal(t, "t1,t2", pubTables)
 	require.Equal(t, []string{showTablesSQL}, bh.executedSQLs)
@@ -2492,6 +2492,14 @@ func Test_getSubscriptionMeta_ErrorPropagation(t *testing.T) {
 		require.NoError(t, err, "ExpectedEOB should return nil — database not visible means not a subscription")
 		require.Nil(t, sub)
 		require.Equal(t, 0, logs.Len())
+	})
+
+	t.Run("preserves ambiguous mode-2 database error", func(t *testing.T) {
+		ambiguous := moerr.NewAmbiguousIdentifier(ctx, "database", "test_db")
+		mockEngine.EXPECT().Database(gomock.Any(), "test_db", mockTxn).Return(nil, ambiguous)
+
+		_, err := getSubscriptionMeta(ctx, "test_db", ses, mockTxn, mockBh)
+		require.ErrorIs(t, err, ambiguous)
 	})
 
 	t.Run("returns NoDB when Database fails with internal error", func(t *testing.T) {

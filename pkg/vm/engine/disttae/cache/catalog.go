@@ -28,6 +28,7 @@ import (
 	"github.com/tidwall/btree"
 
 	"github.com/matrixorigin/matrixone/pkg/catalog"
+	"github.com/matrixorigin/matrixone/pkg/common/identifier"
 	"github.com/matrixorigin/matrixone/pkg/compress"
 	"github.com/matrixorigin/matrixone/pkg/container/batch"
 	"github.com/matrixorigin/matrixone/pkg/container/types"
@@ -43,10 +44,12 @@ func NewCatalog() *CatalogCache {
 	cc := &CatalogCache{
 		tables: &tableCache{
 			data:       btree.NewBTreeG(tableItemLess),
+			folded:     btree.NewBTreeG(foldedTableItemLess),
 			cpkeyIndex: btree.NewBTreeG(tableItemCPKeyLess),
 		},
 		databases: &databaseCache{
 			data:       btree.NewBTreeG(databaseItemLess),
+			folded:     btree.NewBTreeG(foldedDatabaseItemLess),
 			cpkeyIndex: btree.NewBTreeG(databaseItemCPKeyLess),
 		},
 		mu: struct {
@@ -72,6 +75,22 @@ func releaseTableQueryProbe(pool *sync.Pool, probe *TableItem) {
 func releaseDatabaseQueryProbe(pool *sync.Pool, probe *DatabaseItem) {
 	*probe = DatabaseItem{}
 	pool.Put(probe)
+}
+
+// Lowercase ASCII catalog names need no folded index entry. Check that common
+// case before the Unicode fold, which validates and scans the string again.
+func nonCanonicalFold(name string) string {
+	for i := 0; i < len(name); i++ {
+		c := name[i]
+		if c >= 0x80 || c >= 'A' && c <= 'Z' {
+			folded := identifier.Fold(name)
+			if folded != name {
+				return folded
+			}
+			return ""
+		}
+	}
+	return ""
 }
 
 func (cc *CatalogCache) UpdateDuration(start types.TS, end types.TS) {
@@ -202,6 +221,9 @@ func (cc *CatalogCache) GC(ts timestamp.Timestamp) GCReport {
 		r.TStaleItem = len(deletedItems)
 		r.TStaleCpk = len(deletedCpkey)
 		deleteCatalogVersions(deletedItems, func(item *TableItem) {
+			if item.foldedName != "" {
+				cc.tables.folded.Delete(item)
+			}
 			cc.tables.data.Delete(item)
 			if cc.gcDeleteObserverForTesting != nil {
 				cc.gcDeleteObserverForTesting(catalogGCDeleteTable)
@@ -246,6 +268,9 @@ func (cc *CatalogCache) GC(ts timestamp.Timestamp) GCReport {
 		r.DStaleItem = len(deletedItems)
 		r.DStaleCpk = len(deletedCpkey)
 		deleteCatalogVersions(deletedItems, func(item *DatabaseItem) {
+			if item.foldedName != "" {
+				cc.databases.folded.Delete(item)
+			}
 			cc.databases.data.Delete(item)
 			if cc.gcDeleteObserverForTesting != nil {
 				cc.gcDeleteObserverForTesting(catalogGCDeleteDatabase)
@@ -462,6 +487,97 @@ func (cc *CatalogCache) GetTable(tbl *TableItem) bool {
 	return find
 }
 
+// GetFoldedTable resolves a mode-2 table name at tbl.Ts. The caller must first
+// establish that this cache can serve that timestamp; otherwise GC may have
+// retired a second historical name with the same folded identity.
+func (cc *CatalogCache) GetFoldedTable(tbl *TableItem) (found, ambiguous bool) {
+	cc.VisitFoldedTables(tbl.AccountId, tbl.DatabaseId, tbl.Name, tbl.Ts,
+		func(item *TableItem) bool {
+			if found {
+				ambiguous = true
+				return false
+			}
+			copyTableItem(tbl, item)
+			found = true
+			return true
+		})
+	return found && !ambiguous, ambiguous
+}
+
+// VisitFoldedTables visits each visible physical table with the same mode-2
+// identity. It preserves physical-name order so transaction-local tombstones
+// can be overlaid before a caller decides whether the name is ambiguous.
+func (cc *CatalogCache) VisitFoldedTables(
+	accountID uint32, databaseID uint64, name string, snapshot timestamp.Timestamp,
+	visit func(*TableItem) bool,
+) {
+	probe := cc.tableQueryProbePool.Get().(*TableItem)
+	*probe = TableItem{
+		AccountId:  accountID,
+		DatabaseId: databaseID,
+		foldedName: identifier.Fold(name),
+	}
+	// The canonical physical spelling remains in the exact tree. Its first
+	// version visible at this snapshot decides whether it contributes a name.
+	probe.Name = probe.foldedName
+	probe.Ts = types.MaxTs().ToTimestamp()
+	var canonical *TableItem
+	cc.tables.data.Ascend(probe, func(item *TableItem) bool {
+		if item.AccountId != accountID || item.DatabaseId != databaseID || item.Name != probe.Name {
+			return false
+		}
+		if item.Ts.Greater(snapshot) {
+			return true
+		}
+		if !item.deleted {
+			canonical = item
+		}
+		return false
+	})
+	probe.Name = ""
+	probe.Ts = timestamp.Timestamp{}
+	stopped := false
+	emitCanonical := func() bool {
+		item := canonical
+		canonical = nil
+		if item != nil && !visit(item) {
+			stopped = true
+			return false
+		}
+		return true
+	}
+	var previousName string
+	var seenName, decided bool
+	cc.tables.folded.Ascend(probe, func(item *TableItem) bool {
+		if item.AccountId != probe.AccountId || item.DatabaseId != probe.DatabaseId ||
+			item.foldedName != probe.foldedName {
+			return false
+		}
+		if canonical != nil && canonical.Name < item.Name && !emitCanonical() {
+			return false
+		}
+		if !seenName || item.Name != previousName {
+			previousName, seenName, decided = item.Name, true, false
+		}
+		if decided || item.Ts.Greater(snapshot) {
+			return true
+		}
+		decided = true
+		if item.deleted {
+			return true
+		}
+		if !visit(item) {
+			stopped = true
+			return false
+		}
+		return true
+	})
+	if !stopped {
+		emitCanonical()
+	}
+	releaseTableQueryProbe(&cc.tableQueryProbePool, probe)
+}
+
 func (cc *CatalogCache) GetStartTS() types.TS {
 	cc.mu.Lock()
 	defer cc.mu.Unlock()
@@ -567,6 +683,91 @@ func (cc *CatalogCache) GetDatabase(db *DatabaseItem) bool {
 	return find
 }
 
+// GetFoldedDatabase resolves a mode-2 database name at db.Ts. The caller must
+// establish that this cache can serve that timestamp before using its result.
+func (cc *CatalogCache) GetFoldedDatabase(db *DatabaseItem) (found, ambiguous bool) {
+	cc.VisitFoldedDatabases(db.AccountId, db.Name, db.Ts,
+		func(item *DatabaseItem) bool {
+			if found {
+				ambiguous = true
+				return false
+			}
+			copyDatabaseItem(db, item)
+			found = true
+			return true
+		})
+	return found && !ambiguous, ambiguous
+}
+
+// VisitFoldedDatabases visits each visible physical database with the same
+// mode-2 identity. The cache must be complete for snapshot before use.
+func (cc *CatalogCache) VisitFoldedDatabases(
+	accountID uint32, name string, snapshot timestamp.Timestamp,
+	visit func(*DatabaseItem) bool,
+) {
+	probe := cc.databaseQueryProbePool.Get().(*DatabaseItem)
+	*probe = DatabaseItem{
+		AccountId:  accountID,
+		foldedName: identifier.Fold(name),
+	}
+	probe.Name = probe.foldedName
+	probe.Ts = types.MaxTs().ToTimestamp()
+	var canonical *DatabaseItem
+	cc.databases.data.Ascend(probe, func(item *DatabaseItem) bool {
+		if item.AccountId != accountID || item.Name != probe.Name {
+			return false
+		}
+		if item.Ts.Greater(snapshot) {
+			return true
+		}
+		if !item.deleted {
+			canonical = item
+		}
+		return false
+	})
+	probe.Name = ""
+	probe.Ts = timestamp.Timestamp{}
+	stopped := false
+	emitCanonical := func() bool {
+		item := canonical
+		canonical = nil
+		if item != nil && !visit(item) {
+			stopped = true
+			return false
+		}
+		return true
+	}
+	var previousName string
+	var seenName, decided bool
+	cc.databases.folded.Ascend(probe, func(item *DatabaseItem) bool {
+		if item.AccountId != probe.AccountId || item.foldedName != probe.foldedName {
+			return false
+		}
+		if canonical != nil && canonical.Name < item.Name && !emitCanonical() {
+			return false
+		}
+		if !seenName || item.Name != previousName {
+			previousName, seenName, decided = item.Name, true, false
+		}
+		if decided || item.Ts.Greater(snapshot) {
+			return true
+		}
+		decided = true
+		if item.deleted {
+			return true
+		}
+		if !visit(item) {
+			stopped = true
+			return false
+		}
+		return true
+	})
+	if !stopped {
+		emitCanonical()
+	}
+	releaseDatabaseQueryProbe(&cc.databaseQueryProbePool, probe)
+}
+
 func (cc *CatalogCache) DeleteTable(bat *batch.Batch) {
 	cc.tableChange.Lock()
 	defer cc.tableChange.Unlock()
@@ -608,7 +809,7 @@ func (cc *CatalogCache) DeleteDatabase(bat *batch.Batch) {
 				CreateSql: item.CreateSql,
 				Ts:        ts.ToTimestamp(),
 			}
-			cc.databases.data.Set(newItem)
+			cc.setDatabaseItem(newItem, false)
 			return false
 		})
 	}
@@ -677,7 +878,11 @@ func (cc *CatalogCache) setTableItem(item *TableItem, updateCPKey bool) {
 }
 
 func (cc *CatalogCache) setTableItemLocked(item *TableItem, updateCPKey bool) {
+	item.foldedName = nonCanonicalFold(item.Name)
 	cc.tables.data.Set(item)
+	if item.foldedName != "" {
+		cc.tables.folded.Set(item)
+	}
 	if updateCPKey {
 		cc.tables.cpkeyIndex.Set(item)
 	}
@@ -791,9 +996,19 @@ func (cc *CatalogCache) InsertColumns(bat *batch.Batch) {
 
 func (cc *CatalogCache) InsertDatabase(bat *batch.Batch) {
 	ParseDatabaseBatchAnd(bat, func(item *DatabaseItem) {
-		cc.databases.data.Set(item)
-		cc.databases.cpkeyIndex.Set(item)
+		cc.setDatabaseItem(item, true)
 	})
+}
+
+func (cc *CatalogCache) setDatabaseItem(item *DatabaseItem, updateCPKey bool) {
+	item.foldedName = nonCanonicalFold(item.Name)
+	cc.databases.data.Set(item)
+	if item.foldedName != "" {
+		cc.databases.folded.Set(item)
+	}
+	if updateCPKey {
+		cc.databases.cpkeyIndex.Set(item)
+	}
 }
 
 func ParseDatabaseBatchAnd(bat *batch.Batch, f func(*DatabaseItem)) {

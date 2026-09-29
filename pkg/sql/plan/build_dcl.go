@@ -384,13 +384,12 @@ func collectPrepareDdlSchemas(ctx CompilerContext, stmt tree.Statement, prepareP
 		if databaseName == "" {
 			databaseName = ctx.DefaultDatabase()
 		}
-		var databaseID uint64
-		var err error
-		if ctx.DatabaseExists(databaseName, nil) {
-			databaseID, err = ctx.GetDatabaseId(databaseName, nil)
-			if err != nil {
-				return err
-			}
+		physicalName, databaseID, found, err := resolveDatabaseForPlan(ctx, databaseName, nil)
+		if err != nil {
+			return err
+		}
+		if found {
+			databaseName = physicalName
 		}
 		schemas = appendPrepareSchemas(schemas, &plan.ObjectRef{
 			Db:         int64(databaseID),
@@ -488,12 +487,12 @@ func collectPrepareDdlSchemas(ctx CompilerContext, stmt tree.Statement, prepareP
 			return nil, err
 		}
 		if objRef == nil || tableDef == nil {
-			var databaseID uint64
-			if ctx.DatabaseExists(databaseName, nil) {
-				databaseID, err = ctx.GetDatabaseId(databaseName, nil)
-				if err != nil {
-					return nil, err
-				}
+			physicalName, databaseID, found, resolveErr := resolveDatabaseForPlan(ctx, databaseName, nil)
+			if resolveErr != nil {
+				return nil, resolveErr
+			}
+			if found {
+				databaseName = physicalName
 			}
 			schemas = appendPrepareSchemas(schemas, &plan.ObjectRef{
 				Db:         int64(databaseID),

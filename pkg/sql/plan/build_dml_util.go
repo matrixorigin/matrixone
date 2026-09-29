@@ -27,6 +27,7 @@ import (
 	"golang.org/x/exp/slices"
 
 	"github.com/matrixorigin/matrixone/pkg/catalog"
+	"github.com/matrixorigin/matrixone/pkg/common/identifier"
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
 	moruntime "github.com/matrixorigin/matrixone/pkg/common/runtime"
 	"github.com/matrixorigin/matrixone/pkg/container/types"
@@ -5803,6 +5804,48 @@ func getFkReferredToWithCatalogLayout(ctx CompilerContext, db, table string) (ma
 		}
 	}
 	return ret, layout, nil
+}
+
+type forwardFKReferenceName struct {
+	database string
+	table    string
+}
+
+// Foreign keys declared while their parent was absent retain both input
+// spellings. Match the pair before using the exact catalog query; filtering on
+// the physical database name would lose references to a future database alias.
+// This runs only while creating a new parent table in mode 2.
+func getMode2ForwardFKReferenceNames(ctx CompilerContext, db, table string) ([]forwardFKReferenceName, error) {
+	sql := "select distinct refer_db_name, refer_table_name from `mo_catalog`.`mo_foreign_keys`"
+	res, err := runSql(ctx, sql)
+	if err != nil {
+		return nil, err
+	}
+	defer res.Close()
+	names := make([]forwardFKReferenceName, 0, 1)
+	foldedDB, foldedTable := identifier.Fold(db), identifier.Fold(table)
+	for _, batch := range res.Batches {
+		if batch == nil || len(batch.Vecs) < 2 || batch.Vecs[0] == nil || batch.Vecs[1] == nil {
+			continue
+		}
+		for i := 0; i < batch.Vecs[0].Length(); i++ {
+			reference := forwardFKReferenceName{
+				database: string(batch.Vecs[0].GetBytesAt(i)),
+				table:    string(batch.Vecs[1].GetBytesAt(i)),
+			}
+			if identifier.Fold(reference.database) == foldedDB &&
+				identifier.Fold(reference.table) == foldedTable {
+				names = append(names, reference)
+			}
+		}
+	}
+	slices.SortFunc(names, func(a, b forwardFKReferenceName) int {
+		if byDB := strings.Compare(a.database, b.database); byDB != 0 {
+			return byDB
+		}
+		return strings.Compare(a.table, b.table)
+	})
+	return names, nil
 }
 
 func legacyForeignKeyActionOrigin(action string) string {

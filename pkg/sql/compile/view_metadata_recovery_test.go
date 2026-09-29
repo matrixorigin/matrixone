@@ -362,12 +362,16 @@ func TestViewDependencyNameKeyHonorsLowerCaseTableNames(t *testing.T) {
 	require.Equal(t,
 		viewDependencyNameKey("Quoted Name", 1),
 		viewDependencyNameKey("quoted name", 1))
+	require.Equal(t, viewDependencyNameKey("\xc0A", 2), viewDependencyNameKey("\xc0a", 2))
+	require.NotEqual(t, viewDependencyNameKey("\xc0a", 2), viewDependencyNameKey("\xc1a", 2))
 }
 
 func TestViewBindingNameEqualHonorsLowerCaseTableNames(t *testing.T) {
 	require.False(t, viewBindingNameEqual("T", "t", 0))
 	require.True(t, viewBindingNameEqual("T", "t", 1))
 	require.True(t, viewBindingNameEqual("T", "t", 2))
+	require.True(t, viewBindingNameEqual("\xc0A", "\xc0a", 2))
+	require.False(t, viewBindingNameEqual("\xc0a", "\xc1a", 2))
 }
 
 func TestSynchronousViewRefreshCountNeverExceedsBudget(t *testing.T) {
@@ -711,12 +715,15 @@ func TestEnabledLifecycleRemovalAndCleanupPaths(t *testing.T) {
 }
 
 func TestRecoveryCompilerContextCatalogAndBindingAdapters(t *testing.T) {
-	t.Run("subscription catalog result is cached", func(t *testing.T) {
+	t.Run("mode-2 subscription alias uses folded catalog lookup and cache", func(t *testing.T) {
 		proc := testutil.NewProcess(t)
 		proc.Ctx = defines.AttachAccountId(proc.Ctx, 7)
+		database := executor.NewMemResult([]types.Type{types.T_varchar.ToType()}, proc.Mp())
+		database.NewBatchWithRowCount(1)
+		require.NoError(t, executor.AppendStringRows(database, 0, []string{"Sub_DB"}))
 		result := executor.NewMemResult([]types.Type{
 			types.T_int32.ToType(), types.T_varchar.ToType(), types.T_varchar.ToType(),
-			types.T_varchar.ToType(), types.T_varchar.ToType(),
+			types.T_varchar.ToType(), types.T_varchar.ToType(), types.T_varchar.ToType(),
 		}, proc.Mp())
 		result.NewBatchWithRowCount(1)
 		require.NoError(t, executor.AppendFixedRows(result, 0, []int32{11}))
@@ -724,20 +731,81 @@ func TestRecoveryCompilerContextCatalogAndBindingAdapters(t *testing.T) {
 		require.NoError(t, executor.AppendStringRows(result, 2, []string{"publication"}))
 		require.NoError(t, executor.AppendStringRows(result, 3, []string{"published_db"}))
 		require.NoError(t, executor.AppendStringRows(result, 4, []string{"table_a,table_b"}))
-		exec := &viewMetadataCleanupRecordingExecutor{results: []executor.Result{result.GetResult()}}
+		require.NoError(t, executor.AppendStringRows(result, 5, []string{"Sub_DB"}))
+		exec := &viewMetadataCleanupRecordingExecutor{results: []executor.Result{database.GetResult(), result.GetResult()}}
 		installViewMetadataTestExecutor(t, proc, exec)
 		ctx := &recoveryCompilerContext{compilerContext: &compilerContext{
-			ctx: proc.Ctx, proc: proc, lower: 1,
+			ctx: proc.Ctx, proc: proc, lower: 2,
 		}}
 		meta, err := ctx.GetSubscriptionMeta("SUB_DB", nil)
 		require.NoError(t, err)
 		require.Equal(t, int32(11), meta.AccountId)
 		require.Equal(t, "published_db", meta.DbName)
-		require.Equal(t, "SUB_DB", meta.SubName)
+		require.Equal(t, "Sub_DB", meta.SubName)
 		cached, err := ctx.GetSubscriptionMeta("sub_db", nil)
 		require.NoError(t, err)
 		require.Same(t, meta, cached)
+		require.Len(t, exec.sqls, 2)
+		require.Contains(t, exec.sqls[0], "lower(datname)=lower('SUB_DB')")
+		require.NotContains(t, exec.sqls[0], "limit 2")
+		require.Contains(t, exec.sqls[1], "sub_name='Sub_DB'")
+	})
+
+	t.Run("mode-2 subscription rejects malformed-byte lower false positives", func(t *testing.T) {
+		proc := testutil.NewProcess(t)
+		proc.Ctx = defines.AttachAccountId(proc.Ctx, 7)
+		database := executor.NewMemResult([]types.Type{types.T_varchar.ToType()}, proc.Mp())
+		for _, name := range []string{"\xc1a", "\xc0a"} {
+			database.NewBatchWithRowCount(1)
+			require.NoError(t, executor.AppendStringRows(database, 0, []string{name}))
+		}
+		result := executor.NewMemResult([]types.Type{
+			types.T_int32.ToType(), types.T_varchar.ToType(), types.T_varchar.ToType(),
+			types.T_varchar.ToType(), types.T_varchar.ToType(), types.T_varchar.ToType(),
+		}, proc.Mp())
+		result.NewBatchWithRowCount(1)
+		require.NoError(t, executor.AppendFixedRows(result, 0, []int32{11}))
+		for column, value := range []string{"publisher", "publication", "published_db", "table_a", "\xc0a"} {
+			require.NoError(t, executor.AppendStringRows(result, column+1, []string{value}))
+		}
+		otherDatabase := executor.NewMemResult([]types.Type{types.T_varchar.ToType()}, proc.Mp())
+		otherDatabase.NewBatchWithRowCount(1)
+		require.NoError(t, executor.AppendStringRows(otherDatabase, 0, []string{"\xc1a"}))
+		noSubscription := executor.NewMemResult(nil, proc.Mp())
+		exec := &viewMetadataCleanupRecordingExecutor{results: []executor.Result{
+			database.GetResult(), result.GetResult(), otherDatabase.GetResult(), noSubscription.GetResult(),
+		}}
+		installViewMetadataTestExecutor(t, proc, exec)
+		ctx := &recoveryCompilerContext{compilerContext: &compilerContext{ctx: proc.Ctx, proc: proc, lower: 2}}
+		meta, err := ctx.GetSubscriptionMeta("\xc0A", nil)
+		require.NoError(t, err)
+		require.Equal(t, "\xc0a", meta.SubName)
+		other, err := ctx.GetSubscriptionMeta("\xc1a", nil)
+		require.NoError(t, err)
+		require.Nil(t, other)
+		require.Len(t, exec.sqls, 4)
+		require.NotContains(t, exec.sqls[0], "limit 2")
+	})
+
+	t.Run("mode-2 ordinary and subscription database collision is ambiguous across batches", func(t *testing.T) {
+		proc := testutil.NewProcess(t)
+		proc.Ctx = defines.AttachAccountId(proc.Ctx, 7)
+		database := executor.NewMemResult([]types.Type{types.T_varchar.ToType()}, proc.Mp())
+		for _, name := range []string{"Foo", "foo"} {
+			database.NewBatchWithRowCount(1)
+			require.NoError(t, executor.AppendStringRows(database, 0, []string{name}))
+		}
+		exec := &viewMetadataCleanupRecordingExecutor{results: []executor.Result{database.GetResult()}}
+		installViewMetadataTestExecutor(t, proc, exec)
+		ctx := &recoveryCompilerContext{compilerContext: &compilerContext{ctx: proc.Ctx, proc: proc, lower: 2}}
+		_, err := ctx.GetSubscriptionMeta("foo", nil)
+		require.ErrorContains(t, err, "ambiguous database")
 		require.Len(t, exec.sqls, 1)
+		// An ambiguity must not cache a negative result for a later retry.
+		meta, err := ctx.GetSubscriptionMeta("foo", nil)
+		require.NoError(t, err)
+		require.Nil(t, meta)
+		require.Len(t, exec.sqls, 2)
 	})
 
 	t.Run("dependency binding uses physical account", func(t *testing.T) {
@@ -1286,12 +1354,15 @@ func TestViewMetadataCleanupLocksLifecycleGateBeforeRows(t *testing.T) {
 func TestViewDependencyMutationPredicateNeverTreatsUnknownIDAsIdentity(t *testing.T) {
 	predicate := viewDependencyMutationPredicate(viewRelationMutation{
 		accountID: 7, databaseID: 11, relationID: 13, logicalID: 17,
-		databaseName: "Quoted DB", relationName: "Quoted View",
+		databaseName: "\xc0Quoted DB", relationName: "\xc1Quoted View",
 	}, 0, 0)
 	require.Contains(t, predicate, "d.source_relation_id<>0")
 	require.Contains(t, predicate, "d.source_logical_id<>0")
-	require.Equal(t, 1, strings.Count(predicate, viewDependencyNameKey("Quoted DB", 0)))
-	require.Equal(t, 1, strings.Count(predicate, viewDependencyNameKey("quoted db", 1)))
+	require.Equal(t, 1, strings.Count(predicate, viewDependencyNameKey("\xc0Quoted DB", 0)))
+	require.Equal(t, 2, strings.Count(predicate, viewDependencyNameKey("\xc0quoted db", 1)))
+	require.Equal(t, 1, strings.Count(predicate, viewDependencyNameKey("\xc0quoted db", 2)))
+	require.Contains(t, predicate, "d.lower_case_table_names=1")
+	require.Contains(t, predicate, "d.lower_case_table_names=2")
 }
 
 func TestNextViewRefreshGenerationFencesOlderCatalogVisibility(t *testing.T) {

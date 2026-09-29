@@ -5309,6 +5309,10 @@ func getDatabaseOrTableIdWithLock(
 ) (int64, error) {
 	var err error
 	var sql string
+	dbName, tableName, err = resolvePrivilegeCatalogNames(ctx, bh, dbName, tableName)
+	if err != nil {
+		return 0, err
+	}
 	if isDb {
 		if lockObject {
 			sql, err = getSqlForCheckDatabaseByAccount(ctx, dbName)
@@ -5344,6 +5348,155 @@ func getDatabaseOrTableIdWithLock(
 		return 0, moerr.NewInternalErrorf(ctx, `there is no database "%s"`, dbName)
 	}
 	return 0, moerr.NewInternalErrorf(ctx, `there is no table "%s" in database "%s"`, tableName, dbName)
+}
+
+// Privilege catalog queries match physical names exactly. Resolve a mode-2
+// alias before building them so an alias checks the same object ID as its
+// stored spelling. Missing objects still follow the caller's existing path.
+func resolvePrivilegeCatalogNames(
+	ctx context.Context, bh BackgroundExec, dbName, tableName string,
+) (string, string, error) {
+	if !defines.Mode2NameResolutionEnabled(ctx) || dbName == "" {
+		return dbName, tableName, nil
+	}
+	routeDB, routeTable := systemRoutingNames(ctx, dbName, tableName)
+	if ShouldSwitchToSysAccount(routeDB, routeTable) {
+		// These reserved tables have canonical per-tenant catalog rows as
+		// well as sys-owned data. Privilege lookup uses the tenant row.
+		dbName, tableName = routeDB, routeTable
+	}
+	back, ok := bh.(*backExec)
+	if !ok {
+		return "", "", moerr.NewInternalError(ctx,
+			"mode-2 privilege resolution requires a background transaction")
+	}
+	handler := back.backSes.GetTxnHandler()
+	if handler == nil {
+		return "", "", moerr.NewInternalError(ctx,
+			"mode-2 privilege resolution has no transaction handler")
+	}
+	if handler.GetTxn() == nil {
+		if err := bh.Exec(ctx, "begin;"); err != nil {
+			return "", "", err
+		}
+	}
+	op := handler.GetTxn()
+	if op == nil {
+		return "", "", moerr.NewInternalError(ctx,
+			"mode-2 privilege resolution has no transaction")
+	}
+	db, err := back.backSes.GetStorage().Database(ctx, dbName, op)
+	if moerr.IsMoErrCode(err, moerr.OkExpectedEOB) {
+		return dbName, tableName, nil
+	}
+	if err != nil {
+		return "", "", err
+	}
+	physicalDB := resolvedDatabaseName(db, dbName)
+	if tableName == "" {
+		return physicalDB, "", nil
+	}
+	rel, err := db.Relation(ctx, tableName, nil)
+	if moerr.IsMoErrCode(err, moerr.ErrNoSuchTable) {
+		return physicalDB, tableName, nil
+	}
+	if err != nil {
+		return "", "", err
+	}
+	return physicalDB, rel.GetTableName(), nil
+}
+
+// Resolve database-level privilege targets before consulting the privilege
+// cache. Catalog grants are keyed by the physical database ID, and a cached
+// hit must not bypass the mode-2 ambiguity check. Do this once per statement,
+// outside the loop over roles and privilege levels.
+func resolveDatabasePrivilegeTargets(
+	ctx context.Context, ses *Session, priv *privilege,
+) (stats statistic.StatsArray, err error) {
+	stats.Reset()
+	if !defines.Mode2NameResolutionEnabled(ctx) || priv.objectType() != objectTypeDatabase {
+		return stats, nil
+	}
+	needsLookup := false
+	for _, entry := range priv.entries {
+		if entry.privilegeEntryTyp == privilegeEntryTypeGeneral && entry.objType == objectTypeDatabase {
+			needsLookup = true
+			break
+		}
+		if entry.compound != nil {
+			for _, item := range entry.compound.items {
+				if item.objType == objectTypeDatabase {
+					needsLookup = true
+					break
+				}
+			}
+		}
+	}
+	if !needsLookup {
+		return stats, nil
+	}
+
+	// A shared background executor needs an already active frontend transaction.
+	// Before statement planning there may be none; use a private read transaction
+	// then, while preserving visibility of DDL in an explicit user transaction.
+	var bh BackgroundExec
+	if handler := ses.GetTxnHandler(); handler != nil && handler.GetTxn() != nil {
+		bh = ses.GetShareTxnBackgroundExec(ctx, false)
+	} else {
+		bh = ses.GetBackgroundExec(ctx)
+	}
+	defer func() {
+		stats = bh.GetExecStatsArray()
+		bh.Close()
+	}()
+	back := bh.(*backExec)
+	startedTxn := back.backSes.GetTxnHandler().GetTxn() == nil
+	if startedTxn {
+		if err = bh.Exec(ctx, "begin;"); err != nil {
+			return stats, err
+		}
+		defer func() { err = finishTxn(ctx, bh, err) }()
+	}
+
+	resolved := make(map[string]string)
+	resolve := func(name string) (string, error) {
+		if name == "" {
+			name = ses.GetDatabaseName()
+		}
+		if name == "" {
+			return "", nil
+		}
+		if physical, ok := resolved[name]; ok {
+			return physical, nil
+		}
+		physical, _, lookupErr := resolvePrivilegeCatalogNames(ctx, bh, name, "")
+		if lookupErr != nil {
+			return "", lookupErr
+		}
+		resolved[name] = physical
+		return physical, nil
+	}
+	for i := range priv.entries {
+		entry := &priv.entries[i]
+		if entry.privilegeEntryTyp == privilegeEntryTypeGeneral && entry.objType == objectTypeDatabase {
+			entry.databaseName, err = resolve(entry.databaseName)
+			if err != nil {
+				return stats, err
+			}
+		}
+		if entry.compound != nil {
+			for j := range entry.compound.items {
+				item := &entry.compound.items[j]
+				if item.objType == objectTypeDatabase {
+					item.dbName, err = resolve(item.dbName)
+					if err != nil {
+						return stats, err
+					}
+				}
+			}
+		}
+	}
+	return stats, nil
 }
 
 func copyTablePrivileges(
@@ -5486,6 +5639,11 @@ func getViewIdWithLock(
 	viewName string,
 	lockObject bool,
 ) (int64, error) {
+	var err error
+	dbName, viewName, err = resolvePrivilegeCatalogNames(ctx, bh, dbName, viewName)
+	if err != nil {
+		return 0, err
+	}
 	sql, err := getSqlForCheckDatabaseView(ctx, dbName, viewName)
 	if err != nil {
 		return 0, err
@@ -8204,6 +8362,14 @@ func determineUserHasPrivilegeSet(ctx context.Context, ses *Session, priv *privi
 			return false, stats, activeRoleGrantAuthorizationError(ctx)
 		}
 	}
+	if roleGrantCached {
+		var delta statistic.StatsArray
+		delta, err = resolveDatabasePrivilegeTargets(ctx, ses, priv)
+		stats.Add(&delta)
+		if err != nil {
+			return false, stats, err
+		}
+	}
 
 	// A privilege hit is usable only after the active role membership from the
 	// same cache generation has been validated. Otherwise a revoked role can
@@ -8230,7 +8396,8 @@ func determineUserHasPrivilegeSet(ctx context.Context, ses *Session, priv *privi
 	}
 	bh := ses.GetBackgroundExec(ctx, backgroundExecOptions...)
 	defer func() {
-		stats = bh.GetExecStatsArray()
+		delta := bh.GetExecStatsArray()
+		stats.Add(&delta)
 		bh.Close()
 	}()
 
@@ -8298,6 +8465,12 @@ func determineUserHasPrivilegeSet(ctx context.Context, ses *Session, priv *privi
 					roleGrantCacheGeneration)
 			}
 			return false, stats, activeRoleGrantAuthorizationError(ctx)
+		}
+		var delta statistic.StatsArray
+		delta, err = resolveDatabasePrivilegeTargets(ctx, ses, priv)
+		stats.Add(&delta)
+		if err != nil {
+			return false, stats, err
 		}
 
 		// This is the first authorization in the cache generation. Reuse any
@@ -9042,6 +9215,10 @@ func checkRoleWhetherTableOwner(ctx context.Context, ses *Session, dbName, tbNam
 	}()
 
 	// getOwner of the table
+	dbName, tbName, err = resolvePrivilegeCatalogNames(ctx, bh, dbName, tbName)
+	if err != nil {
+		return false, stats, err
+	}
 	sql = getSqlForGetOwnerOfTable(dbName, tbName)
 	bh.ClearExecResultSet()
 	err = bh.Exec(ctx, sql)
@@ -9123,6 +9300,10 @@ func checkRoleWhetherDatabaseOwner(ctx context.Context, ses *Session, dbName str
 	}()
 
 	// getOwner of the database
+	dbName, _, err = resolvePrivilegeCatalogNames(ctx, bh, dbName, "")
+	if err != nil {
+		return false, stats, err
+	}
 	sql = getSqlForGetOwnerOfDatabase(dbName)
 	bh.ClearExecResultSet()
 	err = bh.Exec(ctx, sql)
@@ -12539,11 +12720,15 @@ func doRevokePrivilegeImplicitly(
 	// 2.grant database privilege
 	switch st := stmt.(type) {
 	case *tree.DropDatabase:
-		curRole, err := getDatabaseOwnerRoleName(tenantCtx, bh, string(st.Name))
+		dbName, _, err := resolvePrivilegeCatalogNames(tenantCtx, bh, string(st.Name), "")
+		if err != nil {
+			return err
+		}
+		curRole, err := getDatabaseOwnerRoleName(tenantCtx, bh, dbName)
 		if err != nil || shouldSkipImplicitOwnershipRevoke(ses, curRole) {
 			return err
 		}
-		sql := getSqlForRevokeOwnershipFromDatabase(string(st.Name), curRole)
+		sql := getSqlForRevokeOwnershipFromDatabase(dbName, curRole)
 		rp, err := mysql.Parse(tenantCtx, sql, 1)
 		if err != nil {
 			return err
@@ -12559,14 +12744,18 @@ func doRevokePrivilegeImplicitly(
 					dbName = ses.GetDatabaseName()
 				}
 			}
-			curRole, err := getTableOwnerRoleName(tenantCtx, bh, dbName, string(name.ObjectName))
+			dbName, tbName, err := resolvePrivilegeCatalogNames(tenantCtx, bh, dbName, string(name.ObjectName))
+			if err != nil {
+				return err
+			}
+			curRole, err := getTableOwnerRoleName(tenantCtx, bh, dbName, tbName)
 			if err != nil {
 				return err
 			}
 			if shouldSkipImplicitOwnershipRevoke(ses, curRole) {
 				continue
 			}
-			sqls = append(sqls, getSqlForRevokeOwnershipFromTable(dbName, string(name.ObjectName), curRole))
+			sqls = append(sqls, getSqlForRevokeOwnershipFromTable(dbName, tbName, curRole))
 		}
 
 		for _, sql := range sqls {

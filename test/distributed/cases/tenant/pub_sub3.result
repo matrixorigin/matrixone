@@ -197,7 +197,7 @@ a    b
 desc sys_sub_part_tbls.t2;
 no such table sys_sub_part_tbls.t2
 show create table sys_sub_part_tbls.t2;
-internal error: table t2 not found in publication pub_part_tbls
+no such table sys_sub_part_tbls.t2
 select * from sys_sub_part_tbls.t2;
 SQL parser error: table "t2" does not exist
 use sys_sub_part_tbls;
@@ -222,7 +222,7 @@ a    b
 desc t2;
 no such table sys_sub_part_tbls.t2
 show create table t2;
-internal error: table t2 not found in publication pub_part_tbls
+no such table sys_sub_part_tbls.t2
 select * from t2;
 SQL parser error: table "t2" does not exist
 create database db1;

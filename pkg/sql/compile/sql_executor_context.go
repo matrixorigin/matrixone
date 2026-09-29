@@ -629,7 +629,11 @@ func (c *compilerContext) Resolve(dbName string, tableName string, snapshot *pla
 	// This keeps CTAS follow-up INSERT in the same transaction workable for temp tables.
 	isTmpTable := false
 	if ses := c.proc.GetSession(); ses != nil {
-		if realName, ok := ses.GetTempTable(dbName, tableName); ok {
+		realName, found, resolveErr := resolveSessionTemporaryAlias(c.proc.Ctx, ses, dbName, tableName)
+		if resolveErr != nil {
+			return nil, nil, resolveErr
+		}
+		if found {
 			tableName = realName
 			isTmpTable = true
 		}
