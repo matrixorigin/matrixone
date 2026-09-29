@@ -6445,6 +6445,38 @@ func preparedParamUsesStringMathFunction(plan0 *Plan, position int) bool {
 	return found
 }
 
+// preparedParamUsesOrdinaryMathPrecision preserves the original parameter
+// position for source-aware CEIL/FLOOR precision rebinding. Precision is not a
+// numeric-result value role, so it must not opt into string numeric-prefix
+// conversion; retaining only its source marker lets the control cast choose
+// the native integer conversion for numeric EXECUTE values.
+func preparedParamUsesOrdinaryMathPrecision(plan0 *Plan, position int) bool {
+	if plan0 == nil || position < 0 {
+		return false
+	}
+	found := false
+	_ = plan.VisitExpressionsInOwner(plan0, func(expr *plan.Expr) error {
+		if found || expr == nil {
+			return nil
+		}
+		fn := expr.GetF()
+		if fn == nil || fn.Func == nil {
+			return nil
+		}
+		for i, arg := range fn.Args {
+			if _, ordinaryPrecision := function.IntegerArgumentOrdinaryCastTarget(fn.Func.GetObjName(), i); !ordinaryPrecision {
+				continue
+			}
+			if paramPos, ok := preparedRuntimeSourceParamPosition(arg); ok && paramPos == position {
+				found = true
+				return nil
+			}
+		}
+		return nil
+	})
+	return found
+}
+
 // preparedExprUsesStringMathValueArg finds a string-math value occurrence for
 // position. Numeric roles cross only function arguments whose domain is
 // explicitly known; a string-domain or unknown function resets the inherited
@@ -6841,7 +6873,7 @@ func replaceParamValsWithSelection(
 			runtimeType = param.RuntimeType
 			hasRuntimeType = param.HasRuntimeType
 			numericPrefixSource = param.EnableNumericPrefix
-			retainParamRef = param.RetainParamRef
+			retainParamRef = param.RetainParamRef || preparedParamUsesOrdinaryMathPrecision(plan0, i)
 			runtimeStringDomain = param.RuntimeStringDomain
 			// Materialize only a non-NULL binary string domain. NULL retains the
 			// prepared marker type, while text sources keep the TEXT transport type.
