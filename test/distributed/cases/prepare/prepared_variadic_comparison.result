@@ -28,11 +28,20 @@ EXECUTE p_numeric_peer USING @n, @n;
 ➤ GREATEST(?, 1)[3,20,1]  ¦  LEAST(?, 1)[3,20,1]  𝄀
 2.0  ¦  1.0
 DEALLOCATE PREPARE p_numeric_peer;
+SET @prepared_variadic_saved_sql_mode = @@session.sql_mode;
+SELECT FIELD(2.0, 1, 2, '2', NULL);
+➤ FIELD(2.0, 1, 2, 2, null)[-5,64,0]  𝄀
+2
+PREPARE p_field FROM 'SELECT FIELD(?, ?, ?, ?, ?)';
+SET @needle = 2.0, @first = 1, @second = 2, @text = '2', @nil = NULL;
+EXECUTE p_field USING @needle, @first, @second, @text, @nil;
+➤ FIELD(?, ?, ?, ?, ?)[-5,64,0]  𝄀
+2
+SET @text = 'x';
+SET SESSION sql_mode = CONCAT_WS(',', NULLIF(@prepared_variadic_saved_sql_mode, ''), 'MYSQL_NUMERIC_COMPATIBILITY');
 SELECT FIELD(2.0, 1, 2, 'x', NULL);
 ➤ FIELD(2.0, 1, 2, x, null)[-5,64,0]  𝄀
 2
-PREPARE p_field FROM 'SELECT FIELD(?, ?, ?, ?, ?)';
-SET @needle = 2.0, @first = 1, @second = 2, @text = 'x', @nil = NULL;
 EXECUTE p_field USING @needle, @first, @second, @text, @nil;
 ➤ FIELD(?, ?, ?, ?, ?)[-5,64,0]  𝄀
 2
@@ -44,6 +53,8 @@ SET @needle = 2.0;
 EXECUTE p_field USING @needle, @first, @second, @text, @nil;
 ➤ FIELD(?, ?, ?, ?, ?)[-5,64,0]  𝄀
 2
+SET SESSION sql_mode = @prepared_variadic_saved_sql_mode;
+SET @prepared_variadic_saved_sql_mode = NULL;
 DEALLOCATE PREPARE p_field;
 SELECT FIELD(CAST(9007199254740993 AS DECIMAL(20,0)), CAST(9007199254740992 AS DECIMAL(20,0)));
 ➤ FIELD(cast(9007199254740993 as decimal(20)), cast(9007199254740992 as decimal(20)))[-5,64,0]  𝄀
