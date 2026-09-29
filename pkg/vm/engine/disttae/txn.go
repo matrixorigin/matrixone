@@ -3072,6 +3072,17 @@ func (txn *Transaction) rollbackTableOpLocked() {
 	}
 }
 
+var _ client.TerminalTableDeletionView = (*Transaction)(nil)
+
+// IsTableDeletedAtTxnClose reads the surviving physical deletion set after
+// statement rollback and commit preparation. The terminal callback runs while
+// the transaction is quiescent, so taking the workspace lock here would add an
+// operator-to-workspace lock edge without protecting a concurrent writer.
+func (txn *Transaction) IsTableDeletedAtTxnClose(physicalTableID uint64) bool {
+	_, deleted := txn.tablesInVain[physicalTableID]
+	return deleted
+}
+
 func (txn *Transaction) clearTableCache() {
 	txn.tableCache.Range(func(key, value any) bool {
 		txn.tableCache.Delete(key)
