@@ -19,6 +19,7 @@ import (
 	"fmt"
 	"math"
 	"strings"
+	"unicode"
 
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
 	"github.com/matrixorigin/matrixone/pkg/logutil"
@@ -652,6 +653,78 @@ func CreatePattern(pattern string, parser string) (*Pattern, error) {
 	return &Pattern{Text: pattern, Operator: operator, Children: p}, nil
 }
 
+// isAllCJK reports whether every rune is CJK-class (>= 0x7FF), the same boundary SimpleTokenizer.isLatin
+// uses to decide trigram tiling vs whole-word. A stem with any Latin rune is left to the plain
+// single-prefix star path.
+func isAllCJK(runes []rune) bool {
+	if len(runes) == 0 {
+		return false
+	}
+	for _, r := range runes {
+		if r < 0x7FF {
+			return false
+		}
+	}
+	return true
+}
+
+// cjkStarPhraseChildren tiles a CJK stem into non-overlapping trigrams as byte-positioned exact TEXT
+// terms, with the trailing piece -- a full trigram if the length is a clean multiple of 3, else the
+// 1-2 rune tail -- turned into a STAR (prefix_eq). The positions match SimpleTokenizer.outputCJK's
+// stored tokens (苹果香@0 ... 蕉@9), so SqlPhrase's positional JOIN pins the whole stem. Returns nil
+// for a stem <= one trigram or containing a Latin rune (handled by the plain prefix_eq star path).
+func cjkStarPhraseChildren(stem string) []*Pattern {
+	runes := []rune(stem)
+	if len(runes) <= 3 || !isAllCJK(runes) {
+		return nil
+	}
+	children := make([]*Pattern, 0, len(runes)/3+1)
+	// Track the byte offset in one pass; re-encoding string(runes[:i]) per child is O(n^2) and a long
+	// CJK stem (thousands of runes) would amplify per-query CPU/GC before execution (#29273 P2).
+	bytePos := int32(0)
+	for i := 0; i < len(runes); i += 3 {
+		end := i + 3
+		if end > len(runes) {
+			end = len(runes)
+		}
+		text := string(runes[i:end])
+		children = append(children, &Pattern{
+			Text:     text,
+			Operator: TEXT,
+			Position: bytePos,
+		})
+		bytePos += int32(len(text))
+	}
+	last := children[len(children)-1]
+	last.Operator = STAR
+	last.Text += "*"
+	return children
+}
+
+// jiebaStarPhraseChildren segments a gojieba stem and turns the last word into a STAR (prefix). A
+// multi-word stem yields the positional phrase children; a single word returns nil (plain prefix).
+func jiebaStarPhraseChildren(stem string) ([]*Pattern, error) {
+	tok, err := tokenizer.SharedJiebaTokenizer(false)
+	if err != nil {
+		return nil, err
+	}
+	children := make([]*Pattern, 0, 8)
+	for t, err := range tok.Tokenize([]byte(stem)) {
+		if err != nil {
+			return nil, err
+		}
+		slen := t.TokenBytes[0]
+		children = append(children, &Pattern{Text: string(t.TokenBytes[1 : slen+1]), Operator: TEXT, Position: t.BytePos})
+	}
+	if len(children) <= 1 {
+		return nil, nil
+	}
+	last := children[len(children)-1]
+	last.Operator = STAR
+	last.Text += "*"
+	return children, nil
+}
+
 // ParsePhrase splits a quoted-phrase body into TEXT children for a PHRASE
 // node. With parser="gojieba" the phrase is segmented through jieba so the
 // children match how the index stores Chinese words; otherwise the legacy
@@ -931,6 +1004,33 @@ func parsePatternInNLModeJieba(pattern string) ([]*Pattern, error) {
 	return list, nil
 }
 
+// normalizeShortPattern lowercases a short (<3-rune) query prefix the SAME way the selected index
+// parser normalizes stored tokens, so the prefix_eq matches what was indexed (#29296):
+//   - json_value stores ByteJson.TokenizeValue output verbatim (no case folding) -> preserve as-is.
+//   - SimpleTokenizer (default/ngram/json) folds ONLY Latin-class runes (<0x7FF, via outputLatin) and
+//     preserves wider runes verbatim (outputCJK), so a fullwidth/CJK capital like `Ａ` or `ẞ` must not
+//     be folded (that would prefix-search a token the index never stored).
+//
+// Blanket strings.ToLower is wrong for both: it folds `Ａ`/`ẞ` (which the ngram index stores cased)
+// and folds every json_value character (which is stored uncased).
+func normalizeShortPattern(pattern, parser string) string {
+	if parser == "json_value" {
+		return pattern
+	}
+	var b strings.Builder
+	b.Grow(len(pattern))
+	for _, r := range pattern {
+		// 0x7FF is SimpleTokenizer.isLatin's boundary: <0x7FF routes to outputLatin (lowercased),
+		// >=0x7FF to outputCJK (preserved).
+		if r < 0x7FF {
+			b.WriteRune(unicode.ToLower(r))
+		} else {
+			b.WriteRune(r)
+		}
+	}
+	return b.String()
+}
+
 // Parse search string in natural language mode
 func ParsePatternInNLMode(pattern string, parser string) ([]*Pattern, error) {
 	if parser == "gojieba" {
@@ -939,9 +1039,13 @@ func ParsePatternInNLMode(pattern string, parser string) ([]*Pattern, error) {
 
 	runeSlice := []rune(pattern)
 	ngram_size := 3
-	// if number of character is small than Ngram size = 3, do prefix search
+	// if number of character is small than Ngram size = 3, do prefix search.
+	// Normalize case to match how the selected parser stored its tokens (SimpleTokenizer folds only
+	// Latin runes; json_value preserves case), so a capitalized short pattern (e.g. `Hi`) looks up the
+	// stored token instead of prefix-searching the raw string (#29296). Boolean mode already
+	// lowercases its whole pattern.
 	if len(runeSlice) < ngram_size {
-		return []*Pattern{{Text: pattern + "*", Operator: STAR}}, nil
+		return []*Pattern{{Text: normalizeShortPattern(pattern, parser) + "*", Operator: STAR}}, nil
 	}
 
 	list := make([]*Pattern, 0, 32)

@@ -1092,7 +1092,7 @@ func TestViewDependencyCaptureScopeAndIdentityFallbacks(t *testing.T) {
 	ctx.GetAccountIdFunc = func() (uint32, error) { return 7, nil }
 	capture := newViewDependencyCaptureContext(ctx)
 
-	capture.enterNestedView()
+	require.NoError(t, capture.enterNestedView())
 	_, _, err := capture.Resolve("tpch", "nation", nil)
 	require.NoError(t, err)
 	require.Empty(t, capture.dependencies())
@@ -1126,6 +1126,20 @@ func TestViewDependencyCaptureScopeAndIdentityFallbacks(t *testing.T) {
 	expected := errors.New("account unavailable")
 	ctx.GetAccountIdFunc = func() (uint32, error) { return 0, expected }
 	require.ErrorIs(t, capture.record(&planpb.ObjectRef{}, tableDef, nil, "", ""), expected)
+}
+
+func TestViewMetadataNestedExpansionBudget(t *testing.T) {
+	capture := newViewDependencyCaptureContext(NewMockCompilerContext(false))
+	for i := 0; i < MaxViewMetadataColumns; i++ {
+		require.NoError(t, capture.enterNestedView())
+		capture.leaveNestedView()
+	}
+	require.ErrorContains(t, capture.enterNestedView(), "binding budget")
+	require.Zero(t, capture.depth, "rejected expansions must not enter the binding scope")
+	columns := newViewDependencyCaptureContext(NewMockCompilerContext(false))
+	require.NoError(t, columns.chargeViewColumns(MaxViewMetadataColumns-1))
+	require.NoError(t, columns.chargeViewColumns(1))
+	require.ErrorContains(t, columns.chargeViewColumns(1), "column budget")
 }
 
 func TestViewDependencyCaptureResolveByID(t *testing.T) {

@@ -5007,28 +5007,11 @@ func (h *ParquetHandler) rowsToSourceBudget(maxRows int64, budget uint64) int64 
 	if maxRows <= 1 || budget == 0 {
 		return min(maxRows, 1)
 	}
-	hasDictionary := false
-	for _, colIdx := range h.budgetColIndices {
-		if h.currentPage[colIdx].Dictionary() != nil {
-			hasDictionary = true
-			break
-		}
-	}
-	if hasDictionary {
-		var size uint64
-		for row := int64(0); row < maxRows; row++ {
-			for _, colIdx := range h.budgetColIndices {
-				pageOff := h.pageOffset[colIdx]
-				size = addParquetBytes(size,
-					parquetDecodedPageSize(h.currentPage[colIdx].Slice(pageOff+row, pageOff+row+1)))
-			}
-			if size >= budget {
-				return row + 1
-			}
-		}
-		return maxRows
-	}
 
+	// The decoded size of a page prefix is monotonic in the number of rows,
+	// including dictionary-backed pages. Using the same binary search for both
+	// page kinds avoids repeatedly slicing every single dictionary row (which
+	// makes parquet-go rescan definition levels for each one-row slice).
 	sizeAt := func(rows int64) uint64 {
 		var size uint64
 		for _, colIdx := range h.budgetColIndices {

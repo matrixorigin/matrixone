@@ -137,15 +137,10 @@ LD_LIBRARY_PATH="${THIRDPARTIES_INSTALL_DIR}/lib:${BUILD_WKSP}/cgo"
 
 if [[ -n "${MO_CL_CUDA:-}" ]] ; then
     if [[ ${MO_CL_CUDA} == "1" ]] ; then
-         if [[ -z "${CONDA_PREFIX:-}" ]] ; then
-		 echo "CONDA_PREFIX environment variable not found"
-		 exit 1
-	 fi
-
-         CUDA_HOME=/usr/local/cuda
-         CGO_CFLAGS="${CGO_CFLAGS} -I${CUDA_HOME}/include -I${CONDA_PREFIX}/include"
-         CGO_LDFLAGS="${CGO_LDFLAGS} -L${CUDA_HOME}/lib64/stubs -lcuda -L${CUDA_HOME}/lib64 -lcudart -L${CONDA_PREFIX}/lib -lcuvs -lcuvs_c  -lstdc++"
-         LD_LIBRARY_PATH="${LD_LIBRARY_PATH}:${CUDA_HOME}/lib64:${CUDA_HOME}/extras/CUPTI/lib64:${CONDA_PREFIX}/lib"
+         . "${BUILD_WKSP}/cgo/mo-gpu-env" || exit 1
+         CGO_CFLAGS="${CGO_CFLAGS} ${MO_GPU_CFLAGS}"
+         CGO_LDFLAGS="${CGO_LDFLAGS} ${MO_GPU_LDFLAGS}"
+         LD_LIBRARY_PATH="${MO_GPU_RUNTIME_PATH}${LD_LIBRARY_PATH:+:${LD_LIBRARY_PATH}}"
 	 TAGS="${TAGS},gpu"
     fi
 fi

@@ -16,11 +16,13 @@ package function
 
 import (
 	"bytes"
+	"encoding/binary"
 	"math"
 	"testing"
 
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
 	"github.com/matrixorigin/matrixone/pkg/common/mpool"
+	"github.com/matrixorigin/matrixone/pkg/container/bytejson"
 	"github.com/matrixorigin/matrixone/pkg/container/nulls"
 	"github.com/matrixorigin/matrixone/pkg/container/types"
 	"github.com/matrixorigin/matrixone/pkg/container/vector"
@@ -378,6 +380,100 @@ func TestJSONNumericAggCastErrorsDoNotPoisonRetry(t *testing.T) {
 	require.False(t, gotNull)
 	require.InDelta(t, 2.5, got, 1e-14)
 }
+
+func jsonAggDecimalValue(text string) bytejson.ByteJson {
+	data := make([]byte, binary.MaxVarintLen64+len(text))
+	n := binary.PutUvarint(data, uint64(len(text)))
+	copy(data[n:], text)
+	return bytejson.ByteJson{Type: bytejson.TpCodeDecimal, Data: data[:n+len(text)]}
+}
+
+func jsonAggValueFromText(t *testing.T, text string) bytejson.ByteJson {
+	t.Helper()
+	encoded := makeJSONEncodedFromText(t, []string{text}, nil)
+	return types.DecodeJson([]byte(encoded[0]))
+}
+
+func TestJSONNumericAggScalarConversionBranches(t *testing.T) {
+	mp := mpool.MustNewZeroNoFixed()
+	proc := testutil.NewProcess(t, testutil.WithMPool(mp))
+	session := &numericWarningSession{}
+	proc.Session = session
+	t.Cleanup(func() {
+		proc.Free()
+		require.Zero(t, mp.CurrNB())
+		mpool.DeleteMPool(mp)
+	})
+
+	intData := make([]byte, 8)
+	negative := int64(-7)
+	binary.LittleEndian.PutUint64(intData, uint64(negative))
+	uintData := make([]byte, 8)
+	binary.LittleEndian.PutUint64(uintData, 9)
+	floatData := make([]byte, 8)
+	binary.LittleEndian.PutUint64(floatData, math.Float64bits(2.5))
+
+	cases := []struct {
+		name     string
+		value    bytejson.ByteJson
+		want     float64
+		wantNull bool
+	}{
+		{name: "int64", value: bytejson.ByteJson{Type: bytejson.TpCodeInt64, Data: intData}, want: -7},
+		{name: "uint64", value: bytejson.ByteJson{Type: bytejson.TpCodeUint64, Data: uintData}, want: 9},
+		{name: "float64", value: bytejson.ByteJson{Type: bytejson.TpCodeFloat64, Data: floatData}, want: 2.5},
+		{name: "decimal", value: jsonAggDecimalValue("12.5"), want: 12.5},
+		{name: "decimal parse error", value: jsonAggDecimalValue("0x"), wantNull: true},
+		{name: "string parse error", value: jsonAggValueFromText(t, `"0x"`), wantNull: true},
+		{name: "empty literal", value: bytejson.ByteJson{Type: bytejson.TpCodeLiteral}, wantNull: true},
+		{name: "unknown literal", value: bytejson.ByteJson{Type: bytejson.TpCodeLiteral, Data: []byte{0xff}}, wantNull: true},
+		{name: "unsupported type", value: bytejson.ByteJson{Type: bytejson.TpCodeDate}, wantNull: true},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			got, gotNull := jsonAggToFloat64(tc.value, proc)
+			require.Equal(t, tc.wantNull, gotNull)
+			if !tc.wantNull {
+				require.Equal(t, tc.want, got)
+			}
+		})
+	}
+
+	got, gotNull := jsonAggToFloat64(jsonAggValueFromText(t, `{}`), nil)
+	require.True(t, gotNull)
+	require.Zero(t, got)
+}
+
+func TestJSONNumericAggSelectionAndArity(t *testing.T) {
+	proc := testutil.NewProcess(t)
+
+	input := makeJSONEncodedFromText(t, []string{`1`, `2`}, nil)
+	selected := NewFunctionTestCase(
+		proc,
+		[]FunctionTestInput{
+			NewFunctionTestInput(types.T_json.ToType(), input, nil),
+		},
+		NewFunctionTestResult(types.T_float64.ToType(), false, []float64{0, 2}, []bool{true, false}),
+		JsonAggToDouble,
+	).WithSelectList(&FunctionSelectList{AnyNull: true, SelectList: []bool{true, false}})
+	ok, info := selected.Run()
+	require.True(t, ok, info)
+
+	allNull := NewFunctionTestCase(
+		proc,
+		[]FunctionTestInput{
+			NewFunctionTestInput(types.T_json.ToType(), input, nil),
+		},
+		NewFunctionTestResult(types.T_float64.ToType(), false, []float64{0, 0}, []bool{true, true}),
+		JsonAggToDouble,
+	).WithSelectList(&FunctionSelectList{AllNull: true, SelectList: []bool{false, false}})
+	ok, info = allNull.Run()
+	require.True(t, ok, info)
+
+	err := JsonAggToDouble(nil, nil, proc, 0, nil)
+	require.ErrorContains(t, err, "expects one argument")
+}
+
 func TestJSONNumericAggDoublePrecisionBoundary(t *testing.T) {
 	mp := mpool.MustNewZeroNoFixed()
 	proc := testutil.NewProcess(t, testutil.WithMPool(mp))

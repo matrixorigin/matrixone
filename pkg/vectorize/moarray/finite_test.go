@@ -16,6 +16,7 @@ package moarray
 
 import (
 	"math"
+	"strconv"
 	"testing"
 
 	"github.com/stretchr/testify/require"
@@ -94,4 +95,66 @@ func TestSummationRejectsOverflow(t *testing.T) {
 	got, err = Summation[float32]([]float32{0.5, 0.25})
 	require.NoError(t, err)
 	require.EqualValues(t, 0.75, got)
+}
+
+// #29083: l1_norm/l2_norm are DOUBLE functions. A finite VECF32 whose norm exceeds the float32
+// range but fits float64 must return that representable double, not overflow to +Inf and not error --
+// the norm is accumulated in float64. VECF64 norms keep their existing (float64-domain) behavior.
+func TestF32NormAccumulatesInDouble(t *testing.T) {
+	// Norms past the float32 range (max ~3.4e38) but well within float64: finite double, no error.
+	got, err := L1Norm[float32]([]float32{2e38, 2e38}) // ~4e38 > float32 max
+	require.NoError(t, err)
+	require.False(t, math.IsInf(got, 0))
+	require.InEpsilon(t, 4e38, got, 1e-6)
+
+	got, err = L2Norm[float32]([]float32{2.5e38, 2.5e38}) // ~3.54e38 > float32 max
+	require.NoError(t, err)
+	require.False(t, math.IsInf(got, 0))
+	require.InEpsilon(t, 2.5e38*math.Sqrt2, got, 1e-6)
+
+	// The reviewer's control: a single 1e20 element has a finite L2 norm (l2_distance to origin
+	// separately errors on the float32-squared intermediate; the norm does not share that contract).
+	got, err = L2Norm[float32]([]float32{1e20, 0})
+	require.NoError(t, err)
+	require.InEpsilon(t, 1e20, got, 1e-6)
+
+	// Ordinary VECF32 norms are exact.
+	got, err = L2Norm[float32]([]float32{3, 4})
+	require.NoError(t, err)
+	require.EqualValues(t, 5, got)
+	got, err = L1Norm[float32]([]float32{3, -4})
+	require.NoError(t, err)
+	require.EqualValues(t, 7, got)
+
+	// VECF64 norms are computed in the float64 domain and stay finite here (f64 is unchanged).
+	got, err = L2Norm[float64]([]float64{1e300, 1e300})
+	require.NoError(t, err)
+	require.False(t, math.IsInf(got, 0))
+	got, err = L1Norm[float64]([]float64{1e300, 1e300})
+	require.NoError(t, err)
+	require.False(t, math.IsInf(got, 0))
+}
+
+// BenchmarkF32Norm covers the VECF32 norm path the #29083 fix rewrote from a float32 blas
+// reduction to a float64 accumulation. The loop is faster at every width measured (largest at
+// small dims, where blas32.Nrm2's per-element scaling branch dominates) and never overflows.
+func BenchmarkF32Norm(b *testing.B) {
+	for _, n := range []int{2, 128, 1024} {
+		v := make([]float32, n)
+		for i := range v {
+			v[i] = float32(i%13) - 6.5
+		}
+		var sink float64
+		b.Run("L1/"+strconv.Itoa(n), func(b *testing.B) {
+			for i := 0; i < b.N; i++ {
+				sink, _ = L1Norm[float32](v)
+			}
+		})
+		b.Run("L2/"+strconv.Itoa(n), func(b *testing.B) {
+			for i := 0; i < b.N; i++ {
+				sink, _ = L2Norm[float32](v)
+			}
+		})
+		_ = sink
+	}
 }

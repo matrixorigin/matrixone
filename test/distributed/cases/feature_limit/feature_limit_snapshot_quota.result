@@ -1,3 +1,7 @@
+drop snapshot if exists fl_snap_sys_first;
+drop snapshot if exists fl_snap_sys_old;
+drop snapshot if exists fl_snap_sys_disabled;
+drop snapshot if exists fl_snap_sys_second;
 drop account if exists fl_snap_acc;
 create account fl_snap_acc admin_name = 'admin' identified by '111';
 select mo_feature_registry_upsert(
@@ -56,4 +60,49 @@ drop snapshot spa2;
 drop snapshot spa4;
 drop table t;
 drop database fl_snap_db;
+select mo_feature_limit_upsert(@fl_snap_id, 'snapshot', 'account', 0);
+mo_feature_limit_upsert(@fl_snap_id, snapshot, account, 0)
+{\n  "now": {\n    "account_id": 1,\n    "feature_code": "SNAPSHOT",\n    "scope": "account",\n    "quota": 0\n  },\n  "old": {\n    "account_id": 1,\n    "feature_code": "SNAPSHOT",\n    "scope": "account",\n    "quota": 2\n  }\n}\n
+create snapshot fl_snap_sys_disabled for account fl_snap_acc;
+internal error: feature SNAPSHOT with scope account has disabled for account fl_snap_acc
+select count(*) from mo_catalog.mo_snapshots where sname = 'fl_snap_sys_disabled';
+count(*)
+0
+select mo_feature_limit_upsert(@fl_snap_id, 'snapshot', 'account', 1);
+mo_feature_limit_upsert(@fl_snap_id, snapshot, account, 1)
+{\n  "now": {\n    "account_id": 1,\n    "feature_code": "SNAPSHOT",\n    "scope": "account",\n    "quota": 1\n  },\n  "old": {\n    "account_id": 1,\n    "feature_code": "SNAPSHOT",\n    "scope": "account",\n    "quota": 0\n  }\n}\n
+create snapshot fl_snap_sys_first for account fl_snap_acc;
+select obj_id = @fl_snap_id from mo_catalog.mo_snapshots where sname = 'fl_snap_sys_first';
+obj_id = @fl_snap_id
+1
+create snapshot fl_snap_tenant_second for account;
+internal error: feature SNAPSHOT with scope account has reached the limit of 1
+select count(*) from mo_catalog.mo_snapshots where sname = 'fl_snap_tenant_second';
+count(*)
+0
+drop snapshot fl_snap_sys_first;
+create snapshot fl_snap_tenant_first for account;
+create snapshot fl_snap_sys_second for account fl_snap_acc;
+internal error: feature SNAPSHOT with scope account has reached the limit of 1
+select count(*) from mo_catalog.mo_snapshots where sname = 'fl_snap_sys_second';
+count(*)
+0
+drop snapshot fl_snap_tenant_first;
+create snapshot fl_snap_sys_old for account fl_snap_acc;
+set @fl_snap_old_id = @fl_snap_id;
+drop account fl_snap_acc;
+create account fl_snap_acc admin_name = 'admin' identified by '111';
+set @fl_snap_id = (select account_id from mo_catalog.mo_account where account_name = 'fl_snap_acc');
+select @fl_snap_id != @fl_snap_old_id;
+@fl_snap_id != @fl_snap_old_id
+1
+select mo_feature_limit_upsert(@fl_snap_id, 'snapshot', 'account', 1);
+mo_feature_limit_upsert(@fl_snap_id, snapshot, account, 1)
+{\n  "now": {\n    "account_id": 2,\n    "feature_code": "SNAPSHOT",\n    "scope": "account",\n    "quota": 1\n  },\n  "old": null\n}\n
+create snapshot fl_snap_new_account for account;
+select count(*) from mo_catalog.mo_snapshots where sname = 'fl_snap_new_account';
+count(*)
+1
+drop snapshot fl_snap_new_account;
+drop snapshot fl_snap_sys_old;
 drop account fl_snap_acc;

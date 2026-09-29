@@ -847,9 +847,10 @@ const (
 	// logical payload size and currently-supported free-space contract.
 	JSON_STORAGE_SIZE = 579
 	JSON_STORAGE_FREE = 580
+	JSON_DEPTH        = 584
 	// JSON_AGG_TO_DOUBLE is the MySQL warning-conversion boundary used by
 	// numeric aggregates (SUM/AVG/VAR_*/STDDEV_*). It is not public SQL.
-	JSON_AGG_TO_DOUBLE = 584
+	JSON_AGG_TO_DOUBLE = 585
 
 	EXTRACTVALUE            = 581
 	UPDATEXML               = 582
@@ -857,7 +858,7 @@ const (
 
 	// FUNCTION_END_NUMBER is not a function, just a flag to record the max number of function.
 	// TODO: every one should put the new function id in front of this one if you want to make a new function.
-	FUNCTION_END_NUMBER = 585
+	FUNCTION_END_NUMBER = 586
 )
 
 // functionIdRegister is what function we have registered already.
@@ -1162,6 +1163,7 @@ var functionIdRegister = map[string]int32{
 	"json_storage_size":              JSON_STORAGE_SIZE,
 	"json_agg_to_double":             JSON_AGG_TO_DOUBLE,
 	"json_storage_free":              JSON_STORAGE_FREE,
+	"json_depth":                     JSON_DEPTH,
 	"json_contains":                  JSON_CONTAINS,
 	"json_contains_path":             JSON_CONTAINS_PATH,
 	"json_merge":                     JSON_MERGE_PRESERVE,
