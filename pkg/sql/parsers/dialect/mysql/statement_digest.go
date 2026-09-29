@@ -794,7 +794,7 @@ func digestNullIsColumnAttribute(tokens []digestToken) bool {
 			// DEFAULT can precede a NULL/NOT NULL column attribute. Its own
 			// pending value (including the right operand of DEFAULT 1 + NULL)
 			// is still an expression NULL, not an attribute.
-			if expressionEnd <= i || digestTokenStartsExpression(tokens[expressionEnd]) ||
+			if expressionEnd <= i || tokens[expressionEnd].text == "NULL" || digestTokenStartsExpression(tokens[expressionEnd]) ||
 				tokens[expressionEnd].text == "THEN" || tokens[expressionEnd].text == "ELSE" {
 				return false
 			}
