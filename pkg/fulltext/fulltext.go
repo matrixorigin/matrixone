@@ -484,7 +484,9 @@ func (p *Pattern) Eval(accum *SearchAccum, docvec []uint8, docLen int64, aggcnt 
 
 		return result, nil
 	case PHRASE:
-		// all children are TEXT and AND operations
+		// children are TEXT or STAR leaves, AND'd together; SqlPhrase enforces their relative
+		// positions, so here it is a presence-AND across the leaves (a STAR leaf evaluates through
+		// EvalLeaf like a TEXT one).
 		for i, c := range p.Children {
 			child_result, err := c.Eval(accum, docvec, docLen, aggcnt, weight, nil)
 			if err != nil {
@@ -535,8 +537,11 @@ func (p *Pattern) Validate() error {
 		}
 	case PHRASE:
 		for _, c := range p.Children {
-			if c.Operator != TEXT {
-				return moerr.NewInternalErrorNoCtx("PHRASE can only have text Pattern")
+			// SqlPhrase resolves a STAR child as a positional prefix_eq, so a phrase may hold a STAR
+			// -- a short CJK tail (a prefix of a stored trigram) or a short query word decomposes into
+			// one (#29271). Reject only nested/compound operators.
+			if c.Operator != TEXT && c.Operator != STAR {
+				return moerr.NewInternalErrorNoCtx("PHRASE can only have text or star Pattern")
 			}
 		}
 	case GROUP:
@@ -725,10 +730,13 @@ func jiebaStarPhraseChildren(stem string) ([]*Pattern, error) {
 	return children, nil
 }
 
-// ParsePhrase splits a quoted-phrase body into TEXT children for a PHRASE
-// node. With parser="gojieba" the phrase is segmented through jieba so the
-// children match how the index stores Chinese words; otherwise the legacy
-// whitespace split is used.
+// ParsePhrase splits a quoted-phrase body into children for a PHRASE node. With
+// parser="gojieba" the phrase is segmented through jieba; otherwise it is run
+// through SimpleTokenizer -- the same tokenizer the index build uses -- so the
+// children match how the index stored the phrase: CJK trigrams, Latin words
+// capped at 23 bytes, and splits on hyphen/apostrophe. The legacy whitespace-only
+// split looked up the raw phrase string, which is never an indexed token, so a
+// CJK / long-Latin / hyphenated phrase matched nothing (#29271).
 //
 // Children carry BytePos as Position so SqlPhrase's positional JOIN
 // (kw[i].pos - kw[0].pos = ps[i].Position - ps[0].Position) is consistent
@@ -738,29 +746,10 @@ func ParsePhrase(pattern string, parser string) ([]*Pattern, error) {
 		return parsePhraseJieba(pattern)
 	}
 
-	// phrase here
-	offset := int32(0)
-	isspace := false
-	var children []*Pattern
-
-	for pos, r := range pattern {
-		if r == ' ' {
-			if isspace {
-				continue
-			} else {
-				children = append(children, &Pattern{Text: string(pattern[offset:pos]), Operator: TEXT, Position: offset})
-			}
-			isspace = true
-		} else {
-			if isspace {
-				// start of the word
-				offset = int32(pos)
-			}
-			isspace = false
-		}
+	children, err := simpleTokenizePatterns(pattern, parser, true)
+	if err != nil {
+		return nil, err
 	}
-
-	children = append(children, &Pattern{Text: string(pattern[offset:]), Operator: TEXT, Position: offset})
 	ret := []*Pattern{{Text: pattern, Operator: PHRASE, Children: children}}
 
 	// assign index
@@ -770,7 +759,6 @@ func ParsePhrase(pattern string, parser string) ([]*Pattern, error) {
 	}
 
 	return ret, nil
-
 }
 
 // parsePhraseJieba tokenizes a quoted-phrase body with gojieba and builds
@@ -1037,6 +1025,35 @@ func ParsePatternInNLMode(pattern string, parser string) ([]*Pattern, error) {
 		return parsePatternInNLModeJieba(pattern)
 	}
 
+	list, err := simpleTokenizePatterns(pattern, parser, false)
+	if err != nil {
+		return nil, err
+	}
+
+	// assign index
+	idx := int32(0)
+	for _, p := range list {
+		assignPatternIndex(p, &idx)
+	}
+
+	return list, nil
+}
+
+// simpleTokenizePatterns decomposes pattern into positioned TEXT/STAR patterns with SimpleTokenizer,
+// the same tokenizer the index build (fulltext_index_tokenize) uses, so the emitted words and byte
+// Positions match the stored tokens. It is shared by natural-language term expansion and quoted-phrase
+// decomposition (#29271): a quoted BOOLEAN phrase on the ""/default/ngram parser must be broken into
+// the same CJK trigrams, 23-byte-capped Latin tokens, and hyphen/apostrophe splits the index holds,
+// instead of a raw whole-string `word =` lookup that never matches an indexed token. Indices are not
+// assigned here -- the caller wraps the result (a flat OR list for NL, a PHRASE node for a phrase)
+// and assigns them.
+//
+// forPhrase changes how a SHORT (< 3-rune) token is matched. NL mode prefix-searches a short query
+// word (STAR). A phrase must instead reproduce the STORED token: outputLatin stores a Latin word
+// whole, so a short Latin token is matched EXACTLY (TEXT) -- prefix there would falsely match a
+// longer word for a single-word phrase, which has no positional anchor to pin it. A short CJK token
+// is only ever a prefix of a stored trigram (e.g. 苹果 of 苹果甜), so it stays a STAR either way.
+func simpleTokenizePatterns(pattern string, parser string, forPhrase bool) ([]*Pattern, error) {
 	runeSlice := []rune(pattern)
 	ngram_size := 3
 	// if number of character is small than Ngram size = 3, do prefix search.
@@ -1045,6 +1062,9 @@ func ParsePatternInNLMode(pattern string, parser string) ([]*Pattern, error) {
 	// stored token instead of prefix-searching the raw string (#29296). Boolean mode already
 	// lowercases its whole pattern.
 	if len(runeSlice) < ngram_size {
+		if forPhrase && !isAllCJK(runeSlice) {
+			return []*Pattern{{Text: normalizeShortPattern(pattern, parser), Operator: TEXT}}, nil
+		}
 		return []*Pattern{{Text: normalizeShortPattern(pattern, parser) + "*", Operator: STAR}}, nil
 	}
 
@@ -1098,7 +1118,12 @@ func ParsePatternInNLMode(pattern string, parser string) ([]*Pattern, error) {
 				}
 			}
 			if !found {
-				list = append(list, &Pattern{Text: word + "*", Operator: STAR, Position: t.BytePos})
+				if forPhrase && !isAllCJK(runeSlice) {
+					// A short Latin token (no overlapping trigram) is stored whole; match it exactly.
+					list = append(list, &Pattern{Text: word, Operator: TEXT, Position: t.BytePos})
+				} else {
+					list = append(list, &Pattern{Text: word + "*", Operator: STAR, Position: t.BytePos})
+				}
 			}
 		} else {
 			list = append(list, &Pattern{Text: word, Operator: TEXT, Position: t.BytePos})
@@ -1111,12 +1136,6 @@ func ParsePatternInNLMode(pattern string, parser string) ([]*Pattern, error) {
 
 	if len(list) == 0 {
 		return nil, moerr.NewInternalErrorNoCtx("Invalid input search string.  search string converted to empty pattern")
-	}
-
-	// assign index
-	idx := int32(0)
-	for _, p := range list {
-		assignPatternIndex(p, &idx)
 	}
 
 	return list, nil

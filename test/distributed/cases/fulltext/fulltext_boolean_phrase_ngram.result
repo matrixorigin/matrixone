@@ -1,0 +1,42 @@
+set experimental_fulltext_index = 1;
+drop database if exists ft_bool_phrase;
+create database ft_bool_phrase;
+use ft_bool_phrase;
+create table ft(id int primary key, body varchar(200));
+insert into ft values
+(1, '苹果香蕉'),
+(2, '红苹果甜'),
+(3, 'full-text search'),
+(4, 'Ma''trix Origin'),
+(5, 'abcdefghijklmnopqrstuvwxyz'),
+(6, '苹果香瓜');
+create fulltext index fi on ft(body) with parser ngram;
+select id from ft where match(body) against('"苹果香蕉"' in boolean mode) order by id;
+➤ id[4,32,0]  𝄀
+1
+select id from ft where match(body) against('"苹果"' in boolean mode) order by id;
+➤ id[4,32,0]  𝄀
+1  𝄀
+2  𝄀
+6
+select id from ft where match(body) against('"full-text search"' in boolean mode) order by id;
+➤ id[4,32,0]  𝄀
+3
+select id from ft where match(body) against('"Ma''trix Origin"' in boolean mode) order by id;
+➤ id[4,32,0]  𝄀
+4
+select id from ft where match(body) against('"abcdefghijklmnopqrstuvwxyz"' in boolean mode) order by id;
+➤ id[4,32,0]  𝄀
+5
+select id from ft where match(body) against('苹果香蕉' in natural language mode) order by id;
+➤ id[4,32,0]  𝄀
+1
+select id from ft where match(body) against('+苹果香蕉' in boolean mode) order by id;
+➤ id[4,32,0]  𝄀
+1
+select id from ft where match(body) against('+苹果' in boolean mode) order by id;
+➤ id[4,32,0]  𝄀
+1  𝄀
+2  𝄀
+6
+drop database ft_bool_phrase;
