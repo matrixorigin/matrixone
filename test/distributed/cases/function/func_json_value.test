@@ -22,7 +22,7 @@ select json_value('{"d":"2024-01-02"}', '$.d' returning date) as d;
 select json_value('{}', '$.a' returning unsigned default 5 on empty default 7 on error) as n;
 select json_value('{"a":"bad"}', '$.a' returning unsigned default 5 on empty default 7 on error) as n;
 select json_value('{"a":1,"b":2}', '$.*' default 'empty' on empty default 'error' on error) as s;
-select json_value('not-json', '$' returning json default '5' on empty default '7' on error) as j;
+select json_value('{"a":1,"b":2}', '$.*' returning json default '5' on empty default '7' on error) as j;
 select json_value('{}', '$.a' returning json default '5' on empty default '7' on error) as j;
 
 create table json_value_responses (id int, doc varchar(100));

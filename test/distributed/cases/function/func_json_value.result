@@ -43,7 +43,7 @@ n
 select json_value('{"a":1,"b":2}', '$.*' default 'empty' on empty default 'error' on error) as s;
 s
 error
-select json_value('not-json', '$' returning json default '5' on empty default '7' on error) as j;
+select json_value('{"a":1,"b":2}', '$.*' returning json default '5' on empty default '7' on error) as j;
 j
 7
 select json_value('{}', '$.a' returning json default '5' on empty default '7' on error) as j;
