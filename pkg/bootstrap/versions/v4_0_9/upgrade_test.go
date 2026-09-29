@@ -19,6 +19,7 @@ import (
 
 	"github.com/matrixorigin/matrixone/pkg/bootstrap/versions"
 	"github.com/matrixorigin/matrixone/pkg/catalog"
+	"github.com/matrixorigin/matrixone/pkg/defines"
 	"github.com/stretchr/testify/require"
 )
 
@@ -29,9 +30,15 @@ func TestSnapshotQuotaIndexUpgrade(t *testing.T) {
 	require.False(t, metadata.CanDirectUpgrade("4.0.6"))
 	require.Equal(t, versions.Yes, metadata.UpgradeCluster)
 	require.Equal(t, versions.No, metadata.UpgradeTenant)
-	require.Len(t, clusterUpgEntries, 1)
-	entry := clusterUpgEntries[0]
-	require.Equal(t, catalog.MO_SNAPSHOTS, entry.TableName)
-	require.Equal(t, versions.ADD_INDEX, entry.UpgType)
-	require.Contains(t, entry.UpgSql, "(account_name, level, obj_id, kind)")
+	require.Len(t, clusterUpgEntries, 3)
+	indexEntry := clusterUpgEntries[0]
+	require.Equal(t, catalog.MO_SNAPSHOTS, indexEntry.TableName)
+	require.Equal(t, versions.ADD_INDEX, indexEntry.UpgType)
+	require.Contains(t, indexEntry.UpgSql, "(account_name, level, obj_id, kind)")
+	for _, entry := range clusterUpgEntries[1:] {
+		require.Equal(t, catalog.MO_CDC_WATERMARK, entry.TableName)
+		require.Equal(t, versions.ADD_COLUMN, entry.UpgType)
+		require.Contains(t, entry.UpgSql, "alter table mo_catalog.mo_cdc_watermark add column")
+		require.Equal(t, int64(defines.MORPCVersion97), entry.RequiredProtocolVersion)
+	}
 }
