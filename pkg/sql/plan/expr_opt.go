@@ -94,7 +94,7 @@ func (builder *QueryBuilder) decimalFloatPeerValue(expr *plan.Expr) (float64, bo
 			}
 			return true
 		}
-		return current.GetLit() != nil
+		return current.GetLit() != nil || current.GetT() != nil
 	}
 	if !substitute(copy) || !rule.IsConstant(copy, false) {
 		return 0, false

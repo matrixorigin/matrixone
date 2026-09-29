@@ -269,6 +269,99 @@ deallocate prepare abs_peer;
 deallocate prepare derived_peer;
 deallocate prepare derived_abs_peer;
 deallocate prepare second_peer;
+set @v = cast(54321 as double);
+prepare cast_peer from 'select count(*) from t where d = cast(? as double)';
+explain analyze force execute cast_peer using @v;
+➤ tp query plan[12,-1,0]  𝄀
+Project  𝄀
+  Analyze: timeConsumed=0ms waitTime=0ms inputRows=1 outputRows=1 (min=1, max=1) InputSize=8 bytes OutputSize=8 bytes ReadSize=0 bytes|0 bytes|0 bytes MemorySize=8 bytes (min=8 bytes, max=8 bytes)  𝄀
+  ->  Aggregate  𝄀
+        Analyze: timeConsumed=0ms waitTime=0ms inputRows=1 outputRows=1 (min=1, max=1) InputSize=8 bytes OutputSize=8 bytes ReadSize=0 bytes|0 bytes|0 bytes MemorySize=64.00 KiB (min=64.00 KiB, max=64.00 KiB)  𝄀
+        Aggregate Functions: starcount(1)  𝄀
+        ->  Table Scan on issue_29514_decimal_expr.t  𝄀
+              Analyze: timeConsumed=0ms waitTime=0ms inputBlocks=1 inputRows=8192 outputRows=1 (min=1, max=1) InputSize=64.00 KiB OutputSize=8 bytes ReadSize=35.21 KiB|0 bytes|0 bytes MemorySize=72.01 KiB (min=72.01 KiB, max=72.01 KiB)  𝄀
+              Filter Cond: (t.d = cast(cast(cast('54321' AS DOUBLE) AS DOUBLE) AS DECIMAL64(12, 2)))  𝄀
+              Block Filter Cond: (t.d = cast(cast(cast('54321' AS DOUBLE) AS DOUBLE) AS DECIMAL64(12, 2)))
+execute cast_peer using @v;
+➤ count(*)[-5,64,0]  𝄀
+1
+prepare scalar_cast_peer from 'select count(*) from t where d = (select cast(? as double))';
+explain analyze force execute scalar_cast_peer using @v;
+➤ tp query plan[12,-1,0]  𝄀
+Project  𝄀
+  Analyze: timeConsumed=0ms waitTime=0ms inputRows=1 outputRows=1 (min=1, max=1) InputSize=8 bytes OutputSize=8 bytes ReadSize=0 bytes|0 bytes|0 bytes MemorySize=8 bytes (min=8 bytes, max=8 bytes)  𝄀
+  ->  Aggregate  𝄀
+        Analyze: timeConsumed=0ms waitTime=0ms inputRows=1 outputRows=1 (min=1, max=1) InputSize=8 bytes OutputSize=8 bytes ReadSize=0 bytes|0 bytes|0 bytes MemorySize=64.00 KiB (min=64.00 KiB, max=64.00 KiB)  𝄀
+        Aggregate Functions: starcount(1)  𝄀
+        ->  Table Scan on issue_29514_decimal_expr.t  𝄀
+              Analyze: timeConsumed=0ms waitTime=0ms inputBlocks=1 inputRows=8192 outputRows=1 (min=1, max=1) InputSize=64.00 KiB OutputSize=8 bytes ReadSize=35.21 KiB|0 bytes|0 bytes MemorySize=72.01 KiB (min=72.01 KiB, max=72.01 KiB)  𝄀
+              Filter Cond: (t.d = cast(cast(cast('54321' AS DOUBLE) AS DOUBLE) AS DECIMAL64(12, 2)))  𝄀
+              Block Filter Cond: (t.d = cast(cast(cast('54321' AS DOUBLE) AS DOUBLE) AS DECIMAL64(12, 2)))
+execute scalar_cast_peer using @v;
+➤ count(*)[-5,64,0]  𝄀
+1
+prepare derived_cast_peer from 'select count(*) from t join (select cast(? as double) as v) x on t.d = x.v';
+explain analyze force execute derived_cast_peer using @v;
+➤ tp query plan[12,-1,0]  𝄀
+Project  𝄀
+  Analyze: timeConsumed=0ms waitTime=0ms inputRows=1 outputRows=1 (min=1, max=1) InputSize=8 bytes OutputSize=8 bytes ReadSize=0 bytes|0 bytes|0 bytes MemorySize=8 bytes (min=8 bytes, max=8 bytes)  𝄀
+  ->  Aggregate  𝄀
+        Analyze: timeConsumed=0ms waitTime=0ms inputRows=1 outputRows=1 (min=1, max=1) InputSize=0 bytes OutputSize=8 bytes ReadSize=0 bytes|0 bytes|0 bytes MemorySize=64.00 KiB (min=64.00 KiB, max=64.00 KiB)  𝄀
+        Aggregate Functions: starcount(1)  𝄀
+        ->  Join  𝄀
+              Analyze: timeConsumed=0ms waitTime=0ms inputRows=2 outputRows=1 (min=1, max=1) InputSize=16 bytes OutputSize=0 bytes ReadSize=0 bytes|0 bytes|0 bytes MemorySize=32.14 KiB (min=16.06 KiB, max=16.08 KiB)  𝄀
+              Join Type: INNER  𝄀
+              Join Cond: (t.d = cast(x.v AS DECIMAL64(12, 2)))  𝄀
+              Runtime Filter Build: #[-1,0]  𝄀
+              ->  Table Scan on issue_29514_decimal_expr.t  𝄀
+                    Analyze: timeConsumed=0ms waitTime=0ms inputBlocks=1 inputRows=8192 outputRows=1 (min=1, max=1) InputSize=64.00 KiB OutputSize=8 bytes ReadSize=35.21 KiB|0 bytes|0 bytes MemorySize=72.01 KiB (min=72.01 KiB, max=72.01 KiB)  𝄀
+                    Runtime Filter Probe: t.d  𝄀
+              ->  Project  𝄀
+                    Analyze: timeConsumed=0ms waitTime=0ms inputRows=1 outputRows=1 (min=1, max=1) InputSize=8 bytes OutputSize=8 bytes ReadSize=0 bytes|0 bytes|0 bytes MemorySize=8 bytes (min=8 bytes, max=8 bytes)  𝄀
+                    ->  Values Scan "*VALUES*"   𝄀
+                          Analyze: timeConsumed=0ms waitTime=0ms inputRows=1 outputRows=1 (min=1, max=1) InputSize=0 bytes OutputSize=8 bytes ReadSize=0 bytes|0 bytes|0 bytes MemorySize=0 bytes (min=0 bytes, max=0 bytes)
+execute derived_cast_peer using @v;
+➤ count(*)[-5,64,0]  𝄀
+1
+prepare precision_cast_peer from 'select count(*) from t where d = cast(? as double(5,0))';
+execute precision_cast_peer using @v;
+➤ count(*)[-5,64,0]  𝄀
+1
+set @v = cast(0.104 as double);
+execute cast_peer using @v;
+➤ count(*)[-5,64,0]  𝄀
+0
+execute scalar_cast_peer using @v;
+➤ count(*)[-5,64,0]  𝄀
+0
+execute derived_cast_peer using @v;
+➤ count(*)[-5,64,0]  𝄀
+0
+execute precision_cast_peer using @v;
+➤ count(*)[-5,64,0]  𝄀
+0
+set @v = null;
+execute cast_peer using @v;
+➤ count(*)[-5,64,0]  𝄀
+0
+execute scalar_cast_peer using @v;
+➤ count(*)[-5,64,0]  𝄀
+0
+execute derived_cast_peer using @v;
+➤ count(*)[-5,64,0]  𝄀
+0
+set @v = '54321junk';
+execute cast_peer using @v;
+➤ count(*)[-5,64,0]  𝄀
+1
+set @v = 'abc';
+execute cast_peer using @v;
+➤ count(*)[-5,64,0]  𝄀
+0
+deallocate prepare cast_peer;
+deallocate prepare scalar_cast_peer;
+deallocate prepare derived_cast_peer;
+deallocate prepare precision_cast_peer;
 create table wide(d decimal(20,0));
 insert into wide values (9007199254740992), (9007199254740993);
 select count(*) from wide where d = (select cast(9007199254740992 as double));
@@ -288,4 +381,10 @@ execute wide_derived_peer using @v;
 ➤ count(*)[-5,64,0]  𝄀
 2
 deallocate prepare wide_derived_peer;
+set @v = cast(9007199254740992 as double);
+prepare wide_cast_peer from 'select count(*) from wide where d = cast(? as double)';
+execute wide_cast_peer using @v;
+➤ count(*)[-5,64,0]  𝄀
+2
+deallocate prepare wide_cast_peer;
 drop database issue_29514_decimal_expr;

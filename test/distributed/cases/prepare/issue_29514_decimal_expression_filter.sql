@@ -74,6 +74,40 @@ deallocate prepare derived_peer;
 deallocate prepare derived_abs_peer;
 deallocate prepare second_peer;
 
+-- #29516: the explicit CAST type argument must participate in safe folding.
+set @v = cast(54321 as double);
+prepare cast_peer from 'select count(*) from t where d = cast(? as double)';
+-- @ignore:0
+explain analyze force execute cast_peer using @v;
+execute cast_peer using @v;
+prepare scalar_cast_peer from 'select count(*) from t where d = (select cast(? as double))';
+-- @ignore:0
+explain analyze force execute scalar_cast_peer using @v;
+execute scalar_cast_peer using @v;
+prepare derived_cast_peer from 'select count(*) from t join (select cast(? as double) as v) x on t.d = x.v';
+-- @ignore:0
+explain analyze force execute derived_cast_peer using @v;
+execute derived_cast_peer using @v;
+prepare precision_cast_peer from 'select count(*) from t where d = cast(? as double(5,0))';
+execute precision_cast_peer using @v;
+set @v = cast(0.104 as double);
+execute cast_peer using @v;
+execute scalar_cast_peer using @v;
+execute derived_cast_peer using @v;
+execute precision_cast_peer using @v;
+set @v = null;
+execute cast_peer using @v;
+execute scalar_cast_peer using @v;
+execute derived_cast_peer using @v;
+set @v = '54321junk';
+execute cast_peer using @v;
+set @v = 'abc';
+execute cast_peer using @v;
+deallocate prepare cast_peer;
+deallocate prepare scalar_cast_peer;
+deallocate prepare derived_cast_peer;
+deallocate prepare precision_cast_peer;
+
 create table wide(d decimal(20,0));
 insert into wide values (9007199254740992), (9007199254740993);
 select count(*) from wide where d = (select cast(9007199254740992 as double));
@@ -85,5 +119,9 @@ deallocate prepare wide_scalar_peer;
 prepare wide_derived_peer from 'select count(*) from wide join (select ? as v) x on wide.d = x.v';
 execute wide_derived_peer using @v;
 deallocate prepare wide_derived_peer;
+set @v = cast(9007199254740992 as double);
+prepare wide_cast_peer from 'select count(*) from wide where d = cast(? as double)';
+execute wide_cast_peer using @v;
+deallocate prepare wide_cast_peer;
 
 drop database issue_29514_decimal_expr;
