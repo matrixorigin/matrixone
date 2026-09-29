@@ -2370,6 +2370,12 @@ func validateRemoteExpressionPipelineProtocol(
 			"corrected IP function semantics require MORPC protocol version 72",
 		)
 	}
+	if features.JSONValueContract &&
+		(!hasProtocolVersion || protocolVersion < defines.MORPCVersion101) {
+		return moerr.NewNotSupportedNoCtx(
+			"seven-argument JSON_VALUE plans require MORPC protocol version 101",
+		)
+	}
 	if features.ExpressionResultMetadataContracts || features.TOBase64ResultContracts || features.IPFunctionResultContracts {
 		if !hasProtocolVersion || protocolVersion < defines.MORPCVersion86 {
 			return moerr.NewNotSupportedNoCtx(
