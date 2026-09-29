@@ -1,6 +1,6 @@
 # Embedded Sirius migration
 
-Design version: 3.
+Design version: 2.
 
 Owner: MatrixOne query execution.
 
@@ -179,42 +179,6 @@ worker. Include in-flight publication in capacity; wakeups are durable and
 cancellation-aware. Never collect the full result and only then expose a stream.
 MO reader prefetch remains bounded by its existing pipeline and the native
 input credit window.
-
-### Bounded native execution details
-
-The follow-up split names the remaining closures C through I: C is bounded
-native input, D the native result sink, E the CGo/service/SDK bridge, F the
-real MO reader/result path, H default cutover, and I sidecar retirement. G,
-protected direct-TAE admission, is deferred to a separate design. C/D/E
-implementation can overlap with frozen interfaces; D readiness requires
-merged C, and E readiness requires merged D. F follows E. H requires the
-MO-reader route and every numeric/performance gate; I follows H.
-
-- MO source units are granted native input credit before conversion and copy.
-  The producer cannot retain whole-table state while Sirius is stalled.
-- GPU tasks that cannot obtain their full converter reservation stay in the
-  scheduler's existing queue. Admission never clamps the mandatory floor
-  below required bytes; observed retry floors are also respected. New
-  task/device events wake the scheduler, with a bounded 10 ms backstop for
-  external cuCascade memory retirement, which has no public subscription API.
-- Each terminal producer obtains a query-wide ticket before claiming input.
-  A dedicated bounded publisher owns completed GPU cursors and serializes
-  result slices in claim order. It may wait for output credits; task-creator
-  and GPU workers do not wait for the Go consumer. Ticket retirement follows
-  GPU-owner retirement, not enqueueing. The bound is `max(2, 2*S)` cursors.
-- The 64 MiB result window includes allocator-rounded storage, descriptors,
-  borrowed batches, and codec scratch. D2H writes into segmented native
-  storage without another GPU mirror. The 32 MiB target leaves room for
-  physical rounding/scratch; one row that cannot fit is rejected explicitly.
-  A borrowed result remains valid through cancellation and makes query close
-  return busy until release. EOF follows both execution and publisher drain.
-
-PR evidence must apply to each PR's own committed state. Combined working-tree
-tests are integration evidence only. Sirius verification uses incremental
-host builds in Pixi; containers are not part of this workflow. SDK manifests
-record source revision/dirty state and hashes of the verified consumer/link
-closure. Development artifacts are explicit opt-in; release artifacts must
-come from a clean merged Sirius revision.
 
 ## 6. Lifecycle, failure and recovery
 

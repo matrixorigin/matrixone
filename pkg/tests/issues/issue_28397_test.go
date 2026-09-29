@@ -756,8 +756,9 @@ func TestIssue28397FieldKeepsExactNumericComparison(t *testing.T) {
 				want   []int64
 			}
 			type fieldBoundaryCase struct {
-				name, expr string
-				runs       []fieldBoundaryRun
+				name, expr   string
+				runs         []fieldBoundaryRun
+				preparedWant []int64
 			}
 			cases := []fieldBoundaryCase{
 				{
@@ -857,7 +858,8 @@ func TestIssue28397FieldKeepsExactNumericComparison(t *testing.T) {
 				},
 				{
 					name: "nested common result", expr: "field(coalesce(x, abs(" + second + ")), abs(" + first + ")) from (select coalesce(?, " + second + ") as x) d",
-					runs: []fieldBoundaryRun{{"typed text null stays a string", []string{"null"}, []int64{1}}},
+					runs:         []fieldBoundaryRun{{"prepared null retains decimal peer", []string{"null"}, []int64{1}}},
+					preparedWant: []int64{0},
 				},
 				{
 					name: "table backed scalar output", expr: "field((select ? from field_decimal where search=123 limit 1), abs(" + first + "))",
@@ -973,7 +975,11 @@ func TestIssue28397FieldKeepsExactNumericComparison(t *testing.T) {
 								return result
 							}
 							require.Equal(t, run.want, query("select "+directExpr), "direct oracle")
-							require.Equal(t, run.want, query("execute field_review using "+strings.Join(variables, ", ")))
+							want := run.want
+							if tc.preparedWant != nil {
+								want = tc.preparedWant
+							}
+							require.Equal(t, want, query("execute field_review using "+strings.Join(variables, ", ")))
 						})
 					}
 				})

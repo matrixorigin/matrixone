@@ -63,6 +63,29 @@ func TestEmbeddedMOReadIdentityFallsBackToTableDefinition(t *testing.T) {
 	require.Empty(t, reads[0].Schema)
 }
 
+func TestEmbeddedMOReadRejectsHiddenSuffixWithoutProjection(t *testing.T) {
+	query := embeddedProjectedScanQuery()
+	query.Nodes[0].ProjectList = nil
+	candidate, err := Export(query)
+	require.NoError(t, err)
+	_, err = candidate.EmbeddedMOReads()
+	require.ErrorContains(t, err, "projection to remove hidden columns")
+	_, err = candidate.BuildEmbedded(map[int32]EmbeddedReadBinding{0: {BindingID: 1, Source: EmbeddedReadMO}})
+	require.ErrorContains(t, err, "projection to remove hidden columns")
+
+	// Without hidden columns, the same empty projection describes exactly the
+	// rows MO emits and must remain admissible.
+	query.Nodes[0].TableDef.Cols = query.Nodes[0].TableDef.Cols[:2]
+	candidate, err = Export(query)
+	require.NoError(t, err)
+	reads, err := candidate.EmbeddedMOReads()
+	require.NoError(t, err)
+	require.Len(t, reads[0].Columns, 2)
+	wire, err := candidate.BuildEmbedded(map[int32]EmbeddedReadBinding{0: {BindingID: 1, Source: EmbeddedReadMO}})
+	require.NoError(t, err)
+	require.Len(t, embeddedPlan(t, wire).Relations[0].GetRoot().Input.GetRead().BaseSchema.Names, 2)
+}
+
 func TestEmbeddedTAESourceIsDeferred(t *testing.T) {
 	candidate, err := Export(embeddedProjectedScanQuery())
 	require.NoError(t, err)

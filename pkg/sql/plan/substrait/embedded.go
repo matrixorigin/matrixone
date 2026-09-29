@@ -224,6 +224,12 @@ func embeddedMORead(node *planpb.Node) (EmbeddedMORead, *spb.NamedStruct, error)
 	ordinals := make([]int32, 0, len(visible))
 	outputTypes := make([]planpb.Type, 0, len(visible))
 	if len(node.ProjectList) == 0 {
+		// MO leaves an empty projection untouched, so its scan emits every
+		// TableDef column. Advertising only the visible prefix would mismatch
+		// the native binding when the table has a hidden suffix.
+		if len(visible) != len(node.TableDef.Cols) {
+			return EmbeddedMORead{}, nil, notEligiblef(EligibilityOperator, "embedded MO scan node %d needs a projection to remove hidden columns", node.NodeId)
+		}
 		for ordinal := range visible {
 			ordinals = append(ordinals, int32(ordinal))
 			outputTypes = append(outputTypes, visible[ordinal].Typ)
