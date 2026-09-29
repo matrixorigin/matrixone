@@ -85,3 +85,17 @@ func TestStatementDigestDestinationDoesNotProbeOrdinaryExpression(t *testing.T) 
 	require.NotEmpty(t, data)
 	require.Zero(t, client.calls)
 }
+
+func TestStatementDigestTextDestinationPropagatesProbeCancellation(t *testing.T) {
+	c, client := expressionProtocolTestCompile(t)
+	scope := mysqlStatementDigestTextProtocolTestScope(t, c, "statement_digest_text")
+	ctx, cancel := context.WithCancel(c.proc.Ctx)
+	cancel()
+	c.proc.Ctx = ctx
+
+	data, err := encodeRemoteScope(scope, c.proc)
+	require.ErrorIs(t, err, context.Canceled)
+	require.Empty(t, data)
+	require.Zero(t, client.calls)
+	require.Zero(t, client.releases)
+}
