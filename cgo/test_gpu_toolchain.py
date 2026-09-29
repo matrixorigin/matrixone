@@ -96,12 +96,14 @@ class GPUContractTest(unittest.TestCase):
         )
 
     def test_all_gpu_make_consumers_use_one_pixi_prefix(self):
+        # A legacy CUDA_PATH must never displace the locked Pixi provider.
+        env = dict(self.env, CUDA_PATH="/usr/local/cuda")
         for directory, target in (
             ("cgo", "mo.o"), ("cgo/cuda", "cuda.o"),
             ("cgo/cuvs", "helper.o"), ("cgo/test", "test_add.exe"),
         ):
             with self.subTest(directory=directory):
-                result = self.make(directory, "-B", target)
+                result = self.make(directory, "-B", target, env=env)
                 self.assertEqual(result.returncode, 0, result.stderr)
                 self.assertIn(str(self.prefix / "bin/nvcc"), result.stdout)
                 self.assertIn(str(self.prefix / "bin/x86_64-conda-linux-gnu-c++"), result.stdout)
@@ -171,6 +173,17 @@ class GPUContractTest(unittest.TestCase):
             with self.subTest(directory=directory):
                 clean = self.make(directory, "clean", env=env)
                 self.assertEqual(clean.returncode, 0, clean.stderr)
+                self.assertNotIn("libcuda.so not found", clean.stdout)
+
+    def test_legacy_cgo_entry_points_delegate_to_pixi_aware_owners(self):
+        for name in ("mo-cgo-test", "mo-cgo-test-tags-test"):
+            with self.subTest(name=name):
+                wrapper = (REPO / ".claude/skills/mo-dev/scripts" / name).read_text()
+                self.assertIn(
+                    f'exec "$script_dir/../../../../.agents/skills/mo-dev/scripts/{name}" "$@"',
+                    wrapper,
+                )
+                self.assertNotIn("/usr/local/cuda", wrapper)
 
 
 if __name__ == "__main__":

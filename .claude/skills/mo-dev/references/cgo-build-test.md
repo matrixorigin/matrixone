@@ -335,27 +335,15 @@ cannot erase the evidence before comparison.
 
 GPU support compiles the CUDA-backed vector index algorithms (**CAGRA**, **IVF-PQ**) into `libmo` and turns on the `gpu` Go build tag. Linux x86_64 only. The macOS Makefile branch carries no CUDA flags, so macOS builds are CPU-only. Do not try to enable it on Darwin.
 
-Prerequisites:
-
-1. CUDA toolkit matching the versions pinned by
-   `optools/images/gpu/Dockerfile` and
-   `optools/images/gpu/go_cuda-133_arch-x86_64.yaml`, installed under the path
-   expected by those files. Do not infer an unsupported version range.
-2. cuVS Go bindings installed from the repository's Linux x86_64 environment
-   file and the environment activated so `CONDA_PREFIX` is exported. Prefer the
-   builder stage in `optools/images/gpu/Dockerfile` when a container runtime is
-   available. Building does not require a GPU device; executing GPU workloads
-   requires a compatible NVIDIA host/runtime.
+Pixi is the only supported GPU build provider. The MO-only profile is locked
+under `optools/gpu`; the combined Sirius build uses Sirius's `mo` profile and
+the same activated prefix for both projects. Neither needs a system CUDA
+toolkit. Building does not require a GPU device; executing GPU workloads still
+requires the NVIDIA host driver and device access.
 
 ```bash
-conda env create --name go -f optools/images/gpu/go_cuda-133_arch-x86_64.yaml
-conda activate go
-```
-
-Build:
-
-```bash
-MO_CL_CUDA=1 make -j8
+cd optools/gpu
+pixi run --frozen env MO_CL_CUDA=1 make -C ../.. -j8
 ```
 
 What `MO_CL_CUDA=1` flips:
@@ -363,43 +351,39 @@ What `MO_CL_CUDA=1` flips:
 | Layer | CPU build | GPU build (`MO_CL_CUDA=1`) |
 |-------|-----------|----------------------------|
 | Go build tag | none | `-tags gpu` -- registers CAGRA + IVF-PQ, compiles `*_gpu.go` |
-| `cgo/` compiler | `gcc`/`clang` | `/usr/local/cuda/bin/nvcc` |
+| `cgo/` compiler | `gcc`/`clang` | `$CONDA_PREFIX/bin/nvcc` |
 | `libmo` objects | C objects only | + `cuda/*.o` + `cuvs/*.o` |
 | Runtime sidecar | none | `mocl_kernel64.fatbin` beside `mo-service` |
 | Link flags | `-lusearch_c -lroaring` | + `-lcuvs -lcuvs_c -lcudart -lcuda -lrmm -lstdc++` |
-| Header/lib roots | thirdparties only | + `$CONDA_PREFIX/{include,lib}`, `/usr/local/cuda/...` |
+| Header/lib roots | thirdparties only | + `$CONDA_PREFIX/{include,lib,targets/x86_64-linux/{include,lib}}` |
 
 Guardrails:
 
-- `CONDA_PREFIX env variable not found`: conda env not activated. Run `conda activate <env>` first. This is not a code bug.
+- Missing or mismatched `CONDA_PREFIX`: run the GPU command through `pixi run --frozen`; a bare Conda environment is unsupported.
 - `libmo` is re-linked on every GPU build deliberately because `mo-service` loads `libmo.so` dynamically. A stale `.so` silently runs old C++.
 - Use the top-level build owner. It content-binds and atomically stages
   `mocl_kernel64.fatbin` beside `mo-service`; direct `make -C cgo` does not
   produce a complete distributable GPU generation.
-- Always pass `-j8`. The cuVS/CUDA objects dominate a GPU build and a single-threaded `make` stalls the edit-build-test loop for minutes at a time.
+- Use parallel `make` jobs. The cuVS/CUDA objects dominate a GPU build and a single-threaded `make` stalls the edit-build-test loop for minutes at a time.
 
 The `gpu` tag gates index-plugin registration. CAGRA and IVF-PQ register only under `//go:build gpu` (`pkg/indexplugin/all/all_gpu.go`). On a CPU binary their plugins are absent from the registry, so `CREATE INDEX ... USING ivfpq|cagra` fails cleanly at plan-build with `unsupported index type: <algo>` before hidden table creation. Do not move those imports into `all.go`.
 
 The linked `libmo` must itself be GPU-built:
 
 ```bash
-MO_CL_CUDA=1 make -j8 cgo
+cd optools/gpu
+pixi run --frozen env MO_CL_CUDA=1 make -C ../.. -j8 cgo
 ```
 
-GPU tests need `-tags gpu` plus CUDA search paths. Linux only:
+GPU tests use the CGo wrapper, which sources `cgo/mo-gpu-env`, derives all
+flags from the activated Pixi prefix, and merges the `gpu` build tag with any
+caller-supplied tags. Linux x86_64 only:
 
 ```bash
-gpu_package=./pkg/vectorindex/ivfpq/... # set to the affected GPU algorithm package
-CGO_CFLAGS="-I$(pwd)/cgo -I$(pwd)/thirdparties/install/include -I$CONDA_PREFIX/include -I/usr/local/cuda/include" \
-CGO_LDFLAGS="-L$(pwd)/thirdparties/install/lib -lusearch_c -L$CONDA_PREFIX/lib -lcuvs -lcuvs_c" \
-LD_LIBRARY_PATH="$(pwd)/cgo:$(pwd)/thirdparties/install/lib:$CONDA_PREFIX/lib:/usr/local/cuda/lib64" \
-MO_CUDA_FATBIN_PATH="$(pwd)/mocl_kernel64.fatbin" \
-GOWORK=off go test -mod=readonly -tags gpu \
-  -ldflags="-extldflags '-L$(pwd)/cgo -lmo -L$(pwd)/thirdparties/install/lib -Wl,-rpath,$(pwd)/cgo -Wl,-rpath,$(pwd)/thirdparties/install/lib -Wl,-rpath,$CONDA_PREFIX/lib -Wl,-rpath,/usr/local/cuda/lib64 -fopenmp'" \
-  -v -count=1 -timeout 300s "$gpu_package"
+cd optools/gpu
+pixi run --frozen env MO_CL_CUDA=1 ../../.agents/skills/mo-dev/scripts/mo-cgo-test \
+  -v -count=1 -timeout=300s ./pkg/vectorindex/ivfpq/...
 ```
-
-The authoritative flag source is the Makefile (`CUDA_CFLAGS` / `CUDA_LDFLAGS`), not this snippet. If a GPU link error appears, diff your flags against those lines.
 
 Tag-split test files are a trap: `*_gpu.go` / `//go:build gpu` tests compile only under `-tags gpu`. A plain `go test ./pkg/vectorindex/ivfpq/...` runs `//go:build !gpu` / `*_cpu.go` stubs instead. CPU tests passing does not test the GPU path.
 
@@ -422,7 +406,7 @@ Two consequences for anyone running GPU tests:
    forbidden there for reasons that apply verbatim here, and `git checkout HEAD~1 -- <paths>`
    is worse: it rewrites the index AND the working tree, so an interrupted or mistyped
    invocation silently discards uncommitted work. A GPU build in the worktree needs its own
-   `MO_CL_CUDA=1 make -j8 cgo`, since `cgo/libmo.so` is a build artifact and is not checked
+   Pixi-activated `MO_CL_CUDA=1 make -j8 cgo`, since `cgo/libmo.so` is a build artifact and is not checked
    out with it.
 
    Once the failure is shown to predate your change, find out who owns it before touching it:
