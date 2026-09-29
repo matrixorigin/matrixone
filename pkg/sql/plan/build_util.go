@@ -2398,6 +2398,9 @@ func getTablePriKeyName(priKeyDef *plan.PrimaryKeyDef) string {
 
 // Check whether the table column name is an internal key
 func checkTableColumnNameValid(name string) bool {
+	if strings.HasPrefix(strings.ToLower(name), functionalColumnPrefix) {
+		return false
+	}
 	if name == catalog.Row_ID || name == catalog.CPrimaryKeyColName ||
 		name == catalog.TableTailAttrDeleteRowID || name == catalog.TableTailAttrAborted ||
 		name == catalog.TableTailAttrPKVal || name == catalog.TableTailAttrCommitTs ||

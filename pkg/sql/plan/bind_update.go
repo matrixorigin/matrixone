@@ -457,6 +457,9 @@ func (builder *QueryBuilder) bindUpdate(stmt *tree.Update, bindCtx *BindContext)
 		}
 		for _, assignment := range updateAssignments {
 			colName := assignment.Column
+			if strings.HasPrefix(strings.ToLower(colName), functionalColumnPrefix) {
+				return 0, moerr.NewBadFieldError(builder.GetContext(), colName, tableDef.Name)
+			}
 			updateExpr := assignment.Expr
 			// Check: cannot update a generated column (unless SET gen_col = DEFAULT)
 			isGenCol := false

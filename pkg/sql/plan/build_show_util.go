@@ -399,6 +399,16 @@ func constructCreateTableSQL(
 						rewriteIndexStr += ","
 					}
 
+					if col := functionalIndexColumn(tableDef, indexdef); col != nil && part == col.Name {
+						if err := validateFunctionalTable(ctx.GetContext(), tableDef); err != nil {
+							return "", nil, err
+						}
+						expressionPart := "(" + col.GeneratedCol.OriginString + ")"
+						indexStr += expressionPart
+						rewriteIndexStr += expressionPart
+						i++
+						continue
+					}
 					originPart := colNameToOriginName[part]
 					indexStr += sqlquote.Ident(originPart)
 					rewriteIndexStr += sqlquote.Ident(originPart)

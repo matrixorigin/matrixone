@@ -127,6 +127,7 @@ type TableColumn struct {
 }
 
 type TableUniqueKey struct {
+	Expression string // original expression for a single functional key part
 	Name       string
 	Columns    []string
 	Unique     bool
@@ -246,6 +247,7 @@ type indexDDLColumn struct {
 }
 
 type indexDDLInfo struct {
+	expression string
 	name       string
 	indexType  string
 	algo       string
@@ -527,6 +529,11 @@ func renderCreateTableDDLFullWithForeignKeysAndClusterBy(tableName string, cols 
 		}
 	}
 	for i, key := range uniqueKeys {
+		for _, part := range key.Columns {
+			if strings.HasPrefix(part, "__mo_fi_") && key.Expression == "" {
+				return "" // Never restore a reference to an absent hidden column.
+			}
+		}
 		if len(key.Columns) == 0 {
 			continue
 		}
@@ -555,7 +562,11 @@ func renderCreateTableDDLFullWithForeignKeysAndClusterBy(tableName string, cols 
 			if i > 0 {
 				sb.WriteString(", ")
 			}
-			sb.WriteString(quoteDDLIdent(col))
+			if key.Expression != "" {
+				sb.WriteString("(" + key.Expression + ")")
+			} else {
+				sb.WriteString(quoteDDLIdent(col))
+			}
 		}
 		sb.WriteString(")")
 		if err := appendIndexTrailingOptionsDDL(&sb, fullText, key.AlgoParams, key.Comment); err != nil {
@@ -806,6 +817,7 @@ func normalizedUniqueKeys(keys []TableUniqueKey) []TableUniqueKey {
 		}
 		seen[signature] = struct{}{}
 		out = append(out, TableUniqueKey{
+			Expression: key.Expression,
 			Name:       name,
 			Columns:    cols,
 			Unique:     key.Unique,
@@ -1131,6 +1143,7 @@ func buildTableSchemaFromCatalogViews(tableID uint64, moTablesView, moColumnsVie
 		}
 	}
 	if moColumnsView != nil {
+		attachFunctionalIndexExpressions(schema, moColumnsView, tableID)
 		cols := buildColumnsFromMoColumnsRows(moColumnsView, tableID)
 		if len(cols) > 0 {
 			schema.Columns = cols
@@ -1146,6 +1159,39 @@ func buildTableSchemaFromCatalogViews(tableID uint64, moTablesView, moColumnsVie
 		schema = mergeBuiltinSchemaFallback(schema, builtinTableSchemaForLayout(layout, tableID), tableID)
 	}
 	return schema
+}
+
+// Functional backing columns are not exportable row columns. Recover only
+// their generated expression into the owning index's DDL metadata.
+func attachFunctionalIndexExpressions(schema *TableSchema, view *LogicalTableView, tableID uint64) {
+	if schema == nil || view == nil {
+		return
+	}
+	idPos := fallbackCatalogColIndex(view, moColumnsID, catalog.SystemColAttr_RelID)
+	namePos := fallbackCatalogColIndex(view, moColumnsID, catalog.SystemColAttr_Name)
+	hiddenPos := fallbackCatalogColIndex(view, moColumnsID, catalog.SystemColAttr_IsHidden)
+	generatedPos := fallbackCatalogColIndex(view, moColumnsID, catalog.SystemColAttr_Generated)
+	for _, fullRow := range view.Rows {
+		if len(fullRow) < logicalViewDataOffset(view) {
+			continue
+		}
+		row := fullRow[logicalViewDataOffset(view):]
+		if idPos < 0 || namePos < 0 || hiddenPos < 0 || generatedPos < 0 ||
+			idPos >= len(row) || namePos >= len(row) || hiddenPos >= len(row) || generatedPos >= len(row) ||
+			row[idPos] != strconv.FormatUint(tableID, 10) || !isTruthyCatalogValue(row[hiddenPos]) || !strings.HasPrefix(row[namePos], "__mo_fi_") {
+			continue
+		}
+		expression, stored := decodeMoColumnGenerated(row[generatedPos])
+		if expression == "" || stored || !isPrintableDDLExpression(expression) {
+			continue
+		}
+		for i := range schema.UniqueKeys {
+			key := &schema.UniqueKeys[i]
+			if !key.Unique && len(key.Columns) == 1 && key.Columns[0] == row[namePos] {
+				key.Expression = expression
+			}
+		}
+	}
 }
 
 func buildTableSchemasForIDs(
@@ -1483,7 +1529,7 @@ func (r *CheckpointReader) PrepareTableDumpDataForTables(
 			data := result[primaryID]
 			tableIndexesView := logicalViewWithRows(moIndexesView, indexRowsByTableID[primaryID])
 			data.IndexDDLs, err = buildCreateIndexStatementsFromMoIndexes(
-				tableIndexesView, primaryID, data.Schema.TableName,
+				tableIndexesView, primaryID, data.Schema.TableName, data.Schema,
 			)
 			if err != nil {
 				return nil, err
@@ -1628,6 +1674,7 @@ func cloneTableSchema(schema *TableSchema) *TableSchema {
 	if len(schema.UniqueKeys) > 0 {
 		clone.UniqueKeys = make([]TableUniqueKey, len(schema.UniqueKeys))
 		for i, key := range schema.UniqueKeys {
+			clone.UniqueKeys[i].Expression = strings.Clone(key.Expression)
 			clone.UniqueKeys[i].Name = strings.Clone(key.Name)
 			clone.UniqueKeys[i].Unique = key.Unique
 			clone.UniqueKeys[i].Algo = strings.Clone(key.Algo)
@@ -3636,6 +3683,9 @@ func createTableDDLFromCatalogViews(tableID uint64, moTablesView, moColumnsView 
 	}
 	if moColumnsView != nil {
 		clusterBy = buildClusterByFromMoColumnsRows(moColumnsView, tableID)
+		schema := &TableSchema{UniqueKeys: uniqueKeys}
+		attachFunctionalIndexExpressions(schema, moColumnsView, tableID)
+		uniqueKeys = schema.UniqueKeys
 	}
 	if len(partitionMetadataView) > 0 && partitionMetadataView[0] != nil {
 		partition = buildPartitionClauseFromMetadata(partitionMetadataView[0], tableID)
@@ -4193,7 +4243,12 @@ func (r *CheckpointReader) ShowCreateIndexStatements(
 	if err != nil {
 		return nil, err
 	}
-	return buildCreateIndexStatementsFromMoIndexes(view, tableID, tableName)
+	columns, err := r.getTableLogicalView(ctx, moColumnsID, snapshotTS)
+	if err != nil {
+		return nil, err
+	}
+	schema := buildTableSchemaFromCatalogViews(tableID, moTablesView, columns)
+	return buildCreateIndexStatementsFromMoIndexes(view, tableID, tableName, schema)
 }
 
 func (r *CheckpointReader) getPartitionMetadataView(
@@ -4403,6 +4458,7 @@ func buildCreateIndexStatementsFromMoIndexes(
 	view *LogicalTableView,
 	tableID uint64,
 	tableName string,
+	schemas ...*TableSchema,
 ) ([]string, error) {
 	if view == nil {
 		return nil, nil
@@ -4508,6 +4564,25 @@ func buildCreateIndexStatementsFromMoIndexes(
 
 	statements := make([]string, 0, len(names))
 	for _, name := range names {
+		info := byName[name]
+		for column := range info.columns {
+			if !strings.HasPrefix(column, "__mo_fi_") {
+				continue
+			}
+			for _, schema := range schemas {
+				if schema == nil {
+					continue
+				}
+				for _, key := range schema.UniqueKeys {
+					if key.Name == name && len(key.Columns) == 1 && key.Columns[0] == column {
+						info.expression = key.Expression
+					}
+				}
+			}
+			if info.expression == "" || len(info.columns) != 1 || strings.EqualFold(info.indexType, "UNIQUE") {
+				return nil, fmt.Errorf("invalid functional index metadata for %s.%s", tableName, name)
+			}
+		}
 		stmt, err := renderCreateIndexStatement(tableName, byName[name])
 		if err != nil {
 			return nil, err
@@ -4889,7 +4964,11 @@ func renderCreateIndexStatement(tableName string, info *indexDDLInfo) (string, e
 		if i > 0 {
 			sb.WriteString(", ")
 		}
-		sb.WriteString(quoteDDLIdent(col.name))
+		if info.expression != "" {
+			sb.WriteString("(" + info.expression + ")")
+		} else {
+			sb.WriteString(quoteDDLIdent(col.name))
+		}
 	}
 	sb.WriteString(")")
 	if err := appendIndexTrailingOptionsDDL(&sb, fullText, info.algoParams, info.comment); err != nil {

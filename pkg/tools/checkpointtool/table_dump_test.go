@@ -49,6 +49,29 @@ func TestCSVPipelineErrorKeepsNonCanceledRootCause(t *testing.T) {
 	assert.NoError(t, csvPipelineError(nil, nil))
 }
 
+func TestFunctionalIndexCheckpointDDL(t *testing.T) {
+	const backing = "__mo_fi_123"
+	schema := &TableSchema{TableName: "fi", Columns: []TableColumn{{Name: "name", SQLType: "VARCHAR(40)", Position: 1}},
+		UniqueKeys: []TableUniqueKey{{Name: "idx", Columns: []string{backing}}}}
+	encoded, err := types.Encode(&plan.GeneratedCol{OriginString: "lower(`name`)"})
+	require.NoError(t, err)
+	columns := &LogicalTableView{Headers: []string{"object", "block", "row", "att_relname_id", "attname", "att_is_hidden", "attr_generated"},
+		Rows: [][]string{{}, {"o", "0", "0", "42", backing, "1", string(encoded)}}}
+	attachFunctionalIndexExpressions(schema, columns, 42)
+	ddl := RenderCreateTableDDLFromSchema(cloneTableSchema(schema))
+	require.Contains(t, ddl, "KEY `idx`((lower(`name`)))")
+	require.NotContains(t, ddl, backing)
+	indexes := &LogicalTableView{Headers: []string{"object", "block", "row", "table_id", "name", "column_name", "type", "ordinal_position"},
+		Rows: [][]string{{"o", "0", "0", "42", "idx", backing, "INDEX", "1"}}}
+	statements, err := buildCreateIndexStatementsFromMoIndexes(indexes, 42, "fi", schema)
+	require.NoError(t, err)
+	require.Equal(t, []string{"ALTER TABLE `fi` ADD KEY `idx`((lower(`name`)));"}, statements)
+	schema.UniqueKeys[0].Expression = ""
+	require.Empty(t, RenderCreateTableDDLFromSchema(schema))
+	_, err = buildCreateIndexStatementsFromMoIndexes(indexes, 42, "fi", schema)
+	require.Error(t, err)
+}
+
 func TestComposeAtUsesLatestUsableGlobalCheckpoint(t *testing.T) {
 	older := checkpoint.NewCheckpointEntry("", types.BuildTS(1, 0), types.BuildTS(10, 0), checkpoint.ET_Global)
 	newer := checkpoint.NewCheckpointEntry("", types.BuildTS(11, 0), types.BuildTS(20, 0), checkpoint.ET_Global)

@@ -1,0 +1,324 @@
+// Copyright 2026 Matrix Origin
+//
+// Licensed under the Apache License, Version 2.0 (the "License");
+// you may not use this file except in compliance with the License.
+// You may obtain a copy of the License at
+//
+// http://www.apache.org/licenses/LICENSE-2.0
+//
+// Unless required by applicable law or agreed to in writing, software
+// distributed under the License is distributed on an "AS IS" BASIS,
+// WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+// See the License for the specific language governing permissions and
+// limitations under the License.
+
+package plan
+
+import (
+	"context"
+	"crypto/sha256"
+	"fmt"
+	"reflect"
+	"strings"
+
+	"github.com/gogo/protobuf/proto"
+	"github.com/matrixorigin/matrixone/pkg/catalog"
+	"github.com/matrixorigin/matrixone/pkg/common/moerr"
+	"github.com/matrixorigin/matrixone/pkg/container/types"
+	"github.com/matrixorigin/matrixone/pkg/defines"
+	pb "github.com/matrixorigin/matrixone/pkg/pb/plan"
+	"github.com/matrixorigin/matrixone/pkg/sql/parsers/dialect"
+	"github.com/matrixorigin/matrixone/pkg/sql/parsers/tree"
+	"github.com/matrixorigin/matrixone/pkg/sql/util"
+)
+
+const functionalColumnPrefix = "__mo_fi_"
+
+func functionalColumnName(indexName string) string {
+	sum := sha256.Sum256([]byte(indexNameKey(indexName)))
+	return fmt.Sprintf("%s%x", functionalColumnPrefix, sum[:16])
+}
+
+func hasFunctionalKey(parts []*tree.KeyPart) bool {
+	for _, part := range parts {
+		if part != nil && part.Expr != nil {
+			return true
+		}
+	}
+	return false
+}
+
+func isFunctionalColumn(col *ColDef) bool {
+	return col != nil && col.Hidden && col.GeneratedCol != nil && strings.HasPrefix(col.Name, functionalColumnPrefix)
+}
+
+func functionalIndexColumn(table *TableDef, index *pb.IndexDef) *ColDef {
+	if table == nil || index == nil || len(index.Parts) == 0 {
+		return nil
+	}
+	for _, col := range table.Cols {
+		if isFunctionalColumn(col) && col.Name == index.Parts[0] && col.Name == functionalColumnName(index.IndexName) {
+			return col
+		}
+	}
+	return nil
+}
+
+// functionalExpressionEligible deliberately does not equate foldability with
+// persistence safety. Unknown functions and conversions fail closed. In
+// particular, temporal casts can read the writer's timezone or SQL mode.
+func functionalExpressionEligible(expr *Expr, cols []*ColDef, visiting map[int32]bool) bool {
+	if expr == nil {
+		return false
+	}
+	switch e := expr.Expr.(type) {
+	case *pb.Expr_Lit:
+		return true
+	case *pb.Expr_Col:
+		pos := e.Col.ColPos
+		if e.Col.RelPos != 0 || pos < 0 || int(pos) >= len(cols) || visiting[pos] {
+			return false
+		}
+		col := cols[pos]
+		if col == nil || col.Hidden || col.Typ.AutoIncr {
+			return false
+		}
+		if col.GeneratedCol != nil {
+			visiting[pos] = true
+			ok := functionalExpressionEligible(col.GeneratedCol.Expr, cols, visiting)
+			delete(visiting, pos)
+			return ok
+		}
+		return true
+	case *pb.Expr_T:
+		return true
+	case *pb.Expr_F:
+		if e.F == nil || e.F.Func == nil {
+			return false
+		}
+		switch e.F.Func.ObjName {
+		case "lower", "upper":
+			if len(e.F.Args) != 1 || !functionalTextType(e.F.Args[0].Typ) || !functionalTextType(expr.Typ) {
+				return false
+			}
+		case "+", "-", "*", "abs":
+			if !types.T(expr.Typ.Id).IsInteger() {
+				return false
+			}
+			for _, arg := range e.F.Args {
+				if !types.T(arg.Typ.Id).IsInteger() {
+					return false
+				}
+			}
+		case "cast":
+			if len(e.F.Args) == 2 {
+				from, to := types.T(e.F.Args[0].Typ.Id), types.T(expr.Typ.Id)
+				if from.IsInteger() && to.IsInteger() && from.IsUnsignedInt() == to.IsUnsignedInt() && from.TypeLen() <= to.TypeLen() {
+					break
+				}
+			}
+			// Identity casts inserted by generated-column assignment are safe.
+			if len(e.F.Args) != 2 || e.F.Args[0].Typ.Id != expr.Typ.Id ||
+				e.F.Args[0].Typ.Width != expr.Typ.Width || e.F.Args[0].Typ.Scale != expr.Typ.Scale ||
+				e.F.Args[0].Typ.Charset != expr.Typ.Charset || e.F.Args[0].Typ.PadSpace != expr.Typ.PadSpace {
+				return false
+			}
+		default:
+			return false
+		}
+		for _, arg := range e.F.Args {
+			if !functionalExpressionEligible(arg, cols, visiting) {
+				return false
+			}
+		}
+		return true
+	default:
+		return false
+	}
+}
+
+func functionalTextType(typ Type) bool {
+	return typ.Id == int32(types.T_varchar) || typ.Id == int32(types.T_char)
+}
+
+// lowerFunctionalIndex appends one index-owned generated value. Ordinary
+// generated-column writes and secondary-index maintenance then share exactly
+// the same row expression for backfill and future DML.
+func lowerFunctionalIndex(ctx CompilerContext, table *TableDef, index *tree.Index) (*tree.Index, error) {
+	if !hasFunctionalKey(index.KeyParts) {
+		return index, nil
+	}
+	if table.IsTemporary || util.TableIsClusterTable(table.TableType) {
+		return nil, moerr.NewNotSupported(ctx.GetContext(), "functional indexes require ordinary persistent tables")
+	}
+	fail := func() (*tree.Index, error) {
+		return nil, moerr.NewNotSupported(ctx.GetContext(), "functional indexes require a named, single expression ordinary non-unique BTREE index")
+	}
+	if len(index.KeyParts) != 1 || index.Name == "" ||
+		(index.KeyType != tree.INDEX_TYPE_INVALID && index.KeyType != tree.INDEX_TYPE_BTREE) {
+		return fail()
+	}
+	if option := index.IndexOption; option != nil {
+		allowed := tree.IndexOption{IType: option.IType, Comment: option.Comment, Visible: option.Visible}
+		if (option.IType != tree.INDEX_TYPE_INVALID && option.IType != tree.INDEX_TYPE_BTREE) || !reflect.DeepEqual(*option, allowed) {
+			return fail()
+		}
+	}
+	key := index.KeyParts[0]
+	if key.Expr == nil || key.ColName != nil || key.Length != 0 || key.Direction != tree.DefaultDirection {
+		return fail()
+	}
+	if err := RequirePersistedProtocolVersionForAuthoring(ctx.GetContext(), ctx.GetProcess(), defines.MORPCVersion101); err != nil {
+		return nil, err
+	}
+	names := make([]string, len(table.Cols))
+	typs := make([]Type, len(table.Cols))
+	name := functionalColumnName(index.Name)
+	for i, col := range table.Cols {
+		if col.Name == name {
+			return nil, moerr.NewInvalidInput(ctx.GetContext(), "functional index backing column already exists")
+		}
+		names[i], typs[i] = col.Name, col.Typ
+	}
+	bindCtx := ddlExpressionContext(ctx, ctx.GetContext())
+	expr, err := NewGeneratedColBinder(bindCtx, names, typs).bindPersistedExpr(key.Expr, 0, false)
+	if err != nil {
+		return nil, err
+	}
+	if !functionalExpressionEligible(expr, table.Cols, make(map[int32]bool)) {
+		return nil, moerr.NewNotSupported(ctx.GetContext(), "functional index expression must have session-independent semantics")
+	}
+	if err := preservePersistedFormatCompatibility(bindCtx, expr); err != nil {
+		return nil, err
+	}
+	if err := checkExprForVolatileFunc(bindCtx, expr); err != nil {
+		return nil, err
+	}
+	if err := checkGeneratedExprReferences(bindCtx, expr, name, table.Cols, make(map[int32]bool)); err != nil {
+		return nil, err
+	}
+	if !types.T(expr.Typ.Id).IsInteger() && !functionalTextType(expr.Typ) {
+		return nil, moerr.NewNotSupported(ctx.GetContext(), "functional index result type")
+	}
+	col := &ColDef{Name: name, OriginName: name, Hidden: true, Typ: expr.Typ,
+		Alg: pb.CompressType_Lz4, Default: &pb.Default{NullAbility: true},
+		GeneratedCol: &pb.GeneratedCol{Expr: expr, OriginString: tree.StringWithOpts(key.Expr, dialect.MYSQL, tree.WithQuoteIdentifier()), IsStored: false}}
+	replacement := &tree.KeyPart{ColName: tree.NewUnresolvedColName(name)}
+	if err := checkIndexColumnSupportability(ctx.GetContext(), col, replacement, "index"); err != nil {
+		return nil, err
+	}
+	table.Cols = append(table.Cols, col)
+	copy := *index
+	copy.KeyParts = []*tree.KeyPart{replacement}
+	return &copy, nil
+}
+
+func validateFunctionalTable(ctx context.Context, table *TableDef) error {
+	owners := make(map[string]int)
+	for _, index := range table.Indexes {
+		if index == nil {
+			return moerr.NewInvalidInput(ctx, "invalid index metadata")
+		}
+		functional := false
+		for _, part := range index.Parts {
+			functional = functional || strings.HasPrefix(catalog.ResolveAlias(part), functionalColumnPrefix)
+		}
+		if !functional {
+			continue
+		}
+		col := functionalIndexColumn(table, index)
+		if col == nil || index.Unique || !catalog.IsRegularIndexAlgo(index.IndexAlgo) || col.GeneratedCol.IsStored ||
+			col.GeneratedCol.Expr == nil || col.GeneratedCol.OriginString == "" ||
+			!sameFunctionalValueType(col.Typ, col.GeneratedCol.Expr.Typ) ||
+			!functionalExpressionEligible(col.GeneratedCol.Expr, table.Cols, make(map[int32]bool)) {
+			return moerr.NewInvalidInput(ctx, "invalid functional index metadata")
+		}
+		for _, part := range index.Parts[1:] {
+			if !catalog.IsAlias(part) {
+				return moerr.NewInvalidInput(ctx, "invalid functional index key parts")
+			}
+		}
+		owners[col.Name]++
+	}
+	for _, col := range table.Cols {
+		if strings.HasPrefix(col.Name, functionalColumnPrefix) && (!isFunctionalColumn(col) || owners[col.Name] != 1) {
+			return moerr.NewInvalidInput(ctx, "orphaned functional index backing column")
+		}
+	}
+	return nil
+}
+
+func sameFunctionalValueType(a, b Type) bool {
+	a.Table, b.Table = "", ""
+	a.NotNullable, b.NotNullable = false, false
+	return proto.Equal(&a, &b)
+}
+
+// addFunctionalIndexFilters supplies an indexable equality while retaining the
+// original predicate as a base-row residual. Matching is structural and typed;
+// it never uses algebraic equivalence or session-dependent evaluation.
+func (builder *QueryBuilder) addFunctionalIndexFilters(node *pb.Node) {
+	if node.TableDef == nil || len(node.BindingTags) != 1 {
+		return
+	}
+	originals := append([]*Expr(nil), node.FilterList...)
+	for _, index := range node.TableDef.Indexes {
+		col := functionalIndexColumn(node.TableDef, index)
+		if col == nil || !functionalExpressionEligible(col.GeneratedCol.Expr, node.TableDef.Cols, make(map[int32]bool)) {
+			continue
+		}
+		var pos int32 = -1
+		for i, c := range node.TableDef.Cols {
+			if c.Name == col.Name {
+				pos = int32(i)
+			}
+		}
+		for _, filter := range originals {
+			f := filter.GetF()
+			if f == nil || f.Func.ObjName != "=" || len(f.Args) != 2 {
+				continue
+			}
+			for side := 0; side < 2; side++ {
+				constant := f.Args[1-side]
+				if constant.GetLit() == nil || constant.GetLit().Isnull {
+					continue
+				}
+				candidate := DeepCopyExpr(f.Args[side])
+				persisted := DeepCopyExpr(col.GeneratedCol.Expr)
+				if !normalizeFunctionalExpression(candidate, node.BindingTags[0]) || !normalizeFunctionalExpression(persisted, 0) ||
+					!functionalExpressionEligible(candidate, node.TableDef.Cols, make(map[int32]bool)) || !proto.Equal(candidate, persisted) {
+					continue
+				}
+				ref := &Expr{Typ: col.Typ, Expr: &pb.Expr_Col{Col: &pb.ColRef{RelPos: node.BindingTags[0], ColPos: pos}}}
+				equality, err := BindFuncExprImplByPlanExpr(builder.GetContext(), "=", []*Expr{ref, DeepCopyExpr(constant)})
+				if err == nil {
+					equality.Selectivity = filter.Selectivity
+					node.FilterList = append(node.FilterList, equality)
+				}
+			}
+		}
+	}
+}
+
+func normalizeFunctionalExpression(expr *Expr, tag int32) bool {
+	expr.AuxId, expr.Ndv, expr.Selectivity = 0, 0, 0
+	// Provenance and inferred nullability do not change expression values.
+	// Keep value-bearing type metadata (width, scale, charset, padding) exact.
+	expr.Typ.Table = ""
+	expr.Typ.NotNullable = false
+	if col := expr.GetCol(); col != nil {
+		if col.RelPos != tag {
+			return false
+		}
+		col.RelPos = 0
+		col.Name = ""
+	}
+	if f := expr.GetF(); f != nil {
+		for _, arg := range f.Args {
+			if !normalizeFunctionalExpression(arg, tag) {
+				return false
+			}
+		}
+	}
+	return true
+}

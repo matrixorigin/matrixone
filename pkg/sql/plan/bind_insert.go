@@ -4466,6 +4466,9 @@ func (builder *QueryBuilder) rejectDuplicateInsertColumns(astCols tree.Identifie
 	for _, column := range astCols {
 		columnName := string(column)
 		key := strings.ToLower(columnName)
+		if strings.HasPrefix(key, functionalColumnPrefix) {
+			return moerr.NewBadFieldError(builder.GetContext(), columnName, "field list")
+		}
 		if _, ok := seen[key]; ok {
 			return moerr.NewFieldSpecifiedTwice(builder.GetContext(), columnName)
 		}
