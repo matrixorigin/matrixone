@@ -134,6 +134,48 @@ func (b *baseBinder) bindIntegerSourceAst(ast tree.Expr, depth int32, target typ
 	return appendIntegerArgument(b.GetContext(), source, target, false)
 }
 
+// bindOrdinaryMathPrecisionAst preserves normal expression binding for
+// explicit casts and value selectors. Only a bare native numeric precision
+// source uses the legacy integer conversion; text still uses strict INT64
+// casting.
+func (b *baseBinder) bindOrdinaryMathPrecisionAst(ast tree.Expr, depth int32, target types.T, name string, position int) (*Expr, error) {
+	ast = unwrapParenExpr(ast)
+	_, explicitCast := ast.(*tree.CastExpr)
+	selecting := false
+	switch value := ast.(type) {
+	case *tree.CaseExpr:
+		selecting = true
+	case *tree.FuncExpr:
+		switch numericAstFunctionName(value) {
+		case "if", "iff", "nullif":
+			selecting = true
+		}
+	}
+	if !explicitCast && !selecting {
+		return b.bindIntegerSourceAst(ast, depth, target, name, position)
+	}
+
+	source, err := b.impl.BindExpr(ast, depth, false)
+	if err != nil {
+		return nil, err
+	}
+	if selecting {
+		source, err = b.integerArgumentStorageSource(source)
+		if err != nil {
+			return nil, err
+		}
+	}
+	if nativeTarget, native := function.IntegerArgumentNativeOrdinaryCastTarget(name, position, types.T(source.Typ.Id)); native && !explicitCast {
+		return appendIntegerArgument(b.GetContext(), source, nativeTarget, false)
+	}
+	ordinaryTarget, ok := function.IntegerArgumentOrdinaryCastTarget(name, position)
+	if !ok {
+		return appendIntegerArgument(b.GetContext(), source, target, false)
+	}
+	typ := ordinaryTarget.ToType()
+	return appendCastBeforeExpr(b.GetContext(), source, makePlan2Type(&typ))
+}
+
 // Recover only direct display wrappers or established reversible provenance.
 // Arbitrary string expressions (including IFNULL/COALESCE) own their result
 // domain and must not be reinterpreted as the original ENUM/SET storage.
