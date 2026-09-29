@@ -309,6 +309,7 @@ func fixedTypeMatchSelection(overloads []overload, inputs []types.Type, excluded
 				// collation. Retaining it here prevents an implicit overload cast
 				// from erasing metadata before a derived-string return callback runs.
 				castType[i].Charset = inputs[i].Charset
+				castType[i].CollationVersion = inputs[i].CollationVersion
 			}
 		}
 	}

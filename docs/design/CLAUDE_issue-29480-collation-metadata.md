@@ -50,9 +50,11 @@
 
 `utf8mb4_0900_ai_ci` 的现有默认拼写在 legacy 准入策略下仍解析成身份 3、修订 0，effective metadata 为 general-ci/PAD SPACE；native 查找结果则是身份 4、修订 1、NO PAD，两者由明确的 API 和修订区分。旧对象没有保存原始拼写，不能凭空恢复。
 
-latin1/latin1_* 一律拒绝新增 DDL、会话/全局设置、握手/change-user 和 CONVERT 请求。不会猜测历史 latin1 字节，也不将它们重编码。
+latin1/latin1_* 一律拒绝新增 DDL、会话/全局设置、握手/change-user 和 CONVERT 请求。SET NAMES/SET CHARACTER SET 在赋值前检查字符集及显式 collation；本任务不顺带重构其既有赋值/转码行为。保留 collation_connection 的既有 `default` 占位值。已验证的历史 session snapshot 使用独立恢复入口保留原设置，仍执行既有变量校验及 runtime hooks，不重新按新请求解析名称；这不是 C11 的新格式迁移或激活机制。不会猜测历史 latin1 字节，也不将它们重编码。
 
 **utf8/utf8mb3 保留静默兼容映射，这是用户明确确认的行为契约：** 现有以及新增的同名 SQL 声明继续采用 MO 原有 utf8mb4 有效语义；`utf8_bin`/`utf8mb3_bin` 保留到 utf8mb4_bin 的映射，`utf8_general_ci`/`utf8mb3_general_ci` 保留到 utf8mb4_general_ci 的映射。不得新增三字节限制，不得拒绝原先接受的这些名称，也不通过告警改变现有调用行为。未支持的 unicode-ci 等规则不会因这个兼容决定变成已支持。
+
+`information_schema.CHARACTER_SETS` 的 utf8 行 `MAXLEN` 按有效兼容编码显示 4，而非原生严格三字节定义的 3；这与四字节数据的实际准入一致，不修改默认排序规则。原生定义查询仍返回严格 utf8 的容量 3。
 
 准入返回的是兼容解析后的有效身份，而不是同名原生定义的身份。SHOW、information_schema 和协议消费者必须使用同一能力定义，区分兼容拼写、协议编号与有效语义；不得把接受 utf8 名称作为已实现严格 utf8mb3 的证据。原有 0–3 持久值和默认行为不变。
 
@@ -77,7 +79,7 @@ ascii、GBK、unicode-ci、native 0900 和严格三字节 utf8mb3 的原生身�
 - `plan.Type`: charset=8 不变；coercibility=10、presence=11、merge_conflict=12；collation_version=13。
 - `plan.IndexDef`: key_format=15；既有 reserved 14 不动。
 - `plan.TableDef`: key_format=41、collation_version=42，default_charset=39 不变。
-- `api.SchemaExtra`: default_charset=19 不变；key_format=20、collation_version=21。
+- `api.SchemaExtra`: default_charset=19、auto_id_cache=20 不变；key_format=21、collation_version=22。main 已占用 #29055 当时拟用的 20，必须顺延而不能重用现有 wire identity；本分配取代旧草案的 20/21。
 
 coercibility 合法范围 0–6；显式 COLLATE 的 0 与“未提供”由 presence 区分。它是表达式 provenance，不伪装成 runtime Type 的编码属性。Type↔runtime 的契约只传输运行时相关字段；plan↔plan 必须保留全部 provenance。
 
@@ -101,6 +103,8 @@ protobuf 中的 uint32 身份/修订必须先验证范围，再降到 uint8。�
 
 结构验证允许已知但禁用的元数据正常往返，以便后续组件逐步接入。生产准入是独立的拒绝边界：新 DDL/绑定、计划编译（包含缓存计划）、remote sender/receiver、目录创建。未知值总是拒绝，已知新域也不因本地无 service ID 而放行。
 
+单表达式、批量表达式及 join 工厂均在资源分配前完成全输入预检；递归构造器不重复做整树扫描。Substrait 不能表达新版本/格式，其 Export、Build 和 CanonicalSchema 边界拒绝这些元数据，而不是删字段导出。
+
 失败发生在会话/目录状态发布、算子资源分配或数据写入之前。请求取消、重试不增加持久状态；本任务没有新 worker、锁、队列、事务协调器或重试循环。对接既有边界时保留它们原有清理责任。
 
 C01 负责表达、传播和本地拒绝。C11/#29490 负责可以强制执行的集群能力、旧 reader/writer 隔离、迁移、恢复和回滚；C12/#29491 负责 release acceptance，当前三项 assignee 均为 ck89119。只有完成适用的 SQL/index/storage/upgrade/release gate 才能修改准入策略。没有可靠混合版本保护时要求完整同构升级，而不是依赖旧节点忽略的 table flag。
@@ -111,7 +115,7 @@ C01 负责表达、传播和本地拒绝。C11/#29490 负责可以强制执行�
 
 - 固定十三个内部身份、十二个 canonical collation；名称 lookup 为 O(13)，仅绑定/元数据阶段使用。
 - 热路径继续携带两个 uint8，Type 原生大小及复制成本不变，不添加每行解析或 per-key metadata。
-- plan protobuf 新增四个标量字段；零值省略，coercibility/版本各值受界限约束。schema/index 仅新增标量，不含随行数增长的结构。
+- plan protobuf 新增四个标量字段；零值省略，coercibility/版本各值受界限约束。在当前 64-bit Go/gogo 布局下，plan.Type 从 88 增至 104 字节，包含它的 Expr 从 168 增至 184 字节；新增预算为每个计划类型/表达式 16 字节，并非每行或每条 key。既有 prepared-numeric 仍使用可选指针，不增加其 resident 标量。schema/index 仅新增标量，不含随行数增长的结构。
 - 不引入新全局可变 cache、goroutine、I/O、日志标签或指标维度；目录和缓存的所有者不变。
 - legacy/binary round trip 增量堆分配预算为零；以 allocation 测试验证，不以文档声称代替。
 

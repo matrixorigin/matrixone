@@ -6121,6 +6121,15 @@ func bindFuncExprImplByPlanExpr(
 	allowInternalFunctionArgs bool,
 ) (*plan.Expr, error) {
 	var err error
+	// Validate before rewriting or converting argument metadata. Checked public
+	// binding must not turn an unknown identity into a MustTypeFromPlan panic.
+	for _, arg := range args {
+		if arg != nil {
+			if err := arg.Typ.ValidateCollation(); err != nil {
+				return nil, err
+			}
+		}
+	}
 	if (strings.EqualFold(name, "extractvalue") || strings.EqualFold(name, "updatexml")) && len(args) >= 2 {
 		if !isXMLXPathConstant(args[1]) {
 			return nil, moerr.NewInvalidInput(ctx, "Only constant XPATH queries are supported")
@@ -8102,13 +8111,8 @@ func bindConvertUsingCharset(ctx context.Context, args []*plan.Expr) error {
 		return moerr.NewInvalidInput(ctx, "CONVERT USING requires a constant character set")
 	}
 
-	var charset uint32
-	switch strings.ToLower(charsetLiteral.GetSval()) {
-	case "binary":
-		charset = uint32(types.CharsetBinary)
-	case "utf8", "utf8mb3", "utf8mb4":
-		charset = uint32(types.CharsetUTF8)
-	default:
+	charset, ok := charsetForName(charsetLiteral.GetSval())
+	if !ok {
 		return moerr.NewInvalidInputf(ctx, "unsupported character set '%s' for CONVERT USING", charsetLiteral.GetSval())
 	}
 

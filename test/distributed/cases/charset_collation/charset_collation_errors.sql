@@ -4,6 +4,50 @@ DROP DATABASE IF EXISTS charset_error_test;
 CREATE DATABASE charset_error_test;
 USE charset_error_test;
 
+-- 新请求拒绝 latin1 和未启用原生域，失败不得发布目录对象。
+DROP DATABASE IF EXISTS charset_rejected_latin1;
+CREATE DATABASE charset_rejected_latin1 CHARACTER SET latin1;
+SELECT COUNT(*) FROM information_schema.schemata WHERE schema_name = 'charset_rejected_latin1';
+DROP DATABASE IF EXISTS charset_rejected_latin1;
+CREATE TABLE t_rejected (v VARCHAR(8)) CHARACTER SET latin1;
+CREATE TABLE t_rejected (v VARCHAR(8) CHARACTER SET latin1);
+CREATE TABLE t_rejected (v VARCHAR(8) COLLATE latin1_swedish_ci);
+CREATE TABLE t_rejected (v VARCHAR(8) COLLATE utf8mb4_0900_bin);
+SELECT COUNT(*) FROM information_schema.tables
+WHERE table_schema = 'charset_error_test' AND table_name = 't_rejected';
+SELECT CONVERT('text' USING latin1);
+SELECT CONVERT(NULL USING latin1);
+
+-- 会话兼容映射与拒绝的原子性，最后恢复进入用例时的会话值。
+SET @saved_client = @@character_set_client;
+SET @saved_connection = @@character_set_connection;
+SET @saved_results = @@character_set_results;
+SET @saved_collation = @@collation_connection;
+SET NAMES utf8;
+SELECT HEX(CONVERT('😀' USING utf8));
+SET NAMES utf8mb3;
+SELECT HEX(CONVERT('😀' USING utf8mb3));
+SET @before_client = @@character_set_client;
+SET @before_connection = @@character_set_connection;
+SET @before_results = @@character_set_results;
+SET @before_collation = @@collation_connection;
+SET NAMES latin1;
+SET CHARACTER SET latin1;
+SET CHARSET latin1;
+SET NAMES utf8mb4 COLLATE latin1_bin;
+SET @charset = 'latin1';
+SELECT @charset;
+SET character_set_connection = 'latin1';
+SET collation_connection = 'latin1_bin';
+SELECT @@character_set_client = @before_client,
+       @@character_set_connection = @before_connection,
+       @@character_set_results = @before_results,
+       @@collation_connection = @before_collation;
+SET character_set_client = @saved_client;
+SET character_set_connection = @saved_connection;
+SET character_set_results = @saved_results;
+SET collation_connection = @saved_collation;
+
 -- @case
 -- @desc: Test invalid charset names
 -- @label:bvt
@@ -36,6 +80,11 @@ CREATE TABLE t_byte_boundary (
     id INT PRIMARY KEY,
     data VARCHAR(100)
 ) CHARACTER SET utf8mb4;
+
+-- ALTER 拒绝后，原来的列类型和排序规则保持不变。
+ALTER TABLE t_byte_boundary MODIFY data VARCHAR(100) CHARACTER SET latin1;
+SELECT character_set_name, collation_name FROM information_schema.columns
+WHERE table_schema = 'charset_error_test' AND table_name = 't_byte_boundary' AND column_name = 'data';
 
 -- UTF-8 can have 1-4 bytes per character
 -- Test 1-byte characters (ASCII)

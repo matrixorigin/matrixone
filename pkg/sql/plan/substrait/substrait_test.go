@@ -46,6 +46,29 @@ import (
 	"google.golang.org/protobuf/proto"
 )
 
+func TestCollationMetadataSubstraitBoundaries(t *testing.T) {
+	for _, mutate := range []func(*planpb.TableDef){
+		func(table *planpb.TableDef) {
+			table.Cols[0].Typ = planpb.Type{Id: int32(types.T_varchar), Width: 32, Charset: 3, CollationVersion: 1}
+		},
+		func(table *planpb.TableDef) { table.KeyFormat = 1 },
+		func(table *planpb.TableDef) { table.Indexes = []*planpb.IndexDef{{KeyFormat: 1}} },
+	} {
+		q := scanQuery()
+		candidate, err := Export(q)
+		require.NoError(t, err)
+		table := q.Nodes[0].TableDef
+		mutate(table)
+		_, err = Export(q)
+		require.ErrorContains(t, err, "unsupported collation metadata")
+		// Revalidate a candidate whose caller-owned plan changed after admission.
+		_, err = candidate.Build(nil)
+		require.ErrorContains(t, err, "unsupported collation metadata")
+		_, err = CanonicalSchema(table)
+		require.ErrorContains(t, err, "unsupported collation metadata")
+	}
+}
+
 func TestExportBuildSupportedSubset(t *testing.T) {
 	q := scanQuery()
 	q.Nodes = append(q.Nodes, &planpb.Node{NodeId: 1, NodeType: planpb.Node_FILTER, Children: []int32{0}, FilterList: []*planpb.Expr{fn(">", boolType(), col(0), i64(7))}})

@@ -4922,7 +4922,10 @@ func decodeVectorBinaryLayout(
 			return vectorBinaryLayout{}, err
 		}
 	}
-	typ := types.DecodeType(typData)
+	typ, err := types.DecodeTypeChecked(typData)
+	if err != nil {
+		return vectorBinaryLayout{}, err
+	}
 	if err = validateVectorBinary(
 		class[0],
 		typ,

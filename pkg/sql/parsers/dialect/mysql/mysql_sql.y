@@ -3131,6 +3131,7 @@ var_assignment:
 |   charset_keyword charset_name
     {
         $$ = &tree.VarAssignmentExpr{
+            CharsetRequest: true,
             Name: strings.ToLower($1),
             Value: tree.NewNumVal($2, $2, false, tree.P_char),
         }
@@ -3138,6 +3139,7 @@ var_assignment:
 |   charset_keyword DEFAULT
     {
         $$ = &tree.VarAssignmentExpr{
+            CharsetRequest: true,
             Name: strings.ToLower($1),
             Value: &tree.DefaultVal{},
         }

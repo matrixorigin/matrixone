@@ -1155,7 +1155,7 @@ func TestBuiltInConvertUsingCharsetBranches(t *testing.T) {
 				[]string{invalidUTF8, invalidUTF8, "AZ", "你好", "charset null"},
 				[]bool{false, false, false, false, false}),
 			NewFunctionTestInput(types.T_varchar.ToType(),
-				[]string{"utf8", "latin1", "UTF8MB4", "utf8", ""},
+				[]string{"utf8", "binary", "UTF8MB4", "utf8", ""},
 				[]bool{false, false, false, false, true}),
 		},
 		expect: NewFunctionTestResult(types.T_varchar.ToType(), false,
@@ -1165,6 +1165,34 @@ func TestBuiltInConvertUsingCharsetBranches(t *testing.T) {
 	fcTC := NewFunctionTestCase(proc, tc.inputs, tc.expect, builtInConvertUsingCharset)
 	s, info := fcTC.Run()
 	require.True(t, s, info)
+}
+
+func TestBuiltInConvertUsingRejectsDisabledCharsets(t *testing.T) {
+	for _, charset := range []string{"latin1", "ASCII", "gbk", "missing"} {
+		proc := testutil.NewProcess(t)
+		fc := NewFunctionTestCase(proc, []FunctionTestInput{
+			NewFunctionTestConstInput(types.T_varchar.ToType(), []string{"a"}, []bool{false}),
+			NewFunctionTestConstInput(types.T_varchar.ToType(), []string{charset}, []bool{false}),
+		}, NewFunctionTestResult(types.T_varchar.ToType(), false, nil, nil), builtInConvertUsingCharset)
+		defer fc.result.Free()
+		for _, parameter := range fc.parameters {
+			defer parameter.Free(fc.proc.Mp())
+		}
+		require.NoError(t, fc.result.PreExtendAndReset(fc.fnLength))
+		require.ErrorContains(t, fc.fn(fc.parameters, fc.result, fc.proc, fc.fnLength, nil), "unsupported character set")
+	}
+	for _, charset := range []string{"utf8", "utf8mb3", "utf8mb4"} {
+		fc := NewFunctionTestCase(testutil.NewProcess(t), []FunctionTestInput{
+			NewFunctionTestConstInput(types.T_varchar.ToType(), []string{"😀"}, []bool{false}),
+			NewFunctionTestConstInput(types.T_varchar.ToType(), []string{charset}, []bool{false}),
+		}, NewFunctionTestResult(types.T_varchar.ToType(), false, []string{"😀"}, []bool{false}), builtInConvertUsingCharset)
+		defer fc.result.Free()
+		for _, parameter := range fc.parameters {
+			defer parameter.Free(fc.proc.Mp())
+		}
+		ok, info := fc.Run()
+		require.True(t, ok, info)
+	}
 }
 
 func TestBuiltInConvertUsingCharsetConstArgs(t *testing.T) {

@@ -452,8 +452,8 @@ func TestBuildCreateTableAcceptsMySQL8DefaultCollationCompatibilityAlias(t *test
 			c_utf8mb4_ci varchar(100) character set utf8mb4 collate utf8mb4_0900_ai_ci null,
 			c_utf8mb4_bin varchar(100) character set utf8mb4 collate utf8mb4_bin null,
 			c_utf8mb4_general varchar(100) character set utf8mb4 collate utf8mb4_general_ci null,
-			c_latin1 varchar(100) character set latin1 collate latin1_swedish_ci null,
-			c_ascii varchar(100) character set ascii collate ascii_general_ci null,
+			c_utf8 varchar(100) character set utf8 collate utf8_general_ci null,
+			c_utf8mb3 varchar(100) character set utf8mb3 collate utf8mb3_general_ci null,
 			c_binary varbinary(100) null,
 			primary key (id)
 		) engine=InnoDB default charset=utf8mb4`, 1)
@@ -468,8 +468,8 @@ func TestBuildCreateTableAcceptsMySQL8DefaultCollationCompatibilityAlias(t *test
 	require.Equal(t, uint32(types.CharsetUTF8), FindColumn(tableDef.Cols, "c_utf8mb4_ci").Typ.Charset)
 	require.Equal(t, uint32(types.CharsetUTF8MB4Bin), FindColumn(tableDef.Cols, "c_utf8mb4_bin").Typ.Charset)
 	require.Equal(t, uint32(types.CharsetUTF8), FindColumn(tableDef.Cols, "c_utf8mb4_general").Typ.Charset)
-	require.Equal(t, uint32(types.CharsetUTF8), FindColumn(tableDef.Cols, "c_latin1").Typ.Charset)
-	require.Equal(t, uint32(types.CharsetUTF8), FindColumn(tableDef.Cols, "c_ascii").Typ.Charset)
+	require.Equal(t, uint32(types.CharsetUTF8), FindColumn(tableDef.Cols, "c_utf8").Typ.Charset)
+	require.Equal(t, uint32(types.CharsetUTF8), FindColumn(tableDef.Cols, "c_utf8mb3").Typ.Charset)
 	require.Equal(t, uint32(types.CharsetBinary), FindColumn(tableDef.Cols, "c_binary").Typ.Charset)
 
 	showSQL, _, err := ConstructCreateTableSQL(ctx, tableDef, nil, false, nil)
@@ -546,8 +546,6 @@ func TestBuildCreateTableRejectsIncompatibleCharsetAndCollation(t *testing.T) {
 	for _, sql := range []string{
 		"create table t(v varchar(8)) character set utf8mb4 collate binary",
 		"create table t(v varchar(8) character set binary collate utf8mb4_bin)",
-		"create table t(v varchar(8)) character set latin1 collate ascii_general_ci",
-		"create table t(v varchar(8) character set ascii collate latin1_swedish_ci)",
 	} {
 		t.Run(sql, func(t *testing.T) {
 			stmt, err := parsers.ParseOne(t.Context(), dialect.MYSQL, sql, 1)
@@ -576,47 +574,25 @@ func TestBuildCreateTableAcceptsUTF8MB3Aliases(t *testing.T) {
 	}
 }
 
-func TestBuildCreateTableAcceptsSingleByteCharsetCompatibilityAliases(t *testing.T) {
-	testCases := []struct {
-		name      string
-		sql       string
-		wantTable uint32
-	}{
-		{
-			name: "latin1 column",
-			sql: "create table t(v varchar(8) character set latin1 " +
-				"collate latin1_swedish_ci)",
-			wantTable: uint32(types.CharsetUTF8),
-		},
-		{
-			name: "ascii column case insensitive spelling",
-			sql: "create table t(v varchar(8) character set ASCII " +
-				"collate ASCII_GENERAL_CI)",
-			wantTable: uint32(types.CharsetUTF8),
-		},
-		{
-			name:      "latin1 table default",
-			sql:       "create table t(v varchar(8)) character set latin1 collate latin1_swedish_ci",
-			wantTable: uint32(types.CharsetUTF8),
-		},
-		{
-			name:      "ascii table default",
-			sql:       "create table t(v varchar(8)) character set ascii collate ascii_general_ci",
-			wantTable: uint32(types.CharsetUTF8),
-		},
-	}
-
-	for _, tc := range testCases {
-		t.Run(tc.name, func(t *testing.T) {
-			stmt, err := parsers.ParseOne(t.Context(), dialect.MYSQL, tc.sql, 1)
+func TestBuildCreateTableRejectsDisabledCharsetDomains(t *testing.T) {
+	for _, sql := range []string{
+		"create table t(v varchar(8)) character set latin1 collate ascii_general_ci",
+		"create table t(v varchar(8) character set ascii collate latin1_swedish_ci)",
+		"create table t(v varchar(8) character set latin1 collate latin1_swedish_ci)",
+		"create table t(v varchar(8) character set ASCII collate ASCII_GENERAL_CI)",
+		"create table t(v varchar(8)) character set latin1 collate latin1_swedish_ci",
+		"create table t(v varchar(8)) character set ascii collate ascii_general_ci",
+		"create table t(v varchar(8)) collate latin1_bin",
+		"create table t(v varchar(8)) character set gbk",
+		"create database d character set latin1",
+		"create database d collate latin1_swedish_ci",
+	} {
+		t.Run(sql, func(t *testing.T) {
+			stmt, err := parsers.ParseOne(t.Context(), dialect.MYSQL, sql, 1)
 			require.NoError(t, err)
 			defer stmt.Free()
-
-			p, err := BuildPlan(NewMockCompilerContext(false), stmt, false)
-			require.NoError(t, err)
-			tableDef := p.GetDdl().GetCreateTable().GetTableDef()
-			require.Equal(t, tc.wantTable, tableDef.DefaultCharset)
-			require.Equal(t, uint32(types.CharsetUTF8), tableDef.Cols[0].Typ.Charset)
+			_, err = BuildPlan(NewMockCompilerContext(false), stmt, false)
+			require.ErrorContains(t, err, "unsupported")
 		})
 	}
 }

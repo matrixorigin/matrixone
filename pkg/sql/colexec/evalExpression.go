@@ -230,6 +230,9 @@ func NewJoinProbeExpressionExecutors(
 		execs, err := NewExpressionExecutorsFromPlanExpressionsWithAllocation(proc, planExprs, selection)
 		return execs, nil, err
 	}
+	if err := plan.RequireLegacyCollations(planExprs); err != nil {
+		return nil, nil, err
+	}
 	activation := make([]ExpressionExecutor, 0)
 	execs := make([]ExpressionExecutor, len(planExprs))
 	for i, expr := range planExprs {
@@ -260,6 +263,9 @@ func newExpressionExecutorsWithDiagnosticOwner(
 	foldOwnedConstantCasts bool,
 	owner *DeferredJoinDiagnostic,
 ) (executors []ExpressionExecutor, err error) {
+	if err := plan.RequireLegacyCollations(planExprs); err != nil {
+		return nil, err
+	}
 	executors = make([]ExpressionExecutor, len(planExprs))
 	for i := range executors {
 		buildCtx := &expressionExecutorBuildContext{
@@ -289,6 +295,9 @@ func NewExpressionExecutorWithAllocation(
 	planExpr *plan.Expr,
 	selection *vector.AllocationAccountSelection,
 ) (ExpressionExecutor, error) {
+	if err := plan.RequireLegacyCollations(planExpr); err != nil {
+		return nil, err
+	}
 	buildCtx := &expressionExecutorBuildContext{}
 	executor, err := newExpressionExecutorWithAllocation(proc, planExpr, selection, buildCtx)
 	if err != nil || len(buildCtx.states) == 0 {
@@ -303,6 +312,10 @@ func newExpressionExecutorWithAllocation(
 	selection *vector.AllocationAccountSelection,
 	buildCtx *expressionExecutorBuildContext,
 ) (ExpressionExecutor, error) {
+	typ, typeErr := types.TypeFromPlan(planExpr.Typ)
+	if typeErr != nil {
+		return nil, typeErr
+	}
 	if planExpr.AuxId < 0 {
 		if buildCtx.memos == nil {
 			buildCtx.memos = make(map[int32]*memoExpressionState)
@@ -324,9 +337,6 @@ func newExpressionExecutorWithAllocation(
 	}
 	switch t := planExpr.Expr.(type) {
 	case *plan.Expr_Lit:
-		typ := types.NewWithCharset(
-			types.T(planExpr.Typ.Id), planExpr.Typ.Width, planExpr.Typ.Scale, uint8(planExpr.Typ.Charset),
-		)
 		vec, err := generateConstExpressionExecutor(proc, typ, t.Lit, selection)
 		if err != nil {
 			return nil, err
@@ -334,9 +344,6 @@ func newExpressionExecutorWithAllocation(
 		return NewFixedVectorExpressionExecutor(proc.Mp(), false, vec), nil
 
 	case *plan.Expr_T:
-		typ := types.NewWithCharset(
-			types.T(planExpr.Typ.Id), planExpr.Typ.Width, planExpr.Typ.Scale, uint8(planExpr.Typ.Charset),
-		)
 		vec, err := newExpressionConstNull(typ, 1, selection)
 		if err != nil {
 			return nil, err
@@ -344,9 +351,6 @@ func newExpressionExecutorWithAllocation(
 		return NewFixedVectorExpressionExecutor(proc.Mp(), false, vec), nil
 
 	case *plan.Expr_Col:
-		typ := types.NewWithCharset(
-			types.T(planExpr.Typ.Id), planExpr.Typ.Width, planExpr.Typ.Scale, uint8(planExpr.Typ.Charset),
-		)
 		ce := NewColumnExpressionExecutor()
 		*ce = ColumnExpressionExecutor{
 			mp:         proc.Mp(),
@@ -363,17 +367,11 @@ func newExpressionExecutorWithAllocation(
 		return ce, nil
 
 	case *plan.Expr_P:
-		typ := types.NewWithCharset(
-			types.T(planExpr.Typ.Id), planExpr.Typ.Width, planExpr.Typ.Scale, uint8(planExpr.Typ.Charset),
-		)
 		executor := NewParamExpressionExecutor(proc.Mp(), int(t.P.Pos), typ)
 		executor.allocation = selection
 		return executor, nil
 
 	case *plan.Expr_V:
-		typ := types.NewWithCharset(
-			types.T(planExpr.Typ.Id), planExpr.Typ.Width, planExpr.Typ.Scale, uint8(planExpr.Typ.Charset),
-		)
 		ve := NewVarExpressionExecutor()
 		*ve = VarExpressionExecutor{
 			mp:         proc.Mp(),
@@ -410,9 +408,7 @@ func newExpressionExecutorWithAllocation(
 	case *plan.Expr_List:
 		executor := NewListExpressionExecutor()
 		resultVecTyp := t.List.List[0].GetTyp()
-		typ := types.NewWithCharset(
-			types.T(resultVecTyp.Id), resultVecTyp.Width, resultVecTyp.Scale, uint8(resultVecTyp.Charset),
-		)
+		typ := types.MustTypeFromPlan(resultVecTyp)
 		if err := executor.init(proc, typ, len(t.List.List), selection); err != nil {
 			executor.Free()
 			return nil, err
@@ -451,10 +447,6 @@ func newExpressionExecutorWithAllocation(
 			executor.fid, _ = function.DecodeOverloadID(overloadID)
 			executor.evalFn, executor.resetFn, executor.freeFn, executor.retainedBytesFn = overload.GetExecuteMethod()
 		}
-		typ := types.NewWithCharset(
-			types.T(planExpr.Typ.Id), planExpr.Typ.Width, planExpr.Typ.Scale, uint8(planExpr.Typ.Charset),
-		)
-
 		if err = executor.init(proc, len(t.F.Args), typ, selection); err != nil {
 			executor.Free()
 			return nil, err
@@ -2068,6 +2060,8 @@ func generateConstExpressionExecutor(
 				// plan-typed CHAR and still materializes as VARCHAR for consumers.
 				constStringType := constSType
 				constStringType.Charset = typ.Charset
+				constStringType.CollationVersion = typ.CollationVersion
+				constStringType.CollationVersion = typ.CollationVersion
 				vec, err = newExpressionConstBytes(constStringType, []byte(sval), 1, proc.Mp(), selection)
 			} else {
 				vec, err = newExpressionConstBytes(constSType, []byte(sval), 1, proc.Mp(), selection)
@@ -2163,9 +2157,11 @@ func DecodeLiteralStringSource(literal *plan.Literal) (types.StringSource, error
 
 func GenerateConstListExpressionExecutor(proc *process.Process, exprs []*plan.Expr) (*vector.Vector, error) {
 	lenList := len(exprs)
-	vec, err := proc.AllocVectorOfRows(types.NewWithCharset(
-		types.T(exprs[0].Typ.Id), exprs[0].Typ.Width, exprs[0].Typ.Scale, uint8(exprs[0].Typ.Charset),
-	), lenList, nil)
+	typ, err := types.TypeFromPlan(exprs[0].Typ)
+	if err != nil {
+		return nil, err
+	}
+	vec, err := proc.AllocVectorOfRows(typ, lenList, nil)
 	if err != nil {
 		return nil, err
 	}
@@ -2942,9 +2938,7 @@ func GetExprZoneMap(
 					}
 				}
 				fn, _, fnFree, _ := overload.GetExecuteMethod()
-				typ := types.NewWithCharset(
-					types.T(expr.Typ.Id), expr.Typ.Width, expr.Typ.Scale, uint8(expr.Typ.Charset),
-				)
+				typ := types.MustTypeFromPlan(expr.Typ)
 
 				result := vector.NewFunctionResultWrapper(typ, proc.Mp())
 				if err = result.PreExtendAndReset(2); err != nil {
@@ -3478,9 +3472,7 @@ func MakeEvalVectorWithAllocation(
 	ev.Vec = make([]*vector.Vector, len(ev.Executor))
 	ev.Typ = make([]types.Type, len(ev.Executor))
 	for i, expr := range expressions {
-		ev.Typ[i] = types.NewWithCharset(
-			types.T(expr.Typ.Id), expr.Typ.Width, expr.Typ.Scale, uint8(expr.Typ.Charset),
-		)
+		ev.Typ[i] = types.MustTypeFromPlan(expr.Typ)
 	}
 	return
 }

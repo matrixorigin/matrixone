@@ -93,6 +93,7 @@ func (ses *Session) snapshotUserDefinedVars(ctx context.Context) ([]*query.Migra
 		if err != nil {
 			return nil, err
 		}
+		typ := variable.Type
 		item := &query.MigrateUserDefinedVar{
 			Name:                name,
 			Value:               value,
@@ -100,16 +101,7 @@ func (ses *Session) snapshotUserDefinedVars(ctx context.Context) ([]*query.Migra
 			IsBin:               variable.IsBin,
 			PrepareParamKind:    uint32(variable.PrepareParamKind),
 			RuntimeStringDomain: uint32(variable.RuntimeStringDomain),
-			Type: &plan.Type{
-				Id:          variable.Type.Id,
-				NotNullable: variable.Type.NotNullable,
-				AutoIncr:    variable.Type.AutoIncr,
-				Width:       variable.Type.Width,
-				Scale:       variable.Type.Scale,
-				Table:       variable.Type.Table,
-				Enumvalues:  variable.Type.Enumvalues,
-				Charset:     variable.Type.Charset,
-			},
+			Type:                &typ,
 		}
 		result = append(result, item)
 	}
