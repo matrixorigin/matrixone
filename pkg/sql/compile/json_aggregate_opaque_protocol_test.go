@@ -87,6 +87,7 @@ func TestJSONAggregateOpaqueRejectsPreviousCapability(t *testing.T) {
 		defines.MORPCVersion93,
 		defines.MORPCVersion94,
 		defines.MORPCVersion99,
+		defines.MORPCVersion100,
 	} {
 		client.version = version
 		c.execType = plan2.ExecTypeAP_MULTICN
@@ -123,6 +124,7 @@ func TestJSONAggregateOpaqueRejectsPreviousCapability(t *testing.T) {
 		defines.MORPCVersion93,
 		defines.MORPCVersion94,
 		defines.MORPCVersion99,
+		defines.MORPCVersion100,
 	} {
 		rt.SetGlobalVariables(moruntime.MOProtocolVersion, version)
 		require.ErrorContains(t,
@@ -168,7 +170,7 @@ func TestJSONAggregateOpaqueQueryServiceCapabilityProbe(t *testing.T) {
 		workerRT = moruntime.ServiceRuntime(workerID)
 	}
 	oldWorkerVersion, hadWorkerVersion := workerRT.GetGlobalVariables(moruntime.MOProtocolVersion)
-	workerRT.SetGlobalVariables(moruntime.MOProtocolVersion, defines.MORPCVersion99)
+	workerRT.SetGlobalVariables(moruntime.MOProtocolVersion, defines.MORPCVersion100)
 
 	cluster := clusterservice.NewMOCluster(
 		coordinatorService,
@@ -216,7 +218,7 @@ func TestJSONAggregateOpaqueQueryServiceCapabilityProbe(t *testing.T) {
 	qry := jsonAggregateOpaqueTestQuery()
 
 	// This same-binary QueryService probe checks real capability RPC routing.
-	// It does not execute an old decoder or an aggregate pipeline. The v99
+	// It does not execute an old decoder or an aggregate pipeline. The v100
 	// response must keep opaque aggregation local.
 	supported, err := remoteWorkersSupportProtocol(
 		c.proc, worker, jsonAggregateOpaqueCapabilityVersion)
@@ -243,7 +245,7 @@ func TestJSONAggregateOpaqueQueryServiceCapabilityProbe(t *testing.T) {
 	// placement admission succeed. The receiver-local gate is checked at both
 	// advertised versions as well.
 	workerRT.SetGlobalVariables(moruntime.MOProtocolVersion, jsonAggregateOpaqueCapabilityVersion)
-	rt.SetGlobalVariables(moruntime.MOProtocolVersion, defines.MORPCVersion99)
+	rt.SetGlobalVariables(moruntime.MOProtocolVersion, defines.MORPCVersion100)
 	wire := jsonAggregateOpaqueTestPipeline()
 	require.ErrorContains(t,
 		validateJSONAggregateOpaquePipelineProtocol(c.proc, wire),
@@ -324,7 +326,7 @@ func TestJSONAggregateOpaqueFallbackRespectsPlacement(t *testing.T) {
 	for _, probeFails := range []bool{false, true} {
 		t.Run(fmt.Sprintf("probe-fails=%t", probeFails), func(t *testing.T) {
 			c, client := expressionProtocolTestCompile(t)
-			client.version = defines.MORPCVersion99
+			client.version = defines.MORPCVersion100
 			if probeFails {
 				client.customResponse = true
 				client.sendErr = errors.New("probe failed")
