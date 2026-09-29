@@ -171,10 +171,13 @@ func TestIssue29400CopyAlterRetainedGatePromotionFastFails(t *testing.T) {
 		} {
 			t.Run(scenario.name, func(t *testing.T) {
 				database := "issue_29400_prior_dml_" + scenario.name
+				unrelated := database + "_other"
 				for _, query := range []string{
 					"create database " + database,
+					"create database " + unrelated,
 					"create table " + database + ".t (id int primary key, v int)",
 					"create table " + database + ".u (i int)",
+					"create table " + unrelated + ".u (i int)",
 					"insert into " + database + ".t values (1, 1)",
 				} {
 					execSQLRequire(t, ctx, db0, query)
@@ -183,6 +186,7 @@ func TestIssue29400CopyAlterRetainedGatePromotionFastFails(t *testing.T) {
 					cleanupCtx, done := context.WithTimeout(context.Background(), 20*time.Second)
 					defer done()
 					_, _ = db0.ExecContext(cleanupCtx, "drop database if exists "+database)
+					_, _ = db0.ExecContext(cleanupCtx, "drop database if exists "+unrelated)
 				}()
 				owner, err := db0.BeginTx(ctx, nil)
 				require.NoError(t, err)
@@ -227,6 +231,12 @@ func TestIssue29400CopyAlterRetainedGatePromotionFastFails(t *testing.T) {
 				case earlyErr := <-otherDone:
 					t.Fatalf("competing lifecycle owner finished before the reciprocal wait: %v", earlyErr)
 				default:
+				}
+				if scenario.name == "shared_gate" {
+					fastCtx, cancelFast := context.WithTimeout(ctx, 2*time.Second)
+					defer cancelFast()
+					_, err = db0.ExecContext(fastCtx, "drop table "+unrelated+".u")
+					require.NoError(t, err, "unrelated DROP must progress while target DROP waits for T")
 				}
 				nextCtx, cancelNext := context.WithTimeout(ctx, 10*time.Second)
 				defer cancelNext()

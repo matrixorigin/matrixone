@@ -194,11 +194,11 @@ Scale is separate from UT/BVT: mandatory known live counts 100, 1,000 and 2,000;
 
 ## 11. Acceptance and delivery
 
-All functional/ordering/rollback/metadata gates must pass. Require **at least 25% lower median end-to-end DROP DATABASE time at both 1,000 and 2,000 plain tables**, from at least three comparable paired/recreated base/candidate runs with raw samples. E4's initial single samples are not the paired baseline; its later three-sample medians can be reused if the candidate comparison preserves the relevant setup and mode. This is an engineering gate, not a public SLA.
+All functional/ordering/rollback/metadata gates must pass. The original revision-4 engineering target was **at least 25% lower median end-to-end DROP DATABASE time at both 1,000 and 2,000 plain tables**, from at least three comparable paired/recreated base/candidate runs with raw samples. E4's initial single samples are not the paired baseline; its later three-sample medians can be reused if the candidate comparison preserves the relevant setup and mode. The integrated RC delivery's measured result and user-approved acceptance boundary are recorded in §15. This target is not a public SLA.
 
-The incremental 1,000→2,000 cost must materially decrease and the T(2000)/T(1000) ratio must not worsen outside variance. Check profiles if a total gain hides steeper growth. No meaningful small/single-table regression, new retained resource leak or generated all-N SQL/plan statement allocation. The bounded descriptor slice is intentional; reduced lifecycle write count alone is insufficient; branch/CCPR counts are expected to remain linear as today.
+The incremental 1,000→2,000 cost should materially decrease and the T(2000)/T(1000) ratio must not worsen outside variance. Check profiles if a total gain hides steeper growth. No meaningful small/single-table regression, new retained resource leak or generated all-N SQL/plan statement allocation. The bounded descriptor slice is intentional; reduced lifecycle write count alone is insufficient; branch/CCPR counts are expected to remain linear as today.
 
-If the remaining cleanup dominates and this candidate fails, do not label it the completed issue fix. Revisit the measured dominant owner with an independently reviewed design. In particular, do not restore grouped reclaim without statement-aware callback proof, and do not silently add a database-only bypass. The user authorized robust optimization, not a cosmetic benchmark result.
+If the remaining cleanup dominates and a candidate fails its applicable acceptance criteria, do not label it the completed issue fix. Revisit the measured dominant owner with an independently reviewed design. In particular, do not restore grouped reclaim without statement-aware callback proof, and do not silently add a database-only bypass. The user authorized robust optimization, not a cosmetic benchmark result.
 
 A standalone speedup does not establish the two-hour disconnect cause or claim its resolution. The deliverable claim is measured reduction of table-count-driven CN database cleanup with the original table-by-table failure boundaries preserved.
 
@@ -260,3 +260,16 @@ For the final candidate, base and head used identical Go 1.26.4/native inputs, s
 Median improvement is **28.297% / 32.904%**, satisfying the declared two-scale 25% gate in this controlled run. The 2,000/1,000 median growth ratio improves from 2.701 to 2.527. Individual pairs still vary, so this is a measured acceptance result for the stated setup, not a production latency guarantee. Earlier nonpassing rounds remain in the QA ledger. The global SNAPSHOT-row convoy, historical two-hour disconnect, and #29400/#29457 integration are not established by this performance result; #27575 remains open.
 
 After that measurement, `main` advanced to `466eb8ff4f6` with only Sirius substrait binding code/tests and its design document (#29209). The final branch was rebased onto it without conflicts. The complete production/test diff has the same SHA256 before and after rebase; compile/plan/incrservice package tests passed again. The table above retains its exact measured `087000434fed` base provenance rather than relabeling it as a fresh `466eb8ff4f6` benchmark.
+
+## 15. Integrated RC delivery, 2026-09-29
+
+The RC protocol from #29457 was integrated into #29393 and rebased onto exact base `c69187e0e3`. Fresh one-CN runs used Go 1.26.4, `GOAMD64=v3`, `GOEXPERIMENT=simd`, matching native inputs and temporary probe source, alternating base/candidate order, and three recreated databases per scale. Setup was excluded. Every sample checked `SELECT 1` and connection identity on the same pinned connection and found no database/table/column/index rows by saved database ID.
+
+| Build | 1,000-table raw seconds | 2,000-table raw seconds | Median 1,000 / 2,000 |
+| --- | --- | --- | --- |
+| Base `c69187e0e3` | 6.698, 6.713, 6.804 | 16.418, 16.497, 16.529 | 6.713 / 16.497 |
+| Integrated RC | 5.414, 5.360, 5.312 | 12.657, 12.665, 12.418 | 5.360 / 12.657 |
+
+The integrated medians improve **20.2% / 23.3%**; the 2,000/1,000 growth ratio improves from 2.458 to 2.361. They do not reach the original 25% target. The user accepted the measured improvement together with the stronger slow-table concurrency behavior as the delivery criterion. In the public three-actor SQL regression, an unrelated database DROP finishes within 2 seconds while the target database DROP remains blocked behind a retained UPDATE table lock. That demonstrates independent progress, not a quantified production speedup for an arbitrarily slow table. The historical two-hour disconnect and ALTER-history global G(X) scope limit remain unresolved; #27575 stays open.
+
+To isolate the RC integration cost, a separate alternating 1,000-table comparison on the same base measured the parent-only median at 5.490 s and the integrated median at 5.363 s (three fresh samples each). The integrated path was 2.3% faster in that bounded comparison; this is a regression control, not an additional gate or a claim about every workload.

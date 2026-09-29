@@ -83,4 +83,4 @@ First protocol activation requires an approved maintenance window: stop foregrou
 | Rollback and receipt | Whole rollback, statement rollback followed by COMMIT, retry after promotion, nested receipt expiry and reclaim failure. |
 | Public acceptance | Pessimistic RC multi-CN BVT branch edge/rebuild/clone cases plus SI controls; maintenance restart/View rebuild evidence before activation. |
 
-The #29393 two-scale, three-sample >=25% end-to-end DROP DATABASE performance gate remains separate and open until current-source measurements meet it. Historical single samples and a passing unit suite cannot close that gate or a pending multi-CN BVT.
+The integrated #29393 exact-base, three-sample DROP DATABASE medians improve 20.2% at 1,000 tables and 23.3% at 2,000 tables (§15 of the parent design). The user explicitly accepted measured improvement plus independent progress during a slow target-table wait in place of the original fixed 25% threshold. These results do not close pending multi-CN BVT or the historical #27575 incident.
