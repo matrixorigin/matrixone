@@ -76,7 +76,7 @@ func materializedViewTimezoneSensitiveFunction(name string) bool {
 		"extract", "year", "yearweek", "quarter", "month", "week",
 		"day", "dayofmonth", "dayofweek", "dayofyear", "hour", "minute",
 		"second", "microsecond", "time", "ts_to_time", "convert_tz",
-		"weekday", "weekofyear", "dayname", "monthname", "last_day":
+		"weekday", "weekofyear", "dayname", "monthname", "last_day", "interval":
 		return true
 	default:
 		return false
