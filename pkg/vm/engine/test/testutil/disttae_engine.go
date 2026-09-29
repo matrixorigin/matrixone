@@ -586,7 +586,9 @@ func (ml *mockLockService) GetServiceID() string          { return "" }
 func (ml *mockLockService) GetConfig() lockservice.Config { return lockservice.Config{} }
 func (ml *mockLockService) Lock(ctx context.Context, tableID uint64, rows [][]byte,
 	txnID []byte, options lock.LockOptions) (lock.Result, error) {
-	return lock.Result{}, nil
+	return lock.Result{LockedOn: lock.LockTable{
+		Table: tableID, Group: options.Group, Version: 1, Valid: true,
+	}}, nil
 }
 func (ml *mockLockService) Unlock(ctx context.Context, txnID []byte,
 	commitTS timestamp.Timestamp, mutations ...lock.ExtraMutation) error {
@@ -603,10 +605,10 @@ func (ml *mockLockService) GetLockHolder(ctx context.Context, tableID uint64, ro
 func (ml *mockLockService) ForceRefreshLockTableBinds(targets []uint64, matcher func(bind lock.LockTable) bool) {
 }
 func (ml *mockLockService) GetLockTableBind(group uint32, tableID uint64) (lock.LockTable, error) {
-	return lock.LockTable{}, nil
+	return lock.LockTable{Table: tableID, Group: group, Version: 1, Valid: true}, nil
 }
 func (ml *mockLockService) GetLatestLockTableBind(bind lock.LockTable) (lock.LockTable, error) {
-	return lock.LockTable{}, nil
+	return bind, nil
 }
 func (ml *mockLockService) IterLocks(func(tableID uint64, keys [][]byte, lock lockservice.Lock) bool) {
 }

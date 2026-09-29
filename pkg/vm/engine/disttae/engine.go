@@ -546,6 +546,7 @@ func loadNameByIdFromStorage(
 	if err != nil {
 		return "", "", err
 	}
+	defer result.Close()
 	for _, b := range result.Batches {
 		for i := 0; i < b.RowCount(); i++ {
 			tblanmes = append(tblanmes, b.Vecs[0].GetStringAt(i))
@@ -748,6 +749,7 @@ func (e *Engine) Delete(ctx context.Context, name string, op client.TxnOperator)
 	if err != nil {
 		return err
 	}
+	defer res.Close()
 	if len(res.Batches) != 1 || res.Batches[0].Vecs[0].Length() != 1 {
 		logutil.Error(
 			"engine.delete.relation.bad",

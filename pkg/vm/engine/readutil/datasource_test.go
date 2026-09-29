@@ -240,6 +240,64 @@ func TestFastApplyDeletesByRowIds(t *testing.T) {
 	require.Equal(t, -1, idx)
 }
 
+func TestFastApplyDeletesByRowIdsSortedSingleton(t *testing.T) {
+	objectID := types.NewObjectid()
+	blockID := types.NewBlockidWithObjectID(&objectID, 1)
+	otherBlockID := types.NewBlockidWithObjectID(&objectID, 2)
+	deletes := make([]types.Rowid, 0, 1026)
+	for offset := uint32(0); offset < 1024; offset++ {
+		deletes = append(deletes, types.NewRowid(&blockID, offset*2))
+	}
+	deletes = append(deletes, types.NewRowid(&blockID, 2046))
+	deletes = append(deletes, types.NewRowid(&otherBlockID, 1))
+
+	for _, tc := range []struct {
+		name   string
+		offset int64
+		want   []int64
+	}{
+		{name: "first", offset: 0},
+		{name: "middle", offset: 1024},
+		{name: "last and duplicate", offset: 2046},
+		{name: "gap", offset: 1025, want: []int64{1025}},
+		{name: "after last", offset: 2047, want: []int64{2047}},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			rows := []int64{tc.offset}
+			FastApplyDeletesByRowIds(&blockID, &rows, nil, deletes, true)
+			if len(tc.want) == 0 {
+				require.Empty(t, rows)
+			} else {
+				require.Equal(t, tc.want, rows)
+			}
+		})
+	}
+
+	rows := []int64{1}
+	FastApplyDeletesByRowIds(&otherBlockID, &rows, nil, deletes, true)
+	require.Empty(t, rows)
+}
+
+func BenchmarkFastApplyDeletesByRowIdsSortedSingleton(b *testing.B) {
+	objectID := types.NewObjectid()
+	blockID := types.NewBlockidWithObjectID(&objectID, 1)
+	for _, size := range []int{8, 1024} {
+		deletes := make([]types.Rowid, size)
+		for i := range deletes {
+			deletes[i] = types.NewRowid(&blockID, uint32(i*2))
+		}
+		for _, offset := range []int64{0, int64(size - 1), int64(size * 2)} {
+			b.Run(fmt.Sprintf("size=%d/offset=%d", size, offset), func(b *testing.B) {
+				b.ReportAllocs()
+				for i := 0; i < b.N; i++ {
+					rows := []int64{offset}
+					FastApplyDeletesByRowIds(&blockID, &rows, nil, deletes, true)
+				}
+			})
+		}
+	}
+}
+
 func TestFastApplyDeletesByRowIds2(t *testing.T) {
 
 	var rowStrs = []string{
