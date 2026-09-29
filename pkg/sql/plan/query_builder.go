@@ -1070,8 +1070,27 @@ func (builder *QueryBuilder) remapAllColRefsForConsumer(
 	}
 
 	switch node.NodeType {
-	case plan.Node_ADAPTIVE_TOP:
-		if len(node.Children) < 2 || len(node.BindingTags) > 1 {
+	case plan.Node_ADAPTIVE_TOP, plan.Node_VECTOR_QUERY_TOP:
+		resultChildren := node.Children
+		outputChild := int32(0)
+		if node.NodeType == plan.Node_VECTOR_QUERY_TOP {
+			// Child 0 is control input, not the result schema. Keep the logical
+			// producer reference explicit for prepared type refresh and metadata.
+			outputChild = 1
+			if len(node.Children) != 3 {
+				return nil, moerr.NewInternalError(builder.GetContext(), "invalid scalar vector query topology")
+			}
+			provider := builder.qry.Nodes[node.Children[0]]
+			if len(provider.BindingTags) != 1 || len(provider.ProjectList) != 1 {
+				return nil, moerr.NewInternalError(builder.GetContext(), "invalid scalar vector provider projection")
+			}
+			colRefCnt[[2]int32{provider.BindingTags[0], 0}]++
+			if _, err := builder.remapAllColRefs(provider.NodeId, step, colRefCnt, colRefBool, sinkColRef); err != nil {
+				return nil, err
+			}
+			resultChildren = node.Children[1:]
+		}
+		if len(resultChildren) < 2 || len(node.BindingTags) > 1 {
 			return nil, moerr.NewInternalError(builder.GetContext(), "invalid adaptive top remapping topology")
 		}
 		needed := make([]int, 0, len(node.ProjectList))
@@ -1093,7 +1112,7 @@ func (builder *QueryBuilder) remapAllColRefsForConsumer(
 			needed = append(needed, 0)
 		}
 		var first *ColRefRemapping
-		for _, childID := range node.Children {
+		for _, childID := range resultChildren {
 			for _, pos := range needed {
 				increaseRefCnt(node.ProjectList[pos], 1, colRefCnt)
 			}
@@ -1131,8 +1150,8 @@ func (builder *QueryBuilder) remapAllColRefsForConsumer(
 			node.ProjectList = make([]*plan.Expr, len(first.localToGlobal))
 			for i, globalRef := range first.localToGlobal {
 				node.ProjectList[i] = &plan.Expr{
-					Typ:  builder.qry.Nodes[node.Children[0]].ProjectList[i].Typ,
-					Expr: &plan.Expr_Col{Col: &plan.ColRef{RelPos: 0, ColPos: int32(i)}},
+					Typ:  builder.qry.Nodes[resultChildren[0]].ProjectList[i].Typ,
+					Expr: &plan.Expr_Col{Col: &plan.ColRef{RelPos: outputChild, ColPos: int32(i)}},
 				}
 				remapping.addColRef(globalRef)
 			}
@@ -1145,12 +1164,12 @@ func (builder *QueryBuilder) remapAllColRefsForConsumer(
 			remapping.addColRef(globalRef)
 			newProjectList = append(newProjectList, &plan.Expr{
 				Typ:  node.ProjectList[pos].Typ,
-				Expr: &plan.Expr_Col{Col: &plan.ColRef{RelPos: 0, ColPos: int32(len(newProjectList))}},
+				Expr: &plan.Expr_Col{Col: &plan.ColRef{RelPos: outputChild, ColPos: int32(len(newProjectList))}},
 			})
 		}
 		node.ProjectList = newProjectList
 
-	case plan.Node_FUNCTION_SCAN, plan.Node_VECTOR_INDEX_SCAN:
+	case plan.Node_FUNCTION_SCAN, plan.Node_VECTOR_INDEX_SCAN, plan.Node_VECTOR_QUERY_SOURCE:
 		for _, expr := range node.FilterList {
 			increaseRefCnt(expr, 1, colRefCnt)
 		}

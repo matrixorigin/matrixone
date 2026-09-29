@@ -1,0 +1,251 @@
+set experimental_ivf_index = 1;
+drop database if exists vector_scalar_query;
+create database vector_scalar_query;
+use vector_scalar_query;
+create table items(id varchar(32) primary key, v vecf64(3));
+insert into items values ('a','[0,0,0]'), ('b','[1,0,0]'), ('c','[3,0,0]');
+create index ix using ivfflat on items(v) lists=1 op_type 'vector_l2_ops';
+explain select id from items order by l2_distance(v, (select v from items ref where ref.id='b')) limit 2;
+-- @regex("Scalar Vector Query", true)
+➤ AP QUERY PLAN ON ONE CN(10 core)[12,-1,0]  𝄀
+Scalar Vector Query  𝄀
+  Limit: 2  𝄀
+  ->  Project  𝄀
+        ->  Table Scan on vector_scalar_query.items  𝄀
+              Filter Cond: (ref.id = 'b')  𝄀
+  ->  Project  𝄀
+        ->  Sort  𝄀
+              Sort Key: #[0,1] INTERNAL  𝄀
+              Limit: 2  𝄀
+              ->  Join  𝄀
+                    Join Type: INNER  𝄀
+                    Join Cond: (items.id = #[1,1])  𝄀
+                    Runtime Filter Build: #[-1,0]  𝄀
+                    ->  Table Scan on vector_scalar_query.items  𝄀
+                          Runtime Filter Probe: items.id  𝄀
+                    ->  CROSS APPLY  𝄀
+                          ->  Scalar Vector Source  𝄀
+                          ->  Vector Index Scan on ix [l2_distance]  𝄀
+                                Vector Index: ix, Metric: l2_distance, Candidate Limit: 2, NProbe: 5  𝄀
+  ->  Project  𝄀
+        ->  Sort  𝄀
+              Sort Key: l2_distance(items.v, #[0,2]) INTERNAL  𝄀
+              Limit: 2  𝄀
+              ->  Join  𝄀
+                    Join Type: SINGLE  𝄀
+                    ->  Table Scan on vector_scalar_query.items  𝄀
+                    ->  Scalar Vector Source
+explain select id from items order by l2_distance(v, (select v from items ref where ref.id='b')) limit 2;
+-- @regex("Vector Index Scan", true)
+➤ AP QUERY PLAN ON ONE CN(10 core)[12,-1,0]  𝄀
+Scalar Vector Query  𝄀
+  Limit: 2  𝄀
+  ->  Project  𝄀
+        ->  Table Scan on vector_scalar_query.items  𝄀
+              Filter Cond: (ref.id = 'b')  𝄀
+  ->  Project  𝄀
+        ->  Sort  𝄀
+              Sort Key: #[0,1] INTERNAL  𝄀
+              Limit: 2  𝄀
+              ->  Join  𝄀
+                    Join Type: INNER  𝄀
+                    Join Cond: (items.id = #[1,1])  𝄀
+                    Runtime Filter Build: #[-1,0]  𝄀
+                    ->  Table Scan on vector_scalar_query.items  𝄀
+                          Runtime Filter Probe: items.id  𝄀
+                    ->  CROSS APPLY  𝄀
+                          ->  Scalar Vector Source  𝄀
+                          ->  Vector Index Scan on ix [l2_distance]  𝄀
+                                Vector Index: ix, Metric: l2_distance, Candidate Limit: 2, NProbe: 5  𝄀
+  ->  Project  𝄀
+        ->  Sort  𝄀
+              Sort Key: l2_distance(items.v, #[0,2]) INTERNAL  𝄀
+              Limit: 2  𝄀
+              ->  Join  𝄀
+                    Join Type: SINGLE  𝄀
+                    ->  Table Scan on vector_scalar_query.items  𝄀
+                    ->  Scalar Vector Source
+select id from items order by l2_distance(v, (select v from items ref where ref.id='b')) limit 2;
+➤ id[12,32,0]  𝄀
+b  𝄀
+a
+select id from items order by l2_distance(v, (select v from items ref where ref.id='b')) limit 1 offset 1;
+➤ id[12,32,0]  𝄀
+a
+explain select id from items where id='a' order by l2_distance(v, (select v from items ref where ref.id='absent')) limit 2;
+-- @regex("Scalar Vector Query", true)
+➤ AP QUERY PLAN ON ONE CN(10 core)[12,-1,0]  𝄀
+Scalar Vector Query  𝄀
+  Limit: 2  𝄀
+  ->  Project  𝄀
+        ->  Table Scan on vector_scalar_query.items  𝄀
+              Filter Cond: (ref.id = 'absent')  𝄀
+  ->  Project  𝄀
+        ->  Sort  𝄀
+              Sort Key: #[0,1] INTERNAL  𝄀
+              Limit: 2  𝄀
+              ->  Join  𝄀
+                    Join Type: INNER  𝄀
+                    Join Cond: (items.id = #[1,1])  𝄀
+                    Runtime Filter Build: #[-1,0]  𝄀
+                    ->  Table Scan on vector_scalar_query.items  𝄀
+                          Runtime Filter Probe: items.id  𝄀
+                    ->  CROSS APPLY  𝄀
+                          ->  Scalar Vector Source  𝄀
+                          ->  Vector Index Scan on ix [l2_distance]  𝄀
+                                Vector Index: ix, Metric: l2_distance, Candidate Limit: 2, NProbe: 5, Index Filter: (__mo_index_pri_col = 'a')  𝄀
+  ->  Project  𝄀
+        ->  Sort  𝄀
+              Sort Key: l2_distance(items.v, #[0,2]) INTERNAL  𝄀
+              Limit: 2  𝄀
+              ->  Join  𝄀
+                    Join Type: SINGLE  𝄀
+                    ->  Table Scan on vector_scalar_query.items  𝄀
+                          Filter Cond: (items.id = 'a')  𝄀
+                    ->  Scalar Vector Source
+select id from items where id='a' order by l2_distance(v, (select v from items ref where ref.id='absent')) limit 2;
+➤ id[12,32,0]  𝄀
+a
+select count(*) from (select id from items order by l2_distance(v, (select v from items ref where ref.id='absent')) limit 2) s;
+➤ count(*)[-5,64,0]  𝄀
+2
+insert into items values ('null-vector', null);
+select id from items where id='a' order by l2_distance(v, (select v from items ref where ref.id='null-vector')) limit 2;
+➤ id[12,32,0]  𝄀
+a
+select count(*) from (select id from items order by l2_distance(v, (select v from items ref where ref.id='null-vector')) limit 2) s;
+➤ count(*)[-5,64,0]  𝄀
+2
+select count(*) from (select id from items order by l2_distance(v, (select v from items ref where ref.id='null-vector')) limit 0) s;
+➤ count(*)[-5,64,0]  𝄀
+0
+prepare scalar_query from 'select id from items order by l2_distance(v, (select v from items ref where ref.id=?)) limit ?';
+set @id='b';
+set @k=2;
+execute scalar_query using @id, @k;
+➤ id[12,32,0]  𝄀
+b  𝄀
+a
+set @id='c';
+execute scalar_query using @id, @k;
+➤ id[12,32,0]  𝄀
+c  𝄀
+b
+update items set v='[5,0,0]' where id='b';
+set @id='b';
+execute scalar_query using @id, @k;
+➤ id[12,32,0]  𝄀
+b  𝄀
+c
+deallocate prepare scalar_query;
+prepare scalar_null from 'select id from items where id=''a'' order by l2_distance(v, (select v from items ref where ref.id=?)) limit ?';
+set @id='absent';
+execute scalar_null using @id, @k;
+➤ id[12,32,0]  𝄀
+a
+set @id='null-vector';
+execute scalar_null using @id, @k;
+➤ id[12,32,0]  𝄀
+a
+set @id='b';
+execute scalar_null using @id, @k;
+➤ id[12,32,0]  𝄀
+a
+set @k=0;
+execute scalar_null using @id, @k;
+➤ id[12,32,0]
+set @k=1;
+execute scalar_null using @id, @k;
+➤ id[12,32,0]  𝄀
+a
+deallocate prepare scalar_null;
+select id from items order by l2_distance(v, (select v from items ref where ref.id in ('a','b'))) limit 2;
+Subquery returns more than 1 row
+drop database vector_scalar_query;
+set experimental_ivf_index = 0;
+set experimental_hnsw_index = 1;
+create database vector_scalar_query;
+use vector_scalar_query;
+create table items(id bigint primary key, v vecf32(3));
+insert into items values (1,'[0,0,0]'), (2,'[1,0,0]'), (3,'[3,0,0]');
+create index ix using hnsw on items(v) op_type 'vector_l2_ops' M 4 EF_CONSTRUCTION 16 EF_SEARCH 16;
+explain select id from items order by l2_distance(v, (select v from items ref where ref.id=2)) limit 2;
+-- @regex("Scalar Vector Query", true)
+➤ TP QUERY PLAN[12,-1,0]  𝄀
+Scalar Vector Query  𝄀
+  Limit: 2  𝄀
+  ->  Project  𝄀
+        ->  Table Scan on vector_scalar_query.items  𝄀
+              Filter Cond: (ref.id = 2)  𝄀
+  ->  Project  𝄀
+        ->  Sort  𝄀
+              Sort Key: mo_hnsw_alias_0.score INTERNAL  𝄀
+              Limit: 2  𝄀
+              ->  Join  𝄀
+                    Join Type: INNER  𝄀
+                    Join Cond: (items.id = mo_hnsw_alias_0.pkid)  𝄀
+                    Runtime Filter Build: #[-1,0]  𝄀
+                    ->  Table Scan on vector_scalar_query.items  𝄀
+                          Runtime Filter Probe: items.id  𝄀
+                    ->  Table Function on hnsw_search  𝄀
+                          Index Reader Param:  Limit: 2  𝄀
+                          Limit: 2  𝄀
+                          ->  Scalar Vector Source  𝄀
+  ->  Project  𝄀
+        ->  Sort  𝄀
+              Sort Key: l2_distance(items.v, #[0,2]) INTERNAL  𝄀
+              Limit: 2  𝄀
+              ->  Join  𝄀
+                    Join Type: SINGLE  𝄀
+                    ->  Table Scan on vector_scalar_query.items  𝄀
+                    ->  Scalar Vector Source
+select id from items order by l2_distance(v, (select v from items ref where ref.id=2)) limit 2;
+➤ id[-5,64,0]  𝄀
+2  𝄀
+1
+select id from items where id=1 order by l2_distance(v, (select v from items ref where ref.id=99)) limit 2;
+➤ id[-5,64,0]  𝄀
+1
+select count(*) from (select id from items order by l2_distance(v, (select v from items ref where ref.id=99)) limit 2) s;
+➤ count(*)[-5,64,0]  𝄀
+2
+create table query_vectors(id bigint primary key, v vecf32(3));
+insert into query_vectors values (1,'[1,0,0]'), (2,'[3,0,0]'), (3,null);
+prepare scalar_hnsw from 'select id from items order by l2_distance(v, (select v from query_vectors where id=?)) limit ?';
+set @id=1;
+set @k=2;
+execute scalar_hnsw using @id, @k;
+➤ id[-5,64,0]  𝄀
+2  𝄀
+1
+set @id=2;
+execute scalar_hnsw using @id, @k;
+➤ id[-5,64,0]  𝄀
+3  𝄀
+2
+set @k=0;
+execute scalar_hnsw using @id, @k;
+➤ id[-5,64,0]
+set @k=2;
+update query_vectors set v='[0,0,0]' where id=2;
+execute scalar_hnsw using @id, @k;
+➤ id[-5,64,0]  𝄀
+1  𝄀
+2
+deallocate prepare scalar_hnsw;
+prepare scalar_hnsw_null from 'select id from items where id=1 order by l2_distance(v, (select v from query_vectors where id=?)) limit ?';
+set @id=3;
+execute scalar_hnsw_null using @id, @k;
+➤ id[-5,64,0]  𝄀
+1
+set @id=99;
+execute scalar_hnsw_null using @id, @k;
+➤ id[-5,64,0]  𝄀
+1
+set @id=1;
+execute scalar_hnsw_null using @id, @k;
+➤ id[-5,64,0]  𝄀
+1
+deallocate prepare scalar_hnsw_null;
+drop database vector_scalar_query;
+set experimental_hnsw_index = 0;
