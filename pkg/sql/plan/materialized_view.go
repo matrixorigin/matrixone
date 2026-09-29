@@ -47,8 +47,15 @@ func validateMaterializedViewQuery(ctx context.Context, stmt *tree.Select) error
 		switch node := expr.(type) {
 		case *tree.Subquery, *tree.VarExpr, *tree.ParamExpr:
 			err = unsupported()
+		case *tree.CastExpr:
+			// A TIMESTAMP-to-DATE cast uses the session timezone. Refresh
+			// workers do not inherit the defining session's timezone.
+			if target, ok := node.Type.(*tree.T); ok && target.InternalType.Oid == uint32(types.T_date) {
+				err = unsupported()
+			}
 		case *tree.FuncExpr:
-			if function.GetFunctionIsVolatileOrRealTimeRelatedByName(materializedViewIncrementalFunctionName(node)) {
+			name := materializedViewIncrementalFunctionName(node)
+			if name == "date_trunc" || function.GetFunctionIsVolatileOrRealTimeRelatedByName(name) {
 				err = unsupported()
 			}
 		}

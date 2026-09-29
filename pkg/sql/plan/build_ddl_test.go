@@ -1717,6 +1717,8 @@ func TestMaterializedViewAdmissionTracksAllInputs(t *testing.T) {
 		{"select row_number() over(partition by (select max(k) from dim)) from src", false},
 		{"select k from src order by (select max(k) from dim)", false},
 		{"select k,count(*) from src group by k having rand()>0.5", false},
+		{"select cast(ts as date), count(*) from src group by cast(ts as date)", false},
+		{"select date_trunc('day', ts), count(*) from src group by date_trunc('day', ts)", false},
 		{"select k,now() from src", false},
 		{"select k from src where k=@limit", false},
 		{"select k from src where k=?", false},
