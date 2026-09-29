@@ -6266,12 +6266,13 @@ func preparedBetweenHasMixedNumericText(ctx context.Context, args []*Expr) bool 
 	if state == nil || len(args) != 3 {
 		return false
 	}
-	hasText, hasNumericMarker := false, false
+	hasText, hasNumericMarker, hasTextMarker, hasNumeric := false, false, false, false
 	for i, arg := range args {
 		if arg == nil {
 			continue
 		}
 		hasText = hasText || types.T(arg.Typ.Id).IsMySQLString()
+		hasNumeric = hasNumeric || types.T(arg.Typ.Id).ToType().IsNumeric()
 		if i == 0 && arg.AuxId < 0 && arg.Typ.Id == int32(types.T_float64) {
 			if fn := arg.GetF(); fn != nil && fn.Func != nil && fn.Func.ObjName == "cast" &&
 				len(fn.Args) > 0 && types.T(fn.Args[0].Typ.Id).IsMySQLString() {
@@ -6281,9 +6282,10 @@ func preparedBetweenHasMixedNumericText(ctx context.Context, args []*Expr) bool 
 		if marker := arg.GetP(); marker != nil {
 			binding, ok := state.bindingForPosition(marker.Pos)
 			hasNumericMarker = hasNumericMarker || ok && binding.Type.IsNumeric()
+			hasTextMarker = hasTextMarker || ok && binding.Type.Oid.IsMySQLString()
 		}
 	}
-	return hasText && hasNumericMarker
+	return hasText && hasNumericMarker || hasTextMarker && hasNumeric
 }
 
 func bindBetweenAsComparisons(ctx context.Context, args []*Expr) (*Expr, error) {

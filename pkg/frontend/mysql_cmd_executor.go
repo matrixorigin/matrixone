@@ -3121,7 +3121,6 @@ func createPrepareStmtInSession(
 			prepareControl.Plan),
 		directResultParamPositions: plan2.PreparedPlanDirectResultParamPositions(
 			prepareControl.Plan),
-		directResultParamPositionsSet: true,
 		jsonComparisonParamPositions: plan2.PreparedJSONComparisonParamPositions(
 			prepareControl.Plan),
 		jsonMemberOfParamPositions: plan2.PreparedJSONMemberOfParamPositions(
@@ -3133,8 +3132,6 @@ func createPrepareStmtInSession(
 		schedulingSQLMode:          schedulingSQLMode,
 	}
 	prepareStmt.refreshGenerateSeriesParamMetadata(prepareControl.Plan)
-	prepareStmt.directResultParamPositions = plan2.PreparedPlanDirectResultParamPositions(prepareControl.Plan)
-	prepareStmt.directResultParamPositionsSet = true
 
 	_, ok := preparePlan.GetDcl().Control.(*plan.DataControl_Prepare)
 	if ok {

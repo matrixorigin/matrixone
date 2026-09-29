@@ -1808,7 +1808,6 @@ func TestInitExecuteStmtParamRestoresBooleanRuntimeType(t *testing.T) {
 	require.NoError(t, vector.AppendBytes(prepareStmt.params, []byte("1"), false, cw.proc.Mp()))
 	prepareStmt.ParamTypes = []byte{byte(defines.MYSQL_TYPE_TINY), 0}
 	prepareStmt.directResultParamPositions = []int32{0}
-	prepareStmt.directResultParamPositionsSet = true
 
 	_, _, _, _, _, err := initExecuteStmtParam(execCtx, ses, cw, nil, prepareStmt.Name)
 	require.NoError(t, err)
@@ -2038,18 +2037,6 @@ func TestBinaryProtocolRuntimeParamTypesDoesNotScanDecimalPayload(t *testing.T) 
 	require.Equal(t, payload, params.GetRawBytesAt(0), "category admission must not mutate packet provenance")
 }
 
-func TestRuntimeParamTypesContainText(t *testing.T) {
-	require.False(t, runtimeParamTypesContainText(nil))
-	require.False(t, runtimeParamTypesContainText([]types.Type{
-		types.T_int64.ToType(), types.T_decimal128.ToType(), {},
-	}))
-	for _, oid := range []types.T{types.T_char, types.T_varchar, types.T_text} {
-		require.True(t, runtimeParamTypesContainText([]types.Type{
-			types.T_int64.ToType(), oid.ToType(),
-		}), oid.String())
-	}
-}
-
 func BenchmarkBinaryProtocolRuntimeParamTypesLargeDecimal(b *testing.B) {
 	params := vector.NewVec(types.T_text.ToType())
 	mp := mpool.MustNewZero()
@@ -2222,7 +2209,6 @@ func TestCOMStmtGenerateSeriesDatePacketKeepsResultDomain(t *testing.T) {
 		scratchPrepare.Close()
 	}()
 	require.Equal(t, []int32{0}, prepareStmt.temporalRuntimeParamPositions)
-	require.True(t, prepareStmt.parameterizedGenerateSeries)
 	require.NoError(t, proto.ParseExecuteData(
 		execCtx.reqCtx, cw.proc, prepareStmt,
 		buildDateExecutePacketForParams([]defines.MysqlType{defines.MYSQL_TYPE_DATE}, 2024, 1, 1), 0))
@@ -2586,62 +2572,6 @@ func TestPreparedParamValuesBoundsInvalidDecimalError(t *testing.T) {
 	require.Less(t, len(err.Error()), 160)
 }
 
-func BenchmarkBinaryDirectResultDecimalLargeLexeme(b *testing.B) {
-	value := strings.Repeat("0", 1<<20) + "1.0"
-	paramTypes := []byte{byte(defines.MYSQL_TYPE_NEWDECIMAL), 0}
-	positions := []int32{0}
-	paramVals := []any{plan2.ParamValue{Value: value}}
-	b.ReportAllocs()
-	b.SetBytes(int64(len(value)))
-	for b.Loop() {
-		normalized, visible, canonical, hasVisible, ok := binaryProtocolPrepareParamDomains(
-			defines.MYSQL_TYPE_NEWDECIMAL, false, value)
-		if !ok || !hasVisible {
-			b.Fatal("large valid DECIMAL lexeme rejected")
-		}
-		param := paramVals[0].(plan2.ParamValue)
-		param.RuntimeType = normalized
-		param.HasRuntimeType = true
-		param.DirectResultType = visible
-		param.HasDirectResultType = true
-		param.MaterializedValue = canonical
-		paramVals[0] = param
-		if err := applyBinaryDirectResultDecimalTypes(
-			context.Background(), paramVals, paramTypes, positions); err != nil {
-			b.Fatal(err)
-		}
-	}
-}
-
-func TestApplyBinaryDirectResultDecimalTypesPreservesLexicalScale(t *testing.T) {
-	values := []any{
-		plan2.ParamValue{
-			Value: "0.00", RuntimeType: types.New(types.T_decimal64, 1, 0), HasRuntimeType: true,
-			DirectResultType: types.New(types.T_decimal64, 2, 2), HasDirectResultType: true,
-		},
-		plan2.ParamValue{
-			Value: "9.00", RuntimeType: types.New(types.T_decimal64, 1, 0), HasRuntimeType: true,
-			DirectResultType: types.New(types.T_decimal64, 3, 2), HasDirectResultType: true,
-		},
-	}
-	err := applyBinaryDirectResultDecimalTypes(
-		context.Background(), values,
-		[]byte{
-			byte(defines.MYSQL_TYPE_NEWDECIMAL), 0,
-			byte(defines.MYSQL_TYPE_NEWDECIMAL), 0,
-		},
-		[]int32{0},
-	)
-	require.NoError(t, err)
-	direct := values[0].(plan2.ParamValue)
-	require.Equal(t, types.T_decimal64, direct.RuntimeType.Oid)
-	require.Equal(t, int32(2), direct.RuntimeType.Width)
-	require.Equal(t, int32(2), direct.RuntimeType.Scale)
-	unrelated := values[1].(plan2.ParamValue)
-	require.Equal(t, int32(1), unrelated.RuntimeType.Width)
-	require.Zero(t, unrelated.RuntimeType.Scale)
-}
-
 func TestBinaryProtocolDecimalRebindPreservesExactAbsDomain(t *testing.T) {
 	_, prepareStmt, cw, _ := newPreparedExecuteEnvForSQL(t, 113, "select abs(?)")
 	defer prepareStmt.Close()
@@ -2712,7 +2642,6 @@ func TestInitExecuteStmtParamSpecializesBinaryRuntimePlan(t *testing.T) {
 	prepareStmt.params = params
 	prepareStmt.ParamTypes = []byte{byte(defines.MYSQL_TYPE_NEWDECIMAL), 0}
 	prepareStmt.directResultParamPositions = []int32{0}
-	prepareStmt.directResultParamPositionsSet = true
 
 	var resultColumns []*plan.ColDef
 	writer := execCtx.resper.MysqlRrWr().(*testMysqlWriter)
@@ -2895,7 +2824,6 @@ func TestInitExecuteStmtParamKeepsDirectResultSpecializationAcrossNoOpPlanScan(t
 		byte(defines.MYSQL_TYPE_VAR_STRING), 0,
 	}
 	prepareStmt.directResultParamPositions = []int32{0}
-	prepareStmt.directResultParamPositionsSet = true
 	sentinel := compile.NewCompile(
 		"", "", prepareStmt.Sql, "", "", nil,
 		cw.proc, prepareStmt.PrepareStmt, false, nil, time.Now())

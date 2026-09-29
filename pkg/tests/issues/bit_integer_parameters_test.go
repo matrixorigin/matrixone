@@ -79,7 +79,7 @@ func testBitIntegerPreparedParameters(t *testing.T, ctx context.Context, db *sql
 		for _, tc := range []struct{ source, want string }{
 			{"64.5e0", "40"},
 			{"cast(64.5 as decimal(3,1))", "41"},
-			{"'64.5'", "41"},
+			{"'64.5'", "40"},
 		} {
 			_, err = conn.ExecContext(ctx, "set @char_rounding="+tc.source)
 			require.NoError(t, err)

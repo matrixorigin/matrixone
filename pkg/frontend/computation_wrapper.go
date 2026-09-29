@@ -1113,34 +1113,6 @@ func binaryProtocolPrepareParamBinaryStringMetadata(
 	return reusable
 }
 
-func applyBinaryDirectResultDecimalTypes(
-	ctx context.Context,
-	paramVals []any,
-	paramTypes []byte,
-	positions []int32,
-) error {
-	for _, position := range positions {
-		if position < 0 || int(position) >= len(paramVals) || int(position)*2+1 >= len(paramTypes) {
-			continue
-		}
-		param, ok := paramVals[position].(plan2.ParamValue)
-		if !ok || param.Value == nil {
-			continue
-		}
-		mysqlType := defines.MysqlType(paramTypes[position*2])
-		if mysqlType != defines.MYSQL_TYPE_DECIMAL && mysqlType != defines.MYSQL_TYPE_NEWDECIMAL {
-			continue
-		}
-		if !param.HasDirectResultType {
-			return invalidBinaryDecimalParameter(ctx, param.Value)
-		}
-		param.RuntimeType = param.DirectResultType
-		param.HasRuntimeType = true
-		paramVals[position] = param
-	}
-	return nil
-}
-
 // preparedFixedIntegerParamPositions returns static execute-time metadata for
 // one prepared-plan generation. LIMIT/OFFSET and LAG/LEAD offsets have the
 // same fixed unsigned-integer contract, so retain one sorted position list for
@@ -1470,7 +1442,6 @@ func initExecuteStmtParamWithResolverInSession(
 		prepareStmt.PreparePlan = newPlan
 		rebuildCommitted = true
 		prepareStmt.directResultParamPositions = plan2.PreparedPlanDirectResultParamPositions(executionPlan)
-		prepareStmt.directResultParamPositionsSet = true
 		prepareStmt.jsonComparisonParamPositions =
 			plan2.PreparedJSONComparisonParamPositions(executionPlan)
 		prepareStmt.jsonMemberOfParamPositions =
@@ -2369,16 +2340,6 @@ func binaryProtocolRuntimeParamTypes(paramTypes []byte, params *vector.Vector) [
 	return runtimeTypes
 }
 
-func runtimeParamTypesContainText(runtimeTypes []types.Type) bool {
-	for _, runtimeType := range runtimeTypes {
-		switch runtimeType.Oid {
-		case types.T_char, types.T_varchar, types.T_text:
-			return true
-		}
-	}
-	return false
-}
-
 // executeUserParamConcreteType returns the assignment-time SQL type carried by
 // the EXECUTE ... USING expression when that width changes JSON comparison
 // semantics. The Go value is only a compatibility fallback for callers which
@@ -2728,8 +2689,7 @@ func shouldCachePrepareCompile(p *plan.Plan) bool {
 }
 
 func (prepareStmt *PrepareStmt) refreshGenerateSeriesParamMetadata(p *plan.Plan) {
-	endpoints, parameterized := plan2.PreparedPlanGenerateSeriesParameterInfo(p)
-	prepareStmt.parameterizedGenerateSeries = parameterized
+	endpoints, _ := plan2.PreparedPlanGenerateSeriesParameterInfo(p)
 	positions := slices.Concat(prepareStmt.numericOverloadParamPositions, endpoints)
 	slices.Sort(positions)
 	prepareStmt.temporalRuntimeParamPositions = slices.Compact(positions)

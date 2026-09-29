@@ -364,10 +364,9 @@ type PrepareStmt struct {
 	// Percentile configuration is fixed by a value during compilation. Cache
 	// this static trait with the conservative generation rather than walking
 	// the plan on every EXECUTE.
-	percentileParamPlan           *plan.Plan
-	hasPercentileParams           bool
-	directResultParamPositions    []int32
-	directResultParamPositionsSet bool
+	percentileParamPlan        *plan.Plan
+	hasPercentileParams        bool
+	directResultParamPositions []int32
 	// fixedIntegerParamPositions identifies parameters with a fixed unsigned-
 	// integer contract (LIMIT/OFFSET and LAG/LEAD offsets). It is installed
 	// with each prepared-plan generation so binary EXECUTE never walks the plan
@@ -393,9 +392,6 @@ type PrepareStmt struct {
 	// GENERATE_SERIES endpoint positions. Only these markers retain a temporal
 	// COM_STMT_EXECUTE packet domain instead of generic text transport.
 	temporalRuntimeParamPositions []int32
-	// A parameterized GENERATE_SERIES can derive DATETIME scale from text
-	// values or an interval step, even when protocol parameter types are stable.
-	parameterizedGenerateSeries bool
 	// bitCountOverloadParamPositions owns BIT_COUNT's asymmetric prepared
 	// contract. Each marker starts with the binary-string default; after an
 	// actual numeric value reparses the statement, later text/BLOB values keep
@@ -895,7 +891,6 @@ func (prepareStmt *PrepareStmt) Close() {
 		prepareStmt.ColDefData = nil
 	}
 	prepareStmt.directResultParamPositions = nil
-	prepareStmt.directResultParamPositionsSet = false
 	prepareStmt.percentileParamPlan = nil
 	prepareStmt.remapDb = nil
 	prepareStmt.getFromSendLongData = nil
