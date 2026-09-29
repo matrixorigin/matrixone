@@ -238,7 +238,8 @@ func TestIssue27088PreparedDecimalCommonType(t *testing.T) {
 		mustExec(t, ctx, conn, `insert into prepared_exact_integer_cmp values
 			(1, 9007199254740992, 9007199254740992),
 			(2, 9007199254740993, 9007199254740993),
-			(3, 9007199254740994, 9007199254740994)`)
+			(3, 9007199254740994, 9007199254740994),
+			(4, 100, 100)`)
 
 		t.Run("issue 27492 COM_STMT exact integer comparison", func(t *testing.T) {
 			for _, column := range []string{"u", "b"} {
@@ -256,6 +257,20 @@ func TestIssue27088PreparedDecimalCommonType(t *testing.T) {
 						require.NoError(t, rows.Err())
 					}
 					queryAndAssert("9007199254740993", 2)
+					queryAndAssert("9007199254740993.0", 2)
+					queryAndAssert("100.0", 4)
+					queryAndAssert("1e2", 4)
+					if column == "b" {
+						rows, queryErr := stmt.QueryContext(ctx, "100.5")
+						if rows != nil {
+							defer rows.Close()
+							require.NoError(t, rows.Err())
+						}
+						require.ErrorContains(t, queryErr, "invalid argument cast to uint64")
+					} else {
+						queryAndAssert("100.5")
+					}
+					queryAndAssert("1e2", 4)
 					queryAndAssert(uint64(9007199254740993), 2)
 					queryAndAssert(nil)
 					queryAndAssert("9007199254740993", 2)
@@ -283,6 +298,25 @@ func TestIssue27088PreparedDecimalCommonType(t *testing.T) {
 
 				mustExec(t, ctx, conn, "set @issue27492_value = '9007199254740993'")
 				querySQLAndAssert(2)
+				mustExec(t, ctx, conn, "set @issue27492_value = '9007199254740993.0'")
+				querySQLAndAssert(2)
+				mustExec(t, ctx, conn, "set @issue27492_value = '100.0'")
+				querySQLAndAssert(4)
+				mustExec(t, ctx, conn, "set @issue27492_value = '1e2'")
+				querySQLAndAssert(4)
+				mustExec(t, ctx, conn, "set @issue27492_value = '100.5'")
+				if column == "b" {
+					rows, queryErr := conn.QueryContext(ctx, "execute "+statementName+" using @issue27492_value")
+					if rows != nil {
+						defer rows.Close()
+						require.NoError(t, rows.Err())
+					}
+					require.ErrorContains(t, queryErr, "invalid argument cast to uint64")
+				} else {
+					querySQLAndAssert()
+				}
+				mustExec(t, ctx, conn, "set @issue27492_value = '1e2'")
+				querySQLAndAssert(4)
 				mustExec(t, ctx, conn, "set @issue27492_value = null")
 				querySQLAndAssert()
 				mustExec(t, ctx, conn, "set @issue27492_value = '9007199254740993'")

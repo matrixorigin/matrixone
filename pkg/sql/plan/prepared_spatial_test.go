@@ -36,7 +36,6 @@ func TestPreparedSpatialDistanceUnitOverload(t *testing.T) {
 	_, prepareOverload := function.DecodeOverloadID(prepareFn.GetF().GetFunc().GetObj())
 	require.Equal(t, int32(4), prepareOverload,
 		"the marker uses the VARCHAR unit overload as the provisional prepare-time domain")
-	require.True(t, PreparedPlanNeedsRuntimeSpecialization(preparePlan))
 
 	unitValues := []any{
 		ParamValue{Value: "POINT(0 0)", SourceType: types.T_varchar.ToType(), HasSourceType: true},

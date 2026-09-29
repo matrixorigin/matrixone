@@ -15,6 +15,7 @@
 package plan
 
 import (
+	"context"
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
 	"github.com/matrixorigin/matrixone/pkg/container/types"
 	"github.com/matrixorigin/matrixone/pkg/pb/plan"
@@ -666,7 +667,7 @@ func existentialPredicateSafe(e *plan.Expr) bool {
 		if lit == nil || lit.Src != nil || !types.T(arg.Typ.Id).IsInteger() || !types.T(x.Typ.Id).IsInteger() {
 			return
 		}
-		if checkNoNeedCast(makeTypeByPlan2Expr(arg), makeTypeByPlan2Expr(x), arg) {
+		if checkNoNeedCast(context.Background(), makeTypeByPlan2Expr(arg), makeTypeByPlan2Expr(x), arg) {
 			x.Expr = DeepCopyExpr(arg).Expr
 		}
 	})

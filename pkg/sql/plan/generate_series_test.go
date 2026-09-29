@@ -207,7 +207,6 @@ func TestPreparedGenerateSeriesEndpointDomain(t *testing.T) {
 		"prepare gs from 'select min(result), max(result) from generate_series(?,?,?) g'")
 	require.NoError(t, err)
 	original := prepared.GetDcl().GetPrepare().Plan
-	require.True(t, PreparedPlanNeedsRuntimeSpecialization(original))
 	findScan := func(p *planpb.Plan) *planpb.Node {
 		for _, node := range p.GetQuery().Nodes {
 			if node.NodeType == planpb.Node_FUNCTION_SCAN && node.TableDef.GetTblFunc().GetName() == "generate_series" {

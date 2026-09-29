@@ -624,7 +624,7 @@ var supportedAggInNewFramework = []FuncNew{
 		class:      plan.Function_AGG,
 		layout:     STANDARD_FUNCTION,
 		checkFn: func(overloads []overload, inputs []types.Type) checkResult {
-			return fixedUnaryAggTypeCheck(inputs, []types.T{types.T_varbinary})
+			return opaqueStateTypeCheck(inputs, failedAggParametersWrong)
 		},
 
 		Overloads: []overload{
@@ -674,16 +674,7 @@ var supportedAggInNewFramework = []FuncNew{
 		class:      plan.Function_AGG | plan.Function_PRODUCE_NO_NULL,
 		layout:     STANDARD_FUNCTION,
 		checkFn: func(overloads []overload, inputs []types.Type) checkResult {
-			if len(inputs) != 1 {
-				return newCheckResultWithFailure(failedAggParametersWrong)
-			}
-			switch inputs[0].Oid {
-			case types.T_any:
-				return newCheckResultWithCast(0, []types.Type{types.T_varbinary.ToType()})
-			case types.T_binary, types.T_varbinary, types.T_blob:
-				return newCheckResultWithSuccess(0)
-			}
-			return newCheckResultWithFailure(failedAggParametersWrong)
+			return opaqueStateTypeCheck(inputs, failedAggParametersWrong)
 		},
 
 		Overloads: []overload{
