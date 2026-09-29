@@ -16,6 +16,7 @@ package plan
 
 import (
 	"context"
+	"math"
 	"strconv"
 	"testing"
 
@@ -24,6 +25,36 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/pb/plan"
 	"github.com/stretchr/testify/require"
 )
+
+func TestDecimalFloatComparisonUniqueValue(t *testing.T) {
+	decimal, err := makePlan2DecimalExprWithType(context.Background(), "12345.00")
+	require.NoError(t, err)
+	cast, err := makePlan2CastExpr(context.Background(), decimal, makeSimplePlan2Type(types.T_float64))
+	require.NoError(t, err)
+	value, ok := decimalFloatComparisonConstant(cast)
+	require.True(t, ok)
+	require.Equal(t, float64(12345), value)
+
+	for _, test := range []struct {
+		name   string
+		value  float64
+		column types.Type
+		unique bool
+	}{
+		{"integral decimal64", 54321, types.New(types.T_decimal64, 12, 2), true},
+		{"fractional decimal64", 0.1, types.New(types.T_decimal64, 12, 2), true},
+		{"between scale points", 0.104, types.New(types.T_decimal64, 12, 2), false},
+		{"negative", -54321, types.New(types.T_decimal64, 12, 2), true},
+		{"outside width", 1e11, types.New(types.T_decimal64, 12, 2), false},
+		{"decimal128 collision", 9007199254740992, types.New(types.T_decimal128, 20, 0), false},
+		{"decimal128 ordinary", 54321, types.New(types.T_decimal128, 20, 2), true},
+		{"infinity", math.Inf(1), types.New(types.T_decimal64, 12, 2), false},
+	} {
+		t.Run(test.name, func(t *testing.T) {
+			require.Equal(t, test.unique, decimalFloatComparisonHasUniqueValue(test.value, test.column))
+		})
+	}
+}
 
 // TestComparisonTypeCastOptimization tests that comparison operators avoid casting columns
 // when comparing with constants to preserve index usage

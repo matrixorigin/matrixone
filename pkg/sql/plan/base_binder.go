@@ -7442,6 +7442,11 @@ func bindFuncExprImplByPlanExpr(
 						}
 						return false
 					}
+					if colOid.IsDecimal() && otherOid == types.T_float64 && otherExpr != nil {
+						if value, ok := decimalFloatComparisonConstant(otherExpr); ok {
+							return decimalFloatComparisonHasUniqueValue(value, colType)
+						}
+					}
 
 					return false
 				}
@@ -9381,6 +9386,95 @@ func integerMetadataWidth(oid types.T) int32 {
 		return 20
 	default:
 		return 0
+	}
+}
+
+func decimalFloatComparisonConstant(expr *Expr) (float64, bool) {
+	if expr == nil || expr.Typ.Id != int32(types.T_float64) {
+		return 0, false
+	}
+	if literal := expr.GetLit(); literal != nil {
+		if value, ok := literal.GetValue().(*plan.Literal_Dval); ok {
+			return value.Dval, true
+		}
+	}
+	fn := expr.GetF()
+	if fn == nil || fn.Func == nil || fn.Func.GetObjName() != "cast" || len(fn.Args) != 2 {
+		return 0, false
+	}
+	source := fn.Args[0]
+	if inner := source.GetF(); inner != nil && inner.Func != nil && inner.Func.GetObjName() == "cast" &&
+		len(inner.Args) == 2 && !isExplicitPreparedCast(source) {
+		if text := inner.Args[0].GetLit(); text != nil &&
+			text.LiteralForm == plan.StringLiteralForm_STRING_LITERAL_TEXT &&
+			types.T(inner.Args[0].Typ.Id).IsMySQLString() {
+			switch types.T(source.Typ.Id) {
+			case types.T_decimal64:
+				decimal, err := types.ParseDecimal64(text.GetSval(), source.Typ.Width, source.Typ.Scale)
+				if err == nil {
+					return types.Decimal64ToFloat64(decimal, source.Typ.Scale), true
+				}
+			case types.T_decimal128:
+				decimal, err := types.ParseDecimal128(text.GetSval(), source.Typ.Width, source.Typ.Scale)
+				if err == nil {
+					return types.Decimal128ToFloat64(decimal, source.Typ.Scale), true
+				}
+			}
+		}
+	}
+	literal := source.GetLit()
+	if literal == nil {
+		return 0, false
+	}
+	switch value := literal.GetValue().(type) {
+	case *plan.Literal_I64Val:
+		return float64(value.I64Val), true
+	case *plan.Literal_U64Val:
+		return float64(value.U64Val), true
+	case *plan.Literal_Dval:
+		return value.Dval, true
+	case *plan.Literal_Decimal64Val:
+		if value.Decimal64Val != nil {
+			return types.Decimal64ToFloat64(types.Decimal64(value.Decimal64Val.A), fn.Args[0].Typ.Scale), true
+		}
+	case *plan.Literal_Decimal128Val:
+		if value.Decimal128Val != nil {
+			coefficient := types.Decimal128{B0_63: uint64(value.Decimal128Val.A), B64_127: uint64(value.Decimal128Val.B)}
+			return types.Decimal128ToFloat64(coefficient, fn.Args[0].Typ.Scale), true
+		}
+	}
+	return 0, false
+}
+
+// A native DECIMAL equality is equivalent to the usual DOUBLE comparison only
+// when exactly one value at the column's scale converts to the peer DOUBLE.
+// Conversion is monotone, so checking the adjacent representable DECIMAL
+// values rules out every other value in the column domain.
+func decimalFloatComparisonHasUniqueValue(value float64, column types.Type) bool {
+	if math.IsNaN(value) || math.IsInf(value, 0) || column.Scale < 0 {
+		return false
+	}
+	switch column.Oid {
+	case types.T_decimal64:
+		candidate, err := types.Decimal64FromFloat64(value, column.Width, column.Scale)
+		if err != nil || types.Decimal64ToFloat64(candidate, column.Scale) != value {
+			return false
+		}
+		return types.Decimal64ToFloat64(candidate-1, column.Scale) != value &&
+			types.Decimal64ToFloat64(candidate+1, column.Scale) != value
+	case types.T_decimal128:
+		candidate, err := types.Decimal128FromFloat64(value, column.Width, column.Scale)
+		if err != nil || types.Decimal128ToFloat64(candidate, column.Scale) != value {
+			return false
+		}
+		previous, err := candidate.Add128(types.Decimal128{B0_63: 1}.Minus())
+		if err != nil || types.Decimal128ToFloat64(previous, column.Scale) == value {
+			return false
+		}
+		next, err := candidate.Add128(types.Decimal128{B0_63: 1})
+		return err == nil && types.Decimal128ToFloat64(next, column.Scale) != value
+	default:
+		return false
 	}
 }
 

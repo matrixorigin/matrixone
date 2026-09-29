@@ -442,6 +442,30 @@ func bindPreparedConsumerArguments(ctx context.Context, name string, args []*Exp
 				continue
 			}
 		}
+		if len(args) == 2 && state.selectStatement && isPreparedNumericComparisonContext(name) &&
+			binding.Type.Oid == types.T_float64 && args[1-i] != nil && args[1-i].GetCol() != nil &&
+			types.T(args[1-i].Typ.Id).IsDecimal() {
+			if raw, present := preparedConfigurationValue(ctx, source); present {
+				var value float64
+				var ok bool
+				switch typed := raw.(type) {
+				case float64:
+					value, ok = typed, true
+				case string:
+					var parseErr error
+					value, parseErr = strconv.ParseFloat(typed, 64)
+					ok = parseErr == nil
+				}
+				if ok && decimalFloatComparisonHasUniqueValue(value, makeTypeByPlan2Expr(args[1-i])) {
+					converted, castErr := makePlan2CastExpr(ctx, source, args[1-i].Typ)
+					if castErr != nil {
+						return nil, castErr
+					}
+					args[i] = converted
+					continue
+				}
+			}
+		}
 		if len(args) == 2 && isPreparedNumericComparisonContext(name) && args[1-i] != nil &&
 			(types.T(args[1-i].Typ.Id).IsInteger() || args[1-i].Typ.Id == int32(types.T_bit)) &&
 			(binding.Type.Oid.IsMySQLString() ||

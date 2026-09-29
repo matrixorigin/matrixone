@@ -33,6 +33,34 @@ import (
 	"github.com/stretchr/testify/require"
 )
 
+func TestPreparedDecimalFloatFilterUsesUniqueValueProof(t *testing.T) {
+	for _, test := range []struct {
+		name   string
+		value  string
+		column types.Type
+		native bool
+	}{
+		{"integral", "54321", types.New(types.T_decimal64, 12, 2), true},
+		{"fractional", "0.1", types.New(types.T_decimal64, 12, 2), true},
+		{"between scale points", "0.104", types.New(types.T_decimal64, 12, 2), false},
+		{"float collision", "9007199254740992", types.New(types.T_decimal128, 20, 0), false},
+	} {
+		t.Run(test.name, func(t *testing.T) {
+			ctx := withPreparedSourceBindings(context.Background(),
+				[]PreparedSourceBinding{{Position: 0, Type: types.T_float64.ToType()}},
+				[]any{ParamValue{Value: test.value, IsBinaryProtocol: true}})
+			state := preparedBindingState(ctx)
+			state.selectStatement = true
+			column := &Expr{Typ: makePlan2Type(&test.column), Expr: &planpb.Expr_Col{Col: &planpb.ColRef{}}}
+			param := &Expr{Typ: makeSimplePlan2Type(types.T_float64), Expr: &planpb.Expr_P{P: &planpb.ParamRef{Pos: 0}}}
+			args, err := bindPreparedConsumerArguments(ctx, "=", []*Expr{column, param})
+			require.NoError(t, err)
+			require.Equal(t, test.native, args[1].Typ.Id == column.Typ.Id)
+			require.True(t, state.valueDependent)
+		})
+	}
+}
+
 func TestPreparedDomainlessNullUsesConcreteRelationalColumns(t *testing.T) {
 	for _, query := range []string{
 		"select ? group by 1",
