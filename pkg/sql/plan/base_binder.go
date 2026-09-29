@@ -7866,6 +7866,11 @@ func possibleStringDomainsForExpr(expr *plan.Expr) uint8 {
 	}
 	name := strings.ToLower(fn.Func.GetObjName())
 	if name == "cast" {
+		// A numeric (or other non-string) result cannot carry a string-domain
+		// witness, even when an implicit cast's input has a string origin.
+		if staticDomains == 0 {
+			return 0
+		}
 		if fn.GetSyntaxExplicitCast() {
 			return staticDomains
 		}
