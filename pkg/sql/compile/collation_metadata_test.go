@@ -11,6 +11,11 @@
 package compile
 
 import (
+	"bytes"
+	"testing"
+
+	"github.com/matrixorigin/matrixone/pkg/common/mpool"
+	"github.com/matrixorigin/matrixone/pkg/container/batch"
 	"github.com/matrixorigin/matrixone/pkg/container/types"
 	"github.com/matrixorigin/matrixone/pkg/container/vector"
 	"github.com/matrixorigin/matrixone/pkg/pb/pipeline"
@@ -18,8 +23,32 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/sql/colexec"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine"
 	"github.com/stretchr/testify/require"
-	"testing"
 )
+
+func TestCollationMetadataRemoteBatchAdmission(t *testing.T) {
+	mp := mpool.MustNewZero()
+	defer mpool.DeleteMPool(mp)
+	source := batch.NewWithSize(2)
+	defer func() {
+		source.Clean(mp)
+		require.Zero(t, mp.CurrNB())
+	}()
+	source.Attrs = []string{"legacy", "disabled"}
+	for i, version := range []uint8{0, 1} {
+		typ := types.NewWithCharset(types.T_varchar, 8, 0, 3)
+		typ.CollationVersion = version
+		source.Vecs[i] = vector.NewVec(typ)
+		require.NoError(t, vector.AppendBytes(source.Vecs[i], []byte("x"), false, mp))
+	}
+	source.SetRowCount(1)
+	data, err := source.MarshalBinaryForPipeline(new(bytes.Buffer), true, true)
+	require.NoError(t, err)
+	before := mp.CurrNB()
+	decoded, err := decodeBatch(mp, data)
+	require.ErrorContains(t, err, "disabled")
+	require.Nil(t, decoded)
+	require.Equal(t, before, mp.CurrNB(), "rejection must release all decoded columns")
+}
 
 func TestCollationMetadataExecutionBoundaries(t *testing.T) {
 	c, _ := expressionProtocolTestCompile(t)

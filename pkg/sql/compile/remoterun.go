@@ -2948,6 +2948,16 @@ func decodeBatch(mp *mpool.MPool, data []byte) (*batch.Batch, error) {
 		bat.Clean(mp)
 		return nil, err
 	}
+	// Transport codecs preserve known metadata, but the received batch is
+	// about to enter execution. Its opaque vectors need their own admission.
+	for _, vec := range bat.Vecs {
+		if vec != nil {
+			if err := plan.RequireLegacyCollations(vec.GetType().PlanType()); err != nil {
+				bat.Clean(mp)
+				return nil, err
+			}
+		}
+	}
 	return bat, nil
 }
 
