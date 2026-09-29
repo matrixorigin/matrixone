@@ -305,10 +305,6 @@ func (s *service) Delete(
 	ctx context.Context,
 	tableID uint64,
 	txnOp client.TxnOperator) error {
-	s.logger.Info("delete auto increment table",
-		zap.Uint64("table-id", tableID),
-		zap.String("txn", txnOp.Txn().DebugString()))
-
 	delCtx, err := newDeleteCtx(ctx, tableID)
 	if err != nil {
 		return err

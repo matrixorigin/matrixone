@@ -2799,7 +2799,9 @@ func (c *Compile) reclaimBranchProtectSnapshots(deadTIDs []uint64) (bool, error)
 		catalog.MO_CATALOG, catalog.MO_BRANCH_METADATA,
 		idList.String(), idList.String(),
 	)
-	probeRes, err := c.runSqlWithResult(probeSQL, int32(catalog.System_Account))
+	probeRes, err := c.runSqlWithResultAndOptions(
+		probeSQL, int32(catalog.System_Account), executor.StatementOption{}.WithDisableLog(),
+	)
 	if err != nil {
 		return false, err
 	}
@@ -7716,7 +7718,9 @@ func checkCCPRTableBeforeDrop(c *Compile, tableID uint64) (bool, error) {
 		tableID,
 	)
 
-	res, err := c.runSqlWithResult(querySql, int32(catalog.System_Account))
+	res, err := c.runSqlWithResultAndOptions(
+		querySql, int32(catalog.System_Account), executor.StatementOption{}.WithDisableLog(),
+	)
 	if err != nil {
 		if isMissingCCPRMetadataTable(err, catalog.MO_CCPR_TABLES) {
 			return true, nil
