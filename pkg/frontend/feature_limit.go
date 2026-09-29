@@ -110,16 +110,8 @@ func featureLimitCheckerForAccount(
 
 	// Feature limits are admission-control state. The owning mutation installs
 	// its TN-ordered catalog frontier before writing the shared lifecycle gate;
-	// do not advance that transaction snapshot again after the write. Retain the
-	// independent quota read for legacy fixed-SI test callers; public DATA BRANCH
-	// mutation now requires pessimistic RC.
-	if featureCode == featureCodeBranch && featureLimitTxnUsesFixedSnapshot(bh) {
-		limitQuota, err = queryQuotaInIndependentTxn(
-			ctx, ses, accId, featureCode, featureScope,
-		)
-	} else {
-		limitQuota, err = queryQuota(ctx, ses, bh, accId, featureCode, featureScope)
-	}
+	// do not advance that transaction snapshot again after the write.
+	limitQuota, err = queryQuota(ctx, ses, bh, accId, featureCode, featureScope)
 	if err != nil {
 		return err
 	}
@@ -257,32 +249,6 @@ func checkBranchQuotaTxn(bh BackgroundExec) error {
 func featureLimitTxnUsesFixedSnapshot(bh BackgroundExec) bool {
 	txnOp := backgroundExecTxnOperator(bh)
 	return txnOp != nil && !txnOp.Txn().IsRCIsolation()
-}
-
-func queryQuotaInIndependentTxn(
-	ctx context.Context,
-	ses *Session,
-	accID uint32,
-	featureCode string,
-	featureScope string,
-) (quota int64, err error) {
-	bh := ses.GetBackgroundExec(ctx, &BackgroundExecOption{
-		forcePessimisticRC:         true,
-		cancelTxnCreateWithRequest: true,
-	})
-	defer bh.Close()
-
-	if err = bh.Exec(ctx, "begin"); err != nil {
-		return 0, err
-	}
-	defer func() {
-		err = finishTxn(ctx, bh, err)
-	}()
-
-	if err = advanceFeatureLimitSnapshot(ctx, ses, bh); err != nil {
-		return 0, err
-	}
-	return queryQuota(ctx, ses, bh, accID, featureCode, featureScope)
 }
 
 func advanceFeatureLimitSnapshot(

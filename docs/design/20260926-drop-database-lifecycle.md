@@ -1,6 +1,14 @@
-# DROP DATABASE: reuse lifecycle admission without reordering cleanup
+# DROP DATABASE: revision-4 history and measurements
 
-The subsequent pessimistic-RC component protocol in [revision 1 of the RC lifecycle design](20260929-rc-lifecycle-protocol.md) supersedes this document's earlier no-new-wire/wait/upgrade assumption for PR #29457. This document retains #29393's ordered per-table cleanup and separate performance acceptance.
+**Status: historical design record.** The current pessimistic-RC contract is
+[the integrated lifecycle design](20260929-rc-lifecycle-protocol.md). Its
+`DROP TABLE` coordinator reclaims each reached persistent member before moving
+to the next; RC `DROP DATABASE` reclaims its admitted set after ordered table
+cleanup. Earlier claims below that every database member reclaims in place,
+that no wire or wait protocol changed, and that a fixed 25% gain is required
+describe superseded revisions. The current performance acceptance and exact
+measurement provenance are in §15. Keep the earlier experiments here as
+history, not as instructions for modifying the current execution path.
 
 Design revision: **4**, 2026-09-27, with a focused performance addendum dated 2026-09-28. **Supersedes revision 3. The rejected grouped SQL path is removed; DROP DATABASE now reuses the existing per-table primitive directly after resolving live descriptors.** Revision 3's admission and callback constraints remain. Current review and operational limits are recorded below.
 

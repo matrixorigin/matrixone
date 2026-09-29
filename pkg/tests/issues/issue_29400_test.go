@@ -470,6 +470,81 @@ func TestIssue29400DropTableRCReclaimFailureKeepsTemporaryOrder(t *testing.T) {
 	})
 }
 
+func TestIssue29400DropDatabaseRCReclaimFailureRollsBackWholeDatabase(t *testing.T) {
+	faultEnabledHere := fault.Enable()
+	if faultEnabledHere {
+		defer fault.Disable()
+	}
+	runAuthenticatedClusterTest(t, func(cluster embed.Cluster) {
+		ctx, cancel := context.WithTimeout(t.Context(), 2*time.Minute)
+		defer cancel()
+		cn, err := cluster.GetCNService(0)
+		require.NoError(t, err)
+		db, err := sql.Open("mysql", issue27487DSN(cn.GetServiceConfig().CN.Frontend.Port))
+		require.NoError(t, err)
+		defer db.Close()
+		conn, err := db.Conn(ctx)
+		require.NoError(t, err)
+		defer conn.Close()
+		const name = "issue_29400_db_reclaim_rollback"
+		defer func() {
+			cleanupCtx, done := context.WithTimeout(context.Background(), 20*time.Second)
+			defer done()
+			_, _ = conn.ExecContext(cleanupCtx, "rollback")
+			_, _ = conn.ExecContext(cleanupCtx, "drop database if exists "+name)
+		}()
+		for _, query := range []string{
+			"drop database if exists " + name,
+			"create database " + name,
+			"create table " + name + ".src (id int primary key)",
+			"data branch create table " + name + ".child from " + name + ".src",
+			"create table " + name + ".later (id bigint auto_increment primary key)",
+			"insert into " + name + ".later values (null)",
+			"create table " + name + ".guard (id int)",
+			"create temporary table " + name + ".tmp (v int)",
+			"insert into " + name + ".tmp values (7)",
+			"set mo_rollback_txn_on_error=0",
+			"begin",
+			"insert into " + name + ".guard values (1)",
+		} {
+			_, err = conn.ExecContext(ctx, query)
+			require.NoError(t, err, query)
+		}
+		var childID uint64
+		require.NoError(t, conn.QueryRowContext(ctx,
+			"select rel_id from mo_catalog.mo_tables where reldatabase=? and relname='child'", name).Scan(&childID))
+		const injection = "drop_table_rc_branch_reclaim_mutation_fail"
+		require.NoError(t, fault.AddFaultPoint(ctx, injection, ":::", "echo", 0,
+			"update mo_catalog.mo_branch_metadata", false))
+		defer func() { _, _ = fault.RemoveFaultPoint(context.Background(), injection) }()
+		_, dropErr := conn.ExecContext(ctx, "drop database "+name)
+		require.ErrorContains(t, dropErr, "injected RC branch reclaim mutation failure")
+		_, err = fault.RemoveFaultPoint(ctx, injection)
+		require.NoError(t, err)
+		_, err = conn.ExecContext(ctx, "commit")
+		require.NoError(t, err)
+
+		var count int
+		for _, check := range []struct {
+			query string
+			want  int
+		}{
+			{"select count(*) from " + name + ".guard", 1},
+			{"select count(*) from mo_catalog.mo_tables where reldatabase='" + name + "' and relname in ('src','child','later','guard')", 4},
+			{fmt.Sprintf("select count(*) from mo_catalog.mo_branch_metadata where table_id=%d and table_deleted=false", childID), 1},
+			{fmt.Sprintf("select count(*) from mo_catalog.mo_snapshots where sname='__mo_branch_%d'", childID), 1},
+			{"select v from " + name + ".tmp", 7},
+		} {
+			require.NoError(t, conn.QueryRowContext(ctx, check.query).Scan(&count), check.query)
+			require.Equal(t, check.want, count, check.query)
+		}
+		_, err = conn.ExecContext(ctx, "insert into "+name+".later values (null)")
+		require.NoError(t, err, "allocator must remain usable after rolled-back database removal")
+		require.NoError(t, conn.QueryRowContext(ctx, "select max(id) from "+name+".later").Scan(&count))
+		require.Greater(t, count, 1)
+	})
+}
+
 func TestIssue29400BranchDeletePartitionChildrenStayInternal(t *testing.T) {
 	runAuthenticatedClusterTest(t, func(cluster embed.Cluster) {
 		ctx, cancel := context.WithTimeout(context.Background(), 2*time.Minute)

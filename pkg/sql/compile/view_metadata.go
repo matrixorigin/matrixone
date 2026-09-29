@@ -91,14 +91,6 @@ func ViewMetadataRefreshEnabled(string) bool {
 	return false
 }
 
-// The inactive View lifecycle has no online activation path. A future
-// activation must rebuild under maintenance before changing this capability.
-// Writing its revalidation marker on every DDL would retain the global
-// SNAPSHOT lock even though no reader consumes incremental View metadata.
-func (c *Compile) viewMetadataRefreshAvailable() (bool, error) {
-	return viewMetadataRefreshEnabled(c.proc.GetService()), nil
-}
-
 func restoreInvalidatesViewMetadata(ctx context.Context) bool {
 	level, ok := ctx.Value(tree.CloneLevelCtxKey{}).(tree.CloneLevelType)
 	return ok && (level == tree.RestoreCloneLevelTable || level == tree.RestoreCloneLevelDatabase)
@@ -112,11 +104,7 @@ func (c *Compile) persistViewDependencies(
 	if needSkipDbs[databaseName] || c.proc.GetSessionInfo().IsRestore {
 		return nil
 	}
-	available, err := c.viewMetadataRefreshAvailable()
-	if err != nil {
-		return err
-	}
-	if !available {
+	if !viewMetadataRefreshEnabled(c.proc.GetService()) {
 		return nil
 	}
 	return c.persistViewDependenciesWithContext(
@@ -270,11 +258,7 @@ func (c *Compile) refreshViewsAfterRelationMutation(
 		// twice. Account/cluster restore rebuilds the lifecycle tables themselves.
 		return nil
 	}
-	available, err := c.viewMetadataRefreshAvailable()
-	if err != nil {
-		return err
-	}
-	if !available {
+	if !viewMetadataRefreshEnabled(c.proc.GetService()) {
 		return nil
 	}
 	accountID, err := defines.GetAccountId(c.proc.Ctx)
@@ -450,11 +434,7 @@ func (c *Compile) enqueueViewsAfterRelationRemoval(
 		(c.proc.GetSessionInfo().IsRestore && !restoreInvalidatesViewMetadata(c.proc.Ctx)) {
 		return nil
 	}
-	available, err := c.viewMetadataRefreshAvailable()
-	if err != nil {
-		return err
-	}
-	if !available {
+	if !viewMetadataRefreshEnabled(c.proc.GetService()) {
 		return nil
 	}
 	accountID, err := defines.GetAccountId(c.proc.Ctx)
@@ -480,11 +460,7 @@ func (c *Compile) deleteDroppedViewMetadata(databaseName string, relationID uint
 		(c.proc.GetSessionInfo().IsRestore && !restoreInvalidatesViewMetadata(c.proc.Ctx)) {
 		return nil
 	}
-	available, err := c.viewMetadataRefreshAvailable()
-	if err != nil {
-		return err
-	}
-	if !available {
+	if !viewMetadataRefreshEnabled(c.proc.GetService()) {
 		return nil
 	}
 	// Recovery and catalog cleanup must acquire locks in the same order. In
@@ -516,11 +492,7 @@ func (c *Compile) deleteDroppedDatabaseViewMetadata(
 		(c.proc.GetSessionInfo().IsRestore && !restoreInvalidatesViewMetadata(c.proc.Ctx)) {
 		return nil
 	}
-	available, err := c.viewMetadataRefreshAvailable()
-	if err != nil {
-		return err
-	}
-	if !available {
+	if !viewMetadataRefreshEnabled(c.proc.GetService()) {
 		return nil
 	}
 	if err := lockViewMetadataLifecycleGate(c.proc); err != nil {

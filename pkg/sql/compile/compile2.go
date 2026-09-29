@@ -416,9 +416,13 @@ func expressionsContainUnresolvedFullText(expressions []*plan.Expr) bool {
 
 // Run executes the pipeline and returns the result.
 func (c *Compile) Run(_ uint64) (queryResult *util2.RunResult, err error) {
-	c.temporaryDropRetryStage = &temporaryDropRetireStage{}
-	c.temporaryDropRetryActive = true
-	defer c.finishTemporaryDropRetry()
+	if c.pn.GetDdl().GetDropTable() != nil {
+		// Retry generations share this statement owner. Other statements do
+		// not need a temporary DROP retirement journal.
+		c.temporaryDropRetryStage = &temporaryDropRetireStage{}
+		c.temporaryDropRetryActive = true
+		defer c.finishTemporaryDropRetry()
+	}
 	promoteGroupConcatCut, err := c.strictWriteGroupConcatPromotionEnabled()
 	if err != nil {
 		return nil, err
