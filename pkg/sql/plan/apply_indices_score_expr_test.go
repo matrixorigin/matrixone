@@ -506,7 +506,7 @@ func TestGetWrappedFullTextMatches(t *testing.T) {
 
 	// A projection MATCH drives too, and a bare projection position is skipped as already served.
 	proj := &plan.Node{NodeType: plan.Node_PROJECT, ProjectList: []*plan.Expr{
-		bodyMatch(tag, "bare"), // projids says this is served
+		bodyMatch(tag, "bare"),                                  // projids says this is served
 		scoreFn("round", bodyMatch(tag, "wrapped"), scoreLit()), // this one needs a stream
 	}}
 	exprs, _ = builder.getWrappedFullTextMatches(proj, ftScanNodeWithIndex(tag), nil, []int32{0})
