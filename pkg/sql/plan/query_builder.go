@@ -5495,6 +5495,14 @@ func (bc *BindContext) bindingRecurStmt() bool {
 	return bc.cteState.cteBindType == CteBindTypeRecurStmt
 }
 
+// bindingRecurQueryBlock reports whether the current context owns the
+// recursive query block itself. Nested SELECT contexts inherit the recursive
+// CTE state, but own an independent query block.
+func (bc *BindContext) bindingRecurQueryBlock() bool {
+	return bc.bindingRecurStmt() &&
+		bc.queryBlockOwner == bc.cteState.recursiveRefQueryBlock
+}
+
 func (builder *QueryBuilder) bindCte(
 	ctx *BindContext,
 	stmt tree.NodeFormatter,
@@ -6079,7 +6087,7 @@ func (builder *QueryBuilder) bindSelect(stmt *tree.Select, ctx *BindContext, isR
 	// materialize scalar subqueries into that input before fixing the group-key
 	// layout. Projection, alias, and ordinal references already point at the
 	// corresponding group position and do not need to be rebound.
-	if !ctx.sampleFunc.hasSampleFunc && !ctx.bindingRecurStmt() {
+	if !ctx.sampleFunc.hasSampleFunc && !ctx.bindingRecurQueryBlock() {
 		for i, group := range ctx.groups {
 			if nodeID, ctx.groups[i], err = builder.flattenSubqueries(nodeID, group, ctx); err != nil {
 				return
@@ -8398,6 +8406,8 @@ func (builder *QueryBuilder) bindSelectClause(
 	}
 
 	// build FROM clause
+	ctx.fullGroupByInputReady = false
+	ctx.fullGroupByProof = nil
 	if nodeID, err = builder.buildFrom(clause.From.Tables, ctx, isRoot); err != nil {
 		return
 	}
@@ -8522,6 +8532,8 @@ func (builder *QueryBuilder) bindSelectClause(
 		queryBlockHasPendingAggregate(selectList, clause.Having, astOrderBy)
 
 	// bind HAVING clause
+	ctx.fullGroupByInputNode = nodeID
+	ctx.fullGroupByInputReady = true
 	havingBinder = NewHavingBinder(builder, ctx)
 	if clause.Having != nil {
 		boundHavingList, err = builder.bindHaving(ctx, clause.Having, havingBinder)
@@ -10046,6 +10058,11 @@ func (builder *QueryBuilder) rewriteMySQLSpecialOrderByExpr(ctx *BindContext, ex
 	}
 
 	projectExpr := ctx.projects[col.ColPos]
+	if storageType := ctx.mysqlSpecialOrderTypeForProject(col.ColPos); ctx.isDistinct && isSetPlanType(storageType) {
+		// Sort the surviving visible value after DISTINCT; adding raw identity
+		// to its input projection would change the equality tuple.
+		return makeCanonicalSetValue(builder.GetContext(), expr, storageType)
+	}
 	var orderKeyExpr *plan.Expr
 	if isEnumOrSetDisplayValueExpr(projectExpr) {
 		fn := projectExpr.GetF()
@@ -10425,7 +10442,7 @@ func (builder *QueryBuilder) appendAggNode(
 	boundHavingList []*plan.Expr,
 	rollupFilter bool,
 ) (newNodeID int32, postTimeWindowHavingList []*plan.Expr, err error) {
-	if ctx.bindingRecurStmt() {
+	if ctx.bindingRecurQueryBlock() {
 		err = moerr.NewInternalError(builder.GetContext(), "not support aggregate function recursive cte")
 		return
 	}
@@ -10643,6 +10660,7 @@ func (builder *QueryBuilder) appendWindowNode(
 			WinSpecList: []*Expr{w},
 			WindowIdx:   int32(i),
 			BindingTags: []int32{ctx.windowTag},
+			SpillMem:    builder.sortSpillMem,
 		}, ctx)
 		builder.userWindowNodes[nodeID] = struct{}{}
 	}
@@ -11693,6 +11711,17 @@ func (builder *QueryBuilder) bindView(
 	if err != nil {
 		return 0, err
 	}
+	if viewData.RequiredProtocolVersion != nil {
+		if *viewData.RequiredProtocolVersion < 0 {
+			return 0, moerr.NewInvalidInput(
+				builder.GetContext(), "invalid persisted view protocol version")
+		}
+		if err = RequirePersistedProtocolVersion(
+			builder.GetContext(), builder.compCtx.GetProcess(),
+			*viewData.RequiredProtocolVersion); err != nil {
+			return 0, err
+		}
+	}
 
 	parserSQLMode := legacyViewParserSQLMode
 	if viewData.SQLMode != nil {
@@ -11793,6 +11822,10 @@ func (builder *QueryBuilder) bindView(
 	defer func() {
 		builder.isForUpdate = savedIsForUpdate
 	}()
+	previousWarningContext := builder.compCtx.GetContext()
+	builder.compCtx.SetContext(WithJSONMergeWarningOrigin(
+		previousWarningContext, JSONMergeWarningStoredView))
+	defer builder.compCtx.SetContext(previousWarningContext)
 
 	if capture, ok := builder.compCtx.(viewDependencyScope); ok {
 		if err := capture.enterNestedView(); err != nil {
@@ -11805,8 +11838,18 @@ func (builder *QueryBuilder) bindView(
 		builder.compCtx.SetQueryingSubscription(metadataSubscription.Meta)
 		defer builder.compCtx.SetQueryingSubscription(previousSubscription)
 	}
+	viewNodeStart := len(builder.qry.Nodes)
 	nodeID, err = builder.bindSelect(viewStmt.AsSource, viewCtx, false)
 	if err != nil {
+		return
+	}
+	// Views written before the protocol marker was introduced are still
+	// rebound from SQL. Recheck the finalized plan before exposing it to the
+	// outer query; the cluster admission floor protects older CN binaries, and
+	// this local check protects a capable reader with a stale catalog marker.
+	if err = RequirePersistedIPFunctionProtocol(
+		builder.GetContext(), builder.compCtx.GetProcess(),
+		builder.qry.Nodes[viewNodeStart:]); err != nil {
 		return
 	}
 	nodeID, err = builder.appendMySQLSpecialTypeBoundary(
@@ -12855,6 +12898,15 @@ func (builder *QueryBuilder) addBinding(nodeID int32, alias tree.AliasClause, ct
 	if slices.Contains(scanNodes, node.NodeType) {
 		if (node.NodeType == plan.Node_VALUE_SCAN || node.NodeType == plan.Node_SINK_SCAN || node.NodeType == plan.Node_RECURSIVE_SCAN) && node.TableDef == nil {
 			return nil
+		}
+		if node.TableDef != nil {
+			// Defaults, generated columns, CHECK and ON UPDATE expressions are
+			// evaluated locally when a persisted TableDef is rebound. Keep this
+			// final read boundary in addition to the writer-side DDL checks.
+			if err := RequirePersistedIPFunctionProtocol(
+				builder.GetContext(), builder.compCtx.GetProcess(), node.TableDef); err != nil {
+				return err
+			}
 		}
 		if len(alias.Cols) > len(node.TableDef.Cols) {
 			return moerr.NewSyntaxErrorf(builder.GetContext(), "table %q has %d columns available but %d columns specified", alias.Alias, len(node.TableDef.Cols), len(alias.Cols))
