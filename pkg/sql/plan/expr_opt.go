@@ -57,6 +57,55 @@ func comparisonCastSource(expr *plan.Expr) *plan.Expr {
 	return fn.Args[0]
 }
 
+// Evaluate a bound DOUBLE peer only for the uniqueness proof. Keep the
+// executable expression intact, and keep value-dependent plans out of the
+// type-only prepared cache.
+func (builder *QueryBuilder) decimalFloatPeerValue(expr *plan.Expr) (float64, bool) {
+	if value, ok := decimalFloatComparisonConstant(expr); ok {
+		return value, true
+	}
+	state := preparedBindingState(builder.GetContext())
+	if state == nil || !state.selectStatement || expr.Typ.Id != int32(types.T_float64) ||
+		!preparedExprContainsParam(expr) {
+		return 0, false
+	}
+	copy := DeepCopyExpr(expr)
+	var substitute func(*plan.Expr) bool
+	substitute = func(current *plan.Expr) bool {
+		if param := current.GetP(); param != nil {
+			binding, ok := state.bindingForPosition(param.Pos)
+			if !ok || binding.Type.Oid != types.T_float64 ||
+				current.Typ.Id != int32(types.T_float64) {
+				return false
+			}
+			bound, ok := preparedBoundDoubleValue(builder.GetContext(), current)
+			if !ok {
+				return false
+			}
+			current.Expr = &plan.Expr_Lit{Lit: &plan.Literal{Value: &plan.Literal_Dval{Dval: bound}}}
+			current.Typ = makeSimplePlan2Type(types.T_float64)
+			return true
+		}
+		if fn := current.GetF(); fn != nil {
+			for _, arg := range fn.Args {
+				if !substitute(arg) {
+					return false
+				}
+			}
+			return true
+		}
+		return current.GetLit() != nil
+	}
+	if !substitute(copy) || !rule.IsConstant(copy, false) {
+		return 0, false
+	}
+	folded, err := ConstantFold(batch.EmptyForConstFoldBatch, copy, builder.compCtx.GetProcess(), false, true)
+	if err != nil {
+		return 0, false
+	}
+	return decimalFloatComparisonConstant(folded)
+}
+
 func (builder *QueryBuilder) singletonProjectedFloatValue(node *plan.Node, expr *plan.Expr) (float64, bool) {
 	column := expr.GetCol()
 	if column == nil {
@@ -73,7 +122,7 @@ func (builder *QueryBuilder) singletonProjectedFloatValue(node *plan.Node, expr 
 		if input.NodeType == plan.Node_VALUE_SCAN && input.TableDef == nil &&
 			input.Limit == nil && input.Offset == nil && input.RankOption == nil {
 			candidate := project.ProjectList[column.ColPos]
-			if value, ok := decimalFloatComparisonConstant(candidate); ok {
+			if value, ok := builder.decimalFloatPeerValue(candidate); ok {
 				return value, true
 			}
 			if !rule.IsConstant(candidate, false) {
@@ -102,7 +151,7 @@ func (builder *QueryBuilder) rewriteUniqueDecimalFloatComparison(node *plan.Node
 			continue
 		}
 		peer := fn.Args[1-side]
-		value, ok := decimalFloatComparisonConstant(peer)
+		value, ok := builder.decimalFloatPeerValue(peer)
 		if !ok && node.NodeType == plan.Node_JOIN {
 			value, ok = builder.singletonProjectedFloatValue(node, peer)
 		}

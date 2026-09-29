@@ -33,9 +33,57 @@ select count(*) from t where d = (select cast(null as double));
 select count(*) from t join (select cast(null as double) as v) x on t.d = x.v;
 select count(*) from t join (select d as v from t where d in (54321, 54322)) x on t.d = x.v;
 
+-- #29515: execution-time DOUBLE parameters in equivalent expression shapes.
+set @v = cast(54321 as double);
+prepare scalar_peer from 'select count(*) from t where d = (select ?)';
+-- @ignore:0
+explain analyze force execute scalar_peer using @v;
+execute scalar_peer using @v;
+prepare abs_peer from 'select count(*) from t where d = abs(?)';
+-- @ignore:0
+explain analyze force execute abs_peer using @v;
+execute abs_peer using @v;
+prepare derived_peer from 'select count(*) from t join (select ? as v) x on t.d = x.v';
+-- @ignore:0
+explain analyze force execute derived_peer using @v;
+execute derived_peer using @v;
+prepare derived_abs_peer from 'select count(*) from t join (select abs(?) as v) x on t.d = x.v';
+-- @ignore:0
+explain analyze force execute derived_abs_peer using @v;
+execute derived_abs_peer using @v;
+set @one = 1;
+prepare second_peer from 'select count(*) from t where ? = 1 and d = abs(?)';
+-- @ignore:0
+explain analyze force execute second_peer using @one, @v;
+execute second_peer using @one, @v;
+set @v = cast(0.104 as double);
+execute scalar_peer using @v;
+execute abs_peer using @v;
+execute derived_peer using @v;
+execute derived_abs_peer using @v;
+execute second_peer using @one, @v;
+set @v = null;
+execute scalar_peer using @v;
+execute abs_peer using @v;
+execute derived_peer using @v;
+execute derived_abs_peer using @v;
+execute second_peer using @one, @v;
+deallocate prepare scalar_peer;
+deallocate prepare abs_peer;
+deallocate prepare derived_peer;
+deallocate prepare derived_abs_peer;
+deallocate prepare second_peer;
+
 create table wide(d decimal(20,0));
 insert into wide values (9007199254740992), (9007199254740993);
 select count(*) from wide where d = (select cast(9007199254740992 as double));
 select count(*) from wide join (select cast(9007199254740992 as double) as v) x on wide.d = x.v;
+set @v = cast(9007199254740992 as double);
+prepare wide_scalar_peer from 'select count(*) from wide where d = (select ?)';
+execute wide_scalar_peer using @v;
+deallocate prepare wide_scalar_peer;
+prepare wide_derived_peer from 'select count(*) from wide join (select ? as v) x on wide.d = x.v';
+execute wide_derived_peer using @v;
+deallocate prepare wide_derived_peer;
 
 drop database issue_29514_decimal_expr;

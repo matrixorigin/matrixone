@@ -162,6 +162,22 @@ func preparedConfigurationValue(ctx context.Context, expr *Expr) (any, bool) {
 	return value, true
 }
 
+func preparedBoundDoubleValue(ctx context.Context, expr *Expr) (float64, bool) {
+	raw, present := preparedConfigurationValue(ctx, expr)
+	if !present {
+		return 0, false
+	}
+	switch value := raw.(type) {
+	case float64:
+		return value, true
+	case string:
+		parsed, err := strconv.ParseFloat(value, 64)
+		return parsed, err == nil
+	default:
+		return 0, false
+	}
+}
+
 func preparedNumericValueSpelling(value any) string {
 	if bytes, ok := value.([]byte); ok {
 		return string(bytes)
@@ -445,25 +461,14 @@ func bindPreparedConsumerArguments(ctx context.Context, name string, args []*Exp
 		if len(args) == 2 && state.selectStatement && isPreparedNumericComparisonContext(name) &&
 			binding.Type.Oid == types.T_float64 && args[1-i] != nil && args[1-i].GetCol() != nil &&
 			types.T(args[1-i].Typ.Id).IsDecimal() {
-			if raw, present := preparedConfigurationValue(ctx, source); present {
-				var value float64
-				var ok bool
-				switch typed := raw.(type) {
-				case float64:
-					value, ok = typed, true
-				case string:
-					var parseErr error
-					value, parseErr = strconv.ParseFloat(typed, 64)
-					ok = parseErr == nil
+			if value, ok := preparedBoundDoubleValue(ctx, source); ok &&
+				decimalFloatComparisonHasUniqueValue(value, makeTypeByPlan2Expr(args[1-i])) {
+				converted, castErr := makePlan2CastExpr(ctx, source, args[1-i].Typ)
+				if castErr != nil {
+					return nil, castErr
 				}
-				if ok && decimalFloatComparisonHasUniqueValue(value, makeTypeByPlan2Expr(args[1-i])) {
-					converted, castErr := makePlan2CastExpr(ctx, source, args[1-i].Typ)
-					if castErr != nil {
-						return nil, castErr
-					}
-					args[i] = converted
-					continue
-				}
+				args[i] = converted
+				continue
 			}
 		}
 		if len(args) == 2 && isPreparedNumericComparisonContext(name) && args[1-i] != nil &&

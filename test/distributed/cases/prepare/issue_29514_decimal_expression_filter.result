@@ -138,6 +138,137 @@ select count(*) from t join (select cast(null as double) as v) x on t.d = x.v;
 select count(*) from t join (select d as v from t where d in (54321, 54322)) x on t.d = x.v;
 ➤ count(*)[-5,64,0]  𝄀
 2
+set @v = cast(54321 as double);
+prepare scalar_peer from 'select count(*) from t where d = (select ?)';
+explain analyze force execute scalar_peer using @v;
+➤ tp query plan[12,-1,0]  𝄀
+Project  𝄀
+  Analyze: timeConsumed=0ms waitTime=0ms inputRows=1 outputRows=1 (min=1, max=1) InputSize=8 bytes OutputSize=8 bytes ReadSize=0 bytes|0 bytes|0 bytes MemorySize=8 bytes (min=8 bytes, max=8 bytes)  𝄀
+  ->  Aggregate  𝄀
+        Analyze: timeConsumed=0ms waitTime=0ms inputRows=1 outputRows=1 (min=1, max=1) InputSize=8 bytes OutputSize=8 bytes ReadSize=0 bytes|0 bytes|0 bytes MemorySize=64.00 KiB (min=64.00 KiB, max=64.00 KiB)  𝄀
+        Aggregate Functions: starcount(1)  𝄀
+        ->  Table Scan on issue_29514_decimal_expr.t  𝄀
+              Analyze: timeConsumed=0ms waitTime=0ms inputBlocks=1 inputRows=8192 outputRows=1 (min=1, max=1) InputSize=64.00 KiB OutputSize=8 bytes ReadSize=35.21 KiB|0 bytes|0 bytes MemorySize=72.01 KiB (min=72.01 KiB, max=72.01 KiB)  𝄀
+              Filter Cond: (cast(t.d AS DOUBLE) = 54321)
+              -- HINT: Cast expression may prevent index usage  𝄀
+              Block Filter Cond: (cast(t.d AS DOUBLE) = 54321)
+execute scalar_peer using @v;
+➤ count(*)[-5,64,0]  𝄀
+1
+prepare abs_peer from 'select count(*) from t where d = abs(?)';
+explain analyze force execute abs_peer using @v;
+➤ tp query plan[12,-1,0]  𝄀
+Project  𝄀
+  Analyze: timeConsumed=0ms waitTime=0ms inputRows=1 outputRows=1 (min=1, max=1) InputSize=8 bytes OutputSize=8 bytes ReadSize=0 bytes|0 bytes|0 bytes MemorySize=8 bytes (min=8 bytes, max=8 bytes)  𝄀
+  ->  Aggregate  𝄀
+        Analyze: timeConsumed=0ms waitTime=0ms inputRows=1 outputRows=1 (min=1, max=1) InputSize=8 bytes OutputSize=8 bytes ReadSize=0 bytes|0 bytes|0 bytes MemorySize=64.00 KiB (min=64.00 KiB, max=64.00 KiB)  𝄀
+        Aggregate Functions: starcount(1)  𝄀
+        ->  Table Scan on issue_29514_decimal_expr.t  𝄀
+              Analyze: timeConsumed=0ms waitTime=0ms inputBlocks=1 inputRows=8192 outputRows=1 (min=1, max=1) InputSize=64.00 KiB OutputSize=8 bytes ReadSize=35.21 KiB|0 bytes|0 bytes MemorySize=72.01 KiB (min=72.01 KiB, max=72.01 KiB)  𝄀
+              Filter Cond: (t.d = cast(abs(54321) AS DECIMAL64(12, 2)))  𝄀
+              Block Filter Cond: (t.d = cast(abs(54321) AS DECIMAL64(12, 2)))
+execute abs_peer using @v;
+➤ count(*)[-5,64,0]  𝄀
+1
+prepare derived_peer from 'select count(*) from t join (select ? as v) x on t.d = x.v';
+explain analyze force execute derived_peer using @v;
+➤ tp query plan[12,-1,0]  𝄀
+Project  𝄀
+  Analyze: timeConsumed=0ms waitTime=0ms inputRows=1 outputRows=1 (min=1, max=1) InputSize=8 bytes OutputSize=8 bytes ReadSize=0 bytes|0 bytes|0 bytes MemorySize=8 bytes (min=8 bytes, max=8 bytes)  𝄀
+  ->  Aggregate  𝄀
+        Analyze: timeConsumed=0ms waitTime=0ms inputRows=1 outputRows=1 (min=1, max=1) InputSize=0 bytes OutputSize=8 bytes ReadSize=0 bytes|0 bytes|0 bytes MemorySize=64.00 KiB (min=64.00 KiB, max=64.00 KiB)  𝄀
+        Aggregate Functions: starcount(1)  𝄀
+        ->  Join  𝄀
+              Analyze: timeConsumed=0ms waitTime=0ms inputRows=2 outputRows=1 (min=1, max=1) InputSize=16 bytes OutputSize=0 bytes ReadSize=0 bytes|0 bytes|0 bytes MemorySize=32.14 KiB (min=16.06 KiB, max=16.08 KiB)  𝄀
+              Join Type: INNER  𝄀
+              Join Cond: (t.d = cast(x.v AS DECIMAL64(12, 2)))  𝄀
+              Runtime Filter Build: #[-1,0]  𝄀
+              ->  Table Scan on issue_29514_decimal_expr.t  𝄀
+                    Analyze: timeConsumed=0ms waitTime=0ms inputBlocks=1 inputRows=8192 outputRows=1 (min=1, max=1) InputSize=64.00 KiB OutputSize=8 bytes ReadSize=35.21 KiB|0 bytes|0 bytes MemorySize=72.01 KiB (min=72.01 KiB, max=72.01 KiB)  𝄀
+                    Runtime Filter Probe: t.d  𝄀
+              ->  Project  𝄀
+                    Analyze: timeConsumed=0ms waitTime=0ms inputRows=1 outputRows=1 (min=1, max=1) InputSize=8 bytes OutputSize=8 bytes ReadSize=0 bytes|0 bytes|0 bytes MemorySize=8 bytes (min=8 bytes, max=8 bytes)  𝄀
+                    ->  Values Scan "*VALUES*"   𝄀
+                          Analyze: timeConsumed=0ms waitTime=0ms inputRows=1 outputRows=1 (min=1, max=1) InputSize=0 bytes OutputSize=8 bytes ReadSize=0 bytes|0 bytes|0 bytes MemorySize=0 bytes (min=0 bytes, max=0 bytes)
+execute derived_peer using @v;
+➤ count(*)[-5,64,0]  𝄀
+1
+prepare derived_abs_peer from 'select count(*) from t join (select abs(?) as v) x on t.d = x.v';
+explain analyze force execute derived_abs_peer using @v;
+➤ tp query plan[12,-1,0]  𝄀
+Project  𝄀
+  Analyze: timeConsumed=0ms waitTime=0ms inputRows=1 outputRows=1 (min=1, max=1) InputSize=8 bytes OutputSize=8 bytes ReadSize=0 bytes|0 bytes|0 bytes MemorySize=8 bytes (min=8 bytes, max=8 bytes)  𝄀
+  ->  Aggregate  𝄀
+        Analyze: timeConsumed=0ms waitTime=0ms inputRows=1 outputRows=1 (min=1, max=1) InputSize=0 bytes OutputSize=8 bytes ReadSize=0 bytes|0 bytes|0 bytes MemorySize=64.00 KiB (min=64.00 KiB, max=64.00 KiB)  𝄀
+        Aggregate Functions: starcount(1)  𝄀
+        ->  Join  𝄀
+              Analyze: timeConsumed=0ms waitTime=0ms inputRows=2 outputRows=1 (min=1, max=1) InputSize=16 bytes OutputSize=0 bytes ReadSize=0 bytes|0 bytes|0 bytes MemorySize=32.14 KiB (min=16.06 KiB, max=16.08 KiB)  𝄀
+              Join Type: INNER  𝄀
+              Join Cond: (t.d = cast(x.v AS DECIMAL64(12, 2)))  𝄀
+              Runtime Filter Build: #[-1,0]  𝄀
+              ->  Table Scan on issue_29514_decimal_expr.t  𝄀
+                    Analyze: timeConsumed=0ms waitTime=0ms inputBlocks=1 inputRows=8192 outputRows=1 (min=1, max=1) InputSize=64.00 KiB OutputSize=8 bytes ReadSize=35.21 KiB|0 bytes|0 bytes MemorySize=72.01 KiB (min=72.01 KiB, max=72.01 KiB)  𝄀
+                    Runtime Filter Probe: t.d  𝄀
+              ->  Project  𝄀
+                    Analyze: timeConsumed=0ms waitTime=0ms inputRows=1 outputRows=1 (min=1, max=1) InputSize=8 bytes OutputSize=8 bytes ReadSize=0 bytes|0 bytes|0 bytes MemorySize=8 bytes (min=8 bytes, max=8 bytes)  𝄀
+                    ->  Values Scan "*VALUES*"   𝄀
+                          Analyze: timeConsumed=0ms waitTime=0ms inputRows=1 outputRows=1 (min=1, max=1) InputSize=0 bytes OutputSize=8 bytes ReadSize=0 bytes|0 bytes|0 bytes MemorySize=0 bytes (min=0 bytes, max=0 bytes)
+execute derived_abs_peer using @v;
+➤ count(*)[-5,64,0]  𝄀
+1
+set @one = 1;
+prepare second_peer from 'select count(*) from t where ? = 1 and d = abs(?)';
+explain analyze force execute second_peer using @one, @v;
+➤ tp query plan[12,-1,0]  𝄀
+Project  𝄀
+  Analyze: timeConsumed=0ms waitTime=0ms inputRows=1 outputRows=1 (min=1, max=1) InputSize=8 bytes OutputSize=8 bytes ReadSize=0 bytes|0 bytes|0 bytes MemorySize=8 bytes (min=8 bytes, max=8 bytes)  𝄀
+  ->  Aggregate  𝄀
+        Analyze: timeConsumed=0ms waitTime=0ms inputRows=1 outputRows=1 (min=1, max=1) InputSize=8 bytes OutputSize=8 bytes ReadSize=0 bytes|0 bytes|0 bytes MemorySize=64.00 KiB (min=64.00 KiB, max=64.00 KiB)  𝄀
+        Aggregate Functions: starcount(1)  𝄀
+        ->  Table Scan on issue_29514_decimal_expr.t  𝄀
+              Analyze: timeConsumed=0ms waitTime=0ms inputBlocks=1 inputRows=8192 outputRows=1 (min=1, max=1) InputSize=64.00 KiB OutputSize=8 bytes ReadSize=35.21 KiB|0 bytes|0 bytes MemorySize=72.01 KiB (min=72.01 KiB, max=72.01 KiB)  𝄀
+              Filter Cond: (t.d = cast(abs(54321) AS DECIMAL64(12, 2))), (cast('1' AS BIGINT) = 1)  𝄀
+              Block Filter Cond: (t.d = cast(abs(54321) AS DECIMAL64(12, 2)))
+execute second_peer using @one, @v;
+➤ count(*)[-5,64,0]  𝄀
+1
+set @v = cast(0.104 as double);
+execute scalar_peer using @v;
+➤ count(*)[-5,64,0]  𝄀
+0
+execute abs_peer using @v;
+➤ count(*)[-5,64,0]  𝄀
+0
+execute derived_peer using @v;
+➤ count(*)[-5,64,0]  𝄀
+0
+execute derived_abs_peer using @v;
+➤ count(*)[-5,64,0]  𝄀
+0
+execute second_peer using @one, @v;
+➤ count(*)[-5,64,0]  𝄀
+0
+set @v = null;
+execute scalar_peer using @v;
+➤ count(*)[-5,64,0]  𝄀
+0
+execute abs_peer using @v;
+➤ count(*)[-5,64,0]  𝄀
+0
+execute derived_peer using @v;
+➤ count(*)[-5,64,0]  𝄀
+0
+execute derived_abs_peer using @v;
+➤ count(*)[-5,64,0]  𝄀
+0
+execute second_peer using @one, @v;
+➤ count(*)[-5,64,0]  𝄀
+0
+deallocate prepare scalar_peer;
+deallocate prepare abs_peer;
+deallocate prepare derived_peer;
+deallocate prepare derived_abs_peer;
+deallocate prepare second_peer;
 create table wide(d decimal(20,0));
 insert into wide values (9007199254740992), (9007199254740993);
 select count(*) from wide where d = (select cast(9007199254740992 as double));
@@ -146,4 +277,15 @@ select count(*) from wide where d = (select cast(9007199254740992 as double));
 select count(*) from wide join (select cast(9007199254740992 as double) as v) x on wide.d = x.v;
 ➤ count(*)[-5,64,0]  𝄀
 2
+set @v = cast(9007199254740992 as double);
+prepare wide_scalar_peer from 'select count(*) from wide where d = (select ?)';
+execute wide_scalar_peer using @v;
+➤ count(*)[-5,64,0]  𝄀
+2
+deallocate prepare wide_scalar_peer;
+prepare wide_derived_peer from 'select count(*) from wide join (select ? as v) x on wide.d = x.v';
+execute wide_derived_peer using @v;
+➤ count(*)[-5,64,0]  𝄀
+2
+deallocate prepare wide_derived_peer;
 drop database issue_29514_decimal_expr;
