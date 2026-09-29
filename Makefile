@@ -42,7 +42,7 @@
 # in optools/gpu/README.md. CPU-only builds do not require Pixi.
 
 # Go toolchain (override with `make GO=/path/to/go ...`); defaults to `go`.
-# Requires Go 1.26+ for the arch-specific SIMD kernels (built by default on x86_64).
+# Requires Go 1.27+ for the arch-specific SIMD kernels (built by default on x86_64 and arm64).
 ifeq ($(GO),)
 	GO=go
 endif
