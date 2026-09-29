@@ -68,6 +68,12 @@ func TestLocalCTEOuterReferencesExecutablePlan(t *testing.T) {
 				select abs(n) from q where p.n_nationkey=2) from tpch.nation p`,
 		},
 		{
+			name: "window consumer demand preserves identity",
+			sql: `select p.n_nationkey, (with q(n) as (select abs(p.n_regionkey))
+				select n from (select n,row_number() over(order by n) rn from q) d
+				where p.n_nationkey=2) from tpch.nation p`,
+		},
+		{
 			name: "distinct consumer demand preserves identity",
 			sql: `select p.n_nationkey, (with q(n) as (select p.n_regionkey)
 				select abs(n) from (select distinct n from q) d where p.n_nationkey=2)
@@ -388,15 +394,41 @@ func TestLocalCTEDomainAdmissionIsAtomic(t *testing.T) {
 }
 
 func TestPreparedLocalCTEOuterReferences(t *testing.T) {
-	stmt, err := parsers.ParseOne(context.Background(), dialect.MYSQL, `
-		select (with recursive r(n) as (
+	for _, tc := range []struct {
+		name   string
+		sql    string
+		demand bool
+	}{
+		{"outer parameter", `select (with recursive r(n) as (
 			select p.n_regionkey union all select n-1 from r where n>1
-		) select count(*) from r) from tpch.nation p where p.n_nationkey=?`, 1)
-	require.NoError(t, err)
-	defer stmt.Free()
-	logicPlan, err := BuildPlan(NewMockCompilerContext(true), stmt, true)
-	require.NoError(t, err)
-	assertReachablePlanHasNoCorrelatedExpr(t, logicPlan.GetQuery())
+		) select count(*) from r) from tpch.nation p where p.n_nationkey=?`, false},
+		{"distinct parameter demand", `select p.n_nationkey,
+			(with q(n) as (select abs(p.n_regionkey))
+			select n from (select distinct n from q) d where p.n_nationkey=?)
+			from tpch.nation p`, true},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			stmt, err := parsers.ParseOne(context.Background(), dialect.MYSQL, tc.sql, 1)
+			require.NoError(t, err)
+			defer stmt.Free()
+			logicPlan, err := BuildPlan(NewMockCompilerContext(true), stmt, true)
+			require.NoError(t, err)
+			query := logicPlan.GetQuery()
+			assertReachablePlanHasNoCorrelatedExpr(t, query)
+			if tc.demand {
+				found := false
+				for _, node := range query.Nodes {
+					if !node.FilterIsBarrier {
+						continue
+					}
+					for _, filter := range node.FilterList {
+						walkLocalCTEExpr(filter, func(e *planpb.Expr) { found = found || e.GetP() != nil })
+					}
+				}
+				require.True(t, found, "PREPARE must retain a parameterized replay-domain filter")
+			}
+		})
+	}
 }
 
 func TestLocalCTEGuardedLiteralProof(t *testing.T) {

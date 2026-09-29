@@ -356,6 +356,19 @@ from guarded_values p order by p.id;
 select p.id, (with q(n) as (select p.val)
   select cast(n as signed) from (select n from q limit 1) d where p.id=2) as c
 from guarded_values p order by p.id;
+-- An outer WHERE selects whole window partitions before CAST executes.
+select p.id, (with q(n) as (select p.val)
+  select cast(n as signed) from (select n,row_number() over(order by n) rn from q) d
+  where p.id=2) as c from guarded_values p order by p.id;
+prepare wrapped_cast from 'select p.id,(with q(n) as (select cast(p.val as signed)) select n from (select distinct n from q) d where p.id=?) as c from guarded_values p order by p.id';
+set @wrapped_demand=2;
+execute wrapped_cast using @wrapped_demand;
+set @wrapped_demand=1;
+execute wrapped_cast using @wrapped_demand;
+set @wrapped_demand=2;
+execute wrapped_cast using @wrapped_demand;
+deallocate prepare wrapped_cast;
+set @wrapped_demand=null;
 drop table guarded_values;
 
 -- Outer columns in ordinary COUNT HAVING must be rebound above the
@@ -503,6 +516,36 @@ from guarded_abs p order by p.id;
 select p.id, (with q(n) as (select p.v)
   select abs(n) from (select n from q limit 1 offset 1) d where p.id=2) as c
 from guarded_abs p order by p.id;
+-- Window input columns carry the same identity payload; the outer WHERE
+-- must not move above ABS, and CTE-dependent predicates must not move below
+-- window ranking. Selecting n=2 keeps its original rn=2 (not rn=1).
+select p.id, (with q(n) as (select p.v)
+  select abs(n) from (select n,row_number() over(order by n) rn from q) d where p.id=2) as c
+from guarded_abs p order by p.id;
+select p.id, (with q(n) as (select abs(p.v))
+  select n from (select n,row_number() over(order by n) rn from q) d where p.id=2) as c
+from guarded_abs p order by p.id;
+select p.id, (with q(n) as (select a.id from guarded_abs a where p.id>0)
+  select rn from (select n,row_number() over(order by n) rn from q) d where p.id=2 and n=2) as c
+from guarded_abs p order by p.id;
+select p.id, (with recursive q(n) as (select p.id union all select n from q where n=1)
+  select n from (select n,row_number() over(order by n) rn from q) d where p.id=2) as c
+from guarded_abs p order by p.id;
+-- PREPARE cannot require a parameter cast to be total for every possible
+-- value. Binding 2 filters first; NULL skips all; binding 1 exposes the error.
+prepare wrapped_abs from 'select p.id,(with q(n) as (select abs(p.v)) select n from (select distinct n from q) d where p.id=?) as c from guarded_abs p order by p.id';
+set @wrapped_demand=2;
+execute wrapped_abs using @wrapped_demand;
+set @wrapped_demand=null;
+execute wrapped_abs using @wrapped_demand;
+set @wrapped_demand=1;
+execute wrapped_abs using @wrapped_demand;
+set @wrapped_demand='bad';
+execute wrapped_abs using @wrapped_demand;
+set @wrapped_demand=2;
+execute wrapped_abs using @wrapped_demand;
+deallocate prepare wrapped_abs;
+set @wrapped_demand=null;
 -- NULL demand removes every partition, but does not remove COUNT's empty row.
 select p.id, (with q(n) as (select abs(p.v))
   select count(*) from q where p.id=null) as c from guarded_abs p order by p.id;

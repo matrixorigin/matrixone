@@ -247,7 +247,7 @@ func (d *localCTEDomain) consumerFilterReadsCTE(id int32) bool {
 		return false
 	}
 	switch n.NodeType {
-	case plan.Node_PROJECT, plan.Node_FILTER, plan.Node_SORT, plan.Node_DISTINCT:
+	case plan.Node_PROJECT, plan.Node_FILTER, plan.Node_SORT, plan.Node_DISTINCT, plan.Node_WINDOW:
 		return d.consumerFilterReadsCTE(n.Children[0])
 	default:
 		return false
@@ -255,7 +255,8 @@ func (d *localCTEDomain) consumerFilterReadsCTE(id int32) bool {
 }
 
 // A consumer predicate can constrain the producer domain only when it reads
-// exclusively the immediate outer row, is total, and cannot observe CTE data.
+// exclusively the immediate outer row and cannot observe CTE data. Conditional
+// consumers require totality; unconditional demand also admits parameter casts.
 func (d *localCTEDomain) outerOnlyDemand(expr *plan.Expr) *plan.Expr {
 	rowID := d.builder.correlatedScalarOuterRowID(d.outerID, d.ctx)
 	if rowID == nil || !hasCorrCol(expr) {
@@ -276,7 +277,25 @@ func (d *localCTEDomain) outerOnlyDemand(expr *plan.Expr) *plan.Expr {
 			valid = false
 		}
 	})
-	if !valid || !localCTEGuardedPredicateSafe(copy) {
+	if !valid {
+		return nil
+	}
+	// Without a conditional consumer, this outer-only WHERE is the demand
+	// predicate itself. Statement-constant parameter conversions must retain
+	// their runtime value/error, not be required to fit every possible type
+	// value at PREPARE time. Conditional consumers still require totality.
+	proof := copy
+	if !d.guarded {
+		proof = DeepCopyExpr(copy)
+		walkLocalCTEExpr(proof, func(e *plan.Expr) {
+			fn := e.GetF()
+			if fn != nil && fn.Func != nil && fn.Func.ObjName == "cast" && len(fn.Args) == 2 &&
+				fn.Args[0].GetP() != nil && fn.Args[1].GetT() != nil {
+				e.Expr = &plan.Expr_Lit{Lit: &plan.Literal{Isnull: true}}
+			}
+		})
+	}
+	if !localCTEGuardedPredicateSafe(proof) {
 		return nil
 	}
 	return copy
@@ -798,7 +817,10 @@ func (d *localCTEDomain) lowerConsumerFilters(id, root int32, values []*plan.Exp
 			}
 		}
 		return payload
-	case plan.Node_FILTER, plan.Node_SORT:
+	case plan.Node_FILTER, plan.Node_SORT, plan.Node_WINDOW:
+		// WINDOW preserves its input columns. Identity predicates below it
+		// are still pulled up to extend the existing per-identity partition;
+		// the consumer WHERE remains above the completed window calculation.
 		return payload
 	default:
 		return nil

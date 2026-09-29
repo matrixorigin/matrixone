@@ -488,6 +488,28 @@ from guarded_values p order by p.id;
 ➤ id[4,32,0]  ¦  c[-5,64,0]  𝄀
 1  ¦  null  𝄀
 2  ¦  2
+select p.id, (with q(n) as (select p.val)
+select cast(n as signed) from (select n,row_number() over(order by n) rn from q) d
+where p.id=2) as c from guarded_values p order by p.id;
+➤ id[4,32,0]  ¦  c[-5,64,0]  𝄀
+1  ¦  null  𝄀
+2  ¦  2
+prepare wrapped_cast from 'select p.id,(with q(n) as (select cast(p.val as signed)) select n from (select distinct n from q) d where p.id=?) as c from guarded_values p order by p.id';
+set @wrapped_demand=2;
+execute wrapped_cast using @wrapped_demand;
+➤ id[4,32,0]  ¦  c[-5,64,0]  𝄀
+1  ¦  null  𝄀
+2  ¦  2
+set @wrapped_demand=1;
+execute wrapped_cast using @wrapped_demand;
+invalid argument cast to int, bad value bad
+set @wrapped_demand=2;
+execute wrapped_cast using @wrapped_demand;
+➤ id[4,32,0]  ¦  c[-5,64,0]  𝄀
+1  ¦  null  𝄀
+2  ¦  2
+deallocate prepare wrapped_cast;
+set @wrapped_demand=null;
 drop table guarded_values;
 create table having_keys(id int primary key, k int);
 insert into having_keys values (1,1),(2,1),(3,0);
@@ -715,6 +737,56 @@ from guarded_abs p order by p.id;
 ➤ id[4,32,0]  ¦  c[-5,64,0]  𝄀
 1  ¦  null  𝄀
 2  ¦  null
+select p.id, (with q(n) as (select p.v)
+select abs(n) from (select n,row_number() over(order by n) rn from q) d where p.id=2) as c
+from guarded_abs p order by p.id;
+➤ id[4,32,0]  ¦  c[-5,64,0]  𝄀
+1  ¦  null  𝄀
+2  ¦  2
+select p.id, (with q(n) as (select abs(p.v))
+select n from (select n,row_number() over(order by n) rn from q) d where p.id=2) as c
+from guarded_abs p order by p.id;
+➤ id[4,32,0]  ¦  c[-5,64,0]  𝄀
+1  ¦  null  𝄀
+2  ¦  2
+select p.id, (with q(n) as (select a.id from guarded_abs a where p.id>0)
+select rn from (select n,row_number() over(order by n) rn from q) d where p.id=2 and n=2) as c
+from guarded_abs p order by p.id;
+➤ id[4,32,0]  ¦  c[-5,64,0]  𝄀
+1  ¦  null  𝄀
+2  ¦  2
+select p.id, (with recursive q(n) as (select p.id union all select n from q where n=1)
+select n from (select n,row_number() over(order by n) rn from q) d where p.id=2) as c
+from guarded_abs p order by p.id;
+➤ id[4,32,0]  ¦  c[4,32,0]  𝄀
+1  ¦  null  𝄀
+2  ¦  2
+prepare wrapped_abs from 'select p.id,(with q(n) as (select abs(p.v)) select n from (select distinct n from q) d where p.id=?) as c from guarded_abs p order by p.id';
+set @wrapped_demand=2;
+execute wrapped_abs using @wrapped_demand;
+➤ id[4,32,0]  ¦  c[-5,64,0]  𝄀
+1  ¦  null  𝄀
+2  ¦  2
+set @wrapped_demand=null;
+execute wrapped_abs using @wrapped_demand;
+➤ id[4,32,0]  ¦  c[-5,64,0]  𝄀
+1  ¦  null  𝄀
+2  ¦  null
+set @wrapped_demand=1;
+execute wrapped_abs using @wrapped_demand;
+Data truncation: data out of range: data type int, '-9223372036854775808'
+set @wrapped_demand='bad';
+execute wrapped_abs using @wrapped_demand;
+➤ id[4,32,0]  ¦  c[-5,64,0]  𝄀
+1  ¦  null  𝄀
+2  ¦  null
+set @wrapped_demand=2;
+execute wrapped_abs using @wrapped_demand;
+➤ id[4,32,0]  ¦  c[-5,64,0]  𝄀
+1  ¦  null  𝄀
+2  ¦  2
+deallocate prepare wrapped_abs;
+set @wrapped_demand=null;
 select p.id, (with q(n) as (select abs(p.v))
 select count(*) from q where p.id=null) as c from guarded_abs p order by p.id;
 ➤ id[4,32,0]  ¦  c[-5,64,0]  𝄀
