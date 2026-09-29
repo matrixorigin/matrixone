@@ -108,6 +108,9 @@ func bindPreparedSource(ctx context.Context, ordinal int) (*Expr, error) {
 	if err != nil {
 		return nil, err
 	}
+	// Keep the parameter executable even when this execution supplies NULL.
+	// Consumers choose a concrete domain; relational materialization handles
+	// the remaining domainless projection at its own boundary.
 	return &Expr{
 		Typ:  makePlan2Type(&binding.Type),
 		Expr: &plan.Expr_P{P: &plan.ParamRef{Pos: binding.Position}},
@@ -183,6 +186,48 @@ func lowerPreparedSourceTransports(ctx context.Context, p *Plan) error {
 	})
 }
 
+// SQL EXECUTE exposes a bare marker as TEXT, even when its source domain is
+// numeric or BOOL for expressions that consume it. Apply that presentation
+// only at the final result edge, including transparent derived projections;
+// inner columns retain their semantic source types.
+func presentPreparedSQLResults(ctx context.Context, query *plan.Query) {
+	state := preparedBindingState(ctx)
+	if state == nil || query == nil || query.StmtType != plan.Query_SELECT {
+		return
+	}
+	textType := types.T_text.ToType()
+	for _, step := range query.Steps {
+		if step < 0 || int(step) >= len(query.Nodes) {
+			continue
+		}
+		root := query.Nodes[step]
+		if root == nil {
+			continue
+		}
+		for i, expr := range root.ProjectList {
+			if expr == nil || expr.Typ.Id == int32(types.T_text) {
+				continue
+			}
+			pos, direct := preparedProjectedParamPosition(query, root, expr,
+				make(map[preparedSetOperationNullKey]bool), false)
+			if !direct || pos < 0 || int(pos) >= len(state.values) {
+				continue
+			}
+			param, ok := state.values[pos].(ParamValue)
+			if !ok || param.IsBinaryProtocol {
+				continue
+			}
+			// SQL EXECUTE already transports the original spelling as TEXT.
+			// Reuse that source for presentation instead of formatting a
+			// semantic BOOL/DECIMAL value back into a different string.
+			root.ProjectList[i] = &Expr{
+				Typ:  makePlan2Type(&textType),
+				Expr: &plan.Expr_P{P: &plan.ParamRef{Pos: pos}},
+			}
+		}
+	}
+}
+
 // Consumer-specific conversions are selected before their parent's overload
 // and before key construction. The witness can determine a conversion domain,
 // but only the original parameter reference enters the executable expression.
@@ -201,6 +246,67 @@ func bindPreparedConsumerArguments(ctx context.Context, name string, args []*Exp
 		if !ok {
 			continue
 		}
+		if name == "member of" && i == 0 && binding.Type.Oid.IsArrayRelate() {
+			// MEMBER OF rejects SQL arrays with an argument-specific runtime
+			// error. Keep a direct prepared array in its TEXT transport form so
+			// the existing checker can report that error using source metadata.
+			args[i] = &Expr{Typ: makeSimplePlan2Type(types.T_text),
+				Expr: &plan.Expr_P{P: &plan.ParamRef{Pos: source.GetP().Pos}}}
+			continue
+		}
+		if len(args) == 2 && isPreparedNumericComparisonContext(name) &&
+			args[1-i] != nil && args[1-i].Typ.Id == int32(types.T_float32) &&
+			binding.Type.IsNumeric() && int(source.GetP().Pos) < len(state.values) {
+			if param, ok := state.values[source.GetP().Pos].(ParamValue); ok && !param.IsBinaryProtocol {
+				// A SQL PREPARE marker compared directly with FLOAT inherits
+				// that column's storage precision. Comparing DECIMAL transport
+				// against FLOAT via DOUBLE would miss the stored rounded value.
+				converted, castErr := makePlan2CastExpr(ctx, source, args[1-i].Typ)
+				if castErr != nil {
+					return nil, castErr
+				}
+				args[i] = converted
+				continue
+			}
+		}
+		if len(args) == 2 && isPreparedNumericComparisonContext(name) &&
+			binding.Type.Oid.IsMySQLString() && args[1-i] != nil &&
+			(types.T(args[1-i].Typ.Id).IsUnsignedInt() || args[1-i].Typ.Id == int32(types.T_bit)) {
+			// A proven integral string must compare in an exact UINT/BIT
+			// domain before the generic matcher can round it through DOUBLE.
+			// The proof depends on this execution's value, so the existing
+			// binding state keeps the resulting plan out of the type-only cache.
+			if value, present := preparedConfigurationValue(ctx, source); present && value != nil {
+				_, exact, proofErr := preparedComparisonExactIntegerExpr(ctx, fmt.Sprint(value), args[1-i].Typ)
+				if proofErr != nil {
+					return nil, proofErr
+				}
+				if exact {
+					target := args[1-i].Typ
+					if target.Id == int32(types.T_bit) {
+						// BIT stores an unsigned integer; a direct string→BIT cast
+						// would interpret the source bytes instead of its numeric text.
+						unsigned := types.T_uint64.ToType()
+						target = makePlan2Type(&unsigned)
+					}
+					// The proof accepts complete decimal/scientific spellings such
+					// as "100.0" and "1e2". String→UINT's integer parser does
+					// not accept those spellings, while DECIMAL(38,0) parses them
+					// exactly without rounding adjacent values above 2^53.
+					decimalType := types.New(types.T_decimal128, 38, 0)
+					decimalValue, castErr := makePlan2CastExpr(ctx, source, makePlan2Type(&decimalType))
+					if castErr != nil {
+						return nil, castErr
+					}
+					converted, castErr := makePlan2CastExpr(ctx, decimalValue, target)
+					if castErr != nil {
+						return nil, castErr
+					}
+					args[i] = converted
+					continue
+				}
+			}
+		}
 		var target types.Type
 		switch {
 		case name == "bit_count" && len(args) == 1:
@@ -208,6 +314,12 @@ func bindPreparedConsumerArguments(ctx context.Context, name string, args []*Exp
 			if target.Oid == types.T_any && (binding.Type.Oid.IsMySQLString() || binding.Type.Oid == types.T_any) {
 				target = types.T_varbinary.ToType()
 			}
+		case len(args) == 1 && binding.Type.Oid.IsMySQLString() &&
+			(name == "abs" || name == "sign" || name == "sleep"):
+			// Prepared string sources can contain fractions. Keep this
+			// conversion at the marker consumer; ordinary string expressions
+			// retain their established overload selection.
+			target = types.T_float64.ToType()
 		case binding.NumericType.Oid.IsDecimal() &&
 			(isNumericContextFunction(name) || supportsGenericNumericFunctionContext(name) ||
 				preparedSQLExecuteNumericResultConsumer(name) || isPreparedNumericComparisonContext(name)):
@@ -218,15 +330,6 @@ func bindPreparedConsumerArguments(ctx context.Context, name string, args []*Exp
 			args[i], err = makePlan2CastExpr(ctx, source, makePlan2Type(&target))
 			if err != nil {
 				return nil, err
-			}
-		}
-		if name == "char" && binding.Type.Oid.IsMySQLString() {
-			if value, present := preparedConfigurationValue(ctx, source); present && value != nil {
-				var err error
-				args[i], err = preparedCharSourceCast(ctx, source, fmt.Sprint(value))
-				if err != nil {
-					return nil, err
-				}
 			}
 		}
 		if int(source.GetP().Pos) < len(state.values) {
@@ -319,6 +422,8 @@ func (state *preparedSourceBindingState) bindingForPosition(position int32) (Pre
 	return PreparedSourceBinding{}, false
 }
 
+// Retained for the legacy parameter-replacement path, which still handles
+// prepared DDL and other statements not built through source bindings.
 func preparedCharSourceCast(ctx context.Context, source *Expr, value string) (*Expr, error) {
 	target, ok := PreparedCharSourceTypeFromString(value)
 	if !ok {
@@ -352,6 +457,7 @@ func BuildPreparedExecutionPlan(ctx CompilerContext, stmt tree.Statement,
 		return nil, err
 	}
 	p := &Plan{Plan: &plan.Plan_Query{Query: query}, IsPrepare: true}
+	presentPreparedSQLResults(planning, query)
 	if err = lowerPreparedSourceTransports(planning, p); err != nil {
 		return nil, err
 	}

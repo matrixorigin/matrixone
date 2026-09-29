@@ -818,6 +818,7 @@ var supportedTypeCast = map[types.T][]types.T{
 
 	types.T_year: {
 		types.T_year,
+		types.T_bit,
 		types.T_int8, types.T_int16, types.T_int32, types.T_int64,
 		types.T_uint8, types.T_uint16, types.T_uint32, types.T_uint64,
 		types.T_float32, types.T_float64,
@@ -1170,7 +1171,7 @@ func newCast(parameters []*vector.Vector, result vector.FunctionResultWrapper, p
 		err = timestampToOthers(execProc, s, *toType, result, length, selectList, strictStringWidth, reportDataTooLong)
 	case types.T_year:
 		s := vector.GenerateFunctionFixedTypeParameter[types.MoYear](from)
-		err = yearToOthers(execProc.Ctx, s, *toType, result, length, selectList, strictStringWidth, reportDataTooLong)
+		err = yearToOthers(execProc, s, *toType, result, length, selectList, strictStringWidth, reportDataTooLong)
 	case types.T_char, types.T_varchar, types.T_binary, types.T_varbinary, types.T_blob, types.T_text, types.T_datalink, types.T_geometry, types.T_geometry32:
 		s := vector.GenerateFunctionStrParameter(from)
 		err = strTypeToOthers(execProc, s, *toType, result, length, selectList, mode, allowTrailingSpaceTrim, reportDataTooLong)
@@ -10601,13 +10602,17 @@ func floatToBytes(v float64, bitSize int) []byte {
 }
 
 // yearToOthers converts YEAR type to other types
-func yearToOthers(ctx context.Context,
+func yearToOthers(proc *process.Process,
 	source vector.FunctionParameterWrapper[types.MoYear],
 	toType types.Type, result vector.FunctionResultWrapper, length int, selectList *FunctionSelectList, strictStringWidth ...bool) error {
+	ctx := proc.Ctx
 	switch toType.Oid {
 	case types.T_year:
 		rs := vector.MustFunctionResult[types.MoYear](result)
 		return yearToYear(ctx, source, rs, length, selectList)
+	case types.T_bit:
+		rs := vector.MustFunctionResult[uint64](result)
+		return numericToBitWithIgnore(ctx, proc, source, rs, int(toType.Width), length, selectList)
 	case types.T_int8:
 		rs := vector.MustFunctionResult[int8](result)
 		return yearToInteger(ctx, source, rs, length, selectList)

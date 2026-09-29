@@ -1509,7 +1509,8 @@ func TestInitExecuteStmtParamDirectResultSpecializationUsesBoundedCache(t *testi
 	require.NoError(t, err)
 	require.Nil(t, retComp)
 	require.NotSame(t, ordinaryPlan, nullPlan)
-	require.Equal(t, int32(types.T_any), resultExpr(nullPlan).Typ.Id)
+	require.Equal(t, int32(types.T_text), resultExpr(nullPlan).Typ.Id,
+		"a visible NULL needs a concrete transport column")
 	require.Equal(t, ordinaryColDef, prepareStmt.ColDefData)
 	require.Same(t, decimalCompile, prepareStmt.runtimeCompile,
 		"an untyped NULL execution may leave the bounded numeric cache dormant")
@@ -1733,9 +1734,10 @@ func TestSQLPreparedBooleanDirectResultIsIndependentOfNumericSibling(t *testing.
 						directExecutor.Free()
 						directInput.Clean(cw.proc.Mp())
 					})
-					require.Equal(t, types.T_bool, direct.GetType().Oid)
+					require.Equal(t, types.T_text, direct.GetType().Oid,
+						"SQL EXECUTE presents a bare marker as TEXT")
 					require.False(t, direct.GetNulls().Contains(0))
-					require.Equal(t, execution.value.(bool), vector.GetFixedAtNoTypeCheck[bool](direct, 0))
+					require.Equal(t, execution.wantText, direct.GetStringAt(0))
 					for _, numericIndex := range test.numeric {
 						numeric, numericExecutor, numericInput := evaluate(root.ProjectList[numericIndex])
 						t.Cleanup(func() {
@@ -3924,7 +3926,7 @@ func TestPreparedOrdinaryFloatRuntimeCacheReusesCompile(t *testing.T) {
 	require.Same(t, cached, reused)
 }
 
-func TestCOMStmtCharRuntimeCacheSeparatesEffectiveIntegerDomains(t *testing.T) {
+func TestCOMStmtCharRuntimeCacheReusesTextSourceAcrossSignedness(t *testing.T) {
 	for i, scenario := range []struct {
 		name   string
 		first  string
@@ -3981,22 +3983,27 @@ func TestCOMStmtCharRuntimeCacheSeparatesEffectiveIntegerDomains(t *testing.T) {
 			}
 
 			install(scenario.first)
-			firstPlan, _ := execute()
-			require.Nil(t, cw.runtimeCachePlan)
+			firstPlan, firstValue := execute()
+			require.Same(t, firstPlan, cw.runtimeCachePlan)
+			cachedCompile := compile.NewCompile(
+				"", "", prepareStmt.Sql, "", "", nil,
+				cw.proc, prepareStmt.PrepareStmt, false, nil, time.Now())
+			require.True(t, cw.installRuntimeCacheCandidate(cachedCompile))
 
 			install(scenario.second)
 			secondPlan, freshValue := execute()
-			require.NotSame(t, firstPlan, secondPlan,
-				"different effective CHAR integer domains must force a fresh specialization")
-
+			require.Same(t, firstPlan, secondPlan,
+				"the binary string source domain reuses one value-independent plan")
+			require.NotEqual(t, firstValue, freshValue,
+				"cached CHAR must consume this execution's source bytes")
 			require.Nil(t, cw.runtimeCachePlan)
 
 			install(scenario.second)
 			retComp, cachedPlan, _, _, _, err := initExecuteStmtParam(
 				execCtx, ses, cw, nil, prepareStmt.Name)
 			require.NoError(t, err)
-			require.Nil(t, retComp)
-			require.NotSame(t, secondPlan, cachedPlan)
+			require.Same(t, cachedCompile, retComp)
+			require.Same(t, secondPlan, cachedPlan)
 			require.Nil(t, cw.runtimeCachePlan)
 			require.Equal(t, freshValue, evaluate(cachedPlan),
 				"repeated binding must use the same CHAR conversion domain")

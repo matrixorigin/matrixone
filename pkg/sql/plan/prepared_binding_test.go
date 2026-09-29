@@ -16,6 +16,7 @@ package plan
 
 import (
 	"context"
+	"fmt"
 	"strings"
 	"testing"
 
@@ -31,6 +32,67 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/testutil"
 	"github.com/stretchr/testify/require"
 )
+
+func TestPreparedDomainlessNullUsesConcreteRelationalColumns(t *testing.T) {
+	for _, query := range []string{
+		"select ? group by 1",
+		"select ? union all select ?",
+	} {
+		for _, binary := range []bool{false, true} {
+			t.Run(fmt.Sprintf("%s/binary=%v", query, binary), func(t *testing.T) {
+				mock := NewMockOptimizer(false)
+				bindings := []PreparedSourceBinding{
+					{Position: 0, Type: types.T_any.ToType()},
+					{Position: 1, Type: types.T_any.ToType()},
+				}
+				values := []any{
+					ParamValue{IsBinaryProtocol: binary},
+					ParamValue{IsBinaryProtocol: binary},
+				}
+				mock.ctxt.SetContext(withPreparedSourceBindings(context.Background(), bindings, values))
+				p, err := runOneStmt(mock, t, query)
+				require.NoError(t, err)
+				for _, node := range p.GetQuery().Nodes {
+					for _, expr := range append(append([]*Expr(nil), node.ProjectList...), node.GroupBy...) {
+						require.NotEqual(t, int32(types.T_any), expr.Typ.Id, "materialized column or group key")
+					}
+				}
+			})
+		}
+	}
+
+	ctx := withPreparedSourceBindings(context.Background(), []PreparedSourceBinding{{Position: 0, Type: types.T_varchar.ToType()}}, []any{nil})
+	typedNull, err := bindPreparedSource(ctx, 1)
+	require.NoError(t, err)
+	require.NotNil(t, typedNull.GetP(), "typed NULL retains its source domain")
+	require.Equal(t, int32(types.T_varchar), typedNull.Typ.Id)
+}
+
+func TestPreparedSQLPresentationKeepsDerivedNumericConsumer(t *testing.T) {
+	const query = "select x, greatest(x,y) from (select ? as x, ? as y limit 1) d"
+	source := types.New(types.T_decimal128, 20, 0)
+	bindings := []PreparedSourceBinding{{Position: 0, Type: source}, {Position: 1, Type: source}}
+	for _, binary := range []bool{false, true} {
+		mock := NewMockOptimizer(false)
+		ctx := withPreparedSourceBindings(context.Background(), bindings, []any{
+			ParamValue{Value: "2", IsBinaryProtocol: binary},
+			ParamValue{Value: "10", IsBinaryProtocol: binary},
+		})
+		mock.ctxt.SetContext(ctx)
+		p, err := runOneStmt(mock, t, query)
+		require.NoError(t, err)
+		root := p.GetQuery().Nodes[p.GetQuery().Steps[0]]
+		require.Equal(t, int32(types.T_decimal128), root.ProjectList[0].Typ.Id)
+		require.Equal(t, int32(types.T_decimal128), root.ProjectList[1].Typ.Id)
+		presentPreparedSQLResults(ctx, p.GetQuery())
+		if binary {
+			require.Equal(t, int32(types.T_decimal128), root.ProjectList[0].Typ.Id)
+		} else {
+			require.Equal(t, int32(types.T_text), root.ProjectList[0].Typ.Id)
+		}
+		require.Equal(t, int32(types.T_decimal128), root.ProjectList[1].Typ.Id)
+	}
+}
 
 func TestPreparedBindingBeforeKeyLowering(t *testing.T) {
 	for _, tc := range []struct {

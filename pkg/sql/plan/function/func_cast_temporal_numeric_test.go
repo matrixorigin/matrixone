@@ -127,6 +127,17 @@ func TestCastTemporalNumericUsesMysqlPackedValue(t *testing.T) {
 	}
 }
 
+func TestCastYearToBitRejectsOverflow(t *testing.T) {
+	proc := testutil.NewProcess(t)
+	bit10 := types.New(types.T_bit, 10, 0)
+	tc := NewFunctionTestCase(proc, []FunctionTestInput{
+		NewFunctionTestInput(types.T_year.ToType(), []types.MoYear{2024}, nil),
+		NewFunctionTestInput(bit10, []uint64{}, nil),
+	}, NewFunctionTestResult(bit10, true, nil, nil), NewCast)
+	ok, info := tc.Run()
+	require.True(t, ok, info)
+}
+
 func TestTimeNumericArithmeticPreservesFractionAndMetadata(t *testing.T) {
 	proc := testutil.NewProcess(t)
 	timeType := types.T_time.ToTypeWithScale(3)
@@ -621,6 +632,7 @@ func TestTemporalNumericCastDecimalAndNulls(t *testing.T) {
 	dateType128 := types.New(types.T_decimal128, 20, 0)
 	datetimeType128 := types.New(types.T_decimal128, 20, 6)
 	yearType128 := types.New(types.T_decimal128, 20, 0)
+	yearBitType := types.New(types.T_bit, 11, 0)
 	datetimeOutType := types.T_datetime.ToTypeWithScale(6)
 	timestampOutType := types.T_timestamp.ToTypeWithScale(6)
 	nulls := []bool{false, true}
@@ -693,6 +705,14 @@ func TestTemporalNumericCastDecimalAndNulls(t *testing.T) {
 				NewFunctionTestInput(yearType128, []types.Decimal128{}, nil),
 			},
 			expect: NewFunctionTestResult(yearType128, false, []types.Decimal128{yearDecimal128, {}}, nulls),
+		},
+		{
+			name: "year to bit uses numeric value and propagates null",
+			inputs: []FunctionTestInput{
+				NewFunctionTestInput(types.T_year.ToType(), []types.MoYear{2024, 0}, nulls),
+				NewFunctionTestInput(yearBitType, []uint64{}, nil),
+			},
+			expect: NewFunctionTestResult(yearBitType, false, []uint64{2024, 0}, nulls),
 		},
 		{
 			name: "decimal64 to datetime propagates null",

@@ -368,6 +368,32 @@ func (b *baseBinder) baseBindParam(astExpr *tree.ParamExpr, depth int32, isRoot 
 		if err != nil {
 			return nil, err
 		}
+		if param.Typ.Id == int32(types.T_any) && (b.preparedFieldArgumentContext || isRoot) {
+			state := preparedBindingState(b.GetContext())
+			if state != nil && astExpr.Offset > 0 && astExpr.Offset <= len(state.values) {
+				value := state.values[astExpr.Offset-1]
+				if source, ok := value.(ParamValue); ok {
+					value = source.Value
+				}
+				if value == nil {
+					source, _ := state.values[astExpr.Offset-1].(ParamValue)
+					if !source.IsBinaryProtocol {
+						// SQL user-variable NULL has a TEXT source for FIELD and
+						// for a bare visible projection.
+						textType := types.T_text.ToType()
+						return &Expr{Typ: makePlan2Type(&textType), Expr: param.Expr}, nil
+					}
+					if isRoot {
+						// Physical relational columns cannot carry ANY.
+						return MakePlan2NullTextConstExprWithType(""), nil
+					}
+				}
+			}
+		}
+		if b.numericParamType != nil && !b.integerArgumentSourceContext &&
+			types.T(param.Typ.Id).IsMySQLString() {
+			return appendCastBeforeExpr(b.GetContext(), param, *b.numericParamType)
+		}
 		if param.Typ.Id == int32(types.T_any) && b.numericParamType != nil {
 			return appendCastBeforeExpr(b.GetContext(), param, *b.numericParamType)
 		}
@@ -394,6 +420,12 @@ func (b *baseBinder) baseBindVar(astExpr *tree.VarExpr, depth int32, isRoot bool
 	if !astExpr.System {
 		if resolved, ok := b.resolveUserVariableType(astExpr); ok {
 			typ = makeTypeByPlan2Type(resolved)
+		}
+		if typ.Oid == types.T_any {
+			// A domainless user-variable NULL is still a TEXT expression in
+			// ordinary SQL. Prepared marker binding keeps the untyped source
+			// separately and lets each consumer choose its domain.
+			typ = types.T_text.ToType()
 		}
 		if typ.Oid.IsMySQLString() {
 			domain := types.RuntimeStringInherit
@@ -1172,6 +1204,16 @@ func (b *baseBinder) bindNumericExprWithContextMode(
 		defer func() { b.numericParamType = paramType }()
 		return b.impl.BindExpr(astExpr, depth, false)
 	}
+	if outer != nil && preparedSourceBindings(b.GetContext()) != nil {
+		if _, direct := unwrapParenExpr(astExpr).(*tree.ParamExpr); direct {
+			// A bare assignment marker is a source value. Its destination cast
+			// must retain string bytes (not arithmetic numeric coercion).
+			paramType := b.numericParamType
+			b.numericParamType = nil
+			defer func() { b.numericParamType = paramType }()
+			return b.impl.BindExpr(astExpr, depth, false)
+		}
+	}
 	if b.numericParamType != nil {
 		return b.impl.BindExpr(astExpr, depth, false)
 	}
@@ -1241,10 +1283,13 @@ type numericAstTypeScan struct {
 	// deferred numeric-context propagation even when their result type cannot
 	// be inferred statically. Callers that need to distinguish a marker from a
 	// deferred-but-unknown scalar expression must use hasParamRef.
-	hasParamRef  bool
-	hasVar       bool
-	hasUnknown   bool
-	incompatible bool
+	hasParamRef bool
+	// String markers enter arithmetic as numeric values, but an integer peer
+	// alone must not turn their default approximate domain into BIGINT.
+	hasStringParam bool
+	hasVar         bool
+	hasUnknown     bool
+	incompatible   bool
 }
 
 func (s numericAstTypeScan) merge(other numericAstTypeScan) numericAstTypeScan {
@@ -1253,6 +1298,7 @@ func (s numericAstTypeScan) merge(other numericAstTypeScan) numericAstTypeScan {
 	s.weakDecimals = append(s.weakDecimals, other.weakDecimals...)
 	s.hasParam = s.hasParam || other.hasParam
 	s.hasParamRef = s.hasParamRef || other.hasParamRef
+	s.hasStringParam = s.hasStringParam || other.hasStringParam
 	s.hasVar = s.hasVar || other.hasVar
 	s.hasUnknown = s.hasUnknown || other.hasUnknown
 	s.incompatible = s.incompatible || other.incompatible
@@ -1382,6 +1428,12 @@ func (b *baseBinder) numericAstTypesInternalWithHint(
 			binding, err := preparedSourceBindingAt(b.GetContext(), expr.Offset)
 			if err != nil {
 				return numericAstTypeScan{}, err
+			}
+			if binding.Type.Oid.IsMySQLString() {
+				// A string source remains a string outside numeric arithmetic.
+				// Here its value needs the surrounding numeric domain, not the
+				// string/string CONCAT overload of '+'.
+				return numericAstTypeScan{hasParam: true, hasParamRef: true, hasStringParam: true}, nil
 			}
 			if binding.Type.Oid == types.T_any {
 				return numericAstTypeScan{hasParam: true, hasParamRef: true}, nil
@@ -1682,6 +1734,10 @@ func numericTypeFromAstScan(scan numericAstTypeScan, outer *Type) (Type, bool) {
 	if outer != nil {
 		typ := makeTypeByPlan2Type(*outer)
 		outerType = &typ
+	}
+	if scan.hasStringParam && (outerType == nil || !outerType.Oid.IsDecimal()) {
+		approximate := types.T_float64.ToType()
+		return makePlan2Type(&approximate), true
 	}
 	if shouldIncludeTemporalHints(scan, outerType) {
 		for i := range scan.temporalHints {
@@ -3888,6 +3944,9 @@ func (b *baseBinder) coerceJSONNumericAggregateArg(
 }
 
 func (b *baseBinder) bindFuncExprImplByAstExpr(name string, astArgs []tree.Expr, depth int32) (*plan.Expr, error) {
+	previousFieldContext := b.preparedFieldArgumentContext
+	b.preparedFieldArgumentContext = previousFieldContext || name == "field"
+	defer func() { b.preparedFieldArgumentContext = previousFieldContext }()
 	if name == "format" && b.persistedFormatCompatibility && !function.LegacySpecialConsumers(b.GetContext()) {
 		return b.bindPersistedFormat(astArgs, depth)
 	}
@@ -4099,6 +4158,14 @@ func (b *baseBinder) bindFuncExprImplByAstExpr(name string, astArgs []tree.Expr,
 				}
 			}
 
+			if (name == "field" || name == "coalesce") && b.ctx != nil &&
+				b.ctx.outputColumnProvenanceForExpr(expr).State == ProvenancePureNull {
+				// A transparent projected NULL needs a concrete TEXT column for
+				// materialization, but is still untyped when FIELD or COALESCE
+				// chooses a common domain. SQL user-variable NULLs retain their
+				// TEXT parameter reference instead of PureNull provenance.
+				expr = makePlan2NullConstExprWithType()
+			}
 			args[idx] = expr
 		}
 	}

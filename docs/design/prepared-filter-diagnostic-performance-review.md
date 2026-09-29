@@ -2,7 +2,11 @@
 
 Updated: 2026-09-29. The original published head reviewed was `f5b8e9f33588f7e0c7945f305c7d2de2f901a1ae`; this record includes the subsequent source-binding rewrite. Merge base: `a543410f766d2f41237519ed7cc1376c31e03d99`. Current design: [prepared-filter-diagnostic-performance.md](prepared-filter-diagnostic-performance.md).
 
-The user authorized staged GPT-6 Astra / xhigh review. That reviewer approved source binding before optimization and a single runtime cache. The full implementation review found two concrete consumer bugs; both are corrected and their regressions pass. The final incremental code review found no remaining blocker. Repeated two-CN BVT and current-binary performance acceptance pass. The same GPT-6 Astra/xhigh reviewer independently audited the final manifests, terminal logs, profiles and summaries: final PASS, zero unresolved blockers. New-head CI and a future merge result remain separate from this local acceptance.
+The user authorized staged GPT-6 Astra / xhigh review. That reviewer approved source binding before optimization and a single runtime cache. The full implementation review found two concrete consumer bugs; both were corrected. Repeated two-CN BVT and performance acceptance passed on the previously reviewed head. Subsequent public-regression review found additional failures at `74d6811d3ddae92e1841efab3892bf841588e16f`; the earlier PASS does not cover the repair described below. New-head CI and a future merge result remain separate from local acceptance.
+
+## Public-regression repair after the prior PASS
+
+Unchanged public prepared-statement tests failed at `74d6811` and passed at merge base `a543410`. Failures included string-source numeric arithmetic, NULL/ANY relational materialization, YEAR→BIT stored-procedure assignment, and prepared-result presentation. The repair keeps NULL markers executable while giving physical result columns concrete types; preserves SQL EXECUTE's visible TEXT spelling without changing inner numeric consumers; applies source-specific casts only at the relevant consumer; and adds YEAR→BIT to the common cast path. It does not add a second execution path or cache. An independent GPT-6 Astra/high read-only review then found two further counterexamples: exact unsigned comparison of integral decimal/scientific string spellings and `CHAR` rounding of explicitly DOUBLE sources. Both received public-protocol regression tests and narrow fixes. The former casts the executable marker through exact DECIMAL before unsigned comparison; the latter restricts lexical inference to string sources. Rebinding from an inexact value/error back to an exact value is tested to challenge stale cache/proof state.
 
 ## Change map
 
@@ -37,6 +41,7 @@ Cleanup findings were adopted: removed `PreparedPlanDiagnosticNeedsTemplate`, co
 
 ## Evidence and remaining gates
 
+- For the post-PASS repair, seven affected public prepared-statement integration tests passed together (15.640 seconds), including the unchanged tests that failed at `74d6811`, the prior composite-key regression, and new exact-integer, NULL, `CHAR`, and SQL UNION controls. Full plan/function/frontend/compile unit packages passed (5.799/15.512/26.191/6.610 seconds). Exact comparison's same-type inexact/error→exact rebinding passed for SQL PREPARE and COM_STMT separately. `git diff --check` passed. These results are local macOS/CGo evidence; the previously recorded two-CN BVT and NVMe throughput measurements have not been rerun on this repair.
 - Complete frontend/plan/function/compile UT passed: 21.889/7.131/14.682/4.125 seconds.
 - After QUERY retry deletion and common planning accounting extraction, real two-CN `TestIssue29463PreparedCompositeKeyDomains` passed in 13.213 seconds. Covers both protocols, warnings, keys/no keys/secondary indexes, fractions, NULL, invalid text, rebinding, UPDATE, adjacent BIGINT literals, ordinary UINT64/BIT multiplication and JSON CONCAT.
 - Subsequent frontend/pb-plan/colexec/parser-tree full UT passed: 29.981/0.043/1.865/0.027 seconds.
