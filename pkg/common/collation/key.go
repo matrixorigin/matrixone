@@ -32,13 +32,17 @@ const (
 	UTF8MB4GeneralCI
 	UTF8MB40900AI
 	UTF8MB40900Bin
+	// Foundation only: not admitted by SQL or persisted schema metadata.
+	UTF8MB4UnicodeCI
+	UTF8MB3UnicodeCI
 )
 
 var (
-	ErrDomain = moerr.NewNotSupportedNoCtx("unsupported collation key domain")
-	ErrUTF8   = moerr.NewInvalidInputNoCtx("invalid UTF-8 in collation key")
-	ErrKey    = moerr.NewInvalidInputNoCtx("invalid collation key encoding")
-	ErrSize   = moerr.NewInvalidInputNoCtx("collation key size overflow")
+	ErrDomain     = moerr.NewNotSupportedNoCtx("unsupported collation key domain")
+	ErrUTF8       = moerr.NewInvalidInputNoCtx("invalid UTF-8 in collation key")
+	ErrKey        = moerr.NewInvalidInputNoCtx("invalid collation key encoding")
+	ErrSize       = moerr.NewInvalidInputNoCtx("collation key size overflow")
+	ErrRepertoire = moerr.NewInvalidInputNoCtx("supplementary character in utf8mb3 collation key")
 )
 
 // KeySizeUpperBound bounds the payload allocation for an input byte length.
@@ -56,6 +60,10 @@ func (d Domain) KeySizeUpperBound(inputBytes int) (int, error) {
 		multiplier, extra = 4, 1
 	case UTF8MB40900AI:
 		multiplier = 16
+	case UTF8MB4UnicodeCI, UTF8MB3UnicodeCI:
+		// Frozen UCA4 table: at most 18 primary elements per scalar,
+		// each encoded in three bytes, plus the PAD terminator.
+		multiplier, extra = 54, 1
 	default:
 		return 0, ErrDomain
 	}
@@ -68,9 +76,13 @@ func (d Domain) KeySizeUpperBound(inputBytes int) (int, error) {
 // Key returns borrowed bytes: Raw and 0900-bin borrow the input; other domains
 // reuse scratch[:0]. Scratch must not overlap value. Callers must copy retained
 // keys before reusing input/scratch. Invalid text/domain/size leaves scratch
-// unchanged. PAD domains use C1; 0900 uses unpadded primary weights/raw UTF-8.
+// unchanged. Bin/general-ci PAD domains use C1; Unicode-ci uses U4P1;
+// 0900 uses unpadded primary weights/raw UTF-8.
 // New transformed keys reject malformed UTF-8; legacy Raw preserves all bytes.
 func (d Domain) Key(scratch, value []byte) ([]byte, error) {
+	if d == UTF8MB4UnicodeCI || d == UTF8MB3UnicodeCI {
+		return d.uca400Key(scratch, value)
+	}
 	if d == Raw {
 		return value, nil
 	}
@@ -133,6 +145,9 @@ func (d Domain) next(value []byte) (uint32, int) {
 // ValidateKey checks canonical framing and weight bounds without decoding into
 // user text. The caller has already removed the outer tuple escaping.
 func (d Domain) ValidateKey(key []byte) error {
+	if d == UTF8MB4UnicodeCI || d == UTF8MB3UnicodeCI {
+		return validateUCA400Key(key)
+	}
 	if d == Raw {
 		return nil
 	}

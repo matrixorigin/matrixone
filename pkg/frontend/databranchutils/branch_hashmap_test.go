@@ -19,6 +19,7 @@ import (
 	"fmt"
 	"math/rand"
 	"os"
+	"path/filepath"
 	"runtime"
 	"sync"
 	"sync/atomic"
@@ -300,6 +301,156 @@ func TestBranchHashmapSpillAndRetrieve(t *testing.T) {
 		require.Equal(t, expected.key, row[0])
 		require.Equal(t, []byte(expected.value), row[1])
 	}
+}
+
+func TestBranchHashmapFailedSpillDoesNotDuplicate(t *testing.T) {
+	var keys [][]byte
+	for i := 0; i < 10000 && len(keys) < 2; i++ {
+		key := []byte(fmt.Sprintf("k%04d", i))
+		if len(keys) == 0 || hashKey(key)%4 == hashKey(keys[0])%4 {
+			keys = append(keys, key)
+		}
+	}
+	require.Len(t, keys, 2)
+	values := [][]byte{[]byte("a"), []byte("b")}
+	initialSize := uint64(len(keys[0]) + len(values[0]) + len(keys[1]) + len(values[1]))
+	bhIface, err := NewBranchHashmap(
+		WithBranchHashmapAllocator(newLimitedAllocator(initialSize)),
+		WithBranchHashmapSpillRoot(t.TempDir()),
+		WithBranchHashmapShardCount(4),
+		WithBranchHashmapSpillBucketCount(1),
+		WithBranchHashmapSpillSegmentMaxBytes(uint64(spillEntryHeaderSize+len(keys[0])+len(values[0]))),
+		withBranchHashmapRawEncodedKeys(),
+	)
+	require.NoError(t, err)
+	bh := bhIface.(*branchHashmap)
+	t.Cleanup(func() { require.NoError(t, bh.Close()) })
+	initial := []preparedEntry{{key: keys[0], value: values[0]}, {key: keys[1], value: values[1]}}
+	require.NoError(t, bh.flushPreparedEntries(make([][]int, bh.shardCount), initial))
+	shard := bh.shards[int(hashKey(keys[0])%uint64(bh.shardCount))]
+	_, err = shard.ensureSpillStore()
+	require.NoError(t, err)
+	blockedPath := filepath.Join(shard.spillDir, "spill-b00000-000001.bin")
+	require.NoError(t, os.Mkdir(blockedPath, 0o700))
+
+	mp := mpool.MustNewZero()
+	t.Cleanup(func() { mpool.DeleteMPool(mp) })
+	trigger := buildInt64Vector(t, mp, []int64{999})
+	t.Cleanup(func() { trigger.Free(mp) })
+	require.Error(t, bh.PutByVectors([]*vector.Vector{trigger}, []int{0}))
+	require.Equal(t, int64(2), bh.ItemCount())
+	for i, key := range keys {
+		got, err := bh.GetByEncodedKey(key)
+		require.NoError(t, err)
+		require.Equal(t, [][]byte{values[i]}, got.Rows)
+	}
+
+	require.NoError(t, os.Remove(blockedPath))
+	require.NoError(t, bh.PutByVectors([]*vector.Vector{trigger}, []int{0}))
+	require.Equal(t, int64(3), bh.ItemCount())
+	for i, key := range keys {
+		got, err := bh.GetByEncodedKey(key)
+		require.NoError(t, err)
+		require.Equal(t, [][]byte{values[i]}, got.Rows)
+	}
+}
+
+func TestSpillStoreAppendEntriesRollbackExistingSegment(t *testing.T) {
+	store, err := newSpillStore(t.TempDir(), 1, 45)
+	require.NoError(t, err)
+	t.Cleanup(func() { require.NoError(t, store.close()) })
+	first := spillEntry{hash: 1, key: []byte("k1"), value: []byte("a")}
+	require.NoError(t, store.appendEntries(0, []spillEntry{first}))
+	bucket := &store.buckets[0]
+	require.Len(t, bucket.segments, 1)
+	oldSize := bucket.segments[0].size
+	blockedPath := filepath.Join(store.dir, "spill-b00000-000001.bin")
+	require.NoError(t, os.Mkdir(blockedPath, 0o700))
+	next := []spillEntry{
+		{hash: 2, key: []byte("k2"), value: []byte("b")},
+		{hash: 3, key: []byte("k3"), value: []byte("c")},
+	}
+	require.Error(t, store.appendEntries(0, next))
+	require.Len(t, bucket.segments, 1)
+	require.Equal(t, oldSize, bucket.segments[0].size)
+	require.Equal(t, uint64(1), bucket.rowCount)
+	require.Equal(t, uint64(1), store.stats.spilledEntries)
+	info, err := os.Stat(bucket.segments[0].path)
+	require.NoError(t, err)
+	require.Equal(t, oldSize, info.Size())
+	var keys []string
+	var scratch []byte
+	require.NoError(t, store.scanBucket(0, scanReasonGet, &scratch, func(_ uint64, key, _ []byte, _ uint64) (bool, error) {
+		keys = append(keys, string(key))
+		return false, nil
+	}))
+	require.Equal(t, []string{"k1"}, keys)
+	require.NoError(t, os.Remove(blockedPath))
+	require.NoError(t, store.appendEntries(0, next))
+	keys = nil
+	require.NoError(t, store.scanBucket(0, scanReasonGet, &scratch, func(_ uint64, key, _ []byte, _ uint64) (bool, error) {
+		keys = append(keys, string(key))
+		return false, nil
+	}))
+	require.Equal(t, []string{"k1", "k2", "k3"}, keys)
+}
+
+func TestSpillStoreRollbackFailureSealsReads(t *testing.T) {
+	store, err := newSpillStore(t.TempDir(), 1, 45)
+	require.NoError(t, err)
+	t.Cleanup(func() { require.NoError(t, store.close()) })
+	entry := spillEntry{hash: 1, key: []byte("k1"), value: []byte("a")}
+	require.NoError(t, store.appendEntries(0, []spillEntry{entry}))
+	path := store.buckets[0].segments[0].path
+	require.NoError(t, os.Remove(path))
+	require.NoError(t, os.Mkdir(path, 0o700))
+	require.Error(t, store.appendEntries(0, []spillEntry{entry}))
+	require.Error(t, store.failed)
+	var rows [][]byte
+	require.ErrorIs(t, store.collect(0, entry.hash, entry.key, &rows, nil, true, scanReasonGet), store.failed)
+	require.Empty(t, rows)
+}
+
+func TestBranchHashmapPoisonedShardDoesNotPartiallyConsume(t *testing.T) {
+	mp := mpool.MustNewZero()
+	t.Cleanup(func() { mpool.DeleteMPool(mp) })
+	keys := buildInt64Vector(t, mp, []int64{1, 2, 3, 4, 5, 6, 7, 8})
+	t.Cleanup(func() { keys.Free(mp) })
+	bhIface, err := NewBranchHashmap(WithBranchHashmapShardCount(4))
+	require.NoError(t, err)
+	bh := bhIface.(*branchHashmap)
+	t.Cleanup(func() { require.NoError(t, bh.Close()) })
+	require.NoError(t, bh.PutByVectors([]*vector.Vector{keys}, []int{0}))
+	encoded := collectInt64EncodedKeys(t, bh)
+	healthyKey := int64(1)
+	poisonedKey := int64(0)
+	for key := int64(2); key <= 8; key++ {
+		if hashKey(encoded[key])%4 != hashKey(encoded[healthyKey])%4 {
+			poisonedKey = key
+			break
+		}
+	}
+	require.NotZero(t, poisonedKey)
+	shard := bh.shards[int(hashKey(encoded[poisonedKey])%4)]
+	store, err := shard.ensureSpillStore()
+	require.NoError(t, err)
+	store.failed = errors.New("spill rollback failed")
+	probe := buildInt64Vector(t, mp, []int64{healthyKey, poisonedKey})
+	t.Cleanup(func() { probe.Free(mp) })
+	_, err = bh.PopByVectors([]*vector.Vector{probe}, true)
+	require.ErrorIs(t, err, store.failed)
+	checkHealthy := func() {
+		got, err := bh.GetByEncodedKey(encoded[healthyKey])
+		require.NoError(t, err)
+		require.Len(t, got.Rows, 1)
+	}
+	checkHealthy()
+	_, err = bh.PopByVectorsStream([]*vector.Vector{probe}, true, nil)
+	require.ErrorIs(t, err, store.failed)
+	checkHealthy()
+	_, err = bh.Migrate([]int{0}, 2)
+	require.ErrorIs(t, err, store.failed)
+	checkHealthy()
 }
 
 func TestBranchHashmapPopByVectorsSpilled(t *testing.T) {

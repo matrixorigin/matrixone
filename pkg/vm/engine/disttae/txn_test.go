@@ -1019,6 +1019,7 @@ func TestIssue25589RollbackLastStatementRestoresWorkspaceAccounting(t *testing.T
 	txn := &Transaction{
 		op:              op,
 		proc:            proc,
+		tablesInVain:    map[uint64]int{42: 1, 43: 0},
 		tableCache:      new(sync.Map),
 		tableOps:        newTableOps(),
 		databaseOps:     newDbOps(),
@@ -1035,8 +1036,12 @@ func TestIssue25589RollbackLastStatementRestoresWorkspaceAccounting(t *testing.T
 	txn.appendWorkspaceEntryLocked(Entry{typ: DELETE, databaseId: 7, tableId: 42, bat: rolledBackDelete})
 	txn.statementID = 1
 	txn.offsets = []int{1}
+	require.True(t, txn.IsTableDeletedAtTxnClose(42))
+	require.True(t, txn.IsTableDeletedAtTxnClose(43))
 
 	require.NoError(t, txn.RollbackLastStatement(context.Background()))
+	require.False(t, txn.IsTableDeletedAtTxnClose(42))
+	require.True(t, txn.IsTableDeletedAtTxnClose(43))
 	require.Len(t, txn.writes, 1)
 	require.Same(t, committed, txn.writes[0].bat)
 	require.Equal(t, uint64(committed.Size()), txn.workspaceSize)

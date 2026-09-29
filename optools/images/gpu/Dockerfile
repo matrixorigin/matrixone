@@ -26,9 +26,8 @@ RUN module_files="$(sha256sum go.mod go.sum)" && \
 COPY . .
 
 # Rootless container builds cannot restore archive owners outside their UID map.
-# Pipe jobserver tokens also work with CMake's older system gmake.
 RUN cd optools/gpu && pixi run --frozen env TAR_OPTIONS=--no-same-owner \
-    make --jobserver-style=pipe -C ../.. MO_CL_CUDA=1 -j8
+    make -C ../.. MO_CL_CUDA=1 -j8
 
 # Stage user-space libraries without dangling cross-directory Pixi symlinks or
 # silent basename collisions. Driver stubs are link-only and never packaged.
