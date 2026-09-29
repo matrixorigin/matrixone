@@ -125,6 +125,27 @@ func TestUserDefinedVarMigrationPreservesType(t *testing.T) {
 	require.Equal(t, typ, restored["amount"].Type)
 }
 
+func TestUserDefinedVarMigrationPreservesCollationMetadata(t *testing.T) {
+	typ := plan.Type{
+		Id: int32(types.T_varchar), Charset: 4, CollationVersion: 1,
+		CollationCoercibility: 2, CollationCoercibilitySet: true, CollationMergeConflict: true,
+		XXX_unrecognized: []byte{0xa0, 0x06, 0x01},
+	}
+	source := &Session{userDefinedVars: map[string]*UserDefinedVar{
+		"v": {Value: "x", Type: typ},
+	}}
+	snapshot, err := source.snapshotUserDefinedVars(t.Context())
+	require.NoError(t, err)
+	require.Equal(t, typ, *snapshot[0].Type)
+	typ.XXX_unrecognized[2] = 2
+	require.Equal(t, byte(1), snapshot[0].Type.XXX_unrecognized[2])
+	restored, err := decodeUserDefinedVars(t.Context(), snapshot, false)
+	require.NoError(t, err)
+	require.Equal(t, *snapshot[0].Type, restored["v"].Type)
+	snapshot[0].Type.XXX_unrecognized[2] = 3
+	require.Equal(t, byte(1), restored["v"].Type.XXX_unrecognized[2])
+}
+
 func TestUserDefinedVarMigrationPreservesRuntimeStringDomain(t *testing.T) {
 	ctrl := gomock.NewController(t)
 	defer ctrl.Finish()

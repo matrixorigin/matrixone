@@ -30,10 +30,12 @@ func TestCollationMetadataPKFilterReader(t *testing.T) {
 	require.NoError(t, err)
 	require.Equal(t, *source.GetType(), *decoded.GetType())
 	decoded.Free(mp)
-	wire[1+3] = 2
-	decoded, err = unmarshalPKInVector(wire)
-	require.ErrorContains(t, err, "collation")
-	require.Nil(t, decoded)
+	for _, revision := range []byte{1, 2} {
+		wire[1+3] = revision
+		decoded, err = unmarshalPKInVector(wire)
+		require.ErrorContains(t, err, "collation")
+		require.Nil(t, decoded)
+	}
 	source.Free(mp)
 	require.Zero(t, mp.CurrNB())
 }

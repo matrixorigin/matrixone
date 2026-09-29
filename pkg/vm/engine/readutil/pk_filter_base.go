@@ -558,6 +558,10 @@ func validatePKInVectorEncoding(data []byte) error {
 	if err != nil {
 		return err
 	}
+	// This reader sorts and compares keys, rather than merely transporting them.
+	if err := plan.RequireLegacyCollations(typ.PlanType()); err != nil {
+		return err
+	}
 	pos += types.TSize
 	if !supportedPKInType(typ.Oid) || typ.TypeSize() != typ.Oid.TypeLen() {
 		return moerr.NewInvalidInputNoCtxf("invalid PK IN vector type %s", typ.Oid.String())

@@ -390,6 +390,12 @@ func newExpressionExecutorWithAllocation(
 			vec.Free(proc.Mp())
 			return nil, err
 		}
+		// The opaque payload may carry a different type than the enclosing Expr.
+		// Decoding permits known metadata; executing it still requires admission.
+		if err := plan.RequireLegacyCollations(vec.GetType().PlanType()); err != nil {
+			vec.Free(proc.Mp())
+			return nil, err
+		}
 		// The stable Vector payload does not carry runtime provenance. LiteralVec
 		// explicitly records its uniform owner because the same container is used
 		// for SQL constants and runtime-filter payloads.
@@ -2156,6 +2162,9 @@ func DecodeLiteralStringSource(literal *plan.Literal) (types.StringSource, error
 }
 
 func GenerateConstListExpressionExecutor(proc *process.Process, exprs []*plan.Expr) (*vector.Vector, error) {
+	if err := plan.RequireLegacyCollations(exprs); err != nil {
+		return nil, err
+	}
 	lenList := len(exprs)
 	typ, err := types.TypeFromPlan(exprs[0].Typ)
 	if err != nil {

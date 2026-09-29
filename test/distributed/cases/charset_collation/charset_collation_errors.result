@@ -1,26 +1,97 @@
 DROP DATABASE IF EXISTS charset_error_test;
 CREATE DATABASE charset_error_test;
 USE charset_error_test;
+DROP DATABASE IF EXISTS charset_rejected_latin1;
+CREATE DATABASE charset_rejected_latin1 CHARACTER SET latin1;
+invalid input: unsupported character set 'latin1'
+SELECT COUNT(*) FROM information_schema.schemata WHERE schema_name = 'charset_rejected_latin1';
+➤ COUNT(*)[-5,64,0]  𝄀
+0
+DROP DATABASE IF EXISTS charset_rejected_latin1;
+CREATE TABLE t_rejected (v VARCHAR(8)) CHARACTER SET latin1;
+invalid input: unsupported character set 'latin1'
+CREATE TABLE t_rejected (v VARCHAR(8) CHARACTER SET latin1);
+invalid input: unsupported character set 'latin1'
+CREATE TABLE t_rejected (v VARCHAR(8) COLLATE latin1_swedish_ci);
+invalid input: unsupported collation 'latin1_swedish_ci'
+CREATE TABLE t_rejected (v VARCHAR(8) COLLATE utf8mb4_0900_bin);
+invalid input: unsupported collation 'utf8mb4_0900_bin'; replace it with 'utf8mb4_bin' when restoring legacy MatrixOne DDL
+SELECT COUNT(*) FROM information_schema.tables
+WHERE table_schema = 'charset_error_test' AND table_name = 't_rejected';
+➤ COUNT(*)[-5,64,0]  𝄀
+0
+SELECT CONVERT('text' USING latin1);
+invalid input: unsupported character set 'latin1' for CONVERT USING
+SELECT CONVERT(NULL USING latin1);
+invalid input: unsupported character set 'latin1' for CONVERT USING
+SET @saved_client = @@character_set_client;
+SET @saved_connection = @@character_set_connection;
+SET @saved_results = @@character_set_results;
+SET @saved_collation = @@collation_connection;
+SET NAMES utf8;
+SELECT HEX(CONVERT('😀' USING utf8));
+➤ HEX(CONVERT(😀 using utf8))[12,8,0]  𝄀
+F09F9880
+SET NAMES utf8mb3;
+SELECT HEX(CONVERT('😀' USING utf8mb3));
+➤ HEX(CONVERT(😀 using utf8mb3))[12,8,0]  𝄀
+F09F9880
+SET @before_client = @@character_set_client;
+SET @before_connection = @@character_set_connection;
+SET @before_results = @@character_set_results;
+SET @before_collation = @@collation_connection;
+SET NAMES latin1;
+invalid input: unsupported character set 'latin1'
+SET CHARACTER SET latin1;
+invalid input: unsupported character set 'latin1'
+SET CHARSET latin1;
+invalid input: unsupported character set 'latin1'
+SET NAMES utf8mb4 COLLATE latin1_bin;
+invalid input: unsupported collation 'latin1_bin'
+SET @charset = 'latin1';
+SELECT @charset;
+➤ @charset[12,65535,0]  𝄀
+latin1
+SET character_set_connection = 'latin1';
+invalid input: unsupported character set 'latin1'
+SET collation_connection = 'latin1_bin';
+invalid input: unsupported collation 'latin1_bin'
+SELECT @@character_set_client = @before_client,
+@@character_set_connection = @before_connection,
+@@character_set_results = @before_results,
+@@collation_connection = @before_collation;
+➤ @@character_set_client = @before_client[-7,1,0]  ¦  @@character_set_connection = @before_connection[-7,1,0]  ¦  @@character_set_results = @before_results[-7,1,0]  ¦  @@collation_connection = @before_collation[-7,1,0]  𝄀
+1  ¦  1  ¦  1  ¦  1
+SET character_set_client = @saved_client;
+SET character_set_connection = @saved_connection;
+SET character_set_results = @saved_results;
+SET collation_connection = @saved_collation;
 CREATE TABLE t_byte_boundary (
 id INT PRIMARY KEY,
 data VARCHAR(100)
 ) CHARACTER SET utf8mb4;
+ALTER TABLE t_byte_boundary MODIFY data VARCHAR(100) CHARACTER SET latin1;
+invalid input: unsupported character set 'latin1'
+SELECT character_set_name, collation_name FROM information_schema.columns
+WHERE table_schema = 'charset_error_test' AND table_name = 't_byte_boundary' AND column_name = 'data';
+➤ character_set_name[12,7,0]  ¦  collation_name[12,18,0]  𝄀
+utf8mb4  ¦  utf8mb4_general_ci
 INSERT INTO t_byte_boundary VALUES (1, 'A');
 SELECT id, LENGTH(data), CHAR_LENGTH(data) FROM t_byte_boundary WHERE id = 1;
-id    LENGTH(data)    CHAR_LENGTH(data)
-1    1    1
+➤ id[4,32,0]  ¦  LENGTH(data)[-5,64,0]  ¦  CHAR_LENGTH(data)[-5,64,0]  𝄀
+1  ¦  1  ¦  1
 INSERT INTO t_byte_boundary VALUES (2, '中');
 SELECT id, LENGTH(data), CHAR_LENGTH(data) FROM t_byte_boundary WHERE id = 2;
-id    LENGTH(data)    CHAR_LENGTH(data)
-2    3    1
+➤ id[4,32,0]  ¦  LENGTH(data)[-5,64,0]  ¦  CHAR_LENGTH(data)[-5,64,0]  𝄀
+2  ¦  3  ¦  1
 INSERT INTO t_byte_boundary VALUES (3, '€');
 SELECT id, LENGTH(data), CHAR_LENGTH(data) FROM t_byte_boundary WHERE id = 3;
-id    LENGTH(data)    CHAR_LENGTH(data)
-3    3    1
+➤ id[4,32,0]  ¦  LENGTH(data)[-5,64,0]  ¦  CHAR_LENGTH(data)[-5,64,0]  𝄀
+3  ¦  3  ¦  1
 INSERT INTO t_byte_boundary VALUES (4, '😀');
 SELECT id, LENGTH(data), CHAR_LENGTH(data) FROM t_byte_boundary WHERE id = 4;
-id    LENGTH(data)    CHAR_LENGTH(data)
-4    4    1
+➤ id[4,32,0]  ¦  LENGTH(data)[-5,64,0]  ¦  CHAR_LENGTH(data)[-5,64,0]  𝄀
+4  ¦  4  ¦  1
 CREATE TABLE t_varchar_limit (
 id INT PRIMARY KEY,
 data VARCHAR(10)
@@ -29,10 +100,10 @@ INSERT INTO t_varchar_limit VALUES (1, '0123456789');
 INSERT INTO t_varchar_limit VALUES (2, '零一二三四五六七八九');
 INSERT INTO t_varchar_limit VALUES (3, '😀😃😄😁😆😅🤣😂🙂🙃');
 SELECT id, data, LENGTH(data), CHAR_LENGTH(data) FROM t_varchar_limit ORDER BY id;
-id    data    LENGTH(data)    CHAR_LENGTH(data)
-1    0123456789    10    10
-2    零一二三四五六七八九    30    10
-3    😀😃😄😁😆😅🤣😂🙂🙃    40    10
+➤ id[4,32,0]  ¦  data[12,10,0]  ¦  LENGTH(data)[-5,64,0]  ¦  CHAR_LENGTH(data)[-5,64,0]  𝄀
+1  ¦  0123456789  ¦  10  ¦  10  𝄀
+2  ¦  零一二三四五六七八九  ¦  30  ¦  10  𝄀
+3  ¦  😀😃😄😁😆😅🤣😂🙂🙃  ¦  40  ¦  10
 CREATE TABLE t_char_padding (
 id INT PRIMARY KEY,
 data CHAR(10)
@@ -41,10 +112,10 @@ INSERT INTO t_char_padding VALUES (1, 'test');
 INSERT INTO t_char_padding VALUES (2, 'test      ');  -- explicit spaces
 INSERT INTO t_char_padding VALUES (3, '测');
 SELECT id, LENGTH(data), CHAR_LENGTH(data) FROM t_char_padding ORDER BY id;
-id    LENGTH(data)    CHAR_LENGTH(data)
-1    4    4
-2    10    10
-3    3    1
+➤ id[4,32,0]  ¦  LENGTH(data)[-5,64,0]  ¦  CHAR_LENGTH(data)[-5,64,0]  𝄀
+1  ¦  4  ¦  4  𝄀
+2  ¦  10  ¦  10  𝄀
+3  ¦  3  ¦  1
 CREATE TABLE t_null_handling (
 id INT PRIMARY KEY,
 data VARCHAR(100)
@@ -53,18 +124,18 @@ INSERT INTO t_null_handling VALUES (1, NULL);
 INSERT INTO t_null_handling VALUES (2, '');
 INSERT INTO t_null_handling VALUES (3, 'NULL');
 SELECT id, data, data IS NULL as is_null, (data = '') as is_empty, LENGTH(data) as len FROM t_null_handling ORDER BY id;
-id    data    is_null    is_empty    len
-1    null    1    null    null
-2        0    1    0
-3    NULL    0    0    4
+➤ id[4,32,0]  ¦  data[12,100,0]  ¦  is_null[-7,1,0]  ¦  is_empty[-7,1,0]  ¦  len[-5,64,0]  𝄀
+1  ¦  null  ¦  1  ¦  null  ¦  null  𝄀
+2  ¦    ¦  0  ¦  1  ¦  0  𝄀
+3  ¦  NULL  ¦  0  ¦  0  ¦  4
 SELECT CONCAT('Hello', NULL, 'World');
-CONCAT(Hello, null, World)
+➤ CONCAT(Hello, null, World)[-1,16383,0]  𝄀
 null
 SELECT CONCAT('你好', NULL, '世界');
-CONCAT(你好, null, 世界)
+➤ CONCAT(你好, null, 世界)[-1,16383,0]  𝄀
 null
 SELECT CONCAT_WS(',', 'A', NULL, 'B', NULL, 'C');
-CONCAT_WS(,, A, null, B, null, C)
+➤ CONCAT_WS(,, A, null, B, null, C)[-1,16383,0]  𝄀
 A,B,C
 CREATE TABLE t_invalid_utf8 (
 id INT PRIMARY KEY,
@@ -73,31 +144,31 @@ data VARCHAR(100)
 INSERT INTO t_invalid_utf8 VALUES (1, 'Valid UTF-8');
 INSERT INTO t_invalid_utf8 VALUES (2, '有效的UTF-8');
 SELECT * FROM t_invalid_utf8 ORDER BY id;
-id    data
-1    Valid UTF-8
-2    有效的UTF-8
+➤ id[4,32,0]  ¦  data[12,100,0]  𝄀
+1  ¦  Valid UTF-8  𝄀
+2  ¦  有效的UTF-8
 CREATE TABLE t_substring_edge (
 id INT PRIMARY KEY,
 data VARCHAR(100)
 ) CHARACTER SET utf8mb4;
 INSERT INTO t_substring_edge VALUES (1, '你好世界');
 SELECT SUBSTRING(data, -2) FROM t_substring_edge WHERE id = 1;
-SUBSTRING(data, -2)
+➤ SUBSTRING(data, -2)[12,100,0]  𝄀
 世界
 SELECT SUBSTRING(data, -2, 1) FROM t_substring_edge WHERE id = 1;
-SUBSTRING(data, -2, 1)
+➤ SUBSTRING(data, -2, 1)[12,1,0]  𝄀
 世
 SELECT SUBSTRING(data, 0) FROM t_substring_edge WHERE id = 1;
-SUBSTRING(data, 0)
+➤ SUBSTRING(data, 0)[12,100,0]  𝄀
 
 SELECT SUBSTRING(data, 100) FROM t_substring_edge WHERE id = 1;
-SUBSTRING(data, 100)
+➤ SUBSTRING(data, 100)[12,100,0]  𝄀
 
 SELECT SUBSTRING(data, 1, -1) FROM t_substring_edge WHERE id = 1;
-SUBSTRING(data, 1, -1)
+➤ SUBSTRING(data, 1, -1)[12,536870911,0]  𝄀
 
 SELECT SUBSTRING(data, 1, 0) FROM t_substring_edge WHERE id = 1;
-SUBSTRING(data, 1, 0)
+➤ SUBSTRING(data, 1, 0)[12,536870911,0]  𝄀
 
 CREATE TABLE t_length_test (
 id INT PRIMARY KEY,
@@ -105,56 +176,56 @@ data VARCHAR(100)
 ) CHARACTER SET utf8mb4;
 INSERT INTO t_length_test VALUES (1, '');
 SELECT id, LENGTH(data), CHAR_LENGTH(data) FROM t_length_test WHERE id = 1;
-id    LENGTH(data)    CHAR_LENGTH(data)
-1    0    0
+➤ id[4,32,0]  ¦  LENGTH(data)[-5,64,0]  ¦  CHAR_LENGTH(data)[-5,64,0]  𝄀
+1  ¦  0  ¦  0
 INSERT INTO t_length_test VALUES (2, 'A');
 SELECT id, LENGTH(data), CHAR_LENGTH(data) FROM t_length_test WHERE id = 2;
-id    LENGTH(data)    CHAR_LENGTH(data)
-2    1    1
+➤ id[4,32,0]  ¦  LENGTH(data)[-5,64,0]  ¦  CHAR_LENGTH(data)[-5,64,0]  𝄀
+2  ¦  1  ¦  1
 INSERT INTO t_length_test VALUES (3, 'Ü');
 SELECT id, LENGTH(data), CHAR_LENGTH(data) FROM t_length_test WHERE id = 3;
-id    LENGTH(data)    CHAR_LENGTH(data)
-3    2    1
+➤ id[4,32,0]  ¦  LENGTH(data)[-5,64,0]  ¦  CHAR_LENGTH(data)[-5,64,0]  𝄀
+3  ¦  2  ¦  1
 INSERT INTO t_length_test VALUES (4, '中');
 SELECT id, LENGTH(data), CHAR_LENGTH(data) FROM t_length_test WHERE id = 4;
-id    LENGTH(data)    CHAR_LENGTH(data)
-4    3    1
+➤ id[4,32,0]  ¦  LENGTH(data)[-5,64,0]  ¦  CHAR_LENGTH(data)[-5,64,0]  𝄀
+4  ¦  3  ¦  1
 INSERT INTO t_length_test VALUES (5, '𝄞');  -- Musical symbol
 SELECT id, LENGTH(data), CHAR_LENGTH(data) FROM t_length_test WHERE id = 5;
-id    LENGTH(data)    CHAR_LENGTH(data)
-5    4    1
+➤ id[4,32,0]  ¦  LENGTH(data)[-5,64,0]  ¦  CHAR_LENGTH(data)[-5,64,0]  𝄀
+5  ¦  4  ¦  1
 INSERT INTO t_length_test VALUES (6, 'A中😀');
 SELECT id, LENGTH(data), CHAR_LENGTH(data) FROM t_length_test WHERE id = 6;
-id    LENGTH(data)    CHAR_LENGTH(data)
-6    8    3
+➤ id[4,32,0]  ¦  LENGTH(data)[-5,64,0]  ¦  CHAR_LENGTH(data)[-5,64,0]  𝄀
+6  ¦  8  ¦  3
 CREATE TABLE t_case_conversion (
 id INT PRIMARY KEY,
 data VARCHAR(100)
 ) CHARACTER SET utf8mb4;
 INSERT INTO t_case_conversion VALUES (1, 'Hello World');
 SELECT id, UPPER(data), LOWER(data) FROM t_case_conversion WHERE id = 1;
-id    UPPER(data)    LOWER(data)
-1    HELLO WORLD    hello world
+➤ id[4,32,0]  ¦  UPPER(data)[12,100,0]  ¦  LOWER(data)[12,100,0]  𝄀
+1  ¦  HELLO WORLD  ¦  hello world
 INSERT INTO t_case_conversion VALUES (2, 'Café');
 SELECT id, UPPER(data), LOWER(data) FROM t_case_conversion WHERE id = 2;
-id    UPPER(data)    LOWER(data)
-2    CAFÉ    café
+➤ id[4,32,0]  ¦  UPPER(data)[12,100,0]  ¦  LOWER(data)[12,100,0]  𝄀
+2  ¦  CAFÉ  ¦  café
 INSERT INTO t_case_conversion VALUES (3, 'Straße');
 SELECT id, UPPER(data), LOWER(data) FROM t_case_conversion WHERE id = 3;
-id    UPPER(data)    LOWER(data)
-3    STRAßE    straße
+➤ id[4,32,0]  ¦  UPPER(data)[12,100,0]  ¦  LOWER(data)[12,100,0]  𝄀
+3  ¦  STRAßE  ¦  straße
 INSERT INTO t_case_conversion VALUES (4, 'Ελληνικά');
 SELECT id, UPPER(data), LOWER(data) FROM t_case_conversion WHERE id = 4;
-id    UPPER(data)    LOWER(data)
-4    ΕΛΛΗΝΙΚΆ    ελληνικά
+➤ id[4,32,0]  ¦  UPPER(data)[12,100,0]  ¦  LOWER(data)[12,100,0]  𝄀
+4  ¦  ΕΛΛΗΝΙΚΆ  ¦  ελληνικά
 INSERT INTO t_case_conversion VALUES (5, 'Привет');
 SELECT id, UPPER(data), LOWER(data) FROM t_case_conversion WHERE id = 5;
-id    UPPER(data)    LOWER(data)
-5    ПРИВЕТ    привет
+➤ id[4,32,0]  ¦  UPPER(data)[12,100,0]  ¦  LOWER(data)[12,100,0]  𝄀
+5  ¦  ПРИВЕТ  ¦  привет
 INSERT INTO t_case_conversion VALUES (6, '你好世界');
 SELECT id, UPPER(data), LOWER(data) FROM t_case_conversion WHERE id = 6;
-id    UPPER(data)    LOWER(data)
-6    你好世界    你好世界
+➤ id[4,32,0]  ¦  UPPER(data)[12,100,0]  ¦  LOWER(data)[12,100,0]  𝄀
+6  ¦  你好世界  ¦  你好世界
 CREATE TABLE t_special_unicode (
 id INT PRIMARY KEY,
 data VARCHAR(100)
@@ -162,22 +233,22 @@ data VARCHAR(100)
 INSERT INTO t_special_unicode VALUES (1, 'test test');      -- Regular space
 INSERT INTO t_special_unicode VALUES (2, 'test test');     -- Non-breaking space (looks same)
 SELECT COUNT(*) FROM t_special_unicode WHERE data = 'test test';
-COUNT(*)
+➤ COUNT(*)[-5,64,0]  𝄀
 2
 INSERT INTO t_special_unicode VALUES (3, 'test­ing');
 SELECT * FROM t_special_unicode ORDER BY id;
-id    data
-1    test test
-2    test test
-3    test­ing
+➤ id[4,32,0]  ¦  data[12,100,0]  𝄀
+1  ¦  test test  𝄀
+2  ¦  test test  𝄀
+3  ¦  test­ing
 CREATE TABLE t_normalization (
 id INT PRIMARY KEY,
 data VARCHAR(100)
 ) CHARACTER SET utf8mb4;
 INSERT INTO t_normalization VALUES (1, 'café');
 SELECT id, data, LENGTH(data), CHAR_LENGTH(data) FROM t_normalization ORDER BY id;
-id    data    LENGTH(data)    CHAR_LENGTH(data)
-1    café    5    4
+➤ id[4,32,0]  ¦  data[12,100,0]  ¦  LENGTH(data)[-5,64,0]  ¦  CHAR_LENGTH(data)[-5,64,0]  𝄀
+1  ¦  café  ¦  5  ¦  4
 CREATE TABLE t_query_collate (
 id INT PRIMARY KEY,
 name VARCHAR(100)
@@ -185,11 +256,11 @@ name VARCHAR(100)
 INSERT INTO t_query_collate VALUES (1, 'Apple');
 INSERT INTO t_query_collate VALUES (2, 'apple');
 SELECT * FROM t_query_collate WHERE name = 'apple' ORDER BY id;
-id    name
-2    apple
+➤ id[4,32,0]  ¦  name[12,100,0]  𝄀
+2  ¦  apple
 SELECT * FROM t_query_collate WHERE name COLLATE utf8mb4_general_ci = 'apple' ORDER BY id;
-id    name
-2    apple
+➤ id[4,32,0]  ¦  name[12,100,0]  𝄀
+2  ¦  apple
 CREATE TABLE t_type_conversion (
 id INT PRIMARY KEY,
 str_val VARCHAR(100),
@@ -198,12 +269,12 @@ int_val INT
 INSERT INTO t_type_conversion VALUES (1, '123', 123);
 INSERT INTO t_type_conversion VALUES (2, '456', 456);
 SELECT * FROM t_type_conversion WHERE str_val = 123 ORDER BY id;
-id    str_val    int_val
-1    123    123
+➤ id[4,32,0]  ¦  str_val[12,100,0]  ¦  int_val[4,32,0]  𝄀
+1  ¦  123  ¦  123
 SELECT * FROM t_type_conversion WHERE str_val = int_val ORDER BY id;
-id    str_val    int_val
-1    123    123
-2    456    456
+➤ id[4,32,0]  ¦  str_val[12,100,0]  ¦  int_val[4,32,0]  𝄀
+1  ¦  123  ¦  123  𝄀
+2  ¦  456  ¦  456
 CREATE TABLE t_coalesce (
 id INT PRIMARY KEY,
 col1 VARCHAR(100),
@@ -215,28 +286,28 @@ INSERT INTO t_coalesce VALUES (2, NULL, 'Second', 'Default');
 INSERT INTO t_coalesce VALUES (3, 'First', 'Second', 'Default');
 INSERT INTO t_coalesce VALUES (4, NULL, NULL, NULL);
 SELECT id, COALESCE(col1, col2, col3) as result FROM t_coalesce ORDER BY id;
-id    result
-1    Default
-2    Second
-3    First
-4    null
+➤ id[4,32,0]  ¦  result[12,100,0]  𝄀
+1  ¦  Default  𝄀
+2  ¦  Second  𝄀
+3  ¦  First  𝄀
+4  ¦  null
 SELECT id, COALESCE(col1, col2, col3, 'Fallback') as result FROM t_coalesce ORDER BY id;
-id    result
-1    Default
-2    Second
-3    First
-4    Fallback
+➤ id[4,32,0]  ¦  result[12,100,0]  𝄀
+1  ¦  Default  𝄀
+2  ¦  Second  𝄀
+3  ¦  First  𝄀
+4  ¦  Fallback
 SELECT IFNULL(NULL, '默认值');
-IFNULL(null, 默认值)
+➤ IFNULL(null, 默认值)[12,3,0]  𝄀
 默认值
 SELECT IFNULL('Value', '默认值');
-IFNULL(Value, 默认值)
+➤ IFNULL(Value, 默认值)[12,5,0]  𝄀
 Value
 SELECT IF(1=1, '真', '假');
-IF(1 = 1, 真, 假)
+➤ IF(1 = 1, 真, 假)[12,1,0]  𝄀
 真
 SELECT IF(1=2, '真', '假');
-IF(1 = 2, 真, 假)
+➤ IF(1 = 2, 真, 假)[12,1,0]  𝄀
 假
 CREATE TABLE t_case_when (
 id INT PRIMARY KEY,
@@ -254,11 +325,11 @@ WHEN 'pending' THEN '待定'
 ELSE '未知'
 END as status_cn
 FROM t_case_when ORDER BY id;
-id    status    status_cn
-1    active    活动
-2    inactive    非活动
-3    pending    待定
-4    null    未知
+➤ id[4,32,0]  ¦  status[12,50,0]  ¦  status_cn[12,3,0]  𝄀
+1  ¦  active  ¦  活动  𝄀
+2  ¦  inactive  ¦  非活动  𝄀
+3  ¦  pending  ¦  待定  𝄀
+4  ¦  null  ¦  未知
 CREATE TABLE t_only_spaces (
 id INT PRIMARY KEY,
 data VARCHAR(100)
@@ -268,55 +339,55 @@ INSERT INTO t_only_spaces VALUES (2, '  ');
 INSERT INTO t_only_spaces VALUES (3, '   ');
 INSERT INTO t_only_spaces VALUES (4, '    ');
 SELECT id, LENGTH(data), CHAR_LENGTH(data), data = '' FROM t_only_spaces ORDER BY id;
-id    LENGTH(data)    CHAR_LENGTH(data)    data =
-1    1    1    0
-2    2    2    0
-3    3    3    0
-4    4    4    0
+➤ id[4,32,0]  ¦  LENGTH(data)[-5,64,0]  ¦  CHAR_LENGTH(data)[-5,64,0]  ¦  data = [-7,1,0]  𝄀
+1  ¦  1  ¦  1  ¦  0  𝄀
+2  ¦  2  ¦  2  ¦  0  𝄀
+3  ¦  3  ¦  3  ¦  0  𝄀
+4  ¦  4  ¦  4  ¦  0
 SELECT id, LENGTH(TRIM(data)) FROM t_only_spaces ORDER BY id;
-id    LENGTH(TRIM(data))
-1    0
-2    0
-3    0
-4    0
+➤ id[4,32,0]  ¦  LENGTH(TRIM(data))[-5,64,0]  𝄀
+1  ¦  0  𝄀
+2  ¦  0  𝄀
+3  ¦  0  𝄀
+4  ¦  0
 SELECT REPEAT('A', 5);
-REPEAT(A, 5)
+➤ REPEAT(A, 5)[12,5,0]  𝄀
 AAAAA
 SELECT REPEAT('中', 5);
-REPEAT(中, 5)
+➤ REPEAT(中, 5)[12,5,0]  𝄀
 中中中中中
 SELECT REPEAT('😀', 5);
-REPEAT(😀, 5)
+➤ REPEAT(😀, 5)[12,5,0]  𝄀
 😀😀😀😀😀
 SELECT LENGTH(REPEAT('A', 10)), CHAR_LENGTH(REPEAT('A', 10));
-LENGTH(REPEAT(A, 10))    CHAR_LENGTH(REPEAT(A, 10))
-10    10
+➤ LENGTH(REPEAT(A, 10))[-5,64,0]  ¦  CHAR_LENGTH(REPEAT(A, 10))[-5,64,0]  𝄀
+10  ¦  10
 SELECT LENGTH(REPEAT('中', 10)), CHAR_LENGTH(REPEAT('中', 10));
-LENGTH(REPEAT(中, 10))    CHAR_LENGTH(REPEAT(中, 10))
-30    10
+➤ LENGTH(REPEAT(中, 10))[-5,64,0]  ¦  CHAR_LENGTH(REPEAT(中, 10))[-5,64,0]  𝄀
+30  ¦  10
 SELECT LENGTH(REPEAT('😀', 10)), CHAR_LENGTH(REPEAT('😀', 10));
-LENGTH(REPEAT(😀, 10))    CHAR_LENGTH(REPEAT(😀, 10))
-40    10
+➤ LENGTH(REPEAT(😀, 10))[-5,64,0]  ¦  CHAR_LENGTH(REPEAT(😀, 10))[-5,64,0]  𝄀
+40  ¦  10
 SELECT LENGTH(SPACE(10)), CHAR_LENGTH(SPACE(10));
-LENGTH(SPACE(10))    CHAR_LENGTH(SPACE(10))
-10    10
+➤ LENGTH(SPACE(10))[-5,64,0]  ¦  CHAR_LENGTH(SPACE(10))[-5,64,0]  𝄀
+10  ¦  10
 SELECT LENGTH(CONCAT('[', SPACE(5), ']')) as total_len;
-total_len
+➤ total_len[-5,64,0]  𝄀
 7
 SELECT ASCII('A'), ASCII('a'), ASCII('0');
-ASCII(A)    ASCII(a)    ASCII(0)
-65    97    48
+➤ ASCII(A)[4,32,0]  ¦  ASCII(a)[4,32,0]  ¦  ASCII(0)[4,32,0]  𝄀
+65  ¦  97  ¦  48
 SELECT ASCII('中'), ASCII('😀');
-ASCII(中)    ASCII(😀)
-228    240
+➤ ASCII(中)[4,32,0]  ¦  ASCII(😀)[4,32,0]  𝄀
+228  ¦  240
 SELECT ORD('A'), ORD('中'), ORD('😀');
-ORD(A)    ORD(中)    ORD(😀)
-65    14989485    4036991104
+➤ ORD(A)[-5,64,0]  ¦  ORD(中)[-5,64,0]  ¦  ORD(😀)[-5,64,0]  𝄀
+65  ¦  14989485  ¦  4036991104
 SELECT CHAR(65, 66, 67);
-CHAR(65, 66, 67)
+➤ CHAR(65, 66, 67)[-3,12,0]  𝄀
 ABC
 SELECT CHAR(228, 184, 173);  -- UTF-8 bytes for '中'
-CHAR(228, 184, 173)
+➤ CHAR(228, 184, 173)[-3,12,0]  𝄀
 ä¸­
 CREATE TABLE t_strcmp (
 id INT PRIMARY KEY,
@@ -327,18 +398,18 @@ INSERT INTO t_strcmp VALUES (1, 'Apple', 'apple');
 INSERT INTO t_strcmp VALUES (2, 'Apple', 'Banana');
 INSERT INTO t_strcmp VALUES (3, 'Banana', 'Apple');
 SELECT id, val1, val2, STRCMP(val1, val2) as cmp FROM t_strcmp ORDER BY id;
-id    val1    val2    cmp
-1    Apple    apple    -1
-2    Apple    Banana    -1
-3    Banana    Apple    1
+➤ id[4,32,0]  ¦  val1[12,100,0]  ¦  val2[12,100,0]  ¦  cmp[-5,2,0]  𝄀
+1  ¦  Apple  ¦  apple  ¦  -1  𝄀
+2  ¦  Apple  ¦  Banana  ¦  -1  𝄀
+3  ¦  Banana  ¦  Apple  ¦  1
 CREATE TABLE t_duplicate_key (
 id INT PRIMARY KEY,
 name VARCHAR(100) UNIQUE
 ) CHARACTER SET utf8mb4 COLLATE utf8mb4_general_ci;
 INSERT INTO t_duplicate_key VALUES (1, 'Test');
 SELECT * FROM t_duplicate_key;
-id    name
-1    Test
+➤ id[4,32,0]  ¦  name[12,100,0]  𝄀
+1  ¦  Test
 INSERT INTO t_fulltext VALUES (1, 'The quick brown fox jumps over the lazy dog');
 no such table charset_error_test.t_fulltext
 INSERT INTO t_fulltext VALUES (2, 'Quick brown foxes');
@@ -355,15 +426,15 @@ INSERT INTO t_json_charset VALUES (1, '{"name": "John", "age": 30}');
 INSERT INTO t_json_charset VALUES (2, '{"name": "张三", "age": 25}');
 INSERT INTO t_json_charset VALUES (3, '{"emoji": "😀", "text": "Hello"}');
 SELECT * FROM t_json_charset ORDER BY id;
-id    data
-1    {"age": 30, "name": "John"}
-2    {"age": 25, "name": "张三"}
-3    {"emoji": "😀", "text": "Hello"}
+➤ id[4,32,0]  ¦  data[-1,2147483647,0]  𝄀
+1  ¦  {"age": 30, "name": "John"}  𝄀
+2  ¦  {"age": 25, "name": "张三"}  𝄀
+3  ¦  {"emoji": "😀", "text": "Hello"}
 SELECT id, JSON_EXTRACT(data, '$.name') as name FROM t_json_charset ORDER BY id;
-id    name
-1    "John"
-2    "张三"
-3    null
+➤ id[4,32,0]  ¦  name[-1,2147483647,0]  𝄀
+1  ¦  "John"  𝄀
+2  ¦  "张三"  𝄀
+3  ¦  null
 CREATE TABLE t_long_ops (
 id INT PRIMARY KEY,
 data TEXT
@@ -371,14 +442,14 @@ data TEXT
 INSERT INTO t_long_ops VALUES (1, REPEAT('A', 10000));
 INSERT INTO t_long_ops VALUES (2, REPEAT('中', 5000));
 SELECT id, LENGTH(data), CHAR_LENGTH(data) FROM t_long_ops ORDER BY id;
-id    LENGTH(data)    CHAR_LENGTH(data)
-1    10000    10000
-2    15000    5000
+➤ id[4,32,0]  ¦  LENGTH(data)[-5,64,0]  ¦  CHAR_LENGTH(data)[-5,64,0]  𝄀
+1  ¦  10000  ¦  10000  𝄀
+2  ¦  15000  ¦  5000
 SELECT LENGTH(CONCAT(
 (SELECT data FROM t_long_ops WHERE id = 1),
 (SELECT data FROM t_long_ops WHERE id = 2)
 ));
-LENGTH(CONCAT((select data from t_long_ops where id = 1), (select data from t_long_ops where id = 2)))
+➤ LENGTH(CONCAT((select data from t_long_ops where id = 1), (select data from t_long_ops where id = 2)))[-5,64,0]  𝄀
 25000
 CREATE TABLE t_binary_attr (
 id INT PRIMARY KEY,
@@ -402,7 +473,7 @@ CREATE TABLE `测试表` (
 ) CHARACTER SET utf8mb4;
 INSERT INTO `测试表` VALUES (1, '测试数据');
 SELECT * FROM `测试表`;
-编号    名称
-1    测试数据
+➤ 编号[4,32,0]  ¦  名称[12,100,0]  𝄀
+1  ¦  测试数据
 DROP TABLE `测试表`;
 DROP DATABASE IF EXISTS charset_error_test;

@@ -12,6 +12,7 @@ package compile
 
 import (
 	"github.com/matrixorigin/matrixone/pkg/container/types"
+	"github.com/matrixorigin/matrixone/pkg/container/vector"
 	"github.com/matrixorigin/matrixone/pkg/pb/pipeline"
 	pb "github.com/matrixorigin/matrixone/pkg/pb/plan"
 	"github.com/matrixorigin/matrixone/pkg/sql/colexec"
@@ -58,6 +59,20 @@ func TestCollationMetadataExecutionBoundaries(t *testing.T) {
 	require.ErrorContains(t, err, "disabled")
 	require.Nil(t, execs)
 	require.Nil(t, activation)
+	literalVector, err := colexec.GenerateConstListExpressionExecutor(nil, exprs)
+	require.ErrorContains(t, err, "disabled")
+	require.Nil(t, literalVector)
+	// A legacy outer Type must not hide disabled metadata inside opaque bytes.
+	payload := vector.NewVec(types.MustTypeFromPlan(typ))
+	data, err := payload.MarshalBinary()
+	require.NoError(t, err)
+	payload.Free(c.proc.Mp())
+	executor, err = colexec.NewExpressionExecutor(c.proc, &pb.Expr{
+		Typ:  pb.Type{Id: int32(types.T_varchar), Charset: 3},
+		Expr: &pb.Expr_Vec{Vec: &pb.LiteralVec{Data: data}},
+	})
+	require.ErrorContains(t, err, "disabled")
+	require.Nil(t, executor)
 	defs, extra, err := engine.PlanDefsToExeDefs(table)
 	require.ErrorContains(t, err, "disabled")
 	require.Nil(t, defs)

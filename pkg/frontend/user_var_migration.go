@@ -93,7 +93,7 @@ func (ses *Session) snapshotUserDefinedVars(ctx context.Context) ([]*query.Migra
 		if err != nil {
 			return nil, err
 		}
-		typ := variable.Type
+		typ := *plan2.DeepCopyType(&variable.Type)
 		item := &query.MigrateUserDefinedVar{
 			Name:                name,
 			Value:               value,
@@ -224,7 +224,7 @@ func decodeUserDefinedVars(
 		}
 		typ := plan.Type{}
 		if item.Type != nil {
-			typ = *item.Type
+			typ = *plan2.DeepCopyType(item.Type)
 		}
 		if typ.Id == 0 {
 			typ = inferUserDefinedVarType(value)
