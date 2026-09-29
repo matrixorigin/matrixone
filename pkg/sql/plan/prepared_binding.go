@@ -88,6 +88,7 @@ type preparedSourceBindingState struct {
 	values               []any
 	valueDependent       bool
 	selectStatement      bool
+	hasRoundingFunction  bool
 	diagnosticCandidates []*Expr
 	diagnosticFree       bool
 }
@@ -166,6 +167,76 @@ func preparedNumericValueSpelling(value any) string {
 		return string(bytes)
 	}
 	return fmt.Sprint(value)
+}
+
+// preparedZeroPrecisionRoundParam follows only planner casts and a direct
+// projected marker. Other expressions may change the value, so they keep the
+// normal comparison domain.
+func preparedZeroPrecisionRoundParam(expr *Expr) *Expr {
+	fn := expr.GetF()
+	if fn == nil || fn.Func == nil || (fn.Func.GetObjName() != "round" && fn.Func.GetObjName() != "truncate") || len(fn.Args) != 2 {
+		return nil
+	}
+	precision := fn.Args[1].GetLit()
+	if precision == nil || precision.Isnull {
+		return nil
+	}
+	zero, ok := precision.GetValue().(*plan.Literal_I64Val)
+	if !ok || zero.I64Val != 0 {
+		return nil
+	}
+	value := fn.Args[0]
+	cast := value.GetF()
+	if cast == nil || cast.Func == nil || cast.Func.GetObjName() != "cast" || isExplicitPreparedCast(value) || len(cast.Args) != 2 ||
+		(!types.T(value.Typ.Id).IsFloat() && !types.T(value.Typ.Id).IsDecimal()) {
+		return nil
+	}
+	value = cast.Args[0]
+	for value != nil {
+		if value.GetP() != nil {
+			return value
+		}
+		if sub := value.GetSub(); sub != nil {
+			value = sub.Child
+			continue
+		}
+		if source := value.GetPreparedNumeric().GetStringDomainSource(); source != nil {
+			value = source
+			continue
+		}
+		if nested := value.GetF(); nested != nil && nested.Func != nil &&
+			nested.Func.GetObjName() == "cast" && !isExplicitPreparedCast(value) && len(nested.Args) == 2 {
+			value = nested.Args[0]
+			continue
+		}
+		break
+	}
+	return nil
+}
+
+func preparedSafeRoundIntegerComparison(ctx context.Context, source *Expr, target Type) (*Expr, bool, error) {
+	param := preparedZeroPrecisionRoundParam(source)
+	if param == nil {
+		return nil, false, nil
+	}
+	state := preparedBindingState(ctx)
+	if state == nil || !state.selectStatement {
+		return nil, false, nil
+	}
+	binding, bound := state.bindingForPosition(param.GetP().Pos)
+	if !bound || !binding.Type.Oid.IsMySQLString() {
+		return nil, false, nil
+	}
+	value, present := preparedConfigurationValue(ctx, param)
+	if !present || value == nil {
+		return nil, false, nil
+	}
+	_, exact, err := preparedComparisonExactIntegerExpr(ctx, preparedNumericValueSpelling(value), target)
+	if err != nil || !exact {
+		return nil, false, err
+	}
+	cast, err := makePlan2CastExpr(ctx, source, target)
+	return cast, err == nil, err
 }
 
 func preparedSourceBindingAt(ctx context.Context, ordinal int) (PreparedSourceBinding, error) {
@@ -311,12 +382,26 @@ func bindPreparedConsumerArguments(ctx context.Context, name string, args []*Exp
 		return args, nil
 	}
 	name = strings.ToLower(name)
+	if name == "round" || name == "truncate" {
+		state.hasRoundingFunction = true
+	}
 	args = append([]*Expr(nil), args...)
 	for i, source := range args {
 		if source == nil {
 			continue
 		}
 		if source.GetP() == nil {
+			if len(args) == 2 && state.selectStatement && isPreparedNumericComparisonContext(name) &&
+				args[1-i] != nil && types.T(args[1-i].Typ.Id).IsSignedInt() {
+				converted, ok, err := preparedSafeRoundIntegerComparison(ctx, source, args[1-i].Typ)
+				if err != nil {
+					return nil, err
+				}
+				if ok {
+					args[i] = converted
+					continue
+				}
+			}
 			if len(args) == 1 && types.T(source.Typ.Id).IsMySQLString() &&
 				(name == "sum" || name == "avg" || name == "abs" || name == "sign" || name == "sleep") {
 				// The source may be a projected marker, scalar subquery, or

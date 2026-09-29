@@ -48,6 +48,56 @@ func (builder *QueryBuilder) mergeFiltersOnCompositeKey(nodeID int32) {
 	resetHashMapStats(node.Stats)
 }
 
+func preparedCastSource(expr *plan.Expr) *plan.Expr {
+	fn := expr.GetF()
+	if fn == nil || fn.Func == nil || fn.Func.GetObjName() != "cast" || len(fn.Args) != 2 {
+		return nil
+	}
+	return fn.Args[0]
+}
+
+// Scalar subqueries can expose their parameter only after filter pushdown.
+// Reuse the binding proof before scan statistics choose block filters.
+func (builder *QueryBuilder) rewritePreparedRoundIntegerFilters(nodeID int32) {
+	state := preparedBindingState(builder.GetContext())
+	if state == nil || !state.selectStatement || !state.hasRoundingFunction {
+		return
+	}
+	var visit func(int32)
+	visit = func(id int32) {
+		node := builder.qry.Nodes[id]
+		for _, child := range node.Children {
+			visit(child)
+		}
+		if node.NodeType != plan.Node_TABLE_SCAN {
+			return
+		}
+		for i, filter := range node.FilterList {
+			fn := filter.GetF()
+			if fn == nil || fn.Func == nil || fn.Func.GetObjName() != "=" || len(fn.Args) != 2 {
+				continue
+			}
+			for side := range fn.Args {
+				column := preparedCastSource(fn.Args[side])
+				value := preparedCastSource(fn.Args[1-side])
+				if column == nil || column.GetCol() == nil || !types.T(column.Typ.Id).IsSignedInt() || value == nil {
+					continue
+				}
+				castValue, ok, err := preparedSafeRoundIntegerComparison(builder.GetContext(), DeepCopyExpr(value), column.Typ)
+				if err != nil || !ok {
+					continue
+				}
+				rewritten, err := BindFuncExprImplByPlanExpr(builder.GetContext(), "=", []*plan.Expr{DeepCopyExpr(column), castValue})
+				if err == nil {
+					node.FilterList[i] = rewritten
+				}
+				break
+			}
+		}
+	}
+	visit(nodeID)
+}
+
 // collectCompositePartBlockFilters preserves zonemappable predicates on the
 // physical columns that make up a composite primary/cluster key.  The regular
 // filter rewrite replaces a useful equality/range prefix with one predicate on
