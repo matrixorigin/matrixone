@@ -721,18 +721,6 @@ func Test_handleCreateCdc(t *testing.T) {
 		})
 	}
 
-	// Legacy persisted tasks must fail closed before the capability probe.
-	mock.ExpectQuery(sqlx).WillReturnRows(sqlmock.NewRows(
-		[]string{"sink_uri", "sink_type", "sink_password", "tables", "filters", "start_ts", "end_ts", "no_full", "additional_config"},
-	).AddRow(
-		sinkUri, cdc.CDCSinkType_MySQL, pwd, tables, filters,
-		"2006-01-02T15:04:05-07:00", "2006-01-02T15:04:05-07:00", true,
-		fmt.Sprintf("{\"%s\":\"%s\"}", cdc.CDCTaskExtraOptions_InitialSnapshotProtocol, cdc.CDCInitialSnapshotProtocolStableEpoch),
-	))
-	legacy := &CDCTaskExecutor{ie: tie, spec: &task.CreateCdcDetails{
-		TaskId: "taskID_legacy", Accounts: []*task.Account{{Id: 0, Name: "sys"}},
-	}}
-	require.ErrorContains(t, legacy.retrieveCdcTask(context.Background()), "no durable target identity")
 }
 
 func Test_doCreateCdc_invalidStartTs(t *testing.T) {
@@ -1682,6 +1670,7 @@ func TestRegisterCdcExecutor(t *testing.T) {
 				tt.args.cnEngMp)
 		})
 	}
+
 }
 
 func TestCDCFactoryRejectsSupersededClaim(t *testing.T) {
@@ -4505,6 +4494,19 @@ func TestCdcTask_retrieveCdcTask(t *testing.T) {
 			assert.True(t, cdc.stableInitialSnapshot)
 		})
 	}
+
+	// Legacy persisted tasks must fail closed before the capability probe.
+	mock.ExpectQuery(sqlx).WillReturnRows(sqlmock.NewRows(
+		[]string{"sink_uri", "sink_type", "sink_password", "tables", "filters", "start_ts", "end_ts", "no_full", "additional_config"},
+	).AddRow(
+		sinkUri, cdc.CDCSinkType_MySQL, pwd, tables, filters,
+		"2006-01-02T15:04:05-07:00", "2006-01-02T15:04:05-07:00", true,
+		fmt.Sprintf("{\"%s\":\"%s\"}", cdc.CDCTaskExtraOptions_InitialSnapshotProtocol, cdc.CDCInitialSnapshotProtocolStableEpoch),
+	))
+	legacy := &CDCTaskExecutor{ie: tie, spec: &task.CreateCdcDetails{
+		TaskId: "taskID_legacy", Accounts: []*task.Account{{Id: 0, Name: "sys"}},
+	}}
+	require.ErrorContains(t, legacy.retrieveCdcTask(context.Background()), "no durable target identity")
 }
 
 func Test_execFrontend(t *testing.T) {
