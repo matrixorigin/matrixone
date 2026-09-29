@@ -315,6 +315,62 @@ func TestFunctionalCompositeIndexLifecycle(t *testing.T) {
 		_, err = conn.ExecContext(ctx, "alter table t add index bad ((lower(name)),(rand()))")
 		require.Error(t, err)
 		count("select count(*) from mo_catalog.mo_columns where att_database='functional_index_multi' and att_relname='t' and att_is_hidden=1 and attr_has_generated=1", 4)
+		for _, tc := range []struct {
+			name, key   string
+			expressions int
+		}{
+			{"ordinary_drop", "tenant,name,spare", 0},
+			{"single_drop", "tenant,(lower(name))", 1},
+			{"multi_drop", "tenant,(lower(name)),(upper(name))", 2},
+			{"interleaved_drop", "(lower(name)),tenant,(upper(name)),spare,(lower(name))", 3},
+		} {
+			exec("create table " + tc.name + "(id int primary key,tenant int,name varchar(40),spare int,index ix(" + tc.key + "))")
+			exec("insert into " + tc.name + " values(1,7,'ABC',9),(2,8,'DEF',10),(3,7,NULL,9)")
+			exec("alter table " + tc.name + " drop column tenant, drop column spare")
+			var tableName, ddl string
+			require.NoError(t, conn.QueryRowContext(ctx, "show create table "+tc.name).Scan(&tableName, &ddl))
+			require.NotContains(t, ddl, "tenant")
+			require.NotContains(t, ddl, "__mo_fi_")
+			if tc.expressions > 0 {
+				require.Contains(t, ddl, "lower(`name`)")
+			}
+			count("select count(*) from information_schema.statistics where table_schema='functional_index_multi' and table_name='"+tc.name+"' and expression is not null", tc.expressions)
+			exec("update " + tc.name + " set name='ABC' where id=2")
+			exec("insert into " + tc.name + " values(4,'XYZ')")
+			predicate := "name='ABC'"
+			if tc.expressions > 0 {
+				predicate = "lower(name)='abc' and upper(name)='ABC'"
+			}
+			count("select count(*) from "+tc.name+" force index(ix) where "+predicate, 2)
+			count("select count(*) from "+tc.name+" ignore index(ix) where "+predicate, 2)
+			if tc.expressions > 0 {
+				func() {
+					rows, err := conn.QueryContext(ctx, "explain select id from "+tc.name+" force index(ix) where "+predicate)
+					require.NoError(t, err)
+					defer rows.Close()
+					var lines []string
+					for rows.Next() {
+						var line string
+						require.NoError(t, rows.Scan(&line))
+						lines = append(lines, line)
+					}
+					require.NoError(t, rows.Err())
+					require.Contains(t, strings.Join(lines, "\n"), "Index Table Scan on "+tc.name+".ix")
+				}()
+			}
+			exec("create table " + tc.name + "_like like " + tc.name)
+			exec("insert into " + tc.name + "_like values(5,'ABC')")
+			count("select count(*) from "+tc.name+"_like force index(ix) where "+predicate, 1)
+			exec("delete from " + tc.name + " where id=1")
+			count("select count(*) from "+tc.name+" force index(ix) where "+predicate, 1)
+			if tc.expressions > 0 {
+				_, err = conn.ExecContext(ctx, "alter table "+tc.name+" drop column name")
+				require.ErrorContains(t, err, "depends on it")
+				count("select count(*) from "+tc.name+" force index(ix) where "+predicate, 1)
+			}
+			exec("drop index ix on " + tc.name)
+			count("select count(*) from mo_catalog.mo_columns where att_database='functional_index_multi' and att_relname='"+tc.name+"' and attr_has_generated=1", 0)
+		}
 	})
 }
 

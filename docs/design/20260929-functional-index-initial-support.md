@@ -41,6 +41,11 @@ physical index. Explicit INSERT/UPDATE assignments to the reserved internal
 name are rejected, including DEFAULT. SELECT-star and public column metadata
 omit the backing column.
 
+Dropping an ordinary key column rebases every surviving expression backing name
+to its final key ordinal in the COPY metadata, preserving its expression and
+type. The existing generated-column dependency check still rejects dropping a
+source referenced by an expression. Ownership validation remains strict.
+
 Backing columns precede synthesized composite primary/cluster keys. PRE_INSERT
 retains their already-computed values in its physical input column list, and
 INSERT IGNORE's auto-increment provenance marker follows that same materialized

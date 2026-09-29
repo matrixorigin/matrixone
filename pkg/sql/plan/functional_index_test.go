@@ -22,6 +22,48 @@ import (
 	"github.com/stretchr/testify/require"
 )
 
+func TestFunctionalIndexOwnershipAfterDropColumn(t *testing.T) {
+	ctx := NewMockCompilerContext(false)
+	rt := runtime.ServiceRuntime(ctx.GetProcess().GetService())
+	old, _ := rt.GetGlobalVariables(runtime.MOProtocolVersion)
+	rt.SetGlobalVariables(runtime.MOProtocolVersion, defines.MORPCVersion101)
+	t.Cleanup(func() { rt.SetGlobalVariables(runtime.MOProtocolVersion, old) })
+	for _, order := range [][]string{{"tenant", "spare"}, {"spare", "tenant"}} {
+		stmt, err := parsers.ParseOne(t.Context(), dialect.MYSQL,
+			"create table t(id int primary key,tenant int,name varchar(40),spare int,index ix(tenant,(lower(name)),spare,(upper(name)),(lower(name))),index iy((lower(name)),tenant))", 1)
+		require.NoError(t, err)
+		p, err := BuildPlan(ctx, stmt, false)
+		stmt.Free()
+		require.NoError(t, err)
+		table := p.GetDdl().GetCreateTable().TableDef
+		ensureName2ColIndexForReplace(table)
+		owners := functionalIndexColumns(table, table.Indexes[0])
+		require.Len(t, owners, 3)
+		origins := []string{owners[0].GeneratedCol.OriginString, owners[1].GeneratedCol.OriginString, owners[2].GeneratedCol.OriginString}
+		alias := table.Indexes[0].Parts[len(table.Indexes[0].Parts)-1]
+		for _, name := range order {
+			col := FindColumn(table.Cols, name)
+			require.NoError(t, handleDropColumnWithIndex(t.Context(), name, table))
+			for _, owner := range owners {
+				require.Same(t, owner, table.Cols[table.Name2ColIndex[owner.Name]])
+			}
+			require.NoError(t, handleDropColumnPosition(t.Context(), table, col))
+			table.Name2ColIndex = nil // COPY rebuilds physical column positions.
+			ensureName2ColIndexForReplace(table)
+			require.NoError(t, validateFunctionalTable(t.Context(), table))
+		}
+		for i, col := range owners {
+			require.Same(t, col, functionalIndexPartColumn(table, table.Indexes[0], i))
+			require.Equal(t, functionalColumnName("ix", i), col.Name)
+			require.Equal(t, col.Name, col.OriginName)
+			require.Equal(t, origins[i], col.GeneratedCol.OriginString)
+			require.Same(t, col, table.Cols[table.Name2ColIndex[col.Name]])
+		}
+		require.Equal(t, alias, table.Indexes[0].Parts[3])
+		require.Len(t, functionalIndexColumns(table, table.Indexes[1]), 1)
+	}
+}
+
 func TestFunctionalIndexSyntheticKeyLayout(t *testing.T) {
 	ctx := NewMockCompilerContext(false)
 	rt := runtime.ServiceRuntime(ctx.GetProcess().GetService())
