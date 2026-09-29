@@ -21,6 +21,7 @@ import (
 	"math"
 	"regexp"
 	"slices"
+	"strconv"
 	"strings"
 	"time"
 
@@ -32,6 +33,7 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/common/pubsub"
 	"github.com/matrixorigin/matrixone/pkg/defines"
 	indexplugin "github.com/matrixorigin/matrixone/pkg/indexplugin"
+	"github.com/matrixorigin/matrixone/pkg/pb/lock"
 	pbplan "github.com/matrixorigin/matrixone/pkg/pb/plan"
 	"github.com/matrixorigin/matrixone/pkg/pb/timestamp"
 	"github.com/matrixorigin/matrixone/pkg/sql/compile"
@@ -330,7 +332,53 @@ func doCreateSnapshot(ctx context.Context, ses *Session, stmt *tree.CreateSnapSh
 	// Install the quota/catalog frontier before the lifecycle write. Advancing
 	// the transaction snapshot after that write can expose both workspace
 	// versions of the feature-registry gate row to the quota query.
-	if snapshotLevel != tree.SNAPSHOTLEVELCLUSTER {
+	localSnapshot := snapshotLevel == tree.SNAPSHOTLEVELDATABASE || snapshotLevel == tree.SNAPSHOTLEVELTABLE
+	if localSnapshot {
+		if snapshotLevel == tree.SNAPSHOTLEVELDATABASE {
+			databaseName = string(stmt.Object.ObjName)
+		} else {
+			objects := strings.Split(string(stmt.Object.ObjName), ".")
+			if len(objects) != 2 {
+				return moerr.NewInternalErrorf(ctx, "invalid table name %s", stmt.Object.ObjName)
+			}
+			databaseName, tableName = objects[0], objects[1]
+		}
+		if fromPublication {
+			// The publisher identity is provisional until the P row is locked
+			// and checked again after the applied catalog frontier.
+			publisherID, publisherName, pubErr := getAccountFromPublication(
+				ctx, bh, pubAccountName, pubName, tenantInfo.GetTenant())
+			if pubErr != nil {
+				return pubErr
+			}
+			ownerAccountID = uint32(publisherID)
+			currentAccount = publisherName
+			ctx = defines.AttachAccountId(ctx, ownerAccountID)
+		}
+		accountID, err := defines.GetAccountId(ctx)
+		if err != nil {
+			return err
+		}
+		publicationName := ""
+		if pubAccountName != "" && pubName != "" {
+			publicationName = pubName
+		}
+		databaseMode := lock.LockMode_Shared
+		if snapshotLevel == tree.SNAPSHOTLEVELDATABASE {
+			databaseMode = lock.LockMode_Exclusive
+		}
+		err = admitLocalLifecycleRC(ctx, ses, bh, accountID, databaseName,
+			snapshotLevel.String(), databaseMode, publicationName, tableName)
+		if err == nil && !fromPublication {
+			snapshotExist, err = checkSnapShotExistOrNot(ctx, bh, snapshotName)
+			if err == nil && snapshotExist {
+				if stmt.IfNotExists {
+					return nil
+				}
+				return moerr.NewInternalErrorf(ctx, "snapshot %s already exists", snapshotName)
+			}
+		}
+	} else if snapshotLevel != tree.SNAPSHOTLEVELCLUSTER {
 		err = admitFeatureLimitedLineageOwnerMutation(ctx, ses, bh)
 	} else {
 		// Cluster snapshots have no quota state to refresh, but still serialize
@@ -341,17 +389,22 @@ func doCreateSnapshot(ctx context.Context, ses *Session, stmt *tree.CreateSnapSh
 		return err
 	}
 	if fromPublication {
-		// A revoke or drop/recreate can commit while this request waits for
-		// the gate. Resolve membership and the publisher generation afterwards.
-		accountID, accountName, pubErr := lockAccountFromPublication(
-			ctx, bh, pubAccountName, pubName, tenantInfo.GetTenant(), tenantInfo.GetTenantID(),
-		)
-		if pubErr != nil {
-			return pubErr
+		if localSnapshot {
+			if err = checkPublicationSubscriberGeneration(ctx, bh, tenantInfo.GetTenant(), tenantInfo.GetTenantID()); err != nil {
+				return err
+			}
+		} else {
+			// Account/cluster scope keeps the existing broad publication gate.
+			accountID, accountName, pubErr := lockAccountFromPublication(
+				ctx, bh, pubAccountName, pubName, tenantInfo.GetTenant(), tenantInfo.GetTenantID(),
+			)
+			if pubErr != nil {
+				return pubErr
+			}
+			currentAccount = accountName
+			ownerAccountID = uint32(accountID)
+			ctx = defines.AttachAccountId(ctx, ownerAccountID)
 		}
-		currentAccount = accountName
-		ownerAccountID = uint32(accountID)
-		ctx = defines.AttachAccountId(ctx, ownerAccountID)
 		if err = checkAccessAndName(); err != nil || snapshotExist {
 			return err
 		}
@@ -409,9 +462,11 @@ func doCreateSnapshot(ctx context.Context, ses *Session, stmt *tree.CreateSnapSh
 	)
 
 	// refer to the `handleCloneDatabase`
-	if snapshotTS, err = tryToIncreaseTxnPhysicalTS(
-		ctx, ses.proc.GetTxnOperator(),
-	); err != nil {
+	snapshotTxnOp := ses.proc.GetTxnOperator()
+	if localSnapshot {
+		snapshotTxnOp = backgroundExecTxnOperator(bh)
+	}
+	if snapshotTS, err = tryToIncreaseTxnPhysicalTS(ctx, snapshotTxnOp); err != nil {
 		return err
 	}
 
@@ -452,7 +507,6 @@ func doCreateSnapshot(ctx context.Context, ses *Session, stmt *tree.CreateSnapSh
 			return err
 		}
 	case tree.SNAPSHOTLEVELDATABASE:
-		databaseName = string(stmt.Object.ObjName)
 		if len(databaseName) > 0 && needSkipDb(databaseName) {
 			return moerr.NewInternalError(ctx, fmt.Sprintf("can not create snapshot for system database %s", databaseName))
 		}
@@ -508,13 +562,6 @@ func doCreateSnapshot(ctx context.Context, ses *Session, stmt *tree.CreateSnapSh
 		}
 
 	case tree.SNAPSHOTLEVELTABLE:
-		objectName := string(stmt.Object.ObjName)
-		objects := strings.Split(objectName, ".")
-		if len(objects) != 2 {
-			return moerr.NewInternalError(ctx, fmt.Sprintf("invalid table name %s", objectName))
-		}
-		databaseName = objects[0]
-		tableName = objects[1]
 		if len(databaseName) > 0 && needSkipDb(databaseName) {
 			if isClusterTable(databaseName, tableName) {
 				return moerr.NewInternalError(ctx, fmt.Sprintf("can not create snapshot for cluster table %s.%s", databaseName, tableName))
@@ -568,6 +615,29 @@ func doCreateSnapshot(ctx context.Context, ses *Session, stmt *tree.CreateSnapSh
 			objId,
 		)
 		if err != nil {
+			return err
+		}
+	}
+	if localSnapshot && pubAccountName != "" && pubName != "" {
+		accountID, err := defines.GetAccountId(ctx)
+		if err != nil {
+			return err
+		}
+		db, err := ses.proc.GetSessionInfo().StorageEngine.Database(
+			ctx, databaseName, backgroundExecTxnOperator(bh))
+		if err != nil {
+			return err
+		}
+		databaseID, err := strconv.ParseUint(db.GetDatabaseId(ctx), 10, 64)
+		if err != nil {
+			return err
+		}
+		if snapshotLevel == tree.SNAPSHOTLEVELDATABASE && objId != databaseID {
+			return moerr.NewTxnNeedRetryWithDefChanged(ctx)
+		}
+		if err = checkSnapshotPublicationCoverage(ctx, bh, accountID,
+			pubAccountName, pubName, tenantInfo.GetTenant(), databaseName, tableName,
+			databaseID); err != nil {
 			return err
 		}
 	}
@@ -1872,7 +1942,6 @@ func sortedViewInfos(
 		err         error
 		snapshot    *plan.Snapshot
 		sortedViews []string
-		oldSnapshot *plan.Snapshot
 	)
 
 	if inputSnapshot != nil {
@@ -1883,14 +1952,23 @@ func sortedViewInfos(
 			return nil, err
 		}
 	}
+	if len(viewMap) == 0 {
+		return nil, nil
+	}
 
-	compCtx := ses.GetTxnCompileCtx()
+	// Plan source views with the source account and an isolated mutable binder.
+	// A tenant-only subscription snapshot has no TS, so SetSnapshot alone does
+	// not move DatabaseExists/GetSubscriptionMeta to the publisher account.
+	compCtx, closeCompCtx, err := ses.GetTxnCompileCtx().NewViewDescriptionCompilerContext(
+		defines.AttachAccountId(ctx, fromAccountId),
+	)
+	if err != nil {
+		return nil, err
+	}
+	defer closeCompCtx()
+	viewCtx := compCtx.(*TxnCompilerContext)
 	if snapshot != nil {
-		oldSnapshot = compCtx.GetSnapshot()
 		compCtx.SetSnapshot(snapshot)
-		defer func() {
-			compCtx.SetSnapshot(oldSnapshot)
-		}()
 	}
 
 	g := toposort{next: make(map[string][]string)}
@@ -1901,7 +1979,7 @@ func sortedViewInfos(
 			return nil, err
 		}
 
-		compCtx.SetDatabase(viewEntry.dbName)
+		viewCtx.SetDatabase(viewEntry.dbName)
 		// build create sql to find dependent views
 		_, err = plan.BuildPlan(compCtx, stmts[0], false)
 		freeStatements(stmts)
@@ -4327,27 +4405,34 @@ func lockAccountFromPublication(ctx context.Context, bh BackgroundExec, pubAccou
 	// DROP/CREATE ACCOUNT shares the outer SNAPSHOT gate with snapshot DDL.
 	// Match the authenticated session's generation after that gate: a retired
 	// session must not inherit a recreated account's publication membership.
+	if err = checkPublicationSubscriberGeneration(ctx, bh, currentAccount, currentAccountID); err != nil {
+		return 0, "", err
+	}
+	return resolveAccountFromPublication(ctx, bh, pubAccountName, pubName, currentAccount, true)
+}
+
+func checkPublicationSubscriberGeneration(ctx context.Context, bh BackgroundExec, currentAccount string, currentAccountID uint32) error {
 	systemCtx := defines.AttachAccountId(ctx, catalog.System_Account)
 	bh.ClearExecResultSet()
 	query := fmt.Sprintf("select account_id from mo_catalog.mo_account where account_name = '%s'", strings.ReplaceAll(currentAccount, "'", "''"))
-	if err = bh.Exec(systemCtx, query); err != nil {
-		return 0, "", err
+	if err := bh.Exec(systemCtx, query); err != nil {
+		return err
 	}
 	results, readErr := getResultSet(systemCtx, bh)
 	if readErr != nil {
-		return 0, "", readErr
+		return readErr
 	}
 	if !execResultArrayHasData(results) {
-		return 0, "", moerr.NewInternalErrorf(ctx, "account %s session is no longer active", currentAccount)
+		return moerr.NewInternalErrorf(ctx, "account %s session is no longer active", currentAccount)
 	}
 	liveID, readErr := results[0].GetUint64(systemCtx, 0, 0)
 	if readErr != nil {
-		return 0, "", readErr
+		return readErr
 	}
 	if liveID != uint64(currentAccountID) {
-		return 0, "", moerr.NewInternalErrorf(ctx, "account %s session is no longer active", currentAccount)
+		return moerr.NewInternalErrorf(ctx, "account %s session is no longer active", currentAccount)
 	}
-	return resolveAccountFromPublication(ctx, bh, pubAccountName, pubName, currentAccount, true)
+	return nil
 }
 
 func resolveAccountFromPublication(ctx context.Context, bh BackgroundExec, pubAccountName string, pubName string, currentAccount string, lock bool) (accountID uint64, accountName string, err error) {
@@ -4403,6 +4488,58 @@ func resolveAccountFromPublication(ctx context.Context, bh BackgroundExec, pubAc
 	}
 
 	return
+}
+
+func checkSnapshotPublicationCoverage(
+	ctx context.Context, bh BackgroundExec, publisherID uint32,
+	publisherName, publicationName, subscriberName, databaseName, tableName string,
+	databaseID uint64,
+) error {
+	systemCtx := defines.AttachAccountId(ctx, catalog.System_Account)
+	sql := fmt.Sprintf(
+		"select account_name, database_name, database_id, table_list, account_list from mo_catalog.mo_pubs where account_id = %d and pub_name = '%s'",
+		publisherID, strings.ReplaceAll(publicationName, "'", "''"),
+	)
+	bh.ClearExecResultSet()
+	if err := bh.Exec(systemCtx, sql); err != nil {
+		return err
+	}
+	results, err := getResultSet(systemCtx, bh)
+	if err != nil {
+		return err
+	}
+	if len(results) != 1 || results[0].GetRowCount() != 1 {
+		return moerr.NewInternalError(ctx, "snapshot publication is missing or ambiguous")
+	}
+	row := results[0]
+	account, err := row.GetString(systemCtx, 0, 0)
+	if err != nil {
+		return err
+	}
+	pubDatabase, err := row.GetString(systemCtx, 0, 1)
+	if err != nil {
+		return err
+	}
+	pubDatabaseID, err := row.GetUint64(systemCtx, 0, 2)
+	if err != nil {
+		return err
+	}
+	tables, err := row.GetString(systemCtx, 0, 3)
+	if err != nil {
+		return err
+	}
+	subscribers, err := row.GetString(systemCtx, 0, 4)
+	if err != nil {
+		return err
+	}
+	if account != publisherName || !(&pubsub.PubInfo{SubAccountsStr: subscribers}).InSubAccounts(subscriberName) ||
+		!((pubDatabase == pubsub.TableAll && pubDatabaseID == 0) ||
+			(pubDatabase == databaseName && pubDatabaseID == databaseID)) ||
+		(tables != pubsub.TableAll && (tableName == "" ||
+			!slices.Contains(strings.Split(tables, pubsub.Sep), tableName))) {
+		return moerr.NewInternalError(ctx, "snapshot target is outside current publication coverage")
+	}
+	return nil
 }
 
 // handleGetSnapshotTs handles the internal command getsnapshotts

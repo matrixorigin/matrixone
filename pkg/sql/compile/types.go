@@ -416,6 +416,12 @@ type Compile struct {
 	// owned by the SQL executor. It is intentionally separate from isInternal,
 	// which also controls routing and other execution policy.
 	temporaryDDLInExecutorTxn bool
+	// Shared by retry generations so a direct-client temporary DROP reached in
+	// an earlier attempt is published if retry setup later fails terminally.
+	temporaryDropRetryStage *temporaryDropRetireStage
+	// Run owns publication after every possible retry decision, including
+	// errors that occur after the DROP scope itself has returned successfully.
+	temporaryDropRetryActive bool
 	// resourceAttemptOwnerEligible is set only for the top-level statement
 	// Compile. The statement root still arbitrates the single actual owner.
 	resourceAttemptOwnerEligible bool
