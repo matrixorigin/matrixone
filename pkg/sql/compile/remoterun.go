@@ -173,6 +173,11 @@ func encodeRemoteScopeWithVectorProtocol(s *Scope, proc *process.Process, requir
 			return nil, err
 		}
 	}
+	if features.CRC32JSONTextBytes {
+		if err = validateCRC32JSONDestination(proc, p); err != nil {
+			return nil, err
+		}
+	}
 	if features.StringNumericResultContracts {
 		if err = validateStringNumericResultDestination(proc, p); err != nil {
 			return nil, err
@@ -2381,6 +2386,12 @@ func validateRemoteExpressionPipelineProtocol(
 		(!hasProtocolVersion || protocolVersion < defines.MORPCVersion90) {
 		return moerr.NewNotSupportedNoCtx(
 			"geodetic spatial-distance semantics require MORPC protocol version 90",
+		)
+	}
+	if features.CRC32JSONTextBytes &&
+		(!hasProtocolVersion || protocolVersion < defines.MORPCVersion101) {
+		return moerr.NewNotSupportedNoCtx(
+			"CRC32 JSON text-byte semantics require MORPC protocol version 101",
 		)
 	}
 	return nil

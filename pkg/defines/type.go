@@ -359,3 +359,7 @@ type AutoIncrCache struct {
 	MaxNum uint64
 	Step   uint64
 }
+
+// CRC32CopyExpressionsKey carries the final, execution-owned ALTER COPY schema.
+// Regenerated SQL alone cannot preserve historical CRC32 execution identities.
+type CRC32CopyExpressionsKey struct{}

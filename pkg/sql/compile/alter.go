@@ -1108,7 +1108,7 @@ func alterCopyCreateOptions(qry *plan.AlterTable) executor.StatementOption {
 	// The temporary relation is not externally visible. Its parent backrefs are
 	// reconciled after the original relation is replaced, so avoid materializing
 	// an intermediate parent->temporary-table relationship here.
-	opts := executor.StatementOption{}.WithIgnoreForeignKey()
+	opts := executor.StatementOption{}.WithIgnoreForeignKey().WithCRC32CopyExpressions(qry.CopyTableDef)
 	if oldLogicalId := qry.GetTableDef().GetLogicalId(); oldLogicalId != 0 {
 		opts = opts.WithKeepLogicalId(oldLogicalId)
 	}

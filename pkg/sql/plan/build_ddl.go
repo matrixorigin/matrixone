@@ -3487,7 +3487,7 @@ func buildTableDefs(stmt *tree.CreateTable, ctx CompilerContext, createTable *pl
 				if preserved != nil && preserved.generated != nil {
 					generatedCol = proto.Clone(preserved.generated).(*plan.GeneratedCol)
 				} else {
-					generatedCol, err = buildGeneratedExpr(ddlExpressionContext(ctx, ctx.GetProcess().Ctx), def, colType, allColDefs, ctx.GetProcess())
+					generatedCol, err = buildGeneratedExpr(ddlExpressionContext(ctx, ctx.GetProcess().Ctx), def, colType, allColDefs, ctx.GetProcess(), crc32CopyColumn(ctx.GetContext(), colName))
 				}
 				if err != nil {
 					return err
@@ -3510,7 +3510,7 @@ func buildTableDefs(stmt *tree.CreateTable, ctx CompilerContext, createTable *pl
 				if preserved != nil && preserved.defaultExpr != nil {
 					defaultValue = proto.Clone(preserved.defaultExpr).(*plan.Default)
 				} else {
-					defaultValue, err = buildDefaultExprWithColumns(ddlExpressionContext(ctx, ctx.GetProcess().Ctx), def, colType, ctx.GetProcess(), allColDefs)
+					defaultValue, err = buildDefaultExprWithColumns(ddlExpressionContext(ctx, ctx.GetProcess().Ctx), def, colType, ctx.GetProcess(), allColDefs, crc32CopyColumn(ctx.GetContext(), colName))
 				}
 				if err != nil {
 					return err
@@ -3522,7 +3522,7 @@ func buildTableDefs(stmt *tree.CreateTable, ctx CompilerContext, createTable *pl
 				if preserved != nil && preserved.onUpdate != nil {
 					onUpdateExpr = proto.Clone(preserved.onUpdate).(*plan.OnUpdate)
 				} else {
-					onUpdateExpr, err = buildOnUpdate(ddlExpressionContext(ctx, ctx.GetProcess().Ctx), def, colType, ctx.GetProcess())
+					onUpdateExpr, err = buildOnUpdate(ddlExpressionContext(ctx, ctx.GetProcess().Ctx), def, colType, ctx.GetProcess(), crc32CopyColumn(ctx.GetContext(), colName))
 				}
 				if err != nil {
 					return err
@@ -4210,6 +4210,27 @@ func appendCheckDef(
 ) error {
 	if err := requireCheckConstraintProtocol(ctx.GetContext(), ctx.GetProcess()); err != nil {
 		return err
+	}
+	if source, _ := ctx.GetContext().Value(defines.CRC32CopyExpressionsKey{}).(*plan.TableDef); source != nil {
+		for _, check := range source.Checks {
+			if check.Name == name && containsLegacyCRC32(check.Check) {
+				if err := RequirePersistedIPFunctionProtocolForAuthoring(ctx.GetContext(), ctx.GetProcess(), check.Check); err != nil {
+					return err
+				}
+				if err := validateCheckExpr(ctx.GetContext(), tableDef, check.Check, columnPos); err != nil {
+					return err
+				}
+				for _, existing := range tableDef.Checks {
+					if existing.Name == name {
+						return moerr.NewInvalidInputf(ctx.GetContext(), "duplicate check constraint name '%s'", name)
+					}
+				}
+				owned := *check
+				owned.Check = DeepCopyExpr(check.Check)
+				tableDef.Checks = append(tableDef.Checks, &owned)
+				return nil
+			}
+		}
 	}
 	if replay := ddlReplayForTable(ctx.GetContext(), tableDef.Name); replay != nil {
 		checkName := name
