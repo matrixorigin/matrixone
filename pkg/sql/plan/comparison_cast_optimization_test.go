@@ -29,11 +29,16 @@ import (
 func TestDecimalFloatComparisonUniqueValue(t *testing.T) {
 	decimal, err := makePlan2DecimalExprWithType(context.Background(), "12345.00")
 	require.NoError(t, err)
-	cast, err := makePlan2CastExpr(context.Background(), decimal, makeSimplePlan2Type(types.T_float64))
+	target := makeSimplePlan2Type(types.T_float64)
+	target.Scale = -1
+	cast, err := makePlan2CastExpr(context.Background(), decimal, target)
 	require.NoError(t, err)
 	value, ok := decimalFloatComparisonConstant(cast)
 	require.True(t, ok)
 	require.Equal(t, float64(12345), value)
+	cast.Typ.Width, cast.Typ.Scale = 3, 1
+	_, ok = decimalFloatComparisonConstant(cast)
+	require.False(t, ok, "DOUBLE(M,D) rounds before comparison")
 
 	for _, test := range []struct {
 		name   string

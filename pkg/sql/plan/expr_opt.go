@@ -20,6 +20,7 @@ import (
 	"hash/fnv"
 	"strconv"
 
+	"github.com/matrixorigin/matrixone/pkg/container/batch"
 	"github.com/matrixorigin/matrixone/pkg/container/types"
 	"github.com/matrixorigin/matrixone/pkg/container/vector"
 	"github.com/matrixorigin/matrixone/pkg/pb/plan"
@@ -48,7 +49,7 @@ func (builder *QueryBuilder) mergeFiltersOnCompositeKey(nodeID int32) {
 	resetHashMapStats(node.Stats)
 }
 
-func preparedCastSource(expr *plan.Expr) *plan.Expr {
+func comparisonCastSource(expr *plan.Expr) *plan.Expr {
 	fn := expr.GetF()
 	if fn == nil || fn.Func == nil || fn.Func.GetObjName() != "cast" || len(fn.Args) != 2 {
 		return nil
@@ -56,30 +57,105 @@ func preparedCastSource(expr *plan.Expr) *plan.Expr {
 	return fn.Args[0]
 }
 
-// Scalar subqueries can expose their parameter only after filter pushdown.
-// Reuse the binding proof before scan statistics choose block filters.
-func (builder *QueryBuilder) rewritePreparedRoundIntegerFilters(nodeID int32) {
-	state := preparedBindingState(builder.GetContext())
-	if state == nil || !state.selectStatement || !state.hasRoundingFunction {
-		return
+func (builder *QueryBuilder) singletonProjectedFloatValue(node *plan.Node, expr *plan.Expr) (float64, bool) {
+	column := expr.GetCol()
+	if column == nil {
+		return 0, false
 	}
+	for _, childID := range node.Children {
+		project := builder.qry.Nodes[childID]
+		if project.NodeType != plan.Node_PROJECT || len(project.BindingTags) != 1 ||
+			project.BindingTags[0] != column.RelPos || len(project.Children) != 1 ||
+			column.ColPos < 0 || int(column.ColPos) >= len(project.ProjectList) {
+			continue
+		}
+		input := builder.qry.Nodes[project.Children[0]]
+		if input.NodeType == plan.Node_VALUE_SCAN && input.TableDef == nil &&
+			input.Limit == nil && input.Offset == nil && input.RankOption == nil {
+			candidate := project.ProjectList[column.ColPos]
+			if value, ok := decimalFloatComparisonConstant(candidate); ok {
+				return value, true
+			}
+			if !rule.IsConstant(candidate, false) {
+				return 0, false
+			}
+			folded, err := ConstantFold(batch.EmptyForConstFoldBatch, DeepCopyExpr(candidate),
+				builder.compCtx.GetProcess(), false, true)
+			if err == nil {
+				return decimalFloatComparisonConstant(folded)
+			}
+		}
+	}
+	return 0, false
+}
+
+func (builder *QueryBuilder) rewriteUniqueDecimalFloatComparison(node *plan.Node, expr *plan.Expr) *plan.Expr {
+	fn := expr.GetF()
+	if fn == nil || fn.Func == nil || !isDecimalComparisonOperator(fn.Func.GetObjName()) || len(fn.Args) != 2 {
+		return expr
+	}
+	for side := range fn.Args {
+		castColumn := fn.Args[side]
+		column := comparisonCastSource(castColumn)
+		if castColumn.Typ.Id != int32(types.T_float64) || isExplicitPreparedCast(castColumn) ||
+			column == nil || column.GetCol() == nil || !types.T(column.Typ.Id).IsDecimal() {
+			continue
+		}
+		peer := fn.Args[1-side]
+		value, ok := decimalFloatComparisonConstant(peer)
+		if !ok && node.NodeType == plan.Node_JOIN {
+			value, ok = builder.singletonProjectedFloatValue(node, peer)
+		}
+		if !ok || !decimalFloatComparisonHasUniqueValue(value, makeTypeByPlan2Expr(column)) {
+			continue
+		}
+		converted, err := makePlan2CastExpr(builder.GetContext(), DeepCopyExpr(peer), column.Typ)
+		if err != nil {
+			continue
+		}
+		args := []*plan.Expr{DeepCopyExpr(fn.Args[0]), DeepCopyExpr(fn.Args[1])}
+		args[side] = DeepCopyExpr(column)
+		args[1-side] = converted
+		rewritten, err := BindFuncExprImplByPlanExpr(builder.GetContext(), fn.Func.GetObjName(), args)
+		if err == nil {
+			return rewritten
+		}
+	}
+	return expr
+}
+
+// Scalar subqueries can expose constants only after filter pushdown. Rewrite
+// proven numeric domains before scan statistics choose block filters.
+func (builder *QueryBuilder) rewriteNumericDomainFilters(nodeID int32) {
+	state := preparedBindingState(builder.GetContext())
+	roundEnabled := state != nil && state.selectStatement && state.hasRoundingFunction
 	var visit func(int32)
 	visit = func(id int32) {
 		node := builder.qry.Nodes[id]
 		for _, child := range node.Children {
 			visit(child)
 		}
+		if node.NodeType == plan.Node_JOIN {
+			for i, condition := range node.OnList {
+				node.OnList[i] = builder.rewriteUniqueDecimalFloatComparison(node, condition)
+			}
+		}
 		if node.NodeType != plan.Node_TABLE_SCAN {
 			return
 		}
 		for i, filter := range node.FilterList {
+			node.FilterList[i] = builder.rewriteUniqueDecimalFloatComparison(node, filter)
+			if !roundEnabled {
+				continue
+			}
+			filter = node.FilterList[i]
 			fn := filter.GetF()
 			if fn == nil || fn.Func == nil || fn.Func.GetObjName() != "=" || len(fn.Args) != 2 {
 				continue
 			}
 			for side := range fn.Args {
-				column := preparedCastSource(fn.Args[side])
-				value := preparedCastSource(fn.Args[1-side])
+				column := comparisonCastSource(fn.Args[side])
+				value := comparisonCastSource(fn.Args[1-side])
 				if column == nil || column.GetCol() == nil || !types.T(column.Typ.Id).IsSignedInt() || value == nil {
 					continue
 				}

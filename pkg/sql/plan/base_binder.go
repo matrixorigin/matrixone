@@ -9402,6 +9402,10 @@ func decimalFloatComparisonConstant(expr *Expr) (float64, bool) {
 	if fn == nil || fn.Func == nil || fn.Func.GetObjName() != "cast" || len(fn.Args) != 2 {
 		return 0, false
 	}
+	if expr.Typ.Width != 0 || expr.Typ.Scale >= 0 {
+		// DOUBLE(M,D) can round the source before the comparison.
+		return 0, false
+	}
 	source := fn.Args[0]
 	if inner := source.GetF(); inner != nil && inner.Func != nil && inner.Func.GetObjName() == "cast" &&
 		len(inner.Args) == 2 && !isExplicitPreparedCast(source) {

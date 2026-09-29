@@ -40,6 +40,12 @@ select count(*) from t where d = cast(12345.00 as double);
 select count(*) from t where d = cast(0.1 as double);
 ➤ count(*)[-5,64,0]  𝄀
 1
+select count(*) from t where d = cast(0.11 as double(3,1));
+➤ count(*)[-5,64,0]  𝄀
+1
+select count(*) from t where d = cast(0.14 as double(3,1));
+➤ count(*)[-5,64,0]  𝄀
+1
 explain select count(*) from t where d = cast(0.104 as double);
 ➤ TP QUERY PLAN[12,-1,0]  𝄀
 Project  𝄀
@@ -82,7 +88,7 @@ Project  𝄀
         Analyze: timeConsumed=0ms waitTime=0ms inputRows=1 outputRows=1 (min=1, max=1) InputSize=8 bytes OutputSize=8 bytes ReadSize=0 bytes|0 bytes|0 bytes MemorySize=64.00 KiB (min=64.00 KiB, max=64.00 KiB)  𝄀
         Aggregate Functions: starcount(1)  𝄀
         ->  Table Scan on issue_29510_decimal_float.t  𝄀
-              Analyze: timeConsumed=0ms waitTime=0ms inputBlocks=2 inputRows=8195 outputRows=1 (min=1, max=1) InputSize=64.02 KiB OutputSize=8 bytes ReadSize=35.21 KiB|0 bytes|0 bytes MemorySize=72.01 KiB (min=72.01 KiB, max=72.01 KiB)  𝄀
+              Analyze: timeConsumed=1ms waitTime=0ms inputBlocks=2 inputRows=8195 outputRows=1 (min=1, max=1) InputSize=64.02 KiB OutputSize=8 bytes ReadSize=35.21 KiB|0 bytes|0 bytes MemorySize=72.01 KiB (min=72.01 KiB, max=72.01 KiB)  𝄀
               Filter Cond: (cast(t.d AS DOUBLE) = 12345)
               -- HINT: Cast expression may prevent index usage  𝄀
               Block Filter Cond: (cast(t.d AS DOUBLE) = 12345)

@@ -16,6 +16,8 @@ select count(*) from t where d = cast(12345 as double);
 explain select count(*) from t where d = cast(12345.00 as double);
 select count(*) from t where d = cast(12345.00 as double);
 select count(*) from t where d = cast(0.1 as double);
+select count(*) from t where d = cast(0.11 as double(3,1));
+select count(*) from t where d = cast(0.14 as double(3,1));
 explain select count(*) from t where d = cast(0.104 as double);
 select count(*) from t where d = cast(0.104 as double);
 select count(*) from t where d < cast(0.104 as double);
