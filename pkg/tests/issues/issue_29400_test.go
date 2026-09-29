@@ -159,6 +159,106 @@ func TestIssue29400CopyAlterRetainedGatePromotionFastFails(t *testing.T) {
 		require.NoError(t, holder.Commit())
 		_, err = db1.ExecContext(ctx, "truncate table "+solo+".v")
 		require.NoError(t, err, "TRUNCATE should succeed after the competing gate owner commits")
+
+		// A DML statement can retain T without having crossed G. Either G mode
+		// would form a wait cycle if A's next lifecycle statement queued behind
+		// B while B was waiting for A's T.
+		for _, scenario := range []struct {
+			name, otherSQL, nextSQL string
+		}{
+			{"shared_gate", "drop database %s", "alter table %s.t modify column v bigint"},
+			{"exclusive_gate", "alter table %s.t modify column v bigint", "drop table %s.u"},
+		} {
+			t.Run(scenario.name, func(t *testing.T) {
+				database := "issue_29400_prior_dml_" + scenario.name
+				for _, query := range []string{
+					"create database " + database,
+					"create table " + database + ".t (id int primary key, v int)",
+					"create table " + database + ".u (i int)",
+					"insert into " + database + ".t values (1, 1)",
+				} {
+					execSQLRequire(t, ctx, db0, query)
+				}
+				defer func() {
+					cleanupCtx, done := context.WithTimeout(context.Background(), 20*time.Second)
+					defer done()
+					_, _ = db0.ExecContext(cleanupCtx, "drop database if exists "+database)
+				}()
+				owner, err := db0.BeginTx(ctx, nil)
+				require.NoError(t, err)
+				defer owner.Rollback()
+				_, err = owner.ExecContext(ctx, "update "+database+".t set v=2 where id=1")
+				require.NoError(t, err)
+
+				waitingForT := make(chan struct{}, 1)
+				restoreHook := lockservice.SetWaiterEnqueuedHookForTest(func(tableID uint64, _ []byte, _ [][]byte) {
+					if tableID == catalog.MO_TABLES_ID {
+						select {
+						case waitingForT <- struct{}{}:
+						default:
+						}
+					}
+				})
+				defer restoreHook()
+				otherCtx, cancelOther := context.WithTimeout(ctx, 30*time.Second)
+				defer cancelOther()
+				otherDone := make(chan error, 1)
+				go func() {
+					_, otherErr := db1.ExecContext(otherCtx, fmt.Sprintf(scenario.otherSQL, database))
+					otherDone <- otherErr
+				}()
+				otherFinished := false
+				defer func() {
+					_ = owner.Rollback()
+					cancelOther()
+					if !otherFinished {
+						select {
+						case <-otherDone:
+						case <-time.After(5 * time.Second):
+						}
+					}
+				}()
+				select {
+				case <-waitingForT:
+				case <-time.After(15 * time.Second):
+					t.Fatal("competing lifecycle owner did not wait for the prior UPDATE lock")
+				}
+				select {
+				case earlyErr := <-otherDone:
+					t.Fatalf("competing lifecycle owner finished before the reciprocal wait: %v", earlyErr)
+				default:
+				}
+				nextCtx, cancelNext := context.WithTimeout(ctx, 10*time.Second)
+				defer cancelNext()
+				_, ownerErr := owner.ExecContext(nextCtx, fmt.Sprintf(scenario.nextSQL, database))
+				otherErr := <-otherDone
+				otherFinished = true
+				if ownerErr != nil {
+					var deadlock *mysql.MySQLError
+					require.ErrorAs(t, ownerErr, &deadlock)
+					require.Equal(t, moerr.ErrDeadLockDetected, deadlock.Number)
+					require.NoError(t, otherErr, "the competing owner must finish after victim rollback")
+				} else {
+					var deadlock *mysql.MySQLError
+					require.ErrorAs(t, otherErr, &deadlock)
+					require.Equal(t, moerr.ErrDeadLockDetected, deadlock.Number)
+					require.NoError(t, owner.Commit(), "the surviving owner must commit")
+					var value int
+					require.NoError(t, db0.QueryRowContext(ctx,
+						"select v from "+database+".t where id=1").Scan(&value))
+					require.Equal(t, 2, value, "the surviving UPDATE must commit")
+				}
+				if scenario.name == "exclusive_gate" && ownerErr != nil {
+					var value int
+					require.NoError(t, db0.QueryRowContext(ctx,
+						"select v from "+database+".t where id=1").Scan(&value))
+					require.Equal(t, 1, value, "the earlier UPDATE must roll back")
+					require.NoError(t, db0.QueryRowContext(ctx,
+						"select count(*) from mo_catalog.mo_tables where reldatabase=? and relname='u'", database).Scan(&value))
+					require.Equal(t, 1, value, "the rejected DROP must leave its target intact")
+				}
+			})
+		}
 	})
 }
 
