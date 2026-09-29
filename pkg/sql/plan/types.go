@@ -22,6 +22,7 @@ import (
 	"strings"
 
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
+	"github.com/matrixorigin/matrixone/pkg/container/types"
 	"github.com/matrixorigin/matrixone/pkg/pb/plan"
 	pb "github.com/matrixorigin/matrixone/pkg/pb/statsinfo"
 	"github.com/matrixorigin/matrixone/pkg/sql/parsers/tree"
@@ -341,6 +342,14 @@ type TableDefStatsCompilerContext interface {
 // builders and lightweight test contexts).
 type UserVariableTypeResolver interface {
 	ResolveVariableType(varName string, isSystemVar, isGlobalVar bool) (Type, error)
+}
+
+// UserVariableStringDomainResolver exposes the assigned value's domain override
+// at binding time. A variable expression captures that domain in its VarRef,
+// independently of its static Type. It does not rewrite the session value or
+// EXECUTE USING parameters.
+type UserVariableStringDomainResolver interface {
+	ResolveVariableStringDomain(varName string, isSystemVar, isGlobalVar bool) (types.RuntimeStringDomain, error)
 }
 
 type Optimizer interface {
