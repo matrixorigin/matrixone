@@ -32,6 +32,47 @@ func TestLocalCTEOuterReferencesExecutablePlan(t *testing.T) {
 		sql  string
 	}{
 		{
+			name: "split where constrains recursive producer domain",
+			sql: `select p.n_nationkey from tpch.nation p where not exists (
+				with recursive ancestors as (
+					select a.* from tpch.nation a where a.n_nationkey=p.n_regionkey
+					union all
+					select a.* from tpch.nation a join ancestors
+						on ancestors.n_regionkey=a.n_nationkey
+				) select * from ancestors where n_name='inactive'
+			) and p.n_name='active'`,
+		},
+		{
+			name: "split where constrains throwing producer",
+			sql: `select p.n_nationkey from tpch.nation p where p.n_nationkey=2 and
+				(with q(n) as (select abs(p.n_regionkey)) select n from q)>0`,
+		},
+		{
+			name: "split where constrains throwing consumer",
+			sql: `select p.n_nationkey from tpch.nation p where p.n_nationkey=2 and
+				(with q(n) as (select p.n_regionkey) select abs(n) from q)>0`,
+		},
+		{
+			name: "split where conjuncts reversed",
+			sql: `select p.n_nationkey from tpch.nation p where
+				(with q(n) as (select abs(p.n_regionkey)) select n from q)>0 and p.n_nationkey=2`,
+		},
+		{
+			name: "consumer where constrains producer domain",
+			sql: `select p.n_nationkey, (with q(n) as (select abs(p.n_regionkey))
+				select n from q where p.n_nationkey=2) from tpch.nation p`,
+		},
+		{
+			name: "consumer where constrains consumer domain",
+			sql: `select p.n_nationkey, (with q(n) as (select p.n_regionkey)
+				select abs(n) from q where p.n_nationkey=2) from tpch.nation p`,
+		},
+		{
+			name: "mixed consumer predicate stays below projection",
+			sql: `select p.n_nationkey, (with q(n) as (select p.n_regionkey)
+				select abs(n) from q where p.n_nationkey=2 or n>0) from tpch.nation p`,
+		},
+		{
 			name: "ordinary count having user variable",
 			sql: `select p.n_nationkey, (select count(*) from tpch.nation a
 				where a.n_nationkey=p.n_nationkey having count(*)=@having_limit)
@@ -480,17 +521,6 @@ func TestLocalCTEOuterReferencesRejectUnsafeDomains(t *testing.T) {
 				select n from q) from tpch.nation p`,
 		},
 		{
-			name: "split where cannot prove recursive producer terminates on skipped partition",
-			sql: `select p.n_nationkey from tpch.nation p where not exists (
-				with recursive ancestors as (
-					select a.* from tpch.nation a where a.n_nationkey=p.n_regionkey
-					union all
-					select a.* from tpch.nation a join ancestors
-						on ancestors.n_regionkey=a.n_nationkey
-				) select * from ancestors where n_name='inactive'
-			) and p.n_name='active'`,
-		},
-		{
 			name: "guarded recursive operator can fail on skipped partition",
 			sql: `select p.n_nationkey, case when p.n_nationkey=2 then
 				(with recursive r(n) as (
@@ -522,21 +552,6 @@ func TestLocalCTEOuterReferencesRejectUnsafeDomains(t *testing.T) {
 			sql: `select p.n_nationkey, case when p.n_nationkey=1 then 0 else
 				(with q(n) as (select p.n_regionkey) select n-1 from q) end
 				from tpch.nation p`,
-		},
-		{
-			name: "split where conjuncts cannot guard producer",
-			sql: `select p.n_nationkey from tpch.nation p where p.n_nationkey=2 and
-				(with q(n) as (select abs(p.n_regionkey)) select n from q)>0`,
-		},
-		{
-			name: "split where consumer expression can fail",
-			sql: `select p.n_nationkey from tpch.nation p where p.n_nationkey=2 and
-				(with q(n) as (select p.n_regionkey) select abs(n) from q)>0`,
-		},
-		{
-			name: "split where conjuncts reversed",
-			sql: `select p.n_nationkey from tpch.nation p where
-				(with q(n) as (select abs(p.n_regionkey)) select n from q)>0 and p.n_nationkey=2`,
 		},
 		{
 			name: "outer join on conditional producer abs",

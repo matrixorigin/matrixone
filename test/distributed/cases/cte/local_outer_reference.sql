@@ -26,8 +26,8 @@ select p.id from pages p where not exists (
     select a.* from pages a join ancestors on ancestors.parent_id=a.id
   ) select * from ancestors where active=0
 ) order by p.id;
--- A sibling conjunct may skip partitions; recursive operator termination
--- cannot be proved for those rows even if these fixture rows are acyclic.
+-- The independent active predicate must constrain the replay domain first.
+-- This is the original issue's third query, with result (1),(5).
 select p.id from pages p where not exists (
   with recursive ancestors as (
     select a.* from pages a where a.id=p.parent_id
@@ -343,6 +343,12 @@ select p.id, (with q(n) as (select cast(p.val as signed)) select n from q) as c
 from guarded_values p where p.id=2;
 select p.id, (with q(n) as (select cast(p.id as signed)) select n from q) as c
 from guarded_values p where p.id=2;
+select p.id, (with q(n) as (select cast(p.val as signed))
+  select n from q where p.id=2) as c from guarded_values p order by p.id;
+select p.id, (with q(n) as (select p.val)
+  select cast(n as signed) from q where p.id=2) as c from guarded_values p order by p.id;
+select p.id, (with q(n) as (select p.val)
+  select cast(n as signed) from q where p.id=1) as c from guarded_values p order by p.id;
 drop table guarded_values;
 
 -- Outer columns in ordinary COUNT HAVING must be rebound above the
@@ -409,8 +415,8 @@ from guarded_abs p order by p.id;
 select p.id, (with q(n) as (select p.id where p.id<2)
   select count(*) in (0,1) from q group by n) as c
 from guarded_abs p order by p.id;
--- Proof covers the consumer as well as the producer. Neither a skipped CASE
--- arm nor a WHERE conjunct may eagerly evaluate the unproven ABS.
+-- CASE remains separately guarded; a safe independent WHERE conjunct
+-- must filter the outer domain before producer or consumer ABS evaluation.
 select p.id, case when p.id=1 then 0 else
   (with q(n) as (select p.v) select abs(n) from q) end as c
 from guarded_abs p order by p.id;
@@ -454,6 +460,39 @@ select p.id, (with q(n) as (select p.v) select n from q) as c
 from guarded_abs p where p.id=2 order by p.id desc limit 1;
 select p.id, (with q(n) as (select p.v) select n from q) as c
 from guarded_abs p order by p.id desc limit 1;
+-- Consumer WHERE constrains replay before either producer or consumer ABS.
+select p.id, (with q(n) as (select abs(p.v))
+  select n from q where p.id=2) as c from guarded_abs p order by p.id;
+select p.id, (with q(n) as (select p.v)
+  select abs(n) from q where p.id=2) as c from guarded_abs p order by p.id;
+select p.id, (with q(n) as (select p.v)
+  select abs(n) from q where p.id=1) as c from guarded_abs p order by p.id;
+-- COUNT retains its empty group even when no producer partition is demanded.
+select p.id, (with q(n) as (select abs(p.v))
+  select count(*) from q where p.id=2) as c from guarded_abs p order by p.id;
+-- NULL demand removes every partition, but does not remove COUNT's empty row.
+select p.id, (with q(n) as (select abs(p.v))
+  select count(*) from q where p.id=null) as c from guarded_abs p order by p.id;
+-- A predicate reading CTE data is not an outer-only demand predicate.
+select p.id, (with q(n) as (select p.v)
+  select abs(n) from q where n>0) as c from guarded_abs p order by p.id;
+-- Mixed outer/CTE predicates remain below the throwing consumer projection.
+select p.id, (with q(n) as (select p.v)
+  select abs(n) from q where p.id=2 or n>0) as c from guarded_abs p order by p.id;
+select p.id, (with q(n) as (select p.v)
+  select abs(n) from q where p.id=2 and n>0) as c from guarded_abs p order by p.id;
+-- OR must retain the demanded error rather than extract its safe disjunct.
+select p.id, (with q(n) as (select p.v)
+  select abs(n) from q where p.id=2 or n<0) as c from guarded_abs p order by p.id;
+-- An outer WHERE excludes the nonterminating partition before replay starts.
+select p.id from guarded_abs p where
+  (with recursive q(n) as (select p.id union all select n from q where n=1)
+   select count(*) from q)>0 and p.id=2;
+-- Consumer demand also prevents an unused recursive partition from starting.
+select p.id, (with recursive q(n) as (
+  select p.id union all select n from q where n=1
+) select count(*) from q where p.id=2) as c
+from guarded_abs p order by p.id;
 -- Recursive operator failure is not an expression-level error. An unused
 -- partition (id=1) would hit the depth cap before the CASE is evaluated.
 select p.id, case when p.id=2 then

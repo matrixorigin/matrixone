@@ -26,16 +26,48 @@ import (
 // parameters). The identity, rather than parameter equality, isolates NULL and
 // repeated parameter values across recursive iterations.
 type localCTEDomain struct {
-	builder  *QueryBuilder
-	outerID  int32
-	ctx      *BindContext
-	subType  plan.SubqueryRef_Type
-	guarded  bool
-	values   []*plan.Expr
-	params   map[[2]int32]int
-	equality *plan.Expr
-	nodes    map[int32]bool
-	scans    map[int32][]*plan.Expr
+	builder *QueryBuilder
+	outerID int32
+	ctx     *BindContext
+	subType plan.SubqueryRef_Type
+	guarded bool
+	// Outer-only consumer WHERE predicates constrain replay before producer
+	// expressions run; the original consumer predicate is retained as well.
+	demandFilters   []*plan.Expr
+	consumerRoot    int32
+	consumerFilters map[int32]bool
+	values          []*plan.Expr
+	params          map[[2]int32]int
+	equality        *plan.Expr
+	nodes           map[int32]bool
+	scans           map[int32][]*plan.Expr
+}
+
+// Limit demand-domain preparation to local CTE consumers; ordinary subqueries
+// must retain their existing predicate pushdown and index selection paths.
+func (builder *QueryBuilder) hasLocalCTEConsumer(expr *plan.Expr) bool {
+	if len(builder.localCTERoots) == 0 {
+		return false
+	}
+	var contains func(int32) bool
+	contains = func(id int32) bool {
+		if builder.localCTERoots[id] {
+			return true
+		}
+		for _, child := range builder.qry.Nodes[id].Children {
+			if contains(child) {
+				return true
+			}
+		}
+		return false
+	}
+	found := false
+	walkLocalCTEExpr(expr, func(e *plan.Expr) {
+		if sub := e.GetSub(); sub != nil && contains(sub.NodeId) {
+			found = true
+		}
+	})
+	return found
 }
 
 func (builder *QueryBuilder) parameterizeLocalCTEs(
@@ -102,6 +134,8 @@ func (builder *QueryBuilder) parameterizeLocalCTEs(
 // through pagination or a branching/outer join boundary is not equivalent to
 // evaluating the original subquery separately for each outer identity.
 func (d *localCTEDomain) admitConsumer(root int32) error {
+	d.consumerRoot = root
+	d.consumerFilters = make(map[int32]bool)
 	var visit func(id int32, filtered, paginated, branched, having, windowed, aggregated bool) error
 	visit = func(id int32, filtered, paginated, branched, having, windowed, aggregated bool) error {
 		if id < 0 || int(id) >= len(d.builder.qry.Nodes) {
@@ -166,6 +200,16 @@ func (d *localCTEDomain) admitConsumer(root int32) error {
 				return d.unsupported("consumer HAVING needs per-outer-row empty-group semantics")
 			}
 		case plan.Node_FILTER:
+			if !having && !windowed && !branched && len(n.Children) == 1 && d.consumerFilterReadsCTE(n.Children[0]) {
+				for _, cond := range n.FilterList {
+					if hasCorrCol(cond) {
+						d.consumerFilters[id] = true
+					}
+					if demand := d.outerOnlyDemand(cond); demand != nil {
+						d.demandFilters = append(d.demandFilters, demand)
+					}
+				}
+			}
 			if having || windowed {
 				for _, cond := range n.FilterList {
 					if hasCorrCol(cond) {
@@ -189,6 +233,52 @@ func (d *localCTEDomain) admitConsumer(root int32) error {
 		return nil
 	}
 	return visit(root, false, false, false, false, false, false)
+}
+
+// A filter above aggregation is HAVING, not a demand predicate on CTE rows.
+// Do not move it or project the payload through a cardinality boundary.
+func (d *localCTEDomain) consumerFilterReadsCTE(id int32) bool {
+	if d.nodes[id] {
+		return true
+	}
+	n := d.builder.qry.Nodes[id]
+	if len(n.Children) != 1 {
+		return false
+	}
+	switch n.NodeType {
+	case plan.Node_PROJECT, plan.Node_FILTER, plan.Node_SORT:
+		return n.Limit == nil && n.Offset == nil && d.consumerFilterReadsCTE(n.Children[0])
+	default:
+		return false
+	}
+}
+
+// A consumer predicate can constrain the producer domain only when it reads
+// exclusively the immediate outer row, is total, and cannot observe CTE data.
+func (d *localCTEDomain) outerOnlyDemand(expr *plan.Expr) *plan.Expr {
+	rowID := d.builder.correlatedScalarOuterRowID(d.outerID, d.ctx)
+	if rowID == nil || !hasCorrCol(expr) {
+		return nil
+	}
+	copy := DeepCopyExpr(expr)
+	valid := true
+	walkLocalCTEExpr(copy, func(e *plan.Expr) {
+		switch x := e.Expr.(type) {
+		case *plan.Expr_Corr:
+			if x.Corr.Depth != 1 || x.Corr.RelPos != rowID.GetCol().RelPos {
+				valid = false
+				return
+			}
+			e.Expr = &plan.Expr_Col{Col: &plan.ColRef{RelPos: x.Corr.RelPos, ColPos: x.Corr.ColPos}}
+		case *plan.Expr_Lit, *plan.Expr_T, *plan.Expr_P, *plan.Expr_F, *plan.Expr_List:
+		default:
+			valid = false
+		}
+	})
+	if !valid || !localCTEGuardedPredicateSafe(copy) {
+		return nil
+	}
+	return copy
 }
 
 func (d *localCTEDomain) collect(id int32) {
@@ -342,6 +432,26 @@ func (d *localCTEDomain) admit() error {
 			})
 			if !valid || containsVolatileFunction(e) {
 				return d.unsupported("producer expression is volatile or references a different query block")
+			}
+		}
+	}
+	// Consumer WHERE must retain its position below potentially throwing
+	// projections, even when a predicate mixes outer columns and CTE values.
+	// Carry those outer columns in the payload rather than pulling WHERE up.
+	for id := range d.consumerFilters {
+		for _, expr := range b.qry.Nodes[id].FilterList {
+			valid := true
+			walkLocalCTEExpr(expr, func(e *plan.Expr) {
+				if corr := e.GetCorr(); corr != nil {
+					if corr.Depth != 1 || corr.RelPos != outerTag {
+						valid = false
+						return
+					}
+					keys[[2]int32{corr.RelPos, corr.ColPos}] = GetColExpr(e.Typ, corr.RelPos, corr.ColPos)
+				}
+			})
+			if !valid {
+				return d.unsupported("consumer WHERE references a different query block")
 			}
 		}
 	}
@@ -537,6 +647,18 @@ func (d *localCTEDomain) cloneDomain() (int32, []*plan.Expr) {
 		return b.appendNode(n, d.ctx)
 	}
 	id := clone(d.outerID)
+	if len(d.demandFilters) > 0 {
+		filters := DeepCopyExprList(d.demandFilters)
+		for _, filter := range filters {
+			walkLocalCTEExpr(filter, func(e *plan.Expr) {
+				if col := e.GetCol(); col != nil && col.RelPos == oldTag {
+					col.RelPos = newTag
+				}
+			})
+		}
+		id = b.appendNode(&plan.Node{NodeType: plan.Node_FILTER, Children: []int32{id},
+			FilterList: filters, FilterIsBarrier: true}, d.ctx)
+	}
 	values := make([]*plan.Expr, len(d.values))
 	for i, value := range d.values {
 		values[i] = GetColExpr(value.Typ, newTag, value.GetCol().ColPos)
@@ -636,6 +758,40 @@ func (d *localCTEDomain) lowerTree(id int32, force bool) (int32, []*plan.Expr) {
 	return id, values
 }
 
+// Forward the domain payload only through transparent consumer projections.
+// WHERE now reads local columns and cannot be pulled above a throwing SELECT
+// expression by generic correlated-predicate decorrelation.
+func (d *localCTEDomain) lowerConsumerFilters(id, root int32, values []*plan.Expr) []*plan.Expr {
+	if id == root {
+		return values
+	}
+	n := d.builder.qry.Nodes[id]
+	if len(n.Children) != 1 {
+		return nil
+	}
+	payload := d.lowerConsumerFilters(n.Children[0], root, values)
+	if len(payload) == 0 {
+		return nil
+	}
+	if d.consumerFilters[id] {
+		for _, expr := range n.FilterList {
+			walkLocalCTEExpr(expr, func(e *plan.Expr) {
+				if corr := e.GetCorr(); corr != nil {
+					*e = *DeepCopyExpr(payload[d.params[[2]int32{corr.RelPos, corr.ColPos}]])
+				}
+			})
+		}
+	}
+	switch n.NodeType {
+	case plan.Node_PROJECT:
+		return d.appendPayload(n, payload)
+	case plan.Node_FILTER, plan.Node_SORT:
+		return payload
+	default:
+		return nil
+	}
+}
+
 func (d *localCTEDomain) equalIdentity(left, right *plan.Expr) *plan.Expr {
 	eq := DeepCopyExpr(d.equality)
 	eq.GetF().Args = []*plan.Expr{DeepCopyExpr(left), DeepCopyExpr(right)}
@@ -684,6 +840,9 @@ func (d *localCTEDomain) lower(root int32) int32 {
 		b.preserveSinkProjection[id] = struct{}{}
 	}
 	id, values := d.lowerTree(root, true)
+	if len(d.consumerFilters) > 0 {
+		d.lowerConsumerFilters(d.consumerRoot, root, values)
+	}
 	outer := DeepCopyExpr(d.values[0])
 	col := outer.GetCol()
 	outer.Expr = &plan.Expr_Corr{Corr: &plan.CorrColRef{RelPos: col.RelPos, ColPos: col.ColPos, Depth: 1}}
