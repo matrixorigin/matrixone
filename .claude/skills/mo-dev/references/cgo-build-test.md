@@ -137,7 +137,8 @@ also hashes supported compiler/SDK/flag override values (including `CC`,
 `CXX`, and GPU environment selectors), so a custom profile cannot alias the
 default profile. It does not fingerprint compiler or SDK installation bytes;
 record exact tool versions separately when attribution or reproducibility
-depends on them.
+depends on them. GPU Pixi lock changes invalidate the common provenance and
+force a full thirdparty rebuild even if compiler paths stay unchanged.
 
 ### Why test rpaths differ from packaged binaries
 
@@ -335,15 +336,15 @@ cannot erase the evidence before comparison.
 
 GPU support compiles the CUDA-backed vector index algorithms (**CAGRA**, **IVF-PQ**) into `libmo` and turns on the `gpu` Go build tag. Linux x86_64 only. The macOS Makefile branch carries no CUDA flags, so macOS builds are CPU-only. Do not try to enable it on Darwin.
 
-Pixi is the only supported GPU build provider. The MO-only profile is locked
-under `optools/gpu`; the combined Sirius build uses Sirius's `mo` profile and
-the same activated prefix for both projects. Neither needs a system CUDA
-toolkit. Building does not require a GPU device; executing GPU workloads still
-requires the NVIDIA host driver and device access.
+GPU builds use the frozen Pixi profile in `optools/gpu/pixi.toml`; system
+CUDA/Conda and a separate GPU toolchain manifest are not providers. CPU-only
+builds do not invoke Pixi. MO GPU-only builds use MO's profile; combined
+MO/Sirius builds use Sirius's `mo` profile for both components. Compilation
+needs no GPU device, but execution needs a compatible NVIDIA host driver.
 
 ```bash
 cd optools/gpu
-pixi run --frozen env MO_CL_CUDA=1 make -C ../.. -j8
+pixi run --frozen make -C ../.. MO_CL_CUDA=1 -j8
 ```
 
 What `MO_CL_CUDA=1` flips:
@@ -351,15 +352,24 @@ What `MO_CL_CUDA=1` flips:
 | Layer | CPU build | GPU build (`MO_CL_CUDA=1`) |
 |-------|-----------|----------------------------|
 | Go build tag | none | `-tags gpu` -- registers CAGRA + IVF-PQ, compiles `*_gpu.go` |
-| `cgo/` compiler | `gcc`/`clang` | `$CONDA_PREFIX/bin/nvcc` |
+| `cgo/` compiler | `gcc`/`clang` | Pixi `bin/nvcc` with Pixi host compiler |
 | `libmo` objects | C objects only | + `cuda/*.o` + `cuvs/*.o` |
 | Runtime sidecar | none | `mocl_kernel64.fatbin` beside `mo-service` |
 | Link flags | `-lusearch_c -lroaring` | + `-lcuvs -lcuvs_c -lcudart -lcuda -lrmm -lstdc++` |
-| Header/lib roots | thirdparties only | + `$CONDA_PREFIX/{include,lib,targets/x86_64-linux/{include,lib}}` |
+| Header/lib roots | thirdparties only | + Pixi `include/lib` and `targets/x86_64-linux/include/lib` |
 
 Guardrails:
 
-- Missing or mismatched `CONDA_PREFIX`: run the GPU command through `pixi run --frozen`; a bare Conda environment is unsupported.
+- Missing Pixi activation or CUDA/cuVS files: use `pixi run --frozen` and
+  verify the locked environment. There is no system CUDA fallback. A shell
+  stays activated after
+  `eval "$(pixi shell-hook --manifest-path optools/gpu/pixi.toml --frozen)"`;
+  plain `make MO_CL_CUDA=1 -j8` then works from the repository root.
+- `gmake[2]: *** internal error: invalid --jobserver-auth string 'fifo:...'`:
+  CMake ran the host `gmake` under Pixi's make 4.4. The Pixi activation sets
+  `CMAKE_GENERATOR=Ninja`; the error means the build ran without it. Do not pass
+  `--jobserver-style=pipe`: ninja ignores a pipe jobserver and schedules
+  outside the outer `-j` budget.
 - `libmo` is re-linked on every GPU build deliberately because `mo-service` loads `libmo.so` dynamically. A stale `.so` silently runs old C++.
 - Use the top-level build owner. It content-binds and atomically stages
   `mocl_kernel64.fatbin` beside `mo-service`; direct `make -C cgo` does not
@@ -372,18 +382,20 @@ The linked `libmo` must itself be GPU-built:
 
 ```bash
 cd optools/gpu
-pixi run --frozen env MO_CL_CUDA=1 make -C ../.. -j8 cgo
+pixi run --frozen make -C ../.. MO_CL_CUDA=1 -j8 cgo
 ```
 
-GPU tests use the CGo wrapper, which sources `cgo/mo-gpu-env`, derives all
-flags from the activated Pixi prefix, and merges the `gpu` build tag with any
-caller-supplied tags. Linux x86_64 only:
+GPU tests need the `gpu` tag and Pixi CUDA search paths. The repository
+wrapper supplies both after validating the native generation. Linux only:
 
 ```bash
-cd optools/gpu
-pixi run --frozen env MO_CL_CUDA=1 ../../.agents/skills/mo-dev/scripts/mo-cgo-test \
+pixi run --frozen env MO_CL_CUDA=1 \
+  ../../.agents/skills/mo-dev/scripts/mo-cgo-test \
   -v -count=1 -timeout=300s ./pkg/vectorindex/ivfpq/...
 ```
+
+The authoritative flag source is the Pixi profile consumed by Make and the
+wrapper. Do not hand-assemble a second CUDA search path.
 
 Tag-split test files are a trap: `*_gpu.go` / `//go:build gpu` tests compile only under `-tags gpu`. A plain `go test ./pkg/vectorindex/ivfpq/...` runs `//go:build !gpu` / `*_cpu.go` stubs instead. CPU tests passing does not test the GPU path.
 
