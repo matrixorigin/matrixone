@@ -3033,6 +3033,110 @@ func jsonToUint64Scalar(bj bytejson.ByteJson) (uint64, bool, bool) {
 	return value, false, ok
 }
 
+// jsonAggToFloat64 applies MySQL's numeric-aggregate coercion of a JSON value.
+// Unlike CAST(json AS DOUBLE), JSON null and composites contribute 0 with a
+// warning instead of SQL NULL / a cast error, booleans become 1/0, and strings
+// keep their numeric prefix under the MySQL string-to-DOUBLE contract.
+func jsonAggToFloat64(bj bytejson.ByteJson, proc *process.Process) (float64, bool) {
+	emit := func(msg string) {
+		if proc == nil {
+			return
+		}
+		if appender, ok := proc.GetWarningSink().(warningDiagnosticAppender); ok {
+			appender.AppendWarningDiagnostic(moerr.WARN_DATA_TRUNCATED, msg)
+		}
+	}
+	switch bj.Type {
+	case bytejson.TpCodeInt64:
+		return float64(bj.GetInt64()), false
+	case bytejson.TpCodeUint64:
+		return float64(bj.GetUint64()), false
+	case bytejson.TpCodeFloat64:
+		return bj.GetFloat64(), false
+	case bytejson.TpCodeDecimal:
+		s := string(bj.GetString())
+		f, err := parseStringToFloat(s, SQLCompatibilityMySQL)
+		if err != nil {
+			emit(fmt.Sprintf("Truncated incorrect DOUBLE value: '%s'", s))
+			return 0, true
+		}
+		return f, false
+	case bytejson.TpCodeString:
+		s := string(bj.GetString())
+		f, err := parseStringToFloat(s, SQLCompatibilityMySQL)
+		if err != nil {
+			emit(fmt.Sprintf("Truncated incorrect DOUBLE value: '%s'", s))
+			return 0, true
+		}
+		appendNumericCoercionWarning(proc, s)
+		return f, false
+	case bytejson.TpCodeLiteral:
+		if len(bj.Data) == 0 {
+			emit("Truncated incorrect DOUBLE value")
+			return 0, true
+		}
+		switch bj.Data[0] {
+		case bytejson.LiteralNull:
+			emit("Truncated incorrect DOUBLE value: 'null'")
+			return 0, true
+		case bytejson.LiteralTrue:
+			return 1, false
+		case bytejson.LiteralFalse:
+			return 0, false
+		default:
+			emit("Truncated incorrect DOUBLE value")
+			return 0, true
+		}
+	case bytejson.TpCodeObject, bytejson.TpCodeArray:
+		emit("Truncated incorrect DOUBLE value")
+		return 0, true
+	default:
+		emit("Truncated incorrect DOUBLE value")
+		return 0, true
+	}
+}
+
+// JsonAggToDouble is the numeric-aggregate JSON conversion boundary.
+func JsonAggToDouble(
+	ivecs []*vector.Vector, result vector.FunctionResultWrapper, proc *process.Process,
+	length int, selectList *FunctionSelectList,
+) error {
+	if len(ivecs) != 1 {
+		return moerr.NewInternalError(proc.Ctx, "json_agg_to_double expects one argument")
+	}
+	if selectList != nil && selectList.IgnoreAllRow() {
+		for i := 0; i < length; i++ {
+			if err := vector.MustFunctionResult[float64](result).Append(0, true); err != nil {
+				return err
+			}
+		}
+		return nil
+	}
+	source := vector.GenerateFunctionStrParameter(ivecs[0])
+	rs := vector.MustFunctionResult[float64](result)
+	evalAll := selectList == nil || selectList.ShouldEvalAllRow()
+	for i := uint64(0); i < uint64(length); i++ {
+		if !evalAll && !selectList.Contains(i) {
+			if err := rs.Append(0, true); err != nil {
+				return err
+			}
+			continue
+		}
+		v, null := source.GetStrValue(i)
+		if null {
+			if err := rs.Append(0, true); err != nil {
+				return err
+			}
+			continue
+		}
+		value, _ := jsonAggToFloat64(types.DecodeJson(v), proc)
+		if err := rs.Append(value, false); err != nil {
+			return err
+		}
+	}
+	return nil
+}
+
 // jsonToNumeric implements JSON -> all numeric types in one loop; append per row via type switch.
 func jsonToNumeric(ctx context.Context, source vector.FunctionParameterWrapper[types.Varlena],
 	result vector.FunctionResultWrapper, length int, toType types.Type) error {
@@ -9500,6 +9604,53 @@ func blobToArray[T types.ArrayElement](
 	return nil
 }
 
+// rejectNonFiniteVectorElems rejects a converted or decoded vector whose float element(s) became
+// NaN or +/-Inf, applying the same finite check the text-to-vector path uses (types'
+// rejectNonFiniteArrayElem). It closes the vector-to-vector CAST narrowing and VEC*_FROM_BASE64
+// decode bypasses (#29084). Integer element targets clamp and can never be non-finite, so they are
+// skipped.
+func rejectNonFiniteVectorElems[T types.ArrayElement](out []T) error {
+	// x-x is 0 for every finite x and NaN for +Inf/-Inf/NaN alike (the metric.CheckFinite* test),
+	// catching NaN and Infinity in one comparison. Each element is tested in its NATIVE precision:
+	// narrowing a float64 to float32 first would turn a legitimately finite value (e.g. 1e300 in a
+	// VECF64) into a false +Inf. float16/bf16 have no native arithmetic, so they widen to float32
+	// (exact, preserving finiteness). Integer targets clamp and can never be non-finite -- skipped.
+	fail := func(d float64) error {
+		return moerr.NewInternalErrorNoCtxf("vector element cannot be NaN or Inf: %v", d)
+	}
+	switch v := any(out).(type) {
+	case []float32:
+		for _, x := range v {
+			if x-x != 0 {
+				return fail(float64(x))
+			}
+		}
+	case []float64:
+		for _, x := range v {
+			if x-x != 0 {
+				return fail(x)
+			}
+		}
+	case []types.Float16:
+		// Widen each element in place rather than materializing a whole []float32
+		// (types.ToFloat32Array allocates 4*dimension bytes per row on batch decode) (#29084).
+		for _, e := range v {
+			x := e.ToFloat32()
+			if x-x != 0 {
+				return fail(float64(x))
+			}
+		}
+	case []types.BF16:
+		for _, e := range v {
+			x := e.ToFloat32()
+			if x-x != 0 {
+				return fail(float64(x))
+			}
+		}
+	}
+	return nil
+}
+
 func arrayToArray[I types.ArrayElement, O types.ArrayElement](
 	_ context.Context,
 	from vector.FunctionParameterWrapper[types.Varlena],
@@ -9551,6 +9702,12 @@ func arrayToArray[I types.ArrayElement, O types.ArrayElement](
 			_v := types.BytesToArray[I](v)
 			f32 := types.ToFloat32Array[I](_v)
 			out := types.FromFloat32Array[O](f32)
+			// A finite source can narrow to +/-Inf (e.g. VECF64 1e300 -> VECF32, or a VECF32 that
+			// overflows VECF16/VECBF16). Reject it here so the narrowing CAST enforces the same
+			// finite bound as the text cast and direct insert, instead of persisting Infinity (#29084).
+			if err := rejectNonFiniteVectorElems(out); err != nil {
+				return err
+			}
 			bytes := types.ArrayToBytes[O](out)
 			if err := to.AppendBytes(bytes, false); err != nil {
 				return err
