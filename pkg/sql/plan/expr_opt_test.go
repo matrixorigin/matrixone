@@ -190,14 +190,21 @@ func TestLeadingCompositeRangeReachableFromSQL(t *testing.T) {
 	table := makeExprOptCompositeClusterKeyTableDef()
 	table.Name = "range_probe"
 	table.TblId = 29507
+	for i, col := range table.Cols {
+		col.Seqnum = uint32(i + 1)
+	}
 	ctx.tables[table.Name] = table
 	ctx.objects[table.Name] = &planpb.ObjectRef{Obj: int64(table.TblId), ObjName: table.Name, SchemaName: "tpch"}
-	for _, sql := range []string{
-		"select a from range_probe where a >= 10 and a < 20",
-		"select a from range_probe where a > 10",
+	for _, tc := range []struct {
+		sql      string
+		readCols []string
+	}{
+		{"select a from range_probe where a >= 10 and a < 20", []string{"a"}},
+		{"select a from range_probe where a > 10", []string{"a"}},
+		{"select b from range_probe where a > 10", []string{"a", "b"}},
 	} {
-		t.Run(sql, func(t *testing.T) {
-			stmt, err := mysql.ParseOne(ctx.GetContext(), sql, 1)
+		t.Run(tc.sql, func(t *testing.T) {
+			stmt, err := mysql.ParseOne(ctx.GetContext(), tc.sql, 1)
 			require.NoError(t, err)
 			built, err := BuildPlan(ctx, stmt, false)
 			require.NoError(t, err)
@@ -209,10 +216,67 @@ func TestLeadingCompositeRangeReachableFromSQL(t *testing.T) {
 				found = true
 				require.NotEmpty(t, node.FilterList)
 				requireFuncNames(t, node.BlockFilterList, "prefix_in_range")
+				readCols := make([]string, len(node.TableDef.Cols))
+				for i, col := range node.TableDef.Cols {
+					readCols[i] = col.Name
+				}
+				require.Equal(t, tc.readCols, readCols, "block-only composite key must not become a reader attribute")
+				blockKey := node.BlockFilterList[0].GetF().Args[0].GetCol()
+				require.Equal(t, table.Name+"."+table.ClusterBy.Name, blockKey.Name)
+				require.GreaterOrEqual(t, blockKey.ColPos, int32(len(readCols)))
+				columnMap := make(map[int]int)
+				blockFilters := node.BlockFilterList
+				if len(readCols) == 2 {
+					// Runtime filters use compact row positions in this same map.
+					rowCol := makeExprOptInt64Col(0, 1, table.Name+".b")
+					blockFilters = append([]*planpb.Expr{rowCol}, blockFilters...)
+				}
+				GetColumnMapByExprs(blockFilters, table, columnMap)
+				require.Equal(t, int(table.Cols[table.Name2ColIndex[table.ClusterBy.Name]].Seqnum), columnMap[int(blockKey.ColPos)])
+				if len(readCols) == 2 {
+					require.Equal(t, int(table.Cols[table.Name2ColIndex["b"]].Seqnum), columnMap[1])
+				}
 			}
 			require.True(t, found)
 		})
 	}
+}
+
+func TestCompositePartBlockFilterDoesNotReadRewrittenPart(t *testing.T) {
+	ctx := NewMockCompilerContext(true)
+	table := makeExprOptCompositeClusterKeyTableDef()
+	table.Name = "part_probe"
+	table.TblId = 29508
+	ctx.tables[table.Name] = table
+	ctx.objects[table.Name] = &planpb.ObjectRef{Obj: int64(table.TblId), ObjName: table.Name, SchemaName: "tpch"}
+	stmt, err := mysql.ParseOne(ctx.GetContext(), "select a from part_probe where a = 10 and b = 20", 1)
+	require.NoError(t, err)
+	built, err := BuildPlan(ctx, stmt, false)
+	require.NoError(t, err)
+	for _, node := range built.GetQuery().Nodes {
+		if node.NodeType != planpb.Node_TABLE_SCAN || node.TableDef.Name != table.Name {
+			continue
+		}
+		readCols := make([]string, len(node.TableDef.Cols))
+		for i, col := range node.TableDef.Cols {
+			readCols[i] = col.Name
+		}
+		require.NotContains(t, readCols, "b")
+		require.Contains(t, readCols, table.ClusterBy.Name, "row predicate still needs the compound key")
+		require.NotEmpty(t, node.BlockFilterList)
+		partFilter := false
+		for _, filter := range node.BlockFilterList {
+			for _, arg := range filter.GetF().Args {
+				if col := arg.GetCol(); col != nil && col.Name == table.Name+".b" {
+					partFilter = true
+					require.GreaterOrEqual(t, col.ColPos, int32(len(readCols)))
+				}
+			}
+		}
+		require.True(t, partFilter, "the omitted part must still contribute a metadata filter")
+		return
+	}
+	t.Fatal("table scan not found")
 }
 
 func TestDoMergeFiltersOnCompositeKeySupportsFoldedInVector(t *testing.T) {
