@@ -17,6 +17,7 @@ package bytejson
 import (
 	"bytes"
 	"encoding/base64"
+	"encoding/binary"
 	"encoding/json"
 	"errors"
 	"fmt"
@@ -385,15 +386,109 @@ const (
 // must pass the minimum protocol version supported by every executing CN;
 // older readers compare tagged and legacy payloads differently.
 func NewMySQLOpaque(protocolVersion int64, fieldType uint8, payload []byte) (ByteJson, error) {
+	data, err := AppendMySQLOpaque(nil, protocolVersion, fieldType, payload)
+	if err != nil {
+		return ByteJson{}, err
+	}
+	return ByteJson{Type: TpCodeBlob, Data: data[1:]}, nil
+}
+
+// MySQLOpaqueValueSize returns the exact number of bytes used by one tagged
+// MySQL opaque scalar in binary JSON, including its type byte and string
+// envelope. It shares the same base64/tag contract as AppendMySQLOpaque while
+// avoiding construction of the encoded value.
+func MySQLOpaqueValueSize(protocolVersion int64, fieldType uint8, payloadLen int) (int, error) {
 	if protocolVersion < MySQLOpaqueProtocolVersion {
-		return ByteJson{}, moerr.NewNotSupportedNoCtxf(
+		return 0, moerr.NewNotSupportedNoCtxf(
 			"MySQL binary JSON type tags require MORPC protocol version %d",
 			MySQLOpaqueProtocolVersion)
 	}
-	return ByteJson{
-		Type: TpCodeBlob,
-		Data: appendBinaryString(nil, mysqlOpaqueText(fieldType, payload)),
-	}, nil
+	encodedLen, err := mysqlOpaqueEncodedLen(payloadLen)
+	if err != nil {
+		return 0, err
+	}
+	textLen := len(mysqlOpaquePrefix) + mysqlOpaqueFieldTypeDigits(fieldType) + 1
+	if textLen > math.MaxInt-encodedLen {
+		return 0, moerr.NewInvalidInputNoCtx("MySQL opaque JSON value is too large")
+	}
+	textLen += encodedLen
+	lengthBytes := mysqlOpaqueUvarintSize(uint64(textLen))
+	if textLen > math.MaxInt-lengthBytes-1 {
+		return 0, moerr.NewInvalidInputNoCtx("MySQL opaque JSON value is too large")
+	}
+	return 1 + lengthBytes + textLen, nil
+}
+
+// AppendMySQLOpaque appends one canonical MySQL opaque scalar to dst. The
+// destination is grown directly for the final envelope so callers that have
+// preflighted an allocation account do not create a second encoded payload.
+func AppendMySQLOpaque(
+	dst []byte,
+	protocolVersion int64,
+	fieldType uint8,
+	payload []byte,
+) ([]byte, error) {
+	valueSize, err := MySQLOpaqueValueSize(protocolVersion, fieldType, len(payload))
+	if err != nil {
+		return dst, err
+	}
+	encodedLen, err := mysqlOpaqueEncodedLen(len(payload))
+	if err != nil {
+		return dst, err
+	}
+	textLen := len(mysqlOpaquePrefix) + mysqlOpaqueFieldTypeDigits(fieldType) + 1 + encodedLen
+	lengthBytes := mysqlOpaqueUvarintSize(uint64(textLen))
+	if valueSize != 1+lengthBytes+textLen {
+		return dst, moerr.NewInvalidInputNoCtx("MySQL opaque JSON value size mismatch")
+	}
+	oldLen := len(dst)
+	if valueSize > math.MaxInt-oldLen {
+		return dst, moerr.NewInvalidInputNoCtx("MySQL opaque JSON value is too large")
+	}
+	dst = slices.Grow(dst, valueSize)
+	dst = dst[:oldLen+valueSize]
+	pos := oldLen
+	dst[pos] = byte(TpCodeBlob)
+	pos++
+	var scratch [binary.MaxVarintLen64]byte
+	n := binary.PutUvarint(scratch[:], uint64(textLen))
+	copy(dst[pos:], scratch[:n])
+	pos += n
+	copy(dst[pos:], mysqlOpaquePrefix)
+	pos += len(mysqlOpaquePrefix)
+	n = copy(dst[pos:], strconv.AppendUint(scratch[:0], uint64(fieldType), 10))
+	pos += n
+	dst[pos] = ':'
+	pos++
+	base64.StdEncoding.Encode(dst[pos:pos+encodedLen], payload)
+	return dst, nil
+}
+
+func mysqlOpaqueFieldTypeDigits(fieldType uint8) int {
+	switch {
+	case fieldType >= 100:
+		return 3
+	case fieldType >= 10:
+		return 2
+	default:
+		return 1
+	}
+}
+
+func mysqlOpaqueEncodedLen(payloadLen int) (int, error) {
+	if payloadLen < 0 || payloadLen > math.MaxInt-2 {
+		return 0, moerr.NewInvalidInputNoCtx("MySQL opaque JSON value is too large")
+	}
+	groups := (payloadLen + 2) / 3
+	if groups > math.MaxInt/4 {
+		return 0, moerr.NewInvalidInputNoCtx("MySQL opaque JSON value is too large")
+	}
+	return groups * 4, nil
+}
+
+func mysqlOpaqueUvarintSize(value uint64) int {
+	var scratch [binary.MaxVarintLen64]byte
+	return binary.PutUvarint(scratch[:], value)
 }
 
 func mysqlOpaqueText(fieldType uint8, payload []byte) string {

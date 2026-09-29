@@ -246,10 +246,6 @@ var supportedAggInNewFramework = []FuncNew{
 			if inputs[0].Oid == types.T_any {
 				return newCheckResultWithCast(0, []types.Type{types.T_text.ToType()})
 			}
-			switch inputs[0].Oid {
-			case types.T_binary, types.T_varbinary, types.T_blob:
-				return newCheckResultWithFailure(failedAggParametersWrong)
-			}
 			return newCheckResultWithSuccess(0)
 		},
 		Overloads: []overload{
@@ -282,10 +278,6 @@ var supportedAggInNewFramework = []FuncNew{
 				// conventional numeric-key compatibility set.
 				key = types.T_varchar.ToType()
 			case !key.Oid.IsMySQLString():
-				return newCheckResultWithFailure(failedAggParametersWrong)
-			}
-			switch val.Oid {
-			case types.T_binary, types.T_varbinary, types.T_blob:
 				return newCheckResultWithFailure(failedAggParametersWrong)
 			}
 			return newCheckResultWithCast(0, []types.Type{key, val})

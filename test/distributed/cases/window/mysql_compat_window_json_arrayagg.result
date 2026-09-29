@@ -90,4 +90,37 @@ select json_arrayagg, json_objectagg from t_ident;
 ➤ json_arrayagg[4,32,0]  ¦  json_objectagg[4,32,0]  𝄀
 1  ¦  2
 drop table t_ident;
+create table opaque_orders (
+id int primary key,
+customer_id int,
+bit_value bit(8),
+binary_value binary(3),
+varbinary_value varbinary(3),
+blob_value blob
+);
+insert into opaque_orders values
+(1,10,b'10101010',X'00FF41',X'00FF41',X'00'),
+(2,10,NULL,NULL,UNHEX(''),NULL),
+(3,10,b'00000111',X'000102',X'000102',X'80');
+select id,
+json_arrayagg(bit_value) over (partition by customer_id order by id) bit_array,
+json_arrayagg(binary_value) over (partition by customer_id order by id) binary_array,
+json_arrayagg(varbinary_value) over (partition by customer_id order by id) varbinary_array,
+json_arrayagg(blob_value) over (partition by customer_id order by id) blob_array
+from opaque_orders order by id;
+➤ id[4,32,0]  ¦  bit_array[-1,2147483647,0]  ¦  binary_array[-1,2147483647,0]  ¦  varbinary_array[-1,2147483647,0]  ¦  blob_array[-1,2147483647,0]  𝄀
+1  ¦  ["base64:type16:qg=="]  ¦  ["base64:type254:AP9B"]  ¦  ["base64:type15:AP9B"]  ¦  ["base64:type252:AA=="]  𝄀
+2  ¦  ["base64:type16:qg==", null]  ¦  ["base64:type254:AP9B", null]  ¦  ["base64:type15:AP9B", "base64:type15:"]  ¦  ["base64:type252:AA==", null]  𝄀
+3  ¦  ["base64:type16:qg==", null, "base64:type16:Bw=="]  ¦  ["base64:type254:AP9B", null, "base64:type254:AAEC"]  ¦  ["base64:type15:AP9B", "base64:type15:", "base64:type15:AAEC"]  ¦  ["base64:type252:AA==", null, "base64:type252:gA=="]
+select id,
+json_objectagg(id, bit_value) over (partition by customer_id order by id) bit_object,
+json_objectagg(id, binary_value) over (partition by customer_id order by id) binary_object,
+json_objectagg(id, varbinary_value) over (partition by customer_id order by id) varbinary_object,
+json_objectagg(id, blob_value) over (partition by customer_id order by id) blob_object
+from opaque_orders order by id;
+➤ id[4,32,0]  ¦  bit_object[-1,2147483647,0]  ¦  binary_object[-1,2147483647,0]  ¦  varbinary_object[-1,2147483647,0]  ¦  blob_object[-1,2147483647,0]  𝄀
+1  ¦  {"1": "base64:type16:qg=="}  ¦  {"1": "base64:type254:AP9B"}  ¦  {"1": "base64:type15:AP9B"}  ¦  {"1": "base64:type252:AA=="}  𝄀
+2  ¦  {"1": "base64:type16:qg==", "2": null}  ¦  {"1": "base64:type254:AP9B", "2": null}  ¦  {"1": "base64:type15:AP9B", "2": "base64:type15:"}  ¦  {"1": "base64:type252:AA==", "2": null}  𝄀
+3  ¦  {"1": "base64:type16:qg==", "2": null, "3": "base64:type16:Bw=="}  ¦  {"1": "base64:type254:AP9B", "2": null, "3": "base64:type254:AAEC"}  ¦  {"1": "base64:type15:AP9B", "2": "base64:type15:", "3": "base64:type15:AAEC"}  ¦  {"1": "base64:type252:AA==", "2": null, "3": "base64:type252:gA=="}
+drop table opaque_orders;
 drop database mysql_compat_window_json_arrayagg;
