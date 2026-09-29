@@ -845,7 +845,7 @@ func preparedCommonValueFixedDecimalPeer[P any](name string, args []*plan.Expr, 
 			continue
 		}
 		if fn := source.GetF(); fn != nil && fn.Func != nil &&
-			preparedCommonValueFixedDecimalPeer(fn.Func.GetObjName(), fn.Args, positions, paramValues) {
+			preparedFixedDecimalNumericSource(source, positions, paramValues) {
 			hasDecimalPeer = true
 			hasConcretePeer = true
 			continue
@@ -869,6 +869,46 @@ func preparedCommonValueFixedDecimalPeer[P any](name string, args []*plan.Expr, 
 				preparedExprHasFixedDecimalSource(source))
 	}
 	return hasParam && hasDecimalPeer
+}
+
+func preparedFixedDecimalNumericSource[P any](expr *plan.Expr, positions map[int]P, paramValues []any) bool {
+	source := unwrapPreparedImplicitCast(expr, false)
+	for source != nil && source.GetPreparedNumeric().GetProvisionalResultCast() {
+		cast := source.GetF()
+		if cast == nil || cast.Func == nil || cast.Func.GetObjName() != "cast" ||
+			len(cast.Args) == 0 || cast.GetSyntaxExplicitCast() {
+			break
+		}
+		source = cast.Args[0]
+	}
+	if source == nil {
+		return false
+	}
+	if isExplicitPreparedCast(source) {
+		return types.T(source.Typ.Id).IsDecimal()
+	}
+	if fn := source.GetF(); fn != nil && fn.Func != nil {
+		name := strings.ToLower(fn.Func.GetObjName())
+		if preparedCommonValueFixedDecimalPeer(name, fn.Args, positions, paramValues) {
+			return true
+		}
+		// Follow only functions that preserve a DECIMAL value domain.
+		if preparedFixedDecimalNumericFunction(name) {
+			return len(fn.Args) > 0 && preparedFixedDecimalNumericSource(fn.Args[0], positions, paramValues)
+		}
+		return false
+	}
+	oid := types.T(source.Typ.Id)
+	return oid.IsDecimal() && (!preparedExprContainsParam(expr) || isExplicitPreparedCast(source))
+}
+
+func preparedFixedDecimalNumericFunction(name string) bool {
+	switch strings.ToLower(name) {
+	case "abs", "ceil", "ceiling", "floor", "round", "truncate":
+		return true
+	default:
+		return false
+	}
 }
 
 // Child calls may acquire their exact result type only after execute-time
@@ -1639,6 +1679,7 @@ const (
 	preparedStringMathRoleNone preparedStringMathRole = iota
 	preparedStringMathRoleValue
 	preparedStringMathRoleControl
+	preparedStringMathRoleFixedDecimal
 )
 
 // preparedNumericFunctionArgRole describes whether a parent function proves
@@ -1674,6 +1715,9 @@ func preparedNumericFunctionArgRole(
 	}
 	if isPreparedStringMathFunction(name) {
 		if preparedStringMathFunctionValueArg(name, argIndex, argCount) {
+			if inherited == preparedStringMathRoleFixedDecimal {
+				return inherited, true
+			}
 			return preparedStringMathRoleValue, true
 		}
 		return preparedStringMathRoleControl, true
@@ -1743,6 +1787,21 @@ func (rule *ResetParamRefRule) rebindPreparedNumericExprWithRole(
 			// already materialized text/INT64 cast rather than borrowing a source
 			// created for another occurrence of the same parameter position.
 			return bound, false, nil
+		}
+		if role == preparedStringMathRoleFixedDecimal && param.Pos >= 0 {
+			position := int(param.Pos)
+			if rule.numericPrefixParamPositions[position] && position < len(rule.params) &&
+				rule.params[position] != nil {
+				kind := rule.numericPrefixParamKinds[position]
+				prefix, changed, err := rule.preparedNumericPrefixCast(
+					DeepCopyExpr(rule.params[position]), kind)
+				if err != nil {
+					return nil, false, err
+				}
+				if changed {
+					return prefix, true, nil
+				}
+			}
 		}
 		// A parameter nested below a string-math function has a dedicated
 		// permissive DOUBLE source prepared by replaceParamValsWithSelection.
@@ -3583,12 +3642,14 @@ func (rule *ResetParamRefRule) applyExpr(e *plan.Expr) (*plan.Expr, error) {
 				numericPrefixArgs[i] = false
 				rule.specialized = true
 			} else if useSQLExecuteControlSource {
-				// CEIL/FLOOR precision historically uses native integer argument
-				// conversion for numeric sources (DECIMAL half-up, FLOAT ties-even),
-				// while text still follows the ordinary strict INT64 cast below.
+				// Rebuild the ordinary INT64 cast from the current native source;
+				// evaluating the PREPARE-time TEXT cast would use stale input, while
+				// the private integer-argument cast has different FLOAT tie rounding.
 				if target, native := planfunction.IntegerArgumentNativeOrdinaryCastTarget(
 					functionName, i, types.T(sqlExecuteNumericSource.Typ.Id)); native {
-					rewrittenArg, err = appendIntegerArgument(rule.ctx, DeepCopyExpr(sqlExecuteNumericSource), target, false)
+					targetType := target.ToType()
+					rewrittenArg, err = makePlan2CastExpr(
+						rule.ctx, DeepCopyExpr(sqlExecuteNumericSource), makePlan2Type(&targetType))
 					if err != nil {
 						return nil, err
 					}
@@ -3925,8 +3986,19 @@ func (rule *ResetParamRefRule) applyExpr(e *plan.Expr) (*plan.Expr, error) {
 					continue
 				}
 				source := unwrapPreparedImplicitCast(boundArgs[i], false)
+				if source == boundArgs[i] {
+					bound := boundArgs[i].GetF()
+					if bound != nil && bound.Func != nil && bound.Func.GetObjName() == "cast" &&
+						!bound.GetSyntaxExplicitCast() && len(bound.Args) > 0 {
+						_, overload := planfunction.DecodeOverloadID(bound.Func.GetObj())
+						if overload == 2 && preparedFixedDecimalNumericFunction(functionName) &&
+							types.T(bound.Args[0].Typ.Id).IsDecimal() {
+							source = bound.Args[0]
+						}
+					}
+				}
 				if source == nil || source == boundArgs[i] || !types.T(source.Typ.Id).IsDecimal() ||
-					reflect.DeepEqual(cast.Args[0].Typ, source.Typ) || reflect.DeepEqual(boundArgs[i].Typ, source.Typ) {
+					reflect.DeepEqual(boundArgs[i].Typ, source.Typ) {
 					continue
 				}
 				// This cast selected an overload against the PREPARE-time child.
@@ -4039,12 +4111,22 @@ func (rule *ResetParamRefRule) applyExpr(e *plan.Expr) (*plan.Expr, error) {
 			compareArgTypes = true
 		}
 
+		fixedDecimalDeferredSource := isDeferredNumeric && hasPreparedDeferredNumericValue &&
+			preparedFixedDecimalNumericSource(
+				originalDeferredNumericArg, rule.numericPrefixParamPositions, rule.paramValues)
+		if fixedDecimalDeferredSource {
+			// Rebind ABS/ROUND from the exact DECIMAL child. The generic numeric
+			// fallback would otherwise replace its fixed common-value domain with
+			// the approximate SQL string-math source.
+			needResetFunction = true
+			compareArgTypes = true
+		}
 		if isDeferredNumeric && hasPreparedDeferredNumericValue {
 			// A flattened scalar subquery leaves the ABS/SIGN argument as a column
 			// reference.  Its inner projection has already been rebound above;
 			// refresh the reference type and rebind the function, but keep the reference so
 			// empty/multi-row scalar-subquery semantics remain intact.
-			if originalDeferredNumericArg.GetPreparedNumeric().GetFallbackSource() {
+			if !fixedDecimalDeferredSource && originalDeferredNumericArg.GetPreparedNumeric().GetFallbackSource() {
 				refreshed, changed, refreshErr := rule.refreshPreparedNumericSource(boundArgs[0])
 				if refreshErr != nil {
 					return nil, refreshErr
@@ -4072,7 +4154,9 @@ func (rule *ResetParamRefRule) applyExpr(e *plan.Expr) (*plan.Expr, error) {
 			positions := preparedNumericValueParamPositions(originalDeferredNumericArg)
 			if sourceOK && len(positions) > 0 {
 				sourceRole := preparedStringMathRoleNone
-				if preparedStringMathFunctionValueArg(functionName, 0, len(exprImpl.F.Args)) {
+				if fixedDecimalDeferredSource {
+					sourceRole = preparedStringMathRoleFixedDecimal
+				} else if preparedStringMathFunctionValueArg(functionName, 0, len(exprImpl.F.Args)) {
 					// This fallback source is already the outer function's argument,
 					// so recursive rebinding cannot infer the parent value role. ABS
 					// and SIGN must still consume the SQL-mode-aware string source;
