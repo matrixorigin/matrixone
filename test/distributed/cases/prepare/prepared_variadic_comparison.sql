@@ -21,14 +21,21 @@ SET @n = 2.0;
 EXECUTE p_numeric_peer USING @n, @n;
 DEALLOCATE PREPARE p_numeric_peer;
 
-SELECT FIELD(2.0, 1, 2, 'x', NULL);
+SET @prepared_variadic_saved_sql_mode = @@session.sql_mode;
+SELECT FIELD(2.0, 1, 2, '2', NULL);
 PREPARE p_field FROM 'SELECT FIELD(?, ?, ?, ?, ?)';
-SET @needle = 2.0, @first = 1, @second = 2, @text = 'x', @nil = NULL;
+SET @needle = 2.0, @first = 1, @second = 2, @text = '2', @nil = NULL;
+EXECUTE p_field USING @needle, @first, @second, @text, @nil;
+SET @text = 'x';
+SET SESSION sql_mode = CONCAT_WS(',', NULLIF(@prepared_variadic_saved_sql_mode, ''), 'MYSQL_NUMERIC_COMPATIBILITY');
+SELECT FIELD(2.0, 1, 2, 'x', NULL);
 EXECUTE p_field USING @needle, @first, @second, @text, @nil;
 SET @needle = 1.0;
 EXECUTE p_field USING @needle, @first, @second, @text, @nil;
 SET @needle = 2.0;
 EXECUTE p_field USING @needle, @first, @second, @text, @nil;
+SET SESSION sql_mode = @prepared_variadic_saved_sql_mode;
+SET @prepared_variadic_saved_sql_mode = NULL;
 DEALLOCATE PREPARE p_field;
 
 -- A fixed DECIMAL candidate must keep its exact source type after PREPARE (#29378).
