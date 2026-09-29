@@ -27,3 +27,7 @@ libcuvs = "==26.08.01"
 libraft = "26.08.*"
 librmm = "26.08.*"
 nccl = ">=2.19"
+
+# CMake builds with this environment's ninja; the environment has no gmake.
+[activation.env]
+CMAKE_GENERATOR = "Ninja"
