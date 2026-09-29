@@ -296,7 +296,12 @@ func informationSchemaCurrentColumnsDDL() string {
 	userView := "mt.relkind = 'v' AND mt.reldatabase NOT IN ('mo_catalog','information_schema','mysql','system','system_metrics','mo_task','mo_debug')"
 	// Restrict the left side of APPLY before describing publisher Views. A
 	// post-APPLY WHERE cannot prevent invisible Views from consuming budget.
-	prefix += ", __mo_visible_subscription_views AS (SELECT mt.* FROM mo_subscription_tables() mt WHERE mt.relkind = 'v' AND (" +
+	// Keep this projection explicit: CREATE VIEW freezes projection stars and
+	// reformats the entire definition. Upgrade readiness compares the persisted
+	// SQL with this template exactly, so a star would make every retry rebuild it.
+	prefix += ", __mo_visible_subscription_views AS (SELECT mt.account_id, mt.rel_id, mt.relname, " +
+		"mt.reldatabase, mt.relkind, mt.rel_createsql, mt.extra_info, mt.publisher_account_id " +
+		"FROM mo_subscription_tables() mt WHERE mt.relkind = 'v' AND (" +
 		informationSchemaSubscriptionViewAuthorizationPredicate() + ")) "
 	return prefix + local + " AND NOT (" + userView + ") UNION ALL " +
 		viewRows + " AND (" + userView + ") UNION ALL " + branches[1] +

@@ -3699,6 +3699,10 @@ func (b *baseBinder) bindPreparedNumericFuncExpr(
 	if err != nil {
 		return nil, err
 	}
+	args, err = b.coerceJSONNumericAggregateArg(name, args)
+	if err != nil {
+		return nil, err
+	}
 	return bindBoundFuncExprAndConstFoldWithObserver(
 		b.GetContext(), b.builder.compCtx.GetProcess(), name, args,
 		b.observePersistedExpressionProtocol,
@@ -3815,6 +3819,32 @@ func (b *baseBinder) coerceBoolNumericAggregateArg(
 		return nil, err
 	}
 	return []*plan.Expr{casted}, nil
+}
+
+// coerceJSONNumericAggregateArg routes JSON operands of the six numeric
+// aggregates through json_agg_to_double so MySQL warning conversion applies
+// (booleans 1/0, numeric-prefix strings, JSON null/composites as 0 with a
+// warning). Explicit CAST(json AS DOUBLE) keeps the strict JSON-to-DOUBLE
+// contract and is not rewritten here.
+func (b *baseBinder) coerceJSONNumericAggregateArg(
+	name string, args []*plan.Expr,
+) ([]*plan.Expr, error) {
+	if len(args) != 1 || args[0] == nil {
+		return args, nil
+	}
+	switch strings.ToLower(name) {
+	case "sum", "avg", "var_pop", "var_samp", "stddev_pop", "stddev_samp", "variance", "std", "stddev":
+	default:
+		return args, nil
+	}
+	if args[0].Typ.Id != int32(types.T_json) {
+		return args, nil
+	}
+	converted, err := BindFuncExprImplByPlanExpr(b.GetContext(), "json_agg_to_double", []*plan.Expr{args[0]})
+	if err != nil {
+		return nil, err
+	}
+	return []*plan.Expr{converted}, nil
 }
 
 func (b *baseBinder) bindFuncExprImplByAstExpr(name string, astArgs []tree.Expr, depth int32) (*plan.Expr, error) {
@@ -4144,6 +4174,10 @@ func (b *baseBinder) bindFuncExprImplByAstExpr(name string, astArgs []tree.Expr,
 		b.markPreparedStringDomainSubquerySources(name, args)
 	}
 	args, coerceErr := b.coerceBoolNumericAggregateArg(name, args)
+	if coerceErr != nil {
+		return nil, coerceErr
+	}
+	args, coerceErr = b.coerceJSONNumericAggregateArg(name, args)
 	if coerceErr != nil {
 		return nil, coerceErr
 	}
@@ -7841,6 +7875,11 @@ func possibleStringDomainsForExpr(expr *plan.Expr) uint8 {
 	}
 	name := strings.ToLower(fn.Func.GetObjName())
 	if name == "cast" {
+		// A numeric (or other non-string) result cannot carry a string-domain
+		// witness, even when an implicit cast's input has a string origin.
+		if staticDomains == 0 {
+			return 0
+		}
 		if fn.GetSyntaxExplicitCast() {
 			return staticDomains
 		}
@@ -10000,6 +10039,12 @@ func appendCastBeforeExprWithOverload(
 		return expr, nil
 	}
 	toType.NotNullable = expr.Typ.NotNullable
+	// JSON literal null is a SQL NULL when converted to a numeric type, even
+	// when the source JSON column is declared NOT NULL. Keep that runtime
+	// contract in the plan so DISTINCT aggregate rewrites retain the null key.
+	if types.T(expr.Typ.Id) == types.T_json && makeTypeByPlan2Type(toType).IsNumeric() {
+		toType.NotNullable = false
+	}
 	argsType := []types.Type{
 		makeTypeByPlan2Expr(expr),
 		makeTypeByPlan2Type(toType),

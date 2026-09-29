@@ -1,0 +1,49 @@
+drop database if exists rename_transaction;
+create database rename_transaction;
+use rename_transaction;
+create table markers(id int primary key);
+create table nc_workflow_executions(id int);
+begin;
+insert into markers values(1);
+rename table nc_workflow_executions to nc_automation_executions;
+rollback;
+select * from markers order by id;
+id
+1
+show tables;
+Tables_in_rename_transaction
+markers
+nc_automation_executions
+begin;
+insert into markers values(2);
+prepare r from 'rename table nc_automation_executions to renamed';
+execute r;
+rollback;
+deallocate prepare r;
+select * from markers order by id;
+id
+1
+2
+show tables;
+Tables_in_rename_transaction
+markers
+renamed
+set autocommit=0;
+insert into markers values(3);
+rename table renamed to intermediate, intermediate to final_name;
+insert into markers values(4);
+rollback;
+select * from markers order by id;
+id
+1
+2
+3
+select @@autocommit;
+@@autocommit
+0
+show tables;
+Tables_in_rename_transaction
+final_name
+markers
+set autocommit=1;
+drop database rename_transaction;

@@ -380,7 +380,10 @@ func TestInformationSchemaSubscriptionMetadataDDL(t *testing.T) {
 	assert.NotContains(t, InformationSchemaTablesV41DDL, "mo_subscription_tables()")
 	assert.Equal(t, 1, strings.Count(InformationSchemaTablesV41DDL, "internal_auto_increment("))
 	assert.Contains(t, InformationSchemaColumnsDDL,
-		"__mo_visible_subscription_views AS (SELECT mt.* FROM mo_subscription_tables() mt WHERE mt.relkind = 'v' AND (")
+		"__mo_visible_subscription_views AS (SELECT mt.account_id, mt.rel_id, mt.relname, "+
+			"mt.reldatabase, mt.relkind, mt.rel_createsql, mt.extra_info, mt.publisher_account_id "+
+			"FROM mo_subscription_tables() mt WHERE mt.relkind = 'v' AND (")
+	assert.NotContains(t, InformationSchemaColumnsDDL, "mt.*", "migration must persist its exact readiness template")
 	assert.Contains(t, InformationSchemaColumnsDDL, "from __mo_visible_subscription_views mt cross apply "+
 		"mo_subscription_view_columns(mt.publisher_account_id, mt.rel_id)")
 	assert.Contains(t, InformationSchemaColumnsDDL, "mt.owner IN (SELECT role_id FROM __mo_active_roles)")

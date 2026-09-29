@@ -6128,7 +6128,7 @@ func doComQuery(ses *Session, execCtx *ExecCtx, input *UserInput) (retErr error)
 		// binary PREPARE metadata captured before doComQuery.
 		execCtx.beginStatementGeneration(currentInput)
 		// Keep the transaction origin available to compile-time lineage admission.
-		// TRUNCATE commits the old transaction before its plan is built, so the
+		// Implicit-commit DDL commits the old transaction before planning, so the
 		// fresh transaction alone cannot tell whether the client was already in an
 		// explicit transaction.  Reset the marker for every statement generation;
 		// otherwise a later statement in the same request could inherit it.
@@ -6218,7 +6218,7 @@ func doComQuery(ses *Session, execCtx *ExecCtx, input *UserInput) (retErr error)
 		}
 		// Commit only after the current statement has passed local admission and
 		// has a current statement identity. Authorization and plan construction
-		// still run after this boundary, matching TRUNCATE's implicit-commit
+		// still run after this boundary, matching the DDL implicit-commit
 		// contract while keeping instrumentation failures side-effect free.
 		if execCtx.implicitCommitBefore {
 			if err = ses.GetTxnHandler().commitBeforeStatement(execCtx); err != nil {
