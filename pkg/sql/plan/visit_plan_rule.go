@@ -3700,7 +3700,7 @@ func (rule *ResetParamRefRule) applyExpr(e *plan.Expr) (*plan.Expr, error) {
 				}
 				if changed {
 					reboundArgs := []*Expr{refreshed}
-					if functionName == "elt" {
+					if len(boundArgs) > 1 {
 						reboundArgs = append([]*Expr(nil), boundArgs...)
 						reboundArgs[0] = refreshed
 					}
@@ -3727,7 +3727,7 @@ func (rule *ResetParamRefRule) applyExpr(e *plan.Expr) (*plan.Expr, error) {
 				}
 				if changed {
 					reboundArgs := []*Expr{rebound}
-					if functionName == "elt" {
+					if len(boundArgs) > 1 {
 						reboundArgs = append([]*Expr(nil), boundArgs...)
 						reboundArgs[0] = rebound
 					}
