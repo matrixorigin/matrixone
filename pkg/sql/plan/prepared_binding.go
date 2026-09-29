@@ -17,6 +17,7 @@ package plan
 import (
 	"context"
 	"fmt"
+	"strconv"
 	"strings"
 
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
@@ -86,6 +87,7 @@ type preparedSourceBindingState struct {
 	bindings             []PreparedSourceBinding
 	values               []any
 	valueDependent       bool
+	selectStatement      bool
 	diagnosticCandidates []*Expr
 	diagnosticFree       bool
 }
@@ -358,15 +360,26 @@ func bindPreparedConsumerArguments(ctx context.Context, name string, args []*Exp
 		if len(args) == 2 && isPreparedNumericComparisonContext(name) && args[1-i] != nil &&
 			(types.T(args[1-i].Typ.Id).IsInteger() || args[1-i].Typ.Id == int32(types.T_bit)) &&
 			(binding.Type.Oid.IsMySQLString() ||
-				(binding.Type.Oid.IsFloat() && types.T(args[1-i].Typ.Id).IsSignedInt())) {
+				(binding.Type.Oid.IsFloat() && types.T(args[1-i].Typ.Id).IsSignedInt()) ||
+				(state.selectStatement && binding.Type.Oid.IsInteger() &&
+					(binding.Type.Oid.TypeLen() > types.T(args[1-i].Typ.Id).TypeLen() ||
+						binding.Type.Oid.IsSignedInt() != types.T(args[1-i].Typ.Id).IsSignedInt()))) {
 			// A proven integral value can compare in the peer's integer domain
-			// without rounding an indexed column through DOUBLE.
+			// without casting the indexed column to a wider domain.
 			// The proof depends on this execution's value, so the existing
 			// binding state keeps the resulting plan out of the type-only cache.
 			if value, present := preparedConfigurationValue(ctx, source); present && value != nil {
-				_, exact, proofErr := preparedComparisonExactIntegerExpr(ctx, preparedNumericValueSpelling(value), args[1-i].Typ)
+				spelling := preparedNumericValueSpelling(value)
+				_, exact, proofErr := preparedComparisonExactIntegerExpr(ctx, spelling, args[1-i].Typ)
 				if proofErr != nil {
 					return nil, proofErr
+				}
+				if binding.Type.Oid.IsInteger() {
+					// Some mixed integer comparisons enter an approximate domain.
+					// Keep the existing comparison at values
+					// whose adjacent integers may collide in DOUBLE.
+					integer, err := strconv.ParseInt(spelling, 10, 54)
+					exact = exact && err == nil && integer >= -(1<<53)+1 && integer <= (1<<53)-1
 				}
 				if exact {
 					target := args[1-i].Typ
@@ -589,6 +602,7 @@ func BuildPreparedExecutionPlan(ctx CompilerContext, stmt tree.Statement,
 		return nil, moerr.NewInvalidInput(previous, "Incorrect arguments to EXECUTE")
 	}
 	planning := withPreparedSourceBindings(previous, bindings, values)
+	preparedBindingState(planning).selectStatement = stmt.GetQueryType() == tree.QueryTypeDQL
 	ctx.SetContext(planning)
 	defer ctx.SetContext(previous)
 	query, err := NewPrepareOptimizer(ctx).Optimize(stmt, false)

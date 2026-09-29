@@ -34,8 +34,8 @@ Project  𝄀
   ->  Aggregate  𝄀
         Aggregate Functions: starcount(1)  𝄀
         ->  Table Scan on issue_29506_filters.keys32  𝄀
-              Filter Cond: (cast(keys32.id AS BIGINT) = cast('12345' AS BIGINT))
-              -- HINT: Cast expression may prevent index usage
+              Filter Cond: (keys32.id = cast(cast('12345' AS BIGINT) AS INT))  𝄀
+              Block Filter Cond: (keys32.id = cast(cast('12345' AS BIGINT) AS INT))
 execute equal_key using @key;
 ➤ count(*)[-5,64,0]  𝄀
 1
