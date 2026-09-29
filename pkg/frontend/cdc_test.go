@@ -1395,25 +1395,27 @@ func TestCDCCreateTaskMetadataUsesCapabilityFence(t *testing.T) {
 	require.Equal(t, task.TaskCode_InitCdc, legacy.Executor)
 
 	stableOpts := fmt.Sprintf(
-		`{"%s":"%s"}`,
+		`{"%s":"%s","%s":"%s"}`,
 		cdc.CDCTaskExtraOptions_InitialSnapshotProtocol,
 		cdc.CDCInitialSnapshotProtocolStableEpoch,
+		cdc.CDCTaskExtraOptions_GenerationProtocol,
+		cdc.CDCGenerationAwareProtocolV2,
 	)
 	stable := (&CDCCreateTaskOptions{
 		TaskId:    "stable",
 		ExtraOpts: stableOpts,
 	}).BuildTaskMetadata()
-	require.Equal(t, task.TaskCode_InitCdcStableEpoch, stable.Executor)
+	require.Equal(t, task.TaskCode_InitCdcSourcePatternV1, stable.Executor)
 
 	noFull := (&CDCCreateTaskOptions{
 		TaskId: "no-full", NoFull: true, ExtraOpts: stableOpts,
 	}).BuildTaskMetadata()
-	require.Equal(t, task.TaskCode_InitCdc, noFull.Executor)
+	require.Equal(t, task.TaskCode_InitCdcSourcePatternV1, noFull.Executor)
 	lossless := (&CDCCreateTaskOptions{
 		TaskId: "no-full-hlc", NoFull: true,
-		ExtraOpts: fmt.Sprintf(`{"%s":"%s"}`, cdc.CDCTaskExtraOptions_InitialSnapshotProtocol, cdc.CDCInitialSnapshotProtocolNoFullHLC),
+		ExtraOpts: fmt.Sprintf(`{"%s":"%s","%s":"%s"}`, cdc.CDCTaskExtraOptions_InitialSnapshotProtocol, cdc.CDCInitialSnapshotProtocolNoFullHLC, cdc.CDCTaskExtraOptions_GenerationProtocol, cdc.CDCGenerationAwareProtocolV2),
 	}).BuildTaskMetadata()
-	require.Equal(t, task.TaskCode_InitCdcLosslessStart, lossless.Executor)
+	require.Equal(t, task.TaskCode_InitCdcSourcePatternV1, lossless.Executor)
 }
 
 func TestCDCCreateTaskOptionsSetNoFullStartTS(t *testing.T) {

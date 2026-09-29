@@ -411,6 +411,18 @@ func UsesSourcePatternProtocol(extraOptsJSON string) bool {
 	return protocol == CDCSourcePatternProtocolV1
 }
 
+// UsesGenerationAwareProtocol reports whether a task carries the V2 CDC
+// generation/target-identity contract. Such tasks must be claimed only by
+// executors that understand the durable target identity and generation fence.
+func UsesGenerationAwareProtocol(extraOptsJSON string) bool {
+	extraOpts := make(map[string]any)
+	if err := json.Unmarshal([]byte(extraOptsJSON), &extraOpts); err != nil {
+		return false
+	}
+	protocol, _ := extraOpts[CDCTaskExtraOptions_GenerationProtocol].(string)
+	return protocol == CDCGenerationAwareProtocolV2
+}
+
 type TaskId = uuid.UUID
 
 func NewTaskId() TaskId {

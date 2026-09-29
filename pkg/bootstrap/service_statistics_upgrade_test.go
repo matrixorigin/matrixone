@@ -23,6 +23,7 @@ import (
 	"github.com/golang/mock/gomock"
 	"github.com/matrixorigin/matrixone/pkg/bootstrap/versions"
 	"github.com/matrixorigin/matrixone/pkg/bootstrap/versions/v4_0_10"
+	"github.com/matrixorigin/matrixone/pkg/bootstrap/versions/v4_0_11"
 	"github.com/matrixorigin/matrixone/pkg/bootstrap/versions/v4_0_6"
 	"github.com/matrixorigin/matrixone/pkg/bootstrap/versions/v4_0_7"
 	"github.com/matrixorigin/matrixone/pkg/bootstrap/versions/v4_0_8"
@@ -41,7 +42,7 @@ import (
 )
 
 func TestDoCheckUpgradeQueuesStatisticsRefresh(t *testing.T) {
-	final := v4_0_10.Handler.Metadata()
+	final := v4_0_11.Handler.Metadata()
 	require.Greater(t, versions.Compare(final.Version, "4.0.7"), 0)
 	for _, test := range []struct {
 		name    string
@@ -60,7 +61,7 @@ func TestDoCheckUpgradeQueuesStatisticsRefresh(t *testing.T) {
 		{name: "4.0.7_offset_1", version: "4.0.7", offset: 1, upgrade: true, via408: true, via409: true},
 		{name: "current_4.0.8", version: "4.0.8", offset: v4_0_8.Handler.Metadata().VersionOffset, upgrade: true, via409: true},
 		{name: "current_4.0.9", version: "4.0.9", offset: v4_0_9.Handler.Metadata().VersionOffset, upgrade: true},
-		{name: "current_4.0.10", version: final.Version, offset: final.VersionOffset},
+		{name: "current_4.0.11", version: final.Version, offset: final.VersionOffset},
 	} {
 		t.Run(test.name, func(t *testing.T) {
 			runtime.RunTest("", func(runtime.Runtime) {

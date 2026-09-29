@@ -6767,6 +6767,8 @@ const (
 func (opts *CDCCreateTaskOptions) BuildTaskMetadata() task.TaskMetadata {
 	executor := task.TaskCode_InitCdc
 	switch {
+	case cdc.UsesGenerationAwareProtocol(opts.ExtraOpts):
+		executor = task.TaskCode_InitCdcSourcePatternV1
 	case cdc.UsesSourcePatternProtocol(opts.ExtraOpts):
 		executor = task.TaskCode_InitCdcSourcePatternV1
 	case opts.NoFull && cdc.UsesLosslessNoFullStart(opts.ExtraOpts):
@@ -7174,9 +7176,9 @@ func (opts *CDCCreateTaskOptions) ValidateAndFill(
 	if sourcePattern {
 		extraOpts[cdc.CDCTaskExtraOptions_SourcePatternProtocol] = cdc.CDCSourcePatternProtocolV1
 	}
-	if compileProtocolVersion(c) < defines.MORPCVersion97 {
+	if compileProtocolVersion(c) < defines.MORPCVersion101 {
 		return moerr.NewNotSupportedf(ctx,
-			"CDC target identity requires all CNs to support protocol version %d", defines.MORPCVersion97)
+			"CDC target identity requires all CNs to support protocol version %d", defines.MORPCVersion101)
 	}
 	extraOpts[cdc.CDCTaskExtraOptions_GenerationProtocol] = cdc.CDCGenerationAwareProtocolV2
 	if err = validateStableInitialSnapshotCompileProtocol(ctx, c, true); err != nil {

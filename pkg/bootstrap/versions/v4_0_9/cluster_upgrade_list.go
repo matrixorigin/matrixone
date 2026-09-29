@@ -17,7 +17,6 @@ package v4_0_9
 import (
 	"github.com/matrixorigin/matrixone/pkg/bootstrap/versions"
 	"github.com/matrixorigin/matrixone/pkg/catalog"
-	"github.com/matrixorigin/matrixone/pkg/defines"
 	"github.com/matrixorigin/matrixone/pkg/frontend"
 	"github.com/matrixorigin/matrixone/pkg/util/executor"
 )
@@ -36,20 +35,4 @@ var clusterUpgEntries = []versions.UpgradeEntry{
 			return versions.CheckIndexDefinition(txn, accountID, catalog.MO_CATALOG, catalog.MO_SNAPSHOTS, snapshotQuotaTargetIndex)
 		},
 	},
-	cdcWatermarkColumn("pending_source_table_id", "bigint unsigned null after owner_generation"),
-	cdcWatermarkColumn("target_identity", "varchar(256) null after pending_source_table_id"),
-}
-
-func cdcWatermarkColumn(name, definition string) versions.UpgradeEntry {
-	return versions.UpgradeEntry{
-		Schema:                  catalog.MO_CATALOG,
-		TableName:               catalog.MO_CDC_WATERMARK,
-		UpgType:                 versions.ADD_COLUMN,
-		UpgSql:                  "alter table mo_catalog.mo_cdc_watermark add column " + name + " " + definition,
-		RequiredProtocolVersion: defines.MORPCVersion97,
-		CheckFunc: func(txn executor.TxnExecutor, accountID uint32) (bool, error) {
-			column, err := versions.CheckTableColumn(txn, accountID, catalog.MO_CATALOG, catalog.MO_CDC_WATERMARK, name)
-			return column.IsExits, err
-		},
-	}
 }
