@@ -322,8 +322,10 @@ func (builder *QueryBuilder) pushdownFilters(nodeID int32, filters []*plan.Expr,
 
 	var canPushdown, cantPushdown []*plan.Expr
 
-	if node.Limit != nil {
-		// can not push down over limit
+	if node.Limit != nil || node.Offset != nil {
+		// can not push down over limit or offset: a predicate above OFFSET filters the
+		// rows that survive pagination, so pushing it below would change which rows OFFSET
+		// skips (e.g. an outer WHERE across an OFFSET-only subquery would run before the skip).
 		cantPushdown = append(cantPushdown, filters...)
 		filters = nil
 	}
@@ -1040,8 +1042,12 @@ func (builder *QueryBuilder) pushdownFilters(nodeID int32, filters []*plan.Expr,
 		}
 
 	case plan.Node_APPLY:
+		leftTags := make(map[int32]bool)
+		for _, tag := range builder.enumerateTags(node.Children[0]) {
+			leftTags[tag] = true
+		}
 		for _, filter := range filters {
-			if builder.filterPushdownBarrier(filter) {
+			if builder.filterPushdownBarrier(filter) || !containsOnlyTags(filter, leftTags) {
 				cantPushdown = append(cantPushdown, filter)
 			} else {
 				canPushdown = append(canPushdown, filter)
@@ -1066,7 +1072,11 @@ func (builder *QueryBuilder) pushdownFilters(nodeID int32, filters []*plan.Expr,
 
 			node.Children[0] = childID
 		} else {
-			cantPushdown = filters
+			// A leaf (e.g. SINK_SCAN): APPEND rather than overwrite, so filters the
+			// limit/offset guard above already moved into cantPushdown are preserved. A
+			// recursive-CTE consumer SINK_SCAN carries Offset (#29332), so an outer WHERE
+			// blocked by the guard would otherwise be silently dropped here (#29065).
+			cantPushdown = append(cantPushdown, filters...)
 		}
 	}
 

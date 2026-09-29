@@ -11008,6 +11008,16 @@ func Test_checkModify(t *testing.T) {
 	}
 }
 
+func TestCheckModifyRebindsViewMetadataUdf(t *testing.T) {
+	queryPlan := &plan.Plan{Plan: &plan.Plan_Query{Query: &plan.Query{ViewMetadataDependsOnUdf: true}}}
+	changed, err := checkModify(queryPlan, func(string, string, *plan.Snapshot) (*plan.ObjectRef, *plan.TableDef, error) {
+		t.Fatal("UDF-backed SHOW must rebind without relying on a table schema change")
+		return nil, nil, nil
+	})
+	require.NoError(t, err)
+	require.True(t, changed)
+}
+
 func TestCheckModifyValidatesCatalogDependencies(t *testing.T) {
 	snapshot := &plan.Snapshot{
 		TS: &timestamp.Timestamp{PhysicalTime: 42, LogicalTime: 7},

@@ -37,6 +37,12 @@ case "$repo_root" in
 esac
 source_cgo_dir="$repo_root/cgo"
 
+# Compiler identity participates in native provenance. Source the Pixi profile
+# before validating reusable artifacts, as Make does before building.
+if [ "${MO_CL_CUDA:-}" = "1" ]; then
+    . "$source_cgo_dir/mo-gpu-env"
+fi
+
 goos=$(go env GOOS)
 gohostos=$(go env GOHOSTOS)
 goarch=$(go env GOARCH)
@@ -172,15 +178,15 @@ if [ "${MO_CL_CUDA:-}" = "1" ]; then
         echo "MO_CL_CUDA=1 is only supported on linux, not $goos" >&2
         exit 1
     fi
-    if [ -z "${CONDA_PREFIX:-}" ]; then
-        echo "CONDA_PREFIX env variable not found." >&2
-        echo "MO_CL_CUDA=1 needs it to locate cuvs, as the Makefile does" >&2
-        exit 1
-    fi
-    cuda_cflags="'-I/usr/local/cuda/include' '-I$CONDA_PREFIX/include'"
-    cuda_ldflags="-L/usr/local/cuda/lib64/stubs -lcuda -L/usr/local/cuda/lib64 -lcudart -L$CONDA_PREFIX/lib -lcuvs -lcuvs_c -lstdc++"
-    cuda_rpaths="-Wl,-rpath,/usr/local/cuda/lib64 -Wl,-rpath,$CONDA_PREFIX/lib"
-    cuda_runtime_paths=":/usr/local/cuda/lib64:$CONDA_PREFIX/lib"
+    cuda_cflags=$MO_GPU_CFLAGS
+    cuda_ldflags=$MO_GPU_LDFLAGS
+    cuda_runtime_paths=":$MO_GPU_RUNTIME_PATH"
+    gpu_path_ifs=$IFS
+    IFS=:
+    for gpu_library_directory in $MO_GPU_RUNTIME_PATH; do
+        cuda_rpaths="$cuda_rpaths -Wl,-rpath,$gpu_library_directory"
+    done
+    IFS=$gpu_path_ifs
     cuda_fatbin="$artifact_root/mocl_kernel64.fatbin"
 
     # The Makefile adds `-tags gpu` under the same switch, so MO_CL_CUDA=1 must always end up
