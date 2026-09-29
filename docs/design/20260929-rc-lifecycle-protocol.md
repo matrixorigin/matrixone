@@ -1,9 +1,9 @@
 # Pessimistic RC lifecycle and data-branch component protocol
 
-- Status: revision 1 design accepted for implementation; exact-head validation and review remain separate gates.
-- Issue: [#29400](https://github.com/matrixorigin/matrixone/issues/29400); draft implementation: [#29457](https://github.com/matrixorigin/matrixone/pull/29457).
+- Status: integrated implementation in [#29393](https://github.com/matrixorigin/matrixone/pull/29393); review and deployment validation remain separate gates.
+- Issue: [#29400](https://github.com/matrixorigin/matrixone/issues/29400); [#29457](https://github.com/matrixorigin/matrixone/pull/29457) is the superseded implementation PR.
 - Design input: `6ba5c78e17ff6ee319361ef78c6c6d015a1b4d1d` against `e6e3af58ce5693c33517b4e85bf51d0bc609b7b8`. GPT-6 Astra, medium, `/root/design_latest` approved the correction design for implementation on 2026-09-29; this is not approval of the implementation or of pending CI.
-- Parent: [DROP DATABASE lifecycle revision 4](20260926-drop-database-lifecycle.md) describes #29393's per-table execution and separate performance gate. Its earlier claim that no new wire, wait-graph or upgrade contract was introduced applies to that revision, not to this protocol.
+- Historical [DROP DATABASE revision-4 design and measurements](20260926-drop-database-lifecycle.md) record the earlier per-table execution and performance experiments. The current RC failure order is specified below.
 
 ## Purpose and boundaries
 

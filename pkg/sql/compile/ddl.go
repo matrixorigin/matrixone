@@ -4522,10 +4522,6 @@ func (s *Scope) DropTable(c *Compile) (retErr error) {
 	return nil
 }
 
-func (s *Scope) dropTableSingle(c *Compile, qry *plan.DropTable, lifecycleAdmitted *bool) error {
-	return s.dropTableSingleResolved(c, qry, lifecycleAdmitted, false, nil, nil, nil, nil, nil)
-}
-
 func (s *Scope) dropTableSingleResolved(
 	c *Compile,
 	qry *plan.DropTable,
@@ -4589,10 +4585,9 @@ func (s *Scope) dropTableSingleResolved(
 			}
 			databaseLocked = true
 		} else if c.isLifecycleRC() {
-			if err = c.admitDropLifecycleRC([]*plan.DropTable{qry}, ""); err != nil {
-				return err
-			}
-			databaseLocked = true
+			// Every public RC DROP enters through Scope.DropTable, which owns
+			// complete-domain admission before this member is retired.
+			return moerr.NewInternalErrorNoCtx("missing RC DROP TABLE coordinator admission")
 		} else if err = c.lockDataBranchLineageOwnerLifecycle(); err != nil {
 			return err
 		}

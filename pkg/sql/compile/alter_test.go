@@ -3304,11 +3304,11 @@ func TestOwnerCatalogDropEntryPointsStopAtLifecycleAdmissionFailure(t *testing.T
 		{
 			name: "drop table",
 			run: func(s *Scope, c *Compile) error {
-				return s.dropTableSingle(c, &plan2.DropTable{
+				return dropTableScope(&plan2.DropTable{
 					Database: "db",
 					Table:    "tbl",
 					TableDef: &plan2.TableDef{},
-				}, new(bool))
+				}).DropTable(c)
 			},
 		},
 		{

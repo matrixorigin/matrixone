@@ -263,11 +263,6 @@ func (c *Compile) loadDropLifecycleDomain(tables []*plan.DropTable, database str
 	return names, identities, nil
 }
 
-func (c *Compile) admitDropLifecycleRC(tables []*plan.DropTable, database string) error {
-	_, _, err := c.admitDropLifecycleRCWithDomain(tables, database)
-	return err
-}
-
 func (c *Compile) admitDropLifecycleRCWithDomain(tables []*plan.DropTable, database string) (map[uint64]dropLifecycleIdentity, bool, error) {
 	names, before, err := c.loadDropLifecycleDomain(tables, database)
 	if err != nil || len(names) == 0 {

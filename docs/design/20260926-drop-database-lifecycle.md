@@ -1,6 +1,6 @@
 # DROP DATABASE: revision-4 history and measurements
 
-**Status: historical design record.** The current pessimistic-RC contract is
+**Status: historical design and measurement archive.** The current pessimistic-RC contract is
 [the integrated lifecycle design](20260929-rc-lifecycle-protocol.md). Its
 `DROP TABLE` coordinator reclaims each reached persistent member before moving
 to the next; RC `DROP DATABASE` reclaims its admitted set after ordered table

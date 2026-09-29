@@ -965,31 +965,28 @@ func TestTableScopedDDLDatabaseEOBMapsToNoSuchTable(t *testing.T) {
 		eng := newStubEngine()
 		eng.dbErr = moerr.GetOkExpectedEOB()
 		c := newCompileWithStubEngine(t, eng, "drop table t2")
-		s := &Scope{}
 		lockMoDb := gostub.Stub(&lockMoDatabase, func(_ *Compile, _ string, _ lock.LockMode) error { return nil })
 		defer lockMoDb.Reset()
-		err := s.dropTableSingle(c, &plan2.DropTable{
-			Database: "db1",
-			Table:    "t2",
-		}, new(bool))
+		err := c.withBroadDropLifecycle(func() error {
+			return dropTableScope(&plan2.DropTable{Database: "db1", Table: "t2"}).DropTable(c)
+		})
 		require.True(t, moerr.IsMoErrCode(err, moerr.ErrNoSuchTable))
 	})
 
 	t.Run("TemporaryPlanDoesNotFallThroughToPermanentTable", func(t *testing.T) {
 		c := newCompileWithStubEngine(t, newStubEngine(), "drop temporary table t2")
 		c.proc.Session = &testInternalExecutorSession{}
-		s := &Scope{}
 		qry := &plan2.DropTable{
 			Database: "db1",
 			Table:    "t2",
 			TableDef: &plan2.TableDef{IsTemporary: true},
 		}
 
-		err := s.dropTableSingle(c, qry, new(bool))
+		err := dropTableScope(qry).DropTable(c)
 		require.True(t, moerr.IsMoErrCode(err, moerr.ErrNoSuchTable))
 
 		qry.IfExists = true
-		require.NoError(t, s.dropTableSingle(c, qry, new(bool)))
+		require.NoError(t, dropTableScope(qry).DropTable(c))
 	})
 }
 
@@ -3436,9 +3433,7 @@ func TestDropTableSingleSkipsMissingFkTables(t *testing.T) {
 
 	c := NewCompile("test", "test", "drop table test_tbl", "", "", eng, proc, nil, false, nil, time.Now())
 	c.disableLock = true
-	s := &Scope{}
-	lifecycleAdmitted := true // This test targets cleanup after admission.
-	err := s.dropTableSingle(c, &plan2.DropTable{
+	qry := &plan2.DropTable{
 		Database:             catalog.MO_CATALOG,
 		Table:                "test_tbl",
 		TableId:              1,
@@ -3446,7 +3441,10 @@ func TestDropTableSingleSkipsMissingFkTables(t *testing.T) {
 		TableDef:             &plan2.TableDef{},
 		ForeignTbl:           []uint64{42},
 		FkChildTblsReferToMe: []uint64{43},
-	}, &lifecycleAdmitted)
+	}
+	err := c.withBroadDropLifecycle(func() error {
+		return dropTableScope(qry).DropTable(c)
+	})
 	require.NoError(t, err)
 }
 
