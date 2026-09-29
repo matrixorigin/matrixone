@@ -42,7 +42,7 @@ func (v *versionHandle) Prepare(_ context.Context, txn executor.TxnExecutor, _ b
 	return nil
 }
 
-func (v *versionHandle) HandleTenantUpgrade(context.Context, int32, executor.TxnExecutor) error {
+func (v *versionHandle) HandleTenantUpgrade(_ context.Context, _ int32, _ executor.TxnExecutor) error {
 	return nil
 }
 
@@ -55,6 +55,6 @@ func (v *versionHandle) HandleClusterUpgrade(_ context.Context, txn executor.Txn
 	return nil
 }
 
-func (v *versionHandle) HandleCreateFrameworkDeps(executor.TxnExecutor) error {
-	return moerr.NewInternalErrorNoCtx("only v1.2.0 initializes the upgrade framework")
+func (v *versionHandle) HandleCreateFrameworkDeps(_ executor.TxnExecutor) error {
+	return moerr.NewInternalErrorNoCtxf("Only v1.2.0 can initialize upgrade framework, current version is:%s", v.metadata.Version)
 }

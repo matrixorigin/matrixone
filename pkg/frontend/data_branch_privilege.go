@@ -26,6 +26,7 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/container/vector"
 	"github.com/matrixorigin/matrixone/pkg/defines"
 	"github.com/matrixorigin/matrixone/pkg/frontend/databranchutils"
+	"github.com/matrixorigin/matrixone/pkg/pb/lock"
 	"github.com/matrixorigin/matrixone/pkg/sql/parsers/tree"
 	"github.com/matrixorigin/matrixone/pkg/util/executor"
 	"github.com/matrixorigin/matrixone/pkg/util/trace/impl/motrace/statistic"
@@ -719,7 +720,7 @@ func lockDataBranchDeleteDatabaseTarget(
 	if err != nil {
 		return err
 	}
-	return lockDatabaseCatalogRow(ctx, ses, bh, accountID, dbName)
+	return lockDatabaseCatalogRow(ctx, ses, bh, accountID, dbName, lock.LockMode_Exclusive)
 }
 
 func branchDeleteDatabaseTableIDsSQL(accId uint32, dbName string) string {

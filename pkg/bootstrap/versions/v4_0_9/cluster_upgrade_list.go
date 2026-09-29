@@ -18,10 +18,24 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/bootstrap/versions"
 	"github.com/matrixorigin/matrixone/pkg/catalog"
 	"github.com/matrixorigin/matrixone/pkg/defines"
+	"github.com/matrixorigin/matrixone/pkg/frontend"
 	"github.com/matrixorigin/matrixone/pkg/util/executor"
 )
 
+const snapshotQuotaTargetIndex = "idx_snapshot_quota_target"
+
+// Only sys stores ACCOUNT snapshots for other tenants. The index keeps the
+// second quota count bounded without adding an index to every tenant catalog.
 var clusterUpgEntries = []versions.UpgradeEntry{
+	{
+		Schema:    catalog.MO_CATALOG,
+		TableName: catalog.MO_SNAPSHOTS,
+		UpgType:   versions.ADD_INDEX,
+		UpgSql:    frontend.MoCatalogSysSnapshotQuotaIndexDDL,
+		CheckFunc: func(txn executor.TxnExecutor, accountID uint32) (bool, error) {
+			return versions.CheckIndexDefinition(txn, accountID, catalog.MO_CATALOG, catalog.MO_SNAPSHOTS, snapshotQuotaTargetIndex)
+		},
+	},
 	cdcWatermarkColumn("pending_source_table_id", "bigint unsigned null after owner_generation"),
 	cdcWatermarkColumn("target_identity", "varchar(256) null after pending_source_table_id"),
 }
