@@ -5,8 +5,8 @@ set @issue_29314_saved_sql_mode = @@session.sql_mode;
 prepare issue_29314_p from 'select ceil(123.456, ?), floor(123.456, ?)';
 set @issue_29314_d = 2;
 execute issue_29314_p using @issue_29314_d, @issue_29314_d;
-➤ ceil(123.456, ?)[3,6,3]  ¦  floor(123.456, ?)[3,6,3]  𝄀
-123.460  ¦  123.450
+➤ ceil(123.456, ?)[3,6,2]  ¦  floor(123.456, ?)[3,6,2]  𝄀
+123.46  ¦  123.45
 set @issue_29314_d = 2.5;
 execute issue_29314_p using @issue_29314_d, @issue_29314_d;
 ➤ ceil(123.456, ?)[3,6,3]  ¦  floor(123.456, ?)[3,6,3]  𝄀
@@ -23,8 +23,8 @@ set session sql_mode = @issue_29314_saved_sql_mode;
 set @issue_29314_saved_sql_mode = NULL;
 set @issue_29314_d = 2;
 execute issue_29314_p using @issue_29314_d, @issue_29314_d;
-➤ ceil(123.456, ?)[3,6,3]  ¦  floor(123.456, ?)[3,6,3]  𝄀
-123.460  ¦  123.450
+➤ ceil(123.456, ?)[3,6,2]  ¦  floor(123.456, ?)[3,6,2]  𝄀
+123.46  ¦  123.45
 deallocate prepare issue_29314_p;
 drop table if exists issue_29314_values;
 create table issue_29314_values (v decimal(8,3));
