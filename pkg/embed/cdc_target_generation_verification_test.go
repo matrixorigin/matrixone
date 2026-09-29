@@ -314,10 +314,18 @@ func TestCDCEndTsWildcardLateTableOnMO(t *testing.T) {
 }
 
 func TestCDCGenerationReplacementOnMO(t *testing.T) {
-	defer func() { require.NoError(t, CloseSingleCNBaseClusterTests()) }()
+	defer func() {
+		require.NoError(t, CloseSingleCNBaseClusterTests())
+		cdc.ResetCDCWatermarkUpdaterForTest()
+	}()
 	RunSingleCNBaseClusterTests(t, func(cluster Cluster) {
 		cn, err := cluster.GetCNService(0)
 		require.NoError(t, err)
+		// The detector and watermark updater are process-local in production, but
+		// this package recreates embedded clusters between tests. Rebind both to
+		// the live CN before the task is admitted.
+		cdc.ResetTableDetectorForTest(cn.ServiceID())
+		cdc.ResetCDCWatermarkUpdaterForTest()
 		port := cn.GetServiceConfig().CN.Frontend.Port
 		root, err := sql.Open("mysql", fmt.Sprintf("dump:111@tcp(127.0.0.1:%d)/", port))
 		require.NoError(t, err)
@@ -521,7 +529,10 @@ func TestCDCGenerationReplacementOnMO(t *testing.T) {
 }
 
 func TestCDCFirstAckHoldsSourceGenerationAcrossCN(t *testing.T) {
-	defer func() { require.NoError(t, CloseBaseClusterTests()) }()
+	defer func() {
+		require.NoError(t, CloseBaseClusterTests())
+		cdc.ResetCDCWatermarkUpdaterForTest()
+	}()
 	RunBaseClusterTests(t, func(cluster Cluster) {
 		ports := make([]int, 2)
 		for i := range ports {
@@ -529,6 +540,10 @@ func TestCDCFirstAckHoldsSourceGenerationAcrossCN(t *testing.T) {
 			require.NoError(t, err)
 			ports[i] = int(cn.GetServiceConfig().CN.Frontend.Port)
 		}
+		cn0, err := cluster.GetCNService(0)
+		require.NoError(t, err)
+		cdc.ResetTableDetectorForTest(cn0.ServiceID())
+		cdc.ResetCDCWatermarkUpdaterForTest()
 		ctx, cancel := context.WithTimeout(t.Context(), 3*time.Minute)
 		defer cancel()
 		root, err := sql.Open("mysql", fmt.Sprintf("dump:111@tcp(127.0.0.1:%d)/", ports[0]))
