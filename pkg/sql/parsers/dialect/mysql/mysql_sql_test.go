@@ -5051,6 +5051,11 @@ var (
 			output: "create table t1 (a vecbf16(3), b vecf16(3), c vecint8(3))",
 		},
 		{
+			// #20567: scalar low-precision float types (no length option).
+			input:  "create table t1(a bf16, b float16, c float8, d float4)",
+			output: "create table t1 (a bf16, b float16, c float8, d float4)",
+		},
+		{
 			input:  "create table t1(a vecbf16(128), b vecf16(65535), c vecint8(1))",
 			output: "create table t1 (a vecbf16(128), b vecf16(65535), c vecint8(1))",
 		},

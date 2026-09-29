@@ -178,6 +178,18 @@ func getTypeFromAstWithoutCharset(ctx context.Context, typ tree.ResolvableTypeRe
 			}
 			return plan.Type{Id: int32(types.T_int64), Width: n.InternalType.Width, Scale: -1}, nil
 		case defines.MYSQL_TYPE_FLOAT:
+			// The scalar low-precision float types (#20567) reuse MYSQL_TYPE_FLOAT on the wire and
+			// are disambiguated by FamilyString; they carry no width/scale.
+			switch strings.ToLower(n.InternalType.FamilyString) {
+			case "bf16":
+				return plan.Type{Id: int32(types.T_bf16), Width: 0, Scale: -1}, nil
+			case "float16":
+				return plan.Type{Id: int32(types.T_float16), Width: 0, Scale: -1}, nil
+			case "float8":
+				return plan.Type{Id: int32(types.T_float8), Width: 0, Scale: -1}, nil
+			case "float4":
+				return plan.Type{Id: int32(types.T_float4), Width: 0, Scale: -1}, nil
+			}
 			return plan.Type{Id: int32(types.T_float32), Width: n.InternalType.DisplayWith, Scale: n.InternalType.Scale}, nil
 		case defines.MYSQL_TYPE_DOUBLE:
 			return plan.Type{Id: int32(types.T_float64), Width: n.InternalType.DisplayWith, Scale: n.InternalType.Scale}, nil

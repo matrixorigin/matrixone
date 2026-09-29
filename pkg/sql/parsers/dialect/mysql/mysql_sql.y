@@ -455,6 +455,7 @@ func makeWindowSpec(refName *tree.CStr, partitionBy tree.Exprs, orderBy tree.Ord
 %token <str> NCHAR LONG
 %token <str> TEXT TINYTEXT MEDIUMTEXT LONGTEXT DATALINK
 %token <str> BLOB TINYBLOB MEDIUMBLOB LONGBLOB JSON ENUM UUID VECF32 VECF64 VECBF16 VECF16 VECINT8 VECUINT8
+%token <str> BF16 FLOAT16 FLOAT8 FLOAT4
 %token <str> GEOMETRY POINT LINESTRING POLYGON GEOMETRYCOLLECTION MULTIPOINT MULTILINESTRING MULTIPOLYGON
 %token <str> GEOMETRY32 GEOGRAPHY GEOGRAPHY32 POINT32 LINESTRING32 POLYGON32 GEOMETRYCOLLECTION32 MULTIPOINT32 MULTILINESTRING32 MULTIPOLYGON32
 %token <str> INT1 INT2 INT3 INT4 INT8 S3OPTION STAGEOPTION
@@ -15613,6 +15614,58 @@ char_type:
             },
         }
     }
+|   BF16
+    {
+        locale := ""
+        $$ = &tree.T{
+            InternalType: tree.InternalType{
+                Family: tree.FloatFamily,
+                FamilyString: $1,
+                Width: 16,
+                Locale: &locale,
+                Oid: uint32(defines.MYSQL_TYPE_FLOAT),
+            },
+        }
+    }
+|   FLOAT16
+    {
+        locale := ""
+        $$ = &tree.T{
+            InternalType: tree.InternalType{
+                Family: tree.FloatFamily,
+                FamilyString: $1,
+                Width: 16,
+                Locale: &locale,
+                Oid: uint32(defines.MYSQL_TYPE_FLOAT),
+            },
+        }
+    }
+|   FLOAT8
+    {
+        locale := ""
+        $$ = &tree.T{
+            InternalType: tree.InternalType{
+                Family: tree.FloatFamily,
+                FamilyString: $1,
+                Width: 8,
+                Locale: &locale,
+                Oid: uint32(defines.MYSQL_TYPE_FLOAT),
+            },
+        }
+    }
+|   FLOAT4
+    {
+        locale := ""
+        $$ = &tree.T{
+            InternalType: tree.InternalType{
+                Family: tree.FloatFamily,
+                FamilyString: $1,
+                Width: 4,
+                Locale: &locale,
+                Oid: uint32(defines.MYSQL_TYPE_FLOAT),
+            },
+        }
+    }
 | ENUM '(' enum_values ')'
     {
         locale := ""
@@ -16174,6 +16227,10 @@ non_reserved_keyword:
 |   VECF16
 |   VECINT8
 |   VECUINT8
+|   BF16
+|   FLOAT16
+|   FLOAT8
+|   FLOAT4
 |   KEY_BLOCK_SIZE
 |   LISTS
 |   OP_TYPE
