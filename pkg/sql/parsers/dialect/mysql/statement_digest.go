@@ -1609,16 +1609,6 @@ func digestTokenText(typ int, value, source string) string {
 		return "`" + value + "`"
 	case QUOTE_ID:
 		return "`" + value + "`"
-	case AT_ID:
-		if strings.HasPrefix(source, "@`") {
-			return "@`" + value + "`"
-		}
-		return "@?"
-	case AT_AT_ID:
-		if scope, name, ok := strings.Cut(value, "."); ok {
-			return "@@" + strings.ToUpper(scope) + " . `" + name + "`"
-		}
-		return "@@`" + value + "`"
 	case UNDERSCORE_BINARY:
 		return "(_charset)"
 	case AND:
