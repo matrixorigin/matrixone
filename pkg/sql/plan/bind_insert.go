@@ -2150,13 +2150,13 @@ func (builder *QueryBuilder) insertIgnoreAutoIncrementReorderable(
 	if !hasOtherUnique || builder.canSkipDedup(tableDef) {
 		return 0, false
 	}
-	visibleWidth := 0
+	materializedWidth := 0
 	for _, col := range tableDef.Cols {
-		if col != nil && (!col.Hidden || col.Name == catalog.FakePrimaryKeyColName) {
-			visibleWidth++
+		if col != nil && (!col.Hidden || col.GeneratedCol != nil || col.Name == catalog.FakePrimaryKeyColName) {
+			materializedWidth++
 		}
 	}
-	return int32(visibleWidth), true
+	return int32(materializedWidth), true
 }
 
 func hasAutoIncrementDependentConstraint(tableDef *plan.TableDef, autoColPos int32) bool {

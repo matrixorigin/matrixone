@@ -13,6 +13,7 @@ package plan
 import (
 	"testing"
 
+	"github.com/matrixorigin/matrixone/pkg/catalog"
 	"github.com/matrixorigin/matrixone/pkg/common/runtime"
 	"github.com/matrixorigin/matrixone/pkg/defines"
 	pb "github.com/matrixorigin/matrixone/pkg/pb/plan"
@@ -20,6 +21,33 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/sql/parsers/dialect"
 	"github.com/stretchr/testify/require"
 )
+
+func TestFunctionalIndexSyntheticKeyLayout(t *testing.T) {
+	ctx := NewMockCompilerContext(false)
+	rt := runtime.ServiceRuntime(ctx.GetProcess().GetService())
+	old, _ := rt.GetGlobalVariables(runtime.MOProtocolVersion)
+	rt.SetGlobalVariables(runtime.MOProtocolVersion, defines.MORPCVersion101)
+	t.Cleanup(func() { rt.SetGlobalVariables(runtime.MOProtocolVersion, old) })
+	for _, sql := range []string{
+		"create table t(a int,b int,primary key(a,b),index ix((a+1)),index iy(b,(a+2)))",
+		"create table t(a int,b int,index ix((a+1)),index iy(b,(a+2))) cluster by(a,b)",
+	} {
+		stmt, err := parsers.ParseOne(t.Context(), dialect.MYSQL, sql, 1)
+		require.NoError(t, err)
+		p, err := BuildPlan(ctx, stmt, false)
+		stmt.Free()
+		require.NoError(t, err)
+		table := p.GetDdl().GetCreateTable().TableDef
+		synthetic := table.Pkey.PkeyColName
+		if table.ClusterBy != nil {
+			synthetic = table.ClusterBy.Name
+		} else {
+			require.Equal(t, catalog.CPrimaryKeyColName, synthetic)
+		}
+		require.Equal(t, synthetic, table.Cols[len(table.Cols)-1].Name)
+		require.NoError(t, validateFunctionalTable(t.Context(), table))
+	}
+}
 
 func TestFunctionalIndexDDL(t *testing.T) {
 	ctx := NewMockCompilerContext(false)

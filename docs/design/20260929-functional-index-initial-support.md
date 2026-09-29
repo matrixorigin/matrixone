@@ -41,12 +41,26 @@ physical index. Explicit INSERT/UPDATE assignments to the reserved internal
 name are rejected, including DEFAULT. SELECT-star and public column metadata
 omit the backing column.
 
+Backing columns precede synthesized composite primary/cluster keys. PRE_INSERT
+retains their already-computed values in its physical input column list, and
+INSERT IGNORE's auto-increment provenance marker follows that same materialized
+width. Hidden visibility does not mean the value can be pruned from writes.
+
+Parent FK CASCADE/SET NULL updates recompute affected owned functional columns
+from the final child row image before recursive actions and ordinary index
+maintenance. Unrelated functional values are left unchanged. This does not
+relax the existing restrictions on ordinary generated columns or ON UPDATE
+columns in FK child mutation closure.
+
 Standalone creation, addition and removal use atomic COPY ALTER. Source-column
 MODIFY/CHANGE/RENAME on tables with functional indexes also require COPY so a
 source type change cannot leave an old inferred key type behind. This costs a
 table rebuild and does not provide online/in-place index construction. Original
 expression SQL is replayed against the final schema, including reordered
 columns; source types and the strict allowlist determine the new binding.
+RENAME and renaming CHANGE rewrite only owned functional expression identifier
+nodes before COPY replay, preserving literals and quoted identifiers. Ordinary
+generated/default dependency restrictions remain in force.
 
 ## Query planning
 
@@ -82,6 +96,12 @@ updates and rollback, backfill, COPY type/reorder changes, LIKE cloning and
 removal of every owned hidden column. Checkpoint expression maps are keyed by
 backing column and deep-copied; replay preserves per-key order and rejects any
 missing expression. Both legacy single-expression and new multi-part tests run.
+
+Review regressions additionally exercise FK CASCADE/SET NULL, rollback and
+expression-error atomicity, recursive/self actions, composite primary-key and
+cluster-key INSERT layout, keyless/autoincrement tables, and RENAME/CHANGE with
+SHOW/STATISTICS/LIKE replay. Ordinary generated-column dependency guards remain
+negative controls.
 
 Issue #29300 does not contain the exact failing InvenTree index expression.
 This change therefore supplies the supported functional-index foundation but

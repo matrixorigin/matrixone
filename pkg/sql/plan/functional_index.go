@@ -19,6 +19,7 @@ import (
 	"crypto/sha256"
 	"fmt"
 	"reflect"
+	"slices"
 	"strings"
 
 	"github.com/gogo/protobuf/proto"
@@ -27,6 +28,7 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/container/types"
 	"github.com/matrixorigin/matrixone/pkg/defines"
 	pb "github.com/matrixorigin/matrixone/pkg/pb/plan"
+	"github.com/matrixorigin/matrixone/pkg/sql/parsers"
 	"github.com/matrixorigin/matrixone/pkg/sql/parsers/dialect"
 	"github.com/matrixorigin/matrixone/pkg/sql/parsers/tree"
 	"github.com/matrixorigin/matrixone/pkg/sql/util"
@@ -254,7 +256,18 @@ func lowerFunctionalIndex(ctx CompilerContext, table *TableDef, index *tree.Inde
 		added = append(added, col)
 		copy.KeyParts[ordinal] = replacement
 	}
-	table.Cols = append(table.Cols, added...)
+	// PRE_INSERT appends synthesized composite keys after ordinary/generated
+	// values. Keep that physical layout even though index lowering happens
+	// after the primary/cluster key definitions have already been constructed.
+	pos := len(table.Cols)
+	for i, col := range table.Cols {
+		if col.Name == catalog.CPrimaryKeyColName ||
+			(table.ClusterBy != nil && col.Name == table.ClusterBy.Name && util.JudgeIsCompositeClusterByColumn(col.Name)) {
+			pos = i
+			break
+		}
+	}
+	table.Cols = slices.Insert(table.Cols, pos, added...)
 	return &copy, nil
 }
 
@@ -293,6 +306,67 @@ func validateFunctionalTable(ctx context.Context, table *TableDef) error {
 		}
 	}
 	return nil
+}
+
+// renameFunctionalColumnDependencies is used only by COPY RENAME/CHANGE.
+// Ordinary generated dependencies remain unsupported. Owned index expressions
+// are rewritten as syntax, then replayed by COPY against the final schema.
+func renameFunctionalColumnDependencies(ctx context.Context, table *TableDef, oldName, newName string) error {
+	if err := validateFunctionalTable(ctx, table); err != nil {
+		return err
+	}
+	names := make([]string, len(table.Cols))
+	types := make([]Type, len(table.Cols))
+	for i, col := range table.Cols {
+		names[i], types[i] = col.Name, col.Typ
+		if strings.EqualFold(col.Name, oldName) {
+			names[i] = strings.ToLower(newName)
+		}
+	}
+	rewritten := make(map[int]*pb.GeneratedCol)
+	for i, col := range table.Cols {
+		if col.GeneratedCol == nil || !exprReferencesColumn(col.GeneratedCol.Expr, oldName, table.Cols) {
+			continue
+		}
+		if !isFunctionalColumn(col) {
+			return moerr.NewInvalidInputf(ctx, "Cannot modify column '%s': generated column '%s' depends on it", oldName, col.Name)
+		}
+		generated, err := rewriteFunctionalColumnDependency(ctx, col, names, types, oldName, newName)
+		if err != nil {
+			return err
+		}
+		rewritten[i] = generated
+	}
+	for i, generated := range rewritten {
+		table.Cols[i].GeneratedCol = generated
+	}
+	return nil
+}
+
+func rewriteFunctionalColumnDependency(ctx context.Context, col *ColDef, names []string, types []Type, oldName, newName string) (*pb.GeneratedCol, error) {
+	stmt, err := parsers.ParseOne(ctx, dialect.MYSQL, "select "+col.GeneratedCol.OriginString, 1)
+	if err != nil {
+		return nil, err
+	}
+	defer stmt.Free()
+	selectStmt, ok := stmt.(*tree.Select)
+	if !ok {
+		return nil, moerr.NewInvalidInput(ctx, "invalid functional index expression")
+	}
+	clause, ok := selectStmt.Select.(*tree.SelectClause)
+	if !ok || len(clause.Exprs) != 1 {
+		return nil, moerr.NewInvalidInput(ctx, "invalid functional index expression")
+	}
+	visitor := &renameCheckColumnVisitor{oldName: oldName, newName: newName}
+	expr, ok := clause.Exprs[0].Expr.Accept(visitor)
+	if !ok || !visitor.changed {
+		return nil, moerr.NewInvalidInput(ctx, "functional index source cannot be renamed")
+	}
+	bound, err := NewGeneratedColBinder(ctx, names, types).BindExpr(expr, 0, true)
+	if err != nil {
+		return nil, err
+	}
+	return &pb.GeneratedCol{Expr: bound, OriginString: tree.StringWithOpts(expr, dialect.MYSQL, tree.WithQuoteIdentifier()), IsStored: false}, nil
 }
 
 func sameFunctionalValueType(a, b Type) bool {
