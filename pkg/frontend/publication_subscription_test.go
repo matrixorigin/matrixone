@@ -139,6 +139,8 @@ func Test_doCreatePublication(t *testing.T) {
 	}
 
 	convey.Convey("check create publication", t, func() {
+		lockStub := gostub.StubFunc(&lockPublicationDatabase, catalog.SystemDBTypeDataBranch, nil)
+		defer lockStub.Reset()
 		ctrl := gomock.NewController(t)
 		defer ctrl.Finish()
 
@@ -342,6 +344,8 @@ func Test_doAlterPublication(t *testing.T) {
 	}
 
 	convey.Convey("check alter publication", t, func() {
+		lockStub := gostub.StubFunc(&lockPublicationDatabase, catalog.SystemDBTypeDataBranch, nil)
+		defer lockStub.Reset()
 		ctrl := gomock.NewController(t)
 		defer ctrl.Finish()
 
@@ -589,6 +593,8 @@ func TestDoAlterPublicationDataBranchIdentityCapability(t *testing.T) {
 
 	for _, test := range tests {
 		t.Run(test.name, func(t *testing.T) {
+			lockStub := gostub.StubFunc(&lockPublicationDatabase, catalog.SystemDBTypeDataBranch, nil)
+			t.Cleanup(lockStub.Reset)
 			ctrl := gomock.NewController(t)
 			tenant := &TenantInfo{
 				Tenant:        sysAccountName,

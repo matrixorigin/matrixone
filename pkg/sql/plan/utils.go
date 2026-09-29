@@ -3571,6 +3571,13 @@ func doFormatExprInConsole(expr *plan.Expr, out *bytes.Buffer, depth int, option
 	}
 }
 
+// viewDatabaseExistenceChecker lets View regeneration distinguish an absent
+// source database from a failed catalog lookup. The general CompilerContext
+// boolean probe is retained for callers that cannot propagate errors.
+type viewDatabaseExistenceChecker interface {
+	CheckViewDatabase(name string, snapshot *Snapshot) (bool, error)
+}
+
 // databaseIsValid checks whether the database exists or not.
 func databaseIsValid(dbName string, ctx CompilerContext, snapshot *Snapshot) (string, error) {
 	connectDBFirst := false
@@ -3586,12 +3593,24 @@ func databaseIsValid(dbName string, ctx CompilerContext, snapshot *Snapshot) (st
 		dbName = strings.ToLower(dbName)
 	}
 
-	if len(dbName) == 0 || !ctx.DatabaseExists(dbName, snapshot) {
+	if len(dbName) == 0 {
+		return "", moerr.NewNoDB(ctx.GetContext())
+	}
+	exists := false
+	if checker, ok := ctx.(viewDatabaseExistenceChecker); ok {
+		var err error
+		exists, err = checker.CheckViewDatabase(dbName, snapshot)
+		if err != nil {
+			return "", err
+		}
+	} else {
+		exists = ctx.DatabaseExists(dbName, snapshot)
+	}
+	if !exists {
 		if connectDBFirst {
 			return "", moerr.NewNoDB(ctx.GetContext())
-		} else {
-			return "", moerr.NewBadDB(ctx.GetContext(), dbName)
 		}
+		return "", moerr.NewBadDB(ctx.GetContext(), dbName)
 	}
 	return dbName, nil
 }
@@ -6096,52 +6115,9 @@ func PreparedRuntimeTypeFromString(value string) (types.Type, bool) {
 // DECIMAL-aware common-type consumer, while that consumer follows MySQL and
 // treats a missing numeric prefix as zero.
 func PreparedNumericPrefixTypeFromString(value string) types.Type {
-	prefix, ok := function.GetNumericStringPrefix(value)
-	if !ok {
-		return types.New(types.T_decimal64, 1, 0)
-	}
-
-	unsigned := prefix
-	if unsigned[0] == '+' || unsigned[0] == '-' {
-		unsigned = unsigned[1:]
-	}
-	mantissa := unsigned
-	exponentText := ""
-	if exponentAt := strings.IndexAny(unsigned, "eE"); exponentAt >= 0 {
-		mantissa = unsigned[:exponentAt]
-		exponentText = unsigned[exponentAt+1:]
-	}
-
-	digits := strings.ReplaceAll(mantissa, ".", "")
-	nonZero := strings.TrimLeft(digits, "0")
-	if nonZero == "" {
-		return types.New(types.T_decimal64, 1, 0)
-	}
-
-	fractionalDigits := int64(0)
-	if pointAt := strings.IndexByte(mantissa, '.'); pointAt >= 0 {
-		fractionalDigits = int64(len(mantissa) - pointAt - 1)
-	}
-	trailingZeros := len(nonZero) - len(strings.TrimRight(nonZero, "0"))
-	exponentCompensation := -fractionalDigits + int64(trailingZeros)
-	exponent, bounded := preparedBoundedDecimalExponent(exponentText, exponentCompensation)
+	integralWidth, scale, _, _, bounded := preparedNumericPrefixWidths(value)
 	if !bounded {
 		return types.T_float64.ToType()
-	}
-
-	coefficient := nonZero[:len(nonZero)-trailingZeros]
-	decimalExponent := exponent
-
-	integralWidth := int64(0)
-	scale := int64(0)
-	if decimalExponent >= 0 {
-		integralWidth = int64(len(coefficient)) + decimalExponent
-	} else {
-		scale = -decimalExponent
-		integralWidth = int64(len(coefficient)) - scale
-		if integralWidth < 0 {
-			integralWidth = 0
-		}
 	}
 	width := integralWidth + scale
 	if width < 1 {
@@ -6160,6 +6136,73 @@ func PreparedNumericPrefixTypeFromString(value string) types.Type {
 	default:
 		return types.New(types.T_decimal256, w, s)
 	}
+}
+
+// The shape remains available when total precision exceeds Decimal256, so a
+// fixed DECIMAL peer can reserve integral digits before reducing text scale.
+func preparedNumericPrefixWidths(value string) (integralWidth, scale int64, coefficient string, decimalExponent int64, bounded bool) {
+	prefix, ok := function.GetNumericStringPrefix(value)
+	if !ok {
+		return 1, 0, "", 0, true
+	}
+
+	unsigned := prefix
+	if unsigned[0] == '+' || unsigned[0] == '-' {
+		unsigned = unsigned[1:]
+	}
+	mantissa := unsigned
+	exponentText := ""
+	if exponentAt := strings.IndexAny(unsigned, "eE"); exponentAt >= 0 {
+		mantissa = unsigned[:exponentAt]
+		exponentText = unsigned[exponentAt+1:]
+	}
+
+	digits := strings.ReplaceAll(mantissa, ".", "")
+	nonZero := strings.TrimLeft(digits, "0")
+	if nonZero == "" {
+		return 1, 0, "", 0, true
+	}
+
+	fractionalDigits := int64(0)
+	if pointAt := strings.IndexByte(mantissa, '.'); pointAt >= 0 {
+		fractionalDigits = int64(len(mantissa) - pointAt - 1)
+	}
+	trailingZeros := len(nonZero) - len(strings.TrimRight(nonZero, "0"))
+	exponentCompensation := -fractionalDigits + int64(trailingZeros)
+	exponent, bounded := preparedBoundedDecimalExponent(exponentText, exponentCompensation)
+	if !bounded {
+		return 0, 0, "", 0, false
+	}
+
+	coefficient = nonZero[:len(nonZero)-trailingZeros]
+	decimalExponent = exponent
+
+	if decimalExponent >= 0 {
+		integralWidth = int64(len(coefficient)) + decimalExponent
+	} else {
+		scale = -decimalExponent
+		integralWidth = int64(len(coefficient)) - scale
+		if integralWidth < 0 {
+			integralWidth = 0
+		}
+	}
+	return integralWidth, scale, coefficient, decimalExponent, true
+}
+
+// Only a carry across every retained 9 can increase the integer width when
+// Decimal256 forces a text prefix to lose fractional digits.
+func preparedNumericPrefixIntegralCarry(coefficient string, decimalExponent int64, targetScale int32) bool {
+	decimalPosition := int64(len(coefficient)) + decimalExponent
+	cut := decimalPosition + int64(targetScale)
+	if decimalPosition < 0 || cut < 0 || cut >= int64(len(coefficient)) || coefficient[cut] < '5' {
+		return false
+	}
+	for i := int64(0); i < cut; i++ {
+		if coefficient[i] != '9' {
+			return false
+		}
+	}
+	return true
 }
 
 // PreparedNumericStringIsComplete reports whether the whole value (apart from

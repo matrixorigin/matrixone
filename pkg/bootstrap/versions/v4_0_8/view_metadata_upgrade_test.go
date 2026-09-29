@@ -47,6 +47,12 @@ func TestRelease42ViewMetadataUpgrade(t *testing.T) {
 				var creates []string
 				txn := newVersionTxnExecutor(t, func(sql string) (executor.Result, error) {
 					require.False(t, failed, "must stop after an upgrade error")
+					if strings.HasPrefix(sql, "select 1 from mo_catalog.mo_pubs p ") {
+						return executor.Result{}, nil
+					}
+					if strings.HasPrefix(sql, "select distinct `idx`.`name`") {
+						return statisticsStringResult(t, "idx_mo_pubs_database_id"), nil
+					}
 					for i, table := range tables {
 						if strings.HasPrefix(sql, "SELECT reldatabase, relname, account_id") && strings.Contains(sql, "relname = '"+table+"'") {
 							require.Contains(t, sql, "account_id = 0")
