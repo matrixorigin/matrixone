@@ -52,15 +52,16 @@ func TestDoCheckUpgradeQueuesStatisticsRefresh(t *testing.T) {
 		via407  bool
 		via408  bool
 		via409  bool
+		via410  bool
 	}{
 		// Released v4.2.4 has four tenant entries and one cluster entry;
 		// later additions to main's 4.0.6 handler must not be assumed to run.
-		{name: "release_4.2.4", version: "4.0.6", offset: 5, upgrade: true, via407: true, via408: true, via409: true},
-		{name: "4.0.6", version: "4.0.6", offset: v4_0_6.Handler.Metadata().VersionOffset, upgrade: true, via407: true, via408: true, via409: true},
-		{name: "old_4.0.7", version: "4.0.7", upgrade: true, via408: true, via409: true},
-		{name: "4.0.7_offset_1", version: "4.0.7", offset: 1, upgrade: true, via408: true, via409: true},
-		{name: "current_4.0.8", version: "4.0.8", offset: v4_0_8.Handler.Metadata().VersionOffset, upgrade: true, via409: true},
-		{name: "current_4.0.9", version: "4.0.9", offset: v4_0_9.Handler.Metadata().VersionOffset, upgrade: true},
+		{name: "release_4.2.4", version: "4.0.6", offset: 5, upgrade: true, via407: true, via408: true, via409: true, via410: true},
+		{name: "4.0.6", version: "4.0.6", offset: v4_0_6.Handler.Metadata().VersionOffset, upgrade: true, via407: true, via408: true, via409: true, via410: true},
+		{name: "old_4.0.7", version: "4.0.7", upgrade: true, via408: true, via409: true, via410: true},
+		{name: "4.0.7_offset_1", version: "4.0.7", offset: 1, upgrade: true, via408: true, via409: true, via410: true},
+		{name: "current_4.0.8", version: "4.0.8", offset: v4_0_8.Handler.Metadata().VersionOffset, upgrade: true, via409: true, via410: true},
+		{name: "current_4.0.9", version: "4.0.9", offset: v4_0_9.Handler.Metadata().VersionOffset, upgrade: true, via410: true},
 		{name: "current_4.0.11", version: final.Version, offset: final.VersionOffset},
 	} {
 		t.Run(test.name, func(t *testing.T) {
@@ -96,6 +97,9 @@ func TestDoCheckUpgradeQueuesStatisticsRefresh(t *testing.T) {
 				require.NoError(t, b.doCheckUpgrade(context.Background()))
 				if test.upgrade {
 					hops := []versions.Version{final}
+					if test.via410 {
+						hops = append([]versions.Version{v4_0_10.Handler.Metadata()}, hops...)
+					}
 					if test.via409 {
 						hops = append([]versions.Version{v4_0_9.Handler.Metadata()}, hops...)
 					}
