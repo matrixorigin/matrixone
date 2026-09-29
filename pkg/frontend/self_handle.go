@@ -86,7 +86,11 @@ func execInFrontend(ses *Session, execCtx *ExecCtx) (stats statistic.StatsArray,
 		if err != nil {
 			return
 		}
-		_, err = authenticateUserCanExecutePrepareOrExecute(execCtx.reqCtx, ses, execCtx.prepareStmt.PrepareStmt, execCtx.prepareStmt.PreparePlan.GetDcl().GetPrepare().GetPlan())
+		_, err = authenticateUserCanExecutePrepareOrExecute(
+			execCtx.reqCtx, ses, execCtx.prepareStmt.PrepareStmt,
+			execCtx.prepareStmt.PreparePlan.GetDcl().GetPrepare().GetPlan(),
+			execCtx.prepareStmt.defaultDatabase,
+		)
 		if err != nil {
 			ses.RemovePrepareStmt(execCtx.prepareStmt.Name)
 			return
@@ -103,7 +107,11 @@ func execInFrontend(ses *Session, execCtx *ExecCtx) (stats statistic.StatsArray,
 		if err != nil {
 			return
 		}
-		_, err = authenticateUserCanExecutePrepareOrExecute(execCtx.reqCtx, ses, execCtx.prepareStmt.PrepareStmt, execCtx.prepareStmt.PreparePlan.GetDcl().GetPrepare().GetPlan())
+		_, err = authenticateUserCanExecutePrepareOrExecute(
+			execCtx.reqCtx, ses, execCtx.prepareStmt.PrepareStmt,
+			execCtx.prepareStmt.PreparePlan.GetDcl().GetPrepare().GetPlan(),
+			execCtx.prepareStmt.defaultDatabase,
+		)
 		if err != nil {
 			ses.RemovePrepareStmt(execCtx.prepareStmt.Name)
 			return
@@ -243,6 +251,8 @@ func execInFrontend(ses *Session, execCtx *ExecCtx) (stats statistic.StatsArray,
 	case *tree.AnalyzeStmt:
 		ses.EnterFPrint(FPAnalyzeStmt)
 		defer ses.ExitFPrint(FPAnalyzeStmt)
+		restoreDatabase := bindSessionDatabaseForStatement(ses, execCtx.effectiveTxnDefaultDatabase)
+		defer restoreDatabase()
 		if err = handleAnalyzeStmt(ses, execCtx, st); err != nil {
 			return
 		}
@@ -739,6 +749,8 @@ func execInFrontend(ses *Session, execCtx *ExecCtx) (stats statistic.StatsArray,
 		*tree.DataBranchDeleteDatabase,
 		*tree.DataBranchCreateDatabase:
 
+		restoreDatabase := bindSessionDatabaseForStatement(ses, execCtx.effectiveTxnDefaultDatabase)
+		defer restoreDatabase()
 		ses.EnterFPrint(FPDataBranch)
 		defer ses.ExitFPrint(FPDataBranch)
 		authStats, authErr := authenticateDataBranchStatement(execCtx.reqCtx, ses, st)

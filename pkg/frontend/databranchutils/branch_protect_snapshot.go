@@ -133,6 +133,15 @@ type AlterLineageCompactionPlan struct {
 	SnapshotNames []string
 }
 
+// BranchReclaimPlan contains the branch-owned rows that can be reclaimed
+// after an account drop. Metadata rows are retained while any descendant is
+// live because their parent links are needed to protect that descendant's
+// ancestor snapshots.
+type BranchReclaimPlan struct {
+	MetadataTableIDs []uint64
+	SnapshotNames    []string
+}
+
 // NewBranchReclaimDag builds the reclaim DAG from a flat list of metadata
 // rows (shape shared with NewDAG).
 func NewBranchReclaimDag(rows []DataBranchMetadata) BranchReclaimDag {
@@ -159,7 +168,7 @@ func NewBranchReclaimDag(rows []DataBranchMetadata) BranchReclaimDag {
 // the supplied statement time. It never reads the wall clock itself, keeping
 // frontend and compile-layer decisions on the same boundary.
 func PitrRetentionLowerBound(now time.Time, length int, unit string) (int64, error) {
-	if length < 0 {
+	if length <= 0 || length > 100 {
 		return 0, moerr.NewInvalidInputNoCtxf("invalid PITR length %d", length)
 	}
 	now = now.UTC()
@@ -170,13 +179,150 @@ func PitrRetentionLowerBound(now time.Time, length int, unit string) (int64, err
 	case "d":
 		lower = now.AddDate(0, 0, -length)
 	case "mo":
-		lower = now.AddDate(0, -length, 0)
+		lower = addDateClamped(now, 0, -length)
 	case "y":
-		lower = now.AddDate(-length, 0, 0)
+		lower = addDateClamped(now, -length, 0)
 	default:
 		return 0, moerr.NewInvalidInputNoCtxf("unknown PITR unit %q", unit)
 	}
 	return lower.UnixNano(), nil
+}
+
+// PitrRetentionRangeDoesNotExpand reports whether replacing one PITR range
+// with another can never ask GC to retain older history. A point-in-time
+// comparison is insufficient for mixed fixed and calendar units: for example,
+// one month can be shorter than 30 days in February and longer in March.
+func PitrRetentionRangeDoesNotExpand(
+	currentLength int,
+	currentUnit string,
+	nextLength int,
+	nextUnit string,
+) (bool, error) {
+	current, err := newPitrDuration(currentLength, currentUnit)
+	if err != nil {
+		return false, err
+	}
+	next, err := newPitrDuration(nextLength, nextUnit)
+	if err != nil {
+		return false, err
+	}
+	return pitrRetentionRangeDoesNotExpand(current, next), nil
+}
+
+// MergePitrRetentionRanges returns one persistable PITR range that covers both
+// inputs for every statement time. This is used by sys_mo_catalog_pitr, whose
+// range must remain an upper bound for all user PITRs as month lengths change.
+//
+// If neither input permanently covers the other (for example, one month and
+// thirty days), the result is their fixed-day upper envelope. With PITR lengths
+// limited to 100, an incomparable calendar range is at most three months, so
+// the envelope is always representable as at most 100 days.
+func MergePitrRetentionRanges(
+	currentLength int,
+	currentUnit string,
+	nextLength int,
+	nextUnit string,
+) (int, string, error) {
+	current, err := newPitrDuration(currentLength, currentUnit)
+	if err != nil {
+		return 0, "", err
+	}
+	next, err := newPitrDuration(nextLength, nextUnit)
+	if err != nil {
+		return 0, "", err
+	}
+
+	if pitrRetentionRangeDoesNotExpand(current, next) {
+		return currentLength, currentUnit, nil
+	}
+	if pitrRetentionRangeDoesNotExpand(next, current) {
+		return nextLength, nextUnit, nil
+	}
+
+	maxHours := current.maxHours
+	if next.maxHours > maxHours {
+		maxHours = next.maxHours
+	}
+	days := (maxHours + 24 - 1) / 24
+	if days > 100 {
+		return 0, "", moerr.NewInternalErrorNoCtxf(
+			"cannot represent merged PITR retention range %dh", maxHours,
+		)
+	}
+	return days, "d", nil
+}
+
+func pitrRetentionRangeDoesNotExpand(current, next pitrDuration) bool {
+	// Hours and days are fixed durations in UTC. Months and years share the
+	// same clamped calendar semantics, so twelve months exactly equal one year.
+	if current.kind == next.kind {
+		return next.normalized <= current.normalized
+	}
+
+	// Across fixed and calendar units, require the longest possible next
+	// duration to fit inside the shortest possible current duration. The
+	// conservative bound makes the decision independent of month ends, leap
+	// years, and an unbounded delay before every GC consumer observes ALTER.
+	return next.maxHours <= current.minHours
+}
+
+type pitrDuration struct {
+	kind       byte
+	normalized int
+	minHours   int
+	maxHours   int
+}
+
+func newPitrDuration(length int, unit string) (pitrDuration, error) {
+	if length <= 0 || length > 100 {
+		return pitrDuration{}, moerr.NewInvalidInputNoCtxf("invalid PITR length %d", length)
+	}
+
+	switch unit {
+	case "h":
+		return pitrDuration{kind: 'f', normalized: length, minHours: length, maxHours: length}, nil
+	case "d":
+		hours := length * 24
+		return pitrDuration{kind: 'f', normalized: hours, minHours: hours, maxHours: hours}, nil
+	case "mo":
+		return pitrDuration{
+			kind:       'c',
+			normalized: length,
+			minHours:   length * 28 * 24,
+			maxHours:   length * 31 * 24,
+		}, nil
+	case "y":
+		return pitrDuration{
+			kind:       'c',
+			normalized: length * 12,
+			minHours:   length * 365 * 24,
+			maxHours:   length * 366 * 24,
+		}, nil
+	default:
+		return pitrDuration{}, moerr.NewInvalidInputNoCtxf("unknown PITR unit %q", unit)
+	}
+}
+
+// addDateClamped applies a calendar offset while clamping the day to the last
+// valid day in the target month. time.Time.AddDate normalizes February 31 into
+// March, which can move a rolling retention boundary backwards at month end.
+func addDateClamped(t time.Time, years int, months int) time.Time {
+	targetMonth := time.Date(
+		t.Year()+years,
+		t.Month()+time.Month(months),
+		1,
+		t.Hour(),
+		t.Minute(),
+		t.Second(),
+		t.Nanosecond(),
+		t.Location(),
+	)
+	lastDay := targetMonth.AddDate(0, 1, -1).Day()
+	day := t.Day()
+	if day > lastDay {
+		day = lastDay
+	}
+	return targetMonth.AddDate(0, 0, day-1)
 }
 
 func historicalSourceOwnsComponent(
@@ -444,19 +590,11 @@ func (d BranchReclaimDag) subtreeAllDeletedMemo(
 	return true
 }
 
-// ComputeBranchReclaimDropList walks the DAG starting from `deadTIDs`,
-// climbing to every ancestor and re-checking subtree-all-deleted. The return
-// value is the (sorted, deduplicated) list of snames that must be removed
-// from mo_snapshots to release protection (§5.3).
-//
-// Both the ancestor walk (this function) and the subtree check
-// (SubtreeAllDeleted) are cycle-safe — a corrupt `mo_branch_metadata` row
-// that produces a parent-cycle must never hang the drop path.
-func ComputeBranchReclaimDropList(dag BranchReclaimDag, deadTIDs []uint64) []string {
-	candidates := make(map[uint64]struct{}, len(deadTIDs)*2)
-	for _, tid := range deadTIDs {
+func branchReclaimCandidates(dag BranchReclaimDag, roots []uint64) map[uint64]struct{} {
+	candidates := make(map[uint64]struct{}, len(roots)*2)
+	for _, tid := range roots {
 		cursor := tid
-		// `walkVisited` is scoped to a single dead-tid walk so we can
+		// `walkVisited` is scoped to a single root walk so we can
 		// distinguish "hit a sibling's already-seen ancestor" (benign)
 		// from "hit a node in our own walk's history" (cycle).
 		walkVisited := make(map[uint64]struct{})
@@ -472,7 +610,7 @@ func ComputeBranchReclaimDropList(dag BranchReclaimDag, deadTIDs []uint64) []str
 			}
 			walkVisited[cursor] = struct{}{}
 			if _, seen := candidates[cursor]; seen {
-				// Already covered by a previous dead tid's walk (normal
+				// Already covered by a previous root's walk (normal
 				// fan-out): nothing new above this cursor.
 				break
 			}
@@ -484,13 +622,18 @@ func ComputeBranchReclaimDropList(dag BranchReclaimDag, deadTIDs []uint64) []str
 			cursor = meta.ParentTableID
 		}
 	}
+	return candidates
+}
+
+func branchReclaimableTableIDs(dag BranchReclaimDag, roots []uint64) []uint64 {
+	candidates := branchReclaimCandidates(dag, roots)
 
 	// Memoise subtree results so `O(candidates)` × `O(subtree)` does not
 	// become quadratic when many candidates share ancestors (cascaded drop
 	// of a wide subtree).
 	memo := make(map[uint64]bool, len(dag.Info))
 	visited := make(map[uint64]struct{}, len(dag.Info))
-	var drops []string
+	var tableIDs []uint64
 	for tid := range candidates {
 		meta, ok := dag.Info[tid]
 		if !ok {
@@ -504,8 +647,51 @@ func ComputeBranchReclaimDropList(dag BranchReclaimDag, deadTIDs []uint64) []str
 			continue
 		}
 		if dag.subtreeAllDeletedMemo(tid, memo, visited) {
-			drops = append(drops, BranchSnapshotName(tid))
+			tableIDs = append(tableIDs, tid)
 		}
+	}
+	sort.Slice(tableIDs, func(i, j int) bool { return tableIDs[i] < tableIDs[j] })
+	return tableIDs
+}
+
+// ComputeAccountBranchReclaimPlan returns the safe branch metadata and
+// protect-snapshot rows to remove while dropping accountID. It starts at all
+// metadata rows created in that account and walks through their ancestors, so
+// a later child-account drop can reclaim a retained ancestor row. A row is
+// returned only when its complete descendant subtree is deleted; this keeps
+// the DAG connected for live cross-account descendants.
+func ComputeAccountBranchReclaimPlan(
+	dag BranchReclaimDag,
+	accountID uint64,
+) BranchReclaimPlan {
+	var roots []uint64
+	for tableID, meta := range dag.Info {
+		if meta.Creator == accountID {
+			roots = append(roots, tableID)
+		}
+	}
+	tableIDs := branchReclaimableTableIDs(dag, roots)
+	plan := BranchReclaimPlan{MetadataTableIDs: tableIDs}
+	for _, tableID := range tableIDs {
+		plan.SnapshotNames = append(plan.SnapshotNames, BranchSnapshotName(tableID))
+	}
+	sort.Strings(plan.SnapshotNames)
+	return plan
+}
+
+// ComputeBranchReclaimDropList walks the DAG starting from `deadTIDs`,
+// climbing to every ancestor and re-checking subtree-all-deleted. The return
+// value is the (sorted, deduplicated) list of snames that must be removed
+// from mo_snapshots to release protection (§5.3).
+//
+// Both the ancestor walk (this function) and the subtree check
+// (SubtreeAllDeleted) are cycle-safe — a corrupt `mo_branch_metadata` row
+// that produces a parent-cycle must never hang the drop path.
+func ComputeBranchReclaimDropList(dag BranchReclaimDag, deadTIDs []uint64) []string {
+	tableIDs := branchReclaimableTableIDs(dag, deadTIDs)
+	drops := make([]string, 0, len(tableIDs))
+	for _, tableID := range tableIDs {
+		drops = append(drops, BranchSnapshotName(tableID))
 	}
 	sort.Strings(drops)
 	return drops
@@ -536,6 +722,27 @@ func BuildBranchSnapshotDeleteSQL(snames []string) string {
 		b.WriteByte('\'')
 	}
 	b.WriteByte(')')
+	return b.String()
+}
+
+// BuildBranchMetadataDeleteSQL returns a guarded DELETE for reclaimable
+// normal branch metadata. The table_deleted and level predicates are repeated
+// at execution time so a stale caller cannot remove a live or ALTER lineage
+// row even if its table-id list was computed earlier.
+func BuildBranchMetadataDeleteSQL(tableIDs []uint64) string {
+	if len(tableIDs) == 0 {
+		return ""
+	}
+	var b strings.Builder
+	b.Grow(160 + len(tableIDs)*20)
+	b.WriteString("delete from mo_catalog.mo_branch_metadata where table_id in (")
+	for i, tableID := range tableIDs {
+		if i > 0 {
+			b.WriteByte(',')
+		}
+		b.WriteString(strconv.FormatUint(tableID, 10))
+	}
+	b.WriteString(") and table_deleted = true and (level != 'alter' and level not like 'alter:%')")
 	return b.String()
 }
 

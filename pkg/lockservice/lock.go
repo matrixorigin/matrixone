@@ -97,6 +97,10 @@ func (l Lock) addHolder(
 ) {
 	l.holders.add(c.waitTxn)
 	l.waiters.removeByTxnID(c.waitTxn.TxnID)
+	if c.opts.Mode == pb.LockMode_Shared && c.opts.Granularity == pb.Granularity_Row {
+		l.waiters.notifyLeadingShared(
+			notifyValue{defChanged: c.result.TableDefChanged})
+	}
 	logHolderAdded(logger, c, l)
 }
 
@@ -155,6 +159,14 @@ func (l Lock) tryHold(
 
 	// txn already hold the lock
 	if l.holders.contains(c.txn.txnID) {
+		// Re-entry is immediately compatible except for a Shared -> Exclusive
+		// promotion. That promotion is safe only after every other Shared holder
+		// has left; until then this holder must join the waiter graph.
+		if l.isShared() &&
+			c.opts.Mode == pb.LockMode_Exclusive &&
+			l.holders.size() > 1 {
+			return false, false, nil
+		}
 		return true, false, nil
 	}
 
@@ -185,7 +197,9 @@ func (l Lock) canHold(c *lockContext) bool {
 
 func (l Lock) isLockModeAllowed(c *lockContext) bool {
 	if l.isShared() {
-		return c.opts.Mode == pb.LockMode_Shared
+		return c.opts.Mode == pb.LockMode_Shared &&
+			(!c.opts.WriterFair || c.opts.Granularity != pb.Granularity_Row ||
+				!l.waiters.hasExclusiveWaiterBefore(c.w))
 	}
 	return false
 }
@@ -209,6 +223,10 @@ func (l Lock) removeWaiter(w *waiter, logger *log.MOLogger) (bool, bool) {
 	}
 	if l.holders.size() == 0 && wasFirst && l.waiters.size() > 0 {
 		l.waiters.notify(notifyValue{defChanged: l.isLockTableDefChanged()})
+	} else if l.isLockRow() && l.isShared() && wasFirst {
+		// Canceling the leading writer exposes a Shared prefix that can join the
+		// current holder generation without waiting for every holder to leave.
+		l.waiters.notifyLeadingShared(notifyValue{})
 	}
 	return true, l.isEmpty()
 }
@@ -220,6 +238,12 @@ func (l Lock) closeTxn(
 
 	// has another holders
 	if l.holders.size() > 0 {
+		if l.isShared() {
+			// A range-merge waiter can itself be one of the remaining
+			// compatible Shared holders. Wake only those waiters so they can
+			// retry when the ownership shape becomes collapsible.
+			l.waiters.notifySharedHolderChange(notify)
+		}
 		return false
 	}
 

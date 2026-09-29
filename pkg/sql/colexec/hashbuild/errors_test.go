@@ -126,3 +126,19 @@ func TestTerminalBudgetError(t *testing.T) {
 		})
 	}
 }
+
+func TestTerminalBudgetErrorForOperator(t *testing.T) {
+	err := TerminalBudgetErrorForOperator(context.Background(), "merge order", &process.ExecutionResourceError{
+		Kind:      process.ExecutionResourceErrorAdmission,
+		Component: process.ExecutionResourceComponentSpillDisk,
+		Requested: 64 << 10,
+		Used:      8 << 20,
+		Cap:       8 << 20,
+		Message:   process.ErrExecutionResourceAdmission.Error() + ": requested=65536 used=8388608 cap=8388608",
+	})
+
+	require.True(t, moerr.IsMoErrCode(err, moerr.ErrOOM))
+	require.Contains(t, err.Error(), "merge order spill disk budget exceeded")
+	require.NotContains(t, err.Error(), process.ErrExecutionResourceAdmission.Error())
+	require.NotContains(t, err.Error(), "hash build")
+}

@@ -15,9 +15,12 @@
 package window
 
 import (
+	"time"
+
 	"github.com/matrixorigin/matrixone/pkg/common/mpool"
 	"github.com/matrixorigin/matrixone/pkg/common/reuse"
 	"github.com/matrixorigin/matrixone/pkg/container/batch"
+	"github.com/matrixorigin/matrixone/pkg/container/vector"
 	"github.com/matrixorigin/matrixone/pkg/pb/plan"
 	"github.com/matrixorigin/matrixone/pkg/sql/colexec"
 	"github.com/matrixorigin/matrixone/pkg/sql/colexec/aggexec"
@@ -42,14 +45,26 @@ type container struct {
 	batAggs []aggexec.AggFuncExec
 
 	// runningAgg retains the one-group aggregate for cumulative and bounded
-	// sliding ROWS frames between output chunks. runningNextRow guards against
+	// sliding frames between output chunks. runningNextRow guards against
 	// accidentally reusing the state out of order; runningLeft/runningRight
-	// describe the current half-open sliding frame.
+	// describe the current half-open sliding frame. For RANGE frames,
+	// runningPeerEnd lets every row in one peer group reuse the same boundaries.
 	runningAgg       aggexec.AggFuncExec
 	runningNextRow   int
 	runningPartition int
 	runningLeft      int
 	runningRight     int
+	runningPeerEnd   int
+
+	// orderedSetPartitionResults retains one finalized scalar result per
+	// logical partition while a materialized input generation is emitted in
+	// bounded chunks. The compact cache avoids rebuilding an ordered-set
+	// aggregate for every output chunk. orderedSetNextRow and
+	// orderedSetPartition enforce sequential consumption and identify the
+	// cached scalar to broadcast next.
+	orderedSetPartitionResults *vector.Vector
+	orderedSetNextRow          int
+	orderedSetPartition        int
 
 	desc      []bool
 	nullsLast []bool
@@ -66,6 +81,37 @@ type container struct {
 	rBat       *batch.Batch
 
 	runtimeFrames []*plan.FrameClause
+
+	// timestampCivilOrder caches the monotonic civil-time spans of a sorted
+	// TIMESTAMP partition. It is scoped to one materialized input generation
+	// and is cleared before order vectors are reused for the next input batch.
+	// A fold query can then binary-search each span instead of rescanning the
+	// partition for every frame row.
+	timestampCivilOrder map[timestampCivilOrderKey]*timestampCivilOrderIndex
+}
+
+type timestampCivilOrderKey struct {
+	vec        *vector.Vector
+	loc        *time.Location
+	start, end int
+	desc       bool
+}
+
+type timestampCivilOrderIndex struct {
+	hasFold         bool
+	nullPrefixEnd   int
+	nullSuffixStart int
+	spans           []timestampCivilOrderSpan
+}
+
+type timestampCivilOrderSpan struct {
+	start, end int
+}
+
+// timestampRangeSelection preserves window order while allowing a civil-time
+// frame to consist of several disjoint instant-sorted spans around a fold.
+type timestampRangeSelection struct {
+	spans []timestampCivilOrderSpan
 }
 
 type Window struct {
@@ -78,6 +124,10 @@ type Window struct {
 	// PartitionTopN allows the bounded ROW_NUMBER path to coalesce complete
 	// candidate partitions and evaluate their explicit boundaries once.
 	PartitionTopN bool
+	// SpillThreshold is the session sort_spill_mem value captured in the plan.
+	// Window uses it for the internal ordering pass when a partition exceeds
+	// the configured resident sort budget.
+	SpillThreshold int64
 
 	vm.OperatorBase
 }
@@ -126,6 +176,7 @@ func (window *Window) Reset(proc *process.Process, pipelineFailed bool, err erro
 	// hashes) in the mpool until the next reuse.
 	ctr.freeAggFun()
 	ctr.freeRunningAgg()
+	ctr.freeOrderedSetPartitionResults(proc.Mp())
 	if ctr.hasAccountedBufferedData() {
 		// AppendWithCopy and Dup preserve a source vector's allocation
 		// selection. Release inherited backing at the prepared-statement
@@ -142,10 +193,12 @@ func (window *Window) Free(proc *process.Process, pipelineFailed bool, err error
 
 	ctr.cleanOutput(proc.Mp())
 	ctr.runtimeFrames = nil
+	ctr.timestampCivilOrder = nil
 	// Free aggregators before the batch so an error exit from Call (which skips
 	// the normal freeAggFun()) does not leak their mpool-held state.
 	ctr.freeAggFun()
 	ctr.freeRunningAgg()
+	ctr.freeOrderedSetPartitionResults(proc.Mp())
 	ctr.freeBatch(proc.Mp())
 	ctr.freeExes()
 	ctr.freeVector(proc.Mp())
@@ -165,6 +218,7 @@ func (ctr *container) resetParam() {
 	ctr.ps = nil
 	ctr.os = nil
 	ctr.runtimeFrames = nil
+	ctr.timestampCivilOrder = nil
 }
 
 // cleanOutput releases the batch returned by the previous Call. Input-column
@@ -214,6 +268,16 @@ func (ctr *container) freeRunningAgg() {
 	ctr.runningPartition = 0
 	ctr.runningLeft = 0
 	ctr.runningRight = 0
+	ctr.runningPeerEnd = 0
+}
+
+func (ctr *container) freeOrderedSetPartitionResults(mp *mpool.MPool) {
+	if ctr.orderedSetPartitionResults != nil {
+		ctr.orderedSetPartitionResults.Free(mp)
+		ctr.orderedSetPartitionResults = nil
+	}
+	ctr.orderedSetNextRow = 0
+	ctr.orderedSetPartition = 0
 }
 
 func (ctr *container) freeExes() {

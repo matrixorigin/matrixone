@@ -18,6 +18,7 @@ import (
 	"context"
 	"hash/maphash"
 	"math"
+	"sync"
 
 	"github.com/matrixorigin/matrixone/pkg/common/util"
 	"github.com/matrixorigin/matrixone/pkg/fileservice/fscache"
@@ -85,6 +86,27 @@ func (d *DataCache) SetAdmissionTarget(admissionTarget func(capacity int64) (int
 	d.fifo.SetAdmissionTarget(admissionTarget)
 }
 
+func commitDataCacheReservation(value dataCacheValue) {
+	if reservation, ok := value.data.(fscache.DataCacheReservation); ok {
+		reservation.CommitCacheReservation()
+	}
+}
+
+func hasDataCacheReservation(value dataCacheValue) bool {
+	_, ok := value.data.(fscache.DataCacheReservation)
+	return ok
+}
+
+// SetAccountingGuard installs the initialization-only guard used to transfer
+// a MemCache allocation reservation into FIFO usage atomically. The reservation
+// commit callback is bounded, non-blocking, and cannot re-enter the cache.
+func (d *DataCache) SetAccountingGuard(guard sync.Locker) {
+	d.fifo.setAccountingGuard(guard, commitDataCacheReservation)
+	// Values without a reservation have no budget to transfer. Keep their
+	// existing concurrent enqueue path free of the accounting lock.
+	d.fifo.accountingRequired = hasDataCacheReservation
+}
+
 var seed = maphash.MakeSeed()
 
 func shardCacheKey(key fscache.CacheKey) uint64 {
@@ -98,6 +120,7 @@ func shardCacheKey(key fscache.CacheKey) uint64 {
 }
 
 var _ fscache.DataCache = new(DataCache)
+var _ fscache.DataCacheWithPinAdmission = new(DataCache)
 
 func (d *DataCache) Available() int64 {
 	ret := d.fifo.capacity() - d.fifo.Used()
@@ -170,6 +193,28 @@ func (d *DataCache) Get(ctx context.Context, key query.CacheKey) (fscache.Data, 
 		return nil, false
 	}
 	return value.data, true
+}
+
+func (d *DataCache) GetWithPinAdmission(
+	ctx context.Context,
+	key query.CacheKey,
+	admit fscache.DataCachePinAdmission,
+) (data fscache.Data, release func(), ok bool, err error) {
+	if admit == nil {
+		data, ok = d.Get(ctx, key)
+		return data, nil, ok, nil
+	}
+	value, release, ok, err := d.fifo.GetWithAdmission(
+		ctx,
+		key,
+		func(value dataCacheValue, size int64) (func(), error) {
+			return admit(size)
+		},
+	)
+	if !ok || err != nil {
+		return nil, release, ok, err
+	}
+	return value.data, release, true, nil
 }
 
 func (d *DataCache) Contains(key query.CacheKey) bool {

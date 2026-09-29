@@ -12,7 +12,7 @@ create table t1(id int primary key, val int, name varchar(50));
 create index idx_val on t1(val);
 insert into t1 select result, result * 10, concat('row', result) from generate_series(1, 100) g;
 select mo_ctl('dn', 'flush', 'd1.t1');
-select Sleep(1);
+analyze table t1(val);
 
 -- 1. Paired range: >= and <= (closed interval) -> prefix_between
 -- @regex("prefix_between",true)
@@ -80,7 +80,7 @@ insert into t2 values(3, 20, 100, 'z');
 insert into t2 values(4, 20, 200, 'w');
 insert into t2 values(5, 30, 150, 'v');
 select mo_ctl('dn', 'flush', 'd1.t2');
-select Sleep(1);
+analyze table t2(a);
 
 -- 11. Range on leading column of composite index
 -- @regex("prefix_between",true)
@@ -105,7 +105,7 @@ insert into t3 values('d', 'Boston', 90);
 insert into t3 values('e', 'Chicago', 88);
 insert into t3 values('f', 'Austin', 95);
 select mo_ctl('dn', 'flush', 'd1.t3');
-select Sleep(1);
+analyze table t3(city);
 
 -- 14. Range on varchar column: paired bounds
 -- @regex("prefix_between",true)
@@ -137,7 +137,7 @@ create table t4(x int, y int);
 create index idx_x on t4(x);
 insert into t4 select result, result * 2 from generate_series(1, 50) g;
 select mo_ctl('dn', 'flush', 'd1.t4');
-select Sleep(1);
+analyze table t4(x);
 
 -- 19. Range query on table with fake pk
 -- @regex("prefix_between",true)
@@ -179,7 +179,7 @@ insert into t5 values(3, NULL);
 insert into t5 values(4, 20);
 insert into t5 values(5, 30);
 select mo_ctl('dn', 'flush', 'd1.t5');
-select Sleep(1);
+analyze table t5(val);
 
 -- NULL should not appear in range results
 -- @sortkey:0
@@ -199,7 +199,7 @@ drop table if exists t6;
 create table t6(id int primary key, val int unique key);
 insert into t6 select result, result * 5 from generate_series(1, 100) g;
 select mo_ctl('dn', 'flush', 'd1.t6');
-select Sleep(1);
+analyze table t6(val);
 
 -- @regex("Index Table Scan",true)
 explain select * from t6 where val > 100 and val < 200;
@@ -217,7 +217,7 @@ insert into t7 values(3, '2024-06-30');
 insert into t7 values(4, '2024-09-01');
 insert into t7 values(5, '2024-12-31');
 select mo_ctl('dn', 'flush', 'd1.t7');
-select Sleep(1);
+analyze table t7(d);
 
 -- @regex("Index Table Scan",true)
 explain select * from t7 where d >= '2024-03-01' and d <= '2024-09-30';
@@ -237,7 +237,7 @@ insert into t8 values(3, 29.99);
 insert into t8 values(4, 49.99);
 insert into t8 values(5, 99.99);
 select mo_ctl('dn', 'flush', 'd1.t8');
-select Sleep(1);
+analyze table t8(price);
 
 -- @regex("prefix_between",true)
 explain select * from t8 where price >= 19.99 and price <= 49.99;
@@ -270,7 +270,7 @@ insert into t9 values
     ('a4', 'u2', 's2', 'active', NULL, 40),
     ('a5', 'u3', 's1', NULL, '2026-07-05 00:00:00.000004', 50);
 select mo_ctl('dn', 'flush', 'd1.t9');
-select Sleep(1);
+analyze table t9(status);
 
 -- @regex("Index Table Scan",true)
 explain select count(*) from t9 where status = 'active';

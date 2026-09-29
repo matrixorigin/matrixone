@@ -21,6 +21,7 @@ import (
 	"io"
 	"math"
 	"os"
+	"slices"
 	"sync/atomic"
 
 	"github.com/matrixorigin/matrixone/pkg/common/hashmap/keycodec"
@@ -30,6 +31,7 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/container/types"
 	"github.com/matrixorigin/matrixone/pkg/container/vector"
 	"github.com/matrixorigin/matrixone/pkg/pb/plan"
+	"github.com/matrixorigin/matrixone/pkg/sql/colexec"
 	"github.com/matrixorigin/matrixone/pkg/sql/colexec/runtimefilter"
 	planfunction "github.com/matrixorigin/matrixone/pkg/sql/plan/function"
 	v2 "github.com/matrixorigin/matrixone/pkg/util/metric/v2"
@@ -98,6 +100,10 @@ func (hashBuild *HashBuild) Prepare(proc *process.Process) (err error) {
 	hashBuild.ctr.hashmapBuilder.DedupColName = hashBuild.DedupColName
 	hashBuild.ctr.hashmapBuilder.DedupColTypes = hashBuild.DedupColTypes
 	hashBuild.ctr.hashmapBuilder.TrackNullKeys = hashBuild.TrackNullKeys
+	hashBuild.ctr.hashmapBuilder.joinDiagnostic = hashBuild.JoinDiagnostic
+	if hashBuild.JoinDiagnostic != nil {
+		hashBuild.JoinDiagnostic.Prepare(proc)
+	}
 
 	err = hashBuild.ctr.hashmapBuilder.Prepare(
 		hashBuild.Conditions,
@@ -105,6 +111,7 @@ func (hashBuild *HashBuild) Prepare(proc *process.Process) (err error) {
 		hashBuild.DedupDeleteMarkerColIdx,
 		hashBuild.DedupDeleteKeepColIdxList,
 		proc,
+		hashBuild.OwnsConstantFilterDiagnostics,
 	)
 	return TerminalBudgetError(proc.Ctx, err)
 }
@@ -454,7 +461,8 @@ func (hashBuild *HashBuild) build(
 		}
 		needUniqueVec := false
 		ctr.hashmapBuilder.uniqueKeySlots = nil
-		if !hashBuild.IsShuffle && hashBuild.RuntimeFilterSpec != nil {
+		if !hashBuild.IsShuffle && hashBuild.RuntimeFilterSpec != nil &&
+			(hashBuild.JoinDiagnostic == nil || hashBuild.RuntimeFilterSpec.MustApply) {
 			// Membership-filter consumers own a separate typed-key contract.
 			// Ordinary exact filters collect unique keys only when the plan
 			// advertises every producer-side closure required by their payload
@@ -483,7 +491,17 @@ func (hashBuild *HashBuild) build(
 			}
 		}
 
-		err := ctr.hashmapBuilder.BuildHashmap(hashBuild.HashOnPK, hashBuild.NeedAllocateSels, needUniqueVec, proc)
+		runtimeFilterLimit := int32(-1)
+		if needUniqueVec && !hashBuild.RuntimeFilterSpec.UseMembershipFilter {
+			runtimeFilterLimit = hashBuild.RuntimeFilterSpec.UpperLimit
+		}
+		err := ctr.hashmapBuilder.buildHashmapWithRuntimeFilterLimit(
+			hashBuild.HashOnPK,
+			hashBuild.NeedAllocateSels,
+			needUniqueVec,
+			runtimeFilterLimit,
+			proc,
+		)
 		collectionFallback, _ :=
 			ctr.hashmapBuilder.runtimeFilterFallbackState()
 		rebuildSafe := ctr.hashmapBuilder.RetainedBatchRecoverySafe()
@@ -619,6 +637,54 @@ func planExprType(expr *plan.Expr) (types.Type, bool) {
 	), true
 }
 
+func serializedRuntimeFilterSourceCol(expr *plan.Expr) *plan.ColRef {
+	if expr == nil {
+		return nil
+	}
+	if col := expr.GetCol(); col != nil {
+		return col
+	}
+	fn := expr.GetF()
+	if fn == nil || len(fn.Args) == 0 || fn.Args[0] == nil {
+		return nil
+	}
+	return fn.Args[0].GetCol()
+}
+
+func serializedRuntimeFilterEvalArg(expr *plan.Expr) *plan.Expr {
+	col := serializedRuntimeFilterSourceCol(expr)
+	if expr == nil || col == nil {
+		return nil
+	}
+	source := &plan.Expr{
+		Typ: colExprType(expr),
+		Expr: &plan.Expr_Col{Col: &plan.ColRef{
+			RelPos: 0,
+			ColPos: col.ColPos,
+			Name:   col.Name,
+		}},
+	}
+	if expr.GetCol() != nil {
+		source.Typ = expr.Typ
+		return source
+	}
+	fn := expr.GetF()
+	return &plan.Expr{
+		Typ: expr.Typ,
+		Expr: &plan.Expr_F{F: &plan.Function{
+			Func: fn.Func,
+			Args: []*plan.Expr{source, fn.Args[1]},
+		}},
+	}
+}
+
+func colExprType(expr *plan.Expr) plan.Type {
+	if expr.GetCol() != nil {
+		return expr.Typ
+	}
+	return expr.GetF().Args[0].Typ
+}
+
 func runtimeFilterComponentSlots(spec *plan.RuntimeFilterSpec) ([]int, bool) {
 	buildExpr := runtimefilter.BuildKeyExpr(spec)
 	if buildExpr == nil || buildExpr.GetF() == nil {
@@ -630,10 +696,11 @@ func runtimeFilterComponentSlots(spec *plan.RuntimeFilterSpec) ([]int, bool) {
 	}
 	slots := make([]int, len(args))
 	for i, arg := range args {
-		if arg == nil || arg.GetCol() == nil || arg.GetCol().ColPos < 0 {
+		slot, _, ok := runtimefilter.TupleComponentSlot(arg)
+		if !ok {
 			return nil, false
 		}
-		slots[i] = int(arg.GetCol().ColPos)
+		slots[i] = slot
 	}
 	return slots, true
 }
@@ -708,11 +775,17 @@ func (hashBuild *HashBuild) declaredRuntimeFilterEncoding(
 		return keycodec.ExactRuntimeFilterUnsupported, false
 	}
 	componentTypes := make([]types.Type, len(slots))
+	args := buildExpr.GetF().Args
 	for i, slot := range slots {
 		if slot >= len(hashBuild.Conditions) {
 			return keycodec.ExactRuntimeFilterUnsupported, false
 		}
-		componentTypes[i], ok = planExprType(hashBuild.Conditions[slot])
+		conditionType, valid := planExprType(hashBuild.Conditions[slot])
+		_, sourceType, validSlot := runtimefilter.TupleComponentSlot(args[i])
+		if !valid || !validSlot || conditionType != sourceType {
+			return keycodec.ExactRuntimeFilterUnsupported, false
+		}
+		componentTypes[i], ok = planExprType(args[i])
 		if !ok {
 			return keycodec.ExactRuntimeFilterUnsupported, false
 		}
@@ -737,12 +810,22 @@ func materializedRuntimeFilterComponents(
 		return nil, 0, false
 	}
 	componentTypes := make([]types.Type, len(slots))
+	buildExpr := runtimefilter.BuildKeyExpr(spec)
+	args := buildExpr.GetF().Args
 	rowCount := -1
 	for i, slot := range slots {
 		if slot >= len(keys) || keys[slot] == nil {
 			return nil, 0, false
 		}
-		componentTypes[i] = *keys[slot].GetType()
+		_, sourceType, validSlot := runtimefilter.TupleComponentSlot(args[i])
+		if !validSlot || *keys[slot].GetType() != sourceType {
+			return nil, 0, false
+		}
+		var valid bool
+		componentTypes[i], valid = planExprType(args[i])
+		if !valid {
+			return nil, 0, false
+		}
 		if rowCount == -1 {
 			rowCount = keys[slot].Length()
 		} else if keys[slot].Length() != rowCount {
@@ -768,11 +851,24 @@ func (hashBuild *HashBuild) handleRuntimeFilter(
 	if hashBuild.RuntimeFilterSpec == nil {
 		return nil
 	}
+	if hashBuild.JoinDiagnostic != nil && !hashBuild.RuntimeFilterSpec.MustApply {
+		// Probe input cardinality activates ON diagnostics. An optional filter
+		// from this join must not erase every probe row before that point.
+		runtimeFilter := message.RuntimeFilterMessage{
+			Tag: hashBuild.RuntimeFilterSpec.Tag,
+			Typ: message.RuntimeFilter_PASS,
+		}
+		hashBuild.sendRuntimeFilter(runtimeFilter, hashBuild.RuntimeFilterSpec, proc)
+		return nil
+	}
 
 	var runtimeFilter message.RuntimeFilterMessage
 	runtimeFilter.Tag = hashBuild.RuntimeFilterSpec.Tag
 
 	spec := hashBuild.RuntimeFilterSpec
+	if spec.ScalarPredicate {
+		return hashBuild.handleScalarRuntimeFilter(proc, &runtimeFilter, spec)
+	}
 	// Unique keys are source state for an optional message, never transferred
 	// with the message payload. Release them on every terminal path, including
 	// malformed cached plans and contradictory empty/missing states.
@@ -951,6 +1047,92 @@ func (hashBuild *HashBuild) handleRuntimeFilter(
 	return nil
 }
 
+// handleScalarRuntimeFilter publishes an optional early filter for a logical
+// FILTER above an uncorrelated SINGLE join.  The retained build is the scalar
+// subquery result itself, so only an actual cardinality of one can constrain
+// the probe.  More than one row must fail open: the untouched SINGLE operator
+// remains responsible for raising the cardinality error at its original scope.
+func (hashBuild *HashBuild) handleScalarRuntimeFilter(
+	proc *process.Process,
+	runtimeFilter *message.RuntimeFilterMessage,
+	spec *plan.RuntimeFilterSpec,
+) error {
+	ctr := &hashBuild.ctr
+	buildExpr := runtimefilter.BuildKeyExpr(spec)
+	if hashBuild.NeedHashMap || !hashBuild.NeedBatches ||
+		spec.UseMembershipFilter || spec.MatchPrefix ||
+		len(spec.KeyComponentProbeTypes) != 0 || spec.UpperLimit != 1 ||
+		buildExpr == nil ||
+		buildExpr.GetCol() == nil || buildExpr.GetCol().ColPos < 0 {
+		runtimeFilter.Typ = message.RuntimeFilter_PASS
+		hashBuild.sendRuntimeFilter(*runtimeFilter, spec, proc)
+		return nil
+	}
+
+	switch ctr.hashmapBuilder.InputBatchRowCount {
+	case 0:
+		runtimeFilter.Typ = message.RuntimeFilter_DROP
+		hashBuild.sendRuntimeFilter(*runtimeFilter, spec, proc)
+		return nil
+	case 1:
+		// Continue below.
+	default:
+		runtimeFilter.Typ = message.RuntimeFilter_PASS
+		hashBuild.sendRuntimeFilter(*runtimeFilter, spec, proc)
+		return nil
+	}
+
+	var keyVec *vector.Vector
+	keySlot := int(buildExpr.GetCol().ColPos)
+	for _, bat := range ctr.hashmapBuilder.Batches.Buf {
+		if bat == nil || bat.RowCount() == 0 {
+			continue
+		}
+		if bat.RowCount() != 1 || keySlot >= len(bat.Vecs) ||
+			bat.Vecs[keySlot] == nil || bat.Vecs[keySlot].Length() != 1 {
+			runtimeFilter.Typ = message.RuntimeFilter_PASS
+			hashBuild.sendRuntimeFilter(*runtimeFilter, spec, proc)
+			return nil
+		}
+		keyVec = bat.Vecs[keySlot]
+		break
+	}
+	if keyVec == nil {
+		runtimeFilter.Typ = message.RuntimeFilter_PASS
+		hashBuild.sendRuntimeFilter(*runtimeFilter, spec, proc)
+		return nil
+	}
+	if keyVec.IsNull(0) {
+		runtimeFilter.Typ = message.RuntimeFilter_DROP
+		hashBuild.sendRuntimeFilter(*runtimeFilter, spec, proc)
+		return nil
+	}
+	if keyVec.GetGrouping().GetBitmap().CountRange(0, 1) != 0 ||
+		runtimefilter.ExactKeyEncoding(spec, *keyVec.GetType()) !=
+			keycodec.ExactRuntimeFilterRaw {
+		runtimeFilter.Typ = message.RuntimeFilter_PASS
+		hashBuild.sendRuntimeFilter(*runtimeFilter, spec, proc)
+		return nil
+	}
+
+	data, release, err := ctr.hashmapBuilder.marshalRuntimeFilterVector(
+		keyVec, proc.Mp())
+	if err != nil {
+		if hashBuild.fallbackOptionalRuntimeFilter(
+			err, runtimeFilter, spec, proc) {
+			return nil
+		}
+		return err
+	}
+	runtimeFilter.Typ = message.RuntimeFilter_IN
+	runtimeFilter.Card = 1
+	runtimeFilter.Data = data
+	runtimeFilter.SetMemoryRelease(release)
+	hashBuild.sendRuntimeFilter(*runtimeFilter, spec, proc)
+	ctr.runtimeFilterIn = true
+	return nil
+}
+
 func (hashBuild *HashBuild) handleSerializedRuntimeFilter(
 	proc *process.Process,
 	runtimeFilter *message.RuntimeFilterMessage,
@@ -993,6 +1175,14 @@ func (hashBuild *HashBuild) handleSerializedRuntimeFilter(
 		hashBuild.materializeSerializedRuntimeFilter(
 			proc, spec, componentTypes, rowCount)
 	if err != nil {
+		if moerr.IsMoErrCode(err, moerr.ErrOutOfRange) {
+			// A comparison key outside the narrower probe domain cannot match any
+			// probe row. The optional tuple encoder may reject that narrowing;
+			// publish PASS rather than changing the join's error semantics.
+			runtimeFilter.Typ = message.RuntimeFilter_PASS
+			hashBuild.sendRuntimeFilter(*runtimeFilter, spec, proc)
+			return nil
+		}
 		if hashBuild.fallbackOptionalRuntimeFilter(
 			err, runtimeFilter, spec, proc,
 		) {
@@ -1054,17 +1244,54 @@ func (hashBuild *HashBuild) materializeSerializedRuntimeFilter(
 	full := spec.KeyEncoding ==
 		plan.RuntimeFilterKeyEncoding_RUNTIME_FILTER_KEY_SERIAL_FULL_V1
 
-	encoders := make([]planfunction.SerialValueEncoder, len(slots))
-	for i, slot := range slots {
-		encoders[i], err =
-			planfunction.NewSerialValueEncoder(keys[slot])
+	components := keys
+	componentSlots := append([]int(nil), slots...)
+	buildArgs := runtimefilter.BuildKeyExpr(spec).GetF().Args
+	var executors []colexec.ExpressionExecutor
+	if slices.ContainsFunc(buildArgs, func(arg *plan.Expr) bool { return arg.GetF() != nil }) {
+		evalArgs := make([]*plan.Expr, len(buildArgs))
+		for i, arg := range buildArgs {
+			evalArgs[i] = serializedRuntimeFilterEvalArg(arg)
+			if evalArgs[i] == nil {
+				return nil, nil, 0, false, nil
+			}
+		}
+		executors, err = NewExpressionExecutors(
+			proc, evalArgs, hashBuild.ctr.hashmapBuilder.mapAllocationAccount)
+		if err != nil {
+			return nil, nil, 0, false,
+				runtimefilter.MarkOptionalAllocationError(err)
+		}
+		defer func() {
+			for _, executor := range executors {
+				executor.Free()
+			}
+		}()
+		keyBatch := batch.NewWithSize(len(keys))
+		keyBatch.Vecs = keys
+		keyBatch.SetRowCount(rowCount)
+		components = make([]*vector.Vector, len(executors))
+		componentSlots = make([]int, len(executors))
+		for i, executor := range executors {
+			components[i], err = executor.Eval(proc, []*batch.Batch{keyBatch}, nil)
+			if err != nil {
+				return nil, nil, 0, false,
+					runtimefilter.MarkOptionalAllocationError(err)
+			}
+			componentSlots[i] = i
+		}
+	}
+
+	encoders := make([]planfunction.SerialValueEncoder, len(componentSlots))
+	for i, slot := range componentSlots {
+		encoders[i], err = planfunction.NewSerialValueEncoder(components[slot])
 		if err != nil {
 			return nil, nil, 0, false, err
 		}
 	}
 
 	areaBound, maxRowBound, err := serializedRuntimeFilterBounds(
-		proc, keys, slots, rowCount, full)
+		proc, components, componentSlots, rowCount, full)
 	if err != nil {
 		return nil, nil, 0, false, err
 	}
@@ -1121,8 +1348,8 @@ func (hashBuild *HashBuild) materializeSerializedRuntimeFilter(
 		}
 		packer.Reset()
 		rowIsNull := false
-		for i, slot := range slots {
-			component := keys[slot]
+		for i, slot := range componentSlots {
+			component := components[slot]
 			if component.IsNull(uint64(row)) {
 				if !full {
 					rowIsNull = true
@@ -1246,6 +1473,17 @@ func (hashBuild *HashBuild) fallbackOptionalRuntimeFilter(
 ) bool {
 	kind := runtimefilter.ClassifyOptionalFallback(err)
 	if kind == runtimefilter.OptionalFallbackNone {
+		return false
+	}
+	if spec.MustApply {
+		// Publish a terminal message so the probe side cannot remain blocked, but
+		// preserve the admission/allocation error: a required semantic input must
+		// never be converted into a successful optional PASS fallback.
+		*runtimeFilter = message.RuntimeFilterMessage{
+			Tag: spec.Tag,
+			Typ: message.RuntimeFilter_PASS,
+		}
+		hashBuild.sendRuntimeFilter(*runtimeFilter, spec, proc)
 		return false
 	}
 

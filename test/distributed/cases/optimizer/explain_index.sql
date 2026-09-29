@@ -8,7 +8,9 @@ create index t1i1 on t1(c3,c4,c5);
 create unique index t1i2 on t1(c2,c5);
 -- @separator:table
 select mo_ctl('dn', 'flush', 'd1.t1');
-select Sleep(1);
+-- Approximate NDV values are not the assertion target; the following plans are.
+-- @ignore:0,1,2,3
+analyze table t1(c2,c3,c4,c5);
 -- @separator:table
 explain select c3,c4,c5 from t1 where c3=1;
 select c3,c4,c5 from t1 where c3=1;
@@ -84,7 +86,8 @@ create index t2i1 on t2(c2,c3);
 create index t2i2 on t2(c4,c5);
 -- @separator:table
 select mo_ctl('dn', 'flush', 'd1.t2');
-select Sleep(1);
+-- @ignore:0,1,2,3
+analyze table t2(c2,c3,c4,c5);
 -- @separator:table
 explain select * from t2 where c2 in (1,2,3,4,5,6,7,8,9);
 select * from t2 where c2 in (1,2,3,4,5,6,7,8,9);

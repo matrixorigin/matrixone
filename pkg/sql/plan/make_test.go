@@ -71,10 +71,29 @@ func TestPlanTypeCharsetRoundTrip(t *testing.T) {
 func TestNewStringExpressionsAndSerializedColumnsHaveExplicitCharsets(t *testing.T) {
 	require.Equal(t, uint32(types.CharsetUTF8),
 		makePlan2StringConstExprWithType("value").Typ.Charset)
+	require.Equal(t, plan.StringLiteralForm_STRING_LITERAL_TEXT,
+		makePlan2StringConstExprWithType("value").GetLit().GetLiteralForm())
 	require.Equal(t, uint32(types.CharsetBinary),
 		makePlan2StringConstExprWithType("\xff", true).Typ.Charset)
+	require.Equal(t, plan.StringLiteralForm_STRING_LITERAL_HEX,
+		makePlan2StringConstExprWithType("\xff", true).GetLit().GetLiteralForm())
 	require.Equal(t, uint32(types.CharsetBinary),
 		MakeHiddenColDefByName("__mo_serialized").Typ.Charset)
+}
+
+func TestStringLiteralFormRoundTripAndDeepCopy(t *testing.T) {
+	original := makePlan2VarBinaryConstExprWithType("value")
+	original.GetLit().LiteralForm = plan.StringLiteralForm_STRING_LITERAL_BINARY_INTRODUCER
+
+	encoded, err := original.Marshal()
+	require.NoError(t, err)
+	decoded := &plan.Expr{}
+	require.NoError(t, decoded.Unmarshal(encoded))
+	require.Equal(t, original.GetLit().GetLiteralForm(), decoded.GetLit().GetLiteralForm())
+
+	copied := DeepCopyExpr(original)
+	require.NotSame(t, original.GetLit(), copied.GetLit())
+	require.Equal(t, original.GetLit().GetLiteralForm(), copied.GetLit().GetLiteralForm())
 }
 
 func TestMakeGeneratedPlan2TypeUsesExplicitTextCharset(t *testing.T) {

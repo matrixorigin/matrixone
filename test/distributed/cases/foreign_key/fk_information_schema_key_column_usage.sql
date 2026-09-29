@@ -31,6 +31,7 @@ alter table restrict_alter_child add constraint fk_metadata_alter_restrict forei
 select TABLE_NAME as table_name, COLUMN_NAME as column_name, REFERENCED_TABLE_NAME as referenced_table_name, REFERENCED_COLUMN_NAME as referenced_column_name, ORDINAL_POSITION as ordinal_position
 from information_schema.KEY_COLUMN_USAGE
 where TABLE_SCHEMA = database() and TABLE_NAME in ('alter_child', 'restrict_alter_child', 'unnamed_child')
+  and REFERENCED_TABLE_NAME is not null
 order by TABLE_NAME, ORDINAL_POSITION;
 select TABLE_NAME as table_name, UPDATE_RULE as update_rule, DELETE_RULE as delete_rule
 from information_schema.REFERENTIAL_CONSTRAINTS

@@ -36,6 +36,42 @@ type UT_ForceTransCheck struct{}
 
 type TransferOption func(*TransferFlow)
 
+const (
+	// RowID transfer has a material fixed cost: every batch constructs an IN
+	// filter, prunes replacement objects, and builds a reader.  One object block
+	// (8192 rows) made large updates pay that setup cost thousands of times.
+	// Aggregate up to eight blocks, with an 8 MiB soft limit that flushes wide
+	// primary keys at the next source-batch boundary.
+	transferBatchRowLimit  = objectio.BlockMaxRows * 8
+	transferBatchSizeLimit = mpool.MB * 8
+)
+
+func transferBatchLimitReached(rowCount, byteSize int, sourceBatchDone bool) bool {
+	if rowCount == 0 {
+		return false
+	}
+	if rowCount >= transferBatchRowLimit {
+		return true
+	}
+	// Computing Batch.Size for every row would add work to the hot path.  The
+	// source reader already bounds its batches, so enforce the byte limit once
+	// per source batch and bound any overshoot by that source batch.
+	return sourceBatchDone && byteSize >= transferBatchSizeLimit
+}
+
+func newDeletedObjectFilter(
+	deletedObjects []objectio.ObjectStats,
+) func(*objectio.ObjectId) bool {
+	deletedObjectIDs := make(map[types.Objectid]struct{}, len(deletedObjects))
+	for i := range deletedObjects {
+		deletedObjectIDs[*deletedObjects[i].ObjectName().ObjectId()] = struct{}{}
+	}
+	return func(objID *objectio.ObjectId) bool {
+		_, deleted := deletedObjectIDs[*objID]
+		return deleted
+	}
+}
+
 func ConstructCNTombstoneObjectsTransferFlow(
 	ctx context.Context,
 	start, end types.TS,
@@ -51,10 +87,6 @@ func ConstructCNTombstoneObjectsTransferFlow(
 		return nil, nil, err
 	}
 
-	isObjectDeletedFn := func(objId *objectio.ObjectId) bool {
-		return state.CheckIfObjectDeletedBeforeTS(end, false, objId)
-	}
-
 	var logs []zap.Field
 
 	newDataObjects, deletedObjects := state.CollectObjectsBetween(start, end)
@@ -67,13 +99,14 @@ func ConstructCNTombstoneObjectsTransferFlow(
 		return nil, logs, nil
 	}
 
+	deletedObjectPos := 0
 	deletedObjectsIter := func() *types.Objectid {
-		if len(deletedObjects) == 0 {
+		if deletedObjectPos == len(deletedObjects) {
 			return nil
 		}
 
-		id := deletedObjects[0].ObjectName().ObjectId()
-		deletedObjects = deletedObjects[1:]
+		id := deletedObjects[deletedObjectPos].ObjectName().ObjectId()
+		deletedObjectPos++
 		return id
 	}
 
@@ -102,6 +135,12 @@ func ConstructCNTombstoneObjectsTransferFlow(
 	}
 
 	logs = append(logs, zap.Int("coarse-tombstoneObjects", len(tombstoneObjects)))
+
+	// Only tombstones that point at an object deleted in this exact transfer
+	// window need to move. Live appendable objects are intentionally absent
+	// from PartitionState's persisted-object index, so treating an unknown
+	// object as deleted would incorrectly stage their tombstones.
+	isObjectDeletedFn := newDeletedObjectFilter(deletedObjects)
 
 	pkColIdx := table.tableDef.Name2ColIndex[table.tableDef.Pkey.PkeyColName]
 	pkCol := table.tableDef.Cols[pkColIdx]
@@ -264,12 +303,15 @@ func (flow *TransferFlow) processOneBatch(ctx context.Context, buffer *batch.Bat
 		flow.transferred.rowCnt++
 		flow.transferred.objDetails[objectid.ShortStringEx()]++
 
-		if staged.Vecs[0].Length() >= objectio.BlockMaxRows {
+		if transferBatchLimitReached(staged.RowCount(), 0, false) {
 			if err := flow.transferStaged(ctx); err != nil {
 				return err
 			}
 			staged = flow.getStaged()
 		}
+	}
+	if transferBatchLimitReached(staged.RowCount(), staged.Size(), true) {
+		return flow.transferStaged(ctx)
 	}
 	return nil
 }

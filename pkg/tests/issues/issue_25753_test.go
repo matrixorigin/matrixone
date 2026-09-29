@@ -81,16 +81,14 @@ func (c *issue25753TraceConn) didRewriteParamAsDecimal() bool {
 }
 
 // issue25753RewriteFirstParamAsDecimal keeps the driver's length-encoded value
-// and changes only its COM_STMT_EXECUTE type descriptor. This exercises the
-// same wire shape used by clients that bind a direct DECIMAL parameter, while
-// retaining the driver's real prepare/execute/result decoding path.
+// and changes only the COM_STMT_EXECUTE type descriptor. This exercises the
+// wire shape used by clients that bind a direct DECIMAL parameter.
 func issue25753RewriteFirstParamAsDecimal(data []byte) bool {
 	const (
 		packetHeaderSize = 4
 		stmtExecute      = 0x17
 		paramCount       = 1
 	)
-
 	for pos := 0; pos+packetHeaderSize <= len(data); {
 		payloadLen := int(data[pos]) | int(data[pos+1])<<8 | int(data[pos+2])<<16
 		end := pos + packetHeaderSize + payloadLen
@@ -102,8 +100,7 @@ func issue25753RewriteFirstParamAsDecimal(data []byte) bool {
 		const executeHeaderLen = 1 + 4 + 1 + 4
 		newTypesFlagPos := executeHeaderLen + nullBitmapLen
 		typePos := newTypesFlagPos + 1
-		if len(payload) > typePos+1 &&
-			payload[0] == stmtExecute &&
+		if len(payload) > typePos+1 && payload[0] == stmtExecute &&
 			payload[newTypesFlagPos] == 1 &&
 			(payload[typePos] == byte(defines.MYSQL_TYPE_VAR_STRING) ||
 				payload[typePos] == byte(defines.MYSQL_TYPE_STRING)) {
@@ -215,10 +212,7 @@ func TestIssue25753PreparedNumericProtocolLifecycle(t *testing.T) {
 			require.NoError(t, err)
 			defer directStmt.Close()
 
-			// The Go driver sends string arguments as MYSQL_TYPE_VAR_STRING on
-			// COM_STMT_EXECUTE.  These values are nevertheless valid numeric
-			// arguments for overloaded functions; the execute path must infer
-			// their numeric domain without changing the cached prepared plan.
+			// String arguments can still be numeric inputs for overloaded functions.
 			textAbsStmt, err := conn.PrepareContext(ctx, "select abs(?)")
 			require.NoError(t, err)
 			defer textAbsStmt.Close()
@@ -243,9 +237,19 @@ func TestIssue25753PreparedNumericProtocolLifecycle(t *testing.T) {
 				"VAR_STRING sleep argument was not rebound to a fractional numeric value")
 			require.Equal(t, int64(0), sleepResult)
 
-			assertDirectNumeric := func(value any, databaseType string, scanTarget any) {
+			distinctStmt, err := conn.PrepareContext(ctx,
+				"select distinct ? as result from (select 1 union all select 2) as source")
+			require.NoError(t, err)
+			defer distinctStmt.Close()
+			assertPreparedDirect := func(
+				prepared *sql.Stmt,
+				value any,
+				databaseType string,
+				wantPrecision, wantScale int64,
+				scanTarget any,
+			) {
 				t.Helper()
-				rows, queryErr := directStmt.QueryContext(ctx, value)
+				rows, queryErr := prepared.QueryContext(ctx, value)
 				require.NoError(t, queryErr)
 				defer rows.Close()
 
@@ -253,27 +257,76 @@ func TestIssue25753PreparedNumericProtocolLifecycle(t *testing.T) {
 				require.NoError(t, typeErr)
 				require.Len(t, columnTypes, 1)
 				require.Equal(t, databaseType, columnTypes[0].DatabaseTypeName())
+				if wantPrecision >= 0 {
+					precision, scale, ok := columnTypes[0].DecimalSize()
+					require.True(t, ok)
+					require.Equal(t, wantPrecision, precision)
+					require.Equal(t, wantScale, scale)
+				}
 				require.True(t, rows.Next())
 				require.NoError(t, rows.Scan(scanTarget))
 				require.False(t, rows.Next())
 				require.NoError(t, rows.Err())
 			}
+			assertDirect := func(
+				value any,
+				databaseType string,
+				wantPrecision, wantScale int64,
+				scanTarget any,
+			) {
+				t.Helper()
+				assertPreparedDirect(
+					directStmt, value, databaseType, wantPrecision, wantScale, scanTarget)
+			}
 
-			// A direct numeric placeholder must publish and materialize the same
-			// type. Previously the metadata was BIGINT while the value vector was
-			// VARCHAR, which made binary-row decoding fail in GetInt64.
 			var directInteger int64
-			assertDirectNumeric(int64(-42), "BIGINT", &directInteger)
+			assertDirect(int64(-42), "BIGINT", -1, -1, &directInteger)
 			require.Equal(t, int64(-42), directInteger)
 
-			// The Go driver normally sends decimal-looking strings as VAR_STRING;
-			// rewrite only the wire type to exercise a real DECIMAL COM_STMT bind.
+			assertWireDecimal := func(value string, wantPrecision, wantScale int64, expected string) {
+				t.Helper()
+				traceConn.rewriteNextParamAsDecimal()
+				var actual string
+				assertDirect(value, "DECIMAL", wantPrecision, wantScale, &actual)
+				require.True(t, traceConn.didRewriteParamAsDecimal())
+				require.Equal(t, expected, actual)
+			}
+			assertWireDecimal(
+				"-12345678901234567890.123456789", 29, 9,
+				"-12345678901234567890.123456789")
+			assertWireDecimal("0.00", 2, 2, "0.00")
+			assertWireDecimal("0e-30", 30, 30, "0."+strings.Repeat("0", 30))
+			assertWireDecimal("0e+77", 1, 0, "0")
+			assertWireDecimal("000.000e+80", 1, 0, "0")
+			assertWireDecimal(strings.Repeat("0", 100)+"1.0", 2, 1, "1.0")
+			assertWireDecimal(strings.Repeat("0", 200)+"2.0", 2, 1, "2.0")
+			leadingZeroWide := strings.Repeat("0", 100) + strings.Repeat("9", 65)
+			assertWireDecimal(leadingZeroWide, 65, 0, strings.Repeat("9", 65))
+
 			traceConn.rewriteNextParamAsDecimal()
-			var directDecimal string
-			assertDirectNumeric("-1.5", "DECIMAL", &directDecimal)
-			require.True(t, traceConn.didRewriteParamAsDecimal(),
-				"test did not send a direct MYSQL_TYPE_NEWDECIMAL parameter")
-			require.Equal(t, "-1.5", directDecimal)
+			err = directStmt.QueryRowContext(ctx, "0e-77").Scan(new(string))
+			require.Error(t, err)
+			require.True(t, traceConn.didRewriteParamAsDecimal())
+			var decimalErr *mysqlDriver.MySQLError
+			require.True(t, errors.As(err, &decimalErr), "expected MySQL protocol error, got %T: %v", err, err)
+			require.Equal(t, moerr.ErrInvalidInput, decimalErr.Number)
+			require.NotContains(t, decimalErr.Message, "0e-77")
+
+			traceConn.rewriteNextParamAsDecimal()
+			var distinctDecimal string
+			assertPreparedDirect(distinctStmt, "123.4500", "DECIMAL", 7, 4, &distinctDecimal)
+			require.True(t, traceConn.didRewriteParamAsDecimal())
+			require.Equal(t, "123.4500", distinctDecimal)
+
+			wideDecimal := strings.Repeat("9", 65)
+			assertWireDecimal(wideDecimal, 65, 0, wideDecimal)
+
+			var directNullResult sql.NullString
+			assertDirect(nil, "TEXT", -1, -1, &directNullResult)
+			require.False(t, directNullResult.Valid)
+			assertWireDecimal(
+				"-12345678901234567890.123456789", 29, 9,
+				"-12345678901234567890.123456789")
 
 			assertValue := func(left, right any, expected string) {
 				t.Helper()

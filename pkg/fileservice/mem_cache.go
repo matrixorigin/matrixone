@@ -49,8 +49,11 @@ type MemCache struct {
 	statsRefreshPending atomic.Bool
 	closed              atomic.Bool
 
+	// Capacity decisions and the reservation-to-FIFO handoff share this lock.
+	// Releases only decrease reservedBytes and must not reacquire it from the
+	// handoff callback.
 	capacityMu    sync.Mutex
-	reservedBytes int64
+	reservedBytes atomic.Int64
 
 	// idleCacheData contains native buffers whose capacity was reserved but
 	// which were released before FIFO insertion. Keeping these exact
@@ -375,6 +378,7 @@ func newMemCacheWithMetricScope(
 	}
 
 	dataCache = fifocache.NewDataCacheWithPrepareSet(capacityFunc, prepareSetFn, postSetFn, postGetFn, postEvictFn)
+	dataCache.SetAccountingGuard(&ret.capacityMu)
 	dataCache.SetAdmissionTarget(memoryCachePressureTarget)
 
 	ret.cache = dataCache
@@ -393,11 +397,6 @@ func newMemCacheWithMetricScope(
 
 var _ IOVectorCache = new(MemCache)
 var _ CacheDataAllocator = new(MemCache)
-
-// cacheDataAllocationCapacityGuarded marks allocators that reserve FIFO cache
-// capacity before allocating. DiskCache uses it to avoid a second eviction
-// pass when its cache data is allocated directly into this MemCache.
-func (*MemCache) cacheDataAllocationCapacityGuarded() {}
 
 func (m *MemCache) AllocateCacheData(ctx context.Context, size int) fscache.Data {
 	return m.allocateCacheData(ctx, size, malloc.NoHints)
@@ -451,8 +450,9 @@ func (m *MemCache) reserveCacheData(ctx context.Context, bytes int) *memoryCache
 		m.capacityMu.Lock()
 		capacity := m.cache.Capacity()
 		used := m.cache.Used()
-		if want <= capacity-used-m.reservedBytes {
-			m.reservedBytes += want
+		reserved := m.reservedBytes.Load()
+		if want <= capacity-used-reserved {
+			m.reservedBytes.Add(want)
 			m.capacityMu.Unlock()
 			return &memoryCacheReservation{cache: m, bytes: want}
 		}
@@ -466,7 +466,7 @@ func (m *MemCache) reserveCacheData(ctx context.Context, bytes int) *memoryCache
 
 		m.capacityMu.Lock()
 		capacity = m.cache.Capacity()
-		target := capacity - m.reservedBytes - want
+		target := capacity - m.reservedBytes.Load() - want
 		m.capacityMu.Unlock()
 
 		if target < 0 {
@@ -560,13 +560,9 @@ func (m *MemCache) releaseIdleCacheData() int {
 }
 
 func (m *MemCache) releaseReservedBytes(bytes int64) {
-	m.capacityMu.Lock()
-	m.reservedBytes -= bytes
-	if m.reservedBytes < 0 {
-		m.capacityMu.Unlock()
+	if m.reservedBytes.Add(-bytes) < 0 {
 		panic("memory cache reservation underflow")
 	}
-	m.capacityMu.Unlock()
 }
 
 func (m *MemCache) refreshAllocatorMetrics(force bool) {
@@ -711,7 +707,32 @@ func (m *MemCache) Read(
 			Offset: entry.Offset,
 			Sz:     entry.Size,
 		}
-		bs, ok := m.cache.Get(ctx, key)
+		var bs fscache.Data
+		var ok bool
+		if entry.admitCachedData != nil {
+			cache, supportsAdmission := m.cache.(fscache.DataCacheWithPinAdmission)
+			if !supportsAdmission {
+				continue
+			}
+			var release func()
+			bs, release, ok, err = cache.GetWithPinAdmission(ctx, key, entry.admitCachedData)
+			if errors.Is(err, fscache.ErrCacheAdmissionRejected) {
+				// The key exists, but retaining its physical backing would violate
+				// the caller's pin policy or budget. Treat that as a cache miss so
+				// cache warmth cannot turn an otherwise valid read into a failure.
+				numRead++
+				err = nil
+				continue
+			}
+			if err != nil {
+				return err
+			}
+			if ok {
+				vector.Entries[i].releaseCachedData = release
+			}
+		} else {
+			bs, ok = m.cache.Get(ctx, key)
+		}
 		numRead++
 		if ok {
 			vector.Entries[i].CachedData = bs
@@ -768,7 +789,7 @@ func (m *MemCache) Update(
 			Sz:     entry.Size,
 		}
 		LogEvent(ctx, str_set_memory_cache_entry_begin)
-		inserted, err := m.cache.Set(ctx, key, entry.CachedData)
+		_, err := m.cache.Set(ctx, key, entry.CachedData)
 		LogEvent(ctx, str_set_memory_cache_entry_end)
 		if errors.Is(err, fscache.ErrCacheAdmissionRejected) {
 			metric.FSCachePressureMemorySkipCounter.Inc()
@@ -776,11 +797,6 @@ func (m *MemCache) Update(
 		}
 		if err != nil {
 			return err
-		}
-		if inserted {
-			if reserved, ok := entry.CachedData.(fscache.DataCacheReservation); ok {
-				reserved.CommitCacheReservation()
-			}
 		}
 	}
 	return nil

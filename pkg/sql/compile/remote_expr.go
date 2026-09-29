@@ -18,9 +18,11 @@ import (
 	"reflect"
 
 	"github.com/matrixorigin/matrixone/pkg/container/batch"
+	"github.com/matrixorigin/matrixone/pkg/pb/pipeline"
 	"github.com/matrixorigin/matrixone/pkg/pb/plan"
 	"github.com/matrixorigin/matrixone/pkg/sql/colexec"
 	plan2 "github.com/matrixorigin/matrixone/pkg/sql/plan"
+	"github.com/matrixorigin/matrixone/pkg/sql/plan/function"
 	"github.com/matrixorigin/matrixone/pkg/sql/plan/rule"
 	"github.com/matrixorigin/matrixone/pkg/vm"
 	"github.com/matrixorigin/matrixone/pkg/vm/process"
@@ -529,6 +531,95 @@ func containsVarExprInExpressionGetters(value any) bool {
 	if getter, ok := value.(lockRowsExpressionsGetter); ok {
 		if containsVarExprInValue(reflect.ValueOf(getter.GetLockRowsExpressions()), nil) {
 			return true
+		}
+	}
+	return false
+}
+
+type remoteFunctionPredicate func(functionID, overloadID int32) bool
+
+func pipelineContainsPadSpaceCast(p *pipeline.Pipeline) bool {
+	return pipelineContainsFunction(p, func(functionID, overloadID int32) bool {
+		return functionID == function.CAST && (overloadID == 2 || overloadID == 3)
+	})
+}
+
+func pipelineContainsFunction(p *pipeline.Pipeline, predicate remoteFunctionPredicate) bool {
+	return containsFunctionInValue(reflect.ValueOf(p), nil, predicate)
+}
+
+func containsFunctionInExpr(
+	expr *plan.Expr,
+	seen map[uintptr]struct{},
+	predicate remoteFunctionPredicate,
+) bool {
+	if expr == nil {
+		return false
+	}
+	if fn := expr.GetF(); fn != nil && fn.Func != nil {
+		functionID, overloadID := function.DecodeOverloadID(fn.Func.Obj)
+		if predicate(functionID, overloadID) {
+			return true
+		}
+	}
+	return containsFunctionInValue(reflect.ValueOf(expr.Expr), seen, predicate)
+}
+
+func containsFunctionInValue(
+	v reflect.Value,
+	seen map[uintptr]struct{},
+	predicate remoteFunctionPredicate,
+) bool {
+	if !v.IsValid() {
+		return false
+	}
+	if v.Kind() == reflect.Interface {
+		if v.IsNil() {
+			return false
+		}
+		return containsFunctionInValue(v.Elem(), seen, predicate)
+	}
+	if v.Kind() == reflect.Pointer {
+		if v.IsNil() {
+			return false
+		}
+		if v.Type() == planExprPtrType {
+			return containsFunctionInExpr(v.Interface().(*plan.Expr), seen, predicate)
+		}
+		if seen == nil {
+			seen = make(map[uintptr]struct{})
+		}
+		ptr := v.Pointer()
+		if _, ok := seen[ptr]; ok {
+			return false
+		}
+		seen[ptr] = struct{}{}
+		return containsFunctionInValue(v.Elem(), seen, predicate)
+	}
+
+	switch v.Kind() {
+	case reflect.Slice, reflect.Array:
+		for i := 0; i < v.Len(); i++ {
+			if containsFunctionInValue(v.Index(i), seen, predicate) {
+				return true
+			}
+		}
+	case reflect.Map:
+		iter := v.MapRange()
+		for iter.Next() {
+			if containsFunctionInValue(iter.Key(), seen, predicate) ||
+				containsFunctionInValue(iter.Value(), seen, predicate) {
+				return true
+			}
+		}
+	case reflect.Struct:
+		for i := 0; i < v.NumField(); i++ {
+			if !v.Type().Field(i).IsExported() {
+				continue
+			}
+			if containsFunctionInValue(v.Field(i), seen, predicate) {
+				return true
+			}
 		}
 	}
 	return false

@@ -44,7 +44,8 @@ select cast('1abc' as double);
 ➤ cast(1abc as double)[8,54,0]  𝄀
 1.0
 select cast(X'' as double);
-invalid input: "" is invalid numeric string
+➤ cast(0x as double)[8,53,31]  𝄀
+0.0
 select cast(_binary 'this-is-a-very-long-string' as double);
 ➤ cast(this-is-a-very-long-string as double)[8,54,0]  𝄀
 0.0
@@ -376,7 +377,8 @@ select (_binary X'31' | NULL) + 0;
 ➤ (0x31 | null) + 0[-5,64,0]  𝄀
 null
 SELECT CAST(X'' AS SIGNED);
-invalid argument cast to int, bad value []
+➤ cast(0x as signed)[-5,64,0]  𝄀
+0
 SELECT CAST(X'11111111111111111111111111' AS SIGNED);
 Data truncation: data out of range: data type int, 
 select CAST(0x8fffffffffffffff as signed);
@@ -393,7 +395,7 @@ select cast('a10' as unsigned integer);
 invalid argument cast to uint64, bad value a10
 select 10+'a';
 invalid argument cast to int, bad value a
-select 10.0+cast('a' as decimal);
+select 10.0+cast('a' as decimal(38,0));
 invalid input: a beyond the range, can't be converted to Decimal128(38,0).
 select 10E+0+'a';
 ➤ 10e+0 + a[8,54,0]  𝄀
@@ -508,7 +510,7 @@ drop table ts_cast_time;
 set time_zone='SYSTEM';
 CREATE TABLE t1 (v varchar(10), tt char(255), t char(255),mt char(255), lt char(255));
 INSERT INTO t1 VALUES ('1.01', '2.02', '3.03', '4.04', '5.05');
-SELECT CAST(v AS DECIMAL), CAST(tt AS DECIMAL), CAST(t AS DECIMAL), CAST(mt AS DECIMAL), CAST(lt AS DECIMAL) from t1;
+SELECT CAST(v AS DECIMAL(38,0)), CAST(tt AS DECIMAL(38,0)), CAST(t AS DECIMAL(38,0)), CAST(mt AS DECIMAL(38,0)), CAST(lt AS DECIMAL(38,0)) from t1;
 ➤ cast(v as decimal(38))[3,38,0]  ¦  cast(tt as decimal(38))[3,38,0]  ¦  cast(t as decimal(38))[3,38,0]  ¦  cast(mt as decimal(38))[3,38,0]  ¦  cast(lt as decimal(38))[3,38,0]  𝄀
 1  ¦  2  ¦  3  ¦  4  ¦  5
 DROP TABLE t1;

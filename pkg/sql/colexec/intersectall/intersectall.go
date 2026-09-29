@@ -53,6 +53,9 @@ func (intersectAll *IntersectAll) Prepare(proc *process.Process) error {
 	if intersectAll.ctr.hashTable, err = hashmap.NewStrHashMap(true, proc.Mp()); err != nil {
 		return err
 	}
+	if err = intersectAll.ctr.keyEvaluator.Prepare(proc, intersectAll.KeyExprs); err != nil {
+		return err
+	}
 	if len(intersectAll.ctr.inserted) == 0 {
 		intersectAll.ctr.inserted = make([]uint8, hashmap.UnitLimit)
 		intersectAll.ctr.resetInserted = make([]uint8, hashmap.UnitLimit)
@@ -102,8 +105,12 @@ func (intersectAll *IntersectAll) Call(proc *process.Process) (vm.CallResult, er
 // build use all batches from proc.Reg.MergeReceiver[1](right relation) to build the hash map.
 func (intersectAll *IntersectAll) build(proc *process.Process, analyzer process.Analyzer) error {
 	ctr := &intersectAll.ctr
+	child, err := vm.GetChild(intersectAll, 1)
+	if err != nil {
+		return err
+	}
 	for {
-		input, err := vm.ChildrenCall(intersectAll.GetChildren(1), proc, analyzer)
+		input, err := vm.ChildrenCall(child, proc, analyzer)
 		if err != nil {
 			return err
 		}
@@ -117,6 +124,10 @@ func (intersectAll *IntersectAll) build(proc *process.Process, analyzer process.
 
 		// build hashTable and a counter to record how many times each key appears
 		{
+			keyVecs, err := ctr.keyEvaluator.Eval(proc, input.Batch)
+			if err != nil {
+				return err
+			}
 			itr := ctr.hashTable.NewIterator()
 			count := input.Batch.RowCount()
 			for i := 0; i < count; i += hashmap.UnitLimit {
@@ -125,7 +136,7 @@ func (intersectAll *IntersectAll) build(proc *process.Process, analyzer process.
 				if n > hashmap.UnitLimit {
 					n = hashmap.UnitLimit
 				}
-				vs, _, err := itr.Insert(i, n, input.Batch.Vecs)
+				vs, _, err := itr.Insert(i, n, keyVecs)
 				if err != nil {
 					return err
 				}
@@ -153,8 +164,12 @@ func (intersectAll *IntersectAll) build(proc *process.Process, analyzer process.
 // if batch is the last one, return true, else return false.
 func (intersectAll *IntersectAll) probe(proc *process.Process, analyzer process.Analyzer, result *vm.CallResult) (bool, error) {
 	ctr := &intersectAll.ctr
+	child, err := vm.GetChild(intersectAll, 0)
+	if err != nil {
+		return false, err
+	}
 	for {
-		input, err := vm.ChildrenCall(intersectAll.GetChildren(0), proc, analyzer)
+		input, err := vm.ChildrenCall(child, proc, analyzer)
 		if err != nil {
 			return false, err
 		}
@@ -183,6 +198,10 @@ func (intersectAll *IntersectAll) probe(proc *process.Process, analyzer process.
 
 		// probe hashTable
 		{
+			keyVecs, err := ctr.keyEvaluator.Eval(proc, input.Batch)
+			if err != nil {
+				return false, err
+			}
 			itr := ctr.hashTable.NewIterator()
 			count := input.Batch.RowCount()
 			for i := 0; i < count; i += hashmap.UnitLimit {
@@ -194,7 +213,7 @@ func (intersectAll *IntersectAll) probe(proc *process.Process, analyzer process.
 				copy(ctr.inserted[:n], ctr.resetInserted[:n])
 				cnt = 0
 
-				vs, _, err := itr.Find(i, n, input.Batch.Vecs)
+				vs, _, err := itr.Find(i, n, keyVecs)
 				if err != nil {
 					return false, err
 				}

@@ -642,6 +642,8 @@ func (txn *Transaction) GetSyncProtectionJobID() string {
 type Summary struct {
 	objBat             *batch.Batch
 	accountId          uint32
+	databaseId         uint64
+	tableId            uint64
 	tbName             string
 	dbName             string
 	autoIncrEpoch      uint32
@@ -680,6 +682,20 @@ func (b *deletedBlocks) getDeletedRowIDs(appendTo func(row types.Rowid)) {
 		for _, offset := range offsets {
 			rowId := types.NewRowid(&bid, uint32(offset))
 			appendTo(rowId)
+		}
+	}
+}
+
+func (b *deletedBlocks) getDeletedRowIDsForBlocks(
+	blocks []types.Blockid,
+	appendTo func(row types.Rowid),
+) {
+	b.RLock()
+	defer b.RUnlock()
+	for i := range blocks {
+		for _, offset := range b.offsets[blocks[i]] {
+			rowID := types.NewRowid(&blocks[i], uint32(offset))
+			appendTo(rowID)
 		}
 	}
 }
@@ -800,6 +816,9 @@ func (txn *Transaction) StartStatement() {
 	}
 	txn.startStatementCalled = true
 	txn.incrStatementCalled = false
+	if callbacks, ok := txn.op.(client.StatementCallbackOperator); ok {
+		callbacks.BeginStatementCallbacks()
+	}
 }
 
 func (txn *Transaction) EndStatement() {
@@ -1162,9 +1181,16 @@ func (txn *Transaction) gcObjsByIdxRange(start, end int, scope cloneGCScope) (er
 	return gcFiles(txn, scope, objsName...)
 }
 
-func (txn *Transaction) RollbackLastStatement(ctx context.Context) error {
+func (txn *Transaction) RollbackLastStatement(ctx context.Context) (err error) {
 	txn.op.EnterRollbackStmt()
 	defer txn.op.ExitRollbackStmt()
+	// This defer runs after the workspace mutex is released. Cache retirement
+	// can wait for allocator work that needs the workspace.
+	defer func() {
+		if callbacks, ok := txn.op.(client.StatementCallbackOperator); ok {
+			err = errors.Join(err, callbacks.RollbackStatementCallbacks(ctx))
+		}
+	}()
 	v2.TxnRollbackLastStatementCounter.Inc()
 	var (
 		beforeEntries int
@@ -1450,7 +1476,6 @@ type txnTable struct {
 	fake bool
 }
 
-// FIXME: no pointer here
 type blockSortHelper struct {
 	blk *objectio.BlockInfo
 	zm  index.ZM

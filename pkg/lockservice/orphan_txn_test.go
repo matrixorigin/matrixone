@@ -70,6 +70,86 @@ func TestUnlockOrphanTxn(t *testing.T) {
 	)
 }
 
+func TestRemoteSessionLockIsNotUnlockedAsOrphan(t *testing.T) {
+	runLockServiceTestsWithAdjustConfig(
+		t,
+		[]string{"s1", "s2"},
+		time.Second*10,
+		func(_ *lockTableAllocator, s []*service) {
+			owner := s[0]
+			session := s[1]
+			ctx, cancel := context.WithTimeout(context.Background(), time.Second*5)
+			defer cancel()
+
+			const table = uint64(27380)
+			row := [][]byte{[]byte("session-lock")}
+			holderTxn := []byte("mo-user-level-lock\x00sys:session\x00name\x0045\x00nonce")
+			waiterTxn := []byte("waiter")
+			warmupTxn := []byte("warmup")
+
+			// Bind the table to the intended owner before the remote session
+			// creates the holder.
+			mustAddTestLock(t, ctx, owner, table, warmupTxn,
+				[][]byte{[]byte("warmup-row")}, pb.Granularity_Row)
+			require.NoError(t, owner.Unlock(ctx, warmupTxn, timestamp.Timestamp{}))
+
+			require.NoError(t, session.RegisterExternalTxn(holderTxn))
+			defer session.UnregisterExternalTxn(holderTxn)
+
+			// The first service owns the table; the session on s2 holds its row
+			// remotely. Unlike a transaction, a user-level lock is intentionally
+			// absent from Config.TxnIterFunc while its SQL session remains alive.
+			mustAddTestLock(t, ctx, session, table, holderTxn, row, pb.Granularity_Row)
+			bind, err := owner.GetLockTableBind(0, table)
+			require.NoError(t, err)
+			require.Equal(t, owner.GetServiceID(), bind.ServiceID)
+
+			waiterDone := make(chan error, 1)
+			go func() {
+				_, err := owner.Lock(ctx, table, row, waiterTxn, newTestRowExclusiveOptions())
+				waiterDone <- err
+			}()
+			require.NoError(t, WaitWaiters(owner, 0, table, row[0], 1))
+
+			lockTable, err := owner.getLockTable(ctx, 0, table)
+			require.NoError(t, err)
+			lt := lockTable.(*localLockTable)
+			require.True(t, owner.activeTxnHolder.hasRemoteLockBind(
+				session.GetServiceID(),
+				lt.getBind(),
+				owner.cfg.RemoteLockTimeout.Duration,
+			), "the test must exercise remote transaction liveness, not dead-service recovery")
+			// Run the same orphan check synchronously so this assertion cannot
+			// pass merely because the background checker was not scheduled yet.
+			owner.events.checkOrphan(checkOrphan{
+				lt:  lt,
+				key: row[0],
+			})
+			holder, exists, err := owner.GetLockHolder(
+				ctx,
+				table,
+				row[0],
+				newTestRowExclusiveOptions(),
+			)
+			require.NoError(t, err)
+			require.True(t, exists)
+			require.Equal(t, holderTxn, holder.TxnID,
+				"the live remote session must remain the lock holder")
+
+			require.NoError(t, session.Unlock(ctx, holderTxn, timestamp.Timestamp{}))
+			session.UnregisterExternalTxn(holderTxn)
+			select {
+			case err := <-waiterDone:
+				require.NoError(t, err)
+			case <-ctx.Done():
+				require.NoError(t, ctx.Err())
+			}
+			require.NoError(t, owner.Unlock(ctx, waiterTxn, timestamp.Timestamp{}))
+		},
+		nil,
+	)
+}
+
 func TestCannotUnlockOrphanTxnWithCommunicationInterruption(t *testing.T) {
 	var pause atomic.Bool
 	remoteLockTimeout := time.Second
@@ -155,13 +235,7 @@ func TestCannotUnlockOrphanTxnWithCommittingInAllocator(t *testing.T) {
 		func(c *Config) {
 			c.RemoteLockTimeout.Duration = remoteLockTimeout
 			c.KeepRemoteLockDuration.Duration = time.Millisecond * 100
-			c.TxnIterFunc = func(f func([]byte) bool) {
-				for _, txn := range activeTxns {
-					if !f(txn) {
-						return
-					}
-				}
-			}
+			c.TxnIterFunc = newTestTxnIterFunc(activeTxns...)
 		},
 	)
 }
@@ -233,6 +307,10 @@ func TestUnlockOrphanTxnWhenBindHeartbeatMissing(t *testing.T) {
 			mustAddTestLock(t, ctx, l2, table1, holderTxn, [][]byte{row1}, pb.Granularity_Row)
 			require.NotNil(t, l1.activeTxnHolder.getActiveTxn(holderTxn, false, ""))
 
+			// Route-cache eviction no longer stops a live transaction's bind
+			// heartbeat. Stop the keeper explicitly to exercise the missing-heartbeat
+			// orphan path.
+			require.NoError(t, l2.remote.keeper.Close())
 			l2.tableGroups.removeWithFilter(func(id uint64, _ lockTable) bool {
 				return id == table1
 			}, closeReasonBindChanged)
@@ -258,13 +336,7 @@ func TestUnlockOrphanTxnWhenBindHeartbeatMissing(t *testing.T) {
 		func(c *Config) {
 			c.RemoteLockTimeout.Duration = remoteLockTimeout
 			c.KeepRemoteLockDuration.Duration = time.Millisecond * 50
-			c.TxnIterFunc = func(f func([]byte) bool) {
-				for _, txn := range activeTxns {
-					if !f(txn) {
-						return
-					}
-				}
-			}
+			c.TxnIterFunc = newTestTxnIterFunc(activeTxns...)
 		},
 	)
 }
@@ -375,13 +447,7 @@ func TestCannotUnlockStaleBindTxnWithCommittingInAllocator(t *testing.T) {
 		func(c *Config) {
 			c.RemoteLockTimeout.Duration = remoteLockTimeout
 			c.KeepRemoteLockDuration.Duration = time.Millisecond * 50
-			c.TxnIterFunc = func(f func([]byte) bool) {
-				for _, txn := range activeTxns {
-					if !f(txn) {
-						return
-					}
-				}
-			}
+			c.TxnIterFunc = newTestTxnIterFunc(activeTxns...)
 		},
 	)
 }

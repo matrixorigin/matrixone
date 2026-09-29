@@ -1,0 +1,88 @@
+drop database if exists sql_tvf_test;
+create database sql_tvf_test;
+use sql_tvf_test;
+create table t(id int, name varchar(50), score int);
+insert into t values (1,'alice',90),(2,'bob',NULL),(3,'carol',75),(4,'d,e',60),(5,'q"x',NULL);
+set @h = sql_tvf_connect('{"driver":"mysql","dsn":"dump:111@tcp(127.0.0.1:6001)/sql_tvf_test"}');
+select * from sql_tvf('select id,name,score from t order by id', '{"cols":[{"name":"id","type":"int64"},{"name":"name","type":"string"},{"name":"score","type":"int64"}]}', @h) x;
+➤ id[-5,64,0]  ¦  name[12,536870911,0]  ¦  score[-5,64,0]  𝄀
+1  ¦  alice  ¦  90  𝄀
+2  ¦  bob  ¦  null  𝄀
+3  ¦  carol  ¦  75  𝄀
+4  ¦  d,e  ¦  60  𝄀
+5  ¦  q"x  ¦  null
+select count(*) as null_scores from sql_tvf('select id,name,score from t', '{"cols":[{"name":"id","type":"int64"},{"name":"name","type":"string"},{"name":"score","type":"int64"}]}', @h) x where x.score is null;
+➤ null_scores[-5,64,0]  𝄀
+2
+select x.id, x.score from sql_tvf('select id,name,score from t order by id', '{"cols":[{"name":"id","type":"int64"},{"name":"name","type":"string"},{"name":"score","type":"int64"}]}', @h) x where x.score is not null order by x.id;
+➤ id[-5,64,0]  ¦  score[-5,64,0]  𝄀
+1  ¦  90  𝄀
+3  ¦  75  𝄀
+4  ¦  60
+select count(*) as c from sql_tvf('select id,name,score from t', '{"cols":[{"name":"id","type":"int64"},{"name":"name","type":"string"},{"name":"score","type":"int64"}]}', @h) x where x.id > 2;
+➤ c[-5,64,0]  𝄀
+3
+select a.id, b.name from
+sql_tvf('select id,name,score from t', '{"cols":[{"name":"id","type":"int64"},{"name":"name","type":"string"},{"name":"score","type":"int64"}]}', @h) a
+join sql_tvf('select id,name,score from t', '{"cols":[{"name":"id","type":"int64"},{"name":"name","type":"string"},{"name":"score","type":"int64"}]}', @h) b
+on a.id = b.id where a.id in (1,4) order by a.id;
+➤ id[-5,64,0]  ¦  name[12,536870911,0]  𝄀
+1  ¦  alice  𝄀
+4  ¦  d,e
+select * from sql_tvf('select id,name from t order by id', NULL, @h) x;
+➤ result[-1,2147483647,0]  𝄀
+["1", "alice"]  𝄀
+["2", "bob"]  𝄀
+["3", "carol"]  𝄀
+["4", "d,e"]  𝄀
+["5", "q\"x"]
+set @sql_tvf_config = '{"driver":"mysql","dsn":"dump:111@tcp(127.0.0.1:6001)/sql_tvf_test"}';
+select count(*) as c from sql_tvf('select * from t') x;
+➤ c[-5,64,0]  𝄀
+5
+select sql_tvf_connect('{"driver":"nope","dsn":"x"}');
+invalid input: sql_tvf: unsupported driver "nope" (supported: mysql, postgres)
+select sql_tvf_disconnect(@h) as disconnected;
+➤ disconnected[-7,1,0]  𝄀
+1
+select sql_tvf_disconnect(@h) as disconnected_again;
+➤ disconnected_again[-7,1,0]  𝄀
+0
+select count(*) from sql_tvf('select 1', '{"cols":[{"name":"x","type":"int64"}]}', 'sql:deadbeefdeadbeef') x;
+invalid input: foreigntvf: connection handle "sql:deadbeefdeadbeef" not found or disconnected; check the conn argument
+set @h = sql_tvf_connect('{"driver":"mysql","dsn":"dump:111@tcp(127.0.0.1:6001)/sql_tvf_test"}');
+create table typed(b bool, i32 int, f32 float, f64 double, ts timestamp, txt varchar(100));
+insert into typed values
+(true, 42, 1.5, 2.25, '2026-01-15 10:20:30', 'line1\nline2 unicode 中文'),
+(false, NULL, NULL, -0.5, NULL, NULL);
+select * from sql_tvf('select b,i32,f32,f64,ts,txt from typed order by i32', '{"cols":[{"name":"b","type":"bool"},{"name":"i32","type":"int32"},{"name":"f32","type":"float32"},{"name":"f64","type":"float64"},{"name":"ts","type":"timestamp"},{"name":"txt","type":"string"}]}', @h) x;
+➤ b[-7,1,0]  ¦  i32[4,32,0]  ¦  f32[7,23,31]  ¦  f64[8,53,31]  ¦  ts[93,19,0]  ¦  txt[12,536870911,0]  𝄀
+0  ¦  null  ¦  null  ¦  -0.5  ¦  null  ¦  null  𝄀
+1  ¦  42  ¦  1.5  ¦  2.25  ¦  2026-01-15 10:20:30  ¦  line1
+line2 unicode 中文
+select * from sql_tvf('select b,i32,f32,f64,ts from typed where i32 is not null', 'bifFt', @h) x;
+➤ col0[-7,1,0]  ¦  col1[4,32,0]  ¦  col2[7,23,31]  ¦  col3[8,53,31]  ¦  col4[93,19,0]  𝄀
+1  ¦  42  ¦  1.5  ¦  2.25  ¦  2026-01-15 10:20:30
+select * from sql_tvf('select 1,2', '{"cols":[{"name":"a","type":"int64"},{"name":"a","type":"int64"}]}', @h) x;
+invalid input: duplicate column name "a" in options
+select * from sql_tvf(1, 'I', @h) x;
+invalid input: the query (1st) argument of sql_tvf must be a string, not BIGINT
+select * from sql_tvf('select 1', 'I', 42) x;
+invalid input: the conn (3rd) argument of sql_tvf must be a string, not BIGINT
+select * from typed t, sql_tvf(t.txt, 'I', @h) x;
+not supported: the query (1st) argument of sql_tvf must not reference columns; use a constant, parameter, or session variable
+select x.col0 from typed t cross apply sql_tvf(t.txt, 'I', @h) x;
+not supported: the query (1st) argument of sql_tvf must not reference columns; use a constant, parameter, or session variable
+select x.col0 from typed t cross apply sql_tvf(concat(t.txt, ''), 'I', @h) x;
+not supported: the query (1st) argument of sql_tvf must not reference columns; use a constant, parameter, or session variable
+-- @regex("is a sql connection; esql_tvf accepts only esql connections", true)
+select * from esql_tvf('FROM idx', 'I', @h) x;
+invalid input: connection handle "sql:1108129e3e966f3a" is a sql connection; esql_tvf accepts only esql connections
+create table bad_col (id int, __mo_query varchar(10));
+invalid input: column name __mo_query is reserved for external table scans
+create table bad_col2 (id int, __mo_filepath varchar(10));
+invalid input: column name __mo_filepath is reserved for external table scans
+select sql_tvf_disconnect(@h);
+➤ sql_tvf_disconnect(@h)[-7,1,0]  𝄀
+1
+drop database sql_tvf_test;

@@ -238,6 +238,7 @@ func RequestFromScalar(
 	identity searchplugin.ScanIdentity,
 	membership []byte,
 	hasMembership bool,
+	membershipRequired bool,
 ) (req searchplugin.Request, ok bool, err error) {
 	if spec == nil || spec.QueryVector == nil {
 		return req, false, moerr.NewInvalidInputNoCtx("vector index scan has incomplete bound expressions")
@@ -261,8 +262,10 @@ func RequestFromScalar(
 		return req, false, moerr.NewInvalidInputNoCtx("vector index result limit is not uint64")
 	}
 	req = requestForValues(spec, []byte(queryLit.GetVecVal()), spec.QueryVector.Typ, limit.U64Val, identity)
+	req.CollectExplainDiagnostics = true
 	req.MembershipFilter = append([]byte(nil), membership...)
 	req.HasMembershipFilter = hasMembership
+	req.MembershipFilterRequired = membershipRequired
 	if spec.FirstRoundLimit != nil {
 		lit := spec.FirstRoundLimit.GetLit()
 		if lit == nil || lit.Isnull {

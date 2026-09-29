@@ -42,4 +42,10 @@ order by category;
 category    count(*)
 north    3
 south    1
+select distinct category from ft_gap
+where match(body, title) against('+aurora' in boolean mode)
+order by category;
+category
+north
+south
 drop database fulltext_group_match;

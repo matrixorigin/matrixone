@@ -100,7 +100,7 @@ public:
 
         this->worker = std::make_unique<cuvs_worker_t>(nthread, this->devices_, this->dist_mode);
 
-        this->flattened_host_dataset.resize(this->count * this->dimension);
+        this->allocate_host_capacity("kmeans", /*with_ids=*/false);
         if (dataset_data) {
             std::copy(dataset_data, dataset_data + (this->count * this->dimension), this->flattened_host_dataset.begin());
         }
@@ -119,7 +119,7 @@ public:
 
         this->worker = std::make_unique<cuvs_worker_t>(static_cast<uint32_t>(nthread), this->devices_, this->dist_mode);
 
-        this->flattened_host_dataset.resize(this->count * this->dimension);
+        this->allocate_host_capacity("kmeans", /*with_ids=*/false);
         if (dataset_data) {
             std::copy(dataset_data, dataset_data + (this->count * this->dimension), this->flattened_host_dataset.begin());
         }
@@ -139,7 +139,7 @@ public:
 
         this->worker = std::make_unique<cuvs_worker_t>(nthread, this->devices_, this->dist_mode);
 
-        this->flattened_host_dataset.resize(this->count * this->dimension);
+        this->allocate_host_capacity("kmeans", /*with_ids=*/false);
     }
 
     // Constructor for kmeans_c.cpp compatibility
@@ -218,7 +218,7 @@ public:
 
     kmeans_result_t fit(const T* dataset_data, uint64_t count_vectors) {
         this->count = count_vectors;
-        this->flattened_host_dataset.resize(this->count * this->dimension);
+        this->allocate_host_capacity("kmeans", /*with_ids=*/false);
         std::copy(dataset_data, dataset_data + (this->count * this->dimension), this->flattened_host_dataset.begin());
         
         this->train_quantizer_if_needed();
@@ -350,7 +350,7 @@ public:
 
     kmeans_result_t fit_predict(const T* dataset_data, uint64_t count_vectors) {
         this->count = count_vectors;
-        this->flattened_host_dataset.resize(this->count * this->dimension);
+        this->allocate_host_capacity("kmeans", /*with_ids=*/false);
         std::copy(dataset_data, dataset_data + (this->count * this->dimension), this->flattened_host_dataset.begin());
         
         this->train_quantizer_if_needed();

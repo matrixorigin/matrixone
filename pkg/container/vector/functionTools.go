@@ -18,6 +18,7 @@ import (
 	"fmt"
 
 	"github.com/matrixorigin/matrixone/pkg/common/bitmap"
+	"github.com/matrixorigin/matrixone/pkg/common/moerr"
 	"github.com/matrixorigin/matrixone/pkg/common/mpool"
 	"github.com/matrixorigin/matrixone/pkg/container/bytejson"
 	"github.com/matrixorigin/matrixone/pkg/container/nulls"
@@ -611,8 +612,8 @@ func newResultFunc[T types.FixedSizeT](
 }
 
 func (fr *FunctionResult[T]) UseOptFunctionParamFrame(paramCount int) {
-	if fr.convenientParam == nil {
-		fr.convenientParam = make([]reusableParameterWrapper, paramCount)
+	if len(fr.convenientParam) < paramCount {
+		fr.convenientParam = append(fr.convenientParam, make([]reusableParameterWrapper, paramCount-len(fr.convenientParam))...)
 	}
 }
 
@@ -630,8 +631,18 @@ func (fr *FunctionResult[T]) PreExtendAndReset(targetSize int) error {
 	}
 
 	oldLength := fr.vec.Length()
-
-	if more := targetSize - oldLength; more > 0 {
+	wasConst := fr.vec.IsConst()
+	if wasConst {
+		// PreExtend is intentionally a no-op for CONSTANT vectors. Reset the
+		// class first so a later non-folded evaluation can materialize every
+		// requested row instead of retaining one broadcast physical value.
+		fr.vec.ResetWithSameType()
+		if targetSize > 0 {
+			if err := fr.vec.PreExtend(targetSize, fr.mp); err != nil {
+				return err
+			}
+		}
+	} else if more := targetSize - oldLength; more > 0 {
 		if err := fr.vec.PreExtend(more, fr.mp); err != nil {
 			return err
 		}
@@ -639,12 +650,20 @@ func (fr *FunctionResult[T]) PreExtendAndReset(targetSize int) error {
 	if err := fr.vec.PreExtendNulls(targetSize, fr.mp); err != nil {
 		return err
 	}
-	fr.vec.ResetWithSameType()
+	if !wasConst {
+		fr.vec.ResetWithSameType()
+	}
+	if nullBitmap := fr.vec.nsp.GetBitmap(); nullBitmap.HasExternalStorage() {
+		// Allocation-accounted storage can outlive several evaluations and be
+		// larger than this result. Publish the current row domain explicitly so
+		// NULL unions never infer it from a reused source or physical capacity.
+		nullBitmap.TryExpandWithSize(targetSize)
+	}
 
 	if !fr.isVarlena {
 		fr.length = 0
 		fr.vec.length = targetSize
-		if targetSize > oldLength {
+		if wasConst || targetSize > oldLength {
 			fr.cols = MustFixedColWithTypeCheck[T](fr.vec)
 		}
 	}
@@ -668,6 +687,13 @@ func (fr *FunctionResult[T]) Append(val T, isnull bool) error {
 	}
 	fr.length++
 	return nil
+}
+
+func (fr *FunctionResult[T]) AppendBytesWithWriter(size int, writer func([]byte) error) error {
+	if fr.vec.IsConst() {
+		return moerr.NewInternalErrorNoCtx("direct varlena writer does not support const result")
+	}
+	return AppendBytesWithWriter(fr.vec, size, fr.mp, writer)
 }
 
 func (fr *FunctionResult[T]) AppendBytes(val []byte, isnull bool) error {

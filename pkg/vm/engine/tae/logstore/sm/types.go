@@ -15,6 +15,7 @@
 package sm
 
 import (
+	"context"
 	"sync/atomic"
 
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
@@ -54,6 +55,17 @@ type Queue interface {
 	// it will return directly when if it is an unblocking queue and there has no more free space,
 	// and ErrFull will be return to notify the producer.
 	Enqueue(any) (any, error)
+}
+
+// ContextQueue extends Queue for request-scoped producers that must be able to
+// withdraw while waiting for capacity. Existing background-only queue users do
+// not need to implement the extra method.
+type ContextQueue interface {
+	Queue
+	// EnqueueWithContext has the same ordering and shutdown guarantees as
+	// Enqueue, but lets request-scoped producers stop waiting for queue capacity
+	// when their caller is canceled.
+	EnqueueWithContext(context.Context, any) (any, error)
 }
 
 type StateMachine interface {

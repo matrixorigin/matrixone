@@ -22,6 +22,7 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/container/batch"
 	"github.com/matrixorigin/matrixone/pkg/container/types"
 	"github.com/matrixorigin/matrixone/pkg/defines"
+	"github.com/matrixorigin/matrixone/pkg/objectio"
 	"github.com/matrixorigin/matrixone/pkg/pb/plan"
 	"github.com/matrixorigin/matrixone/pkg/txn/trace"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine"
@@ -29,11 +30,12 @@ import (
 )
 
 // Short varlen values are commonly cheaper to fetch with the predicate
-// columns in one I/O. At the standard 8192-row object block, a 256-byte
-// declared value can represent 2 MiB of logical payload, large enough to
-// justify a second selected-row read. Unbounded payload types are always
-// candidates.
-const lateMaterializationMinVarlenWidth = 256
+// columns in one I/O. For bounded values, use the logical payload of a full
+// object block instead of a field-width-only cutoff. A 96-byte value in the
+// standard 8192-row block represents 768 KiB, which is large enough to avoid
+// eagerly copying the whole output column for a selective filter. Unbounded
+// payload types are always candidates.
+const lateMaterializationMinVarlenBlockBytes = 768 << 10
 
 func isLateMaterializationCandidate(typ plan.Type) bool {
 	switch types.T(typ.Id) {
@@ -51,7 +53,8 @@ func isLateMaterializationCandidate(typ plan.Type) bool {
 		types.T_array_uint8:
 		return true
 	case types.T_char, types.T_varchar, types.T_binary, types.T_varbinary:
-		return typ.Width >= lateMaterializationMinVarlenWidth
+		return typ.Width > 0 &&
+			int64(typ.Width)*int64(objectio.BlockMaxRows) >= lateMaterializationMinVarlenBlockBytes
 	default:
 		return false
 	}

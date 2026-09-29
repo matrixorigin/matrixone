@@ -1,0 +1,34 @@
+drop database if exists load_hidden_paths;
+create database load_hidden_paths;
+use load_hidden_paths;
+create table loaded (a int);
+load data infile '$resources/load_data/hidden_paths/.data/part-1.csv' into table loaded;
+select a from loaded order by a;
+➤ a[4,32,0]  𝄀
+2
+create external table visible_glob (a int)
+infile{'filepath'='$resources/load_data/hidden_paths/*/part-*.csv', 'format'='csv'};
+select a from visible_glob order by a;
+➤ a[4,32,0]  𝄀
+1
+create external table hidden_dir (a int)
+infile{'filepath'='$resources/load_data/hidden_paths/.data/*.csv', 'format'='csv'};
+select a from hidden_dir order by a;
+➤ a[4,32,0]  𝄀
+2
+create external table hidden_glob (a int)
+infile{'filepath'='$resources/load_data/hidden_paths/.data/.part-*.csv', 'format'='csv'};
+select a from hidden_glob order by a;
+➤ a[4,32,0]  𝄀
+3
+create external table hidden_file (a int)
+infile{'filepath'='$resources/load_data/hidden_paths/.top.csv', 'format'='csv'};
+select a from hidden_file order by a;
+➤ a[4,32,0]  𝄀
+4
+create external table missing_path (a int)
+infile{'filepath'='$resources/load_data/hidden_paths/.missing/*.csv', 'format'='csv'};
+select count(*) from missing_path;
+➤ count(*)[-5,64,0]  𝄀
+0
+drop database load_hidden_paths;

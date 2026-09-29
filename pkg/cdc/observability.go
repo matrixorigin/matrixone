@@ -61,6 +61,7 @@ type ProgressTracker struct {
 	state            string // "idle", "reading", "processing", "committing", "error"
 	lastStateChange  time.Time
 	stateChangeCount atomic.Uint64
+	lastProgressTime atomic.Int64
 
 	// Progress counters
 	totalRounds           atomic.Uint64 // Total number of processing rounds
@@ -113,15 +114,17 @@ type ProgressTracker struct {
 
 // NewProgressTracker creates a new progress tracker
 func NewProgressTracker(accountId uint64, taskId, dbName, tableName string) *ProgressTracker {
+	now := time.Now()
 	pt := &ProgressTracker{
 		accountId:       accountId,
 		taskId:          taskId,
 		dbName:          dbName,
 		tableName:       tableName,
 		state:           "idle",
-		lastStateChange: time.Now(),
+		lastStateChange: now,
 		logInterval:     30 * time.Second, // Log progress every 30 seconds by default
 	}
+	pt.lastProgressTime.Store(now.UnixNano())
 	pt.initialSyncState.Store(initialSyncStateNotStarted)
 	v2.CdcInitialSyncStatusGauge.WithLabelValues(pt.tableKey()).Set(initialSyncStatusNotStartedValue)
 	// Initialize table stream state gauge
@@ -138,6 +141,7 @@ func (pt *ProgressTracker) SetState(state string) {
 	if pt.state != state {
 		pt.state = state
 		pt.lastStateChange = time.Now()
+		pt.recordProgress()
 		pt.stateChangeCount.Add(1)
 
 		// Update table stream total gauge: decrement old state, increment new state
@@ -381,6 +385,7 @@ func (pt *ProgressTracker) handleInitialSyncRoundLocked(success bool, err error)
 
 // RecordBatch records processing of a batch
 func (pt *ProgressTracker) RecordBatch(rows, bytes uint64) {
+	pt.recordProgress()
 	pt.currentRoundRows.Add(rows)
 	pt.currentRoundBatches.Add(1)
 	pt.totalRowsProcessed.Add(rows)
@@ -412,6 +417,7 @@ func (pt *ProgressTracker) RecordBatch(rows, bytes uint64) {
 
 // RecordTransaction records a committed transaction
 func (pt *ProgressTracker) RecordTransaction() {
+	pt.recordProgress()
 	pt.totalTransactions.Add(1)
 }
 
@@ -422,6 +428,7 @@ func (pt *ProgressTracker) RecordRetry() {
 
 // RecordSQL records execution of SQL statements by the sinker
 func (pt *ProgressTracker) RecordSQL(count uint64) {
+	pt.recordProgress()
 	pt.totalSQLExecuted.Add(count)
 	if pt.initialSyncState.Load() == initialSyncStateRunning {
 		pt.initialSyncSQL.Add(count)
@@ -432,6 +439,7 @@ func (pt *ProgressTracker) RecordSQL(count uint64) {
 func (pt *ProgressTracker) UpdateWatermark(newWatermark types.TS) {
 	pt.mu.Lock()
 	defer pt.mu.Unlock()
+	pt.recordProgress()
 
 	oldWatermark := pt.currentWatermark
 	pt.currentWatermark = newWatermark
@@ -584,28 +592,27 @@ func (pt *ProgressTracker) CheckStuck(stuckThreshold time.Duration) (bool, strin
 	pt.mu.RLock()
 	defer pt.mu.RUnlock()
 
-	stateAge := time.Since(pt.lastStateChange)
-	watermarkAge := time.Since(pt.lastWatermarkUpdate)
-
-	// Check if state hasn't changed for too long
-	if stateAge > stuckThreshold {
-		return true, fmt.Sprintf("state '%s' unchanged for %v", pt.state, stateAge)
+	// Initial snapshots intentionally keep their watermark unchanged until all
+	// batches have reached the sink. A long-running round or state is therefore
+	// not evidence of a stall while batches or SQL statements still progress.
+	if pt.state == "idle" {
+		return false, ""
 	}
 
-	// Check if watermark hasn't updated for too long (and we're not idle)
-	if pt.state != "idle" && watermarkAge > stuckThreshold {
-		return true, fmt.Sprintf("watermark not updated for %v", watermarkAge)
+	lastProgress := pt.lastProgressTime.Load()
+	if lastProgress == 0 {
+		lastProgress = pt.lastStateChange.UnixNano()
 	}
-
-	// Check if current round is taking too long
-	if !pt.currentRoundStartTime.IsZero() {
-		roundAge := time.Since(pt.currentRoundStartTime)
-		if roundAge > stuckThreshold {
-			return true, fmt.Sprintf("current round running for %v", roundAge)
-		}
+	progressAge := time.Since(time.Unix(0, lastProgress))
+	if progressAge > stuckThreshold {
+		return true, fmt.Sprintf("no progress in state '%s' for %v", pt.state, progressAge)
 	}
 
 	return false, ""
+}
+
+func (pt *ProgressTracker) recordProgress() {
+	pt.lastProgressTime.Store(time.Now().UnixNano())
 }
 
 func (pt *ProgressTracker) tableKey() string {

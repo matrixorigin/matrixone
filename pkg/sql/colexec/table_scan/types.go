@@ -47,6 +47,7 @@ type container struct {
 	filterActiveDuration   time.Duration
 	readerFilter           engine.ReaderFilter
 	metricView             *batch.Batch
+	padCharToFullLength    bool
 }
 
 type TableScan struct {

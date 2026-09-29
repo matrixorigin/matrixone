@@ -15,9 +15,11 @@
 package function
 
 import (
+	"crypto/aes"
 	"fmt"
 	"testing"
 
+	"github.com/matrixorigin/matrixone/pkg/common/moerr"
 	"github.com/matrixorigin/matrixone/pkg/container/types"
 	"github.com/matrixorigin/matrixone/pkg/testutil"
 	"github.com/matrixorigin/matrixone/pkg/vm/process"
@@ -114,11 +116,25 @@ func TestAESEncryptCBCMissingIV(t *testing.T) {
 			NewFunctionTestInput(types.T_varchar.ToType(), []string{plain}, []bool{false}),
 			NewFunctionTestInput(types.T_varchar.ToType(), []string{key}, []bool{false}),
 		},
-		NewFunctionTestResult(types.T_blob.ToType(), false, []string{""}, []bool{true}),
+		NewFunctionTestResult(types.T_blob.ToType(), true, nil, nil),
 		AESEncrypt,
 	)
 	ok, info := encryptCase.Run()
 	require.True(t, ok, fmt.Sprintf("encrypt cbc missing iv failed: %s", info))
+}
+
+func TestAESDecryptCBCMissingIV(t *testing.T) {
+	proc := newAESProcess(t, "aes-256-cbc")
+	decryptCase := NewFunctionTestCase(proc,
+		[]FunctionTestInput{
+			NewFunctionTestInput(types.T_blob.ToType(), []string{string(make([]byte, aes.BlockSize))}, []bool{false}),
+			NewFunctionTestInput(types.T_varchar.ToType(), []string{"secret-key-for-cbc"}, []bool{false}),
+		},
+		NewFunctionTestResult(types.T_varchar.ToType(), true, nil, nil),
+		AESDecrypt,
+	)
+	ok, info := decryptCase.Run()
+	require.True(t, ok, fmt.Sprintf("decrypt cbc missing iv failed: %s", info))
 }
 
 func TestAESInvalidModeReturnsNull(t *testing.T) {
@@ -163,7 +179,7 @@ func TestAESDecryptInvalidCiphertextReturnsNull(t *testing.T) {
 	require.True(t, ok, fmt.Sprintf("decrypt invalid ciphertext failed: %s", info))
 }
 
-func TestAESCBCIVTooShortReturnsNull(t *testing.T) {
+func TestAESCBCIVTooShortReturnsError(t *testing.T) {
 	proc := newAESProcess(t, "aes-256-cbc")
 	iv := "short"
 
@@ -173,7 +189,7 @@ func TestAESCBCIVTooShortReturnsNull(t *testing.T) {
 			NewFunctionTestInput(types.T_varchar.ToType(), []string{"key"}, []bool{false}),
 			NewFunctionTestInput(types.T_varchar.ToType(), []string{iv}, []bool{false}),
 		},
-		NewFunctionTestResult(types.T_blob.ToType(), false, []string{""}, []bool{true}),
+		NewFunctionTestResult(types.T_blob.ToType(), true, nil, nil),
 		AESEncrypt,
 	)
 	ok, info := encryptCase.Run()
@@ -185,11 +201,107 @@ func TestAESCBCIVTooShortReturnsNull(t *testing.T) {
 			NewFunctionTestInput(types.T_varchar.ToType(), []string{"key"}, []bool{false}),
 			NewFunctionTestInput(types.T_varchar.ToType(), []string{iv}, []bool{false}),
 		},
-		NewFunctionTestResult(types.T_varchar.ToType(), false, []string{""}, []bool{true}),
+		NewFunctionTestResult(types.T_varchar.ToType(), true, nil, nil),
 		AESDecrypt,
 	)
 	ok, info = decryptCase.Run()
 	require.True(t, ok, fmt.Sprintf("decrypt short iv failed: %s", info))
+}
+
+func TestAESCBCInvalidIVErrorCodes(t *testing.T) {
+	tests := []struct {
+		name       string
+		fn         fEvalFn
+		proc       *process.Process
+		inputs     []FunctionTestInput
+		resultType types.Type
+		wantCode   uint16
+		wantMySQL  uint16
+	}{
+		{
+			name: "encrypt missing",
+			fn:   AESEncrypt,
+			proc: newAESProcess(t, "aes-256-cbc"),
+			inputs: []FunctionTestInput{
+				NewFunctionTestInput(types.T_varchar.ToType(), []string{"hello"}, []bool{false}),
+				NewFunctionTestInput(types.T_varchar.ToType(), []string{"key"}, []bool{false}),
+			},
+			resultType: types.T_blob.ToType(),
+			wantCode:   moerr.ErrWrongParamCountToNativeFct,
+			wantMySQL:  moerr.ER_WRONG_PARAMCOUNT_TO_NATIVE_FCT,
+		},
+		{
+			name: "encrypt null iv",
+			fn:   AESEncrypt,
+			proc: newAESProcess(t, "aes-256-cbc"),
+			inputs: []FunctionTestInput{
+				NewFunctionTestInput(types.T_varchar.ToType(), []string{"hello"}, []bool{false}),
+				NewFunctionTestInput(types.T_varchar.ToType(), []string{"key"}, []bool{false}),
+				NewFunctionTestInput(types.T_varchar.ToType(), []string{""}, []bool{true}),
+			},
+			resultType: types.T_blob.ToType(),
+			wantCode:   moerr.ErrAESInvalidIV,
+			wantMySQL:  moerr.ER_AES_INVALID_IV,
+		},
+		{
+			name: "decrypt short",
+			fn:   AESDecrypt,
+			proc: newAESProcess(t, "aes-256-cbc"),
+			inputs: []FunctionTestInput{
+				NewFunctionTestInput(types.T_blob.ToType(), []string{string(make([]byte, aes.BlockSize))}, []bool{false}),
+				NewFunctionTestInput(types.T_varchar.ToType(), []string{"key"}, []bool{false}),
+				NewFunctionTestInput(types.T_varchar.ToType(), []string{"short"}, []bool{false}),
+			},
+			resultType: types.T_varchar.ToType(),
+			wantCode:   moerr.ErrAESInvalidIV,
+			wantMySQL:  moerr.ER_AES_INVALID_IV,
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			caseData := NewFunctionTestCase(tt.proc, tt.inputs,
+				NewFunctionTestResult(tt.resultType, true, nil, nil), tt.fn)
+			require.NoError(t, caseData.result.PreExtendAndReset(caseData.fnLength))
+			err := caseData.fn(caseData.parameters, caseData.result, caseData.proc, caseData.fnLength, nil)
+			require.Error(t, err)
+			code, ok := moerr.GetMoErrCode(err)
+			require.True(t, ok)
+			require.Equal(t, tt.wantCode, code)
+			moErr, ok := err.(*moerr.Error)
+			require.True(t, ok)
+			require.Equal(t, tt.wantMySQL, moErr.MySQLCode())
+		})
+	}
+}
+
+func TestAESCBCInvalidIVInMaskedRowIsIgnored(t *testing.T) {
+	proc := newAESProcess(t, "aes-256-cbc")
+	plain := "active row"
+	key := "key"
+	validIV := "0123456789abcdef"
+	aesKey, err := generateAESKey([]byte(key), 32)
+	require.NoError(t, err)
+	wantCiphertext, err := encryptCBC([]byte(plain), aesKey, []byte(validIV))
+	require.NoError(t, err)
+
+	caseData := NewFunctionTestCase(proc,
+		[]FunctionTestInput{
+			NewFunctionTestInput(types.T_varchar.ToType(), []string{"masked row", plain}, nil),
+			NewFunctionTestInput(types.T_varchar.ToType(), []string{key, key}, nil),
+			NewFunctionTestInput(types.T_varchar.ToType(), []string{"short", validIV}, nil),
+		},
+		NewFunctionTestResult(types.T_blob.ToType(), false,
+			[]string{"", string(wantCiphertext)}, []bool{true, false}),
+		AESEncrypt).WithSelectList(&FunctionSelectList{
+		AnyNull: true,
+		SelectList: []bool{
+			false,
+			true,
+		},
+	})
+	ok, info := caseData.Run()
+	require.True(t, ok, info)
 }
 
 func TestGenerateAESKeyEdgeCases(t *testing.T) {

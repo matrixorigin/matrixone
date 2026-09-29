@@ -21,11 +21,18 @@ import (
 	"github.com/stretchr/testify/require"
 
 	"github.com/matrixorigin/matrixone/pkg/pb/plan"
+	"github.com/matrixorigin/matrixone/pkg/testutil"
+	"github.com/matrixorigin/matrixone/pkg/vm/process"
 )
 
 type vecViewCtx struct{}
 
 func (vecViewCtx) GetContext() context.Context { return context.Background() }
+
+// GetProcess hands back a test process on the default service runtime, which carries
+// MORPCLatestVersion -- so these tests plan as a fully activated deployment.
+func (vecViewCtx) GetProcess() *process.Process { return testutil.NewProcess(nil) }
+
 func (vecViewCtx) ResolveVariable(string, bool, bool) (interface{}, error) {
 	return nil, nil
 }

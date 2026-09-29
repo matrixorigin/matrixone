@@ -17,6 +17,7 @@ package mpool
 import (
 	"fmt"
 	"math"
+	"math/bits"
 	"runtime/debug"
 	"strings"
 	"sync"
@@ -31,6 +32,7 @@ import (
 	v2 "github.com/matrixorigin/matrixone/pkg/util/metric/v2"
 	"github.com/matrixorigin/matrixone/pkg/util/resource"
 	"github.com/matrixorigin/matrixone/pkg/util/stack"
+	"go.uber.org/zap"
 )
 
 // debugPoisonOnFree, when enabled, fills freed memory with 0xDD bytes before
@@ -55,6 +57,50 @@ type MPoolStats struct {
 	// xpool frees are really bugs.  we always record them for debugging.
 	mu        sync.Mutex
 	xpoolFree map[string]detailInfo
+}
+
+// OnHeapOwnershipStats tracks the minimum logical-ownership facts needed to
+// detect an on-heap allocation whose owner has not called Free. It is smaller
+// than MPoolStats because on-heap ownership does not participate in admission
+// and does not need cumulative allocation traffic counters.
+type OnHeapOwnershipStats struct {
+	NumCurrBytes   atomic.Int64
+	NumCurrObjects atomic.Int64
+	HighWaterMark  atomic.Int64
+}
+
+func (s *OnHeapOwnershipStats) recordAlloc(sz int64) {
+	curr := s.NumCurrBytes.Add(sz)
+	s.NumCurrObjects.Add(1)
+	for {
+		peak := s.HighWaterMark.Load()
+		if curr <= peak || s.HighWaterMark.CompareAndSwap(peak, curr) {
+			return
+		}
+	}
+}
+
+func (s *OnHeapOwnershipStats) recordFree(sz, objects int64) {
+	if sz < 0 || objects < 0 {
+		panic(moerr.NewInternalErrorNoCtx("mpool on-heap ownership freed a negative value"))
+	}
+	bytes := s.NumCurrBytes.Add(-sz)
+	count := s.NumCurrObjects.Add(-objects)
+	if bytes < 0 || count < 0 {
+		panic(moerr.NewInternalErrorNoCtx("mpool freed more on-heap ownership than allocated"))
+	}
+}
+
+func (s *OnHeapOwnershipStats) ReportJson() string {
+	if s.HighWaterMark.Load() == 0 {
+		return ""
+	}
+	return fmt.Sprintf(
+		`{"currBytes": %d,"currObjects": %d,"highWaterMark": %d}`,
+		s.NumCurrBytes.Load(),
+		s.NumCurrObjects.Load(),
+		s.HighWaterMark.Load(),
+	)
 }
 
 // ResourcePeakEpoch is an opaque, statement-scoped observation token.  Its
@@ -266,15 +312,19 @@ type detailInfo struct {
 }
 
 type mpoolDetails struct {
-	mu    sync.Mutex
-	alloc map[string]detailInfo
-	free  map[string]detailInfo
+	mu          sync.Mutex
+	alloc       map[string]detailInfo
+	free        map[string]detailInfo
+	onHeapAlloc map[string]detailInfo
+	onHeapFree  map[string]detailInfo
 }
 
 func newMpoolDetails() *mpoolDetails {
 	mpd := mpoolDetails{}
 	mpd.alloc = make(map[string]detailInfo)
 	mpd.free = make(map[string]detailInfo)
+	mpd.onHeapAlloc = make(map[string]detailInfo)
+	mpd.onHeapFree = make(map[string]detailInfo)
 	return &mpd
 }
 
@@ -305,6 +355,30 @@ func (d *mpoolDetails) recordFree(k string, nb int64) {
 	d.free[k] = info
 }
 
+func (d *mpoolDetails) recordOnHeapAlloc(k string, nb int64) {
+	if d == nil {
+		return
+	}
+	d.mu.Lock()
+	defer d.mu.Unlock()
+	info := d.onHeapAlloc[k]
+	info.cnt++
+	info.bytes += nb
+	d.onHeapAlloc[k] = info
+}
+
+func (d *mpoolDetails) recordOnHeapFree(k string, nb int64) {
+	if d == nil {
+		return
+	}
+	d.mu.Lock()
+	defer d.mu.Unlock()
+	info := d.onHeapFree[k]
+	info.cnt++
+	info.bytes += nb
+	d.onHeapFree[k] = info
+}
+
 func (d *mpoolDetails) reportJson() string {
 	d.mu.Lock()
 	defer d.mu.Unlock()
@@ -322,6 +396,20 @@ func (d *mpoolDetails) reportJson() string {
 		frees = append(frees, kvs)
 	}
 	ret += strings.Join(frees, ",")
+	ret += `}, "on_heap_alloc": {`
+	onHeapAllocs := make([]string, 0, len(d.onHeapAlloc))
+	for k, v := range d.onHeapAlloc {
+		kvs := fmt.Sprintf("\"%s\": [%d, %d]", k, v.cnt, v.bytes)
+		onHeapAllocs = append(onHeapAllocs, kvs)
+	}
+	ret += strings.Join(onHeapAllocs, ",")
+	ret += `}, "on_heap_free": {`
+	onHeapFrees := make([]string, 0, len(d.onHeapFree))
+	for k, v := range d.onHeapFree {
+		kvs := fmt.Sprintf("\"%s\": [%d, %d]", k, v.cnt, v.bytes)
+		onHeapFrees = append(onHeapFrees, kvs)
+	}
+	ret += strings.Join(onHeapFrees, ",")
 	ret += "}}"
 	return ret
 }
@@ -335,6 +423,10 @@ type MPool struct {
 	resource resourceMemoryStats
 	epoch    atomic.Pointer[ResourcePeakEpoch]
 	details  *mpoolDetails
+	// onHeapShardHints is a conservative set of global registry shards this
+	// pool has published on-heap pointers into. It only narrows destroy-time
+	// diagnostics; the pointer registry remains authoritative.
+	onHeapShardHints [(numPtrShards + 63) / 64]atomic.Uint64
 
 	noLock bool
 	ptrs   map[unsafe.Pointer]memHdr
@@ -384,6 +476,9 @@ const (
 
 func (mp *MPool) recordPtrHdr(ptr unsafe.Pointer, pHdr memHdr) error {
 	if !mp.noLock {
+		if !pHdr.isOffHeap() {
+			return gRecordOnHeapPtr(ptr, pHdr, mp)
+		}
 		return gRecordPtr(ptr, pHdr)
 	}
 	if _, ok := mp.ptrs[ptr]; ok {
@@ -520,21 +615,38 @@ func (mp *MPool) Cap() int64 {
 }
 
 func (mp *MPool) destroy() {
+	var onHeapBytes, onHeapObjects int64
+	if mp.noLock {
+		onHeapBytes, onHeapObjects = mp.OnHeapOutstanding()
+	} else {
+		onHeapBytes, onHeapObjects = mp.scanOnHeapOutstandingHinted()
+	}
+	if onHeapBytes != 0 {
+		logutil.Warn(
+			"mpool closed with outstanding on-heap ownership",
+			zap.Int64("pool-id", mp.id),
+			zap.String("pool-tag", mp.tag),
+			zap.Int64("bytes", onHeapBytes),
+			zap.Int64("objects", onHeapObjects),
+		)
+	}
 	liveBytes := mp.stats.NumCurrBytes.Load()
 	if liveBytes != 0 {
 		logutil.Errorf("mp error: %s", mp.stats.Report(""))
-		if mp.noLock {
-			// A noLock pool exclusively owns its local pointer metadata, so its
-			// teardown is the physical deallocation event.
+	}
+	if mp.noLock && (liveBytes != 0 || onHeapBytes != 0) {
+		// A noLock pool exclusively owns its local pointer metadata, so its
+		// teardown is the terminal release event for every remaining block.
+		mp.deallocateAllPtrs()
+		if liveBytes != 0 {
 			nfree := mp.stats.NumAlloc.Load() - mp.stats.NumFree.Load()
-			mp.deallocateAllPtrs()
 			mp.stats.RecordManyFrees(mp.tag, nfree, liveBytes)
 			globalStats.RecordManyFrees(mp.tag, nfree, liveBytes)
 			mp.resource.recordFree(liveBytes)
 		}
-		// A normal pool may have handed allocations to another owner. Its
-		// global pointer metadata and account lease remain authoritative until
-		// a later physical Free, including after this pool is unregistered.
+		if onHeapBytes != 0 {
+			globalOnHeapStats.recordFree(onHeapBytes, onHeapObjects)
+		}
 	}
 }
 
@@ -601,11 +713,14 @@ func MustNewZeroNoFixed() *MPool {
 func (mp *MPool) ReportJson() string {
 	ss := mp.stats.ReportJson()
 	if ss == "" {
-		return fmt.Sprintf("{\"%s\": \"\"}", mp.tag)
+		ss = `""`
 	}
 	ret := fmt.Sprintf("{\"%s\": %s", mp.tag, ss)
+	if bytes, objects := mp.OnHeapOutstanding(); objects != 0 {
+		ret += fmt.Sprintf(",\n \"on_heap\": {\"currBytes\": %d,\"currObjects\": %d}", bytes, objects)
+	}
 	if mp.details != nil {
-		ret += `,\n "detailed_alloc": `
+		ret += ",\n \"detailed_alloc\": "
 		ret += mp.details.reportJson()
 	}
 
@@ -614,6 +729,78 @@ func (mp *MPool) ReportJson() string {
 
 func (mp *MPool) CurrNB() int64 {
 	return mp.stats.NumCurrBytes.Load()
+}
+
+// OnHeapCurrNB returns the bytes whose Go-heap backing remains logically owned
+// by this MPool and has not yet passed through Free.
+func (mp *MPool) OnHeapCurrNB() int64 {
+	bytes, _ := mp.OnHeapOutstanding()
+	return bytes
+}
+
+// OnHeapOutstanding returns the live Go-heap-backed allocations whose
+// metadata still names this pool as owner. It scans the authoritative pointer
+// registry only at diagnostic boundaries; allocations do not update per-pool
+// counters on the hot path.
+func (mp *MPool) OnHeapOutstanding() (bytes, objects int64) {
+	if mp == nil {
+		return 0, 0
+	}
+	if mp.noLock {
+		for _, hdr := range mp.ptrs {
+			if !hdr.isOffHeap() {
+				bytes += int64(hdr.allocSz)
+				objects++
+			}
+		}
+		return bytes, objects
+	}
+	for i := range globalPtrShards {
+		shard := &globalPtrShards[i]
+		shard.mu.Lock()
+		for _, hdr := range shard.m {
+			if hdr.poolId == mp.id && !hdr.isOffHeap() {
+				bytes += int64(hdr.allocSz)
+				objects++
+			}
+		}
+		shard.mu.Unlock()
+	}
+	return bytes, objects
+}
+
+// scanOnHeapOutstandingHinted is used only at pool teardown. Allocation sets
+// a shard bit once, while frees leave it set, so every shard containing a
+// pointer owned by this pool is scanned and empty shards are merely false
+// positives. The pointer map remains authoritative for exact leak reporting.
+func (mp *MPool) scanOnHeapOutstandingHinted() (bytes, objects int64) {
+	for wordIndex := range mp.onHeapShardHints {
+		shards := mp.onHeapShardHints[wordIndex].Load()
+		for shards != 0 {
+			bit := bits.TrailingZeros64(shards)
+			shard := &globalPtrShards[wordIndex*64+bit]
+			shard.mu.Lock()
+			for _, hdr := range shard.m {
+				if hdr.poolId == mp.id && !hdr.isOffHeap() {
+					bytes += int64(hdr.allocSz)
+					objects++
+				}
+			}
+			shard.mu.Unlock()
+			shards &= shards - 1
+		}
+	}
+	return bytes, objects
+}
+
+func (mp *MPool) recordOnHeapShardHint(shardIndex int) {
+	word := &mp.onHeapShardHints[shardIndex/64]
+	mask := uint64(1) << (shardIndex % 64)
+	for current := word.Load(); current&mask == 0; current = word.Load() {
+		if word.CompareAndSwap(current, current|mask) {
+			return
+		}
+	}
 }
 
 // ResourcePeakLiveBytes returns the peak observed by token.  Ended tokens
@@ -728,6 +915,7 @@ func DeleteMPool(mp *MPool) {
 var nextPool int64
 var globalCap atomic.Int64
 var globalStats MPoolStats
+var globalOnHeapStats OnHeapOwnershipStats
 var globalPools sync.Map
 
 // Sharded pointer map to reduce lock contention
@@ -741,7 +929,7 @@ type ptrShard struct {
 
 var globalPtrShards [numPtrShards]ptrShard
 
-func getPtrShard(ptr unsafe.Pointer) *ptrShard {
+func getPtrShardIndex(ptr unsafe.Pointer) int {
 	hash := uintptr(ptr) >> 4
 	// Better hash mixing to distribute load evenly
 	hash ^= hash >> 17
@@ -749,7 +937,11 @@ func getPtrShard(ptr unsafe.Pointer) *ptrShard {
 	hash ^= hash >> 13
 	hash *= 0xc2b2ae35
 	hash ^= hash >> 16
-	return &globalPtrShards[hash%numPtrShards]
+	return int(hash % numPtrShards)
+}
+
+func getPtrShard(ptr unsafe.Pointer) *ptrShard {
+	return &globalPtrShards[getPtrShardIndex(ptr)]
 }
 
 func InitCap(cap int64) {
@@ -762,6 +954,12 @@ func InitCap(cap int64) {
 
 func GlobalStats() *MPoolStats {
 	return &globalStats
+}
+
+// GlobalOnHeapStats reports logical ownership of all Go-heap-backed MPool
+// allocations. It is independent from the off-heap capacity controller.
+func GlobalOnHeapStats() *OnHeapOwnershipStats {
+	return &globalOnHeapStats
 }
 
 func GlobalCap() int64 {
@@ -778,6 +976,17 @@ func maxAllocationSize() int64 {
 	return int64(CapLimit) - kMemHdrSz
 }
 
+// MaxAllocationSize returns the largest payload accepted by one MPool
+// allocation. Callers may use it to cap speculative growth before asking the
+// allocator; it is not a reservation and does not bypass account or pool
+// capacity admission.
+func MaxAllocationSize() int64 {
+	return maxAllocationSize()
+}
+
+// Alloc returns an MPool-owned block. The caller must eventually pass every
+// successful non-empty allocation to Free; DeleteMPool provides the terminal
+// release only for NoLock pools, whose allocations cannot outlive the pool.
 func (mp *MPool) Alloc(sz int, offHeap bool) ([]byte, error) {
 	detailk := mp.getDetailK()
 	return mp.allocWithDetailK(detailk, int64(sz), offHeap)
@@ -936,7 +1145,12 @@ func (mp *MPool) alloc(
 		}
 		return nil, err
 	}
-	if offHeap {
+	if !offHeap {
+		globalOnHeapStats.recordAlloc(sz)
+		if mp.details != nil {
+			mp.details.recordOnHeapAlloc(detailk, sz)
+		}
+	} else {
 		mp.recordResourcePeak(mp.resource.recordAlloc(sz))
 		if mp.details != nil {
 			mp.details.recordAlloc(detailk, sz)
@@ -1101,6 +1315,8 @@ func (mp *MPool) freePtr(detailk string, ptr unsafe.Pointer) {
 				if hdr.isAccounted() {
 					lease.release(uint64(sz))
 				}
+			} else {
+				globalOnHeapStats.recordFree(int64(hdr.allocSz), 1)
 			}
 		} else {
 			owner := otherPool.(*MPool)
@@ -1124,6 +1340,11 @@ func (mp *MPool) freePtrInternal(
 			panic(moerr.NewInternalErrorNoCtx(
 				"accounted allocation is not off-heap",
 			))
+		}
+		sz := int64(hdr.allocSz)
+		globalOnHeapStats.recordFree(sz, 1)
+		if mp.details != nil {
+			mp.details.recordOnHeapFree(detailk, sz)
 		}
 		return
 	}
@@ -1347,30 +1568,30 @@ func (mp *MPool) ReallocZero(old []byte, sz int, offHeap bool) ([]byte, error) {
 			"mpool out of space, realloc %d bytes, cap %d", sz, mp.cap)
 	}
 
+	// Retire address-keyed state before realloc can release the address to
+	// another allocator thread. Failure leaves old live and restores its state.
+	var removedLease allocationLease
+	removedHdr, removed := mp.removePtrMetadata(oldptr, &removedLease)
+	if !removed || removedHdr != hdr || removedHdr.isAccounted() || removedLease.account != nil {
+		panic(moerr.NewInternalErrorNoCtx("allocation metadata changed during realloc"))
+	}
+	oldProfile := profileDetach(uintptr(oldptr))
 	newbs, err := simpleCAllocator().ReallocZero(
 		fullAllocation[:oldLength],
 		uint64(oldSize),
 		uint64(sz),
 	)
 	if err != nil {
+		profileRestore(uintptr(oldptr), oldProfile)
+		if restoreErr := mp.recordPtrHdr(oldptr, hdr); restoreErr != nil {
+			panic(restoreErr)
+		}
 		mp.stats.RecordFree(mp.tag, int64(sz))
 		globalStats.RecordFree("global", int64(sz))
 		return nil, moerr.NewMPoolCapacityNoCtxf(
 			"physical allocator rejected realloc to %d bytes: %v", sz, err)
 	}
 	newptr := unsafe.Pointer(&newbs[0])
-	var removedLease allocationLease
-	removedHdr, removed := mp.removePtrMetadata(oldptr, &removedLease)
-	if !removed || removedHdr != hdr {
-		panic(moerr.NewInternalErrorNoCtx(
-			"allocation metadata changed during realloc",
-		))
-	}
-	if removedHdr.isAccounted() || removedLease.account != nil {
-		panic(moerr.NewInternalErrorNoCtx(
-			"unaccounted realloc removed an account lease",
-		))
-	}
 	newHdr := memHdr{
 		poolId:  hdr.poolId,
 		allocSz: int32(sz),
@@ -1380,7 +1601,7 @@ func (mp *MPool) ReallocZero(old []byte, sz int, offHeap bool) ([]byte, error) {
 	if err := mp.recordPtrHdr(newptr, newHdr); err != nil {
 		panic(err)
 	}
-	profileRecordRealloc(3, uintptr(oldptr), uintptr(newptr), int64(oldSize), int64(sz))
+	profileRecordRealloc(3, oldProfile, uintptr(newptr), int64(oldSize), int64(sz))
 	globalStats.RecordFree("global", int64(oldSize))
 	mp.stats.RecordFree(mp.tag, int64(oldSize))
 	mp.resource.recordFree(int64(oldSize))
@@ -1567,7 +1788,17 @@ func gRecordPtr(
 	ptr unsafe.Pointer,
 	hdr memHdr,
 ) error {
-	shard := getPtrShard(ptr)
+	shardIndex := getPtrShardIndex(ptr)
+	return gRecordPtrInShard(ptr, hdr, shardIndex, nil)
+}
+
+func gRecordOnHeapPtr(ptr unsafe.Pointer, hdr memHdr, owner *MPool) error {
+	shardIndex := getPtrShardIndex(ptr)
+	return gRecordPtrInShard(ptr, hdr, shardIndex, owner)
+}
+
+func gRecordPtrInShard(ptr unsafe.Pointer, hdr memHdr, shardIndex int, owner *MPool) error {
+	shard := &globalPtrShards[shardIndex]
 	shard.mu.Lock()
 	defer shard.mu.Unlock()
 	if _, ok := shard.m[ptr]; ok {
@@ -1577,6 +1808,9 @@ func gRecordPtr(
 		return moerr.NewInternalErrorNoCtx("ptr already recorded")
 	}
 	shard.m[ptr] = hdr
+	if owner != nil {
+		owner.recordOnHeapShardHint(shardIndex)
+	}
 	return nil
 }
 

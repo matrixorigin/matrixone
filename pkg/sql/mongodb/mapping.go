@@ -20,6 +20,7 @@ import (
 	"strings"
 
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
+	"github.com/matrixorigin/matrixone/pkg/defines"
 	"github.com/matrixorigin/matrixone/pkg/pb/plan"
 	"github.com/matrixorigin/matrixone/pkg/sql/parsers/tree"
 )
@@ -114,6 +115,13 @@ func ParseTableMappingSpec(
 		}
 		if planned.GeneratedCol != nil {
 			return TableMappingSpec{}, moerr.NewNotSupportedf(ctx, "MongoDB external table does not support generated column '%s'", planned.Name)
+		}
+		// SET becomes T_uint64 in plans, and its joined member metadata is also
+		// empty for SET(''). Use the parsed MySQL type while it is still
+		// unambiguous, before ColumnMapping flattens it to a bare TypeID.
+		parsedType, ok := column.Type.(*tree.T)
+		if ok && defines.MysqlType(parsedType.InternalType.Oid) == defines.MYSQL_TYPE_SET {
+			return TableMappingSpec{}, moerr.NewNotSupported(ctx, "MongoDB mapping target type SET")
 		}
 		path := planned.Name
 		conversion := mapping.Conversion

@@ -92,20 +92,6 @@ func TestTxnTableDelegateRejectsDelegatedSnapshotReads(t *testing.T) {
 	require.True(t, local)
 }
 
-func TestTxnTableDelegate_MergeObjects(t *testing.T) {
-	table := &txnTableDelegate{}
-	table.combined.is = true
-	table.combined.tbl = newMockCombinedTxnTable()
-
-	assert.PanicsWithValue(t, "not implemented", func() {
-		table.MergeObjects(
-			context.Background(),
-			[]objectio.ObjectStats{},
-			1024,
-		)
-	})
-}
-
 func TestTxnTableDelegate_UpdateConstraint(t *testing.T) {
 	table := &txnTableDelegate{}
 	table.combined.is = true

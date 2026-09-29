@@ -123,6 +123,10 @@ The CDC system consists of five main components that work together to achieve re
 - Provides circuit breaker to prevent retry storms
 - Handles connection management and reconnection
 - Tracks transaction state (IDLE, ACTIVE, COMMITTED, ROLLED_BACK)
+- For stable-epoch tasks, admits target DDL/transactions only for the exact
+  status-bound daemon generation (including a newly claimed Resume/Restart
+  startup); target-lock waits and connection setup stop on pause, cancel,
+  supersession, or shutdown
 
 **Key Behaviors**:
 - Uses command channel pattern: commands are sent asynchronously, executed by consumer goroutine
@@ -159,6 +163,11 @@ IDLE --SendBegin--> ACTIVE --SendCommit--> COMMITTED --cleanup--> IDLE
 **Storage**:
 - In-memory cache: fast lookups during processing
 - Database (`mo_catalog.mo_cdc_watermark`): persistent state, survives restarts
+- Database (`mo_catalog.mo_cdc_snapshot`): the immutable initial-snapshot epoch
+  for each task/table/source-table generation. It is written synchronously before
+  the first split snapshot transaction can commit and reused after restart.
+  Dynamically discovered tables receive an epoch from their own discovery
+  transaction rather than from the CDC task creation time.
 
 **Watermark Persistence Design - At-Least-Once Semantics**:
 
@@ -1140,7 +1149,7 @@ Use curly braces `{}` to specify options. Options are comma-separated key-value 
 | `NoFull` | boolean | `false` | Skip initial snapshot, sync incremental only |
 | `MaxSqlLength` | integer | 4194304 (4MB) | Maximum SQL statement size in bytes |
 | `SendSqlTimeout` | duration | `10m` | Timeout for sending SQL to target |
-| `InitSnapshotSplitTxn` | boolean | `true` | Split large snapshot into multiple transactions |
+| `InitSnapshotSplitTxn` | boolean | `true` | Split a large initial snapshot into transactions of at most 8 engine batches. 512 MiB is the grouping threshold; one indivisible engine batch may exceed it. The final group publishes the watermark; retries reuse a durable per-table-generation source epoch. |
 | `Frequency` | duration | `200ms` | Polling frequency for change detection |
 
 **Option Syntax**:
@@ -1471,7 +1480,9 @@ drop cdc all;
 
 1. **Stops Task**: If running, gracefully stops synchronization
 2. **Deletes Metadata**: Removes task configuration from `mo_catalog.mo_cdc_task`
-3. **Deletes Watermarks**: Removes all watermarks from `mo_catalog.mo_cdc_watermark`
+3. **Deletes Progress Metadata**: Removes all watermarks from
+   `mo_catalog.mo_cdc_watermark` and stable initial-snapshot epochs from
+   `mo_catalog.mo_cdc_snapshot`
 4. **Irreversible**: Cannot be undone
 
 ### ⚠️ Warning
@@ -2975,9 +2986,68 @@ Split large initial snapshots into multiple transactions.
 
 **Default**: `true`
 
-**Impact**: 
-- `true`: Better memory usage, longer initial sync
-- `false`: Faster initial sync, higher memory usage
+**Impact**:
+- `true`: Uses retry-safe grouped target transactions (up to eight engine
+  batches, with a 512 MiB measured-allocation grouping threshold). One
+  indivisible engine batch may exceed 512 MiB, so the current V1 implementation
+  does not treat that threshold as an absolute byte cap. MatrixOne collects each
+  bounded source group before opening its target transaction, so waiting for the
+  source cannot retain the target ownership lock. Admission backpressure may
+  flush a smaller group to release CN memory permits. All retries read that
+  source-table generation's stable snapshot timestamp, and the watermark
+  advances only after the complete snapshot succeeds.
+- `false`: Uses one atomic target transaction for the complete initial
+  snapshot. This avoids partial target visibility but may consume substantially
+  more target transaction memory, locks, and commit time for large tables.
+
+**Partial-visibility and readiness contract**:
+
+- With `true`, each bounded group commits independently. Ordinary target queries
+  can therefore see an incomplete, progressively growing initial snapshot.
+- The target database has no local CDC-ready marker. Do not release a mapped
+  table to consumers until `SHOW CDC TASK <task_name>` reports a non-empty
+  per-table watermark for the current table generation and no table error.
+- Consumers that cannot be gated by source-side CDC status, or that require the
+  initial table to become visible atomically, must set
+  `InitSnapshotSplitTxn=false`.
+- Pausing retains the stable epoch and can resume the same snapshot. Dropping or
+  cancelling a task during initial sync can leave committed partial rows in the
+  target. Reset or verify that target before creating a replacement task.
+- The 512 MiB value controls transaction grouping; it is not a hard cap on one
+  engine batch. Size source batches and CN memory so one indivisible batch
+  cannot exhaust the CN.
+- Ownership fencing serializes different executions of the same task/table. It
+  does not prevent two independently configured CDC tasks from writing the same
+  physical target table; avoid that configuration.
+- MatrixOne backup/restore and PITR do not rewind an independently managed
+  target. After restoring the source to an earlier point, verify or reset the
+  target and recreate the CDC task instead of resuming against a later target.
+
+Source changes that happen while the initial snapshot is running are applied by
+the incremental phase after the stable snapshot watermark. If that historical
+snapshot has expired from source retention, CDC fails closed instead of silently
+switching to a newer snapshot; recreate the task or use atomic mode after
+verifying the target state.
+
+During a rolling upgrade, bounded stable-snapshot tasks run only on CNs that
+support this protocol. Older CNs cannot claim these tasks, including after the
+original CN stops following a partial group commit. The task remains pending
+until a protocol-capable CN is available, then resumes from the persisted stable
+snapshot epoch. Legacy tasks remain eligible for the atomic executor.
+
+On every restart, MatrixOne reloads the current source table ID's epoch even if
+the watermark is non-empty. A watermark below that epoch is treated as an
+incomplete initial snapshot. If a retired source table ID is also present, the
+target table is reset under the task/table ownership lock before replay. Missing
+epoch metadata paired with an existing stable-task watermark fails closed; do
+not manually delete rows from `mo_cdc_snapshot`.
+
+Stable-task progress persistence is monotonic and update-only at the catalog
+SQL boundary. Pipeline startup creates and claims the progress row; later
+checkpoints cannot recreate a row deleted by `RESTART`. This prevents a delayed
+write from an old CN from replacing or resurrecting progress after takeover. Do
+not manually delete stable-task watermark rows. Legacy tasks retain their
+existing stale-read rewind behavior.
 
 ---
 
@@ -3509,7 +3579,23 @@ Stores per-table watermarks and errors.
 | `db_name` | varchar(256) | Database name |
 | `table_name` | varchar(256) | Table name |
 | `watermark` | varchar(128) | Last synchronized timestamp |
+| `source_table_id` | bigint unsigned | Physical source-table generation that produced the watermark (`0` for legacy tasks) |
 | `err_msg` | varchar(256) | Per-table error message |
+
+### mo_catalog.mo_cdc_snapshot
+
+Stores the immutable source epoch selected before a bounded initial snapshot
+can make its first partial target commit. This is internal recovery metadata;
+operators should not update it directly.
+
+| Column | Type | Description |
+|--------|------|-------------|
+| `account_id` | bigint unsigned | Account ID |
+| `task_id` | uuid | CDC task ID |
+| `db_name` | varchar(256) | Source database name |
+| `table_name` | varchar(256) | Source table name |
+| `source_table_id` | bigint unsigned | Physical source-table generation ID |
+| `snapshot_epoch` | varchar(128) | Stable source timestamp reused by every retry of this generation |
 
 ---
 

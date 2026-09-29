@@ -149,6 +149,14 @@ alter table index02 alter index key1 invisible;
 show index from index02;
 drop table index02;
 
+drop table if exists index_case;
+create table index_case(v varchar(20));
+create index StandAloneIdx on index_case(v);
+show index from index_case;
+drop index standaloneidx on index_case;
+show index from index_case;
+drop table index_case;
+
 drop table if exists index03;
 create table index03(col1 int, col2 int, col3 int);
 alter table index03 add unique key(col1,col2) comment 'abcTest';
@@ -175,7 +183,7 @@ show index from index04;
 drop table index04;
 
 drop table if exists index05;
-create table index05(col1 int, col2 bigint, col3 decimal);
+create table index05(col1 int, col2 bigint, col3 decimal(38,0));
 show index from index05;
 alter table index05 add unique key(col1,col2);
 show index from index05;
@@ -359,7 +367,7 @@ drop database if exists test;
 create database test;
 use test;
 drop table if exists test01;
-create table test01 (col1 int, col2 decimal, col3 varchar(50));
+create table test01 (col1 int, col2 decimal(38,0), col3 varchar(50));
 insert into test01 values (1, 3242434.423, '3224332r32r');
 insert into test01 values (2, 39304.3424, '343234343213124');
 insert into test01 values (3, 372.324, '00');

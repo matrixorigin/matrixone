@@ -40,6 +40,10 @@ func genWriteReqs(
 	txnCommit *Transaction,
 ) ([]txn.TxnRequest, error) {
 	writes, tablesInVain, op := txnCommit.writes, txnCommit.tablesInVain, txnCommit.op
+	var pendingDatabaseCreates map[databaseKey]uint64
+	if txnCommit.haveDDL.Load() {
+		pendingDatabaseCreates = txnCommit.pendingCreatedDatabaseWrites()
+	}
 	var pkChkByTN int8
 	if v := ctx.Value(defines.PkCheckByTN{}); v != nil {
 		pkChkByTN = v.(int8)
@@ -63,6 +67,12 @@ func genWriteReqs(
 		if err != nil {
 			return nil, err
 		}
+		if len(pendingDatabaseCreates) != 0 &&
+			e.typ == INSERT &&
+			e.databaseId == catalog.MO_CATALOG_ID &&
+			e.tableId == catalog.MO_DATABASE_ID {
+			consumeCreatedDatabaseWrites(pendingDatabaseCreates, e.bat)
+		}
 		// --sql
 		// create table t (a int);
 		// begin;
@@ -82,6 +92,9 @@ func genWriteReqs(
 		}
 
 		entries = append(entries, pe)
+	}
+	if len(pendingDatabaseCreates) != 0 {
+		return nil, missingCreatedDatabaseWriteError(ctx, pendingDatabaseCreates)
 	}
 
 	requireAutoIncrEpochFence := requiresAutoIncrEpochFenceCommit(entries)

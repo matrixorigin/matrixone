@@ -22,6 +22,8 @@
 
 # Top-level folders
 /cgo @aunjgr @XuPeng-SH
+/cgo/cuda @aunjgr @XuPeng-SH @cpegeric
+/cgo/cuvs @aunjgr @XuPeng-SH @cpegeric
 /docs @fengttt @XuPeng-SH
 /etc @XuPeng-SH
 /optools @fengttt @XuPeng-SH
@@ -102,7 +104,7 @@
 /pkg/frontend @XuPeng-SH
 
 # pkg/fulltext2
-/pkg/fulltext2 @epegeric @fengttt @XuPeng-SH
+/pkg/fulltext2 @cpegeric @fengttt @XuPeng-SH
 
 # pkg/hakeeper
 /pkg/hakeeper @XuPeng-SH @LeftHandCold

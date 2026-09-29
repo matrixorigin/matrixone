@@ -18,6 +18,7 @@ import (
 	"context"
 	"testing"
 
+	"github.com/matrixorigin/matrixone/pkg/catalog"
 	"github.com/matrixorigin/matrixone/pkg/common/mpool"
 	"github.com/matrixorigin/matrixone/pkg/container/batch"
 	"github.com/matrixorigin/matrixone/pkg/container/types"
@@ -186,6 +187,41 @@ func TestAccountToTableSnapshots(t *testing.T) {
 		assert.NotNil(t, tablePitrs[1002])
 		assert.NotNil(t, tablePitrs[2001])
 		assert.NotNil(t, tablePitrs[3001])
+	})
+
+	t.Run("AllMoCatalogTablesUseGlobalPitrLowerBound", func(t *testing.T) {
+		const catalogTableID = uint64(5001)
+		const userTableID = uint64(5002)
+		const userDatabaseID = uint64(100)
+		catalogMeta := &SnapshotMeta{
+			tableIDIndex: map[uint64]*tableInfo{
+				catalogTableID: {
+					accountID: uint32(catalog.System_Account),
+					dbID:      catalog.MO_CATALOG_ID,
+					tid:       catalogTableID,
+				},
+				userTableID: {
+					accountID: 7,
+					dbID:      userDatabaseID,
+					tid:       userTableID,
+				},
+			},
+		}
+		snapshots := NewSnapshotInfo()
+		pitr := NewPitrInfo()
+		globalLowerBound := types.BuildTS(1000, 0)
+		legacySysLowerBound := types.BuildTS(2000, 0)
+		userLowerBound := types.BuildTS(3000, 0)
+		pitr.account[42] = []types.TS{globalLowerBound}
+		pitr.database[catalog.MO_CATALOG_ID] = []types.TS{legacySysLowerBound}
+		pitr.database[userDatabaseID] = []types.TS{userLowerBound}
+
+		_, tablePitrs := catalogMeta.AccountToTableSnapshots(snapshots, pitr)
+
+		require.NotNil(t, tablePitrs[catalogTableID])
+		require.Equal(t, globalLowerBound, *tablePitrs[catalogTableID])
+		require.NotNil(t, tablePitrs[userTableID])
+		require.Equal(t, userLowerBound, *tablePitrs[userTableID])
 	})
 
 	t.Run("MultipleTableSnapshotsInSameDatabase", func(t *testing.T) {

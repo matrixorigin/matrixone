@@ -15,15 +15,744 @@
 package plan
 
 import (
+	"context"
+	"fmt"
 	"math"
 	"testing"
 
 	"github.com/matrixorigin/matrixone/pkg/catalog"
 	"github.com/matrixorigin/matrixone/pkg/container/types"
+	"github.com/matrixorigin/matrixone/pkg/container/vector"
 	"github.com/matrixorigin/matrixone/pkg/pb/plan"
+	"github.com/matrixorigin/matrixone/pkg/sql/plan/function"
 	"github.com/matrixorigin/matrixone/pkg/vectorindex/metric"
 	"github.com/stretchr/testify/require"
 )
+
+func makeVolatileJoinFilter(t *testing.T, ctx *MockCompilerContext, tag *int32) *plan.Expr {
+	t.Helper()
+	randFn, err := function.GetFunctionByName(context.Background(), "rand", nil)
+	require.NoError(t, err)
+	value := &plan.Expr{
+		Typ: Type{Id: int32(types.T_float64)},
+		Expr: &plan.Expr_F{F: &plan.Function{
+			Func: &plan.ObjectRef{Obj: randFn.GetEncodedOverloadID(), ObjName: "rand"},
+		}},
+	}
+	if tag != nil {
+		value, err = BindFuncExprImplByPlanExpr(ctx.GetContext(), "+", []*plan.Expr{
+			{Typ: Type{Id: int32(types.T_float64)}, Expr: &plan.Expr_Col{
+				Col: &plan.ColRef{RelPos: *tag, ColPos: 0},
+			}},
+			value,
+		})
+		require.NoError(t, err)
+	}
+	filter, err := BindFuncExprImplByPlanExpr(ctx.GetContext(), "<", []*plan.Expr{
+		value, makePlan2Float64ConstExprWithType(0.5),
+	})
+	require.NoError(t, err)
+	return filter
+}
+
+func newVolatileJoinPushdownBuilder(ctx *MockCompilerContext, joinType plan.Node_JoinType) (*QueryBuilder, int32, int32) {
+	builder := NewQueryBuilder(plan.Query_SELECT, ctx, false, false)
+	leftTag := builder.GenNewBindTag()
+	rightTag := builder.GenNewBindTag()
+	builder.qry.Nodes = []*plan.Node{
+		{NodeType: plan.Node_TABLE_SCAN, BindingTags: []int32{leftTag}, Stats: &plan.Stats{Outcnt: 1}},
+		{NodeType: plan.Node_TABLE_SCAN, BindingTags: []int32{rightTag}, Stats: &plan.Stats{Outcnt: 1}},
+		{NodeType: plan.Node_JOIN, JoinType: joinType, Children: []int32{0, 1}},
+	}
+	return builder, leftTag, rightTag
+}
+
+func TestJoinDoesNotPushDownVolatileFilter(t *testing.T) {
+	for _, side := range []string{"none", "left", "right"} {
+		t.Run("inner/"+side, func(t *testing.T) {
+			ctx := NewMockCompilerContext(true)
+			builder, leftTag, rightTag := newVolatileJoinPushdownBuilder(ctx, plan.Node_INNER)
+			var tag *int32
+			switch side {
+			case "left":
+				tag = &leftTag
+			case "right":
+				tag = &rightTag
+			}
+			filter := makeVolatileJoinFilter(t, ctx, tag)
+
+			nodeID, cantPushdown := builder.pushdownFilters(2, []*plan.Expr{filter}, false)
+			require.Equal(t, int32(2), nodeID)
+			require.Equal(t, []*plan.Expr{filter}, cantPushdown)
+			require.Empty(t, builder.qry.Nodes[0].FilterList)
+			require.Empty(t, builder.qry.Nodes[1].FilterList)
+		})
+	}
+
+	t.Run("inner on-list", func(t *testing.T) {
+		ctx := NewMockCompilerContext(true)
+		builder, leftTag, _ := newVolatileJoinPushdownBuilder(ctx, plan.Node_INNER)
+		filter := makeVolatileJoinFilter(t, ctx, &leftTag)
+		builder.qry.Nodes[2].OnList = []*plan.Expr{filter}
+
+		_, cantPushdown := builder.pushdownFilters(2, nil, false)
+		require.Equal(t, []*plan.Expr{filter}, cantPushdown)
+		require.Empty(t, builder.qry.Nodes[0].FilterList)
+		require.Empty(t, builder.qry.Nodes[1].FilterList)
+	})
+
+	t.Run("left on-list", func(t *testing.T) {
+		ctx := NewMockCompilerContext(true)
+		builder, _, rightTag := newVolatileJoinPushdownBuilder(ctx, plan.Node_LEFT)
+		filter := makeVolatileJoinFilter(t, ctx, &rightTag)
+		builder.qry.Nodes[2].OnList = []*plan.Expr{filter}
+
+		_, cantPushdown := builder.pushdownFilters(2, nil, false)
+		require.Empty(t, cantPushdown)
+		require.Equal(t, []*plan.Expr{filter}, builder.qry.Nodes[2].OnList)
+		require.Empty(t, builder.qry.Nodes[0].FilterList)
+		require.Empty(t, builder.qry.Nodes[1].FilterList)
+	})
+
+	t.Run("function scan bypass", func(t *testing.T) {
+		ctx := NewMockCompilerContext(true)
+		builder, leftTag, _ := newVolatileJoinPushdownBuilder(ctx, plan.Node_INNER)
+		builder.qry.Nodes[1].NodeType = plan.Node_FUNCTION_SCAN
+		filter := makeVolatileJoinFilter(t, ctx, &leftTag)
+
+		_, cantPushdown := builder.pushdownFilters(2, []*plan.Expr{filter}, false)
+		require.Equal(t, []*plan.Expr{filter}, cantPushdown)
+		require.Empty(t, builder.qry.Nodes[0].FilterList)
+		require.Empty(t, builder.qry.Nodes[1].FilterList)
+	})
+}
+
+// TestPushdownFiltersLeafWithOffsetKeepsFilter is the #29065 regression: a filter blocked by the
+// LIMIT/OFFSET guard at a LEAF node (a recursive-CTE consumer SINK_SCAN carries only Offset, #29332)
+// must be RETURNED as cantPushdown, not overwritten to nil by the default leaf branch, so the caller
+// re-attaches it as a FILTER instead of silently dropping it (which returned wrong recursive-CTE rows).
+func TestPushdownFiltersLeafWithOffsetKeepsFilter(t *testing.T) {
+	ctx := NewMockCompilerContext(true)
+	builder := NewQueryBuilder(plan.Query_SELECT, ctx, false, false)
+	tag := builder.GenNewBindTag()
+	// Append directly (not via appendNode) to skip ReCalcNodeStats, which a bare SINK_SCAN with no
+	// source step cannot satisfy; the leaf pushdown branch only reads NodeType/Offset/Children.
+	leafID := int32(len(builder.qry.Nodes))
+	builder.qry.Nodes = append(builder.qry.Nodes, &plan.Node{
+		NodeType:    plan.Node_SINK_SCAN,
+		NodeId:      leafID,
+		BindingTags: []int32{tag},
+		Offset:      makePlan2Int64ConstExprWithType(1),
+	})
+	filter := makeVolatileJoinFilter(t, ctx, &tag)
+
+	_, cantPushdown := builder.pushdownFilters(leafID, []*plan.Expr{filter}, false)
+	require.Equal(t, []*plan.Expr{filter}, cantPushdown,
+		"a filter blocked over a leaf OFFSET node must be returned, not dropped (#29065)")
+	require.Empty(t, builder.qry.Nodes[leafID].FilterList)
+}
+
+func TestJoinKeepsDiagnosticEquijoinKeys(t *testing.T) {
+	for _, separate := range []bool{false, true} {
+		for _, fromOn := range []bool{false, true} {
+			for _, reversed := range []bool{false, true} {
+				t.Run(fmt.Sprintf("separate=%t/on=%t/reversed=%t", separate, fromOn, reversed), func(t *testing.T) {
+					ctx := NewMockCompilerContext(true)
+					builder, leftTag, rightTag := newVolatileJoinPushdownBuilder(ctx, plan.Node_INNER)
+					for i, node := range builder.qry.Nodes {
+						node.NodeId = int32(i)
+					}
+					column := func(tag int32) *plan.Expr {
+						return &plan.Expr{Typ: Type{Id: int32(types.T_time)}, Expr: &plan.Expr_Col{
+							Col: &plan.ColRef{RelPos: tag, ColPos: 0},
+						}}
+					}
+					param := &plan.Expr{Typ: Type{Id: int32(types.T_varchar)}, Expr: &plan.Expr_P{P: &plan.ParamRef{Pos: 0}}}
+					clock, err := BindFuncExprImplByPlanExpr(ctx.GetContext(), "time", []*plan.Expr{param})
+					require.NoError(t, err)
+					right, err := BindFuncExprImplByPlanExpr(ctx.GetContext(), "addtime", []*plan.Expr{column(rightTag), clock})
+					require.NoError(t, err)
+					args := []*plan.Expr{column(leftTag), right}
+					if reversed {
+						args[0], args[1] = args[1], args[0]
+					}
+					condition, err := BindFuncExprImplByPlanExpr(ctx.GetContext(), "=", args)
+					require.NoError(t, err)
+					require.True(t, ContainsStatementInvariantFilterDiagnostic(ctx.GetProcess(), condition))
+					filters := []*plan.Expr{condition}
+					if fromOn {
+						builder.qry.Nodes[2].OnList = filters
+						filters = nil
+					}
+					_, remaining := builder.pushdownFilters(2, filters, separate)
+					if fromOn {
+						require.Empty(t, remaining, "a diagnostic must not demote an eligible hash key")
+						require.Equal(t, []*plan.Expr{condition}, builder.qry.Nodes[2].OnList)
+						require.True(t, isEquiCond(condition, map[int32]bool{leftTag: true}, map[int32]bool{rightTag: true}))
+						require.Equal(t, int32(2), builder.determineJoinOrder(2))
+						_, remaining = builder.pushdownFilters(2, nil, true)
+						require.Empty(t, remaining)
+						require.Equal(t, []*plan.Expr{condition}, builder.qry.Nodes[2].OnList)
+						// A parent may reorder its other inputs, but cannot flatten
+						// away this diagnostic owner's two logical input domains.
+						leaves, conditions := builder.gatherJoinLeavesAndConds(builder.qry.Nodes[2], nil, nil)
+						require.Equal(t, []*plan.Node{builder.qry.Nodes[2]}, leaves)
+						require.Empty(t, conditions)
+					} else {
+						require.Equal(t, []*plan.Expr{condition}, remaining, "WHERE retains its post-join diagnostic owner")
+						require.Empty(t, builder.qry.Nodes[2].OnList)
+					}
+					require.Empty(t, builder.qry.Nodes[0].FilterList)
+					require.Empty(t, builder.qry.Nodes[1].FilterList)
+				})
+			}
+		}
+	}
+}
+
+func TestPreparedJoinDiagnosticProofOnlyRelaxesCurrentExecution(t *testing.T) {
+	ctx := NewMockCompilerContext(true)
+	builder, leftTag, _ := newVolatileJoinPushdownBuilder(ctx, plan.Node_INNER)
+	param := &plan.Expr{Typ: Type{Id: int32(types.T_varchar)}, Expr: &plan.Expr_P{P: &plan.ParamRef{Pos: 0}}}
+	clock, err := BindFuncExprImplByPlanExpr(ctx.GetContext(), "time", []*plan.Expr{param})
+	require.NoError(t, err)
+	column := &plan.Expr{Typ: Type{Id: int32(types.T_time)}, Expr: &plan.Expr_Col{
+		Col: &plan.ColRef{RelPos: leftTag, ColPos: 0},
+	}}
+	condition, err := BindFuncExprImplByPlanExpr(ctx.GetContext(), "=", []*plan.Expr{column, clock})
+	require.NoError(t, err)
+	builder.qry.Nodes[2].OnList = []*plan.Expr{condition}
+	builder.qry.Steps = []int32{2}
+	template := &plan.Plan{Plan: &plan.Plan_Query{Query: builder.qry}}
+	require.True(t, PreparedPlanHasJoinParameterDiagnostic(template))
+	require.True(t, builder.joinOwnsConstantDiagnostic(builder.qry.Nodes[2]))
+	require.True(t, builder.filterPushdownBarrier(condition))
+
+	proc := ctx.GetProcess()
+	params := vector.NewVec(types.T_text.ToType())
+	defer func() { proc.SetPrepareParams(nil); params.Free(proc.Mp()) }()
+	require.NoError(t, vector.AppendBytes(params, []byte("00:00:01"), false, proc.Mp()))
+	proc.SetPrepareParams(params)
+	safe, err := ProbePreparedJoinParameterDiagnostics(proc, template)
+	require.NoError(t, err)
+	require.True(t, safe)
+	rowCondition, err := BindFuncExprImplByPlanExpr(ctx.GetContext(), "=", []*plan.Expr{column, column})
+	require.NoError(t, err)
+	guarded, err := BindFuncExprImplByPlanExpr(ctx.GetContext(), "case", []*plan.Expr{rowCondition, clock, column})
+	require.NoError(t, err)
+	require.True(t, ContainsGuardedJoinDiagnostic(proc, guarded))
+	require.False(t, ContainsGuardedJoinDiagnosticWithProof(proc, guarded, safe))
+	invalidLiteral, err := BindFuncExprImplByPlanExpr(ctx.GetContext(), "time", []*plan.Expr{
+		makePlan2StringConstExprWithType("900:00:00"),
+	})
+	require.NoError(t, err)
+	guardedLiteral, err := BindFuncExprImplByPlanExpr(ctx.GetContext(), "case", []*plan.Expr{rowCondition, invalidLiteral, column})
+	require.NoError(t, err)
+	require.True(t, ContainsGuardedJoinDiagnosticWithProof(proc, guardedLiteral, safe),
+		"parameter proof cannot suppress an unrelated literal diagnostic")
+	originalContext := ctx.GetContext()
+	ctx.SetContext(WithPreparedJoinDiagnosticFree(originalContext))
+	require.False(t, builder.joinOwnsConstantDiagnostic(builder.qry.Nodes[2]))
+	require.False(t, builder.filterPushdownBarrier(condition))
+	ctx.SetContext(originalContext)
+	require.True(t, builder.joinOwnsConstantDiagnostic(builder.qry.Nodes[2]))
+
+	require.NoError(t, vector.SetStringAt(params, 0, "900:00:00", proc.Mp()))
+	safe, err = ProbePreparedJoinParameterDiagnostics(proc, template)
+	require.NoError(t, err)
+	require.False(t, safe)
+	require.True(t, builder.joinOwnsConstantDiagnostic(builder.qry.Nodes[2]))
+
+	// The proof covers other parameter diagnostics in the same statement too:
+	// the execution-scoped optimizer flag must not move an unprobed WHERE error.
+	whereParam := &plan.Expr{Typ: Type{Id: int32(types.T_varchar)}, Expr: &plan.Expr_P{P: &plan.ParamRef{Pos: 1}}}
+	whereClock, err := BindFuncExprImplByPlanExpr(ctx.GetContext(), "time", []*plan.Expr{whereParam})
+	require.NoError(t, err)
+	builder.qry.Nodes = append(builder.qry.Nodes, &plan.Node{
+		NodeType: plan.Node_FILTER, Children: []int32{2}, FilterList: []*plan.Expr{whereClock},
+	})
+	builder.qry.Steps = []int32{3}
+	require.NoError(t, vector.SetStringAt(params, 0, "00:00:01", proc.Mp()))
+	require.NoError(t, vector.AppendBytes(params, []byte("900:00:00"), false, proc.Mp()))
+	safe, err = ProbePreparedJoinParameterDiagnostics(proc, template)
+	require.NoError(t, err)
+	require.False(t, safe)
+	builder.qry.Steps = []int32{2}
+	safe, err = ProbePreparedJoinParameterDiagnostics(proc, template)
+	require.NoError(t, err)
+	require.False(t, safe, "auxiliary nodes must also be covered before relaxing the whole replan")
+	builder.qry.Nodes = builder.qry.Nodes[:3]
+
+	// A projection retains its own execution owner when the JOIN is replanned.
+	// Its invalid TIME value must still warn at execution, but cannot block a
+	// selective JOIN whose ON and filter inputs are diagnostic-free.
+	builder.qry.Nodes = append(builder.qry.Nodes, &plan.Node{
+		NodeType: plan.Node_PROJECT, Children: []int32{2}, ProjectList: []*plan.Expr{whereClock},
+	})
+	builder.qry.Steps = []int32{3}
+	safe, err = ProbePreparedJoinParameterDiagnostics(proc, template)
+	require.NoError(t, err)
+	require.True(t, safe)
+	require.NoError(t, vector.SetStringAt(params, 0, "900:00:00", proc.Mp()))
+	safe, err = ProbePreparedJoinParameterDiagnostics(proc, template)
+	require.NoError(t, err)
+	require.False(t, safe, "the JOIN's own invalid input still blocks the replan")
+	require.NoError(t, vector.SetStringAt(params, 0, "00:00:01", proc.Mp()))
+	builder.qry.Nodes = builder.qry.Nodes[:3]
+	builder.qry.Steps = []int32{2}
+	builder.qry.Nodes[0].BlockFilterList = []*plan.Expr{whereClock}
+	safe, err = ProbePreparedJoinParameterDiagnostics(proc, template)
+	require.NoError(t, err)
+	require.False(t, safe, "block filters are part of the predicate proof")
+	builder.qry.Nodes[0].BlockFilterList = nil
+	builder.qry.Nodes = append(builder.qry.Nodes, &plan.Node{
+		NodeType:        plan.Node_VECTOR_INDEX_SCAN,
+		VectorIndexScan: &plan.VectorIndexScan{PreFilters: []*plan.Expr{whereClock}},
+	})
+	safe, err = ProbePreparedJoinParameterDiagnostics(proc, template)
+	require.NoError(t, err)
+	require.False(t, safe, "index prefilters remain predicate owners after pushdown")
+	builder.qry.Nodes = builder.qry.Nodes[:3]
+
+	// Runtime binding may replace TIME(?) by TIME(literal). The proof must
+	// inspect that final expression even though it no longer contains a marker.
+	for _, tc := range []struct {
+		value string
+		free  bool
+	}{
+		{value: "00:00:01", free: true},
+		{value: "900:00:00", free: false},
+	} {
+		boundClock, bindErr := BindFuncExprImplByPlanExpr(ctx.GetContext(), "time", []*plan.Expr{
+			makePlan2StringConstExprWithType(tc.value),
+		})
+		require.NoError(t, bindErr)
+		boundCondition, bindErr := BindFuncExprImplByPlanExpr(ctx.GetContext(), "=", []*plan.Expr{column, boundClock})
+		require.NoError(t, bindErr)
+		builder.qry.Nodes[2].OnList = []*plan.Expr{boundCondition}
+		require.False(t, PreparedPlanHasJoinParameterDiagnostic(template))
+		free, probeErr := ProbePreparedJoinParameterDiagnostics(proc, template)
+		require.NoError(t, probeErr)
+		require.Equal(t, tc.free, free, tc.value)
+	}
+	goodClock, err := BindFuncExprImplByPlanExpr(ctx.GetContext(), "time", []*plan.Expr{
+		makePlan2StringConstExprWithType("00:00:01"),
+	})
+	require.NoError(t, err)
+	badClock, err := BindFuncExprImplByPlanExpr(ctx.GetContext(), "time", []*plan.Expr{
+		makePlan2StringConstExprWithType("900:00:00"),
+	})
+	require.NoError(t, err)
+	for _, tc := range []struct {
+		active bool
+		free   bool
+	}{
+		{active: false, free: true},
+		{active: true, free: false},
+	} {
+		// The maximal constant CASE must decide which TIME arm runs. Probing
+		// TIME descendants independently would reject the inactive bad arm.
+		selected, bindErr := BindFuncExprImplByPlanExpr(ctx.GetContext(), "case", []*plan.Expr{
+			makePlan2BoolConstExprWithType(tc.active), badClock, goodClock,
+		})
+		require.NoError(t, bindErr)
+		builder.qry.Nodes[2].OnList = []*plan.Expr{selected}
+		free, probeErr := ProbePreparedJoinParameterDiagnostics(proc, template)
+		require.NoError(t, probeErr)
+		require.Equal(t, tc.free, free)
+	}
+	for _, tc := range []struct {
+		clock *plan.Expr
+		free  bool
+	}{
+		{clock: goodClock, free: true},
+		{clock: badClock, free: false},
+	} {
+		// Aggregate and window functions have no scalar executor. Inspect
+		// their diagnostic operand without attempting to execute the wrapper.
+		aggregate, bindErr := BindFuncExprImplByPlanExpr(ctx.GetContext(), "max", []*plan.Expr{tc.clock})
+		require.NoError(t, bindErr)
+		builder.qry.Nodes[2].OnList = []*plan.Expr{aggregate}
+		free, probeErr := ProbePreparedJoinParameterDiagnostics(proc, template)
+		require.NoError(t, probeErr)
+		require.Equal(t, tc.free, free)
+	}
+}
+
+func TestPushdownLimitToTableScanComposesExistingPagination(t *testing.T) {
+	dynamic := func(pos int32) *plan.Expr {
+		return &plan.Expr{Expr: &plan.Expr_P{P: &plan.ParamRef{Pos: pos}}}
+	}
+	tests := []struct {
+		name                        string
+		innerLimit, innerOffset     *plan.Expr
+		outerLimit, outerOffset     *plan.Expr
+		wantLimit, wantOffset       uint64
+		wantLimitSet, wantOffsetSet bool
+		wantPushed                  bool
+	}{
+		{
+			name:          "outer wider than inner",
+			innerLimit:    makePlan2Uint64ConstExprWithType(1),
+			innerOffset:   makePlan2Uint64ConstExprWithType(2),
+			outerLimit:    makePlan2Uint64ConstExprWithType(10),
+			wantLimit:     1,
+			wantOffset:    2,
+			wantLimitSet:  true,
+			wantOffsetSet: true,
+			wantPushed:    true,
+		},
+		{
+			name:          "outer narrower than inner",
+			innerLimit:    makePlan2Uint64ConstExprWithType(10),
+			innerOffset:   makePlan2Uint64ConstExprWithType(2),
+			outerLimit:    makePlan2Uint64ConstExprWithType(3),
+			wantLimit:     3,
+			wantOffset:    2,
+			wantLimitSet:  true,
+			wantOffsetSet: true,
+			wantPushed:    true,
+		},
+		{
+			name:          "both offsets",
+			innerLimit:    makePlan2Uint64ConstExprWithType(10),
+			innerOffset:   makePlan2Uint64ConstExprWithType(2),
+			outerLimit:    makePlan2Uint64ConstExprWithType(3),
+			outerOffset:   makePlan2Uint64ConstExprWithType(4),
+			wantLimit:     3,
+			wantOffset:    6,
+			wantLimitSet:  true,
+			wantOffsetSet: true,
+			wantPushed:    true,
+		},
+		{
+			name:        "outer offset exhausts inner window stays layered",
+			innerLimit:  makePlan2Uint64ConstExprWithType(3),
+			innerOffset: makePlan2Uint64ConstExprWithType(2),
+			outerLimit:  makePlan2Uint64ConstExprWithType(10),
+			outerOffset: makePlan2Uint64ConstExprWithType(4),
+			wantPushed:  false,
+		},
+		{
+			name:          "outer offset without limit",
+			innerLimit:    makePlan2Uint64ConstExprWithType(10),
+			innerOffset:   makePlan2Uint64ConstExprWithType(2),
+			outerOffset:   makePlan2Uint64ConstExprWithType(4),
+			wantLimit:     6,
+			wantOffset:    6,
+			wantLimitSet:  true,
+			wantOffsetSet: true,
+			wantPushed:    true,
+		},
+		{
+			name:          "offsets over unbounded inner window",
+			innerOffset:   makePlan2Uint64ConstExprWithType(2),
+			outerLimit:    makePlan2Uint64ConstExprWithType(3),
+			outerOffset:   makePlan2Uint64ConstExprWithType(4),
+			wantLimit:     3,
+			wantOffset:    6,
+			wantLimitSet:  true,
+			wantOffsetSet: true,
+			wantPushed:    true,
+		},
+		{
+			name:        "dynamic existing pagination stays layered",
+			innerLimit:  dynamic(0),
+			innerOffset: makePlan2Uint64ConstExprWithType(2),
+			outerLimit:  makePlan2Uint64ConstExprWithType(3),
+			wantPushed:  false,
+		},
+		{
+			name:          "dynamic outer limit follows literal inner offset",
+			innerOffset:   makePlan2Uint64ConstExprWithType(2),
+			outerLimit:    dynamic(0),
+			wantOffset:    2,
+			wantOffsetSet: true,
+			wantPushed:    true,
+		},
+		{
+			name:        "dynamic outer limit follows dynamic inner offset",
+			innerOffset: dynamic(0),
+			outerLimit:  dynamic(1),
+			wantPushed:  true,
+		},
+		{
+			name:        "literal offset overflow stays layered",
+			innerOffset: makePlan2Uint64ConstExprWithType(math.MaxUint64),
+			outerLimit:  makePlan2Uint64ConstExprWithType(3),
+			outerOffset: makePlan2Uint64ConstExprWithType(1),
+			wantPushed:  false,
+		},
+		{
+			name:        "dynamic pagination moves into empty scan window",
+			outerLimit:  dynamic(0),
+			outerOffset: dynamic(1),
+			wantPushed:  true,
+		},
+	}
+
+	for _, test := range tests {
+		t.Run(test.name, func(t *testing.T) {
+			builder := NewQueryBuilder(plan.Query_SELECT, NewMockCompilerContext(false), false, true)
+			scan := &plan.Node{
+				NodeType: plan.Node_TABLE_SCAN,
+				Limit:    test.innerLimit,
+				Offset:   test.innerOffset,
+			}
+			project := &plan.Node{
+				NodeType: plan.Node_PROJECT,
+				Children: []int32{0},
+				Limit:    test.outerLimit,
+				Offset:   test.outerOffset,
+			}
+			builder.qry.Nodes = []*plan.Node{scan, project}
+
+			builder.pushdownLimitToTableScan(1)
+			if !test.wantPushed {
+				require.Same(t, test.innerLimit, scan.Limit)
+				require.Same(t, test.innerOffset, scan.Offset)
+				require.Same(t, test.outerLimit, project.Limit)
+				require.Same(t, test.outerOffset, project.Offset)
+				builder.pushdownLimitToTableScan(1)
+				require.Same(t, test.innerLimit, scan.Limit)
+				require.Same(t, test.innerOffset, scan.Offset)
+				require.Same(t, test.outerLimit, project.Limit)
+				require.Same(t, test.outerOffset, project.Offset)
+				return
+			}
+
+			require.Nil(t, project.Limit)
+			require.Nil(t, project.Offset)
+			if test.wantLimitSet {
+				require.Equal(t, test.wantLimit, scan.Limit.GetLit().GetU64Val())
+			} else {
+				require.NotNil(t, scan.Limit)
+			}
+			if test.wantOffsetSet {
+				require.Equal(t, test.wantOffset, scan.Offset.GetLit().GetU64Val())
+			} else {
+				require.NotNil(t, scan.Offset)
+			}
+
+			// The optimizer intentionally invokes this pass twice. A second pass
+			// must be a semantic no-op after pagination ownership was transferred.
+			limit, offset := scan.Limit, scan.Offset
+			builder.pushdownLimitToTableScan(1)
+			require.Same(t, limit, scan.Limit)
+			require.Same(t, offset, scan.Offset)
+		})
+	}
+}
+
+func TestNestedLimitPushdownPreservesInnerWindow(t *testing.T) {
+	tests := []struct {
+		name                            string
+		sql                             string
+		wantLimit, wantOffset           uint64
+		wantOuterLimit, wantOuterOffset uint64
+		wantLayered                     bool
+	}{
+		{
+			name:       "outer wider",
+			sql:        "select * from (select empno from constraint_test.emp limit 1 offset 2) d limit 10",
+			wantLimit:  1,
+			wantOffset: 2,
+		},
+		{
+			name:       "both offsets",
+			sql:        "select * from (select empno from constraint_test.emp limit 10 offset 2) d limit 3 offset 4",
+			wantLimit:  3,
+			wantOffset: 6,
+		},
+		{
+			name:            "exhausted inner window stays layered",
+			sql:             "select * from (select empno from constraint_test.emp limit 3 offset 2) d limit 10 offset 4",
+			wantLimit:       3,
+			wantOffset:      2,
+			wantOuterLimit:  10,
+			wantOuterOffset: 4,
+			wantLayered:     true,
+		},
+	}
+
+	for _, test := range tests {
+		t.Run(test.name, func(t *testing.T) {
+			logical, err := runOneStmt(NewMockOptimizer(false), t, test.sql)
+			require.NoError(t, err)
+			scan := firstReachableNode(logical.GetQuery(), plan.Node_TABLE_SCAN)
+			require.NotNil(t, scan)
+			require.Equal(t, test.wantLimit, scan.Limit.GetLit().GetU64Val())
+			require.Equal(t, test.wantOffset, scan.Offset.GetLit().GetU64Val())
+			if test.wantLayered {
+				project := firstReachableNode(logical.GetQuery(), plan.Node_PROJECT)
+				require.NotNil(t, project)
+				require.NotNil(t, project.Limit)
+				require.NotNil(t, project.Offset)
+				require.Equal(t, test.wantOuterLimit, project.Limit.GetLit().GetU64Val())
+				require.Equal(t, test.wantOuterOffset, project.Offset.GetLit().GetU64Val())
+			}
+		})
+	}
+}
+
+func TestSetPhysicalEqualityFilterBoundary(t *testing.T) {
+	for _, kind := range []plan.Node_NodeType{
+		plan.Node_UNION, plan.Node_UNION_ALL, plan.Node_MINUS,
+		plan.Node_MINUS_ALL, plan.Node_INTERSECT, plan.Node_INTERSECT_ALL,
+	} {
+		for _, keyed := range []bool{false, true} {
+			name := kind.String() + "/exact"
+			if keyed {
+				name = kind.String() + "/normalized"
+			}
+			t.Run(name, func(t *testing.T) {
+				ctx := NewMockCompilerContext(true)
+				builder := NewQueryBuilder(plan.Query_SELECT, ctx, false, false)
+				typ := Type{Id: int32(types.T_varchar), Width: 8}
+				left, right, output := GetColExpr(typ, 1, 0), GetColExpr(typ, 2, 0), GetColExpr(typ, 3, 0)
+				predicate := func(col *plan.Expr) *plan.Expr {
+					hex, err := BindFuncExprImplByPlanExpr(ctx.GetContext(), "hex", []*plan.Expr{DeepCopyExpr(col)})
+					require.NoError(t, err)
+					expr, err := BindFuncExprImplByPlanExpr(ctx.GetContext(), "=", []*plan.Expr{hex, makePlan2StringConstExprWithType("6120")})
+					require.NoError(t, err)
+					return expr
+				}
+				local := predicate(left)
+				set := &plan.Node{NodeType: kind, Children: []int32{2, 1}, ProjectList: []*plan.Expr{output}, BindingTags: []int32{3}}
+				if keyed {
+					set.PhysicalEqualityKeyList = []*plan.Expr{DeepCopyExpr(output)}
+				}
+				builder.qry.Nodes = []*plan.Node{
+					{NodeType: plan.Node_TABLE_SCAN, BindingTags: []int32{1}, ProjectList: []*plan.Expr{left}, Stats: &plan.Stats{Outcnt: 1}},
+					{NodeType: plan.Node_TABLE_SCAN, BindingTags: []int32{2}, ProjectList: []*plan.Expr{right}, Stats: &plan.Stats{Outcnt: 1}},
+					{NodeType: plan.Node_FILTER, Children: []int32{0}, ProjectList: []*plan.Expr{left}, FilterList: []*plan.Expr{local}},
+					set,
+				}
+				filter := predicate(output)
+				original := DeepCopyExpr(filter)
+				_, residual := builder.pushdownFilters(3, []*plan.Expr{filter}, false)
+				if keyed && kind != plan.Node_UNION_ALL {
+					require.Equal(t, []*plan.Expr{original}, residual)
+					require.Same(t, filter, residual[0])
+					require.Len(t, builder.qry.Nodes[0].FilterList, 1, "branch-local filter must still optimize")
+					require.Empty(t, builder.qry.Nodes[1].FilterList)
+					set.Limit = makePlan2Uint64ConstExprWithType(100)
+					_, residual = builder.pushdownFilters(3, []*plan.Expr{filter}, false)
+					require.Equal(t, []*plan.Expr{original}, residual, "LIMIT residual must not be lost or duplicated")
+				} else {
+					require.Empty(t, residual)
+					require.NotEmpty(t, builder.qry.Nodes[0].FilterList)
+					require.Len(t, builder.qry.Nodes[1].FilterList, 1, "exact-key and UNION ALL pushdown must remain enabled")
+				}
+			})
+		}
+	}
+}
+
+func TestVolatileFilterStopsAtPlanBoundary(t *testing.T) {
+	for _, test := range []struct {
+		name       string
+		node       *plan.Node
+		storedHere bool
+	}{
+		{name: "aggregate", node: &plan.Node{NodeType: plan.Node_AGG, BindingTags: []int32{1, 2}, Children: []int32{0}}, storedHere: true},
+		{name: "sample", node: &plan.Node{NodeType: plan.Node_SAMPLE, BindingTags: []int32{1, 2}, Children: []int32{0}}, storedHere: true},
+		{name: "window", node: &plan.Node{NodeType: plan.Node_WINDOW, BindingTags: []int32{1}, Children: []int32{0}}, storedHere: true},
+		{name: "time window", node: &plan.Node{NodeType: plan.Node_TIME_WINDOW, BindingTags: []int32{1}, Children: []int32{0}}, storedHere: true},
+		{name: "set operation", node: &plan.Node{NodeType: plan.Node_UNION_ALL, Children: []int32{0, 1}}},
+		{name: "apply", node: &plan.Node{NodeType: plan.Node_APPLY, Children: []int32{0}}},
+	} {
+		t.Run(test.name, func(t *testing.T) {
+			ctx := NewMockCompilerContext(true)
+			builder := NewQueryBuilder(plan.Query_SELECT, ctx, false, false)
+			builder.qry.Nodes = []*plan.Node{
+				{NodeType: plan.Node_TABLE_SCAN, BindingTags: []int32{1}, Stats: &plan.Stats{Outcnt: 1}},
+				{NodeType: plan.Node_TABLE_SCAN, BindingTags: []int32{2}, Stats: &plan.Stats{Outcnt: 1}},
+			}
+			rootID := int32(len(builder.qry.Nodes))
+			if test.node.NodeType == plan.Node_TABLE_SCAN {
+				rootID = 0
+				builder.qry.Nodes[0] = DeepCopyNode(test.node)
+			} else {
+				builder.qry.Nodes = append(builder.qry.Nodes, DeepCopyNode(test.node))
+			}
+			filter := makeVolatileJoinFilter(t, ctx, nil)
+
+			nodeID, cantPushdown := builder.pushdownFilters(rootID, []*plan.Expr{filter}, false)
+			require.Equal(t, rootID, nodeID)
+			if test.storedHere {
+				require.Empty(t, cantPushdown)
+				require.Equal(t, []*plan.Expr{filter}, builder.qry.Nodes[rootID].FilterList)
+			} else {
+				require.Equal(t, []*plan.Expr{filter}, cantPushdown)
+			}
+			require.Empty(t, builder.qry.Nodes[0].FilterList)
+			require.Empty(t, builder.qry.Nodes[1].FilterList)
+		})
+	}
+}
+
+func TestProjectDoesNotPushDownFilterRewrittenWithVolatileExpression(t *testing.T) {
+	t.Run("volatile projection", func(t *testing.T) {
+		ctx := NewMockCompilerContext(true)
+		builder := NewQueryBuilder(plan.Query_SELECT, ctx, false, false)
+		childTag := builder.GenNewBindTag()
+		projectTag := builder.GenNewBindTag()
+		projectExpr := makeVolatileJoinFilter(t, ctx, nil)
+		filter := &plan.Expr{
+			Typ:  Type{Id: int32(types.T_bool)},
+			Expr: &plan.Expr_Col{Col: &plan.ColRef{RelPos: projectTag, ColPos: 0}},
+		}
+		builder.qry.Nodes = []*plan.Node{
+			{NodeType: plan.Node_TABLE_SCAN, BindingTags: []int32{childTag}, Stats: &plan.Stats{Outcnt: 1}},
+			{
+				NodeType:    plan.Node_PROJECT,
+				BindingTags: []int32{projectTag},
+				Children:    []int32{0},
+				ProjectList: []*plan.Expr{projectExpr},
+			},
+		}
+
+		rewritten := replaceColRefs(DeepCopyExpr(filter), projectTag, builder.qry.Nodes[1].ProjectList)
+		require.False(t, ContainsVolatileFunction(filter))
+		require.True(t, ContainsVolatileFunction(rewritten))
+
+		nodeID, cantPushdown := builder.pushdownFilters(1, []*plan.Expr{filter}, false)
+		require.Equal(t, int32(1), nodeID)
+		require.Equal(t, []*plan.Expr{filter}, cantPushdown)
+		require.Empty(t, builder.qry.Nodes[0].FilterList)
+	})
+
+	t.Run("deterministic projection", func(t *testing.T) {
+		ctx := NewMockCompilerContext(true)
+		builder := NewQueryBuilder(plan.Query_SELECT, ctx, false, false)
+		childTag := builder.GenNewBindTag()
+		projectTag := builder.GenNewBindTag()
+		projectExpr := &plan.Expr{
+			Typ:  Type{Id: int32(types.T_bool)},
+			Expr: &plan.Expr_Col{Col: &plan.ColRef{RelPos: childTag, ColPos: 0}},
+		}
+		filter := &plan.Expr{
+			Typ:  Type{Id: int32(types.T_bool)},
+			Expr: &plan.Expr_Col{Col: &plan.ColRef{RelPos: projectTag, ColPos: 0}},
+		}
+		builder.qry.Nodes = []*plan.Node{
+			{NodeType: plan.Node_TABLE_SCAN, BindingTags: []int32{childTag}, Stats: &plan.Stats{Outcnt: 1}},
+			{
+				NodeType:    plan.Node_PROJECT,
+				BindingTags: []int32{projectTag},
+				Children:    []int32{0},
+				ProjectList: []*plan.Expr{projectExpr},
+			},
+		}
+
+		nodeID, cantPushdown := builder.pushdownFilters(1, []*plan.Expr{filter}, false)
+		require.Equal(t, int32(1), nodeID)
+		require.Empty(t, cantPushdown)
+		require.Len(t, builder.qry.Nodes[0].FilterList, 1)
+		require.Equal(t, childTag, builder.qry.Nodes[0].FilterList[0].GetCol().RelPos)
+	})
+}
 
 func TestAssertIsFilterPushdownBoundary(t *testing.T) {
 	ctx := NewMockCompilerContext(true)
@@ -140,6 +869,24 @@ func TestDedupUpdateIsFilterPushdownBoundary(t *testing.T) {
 	require.Empty(t, cantPushdown)
 	require.Len(t, control.qry.Nodes[1].FilterList, 1,
 		"non-mutating DEDUP actions must retain their existing one-side pushdown")
+}
+
+func TestAsofConstantFilterPushesOnlyToProbeSide(t *testing.T) {
+	ctx := NewMockCompilerContext(true)
+	builder := NewQueryBuilder(plan.Query_SELECT, ctx, false, false)
+	leftTag := builder.GenNewBindTag()
+	rightTag := builder.GenNewBindTag()
+	filter := MakePlan2BoolConstExprWithType(false)
+	builder.qry.Nodes = []*plan.Node{
+		{NodeType: plan.Node_TABLE_SCAN, BindingTags: []int32{leftTag}},
+		{NodeType: plan.Node_TABLE_SCAN, BindingTags: []int32{rightTag}},
+		{NodeType: plan.Node_JOIN, JoinType: plan.Node_ASOF_LEFT, Children: []int32{0, 1}},
+	}
+
+	_, cantPushdown := builder.pushdownFilters(2, []*plan.Expr{filter}, false)
+	require.Empty(t, cantPushdown)
+	require.Len(t, builder.qry.Nodes[0].FilterList, 1)
+	require.Empty(t, builder.qry.Nodes[1].FilterList)
 }
 
 func setupLeftJoinBase(t *testing.T) (*MockCompilerContext, *QueryBuilder, *plan.Expr, *plan.Expr, *plan.Expr) {

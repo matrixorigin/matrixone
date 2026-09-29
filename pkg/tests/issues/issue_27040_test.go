@@ -60,10 +60,12 @@ func TestIssue27040ConcurrentIfNotExistsDatabaseClone(t *testing.T) {
 		execSQLRequire(t, ctx, db, "create table `"+sourceDatabase+"`.payload (id int primary key)")
 		execSQLRequire(t, ctx, db, "insert into `"+sourceDatabase+"`.payload values (1)")
 
-		var moDatabaseTableID uint64
+		// Clone serializes through the lineage lifecycle gate before taking the
+		// target catalog key, so the second transaction must wait here first.
+		var lineageGateTableID uint64
 		require.NoError(t, db.QueryRowContext(ctx,
-			"select rel_id from mo_catalog.mo_tables where account_id = 0 and reldatabase = 'mo_catalog' and relname = 'mo_database'",
-		).Scan(&moDatabaseTableID))
+			"select rel_id from mo_catalog.mo_tables where account_id = 0 and reldatabase = 'mo_catalog' and relname = 'mo_feature_registry'",
+		).Scan(&lineageGateTableID))
 
 		first, err := db.Conn(ctx)
 		require.NoError(t, err)
@@ -107,9 +109,9 @@ func TestIssue27040ConcurrentIfNotExistsDatabaseClone(t *testing.T) {
 		secondPending = true
 
 		require.Eventually(t, func() bool {
-			return clusterHasLockWaiter(c, moDatabaseTableID)
+			return clusterHasLockWaiter(c, lineageGateTableID)
 		}, 30*time.Second, 10*time.Millisecond,
-			"second clone did not wait for the first clone's mo_database target lock")
+			"second clone did not wait for the first clone's lineage lifecycle lock")
 
 		select {
 		case cloneErr := <-secondDone:

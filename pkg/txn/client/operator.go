@@ -277,6 +277,7 @@ type txnOperator struct {
 		cachedWrites           map[uint64][]txn.TxnRequest
 		lockTables             []lock.LockTable
 		callbacks              *txnEventCallbacks
+		statementCallbackStart int
 		retry                  bool
 		lockSeq                uint64
 		waitLocks              map[uint64]Lock
@@ -778,6 +779,7 @@ func (tc *txnOperator) initProtectedFields(sealTerminalCall bool) {
 		}
 	}
 	tc.mu.callbacks = nil
+	tc.mu.statementCallbackStart = 0
 	if tc.mu.waitLocks != nil {
 		for k := range tc.mu.waitLocks {
 			delete(tc.mu.waitLocks, k)
@@ -2236,6 +2238,7 @@ func (tc *txnOperator) GetOverview() TxnOverview {
 
 	return TxnOverview{
 		CreateAt:  tc.reset.createAt,
+		AccountID: tc.opts.options.GetAccountID(),
 		Meta:      tc.mu.txn,
 		UserTxn:   tc.opts.options.UserTxn(),
 		WaitLocks: tc.getWaitLocksLocked(),

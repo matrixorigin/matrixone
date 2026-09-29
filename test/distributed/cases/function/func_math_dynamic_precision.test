@@ -1,0 +1,39 @@
+drop database if exists math_dynamic_precision;
+create database math_dynamic_precision;
+use math_dynamic_precision;
+set @saved_optimizer_hints = @@optimizer_hints;
+
+-- 动态 precision 的区间端点不能覆盖内部极值或相反符号的方向。
+create table precision_rows(a double, d bigint);
+insert into precision_rows values (149,-2),(149,-1),(149,0),(-149,-2),(-149,-1),(-149,0),(149,null);
+-- @ignore:0
+select mo_ctl('dn', 'flush', 'math_dynamic_precision.precision_rows');
+set optimizer_hints = 'blockFilter=1';
+select a, d, round(a,d) as r from precision_rows where round(a,d) > 149 order by a,d;
+select a, d, truncate(a,d) as r from precision_rows where truncate(a,d) < -140 order by a,d;
+set optimizer_hints = 'blockFilter=2';
+select a, d, round(a,d) as r from precision_rows where round(a,d) > 149 order by a,d;
+select a, d, truncate(a,d) as r from precision_rows where truncate(a,d) < -140 order by a,d;
+
+-- prepared 重复执行覆盖不同阈值和 NULL 参数。
+set optimizer_hints = 'blockFilter=1';
+prepare precision_query from 'select a,d,round(a,d) as r from precision_rows where round(a,d) > ? order by a,d';
+set @threshold = 149;
+execute precision_query using @threshold;
+set @threshold = 150;
+execute precision_query using @threshold;
+set @threshold = null;
+execute precision_query using @threshold;
+set @threshold = 149;
+execute precision_query using @threshold;
+deallocate prepare precision_query;
+
+-- 三种 decimal 表示保留非平凡舍入、负 precision 和 NULL 的语义。
+create table precision_decimals(a decimal(18,2), b decimal(38,2), c decimal(65,2), d bigint);
+insert into precision_decimals values
+(149.55,149.55,149.55,-1),(-149.55,-149.55,-149.55,1),
+(9999999999999999.99,999999999999999999999999999999999999.99,999999999999999999999999999999999999999999999999999999999999999.99,2),
+(1,1,1,null);
+select a,d,round(a,d),truncate(a,d),round(b,d),truncate(b,d),round(c,d),truncate(c,d) from precision_decimals order by a;
+set optimizer_hints = @saved_optimizer_hints;
+drop database math_dynamic_precision;

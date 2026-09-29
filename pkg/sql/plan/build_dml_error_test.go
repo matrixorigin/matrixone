@@ -116,3 +116,15 @@ func TestDMLPlannerRoutesUnsupportedDMLToLegacyPlanner(t *testing.T) {
 		})
 	}
 }
+
+func TestUpdatePlannerRejectsUnknownUnsupportedDML(t *testing.T) {
+	stmt, err := mysql.ParseOne(context.Background(), "update nation set n_name = 'x'", 1)
+	require.NoError(t, err)
+	ctx := &dmlUnsupportedOnceCompilerContext{MockCompilerContext: NewMockCompilerContext(true)}
+
+	logicPlan, err := BuildPlan(ctx, stmt, false)
+
+	require.Nil(t, logicPlan)
+	require.ErrorContains(t, err, "unsupported DML: force legacy planner")
+	require.True(t, ctx.modernRejected)
+}

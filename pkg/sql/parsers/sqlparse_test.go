@@ -473,6 +473,50 @@ func TestAddRewriteHints_ValidSimple(t *testing.T) {
 	}
 }
 
+// A read source inside a DML statement must carry the rewrite option too,
+// otherwise the statement reads the raw base table and bypasses the rewrite
+// policy. Covers INSERT ... SELECT and multi-table INSERT ALL/FIRST ... SELECT.
+func TestAddRewriteHints_AttachesToDMLSourceQuery(t *testing.T) {
+	tests := []struct {
+		name   string
+		sql    string
+		source func(tree.Statement) *tree.Select
+	}{
+		{
+			name: "insert select",
+			sql:  "/*+ {\"rewrites\": {\"db1.t1\": \"select 1\"}} */ insert into db1.t2 select * from db1.t1",
+			source: func(stmt tree.Statement) *tree.Select {
+				return stmt.(*tree.Insert).Rows
+			},
+		},
+		{
+			name: "multi insert all",
+			sql:  "/*+ {\"rewrites\": {\"db1.t1\": \"select 1\"}} */ insert all into db1.t2 (a) values (k) into db1.t3 (a) values (k) select k from db1.t1",
+			source: func(stmt tree.Statement) *tree.Select {
+				return stmt.(*tree.MultiInsert).Source
+			},
+		},
+		{
+			name: "multi insert first with when",
+			sql:  "/*+ {\"rewrites\": {\"db1.t1\": \"select 1\"}} */ insert first when k > 1 then into db1.t2 (a) values (k) else into db1.t3 (a) values (k) select k from db1.t1",
+			source: func(stmt tree.Statement) *tree.Select {
+				return stmt.(*tree.MultiInsert).Source
+			},
+		},
+	}
+	for _, test := range tests {
+		t.Run(test.name, func(t *testing.T) {
+			stmts, err := parseAndApply(t, test.sql)
+			require.NoError(t, err)
+			require.Len(t, stmts, 1)
+			source := test.source(stmts[0])
+			require.NotNil(t, source)
+			require.NotNil(t, source.RewriteOption, "rewrite policy must reach the DML source query")
+			require.Contains(t, source.RewriteOption.Rewrites, "db1.t1")
+		})
+	}
+}
+
 func TestAddRewriteHints_ValidWithBangPlusComment(t *testing.T) {
 	sql := "/*+ {\"rewrites\": {\"db2.t2\": \"(select 1)\"}} */ select 2"
 	stmts, err := parseAndApply(t, sql)

@@ -42,9 +42,10 @@ var _ interface {
 const topSpillThreshold uint64 = 8192 * 2
 
 type rowRef struct {
-	offset int64
-	size   int64
-	rowIdx int64
+	offset      int64
+	size        int64
+	rowIdx      int64
+	outputBytes uint64
 }
 
 type spillRecordRef struct {
@@ -81,25 +82,32 @@ type container struct {
 	spillAllocation      *spillutil.SpillAllocationAccount
 	budget               *process.ExecutionResourceGeneration
 
-	spilling       bool
-	spillFile      *os.File
-	spillWriter    spillWriteFlusher
-	spillOffset    int64
-	spillFDToken   *process.ExecutionSpillFDReservation
-	spillDiskToken *process.ExecutionSpillDiskReservation
-	rowRefs        []rowRef
+	spilling          bool
+	boundedResident   bool   // actual schema needs byte admission and reclamation
+	residentBytes     uint64 // logical bytes including dead replacement history
+	residentByteLimit uint64 // zero uses the production window; instance test seam
+	spillFile         *os.File
+	spillWriter       spillWriteFlusher
+	spillOffset       int64
+	spillFDToken      *process.ExecutionSpillFDReservation
+	spillDiskToken    *process.ExecutionSpillDiskReservation
+	rowRefs           []rowRef
 
 	// streaming eval state for spill mode
 	spillOrdered bool         // sels backing contains the final ascending order
 	evalCursor   int          // next row index to output in sels
 	spillOutBat  *batch.Batch // current chunk output batch, freed on next call
+	// evalSpillOutputBytes overrides the production byte ceiling in focused
+	// tests. Zero selects evalSpillChunkBytes.
+	evalSpillOutputBytes uint64
 }
 
 type Top struct {
-	Limit       *plan.Expr
-	TopValueTag int32
-	ctr         container
-	Fs          []*plan.OrderBySpec
+	Limit         *plan.Expr
+	TopValueTag   int32
+	OrderedOutput bool
+	ctr           container
+	Fs            []*plan.OrderBySpec
 
 	vm.OperatorBase
 }
@@ -136,6 +144,11 @@ func (top *Top) WithLimit(limit *plan.Expr) *Top {
 
 func (top *Top) WithFs(fs []*plan.OrderBySpec) *Top {
 	top.Fs = fs
+	return top
+}
+
+func (top *Top) WithOrderedOutput() *Top {
+	top.OrderedOutput = true
 	return top
 }
 
@@ -347,6 +360,8 @@ func (ctr *container) cleanupSpill(proc *process.Process) {
 	ctr.sels = nil
 	ctr.rowRefs = nil
 	ctr.spilling = false
+	ctr.boundedResident = false
+	ctr.residentBytes = 0
 	ctr.spillOffset = 0
 	ctr.spillOrdered = false
 	ctr.evalCursor = 0

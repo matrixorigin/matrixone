@@ -106,6 +106,7 @@ func TestSiriusConfigIsOptInAndFailClosed(t *testing.T) {
 	enabled := SiriusConfig{Enabled: true}
 	err := enabled.validate()
 	require.ErrorContains(t, err, "missing Sirius flight-address")
+	require.Equal(t, "flight", enabled.Backend)
 	require.Equal(t, uint64(64<<20), enabled.MaxBatchBytes)
 	require.Equal(t, 15*time.Minute, enabled.RequestTimeout.Duration)
 	require.Equal(t, 30*time.Second, enabled.CleanupTimeout.Duration)
@@ -130,6 +131,37 @@ func TestSiriusConfigIsOptInAndFailClosed(t *testing.T) {
 	enabled.CleanupTimeout.Duration = time.Duration(1 << 62)
 	enabled.LeaseTTL.Duration = substrait.MaxLeaseTTL
 	require.ErrorContains(t, enabled.validate(), "invalid Sirius transport limits")
+}
+
+func TestSiriusBackendSelectionFailsBeforeTransportSetup(t *testing.T) {
+	for _, tc := range []struct {
+		backend string
+		want    string
+	}{
+		{"embedded", "embedded backend is not available in this build"},
+		{"unknown", "invalid Sirius backend"},
+		{"FLIGHT", "invalid Sirius backend"},
+	} {
+		t.Run(tc.backend, func(t *testing.T) {
+			cfg := SiriusConfig{Enabled: true, Backend: tc.backend}
+			err := cfg.validate()
+			require.ErrorContains(t, err, tc.want)
+			require.True(t, moerr.IsMoErrCode(err, moerr.ErrBadConfig))
+			// Startup can be reached independently of Config.Validate. It must
+			// reject the selection before allocating leases or opening sockets.
+			s := &service{cfg: &Config{Sirius: cfg}}
+			require.ErrorContains(t, s.startSiriusRuntime(context.Background()), tc.want)
+			require.Nil(t, s.siriusRuntime)
+			require.Nil(t, s.options.siriusLeases)
+		})
+	}
+	for _, backend := range []string{"", "flight", "embedded"} {
+		disabled := SiriusConfig{Backend: backend}
+		require.NoError(t, disabled.validate())
+		s := &service{cfg: &Config{Sirius: disabled}}
+		require.NoError(t, s.startSiriusRuntime(context.Background()))
+		require.Nil(t, s.siriusRuntime)
+	}
 }
 
 func TestSiriusBenchmarkNoGCRequiresLauncherVerification(t *testing.T) {

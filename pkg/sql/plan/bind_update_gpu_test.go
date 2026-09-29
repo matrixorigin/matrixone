@@ -42,10 +42,10 @@ func TestClassifyAlwaysAsyncGPUIndexesForUpdate(t *testing.T) {
 				}},
 			}
 
-			inline, legacy, err := classifyIrregularIndexesForUpdate(
+			inline, unsupported, err := classifyIrregularIndexesForUpdate(
 				context.Background(), tableDef, map[string]tree.Expr{"id": nil, "vec": nil})
 			require.NoError(t, err)
-			require.False(t, legacy)
+			require.False(t, unsupported)
 			require.Empty(t, inline)
 		})
 	}

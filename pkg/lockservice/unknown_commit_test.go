@@ -479,20 +479,17 @@ func TestUnknownCommitCleanupDoesNotDeadlockBindFence(t *testing.T) {
 		txnID := []byte("unknown-commit-bind-fence")
 		txn := service.activeTxnHolder.getActiveTxn(txnID, true, "")
 		txn.Lock()
-		require.NoError(t, txn.lockAdded(bind.Group, bind, [][]byte{{1}}, service.logger))
+		require.NoError(t, txn.lockAdded(
+			bind.Group,
+			bind,
+			[][]byte{{1}},
+			newTestRowExclusiveOptions(),
+			service.logger,
+		))
 		txn.Unlock()
 		service.incRef(bind.Group, bind.Table)
 
 		holder := service.activeTxnHolder.(*mapBasedTxnHolder)
-		fenceEntered := make(chan struct{}, 1)
-		holder.beforeFenceTxnLock = func(candidate *activeTxn) {
-			if candidate == txn {
-				select {
-				case fenceEntered <- struct{}{}:
-				default:
-				}
-			}
-		}
 		service.tableGroups.set(bind.Group, bind.Table, lockTable)
 
 		unlockDone := make(chan error, 1)
@@ -511,19 +508,19 @@ func TestUnknownCommitCleanupDoesNotDeadlockBindFence(t *testing.T) {
 		go func() {
 			fenceDone <- holder.fenceByBindChanged(changedBind)
 		}()
-		<-fenceEntered
+		select {
+		case count := <-fenceDone:
+			require.Zero(t, count,
+				"a closing transaction already rejects new locks and needs no bind fence")
+		case <-time.After(5 * time.Second):
+			t.Fatal("bind fencing waited on a closing unknown-commit cleanup")
+		}
 		close(lockTable.release)
-
 		select {
 		case err := <-unlockDone:
 			require.NoError(t, err)
 		case <-time.After(5 * time.Second):
-			t.Fatal("unknown-commit cleanup deadlocked with bind fencing")
-		}
-		select {
-		case <-fenceDone:
-		case <-time.After(5 * time.Second):
-			t.Fatal("bind fencing deadlocked with unknown-commit cleanup")
+			t.Fatal("unknown-commit cleanup did not finish after unlock release")
 		}
 		require.False(t, holder.hasActiveTxn(txnID))
 	})
@@ -890,7 +887,7 @@ func TestUnknownCommitResolverCloseCancelsRemoteUnlock(t *testing.T) {
 		txnID := []byte("unknown-commit-remote-unlock")
 		txn := service.activeTxnHolder.getActiveTxn(txnID, true, "")
 		txn.Lock()
-		require.NoError(t, txn.lockAdded(bind.Group, bind, [][]byte{[]byte("key")}, service.logger))
+		require.NoError(t, txn.lockAdded(bind.Group, bind, [][]byte{[]byte("key")}, pb.LockOptions{}, service.logger))
 		txn.Unlock()
 		resolved := make(chan struct{}, 1)
 		callbackCloseErr := make(chan error, 1)
@@ -956,7 +953,7 @@ func TestServiceCloseCancelsOrdinaryRemoteUnlock(t *testing.T) {
 		txnID := []byte("ordinary-remote-unlock")
 		txn := service.activeTxnHolder.getActiveTxn(txnID, true, "")
 		txn.Lock()
-		require.NoError(t, txn.lockAdded(bind.Group, bind, [][]byte{[]byte("key")}, service.logger))
+		require.NoError(t, txn.lockAdded(bind.Group, bind, [][]byte{[]byte("key")}, pb.LockOptions{}, service.logger))
 		txn.Unlock()
 
 		unlockDone := make(chan error, 1)

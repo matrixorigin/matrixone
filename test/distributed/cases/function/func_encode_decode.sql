@@ -1,4 +1,5 @@
 -- test hex/unhex and to_base64/from_base64 function
+drop table if exists test_base, t1, t2, base64_values;
 SELECT hex('\xa7');
 SELECT unhex('616263');
 
@@ -32,6 +33,23 @@ select from_base64('MjAwMy0wOS0wNg==');
 create table test_base(c1 varchar(25));
 insert into test_base values(to_base64('blue')),(to_base64('232525')),(to_base64('lijfe23253'));
 select from_base64(c1) from test_base;
+
+-- Exact decoded bytes, whitespace, and row-local NULL/error handling.
+SELECT HEX(FROM_BASE64('YQ==')) AS one_byte, HEX(FROM_BASE64('YWI=')) AS two_bytes;
+SELECT HEX(FROM_BASE64(CONCAT(' Y', CHAR(9), 'Q', CHAR(13), '=', CHAR(10), '= '))) AS whitespace;
+create table base64_values(id int primary key, v varchar(64));
+insert into base64_values values (1,'YQ=='),(2,NULL),(3,'invalid!'),(4,'YWI='),(5,''),(6,'AAEC/w==');
+select id, HEX(FROM_BASE64(v)) AS decoded from base64_values order by id;
+PREPARE base64_stmt FROM 'SELECT HEX(FROM_BASE64(?)) AS decoded';
+SET @base64_input='YQ==';
+EXECUTE base64_stmt USING @base64_input;
+SET @base64_input='invalid!';
+EXECUTE base64_stmt USING @base64_input;
+SET @base64_input='YWI=';
+EXECUTE base64_stmt USING @base64_input;
+DEALLOCATE PREPARE base64_stmt;
+SET @base64_input=NULL;
+drop table base64_values;
 
 -- test serial() and serial_full()
 CREATE TABLE t1 (name varchar(255), age int);
@@ -129,3 +147,20 @@ select serial_extract(min(serial(id, `vecf64_3`, `vecf64_5`)), 1 as vecf64(3)) f
 select serial_extract(max(serial_full(cast(id as decimal), `vecf64_3`)), 0 as decimal) from vtab64;
 select serial_extract(min(serial_full(cast(id as decimal), `vecf64_3`)), 1 as vecf64(3)) from vtab64;
 drop table vtab64;
+drop table test_base, t1, t2;
+
+-- MySQL-compatible TO_BASE64 line wrapping, checked as exact bytes.
+SELECT HEX(TO_BASE64(REPEAT('a', 56))) = HEX(CONCAT(REPEAT('YWFh', 18), 'YWE=')) AS wrapped_56, HEX(TO_BASE64(REPEAT('a', 57))) = HEX(REPEAT('YWFh', 19)) AS wrapped_57, HEX(TO_BASE64(REPEAT('a', 58))) = HEX(CONCAT(REPEAT('YWFh', 19), CHAR(10), 'YQ==')) AS wrapped_58, HEX(TO_BASE64(REPEAT('a', 59))) = HEX(CONCAT(REPEAT('YWFh', 19), CHAR(10), 'YWE=')) AS wrapped_59, HEX(TO_BASE64(REPEAT('a', 60))) = HEX(CONCAT(REPEAT('YWFh', 19), CHAR(10), 'YWFh')) AS wrapped_60, HEX(TO_BASE64(REPEAT('a', 113))) = HEX(CONCAT(REPEAT('YWFh', 19), CHAR(10), REPEAT('YWFh', 18), 'YWE=')) AS wrapped_113, HEX(TO_BASE64(REPEAT('a', 114))) = HEX(CONCAT(REPEAT('YWFh', 19), CHAR(10), REPEAT('YWFh', 19))) AS wrapped_114, HEX(TO_BASE64(REPEAT('a', 115))) = HEX(CONCAT(REPEAT('YWFh', 19), CHAR(10), REPEAT('YWFh', 19), CHAR(10), 'YQ==')) AS wrapped_115;
+SELECT HEX(TO_BASE64(CONCAT(REPEAT('a', 57), REPEAT('b', 57)))) = HEX(CONCAT(REPEAT('YWFh', 19), CHAR(10), REPEAT('YmJi', 19))) AS wrapped_mixed;
+SELECT HEX(TO_BASE64(REPEAT('a', 1000))) = HEX(CONCAT(REPEAT(CONCAT(REPEAT('YWFh', 19), CHAR(10)), 17), REPEAT('YWFh', 10), 'YQ==')) AS wrapped_1000;
+
+DROP TABLE IF EXISTS base64_wrap_binary;
+CREATE TABLE base64_wrap_binary(id INT PRIMARY KEY, v VARBINARY(58));
+INSERT INTO base64_wrap_binary VALUES (1, CAST(REPEAT('a', 58) AS VARBINARY(58))), (2, UNHEX(REPEAT('00', 58)));
+SELECT id, HEX(TO_BASE64(v)) = CASE id WHEN 1 THEN HEX(CONCAT(REPEAT('YWFh', 19), CHAR(10), 'YQ==')) WHEN 2 THEN HEX(CONCAT(REPEAT('A', 76), CHAR(10), 'AA==')) END AS wrapped FROM base64_wrap_binary ORDER BY id;
+PREPARE base64_wrap_stmt FROM 'SELECT HEX(TO_BASE64(CAST(? AS VARBINARY(58)))) = HEX(CONCAT(REPEAT(''YWFh'', 19), CHAR(10), ''YQ=='')) AS wrapped';
+SET @base64_wrap_input=REPEAT('a',58);
+EXECUTE base64_wrap_stmt USING @base64_wrap_input;
+DEALLOCATE PREPARE base64_wrap_stmt;
+SET @base64_wrap_input=NULL;
+drop table base64_wrap_binary;

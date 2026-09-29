@@ -19,6 +19,21 @@ import (
 )
 
 var (
+	sharedDecodeCounter = prometheus.NewCounterVec(prometheus.CounterOpts{
+		Namespace: "mo", Subsystem: "fs", Name: "shared_decode_total", Help: "Scoped decompression sharing outcomes.",
+	}, []string{"type"})
+	SharedDecodeConversions = sharedDecodeCounter.WithLabelValues("conversion")
+	SharedDecodeLeaders     = sharedDecodeCounter.WithLabelValues("leader")
+	SharedDecodeReuses      = sharedDecodeCounter.WithLabelValues("reuse")
+	SharedDecodeAdmission   = sharedDecodeCounter.WithLabelValues("bypass_admission")
+	SharedDecodeTimeout     = sharedDecodeCounter.WithLabelValues("bypass_timeout")
+	SharedDecodeAbandoned   = sharedDecodeCounter.WithLabelValues("bypass_abandoned")
+	SharedDecodeClosed      = sharedDecodeCounter.WithLabelValues("closed")
+	SharedDecodeActive      = prometheus.NewGauge(prometheus.GaugeOpts{Namespace: "mo", Subsystem: "fs", Name: "shared_decode_active", Help: "Live decoded-read generations, including cleanup."})
+	SharedDecodeReserved    = prometheus.NewGauge(prometheus.GaugeOpts{Namespace: "mo", Subsystem: "fs", Name: "shared_decode_reserved_bytes", Help: "Backing bytes reserved for active decoded-read sharing."})
+)
+
+var (
 	fsReadCounter = prometheus.NewCounterVec(
 		prometheus.CounterOpts{
 			Namespace: "mo",
@@ -139,6 +154,20 @@ var (
 	FSWriteDurationExists       = fsReadWriteDuration.WithLabelValues("s3fs-write-exists")
 	FSWriteDurationStorage      = fsReadWriteDuration.WithLabelValues("s3fs-write-storage")
 	FSWriteDurationDiskCacheSet = fsReadWriteDuration.WithLabelValues("s3fs-write-disk-cache-setfile")
+)
+
+var (
+	fsMultipartInitCounter = prometheus.NewCounterVec(
+		prometheus.CounterOpts{
+			Namespace: "mo",
+			Subsystem: "fs",
+			Name:      "multipart_init_total",
+			Help:      "Total number of multipart initialization lifecycle events.",
+		}, []string{"event"})
+	FSMultipartInitAttemptCounter   = fsMultipartInitCounter.WithLabelValues("attempt")
+	FSMultipartInitAmbiguousCounter = fsMultipartInitCounter.WithLabelValues("ambiguous")
+	FSMultipartInitRecoveredCounter = fsMultipartInitCounter.WithLabelValues("recovered")
+	FSMultipartInitCleanupCounter   = fsMultipartInitCounter.WithLabelValues("cleanup")
 )
 
 var (
@@ -347,6 +376,28 @@ var (
 			Subsystem: "fs",
 			Name:      "disk_cache_error_total",
 			Help:      "Total number of disk cache errors",
+		},
+	)
+
+	// FSDiskCacheAsyncUpdateDroppedCounter tracks optional cache fills that are
+	// dropped when the bounded asynchronous queue cannot admit more work.
+	FSDiskCacheAsyncUpdateDroppedCounter = prometheus.NewCounter(
+		prometheus.CounterOpts{
+			Namespace: "mo",
+			Subsystem: "fs",
+			Name:      "disk_cache_async_update_dropped_total",
+			Help:      "Total number of disk cache async updates dropped by admission control",
+		},
+	)
+
+	// FSDiskCacheAsyncCallbackPanicCounter tracks callback panics contained at
+	// the disk-cache-owned async goroutine boundary.
+	FSDiskCacheAsyncCallbackPanicCounter = prometheus.NewCounter(
+		prometheus.CounterOpts{
+			Namespace: "mo",
+			Subsystem: "fs",
+			Name:      "disk_cache_async_callback_panic_total",
+			Help:      "Total number of panics contained in disk cache async callbacks",
 		},
 	)
 )

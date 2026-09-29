@@ -68,6 +68,10 @@ func TestSqlProcessExecutionIdentityOverride(t *testing.T) {
 	spy := &identityCapturingSQLExecutor{}
 	rt := moruntime.DefaultRuntime()
 	rt.SetGlobalVariables(moruntime.InternalSQLExecutor, spy)
+	// DefaultRuntime IS the "" service's runtime, and this variable is what makes RunTxn work
+	// at all -- leaving it behind makes TestSqlTxnError, which asserts the panic its ABSENCE
+	// causes, pass alone and fail on the second -count iteration in the same process.
+	t.Cleanup(func() { rt.CompareAndDeleteGlobalVariables(moruntime.InternalSQLExecutor, spy) })
 	moruntime.SetupServiceBasedRuntime(uuid, rt)
 
 	subscriberCtx := defines.AttachAccountId(context.Background(), 7)
@@ -111,6 +115,10 @@ func TestSqlProcessExecutionIdentityOverrideFromProcess(t *testing.T) {
 	spy := &identityCapturingSQLExecutor{}
 	rt := moruntime.DefaultRuntime()
 	rt.SetGlobalVariables(moruntime.InternalSQLExecutor, spy)
+	// DefaultRuntime IS the "" service's runtime, and this variable is what makes RunTxn work
+	// at all -- leaving it behind makes TestSqlTxnError, which asserts the panic its ABSENCE
+	// causes, pass alone and fail on the second -count iteration in the same process.
+	t.Cleanup(func() { rt.CompareAndDeleteGlobalVariables(moruntime.InternalSQLExecutor, spy) })
 	moruntime.SetupServiceBasedRuntime(uuid, rt)
 
 	type contextKey struct{}
@@ -186,7 +194,11 @@ func TestSqlTxn(t *testing.T) {
 
 	uuid := ""
 	rt := moruntime.DefaultRuntime()
-	rt.SetGlobalVariables(moruntime.InternalSQLExecutor, &MockSQLExecutor{})
+	exec := &MockSQLExecutor{}
+	rt.SetGlobalVariables(moruntime.InternalSQLExecutor, exec)
+	// Removed again: TestSqlTxnError asserts the panic this variable's ABSENCE causes, so
+	// leaving it registered on the default runtime fails that test on the next -count pass.
+	t.Cleanup(func() { rt.CompareAndDeleteGlobalVariables(moruntime.InternalSQLExecutor, exec) })
 	moruntime.SetupServiceBasedRuntime(uuid, rt)
 
 	m := mpool.MustNewZero()
@@ -275,4 +287,39 @@ func TestSqlProcessServiceAndAccount(t *testing.T) {
 	acc, err := sp2.GetAccountID()
 	require.NoError(t, err)
 	require.Equal(t, uint32(42), acc)
+}
+
+// The *WithOptimizerHints run variants thread a per-statement optimizer_hints string into the
+// executor's StatementOption (StatementOption.WithOptimizerHints), scoped to that one call. The
+// fulltext2 json probe uses the streaming variant to pass applyIndices=1 to its fallback/tail SQL.
+func TestRunSqlWithOptimizerHints(t *testing.T) {
+	uuid := "optimizer-hints-identity"
+	spy := &identityCapturingSQLExecutor{}
+	rt := moruntime.DefaultRuntime()
+	rt.SetGlobalVariables(moruntime.InternalSQLExecutor, spy)
+	t.Cleanup(func() { rt.CompareAndDeleteGlobalVariables(moruntime.InternalSQLExecutor, spy) })
+	moruntime.SetupServiceBasedRuntime(uuid, rt)
+
+	ctx := defines.AttachAccountId(context.Background(), 7)
+	sqlproc := NewSqlProcessWithContext(NewSqlContext(ctx, uuid, nil, 7, nil))
+
+	// Batch variant carries the hint; plain RunSql does not.
+	_, err := RunSqlWithOptimizerHints(sqlproc, "select 1", "applyIndices=1")
+	require.NoError(t, err)
+	require.Equal(t, "applyIndices=1", spy.opts.StatementOption().OptimizerHints())
+
+	_, err = RunSql(sqlproc, "select 1")
+	require.NoError(t, err)
+	require.Equal(t, "", spy.opts.StatementOption().OptimizerHints(), "plain RunSql carries no hint")
+
+	// Streaming variant carries the hint; empty hint is a no-op.
+	streamCh := make(chan executor.Result, 1)
+	errCh := make(chan error, 1)
+	_, err = RunStreamingSqlWithOptimizerHints(ctx, sqlproc, "select 1", "applyIndices=1", streamCh, errCh)
+	require.NoError(t, err)
+	require.Equal(t, "applyIndices=1", spy.opts.StatementOption().OptimizerHints())
+
+	_, err = RunStreamingSqlWithOptimizerHints(ctx, sqlproc, "select 1", "", streamCh, errCh)
+	require.NoError(t, err)
+	require.Equal(t, "", spy.opts.StatementOption().OptimizerHints(), "empty hint is a no-op")
 }

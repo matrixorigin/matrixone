@@ -15,11 +15,16 @@
 package function
 
 import (
+	"context"
 	"encoding/binary"
 	"testing"
 
+	"github.com/matrixorigin/matrixone/pkg/common/mpool"
+	moruntime "github.com/matrixorigin/matrixone/pkg/common/runtime"
 	"github.com/matrixorigin/matrixone/pkg/container/bytejson"
 	"github.com/matrixorigin/matrixone/pkg/container/types"
+	"github.com/matrixorigin/matrixone/pkg/container/vector"
+	"github.com/matrixorigin/matrixone/pkg/defines"
 	"github.com/matrixorigin/matrixone/pkg/testutil"
 	"github.com/stretchr/testify/require"
 )
@@ -355,6 +360,194 @@ func TestNewTypedByteJson(t *testing.T) {
 			require.Equal(t, tt.s, string(bj.Data[n:]), "data mismatch")
 		})
 	}
+}
+
+func TestGeometryToByteJSON(t *testing.T) {
+	value, err := geometryToByteJSON(context.Background(), encodeGeometryPayload("POINT(1 2)", 0, false))
+	require.NoError(t, err)
+	require.Equal(t, bytejson.TpCodeObject, value.Type)
+	require.Equal(t, `{"coordinates": [1, 2], "type": "Point"}`, value.String())
+
+	_, err = geometryToByteJSON(context.Background(), []byte{1})
+	require.ErrorContains(t, err, "invalid geometry payload")
+}
+
+func TestJsonObjectKeysPreserveExistingConversion(t *testing.T) {
+	proc := testutil.NewProcess(t)
+	timeValue, err := types.ParseTime("04:05:06", 0)
+	require.NoError(t, err)
+	datetimeValue, err := types.ParseDatetime("2024-02-03 04:05:06.12", 2)
+	require.NoError(t, err)
+	timestampValue, err := types.ParseTimestamp(jsonSessionTimeZone(proc), "2024-02-03 04:05:06.12", 2)
+	require.NoError(t, err)
+
+	for _, tc := range []struct {
+		name string
+		key  FunctionTestInput
+		want string
+	}{
+		{
+			name: "time keeps declared scale",
+			key: NewFunctionTestInput(types.New(types.T_time, 0, 0),
+				[]types.Time{timeValue}, []bool{false}),
+			want: `{"04:05:06": 1}`,
+		},
+		{
+			name: "binary keeps legacy base64 key",
+			key: NewFunctionTestInput(types.T_binary.ToType(),
+				[]string{"\x00\xff"}, []bool{false}),
+			want: `{"AP8=": 1}`,
+		},
+		{
+			name: "datetime keeps declared scale",
+			key: NewFunctionTestInput(types.New(types.T_datetime, 0, 2),
+				[]types.Datetime{datetimeValue}, []bool{false}),
+			want: `{"2024-02-03 04:05:06.12": 1}`,
+		},
+		{
+			name: "timestamp keeps session timezone and declared scale",
+			key: NewFunctionTestInput(types.New(types.T_timestamp, 0, 2),
+				[]types.Timestamp{timestampValue}, []bool{false}),
+			want: `{"2024-02-03 04:05:06.12": 1}`,
+		},
+		{
+			name: "year remains a member name",
+			key: NewFunctionTestInput(types.T_year.ToType(),
+				[]types.MoYear{2024}, []bool{false}),
+			want: `{"2024": 1}`,
+		},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			vec := runJsonFunctionWithSelectList(t, proc,
+				[]FunctionTestInput{
+					tc.key,
+					NewFunctionTestInput(types.T_int64.ToType(), []int64{1}, []bool{false}),
+				},
+				types.T_json.ToType(), newOpBuiltInJsonObject().jsonObject, nil)
+			require.Equal(t, tc.want, jsonVectorRowString(t, vec, 0))
+		})
+	}
+}
+
+func TestJsonConstructorBinaryValuesUseAdmittedProtocolVersion(t *testing.T) {
+	proc := testutil.NewProcess(t)
+	rt := moruntime.ServiceRuntime(proc.GetService())
+	original, hadOriginal := rt.GetGlobalVariables(moruntime.MOProtocolVersion)
+	t.Cleanup(func() {
+		if hadOriginal {
+			rt.SetGlobalVariables(moruntime.MOProtocolVersion, original)
+		} else {
+			rt.SetGlobalVariables(moruntime.MOProtocolVersion, defines.MORPCLatestVersion)
+		}
+	})
+
+	tests := []struct {
+		name   string
+		typ    types.Type
+		append func(*vector.Vector, *mpool.MPool) error
+	}{
+		{
+			name: "binary", typ: types.T_binary.ToType(),
+			append: func(v *vector.Vector, mp *mpool.MPool) error {
+				return vector.AppendBytes(v, []byte("binary"), false, mp)
+			},
+		},
+		{
+			name: "varbinary", typ: types.T_varbinary.ToType(),
+			append: func(v *vector.Vector, mp *mpool.MPool) error {
+				return vector.AppendBytes(v, []byte("varbinary"), false, mp)
+			},
+		},
+		{
+			name: "blob", typ: types.T_blob.ToType(),
+			append: func(v *vector.Vector, mp *mpool.MPool) error {
+				return vector.AppendBytes(v, []byte("blob"), false, mp)
+			},
+		},
+		{
+			name: "bit", typ: types.New(types.T_bit, 9, 0),
+			append: func(v *vector.Vector, mp *mpool.MPool) error {
+				return vector.AppendFixed(v, uint64(0x101), false, mp)
+			},
+		},
+	}
+
+	for _, tc := range tests {
+		t.Run(tc.name, func(t *testing.T) {
+			mp := mpool.MustNewZero()
+			v := vector.NewVec(tc.typ)
+			require.NoError(t, tc.append(v, mp))
+			defer v.Free(mp)
+
+			rt.SetGlobalVariables(moruntime.MOProtocolVersion, defines.MORPCVersion51)
+			_, err := newOpBuiltInJsonArray().convertToAny(proc, v, 0, jsonSessionProtocolVersion(proc))
+			require.ErrorContains(t, err, "MORPC protocol version 52")
+
+			rt.SetGlobalVariables(moruntime.MOProtocolVersion, defines.MORPCVersion52)
+			value, err := newOpBuiltInJsonArray().convertToAny(proc, v, 0, jsonSessionProtocolVersion(proc))
+			require.NoError(t, err)
+			_, err = bytejson.CreateByteJSON(value)
+			require.NoError(t, err)
+		})
+	}
+}
+
+func TestJsonConstructorPreparedMetadata(t *testing.T) {
+	proc := testutil.NewProcess(t)
+	for _, tc := range []struct {
+		name        string
+		typ         types.T
+		binary      bool
+		kind        vector.PrepareParamKind
+		input, want string
+	}{
+		{"binary", types.T_binary, true, vector.PrepareParamNone, "ab", `"base64:type254:YWI="`},
+		{"varbinary", types.T_varbinary, true, vector.PrepareParamNone, "ab", `"base64:type15:YWI="`},
+		{"blob", types.T_blob, true, vector.PrepareParamNone, "ab", `"base64:type252:YWI="`},
+		{"float32", types.T_float32, false, vector.PrepareParamFloat, "0.1", "0.10000000149011612"},
+		{"kind_only", types.T_any, false, vector.PrepareParamInteger, "42", "42"},
+		{"text", types.T_any, false, vector.PrepareParamNone, "ab", `"ab"`},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			v := vector.NewVec(types.T_text.ToType())
+			defer v.Free(proc.Mp())
+			require.NoError(t, vector.AppendBytes(v, []byte(tc.input), false, proc.Mp()))
+			v.SetPrepareParamType(tc.typ)
+			v.SetPrepareParamKind(tc.kind)
+			v.SetIsBinaryString(tc.binary)
+			value, err := newOpBuiltInJsonArray().convertToAny(proc, v, 0, defines.MORPCVersion52)
+			require.NoError(t, err)
+			got, err := bytejson.CreateByteJSON(value)
+			require.NoError(t, err)
+			require.Equal(t, tc.want, got.String())
+			if tc.binary {
+				key, err := newOpBuiltInJsonObject().convertKeyToAny(proc, newOpBuiltInJsonArray(), v, 0, defines.MORPCVersion51)
+				require.NoError(t, err)
+				require.Equal(t, tc.input, key)
+			}
+		})
+	}
+}
+
+func TestJsonObjectBitKeyPreservesLegacyNameAndTaggedValue(t *testing.T) {
+	proc := testutil.NewProcess(t)
+	vec := runJsonFunctionWithSelectList(t, proc,
+		[]FunctionTestInput{
+			NewFunctionTestInput(types.New(types.T_bit, 9, 0), []uint64{0x101}, []bool{false}),
+			NewFunctionTestInput(types.New(types.T_bit, 4, 0), []uint64{0xa}, []bool{false}),
+		},
+		types.T_json.ToType(), newOpBuiltInJsonObject().jsonObject, nil)
+
+	got := jsonVectorRowString(t, vec, 0)
+	require.Equal(t, `{"AQE=": "base64:type16:Cg=="}`, got)
+
+	document, err := bytejson.ParseFromString(got)
+	require.NoError(t, err)
+	path, err := types.ParseStringToPath(`$."AQE="`)
+	require.NoError(t, err)
+	member, exists := document.QuerySimpleExist(&path)
+	require.True(t, exists)
+	require.Equal(t, `"base64:type16:Cg=="`, member.String())
 }
 
 func TestJsonContainsNumericEqualDecimalAndFloat(t *testing.T) {

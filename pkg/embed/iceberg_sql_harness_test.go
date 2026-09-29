@@ -222,321 +222,328 @@ func TestCreateEmbeddedIcebergTenantAccountStopsWhenContextIsCancelled(t *testin
 	require.Equal(t, 1, calls)
 }
 
-func TestIcebergSQLEngineEmbeddedReadPruningExplainAndTimeTravel(t *testing.T) {
+func TestIcebergSQLEngineEmbeddedHarness(t *testing.T) {
 	RunSingleCNBaseClusterTests(t, func(c Cluster) {
 		rootDB := openIcebergRootTestDB(t, c)
 		defer rootDB.Close()
-		tenantSQL := openIcebergTenantTestSQL(t, c, rootDB)
+		baseTenantSQL := openIcebergTenantTestSQL(t, c, rootDB)
 
 		fixture := newEmbeddedIcebergFixture(t, c)
 		defer fixture.Close()
-		installEmbeddedIcebergPlanner(t, c, fixture.planner)
-		setupEmbeddedIcebergCatalog(t, c, tenantSQL, fixture)
-		readTable := createEmbeddedIcebergTable(t, tenantSQL, fixture, "orders_read", "orders", model.ReadModeAppendOnly)
+		setupEmbeddedIcebergCatalog(t, c, baseTenantSQL, fixture)
 
-		beforeFullScan := fixture.planner.callCount()
-		require.Equal(t, int64(4), queryInt64(t, tenantSQL, fmt.Sprintf("select count(*) from %s", readTable)))
-		require.Equal(t, beforeFullScan+1, fixture.planner.callCount(), "3-CN read must plan once on the coordinator")
-		require.Equal(t, [][]int64{{3, 30}, {4, 40}}, queryIntRows(t, tenantSQL,
-			fmt.Sprintf("select id, amount from %s where id >= 3 order by id", readTable)))
-
-		mustExecSQL(t, tenantSQL, fmt.Sprintf("create table %s.keep_bucket (bucket bigint)", fixture.databaseName))
-		mustExecSQL(t, tenantSQL, fmt.Sprintf("insert into %s.keep_bucket values (2)", fixture.databaseName))
-		require.Equal(t, int64(2), queryInt64(t, tenantSQL,
-			fmt.Sprintf("select count(*) from %s o join %s.keep_bucket k on o.bucket = k.bucket", readTable, fixture.databaseName)))
-		require.Equal(t, [][]int64{{1, 2, 30}, {2, 2, 70}}, queryIntRows(t, tenantSQL,
-			fmt.Sprintf("select bucket, count(*), sum(amount) from %s group by bucket order by bucket", readTable)))
-
-		beforePrune := fixture.planner.callCount()
-		require.Equal(t, int64(70), queryInt64(t, tenantSQL, fmt.Sprintf("select sum(amount) from %s where id >= 3", readTable)))
-		pruneReq, prunePlan := fixture.planner.lastCallAfter(beforePrune)
-		require.Equal(t, []int{1, 4}, pruneReq.ProjectionIDs)
-		require.Equal(t, []api.PrunePredicate{{
-			FieldID: 1,
-			Op:      api.PruneOpGTE,
-			Literal: api.PruneLiteral{Kind: api.TypeLong, Int64: 3},
-		}}, pruneReq.PrunePredicates)
-		require.True(t, pruneReq.EnableRowGroupPlanning)
-		require.Contains(t, pruneReq.ResidualSQL, "filter_digest:")
-		require.Equal(t, 1, prunePlan.Profile.DataFilesPruned)
-		require.Equal(t, 1, prunePlan.Profile.DataFilesSelected)
-		require.Greater(t, prunePlan.Profile.DataFileBytesSelected, int64(0))
-		require.Equal(t, "embedded-fixture", prunePlan.Profile.PlanningMode)
-
-		beforeSnapshot := fixture.planner.callCount()
-		require.Equal(t, int64(2), queryInt64(t, tenantSQL,
-			fmt.Sprintf("select count(*) from %s for iceberg snapshot %d", readTable, embeddedIcebergSnapshotOld)))
-		snapshotReq, snapshotPlan := fixture.planner.lastCallAfter(beforeSnapshot)
-		require.True(t, snapshotReq.Snapshot.HasSnapshotID)
-		require.Equal(t, embeddedIcebergSnapshotOld, snapshotReq.Snapshot.SnapshotID)
-		require.Equal(t, embeddedIcebergSnapshotOld, snapshotPlan.Snapshot.SnapshotID)
-		mustExecSQL(t, tenantSQL, "set time_zone = '+03:00'")
-		require.Equal(t, int64(2), queryInt64(t, tenantSQL,
-			fmt.Sprintf("select count(*) from %s for iceberg timestamp as of timestamp '2026-01-01 12:00:00'", readTable)))
-
-		err := tenantSQL.Exec(fmt.Sprintf("select count(*) from %s {timestamp = '2026-01-01 00:00:00'} for iceberg snapshot 101", readTable))
-		require.Error(t, err)
-		require.Contains(t, strings.ToLower(err.Error()), "iceberg")
-
-		mustExecSQL(t, tenantSQL, fmt.Sprintf("create table %s.native_orders (id bigint)", fixture.databaseName))
-		err = tenantSQL.Exec(fmt.Sprintf("select * from %s.native_orders for iceberg snapshot 101", fixture.databaseName))
-		require.Error(t, err)
-		require.Contains(t, strings.ToLower(err.Error()), "iceberg")
-	})
-}
-
-func TestIcebergSQLEngineEmbeddedSecurityErrors(t *testing.T) {
-	RunSingleCNBaseClusterTests(t, func(c Cluster) {
-		rootDB := openIcebergRootTestDB(t, c)
-		defer rootDB.Close()
-		tenantSQL := openIcebergTenantTestSQL(t, c, rootDB)
-
-		fixture := newEmbeddedIcebergFixture(t, c)
-		defer fixture.Close()
-		installEmbeddedIcebergPlanner(t, c, fixture.planner)
-		setupEmbeddedIcebergCatalog(t, c, tenantSQL, fixture)
-
-		missingPrincipal := createEmbeddedIcebergTable(t, tenantSQL, fixture, "orders_no_principal", "orders", model.ReadModeAppendOnly)
-		installEmbeddedIcebergAccessRows(t, c, fixture, false, true)
-		err := tenantSQL.Exec(fmt.Sprintf("select count(*) from %s", missingPrincipal))
-		require.Error(t, err)
-		require.Contains(t, err.Error(), string(api.ErrPrincipalNotMapped))
-
-		installEmbeddedIcebergAccessRows(t, c, fixture, true, false)
-		err = tenantSQL.Exec(fmt.Sprintf("select count(*) from %s", missingPrincipal))
-		require.Error(t, err)
-		require.Contains(t, err.Error(), string(api.ErrResidencyDenied))
-
-		installEmbeddedIcebergAccessRows(t, c, fixture, true, true)
-		for _, tc := range []struct {
-			remoteTable string
-			code        api.ErrorCode
+		tests := []struct {
+			name string
+			run  func(*testing.T, Cluster, *embeddedSQLSession, *embeddedIcebergFixture)
 		}{
-			{remoteTable: "orders_unauthorized", code: api.ErrAuthUnauthorized},
-			{remoteTable: "orders_forbidden", code: api.ErrAuthForbidden},
-			{remoteTable: "orders_missing", code: api.ErrTableNotFound},
-			{remoteTable: "orders_unavailable", code: api.ErrCatalogUnavailable},
-		} {
-			table := createEmbeddedIcebergTable(t, tenantSQL, fixture, tc.remoteTable, tc.remoteTable, model.ReadModeAppendOnly)
-			err = tenantSQL.Exec(fmt.Sprintf("select count(*) from %s", table))
-			require.Error(t, err)
-			require.Contains(t, err.Error(), string(tc.code))
-			require.NotContains(t, err.Error(), "secret://")
-			require.NotContains(t, err.Error(), "s3://warehouse")
+			{name: "read pruning explain and time travel", run: runIcebergSQLEngineEmbeddedReadPruningExplainAndTimeTravel},
+			{name: "security errors", run: runIcebergSQLEngineEmbeddedSecurityErrors},
+			{name: "delete apply", run: runIcebergSQLEngineEmbeddedDeleteApply},
+			{name: "import native pins snapshot", run: runIcebergSQLEngineEmbeddedImportNativePinsSnapshot},
+			{name: "branch ref read and append write intent", run: runIcebergSQLEngineEmbeddedBranchRefReadAndAppendWriteIntent},
+			{name: "write DML and maintenance SQL", run: runIcebergSQLEngineEmbeddedWriteDMLAndMaintenanceSQL},
+			// This scenario replaces the fixture's object provider and disables its
+			// residency row, so keep it last while the suite shares catalog state.
+			{name: "credential security and redaction", run: runIcebergSQLEngineEmbeddedCredentialSecurityAndRedaction},
+		}
+		for _, test := range tests {
+			t.Run(test.name, func(t *testing.T) {
+				tenantSQL := newEmbeddedSQLSession(t, c, baseTenantSQL.accountName,
+					baseTenantSQL.accountID, baseTenantSQL.userID, baseTenantSQL.roleID)
+				// Several scenarios intentionally map a different MO table to the same
+				// remote table/ref. Clear only that lightweight mapping state so each
+				// subtest keeps its original uniqueness boundary without rebuilding the
+				// tenant, catalog, and object fixture.
+				execEmbeddedIcebergSystemSQL(t, c, fixture, fmt.Sprintf(
+					"delete from mo_catalog.%s where account_id = %d and catalog_id = %d",
+					sqliceberg.TableTables, fixture.accountID, fixture.catalogID))
+				installEmbeddedIcebergAccessRows(t, c, fixture, true, true)
+				installEmbeddedIcebergPlanner(t, c, fixture.planner)
+				test.run(t, c, tenantSQL, fixture)
+			})
 		}
 	})
 }
 
-func TestIcebergSQLEngineEmbeddedCredentialSecurityAndRedaction(t *testing.T) {
-	RunSingleCNBaseClusterTests(t, func(c Cluster) {
-		rootDB := openIcebergRootTestDB(t, c)
-		defer rootDB.Close()
-		tenantSQL := openIcebergTenantTestSQL(t, c, rootDB)
+func runIcebergSQLEngineEmbeddedReadPruningExplainAndTimeTravel(
+	t *testing.T,
+	c Cluster,
+	tenantSQL *embeddedSQLSession,
+	fixture *embeddedIcebergFixture,
+) {
+	readTable := createEmbeddedIcebergTable(t, tenantSQL, fixture, "orders_read", "orders", model.ReadModeAppendOnly)
 
-		fixture := newEmbeddedIcebergFixture(t, c)
-		defer fixture.Close()
-		installEmbeddedIcebergPlanner(t, c, fixture.planner)
-		setupEmbeddedIcebergCatalog(t, c, tenantSQL, fixture)
-		vendedBuilds := fixture.UseVendedObjectIO(t, time.Date(2026, 6, 30, 0, 0, 0, 0, time.UTC))
-		readTable := createEmbeddedIcebergTable(t, tenantSQL, fixture, "orders_vended_security", "orders", model.ReadModeAppendOnly)
+	beforeFullScan := fixture.planner.callCount()
+	require.Equal(t, int64(4), queryInt64(t, tenantSQL, fmt.Sprintf("select count(*) from %s", readTable)))
+	require.Equal(t, beforeFullScan+1, fixture.planner.callCount(), "3-CN read must plan once on the coordinator")
+	require.Equal(t, [][]int64{{3, 30}, {4, 40}}, queryIntRows(t, tenantSQL,
+		fmt.Sprintf("select id, amount from %s where id >= 3 order by id", readTable)))
 
-		beforeRead := fixture.planner.callCount()
-		require.Equal(t, int64(4), queryInt64(t, tenantSQL, fmt.Sprintf("select count(*) from %s", readTable)))
-		require.Greater(t, vendedBuilds.Load(), int32(0), "scan must resolve data files through the vended credential provider")
-		_, plan := fixture.planner.lastCallAfter(beforeRead)
-		assertEmbeddedIcebergNoCredentialLeak(t, queryText(t, tenantSQL, fmt.Sprintf("show create table %s", readTable)))
-		assertEmbeddedIcebergNoCredentialLeak(t, plan.Snapshot.MetadataLocationHash)
-		assertEmbeddedIcebergNoCredentialLeak(t, plan.Snapshot.ManifestListHash)
-		assertEmbeddedIcebergNoCredentialLeak(t, plan.ObjectIORef)
-		require.NotEmpty(t, plan.Snapshot.MetadataLocationHash)
-		require.NotEmpty(t, plan.Snapshot.ManifestListHash)
-		require.NotContains(t, plan.Snapshot.MetadataLocationHash, "warehouse")
-		require.NotContains(t, plan.Snapshot.ManifestListHash, "warehouse")
+	mustExecSQL(t, tenantSQL, fmt.Sprintf("create table %s.keep_bucket (bucket bigint)", fixture.databaseName))
+	mustExecSQL(t, tenantSQL, fmt.Sprintf("insert into %s.keep_bucket values (2)", fixture.databaseName))
+	require.Equal(t, int64(2), queryInt64(t, tenantSQL,
+		fmt.Sprintf("select count(*) from %s o join %s.keep_bucket k on o.bucket = k.bucket", readTable, fixture.databaseName)))
+	require.Equal(t, [][]int64{{1, 2, 30}, {2, 2, 70}}, queryIntRows(t, tenantSQL,
+		fmt.Sprintf("select bucket, count(*), sum(amount) from %s group by bucket order by bucket", readTable)))
 
-		installEmbeddedIcebergAccessRows(t, c, fixture, true, false)
-		err := tenantSQL.Exec(fmt.Sprintf("select count(*) from %s", readTable))
+	beforePrune := fixture.planner.callCount()
+	require.Equal(t, int64(70), queryInt64(t, tenantSQL, fmt.Sprintf("select sum(amount) from %s where id >= 3", readTable)))
+	pruneReq, prunePlan := fixture.planner.lastCallAfter(beforePrune)
+	require.Equal(t, []int{1, 4}, pruneReq.ProjectionIDs)
+	require.Equal(t, []api.PrunePredicate{{
+		FieldID: 1,
+		Op:      api.PruneOpGTE,
+		Literal: api.PruneLiteral{Kind: api.TypeLong, Int64: 3},
+	}}, pruneReq.PrunePredicates)
+	require.True(t, pruneReq.EnableRowGroupPlanning)
+	require.Contains(t, pruneReq.ResidualSQL, "filter_digest:")
+	require.Equal(t, 1, prunePlan.Profile.DataFilesPruned)
+	require.Equal(t, 1, prunePlan.Profile.DataFilesSelected)
+	require.Greater(t, prunePlan.Profile.DataFileBytesSelected, int64(0))
+	require.Equal(t, "embedded-fixture", prunePlan.Profile.PlanningMode)
+
+	beforeSnapshot := fixture.planner.callCount()
+	require.Equal(t, int64(2), queryInt64(t, tenantSQL,
+		fmt.Sprintf("select count(*) from %s for iceberg snapshot %d", readTable, embeddedIcebergSnapshotOld)))
+	snapshotReq, snapshotPlan := fixture.planner.lastCallAfter(beforeSnapshot)
+	require.True(t, snapshotReq.Snapshot.HasSnapshotID)
+	require.Equal(t, embeddedIcebergSnapshotOld, snapshotReq.Snapshot.SnapshotID)
+	require.Equal(t, embeddedIcebergSnapshotOld, snapshotPlan.Snapshot.SnapshotID)
+	mustExecSQL(t, tenantSQL, "set time_zone = '+03:00'")
+	require.Equal(t, int64(2), queryInt64(t, tenantSQL,
+		fmt.Sprintf("select count(*) from %s for iceberg timestamp as of timestamp '2026-01-01 12:00:00'", readTable)))
+
+	err := tenantSQL.Exec(fmt.Sprintf("select count(*) from %s {timestamp = '2026-01-01 00:00:00'} for iceberg snapshot 101", readTable))
+	require.Error(t, err)
+	require.Contains(t, strings.ToLower(err.Error()), "iceberg")
+
+	mustExecSQL(t, tenantSQL, fmt.Sprintf("create table %s.native_orders (id bigint)", fixture.databaseName))
+	err = tenantSQL.Exec(fmt.Sprintf("select * from %s.native_orders for iceberg snapshot 101", fixture.databaseName))
+	require.Error(t, err)
+	require.Contains(t, strings.ToLower(err.Error()), "iceberg")
+}
+
+func runIcebergSQLEngineEmbeddedSecurityErrors(
+	t *testing.T,
+	c Cluster,
+	tenantSQL *embeddedSQLSession,
+	fixture *embeddedIcebergFixture,
+) {
+
+	missingPrincipal := createEmbeddedIcebergTable(t, tenantSQL, fixture, "orders_no_principal", "orders", model.ReadModeAppendOnly)
+	installEmbeddedIcebergAccessRows(t, c, fixture, false, true)
+	err := tenantSQL.Exec(fmt.Sprintf("select count(*) from %s", missingPrincipal))
+	require.Error(t, err)
+	require.Contains(t, err.Error(), string(api.ErrPrincipalNotMapped))
+
+	installEmbeddedIcebergAccessRows(t, c, fixture, true, false)
+	err = tenantSQL.Exec(fmt.Sprintf("select count(*) from %s", missingPrincipal))
+	require.Error(t, err)
+	require.Contains(t, err.Error(), string(api.ErrResidencyDenied))
+
+	installEmbeddedIcebergAccessRows(t, c, fixture, true, true)
+	for _, tc := range []struct {
+		remoteTable string
+		code        api.ErrorCode
+	}{
+		{remoteTable: "orders_unauthorized", code: api.ErrAuthUnauthorized},
+		{remoteTable: "orders_forbidden", code: api.ErrAuthForbidden},
+		{remoteTable: "orders_missing", code: api.ErrTableNotFound},
+		{remoteTable: "orders_unavailable", code: api.ErrCatalogUnavailable},
+	} {
+		table := createEmbeddedIcebergTable(t, tenantSQL, fixture, tc.remoteTable, tc.remoteTable, model.ReadModeAppendOnly)
+		err = tenantSQL.Exec(fmt.Sprintf("select count(*) from %s", table))
 		require.Error(t, err)
-		require.Contains(t, err.Error(), string(api.ErrResidencyDenied))
-		assertEmbeddedIcebergNoCredentialLeak(t, err.Error())
-	})
+		require.Contains(t, err.Error(), string(tc.code))
+		require.NotContains(t, err.Error(), "secret://")
+		require.NotContains(t, err.Error(), "s3://warehouse")
+	}
 }
 
-func TestIcebergSQLEngineEmbeddedDeleteApply(t *testing.T) {
-	RunSingleCNBaseClusterTests(t, func(c Cluster) {
-		rootDB := openIcebergRootTestDB(t, c)
-		defer rootDB.Close()
-		tenantSQL := openIcebergTenantTestSQL(t, c, rootDB)
+func runIcebergSQLEngineEmbeddedCredentialSecurityAndRedaction(
+	t *testing.T,
+	c Cluster,
+	tenantSQL *embeddedSQLSession,
+	fixture *embeddedIcebergFixture,
+) {
+	vendedBuilds := fixture.UseVendedObjectIO(t, time.Date(2026, 6, 30, 0, 0, 0, 0, time.UTC))
+	readTable := createEmbeddedIcebergTable(t, tenantSQL, fixture, "orders_vended_security", "orders", model.ReadModeAppendOnly)
 
-		fixture := newEmbeddedIcebergFixture(t, c)
-		defer fixture.Close()
-		installEmbeddedIcebergPlanner(t, c, fixture.planner)
-		setupEmbeddedIcebergCatalog(t, c, tenantSQL, fixture)
+	beforeRead := fixture.planner.callCount()
+	require.Equal(t, int64(4), queryInt64(t, tenantSQL, fmt.Sprintf("select count(*) from %s", readTable)))
+	require.Greater(t, vendedBuilds.Load(), int32(0), "scan must resolve data files through the vended credential provider")
+	_, plan := fixture.planner.lastCallAfter(beforeRead)
+	assertEmbeddedIcebergNoCredentialLeak(t, queryText(t, tenantSQL, fmt.Sprintf("show create table %s", readTable)))
+	assertEmbeddedIcebergNoCredentialLeak(t, plan.Snapshot.MetadataLocationHash)
+	assertEmbeddedIcebergNoCredentialLeak(t, plan.Snapshot.ManifestListHash)
+	assertEmbeddedIcebergNoCredentialLeak(t, plan.ObjectIORef)
+	require.NotEmpty(t, plan.Snapshot.MetadataLocationHash)
+	require.NotEmpty(t, plan.Snapshot.ManifestListHash)
+	require.NotContains(t, plan.Snapshot.MetadataLocationHash, "warehouse")
+	require.NotContains(t, plan.Snapshot.ManifestListHash, "warehouse")
 
-		appendOnly := createEmbeddedIcebergTable(t, tenantSQL, fixture, "orders_append_delete", "orders_mor_append_only", model.ReadModeAppendOnly)
-		err := tenantSQL.Exec(fmt.Sprintf("select count(*) from %s", appendOnly))
-		require.Error(t, err)
-		require.Contains(t, err.Error(), string(api.ErrUnsupportedFeature))
-
-		mergeOnRead := createEmbeddedIcebergTable(t, tenantSQL, fixture, "orders_mor", "orders_mor_merge", model.ReadModeMergeOnRead)
-		beforeMergeOnRead := fixture.planner.callCount()
-		require.Equal(t, [][]int64{{3, 30}, {4, 40}}, queryIntRows(t, tenantSQL,
-			fmt.Sprintf("select id, amount from %s order by id", mergeOnRead)))
-		_, mergePlan := fixture.planner.lastCallAfter(beforeMergeOnRead)
-		require.Equal(t, beforeMergeOnRead+1, fixture.planner.callCount(), "3-CN delete apply scan must plan once on the coordinator")
-		require.Equal(t, 2, mergePlan.Profile.DeleteFilesSelected)
-	})
+	installEmbeddedIcebergAccessRows(t, c, fixture, true, false)
+	err := tenantSQL.Exec(fmt.Sprintf("select count(*) from %s", readTable))
+	require.Error(t, err)
+	require.Contains(t, err.Error(), string(api.ErrResidencyDenied))
+	assertEmbeddedIcebergNoCredentialLeak(t, err.Error())
 }
 
-func TestIcebergSQLEngineEmbeddedImportNativePinsSnapshot(t *testing.T) {
-	RunSingleCNBaseClusterTests(t, func(c Cluster) {
-		rootDB := openIcebergRootTestDB(t, c)
-		defer rootDB.Close()
-		tenantSQL := openIcebergTenantTestSQL(t, c, rootDB)
+func runIcebergSQLEngineEmbeddedDeleteApply(
+	t *testing.T,
+	c Cluster,
+	tenantSQL *embeddedSQLSession,
+	fixture *embeddedIcebergFixture,
+) {
 
-		fixture := newEmbeddedIcebergFixture(t, c)
-		defer fixture.Close()
-		installEmbeddedIcebergPlanner(t, c, fixture.planner)
-		setupEmbeddedIcebergCatalog(t, c, tenantSQL, fixture)
-		readTable := createEmbeddedIcebergTable(t, tenantSQL, fixture, "orders_import_source", "orders", model.ReadModeAppendOnly)
-		targetTable := fixture.databaseName + ".orders_imported_native"
+	appendOnly := createEmbeddedIcebergTable(t, tenantSQL, fixture, "orders_append_delete", "orders_mor_append_only", model.ReadModeAppendOnly)
+	err := tenantSQL.Exec(fmt.Sprintf("select count(*) from %s", appendOnly))
+	require.Error(t, err)
+	require.Contains(t, err.Error(), string(api.ErrUnsupportedFeature))
 
-		beforeImport := fixture.planner.callCount()
-		mustExecSQL(t, tenantSQL, fmt.Sprintf(
-			"create table %s as select id, hidden_key, bucket, amount from %s for iceberg snapshot %d",
-			targetTable, readTable, embeddedIcebergSnapshotOld,
-		))
-		importReq, importPlan := fixture.planner.lastCallAfter(beforeImport)
-		require.True(t, importReq.Snapshot.HasSnapshotID)
-		require.Equal(t, embeddedIcebergSnapshotOld, importReq.Snapshot.SnapshotID)
-		require.Equal(t, embeddedIcebergSnapshotOld, importPlan.Snapshot.SnapshotID)
-		require.Equal(t, 1, importPlan.Profile.DataFilesSelected)
-		require.Greater(t, importPlan.Profile.DataFileBytesSelected, int64(0))
-
-		sourcePinned := queryIntRows(t, tenantSQL,
-			fmt.Sprintf("select id, hidden_key, bucket, amount from %s for iceberg snapshot %d order by id", readTable, embeddedIcebergSnapshotOld))
-		imported := queryIntRows(t, tenantSQL, fmt.Sprintf("select id, hidden_key, bucket, amount from %s order by id", targetTable))
-		require.Equal(t, sourcePinned, imported)
-		require.Equal(t, [][]int64{{1, 10, 1, 10}, {2, 20, 1, 20}}, imported)
-		require.Equal(t, int64(4), queryInt64(t, tenantSQL, fmt.Sprintf("select count(*) from %s", readTable)))
-		require.Equal(t, int64(2), queryInt64(t, tenantSQL, fmt.Sprintf("select count(*) from %s", targetTable)))
-		require.Equal(t, int64(3), queryInt64(t, tenantSQL, fmt.Sprintf("select sum(id) from %s", targetTable)))
-		require.Equal(t, int64(30), queryInt64(t, tenantSQL, fmt.Sprintf("select sum(amount) from %s", targetTable)))
-	})
+	mergeOnRead := createEmbeddedIcebergTable(t, tenantSQL, fixture, "orders_mor", "orders_mor_merge", model.ReadModeMergeOnRead)
+	beforeMergeOnRead := fixture.planner.callCount()
+	require.Equal(t, [][]int64{{3, 30}, {4, 40}}, queryIntRows(t, tenantSQL,
+		fmt.Sprintf("select id, amount from %s order by id", mergeOnRead)))
+	_, mergePlan := fixture.planner.lastCallAfter(beforeMergeOnRead)
+	require.Equal(t, beforeMergeOnRead+1, fixture.planner.callCount(), "3-CN delete apply scan must plan once on the coordinator")
+	require.Equal(t, 2, mergePlan.Profile.DeleteFilesSelected)
 }
 
-func TestIcebergSQLEngineEmbeddedBranchRefReadAndAppendWriteIntent(t *testing.T) {
-	RunSingleCNBaseClusterTests(t, func(c Cluster) {
-		rootDB := openIcebergRootTestDB(t, c)
-		defer rootDB.Close()
-		tenantSQL := openIcebergTenantTestSQL(t, c, rootDB)
+func runIcebergSQLEngineEmbeddedImportNativePinsSnapshot(
+	t *testing.T,
+	c Cluster,
+	tenantSQL *embeddedSQLSession,
+	fixture *embeddedIcebergFixture,
+) {
+	readTable := createEmbeddedIcebergTable(t, tenantSQL, fixture, "orders_import_source", "orders", model.ReadModeAppendOnly)
+	targetTable := fixture.databaseName + ".orders_imported_native"
 
-		fixture := newEmbeddedIcebergFixture(t, c)
-		defer fixture.Close()
-		installEmbeddedIcebergPlanner(t, c, fixture.planner)
-		setupEmbeddedIcebergCatalog(t, c, tenantSQL, fixture)
-		writeRecorder := &embeddedIcebergWriteRecorder{}
-		installEmbeddedIcebergWriteCoordinator(t, c, writeRecorder)
+	beforeImport := fixture.planner.callCount()
+	mustExecSQL(t, tenantSQL, fmt.Sprintf(
+		"create table %s as select id, hidden_key, bucket, amount from %s for iceberg snapshot %d",
+		targetTable, readTable, embeddedIcebergSnapshotOld,
+	))
+	importReq, importPlan := fixture.planner.lastCallAfter(beforeImport)
+	require.True(t, importReq.Snapshot.HasSnapshotID)
+	require.Equal(t, embeddedIcebergSnapshotOld, importReq.Snapshot.SnapshotID)
+	require.Equal(t, embeddedIcebergSnapshotOld, importPlan.Snapshot.SnapshotID)
+	require.Equal(t, 1, importPlan.Profile.DataFilesSelected)
+	require.Greater(t, importPlan.Profile.DataFileBytesSelected, int64(0))
 
-		readTable := createEmbeddedIcebergTable(t, tenantSQL, fixture, "orders_ref_read", "orders", model.ReadModeAppendOnly)
-		beforeRefRead := fixture.planner.callCount()
-		require.Equal(t, int64(4), queryInt64(t, tenantSQL,
-			fmt.Sprintf("select count(*) from %s for iceberg ref audit_branch", readTable)))
-		refReq, refPlan := fixture.planner.lastCallAfter(beforeRefRead)
-		require.Equal(t, "audit_branch", refReq.Ref)
-		require.Equal(t, "audit_branch", refReq.Snapshot.RefName)
-		require.Equal(t, "audit_branch", refPlan.Snapshot.RefName)
-
-		mustExecSQL(t, tenantSQL, fmt.Sprintf("create table %s.ref_stage (id bigint, hidden_key bigint, bucket bigint, amount bigint)", fixture.databaseName))
-		mustExecSQL(t, tenantSQL, fmt.Sprintf("insert into %s.ref_stage values (21, 210, 2, 2100)", fixture.databaseName))
-
-		appendBranchTable := createEmbeddedIcebergTableWithRefModes(t, tenantSQL, fixture,
-			"orders_branch_append", "orders", "branch:publish", model.ReadModeAppendOnly, model.WriteModeAppendOnly)
-		mustExecSQL(t, tenantSQL, fmt.Sprintf("insert into %s select id, hidden_key, bucket, amount from %s.ref_stage", appendBranchTable, fixture.databaseName))
-		appendCall := writeRecorder.lastOperation(t, icebergwrite.OperationAppend)
-		require.Equal(t, "branch:publish", appendCall.Request.DefaultRef)
-		require.Equal(t, []int{1}, appendCall.AppendRows)
-		require.Equal(t, 1, appendCall.CommitCalls)
-	})
+	sourcePinned := queryIntRows(t, tenantSQL,
+		fmt.Sprintf("select id, hidden_key, bucket, amount from %s for iceberg snapshot %d order by id", readTable, embeddedIcebergSnapshotOld))
+	imported := queryIntRows(t, tenantSQL, fmt.Sprintf("select id, hidden_key, bucket, amount from %s order by id", targetTable))
+	require.Equal(t, sourcePinned, imported)
+	require.Equal(t, [][]int64{{1, 10, 1, 10}, {2, 20, 1, 20}}, imported)
+	require.Equal(t, int64(4), queryInt64(t, tenantSQL, fmt.Sprintf("select count(*) from %s", readTable)))
+	require.Equal(t, int64(2), queryInt64(t, tenantSQL, fmt.Sprintf("select count(*) from %s", targetTable)))
+	require.Equal(t, int64(3), queryInt64(t, tenantSQL, fmt.Sprintf("select sum(id) from %s", targetTable)))
+	require.Equal(t, int64(30), queryInt64(t, tenantSQL, fmt.Sprintf("select sum(amount) from %s", targetTable)))
 }
 
-func TestIcebergSQLEngineEmbeddedWriteDMLAndMaintenanceSQL(t *testing.T) {
-	RunSingleCNBaseClusterTests(t, func(c Cluster) {
-		rootDB := openIcebergRootTestDB(t, c)
-		defer rootDB.Close()
-		tenantSQL := openIcebergTenantTestSQL(t, c, rootDB)
+func runIcebergSQLEngineEmbeddedBranchRefReadAndAppendWriteIntent(
+	t *testing.T,
+	c Cluster,
+	tenantSQL *embeddedSQLSession,
+	fixture *embeddedIcebergFixture,
+) {
+	writeRecorder := &embeddedIcebergWriteRecorder{}
+	installEmbeddedIcebergWriteCoordinator(t, c, writeRecorder)
 
-		fixture := newEmbeddedIcebergFixture(t, c)
-		defer fixture.Close()
-		installEmbeddedIcebergPlanner(t, c, fixture.planner)
-		setupEmbeddedIcebergCatalog(t, c, tenantSQL, fixture)
+	readTable := createEmbeddedIcebergTable(t, tenantSQL, fixture, "orders_ref_read", "orders", model.ReadModeAppendOnly)
+	beforeRefRead := fixture.planner.callCount()
+	require.Equal(t, int64(4), queryInt64(t, tenantSQL,
+		fmt.Sprintf("select count(*) from %s for iceberg ref audit_branch", readTable)))
+	refReq, refPlan := fixture.planner.lastCallAfter(beforeRefRead)
+	require.Equal(t, "audit_branch", refReq.Ref)
+	require.Equal(t, "audit_branch", refReq.Snapshot.RefName)
+	require.Equal(t, "audit_branch", refPlan.Snapshot.RefName)
 
-		writeRecorder := &embeddedIcebergWriteRecorder{}
-		installEmbeddedIcebergWriteCoordinator(t, c, writeRecorder)
-		maintenanceRecorder := &embeddedIcebergMaintenanceRecorder{}
-		installEmbeddedIcebergMaintenanceExecutor(t, c, maintenanceRecorder)
-		maintenanceDB := openIcebergTenantFrontendDB(t, c, tenantSQL.accountName)
-		defer maintenanceDB.Close()
+	mustExecSQL(t, tenantSQL, fmt.Sprintf("create table %s.ref_stage (id bigint, hidden_key bigint, bucket bigint, amount bigint)", fixture.databaseName))
+	mustExecSQL(t, tenantSQL, fmt.Sprintf("insert into %s.ref_stage values (21, 210, 2, 2100)", fixture.databaseName))
 
-		mustExecSQL(t, tenantSQL, fmt.Sprintf("create table %s.write_stage (id bigint, hidden_key bigint, bucket bigint, amount bigint)", fixture.databaseName))
-		mustExecSQL(t, tenantSQL, fmt.Sprintf("insert into %s.write_stage values (10, 100, 1, 1000), (11, 110, 1, 1100)", fixture.databaseName))
+	appendBranchTable := createEmbeddedIcebergTableWithRefModes(t, tenantSQL, fixture,
+		"orders_branch_append", "orders", "branch:publish", model.ReadModeAppendOnly, model.WriteModeAppendOnly)
+	mustExecSQL(t, tenantSQL, fmt.Sprintf("insert into %s select id, hidden_key, bucket, amount from %s.ref_stage", appendBranchTable, fixture.databaseName))
+	appendCall := writeRecorder.lastOperation(t, icebergwrite.OperationAppend)
+	require.Equal(t, "branch:publish", appendCall.Request.DefaultRef)
+	require.Equal(t, []int{1}, appendCall.AppendRows)
+	require.Equal(t, 1, appendCall.CommitCalls)
+}
 
-		appendTable := createEmbeddedIcebergTableWithModes(t, tenantSQL, fixture, "orders_write_append", "orders", model.ReadModeAppendOnly, model.WriteModeAppendOnly)
-		mustExecSQL(t, tenantSQL, fmt.Sprintf("insert into %s select id, hidden_key, bucket, amount from %s.write_stage", appendTable, fixture.databaseName))
-		appendCall := writeRecorder.lastOperation(t, icebergwrite.OperationAppend)
-		require.Equal(t, model.WriteModeAppendOnly, appendCall.Request.WriteMode)
-		require.Equal(t, []int{2}, appendCall.AppendRows)
-		require.Equal(t, 1, appendCall.CommitCalls)
+func runIcebergSQLEngineEmbeddedWriteDMLAndMaintenanceSQL(
+	t *testing.T,
+	c Cluster,
+	tenantSQL *embeddedSQLSession,
+	fixture *embeddedIcebergFixture,
+) {
+	writeRecorder := &embeddedIcebergWriteRecorder{}
+	installEmbeddedIcebergWriteCoordinator(t, c, writeRecorder)
+	maintenanceRecorder := &embeddedIcebergMaintenanceRecorder{}
+	installEmbeddedIcebergMaintenanceExecutor(t, c, maintenanceRecorder)
+	maintenanceDB := openIcebergTenantFrontendDB(t, c, tenantSQL.accountName)
+	defer maintenanceDB.Close()
 
-		dmlTable := createEmbeddedIcebergTableWithModes(t, tenantSQL, fixture, "orders_write_dml", "orders_write_dml", model.ReadModeMergeOnRead, model.WriteModeMergeOnRead)
-		mustExecSQL(t, tenantSQL, fmt.Sprintf("delete from %s where id = 1", dmlTable))
-		deleteCall := writeRecorder.lastOperation(t, icebergwrite.OperationDelete)
-		require.Equal(t, []int{1}, deleteCall.AppendRows)
-		require.Equal(t, embeddedIcebergSnapshotCurrent, deleteCall.Request.DMLScan.BaseSnapshotID)
-		require.Len(t, deleteCall.Request.DMLScan.DataFiles, 2)
+	mustExecSQL(t, tenantSQL, fmt.Sprintf("create table %s.write_stage (id bigint, hidden_key bigint, bucket bigint, amount bigint)", fixture.databaseName))
+	mustExecSQL(t, tenantSQL, fmt.Sprintf("insert into %s.write_stage values (10, 100, 1, 1000), (11, 110, 1, 1100)", fixture.databaseName))
 
-		mustExecSQL(t, tenantSQL, fmt.Sprintf("update %s set amount = amount + 100 where id = 2", dmlTable))
-		updateCall := writeRecorder.lastOperation(t, icebergwrite.OperationUpdate)
-		require.Equal(t, []int{1}, updateCall.AppendRows)
-		require.Equal(t, embeddedIcebergSnapshotCurrent, updateCall.Request.DMLScan.BaseSnapshotID)
+	appendTable := createEmbeddedIcebergTableWithModes(t, tenantSQL, fixture, "orders_write_append", "orders", model.ReadModeAppendOnly, model.WriteModeAppendOnly)
+	mustExecSQL(t, tenantSQL, fmt.Sprintf("insert into %s select id, hidden_key, bucket, amount from %s.write_stage", appendTable, fixture.databaseName))
+	appendCall := writeRecorder.lastOperation(t, icebergwrite.OperationAppend)
+	require.Equal(t, model.WriteModeAppendOnly, appendCall.Request.WriteMode)
+	require.Equal(t, []int{2}, appendCall.AppendRows)
+	require.Equal(t, 1, appendCall.CommitCalls)
 
-		mustExecSQL(t, tenantSQL, fmt.Sprintf("create table %s.merge_stage (id bigint, hidden_key bigint, bucket bigint, amount bigint)", fixture.databaseName))
-		mustExecSQL(t, tenantSQL, fmt.Sprintf("insert into %s.merge_stage values (3, 300, 2, 3000), (99, 990, 9, 9900)", fixture.databaseName))
-		mustExecSQL(t, tenantSQL, fmt.Sprintf(
-			"merge into %s as t using %s.merge_stage as s on t.id = s.id when matched then update set hidden_key = s.hidden_key, bucket = s.bucket, amount = s.amount when not matched then insert (id, hidden_key, bucket, amount) values (s.id, s.hidden_key, s.bucket, s.amount)",
-			dmlTable, fixture.databaseName,
-		))
-		mergeCall := writeRecorder.lastOperation(t, icebergwrite.OperationMerge)
-		require.Equal(t, 2, mergeCall.totalAppendRows())
-		require.Equal(t, embeddedIcebergSnapshotCurrent, mergeCall.Request.DMLScan.BaseSnapshotID)
+	dmlTable := createEmbeddedIcebergTableWithModes(t, tenantSQL, fixture, "orders_write_dml", "orders_write_dml", model.ReadModeMergeOnRead, model.WriteModeMergeOnRead)
+	mustExecSQL(t, tenantSQL, fmt.Sprintf("delete from %s where id = 1", dmlTable))
+	deleteCall := writeRecorder.lastOperation(t, icebergwrite.OperationDelete)
+	require.Equal(t, []int{1}, deleteCall.AppendRows)
+	require.Equal(t, embeddedIcebergSnapshotCurrent, deleteCall.Request.DMLScan.BaseSnapshotID)
+	require.Len(t, deleteCall.Request.DMLScan.DataFiles, 2)
 
-		mustExecSQL(t, tenantSQL, fmt.Sprintf("insert overwrite %s select id, hidden_key, bucket, amount from %s.merge_stage where id = 99", dmlTable, fixture.databaseName))
-		overwriteCall := writeRecorder.lastOperation(t, icebergwrite.OperationOverwrite)
-		require.Equal(t, []int{1}, overwriteCall.AppendRows)
-		require.Equal(t, "", overwriteCall.Request.DMLScan.OverwriteScope)
-		require.Len(t, overwriteCall.Request.DMLScan.DataFiles, 2)
+	mustExecSQL(t, tenantSQL, fmt.Sprintf("update %s set amount = amount + 100 where id = 2", dmlTable))
+	updateCall := writeRecorder.lastOperation(t, icebergwrite.OperationUpdate)
+	require.Equal(t, []int{1}, updateCall.AppendRows)
+	require.Equal(t, embeddedIcebergSnapshotCurrent, updateCall.Request.DMLScan.BaseSnapshotID)
 
-		mustExecSQL(t, tenantSQL, fmt.Sprintf("insert overwrite %s partition(bucket = 2) select id, hidden_key, bucket, amount from %s.merge_stage where id = 99", dmlTable, fixture.databaseName))
-		partitionOverwriteCall := writeRecorder.lastOperation(t, icebergwrite.OperationOverwrite)
-		require.Equal(t, "partition", partitionOverwriteCall.Request.DMLScan.OverwriteScope)
-		require.Equal(t, int64(2), partitionOverwriteCall.Request.DMLScan.OverwritePartition["bucket"])
+	mustExecSQL(t, tenantSQL, fmt.Sprintf("create table %s.merge_stage (id bigint, hidden_key bigint, bucket bigint, amount bigint)", fixture.databaseName))
+	mustExecSQL(t, tenantSQL, fmt.Sprintf("insert into %s.merge_stage values (3, 300, 2, 3000), (99, 990, 9, 9900)", fixture.databaseName))
+	mustExecSQL(t, tenantSQL, fmt.Sprintf(
+		"merge into %s as t using %s.merge_stage as s on t.id = s.id when matched then update set hidden_key = s.hidden_key, bucket = s.bucket, amount = s.amount when not matched then insert (id, hidden_key, bucket, amount) values (s.id, s.hidden_key, s.bucket, s.amount)",
+		dmlTable, fixture.databaseName,
+	))
+	mergeCall := writeRecorder.lastOperation(t, icebergwrite.OperationMerge)
+	require.Equal(t, 2, mergeCall.totalAppendRows())
+	require.Equal(t, embeddedIcebergSnapshotCurrent, mergeCall.Request.DMLScan.BaseSnapshotID)
 
-		err := tenantSQL.Exec(fmt.Sprintf("insert overwrite %s partition(p0) select id, hidden_key, bucket, amount from %s.merge_stage", dmlTable, fixture.databaseName))
-		require.Error(t, err)
-		require.Contains(t, err.Error(), "PARTITION name syntax")
+	mustExecSQL(t, tenantSQL, fmt.Sprintf("insert overwrite %s select id, hidden_key, bucket, amount from %s.merge_stage where id = 99", dmlTable, fixture.databaseName))
+	overwriteCall := writeRecorder.lastOperation(t, icebergwrite.OperationOverwrite)
+	require.Equal(t, []int{1}, overwriteCall.AppendRows)
+	require.Equal(t, "", overwriteCall.Request.DMLScan.OverwriteScope)
+	require.Len(t, overwriteCall.Request.DMLScan.DataFiles, 2)
 
-		for _, stmt := range []string{
-			"call iceberg_rewrite_data_files('" + fixture.catalogName + ".sales.orders', 'ref=main,target_file_size=1048576')",
-			"call iceberg_rewrite_manifests('" + fixture.catalogName + ".sales.orders', 'ref=main')",
-			"call iceberg_expire_snapshots('" + fixture.catalogName + ".sales.orders', 'older_than=2026-01-04 00:00:00,retain_last=1')",
-		} {
-			mustExec(t, maintenanceDB, stmt)
-		}
-		maintenanceRecorder.requireOperations(t,
-			maintenance.OperationRewriteDataFiles,
-			maintenance.OperationRewriteManifests,
-			maintenance.OperationExpireSnapshots,
-		)
-	})
+	mustExecSQL(t, tenantSQL, fmt.Sprintf("insert overwrite %s partition(bucket = 2) select id, hidden_key, bucket, amount from %s.merge_stage where id = 99", dmlTable, fixture.databaseName))
+	partitionOverwriteCall := writeRecorder.lastOperation(t, icebergwrite.OperationOverwrite)
+	require.Equal(t, "partition", partitionOverwriteCall.Request.DMLScan.OverwriteScope)
+	require.Equal(t, int64(2), partitionOverwriteCall.Request.DMLScan.OverwritePartition["bucket"])
+
+	err := tenantSQL.Exec(fmt.Sprintf("insert overwrite %s partition(p0) select id, hidden_key, bucket, amount from %s.merge_stage", dmlTable, fixture.databaseName))
+	require.Error(t, err)
+	require.Contains(t, err.Error(), "PARTITION name syntax")
+
+	for _, stmt := range []string{
+		"call iceberg_rewrite_data_files('" + fixture.catalogName + ".sales.orders', 'ref=main,target_file_size=1048576')",
+		"call iceberg_rewrite_manifests('" + fixture.catalogName + ".sales.orders', 'ref=main')",
+		"call iceberg_expire_snapshots('" + fixture.catalogName + ".sales.orders', 'older_than=2026-01-04 00:00:00,retain_last=1')",
+	} {
+		mustExec(t, maintenanceDB, stmt)
+	}
+	maintenanceRecorder.requireOperations(t,
+		maintenance.OperationRewriteDataFiles,
+		maintenance.OperationRewriteManifests,
+		maintenance.OperationExpireSnapshots,
+	)
 }
 
 type embeddedIcebergFixture struct {

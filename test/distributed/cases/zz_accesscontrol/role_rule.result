@@ -1,5 +1,6 @@
 set global enable_privilege_cache = off;
 drop user if exists test_rule_user;
+drop user if exists test_rule_user_show;
 drop user if exists test_rule_user_multi;
 drop user if exists test_rule_user_multi_diff;
 drop user if exists test_rule_user_inherit;
@@ -67,6 +68,10 @@ create user test_rule_user identified by '123456' default role test_rule_role;
 grant connect on account * to test_rule_role;
 grant select on table *.* to test_rule_role;
 set enable_remap_hint = 1;
+select * from db1.t1;
+➤ a[4,32,0]  ¦  age[4,32,0]  𝄀
+100  ¦  30
+set enable_remap_hint = 0;
 select * from db1.t1;
 ➤ a[4,32,0]  ¦  age[4,32,0]  𝄀
 100  ¦  30
@@ -212,7 +217,11 @@ set secondary role all;
 select b, count(*) from db1.t_dup group by b order by b;
 ➤ b[-5,64,0]  ¦  count(*)[-5,64,0]  𝄀
 2  ¦  1
+create user test_rule_user_show identified by '123456';
+show rules on role test_rule_role_validate;
+internal error: do not have privilege to execute the statement
 drop user if exists test_rule_user;
+drop user if exists test_rule_user_show;
 drop user if exists test_rule_user_multi;
 drop user if exists test_rule_user_multi_diff;
 drop user if exists test_rule_user_inherit;

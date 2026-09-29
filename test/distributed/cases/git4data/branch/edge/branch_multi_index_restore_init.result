@@ -1,0 +1,114 @@
+set experimental_fulltext2_index = 1;
+set experimental_hnsw_index = 1;
+drop database if exists issue27950_branch_indexes;
+create database issue27950_branch_indexes;
+use issue27950_branch_indexes;
+create table base_t(
+id bigint primary key,
+body text,
+v vecf32(3)
+);
+insert into base_t values
+(1, 'alpha seed', '[1,0,0]'),
+(2, 'beta seed', '[0,1,0]');
+create fulltext2 index ft on base_t(body) max_index_capacity 64;
+create index hv using hnsw on base_t(v) op_type 'vector_l2_ops';
+alter table base_t alter reindex ft fulltext2 force_sync;
+alter table base_t alter reindex hv hnsw force_sync;
+data branch create table leaf_t from base_t;
+update leaf_t set body = 'branch token', v = '[9,0,0]' where id = 1;
+insert into leaf_t values (3, 'branch insert', '[0,0,0]');
+set @leaf_id = (
+select rel_id from mo_catalog.mo_tables
+where reldatabase = database() and relname = 'leaf_t'
+);
+set @leaf_ft2_index = (
+select index_table_name from mo_catalog.mo_indexes
+where table_id = @leaf_id and name = 'ft'
+and algo = 'fulltext2' and algo_table_type = 'ftv2_index'
+limit 1
+);
+set @leaf_ft2_ready_sql = concat(
+'select coalesce(max(chunk_id), -1) >= 0 as ready from `', database(), '`.`',
+@leaf_ft2_index, '` where index_id = ''cdc_tail'' and tag = 1'
+);
+prepare wait_leaf_ft2 from @leaf_ft2_ready_sql;
+set @leaf_hnsw_meta = (
+select index_table_name from mo_catalog.mo_indexes
+where table_id = @leaf_id and name = 'hv'
+and algo = 'hnsw' and algo_table_type = 'hnsw_meta'
+limit 1
+);
+set @leaf_hnsw_ready_sql = concat(
+'select count(*) > 0 as ready from `', database(), '`.`',
+@leaf_hnsw_meta, '`'
+);
+prepare wait_leaf_hnsw from @leaf_hnsw_ready_sql;
+execute wait_leaf_ft2;
+➤ ready[-7,1,0]  𝄀
+1
+deallocate prepare wait_leaf_ft2;
+execute wait_leaf_hnsw;
+➤ ready[-7,1,0]  𝄀
+1
+deallocate prepare wait_leaf_hnsw;
+select count(*) from mo_catalog.mo_iscp_log
+where table_id = @leaf_id and drop_at is null
+and job_name in ('index_ft', 'index_hv')
+and job_state = 4;
+➤ count(*)[-5,64,0]  𝄀
+0
+explain select id from leaf_t
+where match(body) against('+branch' in boolean mode) order by id;
+-- @regex("Table Function on fulltext2_search", true)
+➤ TP QUERY PLAN[12,-1,0]  𝄀
+Project  𝄀
+  ->  Sort  𝄀
+        Sort Key: leaf_t.id INTERNAL  𝄀
+        ->  Sort  𝄀
+              Sort Key: mo_fulltext_alias_0.__mo_ft_score DESC  𝄀
+              ->  Join  𝄀
+                    Join Type: INNER  𝄀
+                    Join Cond: (leaf_t.id = mo_fulltext_alias_0.__mo_ft_doc_id)  𝄀
+                    Runtime Filter Build: #[-1,0]  𝄀
+                    ->  Table Scan on issue27950_branch_indexes.leaf_t  𝄀
+                          Runtime Filter Probe: leaf_t.id  𝄀
+                    ->  Table Function on fulltext2_search
+select id from leaf_t
+where match(body) against('+branch' in boolean mode) order by id;
+➤ id[-5,64,0]  𝄀
+1  𝄀
+3
+explain select id from leaf_t
+order by l2_distance(v, '[0,0,0]') limit 2;
+-- @regex("Table Function on hnsw_search", true)
+➤ TP QUERY PLAN[12,-1,0]  𝄀
+Project  𝄀
+  ->  Sort  𝄀
+        Sort Key: mo_hnsw_alias_0.score INTERNAL  𝄀
+        Limit: 2  𝄀
+        ->  Join  𝄀
+              Join Type: INNER  𝄀
+              Join Cond: (leaf_t.id = mo_hnsw_alias_0.pkid)  𝄀
+              Runtime Filter Build: #[-1,0]  𝄀
+              ->  Table Scan on issue27950_branch_indexes.leaf_t  𝄀
+                    Runtime Filter Probe: leaf_t.id  𝄀
+              ->  Table Function on hnsw_search  𝄀
+                    Index Reader Param:  Limit: 2  𝄀
+                    Limit: 2
+select id from leaf_t
+order by l2_distance(v, '[0,0,0]') limit 2;
+➤ id[-5,64,0]  𝄀
+3  𝄀
+2
+select id from leaf_t
+order by (l2_distance(v, '[0,0,0]') + 0) limit 2;
+➤ id[-5,64,0]  𝄀
+3  𝄀
+2
+data branch diff leaf_t against base_t output count;
+➤ COUNT(*)[-5,0,0]  𝄀
+2
+drop database issue27950_branch_indexes;
+set experimental_fulltext2_index = 0;
+set experimental_hnsw_index = 0;

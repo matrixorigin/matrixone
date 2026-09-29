@@ -45,6 +45,10 @@ type Logtailer interface {
 	// from Now and use the timestamp to collect logtail, in that case, all txn prepared
 	// before it are visible.
 	Now() (timestamp.Timestamp, timestamp.Timestamp)
+
+	// ReadBarrier returns an exact logtail frontier ordered after every
+	// transaction that entered the TN logtail manager before the barrier.
+	ReadBarrier(context.Context) (timestamp.Timestamp, error)
 }
 
 var _ Logtailer = (*LogtailerImpl)(nil)
@@ -76,6 +80,10 @@ func (l *LogtailerImpl) Now() (timestamp.Timestamp, timestamp.Timestamp) {
 	ts := l.mgr.nowClock() // now in logtail manager is the same with the one in TxnManager
 
 	return ts.ToTimestamp(), timestamp.Timestamp{}
+}
+
+func (l *LogtailerImpl) ReadBarrier(ctx context.Context) (timestamp.Timestamp, error) {
+	return l.mgr.ReadBarrier(ctx)
 }
 
 // TableLogtail returns logtail for the specified table.

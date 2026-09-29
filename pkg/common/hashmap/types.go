@@ -212,10 +212,11 @@ type StrHashMap struct {
 // before you use the IntHashMap, the user should make sure that
 // sum of vectors' length equal to 8
 type IntHashMap struct {
-	hasNull   bool
-	rejectNaN bool
-	rows      uint64
-	hashMap   *hashtable.Int64HashMap
+	hasNull           bool
+	rejectNaN         bool
+	legacyCharPadding bool
+	rows              uint64
+	hashMap           *hashtable.Int64HashMap
 }
 
 type strHashmapIterator struct {

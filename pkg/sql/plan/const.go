@@ -27,6 +27,8 @@ const (
 		Identifier Length Limits
 		See MySQL: https://dev.mysql.com/doc/refman/8.0/en/identifiers.html
 	*/
+	// MaxIdentifierLength is the maximum number of Unicode characters in an identifier.
+	MaxIdentifierLength = 64
 	// MaxKeyParts is max length of key parts.
 	MaxKeyParts = 16
 )

@@ -43,12 +43,22 @@ func (s *store) registerRPCHandlers() {
 }
 
 func (s *store) dispatchLocalRequest(shard metadata.TNShard) rpc.TxnRequestHandleFunc {
+	if s.quiesced.Load() {
+		return nil
+	}
 	// DNShard not found, TxnSender will RPC call
 	r := s.getReplica(shard.ShardID)
 	if r == nil {
 		return nil
 	}
-	return r.handleLocalRequest
+	return func(ctx context.Context, request *txn.TxnRequest, response *txn.TxnResponse) error {
+		release, ok := s.acquireLocalHandler()
+		if !ok {
+			return moerr.NewStreamClosedNoCtx()
+		}
+		defer release()
+		return r.handleLocalRequest(ctx, request, response)
+	}
 }
 
 func (s *store) handleRead(ctx context.Context, request *txn.TxnRequest, response *txn.TxnResponse) error {

@@ -1691,6 +1691,7 @@ const (
 	ER_TABLE_MUST_HAVE_A_VISIBLE_COLUMN                              uint16 = 4028
 	ER_INNODB_COMPRESSION_FAILURE                                    uint16 = 4029
 	ER_WARN_ASYNC_CONN_FAILOVER_NETWORK_NAMESPACE                    uint16 = 4030
+	ER_TOO_MANY_WINDOWS                                              uint16 = 4086
 
 	//5,000 to 5,999: Error codes reserved for use by X Plugin for messages sent to clients.
 
@@ -7093,6 +7094,7 @@ var MysqlErrorMsgRefer = map[uint16]errorMsgItem{
 	ER_TABLE_MUST_HAVE_A_VISIBLE_COLUMN:                              {4028, []string{"HY000"}, "A table must have at least one visible column."},
 	ER_INNODB_COMPRESSION_FAILURE:                                    {4029, []string{"HY000"}, "Compression failed with the following error : %s"},
 	ER_WARN_ASYNC_CONN_FAILOVER_NETWORK_NAMESPACE:                    {4030, []string{"HY000"}, "The parameter network_namespace is reserved for future use. Please use the CHANGE REPLICATION SOURCE command to set channel network_namespace parameter."},
+	ER_TOO_MANY_WINDOWS:                                              {4086, []string{"HY000"}, "Too many windows in SELECT: %d. Maximum allowed is %d. Use named windows to share windows between window functions."},
 	ER_PARSER_TRACE:                                                  {10000, []string{"XX999"}, "Parser saw: %s"},
 	ER_BOOTSTRAP_CANT_THREAD:                                         {10001, []string{"HY000"}, "Can't create thread to handle bootstrap (errno: %d)"},
 	ER_TRIGGER_INVALID_VALUE:                                         {10002, []string{"HY000"}, "Trigger for table '%s'.'%s': invalid %s value (%s)."},

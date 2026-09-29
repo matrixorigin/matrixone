@@ -349,6 +349,58 @@ func TestAccountedMergeTopMultiColumnAppendFailureRollsBack(t *testing.T) {
 	finalizeMergeTopTestAllocation(t, op, state)
 }
 
+func TestAccountedMergeTopHardVectorCapacityFailureIsControlled(t *testing.T) {
+	oldCapLimit := mpool.CapLimit
+	mpool.CapLimit = 64 << 10
+	t.Cleanup(func() {
+		mpool.CapLimit = oldCapLimit
+	})
+
+	proc := testutil.NewProcessWithMPool(t, "", mpool.MustNewZeroNoFixed())
+	defer func() {
+		proc.Free()
+		mpool.DeleteMPool(proc.Mp())
+	}()
+	op := newAccountedMergeTop(100)
+	controller := &mergeTopTestCapacityController{limit: 64 << 20}
+	state := installMergeTopTestAllocation(t, op, 64<<20, controller)
+	var capacityErr error
+	defer func() {
+		op.Free(proc, true, capacityErr)
+		require.Zero(t, controller.current())
+		finalizeMergeTopTestAllocation(t, op, state)
+	}()
+
+	input := batch.NewWithSize(2)
+	input.Vecs[0] = vector.NewVec(types.T_int64.ToType())
+	require.NoError(t, vector.AppendFixed(input.Vecs[0], int64(7), false, proc.Mp()))
+	input.Vecs[1] = vector.NewVec(types.New(types.T_array_float32, 1024, 0))
+	require.NoError(t, vector.AppendArrayList(
+		input.Vecs[1],
+		[][]float32{make([]float32, 1024)},
+		nil,
+		proc.Mp(),
+	))
+	input.SetRowCount(1)
+	defer input.Clean(proc.Mp())
+
+	op.ctr.bat = batch.NewOffHeapWithSize(2)
+	for i := range input.Vecs {
+		op.ctr.bat.Vecs[i] = vector.NewOffHeapVecWithType(*input.Vecs[i].GetType())
+	}
+	require.NoError(t, op.ctr.bat.SetAllocationAccount(op.ctr.retainedAllocation))
+
+	for range 100 {
+		if err := op.ctr.processBatch(100, input, proc); err != nil {
+			capacityErr = err
+			break
+		}
+	}
+	require.Error(t, capacityErr)
+	converted := mergeTopTerminalCapacityError(proc.Ctx, capacityErr)
+	require.True(t, moerr.IsMoErrCode(converted, moerr.ErrOOM), converted)
+}
+
 func TestAccountedMergeTopCancellationCleans(t *testing.T) {
 	proc := testutil.NewProcessWithMPool(t, "", mpool.MustNewZero())
 	op := newAccountedMergeTop(3)

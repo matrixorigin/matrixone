@@ -67,6 +67,8 @@ select a, replace(b, '\n', '<NL>') as b from ext_tricky order by a;
 -- mode instead of degrading to engine-relation inserts.
 drop table if exists big_src;
 create table big_src(a int, b varchar(30));
+select enable_fault_injection();
+select add_fault_point('fj/cn/flush_small_objs', ':::', 'echo', 40, 'wext.big_src');
 insert into big_src select result, concat('row-', result) from generate_series(1, 100000) g;
 drop table if exists ext_big;
 create external table ext_big(a int, b varchar(30))
@@ -76,25 +78,32 @@ insert into ext_big select * from big_src;
 select count(*), min(a), max(a) from ext_big;
 
 -- ---------- remote run (multi-CN dispatch) ----------
--- A flushed source above the multi-CN stats thresholds (>512 blocks, like the
--- optimizer/shuffle cases) compiles the INSERT to a MULTICN plan: on a
--- multi-CN cluster, source-scan scopes — with the external-write insert on
--- top — are dispatched to remote CNs through the pipeline protocol,
--- exercising the to_external encode/decode and the remote writer rebuild; on
--- a single CN it degenerates to the parallel case. Results are identical
--- either way.
-drop table if exists remote_src;
-create table remote_src(a int, b varchar(30));
-insert into remote_src select result, concat('r-', result) from generate_series(1, 4400000) g;
+-- Reuse the parallel source, but force the small input into many real objects
+-- so the scan has physical ranges to distribute. Planner statistics retain the
+-- original MULTICN threshold. Because wstage is a local file stage, remote
+-- source scopes are merged back to the current CN before the external writer;
+-- this case proves distributed source execution plus the public write result.
+-- Remote external-writer reconstruction for shared stages is covered by the
+-- compile/remoterun unit tests and must not be inferred from this topology.
 -- @separator:table
-select mo_ctl('dn', 'flush', 'wext.remote_src');
-select sleep(1);
+select mo_ctl('dn', 'flush', 'wext.big_src');
+-- @metacmp(false)
+-- @wait_expect(2, 30)
+select count(distinct object_name) > 1 as multiple_objects,
+       sum(rows_cnt) = 100000 as all_rows_flushed
+from metadata_scan('wext.big_src', 'a') m;
+set @wext_remote_stats = '{"table_cnt":4400000,"block_number":560,"accurate_object_number":35,"approx_object_number":35,"ndv_map":{"a":4400000,"b":4400000}}';
+select table_cnt from table_stats('wext.big_src', 'patch', @wext_remote_stats) g;
 drop table if exists ext_remote;
 create external table ext_remote(a int, b varchar(30))
 infile{'filepath'='stage://wstage/wext_remote_*.csv', 'format'='csv', 'write_file_pattern'='stage://wstage/wext_remote_%U.csv'}
 fields terminated by ',';
-insert into ext_remote select * from remote_src;
+-- Prove that the reduced physical input still exercises multi-CN dispatch.
+-- @regex("(?i)ap query plan on multicn", true)
+explain insert into ext_remote select * from big_src;
+insert into ext_remote select * from big_src;
 select count(*), min(a), max(a) from ext_remote;
+select disable_fault_injection();
 
 -- ---------- JSONLine writable external table ----------
 drop table if exists ext_jl;
@@ -399,7 +408,6 @@ drop table if exists tricky_src;
 drop table if exists ext_big;
 drop table if exists big_src;
 drop table if exists ext_remote;
-drop table if exists remote_src;
 drop table if exists ext_bit;
 drop table if exists bit_src;
 drop table if exists ext_sb;

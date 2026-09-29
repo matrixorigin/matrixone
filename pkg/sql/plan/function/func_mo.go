@@ -261,6 +261,7 @@ func isSubscribedTable(
 					    account_id = %d and reldatabase = '%s' and relname = '%s';`,
 			meta.AccountId, meta.DbName, tblName)
 
+		ctx = process.ContextWithWarningSink(ctx, proc.WarningSink)
 		ret, err = proc.GetSessionInfo().SqlHelper.ExecSqlWithCtx(ctx, sql)
 		if err != nil {
 			return sub,
@@ -1356,7 +1357,7 @@ func NormalizeGeometryForStorage(proc *process.Process, payload []byte, columnSu
 		return nil, moerr.NewInvalidInputNoCtxf("cannot store %s in %s column", valueSubtype, columnSubtype)
 	}
 	if float32Column {
-		return encodeGeometryPayloadFloat32(wkt), nil
+		return encodeGeometryPayloadFloat32(wkt)
 	}
 	return encodeGeometryPayload(wkt, 0, false), nil
 }

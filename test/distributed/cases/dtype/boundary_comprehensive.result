@@ -230,6 +230,7 @@ SELECT * FROM t_time ORDER BY id;
 2  ¦  00:00:00  𝄀
 3  ¦  838:59:59
 INSERT INTO t_time (tm) VALUES ('839:00:00');
+Data truncation: data out of range: data type time, value '839:00:00'
 DROP TABLE t_time;
 DROP TABLE IF EXISTS t_null_test;
 CREATE TABLE t_null_test (

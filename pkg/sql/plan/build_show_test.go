@@ -151,8 +151,35 @@ func TestCoverage_buildShowIndex(t *testing.T) {
 
 	sqls := []string{
 		"show index from tpch.nation",
+		"show keys from tpch.nation",
 	}
 	runTestShouldPass(mock, t, sqls, false, false)
+}
+
+func TestShowKeysUsesMySQLIndexOrder(t *testing.T) {
+	testCases := []string{
+		"show keys from tpch.nation",
+		"show keys from tpch.nation where Key_name = 'PRIMARY'",
+	}
+
+	for _, sql := range testCases {
+		t.Run(sql, func(t *testing.T) {
+			logicPlan, err := runOneStmt(NewMockOptimizer(false), t, sql)
+			require.NoError(t, err)
+
+			var sortNodes []*plan.Node
+			for _, node := range logicPlan.GetQuery().GetNodes() {
+				if node.GetNodeType() == plan.Node_SORT {
+					sortNodes = append(sortNodes, node)
+				}
+			}
+			require.Len(t, sortNodes, 1)
+			require.Len(t, sortNodes[0].GetOrderBy(), 3)
+			require.Equal(t, "case", sortNodes[0].GetOrderBy()[0].GetExpr().GetF().GetFunc().GetObjName())
+			require.Equal(t, "MIN(idx.id)", sortNodes[0].GetOrderBy()[1].GetExpr().GetCol().GetName())
+			require.Equal(t, "idx.ordinal_position", sortNodes[0].GetOrderBy()[2].GetExpr().GetCol().GetName())
+		})
+	}
 }
 
 func TestCoverage_buildShowFunctionStatus(t *testing.T) {
@@ -264,6 +291,57 @@ func TestCoverage_buildShowColumns(t *testing.T) {
 		"show columns from nation from tpch",
 	}
 	runTestShouldPass(mock, t, sqls, false, false)
+}
+
+func TestShowColumnsTracksTargetDependency(t *testing.T) {
+	for _, sql := range []string{
+		"show columns from nation",
+		"show full columns from nation from tpch",
+		"show columns from nation like 'n_name'",
+		"show columns from nation where Field = 'n_name'",
+	} {
+		t.Run(sql, func(t *testing.T) {
+			mock := NewMockOptimizer(false)
+			def := mock.ctxt.tables["nation"]
+			def.DbId, def.TblId, def.Version = 42, 100, 7
+			p, err := runOneStmt(mock, t, sql)
+			require.NoError(t, err)
+			dependencies := p.GetQuery().GetCatalogDependencies()
+			require.Len(t, dependencies, 1, "SHOW embeds target-specific metadata outside its catalog scans")
+			target := dependencies[0]
+			require.Equal(t, "tpch", target.SchemaName)
+			require.Equal(t, "nation", target.ObjName)
+			require.Equal(t, int64(42), target.Db)
+			require.Equal(t, int64(100), target.Obj)
+			require.Equal(t, int64(7), target.Server)
+			require.Nil(t, target.Snapshot)
+
+			copied := DeepCopyPlan(p)
+			require.Equal(t, dependencies, copied.GetQuery().GetCatalogDependencies())
+			require.NotSame(t, target, copied.GetQuery().CatalogDependencies[0])
+			data, err := p.Marshal()
+			require.NoError(t, err)
+			var decoded plan.Plan
+			require.NoError(t, decoded.Unmarshal(data))
+			schemas, _, err := ResetPreparePlan(&mock.ctxt, &decoded)
+			require.NoError(t, err)
+			require.Contains(t, schemas, target, "PREPARE must validate the target, not just mo_columns/mo_tables")
+		})
+	}
+	t.Run("View retains source and target", func(t *testing.T) {
+		mock := NewMockOptimizer(false)
+		mock.ctxt.tables["v1"].ViewSql.View = `{"Stmt":"create view v1 as select n_name from nation","DefaultDatabase":"tpch"}`
+		p, err := runOneStmt(mock, t, "show columns from v1")
+		require.NoError(t, err)
+		dependencies := p.GetQuery().GetCatalogDependencies()
+		require.Len(t, dependencies, 2)
+		require.ElementsMatch(t, []string{"nation", "v1"}, []string{dependencies[0].ObjName, dependencies[1].ObjName})
+	})
+	t.Run("ordinary SELECT keeps scan dependencies", func(t *testing.T) {
+		p, err := runOneStmt(NewMockOptimizer(false), t, "select n_name from nation")
+		require.NoError(t, err)
+		require.Empty(t, p.GetQuery().GetCatalogDependencies())
+	})
 }
 
 func TestShowColumnsSkipsNilIndexMetadata(t *testing.T) {

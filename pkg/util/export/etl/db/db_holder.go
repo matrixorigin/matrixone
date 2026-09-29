@@ -34,6 +34,10 @@ import (
 
 var (
 	errNotReady = moerr.NewInvalidStateNoCtx("SQL writer's DB conn not ready")
+
+	// ErrIncompatibleStatementInfoRecord identifies a statement_info CSV record
+	// written with a schema that cannot be loaded into the current table.
+	ErrIncompatibleStatementInfoRecord = moerr.NewInternalErrorNoCtx("incompatible statement_info CSV record")
 )
 
 // sqlWriterDBUser holds the db user for logger
@@ -403,25 +407,41 @@ func bulkInsert(ctx context.Context, sqlDb *sql.DB, records [][]string, tbl *tab
 type DBConnProvider func(forceNewConn bool, randomCN bool) (*sql.DB, error)
 
 func IsRecordExisted(ctx context.Context, record []string, tbl *table.Table, getDBConn DBConnProvider) (bool, error) {
-	dbConn, err := getDBConn(false, false)
-	if err != nil {
-		return false, err
-	}
-
 	if tbl.Table == "statement_info" {
-		const stmtIDIndex = 0           // Replace with actual index for statement ID if different
-		const accountIdIndex = 4        // Replace with actual index for account_id (after account at index 3)
-		const statusIndex = 16          // Replace with actual index for status (shifted by 1 due to account_id)
-		const requestAtIndex = 13       // Replace with actual index for request_at (shifted by 1 due to account_id)
-		if len(record) <= statusIndex { // Use the largest index you will access
+		const stmtIDIndex = 0
+		const statusIndex = 16    // Replace with actual index for status (shifted by 1 due to account_id)
+		const requestAtIndex = 13 // Replace with actual index for request_at (shifted by 1 due to account_id)
+		accountIdIndex := 4
+		statusFieldIndex := statusIndex
+		requestAtFieldIndex := requestAtIndex
+		if len(tbl.Columns) > 0 {
+			if len(record) != len(tbl.Columns) {
+				return false, ErrIncompatibleStatementInfoRecord
+			}
+			for i, column := range tbl.Columns {
+				switch column.Name {
+				case "account_id":
+					accountIdIndex = i
+				case "status":
+					statusFieldIndex = i
+				case "request_at":
+					requestAtFieldIndex = i
+				}
+			}
+		}
+		if accountIdIndex >= len(record) || statusFieldIndex >= len(record) || requestAtFieldIndex >= len(record) {
 			return false, nil
 		}
 		accountIdStr := record[accountIdIndex]
 		accountId, err := strconv.ParseUint(accountIdStr, 10, 32)
 		if err != nil {
+			return false, ErrIncompatibleStatementInfoRecord
+		}
+		dbConn, err := getDBConn(false, false)
+		if err != nil {
 			return false, err
 		}
-		return isStatementExisted(ctx, dbConn, record[stmtIDIndex], record[statusIndex], record[requestAtIndex], uint32(accountId))
+		return isStatementExisted(ctx, dbConn, record[stmtIDIndex], record[statusFieldIndex], record[requestAtFieldIndex], uint32(accountId))
 	}
 
 	return false, nil

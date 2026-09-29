@@ -171,19 +171,21 @@ func toPlanplugin(vc *vectorSortContext, m *MultiTableIndex) (*planplugin.Vector
 	var vctx *planplugin.VectorSortContext
 	if vc != nil {
 		vctx = &planplugin.VectorSortContext{
-			ProjNode:       vc.projNode,
-			SortNode:       vc.sortNode,
-			ScanNode:       vc.scanNode,
-			ChildNode:      vc.childNode,
-			OrderExpr:      vc.orderExpr,
-			DistFnExpr:     vc.distFnExpr,
-			SortDirection:  vc.sortDirection,
-			Limit:          vc.limit,
-			ResultLimit:    vc.resultLimit,
-			ResultOffset:   vc.resultOffset,
-			RankOption:     vc.rankOption,
-			ProviderNodeID: vc.providerNodeID,
-			VecArgExpr:     vc.vecArgExpr,
+			ProjNode:         vc.projNode,
+			SortNode:         vc.sortNode,
+			ScanNode:         vc.scanNode,
+			ChildNode:        vc.childNode,
+			OrderExpr:        vc.orderExpr,
+			DistFnExpr:       vc.distFnExpr,
+			SortDirection:    vc.sortDirection,
+			Limit:            vc.limit,
+			ResultLimit:      vc.resultLimit,
+			ResultOffset:     vc.resultOffset,
+			RankOption:       vc.rankOption,
+			ProviderNodeID:   vc.providerNodeID,
+			VecArgExpr:       vc.vecArgExpr,
+			MembershipNodeID: vc.membershipNodeID,
+			HasMembership:    vc.hasMembership,
 		}
 	}
 	var mti *planplugin.MultiTableIndexRef
@@ -204,19 +206,21 @@ func fromPlanplugin(vctx *planplugin.VectorSortContext, mti *planplugin.MultiTab
 	var vc *vectorSortContext
 	if vctx != nil {
 		vc = &vectorSortContext{
-			projNode:       vctx.ProjNode,
-			sortNode:       vctx.SortNode,
-			scanNode:       vctx.ScanNode,
-			childNode:      vctx.ChildNode,
-			orderExpr:      vctx.OrderExpr,
-			distFnExpr:     vctx.DistFnExpr,
-			sortDirection:  vctx.SortDirection,
-			limit:          vctx.Limit,
-			resultLimit:    vctx.ResultLimit,
-			resultOffset:   vctx.ResultOffset,
-			rankOption:     vctx.RankOption,
-			providerNodeID: vctx.ProviderNodeID,
-			vecArgExpr:     vctx.VecArgExpr,
+			projNode:         vctx.ProjNode,
+			sortNode:         vctx.SortNode,
+			scanNode:         vctx.ScanNode,
+			childNode:        vctx.ChildNode,
+			orderExpr:        vctx.OrderExpr,
+			distFnExpr:       vctx.DistFnExpr,
+			sortDirection:    vctx.SortDirection,
+			limit:            vctx.Limit,
+			resultLimit:      vctx.ResultLimit,
+			resultOffset:     vctx.ResultOffset,
+			rankOption:       vctx.RankOption,
+			providerNodeID:   vctx.ProviderNodeID,
+			vecArgExpr:       vctx.VecArgExpr,
+			membershipNodeID: vctx.MembershipNodeID,
+			hasMembership:    vctx.HasMembership,
 		}
 	}
 	var m *MultiTableIndex

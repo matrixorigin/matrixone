@@ -1,6 +1,10 @@
 # docker compose extension fields
 # https://github.com/docker/compose/pull/5140
 # https://stackoverflow.com/questions/45805380/meaning-of-ampersand-in-docker-compose-yml-file
+# Versioned producer/consumer marker used by shared CI before it spends time
+# building a prebuilt jstfu artifact for this exact MatrixOne head.
+x-jstfu-prebuilt-contract: "1"
+
 x-mo-common: &mo-common
     build:
       context: ../../
@@ -18,6 +22,10 @@ x-mo-common: &mo-common
       - ../../docker-compose-log:/log
       - ../../coverage:/coverage
     restart: on-failure
+    # mo-service starts conntrack collection on Linux; joining its netlink
+    # groups requires NET_ADMIN in the compose containers.
+    cap_add:
+      - NET_ADMIN
     tty: true
 
 
@@ -138,8 +146,106 @@ services:
         aliases:
           - "logservice"
 
+  # ---------------------------------------------------------------------
+  # jstfu: the datastream external table gRPC server (xtool/jstfu), needed
+  # by test/distributed/cases/datastream.  The BVT cases address it as
+  # 'server'='127.0.0.1','port'='4444' from whichever CN compiles the scan,
+  # so one instance runs inside each CN's network namespace.  The jar is
+  # prepared once by jstfu-build into a shared volume.  Local launches build
+  # Java 8 bytecode from source.  CI may supply an exact-head jar and use the
+  # already-local MatrixOne image only as a staging container, avoiding Maven
+  # downloads on every BVT runner.  Both modes validate the jar before it is
+  # published, and docker compose up -d cannot succeed without it.
+  # ---------------------------------------------------------------------
+  jstfu-build:
+    container_name: jstfu-build
+    image: ${JSTFU_BUILDER_IMAGE:-maven:3.9.9-eclipse-temurin-17}
+    profiles:
+      - launch
+      - launch-multi-cn
+    volumes:
+      - ../../:/matrixone
+      - jstfu_out:/jstfu-out
+      - jstfu_m2:/root/.m2
+    working_dir: /matrixone/xtool/jstfu
+    environment:
+      JSTFU_USE_PREBUILT: ${JSTFU_USE_PREBUILT:-0}
+      JSTFU_EXPECTED_SHA256: ${JSTFU_EXPECTED_SHA256:-}
+    entrypoint:
+      - /bin/bash
+      - -c
+      - |
+        set -euo pipefail
+        if [ "$${JSTFU_USE_PREBUILT}" = "1" ]; then
+          printf '%s\n' "$${JSTFU_EXPECTED_SHA256}" | grep -Eq '^[0-9a-f]{64}$$'
+          test -s target/jstfu.jar
+          printf '%s  %s\n' "$${JSTFU_EXPECTED_SHA256}" target/jstfu.jar | sha256sum -c -
+          echo 'using exact-head prebuilt jstfu.jar'
+        else
+          mvn -B --no-transfer-progress \
+            -Dmaven.wagon.http.retryHandler.count=3 \
+            -DskipTests package
+        fi
+        install -m 0644 target/jstfu.jar /jstfu-out/jstfu.jar
+        test -s /jstfu-out/jstfu.jar
+        if [ "$${JSTFU_USE_PREBUILT}" = "1" ]; then
+          printf '%s  %s\n' "$${JSTFU_EXPECTED_SHA256}" /jstfu-out/jstfu.jar | sha256sum -c -
+        fi
+        echo 'jstfu.jar ready'
+    networks:
+      monet:
+
+  jstfu-cn0:
+    container_name: jstfu-cn0
+    image: eclipse-temurin:8-jre
+    profiles:
+      - launch
+      - launch-multi-cn
+    network_mode: "service:cn-0"
+    restart: on-failure
+    depends_on:
+      jstfu-build:
+        condition: service_completed_successfully
+      cn-0:
+        condition: service_started
+    volumes:
+      # /jstfu-test (not /test): compose CI rewrites ':/test' mounts to the
+      # host workspace path so LOAD DATA host paths resolve in-container;
+      # jstfu's config paths must stay stable, so use a name the rewrite
+      # cannot match.
+      - ../../test:/jstfu-test
+      - ../../etc/launch-tae-compose/config:/config
+      - jstfu_out:/jstfu-out
+    entrypoint: ["java","-jar","/jstfu-out/jstfu.jar","/config/jstfu-compose.json"]
+
+  jstfu-cn1:
+    container_name: jstfu-cn1
+    image: eclipse-temurin:8-jre
+    profiles:
+      - launch
+      - launch-multi-cn
+    network_mode: "service:cn-1"
+    restart: on-failure
+    depends_on:
+      jstfu-build:
+        condition: service_completed_successfully
+      cn-1:
+        condition: service_started
+    volumes:
+      # /jstfu-test (not /test): compose CI rewrites ':/test' mounts to the
+      # host workspace path so LOAD DATA host paths resolve in-container;
+      # jstfu's config paths must stay stable, so use a name the rewrite
+      # cannot match.
+      - ../../test:/jstfu-test
+      - ../../etc/launch-tae-compose/config:/config
+      - jstfu_out:/jstfu-out
+    entrypoint: ["java","-jar","/jstfu-out/jstfu.jar","/config/jstfu-compose.json"]
+
   minio:
-    image: minio/minio:RELEASE.2023-11-01T18-37-25Z
+    build:
+      context: .
+      dockerfile: Dockerfile.minio
+    platform: linux/amd64
     ports:
       - "9000:9000"
       - "9001:9001"
@@ -165,7 +271,10 @@ services:
   # mc client: https://github.com/minio/mc/blob/master/docs/minio-client-complete-guide.md
   # mc anonymous set: https://min.io/docs/minio/linux/reference/minio-mc/mc-anonymous-set.html
   createbuckets:
-    image: minio/mc:RELEASE.2023-10-30T18-43-32Z
+    build:
+      context: .
+      dockerfile: Dockerfile.mc
+    platform: linux/amd64
     depends_on:
       minio:
         condition: service_healthy
@@ -173,11 +282,10 @@ services:
       - launch
       - launch-multi-cn
     entrypoint: >
-      /bin/sh -c "
+      /bin/sh -ec "
       /usr/bin/mc alias set myminio http://minio:9000 minio minio123;
-      /usr/bin/mc mb myminio/mo-test;
+      /usr/bin/mc mb --ignore-existing myminio/mo-test;
       /usr/bin/mc anonymous set public myminio/mo-test;
-      exit 0;
       "
     networks:
       monet:
@@ -185,6 +293,8 @@ services:
 
 volumes:
   minio_storage: {}
+  jstfu_out: {}
+  jstfu_m2: {}
 
 # If there has subnet conflict, please change the subnet CIDR
 networks:

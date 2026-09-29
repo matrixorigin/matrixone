@@ -50,6 +50,7 @@ func TestIssue27055DatabaseCloneReadsExplicitTransactionSource(t *testing.T) {
 		const (
 			sourceDB       = "issue_27055_source"
 			targetDB       = "issue_27055_target"
+			directTarget   = "issue_27055_direct_target"
 			autocommitDB   = "issue_27055_autocommit"
 			snapshotDB     = "issue_27055_snapshot"
 			createdSource  = "issue_27055_created_source"
@@ -59,7 +60,7 @@ func TestIssue27055DatabaseCloneReadsExplicitTransactionSource(t *testing.T) {
 			snapshotName   = "issue_27055_snapshot_point"
 		)
 		allDatabases := []string{
-			targetDB, autocommitDB, snapshotDB, createdTarget, createdSource,
+			targetDB, directTarget, autocommitDB, snapshotDB, createdTarget, createdSource,
 			rollbackTarget, rollbackSource, sourceDB,
 		}
 		defer func() {
@@ -117,6 +118,21 @@ func TestIssue27055DatabaseCloneReadsExplicitTransactionSource(t *testing.T) {
 		exec("commit")
 		assertItems(sourceDB, "items", transactionItems)
 		assertItems(targetDB, "items", transactionItems)
+		exec("use " + targetDB)
+		var targetCount, targetSum int
+		require.NoError(t, conn.QueryRowContext(ctx,
+			"select count(*), sum(id) from items").Scan(&targetCount, &targetSum))
+		require.Equal(t, 3, targetCount)
+		require.Equal(t, 7, targetSum)
+		exec("use " + sourceDB)
+
+		// A clone immediately after BEGIN must use the transaction handler state,
+		// even when no statement has refreshed the frontend process yet.
+		exec("begin")
+		exec("create database " + directTarget + " clone " + sourceDB)
+		assertItems(directTarget, "items", transactionItems)
+		exec("commit")
+		assertItems(directTarget, "items", transactionItems)
 
 		// Table clone remains a shared-transaction reader as established by #26293.
 		exec("begin")

@@ -14,8 +14,8 @@ data branch diff child against base output limit 1;
 ➤ diff child against base[12,0,0]  ¦  flag[12,0,0]  ¦  id[4,32,0]  ¦  v[12,-1,0]  𝄀
 base  ¦  INSERT  ¦  1  ¦  base-low
 data branch diff child against base columns (v) output limit 1;
-➤ diff child against base[12,0,0]  ¦  flag[12,0,0]  ¦  v[12,-1,0]  𝄀
-base  ¦  INSERT  ¦  base-low
+➤ diff child against base[12,0,0]  ¦  flag[12,0,0]  ¦  id[4,32,0]  ¦  v[12,-1,0]  𝄀
+base  ¦  INSERT  ¦  1  ¦  base-low
 insert into base values (2, 'base-mid');
 insert into child values (99, 'child-mid');
 data branch diff child against base output limit 2;

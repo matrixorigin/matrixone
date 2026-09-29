@@ -31,9 +31,12 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/common/mpool"
 	"github.com/matrixorigin/matrixone/pkg/container/types"
 	"github.com/matrixorigin/matrixone/pkg/container/vector"
+	"github.com/matrixorigin/matrixone/pkg/defines"
 	planpb "github.com/matrixorigin/matrixone/pkg/pb/plan"
 	"github.com/matrixorigin/matrixone/pkg/sql/parsers/dialect/mysql"
 	"github.com/matrixorigin/matrixone/pkg/sql/parsers/tree"
+	metric "github.com/matrixorigin/matrixone/pkg/util/metric/v2"
+	"github.com/prometheus/client_golang/prometheus/testutil"
 	"github.com/stretchr/testify/require"
 	"go.mongodb.org/mongo-driver/v2/bson"
 	"go.mongodb.org/mongo-driver/v2/mongo/options"
@@ -132,6 +135,18 @@ func TestMappingSnapshotMatchesPlan(t *testing.T) {
 	}
 	require.True(t, MappingDefinitionMatchesPlan(mapping, scan))
 	require.True(t, MappingSnapshotMatchesPlan(mapping, scan))
+	queryOnly := *scan
+	queryOnly.Columns = nil
+	queryOnly.IncludeQueryColumn = true
+	require.True(t, MappingSnapshotMatchesPlan(mapping, &queryOnly), "explicit __mo_query projection needs no mapped vectors")
+	queryOnly.IncludeQueryColumn = false
+	queryOnly.UserQueryKind = int32(UserQueryFilter)
+	require.True(t, MappingSnapshotMatchesPlan(mapping, &queryOnly), "COUNT(*) over an explicit query needs only a row carrier")
+	queryOnly.UserQueryKind = int32(UserQueryInvalid)
+	queryOnly.EmptyResult = true
+	require.True(t, MappingSnapshotMatchesPlan(mapping, &queryOnly), "a pruned explicit query opens no row source")
+	queryOnly.EmptyResult = false
+	require.False(t, MappingSnapshotMatchesPlan(mapping, &queryOnly), "ordinary scans require a mapped row carrier")
 	mapping.Columns = append(mapping.Columns, ColumnMapping{Name: "quality", Path: "quality", TypeID: int32(types.T_varchar), Conversion: ConversionStrict})
 	require.False(t, MappingDefinitionMatchesPlan(mapping, scan), "compile compares the full rel_createsql definition")
 	require.True(t, MappingSnapshotMatchesPlan(mapping, scan), "execution accepts a verified projected subset")
@@ -194,6 +209,7 @@ func TestPredicateTranslationAndProjection(t *testing.T) {
 
 	projection := ProjectionDocument([]ColumnMapping{{Path: "a"}, {Path: "a"}, {Path: "nested.b"}})
 	require.Equal(t, bson.D{{Key: "a", Value: 1}, {Key: "nested.b", Value: 1}, {Key: "_id", Value: 0}}, projection)
+	require.Equal(t, bson.D{{Key: "_id", Value: 1}}, ProjectionDocument(nil))
 	require.Error(t, (&Predicate{Op: PredicateEqual, Path: "$where", Value: 1}).Validate(ctx))
 }
 
@@ -242,6 +258,37 @@ func TestPredicateOperatorsValidationAndProjectionParents(t *testing.T) {
 	require.Equal(t, bson.D{{Key: "payload", Value: 1}, {Key: "_id.hex", Value: 1}}, projection)
 }
 
+func TestPredicatePlanRejectsNilAndChild(t *testing.T) {
+	input := &planpb.MongoPredicate{
+		Op:       planpb.MongoPredicateOp_MONGO_PREDICATE_AND,
+		Children: []*planpb.MongoPredicate{nil},
+	}
+	_, err := PredicateFromPlan(t.Context(), input)
+	require.ErrorContains(t, err, "non-nil children")
+
+	_, err = PredicateToPlan(t.Context(), &Predicate{
+		Op:       PredicateAnd,
+		Children: []*Predicate{nil},
+	})
+	require.ErrorContains(t, err, "non-nil children")
+}
+
+func TestPredicatePlanRejectsMissingComparisonValue(t *testing.T) {
+	for name, op := range map[string]planpb.MongoPredicateOp{
+		"equal":         planpb.MongoPredicateOp_MONGO_PREDICATE_EQUAL,
+		"not equal":     planpb.MongoPredicateOp_MONGO_PREDICATE_NOT_EQUAL,
+		"less":          planpb.MongoPredicateOp_MONGO_PREDICATE_LESS,
+		"less equal":    planpb.MongoPredicateOp_MONGO_PREDICATE_LESS_EQUAL,
+		"greater":       planpb.MongoPredicateOp_MONGO_PREDICATE_GREATER,
+		"greater equal": planpb.MongoPredicateOp_MONGO_PREDICATE_GREATER_EQUAL,
+	} {
+		t.Run(name, func(t *testing.T) {
+			_, err := PredicateFromPlan(t.Context(), &planpb.MongoPredicate{Op: op, Path: "value"})
+			require.ErrorContains(t, err, "requires a value")
+		})
+	}
+}
+
 func TestParseTableMappingSpecRejectsInvalidOptionsAndColumnContracts(t *testing.T) {
 	ctx := t.Context()
 	validOptions := func(extra ...*tree.MongoDBOption) *tree.MongoDBTableParam {
@@ -255,6 +302,14 @@ func TestParseTableMappingSpecRejectsInvalidOptionsAndColumnContracts(t *testing
 	}
 	validDefs := func(attributes ...tree.ColumnAttribute) tree.TableDefs {
 		return tree.TableDefs{&tree.ColumnTableDef{Name: tree.NewUnresolvedColName("value"), Attributes: attributes}}
+	}
+	setDefs := func(values ...string) tree.TableDefs {
+		return tree.TableDefs{&tree.ColumnTableDef{
+			Name: tree.NewUnresolvedColName("value"),
+			Type: &tree.T{InternalType: tree.InternalType{
+				Family: tree.SetFamily, Oid: uint32(defines.MYSQL_TYPE_SET), EnumValues: values,
+			}},
+		}}
 	}
 	validTable := func() *planpb.TableDef {
 		return &planpb.TableDef{Cols: []*planpb.ColDef{{Name: "value", Typ: planpb.Type{Id: int32(types.T_int64)}}}}
@@ -292,6 +347,8 @@ func TestParseTableMappingSpecRejectsInvalidOptionsAndColumnContracts(t *testing
 		{name: "invalid column path", param: validOptions(), defs: validDefs(tree.NewAttributeMongoDBPath("$where")), table: validTable()},
 		{name: "non-null default", param: validOptions(), defs: validDefs(tree.NewAttributeDefault(tree.NewNumVal("fallback", "fallback", false, tree.P_char))), table: validTable()},
 		{name: "unsupported type", param: validOptions(), defs: validDefs(), table: &planpb.TableDef{Cols: []*planpb.ColDef{{Name: "value", Typ: planpb.Type{Id: int32(types.T_array_float32)}}}}},
+		{name: "unsupported set type", param: validOptions(), defs: setDefs("a", "b"), table: &planpb.TableDef{Cols: []*planpb.ColDef{{Name: "value", Typ: planpb.Type{Id: int32(types.T_uint64), Enumvalues: "a,b"}}}}},
+		{name: "unsupported single empty set member", param: validOptions(), defs: setDefs(""), table: &planpb.TableDef{Cols: []*planpb.ColDef{{Name: "value", Typ: planpb.Type{Id: int32(types.T_uint64)}}}}},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			_, err := ParseTableMappingSpec(ctx, tc.param, tc.defs, tc.table)
@@ -944,6 +1001,42 @@ func TestConverterNestedPathDistinguishesMissingAndInvalidTraversal(t *testing.T
 	require.Zero(t, mp.CurrNB())
 }
 
+func TestConverterConversionErrorMetricCountsStrictAndTryNull(t *testing.T) {
+	mp := mpool.MustNewZero()
+	t.Cleanup(func() { require.Zero(t, mp.CurrNB()) })
+
+	raw, err := bson.Marshal(bson.D{{Key: "value", Value: "not-an-int"}})
+	require.NoError(t, err)
+	validRaw, err := bson.Marshal(bson.D{{Key: "value", Value: int64(7)}})
+	require.NoError(t, err)
+
+	strict, err := NewConverter(t.Context(), []ColumnMapping{{
+		Name: "value", Path: "value", TypeID: int32(types.T_int64),
+	}}, 1024)
+	require.NoError(t, err)
+	strictBatch := strict.NewBatch()
+	t.Cleanup(func() { strictBatch.Clean(mp) })
+
+	strictBefore := testutil.ToFloat64(metric.MongoDBConversionErrorCounter)
+	require.NoError(t, strict.AppendDocument(t.Context(), strictBatch, validRaw, mp))
+	require.Equal(t, strictBefore, testutil.ToFloat64(metric.MongoDBConversionErrorCounter))
+	require.ErrorContains(t, strict.AppendDocument(t.Context(), strictBatch, raw, mp), "cannot be converted")
+	require.Equal(t, strictBefore+1, testutil.ToFloat64(metric.MongoDBConversionErrorCounter))
+	require.Equal(t, 1, strictBatch.RowCount())
+
+	tryNull, err := NewConverter(t.Context(), []ColumnMapping{{
+		Name: "value", Path: "value", TypeID: int32(types.T_int64), Conversion: ConversionTryNull,
+	}}, 1024)
+	require.NoError(t, err)
+	tryNullBatch := tryNull.NewBatch()
+	t.Cleanup(func() { tryNullBatch.Clean(mp) })
+
+	tryNullBefore := testutil.ToFloat64(metric.MongoDBConversionErrorCounter)
+	require.NoError(t, tryNull.AppendDocument(t.Context(), tryNullBatch, raw, mp))
+	require.Equal(t, tryNullBefore+1, testutil.ToFloat64(metric.MongoDBConversionErrorCounter))
+	require.Equal(t, int64(1), tryNull.ConversionErrors())
+}
+
 func TestConverterMpoolFailureLeavesNoPartialRow(t *testing.T) {
 	ctx := context.Background()
 	converter, err := NewConverter(ctx, []ColumnMapping{
@@ -1053,7 +1146,49 @@ func TestConverterDecimalBinaryAndInternalJSONEncoding(t *testing.T) {
 	require.NoError(t, converter.AppendDocument(ctx, bat, raw, mp))
 	require.Equal(t, "123.456", vector.GetFixedAtNoTypeCheck[types.Decimal128](bat.Vecs[0], 0).Format(3))
 	require.Equal(t, []byte{1, 2, 3}, bat.Vecs[1].GetBytesAt(0))
-	require.JSONEq(t, `{"nested":[{"$numberInt":"1"},"two"]}`, types.DecodeJson(bat.Vecs[2].GetBytesAt(0)).String())
+	require.JSONEq(t, `{"nested":[1,"two"]}`, types.DecodeJson(bat.Vecs[2].GetBytesAt(0)).String())
+	bat.Clean(mp)
+	require.Zero(t, mp.CurrNB())
+}
+
+func TestConverterBinaryPreservesFixedLengthPadding(t *testing.T) {
+	converter, err := NewConverter(t.Context(), []ColumnMapping{
+		{Name: "fixed", Path: "value", TypeID: int32(types.T_binary), Width: 4},
+		{Name: "variable", Path: "value", TypeID: int32(types.T_varbinary), Width: 4},
+	}, 1024)
+	require.NoError(t, err)
+
+	values := [][]byte{
+		{},
+		{0x61},
+		{0x61, 0x20},
+		{0x61, 0x20, 0x20},
+		{0x41},
+		{0x01, 0x02, 0x03, 0x04},
+	}
+	wantFixed := [][]byte{
+		{0x00, 0x00, 0x00, 0x00},
+		{0x61, 0x00, 0x00, 0x00},
+		{0x61, 0x20, 0x00, 0x00},
+		{0x61, 0x20, 0x20, 0x00},
+		{0x41, 0x00, 0x00, 0x00},
+		{0x01, 0x02, 0x03, 0x04},
+	}
+	mp := mpool.MustNewZero()
+	bat := converter.NewBatch()
+	for _, value := range values {
+		raw, marshalErr := bson.Marshal(bson.D{{Key: "value", Value: bson.Binary{Data: value}}})
+		require.NoError(t, marshalErr)
+		require.NoError(t, converter.AppendDocument(t.Context(), bat, raw, mp))
+	}
+	for row := range values {
+		require.Equal(t, wantFixed[row], bat.Vecs[0].GetBytesAt(row))
+		require.Equal(t, values[row], bat.Vecs[1].GetBytesAt(row))
+	}
+	overlong, err := bson.Marshal(bson.D{{Key: "value", Value: bson.Binary{Data: []byte{1, 2, 3, 4, 5}}}})
+	require.NoError(t, err)
+	require.ErrorContains(t, converter.AppendDocument(t.Context(), bat, overlong, mp), "cannot be converted")
+	require.Equal(t, len(values), bat.RowCount())
 	bat.Clean(mp)
 	require.Zero(t, mp.CurrNB())
 }
@@ -1073,16 +1208,19 @@ func TestConverterJSONValues(t *testing.T) {
 	}{
 		{name: "string", value: "text", wantJSON: `"text"`},
 		{name: "empty string", value: "", wantJSON: `""`},
-		{name: "int32", value: int32(32), wantJSON: `{"$numberInt":"32"}`},
-		{name: "int64", value: int64(64), wantJSON: `{"$numberLong":"64"}`},
-		{name: "double", value: 1.5, wantJSON: `{"$numberDouble":"1.5"}`},
+		{name: "int32", value: int32(32), wantJSON: `32`},
+		{name: "int64", value: int64(64), wantJSON: `64`},
+		{name: "int64 max", value: int64(math.MaxInt64), wantJSON: `9223372036854775807`},
+		{name: "double", value: 1.5, wantJSON: `1.5`},
+		{name: "non-finite double", value: math.Inf(1), wantJSON: `{"$numberDouble":"Infinity"}`},
 		{name: "decimal128", value: decimal, wantJSON: `{"$numberDecimal":"123.456"}`},
 		{name: "bool", value: true, wantJSON: `true`},
-		{name: "date", value: instant, wantJSON: fmt.Sprintf(`{"$date":{"$numberLong":"%d"}}`, instant.UnixMilli())},
+		{name: "date", value: instant, wantJSON: `{"$date":"2026-08-18T09:10:11.123Z"}`},
+		{name: "date before epoch", value: bson.DateTime(-1), wantJSON: `{"$date":{"$numberLong":"-1"}}`},
 		{name: "binary", value: bson.Binary{Data: []byte{1, 2, 3}}, wantJSON: `{"$binary":{"base64":"AQID","subType":"00"}}`},
 		{name: "objectID", value: objectID, wantJSON: fmt.Sprintf(`{"$oid":"%s"}`, objectID.Hex())},
-		{name: "document", value: bson.D{{Key: "nested", Value: int32(1)}}, wantJSON: `{"nested":{"$numberInt":"1"}}`},
-		{name: "array", value: bson.A{int32(1), "two"}, wantJSON: `[{"$numberInt":"1"},"two"]`},
+		{name: "document", value: bson.D{{Key: "nested", Value: int32(1)}}, wantJSON: `{"nested":1}`},
+		{name: "array", value: bson.A{int32(1), "two"}, wantJSON: `[1,"two"]`},
 		{name: "null", value: nil, wantNull: true},
 		{name: "missing", missing: true, wantNull: true},
 	}
@@ -1115,6 +1253,14 @@ func TestConverterJSONValues(t *testing.T) {
 			require.JSONEq(t, tc.wantJSON, types.DecodeJson(bat.Vecs[0].GetBytesAt(0)).String())
 		})
 	}
+}
+
+func TestRelaxedExtJSONValueRejectsMalformedBSON(t *testing.T) {
+	_, err := relaxedExtJSONValue(bson.RawValue{
+		Type:  bson.TypeString,
+		Value: []byte{1},
+	})
+	require.Error(t, err)
 }
 
 func TestConverterCoversSupportedScalarFamilies(t *testing.T) {

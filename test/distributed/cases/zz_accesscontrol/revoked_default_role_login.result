@@ -1,0 +1,66 @@
+set global enable_privilege_cache = on;
+drop database if exists revoked_default_role_db;
+drop user if exists revoked_default_role_user;
+drop role if exists revoked_default_role_reader;
+drop role if exists revoked_default_role_secondary;
+create database revoked_default_role_db;
+create table revoked_default_role_db.protected(value int);
+insert into revoked_default_role_db.protected values (27651);
+create role revoked_default_role_reader;
+create role revoked_default_role_secondary;
+create user revoked_default_role_user identified by '123456' default role revoked_default_role_reader;
+grant connect on account * to revoked_default_role_reader;
+grant connect on account * to revoked_default_role_secondary;
+grant select on table revoked_default_role_db.protected to revoked_default_role_reader;
+grant revoked_default_role_reader to revoked_default_role_user;
+grant revoked_default_role_secondary to revoked_default_role_user;
+select current_role();
+current_role()
+revoked_default_role_reader
+select * from revoked_default_role_db.protected;
+value
+27651
+set role revoked_default_role_secondary;
+select current_role();
+current_role()
+revoked_default_role_secondary
+revoke revoked_default_role_secondary from revoked_default_role_user;
+select current_role();
+current_role()
+revoked_default_role_reader
+select * from revoked_default_role_db.protected;
+value
+27651
+set role revoked_default_role_secondary;
+internal error: the role revoked_default_role_secondary has not be granted to the user revoked_default_role_user
+revoke revoked_default_role_reader from revoked_default_role_user;
+select current_role();
+current_role()
+public
+select * from revoked_default_role_db.protected;
+internal error: do not have privilege to execute the statement
+set role revoked_default_role_reader;
+internal error: the role revoked_default_role_reader has not be granted to the user revoked_default_role_user
+select current_role();
+current_role()
+revoked_default_role_reader
+select * from revoked_default_role_db.protected;
+value
+27651
+grant revoked_default_role_reader to revoked_default_role_user;
+select current_role();
+current_role()
+revoked_default_role_reader
+select * from revoked_default_role_db.protected;
+value
+27651
+select current_role();
+current_role()
+revoked_default_role_reader
+select * from revoked_default_role_db.protected;
+value
+27651
+drop user revoked_default_role_user;
+drop role revoked_default_role_reader;
+drop role revoked_default_role_secondary;
+drop database revoked_default_role_db;

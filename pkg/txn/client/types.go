@@ -377,6 +377,8 @@ type Workspace interface {
 type TxnOverview struct {
 	// CreateAt create at
 	CreateAt time.Time
+	// AccountID is the account that created the transaction.
+	AccountID uint32
 	// Meta txn metadata
 	Meta txn.TxnMeta
 	// UserTxn true if is a user transaction
@@ -415,8 +417,16 @@ func (e TxnEvent) Aborted() bool {
 }
 
 type TxnEventCallback struct {
-	Func  func(context.Context, TxnOperator, TxnEvent, any) error
-	Value any
+	Func            func(context.Context, TxnOperator, TxnEvent, any) error
+	Value           any
+	StatementScoped bool // ClosedEvent action discarded if its statement rolls back.
+}
+
+// StatementCallbackOperator is implemented by operators that can discard
+// transaction-close actions owned by a rolled-back statement.
+type StatementCallbackOperator interface {
+	BeginStatementCallbacks()
+	RollbackStatementCallbacks(context.Context) error
 }
 
 func NewTxnEventCallback(f func(context.Context, TxnOperator, TxnEvent, any) error) TxnEventCallback {

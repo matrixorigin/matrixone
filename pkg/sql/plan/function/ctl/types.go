@@ -46,7 +46,6 @@ var (
 	TraceSpanMethod          = "TRACESPAN"
 	CoreDumpMethod           = "COREDUMP"
 	InterceptCommitMethod    = "INTERCEPTCOMMIT"
-	MergeObjectsMethod       = "MERGEOBJECTS"
 	DiskCleanerMethod        = "DISKCLEANER"
 	GetProtocolVersionMethod = "GETPROTOCOLVERSION"
 	SetProtocolVersionMethod = "SETPROTOCOLVERSION"
@@ -62,6 +61,7 @@ var (
 	TableExtra               = strings.ToUpper("table-extra")
 	PrefetchOnSubscribed     = strings.ToUpper("prefetch-on-subscribed")
 	GCCatalogCacheMethod     = strings.ToUpper("GCCatalogCache")
+	RefreshViewMetadata      = strings.ToUpper("RefreshViewMetadata")
 )
 
 var (
@@ -91,7 +91,6 @@ var (
 		TraceSpanMethod:          handleTraceSpan,
 		CoreDumpMethod:           handleCoreDump,
 		InterceptCommitMethod:    handleInterceptCommit(),
-		MergeObjectsMethod:       handleCNMerge,
 		DiskCleanerMethod:        handleDiskCleaner(),
 		GetProtocolVersionMethod: handleGetProtocolVersion,
 		SetProtocolVersionMethod: handleSetProtocolVersion,
@@ -107,6 +106,7 @@ var (
 		TableExtra:               handleTableExtra,
 		PrefetchOnSubscribed:     handlePrefetchOnSubscribed,
 		GCCatalogCacheMethod:     handleGCCatalogCache,
+		RefreshViewMetadata:      handleRefreshViewMetadata,
 	}
 )
 

@@ -1,0 +1,219 @@
+drop database if exists mi_big;
+create database mi_big;
+use mi_big;
+create table src (id int primary key, cat int, val bigint, pad varchar(600));
+insert into src select result, result % 7, result * 11, repeat('p', 500) from generate_series(1, 300000) g;
+select count(*), sum(val), sum(length(pad)) from src;
+➤ count(*)[-5,64,0]  ¦  sum(val)[3,38,0]  ¦  sum(length(pad))[3,38,0]  𝄀
+300000  ¦  495001650000  ¦  150000000
+create table t_plain (id int primary key, cat int, val bigint, pad varchar(600));
+create table t_idx (id int primary key, cat int, val bigint, pad varchar(600), unique key uk_val(val), key ik_cat(cat));
+create table t_cpk (cat int, id int, val bigint, pad varchar(600), primary key (cat, id));
+create table t_narrow (id int primary key, cat int);
+insert all
+into t_plain
+into t_idx (id, cat, val, pad) values (id, cat, val, pad)
+into t_cpk (cat, id, val, pad) values (cat, id, val, pad)
+into t_narrow (id, cat) values (id, cat)
+select id, cat, val, pad from src;
+select count(*), sum(val), min(id), max(id), sum(length(pad)) from t_plain;
+➤ count(*)[-5,64,0]  ¦  sum(val)[3,38,0]  ¦  min(id)[4,32,0]  ¦  max(id)[4,32,0]  ¦  sum(length(pad))[3,38,0]  𝄀
+300000  ¦  495001650000  ¦  1  ¦  300000  ¦  150000000
+select count(*), sum(val), min(id), max(id), sum(length(pad)) from t_idx;
+➤ count(*)[-5,64,0]  ¦  sum(val)[3,38,0]  ¦  min(id)[4,32,0]  ¦  max(id)[4,32,0]  ¦  sum(length(pad))[3,38,0]  𝄀
+300000  ¦  495001650000  ¦  1  ¦  300000  ¦  150000000
+select count(*), sum(val), min(id), max(id), sum(length(pad)) from t_cpk;
+➤ count(*)[-5,64,0]  ¦  sum(val)[3,38,0]  ¦  min(id)[4,32,0]  ¦  max(id)[4,32,0]  ¦  sum(length(pad))[3,38,0]  𝄀
+300000  ¦  495001650000  ¦  1  ¦  300000  ¦  150000000
+select count(*), sum(cat) from t_narrow;
+➤ count(*)[-5,64,0]  ¦  sum(cat)[-5,64,0]  𝄀
+300000  ¦  899998
+select count(*) > 0 as has_objects, sum(rows_cnt) from metadata_scan('mi_big.t_plain', 'id') g;
+➤ has_objects[-7,1,0]  ¦  sum(rows_cnt)[3,38,0]  𝄀
+1  ¦  300000
+select count(*) > 0 as has_objects, sum(rows_cnt) from metadata_scan('mi_big.t_idx', 'id') g;
+➤ has_objects[-7,1,0]  ¦  sum(rows_cnt)[3,38,0]  𝄀
+1  ¦  300000
+select count(*) > 0 as has_objects, sum(rows_cnt) from metadata_scan('mi_big.t_cpk', 'id') g;
+➤ has_objects[-7,1,0]  ¦  sum(rows_cnt)[3,38,0]  𝄀
+1  ¦  300000
+select count(*) > 0 as has_objects, sum(rows_cnt) from metadata_scan('mi_big.t_narrow', 'id') g;
+➤ has_objects[-7,1,0]  ¦  sum(rows_cnt)[3,38,0]  𝄀
+1  ¦  300000
+select id, cat from t_idx where val = 11 * 123456;
+➤ id[4,32,0]  ¦  cat[4,32,0]  𝄀
+123456  ¦  4
+select count(*) from t_idx where cat = 3;
+➤ count(*)[-5,64,0]  𝄀
+42857
+select count(*) from t_cpk where cat = 3 and id between 1000 and 2000;
+➤ count(*)[-5,64,0]  𝄀
+143
+select id from t_plain where id in (1, 150000, 300000) order by id;
+➤ id[4,32,0]  𝄀
+1  𝄀
+150000  𝄀
+300000
+create table f_zero (id int primary key, cat int);
+create table f_low (id int primary key, cat int, val bigint, pad varchar(600));
+create table f_rest (cat int, id int, val bigint, pad varchar(600), primary key (cat, id));
+insert first
+when cat = 0 then into f_zero (id, cat) values (id, cat)
+when cat < 3 then into f_low (id, cat, val, pad) values (id, cat, val, pad)
+else              into f_rest (cat, id, val, pad) values (cat, id, val, pad)
+select id, cat, val, pad from src;
+select count(*), min(cat), max(cat) from f_zero;
+➤ count(*)[-5,64,0]  ¦  min(cat)[4,32,0]  ¦  max(cat)[4,32,0]  𝄀
+42857  ¦  0  ¦  0
+select count(*), min(cat), max(cat) from f_low;
+➤ count(*)[-5,64,0]  ¦  min(cat)[4,32,0]  ¦  max(cat)[4,32,0]  𝄀
+85715  ¦  1  ¦  2
+select count(*), min(cat), max(cat) from f_rest;
+➤ count(*)[-5,64,0]  ¦  min(cat)[4,32,0]  ¦  max(cat)[4,32,0]  𝄀
+171428  ¦  3  ¦  6
+select (select count(*) from f_zero) + (select count(*) from f_low) + (select count(*) from f_rest) = (select count(*) from src) as covers_source_once;
+➤ covers_source_once[-7,1,0]  𝄀
+1
+select (select count(*) from f_zero) = (select count(*) from src where cat = 0) as zero_ok;
+➤ zero_ok[-7,1,0]  𝄀
+1
+select (select count(*) from f_low) = (select count(*) from src where cat in (1, 2)) as low_ok;
+➤ low_ok[-7,1,0]  𝄀
+1
+select (select count(*) from f_rest) = (select count(*) from src where cat >= 3) as rest_ok;
+➤ rest_ok[-7,1,0]  𝄀
+1
+select count(*) > 0 as has_objects from metadata_scan('mi_big.f_low', 'id') g;
+➤ has_objects[-7,1,0]  𝄀
+1
+select count(*) > 0 as has_objects from metadata_scan('mi_big.f_rest', 'id') g;
+➤ has_objects[-7,1,0]  𝄀
+1
+create table a_zero (id int primary key, cat int);
+create table a_low (id int primary key, cat int, val bigint, pad varchar(600));
+create table a_rest (cat int, id int, val bigint, pad varchar(600), primary key (cat, id));
+insert all
+when cat = 0 then into a_zero (id, cat) values (id, cat)
+when cat < 3 then into a_low (id, cat, val, pad) values (id, cat, val, pad)
+else              into a_rest (cat, id, val, pad) values (cat, id, val, pad)
+select id, cat, val, pad from src;
+select count(*) from a_zero;
+➤ count(*)[-5,64,0]  𝄀
+42857
+select count(*) from a_low;
+➤ count(*)[-5,64,0]  𝄀
+128572
+select count(*) from a_rest;
+➤ count(*)[-5,64,0]  𝄀
+171428
+select count(*) from a_zero z join a_low l on z.id = l.id;
+➤ count(*)[-5,64,0]  𝄀
+42857
+create table merged (id int primary key, cat int, val bigint, pad varchar(600));
+insert all
+into merged (id, cat, val, pad) values (id, cat, val, pad)
+into merged (id, cat, val, pad) values (id + 1000000, cat + 10, val, pad)
+select id, cat, val, pad from src;
+select count(*), sum(cat) from merged;
+➤ count(*)[-5,64,0]  ¦  sum(cat)[-5,64,0]  𝄀
+600000  ¦  4799996
+select count(*) > 0 as has_objects, sum(rows_cnt) from metadata_scan('mi_big.merged', 'id') g;
+➤ has_objects[-7,1,0]  ¦  sum(rows_cnt)[3,38,0]  𝄀
+1  ¦  600000
+insert all
+into merged (id, cat, val, pad) values (id + 2000000, cat, val, pad)
+into merged (id, cat, val, pad) values (id + 2000000, cat, val, pad)
+select id, cat, val, pad from src;
+Duplicate entry '2000001' for key 'id'
+select count(*) from merged;
+➤ count(*)[-5,64,0]  𝄀
+600000
+create table late_fail (id int primary key, cat int, val bigint, pad varchar(600));
+insert into late_fail values (299999, 0, 0, 'existing');
+create table other_big (id int primary key, cat int, val bigint, pad varchar(600));
+insert all
+into other_big (id, cat, val, pad) values (id, cat, val, pad)
+into late_fail (id, cat, val, pad) values (id, cat, val, pad)
+select id, cat, val, pad from src;
+Duplicate entry '299999' for key 'id'
+select count(*) from late_fail;
+➤ count(*)[-5,64,0]  𝄀
+1
+select count(*) from other_big;
+➤ count(*)[-5,64,0]  𝄀
+0
+select count(*) > 0 as has_objects from metadata_scan('mi_big.other_big', 'id') g;
+➤ has_objects[-7,1,0]  𝄀
+0
+select mo_ctl('dn', 'flush', 'mi_big.t_plain');
+➤ mo_ctl(dn, flush, mi_big.t_plain)[12,65535,0]  𝄀
+{
+  "method": "Flush",
+  "result": [
+    {
+      "returnStr": "OK"
+    }
+  ]
+}
+
+select mo_ctl('dn', 'flush', 'mi_big.t_idx');
+➤ mo_ctl(dn, flush, mi_big.t_idx)[12,65535,0]  𝄀
+{
+  "method": "Flush",
+  "result": [
+    {
+      "returnStr": "OK"
+    }
+  ]
+}
+
+select mo_ctl('dn', 'flush', 'mi_big.t_narrow');
+➤ mo_ctl(dn, flush, mi_big.t_narrow)[12,65535,0]  𝄀
+{
+  "method": "Flush",
+  "result": [
+    {
+      "returnStr": "OK"
+    }
+  ]
+}
+
+select mo_ctl('dn', 'flush', 'mi_big.merged');
+➤ mo_ctl(dn, flush, mi_big.merged)[12,65535,0]  𝄀
+{
+  "method": "Flush",
+  "result": [
+    {
+      "returnStr": "OK"
+    }
+  ]
+}
+
+select count(*), sum(val) from t_plain;
+➤ count(*)[-5,64,0]  ¦  sum(val)[3,38,0]  𝄀
+300000  ¦  495001650000
+select count(*), sum(val) from t_idx;
+➤ count(*)[-5,64,0]  ¦  sum(val)[3,38,0]  𝄀
+300000  ¦  495001650000
+select count(*), sum(cat) from t_narrow;
+➤ count(*)[-5,64,0]  ¦  sum(cat)[-5,64,0]  𝄀
+300000  ¦  899998
+select count(*), sum(cat) from merged;
+➤ count(*)[-5,64,0]  ¦  sum(cat)[-5,64,0]  𝄀
+600000  ¦  4799996
+select id, cat from t_idx where val = 11 * 299999;
+➤ id[4,32,0]  ¦  cat[4,32,0]  𝄀
+299999  ¦  0
+begin;
+insert all into t_narrow (id, cat) values (id + 1000000, cat) into t_plain (id, cat, val, pad) values (id + 1000000, cat, val, pad) select id, cat, val, pad from src;
+select count(*) from t_plain;
+➤ count(*)[-5,64,0]  𝄀
+600000
+rollback;
+select count(*) from t_plain;
+➤ count(*)[-5,64,0]  𝄀
+300000
+select count(*) from t_narrow;
+➤ count(*)[-5,64,0]  𝄀
+300000
+drop database mi_big;

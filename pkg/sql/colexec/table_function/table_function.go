@@ -156,6 +156,10 @@ func (tableFunction *TableFunction) Prepare(proc *process.Process) error {
 		tblArg.ctr.state, err = metaScanPrepare(proc, tblArg)
 	case "current_account":
 		tblArg.ctr.state, err = currentAccountPrepare(proc, tblArg)
+	case "change_watermark":
+		tblArg.ctr.state, err = changeWatermarkPrepare(proc, tblArg)
+	case "table_changes":
+		tblArg.ctr.state, err = tableChangesPrepare(proc, tblArg)
 	case "metadata_scan":
 		tblArg.ctr.state, err = metadataScanPrepare(proc, tblArg)
 	case "processlist":
@@ -170,6 +174,12 @@ func (tableFunction *TableFunction) Prepare(proc *process.Process) error {
 		tblArg.ctr.state, err = moCachePrepare(proc, tblArg)
 	case "mo_check_constraints":
 		tblArg.ctr.state, err = checkConstraintsPrepare(proc, tblArg)
+	case "mo_current_roles":
+		tblArg.ctr.state, err = currentRolesPrepare(proc, tblArg)
+	case "mo_view_columns", "mo_subscription_view_columns":
+		tblArg.ctr.state, err = viewColumnsPrepare(proc, tblArg)
+	case subscriptionTablesFunctionName, subscriptionColumnsFunctionName:
+		tblArg.ctr.state, err = subscriptionMetadataPrepare(proc, tblArg)
 	case "fulltext_index_scan":
 		tblArg.ctr.state, err = fulltextIndexScanPrepare(proc, tblArg)
 	case "fulltext_index_tokenize":
@@ -194,6 +204,10 @@ func (tableFunction *TableFunction) Prepare(proc *process.Process) error {
 		tblArg.ctr.state, err = parseJsonlDataPrepare(proc, tblArg)
 	case "parse_jsonl_file":
 		tblArg.ctr.state, err = parseJsonlFilePrepare(proc, tblArg)
+	case "esql_tvf":
+		tblArg.ctr.state, err = esqlTvfPrepare(proc, tblArg)
+	case "sql_tvf":
+		tblArg.ctr.state, err = sqlTvfPrepare(proc, tblArg)
 	case "table_stats":
 		tblArg.ctr.state, err = tableStatsPrepare(proc, tblArg)
 	case "load_file_chunks":

@@ -17,7 +17,17 @@ use ft2db;
 create stage ft2stage URL='file://$resources/fulltext/';
 create table dl (id bigint primary key, fpath datalink, FULLTEXT2 ftidx(fpath));
 insert into dl values (0, 'stage://ft2stage/mo.pdf'), (1, 'stage://ft2stage/chinese.pdf');
-select sleep(30);
+-- Poll the tenant-owned hidden tail from the tenant session. This proves that
+-- its CDC writer resolved and durably indexed the rows before the first MATCH.
+set @dl_ft2 = (select index_table_name from mo_catalog.mo_indexes where name = 'ftidx' and algo_table_type = 'ftv2_index' and table_id in (select rel_id from mo_catalog.mo_tables where reldatabase = database() and relname = 'dl') limit 1);
+set @wait_tenant_dl_sql = concat(
+    'select coalesce(max(chunk_id), -1) >= 0 as tenant_dl_ready from `', database(), '`.`', @dl_ft2,
+    '` where index_id = ''cdc_tail'' and tag = 1'
+);
+prepare wait_tenant_dl from @wait_tenant_dl_sql;
+-- @wait_expect(2, 120)
+execute wait_tenant_dl;
+deallocate prepare wait_tenant_dl;
 
 -- CDC must have resolved the datalink CONTENT under this tenant's mo_stages: 'matrixone'
 -- (mo.pdf), '慢慢地' (chinese.pdf). If the resolver ran under System_Account, the tenant's

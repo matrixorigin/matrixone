@@ -55,11 +55,17 @@ func (c cpuTotal) Desc() *prom.Desc {
 }
 
 func (c cpuTotal) Metric(ctx context.Context, _ *statCaches) (prom.Metric, error) {
-	cpus, _ := cpu.Times(false)
+	if logicalCore <= 0 {
+		return nil, moerr.NewInternalError(ctx, "invalid logical cpu core count")
+	}
+	cpus, err := cpu.Times(false)
+	if err != nil {
+		return nil, err
+	}
 	if len(cpus) == 0 {
 		return nil, moerr.NewInternalError(ctx, "empty cpu times")
 	}
-	v := (CPUTotalTime(cpus[0]) - cpus[0].Idle) / float64(logicalCore)
+	v := cpuBusyTime(cpus[0]) / float64(logicalCore)
 	return prom.MustNewConstMetric(c.Desc(), prom.CounterValue, v), nil
 }
 

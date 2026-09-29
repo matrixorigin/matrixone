@@ -122,6 +122,77 @@ func TestBuildUniqueKeyBatch(t *testing.T) {
 	}
 }
 
+func TestBuildUniqueKeyBatchDecimal256(t *testing.T) {
+	proc := testutil.NewProcess(t)
+	typ := types.New(types.T_decimal256, 65, 2)
+	values := []types.Decimal256{
+		mustParseDecimal256ForIndexTest(t, typ, "123.45"),
+		mustParseDecimal256ForIndexTest(t, typ, "678.90"),
+		mustParseDecimal256ForIndexTest(t, typ, "42.00"),
+	}
+	keys := []int64{7, 8, 9}
+
+	decimalVec := vector.NewVec(typ)
+	require.NoError(t, vector.AppendFixedList(
+		decimalVec, values, []bool{false, true, false}, proc.Mp()))
+	keyVec := vector.NewVec(types.T_int64.ToType())
+	require.NoError(t, vector.AppendFixedList(keyVec, keys, nil, proc.Mp()))
+	defer decimalVec.Free(proc.Mp())
+	defer keyVec.Free(proc.Mp())
+
+	t.Run("composite encoding filters null decimal rows", func(t *testing.T) {
+		packers := PackerList{}
+		defer packers.Free()
+
+		got, _, err := BuildUniqueKeyBatch(
+			[]*vector.Vector{decimalVec, keyVec},
+			[]string{"d", "k"},
+			[]string{"d", "k"},
+			"",
+			proc,
+			&packers,
+		)
+		require.NoError(t, err)
+		defer got.Clean(proc.Mp())
+		require.Equal(t, 2, got.RowCount())
+
+		encoded, area := vector.MustVarlenaRawData(got.Vecs[0])
+		for outputRow, inputRow := range []int{0, 2} {
+			packer := types.NewPacker()
+			packer.EncodeDecimal256(values[inputRow])
+			packer.EncodeInt64(keys[inputRow])
+			require.Equal(t, packer.GetBuf(), encoded[outputRow].GetByteSlice(area))
+			packer.Close()
+		}
+	})
+
+	t.Run("single nullable decimal index compacts values", func(t *testing.T) {
+		packers := PackerList{}
+		defer packers.Free()
+
+		got, _, err := BuildUniqueKeyBatch(
+			[]*vector.Vector{decimalVec, keyVec},
+			[]string{"d", "k"},
+			[]string{"d"},
+			"",
+			proc,
+			&packers,
+		)
+		require.NoError(t, err)
+		defer got.Clean(proc.Mp())
+		require.Equal(t, 2, got.RowCount())
+		require.Equal(t,
+			[]types.Decimal256{values[0], values[2]},
+			vector.MustFixedColNoTypeCheck[types.Decimal256](got.Vecs[0]))
+	})
+}
+
+func mustParseDecimal256ForIndexTest(t *testing.T, typ types.Type, value string) types.Decimal256 {
+	result, err := types.ParseDecimal256(value, typ.Width, typ.Scale)
+	require.NoError(t, err)
+	return result
+}
+
 func TestCompactUniqueKeyBatch(t *testing.T) {
 	proc := testutil.NewProcess(t)
 	tests := []struct {

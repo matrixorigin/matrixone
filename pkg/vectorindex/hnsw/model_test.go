@@ -16,6 +16,7 @@ package hnsw
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"os"
 	"path/filepath"
@@ -163,7 +164,7 @@ func TestModelStreamError(t *testing.T) {
 	runSql = mock_runSql
 	runSql_streaming = mock_runSql_streaming_error
 
-	models, err := LoadMetadata[float32](sqlproc, "db", "meta")
+	models, _, err := LoadMetadata[float32](sqlproc, "db", "meta")
 	require.Nil(t, err)
 
 	idxcfg := vectorindex.IndexConfig{Type: "hnsw", Usearch: usearch.DefaultConfig(3)}
@@ -202,6 +203,58 @@ func TestModelStreamError(t *testing.T) {
 		"temp file leaked after LoadIndexFromBuffer streaming error")
 }
 
+func TestHnswWaitsPreserveCancellationCause(t *testing.T) {
+	newSQLProcess := func(t *testing.T) *sqlexec.SqlProcess {
+		proc := testutil.NewProcessWithMPool(t, "", mpool.MustNewZero())
+		proc.BuildPipelineContext(context.Background())
+		t.Cleanup(func() {
+			proc.Cancel(nil)
+		})
+		return sqlexec.NewSqlProcess(proc)
+	}
+
+	t.Run("load chunk observes pipeline cancellation", func(t *testing.T) {
+		sqlproc := newSQLProcess(t)
+		sqlproc.Proc.Cancel(context.Canceled)
+
+		model := new(HnswModel[float32])
+		_, err := model.loadChunk(
+			context.Background(),
+			sqlproc,
+			make(chan executor.Result),
+			make(chan error),
+			nil,
+		)
+		require.ErrorIs(t, err, context.Canceled)
+	})
+
+	t.Run("load chunk preserves nested stream cause", func(t *testing.T) {
+		sqlproc := newSQLProcess(t)
+		streamCause := errors.New("stream stopped")
+		streamCtx, cancel := context.WithCancelCause(context.Background())
+		cancel(streamCause)
+
+		model := new(HnswModel[float32])
+		_, err := model.loadChunk(
+			streamCtx,
+			sqlproc,
+			make(chan executor.Result),
+			make(chan error),
+			nil,
+		)
+		require.ErrorIs(t, err, streamCause)
+	})
+
+	t.Run("build worker observes pipeline cancellation", func(t *testing.T) {
+		sqlproc := newSQLProcess(t)
+		sqlproc.Proc.Cancel(context.Canceled)
+
+		build := &HnswBuild[float32]{add_chan: make(chan AddItem[float32])}
+		_, err := build.addFromChannel(sqlproc)
+		require.ErrorIs(t, err, context.Canceled)
+	})
+}
+
 func doModelSearchTest[T types.RealNumbers](t *testing.T, idx *HnswModel[T], key uint64, v []T) {
 	keys, distances, err := idx.Search(v, 4)
 	require.Nil(t, err)
@@ -225,7 +278,7 @@ func TestModelFromBuffer(t *testing.T) {
 	runSql = mock_runSql
 	runSql_streaming = mock_runSql_streaming
 
-	models, err := LoadMetadata[float32](sqlproc, "db", "meta")
+	models, _, err := LoadMetadata[float32](sqlproc, "db", "meta")
 	require.Nil(t, err)
 
 	idxcfg := vectorindex.IndexConfig{Type: "hnsw", Usearch: usearch.DefaultConfig(3)}
@@ -271,7 +324,7 @@ func TestModelFromFileViewTrue(t *testing.T) {
 	runSql = mock_runSql
 	runSql_streaming = mock_runSql_streaming
 
-	models, err := LoadMetadata[float32](sqlproc, "db", "meta")
+	models, _, err := LoadMetadata[float32](sqlproc, "db", "meta")
 	require.Nil(t, err)
 
 	idxcfg := vectorindex.IndexConfig{Type: "hnsw", Usearch: usearch.DefaultConfig(3)}
@@ -318,7 +371,7 @@ func TestModel(t *testing.T) {
 	runSql = mock_runSql
 	runSql_streaming = mock_runSql_streaming
 
-	models, err := LoadMetadata[float32](sqlproc, "db", "meta")
+	models, _, err := LoadMetadata[float32](sqlproc, "db", "meta")
 	require.Nil(t, err)
 
 	idxcfg := vectorindex.IndexConfig{Type: "hnsw", Usearch: usearch.DefaultConfig(3)}
@@ -493,7 +546,7 @@ func TestNewHnswModelForBuild(t *testing.T) {
 	cfg := vectorindex.IndexConfig{Type: "hnsw", Usearch: usearch.DefaultConfig(3)}
 	cfg.Usearch.Metric = usearch.L2sq
 
-	idx, err := NewHnswModelForBuild[float32]("build-test", cfg, 1, 64)
+	idx, err := NewHnswModelForBuild[float32]("build-test", cfg, 1, 64, "")
 	require.NoError(t, err)
 	require.NotNil(t, idx.Index)
 	defer idx.Destroy()
@@ -563,7 +616,7 @@ func TestSearch_WrongDimension(t *testing.T) {
 	cfg := vectorindex.IndexConfig{Type: "hnsw", Usearch: usearch.DefaultConfig(3)}
 	cfg.Usearch.Metric = usearch.L2sq
 
-	idx, err := NewHnswModelForBuild[float32]("dim-test", cfg, 1, 16)
+	idx, err := NewHnswModelForBuild[float32]("dim-test", cfg, 1, 16, "")
 	require.NoError(t, err)
 	defer idx.Destroy()
 
@@ -589,7 +642,7 @@ func TestStreamingDrain(t *testing.T) {
 		MetadataTable: "__secondary_meta", IndexTable: "__secondary_index"}
 
 	// Test LoadIndex drain path.
-	models, err := LoadMetadata[float32](sqlproc, "db", "meta")
+	models, _, err := LoadMetadata[float32](sqlproc, "db", "meta")
 	require.NoError(t, err)
 	idx0 := models[0]
 	defer idx0.Destroy()
@@ -603,7 +656,7 @@ func TestStreamingDrain(t *testing.T) {
 		"temp file leaked after LoadIndex drain")
 
 	// Test LoadIndexFromBuffer drain path.
-	models, err = LoadMetadata[float32](sqlproc, "db", "meta")
+	models, _, err = LoadMetadata[float32](sqlproc, "db", "meta")
 	require.NoError(t, err)
 	idx1 := models[0]
 	defer idx1.Destroy()
@@ -631,7 +684,7 @@ func TestTempFileCleanup_ChecksumMismatch(t *testing.T) {
 		MetadataTable: "__secondary_meta", IndexTable: "__secondary_index"}
 
 	// Test LoadIndexFromBuffer with bad checksum
-	models, err := LoadMetadata[float32](sqlproc, "db", "meta")
+	models, _, err := LoadMetadata[float32](sqlproc, "db", "meta")
 	require.NoError(t, err)
 	idx0 := models[0]
 	defer idx0.Destroy()
@@ -646,7 +699,7 @@ func TestTempFileCleanup_ChecksumMismatch(t *testing.T) {
 		"temp file leaked after LoadIndexFromBuffer checksum mismatch")
 
 	// Test LoadIndex with bad checksum (view=false)
-	models, err = LoadMetadata[float32](sqlproc, "db", "meta")
+	models, _, err = LoadMetadata[float32](sqlproc, "db", "meta")
 	require.NoError(t, err)
 	idx1 := models[0]
 	defer idx1.Destroy()

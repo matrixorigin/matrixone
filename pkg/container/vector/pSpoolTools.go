@@ -33,7 +33,7 @@ const (
 )
 
 func DetachVectorData(v *Vector) DetachedBuffer {
-	if v == nil {
+	if v == nil || !v.CanDetach(BackingData) {
 		return DetachedBuffer{}
 	}
 	buffer := DetachedBuffer{
@@ -48,7 +48,7 @@ func DetachVectorData(v *Vector) DetachedBuffer {
 }
 
 func DetachVectorArea(v *Vector) DetachedBuffer {
-	if v == nil {
+	if v == nil || !v.CanDetach(BackingArea) {
 		return DetachedBuffer{}
 	}
 	buffer := DetachedBuffer{

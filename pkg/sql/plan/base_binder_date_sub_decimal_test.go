@@ -151,6 +151,21 @@ func makeFloat64ColumnExpr(relPos, colPos int32) *plan.Expr {
 	}
 }
 
+func makeVarcharColumnExpr(relPos, colPos int32) *plan.Expr {
+	return &plan.Expr{
+		Expr: &plan.Expr_Col{
+			Col: &plan.ColRef{
+				RelPos: relPos,
+				ColPos: colPos,
+			},
+		},
+		Typ: plan.Type{
+			Id:          int32(types.T_varchar),
+			NotNullable: true,
+		},
+	}
+}
+
 func makeFunctionExprForResetDate(name string, typ plan.Type, args ...*plan.Expr) *plan.Expr {
 	return &plan.Expr{
 		Expr: &plan.Expr_F{
@@ -377,13 +392,129 @@ func TestResetDateFunctionArgsDoesNotFoldLiteralFirstDynamicFunction(t *testing.
 	require.Len(t, args, 3)
 	require.Equal(t, dateExpr, args[0])
 
-	castExpr := args[1].GetF()
-	require.NotNil(t, castExpr, "dynamic interval expression should be cast, not folded to a literal")
-	require.NotNil(t, castExpr.Func)
-	require.Equal(t, "cast", castExpr.Func.GetObjName())
-	require.Len(t, castExpr.Args, 2)
-	require.Equal(t, literalFirstDynamicExpr, castExpr.Args[0], "the complete row-dependent expression must be preserved")
+	normalizeExpr := args[1].GetF()
+	require.NotNil(t, normalizeExpr, "dynamic interval expression must not be folded to a literal")
+	require.NotNil(t, normalizeExpr.Func)
+	require.Equal(t, "to_interval_microsecond", normalizeExpr.Func.GetObjName())
+	require.Len(t, normalizeExpr.Args, 2)
+	require.Equal(t, literalFirstDynamicExpr, normalizeExpr.Args[0], "the complete row-dependent expression must be preserved")
+	require.Equal(t, int64(types.Second), extractInt64Value(normalizeExpr.Args[1]))
 
 	intervalType := extractInt64Value(args[2])
-	require.Equal(t, int64(types.Second), intervalType, "non-constant dynamic SECOND interval must not be rewritten to constant MICROSECOND")
+	require.Equal(t, int64(types.MicroSecond), intervalType, "dynamic numeric SECOND interval uses a microsecond result")
+}
+
+func TestCalendarMicrosecondNumericIntervalUsesCheckedNormalizer(t *testing.T) {
+	for _, typ := range []plan.Type{
+		{Id: int32(types.T_float64)},
+		{Id: int32(types.T_decimal128), Width: 38, Scale: 1},
+		{Id: int32(types.T_decimal256), Width: 50, Scale: 20},
+	} {
+		source := &plan.Expr{Typ: typ, Expr: &plan.Expr_Col{Col: &plan.ColRef{ColPos: 0}}}
+		args, err := resetDateFunctionArgs(context.Background(),
+			makeDatetimeConst("2024-01-01 00:00:00"), makeIntervalExpr(source, "MICROSECOND"))
+		require.NoError(t, err)
+		normalizer := args[1].GetF()
+		require.NotNil(t, normalizer)
+		require.Equal(t, "to_interval_microsecond", normalizer.GetFunc().GetObjName())
+		require.Equal(t, typ.Id, normalizer.GetArgs()[0].Typ.Id)
+		require.Equal(t, int64(types.MicroSecond), args[2].GetLit().GetI64Val())
+	}
+}
+
+func TestResetDateFunctionArgsExactDecimalHalfMicrosecond(t *testing.T) {
+	for _, text := range []string{"34410126.8315485", "-34410126.8315485"} {
+		t.Run(text, func(t *testing.T) {
+			for _, width := range []int32{18, 38} {
+				var literal *plan.Expr
+				if width == 18 {
+					value, err := types.ParseDecimal64(text, width, 7)
+					require.NoError(t, err)
+					literal = &plan.Expr{
+						Typ: plan.Type{Id: int32(types.T_decimal64), Width: width, Scale: 7},
+						Expr: &plan.Expr_Lit{Lit: &plan.Literal{Value: &plan.Literal_Decimal64Val{
+							Decimal64Val: &plan.Decimal64{A: int64(value)},
+						}}},
+					}
+				} else {
+					value, err := types.ParseDecimal128(text, width, 7)
+					require.NoError(t, err)
+					literal = &plan.Expr{
+						Typ: plan.Type{Id: int32(types.T_decimal128), Width: width, Scale: 7},
+						Expr: &plan.Expr_Lit{Lit: &plan.Literal{Value: &plan.Literal_Decimal128Val{
+							Decimal128Val: &plan.Decimal128{A: int64(value.B0_63), B: int64(value.B64_127)},
+						}}},
+					}
+				}
+				args, err := resetDateFunctionArgs(context.Background(), makeDatetimeConst("2024-01-01 00:00:00"), makeIntervalExpr(literal, "SECOND"))
+				require.NoError(t, err)
+				want := int64(34410126831549)
+				if text[0] == '-' {
+					want = -want
+				}
+				require.Equal(t, want, extractInt64Value(args[1]), "decimal ties round exactly at binding")
+				require.Equal(t, int64(types.MicroSecond), extractInt64Value(args[2]))
+			}
+		})
+	}
+}
+
+func TestResetDateFunctionArgsDoesNotFoldVarcharColumn(t *testing.T) {
+	ctx := context.Background()
+	dateExpr := makeDatetimeConst("2026-01-01 00:00:00")
+	varcharColumn := makeVarcharColumnExpr(0, 0)
+	require.True(t, varcharColumn.Typ.NotNullable)
+
+	args, err := resetDateFunctionArgs(ctx, dateExpr, makeIntervalExpr(varcharColumn, "SECOND"))
+	require.NoError(t, err)
+	require.Len(t, args, 3)
+	require.Equal(t, dateExpr, args[0])
+
+	normalizeExpr := args[1].GetF()
+	require.NotNil(t, normalizeExpr, "VARCHAR column interval must be normalized at execution time, not folded to a literal")
+	require.NotNil(t, normalizeExpr.Func)
+	require.Equal(t, "to_interval_microsecond", normalizeExpr.Func.GetObjName())
+	require.Len(t, normalizeExpr.Args, 2)
+	require.Equal(t, varcharColumn, normalizeExpr.Args[0])
+	require.Equal(t, int64(types.Second), extractInt64Value(normalizeExpr.Args[1]))
+	require.False(t, args[1].Typ.NotNullable,
+		"to_interval can return NULL for an invalid non-NULL VARCHAR value")
+
+	intervalType := extractInt64Value(args[2])
+	require.Equal(t, int64(types.MicroSecond), intervalType)
+}
+
+func TestResetDateFunctionArgsDoesNotFoldCharColumn(t *testing.T) {
+	ctx := context.Background()
+	dateExpr := makeDatetimeConst("2026-01-01 00:00:00")
+	charColumn := makeVarcharColumnExpr(0, 0)
+	charColumn.Typ.Id = int32(types.T_char)
+
+	args, err := resetDateFunctionArgs(ctx, dateExpr, makeIntervalExpr(charColumn, "YEAR_MONTH"))
+	require.NoError(t, err)
+	require.Len(t, args, 3)
+
+	normalizeExpr := args[1].GetF()
+	require.NotNil(t, normalizeExpr)
+	require.NotNil(t, normalizeExpr.Func)
+	require.Equal(t, "to_interval_microsecond", normalizeExpr.Func.GetObjName())
+	require.Len(t, normalizeExpr.Args, 2)
+	require.Equal(t, charColumn, normalizeExpr.Args[0])
+	require.Equal(t, int64(types.Year_Month), extractInt64Value(normalizeExpr.Args[1]))
+	require.Equal(t, int64(types.Month), extractInt64Value(args[2]))
+}
+
+func TestResetDateFunctionArgsDoesNotFoldTextExpression(t *testing.T) {
+	ctx := context.Background()
+	dateExpr := makeDatetimeConst("2026-01-01 00:00:00")
+	textExpr := makeVarcharColumnExpr(0, 0)
+	textExpr.Typ.Id = int32(types.T_text)
+
+	args, err := resetDateFunctionArgs(ctx, dateExpr, makeIntervalExpr(textExpr, "DAY_SECOND"))
+	require.NoError(t, err)
+	require.Len(t, args, 3)
+	require.Equal(t, "to_interval_microsecond", args[1].GetF().GetFunc().GetObjName())
+	require.Equal(t, textExpr, args[1].GetF().GetArgs()[0])
+	require.Equal(t, int64(types.Day_Second), extractInt64Value(args[1].GetF().GetArgs()[1]))
+	require.Equal(t, int64(types.MicroSecond), extractInt64Value(args[2]))
 }

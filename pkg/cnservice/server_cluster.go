@@ -101,13 +101,20 @@ func (s *service) waitForClusterSelfReadyWithContext(
 
 func (s *service) clusterSnapshotContainsSelf(ctx context.Context) (bool, error) {
 	found := false
-	err := clusterservice.GetCNServiceWithoutWorkingStateWithContext(
+	requireGeneration := false
+	if reader, ok := s.moCluster.(clusterservice.ViewMetadataAdmissionReader); ok {
+		admission := reader.GetViewMetadataAdmission()
+		requireGeneration = admission.Preparing || admission.Enabled
+	}
+	err := clusterservice.GetCNServiceRawWithContext(
 		ctx,
 		s.moCluster,
 		clusterservice.NewServiceIDSelector(s.cfg.UUID),
 		func(cn metadata.CNService) bool {
 			found = cn.PipelineServiceAddress == s.pipelineServiceServiceAddr() &&
-				cn.CommitID == version.CommitID
+				cn.CommitID == version.CommitID &&
+				(!requireGeneration || s.viewMetadataAdmissionGeneration == 0 ||
+					cn.ViewMetadataAdmissionGeneration == s.viewMetadataAdmissionGeneration)
 			return false
 		})
 	return found, err

@@ -86,6 +86,7 @@ func (exec *maxByExec) BulkFill(groupIndex int, vectors []*vector.Vector) error 
 }
 
 func (exec *maxByExec) BatchFill(offset int, groups []uint64, vectors []*vector.Vector) error {
+	defer exec.finalizeStringSourcePreflights(groups)
 	if len(vectors) != 3 {
 		return moerr.NewInternalErrorNoCtx("max_by requires three input vectors")
 	}
@@ -122,9 +123,8 @@ func (exec *maxByExec) fillRow(
 		candidateWins(vectors, rows, state.vecs, int(y), exec.argTypes) {
 		return exec.copyWinner(x, state.vecs, int(y), vectors, rows)
 	}
-	if candidateEquals(vectors, rows, state.vecs, int(y), exec.argTypes) &&
-		vectors[0].GetBinaryStringMetadataAt(rows[0]) {
-		return state.vecs[0].SetIsBinaryStringAt(int(y), true, exec.mp)
+	if candidateEquals(vectors, rows, state.vecs, int(y), exec.argTypes) {
+		return mergeEqualRuntimeStringDomain(state.vecs[0], int(y), vectors[0], rows[0], exec.mp)
 	}
 	return nil
 }
@@ -137,6 +137,7 @@ func (exec *maxByExec) Merge(next AggFuncExec, groupIdx1, groupIdx2 int) error {
 }
 
 func (exec *maxByExec) BatchMerge(next AggFuncExec, offset int, groups []uint64) error {
+	defer exec.finalizeStringSourcePreflights(groups)
 	other, ok := next.(*maxByExec)
 	if !ok || other.nonNullValue != exec.nonNullValue || !slices.Equal(other.argTypes, exec.argTypes) {
 		return moerr.NewInternalErrorNoCtx("cannot merge incompatible max_by states")
@@ -157,9 +158,8 @@ func (exec *maxByExec) BatchMerge(next AggFuncExec, offset int, groups []uint64)
 			if err := exec.copyWinner(x1, current, int(y1), candidate, rows); err != nil {
 				return err
 			}
-		} else if candidateEquals(candidate, rows, current, int(y1), exec.argTypes) &&
-			candidate[0].GetBinaryStringMetadataAt(rows[0]) {
-			if err := current[0].SetIsBinaryStringAt(int(y1), true, exec.mp); err != nil {
+		} else if candidateEquals(candidate, rows, current, int(y1), exec.argTypes) {
+			if err := mergeEqualRuntimeStringDomain(current[0], int(y1), candidate[0], rows[0], exec.mp); err != nil {
 				return err
 			}
 		}
@@ -313,6 +313,10 @@ func (exec *maxByExec) copyWinner(
 			return err
 		}
 	}
+	valueSource := src[0].GetStringSourceAt(srcRows[0])
+	if err := dst[0].PreflightSetStringSourceAt(dstRow, valueSource, exec.mp); err != nil {
+		return err
+	}
 	if !src[0].IsNull(uint64(srcRows[0])) {
 		if err := dst[0].PreflightSetPrepareParamKindAt(
 			dstRow,
@@ -326,6 +330,9 @@ func (exec *maxByExec) copyWinner(
 		if src[i].IsNull(uint64(srcRows[i])) {
 			if i == 0 {
 				dst[i].SetNullPreservingPrepareParamCapacity(uint64(dstRow))
+				if err := dst[i].SetStringSourceAtWithMP(dstRow, valueSource, exec.mp); err != nil {
+					return err
+				}
 			} else {
 				dst[i].SetNull(uint64(dstRow))
 			}

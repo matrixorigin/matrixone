@@ -24,7 +24,8 @@ select
 from generate_series(1, 50) g;
 
 select mo_ctl('dn', 'flush', 'regular_index_order_limit_cursor.t');
-select Sleep(1);
+-- @wait_expect(1, 10)
+select table_name, table_cnt from table_stats('regular_index_order_limit_cursor.t') g;
 
 select id
 from t

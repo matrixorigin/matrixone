@@ -22,10 +22,12 @@ package cuvs
 */
 import "C"
 import (
-	"github.com/matrixorigin/matrixone/pkg/common/moerr"
 	"runtime"
+	"strings"
 	"sync"
 	"unsafe"
+
+	"github.com/matrixorigin/matrixone/pkg/common/moerr"
 )
 
 // DistanceType maps to C.distance_type_t
@@ -277,6 +279,222 @@ func GetGpuDeviceList() ([]int, error) {
 	}
 	runtime.KeepAlive(cDevices)
 	return devices, nil
+}
+
+// IndexBudgetPercent reports an algorithm's VRAM budget fraction, read from its
+// cost class rather than duplicated here, so a CREATE-time gate cannot admit
+// against a different fraction than the build was sized and claimed with.
+//
+// indexType is the name IndexConfig.Type already carries (vectorindex.IVFPQ,
+// vectorindex.CAGRA, ...); unknown names take the default.
+func IndexBudgetPercent(indexType string) uint64 {
+	cs := C.CString(indexType)
+	defer C.free(unsafe.Pointer(cs))
+	return uint64(C.gpu_index_budget_percent(cs))
+}
+
+// BudgetFor pairs an algorithm's two admission bounds, both derived from ONE
+// IndexBudgetPercent call.
+//
+// This is the only supported way to obtain them. The permanent CREATE gate and the
+// situational load gate ask the same question of different pools, and while each
+// caller picked its own fraction they picked differently -- the load pre-flight
+// stayed on the 75% default while IVF-PQ's own claim used 65%, so an index sized
+// between the two passed the pre-flight and then threw on the first deserialize,
+// with the whole artifact already downloaded. One lookup feeding both closures
+// makes that mismatch unrepresentable.
+//
+// indexType is the name IndexConfig.Type already carries (vectorindex.IVFPQ, ...).
+func BudgetFor(indexType string) DeviceBudget {
+	return DeviceBudget{pct: IndexBudgetPercent(indexType)}
+}
+
+// DeviceBudget carries ONE budget fraction and derives both admission bounds from
+// it. It satisfies memory.DeviceBudget structurally, which is why this package
+// does not import that one -- an explicit dependency here would be an import cycle
+// in memory's own GPU test.
+//
+// The fraction is unexported on purpose: the only way to obtain a DeviceBudget is
+// BudgetFor, so the two bounds cannot be built from different fractions.
+type DeviceBudget struct{ pct uint64 }
+
+// MaxAdmissible: the fraction of TOTAL VRAM -- the permanent ceiling.
+func (b DeviceBudget) MaxAdmissible(dev int) (uint64, error) {
+	return DeviceMaxAdmissible(dev, b.pct)
+}
+
+// RowsFitting: the fraction of FREE VRAM -- the situational ceiling.
+func (b DeviceBudget) RowsFitting(dev int, perRowBytes uint64) (int64, uint64, error) {
+	return rowsFittingFreeMem(dev, perRowBytes, b.pct)
+}
+
+// DeviceMaxAdmissible reports the most VRAM any admission could EVER grant on a
+// device: the governor's budget fraction of TOTAL memory.
+//
+// The load gate admits against that fraction of FREE memory, and free is at most
+// total, so an index needing more than this can never be loaded however empty the
+// card becomes. That makes it the exact threshold for refusing a build outright --
+// tighter than total (which would let through indexes that always fail at query
+// time) and not situational like a free-memory check.
+//
+// Derived in C++ from the same constants the admission path uses, so the two
+// cannot drift.
+// budgetPercent is the algorithm's own fraction (index_cost_base::budget_percent);
+// 0 uses the governor default. Passing the index's own value keeps this gate on
+// the same fraction the build was sized and admitted against.
+func DeviceMaxAdmissible(deviceID int, budgetPercent uint64) (uint64, error) {
+	var errmsg *C.char
+	var maxAdm C.uint64_t
+	rc := C.gpu_device_total_mem(C.int(deviceID), nil, &maxAdm, C.uint64_t(budgetPercent), unsafe.Pointer(&errmsg))
+	if errmsg != nil {
+		errStr := C.GoString(errmsg)
+		C.free(unsafe.Pointer(errmsg))
+		return 0, moerr.NewInternalErrorNoCtx(errStr)
+	}
+	if rc != 0 {
+		return 0, moerr.NewInternalErrorNoCtxf("cuvs: cannot read admissible VRAM of device %d", deviceID)
+	}
+	return uint64(maxAdm), nil
+}
+
+// hostResidentComponents are the packed components that live in HOST memory when
+// an index loads, not on the device: host_ids, the INCLUDE-column filter store,
+// the scalar-quantizer min/max, the deleted bitset, and the manifest itself.
+// Everything else -- index.bin, shard_N.bin -- is deserialized onto the GPU.
+//
+// Anything NOT listed counts as device-resident. That default is deliberate: a
+// component added later and not classified will over-state device demand, which
+// over-refuses, rather than under-state it and let a build through that cannot
+// be loaded.
+//
+// The list is READ from the C++ that owns it (helper.cpp,
+// kHostResidentComponents) rather than restated here, because the same list
+// decides both governors -- the host claim in load_dir sums the host-resident
+// files, and the device gates sum everything else by exclusion. With a copy on
+// each side, a new component was charged twice or not at all depending on which
+// copy someone remembered to update.
+//
+// Read once behind a sync.Once: the classification is asked per file per
+// sub-index, which is far too hot for a cgo call each time.
+var (
+	hostResidentOnce sync.Once
+	hostResidentSet  map[string]bool
+)
+
+func hostResidentComponents() map[string]bool {
+	hostResidentOnce.Do(func() {
+		// Static storage owned by the library: not ours to free.
+		raw := C.GoString(C.gpu_host_resident_components())
+		hostResidentSet = make(map[string]bool)
+		for _, n := range strings.Split(raw, ",") {
+			if n = strings.TrimSpace(n); n != "" {
+				hostResidentSet[n] = true
+			}
+		}
+	})
+	return hostResidentSet
+}
+
+// IsHostResidentComponent reports whether a packed component stays in host
+// memory rather than being deserialized onto the GPU.
+func IsHostResidentComponent(name string) bool { return hostResidentComponents()[name] }
+
+// QuantizerStagingRows reports how many rows the int8/uint8 quantizer will stage
+// on deviceID -- matrixone::quantizer_staging_rows, i.e. the train limit after
+// the hard ceiling and the device budget, but BEFORE any per-sub-index clamp.
+//
+// That is the figure the host solver needs: it must know where the arena stops
+// growing with capacity, and the per-sub-index clamp is the very thing capacity
+// is being solved for.
+func QuantizerStagingRows(deviceID int, perTrainRow, trainLimit uint64, indexType string) (uint64, error) {
+	if perTrainRow == 0 {
+		return 0, nil
+	}
+	var errmsg *C.char
+	n := C.gpu_quantizer_staging_rows(
+		C.int(deviceID), C.uint64_t(perTrainRow), C.uint64_t(trainLimit),
+		C.uint64_t(IndexBudgetPercent(indexType)), unsafe.Pointer(&errmsg))
+	if errmsg != nil {
+		errStr := C.GoString(errmsg)
+		C.free(unsafe.Pointer(errmsg))
+		return 0, moerr.NewInternalErrorNoCtx(errStr)
+	}
+	return uint64(n), nil
+}
+
+// MaxQuantizerTrainLimit is the hard ceiling on quantizer_train_limit, read from
+// the C++ that enforces it (helper.h, kMaxQuantizerTrainLimit) rather than
+// restated here.
+//
+// The native sample resolution clamps to this silently, which is the right
+// backstop but the wrong answer for DDL: a CREATE INDEX that asks for more
+// should be told, not quietly given less. The create paths reject against this.
+func MaxQuantizerTrainLimit() uint64 {
+	return uint64(C.gpu_max_quantizer_train_limit())
+}
+
+// DeviceTotalMem reports a device's TOTAL VRAM in bytes -- the hardware capacity,
+// not what is currently free.
+//
+// Admission normally works off free memory, but "can this index EVER be searched
+// on this GPU" is a different question with a stable answer: if its resident
+// footprint exceeds the card itself, no amount of eviction helps. That makes
+// total the right basis for refusing a build outright, where using free would
+// refuse builds that merely collided with whatever else was resident at the time.
+func DeviceTotalMem(deviceID int) (uint64, error) {
+	var errmsg *C.char
+	var total C.uint64_t
+	rc := C.gpu_device_total_mem(C.int(deviceID), &total, nil, 0, unsafe.Pointer(&errmsg))
+	if errmsg != nil {
+		errStr := C.GoString(errmsg)
+		C.free(unsafe.Pointer(errmsg))
+		return 0, moerr.NewInternalErrorNoCtx(errStr)
+	}
+	if rc != 0 {
+		return 0, moerr.NewInternalErrorNoCtxf("cuvs: cannot read total VRAM of device %d", deviceID)
+	}
+	return uint64(total), nil
+}
+
+// RowsFittingFreeMem reports how many rows of perRowBytes fit in ~60% of the free VRAM on
+// deviceID, together with the free-byte reading used. It shares one implementation with the
+// quantizer's staging bound (matrixone::rows_fitting_gpu_mem in cgo/cuvs/helper.h), so a
+// build sized by this cannot disagree with a quantizer sized by that.
+//
+// It ERRORS rather than guessing when cudaMemGetInfo fails. A caller that cannot measure the
+// device cannot size an upload for it, and the historical fallback -- assume the whole table
+// fits -- is exactly the out-of-memory this is meant to prevent.
+//
+// Sample this BEFORE constructing any index: the RMM pool that worker->start() creates counts
+// as used memory, so a later reading understates what is actually available for the build.
+func RowsFittingFreeMem(deviceID int, perRowBytes uint64) (rows int64, freeBytes uint64, err error) {
+	return rowsFittingFreeMem(deviceID, perRowBytes, 0)
+}
+
+func rowsFittingFreeMem(deviceID int, perRowBytes uint64, budgetPercent uint64) (rows int64, freeBytes uint64, err error) {
+	if perRowBytes == 0 {
+		return 0, 0, moerr.NewInternalErrorNoCtx("RowsFittingFreeMem: per-row size is 0")
+	}
+	var errmsg *C.char
+	var cRows C.int64_t
+	var cFree C.uint64_t
+	rc := C.gpu_rows_fitting_free_mem(
+		C.int(deviceID),
+		C.uint64_t(perRowBytes),
+		&cRows,
+		&cFree,
+		C.uint64_t(budgetPercent),
+		unsafe.Pointer(&errmsg),
+	)
+	if errmsg != nil {
+		errStr := C.GoString(errmsg)
+		C.free(unsafe.Pointer(errmsg))
+		return 0, 0, moerr.NewInternalErrorNoCtx(errStr)
+	}
+	if rc != 0 {
+		return 0, 0, moerr.NewInternalErrorNoCtx("RowsFittingFreeMem: failed to query GPU memory")
+	}
+	return int64(cRows), uint64(cFree), nil
 }
 
 // GpuAllocPinned allocates pinned (non-pageable) host memory.

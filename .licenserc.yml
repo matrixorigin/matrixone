@@ -15,6 +15,7 @@ header:
     - 'optools/'
     - 'cgo/external/'
     - 'thirdparties/'
+    - '.sca-go-module-cache/'
     - 'pkg/frontend/test/'
     - 'pkg/vm/engine/tae/mergesort/sort.go'
     - 'pkg/vm/engine/tae/mergesort/heap.go'

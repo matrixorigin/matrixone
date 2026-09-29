@@ -28,7 +28,7 @@ insert into t values
 (232,'g02',10,34,'active',23,'2024-05-09 16:00:00');
 
 select mo_ctl('dn', 'flush', 'mysql_compat_index_hint.t');
-select Sleep(1);
+analyze table t(a,b,c,status,dt);
 
 -- @separator:table
 -- @regex("Index Table Scan.*idx_b_a_id",true)
@@ -244,7 +244,7 @@ insert into owner_tasks values
 (2,2,1,'done',60,'drop',60);
 
 select mo_ctl('dn', 'flush', 'mysql_compat_index_hint.owner_tasks');
-select Sleep(1);
+analyze table owner_tasks(status,policy,score,due);
 
 select count(*) from owner_tasks where status = 'active';
 -- @separator:table

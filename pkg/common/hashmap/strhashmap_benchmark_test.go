@@ -96,3 +96,52 @@ func BenchmarkStrHashIteratorReuseFind(b *testing.B) {
 		})
 	}
 }
+
+func BenchmarkNullableStrHashEncodeFlatFixed(b *testing.B) {
+	for _, test := range []struct {
+		name           string
+		nullOutsideRun bool
+	}{
+		{name: "flat"},
+		{name: "bitmap-slow-path", nullOutsideRun: true},
+	} {
+		b.Run(test.name, func(b *testing.B) {
+			mp := mpool.MustNewZero()
+			hashMap, err := NewStrHashMap(true, mp)
+			if err != nil {
+				b.Fatal(err)
+			}
+			defer hashMap.Free()
+
+			vecs := make([]*vector.Vector, 7)
+			for column := range vecs {
+				vecs[column] = vector.NewVec(types.T_int32.ToType())
+				values := make([]int32, UnitLimit+1)
+				for row := range values {
+					values[row] = int32(column*(UnitLimit+1) + row)
+				}
+				if err := vector.AppendFixedList(vecs[column], values, nil, mp); err != nil {
+					b.Fatal(err)
+				}
+				if test.nullOutsideRun {
+					vecs[column].GetNulls().Add(UnitLimit)
+				}
+				defer vecs[column].Free(mp)
+			}
+			itr := hashMap.NewIterator().(*strHashmapIterator)
+			if err := itr.prepareHashKeys(vecs, 0, UnitLimit); err != nil {
+				b.Fatal(err)
+			}
+
+			b.ReportAllocs()
+			b.SetBytes(int64(len(vecs) * UnitLimit * 4))
+			b.ResetTimer()
+			for i := 0; i < b.N; i++ {
+				if err := itr.prepareHashKeys(vecs, 0, UnitLimit); err != nil {
+					b.Fatal(err)
+				}
+				itr.encodeHashKeys(vecs, 0, UnitLimit)
+			}
+		})
+	}
+}

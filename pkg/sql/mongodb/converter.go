@@ -16,6 +16,7 @@ package mongodb
 
 import (
 	"context"
+	"encoding/json"
 	"errors"
 	"math"
 	"strconv"
@@ -75,6 +76,18 @@ func NewConverter(ctx context.Context, columns []ColumnMapping, maxValueBytes in
 			return nil, moerr.NewNotSupportedf(ctx, "MongoDB mapping target type %s", types.T(columns[i].TypeID).String())
 		}
 	}
+	return newConverter(columns, maxValueBytes), nil
+}
+
+// NewRowCountConverter creates the zero-vector converter used when a scan only
+// needs one MO row per returned MongoDB document, such as COUNT(*) or an
+// explicit __mo_query projection. The operator admits this path only after the
+// complete mapping identity/version has been revalidated.
+func NewRowCountConverter(maxValueBytes int64) *Converter {
+	return newConverter(nil, maxValueBytes)
+}
+
+func newConverter(columns []ColumnMapping, maxValueBytes int64) *Converter {
 	if maxValueBytes <= 0 {
 		maxValueBytes = DefaultRuntimeConfig().MaxValueBytes
 	}
@@ -83,7 +96,7 @@ func NewConverter(ctx context.Context, columns []ColumnMapping, maxValueBytes in
 		columns: columns, maxValueBytes: maxValueBytes,
 		maxConversionErrors:    defaults.MaxConversionErrors,
 		maxConversionErrorRate: defaults.MaxConversionErrorRate,
-	}, nil
+	}
 }
 
 // SetConversionErrorLimits configures statement-local try_null protection.
@@ -180,23 +193,23 @@ func (c *Converter) AppendDocumentWithBudget(
 			appendErr = c.appendValue(bat.Vecs[i], value, column, mp, &budget)
 		}
 		if err := appendErr; err != nil {
-			if errors.Is(err, errConversion) && column.Conversion == ConversionTryNull {
-				c.conversionErrors++
-				metric.MongoDBConversionErrorCounter.Inc()
-				if column.NotNullable {
-					return mongoDBNotNullError(ctx, column)
-				}
-				if c.conversionErrors > c.maxConversionErrors ||
-					c.conversionAttempts >= conversionErrorRateMinAttempts &&
-						float64(c.conversionErrors)/float64(c.conversionAttempts) > c.maxConversionErrorRate {
-					return moerr.NewInvalidInput(ctx, "MongoDB try_null conversion error limit exceeded")
-				}
-				if appendErr := vector.AppendNull(bat.Vecs[i], mp); appendErr != nil {
-					return appendErr
-				}
-				continue
-			}
 			if errors.Is(err, errConversion) {
+				metric.MongoDBConversionErrorCounter.Inc()
+				if column.Conversion == ConversionTryNull {
+					c.conversionErrors++
+					if column.NotNullable {
+						return mongoDBNotNullError(ctx, column)
+					}
+					if c.conversionErrors > c.maxConversionErrors ||
+						c.conversionAttempts >= conversionErrorRateMinAttempts &&
+							float64(c.conversionErrors)/float64(c.conversionAttempts) > c.maxConversionErrorRate {
+						return moerr.NewInvalidInput(ctx, "MongoDB try_null conversion error limit exceeded")
+					}
+					if appendErr := vector.AppendNull(bat.Vecs[i], mp); appendErr != nil {
+						return appendErr
+					}
+					continue
+				}
 				return moerr.NewInvalidInputf(ctx, "MongoDB value at path %s cannot be converted to %s", column.Path, types.T(column.TypeID).String())
 			}
 			return err
@@ -394,16 +407,20 @@ func (c *Converter) appendValue(
 		} else {
 			return errConversion
 		}
+		if target == types.T_binary {
+			return c.appendBinary(vec, data, column.Width, mp, budget)
+		}
 		return c.appendBytes(vec, data, column.Width, mp, budget)
 	case types.T_json:
-		// Canonical Extended JSON preserves BSON distinctions such as int32 vs
-		// int64, Decimal128, Date and Binary instead of silently relaxing them
-		// into a lossy generic JSON number/string representation.
-		text := value.String()
-		if text == "" {
+		// Relaxed Extended JSON maps BSON values that have a native JSON
+		// representation (including int32, int64 and finite double values) to
+		// ordinary JSON values. BSON-only values retain their Extended JSON
+		// wrappers so the result is still valid, lossless JSON.
+		text, err := relaxedExtJSONValue(value)
+		if err != nil {
 			return errConversion
 		}
-		jsonValue, err := types.ParseStringToByteJson(text)
+		jsonValue, err := types.ParseSliceToByteJson(text)
 		if err != nil {
 			return errConversion
 		}
@@ -415,6 +432,52 @@ func (c *Converter) appendValue(
 	default:
 		return errConversion
 	}
+}
+
+// MarshalExtJSON requires a document at the top level. Wrap a raw BSON value
+// in a temporary document, marshal it in relaxed mode, then unwrap the JSON
+// value without decoding its number tokens through float64.
+func relaxedExtJSONValue(value bson.RawValue) ([]byte, error) {
+	const field = "value"
+	doc := bsoncore.BuildDocument(nil, bsoncore.AppendValueElement(nil, field, bsoncore.Value{
+		Type: bsoncore.Type(value.Type),
+		Data: value.Value,
+	}))
+	text, err := bson.MarshalExtJSON(bson.Raw(doc), false, false)
+	if err != nil {
+		return nil, err
+	}
+	var wrapper struct {
+		Value json.RawMessage `json:"value"`
+	}
+	if err := json.Unmarshal(text, &wrapper); err != nil || len(wrapper.Value) == 0 {
+		return nil, errConversion
+	}
+	return wrapper.Value, nil
+}
+
+func (c *Converter) appendBinary(
+	vec *vector.Vector,
+	value []byte,
+	width int32,
+	mp *mpool.MPool,
+	budget *decodedBatchBudget,
+) error {
+	if width <= 0 {
+		return c.appendBytes(vec, value, width, mp, budget)
+	}
+	if int32(len(value)) > width || int64(width) > c.maxValueBytes {
+		return errConversion
+	}
+	if err := budget.reserve(int64(width)); err != nil {
+		return err
+	}
+	if int32(len(value)) == width {
+		return vector.AppendBytes(vec, value, false, mp)
+	}
+	padded := make([]byte, width)
+	copy(padded, value)
+	return vector.AppendBytes(vec, padded, false, mp)
 }
 
 func (c *Converter) appendBytes(

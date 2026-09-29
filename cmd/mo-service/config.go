@@ -132,10 +132,11 @@ type Config struct {
 	Clock struct {
 		// Backend clock backend implementation. [LOCAL|HLC], default LOCAL.
 		Backend string `toml:"source"`
-		// MaxClockOffset max clock offset between two nodes. Default is 500ms.
-		// Only valid when enable-check-clock-offset is true
+		// MaxClockOffset is the maximum clock offset between two nodes and is
+		// part of the timestamp-ordering correctness contract. Default is 500ms.
 		MaxClockOffset tomlutil.Duration `toml:"max-clock-offset"`
-		// EnableCheckMaxClockOffset enable local clock offset checker
+		// EnableCheckMaxClockOffset enables the local clock-jump monitor. It does
+		// not disable the MaxClockOffset uncertainty bound when false.
 		EnableCheckMaxClockOffset bool `toml:"enable-check-clock-offset"`
 	}
 
@@ -176,7 +177,8 @@ func NewConfig() *Config {
 		CN: cnservice.Config{
 			AutomaticUpgrade: true,
 			Frontend: config.FrontendParameters{
-				MongoDB: *config.NewMongoDBParameters(),
+				MongoDB:   *config.NewMongoDBParameters(),
+				ArrowLoad: *config.NewArrowLoadParameters(),
 			},
 		},
 	}
@@ -221,16 +223,18 @@ func (c *Config) validate() error {
 	if c.Clock.MaxClockOffset.Duration == 0 {
 		c.Clock.MaxClockOffset.Duration = defaultMaxClockOffset
 	}
+	if c.Clock.MaxClockOffset.Duration < 0 {
+		return moerr.NewBadConfigNoCtx("max-clock-offset must be positive")
+	}
 	if c.Clock.Backend == "" {
 		c.Clock.Backend = localClockBackend
 	}
 	if _, ok := supportTxnClockBackends[strings.ToUpper(c.Clock.Backend)]; !ok {
 		return moerr.NewInternalErrorf(context.Background(), "%s clock backend not support", c.Clock.Backend)
 	}
-	if !c.Clock.EnableCheckMaxClockOffset {
-		c.Clock.MaxClockOffset.Duration = 0
+	if err := c.validateAuthenticationClockBudget(); err != nil {
+		return err
 	}
-
 	// file service
 	c.setFileserviceDefaultValues()
 
@@ -257,16 +261,15 @@ func (c *Config) setDefaultValue() error {
 	if c.Clock.MaxClockOffset.Duration == 0 {
 		c.Clock.MaxClockOffset.Duration = defaultMaxClockOffset
 	}
+	if c.Clock.MaxClockOffset.Duration < 0 {
+		return moerr.NewBadConfigNoCtx("max-clock-offset must be positive")
+	}
 	if c.Clock.Backend == "" {
 		c.Clock.Backend = localClockBackend
 	}
 	if _, ok := supportTxnClockBackends[strings.ToUpper(c.Clock.Backend)]; !ok {
 		return moerr.NewInternalErrorf(context.Background(), "%s clock backend not support", c.Clock.Backend)
 	}
-	if !c.Clock.EnableCheckMaxClockOffset {
-		c.Clock.MaxClockOffset.Duration = 0
-	}
-
 	// file service
 	c.setFileserviceDefaultValues()
 
@@ -295,6 +298,9 @@ func (c *Config) setDefaultValue() error {
 
 	// cn
 	c.CN.SetDefaultValue()
+	if err := c.validateAuthenticationClockBudget(); err != nil {
+		return err
+	}
 
 	//no default proxy config
 
@@ -304,6 +310,23 @@ func (c *Config) setDefaultValue() error {
 	c.initMetaCache()
 
 	return nil
+}
+
+func (c *Config) validateAuthenticationClockBudget() error {
+	if !strings.EqualFold(c.ServiceType, metadata.ServiceType_CN.String()) {
+		return nil
+	}
+	c.CN.Frontend.SetDefaultValues()
+	// skipCheckUser bypasses catalog authentication, so no authentication
+	// freshness fence can consume the connection deadline. General clock
+	// validation above remains mandatory for every service mode.
+	if c.CN.Frontend.SkipCheckUser {
+		return nil
+	}
+	return config.ValidateAuthenticationFreshnessBudget(
+		c.Clock.MaxClockOffset.Duration,
+		c.CN.Frontend.ConnectTimeout.Duration,
+	)
 }
 
 func (c *Config) initMetaCache() {
@@ -316,10 +339,30 @@ func (c *Config) defaultFileServiceDataDir(name string) string {
 	return filepath.Join(c.DataDir, strings.ToLower(name))
 }
 
+type fileServiceCreator func(
+	context.Context,
+	fileservice.Config,
+	[]*perfcounter.CounterSet,
+) (fileservice.FileService, error)
+
 func (c *Config) createFileService(
 	ctx context.Context,
 	serviceType metadata.ServiceType,
 	nodeUUID string,
+) (*fileservice.FileServices, error) {
+	return c.createFileServiceWithCreator(
+		ctx,
+		serviceType,
+		nodeUUID,
+		fileservice.NewFileService,
+	)
+}
+
+func (c *Config) createFileServiceWithCreator(
+	ctx context.Context,
+	serviceType metadata.ServiceType,
+	nodeUUID string,
+	creator fileServiceCreator,
 ) (*fileservice.FileServices, error) {
 
 	// set distributed cache callbacks
@@ -328,11 +371,26 @@ func (c *Config) createFileService(
 	}
 
 	services := make([]fileservice.FileService, 0, len(c.FileServices))
+	counterSets := make([]*perfcounter.CounterSet, 0, len(c.FileServices))
+	counterSetNames := make([]string, 0, len(c.FileServices)*2)
+	completed := false
+	defer func() {
+		if completed {
+			return
+		}
+		for _, service := range services {
+			service.Close(context.Background())
+		}
+		for _, name := range counterSetNames {
+			perfcounter.Named.Delete(name)
+		}
+	}()
+
 	metricScope := fileservice.ServiceMetricScope(serviceType.String(), nodeUUID)
 	for _, config := range c.FileServices {
 		config.Cache.MetricScope = metricScope
 		counterSet := new(perfcounter.CounterSet)
-		service, err := fileservice.NewFileService(
+		service, err := creator(
 			ctx,
 			config,
 			[]*perfcounter.CounterSet{
@@ -343,22 +401,7 @@ func (c *Config) createFileService(
 			return nil, err
 		}
 		services = append(services, service)
-
-		// perf counter
-		counterSetName := perfcounter.NameForFileService(
-			serviceType.String(),
-			nodeUUID,
-			service.Name(),
-		)
-		perfcounter.Named.Store(counterSetName, counterSet)
-
-		// set shared fs perf counter as node perf counter
-		if service.Name() == defines.SharedFileServiceName {
-			perfcounter.Named.Store(
-				perfcounter.NameForNode(serviceType.String(), nodeUUID),
-				counterSet,
-			)
-		}
+		counterSets = append(counterSets, counterSet)
 	}
 
 	// create FileServices
@@ -396,6 +439,24 @@ func (c *Config) createFileService(
 		return nil, err
 	}
 
+	for i, service := range services {
+		counterSet := counterSets[i]
+		counterSetName := perfcounter.NameForFileService(
+			serviceType.String(),
+			nodeUUID,
+			service.Name(),
+		)
+		perfcounter.Named.Store(counterSetName, counterSet)
+		counterSetNames = append(counterSetNames, counterSetName)
+
+		if service.Name() == defines.SharedFileServiceName {
+			nodeCounterSetName := perfcounter.NameForNode(serviceType.String(), nodeUUID)
+			perfcounter.Named.Store(nodeCounterSetName, counterSet)
+			counterSetNames = append(counterSetNames, nodeCounterSetName)
+		}
+	}
+
+	completed = true
 	return fs, nil
 }
 

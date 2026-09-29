@@ -20,8 +20,10 @@ import (
 	"errors"
 	"time"
 
+	"github.com/google/uuid"
+
+	"github.com/matrixorigin/matrixone/pkg/catalog"
 	"github.com/matrixorigin/matrixone/pkg/common/buffer"
-	"github.com/matrixorigin/matrixone/pkg/common/moerr"
 	"github.com/matrixorigin/matrixone/pkg/common/mpool"
 	"github.com/matrixorigin/matrixone/pkg/common/runtime"
 	commonutil "github.com/matrixorigin/matrixone/pkg/common/util"
@@ -31,6 +33,7 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/lockservice"
 	"github.com/matrixorigin/matrixone/pkg/logservice"
 	"github.com/matrixorigin/matrixone/pkg/logutil"
+	planpb "github.com/matrixorigin/matrixone/pkg/pb/plan"
 	"github.com/matrixorigin/matrixone/pkg/perfcounter"
 	qclient "github.com/matrixorigin/matrixone/pkg/queryservice/client"
 	"github.com/matrixorigin/matrixone/pkg/sql/parsers"
@@ -62,6 +65,23 @@ type sqlExecutor struct {
 	taskservice taskservice.TaskService
 }
 
+func markMoColumnsUpdatePlan(pn *planpb.Plan) {
+	query := pn.GetQuery()
+	if query == nil {
+		return
+	}
+	for _, node := range query.Nodes {
+		if node == nil {
+			continue
+		}
+		for _, updateCtx := range node.UpdateCtxList {
+			if updateCtx.TableDef != nil && updateCtx.TableDef.TblId == catalog.MO_COLUMNS_ID {
+				updateCtx.TableDef.Name = catalog.MO_COLUMNS_UPDATE
+			}
+		}
+	}
+}
+
 func ensureExecutorContext(ctx context.Context) context.Context {
 	if ctx == nil {
 		return context.Background()
@@ -73,6 +93,13 @@ func newInternalStatementContext(parent context.Context) context.Context {
 	return statistic.ContextWithStatsInfo(
 		ensureExecutorContext(parent),
 		statistic.NewStatsInfo())
+}
+
+func markInternalJSONMergeWarningContext(ctx context.Context) context.Context {
+	return plan.WithJSONMergeWarningOrigin(
+		ctx,
+		plan.JSONMergeWarningInternalReprepare,
+	)
 }
 
 // NewSQLExecutor returns a internal used sql service. It can execute sql in current CN.
@@ -271,6 +298,32 @@ type txnExecutor struct {
 	database string
 }
 
+func (exec *txnExecutor) newCompile(
+	proc *process.Process,
+	stmt tree.Statement,
+	sql string,
+	receiveAt time.Time,
+) *Compile {
+	c := NewCompile(
+		exec.s.addr,
+		exec.getDatabase(),
+		sql,
+		"",
+		"",
+		exec.s.eng,
+		proc,
+		stmt,
+		false,
+		nil,
+		receiveAt,
+	)
+	// Every statement compiled here belongs to the txnExecutor's transaction.
+	// Borrowing the frontend session must not turn constituent temporary DDL
+	// (for example ALTER COPY CREATE/DROP) into an independent session txn.
+	c.temporaryDDLInExecutorTxn = true
+	return c
+}
+
 func newTxnExecutor(
 	ctx context.Context,
 	s *sqlExecutor,
@@ -299,7 +352,8 @@ func (exec *txnExecutor) Exec(
 	statementOption executor.StatementOption,
 ) (executor.Result, error) {
 	parentCtx := exec.ctx
-	exec.ctx = newInternalStatementContext(parentCtx)
+	exec.ctx = markInternalJSONMergeWarningContext(
+		newInternalStatementContext(parentCtx))
 	defer func() {
 		// The fresh StatsInfo is statement-owned. Do not retain it in a
 		// long-lived transaction executor or build an unbounded context chain.
@@ -337,10 +391,21 @@ func (exec *txnExecutor) Exec(
 			defines.AlterCopyOpt{}, v)
 	}
 
+	if h := statementOption.OptimizerHints(); h != "" {
+		exec.ctx = context.WithValue(exec.ctx,
+			defines.OptimizerHints{}, h)
+	}
+
 	if logicalId := statementOption.KeepLogicalId(); logicalId != 0 {
 		exec.ctx = context.WithValue(exec.ctx,
 			defines.LogicalIdKey{},
 			logicalId)
+	}
+
+	if kind, ok := statementOption.KeepRelKind(); ok {
+		exec.ctx = context.WithValue(exec.ctx,
+			defines.RelKindKey{},
+			kind)
 	}
 
 	// Keep historical behavior for internal SQL: bypass frontend privilege checks.
@@ -393,9 +458,18 @@ func (exec *txnExecutor) Exec(
 		nil,
 		exec.s.taskservice,
 	)
+	// Internal DML (including CTAS population) needs the same expression error
+	// policy as frontend DML, before planning can fold any constants.
+	initInternalStatementProfile(proc, stmts[0])
 	// Attach original frontend session to support session-scoped metadata
 	// (e.g. temporary-table alias mapping) in internal SQL compilation.
 	proc.Session = getInternalExecutorSession(exec.ctx)
+	proc.WarningSink = process.WarningSinkFromContext(exec.ctx)
+	if session, ok := proc.Session.(interface{ GetSessId() uuid.UUID }); ok {
+		// Internal temporary CREATEs belong to the original connection, including
+		// the physical-name prefix used by orphan-table cleanup.
+		proc.Base.SessionInfo.SessionId = session.GetSessId()
+	}
 	// A DisableIncrStatement execution runs on the caller's transaction
 	// without opening a statement, so its compile must not advance the
 	// workspace snapshot write offset (the statement boundary).
@@ -404,6 +478,9 @@ func (exec *txnExecutor) Exec(
 
 	if exec.opts.ResolveVariableFunc() != nil {
 		proc.SetResolveVariableFunc(exec.opts.ResolveVariableFunc())
+	}
+	if process.HasSystemCTELimits(exec.ctx) {
+		proc.SetResolveVariableFunc(process.SystemCTEResolver(exec.opts.ResolveVariableFunc()))
 	}
 
 	// Propagate the "is this frontend?" signal onto the proc — same
@@ -436,8 +513,23 @@ func (exec *txnExecutor) Exec(
 		proc.Free()
 	}()
 
-	compileContext := exec.s.getCompileContext(exec.ctx, proc, exec.getDatabase(), lower)
-	compileContext.SetRootSql(sql)
+	newCompileContext := func(ctx context.Context) *compilerContext {
+		cc := exec.s.getCompileContext(ctx, proc, exec.getDatabase(), lower)
+		if statementOption.AllowMoColumnsUpdate() {
+			cc.SetContext(context.WithValue(cc.GetContext(), defines.MoColumnsUpdateKey{}, true))
+		}
+		cc.SetRootSql(sql)
+		return cc
+	}
+	compileContext := newCompileContext(exec.ctx)
+	proc.Base.SessionInfo.CompilerContext = compileContext
+	buildPlan := func(ctx *compilerContext, prepared bool) (*plan.Plan, error) {
+		pn, err := plan.BuildPlan(ctx, stmts[0], prepared)
+		if err == nil && statementOption.AllowMoColumnsUpdate() {
+			markMoColumnsUpdatePlan(pn)
+		}
+		return pn, err
+	}
 
 	var pn *plan.Plan
 
@@ -460,36 +552,28 @@ func (exec *txnExecutor) Exec(
 			return executor.Result{}, err
 		}
 	default:
-		pn, err = plan.BuildPlan(compileContext, stmt, prepared)
+		pn, err = buildPlan(compileContext, prepared)
 	}
 
 	if err != nil {
 		return executor.Result{}, err
 	}
-
 	if prepared {
 		_, _, err := plan.ResetPreparePlan(compileContext, pn)
 		if err != nil {
 			return executor.Result{}, err
 		}
+		pn, err = specializeInternalPreparedPlan(exec.ctx, pn, statementOption.PreparedParamValues())
+		if err != nil {
+			return executor.Result{}, err
+		}
 	}
 
-	c := NewCompile(
-		exec.s.addr,
-		exec.getDatabase(),
-		sql,
-		"",
-		"",
-		exec.s.eng,
-		proc,
-		stmts[0],
-		false,
-		nil,
-		receiveAt,
-	)
+	c := exec.newCompile(proc, stmts[0], sql, receiveAt)
 	c.SetOriginSQL(sql)
 	c.adjustTableExtraFunc = exec.opts.AdjustTableExtraFunc()
 	c.disableDropAutoIncrement = statementOption.DisableDropIncrStatement()
+	c.skipDataBranchReclaim = statementOption.SkipDataBranchReclaim()
 	c.keepAutoIncrement = statementOption.KeepAutoIncrement()
 	c.disableRetry = exec.opts.DisableIncrStatement()
 	c.ignorePublish = statementOption.IgnorePublish()
@@ -500,10 +584,7 @@ func (exec *txnExecutor) Exec(
 
 	if prepared {
 		c.SetBuildPlanFunc(func(ctx context.Context) (*plan.Plan, error) {
-			pn, err := plan.BuildPlan(
-				exec.s.getCompileContext(ctx, proc, exec.getDatabase(), lower),
-				stmts[0], true,
-			)
+			pn, err := buildPlan(newCompileContext(ctx), true)
 			if err != nil {
 				return pn, err
 			}
@@ -511,13 +592,11 @@ func (exec *txnExecutor) Exec(
 			if err != nil {
 				return pn, err
 			}
-			return pn, nil
+			return specializeInternalPreparedPlan(ctx, pn, statementOption.PreparedParamValues())
 		})
 	} else {
 		c.SetBuildPlanFunc(func(ctx context.Context) (*plan.Plan, error) {
-			return plan.BuildPlan(
-				exec.s.getCompileContext(ctx, proc, exec.getDatabase(), lower),
-				stmts[0], false)
+			return buildPlan(newCompileContext(ctx), false)
 		})
 	}
 
@@ -601,7 +680,7 @@ func (exec *txnExecutor) Exec(
 		)
 	}
 
-	result.LastInsertID = proc.GetLastInsertID()
+	result.LastInsertID = proc.GetStatementLastInsertID()
 	result.Batches = batches
 	result.AffectedRows = runResult.AffectRows
 	result.LogicalPlan = pn.GetQuery()
@@ -634,11 +713,35 @@ func publishInternalExecutorStreamResult(
 		return nil
 	case <-procCtx.Done():
 		result.Close()
-		return moerr.NewInternalError(procCtx, "context cancelled")
+		return context.Cause(procCtx)
 	case <-execCtx.Done():
 		result.Close()
 		return execCtx.Err()
 	}
+}
+
+// The internal executor reparses CTAS population SQL. Apply the same prepared
+// specialization used by the frontend after each plan build, including retry
+// rebuilds, so parameter source domains survive that reparse.
+func specializeInternalPreparedPlan(
+	ctx context.Context, pn *plan.Plan, values []executor.ParamValue,
+) (*plan.Plan, error) {
+	if len(values) == 0 {
+		return pn, nil
+	}
+	params := make([]any, len(values))
+	for i := range values {
+		params[i] = values[i]
+	}
+	specialized, changed, err := plan.FillValuesOfParamsInPlanWithSpecializationPreservingDMLWrites(
+		ctx, pn, params)
+	if err != nil {
+		return nil, err
+	}
+	if changed {
+		return specialized, nil
+	}
+	return pn, nil
 }
 
 func (exec *txnExecutor) LockTable(table string) error {
@@ -721,4 +824,10 @@ func (exec *txnExecutor) getDatabase() string {
 		return exec.database
 	}
 	return exec.opts.Database()
+}
+
+func initInternalStatementProfile(proc *process.Process, stmt tree.Statement) {
+	profile := &process.StmtProfile{}
+	proc.SetStmtProfile(profile)
+	profile.SetStatementRuntimeProfile(stmt.GetStatementType(), stmt.GetQueryType(), tree.IsIgnoreStatement(stmt))
 }

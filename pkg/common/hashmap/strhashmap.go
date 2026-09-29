@@ -112,6 +112,7 @@ func (itr *strHashmapIterator) prepareHashKeys(
 		itr.zValues[i] = 0
 	}
 	const maxInt = int(^uint(0) >> 1)
+	flatFixedSize := 0
 	add := func(row int, size int) error {
 		if size < 0 || itr.zValues[row] > int64(maxInt-size) {
 			return mpool.ErrAllocationAccountInvalid
@@ -151,15 +152,14 @@ func (itr *strHashmapIterator) prepareHashKeys(
 		if !hasGrouping && !vec.GetNulls().Any() {
 			if vec.GetType().IsFixedLen() {
 				size := prefix + vec.GetType().TypeSize()
-				for i := 0; i < count; i++ {
-					if err := add(i, size); err != nil {
-						return err
-					}
+				if size < 0 || flatFixedSize > maxInt-size {
+					return mpool.ErrAllocationAccountInvalid
 				}
+				flatFixedSize += size
 				continue
 			}
 			if vec.IsConst() {
-				value := vec.GetBytesAt(0)
+				value := canonicalVarlenaHashValue(vec.GetType().Oid, vec.GetBytesAt(0))
 				valueSize := len(value)
 				if vec.GetType().Oid == types.T_json {
 					valueSize = keycodec.CanonicalJSONSize(value)
@@ -182,7 +182,9 @@ func (itr *strHashmapIterator) prepareHashKeys(
 				}
 			} else {
 				for i := 0; i < count; i++ {
-					value := values[start+i].GetByteSlice(area)
+					value := canonicalVarlenaHashValue(
+						vec.GetType().Oid, values[start+i].GetByteSlice(area),
+					)
 					if err := add(i, prefix+4+len(value)); err != nil {
 						return err
 					}
@@ -218,7 +220,7 @@ func (itr *strHashmapIterator) prepareHashKeys(
 			if vec.IsConst() {
 				valueRow = 0
 			}
-			value := vec.GetBytesAt(valueRow)
+			value := canonicalVarlenaHashValue(vec.GetType().Oid, vec.GetBytesAt(valueRow))
 			valueSize := len(value)
 			if vec.GetType().Oid == types.T_json {
 				valueSize = keycodec.CanonicalJSONSize(value)
@@ -226,6 +228,13 @@ func (itr *strHashmapIterator) prepareHashKeys(
 			if err := add(i, prefix+4+valueSize); err != nil {
 				return err
 			}
+		}
+	}
+	// Fixed, flat columns contribute the same width to every row. Accumulate
+	// them once above instead of walking the row set once per key column.
+	for i := 0; i < count; i++ {
+		if err := add(i, flatFixedSize); err != nil {
+			return err
 		}
 	}
 
@@ -376,6 +385,7 @@ func (itr *strHashmapIterator) encodeHashKeys(vecs []*vector.Vector, start, coun
 }
 
 func appendVarlenaHashKey(dst []byte, oid types.T, value []byte) []byte {
+	value = canonicalVarlenaHashValue(oid, value)
 	switch oid {
 	case types.T_json:
 		return keycodec.AppendCanonicalJSON(dst, value)
@@ -388,6 +398,16 @@ func appendVarlenaHashKey(dst []byte, oid types.T, value []byte) []byte {
 	default:
 		return append(dst, value...)
 	}
+}
+
+func canonicalVarlenaHashValue(oid types.T, value []byte) []byte {
+	if oid != types.T_char {
+		return value
+	}
+	for len(value) > 0 && value[len(value)-1] == ' ' {
+		value = value[:len(value)-1]
+	}
+	return value
 }
 
 func appendFramedVarlenaHashKey(dst []byte, oid types.T, value []byte) []byte {
@@ -584,6 +604,15 @@ func fillGroupingAwareStr(
 	start int,
 ) {
 	keys := itr.keys
+	// Nullable and grouping-aware maps use a domain byte before every ordinary
+	// value. Most batches contain neither NULL nor GROUPING rows, though. Keep
+	// that common case on flat vector data so the hot path does not probe two
+	// bitmaps and redispatch the vector representation for every row.
+	if vec.GetType().IsFixedLen() && !vec.IsConstNull() &&
+		!vec.HasGrouping() && !vec.GetNulls().Any() {
+		fillFlatFixedGroupingAwareStr(keys, vec, n, start)
+		return
+	}
 	if vec.IsGrouping() {
 		for i := 0; i < n; i++ {
 			keys[i] = append(keys[i], byte(2))
@@ -642,10 +671,56 @@ func fillGroupingAwareStr(
 			keys[i] = append(keys[i], value...)
 			continue
 		}
-		value := vec.GetBytesAt(valueRow)
+		value := canonicalVarlenaHashValue(vec.GetType().Oid, vec.GetBytesAt(valueRow))
 		length := uint32(len(value))
 		keys[i] = append(keys[i], util.UnsafeToBytes(&length)...)
 		keys[i] = append(keys[i], value...)
+	}
+}
+
+func fillFlatFixedGroupingAwareStr(
+	keys [][]byte,
+	vec *vector.Vector,
+	n int,
+	start int,
+) {
+	valueRow := start
+	if vec.IsConst() {
+		valueRow = 0
+	}
+	switch vec.GetType().Oid {
+	case types.T_float32:
+		values := vector.MustFixedColNoTypeCheck[float32](vec)
+		codec := keycodec.NewFloat32Codec(vec.GetType().Scale)
+		for i := 0; i < n; i++ {
+			keys[i] = append(keys[i], byte(0))
+			value := codec.CanonicalBytes(values[valueRow])
+			keys[i] = append(keys[i], value[:]...)
+			if !vec.IsConst() {
+				valueRow++
+			}
+		}
+	case types.T_float64:
+		values := vector.MustFixedColNoTypeCheck[float64](vec)
+		for i := 0; i < n; i++ {
+			keys[i] = append(keys[i], byte(0))
+			value := keycodec.CanonicalFloat64Bytes(values[valueRow])
+			keys[i] = append(keys[i], value[:]...)
+			if !vec.IsConst() {
+				valueRow++
+			}
+		}
+	default:
+		width := vec.GetType().TypeSize()
+		data := vec.GetData()
+		for i := 0; i < n; i++ {
+			keys[i] = append(keys[i], byte(0))
+			offset := valueRow * width
+			keys[i] = append(keys[i], data[offset:offset+width]...)
+			if !vec.IsConst() {
+				valueRow++
+			}
+		}
 	}
 }
 
@@ -723,7 +798,7 @@ func fillFloat64GroupStr(itr *strHashmapIterator, vec *vector.Vector, n, start i
 
 func fillStringGroupStrForConstVec(itr *strHashmapIterator, vec *vector.Vector, n int, start int) {
 	keys := itr.keys
-	bytes := vec.GetBytesAt(start)
+	bytes := canonicalVarlenaHashValue(vec.GetType().Oid, vec.GetBytesAt(start))
 	length := uint32(len(bytes))
 	// can't be const null
 	if itr.mp.hasNull {
@@ -791,7 +866,7 @@ func fillStringGroupStr(itr *strHashmapIterator, vec *vector.Vector, lenV int, s
 			va, area := vector.MustVarlenaRawData(vec)
 			if area == nil {
 				for i := 0; i < lenV; i++ {
-					bytes := va[i+start].ByteSlice()
+					bytes := canonicalVarlenaHashValue(vec.GetType().Oid, va[i+start].ByteSlice())
 					hasGrouping := gsp.Contains(uint64(i + start))
 					if hasGrouping {
 						keys[i] = append(keys[i], byte(2))
@@ -808,7 +883,7 @@ func fillStringGroupStr(itr *strHashmapIterator, vec *vector.Vector, lenV int, s
 				}
 			} else {
 				for i := 0; i < lenV; i++ {
-					bytes := va[i+start].GetByteSlice(area)
+					bytes := canonicalVarlenaHashValue(vec.GetType().Oid, va[i+start].GetByteSlice(area))
 					hasGrouping := gsp.Contains(uint64(i + start))
 					if hasGrouping {
 						keys[i] = append(keys[i], byte(2))
@@ -828,7 +903,7 @@ func fillStringGroupStr(itr *strHashmapIterator, vec *vector.Vector, lenV int, s
 			va, area := vector.MustVarlenaRawData(vec)
 			if area == nil {
 				for i := 0; i < lenV; i++ {
-					bytes := va[i+start].ByteSlice()
+					bytes := canonicalVarlenaHashValue(vec.GetType().Oid, va[i+start].ByteSlice())
 					// for "a"，"bc" and "ab","c", we need to distinct
 					// give the length
 					length := uint32(len(bytes))
@@ -838,7 +913,7 @@ func fillStringGroupStr(itr *strHashmapIterator, vec *vector.Vector, lenV int, s
 				}
 			} else {
 				for i := 0; i < lenV; i++ {
-					bytes := va[i+start].GetByteSlice(area)
+					bytes := canonicalVarlenaHashValue(vec.GetType().Oid, va[i+start].GetByteSlice(area))
 					// for "a"，"bc" and "ab","c", we need to distinct
 					// give the length
 					length := uint32(len(bytes))
@@ -862,7 +937,7 @@ func fillStringGroupStr(itr *strHashmapIterator, vec *vector.Vector, lenV int, s
 					} else if hasNull {
 						keys[i] = append(keys[i], byte(1))
 					} else {
-						bytes := va[i+start].ByteSlice()
+						bytes := canonicalVarlenaHashValue(vec.GetType().Oid, va[i+start].ByteSlice())
 						// for "a"，"bc" and "ab","c", we need to distinct
 						// this is not null value
 						keys[i] = append(keys[i], 0)
@@ -877,7 +952,7 @@ func fillStringGroupStr(itr *strHashmapIterator, vec *vector.Vector, lenV int, s
 						itr.zValues[i] = 0
 						continue
 					}
-					bytes := va[i+start].ByteSlice()
+					bytes := canonicalVarlenaHashValue(vec.GetType().Oid, va[i+start].ByteSlice())
 					// for "a"，"bc" and "ab","c", we need to distinct
 					// give the length
 					length := uint32(len(bytes))
@@ -896,7 +971,7 @@ func fillStringGroupStr(itr *strHashmapIterator, vec *vector.Vector, lenV int, s
 					} else if hasNull {
 						keys[i] = append(keys[i], byte(1))
 					} else {
-						bytes := va[i+start].GetByteSlice(area)
+						bytes := canonicalVarlenaHashValue(vec.GetType().Oid, va[i+start].GetByteSlice(area))
 						// for "a"，"bc" and "ab","c", we need to distinct
 						// this is not null value
 						keys[i] = append(keys[i], 0)
@@ -911,7 +986,7 @@ func fillStringGroupStr(itr *strHashmapIterator, vec *vector.Vector, lenV int, s
 						itr.zValues[i] = 0
 						continue
 					}
-					bytes := va[i+start].GetByteSlice(area)
+					bytes := canonicalVarlenaHashValue(vec.GetType().Oid, va[i+start].GetByteSlice(area))
 					// for "a"，"bc" and "ab","c", we need to distinct
 					// give the length
 					length := uint32(len(bytes))

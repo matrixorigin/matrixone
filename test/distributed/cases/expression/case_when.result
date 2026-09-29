@@ -401,7 +401,7 @@ nullif_mixed  ¦  VARCHAR(2)  ¦  YES  ¦  2  ¦  null  ¦  null  𝄀
 coalesce_str_num  ¦  VARCHAR(2)  ¦  NO  ¦  2  ¦  null  ¦  null  𝄀
 greatest_date  ¦  DATE(0)  ¦  YES  ¦  null  ¦  null  ¦  null
 select * from v_flow_metadata_safe;
-➤ if_str_num[12,2,0]  ¦  if_unsigned_signed[3,21,0]  ¦  case_date_dt[93,64,0]  ¦  case_binary_char[12,8,0]  ¦  ifnull_decimal[3,2,1]  ¦  nullif_mixed[12,2,0]  ¦  coalesce_str_num[12,2,0]  ¦  greatest_date[91,64,0]  𝄀
+➤ if_str_num[12,2,0]  ¦  if_unsigned_signed[3,21,0]  ¦  case_date_dt[93,64,0]  ¦  case_binary_char[-3,8,0]  ¦  ifnull_decimal[3,2,1]  ¦  nullif_mixed[12,2,0]  ¦  coalesce_str_num[12,2,0]  ¦  greatest_date[91,64,0]  𝄀
 2  ¦  1  ¦  2024-01-01 00:00:00  ¦  a  ¦  9.5  ¦  null  ¦  8  ¦  2024-01-02
 drop view v_flow_metadata_safe;
 drop view if exists v_case_temporal_else;
@@ -453,8 +453,8 @@ ifnull_null_first  ¦  DECIMAL(2,1)  ¦  NO  ¦    ¦  null  ¦    ¦    𝄀
 ifnull_nullable_col  ¦  DECIMAL(11,1)  ¦  NO  ¦    ¦  null  ¦    ¦    𝄀
 ifnull_notnull_col  ¦  DECIMAL(11,1)  ¦  NO  ¦    ¦  null  ¦    ¦    𝄀
 coalesce_null_first  ¦  VARCHAR(2)  ¦  NO  ¦    ¦  null  ¦    ¦    𝄀
-coalesce_nullable_col  ¦  BIGINT(0)  ¦  NO  ¦    ¦  null  ¦    ¦    𝄀
-coalesce_notnull_col  ¦  BIGINT(0)  ¦  NO  ¦    ¦  null  ¦    ¦    𝄀
+coalesce_nullable_col  ¦  BIGINT  ¦  NO  ¦    ¦  null  ¦    ¦    𝄀
+coalesce_notnull_col  ¦  BIGINT  ¦  NO  ¦    ¦  null  ¦    ¦    𝄀
 greatest_const  ¦  DATE(0)  ¦  YES  ¦    ¦  null  ¦    ¦    𝄀
 greatest_nullable_col  ¦  DATE(0)  ¦  YES  ¦    ¦  null  ¦    ¦    𝄀
 greatest_notnull_col  ¦  DATE(0)  ¦  YES  ¦    ¦  null  ¦    ¦  
@@ -467,8 +467,8 @@ ifnull_null_first  ¦  DECIMAL(2,1)  ¦  NO  ¦  null  ¦  2  ¦  1  𝄀
 ifnull_nullable_col  ¦  DECIMAL(11,1)  ¦  NO  ¦  null  ¦  11  ¦  1  𝄀
 ifnull_notnull_col  ¦  DECIMAL(11,1)  ¦  NO  ¦  null  ¦  11  ¦  1  𝄀
 coalesce_null_first  ¦  VARCHAR(2)  ¦  NO  ¦  2  ¦  null  ¦  null  𝄀
-coalesce_nullable_col  ¦  BIGINT(0)  ¦  NO  ¦  null  ¦  null  ¦  null  𝄀
-coalesce_notnull_col  ¦  BIGINT(0)  ¦  NO  ¦  null  ¦  null  ¦  null  𝄀
+coalesce_nullable_col  ¦  BIGINT  ¦  NO  ¦  null  ¦  19  ¦  0  𝄀
+coalesce_notnull_col  ¦  BIGINT  ¦  NO  ¦  null  ¦  19  ¦  0  𝄀
 greatest_const  ¦  DATE(0)  ¦  YES  ¦  null  ¦  null  ¦  null  𝄀
 greatest_nullable_col  ¦  DATE(0)  ¦  YES  ¦  null  ¦  null  ¦  null  𝄀
 greatest_notnull_col  ¦  DATE(0)  ¦  YES  ¦  null  ¦  null  ¦  null
@@ -649,5 +649,25 @@ case_typed_null  ¦  VARCHAR(10)  𝄀
 if_typed_null  ¦  VARCHAR(10)  𝄀
 coalesce_plain_null  ¦  VARCHAR(2)  𝄀
 case_plain_null  ¦  VARCHAR(2)  𝄀
-if_plain_null  ¦  BIGINT(0)
+if_plain_null  ¦  BIGINT
 drop view v_conditional_typed_null;
+select case when null then 'a' else 'b' end as literal_null_condition;
+➤ literal_null_condition[12,1,0]  𝄀
+b
+select case when null then 'a' when 1 = 1 then 'b' else 'c' end as mixed_null_condition;
+➤ mixed_null_condition[12,1,0]  𝄀
+b
+select case when 0 / 0 then 'a' else 'b' end as null_arithmetic_condition;
+➤ null_arithmetic_condition[12,1,0]  𝄀
+b
+drop table if exists t_case_nullable_condition;
+create table t_case_nullable_condition (id int primary key, cond double);
+insert into t_case_nullable_condition values (1, null), (2, 0), (3, 2.5);
+select id, case when cond then 'true' else 'false' end as condition_result
+from t_case_nullable_condition
+order by id;
+➤ id[4,32,0]  ¦  condition_result[12,5,0]  𝄀
+1  ¦  false  𝄀
+2  ¦  false  𝄀
+3  ¦  true
+drop table t_case_nullable_condition;

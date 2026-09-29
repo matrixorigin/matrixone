@@ -22,6 +22,7 @@ import (
 
 	"github.com/parquet-go/parquet-go"
 
+	"github.com/matrixorigin/matrixone/pkg/common/mpool"
 	"github.com/matrixorigin/matrixone/pkg/common/reuse"
 	"github.com/matrixorigin/matrixone/pkg/container/batch"
 	"github.com/matrixorigin/matrixone/pkg/container/vector"
@@ -69,6 +70,20 @@ type ExParamConst struct {
 	Idx                    int
 	ColumnListLen          int32 // load ...  (col1, col2 , col3), ColumnListLen is 3
 	CreateSql              string
+	// ArrowExecutionScope is positive authorization emitted only by compile.
+	// The zero value must fail closed before Arrow I/O.
+	ArrowExecutionScope        pipeline.ArrowExecutionScope
+	ArrowObjectIdentities      []*pipeline.ArrowObjectIdentity
+	ArrowRecordBatchShards     []*pipeline.ArrowRecordBatchShard
+	ArrowSchemaFingerprint     []byte
+	ArrowConversionPlanVersion uint32
+	// ArrowForceMaterialize is the compile-time rollout snapshot propagated to
+	// every local or remote External scope. It is not a per-batch heuristic.
+	ArrowForceMaterialize bool
+	// ArrowDistributedExecution records that this scope was created by Arrow
+	// fanout. It intentionally differs from Extern.Parallel: shard scopes clear
+	// the user request after planning but still require worker-side opt-in.
+	ArrowDistributedExecution bool
 
 	// letter case: origin
 	Attrs           []plan.ExternAttr
@@ -78,7 +93,11 @@ type ExParamConst struct {
 	FileOffset      []int64
 	FileOffsetTotal []*pipeline.FileOffset
 	// Optional Parquet row group shards. Empty means whole-file scan.
-	ParquetRowGroupShards       []*pipeline.ParquetRowGroupShard
+	ParquetRowGroupShards []*pipeline.ParquetRowGroupShard
+	// ParquetWholeFileFanout is set only on an admitted Parquet LOAD scope
+	// created by the compiler's whole-file fanout path. It is distinct from a
+	// requested-but-serial LOAD, which must retain the regular S3 prefetch path.
+	ParquetWholeFileFanout      bool
 	IcebergDataTasks            []*pipeline.IcebergDataFileTask
 	IcebergDeleteTasks          []*pipeline.IcebergDeleteFileTask
 	IcebergColumns              []*pipeline.IcebergColumnMapping
@@ -89,13 +108,62 @@ type ExParamConst struct {
 	NeedRowOrdinal              bool
 	IcebergDeleteMaxMemoryBytes int64
 	IcebergDeleteSpillEnabled   bool
-	Ctx                         context.Context
-	Extern                      *tree.ExternParam
-	ClusterTable                *plan.ClusterTable
+	// DatastreamScan marks this scan as a datastream external table read and
+	// carries the gRPC endpoint plus the pushed-down filter text.
+	DatastreamScan *plan.DataStreamScan
+	// ForeignScan marks this scan as an ESQL/SQL foreign external table read
+	// and carries the connection config reference and default query.
+	ForeignScan *plan.ForeignScan
+	// KafkaScan marks this scan as a Kafka external table read and carries
+	// the broker/topic/partition plus the compile-resolved read controls.
+	KafkaScan *plan.KafkaScan
+	// ESQLTemporalUTC marks a scan whose CSV source renders temporal values as
+	// ISO 8601 UTC (ES|QL); getColData then rewrites them as session-zone wall
+	// clock, preserving the instant. Set for ESQL foreign tables (Prepare) and
+	// schema-mode esql_tvf (BuildForeignTVFExternParam).
+	ESQLTemporalUTC bool
+	Ctx             context.Context
+	Extern          *tree.ExternParam
+	ClusterTable    *plan.ClusterTable
+}
+
+// ExternalErrorMode carries the per-scan state behind the error-mode columns
+// (issue #27517). Tolerate is resolved ONCE from the pruned attribute list, so
+// a scan that never mentions the error columns pays only this bool test.
+type ExternalErrorMode struct {
+	// Tolerate is true when the query kept __mo_error_message or
+	// __mo_error_text. Keeping only __mo_file_line does NOT set it: that column
+	// is position metadata, and asking for it must not change whether a bad
+	// record fails the query.
+	Tolerate bool
+	// WantLine is true when __mo_file_line survived pruning.
+	WantLine bool
+	// RawText overrides the reconstructed record text for __mo_error_text.
+	// The JSONLINE reader sets it to the source line, which is the record as
+	// written; the CSV reader leaves it empty and the fields are re-joined.
+	RawText string
+
+	// RecordLine is the physical line the record being materialized starts on,
+	// refreshed per record by the reader. Readers with no file (Kafka,
+	// datastream) use the record ordinal of the current read instead.
+	RecordLine int64
+	// rowLens is scratch reused across rows to snapshot the batch's vector
+	// lengths, so rolling a failed row back costs no allocation per record.
+	rowLens []int
 }
 
 type ExParam struct {
-	Fileparam                   *ExFileparam
+	// ErrorMode is resolved in Prepare from the pruned attributes.
+	ErrorMode ExternalErrorMode
+	Fileparam *ExFileparam
+	// KafkaMeta carries the per-message metadata FIFO of a running Kafka
+	// scan (set by KafkaReader.Open, consumed row-by-row in makeBatchRows).
+	KafkaMeta *KafkaMetaState
+	// KafkaPending is the deferred progress of a DRAINED Kafka scan: the
+	// reader hands it off at source EOF, and External.Reset publishes it
+	// only when the whole statement succeeded (discarding it on failure or
+	// cancel), so an aborted statement never advances session/broker progress.
+	KafkaPending                *KafkaPendingProgress
 	Filter                      *FilterParam
 	currentPartValues           map[string]string
 	parquetProfile              process.ParquetProfileStats
@@ -150,10 +218,11 @@ type container struct {
 }
 
 type External struct {
-	ctr        container
-	Es         *ExternalParam
-	reader     ExternalFileReader // unified file reader
-	fileOpened bool               // whether a file is currently active
+	ctr               container
+	Es                *ExternalParam
+	reader            ExternalFileReader // unified file reader
+	fileOpened        bool               // whether a file is currently active
+	allocationAccount *mpool.AllocationAccount
 
 	vm.OperatorBase
 	colexec.Projection
@@ -182,6 +251,36 @@ func (external External) TypeName() string {
 
 func NewArgument() *External {
 	return reuse.Alloc[External](nil)
+}
+
+func (external *External) SetAllocationAccount(account *mpool.AllocationAccount) error {
+	if account == nil || account.Handle() == 0 {
+		return mpool.ErrAllocationAccountInvalid
+	}
+	if external.allocationAccount != nil && external.allocationAccount != account {
+		return mpool.ErrAllocationAccountMismatch
+	}
+	external.allocationAccount = account
+	return nil
+}
+
+func (external *External) ActivatesAllocationAccountLifecycle() bool {
+	return external != nil && external.Es != nil &&
+		external.Es.ArrowExecutionScope == pipeline.ArrowExecutionScope_ArrowLoadData
+}
+
+func (external *External) ClearAllocationAccount(account *mpool.AllocationAccount) error {
+	if external.allocationAccount == nil {
+		return nil
+	}
+	if external.allocationAccount != account {
+		return mpool.ErrAllocationAccountMismatch
+	}
+	if external.reader != nil || external.fileOpened || external.ctr.buf != nil {
+		return mpool.ErrAllocationAccountInvariant
+	}
+	external.allocationAccount = nil
+	return nil
 }
 
 func (param *ExternalParam) addParquetProfile(stats process.ParquetProfileStats) {
@@ -259,6 +358,24 @@ func (external *External) Release() {
 }
 
 func (external *External) Reset(proc *process.Process, pipelineFailed bool, err error) {
+	if external.Es != nil && external.Es.KafkaPending != nil {
+		pending := external.Es.KafkaPending
+		external.Es.KafkaPending = nil
+		if pipelineFailed || err != nil {
+			pending.Finalize(proc, false)
+		} else if ses, ok := proc.GetSession().(process.KafkaSessionState); ok {
+			// SOURCE-pipeline success is not STATEMENT success: on split
+			// scopes this Reset runs before downstream pipelines consume the
+			// final batch. Defer publication to the statement terminal.
+			pendingProc := proc
+			ses.EnqueueKafkaProgress(func(publish bool) {
+				pending.Finalize(pendingProc, publish)
+			})
+		} else {
+			// no statement coordinator (internal executor): best effort
+			pending.Finalize(proc, true)
+		}
+	}
 	if external.reader != nil {
 		if closeErr := external.reader.Close(); closeErr != nil {
 			logutil.Debugf("external reader close on reset: %v", closeErr)
@@ -294,6 +411,12 @@ func (external *External) Reset(proc *process.Process, pipelineFailed bool, err 
 }
 
 func (external *External) Free(proc *process.Process, pipelineFailed bool, err error) {
+	if external.Es != nil && external.Es.KafkaPending != nil {
+		// Free without a prior Reset means the statement did not complete
+		// normally: discard, never publish (replay is safe, skipping is not)
+		external.Es.KafkaPending.Finalize(proc, false)
+		external.Es.KafkaPending = nil
+	}
 	if external.reader != nil {
 		external.reader.Close()
 		external.reader = nil
@@ -408,13 +531,19 @@ type ParquetHandler struct {
 	pages          []parquet.Pages // cached pages iterators for each column
 	currentPage    []parquet.Page  // cached current page for each column
 	pageOffset     []int64         // current offset within each cached page
+	// dataColIndices are the physical leaf columns advanced together by page
+	// mode. budgetColIndices is the subset whose source or target is variable
+	// width and therefore participates in source-prefix sizing.
+	dataColIndices   []int
+	budgetColIndices []int
 	// Iceberg optional columns added after an older data file was written are
 	// materialized as NULL when the file has no matching field id.
 	icebergNullFill []bool
 
 	// for nested types support
-	hasNestedCols bool
-	rowReader     parquet.Rows
+	hasNestedCols    bool
+	nestedColIndices []int
+	rowReader        parquet.Rows
 
 	// virtual column support (hive partitions + __mo_filepath)
 	partitionColIndices            []int
@@ -424,12 +553,13 @@ type ParquetHandler struct {
 	hasPhysicalCol                 bool
 	rowCountOnly                   bool
 	currentRowGroup                int
-	rowCountRemaining              int
+	rowCountRemaining              int64
 }
 
 type columnMapper struct {
 	srcNull, dstNull   bool
 	maxDefinitionLevel byte
+	maxRepetitionLevel byte
 	allowRepetition    bool
 	listCanBeNull      bool
 	listNullLevel      byte
@@ -437,5 +567,7 @@ type columnMapper struct {
 	listElemCanBeNull  bool
 	listElemNullLevel  byte
 
-	mapper func(mp *columnMapper, page parquet.Page, proc *process.Process, vec *vector.Vector) error
+	mapper           func(mp *columnMapper, page parquet.Page, proc *process.Process, vec *vector.Vector) error
+	listValuesMapper func(mp *columnMapper, values []parquet.Value, numRows int, proc *process.Process, vec *vector.Vector) error
+	rowBuffer        *parquet.Buffer
 }

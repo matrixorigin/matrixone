@@ -391,6 +391,7 @@ func (exec *ISCPTaskExecutor) filterFencedIteration(iter *IterationContext) *Ite
 	keepJobNames := make([]string, 0, len(iter.jobNames))
 	keepJobIDs := make([]uint64, 0, len(iter.jobIDs))
 	keepLSN := make([]uint64, 0, len(iter.lsn))
+	keepStages := make([]int8, 0, len(iter.stages))
 	for i, jobName := range iter.jobNames {
 		key := NewJobRuntimeKey(iter.accountID, iter.tableID, jobName, iter.jobIDs[i])
 		if exec.IsJobFenced(key) {
@@ -399,6 +400,9 @@ func (exec *ISCPTaskExecutor) filterFencedIteration(iter *IterationContext) *Ite
 		keepJobNames = append(keepJobNames, jobName)
 		keepJobIDs = append(keepJobIDs, iter.jobIDs[i])
 		keepLSN = append(keepLSN, iter.lsn[i])
+		if len(iter.stages) == len(iter.jobNames) {
+			keepStages = append(keepStages, iter.stages[i])
+		}
 	}
 	if len(keepJobNames) == 0 {
 		return nil
@@ -412,6 +416,7 @@ func (exec *ISCPTaskExecutor) filterFencedIteration(iter *IterationContext) *Ite
 		jobNames:  keepJobNames,
 		jobIDs:    keepJobIDs,
 		lsn:       keepLSN,
+		stages:    keepStages,
 		fromTS:    iter.fromTS,
 		toTS:      iter.toTS,
 	}

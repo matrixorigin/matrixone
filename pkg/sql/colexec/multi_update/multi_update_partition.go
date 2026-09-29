@@ -29,13 +29,14 @@ import (
 type PartitionMultiUpdate struct {
 	vm.OperatorBase
 
-	raw          *MultiUpdate
-	rawContexts  []*MultiUpdateCtx
-	targets      []*partitionUpdateTarget
-	affectedRows uint64
-	writers      map[uint64]*s3WriterDelegate
-	freeWriters  []*s3WriterDelegate
-	nextWriterID uint64
+	raw            *MultiUpdate
+	rawContexts    []*MultiUpdateCtx
+	targets        []*partitionUpdateTarget
+	affectedRows   uint64
+	s3AffectedRows uint64
+	writers        map[uint64]*s3WriterDelegate
+	freeWriters    []*s3WriterDelegate
+	nextWriterID   uint64
 }
 
 type partitionUpdateTarget struct {
@@ -126,9 +127,22 @@ func (op *PartitionMultiUpdate) Prepare(
 	}
 
 	op.affectedRows = 0
+	op.s3AffectedRows = 0
 	op.raw.getS3WriterFunc = op.getS3Writer
 	op.raw.getFlushableS3WriterFunc = op.getFlushableS3Writer
 	op.raw.addAffectedRowsFunc = op.doAddAffectedRows
+	op.raw.takeS3AffectedRowsFunc = nil
+	if op.raw.Action == UpdateWriteS3 && hasODKUAffectedRows(op.rawContexts) {
+		op.raw.addAffectedRowsFunc = op.doAddS3AffectedRows
+		op.raw.takeS3AffectedRowsFunc = op.takeS3AffectedRows
+		// raw.Prepare creates a writer before the partition wrapper replaces the
+		// callbacks. Keep that writer as the control-only fallback for statements
+		// whose rows are all physical no-ops and therefore create no partition
+		// writer at all.
+		if op.raw.ctr.s3Writer != nil {
+			op.raw.ctr.s3Writer.refreshSelectorState(op.raw)
+		}
+	}
 	op.writers = make(map[uint64]*s3WriterDelegate)
 	op.nextWriterID = 0
 	return nil
@@ -374,7 +388,16 @@ func clonePartitionTargetContexts(contexts []*MultiUpdateCtx) []*MultiUpdateCtx 
 	cloned := make([]*MultiUpdateCtx, len(contexts))
 	for i, ctx := range contexts {
 		cloned[i] = ctx.clone()
+		// selectPartitionTargetRows already accounted for selector semantics.
+		// Partition-local writers must not count physical inserts again when
+		// semantic selectors were present; ordinary single-target updates still
+		// derive affected rows from their physical inserts.
 		cloned[i].DedupByTargetRowID = false
+		cloned[i].SuppressPhysicalAffectedRows = len(cloned[i].AffectedRowsCols) > 0 ||
+			cloned[i].AffectedRowsWeightCol != nil
+		cloned[i].AffectedRowsCols = nil
+		cloned[i].AffectedRowsWeightCol = nil
+		cloned[i].PhysicalChangedRowsCol = nil
 	}
 	return cloned
 }
@@ -386,7 +409,14 @@ func clonePartitionPhaseContexts(
 	cloned := make([]*MultiUpdateCtx, len(contexts))
 	for i, ctx := range contexts {
 		cloned[i] = ctx.clone()
+		// Partition-key moves share the selection result across delete and
+		// insert phases, so neither phase may count semantic selectors again.
 		cloned[i].DedupByTargetRowID = false
+		cloned[i].SuppressPhysicalAffectedRows = len(cloned[i].AffectedRowsCols) > 0 ||
+			cloned[i].AffectedRowsWeightCol != nil
+		cloned[i].AffectedRowsCols = nil
+		cloned[i].AffectedRowsWeightCol = nil
+		cloned[i].PhysicalChangedRowsCol = nil
 		if deletePhase {
 			cloned[i].InsertCols = nil
 		} else {
@@ -501,6 +531,7 @@ func (op *PartitionMultiUpdate) Reset(
 	op.raw.Reset(proc, pipelineFailed, err)
 	op.raw.resetMultiUpdateCtxs()
 	op.freePartitionWriters(proc)
+	op.s3AffectedRows = 0
 	for _, target := range op.targets {
 		clear(target.writerIDs)
 	}
@@ -589,11 +620,30 @@ func (op *PartitionMultiUpdate) getFlushableS3Writer() *s3WriterDelegate {
 		op.freeWriters = append(op.freeWriters, w)
 		return w
 	}
+	if op.s3AffectedRows > 0 {
+		// Every physical row may have been filtered as a no-op before partition
+		// routing. The raw writer owns no data in this topology, but it can still
+		// transfer the pending logical count to the coordinator.
+		return op.raw.ctr.s3Writer
+	}
 	return nil
 }
 
 func (op *PartitionMultiUpdate) doAddAffectedRows(affectedRows uint64) {
 	op.affectedRows += affectedRows
+}
+
+func (op *PartitionMultiUpdate) doAddS3AffectedRows(affectedRows uint64) {
+	if len(op.rawContexts) > 0 && op.rawContexts[0].IgnoreAffectedRows {
+		return
+	}
+	op.s3AffectedRows += affectedRows
+}
+
+func (op *PartitionMultiUpdate) takeS3AffectedRows() uint64 {
+	affectedRows := op.s3AffectedRows
+	op.s3AffectedRows = 0
+	return affectedRows
 }
 
 func (op *PartitionMultiUpdate) GetAffectedRows() uint64 {
@@ -606,15 +656,20 @@ func (op *PartitionMultiUpdate) SetAffectedRows(affectedRows uint64) {
 
 func (ctx *MultiUpdateCtx) clone() *MultiUpdateCtx {
 	v := &MultiUpdateCtx{
-		InsertCols:         ctx.InsertCols,
-		DeleteCols:         ctx.DeleteCols,
-		PartitionCols:      ctx.PartitionCols,
-		SkipInsertOnNullPk: ctx.SkipInsertOnNullPk,
-		InsertPkColIdx:     ctx.InsertPkColIdx,
-		IgnoreAffectedRows: ctx.IgnoreAffectedRows,
-		DedupByTargetRowID: ctx.DedupByTargetRowID,
-		TargetUpdateCtxIdx: ctx.TargetUpdateCtxIdx,
-		TargetTableID:      ctx.TargetTableID,
+		InsertCols:                   ctx.InsertCols,
+		DeleteCols:                   ctx.DeleteCols,
+		PartitionCols:                ctx.PartitionCols,
+		SkipInsertOnNullPk:           ctx.SkipInsertOnNullPk,
+		InsertPkColIdx:               ctx.InsertPkColIdx,
+		IgnoreAffectedRows:           ctx.IgnoreAffectedRows,
+		DedupByTargetRowID:           ctx.DedupByTargetRowID,
+		TargetUpdateCtxIdx:           ctx.TargetUpdateCtxIdx,
+		ChangedRowsCol:               ctx.ChangedRowsCol,
+		AffectedRowsWeightCol:        ctx.AffectedRowsWeightCol,
+		PhysicalChangedRowsCol:       ctx.PhysicalChangedRowsCol,
+		AffectedRowsCols:             append([]int(nil), ctx.AffectedRowsCols...),
+		SuppressPhysicalAffectedRows: ctx.SuppressPhysicalAffectedRows,
+		TargetTableID:                ctx.TargetTableID,
 	}
 	objRef := *ctx.ObjRef
 	def := *ctx.TableDef

@@ -14,47 +14,94 @@ insert into j1 values (1,'{"title":"quantum physics","tag":"science"}'), (2,'{"t
 create table j2 (id bigint primary key, a json, b json);
 create fulltext2 index ftidx on j2(a,b) with parser json;
 insert into j2 values (1,'{"x":"hello world"}','{"y":"foo bar"}'), (2,'{"x":"lorem ipsum"}','{"y":"dolor sit"}');
-select sleep(45);
-sleep(45)
-0
-select id from pk_dt where match(body) against('beta') order by id;
-id
-2020-01-02 03:04:05
-2021-06-07 08:09:10
-select id from pk_dt where match(body) against('gamma') order by id;
-id
-2021-06-07 08:09:10
-select id from pk_dec where match(body) against('beta') order by id;
-id
-123.4567
-890.1234
-select id from j1 where match(doc) against('quantum') order by id;
-id
-1
-select id from j1 where match(doc) against('food') order by id;
-id
-2
-select id from j2 where match(a,b) against('hello') order by id;
-id
-1
-select id from j2 where match(a,b) against('bar') order by id;
-id
-1
-select id from j2 where match(a,b) against('dolor') order by id;
-id
-2
 create table reb (id bigint primary key, body text);
 create fulltext2 index ftidx on reb(body);
 insert into reb values (1,'stale zebra'),(2,'stale zebra');
-select sleep(45);
-sleep(45)
-0
+set @pk_dt_ft2 = (select index_table_name from mo_catalog.mo_indexes where name = 'ftidx' and algo_table_type = 'ftv2_index' and table_id in (select rel_id from mo_catalog.mo_tables where reldatabase = database() and relname = 'pk_dt') limit 1);
+set @pk_dec_ft2 = (select index_table_name from mo_catalog.mo_indexes where name = 'ftidx' and algo_table_type = 'ftv2_index' and table_id in (select rel_id from mo_catalog.mo_tables where reldatabase = database() and relname = 'pk_dec') limit 1);
+set @j1_ft2 = (select index_table_name from mo_catalog.mo_indexes where name = 'ftidx' and algo_table_type = 'ftv2_index' and table_id in (select rel_id from mo_catalog.mo_tables where reldatabase = database() and relname = 'j1') limit 1);
+set @j2_ft2 = (select index_table_name from mo_catalog.mo_indexes where name = 'ftidx' and algo_table_type = 'ftv2_index' and table_id in (select rel_id from mo_catalog.mo_tables where reldatabase = database() and relname = 'j2') limit 1);
+set @reb_ft2 = (select index_table_name from mo_catalog.mo_indexes where name = 'ftidx' and algo_table_type = 'ftv2_index' and table_id in (select rel_id from mo_catalog.mo_tables where reldatabase = database() and relname = 'reb') limit 1);
+set @wait_bugfix_initial_sql = concat(
+'select ',
+'(select coalesce(max(chunk_id), -1) >= 0 from `', database(), '`.`', @pk_dt_ft2, '` where index_id = ''cdc_tail'' and tag = 1) as pk_dt_ready, ',
+'(select coalesce(max(chunk_id), -1) >= 0 from `', database(), '`.`', @pk_dec_ft2, '` where index_id = ''cdc_tail'' and tag = 1) as pk_dec_ready, ',
+'(select coalesce(max(chunk_id), -1) >= 0 from `', database(), '`.`', @j1_ft2, '` where index_id = ''cdc_tail'' and tag = 1) as j1_ready, ',
+'(select coalesce(max(chunk_id), -1) >= 0 from `', database(), '`.`', @j2_ft2, '` where index_id = ''cdc_tail'' and tag = 1) as j2_ready, ',
+'(select coalesce(max(chunk_id), -1) >= 0 from `', database(), '`.`', @reb_ft2, '` where index_id = ''cdc_tail'' and tag = 1) as reb_ready'
+);
+prepare wait_bugfix_initial from @wait_bugfix_initial_sql;
+execute wait_bugfix_initial;
+➤ pk_dt_ready[-7,1,0]  ¦  pk_dec_ready[-7,1,0]  ¦  j1_ready[-7,1,0]  ¦  j2_ready[-7,1,0]  ¦  reb_ready[-7,1,0]  𝄀
+1  ¦  1  ¦  1  ¦  1  ¦  1
+deallocate prepare wait_bugfix_initial;
+select id from pk_dt where match(body) against('beta') order by id;
+➤ id[93,19,0]  𝄀
+2020-01-02 03:04:05  𝄀
+2021-06-07 08:09:10
+select id from pk_dt where match(body) against('gamma') order by id;
+➤ id[93,19,0]  𝄀
+2021-06-07 08:09:10
+select id from pk_dec where match(body) against('beta') order by id;
+➤ id[3,18,4]  𝄀
+123.4567  𝄀
+890.1234
+select id from j1 where json_extract_string(doc,'$.title') = 'quantum physics' order by id;
+➤ id[-5,64,0]  𝄀
+1
+select id from j1 where json_extract_string(doc,'$.tag') = 'food' order by id;
+➤ id[-5,64,0]  𝄀
+2
+select id from j2 where json_extract_string(a,'$.x') = 'hello world' order by id;
+➤ id[-5,64,0]  𝄀
+1
+select id from j2 where json_extract_string(b,'$.y') = 'foo bar' order by id;
+➤ id[-5,64,0]  𝄀
+1
+select id from j2 where json_extract_string(b,'$.y') = 'dolor sit' order by id;
+➤ id[-5,64,0]  𝄀
+2
 select count(*) from reb where match(body) against('zebra');
-count(*)
+➤ count(*)[-5,64,0]  𝄀
 2
 delete from reb;
 alter table reb alter reindex ftidx fulltext2;
 select count(*) from reb where match(body) against('zebra');
-count(*)
+➤ count(*)[-5,64,0]  𝄀
+0
+create table reb_one (id bigint primary key, body text);
+insert into reb_one values (1, 'single stale');
+create fulltext2 index ftidx on reb_one(body);
+select count(*) from reb_one where match(body) against('single');
+➤ count(*)[-5,64,0]  𝄀
+1
+set @reb_one_ft2 = (select index_table_name from mo_catalog.mo_indexes where name = 'ftidx' and algo_table_type = 'ftv2_index' and table_id in (select rel_id from mo_catalog.mo_tables where reldatabase = database() and relname = 'reb_one') limit 1);
+set @capture_reb_one_tail_sql = concat(
+'select coalesce(max(chunk_id), -1) into @reb_one_tail_before from `', database(), '`.`', @reb_one_ft2,
+'` where index_id = ''cdc_tail'' and tag = 1'
+);
+prepare capture_reb_one_tail from @capture_reb_one_tail_sql;
+execute capture_reb_one_tail;
+deallocate prepare capture_reb_one_tail;
+update reb_one set body = NULL where id = 1;
+set @wait_reb_one_sql = concat(
+'select coalesce(max(chunk_id), -1) > ', @reb_one_tail_before,
+' as reb_one_update_ready from `', database(), '`.`', @reb_one_ft2,
+'` where index_id = ''cdc_tail'' and tag = 1'
+);
+prepare wait_reb_one from @wait_reb_one_sql;
+execute wait_reb_one;
+➤ reb_one_update_ready[-7,1,0]  𝄀
+1
+deallocate prepare wait_reb_one;
+select id from reb_one where id = 1;
+➤ id[-5,64,0]  𝄀
+1
+alter table reb_one alter reindex ftidx fulltext2 force_sync;
+select id from reb_one where id = 1;
+➤ id[-5,64,0]  𝄀
+1
+select count(*) from reb_one where match(body) against('single');
+➤ count(*)[-5,64,0]  𝄀
 0
 drop database ft2_bugfix;

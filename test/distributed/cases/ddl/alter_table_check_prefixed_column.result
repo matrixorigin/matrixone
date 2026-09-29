@@ -26,7 +26,7 @@ agent_runs  ¦  CREATE TABLE `agent_runs` (
   `user_id` varchar(128) NOT NULL,
   `retry_scope` varchar(16) NOT NULL DEFAULT 'node',
   `checkpoint_version` varchar(32) DEFAULT NULL,
-  `checkpoint_json` text DEFAULT NULL,
+  `checkpoint_json` longtext DEFAULT NULL,
   `check$point` varchar(32) DEFAULT NULL,
   `error_code` varchar(128) DEFAULT NULL,
   `model_offering_id` varchar(64) DEFAULT NULL,

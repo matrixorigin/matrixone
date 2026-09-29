@@ -169,6 +169,60 @@ func TestRuntimeAndExecutionRejectInvalidStates(t *testing.T) {
 	require.NoError(t, nilExecution.CleanupAfterRun(nil, nil))
 }
 
+func TestRuntimeReconcileRejectsMalformedQueryIdentity(t *testing.T) {
+	server := &testFlightServer{}
+	runtime := &Runtime{
+		config:     Config{CleanupTimeout: time.Second},
+		conn:       testFlightConnection(t, server),
+		executions: make(map[*Execution]struct{}),
+	}
+	err := runtime.Reconcile(1, []byte{1}, testFlightRelease)
+	closeErr := runtime.Close(context.Background())
+	require.ErrorContains(t, err, "invalid replayed execution")
+	require.NoError(t, closeErr)
+}
+
+func TestRuntimeReconcileDoesNotRetainAfterClose(t *testing.T) {
+	server := &testFlightServer{}
+	runtime := &Runtime{
+		config:     Config{CleanupTimeout: time.Second},
+		conn:       testFlightConnection(t, server),
+		executions: make(map[*Execution]struct{}),
+	}
+	require.NoError(t, runtime.Close(context.Background()))
+	err := runtime.Reconcile(1, make([]byte, 16), testFlightRelease)
+	require.ErrorContains(t, err, "runtime is stopping")
+	require.Zero(t, runtimeExecutionCount(runtime))
+}
+
+func TestExecutionRunRejectsExecutionCancelledBeforeStart(t *testing.T) {
+	server := &testFlightServer{
+		schema: mustHex(t, fixtureSchemaHex), header: mustHex(t, fixtureHeaderHex), body: mustHex(t, fixtureBodyHex),
+		ticket: make([]byte, ticketBytes), hash: make([]byte, sha256.Size), doGetStarted: make(chan struct{}),
+	}
+	runtime := &Runtime{
+		config: Config{MaxBatchBytes: 1 << 20, RequestTimeout: time.Minute, CleanupTimeout: time.Second},
+		conn:   testFlightConnection(t, server), executions: make(map[*Execution]struct{}),
+	}
+	copy(runtime.capabilityHash[:], server.hash)
+	typesOut, headings := fixtureOutputShape()
+	execution, err := runtime.Prepare(
+		context.Background(), 1, make([]byte, 16), []byte("plan"), typesOut, headings,
+		testFlightDeadline(), testFlightRelease,
+	)
+	require.NoError(t, err)
+	require.NoError(t, execution.CancelAndJoin(context.Background()))
+	runErr := execution.Run(context.Background(), mpool.MustNewZero(), nil,
+		func(*batch.Batch, *perfcounter.CounterSet) error { return nil })
+	require.ErrorContains(t, runErr, "already claimed or completed")
+	select {
+	case <-server.doGetStarted:
+		t.Fatal("DoGet was started after cancellation completed")
+	default:
+	}
+	require.NoError(t, runtime.Close(context.Background()))
+}
+
 func TestPrepareRejectsUnsafeFlightInfo(t *testing.T) {
 	typesOut, headings := fixtureOutputShape()
 	for _, tc := range []struct {

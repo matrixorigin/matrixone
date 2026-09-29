@@ -322,9 +322,7 @@ INSERT INTO t_time (tm) VALUES ('838:59:59');
 
 SELECT * FROM t_time ORDER BY id;
 
--- @bvt:issue
 INSERT INTO t_time (tm) VALUES ('839:00:00');
--- @bvt:issue
 
 DROP TABLE t_time;
 

@@ -43,6 +43,40 @@ func TestProfileAllocFree(t *testing.T) {
 	require.Equal(t, before, ProfileTrackedCount())
 }
 
+func TestProfileReallocAddressReuse(t *testing.T) {
+	EnableProfiling()
+	defer DisableProfiling()
+	// These are profile keys, never dereferenced pointers. Model immediate
+	// address reuse deterministically rather than relying on a libc schedule.
+	const oldPtr, newPtr = uintptr(1), uintptr(2)
+	t.Cleanup(func() {
+		EnableProfiling()
+		profileRecordFree(oldPtr, 128)
+		profileRecordFree(newPtr, 256)
+		DisableProfiling()
+	})
+	old := &malloc.HeapSampleValues{}
+	old.Init()
+	old.Bytes.Inuse.Add(64)
+	old.Objects.Inuse.Add(1)
+	profileRestore(oldPtr, old)
+	claim := profileDetach(oldPtr)
+	require.Same(t, old, claim)
+	profileRestore(oldPtr, claim) // failed realloc restores the same sample
+	require.Same(t, old, profileDetach(oldPtr))
+	reused := &malloc.HeapSampleValues{}
+	reused.Init()
+	reused.Bytes.Inuse.Add(128)
+	reused.Objects.Inuse.Add(1)
+	profileRestore(oldPtr, reused)
+	profileRecordRealloc(3, claim, newPtr, 64, 256)
+	require.Zero(t, old.Bytes.Inuse.Load())
+	require.Zero(t, old.Objects.Inuse.Load())
+	require.Equal(t, int64(128), reused.Bytes.Inuse.Load())
+	require.Same(t, reused, profileDetach(oldPtr))
+	profileRestore(oldPtr, reused)
+}
+
 func TestProfileOnHeapNotTracked(t *testing.T) {
 	EnableProfiling()
 	defer DisableProfiling()

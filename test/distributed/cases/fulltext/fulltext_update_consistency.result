@@ -2,6 +2,27 @@ set experimental_fulltext_index = 1;
 drop database if exists fulltext_update_consistency;
 create database fulltext_update_consistency;
 use fulltext_update_consistency;
+create table ft_async_pk(
+id bigint primary key,
+body text,
+fulltext ft_body(body) async
+);
+insert into ft_async_pk values (10, 'async identity token');
+create table ft_async_composite(
+tenant varchar(20),
+id bigint,
+body text,
+primary key(tenant, id),
+fulltext ft_body(body) async
+);
+insert into ft_async_composite values ('a', 1, 'composite identity token');
+create table ft_null_async(
+id int primary key,
+left_text text,
+right_text text,
+fulltext ft_body(left_text, right_text) async
+);
+insert into ft_null_async(id, right_text) values (1, 'asyncrighttoken');
 create table ft_sync(id int primary key, k int unique, body text, fulltext ft_body(body));
 insert into ft_sync values (1, 1, 'sync old token'), (2, 2, 'sync peer token');
 select id from ft_sync where match(body) against('old') order by id;
@@ -32,40 +53,23 @@ select id from ft_sync where match(body) against('failed') order by id;
 select id from ft_sync where match(body) against('new') order by id;
 ➤ id[4,32,0]  𝄀
 1
-create table ft_async_pk(
-id bigint primary key,
-body text,
-fulltext ft_body(body) async
-);
-insert into ft_async_pk values (10, 'async identity token');
-select id from ft_async_pk where match(body) against('identity') order by id;
-➤ id[-5,64,0]  𝄀
-10
+select case_name, identity from (select 'composite' as case_name, concat(tenant, ':', id) as identity from ft_async_composite where match(body) against('composite') union all select 'null-column', cast(id as char) from ft_null_async where match(left_text, right_text) against('asyncrighttoken') union all select 'pk', cast(id as char) from ft_async_pk where match(body) against('identity')) readiness order by case_name;
+➤ case_name[12,-1,0]  ¦  identity[12,-1,0]  𝄀
+composite  ¦  a:1  𝄀
+null-column  ¦  1  𝄀
+pk  ¦  10
 update ft_async_pk set id = 20 where id = 10;
-select id from ft_async_pk where match(body) against('identity') order by id;
-➤ id[-5,64,0]  𝄀
-20
+update ft_async_composite set tenant = 'b', id = 2 where tenant = 'a' and id = 1;
+select case_name, identity from (select 'composite' as case_name, concat(tenant, ':', id) as identity from ft_async_composite where match(body) against('composite') union all select 'pk', cast(id as char) from ft_async_pk where match(body) against('identity')) readiness order by case_name;
+➤ case_name[12,-1,0]  ¦  identity[12,-1,0]  𝄀
+composite  ¦  b:2  𝄀
+pk  ¦  20
 begin;
 update ft_async_pk set id = 30 where id = 20;
 rollback;
 select id from ft_async_pk where match(body) against('identity') order by id;
 ➤ id[-5,64,0]  𝄀
 20
-create table ft_async_composite(
-tenant varchar(20),
-id bigint,
-body text,
-primary key(tenant, id),
-fulltext ft_body(body) async
-);
-insert into ft_async_composite values ('a', 1, 'composite identity token');
-select tenant, id from ft_async_composite where match(body) against('composite') order by tenant, id;
-➤ tenant[12,-1,0]  ¦  id[-5,64,0]  𝄀
-a  ¦  1
-update ft_async_composite set tenant = 'b', id = 2 where tenant = 'a' and id = 1;
-select tenant, id from ft_async_composite where match(body) against('composite') order by tenant, id;
-➤ tenant[12,-1,0]  ¦  id[-5,64,0]  𝄀
-b  ¦  2
 create table ft_null_default(id int primary key, left_text text, right_text text);
 insert into ft_null_default values
 (1, null, 'defaultrighttoken'),
@@ -146,14 +150,4 @@ select id from ft_null_dml where match(left_text, right_text) against('reviverig
 delete from ft_null_dml where id = 1;
 select id from ft_null_dml where match(left_text, right_text) against('reviverighttoken') order by id;
 ➤ id[4,32,0]
-create table ft_null_async(
-id int primary key,
-left_text text,
-right_text text,
-fulltext ft_body(left_text, right_text) async
-);
-insert into ft_null_async(id, right_text) values (1, 'asyncrighttoken');
-select id from ft_null_async where match(left_text, right_text) against('asyncrighttoken') order by id;
-➤ id[4,32,0]  𝄀
-1
 drop database fulltext_update_consistency;

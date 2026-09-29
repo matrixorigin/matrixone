@@ -60,6 +60,7 @@ func init() {
 	initCCPRMetrics()
 	initExecutionResourceMetrics()
 	initHashBuildMetrics()
+	initArrowLoadMetrics()
 
 	registry.MustRegister(HeartbeatHistogram)
 	registry.MustRegister(HeartbeatFailureCounter)
@@ -73,10 +74,29 @@ func init() {
 	registry.MustRegister(StatsUpdateBlockCounter)
 }
 
+func initArrowLoadMetrics() {
+	registry.MustRegister(ArrowLoadObjectCounter)
+	registry.MustRegister(ArrowLoadShardCounter)
+	registry.MustRegister(ArrowLoadRecordCounter)
+	registry.MustRegister(ArrowLoadBatchCounter)
+	registry.MustRegister(ArrowLoadRowCounter)
+	registry.MustRegister(ArrowLoadPayloadBytesCounter)
+	registry.MustRegister(ArrowLoadCopyBytesCounter)
+	registry.MustRegister(ArrowLoadConversionColumnCounter)
+	registry.MustRegister(ArrowLoadFallbackCounter)
+	registry.MustRegister(ArrowLoadErrorCounter)
+	registry.MustRegister(ArrowLoadPhaseDurationHistogram)
+	registry.MustRegister(ArrowLoadPinnedBytesGauge)
+	registry.MustRegister(ArrowLoadPinnedBytesHighWaterGauge)
+}
+
 func initMemMetrics() {
 	registry.MustRegister(memMPoolAllocatedSizeGauge)
+	registry.MustRegister(MemObjectIOPooledSerialBytesGauge)
 	registry.MustRegister(MemTotalCrossPoolFreeCounter)
 	registry.MustRegister(memMPoolHighWaterMarkGauge)
+	registry.MustRegister(MemMPoolOnHeapOutstandingBytesGauge)
+	registry.MustRegister(MemMPoolOnHeapOutstandingObjectsGauge)
 	registry.MustRegister(MallocCounter)
 	registry.MustRegister(MallocGauge)
 	registry.MustRegister(OffHeapInuseGauge)
@@ -107,6 +127,7 @@ func initTaskMetrics() {
 
 func initFileServiceMetrics() {
 	registry.MustRegister(fsReadCounter)
+	registry.MustRegister(sharedDecodeCounter, SharedDecodeActive, SharedDecodeReserved)
 	registry.MustRegister(fsCacheBytes)
 	registry.MustRegister(fsCacheAllocatorArenas)
 	registry.MustRegister(fsCachePressureCounter)
@@ -119,6 +140,7 @@ func initFileServiceMetrics() {
 	registry.MustRegister(ioMergerCounter)
 	registry.MustRegister(ioMergerDuration)
 	registry.MustRegister(fsReadWriteDuration)
+	registry.MustRegister(fsMultipartInitCounter)
 	registry.MustRegister(FSObjectStorageOperations)
 
 	registry.MustRegister(FSHTTPTraceCounter)
@@ -126,6 +148,8 @@ func initFileServiceMetrics() {
 
 	registry.MustRegister(FSDiskCacheEvictCounter)
 	registry.MustRegister(FSDiskCacheErrorCounter)
+	registry.MustRegister(FSDiskCacheAsyncUpdateDroppedCounter)
+	registry.MustRegister(FSDiskCacheAsyncCallbackPanicCounter)
 }
 
 func initLogtailMetrics() {
@@ -171,6 +195,7 @@ func initTxnMetrics() {
 	registry.MustRegister(TxnLifeCycleStatementsTotalHistogram)
 	registry.MustRegister(txnCreateDurationHistogram)
 	registry.MustRegister(txnStatementDurationHistogram)
+	registry.MustRegister(txnLoadLogtailReadBarrierDurationHistogram)
 	registry.MustRegister(txnLockDurationHistogram)
 	registry.MustRegister(txnUnlockDurationHistogram)
 	registry.MustRegister(TxnTableRangeDurationHistogram)

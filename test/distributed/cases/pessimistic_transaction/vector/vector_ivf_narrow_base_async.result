@@ -123,26 +123,20 @@ update nbf set v = '[55,55,55,55]' where a = 1;
 update nhf set v = '[55,55,55,55]' where a = 1;
 update ni8 set v = '[55,55,55,55]' where a = 1;
 update nu8 set v = '[55,55,55,55]' where a = 1;
-select a from nbf order by l2_distance(v,'[1,1,1,1]') limit 3;
-➤ a[4,32,0]  𝄀
-7  𝄀
-2  𝄀
-3
-select a from nhf order by l2_distance(v,'[1,1,1,1]') limit 3;
-➤ a[4,32,0]  𝄀
-7  𝄀
-2  𝄀
-3
-select a from ni8 order by l2_distance(v,'[1,1,1,1]') limit 3;
-➤ a[4,32,0]  𝄀
-7  𝄀
-2  𝄀
-3
-select a from nu8 order by l2_distance(v,'[1,1,1,1]') limit 3;
-➤ a[4,32,0]  𝄀
-7  𝄀
-2  𝄀
-3
+select case_name, a from (select 'bf16' as case_name, a, d from (select a, l2_distance(v,'[1,1,1,1]') as d from nbf order by l2_distance(v,'[1,1,1,1]') limit 3) q union all select 'f16', a, d from (select a, l2_distance(v,'[1,1,1,1]') as d from nhf order by l2_distance(v,'[1,1,1,1]') limit 3) q union all select 'int8', a, d from (select a, l2_distance(v,'[1,1,1,1]') as d from ni8 order by l2_distance(v,'[1,1,1,1]') limit 3) q union all select 'uint8', a, d from (select a, l2_distance(v,'[1,1,1,1]') as d from nu8 order by l2_distance(v,'[1,1,1,1]') limit 3) q) readiness order by case_name, d;
+case_name	a
+bf16	7
+bf16	2
+bf16	3
+f16	7
+f16	2
+f16	3
+int8	7
+int8	2
+int8	3
+uint8	7
+uint8	2
+uint8	3
 deallocate prepare wait_narrow_entries;
 drop table nbf;
 drop table nhf;

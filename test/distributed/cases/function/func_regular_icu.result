@@ -1,0 +1,47 @@
+SELECT REGEXP_LIKE('ab', 'a(?=b)') AS positive_lookahead,
+REGEXP_LIKE('ab', 'a(?!c)') AS negative_lookahead,
+REGEXP_LIKE('ab', '(?<=a)b') AS positive_lookbehind,
+REGEXP_LIKE('ab', '(?<!c)b') AS negative_lookbehind;
+➤ positive_lookahead[-7,1,0]  ¦  negative_lookahead[-7,1,0]  ¦  positive_lookbehind[-7,1,0]  ¦  negative_lookbehind[-7,1,0]  𝄀
+1  ¦  1  ¦  1  ¦  1
+SELECT REGEXP_LIKE('ab', '(?>a)b') AS atomic_group,
+REGEXP_LIKE('aaa', 'a++a') AS possessive_quantifier,
+REGEXP_LIKE('😀', '\\X') AS grapheme;
+➤ atomic_group[-7,1,0]  ¦  possessive_quantifier[-7,1,0]  ¦  grapheme[-7,1,0]  𝄀
+1  ¦  0  ¦  1
+SELECT 'aa' REGEXP '(a)\\1' AS operator_backreference,
+'ab' NOT REGEXP 'a(?!b)' AS operator_negative_lookahead;
+➤ operator_backreference[-7,1,0]  ¦  operator_negative_lookahead[-7,1,0]  𝄀
+1  ¦  1
+SELECT REGEXP_INSTR('ab', 'a(?=b)') AS instr_start,
+REGEXP_INSTR('ab', '(?<=a)b', 1, 1, 1) AS instr_end,
+REGEXP_SUBSTR('ab', 'a(?=b)') AS substr_lookahead,
+REGEXP_SUBSTR('ab', '(?<=a)b') AS substr_lookbehind;
+➤ instr_start[-5,64,0]  ¦  instr_end[-5,64,0]  ¦  substr_lookahead[12,2,0]  ¦  substr_lookbehind[12,2,0]  𝄀
+1  ¦  3  ¦  a  ¦  b
+SELECT REGEXP_REPLACE('abc', '(?<=a)b', 'X') AS replace_lookbehind,
+REGEXP_REPLACE('aa', '(a)\\1', '<$0>') AS replace_backreference,
+REGEXP_REPLACE('aba', '(?<left>a)(b)\\1', '<$1:$2:${left}>') AS replace_mixed_capture;
+➤ replace_lookbehind[12,7,0]  ¦  replace_backreference[12,14,0]  ¦  replace_mixed_capture[12,63,0]  𝄀
+aXc  ¦  <aa>  ¦  <a:b:a>
+SELECT REGEXP_INSTR('ab ab', 'a(?=b)', 1, 2, 1) AS second_end,
+REGEXP_SUBSTR('ab ab', 'a(?=b)', 1, 2) AS second_substr,
+REGEXP_REPLACE('ab ab', 'a(?=b)', 'X', 1, 2) AS second_replace;
+➤ second_end[-5,64,0]  ¦  second_substr[12,5,0]  ¦  second_replace[12,11,0]  𝄀
+5  ¦  a  ¦  ab Xb
+SELECT REGEXP_LIKE('AB', 'a(?=b)', 'i') AS match_type_case_fold,
+REGEXP_LIKE('é', '^\\X$') AS combining_grapheme,
+REGEXP_LIKE('👩‍💻', '^\\X$') AS zwj_grapheme;
+➤ match_type_case_fold[-7,1,0]  ¦  combining_grapheme[-7,1,0]  ¦  zwj_grapheme[-7,1,0]  𝄀
+1  ¦  1  ¦  1
+PREPARE regexp_icu_pattern_rebind FROM 'SELECT REGEXP_LIKE(?, ?) AS matched';
+SET @regexp_icu_subject = 'ab';
+SET @regexp_icu_pattern = 'a(?=b)';
+EXECUTE regexp_icu_pattern_rebind USING @regexp_icu_subject, @regexp_icu_pattern;
+➤ matched[-7,1,0]  𝄀
+1
+SET @regexp_icu_pattern = 'a+';
+EXECUTE regexp_icu_pattern_rebind USING @regexp_icu_subject, @regexp_icu_pattern;
+➤ matched[-7,1,0]  𝄀
+1
+DEALLOCATE PREPARE regexp_icu_pattern_rebind;

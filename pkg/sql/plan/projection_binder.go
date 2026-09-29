@@ -32,6 +32,17 @@ func NewProjectionBinder(builder *QueryBuilder, ctx *BindContext, havingBinder *
 }
 
 func (b *ProjectionBinder) BindExpr(astExpr tree.Expr, depth int32, isRoot bool) (*plan.Expr, error) {
+	if aliasExpr, projectPos, ok := b.ctx.isAliasExpansion(astExpr); ok {
+		if projectPos >= 0 && int(projectPos) < len(b.ctx.projects) {
+			return DeepCopyExpr(b.ctx.projects[projectPos]), nil
+		}
+		if b.havingBinder != nil {
+			previousHaving := b.havingBinder.bindingProjectedAlias
+			b.havingBinder.bindingProjectedAlias = true
+			defer func() { b.havingBinder.bindingProjectedAlias = previousHaving }()
+		}
+		return b.BindExpr(aliasExpr.Expr, depth, isRoot)
+	}
 	astStr := windowExprAstKey(astExpr)
 
 	if colPos, ok := b.ctx.timeByAst[astStr]; ok {
@@ -53,7 +64,20 @@ func (b *ProjectionBinder) BindExpr(astExpr tree.Expr, depth int32, isRoot bool)
 		}, nil
 	}
 
-	if colPos, ok := b.ctx.aggregateByAst[astStr]; ok {
+	if colPos, ok := b.ctx.groupConcatAggregatePosition(astExpr); ok {
+		return &plan.Expr{
+			Typ: b.ctx.aggregates[colPos].Typ,
+			Expr: &plan.Expr_Col{
+				Col: &plan.ColRef{
+					RelPos: b.ctx.aggregateTag,
+					ColPos: colPos,
+				},
+			},
+		}, nil
+	}
+
+	if colPos, ok := b.ctx.aggregateByAst[astStr]; ok &&
+		(!isGroupConcatAggregateExpr(astExpr) || b.allowGroupConcatReuse) {
 		return &plan.Expr{
 			Typ: b.ctx.aggregates[colPos].Typ,
 			Expr: &plan.Expr_Col{
@@ -98,6 +122,15 @@ func (b *ProjectionBinder) BindExpr(astExpr tree.Expr, depth int32, isRoot bool)
 		target := b.numericTargetType
 		b.numericTargetType = nil
 		defer func() { b.numericTargetType = target }()
+		_, isDirectPreparedParam := unwrapParenExpr(astExpr).(*tree.ParamExpr)
+		if b.builder != nil && b.builder.isPrepareStatement && isDirectPreparedParam &&
+			(b.builder.isInsertIgnore || (b.ctx != nil && b.ctx.assignmentIgnore)) &&
+			useIgnoreConversionAssignmentCast(*target) {
+			// A bare marker is the assignment source, not a numeric expression.
+			// Leave it as TEXT so the final DML assignment boundary can use
+			// cast_ignore and emit the per-row warning/adjustment at execution.
+			return b.baseBindExpr(astExpr, depth, isRoot)
+		}
 		_, isBareColumn := unwrapParenExpr(astExpr).(*tree.UnresolvedName)
 		if isBareColumn && isEnumOrSetPlanType(target) {
 			previousTarget := b.mysqlSpecialTargetType
@@ -156,6 +189,5 @@ func (b *ProjectionBinder) BindSubquery(astExpr *tree.Subquery, isRoot bool) (*p
 }
 
 func (b *ProjectionBinder) BindTimeWindowFunc(funcName string, astExpr *tree.FuncExpr, depth int32, isRoot bool) (*plan.Expr, error) {
-	b.ctx.timeAsts = append(b.ctx.timeAsts, astExpr)
 	return b.havingBinder.BindTimeWindowFunc(funcName, astExpr, depth, isRoot)
 }

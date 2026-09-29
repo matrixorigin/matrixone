@@ -15,7 +15,6 @@
 package rule
 
 import (
-	"github.com/matrixorigin/matrixone/pkg/common/moerr"
 	"github.com/matrixorigin/matrixone/pkg/container/batch"
 	"github.com/matrixorigin/matrixone/pkg/container/types"
 	"github.com/matrixorigin/matrixone/pkg/container/vector"
@@ -123,13 +122,32 @@ func (r *ConstantFold) Apply(node *plan.Node, _ *plan.Query, proc *process.Proce
 	}
 }
 
+// IsNullIntegerArgumentCast protects the source domain until EXECUTE.
+// Folding this to an INT64 NULL would make a selecting expression choose a
+// signed domain even when its actual non-NULL source is UINT64.
+func IsNullIntegerArgumentCast(expr *plan.Expr) bool {
+	fn := expr.GetF()
+	if fn == nil || fn.Func == nil || len(fn.Args) != 2 {
+		return false
+	}
+	id, overload := function.DecodeOverloadID(fn.Func.Obj)
+	return id == function.CAST &&
+		function.IsIntegerArgumentCastOverload(overload) &&
+		fn.Args[0].GetLit().GetIsnull()
+}
+
 func (r *ConstantFold) constantFold(expr *plan.Expr, proc *process.Process) *plan.Expr {
 	if expr == nil {
 		return expr
 	}
 
 	if expr.Typ.Id == int32(types.T_interval) {
-		panic(moerr.NewInternalError(proc.Ctx, "not supported type INTERVAL"))
+		// INTERVAL is meaningful as an argument to temporal functions, but the
+		// expression executor cannot materialize it as a standalone scalar
+		// literal. Retaining the expression is the constant-fold rule's normal
+		// fail-closed result; a public scalar boundary rejects it if no enclosing
+		// temporal operation consumes it.
+		return expr
 	}
 
 	fn := expr.GetF()
@@ -147,6 +165,17 @@ func (r *ConstantFold) constantFold(expr *plan.Expr, proc *process.Process) *pla
 			if cannotFold {
 				return expr
 			}
+			requiresStringProvenance, err := plan.RequiresMORPCVersion23StringProvenance(exprList)
+			if err != nil || requiresStringProvenance {
+				// LiteralVec uses the stable Vector wire format, which cannot carry
+				// per-item runtime string domains. Keep the literal list executable
+				// and visible to the remote protocol capability analysis.
+				return expr
+			}
+			requiresDecimalProvenance, err := plan.RequiresMORPCVersion89DecimalLiteralSemantics(exprList)
+			if err != nil {
+				return expr
+			}
 			isSerialized := ContainsSerializedLiteral(exprList)
 
 			vec, err := colexec.GenerateConstListExpressionExecutor(proc, exprList)
@@ -154,6 +183,11 @@ func (r *ConstantFold) constantFold(expr *plan.Expr, proc *process.Process) *pla
 				return expr
 			}
 			defer vec.Free(proc.Mp())
+			if vec.GetStringSources() != nil {
+				// LiteralVec has only a uniform source field. Keep mixed-owner
+				// lists structured so each scalar literal retains its identity.
+				return expr
+			}
 
 			// Nullable IN-lists must keep their null bitmap aligned with values.
 			if !vec.IsConstNull() && !vec.GetNulls().Any() {
@@ -169,9 +203,11 @@ func (r *ConstantFold) constantFold(expr *plan.Expr, proc *process.Process) *pla
 				Typ: expr.Typ,
 				Expr: &plan.Expr_Vec{
 					Vec: &plan.LiteralVec{
-						Len:          int32(vec.Length()),
-						Data:         data,
-						IsSerialized: isSerialized,
+						Len:                       int32(vec.Length()),
+						Data:                      data,
+						IsSerialized:              isSerialized,
+						StringSource:              uint32(vec.GetStringSource()),
+						DecimalLiteralRequiresV82: requiresDecimalProvenance,
 					},
 				},
 			}
@@ -180,15 +216,36 @@ func (r *ConstantFold) constantFold(expr *plan.Expr, proc *process.Process) *pla
 		return expr
 	}
 	overloadID := fn.Func.GetObj()
+	if r.isPrepared && IsNullIntegerArgumentCast(expr) {
+		return expr
+	}
 	f, exists := function.GetFunctionByIdWithoutError(overloadID)
 
 	if !exists {
 		return expr
 	}
+	// The persisted-expression admission pass runs after optimization. Keep
+	// spatial-distance functions visible until that pass has observed the v86
+	// requirement; folding them to a literal would erase the only durable
+	// capability marker and let an older reader rebind the original SQL under
+	// incompatible planar semantics.
+	if requiresSpatial, err := plan.RequiresMORPCVersion90SpatialDistanceSemantics(expr); err != nil || requiresSpatial {
+		return expr
+	}
 	if f.CannotFold() { // function cannot be fold
 		return expr
 	}
+	if IsLegacyTimeAssignmentOutsideInternalRange(fn) {
+		return expr
+	}
 	if f.IsRealTimeRelated() && r.isPrepared {
+		return expr
+	}
+	if r.isPrepared && IsImplicitFloatCastOfExplicitDecimalConstant(expr) {
+		// A parameterized parent can be rebound from FLOAT to DECIMAL at execute
+		// time. Keep the exact explicit DECIMAL source available underneath the
+		// provisional binder cast; folding it to FLOAT here irreversibly loses
+		// digits before execute-time common-type specialization can run.
 		return expr
 	}
 	isVec := false
@@ -196,7 +253,7 @@ func (r *ConstantFold) constantFold(expr *plan.Expr, proc *process.Process) *pla
 		fn.Args[i] = r.constantFold(fn.Args[i], proc)
 		isVec = isVec || fn.Args[i].GetVec() != nil
 	}
-	if r.isPrepared && isSqlModeDependentTemporalCast(fn) {
+	if r.isPrepared && ContainsSqlModeDependentTemporalCall(expr) {
 		return expr
 	}
 	if f.IsAgg() || f.IsWin() {
@@ -212,13 +269,23 @@ func (r *ConstantFold) constantFold(expr *plan.Expr, proc *process.Process) *pla
 		return expr
 	}
 
-	vec, free, err := colexec.GetReadonlyResultFromExpression(proc, expr, []*batch.Batch{r.bat})
+	vec, free, warned, err := EvaluateConstantExpression(proc, expr, r.bat)
 	if err != nil {
 		return expr
 	}
 	defer free()
+	if warned {
+		return expr
+	}
 
 	if isVec {
+		requiresDecimalProvenance, err := plan.RequiresMORPCVersion89DecimalLiteralSemantics(fn.Args)
+		if err != nil {
+			return expr
+		}
+		if vec.GetStringSources() != nil {
+			return expr
+		}
 		data, err := vec.MarshalBinary()
 		if err != nil {
 			return expr
@@ -228,8 +295,10 @@ func (r *ConstantFold) constantFold(expr *plan.Expr, proc *process.Process) *pla
 			Typ: expr.Typ,
 			Expr: &plan.Expr_Vec{
 				Vec: &plan.LiteralVec{
-					Len:  int32(vec.Length()),
-					Data: data,
+					Len:                       int32(vec.Length()),
+					Data:                      data,
+					StringSource:              uint32(vec.GetStringSource()),
+					DecimalLiteralRequiresV82: requiresDecimalProvenance,
 				},
 			},
 		}
@@ -239,6 +308,8 @@ func (r *ConstantFold) constantFold(expr *plan.Expr, proc *process.Process) *pla
 	if c == nil {
 		return expr
 	}
+	PreserveFoldedLiteralStringDomain(expr, c)
+	PreserveFoldedDecimalLiteralSemantics(expr, c)
 
 	MarkFoldedLiteralSerialized(overloadID, fn.Args, c)
 
@@ -294,6 +365,11 @@ func (r *ConstantFold) constantFold(expr *plan.Expr, proc *process.Process) *pla
 			}
 		}
 	}
+	if r.isPrepared {
+		if source, ok := ProvisionalPreparedExactPeerSource(expr); ok {
+			c.Src = source
+		}
+	}
 
 	ec := &plan.Expr_Lit{
 		Lit: c,
@@ -304,13 +380,144 @@ func (r *ConstantFold) constantFold(expr *plan.Expr, proc *process.Process) *pla
 	// For example, TIMESTAMPADD with DATE input returns DATETIME type (from retType),
 	// but the actual vector type might be DATETIME (after TempSetType) or DATE (before TempSetType)
 	// We should preserve the retType (DATETIME) to ensure consistency
-	expr.Typ = plan.Type{Id: expr.Typ.Id, Scale: vec.GetType().Scale, Width: vec.GetType().Width}
+	expr.Typ.Scale = vec.GetType().Scale
+	expr.Typ.Width = vec.GetType().Width
 	expr.Expr = ec
 
 	return expr
 }
 
-func GetConstantValue(vec *vector.Vector, transAll bool, row uint64) *plan.Literal {
+// IsImplicitFloatCastOfExplicitDecimalConstant reports the narrow binder cast
+// whose exact source must survive until a parameterized parent is rebound.
+func IsImplicitFloatCastOfExplicitDecimalConstant(expr *plan.Expr) bool {
+	if expr == nil || !types.T(expr.Typ.Id).IsFloat() {
+		return false
+	}
+	fn := expr.GetF()
+	if fn == nil || fn.Func == nil || fn.Func.GetObjName() != "cast" || len(fn.Args) == 0 {
+		return false
+	}
+	_, overload := function.DecodeOverloadID(fn.Func.GetObj())
+	if overload != 0 {
+		return false
+	}
+	source := fn.Args[0]
+	if source == nil || !types.T(source.Typ.Id).IsDecimal() || !IsConstant(source, false) {
+		return false
+	}
+	sourceFn := source.GetF()
+	if sourceFn == nil || sourceFn.Func == nil || sourceFn.Func.GetObjName() != "cast" {
+		return false
+	}
+	_, sourceOverload := function.DecodeOverloadID(sourceFn.Func.GetObj())
+	return sourceOverload != 0
+}
+
+// ProvisionalPreparedExactPeerSource returns the exact input of a binder cast
+// chosen while a prepared parameter had only a provisional type. Constant
+// folding may still materialize the FLOAT or TEXT value, but EXECUTE needs
+// this source to restore the fixed peer's numeric domain without rounding.
+func ProvisionalPreparedExactPeerSource(expr *plan.Expr) (*plan.Expr, bool) {
+	if expr == nil || !expr.GetPreparedNumeric().GetProvisionalResultPeer() {
+		return nil, false
+	}
+	target := types.T(expr.Typ.Id)
+	if !target.IsFloat() && !target.IsMySQLString() {
+		return nil, false
+	}
+	fn := expr.GetF()
+	if fn == nil || fn.Func == nil || fn.Func.GetObjName() != "cast" || len(fn.Args) == 0 {
+		return nil, false
+	}
+	_, overload := function.DecodeOverloadID(fn.Func.GetObj())
+	if overload != 0 || fn.GetSyntaxExplicitCast() || fn.Args[0] == nil {
+		return nil, false
+	}
+	source := types.T(fn.Args[0].Typ.Id)
+	if source.IsInteger() || source.IsDecimal() || source == types.T_bit {
+		return fn.Args[0], true
+	}
+	return nil, false
+}
+
+// PreserveFoldedLiteralStringDomain keeps a binder-inserted cast transparent to
+// selected-value provenance when the cast itself is materialized as a literal.
+// Explicit CAST uses a nonzero overload and remains a semantic boundary.
+func PreserveFoldedLiteralStringDomain(expr *plan.Expr, literal *plan.Literal) {
+	if expr == nil || literal == nil || literal.Isnull {
+		return
+	}
+	if _, ok := literal.Value.(*plan.Literal_Sval); !ok {
+		return
+	}
+	fn := expr.GetF()
+	if fn == nil || len(fn.Args) == 0 {
+		return
+	}
+	fid, overload := function.DecodeOverloadID(fn.GetFunc().GetObj())
+	if fid != function.CAST || overload != 0 {
+		return
+	}
+	source := fn.Args[0]
+	if source == nil || !types.T(source.Typ.Id).IsMySQLString() ||
+		!types.T(expr.Typ.Id).IsMySQLString() {
+		return
+	}
+
+	sourceDomain := types.StaticStringDomain(types.NewWithCharset(
+		types.T(source.Typ.Id), source.Typ.Width, source.Typ.Scale, uint8(source.Typ.Charset)))
+	if sourceLiteral := source.GetLit(); sourceLiteral != nil {
+		switch sourceLiteral.LiteralForm {
+		case plan.StringLiteralForm_STRING_LITERAL_TEXT:
+			sourceDomain = types.StringDomainText
+		case plan.StringLiteralForm_STRING_LITERAL_BINARY_INTRODUCER,
+			plan.StringLiteralForm_STRING_LITERAL_HEX,
+			plan.StringLiteralForm_STRING_LITERAL_BIT:
+			sourceDomain = types.StringDomainBinary
+		}
+	}
+	targetDomain := types.StaticStringDomain(types.NewWithCharset(
+		types.T(expr.Typ.Id), expr.Typ.Width, expr.Typ.Scale, uint8(expr.Typ.Charset)))
+	if sourceDomain == targetDomain {
+		literal.LiteralForm = plan.StringLiteralForm_STRING_LITERAL_NONE
+	} else if sourceDomain == types.StringDomainBinary {
+		literal.LiteralForm = plan.StringLiteralForm_STRING_LITERAL_BINARY_INTRODUCER
+	} else {
+		literal.LiteralForm = plan.StringLiteralForm_STRING_LITERAL_TEXT
+	}
+}
+
+// PreserveFoldedDecimalLiteralSemantics carries the planner provenance bit
+// through constant folding. A folded CAST or arithmetic expression may replace
+// the source literal with a new Literal, but an old CN would still rebind the
+// persisted SQL using its pre-Decimal256 rules.
+func PreserveFoldedDecimalLiteralSemantics(expr *plan.Expr, literal *plan.Literal) {
+	if expr == nil || literal == nil || literal.DecimalLiteralRequiresV82 {
+		return
+	}
+	_ = plan.VisitExprTree(expr, func(current *plan.Expr) error {
+		if source := current.GetLit(); source != nil && source.DecimalLiteralRequiresV82 {
+			literal.DecimalLiteralRequiresV82 = true
+		}
+		if source := current.GetVec(); source != nil && source.DecimalLiteralRequiresV82 {
+			literal.DecimalLiteralRequiresV82 = true
+		}
+		return nil
+	})
+}
+
+func GetConstantValue(vec *vector.Vector, transAll bool, row uint64) (literal *plan.Literal) {
+	defer func() {
+		if literal == nil {
+			return
+		}
+		// Zero is the canonical spelling of an ordinary source literal. Encode
+		// every other executable owner as StringSource + 1 so every vector to
+		// scalar materialization path, including NULL, preserves provenance.
+		if source := vec.GetStringSourceAt(int(row)); source != types.StringSourceLiteral {
+			literal.StringSource = uint32(source) + 1
+		}
+	}()
 	if vec.IsConstNull() || vec.GetNulls().Contains(row) {
 		return &plan.Literal{Isnull: true}
 	}
@@ -389,11 +596,20 @@ func GetConstantValue(vec *vector.Vector, transAll bool, row uint64) *plan.Liter
 		}
 	case types.T_varchar, types.T_char,
 		types.T_binary, types.T_varbinary, types.T_text, types.T_blob, types.T_datalink, types.T_geometry:
-		return &plan.Literal{
+		literal := &plan.Literal{
 			Value: &plan.Literal_Sval{
 				Sval: vec.GetStringAt(int(row)),
 			},
 		}
+		if vec.GetType().Oid.IsMySQLString() {
+			switch vec.GetRuntimeStringDomainAt(int(row)) {
+			case types.RuntimeStringText:
+				literal.LiteralForm = plan.StringLiteralForm_STRING_LITERAL_TEXT
+			case types.RuntimeStringBinary:
+				literal.LiteralForm = plan.StringLiteralForm_STRING_LITERAL_BINARY_INTRODUCER
+			}
+		}
+		return literal
 	case types.T_json:
 		if !transAll {
 			return nil
@@ -462,15 +678,21 @@ func GetConstantValue(vec *vector.Vector, transAll bool, row uint64) *plan.Liter
 
 func GetConstantValue2(proc *process.Process, expr *plan.Expr, vec *vector.Vector) (get bool, err error) {
 	if cExpr, ok := expr.Expr.(*plan.Expr_Lit); ok {
+		source, sourceErr := colexec.DecodeLiteralStringSource(cExpr.Lit)
+		if sourceErr != nil {
+			return false, sourceErr
+		}
+		// Publish known provenance with the value, not via an ordinary append
+		// followed by a row-source rewrite (quadratic for uniform VALUES).
 		if cExpr.Lit.Isnull {
-			err = vector.AppendBytes(vec, nil, true, proc.Mp())
+			err = vector.AppendBytesWithStringSource(vec, nil, true, source, proc.Mp())
 			return true, err
 		}
 		switch vec.GetType().Oid {
 		case types.T_bool:
 			if val, ok := cExpr.Lit.Value.(*plan.Literal_Bval); ok {
 				val := val.Bval
-				err = vector.AppendFixed(vec, val, false, proc.GetMPool())
+				err = vector.AppendFixedWithStringSource(vec, val, false, source, proc.GetMPool())
 				return true, err
 			} else {
 				err = vector.AppendBytes(vec, nil, true, proc.Mp())
@@ -479,7 +701,7 @@ func GetConstantValue2(proc *process.Process, expr *plan.Expr, vec *vector.Vecto
 		case types.T_bit:
 			if val, ok := cExpr.Lit.Value.(*plan.Literal_U64Val); ok {
 				val := val.U64Val
-				err = vector.AppendFixed(vec, val, false, proc.GetMPool())
+				err = vector.AppendFixedWithStringSource(vec, val, false, source, proc.GetMPool())
 				return true, err
 			} else {
 				err = vector.AppendBytes(vec, nil, true, proc.Mp())
@@ -488,7 +710,7 @@ func GetConstantValue2(proc *process.Process, expr *plan.Expr, vec *vector.Vecto
 		case types.T_int8:
 			if val, ok := cExpr.Lit.Value.(*plan.Literal_I8Val); ok {
 				val := int8(val.I8Val)
-				err = vector.AppendFixed(vec, val, false, proc.GetMPool())
+				err = vector.AppendFixedWithStringSource(vec, val, false, source, proc.GetMPool())
 				return true, err
 			} else {
 				err = vector.AppendBytes(vec, nil, true, proc.Mp())
@@ -497,7 +719,7 @@ func GetConstantValue2(proc *process.Process, expr *plan.Expr, vec *vector.Vecto
 		case types.T_int16:
 			if val, ok := cExpr.Lit.Value.(*plan.Literal_I16Val); ok {
 				val := int16(val.I16Val)
-				err = vector.AppendFixed(vec, val, false, proc.GetMPool())
+				err = vector.AppendFixedWithStringSource(vec, val, false, source, proc.GetMPool())
 				return true, err
 			} else {
 				err = vector.AppendBytes(vec, nil, true, proc.Mp())
@@ -506,7 +728,7 @@ func GetConstantValue2(proc *process.Process, expr *plan.Expr, vec *vector.Vecto
 		case types.T_int32:
 			if val, ok := cExpr.Lit.Value.(*plan.Literal_I32Val); ok {
 				val := val.I32Val
-				err = vector.AppendFixed(vec, val, false, proc.GetMPool())
+				err = vector.AppendFixedWithStringSource(vec, val, false, source, proc.GetMPool())
 				return true, err
 			} else {
 				err = vector.AppendBytes(vec, nil, true, proc.Mp())
@@ -515,7 +737,7 @@ func GetConstantValue2(proc *process.Process, expr *plan.Expr, vec *vector.Vecto
 		case types.T_int64:
 			if val, ok := cExpr.Lit.Value.(*plan.Literal_I64Val); ok {
 				val := val.I64Val
-				err = vector.AppendFixed(vec, val, false, proc.GetMPool())
+				err = vector.AppendFixedWithStringSource(vec, val, false, source, proc.GetMPool())
 				return true, err
 			} else {
 				err = vector.AppendBytes(vec, nil, true, proc.Mp())
@@ -524,7 +746,7 @@ func GetConstantValue2(proc *process.Process, expr *plan.Expr, vec *vector.Vecto
 		case types.T_uint8:
 			if val, ok := cExpr.Lit.Value.(*plan.Literal_U8Val); ok {
 				val := uint8(val.U8Val)
-				err = vector.AppendFixed(vec, val, false, proc.GetMPool())
+				err = vector.AppendFixedWithStringSource(vec, val, false, source, proc.GetMPool())
 				return true, err
 			} else {
 				err = vector.AppendBytes(vec, nil, true, proc.Mp())
@@ -533,7 +755,7 @@ func GetConstantValue2(proc *process.Process, expr *plan.Expr, vec *vector.Vecto
 		case types.T_uint16:
 			if val, ok := cExpr.Lit.Value.(*plan.Literal_U16Val); ok {
 				val := uint16(val.U16Val)
-				err = vector.AppendFixed(vec, val, false, proc.GetMPool())
+				err = vector.AppendFixedWithStringSource(vec, val, false, source, proc.GetMPool())
 				return true, err
 			} else {
 				err = vector.AppendBytes(vec, nil, true, proc.Mp())
@@ -542,7 +764,7 @@ func GetConstantValue2(proc *process.Process, expr *plan.Expr, vec *vector.Vecto
 		case types.T_uint32:
 			if val, ok := cExpr.Lit.Value.(*plan.Literal_U32Val); ok {
 				val := val.U32Val
-				err = vector.AppendFixed(vec, val, false, proc.GetMPool())
+				err = vector.AppendFixedWithStringSource(vec, val, false, source, proc.GetMPool())
 				return true, err
 			} else {
 				err = vector.AppendBytes(vec, nil, true, proc.Mp())
@@ -551,7 +773,7 @@ func GetConstantValue2(proc *process.Process, expr *plan.Expr, vec *vector.Vecto
 		case types.T_uint64:
 			if val, ok := cExpr.Lit.Value.(*plan.Literal_U64Val); ok {
 				val := val.U64Val
-				err = vector.AppendFixed(vec, val, false, proc.GetMPool())
+				err = vector.AppendFixedWithStringSource(vec, val, false, source, proc.GetMPool())
 				return true, err
 			} else {
 				err = vector.AppendBytes(vec, nil, true, proc.Mp())
@@ -560,7 +782,7 @@ func GetConstantValue2(proc *process.Process, expr *plan.Expr, vec *vector.Vecto
 		case types.T_float32:
 			if val, ok := cExpr.Lit.Value.(*plan.Literal_Fval); ok {
 				val := val.Fval
-				err = vector.AppendFixed(vec, val, false, proc.GetMPool())
+				err = vector.AppendFixedWithStringSource(vec, val, false, source, proc.GetMPool())
 				return true, err
 			} else {
 				err = vector.AppendBytes(vec, nil, true, proc.Mp())
@@ -569,7 +791,7 @@ func GetConstantValue2(proc *process.Process, expr *plan.Expr, vec *vector.Vecto
 		case types.T_float64:
 			if val, ok := cExpr.Lit.Value.(*plan.Literal_Dval); ok {
 				val := val.Dval
-				err = vector.AppendFixed(vec, val, false, proc.GetMPool())
+				err = vector.AppendFixedWithStringSource(vec, val, false, source, proc.GetMPool())
 				return true, err
 			} else {
 				err = vector.AppendBytes(vec, nil, true, proc.Mp())
@@ -579,7 +801,7 @@ func GetConstantValue2(proc *process.Process, expr *plan.Expr, vec *vector.Vecto
 			types.T_blob, types.T_datalink, types.T_json, types.T_geometry:
 			if val, ok := cExpr.Lit.Value.(*plan.Literal_Sval); ok {
 				val := val.Sval
-				err = vector.AppendBytes(vec, []byte(val), false, proc.Mp())
+				err = vector.AppendBytesWithStringSource(vec, []byte(val), false, source, proc.Mp())
 				return true, err
 			} else {
 				err = vector.AppendBytes(vec, nil, false, proc.Mp())
@@ -589,7 +811,7 @@ func GetConstantValue2(proc *process.Process, expr *plan.Expr, vec *vector.Vecto
 			types.T_array_bf16, types.T_array_float16, types.T_array_int8, types.T_array_uint8:
 			if val, ok := cExpr.Lit.Value.(*plan.Literal_VecVal); ok {
 				val := val.VecVal
-				err = vector.AppendBytes(vec, []byte(val), false, proc.Mp())
+				err = vector.AppendBytesWithStringSource(vec, []byte(val), false, source, proc.Mp())
 				return true, err
 			} else {
 				err = vector.AppendBytes(vec, nil, false, proc.Mp())
@@ -598,7 +820,7 @@ func GetConstantValue2(proc *process.Process, expr *plan.Expr, vec *vector.Vecto
 		case types.T_timestamp:
 			if val, ok := cExpr.Lit.Value.(*plan.Literal_Timestampval); ok {
 				val := val.Timestampval
-				err = vector.AppendFixed(vec, val, false, proc.GetMPool())
+				err = vector.AppendFixedWithStringSource(vec, val, false, source, proc.GetMPool())
 				return true, err
 			} else {
 				err = vector.AppendBytes(vec, nil, true, proc.Mp())
@@ -607,7 +829,7 @@ func GetConstantValue2(proc *process.Process, expr *plan.Expr, vec *vector.Vecto
 		case types.T_date:
 			if val, ok := cExpr.Lit.Value.(*plan.Literal_Dval); ok {
 				val := val.Dval
-				err = vector.AppendFixed(vec, val, false, proc.GetMPool())
+				err = vector.AppendFixedWithStringSource(vec, val, false, source, proc.GetMPool())
 				return true, err
 			} else {
 				err = vector.AppendBytes(vec, nil, true, proc.Mp())
@@ -616,7 +838,7 @@ func GetConstantValue2(proc *process.Process, expr *plan.Expr, vec *vector.Vecto
 		case types.T_time:
 			if val, ok := cExpr.Lit.Value.(*plan.Literal_Dval); ok {
 				val := val.Dval
-				err = vector.AppendFixed(vec, val, false, proc.GetMPool())
+				err = vector.AppendFixedWithStringSource(vec, val, false, source, proc.GetMPool())
 				return true, err
 			} else {
 				err = vector.AppendBytes(vec, nil, true, proc.Mp())
@@ -625,16 +847,16 @@ func GetConstantValue2(proc *process.Process, expr *plan.Expr, vec *vector.Vecto
 		case types.T_datetime:
 			if val, ok := cExpr.Lit.Value.(*plan.Literal_Datetimeval); ok {
 				val := val.Datetimeval
-				err = vector.AppendFixed(vec, types.Datetime(val), false, proc.GetMPool())
+				err = vector.AppendFixedWithStringSource(vec, types.Datetime(val), false, source, proc.GetMPool())
 				return true, err
 			} else {
-				err = vector.AppendBytes(vec, nil, true, proc.Mp())
+				err = vector.AppendBytesWithStringSource(vec, nil, true, source, proc.Mp())
 				return true, err
 			}
 		case types.T_enum:
 			if val, ok := cExpr.Lit.Value.(*plan.Literal_EnumVal); ok {
 				val := types.Enum(val.EnumVal)
-				err = vector.AppendFixed(vec, val, false, proc.GetMPool())
+				err = vector.AppendFixedWithStringSource(vec, val, false, source, proc.GetMPool())
 				return true, err
 			} else {
 				err = vector.AppendBytes(vec, nil, true, proc.Mp())
@@ -643,7 +865,7 @@ func GetConstantValue2(proc *process.Process, expr *plan.Expr, vec *vector.Vecto
 		case types.T_decimal64:
 			if val, ok := cExpr.Lit.Value.(*plan.Literal_Decimal64Val); ok {
 				val := val.Decimal64Val.A
-				err = vector.AppendFixed(vec, val, false, proc.GetMPool())
+				err = vector.AppendFixedWithStringSource(vec, val, false, source, proc.GetMPool())
 				return true, err
 			} else {
 				err = vector.AppendBytes(vec, nil, true, proc.Mp())
@@ -652,7 +874,7 @@ func GetConstantValue2(proc *process.Process, expr *plan.Expr, vec *vector.Vecto
 		case types.T_decimal128:
 			if val, ok := cExpr.Lit.Value.(*plan.Literal_Decimal128Val); ok {
 				val := types.Decimal128{B0_63: uint64(val.Decimal128Val.A), B64_127: uint64(val.Decimal128Val.B)}
-				err = vector.AppendFixed(vec, val, false, proc.GetMPool())
+				err = vector.AppendFixedWithStringSource(vec, val, false, source, proc.GetMPool())
 				return true, err
 			} else {
 				err = vector.AppendBytes(vec, nil, true, proc.Mp())
@@ -714,7 +936,7 @@ func ContainsSerializedLiteral(exprs []*plan.Expr) bool {
 }
 
 func isSqlModeDependentTemporalCast(fn *plan.Function) bool {
-	functionID, _ := function.DecodeOverloadID(fn.Func.GetObj())
+	functionID, overloadID := function.DecodeOverloadID(fn.Func.GetObj())
 	if functionID != function.CAST || len(fn.Args) != 2 {
 		return false
 	}
@@ -722,16 +944,122 @@ func isSqlModeDependentTemporalCast(fn *plan.Function) bool {
 	switch types.T(fn.Args[0].Typ.Id) {
 	case types.T_char, types.T_varchar, types.T_binary, types.T_varbinary,
 		types.T_blob, types.T_text, types.T_datalink:
+		target := types.T(fn.Args[1].Typ.Id)
+		if target != types.T_date && target != types.T_datetime && target != types.T_timestamp {
+			return false
+		}
+		lit := fn.Args[0].GetLit()
+		if lit == nil {
+			return true
+		}
+		if lit.Isnull {
+			return false
+		}
+		if types.T(fn.Args[1].Typ.Id) == types.T_timestamp {
+			// TIMESTAMP conversion also depends on the execution-time zone.
+			return true
+		}
+		value, ok := lit.Value.(*plan.Literal_Sval)
+		if !ok {
+			return true
+		}
+		switch types.T(fn.Args[1].Typ.Id) {
+		case types.T_date:
+			parsed, err := types.ParseDateCast(value.Sval)
+			return err != nil || parsed == types.ZeroDate
+		case types.T_datetime:
+			parsed, err := types.ParseDatetime(value.Sval, 6)
+			return err != nil || parsed == types.ZeroDatetime
+		default:
+			return false
+		}
+	case types.T_date, types.T_datetime:
+		if types.T(fn.Args[1].Typ.Id) != types.T_date ||
+			(!fn.SyntaxExplicitCast && overloadID != 1) {
+			return false
+		}
+		// Only the typed zero sentinel depends on NO_ZERO_DATE. Keep normal
+		// literal casts foldable, including prepared interval constants.
+		lit := fn.Args[0].GetLit()
+		if lit == nil {
+			return true
+		}
+		if lit.Isnull {
+			return false
+		}
+		if types.T(fn.Args[0].Typ.Id) == types.T_date {
+			return lit.GetDateval() == int32(types.ZeroDate)
+		}
+		return lit.GetDatetimeval() == int64(types.ZeroDatetime)
 	default:
 		return false
 	}
 
-	switch types.T(fn.Args[1].Typ.Id) {
-	case types.T_date, types.T_datetime, types.T_timestamp:
+}
+
+func isSqlModeDependentTemporalFunction(fn *plan.Function) bool {
+	id, overload := function.DecodeOverloadID(fn.Func.GetObj())
+	if id == function.EXTRACT && overload >= 5 && len(fn.Args) == 2 && types.T(fn.Args[1].Typ.Id).IsMySQLString() {
 		return true
+	}
+	if len(fn.Args) != 1 {
+		return false
+	}
+	functionID, _ := function.DecodeOverloadID(fn.Func.GetObj())
+	argType := types.T(fn.Args[0].Typ.Id)
+	switch functionID {
+	case function.DATE:
+		return argType == types.T_date || argType == types.T_datetime || argType.IsMySQLString()
+	case function.DAY:
+		// DAY is resolved through a DATE argument. Retain its literal-to-DATE
+		// conversion until EXECUTE so NO_ZERO_DATE can still null it.
+		return true
+	case function.YEAR, function.MONTH, function.QUARTER, function.DAYOFMONTH:
+		return argType.IsMySQLString()
 	default:
 		return false
 	}
+}
+
+// A wrapper such as IS NULL is itself constant-looking when its child is a
+// literal-only DATE/YEAR expression. Preserve the entire path to that child
+// so every EXECUTE evaluates it under the current session sql_mode.
+func ContainsSqlModeDependentTemporalCall(expr *plan.Expr) bool {
+	fn := expr.GetF()
+	if fn == nil {
+		return false
+	}
+	if isSqlModeDependentTemporalCast(fn) || isSqlModeDependentTemporalFunction(fn) {
+		return true
+	}
+	for _, arg := range fn.Args {
+		if arg != nil && ContainsSqlModeDependentTemporalCall(arg) {
+			return true
+		}
+	}
+	return false
+}
+
+// IsLegacyTimeAssignmentOutsideInternalRange identifies a CAST_STRICT literal
+// produced for an older protocol's TIME assignment. The literal is valid MySQL
+// TIME syntax but exceeds MatrixOne's internal representation, so it must reach
+// the runtime assignment cast where strict/non-strict policy is available.
+func IsLegacyTimeAssignmentOutsideInternalRange(fn *plan.Function) bool {
+	functionID, _ := function.DecodeOverloadID(fn.Func.GetObj())
+	if functionID != function.CAST_STRICT || len(fn.Args) != 2 ||
+		types.T(fn.Args[1].Typ.Id) != types.T_time {
+		return false
+	}
+	literal := fn.Args[0].GetLit()
+	if literal == nil {
+		return false
+	}
+	value, ok := literal.Value.(*plan.Literal_Sval)
+	if !ok {
+		return false
+	}
+	_, outOfRange := types.IsTimeStringOutOfInternalRange(value.Sval, fn.Args[1].Typ.Scale)
+	return outOfRange
 }
 
 func IsConstant(e *plan.Expr, varAndParamIsConst bool) bool {
@@ -832,4 +1160,24 @@ func isZeroLiteral(lit *plan.Literal) bool {
 		return v.Decimal128Val.A == 0 && v.Decimal128Val.B == 0
 	}
 	return false
+}
+
+// foldWarningSink records only the presence of diagnostics. Speculative
+// evaluation must neither publish a warning nor erase its runtime producer.
+type foldWarningSink struct{ warned bool }
+
+func (s *foldWarningSink) AppendWarningDiagnostic(uint16, string) { s.warned = true }
+func (s *foldWarningSink) AppendWarningCount(n uint64)            { s.warned = s.warned || n != 0 }
+func (s *foldWarningSink) GetWarningRetentionLimit() int          { return 0 }
+
+// EvaluateConstantExpression is shared by binder and optimizer folding. The
+// child borrows the context and memory pool; only the expression result needs
+// freeing. Never mutate the statement's immutable warning destination.
+func EvaluateConstantExpression(proc *process.Process, expr *plan.Expr, bat *batch.Batch) (*vector.Vector, func(), bool, error) {
+	sink := &foldWarningSink{}
+	child := proc.NewNoContextChildProc(0)
+	child.Ctx = proc.Ctx
+	child.WarningSink = sink
+	vec, free, err := colexec.GetReadonlyResultFromExpression(child, expr, []*batch.Batch{bat})
+	return vec, free, sink.warned, err
 }

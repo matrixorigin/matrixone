@@ -225,6 +225,7 @@ INSERT INTO information_schema.KEYWORDS VALUES
 ('FOUND'                                  , 0),
 ('FROM'                                   , 1),
 ('FULL'                                   , 0),
+('FULLSCAN'                               , 0),
 ('FULLTEXT'                               , 1),
 ('FUNCTION'                               , 1),
 ('GENERAL'                                , 0),

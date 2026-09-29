@@ -55,7 +55,23 @@ func NewCatalog() *CatalogCache {
 			end   types.TS
 		}{start: types.MaxTs()},
 	}
+	cc.tableQueryProbePool.New = func() any {
+		return new(TableItem)
+	}
+	cc.databaseQueryProbePool.New = func() any {
+		return new(DatabaseItem)
+	}
 	return cc
+}
+
+func releaseTableQueryProbe(pool *sync.Pool, probe *TableItem) {
+	*probe = TableItem{}
+	pool.Put(probe)
+}
+
+func releaseDatabaseQueryProbe(pool *sync.Pool, probe *DatabaseItem) {
+	*probe = DatabaseItem{}
+	pool.Put(probe)
 }
 
 func (cc *CatalogCache) UpdateDuration(start types.TS, end types.TS) {
@@ -98,9 +114,32 @@ type GCReport struct {
 	DStaleCpk  int
 }
 
+type catalogGCDeleteKind uint8
+
+const (
+	catalogGCDeleteTable catalogGCDeleteKind = iota
+	catalogGCDeleteDatabase
+)
+
+// deleteCatalogVersions deletes a newest-first group from oldest to newest.
+// When the newest collected version is a tombstone, keeping it until all
+// superseded live versions are gone prevents concurrent readers from briefly
+// observing a dropped database or table as live again.
+func deleteCatalogVersions[T any](items []T, deleteItem func(T)) {
+	for i := len(items) - 1; i >= 0; i-- {
+		deleteItem(items[i])
+	}
+}
+
 func (cc *CatalogCache) GC(ts timestamp.Timestamp) GCReport {
 	cc.gcMu.Lock()
 	defer cc.gcMu.Unlock()
+
+	// Stop serving snapshots whose retained history is about to be removed
+	// before the first destructive operation. Readers at an older snapshot
+	// must fall back to storage rather than interpreting a partially retired
+	// cache as an authoritative miss.
+	cc.UpdateStart(types.TimestampToTS(ts))
 
 	/*
 							GC
@@ -123,15 +162,20 @@ func (cc *CatalogCache) GC(ts timestamp.Timestamp) GCReport {
 
 	r := GCReport{}
 	{ // table cache gc
+		var prevAccountId uint32
 		var prevName string
 		var prevDbId uint64
 		deletedCpkey := make([]*TableItem, 0, 16)
 		deletedItems := make([]*TableItem, 0, 16)
+		seenGroup := false
 		seenLargest := false
 		cc.tables.data.Scan(func(item *TableItem) bool {
-			if item.DatabaseId != prevDbId {
+			if !seenGroup || item.AccountId != prevAccountId || item.DatabaseId != prevDbId {
+				prevAccountId = item.AccountId
 				prevDbId = item.DatabaseId
 				prevName = ""
+				seenGroup = true
+				seenLargest = false
 			}
 
 			if item.Name != prevName {
@@ -157,22 +201,29 @@ func (cc *CatalogCache) GC(ts timestamp.Timestamp) GCReport {
 		})
 		r.TStaleItem = len(deletedItems)
 		r.TStaleCpk = len(deletedCpkey)
-		for _, item := range deletedItems {
+		deleteCatalogVersions(deletedItems, func(item *TableItem) {
 			cc.tables.data.Delete(item)
-		}
+			if cc.gcDeleteObserverForTesting != nil {
+				cc.gcDeleteObserverForTesting(catalogGCDeleteTable)
+			}
+		})
 		for _, item := range deletedCpkey {
 			cc.tables.cpkeyIndex.Delete(item)
 		}
 
 	}
 	{ // database cache gc
+		var prevAccountId uint32
 		var prevName string
 		deletedCpkey := make([]*DatabaseItem, 0, 16)
 		deletedItems := make([]*DatabaseItem, 0, 16)
+		seenGroup := false
 		seenLargest := false
 		cc.databases.data.Scan(func(item *DatabaseItem) bool {
-			if item.Name != prevName {
+			if !seenGroup || item.AccountId != prevAccountId || item.Name != prevName {
+				prevAccountId = item.AccountId
 				prevName = item.Name
+				seenGroup = true
 				seenLargest = false
 			}
 			if item.Ts.Less(ts) {
@@ -194,14 +245,16 @@ func (cc *CatalogCache) GC(ts timestamp.Timestamp) GCReport {
 
 		r.DStaleItem = len(deletedItems)
 		r.DStaleCpk = len(deletedCpkey)
-		for _, item := range deletedItems {
+		deleteCatalogVersions(deletedItems, func(item *DatabaseItem) {
 			cc.databases.data.Delete(item)
-		}
+			if cc.gcDeleteObserverForTesting != nil {
+				cc.gcDeleteObserverForTesting(catalogGCDeleteDatabase)
+			}
+		})
 		for _, item := range deletedCpkey {
 			cc.databases.cpkeyIndex.Delete(item)
 		}
 	}
-	cc.UpdateStart(types.TimestampToTS(ts))
 	return r
 }
 
@@ -325,37 +378,67 @@ func (cc *CatalogCache) GetTableByIdAndTime(accountID uint32, databaseId, tblId 
 	return rel
 }
 
-func (cc *CatalogCache) scanThrough(aid uint32, did uint64, f func(*TableItem) bool) (ret *TableItem) {
-	key := &TableItem{
-		AccountId:  aid,
-		DatabaseId: did,
-	}
-	cc.tables.data.Ascend(key, func(item *TableItem) bool {
-		if item.AccountId != aid || item.DatabaseId != did {
-			return false
-		}
-		// delete entry has incomplete information for tableitem
-		if !item.deleted && f(item) {
-			ret = item
-			return false
-		}
-		return true
-	})
-	return
-}
-
-// GetTableById's complexicity is O(n), where n is the number of all items of the database.
+// GetTableById scans retained catalog versions. A latest DROP tombstone hides
+// every older incarnation of that name, so historical rows cannot make a
+// dropped or truncated table appear current.
 func (cc *CatalogCache) GetTableById(aid uint32, databaseId, tblId uint64) *TableItem {
-	return cc.scanThrough(aid, databaseId, func(item *TableItem) bool {
-		return item.Id == tblId
-	})
+	return cc.GetTableByIdAndTime(
+		aid, databaseId, tblId, types.MaxTs().ToTimestamp())
 }
 
-// GetTableByName's complexicity is O(n), where n is the number of all items of the database.
+// WithTableVersion runs fn only when the current table identity still has the
+// expected schema version. The table-change read lock remains held through fn,
+// making the version check and the caller's publication one linearizable
+// operation with respect to InsertTable, DeleteTable, and setTableItem.
+//
+// fn must be bounded and must not mutate this CatalogCache.
+func (cc *CatalogCache) WithTableVersion(
+	aid uint32,
+	databaseID uint64,
+	tableID uint64,
+	expectedVersion uint32,
+	fn func(),
+) (actualVersion uint32, found bool, matched bool) {
+	cc.tableChange.RLock()
+	defer cc.tableChange.RUnlock()
+
+	item := cc.GetTableById(aid, databaseID, tableID)
+	if item == nil {
+		return 0, false, false
+	}
+	actualVersion = item.Version
+	if actualVersion != expectedVersion {
+		return actualVersion, true, false
+	}
+	if fn != nil {
+		fn()
+	}
+	return actualVersion, true, true
+}
+
+// GetTableByName's complexity is O(log n) plus the newest item lookup. The
+// first item for a name is authoritative; if it is a tombstone, older live
+// rows are historical and must remain hidden.
 func (cc *CatalogCache) GetTableByName(aid uint32, databaseID uint64, tableName string) *TableItem {
-	return cc.scanThrough(aid, databaseID, func(item *TableItem) bool {
-		return item.Name == tableName
+	probe := cc.tableQueryProbePool.Get().(*TableItem)
+	*probe = TableItem{
+		AccountId:  aid,
+		DatabaseId: databaseID,
+		Name:       tableName,
+		Ts:         types.MaxTs().ToTimestamp(),
+	}
+	var current *TableItem
+	cc.tables.data.Ascend(probe, func(item *TableItem) bool {
+		if item.AccountId != aid || item.DatabaseId != databaseID || item.Name != tableName {
+			return false
+		}
+		if !item.deleted {
+			current = item
+		}
+		return false
 	})
+	releaseTableQueryProbe(&cc.tableQueryProbePool, probe)
+	return current
 }
 
 func (cc *CatalogCache) GetTable(tbl *TableItem) bool {
@@ -409,7 +492,8 @@ func (cc *CatalogCache) GetPreparedMetadataTS() timestamp.Timestamp {
 func (cc *CatalogCache) HasNewerVersion(qry *TableChangeQuery) bool {
 	var find bool
 	if qry.DatabaseName != "" {
-		key := &DatabaseItem{
+		key := cc.databaseQueryProbePool.Get().(*DatabaseItem)
+		*key = DatabaseItem{
 			AccountId: qry.AccountId,
 			Name:      qry.DatabaseName,
 			Ts:        types.MaxTs().ToTimestamp(),
@@ -423,6 +507,7 @@ func (cc *CatalogCache) HasNewerVersion(qry *TableChangeQuery) bool {
 			}
 			return false
 		})
+		releaseDatabaseQueryProbe(&cc.databaseQueryProbePool, key)
 		if find {
 			return true
 		}
@@ -440,7 +525,8 @@ func (cc *CatalogCache) HasNewerVersion(qry *TableChangeQuery) bool {
 		return false
 	}
 
-	key := &TableItem{
+	key := cc.tableQueryProbePool.Get().(*TableItem)
+	*key = TableItem{
 		AccountId:  qry.AccountId,
 		DatabaseId: qry.DatabaseId,
 		Name:       qry.Name,
@@ -458,6 +544,7 @@ func (cc *CatalogCache) HasNewerVersion(qry *TableChangeQuery) bool {
 		}
 		return false
 	})
+	releaseTableQueryProbe(&cc.tableQueryProbePool, key)
 	return find
 }
 
@@ -618,6 +705,7 @@ func ParseColumnsBatchAnd(bat *batch.Batch, f func(map[TableItemKey]Columns)) {
 	names := bat.GetVector(catalog.MO_COLUMNS_ATTNAME_IDX + MO_OFF)
 	comments := bat.GetVector(catalog.MO_COLUMNS_ATT_COMMENT_IDX + MO_OFF)
 	isHiddens := vector.MustFixedColWithTypeCheck[int8](bat.GetVector(catalog.MO_COLUMNS_ATT_IS_HIDDEN_IDX + MO_OFF))
+	isUnsigneds := vector.MustFixedColWithTypeCheck[int8](bat.GetVector(catalog.MO_COLUMNS_ATT_IS_UNSIGNED_IDX + MO_OFF))
 	isAutos := vector.MustFixedColWithTypeCheck[int8](bat.GetVector(catalog.MO_COLUMNS_ATT_IS_AUTO_INCREMENT_IDX + MO_OFF))
 	constraintTypes := bat.GetVector(catalog.MO_COLUMNS_ATT_CONSTRAINT_TYPE_IDX + MO_OFF)
 	typs := bat.GetVector(catalog.MO_COLUMNS_ATTTYP_IDX + MO_OFF)
@@ -644,6 +732,7 @@ func ParseColumnsBatchAnd(bat *batch.Batch, f func(map[TableItemKey]Columns)) {
 			Name:            names.GetStringAt(i),
 			Comment:         comments.GetStringAt(i),
 			IsHidden:        isHiddens[i],
+			IsUnsigned:      isUnsigneds[i],
 			IsAutoIncrement: isAutos[i],
 			HasDef:          hasDefs[i],
 			HasUpdate:       hasUpdates[i],
@@ -956,6 +1045,7 @@ func getTableDef(tblItem *TableItem, coldefs []engine.TableDef) (*plan.TableDef,
 		FeatureFlag:    tblItem.ExtraInfo.GetFeatureFlag(),
 		AutoIncrOffset: tblItem.ExtraInfo.GetAutoIncrOffset(),
 		AutoIncrEpoch:  tblItem.ExtraInfo.GetAutoIncrEpoch(),
+		AutoIdCache:    tblItem.ExtraInfo.GetAutoIdCache(),
 		DefaultCharset: tblItem.ExtraInfo.GetDefaultCharset(),
 		Checks:         tblItem.ExtraInfo.GetChecks(),
 		LogicalId:      tblItem.LogicalId,

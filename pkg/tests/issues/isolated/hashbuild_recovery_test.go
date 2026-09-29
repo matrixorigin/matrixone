@@ -25,6 +25,7 @@ import (
 	_ "github.com/go-sql-driver/mysql"
 	"github.com/matrixorigin/matrixone/pkg/embed"
 	"github.com/matrixorigin/matrixone/pkg/pb/metadata"
+	"github.com/matrixorigin/matrixone/pkg/sql/colexec"
 	"github.com/matrixorigin/matrixone/pkg/tests/testutils"
 	metricv2 "github.com/matrixorigin/matrixone/pkg/util/metric/v2"
 	promtestutil "github.com/prometheus/client_golang/prometheus/testutil"
@@ -32,8 +33,14 @@ import (
 )
 
 const (
-	hashBuildRecoveryQueryCap = int64(28 << 20)
-	hashBuildRecoveryRows     = 1_000_000
+	hashBuildRecoveryQueryCap = int64(25 << 20)
+	// Eighty full three-BIGINT batches contain 15 MiB of vector data. Hash
+	// cells then cross the 25 MiB hard budget after batch retention,
+	// preserving the map-admission recovery path without a million-row fixture.
+	// Keep headroom for retained vectors and recovery scratch. Scaling the cap
+	// down proportionally would reject batch retention before map allocation.
+	// A small tail also exercises partial-batch recovery accounting.
+	hashBuildRecoveryRows = colexec.DefaultBatchSize*80 + colexec.DefaultBatchSize/16
 )
 
 // TestHashBuildSharedBudgetRecoverySQL is the SQL-protocol counterexample for
@@ -47,6 +54,7 @@ const (
 // query limit creates the relevant shared-budget pressure without TPCH-sized
 // fixture data.
 func TestHashBuildSharedBudgetRecoverySQL(t *testing.T) {
+	releaseSharedSingleCNCluster(t)
 	cluster, err := embed.StartTestCluster(
 		embed.WithCNCount(1),
 		embed.WithPreStart(func(service embed.ServiceOperator) {
@@ -117,7 +125,7 @@ func TestHashBuildSharedBudgetRecoverySQL(t *testing.T) {
 	require.NotEqualf(t, -1, probeScan, "probe scan missing from plan:\n%s", plan)
 	require.NotEqualf(t, -1, buildScan, "build scan missing from plan:\n%s", plan)
 	require.Lessf(t, probeScan, buildScan,
-		"the million-row table must remain the right/hash-build input:\n%s", plan)
+		"the larger table must remain the right/hash-build input:\n%s", plan)
 
 	spillBefore := promtestutil.ToFloat64(
 		metricv2.HashBuildSpillDepthCounter.WithLabelValues("spill", "1"))

@@ -22,7 +22,7 @@ import (
 )
 
 func TestUpdatePlannerRouteCounter(t *testing.T) {
-	counter := UpdatePlannerRouteCounter.WithLabelValues("legacy", "multi_target", "selected")
+	counter := UpdatePlannerRouteCounter.WithLabelValues("modern", "none", "selected")
 	before := testutil.ToFloat64(counter)
 	counter.Inc()
 	require.Equal(t, before+1, testutil.ToFloat64(counter))

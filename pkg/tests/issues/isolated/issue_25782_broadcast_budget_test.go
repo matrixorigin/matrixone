@@ -27,6 +27,7 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
 	"github.com/matrixorigin/matrixone/pkg/embed"
 	"github.com/matrixorigin/matrixone/pkg/pb/metadata"
+	"github.com/matrixorigin/matrixone/pkg/sql/colexec"
 	"github.com/matrixorigin/matrixone/pkg/tests/testutils"
 	metricv2 "github.com/matrixorigin/matrixone/pkg/util/metric/v2"
 	promtestutil "github.com/prometheus/client_golang/prometheus/testutil"
@@ -35,7 +36,11 @@ import (
 
 const (
 	issue25782QueryBudget = int64(1 << 20)
-	issue25782BuildRows   = int64(200_000)
+	// Eight full two-BIGINT batches contain exactly 1 MiB of vector data.
+	// Hash cells and vector metadata therefore make the resident broadcast
+	// build exceed the 1 MiB hard budget without an oversized fixture. A small
+	// tail also retains non-full-batch ingestion behavior from the old fixture.
+	issue25782BuildRows = int64(colexec.DefaultBatchSize*8 + colexec.DefaultBatchSize/16)
 )
 
 // TestIssue25782BroadcastHashBuildFailsClosedUnderHardBudget proves the
@@ -51,6 +56,7 @@ const (
 // key keeps the physical topology independent of SQL predicate ordering and
 // avoids turning this into a shuffle-spill test.
 func TestIssue25782BroadcastHashBuildFailsClosedUnderHardBudget(t *testing.T) {
+	releaseSharedSingleCNCluster(t)
 	cluster, err := embed.StartTestCluster(
 		embed.WithCNCount(1),
 		embed.WithPreStart(func(service embed.ServiceOperator) {
@@ -105,7 +111,9 @@ func TestIssue25782BroadcastHashBuildFailsClosedUnderHardBudget(t *testing.T) {
 		"create table broadcast_probe (k bigint not null) cluster by k")
 	execJoinSpillSQL(t, ctx, conn,
 		"create table broadcast_build (k bigint not null, payload bigint not null) cluster by k")
-	execJoinSpillSQL(t, ctx, conn, "insert into broadcast_probe values (1)")
+	// Include an unmatched probe as well: COUNT(b.payload) must exclude the
+	// NULL-extended LEFT JOIN row in the admitted control.
+	execJoinSpillSQL(t, ctx, conn, "insert into broadcast_probe values (1),(65)")
 
 	// The outer aggregate is intentionally blocking: the SQL protocol may send
 	// SELECT metadata before execution, but it must not publish a result row
@@ -122,7 +130,7 @@ func TestIssue25782BroadcastHashBuildFailsClosedUnderHardBudget(t *testing.T) {
 	// result oracle under the same broadcast topology and hard budget.
 	execJoinSpillSQL(t, ctx, conn,
 		"insert into broadcast_build select mod(result, 64), result from generate_series(1, 64) g")
-	patchJoinSpillStats(t, ctx, conn, dbName, "broadcast_probe", 1)
+	patchJoinSpillStats(t, ctx, conn, dbName, "broadcast_probe", 2)
 	patchJoinSpillStatsWithNDV(t, ctx, conn, dbName, "broadcast_build", 64, 64)
 	controlPlan := queryJoinSpillText(t, ctx, conn, "explain "+query)
 	require.Contains(t, controlPlan, "Aggregate", "the public witness must retain the grouped build child:\n%s", controlPlan)

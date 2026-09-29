@@ -140,6 +140,21 @@ type LockService interface {
 	CloseRemoteLockTable(group uint32, tableID, version uint64) (bool, error)
 }
 
+// ExternalTxnLivenessRegistry lets a caller register transaction IDs whose
+// liveness is owned outside the transaction client. The registration remains
+// active until the caller unregisters it after terminal lock cleanup.
+//
+// The separate optional capability keeps ordinary LockService clients from
+// having to implement session-level transaction tracking.
+type ExternalTxnLivenessRegistry interface {
+	// RegisterExternalTxn must be called before issuing the corresponding Lock.
+	// An error leaves the registry unchanged.
+	RegisterExternalTxn(txnID []byte) error
+	// UnregisterExternalTxn must be called only after the corresponding lock
+	// cleanup has completed successfully.
+	UnregisterExternalTxn(txnID []byte)
+}
+
 // UnknownCommitResolver resolves a Commit whose request may have reached TN but
 // whose final response was not received by CN. It must not release the txn's
 // locks until the allocator proves that the txn cannot still be committing.
@@ -324,6 +339,21 @@ type LockOptions struct {
 	pb.LockOptions
 	async                      bool
 	remoteLockOwnerWaitTimeout time.Duration
+	// replaceTxnLocks is set when the request was coarsened from every lock
+	// recorded for the same transaction and lock table at planning time. The lock
+	// owner merges that replacement into its current bookkeeping at commit time,
+	// preserving any out-of-range key acquired while this request was waiting. A
+	// remote origin must apply the same merge after the owner accepts the range.
+	replaceTxnLocks bool
+	// originalRows and originalOptions retain the logical request before a
+	// cumulative Exclusive-row request is represented as one range. A waiting
+	// owner can fall back to this exact request if concurrent ownership makes the
+	// prepared range ineligible before commit. remoteLockTable also sends this
+	// logical request to the authoritative owner instead of forwarding an
+	// origin-side representation decision.
+	originalRows                  [][]byte
+	originalOptions               pb.LockOptions
+	requireOwnerLocalWaitSnapshot bool
 }
 
 // Lock stores specific lock information. Since there are a large number of lock objects

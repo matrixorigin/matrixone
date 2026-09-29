@@ -24,16 +24,20 @@ import (
 	"github.com/golang/mock/gomock"
 	"github.com/prashantv/gostub"
 	"github.com/stretchr/testify/assert"
+	"github.com/stretchr/testify/require"
 
+	"github.com/matrixorigin/matrixone/pkg/catalog"
 	"github.com/matrixorigin/matrixone/pkg/clusterservice"
 	"github.com/matrixorigin/matrixone/pkg/common/morpc"
 	"github.com/matrixorigin/matrixone/pkg/common/mpool"
 	"github.com/matrixorigin/matrixone/pkg/container/vector"
+	"github.com/matrixorigin/matrixone/pkg/defines"
 	"github.com/matrixorigin/matrixone/pkg/logservice"
 	"github.com/matrixorigin/matrixone/pkg/pb/lock"
 	pb "github.com/matrixorigin/matrixone/pkg/pb/logservice"
 	"github.com/matrixorigin/matrixone/pkg/pb/metadata"
 	"github.com/matrixorigin/matrixone/pkg/pb/query"
+	"github.com/matrixorigin/matrixone/pkg/pb/txn"
 	"github.com/matrixorigin/matrixone/pkg/queryservice"
 	qclient "github.com/matrixorigin/matrixone/pkg/queryservice/client"
 	"github.com/matrixorigin/matrixone/pkg/vm/process"
@@ -188,7 +192,19 @@ func Test_gettingInfo(t *testing.T) {
 	}
 	defer mpool.DeleteMPool(mp)
 
-	testProc := process.NewTopProcess(context.Background(), mp, nil, nil, nil, nil, &mockQueryService{}, nil, nil, nil, nil)
+	testProc := process.NewTopProcess(
+		defines.AttachAccountId(context.Background(), catalog.System_Account),
+		mp,
+		nil,
+		nil,
+		nil,
+		nil,
+		&mockQueryService{},
+		nil,
+		nil,
+		nil,
+		nil,
+	)
 
 	type args struct {
 		proc *process.Process
@@ -475,6 +491,127 @@ func Test_gettingInfo(t *testing.T) {
 			assert.Equal(t, vector.InefficientMustStrCol(bat.GetVector(2))[0], "Exclusive")
 		})
 	}
+}
+
+func TestFilterTxnInfoForAccount(t *testing.T) {
+	legacy := &query.TxnInfo{AccountID: catalog.System_Account}
+	own := &query.TxnInfo{AccountID: 7}
+	foreign := &query.TxnInfo{AccountID: 8}
+	txns := []*query.TxnInfo{legacy, own, foreign, nil}
+
+	require.Equal(t, txns, filterTxnInfoForAccount(catalog.System_Account, txns))
+	require.Equal(t, []*query.TxnInfo{own}, filterTxnInfoForAccount(7, txns))
+	require.Empty(t, filterTxnInfoForAccount(9, txns))
+}
+
+func TestGetTxnsRequiresAccountIdentity(t *testing.T) {
+	proc := process.NewTopProcess(context.Background(), nil, nil, nil, nil, nil, nil, nil, nil, nil, nil)
+	_, err := getTxns(proc)
+	require.Error(t, err)
+}
+
+func TestMoLocksFiltersParticipantsByTenant(t *testing.T) {
+	const accountID uint32 = 7
+	ownTxnID := []byte("own")
+	foreignTxnID := []byte("foreign")
+
+	selectStubs := gostub.Stub(
+		&selectSuperTenant,
+		func(
+			sid string,
+			selector clusterservice.Selector,
+			username string,
+			filter func(string) bool,
+			appendFn func(service *metadata.CNService),
+		) {
+			appendFn(&metadata.CNService{QueryAddress: "coordinator"})
+			appendFn(&metadata.CNService{QueryAddress: "lock-owner"})
+		},
+	)
+	defer selectStubs.Reset()
+
+	requestStubs := gostub.Stub(
+		&requestMultipleCn,
+		func(
+			ctx context.Context,
+			nodes []string,
+			qc qclient.QueryClient,
+			genRequest func() *query.Request,
+			handleValidResponse func(string, *query.Response),
+			handleInvalidResponse func(string),
+		) error {
+			req := genRequest()
+			switch req.CmdMethod {
+			case query.CmdMethod_GetTxnInfo:
+				handleValidResponse("coordinator", &query.Response{
+					GetTxnInfoResponse: &query.GetTxnInfoResponse{
+						CnId: "coordinator",
+						TxnInfoList: []*query.TxnInfo{
+							{AccountID: accountID, Meta: &txn.TxnMeta{ID: ownTxnID}},
+							{AccountID: 8, Meta: &txn.TxnMeta{ID: foreignTxnID}},
+							{Meta: &txn.TxnMeta{ID: []byte("legacy")}},
+						},
+					},
+				})
+			case query.CmdMethod_GetLockInfo:
+				handleValidResponse("lock-owner", &query.Response{
+					GetLockInfoResponse: &query.GetLockInfoResponse{
+						CnId: "lock-owner",
+						LockInfoList: []*query.LockInfo{
+							{
+								TableId: 1,
+								Holders: []*lock.WaitTxn{{TxnID: ownTxnID}, {TxnID: foreignTxnID}},
+								Waiters: []*lock.WaitTxn{{TxnID: foreignTxnID}},
+							},
+							{
+								TableId: 2,
+								Holders: []*lock.WaitTxn{{TxnID: foreignTxnID}},
+							},
+							{
+								TableId: 3,
+								Holders: []*lock.WaitTxn{{TxnID: foreignTxnID}},
+								Waiters: []*lock.WaitTxn{{TxnID: ownTxnID}},
+							},
+						},
+					},
+				})
+			default:
+				t.Fatalf("unexpected query method %s", req.CmdMethod.String())
+			}
+			return nil
+		},
+	)
+	defer requestStubs.Reset()
+
+	mp, err := mpool.NewMPool("tenant_lock_filter", 0, mpool.NoFixed)
+	require.NoError(t, err)
+	defer mpool.DeleteMPool(mp)
+
+	proc := process.NewTopProcess(
+		defines.AttachAccountId(context.Background(), accountID),
+		mp,
+		nil,
+		nil,
+		nil,
+		nil,
+		&mockQueryService{},
+		nil,
+		nil,
+		nil,
+		nil,
+	)
+	tf := &TableFunction{Attrs: []string{"table_id", "txn_id", "lock_wait", "lock_status"}}
+	state, err := moLocksPrepare(proc, tf)
+	require.NoError(t, err)
+	defer state.free(tf, proc, false, nil)
+	require.NoError(t, state.start(tf, proc, 0, nil))
+
+	result, err := state.call(tf, proc)
+	require.NoError(t, err)
+	require.Equal(t, []string{"1", "3"}, vector.InefficientMustStrCol(result.Batch.Vecs[0]))
+	require.Equal(t, []string{"6f776e", ""}, vector.InefficientMustStrCol(result.Batch.Vecs[1]))
+	require.Equal(t, []string{"", "6f776e"}, vector.InefficientMustStrCol(result.Batch.Vecs[2]))
+	require.Equal(t, []string{lockStatusAcquired, lockStatusWait}, vector.InefficientMustStrCol(result.Batch.Vecs[3]))
 }
 
 var _ logservice.CNHAKeeperClient = &mockHKClient{}

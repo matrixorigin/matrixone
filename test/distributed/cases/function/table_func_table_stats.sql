@@ -26,9 +26,9 @@ select count(*) from t1;
 -- Flush to ensure stats are available
 select mo_ctl('dn', 'flush', 'table_func_table_stats.t1');
 
-select sleep(1);
-
 -- Query table stats - basic columns (new column structure)
+-- Retry only while the new stats snapshot is pending.
+-- @wait_expect(1, 10)
 select * from table_stats('table_func_table_stats.t1') g;
 
 -- Check sampling_ratio is present

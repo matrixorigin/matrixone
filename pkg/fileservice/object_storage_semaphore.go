@@ -55,6 +55,7 @@ func (o *objectStorageSemaphore) release() {
 var _ ObjectStorage = new(objectStorageSemaphore)
 var _ ParallelMultipartWriter = new(objectStorageSemaphore)
 var _ objectStorageCopier = new(objectStorageSemaphore)
+var _ objectStorageIdentityReader = new(objectStorageSemaphore)
 
 func (o *objectStorageSemaphore) CopyObject(
 	ctx context.Context,
@@ -125,6 +126,53 @@ func (o *objectStorageSemaphore) Read(ctx context.Context, key string, min *int6
 		}),
 		closeFunc: func() error {
 			// release when close
+			release()
+			return r.Close()
+		},
+	}, nil
+}
+
+func (o *objectStorageSemaphore) StatObjectIdentity(ctx context.Context, key string) (ObjectIdentity, error) {
+	upstream, ok := o.upstream.(objectStorageIdentityReader)
+	if !ok {
+		return ObjectIdentity{}, moerr.NewNotSupported(ctx, "object storage identity")
+	}
+	if err := o.acquireContext(ctx); err != nil {
+		return ObjectIdentity{}, err
+	}
+	defer o.release()
+	return upstream.StatObjectIdentity(ctx, key)
+}
+
+func (o *objectStorageSemaphore) ReadObjectWithIdentity(
+	ctx context.Context,
+	key string,
+	min *int64,
+	max *int64,
+	expected ObjectIdentity,
+) (io.ReadCloser, error) {
+	upstream, ok := o.upstream.(objectStorageIdentityReader)
+	if !ok {
+		return nil, moerr.NewNotSupported(ctx, "conditional object storage read")
+	}
+	if err := o.acquireContext(ctx); err != nil {
+		return nil, err
+	}
+	r, err := upstream.ReadObjectWithIdentity(ctx, key, min, max, expected)
+	if err != nil {
+		o.release()
+		return nil, err
+	}
+	release := sync.OnceFunc(o.release)
+	return &readCloser{
+		r: readerFunc(func(buffer []byte) (int, error) {
+			n, readErr := r.Read(buffer)
+			if readErr != nil {
+				release()
+			}
+			return n, readErr
+		}),
+		closeFunc: func() error {
 			release()
 			return r.Close()
 		},

@@ -11,12 +11,60 @@ Kubernetes is not an egress security boundary by itself. `NetworkPolicy`, CNI po
 ## Frozen MVP contracts
 
 - MongoDB 8.0.12 and official Go driver v2.8.0 are the PR baseline. The product implementation accepts normal ReplicaSet seeds and SRV subject to endpoint policy; TLS/SRV and minimum supported production versions remain release gates.
+- BSON values mapped to an MO `JSON` column use MongoDB Relaxed Extended JSON. BSON int32, int64, finite double, strings, booleans, arrays and documents become their ordinary JSON equivalents, so MO JSON predicates behave like predicates over locally stored JSON. BSON-only or non-JSON values such as Decimal128, Binary, ObjectID and non-finite doubles retain their standard Extended JSON wrappers. BSON DateTime uses the relaxed `$date` string form for years 1970 through 9999, and the canonical `$numberLong` form otherwise.
 - Numeric contract is `mongodb-aggregate-v1`: BSON double, `AVG(DOUBLE)`, one cursor, `max_parallelism=1`, then the existing target-compatible `FLOAT` cast. Every floating column uses the named numeric comparison contract and is excluded from `mongodb-aggregate-v1-exact`; that hash covers the exact key/count/source-batch subset with delimiter-safe hex encoding and an explicit NULL marker. This implementation enforces `max_parallelism=1` for every MongoDB external table. Local split remains a post-MVP gated task and stays disabled for this ingestion.
 - Missing and BSON null both map to SQL NULL. There is no presence column in MVP.
 - `try_null` is bounded per statement by `max-conversion-errors` and `max-conversion-error-rate` (the rate gate starts after 100 non-null try-conversion attempts); threshold violations fail the statement instead of silently degrading an unbounded scan.
 - The indexed incremental timestamp must be declared `MONGODB_CONVERT 'try_null'`. Its BSON DateTime range is then pushed as an outward-rounded candidate and retained as an MO residual, so bounded ingestion does not pull the whole collection. A strict timestamp deliberately stays residual-only because pushdown could hide malformed source values outside the requested range.
 - Incremental bounds are `[low, high)`. `low` includes the configured overlap and `high` includes a safety lag. A cursor failure restarts from the last committed watermark.
 - MO does not yet expose an external-connection `USAGE` privilege object. Until it does, creating a MongoDB connection or a table mapping requires the account-admin role; ordinary users consume an existing mapping through normal table `SELECT` grants. Execution revalidates the tenant-scoped mapping ID/version, namespace, schema and connection generation before opening a cursor.
+
+## Explicit MongoDB read operations
+
+`ENGINE = MONGODB` tables expose a synthetic `__mo_query` column for an explicit, constant read selector. It is omitted from `SELECT *` and catalog table definitions, but can be named directly. The value must be strict MongoDB Extended JSON with exactly one top-level operation:
+
+| Envelope | MongoDB path | Semantics |
+|---|---|---|
+| `{"filter": {...}}` | `Collection.Find` | Intersects the explicit filter with safe automatic MO predicate candidates; MO still evaluates ordinary SQL predicates as residuals. |
+| `{"pipeline": [...]}` | `Collection.Aggregate` | Runs the pipeline as written, then adds a connector-owned mapped-field projection; ordinary SQL predicates run over the pipeline output in MO. |
+
+```sql
+-- A MongoDB filter outside the automatic SQL-pushdown subset.
+SELECT device_id, ts, measurement
+FROM mongo_events
+WHERE __mo_query = '{
+  "filter": {
+    "ts": {"$gte": {"$date": "2026-07-27T10:00:00Z"}},
+    "device_id": "pump-1"
+  }
+}';
+
+-- The aggregate output paths must match this external table's explicit mapping.
+SELECT device_id, event_count, avg_measurement
+FROM mongo_events_aggregate
+WHERE __mo_query = '{
+  "pipeline": [
+    {"$match": {"measurement": {"$type": "number"}}},
+    {"$group": {
+      "_id": "$device_id",
+      "event_count": {"$sum": 1},
+      "avg_measurement": {"$avg": "$measurement"}
+    }},
+    {"$project": {
+      "_id": 0,
+      "device_id": "$_id",
+      "event_count": 1,
+      "avg_measurement": 1
+    }}
+  ]
+}';
+```
+
+The first version accepts one equality selector per scan. Prepared parameters remain gated on #27411. The query is bounded to 64 KiB, 32 nesting levels, and 16 stages. Pipelines use `allowDiskUse=false`; explicit queries use the shorter configured socket timeout or 30 seconds as a client context deadline across the initial command and every `getMore`. This bounds MatrixOne's operation lifetime, not a MongoDB server CPU quota.
+
+The stage allowlist is `$match`, `$project`, `$set`, `$addFields`, `$unset`, `$group`, `$sort`, `$limit`, `$skip`, `$unwind`, and `$count`. `$sort` accepts 1–32 dotted field paths of at most 199 components with direction `1` or `-1` and remains inside MongoDB's aggregation-memory limit with disk spill disabled; metadata sorts are excluded. `$unwind` accepts a `$`-prefixed field path with at most 199 nonempty dotted components that do not start with `$`, or the standard `path`/`includeArrayIndex`/`preserveNullAndEmptyArrays` options object (`includeArrayIndex` uses the same component grammar without the leading `$`), and its output remains inside the connector's existing row, raw-byte, value, and decoded-batch limits. `$push` and `$addToSet` remain excluded because they add per-group array growth. Unknown stages/operators fail closed. Write stages (`$out`, `$merge`), cross-collection stages (`$lookup`, `$graphLookup`, `$unionWith`), metadata stages, and server-side JavaScript (`$where`, `$function`, `$accumulator`) are rejected before a MongoDB operation is sent. The external table mapping remains the authorization boundary; this is not an arbitrary command interface.
+
+When explicitly selected, `__mo_query` is populated on every returned row as canonical relaxed Extended JSON (insignificant input whitespace is not preserved). Diagnostics expose only the operation kind and a digest prefix; errors, metrics labels, E2E reports, and EXPLAIN output do not include the raw query body.
 
 ## Backfill, cutover and rollback
 

@@ -18,6 +18,7 @@ import (
 	"strings"
 
 	"github.com/matrixorigin/matrixone/pkg/pb/plan"
+	planfunction "github.com/matrixorigin/matrixone/pkg/sql/plan/function"
 )
 
 type ProvenanceState uint8
@@ -123,22 +124,27 @@ func ctasViewDefaultPolicy(metadata SourceColumnMetadata) CTASDefaultPolicy {
 	return CTASDefaultNone
 }
 
-func (bc *BindContext) markViewCTASDefaultBoundary(viewCols []*plan.ColDef) {
+func (bc *BindContext) markViewCTASDefaultBoundary() {
 	for i := 0; i < min(len(bc.headings), len(bc.projects)); i++ {
 		provenance := bc.outputColumnProvenanceForProject(int32(i))
 		if provenance.State == ProvenanceSingleSource && provenance.Source != nil {
 			// The authoritative View schema has already applied outer-join
 			// null-extension. Preserve source identity/default policy, but take
 			// nullability from that boundary instead of the pre-join base column.
-			if i < len(viewCols) {
-				source := *provenance.Source
-				source.Metadata.NullAbility = snapshotSourceColumnMetadata(viewCols[i]).NullAbility
-				provenance.Source = &source
-			}
+			source := *provenance.Source
+			source.Metadata.NullAbility = !bc.projects[i].Typ.NotNullable
+			provenance.Source = &source
 			provenance.CTASDefaultPolicy = ctasViewDefaultPolicy(provenance.Source.Metadata)
 		}
-		bc.outputColumnProvenance[int32(i)] = provenance
+		bc.setOutputColumnProvenance(int32(i), provenance)
 	}
+}
+
+func (bc *BindContext) setOutputColumnProvenance(index int32, provenance OutputColumnProvenance) {
+	if bc.outputColumnProvenance == nil {
+		bc.outputColumnProvenance = make(map[int32]OutputColumnProvenance)
+	}
+	bc.outputColumnProvenance[index] = provenance
 }
 
 // transparentOutputSourceExpr unwraps planner display adapters that preserve
@@ -204,6 +210,23 @@ func (bc *BindContext) outputColumnProvenanceForExpr(expr *plan.Expr) OutputColu
 		}
 		return bc.outputColumnProvenanceForExpr(groupExpr)
 	}
+	if bc.aggregateTag > 0 && col.RelPos == bc.aggregateTag &&
+		col.ColPos >= 0 && int(col.ColPos) < len(bc.aggregates) {
+		aggregate := bc.aggregates[col.ColPos]
+		if aggregate != nil {
+			fn := aggregate.GetF()
+			if fn != nil && fn.Func != nil {
+				overloadID := fn.Func.Obj & int64(planfunction.DistinctMask)
+				if planfunction.HasExecutableCTASTypeDefault(overloadID) {
+					return OutputColumnProvenance{
+						State:             ProvenanceNone,
+						CTASDefaultPolicy: CTASDefaultUseTypeDefault,
+					}
+				}
+			}
+		}
+		return OutputColumnProvenance{State: ProvenanceNone}
+	}
 	binding := bc.bindingByTag[col.RelPos]
 	if binding == nil || col.ColPos < 0 || int(col.ColPos) >= len(binding.outputColumnProvenance) {
 		return OutputColumnProvenance{State: ProvenanceNone}
@@ -230,6 +253,11 @@ func (bc *BindContext) outputColumnProvenanceForBoundary() []OutputColumnProvena
 }
 
 func (bc *BindContext) clearOutputColumnProvenance() {
+	if len(bc.projects) == 0 || len(bc.headings) == 0 {
+		bc.outputColumnProvenance = nil
+		return
+	}
+	bc.outputColumnProvenance = make(map[int32]OutputColumnProvenance, min(len(bc.headings), len(bc.projects)))
 	for i := 0; i < min(len(bc.headings), len(bc.projects)); i++ {
 		bc.outputColumnProvenance[int32(i)] = OutputColumnProvenance{State: ProvenanceNone}
 	}

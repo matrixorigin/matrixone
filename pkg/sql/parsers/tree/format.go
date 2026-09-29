@@ -40,6 +40,17 @@ type FmtCtx struct {
 	// NO_BACKSLASH_ESCAPES.
 	modeIndependentStringLiterals bool
 	paramExprOffset               bool
+	detectDateTimeFormat          bool
+	sawDateTimeFormat             bool
+	stringLiteralPositions        *[]StringLiteralPosition
+}
+
+// StringLiteralPosition identifies the bytes occupied by one string literal
+// in the formatted output. Positions are recorded only when requested by the
+// caller and are relative to the FmtCtx builder.
+type StringLiteralPosition struct {
+	Start int
+	End   int
 }
 
 func NewFmtCtx(dialectType dialect.DialectType, opts ...FmtCtxOption) *FmtCtx {
@@ -108,6 +119,31 @@ func WithParamExprOffset() FmtCtxOption {
 	return FmtCtxOption(func(ctx *FmtCtx) {
 		ctx.paramExprOffset = true
 	})
+}
+
+// WithDateTimeFormatDetection asks the formatter to report whether the
+// expression tree contains a DATE_FORMAT or TIME_FORMAT call. Detection is
+// performed by the formatter itself, so nested expressions and subqueries use
+// the same complete traversal as normal SQL rendering.
+func WithDateTimeFormatDetection() FmtCtxOption {
+	return FmtCtxOption(func(ctx *FmtCtx) {
+		ctx.detectDateTimeFormat = true
+	})
+}
+
+// WithStringLiteralPositions records the output ranges of string literals.
+// The caller normally combines this with WithSingleQuoteString so the ranges
+// include their stable SQL quoting.
+func WithStringLiteralPositions(positions *[]StringLiteralPosition) FmtCtxOption {
+	return FmtCtxOption(func(ctx *FmtCtx) {
+		ctx.stringLiteralPositions = positions
+	})
+}
+
+// HasDateTimeFormatFunction reports whether formatting visited a
+// DATE_FORMAT/TIME_FORMAT call while detection was enabled.
+func (ctx *FmtCtx) HasDateTimeFormatFunction() bool {
+	return ctx.sawDateTimeFormat
 }
 
 // NodeFormatter for formatted output of the node.
@@ -182,18 +218,32 @@ func (ctx *FmtCtx) PrintExpr(currentExpr Expr, expr Expr, left bool) {
 }
 
 func (ctx *FmtCtx) WriteValue(t P_TYPE, v string) (int, error) {
+	start := ctx.Len()
+	var n int
+	var err error
 	if ctx.quoteString {
 		switch t {
 		case P_char:
-			return ctx.WriteString(fmt.Sprintf("%q", v))
+			n, err = ctx.WriteString(fmt.Sprintf("%q", v))
 		default:
-			return ctx.WriteString(v)
+			n, err = ctx.WriteString(v)
 		}
+	} else if ctx.singleQuoteString && (t == P_char || t == P_ScoreBinary) {
+		if t == P_ScoreBinary {
+			n, err = ctx.WriteString(fmt.Sprintf("_binary '%s'", strings.ReplaceAll(v, "'", "''")))
+		} else {
+			n, err = ctx.WriteString(fmt.Sprintf("'%s'", strings.ReplaceAll(v, "'", "''")))
+		}
+	} else {
+		n, err = ctx.WriteString(v)
 	}
-	if ctx.singleQuoteString && t == P_char {
-		return ctx.WriteString(fmt.Sprintf("'%s'", strings.ReplaceAll(v, "'", "''")))
+	if err == nil && (t == P_char || t == P_ScoreBinary) && ctx.stringLiteralPositions != nil {
+		*ctx.stringLiteralPositions = append(*ctx.stringLiteralPositions, StringLiteralPosition{
+			Start: start,
+			End:   ctx.Len(),
+		})
 	}
-	return ctx.WriteString(v)
+	return n, err
 }
 
 func (ctx *FmtCtx) WriteStringQuote(v string) (int, error) {

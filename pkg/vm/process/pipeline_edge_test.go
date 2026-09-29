@@ -145,6 +145,15 @@ func TestWaitPipelineSignalCapacityWaitsUntilChannelDrains(t *testing.T) {
 	}
 }
 
+func TestPipelineEdgeResetClearsOrderedStreamContract(t *testing.T) {
+	edge := NewPipelineEdge(1, 1)
+	edge.OrderedStream = true
+	edge.ResetForReuse(2, 2)
+	if edge.OrderedStream {
+		t.Fatal("ResetForReuse retained a stale ordered-stream contract")
+	}
+}
+
 func TestWaitPipelineSignalCapacityReturnsOnContextCancel(t *testing.T) {
 	edge := NewPipelineEdge(1, 1)
 	edge.Ch2 <- NewPipelineSignalToDirectly(nil, nil, nil)

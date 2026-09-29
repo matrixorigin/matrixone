@@ -28,12 +28,17 @@ import (
 )
 
 var errStorageUsage = errors.New("storage usage failed")
+var errSnapshotRead = errors.New("snapshot read failed")
 
 type storageUsageErrorHandler struct {
 	rpchandle.Handler
 }
 
 type backupErrorHandler struct {
+	rpchandle.Handler
+}
+
+type snapshotReadErrorHandler struct {
 	rpchandle.Handler
 }
 
@@ -53,6 +58,15 @@ func (h *backupErrorHandler) HandleBackup(
 	*api.SyncLogTailResp,
 ) (func(), error) {
 	return nil, context.DeadlineExceeded
+}
+
+func (h *snapshotReadErrorHandler) HandleSnapshotRead(
+	context.Context,
+	txn.TxnMeta,
+	*cmd_util.SnapshotReadReq,
+	*cmd_util.SnapshotReadResp,
+) (func(), error) {
+	return nil, errSnapshotRead
 }
 
 func TestDebugBackupReturnsCheckpointError(t *testing.T) {
@@ -79,6 +93,18 @@ func TestDebugStorageUsageReturnsHandlerError(t *testing.T) {
 		payload,
 	)
 	require.ErrorIs(t, err, errStorageUsage)
+	require.Nil(t, resp)
+}
+
+func TestDebugSnapshotReadReturnsHandlerError(t *testing.T) {
+	s := &taeStorage{taeHandler: &snapshotReadErrorHandler{}}
+	resp, err := s.Debug(
+		context.Background(),
+		txn.TxnMeta{},
+		uint32(api.OpCode_OpSnapshotRead),
+		nil,
+	)
+	require.ErrorIs(t, err, errSnapshotRead)
 	require.Nil(t, resp)
 }
 

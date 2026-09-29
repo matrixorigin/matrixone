@@ -107,6 +107,19 @@ func (cb *cachedBatch) GetCopiedBatch(
 		if vec == nil || dst.Vecs[i] != nil {
 			continue
 		}
+		if vec.HasBorrowedBacking() {
+			dst.Vecs[i], err = vec.RetainedReadonlyViewWithMP(cb.mp)
+			if err != nil {
+				cb.CacheBatch(true, cacheID, dst)
+				return nil, false, 0, err
+			}
+			for j := i + 1; j < len(src.Vecs); j++ {
+				if dst.Vecs[j] == nil && src.Vecs[j] == vec {
+					dst.Vecs[j] = dst.Vecs[i]
+				}
+			}
+			continue
+		}
 
 		typ := *vec.GetType()
 		selection := vec.AllocationAccountSelection()
@@ -173,7 +186,10 @@ func (cb *cachedBatch) GetCopiedBatch(
 				cb.CacheBatch(true, cacheID, dst)
 				return nil, false, 0, err
 			}
-			dst.Vecs[i].SetIsBinaryString(vec.GetIsBinaryString())
+			if err = dst.Vecs[i].SetRuntimeStringDomainWithMP(vec.GetRuntimeStringDomainAt(0), cb.mp); err != nil {
+				cb.CacheBatch(true, cacheID, dst)
+				return nil, false, 0, err
+			}
 		}
 
 		// range src and found the same vector.

@@ -54,6 +54,145 @@ func maxByInputs(t *testing.T, mp *mpool.MPool, values []string, nullValue map[i
 	return []*vector.Vector{valueVec, orderVec, tieVec}
 }
 
+func TestMaxByEqualCandidatesMergeStringSourcesForAllPhysicalFamilies(t *testing.T) {
+	jsonValue, err := types.ParseStringToByteJson(`{"v":7}`)
+	require.NoError(t, err)
+	jsonBytes, err := types.EncodeJson(jsonValue)
+	require.NoError(t, err)
+	for _, valueType := range []struct {
+		name  string
+		typ   types.Type
+		value any
+	}{
+		{name: "fixed", typ: types.T_int64.ToType(), value: int64(7)},
+		{name: "json", typ: types.T_json.ToType(), value: jsonBytes},
+		{name: "array", typ: types.T_array_float32.ToType(), value: types.ArrayToBytes([]float32{7})},
+	} {
+		for _, sources := range [][]types.StringSource{
+			{types.StringSourceLiteral, types.StringSourceCOMStmt},
+			{types.StringSourceCOMStmt, types.StringSourceLiteral},
+		} {
+			t.Run(fmt.Sprintf("%s/%d-first", valueType.name, sources[0]), func(t *testing.T) {
+				mp := mpool.MustNewZero()
+				values := vector.NewVec(valueType.typ)
+				for range sources {
+					if valueType.typ.IsVarlen() {
+						require.NoError(t, vector.AppendBytes(values, valueType.value.([]byte), false, mp))
+					} else {
+						require.NoError(t, vector.AppendAny(values, valueType.value, false, mp))
+					}
+				}
+				require.NoError(t, values.SetStringSourcesWithMP(sources, mp))
+				orders := vector.NewVec(types.T_int64.ToType())
+				ties := vector.NewVec(types.T_int64.ToType())
+				for range sources {
+					require.NoError(t, vector.AppendFixed(orders, int64(1), false, mp))
+					require.NoError(t, vector.AppendFixed(ties, int64(1), false, mp))
+				}
+				exec := makeMaxByExec(mp, AggIdOfMaxBy, false, []types.Type{
+					valueType.typ, types.T_int64.ToType(), types.T_int64.ToType(),
+				})
+				require.NoError(t, exec.GroupGrow(1))
+				require.NoError(t, exec.BulkFill(0, []*vector.Vector{values, orders, ties}))
+				results, err := exec.Flush()
+				require.NoError(t, err)
+				require.Equal(t, types.StringSourceExpression, results[0].GetStringSourceAt(0))
+				results[0].Free(mp)
+				exec.Free()
+				values.Free(mp)
+				orders.Free(mp)
+				ties.Free(mp)
+				require.Zero(t, mp.CurrNB())
+			})
+		}
+	}
+}
+
+func TestMaxByNullWinnerPreservesSelectedStringSource(t *testing.T) {
+	for _, test := range []struct {
+		name        string
+		firstNull   bool
+		firstSource types.StringSource
+		second      bool
+		equalSecond bool
+		want        types.StringSource
+	}{
+		{name: "first null winner", firstNull: true, firstSource: types.StringSourceCOMStmt, want: types.StringSourceCOMStmt},
+		{name: "equal null same source", firstNull: true, firstSource: types.StringSourceCOMStmt, equalSecond: true, want: types.StringSourceCOMStmt},
+		{name: "null replacement", firstSource: types.StringSourceLiteral, second: true, want: types.StringSourceCOMStmt},
+	} {
+		t.Run(test.name, func(t *testing.T) {
+			mp := mpool.MustNewZero()
+			values := vector.NewVec(types.T_varchar.ToType())
+			orders := vector.NewVec(types.T_int64.ToType())
+			ties := vector.NewVec(types.T_int64.ToType())
+			require.NoError(t, vector.AppendBytes(values, []byte("first"), test.firstNull, mp))
+			require.NoError(t, vector.AppendFixed(orders, int64(1), false, mp))
+			require.NoError(t, vector.AppendFixed(ties, int64(1), false, mp))
+			sources := []types.StringSource{test.firstSource}
+			if test.second || test.equalSecond {
+				require.NoError(t, vector.AppendBytes(values, nil, true, mp))
+				order := int64(2)
+				if test.equalSecond {
+					order = 1
+				}
+				require.NoError(t, vector.AppendFixed(orders, order, false, mp))
+				require.NoError(t, vector.AppendFixed(ties, order, false, mp))
+				sources = append(sources, types.StringSourceCOMStmt)
+			}
+			require.NoError(t, values.SetStringSourcesWithMP(sources, mp))
+			exec := makeMaxByExec(mp, AggIdOfMaxBy, false, []types.Type{
+				types.T_varchar.ToType(), types.T_int64.ToType(), types.T_int64.ToType(),
+			})
+			require.NoError(t, exec.GroupGrow(1))
+			require.NoError(t, exec.BulkFill(0, []*vector.Vector{values, orders, ties}))
+			results, err := exec.Flush()
+			require.NoError(t, err)
+			require.True(t, results[0].IsNull(0))
+			require.Equal(t, test.want, results[0].GetStringSourceAt(0))
+			results[0].Free(mp)
+			exec.Free()
+			values.Free(mp)
+			orders.Free(mp)
+			ties.Free(mp)
+			require.Zero(t, mp.CurrNB())
+		})
+	}
+}
+
+func TestMaxByPartialMergeCombinesEqualNullCandidateStringSources(t *testing.T) {
+	mp := mpool.MustNewZero()
+	makeExec := func(source types.StringSource) (*maxByExec, []*vector.Vector) {
+		values := vector.NewVec(types.T_int64.ToType())
+		orders := vector.NewVec(types.T_int64.ToType())
+		ties := vector.NewVec(types.T_int64.ToType())
+		require.NoError(t, vector.AppendFixed(values, int64(7), true, mp))
+		require.NoError(t, vector.AppendFixed(orders, int64(1), false, mp))
+		require.NoError(t, vector.AppendFixed(ties, int64(1), false, mp))
+		require.NoError(t, values.SetStringSource(source))
+		exec := makeMaxByExec(mp, AggIdOfMaxBy, false, []types.Type{
+			types.T_int64.ToType(), types.T_int64.ToType(), types.T_int64.ToType(),
+		}).(*maxByExec)
+		require.NoError(t, exec.GroupGrow(1))
+		require.NoError(t, exec.BulkFill(0, []*vector.Vector{values, orders, ties}))
+		return exec, []*vector.Vector{values, orders, ties}
+	}
+	left, leftInputs := makeExec(types.StringSourceLiteral)
+	right, rightInputs := makeExec(types.StringSourceCOMStmt)
+	require.NoError(t, left.Merge(right, 0, 0))
+	results, err := left.Flush()
+	require.NoError(t, err)
+	require.True(t, results[0].IsNull(0))
+	require.Equal(t, types.StringSourceExpression, results[0].GetStringSourceAt(0))
+	results[0].Free(mp)
+	left.Free()
+	right.Free()
+	for _, vec := range append(leftInputs, rightInputs...) {
+		vec.Free(mp)
+	}
+	require.Zero(t, mp.CurrNB())
+}
+
 func TestMaxByCompactsReplacedVarlenaState(t *testing.T) {
 	mp := mpool.MustNewZero()
 	params := []types.Type{types.T_varchar.ToType(), types.T_int64.ToType(), types.T_int64.ToType()}
@@ -361,6 +500,34 @@ func TestMaxByNullContractAndDeterministicMerge(t *testing.T) {
 	restored.Free()
 }
 
+func TestMaxByNullWinnerClearsExplicitTextProvenance(t *testing.T) {
+	mp := mpool.MustNewZero()
+	params := []types.Type{types.T_varbinary.ToType(), types.T_int64.ToType(), types.T_varchar.ToType()}
+	inputs := maxByInputs(
+		t, mp, []string{"older", "ignored"}, map[int]bool{1: true},
+		[]int64{9, 10}, []string{"a", "z"})
+	inputs[0].SetType(types.T_varbinary.ToType())
+	require.NoError(t, inputs[0].SetRuntimeStringDomainAtWithMP(
+		0, types.RuntimeStringText, mp))
+	defer func() {
+		for _, input := range inputs {
+			input.Free(mp)
+		}
+		require.Zero(t, mp.CurrNB())
+	}()
+
+	exec := makeMaxByExec(mp, 7022, false, params).(*maxByExec)
+	require.NoError(t, exec.GroupGrow(1))
+	require.NoError(t, exec.BulkFill(0, inputs))
+	result, err := exec.Flush()
+	require.NoError(t, err)
+	require.True(t, result[0].IsNull(0))
+	require.False(t, result[0].HasExplicitTextStringMetadata())
+	require.False(t, result[0].HasBinaryStringMetadata())
+	result[0].Free(mp)
+	exec.Free()
+}
+
 func TestMaxByEqualWinnerOrsBinaryStringProvenance(t *testing.T) {
 	mp := mpool.MustNewZero()
 	params := []types.Type{types.T_varchar.ToType(), types.T_int64.ToType(), types.T_varchar.ToType()}
@@ -380,6 +547,69 @@ func TestMaxByEqualWinnerOrsBinaryStringProvenance(t *testing.T) {
 		}
 	}
 	require.Zero(t, mp.CurrNB())
+}
+
+func TestMaxByEqualWinnerMergesEffectiveStringDomainsCommutatively(t *testing.T) {
+	for _, textFirst := range []bool{false, true} {
+		mp := mpool.MustNewZero()
+		inputs := maxByInputs(t, mp, []string{"same", "same"}, nil, []int64{10, 10}, []string{"tie", "tie"})
+		inputs[0].SetType(types.T_varbinary.ToType())
+		textRow := 1
+		if textFirst {
+			textRow = 0
+		}
+		require.NoError(t, inputs[0].SetRuntimeStringDomainAtWithMP(textRow, types.RuntimeStringText, mp))
+		params := []types.Type{types.T_varbinary.ToType(), types.T_int64.ToType(), types.T_varchar.ToType()}
+		exec := makeMaxByExec(mp, 7021, false, params).(*maxByExec)
+		require.NoError(t, exec.GroupGrow(1))
+		require.NoError(t, exec.BulkFill(0, inputs))
+		result, err := exec.Flush()
+		require.NoError(t, err)
+		require.Equal(t, types.RuntimeStringInherit, result[0].GetRuntimeStringDomainAt(0))
+		result[0].Free(mp)
+		exec.Free()
+		for _, input := range inputs {
+			input.Free(mp)
+		}
+		require.Zero(t, mp.CurrNB())
+	}
+}
+
+func TestMaxByEqualPartialMergeUsesEffectiveStringDomains(t *testing.T) {
+	for _, textLeft := range []bool{false, true} {
+		t.Run(fmt.Sprintf("text_left_%t", textLeft), func(t *testing.T) {
+			mp := mpool.MustNewZero()
+			params := []types.Type{types.T_varbinary.ToType(), types.T_int64.ToType(), types.T_varchar.ToType()}
+			makeState := func(domain types.RuntimeStringDomain) *maxByExec {
+				inputs := maxByInputs(t, mp, []string{"same"}, nil, []int64{10}, []string{"tie"})
+				inputs[0].SetType(types.T_varbinary.ToType())
+				if domain != types.RuntimeStringInherit {
+					require.NoError(t, inputs[0].SetRuntimeStringDomainWithMP(domain, mp))
+				}
+				exec := makeMaxByExec(mp, 7022, false, params).(*maxByExec)
+				require.NoError(t, exec.GroupGrow(1))
+				require.NoError(t, exec.Fill(0, 0, inputs))
+				for _, input := range inputs {
+					input.Free(mp)
+				}
+				return exec
+			}
+			leftDomain, rightDomain := types.RuntimeStringInherit, types.RuntimeStringText
+			if textLeft {
+				leftDomain, rightDomain = rightDomain, leftDomain
+			}
+			left := makeState(leftDomain)
+			right := makeState(rightDomain)
+			require.NoError(t, left.Merge(right, 0, 0))
+			result, err := left.Flush()
+			require.NoError(t, err)
+			require.Equal(t, types.RuntimeStringInherit, result[0].GetRuntimeStringDomainAt(0))
+			result[0].Free(mp)
+			left.Free()
+			right.Free()
+			require.Zero(t, mp.CurrNB())
+		})
+	}
 }
 
 func TestMaxByPreservesBinaryStringProvenanceAcrossGroups(t *testing.T) {

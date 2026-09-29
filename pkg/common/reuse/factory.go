@@ -31,7 +31,6 @@ var (
 	MpoolBased = SPI(1)
 
 	defaultSPI    = SyncBased
-	enableChecker atomic.Bool
 	enableVerbose atomic.Bool
 )
 

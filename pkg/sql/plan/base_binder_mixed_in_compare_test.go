@@ -16,13 +16,57 @@ package plan
 
 import (
 	"context"
+	"math"
 	"testing"
 
 	"github.com/matrixorigin/matrixone/pkg/container/batch"
 	"github.com/matrixorigin/matrixone/pkg/container/types"
 	planpb "github.com/matrixorigin/matrixone/pkg/pb/plan"
+	"github.com/matrixorigin/matrixone/pkg/sql/plan/function"
 	"github.com/stretchr/testify/require"
 )
+
+func TestTupleMemoIdentityMarksStableVolatileSource(t *testing.T) {
+	randFn, err := function.GetFunctionByName(context.Background(), "rand", nil)
+	require.NoError(t, err)
+	newCandidate := func(wrapperType types.T) (*planpb.Expr, *planpb.Expr) {
+		source := &planpb.Expr{
+			Typ: planpb.Type{Id: int32(types.T_float64)},
+			Expr: &planpb.Expr_F{F: &planpb.Function{
+				Func: &planpb.ObjectRef{Obj: randFn.GetEncodedOverloadID(), ObjName: "rand"},
+			}},
+		}
+		wrapper := &planpb.Expr{
+			Typ:  planpb.Type{Id: int32(wrapperType)},
+			Expr: &planpb.Expr_F{F: &planpb.Function{Args: []*planpb.Expr{source}}},
+		}
+		return wrapper, source
+	}
+	first, firstSource := newCandidate(types.T_float64)
+	second, secondSource := newCandidate(types.T_decimal128)
+	binder := &baseBinder{builder: &QueryBuilder{}, ctx: &BindContext{}}
+	var memoIDs []int32
+
+	require.NoError(t, binder.markTupleVolatileSources(first, &memoIDs))
+	require.NoError(t, binder.markTupleVolatileSources(second, &memoIDs))
+
+	require.Zero(t, first.AuxId)
+	require.Zero(t, second.AuxId)
+	require.Negative(t, firstSource.AuxId)
+	require.Equal(t, firstSource.AuxId, secondSource.AuxId)
+}
+
+func TestVolatileMemoIDExhaustionFailsWithoutWrapping(t *testing.T) {
+	builder := &QueryBuilder{nextVolatileExprMemoID: math.MinInt32 + 1}
+	binder := &baseBinder{sysCtx: context.Background(), builder: builder}
+
+	id, err := binder.allocateVolatileExprMemoID()
+	require.NoError(t, err)
+	require.Equal(t, int32(math.MinInt32), id)
+	_, err = binder.allocateVolatileExprMemoID()
+	require.ErrorContains(t, err, "too many memoized expressions")
+	require.Equal(t, int32(math.MinInt32), builder.nextVolatileExprMemoID)
+}
 
 func mixedStringNumericInList(t *testing.T, ctx context.Context) *planpb.Expr {
 	t.Helper()
@@ -124,6 +168,84 @@ func TestMixedStringNumericNotInBindsAndFoldsToFalse(t *testing.T) {
 	result, ok := folded.GetLit().Value.(*planpb.Literal_Bval)
 	require.True(t, ok)
 	require.False(t, result.Bval)
+}
+
+func TestPromotedPadSpaceStringInUsesCanonicalKey(t *testing.T) {
+	ctx := NewMockCompilerContext(true)
+	for _, tc := range []struct {
+		name string
+		fn   string
+	}{
+		{name: "in", fn: "in"},
+		{name: "not in", fn: "not_in"},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			left := makePlan2StringConstExprWithType("MO      ")
+			left.Typ.PadSpace = true
+			right := &planpb.Expr{
+				Expr: &planpb.Expr_List{List: &planpb.ExprList{List: []*planpb.Expr{
+					makePlan2StringConstExprWithType("MO"),
+					makePlan2StringConstExprWithType("XX"),
+				}}},
+			}
+
+			expr, err := BindFuncExprImplByPlanExpr(ctx.GetContext(), tc.fn, []*planpb.Expr{left, right})
+			require.NoError(t, err)
+			inFunction := expr.GetF()
+			require.NotNil(t, inFunction)
+			require.Equal(t, tc.fn, inFunction.Func.ObjName)
+			leftCast := inFunction.Args[0].GetF()
+			require.NotNil(t, leftCast)
+			require.Equal(t, "cast", leftCast.Func.ObjName)
+			_, overloadID := function.DecodeOverloadID(leftCast.Func.Obj)
+			require.Equal(t, int32(2), overloadID)
+		})
+	}
+}
+
+func TestPromotedPadSpaceComparisonBuiltinsUseCanonicalArguments(t *testing.T) {
+	value := "coalesce(cast(n_name as char(8)), cast(n_comment as varchar(8)))"
+	for _, tc := range []struct {
+		name string
+		sql  string
+		fn   string
+	}{
+		{name: "strcmp", sql: "select strcmp(" + value + ", 'MO') from nation", fn: "strcmp"},
+		{name: "field", sql: "select field(" + value + ", 'MO', 'XX') from nation", fn: "field"},
+		{name: "least", sql: "select least(" + value + ", 'MO') from nation", fn: "least"},
+		{name: "greatest", sql: "select greatest(" + value + ", 'MO') from nation", fn: "greatest"},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			logicPlan, err := runOneStmt(NewMockOptimizer(true), t, tc.sql)
+			require.NoError(t, err)
+
+			var found bool
+			var visit func(*planpb.Expr)
+			visit = func(expr *planpb.Expr) {
+				if expr == nil {
+					return
+				}
+				fn := expr.GetF()
+				if fn == nil {
+					return
+				}
+				if fn.Func.ObjName == tc.fn {
+					for _, arg := range fn.Args {
+						found = found || isCastOverload(arg, 2)
+					}
+				}
+				for _, arg := range fn.Args {
+					visit(arg)
+				}
+			}
+			for _, node := range logicPlan.GetQuery().Nodes {
+				for _, projection := range node.ProjectList {
+					visit(projection)
+				}
+			}
+			require.True(t, found)
+		})
+	}
 }
 
 func TestNumericInStringLiteralKeepsExactNumericComparison(t *testing.T) {

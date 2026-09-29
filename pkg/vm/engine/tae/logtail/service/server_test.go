@@ -122,6 +122,180 @@ func TestService(t *testing.T) {
 	}
 }
 
+func TestReadBarrierResponseFollowsEarlierLogtailUpdate(t *testing.T) {
+	frontier := timestamp.Timestamp{PhysicalTime: 20, LogicalTime: 2}
+	logtailer := &controlledLogtailer{
+		now: frontier,
+		barrierFn: func(context.Context) (timestamp.Timestamp, error) {
+			return frontier, nil
+		},
+	}
+	server := newUnitLogtailServer(t, logtailer)
+	transport := newCaptureSession()
+	stream := newCaptureStream(transport)
+	session, err := server.getSession(stream)
+	require.NoError(t, err)
+
+	table := mockTable(1, 2, 3)
+	id := MarshalTableID(&table)
+	repeated, generation := session.RegisterWithGeneration(id, table)
+	require.False(t, repeated)
+	completed, err := session.CompleteSubscription(
+		t.Context(), id, generation, mockLogtail(table, timestamp.Timestamp{}), nil,
+	)
+	require.True(t, completed)
+	require.NoError(t, err)
+	require.NotNil(t, receiveCapturedLogtailResponse(t, transport).GetSubscribeResponse())
+
+	from := timestamp.Timestamp{PhysicalTime: 10, LogicalTime: 1}
+	tail := mockLogtail(table, frontier)
+	require.NoError(t, logtailer.notify(from, frontier, nil, tail))
+	require.NoError(t, server.onReadBarrier(
+		t.Context(), stream, &logtail.ReadBarrierRequest{BarrierId: 7},
+	))
+
+	update := receiveCapturedLogtailResponse(t, transport)
+	require.NotNil(t, update.GetUpdateResponse())
+	require.Equal(t, frontier, *update.GetUpdateResponse().To)
+
+	barrier := receiveCapturedLogtailResponse(t, transport).GetReadBarrierResponse()
+	require.NotNil(t, barrier)
+	require.Equal(t, uint64(7), barrier.BarrierId)
+	require.Equal(t, frontier, *barrier.Timestamp)
+	require.Empty(t, server.readBarrierSlots,
+		"the end-to-end admission slot must be released after response hand-off")
+}
+
+func TestReadBarrierServerAdmissionHonorsCancellation(t *testing.T) {
+	barrierCalled := false
+	logtailer := &controlledLogtailer{
+		barrierFn: func(context.Context) (timestamp.Timestamp, error) {
+			barrierCalled = true
+			return timestamp.Timestamp{}, nil
+		},
+	}
+	server := newUnitLogtailServer(t, logtailer)
+	server.readBarrierSlots = make(chan struct{}, 1)
+	server.readBarrierSlots <- struct{}{}
+
+	ctx, cancel := context.WithCancel(t.Context())
+	cancel()
+	err := server.onReadBarrier(
+		ctx,
+		newCaptureStream(newCaptureSession()),
+		&logtail.ReadBarrierRequest{BarrierId: 1},
+	)
+	require.ErrorIs(t, err, context.Canceled)
+	require.False(t, barrierCalled)
+	require.Len(t, server.readBarrierSlots, 1,
+		"a canceled waiter must not release another request's slot")
+	<-server.readBarrierSlots
+}
+
+func TestReadBarrierForcesFilteredProgressBeforeResponse(t *testing.T) {
+	frontier := timestamp.Timestamp{PhysicalTime: 30, LogicalTime: 3}
+	logtailer := &controlledLogtailer{
+		now: frontier,
+		barrierFn: func(context.Context) (timestamp.Timestamp, error) {
+			return frontier, nil
+		},
+	}
+	server := newUnitLogtailServer(t, logtailer)
+	transport := newCaptureSession()
+	stream := newCaptureStream(transport)
+	session, err := server.getSession(stream)
+	require.NoError(t, err)
+
+	subscribed := mockTable(1, 2, 3)
+	id := MarshalTableID(&subscribed)
+	repeated, generation := session.RegisterWithGeneration(id, subscribed)
+	require.False(t, repeated)
+	completed, err := session.CompleteSubscription(
+		t.Context(), id, generation, mockLogtail(subscribed, timestamp.Timestamp{}), nil,
+	)
+	require.True(t, completed)
+	require.NoError(t, err)
+	require.NotNil(t, receiveCapturedLogtailResponse(t, transport).GetSubscribeResponse())
+
+	// Initialize the session frontier below the barrier, then publish a commit
+	// for an unsubscribed table. Publish deliberately filters that tail and its
+	// periodic heartbeat is not due, so the barrier must supply progress.
+	from := timestamp.Timestamp{PhysicalTime: 10, LogicalTime: 1}
+	visible := timestamp.Timestamp{PhysicalTime: 20, LogicalTime: 2}
+	require.NoError(t, logtailer.notify(
+		from, visible, nil, mockLogtail(subscribed, visible),
+	))
+	update := receiveCapturedLogtailResponse(t, transport).GetUpdateResponse()
+	require.NotNil(t, update)
+	require.Equal(t, visible, *update.To)
+
+	unsubscribed := mockTable(9, 9, 9)
+	require.NoError(t, logtailer.notify(
+		visible, frontier, nil, mockLogtail(unsubscribed, frontier),
+	))
+	require.NoError(t, server.onReadBarrier(
+		t.Context(), stream, &logtail.ReadBarrierRequest{BarrierId: 8},
+	))
+
+	progress := receiveCapturedLogtailResponse(t, transport).GetUpdateResponse()
+	require.NotNil(t, progress)
+	require.Empty(t, progress.LogtailList)
+	require.Equal(t, visible, *progress.From)
+	require.Equal(t, frontier, *progress.To)
+
+	barrier := receiveCapturedLogtailResponse(t, transport).GetReadBarrierResponse()
+	require.NotNil(t, barrier)
+	require.Equal(t, uint64(8), barrier.BarrierId)
+	require.Equal(t, frontier, *barrier.Timestamp)
+}
+
+func TestReadBarrierDoesNotRegressNewerSessionProgress(t *testing.T) {
+	barrierFrontier := timestamp.Timestamp{PhysicalTime: 30, LogicalTime: 3}
+	newerFrontier := timestamp.Timestamp{PhysicalTime: 40, LogicalTime: 4}
+	logtailer := &controlledLogtailer{
+		now: barrierFrontier,
+		barrierFn: func(context.Context) (timestamp.Timestamp, error) {
+			return barrierFrontier, nil
+		},
+	}
+	server := newUnitLogtailServer(t, logtailer)
+	transport := newCaptureSession()
+	stream := newCaptureStream(transport)
+	session, err := server.getSession(stream)
+	require.NoError(t, err)
+
+	table := mockTable(1, 2, 3)
+	id := MarshalTableID(&table)
+	repeated, generation := session.RegisterWithGeneration(id, table)
+	require.False(t, repeated)
+	completed, err := session.CompleteSubscription(
+		t.Context(), id, generation, mockLogtail(table, timestamp.Timestamp{}), nil,
+	)
+	require.True(t, completed)
+	require.NoError(t, err)
+	require.NotNil(t, receiveCapturedLogtailResponse(t, transport).GetSubscribeResponse())
+
+	// A transaction ordered after the manager marker may reach the global
+	// sender before the barrier event. The session must keep the newer frontier
+	// and enqueue no regressing progress update.
+	from := timestamp.Timestamp{PhysicalTime: 20, LogicalTime: 2}
+	require.NoError(t, logtailer.notify(
+		from, newerFrontier, nil, mockLogtail(table, newerFrontier),
+	))
+	update := receiveCapturedLogtailResponse(t, transport).GetUpdateResponse()
+	require.NotNil(t, update)
+	require.Equal(t, newerFrontier, *update.To)
+
+	require.NoError(t, server.onReadBarrier(
+		t.Context(), stream, &logtail.ReadBarrierRequest{BarrierId: 9},
+	))
+	barrier := receiveCapturedLogtailResponse(t, transport).GetReadBarrierResponse()
+	require.NotNil(t, barrier)
+	require.Equal(t, uint64(9), barrier.BarrierId)
+	require.Equal(t, barrierFrontier, *barrier.Timestamp)
+	require.Empty(t, transport.writes, "barrier must not enqueue a regressing update")
+}
+
 func TestNewLogtailServerRejectsSmallRPCMessageSize(t *testing.T) {
 	cfg := options.NewDefaultLogtailServerCfg()
 	cfg.RpcMaxMessageSize = 1
@@ -197,6 +371,11 @@ func (m *logtailer) RangeLogtail(
 }
 
 func (m *logtailer) RegisterCallback(cb func(from, to timestamp.Timestamp, closeCB func(), tails ...logtail.TableLogtail) error) {
+}
+
+func (m *logtailer) ReadBarrier(context.Context) (timestamp.Timestamp, error) {
+	frontier, _ := m.Now()
+	return frontier, nil
 }
 
 func (m *logtailer) TableLogtail(

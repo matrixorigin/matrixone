@@ -1,0 +1,51 @@
+drop database if exists semi_join_containment;
+create database semi_join_containment;
+use semi_join_containment;
+create table x(id int primary key, k int);
+create table a(k int, v int);
+create table b(k int);
+insert into x values (1,1),(2,1),(3,2),(4,3),(5,null),(6,4),(7,5);
+insert into a values (1,10),(1,20),(1,20),(2,10),(3,10),(3,null),
+(4,10),(4,20),(5,10),(5,20),(null,10),(null,20);
+insert into b values (1),(1),(2),(3),(5),(null);
+select id from x
+where k in (select a1.k from a a1 join a a2 on a1.k=a2.k where a1.v<>a2.v)
+and k in (select b.k from b join a a1 on b.k=a1.k
+join a a2 on a1.k=a2.k where a1.v<>a2.v)
+order by id;
+id
+1
+2
+7
+select id from x where k in (1,5) order by id;
+id
+1
+2
+7
+select id from x
+where k in (select a1.k from a a1 join a a2 on a1.k=a2.k where a1.v<>a2.v)
+and k in (select b.k from b join a a1 on b.k=a1.k
+join a a2 on a1.k=a2.k)
+order by id;
+id
+1
+2
+7
+select id from x
+where k in (select b.k from b join a a1 on b.k=a1.k
+join a a2 on a1.k=a2.k)
+order by id;
+id
+1
+2
+3
+4
+7
+delete from b;
+select id from x
+where k in (select a1.k from a a1 join a a2 on a1.k=a2.k where a1.v<>a2.v)
+and k in (select b.k from b join a a1 on b.k=a1.k
+join a a2 on a1.k=a2.k where a1.v<>a2.v)
+order by id;
+id
+drop database semi_join_containment;

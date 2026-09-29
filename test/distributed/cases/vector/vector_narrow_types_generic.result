@@ -37,16 +37,16 @@ select mo_table_col_max('narrowgen', 'nv', 'u8');
 
 select hex(group_concat(i8 order by a)) from nv;
 ➤ hex(group_concat(i8, ,order by a))[12,-1,0]  𝄀
-0102032C0405062CFF0007
+5B312C20322C20335D2C5B342C20352C20365D2C5B2D312C20302C20375D
 select hex(group_concat(u8 order by a)) from nv;
 ➤ hex(group_concat(u8, ,order by a))[12,-1,0]  𝄀
-0102032C0405062C0A80FF
+5B312C20322C20335D2C5B342C20352C20365D2C5B31302C203132382C203235355D
 select hex(group_concat(bf order by a)) from nv where a = 1;
 ➤ hex(group_concat(bf, ,order by a))[12,-1,0]  𝄀
-803F00404040
+5B312C20322C20335D
 select hex(group_concat(f16 order by a)) from nv where a = 1;
 ➤ hex(group_concat(f16, ,order by a))[12,-1,0]  𝄀
-003C00400042
+5B312C20322C20335D
 select json_arrayagg(i8) from nv where a = 3;
 ➤ json_arrayagg(i8)[-1,2147483647,0]  𝄀
 [[-1, 0, 7]]

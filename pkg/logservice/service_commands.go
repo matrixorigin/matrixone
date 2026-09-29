@@ -33,6 +33,12 @@ func (s *Service) handleCommands(cmds []pb.ScheduleCommand) {
 	for _, cmd := range cmds {
 		s.runtime.Logger().Info(fmt.Sprintf("%s applying cmd: %s", s.ID(), cmd.LogString()))
 		if cmd.GetConfigChange() != nil {
+			if cmd.ConfigChange.Replica.ShardID == hakeeper.DefaultHAKeeperShardID && s.store.catalogExecutor.enabled {
+				if err := s.store.executeCatalogCommand(cmd); err != nil {
+					s.runtime.Logger().Error("catalog metadata command rejected", zap.Error(err))
+				}
+				continue
+			}
 			s.runtime.Logger().Debug("applying schedule command:", zap.String("command", cmd.LogString()))
 			switch cmd.ConfigChange.ChangeType {
 			case pb.AddReplica:
@@ -182,6 +188,8 @@ func (s *Service) heartbeatWorker(ctx context.Context) {
 		select {
 		case <-ctx.Done():
 			return
+		case <-s.heartbeatC:
+			s.heartbeat(ctx)
 		case <-ticker.C:
 			s.heartbeat(ctx)
 			// I'd call this an ugly hack to just workaround select's
@@ -192,6 +200,16 @@ func (s *Service) heartbeatWorker(ctx context.Context) {
 			default:
 			}
 		}
+	}
+}
+
+func (s *Service) requestHeartbeat() {
+	if s.heartbeatC == nil {
+		return
+	}
+	select {
+	case s.heartbeatC <- struct{}{}:
+	default:
 	}
 }
 
@@ -213,7 +231,9 @@ func (s *Service) checkReplicaHealth(ctx context.Context) {
 			zap.Uint64("shardID", tnShardID))
 		return
 	}
-	if err := s.store.checkHealth(tnShardID); err != nil {
+	// A TN shard and its backing Log shard have distinct IDs. The only
+	// supported TN shard is backed by the first Log shard.
+	if err := s.store.checkHealth(firstLogShardID); err != nil {
 		s.runtime.Logger().Error("failed to check health", zap.Error(err))
 		v2.LogServiceReplicaHealthGauge.Set(0)
 	} else {

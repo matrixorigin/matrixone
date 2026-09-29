@@ -15,11 +15,13 @@
 package plan
 
 import (
+	"context"
 	"fmt"
 	"strings"
 	"testing"
 	"time"
 
+	"github.com/gogo/protobuf/proto"
 	"github.com/matrixorigin/matrixone/pkg/container/batch"
 	"github.com/matrixorigin/matrixone/pkg/container/bytejson"
 	"github.com/matrixorigin/matrixone/pkg/sql/colexec"
@@ -28,9 +30,11 @@ import (
 
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
 	"github.com/matrixorigin/matrixone/pkg/container/types"
+	"github.com/matrixorigin/matrixone/pkg/container/vector"
 	"github.com/matrixorigin/matrixone/pkg/pb/plan"
 	"github.com/matrixorigin/matrixone/pkg/sql/parsers/dialect/mysql"
 	"github.com/matrixorigin/matrixone/pkg/sql/parsers/tree"
+	planfunction "github.com/matrixorigin/matrixone/pkg/sql/plan/function"
 	"github.com/matrixorigin/matrixone/pkg/sql/plan/rule"
 	"github.com/smartystreets/goconvey/convey"
 )
@@ -507,7 +511,11 @@ func TestEnumToJSONQuotesDisplayValueDuringBinding(t *testing.T) {
 
 				expr := pl.GetQuery().Nodes[1].ProjectList[0]
 				require.Equal(t, int32(types.T_json), expr.Typ.Id, sql)
-				quoted := expr.GetF()
+				cast := expr.GetF()
+				require.NotNil(t, cast, sql)
+				require.Equal(t, "cast", cast.Func.ObjName, sql)
+				require.Len(t, cast.Args, 2, sql)
+				quoted := cast.Args[0].GetF()
 				require.NotNil(t, quoted, sql)
 				require.Equal(t, "json_quote", quoted.Func.ObjName, sql)
 				require.Len(t, quoted.Args, 1, sql)
@@ -739,6 +747,188 @@ func TestEnumAndSetNumericContractsUseStoredValues(t *testing.T) {
 	}
 }
 
+func TestGroupedMySQLSpecialNumericContextsRecoverStoredValues(t *testing.T) {
+	tests := []struct {
+		name         string
+		sql          string
+		functionName string
+		definition   string
+	}{
+		{name: "grouped enum", sql: "select e + 0 from enum_order_t group by e", functionName: moEnumCastValueToIndexFun, definition: "low,mid,high"},
+		{name: "derived grouped enum", sql: "select d.e + 0 from (select e from enum_order_t group by e) d", functionName: moEnumCastValueToIndexFun, definition: "low,mid,high"},
+		{name: "cte grouped enum", sql: "with c as (select e from enum_order_t group by e) select e + 0 from c", functionName: moEnumCastValueToIndexFun, definition: "low,mid,high"},
+		{name: "having grouped enum", sql: "select e from enum_order_t group by e having e + 0 > 1", functionName: moEnumCastValueToIndexFun, definition: "low,mid,high"},
+		{name: "window over grouped enum", sql: "select e + 0, sum(e + 0) over () from enum_order_t group by e", functionName: moEnumCastValueToIndexFun, definition: "low,mid,high"},
+		{name: "grouped set", sql: "select s + 0 from enum_order_t group by s", functionName: moSetCastValueToIndexFun, definition: "red,green,blue"},
+		{name: "grouped enum numeric IN", sql: "select e in (1, 2) from enum_order_t group by e", functionName: moEnumCastValueToIndexFun, definition: "low,mid,high"},
+		{name: "grouped enum numeric NOT IN", sql: "select e not in (1, 2) from enum_order_t group by e", functionName: moEnumCastValueToIndexFun, definition: "low,mid,high"},
+		{name: "grouped enum numeric IN subquery", sql: "select e in (select 1) from enum_order_t group by e", functionName: moEnumCastValueToIndexFun, definition: "low,mid,high"},
+		{name: "grouped enum numeric NOT IN subquery", sql: "select e not in (select 1) from enum_order_t group by e", functionName: moEnumCastValueToIndexFun, definition: "low,mid,high"},
+		{name: "numeric NOT IN grouped enum subquery", sql: "select 1 not in (select e from enum_order_t group by e)", functionName: moEnumCastValueToIndexFun, definition: "low,mid,high"},
+		{name: "grouped enum numeric ANY subquery", sql: "select 1 = any (select e from enum_order_t group by e)", functionName: moEnumCastValueToIndexFun, definition: "low,mid,high"},
+		{name: "grouped set numeric IN", sql: "select s in (1, 3) from enum_order_t group by s", functionName: moSetCastValueToIndexFun, definition: "red,green,blue"},
+	}
+
+	for _, tc := range tests {
+		t.Run(tc.name, func(t *testing.T) {
+			mock := newMySQLSpecialOrderMock()
+			logicPlan, err := runOneStmt(mock, t, tc.sql)
+			require.NoError(t, err)
+
+			conversion := findPlanFunctionExpr(logicPlan, tc.functionName)
+			require.NotNil(t, conversion, "expected guarded conversion in bound plan")
+			require.Len(t, conversion.GetF().Args, 2)
+			require.Equal(t, tc.definition, conversion.GetF().Args[0].GetLit().GetSval())
+			_, overloadID := planfunction.DecodeOverloadID(conversion.GetF().Func.Obj)
+			require.Zero(t, overloadID, "grouped expressions must stay on the legacy worker overload")
+			if tc.functionName == moEnumCastValueToIndexFun {
+				require.Equal(t, int32(types.T_enum), conversion.Typ.Id)
+				safeDisplay := conversion.GetF().Args[1].GetF()
+				require.NotNil(t, safeDisplay)
+				require.Equal(t, "if", safeDisplay.Func.GetObjName())
+			} else {
+				require.Equal(t, int32(types.T_uint64), conversion.Typ.Id)
+				require.Empty(t, conversion.Typ.Enumvalues)
+			}
+		})
+	}
+
+	t.Run("tuple IN subquery recovers each side by position", func(t *testing.T) {
+		logicPlan, err := runOneStmt(newMySQLSpecialOrderMock(), t,
+			"select (e, 1) in (select 1, e from enum_order_t group by e) from enum_order_t group by e")
+		require.NoError(t, err)
+		require.GreaterOrEqual(t, countPlanFunctionCalls(logicPlan, moEnumCastValueToIndexFun), 2,
+			"position 0 must recover the grouped left ENUM and position 1 the grouped subquery ENUM")
+	})
+
+	t.Run("row-level conversion remains raw", func(t *testing.T) {
+		logicPlan, err := runOneStmt(newMySQLSpecialOrderMock(), t,
+			"select e + 0 from enum_order_t")
+		require.NoError(t, err)
+		require.Nil(t, findPlanFunctionExpr(logicPlan, moEnumCastValueToIndexFun))
+	})
+
+	t.Run("numeric group key remains numeric", func(t *testing.T) {
+		logicPlan, err := runOneStmt(newMySQLSpecialOrderMock(), t,
+			"select e + 0 from enum_order_t group by e + 0")
+		require.NoError(t, err)
+		require.Nil(t, findPlanFunctionExpr(logicPlan, moEnumCastValueToIndexFun))
+	})
+
+	t.Run("explicit lexical cast clears provenance", func(t *testing.T) {
+		logicPlan, err := runOneStmt(newMySQLSpecialOrderMock(), t,
+			"select cast(e as char) + 0 from enum_order_t group by e")
+		require.NoError(t, err)
+		require.Nil(t, findPlanFunctionExpr(logicPlan, moEnumCastValueToIndexFun))
+	})
+
+	t.Run("mixed IN list keeps display comparison", func(t *testing.T) {
+		logicPlan, err := runOneStmt(newMySQLSpecialOrderMock(), t,
+			"select e in ('low', 1) from enum_order_t group by e")
+		require.NoError(t, err)
+		require.Nil(t, findPlanFunctionExpr(logicPlan, moEnumCastValueToIndexFun))
+	})
+
+	t.Run("empty enum label does not enable lossy recovery", func(t *testing.T) {
+		mock := newMySQLSpecialOrderMock()
+		mock.ctxt.tables["enum_duplicate_t"].Cols[0].Typ = plan.Type{
+			Id: int32(types.T_enum), Enumvalues: ",a",
+		}
+		logicPlan, err := runOneStmt(mock, t,
+			"select e + 0 from enum_duplicate_t group by e")
+		require.NoError(t, err)
+		require.Nil(t, findPlanFunctionExpr(logicPlan, moEnumCastValueToIndexFun))
+	})
+
+	t.Run("ENUM conversion remains on the legacy overload", func(t *testing.T) {
+		legacy, err := BindFuncExprImplByPlanExpr(context.Background(), moEnumCastValueToIndexFun, []*plan.Expr{
+			makePlan2StringConstExprWithType("a,b"),
+			makePlan2StringConstExprWithType("a"),
+		})
+		require.NoError(t, err)
+		_, overloadID := planfunction.DecodeOverloadID(legacy.GetF().Func.Obj)
+		require.Zero(t, overloadID)
+
+		_, err = BindFuncExprImplByPlanExpr(context.Background(), moEnumCastValueToIndexFun, []*plan.Expr{
+			makePlan2StringConstExprWithType("a,b"),
+			makePlan2StringConstExprWithType(""),
+			makePlan2BoolConstExprWithType(true),
+		})
+		require.Error(t, err)
+	})
+}
+
+func TestGroupedEnumRecoveryExecutesAfterPlanRoundTrip(t *testing.T) {
+	proc := testutil.NewProcess(t)
+	storageType := &plan.Type{
+		Id: int32(types.T_enum), Enumvalues: "2,red", NotNullable: false,
+	}
+	nullDisplay := makePlan2NullConstExprWithType()
+	nullDisplay.Typ.Id = int32(types.T_varchar)
+
+	tests := []struct {
+		name     string
+		display  *plan.Expr
+		want     types.Enum
+		wantNull bool
+	}{
+		{name: "ordinal zero", display: makePlan2StringConstExprWithType(""), want: 0},
+		{name: "numeric-looking label", display: makePlan2StringConstExprWithType("2"), want: 1},
+		{name: "ordinary label", display: makePlan2StringConstExprWithType("red"), want: 2},
+		{name: "null remains null", display: nullDisplay, wantNull: true},
+	}
+
+	for _, tc := range tests {
+		t.Run(tc.name, func(t *testing.T) {
+			expr, err := makeMySQLSpecialNumericValue(context.Background(), tc.display, storageType)
+			require.NoError(t, err)
+			// IF selects the common numeric representation for ENUM branches.
+			require.Equal(t, int32(types.T_uint16), expr.Typ.Id)
+			require.Equal(t, storageType.Enumvalues, expr.Typ.Enumvalues)
+			require.Equal(t, !tc.wantNull, expr.Typ.NotNullable)
+
+			payload, err := proto.Marshal(expr)
+			require.NoError(t, err)
+			var restored plan.Expr
+			require.NoError(t, proto.Unmarshal(payload, &restored))
+			require.True(t, proto.Equal(expr, &restored))
+			requireBaseSupportedEnumRecoveryFunctions(t, &restored)
+
+			executor, err := colexec.NewExpressionExecutor(proc, &restored)
+			require.NoError(t, err)
+			defer executor.Free()
+			result, err := executor.Eval(proc, []*batch.Batch{batch.EmptyForConstFoldBatch}, nil)
+			require.NoError(t, err)
+			require.Equal(t, types.T_uint16, result.GetType().Oid)
+			if tc.wantNull {
+				require.True(t, result.GetNulls().Contains(0))
+				return
+			}
+			require.False(t, result.GetNulls().Contains(0))
+			require.Equal(t, uint16(tc.want), vector.MustFixedColWithTypeCheck[uint16](result)[0])
+		})
+	}
+}
+
+func requireBaseSupportedEnumRecoveryFunctions(t *testing.T, expr *plan.Expr) {
+	t.Helper()
+	if functionExpr := expr.GetF(); functionExpr != nil {
+		name := functionExpr.Func.GetObjName()
+		_, err := planfunction.GetFunctionById(context.Background(), functionExpr.Func.Obj)
+		require.NoError(t, err, "serialized function ID %d (%s) must exist in the base registry",
+			functionExpr.Func.Obj, name)
+
+		if name == moEnumCastValueToIndexFun {
+			_, overloadID := planfunction.DecodeOverloadID(functionExpr.Func.Obj)
+			require.Zero(t, overloadID, "recovery must use the legacy two-argument ENUM overload")
+			require.Len(t, functionExpr.Args, 2)
+		}
+		for _, arg := range functionExpr.Args {
+			requireBaseSupportedEnumRecoveryFunctions(t, arg)
+		}
+	}
+}
+
 func TestIsBitwiseBinaryOp(t *testing.T) {
 	for _, op := range []tree.BinaryOp{
 		tree.BIT_XOR,
@@ -782,17 +972,20 @@ func TestEnumDisplayValueToJSONUsesJSONQuoteInPlannerCasts(t *testing.T) {
 	expr, err := makePlan2CastExpr(ctx, DeepCopyExpr(displayExpr), jsonType)
 	require.NoError(t, err)
 	require.Equal(t, int32(types.T_json), expr.Typ.Id)
-	require.Equal(t, "json_quote", expr.GetF().Func.ObjName)
+	require.Equal(t, "cast", expr.GetF().Func.ObjName)
+	require.Equal(t, "json_quote", expr.GetF().Args[0].GetF().Func.ObjName)
 
 	expr, err = forceAssignmentCastExpr(ctx, DeepCopyExpr(displayExpr), jsonType)
 	require.NoError(t, err)
 	require.Equal(t, int32(types.T_json), expr.Typ.Id)
-	require.Equal(t, "json_quote", expr.GetF().Func.ObjName)
+	require.Equal(t, "cast", expr.GetF().Func.ObjName)
+	require.Equal(t, "json_quote", expr.GetF().Args[0].GetF().Func.ObjName)
 
 	expr, err = forceCastExpr2(ctx, DeepCopyExpr(displayExpr), types.T_json.ToType(), &plan.Expr{Typ: jsonType})
 	require.NoError(t, err)
 	require.Equal(t, int32(types.T_json), expr.Typ.Id)
-	require.Equal(t, "json_quote", expr.GetF().Func.ObjName)
+	require.Equal(t, "cast", expr.GetF().Func.ObjName)
+	require.Equal(t, "json_quote", expr.GetF().Args[0].GetF().Func.ObjName)
 }
 
 func TestRawMySQLSpecialTypeToJSONUsesDisplayValue(t *testing.T) {
@@ -815,9 +1008,9 @@ func TestRawMySQLSpecialTypeToJSONUsesDisplayValue(t *testing.T) {
 		)
 		require.NoError(t, err)
 		require.True(t, rewritten)
-		require.Equal(t, "json_quote", got.GetF().Func.ObjName)
-		require.Len(t, got.GetF().Args, 1)
-		require.True(t, isEnumOrSetDisplayValueExpr(got.GetF().Args[0]))
+		require.Equal(t, "cast", got.GetF().Func.ObjName)
+		require.Equal(t, "json_quote", got.GetF().Args[0].GetF().Func.ObjName)
+		require.True(t, isEnumOrSetDisplayValueExpr(got.GetF().Args[0].GetF().Args[0]))
 	}
 }
 
@@ -833,15 +1026,18 @@ func TestSetDisplayValueToJSONUsesJSONQuoteInPlannerCasts(t *testing.T) {
 
 	expr, err := makePlan2CastExpr(ctx, DeepCopyExpr(displayExpr), jsonType)
 	require.NoError(t, err)
-	require.Equal(t, "json_quote", expr.GetF().Func.ObjName)
+	require.Equal(t, "cast", expr.GetF().Func.ObjName)
+	require.Equal(t, "json_quote", expr.GetF().Args[0].GetF().Func.ObjName)
 
 	expr, err = forceAssignmentCastExpr(ctx, DeepCopyExpr(displayExpr), jsonType)
 	require.NoError(t, err)
-	require.Equal(t, "json_quote", expr.GetF().Func.ObjName)
+	require.Equal(t, "cast", expr.GetF().Func.ObjName)
+	require.Equal(t, "json_quote", expr.GetF().Args[0].GetF().Func.ObjName)
 
 	expr, err = forceCastExpr2(ctx, DeepCopyExpr(displayExpr), types.T_json.ToType(), &plan.Expr{Typ: jsonType})
 	require.NoError(t, err)
-	require.Equal(t, "json_quote", expr.GetF().Func.ObjName)
+	require.Equal(t, "cast", expr.GetF().Func.ObjName)
+	require.Equal(t, "json_quote", expr.GetF().Args[0].GetF().Func.ObjName)
 }
 
 func TestSetDisplayValueNumericCastUsesStoredBitmap(t *testing.T) {
@@ -890,8 +1086,10 @@ func TestJSONSourceCastsAreNotSkipped(t *testing.T) {
 	require.Equal(t, int32(types.T_text), expr.Typ.Id)
 	require.Equal(t, "cast", expr.GetF().Func.ObjName)
 
-	_, err = makePlan2CastExpr(ctx, DeepCopyExpr(jsonExpr), plan.Type{Id: int32(types.T_blob)})
-	require.Error(t, err)
+	blobExpr, err := makePlan2CastExpr(ctx, DeepCopyExpr(jsonExpr), plan.Type{Id: int32(types.T_blob)})
+	require.NoError(t, err)
+	require.Equal(t, int32(types.T_blob), blobExpr.Typ.Id)
+	require.Equal(t, "cast", blobExpr.GetF().Func.ObjName)
 }
 
 func TestJSONComparisonsCastBothOperandsToCommonType(t *testing.T) {
@@ -916,6 +1114,58 @@ func TestJSONComparisonsCastBothOperandsToCommonType(t *testing.T) {
 	}
 }
 
+func TestCoalesceLargeJSONCharacterFallbackIsLossless(t *testing.T) {
+	value := strings.Repeat("x", types.MaxVarcharLen+1024)
+	jsonText := `{"payload":"` + value + `"}`
+	expected := `{"payload": "` + value + `"}`
+	require.Greater(t, len(expected), int(types.MaxVarcharLen))
+
+	mock := NewMockOptimizer(false)
+	pl, err := runOneExprStmt(mock, t, "select coalesce(cast('"+jsonText+"' as json), '{}', 0)")
+	require.NoError(t, err)
+
+	expr := pl.GetQuery().Nodes[1].ProjectList[0]
+	require.Equal(t, int32(types.T_text), expr.Typ.Id)
+	require.Zero(t, expr.Typ.Width)
+
+	proc := testutil.NewProc(t)
+	defer proc.Free()
+	executor, err := colexec.NewExpressionExecutor(proc, expr)
+	require.NoError(t, err)
+	defer executor.Free()
+
+	result, err := executor.Eval(proc, nil, nil)
+	require.NoError(t, err)
+	require.False(t, result.GetNulls().Contains(0))
+	got := result.GetStringAt(0)
+	require.Len(t, got, len(expected))
+	require.Equal(t, expected, got)
+}
+
+func TestJSONBooleanEqualityPreservesOperandTypes(t *testing.T) {
+	for _, tc := range []struct {
+		name  string
+		sql   string
+		left  types.T
+		right types.T
+	}{
+		{name: "equal JSON left", sql: `select cast('"true"' as json) = true`, left: types.T_json, right: types.T_bool},
+		{name: "not equal JSON right", sql: `select true != cast('"true"' as json)`, left: types.T_bool, right: types.T_json},
+		{name: "null safe JSON left", sql: `select cast('"true"' as json) <=> true`, left: types.T_json, right: types.T_bool},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			mock := NewMockOptimizer(false)
+			pl, err := runOneExprStmt(mock, t, tc.sql)
+			require.NoError(t, err)
+
+			args := pl.GetQuery().Nodes[1].ProjectList[0].GetF().Args
+			require.Len(t, args, 2)
+			require.Equal(t, int32(tc.left), args[0].Typ.Id)
+			require.Equal(t, int32(tc.right), args[1].Typ.Id)
+		})
+	}
+}
+
 func runOneExprStmt(opt Optimizer, t *testing.T, sql string) (*plan.Plan, error) {
 	stmts, err := mysql.Parse(opt.CurrentContext().GetContext(), sql, 1)
 	if err != nil {
@@ -935,27 +1185,28 @@ func runOneExprStmt(opt Optimizer, t *testing.T, sql string) (*plan.Plan, error)
 
 func TestMakeTimeBinaryLiteralBindAndExecute(t *testing.T) {
 	tests := []struct {
-		name     string
-		sql      string
-		want     string
-		wantNull bool
+		name         string
+		sql          string
+		want         string
+		wantNull     bool
+		wantOverflow bool
 	}{
 		{name: "hex hour", sql: "select cast(maketime(X'0102', 0, 0) as varchar)", want: "258:00:00"},
 		{name: "hex hour empty", sql: "select cast(maketime(X'', 0, 0) as varchar)", want: "00:00:00"},
-		{name: "hex hour max int64", sql: "select cast(maketime(X'7FFFFFFFFFFFFFFF', 0, 0) as varchar)", want: "838:59:59"},
-		{name: "hex hour max int64 plus one", sql: "select cast(maketime(X'8000000000000000', 0, 0) as varchar)", want: "838:59:59"},
-		{name: "hex hour uint64 overflow", sql: "select cast(maketime(X'FFFFFFFFFFFFFFFF', 0, 0) as varchar)", want: "838:59:59"},
-		{name: "hex hour wider than uint64", sql: "select cast(maketime(X'FFFFFFFFFFFFFFFFFF', 0, 0) as varchar)", want: "838:59:59"},
+		{name: "hex hour max int64", sql: "select cast(maketime(X'7FFFFFFFFFFFFFFF', 0, 0) as varchar)", wantNull: true},
+		{name: "hex hour max int64 plus one", sql: "select cast(maketime(X'8000000000000000', 0, 0) as varchar)", wantOverflow: true},
+		{name: "hex hour uint64 overflow", sql: "select cast(maketime(X'FFFFFFFFFFFFFFFF', 0, 0) as varchar)", wantOverflow: true},
+		{name: "hex hour wider than uint64", sql: "select cast(maketime(X'FFFFFFFFFFFFFFFFFF', 0, 0) as varchar)", wantOverflow: true},
 		{name: "hex hour wide leading zeros", sql: "select cast(maketime(X'000000000000000001', 0, 0) as varchar)", want: "01:00:00"},
 		{name: "hex minute", sql: "select cast(maketime(12, X'01', 0) as varchar)", want: "12:01:00"},
-		{name: "hex minute overflow", sql: "select cast(maketime(12, X'FFFFFFFFFFFFFFFFFF', 0) as varchar)", wantNull: true},
+		{name: "hex minute overflow", sql: "select cast(maketime(12, X'FFFFFFFFFFFFFFFFFF', 0) as varchar)", wantOverflow: true},
 		{name: "hex minute wide leading zeros", sql: "select cast(maketime(12, X'000000000000000001', 0) as varchar)", want: "12:01:00"},
 		{name: "hex second", sql: "select cast(maketime(12, 0, X'01') as varchar)", want: "12:00:01"},
 		{name: "hex second wide leading zeros", sql: "select cast(maketime(12, 0, X'000000000000000001') as varchar)", want: "12:00:01"},
 		{name: "hex second wide leading zero max", sql: "select cast(maketime(12, 0, X'00000000000000003B') as varchar)", want: "12:00:59"},
 		{name: "hex second wider overflow", sql: "select cast(maketime(12, 0, X'010000000000000000') as varchar)", wantNull: true},
 		{name: "bit second", sql: "select cast(maketime(12, 0, B'00000001') as varchar)", want: "12:00:01"},
-		{name: "binary string second", sql: "select cast(maketime(12, 0, cast('01' as binary(2))) as varchar)", want: "12:00:01"},
+		{name: "binary string second", sql: "select cast(maketime(12, 0, cast('01' as binary(2))) as varchar)", want: "12:00:01.000000"},
 		{name: "empty string second coerces to zero", sql: "select cast(maketime(12, 34, '') as varchar)", want: "12:34:00.000000"},
 		{name: "nonnumeric string second coerces to zero", sql: "select cast(maketime(12, 34, 'foo') as varchar)", want: "12:34:00.000000"},
 		{name: "plain strings", sql: "select cast(maketime('12.7', '15.8', '30.9') as varchar)", want: "12:15:30.900000"},
@@ -966,14 +1217,14 @@ func TestMakeTimeBinaryLiteralBindAndExecute(t *testing.T) {
 		{name: "decimal minute rounds out of range", sql: "select maketime(12, cast('59.5' as decimal(3, 1)), 0)", wantNull: true},
 		{name: "decimal hour below half", sql: "select cast(maketime(cast('12.49999999999999999999' as decimal(30, 20)), 0, 0) as varchar)", want: "12:00:00"},
 		{name: "negative decimal hour at half", sql: "select cast(maketime(cast('-12.5' as decimal(3, 1)), 0, 0) as varchar)", want: "-13:00:00"},
-		{name: "decimal hour positive overflow", sql: "select cast(maketime(cast('99999999999999999999999999999999999999' as decimal(38, 0)), 0, 0) as varchar)", want: "838:59:59"},
-		{name: "decimal hour negative overflow", sql: "select cast(maketime(cast('-99999999999999999999999999999999999999' as decimal(38, 0)), 0, 0) as varchar)", want: "-838:59:59"},
+		{name: "decimal hour positive overflow", sql: "select cast(maketime(cast('99999999999999999999999999999999999999' as decimal(38, 0)), 0, 0) as varchar)", wantOverflow: true},
+		{name: "decimal hour negative overflow", sql: "select cast(maketime(cast('-99999999999999999999999999999999999999' as decimal(38, 0)), 0, 0) as varchar)", wantOverflow: true},
 		{name: "decimal256 hour below half", sql: "select cast(maketime(cast('12.499999999999999999999999999999' as decimal(65, 30)), 0, 0) as varchar)", want: "12:00:00"},
 		{name: "decimal256 hour at half", sql: "select cast(maketime(cast('12.500000000000000000000000000000' as decimal(65, 30)), 0, 0) as varchar)", want: "13:00:00"},
 		{name: "decimal256 minute below half", sql: "select cast(maketime(12, cast('58.499999999999999999999999999999' as decimal(65, 30)), 0) as varchar)", want: "12:58:00"},
 		{name: "decimal256 minute at half", sql: "select cast(maketime(12, cast('58.500000000000000000000000000000' as decimal(65, 30)), 0) as varchar)", want: "12:59:00"},
-		{name: "decimal256 hour positive overflow", sql: "select cast(maketime(cast('99999999999999999999999999999999999999999999999999999999999999999' as decimal(65, 0)), 0, 0) as varchar)", want: "838:59:59"},
-		{name: "decimal256 hour negative overflow", sql: "select cast(maketime(cast('-99999999999999999999999999999999999999999999999999999999999999999' as decimal(65, 0)), 0, 0) as varchar)", want: "-838:59:59"},
+		{name: "decimal256 hour positive overflow", sql: "select cast(maketime(cast('99999999999999999999999999999999999999999999999999999999999999999' as decimal(65, 0)), 0, 0) as varchar)", wantOverflow: true},
+		{name: "decimal256 hour negative overflow", sql: "select cast(maketime(cast('-99999999999999999999999999999999999999999999999999999999999999999' as decimal(65, 0)), 0, 0) as varchar)", wantOverflow: true},
 		{name: "safe exponent underflow", sql: "select cast(maketime(12, 34, '1e-5000') as varchar)", want: "12:34:00.000000"},
 		{name: "zero mantissa huge exponent", sql: "select cast(maketime(12, 34, '0e5000') as varchar)", want: "12:34:00.000000"},
 		{name: "wide zero mantissa", sql: "select cast(maketime(12, 34, '" + strings.Repeat("0", 4097) + "') as varchar)", want: "12:34:00.000000"},
@@ -999,6 +1250,10 @@ func TestMakeTimeBinaryLiteralBindAndExecute(t *testing.T) {
 			defer executor.Free()
 
 			result, err := executor.Eval(proc, nil, nil)
+			if test.wantOverflow {
+				require.ErrorContains(t, err, "out of range")
+				return
+			}
 			require.NoError(t, err)
 			if test.wantNull {
 				require.True(t, result.GetNulls().Contains(0))
@@ -1146,4 +1401,20 @@ func TestDate(t *testing.T) {
 	r, err := executor.Eval(testutil.NewProc(t), []*batch.Batch{bat}, nil)
 	require.NoError(t, err)
 	require.Equal(t, 1, r.Length())
+}
+
+func TestPreparedDynamicIntervalHasVersionedUnit(t *testing.T) {
+	p, err := runOneStmt(NewMockOptimizer(false), t,
+		"prepare interval_units from select date_add('2026-01-01', interval ? second)")
+	require.NoError(t, err)
+	preparedPlan := p.GetDcl().GetPrepare().GetPlan()
+	require.NotNil(t, findPlanFunctionExpr(preparedPlan, "to_interval_microsecond"))
+	require.Nil(t, findPlanFunctionExpr(preparedPlan, "to_interval"))
+	dateAdd := findPlanFunctionExpr(preparedPlan, "date_add")
+	require.NotNil(t, dateAdd)
+	require.Equal(t, int64(types.MicroSecond), dateAdd.GetF().Args[2].GetLit().GetI64Val())
+	features, err := plan.RequiredRemoteExpressionFeatures(preparedPlan)
+	require.NoError(t, err)
+	require.True(t, features.NormalizedIntervalUnits)
+	require.False(t, features.LegacyIntervalUnits)
 }

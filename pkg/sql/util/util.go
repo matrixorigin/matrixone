@@ -161,6 +161,62 @@ func BuildSysMetricFilter(curAccountId uint64) tree.Expr {
 	return makeAccountIdEqualAst(curAccountId)
 }
 
+// BuildTableScanAccountFilter returns the implicit account filter that the
+// planner must apply when accountID scans the named physical table. A nil
+// result means the scan covers the table's complete physical row domain.
+//
+// Keep this as the single classification point for both plan construction and
+// consumers that decide whether a query result is safe to publish as
+// process-global table metadata (for example, ANALYZE statistics).
+func BuildTableScanAccountFilter(
+	accountID uint32,
+	databaseName string,
+	tableName string,
+	tableType string,
+) tree.Expr {
+	if accountID == catalog.System_Account {
+		return nil
+	}
+
+	switch {
+	case databaseName == catalog.MO_CATALOG && tableName == catalog.MO_DATABASE:
+		return BuildMoDataBaseFilter(uint64(accountID))
+	case databaseName == catalog.MO_SYSTEM_METRICS &&
+		(tableName == catalog.MO_METRIC || tableName == catalog.MO_SQL_STMT_CU):
+		return BuildSysMetricFilter(uint64(accountID))
+	case databaseName == catalog.MO_SYSTEM && tableName == catalog.MO_STATEMENT:
+		return BuildSysStatementInfoFilter(uint64(accountID))
+	case databaseName == catalog.MO_CATALOG && tableName == catalog.MO_TABLES:
+		return BuildMoTablesFilter(uint64(accountID))
+	case databaseName == catalog.MO_CATALOG && tableName == catalog.MO_COLUMNS:
+		return BuildMoColumnsFilter(uint64(accountID))
+	case TableIsClusterTable(tableType):
+		return makeAccountIdEqualAst(uint64(accountID))
+	default:
+		return nil
+	}
+}
+
+// BuildViewMetadataDependenciesFilter exposes only the current account's
+// dependency rows plus the system activation sentinel. The sentinel is cluster
+// wide state used by tenant information_schema views to fail closed while a
+// rolling-upgrade revalidation pass is required or running.
+func BuildViewMetadataDependenciesFilter(curAccountId uint64) tree.Expr {
+	currentAccount := makeAccountIdEqualAst(curAccountId)
+	globalSentinel := tree.NewAndExpr(
+		makeAccountIdEqualAst(uint64(catalog.System_Account)),
+		tree.NewAndExpr(
+			tree.NewComparisonExpr(tree.EQUAL,
+				tree.NewUnresolvedColName("target_relation_id"),
+				tree.NewNumVal(uint64(0), "0", false, tree.P_uint64)),
+			tree.NewComparisonExpr(tree.EQUAL,
+				tree.NewUnresolvedColName("dependency_ordinal"),
+				tree.NewNumVal(uint64(0), "0", false, tree.P_uint64)),
+		),
+	)
+	return tree.NewOrExpr(currentAccount, tree.NewParentExpr(globalSentinel))
+}
+
 // Build the filter condition AST expression for mo_tables, as follows:
 // account_id = cur_account_id or (account_id = 0 and (relname in ('mo_tables','mo_database','mo_columns') or relkind = 'cluster'))
 func BuildMoTablesFilter(curAccountId uint64) tree.Expr {

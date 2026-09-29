@@ -37,6 +37,58 @@ select (select t1.a from t2 where t2.d > t1.a limit 2) as x from t1 where t1.a =
 select (select t1.a from t2 where t2.d > t1.a limit 2) as x from t1 where t1.a = 1;
 
 -- @case
+-- @desc:wrapped outer references are evaluated after correlated scalar matching
+-- @label:bvt
+delete from t2;
+insert into t2 values (50);
+insert into t1 values (11, 23, 34);
+select a, b, (select a + 1 from t2 where d > a limit 1) as arithmetic_wrap from t1 order by a, b;
+select a, b, (select cast(a as signed) from t2 where d > a limit 1) as cast_wrap from t1 order by a, b;
+select a, b, (select coalesce(a, 0) from t2 where d > a limit 1) as coalesce_wrap from t1 order by a, b;
+select a, b, (select if(a > 0, a, 0) from t2 where d > a limit 1) as if_wrap from t1 order by a, b;
+select a, b, (select case when a > 0 then a else 0 end from t2 where d > a limit 1) as case_wrap from t1 order by a, b;
+select a, b, (select case when d > 0 then a else 0 end from t2 where d > a limit 1) as mixed_case_wrap from t1 order by a, b;
+delete from t2;
+select a, b, (select case when d > 0 then a else 0 end from t2 where d > a limit 1) as empty_mixed from t1 order by a, b;
+insert into t2 values (50), (60), (70);
+select a, b, (select case when d > 0 then a else 0 end from t2 where d > a limit 1) as multi_mixed from t1 order by a, b;
+-- @regex("wrapped correlated scalar projection cannot be safely decorrelated",true)
+select a, (select case when x.d > 0 then a else 0 end from (select max(d) as d from t2) x where x.d > a limit 1) as derived_agg_mixed from t1;
+-- @regex("wrapped correlated scalar projection cannot be safely decorrelated",true)
+select a, (select case when x.d > 0 then a else 0 end from (select d from t2 group by d) x where x.d > a limit 1) as grouped_agg_mixed from t1;
+-- @regex("wrapped correlated scalar projection cannot be safely decorrelated",true)
+delete from t1 where (select case when d > 0 then a else 0 end from t2 where d > a limit 1) >= 0;
+-- @regex("wrapped correlated scalar projection cannot be safely decorrelated",true)
+update t1 set b = (select case when d > 0 then a else 0 end from t2 where d > a limit 1);
+-- @regex("wrapped correlated scalar projection cannot be safely decorrelated",true)
+select a, (select case when d > 0 then a else 0 end from t2 where d = a order by d limit 1) as ordered_eq_mixed from t1;
+-- @regex("wrapped correlated scalar projection cannot be safely decorrelated",true)
+select a, (select case when x.d > 0 then a else 0 end from (select max(d) as d from t2) x where x.d = a limit 1) as derived_agg_eq_mixed from t1;
+-- @regex("wrapped correlated scalar projection cannot be safely decorrelated",true)
+select a, (select case when d > 0 then a else 0 end from t2 where d = a group by d limit 1) as grouped_eq_mixed from t1;
+-- @regex("wrapped correlated scalar projection cannot be safely decorrelated",true)
+select a, (select (select case when t1.a > 0 then t1.a else 0 end from t2 limit 1) from t2 as outer_t2 limit 1) as deep_mixed from t1;
+-- @regex("wrapped correlated aggregate projection cannot be safely decorrelated",true)
+select a, (select case when count(*) > 0 then t1.a else 0 end from t2) as aggregate_projection_only from t1;
+-- @regex("wrapped correlated aggregate projection cannot be safely decorrelated",true)
+select a, (select case when count(*) > 0 then t1.a else 0 end from t2 limit 1) as aggregate_limit from t1;
+-- @regex("wrapped correlated aggregate projection cannot be safely decorrelated",true)
+select a, (select case when count(*) > 0 then t1.a else 0 end from t2 limit 1 offset 1) as aggregate_offset from t1;
+-- @regex("wrapped correlated aggregate projection cannot be safely decorrelated",true)
+select a, (select distinct case when count(*) > 0 then t1.a else 0 end from t2) as aggregate_distinct from t1;
+-- @regex("wrapped correlated aggregate projection cannot be safely decorrelated",true)
+select a, (select case when count(*) > 0 then t1.a else 0 end from t2 having count(*) > 0) as aggregate_having from t1;
+-- @regex("wrapped correlated scalar projection cannot be safely decorrelated",true)
+delete from t1 where (select case when d > 0 then a else 0 end from t2 where d = a limit 1) >= 0;
+-- @regex("wrapped correlated scalar projection cannot be safely decorrelated",true)
+update t1 set b = (select case when d > 0 then a else 0 end from t2 where d = a limit 1);
+-- @regex("outer input without a stable row identity",true)
+select a, (select case when d > 0 then a else 0 end from t2 where d > a limit 1) as grouped_mixed from t1 group by a;
+-- @regex("outer input without a stable row identity",true)
+select a from t1 group by a having (select case when d > 0 then a else 0 end from t2 where d > a limit 1) >= 0;
+delete from t1 where b = 23;
+
+-- @case
 -- @desc:issue #25959 - evaluate the final scalar aggregate projection after LEFT JOIN null extension
 -- @label:bvt
 select p.id, (select coalesce(sum(c.v), 0) from child_agg c where c.corr_key = p.corr_key) as sum_value from parent_agg p order by p.id;
@@ -52,6 +104,69 @@ with correlated_input as (select corr_key, v from child_agg) select p.id, (selec
 select p.id, (with correlated_input as (select c.v from child_agg c where c.corr_key = p.corr_key) select coalesce(sum(v), 0) from correlated_input) as cte_correlated_sum from parent_agg p order by p.id;
 select p.id, (select sum(c.v) from child_agg c where c.corr_key = p.corr_key group by c.corr_key) as grouped_sum from parent_agg p order by p.id;
 select p.id, (select sum(c.v) from child_agg c where c.corr_key = p.corr_key having sum(c.v) > 100) as having_sum from parent_agg p order by p.id;
+
+-- @case
+-- @desc:issue #29412 - local CTE aggregate outputs retain their empty-input row through computed and nested consumers
+-- @label:bvt
+select p.id,
+  (with x as (select count(*) as c from child_agg c where c.corr_key = p.corr_key) select c + 1 from x) as computed_count,
+  (with a as (select max(c.v) as m from child_agg c where c.corr_key = p.corr_key), x as (select count(*) as c from a) select c from x) as nested_star_count,
+  (with a as (select max(c.v) as m from child_agg c where c.corr_key = p.corr_key), x as (select count(m) as c from a) select c from x) as nested_value_count,
+  (with a as (select max(c.v) as m from child_agg c where c.corr_key = p.corr_key), x as (select sum(m) as s from a) select s from x) as nested_sum,
+  (with a as (select max(c.v) as m from child_agg c where c.corr_key = p.corr_key), x as (select sum(coalesce(m, 9) + 1) as s from a) select s from x) as computed_sum,
+  (with a as (select max(c.v) as m from child_agg c where c.corr_key = p.corr_key), x as (select count(m) as c from a), y as (select sum(c) as s from x) select s from y) as triple_sum
+from parent_agg p order by p.id;
+select (with x as (select count(*) as c from child_agg c where c.corr_key = p.corr_key) select c + 1 from x) as null_key_count
+from (select cast(null as signed) as corr_key) p;
+
+-- A missing equality group is not an upper aggregate's singleton input.
+-- Preserve COUNT(*)=0 after row removal, COUNT(value)=0 on a NULL singleton,
+-- and the final NULLIF projection's NULL result.
+select p.id,
+  (with a as (select max(c.v) as m from child_agg c where c.corr_key = p.corr_key group by c.corr_key) select count(*) from a) as grouped_rows,
+  (with a as (select max(c.v) as m from child_agg c where c.corr_key = p.corr_key having max(c.v) > 0) select count(*) from a) as accepted_rows,
+  (with a as (select max(c.v) as m from child_agg c where c.corr_key = p.corr_key limit 0) select count(*) from a) as limited_rows,
+  (with a as (select max(c.v) as m from child_agg c where c.corr_key = p.corr_key having max(c.v) is null) select count(m) from a) as null_values,
+  (with a as (select max(c.v) as m from child_agg c where c.corr_key = p.corr_key group by c.corr_key) select nullif(count(*), 0) from a) as nullif_rows
+from parent_agg p order by p.id;
+
+-- Keep scalar CTE forms that were already correct on main: explicit grouping,
+-- empty-row-rejecting HAVING/filter, and a final zero-row limit.
+select p.id,
+  (with x as (select count(*) as c from child_agg c where c.corr_key = p.corr_key group by c.corr_key) select c from x) as grouped_count,
+  (with x as (select max(c.v) as m from child_agg c where c.corr_key = p.corr_key having max(c.v) > 0) select m from x) as having_max,
+  (with x as (select count(*) as c from child_agg c where c.corr_key = p.corr_key having count(*) > 0) select c from x) as having_count,
+  (with x as (select max(c.v) as m from child_agg c where c.corr_key = p.corr_key), y as (select m from x where m > 0) select m from y) as filtered_max,
+  (with x as (select max(c.v) as m from child_agg c where c.corr_key = p.corr_key) select m from x limit 0) as zero_limit,
+  (with x as (select max(c.v) as m from child_agg c where c.corr_key = p.corr_key having max(c.v) is null) select m from x) as retaining_null_having,
+  (with x as (select max(c.v) as m from child_agg c where c.corr_key = p.corr_key) select m from x limit 1) as one_limit,
+  (with x as (select max(c.v) as m from child_agg c where c.corr_key = p.corr_key) select m from x order by m) as ordered_max,
+  (with x as (select max(c.v) as m from child_agg c where c.corr_key = p.corr_key) select avg(m) from x) as nested_avg,
+  (with x as (select max(c.v) as m from child_agg c where c.corr_key = p.corr_key group by c.corr_key) select max(m) from x) as grouped_max
+from parent_agg p order by p.id;
+prepare scalar_cte_filter from 'select p.id, (with x as (select max(c.v) as m from child_agg c where c.corr_key = p.corr_key) select m from x where m > ?) as m from parent_agg p order by p.id';
+set @cutoff = 5;
+execute scalar_cte_filter using @cutoff;
+set @cutoff = 50;
+execute scalar_cte_filter using @cutoff;
+deallocate prepare scalar_cte_filter;
+prepare scalar_cte_having from 'select p.id, (with x as (select max(c.v) as m from child_agg c where c.corr_key = p.corr_key having max(c.v) is null or ? = 1) select m from x) as m from parent_agg p order by p.id';
+set @retain = 0;
+execute scalar_cte_having using @retain;
+set @retain = 1;
+execute scalar_cte_having using @retain;
+deallocate prepare scalar_cte_having;
+-- @regex("correlated aggregate spine cannot preserve empty-input rows", true)
+select p.id, (with x as (select count(*) as c from child_agg c where c.corr_key = p.corr_key having count(*) >= 0) select c from x) as retaining_having
+from parent_agg p order by p.id;
+-- @regex("unsupported singleton aggregate in correlated CTE", true)
+select p.id, (with x as (select count(*) as c from child_agg c where c.corr_key = p.corr_key) select avg(c) from x) as count_avg
+from parent_agg p order by p.id;
+select p.id, (with x as (select max(c.v) as m from child_agg c where c.corr_key > p.corr_key) select m from x) as non_equal_max
+from parent_agg p order by p.id;
+-- @regex("correlated aggregate spine cannot preserve empty-input rows", true)
+select p.id, (with x as (select max(c.v) as m from child_agg c where c.corr_key = p.corr_key group by c.corr_key) select nullif(count(*), 0) from x limit 1) as grouped_count_nullif
+from parent_agg p order by p.id;
 
 -- @case
 -- @desc:ONLY_FULL_GROUP_BY allows inner HAVING to reference an ungrouped outer row

@@ -869,9 +869,20 @@ func (client *txnClient) WaitLogTailAppliedAt(
 	if client.timestampWaiter == nil {
 		return timestamp.Timestamp{}, nil
 	}
-	ctx, cancel := client.withCloseContext(ctx)
-	defer cancel()
-	value, err := client.timestampWaiter.GetTimestamp(ctx, ts)
+	var (
+		value timestamp.Timestamp
+		err   error
+	)
+	if waiter, ok := client.timestampWaiter.(closeAwareTimestampWaiter); ok {
+		// The built-in waiter can observe client closure directly. Avoid a
+		// derived context and context.AfterFunc allocation on every wait.
+		value, err = waiter.GetTimestampWithClose(ctx, ts, client.lifecycle.closedC)
+	} else {
+		// Preserve compatibility with external/legacy waiter implementations.
+		waitCtx, cancel := client.withCloseContext(ctx)
+		defer cancel()
+		value, err = client.timestampWaiter.GetTimestamp(waitCtx, ts)
+	}
 	if err != nil && client.isClosed() {
 		return timestamp.Timestamp{}, moerr.NewClientClosedNoCtx()
 	}
@@ -920,13 +931,16 @@ func (client *txnClient) determineTxnSnapshot(minTS timestamp.Timestamp) timesta
 		v2.TxnDetermineSnapshotDurationHistogram.Observe(time.Since(start).Seconds())
 	}()
 
-	// always use the current ts as txn's snapshot ts is enableSacrificingFreshness
+	// Freshness-preserving mode starts no earlier than either the current clock
+	// or the caller's minimum timestamp.
 	if !client.enableSacrificingFreshness {
 		// TODO: Consider how to handle clock offsets. If use Clock-SI, can use the current
 		// time minus the maximum clock offset as the transaction's snapshotTimestamp to avoid
 		// conflicts due to clock uncertainty.
 		now, _ := client.clock.Now()
-		minTS = now
+		if minTS.Less(now) {
+			minTS = now
+		}
 	} else if client.enableCNBasedConsistency {
 		minTS = client.adjustTimestamp(minTS)
 	}

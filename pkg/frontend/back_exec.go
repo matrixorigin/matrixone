@@ -407,12 +407,18 @@ func doComQueryInBack(
 		TimeZone:      backSes.GetTimeZone(),
 		StorageEngine: pu.StorageEngine,
 		Buf:           backSes.buf,
+		IsRestore:     backSes.GetRestore(),
 	}
 	proc.SetAffectedRows(backSes.lastAffectedRows)
-	bindBackExecSession(proc, backSes)
+	bindBackExecSession(proc, backSes, execCtx.reqCtx)
 	proc.SetStmtProfile(&backSes.stmtProfile)
 	proc.SetResolveVariableFunc(backSes.txnCompileCtx.ResolveVariable)
+	if process.HasSystemCTELimits(execCtx.reqCtx) {
+		proc.SetResolveVariableFunc(process.SystemCTEResolver(backSes.txnCompileCtx.ResolveVariable))
+	}
+	proc.SetResolveVariableTypeFunc(backSes.txnCompileCtx.ResolveVariableType)
 	proc.SetResolveVariableIsBinFunc(backSes.txnCompileCtx.ResolveVariableIsBin)
+	proc.SetResolveVariableStringDomainFunc(backSes.txnCompileCtx.ResolveVariableStringDomain)
 	proc.SetResolveVariablePrepareParamKindFunc(backSes.txnCompileCtx.ResolveVariablePrepareParamKind)
 	// backExec.Exec and ExecRestore reject multi-statement SQL before reaching
 	// this path, so one snapshot here covers the complete background statement.
@@ -574,6 +580,18 @@ func refreshBackgroundStatementScopedSessionInfo(backSes *backSession, input *Us
 	backSes.effectiveMatrixOneNativeMode = nativeMode
 	backSes.hasEffectiveMatrixOneNativeMode = true
 	refreshStatementScopedSessionInfoWithNativeMode(nativeMode, proc)
+	var limit int
+	var ok bool
+	if proc != nil && proc.Base != nil {
+		limit, ok = process.WarningRetentionLimitFromContext(proc.GetTopContext())
+	}
+	if !ok {
+		limit, ok = resolveSessionWarningRetentionLimit(backSes)
+	}
+	if ok && proc != nil && proc.Base != nil {
+		proc.Base.SessionInfo.MaxErrorCount = limit
+		proc.Base.SessionInfo.MaxErrorCountSet = true
+	}
 }
 
 func appendNestedCallResults(ctx context.Context, backSes *backSession, results []ExecResult) error {
@@ -607,7 +625,8 @@ func affectedRowsForStatement(execCtx *ExecCtx) int64 {
 // a frontend background executor. The back session forwards temporary-table
 // aliases to its upstream session, while the upstream ID keeps physical table
 // names visible to the temporary-table GC as belonging to the active client.
-func bindBackExecSession(proc *process.Process, backSes *backSession) {
+func bindBackExecSession(proc *process.Process, backSes *backSession, ctx context.Context) {
+	proc.WarningSink = process.WarningSinkFromContext(ctx)
 	if backSes.upstream == nil {
 		return
 	}
@@ -668,6 +687,9 @@ func executeStmtInBack(backSes *backSession,
 
 	defer func() {
 		if c, ok := ret.(*compile.Compile); ok {
+			if txnCw, ok := execCtx.cw.(*TxnComputationWrapper); ok {
+				txnCw.completeCompileExecution(c, err)
+			}
 			// Preserve the historical BackgroundExec projection for engine-backed
 			// execution. This is return-only data; the authoritative statement
 			// resource root is sealed independently and must not ingest it again.
@@ -880,6 +902,8 @@ func executeStmtInSameSession(
 	execCtx *ExecCtx,
 	stmt tree.Statement,
 	preparedExpression bool,
+	preparedParamVals []any,
+	preparedBinaryExecute bool,
 ) error {
 	ses.EnterFPrint(FPExecStmtInSameSession)
 	defer ses.ExitFPrint(FPExecStmtInSameSession)
@@ -933,10 +957,12 @@ func executeStmtInSameSession(
 		logutil.ConnectionIdField(ses.GetConnectionID()))
 	//3. execute the statement
 	return doComQuery(ses, execCtx, &UserInput{
-		stmt:                 stmt,
-		isInternalInput:      true,
-		isSetExpression:      true,
-		isPreparedExpression: preparedExpression,
+		stmt:                  stmt,
+		isInternalInput:       true,
+		isSetExpression:       true,
+		isPreparedExpression:  preparedExpression,
+		preparedParamVals:     preparedParamVals,
+		preparedBinaryExecute: preparedBinaryExecute,
 	})
 }
 
@@ -1025,10 +1051,13 @@ func getResultSet(ctx context.Context, bh BackgroundExec) ([]ExecResult, error) 
 
 type backSession struct {
 	feSessionImpl
-	parentBackSession               *backSession
-	effectiveMatrixOneNativeMode    bool
-	hasEffectiveMatrixOneNativeMode bool
-	forcePessimisticRC              bool
+	parentBackSession                 *backSession
+	effectiveMatrixOneNativeMode      bool
+	hasEffectiveMatrixOneNativeMode   bool
+	forcePessimisticRC                bool
+	cloneSnapshotUsesBackgroundTxn    bool
+	cancelTxnCreateWithRequest        bool
+	lineageOwnerLifecycleWritePending bool
 	// lastAffectedRows carries the previous statement's ROW_COUNT() value into
 	// the next process created by this background executor.
 	lastAffectedRows int64
@@ -1091,6 +1120,19 @@ func (backSes *backSession) currentMatrixOneNativeMode() bool {
 	return false
 }
 
+func (backSes *backSession) GetWarningRetentionLimit() int {
+	if backSes == nil {
+		return process.WarningDiagnosticDefaultRetentionLimit
+	}
+	if backSes.upstream != nil {
+		return backSes.upstream.GetWarningRetentionLimit()
+	}
+	if backSes.parentBackSession != nil {
+		return backSes.parentBackSession.GetWarningRetentionLimit()
+	}
+	return process.WarningDiagnosticDefaultRetentionLimit
+}
+
 func (backSes *backSession) InitBackExec(txnOp TxnOperator, db string, callBack outputCallBackFunc, opts ...*BackgroundExecOption) BackgroundExec {
 	if txnOp != nil {
 		be := &backExec{}
@@ -1123,6 +1165,7 @@ func (backSes *backSession) Close() {
 	if backSes == nil {
 		return
 	}
+	backSes.lineageOwnerLifecycleWritePending = false
 	txnHandler := backSes.GetTxnHandler()
 	if txnHandler != nil {
 		tempExecCtx := ExecCtx{
@@ -1357,6 +1400,14 @@ func (backSes *backSession) GetSessionSysVar(name string) (interface{}, error) {
 		return int64(1), nil
 	case "sql_mode":
 		return "", nil
+	case "max_error_count":
+		if backSes.upstream != nil {
+			return backSes.upstream.GetSessionSysVar(name)
+		}
+		if backSes.parentBackSession != nil {
+			return backSes.parentBackSession.GetSessionSysVar(name)
+		}
+		return int64(process.WarningDiagnosticDefaultRetentionLimit), nil
 	case "foreign_key_checks", "mo_table_stats.force_update", "mo_table_stats.use_old_impl", "mo_table_stats.reset_update_time":
 		return backSes.upstream.GetSessionSysVar(name)
 	}
@@ -1554,6 +1605,16 @@ func (backSes *backSession) AddTempTable(dbName, alias, realName string) {
 	}
 }
 
+func (backSes *backSession) AddTempIndexTable(dbName, alias, realName string) {
+	if backSes == nil {
+		return
+	}
+	if owner := upstreamUserSession(backSes); owner != nil {
+		txnKey, stmtKey := tempTableMutationKeys(backSes)
+		owner.addTempIndexTable(dbName, alias, realName, txnKey, stmtKey)
+	}
+}
+
 func (backSes *backSession) RemoveTempTableByRealName(realName string) {
 	if backSes == nil {
 		return
@@ -1574,6 +1635,16 @@ func (backSes *backSession) RemoveTempTable(dbName, alias string) {
 	}
 }
 
+func (backSes *backSession) RemoveTempTablesByDatabase(dbName string) {
+	if backSes == nil {
+		return
+	}
+	if owner := upstreamUserSession(backSes); owner != nil {
+		txnKey, stmtKey := tempTableMutationKeys(backSes)
+		owner.removeTempTablesByDatabase(dbName, txnKey, stmtKey)
+	}
+}
+
 func (backSes *backSession) GetSqlModeNoAutoValueOnZero() (bool, bool) {
 	if backSes == nil || backSes.upstream == nil {
 		return false, false
@@ -1588,6 +1659,13 @@ func (backSes *backSession) AppendWarningDiagnostic(code uint16, msg string) {
 		return
 	}
 	backSes.upstream.AppendWarningDiagnostic(code, msg)
+}
+
+func (backSes *backSession) AppendWarningCount(total uint64) {
+	if backSes == nil || backSes.upstream == nil {
+		return
+	}
+	backSes.upstream.AppendWarningCount(total)
 }
 
 func (backSes *backSession) AppendWarningBatch(total uint64, codes []uint16, messages []string) {

@@ -555,6 +555,12 @@ func (s *stateMachine) handleUpdateCommandsCmd(cmd []byte) sm.Result {
 		s.state.ScheduleCommands = make(map[string]pb.CommandBatch)
 	}
 	for _, c := range b.Commands {
+		// Reject terminally obsolete work at its only admission boundary.
+		// Cleanup and recovery remain defense in depth for commands accepted
+		// by an older binary or made stale while already queued.
+		if s.catalogScheduleObsolete(c) {
+			continue
+		}
 		if c.Bootstrapping {
 			s.handleSetStateCmd(GetSetStateCmd(pb.HAKeeperBootstrapCommandsReceived))
 		}
@@ -805,15 +811,18 @@ func (s *stateMachine) getCommandBatchFiltered(
 			pendingIDs = make([]pb.ScheduleCommandID, 0, len(batch.CommandIDs))
 		}
 		for i, cmd := range batch.Commands {
-			if filterHAKeeperAdmissions && !s.logScheduleCommandDeliverable(cmd) {
-				pending = append(pending, cmd)
-				if pendingIDs != nil {
-					pendingIDs = append(pendingIDs, batch.CommandIDs[i])
-				}
+			if s.catalogScheduleObsolete(cmd) {
 				continue
 			}
 			retryable, applied := s.bootstrapReplicaCommandStatus(cmd)
 			if applied {
+				continue
+			}
+			if (filterHAKeeperAdmissions && !s.logScheduleCommandDeliverable(cmd)) || !s.prepareCatalogSchedule(&cmd) {
+				pending = append(pending, cmd)
+				if pendingIDs != nil {
+					pendingIDs = append(pendingIDs, batch.CommandIDs[i])
+				}
 				continue
 			}
 			deliver = append(deliver, cmd)
@@ -878,7 +887,9 @@ func (s *stateMachine) hasPendingHAKeeperAdmission() bool {
 }
 
 func (s *stateMachine) logScheduleCommandDeliverable(cmd pb.ScheduleCommand) bool {
-	if !s.state.CommandDeliveryPreparing && !s.state.CommandDeliveryEnabled {
+	if !s.state.CommandDeliveryPreparing && !s.state.CommandDeliveryEnabled &&
+		!s.state.ViewMetadataAdmissionPreparing && !s.state.ViewMetadataAdmissionEnabled &&
+		s.state.PersistedExpressionRequiredProtocolVersion == 0 {
 		return true
 	}
 	uuid, admission := hakeeperAdmissionTarget(cmd)
@@ -886,7 +897,26 @@ func (s *stateMachine) logScheduleCommandDeliverable(cmd pb.ScheduleCommand) boo
 		return true
 	}
 	store, ok := s.state.LogState.Stores[uuid]
-	return ok && store.CommandDeliverySupported
+	if !ok {
+		return false
+	}
+	if (s.state.CommandDeliveryPreparing || s.state.CommandDeliveryEnabled) &&
+		!store.CommandDeliverySupported {
+		return false
+	}
+	if (s.state.ViewMetadataAdmissionPreparing || s.state.ViewMetadataAdmissionEnabled) &&
+		!store.ViewMetadataAdmissionSupported {
+		return false
+	}
+	// Once the persisted-expression floor is being activated, a newly admitted
+	// HAKeeper replica must understand the floor as well. The original
+	// ViewMetadataAdmissionSupported bit predates that contract and is not
+	// sufficient to keep a downgraded LogStore out of the RSM membership.
+	if s.state.PersistedExpressionRequiredProtocolVersion > 0 &&
+		!store.ViewMetadataAdmissionProtocolV3Supported {
+		return false
+	}
+	return true
 }
 
 // getCommandBatchWithAck implements at-least-once transport. Delivery is a
@@ -984,7 +1014,10 @@ func (s *stateMachine) handleCNHeartbeat(cmd []byte) sm.Result {
 	if err := hb.Unmarshal(data); err != nil {
 		panic(err)
 	}
-	s.state.CNState.Update(hb, s.state.Tick)
+	if !s.updateCNViewMetadataAdmission(hb) {
+		return s.attachViewMetadataAdmission(sm.Result{}, hb.UUID, false)
+	}
+	var result sm.Result
 	if s.state.CommandDeliveryPreparing {
 		if s.state.CommandDeliveryCNReady == nil {
 			s.state.CommandDeliveryCNReady = make(map[string]bool)
@@ -993,7 +1026,8 @@ func (s *stateMachine) handleCNHeartbeat(cmd []byte) sm.Result {
 	}
 	if (s.state.CommandDeliveryEnabled || s.state.CommandDeliveryPreparing) &&
 		hb.CommandDeliveryAckSupported {
-		return s.getCommandBatchWithAck(hb.UUID, hb.AckedCommandBatchID)
+		result = s.getCommandBatchWithAck(hb.UUID, hb.AckedCommandBatchID)
+		return s.attachViewMetadataAdmission(result, hb.UUID, false)
 	}
 	if s.state.CommandDeliveryEnabled || s.state.CommandDeliveryPreparing {
 		// An old CN may still heartbeat after HAKeeper activates the protocol
@@ -1001,9 +1035,10 @@ func (s *stateMachine) handleCNHeartbeat(cmd []byte) sm.Result {
 		// to destructive delivery: a lost response would recreate the command-
 		// loss window. The command remains durable until this CN is upgraded and
 		// starts acknowledging it.
-		return sm.Result{}
+		return s.attachViewMetadataAdmission(result, hb.UUID, false)
 	}
-	return s.getCommandBatch(hb.UUID)
+	result = s.getCommandBatch(hb.UUID)
+	return s.attachViewMetadataAdmission(result, hb.UUID, false)
 }
 
 func (s *stateMachine) handleTNHeartbeat(cmd []byte) sm.Result {
@@ -1038,6 +1073,17 @@ func (s *stateMachine) handleLogHeartbeat(cmd []byte) sm.Result {
 		panic(err)
 	}
 	s.state.LogState.Update(hb, s.state.Tick)
+	s.observeCatalogStartResult(hb)
+	if s.state.ViewMetadataAdmissionPreparing {
+		if s.state.ViewMetadataAdmissionLogReady == nil {
+			s.state.ViewMetadataAdmissionLogReady = make(map[string]bool)
+		}
+		if hb.ViewMetadataAdmissionSupported {
+			s.state.ViewMetadataAdmissionLogReady[hb.UUID] = true
+		} else {
+			delete(s.state.ViewMetadataAdmissionLogReady, hb.UUID)
+		}
+	}
 	if s.state.CommandDeliveryPreparing {
 		if s.state.CommandDeliveryReady == nil {
 			s.state.CommandDeliveryReady = make(map[string]bool)
@@ -1048,7 +1094,7 @@ func (s *stateMachine) handleLogHeartbeat(cmd []byte) sm.Result {
 			delete(s.state.CommandDeliveryReady, hb.UUID)
 		}
 	}
-	return s.getCommandBatchFiltered(hb.UUID, true)
+	return s.attachPendingCatalogStart(s.getCommandBatchFiltered(hb.UUID, true), hb)
 }
 
 func (s *stateMachine) handleTick(cmd []byte) sm.Result {
@@ -1321,6 +1367,9 @@ func (s *stateMachine) handleDeleteCNCmd(uuid string) sm.Result {
 		}
 	}
 	s.state.DeletedStores = s.state.DeletedStores[pos:]
+	delete(s.state.ViewMetadataAdmissionCNReady, uuid)
+	delete(s.state.ViewMetadataAdmissionCNTargets, uuid)
+	delete(s.state.ViewMetadataAdmissionCNTargetTicks, uuid)
 	if store, ok := s.state.CNState.Stores[uuid]; ok {
 		delete(s.state.CNState.Stores, uuid)
 		var addr string
@@ -1341,6 +1390,9 @@ func (s *stateMachine) handleDeleteCNCmd(uuid string) sm.Result {
 
 func (s *stateMachine) handleDeleteProxyCmd(uuid string) sm.Result {
 	delete(s.state.ProxyState.Stores, uuid)
+	delete(s.state.ViewMetadataAdmissionProxyReady, uuid)
+	delete(s.state.ViewMetadataAdmissionProxyTargets, uuid)
+	delete(s.state.ViewMetadataAdmissionProxyTargetTicks, uuid)
 	return sm.Result{}
 }
 
@@ -1350,8 +1402,10 @@ func (s *stateMachine) handleProxyHeartbeat(cmd []byte) sm.Result {
 	if err := hb.Unmarshal(data); err != nil {
 		panic(err)
 	}
-	s.state.ProxyState.Update(hb, s.state.Tick)
-	return s.getCommandBatch(hb.UUID)
+	if !s.updateProxyViewMetadataAdmission(hb) {
+		return s.attachViewMetadataAdmission(sm.Result{}, hb.UUID, true)
+	}
+	return s.attachViewMetadataAdmission(s.getCommandBatch(hb.UUID), hb.UUID, true)
 }
 
 func (s *stateMachine) handleUpdateNonVotingReplicaNum(cmd []byte) sm.Result {
@@ -1601,6 +1655,12 @@ func (s *stateMachine) Update(e sm.Entry) (sm.Result, error) {
 		return s.handleCompleteLogServiceRecoveryCmd(), nil
 	case pb.EnableCommandDeliveryUpdate:
 		return s.handleEnableCommandDelivery(cmd), nil
+	case pb.EnableViewMetadataAdmissionUpdate:
+		return s.handleEnableViewMetadataAdmission(cmd), nil
+	case pb.ActivatePersistedExpressionProtocolUpdate:
+		return s.handleActivatePersistedExpressionProtocol(cmd), nil
+	case pb.CatalogMetadataBarrierUpdate:
+		return s.handleCatalogMetadataRequest(cmd), nil
 	case pb.SetTaskTableUserUpdate:
 		s.assertState()
 		return s.handleTaskTableUserCmd(cmd), nil
@@ -1673,26 +1733,47 @@ func (s *stateMachine) handleClusterDetailsQuery(cfg Config) *pb.ClusterDetails 
 		LogStores:   make([]pb.LogStore, 0, len(s.state.LogState.Stores)),
 		ProxyStores: make([]pb.ProxyStore, 0, len(s.state.ProxyState.Stores)),
 	}
+	if s.viewMetadataAdmissionActive() {
+		cd.ViewMetadataAdmission = &pb.ViewMetadataAdmission{
+			Preparing:            s.state.ViewMetadataAdmissionPreparing,
+			Enabled:              s.state.ViewMetadataAdmissionEnabled,
+			Epoch:                s.state.ViewMetadataAdmissionEpoch,
+			RevalidationRequired: s.state.ViewMetadataRevalidationRequired,
+			CatalogFencedEpoch:   s.state.ViewMetadataCatalogFencedEpoch,
+			PersistedExpressionRequiredProtocolVersion:   s.state.PersistedExpressionRequiredProtocolVersion,
+			PersistedExpressionProtocolActivationPending: s.state.PersistedExpressionProtocolActivationPending,
+		}
+	}
 	for uuid, info := range s.state.CNState.Stores {
+		if s.viewMetadataAdmissionActive() &&
+			!info.ViewMetadataAdmissionReady &&
+			(!info.ViewMetadataAdmissionSupported ||
+				info.ViewMetadataAdmissionGeneration == 0) {
+			continue
+		}
 		state := pb.NormalState
 		if cfg.CNStoreExpired(info.Tick, s.state.Tick) {
 			state = pb.TimeoutState
 		}
 		n := pb.CNStore{
-			UUID:                uuid,
-			Tick:                info.Tick,
-			ServiceAddress:      info.ServiceAddress,
-			SQLAddress:          info.SQLAddress,
-			LockServiceAddress:  info.LockServiceAddress,
-			ShardServiceAddress: info.ShardServiceAddress,
-			State:               state,
-			WorkState:           info.WorkState,
-			Labels:              info.Labels,
-			QueryAddress:        info.QueryAddress,
-			ConfigData:          info.ConfigData,
-			Resource:            info.Resource,
-			UpTime:              info.UpTime,
-			CommitID:            info.CommitID,
+			UUID:                            uuid,
+			Tick:                            info.Tick,
+			ServiceAddress:                  info.ServiceAddress,
+			SQLAddress:                      info.SQLAddress,
+			LockServiceAddress:              info.LockServiceAddress,
+			ShardServiceAddress:             info.ShardServiceAddress,
+			State:                           state,
+			WorkState:                       info.WorkState,
+			Labels:                          info.Labels,
+			QueryAddress:                    info.QueryAddress,
+			ConfigData:                      info.ConfigData,
+			Resource:                        info.Resource,
+			UpTime:                          info.UpTime,
+			CommitID:                        info.CommitID,
+			ViewMetadataAdmissionSupported:  info.ViewMetadataAdmissionSupported,
+			ViewMetadataAdmissionGeneration: info.ViewMetadataAdmissionGeneration,
+			ViewMetadataObservedEpoch:       info.ViewMetadataObservedEpoch,
+			ViewMetadataAdmissionReady:      info.ViewMetadataAdmissionReady,
 		}
 		cd.CNStores = append(cd.CNStores, n)
 	}
@@ -1733,11 +1814,21 @@ func (s *stateMachine) handleClusterDetailsQuery(cfg Config) *pb.ClusterDetails 
 		cd.LogStores = append(cd.LogStores, n)
 	}
 	for uuid, info := range s.state.ProxyState.Stores {
+		if s.viewMetadataAdmissionActive() &&
+			!info.ViewMetadataAdmissionReady &&
+			(!info.ViewMetadataAdmissionSupported ||
+				info.ViewMetadataAdmissionGeneration == 0) {
+			continue
+		}
 		cd.ProxyStores = append(cd.ProxyStores, pb.ProxyStore{
-			UUID:          uuid,
-			Tick:          info.Tick,
-			ListenAddress: info.ListenAddress,
-			ConfigData:    info.ConfigData,
+			UUID:                            uuid,
+			Tick:                            info.Tick,
+			ListenAddress:                   info.ListenAddress,
+			ConfigData:                      info.ConfigData,
+			ViewMetadataAdmissionSupported:  info.ViewMetadataAdmissionSupported,
+			ViewMetadataAdmissionGeneration: info.ViewMetadataAdmissionGeneration,
+			ViewMetadataObservedEpoch:       info.ViewMetadataObservedEpoch,
+			ViewMetadataAdmissionReady:      info.ViewMetadataAdmissionReady,
 		})
 	}
 	for _, store := range s.state.DeletedStores {
@@ -1768,6 +1859,19 @@ func (s *stateMachine) handlePatchCNStore(cmd []byte) sm.Result {
 }
 
 func (s *stateMachine) Lookup(query interface{}) (interface{}, error) {
+	if _, ok := query.(*CatalogMetadataStateQuery); ok {
+		var result pb.CatalogMetadataBarrierState
+		if s.state.CatalogMetadataBarrier != nil {
+			data, err := s.state.CatalogMetadataBarrier.Marshal()
+			if err != nil {
+				return nil, err
+			}
+			if err := result.Unmarshal(data); err != nil {
+				return nil, err
+			}
+		}
+		return &result, nil
+	}
 	if _, ok := query.(*StateQuery); ok {
 		return s.handleStateQuery(), nil
 	} else if q, ok := query.(*ScheduleCommandQuery); ok {
@@ -1803,6 +1907,39 @@ func (s *stateMachine) Lookup(query interface{}) (interface{}, error) {
 			CNReady:                cnReady,
 			TNReady:                tnReady,
 		}, nil
+	} else if _, ok := query.(*ViewMetadataAdmissionStateQuery); ok {
+		var logReady map[string]bool
+		if s.state.ViewMetadataAdmissionLogReady != nil {
+			logReady = make(map[string]bool, len(s.state.ViewMetadataAdmissionLogReady))
+			for uuid, ready := range s.state.ViewMetadataAdmissionLogReady {
+				logReady[uuid] = ready
+			}
+		}
+		var cnReady map[string]bool
+		if s.state.ViewMetadataAdmissionCNReady != nil {
+			cnReady = make(map[string]bool, len(s.state.ViewMetadataAdmissionCNReady))
+			for uuid, ready := range s.state.ViewMetadataAdmissionCNReady {
+				cnReady[uuid] = ready
+			}
+		}
+		var proxyReady map[string]bool
+		if s.state.ViewMetadataAdmissionProxyReady != nil {
+			proxyReady = make(map[string]bool, len(s.state.ViewMetadataAdmissionProxyReady))
+			for uuid, ready := range s.state.ViewMetadataAdmissionProxyReady {
+				proxyReady[uuid] = ready
+			}
+		}
+		return ViewMetadataAdmissionState{
+			Preparing:               s.state.ViewMetadataAdmissionPreparing,
+			Enabled:                 s.state.ViewMetadataAdmissionEnabled,
+			Pending:                 s.state.ViewMetadataAdmissionPending,
+			HAKeeperAdmissionReady:  !s.hasPendingHAKeeperAdmission(),
+			RequiredProtocolVersion: s.state.PersistedExpressionRequiredProtocolVersion,
+			PersistedExpressionProtocolActivationPending: s.state.PersistedExpressionProtocolActivationPending,
+			LogReady:   logReady,
+			CNReady:    cnReady,
+			ProxyReady: proxyReady,
+		}, nil
 	} else if q, ok := query.(*ClusterDetailsQuery); ok {
 		return s.handleClusterDetailsQuery(q.Cfg), nil
 	} else if _, ok := query.(*IndexQuery); ok {
@@ -1813,13 +1950,11 @@ func (s *stateMachine) Lookup(query interface{}) (interface{}, error) {
 
 func (s *stateMachine) SaveSnapshot(w io.Writer,
 	_ sm.ISnapshotFileCollection, _ <-chan struct{}) error {
-	// FIXME: memory recycling when necessary
-	data := make([]byte, s.state.ProtoSize())
-	n, err := s.state.MarshalToSizedBuffer(data)
+	data, err := marshalHAKeeperSnapshot(&s.state, false)
 	if err != nil {
 		return err
 	}
-	_, err = w.Write(data[:n])
+	_, err = w.Write(data)
 	return err
 }
 
@@ -1829,16 +1964,24 @@ func (s *stateMachine) RecoverFromSnapshot(r io.Reader,
 	if err != nil {
 		return err
 	}
-	// The state machine is initialized with maps for normal operation. Clear all
-	// delivery fields before decoding so an older snapshot, or a snapshot
-	// recovery on a reused instance, cannot retain a newer barrier generation or
-	// the one-time BatchID scan marker when those fields are absent on disk.
-	s.state.CommandDeliveryEnabled = false
-	s.state.CommandDeliveryPreparing = false
-	s.state.CommandDeliveryReady = nil
-	s.state.CommandDeliveryCNReady = nil
-	s.state.CommandDeliveryTNReady = nil
-	s.state.CommandDeliveryBatchIDsAssigned = false
-	s.state.CommandDeliveryCommandIDsAssigned = false
-	return s.state.Unmarshal(data)
+	decoded, err := unmarshalHAKeeperSnapshot(data)
+	if err != nil {
+		return err
+	}
+	// Keep the legacy omitted-map shape for the command-delivery barrier.  The
+	// zero-value is meaningful to the recovery code (it rebuilds these maps on
+	// the next activation), while NewRSMState initializes them for normal
+	// construction.
+	if len(decoded.CommandDeliveryCNReady) == 0 {
+		decoded.CommandDeliveryCNReady = nil
+	}
+	if len(decoded.CommandDeliveryTNReady) == 0 {
+		decoded.CommandDeliveryTNReady = nil
+	}
+	s.state = decoded
+	// Older binaries could snapshot tokenless membership commands after a
+	// later configuration had already been confirmed. They can never become
+	// valid again; reclaim them during publication of the recovered owner.
+	s.pruneObsoleteCatalogSchedule()
+	return nil
 }

@@ -16,7 +16,6 @@ package iceberg
 
 import (
 	"context"
-	"errors"
 	"math"
 	"strings"
 	"testing"
@@ -27,6 +26,7 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/container/batch"
 	"github.com/matrixorigin/matrixone/pkg/container/types"
 	"github.com/matrixorigin/matrixone/pkg/container/vector"
+	"github.com/matrixorigin/matrixone/pkg/txn/client"
 	internalexecutor "github.com/matrixorigin/matrixone/pkg/util/executor"
 )
 
@@ -60,6 +60,30 @@ func TestInternalSQLExecutorAdapterScansRows(t *testing.T) {
 	}
 }
 
+func TestInternalSQLExecutorAdapterScansCatalogLifecycleLockProjection(t *testing.T) {
+	mp := mpool.MustNewZero()
+	bat := batch.NewWithSize(1)
+	bat.Vecs[0] = vector.NewVec(types.T_uint64.ToType())
+	requireNoErr(t, vector.AppendFixed(bat.Vecs[0], uint64(7), false, mp))
+	bat.SetRowCount(1)
+
+	exec := &fakeInternalSQLExecutor{result: internalexecutor.Result{Batches: []*batch.Batch{bat}, Mp: mp}}
+	var catalogID uint64
+	sql := GetCatalogByIDForUpdateSQL(9, 7)
+	if !strings.HasPrefix(sql, "select catalog_id from ") || strings.Contains(sql, "select account_id,") {
+		t.Fatalf("catalog lifecycle lock must project only catalog_id: %s", sql)
+	}
+	requireNoErr(t, (InternalSQLExecutorAdapter{Executor: exec}).QueryRow(context.Background(), sql).Scan(&catalogID))
+	if catalogID != 7 {
+		t.Fatalf("unexpected catalog lifecycle lock id: %d", catalogID)
+	}
+
+	noRows := InternalSQLExecutorAdapter{Executor: &fakeInternalSQLExecutor{}}
+	if err := noRows.QueryRow(context.Background(), GetCatalogByIDForUpdateSQL(9, 7)).Scan(new(uint64)); err == nil {
+		t.Fatalf("expected no-row catalog lifecycle lock error")
+	}
+}
+
 func TestInternalSQLExecutorAdapterExec(t *testing.T) {
 	exec := &fakeInternalSQLExecutor{result: internalexecutor.Result{AffectedRows: 3}}
 	affected, err := (InternalSQLExecutorAdapter{Executor: exec}).Exec(context.Background(), "insert into mo_catalog.t values (1)")
@@ -75,13 +99,78 @@ func TestInternalSQLExecutorAdapterExec(t *testing.T) {
 	}
 }
 
+func TestInternalSQLExecutorAdapterExecTxnUsesTransaction(t *testing.T) {
+	mp := mpool.MustNewZero()
+	bat := batch.NewWithSize(1)
+	bat.Vecs[0] = vector.NewVec(types.T_uint64.ToType())
+	requireNoErr(t, vector.AppendFixed(bat.Vecs[0], uint64(7), false, mp))
+	bat.SetRowCount(1)
+
+	txn := &fakeInternalTxnExecutor{result: internalexecutor.Result{Batches: []*batch.Batch{bat}, Mp: mp}}
+	exec := &fakeInternalSQLExecutor{txn: txn}
+	var catalogID uint64
+	err := (InternalSQLExecutorAdapter{Executor: exec}).ExecTxn(context.Background(), func(tx SQLExecutor) error {
+		return tx.QueryRow(context.Background(), "select catalog_id from mo_catalog.mo_iceberg_catalogs for update").Scan(&catalogID)
+	})
+	requireNoErr(t, err)
+	if catalogID != 7 {
+		t.Fatalf("unexpected catalog id: %d", catalogID)
+	}
+	if len(txn.sqls) != 1 || !strings.Contains(txn.sqls[0], "for update") {
+		t.Fatalf("transaction did not execute lifecycle-lock query: %v", txn.sqls)
+	}
+	if !txn.options[0].DisableLog() {
+		t.Fatalf("transaction adapter should disable SQL logging")
+	}
+}
+
+func TestInternalSQLExecutorAdapterExecTxnWriteAndFailurePaths(t *testing.T) {
+	ctx := context.Background()
+	if err := (InternalSQLExecutorAdapter{}).ExecTxn(ctx, func(SQLExecutor) error { return nil }); err == nil {
+		t.Fatalf("expected nil executor transaction error")
+	}
+
+	txn := &fakeInternalTxnExecutor{result: internalexecutor.Result{AffectedRows: 3}}
+	exec := &fakeInternalSQLExecutor{txn: txn}
+	err := (InternalSQLExecutorAdapter{Executor: exec}).ExecTxn(ctx, func(tx SQLExecutor) error {
+		affected, err := tx.Exec(ctx, "insert into mo_catalog.mo_iceberg_refs values (1)")
+		if err != nil {
+			return err
+		}
+		if affected != 3 {
+			t.Fatalf("unexpected transaction affected rows: %d", affected)
+		}
+		return nil
+	})
+	requireNoErr(t, err)
+	if len(txn.sqls) != 1 || !strings.Contains(txn.sqls[0], "insert into") {
+		t.Fatalf("transaction did not execute write: %v", txn.sqls)
+	}
+
+	txn.err = moerr.NewInternalError(ctx, "transaction executor unavailable")
+	err = (InternalSQLExecutorAdapter{Executor: exec}).ExecTxn(ctx, func(tx SQLExecutor) error {
+		_, err := tx.Query(ctx, "select catalog_id from mo_catalog.mo_iceberg_catalogs")
+		return err
+	})
+	if err == nil || !strings.Contains(err.Error(), "transaction executor unavailable") {
+		t.Fatalf("expected transaction query error, got %v", err)
+	}
+	err = (InternalSQLExecutorAdapter{Executor: exec}).ExecTxn(ctx, func(tx SQLExecutor) error {
+		_, err := tx.Exec(ctx, "insert into mo_catalog.mo_iceberg_refs values (2)")
+		return err
+	})
+	if err == nil || !strings.Contains(err.Error(), "transaction executor unavailable") {
+		t.Fatalf("expected transaction write error, got %v", err)
+	}
+}
+
 func TestInternalSQLExecutorAdapterErrorBranches(t *testing.T) {
 	ctx := context.Background()
 	if _, err := (InternalSQLExecutorAdapter{}).Exec(ctx, "select 1"); err == nil {
 		t.Fatalf("expected nil executor exec error")
 	}
 	execErr := moerr.NewInternalError(ctx, "executor unavailable")
-	if _, err := (InternalSQLExecutorAdapter{Executor: &fakeInternalSQLExecutor{err: execErr}}).Exec(ctx, "select 1"); !errors.Is(err, execErr) {
+	if _, err := (InternalSQLExecutorAdapter{Executor: &fakeInternalSQLExecutor{err: execErr}}).Exec(ctx, "select 1"); err != execErr {
 		t.Fatalf("expected executor error %v, got %v", execErr, err)
 	}
 	if _, err := (InternalSQLExecutorAdapter{}).Query(ctx, "select 1"); err == nil {
@@ -204,6 +293,7 @@ type fakeInternalSQLExecutor struct {
 	options []internalexecutor.Options
 	result  internalexecutor.Result
 	err     error
+	txn     internalexecutor.TxnExecutor
 }
 
 func (e *fakeInternalSQLExecutor) Exec(ctx context.Context, sql string, opts internalexecutor.Options) (internalexecutor.Result, error) {
@@ -216,8 +306,36 @@ func (e *fakeInternalSQLExecutor) Exec(ctx context.Context, sql string, opts int
 }
 
 func (e *fakeInternalSQLExecutor) ExecTxn(ctx context.Context, execFunc func(txn internalexecutor.TxnExecutor) error, opts internalexecutor.Options) error {
-	return nil
+	if e.err != nil {
+		return e.err
+	}
+	if e.txn == nil {
+		return moerr.NewInternalError(ctx, "missing fake transaction")
+	}
+	return execFunc(e.txn)
 }
+
+type fakeInternalTxnExecutor struct {
+	sqls    []string
+	options []internalexecutor.StatementOption
+	result  internalexecutor.Result
+	err     error
+}
+
+func (*fakeInternalTxnExecutor) Use(string) {}
+
+func (*fakeInternalTxnExecutor) LockTable(string) error { return nil }
+
+func (e *fakeInternalTxnExecutor) Exec(sql string, opts internalexecutor.StatementOption) (internalexecutor.Result, error) {
+	e.sqls = append(e.sqls, sql)
+	e.options = append(e.options, opts)
+	if e.err != nil {
+		return internalexecutor.Result{}, e.err
+	}
+	return e.result, nil
+}
+
+func (*fakeInternalTxnExecutor) Txn() client.TxnOperator { return nil }
 
 func requireNoErr(t *testing.T, err error) {
 	t.Helper()

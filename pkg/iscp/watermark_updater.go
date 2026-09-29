@@ -25,6 +25,7 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/cdc"
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
 	moruntime "github.com/matrixorigin/matrixone/pkg/common/runtime"
+	"github.com/matrixorigin/matrixone/pkg/common/sqlquote"
 	"github.com/matrixorigin/matrixone/pkg/container/types"
 	"github.com/matrixorigin/matrixone/pkg/container/vector"
 	"github.com/matrixorigin/matrixone/pkg/defines"
@@ -73,6 +74,17 @@ var ExecWithResult = func(
 	return exec.Exec(ctx, sql, opts)
 }
 
+// runInCallerTxn executes fn exactly once. The caller owns the transaction and
+// its statement lifecycle, so retryable errors must escape to the caller, which
+// can roll back and replay the whole statement. Retrying only fn can reuse
+// writes left by the failed attempt in the transaction workspace.
+func runInCallerTxn(ctx context.Context, fn func() error) error {
+	if err := ctx.Err(); err != nil {
+		return err
+	}
+	return fn()
+}
+
 // RegisterJob create jobs. return true if create, return false if task already exists, return error when error
 // JobID.DBName: required, the name of the database.
 // JobID.TableName: required, the name of the table.
@@ -105,16 +117,11 @@ func RegisterJob(
 	jobID *JobID,
 	startFromNow bool,
 ) (ok bool, err error) {
-	return ok, retry(
-		ctx,
-		func() error {
-			ok, err = registerJob(ctx, cnUUID, txn, jobSpec, jobID, startFromNow)
-			return err
-		},
-		DefaultRetryTimes,
-		DefaultRetryInterval,
-		DefaultRetryDuration,
-	)
+	err = runInCallerTxn(ctx, func() error {
+		ok, err = registerJob(ctx, cnUUID, txn, jobSpec, jobID, startFromNow)
+		return err
+	})
+	return
 }
 
 func UnregisterJobsByDBName(
@@ -123,16 +130,9 @@ func UnregisterJobsByDBName(
 	txn client.TxnOperator,
 	dbName string,
 ) (err error) {
-	return retry(
-		ctx,
-		func() error {
-			err = unregisterJobsByDBName(ctx, cnUUID, txn, dbName)
-			return err
-		},
-		DefaultRetryTimes,
-		DefaultRetryInterval,
-		DefaultRetryDuration,
-	)
+	return runInCallerTxn(ctx, func() error {
+		return unregisterJobsByDBName(ctx, cnUUID, txn, dbName)
+	})
 }
 
 func unregisterJobsByDBName(
@@ -164,7 +164,11 @@ func unregisterJobsByDBName(
 	if tenantId, err = defines.GetAccountId(ctx); err != nil {
 		return
 	}
-	getTIDsSql := fmt.Sprintf("SELECT rel_id from mo_catalog.mo_tables where account_id = %d and reldatabase = '%s'", tenantId, dbName)
+	getTIDsSql := fmt.Sprintf(
+		"SELECT rel_id from mo_catalog.mo_tables where account_id = %d and reldatabase = %s",
+		tenantId,
+		sqlquote.String(dbName),
+	)
 	result, err := ExecWithResult(ctxWithSysAccount, getTIDsSql, cnUUID, txn)
 	if err != nil {
 		return
@@ -315,16 +319,11 @@ func UnregisterJob(
 	txn client.TxnOperator,
 	jobID *JobID,
 ) (ok bool, err error) {
-	return ok, retry(
-		ctx,
-		func() error {
-			ok, err = unregisterJob(ctx, cnUUID, txn, jobID)
-			return err
-		},
-		DefaultRetryTimes,
-		DefaultRetryInterval,
-		DefaultRetryDuration,
-	)
+	err = runInCallerTxn(ctx, func() error {
+		ok, err = unregisterJob(ctx, cnUUID, txn, jobID)
+		return err
+	})
+	return
 }
 
 func LookupJobLog(
@@ -369,15 +368,9 @@ func RenameSrcTable(
 	dbID, tbID uint64,
 	oldTableName, newTableName string,
 ) (err error) {
-	return retry(
-		ctx,
-		func() error {
-			return renameSrcTable(ctx, cnUUID, txn, dbID, tbID, oldTableName, newTableName)
-		},
-		DefaultRetryTimes,
-		DefaultRetryInterval,
-		DefaultRetryDuration,
-	)
+	return runInCallerTxn(ctx, func() error {
+		return renameSrcTable(ctx, cnUUID, txn, dbID, tbID, oldTableName, newTableName)
+	})
 }
 
 func renameSrcTable(
@@ -469,15 +462,9 @@ func UpdateJobSpec(
 	jobID *JobID,
 	jobSpec *JobSpec,
 ) (err error) {
-	return retry(
-		ctx,
-		func() error {
-			return updateJobSpec(ctx, cnUUID, txn, jobID, jobSpec)
-		},
-		DefaultRetryTimes,
-		DefaultRetryInterval,
-		DefaultRetryDuration,
-	)
+	return runInCallerTxn(ctx, func() error {
+		return updateJobSpec(ctx, cnUUID, txn, jobID, jobSpec)
+	})
 }
 
 func updateJobSpec(

@@ -16,11 +16,50 @@ package compile
 
 import (
 	"context"
+	"database/sql"
+	"fmt"
+	"strings"
 	"testing"
+	"time"
 
+	"github.com/golang/mock/gomock"
 	"github.com/matrixorigin/matrixone/pkg/cdc"
+	moruntime "github.com/matrixorigin/matrixone/pkg/common/runtime"
+	"github.com/matrixorigin/matrixone/pkg/defines"
+	mock_frontend "github.com/matrixorigin/matrixone/pkg/frontend/test"
+	"github.com/matrixorigin/matrixone/pkg/pb/task"
+	"github.com/matrixorigin/matrixone/pkg/pb/timestamp"
+	"github.com/matrixorigin/matrixone/pkg/sql/parsers/dialect/mysql"
+	"github.com/matrixorigin/matrixone/pkg/taskservice"
+	"github.com/matrixorigin/matrixone/pkg/testutil"
 	"github.com/stretchr/testify/require"
 )
+
+type cdcRecordingSQLExecutor struct {
+	queries []string
+}
+
+func (e *cdcRecordingSQLExecutor) PrepareContext(context.Context, string) (*sql.Stmt, error) {
+	return nil, nil
+}
+
+func (e *cdcRecordingSQLExecutor) ExecContext(
+	_ context.Context, query string, _ ...interface{},
+) (sql.Result, error) {
+	e.queries = append(e.queries, query)
+	return cdcRowsAffectedResult(1), nil
+}
+
+func (e *cdcRecordingSQLExecutor) QueryContext(
+	context.Context, string, ...interface{},
+) (*sql.Rows, error) {
+	return nil, nil
+}
+
+type cdcRowsAffectedResult int64
+
+func (r cdcRowsAffectedResult) LastInsertId() (int64, error) { return 0, nil }
+func (r cdcRowsAffectedResult) RowsAffected() (int64, error) { return int64(r), nil }
 
 func TestCDCCreateTaskOptionsPreservePatternValidationError(t *testing.T) {
 	const tables = "db1.t1:db2.t1,db1.t1:db2.t2"
@@ -36,4 +75,145 @@ func TestCDCCreateTaskOptionsPreservePatternValidationError(t *testing.T) {
 	)
 	require.EqualError(t, err, expected)
 	require.NotContains(t, err.Error(), "invalid level")
+}
+
+func TestCDCCreateTaskMetadataUsesCapabilityFence(t *testing.T) {
+	legacy := (&CDCCreateTaskOptions{TaskId: "legacy"}).BuildTaskMetadata()
+	require.Equal(t, task.TaskCode_InitCdc, legacy.Executor)
+
+	stableOpts := fmt.Sprintf(
+		`{"%s":"%s"}`,
+		cdc.CDCTaskExtraOptions_InitialSnapshotProtocol,
+		cdc.CDCInitialSnapshotProtocolStableEpoch,
+	)
+	stable := (&CDCCreateTaskOptions{
+		TaskId:    "stable",
+		ExtraOpts: stableOpts,
+	}).BuildTaskMetadata()
+	require.Equal(t, task.TaskCode_InitCdcStableEpoch, stable.Executor)
+
+	noFull := (&CDCCreateTaskOptions{
+		TaskId: "no-full", NoFull: true, ExtraOpts: stableOpts,
+	}).BuildTaskMetadata()
+	require.Equal(t, task.TaskCode_InitCdc, noFull.Executor)
+	lossless := (&CDCCreateTaskOptions{
+		TaskId: "no-full-hlc", NoFull: true,
+		ExtraOpts: fmt.Sprintf(`{"%s":"%s"}`, cdc.CDCTaskExtraOptions_InitialSnapshotProtocol, cdc.CDCInitialSnapshotProtocolNoFullHLC),
+	}).BuildTaskMetadata()
+	require.Equal(t, task.TaskCode_InitCdcLosslessStart, lossless.Executor)
+}
+
+func TestCDCCreateTaskOptionsSetNoFullStartTS(t *testing.T) {
+	ctrl := gomock.NewController(t)
+	defer ctrl.Finish()
+	snapshot := timestamp.Timestamp{PhysicalTime: time.Date(2026, 9, 9, 1, 2, 3, 456789000, time.UTC).UnixNano()}
+
+	opts := &CDCCreateTaskOptions{NoFull: true}
+	txnOp := mock_frontend.NewMockTxnOperator(ctrl)
+	txnOp.EXPECT().SnapshotTS().Return(snapshot)
+	setNoFullStartTS(opts, txnOp)
+	require.Equal(t, snapshot.DebugString(), opts.StartTs)
+
+	// Explicit StartTs and absent transaction operators do not alter the start.
+	opts.StartTs = "2026-09-01T00:00:00Z"
+	setNoFullStartTS(opts, txnOp)
+	require.Equal(t, "2026-09-01T00:00:00Z", opts.StartTs)
+	setNoFullStartTS(&CDCCreateTaskOptions{NoFull: true}, nil)
+
+	zeroTxnOp := mock_frontend.NewMockTxnOperator(ctrl)
+	zeroTxnOp.EXPECT().SnapshotTS().Return(timestamp.Timestamp{})
+	noSnapshot := &CDCCreateTaskOptions{NoFull: true}
+	setNoFullStartTS(noSnapshot, zeroTxnOp)
+	require.Empty(t, noSnapshot.StartTs)
+}
+
+func TestValidateStableInitialSnapshotCompileProtocol(t *testing.T) {
+	proc := testutil.NewProcess(t)
+	c := &Compile{proc: proc}
+	rt := moruntime.ServiceRuntime(proc.GetService())
+	original, hadOriginal := rt.GetGlobalVariables(moruntime.MOProtocolVersion)
+	defer func() {
+		if hadOriginal {
+			rt.SetGlobalVariables(moruntime.MOProtocolVersion, original)
+		} else {
+			rt.SetGlobalVariables(moruntime.MOProtocolVersion, defines.MORPCLatestVersion)
+		}
+	}()
+
+	rt.SetGlobalVariables(moruntime.MOProtocolVersion, defines.MORPCVersion47)
+	require.ErrorContains(t, validateStableInitialSnapshotCompileProtocol(
+		context.Background(), c, true), "protocol version 48")
+	require.NoError(t, validateStableInitialSnapshotCompileProtocol(
+		context.Background(), c, false))
+
+	rt.SetGlobalVariables(moruntime.MOProtocolVersion, defines.MORPCVersion48)
+	require.NoError(t, validateStableInitialSnapshotCompileProtocol(
+		context.Background(), c, true))
+
+	// Missing runtime/process information fails closed for stable creation.
+	require.Error(t, validateStableInitialSnapshotCompileProtocol(
+		context.Background(), nil, true))
+}
+
+func TestValidateLosslessNoFullStartCompileProtocol(t *testing.T) {
+	proc := testutil.NewProcess(t)
+	c := &Compile{proc: proc}
+	rt := moruntime.ServiceRuntime(proc.GetService())
+	original, hadOriginal := rt.GetGlobalVariables(moruntime.MOProtocolVersion)
+	defer func() {
+		if hadOriginal {
+			rt.SetGlobalVariables(moruntime.MOProtocolVersion, original)
+		} else {
+			rt.SetGlobalVariables(moruntime.MOProtocolVersion, defines.MORPCLatestVersion)
+		}
+	}()
+
+	rt.SetGlobalVariables(moruntime.MOProtocolVersion, defines.MORPCVersion93)
+	require.ErrorContains(t, validateLosslessNoFullStartCompileProtocol(
+		context.Background(), c), "protocol version 94")
+	rt.SetGlobalVariables(moruntime.MOProtocolVersion, defines.MORPCVersion94)
+	require.NoError(t, validateLosslessNoFullStartCompileProtocol(
+		context.Background(), c))
+}
+
+func TestDeleteManyWatermarkRetainsSnapshotEpochOnRestart(t *testing.T) {
+	keys := map[taskservice.CDCTaskKey]struct{}{
+		{AccountId: 7, TaskId: "task"}: {},
+	}
+
+	restartExecutor := &cdcRecordingSQLExecutor{}
+	deleted, err := deleteManyWatermark(t.Context(), restartExecutor, keys, false)
+	require.NoError(t, err)
+	require.Equal(t, int64(1), deleted)
+	require.Len(t, restartExecutor.queries, 1)
+	require.Contains(t, restartExecutor.queries[0], "mo_cdc_watermark")
+	require.NotContains(t, restartExecutor.queries[0], "mo_cdc_snapshot")
+
+	cancelExecutor := &cdcRecordingSQLExecutor{}
+	deleted, err = deleteManyWatermark(t.Context(), cancelExecutor, keys, true)
+	require.NoError(t, err)
+	require.Equal(t, int64(1), deleted)
+	require.Len(t, cancelExecutor.queries, 2)
+	require.True(t, strings.Contains(cancelExecutor.queries[0], "mo_cdc_watermark"))
+	require.True(t, strings.Contains(cancelExecutor.queries[1], "mo_cdc_snapshot"))
+}
+
+func TestCDCStableWatermarkUpsertParses(t *testing.T) {
+	sql := cdc.CDCSQLBuilder.OnDuplicateUpdateMonotonicWatermarkSQL(
+		"(1, 'task', 'db', 'tbl', '100-2')",
+	)
+	statements, err := mysql.Parse(context.Background(), sql, 1)
+	require.NoError(t, err)
+	require.Len(t, statements, 1)
+}
+
+func TestCDCStableWatermarkErrorUpdateParses(t *testing.T) {
+	sql := cdc.CDCSQLBuilder.GuardedOwnedWatermarkErrorUpdateSQL(
+		"SELECT 1 AS account_id, 'task' AS task_id, 'db' AS db_name, "+
+			"'tbl' AS table_name, 'failed' AS err_msg, 123 AS owner_generation",
+		"(account_id = 1 AND task_id = 'task')",
+	)
+	statements, err := mysql.Parse(context.Background(), sql, 1)
+	require.NoError(t, err)
+	require.Len(t, statements, 1)
 }

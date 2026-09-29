@@ -19,6 +19,8 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/common/mpool"
 	"github.com/matrixorigin/matrixone/pkg/common/reuse"
 	"github.com/matrixorigin/matrixone/pkg/container/batch"
+	"github.com/matrixorigin/matrixone/pkg/pb/plan"
+	"github.com/matrixorigin/matrixone/pkg/sql/colexec"
 	"github.com/matrixorigin/matrixone/pkg/vm"
 	"github.com/matrixorigin/matrixone/pkg/vm/process"
 )
@@ -32,7 +34,8 @@ const (
 )
 
 type Minus struct {
-	ctr container
+	ctr      container
+	KeyExprs []*plan.Expr
 
 	vm.OperatorBase
 }
@@ -78,6 +81,8 @@ type container struct {
 
 	// result batch of minus column execute operator
 	bat *batch.Batch
+
+	keyEvaluator colexec.SetOperationKeyEvaluator
 }
 
 func (minus *Minus) Reset(proc *process.Process, pipelineFailed bool, err error) {
@@ -86,12 +91,14 @@ func (minus *Minus) Reset(proc *process.Process, pipelineFailed bool, err error)
 		minus.ctr.bat.CleanOnlyData()
 	}
 	minus.ctr.cleanHashMap()
+	minus.ctr.keyEvaluator.Reset()
 }
 
 func (minus *Minus) Free(proc *process.Process, pipelineFailed bool, err error) {
 	mp := proc.Mp()
 	minus.ctr.cleanBatch(mp)
 	minus.ctr.cleanHashMap()
+	minus.ctr.keyEvaluator.Free()
 }
 
 func (minus *Minus) ExecProjection(proc *process.Process, input *batch.Batch) (*batch.Batch, error) {

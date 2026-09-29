@@ -123,6 +123,8 @@ func TestSelectIntoUserVariablesRejectsNestedInto(t *testing.T) {
 		"select 1 order by (select 1 into @bad_order)",
 		"select 1 limit (select 1 into @bad_limit)",
 		"select 1 limit 1 offset (select 1 into @bad_offset)",
+		"select 1 from uv_src window w as (partition by (select 1 into @bad_window_partition))",
+		"select 1 from uv_src window w as (order by (select 1 into @bad_window_order))",
 		"select * from uv_src{timestamp = (select 1 into @bad_table_timestamp)}",
 		"select * from uv_src{mo_ts = (select 1 into @bad_table_mo_timestamp)}",
 	}

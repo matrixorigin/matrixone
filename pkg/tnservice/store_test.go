@@ -60,11 +60,89 @@ type storeQueryService struct {
 
 type storeTxnServer struct {
 	rpc.TxnServer
-	beforeClose func()
+	beforeQuiesce func()
+	beforeDrain   func()
+	beforeClose   func()
+}
+
+type failingDrainServer struct {
+	rpc.TxnServer
+	quiesce func() error
+	drain   func(context.Context) error
+}
+
+func (s *failingDrainServer) Quiesce() error                  { return s.quiesce() }
+func (s *failingDrainServer) Drain(ctx context.Context) error { return s.drain(ctx) }
+
+func TestStoreCloseConcurrentSharesDrainFailure(t *testing.T) {
+	expected := errors.New("drain failed")
+	entered := make(chan struct{})
+	release := make(chan struct{})
+	var releaseOnce sync.Once
+	unblock := func() { releaseOnce.Do(func() { close(release) }) }
+	t.Cleanup(unblock)
+	var calls atomic.Int32
+	s := &store{server: &failingDrainServer{
+		quiesce: func() error { return nil },
+		drain: func(context.Context) error {
+			calls.Add(1)
+			close(entered)
+			<-release
+			return expected
+		},
+	}}
+	results := make(chan error, 2)
+	go func() { results <- s.Close() }()
+	<-entered
+	go func() { results <- s.Close() }()
+	unblock()
+	require.ErrorIs(t, <-results, expected)
+	require.ErrorIs(t, <-results, expected)
+	require.ErrorIs(t, s.Close(), expected)
+	require.Equal(t, int32(1), calls.Load())
+	// Replica/storage dependencies are deliberately absent: a failed drain
+	// must return without entering their destruction path.
+}
+
+func TestStoreDrainSharesContextWithLocalHandlers(t *testing.T) {
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+	s := &store{server: &failingDrainServer{
+		quiesce: func() error { return nil },
+		drain: func(actual context.Context) error {
+			require.Equal(t, ctx, actual)
+			cancel()
+			return nil
+		},
+	}}
+	release, ok := s.acquireLocalHandler()
+	require.True(t, ok)
+	defer release()
+	err := s.drainHandlers(ctx)
+	require.ErrorIs(t, err, context.Canceled)
+	require.ErrorIs(t, err, rpc.ErrTxnDrainTimeout)
+	_, accepted := s.acquireLocalHandler()
+	require.False(t, accepted)
+}
+
+func (s *storeTxnServer) Quiesce() error {
+	if s.beforeQuiesce != nil {
+		s.beforeQuiesce()
+	}
+	return s.TxnServer.(txnServerLifecycle).Quiesce()
+}
+
+func (s *storeTxnServer) Drain(ctx context.Context) error {
+	if s.beforeDrain != nil {
+		s.beforeDrain()
+	}
+	return s.TxnServer.(txnServerLifecycle).Drain(ctx)
 }
 
 func (s *storeTxnServer) Close() error {
-	s.beforeClose()
+	if s.beforeClose != nil {
+		s.beforeClose()
+	}
 	return s.TxnServer.Close()
 }
 
@@ -273,6 +351,12 @@ func TestStoreCloseClosesSharedQueryClient(t *testing.T) {
 		realClient := s.queryClient
 		s.queryClient = sharedClient
 		require.NoError(t, realClient.Close())
+		results := make(chan error, 2)
+		go func() { results <- s.Close() }()
+		go func() { results <- s.Close() }()
+		require.NoError(t, <-results)
+		require.NoError(t, <-results)
+		// runTNStoreTest calls Close once more on return.
 		t.Cleanup(func() {
 			require.Equal(t, 1, sharedClient.closeCalls)
 		})
@@ -281,22 +365,31 @@ func TestStoreCloseClosesSharedQueryClient(t *testing.T) {
 
 func TestStoreCloseClosesQueryService(t *testing.T) {
 	var tracked *storeQueryService
-	runTNStoreTest(t, func(s *store) {
+	runTNStoreTestBeforeStart(t, func(s *store) {
 		tracked = &storeQueryService{QueryService: s.queryService}
 		s.queryService = tracked
+	}, func(s *store) {
 		t.Cleanup(func() {
 			require.Equal(t, 1, tracked.closeCalls)
 		})
 	})
 }
 
-func TestStoreCloseCancelsReplicasBeforeDrainingRPCServer(t *testing.T) {
+func TestStoreCloseDrainsRPCBeforeCancellingReplicas(t *testing.T) {
+	var canceledBeforeDrain atomic.Bool
 	var canceledBeforeServerClose atomic.Bool
+	var drainedBeforeServerClose atomic.Bool
 	runTNStoreTest(t, func(s *store) {
 		r := newReplica(newTestTNShard(1, 2, 3), s.rt)
 		s.replicas.Store(r.shard.ShardID, r)
 		s.server = &storeTxnServer{
 			TxnServer: s.server,
+			beforeDrain: func() {
+				r.mu.RLock()
+				canceledBeforeDrain.Store(r.mu.cancelled)
+				r.mu.RUnlock()
+				drainedBeforeServerClose.Store(true)
+			},
 			beforeClose: func() {
 				r.mu.RLock()
 				defer r.mu.RUnlock()
@@ -304,7 +397,9 @@ func TestStoreCloseCancelsReplicasBeforeDrainingRPCServer(t *testing.T) {
 			},
 		}
 	})
+	require.False(t, canceledBeforeDrain.Load())
 	require.True(t, canceledBeforeServerClose.Load())
+	require.True(t, drainedBeforeServerClose.Load())
 }
 
 type neverReadyHAKeeperClient struct {
@@ -456,7 +551,15 @@ func runTNStoreTest(
 	t *testing.T,
 	testFn func(*store),
 	opts ...Option) {
-	runTNStoreTestWithFileServiceFactory(t, testFn, func(name string) (*fileservice.FileServices, error) {
+	runTNStoreTestBeforeStart(t, nil, testFn, opts...)
+}
+
+func runTNStoreTestBeforeStart(
+	t *testing.T,
+	beforeStart func(*store),
+	testFn func(*store),
+	opts ...Option) {
+	runTNStoreTestWithSetup(t, beforeStart, testFn, func(name string) (*fileservice.FileServices, error) {
 		local, err := fileservice.NewMemoryFS(
 			defines.LocalFileServiceName,
 			fileservice.DisabledCacheConfig, nil,
@@ -484,6 +587,15 @@ func runTNStoreTest(
 
 func runTNStoreTestWithFileServiceFactory(
 	t *testing.T,
+	testFn func(*store),
+	fsFactory fileservice.NewFileServicesFunc,
+	opts ...Option) {
+	runTNStoreTestWithSetup(t, nil, testFn, fsFactory, opts...)
+}
+
+func runTNStoreTestWithSetup(
+	t *testing.T,
+	beforeStart func(*store),
 	testFn func(*store),
 	fsFactory fileservice.NewFileServicesFunc,
 	opts ...Option) {
@@ -515,6 +627,11 @@ func runTNStoreTestWithFileServiceFactory(
 	defer func() {
 		assert.NoError(t, s.Close())
 	}()
+	// Test instrumentation must be installed before heartbeat goroutines read
+	// service fields; replacing them after Start races with production readers.
+	if beforeStart != nil {
+		beforeStart(s)
+	}
 	assert.NoError(t, s.Start())
 	testFn(s)
 }

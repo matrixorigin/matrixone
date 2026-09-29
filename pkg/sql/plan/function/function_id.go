@@ -830,13 +830,39 @@ const (
 	// numbering intact leaves the next merge clean. Ids are referenced by name.
 	L1_DISTANCE = 570
 
+	// JSON_ARRAY_APPEND appends values to arrays within a JSON document.
+	JSON_ARRAY_APPEND = 571
+
+	// Foreign-data TVF connection management (esql_tvf / sql_tvf).
+	ESQL_TVF_CONNECT    = 572
+	ESQL_TVF_DISCONNECT = 573
+	SQL_TVF_CONNECT     = 574
+	SQL_TVF_DISCONNECT  = 575
+	// Kafka external table (issue #27518).
+	LAST_KAFKA_MESSAGE_ID = 576
+
+	INTERNAL_JSON_COMPARISON_PARAM = 577
+	INTERNAL_JSON_MEMBER_OF        = 578
+	// JSON_STORAGE_SIZE and JSON_STORAGE_FREE expose MatrixOne's ByteJson
+	// logical payload size and currently-supported free-space contract.
+	JSON_STORAGE_SIZE = 579
+	JSON_STORAGE_FREE = 580
+	JSON_DEPTH        = 584
+
+	EXTRACTVALUE            = 581
+	UPDATEXML               = 582
+	TO_INTERVAL_MICROSECOND = 583
+
 	// FUNCTION_END_NUMBER is not a function, just a flag to record the max number of function.
 	// TODO: every one should put the new function id in front of this one if you want to make a new function.
-	FUNCTION_END_NUMBER = 571
+	FUNCTION_END_NUMBER = 585
 )
 
 // functionIdRegister is what function we have registered already.
 var functionIdRegister = map[string]int32{
+	"to_interval_microsecond": TO_INTERVAL_MICROSECOND,
+	"extractvalue":            EXTRACTVALUE,
+	"updatexml":               UPDATEXML,
 	// operators
 	"=":            EQUAL,
 	"<=>":          NULL_SAFE_EQUAL,
@@ -904,6 +930,7 @@ var functionIdRegister = map[string]int32{
 	"min":                          MIN,
 	"sum":                          SUM,
 	"group_concat":                 GROUP_CONCAT,
+	"listagg":                      GROUP_CONCAT,
 	"grouping":                     GROUPING,
 	"avg":                          AVG,
 	"avg_tw_cache":                 AVG_TW_CACHE,
@@ -958,6 +985,7 @@ var functionIdRegister = map[string]int32{
 	"power":       POW,
 	"startswith":  STARTSWITH,
 	"to_date":     STR_TO_DATE,
+	"to_interval": TO_INTERVAL,
 	"str_to_date": STR_TO_DATE,
 	"ts_to_time":  TS_TO_TIME,
 	"date_format": DATE_FORMAT,
@@ -1113,24 +1141,32 @@ var functionIdRegister = map[string]int32{
 	"json_extract_float64":           JSON_EXTRACT_FLOAT64,
 	"json_object":                    JSON_OBJECT,
 	"json_arrayagg":                  JSON_ARRAYAGG,
+	"array_agg":                      JSON_ARRAYAGG,
 	"json_objectagg":                 JSON_OBJECTAGG,
 	"json_quote":                     JSON_QUOTE,
 	"json_unquote":                   JSON_UNQUOTE,
 	JsonOrderingParamFunctionName:    INTERNAL_JSON_ORDERING_PARAM,
+	JsonComparisonParamFunctionName:  INTERNAL_JSON_COMPARISON_PARAM,
 	"json_row":                       JSON_ROW,
 	"json_set":                       JSON_SET,
 	"json_insert":                    JSON_INSERT,
 	"json_replace":                   JSON_REPLACE,
+	"json_array_append":              JSON_ARRAY_APPEND,
 	"json_remove":                    JSON_REMOVE,
 	"hll_cardinality":                HLL_CARDINALITY,
 	"json_type":                      JSON_TYPE,
 	"json_valid":                     JSON_VALID,
 	"json_length":                    JSON_LENGTH,
+	"json_storage_size":              JSON_STORAGE_SIZE,
+	"json_storage_free":              JSON_STORAGE_FREE,
+	"json_depth":                     JSON_DEPTH,
 	"json_contains":                  JSON_CONTAINS,
 	"json_contains_path":             JSON_CONTAINS_PATH,
+	"json_merge":                     JSON_MERGE_PRESERVE,
 	"json_merge_patch":               JSON_MERGE_PATCH,
 	"json_merge_preserve":            JSON_MERGE_PRESERVE,
 	"json_overlaps":                  JSON_OVERLAPS,
+	"member of":                      INTERNAL_JSON_MEMBER_OF,
 	"onnx_run":                       ONNX_RUN,
 	"json_keys":                      JSON_KEYS,
 	"json_pretty":                    JSON_PRETTY,
@@ -1149,6 +1185,11 @@ var functionIdRegister = map[string]int32{
 	"trigger_fault_point":            TRIGGER_FAULT_POINT,
 	"mo_win_truncate":                MO_WIN_TRUNCATE,
 	"uuid":                           UUID,
+	"esql_tvf_connect":               ESQL_TVF_CONNECT,
+	"esql_tvf_disconnect":            ESQL_TVF_DISCONNECT,
+	"sql_tvf_connect":                SQL_TVF_CONNECT,
+	"sql_tvf_disconnect":             SQL_TVF_DISCONNECT,
+	"last_kafka_message_id":          LAST_KAFKA_MESSAGE_ID,
 	"uuid_v7":                        UUID,
 	"uuid_v1":                        UUID_V1,
 	"uuid_v4":                        UUID_V4,

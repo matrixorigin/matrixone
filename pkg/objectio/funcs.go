@@ -22,12 +22,15 @@ import (
 
 	"github.com/matrixorigin/matrixone/pkg/util"
 
+	"github.com/matrixorigin/matrixone/pkg/common/moerr"
+	"github.com/matrixorigin/matrixone/pkg/compress"
 	"github.com/matrixorigin/matrixone/pkg/container/batch"
 	"github.com/matrixorigin/matrixone/pkg/container/vector"
 
 	"github.com/matrixorigin/matrixone/pkg/common/mpool"
 	"github.com/matrixorigin/matrixone/pkg/container/types"
 	"github.com/matrixorigin/matrixone/pkg/fileservice"
+	"github.com/matrixorigin/matrixone/pkg/fileservice/fscache"
 	"github.com/matrixorigin/matrixone/pkg/logutil"
 	"github.com/matrixorigin/matrixone/pkg/perfcounter"
 )
@@ -116,6 +119,13 @@ func ReadObjectMeta(
 	return
 }
 
+// ReadOneBlockOption controls opt-in scoped behavior, not the stored format.
+type ReadOneBlockOption uint8
+
+// ShareScopedDecodedColumn requires the complete IOVector to remain alive until
+// all decoded views have been consumed. Only scalar/owned results may escape.
+const ShareScopedDecodedColumn ReadOneBlockOption = 1
+
 func ReadOneBlock(
 	ctx context.Context,
 	meta *ObjectDataMeta,
@@ -126,8 +136,29 @@ func ReadOneBlock(
 	m *mpool.MPool,
 	fs fileservice.FileService,
 	policy fileservice.Policy,
+	options ...ReadOneBlockOption,
 ) (ioVec fileservice.IOVector, err error) {
-	return ReadOneBlockWithMeta(ctx, meta, name, blk, seqnums, typs, m, fs, columnCacheConstructorFactory, policy)
+	sharedPosition := -1
+	if len(seqnums) == 1 && len(typs) == 1 && slices.Contains(options, ShareScopedDecodedColumn) {
+		sharedPosition = 0
+	}
+	return readOneBlockWithMeta(ctx, meta, name, blk, seqnums, typs, m, fs, columnCacheConstructorFactory, policy,
+		sharedPosition, nil)
+}
+
+// ReadOneBlockWithScopedDecode opts one requested column into immutable decoded
+// sharing. The caller must keep the complete IOVector until all views are consumed.
+// Position is in seqnums/typs, not in the compacted physical-entry list.
+func ReadOneBlockWithScopedDecode(
+	ctx context.Context, meta *ObjectDataMeta, name string, blk uint16,
+	seqnums []uint16, typs []types.Type, m *mpool.MPool, fs fileservice.FileService,
+	policy fileservice.Policy, sharedPosition int,
+) (fileservice.IOVector, error) {
+	if sharedPosition < 0 || sharedPosition >= len(seqnums) || sharedPosition >= len(typs) {
+		return fileservice.IOVector{}, moerr.NewInvalidInputNoCtxf(
+			"scoped decode column position %d is outside column/type lists", sharedPosition)
+	}
+	return readOneBlockWithMeta(ctx, meta, name, blk, seqnums, typs, m, fs, columnCacheConstructorFactory, policy, sharedPosition, nil)
 }
 
 func ReadOneBlockWithMeta(
@@ -141,6 +172,14 @@ func ReadOneBlockWithMeta(
 	fs fileservice.FileService,
 	factory CacheConstructorFactory,
 	policy fileservice.Policy,
+) (ioVec fileservice.IOVector, err error) {
+	return readOneBlockWithMeta(ctx, meta, name, blk, seqnums, typs, m, fs, factory, policy, -1, nil)
+}
+
+func readOneBlockWithMeta(
+	ctx context.Context, meta *ObjectDataMeta, name string, blk uint16,
+	seqnums []uint16, typs []types.Type, m *mpool.MPool, fs fileservice.FileService,
+	factory CacheConstructorFactory, policy fileservice.Policy, sharedPosition int, selectedEntry *fileservice.IOEntry,
 ) (ioVec fileservice.IOVector, err error) {
 	ioVec = fileservice.IOVector{
 		FilePath: name,
@@ -196,7 +235,16 @@ func ReadOneBlockWithMeta(
 		// read written normal column
 		col := blkmeta.ColumnMeta(seqnum)
 		ext := col.Location()
-		ioVec.Entries = append(ioVec.Entries, newColumnIOEntry(ext, factory))
+		entry := newColumnIOEntry(ext, factory)
+		if i == sharedPosition && selectedEntry != nil {
+			entry = *selectedEntry
+		} else if i == sharedPosition && typs[i].Oid.IsArrayRelate() {
+			entry.DecodeSharing = fileservice.DecodeSharing{
+				Codec:      "objectio-validated-column-v1",
+				Parameters: [2]uint64{uint64(ext.Alg()), uint64(ext.OriginSize())},
+			}
+		}
+		ioVec.Entries = append(ioVec.Entries, entry)
 	}
 	if len(ioVec.Entries) > 0 {
 		err = fs.Read(ctx, &ioVec)
@@ -336,4 +384,181 @@ func ReadOneBlockAllColumns(
 		bat.SetRowCount(bat.Vecs[i].Length())
 	}
 	return
+}
+
+// ReadOneBlockAllColumnsWindow materializes only the requested rows and reads
+// columns sequentially. This keeps the retained source working set to one
+// decoded column plus the bounded output window.
+func ReadOneBlockAllColumnsWindow(
+	ctx context.Context,
+	meta *ObjectDataMeta,
+	name string,
+	id uint32,
+	cols []uint16,
+	offset, length int,
+	cachePolicy fileservice.Policy,
+	fs fileservice.FileService,
+	mp *mpool.MPool,
+	maxSourceBytes int,
+	spillFactory ColumnWindowSpillFactory,
+) (bat *batch.Batch, err error) {
+	if length <= 0 {
+		return nil, moerr.NewInvalidInputNoCtx("object block window must contain rows")
+	}
+	bat = batch.NewWithSize(len(cols))
+	ownedBat := bat
+	defer func() {
+		if err != nil {
+			// An explicit `return nil, err` assigns nil to the named result
+			// before deferred functions run. Keep the owned allocation in a
+			// separate variable so partially materialized vectors are still
+			// released on every error path.
+			ownedBat.Clean(mp)
+			bat = nil
+		}
+	}()
+	for i, seqnum := range cols {
+		col := meta.GetBlockMeta(id).ColumnMeta(seqnum)
+		ext := col.Location()
+		if ext.Alg() == compress.Lz4Chunked {
+			bat.Vecs[i], err = readChunkedColumnWindow(
+				ctx, name, ext, offset, length, cachePolicy, fs, mp,
+			)
+			if err != nil {
+				return nil, err
+			}
+			continue
+		}
+		if maxSourceBytes > 0 && int64(ext.OriginSize()) > int64(maxSourceBytes) {
+			bat.Vecs[i], err = readLegacyColumnWindow(
+				ctx, name, ext, offset, length, fs, mp, spillFactory,
+			)
+			if err != nil {
+				return nil, err
+			}
+			continue
+		}
+		ioVec := &fileservice.IOVector{
+			FilePath: name,
+			Entries: []fileservice.IOEntry{{
+				Offset: int64(ext.Offset()), Size: int64(ext.Length()),
+				CachedDataSize: int64(ext.OriginSize()),
+				ToCacheData:    constructorFactory(int64(ext.OriginSize()), ext.Alg()),
+			}},
+			Policy: cachePolicy,
+		}
+		if err = fs.Read(ctx, ioVec); err != nil {
+			ioVec.ReleaseReadResultOnError()
+			return nil, err
+		}
+		vec, materializeErr := MaterializeCachedVectorWindow(
+			ioVec.Entries[0].CachedData, offset, length, mp,
+		)
+		ioVec.Release()
+		if materializeErr != nil {
+			return nil, materializeErr
+		}
+		bat.Vecs[i] = vec
+	}
+	bat.SetRowCount(length)
+	return bat, nil
+}
+
+func readChunkedColumnWindow(
+	ctx context.Context,
+	name string,
+	ext Extent,
+	offset, length int,
+	policy fileservice.Policy,
+	fs fileservice.FileService,
+	mp *mpool.MPool,
+) (*vector.Vector, error) {
+	readRange := func(relativeOffset, size uint32, originSize uint32, algorithm uint8) (fscache.Data, error) {
+		ioVec := &fileservice.IOVector{
+			FilePath: name,
+			Entries: []fileservice.IOEntry{{
+				Offset: int64(ext.Offset() + relativeOffset), Size: int64(size),
+				CachedDataSize: int64(originSize),
+				ToCacheData:    constructorFactory(int64(originSize), algorithm),
+			}},
+			Policy: policy,
+		}
+		if err := fs.Read(ctx, ioVec); err != nil {
+			ioVec.ReleaseReadResultOnError()
+			return nil, err
+		}
+		data := ioVec.Entries[0].CachedData
+		data.Retain()
+		ioVec.Release()
+		return data, nil
+	}
+	prefix, err := readRange(0, columnChunkHeaderSize, columnChunkHeaderSize, compress.None)
+	if err != nil {
+		return nil, err
+	}
+	headerSize, err := chunkedColumnHeaderReadSize(prefix.Bytes(), ext.Length())
+	prefix.Release()
+	if err != nil {
+		return nil, err
+	}
+	header, err := readRange(0, uint32(headerSize), uint32(headerSize), compress.None)
+	if err != nil {
+		return nil, err
+	}
+	totalRows, metas, err := parseColumnChunkHeader(header.Bytes(), ext.Length())
+	header.Release()
+	if err != nil {
+		return nil, err
+	}
+	if offset < 0 || length <= 0 || offset > int(totalRows)-length {
+		return nil, moerr.NewInvalidInputNoCtx("chunked object column window is out of range")
+	}
+	windowEnd := offset + length
+	var dst *vector.Vector
+	for _, meta := range metas {
+		chunkStart, chunkEnd := int(meta.rowStart), int(meta.rowStart+meta.rowCount)
+		if chunkEnd <= offset || chunkStart >= windowEnd {
+			continue
+		}
+		chunkData, readErr := readRange(meta.offset, meta.length, meta.originSize, meta.algorithm)
+		if readErr != nil {
+			if dst != nil {
+				dst.Free(mp)
+			}
+			return nil, readErr
+		}
+		localStart := max(offset, chunkStart) - chunkStart
+		localEnd := min(windowEnd, chunkEnd) - chunkStart
+		part, materializeErr := MaterializeCachedVectorWindow(
+			chunkData, localStart, localEnd-localStart, mp,
+		)
+		chunkData.Release()
+		if materializeErr != nil {
+			if dst != nil {
+				dst.Free(mp)
+			}
+			return nil, materializeErr
+		}
+		if dst == nil {
+			dst = part
+		} else if *part.GetType() != *dst.GetType() {
+			part.Free(mp)
+			dst.Free(mp)
+			return nil, moerr.NewInvalidInputNoCtx("chunked object column payload type mismatch")
+		} else {
+			if err = dst.UnionBatch(part, 0, part.Length(), nil, mp); err != nil {
+				part.Free(mp)
+				dst.Free(mp)
+				return nil, err
+			}
+			part.Free(mp)
+		}
+	}
+	if dst == nil || dst.Length() != length {
+		if dst != nil {
+			dst.Free(mp)
+		}
+		return nil, moerr.NewInvalidInputNoCtx("chunked object column window row count mismatch")
+	}
+	return dst, nil
 }

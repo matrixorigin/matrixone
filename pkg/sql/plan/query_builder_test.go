@@ -24,6 +24,7 @@ import (
 	"testing"
 	"time"
 
+	"github.com/gogo/protobuf/proto"
 	"github.com/golang/mock/gomock"
 	"github.com/matrixorigin/matrixone/pkg/catalog"
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
@@ -37,6 +38,7 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/sql/parsers"
 	"github.com/matrixorigin/matrixone/pkg/sql/parsers/dialect"
 	"github.com/matrixorigin/matrixone/pkg/sql/parsers/tree"
+	"github.com/matrixorigin/matrixone/pkg/sql/plan/function"
 	"github.com/matrixorigin/matrixone/pkg/testutil"
 	"github.com/matrixorigin/matrixone/pkg/vm/process"
 	"github.com/stretchr/testify/assert"
@@ -201,6 +203,102 @@ func TestMongoDBExternalScanPruningKeepsResidualColumnsAndPlansPushdown(t *testi
 	require.Equal(t, "mo-residual:ff", scanNode.ExternScan.MongodbScan.ResidualFilterDigest)
 }
 
+func TestMongoDBExternalScanAddsHiddenQuerySelectorColumn(t *testing.T) {
+	newMock := func() *MockOptimizer {
+		mock := NewMockOptimizer(false)
+		mock.ctxt.dbs["telemetry_source"] = true
+		mock.ctxt.objects["events_external"] = &plan.ObjectRef{
+			DbName: "telemetry_source", ObjName: "events_external", Obj: 42,
+		}
+		mapping := sqlmongodb.TableMapping{
+			Connection: "telemetry_source", Database: "telemetry", Collection: "events",
+			SchemaMode: sqlmongodb.SchemaExplicit, Conversion: sqlmongodb.ConversionStrict, MaxParallelism: 1,
+			Columns: []sqlmongodb.ColumnMapping{
+				{Name: "device_id", Path: "device_id", TypeID: int32(types.T_varchar), Width: 20, Conversion: sqlmongodb.ConversionStrict},
+				{Name: "measurement", Path: "measurement", TypeID: int32(types.T_float64), Conversion: sqlmongodb.ConversionTryNull},
+			},
+		}
+		mock.ctxt.tables["events_external"] = &plan.TableDef{
+			Name: "events_external", TableType: catalog.SystemExternalRel,
+			FeatureFlag: features.MongoDBExternal,
+			Createsql:   sqlmongodb.BuildCreateSQLEnvelope(mapping),
+			Cols: []*plan.ColDef{
+				{Name: "device_id", Typ: plan.Type{Id: int32(types.T_varchar), Width: 20}},
+				{Name: "measurement", Typ: plan.Type{Id: int32(types.T_float64)}},
+			},
+		}
+		return mock
+	}
+	findScan := func(t *testing.T, logicalPlan *plan.Plan) *plan.Node {
+		t.Helper()
+		for _, node := range logicalPlan.GetQuery().Nodes {
+			if node.NodeType == plan.Node_EXTERNAL_SCAN {
+				return node
+			}
+		}
+		require.FailNow(t, "missing MongoDB external scan")
+		return nil
+	}
+
+	t.Run("hidden from select star but retained for selector", func(t *testing.T) {
+		logicalPlan, err := runOneStmt(newMock(), t,
+			`select * from telemetry_source.events_external where __mo_query = '{"filter":{"device_id":"pump-1"}}'`)
+		require.NoError(t, err)
+		scanNode := findScan(t, logicalPlan)
+		require.NotEmpty(t, scanNode.TableDef.Cols)
+		queryColumn := scanNode.TableDef.Cols[len(scanNode.TableDef.Cols)-1]
+		require.Equal(t, catalog.ExternalQuery, queryColumn.Name)
+		require.Equal(t, catalog.ExternalQueryColId, queryColumn.ColId)
+		require.Len(t, scanNode.FilterList, 1)
+
+		root := logicalPlan.GetQuery().Nodes[logicalPlan.GetQuery().Steps[0]]
+		require.Len(t, root.ProjectList, 2, "SELECT * must not expose __mo_query")
+	})
+
+	t.Run("explicit projection remains addressable", func(t *testing.T) {
+		logicalPlan, err := runOneStmt(newMock(), t,
+			`select __mo_query from telemetry_source.events_external where __mo_query = '{"pipeline":[{"$count":"measurement"}]}'`)
+		require.NoError(t, err)
+		scanNode := findScan(t, logicalPlan)
+		require.Len(t, scanNode.TableDef.Cols, 1)
+		require.Equal(t, catalog.ExternalQuery, scanNode.TableDef.Cols[0].Name)
+		require.True(t, catalog.IsForeignQueryCol(
+			scanNode.TableDef.Cols[0].Name, scanNode.TableDef.Cols[0].ColId))
+		require.Nil(t, scanNode.ExternScan.MongodbScan.PushedPredicate,
+			"the synthetic selector must never be translated as a mapped MongoDB field")
+	})
+
+	t.Run("legacy mapped query column remains unambiguous", func(t *testing.T) {
+		mock := newMock()
+		mapping := sqlmongodb.TableMapping{
+			Connection: "telemetry_source", Database: "telemetry", Collection: "legacy_events",
+			SchemaMode: sqlmongodb.SchemaExplicit, Conversion: sqlmongodb.ConversionStrict, MaxParallelism: 1,
+			Columns: []sqlmongodb.ColumnMapping{
+				{Name: catalog.ExternalQuery, Path: "legacy_query", TypeID: int32(types.T_varchar), Width: 64, Conversion: sqlmongodb.ConversionStrict},
+			},
+		}
+		mock.ctxt.tables["events_external"] = &plan.TableDef{
+			Name: "events_external", TableType: catalog.SystemExternalRel,
+			FeatureFlag: features.MongoDBExternal,
+			Createsql:   sqlmongodb.BuildCreateSQLEnvelope(mapping),
+			Cols: []*plan.ColDef{{
+				Name: catalog.ExternalQuery, ColId: 7,
+				Typ: plan.Type{Id: int32(types.T_varchar), Width: 64},
+			}},
+		}
+
+		logicalPlan, err := runOneStmt(mock, t,
+			`select __mo_query from telemetry_source.events_external where __mo_query = 'legacy-value'`)
+		require.NoError(t, err)
+		scanNode := findScan(t, logicalPlan)
+		require.Len(t, scanNode.TableDef.Cols, 1)
+		require.Equal(t, uint64(7), scanNode.TableDef.Cols[0].ColId)
+		require.False(t, catalog.IsForeignQueryCol(scanNode.TableDef.Cols[0].Name, scanNode.TableDef.Cols[0].ColId))
+		require.Len(t, scanNode.FilterList, 1,
+			"the legacy mapped column remains an ordinary MatrixOne predicate")
+	})
+}
+
 func TestMongoDBExternalScanRejectsInvalidCatalogState(t *testing.T) {
 	newMock := func(createSQL string) *MockOptimizer {
 		mock := NewMockOptimizer(false)
@@ -233,13 +331,56 @@ func TestMongoDBExternalScanRejectsInvalidCatalogState(t *testing.T) {
 	})
 
 	t.Run("prepared scan", func(t *testing.T) {
-		mock := newMock(sqlmongodb.BuildCreateSQLEnvelope(mapping))
-		stmts, err := parsers.Parse(mock.ctxt.GetContext(), dialect.MYSQL,
-			"select value from telemetry_source.events_external", 1)
+		preparedMapping := mapping
+		preparedMapping.Columns = append([]sqlmongodb.ColumnMapping(nil), mapping.Columns...)
+		preparedMapping.Columns[0].Conversion = sqlmongodb.ConversionTryNull
+		mock := newMock(sqlmongodb.BuildCreateSQLEnvelope(preparedMapping))
+		prepareControl, err := buildPrepare(tree.NewPrepareString("mongo_ps",
+			"select count(*) from telemetry_source.events_external where value > ?"), &mock.ctxt)
 		require.NoError(t, err)
-		_, err = BuildPlan(&mock.ctxt, stmts[0], true)
-		require.ErrorContains(t, err, "prepared MongoDB external scans")
+		prepare := prepareControl.GetDcl().GetPrepare()
+		require.NotNil(t, prepare)
+		require.Len(t, prepare.ParamTypes, 1)
+		prepared := prepare.Plan
+
+		preparedScan := findMongoDBScanNode(prepared)
+		require.NotNil(t, preparedScan)
+		require.Len(t, preparedScan.FilterList, 1)
+		require.Nil(t, preparedScan.ExternScan.MongodbScan.PushedPredicate,
+			"an unbound parameter must not be pushed to MongoDB")
+		require.Equal(t, "mo-residual:f", preparedScan.ExternScan.MongodbScan.ResidualFilterDigest)
+
+		runtimeFilters := make([]string, 0, 2)
+		for _, value := range []int64{10, 20} {
+			runtimePlan, err := FillValuesOfParamsInPlan(t.Context(), prepared, []any{value})
+			require.NoError(t, err)
+			runtimeScan := findMongoDBScanNode(runtimePlan)
+			require.NotNil(t, runtimeScan)
+			require.Len(t, runtimeScan.FilterList, 1)
+			runtimeFilters = append(runtimeFilters, runtimeScan.FilterList[0].String())
+		}
+		require.NotEqual(t, runtimeFilters[0], runtimeFilters[1],
+			"each execution must bind its own parameter value")
+
+		// The CAST around a prepared value remains conservative for MongoDB
+		// pushdown. The original filter is always retained as an MO residual, and
+		// repeated execution leaves the cached plan parameterized for the next run.
+		pushed, _ := sqlmongodb.PushdownPlanFilters(
+			t.Context(), preparedScan.FilterList, preparedScan.ExternScan.MongodbScan.Columns)
+		require.Nil(t, pushed)
 	})
+}
+
+func findMongoDBScanNode(logicPlan *Plan) *plan.Node {
+	if logicPlan == nil || logicPlan.GetQuery() == nil {
+		return nil
+	}
+	for _, node := range logicPlan.GetQuery().Nodes {
+		if node.GetExternScan().GetMongodbScan() != nil {
+			return node
+		}
+	}
+	return nil
 }
 
 func TestCanPruneSampleExprs(t *testing.T) {
@@ -492,6 +633,80 @@ func TestBindViewWithoutStoredSQLModeUsesLegacyPipeConcat(t *testing.T) {
 	require.False(t, exprContainsFunc(projectExpr, "or"))
 }
 
+func TestBindViewSequenceFunctionsUseStoredDatabase(t *testing.T) {
+	for _, test := range []struct {
+		name         string
+		expr         string
+		wantArgs     int
+		wantOverload int32
+		wantIsCalled *bool
+	}{
+		{name: "nextval", expr: "nextval('ab.cd')", wantArgs: 2, wantOverload: 1},
+		{name: "currval", expr: "currval('ab.cd')", wantArgs: 2, wantOverload: 1},
+		{name: "setval_default", expr: "setval('ab.cd', '50')", wantArgs: 4, wantOverload: 2, wantIsCalled: ptrTo(true)},
+		{name: "setval_is_called", expr: "setval('ab.cd', '50', false)", wantArgs: 4, wantOverload: 2, wantIsCalled: ptrTo(false)},
+		{name: "setval_string_is_called", expr: "setval('ab.cd', '50', 'false')", wantArgs: 4, wantOverload: 2, wantIsCalled: ptrTo(false)},
+	} {
+		t.Run(test.name, func(t *testing.T) {
+			builder, nodeID := buildViewForSQLModeTest(t, "v_sequence", ViewData{
+				Stmt:            "create view v_sequence as select " + test.expr + " as n",
+				DefaultDatabase: "view_db",
+				SecurityType:    "DEFINER",
+			})
+
+			functionExpr := builder.qry.Nodes[nodeID].ProjectList[0].GetF()
+			require.NotNil(t, functionExpr)
+			functionName := strings.Split(test.name, "_")[0]
+			require.Equal(t, functionName, functionExpr.Func.GetObjName())
+			require.Len(t, functionExpr.Args, test.wantArgs)
+			_, overloadID := function.DecodeOverloadID(functionExpr.Func.Obj)
+			require.Equal(t, test.wantOverload, overloadID)
+			// A dot is legal in a sequence identifier.  Keep the sequence name
+			// intact and carry the view database separately.
+			require.Equal(t, "ab.cd", functionExpr.Args[0].GetLit().GetSval())
+			require.Equal(t, "view_db", functionExpr.Args[test.wantArgs-1].GetLit().GetSval())
+			if test.wantIsCalled != nil {
+				require.Equal(t, *test.wantIsCalled, functionExpr.Args[2].GetLit().GetBval())
+			}
+		})
+	}
+}
+
+func TestSequenceDatabaseArgumentIsInternal(t *testing.T) {
+	_, err := runOneStmt(NewMockOptimizer(false), t, "select nextval('seq1', 'db1')")
+	require.ErrorContains(t, err, "invalid argument function nextval")
+
+	_, err = runOneStmt(NewMockOptimizer(false), t, "select currval('seq1', 'db1')")
+	require.ErrorContains(t, err, "invalid argument function currval")
+
+	_, err = runOneStmt(NewMockOptimizer(false), t, "select setval('seq1', '50', false, 'db1')")
+	require.ErrorContains(t, err, "invalid argument function setval")
+
+	for _, test := range []struct {
+		name         string
+		sql          string
+		wantArgs     int
+		wantOverload int32
+	}{
+		{name: "two arguments", sql: "select setval('seq1', '50')", wantArgs: 2, wantOverload: 0},
+		{name: "quoted boolean", sql: "select setval('seq1', '50', 'false')", wantArgs: 3, wantOverload: 1},
+	} {
+		t.Run(test.name, func(t *testing.T) {
+			queryPlan, buildErr := runOneStmt(NewMockOptimizer(false), t, test.sql)
+			require.NoError(t, buildErr)
+			setvalPlanExpr := findPlanFunctionExpr(queryPlan, "setval")
+			require.NotNil(t, setvalPlanExpr)
+			setvalExpr := setvalPlanExpr.GetF()
+			require.Len(t, setvalExpr.Args, test.wantArgs)
+			_, overloadID := function.DecodeOverloadID(setvalExpr.Func.Obj)
+			require.Equal(t, test.wantOverload, overloadID)
+			if test.wantArgs == 3 {
+				require.Equal(t, int32(types.T_bool), setvalExpr.Args[2].Typ.Id)
+			}
+		})
+	}
+}
+
 func TestBindViewUsesStoredLowerCaseTableNames(t *testing.T) {
 	storedCaseSensitive := int64(0)
 	for _, test := range []struct {
@@ -583,6 +798,7 @@ func buildViewsForLowerCaseTest(
 	ctx.EXPECT().GetProcess().Return(nil).AnyTimes()
 	ctx.EXPECT().Stats(gomock.Any(), gomock.Any()).Return(nil, nil).AnyTimes()
 	ctx.EXPECT().GetBuildingAlterView().Return(false, "", "").AnyTimes()
+	ctx.EXPECT().SetContext(gomock.Any()).AnyTimes()
 	ctx.EXPECT().DatabaseExists(gomock.Any(), gomock.Any()).Return(true).AnyTimes()
 	ctx.EXPECT().GetLowerCaseTableNames().Return(int64(1)).AnyTimes()
 	ctx.EXPECT().GetSubscriptionMeta(gomock.Any(), gomock.Any()).Return(nil, nil).AnyTimes()
@@ -647,6 +863,7 @@ func buildViewForSQLModeTest(t *testing.T, viewName string, viewData ViewData) (
 			return x.obj, x.table, nil
 		}).AnyTimes()
 	ctx.EXPECT().GetContext().Return(context.Background()).AnyTimes()
+	ctx.EXPECT().SetContext(gomock.Any()).AnyTimes()
 	ctx.EXPECT().GetProcess().Return(nil).AnyTimes()
 	ctx.EXPECT().Stats(gomock.Any(), gomock.Any()).Return(nil, nil).AnyTimes()
 	ctx.EXPECT().GetBuildingAlterView().Return(false, "", "").AnyTimes()
@@ -3552,6 +3769,350 @@ func TestQueryBuilder_bindTimeWindow_WithFill(t *testing.T) {
 	}
 }
 
+func TestQueryBuilder_bindTimeWindowLinearFillTypeValidation(t *testing.T) {
+	tests := []struct {
+		name         string
+		fillMode     tree.FillMode
+		fillTypes    []types.Type
+		fillNames    []string
+		wantErr      bool
+		errorType    string
+		wantFillType plan.Node_FillType
+	}{
+		{
+			name:         "int64",
+			fillMode:     tree.FillLinear,
+			fillTypes:    []types.Type{types.T_int64.ToType()},
+			wantFillType: plan.Node_LINEAR,
+		},
+		{
+			name:         "float64",
+			fillMode:     tree.FillLinear,
+			fillTypes:    []types.Type{types.T_float64.ToType()},
+			wantFillType: plan.Node_LINEAR,
+		},
+		{
+			name:         "decimal256",
+			fillMode:     tree.FillLinear,
+			fillTypes:    []types.Type{types.New(types.T_decimal256, 65, 0)},
+			wantFillType: plan.Node_LINEAR,
+		},
+		{
+			name:      "varchar",
+			fillMode:  tree.FillLinear,
+			fillTypes: []types.Type{types.T_varchar.ToType()},
+			wantErr:   true,
+			errorType: "VARCHAR",
+		},
+		{
+			name:      "bool",
+			fillMode:  tree.FillLinear,
+			fillTypes: []types.Type{types.T_bool.ToType()},
+			wantErr:   true,
+			errorType: "BOOL",
+		},
+		{
+			name:      "datetime",
+			fillMode:  tree.FillLinear,
+			fillTypes: []types.Type{types.T_datetime.ToType()},
+			wantErr:   true,
+			errorType: "DATETIME",
+		},
+		{
+			name:      "json",
+			fillMode:  tree.FillLinear,
+			fillTypes: []types.Type{types.T_json.ToType()},
+			wantErr:   true,
+			errorType: "JSON",
+		},
+		{
+			name:      "any",
+			fillMode:  tree.FillLinear,
+			fillTypes: []types.Type{types.T_any.ToType()},
+			wantErr:   true,
+			errorType: "ANY",
+		},
+		{
+			name:      "mixed numeric and varchar",
+			fillMode:  tree.FillLinear,
+			fillTypes: []types.Type{types.T_int64.ToType(), types.T_varchar.ToType()},
+			wantErr:   true,
+			errorType: "VARCHAR",
+		},
+		{
+			name:         "boundary carriers are excluded",
+			fillMode:     tree.FillLinear,
+			fillTypes:    []types.Type{types.T_datetime.ToType(), types.T_datetime.ToType(), types.T_int64.ToType()},
+			fillNames:    []string{TimeWindowStart, TimeWindowEnd, "value"},
+			wantFillType: plan.Node_LINEAR,
+		},
+		{
+			name:         "varchar prev remains supported",
+			fillMode:     tree.FillPrev,
+			fillTypes:    []types.Type{types.T_varchar.ToType()},
+			wantFillType: plan.Node_PREV,
+		},
+		{
+			name:         "varchar next remains supported",
+			fillMode:     tree.FillNext,
+			fillTypes:    []types.Type{types.T_varchar.ToType()},
+			wantFillType: plan.Node_NEXT,
+		},
+		{
+			name:         "varchar value remains supported",
+			fillMode:     tree.FillValue,
+			fillTypes:    []types.Type{types.T_varchar.ToType()},
+			wantFillType: plan.Node_VALUE,
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			builder, bindCtx := genBuilderAndCtxWithColumnType(types.T_datetime, "ts")
+			bindCtx.times = make([]*plan.Expr, len(tt.fillTypes))
+			for i, fillType := range tt.fillTypes {
+				name := "value"
+				if i < len(tt.fillNames) {
+					name = tt.fillNames[i]
+				}
+				bindCtx.times[i] = &plan.Expr{
+					Typ: makePlan2Type(&fillType),
+					Expr: &plan.Expr_Col{Col: &plan.ColRef{
+						RelPos: 1,
+						ColPos: int32(i),
+						Name:   name,
+					}},
+				}
+			}
+
+			fillVal := tree.Expr(nil)
+			if tt.fillMode == tree.FillValue {
+				fillVal = tree.NewNumVal(int64(0), "0", false, tree.P_int64)
+			}
+			astTimeWindow := &tree.TimeWindow{
+				Interval: &tree.Interval{
+					Col:  tree.NewUnresolvedName(tree.NewCStr("ts", 0)),
+					Val:  tree.NewNumVal(int64(2), "2", false, tree.P_int64),
+					Unit: "second",
+				},
+				Fill: &tree.Fill{Mode: tt.fillMode, Val: fillVal},
+			}
+
+			helpFunc, err := makeHelpFuncForTimeWindow(astTimeWindow)
+			require.NoError(t, err)
+			timeWindowGroup := &plan.Expr{
+				Typ: plan.Type{Id: int32(types.T_datetime)},
+				Expr: &plan.Expr_Col{Col: &plan.ColRef{
+					RelPos: 1,
+					ColPos: 0,
+				}},
+			}
+			havingBinder := NewHavingBinder(builder, bindCtx)
+			projectionBinder := NewProjectionBinder(builder, bindCtx, havingBinder)
+
+			fillType, _, _, _, _, _, _, _, _, _, err := builder.bindTimeWindow(
+				bindCtx,
+				projectionBinder,
+				astTimeWindow,
+				timeWindowGroup,
+				helpFunc,
+			)
+
+			if tt.wantErr {
+				require.Error(t, err)
+				require.True(t, moerr.IsMoErrCode(err, moerr.ErrNotSupported), err)
+				require.Contains(t, err.Error(), "FILL(LINEAR) does not support aggregate result type")
+				require.Contains(t, err.Error(), tt.errorType)
+				return
+			}
+
+			require.NoError(t, err)
+			require.Equal(t, tt.wantFillType, fillType)
+		})
+	}
+}
+
+func TestQueryBuilder_bindTimeWindowLinearFillRejectsOrderByOnlyAggregate(t *testing.T) {
+	mock := NewMockOptimizer(false)
+	mock.ctxt.objects["tw_order"] = &plan.ObjectRef{DbName: "test", ObjName: "tw_order", Obj: 42}
+	mock.ctxt.tables["tw_order"] = &plan.TableDef{
+		Name: "tw_order",
+		Cols: []*plan.ColDef{
+			{Name: "series_id", Typ: plan.Type{Id: int32(types.T_int32)}},
+			{Name: "ts", Typ: plan.Type{Id: int32(types.T_datetime)}},
+			{Name: "value", Typ: plan.Type{Id: int32(types.T_varchar), Width: 16}},
+		},
+	}
+
+	_, err := runOneStmt(mock, t, `select series_id, _wstart, max(series_id) as numeric_fill
+from tw_order
+group by series_id interval(ts, 1, minute) gapfill(partition) fill(linear)
+order by max(value), series_id, _wstart`)
+	require.Error(t, err)
+	require.True(t, moerr.IsMoErrCode(err, moerr.ErrNotSupported), err)
+	require.Equal(t,
+		"not supported: FILL(LINEAR) does not support aggregate result type VARCHAR",
+		err.Error())
+}
+
+func TestQueryBuilder_bindTimeWindowLinearFillKeepsOrderByOnlyNumericAggregate(t *testing.T) {
+	mock := NewMockOptimizer(false)
+	mock.ctxt.objects["tw_numeric_order"] = &plan.ObjectRef{DbName: "test", ObjName: "tw_numeric_order", Obj: 42}
+	mock.ctxt.tables["tw_numeric_order"] = &plan.TableDef{
+		Name: "tw_numeric_order",
+		Cols: []*plan.ColDef{
+			{Name: "series_id", Typ: plan.Type{Id: int32(types.T_int32)}},
+			{Name: "ts", Typ: plan.Type{Id: int32(types.T_datetime)}},
+			{Name: "shown", Typ: plan.Type{Id: int32(types.T_int64)}},
+			{Name: "sort_key", Typ: plan.Type{Id: int32(types.T_int64)}},
+		},
+	}
+
+	queryPlan, err := runOneStmt(mock, t, `select series_id, _wstart, max(shown) as shown_fill
+from tw_numeric_order
+group by series_id interval(ts, 1, minute) gapfill(partition) fill(linear)
+order by max(sort_key), series_id, _wstart`)
+	require.NoError(t, err)
+
+	var timeWindowNode, fillNode *plan.Node
+	for _, node := range queryPlan.GetQuery().Nodes {
+		switch node.NodeType {
+		case plan.Node_TIME_WINDOW:
+			timeWindowNode = node
+		case plan.Node_FILL:
+			fillNode = node
+		}
+	}
+	require.NotNil(t, timeWindowNode)
+	require.NotNil(t, fillNode)
+	layout := BuildTimeWindowLayout(timeWindowNode)
+	require.Len(t, layout.AggIdx, 2)
+	require.Len(t, fillNode.AggList, len(layout.AggIdx))
+	require.Len(t, fillNode.FillVal, len(layout.AggIdx))
+}
+
+func TestQueryBuilder_bindTimeWindowLinearFillDeduplicatesSelectedOrderByAggregate(t *testing.T) {
+	mock := NewMockOptimizer(false)
+	mock.ctxt.objects["tw_numeric_order_selected"] = &plan.ObjectRef{DbName: "test", ObjName: "tw_numeric_order_selected", Obj: 42}
+	mock.ctxt.tables["tw_numeric_order_selected"] = &plan.TableDef{
+		Name: "tw_numeric_order_selected",
+		Cols: []*plan.ColDef{
+			{Name: "series_id", Typ: plan.Type{Id: int32(types.T_int32)}},
+			{Name: "ts", Typ: plan.Type{Id: int32(types.T_datetime)}},
+			{Name: "shown", Typ: plan.Type{Id: int32(types.T_int64)}},
+			{Name: "sort_key", Typ: plan.Type{Id: int32(types.T_int64)}},
+		},
+	}
+
+	queryPlan, err := runOneStmt(mock, t, `select series_id, _wstart, max(shown) as shown_fill
+from tw_numeric_order_selected
+group by series_id interval(ts, 1, minute) gapfill(partition) fill(linear)
+order by max(shown), max(sort_key), series_id, _wstart`)
+	require.NoError(t, err)
+
+	var timeWindowNode, fillNode *plan.Node
+	for _, node := range queryPlan.GetQuery().Nodes {
+		switch node.NodeType {
+		case plan.Node_TIME_WINDOW:
+			timeWindowNode = node
+		case plan.Node_FILL:
+			fillNode = node
+		}
+	}
+	require.NotNil(t, timeWindowNode)
+	require.NotNil(t, fillNode)
+	layout := BuildTimeWindowLayout(timeWindowNode)
+	require.Len(t, layout.AggIdx, 2)
+	require.Len(t, fillNode.AggList, len(layout.AggIdx))
+	require.Len(t, fillNode.FillVal, len(layout.AggIdx))
+}
+
+func TestQueryBuilder_bindTimeWindowLinearFillKeepsHavingOnlyNumericAggregate(t *testing.T) {
+	mock := NewMockOptimizer(false)
+	mock.ctxt.objects["tw_numeric_having"] = &plan.ObjectRef{DbName: "test", ObjName: "tw_numeric_having", Obj: 42}
+	mock.ctxt.tables["tw_numeric_having"] = &plan.TableDef{
+		Name: "tw_numeric_having",
+		Cols: []*plan.ColDef{
+			{Name: "series_id", Typ: plan.Type{Id: int32(types.T_int32)}},
+			{Name: "ts", Typ: plan.Type{Id: int32(types.T_datetime)}},
+			{Name: "shown", Typ: plan.Type{Id: int32(types.T_int64)}},
+			{Name: "sort_key", Typ: plan.Type{Id: int32(types.T_int64)}},
+		},
+	}
+
+	queryPlan, err := runOneStmt(mock, t, `select series_id, _wstart, max(shown) as shown_fill
+from tw_numeric_having
+group by series_id
+having max(sort_key) > 0
+interval(ts, 1, minute) gapfill(partition) fill(linear)
+order by series_id, _wstart`)
+	require.NoError(t, err)
+
+	var timeWindowNode, fillNode *plan.Node
+	for _, node := range queryPlan.GetQuery().Nodes {
+		switch node.NodeType {
+		case plan.Node_TIME_WINDOW:
+			timeWindowNode = node
+		case plan.Node_FILL:
+			fillNode = node
+		}
+	}
+	require.NotNil(t, timeWindowNode)
+	require.NotNil(t, fillNode)
+	layout := BuildTimeWindowLayout(timeWindowNode)
+	require.Len(t, layout.AggIdx, 2)
+	require.Len(t, fillNode.AggList, len(layout.AggIdx))
+	require.Len(t, fillNode.FillVal, len(layout.AggIdx))
+	var havingFilter *plan.Node
+	for _, node := range queryPlan.GetQuery().Nodes {
+		if node.NodeType == plan.Node_FILTER && len(node.FilterList) == 1 {
+			havingFilter = node
+			break
+		}
+	}
+	require.NotNil(t, havingFilter)
+	require.True(t, havingFilter.FilterIsBarrier)
+	require.Len(t, havingFilter.Children, 1)
+	require.Equal(t, fillNode.NodeId, havingFilter.Children[0])
+}
+
+func TestQueryBuilder_bindTimeWindowLinearFillKeepsHavingOnlyAggregateWithoutSelection(t *testing.T) {
+	mock := NewMockOptimizer(false)
+	mock.ctxt.objects["tw_having_only"] = &plan.ObjectRef{DbName: "test", ObjName: "tw_having_only", Obj: 42}
+	mock.ctxt.tables["tw_having_only"] = &plan.TableDef{
+		Name: "tw_having_only",
+		Cols: []*plan.ColDef{
+			{Name: "series_id", Typ: plan.Type{Id: int32(types.T_int32)}},
+			{Name: "ts", Typ: plan.Type{Id: int32(types.T_datetime)}},
+			{Name: "sort_key", Typ: plan.Type{Id: int32(types.T_int64)}},
+		},
+	}
+
+	queryPlan, err := runOneStmt(mock, t, `select series_id, _wstart
+from tw_having_only
+group by series_id
+having max(sort_key) > 0
+interval(ts, 1, minute) gapfill(partition) fill(linear)
+order by series_id, _wstart`)
+	require.NoError(t, err)
+
+	var timeWindowNode, fillNode *plan.Node
+	for _, node := range queryPlan.GetQuery().Nodes {
+		switch node.NodeType {
+		case plan.Node_TIME_WINDOW:
+			timeWindowNode = node
+		case plan.Node_FILL:
+			fillNode = node
+		}
+	}
+	require.NotNil(t, timeWindowNode)
+	require.NotNil(t, fillNode)
+	layout := BuildTimeWindowLayout(timeWindowNode)
+	require.Len(t, layout.AggIdx, 1)
+	require.Len(t, fillNode.AggList, len(layout.AggIdx))
+	require.Len(t, fillNode.FillVal, len(layout.AggIdx))
+}
+
 func TestQueryBuilder_bindOrderBy(t *testing.T) {
 	builder, bindCtx := genBuilderAndCtx()
 
@@ -4144,7 +4705,8 @@ func TestQueryBuilder_appendDistinctOrderProjectionNode(t *testing.T) {
 	inputID := builder.appendNode(&plan.Node{NodeType: plan.Node_VALUE_SCAN}, bindCtx)
 	projectID, err := builder.appendProjectionNode(bindCtx, inputID, false)
 	require.NoError(t, err)
-	distinctID := builder.appendDistinctNode(bindCtx, projectID)
+	distinctID, err := builder.appendDistinctNode(bindCtx, projectID)
+	require.NoError(t, err)
 	orderProjectID, orderTag, err := builder.appendDistinctOrderProjectionNode(bindCtx, distinctID, boundOrderBys)
 	require.NoError(t, err)
 	require.NotEqual(t, bindCtx.projectTag, orderTag)
@@ -4243,6 +4805,742 @@ func TestQueryBuilder_buildSetOperationOrderByNull(t *testing.T) {
 			require.NotNil(t, sortNodes[0].OrderBy[0].Expr.GetCol())
 		})
 	}
+}
+
+func TestSetOperationMixedCharVarcharUsesSeparatePadSpaceKey(t *testing.T) {
+	cases := []struct {
+		name     string
+		sql      string
+		nodeType plan.Node_NodeType
+		wantKey  bool
+	}{
+		{
+			name:     "mixed union",
+			sql:      "select cast('MO' as char(8)) union select cast('MO' as varchar(8))",
+			nodeType: plan.Node_UNION,
+			wantKey:  true,
+		},
+		{
+			name:     "mixed intersect",
+			sql:      "select cast('MO' as char(8)) intersect select cast('MO' as varchar(8))",
+			nodeType: plan.Node_INTERSECT,
+			wantKey:  true,
+		},
+		{
+			name:     "mixed minus",
+			sql:      "select cast('MO' as char(8)) minus select cast('MO' as varchar(8))",
+			nodeType: plan.Node_MINUS,
+			wantKey:  true,
+		},
+		{
+			name:     "reversed mixed union",
+			sql:      "select cast('MO' as varchar(8)) union select cast('MO' as char(8))",
+			nodeType: plan.Node_UNION,
+			wantKey:  true,
+		},
+		{
+			name:     "mixed char text union",
+			sql:      "select cast('MO' as char(8)) union select cast('MO' as text)",
+			nodeType: plan.Node_UNION,
+			wantKey:  true,
+		},
+		{
+			name:     "char-only union",
+			sql:      "select cast('MO' as char(8)) union select cast('MO' as char(4))",
+			nodeType: plan.Node_UNION,
+			wantKey:  true,
+		},
+		{
+			name:     "char-only intersect",
+			sql:      "select cast('MO' as char(8)) intersect select cast('MO' as char(4))",
+			nodeType: plan.Node_INTERSECT,
+			wantKey:  true,
+		},
+		{
+			name:     "char-only minus",
+			sql:      "select cast('MO' as char(8)) minus select cast('MO' as char(4))",
+			nodeType: plan.Node_MINUS,
+			wantKey:  true,
+		},
+		{
+			name:     "promoted char union",
+			sql:      "select coalesce(cast(n_name as char(8)), cast(n_comment as varchar(8))) from nation union select cast(r_name as varchar(8)) from region",
+			nodeType: plan.Node_UNION,
+			wantKey:  true,
+		},
+		{
+			name:     "derived promoted char union",
+			sql:      "select x from (select coalesce(cast(n_name as char(8)), cast(n_comment as varchar(8))) as x from nation) d union select cast(r_name as varchar(8)) from region",
+			nodeType: plan.Node_UNION,
+			wantKey:  true,
+		},
+		{
+			name:     "varchar control",
+			sql:      "select cast('MO ' as varchar(8)) union select cast('MO' as varchar(8))",
+			nodeType: plan.Node_UNION,
+			wantKey:  false,
+		},
+	}
+
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			logicPlan, err := runOneStmt(NewMockOptimizer(true), t, tc.sql)
+			require.NoError(t, err)
+
+			var setNode *plan.Node
+			for _, node := range logicPlan.GetQuery().Nodes {
+				if node.NodeType == tc.nodeType {
+					setNode = node
+					break
+				}
+			}
+			require.NotNil(t, setNode)
+			require.Len(t, setNode.ProjectList, 1)
+			require.NotNil(t, setNode.ProjectList[0].GetCol())
+			if !tc.wantKey {
+				require.Empty(t, setNode.PhysicalEqualityKeyList)
+				return
+			}
+
+			require.Len(t, setNode.PhysicalEqualityKeyList, 1)
+			keyFn := setNode.PhysicalEqualityKeyList[0].GetF()
+			require.NotNil(t, keyFn)
+			require.Equal(t, "cast", keyFn.Func.ObjName)
+			_, overloadID := function.DecodeOverloadID(keyFn.Func.Obj)
+			require.Equal(t, int32(3), overloadID)
+		})
+	}
+}
+
+func TestSetOperationMixedWidthCharUsesCommonPaddedType(t *testing.T) {
+	cases := []struct {
+		name     string
+		sql      string
+		nodeType plan.Node_NodeType
+	}{
+		{
+			name:     "union",
+			sql:      "select cast('MO' as char(8)) union select cast('MO' as char(4))",
+			nodeType: plan.Node_UNION,
+		},
+		{
+			name:     "intersect",
+			sql:      "select cast('MO' as char(8)) intersect select cast('MO' as char(4))",
+			nodeType: plan.Node_INTERSECT,
+		},
+		{
+			name:     "minus",
+			sql:      "select cast('MO' as char(8)) minus select cast('MO' as char(4))",
+			nodeType: plan.Node_MINUS,
+		},
+		{
+			name:     "reversed union",
+			sql:      "select cast('MO' as char(4)) union select cast('MO' as char(8))",
+			nodeType: plan.Node_UNION,
+		},
+	}
+
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			logicPlan, err := runOneStmt(NewMockOptimizer(true), t, tc.sql)
+			require.NoError(t, err)
+
+			query := logicPlan.GetQuery()
+			var setNode *plan.Node
+			for _, node := range query.Nodes {
+				if node.NodeType == tc.nodeType {
+					setNode = node
+					break
+				}
+			}
+			require.NotNil(t, setNode)
+			require.Len(t, setNode.ProjectList, 1)
+			require.Equal(t, int32(types.T_char), setNode.ProjectList[0].Typ.Id)
+			require.Equal(t, int32(8), setNode.ProjectList[0].Typ.Width)
+
+			require.Len(t, setNode.Children, 2)
+			for branch, childID := range setNode.Children {
+				require.GreaterOrEqual(t, childID, int32(0))
+				require.Less(t, int(childID), len(query.Nodes))
+				child := query.Nodes[childID]
+				require.Len(t, child.ProjectList, 1)
+				require.Equal(t, setNode.ProjectList[0].Typ, child.ProjectList[0].Typ,
+					"set-operation branch %d must use the common CHAR width", branch)
+			}
+		})
+	}
+}
+
+func TestSetOperationMixedCharVarcharCommonTypeIsOrderIndependent(t *testing.T) {
+	for _, tc := range []struct {
+		name string
+		sql  string
+	}{
+		{
+			name: "char first",
+			sql:  "select cast('MO' as char(8)) intersect select cast('MO' as varchar(8))",
+		},
+		{
+			name: "varchar first",
+			sql:  "select cast('MO' as varchar(8)) intersect select cast('MO' as char(8))",
+		},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			logicPlan, err := runOneStmt(NewMockOptimizer(true), t, tc.sql)
+			require.NoError(t, err)
+
+			var intersect *plan.Node
+			for _, node := range logicPlan.GetQuery().Nodes {
+				if node.NodeType == plan.Node_INTERSECT {
+					intersect = node
+					break
+				}
+			}
+			require.NotNil(t, intersect)
+			require.Len(t, intersect.ProjectList, 1)
+			require.Equal(t, int32(types.T_varchar), intersect.ProjectList[0].Typ.Id)
+			require.Equal(t, int32(8), intersect.ProjectList[0].Typ.Width)
+		})
+	}
+
+}
+
+func TestPreparedSetOperationPureCharUsesCommonPaddedType(t *testing.T) {
+	prepared, err := runOneStmt(NewMockOptimizer(false), t,
+		"prepare pure_char_set from 'select ? as v union all select ? as v'")
+	require.NoError(t, err)
+	preparedPlan := prepared.GetDcl().GetPrepare().Plan
+	cached := DeepCopyPlan(preparedPlan)
+
+	filled, specialized, err := FillValuesOfParamsInPlanWithSpecialization(
+		context.Background(), preparedPlan, []any{ParamValue{
+			Value: "MO", IsBinaryProtocol: true,
+			RuntimeType: types.New(types.T_char, 8, 0), HasRuntimeType: true,
+		}, ParamValue{
+			Value: "MO", IsBinaryProtocol: true,
+			RuntimeType: types.New(types.T_char, 4, 0), HasRuntimeType: true,
+		}},
+	)
+	require.NoError(t, err)
+	require.True(t, specialized)
+
+	var setNode *plan.Node
+	for _, node := range filled.GetQuery().Nodes {
+		if node.NodeType == plan.Node_UNION || node.NodeType == plan.Node_UNION_ALL {
+			setNode = node
+			break
+		}
+	}
+	require.NotNil(t, setNode)
+	require.Len(t, setNode.ProjectList, 1)
+	require.Equal(t, int32(types.T_char), setNode.ProjectList[0].Typ.Id, setNode.String())
+	require.Equal(t, int32(8), setNode.ProjectList[0].Typ.Width)
+	for branch, childID := range setNode.Children {
+		child := filled.GetQuery().Nodes[childID]
+		require.Equal(t, int32(types.T_char), child.ProjectList[0].Typ.Id,
+			"prepared branch %d must retain the common CHAR domain", branch)
+		require.Equal(t, int32(8), child.ProjectList[0].Typ.Width)
+	}
+	require.True(t, proto.Equal(cached, preparedPlan),
+		"prepared specialization must not mutate the cached template")
+
+	mixed, err := runOneStmt(NewMockOptimizer(false), t,
+		"prepare mixed_char_set from 'select ? as v union all select ? as v'")
+	require.NoError(t, err)
+	mixedFilled, _, err := FillValuesOfParamsInPlanWithSpecialization(
+		context.Background(), mixed.GetDcl().GetPrepare().Plan, []any{ParamValue{
+			Value: "MO", IsBinaryProtocol: true,
+			RuntimeType: types.New(types.T_char, 8, 0), HasRuntimeType: true,
+		}, ParamValue{
+			Value: "MO", IsBinaryProtocol: true,
+			RuntimeType: types.New(types.T_varchar, 4, 0), HasRuntimeType: true,
+		}},
+	)
+	require.NoError(t, err)
+	var mixedSetNode *plan.Node
+	for _, node := range mixedFilled.GetQuery().Nodes {
+		if node.NodeType == plan.Node_UNION || node.NodeType == plan.Node_UNION_ALL {
+			mixedSetNode = node
+			break
+		}
+	}
+	require.NotNil(t, mixedSetNode)
+	require.Equal(t, int32(types.T_varchar), mixedSetNode.ProjectList[0].Typ.Id,
+		"mixed CHAR/VARCHAR must keep the variable-string output domain")
+}
+
+func TestDistinctPromotedCharUsesSeparatePadSpaceKey(t *testing.T) {
+	for _, tc := range []struct {
+		name    string
+		sql     string
+		wantKey bool
+	}{
+		{
+			name:    "coalesce char varchar",
+			sql:     "select distinct coalesce(cast(n_name as char(8)), cast(n_comment as varchar(8))) from nation",
+			wantKey: true,
+		},
+		{
+			name:    "coalesce varchar control",
+			sql:     "select distinct coalesce(cast(n_name as varchar(8)), cast(n_comment as varchar(8))) from nation",
+			wantKey: false,
+		},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			logicPlan, err := runOneStmt(NewMockOptimizer(true), t, tc.sql)
+			require.NoError(t, err)
+
+			var distinctAgg *plan.Node
+			for _, node := range logicPlan.GetQuery().Nodes {
+				if node.NodeType == plan.Node_AGG && len(node.AggList) == 0 {
+					distinctAgg = node
+					break
+				}
+			}
+			require.NotNil(t, distinctAgg)
+			if !tc.wantKey {
+				require.Empty(t, distinctAgg.GroupByHashKey)
+				return
+			}
+			require.Len(t, distinctAgg.GroupBy, 2)
+			require.Equal(t, []int32{1}, distinctAgg.GroupByHashKey)
+			keyFn := distinctAgg.GroupBy[1].GetF()
+			require.NotNil(t, keyFn)
+			_, overloadID := function.DecodeOverloadID(keyFn.Func.Obj)
+			require.Equal(t, int32(3), overloadID)
+		})
+	}
+}
+
+func TestDistinctPromotedCharKeepsPadSpaceKeyAcrossDerivedTable(t *testing.T) {
+	for _, tc := range []struct {
+		name string
+		sql  string
+	}{
+		{
+			name: "derived table",
+			sql:  "select distinct x from (select coalesce(cast(n_name as char(8)), cast(n_comment as varchar(8))) as x from nation) d",
+		},
+		{
+			name: "cte",
+			sql:  "with d as (select coalesce(cast(n_name as char(8)), cast(n_comment as varchar(8))) as x from nation) select distinct x from d",
+		},
+		{
+			name: "union all",
+			sql:  "select distinct x from (select coalesce(cast(n_name as char(8)), cast(n_comment as varchar(8))) as x from nation union all select cast(r_name as varchar(8)) from region) d",
+		},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			logicPlan, err := runOneStmt(NewMockOptimizer(true), t, tc.sql)
+			require.NoError(t, err)
+
+			var distinctAgg *plan.Node
+			for _, node := range logicPlan.GetQuery().Nodes {
+				if node.NodeType == plan.Node_AGG && len(node.AggList) == 0 && len(node.GroupByHashKey) > 0 {
+					distinctAgg = node
+					break
+				}
+			}
+			require.NotNil(t, distinctAgg)
+			require.Len(t, distinctAgg.GroupBy, 2)
+			require.Equal(t, []int32{1}, distinctAgg.GroupByHashKey)
+		})
+	}
+}
+
+func TestPromotedCharPadSpaceMetadataCrossesTransparentBoundaries(t *testing.T) {
+	for _, tc := range []struct {
+		name string
+		sql  string
+	}{
+		{
+			name: "derived table",
+			sql:  "select x from (select coalesce(cast(n_name as char(8)), cast(n_comment as varchar(8))) as x from nation) d",
+		},
+		{
+			name: "cte",
+			sql:  "with d as (select coalesce(cast(n_name as char(8)), cast(n_comment as varchar(8))) as x from nation) select x from d",
+		},
+		{
+			name: "union all",
+			sql:  "select coalesce(cast(n_name as char(8)), cast(n_comment as varchar(8))) from nation union all select cast(r_name as varchar(8)) from region",
+		},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			logicPlan, err := runOneStmt(NewMockOptimizer(true), t, tc.sql)
+			require.NoError(t, err)
+			root := logicPlan.GetQuery().Nodes[logicPlan.GetQuery().Steps[0]]
+			require.NotEmpty(t, root.ProjectList)
+			require.True(t, root.ProjectList[0].Typ.PadSpace)
+		})
+	}
+}
+
+func TestWindowValueFunctionsPreservePromotedCharPadSpaceKey(t *testing.T) {
+	value := "coalesce(cast(n_name as char(8)), cast(n_comment as varchar(8)))"
+	for _, tc := range []struct {
+		name       string
+		windowExpr string
+		wantKey    bool
+	}{
+		{name: "lag", windowExpr: "lag(" + value + ") over (order by n_nationkey)", wantKey: true},
+		{name: "lead", windowExpr: "lead(" + value + ") over (order by n_nationkey)", wantKey: true},
+		{name: "first value", windowExpr: "first_value(" + value + ") over (order by n_nationkey)", wantKey: true},
+		{name: "last value", windowExpr: "last_value(" + value + ") over (order by n_nationkey)", wantKey: true},
+		{name: "nth value", windowExpr: "nth_value(" + value + ", 1) over (order by n_nationkey)", wantKey: true},
+		{
+			name:       "varchar control",
+			windowExpr: "lag(cast(n_name as varchar(8))) over (order by n_nationkey)",
+		},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			logicPlan, err := runOneStmt(
+				NewMockOptimizer(true),
+				t,
+				"select distinct y from (select "+tc.windowExpr+" as y from nation) d",
+			)
+			require.NoError(t, err)
+
+			var distinctAgg *plan.Node
+			for _, node := range logicPlan.GetQuery().Nodes {
+				if node.NodeType == plan.Node_AGG && len(node.AggList) == 0 {
+					distinctAgg = node
+					break
+				}
+			}
+			require.NotNil(t, distinctAgg)
+			if !tc.wantKey {
+				require.Empty(t, distinctAgg.GroupByHashKey)
+				return
+			}
+			require.Len(t, distinctAgg.GroupBy, 2)
+			require.Equal(t, []int32{1}, distinctAgg.GroupByHashKey)
+		})
+	}
+}
+
+func TestAggregateValueFunctionsPreservePromotedCharPadSpaceKey(t *testing.T) {
+	value := "coalesce(cast(n_name as char(8)), cast(n_comment as varchar(8)))"
+	for _, tc := range []struct {
+		name    string
+		expr    string
+		wantKey bool
+	}{
+		{name: "any value", expr: "any_value(" + value + ")", wantKey: true},
+		{name: "min", expr: "min(" + value + ")", wantKey: true},
+		{name: "max", expr: "max(" + value + ")", wantKey: true},
+		{name: "max by", expr: "max_by(" + value + ", n_nationkey, n_nationkey)", wantKey: true},
+		{name: "max by non null", expr: "max_by_non_null(" + value + ", n_nationkey, n_nationkey)", wantKey: true},
+		{
+			name: "max by order provenance does not taint value",
+			expr: "max_by(cast(n_name as varchar(8)), " + value + ", n_nationkey)",
+		},
+		{
+			name: "max by tie provenance does not taint value",
+			expr: "max_by(cast(n_name as varchar(8)), n_nationkey, " + value + ")",
+		},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			logicPlan, err := runOneStmt(
+				NewMockOptimizer(true),
+				t,
+				"select distinct x from (select "+tc.expr+
+					" as x from nation group by n_regionkey) d",
+			)
+			require.NoError(t, err)
+
+			var distinctAgg *plan.Node
+			for _, node := range logicPlan.GetQuery().Nodes {
+				if node.NodeType == plan.Node_AGG && len(node.AggList) == 0 {
+					distinctAgg = node
+					break
+				}
+			}
+			require.NotNil(t, distinctAgg)
+			if !tc.wantKey {
+				require.Empty(t, distinctAgg.GroupByHashKey)
+				return
+			}
+			require.Len(t, distinctAgg.GroupBy, 2)
+			require.Equal(t, []int32{1}, distinctAgg.GroupByHashKey)
+		})
+	}
+}
+
+func TestLeastGreatestPreservePromotedCharPadSpaceKey(t *testing.T) {
+	value := "coalesce(cast(n_name as char(8)), cast(n_comment as varchar(8)))"
+	for _, tc := range []struct {
+		name    string
+		expr    string
+		wantKey bool
+	}{
+		{name: "least first value argument", expr: "least(" + value + ", cast(n_comment as varchar(8)))", wantKey: true},
+		{name: "least second value argument", expr: "least(cast(n_comment as varchar(8)), " + value + ")", wantKey: true},
+		{name: "greatest first value argument", expr: "greatest(" + value + ", cast(n_comment as varchar(8)))", wantKey: true},
+		{name: "greatest second value argument", expr: "greatest(cast(n_comment as varchar(8)), " + value + ")", wantKey: true},
+		{name: "varchar control", expr: "least(cast(n_comment as varchar(8)), cast(n_comment as varchar(8)))"},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			logicPlan, err := runOneStmt(
+				NewMockOptimizer(true),
+				t,
+				"select distinct x from (select "+tc.expr+" as x from nation) d",
+			)
+			require.NoError(t, err)
+
+			var distinctAgg *plan.Node
+			for _, node := range logicPlan.GetQuery().Nodes {
+				if node.NodeType == plan.Node_AGG && len(node.AggList) == 0 {
+					distinctAgg = node
+					break
+				}
+			}
+			require.NotNil(t, distinctAgg)
+			if !tc.wantKey {
+				require.Empty(t, distinctAgg.GroupByHashKey)
+				return
+			}
+			require.Len(t, distinctAgg.GroupBy, 2)
+			require.Equal(t, []int32{1}, distinctAgg.GroupByHashKey)
+		})
+	}
+}
+
+func TestGroupByPromotedCharUsesSeparatePadSpaceKey(t *testing.T) {
+	for _, tc := range []struct {
+		name string
+		sql  string
+	}{
+		{
+			name: "direct",
+			sql:  "select coalesce(cast(n_name as char(8)), cast(n_comment as varchar(8))), count(*) from nation group by coalesce(cast(n_name as char(8)), cast(n_comment as varchar(8)))",
+		},
+		{
+			name: "derived table",
+			sql:  "select x, count(*) from (select coalesce(cast(n_name as char(8)), cast(n_comment as varchar(8))) as x from nation) d group by x",
+		},
+		{
+			name: "cte",
+			sql:  "with d as (select coalesce(cast(n_name as char(8)), cast(n_comment as varchar(8))) as x from nation) select x, count(*) from d group by x",
+		},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			logicPlan, err := runOneStmt(NewMockOptimizer(true), t, tc.sql)
+			require.NoError(t, err)
+
+			var aggregate *plan.Node
+			for _, node := range logicPlan.GetQuery().Nodes {
+				if node.NodeType == plan.Node_AGG && len(node.AggList) == 1 && len(node.GroupByHashKey) > 0 {
+					aggregate = node
+					break
+				}
+			}
+			require.NotNil(t, aggregate)
+			require.Len(t, aggregate.GroupBy, 2)
+			require.Equal(t, []int32{1}, aggregate.GroupByHashKey)
+			keyFn := aggregate.GroupBy[1].GetF()
+			require.NotNil(t, keyFn)
+			_, overloadID := function.DecodeOverloadID(keyFn.Func.Obj)
+			require.Equal(t, int32(3), overloadID)
+		})
+	}
+}
+
+func TestDistinctAggregatePromotedCharUsesSeparatePadSpaceKey(t *testing.T) {
+	value := "coalesce(cast(n_name as char(8)), cast(n_comment as varchar(8)))"
+	for _, tc := range []struct {
+		name        string
+		sql         string
+		wantGroupBy int
+		wantHashKey []int32
+		castPos     []int
+	}{
+		{
+			name:        "count distinct",
+			sql:         "select count(distinct " + value + ") from nation",
+			wantGroupBy: 2,
+			wantHashKey: []int32{1},
+			castPos:     []int{1},
+		},
+		{
+			name:        "promoted group and count distinct",
+			sql:         "select " + value + ", count(distinct n_regionkey) from nation group by " + value,
+			wantGroupBy: 3,
+			wantHashKey: []int32{1, 2},
+			castPos:     []int{1},
+		},
+		{
+			name:        "promoted group and promoted count distinct",
+			sql:         "select " + value + ", count(distinct " + value + ") from nation group by " + value,
+			wantGroupBy: 4,
+			wantHashKey: []int32{1, 3},
+			castPos:     []int{1, 3},
+		},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			logicPlan, err := runOneStmt(NewMockOptimizer(true), t, tc.sql)
+			require.NoError(t, err)
+
+			var innerAggregate *plan.Node
+			for _, node := range logicPlan.GetQuery().Nodes {
+				if node.NodeType == plan.Node_AGG && len(node.AggList) == 0 && len(node.GroupByHashKey) > 0 {
+					innerAggregate = node
+					break
+				}
+			}
+			require.NotNil(t, innerAggregate)
+			require.Len(t, innerAggregate.GroupBy, tc.wantGroupBy)
+			require.Equal(t, tc.wantHashKey, innerAggregate.GroupByHashKey)
+			for _, pos := range tc.castPos {
+				keyFn := innerAggregate.GroupBy[pos].GetF()
+				require.NotNil(t, keyFn)
+				_, overloadID := function.DecodeOverloadID(keyFn.Func.Obj)
+				require.Equal(t, int32(3), overloadID)
+			}
+		})
+	}
+}
+
+func TestDistinctAggregatePromotedCharUsesCanonicalArgumentsWhenNotRewritten(t *testing.T) {
+	value := "coalesce(cast(n_name as char(8)), cast(n_comment as varchar(8)))"
+	for _, sql := range []string{
+		"select count(distinct " + value + ", 1) from nation",
+		"select group_concat(distinct " + value + ") from nation",
+	} {
+		logicPlan, err := runOneStmt(NewMockOptimizer(true), t, sql)
+		require.NoError(t, err)
+
+		var aggregate *plan.Node
+		for _, node := range logicPlan.GetQuery().Nodes {
+			if node.NodeType == plan.Node_AGG && len(node.AggList) == 1 {
+				aggregate = node
+				break
+			}
+		}
+		require.NotNil(t, aggregate)
+		var hasCanonicalArgument bool
+		for _, arg := range aggregate.AggList[0].GetF().Args {
+			if isCastOverload(arg, 2) {
+				hasCanonicalArgument = true
+				break
+			}
+		}
+		require.True(t, hasCanonicalArgument, sql)
+	}
+}
+
+func TestDistinctAggregatePromotedCharCanonicalizesWhenRewriteIsSkipped(t *testing.T) {
+	value := "coalesce(cast(n_name as char(8)), cast(n_comment as varchar(8)))"
+	logicPlan, err := runOneStmt(NewMockOptimizer(true), t,
+		"select count(distinct "+value+"), sum(n_regionkey) from nation")
+	require.NoError(t, err)
+
+	var countDistinct *plan.Expr
+	for _, node := range logicPlan.GetQuery().Nodes {
+		if node.NodeType != plan.Node_AGG || len(node.AggList) != 2 {
+			continue
+		}
+		for _, agg := range node.AggList {
+			if f := agg.GetF(); f != nil && f.Func.ObjName == "count" {
+				countDistinct = agg
+				break
+			}
+		}
+	}
+	require.NotNil(t, countDistinct)
+	require.Len(t, countDistinct.GetF().Args, 1)
+	require.True(t, isCastOverload(countDistinct.GetF().Args[0], 2))
+}
+
+func TestDistinctAggregatePromotedCharCanonicalizesWhenGroupingSetsSkipRewrite(t *testing.T) {
+	value := "coalesce(cast(n_name as char(8)), cast(n_comment as varchar(8)))"
+	optimizer := NewMockOptimizer(true)
+	useLegacyGroupingSetPlan(t, optimizer)
+	logicPlan, err := runOneStmt(optimizer, t,
+		"select n_regionkey, count(distinct "+value+
+			") from nation group by rollup(n_regionkey)")
+	require.NoError(t, err)
+
+	var countDistinct *plan.Expr
+	for _, node := range logicPlan.GetQuery().Nodes {
+		if node.NodeType != plan.Node_AGG || len(node.GroupingFlag) == 0 {
+			continue
+		}
+		for _, agg := range node.AggList {
+			if f := agg.GetF(); f != nil && f.Func.ObjName == "count" {
+				countDistinct = agg
+				break
+			}
+		}
+	}
+	require.NotNil(t, countDistinct)
+	require.Len(t, countDistinct.GetF().Args, 1)
+	require.True(t, isCastOverload(countDistinct.GetF().Args[0], 2))
+}
+
+func TestWindowPadSpaceKeysUseCanonicalArguments(t *testing.T) {
+	for _, tc := range []struct {
+		name       string
+		value      string
+		charColumn bool
+	}{
+		{
+			name:  "promoted char value",
+			value: "coalesce(cast(n_name as char(8)), cast(n_comment as varchar(8)))",
+		},
+		{
+			name:       "direct char column",
+			value:      "n_name",
+			charColumn: true,
+		},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			mock := NewMockOptimizer(true)
+			if tc.charColumn {
+				table := DeepCopyTableDef(mock.ctxt.tables["nation"], true)
+				table.Cols[1].Typ = plan.Type{Id: int32(types.T_char), Width: 8}
+				mock.ctxt.tables["nation"] = table
+			}
+
+			logicPlan, err := runOneStmt(mock, t,
+				"select count(*) over (partition by "+tc.value+"), "+
+					"dense_rank() over (order by "+tc.value+"), "+
+					"sum(n_regionkey) over (order by "+tc.value+
+					" range between unbounded preceding and current row) from nation")
+			require.NoError(t, err)
+
+			var partition *plan.Node
+			windowsByName := make(map[string]*plan.WindowSpec)
+			for _, node := range logicPlan.GetQuery().Nodes {
+				if node.NodeType == plan.Node_PARTITION && len(node.OrderBy) == 1 {
+					partition = node
+				}
+				if node.NodeType == plan.Node_WINDOW {
+					for _, item := range node.WinSpecList {
+						if window := item.GetW(); window != nil {
+							windowsByName[window.Name] = window
+						}
+					}
+				}
+			}
+			require.NotNil(t, partition)
+			requireWindowPadSpaceComparisonCast(t, partition.OrderBy[0].Expr)
+
+			for _, name := range []string{"dense_rank", "sum"} {
+				window := windowsByName[name]
+				require.NotNil(t, window)
+				require.Len(t, window.OrderBy, 1)
+				requireWindowPadSpaceComparisonCast(t, window.OrderBy[0].Expr)
+			}
+		})
+	}
+}
+
+func requireWindowPadSpaceComparisonCast(t *testing.T, expr *plan.Expr) {
+	t.Helper()
+	require.NotNil(t, expr)
+	require.True(t, isCastOverload(expr, 2), expr.String())
+	require.Equal(t, int32(types.T_varchar), expr.Typ.Id)
 }
 
 func TestGroupConcatOrderByIsBoundPerAggregate(t *testing.T) {
@@ -4841,6 +6139,186 @@ func TestQueryBuilder_bindValues(t *testing.T) {
 	assert.Equal(t, 1, len(selectList))
 }
 
+func TestQueryBuilderBindValuesUsesColumnCommonType(t *testing.T) {
+	bindValues := func(t *testing.T, rows string) (*plan.Node, error) {
+		t.Helper()
+		builder := NewQueryBuilder(plan.Query_SELECT, NewMockCompilerContext(true), false, true)
+		bindCtx := NewBindContext(builder, nil)
+
+		stmts, err := parsers.Parse(
+			context.TODO(), dialect.MYSQL,
+			"select score from (values "+rows+") as tmp(score)", 1)
+		require.NoError(t, err)
+		tables := stmts[0].(*tree.Select).Select.(*tree.SelectClause).From.Tables
+		joinTable := tables[0].(*tree.JoinTableExpr)
+		aliasedTable := joinTable.Left.(*tree.AliasedTableExpr)
+		parenTable := aliasedTable.Expr.(*tree.ParenTableExpr)
+		valuesClause := parenTable.Expr.(*tree.Select).Select.(*tree.ValuesClause)
+
+		nodeID, _, err := builder.bindValues(bindCtx, valuesClause)
+		if err != nil {
+			return nil, err
+		}
+		return builder.qry.Nodes[nodeID], nil
+	}
+
+	for _, test := range []struct {
+		name        string
+		rows        string
+		oid         types.T
+		width       int32
+		scale       int32
+		notNullable bool
+	}{
+		{
+			name:        "decimal scale grows",
+			rows:        "row(26.27946), row(15.2667265)",
+			oid:         types.T_decimal64,
+			width:       9,
+			scale:       7,
+			notNullable: true,
+		},
+		{
+			name:        "decimal scale is order independent",
+			rows:        "row(15.2667265), row(26.27946)",
+			oid:         types.T_decimal64,
+			width:       9,
+			scale:       7,
+			notNullable: true,
+		},
+		{
+			name:  "bare null before decimal",
+			rows:  "row(null), row(26.27946)",
+			oid:   types.T_decimal64,
+			width: 7,
+			scale: 5,
+		},
+		{
+			name:  "bare null after decimal",
+			rows:  "row(26.27946), row(null)",
+			oid:   types.T_decimal64,
+			width: 7,
+			scale: 5,
+		},
+		{
+			name:  "all bare null",
+			rows:  "row(null), row(null)",
+			oid:   types.T_text,
+			width: 0,
+			scale: 0,
+		},
+		{
+			name:        "integer literal joins decimal precision",
+			rows:        "row(1), row(2.50)",
+			oid:         types.T_decimal64,
+			width:       3,
+			scale:       2,
+			notNullable: true,
+		},
+		{
+			name:        "datetime scale grows",
+			rows:        "row(cast('2024-01-02 12:34:56.123' as datetime(3))), row(cast('2024-01-02 12:34:56.123456' as datetime(6)))",
+			oid:         types.T_datetime,
+			width:       6,
+			scale:       6,
+			notNullable: true,
+		},
+		{
+			name:        "datetime scale is order independent",
+			rows:        "row(cast('2024-01-02 12:34:56.123456' as datetime(6))), row(cast('2024-01-02 12:34:56.123' as datetime(3)))",
+			oid:         types.T_datetime,
+			width:       6,
+			scale:       6,
+			notNullable: true,
+		},
+		{
+			name:        "char width grows",
+			rows:        "row(cast('a' as char(4))), row(cast('abcdefgh' as char(8)))",
+			oid:         types.T_char,
+			width:       8,
+			notNullable: true,
+		},
+		{
+			name:        "char width is order independent",
+			rows:        "row(cast('abcdefgh' as char(8))), row(cast('a' as char(4)))",
+			oid:         types.T_char,
+			width:       8,
+			notNullable: true,
+		},
+	} {
+		t.Run(test.name, func(t *testing.T) {
+			node, err := bindValues(t, test.rows)
+			require.NoError(t, err)
+			require.Len(t, node.TableDef.Cols, 1)
+			columnType := node.TableDef.Cols[0].Typ
+			require.Equal(t, int32(test.oid), columnType.Id)
+			require.Equal(t, test.width, columnType.Width)
+			require.Equal(t, test.scale, columnType.Scale)
+			require.Equal(t, test.notNullable, columnType.NotNullable)
+
+			require.Len(t, node.RowsetData.Cols, 1)
+			for _, row := range node.RowsetData.Cols[0].Data {
+				require.Equal(t, columnType.Id, row.Expr.Typ.Id)
+				require.Equal(t, columnType.Width, row.Expr.Typ.Width)
+				require.Equal(t, columnType.Scale, row.Expr.Typ.Scale)
+			}
+		})
+	}
+
+	t.Run("string comparison provenance", func(t *testing.T) {
+		for _, test := range []struct {
+			rows     string
+			padSpace bool
+		}{
+			{"row(coalesce(cast('a   ' as char(4)), cast('x' as varchar(8))))", true},
+			{"row(cast('a' as varchar(8))), row(cast('a   ' as char(4)))", true},
+			{"row(cast('a   ' as char(4))), row(cast('a' as varchar(8)))", true},
+			{"row(null), row(coalesce(cast('a   ' as char(4)), cast('x' as varchar(8))))", true},
+			{"row(cast(null as char(4))), row(cast('a' as varchar(8)))", true},
+			{"row(coalesce(cast('a   ' as char(4)), cast('x' as varchar(8)))), row(cast('a' as varchar(8)))", true},
+			{"row(null), row(null)", false},
+			{"row(cast('a   ' as varchar(8))), row(cast('a' as varchar(8)))", false},
+			{"row(concat(cast('a' as char(4)), '   '))", false},
+		} {
+			t.Run(test.rows, func(t *testing.T) {
+				node, err := bindValues(t, test.rows)
+				require.NoError(t, err)
+				require.Equal(t, test.padSpace, node.TableDef.Cols[0].Typ.PadSpace)
+			})
+		}
+	})
+
+	t.Run("vector remains vector", func(t *testing.T) {
+		node, err := bindValues(t, "row(cast('[1,2,3]' as vecf32(3)))")
+		require.NoError(t, err)
+		columnType := node.TableDef.Cols[0].Typ
+		require.Equal(t, int32(types.T_array_float32), columnType.Id)
+		require.Equal(t, int32(3), columnType.Width)
+		require.Len(t, node.RowsetData.Cols[0].Data, 1)
+		require.Equal(t, columnType.Id, node.RowsetData.Cols[0].Data[0].Expr.Typ.Id)
+		require.Equal(t, columnType.Width, node.RowsetData.Cols[0].Data[0].Expr.Typ.Width)
+	})
+
+	t.Run("parameter-only column remains unresolved", func(t *testing.T) {
+		builder := NewQueryBuilder(plan.Query_SELECT, NewMockCompilerContext(true), false, true)
+		exprs := []*plan.Expr{
+			{Typ: plan.Type{Id: int32(types.T_any)}},
+			{Typ: plan.Type{Id: int32(types.T_any)}},
+		}
+		commonType, err := builder.coerceValuesColumnToCommonType(exprs, []bool{false, false}, 0)
+		require.NoError(t, err)
+		require.Equal(t, int32(types.T_any), commonType.Id)
+		for _, expr := range exprs {
+			require.Equal(t, int32(types.T_any), expr.Typ.Id)
+		}
+	})
+
+	t.Run("incompatible vector and scalar types are rejected", func(t *testing.T) {
+		_, err := bindValues(t, "row(1), row(cast('[1,2,3]' as vecf32(3)))")
+		require.Error(t, err)
+	})
+}
+
 func TestQueryBuilderBuildValuesAndTableSubqueries(t *testing.T) {
 	for _, sql := range []string{
 		"select (values row(1))",
@@ -4919,7 +6397,7 @@ func TestQueryBuilder_appendAggNode(t *testing.T) {
 	boundHavingList, err := builder.bindHaving(bindCtx, selectClause.Having, NewHavingBinder(builder, bindCtx))
 	require.NoError(t, err)
 
-	nodeID, err = builder.appendAggNode(bindCtx, nodeID, boundHavingList, false)
+	nodeID, _, err = builder.appendAggNode(bindCtx, nodeID, boundHavingList, false)
 	require.NoError(t, err)
 	require.Equal(t, int32(2), nodeID)
 	require.Equal(t, 3, len(builder.qry.Nodes))
@@ -4945,6 +6423,7 @@ func TestQueryBuilder_appendTimeWindowNode(t *testing.T) {}
 
 func TestQueryBuilder_appendWindowNode(t *testing.T) {
 	builder := NewQueryBuilder(plan.Query_SELECT, NewMockCompilerContext(true), false, true)
+	builder.sortSpillMem = 4096
 	bindCtx := NewBindContext(builder, nil)
 	bindCtx.groupTag = builder.GenNewBindTag()
 	bindCtx.aggregateTag = builder.GenNewBindTag()
@@ -4969,7 +6448,7 @@ func TestQueryBuilder_appendWindowNode(t *testing.T) {
 	require.NoError(t, err)
 	require.Len(t, bindCtx.windows, 1)
 
-	nodeID, err = builder.appendAggNode(bindCtx, nodeID, boundHavingList, false)
+	nodeID, _, err = builder.appendAggNode(bindCtx, nodeID, boundHavingList, false)
 	require.NoError(t, err)
 	require.Equal(t, plan.Node_AGG, builder.qry.Nodes[nodeID].NodeType)
 
@@ -4984,6 +6463,7 @@ func TestQueryBuilder_appendWindowNode(t *testing.T) {
 	for _, node := range builder.qry.Nodes {
 		if node.NodeType == plan.Node_WINDOW {
 			windowNodeFound = true
+			require.Equal(t, int64(4096), node.SpillMem)
 			break
 		}
 	}
@@ -5052,7 +6532,8 @@ func TestQueryBuilder_appendDistinctNode(t *testing.T) {
 	require.NoError(t, err)
 	require.Equal(t, int32(0), nodeID)
 
-	nodeID = builder.appendDistinctNode(bindCtx, nodeID)
+	nodeID, err = builder.appendDistinctNode(bindCtx, nodeID)
+	require.NoError(t, err)
 	require.Equal(t, int32(1), nodeID)
 
 	distinctNode := builder.qry.Nodes[1]
@@ -6890,6 +8371,7 @@ func hasAggAboveUnionAll(p *Plan) bool {
 // The non-distinct form has no such de-dup step.
 func TestGroupingSetDistinctGlobalDedup(t *testing.T) {
 	mock := NewMockOptimizer(false)
+	useLegacyGroupingSetPlan(t, mock)
 
 	distinctPlan, err := runOneStmt(mock, t,
 		"select distinct a, grouping(a) as ga from select_test.bind_select group by a, b with rollup")

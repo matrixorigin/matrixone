@@ -28,6 +28,7 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/pb/plan"
 	"github.com/matrixorigin/matrixone/pkg/vectorindex"
 	"github.com/matrixorigin/matrixone/pkg/vectorindex/hnsw"
+	"github.com/matrixorigin/matrixone/pkg/vectorindex/memory"
 	"github.com/matrixorigin/matrixone/pkg/vectorindex/quantizer"
 	"github.com/matrixorigin/matrixone/pkg/vectorindex/sqlexec"
 )
@@ -541,7 +542,24 @@ func (w *HnswSqlWriter[T]) ToSql() ([]byte, error) {
 }
 
 func (w *HnswSqlWriter[T]) NewSync(sqlproc *sqlexec.SqlProcess) (*hnsw.HnswSync[T], error) {
-	return hnsw.NewHnswSync[T](sqlproc, w.meta.DbName, w.meta.Table, w.info.IndexName, w.indexdef, w.meta.VecType, w.meta.Dimension)
+	// Route this sync's model files onto the LOCAL (SSD) fileservice rather than $TMPDIR, the
+	// same way the fulltext2 consumer routes its tail spills: an hnsw model is multi-GB and the
+	// search path mmaps it for a cache entry's whole lifetime, so on a host where $TMPDIR is a
+	// tmpfs it is charged to RAM. A CDC sync runs on a SqlContext with no process.Process, so
+	// the FileService has to come from the ISCP executor, which publishes the CN root FS.
+	// spillDir=="" (no LOCAL attached / executor not found) falls back to $TMPDIR, unchanged.
+	return hnsw.NewHnswSync[T](sqlproc, w.meta.DbName, w.meta.Table, w.info.IndexName, w.indexdef, w.meta.VecType, w.meta.Dimension, resolveHostSpillDir(sqlproc))
+}
+
+// resolveHostSpillDir answers where this sync's model files go. Split out of NewSync so the
+// routing is observable on its own: NewSync's other failure modes are raised before the spill
+// dir is ever used, so a test driving NewSync cannot tell a resolved path from an empty one.
+func resolveHostSpillDir(sqlproc *sqlexec.SqlProcess) string {
+	exec, ok := GetExecutorRuntime(sqlproc.GetService())
+	if !ok {
+		return ""
+	}
+	return memory.HostSpillDir(sqlproc.GetContext(), exec.rootFS, sqlproc.GetService())
 }
 
 // Implementation of Ivfflat Sql writer

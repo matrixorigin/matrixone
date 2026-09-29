@@ -18,9 +18,10 @@ import (
 	"bytes"
 	"context"
 	"encoding/hex"
-	"errors"
 	"fmt"
 	"reflect"
+	"sync"
+	"sync/atomic"
 
 	"go.uber.org/zap"
 
@@ -627,10 +628,16 @@ type concurrentTask func() error
 
 // ConcurrentExecutor is an interface that runs tasks concurrently.
 type ConcurrentExecutor interface {
-	// AppendTask append the concurrent task to the exuecutor.
-	AppendTask(concurrentTask)
+	// AppendTask admits a task or returns without taking ownership. Once
+	// admitted, the executor calls complete exactly once with either the task
+	// result or its own lifecycle cancellation.
+	AppendTask(context.Context, concurrentTask, func(error)) error
 	// Run starts receive task to execute.
 	Run(context.Context)
+	// LifecycleContext is canceled when the executor stops. A task group uses
+	// it to cancel work that a worker already owns, while queued work is rejected
+	// through the completion callback above.
+	LifecycleContext() context.Context
 	// GetConcurrency returns the concurrency of this executor.
 	GetConcurrency() int
 }
@@ -639,40 +646,145 @@ type concurrentExecutor struct {
 	// concurrency is the concurrency to run the tasks at the same time.
 	concurrency int
 	// task contains all the tasks needed to run.
-	tasks chan concurrentTask
+	tasks chan queuedConcurrentTask
+
+	runOnce   sync.Once
+	stopOnce  sync.Once
+	stopCh    chan struct{}
+	stopCause atomic.Pointer[concurrentExecutorStop]
+	workers   sync.WaitGroup
+
+	// submitMu closes the race between a producer admitting work and shutdown
+	// draining the queue. Shutdown signals stopCh before taking the write lock,
+	// so a producer blocked on a full queue can always leave promptly.
+	submitMu  sync.RWMutex
+	stopped   bool
+	lifecycle context.Context
+}
+
+type queuedConcurrentTask struct {
+	run      concurrentTask
+	complete func(error)
+}
+
+type concurrentExecutorStop struct {
+	err error
 }
 
 func newConcurrentExecutor(concurrency int) ConcurrentExecutor {
 	return &concurrentExecutor{
 		concurrency: concurrency,
-		tasks:       make(chan concurrentTask, 2048),
+		tasks:       make(chan queuedConcurrentTask, 2048),
+		stopCh:      make(chan struct{}),
 	}
 }
 
 // AppendTask implements the ConcurrentExecutor interface.
-func (e *concurrentExecutor) AppendTask(t concurrentTask) {
-	e.tasks <- t
+func (e *concurrentExecutor) AppendTask(
+	ctx context.Context,
+	t concurrentTask,
+	complete func(error),
+) error {
+	e.submitMu.RLock()
+	defer e.submitMu.RUnlock()
+	if e.stopped {
+		return e.stoppedError()
+	}
+
+	// Prefer rejection once shutdown is already observable. The second select
+	// still covers shutdown or caller cancellation racing queue admission.
+	select {
+	case <-e.stopCh:
+		return e.stoppedError()
+	default:
+	}
+	select {
+	case e.tasks <- queuedConcurrentTask{run: t, complete: complete}:
+		return nil
+	case <-ctx.Done():
+		return context.Cause(ctx)
+	case <-e.stopCh:
+		return e.stoppedError()
+	}
 }
 
 // Run implements the ConcurrentExecutor interface.
 func (e *concurrentExecutor) Run(ctx context.Context) {
-	for i := 0; i < e.concurrency; i++ {
-		go func() {
-			for {
-				select {
-				case <-ctx.Done():
-					return
+	e.runOnce.Do(func() {
+		e.submitMu.Lock()
+		e.lifecycle = ctx
+		e.submitMu.Unlock()
+		e.workers.Add(e.concurrency)
+		for i := 0; i < e.concurrency; i++ {
+			go e.runWorker()
+		}
+		go e.stopWhenDone(ctx)
+	})
+}
 
-				case t := <-e.tasks:
-					if err := t(); err != nil {
-						if !errors.Is(err, context.Canceled) {
-							logutil.Errorf("failed to execute task: %v", err)
-						}
-					}
-				}
+func (e *concurrentExecutor) LifecycleContext() context.Context {
+	e.submitMu.RLock()
+	defer e.submitMu.RUnlock()
+	return e.lifecycle
+}
+
+func (e *concurrentExecutor) runWorker() {
+	defer e.workers.Done()
+	for {
+		// Make shutdown deterministic after the current task. Without this
+		// priority check, a ready queue and a closed stop channel could keep
+		// selecting more data work while shutdown waits.
+		select {
+		case <-e.stopCh:
+			return
+		default:
+		}
+		select {
+		case <-e.stopCh:
+			return
+		case task := <-e.tasks:
+			err := task.run()
+			if task.complete != nil {
+				task.complete(err)
 			}
-		}()
+		}
 	}
+}
+
+func (e *concurrentExecutor) stopWhenDone(ctx context.Context) {
+	<-ctx.Done()
+	cause := context.Cause(ctx)
+	if cause == nil {
+		cause = context.Canceled
+	}
+	e.stopOnce.Do(func() {
+		e.stopCause.Store(&concurrentExecutorStop{err: cause})
+		close(e.stopCh)
+	})
+
+	// Wait for every producer that could still admit a task, then prevent all
+	// future admission before workers stop and the remaining queue is rejected.
+	e.submitMu.Lock()
+	e.stopped = true
+	e.submitMu.Unlock()
+	e.workers.Wait()
+	for {
+		select {
+		case task := <-e.tasks:
+			if task.complete != nil {
+				task.complete(cause)
+			}
+		default:
+			return
+		}
+	}
+}
+
+func (e *concurrentExecutor) stoppedError() error {
+	if stopped := e.stopCause.Load(); stopped != nil && stopped.err != nil {
+		return stopped.err
+	}
+	return context.Canceled
 }
 
 // GetConcurrency implements the ConcurrentExecutor interface.

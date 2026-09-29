@@ -265,6 +265,63 @@ func TestWaitUniqueJoinKeysForTableFunction(t *testing.T) {
 	})
 }
 
+func TestWaitUniqueJoinKeysWithStatus(t *testing.T) {
+	t.Run("none", func(t *testing.T) {
+		proc := testutil.NewProcessWithMPool(t, "", mpool.MustNewZero())
+		sqlproc := NewSqlProcess(proc)
+		data, status, err := WaitUniqueJoinKeysWithStatus(sqlproc)
+		require.NoError(t, err)
+		require.Nil(t, data)
+		require.Equal(t, UniqueJoinKeysNone, status)
+	})
+
+	t.Run("available", func(t *testing.T) {
+		proc := testutil.NewProcessWithMPool(t, "", mpool.MustNewZero())
+		mb := message.NewMessageBoard()
+		proc.SetMessageBoard(mb)
+		sqlproc := NewSqlProcess(proc)
+		tag := int32(899)
+		payload := []byte{1, 2, 3}
+		message.SendMessage(message.RuntimeFilterMessage{
+			Tag: tag, Typ: message.RuntimeFilter_UNIQUEJOINKEYS, Data: payload,
+		}, mb)
+		sqlproc.RuntimeFilterSpecs = []*plan.RuntimeFilterSpec{{
+			Tag: tag, UseMembershipFilter: true,
+		}}
+
+		data, status, err := WaitUniqueJoinKeysWithStatus(sqlproc)
+		require.NoError(t, err)
+		require.Equal(t, payload, data)
+		require.Equal(t, UniqueJoinKeysAvailable, status)
+	})
+
+	for _, tc := range []struct {
+		name   string
+		typ    int32
+		status UniqueJoinKeysStatus
+	}{
+		{name: "pass", typ: message.RuntimeFilter_PASS, status: UniqueJoinKeysPass},
+		{name: "drop", typ: message.RuntimeFilter_DROP, status: UniqueJoinKeysDrop},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			proc := testutil.NewProcessWithMPool(t, "", mpool.MustNewZero())
+			mb := message.NewMessageBoard()
+			proc.SetMessageBoard(mb)
+			sqlproc := NewSqlProcess(proc)
+			tag := int32(900)
+			message.SendMessage(message.RuntimeFilterMessage{Tag: tag, Typ: tc.typ}, mb)
+			sqlproc.RuntimeFilterSpecs = []*plan.RuntimeFilterSpec{{
+				Tag: tag, UseMembershipFilter: true,
+			}}
+
+			data, status, err := WaitUniqueJoinKeysWithStatus(sqlproc)
+			require.NoError(t, err)
+			require.Nil(t, data)
+			require.Equal(t, tc.status, status)
+		})
+	}
+}
+
 func TestBuildExactPkFilter(t *testing.T) {
 	mp := mpool.MustNewZero()
 	proc := testutil.NewProcessWithMPool(t, "", mp)

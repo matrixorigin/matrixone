@@ -391,42 +391,46 @@ func TestDoHeartbeatInvalidTask(t *testing.T) {
 
 func TestRemoveRunningTask(t *testing.T) {
 	runTaskRunnerTest(t, func(r *taskRunner, s TaskService, store TaskStorage) {
+		executorStarted := make(chan struct{})
+		releaseExecutor := make(chan struct{})
+		var releaseOnce sync.Once
+		release := func() {
+			releaseOnce.Do(func() { close(releaseExecutor) })
+		}
+		defer release()
 		r.RegisterExecutor(0, func(ctx context.Context, task task.Task) error {
+			close(executorStarted)
+			<-releaseExecutor
 			return nil
 		})
 		mustAddTestAsyncTask(t, store, 1, newTestAsyncTask("t1"))
 		mustAllocTestTask(t, s, store, map[string]string{"t1": r.runnerID})
 
 		task := mustGetTestAsyncTask(t, store, 1)[0]
-		r.addToWait(context.Background(), task)
-		r.removeRunningTask(task.ID)
-		time.Sleep(1 * time.Second)
-		timeout := time.After(5 * time.Second)
-		for {
-			select {
-			case <-timeout:
-				require.Fail(t, "timeout waiting for task to be removed and added to completedTasks")
-			default:
-				r.runningTasks.RLock()
-				_, exists := r.runningTasks.m[task.ID]
-				if len(r.runningTasks.completedTasks) != 0 {
-					_, completed := r.runningTasks.completedTasks[task.ID]
-					if !exists && completed {
-						r.runningTasks.RUnlock()
-						return
-					}
-				} else {
-					if !exists {
-						r.runningTasks.RUnlock()
-						return
-					}
-				}
-				r.runningTasks.RUnlock()
-				time.Sleep(10 * time.Millisecond)
-			}
+		require.True(t, r.addToWait(context.Background(), task))
+		select {
+		case <-executorStarted:
+		case <-time.After(10 * time.Second):
+			require.Fail(t, "executor did not start")
 		}
+		r.removeRunningTask(task.ID)
+		r.runningTasks.RLock()
+		_, exists := r.runningTasks.m[task.ID]
+		_, completed := r.runningTasks.completedTasks[task.ID]
+		r.runningTasks.RUnlock()
+		require.False(t, exists, "removed task should not be in runningTasks")
+		require.True(t, completed, "removed task should be in completedTasks")
+
+		tasks, err := r.doFetch()
+		require.NoError(t, err)
+		require.Empty(t, tasks, "fetch should not return the task marked completed")
+		r.runningTasks.RLock()
+		_, completed = r.runningTasks.completedTasks[task.ID]
+		r.runningTasks.RUnlock()
+		require.False(t, completed, "fetch should clear completedTasks after reconciliation")
+		release()
 	}, WithRunnerParallelism(1),
-		WithRunnerFetchInterval(time.Millisecond))
+		WithRunnerFetchInterval(time.Hour))
 }
 
 func TestRemoveRunningTaskNotExists(t *testing.T) {

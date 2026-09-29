@@ -28,7 +28,6 @@ type updatePlannerRoute string
 
 const (
 	updatePlannerModern      updatePlannerRoute = "modern"
-	updatePlannerLegacy      updatePlannerRoute = "legacy"
 	updatePlannerSpecialized updatePlannerRoute = "specialized"
 	updatePlannerRejected    updatePlannerRoute = "rejected"
 	updatePlannerUnknown     updatePlannerRoute = "unknown"
@@ -37,17 +36,16 @@ const (
 type updatePlannerRouteReason string
 
 const (
-	updateRouteReasonNone            updatePlannerRouteReason = "none"
-	updateRouteReasonMultiTarget     updatePlannerRouteReason = "multi_target"
-	updateRouteReasonForeignKey      updatePlannerRouteReason = "foreign_key"
-	updateRouteReasonIrregularIndex  updatePlannerRouteReason = "irregular_index"
-	updateRouteReasonAutoIncrementFK updatePlannerRouteReason = "auto_increment_foreign_key"
-	updateRouteReasonIceberg         updatePlannerRouteReason = "iceberg"
-	updateRouteReasonExternalTable   updatePlannerRouteReason = "external_table"
-	updateRouteReasonTableForm       updatePlannerRouteReason = "unsupported_table_form"
-	updateRouteReasonEmptyTableName  updatePlannerRouteReason = "empty_table_name"
-	updateRouteReasonBinderError     updatePlannerRouteReason = "binder_error"
-	updateRouteReasonUnknown         updatePlannerRouteReason = "unknown"
+	updateRouteReasonNone           updatePlannerRouteReason = "none"
+	updateRouteReasonMultiTarget    updatePlannerRouteReason = "multi_target"
+	updateRouteReasonForeignKey     updatePlannerRouteReason = "foreign_key"
+	updateRouteReasonIrregularIndex updatePlannerRouteReason = "irregular_index"
+	updateRouteReasonIceberg        updatePlannerRouteReason = "iceberg"
+	updateRouteReasonExternalTable  updatePlannerRouteReason = "external_table"
+	updateRouteReasonTableForm      updatePlannerRouteReason = "unsupported_table_form"
+	updateRouteReasonEmptyTableName updatePlannerRouteReason = "empty_table_name"
+	updateRouteReasonBinderError    updatePlannerRouteReason = "binder_error"
+	updateRouteReasonUnknown        updatePlannerRouteReason = "unknown"
 )
 
 type updatePlannerRouteError struct {
@@ -76,8 +74,8 @@ func newUpdatePlannerRouteError(
 	}
 }
 
-func newLegacyUpdatePlannerRouteError(reason updatePlannerRouteReason, err error) error {
-	return newUpdatePlannerRouteError(updatePlannerLegacy, reason, err)
+func newRejectedUpdatePlannerRouteError(reason updatePlannerRouteReason, err error) error {
+	return newUpdatePlannerRouteError(updatePlannerRejected, reason, err)
 }
 
 func classifyUpdatePlannerError(err error) (updatePlannerRoute, updatePlannerRouteReason, error) {

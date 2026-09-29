@@ -51,7 +51,7 @@ func transferInmemTombstones(
 
 	return txn.forEachTableHasDeletesLocked(
 		false,
-		func(tbl *txnTable) error {
+		func(tbl *txnTable, _ string) error {
 			state, err := tbl.getPartitionState(ctx)
 			if err != nil {
 				return err
@@ -101,7 +101,7 @@ func transferTombstoneObjects(
 
 	return txn.forEachTableHasDeletesLocked(
 		true,
-		func(tbl *txnTable) error {
+		func(tbl *txnTable, writeName string) error {
 			now := time.Now()
 			if flow, logs, err = ConstructCNTombstoneObjectsTransferFlow(
 				ctx, start, end, tbl, txn, txn.proc.Mp(), fs); err != nil {
@@ -151,7 +151,7 @@ func transferTombstoneObjects(
 				if err = txn.writeFileLockedWithAutoIncrEpoch(
 					DELETE,
 					tbl.accountId, tbl.db.databaseId, tbl.tableId,
-					tbl.db.databaseName, tbl.tableName, fileName,
+					tbl.db.databaseName, writeName, fileName,
 					bat, txn.tnStores[0],
 					tbl.extraInfo.AutoIncrEpoch,
 				); err != nil {
@@ -511,7 +511,10 @@ func doTransferRowids(
 	}()
 
 	pkColumName := table.GetTableDef(ctx).Pkey.PkeyColName
-	expr := readutil.ConstructInExpr(ctx, pkColumName, searchPKColumn)
+	expr, err := readutil.ConstructInExpr(ctx, pkColumName, searchPKColumn)
+	if err != nil {
+		return err
+	}
 	rangesParam := engine.RangesParam{
 		BlockFilters:   []*plan.Expr{expr},
 		PreAllocBlocks: 2,

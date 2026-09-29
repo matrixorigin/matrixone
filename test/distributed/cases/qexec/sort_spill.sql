@@ -23,6 +23,12 @@ select id, grp from t1 where id <= 6 order by grp, id;
 explain (analyze true, check '["Sort", "SpillSize=", "Sort Key: t1.grp INTERNAL, t1.id INTERNAL"]')
 select id, grp from t1 order by grp, id;
 
+-- @ignore:0
+-- @regex("SpillRows=[1-9][0-9]*", true)
+-- @regex("SpillSize=[1-9][0-9]*", true)
+explain (analyze true, check '["Window", "SpillRows=", "SpillSize="]')
+select id, row_number() over (order by grp, id) as rn from t1;
+
 set @@max_dop = 0;
 set @@sort_spill_mem = 0;
 show variables like 'sort_spill_mem';

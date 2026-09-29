@@ -204,7 +204,7 @@ desc src;
 Field    Type    Null    Key    Default    Extra    Comment
 id    BIGINT(64)    NO    PRI    null        
 body    VARCHAR(65535)    YES    MUL    null        
-title    TEXT(0)    YES        null        
+title    TEXT    YES        null        
 show create table src;
 Table    Create Table
 src    CREATE TABLE `src` (\n  `id` bigint NOT NULL,\n  `body` varchar(65535) DEFAULT NULL,\n  `title` text DEFAULT NULL,\n  PRIMARY KEY (`id`),\n FULLTEXT `ftidx`(`body`,`title`) WITH PARSER gojieba,\n FULLTEXT `ftidx2`(`body`) WITH PARSER gojieba\n)

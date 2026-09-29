@@ -24,8 +24,64 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/pb/lock"
 	"github.com/matrixorigin/matrixone/pkg/pb/plan"
 	"github.com/matrixorigin/matrixone/pkg/pb/timestamp"
+	"github.com/matrixorigin/matrixone/pkg/pb/txn"
 	"github.com/matrixorigin/matrixone/pkg/txn/client"
 )
+
+type ParamValue struct {
+	Value any
+	IsBin bool
+	// IsBinaryString is the legacy binary-domain metadata retained for
+	// compatibility with callers that have not adopted RuntimeStringDomain.
+	IsBinaryString bool
+	// IsBinaryProtocol records that the value came from COM_STMT_EXECUTE.
+	// It is intentionally separate from IsBin: a VAR_STRING parameter is a
+	// binary-protocol value without being a binary string literal.
+	IsBinaryProtocol bool
+	PrepareParamKind vector.PrepareParamKind
+	// SourceType is the logical type of a SQL EXECUTE USING user variable. It
+	// is deliberately separate from RuntimeType: SQL parameters are transported
+	// through a text vector. Selected functions with runtime-domain-sensitive
+	// semantics (including FIELD and variadic extrema) restore this type on the
+	// execute-time plan copy; ordinary comparisons retain their established
+	// common-type and numeric-prefix contracts.
+	SourceType          types.Type
+	HasSourceType       bool
+	RuntimeStringDomain types.RuntimeStringDomain
+	// RuntimeType is the type advertised by the binary-protocol parameter
+	// binding.  Prepared plans deliberately keep parameter markers as TEXT
+	// while they are cached, so the execute-time copy can use this optional
+	// type to rebind overloaded functions and result metadata without mutating
+	// the cached plan.
+	RuntimeType    types.Type
+	HasRuntimeType bool
+	// InetNtoaSourceType carries a SQL EXECUTE user's assignment-time domain
+	// only for INET_NTOA. It must not participate in generic parameter
+	// coercion: a DATE/TIME/JSON user variable is still a text transport value
+	// for unrelated arithmetic and comparisons.
+	InetNtoaSourceType    types.Type
+	HasInetNtoaSourceType bool
+	// DirectResultType is the wire-visible DECIMAL domain parsed from the same
+	// binary-protocol lexeme as RuntimeType. RuntimeType keeps the normalized
+	// numeric-prefix domain used by common-type consumers; a direct result keeps
+	// the visible scale when representable and otherwise uses the normalized
+	// domain for lexemes whose only excess digits are removable trailing zeroes.
+	DirectResultType    types.Type
+	HasDirectResultType bool
+	// MaterializedValue is a bounded canonical DECIMAL lexeme produced by the
+	// protocol scanner. Typed literal construction uses it instead of reparsing
+	// the potentially max-packet-sized raw Value.
+	MaterializedValue string
+	// RetainParamRef records that a specialized query plan will be cached and
+	// therefore must retain this parameter as runtime provenance even when the
+	// parameter itself is unrelated to numeric-prefix specialization.
+	RetainParamRef bool
+	// EnableNumericPrefix records that the deployment-wide protocol version can
+	// execute planner-injected MySQL numeric-prefix casts.  Keep the negotiated
+	// capability on each value so execute-time plan specialization does not need
+	// to guess a service identity from context.Context.
+	EnableNumericPrefix bool
+}
 
 // WithDisableIncrStatement disable incr statement
 func (opts Options) WithDisableIncrStatement() Options {
@@ -220,6 +276,31 @@ func (opts StatementOption) DisableLog() bool {
 	return opts.disableLog
 }
 
+// WithMoColumnsUpdate allows an internal metadata upgrade to rewrite the
+// redundant columns-table fields without opening mo_columns to ordinary DML.
+func (opts StatementOption) WithMoColumnsUpdate() StatementOption {
+	opts.allowMoColumnsUpdate = true
+	return opts
+}
+
+func (opts StatementOption) AllowMoColumnsUpdate() bool {
+	return opts.allowMoColumnsUpdate
+}
+
+// WithOptimizerHints sets a per-statement optimizer_hints string (same comma-separated
+// key=value format as the global optimizer_hints variable). The internal SQL executor
+// bridges it onto the execution context and the planner's parseOptimizeHints applies it
+// on top of the global, so a single internal statement can override optimizer behavior
+// (e.g. applyIndices=1) without touching the process-wide global.
+func (opts StatementOption) WithOptimizerHints(hints string) StatementOption {
+	opts.optimizerHints = hints
+	return opts
+}
+
+func (opts StatementOption) OptimizerHints() string {
+	return opts.optimizerHints
+}
+
 func (opts StatementOption) IgnoreForeignKey() bool {
 	return opts.ignoreForeignKey
 }
@@ -241,6 +322,46 @@ func (opts Options) WithUserTxn() Options {
 
 func (opts Options) ExtraTxnOptions() []client.TxnOption {
 	return opts.txnOpts
+}
+
+// WithTxnIsolation overrides the runtime default for a newly created
+// internal transaction.
+func (opts Options) WithTxnIsolation(isolation txn.TxnIsolation) Options {
+	opts.txnIsolation = isolation
+	opts.txnIsolationSet = true
+	opts.txnOpts = append(opts.txnOpts, client.WithTxnIsolation(isolation))
+	return opts
+}
+
+// HasTxnIsolation reports whether this execution explicitly supplied an
+// isolation level for a newly created internal transaction.
+func (opts Options) HasTxnIsolation() bool {
+	return opts.txnIsolationSet
+}
+
+// TxnIsolation returns the explicitly supplied transaction isolation level.
+func (opts Options) TxnIsolation() txn.TxnIsolation {
+	return opts.txnIsolation
+}
+
+// WithTxnMode overrides the runtime default for a newly created internal
+// transaction.
+func (opts Options) WithTxnMode(mode txn.TxnMode) Options {
+	opts.txnMode = mode
+	opts.txnModeSet = true
+	opts.txnOpts = append(opts.txnOpts, client.WithTxnMode(mode))
+	return opts
+}
+
+// HasTxnMode reports whether this execution explicitly supplied a transaction
+// mode for a newly created internal transaction.
+func (opts Options) HasTxnMode() bool {
+	return opts.txnModeSet
+}
+
+// TxnMode returns the explicitly supplied transaction mode.
+func (opts Options) TxnMode() txn.TxnMode {
+	return opts.txnMode
 }
 
 // WithLockWaitTimeout sets a per-execution lock wait budget. It is propagated
@@ -392,6 +513,19 @@ func (opts StatementOption) WithParamsAndNulls(
 	return opts
 }
 
+// WithPreparedParamValues preserves the SQL source domain of parameters
+// passed through an internal statement, such as CTAS's follow-up INSERT.
+// Values remain transported by WithParamsAndNulls; this metadata only informs
+// execute-time plan specialization.
+func (opts StatementOption) WithPreparedParamValues(values []ParamValue) StatementOption {
+	opts.preparedParamValues = append([]ParamValue(nil), values...)
+	return opts
+}
+
+func (opts StatementOption) PreparedParamValues() []ParamValue {
+	return opts.preparedParamValues
+}
+
 func (opts Options) WithForceRebuildPlan() Options {
 	opts.forceRebuildPlan = true
 	return opts
@@ -424,6 +558,18 @@ func (opts StatementOption) WithDisableDropIncrStatement() StatementOption {
 	return opts
 }
 
+// WithSkipDataBranchReclaim leaves branch metadata intact for an internal
+// replacement DROP. The replacement path must publish its successor edge and
+// then invoke the shared reclaim routine itself in the same transaction.
+func (opts StatementOption) WithSkipDataBranchReclaim() StatementOption {
+	opts.skipDataBranchReclaim = true
+	return opts
+}
+
+func (opts StatementOption) SkipDataBranchReclaim() bool {
+	return opts.skipDataBranchReclaim
+}
+
 func (opts StatementOption) KeepAutoIncrement() uint64 {
 	return opts.keepAutoIncrement
 }
@@ -439,6 +585,24 @@ func (opts StatementOption) KeepLogicalId() uint64 {
 
 func (opts StatementOption) WithKeepLogicalId(keep uint64) StatementOption {
 	opts.keepLogicalId = keep
+	return opts
+}
+
+// KeepRelKind returns the mo_tables.relkind the statement must stamp on the table it
+// creates, and whether one was supplied. Empty string is a meaningful value (it is what
+// a hidden table carries), so the presence flag is separate.
+func (opts StatementOption) KeepRelKind() (string, bool) {
+	return opts.keepRelKind, opts.hasKeepRelKind
+}
+
+// WithKeepRelKind carries a table's existing relkind onto a replica created by
+// regenerated DDL. ALTER TABLE ... COPY rebuilds the table from constructCreateTableSQL,
+// which cannot express relkind, so without this the replica silently takes the kind
+// buildCreateTable computes from its name -- losing hnsw_meta / cagra_meta / ivfpq_meta /
+// ftv2_meta / fulltext / 'i' and un-hiding the table from every relkind-keyed filter.
+func (opts StatementOption) WithKeepRelKind(kind string) StatementOption {
+	opts.keepRelKind = kind
+	opts.hasKeepRelKind = true
 	return opts
 }
 

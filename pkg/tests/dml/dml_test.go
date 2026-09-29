@@ -23,131 +23,212 @@ import (
 	"os"
 	"path/filepath"
 	"strings"
+	"sync"
 	"testing"
 	"time"
 
 	_ "github.com/go-sql-driver/mysql"
 	"github.com/stretchr/testify/require"
 
+	"github.com/matrixorigin/matrixone/pkg/clusterservice"
 	"github.com/matrixorigin/matrixone/pkg/embed"
 	"github.com/matrixorigin/matrixone/pkg/objectio"
+	"github.com/matrixorigin/matrixone/pkg/pb/metadata"
 	"github.com/matrixorigin/matrixone/pkg/sql/plan"
 	"github.com/matrixorigin/matrixone/pkg/tests/testutils"
 	"github.com/matrixorigin/matrixone/pkg/util/executor"
 	"github.com/matrixorigin/matrixone/pkg/util/fault"
 )
 
-func TestDeleteAndSelect(t *testing.T) {
-	embed.RunBaseClusterTests(t,
-		func(c embed.Cluster) {
-			ctx, cancel := context.WithTimeout(context.Background(), time.Second*120)
-			defer cancel()
-
-			cn1, err := c.GetCNService(0)
-			require.NoError(t, err)
-
-			exec := testutils.GetSQLExecutor(cn1)
-
-			db := testutils.GetDatabaseName(t)
-			table := "debug"
-
-			res, err := exec.Exec(
-				ctx,
-				"create database "+db,
-				executor.Options{},
-			)
-			require.NoError(t, err)
-			res.Close()
-
-			res, err = exec.Exec(
-				ctx,
-				"create table "+table+" (a varchar primary key, b varchar)",
-				executor.Options{}.WithDatabase(db),
-			)
-			require.NoError(t, err)
-			res.Close()
-
-			//insert 3 blocks into t;
-			res, err = exec.Exec(
-				ctx,
-				"insert into "+table+" select *, * from generate_series(1,24576)g",
-				executor.Options{}.WithDatabase(db),
-			)
-			require.NoError(t, err)
-			res.Close()
-
-			plan.SetForceScanOnMultiCN(true)
-			defer plan.SetForceScanOnMultiCN(false)
-			//select * from t where a > 24500;
-			res, err = exec.Exec(
-				ctx,
-				"select * from "+table+" where a > 24500",
-				executor.Options{}.WithDatabase(db),
-			)
-			require.NoError(t, err)
-			res.Close()
-
-			//res, err = exec.Exec(
-			//	ctx,
-			//	"delete from "+table+" where a > 3",
-			//	executor.Options{}.WithDatabase(db),
-			//)
-			//require.NoError(t, err)
-			//res.Close()
-
-			//select b from t2 where a between 1 and 3 order by b asc;
-			//res, err = exec.Exec(
-			//	ctx,
-			//	"select b from "+table+" where a between 1 and 3 order by b asc",
-			//	executor.Options{}.WithDatabase(db),
-			//)
-			//require.NoError(t, err)
-			//rows := 0
-			//for _, b := range res.Batches {
-			//	rows += b.RowCount()
-			//}
-			//require.Equal(t, 3, rows)
-			//res.Close()
-		},
-	)
-}
-
-func TestInsertIgnoreSpecialTypeOnRemoteCN(t *testing.T) {
+func TestForcedMultiCNDeleteAndInsertIgnore(t *testing.T) {
 	embed.RunBaseClusterTests(t, func(c embed.Cluster) {
 		ctx, cancel := context.WithTimeout(context.Background(), 2*time.Minute)
 		defer cancel()
 
 		cn, err := c.GetCNService(0)
 		require.NoError(t, err)
+		// Service startup does not imply that the query coordinator's cached
+		// inventory contains both workers. Establish that precondition before
+		// asserting the distributed Top topology.
+		cluster := clusterservice.GetMOCluster(cn.ServiceID())
+		refresher, ok := cluster.(clusterservice.AuthoritativeRefresher)
+		require.True(t, ok)
+		require.Eventually(t, func() bool {
+			if refresher.Refresh(ctx) != nil {
+				return false
+			}
+			workers := 0
+			cluster.GetCNService(clusterservice.NewSelector(), func(metadata.CNService) bool {
+				workers++
+				return true
+			})
+			return workers == 2
+		}, 30*time.Second, 100*time.Millisecond, "both CN workers must be discoverable")
+		internalExec := testutils.GetSQLExecutor(cn)
 		port := cn.GetServiceConfig().CN.Frontend.Port
 		db, err := sql.Open("mysql", fmt.Sprintf("dump:111@tcp(127.0.0.1:%d)/", port))
 		require.NoError(t, err)
 		defer db.Close()
+		db.SetMaxOpenConns(1)
 
-		dbName := testutils.GetDatabaseName(t)
-		execSQLDB(t, ctx, db, "create database `"+dbName+"`")
-		defer func() {
-			execSQLDB(t, ctx, db, "use mo_catalog")
-			execSQLDB(t, ctx, db, "drop database if exists `"+dbName+"`")
-		}()
-		execSQLDB(t, ctx, db, "use `"+dbName+"`")
+		dbPrefix := testutils.GetDatabaseName(t)
+		deleteDB := dbPrefix + "_delete"
+		castDB := dbPrefix + "_cast"
+		defer cleanupTestDatabases(t, db, deleteDB, castDB)
+		execSQLDB(t, ctx, db, "create database `"+deleteDB+"`")
+		execSQLDB(t, ctx, db, "create database `"+castDB+"`")
+
+		const deleteTable = "forced_delete"
+		deleteOpts := executor.Options{}.WithDatabase(deleteDB)
+		for _, statement := range []string{
+			"create table " + deleteTable + " (a varchar primary key, b varchar)",
+			"insert into " + deleteTable + " values ('1','1'),('2','2'),('3','3'),('7','7'),('8','8')",
+		} {
+			res, execErr := internalExec.Exec(ctx, statement, deleteOpts)
+			require.NoError(t, execErr)
+			res.Close()
+		}
+
+		execSQLDB(t, ctx, db, "use `"+castDB+"`")
 		execSQLDB(t, ctx, db, "set session sql_mode = 'STRICT_TRANS_TABLES'")
-		execSQLDB(t, ctx, db, "create table src (v int)")
-		// Multiple source blocks ensure the forced AP multi-CN scan evaluates
-		// assignment casts on remote scan scopes, not only on the coordinator.
-		execSQLDB(t, ctx, db, "insert into src select 31 from generate_series(1, 24576) g")
-		execSQLDB(t, ctx, db, "create table dst (b bit(4))")
+		execSQLDB(t, ctx, db, "create table forced_src (v int)")
+		execSQLDB(t, ctx, db, "insert into forced_src values (31),(31),(31),(31)")
+		execSQLDB(t, ctx, db, "create table forced_dst (b bit(4))")
+		execSQLDB(t, ctx, db, "create table forced_top_src (id bigint, k bigint, payload varchar(64))")
+		execSQLDB(t, ctx, db, "insert into forced_top_src select result, 99999-result, repeat('x',64) from generate_series(0,99999) g")
 
-		plan.SetForceScanOnMultiCN(true)
+		// Force only the operations under test. Applying this process-wide test
+		// hook to fixture DDL would exercise an unrelated execution path and can
+		// make setup contend with the test's frontend session.
 		defer plan.SetForceScanOnMultiCN(false)
-		execSQLDB(t, ctx, db, "insert ignore into dst select v from src")
+		plan.SetForceScanOnMultiCN(true)
 
-		var count, min, max int
-		err = db.QueryRowContext(ctx, "select count(*), min(b + 0), max(b + 0) from dst").Scan(&count, &min, &max)
-		require.NoError(t, err)
-		require.Equal(t, 24576, count)
-		require.Equal(t, 15, min)
-		require.Equal(t, 15, max)
+		t.Run("remote top gathers workers before write back", func(t *testing.T) {
+			execSQLDB(t, ctx, db, "use `"+castDB+"`")
+			// Varlen payload selects the ordered hierarchy. Assert the actual
+			// gather topology, not just the MULTICN execution-mode header.
+			query := "select id,k,payload from forced_top_src order by k limit 1000"
+			physical, planErr := testutils.QueryTextResult(ctx, db, "explain phyplan "+query)
+			require.NoError(t, planErr)
+			require.Contains(t, strings.ToUpper(physical.ColumnName), "PHYPLAN ON MULTICN(")
+			require.Contains(t, physical.Text, "Magic: Remote")
+			require.Contains(t, strings.ToLower(physical.Text), "merge top")
+			rows, queryErr := db.QueryContext(ctx, query)
+			require.NoError(t, queryErr)
+			defer rows.Close()
+			count := 0
+			for rows.Next() {
+				var id, key int64
+				var payload string
+				require.NoError(t, rows.Scan(&id, &key, &payload))
+				require.Equal(t, int64(count), key)
+				require.Equal(t, int64(99999-count), id)
+				require.Equal(t, strings.Repeat("x", 64), payload)
+				count++
+			}
+			require.NoError(t, rows.Err())
+			require.NoError(t, rows.Close())
+			require.Equal(t, 1000, count)
+		})
+
+		t.Run("bounded top preserves remote order and prepared reuse", func(t *testing.T) {
+			execSQLDB(t, ctx, db, "use `"+deleteDB+"`")
+			query := "select a,b from " + deleteTable + " order by a desc limit 2"
+			physical, planErr := testutils.QueryTextResult(ctx, db, "explain phyplan "+query)
+			require.NoError(t, planErr)
+			require.Contains(t, strings.ToUpper(physical.ColumnName), "PHYPLAN ON MULTICN(")
+			require.Contains(t, physical.Text, "Magic: Remote")
+			// A tiny source can collapse to one remote worker. The larger case
+			// above proves the gather topology; this control proves exact rows
+			// and prepared reuse without requiring an unnecessary merge.
+			readRows := func(rows *sql.Rows) [][2]string {
+				t.Helper()
+				var got [][2]string
+				for rows.Next() {
+					var row [2]string
+					require.NoError(t, rows.Scan(&row[0], &row[1]))
+					got = append(got, row)
+				}
+				return got
+			}
+			rows, queryErr := db.QueryContext(ctx, query+" offset 1")
+			require.NoError(t, queryErr)
+			defer rows.Close()
+			require.Equal(t, [][2]string{{"7", "7"}, {"3", "3"}}, readRows(rows))
+			require.NoError(t, rows.Err())
+			require.NoError(t, rows.Close())
+			stmt, prepareErr := db.PrepareContext(ctx,
+				"select a,b from "+deleteTable+" order by a desc limit ?")
+			require.NoError(t, prepareErr)
+			defer stmt.Close()
+			for range 2 {
+				rows, queryErr = stmt.QueryContext(ctx, 2)
+				require.NoError(t, queryErr)
+				defer rows.Close()
+				require.Equal(t, [][2]string{{"8", "8"}, {"7", "7"}}, readRows(rows))
+				require.NoError(t, rows.Err())
+				require.NoError(t, rows.Close())
+			}
+		})
+
+		t.Run("delete and select retain exact rows", func(t *testing.T) {
+			execSQLDB(t, ctx, db, "use `"+deleteDB+"`")
+			planResult, planErr := testutils.QueryTextResult(ctx, db,
+				"explain phyplan select * from "+deleteTable+" where a >= '7'")
+			require.NoError(t, planErr)
+			require.Contains(t, strings.ToUpper(planResult.ColumnName), "PHYPLAN ON MULTICN(")
+			require.Contains(t, planResult.Text, "Magic: Remote",
+				"the small fixture must still compile a real remote scan scope")
+
+			selected, execErr := internalExec.Exec(ctx,
+				"select a,b from "+deleteTable+" where a >= '7' order by a", deleteOpts)
+			require.NoError(t, execErr)
+			var selectedRows [][2]string
+			for _, batch := range selected.Batches {
+				as := executor.GetStringRows(batch.Vecs[0])
+				bs := executor.GetStringRows(batch.Vecs[1])
+				for i := range as {
+					selectedRows = append(selectedRows, [2]string{as[i], bs[i]})
+				}
+			}
+			selected.Close()
+			require.Equal(t, [][2]string{{"7", "7"}, {"8", "8"}}, selectedRows)
+
+			deleted, execErr := internalExec.Exec(ctx,
+				"delete from "+deleteTable+" where a >= '7'", deleteOpts)
+			require.NoError(t, execErr)
+			require.Equal(t, uint64(2), deleted.AffectedRows)
+			deleted.Close()
+
+			remaining, execErr := internalExec.Exec(ctx,
+				"select a from "+deleteTable+" order by a", deleteOpts)
+			require.NoError(t, execErr)
+			var remainingKeys []string
+			for _, batch := range remaining.Batches {
+				remainingKeys = append(remainingKeys, executor.GetStringRows(batch.Vecs[0])...)
+			}
+			remaining.Close()
+			require.Equal(t, []string{"1", "2", "3"}, remainingKeys)
+		})
+
+		t.Run("insert ignore evaluates assignment cast remotely", func(t *testing.T) {
+			execSQLDB(t, ctx, db, "use `"+castDB+"`")
+			planResult, planErr := testutils.QueryTextResult(ctx, db,
+				"explain phyplan select v from forced_src")
+			require.NoError(t, planErr)
+			require.Contains(t, strings.ToUpper(planResult.ColumnName), "PHYPLAN ON MULTICN(")
+			require.Contains(t, planResult.Text, "Magic: Remote",
+				"the insert source must be scanned by a real remote scope")
+
+			execSQLDB(t, ctx, db, "insert ignore into forced_dst select v from forced_src")
+			var count, min, max int
+			err = db.QueryRowContext(ctx,
+				"select count(*), min(b + 0), max(b + 0) from forced_dst").Scan(&count, &min, &max)
+			require.NoError(t, err)
+			require.Equal(t, 4, count)
+			require.Equal(t, 15, min)
+			require.Equal(t, 15, max)
+		})
 	})
 }
 
@@ -165,68 +246,281 @@ func TestDataBranchDiffAsFile(t *testing.T) {
 			sqlDB, err := sql.Open("mysql", dsn)
 			require.NoError(t, err)
 			defer sqlDB.Close()
+			sqlDB.SetMaxOpenConns(1)
 
-			t.Log("single primary key diff with base snapshot")
-			runSinglePKWithBase(t, ctx, sqlDB)
+			dbName := testutils.GetDatabaseName(t)
+			defer cleanupTestDatabases(t, sqlDB, dbName)
+			execSQLDB(t, ctx, sqlDB, fmt.Sprintf("create database `%s`", dbName))
+			execSQLDB(t, ctx, sqlDB, fmt.Sprintf("use `%s`", dbName))
 
-			t.Log("multi primary key diff with base snapshot")
-			runMultiPKWithBase(t, ctx, sqlDB)
+			cases := []struct {
+				name string
+				run  func(*testing.T, context.Context, *sql.DB, string)
+			}{
+				// Start the longest independent scenarios first so the second
+				// slot can drain short cases while the special-column matrix runs.
+				{name: "update_apply_special_columns", run: func(t *testing.T, ctx context.Context, db *sql.DB, _ string) {
+					runDataBranchUpdateApplySpecialColumns(t, ctx, db)
+				}},
+				{name: "composite_multi_column_mutations", run: runCompositeDiffMultiColumn},
+				{name: "single_pk_update_split", run: runUpdateSplitDiffAsFile},
+				{name: "output_limit_multi_block", run: runDiffOutputLimitMultiBlockBase},
+				{name: "single_pk_with_base", run: runSinglePKWithBase},
+				{name: "composite_pk_with_base", run: runMultiPKWithBase},
+				{name: "single_pk_without_base", run: runSinglePKNoBase},
+				{name: "composite_pk_without_base", run: runMultiPKNoBase},
+				{name: "composite_pk_update_split", run: runCompositeUpdateSplitDiffAsFile},
+				{name: "no_pk_duplicates_and_null_delete", run: runNoPKDuplicateDiffAsFile},
+				{name: "complex_types_and_string_edges", run: runComplexTypeDiffAsFile},
+				{name: "sql_null_values", run: runSQLDiffHandlesNulls},
+				{name: "database_branch_metadata", run: func(t *testing.T, ctx context.Context, db *sql.DB, dbName string) {
+					runBranchDatabaseMetadata(t, ctx, db, dbName+"_metadata")
+					execSQLDB(t, ctx, db, fmt.Sprintf("use `%s`", dbName))
+				}},
+				{name: "csv_multi_block_round_trip", run: runCSVLoadSimple},
+				{name: "csv_rich_types_round_trip", run: runCSVLoadRichTypes},
+				{name: "csv_user_diff_prefix_identifier", run: runCSVUserDiffPrefixIdentifier},
+				{name: "output_limit_subset", run: runDiffOutputLimitSubset},
+				{name: "output_limit_without_base", run: runDiffOutputLimitNoBase},
+				{name: "output_summary", run: runDiffOutputSummaryComplex},
+				{name: "stage_round_trip", run: runDiffOutputToStage},
+			}
 
-			t.Log("single primary key diff without branch base relationship")
-			runSinglePKNoBase(t, ctx, sqlDB)
+			sem := make(chan struct{}, 2)
+			var wg sync.WaitGroup
+			for _, tc := range cases {
+				// Admit in declaration order, rather than launching every case
+				// and letting goroutines race for the two execution slots. t.Run
+				// joins the child (including FailNow cleanup) before releasing it.
+				sem <- struct{}{}
+				wg.Add(1)
+				go func() {
+					defer wg.Done()
+					defer func() { <-sem }()
 
-			t.Log("multi primary key diff without branch base relationship")
-			runMultiPKNoBase(t, ctx, sqlDB)
-
-			t.Log("large composite diff with multi column workload")
-			runLargeCompositeDiff(t, ctx, sqlDB)
-
-			t.Log("diff output splits updates into delete + insert (single pk)")
-			runUpdateSplitDiffAsFile(t, ctx, sqlDB)
-
-			t.Log("diff output splits updates into delete + insert (composite pk)")
-			runCompositeUpdateSplitDiffAsFile(t, ctx, sqlDB)
-
-			t.Log("diff output handles no-pk duplicates and null deletes")
-			runNoPKDuplicateDiffAsFile(t, ctx, sqlDB)
-
-			t.Log("diff output handles mixed types and string edge cases")
-			runComplexTypeDiffAsFile(t, ctx, sqlDB)
-
-			t.Log("sql diff handles rows containing NULL values")
-			runSQLDiffHandlesNulls(t, ctx, sqlDB)
-
-			t.Log("data branch create database populates metadata")
-			runBranchDatabaseMetadata(t, ctx, sqlDB)
-
-			t.Log("csv diff emits large range dataset that can be loaded back")
-			runCSVLoadSimple(t, ctx, sqlDB)
-
-			t.Log("csv diff covers rich data type payloads")
-			runCSVLoadRichTypes(t, ctx, sqlDB)
-
-			t.Log("diff output limit returns subset of full diff")
-			runDiffOutputLimitSubset(t, ctx, sqlDB)
-
-			t.Log("diff output limit without branch relationship returns subset of full diff")
-			runDiffOutputLimitNoBase(t, ctx, sqlDB)
-
-			t.Log("diff output limit with large base workload still returns subset of full diff")
-			runDiffOutputLimitLargeBase(t, ctx, sqlDB)
-
-			t.Log("diff output summary validates complex snapshot and branch divergence scenarios")
-			runDiffOutputSummaryComplex(t, ctx, sqlDB)
-
-			t.Log("diff output to stage and load via datalink")
-			runDiffOutputToStage(t, ctx, sqlDB)
+					t.Run(tc.name, func(t *testing.T) {
+						subDB, openErr := sql.Open("mysql", dsn)
+						require.NoError(t, openErr)
+						defer subDB.Close()
+						subDB.SetMaxOpenConns(1)
+						subCtx, subCancel := context.WithTimeout(ctx, time.Second*240)
+						defer subCancel()
+						execSQLDB(t, subCtx, subDB, fmt.Sprintf("use `%s`", dbName))
+						tc.run(t, subCtx, subDB, dbName)
+					})
+				}()
+			}
+			wg.Wait()
 		})
 }
 
-func dataBranchScaleRows(full, short int) int {
-	if testing.Short() {
-		return short
+func runDataBranchUpdateApplySpecialColumns(t *testing.T, ctx context.Context, db *sql.DB) {
+	t.Helper()
+
+	t.Run("generated_primary_key", func(t *testing.T) {
+		t.Run("payload", func(t *testing.T) {
+			execSQLDB(t, ctx, db, "create table update_generated_base (a int, b int generated always as (a * 2) stored, payload int, primary key (b))")
+			execSQLDB(t, ctx, db, "insert into update_generated_base(a, payload) values (1, 10)")
+			execSQLDB(t, ctx, db, "data branch create table update_generated_branch from update_generated_base")
+			execSQLDB(t, ctx, db, "data branch create table update_generated_pick_src from update_generated_base")
+			execSQLDB(t, ctx, db, "data branch create table update_generated_pick_dst from update_generated_base")
+
+			t.Run("merge", func(t *testing.T) {
+				execSQLDB(t, ctx, db, "update update_generated_branch set payload = 11 where b = 2")
+				execSQLDB(t, ctx, db, "data branch merge update_generated_branch into update_generated_base when conflict accept")
+				require.Equal(t, [][]string{{"1", "2", "11"}}, queryStringRows(t, ctx, db, "select a, b, payload from update_generated_base"))
+			})
+			t.Run("pick", func(t *testing.T) {
+				execSQLDB(t, ctx, db, "update update_generated_pick_src set payload = 11 where b = 2")
+				execSQLDB(t, ctx, db, "data branch pick update_generated_pick_src into update_generated_pick_dst keys(2) when conflict accept")
+				require.Equal(t, [][]string{{"1", "2", "11"}}, queryStringRows(t, ctx, db, "select a, b, payload from update_generated_pick_dst"))
+			})
+		})
+
+		t.Run("set", func(t *testing.T) {
+			execSQLDB(t, ctx, db, "create table update_generated_special_base (a int, b int generated always as (a * 2) stored, v set('a','b','c'), primary key (b))")
+			execSQLDB(t, ctx, db, "insert into update_generated_special_base(a, v) values (1, 'a')")
+			execSQLDB(t, ctx, db, "data branch create table update_generated_special_branch from update_generated_special_base")
+			execSQLDB(t, ctx, db, "data branch create table update_generated_special_pick_src from update_generated_special_base")
+			execSQLDB(t, ctx, db, "data branch create table update_generated_special_pick_dst from update_generated_special_base")
+
+			t.Run("merge", func(t *testing.T) {
+				execSQLDB(t, ctx, db, "update update_generated_special_branch set v = 'b,c' where b = 2")
+				execSQLDB(t, ctx, db, "data branch merge update_generated_special_branch into update_generated_special_base when conflict accept")
+				require.Equal(t, [][]string{{"1", "2", "b,c"}}, queryStringRows(t, ctx, db, "select a, b, cast(v as char) from update_generated_special_base"))
+			})
+			t.Run("pick", func(t *testing.T) {
+				execSQLDB(t, ctx, db, "update update_generated_special_pick_src set v = 'b,c' where b = 2")
+				execSQLDB(t, ctx, db, "data branch pick update_generated_special_pick_src into update_generated_special_pick_dst keys(2) when conflict accept")
+				require.Equal(t, [][]string{{"1", "2", "b,c"}}, queryStringRows(t, ctx, db, "select a, b, cast(v as char) from update_generated_special_pick_dst"))
+			})
+		})
+	})
+
+	t.Run("set", func(t *testing.T) {
+		t.Run("ordinary_merge", func(t *testing.T) {
+			execSQLDB(t, ctx, db, "create table update_set_base (id int primary key, v set('a','b','c'))")
+			execSQLDB(t, ctx, db, "insert into update_set_base values (1, 'a')")
+			execSQLDB(t, ctx, db, "data branch create table update_set_branch from update_set_base")
+			execSQLDB(t, ctx, db, "update update_set_branch set v = 'b,c' where id = 1")
+			execSQLDB(t, ctx, db, "data branch merge update_set_branch into update_set_base when conflict accept")
+			require.Equal(t, [][]string{{"1", "b,c"}}, queryStringRows(t, ctx, db, "select id, cast(v as char) from update_set_base"))
+		})
+
+		t.Run("foreign_key_merge", func(t *testing.T) {
+			execSQLDB(t, ctx, db, "create table update_set_fk_merge_base (id int primary key, v set('a','b','c'))")
+			execSQLDB(t, ctx, db, "create table update_set_fk_merge_child (id int primary key, parent_id int, constraint fk_set_merge foreign key (parent_id) references update_set_fk_merge_base(id))")
+			execSQLDB(t, ctx, db, "insert into update_set_fk_merge_base values (1, 'a')")
+			execSQLDB(t, ctx, db, "insert into update_set_fk_merge_child values (1, 1)")
+			execSQLDB(t, ctx, db, "data branch create table update_set_fk_merge_branch from update_set_fk_merge_base")
+			execSQLDB(t, ctx, db, "update update_set_fk_merge_branch set v = 'b,c' where id = 1")
+			execSQLDB(t, ctx, db, "data branch merge update_set_fk_merge_branch into update_set_fk_merge_base when conflict accept")
+			require.Equal(t, [][]string{{"1", "b,c", "1"}}, queryStringRows(t, ctx, db, "select p.id, cast(p.v as char), c.parent_id from update_set_fk_merge_base p join update_set_fk_merge_child c on p.id = c.parent_id"))
+		})
+
+		t.Run("foreign_key_pick", func(t *testing.T) {
+			execSQLDB(t, ctx, db, "create table update_set_fk_pick_base (id int primary key, v set('a','b','c'))")
+			execSQLDB(t, ctx, db, "create table update_set_fk_pick_child (id int primary key, parent_id int, constraint fk_set_pick foreign key (parent_id) references update_set_fk_pick_base(id))")
+			execSQLDB(t, ctx, db, "insert into update_set_fk_pick_base values (1, 'a')")
+			execSQLDB(t, ctx, db, "insert into update_set_fk_pick_child values (1, 1)")
+			execSQLDB(t, ctx, db, "data branch create table update_set_fk_pick_src from update_set_fk_pick_base")
+			execSQLDB(t, ctx, db, "update update_set_fk_pick_src set v = 'b,c' where id = 1")
+			execSQLDB(t, ctx, db, "update update_set_fk_pick_base set v = 'c' where id = 1")
+			execSQLDB(t, ctx, db, "data branch pick update_set_fk_pick_src into update_set_fk_pick_base keys(1) when conflict accept")
+			require.Equal(t, [][]string{{"1", "b,c", "1"}}, queryStringRows(t, ctx, db, "select p.id, cast(p.v as char), c.parent_id from update_set_fk_pick_base p join update_set_fk_pick_child c on p.id = c.parent_id"))
+		})
+	})
+
+	t.Run("geometry32", func(t *testing.T) {
+		execSQLDB(t, ctx, db, "create table update_geometry_base (id int primary key, g geometry32)")
+		execSQLDB(t, ctx, db, "insert into update_geometry_base values (1, cast('POINT(1 1)' as geometry32))")
+		execSQLDB(t, ctx, db, "data branch create table update_geometry_branch from update_geometry_base")
+		execSQLDB(t, ctx, db, "update update_geometry_branch set g = cast('POINT(2 2)' as geometry32) where id = 1")
+		execSQLDB(t, ctx, db, "data branch merge update_geometry_branch into update_geometry_base when conflict accept")
+		require.Equal(t, [][]string{{"1", "POINT(2 2)"}}, queryStringRows(t, ctx, db, "select id, st_astext(g) from update_geometry_base"))
+	})
+
+	t.Run("indexed_enum", func(t *testing.T) {
+		t.Run("unique", func(t *testing.T) {
+			execSQLDB(t, ctx, db, "create table update_enum_unique_merge_base (id int primary key, status enum('new','paid','shipped'), unique key uk_status(status))")
+			execSQLDB(t, ctx, db, "insert into update_enum_unique_merge_base values (1, 'new'), (2, 'paid')")
+			execSQLDB(t, ctx, db, "data branch create table update_enum_unique_merge_branch from update_enum_unique_merge_base")
+			execSQLDB(t, ctx, db, "data branch create table update_enum_unique_pick_src from update_enum_unique_merge_base")
+			execSQLDB(t, ctx, db, "data branch create table update_enum_unique_pick_dst from update_enum_unique_merge_base")
+
+			t.Run("merge", func(t *testing.T) {
+				execSQLDB(t, ctx, db, "update update_enum_unique_merge_branch set status = 'shipped' where id = 1")
+				execSQLDB(t, ctx, db, "data branch merge update_enum_unique_merge_branch into update_enum_unique_merge_base when conflict accept")
+				require.Equal(t, [][]string{{"1", "shipped"}, {"2", "paid"}}, queryStringRows(t, ctx, db, "select id, cast(status as char) from update_enum_unique_merge_base order by id"))
+			})
+			t.Run("pick", func(t *testing.T) {
+				execSQLDB(t, ctx, db, "update update_enum_unique_pick_src set status = 'shipped' where id = 1")
+				execSQLDB(t, ctx, db, "data branch pick update_enum_unique_pick_src into update_enum_unique_pick_dst keys(1) when conflict accept")
+				require.Equal(t, [][]string{{"1", "shipped"}, {"2", "paid"}}, queryStringRows(t, ctx, db, "select id, cast(status as char) from update_enum_unique_pick_dst order by id"))
+			})
+		})
+
+		t.Run("payload", func(t *testing.T) {
+			execSQLDB(t, ctx, db, "create table update_enum_unique_payload_base (id int primary key, payload varchar(32), status enum('new','paid'), unique key uk_status(status))")
+			execSQLDB(t, ctx, db, "insert into update_enum_unique_payload_base values (1, 'one', 'new'), (2, 'two', 'paid')")
+			execSQLDB(t, ctx, db, "data branch create table update_enum_unique_payload_branch from update_enum_unique_payload_base")
+			t.Run("merge", func(t *testing.T) {
+				execSQLDB(t, ctx, db, "update update_enum_unique_payload_branch set payload = 'branch-one' where id = 1")
+				execSQLDB(t, ctx, db, "data branch merge update_enum_unique_payload_branch into update_enum_unique_payload_base when conflict accept")
+				require.Equal(t, [][]string{{"1", "branch-one", "new"}, {"2", "two", "paid"}}, queryStringRows(t, ctx, db, "select id, payload, cast(status as char) from update_enum_unique_payload_base order by id"))
+			})
+		})
+
+		t.Run("duplicate_merge", func(t *testing.T) {
+			execSQLDB(t, ctx, db, "create table update_enum_unique_merge_duplicate_base (id int primary key, status enum('new','paid','shipped'), unique key uk_status(status))")
+			execSQLDB(t, ctx, db, "insert into update_enum_unique_merge_duplicate_base values (1, 'new'), (2, 'paid')")
+			execSQLDB(t, ctx, db, "data branch create table update_enum_unique_merge_duplicate_branch from update_enum_unique_merge_duplicate_base")
+			execSQLDB(t, ctx, db, "update update_enum_unique_merge_duplicate_branch set status = 'shipped' where id = 1")
+			execSQLDB(t, ctx, db, "update update_enum_unique_merge_duplicate_base set status = 'shipped' where id = 2")
+			_, err := db.ExecContext(ctx, "data branch merge update_enum_unique_merge_duplicate_branch into update_enum_unique_merge_duplicate_base when conflict accept")
+			require.Error(t, err)
+			require.Equal(t, [][]string{{"1", "new"}, {"2", "shipped"}}, queryStringRows(t, ctx, db, "select id, cast(status as char) from update_enum_unique_merge_duplicate_base order by id"))
+		})
+
+		t.Run("duplicate_pick", func(t *testing.T) {
+			execSQLDB(t, ctx, db, "create table update_enum_unique_pick_duplicate_base (id int primary key, status enum('new','paid','shipped'), unique key uk_status(status))")
+			execSQLDB(t, ctx, db, "insert into update_enum_unique_pick_duplicate_base values (1, 'new'), (2, 'paid')")
+			execSQLDB(t, ctx, db, "data branch create table update_enum_unique_pick_duplicate_src from update_enum_unique_pick_duplicate_base")
+			execSQLDB(t, ctx, db, "data branch create table update_enum_unique_pick_duplicate_dst from update_enum_unique_pick_duplicate_base")
+			execSQLDB(t, ctx, db, "update update_enum_unique_pick_duplicate_src set status = 'shipped' where id = 1")
+			execSQLDB(t, ctx, db, "update update_enum_unique_pick_duplicate_dst set status = 'shipped' where id = 2")
+			_, err := db.ExecContext(ctx, "data branch pick update_enum_unique_pick_duplicate_src into update_enum_unique_pick_duplicate_dst keys(1) when conflict accept")
+			require.Error(t, err)
+			require.Equal(t, [][]string{{"1", "new"}, {"2", "shipped"}}, queryStringRows(t, ctx, db, "select id, cast(status as char) from update_enum_unique_pick_duplicate_dst order by id"))
+		})
+	})
+
+	t.Run("indexed_enum_conflict_accept", func(t *testing.T) {
+		execSQLDB(t, ctx, db, "create table update_enum_unique_conflict_merge_base (id int primary key, payload varchar(32), status enum('new','paid','shipped'), unique key uk_status(status))")
+		execSQLDB(t, ctx, db, "insert into update_enum_unique_conflict_merge_base values (1, 'base-one', 'new'), (2, 'two', 'paid')")
+		execSQLDB(t, ctx, db, "data branch create table update_enum_unique_conflict_merge_src from update_enum_unique_conflict_merge_base")
+		execSQLDB(t, ctx, db, "data branch create table update_enum_unique_conflict_pick_src from update_enum_unique_conflict_merge_base")
+		execSQLDB(t, ctx, db, "data branch create table update_enum_unique_conflict_pick_dst from update_enum_unique_conflict_merge_base")
+
+		t.Run("merge", func(t *testing.T) {
+			execSQLDB(t, ctx, db, "update update_enum_unique_conflict_merge_src set payload = 'source-one' where id = 1")
+			execSQLDB(t, ctx, db, "update update_enum_unique_conflict_merge_base set status = 'shipped' where id = 1")
+			execSQLDB(t, ctx, db, "data branch merge update_enum_unique_conflict_merge_src into update_enum_unique_conflict_merge_base when conflict accept")
+			require.Equal(t,
+				[][]string{{"1", "source-one", "new"}, {"2", "two", "paid"}},
+				queryStringRows(t, ctx, db, "select id, payload, cast(status as char) from update_enum_unique_conflict_merge_base order by id"),
+			)
+		})
+		t.Run("pick", func(t *testing.T) {
+			execSQLDB(t, ctx, db, "update update_enum_unique_conflict_pick_src set payload = 'source-one' where id = 1")
+			execSQLDB(t, ctx, db, "update update_enum_unique_conflict_pick_dst set status = 'shipped' where id = 1")
+			execSQLDB(t, ctx, db, "data branch pick update_enum_unique_conflict_pick_src into update_enum_unique_conflict_pick_dst keys(1) when conflict accept")
+			require.Equal(t,
+				[][]string{{"1", "source-one", "new"}, {"2", "two", "paid"}},
+				queryStringRows(t, ctx, db, "select id, payload, cast(status as char) from update_enum_unique_conflict_pick_dst order by id"),
+			)
+		})
+	})
+
+	t.Run("mixed_schema_ordinary_assignment", func(t *testing.T) {
+		execSQLDB(t, ctx, db, "create table update_mixed_merge_base (id int primary key, payload varchar(32), status enum('new','ready'))")
+		execSQLDB(t, ctx, db, "insert into update_mixed_merge_base values (1, 'one', 'new'), (2, 'two', 'ready'), (3, 'three', 'new')")
+		execSQLDB(t, ctx, db, "data branch create table update_mixed_merge_branch from update_mixed_merge_base")
+		execSQLDB(t, ctx, db, "data branch create table update_mixed_pick_src from update_mixed_merge_base")
+		execSQLDB(t, ctx, db, "data branch create table update_mixed_pick_dst from update_mixed_merge_base")
+
+		t.Run("merge", func(t *testing.T) {
+			execSQLDB(t, ctx, db, "update update_mixed_merge_branch set payload = concat('branch-', payload) where id in (1, 2, 3)")
+			execSQLDB(t, ctx, db, "data branch merge update_mixed_merge_branch into update_mixed_merge_base when conflict accept")
+			require.Equal(t,
+				[][]string{{"1", "branch-one", "new"}, {"2", "branch-two", "ready"}, {"3", "branch-three", "new"}},
+				queryStringRows(t, ctx, db, "select id, payload, cast(status as char) from update_mixed_merge_base order by id"),
+			)
+		})
+		t.Run("pick", func(t *testing.T) {
+			execSQLDB(t, ctx, db, "update update_mixed_pick_src set payload = concat('branch-', payload) where id in (1, 2, 3)")
+			execSQLDB(t, ctx, db, "data branch pick update_mixed_pick_src into update_mixed_pick_dst keys(1, 2, 3) when conflict accept")
+			require.Equal(t,
+				[][]string{{"1", "branch-one", "new"}, {"2", "branch-two", "ready"}, {"3", "branch-three", "new"}},
+				queryStringRows(t, ctx, db, "select id, payload, cast(status as char) from update_mixed_pick_dst order by id"),
+			)
+		})
+	})
+}
+
+func cleanupTestDatabases(t *testing.T, db *sql.DB, names ...string) {
+	t.Helper()
+	ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
+	defer cancel()
+
+	if _, err := db.ExecContext(ctx, "use mo_catalog"); err != nil {
+		t.Errorf("select cleanup database: %v", err)
 	}
-	return full
+	for _, name := range names {
+		if _, err := db.ExecContext(ctx, fmt.Sprintf("drop database if exists `%s`", name)); err != nil {
+			t.Errorf("drop cleanup database %s: %v", name, err)
+		}
+	}
 }
 
 func TestCloneCommitFailureRollbackKeepsSourceFiles(t *testing.T) {
@@ -310,24 +604,16 @@ func runCloneCommitFailureRollbackKeepsSourceFiles(t *testing.T, parentCtx conte
 	require.Equal(t, 50, queryRowCount(t, ctx, db, "select count(*) from src where id mod 100 = 0"))
 }
 
-func runSinglePKWithBase(t *testing.T, parentCtx context.Context, db *sql.DB) {
+func runSinglePKWithBase(t *testing.T, parentCtx context.Context, db *sql.DB, dbName string) {
 	t.Helper()
 
 	ctx, cancel := context.WithTimeout(parentCtx, time.Second*90)
 	defer cancel()
 
-	dbName := testutils.GetDatabaseName(t)
 	base := "single_pk_base"
 	branch := "single_pk_branch"
 	diffDir := t.TempDir()
 	diffLiteral := strings.ReplaceAll(diffDir, "'", "''")
-
-	execSQLDB(t, ctx, db, fmt.Sprintf("create database `%s`", dbName))
-	defer func() {
-		execSQLDB(t, ctx, db, "use mo_catalog")
-		execSQLDB(t, ctx, db, fmt.Sprintf("drop database if exists `%s`", dbName))
-	}()
-	execSQLDB(t, ctx, db, fmt.Sprintf("use `%s`", dbName))
 
 	execSQLDB(t, ctx, db, fmt.Sprintf("create table `%s` (id int primary key, value int, note varchar(32))", base))
 	execSQLDB(t, ctx, db, fmt.Sprintf("insert into `%s` values (1, 10, 'seed'), (2, 20, 'seed'), (3, 30, 'seed')", base))
@@ -350,24 +636,16 @@ func runSinglePKWithBase(t *testing.T, parentCtx context.Context, db *sql.DB) {
 	assertTablesEqual(t, ctx, db, dbName, branch, base)
 }
 
-func runMultiPKWithBase(t *testing.T, parentCtx context.Context, db *sql.DB) {
+func runMultiPKWithBase(t *testing.T, parentCtx context.Context, db *sql.DB, dbName string) {
 	t.Helper()
 
 	ctx, cancel := context.WithTimeout(parentCtx, time.Second*90)
 	defer cancel()
 
-	dbName := testutils.GetDatabaseName(t)
 	base := "multi_pk_base"
 	branch := "multi_pk_branch"
 	diffDir := t.TempDir()
 	diffLiteral := strings.ReplaceAll(diffDir, "'", "''")
-
-	execSQLDB(t, ctx, db, fmt.Sprintf("create database `%s`", dbName))
-	defer func() {
-		execSQLDB(t, ctx, db, "use mo_catalog")
-		execSQLDB(t, ctx, db, fmt.Sprintf("drop database if exists `%s`", dbName))
-	}()
-	execSQLDB(t, ctx, db, fmt.Sprintf("use `%s`", dbName))
 
 	execSQLDB(t, ctx, db, fmt.Sprintf("create table `%s` (org_id int, event_id int, quantity int, status varchar(16), primary key (org_id, event_id))", base))
 	execSQLDB(t, ctx, db, fmt.Sprintf("insert into `%s` values (1, 1, 100, 'seed'), (1, 2, 200, 'seed'), (2, 1, 300, 'seed')", base))
@@ -391,24 +669,16 @@ func runMultiPKWithBase(t *testing.T, parentCtx context.Context, db *sql.DB) {
 	assertTablesEqual(t, ctx, db, dbName, branch, base)
 }
 
-func runSinglePKNoBase(t *testing.T, parentCtx context.Context, db *sql.DB) {
+func runSinglePKNoBase(t *testing.T, parentCtx context.Context, db *sql.DB, dbName string) {
 	t.Helper()
 
 	ctx, cancel := context.WithTimeout(parentCtx, time.Second*90)
 	defer cancel()
 
-	dbName := testutils.GetDatabaseName(t)
 	base := "single_pk_nobranch_base"
 	target := "single_pk_nobranch_target"
 	diffDir := t.TempDir()
 	diffLiteral := strings.ReplaceAll(diffDir, "'", "''")
-
-	execSQLDB(t, ctx, db, fmt.Sprintf("create database `%s`", dbName))
-	defer func() {
-		execSQLDB(t, ctx, db, "use mo_catalog")
-		execSQLDB(t, ctx, db, fmt.Sprintf("drop database if exists `%s`", dbName))
-	}()
-	execSQLDB(t, ctx, db, fmt.Sprintf("use `%s`", dbName))
 
 	execSQLDB(t, ctx, db, fmt.Sprintf("create table `%s` (id int primary key, label varchar(20), amount int)", base))
 	execSQLDB(t, ctx, db, fmt.Sprintf("create table `%s` (id int primary key, label varchar(20), amount int)", target))
@@ -431,24 +701,16 @@ func runSinglePKNoBase(t *testing.T, parentCtx context.Context, db *sql.DB) {
 	assertTablesEqual(t, ctx, db, dbName, target, base)
 }
 
-func runMultiPKNoBase(t *testing.T, parentCtx context.Context, db *sql.DB) {
+func runMultiPKNoBase(t *testing.T, parentCtx context.Context, db *sql.DB, dbName string) {
 	t.Helper()
 
 	ctx, cancel := context.WithTimeout(parentCtx, time.Second*90)
 	defer cancel()
 
-	dbName := testutils.GetDatabaseName(t)
 	base := "multi_pk_nobranch_base"
 	target := "multi_pk_nobranch_target"
 	diffDir := t.TempDir()
 	diffLiteral := strings.ReplaceAll(diffDir, "'", "''")
-
-	execSQLDB(t, ctx, db, fmt.Sprintf("create database `%s`", dbName))
-	defer func() {
-		execSQLDB(t, ctx, db, "use mo_catalog")
-		execSQLDB(t, ctx, db, fmt.Sprintf("drop database if exists `%s`", dbName))
-	}()
-	execSQLDB(t, ctx, db, fmt.Sprintf("use `%s`", dbName))
 
 	execSQLDB(t, ctx, db, fmt.Sprintf("create table `%s` (region int, device_id int, reading int, note varchar(24), primary key (region, device_id))", base))
 	execSQLDB(t, ctx, db, fmt.Sprintf("create table `%s` (region int, device_id int, reading int, note varchar(24), primary key (region, device_id))", target))
@@ -471,26 +733,23 @@ func runMultiPKNoBase(t *testing.T, parentCtx context.Context, db *sql.DB) {
 	assertTablesEqual(t, ctx, db, dbName, target, base)
 }
 
-func runLargeCompositeDiff(t *testing.T, parentCtx context.Context, db *sql.DB) {
+func runCompositeDiffMultiColumn(t *testing.T, parentCtx context.Context, db *sql.DB, dbName string) {
 	t.Helper()
 
 	ctx, cancel := context.WithTimeout(parentCtx, time.Second*150)
 	defer cancel()
 
-	dbName := testutils.GetDatabaseName(t)
 	base := "composite_base"
 	branch := "composite_branch"
 	diffDir := t.TempDir()
 	diffLiteral := strings.ReplaceAll(diffDir, "'", "''")
-	baseRows := dataBranchScaleRows(10000, 2000)
-	insertRows := dataBranchScaleRows(800, 200)
-
-	execSQLDB(t, ctx, db, fmt.Sprintf("create database `%s`", dbName))
-	defer func() {
-		execSQLDB(t, ctx, db, "use mo_catalog")
-		execSQLDB(t, ctx, db, fmt.Sprintf("drop database if exists `%s`", dbName))
-	}()
-	execSQLDB(t, ctx, db, fmt.Sprintf("use `%s`", dbName))
+	const (
+		// This is a mixed-type mutation round trip, not a block-boundary
+		// test. Retain repeated composite-key components and all six
+		// base/inserted x updated/deleted/untouched cells below.
+		baseRows   = 274
+		insertRows = 137
+	)
 
 	execSQLDB(t, ctx, db, fmt.Sprintf(`
 create table %s (
@@ -531,6 +790,16 @@ select
 	date_add('2024-02-01 00:00:00', interval g.result second) as created_at
 from generate_series(%d, %d) as g`, branch, baseRows+1, baseRows+insertRows)
 	execSQLDB(t, ctx, db, newInserts)
+	require.Equal(t, [][]string{{"3", "2", "269", "1", "1", "135"}},
+		queryStringRows(t, ctx, db, fmt.Sprintf(`select
+			sum(seq <= %[2]d and seq %% 91 = 0 and seq %% 137 <> 0),
+			sum(seq <= %[2]d and seq %% 137 = 0),
+			sum(seq <= %[2]d and seq %% 91 <> 0 and seq %% 137 <> 0),
+			sum(seq > %[2]d and seq %% 91 = 0 and seq %% 137 <> 0),
+			sum(seq > %[2]d and seq %% 137 = 0),
+			sum(seq > %[2]d and seq %% 91 <> 0 and seq %% 137 <> 0)
+			from %[1]s`, branch, baseRows)),
+		"fixture must retain all six mutation cells before diff/replay")
 
 	execSQLDB(t, ctx, db, fmt.Sprintf(
 		"update %s set amount = amount + 77.7700, ratio = ratio * 1.05, memo = concat(memo, '-upd') where seq %% 91 = 0",
@@ -553,24 +822,16 @@ from generate_series(%d, %d) as g`, branch, baseRows+1, baseRows+insertRows)
 	assertTablesEqual(t, ctx, db, dbName, branch, base)
 }
 
-func runSQLDiffHandlesNulls(t *testing.T, parentCtx context.Context, db *sql.DB) {
+func runSQLDiffHandlesNulls(t *testing.T, parentCtx context.Context, db *sql.DB, dbName string) {
 	t.Helper()
 
 	ctx, cancel := context.WithTimeout(parentCtx, time.Second*120)
 	defer cancel()
 
-	dbName := testutils.GetDatabaseName(t)
 	base := "sql_null_base"
 	branch := "sql_null_branch"
 	diffDir := t.TempDir()
 	diffLiteral := strings.ReplaceAll(diffDir, "'", "''")
-
-	execSQLDB(t, ctx, db, fmt.Sprintf("create database `%s`", dbName))
-	defer func() {
-		execSQLDB(t, ctx, db, "use mo_catalog")
-		execSQLDB(t, ctx, db, fmt.Sprintf("drop database if exists `%s`", dbName))
-	}()
-	execSQLDB(t, ctx, db, fmt.Sprintf("use `%s`", dbName))
 
 	execSQLDB(t, ctx, db, fmt.Sprintf(`
 create table %s (
@@ -606,25 +867,18 @@ insert into %s values
 	assertTablesEqual(t, ctx, db, dbName, branch, base)
 }
 
-func runCSVLoadSimple(t *testing.T, parentCtx context.Context, db *sql.DB) {
+func runCSVLoadSimple(t *testing.T, parentCtx context.Context, db *sql.DB, dbName string) {
 	t.Helper()
 
 	ctx, cancel := context.WithTimeout(parentCtx, time.Second*180)
 	defer cancel()
 
-	dbName := testutils.GetDatabaseName(t)
-	base := "csv_massive_base"
-	target := "csv_massive_target"
+	base := "csv_range_base"
+	target := "csv_range_target"
 	diffDir := t.TempDir()
 	diffLiteral := strings.ReplaceAll(diffDir, "'", "''")
-	rowCount := dataBranchScaleRows(1000*100, int(objectio.BlockMaxRows)*2)
+	rowCount := int(objectio.BlockMaxRows) * 2
 
-	execSQLDB(t, ctx, db, fmt.Sprintf("create database `%s`", dbName))
-	defer func() {
-		execSQLDB(t, ctx, db, "use mo_catalog")
-		execSQLDB(t, ctx, db, fmt.Sprintf("drop database if exists `%s`", dbName))
-	}()
-	execSQLDB(t, ctx, db, fmt.Sprintf("use `%s`", dbName))
 	execSQLDB(t, ctx, db, fmt.Sprintf("create table %s (a int primary key, b int)", base))
 	execSQLDB(t, ctx, db, fmt.Sprintf("create table %s like %s", target, base))
 	execSQLDB(t, ctx, db, fmt.Sprintf("insert into %s select *, * from generate_series(1, %d) g", target, rowCount))
@@ -638,24 +892,17 @@ func runCSVLoadSimple(t *testing.T, parentCtx context.Context, db *sql.DB) {
 	assertTablesEqual(t, ctx, db, dbName, target, base)
 }
 
-func runCSVLoadRichTypes(t *testing.T, parentCtx context.Context, db *sql.DB) {
+func runCSVLoadRichTypes(t *testing.T, parentCtx context.Context, db *sql.DB, dbName string) {
 	t.Helper()
 
 	ctx, cancel := context.WithTimeout(parentCtx, time.Second*180)
 	defer cancel()
 
-	dbName := testutils.GetDatabaseName(t)
 	base := "csv_rich_types_base"
 	target := "csv_rich_types_target"
 	diffDir := t.TempDir()
 	diffLiteral := strings.ReplaceAll(diffDir, "'", "''")
 
-	execSQLDB(t, ctx, db, fmt.Sprintf("create database `%s`", dbName))
-	defer func() {
-		execSQLDB(t, ctx, db, "use mo_catalog")
-		execSQLDB(t, ctx, db, fmt.Sprintf("drop database if exists `%s`", dbName))
-	}()
-	execSQLDB(t, ctx, db, fmt.Sprintf("use `%s`", dbName))
 	execSQLDB(t, ctx, db, fmt.Sprintf(`
 create table %s (
 	id int primary key,
@@ -688,22 +935,40 @@ insert into %s values
 	assertTablesEqual(t, ctx, db, dbName, target, base)
 }
 
-func runDiffOutputLimitSubset(t *testing.T, parentCtx context.Context, db *sql.DB) {
+func runCSVUserDiffPrefixIdentifier(t *testing.T, parentCtx context.Context, db *sql.DB, dbName string) {
 	t.Helper()
 
 	ctx, cancel := context.WithTimeout(parentCtx, time.Second*90)
 	defer cancel()
 
-	dbName := testutils.GetDatabaseName(t)
+	base := "user_prefix_csv_base"
+	target := "__mo_diff_orders"
+	diffDir := t.TempDir()
+	diffLiteral := strings.ReplaceAll(diffDir, "'", "''")
+
+	execSQLDB(t, ctx, db, fmt.Sprintf("create table `%s` (id int primary key, value varchar(32))", base))
+	execSQLDB(t, ctx, db, fmt.Sprintf("create table `%s` like `%s`", target, base))
+	execSQLDB(t, ctx, db, fmt.Sprintf("insert into `%s` values (1, 'first'), (2, 'second')", target))
+
+	diffStmt := fmt.Sprintf("data branch diff `%s` against `%s` output file '%s'", target, base, diffLiteral)
+	diffPath := execDiffAndFetchFile(t, ctx, db, diffStmt)
+	require.Equal(t, ".csv", filepath.Ext(diffPath))
+
+	records := readDiffCSVFile(t, diffPath)
+	require.ElementsMatch(t, [][]string{{"1", "first"}, {"2", "second"}}, records)
+
+	loadDiffCSVIntoTable(t, ctx, db, base, diffPath)
+	assertTablesEqual(t, ctx, db, dbName, target, base)
+}
+
+func runDiffOutputLimitSubset(t *testing.T, parentCtx context.Context, db *sql.DB, dbName string) {
+	t.Helper()
+
+	ctx, cancel := context.WithTimeout(parentCtx, time.Second*90)
+	defer cancel()
+
 	base := "limit_base"
 	branch := "limit_branch"
-
-	execSQLDB(t, ctx, db, fmt.Sprintf("create database `%s`", dbName))
-	defer func() {
-		execSQLDB(t, ctx, db, "use mo_catalog")
-		execSQLDB(t, ctx, db, fmt.Sprintf("drop database if exists `%s`", dbName))
-	}()
-	execSQLDB(t, ctx, db, fmt.Sprintf("use `%s`", dbName))
 
 	execSQLDB(t, ctx, db, fmt.Sprintf("create table %s (id int primary key, val int, note varchar(16))", base))
 	execSQLDB(t, ctx, db, fmt.Sprintf("insert into %s values (1, 10, 'seed'), (2, 20, 'seed'), (3, 30, 'seed'), (4, 40, 'seed'), (5, 50, 'seed'), (6, 60, 'seed')", base))
@@ -737,7 +1002,7 @@ func runDiffOutputLimitSubset(t *testing.T, parentCtx context.Context, db *sql.D
 	projectedFullRows := fetchDiffRowsAsStrings(t, ctx, db, projectedFullStmt)
 	require.GreaterOrEqual(t, len(projectedFullRows), 6)
 	for _, row := range projectedFullRows {
-		require.Len(t, row, 4, "projected diff should only include table, flag, and requested columns")
+		require.Len(t, row, 5, "projected diff should include table, flag, primary key, and requested columns")
 	}
 
 	projectedLimitStmt := fmt.Sprintf("data branch diff %s against %s columns (val, note) output limit %d", branch, base, limit)
@@ -750,28 +1015,20 @@ func runDiffOutputLimitSubset(t *testing.T, parentCtx context.Context, db *sql.D
 		projectedFullSet[strings.Join(row, "||")] = struct{}{}
 	}
 	for _, row := range projectedLimitedRows {
-		require.Len(t, row, 4, "projected limited diff should only include table, flag, and requested columns")
+		require.Len(t, row, 5, "projected limited diff should include table, flag, primary key, and requested columns")
 		_, ok := projectedFullSet[strings.Join(row, "||")]
 		require.Truef(t, ok, "projected limited diff row not contained in projected full diff: %v", row)
 	}
 }
 
-func runDiffOutputLimitNoBase(t *testing.T, parentCtx context.Context, db *sql.DB) {
+func runDiffOutputLimitNoBase(t *testing.T, parentCtx context.Context, db *sql.DB, dbName string) {
 	t.Helper()
 
 	ctx, cancel := context.WithTimeout(parentCtx, time.Second*90)
 	defer cancel()
 
-	dbName := testutils.GetDatabaseName(t)
 	base := "limit_nobranch_base"
 	target := "limit_nobranch_target"
-
-	execSQLDB(t, ctx, db, fmt.Sprintf("create database `%s`", dbName))
-	defer func() {
-		execSQLDB(t, ctx, db, "use mo_catalog")
-		execSQLDB(t, ctx, db, fmt.Sprintf("drop database if exists `%s`", dbName))
-	}()
-	execSQLDB(t, ctx, db, fmt.Sprintf("use `%s`", dbName))
 
 	execSQLDB(t, ctx, db, fmt.Sprintf("create table %s (id int primary key, val int, note varchar(16))", base))
 	execSQLDB(t, ctx, db, fmt.Sprintf("create table %s (id int primary key, val int, note varchar(16))", target))
@@ -801,37 +1058,22 @@ func runDiffOutputLimitNoBase(t *testing.T, parentCtx context.Context, db *sql.D
 	}
 }
 
-func runDiffOutputLimitLargeBase(t *testing.T, parentCtx context.Context, db *sql.DB) {
+func runDiffOutputLimitMultiBlockBase(t *testing.T, parentCtx context.Context, db *sql.DB, dbName string) {
 	t.Helper()
 
 	ctx, cancel := context.WithTimeout(parentCtx, time.Second*180)
 	defer cancel()
 
-	dbName := testutils.GetDatabaseName(t)
-	base := "limit_large_t1"
-	branch := "limit_large_t2"
-	rowCount := dataBranchScaleRows(8192*100, int(objectio.BlockMaxRows)*3+100)
-	updateEnd := 10000
-	branchUpdateStart := 10000
-	branchUpdateEnd := 10001
-	deleteStart := 30000
-	deleteEnd := 100000
-	if testing.Short() {
-		// Keep at least three blocks and both update/delete sides of the diff;
-		// the 100-block volume is reserved for explicit non-short stress runs.
-		updateEnd = rowCount / 4
-		branchUpdateStart = updateEnd
-		branchUpdateEnd = updateEnd + 1
-		deleteStart = rowCount / 2
-		deleteEnd = rowCount * 3 / 4
-	}
-
-	execSQLDB(t, ctx, db, fmt.Sprintf("create database `%s`", dbName))
-	defer func() {
-		execSQLDB(t, ctx, db, "use mo_catalog")
-		execSQLDB(t, ctx, db, fmt.Sprintf("drop database if exists `%s`", dbName))
-	}()
-	execSQLDB(t, ctx, db, fmt.Sprintf("use `%s`", dbName))
+	base := "limit_multiblock_base"
+	branch := "limit_multiblock_branch"
+	// Three full blocks plus a tail block are the minimum deterministic shape
+	// needed by this case. Larger volumes repeat the same diff/limit paths.
+	rowCount := int(objectio.BlockMaxRows)*3 + 100
+	updateEnd := rowCount / 4
+	branchUpdateStart := updateEnd
+	branchUpdateEnd := updateEnd + 1
+	deleteStart := rowCount / 2
+	deleteEnd := rowCount * 3 / 4
 
 	execSQLDB(t, ctx, db, fmt.Sprintf("create table %s (a int primary key, b int, c time)", base))
 	execSQLDB(t, ctx, db, fmt.Sprintf("insert into %s select *, *, '12:34:56' from generate_series(1, %d)g", base, rowCount))
@@ -868,25 +1110,17 @@ func runDiffOutputLimitLargeBase(t *testing.T, parentCtx context.Context, db *sq
 	limitQuery(len(fullRows) * 20 / 100)
 }
 
-func runDiffOutputSummaryComplex(t *testing.T, parentCtx context.Context, db *sql.DB) {
+func runDiffOutputSummaryComplex(t *testing.T, parentCtx context.Context, db *sql.DB, dbName string) {
 	t.Helper()
 
 	ctx, cancel := context.WithTimeout(parentCtx, time.Second*150)
 	defer cancel()
 
-	dbName := testutils.GetDatabaseName(t)
 	seed := "summary_seed"
 	left := "summary_left"
 	right := "summary_right"
 	standaloneBase := "summary_standalone_base"
 	standaloneTarget := "summary_standalone_target"
-
-	execSQLDB(t, ctx, db, fmt.Sprintf("create database `%s`", dbName))
-	defer func() {
-		execSQLDB(t, ctx, db, "use mo_catalog")
-		execSQLDB(t, ctx, db, fmt.Sprintf("drop database if exists `%s`", dbName))
-	}()
-	execSQLDB(t, ctx, db, fmt.Sprintf("use `%s`", dbName))
 
 	// Divergent branch scenario to verify both target/base columns can be non-zero per metric.
 	execSQLDB(t, ctx, db, fmt.Sprintf("create table %s (id int primary key, val int)", seed))
@@ -928,28 +1162,22 @@ func runDiffOutputSummaryComplex(t *testing.T, parentCtx context.Context, db *sq
 	require.Greater(t, standaloneCount, int64(0), "standalone summary/count should report non-zero diff rows")
 }
 
-func runDiffOutputToStage(t *testing.T, parentCtx context.Context, db *sql.DB) {
+func runDiffOutputToStage(t *testing.T, parentCtx context.Context, db *sql.DB, dbName string) {
 	t.Helper()
 
 	ctx, cancel := context.WithTimeout(parentCtx, time.Second*120)
 	defer cancel()
 
-	dbName := testutils.GetDatabaseName(t)
 	base := "stage_base"
 	branch := "stage_branch"
 
 	stageDir := t.TempDir()
-	stageName := "stage_local_" + strings.ToLower(testutils.GetDatabaseName(t))
+	stageName := "stage_local_" + strings.ToLower(dbName)
 	stageURL := fmt.Sprintf("file://%s", stageDir)
 
 	execSQLDB(t, ctx, db, "set role moadmin")
 	execSQLDB(t, ctx, db, fmt.Sprintf("create stage %s url = '%s'", stageName, stageURL))
 	defer execSQLDB(t, ctx, db, fmt.Sprintf("drop stage if exists %s", stageName))
-
-	execSQLDB(t, ctx, db, fmt.Sprintf("create database `%s`", dbName))
-	defer func() {
-		execSQLDB(t, ctx, db, fmt.Sprintf("drop database if exists `%s`", dbName))
-	}()
 
 	execSQLDB(t, ctx, db, fmt.Sprintf("create table `%s`.`%s` (id int primary key, val int)", dbName, base))
 	execSQLDB(t, ctx, db, fmt.Sprintf("insert into `%s`.`%s` values (1, 10), (2, 20), (3, 30)", dbName, base))
@@ -1004,24 +1232,16 @@ func runDiffOutputToStage(t *testing.T, parentCtx context.Context, db *sql.DB) {
 	assertTablesEqual(t, ctx, db, dbName, branch, base)
 }
 
-func runUpdateSplitDiffAsFile(t *testing.T, parentCtx context.Context, db *sql.DB) {
+func runUpdateSplitDiffAsFile(t *testing.T, parentCtx context.Context, db *sql.DB, dbName string) {
 	t.Helper()
 
 	ctx, cancel := context.WithTimeout(parentCtx, time.Second*90)
 	defer cancel()
 
-	dbName := testutils.GetDatabaseName(t)
 	base := "split_pk_base"
 	branch := "split_pk_branch"
 	diffDir := t.TempDir()
 	diffLiteral := strings.ReplaceAll(diffDir, "'", "''")
-
-	execSQLDB(t, ctx, db, fmt.Sprintf("create database `%s`", dbName))
-	defer func() {
-		execSQLDB(t, ctx, db, "use mo_catalog")
-		execSQLDB(t, ctx, db, fmt.Sprintf("drop database if exists `%s`", dbName))
-	}()
-	execSQLDB(t, ctx, db, fmt.Sprintf("use `%s`", dbName))
 
 	execSQLDB(t, ctx, db, fmt.Sprintf("create table `%s` (id int primary key, score int, note varchar(32))", base))
 	execSQLDB(t, ctx, db, fmt.Sprintf("insert into `%s` values (1, 10, 'seed'), (2, 20, 'seed'), (3, 30, 'seed')", base))
@@ -1036,32 +1256,31 @@ func runUpdateSplitDiffAsFile(t *testing.T, parentCtx context.Context, db *sql.D
 
 	sqlContent := readSQLFile(t, diffPath)
 	lowerContent := strings.ToLower(sqlContent)
-	require.Contains(t, lowerContent, "insert into "+diffSQLTable(dbName, base))
-	require.Contains(t, lowerContent, "delete from "+diffSQLTable(dbName, base)+" where "+diffSQLIdent("id")+" in")
-	require.NotContains(t, lowerContent, "update ")
+	baseTable := diffSQLTable(dbName, base)
+	require.Contains(t, lowerContent, "update "+baseTable+" as branch_apply_base join "+diffSQLIdent(dbName)+".`__mo_diff_upd_")
+	require.Contains(t, lowerContent,
+		"branch_apply_base."+diffSQLIdent("id")+" = branch_apply_stage."+diffSQLIdent("branch_apply_key_0"))
+	require.Contains(t, lowerContent,
+		"set branch_apply_base."+diffSQLIdent("score")+" = branch_apply_stage."+diffSQLIdent("score")+
+			",branch_apply_base."+diffSQLIdent("note")+" = branch_apply_stage."+diffSQLIdent("note"))
+	require.NotContains(t, lowerContent, "update "+baseTable+" set")
+	require.NotContains(t, lowerContent, "insert into "+baseTable)
+	require.NotContains(t, lowerContent, "delete from "+baseTable)
 
 	applyDiffStatements(t, ctx, db, sqlContent)
 	assertTablesEqual(t, ctx, db, dbName, branch, base)
 }
 
-func runCompositeUpdateSplitDiffAsFile(t *testing.T, parentCtx context.Context, db *sql.DB) {
+func runCompositeUpdateSplitDiffAsFile(t *testing.T, parentCtx context.Context, db *sql.DB, dbName string) {
 	t.Helper()
 
 	ctx, cancel := context.WithTimeout(parentCtx, time.Second*90)
 	defer cancel()
 
-	dbName := testutils.GetDatabaseName(t)
 	base := "split_comp_base"
 	branch := "split_comp_branch"
 	diffDir := t.TempDir()
 	diffLiteral := strings.ReplaceAll(diffDir, "'", "''")
-
-	execSQLDB(t, ctx, db, fmt.Sprintf("create database `%s`", dbName))
-	defer func() {
-		execSQLDB(t, ctx, db, "use mo_catalog")
-		execSQLDB(t, ctx, db, fmt.Sprintf("drop database if exists `%s`", dbName))
-	}()
-	execSQLDB(t, ctx, db, fmt.Sprintf("use `%s`", dbName))
 
 	execSQLDB(t, ctx, db, fmt.Sprintf("create table `%s` (org_id int, event_id int, qty int, note varchar(32), primary key (org_id, event_id))", base))
 	execSQLDB(t, ctx, db, fmt.Sprintf("insert into `%s` values (1, 1, 10, 'seed'), (1, 2, 20, 'seed'), (2, 1, 30, 'seed')", base))
@@ -1077,33 +1296,33 @@ func runCompositeUpdateSplitDiffAsFile(t *testing.T, parentCtx context.Context, 
 
 	sqlContent := readSQLFile(t, diffPath)
 	lowerContent := strings.ToLower(sqlContent)
-	require.Contains(t, lowerContent, "insert into "+diffSQLTable(dbName, base))
-	require.Contains(t, lowerContent, "delete from "+diffSQLTable(dbName, base)+" where "+diffSQLColumns("org_id", "event_id")+" in")
+	baseTable := diffSQLTable(dbName, base)
+	require.Contains(t, lowerContent, "update "+baseTable+" as branch_apply_base join "+diffSQLIdent(dbName)+".`__mo_diff_upd_")
+	require.Contains(t, lowerContent,
+		"branch_apply_base."+diffSQLIdent("org_id")+" = branch_apply_stage."+diffSQLIdent("branch_apply_key_0")+
+			" and branch_apply_base."+diffSQLIdent("event_id")+" = branch_apply_stage."+diffSQLIdent("branch_apply_key_1"))
+	require.Contains(t, lowerContent,
+		"set branch_apply_base."+diffSQLIdent("qty")+" = branch_apply_stage."+diffSQLIdent("qty")+
+			",branch_apply_base."+diffSQLIdent("note")+" = branch_apply_stage."+diffSQLIdent("note"))
+	require.NotContains(t, lowerContent, "update "+baseTable+" set")
 	require.Contains(t, lowerContent, "null")
-	require.NotContains(t, lowerContent, "update ")
+	require.NotContains(t, lowerContent, "insert into "+baseTable)
+	require.NotContains(t, lowerContent, "delete from "+baseTable)
 
 	applyDiffStatements(t, ctx, db, sqlContent)
 	assertTablesEqual(t, ctx, db, dbName, branch, base)
 }
 
-func runNoPKDuplicateDiffAsFile(t *testing.T, parentCtx context.Context, db *sql.DB) {
+func runNoPKDuplicateDiffAsFile(t *testing.T, parentCtx context.Context, db *sql.DB, dbName string) {
 	t.Helper()
 
 	ctx, cancel := context.WithTimeout(parentCtx, time.Second*120)
 	defer cancel()
 
-	dbName := testutils.GetDatabaseName(t)
 	base := "no_pk_base"
 	branch := "no_pk_branch"
 	diffDir := t.TempDir()
 	diffLiteral := strings.ReplaceAll(diffDir, "'", "''")
-
-	execSQLDB(t, ctx, db, fmt.Sprintf("create database `%s`", dbName))
-	defer func() {
-		execSQLDB(t, ctx, db, "use mo_catalog")
-		execSQLDB(t, ctx, db, fmt.Sprintf("drop database if exists `%s`", dbName))
-	}()
-	execSQLDB(t, ctx, db, fmt.Sprintf("use `%s`", dbName))
 
 	execSQLDB(t, ctx, db, fmt.Sprintf("create table `%s` (id int, grp int, note varchar(32))", base))
 	execSQLDB(t, ctx, db, fmt.Sprintf(`insert into %s values
@@ -1141,24 +1360,16 @@ func runNoPKDuplicateDiffAsFile(t *testing.T, parentCtx context.Context, db *sql
 	assertTablesEqual(t, ctx, db, dbName, branch, base)
 }
 
-func runComplexTypeDiffAsFile(t *testing.T, parentCtx context.Context, db *sql.DB) {
+func runComplexTypeDiffAsFile(t *testing.T, parentCtx context.Context, db *sql.DB, dbName string) {
 	t.Helper()
 
 	ctx, cancel := context.WithTimeout(parentCtx, time.Second*120)
 	defer cancel()
 
-	dbName := testutils.GetDatabaseName(t)
 	base := "complex_base"
 	branch := "complex_branch"
 	diffDir := t.TempDir()
 	diffLiteral := strings.ReplaceAll(diffDir, "'", "''")
-
-	execSQLDB(t, ctx, db, fmt.Sprintf("create database `%s`", dbName))
-	defer func() {
-		execSQLDB(t, ctx, db, "use mo_catalog")
-		execSQLDB(t, ctx, db, fmt.Sprintf("drop database if exists `%s`", dbName))
-	}()
-	execSQLDB(t, ctx, db, fmt.Sprintf("use `%s`", dbName))
 
 	execSQLDB(t, ctx, db, fmt.Sprintf(`
 create table %s (
@@ -1190,31 +1401,33 @@ create table %s (
 
 	sqlContent := readSQLFile(t, diffPath)
 	lowerContent := strings.ToLower(sqlContent)
-	require.Contains(t, lowerContent, "insert into "+diffSQLTable(dbName, base))
-	require.Contains(t, lowerContent, "delete from "+diffSQLTable(dbName, base))
+	baseTable := diffSQLTable(dbName, base)
+	require.Contains(t, lowerContent, "update "+baseTable+" as branch_apply_base join "+diffSQLIdent(dbName)+".`__mo_diff_upd_")
+	require.Contains(t, lowerContent,
+		"branch_apply_base."+diffSQLIdent("id")+" = branch_apply_stage."+diffSQLIdent("branch_apply_key_0"))
+	require.Contains(t, lowerContent,
+		"set branch_apply_base."+diffSQLIdent("name")+" = branch_apply_stage."+diffSQLIdent("name"))
+	require.NotContains(t, lowerContent, "update "+baseTable+" set")
+	require.Contains(t, lowerContent, "insert into "+baseTable)
+	require.Contains(t, lowerContent, "delete from "+baseTable)
 	require.Contains(t, lowerContent, "null")
 	require.Contains(t, lowerContent, "''")
-	require.NotContains(t, lowerContent, "update ")
 
 	applyDiffStatements(t, ctx, db, sqlContent)
 	assertTablesEqual(t, ctx, db, dbName, branch, base)
 }
 
-func runBranchDatabaseMetadata(t *testing.T, parentCtx context.Context, db *sql.DB) {
+func runBranchDatabaseMetadata(t *testing.T, parentCtx context.Context, db *sql.DB, dbName string) {
 	t.Helper()
 
 	ctx, cancel := context.WithTimeout(parentCtx, time.Second*90)
 	defer cancel()
 
-	dbName := testutils.GetDatabaseName(t)
 	copyDB := dbName + "_copy"
 	tables := []string{"tbl_one", "tbl_two"}
 
+	defer cleanupTestDatabases(t, db, copyDB, dbName)
 	execSQLDB(t, ctx, db, fmt.Sprintf("create database `%s`", dbName))
-	defer func() {
-		execSQLDB(t, ctx, db, fmt.Sprintf("drop database if exists `%s`", copyDB))
-		execSQLDB(t, ctx, db, fmt.Sprintf("drop database if exists `%s`", dbName))
-	}()
 
 	execSQLDB(t, ctx, db, fmt.Sprintf("create table `%s`.`%s` (id int primary key)", dbName, tables[0]))
 	execSQLDB(t, ctx, db, fmt.Sprintf("create table `%s`.`%s` (id int primary key)", dbName, tables[1]))

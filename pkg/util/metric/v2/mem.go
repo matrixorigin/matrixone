@@ -18,6 +18,13 @@ import (
 	"github.com/prometheus/client_golang/prometheus"
 )
 
+var MemObjectIOPooledSerialBytesGauge = prometheus.NewGauge(prometheus.GaugeOpts{
+	Namespace: "mo",
+	Subsystem: "mem",
+	Name:      "objectio_pooled_serial_bytes",
+	Help:      "Retained Go-heap serialization-buffer capacity in pooled object writers.",
+})
+
 var (
 	memMPoolAllocatedSizeGauge = prometheus.NewGaugeVec(
 		prometheus.GaugeOpts{
@@ -56,6 +63,23 @@ var (
 	MemTAEWorkSpaceHighWaterMarkGauge         = memMPoolHighWaterMarkGauge.WithLabelValues("tae_workspace_high_water_mark")
 	MemTAEDebugHighWaterMarkGauge             = memMPoolHighWaterMarkGauge.WithLabelValues("tae_debug_high_water_mark")
 	MemGlobalStatsHighWaterMarkGauge          = memMPoolHighWaterMarkGauge.WithLabelValues("global_stats_allocated_high_water_mark")
+)
+
+var (
+	MemMPoolOnHeapOutstandingBytesGauge = prometheus.NewGauge(
+		prometheus.GaugeOpts{
+			Namespace: "mo",
+			Subsystem: "mem",
+			Name:      "mpool_onheap_outstanding_bytes",
+			Help:      "Go-heap-backed bytes still logically owned by MPool and awaiting Free.",
+		})
+	MemMPoolOnHeapOutstandingObjectsGauge = prometheus.NewGauge(
+		prometheus.GaugeOpts{
+			Namespace: "mo",
+			Subsystem: "mem",
+			Name:      "mpool_onheap_outstanding_objects",
+			Help:      "Go-heap-backed objects still logically owned by MPool and awaiting Free.",
+		})
 )
 
 var (

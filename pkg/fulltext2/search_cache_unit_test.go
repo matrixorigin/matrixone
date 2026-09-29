@@ -16,8 +16,10 @@ package fulltext2
 
 import (
 	"math"
+	"strings"
 	"testing"
 
+	"github.com/matrixorigin/matrixone/pkg/common/moerr"
 	"github.com/matrixorigin/matrixone/pkg/common/mpool"
 	"github.com/matrixorigin/matrixone/pkg/container/batch"
 	"github.com/matrixorigin/matrixone/pkg/container/types"
@@ -59,6 +61,111 @@ func TestFulltext2SearchNewAndUnloaded(t *testing.T) {
 
 	// SearchFloat32 is unsupported.
 	require.ErrorContains(t, s.SearchFloat32(proc, nil, vectorindex.RuntimeConfig{}, nil, nil), "not supported")
+
+	// Generic cache cleanup destroys failed loads too. An unloaded FULLTEXT2
+	// handle therefore has to be safe to destroy.
+	s.Destroy()
+	require.Nil(t, s.idx)
+	require.False(t, s.loaded)
+}
+
+func TestFulltext2SearchLoad(t *testing.T) {
+	sp, mp := mockSqlProc(t)
+	cfg := testStorageCfg()
+	// Dispatch on the SQL, not on call ORDER: a stub keyed by sequence renumbers every case
+	// the moment the load path gains or drops a query, which is how it breaks for reasons
+	// unrelated to what it asserts.
+	swapRunSql(t, func(_ *sqlexec.SqlProcess, sql string) (executor.Result, error) {
+		switch {
+		case strings.Contains(sql, "MAX(timestamp"):
+			return executor.Result{Mp: mp, Batches: []*batch.Batch{docsAndBytesBatch(mp, 11, 0)}}, nil
+		case strings.Contains(sql, "MAX(chunk_id"):
+			return executor.Result{Mp: mp, Batches: []*batch.Batch{docsAndBytesBatch(mp, 22, 0)}}, nil
+		case strings.Contains(sql, "SUM(") || strings.Contains(sql, "COUNT(*)"):
+			// base doc/byte sums, the tail frame sum, and the chunk-count fallback
+			return executor.Result{Mp: mp, Batches: []*batch.Batch{docsAndBytesBatch(mp, 0, 0)}}, nil
+		default:
+			// base id enumeration and tail chunk data: neither has rows here
+			return executor.Result{Mp: mp}, nil
+		}
+	})
+
+	s := NewFulltext2Search(cfg)
+	require.NoError(t, s.Load(sp))
+	require.True(t, s.loaded)
+	require.NotNil(t, s.idx)
+	require.True(t, s.genValid)
+	require.Equal(t, int64(11), s.loadedTs)
+	require.Equal(t, int64(22), s.loadedTail)
+	s.Destroy()
+}
+
+func TestFulltext2SearchLoadErrors(t *testing.T) {
+	t.Run("base budget", func(t *testing.T) {
+		sp, _ := mockSqlProc(t)
+		swapRunSql(t, func(_ *sqlexec.SqlProcess, _ string) (executor.Result, error) {
+			return executor.Result{}, moerr.NewInternalErrorNoCtx("base budget failed")
+		})
+
+		s := NewFulltext2Search(testStorageCfg())
+		require.ErrorContains(t, s.Load(sp), "base budget failed")
+	})
+
+	t.Run("base enumeration", func(t *testing.T) {
+		sp, mp := mockSqlProc(t)
+		calls := 0
+		swapRunSql(t, func(_ *sqlexec.SqlProcess, _ string) (executor.Result, error) {
+			calls++
+			if calls == 1 {
+				return executor.Result{Mp: mp, Batches: []*batch.Batch{docsAndBytesBatch(mp, 0, 0)}}, nil
+			}
+			return executor.Result{}, moerr.NewInternalErrorNoCtx("base enumeration failed")
+		})
+
+		s := NewFulltext2Search(testStorageCfg())
+		require.ErrorContains(t, s.Load(sp), "base enumeration failed")
+	})
+
+	t.Run("tail query", func(t *testing.T) {
+		sp, mp := mockSqlProc(t)
+		calls := 0
+		swapRunSql(t, func(_ *sqlexec.SqlProcess, _ string) (executor.Result, error) {
+			calls++
+			switch calls {
+			case 1, 3:
+				return executor.Result{Mp: mp, Batches: []*batch.Batch{docsAndBytesBatch(mp, 0, 0)}}, nil
+			case 2:
+				return executor.Result{Mp: mp}, nil // no base ids
+			default:
+				return executor.Result{}, moerr.NewInternalErrorNoCtx("tail query failed")
+			}
+		})
+
+		s := NewFulltext2Search(testStorageCfg())
+		require.ErrorContains(t, s.Load(sp), "tail query failed")
+	})
+
+	t.Run("generation capture", func(t *testing.T) {
+		sp, mp := mockSqlProc(t)
+		// Only the generation reads fail; everything the load itself needs succeeds. Keyed on
+		// the SQL rather than call order, which renumbers whenever the load path changes.
+		swapRunSql(t, func(_ *sqlexec.SqlProcess, sql string) (executor.Result, error) {
+			switch {
+			case strings.Contains(sql, "MAX("):
+				return executor.Result{}, moerr.NewInternalErrorNoCtx("generation capture failed")
+			case strings.Contains(sql, "SUM(") || strings.Contains(sql, "COUNT(*)"):
+				return executor.Result{Mp: mp, Batches: []*batch.Batch{docsAndBytesBatch(mp, 0, 0)}}, nil
+			default:
+				return executor.Result{Mp: mp}, nil // no base ids and no tail chunks
+			}
+		})
+
+		s := NewFulltext2Search(testStorageCfg())
+		require.NoError(t, s.Load(sp))
+		require.True(t, s.loaded)
+		require.False(t, s.genValid)
+		s.Destroy()
+	})
 }
 
 // TestStaleGenSqls pins the cache-freshness generation queries: MAX(timestamp) over the

@@ -49,8 +49,24 @@ type testEntireEngine struct {
 }
 
 type testEngine struct {
-	name   string // origin or temporary
-	parent *testEntireEngine
+	name       string // origin or temporary
+	parent     *testEntireEngine
+	stats      *pb.StatsInfo
+	statsCalls int
+}
+
+type testRemoteStatsEngine struct {
+	Engine
+	stats *pb.StatsInfo
+	calls int
+}
+
+func (e *testRemoteStatsEngine) StatsForRemote(
+	context.Context,
+	pb.StatsInfoKey,
+) *pb.StatsInfo {
+	e.calls++
+	return e.stats
 }
 
 var _ Engine = new(testEngine)
@@ -135,6 +151,28 @@ func TestEntireEngineHints(t *testing.T) {
 	ee.Hints()
 	assert.Equal(t, only_engine, ee.state)
 
+}
+
+func TestEntireEngineStatsForRemote(t *testing.T) {
+	t.Run("optional exporter", func(t *testing.T) {
+		want := &pb.StatsInfo{TableCnt: 42}
+		exporter := &testRemoteStatsEngine{stats: want}
+		ee := &EntireEngine{Engine: exporter}
+
+		assert.Same(t, want, ee.StatsForRemote(context.Background(), pb.StatsInfoKey{}))
+		assert.Equal(t, 1, exporter.calls)
+	})
+
+	t.Run("legacy fallback", func(t *testing.T) {
+		parent := new(testEntireEngine)
+		want := &pb.StatsInfo{TableCnt: 7}
+		legacy := newtestEngine(origin, parent)
+		legacy.stats = want
+		ee := &EntireEngine{Engine: legacy}
+
+		assert.Same(t, want, ee.StatsForRemote(context.Background(), pb.StatsInfoKey{}))
+		assert.Equal(t, 1, legacy.statsCalls)
+	})
 }
 
 func buildTestEntireEngine() *testEntireEngine {
@@ -286,7 +324,8 @@ func (e *testEngine) PrefetchTableMeta(ctx context.Context, key pb.StatsInfoKey)
 }
 
 func (e *testEngine) Stats(ctx context.Context, key pb.StatsInfoKey, sync bool) *pb.StatsInfo {
-	return nil
+	e.statsCalls++
+	return e.stats
 }
 
 func (e *testEngine) GetMessageCenter() any {

@@ -27,8 +27,9 @@ import (
 )
 
 var (
-	ErrSQLTaskOverlap  = moerr.NewInternalErrorNoCtx("sql task is already running")
-	ErrSQLTaskNotFound = moerr.NewInternalErrorNoCtx("sql task not found")
+	ErrSQLTaskOverlap        = moerr.NewInternalErrorNoCtx("sql task is already running")
+	ErrSQLTaskNotFound       = moerr.NewInternalErrorNoCtx("sql task not found")
+	ErrSQLTaskAccountMissing = moerr.NewInternalErrorNoCtx("sql task account not found")
 )
 
 func BuildSQLTaskCronSpec(cronExpr, timezone string) string {

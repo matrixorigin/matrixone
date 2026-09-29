@@ -17,6 +17,8 @@ package compile
 import (
 	"context"
 	"testing"
+
+	"github.com/matrixorigin/matrixone/pkg/sql/plan"
 )
 
 type testInternalExecutorSession struct{}
@@ -51,6 +53,19 @@ func TestAttachInternalExecutorSessionWithNil(t *testing.T) {
 	attached := attachInternalExecutorSession(ctx, nil)
 	if got := getInternalExecutorSession(attached); got != nil {
 		t.Fatalf("expected nil session, got %v", got)
+	}
+}
+
+func TestAttachInternalExecutorCompilerContext(t *testing.T) {
+	ctx := context.Background()
+	compilerContext := plan.NewMockCompilerContext(false)
+	attached := attachInternalExecutorCompilerContext(ctx, compilerContext)
+	if got := getInternalExecutorCompilerContext(attached); got != compilerContext {
+		t.Fatalf("expected attached compiler context, got %v", got)
+	}
+	if got := getInternalExecutorCompilerContext(
+		attachInternalExecutorCompilerContext(ctx, nil)); got != nil {
+		t.Fatalf("expected nil compiler context, got %v", got)
 	}
 }
 

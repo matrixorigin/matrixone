@@ -152,6 +152,21 @@ func TestCanSaveQueryResultBySQLSource(t *testing.T) {
 	}
 }
 
+func TestBuildQueryResultMetaBatchCleansPartialBatchOnAppendFailure(t *testing.T) {
+	originalCapLimit := mpool.CapLimit
+	mpool.CapLimit = 128
+	t.Cleanup(func() { mpool.CapLimit = originalCapLimit })
+
+	mp := mpool.MustNewZero()
+	defer mpool.DeleteMPool(mp)
+
+	bat, err := buildQueryResultMetaBatch(&catalog.Meta{
+		Statement: strings.Repeat("x", 256),
+	}, mp)
+	require.Error(t, err)
+	require.Nil(t, bat)
+}
+
 func Test_saveQueryResultMeta(t *testing.T) {
 	ioutil.RunPipelineTest(
 		func() {

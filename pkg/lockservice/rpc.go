@@ -39,11 +39,12 @@ import (
 )
 
 var (
-	defaultRPCTimeout          = time.Second * 10
-	defaultRPCWriteTimeout     = time.Second * 3
-	defaultRPCEnqueueTimeout   = time.Second * 5
-	defaultHandleWorkers       = 12
-	defaultHandleGetTxnWorkers = 4
+	defaultRPCTimeout           = time.Second * 10
+	defaultRPCWriteTimeout      = time.Second * 3
+	defaultRPCEnqueueTimeout    = time.Second * 5
+	defaultHandleWorkers        = 12
+	defaultHandleGetTxnWorkers  = 4
+	defaultOwnerSnapshotWorkers = 4
 	// Recovery identity and validation probes must fail fast when a remote lock
 	// service is gone. Factory execution and process-local queue admission are
 	// different failure domains: the former is peer health, while the latter is
@@ -283,11 +284,59 @@ func checkMethodVersion(
 	service string,
 	req *pb.Request,
 ) error {
-	return runtime.CheckMethodVersion(ctx, service, methodVersions, req)
+	err := runtime.CheckMethodVersion(ctx, service, methodVersions, req)
+	if err != nil && req.Method == pb.Method_GetTxnWaitingListOnLockTable {
+		// This method has an explicit Lock-response capability handshake. If the
+		// process-wide deployment protocol later moves below v28, surface the
+		// loss as a terminal capability error instead of an Internal error that
+		// remote snapshot retry loops would treat as transport-transient.
+		return moerr.NewNotSupportedNoCtx(
+			"owner-local lock wait snapshot is unavailable in the current protocol version")
+	}
+	if err != nil && req.Method == pb.Method_LockWriterFair {
+		// This method is deliberately capability-bearing. A local rollout gate
+		// below v99 is equivalent to an old remote owner: reject before admission
+		// so remoteLockTable can retry the logical request as Exclusive.
+		return moerr.NewNotSupportedNoCtx(
+			"writer-fair lock admission is unavailable in the current protocol version")
+	}
+	return err
 }
 
 func (c *client) AsyncSend(ctx context.Context, request *pb.Request) (*morpc.Future, error) {
 	return c.asyncSend(ctx, request, true)
+}
+
+// lookupLockServiceAddress resolves an internal lock protocol endpoint from
+// the raw CN inventory. A CN starts and identity-fences its lock RPC server
+// before it becomes eligible for new SQL work, so public admission filtering
+// must not hide an existing lock-table owner during that startup window.
+func (c *client) lookupLockServiceAddress(
+	ctx context.Context,
+	serviceID string,
+) (string, error) {
+	var address string
+	err := clusterservice.GetCNServiceRawWithContext(
+		ctx,
+		c.cluster,
+		clusterservice.NewServiceIDSelector(serviceID),
+		func(s metadata.CNService) bool {
+			address = s.LockServiceAddress
+			return false
+		},
+	)
+	return address, err
+}
+
+// activeTxnOwnerPresent consults the local raw membership view, without an RPC,
+// a discovery refresh, or a connection reset. Absence is only a reason to defer
+// probing: it is not an authoritative negative GetActiveTxn response.
+func (c *client) activeTxnOwnerPresent(ctx context.Context, serviceID string) (bool, error) {
+	address, err := c.lookupLockServiceAddress(ctx, getUUIDFromServiceIdentifier(serviceID))
+	if err == nil && address == "" {
+		v2.TxnLockActiveTxnRecoveryCounter.WithLabelValues("owner-absent").Inc()
+	}
+	return address != "", err
 }
 
 func (c *client) asyncSend(
@@ -309,18 +358,6 @@ func (c *client) asyncSend(
 		}
 		return nil, err
 	}
-	lookupCN := func(
-		selector clusterservice.Selector,
-		apply func(metadata.CNService) bool,
-	) error {
-		return clusterservice.GetCNServiceWithoutWorkingStateWithContext(
-			ctx,
-			c.cluster,
-			selector,
-			apply,
-		)
-	}
-
 	var sid = ""
 	var address string
 	for i := 0; i < 2; i++ {
@@ -328,64 +365,32 @@ func (c *client) asyncSend(
 		switch request.Method {
 		case pb.Method_ForwardLock:
 			sid = getUUIDFromServiceIdentifier(request.Lock.Options.ForwardTo)
-			lookupErr = lookupCN(
-				clusterservice.NewServiceIDSelector(sid),
-				func(s metadata.CNService) bool {
-					address = s.LockServiceAddress
-					return false
-				})
+			address, lookupErr = c.lookupLockServiceAddress(ctx, sid)
 		case pb.Method_Lock,
+			pb.Method_LockWriterFair,
 			pb.Method_Unlock,
+			pb.Method_BatchUnlock,
 			pb.Method_GetTxnLock,
 			pb.Method_GetLockHolder,
 			pb.Method_KeepRemoteLock:
 			sid = getUUIDFromServiceIdentifier(request.LockTable.ServiceID)
-			lookupErr = lookupCN(
-				clusterservice.NewServiceIDSelector(sid),
-				func(s metadata.CNService) bool {
-					address = s.LockServiceAddress
-					return false
-				})
+			address, lookupErr = c.lookupLockServiceAddress(ctx, sid)
 		case pb.Method_ValidateService:
 			sid = getUUIDFromServiceIdentifier(request.ValidateService.ServiceID)
-			lookupErr = lookupCN(
-				clusterservice.NewServiceIDSelector(sid),
-				func(s metadata.CNService) bool {
-					address = s.LockServiceAddress
-					return false
-				})
-		case pb.Method_GetWaitingList:
+			address, lookupErr = c.lookupLockServiceAddress(ctx, sid)
+		case pb.Method_GetWaitingList,
+			pb.Method_GetTxnWaitingListOnLockTable:
 			sid = getUUIDFromServiceIdentifier(request.GetWaitingList.Txn.CreatedOn)
-			lookupErr = lookupCN(
-				clusterservice.NewServiceIDSelector(sid),
-				func(s metadata.CNService) bool {
-					address = s.LockServiceAddress
-					return false
-				})
+			address, lookupErr = c.lookupLockServiceAddress(ctx, sid)
 		case pb.Method_GetActiveTxn:
 			sid = getUUIDFromServiceIdentifier(request.GetActiveTxn.ServiceID)
-			lookupErr = lookupCN(
-				clusterservice.NewServiceIDSelector(sid),
-				func(s metadata.CNService) bool {
-					address = s.LockServiceAddress
-					return false
-				})
+			address, lookupErr = c.lookupLockServiceAddress(ctx, sid)
 		case pb.Method_CheckActiveTxn:
 			sid = getUUIDFromServiceIdentifier(request.CheckActiveTxn.ServiceID)
-			lookupErr = lookupCN(
-				clusterservice.NewServiceIDSelector(sid),
-				func(s metadata.CNService) bool {
-					address = s.LockServiceAddress
-					return false
-				})
+			address, lookupErr = c.lookupLockServiceAddress(ctx, sid)
 		case pb.Method_AbortRemoteDeadlockTxn:
 			sid = getUUIDFromServiceIdentifier(request.AbortRemoteDeadlockTxn.Txn.WaiterAddress)
-			lookupErr = lookupCN(
-				clusterservice.NewServiceIDSelector(sid),
-				func(s metadata.CNService) bool {
-					address = s.LockServiceAddress
-					return false
-				})
+			address, lookupErr = c.lookupLockServiceAddress(ctx, sid)
 		default:
 			values := c.cluster.GetAllTNServices()
 			if len(values) > 0 {
@@ -415,7 +420,9 @@ func (c *client) asyncSend(
 	}
 	if address == "" {
 		var cns []string
-		if err := lookupCN(
+		if err := clusterservice.GetCNServiceRawWithContext(
+			ctx,
+			c.cluster,
 			clusterservice.NewSelectAll(),
 			func(s metadata.CNService) bool {
 				cns = append(cns, s.ServiceID)
@@ -427,7 +434,8 @@ func (c *client) asyncSend(
 			zap.String("target", sid),
 			zap.Any("cns", cns),
 			zap.String("request", request.DebugString()))
-
+		return returnError(moerr.NewBackendCannotConnectNoCtx(
+			"lockservice service " + sid + " is absent from cluster inventory"))
 	}
 	transport := c.client
 	if keeperOwnsRequest {
@@ -661,15 +669,7 @@ func (c *client) ResetBackend(parent context.Context, serviceID string) (err err
 	}
 
 	lookupAddress := func() (string, error) {
-		var address string
-		err := clusterservice.GetCNServiceWithoutWorkingStateWithContext(
-			ctx,
-			c.cluster,
-			clusterservice.NewServiceIDSelector(sid),
-			func(s metadata.CNService) bool {
-				address = s.LockServiceAddress
-				return false
-			})
+		address, err := c.lookupLockServiceAddress(ctx, sid)
 		if err != nil {
 			return "", moerr.AttachCause(ctx, err)
 		}
@@ -790,16 +790,7 @@ func (c *client) ResetValidationBackend(
 	}
 	sid := getUUIDFromServiceIdentifier(serviceID)
 	lookupAddress := func() (string, error) {
-		var address string
-		err := clusterservice.GetCNServiceWithoutWorkingStateWithContext(
-			ctx,
-			c.cluster,
-			clusterservice.NewServiceIDSelector(sid),
-			func(s metadata.CNService) bool {
-				address = s.LockServiceAddress
-				return false
-			},
-		)
+		address, err := c.lookupLockServiceAddress(ctx, sid)
 		if err != nil {
 			return "", moerr.AttachCause(ctx, err)
 		}
@@ -975,6 +966,7 @@ type server struct {
 	closeErr              error
 	requests              chan requestCtx
 	getActiveTxnRequests  chan requestCtx
+	ownerSnapshotRequests chan requestCtx
 	requestEnqueueTimeout time.Duration
 	stopper               *stopper.Stopper
 
@@ -998,6 +990,7 @@ func NewServer(
 		handlers:              make(map[pb.Method]RequestHandleFunc),
 		requests:              make(chan requestCtx, 10240),
 		getActiveTxnRequests:  make(chan requestCtx, 10240),
+		ownerSnapshotRequests: make(chan requestCtx, 10240),
 		requestEnqueueTimeout: defaultRPCEnqueueTimeout,
 		stopper: stopper.NewStopper("lock-service-rpc-server",
 			stopper.WithLogger(logger.RawLogger())),
@@ -1026,6 +1019,7 @@ func NewServer(
 func (s *server) Start() error {
 	s.setupRemoteHandles(defaultHandleWorkers, s.requests)
 	s.setupRemoteHandles(defaultHandleGetTxnWorkers, s.getActiveTxnRequests)
+	s.setupRemoteHandles(defaultOwnerSnapshotWorkers, s.ownerSnapshotRequests)
 	return s.rpc.Start()
 }
 
@@ -1045,8 +1039,14 @@ func (s *server) Close() error {
 		s.stopper.Stop()
 		releaseQueuedRequests(s.requests)
 		releaseQueuedRequests(s.getActiveTxnRequests)
+		if s.ownerSnapshotRequests != nil {
+			releaseQueuedRequests(s.ownerSnapshotRequests)
+		}
 		close(s.requests)
 		close(s.getActiveTxnRequests)
+		if s.ownerSnapshotRequests != nil {
+			close(s.ownerSnapshotRequests)
+		}
 	})
 	return s.closeErr
 }
@@ -1131,6 +1131,8 @@ func (s *server) onMessage(
 	if req.Method == pb.Method_GetActiveTxn ||
 		req.Method == pb.Method_CheckActiveTxn {
 		c = s.getActiveTxnRequests
+	} else if req.Method == pb.Method_GetTxnWaitingListOnLockTable {
+		c = s.ownerSnapshotRequests
 	}
 	queuedRequest := requestCtx{
 		req:     req,
@@ -1158,7 +1160,7 @@ func (s *server) onMessage(
 	select {
 	case c <- queuedRequest:
 		s.lifecycle.RUnlock()
-		v2.TxnLockRPCQueueSizeGauge.Set(float64(len(s.requests) + len(s.getActiveTxnRequests)))
+		v2.TxnLockRPCQueueSizeGauge.Set(float64(s.queuedRequestCount()))
 		return nil
 	default:
 	}
@@ -1176,7 +1178,7 @@ func (s *server) onMessage(
 	select {
 	case c <- queuedRequest:
 		s.lifecycle.RUnlock()
-		v2.TxnLockRPCQueueSizeGauge.Set(float64(len(s.requests) + len(s.getActiveTxnRequests)))
+		v2.TxnLockRPCQueueSizeGauge.Set(float64(s.queuedRequestCount()))
 		return nil
 	case <-closingC:
 		s.lifecycle.RUnlock()
@@ -1211,6 +1213,12 @@ func (s *server) onMessage(
 		releaseRequest(req)
 		return nil
 	}
+}
+
+func (s *server) queuedRequestCount() int {
+	return len(s.requests) +
+		len(s.getActiveTxnRequests) +
+		len(s.ownerSnapshotRequests)
 }
 
 func rejectRequestForServerClose(
@@ -1265,7 +1273,7 @@ func (s *server) handle(
 		case <-ctx.Done():
 			return
 		case ctx := <-requests:
-			v2.TxnLockRPCQueueSizeGauge.Set(float64(len(requests)))
+			v2.TxnLockRPCQueueSizeGauge.Set(float64(s.queuedRequestCount()))
 			fn(ctx)
 		}
 	}

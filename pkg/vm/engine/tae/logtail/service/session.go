@@ -835,6 +835,50 @@ func (ss *Session) TrySendUpdateResponse(
 	return ss.sendResponse(sendCtx, resp, false)
 }
 
+// TrySendProgressResponse makes to observable through the ordinary CN apply
+// pipeline even when every preceding logtail was filtered out for this
+// session. Responses are admitted by the global logtail sender, so holding
+// publishMu across the non-blocking hand-off preserves the same per-session
+// frontier order as Publish.
+func (ss *Session) TrySendProgressResponse(
+	sendCtx context.Context,
+	to timestamp.Timestamp,
+) error {
+	ss.publishMu.Lock()
+	defer ss.publishMu.Unlock()
+
+	// A ready subscriber has already applied its subscription snapshots. If no
+	// incremental response initialized exactFrom yet, that snapshot is at least
+	// as new as the barrier frontier and no extra progress response is needed.
+	ss.publishInit.Do(func() {
+		ss.exactFrom = to
+	})
+	if to.LessEq(ss.exactFrom) {
+		return nil
+	}
+
+	resp := ss.responses.Acquire()
+	resp.Response = newUpdateResponse(ss.exactFrom, to)
+	if err := ss.sendResponse(sendCtx, resp, false); err != nil {
+		return err
+	}
+	ss.exactFrom = to
+	return nil
+}
+
+// TrySendReadBarrierResponse preserves global logtail progress: a congested
+// session reconnects instead of blocking every other subscriber behind its
+// barrier response.
+func (ss *Session) TrySendReadBarrierResponse(
+	sendCtx context.Context,
+	barrierID uint64,
+	ts timestamp.Timestamp,
+) error {
+	resp := ss.responses.Acquire()
+	resp.Response = newReadBarrierResponse(barrierID, ts)
+	return ss.sendResponse(sendCtx, resp, false)
+}
+
 // SendResponse sends response.
 //
 // If the sender of Session finished, it would block until
@@ -986,6 +1030,18 @@ func newUnsubscriptionResponse(
 	return &logtail.LogtailResponse_UnsubscribeResponse{
 		UnsubscribeResponse: &logtail.UnSubscribeResponse{
 			Table: &table,
+		},
+	}
+}
+
+func newReadBarrierResponse(
+	barrierID uint64,
+	ts timestamp.Timestamp,
+) *logtail.LogtailResponse_ReadBarrierResponse {
+	return &logtail.LogtailResponse_ReadBarrierResponse{
+		ReadBarrierResponse: &logtail.ReadBarrierResponse{
+			BarrierId: barrierID,
+			Timestamp: &ts,
 		},
 	}
 }

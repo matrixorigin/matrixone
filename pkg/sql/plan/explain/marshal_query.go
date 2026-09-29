@@ -108,6 +108,9 @@ func (m MarshalNodeImpl) GetNodeName(ctx context.Context) (string, error) {
 	if m.node.NodeType == plan.Node_PARTITION && m.node.Limit != nil && m.node.PartitionByCount > 0 {
 		return "Partition Top N", nil
 	}
+	if m.node.NodeType == plan.Node_PARTITION && m.node.PartitionAlgorithm == plan.Node_PARTITION_ALGORITHM_HASH {
+		return "Hash Partition", nil
+	}
 	if value, ok := nodeTypeToNameMap[m.node.NodeType]; ok {
 		return value, nil
 	} else {
@@ -160,7 +163,7 @@ func (m MarshalNodeImpl) GetNodeTitle(ctx context.Context, options *ExplainOptio
 		}
 	case plan.Node_FILTER, plan.Node_ASSERT:
 		//"title" : "(D_0.D_MONTH_SEQ >= 1189) AND (D_0.D_MONTH_SEQ <= 1200)",
-		exprs := NewExprListDescribeImpl(m.node.FilterList)
+		exprs := NewExprListDescribeImpl(explainFilterList(m.node))
 		err = exprs.GetDescription(ctx, options, buf)
 		if err != nil {
 			return "", err
@@ -262,6 +265,8 @@ func (m MarshalNodeImpl) GetNodeTitle(ctx context.Context, options *ExplainOptio
 		return "postdml", nil
 	case plan.Node_TABLE_CLONE:
 		return "table_clone", nil
+	case plan.Node_ADAPTIVE_TOP:
+		return "adaptive_top", nil
 	default:
 		return "", moerr.NewInternalError(ctx, errUnsupportedNodeType)
 	}
@@ -451,7 +456,7 @@ func (m MarshalNodeImpl) GetNodeLabels(ctx context.Context, options *ExplainOpti
 			})
 		}
 	case plan.Node_FILTER:
-		value, err := GetExprsLabelValue(ctx, m.node.FilterList, options)
+		value, err := GetExprsLabelValue(ctx, explainFilterList(m.node), options)
 		if err != nil {
 			return nil, err
 		}
@@ -625,7 +630,7 @@ func (m MarshalNodeImpl) GetNodeLabels(ctx context.Context, options *ExplainOpti
 			Value: []string{},
 		})
 	case plan.Node_ASSERT:
-		value, err := GetExprsLabelValue(ctx, m.node.FilterList, options)
+		value, err := GetExprsLabelValue(ctx, explainFilterList(m.node), options)
 		if err != nil {
 			return nil, err
 		}
@@ -703,13 +708,19 @@ func (m MarshalNodeImpl) GetNodeLabels(ctx context.Context, options *ExplainOpti
 			Name:  Label_Table_Clone,
 			Value: []string{},
 		})
+	case plan.Node_ADAPTIVE_TOP:
+		labels = append(labels, models.Label{
+			Name:  Label_Unknown,
+			Value: []string{"post", "pre", "force"},
+		})
 	default:
 		return nil, moerr.NewInternalError(ctx, errUnsupportedNodeType)
 	}
 
 	// 2. handle shared label information for all nodes, such as filter conditions
-	if len(m.node.FilterList) > 0 && m.node.NodeType != plan.Node_FILTER && m.node.NodeType != plan.Node_ASSERT {
-		value, err := GetExprsLabelValue(ctx, m.node.FilterList, options)
+	filters := explainFilterList(m.node)
+	if len(filters) > 0 && m.node.NodeType != plan.Node_FILTER && m.node.NodeType != plan.Node_ASSERT {
+		value, err := GetExprsLabelValue(ctx, filters, options)
 		if err != nil {
 			return nil, err
 		}

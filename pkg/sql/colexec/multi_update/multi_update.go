@@ -16,6 +16,7 @@ package multi_update
 
 import (
 	"bytes"
+	"context"
 	"fmt"
 	"time"
 
@@ -27,6 +28,7 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/container/batch"
 	"github.com/matrixorigin/matrixone/pkg/container/types"
 	"github.com/matrixorigin/matrixone/pkg/container/vector"
+	"github.com/matrixorigin/matrixone/pkg/defines"
 	"github.com/matrixorigin/matrixone/pkg/perfcounter"
 	"github.com/matrixorigin/matrixone/pkg/sql/colexec"
 	"github.com/matrixorigin/matrixone/pkg/sql/features"
@@ -116,10 +118,19 @@ func (update *MultiUpdate) Prepare(proc *process.Process) error {
 	}
 
 	update.ctr.affectedRows = 0
+	update.ctr.s3AffectedRows = 0
 	update.ctr.flushed = false
 	update.getFlushableS3WriterFunc = update.getFlushableS3Writer
 	update.getS3WriterFunc = update.getS3Writer
 	update.addAffectedRowsFunc = update.doAddAffectedRows
+	update.takeS3AffectedRowsFunc = nil
+	if update.Action == UpdateWriteS3 && hasODKUAffectedRows(update.MultiUpdateCtx) {
+		// Writer operators can live below a merge PreScope, where Scope.affectedRows
+		// cannot see their counters. Transfer ODKU's logical count in-band and let
+		// the final FlushS3Info operator own the client-visible count.
+		update.addAffectedRowsFunc = update.doAddS3AffectedRows
+		update.takeS3AffectedRowsFunc = update.takeS3AffectedRows
+	}
 
 	switch update.Action {
 	case UpdateWriteS3:
@@ -302,6 +313,10 @@ func (update *MultiUpdate) updateFlushS3Info(proc *process.Process, analyzer pro
 	}()
 
 	for i, action := range actions {
+		if actionType(action) == actionAffectedRows {
+			update.addAffectedRowsFunc(rowCounts[i])
+			continue
+		}
 		source, err := update.getSourceByID(tables[i], proc)
 		if err != nil {
 			return input, err
@@ -330,6 +345,7 @@ func (update *MultiUpdate) updateFlushS3Info(proc *process.Process, analyzer pro
 
 			crs := analyzer.GetOpCounterSet()
 			newCtx := perfcounter.AttachS3RequestKey(proc.Ctx, crs)
+			newCtx = update.writeContext(newCtx, tables[i])
 			err = process.MeasureFilesystemWaitErr(analyzer, func() error {
 				return source.Delete(newCtx, batBufs[actionDelete], name)
 			})
@@ -353,12 +369,13 @@ func (update *MultiUpdate) updateFlushS3Info(proc *process.Process, analyzer pro
 
 			// For REPLACE INTO, we need to count INSERT rows based on the actual action
 			// Always count INSERT rows for main table, regardless of update.ctr.action
-			if tableType == UpdateMainTable {
+			if tableType == UpdateMainTable && !hasChangedRowsCol(update.MultiUpdateCtx) {
 				update.addAffectedRowsFunc(rowCounts[i])
 			}
 
 			crs := analyzer.GetOpCounterSet()
 			newCtx := perfcounter.AttachS3RequestKey(ctx, crs)
+			newCtx = update.writeContext(newCtx, tables[i])
 			err = process.MeasureFilesystemWaitErr(analyzer, func() error {
 				return source.Write(newCtx, batBufs[actionInsert])
 			})
@@ -459,42 +476,96 @@ func filterTargetRows(
 	seen *hashmap.StrHashMap,
 ) (*batch.Batch, bool, uint64, error) {
 	if !updateCtx.DedupByTargetRowID {
+		if updateCtx.AffectedRowsWeightCol != nil || updateCtx.PhysicalChangedRowsCol != nil {
+			return filterODKUPhysicalRows(proc, updateCtx, input)
+		}
+		if len(updateCtx.AffectedRowsCols) > 0 {
+			affectedRows, err := countAffectedRowsBySelectors(proc, updateCtx, input)
+			return input, false, affectedRows, err
+		}
 		return input, false, 0, nil
 	}
-	if len(updateCtx.DeleteCols) < 4 ||
+	if len(updateCtx.DeleteCols) < 3 ||
 		updateCtx.DeleteCols[0] < 0 ||
 		updateCtx.DeleteCols[0] >= len(input.Vecs) ||
 		updateCtx.DeleteCols[2] < 0 ||
-		updateCtx.DeleteCols[2] >= len(input.Vecs) ||
-		updateCtx.DeleteCols[3] < 0 ||
-		updateCtx.DeleteCols[3] >= len(input.Vecs) {
+		updateCtx.DeleteCols[2] >= len(input.Vecs) {
 		return nil, false, 0, moerr.NewInternalError(proc.Ctx, "invalid multi-target update selector columns")
 	}
 
 	rowIDVec := input.Vecs[updateCtx.DeleteCols[0]]
 	rowNumberVec := input.Vecs[updateCtx.DeleteCols[2]]
-	activeVec := input.Vecs[updateCtx.DeleteCols[3]]
 	if rowIDVec.GetType().Oid != types.T_Rowid ||
-		rowNumberVec.GetType().Oid != types.T_int64 ||
-		activeVec.GetType().Oid != types.T_bool {
+		rowNumberVec.GetType().Oid != types.T_int64 {
 		return nil, false, 0, moerr.NewInternalError(proc.Ctx, "invalid multi-target update selector types")
 	}
 
 	rowNumbers := vector.MustFixedColWithTypeCheck[int64](rowNumberVec)
-	active := vector.MustFixedColWithTypeCheck[bool](activeVec)
 	rowIDNulls := rowIDVec.GetNulls()
 	rowNumberNulls := rowNumberVec.GetNulls()
-	activeNulls := activeVec.GetNulls()
+	activeCols := updateCtx.AffectedRowsCols
+	activeVecs := make([]*vector.Vector, len(activeCols))
+	for i, col := range activeCols {
+		if col < 0 || col >= len(input.Vecs) {
+			return nil, false, 0, moerr.NewInternalError(proc.Ctx, "invalid multi-target update selector columns")
+		}
+		activeVecs[i] = input.Vecs[col]
+		if activeVecs[i].GetType().Oid != types.T_bool {
+			return nil, false, 0, moerr.NewInternalError(proc.Ctx, "invalid multi-target update selector types")
+		}
+	}
+	var physicalActiveVec *vector.Vector
+	if len(updateCtx.DeleteCols) >= 4 {
+		physicalActiveCol := updateCtx.DeleteCols[3]
+		if physicalActiveCol < 0 || physicalActiveCol >= len(input.Vecs) {
+			return nil, false, 0, moerr.NewInternalError(
+				proc.Ctx, "invalid multi-target update selector columns")
+		}
+		physicalActiveVec = input.Vecs[physicalActiveCol]
+		if physicalActiveVec.GetType().Oid != types.T_bool {
+			return nil, false, 0, moerr.NewInternalError(
+				proc.Ctx, "invalid multi-target update selector types")
+		}
+	}
+	if updateCtx.ChangedRowsCol != nil {
+		changedCol := *updateCtx.ChangedRowsCol
+		if changedCol < 0 || changedCol >= len(input.Vecs) ||
+			input.Vecs[changedCol].GetType().Oid != types.T_bool {
+			return nil, false, 0, moerr.NewInternalError(proc.Ctx, "invalid UPDATE changed-row column")
+		}
+	}
 	selections := make([]int64, 0, input.RowCount())
+	var matchedSemanticAffectedRows uint64
 	for i := 0; i < input.RowCount(); i++ {
 		if rowIDNulls.Contains(uint64(i)) ||
 			rowNumberNulls.Contains(uint64(i)) ||
-			activeNulls.Contains(uint64(i)) ||
-			rowNumbers[i] != 1 ||
-			!active[i] {
+			rowNumbers[i] != 1 {
+			continue
+		}
+		activeCount := 1
+		if len(activeVecs) > 0 {
+			activeCount = 0
+			for _, activeVec := range activeVecs {
+				if !activeVec.IsNull(uint64(i)) &&
+					vector.GetFixedAtNoTypeCheck[bool](activeVec, i) {
+					activeCount++
+				}
+			}
+		}
+		physicalActive := true
+		if physicalActiveVec != nil {
+			physicalActive = !physicalActiveVec.IsNull(uint64(i)) &&
+				vector.GetFixedAtNoTypeCheck[bool](physicalActiveVec, i)
+		} else if len(activeVecs) > 0 {
+			// Compatibility with plans produced before physical write eligibility
+			// was separated from semantic affected-row selectors.
+			physicalActive = activeCount > 0
+		}
+		if !physicalActive {
 			continue
 		}
 		selections = append(selections, int64(i))
+		matchedSemanticAffectedRows += uint64(activeCount)
 	}
 
 	// The input can carry a build-side allocation account whose lifetime ends
@@ -507,7 +578,12 @@ func filterTargetRows(
 	filtered.Shrink(selections, false)
 	filtered.SetRowCount(len(selections))
 	if seen == nil || filtered.RowCount() == 0 {
-		return filtered, true, 0, nil
+		semanticAffectedRows := matchedSemanticAffectedRows
+		if updateCtx.ChangedRowsCol != nil {
+			semanticAffectedRows = countSemanticAffectedRows(updateCtx, filtered, activeCols)
+		}
+		return filtered, true, filterReportedAffectedRows(
+			updateCtx, semanticAffectedRows, insertAffectedRows(updateCtx, filtered)), nil
 	}
 
 	physicalSelections := make([]int64, 0, filtered.RowCount())
@@ -532,10 +608,152 @@ func filterTargetRows(
 			}
 		}
 	}
-	duplicateRows := uint64(filtered.RowCount() - len(physicalSelections))
 	filtered.Shrink(physicalSelections, false)
 	filtered.SetRowCount(len(physicalSelections))
-	return filtered, true, duplicateRows, nil
+	semanticAffectedRows := matchedSemanticAffectedRows
+	if updateCtx.ChangedRowsCol != nil {
+		semanticAffectedRows = countSemanticAffectedRows(updateCtx, filtered, activeCols)
+	}
+	return filtered, true, filterReportedAffectedRows(
+		updateCtx, semanticAffectedRows, insertAffectedRows(updateCtx, filtered)), nil
+}
+
+func filterODKUPhysicalRows(
+	proc *process.Process,
+	updateCtx *MultiUpdateCtx,
+	input *batch.Batch,
+) (*batch.Batch, bool, uint64, error) {
+	var affectedRows uint64
+	if updateCtx.AffectedRowsWeightCol != nil {
+		col := *updateCtx.AffectedRowsWeightCol
+		if col < 0 || col >= len(input.Vecs) || input.Vecs[col].GetType().Oid != types.T_uint64 {
+			return nil, false, 0, moerr.NewInternalError(proc.Ctx, "invalid ODKU affected-row weight column")
+		}
+		vec := input.Vecs[col]
+		if vec.HasNull() {
+			return nil, false, 0, moerr.NewInternalError(proc.Ctx, "NULL ODKU affected-row weight")
+		}
+		for _, n := range vector.MustFixedColWithTypeCheck[uint64](vec)[:input.RowCount()] {
+			affectedRows += n
+		}
+	}
+	if updateCtx.PhysicalChangedRowsCol == nil {
+		return input, false, affectedRows, nil
+	}
+	col := *updateCtx.PhysicalChangedRowsCol
+	if col < 0 || col >= len(input.Vecs) || input.Vecs[col].GetType().Oid != types.T_bool {
+		return nil, false, 0, moerr.NewInternalError(proc.Ctx, "invalid ODKU physical-change column")
+	}
+	vec := input.Vecs[col]
+	if vec.HasNull() {
+		return nil, false, 0, moerr.NewInternalError(proc.Ctx, "NULL ODKU physical-change marker")
+	}
+	changed := vector.MustFixedColWithTypeCheck[bool](vec)
+	allChanged := true
+	for row := 0; row < input.RowCount(); row++ {
+		if !changed[row] {
+			allChanged = false
+			break
+		}
+	}
+	if allChanged {
+		return input, false, affectedRows, nil
+	}
+	selections := make([]int64, 0, input.RowCount())
+	for row := 0; row < input.RowCount(); row++ {
+		if changed[row] {
+			selections = append(selections, int64(row))
+		}
+	}
+	filtered, err := input.CloneWithoutAllocationAccount(proc.Mp(), true)
+	if err != nil {
+		return nil, false, 0, err
+	}
+	filtered.Shrink(selections, false)
+	filtered.SetRowCount(len(selections))
+	return filtered, true, affectedRows, nil
+}
+
+func filterReportedAffectedRows(
+	updateCtx *MultiUpdateCtx,
+	semanticAffectedRows uint64,
+	physicalAffectedRows uint64,
+) uint64 {
+	if len(updateCtx.AffectedRowsCols) > 0 {
+		return semanticAffectedRows
+	}
+	return semanticAffectedRows - physicalAffectedRows
+}
+
+func countSemanticAffectedRows(updateCtx *MultiUpdateCtx, input *batch.Batch, activeCols []int) uint64 {
+	activeVecs := make([]*vector.Vector, len(activeCols))
+	for i, col := range activeCols {
+		activeVecs[i] = input.Vecs[col]
+	}
+	var changedVec *vector.Vector
+	if updateCtx.ChangedRowsCol != nil {
+		changedVec = input.Vecs[*updateCtx.ChangedRowsCol]
+	}
+
+	var affectedRows uint64
+	for row := 0; row < input.RowCount(); row++ {
+		activeCount := 1
+		if len(activeVecs) > 0 {
+			activeCount = 0
+			for _, activeVec := range activeVecs {
+				if !activeVec.IsNull(uint64(row)) &&
+					vector.GetFixedAtNoTypeCheck[bool](activeVec, row) {
+					activeCount++
+				}
+			}
+		}
+		if changedVec == nil || (!changedVec.IsNull(uint64(row)) &&
+			vector.GetFixedAtNoTypeCheck[bool](changedVec, row)) {
+			affectedRows += uint64(activeCount)
+		}
+	}
+	return affectedRows
+}
+
+func countAffectedRowsBySelectors(
+	proc *process.Process,
+	updateCtx *MultiUpdateCtx,
+	input *batch.Batch,
+) (uint64, error) {
+	activeVecs := make([]*vector.Vector, len(updateCtx.AffectedRowsCols))
+	for i, col := range updateCtx.AffectedRowsCols {
+		if col < 0 || col >= len(input.Vecs) {
+			return 0, moerr.NewInternalError(proc.Ctx, "invalid multi-target update selector columns")
+		}
+		activeVecs[i] = input.Vecs[col]
+		if activeVecs[i].GetType().Oid != types.T_bool {
+			return 0, moerr.NewInternalError(proc.Ctx, "invalid multi-target update selector types")
+		}
+	}
+	var changedVec *vector.Vector
+	if updateCtx.ChangedRowsCol != nil {
+		changedCol := *updateCtx.ChangedRowsCol
+		if changedCol < 0 || changedCol >= len(input.Vecs) ||
+			input.Vecs[changedCol].GetType().Oid != types.T_bool {
+			return 0, moerr.NewInternalError(proc.Ctx, "invalid UPDATE changed-row column")
+		}
+		changedVec = input.Vecs[changedCol]
+	}
+
+	var affectedRows uint64
+	for row := 0; row < input.RowCount(); row++ {
+		if changedVec != nil && (changedVec.IsNull(uint64(row)) ||
+			!vector.GetFixedAtNoTypeCheck[bool](changedVec, row)) {
+			continue
+		}
+		for _, activeVec := range activeVecs {
+			if !activeVec.IsNull(uint64(row)) &&
+				vector.GetFixedAtNoTypeCheck[bool](activeVec, row) {
+				affectedRows++
+			}
+		}
+	}
+	return affectedRows, nil
 }
 
 func (update *MultiUpdate) prepareSeenTargetRows(proc *process.Process) error {
@@ -607,6 +825,16 @@ func targetTableID(ctx *MultiUpdateCtx) uint64 {
 		return ctx.TargetTableID
 	}
 	return ctx.TableDef.TblId
+}
+
+func (update *MultiUpdate) writeContext(ctx context.Context, tableID uint64) context.Context {
+	for _, updateCtx := range update.MultiUpdateCtx {
+		if updateCtx != nil && updateCtx.TableDef != nil &&
+			targetTableID(updateCtx) == tableID && updateCtx.TableDef.Name == catalog.MO_COLUMNS_UPDATE {
+			return context.WithValue(ctx, defines.MoColumnsUpdateKey{}, true)
+		}
+	}
+	return ctx
 }
 
 func (update *MultiUpdate) resetMultiUpdateCtxs() {

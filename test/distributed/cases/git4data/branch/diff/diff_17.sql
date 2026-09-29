@@ -1,9 +1,9 @@
 -- DATA BRANCH DIFF OUTPUT AS coverage.
 --
 -- OUTPUT AS materializes a normal persistent table.  Its two metadata columns
--- are __mo_diff_source and __mo_diff_flag; the remaining columns retain the
--- requested source-column order and types.  The result table is never itself
--- a data branch.
+-- are __mo_diff_source and __mo_diff_flag; explicit primary-key columns precede
+-- the remaining requested source columns.  The result table is never itself a
+-- data branch.
 
 drop database if exists test_diff_output_as_dst;
 drop database if exists test_diff_output_as;
@@ -54,8 +54,9 @@ select __mo_diff_source, __mo_diff_flag, id
     from test_diff_output_as.diff_full order by id;
 -- @session
 
--- Case 2: COLUMNS controls result-table schema and column order.  Duplicate
--- names are deduplicated just as they are for ordinary DIFF output.
+-- Case 2: COLUMNS controls result-table schema and column order.  Explicit
+-- primary-key columns are retained first, and duplicate names are deduplicated
+-- just as they are for ordinary DIFF output.
 data branch diff branch_full against base_full
     columns (flag, id, amount) output as diff_projected;
 show create table diff_projected;

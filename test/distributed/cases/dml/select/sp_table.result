@@ -9,6 +9,7 @@ mo_cache    v
 mo_ccpr_dbs    r
 mo_ccpr_log    r
 mo_ccpr_tables    r
+mo_cdc_snapshot    r
 mo_cdc_task    r
 mo_cdc_watermark    r
 mo_columns    r
@@ -61,3 +62,5 @@ mo_user_defined_function    r
 mo_user_grant    r
 mo_variables    v
 mo_version    r
+mo_view_dependencies    cluster
+mo_view_refresh    cluster

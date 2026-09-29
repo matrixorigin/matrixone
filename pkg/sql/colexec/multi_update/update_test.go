@@ -25,6 +25,7 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/container/batch"
 	"github.com/matrixorigin/matrixone/pkg/container/types"
 	"github.com/matrixorigin/matrixone/pkg/container/vector"
+	"github.com/matrixorigin/matrixone/pkg/defines"
 	"github.com/matrixorigin/matrixone/pkg/sql/colexec"
 	"github.com/matrixorigin/matrixone/pkg/sql/plan"
 	"github.com/matrixorigin/matrixone/pkg/sql/util"
@@ -46,15 +47,27 @@ func TestSimpleInterface(t *testing.T) {
 	op.Release()
 }
 
+func TestMoColumnsWriteContext(t *testing.T) {
+	update := NewArgument()
+	update.MultiUpdateCtx = []*MultiUpdateCtx{{
+		TableDef:      &plan.TableDef{TblId: catalog.MO_COLUMNS_ID, Name: catalog.MO_COLUMNS_UPDATE},
+		TargetTableID: catalog.MO_COLUMNS_ID,
+	}}
+
+	ctx := update.writeContext(context.Background(), catalog.MO_COLUMNS_ID)
+	require.NotNil(t, ctx.Value(defines.MoColumnsUpdateKey{}))
+	require.Nil(t, update.writeContext(context.Background(), catalog.MO_TABLES_ID).Value(defines.MoColumnsUpdateKey{}))
+}
+
 func TestUpdateSingleTable(t *testing.T) {
 	hasUniqueKey := false
 	hasSecondaryKey := false
 
 	proc, case1 := buildUpdateTestCase(t, hasUniqueKey, hasSecondaryKey, false)
-	runTestCases(t, proc, []*testCase{case1})
+	runTestCase(t, proc, case1)
 
 	proc, case1 = buildUpdateTestCase(t, hasUniqueKey, hasSecondaryKey, true)
-	runTestCases(t, proc, []*testCase{case1})
+	runTestCaseAfterReset(t, proc, case1)
 }
 
 func TestUpdateTableWithUniqueKey(t *testing.T) {
@@ -62,7 +75,7 @@ func TestUpdateTableWithUniqueKey(t *testing.T) {
 	hasSecondaryKey := false
 
 	proc, case1 := buildUpdateTestCase(t, hasUniqueKey, hasSecondaryKey, false)
-	runTestCases(t, proc, []*testCase{case1})
+	runTestCaseAfterReset(t, proc, case1)
 }
 
 func TestFilterTargetRowsKeepsIndependentWholeRows(t *testing.T) {
@@ -253,7 +266,7 @@ func TestFilterTargetRowsDedupsRepeatedRowIDsWithinOneChunk(t *testing.T) {
 	mp := proc.Mp()
 	rowIDA := types.BuildTestRowid(1, 1)
 	rowIDB := types.BuildTestRowid(1, 2)
-	bat := batch.NewWithSize(4)
+	bat := batch.NewWithSize(5)
 	bat.Vecs[0] = testutil.MakeRowIdVector(
 		[]types.Rowid{rowIDA, rowIDA, rowIDB, rowIDA}, nil, mp)
 	bat.Vecs[1] = testutil.NewInt64Vector(
@@ -262,22 +275,184 @@ func TestFilterTargetRowsDedupsRepeatedRowIDsWithinOneChunk(t *testing.T) {
 		4, types.T_int32.ToType(), mp, false, nil, []int32{10, 11, 20, 12})
 	bat.Vecs[3] = testutil.NewBoolVector(
 		4, types.T_bool.ToType(), mp, false, nil, []bool{true, true, true, true})
+	bat.Vecs[4] = testutil.NewBoolVector(
+		4, types.T_bool.ToType(), mp, false, nil, []bool{true, false, true, true})
 	bat.SetRowCount(4)
 	defer bat.Clean(mp)
 
 	seen, err := hashmap.NewStrHashMap(false, mp)
 	require.NoError(t, err)
 	defer seen.Free()
+	changedRowsCol := 4
 	filtered, owned, duplicateRows, err := filterTargetRows(proc, &MultiUpdateCtx{
 		TableDef:           &plan.TableDef{TblId: 42},
 		DedupByTargetRowID: true,
 		DeleteCols:         []int{0, 2, 1, 3},
+		ChangedRowsCol:     &changedRowsCol,
 	}, bat, seen)
 	require.NoError(t, err)
 	require.True(t, owned)
 	defer filtered.Clean(mp)
-	require.Equal(t, uint64(2), duplicateRows)
+	require.Zero(t, duplicateRows)
 	require.Equal(t, []int32{10, 20}, vector.MustFixedColWithTypeCheck[int32](filtered.Vecs[2]))
+}
+
+func TestFilterTargetRowsCountsActiveAliasesWithoutRepeatingPhysicalWrites(t *testing.T) {
+	proc := testutil.NewProcess(t)
+	mp := proc.Mp()
+
+	bat := batch.NewWithSize(6)
+	bat.Vecs[0] = testutil.MakeRowIdVector(
+		[]types.Rowid{
+			types.BuildTestRowid(1, 1),
+			types.BuildTestRowid(1, 2),
+			types.BuildTestRowid(1, 3),
+			types.BuildTestRowid(1, 4),
+		},
+		nil,
+		mp,
+	)
+	bat.Vecs[1] = testutil.NewInt64Vector(
+		4, types.T_int64.ToType(), mp, false, nil, []int64{1, 1, 1, 1},
+	)
+	bat.Vecs[2] = testutil.NewBoolVector(
+		4, types.T_bool.ToType(), mp, false, nil, []bool{true, true, false, false},
+	)
+	bat.Vecs[3] = testutil.NewBoolVector(
+		4, types.T_bool.ToType(), mp, false, nil, []bool{true, false, true, false},
+	)
+	bat.Vecs[4] = testutil.NewBoolVector(
+		4, types.T_bool.ToType(), mp, false, nil, []bool{true, true, true, false},
+	)
+	bat.Vecs[5] = testutil.NewInt32Vector(
+		4, types.T_int32.ToType(), mp, false, nil, []int32{10, 20, 30, 40},
+	)
+	bat.SetRowCount(4)
+	defer bat.Clean(mp)
+
+	filtered, clean, semanticAffectedRows, err := filterTargetRows(proc, &MultiUpdateCtx{
+		TableDef:           &plan.TableDef{TblId: 42},
+		DedupByTargetRowID: true,
+		DeleteCols:         []int{0, 5, 1, 4},
+		AffectedRowsCols:   []int{2, 3},
+	}, bat, nil)
+	require.NoError(t, err)
+	require.True(t, clean)
+	defer filtered.Clean(mp)
+	require.Equal(t, []int32{10, 20, 30}, vector.MustFixedColWithTypeCheck[int32](filtered.Vecs[5]))
+	require.Equal(t, uint64(4), semanticAffectedRows)
+}
+
+func TestFilterTargetRowsKeepsSecondAliasOnlyRowsThroughPhysicalOR(t *testing.T) {
+	proc := testutil.NewProcess(t)
+	mp := proc.Mp()
+
+	bat := batch.NewWithSize(6)
+	bat.Vecs[0] = testutil.MakeRowIdVector(
+		[]types.Rowid{types.BuildTestRowid(1, 2)}, nil, mp)
+	bat.Vecs[1] = testutil.NewInt64Vector(
+		1, types.T_int64.ToType(), mp, false, nil, []int64{1})
+	bat.Vecs[2] = testutil.NewBoolVector(
+		1, types.T_bool.ToType(), mp, false, nil, []bool{false})
+	bat.Vecs[3] = testutil.NewBoolVector(
+		1, types.T_bool.ToType(), mp, false, nil, []bool{true})
+	bat.Vecs[4] = testutil.NewBoolVector(
+		1, types.T_bool.ToType(), mp, false, nil, []bool{true})
+	bat.Vecs[5] = testutil.NewInt32Vector(
+		1, types.T_int32.ToType(), mp, false, nil, []int32{20})
+	bat.SetRowCount(1)
+	defer bat.Clean(mp)
+
+	filtered, clean, semanticAffectedRows, err := filterTargetRows(proc, &MultiUpdateCtx{
+		TableDef:           &plan.TableDef{TblId: 42},
+		DedupByTargetRowID: true,
+		DeleteCols:         []int{0, 5, 1, 4},
+		AffectedRowsCols:   []int{2, 3},
+	}, bat, nil)
+	require.NoError(t, err)
+	require.True(t, clean)
+	defer filtered.Clean(mp)
+	require.Equal(t, 1, filtered.RowCount(), "the second alias row must remain physically writable")
+	require.Equal(t, []int32{20}, vector.MustFixedColWithTypeCheck[int32](filtered.Vecs[5]))
+	require.Equal(t, uint64(1), semanticAffectedRows)
+}
+
+func TestFilterTargetRowsKeepsSelfCascadeRowsWithoutCountingThem(t *testing.T) {
+	proc := testutil.NewProcess(t)
+	mp := proc.Mp()
+
+	bat := batch.NewWithSize(5)
+	bat.Vecs[0] = testutil.MakeRowIdVector([]types.Rowid{
+		types.BuildTestRowid(1, 1),
+		types.BuildTestRowid(1, 2),
+		types.BuildTestRowid(2, 1),
+	}, nil, mp)
+	bat.Vecs[1] = testutil.NewInt64Vector(
+		3, types.T_int64.ToType(), mp, false, nil, []int64{1, 1, 1})
+	bat.Vecs[2] = testutil.NewBoolVector(
+		3, types.T_bool.ToType(), mp, false, nil, []bool{true, true, false})
+	bat.Vecs[3] = testutil.NewBoolVector(
+		3, types.T_bool.ToType(), mp, false, nil, []bool{true, false, false})
+	bat.Vecs[4] = testutil.NewInt32Vector(
+		3, types.T_int32.ToType(), mp, false, nil, []int32{10, 20, 30})
+	bat.SetRowCount(3)
+	defer bat.Clean(mp)
+
+	updateCtx := &MultiUpdateCtx{
+		TableDef:           &plan.TableDef{TblId: 42},
+		DedupByTargetRowID: true,
+		DeleteCols:         []int{0, 4, 1, 2},
+		AffectedRowsCols:   []int{3},
+	}
+	filtered, clean, semanticAffectedRows, err := filterTargetRows(proc, updateCtx, bat, nil)
+	require.NoError(t, err)
+	require.True(t, clean)
+	defer filtered.Clean(mp)
+	require.Equal(t, []int32{10, 20}, vector.MustFixedColWithTypeCheck[int32](filtered.Vecs[4]))
+	require.Equal(t, uint64(1), semanticAffectedRows)
+	require.Zero(t, physicalInsertAffectedRows(updateCtx, uint64(filtered.RowCount())))
+}
+
+func TestFilterTargetRowsCountsSelectorsWithoutDroppingCascadeRows(t *testing.T) {
+	proc := testutil.NewProcess(t)
+	mp := proc.Mp()
+
+	bat := batch.NewWithSize(3)
+	bat.Vecs[0] = testutil.NewInt32Vector(
+		4, types.T_int32.ToType(), mp, false, nil, []int32{10, 20, 30, 40},
+	)
+	bat.Vecs[1] = testutil.NewBoolVector(
+		4, types.T_bool.ToType(), mp, false, nil, []bool{true, false, true, false},
+	)
+	bat.Vecs[2] = testutil.NewBoolVector(
+		4, types.T_bool.ToType(), mp, false, nil, []bool{true, true, false, true},
+	)
+	bat.SetRowCount(4)
+	defer bat.Clean(mp)
+
+	changedRowsCol := 2
+	updateCtx := &MultiUpdateCtx{
+		AffectedRowsCols: []int{1},
+		ChangedRowsCol:   &changedRowsCol,
+	}
+	filtered, clean, semanticAffectedRows, err := filterTargetRows(proc, updateCtx, bat, nil)
+	require.NoError(t, err)
+	require.False(t, clean)
+	require.Same(t, bat, filtered)
+	require.Equal(t, 4, filtered.RowCount(), "cascade rows remain in the physical write batch")
+	require.Equal(t, uint64(1), semanticAffectedRows,
+		"only explicit roots whose final row image changed contribute")
+	require.Zero(t, physicalInsertAffectedRows(updateCtx, uint64(filtered.RowCount())))
+}
+
+func TestPhysicalInsertAffectedRowsPreservesDeduplicatedTargetRows(t *testing.T) {
+	updateCtx := &MultiUpdateCtx{
+		DedupByTargetRowID: true,
+		AffectedRowsCols:   []int{2, 3},
+	}
+
+	require.Zero(t, physicalInsertAffectedRows(updateCtx, 2),
+		"semantic selectors own affected-row accounting independently of physical writes")
 }
 
 func TestS3WriterRefreshSelectorState(t *testing.T) {
@@ -454,13 +629,45 @@ func TestNewS3WriterAllowsIndexOnlyContext(t *testing.T) {
 	require.NoError(t, writer.free(proc))
 }
 
+func TestSortAndSyncOneTableUsesDataWriter(t *testing.T) {
+	_, _, proc := prepareTestCtx(t, true)
+	defer proc.Free()
+	_, tableDef := getTestMainTable()
+	updateCtx := &MultiUpdateCtx{
+		TableDef:   tableDef,
+		InsertCols: []int{0, 1, 2, 3},
+	}
+	update := &MultiUpdate{MultiUpdateCtx: []*MultiUpdateCtx{updateCtx}}
+	update.resetMultiUpdateCtxs()
+	writer, err := newS3Writer(proc.GetService(), update)
+	require.NoError(t, err)
+	defer func() { require.NoError(t, writer.free(proc)) }()
+
+	// Keep the full-block ownership-transfer path and its partial-block fallback
+	// in one focused test instead of making every S3 matrix case use large data.
+	bats, _ := prepareTestInsertBatchs(proc.Mp(), 2, colexec.DefaultBatchSize, false, false)
+	require.NoError(t, writer.sortAndSyncOneTable(
+		proc,
+		tableDef,
+		process.NewAnalyzer(0, false, false, "multi-update-data-sync"),
+		0,
+		false,
+		bats,
+		true,
+	))
+	for _, bat := range bats {
+		require.Nil(t, bat)
+	}
+	require.NotNil(t, writer.insertBlockInfo[0])
+}
+
 // update table s3
 func TestUpdateS3SingleTable(t *testing.T) {
 	hasUniqueKey := false
 	hasSecondaryKey := false
 
 	proc, case1 := buildUpdateS3TestCase(t, hasUniqueKey, hasSecondaryKey)
-	runTestCases(t, proc, []*testCase{case1})
+	runTestCase(t, proc, case1)
 }
 
 func TestUpdateS3TableWithUniqueKey(t *testing.T) {
@@ -468,7 +675,7 @@ func TestUpdateS3TableWithUniqueKey(t *testing.T) {
 	hasSecondaryKey := true
 
 	proc, case1 := buildUpdateS3TestCase(t, hasUniqueKey, hasSecondaryKey)
-	runTestCases(t, proc, []*testCase{case1})
+	runTestCaseAfterReset(t, proc, case1)
 }
 
 // ----- util function ----
@@ -476,7 +683,9 @@ func buildUpdateTestCase(t *testing.T, hasUniqueKey bool, hasSecondaryKey bool, 
 	_, ctrl, proc := prepareTestCtx(t, false)
 	eng := prepareTestEng(ctrl, relResetExpectErr)
 
-	batchs, affectRows := prepareUpdateTestBatchs(proc.GetMPool(), 3, hasUniqueKey, hasSecondaryKey)
+	batchs, affectRows := prepareUpdateTestBatchs(
+		proc.GetMPool(), 3, colexec.DefaultBatchSize, hasUniqueKey, hasSecondaryKey,
+	)
 	multiUpdateCtxs := prepareTestUpdateMultiUpdateCtx(hasUniqueKey, hasSecondaryKey)
 	action := UpdateWriteTable
 	retCase := buildTestCase(multiUpdateCtxs, eng, batchs, affectRows, action, relResetExpectErr)
@@ -487,21 +696,29 @@ func buildUpdateS3TestCase(t *testing.T, hasUniqueKey bool, hasSecondaryKey bool
 	_, ctrl, proc := prepareTestCtx(t, true)
 	eng := prepareTestEng(ctrl, false)
 
-	batchs, _ := prepareUpdateTestBatchs(proc.GetMPool(), 10, hasUniqueKey, hasSecondaryKey)
+	batchs, _ := prepareUpdateTestBatchs(
+		proc.GetMPool(), testS3BatchCount, testS3BatchRows, hasUniqueKey, hasSecondaryKey,
+	)
 	multiUpdateCtxs := prepareTestUpdateMultiUpdateCtx(hasUniqueKey, hasSecondaryKey)
 	action := UpdateWriteS3
 	retCase := buildTestCase(multiUpdateCtxs, eng, batchs, 0, action, false)
 	return proc, retCase
 }
 
-func prepareUpdateTestBatchs(mp *mpool.MPool, size int, hasUniqueKey bool, hasSecondaryKey bool) ([]*batch.Batch, uint64) {
+func prepareUpdateTestBatchs(
+	mp *mpool.MPool,
+	size int,
+	rowsPerBatch int,
+	hasUniqueKey bool,
+	hasSecondaryKey bool,
+) ([]*batch.Batch, uint64) {
 	var bats = make([]*batch.Batch, size)
 	affectRows := 0
 	mainObjectID := types.NewObjectid()
 	uniqueObjectID := types.NewObjectid()
 	secondaryObjectID := types.NewObjectid()
 	for i := 0; i < size; i++ {
-		rowCount := colexec.DefaultBatchSize
+		rowCount := rowsPerBatch
 		if i == size-1 {
 			rowCount = rowCount / 2
 		}

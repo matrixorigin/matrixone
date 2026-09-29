@@ -225,6 +225,24 @@ func TestLeast(t *testing.T) {
 	}
 }
 
+func TestLeastGreatestPromoteVarcharMetadataWhenWidthsDiffer(t *testing.T) {
+	proc := testutil.NewProcess(t)
+	defer proc.Free()
+
+	inputs := []types.Type{
+		types.New(types.T_varchar, 8, 0),
+		types.New(types.T_varchar, 2, 0),
+	}
+	for _, name := range []string{"least", "greatest"} {
+		t.Run(name, func(t *testing.T) {
+			resolved, err := GetFunctionByName(proc.Ctx, name, inputs)
+			require.NoError(t, err)
+			require.Equal(t, types.T_varchar, resolved.GetReturnType().Oid)
+			require.Equal(t, int32(types.MaxVarcharLen), resolved.GetReturnType().Width)
+		})
+	}
+}
+
 func initGreatestTestCase() []tcTemp {
 	return []tcTemp{
 		// Test int8
@@ -761,7 +779,7 @@ func TestLeastGreatestStringResolutionPreservesMergedCharset(t *testing.T) {
 			inputs:      []types.Type{generalVarchar, utf8mb4BinVarchar},
 			wantOID:     types.T_varchar,
 			wantCharset: types.CharsetUTF8MB4Bin,
-			wantWidth:   32,
+			wantWidth:   types.MaxVarcharLen,
 		},
 		{
 			name:        "json and varchar keep utf8mb4 bin",

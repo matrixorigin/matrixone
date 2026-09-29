@@ -28,13 +28,18 @@ const (
 	VarlenaBigHdr     = 0xffffffff
 	MaxCharLen        = 255
 	MaxTinyTextLen    = 255
-	MaxBinaryLen      = 255
-	MaxEnumLen        = 65535
-	MaxBitLen         = 64
-	MaxBlobLen        = 67108864 // 64 MB
-	MaxStringSize     = 65535    // 64 KB
-	MaxVarcharLen     = MaxStringSize
-	MaxVarBinaryLen   = MaxStringSize
+	// The TEXT-family limits are byte limits in the MySQL type system.  Keep
+	// them distinct in the plan so the protocol can expose the same declared
+	// capacity to clients (not just the common TEXT limit).
+	MaxMediumTextLen = 16777215
+	MaxLongTextLen   = 2147483647
+	MaxBinaryLen     = 255
+	MaxEnumLen       = 65535
+	MaxBitLen        = 64
+	MaxBlobLen       = 67108864 // 64 MB
+	MaxStringSize    = 65535    // 64 KB
+	MaxVarcharLen    = MaxStringSize
+	MaxVarBinaryLen  = MaxStringSize
 )
 
 func (v *Varlena) UnsafePtr() unsafe.Pointer {

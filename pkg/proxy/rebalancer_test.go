@@ -348,6 +348,90 @@ func TestDoRebalance(t *testing.T) {
 	}
 }
 
+func TestRebalanceFallbackToNewlyLabeledCN(t *testing.T) {
+	defer leaktest.AfterTest(t)()
+
+	tp := newTestProxyHandler(t)
+	defer tp.closeFn()
+	frontend.InitServerLevelVars("")
+	frontend.SetSessionAlloc("", frontend.NewSessionAllocator(newTestPu()))
+
+	li := newLabelInfo("t1", nil)
+	hash, err := li.getHash()
+	require.NoError(t, err)
+	ci := clientInfo{
+		labelInfo: li,
+		username:  "test",
+		originIP:  net.ParseIP("127.0.0.1"),
+		hash:      hash,
+	}
+
+	temp := os.TempDir()
+	addr1 := fmt.Sprintf("%s/%d.sock", temp, time.Now().Nanosecond())
+	require.NoError(t, os.RemoveAll(addr1))
+	cn1 := testMakeCNServer("cn1", addr1, 0, hash, li)
+	frontend.InitServerLevelVars(cn1.uuid)
+	frontend.SetSessionAlloc(cn1.uuid, frontend.NewSessionAllocator(newTestPu()))
+	tp.hc.updateCN(cn1.uuid, cn1.addr, nil)
+	stopCN1 := startTestCNServer(t, tp.ctx, addr1, nil)
+	defer func() { require.NoError(t, stopCN1()) }()
+
+	addr2 := fmt.Sprintf("%s/%d.sock", temp, time.Now().Nanosecond())
+	require.NoError(t, os.RemoveAll(addr2))
+	cn2 := testMakeCNServer("cn2", addr2, 0, hash, li)
+	frontend.InitServerLevelVars(cn2.uuid)
+	frontend.SetSessionAlloc(cn2.uuid, frontend.NewSessionAllocator(newTestPu()))
+	tp.hc.updateCN(cn2.uuid, cn2.addr, map[string]metadata.LabelList{
+		tenantLabelKey: {Labels: []string{"other"}},
+	})
+	stopCN2 := startTestCNServer(t, tp.ctx, addr2, nil)
+	defer func() { require.NoError(t, stopCN2()) }()
+	tp.mc.ForceRefresh(true)
+
+	selected, err := tp.ru.Route(tp.ctx, "", ci, nil)
+	require.NoError(t, err)
+	require.Equal(t, cn1.uuid, selected.uuid)
+	selected.salt = testSlat
+	clientProxy, client := net.Pipe()
+	defer func() { require.NoError(t, client.Close()) }()
+	tu := newTunnel(tp.ctx, tp.logger, tp.counterSet)
+	sc, _, err := tp.ru.Connect(selected, testPacket, tu)
+	require.NoError(t, err)
+	cc := newMockClientConn(clientProxy, "t1", ci, tp.ru, tu)
+	require.NoError(t, tu.run(cc, sc))
+	defer func() {
+		_ = tu.Close()
+		_ = sc.Close()
+	}()
+
+	tp.hc.updateCN(cn2.uuid, cn2.addr, map[string]metadata.LabelList{
+		tenantLabelKey: {Labels: []string{"t1"}},
+	})
+	tp.mc.ForceRefresh(true)
+	fresh, err := tp.ru.Route(tp.ctx, "", ci, nil)
+	require.NoError(t, err)
+	require.Equal(t, cn2.uuid, fresh.uuid)
+
+	tp.re.doRebalance()
+	require.Eventually(t, func() bool {
+		tp.re.connManager.Lock()
+		defer tp.re.connManager.Unlock()
+		tunnels := tp.re.connManager.conns[hash].cnTunnels
+		return tunnels[cn1.uuid].count() == 0 &&
+			tunnels[cn2.uuid].count() == 1 &&
+			tp.counterSet.connMigrationRequested.Load() == 1 &&
+			tp.counterSet.connMigrationSuccess.Load() == 1
+	}, 10*time.Second, 20*time.Millisecond)
+
+	require.NoError(t, client.SetDeadline(time.Now().Add(3*time.Second)))
+	_, err = client.Write(makeSimplePacket("select 1"))
+	require.NoError(t, err)
+	response, err := readProxyTestPacket(client)
+	require.NoError(t, err)
+	require.True(t, isOKPacket(response))
+	require.Equal(t, byte(1), response[3], "response must start a new MySQL packet sequence")
+}
+
 func prepareCN(uid string, hc *mockHAKeeperClient, ha LabelHash, reLabels labelInfo, cnLabels map[string]metadata.LabelList) *CNServer {
 	temp := os.TempDir()
 	addr := fmt.Sprintf("%s/%d.sock", temp, time.Now().Nanosecond())

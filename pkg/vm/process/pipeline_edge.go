@@ -43,6 +43,11 @@ type PipelineEdge struct {
 	// channel must receive before it is considered done. 0 defaults to 1.
 	NilBatchCnt int
 
+	// OrderedStream marks an edge whose single producer must preserve total
+	// ordering across batch boundaries. It is compile/runtime topology metadata,
+	// not a data signal property.
+	OrderedStream bool
+
 	// --- terminal state ---
 	done chan struct{}
 	abrt chan struct{}
@@ -104,6 +109,7 @@ func (e *PipelineEdge) ResetForReuse(channelBufferSize int, nilBatchCnt int) {
 done:
 	e.Ch2 = make(chan PipelineSignal, channelBufferSize)
 	e.NilBatchCnt = nilBatchCnt
+	e.OrderedStream = false
 	e.resetTerminalStateLocked()
 }
 

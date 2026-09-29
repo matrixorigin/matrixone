@@ -82,15 +82,6 @@ func MoCtl(ivecs []*vector.Vector, result vector.FunctionResultWrapper, proc *pr
 		return moerr.NewNotSupportedf(proc.Ctx, "command %s not supported", command)
 	}
 
-	switch command {
-	case MergeObjectsMethod:
-		if proc.GetTxnOperator() != nil && proc.GetTxnOperator().TxnOptions().ByBegin {
-			return moerr.NewInternalErrorNoCtxf(
-				"cannot execute %s within an explicit transaction", command,
-			)
-		}
-	}
-
 	res, err := f(proc,
 		service,
 		parameter,
@@ -113,9 +104,6 @@ func MoCtl(ivecs []*vector.Vector, result vector.FunctionResultWrapper, proc *pr
 		obj := response.(*cmd_util.InspectResp)
 		err = rs.AppendBytes([]byte(obj.ConsoleString()), false)
 		return err
-	}
-	if command == MergeObjectsMethod {
-		return rs.AppendBytes(res.Data.([]byte), false)
 	}
 	err = rs.AppendBytes(json.Pretty(res), false)
 	return err

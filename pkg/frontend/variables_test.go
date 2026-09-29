@@ -15,11 +15,15 @@
 package frontend
 
 import (
+	"context"
 	"fmt"
+	"math"
 	"testing"
 
+	"github.com/matrixorigin/matrixone/pkg/common/moerr"
 	"github.com/stretchr/testify/assert"
 
+	"github.com/matrixorigin/matrixone/pkg/container/types"
 	"github.com/smartystreets/goconvey/convey"
 )
 
@@ -33,6 +37,29 @@ func TestEventSchedulerDefaultDisabled(t *testing.T) {
 		convey.So(err, convey.ShouldBeNil)
 		convey.So(got, convey.ShouldEqual, "DISABLED")
 	})
+}
+
+func TestSystemVariableSetTypeBits2String(t *testing.T) {
+	svst := InitSystemVariableSetType("sql_mode", "ANSI", "TRADITIONAL", "ONLY_FULL_GROUP_BY")
+
+	tests := []struct {
+		name string
+		bits uint64
+		want string
+	}{
+		{name: "first member", bits: 1, want: "ANSI"},
+		{name: "first and second members", bits: 3, want: "ANSI,TRADITIONAL"},
+		{name: "non-first member", bits: 2, want: "TRADITIONAL"},
+		{name: "non-adjacent members", bits: 5, want: "ANSI,ONLY_FULL_GROUP_BY"},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			got, err := svst.bits2string(tt.bits)
+			assert.NoError(t, err)
+			assert.Equal(t, tt.want, got)
+		})
+	}
 }
 
 func TestLockWaitTimeoutDefaultIsBounded(t *testing.T) {
@@ -51,12 +78,161 @@ func TestGroupConcatMaxLenDefault(t *testing.T) {
 	convey.Convey("group_concat_max_len should use the MySQL default", t, func() {
 		sv, ok := gSysVarsDefs["group_concat_max_len"]
 		convey.So(ok, convey.ShouldBeTrue)
-		convey.So(sv.Default, convey.ShouldEqual, int64(1024))
+		convey.So(sv.Default, convey.ShouldEqual, uint64(1024))
+		_, isUint := sv.Type.(SystemVariableUintType)
+		convey.So(isUint, convey.ShouldBeTrue)
 
 		got, err := sv.Type.Convert(sv.Default)
 		convey.So(err, convey.ShouldBeNil)
-		convey.So(got, convey.ShouldEqual, int64(1024))
+		convey.So(got, convey.ShouldEqual, uint64(1024))
 	})
+}
+
+func TestDiagnosticCountSystemVariables(t *testing.T) {
+	for _, name := range []string{warningCountSystemVariable, errorCountSystemVariable} {
+		sv, ok := gSysVarsDefs[name]
+		assert.True(t, ok)
+		assert.Equal(t, ScopeSession, sv.Scope)
+		assert.False(t, sv.Dynamic)
+		assert.False(t, sv.SetVarHintApplies)
+		assert.Equal(t, uint64(0), sv.Default)
+		assert.Equal(t, types.T_uint64, sv.Type.Type())
+	}
+
+	ses := &Session{errInfo: &errInfo{maxCnt: MoDefaultErrorCount}}
+	ses.appendWarningDiagnostic(1292, "warning")
+	ses.appendErrorDiagnostic(1064, "error")
+
+	warningCount, err := ses.GetSessionSysVar("WARNING_COUNT")
+	assert.NoError(t, err)
+	assert.Equal(t, uint64(2), warningCount)
+	errorCount, err := ses.GetSessionSysVar("error_count")
+	assert.NoError(t, err)
+	assert.Equal(t, uint64(1), errorCount)
+
+	_, err = ses.GetGlobalSysVar(warningCountSystemVariable)
+	assert.Error(t, err)
+	err = ses.SetSessionSysVar(context.Background(), warningCountSystemVariable, uint64(0))
+	assert.Error(t, err)
+}
+
+func TestGroupConcatMaxLenAssignmentBounds(t *testing.T) {
+	tests := []struct {
+		name         string
+		value        interface{}
+		want         uint64
+		wantWarning  bool
+		warningValue string
+	}{
+		{name: "zero", value: int64(0), want: 4, wantWarning: true, warningValue: "0"},
+		{name: "one", value: int64(1), want: 4, wantWarning: true, warningValue: "1"},
+		{name: "three", value: int64(3), want: 4, wantWarning: true, warningValue: "3"},
+		{name: "minimum", value: int64(4), want: 4},
+		{name: "int64 maximum", value: int64(math.MaxInt64), want: uint64(math.MaxInt64)},
+		{name: "above int64 maximum", value: uint64(math.MaxInt64) + 1, want: uint64(math.MaxInt64) + 1},
+		{name: "uint64 maximum", value: uint64(math.MaxUint64), want: uint64(math.MaxUint64)},
+		{name: "negative one", value: int64(-1), want: 4, wantWarning: true, warningValue: "-1"},
+		{name: "default", value: uint64(1024), want: 1024},
+		{name: "numeric string", value: "5", want: 5},
+		{name: "signed numeric string at minimum", value: "+4", want: 4},
+		{name: "signed numeric string at int64 maximum", value: "+9223372036854775807", want: uint64(math.MaxInt64)},
+		{name: "signed numeric string at uint64 maximum", value: "+18446744073709551615", want: uint64(math.MaxUint64)},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			ses := &Session{errInfo: &errInfo{maxCnt: MoDefaultErrorCount}}
+			err := ses.SetSessionSysVar(context.Background(), groupConcatMaxLenVariable, tt.value)
+			assert.NoError(t, err)
+
+			got, err := ses.GetSessionSysVar(groupConcatMaxLenVariable)
+			assert.NoError(t, err)
+			assert.Equal(t, tt.want, got)
+
+			info := ses.diagnosticsSnapshot()
+			if tt.wantWarning {
+				assert.Equal(t, []uint16{moerr.ER_TRUNCATED_WRONG_VALUE}, info.codes)
+				assert.Equal(t,
+					[]string{groupConcatMaxLenTruncationWarning(tt.warningValue)}, info.msgs)
+			} else {
+				assert.Empty(t, info.codes)
+			}
+		})
+	}
+}
+
+func TestNormalizeGroupConcatMaxLenValue(t *testing.T) {
+	tests := []struct {
+		name         string
+		value        interface{}
+		want         interface{}
+		wasTruncated bool
+	}{
+		{name: "int below minimum", value: int(3), want: uint64(4), wasTruncated: true},
+		{name: "int at minimum", value: int(4), want: int(4)},
+		{name: "uint below minimum", value: uint(3), want: uint64(4), wasTruncated: true},
+		{name: "uint at minimum", value: uint(4), want: uint(4)},
+		{name: "int8 below minimum", value: int8(3), want: uint64(4), wasTruncated: true},
+		{name: "int8 at minimum", value: int8(4), want: int8(4)},
+		{name: "uint8 below minimum", value: uint8(3), want: uint64(4), wasTruncated: true},
+		{name: "uint8 at minimum", value: uint8(4), want: uint8(4)},
+		{name: "int16 below minimum", value: int16(3), want: uint64(4), wasTruncated: true},
+		{name: "int16 at minimum", value: int16(4), want: int16(4)},
+		{name: "uint16 below minimum", value: uint16(3), want: uint64(4), wasTruncated: true},
+		{name: "uint16 at minimum", value: uint16(4), want: uint16(4)},
+		{name: "int32 below minimum", value: int32(3), want: uint64(4), wasTruncated: true},
+		{name: "int32 at minimum", value: int32(4), want: int32(4)},
+		{name: "uint32 below minimum", value: uint32(3), want: uint64(4), wasTruncated: true},
+		{name: "uint32 at minimum", value: uint32(4), want: uint32(4)},
+		{name: "int64 below minimum", value: int64(3), want: uint64(4), wasTruncated: true},
+		{name: "int64 at minimum", value: int64(4), want: int64(4)},
+		{name: "uint64 below minimum", value: uint64(3), want: uint64(4), wasTruncated: true},
+		{name: "uint64 at minimum", value: uint64(4), want: uint64(4)},
+		{name: "float32 below minimum", value: float32(3), want: uint64(4), wasTruncated: true},
+		{name: "float32 at minimum", value: float32(4), want: float32(4)},
+		{name: "float32 fractional", value: float32(3.5), want: float32(3.5)},
+		{name: "float64 below minimum", value: float64(3), want: uint64(4), wasTruncated: true},
+		{name: "float64 at minimum", value: float64(4), want: float64(4)},
+		{name: "float64 fractional", value: float64(3.5), want: float64(3.5)},
+		{name: "unsigned string below minimum", value: "3", want: uint64(4), wasTruncated: true},
+		{name: "unsigned string", value: "5", want: uint64(5)},
+		{name: "signed string at minimum", value: "+4", want: uint64(4)},
+		{name: "signed string above minimum", value: "+5", want: uint64(5)},
+		{name: "signed string at uint64 maximum", value: "+18446744073709551615", want: uint64(math.MaxUint64)},
+		{name: "signed string below minimum", value: "-1", want: uint64(4), wasTruncated: true},
+		{name: "invalid string", value: "invalid", want: "invalid"},
+		{name: "overflow string", value: "18446744073709551616", want: "18446744073709551616"},
+		{name: "signed overflow string", value: "+18446744073709551616", want: "+18446744073709551616"},
+		{name: "unsupported type", value: true, want: true},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			got, wasTruncated := normalizeGroupConcatMaxLenValue(tt.value)
+			assert.Equal(t, tt.want, got)
+			assert.Equal(t, tt.wasTruncated, wasTruncated)
+		})
+	}
+}
+
+func TestGroupConcatMaxLenFailedAssignmentKeepsPreviousValue(t *testing.T) {
+	for _, value := range []string{
+		"invalid",
+		"18446744073709551616",
+		"+18446744073709551616",
+	} {
+		t.Run(value, func(t *testing.T) {
+			ses := &Session{errInfo: &errInfo{maxCnt: MoDefaultErrorCount}}
+			assert.NoError(t, ses.SetSessionSysVar(context.Background(), groupConcatMaxLenVariable, int64(1024)))
+
+			err := ses.SetSessionSysVar(context.Background(), groupConcatMaxLenVariable, value)
+			assert.Error(t, err)
+			got, getErr := ses.GetSessionSysVar(groupConcatMaxLenVariable)
+			assert.NoError(t, getErr)
+			assert.Equal(t, uint64(1024), got)
+			assert.Empty(t, ses.diagnosticsSnapshot().codes)
+		})
+	}
 }
 
 func TestCTEMaxMemoryBytesDefinition(t *testing.T) {
@@ -76,6 +252,26 @@ func TestCTEMaxMemoryBytesDefinition(t *testing.T) {
 	_, err = sv.Type.Convert(int64(-1))
 	assert.Error(t, err)
 	_, err = sv.Type.Convert(int64(1099511627777))
+	assert.Error(t, err)
+}
+
+func TestExperimentalParquetLoadParallelVariables(t *testing.T) {
+	gate, ok := gSysVarsDefs["experimental_parquet_load_parallel"]
+	assert.True(t, ok)
+	assert.Equal(t, ScopeSession, gate.Scope)
+	assert.True(t, gate.Dynamic)
+	assert.Equal(t, int8(0), gate.Default)
+
+	minSize, ok := gSysVarsDefs["experimental_parquet_load_parallel_min_size"]
+	assert.True(t, ok)
+	assert.Equal(t, ScopeSession, minSize.Scope)
+	assert.True(t, minSize.Dynamic)
+	assert.Equal(t, int64(128*1024*1024), minSize.Default)
+
+	converted, err := minSize.Type.Convert(int64(1))
+	assert.NoError(t, err)
+	assert.Equal(t, int64(1), converted)
+	_, err = minSize.Type.Convert(int64(128*1024*1024 + 1))
 	assert.Error(t, err)
 }
 
@@ -335,5 +531,62 @@ func Test_valueIsBoolTrue(t *testing.T) {
 			}
 			assert.Equalf(t, tt.want, got, "valueIsBoolTrue(%v)", tt.args.value)
 		})
+	}
+}
+
+// TestRollbackTxnOnErrorVarDefinition pins the definition of the switch that
+// changes when a transaction survives a failed statement. Its default is the
+// MySQL behaviour (statement-only rollback), and it has to be settable per
+// session and globally, at runtime, for an application to opt in.
+func TestRollbackTxnOnErrorVarDefinition(t *testing.T) {
+	convey.Convey("mo_rollback_txn_on_error defaults to MySQL behaviour", t, func() {
+		sv, ok := gSysVarsDefs["mo_rollback_txn_on_error"]
+		convey.So(ok, convey.ShouldBeTrue)
+		convey.So(sv.Default, convey.ShouldEqual, int8(0))
+		convey.So(sv.Scope, convey.ShouldEqual, ScopeBoth)
+		convey.So(sv.Dynamic, convey.ShouldBeTrue)
+
+		// the default must convert, or a fresh session cannot start
+		got, err := sv.Type.Convert(sv.Default)
+		convey.So(err, convey.ShouldBeNil)
+		convey.So(got, convey.ShouldEqual, int8(0))
+
+		// the spellings an application actually writes
+		for _, on := range []any{1, int64(1), "on", "ON", "true"} {
+			got, err = sv.Type.Convert(on)
+			convey.So(err, convey.ShouldBeNil)
+			convey.So(got, convey.ShouldEqual, int8(1))
+		}
+		for _, off := range []any{0, int64(0), "off", "false"} {
+			got, err = sv.Type.Convert(off)
+			convey.So(err, convey.ShouldBeNil)
+			convey.So(got, convey.ShouldEqual, int8(0))
+		}
+
+		// and a value that is not a boolean is rejected rather than coerced
+		// to "on", which would silently discard transactions
+		_, err = sv.Type.Convert("sometimes")
+		convey.So(err, convey.ShouldNotBeNil)
+	})
+}
+
+// The index cache governor holds ONE cap per tenant, not one per index, and that is only sound
+// while the caps are global-scope. If either variable ever became session-settable, two sessions
+// of the same tenant could load indexes under different caps, the tenant's budget would no longer
+// be a single number over the sum of its entries, and the governor would have to capture the cap
+// per load instead -- see tenantCacheLimits and acctLimits in pkg/vectorindex/cache.
+//
+// So this is not a restatement of the definition: it is the tripwire on the assumption a
+// different package makes about it.
+func TestIndexCacheSizeVariablesStayGlobalScope(t *testing.T) {
+	for _, name := range []string{"max_index_cache_size", "max_gpu_index_cache_size"} {
+		def, ok := gSysVarsDefs[name]
+		assert.True(t, ok, "%s must exist: the governor reads it", name)
+		assert.Equal(t, ScopeGlobal, def.Scope,
+			"%s is global-scope by contract; making it session-settable requires the index cache "+
+				"governor to capture the cap per load", name)
+		assert.True(t, def.Dynamic,
+			"%s must stay dynamic: a cache budget an operator can only change by restarting "+
+				"every CN is not usable during the memory pressure that prompts the change", name)
 	}
 }

@@ -70,34 +70,42 @@ func TestIssue26123DatabaseCopiesKeepLikeMetacharacterFKTables(t *testing.T) {
 			{name: "backslash", tableName: `child\fk`, tableNameSQL: "`child\\fk`"},
 		}
 
+		const sourceDB = "issue_26123_source"
+		execSQLRequire(t, ctx, db, "drop database if exists `"+sourceDB+"`")
+		defer func() {
+			cleanupCtx, cleanupCancel := context.WithTimeout(context.Background(), 30*time.Second)
+			defer cleanupCancel()
+			execSQLMaybe(t, cleanupCtx, db, "drop database if exists `"+sourceDB+"`")
+		}()
+		execSQLRequire(t, ctx, db, "create database `"+sourceDB+"`")
+		execSQLRequire(t, ctx, db, "create table `"+sourceDB+"`.`parent_t` (id int primary key)")
+		execSQLRequire(t, ctx, db, "insert into `"+sourceDB+"`.`parent_t` values (1)")
+		execSQLRequire(t, ctx, db, "create table `"+sourceDB+"`.`a0b` (id int primary key)")
+		execSQLRequire(t, ctx, db, "insert into `"+sourceDB+"`.`a0b` values (22)")
+		for _, tc := range tableCases {
+			execSQLRequire(t, ctx, db, "create table `"+sourceDB+"`."+tc.tableNameSQL+
+				" (id int primary key, parent_id int, foreign key (parent_id) references `"+
+				sourceDB+"`.`parent_t`(id))")
+			execSQLRequire(t, ctx, db, "insert into `"+sourceDB+"`."+tc.tableNameSQL+" values (11, 1)")
+		}
+
 		for _, mode := range copyModes {
-			for _, tc := range tableCases {
-				t.Run(mode.name+"/"+tc.name, func(t *testing.T) {
-					sourceDB := "issue_26123_" + mode.key + "_" + tc.name + "_src"
-					targetDB := "issue_26123_" + mode.key + "_" + tc.name + "_dst"
-					defer func() {
-						cleanupCtx, cleanupCancel := context.WithTimeout(context.Background(), 30*time.Second)
-						defer cleanupCancel()
-						execSQLMaybe(t, cleanupCtx, db, "drop database if exists `"+targetDB+"`")
-						execSQLMaybe(t, cleanupCtx, db, "drop database if exists `"+sourceDB+"`")
-					}()
+			t.Run(mode.name, func(t *testing.T) {
+				targetDB := "issue_26123_" + mode.key + "_target"
+				defer func() {
+					cleanupCtx, cleanupCancel := context.WithTimeout(context.Background(), 30*time.Second)
+					defer cleanupCancel()
+					execSQLMaybe(t, cleanupCtx, db, "drop database if exists `"+targetDB+"`")
+				}()
+				execSQLRequire(t, ctx, db, "drop database if exists `"+targetDB+"`")
+				execSQLRequire(t, ctx, db, mode.copy(sourceDB, targetDB))
 
-					execSQLRequire(t, ctx, db, "drop database if exists `"+targetDB+"`")
-					execSQLRequire(t, ctx, db, "drop database if exists `"+sourceDB+"`")
-					execSQLRequire(t, ctx, db, "create database `"+sourceDB+"`")
-					execSQLRequire(t, ctx, db, "create table `"+sourceDB+"`.`parent_t` (id int primary key)")
-					if tc.collisionTable != "" {
-						execSQLRequire(t, ctx, db, "create table `"+sourceDB+"`."+tc.collisionTable+" (id int primary key)")
-						execSQLRequire(t, ctx, db, "insert into `"+sourceDB+"`."+tc.collisionTable+" values (22)")
-					}
-					execSQLRequire(t, ctx, db, "create table `"+sourceDB+"`."+tc.tableNameSQL+" (id int primary key, parent_id int, foreign key (parent_id) references `"+sourceDB+"`.`parent_t`(id))")
-					execSQLRequire(t, ctx, db, "insert into `"+sourceDB+"`.`parent_t` values (1)")
-					execSQLRequire(t, ctx, db, "insert into `"+sourceDB+"`."+tc.tableNameSQL+" values (11, 1)")
-
-					execSQLRequire(t, ctx, db, mode.copy(sourceDB, targetDB))
-					assertIssue26123CopiedFKTable(t, ctx, db, sourceDB, targetDB, tc.tableName, tc.tableNameSQL, tc.collisionTable)
-				})
-			}
+				for _, tc := range tableCases {
+					t.Run(tc.name, func(t *testing.T) {
+						assertIssue26123CopiedFKTable(t, ctx, db, sourceDB, targetDB, tc.tableName, tc.tableNameSQL, tc.collisionTable)
+					})
+				}
+			})
 		}
 	})
 }
@@ -131,16 +139,16 @@ func assertIssue26123CopiedFKTable(
 		databaseName, tableName).Scan(&count))
 	require.Equal(t, 1, count)
 	require.NoError(t, db.QueryRowContext(ctx,
-		"select count(*) from mo_catalog.mo_foreign_keys where db_name = ? and refer_db_name = ? and refer_table_name = 'parent_t'",
-		databaseName, databaseName).Scan(&count))
+		"select count(*) from mo_catalog.mo_foreign_keys where db_name = ? and table_name = ? and refer_db_name = ? and refer_table_name = 'parent_t'",
+		databaseName, tableName, databaseName).Scan(&count))
 	require.Equal(t, 1, count)
 	var sourceFKTableName, targetFKTableName string
 	require.NoError(t, db.QueryRowContext(ctx,
-		"select table_name from mo_catalog.mo_foreign_keys where db_name = ? and refer_db_name = ? and refer_table_name = 'parent_t'",
-		sourceDatabaseName, sourceDatabaseName).Scan(&sourceFKTableName))
+		"select table_name from mo_catalog.mo_foreign_keys where db_name = ? and table_name = ? and refer_db_name = ? and refer_table_name = 'parent_t'",
+		sourceDatabaseName, tableName, sourceDatabaseName).Scan(&sourceFKTableName))
 	require.NoError(t, db.QueryRowContext(ctx,
-		"select table_name from mo_catalog.mo_foreign_keys where db_name = ? and refer_db_name = ? and refer_table_name = 'parent_t'",
-		databaseName, databaseName).Scan(&targetFKTableName))
+		"select table_name from mo_catalog.mo_foreign_keys where db_name = ? and table_name = ? and refer_db_name = ? and refer_table_name = 'parent_t'",
+		databaseName, tableName, databaseName).Scan(&targetFKTableName))
 	require.Equal(t, sourceFKTableName, targetFKTableName)
 
 	_, err := db.ExecContext(ctx,

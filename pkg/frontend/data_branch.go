@@ -81,7 +81,11 @@ func dataBranchGeneratedColumnsEqual(left, right *plan.GeneratedCol) bool {
 		return false
 	}
 	if left.Expr != nil || right.Expr != nil {
-		return proto.Equal(left.Expr, right.Expr)
+		leftExpr := proto.Clone(left.Expr).(*plan.Expr)
+		rightExpr := proto.Clone(right.Expr).(*plan.Expr)
+		return leftExpr.NormalizeTextLiteralFormsForCompatibility() == nil &&
+			rightExpr.NormalizeTextLiteralFormsForCompatibility() == nil &&
+			proto.Equal(leftExpr, rightExpr)
 	}
 	return left.OriginString != "" && left.OriginString == right.OriginString
 }
@@ -123,7 +127,10 @@ func dataBranchGeneratedColumnsLogicallyEqual(
 		}
 		return strings.ToLower(col.Name), true
 	})
-	return leftOK && rightOK && proto.Equal(leftExpr, rightExpr)
+	return leftOK && rightOK &&
+		leftExpr.NormalizeTextLiteralFormsForCompatibility() == nil &&
+		rightExpr.NormalizeTextLiteralFormsForCompatibility() == nil &&
+		proto.Equal(leftExpr, rightExpr)
 }
 
 func dataBranchGeneratedExprColumn(tblDef *plan.TableDef, pos int32) *plan.ColDef {
@@ -208,6 +215,39 @@ func newBranchHashmapAllocator(limitRate float64) *branchHashmapAllocator {
 	return &branchHashmapAllocator{
 		upstream:  malloc.GetDefault(nil),
 		throttler: throttler,
+	}
+}
+
+type dataBranchVisibleStateRecoveryResources struct {
+	allocator *branchHashmapAllocator
+}
+
+func (r *dataBranchVisibleStateRecoveryResources) NewVisibleStateStore() (engine.VisibleStateStore, error) {
+	if r == nil || r.allocator == nil {
+		return nil, moerr.NewInternalErrorNoCtx("data branch visible-state recovery requires an allocator")
+	}
+	return databranchutils.NewVisibleStateStore(r.allocator)
+}
+
+func (r *dataBranchVisibleStateRecoveryResources) ReserveBuffer(bytes int64) error {
+	if bytes <= 0 {
+		return nil
+	}
+	if r == nil || r.allocator == nil || r.allocator.throttler == nil {
+		return moerr.NewInternalErrorNoCtx("data branch visible-state recovery requires a memory throttler")
+	}
+	if _, ok := r.allocator.throttler.Acquire(bytes); !ok {
+		return moerr.NewMPoolCapacityNoCtxf(
+			"data branch visible-state recovery cannot reserve %d buffered bytes",
+			bytes,
+		)
+	}
+	return nil
+}
+
+func (r *dataBranchVisibleStateRecoveryResources) ReleaseBuffer(bytes int64) {
+	if bytes > 0 && r != nil && r.allocator != nil && r.allocator.throttler != nil {
+		r.allocator.throttler.Release(bytes)
 	}
 }
 
@@ -442,6 +482,88 @@ func handleDataBranch(
 	}
 }
 
+func getDataBranchMutationExecutor(
+	ctx context.Context,
+	ses *Session,
+	featureLimited bool,
+	opts ...*BackgroundExecOption,
+) (BackgroundExec, func(error) error, error) {
+	explicitTxn := ses.proc.GetTxnOperator().TxnOptions().ByBegin
+	return getLineageOwnerMutationExecutor(
+		ctx, ses, featureLimited, explicitTxn, true, getBackExecutor, opts...,
+	)
+}
+
+type backgroundExecutorFactory func(
+	context.Context,
+	*Session,
+	...*BackgroundExecOption,
+) (BackgroundExec, func(error) error, error)
+
+func getCloneMutationExecutor(
+	ctx context.Context,
+	ses *Session,
+	useTxnHandler bool,
+	opts ...*BackgroundExecOption,
+) (BackgroundExec, func(error) error, error) {
+	if useTxnHandler {
+		return getLineageOwnerMutationExecutor(
+			ctx, ses, false,
+			ses.GetTxnHandler().OptionBitsIsSet(OPTION_BEGIN), true,
+			getBackExecutorWithTxnHandler, opts...,
+		)
+	}
+	return getLineageOwnerMutationExecutor(
+		ctx, ses, false,
+		ses.proc.GetTxnOperator().TxnOptions().ByBegin, true,
+		getBackExecutor, opts...,
+	)
+}
+
+func getLineageOwnerMutationExecutor(
+	ctx context.Context,
+	ses *Session,
+	featureLimited bool,
+	explicitTxn bool,
+	validateExplicitTxn bool,
+	factory backgroundExecutorFactory,
+	opts ...*BackgroundExecOption,
+) (BackgroundExec, func(error) error, error) {
+	bh, deferred, err := factory(ctx, ses, opts...)
+	if err != nil {
+		return nil, nil, err
+	}
+	if explicitTxn {
+		if !validateExplicitTxn {
+			return bh, deferred, nil
+		}
+		// Preserve DATA BRANCH's transactional SQL contract without letting a
+		// client-controlled transaction own the global row after this statement.
+		// Successful owner-catalog work is validated with fast-fail admission at
+		// COMMIT; a competing restore makes this transaction abort and release its
+		// earlier catalog locks.
+		return bh, func(err error) error {
+			err = deferred(err)
+			if err == nil {
+				ses.GetTxnHandler().requireLineageOwnerLifecycleValidation()
+			}
+			return err
+		}, nil
+	}
+	if featureLimited {
+		err = admitFeatureLimitedLineageOwnerMutation(ctx, ses, bh)
+	} else {
+		err = lockDataBranchLineageOwnerLifecycle(ctx, bh)
+	}
+	if err != nil {
+		// The lifecycle boundary is transaction admission for every data-branch
+		// create/delete path. A failure must end the owned transaction here so no
+		// target-account, table, metadata, snapshot, or PITR lock can follow it.
+		return nil, nil, deferred(err)
+	}
+	return bh, deferred, nil
+}
+
 func dataBranchCreateTable(
 	execCtx *ExecCtx,
 	ses *Session,
@@ -454,18 +576,24 @@ func dataBranchCreateTable(
 		cloneStmt *tree.CloneTable
 	)
 
-	if bh, deferred, err = getBackExecutor(
-		execCtx.reqCtx, ses, &BackgroundExecOption{forcePessimisticRC: true},
+	if bh, deferred, err = getDataBranchMutationExecutor(
+		execCtx.reqCtx, ses, true, &BackgroundExecOption{
+			forcePessimisticRC:             true,
+			cloneSnapshotUsesBackgroundTxn: true,
+		},
 	); err != nil {
 		return
 	}
+	restoreReqCtx := installDataBranchCloneContext(
+		execCtx, tree.NormalCloneLevelTable, "",
+	)
+	defer restoreReqCtx()
 
 	defer func() {
 		if deferred != nil {
 			err = deferred(err)
 		}
 	}()
-
 	cloneStmt = &tree.CloneTable{
 		SrcTable:     stmt.SrcTable,
 		CreateTable:  stmt.CreateTable,
@@ -497,9 +625,6 @@ func dataBranchCreateTable(
 	defer func() {
 		ses.GetTxnCompileCtx().SetDatabase(oldDefault)
 	}()
-
-	execCtx.reqCtx = context.WithValue(execCtx.reqCtx, tree.CloneLevelCtxKey{}, tree.NormalCloneLevelTable)
-	execCtx.reqCtx = context.WithValue(execCtx.reqCtx, dataBranchCloneLockCtxKey{}, true)
 
 	if receipt, err = handleCloneTable(execCtx, ses, cloneStmt, bh, &cloneAccountResolution{
 		opAccountId: opAccountID,
@@ -533,22 +658,29 @@ func dataBranchCreateDatabase(
 		authStats statistic.StatsArray
 	)
 	stats.Reset()
-	if bh, deferred, err = getBackExecutor(
-		execCtx.reqCtx, ses, &BackgroundExecOption{forcePessimisticRC: true},
+	if err = requireDataBranchDatabaseIdentity(
+		execCtx.reqCtx, currentProtocolVersion(ses.proc),
 	); err != nil {
 		return
 	}
+	if bh, deferred, err = getDataBranchMutationExecutor(
+		execCtx.reqCtx, ses, true, &BackgroundExecOption{
+			forcePessimisticRC:             true,
+			cloneSnapshotUsesBackgroundTxn: true,
+		},
+	); err != nil {
+		return
+	}
+	restoreReqCtx := installDataBranchCloneContext(
+		execCtx, tree.NormalCloneLevelDatabase, catalog.SystemDBTypeDataBranch,
+	)
+	defer restoreReqCtx()
 
 	defer func() {
 		if deferred != nil {
 			err = deferred(err)
 		}
 	}()
-
-	execCtx.reqCtx = context.WithValue(
-		execCtx.reqCtx, tree.CloneLevelCtxKey{}, tree.NormalCloneLevelDatabase,
-	)
-	execCtx.reqCtx = context.WithValue(execCtx.reqCtx, dataBranchCloneLockCtxKey{}, true)
 
 	if !skipDataBranchPrivilegeCheck(ses) {
 		if authStats, err = authenticateDataBranchCreateDatabase(execCtx.reqCtx, ses, stmt); err != nil {
@@ -595,6 +727,27 @@ func dataBranchCreateDatabase(
 	}
 
 	return
+}
+
+// installDataBranchCloneContext keeps clone-only values within one frontend
+// statement. ExecCtx spans every statement in a multi-statement COM_QUERY, so
+// mutating its request context without restoration can make an ordinary DDL
+// inherit DATA BRANCH identity or clone-lock ownership.
+func installDataBranchCloneContext(
+	execCtx *ExecCtx,
+	level tree.CloneLevelType,
+	databaseType string,
+) func() {
+	previous := execCtx.reqCtx
+	derived := context.WithValue(previous, tree.CloneLevelCtxKey{}, level)
+	derived = context.WithValue(derived, dataBranchCloneLockCtxKey{}, true)
+	if databaseType != "" {
+		derived = context.WithValue(derived, defines.DatTypKey{}, databaseType)
+	}
+	execCtx.reqCtx = derived
+	return func() {
+		execCtx.reqCtx = previous
+	}
 }
 
 func validateDataBranchCreateTxn(pessimistic bool) error {
@@ -676,7 +829,9 @@ func dataBranchDeleteTable(
 		deferred func(error) error
 	)
 
-	if bh, deferred, err = getBackExecutor(execCtx.reqCtx, ses); err != nil {
+	if bh, deferred, err = getDataBranchMutationExecutor(
+		execCtx.reqCtx, ses, false, &BackgroundExecOption{forcePessimisticRC: true},
+	); err != nil {
 		return
 	}
 
@@ -685,7 +840,6 @@ func dataBranchDeleteTable(
 			err = deferred(err)
 		}
 	}()
-
 	var (
 		dbName  string
 		tblName string
@@ -742,7 +896,9 @@ func dataBranchDeleteDatabase(
 		deferred func(error) error
 	)
 
-	if bh, deferred, err = getBackExecutor(execCtx.reqCtx, ses); err != nil {
+	if bh, deferred, err = getDataBranchMutationExecutor(
+		execCtx.reqCtx, ses, false, &BackgroundExecOption{forcePessimisticRC: true},
+	); err != nil {
 		return
 	}
 
@@ -751,7 +907,6 @@ func dataBranchDeleteDatabase(
 			err = deferred(err)
 		}
 	}()
-
 	var (
 		dbName   = stmt.DatabaseName
 		accId    uint32
@@ -762,7 +917,12 @@ func dataBranchDeleteDatabase(
 		return
 	}
 
-	if tableIDs, err = validateDataBranchDeleteDatabaseTarget(execCtx.reqCtx, ses, bh, dbName.String()); err != nil {
+	if err = lockDataBranchDeleteDatabaseTarget(execCtx.reqCtx, ses, bh, dbName.String()); err != nil {
+		return
+	}
+	if tableIDs, err = validateDataBranchDeleteDatabaseTarget(
+		execCtx.reqCtx, ses, bh, dbName.String(), currentProtocolVersion(ses.proc),
+	); err != nil {
 		return
 	}
 
@@ -803,25 +963,6 @@ func diffMergeAgency(
 		return err
 	}
 
-	// do not open another transaction,
-	// if this already executed within a transaction.
-	if bh, deferred, err = getBackExecutor(execCtx.reqCtx, ses); err != nil {
-		return
-	}
-
-	defer func() {
-		if deferred != nil {
-			err = deferred(err)
-		}
-	}()
-
-	var (
-		ctx    context.Context
-		cancel context.CancelFunc
-	)
-
-	ctx, cancel = context.WithCancel(execCtx.reqCtx)
-
 	var (
 		dagInfo   branchMetaInfo
 		tblStuff  tableStuff
@@ -832,10 +973,6 @@ func diffMergeAgency(
 		pickStmt  *tree.DataBranchPick
 	)
 
-	defer func() {
-		cancel()
-	}()
-
 	if diffStmt, ok = stmt.(*tree.DataBranchDiff); !ok {
 		if mergeStmt, ok = stmt.(*tree.DataBranchMerge); !ok {
 			if pickStmt, ok = stmt.(*tree.DataBranchPick); !ok {
@@ -843,6 +980,28 @@ func diffMergeAgency(
 			}
 		}
 	}
+
+	// DIFF, PICK, and MERGE all create and drop apply tables. Enter the
+	// lineage-owner lifecycle before resolving either endpoint, so their nested
+	// DDL follows the same lineage -> view-metadata -> object lock order as
+	// ordinary DROP, clone, and restore paths.
+	bh, deferred, err = getDataBranchMutationExecutor(
+		execCtx.reqCtx,
+		ses,
+		false,
+		&BackgroundExecOption{forcePessimisticRC: true},
+	)
+	if err != nil {
+		return
+	}
+	defer func() {
+		if deferred != nil {
+			err = deferred(err)
+		}
+	}()
+
+	ctx, cancel := context.WithCancel(execCtx.reqCtx)
+	defer cancel()
 
 	if diffStmt != nil {
 		if diffStmt.OutputOpt != nil && len(diffStmt.OutputOpt.DirPath) != 0 {
@@ -1343,6 +1502,13 @@ func reconcileDataBranchEndpointSchema(
 			}
 		}
 	}
+	writableIdxes := tables.def.writableIdxes
+	if len(tables.def.tarOnlyIdxes) > 0 {
+		writableIdxes = tables.def.commonWritableIdxes
+	}
+	tables.def.indexedSpecialUpdateIdxes = dataBranchIndexedSpecialUpdateColIdxes(
+		*tables, baseDef, writableIdxes,
+	)
 	return nil
 }
 
@@ -1969,12 +2135,17 @@ func constructChangeHandle(
 		bFrom := betweenFrom.Next()
 		bTo := *betweenTo
 		j := 0
+		boundaries := make([]engine.Relation, 0, len(tarRange.rel))
 		for i := range tarRange.rel {
+			startBoundary := tarRange.startBoundary(i)
 			// Intersect: from = max(original, bFrom), end = min(original, bTo)
 			f := tarRange.from[i]
 			e := tarRange.end[i]
 			if bFrom.GT(&f) {
 				f = bFrom
+				// The lineage boundary represents the state immediately before
+				// the original range, not an arbitrary BETWEEN lower bound.
+				startBoundary = nil
 			}
 			if bTo.LT(&e) {
 				e = bTo
@@ -1983,12 +2154,14 @@ func constructChangeHandle(
 				tarRange.from[j] = f
 				tarRange.end[j] = e
 				tarRange.rel[j] = tarRange.rel[i]
+				boundaries = append(boundaries, startBoundary)
 				j++
 			}
 		}
 		tarRange.from = tarRange.from[:j]
 		tarRange.end = tarRange.end[:j]
 		tarRange.rel = tarRange.rel[:j]
+		tarRange.startBoundaryRel = boundaries
 	}
 	tarHydrationRel := tables.tarRel
 	tarHydrationSnapshot := tarSnapshot
@@ -2000,6 +2173,10 @@ func constructChangeHandle(
 		tarHydrationSnapshot = *betweenTo
 	}
 	targetDef := tables.tarRel.GetTableDef(ctx)
+	ctx = engine.WithVisibleStateRecoveryResources(
+		ctx,
+		&dataBranchVisibleStateRecoveryResources{allocator: tables.hashmapAllocator},
+	)
 
 	// collectFn dispatches to the PK-filtered or plain CollectChanges variant.
 	collectFn := func(
@@ -2033,8 +2210,14 @@ func constructChangeHandle(
 				sourceMapping, len(tables.def.colNames),
 			)
 		}
+		collectCtx := ctx
+		if startBoundary := tarRange.startBoundary(i); startBoundary != nil {
+			collectCtx = engine.WithVisibleStateStartRelation(
+				collectCtx, startBoundary,
+			)
+		}
 		if handle, err = collectFn(
-			ctx,
+			collectCtx,
 			tarRange.rel[i],
 			tarRange.from[i],
 			tarRange.end[i],
@@ -2085,8 +2268,14 @@ func constructChangeHandle(
 				sourceMapping, len(tables.def.colNames),
 			)
 		}
+		collectCtx := ctx
+		if startBoundary := baseRange.startBoundary(i); startBoundary != nil {
+			collectCtx = engine.WithVisibleStateStartRelation(
+				collectCtx, startBoundary,
+			)
+		}
 		if handle, err = collectFn(
-			ctx,
+			collectCtx,
 			baseRange.rel[i],
 			baseRange.from[i],
 			baseRange.end[i],
@@ -2735,6 +2924,7 @@ func buildSideCollectRange(
 ) (cr collectRange, hasZeroHistory bool, err error) {
 
 	endpointID := selfPath[len(selfPath)-1]
+	var previousRel engine.Relation
 	for i, nodeID := range selfPath {
 		var (
 			rel             engine.Relation
@@ -2828,11 +3018,14 @@ func buildSideCollectRange(
 		}
 
 		if windowFrom.GT(&windowEnd) {
+			previousRel = rel
 			continue
 		}
 		cr.rel = append(cr.rel, rel)
 		cr.from = append(cr.from, windowFrom)
 		cr.end = append(cr.end, windowEnd)
+		cr.startBoundaryRel = append(cr.startBoundaryRel, previousRel)
+		previousRel = rel
 	}
 	return
 }
@@ -3051,7 +3244,10 @@ func getDatabaseCreatedTimeLowerBoundByPK(
 
 	attrs := []string{catalog.SystemDBAttr_ID, catalog.SystemDBAttr_CreateAt}
 	colTypes := []types.Type{types.T_uint64.ToType(), types.T_timestamp.ToType()}
-	filterExpr := readutil.ConstructInExpr(ctx, catalog.SystemDBAttr_CPKey, filterVec)
+	filterExpr, cerr := readutil.ConstructInExpr(ctx, catalog.SystemDBAttr_CPKey, filterVec)
+	if cerr != nil {
+		return types.TS{}, cerr
+	}
 
 	found := false
 	result := types.TS{}
@@ -3126,7 +3322,10 @@ func getTableCreationCommitTSByID(
 
 	attrs := []string{catalog.SystemRelAttr_ID, objectio.DefaultCommitTS_Attr}
 	colTypes := []types.Type{types.T_uint64.ToType(), types.T_TS.ToType()}
-	filterExpr := readutil.ConstructInExpr(ctx, catalog.SystemRelAttr_ID, filterVec)
+	filterExpr, cerr := readutil.ConstructInExpr(ctx, catalog.SystemRelAttr_ID, filterVec)
+	if cerr != nil {
+		return types.TS{}, cerr
+	}
 
 	found := false
 	result := types.TS{}
@@ -3226,6 +3425,7 @@ func getTableCreationCommitTSByCollectChanges(
 		ctx = engine.WithPKFilter(ctx, pkFilter)
 	}
 	ctx = engine.WithCollectChangesDebugLabel(ctx, "data-branch-table-cts")
+	ctx = engine.WithCollectChangesPreserveAllVersions(ctx)
 
 	handle, err := rel.CollectChanges(ctx, lowerBound, snapshotTS, true, mp)
 	if err != nil {

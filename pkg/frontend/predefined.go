@@ -79,7 +79,8 @@ var (
 				operation_user_id int signed,
 				granted_time timestamp,
 				with_grant_option bool,
-				primary key(granted_id, grantee_id)
+				primary key(granted_id, grantee_id),
+				key idx_mo_role_grant_grantee_id(grantee_id)
 			)`
 
 	MoCatalogMoRolePrivsDDL = `create table mo_catalog.mo_role_privs (
@@ -142,6 +143,10 @@ var (
 			obj_id bigint unsigned,
     		kind varchar(32) not null default 'user'
 			)`, catalog.MO_CATALOG, catalog.MO_SNAPSHOTS)
+	MoCatalogSysSnapshotQuotaIndexDDL = fmt.Sprintf(
+		"create index idx_snapshot_quota_target on %s.%s(account_name, level, obj_id, kind)",
+		catalog.MO_CATALOG, catalog.MO_SNAPSHOTS,
+	)
 
 	MoCatalogMoPitrDDL = fmt.Sprintf(`CREATE TABLE %s.%s (
 			pitr_id uuid unique key,
@@ -177,7 +182,8 @@ var (
     		owner int unsigned,
     		creator int unsigned,
     		comment text,
-			primary key (account_id, pub_name)
+			primary key (account_id, pub_name),
+			key idx_mo_pubs_database_id (database_id)
 	)`
 
 	MoCatalogMoSubsDDL = `create table mo_catalog.mo_subs (
@@ -196,6 +202,10 @@ var (
 			PRIMARY KEY (pub_account_name, pub_name, sub_account_id),
 			UNIQUE KEY (sub_account_id, sub_name)
 	)`
+
+	MoCatalogMoViewDependenciesDDL = catalog.MoViewDependenciesDDL
+
+	MoCatalogMoViewRefreshDDL = catalog.MoViewRefreshDDL
 
 	MoCatalogMoStoredProcedureDDL = `create table mo_catalog.mo_stored_procedure (
 				proc_id int auto_increment,
@@ -270,9 +280,21 @@ var (
     			task_id uuid,
 				db_name varchar(256),
 				table_name varchar(256),
-    			watermark varchar(128),			
+				watermark varchar(128),
+				source_table_id bigint unsigned not null default 0,
+				owner_generation bigint unsigned not null default 0,
 				err_msg varchar(256),
     			primary key(account_id,task_id,db_name,table_name)
+			)`
+
+	MoCatalogMoCdcSnapshotDDL = `create table mo_catalog.mo_cdc_snapshot (
+				account_id bigint unsigned,
+				task_id uuid,
+				db_name varchar(256),
+				table_name varchar(256),
+				source_table_id bigint unsigned,
+				snapshot_epoch varchar(128),
+				primary key(account_id,task_id,db_name,table_name,source_table_id)
 			)`
 
 	MoCatalogMoISCPLogDDL = `CREATE TABLE mo_catalog.mo_iscp_log (
@@ -577,7 +599,8 @@ var (
 			result_code                 int null,
 			error_msg                   varchar(1000) null,
 			create_at                   bigint,
-			end_at                      bigint)`,
+			end_at                      bigint,
+			index idx_task_parent_id (task_parent_id))`,
 		catalog.MOTaskDB)
 
 	MoTaskSysCronTaskDDL = fmt.Sprintf(`create table %s.sys_cron_task (
@@ -608,7 +631,7 @@ var (
 			create_at                   timestamp not null,
 			update_at                   timestamp not null,
 				end_at                      timestamp,
-				last_run                    timestamp,
+				last_run                    timestamp(6),
 				details                     blob)`,
 		catalog.MOTaskDB)
 
@@ -631,7 +654,8 @@ var (
 				creator_role_id             int unsigned not null default 0,
 				created_at                  timestamp not null default current_timestamp,
 				updated_at                  timestamp not null default current_timestamp,
-				unique key uk_task_name_account (task_name, account_id))`,
+				unique key uk_task_name_account (task_name, account_id),
+				index idx_account_id (account_id))`,
 		catalog.MOTaskDB, catalog.MOSQLTask)
 
 	MoTaskSQLTaskRunDDL = fmt.Sprintf(`create table %s.%s (
@@ -652,6 +676,7 @@ var (
 				gate_result                 tinyint not null default 1,
 				runner_cn                   varchar(128) not null default '',
 				index idx_task_id (task_id),
+				index idx_account_id (account_id),
 				index idx_status (status),
 				index idx_started_at (started_at))`,
 		catalog.MOTaskDB, catalog.MOSQLTaskRun)

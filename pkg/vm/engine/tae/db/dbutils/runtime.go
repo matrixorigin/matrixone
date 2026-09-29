@@ -226,7 +226,7 @@ func (r *Runtime) SID() string {
 // PersistedAObjectAbortSupported reports whether every reader in the current
 // rollout understands appendable objects with the persisted abort column.
 // Deployment keeps MOProtocolVersion at the oldest live service during a
-// rolling upgrade, so writers must retain the legacy layout until version 10 is
+// rolling upgrade, so writers must retain the legacy layout until version 11 is
 // active.
 func (r *Runtime) PersistedAObjectAbortSupported() bool {
 	serviceRuntime := runtime.ServiceRuntime(r.SID())
@@ -238,7 +238,7 @@ func (r *Runtime) PersistedAObjectAbortSupported() bool {
 		return false
 	}
 	version, ok := value.(int64)
-	return ok && version >= defines.MORPCVersion10
+	return ok && version >= defines.MORPCVersion11
 }
 
 func (r *Runtime) PoolUsageReport() {
