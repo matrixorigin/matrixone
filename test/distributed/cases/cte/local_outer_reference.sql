@@ -564,6 +564,28 @@ select p.id, (with q(n) as (select p.v)
 select p.id from guarded_abs p where
   (with recursive q(n) as (select p.id union all select n from q where n=1)
    select count(*) from q)>0 and p.id=2;
+-- ABS(INT) widens to BIGINT, so its complete type domain is safe. The
+-- demand predicate must prevent id=1 from starting an infinite partition.
+select p.id, (with recursive q(n) as (
+  select p.id union all select n from q where n=1
+) select count(*) from q where abs(p.id)=2) as c
+from guarded_abs p order by p.id;
+-- Empty seeds still own COUNT=0, independently of the demand predicate.
+select p.id, (with recursive q(n) as (
+  select p.id where p.id<0 union all select n from q where n=1
+) select count(*) from q where abs(p.id)=2) as c
+from guarded_abs p order by p.id;
+-- Selecting the nonterminating partition must still hit the depth cap.
+select p.id, (with recursive q(n) as (
+  select p.id union all select n from q where n=1
+) select count(*) from q where abs(p.id)=1) as c
+from guarded_abs p order by p.id;
+-- ABS(BIGINT) lacks the widening proof. It must not silently fall back to
+-- recursive replay of all partitions when no demand filter can be produced.
+select p.id, (with recursive q(n) as (
+  select p.id union all select n from q where n=1
+) select count(*) from q where abs(p.v)=2) as c
+from guarded_abs p order by p.id;
 -- Consumer demand also prevents an unused recursive partition from starting.
 select p.id, (with recursive q(n) as (
   select p.id union all select n from q where n=1
@@ -590,6 +612,12 @@ from guarded_abs p where p.id=1;
 select p.id from guarded_abs p where p.id=2;
 select p.id, case when p.id=2 then
   (select count(*) from guarded_abs a where a.id=p.id) else 0 end as c
+from guarded_abs p order by p.id;
+-- INT32_MIN is representable after the ABS widening.
+insert into guarded_abs values (-2147483648,0);
+select p.id, (with recursive q(n) as (
+  select p.id union all select n from q where n=1
+) select count(*) from q where abs(p.id)=2147483648) as c
 from guarded_abs p order by p.id;
 drop table guarded_abs;
 

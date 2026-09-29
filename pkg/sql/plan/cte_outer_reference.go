@@ -296,6 +296,10 @@ func (d *localCTEDomain) outerOnlyDemand(expr *plan.Expr) *plan.Expr {
 		})
 	}
 	if !localCTEGuardedPredicateSafe(proof) {
+		// This predicate can suppress an entire partition, but its demand
+		// cannot be replayed safely. Do not silently start recursive work
+		// for all outer rows just because no demand filter was produced.
+		d.guarded = true
 		return nil
 	}
 	return copy
@@ -554,7 +558,7 @@ func localCTEGuardedPredicateSafe(expr *plan.Expr) bool {
 			lit := fn.Args[0].GetLit()
 			// A bound ASCII string literal fits a wider string target even
 			// when the generic type-domain cast proof cannot prove all bytes.
-			if lit == nil || !(localCTEStringLiteralFits(lit, e.Typ) ||
+			if lit == nil || !(lit.Isnull || localCTEStringLiteralFits(lit, e.Typ) ||
 				localCTEIntegerLiteralFits(lit, types.T(e.Typ.Id))) {
 				total = false
 			}
@@ -623,6 +627,10 @@ func isASCII(s string) bool {
 func localCTEDomainPredicateReplaySafe(expr *plan.Expr) bool {
 	proof := DeepCopyExpr(expr)
 	walkLocalCTEExpr(proof, func(e *plan.Expr) {
+		if localCTEWidenedAbsIsTotal(e) {
+			e.Expr = &plan.Expr_Lit{Lit: &plan.Literal{Isnull: true}}
+			return
+		}
 		fn := e.GetF()
 		if fn == nil || fn.Func == nil || fn.Func.ObjName != "cast" || len(fn.Args) != 2 || fn.Args[1].GetT() == nil {
 			return
@@ -632,6 +640,30 @@ func localCTEDomainPredicateReplaySafe(expr *plan.Expr) bool {
 		}
 	})
 	return isTruncationSafePredicateExpr(proof)
+}
+
+// ABS accepts signed integers as INT64. An INT8/16/32 operand widened to
+// INT64 cannot produce MinInt64, so its absolute value is representable for
+// the entire input domain. The operand itself must also be total; a cast
+// from INT64 or an overflowing expression does not establish this proof.
+func localCTEWidenedAbsIsTotal(expr *plan.Expr) bool {
+	fn := expr.GetF()
+	if fn == nil || fn.Func == nil || fn.Func.ObjName != "abs" || len(fn.Args) != 1 ||
+		types.T(expr.Typ.Id) != types.T_int64 {
+		return false
+	}
+	arg := fn.Args[0]
+	cast := arg.GetF()
+	if cast == nil || cast.Func == nil || cast.Func.ObjName != "cast" || len(cast.Args) != 2 ||
+		cast.Args[1].GetT() == nil || types.T(arg.Typ.Id) != types.T_int64 {
+		return false
+	}
+	switch types.T(cast.Args[0].Typ.Id) {
+	case types.T_int8, types.T_int16, types.T_int32:
+		return isTruncationSafeRowExpr(arg)
+	default:
+		return false
+	}
 }
 
 // cloneDomain retains the bound table object, transaction snapshot and tenant

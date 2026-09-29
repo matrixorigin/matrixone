@@ -68,6 +68,17 @@ func TestLocalCTEOuterReferencesExecutablePlan(t *testing.T) {
 				select abs(n) from q where p.n_nationkey=2) from tpch.nation p`,
 		},
 		{
+			name: "null demand is total despite untyped null cast",
+			sql: `select p.n_nationkey, (with q(n) as (select abs(p.n_regionkey))
+				select count(*) from q where p.n_nationkey=null) from tpch.nation p`,
+		},
+		{
+			name: "recursive demand with widened integer abs",
+			sql: `select p.n_nationkey, (with recursive q(n) as (
+				select p.n_nationkey union all select n from q where n=1)
+				select count(*) from q where abs(p.n_nationkey)=2) from tpch.nation p`,
+		},
+		{
 			name: "window consumer demand preserves identity",
 			sql: `select p.n_nationkey, (with q(n) as (select abs(p.n_regionkey))
 				select n from (select n,row_number() over(order by n) rn from q) d
@@ -431,6 +442,16 @@ func TestPreparedLocalCTEOuterReferences(t *testing.T) {
 	}
 }
 
+func TestLocalCTEWidenedAbsProof(t *testing.T) {
+	for _, typ := range []types.T{types.T_int8, types.T_int16, types.T_int32, types.T_int64} {
+		expr, err := BindFuncExprImplByPlanExpr(context.Background(), "abs", []*planpb.Expr{
+			GetColExpr(planpb.Type{Id: int32(typ)}, 1, 0),
+		})
+		require.NoError(t, err)
+		require.Equal(t, typ != types.T_int64, localCTEWidenedAbsIsTotal(expr), typ.String())
+	}
+}
+
 func TestLocalCTEGuardedLiteralProof(t *testing.T) {
 	lit := func(value int64) *planpb.Literal {
 		return &planpb.Literal{Value: &planpb.Literal_I64Val{I64Val: value}}
@@ -570,6 +591,12 @@ func TestLocalCTEOuterReferencesRejectUnsafeDomains(t *testing.T) {
 			name: "explicit values expression executor",
 			sql: `select (with q(n) as (select p.n_regionkey+v.x from (values row(rand())) v(x))
 				select n from q) from tpch.nation p`,
+		},
+		{
+			name: "unproven outer demand cannot start recursive replay",
+			sql: `select p.n_nationkey, (with recursive q(n) as (
+				select p.n_nationkey union all select n from q where n=1)
+				select count(*) from q where abs(cast(p.n_name as signed))=2) from tpch.nation p`,
 		},
 		{
 			name: "guarded recursive operator can fail on skipped partition",
