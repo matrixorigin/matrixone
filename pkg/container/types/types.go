@@ -86,6 +86,13 @@ const (
 	T_text     T = 71
 	T_datalink T = 72
 
+	// scalar low-precision floats (#20567). Stored as fixed-width uint16/uint8;
+	// arithmetic runs on the float32 bridge (see float16.go/float8.go/float4.go).
+	T_bf16    T = 73 // SQL bf16    (bfloat16, 2 bytes)
+	T_float16 T = 74 // SQL float16 (IEEE binary16, 2 bytes)
+	T_float8  T = 75 // SQL float8  (FP8 e4m3, 1 byte)
+	T_float4  T = 76 // SQL float4  (FP4 e2m1, 1 byte)
+
 	// Transaction TS
 	T_TS       T = 100
 	T_Rowid    T = 101
@@ -508,6 +515,10 @@ var Types = map[string]T{
 	"text":       T_text,
 	"datalink":   T_datalink,
 	"blob":       T_blob,
+	"bf16":       T_bf16,
+	"float16":    T_float16,
+	"float8":     T_float8,
+	"float4":     T_float4,
 	"uuid":       T_uuid,
 
 	"transaction timestamp": T_TS,
@@ -620,7 +631,7 @@ func (t Type) IsIntOrUint() bool {
 
 func (t Type) IsFloat() bool {
 	switch t.Oid {
-	case T_float32, T_float64:
+	case T_float32, T_float64, T_bf16, T_float16, T_float8, T_float4:
 		return true
 	default:
 		return false
@@ -755,6 +766,10 @@ func (t T) ToType() Type {
 		typ.Size = 4
 	case T_float64:
 		typ.Size = 8
+	case T_bf16, T_float16:
+		typ.Size = 2
+	case T_float8, T_float4:
+		typ.Size = 1
 	case T_decimal64:
 		typ.Size = 8
 		typ.Width = 18
@@ -835,6 +850,14 @@ func (t T) String() string {
 		return "FLOAT"
 	case T_float64:
 		return "DOUBLE"
+	case T_bf16:
+		return "BF16"
+	case T_float16:
+		return "FLOAT16"
+	case T_float8:
+		return "FLOAT8"
+	case T_float4:
+		return "FLOAT4"
 	case T_date:
 		return "DATE"
 	case T_datetime:
@@ -930,6 +953,14 @@ func (t T) OidString() string {
 		return "T_float64"
 	case T_float32:
 		return "T_float32"
+	case T_bf16:
+		return "T_bf16"
+	case T_float16:
+		return "T_float16"
+	case T_float8:
+		return "T_float8"
+	case T_float4:
+		return "T_float4"
 	case T_uint8:
 		return "T_uint8"
 	case T_uint16:
@@ -1001,9 +1032,9 @@ func (t T) TypeLen() int {
 		return 0
 	case T_bit:
 		return 8
-	case T_int8, T_bool:
+	case T_int8, T_bool, T_float8, T_float4:
 		return 1
-	case T_int16:
+	case T_int16, T_bf16, T_float16:
 		return 2
 	case T_int32, T_date:
 		return 4
@@ -1054,9 +1085,9 @@ func (t T) FixedLength() int {
 		return 0
 	case T_bit:
 		return 8
-	case T_int8, T_uint8, T_bool:
+	case T_int8, T_uint8, T_bool, T_float8, T_float4:
 		return 1
-	case T_int16, T_uint16:
+	case T_int16, T_uint16, T_bf16, T_float16:
 		return 2
 	case T_year:
 		return 2
@@ -1129,7 +1160,7 @@ func (t T) IsInteger() bool {
 
 // IsFloat return true if the types.T is floating Point Types
 func (t T) IsFloat() bool {
-	if t == T_float32 || t == T_float64 {
+	if t == T_float32 || t == T_float64 || t == T_bf16 || t == T_float16 || t == T_float8 || t == T_float4 {
 		return true
 	}
 	return false
