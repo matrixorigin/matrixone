@@ -3910,6 +3910,14 @@ func GetAny(vec *Vector, i int, deepCopy bool) any {
 		return GetFixedAtNoTypeCheck[float32](vec, i)
 	case types.T_float64:
 		return GetFixedAtNoTypeCheck[float64](vec, i)
+	case types.T_bf16:
+		return GetFixedAtNoTypeCheck[types.BF16](vec, i)
+	case types.T_float16:
+		return GetFixedAtNoTypeCheck[types.Float16](vec, i)
+	case types.T_float8:
+		return GetFixedAtNoTypeCheck[types.Float8](vec, i)
+	case types.T_float4:
+		return GetFixedAtNoTypeCheck[types.Float4](vec, i)
 	case types.T_date:
 		return GetFixedAtNoTypeCheck[types.Date](vec, i)
 	case types.T_datetime:
