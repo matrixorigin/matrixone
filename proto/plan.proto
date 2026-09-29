@@ -121,6 +121,12 @@ message VarRef {
   string name = 1;
   bool system = 2;
   bool global = 3;
+  // Frozen row domain, independent of Expr.typ's static charset:
+  // 0 = legacy/unbound; 1 = INHERIT; 2 = TEXT; 3 = BINARY.
+  // Nonzero values encode container/types.RuntimeStringDomain + 1 and are
+  // valid only for non-system MySQL string variables. Never re-resolve them
+  // from the current assignment during execution.
+  uint32 bound_string_domain = 4;
 }
 
 // Reference a column in the proj list of a node.
