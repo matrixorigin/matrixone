@@ -1,0 +1,99 @@
+DROP DATABASE IF EXISTS decimal_comparison_precision;
+CREATE DATABASE decimal_comparison_precision;
+USE decimal_comparison_precision;
+CREATE TABLE scale_pairs (id INT PRIMARY KEY, a DECIMAL(6,5), b DECIMAL(5,4));
+INSERT INTO scale_pairs VALUES (1, 9.22340, 9.2234), (2, -9.22340, -9.2234), (3, NULL, NULL);
+SELECT l.id, r.id FROM scale_pairs l JOIN scale_pairs r ON l.a = r.b ORDER BY l.id, r.id;
+➤ id[4,32,0]  ¦  id[4,32,0]  𝄀
+1  ¦  1  𝄀
+2  ¦  2
+SELECT id FROM scale_pairs WHERE a = b ORDER BY id;
+➤ id[4,32,0]  𝄀
+1  𝄀
+2
+SELECT id FROM scale_pairs WHERE b = a ORDER BY id;
+➤ id[4,32,0]  𝄀
+1  𝄀
+2
+SELECT id FROM scale_pairs WHERE a <=> b ORDER BY id;
+➤ id[4,32,0]  𝄀
+1  𝄀
+2  𝄀
+3
+SELECT id FROM scale_pairs WHERE a IN (SELECT b FROM scale_pairs) ORDER BY id;
+➤ id[4,32,0]  𝄀
+1  𝄀
+2
+SELECT id, a IN (b), CASE a WHEN b THEN 1 ELSE 0 END FROM scale_pairs ORDER BY id;
+➤ id[4,32,0]  ¦  a in (b)[-7,1,0]  ¦  case a when b then 1 else 0 end[-5,64,0]  𝄀
+1  ¦  1  ¦  1  𝄀
+2  ¦  1  ¦  1  𝄀
+3  ¦  null  ¦  0
+SELECT id FROM scale_pairs WHERE (a, id) = (b, id) ORDER BY id;
+➤ id[4,32,0]  𝄀
+1  𝄀
+2
+SELECT id, a <> b, a < b, a <= b, a > b, a >= b FROM scale_pairs ORDER BY id;
+➤ id[4,32,0]  ¦  a != b[-7,1,0]  ¦  a < b[-7,1,0]  ¦  a <= b[-7,1,0]  ¦  a > b[-7,1,0]  ¦  a >= b[-7,1,0]  𝄀
+1  ¦  0  ¦  0  ¦  1  ¦  0  ¦  1  𝄀
+2  ¦  0  ¦  0  ¦  1  ¦  0  ¦  1  𝄀
+3  ¦  null  ¦  null  ¦  null  ¦  null  ¦  null
+SELECT id, CASE WHEN id = 1 THEN a ELSE b END AS chosen FROM scale_pairs ORDER BY id;
+➤ id[4,32,0]  ¦  chosen[3,6,5]  𝄀
+1  ¦  9.22340  𝄀
+2  ¦  -9.22340  𝄀
+3  ¦  null
+SELECT IN_RANGE(10.50, 0.0, 15.0, 0);
+➤ IN_RANGE(10.50, 0.0, 15.0, 0)[-7,1,0]  𝄀
+1
+SELECT IN_RANGE(10.5, 0.00, 15.0, 0);
+➤ IN_RANGE(10.5, 0.00, 15.0, 0)[-7,1,0]  𝄀
+1
+SELECT IN_RANGE(10.5, 0.0, 15.00, 0);
+➤ IN_RANGE(10.5, 0.0, 15.00, 0)[-7,1,0]  𝄀
+1
+SELECT IN_RANGE(10.50, 0.0, 10.5, 0), IN_RANGE(10.50, 0.0, 10.4, 0);
+➤ IN_RANGE(10.50, 0.0, 10.5, 0)[-7,1,0]  ¦  IN_RANGE(10.50, 0.0, 10.4, 0)[-7,1,0]  𝄀
+1  ¦  0
+SELECT id, IN_RANGE(a, -9.2234, 9.2234, 0) FROM scale_pairs ORDER BY id;
+➤ id[4,32,0]  ¦  IN_RANGE(a, -9.2234, 9.2234, 0)[-7,1,0]  𝄀
+1  ¦  1  𝄀
+2  ¦  1  𝄀
+3  ¦  null
+CREATE TABLE wide_pairs (a DECIMAL(18,0), b DECIMAL(18,1), c DECIMAL(38,0), d DECIMAL(38,1));
+INSERT INTO wide_pairs VALUES (999999999999999999, 99999999999999999.9,
+99999999999999999999999999999999999999, 9999999999999999999999999999999999999.9);
+SELECT a = b, a <=> b, c = d, c <=> d FROM wide_pairs;
+➤ a = b[-7,1,0]  ¦  a <=> b[-7,1,0]  ¦  c = d[-7,1,0]  ¦  c <=> d[-7,1,0]  𝄀
+0  ¦  0  ¦  0  ¦  0
+SELECT IN_RANGE(a, 99999999999999999.9, 999999999999999999, 0),
+IN_RANGE(c, 9999999999999999999999999999999999999.9,
+99999999999999999999999999999999999999, 0) FROM wide_pairs;
+➤ IN_RANGE(a, 99999999999999999.9, 999999999999999999, 0)[-7,1,0]  ¦  IN_RANGE(c, 9999999999999999999999999999999999999.9, 99999999999999999999999999999999999999, 0)[-7,1,0]  𝄀
+1  ¦  1
+SELECT CAST(1 AS DECIMAL(65,0)) = CAST(1 AS DECIMAL(65,30)),
+CAST(1 AS DECIMAL(65,0)) <=> CAST(1 AS DECIMAL(65,30));
+➤ cast(1 as decimal(65)) = cast(1 as decimal(65, 30))[-7,1,0]  ¦  cast(1 as decimal(65)) <=> cast(1 as decimal(65, 30))[-7,1,0]  𝄀
+1  ¦  1
+SELECT CAST(2 AS DECIMAL(65,0)) = CAST(1 AS DECIMAL(65,30)),
+CAST(-1 AS DECIMAL(65,0)) <=> CAST(1 AS DECIMAL(65,30));
+➤ cast(2 as decimal(65)) = cast(1 as decimal(65, 30))[-7,1,0]  ¦  cast(-1 as decimal(65)) <=> cast(1 as decimal(65, 30))[-7,1,0]  𝄀
+0  ¦  0
+CREATE TABLE high_precision_pairs (a DECIMAL(65,0), b DECIMAL(65,30));
+INSERT INTO high_precision_pairs VALUES (1, 1), (2, 1), (-1, 1);
+SELECT a = b, a <=> b FROM high_precision_pairs ORDER BY a;
+➤ a = b[-7,1,0]  ¦  a <=> b[-7,1,0]  𝄀
+0  ¦  0  𝄀
+1  ¦  1  𝄀
+0  ¦  0
+SELECT CAST(a AS DECIMAL(5,5)) FROM scale_pairs WHERE id = 1;
+➤ cast(a as decimal(5, 5))[3,5,5]  𝄀
+0.99999
+SELECT CAST(a AS DECIMAL(5,5)) FROM scale_pairs WHERE id = 2;
+➤ cast(a as decimal(5, 5))[3,5,5]  𝄀
+-0.99999
+DELETE FROM scale_pairs WHERE a = b;
+SELECT id FROM scale_pairs ORDER BY id;
+➤ id[4,32,0]  𝄀
+3
+DROP DATABASE decimal_comparison_precision;

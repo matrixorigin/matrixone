@@ -713,7 +713,10 @@ func (b *HavingBinder) bindGroupConcatOrderBy(
 		return moerr.NewSyntaxError(b.GetContext(), "group_concat requires arguments")
 	}
 	separatorLiteral := fn.Args[concatArgCount].GetLit()
-	if separatorLiteral == nil {
+	separator := ""
+	if separatorLiteral != nil {
+		separator = separatorLiteral.GetSval()
+	} else if value, ok := astExpr.Exprs[len(astExpr.Exprs)-1].(*tree.NumVal); !ok || (value.ValType != tree.P_null && value.ValType != tree.P_nulltext) {
 		return moerr.NewInternalError(b.GetContext(), "invalid group_concat separator")
 	}
 
@@ -817,7 +820,7 @@ func (b *HavingBinder) bindGroupConcatOrderBy(
 		concatArgCount,
 		orderFlags,
 		orderArgIndexes,
-		separatorLiteral.GetSval(),
+		separator,
 	)
 	args := make([]*plan.Expr, 0, concatArgCount+len(orderExprs))
 	args = append(args, fn.Args[:concatArgCount]...)

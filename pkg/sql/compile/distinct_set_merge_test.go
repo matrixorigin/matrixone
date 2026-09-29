@@ -21,6 +21,7 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/sql/colexec"
 	"github.com/matrixorigin/matrixone/pkg/sql/colexec/group"
 	"github.com/matrixorigin/matrixone/pkg/sql/colexec/intersectall"
+	"github.com/matrixorigin/matrixone/pkg/sql/colexec/minusall"
 	plan2 "github.com/matrixorigin/matrixone/pkg/sql/plan"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine"
 	"github.com/stretchr/testify/require"
@@ -116,6 +117,26 @@ func TestCompileParallelIntersectAllKeepsWorkerResults(t *testing.T) {
 		scope.FreeOperator(c)
 		scope.release()
 	}
+	c.proc.Free()
+}
+
+func TestCompileParallelMinusAllUsesSingleMultiplicityOwner(t *testing.T) {
+	c := newDistinctSetTestCompile(t)
+	node := newParallelDistinctSetTestNode(plan.Node_MINUS_ALL)
+
+	result := c.compileMinusAndIntersect(
+		node,
+		newDistinctSetTestScopes(c, 2),
+		newDistinctSetTestScopes(c, 2),
+		plan.Node_MINUS_ALL,
+	)
+	require.Len(t, result, 1)
+	require.IsType(t, &minusall.MinusAll{}, result[0].RootOp)
+	require.Len(t, result[0].PreScopes, 2)
+	require.False(t, c.anal.isFirst)
+
+	result[0].FreeOperator(c)
+	result[0].release()
 	c.proc.Free()
 }
 

@@ -36,6 +36,7 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/pb/api"
 	"github.com/matrixorigin/matrixone/pkg/pb/timestamp"
 	"github.com/matrixorigin/matrixone/pkg/pb/txn"
+	"github.com/matrixorigin/matrixone/pkg/sql/colexec"
 	"github.com/matrixorigin/matrixone/pkg/testutil"
 	"github.com/matrixorigin/matrixone/pkg/txn/client"
 	"github.com/matrixorigin/matrixone/pkg/txn/rpc"
@@ -57,6 +58,72 @@ func TestTxnTableWriteTableName(t *testing.T) {
 	require.Equal(t, catalog.MO_COLUMNS, tbl.writeTableName(
 		context.WithValue(context.Background(), defines.MoColumnsUpdateKey{}, true),
 	))
+}
+
+func TestTxnTableWriteObjectStatsUsesAuthorizedTableName(t *testing.T) {
+	colexec.NewServer("")
+	for _, tc := range []struct {
+		name       string
+		tableID    uint64
+		authorized bool
+		want       string
+	}{
+		{"authorized catalog update", catalog.MO_COLUMNS_ID, true, catalog.MO_COLUMNS_UPDATE},
+		{"ordinary catalog write", catalog.MO_COLUMNS_ID, false, catalog.MO_COLUMNS},
+		{"other table with capability", catalog.MO_COLUMNS_ID + 1, true, catalog.MO_COLUMNS},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			txn := newTransactionWithActivePKTableForTest(t, "pk")
+			txn.tnStores = []DNStore{{}}
+			txn.cnObjsSummary = make(map[types.Objectid]Summary)
+			txn.op.(*mock_frontend.MockTxnOperator).EXPECT().IsSnapOp().Return(false).AnyTimes()
+			tbl := txn.tableOps.existAndActive(genTableKey(1, "tbl", 7, "db"))
+			require.NotNil(t, tbl)
+			tbl.tableId = tc.tableID
+			tbl.tableName = catalog.MO_COLUMNS
+			tbl.db.databaseId = catalog.MO_CATALOG_ID
+			tbl.db.databaseName = catalog.MO_CATALOG
+			tbl.extraInfo = &api.SchemaExtra{}
+
+			location := objectio.NewRandomLocation(1, 1)
+			var info objectio.BlockInfo
+			info.SetMetaLocation(location)
+			stats := objectio.NewObjectStats()
+			require.NoError(t, objectio.SetObjectStatsLocation(stats, location))
+			bat := batch.New([]string{catalog.BlockMeta_BlockInfo, catalog.ObjectMeta_ObjectStats})
+			bat.SetVector(0, vector.NewVec(types.T_varchar.ToType()))
+			bat.SetVector(1, vector.NewVec(types.T_varchar.ToType()))
+			require.NoError(t, vector.AppendBytes(bat.Vecs[0], objectio.EncodeBlockInfo(&info), false, txn.proc.Mp()))
+			require.NoError(t, vector.AppendBytes(bat.Vecs[1], stats.Marshal(), false, txn.proc.Mp()))
+			bat.SetRowCount(1)
+			defer bat.Clean(txn.proc.Mp())
+
+			ctx := context.Background()
+			if tc.authorized {
+				ctx = context.WithValue(ctx, defines.MoColumnsUpdateKey{}, true)
+			}
+			require.NoError(t, tbl.Write(ctx, bat))
+			require.Len(t, txn.writes, 1)
+			require.Equal(t, tc.want, txn.writes[0].tableName)
+			summary, ok := txn.cnObjsSummary[*stats.ObjectName().ObjectId()]
+			require.True(t, ok)
+			require.Equal(t, tbl.db.databaseId, summary.databaseId)
+			require.Equal(t, tc.tableID, summary.tableId)
+			require.Equal(t, tc.want, summary.tbName)
+			if tc.want == catalog.MO_COLUMNS_UPDATE {
+				protoBat, err := batch.BatchToProtoBatch(txn.writes[0].bat)
+				require.NoError(t, err)
+				req, remaining, err := catalog.ParseEntryList([]*api.Entry{{
+					EntryType: api.Entry_Insert, DatabaseId: catalog.MO_CATALOG_ID,
+					TableId: catalog.MO_COLUMNS_ID, TableName: tc.want, Bat: protoBat,
+				}})
+				require.NoError(t, err)
+				require.Equal(t, tc.want, req.(*api.Entry).TableName)
+				require.Empty(t, remaining)
+			}
+			txn.writes[0].bat.Clean(txn.proc.Mp())
+		})
+	}
 }
 
 func TestTxnTableDeleteObjectStatsUsesAuthorizedTableName(t *testing.T) {

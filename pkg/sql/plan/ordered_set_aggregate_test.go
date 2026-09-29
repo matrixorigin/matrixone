@@ -81,6 +81,7 @@ func TestBuildOrderedSetAggregates(t *testing.T) {
 		{name: "approximate descending", function: NameApproxPercentile, sql: "select approx_percentile(0.5) within group (order by a desc) from select_test.bind_select", desc: 1},
 		{name: "group concat within group", function: NameGroupConcat, sql: "select group_concat(a) within group (order by b desc) from select_test.bind_select", wantOrder: true},
 		{name: "listagg compatibility", function: NameGroupConcat, sql: "select listagg(a, '|') within group (order by b desc) from select_test.bind_select", wantOrder: true},
+		{name: "listagg null delimiter", function: NameGroupConcat, sql: "select listagg(a, NULL) within group (order by b desc) from select_test.bind_select", wantOrder: true},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			stmt, err := parsers.ParseOne(context.Background(), dialect.MYSQL, tc.sql, 1)

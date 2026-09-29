@@ -41,7 +41,15 @@ create index idx using ivfflat on t(vec)
 set experimental_ivf_index = 1;
 set probe_limit = 1;
 
-select id, category, payload
+-- Check the executed empty POST and non-empty exact fallback, not only final rows.
+-- Match each operator's own Analyze line without pinning IDs, timings or costs.
+-- @separator:table
+-- @ignore:0
+-- @regex("Adaptive Top[^\n]*\n[^\n]*Output:[^\n]*\n[^\n]*Analyze:[^\n]*inputRows=1 outputRows=1", true)
+-- @regex("->  Project[^\n]*\n[^\n]*Output:[^\n]*\n[^\n]*Analyze:[^\n]*inputRows=0 outputRows=0", true)
+-- @regex("Vector Index Scan[^\n]*\n[^\n]*Output:[^\n]*\n[^\n]*Analyze:[^\n]*outputRows=[1-9][0-9]*", true)
+-- @regex("->  Sort[^\n]*\n[^\n]*Output:[^\n]*\n[^\n]*Analyze:[^\n]*inputRows=1 outputRows=1", true)
+explain analyze verbose select id, category, payload
 from t
 where category = 1
 order by l2_distance(vec, '[0,0,0]')

@@ -15,6 +15,7 @@
 package objectio
 
 import (
+	"bytes"
 	"context"
 	"fmt"
 	"math"
@@ -532,6 +533,19 @@ func TestWriteArena(t *testing.T) {
 		require.Equal(t, 64, a.usedOffset)
 	})
 
+	t.Run("reset clamps growth to non-power-of-two limit", func(t *testing.T) {
+		a := NewArena(128)
+		t.Cleanup(a.FreeBuffers)
+		a.sizeLimit = 200 // scaled-down arenaMaxSize boundary
+		a.Alloc(129)
+		a.Reset()
+		require.Len(t, a.data, 200)
+
+		a.Alloc(201)
+		a.Reset()
+		require.Len(t, a.data, 200, "over-limit cycle must not grow the arena")
+	})
+
 	t.Run("serial buf is reused across Reset calls", func(t *testing.T) {
 		a := NewArena(256)
 		// First use: grow serialBuf to 100 bytes.
@@ -550,4 +564,55 @@ func TestWriteArena(t *testing.T) {
 		require.Equal(t, ptr1, &a.serialBuf) // pointer identity — same struct
 		require.GreaterOrEqual(t, a.serialBuf.Cap(), cap1)
 	})
+
+	t.Run("large serial buf follows current cycle", func(t *testing.T) {
+		a := NewArena(0)
+		t.Cleanup(a.FreeBuffers)
+		a.serialBuf.Grow(32 << 20)
+		largeCap := a.serialBuf.Cap()
+		require.NoError(t, a.serialBuf.WriteByte(1))
+		backing := &a.serialBuf.Bytes()[0]
+		a.serialPeak = 32 << 20
+		a.Reset()
+		require.Equal(t, largeCap, a.serialBuf.Cap(), "repeated large objects reuse scratch")
+		require.NoError(t, a.serialBuf.WriteByte(2))
+		require.Same(t, backing, &a.serialBuf.Bytes()[0])
+
+		a.serialPeak = 1 << 20
+		a.Reset()
+		require.Zero(t, a.serialBuf.Cap(), "a later small object releases the old peak")
+		a.FreeBuffers()
+		require.Zero(t, a.serialBuf.Cap())
+	})
+}
+
+func TestWriterUsesExactSerializedSize(t *testing.T) {
+	mp := mpool.MustNewZero()
+	t.Cleanup(func() { mpool.DeleteMPool(mp) })
+	vec, err := vector.NewConstFixed(types.T_int64.ToType(), int64(7), 8192, mp)
+	require.NoError(t, err)
+	t.Cleanup(func() { vec.Free(mp) })
+	bat := batch.NewWithSize(1)
+	bat.SetVector(0, vec)
+	bat.SetRowCount(vec.Length())
+	arena := NewArena(0)
+	t.Cleanup(arena.FreeBuffers)
+	fs, err := fileservice.NewMemoryFS(
+		defines.SharedFileServiceName, fileservice.DisabledCacheConfig, nil,
+	)
+	require.NoError(t, err)
+	objectID := NewObjectid()
+	writer, err := NewObjectWriter(BuildObjectNameWithObjectID(&objectID), fs, 0, []uint16{0}, arena)
+	require.NoError(t, err)
+	_, err = writer.Write(bat)
+	require.NoError(t, err)
+
+	var expected bytes.Buffer
+	h := IOEntryHeader{IOET_ColData, IOET_ColumnData_CurrVer}
+	_, err = expected.Write(EncodeIOEntryHeader(&h))
+	require.NoError(t, err)
+	require.NoError(t, vec.MarshalBinaryWithBuffer(&expected))
+	require.Equal(t, expected.Bytes(), arena.serialBuf.Bytes())
+	require.Equal(t, expected.Len(), arena.serialPeak)
+	require.Less(t, arena.serialBuf.Cap(), vec.Size())
 }

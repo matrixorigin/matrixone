@@ -81,6 +81,7 @@ select adddate(time'00:00:00', interval 1 minute);
 select adddate(time'00:00:00', interval 1 second);
 select adddate(time'800:00:00', interval 1 hour);
 select adddate(time'2562047787:00:00', interval 1 hour);
+show warnings;
 select adddate(time'100:00:00', interval -100 minute);
 select adddate(time'100:00:00', interval -1000 second);
 
