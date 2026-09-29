@@ -4,6 +4,26 @@
 -- retained and re-evaluated, so an indexed table must return exactly what an
 -- unindexed one does. Every case below asserts that equivalence.
 
+drop database if exists ft2_signed_zero;
+create database ft2_signed_zero;
+use ft2_signed_zero;
+set experimental_fulltext2_index = 1;
+-- #29279: -0.0, 0.0, -0 and 0 are one JSON value; the numeric probe must return the -0.0 document for
+-- a zero predicate (the term encoding used to keep -0.0's sign bit and join it away).
+create table z (id int primary key, doc json);
+create table z_plain (id int primary key, doc json);
+insert into z values (1,'{"n":-0.0}'),(2,'{"n":0.0}'),(3,'{"n":-0}'),(4,'{"n":0}');
+insert into z_plain select * from z;
+create fulltext2 index ftz on z(doc) with parser json;
+-- indexed must equal the unindexed oracle for every zero predicate.
+select id from z where json_extract_float64(doc,'$.n') = 0 order by id;
+select id from z_plain where json_extract_float64(doc,'$.n') = 0 order by id;
+select id from z where json_extract_float64(doc,'$.n') = -0.0 order by id;
+select id from z_plain where json_extract_float64(doc,'$.n') = -0.0 order by id;
+select id from z where json_extract_float64(doc,'$.n') >= 0 order by id;
+select id from z_plain where json_extract_float64(doc,'$.n') >= 0 order by id;
+drop database ft2_signed_zero;
+
 drop database if exists ft2_json_probe;
 create database ft2_json_probe;
 use ft2_json_probe;
