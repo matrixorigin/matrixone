@@ -9859,7 +9859,7 @@ func jsonToStr(
 		} else {
 			bj := types.DecodeJson(v)
 			var str string
-			if bj.Type == bytejson.TpCodeString {
+			if assignment && bj.Type == bytejson.TpCodeString {
 				s, err := bj.Unquote()
 				if err != nil {
 					return err

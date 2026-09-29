@@ -643,7 +643,11 @@ func (cwft *TxnComputationWrapper) Compile(any any, fill func(*batch.Batch, *per
 		*/
 	} else {
 		var planSnapshotTS *timestamp.Timestamp
-		if cwft.hasPlanSnapshotTS {
+		if cwft.preparedStmt != nil {
+			// Executable EXPLAIN wrappers replace the inner EXECUTE plan while
+			// retaining its prepared generation and snapshot binding.
+			planSnapshotTS = &cwft.preparedStmt.Ts
+		} else if cwft.hasPlanSnapshotTS {
 			planSnapshotTS = &cwft.planSnapshotTS
 		}
 		cwft.compile, err = createCompile(
