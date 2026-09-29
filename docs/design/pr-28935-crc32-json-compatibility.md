@@ -10,7 +10,7 @@ PR data.
 | Identity | Binding and execution |
 | --- | --- |
 | CRC32 overload 0 | Existing catalog/wire expressions hash binary JSON; ordinary non-JSON calls retain their original bytes and scalar casts. |
-| CRC32 overload 1 | New JSON or unresolved bindings hash normalized MarshalJSON bytes for JSON; requires MORPC v100. |
+| CRC32 overload 1 | New JSON or unresolved bindings hash normalized MarshalJSON bytes for JSON; requires MORPC v101. |
 
 The result stays UINT64; the executor also retains the historic UINT32 wrapper.
 A stored legacy generated value can intentionally differ from a freshly bound
@@ -20,7 +20,7 @@ INSERT, UPDATE, REPLACE, ODKU, prepared rebinding and index maintenance.
 ## Boundaries
 
 Placement checks workers and falls back to one CN. Sending rechecks the actual
-worker at v100; receiving checks the new identity. Old coordinators send identity
+worker at v101; receiving checks the new identity. Old coordinators send identity
 0, which new workers still implement. Unknown capabilities fail closed.
 
 Catalog read and authoring use the existing separate durable admission floors.
@@ -39,13 +39,13 @@ is not a lossless way to preserve a legacy generated expression's algorithm.
 
 ## Upgrade and rollback
 
-Supported sources include main through v99 and supported released versions, not
+Supported sources include main through v100 and supported released versions, not
 earlier unmerged experiment binaries that changed overload 0 in place. Such data
 cannot be distinguished by identity and must not be admitted as a supported
-upgrade source. The integration preserves main protocols v94 through v99 and assigns this
-new execution identity to v100.
+upgrade source. The integration preserves main protocols v94 through v100 and assigns this
+new execution identity to v101; v100 remains the independent View-metadata contract.
 
-Publishing new persisted expressions requires the durable v100 authoring barrier.
+Publishing new persisted expressions requires the durable v101 authoring barrier.
 Once the durable floor is raised, old CNs must stay excluded, including after
 restart. A failed activation does not imply the floor can be lowered. Rollback
 must respect the existing admission mechanism; this change adds no floor reset.
@@ -82,16 +82,20 @@ protocol reassignment. Integration validation is recorded separately.
   restart, physical restore, and post-activation downgrade rejection. Component
   tests and same-version SQL execution do not replace those acceptance tests.
 
-## Main integration validation on 2026-09-28
+## Historical main integration validation on 2026-09-28
 
 Integrated main `239fe81c82ae07a8c316576cac8555c445c92212` and reassigned
-the new identity to v100, preserving all preceding main contracts.
+the new identity to v100, preserving all preceding main contracts. This result
+predates the later v101 reassignment after main claimed v100 for View metadata.
 
 - PASS: all five owning packages, 6,816 top-level tests with GOMAXPROCS=4.
 - PASS: SQL and binary PREPARE integration, including reprepare and generated DML.
 - PASS: normal mo-tester CRC32 (115 statements) and generated-column (334
   statements) cases, twice each, zero failures or ignored statements, with
   actual authoring-floor/ISCP readiness and database teardown checks.
-- PASS: immediate pre-feature v99 destination rejection and v100 admission.
+- PASS (historical): immediate pre-feature v99 destination rejection and v100 admission.
+- COVERED BY UNIT TEST (must rerun on this post-sync head): a v100
+  View-metadata peer is rejected for CRC32 overload 1, while a v101 peer is
+  admitted.
 - NOT_RUN: the real mixed-binary and persisted upgrade/restore/downgrade
   acceptance scenarios described above. These remain required QA evidence.

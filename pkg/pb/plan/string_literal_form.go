@@ -365,7 +365,7 @@ const (
 // SpatialDistanceSemantics requires MORPC v90 because geodetic
 // ST_FRECHETDISTANCE/ST_HAUSDORFFDISTANCE change the meaning of existing
 // overloads and the distance family adds length-unit overloads.
-// CRC32JSONTextBytes requires MORPC v100 for the new CRC32 JSON-text execution
+// CRC32JSONTextBytes requires MORPC v101 for the new CRC32 JSON-text execution
 // identity. Legacy catalog and wire expressions retain binary JSON hashing
 // under overload zero.
 // PreparedPrecisionScalar requires MORPC v95 because older executors lose
