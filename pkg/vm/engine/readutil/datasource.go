@@ -262,6 +262,18 @@ func FastApplyDeletesByRowIds(
 	if isDeletedRowIdsSorted {
 		panicIfRowIdsUnsortedIfRaceDetectorEnabled(deletedRowIds)
 	}
+	if len(deletedRowIds) >= 32 && isDeletedRowIdsSorted && len(*leftRows) == 1 {
+		// Catalog point reads can revisit a block with many transaction-local
+		// deletes. Avoid scanning the whole sorted delete list for one row.
+		rowID := types.NewRowid(checkBid, uint32((*leftRows)[0]))
+		_, found := sort.Find(len(deletedRowIds), func(i int) int {
+			return rowID.Compare(&deletedRowIds[i])
+		})
+		if found {
+			*leftRows = (*leftRows)[:0]
+		}
+		return
+	}
 
 	var (
 		ptr int

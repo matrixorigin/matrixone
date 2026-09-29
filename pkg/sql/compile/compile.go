@@ -536,6 +536,8 @@ func (c *Compile) clear() {
 	c.needLockMeta = false
 	c.isInternal = false
 	c.temporaryDDLInExecutorTxn = false
+	c.temporaryDropRetryStage = nil
+	c.temporaryDropRetryActive = false
 	c.resourceAttemptOwnerEligible = false
 	c.allocationAccountRegistry = nil
 	c.allocationAccountLimit = 0
@@ -6581,10 +6583,12 @@ func scopesContainOperator(scopes []*Scope, target vm.OpType) bool {
 }
 
 func (c *Compile) compileJoin(node, left, right *plan.Node, probeScopes, buildScopes []*Scope) []*Scope {
-	if containsStatementInvariantDiagnosticInList(c.proc, node.OnList) {
-		// The ON expression is a single logical diagnostic owner. Keep the
-		// join on one coordinator pipeline; shuffle and parallel copies would
-		// each evaluate the same statement-invariant operand independently.
+	if containsStatementInvariantDiagnosticInList(c.proc, node.OnList) ||
+		c.joinNeedsLocalWindow(node, probeScopes, buildScopes) {
+		// Keep WINDOW local: it has no remote encoding. The same local
+		// stage also gives statement-invariant ON diagnostics a single owner.
+		// Neither shuffle nor parallel copies may independently evaluate
+		// those diagnostic operands.
 		if !c.scopesRunOnCoordinator(probeScopes) {
 			probeScopes = []*Scope{c.newMergeScope(probeScopes)}
 		}
@@ -6614,6 +6618,14 @@ func (c *Compile) compileJoin(node, left, right *plan.Node, probeScopes, buildSc
 		}
 	}
 
+	// Resolve local SINK_SCAN/foreign dependencies before any force-one-CN
+	// reshaping. FULL, DEDUP and right-sided equi joins can then change the
+	// probe owner; colocate their build again before installing HashJoin.
+	probeScopes, buildScopes = c.colocateBroadcastJoinInputs(probeScopes, buildScopes)
+	if broadcastJoinForcesOneCN(node, c.broadcastJoinUsesHash(node)) {
+		probeScopes = c.newProbeScopeListForBroadcastJoin(probeScopes, true)
+		probeScopes, buildScopes = c.colocateBroadcastJoinInputs(probeScopes, buildScopes)
+	}
 	rs := c.compileProbeSideForBroadcastJoin(node, left, right, probeScopes)
 	return c.compileBuildSideForBroadcastJoin(node, rs, buildScopes)
 }
@@ -6629,6 +6641,7 @@ func (c *Compile) compileBroadcastAsofBuildLeft(
 	if len(rightScopes) != 1 || rightScopes[0].NodeInfo.Mcpu != 1 {
 		rightScopes = []*Scope{c.newMergeScope(rightScopes)}
 	}
+	rightScopes, leftScopes = c.colocateBroadcastJoinInputs(rightScopes, leftScopes)
 
 	leftTypes := make([]types.Type, len(left.ProjectList))
 	for i, expr := range left.ProjectList {
@@ -7096,7 +7109,7 @@ func (c *Compile) compileProbeSideForBroadcastJoin(node, left, right *plan.Node,
 		}
 		c.anal.isFirst = false
 	case plan.Node_LEFT, plan.Node_RIGHT, plan.Node_SEMI, plan.Node_ANTI, plan.Node_SINGLE:
-		rs = c.newProbeScopeListForBroadcastJoin(probeScopes, isEq && node.IsRightJoin)
+		rs = c.newProbeScopeListForBroadcastJoin(probeScopes, broadcastJoinForcesOneCN(node, isEq))
 		currentFirstFlag := c.anal.isFirst
 		if isEq {
 			for i := range rs {
@@ -7123,10 +7136,8 @@ func (c *Compile) compileProbeSideForBroadcastJoin(node, left, right *plan.Node,
 		c.anal.isFirst = false
 	case plan.Node_OUTER:
 		// FULL OUTER JOIN: equi → hashjoin (Phase 1); non-equi → loopjoin
-		// (Phase 4). IsRightJoin=true (set in stats.go for Node_OUTER) routes
-		// the probe scope through forceOneCN, avoiding distributed
-		// double-emission of unmatched-build rows.
-		rs = c.newProbeScopeListForBroadcastJoin(probeScopes, true)
+		// (Phase 4). Force one probe CN to emit unmatched-build rows once.
+		rs = c.newProbeScopeListForBroadcastJoin(probeScopes, broadcastJoinForcesOneCN(node, isEq))
 		currentFirstFlag := c.anal.isFirst
 		if isEq {
 			for i := range rs {
@@ -7144,7 +7155,7 @@ func (c *Compile) compileProbeSideForBroadcastJoin(node, left, right *plan.Node,
 		c.anal.isFirst = false
 	case plan.Node_DEDUP:
 		if node.IsRightJoin {
-			rs = c.newProbeScopeListForBroadcastJoin(probeScopes, true)
+			rs = c.newProbeScopeListForBroadcastJoin(probeScopes, broadcastJoinForcesOneCN(node, isEq))
 			currentFirstFlag := c.anal.isFirst
 			for i := range rs {
 				op := constructRightDedupJoin(node, leftTypes, rightTypes, c.proc)
@@ -7154,7 +7165,7 @@ func (c *Compile) compileProbeSideForBroadcastJoin(node, left, right *plan.Node,
 			}
 			c.anal.isFirst = false
 		} else {
-			rs = c.newProbeScopeListForBroadcastJoin(probeScopes, true)
+			rs = c.newProbeScopeListForBroadcastJoin(probeScopes, broadcastJoinForcesOneCN(node, isEq))
 			currentFirstFlag := c.anal.isFirst
 			for i := range rs {
 				op := constructDedupJoin(node, leftTypes, rightTypes, c.proc)
