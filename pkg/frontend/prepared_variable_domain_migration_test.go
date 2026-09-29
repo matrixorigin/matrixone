@@ -59,9 +59,11 @@ func TestMigrateConnectionFromPreservesPreparedVariableBinding(t *testing.T) {
 	original := p.String()
 
 	for _, value := range []string{"你", "你好"} {
-		// Migration's current snapshot differs from the frozen row domain.
+		// Migration's current snapshot differs from the frozen type and row domain.
 		require.NoError(t, ses.setUserDefinedVarWithTypeAndKindAndReplayability(
-			"bound_s", value, "", false, staticType, vector.PrepareParamNone, false, types.RuntimeStringBinary))
+			"bound_s", value, "", false,
+			plan.Type{Id: int32(types.T_text), Charset: uint32(types.CharsetUTF8)},
+			vector.PrepareParamNone, false, types.RuntimeStringBinary))
 		resp := &query.MigrateConnFromResponse{}
 		err := rt.migrateConnectionFrom(resp)
 		require.True(t, moerr.IsMoErrCode(err, moerr.OkExpectedNotSafeToStartTransfer))

@@ -35,19 +35,26 @@ type PreparedSourceBinding struct {
 }
 
 type preparedSourceBindingsKey struct{}
-type preparedVariableStringDomainsKey struct{}
+type preparedUserVariableBindingsKey struct{}
 
-// WithPreparedVariableStringDomains retains PREPARE-time user-variable row
-// domains while execution-time parameter binding replans the statement.
-func WithPreparedVariableStringDomains(ctx context.Context, prepared *Plan) context.Context {
+type preparedUserVariableBinding struct {
+	typ          Type
+	stringDomain uint32
+}
+
+// WithPreparedUserVariableBindings retains PREPARE-time user-variable types
+// and row domains while execution-time parameter binding replans the statement.
+func WithPreparedUserVariableBindings(ctx context.Context, prepared *Plan) context.Context {
 	if prepared == nil {
 		return ctx
 	}
-	domains := make(map[string]uint32)
+	bindings := make(map[string]preparedUserVariableBinding)
 	var visit func(*Expr) error
 	visit = func(expr *Expr) error {
-		if v := expr.GetV(); v != nil && !v.System && v.BoundStringDomain != 0 {
-			domains[strings.ToLower(v.Name)] = v.BoundStringDomain
+		if v := expr.GetV(); v != nil && !v.System {
+			bindings[strings.ToLower(v.Name)] = preparedUserVariableBinding{
+				typ: expr.Typ, stringDomain: v.BoundStringDomain,
+			}
 		}
 		if source := expr.GetPreparedNumeric().GetStringDomainSource(); source != nil {
 			return plan.VisitExprTree(source, visit)
@@ -57,22 +64,19 @@ func WithPreparedVariableStringDomains(ctx context.Context, prepared *Plan) cont
 	_ = plan.VisitExpressionsInOwner(prepared, func(root *Expr) error {
 		return plan.VisitExprTree(root, visit)
 	})
-	if len(domains) == 0 {
+	if len(bindings) == 0 {
 		return ctx
 	}
-	return context.WithValue(ctx, preparedVariableStringDomainsKey{}, domains)
+	return context.WithValue(ctx, preparedUserVariableBindingsKey{}, bindings)
 }
 
-func preparedVariableStringDomain(ctx context.Context, name string) (types.RuntimeStringDomain, bool) {
+func preparedUserVariable(ctx context.Context, name string) (preparedUserVariableBinding, bool) {
 	if ctx == nil {
-		return 0, false
+		return preparedUserVariableBinding{}, false
 	}
-	domains, _ := ctx.Value(preparedVariableStringDomainsKey{}).(map[string]uint32)
-	encoded := domains[strings.ToLower(name)]
-	if encoded == 0 {
-		return 0, false
-	}
-	return types.RuntimeStringDomain(encoded - 1), true
+	bindings, _ := ctx.Value(preparedUserVariableBindingsKey{}).(map[string]preparedUserVariableBinding)
+	binding, ok := bindings[strings.ToLower(name)]
+	return binding, ok
 }
 
 // Values are visible only during this binding. Consumers which require a

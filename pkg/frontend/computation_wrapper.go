@@ -1731,7 +1731,7 @@ func initExecuteStmtParamWithResolverInSession(
 				var buildErr error
 				planningCtx := reqCtx
 				if strings.IndexByte(originSQL, '@') >= 0 {
-					planningCtx = plan2.WithPreparedVariableStringDomains(reqCtx, preparePlan.Plan)
+					planningCtx = plan2.WithPreparedUserVariableBindings(reqCtx, preparePlan.Plan)
 				}
 				bound, buildErr = buildPreparedBoundQuery(planningCtx, executionSes, planningContext, prepareStmt.PrepareStmt, cwft.paramBindings, cwft.paramVals)
 				return buildErr
@@ -2846,7 +2846,7 @@ func buildPlanForCompileRetry(
 		ctx = function.WithDivPrecisionIncrement(ctx, sessionDivPrecisionIncrement(ses))
 	}
 	if preparedRetry != nil && preparedRetry.bindings != nil && !forcePrepare {
-		ctx = plan2.WithPreparedVariableStringDomains(ctx, preparedRetry.preparedPlan)
+		ctx = plan2.WithPreparedUserVariableBindings(ctx, preparedRetry.preparedPlan)
 		bound, err := buildPreparedBoundQuery(ctx, ses, compilerContext, stmt, preparedRetry.bindings, preparedRetry.paramVals)
 		if err != nil {
 			return nil, err
