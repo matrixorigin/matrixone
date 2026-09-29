@@ -280,3 +280,26 @@ func TestParsePhraseWhitespaceParserUnchanged(t *testing.T) {
 	assert.Equal(t, []int32{0, 3, 7},
 		[]int32{children[0].Position, children[1].Position, children[2].Position})
 }
+
+// TestParsePhraseJSONValue29271 verifies that a quoted BOOLEAN phrase on a json_value index is
+// matched as ONE verbatim token, not SimpleTokenizer sub-tokens. json_value's index build
+// (fulltext_index_tokenize) stores each JSON value whole and does NOT run SimpleTokenizer, so
+// decomposing "update_json" into update+json (its underscore is a SimpleTokenizer breaker)
+// looked up tokens the index never stored and matched nothing (#29271 regression).
+func TestParsePhraseJSONValue29271(t *testing.T) {
+	ps, err := ParsePhrase("update_json", "json_value")
+	require.NoError(t, err)
+	require.Len(t, ps, 1)
+	require.Equal(t, PHRASE, ps[0].Operator)
+	children := ps[0].Children
+	require.Len(t, children, 1)
+	require.Equal(t, TEXT, children[0].Operator)
+	require.Equal(t, "update_json", children[0].Text)
+
+	// Contrast: the default parser DOES decompose on the underscore breaker, matching its
+	// per-value SimpleTokenizer index build.
+	def, err := ParsePhrase("update_json", "")
+	require.NoError(t, err)
+	require.Len(t, def, 1)
+	require.Equal(t, []string{"update", "json"}, collectTexts(def[0].Children))
+}

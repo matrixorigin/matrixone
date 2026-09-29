@@ -746,6 +746,20 @@ func ParsePhrase(pattern string, parser string) ([]*Pattern, error) {
 		return parsePhraseJieba(pattern)
 	}
 
+	// json_value stores each JSON value as ONE verbatim token (fulltext_index_tokenize's
+	// json_value case does NOT run SimpleTokenizer over the value), so a phrase must match the
+	// whole value as a single term -- exactly like GenTextSql's json_value branch -- rather than
+	// splitting it into SimpleTokenizer sub-tokens the index never stored (#29271 regression).
+	if parser == "json_value" {
+		children := []*Pattern{{Text: pattern, Operator: TEXT, Position: 0}}
+		ret := []*Pattern{{Text: pattern, Operator: PHRASE, Children: children}}
+		idx := int32(0)
+		for _, p := range ret {
+			assignPatternIndex(p, &idx)
+		}
+		return ret, nil
+	}
+
 	children, err := simpleTokenizePatterns(pattern, parser, true)
 	if err != nil {
 		return nil, err
