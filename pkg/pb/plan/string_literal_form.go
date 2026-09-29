@@ -370,9 +370,11 @@ const (
 // DecimalDivisionSemantics requires MORPC v97 for new plans because older
 // executors derive the quotient scale from the left operand instead of the
 // result type. Legacy plans remain executable by v97 receivers.
-// JSONInputContracts requires MORPC v101 for JSON CONCAT and binary JSON_DEPTH inputs.
+// JSONInputContracts and YearBitCast require MORPC v101 for their new
+// execution contracts.
 type RemoteExpressionFeatures struct {
 	JSONInputContracts              bool
+	YearBitCast                     bool
 	NumericPrefix                   bool
 	JSONComparisonParam             bool
 	MixedJSONBooleanEquality        bool
@@ -403,7 +405,7 @@ type RemoteExpressionFeatures struct {
 }
 
 func (features RemoteExpressionFeatures) Any() bool {
-	return features.JSONInputContracts || features.NumericPrefix ||
+	return features.JSONInputContracts || features.YearBitCast || features.NumericPrefix ||
 		features.JSONComparisonParam ||
 		features.MixedJSONBooleanEquality ||
 		features.FormatNumericArguments ||
@@ -858,6 +860,10 @@ func RequiredRemoteExpressionFeatures(owner any) (features RemoteExpressionFeatu
 			fn := current.GetF()
 			if fn != nil && fn.Func != nil {
 				id, overload := int32(fn.Func.Obj>>32), int32(fn.Func.Obj)
+				if id == 21 && current.Typ.Id == 11 && len(fn.Args) > 0 &&
+					fn.Args[0] != nil && fn.Args[0].Typ.Id == 55 { // CAST YEAR -> BIT
+					features.YearBitCast = true
+				}
 				if id == 16 || id == 76 { // CONCAT / CONCAT_WS
 					for _, arg := range fn.Args {
 						if arg != nil && arg.Typ.Id == planJSONTypeID {

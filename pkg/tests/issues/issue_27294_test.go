@@ -91,6 +91,59 @@ func TestIssue27294PreparedNumericOverloads(t *testing.T) {
 			require.Equal(t, test.want, result)
 		}
 
+		t.Run("numeric consumers across query boundaries", func(t *testing.T) {
+			conn, err := db.Conn(ctx)
+			require.NoError(t, err)
+			defer conn.Close()
+			for _, tc := range []struct {
+				name, query, first, second string
+				want                       float64
+			}{
+				{"scalar abs", "select abs((select ?))", "-1.5", "-2.5", 1.5},
+				{"derived sum", "select sum(x) from (select ? x limit 1) d", "1.5", "2.5", 1.5},
+			} {
+				for _, binary := range []bool{false, true} {
+					t.Run(fmt.Sprintf("%s/binary=%t", tc.name, binary), func(t *testing.T) {
+						var stmt *sql.Stmt
+						if binary {
+							stmt, err = conn.PrepareContext(ctx, tc.query)
+							require.NoError(t, err)
+							defer stmt.Close()
+						} else {
+							_, err = conn.ExecContext(ctx, "prepare projected_numeric from '"+tc.query+"'")
+							require.NoError(t, err)
+							defer conn.ExecContext(ctx, "deallocate prepare projected_numeric")
+						}
+						for i, value := range []any{tc.first, tc.second, nil, tc.first} {
+							var got sql.NullFloat64
+							if binary {
+								err = stmt.QueryRowContext(ctx, value).Scan(&got)
+							} else {
+								assignment := "null"
+								if value != nil {
+									assignment = "'" + value.(string) + "'"
+								}
+								_, err = conn.ExecContext(ctx, "set @projected_numeric="+assignment)
+								require.NoError(t, err)
+								err = conn.QueryRowContext(ctx, "execute projected_numeric using @projected_numeric").Scan(&got)
+							}
+							require.NoError(t, err, "binding %d", i)
+							if value == nil {
+								require.False(t, got.Valid)
+							} else {
+								require.True(t, got.Valid)
+								want := tc.want
+								if i == 1 {
+									want = 2.5
+								}
+								require.Equal(t, want, got.Float64)
+							}
+						}
+					})
+				}
+			}
+		})
+
 		wide, err := db.PrepareContext(ctx, "select abs(?)")
 		require.NoError(t, err)
 		defer wide.Close()

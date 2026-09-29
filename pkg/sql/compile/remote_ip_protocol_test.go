@@ -290,8 +290,8 @@ func TestExpressionResultContractDestinationProtocolValidation(t *testing.T) {
 	})
 }
 
-func TestJSONInputContractsProtocolBoundaries(t *testing.T) {
-	for _, name := range []string{"concat", "concat_ws", "json_depth"} {
+func TestVersion101ExpressionContractsProtocolBoundaries(t *testing.T) {
+	for _, name := range []string{"concat", "concat_ws", "json_depth", "cast_year_bit"} {
 		t.Run(name, func(t *testing.T) {
 			c, client := expressionProtocolTestCompile(t)
 			c.proc.Base.QueryClient = client
@@ -303,11 +303,20 @@ func TestJSONInputContractsProtocolBoundaries(t *testing.T) {
 				args = args[:1]
 				args[0].Typ.Id = int32(types.T_blob)
 			}
-			expr, err := plan2.BindFuncExprImplByPlanExpr(context.Background(), name, args)
+			fnName := name
+			if name == "cast_year_bit" {
+				fnName = "cast"
+				args = []*planpb.Expr{
+					{Typ: planpb.Type{Id: int32(types.T_year)}, Expr: &planpb.Expr_Col{Col: &planpb.ColRef{ColPos: 0}}},
+					{Typ: planpb.Type{Id: int32(types.T_bit), Width: 64}, Expr: &planpb.Expr_T{T: &planpb.TargetType{}}},
+				}
+			}
+			expr, err := plan2.BindFuncExprImplByPlanExpr(context.Background(), fnName, args)
 			require.NoError(t, err)
 			features, err := planpb.RequiredRemoteExpressionFeatures(expr)
 			require.NoError(t, err)
-			require.True(t, features.JSONInputContracts)
+			require.Equal(t, name == "cast_year_bit", features.YearBitCast)
+			require.Equal(t, name != "cast_year_bit", features.JSONInputContracts)
 			require.True(t, features.Any())
 			floor, err := plan2.RequiredPersistedExpressionProtocolVersion(expr)
 			require.NoError(t, err)
@@ -341,11 +350,12 @@ func TestJSONInputContractsProtocolBoundaries(t *testing.T) {
 			rt.SetGlobalVariables(runtime.MOProtocolVersion, defines.MORPCVersion101)
 			require.NoError(t, validateRemoteExpressionPipelineProtocol(c.proc, wire))
 			args[0] = plan2.MakePlan2StringConstExprWithType("text")
-			expr, err = plan2.BindFuncExprImplByPlanExpr(context.Background(), name, args)
+			expr, err = plan2.BindFuncExprImplByPlanExpr(context.Background(), fnName, args)
 			require.NoError(t, err)
 			features, err = planpb.RequiredRemoteExpressionFeatures(expr)
 			require.NoError(t, err)
 			require.False(t, features.JSONInputContracts)
+			require.False(t, features.YearBitCast)
 		})
 	}
 }

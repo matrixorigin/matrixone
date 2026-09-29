@@ -132,7 +132,7 @@ func RequiredPersistedExpressionProtocolVersion(owner any) (int64, error) {
 		requiredVersion < defines.MORPCVersion98 {
 		requiredVersion = defines.MORPCVersion98
 	}
-	if features.JSONInputContracts {
+	if features.JSONInputContracts || features.YearBitCast {
 		requiredVersion = defines.MORPCVersion101
 	}
 	return requiredVersion, nil

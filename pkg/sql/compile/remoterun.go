@@ -174,7 +174,7 @@ func encodeRemoteScopeWithVectorProtocol(s *Scope, proc *process.Process, requir
 		}
 	}
 	if features.IPFunctionSemantics || features.TOBase64ResultContracts || features.IPFunctionResultContracts ||
-		features.ExpressionResultMetadataContracts || features.JSONInputContracts {
+		features.ExpressionResultMetadataContracts || features.JSONInputContracts || features.YearBitCast {
 		if err = validateIPFunctionDestination(proc, p); err != nil {
 			return nil, err
 		}
@@ -2379,9 +2379,10 @@ func validateRemoteExpressionPipelineProtocol(
 			"corrected IP function semantics require MORPC protocol version 72",
 		)
 	}
-	if features.JSONInputContracts && (!hasProtocolVersion || protocolVersion < defines.MORPCVersion101) {
+	if (features.JSONInputContracts || features.YearBitCast) &&
+		(!hasProtocolVersion || protocolVersion < defines.MORPCVersion101) {
 		return moerr.NewNotSupportedNoCtx(
-			"JSON input contracts require MORPC protocol version 101",
+			"versioned expression contracts require MORPC protocol version 101",
 		)
 	}
 	if features.ExpressionResultMetadataContracts || features.TOBase64ResultContracts || features.IPFunctionResultContracts {

@@ -261,7 +261,21 @@ func bindPreparedConsumerArguments(ctx context.Context, name string, args []*Exp
 	name = strings.ToLower(name)
 	args = append([]*Expr(nil), args...)
 	for i, source := range args {
-		if source == nil || source.GetP() == nil {
+		if source == nil {
+			continue
+		}
+		if source.GetP() == nil {
+			if len(args) == 1 && types.T(source.Typ.Id).IsMySQLString() &&
+				(name == "sum" || name == "avg" || name == "abs" || name == "sign" || name == "sleep") {
+				// The source may be a projected marker, scalar subquery, or
+				// ordinary string. These numeric consumers use the same text
+				// conversion as a direct prepared marker.
+				var err error
+				args[i], err = makePlan2CastExpr(ctx, source, makeSimplePlan2Type(types.T_float64))
+				if err != nil {
+					return nil, err
+				}
+			}
 			continue
 		}
 		binding, ok := state.bindingForPosition(source.GetP().Pos)
