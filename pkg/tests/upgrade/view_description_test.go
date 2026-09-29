@@ -57,6 +57,9 @@ func TestViewDescriptionPublicSQL(t *testing.T) {
 		exec := func(q string) { t.Helper(); _, err := db.ExecContext(ctx, q); require.NoError(t, err, q) }
 		exec("create database view_description_test")
 		defer exec("drop database view_description_test")
+		t.Run("SHOW target replacement", func(t *testing.T) {
+			testShowColumnsTargetReplacement(t, ctx, db)
+		})
 		exec("create table view_description_test.src (x varchar(5), qty int not null default 7)")
 		exec("create view view_description_test.v as select x as label, qty from view_description_test.src")
 		describe := func(query string) [][]sql.NullString {
@@ -279,6 +282,82 @@ func TestViewDescriptionPublicSQL(t *testing.T) {
 			require.NoError(t, warnings.Err())
 		}()
 	})
+}
+
+// Reuse the public metadata fixture: only two empty tables and two pinned
+// sessions are needed to distinguish target invalidation from local ddlVersion.
+func testShowColumnsTargetReplacement(t *testing.T, ctx context.Context, db *sql.DB) {
+	t.Helper()
+	writer, err := db.Conn(ctx)
+	require.NoError(t, err)
+	defer writer.Close()
+	exec := func(q string) {
+		t.Helper()
+		_, err := writer.ExecContext(ctx, q)
+		require.NoError(t, err, q)
+	}
+	exec("create table view_description_test.show_source (x varchar(5))")
+	exec("create table view_description_test.show_target (x varchar(5))")
+	// The enclosing fixture owns database teardown, including early failures.
+	reader, err := db.Conn(ctx)
+	require.NoError(t, err)
+	defer reader.Close()
+	const show = "show columns from view_description_test.show_target"
+	prepared, err := reader.PrepareContext(ctx, show)
+	require.NoError(t, err)
+	defer prepared.Close()
+	_, err = reader.ExecContext(ctx, "prepare show_target_stmt from '"+show+"'")
+	require.NoError(t, err)
+	defer func() {
+		_, err := reader.ExecContext(ctx, "deallocate prepare show_target_stmt")
+		require.NoError(t, err)
+	}()
+	check := func(want string) {
+		t.Helper()
+		for _, query := range []struct {
+			name string
+			run  func() (*sql.Rows, error)
+		}{
+			{"binary prepared", func() (*sql.Rows, error) { return prepared.QueryContext(ctx) }},
+			{"SQL prepared", func() (*sql.Rows, error) { return reader.QueryContext(ctx, "execute show_target_stmt") }},
+			{"COM_QUERY", func() (*sql.Rows, error) { return reader.QueryContext(ctx, show) }},
+		} {
+			func() {
+				rows, err := query.run()
+				require.NoError(t, err, query.name)
+				defer rows.Close()
+				require.True(t, rows.Next(), query.name)
+				var field, typ, nullable, key, defaultValue, extra, comment sql.NullString
+				require.NoError(t, rows.Scan(&field, &typ, &nullable, &key, &defaultValue, &extra, &comment))
+				require.Equal(t, "x", field.String, query.name)
+				require.Equal(t, want, typ.String, query.name)
+				require.False(t, rows.Next(), query.name)
+				require.NoError(t, rows.Err(), query.name)
+			}()
+		}
+	}
+	check("VARCHAR(5)")
+	exec("drop table view_description_test.show_target")
+	exec("create view view_description_test.show_target as select x from view_description_test.show_source")
+	exec("alter table view_description_test.show_source modify column x varchar(60)")
+	var width int
+	require.NoError(t, writer.QueryRowContext(ctx,
+		"select character_maximum_length from information_schema.columns "+
+			"where table_schema='view_description_test' and table_name='show_target'").Scan(&width))
+	require.Equal(t, 60, width, "execution-time metadata is the independent control")
+	check("VARCHAR(60)")
+	// A rebuilt View plan must also notice replacement by an ordinary table.
+	exec("drop view view_description_test.show_target")
+	exec("create table view_description_test.show_target (x bigint)")
+	exec("drop table view_description_test.show_source")
+	check("BIGINT(64)")
+	exec("drop table view_description_test.show_target")
+	rows, err := prepared.QueryContext(ctx)
+	if rows != nil {
+		defer rows.Close()
+		require.NoError(t, rows.Err())
+	}
+	require.Error(t, err, "a missing SHOW target must not return an empty or stale description")
 }
 
 func TestViewDescriptionPrivileges(t *testing.T) {

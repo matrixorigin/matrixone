@@ -347,7 +347,11 @@ func testHandle(h *testHandler) {
 	reader := bufio.NewReader(h.conn.RawConn())
 	_ = extraInfo.Decode(reader)
 	// server writes init handshake.
-	_ = h.mysqlProto.WritePacket(h.mysqlProto.MakeHandshakePayload())
+	handshake, err := h.mysqlProto.MakeHandshakePayload()
+	if err != nil {
+		return
+	}
+	_ = h.mysqlProto.WritePacket(handshake)
 	// server reads auth information from client.
 	_, _ = h.conn.Read(goetty.ReadOptions{})
 	// server writes ok packet.
