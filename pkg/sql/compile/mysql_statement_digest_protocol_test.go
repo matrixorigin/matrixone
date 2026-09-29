@@ -61,7 +61,7 @@ func TestStatementDigestTextRejectsUnsupportedWorker(t *testing.T) {
 func TestStatementDigestTextRechecksAfterWorkerDowngrade(t *testing.T) {
 	c, client := expressionProtocolTestCompile(t)
 	scope := mysqlStatementDigestTextProtocolTestScope(t, c, "statement_digest_text")
-	client.version = defines.MORPCVersion100
+	client.version = defines.MORPCVersion101
 	data, err := encodeRemoteScope(scope, c.proc)
 	require.NoError(t, err)
 	require.NotEmpty(t, data)

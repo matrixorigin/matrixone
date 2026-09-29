@@ -6091,7 +6091,7 @@ type SessionInfo struct {
 	DefaultWeekFormat    uint32 `protobuf:"varint,20,opt,name=default_week_format,json=defaultWeekFormat,proto3" json:"default_week_format,omitempty"`
 	DefaultWeekFormatSet bool   `protobuf:"varint,21,opt,name=default_week_format_set,json=defaultWeekFormatSet,proto3" json:"default_week_format_set,omitempty"`
 	// MySQL statement digest text length captured on the initiating CN; zero is
-	// meaningful when present. These fields belong to MORPC v100.
+	// meaningful when present. These fields belong to MORPC v101.
 	MaxDigestLength      int64    `protobuf:"varint,22,opt,name=max_digest_length,json=maxDigestLength,proto3" json:"max_digest_length,omitempty"`
 	MaxDigestLengthSet   bool     `protobuf:"varint,23,opt,name=max_digest_length_set,json=maxDigestLengthSet,proto3" json:"max_digest_length_set,omitempty"`
 	XXX_NoUnkeyedLiteral struct{} `json:"-"`

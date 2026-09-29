@@ -1406,7 +1406,7 @@ func TestRemoteExpressionProtocolValidation(t *testing.T) {
 
 	protocolCompile, versionClient := expressionProtocolTestCompile(t)
 	proc := protocolCompile.proc
-	versionClient.version = defines.MORPCVersion100
+	versionClient.version = defines.MORPCVersion101
 	proc.Ctx = context.WithValue(proc.Ctx, defines.TenantIDKey{}, uint32(0))
 	proc.Base.TxnOperator = fakeTxnOperator{}
 	proc.Base.SessionInfo.TimeZone = time.UTC
@@ -1710,8 +1710,8 @@ func TestRemoteExpressionProtocolValidation(t *testing.T) {
 			name:                "statement digest text",
 			expressions:         []*planpb.Expr{statementDigestText(cast(0))},
 			incompatibleVersion: defines.MORPCVersion99,
-			compatibleVersion:   defines.MORPCVersion100,
-			errorContains:       "STATEMENT_DIGEST_TEXT requires MORPC protocol version 100",
+			compatibleVersion:   defines.MORPCVersion101,
+			errorContains:       "STATEMENT_DIGEST_TEXT requires MORPC protocol version 101",
 		},
 		{
 			name:                "numeric prefix and JSON comparison",
@@ -1800,16 +1800,16 @@ func TestRemoteExpressionProtocolValidation(t *testing.T) {
 		require.NoError(t, validateRemoteExpressionPipelineProtocol(proc, remotePipeline))
 	})
 
-	t.Run("statement digest text requires v100", func(t *testing.T) {
+	t.Run("statement digest text requires v101", func(t *testing.T) {
 		remotePipeline := &pipeline.Pipeline{InstructionList: []*pipeline.Instruction{{
 			ProjectList: []*planpb.Expr{statementDigestText(cast(0))},
 		}}}
 		rt.SetGlobalVariables(moruntime.MOProtocolVersion, defines.MORPCVersion99)
 		err := validateRemoteExpressionPipelineProtocol(proc, remotePipeline)
-		require.ErrorContains(t, err, "STATEMENT_DIGEST_TEXT requires MORPC protocol version 100")
+		require.ErrorContains(t, err, "STATEMENT_DIGEST_TEXT requires MORPC protocol version 101")
 		require.True(t, moerr.IsMoErrCode(err, moerr.ErrNotSupported))
 
-		rt.SetGlobalVariables(moruntime.MOProtocolVersion, defines.MORPCVersion100)
+		rt.SetGlobalVariables(moruntime.MOProtocolVersion, defines.MORPCVersion101)
 		require.NoError(t, validateRemoteExpressionPipelineProtocol(proc, remotePipeline))
 	})
 }
