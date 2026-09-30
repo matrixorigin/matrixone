@@ -47,10 +47,10 @@ func TestRemoteStatementDigestTextRejectsMaxDigestLengthResolutionFailure(t *tes
 		if hadVersion {
 			rt.SetGlobalVariables(moruntime.MOProtocolVersion, oldVersion)
 		} else {
-			rt.CompareAndDeleteGlobalVariables(moruntime.MOProtocolVersion, defines.MORPCVersion101)
+			rt.CompareAndDeleteGlobalVariables(moruntime.MOProtocolVersion, defines.MORPCVersion102)
 		}
 	})
-	rt.SetGlobalVariables(moruntime.MOProtocolVersion, defines.MORPCVersion101)
+	rt.SetGlobalVariables(moruntime.MOProtocolVersion, defines.MORPCVersion102)
 
 	digest := &planpb.Expr{Expr: &planpb.Expr_F{F: &planpb.Function{
 		Func: &planpb.ObjectRef{

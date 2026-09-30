@@ -2337,9 +2337,9 @@ func validateRemoteExpressionPipelineProtocol(
 		)
 	}
 	if features.StatementDigestText &&
-		(!hasProtocolVersion || protocolVersion < defines.MORPCVersion101) {
+		(!hasProtocolVersion || protocolVersion < defines.MORPCVersion102) {
 		return moerr.NewNotSupportedNoCtx(
-			"STATEMENT_DIGEST_TEXT requires MORPC protocol version 101",
+			"STATEMENT_DIGEST_TEXT requires MORPC protocol version 102",
 		)
 	}
 	if features.StatementDigestText {

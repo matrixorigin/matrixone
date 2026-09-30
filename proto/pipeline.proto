@@ -800,7 +800,7 @@ message SessionInfo {
   uint32 default_week_format = 20;
   bool default_week_format_set = 21;
   // MySQL statement digest text length captured on the initiating CN; zero is
-  // meaningful when present. These fields belong to MORPC v101.
+  // meaningful when present. These fields belong to MORPC v102.
   int64 max_digest_length = 22;
   bool max_digest_length_set = 23;
 }

@@ -26,12 +26,12 @@ func validateMySQLStatementDigestTextDestination(proc *process.Process, p *pipel
 	if p == nil || p.Node == nil {
 		return moerr.NewNotSupportedNoCtx("STATEMENT_DIGEST_TEXT requires a versioned remote destination")
 	}
-	supported, err := remoteWorkersSupportProtocol(proc, engine.Nodes{{Id: p.Node.Id, Addr: p.Node.Addr}}, defines.MORPCVersion101)
+	supported, err := remoteWorkersSupportProtocol(proc, engine.Nodes{{Id: p.Node.Id, Addr: p.Node.Addr}}, defines.MORPCVersion102)
 	if err != nil {
 		return err
 	}
 	if !supported {
-		return moerr.NewNotSupportedNoCtx("remote destination does not support STATEMENT_DIGEST_TEXT (MORPC version 101)")
+		return moerr.NewNotSupportedNoCtx("remote destination does not support STATEMENT_DIGEST_TEXT (MORPC version 102)")
 	}
 	return nil
 }

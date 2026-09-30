@@ -190,7 +190,7 @@ func TestRequiredRemoteExpressionFeaturesDetectsStatementDigestText(t *testing.T
 		wantText     bool
 		wantInterval bool
 	}{
-		{name: "text", id: 585, objectName: "statement_digest_text", wantText: true},
+		{name: "text", id: 586, objectName: "statement_digest_text", wantText: true},
 		{name: "JSON_DEPTH is not digest text", id: 584, objectName: "json_depth"},
 		{name: "interval", id: 583, objectName: "to_interval_microsecond", wantInterval: true},
 		{name: "main JSON storage size", id: 579, objectName: "json_storage_size"},

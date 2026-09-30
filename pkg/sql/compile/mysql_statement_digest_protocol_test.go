@@ -49,7 +49,7 @@ func mysqlStatementDigestTextProtocolTestScope(t *testing.T, c *Compile, name st
 func TestStatementDigestTextRejectsUnsupportedWorker(t *testing.T) {
 	c, client := expressionProtocolTestCompile(t)
 	scope := mysqlStatementDigestTextProtocolTestScope(t, c, "statement_digest_text")
-	client.version = defines.MORPCVersion99
+	client.version = defines.MORPCVersion101
 	data, err := encodeRemoteScope(scope, c.proc)
 	require.ErrorContains(t, err, "remote destination")
 	require.True(t, moerr.IsMoErrCode(err, moerr.ErrNotSupported))
@@ -61,14 +61,14 @@ func TestStatementDigestTextRejectsUnsupportedWorker(t *testing.T) {
 func TestStatementDigestTextRechecksAfterWorkerDowngrade(t *testing.T) {
 	c, client := expressionProtocolTestCompile(t)
 	scope := mysqlStatementDigestTextProtocolTestScope(t, c, "statement_digest_text")
-	client.version = defines.MORPCVersion101
+	client.version = defines.MORPCVersion102
 	data, err := encodeRemoteScope(scope, c.proc)
 	require.NoError(t, err)
 	require.NotEmpty(t, data)
 	require.Equal(t, 1, client.calls)
 
 	// A replacement worker must not inherit the previous capability result.
-	client.version = defines.MORPCVersion99
+	client.version = defines.MORPCVersion101
 	data, err = encodeRemoteScope(scope, c.proc)
 	require.ErrorContains(t, err, "remote destination")
 	require.Empty(t, data)
