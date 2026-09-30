@@ -1009,6 +1009,9 @@ message Node {
     TABLE_CLONE = 56;
     // Coordinator-local selector for bounded POST -> PRE -> FORCE Top-K candidates.
     ADAPTIVE_TOP = 57;
+    // Coordinator-local scalar query-vector selection and its materialized readers.
+    VECTOR_QUERY_TOP = 58;
+    VECTOR_QUERY_SOURCE = 59;
   }
 
   enum JoinType {
@@ -1272,6 +1275,9 @@ message Node {
   // final candidate only when the initial candidate is empty. This is used by
   // explicit IVF POST fallback and preserves its partial-result behavior.
   bool adaptive_top_fallback_on_empty = 92;
+
+  // VECTOR_QUERY_TOP/SOURCE only: statement-local immutable provider identity.
+  int32 vector_query_source_id = 93;
 }
 
 message SnapshotExtraInfo {

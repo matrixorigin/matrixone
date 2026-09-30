@@ -1048,6 +1048,19 @@ func findResultColumnSourceAtNode(
 		}
 	}
 
+	if node.NodeType == plan.Node_VECTOR_QUERY_TOP {
+		// The provider is control input. Result provenance belongs to the
+		// preserved relational branch, not its one-column vector schema.
+		if len(node.Children) != 3 {
+			return nil
+		}
+		childRef := resultColumnJoinChildProjectionRef(query, node, 2, ref.ColPos)
+		if childRef == nil {
+			return nil
+		}
+		return findResultColumnSourceAtNode(query, node.Children[2], childRef, visited, false)
+	}
+
 	if node.NodeType == plan.Node_JOIN {
 		return findResultColumnSourceAtJoin(query, node, ref, visited)
 	}

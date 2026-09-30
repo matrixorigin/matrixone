@@ -231,7 +231,7 @@ func (builder *QueryBuilder) canRemoveProject(parentType plan.Node_NodeType, nod
 	if parentType == plan.Node_DISTINCT || parentType == plan.Node_UNKNOWN {
 		return false
 	}
-	if parentType == plan.Node_UNION || parentType == plan.Node_UNION_ALL || parentType == plan.Node_ADAPTIVE_TOP {
+	if parentType == plan.Node_UNION || parentType == plan.Node_UNION_ALL || parentType == plan.Node_ADAPTIVE_TOP || parentType == plan.Node_VECTOR_QUERY_TOP {
 		return false
 	}
 	if parentType == plan.Node_MINUS || parentType == plan.Node_MINUS_ALL {
@@ -2396,6 +2396,7 @@ func (builder *QueryBuilder) optimizeFilters(rootID int32) int32 {
 	rootID, _ = builder.pushdownFilters(rootID, nil, false)
 	transposeTableScanFilters(builder.compCtx.GetProcess(), builder.qry, rootID)
 	foldTableScanFilters(builder.compCtx.GetProcess(), builder.qry, rootID, false)
+	builder.rewriteNumericDomainFilters(rootID)
 	ReCalcNodeStats(rootID, builder, true, true, true)
 	builder.rewriteInDomainNotInFilters(rootID)
 	compositePartBlockFilters := builder.collectCompositePartBlockFilters(rootID)
