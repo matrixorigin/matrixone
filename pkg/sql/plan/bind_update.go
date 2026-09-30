@@ -212,7 +212,7 @@ func (builder *QueryBuilder) appendSequentialSingleTableUpdateAssignments(
 		rhsBindCtx, rhsBinder := builder.newSequentialUpdateProjectionBinder(
 			bindCtx, currentNodeID, currentTag, tableDef, alias, currentProjectList,
 		)
-		if isNumericAssignmentTarget(tableDef.Cols[columnIndex].Typ) {
+		if useNumericAssignmentContext(tableDef.Cols[columnIndex].Typ, ignore) && !isPreparedAssignmentParam(builder, astExpr) {
 			target := tableDef.Cols[columnIndex].Typ
 			rhsBinder.numericTargetType = &target
 		}
@@ -349,7 +349,6 @@ func (builder *QueryBuilder) bindUpdate(stmt *tree.Update, bindCtx *BindContext)
 	if err := validateUpdateWindowFunctions(builder.compCtx, stmt); err != nil {
 		return 0, err
 	}
-	bindCtx.assignmentIgnore = stmt.Ignore
 
 	dmlCtx := NewDMLContext()
 	err = dmlCtx.ResolveUpdateTables(builder.compCtx, stmt)
@@ -514,7 +513,7 @@ func (builder *QueryBuilder) bindUpdate(stmt *tree.Update, bindCtx *BindContext)
 			}
 
 			oldPos := oldColName2Idx[alias+"."+colName]
-			if typ := tableDef.Cols[tableDef.Name2ColIndex[colName]].Typ; isNumericAssignmentTarget(typ) {
+			if typ := tableDef.Cols[tableDef.Name2ColIndex[colName]].Typ; useNumericAssignmentContext(typ, stmt.Ignore) && !isPreparedAssignmentParam(builder, updateExpr) {
 				updateNumericTargets[oldPos] = typ
 			}
 			newColName2Idx[alias+"."+colName] = oldPos
