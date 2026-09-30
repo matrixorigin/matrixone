@@ -236,6 +236,53 @@ func TestPreparedSpecializedDomains(t *testing.T) {
 			require.NoError(t, explicitDerived.QueryRowContext(ctx, "2.5").Scan(&explicitGot))
 			require.Equal(t, "3", explicitGot.String)
 		})
+		t.Run("prepared_round_filter_domains", func(t *testing.T) {
+			exec(t, "create table rounding_filters(id bigint)")
+			defer conn.ExecContext(ctx, "drop table rounding_filters")
+			exec(t, "insert into rounding_filters values (null),(-54322),(-54321),(0),(54320),(54321),(54322),"+
+				"(9007199254740991),(9007199254740992),(9007199254740993)")
+			for _, predicate := range []string{
+				"id=round(?)", "id=round((select ?))",
+				"id<round((select ?))", "id<=round((select ?),0)",
+				"id>round((select ?),0)", "id>=round((select ?),0)",
+				"round((select ?))>id", "id<>round((select ?))", "id<=>round((select ?))",
+				"id=truncate(?)", "id<truncate((select ?))", "id>=truncate((select ?),0)",
+			} {
+				t.Run(predicate, func(t *testing.T) {
+					exec(t, "prepare rounding_filter from 'select id from rounding_filters where "+predicate+" order by id'")
+					defer conn.ExecContext(ctx, "deallocate prepare rounding_filter")
+					// Keep the pre-rewrite exact DECIMAL column domain executable as
+					// an independent oracle, including BIGINTs beyond 2^53.
+					control := strings.ReplaceAll(predicate, "id", "cast(id as decimal(38,0))")
+					exec(t, "prepare rounding_control from 'select id from rounding_filters where "+control+" order by id'")
+					defer conn.ExecContext(ctx, "deallocate prepare rounding_control")
+					for _, value := range []string{"'54321.0'", "'54321.5'", "'9007199254740992'", "null", "'-54321.0'", "'54321.0'"} {
+						exec(t, "set @rounding_filter_source="+value)
+						require.Equal(t, query(t, "execute rounding_control using @rounding_filter_source"),
+							query(t, "execute rounding_filter using @rounding_filter_source"), value)
+					}
+				})
+			}
+		})
+		t.Run("prepared_round_reversed_primary_key_ranges", func(t *testing.T) {
+			exec(t, "create table rounding_keys(id bigint primary key)")
+			defer conn.ExecContext(ctx, "drop table rounding_keys")
+			exec(t, "insert into rounding_keys values (54320),(54321),(54322)")
+			exec(t, "set @rounding_key_source='54321.0'")
+			for _, fn := range []string{"round", "truncate"} {
+				for _, source := range []string{"?", "(select ?)"} {
+					for _, tc := range []struct {
+						op   string
+						want [][]string
+					}{{"<", [][]string{{"54322"}}}, {"<=", [][]string{{"54321"}, {"54322"}}},
+						{">", [][]string{{"54320"}}}, {">=", [][]string{{"54320"}, {"54321"}}}} {
+						exec(t, "prepare rounding_key from 'select id from rounding_keys where "+fn+"("+source+")"+tc.op+"id order by id'")
+						require.Equal(t, tc.want, query(t, "execute rounding_key using @rounding_key_source"), fn, source, tc.op)
+						exec(t, "deallocate prepare rounding_key")
+					}
+				}
+			}
+		})
 		t.Run("ntile_null_runtime_error", func(t *testing.T) {
 			exec(t, "create table ntile_source(id int)")
 			exec(t, "insert into ntile_source values (1),(2)")
