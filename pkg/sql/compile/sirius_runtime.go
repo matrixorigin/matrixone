@@ -59,6 +59,8 @@ func siriusPlanEligible(queryPlan *planpb.Plan) bool {
 // exception is the explicit local-CN benchmark mode, where TN GC is disabled,
 // and each CN owns one process-local manager and one sidecar pairing.
 type SiriusRuntime struct {
+	// EmbeddedMO has no external resolver or direct-TAE lease dependency.
+	EmbeddedMO               bool
 	Backend                  SiriusBackend
 	Leases                   *substrait.LeaseManager
 	Resolver                 *substrait.ResolverServer
@@ -73,6 +75,15 @@ type SiriusRuntime struct {
 }
 
 func (r *SiriusRuntime) Validate() error {
+	if r != nil && r.EmbeddedMO {
+		if r.Backend == nil || r.CleanupTimeout <= 0 {
+			return moerr.NewInternalErrorNoCtx("substrait: incomplete embedded Sirius runtime")
+		}
+		if health, ok := r.Backend.(interface{ Accepting() bool }); ok && !health.Accepting() {
+			return moerr.NewInvalidStateNoCtx("substrait: embedded Sirius admission is sealed")
+		}
+		return nil
+	}
 	if r == nil || r.Backend == nil || r.Leases == nil ||
 		r.Resolver == nil || len(r.AuthorizedClientSPKIHash) != 32 || r.DataDir == "" ||
 		r.LeaseTTL <= 0 || r.LeaseTTL > substrait.MaxLeaseTTL || r.CleanupTimeout <= 0 {
@@ -110,6 +121,9 @@ func (r *SiriusRuntime) Close(ctx context.Context) error {
 func (r *SiriusRuntime) ReconcileReplay() error {
 	if err := r.Validate(); err != nil {
 		return err
+	}
+	if r.EmbeddedMO {
+		return nil
 	}
 	var result error
 	for _, pending := range r.Leases.PendingExecutions() {
@@ -158,16 +172,26 @@ func (o *siriusReadOwner) finish(ctx context.Context, succeeded bool) error {
 }
 
 func (c *Compile) tryCompileSiriusRead(ctx context.Context, queryPlan *planpb.Plan) (bool, error) {
-	if c == nil || !siriusOffloadRequested(ctx) || c.isPrepare || c.isInternal || !siriusStatementEligible(c.stmt) {
+	if c == nil || c.proc == nil || !siriusOffloadRequested(ctx) || c.isPrepare || c.isInternal || !siriusStatementEligible(c.stmt) {
+		return false, nil
+	}
+	runtime, ok := lookupSiriusRuntime(c.proc.GetService())
+	if runtime != nil && runtime.EmbeddedMO {
+		// An explicitly selected embedded runtime must not turn failed
+		// admission into an invisible CPU fallback.
+		if err := runtime.Validate(); err != nil {
+			return false, err
+		}
+		// Reader admission/wiring is delivered separately. Do not route an
+		// embedded request through the existing Flight/TAE admission path.
+		return false, moerr.NewNotSupported(ctx, "embedded Sirius MO reader admission is not yet available")
+	}
+	if !ok {
 		return false, nil
 	}
 	if !siriusPlanEligible(queryPlan) {
 		// Normal compilation owns the metadata-lock/retry boundary for a stale
 		// index hint. An offloaded plan cannot bypass that validation.
-		return false, nil
-	}
-	runtime, ok := lookupSiriusRuntime(c.proc.GetService())
-	if !ok {
 		return false, nil
 	}
 	accountID, err := defines.GetAccountId(ctx)
