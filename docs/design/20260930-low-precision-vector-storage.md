@@ -225,16 +225,19 @@ or instances produced partials.
 
 ```json
 [
-  [ {"id": "17", "score": 0.93}, {"id": "4",  "score": 0.91} ],
-  [ {"id": "8",  "score": 0.88}, {"id": "17", "score": 0.85} ]
+  [ ["17", 0.93], ["4",  0.91] ],
+  [ ["8",  0.88], ["17", 0.85] ]
 ]
 ```
 
 - Outer array: one entry per query, in input order (position = query id).
-- Inner array: that query's hits, `score` descending, ties by `id` ascending; at most
+- Inner array: that query's hits, score descending, ties by id ascending; at most
   `limit` entries, `[]` when there is no input row.
-- `id`: the source key as a JSON string (exact for 64-bit integers and non-integer keys).
-- `score`: the dot product.
+- Hit: a pair `[id, score]`.
+  - Position 0, `id`: the source key as a JSON string (exact for 64-bit integers and
+    non-integer keys).
+  - Position 1, `score`: the dot product, a JSON number.
+  - A field added later takes position 2; positions 0 and 1 keep their meaning.
 
 ### Usage
 
@@ -247,13 +250,14 @@ FROM (SELECT f.result
 ```
 
 Relational form of the final result (chained `CROSS APPLY unnest`, verified on the
-current build with three levels):
+current build with three levels and with the pair format, including a
+`9223372036854775807` id cast back to `bigint` exactly):
 
 ```sql
 WITH m AS (<the query above>)
 SELECT q.`index` AS q_id, h.`index` AS rnk,
-       json_unquote(json_extract(h.value, '$.id'))      AS src_id,
-       cast(json_extract(h.value, '$.score') AS double) AS score
+       json_unquote(json_extract(h.value, '$[0]'))  AS src_id,
+       cast(json_extract(h.value, '$[1]') AS double) AS score
 FROM m CROSS APPLY unnest(m.result, '$') q
        CROSS APPLY unnest(q.value, '$') h;
 ```
