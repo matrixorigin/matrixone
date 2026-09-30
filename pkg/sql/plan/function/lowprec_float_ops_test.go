@@ -52,6 +52,16 @@ func TestLowPrecFloatBinaryOpsCoerceToFloat32(t *testing.T) {
 		require.NoError(t, err, "+(%s,int32)", oid)
 		_, shouldCast := got.ShouldDoImplicitTypeCast()
 		require.True(t, shouldCast)
+
+		// Unary minus / plus coerce a low-precision operand to float32 (inserting a
+		// negative literal into such a column depends on this).
+		for _, op := range []string{"unary_minus", "unary_plus"} {
+			u, err := GetFunctionByName(ctx, op, []types.Type{lp})
+			require.NoError(t, err, "%s(%s)", op, oid)
+			casts, cast := u.ShouldDoImplicitTypeCast()
+			require.True(t, cast, "%s(%s) should cast", op, oid)
+			require.Equal(t, f32, casts[0], "%s(%s) cast target", op, oid)
+		}
 	}
 }
 

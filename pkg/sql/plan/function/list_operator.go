@@ -2331,7 +2331,7 @@ var supportedOperators = []FuncNew{
 		functionId: UNARY_PLUS,
 		class:      plan.Function_STRICT | plan.Function_ZONEMAPPABLE,
 		layout:     UNARY_ARITHMETIC_OPERATOR,
-		checkFn:    fixedTypeMatch,
+		checkFn:    unaryPlusMatch,
 
 		Overloads: []overload{
 			{
