@@ -120,7 +120,9 @@ type inputDriver interface {
 }
 
 type inputLeaseDriver interface {
+	// Success consumes the native handle; failure preserves it.
 	publish(uint32, []Vector) error
+	// A failure transfers any surviving handle to query cleanup.
 	release() error
 }
 
@@ -130,8 +132,16 @@ type InputLease struct {
 	native   inputLeaseDriver
 	capacity uint64
 	mu       sync.Mutex
-	released bool
+	state    inputLeaseState
 }
+
+type inputLeaseState uint8
+
+const (
+	inputLeaseAcquired inputLeaseState = iota
+	inputLeasePublished
+	inputLeaseReleased
+)
 
 // Acquire reserves native credit before callers allocate, clone, or copy the
 // corresponding payload. A zero-byte logical payload still consumes one byte
@@ -140,9 +150,15 @@ func (i *Input) Acquire(ctx context.Context, payloadBytes uint64) (*InputLease, 
 	if i == nil || i.native == nil || payloadBytes > WindowBytes {
 		return nil, moerr.NewInvalidInputNoCtx("Sirius input exceeds native window; split at row boundaries")
 	}
+	if err := ctx.Err(); err != nil {
+		return nil, context.Cause(ctx)
+	}
 	lease, err := i.native.acquire(ctx, payloadBytes)
 	if err != nil {
 		return nil, err
+	}
+	if lease == nil {
+		return nil, moerr.NewInternalErrorNoCtx("Sirius acquisition returned no input lease")
 	}
 	return &InputLease{native: lease, capacity: payloadBytes}, nil
 }
@@ -160,8 +176,8 @@ func (l *InputLease) Publish(ctx context.Context, rows uint32, vectors []Vector)
 	}
 	l.mu.Lock()
 	defer l.mu.Unlock()
-	if l.released {
-		return moerr.NewInvalidInputNoCtx("Sirius input lease is released")
+	if l.state != inputLeaseAcquired {
+		return moerr.NewInvalidInputNoCtx("Sirius input lease is no longer acquired")
 	}
 	if err := ctx.Err(); err != nil {
 		return context.Cause(ctx)
@@ -173,7 +189,11 @@ func (l *InputLease) Publish(ctx context.Context, rows uint32, vectors []Vector)
 	if total > l.capacity {
 		return moerr.NewInvalidInputNoCtx("Sirius input payload exceeds reserved native credit")
 	}
-	return l.native.publish(rows, vectors)
+	if err = l.native.publish(rows, vectors); err != nil {
+		return err
+	}
+	l.state = inputLeasePublished
+	return nil
 }
 
 // Release is idempotent. Native publication consumes the handle on success;
@@ -183,13 +203,20 @@ func (l *InputLease) Release() error {
 		return nil
 	}
 	l.mu.Lock()
-	if l.released {
-		l.mu.Unlock()
+	defer l.mu.Unlock()
+	if l.state == inputLeaseReleased {
 		return nil
 	}
-	l.released = true
-	l.mu.Unlock()
-	return l.native.release()
+	if l.state == inputLeasePublished {
+		l.state = inputLeaseReleased
+		return nil
+	}
+	err := l.native.release()
+	// A returned error still relinquishes the lease: query cleanup now owns
+	// the surviving handle. Serializing the whole call prevents competitors
+	// from observing release completion before that transfer has occurred.
+	l.state = inputLeaseReleased
+	return err
 }
 
 // Push synchronously copies into a capacity-reserved native allocation. The

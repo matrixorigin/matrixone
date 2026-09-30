@@ -90,14 +90,19 @@ func TestNativeBridgeDataAndCancellation(t *testing.T) {
 		ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
 		defer cancel()
 		var started, released atomic.Int32
-		request := nativeIntegrationRequest(t, "go-native-data", func(ctx context.Context, input *Input) error {
+		request := nativeIntegrationRequest(t, "go-native-data", func(ctx context.Context, input *Input) (err error) {
 			started.Add(1)
 			values := []int64{7, -9, 42}
+			lease, err := input.Acquire(ctx, uint64(len(values)*8))
+			if err != nil {
+				return err
+			}
+			defer func() { err = errors.Join(err, lease.Release()) }()
 			data := make([]byte, len(values)*8)
 			for i, value := range values {
 				binary.LittleEndian.PutUint64(data[i*8:], uint64(value))
 			}
-			return input.Push(ctx, uint32(len(values)), []Vector{{Data: data}})
+			return lease.Publish(ctx, uint32(len(values)), []Vector{{Data: data}})
 		})
 		request.Release = func(context.Context) error { released.Add(1); return nil }
 		query, err := runtime.Prepare(ctx, request)
@@ -144,10 +149,19 @@ func TestNativeBridgeDataAndCancellation(t *testing.T) {
 		ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
 		defer cancel()
 		request := nativeIntegrationRequest(t, "go-native-null", func(ctx context.Context, input *Input) error {
-			if err := input.Push(ctx, 0, []Vector{{}}); err != nil {
-				return err
+			for _, batch := range []struct{ rows, class uint32 }{{0, 0}, {3, 2}} {
+				if err := func() (err error) {
+					lease, err := input.Acquire(ctx, 0)
+					if err != nil {
+						return err
+					}
+					defer func() { err = errors.Join(err, lease.Release()) }()
+					return lease.Publish(ctx, batch.rows, []Vector{{Class: batch.class}})
+				}(); err != nil {
+					return err
+				}
 			}
-			return input.Push(ctx, 3, []Vector{{Class: 2}})
+			return nil
 		})
 		request.Columns[0].Nullable = true
 		request.Reads[0].Columns[0].Nullable = true

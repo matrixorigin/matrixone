@@ -19,6 +19,7 @@ package siriusbridge
 import (
 	"context"
 	"encoding/binary"
+	"errors"
 	"math"
 	"os"
 	"path/filepath"
@@ -79,10 +80,15 @@ func TestNativeBridgeCoexistsWithCuvsInOneProcess(t *testing.T) {
 
 	ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
 	defer cancel()
-	request := nativeIntegrationRequest(t, "go-native-gpu-coexist", func(ctx context.Context, input *Input) error {
+	request := nativeIntegrationRequest(t, "go-native-gpu-coexist", func(ctx context.Context, input *Input) (err error) {
+		lease, err := input.Acquire(ctx, 8)
+		if err != nil {
+			return err
+		}
+		defer func() { err = errors.Join(err, lease.Release()) }()
 		data := make([]byte, 8)
 		binary.LittleEndian.PutUint64(data, 42)
-		return input.Push(ctx, 1, []Vector{{Data: data}})
+		return lease.Publish(ctx, 1, []Vector{{Data: data}})
 	})
 	query, err := runtime.Prepare(ctx, request)
 	if err != nil {

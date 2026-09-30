@@ -81,8 +81,9 @@ func TestEmbeddedSiriusBackendMapsRequestAndDelegates(t *testing.T) {
 	require.True(t, recorder.closed)
 
 	producerCalls := 0
-	producer := func(context.Context, compile.SiriusInput) error {
+	producer := func(_ context.Context, input compile.SiriusInput) error {
 		producerCalls++
+		require.Equal(t, 1, input.(embeddedInput).columns)
 		return nil
 	}
 	request := compile.SiriusPrepareRequest{
@@ -133,4 +134,47 @@ func TestEmbeddedSiriusStubFailsClosed(t *testing.T) {
 	}
 	s := &service{}
 	require.ErrorContains(t, s.startEmbeddedSiriusRuntime(t.Context()), "not available")
+}
+
+type embeddedLeaseRecorder struct {
+	rows                uint32
+	vectors             []siriusbridge.Vector
+	capacity            uint64
+	publishes, releases int
+	err                 error
+}
+
+func (l *embeddedLeaseRecorder) Capacity() uint64 { return l.capacity }
+func (l *embeddedLeaseRecorder) Publish(_ context.Context, rows uint32, vectors []siriusbridge.Vector) error {
+	l.publishes++
+	l.rows, l.vectors = rows, vectors
+	return l.err
+}
+func (l *embeddedLeaseRecorder) Release() error { l.releases++; return l.err }
+
+func TestEmbeddedSiriusInputLeaseAdapter(t *testing.T) {
+	var input compile.SiriusInput = embeddedInput{}
+	lease, err := input.Acquire(t.Context(), 1)
+	require.Error(t, err)
+	require.Nil(t, lease)
+
+	failure := errors.New("native lease failure")
+	recorder := &embeddedLeaseRecorder{capacity: 6, err: failure}
+	var adapter compile.SiriusInputLease = embeddedInputLease{lease: recorder, columns: 1}
+	require.Equal(t, uint64(6), adapter.Capacity())
+	vector := compile.SiriusInputVector{Class: 1, Data: []byte{1}, Area: []byte{2, 3}, Nulls: []byte{4, 5, 6}}
+	require.ErrorIs(t, adapter.Publish(t.Context(), 3, []compile.SiriusInputVector{vector}), failure)
+	require.Equal(t, uint32(3), recorder.rows)
+	require.Equal(t, []siriusbridge.Vector{{Class: 1, Data: vector.Data, Area: vector.Area, Nulls: vector.Nulls}}, recorder.vectors)
+	require.ErrorIs(t, adapter.Release(), failure)
+	require.Equal(t, 1, recorder.releases)
+	ctx, cancel := context.WithCancelCause(t.Context())
+	cancel(failure)
+	require.ErrorIs(t, adapter.Publish(ctx, 3, []compile.SiriusInputVector{vector}), failure)
+	require.Equal(t, 1, recorder.publishes)
+	recorder.err = nil
+	require.ErrorContains(t, adapter.Publish(t.Context(), 3, []compile.SiriusInputVector{vector, vector}), "registered schema")
+	require.ErrorContains(t, adapter.Publish(t.Context(), 3, nil), "registered schema")
+	require.Equal(t, 1, recorder.publishes)
+	require.NoError(t, adapter.Publish(t.Context(), 3, []compile.SiriusInputVector{vector}))
 }

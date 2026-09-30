@@ -41,10 +41,20 @@ type SiriusPrepareRequest struct {
 	Reads       []SiriusReadDescriptor
 }
 
-// SiriusInput accepts MO-native vector buffers synchronously. It never retains
-// Go memory after Push returns. Producers are lazy and owned by the execution.
+// SiriusInput reserves native credit before a producer materializes its outgoing
+// payload. Existing MO reader batches remain subject to their pipeline bounds.
 type SiriusInput interface {
-	Push(context.Context, uint32, []SiriusInputVector) error
+	Acquire(context.Context, uint64) (SiriusInputLease, error)
+}
+
+// SiriusInputLease owns reserved credit. Register Release immediately after
+// acquisition. Publish synchronously copies Go buffers: success transfers native
+// ownership to Sirius; failure leaves cleanup with the producer. Release is
+// idempotent and transfers failed native cleanup to the query owner.
+type SiriusInputLease interface {
+	Capacity() uint64
+	Publish(context.Context, uint32, []SiriusInputVector) error
+	Release() error
 }
 
 type SiriusInputVector struct {

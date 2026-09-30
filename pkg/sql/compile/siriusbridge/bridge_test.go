@@ -1005,6 +1005,7 @@ type panicTestInput struct {
 	failed   atomic.Int32
 	finished atomic.Int32
 	failure  error // Read only after Run joins the producer.
+	lease    *leaseTestDriver
 }
 
 type noopInputLease struct{}
@@ -1013,6 +1014,9 @@ func (*noopInputLease) publish(uint32, []Vector) error { return nil }
 func (*noopInputLease) release() error                 { return nil }
 
 func (i *panicTestInput) acquire(context.Context, uint64) (inputLeaseDriver, error) {
+	if i.lease != nil {
+		return i.lease, nil
+	}
 	return &noopInputLease{}, nil
 }
 func (i *panicTestInput) finish() error        { i.finished.Add(1); return nil }
@@ -1052,12 +1056,17 @@ func TestProducerPanicReportsFailureCancelsAndJoins(t *testing.T) {
 	t.Cleanup(func() { _ = r.Close(context.Background()) })
 	ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
 	defer cancel()
-	source := &panicTestInput{}
+	source := &panicTestInput{lease: new(leaseTestDriver)}
 	d.q.source = source
 	exited := make(chan struct{})
 	req := testRequest()
-	req.Reads = []Read{{BindingID: 1, Columns: []ReadColumn{{Column: Column{Name: "c"}}}, Producer: func(ctx context.Context, _ *Input) error {
+	req.Reads = []Read{{BindingID: 1, Columns: []ReadColumn{{Column: Column{Name: "c"}}}, Producer: func(ctx context.Context, input *Input) error {
 		defer close(exited)
+		lease, err := input.Acquire(ctx, 1)
+		if err != nil {
+			return err
+		}
+		defer func() { _ = lease.Release() }()
 		select {
 		case <-d.q.entered:
 			panic("producer boom")
@@ -1089,6 +1098,9 @@ func TestProducerPanicReportsFailureCancelsAndJoins(t *testing.T) {
 	}
 	if source.failed.Load() != 1 || source.finished.Load() != 0 || source.failure == nil {
 		t.Fatalf("producer fail/finish calls: %d/%d", source.failed.Load(), source.finished.Load())
+	}
+	if source.lease.releases.Load() != 1 || source.lease.publishes.Load() != 0 {
+		t.Fatalf("unpublished producer lease: release=%d publish=%d", source.lease.releases.Load(), source.lease.publishes.Load())
 	}
 	select {
 	case <-exited:

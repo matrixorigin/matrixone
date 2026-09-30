@@ -84,7 +84,10 @@ func (b *embeddedBackend) Prepare(ctx context.Context, req compile.SiriusPrepare
 		}
 		if read.Producer != nil {
 			producer := read.Producer
-			r.Producer = func(ctx context.Context, input *siriusbridge.Input) error { return producer(ctx, embeddedInput{input}) }
+			columns := len(read.Columns)
+			r.Producer = func(ctx context.Context, input *siriusbridge.Input) error {
+				return producer(ctx, embeddedInput{input: input, columns: columns})
+			}
 		}
 		nativeReq.Reads = append(nativeReq.Reads, r)
 	}
@@ -95,15 +98,51 @@ func (b *embeddedBackend) Prepare(ctx context.Context, req compile.SiriusPrepare
 	return &embeddedExecution{query: q, request: req}, nil
 }
 
-type embeddedInput struct{ input *siriusbridge.Input }
+type embeddedInput struct {
+	input   *siriusbridge.Input
+	columns int
+}
 
-func (i embeddedInput) Push(ctx context.Context, rows uint32, vs []compile.SiriusInputVector) error {
+func (i embeddedInput) Acquire(ctx context.Context, bytes uint64) (compile.SiriusInputLease, error) {
+	lease, err := i.input.Acquire(ctx, bytes)
+	if err != nil {
+		return nil, err
+	}
+	return embeddedInputLease{lease: lease, columns: i.columns}, nil
+}
+
+type embeddedNativeInputLease interface {
+	Capacity() uint64
+	Publish(context.Context, uint32, []siriusbridge.Vector) error
+	Release() error
+}
+
+type embeddedInputLease struct {
+	lease   embeddedNativeInputLease
+	columns int
+}
+
+func (l embeddedInputLease) Capacity() uint64 { return l.lease.Capacity() }
+func (l embeddedInputLease) Release() error   { return l.lease.Release() }
+
+func (l embeddedInputLease) Publish(ctx context.Context, rows uint32, vs []compile.SiriusInputVector) error {
+	if err := ctx.Err(); err != nil {
+		return context.Cause(ctx)
+	}
+	// Prepare validates and bounds the registered schema. Reject malformed
+	// producer descriptors before allocating their converted representation.
+	if len(vs) == 0 || len(vs) != l.columns {
+		return moerr.NewInvalidInputNoCtx("Sirius input vector count does not match registered schema")
+	}
 	vectors := make([]siriusbridge.Vector, len(vs))
 	for n, v := range vs {
 		vectors[n] = siriusbridge.Vector{Class: v.Class, Data: v.Data, Area: v.Area, Nulls: v.Nulls}
 	}
-	return i.input.Push(ctx, rows, vectors)
+	return l.lease.Publish(ctx, rows, vectors)
 }
+
+var _ compile.SiriusInput = embeddedInput{}
+var _ compile.SiriusInputLease = embeddedInputLease{}
 
 type embeddedExecution struct {
 	query   *siriusbridge.Query

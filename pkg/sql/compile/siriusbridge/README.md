@@ -12,6 +12,37 @@ default cutover, and Flight retirement are separate later milestones. Do not
 use a successful build or bridge smoke test as evidence that all 22 queries
 work through embedded Sirius.
 
+## Input reservation contract
+
+The CN-facing `compile.SiriusInput` exposes `Acquire`; it does not expose the
+already-materialized `Push` convenience operation. Reserve payload bytes before
+allocating or copying the outgoing vectors, and register cleanup immediately:
+
+```go
+func produce(ctx context.Context, input compile.SiriusInput) (err error) {
+    lease, err := input.Acquire(ctx, 8)
+    if err != nil {
+        return err
+    }
+    defer func() { err = errors.Join(err, lease.Release()) }()
+    data := make([]byte, 8)
+    binary.LittleEndian.PutUint64(data, 42)
+    return lease.Publish(ctx, 1, []compile.SiriusInputVector{{Data: data}})
+}
+```
+
+Success transfers the native batch to Sirius; the producer can reuse its Go
+buffers when `Publish` returns. Failure or panic leaves the unpublished lease
+with the producer's deferred cleanup. Repeated publication is rejected, while
+repeated release is harmless. Native release failure transfers any surviving
+handle to the query owner for cleanup retry. Cancellation interrupts acquisition
+independently of the data path. Zero-payload vectors still consume native
+descriptor credit; reservations above the 64 MiB window are rejected.
+
+This contract bounds additional outgoing staging. The future MO-reader adapter
+must split oversized batches at row boundaries and preserve the reader's existing
+bounded prefetch; this bridge milestone does not implement that SQL path.
+
 ## Prerequisites
 
 - Linux amd64, CGo, MatrixOne's normal build prerequisites, a compatible
@@ -36,6 +67,7 @@ export MO_SRC=/absolute/path/to/matrixone
 export SIRIUS_SRC="$MO_SRC/third_party/sirius"
 git -C "$MO_SRC" submodule update --init third_party/sirius
 cd "$SIRIUS_SRC"
+git fetch origin upstream-dev-merge
 git submodule update --init duckdb substrait cucascade tae-scanner vcpkg
 pixi install --frozen -e mo
 pixi run --frozen -e mo mo-build-embedding-sdk
@@ -51,7 +83,7 @@ pixi run --frozen -e mo sh -c '
   cd "$MO_SRC"
   MO_CL_CUDA=1 MO_SIRIUS=1 \
     SIRIUS_SDK="$SIRIUS_SRC/build/mo/extension/sirius/embedding-sdk" \
-    SIRIUS_MERGED_REF=upstream-dev-merge \
+    SIRIUS_MERGED_REF=origin/upstream-dev-merge \
     make -j8 build
 '
 ```
