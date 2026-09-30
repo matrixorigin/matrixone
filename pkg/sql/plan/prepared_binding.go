@@ -436,6 +436,18 @@ func bindPreparedConsumerArguments(ctx context.Context, name string, args []*Exp
 			continue
 		}
 		if source.GetP() == nil {
+			if name == "field" {
+				target, comparisonContext, err := preparedFieldOperandComparisonType(ctx, source, state.stringDomainParamLookup)
+				if err != nil {
+					return nil, err
+				}
+				if comparisonContext {
+					args[i], err = appendExplicitCastBeforeExpr(ctx, source, makePlan2Type(&target))
+					if err != nil {
+						return nil, err
+					}
+				}
+			}
 			if len(args) == 2 && state.selectStatement && isPreparedNumericComparisonContext(name) &&
 				args[1-i] != nil && types.T(args[1-i].Typ.Id).IsSignedInt() {
 				converted, ok, err := preparedSafeRoundIntegerComparison(ctx, source, args[1-i].Typ)

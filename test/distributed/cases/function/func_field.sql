@@ -24,6 +24,41 @@ select id, field(b, X'41', X'FE', X'61', X'FF') as blob_field,
 from field_binary_subjects order by id;
 drop table field_binary_subjects;
 
+-- A bare SQL marker keeps its text comparison context; an explicit cast does not.
+set @field_subject = X'41';
+set @field_candidate = X'61';
+prepare field_context_stmt from 'select field(?, ?) as bare_field, field(cast(? as binary), ?) as binary_field';
+execute field_context_stmt using @field_subject, @field_candidate, @field_subject, @field_candidate;
+set @field_subject = _binary 'a';
+set @field_candidate = _binary 'A';
+execute field_context_stmt using @field_subject, @field_candidate, @field_subject, @field_candidate;
+set @field_subject = 'a';
+set @field_candidate = 'a';
+execute field_context_stmt using @field_subject, @field_candidate, @field_subject, @field_candidate;
+set @field_subject = null;
+execute field_context_stmt using @field_subject, @field_candidate, @field_subject, @field_candidate;
+set @field_subject = X'41';
+set @field_candidate = X'61';
+execute field_context_stmt using @field_subject, @field_candidate, @field_subject, @field_candidate;
+deallocate prepare field_context_stmt;
+set @field_candidate = null;
+
+-- Marker text context also survives domain-preserving wrappers, but not a fixed binary value.
+set @field_subject = X'41';
+set @field_candidate = X'61';
+prepare field_nested_stmt from 'select field(coalesce(?, ?), ?) as coalesce_field, field(substring(?, 1), ?) as substring_field, field(coalesce(?, cast(''A'' as binary)), ?) as fixed_binary_field';
+execute field_nested_stmt using @field_subject, @field_subject, @field_candidate, @field_subject, @field_candidate, @field_subject, @field_candidate;
+set @field_subject = null;
+execute field_nested_stmt using @field_subject, @field_subject, @field_candidate, @field_subject, @field_candidate, @field_subject, @field_candidate;
+set @field_subject = X'41';
+execute field_nested_stmt using @field_subject, @field_subject, @field_candidate, @field_subject, @field_candidate, @field_subject, @field_candidate;
+-- Comparison context must not truncate a payload beyond the prepared envelope.
+set @field_subject = repeat(_binary 'A', 70000);
+set @field_candidate = @field_subject;
+execute field_nested_stmt using @field_subject, @field_subject, @field_candidate, @field_subject, @field_candidate, @field_subject, @field_candidate;
+deallocate prepare field_nested_stmt;
+set @field_candidate = null;
+
 -- Explicit binary subjects retain byte equality across prepared executions.
 set @field_subject = _binary 'a';
 prepare field_binary_stmt from 'select field(cast(? as binary), ''A'', ''a'', X''FE'', X''FF'') as prepared_field';

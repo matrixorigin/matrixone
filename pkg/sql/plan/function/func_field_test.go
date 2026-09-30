@@ -125,8 +125,12 @@ func TestFieldStringConstantSubject(t *testing.T) {
 	}
 	fc := NewFunctionTestCase(proc, inputs,
 		NewFunctionTestResult(types.T_uint64.ToType(), false, []uint64{2, 1, 2}, nil), FieldString)
+	// A constant subject has one physical row but broadcasts to the batch.
+	fc.fnLength = 3
 	ok, info := fc.Run()
 	require.True(t, ok, info)
+	require.Equal(t, 3, fc.GetResultVectorDirectly().Length())
+	require.Equal(t, []uint64{2, 1, 2}, vector.MustFixedColNoTypeCheck[uint64](fc.GetResultVectorDirectly()))
 }
 
 func TestFieldIntegerRepresentations(t *testing.T) {

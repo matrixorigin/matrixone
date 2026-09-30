@@ -25,6 +25,54 @@ from field_binary_subjects order by id;
 2  ¦  4  ¦  4  𝄀
 3  ¦  0  ¦  0
 drop table field_binary_subjects;
+set @field_subject = X'41';
+set @field_candidate = X'61';
+prepare field_context_stmt from 'select field(?, ?) as bare_field, field(cast(? as binary), ?) as binary_field';
+execute field_context_stmt using @field_subject, @field_candidate, @field_subject, @field_candidate;
+➤ bare_field[-5,64,0]  ¦  binary_field[-5,64,0]  𝄀
+1  ¦  0
+set @field_subject = _binary 'a';
+set @field_candidate = _binary 'A';
+execute field_context_stmt using @field_subject, @field_candidate, @field_subject, @field_candidate;
+➤ bare_field[-5,64,0]  ¦  binary_field[-5,64,0]  𝄀
+1  ¦  0
+set @field_subject = 'a';
+set @field_candidate = 'a';
+execute field_context_stmt using @field_subject, @field_candidate, @field_subject, @field_candidate;
+➤ bare_field[-5,64,0]  ¦  binary_field[-5,64,0]  𝄀
+1  ¦  1
+set @field_subject = null;
+execute field_context_stmt using @field_subject, @field_candidate, @field_subject, @field_candidate;
+➤ bare_field[-5,64,0]  ¦  binary_field[-5,64,0]  𝄀
+0  ¦  0
+set @field_subject = X'41';
+set @field_candidate = X'61';
+execute field_context_stmt using @field_subject, @field_candidate, @field_subject, @field_candidate;
+➤ bare_field[-5,64,0]  ¦  binary_field[-5,64,0]  𝄀
+1  ¦  0
+deallocate prepare field_context_stmt;
+set @field_candidate = null;
+set @field_subject = X'41';
+set @field_candidate = X'61';
+prepare field_nested_stmt from 'select field(coalesce(?, ?), ?) as coalesce_field, field(substring(?, 1), ?) as substring_field, field(coalesce(?, cast(''A'' as binary)), ?) as fixed_binary_field';
+execute field_nested_stmt using @field_subject, @field_subject, @field_candidate, @field_subject, @field_candidate, @field_subject, @field_candidate;
+➤ coalesce_field[-5,64,0]  ¦  substring_field[-5,64,0]  ¦  fixed_binary_field[-5,64,0]  𝄀
+1  ¦  1  ¦  0
+set @field_subject = null;
+execute field_nested_stmt using @field_subject, @field_subject, @field_candidate, @field_subject, @field_candidate, @field_subject, @field_candidate;
+➤ coalesce_field[-5,64,0]  ¦  substring_field[-5,64,0]  ¦  fixed_binary_field[-5,64,0]  𝄀
+0  ¦  0  ¦  0
+set @field_subject = X'41';
+execute field_nested_stmt using @field_subject, @field_subject, @field_candidate, @field_subject, @field_candidate, @field_subject, @field_candidate;
+➤ coalesce_field[-5,64,0]  ¦  substring_field[-5,64,0]  ¦  fixed_binary_field[-5,64,0]  𝄀
+1  ¦  1  ¦  0
+set @field_subject = repeat(_binary 'A', 70000);
+set @field_candidate = @field_subject;
+execute field_nested_stmt using @field_subject, @field_subject, @field_candidate, @field_subject, @field_candidate, @field_subject, @field_candidate;
+➤ coalesce_field[-5,64,0]  ¦  substring_field[-5,64,0]  ¦  fixed_binary_field[-5,64,0]  𝄀
+1  ¦  1  ¦  1
+deallocate prepare field_nested_stmt;
+set @field_candidate = null;
 set @field_subject = _binary 'a';
 prepare field_binary_stmt from 'select field(cast(? as binary), ''A'', ''a'', X''FE'', X''FF'') as prepared_field';
 execute field_binary_stmt using @field_subject;

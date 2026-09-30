@@ -23,6 +23,7 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/container/vector"
 	"github.com/matrixorigin/matrixone/pkg/sql/parsers"
 	"github.com/matrixorigin/matrixone/pkg/sql/parsers/dialect"
+	planfunction "github.com/matrixorigin/matrixone/pkg/sql/plan/function"
 	"github.com/stretchr/testify/require"
 )
 
@@ -213,7 +214,49 @@ func TestPreparedVariadicRuntimeSourceDomains(t *testing.T) {
 				{Value: []byte{0, 'b'}, SourceType: types.T_varbinary.ToType(), HasSourceType: true, IsBinaryString: true},
 				{Value: []byte{'b'}, SourceType: types.T_varbinary.ToType(), HasSourceType: true, IsBinaryString: true},
 			},
-			want: []types.T{types.T_varbinary, types.T_varbinary},
+			want: []types.T{types.T_text, types.T_text},
+		},
+		{
+			name: "field coalesce marker text context", sql: "prepare p from 'select field(coalesce(?, ?), ?)'", fn: "field",
+			values: []ParamValue{
+				{Value: "A", SourceType: types.T_varbinary.ToType(), HasSourceType: true, IsBinaryString: true},
+				{Value: nil, SourceType: types.T_varbinary.ToType(), HasSourceType: true, IsBinaryString: true},
+				{Value: "a", SourceType: types.T_varbinary.ToType(), HasSourceType: true, IsBinaryString: true},
+			},
+			want: []types.T{types.T_text, types.T_text},
+		},
+		{
+			name: "field substring marker text context", sql: "prepare p from 'select field(substring(?, 1), ?)'", fn: "field",
+			values: []ParamValue{
+				{Value: "A", SourceType: types.T_varbinary.ToType(), HasSourceType: true, IsBinaryString: true},
+				{Value: "a", SourceType: types.T_varbinary.ToType(), HasSourceType: true, IsBinaryString: true},
+			},
+			want: []types.T{types.T_text, types.T_text},
+		},
+		{
+			name: "field substring numeric control", sql: "prepare p from 'select field(substring(?, ?), ?)'", fn: "field",
+			values: []ParamValue{
+				{Value: "A", SourceType: types.T_varbinary.ToType(), HasSourceType: true, IsBinaryString: true},
+				{Value: int64(1), SourceType: types.T_int64.ToType(), HasSourceType: true},
+				{Value: "a", SourceType: types.T_varbinary.ToType(), HasSourceType: true, IsBinaryString: true},
+			},
+			want: []types.T{types.T_text, types.T_text},
+		},
+		{
+			name: "field explicit binary cast boundary", sql: "prepare p from 'select field(cast(? as binary), ?)'", fn: "field",
+			values: []ParamValue{
+				{Value: "A", SourceType: types.T_varbinary.ToType(), HasSourceType: true, IsBinaryString: true},
+				{Value: "a", SourceType: types.T_varbinary.ToType(), HasSourceType: true, IsBinaryString: true},
+			},
+			want: []types.T{types.T_binary, types.T_text},
+		},
+		{
+			name: "field fixed binary contributor boundary", sql: "prepare p from 'select field(coalesce(?, cast(''A'' as binary)), ?)'", fn: "field",
+			values: []ParamValue{
+				{Value: "A", SourceType: types.T_varbinary.ToType(), HasSourceType: true, IsBinaryString: true},
+				{Value: "a", SourceType: types.T_varbinary.ToType(), HasSourceType: true, IsBinaryString: true},
+			},
+			want: []types.T{types.T_blob, types.T_text},
 		},
 	}
 	// Each relational owner keeps a different binding tag or physical output.
@@ -315,6 +358,19 @@ func TestPreparedVariadicRuntimeSourceDomains(t *testing.T) {
 			require.NotNil(t, fn)
 			for i, want := range tc.want {
 				require.Equal(t, want, types.T(fn.GetF().Args[i].Typ.Id), fn.String())
+			}
+			if tc.name == "field coalesce marker text context" || tc.name == "field substring marker text context" ||
+				tc.name == "field substring numeric control" ||
+				tc.name == "field fixed binary contributor boundary" {
+				comparison := fn.GetF().Args[0]
+				wantDomain, wantWidth := types.StringDomainText, -1
+				if tc.name == "field fixed binary contributor boundary" {
+					wantDomain, wantWidth = types.StringDomainBinary, 0
+				}
+				require.Equal(t, wantDomain, types.StaticStringDomain(makeTypeByPlan2Expr(comparison)))
+				require.EqualValues(t, wantWidth, comparison.Typ.Width, "comparison must preserve the complete payload")
+				_, overload := planfunction.DecodeOverloadID(comparison.GetF().Func.Obj)
+				require.EqualValues(t, 1, overload, "comparison domain must survive execution-time constant folding")
 			}
 		})
 	}

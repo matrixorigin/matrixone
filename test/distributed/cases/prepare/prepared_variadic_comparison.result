@@ -108,7 +108,7 @@ EXECUTE p_field_boundary USING @char_needle, @fallback, @nested;
 DEALLOCATE PREPARE p_field_boundary;
 SELECT FIELD(x'0062', x'61', x'0062'), FIELD(x'0062', x'62'), FIELD(x'41', x'61');
 ➤ FIELD(0x0062, 0x61, 0x0062)[-5,64,0]  ¦  FIELD(0x0062, 0x62)[-5,64,0]  ¦  FIELD(0x41, 0x61)[-5,64,0]  𝄀
-2  ¦  0  ¦  1
+2  ¦  0  ¦  0
 PREPARE p_binary FROM 'SELECT FIELD(?, ?, ?), FIELD(?, ?), FIELD(?, ?)';
 SET @binary = x'0062', @binary_first = x'61', @binary_second = x'0062';
 SET @short = x'62', @upper = x'41', @lower = x'61';
