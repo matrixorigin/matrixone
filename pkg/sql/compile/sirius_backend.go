@@ -37,6 +37,43 @@ type SiriusPrepareRequest struct {
 	Headings    []string
 	Deadline    time.Time
 	Release     func(context.Context) error
+	Snapshot    [12]byte
+	Reads       []SiriusReadDescriptor
+}
+
+// SiriusInput reserves native credit before a producer materializes its outgoing
+// payload. Existing MO reader batches remain subject to their pipeline bounds.
+type SiriusInput interface {
+	Acquire(context.Context, uint64) (SiriusInputLease, error)
+}
+
+// SiriusInputLease owns reserved credit. Register Release immediately after
+// acquisition. Publish synchronously copies Go buffers: success transfers native
+// ownership to Sirius; failure leaves cleanup with the producer. Release is
+// idempotent and transfers failed native cleanup to the query owner.
+type SiriusInputLease interface {
+	Capacity() uint64
+	Publish(context.Context, uint32, []SiriusInputVector) error
+	Release() error
+}
+
+type SiriusInputVector struct {
+	Class             uint32
+	Data, Area, Nulls []byte
+}
+
+type SiriusReadColumn struct {
+	Type       planpb.Type
+	Name       string
+	PhysicalID uint64
+	Sequence   uint32
+}
+
+type SiriusReadDescriptor struct {
+	BindingID               uint64
+	Database, Table, Schema string
+	Columns                 []SiriusReadColumn
+	Producer                func(context.Context, SiriusInput) error
 }
 
 // SiriusExecution owns one prepared execution. Run is single-use and must not

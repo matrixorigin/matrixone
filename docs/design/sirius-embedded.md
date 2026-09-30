@@ -18,8 +18,9 @@ document and report its own evidence.
 ## 1. Decision and scope
 
 Embed Sirius and DuckDB statically in `mo-service` through a C ABI and CGo,
-retaining pinned shared GPU dependencies. Use `upstream-dev-merge` synchronized
-with `sirius-db/sirius:dev`, not the legacy engine or a from-scratch port.
+retaining pinned shared GPU dependencies. Use the Sirius commit pinned at
+`third_party/sirius`, integrating the native embedding work with a reviewed
+`sirius-db/sirius:main` commit, not the legacy engine or a from-scratch port.
 
 - MO readers are the only embedded input in this milestone. No new TAE or
   directory-lock changes are required for Sirius offload.
@@ -163,12 +164,24 @@ logical query reservations must not count the same bytes twice.
 
 Input back-pressure:
 
+The compiler-facing input exposes `Acquire(ctx, payloadBytes)` and returns a
+lease with `Capacity`, `Publish`, and `Release`. Acquisition must precede any
+additional outgoing payload allocation, expansion, coalescing, or copying;
+existing MO reader batches remain governed by their bounded pipeline edge.
+Register lease cleanup immediately after acquisition. Successful publication
+consumes native ownership and retains no Go buffers after the synchronous call;
+failed publication leaves cleanup with the producer. A lease publishes at most
+once. Release is idempotent, and a surviving handle after native release failure
+transfers exactly once to query cleanup. Query cancellation uses an independent
+native control path and interrupts blocked acquisition before joining producers.
+
 1. MO acquires native capacity before allocation/copy.
 2. Bounded coalescing creates a GPU source unit on downstream demand.
 3. Filling, queueing and H2D ownership consume the same credit budget.
 4. Credit remains held through asynchronous use and retry ownership.
-5. If Sirius stops consuming, publication blocks, MO's existing bounded output
-   edge fills, and the reader stops after ordinary DOP-bounded read-ahead.
+5. If Sirius stops consuming, acquiring another lease blocks, MO's existing
+   bounded output edge fills, and the reader stops after ordinary DOP-bounded
+   read-ahead.
 
 No second unaccounted repository or eager source-continuation queue is allowed.
 Do not replace back-pressure with spillable-but-unbounded transport state.
@@ -230,8 +243,11 @@ extension or hide unresolved/duplicate symbols with broad linker flags.
 Package pinned shared dependencies beside MO with relocatable runtime paths.
 Pin source commits, compiler/toolchain, architecture and native artifacts in
 build provenance. Use Pixi and incremental host builds; no container rebuilds.
-Combined Sirius/cuVS builds must use a single compatible CUDA/RAPIDS dependency
-set and a lifetime-managed allocator arrangement. No per-query replacement of
+Pixi is the sole GPU dependency provider, and combined Sirius/cuVS builds use
+one activated Sirius `mo` prefix, as defined by the
+[GPU toolchain design v2](sirius-gpu-toolchain.md). They do not exchange a
+separate GPU toolchain manifest. The process needs a lifetime-managed allocator
+arrangement. No per-query replacement of
 process-wide device resources or `cudaDeviceReset` is permitted.
 
 The backend selector is `flight` or `embedded`. Empty selection preserves
