@@ -9,7 +9,11 @@ insert into ft values
 (3, 'full-text search'),
 (4, 'Ma''trix Origin'),
 (5, 'abcdefghijklmnopqrstuvwxyz'),
-(6, '苹果香瓜');
+(6, '苹果香瓜'),
+(7, 'a中'),
+(8, '中b'),
+(9, 'c-'),
+(10, '文。');
 create fulltext index fi on ft(body) with parser ngram;
 select id from ft where match(body) against('"苹果香蕉"' in boolean mode) order by id;
 ➤ id[4,32,0]  𝄀
@@ -28,6 +32,18 @@ select id from ft where match(body) against('"Ma''trix Origin"' in boolean mode)
 select id from ft where match(body) against('"abcdefghijklmnopqrstuvwxyz"' in boolean mode) order by id;
 ➤ id[4,32,0]  𝄀
 5
+select id from ft where match(body) against('"a中"' in boolean mode) order by id;
+➤ id[4,32,0]  𝄀
+7
+select id from ft where match(body) against('"中b"' in boolean mode) order by id;
+➤ id[4,32,0]  𝄀
+8
+select id from ft where match(body) against('"c-"' in boolean mode) order by id;
+➤ id[4,32,0]  𝄀
+9
+select id from ft where match(body) against('"文。"' in boolean mode) order by id;
+➤ id[4,32,0]  𝄀
+10
 select id from ft where match(body) against('苹果香蕉' in natural language mode) order by id;
 ➤ id[4,32,0]  𝄀
 1

@@ -54,6 +54,40 @@ func TestPatternPhrase(t *testing.T) {
 			pattern: "\"  你好嗎? Hello World  在一起  Happy  再见  \"",
 			expect:  "(phrase (text 0 0 你好嗎) (text 1 11 hello) (text 2 17 world) (text 3 24 在一起) (text 4 35 happy) (* 5 42 再见*))",
 		},
+		// #29271 P2: a SHORT (< ngram) phrase that mixes scripts or contains a breaker must
+		// still tokenize like the index -- a raw whole-string leaf ('a中', 'a-', '中。') never
+		// matches the stored tokens ('a'@0, '中'@1; the hyphen/punctuation is a discarded
+		// breaker). Each emitted token is classified short-Latin-exact (TEXT) / short-CJK-prefix
+		// (STAR), matching the >= ngram path.
+		{
+			pattern: "\"a-\"",
+			expect:  "(phrase (text 0 0 a))",
+		},
+		{
+			pattern: "\"-a\"",
+			expect:  "(phrase (text 0 1 a))",
+		},
+		{
+			pattern: "\"a中\"",
+			expect:  "(phrase (text 0 0 a) (* 1 1 中*))",
+		},
+		{
+			pattern: "\"中a\"",
+			expect:  "(phrase (* 0 0 中*) (text 1 3 a))",
+		},
+		{
+			pattern: "\"中。\"",
+			expect:  "(phrase (* 0 0 中*))",
+		},
+		// Single short tokens are unchanged: short Latin -> exact, short CJK -> prefix.
+		{
+			pattern: "\"a\"",
+			expect:  "(phrase (text 0 0 a))",
+		},
+		{
+			pattern: "\"中\"",
+			expect:  "(phrase (* 0 0 中*))",
+		},
 	}
 
 	for _, c := range tests {

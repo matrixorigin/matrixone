@@ -1070,15 +1070,18 @@ func ParsePatternInNLMode(pattern string, parser string) ([]*Pattern, error) {
 func simpleTokenizePatterns(pattern string, parser string, forPhrase bool) ([]*Pattern, error) {
 	runeSlice := []rune(pattern)
 	ngram_size := 3
-	// if number of character is small than Ngram size = 3, do prefix search.
-	// Normalize case to match how the selected parser stored its tokens (SimpleTokenizer folds only
-	// Latin runes; json_value preserves case), so a capitalized short pattern (e.g. `Hi`) looks up the
-	// stored token instead of prefix-searching the raw string (#29296). Boolean mode already
-	// lowercases its whole pattern.
-	if len(runeSlice) < ngram_size {
-		if forPhrase && !isAllCJK(runeSlice) {
-			return []*Pattern{{Text: normalizeShortPattern(pattern, parser), Operator: TEXT}}, nil
-		}
+	// Natural-language mode keeps its legacy short-query shortcut: a whole query below the ngram
+	// size prefix-searches the normalized raw string. Normalize case to match how the selected
+	// parser stored its tokens (SimpleTokenizer folds only Latin runes; json_value preserves
+	// case), so a capitalized short pattern (e.g. `Hi`) looks up the stored token instead of
+	// prefix-searching the raw string (#29296).
+	//
+	// The PHRASE path must NOT take this shortcut. A short phrase mixing scripts or breakers --
+	// "a中", "a-", "中。" -- is tokenized at index time into separate stored tokens ('a'@0, '中'@1;
+	// the hyphen/punctuation is a discarded breaker), so a raw whole-string leaf can never hit
+	// (#29271 P2). Tokenize for every phrase length and classify each emitted token below (short
+	// Latin -> exact TEXT, short CJK -> prefix STAR), exactly as the >= ngram path does.
+	if !forPhrase && len(runeSlice) < ngram_size {
 		return []*Pattern{{Text: normalizeShortPattern(pattern, parser) + "*", Operator: STAR}}, nil
 	}
 
