@@ -75,7 +75,6 @@ func NewBindContext(builder *QueryBuilder, parent *BindContext) *BindContext {
 		bc.snapshot = parent.snapshot
 		bc.remapOption = parent.remapOption
 		bc.numericCteByName = parent.numericCteByName
-		bc.assignmentIgnore = parent.assignmentIgnore
 		if len(parent.viewChain) > 0 {
 			bc.viewChain = append([]string{}, parent.viewChain...)
 		}

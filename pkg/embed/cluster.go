@@ -526,6 +526,7 @@ func (c *cluster) createServiceOperators(from int) error {
 			})
 		}
 		if c.options.testing {
+			adjustTestingClusterStartup(s)
 			s.Adjust(applyTestingHAKeeperBackendReadTimeout)
 			if s.serviceType == metadata.ServiceType_CN {
 				s.Adjust(applyTestingTxnTraceBuffer)

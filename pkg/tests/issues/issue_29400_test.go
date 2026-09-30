@@ -293,6 +293,8 @@ func TestIssue29400DropDatabaseDoesNotHoldBranchDAGAfterTable(t *testing.T) {
 		defer db0.Close()
 		db1 := open(cn1.GetServiceConfig().CN.Frontend.Port)
 		defer db1.Close()
+		// Open the peer connection before the concurrency proof starts.
+		require.NoError(t, db1.PingContext(ctx))
 		const a, b = "issue_29400_dag_a", "issue_29400_dag_b"
 		defer func() {
 			cleanupCtx, done := context.WithTimeout(context.Background(), 30*time.Second)
@@ -350,15 +352,26 @@ func TestIssue29400DropDatabaseDoesNotHoldBranchDAGAfterTable(t *testing.T) {
 			t.Fatalf("A finished before the post-table barrier was released: %v", err)
 		default:
 		}
-		fastCtx, fastCancel := context.WithTimeout(ctx, 2*time.Second)
+		fastCtx, fastCancel := context.WithTimeout(ctx, 10*time.Second)
 		defer fastCancel()
 		_, err = db1.ExecContext(fastCtx, "drop table "+b+".b_child")
 		require.NoError(t, err, "unrelated branch DROP waited for A's post-table work")
+		// Completion must precede A leaving the barrier. The deadline bounds
+		// the test; it must never turn A's cancellation into apparent progress.
+		require.NoError(t, dropCtx.Err())
+		waiters, _, waiting := fault.TriggerFault(probe)
+		require.True(t, waiting)
+		require.Equal(t, int64(1), waiters)
+		select {
+		case err := <-dropA:
+			t.Fatalf("A left the post-table barrier before B completed: %v", err)
+		default:
+		}
 		release()
 		require.NoError(t, <-dropA)
 		// A now retains all statement locks until COMMIT. Its component must
 		// not pin B's root during this explicit transaction tail.
-		otherCtx, otherCancel := context.WithTimeout(ctx, 2*time.Second)
+		otherCtx, otherCancel := context.WithTimeout(ctx, 10*time.Second)
 		defer otherCancel()
 		_, err = db1.ExecContext(otherCtx, "drop table "+b+".a_root")
 		require.NoError(t, err, "unrelated branch DROP waited for A's COMMIT")
