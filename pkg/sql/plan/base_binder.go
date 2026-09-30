@@ -1362,10 +1362,11 @@ type numericAstTypeScan struct {
 	hasParamRef bool
 	// String markers enter arithmetic as numeric values, but an integer peer
 	// alone must not turn their default approximate domain into BIGINT.
-	hasStringParam bool
-	hasVar         bool
-	hasUnknown     bool
-	incompatible   bool
+	hasStringParam       bool
+	hasBinaryStringParam bool
+	hasVar               bool
+	hasUnknown           bool
+	incompatible         bool
 }
 
 func (s numericAstTypeScan) merge(other numericAstTypeScan) numericAstTypeScan {
@@ -1375,6 +1376,7 @@ func (s numericAstTypeScan) merge(other numericAstTypeScan) numericAstTypeScan {
 	s.hasParam = s.hasParam || other.hasParam
 	s.hasParamRef = s.hasParamRef || other.hasParamRef
 	s.hasStringParam = s.hasStringParam || other.hasStringParam
+	s.hasBinaryStringParam = s.hasBinaryStringParam || other.hasBinaryStringParam
 	s.hasVar = s.hasVar || other.hasVar
 	s.hasUnknown = s.hasUnknown || other.hasUnknown
 	s.incompatible = s.incompatible || other.incompatible
@@ -1509,7 +1511,11 @@ func (b *baseBinder) numericAstTypesInternalWithHint(
 				// A string source remains a string outside numeric arithmetic.
 				// Here its value needs the surrounding numeric domain, not the
 				// string/string CONCAT overload of '+'.
-				scan := numericAstTypeScan{hasParam: true, hasParamRef: true, hasStringParam: true}
+				scan := numericAstTypeScan{
+					hasParam: true, hasParamRef: true, hasStringParam: true,
+					hasBinaryStringParam: !preparedRoundTruncateTextSourceEligible(
+						b.GetContext(), int(expr.Offset-1), binding),
+				}
 				if typ, ok := preparedExactNumericStringType(b.GetContext(), expr.Offset-1); ok && typ.Oid.IsDecimal() {
 					// Exact decimal text can participate in an exact arithmetic
 					// context. The helper keeps every lexical decision out of the
@@ -1585,6 +1591,7 @@ func (b *baseBinder) numericAstTypesInternalWithHint(
 		}
 		scan.hasParam = source.hasParam
 		scan.hasParamRef = source.hasParamRef
+		scan.hasBinaryStringParam = source.hasBinaryStringParam
 		scan.hasVar = source.hasVar
 		return scan, nil
 	case *tree.BitCastExpr:
@@ -1599,6 +1606,7 @@ func (b *baseBinder) numericAstTypesInternalWithHint(
 		}
 		scan.hasParam = source.hasParam
 		scan.hasParamRef = source.hasParamRef
+		scan.hasBinaryStringParam = source.hasBinaryStringParam
 		scan.hasVar = source.hasVar
 		return scan, nil
 	case *tree.NumVal:
@@ -1642,6 +1650,7 @@ func (b *baseBinder) numericAstTypesInternalWithHint(
 					}
 					scan.hasParam = scan.hasParam || argScan.hasParam
 					scan.hasParamRef = scan.hasParamRef || argScan.hasParamRef
+					scan.hasBinaryStringParam = scan.hasBinaryStringParam || argScan.hasBinaryStringParam
 					scan.hasVar = scan.hasVar || argScan.hasVar
 				}
 				return scan, nil
@@ -1654,6 +1663,7 @@ func (b *baseBinder) numericAstTypesInternalWithHint(
 				}
 				scan.hasParam = scan.hasParam || argScan.hasParam
 				scan.hasParamRef = scan.hasParamRef || argScan.hasParamRef
+				scan.hasBinaryStringParam = scan.hasBinaryStringParam || argScan.hasBinaryStringParam
 				scan.hasVar = scan.hasVar || argScan.hasVar
 			}
 			return scan, nil
@@ -1674,6 +1684,7 @@ func (b *baseBinder) numericAstTypesInternalWithHint(
 			}
 			scan.hasParam = scan.hasParam || argScan.hasParam
 			scan.hasParamRef = scan.hasParamRef || argScan.hasParamRef
+			scan.hasBinaryStringParam = scan.hasBinaryStringParam || argScan.hasBinaryStringParam
 			scan.hasVar = scan.hasVar || argScan.hasVar
 		}
 		return scan, nil
@@ -3493,7 +3504,8 @@ func (b *baseBinder) bindPreparedNumericPrecisionFuncExpr(
 			if !known && binding.Type.IsNumeric() {
 				runtimeType, known = binding.Type, true
 			}
-			if !known && binding.Type.Oid.IsMySQLString() {
+			if !known && preparedRoundTruncateTextSourceEligible(
+				b.GetContext(), int(projectedPosition), binding) {
 				runtimeType, known = preparedExactNumericStringType(b.GetContext(), int(projectedPosition))
 			}
 			if !known && binding.Type.Oid.IsMySQLString() {
@@ -3516,7 +3528,8 @@ func (b *baseBinder) bindPreparedNumericPrecisionFuncExpr(
 			if !hasRuntimeType && binding.Type.IsNumeric() {
 				runtimeType, hasRuntimeType = binding.Type, true
 			}
-			if !hasRuntimeType && binding.Type.Oid.IsMySQLString() {
+			if !hasRuntimeType && preparedRoundTruncateTextSourceEligible(
+				b.GetContext(), int(param.Offset-1), binding) {
 				runtimeType, hasRuntimeType = preparedExactNumericStringType(
 					b.GetContext(), int(param.Offset-1))
 			}
@@ -3538,7 +3551,8 @@ func (b *baseBinder) bindPreparedNumericPrecisionFuncExpr(
 				if scanErr != nil {
 					return nil, scanErr
 				}
-				if scan.hasStringParam && len(scan.weakDecimals) == 1 && len(scan.strong) == 0 {
+				if scan.hasStringParam && !scan.hasBinaryStringParam &&
+					len(scan.weakDecimals) == 1 && len(scan.strong) == 0 {
 					target = scan.weakDecimals[0]
 					exactScalar = true
 				}
