@@ -6245,6 +6245,9 @@ func Test_statement_type(t *testing.T) {
 			{&tree.CreateTable{}},
 			{&tree.CreateTable{IsAsSelect: true}},
 			{&tree.RefreshMaterializedView{}},
+			{&tree.RenameTable{}},
+			{&tree.PrepareStmt{Stmt: &tree.RenameTable{}}},
+			{&tree.PrepareString{Sql: "rename table old_name to new_name"}},
 			{&tree.Insert{}},
 			{&tree.BeginTransaction{}},
 			{&tree.ShowTables{}},
@@ -6266,6 +6269,15 @@ func Test_statement_type(t *testing.T) {
 		convey.So(IsDDL(&tree.CreateTable{}), convey.ShouldBeTrue)
 		convey.So(IsDDL(&tree.RefreshMaterializedView{}), convey.ShouldBeTrue)
 		convey.So(isImplicitCommitStatement(&tree.TruncateTable{}), convey.ShouldBeTrue)
+		convey.So(isImplicitCommitStatement(&tree.RenameTable{}), convey.ShouldBeTrue)
+		convey.So(isImplicitCommitStatement(&tree.PrepareStmt{Stmt: &tree.RenameTable{}}), convey.ShouldBeFalse)
+		convey.So(isImplicitCommitStatement(&tree.AlterTable{}), convey.ShouldBeFalse)
+		convey.So(needToFinishTransactionAtStatementEnd(&ExecCtx{
+			ses: &backSession{}, stmt: &tree.RenameTable{},
+		}), convey.ShouldBeFalse)
+		convey.So(needToFinishTransactionAtStatementEnd(&ExecCtx{
+			stmt: &tree.RenameTable{}, txnOpt: FeTxnOption{implicitCommitBefore: true},
+		}), convey.ShouldBeTrue)
 		convey.So(isImplicitCommitStatement(&tree.CreateTable{}), convey.ShouldBeFalse)
 		convey.So(IsDropStatement(&tree.DropTable{}), convey.ShouldBeTrue)
 		convey.So(IsAdministrativeStatement(&tree.CreateAccount{}), convey.ShouldBeTrue)
@@ -7650,6 +7662,26 @@ func TestPreparedSetExpressionRetryKeepsGlobalParserOrdinal(t *testing.T) {
 	require.Equal(t, 2, secondParam.Offset)
 }
 
+func TestPreparedQueryRetryKeepsPrunedParserOrdinal(t *testing.T) {
+	ctx := defines.AttachAccountId(context.Background(), catalog.System_Account)
+	ses := newTestSession(t, gomock.NewController(t))
+	defer ses.Close()
+	ses.SetSql("execute p")
+	for _, sql := range []string{
+		"select b from (select ? a, ? b) d",
+		"with d as (select ? a, ? b) select b from d",
+	} {
+		func() {
+			stmt, err := parsers.ParseOne(ctx, dialect.MYSQL, sql, 1)
+			require.NoError(t, err)
+			defer stmt.Free()
+			retryPlan, err := buildPlanForCompileRetry(ctx, ses, plan.NewEmptyCompilerContext(), stmt, false, nil)
+			require.NoError(t, err)
+			require.Equal(t, []int32{1}, queryParamPositions(retryPlan.GetQuery()))
+		}()
+	}
+}
+
 func TestBuildPlanForCompileRetryReappliesPreparedRuntimeSpecialization(t *testing.T) {
 	ctx := defines.AttachAccountId(context.Background(), catalog.System_Account)
 	stmt, err := parsers.ParseOne(ctx, dialect.MYSQL, "select coalesce(?, ?) from dual", 1)
@@ -7667,7 +7699,7 @@ func TestBuildPlanForCompileRetryReappliesPreparedRuntimeSpecialization(t *testi
 			PrepareParamKind:    vector.PrepareParamDecimal,
 			EnableNumericPrefix: true,
 		},
-	}, true)
+	})
 	retryPlan, err := buildPlanForCompileRetry(
 		ctx, nil, plan.NewEmptyCompilerContext(), stmt, true, retry)
 	require.NoError(t, err)
@@ -7712,7 +7744,11 @@ func TestBuildPlanForCompileRetryReprovesPreparedJoin(t *testing.T) {
 	}
 	retry := newPreparedExecutionRetry([]any{
 		plan.ParamValue{Value: "01:00:00"}, plan.ParamValue{Value: int64(1)},
-	}, false, false, true)
+	})
+	retry.bindings = []plan.PreparedSourceBinding{
+		{Position: 0, Type: types.T_text.ToType()},
+		{Position: 1, Type: types.T_int64.ToType()},
+	}
 	safe, err := buildPlanForCompileRetry(ctx, ses, compilerCtx, stmt, false, retry)
 	require.NoError(t, err)
 	require.NotNil(t, safe.GetQuery())
@@ -7732,9 +7768,10 @@ func TestBuildPlanForCompileRetryReprovesPreparedJoin(t *testing.T) {
 	require.Positive(t, scanFilters(again.GetQuery()), "the earlier unsafe retry must not retain its barrier")
 
 	previousCtx := compilerCtx.GetContext()
-	_, err = withPreparedJoinDiagnosticFreeContext(ctx, compilerCtx, func() (*plan.Plan, error) {
-		return nil, moerr.NewInternalErrorNoCtx("injected local replan failure")
-	})
+	invalid, err := parsers.ParseOne(ctx, dialect.MYSQL, "select missing_column", 1)
+	require.NoError(t, err)
+	defer invalid.Free()
+	_, err = buildPreparedBoundQuery(ctx, ses, compilerCtx, invalid, nil, nil)
 	require.Error(t, err)
 	require.Same(t, previousCtx, compilerCtx.GetContext())
 }
@@ -7751,7 +7788,7 @@ func TestBuildPlanForPreparedExpressionRetryPreservesBinaryRuntimeType(t *testin
 			IsBinaryProtocol: true,
 			RuntimeType:      types.T_int64.ToType(),
 			HasRuntimeType:   true,
-		}}, true))
+		}}))
 	require.NoError(t, err)
 	require.Empty(t, queryParamPositions(retryPlan.GetQuery()), retryPlan.String())
 	root := retryPlan.GetQuery().Nodes[retryPlan.GetQuery().Steps[len(retryPlan.GetQuery().Steps)-1]]

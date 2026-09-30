@@ -2281,7 +2281,7 @@ func (builder *QueryBuilder) determineBuildAndProbeSide(nodeID int32, recursive 
 		// across both cost-based and recursive-side orientation choices.
 		for _, expr := range node.OnList {
 			if ContainsGuardedJoinDiagnosticWithProof(builder.compCtx.GetProcess(), expr,
-				preparedJoinDiagnosticFree(builder.compCtx.GetContext())) {
+				builder.preparedParameterDiagnosticsFree()) {
 				node.IsRightJoin = false
 				return
 			}

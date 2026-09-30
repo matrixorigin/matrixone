@@ -61,5 +61,26 @@ CREATE TABLE view_metadata_on_demand.metadata_target (code BIGINT);
 EXECUTE show_target;
 DEALLOCATE PREPARE show_target;
 
+-- Restore replaces the source, not the dependent View. A new statement in
+-- another session must describe the restored schema without a recovery worker.
+DROP SNAPSHOT IF EXISTS view_metadata_restore;
+CREATE SNAPSHOT view_metadata_restore FOR ACCOUNT;
+ALTER TABLE src MODIFY COLUMN code VARCHAR(180);
+-- @session:id=1{
+PREPARE restored_view FROM 'SHOW COLUMNS FROM view_metadata_on_demand.v';
+EXECUTE restored_view;
+-- @session}
+RESTORE TABLE view_metadata_on_demand.src {snapshot='view_metadata_restore'};
+-- @session:id=1{
+EXECUTE restored_view;
+SELECT column_name, column_type FROM information_schema.columns
+WHERE table_schema = 'view_metadata_on_demand' AND table_name = 'v'
+ORDER BY ordinal_position;
+DEALLOCATE PREPARE restored_view;
+-- @session}
+CREATE TABLE restored_copy AS SELECT code FROM v;
+DESC restored_copy;
+DROP SNAPSHOT view_metadata_restore;
+
 DROP DATABASE view_metadata_on_demand;
 -- @suite

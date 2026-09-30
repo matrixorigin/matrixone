@@ -201,7 +201,8 @@ func TestFilterScanStorageExprsExcludesVolatilePredicates(t *testing.T) {
 	}}}}
 	stable := plan2.MakePlan2Int64ConstExprWithType(1)
 
-	require.Equal(t, []*plan.Expr{stable}, filterScanStorageExprs(nil, []*plan.Expr{stable, volatile}))
+	filters := filterScanStorageExprs(nil, []*plan.Expr{stable, volatile}, false)
+	require.Equal(t, []*plan.Expr{stable}, filters)
 }
 
 func TestCompileRunPreservesBinaryPrepareParamAcrossRetries(t *testing.T) {
@@ -2684,7 +2685,7 @@ func TestMultiSourceISCPGatedByProtocolVersion(t *testing.T) {
 	require.False(t, supportsMultiSourceISCP(service))
 	rt.SetGlobalVariables(runtime.MOProtocolVersion, defines.MORPCVersion99)
 	require.False(t, supportsMultiSourceISCP(service), "the MV capability must be newer than the current predecessor")
-	rt.SetGlobalVariables(runtime.MOProtocolVersion, defines.MORPCVersion101)
+	rt.SetGlobalVariables(runtime.MOProtocolVersion, defines.MORPCVersion102)
 	require.True(t, supportsMultiSourceISCP(service))
 
 	rt.SetGlobalVariables(runtime.MOProtocolVersion, defines.MORPCVersion29)
@@ -2707,7 +2708,7 @@ func TestMaterializedViewCapabilityAndReadValidationGuards(t *testing.T) {
 	require.Error(t, requireMaterializedViewCapability(c))
 	rt.SetGlobalVariables(runtime.MOProtocolVersion, defines.MORPCVersion99)
 	require.Error(t, requireMaterializedViewCapability(c))
-	rt.SetGlobalVariables(runtime.MOProtocolVersion, defines.MORPCVersion101)
+	rt.SetGlobalVariables(runtime.MOProtocolVersion, defines.MORPCVersion102)
 	require.NoError(t, requireMaterializedViewCapability(c))
 }
 

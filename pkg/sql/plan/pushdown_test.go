@@ -250,11 +250,10 @@ func TestPreparedJoinDiagnosticProofOnlyRelaxesCurrentExecution(t *testing.T) {
 	require.NoError(t, err)
 	require.True(t, ContainsGuardedJoinDiagnosticWithProof(proc, guardedLiteral, safe),
 		"parameter proof cannot suppress an unrelated literal diagnostic")
-	originalContext := ctx.GetContext()
-	ctx.SetContext(WithPreparedJoinDiagnosticFree(originalContext))
+	builder.preparedBindingProof = &safe
 	require.False(t, builder.joinOwnsConstantDiagnostic(builder.qry.Nodes[2]))
 	require.False(t, builder.filterPushdownBarrier(condition))
-	ctx.SetContext(originalContext)
+	builder.preparedBindingProof = nil
 	require.True(t, builder.joinOwnsConstantDiagnostic(builder.qry.Nodes[2]))
 
 	require.NoError(t, vector.SetStringAt(params, 0, "900:00:00", proc.Mp()))
@@ -377,6 +376,37 @@ func TestPreparedJoinDiagnosticProofOnlyRelaxesCurrentExecution(t *testing.T) {
 		require.NoError(t, probeErr)
 		require.Equal(t, tc.free, free)
 	}
+}
+
+func TestPreparedScanFilterDiagnosticTriggersExecutionProof(t *testing.T) {
+	ctx := NewMockCompilerContext(true)
+	param := &plan.Expr{Typ: Type{Id: int32(types.T_varchar)},
+		Expr: &plan.Expr_P{P: &plan.ParamRef{Pos: 0}}}
+	target := &plan.Expr{Typ: Type{Id: int32(types.T_int32)},
+		Expr: &plan.Expr_T{T: &plan.TargetType{}}}
+	cast, err := BindFuncExprImplByPlanExpr(ctx.GetContext(), "cast", []*plan.Expr{param, target})
+	require.NoError(t, err)
+	column := &plan.Expr{Typ: Type{Id: int32(types.T_int32)},
+		Expr: &plan.Expr_Col{Col: &plan.ColRef{RelPos: 1, ColPos: 0}}}
+	filter, err := BindFuncExprImplByPlanExpr(ctx.GetContext(), "=", []*plan.Expr{column, cast})
+	require.NoError(t, err)
+	template := &plan.Plan{Plan: &plan.Plan_Query{Query: &plan.Query{Nodes: []*plan.Node{
+		{NodeType: plan.Node_FILTER, FilterList: []*plan.Expr{filter}},
+	}}}}
+	require.True(t, PreparedPlanHasJoinParameterDiagnostic(template))
+
+	proc := ctx.GetProcess()
+	params := vector.NewVec(types.T_text.ToType())
+	require.NoError(t, vector.AppendBytes(params, []byte("7"), false, proc.Mp()))
+	proc.SetPrepareParams(params)
+	t.Cleanup(func() { proc.SetPrepareParams(nil); params.Free(proc.Mp()) })
+	safe, err := ProbePreparedJoinParameterDiagnostics(proc, template)
+	require.NoError(t, err)
+	require.True(t, safe)
+	require.NoError(t, vector.SetStringAt(params, 0, "invalid", proc.Mp()))
+	safe, err = ProbePreparedJoinParameterDiagnostics(proc, template)
+	require.NoError(t, err)
+	require.False(t, safe)
 }
 
 func TestPushdownLimitToTableScanComposesExistingPagination(t *testing.T) {
