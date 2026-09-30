@@ -88,10 +88,12 @@ accounts.
 ### Remote compatibility
 
 MORPC v101 retains the upstream JSON/YearBit contract. This change's
-string-numeric and flow-control provenance behavior uses MORPC v103. Placement
-falls back to local execution when a worker is below v103 or has unknown
-capability; sender preflight rejects a destination downgrade; and receivers
-fail closed on pre-v103 or legacy session contracts.
+string-numeric and flow-control provenance behavior uses MORPC v103. For
+expressions requiring the new numeric contract, placement falls back to local
+execution when a worker is below v103 or has unknown capability; sender
+preflight rejects a destination downgrade; and receivers reject the changed
+feature when its protocol or session marker is legacy. Unchanged expressions
+retain their existing compatibility gates.
 
 ## Deployment and rollback boundary
 
