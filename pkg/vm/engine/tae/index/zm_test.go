@@ -27,6 +27,50 @@ import (
 	"github.com/stretchr/testify/require"
 )
 
+// zonemapLowPrecCase verifies the zonemap of one low-precision float type is maintained
+// and pruned by float VALUE, not raw bits. The negative bound is the discriminator: a
+// negative float's raw uint bits exceed a positive's, so a bit-wise zonemap would order
+// min/max backwards and prune wrongly. Values are exactly representable in all four formats.
+func zonemapLowPrecCase[T interface {
+	types.FixedSizeTExceptStrType
+	ToFloat32() float32
+}](t *testing.T, oid types.T, from func(float32) T, mp *mpool.MPool) {
+	// min=-3.0, max=2.0 fed in reversed order so Update must value-order them.
+	zm := NewZM(oid, 0)
+	UpdateZM(zm, types.EncodeFixed(from(2.0)))
+	UpdateZM(zm, types.EncodeFixed(from(-3.0)))
+
+	// getValue must decode by value: min = -3.0, max = 2.0.
+	require.InDelta(t, float32(-3.0), zm.GetMin().(T).ToFloat32(), 1e-6)
+	require.InDelta(t, float32(2.0), zm.GetMax().(T).ToFloat32(), 1e-6)
+
+	// Contains (via compute.Compare) is value-aware: -1.0 is inside [-3,2], the bounds
+	// are inclusive, and 6.0 is outside.
+	require.True(t, zm.Contains(from(-1.0)))
+	require.True(t, zm.Contains(from(-3.0)))
+	require.True(t, zm.Contains(from(2.0)))
+	require.False(t, zm.Contains(from(6.0)))
+
+	// SubVecIn on a value-sorted column prunes by value.
+	vec := vector.NewVec(oid.ToType())
+	defer vec.Free(mp)
+	for _, f := range []float32{-3.0, -1.0, 2.0} {
+		require.NoError(t, vector.AppendFixed(vec, from(f), false, mp))
+	}
+	require.True(t, zm.AnyIn(vec))
+	lower, upper := zm.SubVecIn(vec)
+	require.Equal(t, 0, lower)
+	require.Equal(t, vec.Length(), upper)
+}
+
+func TestZonemapLowPrecFloat(t *testing.T) {
+	mp := mpool.MustNewZero()
+	t.Run("bf16", func(t *testing.T) { zonemapLowPrecCase(t, types.T_bf16, types.BF16FromFloat32, mp) })
+	t.Run("float16", func(t *testing.T) { zonemapLowPrecCase(t, types.T_float16, types.Float16FromFloat32, mp) })
+	t.Run("float8", func(t *testing.T) { zonemapLowPrecCase(t, types.T_float8, types.Float8FromFloat32, mp) })
+	t.Run("float4", func(t *testing.T) { zonemapLowPrecCase(t, types.T_float4, types.Float4FromFloat32, mp) })
+}
+
 func TestTruncatedOverlap(t *testing.T) {
 
 	p := types.NewPacker()

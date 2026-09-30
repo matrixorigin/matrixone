@@ -359,6 +359,14 @@ func DecodeValue(val []byte, t T) any {
 		return DecodeFixed[float32](val)
 	case T_float64:
 		return DecodeFixed[float64](val)
+	case T_bf16:
+		return DecodeFixed[BF16](val)
+	case T_float16:
+		return DecodeFixed[Float16](val)
+	case T_float8:
+		return DecodeFixed[Float8](val)
+	case T_float4:
+		return DecodeFixed[Float4](val)
 	case T_date:
 		return DecodeFixed[Date](val)
 	case T_time:
@@ -537,6 +545,14 @@ func EncodeValue(val any, t T) []byte {
 		return EncodeFixed(val.(float32))
 	case T_float64:
 		return EncodeFixed(val.(float64))
+	case T_bf16:
+		return EncodeFixed(val.(BF16))
+	case T_float16:
+		return EncodeFixed(val.(Float16))
+	case T_float8:
+		return EncodeFixed(val.(Float8))
+	case T_float4:
+		return EncodeFixed(val.(Float4))
 	case T_decimal64:
 		return EncodeFixed(val.(Decimal64))
 	case T_decimal128:
