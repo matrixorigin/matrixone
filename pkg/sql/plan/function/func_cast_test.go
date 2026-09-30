@@ -4623,26 +4623,54 @@ func TestBitToJSONRestoresDeclaredWidth(t *testing.T) {
 	require.Error(t, err)
 }
 
-// TestCastJsonToVarchar verifies that casting a JSON value to VARCHAR uses JSON_UNQUOTE semantics,
-// i.e. JSON strings lose their outer double-quotes (MySQL-compatible behavior).
+// TestCastJsonToVarchar distinguishes explicit JSON serialization from the
+// scalar text used by implicit casts, comparisons, and assignments.
 func TestCastJsonToVarchar(t *testing.T) {
 	proc := testutil.NewProcess(t)
 
 	jsonTexts := []string{`"active"`, `42`, `true`, `null`, `[1,2,3]`, `{"k":"v"}`}
-	// After unquote: JSON strings lose outer quotes; other types keep their JSON text representation.
-	expected := []string{"active", "42", "true", "null", "[1, 2, 3]", `{"k": "v"}`}
 	nulls := []bool{false, false, false, false, false, false}
 	encoded := makeJSONEncodedFromText(t, jsonTexts, nulls)
 
 	toType := types.New(types.T_varchar, 256, 0)
-	inputs := []FunctionTestInput{
-		NewFunctionTestInput(types.T_json.ToType(), encoded, nulls),
-		NewFunctionTestInput(toType, []string{}, []bool{}),
+	cases := []struct {
+		name     string
+		cast     fEvalFn
+		expected []string
+	}{
+		{
+			name:     "explicit cast serializes JSON strings",
+			cast:     NewExplicitCast,
+			expected: []string{`"active"`, "42", "true", "null", "[1, 2, 3]", `{"k": "v"}`},
+		},
+		{
+			name:     "implicit cast exposes string payload",
+			cast:     NewCast,
+			expected: []string{"active", "42", "true", "null", "[1, 2, 3]", `{"k": "v"}`},
+		},
+		{
+			name:     "comparison cast exposes string payload",
+			cast:     NewComparisonCast,
+			expected: []string{"active", "42", "true", "null", "[1, 2, 3]", `{"k": "v"}`},
+		},
+		{
+			name:     "assignment cast exposes string payload",
+			cast:     NewAssignCast,
+			expected: []string{"active", "42", "true", "null", "[1, 2, 3]", `{"k": "v"}`},
+		},
 	}
-	expect := NewFunctionTestResult(toType, false, expected, nulls)
-	fcTC := NewFunctionTestCase(proc, inputs, expect, NewCast)
-	succeed, info := fcTC.Run()
-	require.True(t, succeed, info)
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			inputs := []FunctionTestInput{
+				NewFunctionTestInput(types.T_json.ToType(), encoded, nulls),
+				NewFunctionTestInput(toType, []string{}, []bool{}),
+			}
+			expect := NewFunctionTestResult(toType, false, tc.expected, nulls)
+			fcTC := NewFunctionTestCase(proc, inputs, expect, tc.cast)
+			succeed, info := fcTC.Run()
+			require.True(t, succeed, info)
+		})
+	}
 }
 
 // emptySliceForCastTarget returns an empty slice of the right type for the second (target type) cast parameter.

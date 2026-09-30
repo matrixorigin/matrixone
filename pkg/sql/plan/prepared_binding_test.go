@@ -33,6 +33,131 @@ import (
 	"github.com/stretchr/testify/require"
 )
 
+func TestPreparedDecimalFloatFilterUsesUniqueValueProof(t *testing.T) {
+	for _, test := range []struct {
+		name   string
+		value  string
+		column types.Type
+		native bool
+	}{
+		{"integral", "54321", types.New(types.T_decimal64, 12, 2), true},
+		{"fractional", "0.1", types.New(types.T_decimal64, 12, 2), true},
+		{"between scale points", "0.104", types.New(types.T_decimal64, 12, 2), false},
+		{"float collision", "9007199254740992", types.New(types.T_decimal128, 20, 0), false},
+	} {
+		t.Run(test.name, func(t *testing.T) {
+			ctx := withPreparedSourceBindings(context.Background(),
+				[]PreparedSourceBinding{{Position: 0, Type: types.T_float64.ToType()}},
+				[]any{ParamValue{Value: test.value, IsBinaryProtocol: true}})
+			state := preparedBindingState(ctx)
+			state.selectStatement = true
+			column := &Expr{Typ: makePlan2Type(&test.column), Expr: &planpb.Expr_Col{Col: &planpb.ColRef{}}}
+			param := &Expr{Typ: makeSimplePlan2Type(types.T_float64), Expr: &planpb.Expr_P{P: &planpb.ParamRef{Pos: 0}}}
+			args, err := bindPreparedConsumerArguments(ctx, "=", []*Expr{column, param})
+			require.NoError(t, err)
+			require.Equal(t, test.native, args[1].Typ.Id == column.Typ.Id)
+			require.True(t, state.valueDependent)
+		})
+	}
+}
+
+func TestPreparedNumericPredicateFiltering(t *testing.T) {
+	for _, tc := range []struct {
+		name, predicate string
+		values          []string
+		native          bool
+		integerKey      bool
+	}{
+		{"or expressions", "c=abs(?) or c=abs(?)", []string{"54321", "54322"}, true, false},
+		{"in expressions", "c in (abs(?),abs(?))", []string{"54321", "54322"}, true, false},
+		{"between expressions", "c between abs(?) and abs(?)", []string{"54321", "54322"}, true, false},
+		{"in markers", "c in (?,?)", []string{"54321", "54322"}, true, false},
+		{"between markers", "c between ? and ?", []string{"54321", "54322"}, true, false},
+		{"nested boolean", "(c=abs(?) or c=abs(?)) and c>=abs(?)", []string{"54321", "54322", "54320"}, true, false},
+		{"mixed unsafe in", "c in (?,?)", []string{"54321", "0.104"}, false, false},
+		{"mixed unsafe between", "c between ? and ?", []string{"54321", "54322.104"}, false, false},
+		{"round default precision", "c=round(?)", []string{"54321.0"}, true, true},
+		{"truncate default precision", "c=truncate(?)", []string{"54321.0"}, true, true},
+		{"round scalar default", "c=round((select ?))", []string{"54321.0"}, true, true},
+		{"round scalar strict lower", "c>round((select ?),0)", []string{"54321.0"}, true, true},
+		{"round scalar inclusive lower", "c>=round((select ?),0)", []string{"54321.0"}, true, true},
+		{"truncate scalar strict upper", "c<truncate((select ?))", []string{"54321.0"}, true, true},
+		{"truncate scalar inclusive upper", "c<=truncate((select ?),0)", []string{"54321.0"}, true, true},
+		{"round scalar reversed range", "round((select ?))>c", []string{"54321.0"}, true, true},
+		{"round scalar fractional fallback", "c>=round((select ?))", []string{"54321.5"}, false, true},
+		{"round scalar collision fallback", "c>=round((select ?))", []string{"9007199254740992"}, false, true},
+		{"round zero precision", "c=round(?,?)", []string{"54321.0", "0"}, true, true},
+		{"truncate zero precision", "c=truncate(?,?)", []string{"54321.0", "0"}, true, true},
+		{"explicit precision cast", "c=round(?,cast(? as signed))", []string{"54321.0", "0"}, true, true},
+		{"round nonzero precision", "c=round(?,?)", []string{"54321.0", "1"}, false, true},
+		{"round negative precision", "c=round(?,?)", []string{"54321.0", "-1"}, false, true},
+		{"explicit column cast", "cast(c as decimal(5,0))=round(?,0)", []string{"54321.0"}, false, true},
+		{"explicit value cast", "c=cast(round(?,0) as decimal(4,0))", []string{"54321.0"}, false, true},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			mock := NewMockOptimizer(false)
+			table := makeExprOptCompositeSortKeyTableDef()
+			table.Name, table.TblId = "numeric_filters", 99003
+			decimal := types.New(types.T_decimal64, 12, 2)
+			table.Cols[2].Typ = makePlan2Type(&decimal)
+			if tc.integerKey {
+				table.Cols[2].Typ = makeSimplePlan2Type(types.T_int64)
+			}
+			mock.ctxt.tables[table.Name] = table
+			mock.ctxt.objects[table.Name] = &ObjectRef{ObjName: table.Name, Obj: int64(table.TblId)}
+			proc := mock.ctxt.GetProcess()
+			params := vector.NewVec(types.T_text.ToType())
+			defer func() { proc.SetPrepareParams(nil); params.Free(proc.Mp()) }()
+			bindings := make([]PreparedSourceBinding, len(tc.values))
+			values := make([]any, len(tc.values))
+			for i, value := range tc.values {
+				bindings[i] = PreparedSourceBinding{Position: int32(i), Type: types.T_float64.ToType()}
+				if tc.integerKey {
+					bindings[i].Type = types.T_int64.ToType()
+					if i == 0 {
+						bindings[i].Type = types.T_varchar.ToType()
+					}
+				}
+				values[i] = ParamValue{Value: value, IsBinaryProtocol: true}
+				require.NoError(t, vector.AppendBytes(params, []byte(value), false, proc.Mp()))
+			}
+			proc.SetPrepareParams(params)
+			stmt, err := parsers.ParseOne(context.Background(), dialect.MYSQL,
+				"select c from numeric_filters where "+tc.predicate, 1)
+			require.NoError(t, err)
+			defer stmt.Free()
+			bound, err := BuildPreparedExecutionPlan(&mock.ctxt, stmt, bindings, values)
+			require.NoError(t, err)
+			require.True(t, bound.ValueDependent, "runtime value proof must not enter the type-only cache")
+			foundScan, columnCast, executableParam := false, false, false
+			for _, node := range bound.Plan.GetQuery().Nodes {
+				if node.NodeType != planpb.Node_TABLE_SCAN || node.TableDef.Name != table.Name {
+					continue
+				}
+				foundScan = true
+				for _, filter := range node.FilterList {
+					if tc.native {
+						// BuildPreparedExecutionPlan deliberately skips scan statistics;
+						// assert pruning eligibility here and actual blocks in public QA.
+						require.True(t, ExprIsZonemappable(context.Background(), filter), "safe predicate must allow block pruning")
+					}
+					executableParam = executableParam || function.ContainsParameter(filter)
+					require.NoError(t, planpb.VisitExprTree(filter, func(expr *Expr) error {
+						if fn := expr.GetF(); fn != nil && fn.Func.ObjName == "cast" && len(fn.Args) == 2 &&
+							fn.Args[0].GetCol() != nil && fn.Args[0].Typ.Id == table.Cols[2].Typ.Id {
+							columnCast = true
+						}
+						return nil
+					}))
+				}
+			}
+			require.True(t, foundScan)
+			require.Equal(t, !tc.native, columnCast, bound.Plan.String())
+			require.True(t, executableParam, "proof witnesses must not replace executable parameters")
+		})
+	}
+}
+
 func TestPreparedDomainlessNullUsesConcreteRelationalColumns(t *testing.T) {
 	for _, query := range []string{
 		"select ? group by 1",

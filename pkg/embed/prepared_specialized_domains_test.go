@@ -89,6 +89,219 @@ func TestPreparedSpecializedDomains(t *testing.T) {
 				require.Equal(t, [][]string{{tc.want}}, query(t, "execute numeric_sum using @numeric_source"), tc.assignment)
 			}
 		})
+		t.Run("prepared_round_truncate_value_domains", func(t *testing.T) {
+			for _, tc := range []struct {
+				name string
+				fn   string
+			}{
+				{name: "round", fn: "round"},
+				{name: "truncate", fn: "truncate"},
+			} {
+				fractionalResult := "1.4"
+				if tc.fn == "round" {
+					fractionalResult = "1.5"
+				}
+				t.Run(tc.name+"/sql_execute", func(t *testing.T) {
+					stmtName := "numeric_" + tc.name
+					exec(t, "prepare "+stmtName+" from 'select "+tc.fn+"(?,?)'")
+					defer conn.ExecContext(ctx, "deallocate prepare "+stmtName)
+					for _, value := range []struct {
+						assignment string
+						precision  string
+						want       string
+					}{
+						{"'1.46'", "1", fractionalResult + "0"},
+						{"cast(1.46 as decimal(10,2))", "1", fractionalResult + "0"},
+						{"2", "0", "2"},
+						{"null", "1", "NULL"},
+					} {
+						exec(t, "set @numeric_value="+value.assignment+", @numeric_precision="+value.precision)
+						require.Equal(t, [][]string{{value.want}}, query(t,
+							"execute "+stmtName+" using @numeric_value,@numeric_precision"), value)
+					}
+					exec(t, "set @numeric_value='not-a-number', @numeric_precision=1")
+					err := func() error {
+						rows, err := conn.QueryContext(ctx,
+							"execute "+stmtName+" using @numeric_value,@numeric_precision")
+						if rows == nil {
+							return err
+						}
+						defer rows.Close()
+						for rows.Next() {
+						}
+						return rows.Err()
+					}()
+					require.Error(t, err, "invalid text should fail as on the GOOD baseline")
+					exec(t, "set @numeric_value='1.46'")
+					require.Equal(t, [][]string{{fractionalResult + "0"}},
+						query(t, "execute "+stmtName+" using @numeric_value,@numeric_precision"),
+						"a failed execution must not poison the next binding")
+				})
+
+				t.Run(tc.name+"/binary_protocol", func(t *testing.T) {
+					stmt, err := conn.PrepareContext(ctx, "select "+tc.fn+"(?,?)")
+					require.NoError(t, err)
+					defer stmt.Close()
+					for _, value := range []struct {
+						input any
+						want  string
+					}{
+						{"1.46", fractionalResult + "0"},
+						{int64(2), "2"},
+						{float64(1.46), fractionalResult},
+						{[]byte("1.46"), fractionalResult + "0"},
+						{nil, "NULL"},
+					} {
+						var got sql.NullString
+						require.NoError(t, stmt.QueryRowContext(ctx, value.input, 1).Scan(&got), value)
+						gotString := "NULL"
+						if got.Valid {
+							gotString = got.String
+						}
+						require.Equal(t, value.want, gotString, value)
+					}
+				})
+				for _, shape := range []struct {
+					name  string
+					value string
+				}{
+					{"scalar", "(select ?)"},
+					{"derived", "x"},
+				} {
+					t.Run(tc.name+"/"+shape.name, func(t *testing.T) {
+						statement := "select cast(" + tc.fn + "(" + shape.value + ",1) as double)"
+						if shape.name == "derived" {
+							statement += " from (select ? x limit 1) d"
+						}
+						stmt, err := conn.PrepareContext(ctx, statement)
+						require.NoError(t, err)
+						defer stmt.Close()
+						var got sql.NullString
+						require.NoError(t, stmt.QueryRowContext(ctx, "1.46").Scan(&got))
+						require.Equal(t, fractionalResult, got.String)
+						tieStatement := "select cast(" + tc.fn + "(" + shape.value + ",0) as double)"
+						if shape.name == "derived" {
+							tieStatement += " from (select ? x limit 1) d"
+						}
+						tie, tieErr := conn.PrepareContext(ctx, tieStatement)
+						require.NoError(t, tieErr)
+						defer tie.Close()
+						require.NoError(t, tie.QueryRowContext(ctx, "2.5").Scan(&got))
+						if tc.name == "round" {
+							require.Equal(t, "3", got.String)
+						} else {
+							require.Equal(t, "2", got.String)
+						}
+						if shape.name == "derived" {
+							require.Error(t, stmt.QueryRowContext(ctx, "not-a-number").Scan(&got))
+						}
+						require.NoError(t, stmt.QueryRowContext(ctx, "1.46").Scan(&got))
+						require.Equal(t, fractionalResult, got.String)
+					})
+				}
+				t.Run(tc.name+"/set_operation_domain", func(t *testing.T) {
+					stmt, err := conn.PrepareContext(ctx,
+						"select cast("+tc.fn+"(x,1) as double) from "+
+							"(select ? x union all select cast(1.46 as decimal(10,2))) d")
+					require.NoError(t, err)
+					defer stmt.Close()
+					rows, err := stmt.QueryContext(ctx, int64(1))
+					require.NoError(t, err)
+					defer rows.Close()
+					var got []string
+					for rows.Next() {
+						var value string
+						require.NoError(t, rows.Scan(&value))
+						got = append(got, value)
+					}
+					require.NoError(t, rows.Err())
+					fraction := "1.5"
+					if tc.name == "truncate" {
+						fraction = "1.4"
+					}
+					require.ElementsMatch(t, []string{"1", fraction}, got)
+				})
+			}
+
+			exec(t, "prepare explicit_decimal_round from 'select round(cast(? as decimal(10,2)),1)'")
+			defer conn.ExecContext(ctx, "deallocate prepare explicit_decimal_round")
+			exec(t, "set @explicit_decimal='1.46'")
+			require.Equal(t, [][]string{{"1.5"}}, query(t,
+				"execute explicit_decimal_round using @explicit_decimal"))
+			explicitDerived, err := conn.PrepareContext(ctx,
+				"select cast(round(x,0) as double) from (select cast(? as decimal(10,2)) x) d")
+			require.NoError(t, err)
+			defer explicitDerived.Close()
+			var explicitGot sql.NullString
+			require.NoError(t, explicitDerived.QueryRowContext(ctx, "2.5").Scan(&explicitGot))
+			require.Equal(t, "3", explicitGot.String)
+		})
+		t.Run("prepared_round_filter_domains", func(t *testing.T) {
+			exec(t, "create table rounding_filters(id bigint)")
+			defer conn.ExecContext(ctx, "drop table rounding_filters")
+			exec(t, "insert into rounding_filters values (null),(-54322),(-54321),(0),(54320),(54321),(54322),"+
+				"(9007199254740991),(9007199254740992),(9007199254740993)")
+			for _, predicate := range []string{
+				"id=round(?)", "id=round((select ?))",
+				"id<round((select ?))", "id<=round((select ?),0)",
+				"id>round((select ?),0)", "id>=round((select ?),0)",
+				"round((select ?))>id", "id<>round((select ?))", "id<=>round((select ?))",
+				"id=truncate(?)", "id<truncate((select ?))", "id>=truncate((select ?),0)",
+			} {
+				t.Run(predicate, func(t *testing.T) {
+					exec(t, "prepare rounding_filter from 'select id from rounding_filters where "+predicate+" order by id'")
+					defer conn.ExecContext(ctx, "deallocate prepare rounding_filter")
+					// Keep the pre-rewrite exact DECIMAL column domain executable as
+					// an independent oracle, including BIGINTs beyond 2^53.
+					control := strings.ReplaceAll(predicate, "id", "cast(id as decimal(38,0))")
+					exec(t, "prepare rounding_control from 'select id from rounding_filters where "+control+" order by id'")
+					defer conn.ExecContext(ctx, "deallocate prepare rounding_control")
+					for _, value := range []string{"'54321.0'", "'54321.5'", "'9007199254740992'", "null", "'-54321.0'", "'54321.0'"} {
+						exec(t, "set @rounding_filter_source="+value)
+						require.Equal(t, query(t, "execute rounding_control using @rounding_filter_source"),
+							query(t, "execute rounding_filter using @rounding_filter_source"), value)
+					}
+				})
+			}
+		})
+		t.Run("prepared_round_reversed_primary_key_ranges", func(t *testing.T) {
+			exec(t, "create table rounding_keys(id bigint primary key)")
+			defer conn.ExecContext(ctx, "drop table rounding_keys")
+			exec(t, "insert into rounding_keys values (54320),(54321),(54322)")
+			for _, fn := range []string{"round", "truncate"} {
+				for _, source := range []string{"?", "(select ?)"} {
+					for _, tc := range []struct {
+						op   string
+						want [][]string
+					}{{"<", [][]string{{"54322"}}}, {"<=", [][]string{{"54321"}, {"54322"}}},
+						{">", [][]string{{"54320"}}}, {">=", [][]string{{"54320"}, {"54321"}}}} {
+						t.Run(fn+"/"+source+"/"+tc.op, func(t *testing.T) {
+							predicate := fn + "(" + source + ")" + tc.op
+							exec(t, "prepare rounding_key from 'select id from rounding_keys where "+predicate+"id order by id'")
+							defer conn.ExecContext(ctx, "deallocate prepare rounding_key")
+							exec(t, "prepare rounding_key_control from 'select id from rounding_keys where "+predicate+"cast(id as decimal(38,0)) order by id'")
+							defer conn.ExecContext(ctx, "deallocate prepare rounding_key_control")
+							for _, value := range []string{"'54321.0'", "54321", "54321.5", "null", "'54321.0'"} {
+								exec(t, "set @rounding_key_source="+value)
+								got := query(t, "execute rounding_key using @rounding_key_source")
+								require.Equal(t, query(t, "execute rounding_key_control using @rounding_key_source"), got, value)
+								if value == "54321" || value == "'54321.0'" {
+									require.Equal(t, tc.want, got, value)
+								}
+							}
+						})
+					}
+				}
+			}
+		})
+		t.Run("nested_float_arithmetic_preserves_rows", func(t *testing.T) {
+			exec(t, "create table floating_filters(id int primary key, v double)")
+			defer conn.ExecContext(ctx, "drop table floating_filters")
+			exec(t, "insert into floating_filters values (1,1e-17),(2,2e0)")
+			want := [][]string{{"1"}, {"2"}}
+			require.Equal(t, want, query(t, "select id from floating_filters where cast(v+1e0 as double)=1e0 or v=2e0 order by id"))
+			require.Equal(t, want, query(t, "select id from floating_filters where v+1e0=1e0 or v=2e0 order by id"))
+		})
 		t.Run("ntile_null_runtime_error", func(t *testing.T) {
 			exec(t, "create table ntile_source(id int)")
 			exec(t, "insert into ntile_source values (1),(2)")
