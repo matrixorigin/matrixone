@@ -858,9 +858,9 @@ func TestPreparedExecutionPlanRoundTextUsesExactTextDomain(t *testing.T) {
 			wantExact: true,
 		},
 		{
-			name:   "unproven string source stays out of exact domain",
-			source: types.T_varchar.ToType(),
-			value: ParamValue{Value: "1.5"},
+			name:       "unproven string source stays out of exact domain",
+			source:     types.T_varchar.ToType(),
+			value:      ParamValue{Value: "1.5"},
 			wantDouble: true,
 		},
 		{
