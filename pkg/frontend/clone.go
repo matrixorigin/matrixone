@@ -782,6 +782,16 @@ type cloneAccountResolution struct {
 	snapshot    *plan2.Snapshot
 }
 
+func shouldCheckPlainClonePrivileges(ses *Session) bool {
+	if skipDataBranchPrivilegeCheck(ses) {
+		return false
+	}
+	// Built-in administrators can clone the resolved historical source without
+	// planning a SELECT against its possibly deleted current database or UDFs.
+	// Account, system-database, and snapshot validation still belongs to CLONE.
+	return !ses.GetTenantInfo().IsAdminRole()
+}
+
 // create table x.y clone r.s {MO_TS, SNAPSHOT}
 // create table x.y clone r.s {MO_TS, SNAPSHOT} to account t
 func handleCloneTable(
@@ -933,7 +943,7 @@ func handleCloneTable(
 		err = moerr.NewInternalErrorNoCtxf("only sys can clone table to another account")
 		return
 	}
-	if resolvedAccounts == nil && !skipDataBranchPrivilegeCheck(ses) {
+	if resolvedAccounts == nil && shouldCheckPlainClonePrivileges(ses) {
 		_, err = authenticateDataBranchCreateTable(reqCtx, ses, &tree.DataBranchCreateTable{
 			SrcTable: stmt.SrcTable, CreateTable: stmt.CreateTable, ToAccountOpt: stmt.ToAccountOpt,
 		})
@@ -1234,8 +1244,10 @@ func handleCloneDatabaseWithSource(
 				return
 			}
 		}
-		if _, err = authenticateDataBranchCreateDatabaseSourceTables(reqCtx, ses, &tree.DataBranchCreateDatabase{CloneDatabase: *stmt}, source); err != nil {
-			return
+		if shouldCheckPlainClonePrivileges(ses) {
+			if _, err = authenticateDataBranchCreateDatabaseSourceTables(reqCtx, ses, &tree.DataBranchCreateDatabase{CloneDatabase: *stmt}, source); err != nil {
+				return
+			}
 		}
 	}
 	fromAccountID := source.opAccountId

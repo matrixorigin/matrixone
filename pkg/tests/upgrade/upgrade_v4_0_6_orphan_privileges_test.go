@@ -128,29 +128,29 @@ func TestV406MaintenanceCleansHistoricalOrphanObjectPrivileges(t *testing.T) {
 		bulkDatabaseOrphanStart := maxObjectID + 2000000
 
 		copyRolePrivilegeRangeForUpgradeTest(
-			t, ctx, conn, roleName, databaseID, bulkDatabaseOrphanStart,
+			t, ctx, sqlExecutor, roleName, databaseID, bulkDatabaseOrphanStart,
 			bulkDatabaseOrphanCount, "database", "d",
 		)
 		copyRolePrivilegeForUpgradeTest(
-			t, ctx, conn, roleName, databaseID, orphanIDs[0], "database", "d", "d",
+			t, ctx, sqlExecutor, roleName, databaseID, orphanIDs[0], "database", "d", "d",
 		)
 		copyRolePrivilegeForUpgradeTest(
-			t, ctx, conn, roleName, databaseID, orphanIDs[1], "table", "d.*", "d.*",
+			t, ctx, sqlExecutor, roleName, databaseID, orphanIDs[1], "table", "d.*", "d.*",
 		)
 		copyRolePrivilegeForUpgradeTest(
-			t, ctx, conn, roleName, tableID, orphanIDs[2], "table", "d.t", "d.t",
+			t, ctx, sqlExecutor, roleName, tableID, orphanIDs[2], "table", "d.t", "d.t",
 		)
 		copyRolePrivilegeForUpgradeTest(
-			t, ctx, conn, roleName, viewID, orphanIDs[3], "view", "d.t", "d.t",
+			t, ctx, sqlExecutor, roleName, viewID, orphanIDs[3], "view", "d.t", "d.t",
 		)
 		copyRolePrivilegeForUpgradeTest(
-			t, ctx, conn, roleName, sequenceID, orphanIDs[4], "table", "d.t", "d.t",
+			t, ctx, sqlExecutor, roleName, sequenceID, orphanIDs[4], "table", "d.t", "d.t",
 		)
 		copyRolePrivilegeForUpgradeTest(
-			t, ctx, conn, roleName, tableID, malformedControlID, "table", "d.t", "legacy.unknown",
+			t, ctx, sqlExecutor, roleName, tableID, malformedControlID, "table", "d.t", "legacy.unknown",
 		)
 		copyRolePrivilegeForUpgradeTest(
-			t, ctx, conn, roleName, tableID, hiddenIndexID, "table", "d.t", "d.t",
+			t, ctx, sqlExecutor, roleName, tableID, hiddenIndexID, "table", "d.t", "d.t",
 		)
 
 		require.Equal(t, 5, countRolePrivilegesByObjectIDs(
@@ -583,7 +583,7 @@ func queryOrphanPrivilegeUpgradeID(
 func copyRolePrivilegeForUpgradeTest(
 	t *testing.T,
 	ctx context.Context,
-	conn *sql.Conn,
+	sqlExecutor executor.SQLExecutor,
 	roleName string,
 	sourceObjectID uint64,
 	targetObjectID uint64,
@@ -605,13 +605,17 @@ func copyRolePrivilegeForUpgradeTest(
 		sqlquote.String(objectType),
 		sqlquote.String(sourcePrivilegeLevel),
 	)
-	mustExecOrphanPrivilegeUpgradeSQL(t, ctx, conn, statement)
+	seeded, err := execOrphanPrivilegeUpgradeInternalSQLForAccountAffected(
+		ctx, sqlExecutor, catalog.System_Account, statement,
+	)
+	require.NoError(t, err, statement)
+	require.Equal(t, uint64(1), seeded, statement)
 }
 
 func copyRolePrivilegeRangeForUpgradeTest(
 	t *testing.T,
 	ctx context.Context,
-	conn *sql.Conn,
+	sqlExecutor executor.SQLExecutor,
 	roleName string,
 	sourceObjectID uint64,
 	targetObjectIDStart uint64,
@@ -645,7 +649,11 @@ func copyRolePrivilegeRangeForUpgradeTest(
 		sqlquote.String(objectType),
 		sqlquote.String(privilegeLevel),
 	)
-	mustExecOrphanPrivilegeUpgradeSQL(t, ctx, conn, statement)
+	seeded, err := execOrphanPrivilegeUpgradeInternalSQLForAccountAffected(
+		ctx, sqlExecutor, catalog.System_Account, statement,
+	)
+	require.NoError(t, err, statement)
+	require.Equal(t, count, seeded, statement)
 }
 
 func execOrphanPrivilegeUpgradeInternalSQLForAccountAffected(

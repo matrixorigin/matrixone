@@ -38,6 +38,28 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/util/sysview"
 )
 
+func TestShouldCheckPlainClonePrivileges(t *testing.T) {
+	for _, tc := range []struct {
+		name   string
+		tenant *TenantInfo
+		want   bool
+	}{
+		{"internal", nil, false},
+		{"sys administrator", &TenantInfo{Tenant: "sys", User: "root", DefaultRole: "moadmin"}, false},
+		{"tenant administrator", &TenantInfo{Tenant: "app", User: "root", DefaultRole: "accountadmin"}, false},
+		{"sys ordinary role", &TenantInfo{Tenant: "sys", User: "reader", DefaultRole: "reader"}, true},
+		{"tenant ordinary role", &TenantInfo{Tenant: "app", User: "reader", DefaultRole: "reader"}, true},
+		{"non-sys moadmin name", &TenantInfo{Tenant: "app", User: "reader", DefaultRole: "moadmin"}, true},
+		{"sys accountadmin name", &TenantInfo{Tenant: "sys", User: "reader", DefaultRole: "accountadmin"}, true},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			ses := newValidateSession(t)
+			ses.SetTenantInfo(tc.tenant)
+			require.Equal(t, tc.want, shouldCheckPlainClonePrivileges(ses))
+		})
+	}
+}
+
 func TestWithCloneLockContext(t *testing.T) {
 	proc := newValidateSession(t).proc
 	oldCtx, cancel := context.WithCancel(context.Background())
