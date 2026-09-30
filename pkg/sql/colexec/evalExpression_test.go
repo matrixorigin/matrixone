@@ -3503,6 +3503,53 @@ func TestParamExpressionExecutorDoesNotCacheLookupFailure(t *testing.T) {
 	require.Equal(t, "recovered", result.GetStringAt(0))
 }
 
+func TestTypedParamExpressionExecutorResetAndFailure(t *testing.T) {
+	proc := testutil.NewProcess(t)
+	defer proc.Free()
+	expr := &plan.Expr{
+		Typ:  plan.Type{Id: int32(types.T_int64)},
+		Expr: &plan.Expr_P{P: &plan.ParamRef{Pos: 0}},
+	}
+	executor, err := NewExpressionExecutor(proc, expr)
+	require.NoError(t, err)
+	defer executor.Free()
+	for _, tc := range []struct {
+		value              string
+		null, masked, fail bool
+		want               int64
+	}{
+		{value: "2147483648", want: 2147483648},
+		{value: "invalid", masked: true},
+		{value: "invalid", fail: true},
+		{null: true},
+		{value: "-2147483649", want: -2147483649},
+	} {
+		func() {
+			executor.ResetForNextQuery()
+			params := vector.NewVec(types.T_text.ToType())
+			defer func() { proc.SetPrepareParams(nil); params.Free(proc.Mp()) }()
+			require.NoError(t, vector.AppendBytes(params, []byte(tc.value), tc.null, proc.Mp()))
+			proc.SetPrepareParams(params)
+			var selected []bool
+			if tc.masked {
+				selected = []bool{false}
+			}
+			result, err := executor.Eval(proc, []*batch.Batch{batch.EmptyForConstFoldBatch}, selected)
+			if tc.fail {
+				require.Error(t, err)
+				return
+			}
+			require.NoError(t, err)
+			require.Equal(t, types.T_int64, result.GetType().Oid)
+			if tc.null || tc.masked {
+				require.True(t, result.IsNull(0))
+			} else {
+				require.Equal(t, tc.want, vector.GetFixedAtNoTypeCheck[int64](result, 0))
+			}
+		}()
+	}
+}
+
 func TestParamExpressionExecutorReevaluatesAfterResultTransfer(t *testing.T) {
 	tests := []struct {
 		name  string
