@@ -115,6 +115,7 @@ func preparedExecutionBindingKey(bindings []plan2.PreparedSourceBinding, values 
 		if param, ok := values[i].(plan2.ParamValue); ok {
 			writeInt(int64(param.PrepareParamKind), ':')
 			writeBool(param.IsBinaryProtocol, ':')
+			writeBool(param.HasSourceType, ':')
 			writeBool(param.IsBin, ':')
 			writeBool(param.IsBinaryString, ':')
 			writeInt(int64(param.RuntimeStringDomain), ':')
