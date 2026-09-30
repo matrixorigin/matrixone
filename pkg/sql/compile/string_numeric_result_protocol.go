@@ -48,6 +48,67 @@ func (c *Compile) constrainStringNumericResultWorkers(qry *plan.Query) error {
 	return err
 }
 
+// constrainStrictStringNumericCompatibilityWorkers keeps expressions whose
+// conversion semantics changed in v103 away from older workers. Historical
+// CEIL/FLOOR overloads require this in every mode. A legacy process marker is
+// rejected rather than silently treated as the new sender contract.
+func (c *Compile) constrainStrictStringNumericCompatibilityWorkers(qry *plan.Query) error {
+	if c.execType != plan2.ExecTypeAP_MULTICN {
+		return nil
+	}
+	features, err := plan.RequiredRemoteExpressionFeatures(qry)
+	if err != nil || !requiresStringNumericCompatibilityProtocol(c.proc, features) {
+		return err
+	}
+	if c.proc.GetSessionInfo().LegacyNumericCompatibilityMode {
+		return moerr.NewNotSupportedNoCtx(
+			"string numeric compatibility cannot run with a legacy session contract",
+		)
+	}
+	supported, err := remoteWorkersSupportProtocol(c.proc, c.cnList, defines.MORPCVersion103)
+	if err != nil {
+		return err
+	}
+	if supported {
+		return nil
+	}
+	c.execType = plan2.ExecTypeAP_ONECN
+	c.cnList, err = c.scheduleQueryWorkers()
+	return err
+}
+
+// validateStrictStringNumericCompatibilityDestination rechecks the worker
+// capability at the final destination probe before the scope is serialized.
+// A downgrade visible to this probe is rejected; the query-service probe and
+// pipeline send do not bind a process generation, so a replacement after this
+// probe is outside the guard and requires quiescent rollout.
+func validateStrictStringNumericCompatibilityDestination(proc *process.Process, p *pipeline.Pipeline) error {
+	if p == nil || p.Node == nil || p.Node.Addr == "" {
+		return moerr.NewNotSupportedNoCtx(
+			"string numeric compatibility requires a known v103 remote destination",
+		)
+	}
+	if proc.GetSessionInfo().LegacyNumericCompatibilityMode {
+		return moerr.NewNotSupportedNoCtx(
+			"string numeric compatibility cannot run with a legacy session contract",
+		)
+	}
+	supported, err := remoteWorkersSupportProtocol(
+		proc,
+		engine.Nodes{{Id: p.Node.Id, Addr: p.Node.Addr}},
+		defines.MORPCVersion103,
+	)
+	if err != nil {
+		return err
+	}
+	if !supported {
+		return moerr.NewNotSupportedNoCtx(
+			"string numeric compatibility requires MORPC protocol version 103 on the remote destination",
+		)
+	}
+	return nil
+}
+
 // validateStringNumericResultDestination rechecks the actual serialized
 // destination at send time. A worker can be downgraded or replaced after
 // compile-time placement, so coordinator-only version checks are insufficient.

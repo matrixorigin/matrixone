@@ -51,17 +51,35 @@ func TestPreparedPrecisionProtocolPlacementAndSend(t *testing.T) {
 	defer op.Release()
 	op.ProjectList = []*planpb.Expr{expr}
 	scope := &Scope{Magic: Remote, Proc: c.proc, NodeInfo: engine.Node{Id: "old-worker", Addr: "remote:6001"}, RootOp: op}
+	precisionPipeline, err := fillPipeline(scope)
+	require.NoError(t, err)
 	place := func(version int64) {
 		client.version = version
 		c.execType = plan2.ExecTypeAP_MULTICN
 		c.cnList = engine.Nodes{{Id: "old-worker", Addr: "remote:6001", Mcpu: 4}}
 		require.NoError(t, c.constrainPreparedPrecisionWorkers(qry))
 	}
+	client.version = defines.MORPCVersion94
+	require.ErrorContains(t, validatePreparedPrecisionDestination(c.proc, precisionPipeline), "remote destination")
+	client.version = defines.MORPCVersion95
+	require.NoError(t, validatePreparedPrecisionDestination(c.proc, precisionPipeline),
+		"the upstream prepared-scalar precision fence remains v95")
 	place(defines.MORPCVersion94)
 	require.Equal(t, plan2.ExecTypeAP_ONECN, c.execType)
 	_, err = encodeRemoteScope(scope, c.proc)
 	require.ErrorContains(t, err, "remote destination")
 	place(defines.MORPCVersion95)
+	require.Equal(t, plan2.ExecTypeAP_MULTICN, c.execType)
+	_, err = encodeRemoteScope(scope, c.proc)
+	require.ErrorContains(t, err, "version 103",
+		"the overlapping strict math contract has a later independent v103 fence")
+	place(int64(101))
+	_, err = encodeRemoteScope(scope, c.proc)
+	require.ErrorContains(t, err, "version 103")
+	place(int64(102))
+	_, err = encodeRemoteScope(scope, c.proc)
+	require.ErrorContains(t, err, "version 103")
+	place(defines.MORPCVersion103)
 	require.Equal(t, plan2.ExecTypeAP_MULTICN, c.execType)
 	_, err = encodeRemoteScope(scope, c.proc)
 	require.NoError(t, err)
@@ -79,6 +97,14 @@ func TestPreparedPrecisionProtocolPlacementAndSend(t *testing.T) {
 	_, err = decodeScope(data, c.proc, true, nil)
 	require.ErrorContains(t, err, "version 95")
 	rt.SetGlobalVariables(moruntime.MOProtocolVersion, defines.MORPCVersion95)
+	require.ErrorContains(t, validateRemoteExpressionPipelineProtocol(c.proc, p), "version 103")
+	_, err = decodeScope(data, c.proc, true, nil)
+	require.ErrorContains(t, err, "version 103")
+	rt.SetGlobalVariables(moruntime.MOProtocolVersion, int64(101))
+	require.ErrorContains(t, validateRemoteExpressionPipelineProtocol(c.proc, p), "version 103")
+	rt.SetGlobalVariables(moruntime.MOProtocolVersion, int64(102))
+	require.ErrorContains(t, validateRemoteExpressionPipelineProtocol(c.proc, p), "version 103")
+	rt.SetGlobalVariables(moruntime.MOProtocolVersion, defines.MORPCVersion103)
 	require.NoError(t, validateRemoteExpressionPipelineProtocol(c.proc, p))
 }
 

@@ -78,6 +78,10 @@ func TestPreparedNumericPredicateFiltering(t *testing.T) {
 		{"mixed unsafe between", "c between ? and ?", []string{"54321", "54322.104"}, false, false},
 		{"round zero precision", "c=round(?,?)", []string{"54321.0", "0"}, true, true},
 		{"truncate zero precision", "c=truncate(?,?)", []string{"54321.0", "0"}, true, true},
+		// The raw bytes spell a small decimal integer, but IsBin means the
+		// source is a binary value. Do not use its byte spelling to prove that
+		// the ROUND result fits the indexed BIGINT domain.
+		{"binary bytes zero precision collision", "c=round(?,?)", []string{"12345678", "0"}, false, true},
 		{"explicit precision cast", "c=round(?,cast(? as signed))", []string{"54321.0", "0"}, true, true},
 		{"round nonzero precision", "c=round(?,?)", []string{"54321.0", "1"}, false, true},
 		{"round negative precision", "c=round(?,?)", []string{"54321.0", "-1"}, false, true},
@@ -108,7 +112,12 @@ func TestPreparedNumericPredicateFiltering(t *testing.T) {
 						bindings[i].Type = types.T_varchar.ToType()
 					}
 				}
-				values[i] = ParamValue{Value: value, IsBinaryProtocol: true}
+				paramValue := ParamValue{Value: value, IsBinaryProtocol: true}
+				if tc.name == "binary bytes zero precision collision" && i == 0 {
+					paramValue.Value = []byte(value)
+					paramValue.IsBin = true
+				}
+				values[i] = paramValue
 				require.NoError(t, vector.AppendBytes(params, []byte(value), false, proc.Mp()))
 			}
 			proc.SetPrepareParams(params)
@@ -765,6 +774,198 @@ func TestPreparedExecutionPlanConsumerDomains(t *testing.T) {
 			}
 		})
 	}
+}
+
+func TestPreparedExecutionPlanMathPrecisionUsesSourceProvenance(t *testing.T) {
+	for _, tc := range []struct {
+		name       string
+		source     types.Type
+		value      ParamValue
+		wantCastID int32
+	}{
+		{
+			name:   "native double",
+			source: types.T_float64.ToType(),
+			value: ParamValue{
+				Value: 2.5, SourceType: types.T_float64.ToType(), HasSourceType: true,
+			},
+			wantCastID: function.IntegerArgumentCastOverload,
+		},
+		{
+			name:   "native decimal",
+			source: types.New(types.T_decimal64, 3, 1),
+			value: ParamValue{
+				Value: "2.5", SourceType: types.New(types.T_decimal64, 3, 1), HasSourceType: true,
+			},
+			wantCastID: function.IntegerArgumentCastOverload,
+		},
+		{
+			name:   "binary double",
+			source: types.T_float64.ToType(),
+			value: ParamValue{
+				Value: 2.5, SourceType: types.T_float64.ToType(), HasSourceType: true, IsBinaryProtocol: true,
+			},
+			wantCastID: 0,
+		},
+		{
+			name:       "unproven double",
+			source:     types.T_float64.ToType(),
+			value:      ParamValue{Value: 2.5},
+			wantCastID: 0,
+		},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			mock := NewMockOptimizer(false)
+			stmt, err := parsers.ParseOne(context.Background(), dialect.MYSQL, "select ceil(12.34, ?)", 1)
+			require.NoError(t, err)
+			defer stmt.Free()
+			bound, err := BuildPreparedExecutionPlan(&mock.ctxt, stmt,
+				[]PreparedSourceBinding{{Position: 0, Type: tc.source}}, []any{tc.value})
+			require.NoError(t, err)
+			ceil := findPlanFunctionExpr(bound.Plan, "ceil")
+			require.NotNil(t, ceil)
+			precision := ceil.GetF().Args[1]
+			require.NotNil(t, precision.GetF())
+			_, castID := function.DecodeOverloadID(precision.GetF().Func.Obj)
+			require.Equal(t, tc.wantCastID, castID, precision.String())
+		})
+	}
+}
+
+func TestPreparedExecutionPlanRoundTextUsesExactTextDomain(t *testing.T) {
+	for _, tc := range []struct {
+		name       string
+		source     types.Type
+		value      ParamValue
+		wantExact  bool
+		wantDouble bool
+	}{
+		{
+			name:   "COM_STMT complete text value",
+			source: types.T_text.ToType(),
+			value: ParamValue{
+				Value: "1.5", IsBinaryProtocol: true,
+				RuntimeStringDomain: types.RuntimeStringText,
+			},
+			wantExact: true,
+		},
+		{
+			name:   "SQL EXECUTE complete VARCHAR uses exact domain",
+			source: types.T_varchar.ToType(),
+			value: ParamValue{
+				Value: "1.5", SourceType: types.T_varchar.ToType(), HasSourceType: true,
+			},
+			wantExact: true,
+		},
+		{
+			name:       "unproven string source stays out of exact domain",
+			source:     types.T_varchar.ToType(),
+			value:      ParamValue{Value: "1.5"},
+			wantDouble: true,
+		},
+		{
+			name:   "COM_STMT binary literal stays out of exact domain",
+			source: types.T_text.ToType(),
+			value: ParamValue{
+				Value: "1.5", IsBinaryProtocol: true, IsBin: true,
+				RuntimeStringDomain: types.RuntimeStringText,
+			},
+			wantDouble: true,
+		},
+		{
+			name:   "COM_STMT binary runtime domain stays out of exact domain",
+			source: types.T_text.ToType(),
+			value: ParamValue{
+				Value: "1.5", IsBinaryProtocol: true,
+				RuntimeStringDomain: types.RuntimeStringBinary,
+			},
+			wantDouble: true,
+		},
+		{
+			name:   "COM_STMT VARBINARY source stays out of exact domain",
+			source: types.T_varbinary.ToType(),
+			value: ParamValue{
+				Value: "1.5", IsBinaryProtocol: true,
+				RuntimeStringDomain: types.RuntimeStringBinary,
+			},
+			wantDouble: true,
+		},
+		{
+			name:   "COM_STMT binary-string metadata stays out of exact domain",
+			source: types.T_text.ToType(),
+			value: ParamValue{
+				Value: "1.5", IsBinaryProtocol: true, IsBinaryString: true,
+				RuntimeStringDomain: types.RuntimeStringText,
+			},
+			wantDouble: true,
+		},
+		{
+			name:   "SQL EXECUTE binary static source stays out of exact domain",
+			source: types.T_text.ToType(),
+			value: ParamValue{
+				Value: "1.5", SourceType: types.NewWithCharset(types.T_varchar, 8, 0, types.CharsetBinary),
+				HasSourceType: true,
+			},
+			wantDouble: true,
+		},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			mock := NewMockOptimizer(false)
+			stmt, err := parsers.ParseOne(context.Background(), dialect.MYSQL, "select round(?, ?)", 2)
+			require.NoError(t, err)
+			defer stmt.Free()
+			precision := ParamValue{
+				Value: "0", IsBinaryProtocol: true,
+				RuntimeStringDomain: types.RuntimeStringText,
+			}
+			bound, err := BuildPreparedExecutionPlan(&mock.ctxt, stmt,
+				[]PreparedSourceBinding{
+					{Position: 0, Type: tc.source},
+					{Position: 1, Type: types.T_text.ToType()},
+				}, []any{tc.value, precision})
+			require.NoError(t, err)
+			round := findPlanFunctionExpr(bound.Plan, "round")
+			require.NotNil(t, round)
+			require.Len(t, round.GetF().Args, 2)
+			valueArg := round.GetF().Args[0]
+			if tc.wantExact {
+				require.True(t, bound.ValueDependent)
+				require.Equal(t, int32(types.T_decimal64), valueArg.Typ.Id, valueArg.String())
+				require.NotNil(t, valueArg.GetF(), "the exact domain must wrap, not replace, the parameter")
+				require.NotNil(t, valueArg.GetF().Args[0].GetP(), valueArg.String())
+				require.Equal(t, int32(0), valueArg.GetF().Args[0].GetP().Pos)
+			} else {
+				require.NotEqual(t, int32(types.T_decimal64), valueArg.Typ.Id, valueArg.String())
+			}
+			if tc.wantDouble {
+				require.Equal(t, int32(types.T_float64), valueArg.Typ.Id, valueArg.String())
+			}
+			precisionArg := round.GetF().Args[1]
+			require.Equal(t, int32(types.T_int64), precisionArg.Typ.Id, precisionArg.String())
+		})
+	}
+}
+
+func TestPreparedExecutionPlanRoundScalarBinaryTextKeepsFallbackDomain(t *testing.T) {
+	mock := NewMockOptimizer(false)
+	stmt, err := parsers.ParseOne(context.Background(), dialect.MYSQL, "select round((select ?), 0)", 1)
+	require.NoError(t, err)
+	defer stmt.Free()
+
+	bound, err := BuildPreparedExecutionPlan(&mock.ctxt, stmt,
+		[]PreparedSourceBinding{{Position: 0, Type: types.T_text.ToType()}},
+		[]any{ParamValue{
+			Value: "2.5", IsBinaryProtocol: true, IsBinaryString: true,
+			RuntimeStringDomain: types.RuntimeStringText,
+		}},
+	)
+	require.NoError(t, err)
+	round := findPlanFunctionExpr(bound.Plan, "round")
+	require.NotNil(t, round)
+	require.Equal(t, int32(types.T_float64), round.GetF().Args[0].Typ.Id, round.String())
+	pos, ok := firstPlanParamPosition(round.GetF().Args[0])
+	require.True(t, ok, "binary source remains attached to the original marker")
+	require.Equal(t, int32(0), pos)
 }
 
 func TestPreparedBinarySourceKeepsRuntimeTextWidth(t *testing.T) {

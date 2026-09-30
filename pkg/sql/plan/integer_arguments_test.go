@@ -193,10 +193,14 @@ func TestIntegerArgumentPreparedRuntimeCandidates(t *testing.T) {
 		{`select conv("ff",?,?)`, []int32{0, 1}},
 		{`select period_add(?,?)`, []int32{0, 1}},
 		{`select period_diff(?,?)`, []int32{0, 1}},
-		{`select ceil(1.25,?)`, []int32{0}},
-		{`select floor(1.25,?)`, []int32{0}},
-		{`select round(1.25,?)`, []int32{0}},
-		{`select truncate(1.25,?)`, []int32{0}},
+		// Math precision retains ordinary strict INT64 casts, so these markers
+		// must not enter private integer-prefix source discovery. Their runtime
+		// source and CAST0 contract is covered by TestPreparedMathStringValueAndPrecisionRoles.
+		{`select ceil(1.25,?)`, nil},
+		{`select ceiling(1.25,?)`, nil},
+		{`select floor(1.25,?)`, nil},
+		{`select round(1.25,?)`, nil},
+		{`select truncate(1.25,?)`, nil},
 		{`select from_days(?)`, []int32{0}},
 		{`select week(cast("2026-09-20" as date),?)`, []int32{0}},
 		{`select yearweek(cast("2026-09-20" as date),?)`, []int32{0}},
@@ -234,26 +238,61 @@ func TestIntegerArgumentPreparedRuntimeCandidates(t *testing.T) {
 func TestPreparedCeilPrecisionScalarRuntime(t *testing.T) {
 	ctx := context.Background()
 	proc := testutil.NewProcess(t)
-	prepare := buildPreparedAggregatePlan(t, "select ceil(123.456, ?)")
+	prepare := buildPreparedAggregatePlan(t, "select ceil(123.456, ?), floor(123.456, ?)")
 	original := DeepCopyPlan(prepare.Plan)
 	for _, tc := range []struct {
-		name  string
-		value ParamValue
+		name              string
+		value             ParamValue
+		wantCeil          string
+		wantFloor         string
+		wantOverload      int32
+		wantPrecisionCast bool
 	}{
-		{"decimal", ParamValue{Value: "2.5", SourceType: types.New(types.T_decimal64, 2, 1), HasSourceType: true}},
-		{"double", ParamValue{Value: 2.5, SourceType: types.T_float64.ToType(), HasSourceType: true}},
-		{"text", ParamValue{Value: "2.5tail", SourceType: types.T_varchar.ToType(), HasSourceType: true}},
+		{"integer", ParamValue{Value: int64(2), SourceType: types.T_int64.ToType(), HasSourceType: true}, "123.46", "123.45", 0, false},
+		{"decimal", ParamValue{Value: "2.5", SourceType: types.New(types.T_decimal64, 2, 1), HasSourceType: true}, "123.456", "123.456", function.IntegerArgumentCastOverload, true},
+		{"double", ParamValue{Value: 2.5, SourceType: types.T_float64.ToType(), HasSourceType: true}, "123.460", "123.450", function.IntegerArgumentCastOverload, true},
+		{"binary double", ParamValue{Value: "2.5", IsBinaryProtocol: true, RuntimeType: types.T_float64.ToType(), HasRuntimeType: true}, "123.456", "123.456", 0, true},
+		{"text", ParamValue{Value: "2", SourceType: types.T_varchar.ToType(), HasSourceType: true}, "123.460", "123.450", 0, true},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
-			filled, err := FillValuesOfParamsInPlan(ctx, prepare.Plan, []any{tc.value})
+			filled, err := FillValuesOfParamsInPlan(ctx, prepare.Plan, []any{tc.value, tc.value})
 			require.NoError(t, err)
-			fn := findPlanFunctionExpr(filled, "ceil")
-			require.NotNil(t, fn)
-			require.True(t, isIntegerArgumentCast(fn.GetF().Args[1]))
-			result, free, err := colexec.GetReadonlyResultFromExpression(proc, fn, []*batch.Batch{batch.EmptyForConstFoldBatch})
-			require.NoError(t, err)
-			defer free()
-			require.NotNil(t, result)
+			for _, check := range []struct {
+				name string
+				want string
+			}{
+				{"ceil", tc.wantCeil},
+				{"floor", tc.wantFloor},
+			} {
+				t.Run(check.name, func(t *testing.T) {
+					fn := findPlanFunctionExpr(filled, check.name)
+					require.NotNil(t, fn)
+					precision := fn.GetF().Args[1]
+					require.Equal(t, int32(types.T_int64), precision.Typ.Id)
+					if tc.wantPrecisionCast {
+						require.NotNil(t, precision.GetF())
+						require.Equal(t, "cast", precision.GetF().Func.GetObjName())
+						_, overload := function.DecodeOverloadID(precision.GetF().Func.GetObj())
+						require.Equal(t, tc.wantOverload, overload)
+					} else {
+						require.Nil(t, precision.GetF())
+					}
+					result, free, err := colexec.GetReadonlyResultFromExpression(proc, fn, []*batch.Batch{batch.EmptyForConstFoldBatch})
+					require.NoError(t, err)
+					defer free()
+					require.NotNil(t, result)
+					var got string
+					switch types.T(result.GetType().Oid) {
+					case types.T_decimal64:
+						got = vector.GetFixedAtNoTypeCheck[types.Decimal64](result, 0).Format(result.GetType().Scale)
+					case types.T_decimal128:
+						got = vector.GetFixedAtNoTypeCheck[types.Decimal128](result, 0).Format(result.GetType().Scale)
+					default:
+						t.Fatalf("unexpected %s result type %s", check.name, result.GetType())
+					}
+					require.Equal(t, check.want, got)
+				})
+			}
 			require.True(t, proto.Equal(original, prepare.Plan), "execution specialization must leave the template unchanged")
 		})
 	}

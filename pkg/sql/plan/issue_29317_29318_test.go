@@ -168,14 +168,14 @@ func TestPreparedVariadicRuntimeSourceDomains(t *testing.T) {
 			want:   []types.T{types.T_float64, types.T_float64},
 		},
 		{
-			name: "field reverse coalesce with text null keeps exact result",
+			name: "field reverse coalesce with text null uses double domain",
 			sql:  "prepare p from 'select field(coalesce(abs(?), ?), abs(cast(9007199254740992 as decimal(20,0))))'", fn: "field",
 			values: []ParamValue{
 				{Value: nil, SourceType: types.T_text.ToType(), HasSourceType: true},
 				{Value: "9007199254740993", SourceType: types.New(types.T_decimal128, 20, 0),
 					HasSourceType: true, PrepareParamKind: vector.PrepareParamDecimal},
 			},
-			want: []types.T{types.T_decimal128, types.T_decimal128},
+			want: []types.T{types.T_float64, types.T_float64},
 		},
 		{
 			name: "field reverse coalesce with binary protocol null keeps exact result",
@@ -472,8 +472,8 @@ func TestPreparedRoundAndTruncateKeepRuntimeValueDomain(t *testing.T) {
 				"prepare p from 'select "+name+"(?,?)'")
 			require.NoError(t, err)
 			template := prepared.GetDcl().GetPrepare().Plan
-			require.Equal(t, []int32{0, 1}, PreparedPlanNumericFallbackParamPositions(template),
-				"value overload and integer precision each require execution-time source decoding")
+			require.Equal(t, []int32{0}, PreparedPlanNumericFallbackParamPositions(template),
+				"only the value overload requires execution-time source decoding; precision stays INT64")
 			fn := findPlanFunctionExpr(template, name)
 			require.NotNil(t, fn)
 			require.Equal(t, int32(types.T_float64), fn.GetF().Args[0].Typ.Id, fn.String())

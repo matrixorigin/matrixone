@@ -135,6 +135,47 @@ func preparedExactNumericStringType(ctx context.Context, ordinal int) (types.Typ
 	return PreparedRuntimeTypeFromString(spelling)
 }
 
+// preparedRoundTruncateTextSourceEligible limits exact spelling inference to
+// known text values at ROUND/TRUNCATE's value argument. Binary bytes, binary
+// static domains, numeric runtime types, and unknown sources keep their
+// existing coercion path.
+func preparedRoundTruncateTextSourceEligible(
+	ctx context.Context,
+	ordinal int,
+	binding PreparedSourceBinding,
+) bool {
+	state := preparedBindingState(ctx)
+	if state == nil || ordinal < 0 || ordinal >= len(state.values) {
+		return false
+	}
+	param, ok := state.values[ordinal].(ParamValue)
+	return ok && preparedRoundTruncateTextParamEligible(param, binding.Type)
+}
+
+func preparedRoundTruncateTextParamEligible(param ParamValue, sourceType types.Type) bool {
+	switch sourceType.Oid {
+	case types.T_char, types.T_varchar, types.T_text:
+	default:
+		return false
+	}
+	if types.StaticStringDomain(sourceType) != types.StringDomainText {
+		return false
+	}
+	if param.IsBin || param.IsBinaryString ||
+		param.RuntimeStringDomain == types.RuntimeStringBinary {
+		return false
+	}
+	if param.HasSourceType && (!isStringBackedType(param.SourceType) ||
+		types.StaticStringDomain(param.SourceType) != types.StringDomainText) {
+		return false
+	}
+	if param.HasRuntimeType && (!isStringBackedType(param.RuntimeType) ||
+		types.StaticStringDomain(param.RuntimeType) != types.StringDomainText) {
+		return false
+	}
+	return param.IsBinaryProtocol || param.HasSourceType
+}
+
 func preparedSourceBindings(ctx context.Context) []PreparedSourceBinding {
 	if state := preparedBindingState(ctx); state != nil {
 		return state.bindings
@@ -269,7 +310,8 @@ func preparedSafeRoundIntegerComparison(ctx context.Context, source *Expr, targe
 		return nil, false, nil
 	}
 	binding, bound := state.bindingForPosition(param.GetP().Pos)
-	if !bound || !binding.Type.Oid.IsMySQLString() {
+	if !bound || !preparedRoundTruncateTextSourceEligible(
+		ctx, int(param.GetP().Pos), binding) {
 		return nil, false, nil
 	}
 	value, present := preparedConfigurationValue(ctx, param)

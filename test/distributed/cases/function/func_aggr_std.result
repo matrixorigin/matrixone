@@ -1,3 +1,5 @@
+SET @func_aggr_std_saved_sql_mode = @@session.sql_mode;
+SET SESSION sql_mode = CONCAT_WS(',', NULLIF(@func_aggr_std_saved_sql_mode, ''), 'MYSQL_NUMERIC_COMPATIBILITY');
 SELECT STD(null);
 ➤ STD(null)[8,54,0]  𝄀
 null
@@ -269,3 +271,5 @@ SELECT VAR_POP(s) = 1.25 AS signed_var_ok, VAR_POP(DISTINCT u) = 1.25 AS unsigne
 ➔ signed_var_ok[-7,1,0]  ¦  unsigned_distinct_var_ok[-7,1,0]  ¦  signed_stddev_ok[-7,1,0]  ¦  unsigned_sample_ok[-7,1,0]  𝄀
 1  ¦  1  ¦  1  ¦  1
 DROP TABLE t_variance_integer_limits;
+SET SESSION sql_mode = @func_aggr_std_saved_sql_mode;
+SET @func_aggr_std_saved_sql_mode = NULL;

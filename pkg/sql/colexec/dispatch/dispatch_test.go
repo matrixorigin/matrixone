@@ -99,6 +99,68 @@ func TestMarshalRemoteBatchExplicitTextProtocolGate(t *testing.T) {
 	require.NoError(t, err)
 }
 
+func TestMarshalRemoteBatchNumericBinaryLiteralProtocolGate(t *testing.T) {
+	proc := testutil.NewProcess(t)
+	defer proc.Free()
+
+	bat := batch.NewWithSize(1)
+	bat.Vecs[0] = vector.NewVec(types.T_text.ToType())
+	require.NoError(t, vector.AppendBytesList(
+		bat.Vecs[0], [][]byte{[]byte("1"), []byte("1")}, nil, proc.Mp()))
+	require.NoError(t, bat.Vecs[0].SetIsBinRowsWithMP([]bool{true, false}, proc.Mp()))
+	bat.SetRowCount(2)
+	defer bat.Clean(proc.Mp())
+
+	runtime := moruntime.ServiceRuntime(proc.GetService())
+	original, hadOriginal := runtime.GetGlobalVariables(moruntime.MOProtocolVersion)
+	t.Cleanup(func() {
+		if hadOriginal {
+			runtime.SetGlobalVariables(moruntime.MOProtocolVersion, original)
+		} else {
+			runtime.SetGlobalVariables(moruntime.MOProtocolVersion, defines.MORPCLatestVersion)
+		}
+	})
+
+	for _, version := range []any{nil, "unknown"} {
+		runtime.SetGlobalVariables(moruntime.MOProtocolVersion, version)
+		buf := bytes.NewBufferString("sentinel")
+		_, err := marshalRemoteBatch(proc, bat, buf)
+		require.ErrorContains(t, err, "MORPCVersion103", "unknown runtime protocol state must fail closed")
+		require.Equal(t, "sentinel", buf.String(), "rejection must precede stable batch writes")
+	}
+	runtime.SetGlobalVariables(moruntime.MOProtocolVersion, int64(101))
+	buf := bytes.NewBufferString("sentinel")
+	_, err := marshalRemoteBatch(proc, bat, buf)
+	require.ErrorContains(t, err, "MORPCVersion103")
+	require.Equal(t, "sentinel", buf.String(), "pre-v103 rejection must precede stable batch writes")
+
+	runtime.SetGlobalVariables(moruntime.MOProtocolVersion, int64(102))
+	buf.Reset()
+	_, err = marshalRemoteBatch(proc, bat, buf)
+	require.ErrorContains(t, err, "MORPCVersion103")
+	require.Equal(t, "", buf.String(), "v102 rejection must precede stable batch writes")
+
+	runtime.SetGlobalVariables(moruntime.MOProtocolVersion, int64(defines.MORPCVersion103))
+	buf.Reset()
+	encoded, err := marshalRemoteBatch(proc, bat, buf)
+	require.NoError(t, err)
+	decoded := batch.NewOffHeapEmpty()
+	defer decoded.Clean(proc.Mp())
+	require.NoError(t, decoded.UnmarshalBinaryForPipeline(encoded, proc.Mp()))
+	require.True(t, decoded.Vecs[0].GetIsBinAt(0))
+	require.False(t, decoded.Vecs[0].GetIsBinAt(1))
+
+	plain := batch.NewWithSize(1)
+	plain.Vecs[0] = vector.NewVec(types.T_text.ToType())
+	require.NoError(t, vector.AppendBytes(plain.Vecs[0], []byte("1"), false, proc.Mp()))
+	plain.SetRowCount(1)
+	defer plain.Clean(proc.Mp())
+	runtime.SetGlobalVariables(moruntime.MOProtocolVersion, int64(defines.MORPCVersion99))
+	plainEncoded, err := marshalRemoteBatch(proc, plain, &bytes.Buffer{})
+	require.NoError(t, err, "unmarked batches do not require the numeric provenance fence")
+	require.NotEmpty(t, plainEncoded)
+}
+
 func (child *emptyDispatchChild) Call(*process.Process) (vm.CallResult, error) {
 	close(child.called)
 	return vm.NewCallResult(), nil

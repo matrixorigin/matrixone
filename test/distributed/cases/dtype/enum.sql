@@ -196,12 +196,20 @@ show columns from insert01;
 select id, status + 0, status = 1, status = 'Pending' from insert01 order by id;
 select id from insert01 where status = 3 order by id;
 select id from insert01 where status in (1, 4) order by id;
+set @enum_string_compare_saved_sql_mode = @@session.sql_mode;
+set session sql_mode = concat_ws(',', nullif(@enum_string_compare_saved_sql_mode, ''), 'MYSQL_NUMERIC_COMPATIBILITY');
 select id from insert01 where status in ('Pending', 4) order by id;
+set session sql_mode = @enum_string_compare_saved_sql_mode;
+set @enum_string_compare_saved_sql_mode = NULL;
 delete from insert01 where status=3;
 update insert01 set status='Pending' where status=2;
 select * from insert01;
 select * from insert01 where status=4;
+set @enum_string_compare_saved_sql_mode = @@session.sql_mode;
+set session sql_mode = concat_ws(',', nullif(@enum_string_compare_saved_sql_mode, ''), 'MYSQL_NUMERIC_COMPATIBILITY');
 select * from insert01 where status in ('Pending',4);
+set session sql_mode = @enum_string_compare_saved_sql_mode;
+set @enum_string_compare_saved_sql_mode = NULL;
 drop table insert01;
 
 -- MySQL evaluates ENUM/SET from their stored ordinal/bitmap in every numeric

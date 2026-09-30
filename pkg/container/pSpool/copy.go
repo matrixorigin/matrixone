@@ -177,7 +177,6 @@ func (cb *cachedBatch) GetCopiedBatch(
 			}
 			dst.Vecs[i].SetGrouping(vec.GetGrouping())
 		}
-		dst.Vecs[i].SetIsBin(vec.GetIsBin())
 		if vec.IsConst() {
 			// GetUnionAllFunction already propagates row provenance for the
 			// non-constant path. Constants still need their scalar metadata
@@ -187,6 +186,10 @@ func (cb *cachedBatch) GetCopiedBatch(
 				return nil, false, 0, err
 			}
 			if err = dst.Vecs[i].SetRuntimeStringDomainWithMP(vec.GetRuntimeStringDomainAt(0), cb.mp); err != nil {
+				cb.CacheBatch(true, cacheID, dst)
+				return nil, false, 0, err
+			}
+			if err = dst.Vecs[i].SetIsBinAt(0, vec.GetIsBinAt(0), cb.mp); err != nil {
 				cb.CacheBatch(true, cacheID, dst)
 				return nil, false, 0, err
 			}

@@ -78,6 +78,18 @@ func TestResourceAttemptOwnerEligible(t *testing.T) {
 	require.False(t, resourceAttemptOwnerEligible(derived))
 }
 
+func TestPreparedExecutionBindingKeyIncludesSourceTypeProvenance(t *testing.T) {
+	binding := []plan2.PreparedSourceBinding{{Position: 0, Type: types.T_float64.ToType()}}
+	proven := []any{plan2.ParamValue{
+		Value: 2.5, SourceType: types.T_float64.ToType(), HasSourceType: true,
+	}}
+	unproven := []any{plan2.ParamValue{Value: 2.5}}
+	require.NotEqual(t,
+		preparedExecutionBindingKey(binding, proven),
+		preparedExecutionBindingKey(binding, unproven),
+		"source-aware math precision binding must not reuse an inferred-source plan")
+}
+
 func (m *mockCompile) Run(ts uint64) (*util2.RunResult, error) { return m.runFunc(ts) }
 func (m *mockCompile) GetPlan() *plan.Plan                     { return m.getPlanFunc() }
 func (m *mockCompile) PlanGenerationRebuilt() bool             { return m.planGenerationRebuilt }
@@ -322,20 +334,21 @@ func newPreparedExecuteEnvForSQLWithCompilerContext(
 	fixedIntegerParamPositions, hasPaginationParams, hasLagLeadParams :=
 		preparedFixedIntegerParamPositions(preparePlan.GetDcl().GetPrepare().Plan)
 	prepareStmt := &PrepareStmt{
-		Name:                       stmtName,
-		Sql:                        prepareString.Sql,
-		PreparePlan:                preparePlan,
-		PrepareStmt:                stmts[0],
-		NativeMode:                 ses.sqlModeHasMatrixOneNative(),
-		OnlyFullGroupBy:            ses.sqlModeHasOnlyFullGroupBy(),
-		BoolSumAvg:                 ses.sqlModeHasEnableBoolSumAvg(),
-		divPrecisionIncrement:      ses.currentDivPrecisionIncrement(),
-		sqlModeFlagsSet:            true,
-		divPrecisionIncrementSet:   true,
-		getFromSendLongData:        make(map[int]struct{}),
-		protocolVersion:            currentProtocolVersion(proc),
-		directResultParamPositions: plan2.PreparedPlanDirectResultParamPositions(preparePlan.GetDcl().GetPrepare().Plan),
-		inetNtoaParamPositions:     plan2.PreparedPlanInetNtoaParamPositions(preparePlan.GetDcl().GetPrepare().Plan),
+		Name:                          stmtName,
+		Sql:                           prepareString.Sql,
+		PreparePlan:                   preparePlan,
+		PrepareStmt:                   stmts[0],
+		NativeMode:                    ses.sqlModeHasMatrixOneNative(),
+		MySQLNumericCompatibilityMode: ses.sqlModeHasMySQLNumericCompatibility(),
+		OnlyFullGroupBy:               ses.sqlModeHasOnlyFullGroupBy(),
+		BoolSumAvg:                    ses.sqlModeHasEnableBoolSumAvg(),
+		divPrecisionIncrement:         ses.currentDivPrecisionIncrement(),
+		sqlModeFlagsSet:               true,
+		divPrecisionIncrementSet:      true,
+		getFromSendLongData:           make(map[int]struct{}),
+		protocolVersion:               currentProtocolVersion(proc),
+		directResultParamPositions:    plan2.PreparedPlanDirectResultParamPositions(preparePlan.GetDcl().GetPrepare().Plan),
+		inetNtoaParamPositions:        plan2.PreparedPlanInetNtoaParamPositions(preparePlan.GetDcl().GetPrepare().Plan),
 		jsonComparisonParamPositions: plan2.PreparedJSONComparisonParamPositions(
 			preparePlan.GetDcl().GetPrepare().Plan),
 		jsonMemberOfParamPositions: plan2.PreparedJSONMemberOfParamPositions(
@@ -370,6 +383,33 @@ func newPreparedExecuteEnvForSQLWithCompilerContext(
 	proc.SetResolveVariableStringDomainFunc(ses.txnCompileCtx.ResolveVariableStringDomain)
 	proc.SetResolveVariablePrepareParamKindFunc(ses.txnCompileCtx.ResolveVariablePrepareParamKind)
 	return ses, prepareStmt, cw, execCtx
+}
+
+func TestInitExecuteStmtParamRebuildsPreparedPlanWhenMySQLNumericCompatibilityChanges(t *testing.T) {
+	ses, prepareStmt, cw, execCtx := newPreparedExecuteEnv(t, 113)
+	defer prepareStmt.Close()
+
+	execCtx.reqCtx = defines.AttachAccountId(execCtx.reqCtx, catalog.System_Account)
+	require.NoError(t, ses.SetSessionSysVar(execCtx.reqCtx, "sql_mode", ""))
+	prepareStmt.MySQLNumericCompatibilityMode = false
+	prepareStmt.sqlModeFlagsSet = true
+	originalPlan := prepareStmt.PreparePlan
+	require.NoError(t, ses.SetSessionSysVar(
+		execCtx.reqCtx, "sql_mode", "MYSQL_NUMERIC_COMPATIBILITY"))
+
+	_, retPlan, retStmt, _, _, err := initExecuteStmtParam(execCtx, ses, cw, nil, prepareStmt.Name)
+	require.NoError(t, err)
+	require.NotNil(t, retPlan)
+	require.NotNil(t, retStmt)
+	require.True(t, prepareStmt.MySQLNumericCompatibilityMode)
+	require.NotSame(t, originalPlan, prepareStmt.PreparePlan)
+
+	compatibilityPlan := prepareStmt.PreparePlan
+	require.NoError(t, ses.SetSessionSysVar(execCtx.reqCtx, "sql_mode", ""))
+	_, _, _, _, _, err = initExecuteStmtParam(execCtx, ses, cw, nil, prepareStmt.Name)
+	require.NoError(t, err)
+	require.False(t, prepareStmt.MySQLNumericCompatibilityMode)
+	require.NotSame(t, compatibilityPlan, prepareStmt.PreparePlan)
 }
 
 func TestInitExecuteStmtParamPreservesStaticBinarySourceType(t *testing.T) {
@@ -2336,6 +2376,13 @@ func TestCOMStmtInetNtoaDomainHintDoesNotLeakIntoComparison(t *testing.T) {
 		prepareStmt.Close()
 		scratchPrepare.Close()
 	}()
+	// This assertion covers the legacy text-prefix comparison semantics.  Keep
+	// it explicit now that strict numeric conversion is the default; without
+	// the compatibility flag the DATE value must fail when compared as a
+	// number.
+	require.NoError(t, ses.SetSessionSysVar(
+		execCtx.reqCtx, "sql_mode", "MYSQL_NUMERIC_COMPATIBILITY"))
+	refreshStatementScopedSessionInfo(ses, cw.proc)
 
 	require.NoError(t, proto.ParseExecuteData(
 		execCtx.reqCtx, cw.proc, prepareStmt,
@@ -6171,6 +6218,12 @@ func TestPreparedUserVariableStringDomainIsBoundPerStatement(t *testing.T) {
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			ses, scratch, cw, execCtx := newPreparedExecuteEnv(t, 124)
+			// This fixture exercises prepared string-domain binding while keeping
+			// legacy numeric-prefix behavior for @bound_s + 0 explicit.
+			execCtx.reqCtx = defines.AttachAccountId(execCtx.reqCtx, catalog.System_Account)
+			require.NoError(t, ses.SetSessionSysVar(
+				execCtx.reqCtx, "sql_mode", "MYSQL_NUMERIC_COMPATIBILITY"))
+			refreshStatementScopedSessionInfo(ses, cw.proc)
 			t.Cleanup(func() {
 				cw.proc.SetPrepareParams(nil)
 				scratch.Close()

@@ -31,6 +31,7 @@ func TestDeferredJoinConstantDiagnosticActivationAndReuse(t *testing.T) {
 	proc := testutil.NewProcess(t)
 	defer proc.Free()
 	proc.SetBaseProcessRunningStatus(true)
+	proc.GetSessionInfo().MySQLNumericCompatibilityMode = true
 	session := &preparedCastWarningSession{}
 	proc.Session = session
 	sourceType, targetType := types.T_text.ToType(), types.T_float64.ToType()

@@ -14,7 +14,11 @@
 
 package function
 
-import "github.com/matrixorigin/matrixone/pkg/container/types"
+import (
+	"strings"
+
+	"github.com/matrixorigin/matrixone/pkg/container/types"
+)
 
 // integerParameter declares an integer evaluation context, not a preference in
 // the global numeric conversion lattice. A count does not become an unsigned
@@ -32,6 +36,9 @@ const (
 type integerParameter struct {
 	position int
 	target   types.T
+	// Math precision keeps ordinary CAST semantics, including strict integer
+	// text and rounding, instead of private integer-prefix evaluation.
+	ordinaryCast bool
 	// physicalTarget preserves a legacy executor signature after logical
 	// parameter coercion. Zero means the executor consumes target directly.
 	physicalTarget types.T
@@ -98,14 +105,44 @@ func IntegerArgumentTargetForSource(name string, position int, source types.T, b
 	return parameter.sourceTarget(source, binaryLiteral)
 }
 
-// IntegerArgumentTarget exposes the same parameter contract to AST binding,
-// expression rebinding and prepared specialization. Positions are zero-based.
+// IntegerArgumentTarget exposes private integer-evaluation contracts to AST
+// binding, expression rebinding and prepared specialization. Ordinary-cast
+// parameters still participate in signature matching. Positions are zero-based.
 func IntegerArgumentTarget(name string, position int) (types.T, bool) {
 	parameter, ok := integerParameterForPosition(name, position)
-	if !ok || parameter.mode != fixedIntegerParameter || parameter.temporal || parameter.uuid {
+	if !ok || parameter.ordinaryCast || parameter.mode != fixedIntegerParameter || parameter.temporal || parameter.uuid {
 		return 0, false
 	}
 	return parameter.target, true
+}
+
+// IntegerArgumentOrdinaryCastTarget exposes ordinary integer-cast roles that
+// still need source-domain-aware handling by selected consumers.  At present
+// only CEIL/FLOOR precision uses the native numeric integer conversion while
+// retaining ordinary strict CAST behavior for text.
+func IntegerArgumentOrdinaryCastTarget(name string, position int) (types.T, bool) {
+	parameter, ok := integerParameterForPosition(name, position)
+	if !ok || !parameter.ordinaryCast || position != 1 {
+		return 0, false
+	}
+	switch strings.ToLower(name) {
+	case "ceil", "ceiling", "floor":
+		return parameter.target, true
+	default:
+		return 0, false
+	}
+}
+
+// IntegerArgumentNativeOrdinaryCastTarget identifies source domains whose
+// legacy integer argument conversion is native numeric evaluation rather than
+// public CAST parsing/rounding. Text sources deliberately remain ordinary CAST.
+func IntegerArgumentNativeOrdinaryCastTarget(name string, position int, source types.T) (types.T, bool) {
+	target, ok := IntegerArgumentOrdinaryCastTarget(name, position)
+	if !ok || !(source.IsInteger() || source.IsFloat() || source.IsDecimal() || source == types.T_bool || source == types.T_bit ||
+		source == types.T_year || source == types.T_enum) {
+		return 0, false
+	}
+	return target, true
 }
 
 func IntegerArgumentPhysicalTarget(name string, position int) (types.T, bool) {
