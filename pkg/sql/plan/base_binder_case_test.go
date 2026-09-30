@@ -385,6 +385,19 @@ func TestRegexpBinaryCastAcrossQueryBoundaries(t *testing.T) {
 		sql     string
 		wantErr bool
 	}{
+		{"select regexp_like(if(true, cast('abc' as binary(3)), cast('abc' as binary(3))), 'a')", true},
+		{"select regexp_like(if(false, cast('abc' as binary(3)), 'abc'), 'a')", true},
+		{"select regexp_like(if(true, cast(null as binary(3)), cast(null as binary(3))), 'a')", true},
+		{"select regexp_like(coalesce(cast('abc' as binary(3)), cast('abc' as binary(3))), 'a')", true},
+		{"select regexp_like(coalesce(cast(null as binary(3)), cast(null as binary(3))), 'a')", true},
+		{"select regexp_like(if(true, cast(@v as binary(3)), cast(@v as binary(3))), 'a')", true},
+		{"select regexp_like(cast(substring(@v, 1, 3) as binary), 'a')", true},
+		{"select regexp_like(cast(concat(@v, '') as binary), 'a')", false},
+		{"select regexp_like(cast(lower(@v) as binary), 'a')", false},
+		{"select regexp_like(cast(v as binary), 'a') from (select @v v) s", false},
+		{"select regexp_like(if(true, cast(@v as binary), cast('abc' as binary(3))), 'a')", false},
+		{"select regexp_like(if(false, cast(@v as binary), cast('abc' as binary(3))), 'a')", false},
+		{"select regexp_like(coalesce(cast(@v as binary), cast('abc' as binary(3))), 'a')", false},
 		{"select regexp_like(cast(@int_var as binary), 'a')", true},
 		{"select regexp_like(cast(@unset_var as binary), 'a')", true},
 		{"select regexp_like((select cast(@unset_var as binary)), 'a')", true},

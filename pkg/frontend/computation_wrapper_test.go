@@ -1168,6 +1168,49 @@ func TestBuildPlanRegexpStaticStringDomainMatrix(t *testing.T) {
 	}
 }
 
+func TestBuildPlanRegexpUserVariableNullHistory(t *testing.T) {
+	ctx := defines.AttachAccount(context.Background(), sysAccountID, rootID, moAdminRoleID)
+	for _, tc := range []struct {
+		name     string
+		assigned bool
+		previous any
+		wantErr  bool
+	}{
+		{"unassigned", false, nil, true},
+		{"first NULL assignment", true, nil, false},
+		{"string then NULL", true, "abc", false},
+		{"numeric then NULL", true, int64(123), true},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			ses := &Session{userDefinedVars: make(map[string]*UserDefinedVar)}
+			if tc.previous != nil {
+				require.NoError(t, ses.SetUserDefinedVar("history", tc.previous, ""))
+			}
+			if tc.assigned {
+				require.NoError(t, ses.SetUserDefinedVar("history", nil, ""))
+			}
+			resolver := &TxnCompilerContext{execCtx: &ExecCtx{reqCtx: ctx, ses: ses}}
+			compiler := plan2.NewEmptyCompilerContext()
+			compiler.ResolveVariableTypeFunc = resolver.ResolveVariableType
+			for _, prepare := range []bool{false, true} {
+				statements, err := mysql.Parse(ctx, "select regexp_like(cast(@history as binary), 'a')", 1)
+				require.NoError(t, err)
+				var stmt tree.Statement = statements[0]
+				if prepare {
+					stmt = tree.NewPrepareString(tree.Identifier("history_cast"), "select regexp_like(cast(@history as binary), 'a')")
+				}
+				_, err = buildPlan(ctx, nil, compiler, stmt)
+				statements[0].Free()
+				if tc.wantErr {
+					require.True(t, moerr.IsMoErrCode(err, moerr.ErrCharacterSetMismatch), err)
+				} else {
+					require.NoError(t, err)
+				}
+			}
+		})
+	}
+}
+
 func TestBuildPlanRegexpDefersOnlyRuntimeStringDomains(t *testing.T) {
 	ctx := defines.AttachAccount(context.Background(), sysAccountID, rootID, moAdminRoleID)
 	for _, sql := range []string{

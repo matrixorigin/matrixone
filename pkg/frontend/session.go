@@ -645,8 +645,17 @@ func (ses *Session) setUserDefinedVarWithTypeAndKindAndReplayability(
 	}
 	ses.mu.Lock()
 	key := strings.ToLower(name)
-	if previous := ses.userDefinedVars[key]; previous != nil && !previous.Replayable {
+	previous := ses.userDefinedVars[key]
+	if previous != nil && !previous.Replayable {
 		replayable = false
+	}
+	if value == nil && types.T(typ.Id) == types.T_any {
+		// A literal NULL assignment retains the entry's result type in MySQL.
+		// A new entry starts as STRING_RESULT; absence is still untyped NULL.
+		typ = inferUserDefinedVarType("")
+		if previous != nil && previous.Type.Id != 0 {
+			typ = previous.Type
+		}
 	}
 	ses.userDefinedVars[key] = &UserDefinedVar{
 		Value:               value,

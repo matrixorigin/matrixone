@@ -190,6 +190,9 @@ const (
 	// StringDomainCheckBinaryCast makes CAST AS BINARY a static binary VARCHAR
 	// trigger, unlike a physical BINARY column. Its execution type is unchanged.
 	StringDomainCheckBinaryCast
+	// StringDomainCheckBinaryBlob keeps an expression's logical BLOB domain
+	// compatible without turning its execution type into a VARCHAR trigger.
+	StringDomainCheckBinaryBlob
 )
 
 // GetFunctionByNameWithStringDomainCheckModes resolves a function while

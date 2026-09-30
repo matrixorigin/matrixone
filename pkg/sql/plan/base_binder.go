@@ -5831,60 +5831,6 @@ func preparedRegexpStringDomainCheckModes(
 	return modes
 }
 
-// regexpBinaryCastOperand distinguishes expression-owned binary casts from
-// physical BINARY fields without changing their padding, width, or result type.
-// Constant folding may replace a cast with a typed literal; parameter literals
-// instead retain their marker/variable source and must keep that exception.
-func regexpBinaryCastOperand(expr *Expr) bool {
-	if expr == nil || types.T(expr.Typ.Id) != types.T_binary {
-		return false
-	}
-	if isExplicitPreparedCast(expr) {
-		return !regexpUnboundedUserVariableBinaryCast(expr)
-	}
-	if source := expr.GetPreparedNumeric().GetStringDomainSource(); source != nil {
-		return regexpBinaryCastOperand(source)
-	}
-	if lit := expr.GetLit(); lit != nil {
-		if lit.Src != nil {
-			return regexpBinaryCastOperand(lit.Src)
-		}
-		source := types.StringSource(lit.GetStringSource())
-		return source == types.StringSourceExpression || source == types.StringSourceLiteral
-	}
-	return false
-}
-
-func regexpUnboundedUserVariableBinaryCast(expr *Expr) bool {
-	if expr == nil || types.T(expr.Typ.Id) != types.T_binary || expr.Typ.Width >= 0 {
-		return false
-	}
-	if source := expr.GetPreparedNumeric().GetStringDomainSource(); source != nil {
-		return types.T(source.Typ.Id) == types.T_blob
-	}
-	if lit := expr.GetLit(); lit != nil && lit.Src != nil {
-		return regexpUnboundedUserVariableBinaryCast(lit.Src)
-	}
-	if !isExplicitPreparedCast(expr) || len(expr.GetF().Args) == 0 {
-		return false
-	}
-	// MySQL gives an unbounded user-variable BINARY cast a BLOB-shaped result,
-	// unlike BINARY(n), including BINARY(0). EXECUTE may replace the variable
-	// with a sourced literal, but must retain the same classification.
-	source := expr.GetF().Args[0]
-	for source.GetLit() != nil && source.GetLit().Src != nil {
-		source = source.GetLit().Src
-	}
-	if !types.T(source.Typ.Id).IsMySQLString() {
-		return false
-	}
-	if variable := source.GetV(); variable != nil && !variable.System {
-		return true
-	}
-	return source.GetLit() != nil &&
-		types.StringSource(source.GetLit().GetStringSource()) == types.StringSourceUserVariable
-}
-
 func (b *baseBinder) markPreparedStringDomainSubquerySources(name string, args []*Expr) {
 	stringOperands := preparedRegexpCompatibilityStringOperandCount(name, len(args))
 	for i := 0; i < stringOperands; i++ {
@@ -6270,14 +6216,17 @@ func compactStringDomainWitnessArg(arg *Expr) *Expr {
 
 func stringDomainWitnessType(source *Expr, domains uint8) plan.Type {
 	typ := source.Typ
-	if domains == possibleStringDomainBinary && types.T(typ.Id) == types.T_binary &&
-		(regexpUnboundedUserVariableBinaryCast(source) ||
-			(!isExplicitPreparedCast(source) &&
-				types.T(source.GetPreparedNumeric().GetStringDomainSource().GetTyp().Id) == types.T_blob)) {
-		// This metadata-only witness retains the BLOB-compatible classification
-		// of an unbounded variable cast. A plain BINARY literal would falsely
-		// turn it into an expression-owned VARCHAR trigger at the next boundary.
-		typ.Id = int32(types.T_blob)
+	declared := regexpDeclaredStringType(source)
+	if declared.Oid.IsMySQLString() &&
+		(types.T(source.Typ.Id) == types.T_binary || source.GetV() != nil) {
+		// Retain the logical length class too, not just the current value's
+		// domain. Variable/function BLOB declarations must survive projection.
+		typ = makePlan2Type(&declared)
+		if declared.Oid == types.T_varbinary && types.T(source.Typ.Id) == types.T_binary {
+			// T_binary expression literals are the compact CAST ownership tag;
+			// ordinary specialized VARBINARY parameter literals are not CASTs.
+			typ.Id = int32(types.T_binary)
+		}
 	}
 	if domains == possibleStringDomainText &&
 		types.StaticStringDomain(makeTypeByPlan2Expr(source)) == types.StringDomainBinary {
@@ -7431,15 +7380,22 @@ func bindFuncExprImplByPlanExpr(
 		}
 	}
 	for i := 0; i < preparedRegexpCompatibilityStringOperandCount(name, len(args)); i++ {
-		if !regexpBinaryCastOperand(args[i]) {
+		if !regexpOwnsBinaryCast(args[i]) || (i < len(stringDomainModes) &&
+			stringDomainModes[i] == function.StringDomainCheckParamMarker) {
 			continue
 		}
-		// A fixed CAST domain stays static even when a derived-column witness
-		// makes the generic provenance path conservatively defer the operand.
+		declared := regexpDeclaredStringType(args[i])
+		if declared.Oid != types.T_varbinary && declared.Oid != types.T_blob {
+			continue
+		}
+		// A fixed result declaration dominates runtime branch/value provenance.
 		if stringDomainModes == nil {
 			stringDomainModes = make([]function.StringDomainCheckMode, len(args))
 		}
 		stringDomainModes[i] = function.StringDomainCheckBinaryCast
+		if declared.Oid == types.T_blob {
+			stringDomainModes[i] = function.StringDomainCheckBinaryBlob
+		}
 	}
 	if stringDomainModes != nil {
 		fGet, err = function.GetFunctionByNameWithStringDomainCheckModes(
