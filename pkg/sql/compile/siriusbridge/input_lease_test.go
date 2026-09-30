@@ -17,6 +17,7 @@ package siriusbridge
 import (
 	"context"
 	"errors"
+	"sync"
 	"sync/atomic"
 	"testing"
 
@@ -141,7 +142,11 @@ func TestInputAcquireControlsMaterialization(t *testing.T) {
 			}}}
 			var materialized atomic.Int32
 			done := make(chan error, 1)
+			var workers sync.WaitGroup
+			workers.Add(1)
+			t.Cleanup(func() { cancel(nil); workers.Wait() })
 			go func() {
+				defer workers.Done()
 				done <- func() (err error) {
 					lease, err := input.Acquire(ctx, 1)
 					if err != nil {
@@ -181,7 +186,8 @@ func TestInputLeaseConcurrentTerminalOperations(t *testing.T) {
 					close(unblock)
 				}
 			}
-			t.Cleanup(open)
+			var workers sync.WaitGroup
+			t.Cleanup(func() { open(); workers.Wait() })
 			block := func() error { close(entered); <-unblock; return nil }
 			driver := new(leaseTestDriver)
 			if publishing {
@@ -191,7 +197,9 @@ func TestInputLeaseConcurrentTerminalOperations(t *testing.T) {
 			}
 			lease := &InputLease{native: driver, capacity: 1}
 			first, second := make(chan error, 1), make(chan error, 1)
+			workers.Add(1)
 			go func() {
+				defer workers.Done()
 				if publishing {
 					first <- lease.Publish(t.Context(), 1, []Vector{{Data: []byte{1}}})
 				} else {
@@ -199,7 +207,16 @@ func TestInputLeaseConcurrentTerminalOperations(t *testing.T) {
 				}
 			}()
 			<-entered
-			go func() { second <- lease.Release() }()
+			// This is a cleanup-completion contract, not just a call-count
+			// contract: competitors cannot observe a terminal state before
+			// the native call completes its ownership transfer.
+			locked := lease.mu.TryLock()
+			if locked {
+				lease.mu.Unlock()
+			}
+			require.False(t, locked, "native terminal call must retain exclusive lease ownership")
+			workers.Add(1)
+			go func() { defer workers.Done(); second <- lease.Release() }()
 			open()
 			require.NoError(t, <-first)
 			require.NoError(t, <-second)
