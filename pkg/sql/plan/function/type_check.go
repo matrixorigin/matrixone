@@ -35,6 +35,25 @@ func fixedTypeCastRule1(s1, s2 types.Type) (bool, types.Type, types.Type) {
 	if s2.Oid == types.T_enum {
 		s2 = types.T_uint16.ToType()
 	}
+	// The scalar low-precision float types (bf16/float16/float8/float4) all fit
+	// losslessly in float32, so binary arithmetic and comparison treat them as
+	// float32 while selecting the coercion rule; the operand is then cast from its
+	// low-precision type to the chosen target, mirroring the T_enum treatment above.
+	lowPrec := false
+	if isLowPrecFloat(s1.Oid) {
+		s1 = types.T_float32.ToType()
+		lowPrec = true
+	}
+	if isLowPrecFloat(s2.Oid) {
+		s2 = types.T_float32.ToType()
+		lowPrec = true
+	}
+	// float32+float32 has no diagonal cast rule (equal types normally need no cast),
+	// so a low-precision pair that both normalized to float32 must still be cast from
+	// its low-precision type. Force that cast to float32 here.
+	if lowPrec && s1.Oid == types.T_float32 && s2.Oid == types.T_float32 {
+		return true, s1, s2
+	}
 	check := fixedBinaryCastRule1[s1.Oid][s2.Oid]
 	if check.cast {
 		t1, t2 := check.left.ToType(), check.right.ToType()
@@ -124,6 +143,18 @@ func arithmeticTypeCastRule1(s1, s2 types.Type) (bool, types.Type, types.Type) {
 //  1. Div
 //  2. IntegerDiv
 func fixedTypeCastRule2(s1, s2 types.Type) (bool, types.Type, types.Type) {
+	lowPrec := false
+	if isLowPrecFloat(s1.Oid) {
+		s1 = types.T_float32.ToType()
+		lowPrec = true
+	}
+	if isLowPrecFloat(s2.Oid) {
+		s2 = types.T_float32.ToType()
+		lowPrec = true
+	}
+	if lowPrec && s1.Oid == types.T_float32 && s2.Oid == types.T_float32 {
+		return true, s1, s2
+	}
 	check := fixedBinaryCastRule2[s1.Oid][s2.Oid]
 	if check.cast {
 		t1, t2 := check.left.ToType(), check.right.ToType()

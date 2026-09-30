@@ -94,7 +94,7 @@ var supportedAggInNewFramework = []FuncNew{
 		class:      plan.Function_AGG,
 		layout:     STANDARD_FUNCTION,
 		checkFn: func(overloads []overload, inputs []types.Type) checkResult {
-			return fixedUnaryAggTypeCheck(inputs, MinMaxSupportedTypes)
+			return minMaxTypeCheck(inputs)
 		},
 
 		Overloads: []overload{
@@ -112,7 +112,7 @@ var supportedAggInNewFramework = []FuncNew{
 		class:      plan.Function_AGG,
 		layout:     STANDARD_FUNCTION,
 		checkFn: func(overloads []overload, inputs []types.Type) checkResult {
-			return fixedUnaryAggTypeCheck(inputs, MinMaxSupportedTypes)
+			return minMaxTypeCheck(inputs)
 		},
 
 		Overloads: []overload{
@@ -772,7 +772,23 @@ func sumAvgTypeCheck(inputs []types.Type) checkResult {
 	if len(inputs) == 1 && inputs[0].Oid == types.T_bit {
 		return newCheckResultWithCast(0, []types.Type{types.T_uint64.ToType()})
 	}
+	// The low-precision float types have no native aggregate; widen to float32
+	// (lossless) so SUM/AVG run on float32 and return float64, mirroring the
+	// enum/bit widening above.
+	if len(inputs) == 1 && isLowPrecFloat(inputs[0].Oid) {
+		return newCheckResultWithCast(0, []types.Type{types.T_float32.ToType()})
+	}
 	return fixedUnaryAggTypeCheck(inputs, SumSupportedTypes)
+}
+
+// minMaxTypeCheck widens a low-precision float input to float32 (lossless) so MIN/MAX
+// order by float value via the float32 executor -- newGenericMinMaxExec compares the
+// raw uint bits, which do not order floats. Other types keep native MIN/MAX support.
+func minMaxTypeCheck(inputs []types.Type) checkResult {
+	if len(inputs) == 1 && isLowPrecFloat(inputs[0].Oid) {
+		return newCheckResultWithCast(0, []types.Type{types.T_float32.ToType()})
+	}
+	return fixedUnaryAggTypeCheck(inputs, MinMaxSupportedTypes)
 }
 
 func mysqlNumericAggTypeCheck(inputs []types.Type) checkResult {
