@@ -1,6 +1,9 @@
 select cast(cast('"abc"' as json) as char), json_unquote(cast('"abc"' as json));
 ➤ cast(cast("abc" as json) as varchar)[12,65535,0]  ¦  json_unquote(cast("abc" as json))[12,65535,0]  𝄀
 "abc"  ¦  abc
+select cast('"abc"' as json) = 'abc', cast('"abc"' as json) like 'abc';
+➤ cast("abc" as json) = abc[-7,1,0]  ¦  cast("abc" as json) like abc[-7,1,0]  𝄀
+1  ¦  1
 select cast(cast('"a\\"b"' as json) as varchar(20));
 ➤ cast(cast("a\\"b" as json) as varchar(20))[12,20,0]  𝄀
 "a\"b"
