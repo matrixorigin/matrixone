@@ -95,10 +95,10 @@ check, separate from the volatile-function check:
   by backfill, DML, restore, and optimizer matching; no ambient session value
   may be part of the persisted key contract.
 
-The motivating JSON form remains eligible only when its extracted text and
-target type resolve to those fixed semantics. If a `CHAR` default charset or
-collation is session-derived, the implementation must reject that form or
-require an explicitly fixed equivalent.
+The motivating JSON extraction form is deliberately outside the first
+release, even when its extracted text and target type appear to have fixed
+semantics. JSON extraction/conversion is rejected until a separate design
+defines and persists its path, charset, collation, and error contract.
 
 This conservative rule intentionally narrows the first release. The residual
 predicate is a correctness confirmation only; it cannot recover a row that a
@@ -173,9 +173,8 @@ access is disabled for functional indexes in the first release. Missing or
 malformed metadata fails closed to a normal table scan.
 
 Functional-index creation is gated on the cluster's oldest-live protocol
-capability. The implementation reserves the next available MORPC capability
-(version 46 at the start of this work) so a mixed-version CN cannot publish
-metadata it cannot render or safely alter.
+capability. This implementation uses MORPC protocol 101, so a mixed-version
+CN cannot publish metadata it cannot render or safely alter.
 
 ### DDL foundation from #28052
 
@@ -191,11 +190,10 @@ syntax in the foundation PR.
 The implementation must prove the invariant at the product boundary, not only
 by inspecting the eligibility helper:
 
-- DDL acceptance/rejection covers an eligible JSON extraction with fixed text
-  semantics, `CAST(ts AS CHAR(19))`, session-dependent SQL-mode or collation
-  conversions, and a generated-column dependency whose transitive expression
-  is session-dependent. Rejected cases must publish no functional-index
-  metadata.
+- DDL rejection covers JSON extraction/conversion, `CAST(ts AS CHAR(19))`,
+  session-dependent SQL-mode or collation conversions, and a generated-column
+  dependency whose transitive expression is session-dependent. Rejected cases
+  must publish no functional-index metadata.
 - An index is backfilled by a writer at `+00:00`, then populated or updated by
   a writer at `+08:00`; queries from both timezones and from contrasting SQL
   modes/connection collations compare the index plan and result with a forced

@@ -315,6 +315,22 @@ func TestFunctionalCompositeIndexLifecycle(t *testing.T) {
 		_, err = conn.ExecContext(ctx, "alter table t add index bad ((lower(name)),(rand()))")
 		require.Error(t, err)
 		count("select count(*) from mo_catalog.mo_columns where att_database='functional_index_multi' and att_relname='t' and att_is_hidden=1 and attr_has_generated=1", 4)
+		exec("create table failed_alter(id int primary key,a int,name varchar(40),index ix(a,(lower(name))))")
+		exec("insert into failed_alter values(1,7,'ABC'),(2,8,'DEF')")
+		count("select count(*) from failed_alter force index(ix) where a=7 and lower(name)='abc'", 1)
+		_, err = conn.ExecContext(ctx, "alter table failed_alter drop column a, drop column missing")
+		require.Error(t, err)
+		// A rejected ALTER must not mutate the source TableDef used by the next plan.
+		var tableName, ddl string
+		require.NoError(t, conn.QueryRowContext(ctx, "show create table failed_alter").Scan(&tableName, &ddl))
+		require.Equal(t, "failed_alter", tableName)
+		require.Contains(t, ddl, "ix")
+		count("select count(*) from failed_alter ignore index(ix) where a=7 and lower(name)='abc'", 1)
+		count("select count(*) from failed_alter force index(ix) where a=7 and lower(name)='abc'", 1)
+		exec("update failed_alter set name='ABC' where id=2")
+		count("select count(*) from failed_alter force index(ix) where a=8 and lower(name)='abc'", 1)
+		exec("alter table failed_alter add column tail int")
+		count("select count(*) from failed_alter force index(ix) where a=7 and lower(name)='abc'", 1)
 		for _, tc := range []struct {
 			name, key   string
 			expressions int
