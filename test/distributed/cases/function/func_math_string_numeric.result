@@ -178,7 +178,7 @@ DEALLOCATE PREPARE math_string_numeric_stmt_28487;
 PREPARE math_string_numeric_null_stmt_28487 FROM 'SELECT ABS(?) AS abs_prepare, CEIL(?) AS ceil_prepare, CEILING(?) AS ceiling_prepare, MOD(?, 2) AS mod_prepare, ROUND(?) AS round_prepare, SIGN(?) AS sign_prepare, TRUNCATE(?, 1) AS truncate_prepare';
 SET @math_string_numeric_v_28487 = NULL;
 EXECUTE math_string_numeric_null_stmt_28487 USING @math_string_numeric_v_28487, @math_string_numeric_v_28487, @math_string_numeric_v_28487, @math_string_numeric_v_28487, @math_string_numeric_v_28487, @math_string_numeric_v_28487, @math_string_numeric_v_28487;
-➤ abs_prepare[8,53,31]  ¦  ceil_prepare[8,53,31]  ¦  ceiling_prepare[8,53,31]  ¦  mod_prepare[-5,64,0]  ¦  round_prepare[8,53,31]  ¦  sign_prepare[-5,64,0]  ¦  truncate_prepare[8,53,31]  𝄀
+➤ abs_prepare[-5,64,0]  ¦  ceil_prepare[-5,64,0]  ¦  ceiling_prepare[-5,64,0]  ¦  mod_prepare[-5,64,0]  ¦  round_prepare[-5,64,0]  ¦  sign_prepare[-5,64,0]  ¦  truncate_prepare[-5,64,0]  𝄀
 null  ¦  null  ¦  null  ¦  null  ¦  null  ¦  null  ¦  null
 DEALLOCATE PREPARE math_string_numeric_null_stmt_28487;
 SET SESSION sql_mode = '';
