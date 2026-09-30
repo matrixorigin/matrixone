@@ -3702,7 +3702,7 @@ func (rule *ResetParamRefRule) applyExpr(e *plan.Expr) (*plan.Expr, error) {
 				}
 				if changed {
 					reboundArgs := []*Expr{refreshed}
-					if functionName == "elt" {
+					if len(boundArgs) > 1 {
 						reboundArgs = append([]*Expr(nil), boundArgs...)
 						reboundArgs[0] = refreshed
 					}
@@ -3729,7 +3729,7 @@ func (rule *ResetParamRefRule) applyExpr(e *plan.Expr) (*plan.Expr, error) {
 				}
 				if changed {
 					reboundArgs := []*Expr{rebound}
-					if functionName == "elt" {
+					if len(boundArgs) > 1 {
 						reboundArgs = append([]*Expr(nil), boundArgs...)
 						reboundArgs[0] = rebound
 					}
@@ -3980,7 +3980,16 @@ func preparedComparisonExactIntegerExpr(
 	}
 	targetType := makeTypeByPlan2Type(target)
 	bits := 0
+	signed := false
 	switch targetType.Oid {
+	case types.T_int8:
+		bits, signed = 8, true
+	case types.T_int16:
+		bits, signed = 16, true
+	case types.T_int32:
+		bits, signed = 32, true
+	case types.T_int64:
+		bits, signed = 64, true
 	case types.T_uint8:
 		bits = 8
 	case types.T_uint16:
@@ -3996,6 +4005,16 @@ func preparedComparisonExactIntegerExpr(
 		}
 	default:
 		return nil, false, nil
+	}
+	if signed {
+		value, err := strconv.ParseInt(integerText, 10, bits)
+		if err != nil || value < -(1<<53)+1 || value > (1<<53)-1 {
+			// BIGINT values at and above 2^53 can collide when the original
+			// comparison converts the column to DOUBLE.
+			return nil, false, nil
+		}
+		expr, err := preparedRuntimeParamExpr(ctx, integerText, false, targetType)
+		return expr, err == nil, err
 	}
 	if strings.HasPrefix(integerText, "-") {
 		return nil, false, nil

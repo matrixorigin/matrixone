@@ -1,0 +1,114 @@
+drop database if exists issue_29506_filters;
+create database issue_29506_filters;
+use issue_29506_filters;
+create table keys32(id int primary key);
+insert into keys32 select result from generate_series(1, 20000) g;
+prepare equal_key from 'select count(*) from keys32 where id = ?';
+set @key = '12345.0';
+explain force execute equal_key using @key;
+➤ TP QUERY PLAN[12,-1,0]  𝄀
+Project  𝄀
+  ->  Aggregate  𝄀
+        Aggregate Functions: starcount(1)  𝄀
+        ->  Table Scan on issue_29506_filters.keys32  𝄀
+              Filter Cond: (keys32.id = 12345)  𝄀
+              Block Filter Cond: (keys32.id = 12345)
+explain analyze force execute equal_key using @key;
+➤ tp query plan[12,-1,0]  𝄀
+Project  𝄀
+  Analyze: timeConsumed=0ms waitTime=0ms inputRows=1 outputRows=1 (min=1, max=1) InputSize=8 bytes OutputSize=8 bytes ReadSize=0 bytes|0 bytes|0 bytes MemorySize=8 bytes (min=8 bytes, max=8 bytes)  𝄀
+  ->  Aggregate  𝄀
+        Analyze: timeConsumed=0ms waitTime=0ms inputRows=1 outputRows=1 (min=1, max=1) InputSize=4 bytes OutputSize=8 bytes ReadSize=0 bytes|0 bytes|0 bytes MemorySize=64.00 KiB (min=64.00 KiB, max=64.00 KiB)  𝄀
+        Aggregate Functions: starcount(1)  𝄀
+        ->  Table Scan on issue_29506_filters.keys32  𝄀
+              Analyze: timeConsumed=0ms waitTime=0ms inputBlocks=1 inputRows=1 outputRows=1 (min=1, max=1) InputSize=4 bytes OutputSize=4 bytes ReadSize=64.33 KiB|0 bytes|32.16 KiB MemorySize=9 bytes (min=9 bytes, max=9 bytes)  𝄀
+              Filter Cond: (keys32.id = 12345)  𝄀
+              Block Filter Cond: (keys32.id = 12345)
+execute equal_key using @key;
+➤ count(*)[-5,64,0]  𝄀
+1
+set @key = cast(12345 as signed);
+explain force execute equal_key using @key;
+➤ TP QUERY PLAN[12,-1,0]  𝄀
+Project  𝄀
+  ->  Aggregate  𝄀
+        Aggregate Functions: starcount(1)  𝄀
+        ->  Table Scan on issue_29506_filters.keys32  𝄀
+              Filter Cond: (keys32.id = cast(cast('12345' AS BIGINT) AS INT))  𝄀
+              Block Filter Cond: (keys32.id = cast(cast('12345' AS BIGINT) AS INT))
+execute equal_key using @key;
+➤ count(*)[-5,64,0]  𝄀
+1
+set @key = cast(4294967296 as signed);
+explain force execute equal_key using @key;
+➤ TP QUERY PLAN[12,-1,0]  𝄀
+Project  𝄀
+  ->  Aggregate  𝄀
+        Aggregate Functions: starcount(1)  𝄀
+        ->  Table Scan on issue_29506_filters.keys32  𝄀
+              Filter Cond: (cast(keys32.id AS BIGINT) = cast('4294967296' AS BIGINT))
+              -- HINT: Cast expression may prevent index usage
+execute equal_key using @key;
+➤ count(*)[-5,64,0]  𝄀
+0
+set @key = '12345tail';
+execute equal_key using @key;
+➤ count(*)[-5,64,0]  𝄀
+1
+deallocate prepare equal_key;
+prepare between_keys from 'select count(*) from keys32 where id between ? and ?';
+set @lo = '12344';
+set @hi = '12346';
+explain force execute between_keys using @lo, @hi;
+➤ TP QUERY PLAN[12,-1,0]  𝄀
+Project  𝄀
+  ->  Aggregate  𝄀
+        Aggregate Functions: starcount(1)  𝄀
+        ->  Table Scan on issue_29506_filters.keys32  𝄀
+              Filter Cond: (keys32.id >= 12344), (keys32.id <= 12346)  𝄀
+              Block Filter Cond: (keys32.id >= 12344), (keys32.id <= 12346)
+execute between_keys using @lo, @hi;
+➤ count(*)[-5,64,0]  𝄀
+3
+deallocate prepare between_keys;
+prepare in_keys from 'select count(*) from keys32 where id in (?, ?)';
+explain force execute in_keys using @lo, @hi;
+➤ TP QUERY PLAN[12,-1,0]  𝄀
+Project  𝄀
+  ->  Aggregate  𝄀
+        Aggregate Functions: starcount(1)  𝄀
+        ->  Table Scan on issue_29506_filters.keys32  𝄀
+              Filter Cond: keys32.id in (12344, 12346)  𝄀
+              Block Filter Cond: keys32.id in (12344, 12346)
+execute in_keys using @lo, @hi;
+➤ count(*)[-5,64,0]  𝄀
+2
+deallocate prepare in_keys;
+create table keys64(id bigint primary key);
+insert into keys64 values (9007199254740991), (9007199254740992), (9007199254740993);
+prepare large_key from 'select group_concat(id order by id) from keys64 where id = ?';
+set @key = '9007199254740992';
+explain force execute large_key using @key;
+➤ TP QUERY PLAN[12,-1,0]  𝄀
+Project  𝄀
+  ->  Aggregate  𝄀
+        Aggregate Functions: group_concat(keys64.id ORDER BY keys64.id ASC SEPARATOR ',')  𝄀
+        ->  Table Scan on issue_29506_filters.keys64  𝄀
+              Filter Cond: (cast(keys64.id AS DOUBLE) = cast(cast('9007199254740992' AS DOUBLE) AS DOUBLE))
+              -- HINT: Cast expression may prevent index usage
+execute large_key using @key;
+➤ group_concat(keys64.id order by id separator ,)[-1,536870911,0]  𝄀
+9007199254740992,9007199254740993
+set @key = '9007199254740991';
+explain force execute large_key using @key;
+➤ TP QUERY PLAN[12,-1,0]  𝄀
+Project  𝄀
+  ->  Aggregate  𝄀
+        Aggregate Functions: group_concat(keys64.id ORDER BY keys64.id ASC SEPARATOR ',')  𝄀
+        ->  Table Scan on issue_29506_filters.keys64  𝄀
+              Filter Cond: (keys64.id = 9007199254740991)
+execute large_key using @key;
+➤ group_concat(keys64.id order by id separator ,)[-1,536870911,0]  𝄀
+9007199254740991
+deallocate prepare large_key;
+drop database issue_29506_filters;
