@@ -1782,8 +1782,9 @@ func (rule *ResetParamRefRule) rebindPreparedNumericExprWithRole(
 			if rule.numericPrefixParamPositions[position] && position < len(rule.params) &&
 				rule.params[position] != nil {
 				kind := rule.numericPrefixParamKinds[position]
-				prefix, changed, err := rule.preparedNumericPrefixCast(
-					DeepCopyExpr(rule.params[position]), kind)
+				witness := DeepCopyExpr(rule.params[position])
+				prefix, changed, err := preparedNumericPrefixCast(
+					rule.ctx, DeepCopyExpr(witness), witness, kind)
 				if err != nil {
 					return nil, false, err
 				}

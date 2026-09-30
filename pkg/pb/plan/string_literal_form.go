@@ -374,7 +374,6 @@ const (
 // result type. Legacy plans remain executable by v97 receivers.
 // JSONInputContracts and YearBitCast require MORPC v101 for their new
 // execution contracts.
-type RemoteExpressionFeatures struct {
 // StrictStringNumericCompatibility requires MORPC v103 when the sender uses
 // the strict-by-default contract. Pre-v103 workers understand the prefix-cast
 // representation but default to permissive conversion when the new SessionInfo
