@@ -142,6 +142,8 @@ func extractRowFromVector(ctx context.Context, vec *vector.Vector, i int, row []
 		row[i] = vector.GetArrayAt[types.Float16](vec, rowIndex)
 	case types.T_array_bf16:
 		row[i] = vector.GetArrayAt[types.BF16](vec, rowIndex)
+	case types.T_array_float8, types.T_array_float4:
+		row[i] = copyBytes(vec.GetBytesAt(rowIndex))
 	case types.T_array_int8:
 		row[i] = vector.GetArrayAt[int8](vec, rowIndex)
 	case types.T_array_uint8:
@@ -322,6 +324,12 @@ func convertColIntoSql(
 	case types.T_array_bf16:
 		value := data.([]types.BF16)
 		sqlBuff = appendString(sqlBuff, fmt.Sprintf("CAST('%s' as %s)", types.ArrayToString(value), typ.DescString()))
+	case types.T_array_float8, types.T_array_float4:
+		text, err := types.BlockScaledToString(data.([]byte))
+		if err != nil {
+			return nil, err
+		}
+		sqlBuff = appendString(sqlBuff, fmt.Sprintf("CAST('%s' as %s)", text, typ.DescString()))
 	case types.T_array_int8:
 		value := data.([]int8)
 		sqlBuff = appendString(sqlBuff, fmt.Sprintf("CAST('%s' as %s)", types.ArrayToString(value), typ.DescString()))

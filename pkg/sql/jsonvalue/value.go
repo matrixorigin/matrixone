@@ -160,6 +160,16 @@ func FromVector(
 			out[i] = value
 		}
 		return out, nil
+	case types.T_array_float8, types.T_array_float4:
+		values, err := types.BlockScaledToFloat32(v.GetBytesAt(row))
+		if err != nil {
+			return nil, err
+		}
+		out := make([]any, len(values))
+		for i, value := range values {
+			out[i] = float64(value)
+		}
+		return out, nil
 	case types.T_array_bf16:
 		values := types.BytesToArray[types.BF16](v.GetBytesAt(row))
 		out := make([]any, len(values))

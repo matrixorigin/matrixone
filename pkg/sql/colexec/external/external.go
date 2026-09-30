@@ -953,6 +953,11 @@ func isLegalLine(param *tree.ExternParam, cols []*plan.ColDef, fields []csvparse
 			if err != nil {
 				return false
 			}
+		case types.T_array_float8, types.T_array_float4:
+			f, _ := id.BlockScaledFormat()
+			if _, err := types.StringToBlockScaled(f, field.Val); err != nil {
+				return false
+			}
 		case types.T_array_bf16:
 			_, err := types.StringToArrayToBytes[types.BF16](field.Val)
 			if err != nil {
@@ -1930,6 +1935,22 @@ func getColData(bat *batch.Batch, line []csvparser.Field, rowIdx int, param *Ext
 			return moerr.NewArrayDefMismatchNoCtx(int(vec.GetType().Width), len(arr))
 		}
 		if err = vector.AppendBytes(vec, types.ArrayToBytes[float64](arr), false, mp); err != nil {
+			return err
+		}
+	case types.T_array_float8, types.T_array_float4:
+		arr, err := types.StringToArray[float32](field.Val)
+		if err != nil {
+			return err
+		}
+		if int(vec.GetType().Width) != types.MaxArrayDimension && int(vec.GetType().Width) != len(arr) {
+			return moerr.NewArrayDefMismatchNoCtx(int(vec.GetType().Width), len(arr))
+		}
+		f, _ := vec.GetType().Oid.BlockScaledFormat()
+		cell, err := types.AppendBlockScaled(nil, f, arr)
+		if err != nil {
+			return err
+		}
+		if err = vector.AppendBytes(vec, cell, false, mp); err != nil {
 			return err
 		}
 	case types.T_array_bf16:

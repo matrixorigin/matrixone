@@ -3964,6 +3964,7 @@ func appendFromEntry(src, vec *vector.Vector, offset int, mp *mpool.MPool) {
 		case types.T_char, types.T_varchar, types.T_binary, types.T_varbinary, types.T_json, types.T_blob, types.T_text,
 			types.T_array_float32, types.T_array_float64,
 			types.T_array_bf16, types.T_array_float16, types.T_array_int8, types.T_array_uint8,
+			types.T_array_float8, types.T_array_float4,
 			types.T_datalink, types.T_geometry, types.T_geometry32:
 			val = src.GetBytesAt(offset)
 		default:

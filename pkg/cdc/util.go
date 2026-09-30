@@ -185,6 +185,9 @@ func extractRowFromVector(ctx context.Context, vec *vector.Vector, i int, row []
 		row[i] = vector.GetArrayAt[int8](vec, rowIndex)
 	case types.T_array_uint8:
 		row[i] = vector.GetArrayAt[uint8](vec, rowIndex)
+	case types.T_array_float8, types.T_array_float4:
+		// The block-scaled cell; convertColIntoSql renders it as text.
+		row[i] = vec.GetBytesAt(rowIndex)
 	case types.T_array_float64:
 		row[i] = vector.GetArrayAt[float64](vec, rowIndex)
 	case types.T_date:
@@ -322,6 +325,14 @@ func convertColIntoSql(
 	// Narrow vector element types — ArrayToString is generic over
 	// types.ArrayElement, so each decodes to its own slice type and formats the
 	// same way. Quoted like the f32/f64 cases.
+	case types.T_array_float8, types.T_array_float4:
+		text, err := types.BlockScaledToString(data.([]byte))
+		if err != nil {
+			return nil, err
+		}
+		sqlBuff = appendByte(sqlBuff, '\'')
+		sqlBuff = appendString(sqlBuff, text)
+		sqlBuff = appendByte(sqlBuff, '\'')
 	case types.T_array_bf16:
 		value := data.([]types.BF16)
 		sqlBuff = appendByte(sqlBuff, '\'')

@@ -728,6 +728,18 @@ func formatValIntoStringWithFloatCast(
 		buf.WriteString("'")
 		buf.WriteString(types.ArrayToString[float64](val.([]float64)))
 		buf.WriteString("'")
+	case types.T_array_float8, types.T_array_float4:
+		cell, ok := val.([]byte)
+		if !ok {
+			return moerr.NewInternalErrorNoCtxf("formatValIntoString: unexpected %s type %T", t.Oid, val)
+		}
+		text, err := types.BlockScaledToString(cell)
+		if err != nil {
+			return err
+		}
+		buf.WriteString("'")
+		buf.WriteString(text)
+		buf.WriteString("'")
 	case types.T_array_bf16:
 		buf.WriteString("'")
 		buf.WriteString(types.ArrayToString[types.BF16](val.([]types.BF16)))
@@ -945,6 +957,9 @@ func compareValueFromVector(vec *vector.Vector, rowIdx int) (any, error) {
 		return vector.GetArrayAt[float32](vec, rowIdx), nil
 	case types.T_array_float64:
 		return vector.GetArrayAt[float64](vec, rowIdx), nil
+	case types.T_array_float8, types.T_array_float4:
+		// The block-scaled cell is the value; branch comparisons are byte-exact.
+		return vec.GetBytesAt(rowIdx), nil
 	case types.T_array_bf16:
 		return vector.GetArrayAt[types.BF16](vec, rowIdx), nil
 	case types.T_array_float16:
@@ -1013,6 +1028,10 @@ func normalizeCompareValue(typ types.Type, val any) (any, error) {
 			return v, nil
 		case []byte:
 			return types.BytesToArray[float64](v), nil
+		}
+	case types.T_array_float8, types.T_array_float4:
+		if v, ok := val.([]byte); ok {
+			return v, nil
 		}
 	case types.T_array_bf16:
 		switch v := val.(type) {

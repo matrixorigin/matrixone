@@ -500,6 +500,15 @@ func constructByte(ctx context.Context, obj FeSession, bat *batch.Batch, index i
 				arrStr := types.BytesToArrayToString[float64](vec.GetBytesAt(i))
 				value := addEscapeToString(util2.UnsafeStringToBytes(arrStr), closeby)
 				formatOutputString(ep, value, symbol[j], closeby, true, buffer)
+			case types.T_array_float8, types.T_array_float4:
+				arrStr, err := types.BlockScaledToString(vec.GetBytesAt(i))
+				if err != nil {
+					sendExportBatchByte(ctx, ByteChan, &BatchByte{err: err})
+					bat.Clean(mp)
+					return
+				}
+				value := addEscapeToString(util2.UnsafeStringToBytes(arrStr), closeby)
+				formatOutputString(ep, value, symbol[j], closeby, true, buffer)
 			case types.T_array_bf16:
 				arrStr := types.BytesToArrayToString[types.BF16](vec.GetBytesAt(i))
 				value := addEscapeToString(util2.UnsafeStringToBytes(arrStr), closeby)
@@ -1259,6 +1268,8 @@ func vectorValueToJSON(vec *vector.Vector, i int, ss *Session, backSes *backSess
 		return types.BytesToArray[float32](vec.GetBytesAt(i)), nil
 	case types.T_array_float64:
 		return types.BytesToArray[float64](vec.GetBytesAt(i)), nil
+	case types.T_array_float8, types.T_array_float4:
+		return types.BlockScaledToFloat32(vec.GetBytesAt(i))
 	case types.T_array_bf16:
 		// bf16/f16 are uint16-backed; widen to float32 so JSON emits their float values
 		// (a raw []BF16 would marshal the uint16 bit patterns).

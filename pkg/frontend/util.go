@@ -807,6 +807,8 @@ func getValueFromVector(ctx context.Context, vec *vector.Vector, feSes FeSession
 		return vector.GetArrayAt[float32](vec, 0), nil
 	case types.T_array_float64:
 		return vector.GetArrayAt[float64](vec, 0), nil
+	case types.T_array_float8, types.T_array_float4:
+		return types.BlockScaledToFloat32(vec.GetBytesAt(0))
 	case types.T_array_bf16:
 		return vector.GetArrayAt[types.BF16](vec, 0), nil
 	case types.T_array_float16:

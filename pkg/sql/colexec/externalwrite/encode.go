@@ -254,6 +254,12 @@ func (w *externalWriter) csvValue(vec *vector.Vector, i int) (val []byte, quote 
 		return []byte(types.BytesToArrayToString[float64](vec.GetBytesAt(i))), true, nil
 	// Narrow vector element types — BytesToArrayToString is generic over
 	// types.ArrayElement and already formats BF16/Float16/int8/uint8.
+	case types.T_array_float8, types.T_array_float4:
+		text, err := types.BlockScaledToString(vec.GetBytesAt(i))
+		if err != nil {
+			return nil, false, err
+		}
+		return []byte(text), true, nil
 	case types.T_array_bf16:
 		return []byte(types.BytesToArrayToString[types.BF16](vec.GetBytesAt(i))), true, nil
 	case types.T_array_float16:
@@ -421,6 +427,12 @@ func (w *externalWriter) appendJSONValue(buf *bytes.Buffer, vec *vector.Vector, 
 	// Narrow vector element types. appendJSONFloatArray is constrained to
 	// float32|float64, so widen first: BF16/Float16 via ToFloat32 (exact), and
 	// int8/uint8 are small integers that float32 represents exactly.
+	case types.T_array_float8, types.T_array_float4:
+		values, err := types.BlockScaledToFloat32(vec.GetBytesAt(i))
+		if err != nil {
+			return err
+		}
+		return appendJSONFloatArray(w, buf, values, 32)
 	case types.T_array_bf16:
 		return appendJSONFloatArray(w, buf,
 			types.BF16ToFloat32Slice(types.BytesToArray[types.BF16](vec.GetBytesAt(i))), 32)
