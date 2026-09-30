@@ -186,11 +186,14 @@ func BenchmarkFilteredPREReadGranularity(b *testing.B) {
 		op.NumVec = types.ArrayToBytes(make([]float32, filteredPREDims))
 		return op
 	}
-	var expected [2]struct {
-		rows  []int64
-		dists []float64
-	}
-	for selectionIndex, selection := range selections {
+	// Construct the reference in the parent fixture, not in a sibling benchmark.
+	// Selecting only one chunked leaf must not require the legacy leaf to run.
+	referenceLocation, _, _ := persistTopNTestColumn(b, fs, source, nil)
+	for _, selection := range selections {
+		expectedRows, expectedDistances, _, err := benchmarkReadWholeTopN(
+			ctx, *source.GetType(), fs, referenceLocation, selection.rows, newOp(), mp,
+		)
+		require.NoError(b, err)
 		for _, format := range formats {
 			name := format.name + "/" + format.method + "/" + selection.name
 			b.Run(name, func(b *testing.B) {
@@ -206,18 +209,14 @@ func BenchmarkFilteredPREReadGranularity(b *testing.B) {
 				}
 				rows, dists, err := read()
 				require.NoError(b, err)
-				if format.name == "legacy" {
-					expected[selectionIndex].rows, expected[selectionIndex].dists = slices.Clone(rows), slices.Clone(dists)
-				} else {
-					require.Equal(b, expected[selectionIndex].rows, rows)
-					require.Equal(b, expected[selectionIndex].dists, dists)
-				}
+				require.Equal(b, expectedRows, rows)
+				require.Equal(b, expectedDistances, dists)
 				tracked.ranges, tracked.bytes, tracked.decoded, tracked.maxDecoded = 0, 0, 0, 0
 				b.ReportAllocs()
 				b.ResetTimer()
 				for b.Loop() {
 					rows, dists, err = read()
-					if err != nil || !slices.Equal(rows, expected[selectionIndex].rows) || !slices.Equal(dists, expected[selectionIndex].dists) {
+					if err != nil || !slices.Equal(rows, expectedRows) || !slices.Equal(dists, expectedDistances) {
 						b.Fatalf("incorrect TopN rows=%v distances=%v: %v", rows, dists, err)
 					}
 				}
