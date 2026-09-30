@@ -2396,6 +2396,7 @@ func (builder *QueryBuilder) optimizeFilters(rootID int32) int32 {
 	rootID, _ = builder.pushdownFilters(rootID, nil, false)
 	transposeTableScanFilters(builder.compCtx.GetProcess(), builder.qry, rootID)
 	foldTableScanFilters(builder.compCtx.GetProcess(), builder.qry, rootID, false)
+	builder.rewriteNumericDomainFilters(rootID)
 	ReCalcNodeStats(rootID, builder, true, true, true)
 	builder.rewriteInDomainNotInFilters(rootID)
 	compositePartBlockFilters := builder.collectCompositePartBlockFilters(rootID)
