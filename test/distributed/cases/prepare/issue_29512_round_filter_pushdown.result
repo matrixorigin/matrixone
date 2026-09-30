@@ -164,4 +164,51 @@ execute truncate_key using @value;
 ➤ count(*)[-5,64,0]  𝄀
 1
 deallocate prepare truncate_key;
+prepare dynamic_round from 'select count(*) from lookup_key where id = round(?, ?)';
+set @value = '12345.0', @precision = 0;
+explain force execute dynamic_round using @value, @precision;
+➤ TP QUERY PLAN[12,-1,0]  𝄀
+Project  𝄀
+  ->  Aggregate  𝄀
+        Aggregate Functions: starcount(1)  𝄀
+        ->  Table Scan on issue_29512_round_filter.lookup_key  𝄀
+              Filter Cond: (lookup_key.id = cast(round(cast('12345.0' AS DOUBLE), 0) AS BIGINT))  𝄀
+              Block Filter Cond: (lookup_key.id = cast(round(cast('12345.0' AS DOUBLE), 0) AS BIGINT))
+execute dynamic_round using @value, @precision;
+➤ count(*)[-5,64,0]  𝄀
+1
+set @precision = -1;
+execute dynamic_round using @value, @precision;
+➤ count(*)[-5,64,0]  𝄀
+1
+set @precision = null;
+execute dynamic_round using @value, @precision;
+➤ count(*)[-5,64,0]  𝄀
+0
+set @precision = 0;
+explain force execute dynamic_round using @value, @precision;
+➤ TP QUERY PLAN[12,-1,0]  𝄀
+Project  𝄀
+  ->  Aggregate  𝄀
+        Aggregate Functions: starcount(1)  𝄀
+        ->  Table Scan on issue_29512_round_filter.lookup_key  𝄀
+              Filter Cond: (lookup_key.id = cast(round(cast('12345.0' AS DOUBLE), 0) AS BIGINT))  𝄀
+              Block Filter Cond: (lookup_key.id = cast(round(cast('12345.0' AS DOUBLE), 0) AS BIGINT))
+execute dynamic_round using @value, @precision;
+➤ count(*)[-5,64,0]  𝄀
+1
+deallocate prepare dynamic_round;
+prepare dynamic_truncate from 'select count(*) from lookup_key where id = truncate(?, cast(? as signed))';
+explain force execute dynamic_truncate using @value, @precision;
+➤ TP QUERY PLAN[12,-1,0]  𝄀
+Project  𝄀
+  ->  Aggregate  𝄀
+        Aggregate Functions: starcount(1)  𝄀
+        ->  Table Scan on issue_29512_round_filter.lookup_key  𝄀
+              Filter Cond: (lookup_key.id = cast(truncate(cast('12345.0' AS DOUBLE), cast(cast('0' AS BIGINT) AS BIGINT)) AS BIGINT))  𝄀
+              Block Filter Cond: (lookup_key.id = cast(truncate(cast('12345.0' AS DOUBLE), cast(cast('0' AS BIGINT) AS BIGINT)) AS BIGINT))
+execute dynamic_truncate using @value, @precision;
+➤ count(*)[-5,64,0]  𝄀
+1
+deallocate prepare dynamic_truncate;
 drop database issue_29512_round_filter;

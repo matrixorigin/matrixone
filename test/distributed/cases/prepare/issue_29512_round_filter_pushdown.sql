@@ -54,4 +54,22 @@ set @value = '12345.5';
 execute truncate_key using @value;
 deallocate prepare truncate_key;
 
+-- Reuse one execution shape across precision changes; zero alone is selective.
+prepare dynamic_round from 'select count(*) from lookup_key where id = round(?, ?)';
+set @value = '12345.0', @precision = 0;
+explain force execute dynamic_round using @value, @precision;
+execute dynamic_round using @value, @precision;
+set @precision = -1;
+execute dynamic_round using @value, @precision;
+set @precision = null;
+execute dynamic_round using @value, @precision;
+set @precision = 0;
+explain force execute dynamic_round using @value, @precision;
+execute dynamic_round using @value, @precision;
+deallocate prepare dynamic_round;
+prepare dynamic_truncate from 'select count(*) from lookup_key where id = truncate(?, cast(? as signed))';
+explain force execute dynamic_truncate using @value, @precision;
+execute dynamic_truncate using @value, @precision;
+deallocate prepare dynamic_truncate;
+
 drop database issue_29512_round_filter;

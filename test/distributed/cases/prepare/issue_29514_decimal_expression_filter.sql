@@ -168,4 +168,29 @@ prepare wide_text_cast_peer from 'select count(*) from wide where d = cast(? as 
 execute wide_text_cast_peer using @v;
 deallocate prepare wide_text_cast_peer;
 
+-- Boolean and multi-peer predicates must retain native DECIMAL pruning.
+set @a = cast(54321 as double), @b = cast(54322 as double);
+prepare boolean_peers from 'select count(*) from t where d = abs(?) or d = abs(?)';
+explain force execute boolean_peers using @a, @b;
+execute boolean_peers using @a, @b;
+deallocate prepare boolean_peers;
+prepare list_peers from 'select count(*) from t where d in (abs(?), abs(?))';
+explain force execute list_peers using @a, @b;
+execute list_peers using @a, @b;
+set @b = cast(54322.104 as double);
+execute list_peers using @a, @b;
+set @b = null;
+execute list_peers using @a, @b;
+set @b = cast(54322 as double);
+execute list_peers using @a, @b;
+deallocate prepare list_peers;
+prepare range_peers from 'select count(*) from t where d between abs(?) and abs(?)';
+explain force execute range_peers using @a, @b;
+execute range_peers using @a, @b;
+set @a = cast(54321.104 as double);
+execute range_peers using @a, @b;
+set @a = cast(54323 as double);
+execute range_peers using @a, @b;
+deallocate prepare range_peers;
+
 drop database issue_29514_decimal_expr;

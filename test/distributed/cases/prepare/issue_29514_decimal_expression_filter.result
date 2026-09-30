@@ -500,4 +500,64 @@ execute wide_text_cast_peer using @v;
 ➤ count(*)[-5,64,0]  𝄀
 2
 deallocate prepare wide_text_cast_peer;
+set @a = cast(54321 as double), @b = cast(54322 as double);
+prepare boolean_peers from 'select count(*) from t where d = abs(?) or d = abs(?)';
+explain force execute boolean_peers using @a, @b;
+➤ TP QUERY PLAN[12,-1,0]  𝄀
+Project  𝄀
+  ->  Aggregate  𝄀
+        Aggregate Functions: starcount(1)  𝄀
+        ->  Table Scan on issue_29514_decimal_expr.t  𝄀
+              Filter Cond: t.d in (cast(abs(54321) AS DECIMAL64(12, 2)), cast(abs(54322) AS DECIMAL64(12, 2)))  𝄀
+              Block Filter Cond: t.d in (cast(abs(54321) AS DECIMAL64(12, 2)), cast(abs(54322) AS DECIMAL64(12, 2)))
+execute boolean_peers using @a, @b;
+➤ count(*)[-5,64,0]  𝄀
+2
+deallocate prepare boolean_peers;
+prepare list_peers from 'select count(*) from t where d in (abs(?), abs(?))';
+explain force execute list_peers using @a, @b;
+➤ TP QUERY PLAN[12,-1,0]  𝄀
+Project  𝄀
+  ->  Aggregate  𝄀
+        Aggregate Functions: starcount(1)  𝄀
+        ->  Table Scan on issue_29514_decimal_expr.t  𝄀
+              Filter Cond: t.d in (cast(abs(54321) AS DECIMAL64(12, 2)), cast(abs(54322) AS DECIMAL64(12, 2)))  𝄀
+              Block Filter Cond: t.d in (cast(abs(54321) AS DECIMAL64(12, 2)), cast(abs(54322) AS DECIMAL64(12, 2)))
+execute list_peers using @a, @b;
+➤ count(*)[-5,64,0]  𝄀
+2
+set @b = cast(54322.104 as double);
+execute list_peers using @a, @b;
+➤ count(*)[-5,64,0]  𝄀
+1
+set @b = null;
+execute list_peers using @a, @b;
+➤ count(*)[-5,64,0]  𝄀
+1
+set @b = cast(54322 as double);
+execute list_peers using @a, @b;
+➤ count(*)[-5,64,0]  𝄀
+2
+deallocate prepare list_peers;
+prepare range_peers from 'select count(*) from t where d between abs(?) and abs(?)';
+explain force execute range_peers using @a, @b;
+➤ TP QUERY PLAN[12,-1,0]  𝄀
+Project  𝄀
+  ->  Aggregate  𝄀
+        Aggregate Functions: starcount(1)  𝄀
+        ->  Table Scan on issue_29514_decimal_expr.t  𝄀
+              Filter Cond: t.d BETWEEN cast(abs(54321) AS DECIMAL64(12, 2)) AND cast(abs(54322) AS DECIMAL64(12, 2))  𝄀
+              Block Filter Cond: t.d BETWEEN cast(abs(54321) AS DECIMAL64(12, 2)) AND cast(abs(54322) AS DECIMAL64(12, 2))
+execute range_peers using @a, @b;
+➤ count(*)[-5,64,0]  𝄀
+2
+set @a = cast(54321.104 as double);
+execute range_peers using @a, @b;
+➤ count(*)[-5,64,0]  𝄀
+1
+set @a = cast(54323 as double);
+execute range_peers using @a, @b;
+➤ count(*)[-5,64,0]  𝄀
+0
+deallocate prepare range_peers;
 drop database issue_29514_decimal_expr;

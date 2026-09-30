@@ -188,17 +188,12 @@ func preparedNumericValueSpelling(value any) string {
 // preparedZeroPrecisionRoundParam follows only planner casts and a direct
 // projected marker. Other expressions may change the value, so they keep the
 // normal comparison domain.
-func preparedZeroPrecisionRoundParam(expr *Expr) *Expr {
+func preparedZeroPrecisionRoundParam(ctx context.Context, expr *Expr) *Expr {
 	fn := expr.GetF()
 	if fn == nil || fn.Func == nil || (fn.Func.GetObjName() != "round" && fn.Func.GetObjName() != "truncate") || len(fn.Args) != 2 {
 		return nil
 	}
-	precision := fn.Args[1].GetLit()
-	if precision == nil || precision.Isnull {
-		return nil
-	}
-	zero, ok := precision.GetValue().(*plan.Literal_I64Val)
-	if !ok || zero.I64Val != 0 {
+	if !preparedZeroIntegerArgument(ctx, fn.Args[1]) {
 		return nil
 	}
 	value := fn.Args[0]
@@ -230,8 +225,42 @@ func preparedZeroPrecisionRoundParam(expr *Expr) *Expr {
 	return nil
 }
 
+// Prove zero through numeric casts only. A zero source survives those casts;
+// other values keep their executable conversion, even if it might round to zero.
+func preparedZeroIntegerArgument(ctx context.Context, expr *Expr) bool {
+	if literal := expr.GetLit(); literal != nil {
+		zero, ok := literal.GetValue().(*plan.Literal_I64Val)
+		return !literal.Isnull && ok && zero.I64Val == 0
+	}
+	for {
+		cast := expr.GetF()
+		if cast == nil || cast.Func == nil || cast.Func.ObjName != "cast" || len(cast.Args) != 2 ||
+			!makeTypeByPlan2Expr(expr).IsNumeric() {
+			break
+		}
+		expr = cast.Args[0]
+	}
+	param := expr.GetP()
+	state := preparedBindingState(ctx)
+	if param == nil || state == nil {
+		return false
+	}
+	binding, found := state.bindingForPosition(param.Pos)
+	if !found || !(binding.Type.Oid.IsInteger() || binding.Type.Oid.IsFloat() ||
+		binding.Type.Oid.IsDecimal() || binding.Type.Oid.IsMySQLString()) {
+		return false
+	}
+	value, present := preparedConfigurationValue(ctx, expr)
+	if !present || value == nil {
+		return false
+	}
+	integer := makeSimplePlan2Type(types.T_int64)
+	zero, exact, err := preparedComparisonExactIntegerExpr(ctx, preparedNumericValueSpelling(value), integer)
+	return err == nil && exact && zero.GetLit().GetI64Val() == 0
+}
+
 func preparedSafeRoundIntegerComparison(ctx context.Context, source *Expr, target Type) (*Expr, bool, error) {
-	param := preparedZeroPrecisionRoundParam(source)
+	param := preparedZeroPrecisionRoundParam(ctx, source)
 	if param == nil {
 		return nil, false, nil
 	}
