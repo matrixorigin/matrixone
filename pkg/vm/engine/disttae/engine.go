@@ -172,15 +172,18 @@ func New(
 	}
 
 	if e.config.memThrottler == nil {
-		throttlerOptions := []rscthrottler.MemThrottlerOption{
-			rscthrottler.WithRSSScavenging(),
-			rscthrottler.WithRSSCachePressureTarget(
-				setWorkspaceRSSCachePressureTarget,
-				clearWorkspaceRSSCachePressureTarget,
-			),
-			rscthrottler.WithRSSCacheEvictor(
-				makeWorkspaceRSSCacheEvictor(workspaceRSSCacheFamilyEvictTimeout),
-			),
+		throttlerOptions := make([]rscthrottler.MemThrottlerOption, 0, 4)
+		if e.config.memoryReclamationMode.EnablesReclamation() {
+			throttlerOptions = append(throttlerOptions,
+				rscthrottler.WithRSSScavenging(),
+				rscthrottler.WithRSSCachePressureTarget(
+					setWorkspaceRSSCachePressureTarget,
+					clearWorkspaceRSSCachePressureTarget,
+				),
+				rscthrottler.WithRSSCacheEvictor(
+					makeWorkspaceRSSCacheEvictor(workspaceRSSCacheFamilyEvictTimeout),
+				),
+			)
 		}
 		if e.config.quota.Load() != 0 {
 			throttlerOptions = append(
@@ -206,6 +209,7 @@ func New(
 		zap.Uint64("CommitWorkspaceThreshold", e.config.commitWorkspaceThreshold),
 		zap.Uint64("WriteWorkspaceThreshold", e.config.writeWorkspaceThreshold),
 		zap.Int64("ExtraWorkspaceThresholdQuota", e.config.memThrottler.Available()),
+		zap.String("MemoryReclamationMode", string(e.config.memoryReclamationMode)),
 		zap.Duration("CNTransferTxnLifespanThreshold", e.config.cnTransferTxnLifespanThreshold),
 	)
 
@@ -239,6 +243,9 @@ func (e *Engine) fillDefaults() {
 	}
 	if e.config.cnTransferTxnLifespanThreshold <= 0 {
 		e.config.cnTransferTxnLifespanThreshold = CNTransferTxnLifespanThreshold
+	}
+	if e.config.memoryReclamationMode == "" {
+		e.config.memoryReclamationMode = rscthrottler.AccountingAndReclamation
 	}
 }
 

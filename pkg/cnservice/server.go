@@ -255,16 +255,29 @@ func NewService(
 		panic(err)
 	}
 
+	throttlerOptions := []rscthrottler.MemThrottlerOption{
+		rscthrottler.WithAcquirePolicy(rscthrottler.AcquirePolicyForCNFlushS3),
+	}
+	if srv.cfg.Engine.MemoryReclamationMode.EnablesReclamation() {
+		throttlerOptions = append(throttlerOptions,
+			rscthrottler.WithRSSScavenging(),
+			rscthrottler.WithRSSCachePressureTarget(
+				setRSSCachePressureTarget,
+				clearRSSCachePressureTarget,
+			),
+			rscthrottler.WithRSSCacheEvictor(makeRSSCacheEvictor(rssCacheFamilyEvictTimeout)),
+		)
+	}
 	srv.CNMemoryThrottler = rscthrottler.NewMemThrottler(
 		"CNFlushS3",
 		90.0/100.0,
-		rscthrottler.WithAcquirePolicy(rscthrottler.AcquirePolicyForCNFlushS3),
-		rscthrottler.WithRSSScavenging(),
-		rscthrottler.WithRSSCachePressureTarget(
-			setRSSCachePressureTarget,
-			clearRSSCachePressureTarget,
-		),
-		rscthrottler.WithRSSCacheEvictor(makeRSSCacheEvictor(rssCacheFamilyEvictTimeout)),
+		throttlerOptions...,
+	)
+	logutil.Info(
+		"MemoryThrottler policy",
+		zap.String("component", "CNFlushS3"),
+		zap.String("memory-policy", string(srv.cfg.Engine.MemoryReclamationMode)),
+		zap.Bool("reclamation-enabled", srv.cfg.Engine.MemoryReclamationMode.EnablesReclamation()),
 	)
 
 	srv.pu.LockService = srv.lockService

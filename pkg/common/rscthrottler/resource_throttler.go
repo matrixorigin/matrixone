@@ -20,7 +20,9 @@ import (
 	"fmt"
 	"math"
 	"os"
+	"runtime"
 	"runtime/debug"
+	runtimemetrics "runtime/metrics"
 	"sync"
 	"sync/atomic"
 	"time"
@@ -62,6 +64,65 @@ var (
 		return cgroup.GetMemUsage(pid)
 	}
 )
+
+type runtimeMemorySnapshot struct {
+	heapAlloc    uint64
+	heapInuse    uint64
+	heapIdle     uint64
+	heapReleased uint64
+	numGC        uint32
+	pauseTotalNs uint64
+	gcCPUSeconds float64
+}
+
+func readRuntimeMemorySnapshot() runtimeMemorySnapshot {
+	var stats runtime.MemStats
+	runtime.ReadMemStats(&stats)
+	gcSamples := []runtimemetrics.Sample{{Name: "/cpu/classes/gc/total:cpu-seconds"}}
+	runtimemetrics.Read(gcSamples)
+	gcCPUSeconds := float64(0)
+	if gcSamples[0].Value.Kind() == runtimemetrics.KindFloat64 {
+		gcCPUSeconds = gcSamples[0].Value.Float64()
+	}
+	return runtimeMemorySnapshot{
+		heapAlloc:    stats.HeapAlloc,
+		heapInuse:    stats.HeapInuse,
+		heapIdle:     stats.HeapIdle,
+		heapReleased: stats.HeapReleased,
+		numGC:        stats.NumGC,
+		pauseTotalNs: stats.PauseTotalNs,
+		gcCPUSeconds: gcCPUSeconds,
+	}
+}
+
+func logRuntimeReclamation(action string, before runtimeMemorySnapshot, started time.Time) {
+	after := readRuntimeMemorySnapshot()
+	logutil.Info(
+		fmt.Sprintf("%s-Reclamation", MemoryThrottlerLogHeader),
+		zap.String("action", action),
+		zap.Duration("duration", time.Since(started)),
+		zap.Uint64("heap-alloc-before", before.heapAlloc),
+		zap.Uint64("heap-alloc-after", after.heapAlloc),
+		zap.Int64("heap-alloc-delta", int64(after.heapAlloc)-int64(before.heapAlloc)),
+		zap.Uint64("heap-inuse-before", before.heapInuse),
+		zap.Uint64("heap-inuse-after", after.heapInuse),
+		zap.Int64("heap-inuse-delta", int64(after.heapInuse)-int64(before.heapInuse)),
+		zap.Uint64("heap-idle-before", before.heapIdle),
+		zap.Uint64("heap-idle-after", after.heapIdle),
+		zap.Int64("heap-idle-delta", int64(after.heapIdle)-int64(before.heapIdle)),
+		zap.Uint64("heap-released-before", before.heapReleased),
+		zap.Uint64("heap-released-after", after.heapReleased),
+		zap.Int64("heap-released-delta", int64(after.heapReleased)-int64(before.heapReleased)),
+		zap.Uint32("gc-count-before", before.numGC),
+		zap.Uint32("gc-count-after", after.numGC),
+		zap.Uint64("gc-pause-total-before-ns", before.pauseTotalNs),
+		zap.Uint64("gc-pause-total-after-ns", after.pauseTotalNs),
+		zap.Int64("gc-pause-total-delta-ns", int64(after.pauseTotalNs)-int64(before.pauseTotalNs)),
+		zap.Float64("gc-cpu-seconds-before", before.gcCPUSeconds),
+		zap.Float64("gc-cpu-seconds-after", after.gcCPUSeconds),
+		zap.Float64("gc-cpu-seconds-delta", after.gcCPUSeconds-before.gcCPUSeconds),
+	)
+}
 
 type rssPressureState int64
 
@@ -530,12 +591,21 @@ func (m *memThrottler) tryScavengeRSS(now int64, rss int64) {
 			}
 			evictCtx, cancel := context.WithTimeout(context.Background(), rssCacheEvictTimeout)
 			defer cancel()
+			started := time.Now()
+			before := readRuntimeMemorySnapshot()
 			evictor(evictCtx, targetPercent)
+			logRuntimeReclamation("cache-eviction", before, started)
+			before = readRuntimeMemorySnapshot()
+			started = time.Now()
 			free()
+			logRuntimeReclamation("cache-eviction-free-os-memory", before, started)
 		}(cacheTargetPercent, generation)
 	}
 	if shouldFreeOSMemory {
+		started := time.Now()
+		before := readRuntimeMemorySnapshot()
 		freeOSMemory()
+		logRuntimeReclamation("free-os-memory", before, started)
 	}
 }
 
