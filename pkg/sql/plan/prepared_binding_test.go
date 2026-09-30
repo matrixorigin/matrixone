@@ -237,6 +237,10 @@ func TestPreparedNumericPredicateFiltering(t *testing.T) {
 		{"round scalar collision fallback", "c>=round((select ?))", []string{"9007199254740992"}, false, true},
 		{"round zero precision", "c=round(?,?)", []string{"54321.0", "0"}, true, true},
 		{"truncate zero precision", "c=truncate(?,?)", []string{"54321.0", "0"}, true, true},
+		// The raw bytes spell a small decimal integer, but IsBin means the
+		// source is a binary value. Do not use its byte spelling to prove that
+		// the ROUND result fits the indexed BIGINT domain.
+		{"binary bytes zero precision collision", "c=round(?,?)", []string{"12345678", "0"}, false, true},
 		{"explicit precision cast", "c=round(?,cast(? as signed))", []string{"54321.0", "0"}, true, true},
 		{"round nonzero precision", "c=round(?,?)", []string{"54321.0", "1"}, true, true},
 		{"round negative precision", "c=round(?,?)", []string{"54321.0", "-1"}, true, true},
@@ -269,7 +273,12 @@ func TestPreparedNumericPredicateFiltering(t *testing.T) {
 						bindings[i].Type = types.T_varchar.ToType()
 					}
 				}
-				values[i] = ParamValue{Value: value, IsBinaryProtocol: true}
+				paramValue := ParamValue{Value: value, IsBinaryProtocol: true}
+				if tc.name == "binary bytes zero precision collision" && i == 0 {
+					paramValue.Value = []byte(value)
+					paramValue.IsBin = true
+				}
+				values[i] = paramValue
 				require.NoError(t, vector.AppendBytes(params, []byte(value), false, proc.Mp()))
 			}
 			proc.SetPrepareParams(params)
@@ -1290,9 +1299,9 @@ func TestPreparedExecutionPlanRoundTextUsesExactTextDomain(t *testing.T) {
 			wantExact: true,
 		},
 		{
-			name:   "unproven string source stays out of exact domain",
-			source: types.T_varchar.ToType(),
-			value: ParamValue{Value: "1.5"},
+			name:       "unproven string source stays out of exact domain",
+			source:     types.T_varchar.ToType(),
+			value:      ParamValue{Value: "1.5"},
 			wantDouble: true,
 		},
 		{
