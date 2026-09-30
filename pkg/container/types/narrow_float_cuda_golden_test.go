@@ -1135,3 +1135,6 @@ var cudaNarrowEncode = []struct {
 	{0x3a000000, 0x00, 0x0},
 	{0x3a400000, 0x00, 0x0},
 }
+
+// cudaFloat4PairOneSix is the byte __nv_cvt_float2_to_fp4x2 packs for (x=1.0, y=6.0).
+const cudaFloat4PairOneSix = 0x72

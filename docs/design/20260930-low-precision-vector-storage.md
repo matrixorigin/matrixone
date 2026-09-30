@@ -63,14 +63,22 @@ NaN to +0; CUDA returns `0x7f` / `0x7`); non-finite values are never stored.
 Each value is one varlena cell:
 
 ```
-[ header | block scales (row order) | packed elements ]
+offset  size  field       vecf8 (MXFP8)               vecf4 (NVFP4)
+------  ----  ----------  --------------------------  --------------------------------------
+ 0      1     version     1                           1
+ 1      1     format      1                           2
+ 2      2     reserved    0                           0
+ 4      4     dim N       uint32 LE                   uint32 LE
+ 8      4     global g    float32 LE, 1.0             float32 LE, amax(v)/(6*448); 0 if v = 0
+12      S     scales      S = ceil(N/32), E8M0        S = ceil(N/16), unsigned E4M3
+12+S    E     elements    E = N, e4m3                 E = ceil(N/2), e2m1
 ```
 
-- **header** — fixed-size MO metadata: format version, element format (e4m3 / e2m1),
-  scale format (E8M0 / E4M3), block size (32 / 16), logical dimension `N`, block-scale
-  count (`ceil(N/32)` for vecf8, `ceil(N/16)` for vecf4).
+- **header** — 12 bytes of MO metadata. The format fixes the element type, scale type
+  and block size (32 / 16); the scale count follows from `N`.
 - **block scales** — one byte per block, in block order. Scale block `b` governs its
   `blockSize` consecutive elements.
+- **value** — element `i` of block `b` is `g × scale[b] × element[i]`.
 - **packed elements** — e4m3 one byte each; e2m1 two per byte, **element `2i` in the low
   nibble, `2i+1` in the high nibble** (CUDA's `__nv_fp4x2_e2m1` order, measured). An odd
   `N` leaves the final high nibble `0x0` (+0).
@@ -81,44 +89,48 @@ header, never derived from byte length.
 GPU transfer: the packed-element bytes of consecutive rows form the cuBLASLt operand
 directly (memcpy). The block scales are re-laid out into cuBLASLt's tiled scale tensor
 (§GPU engine) — a per-byte gather, because a scale tile spans 128 vectors and cannot be
-represented inside one cell.
+represented inside one cell. The global `g` stays on the host: the GEMM computes the dot
+product of the block-scaled values, and the caller multiplies it by `g_d × g_q`.
 
 ## Scale derivation
 
-- **Per-block symmetric absmax.** `scale = absmax(block) / FORMAT_MAX` (448 for e4m3, 6
-  for e2m1), rounded **up** to a representable scale so no element overflows; each element
-  `code = quantize(v / scale)`, dequantized as `decode(code) × scale`. An all-zero block
-  stores scale 0 and zero elements.
-  - MXFP8 (E8M0): `scale = 2^ceil(log2(absmax/448))`; dequantization is an exact `ldexp`.
-  - NVFP4 (E4M3): the scale has mantissa bits and fits the block absmax tightly.
-- **NVFP4 per-tensor global = 1.0, not stored.** NVFP4 defines an fp32 scale per operand
-  tensor, which conflicts with per-row incremental storage. Each vector is self-normalized
-  into its per-block E4M3 scales and the GEMM runs with global (alpha) = 1.0, verified
-  exact against a CPU reference. On unit-normalized 768-d embeddings 60% of block scales
-  fall in the E4M3 subnormal range; a per-vector power-of-two pre-scale that lifts them into
-  the normal range did not change recall (table below), so no per-vector factor is stored.
+- **vecf8 (MXFP8), one level.** Per block, `scale = 2^ceil(log2(absmax/448))` (the
+  smallest E8M0 power of two with `448 × scale ≥ absmax`); `element = e4m3(v / scale)`.
+  E8M0 spans 2^-127..2^127, so every finite float32 fits; `g = 1`.
+- **vecf4 (NVFP4), two levels, applied per vector.** NVFP4 scales a tensor by an fp32
+  global and each 16-element block by an E4M3 scale. MO applies the global per vector,
+  so every vector stays independent:
+  - `g = amax(v) / (6 × 448)`;
+  - per block, `scale = ue4m3_round_up(absmax(block) / (6 × g))`, capped at 448 — the
+    block holding the vector maximum gets exactly 448;
+  - `element = e2m1(v / (g × scale))`.
+
+  Any finite float32 range fits, and block scales stay out of the E4M3 subnormal range
+  (0% of scales on unit-normalized embeddings, vs 60% with a fixed global of 1.0).
+- Scales round **up** to a representable value, so no element overflows its format. An
+  all-zero block stores scale 0 and zero elements.
 - **Non-finite is never stored.** NaN/Inf input is rejected at build, per the repo-wide
   finite-persistence rule.
 
-## Storage size (excl. header), 1024-dim
+## Storage size, 1024-dim
 
-| Format | Elements | Scales | Total | bits/elem |
-|--------|----------|--------|-------|-----------|
-| `vecf8` MXFP8 | 1024 B (e4m3) | 32 × 1 B (E8M0) | **1056 B** | 8.25 |
-| `vecf4` NVFP4 | 512 B (e2m1)  | 64 × 1 B (E4M3) | **576 B**  | ~4.5 |
+| Format | Header | Scales | Elements | Total | bits/elem |
+|--------|:------:|--------|----------|-------|-----------|
+| `vecf8` MXFP8 | 12 B | 32 × 1 B (E8M0) | 1024 B (e4m3) | **1068 B** | 8.34 |
+| `vecf4` NVFP4 | 12 B | 64 × 1 B (E4M3) | 512 B (e2m1)  | **588 B**  | 4.59 |
 
-vs `vecf32(1024)` = 4096 B: `vecf4` is ~7× smaller, `vecf8` ~4×.
+vs `vecf32(1024)` = 4096 B: `vecf4` is 7.0× smaller, `vecf8` 3.8×.
 
 ## Accuracy (measured)
 
 `wiki_all_1M` 768-d embeddings, unit-normalized, 50,000 base vectors, 200 queries; both
 dataset and queries quantized; recall@10 of the quantized dot product against exact fp32:
 
-| Format | recall@10 | mean relative L2 reconstruction error |
+| Format (the `pkg/container/types` codec) | recall@10 | mean relative L2 reconstruction error |
 |--------|:---------:|:-------------------------------------:|
 | `vecf8` MXFP8 | 0.971 | 2.7% |
-| `vecf4` NVFP4 (global = 1.0) | 0.918 | 10.6% |
-| `vecf4` NVFP4 with per-vector 2^k pre-scale | 0.913 | 10.0% |
+| `vecf4` NVFP4, per-vector global | 0.922 | 9.9% |
+| NVFP4 with a fixed global of 1.0 (not used) | 0.918 | 10.6% |
 
 The GEMM is exact on the stored values; the ranking is approximate relative to the
 original fp32 vectors because the storage is quantized. `vecf8` is the quality format,
@@ -154,7 +166,7 @@ cuBLASLt call sequence:
 | 4 | `cublasLtMatrixLayoutCreate` | A: element type, K × rows(D), ld = K; B: K × rows(Q), ld = K; D: `CUDA_R_32F`, rows(D) × rows(Q) |
 | 5 | `cublasLtMatmulPreferenceCreate` / `SetAttribute` | workspace limit |
 | 6 | `cublasLtMatmulAlgoGetHeuristic` | cached per shape |
-| 7 | `cublasLtMatmul` | alpha = 1.0, beta = 0 |
+| 7 | `cublasLtMatmul` | alpha = 1.0, beta = 0 (per-vector `g` is applied by the caller) |
 
 Contract (each point measured on sm_120 with cuBLASLt 13.6):
 
@@ -211,10 +223,10 @@ vector_matmul(params, src_id, src_vec, queries) → (result JSON)
 It is fed by `CROSS APPLY` from the dataset table and runs without `IsSingle`: one
 instance per scan pipeline, so the scan keeps its full parallelism. Each instance appends
 incoming rows to its own host tile; when the tile reaches `tile_bytes` or input ends it
-calls the engine, and keeps the top `limit` dot products per query. At end of input it
-emits one row holding its partial result; `vector_matmul_merge` combines the partials of
-all instances on all CNs. NULL vectors are skipped. A `WHERE` on the source table filters
-rows before they reach the function.
+calls the engine, multiplies each dot product by `g_d × g_q`, and keeps the top `limit`
+scores per query. At end of input it emits one row holding its partial result;
+`vector_matmul_merge` combines the partials of all instances on all CNs. NULL vectors
+are skipped. A `WHERE` on the source table filters rows before they reach the function.
 
 Instances on one CN share its GPU: each uses its own CUDA stream and cuBLASLt
 handle/workspace, and host and device tile memory scale with the instance count
@@ -335,8 +347,9 @@ scores within fp32 summation-order tolerance.
 
 ## Decisions
 
-- `vecf4` = NVFP4 (e2m1, unsigned E4M3 16-block scale, per-vector normalized, GEMM
-  global = 1.0, no stored global); `vecf8` = MXFP8 (e4m3, E8M0 32-block scale).
+- `vecf4` = NVFP4 (e2m1, unsigned E4M3 16-block scale, fp32 global per vector in the
+  cell header); `vecf8` = MXFP8 (e4m3, E8M0 32-block scale, header global fixed at 1).
+- Cell = 12-byte header (version, format, reserved, `N`, `g`) + scales + elements.
 - Element codecs = the scalar `Float8`/`Float4`; scale codecs = new E8M0 + `Float8` e4m3.
 - Cells store scales per row in block order; the GPU engine re-lays them into the tiled
   scale tensor.

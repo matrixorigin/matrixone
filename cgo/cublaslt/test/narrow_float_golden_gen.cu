@@ -82,6 +82,9 @@ int main() {
         printf("\t{0x%08x, 0x%02x, 0x%x},\n", f2bits(v), o8, o4);
     }
     printf("}\n\n");
+    float2 pair = make_float2(1.0f, 6.0f);
+    printf("// cudaFloat4PairOneSix is the byte __nv_cvt_float2_to_fp4x2 packs for (x=1.0, y=6.0).\n");
+    printf("const cudaFloat4PairOneSix = 0x%02x\n", __nv_cvt_float2_to_fp4x2(pair, __NV_E2M1, cudaRoundNearest));
     fprintf(stderr, "encode cases: %zu\n", in.size());
     return 0;
 }
