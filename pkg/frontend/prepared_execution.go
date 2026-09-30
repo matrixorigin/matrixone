@@ -94,8 +94,8 @@ func preparedExecutionBindingKey(bindings []plan2.PreparedSourceBinding, values 
 		writeType(binding.NumericType)
 		writeType(binding.BitCountType)
 		if param, ok := values[i].(plan2.ParamValue); ok {
-			fmt.Fprintf(&key, "%d:%t:%t:%t:%d:%t:%t;", param.PrepareParamKind,
-				param.IsBinaryProtocol, param.IsBin, param.IsBinaryString,
+			fmt.Fprintf(&key, "%d:%t:%t:%t:%t:%d:%t:%t;", param.PrepareParamKind,
+				param.IsBinaryProtocol, param.HasSourceType, param.IsBin, param.IsBinaryString,
 				param.RuntimeStringDomain, param.EnableNumericPrefix, param.Value == nil)
 		}
 	}
