@@ -34,6 +34,9 @@ const (
 	SpillFileServiceName = "__spill"
 )
 
+// MORPCVersion101 gates the cumulative JSON source-domain and functional-index
+// wire capabilities. These features share the same protocol epoch and must be
+// landed as one ordered compatibility set.
 const (
 	MORPCMinVersion    int64 = math.MinInt64
 	MORPCVersion1      int64 = 1
@@ -136,9 +139,6 @@ const (
 	MORPCVersion98     int64 = 98  // canonical FORMAT precision and MAKEDATE/MAKETIME integer signatures
 	MORPCVersion99     int64 = 99  // owner-atomic writer-fair row-lock admission
 	MORPCVersion100    int64 = 100 // on-demand View metadata column descriptions
-	// Version 101 gates the cumulative JSON source-domain and functional-index
-	// wire capabilities. These features share the same protocol epoch and must
-	// be landed as one ordered compatibility set.
 	MORPCVersion101    int64 = 101
 	MORPCLatestVersion       = MORPCVersion101
 )
