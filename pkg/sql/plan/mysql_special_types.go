@@ -156,6 +156,36 @@ func isDirectPreparedGeometrySRIDArg(expr *plan.Expr) bool {
 	return isImplicitPreparedParamCast(expr)
 }
 
+// SRID lives in the geometry type, so bind its value before a parent function
+// or assignment consumes that type. Only the configuration marker becomes a
+// literal; geometry data and unrelated parameters keep their references.
+func bindPreparedGeometrySRID(ctx context.Context, name string, args []*Expr) ([]*Expr, error) {
+	if !isPreparedGeometrySRIDFunction(name) || len(args) < 2 {
+		return args, nil
+	}
+	last := len(args) - 1
+	value, known := preparedConfigurationValue(ctx, unwrapPreparedImplicitCast(args[last], true))
+	if !known {
+		return args, nil
+	}
+	var srid uint32
+	isNull := geometrySRIDSourceIsNull(ctx, args[0])
+	if !isNull {
+		var err error
+		srid, isNull, err = geometrySRIDRuntimeValue(value)
+		if err != nil {
+			return nil, err
+		}
+	}
+	literal := &plan.Literal{Isnull: isNull}
+	if !isNull {
+		literal.Value = &plan.Literal_I64Val{I64Val: int64(srid)}
+	}
+	args = append([]*Expr(nil), args...)
+	args[last] = &Expr{Typ: makeSimplePlan2Type(types.T_int64), Expr: &plan.Expr_Lit{Lit: literal}}
+	return args, nil
+}
+
 func isPreparedGeometrySRIDFunction(name string) bool {
 	switch strings.ToLower(name) {
 	case "st_srid", "st_geomfromwkb", "st_geomfrombinary", "st_geometryfromwkb":
@@ -215,14 +245,17 @@ func geometryExprHasDeferredSRID(expr *plan.Expr) bool {
 	return false
 }
 
-// geometrySRIDSourceIsStaticNull is deliberately narrower than a general
+// geometrySRIDSourceIsNull is deliberately narrower than a general
 // constant-folding predicate. It recognizes NULL at the geometry input of an
 // SRID-producing expression, including a cast around NULL, so an invalid SRID
 // cannot mask the SQL NULL result. Row-varying NULLs are left to the runtime
 // evaluator and do not bypass scalar SRID validation.
-func geometrySRIDSourceIsStaticNull(expr *plan.Expr) bool {
+func geometrySRIDSourceIsNull(ctx context.Context, expr *plan.Expr) bool {
 	if expr == nil {
 		return false
+	}
+	if value, known := preparedConfigurationValue(ctx, expr); known {
+		return value == nil
 	}
 	if isNullLiteralExpr(expr) {
 		return true
@@ -231,7 +264,7 @@ func geometrySRIDSourceIsStaticNull(expr *plan.Expr) bool {
 		name := strings.ToLower(fn.Func.GetObjName())
 		if (name == "cast" || name == "cast_assign" || name == "cast_strict") && len(fn.Args) > 0 {
 			// Generic CAST stores the source first and the TargetType second.
-			return geometrySRIDSourceIsStaticNull(fn.Args[0])
+			return geometrySRIDSourceIsNull(ctx, fn.Args[0])
 		}
 		if isGeometrySRIDProducingFunction(name) && len(fn.Args) >= 2 {
 			// These functions are strict NULL propagators: a NULL geometry or a
@@ -239,8 +272,8 @@ func geometrySRIDSourceIsStaticNull(expr *plan.Expr) bool {
 			// assignment boundary, where the result Width is otherwise the same
 			// encoding as an unconstrained geometry and could be mistaken for a
 			// mismatched SRID.
-			return geometrySRIDSourceIsStaticNull(fn.Args[0]) ||
-				geometrySRIDSourceIsStaticNull(fn.Args[len(fn.Args)-1])
+			return geometrySRIDSourceIsNull(ctx, fn.Args[0]) ||
+				geometrySRIDSourceIsNull(ctx, fn.Args[len(fn.Args)-1])
 		}
 	}
 	return false
@@ -1080,7 +1113,7 @@ func funcCastForGeometryType(ctx context.Context, expr *Expr, targetType Type) (
 	// not carry an SRID). A SRID-constrained column requires the value to carry
 	// the same SRID; an unconstrained column (Width 0) accepts any SRID.
 	if columnSRID, columnDefined := geometrySRIDValue(&targetType); columnDefined &&
-		!geometryExprHasDeferredSRID(expr) && !geometrySRIDSourceIsStaticNull(expr) {
+		!geometryExprHasDeferredSRID(expr) && !geometrySRIDSourceIsNull(ctx, expr) {
 		valueSRID, _ := geometrySRIDValue(&expr.Typ)
 		if valueSRID != columnSRID {
 			return nil, moerr.NewInvalidInputf(ctx,
@@ -1137,7 +1170,7 @@ func validateGeometryAssignmentSRID(ctx context.Context, expr *Expr, targetType 
 		strings.EqualFold(fn.Func.GetObjName(), moGeometryCastToSubtypeFun) && len(fn.Args) >= 2 {
 		source = fn.Args[len(fn.Args)-1]
 	}
-	if source == nil || geometrySRIDSourceIsStaticNull(source) || !isGeometryPlanType(&source.Typ) {
+	if source == nil || geometrySRIDSourceIsNull(ctx, source) || !isGeometryPlanType(&source.Typ) {
 		return nil
 	}
 	valueSRID, _ := geometrySRIDValue(&source.Typ)

@@ -18,9 +18,12 @@ import (
 	"context"
 	"testing"
 
+	"github.com/matrixorigin/matrixone/pkg/catalog"
 	"github.com/matrixorigin/matrixone/pkg/common/runtime"
 	"github.com/matrixorigin/matrixone/pkg/defines"
 	"github.com/matrixorigin/matrixone/pkg/pb/plan"
+	"github.com/matrixorigin/matrixone/pkg/sql/parsers"
+	"github.com/matrixorigin/matrixone/pkg/sql/parsers/dialect"
 	"github.com/stretchr/testify/require"
 )
 
@@ -111,4 +114,48 @@ func TestParseOptimizeHintsGlobalAndPerStatement(t *testing.T) {
 	require.NotNil(t, b.optimizerHints)
 	require.Equal(t, 1, b.optimizerHints.aggPushDown, "global hint applied")
 	require.Equal(t, 1, b.optimizerHints.applyIndices, "per-statement hint applied on top")
+}
+
+func TestPreparedBlockFilterDisabledHintPersistsInPlan(t *testing.T) {
+	for _, tc := range []struct {
+		name, global, statement string
+		disabled                bool
+	}{
+		{name: "global disabled", global: "blockFilter=2", disabled: true},
+		{name: "statement disables global", global: "blockFilter=1", statement: "blockFilter=2", disabled: true},
+		{name: "statement enables global", global: "blockFilter=2", statement: "blockFilter=0"},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			ctx := defines.AttachAccountId(context.Background(), catalog.System_Account)
+			if tc.statement != "" {
+				ctx = context.WithValue(ctx, defines.OptimizerHints{}, tc.statement)
+			}
+			mock := NewMockCompilerContext(true)
+			mock.SetContext(ctx)
+			svc := mock.GetProcess().GetService()
+			runtime.ServiceRuntime(svc).SetGlobalVariables("optimizer_hints", tc.global)
+			defer runtime.ServiceRuntime(svc).SetGlobalVariables("optimizer_hints", "")
+			stmt, err := parsers.ParseOne(ctx, dialect.MYSQL,
+				"select a from select_test.bind_select where a=?", 1)
+			require.NoError(t, err)
+			defer stmt.Free()
+			built, err := BuildPlan(mock, stmt, true)
+			require.NoError(t, err)
+			// A later session hint change cannot change this prepared plan's decision.
+			runtime.ServiceRuntime(svc).SetGlobalVariables("optimizer_hints", "blockFilter=1")
+			scans := 0
+			for _, node := range built.GetQuery().Nodes {
+				if node.NodeType != plan.Node_TABLE_SCAN {
+					continue
+				}
+				scans++
+				if tc.disabled {
+					require.Equal(t, PreparedBlockFilterDisabledScanOption, node.ExtraOptions)
+				} else {
+					require.Empty(t, node.ExtraOptions)
+				}
+			}
+			require.Positive(t, scans)
+		})
+	}
 }

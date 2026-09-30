@@ -375,6 +375,7 @@ func DeepCopyNode(node *plan.Node) *plan.Node {
 		DedupInputKeysUnique:       node.DedupInputKeysUnique,
 		EmitCompressedRowCount:     node.EmitCompressedRowCount,
 		AdaptiveTopFallbackOnEmpty: node.AdaptiveTopFallbackOnEmpty,
+		VectorQuerySourceId:        node.VectorQuerySourceId,
 		SpillMem:                   node.SpillMem,
 		RuntimeFilterProbeList: DeepCopyRuntimeFilterSpecList(
 			node.RuntimeFilterProbeList),
@@ -1243,9 +1244,10 @@ func DeepCopyExpr(expr *Expr) *Expr {
 	case *plan.Expr_V:
 		newExpr.Expr = &plan.Expr_V{
 			V: &plan.VarRef{
-				Name:   item.V.GetName(),
-				Global: item.V.GetGlobal(),
-				System: item.V.GetSystem(),
+				Name:              item.V.GetName(),
+				Global:            item.V.GetGlobal(),
+				System:            item.V.GetSystem(),
+				BoundStringDomain: item.V.GetBoundStringDomain(),
 			},
 		}
 

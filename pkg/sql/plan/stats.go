@@ -1619,6 +1619,16 @@ func ReCalcNodeStats(nodeID int32, builder *QueryBuilder, recursive bool, leafNo
 			node.Stats.Selectivity = 1
 		}
 
+	case plan.Node_VECTOR_QUERY_TOP:
+		node.Stats = DeepCopyStats(builder.qry.Nodes[node.Children[1]].Stats)
+		node.Stats.ForceOneCN = true
+
+	case plan.Node_VECTOR_QUERY_SOURCE:
+		node.Stats = DefaultStats()
+		node.Stats.Outcnt = 1
+		node.Stats.TableCnt = 1
+		node.Stats.Selectivity = 1
+
 	case plan.Node_SINK_SCAN:
 		sourceNode := builder.qry.Steps[node.GetSourceStep()[0]]
 		node.Stats = builder.qry.Nodes[sourceNode].Stats
@@ -2281,7 +2291,7 @@ func (builder *QueryBuilder) determineBuildAndProbeSide(nodeID int32, recursive 
 		// across both cost-based and recursive-side orientation choices.
 		for _, expr := range node.OnList {
 			if ContainsGuardedJoinDiagnosticWithProof(builder.compCtx.GetProcess(), expr,
-				preparedJoinDiagnosticFree(builder.compCtx.GetContext())) {
+				builder.preparedParameterDiagnosticsFree()) {
 				node.IsRightJoin = false
 				return
 			}

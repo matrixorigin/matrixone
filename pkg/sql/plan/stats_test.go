@@ -1048,7 +1048,6 @@ func TestGuardedDiagnosticKeepsLoopJoinSupportedOrientation(t *testing.T) {
 		bind(">", GetColExpr(timeType, leftTag, 1), bind("time", param)),
 		makePlan2BoolConstExprWithType(true))
 	require.True(t, ContainsGuardedJoinDiagnostic(proc, preparedGuard))
-	ctx.SetContext(WithPreparedJoinDiagnosticFree(ctx.GetContext()))
 	for _, joinType := range []planpb.Node_JoinType{
 		planpb.Node_LEFT, planpb.Node_SEMI, planpb.Node_ANTI, planpb.Node_SINGLE,
 	} {
@@ -1059,6 +1058,11 @@ func TestGuardedDiagnosticKeepsLoopJoinSupportedOrientation(t *testing.T) {
 			{NodeId: 2, NodeType: planpb.Node_JOIN, JoinType: joinType, Children: []int32{0, 1},
 				OnList: []*planpb.Expr{key, preparedGuard}, Stats: &planpb.Stats{HashmapStats: &planpb.HashMapStats{}}},
 		}
+		builder.qry.Steps = []int32{2}
+		safe, err := ProbePreparedJoinParameterDiagnostics(proc, &Plan{Plan: &planpb.Plan_Query{Query: builder.qry}})
+		require.NoError(t, err)
+		require.True(t, safe)
+		builder.preparedBindingProof = &safe
 		builder.determineBuildAndProbeSide(2, false)
 		require.True(t, builder.qry.Nodes[2].IsRightJoin, "%s safe prepared operand restores cost choice", joinType)
 	}

@@ -477,7 +477,7 @@ func (txn *activeTxn) markTableNonCoarsenableLocked(
 	table uint64,
 	opts pb.LockOptions,
 ) {
-	if opts.Mode == pb.LockMode_Exclusive && opts.Sharding == pb.Sharding_None {
+	if opts.Mode == pb.LockMode_Exclusive && opts.Sharding == pb.Sharding_None && !opts.KeepRows {
 		return
 	}
 	extra := h.ensureExtra()
@@ -815,7 +815,7 @@ func (txn *activeTxn) coarsenLockRequest(
 	opts pb.LockOptions,
 	maxLockRowCount int,
 ) ([][]byte, pb.LockOptions, bool) {
-	if len(rows) == 0 ||
+	if opts.KeepRows || len(rows) == 0 ||
 		maxLockRowCount <= 0 ||
 		opts.Mode != pb.LockMode_Exclusive ||
 		opts.Sharding != pb.Sharding_None {
