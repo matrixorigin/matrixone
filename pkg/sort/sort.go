@@ -98,7 +98,8 @@ func IsSupportedType(typ types.T) bool {
 		types.T_char, types.T_varchar, types.T_json, types.T_text,
 		types.T_binary, types.T_varbinary, types.T_blob, types.T_datalink,
 		types.T_array_float32, types.T_array_float64, types.T_array_bf16,
-		types.T_array_float16, types.T_array_int8, types.T_array_uint8:
+		types.T_array_float16, types.T_array_int8, types.T_array_uint8,
+		types.T_array_float8, types.T_array_float4:
 		return true
 	default:
 		return false
@@ -465,6 +466,14 @@ func sortByVector(
 			genericSort(col, os, arrayElementLess[uint8])
 		} else {
 			genericSort(col, os, arrayElementGreater[uint8])
+		}
+	case types.T_array_float8, types.T_array_float4:
+		// Order by the dequantized values, as vecf32 does.
+		col := blockScaledSortColumn(vec)
+		if !desc {
+			genericSort(col, os, arrayLess[float32])
+		} else {
+			genericSort(col, os, arrayGreater[float32])
 		}
 	case types.T_TS:
 		col := vector.MustFixedColNoTypeCheck[types.TS](vec)
@@ -1168,4 +1177,19 @@ func reverseRange(a, b int, os []int64) {
 		i++
 		j--
 	}
+}
+
+// blockScaledSortColumn dequantizes a vecf8/vecf4 vector; a NULL or malformed cell
+// becomes an empty row.
+func blockScaledSortColumn(vec *vector.Vector) [][]float32 {
+	col := make([][]float32, vec.Length())
+	for i := range col {
+		if vec.IsNull(uint64(i)) {
+			continue
+		}
+		if v, err := types.BlockScaledToFloat32(vec.GetBytesAt(i)); err == nil {
+			col[i] = v
+		}
+	}
+	return col
 }

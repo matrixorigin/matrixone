@@ -197,7 +197,8 @@ func newCompareFor(typ types.Type, desc, nullsLast, sqlOrder bool) Compare {
 			isConstNull: make([]bool, 2),
 		}
 	case types.T_array_float32, types.T_array_float64,
-		types.T_array_bf16, types.T_array_float16, types.T_array_int8, types.T_array_uint8:
+		types.T_array_bf16, types.T_array_float16, types.T_array_int8, types.T_array_uint8,
+		types.T_array_float8, types.T_array_float4:
 		//NOTE: Used by merge_order, merge_top, top agg operators.
 		return &arrayCompare{
 			desc:        desc,

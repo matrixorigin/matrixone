@@ -400,3 +400,22 @@ func TestVectorTypeBySQLName(t *testing.T) {
 		require.False(t, ok, name)
 	}
 }
+
+func TestCompareBlockScaledFromBytes(t *testing.T) {
+	for _, f := range blockScaledFormats {
+		a := mustBlockScaled(t, f, []float32{1, 2, 3})
+		b := mustBlockScaled(t, f, []float32{1, 3, 0})
+		short := mustBlockScaled(t, f, []float32{1, 2})
+		require.Equal(t, -1, CompareBlockScaledFromBytes(a, b, false))
+		require.Equal(t, 1, CompareBlockScaledFromBytes(b, a, false))
+		require.Equal(t, 1, CompareBlockScaledFromBytes(a, b, true))
+		require.Equal(t, 0, CompareBlockScaledFromBytes(a, a, false))
+		require.Equal(t, 1, CompareBlockScaledFromBytes(a, short, false))
+		// vecf32 ordering of the same values agrees
+		va, _ := BlockScaledToFloat32(a)
+		vb, _ := BlockScaledToFloat32(b)
+		require.Equal(t, ArrayCompare(va, vb), CompareBlockScaledFromBytes(a, b, false))
+		// malformed cells order by bytes instead of failing
+		require.Equal(t, -1, CompareBlockScaledFromBytes([]byte{0}, []byte{1}, false))
+	}
+}

@@ -219,7 +219,9 @@ only when it is stored into a `vecf8`/`vecf4` column (assignment cast).
 | `inner_product(a, b)` | fp32 dot product over dequantized values; `a`/`b` each `vecf8`, `vecf4` or `vecf32` |
 | `l2_distance`, `cosine_distance`, `l1_distance`, … | not supported |
 | `SUM`/`AVG`/`MIN`/`MAX` over vectors | not supported (no vector type has them) |
-| comparison, `ORDER BY`, `GROUP BY`, `DISTINCT`, join keys | not supported |
+| `ORDER BY`, window `ORDER BY` | as for `vecf32`: by the dequantized values, element-wise |
+| `GROUP BY`, `DISTINCT`, window `PARTITION BY` | by cell bytes (the encoding of a given input is deterministic) |
+| comparison operators (`=`, `<`, …) | not supported (as for every vector type) |
 | primary key, partition key, secondary/unique index, vector index | rejected at DDL |
 | `LOAD` | CSV text `"[…]"`; Parquet `LIST<FLOAT/DOUBLE>` and text columns, quantized per row |
 

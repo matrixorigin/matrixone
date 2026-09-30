@@ -11305,6 +11305,10 @@ func (v *Vector) GetMinMaxValue() (ok bool, minv, maxv []byte) {
 		_minv, _maxv := ArrayElementGetMinMax[uint8](v)
 		minv = types.ArrayToBytes[uint8](_minv)
 		maxv = types.ArrayToBytes[uint8](_maxv)
+	case types.T_array_float8, types.T_array_float4:
+		// Block-scaled cells have no value order and vector zonemaps are not used for
+		// pruning (ZM.IsArray); flush still records byte-wise bounds.
+		minv, maxv = VarlenGetMinMax(v)
 	default:
 		panic(fmt.Sprintf("unsupported type %s", v.GetType().String()))
 	}
@@ -11446,6 +11450,8 @@ func compareVectorRows(v *Vector, left, right int) int {
 	case types.T_array_uint8:
 		return types.ArrayElementCompare[uint8](
 			types.BytesToArray[uint8](v.GetBytesAt(left)), types.BytesToArray[uint8](v.GetBytesAt(right)))
+	case types.T_array_float8, types.T_array_float4:
+		return types.CompareBlockScaledFromBytes(v.GetBytesAt(left), v.GetBytesAt(right), false)
 	default:
 		return bytes.Compare(v.GetBytesAt(left), v.GetBytesAt(right))
 	}

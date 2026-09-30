@@ -154,3 +154,18 @@ func TestBlockScaledVectorUnmarshalRejectsMalformedCell(t *testing.T) {
 		})
 	}
 }
+
+// Flush computes zonemap bounds for every column; vecf8/vecf4 must not panic.
+func TestBlockScaledVectorGetMinMaxValue(t *testing.T) {
+	for _, oid := range []types.T{types.T_array_float8, types.T_array_float4} {
+		mp := mpool.MustNewZero()
+		vec, _, _ := blockScaledTestVector(t, oid, 4, mp)
+		var ok bool
+		var minv, maxv []byte
+		require.NotPanics(t, func() { ok, minv, maxv = vec.GetMinMaxValue() })
+		require.True(t, ok)
+		require.NotEmpty(t, minv)
+		require.NotEmpty(t, maxv)
+		vec.Free(mp)
+	}
+}

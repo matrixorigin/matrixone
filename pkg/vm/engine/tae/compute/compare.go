@@ -142,6 +142,8 @@ func Compare(a, b []byte, t types.T, scale1, scale2 int32) int {
 		return types.CompareArrayElementFromBytes[int8](a, b, false)
 	case types.T_array_uint8:
 		return types.CompareArrayElementFromBytes[uint8](a, b, false)
+	case types.T_array_float8, types.T_array_float4:
+		return types.CompareBlockScaledFromBytes(a, b, false)
 	case types.T_any:
 		return 0
 	default:
@@ -232,6 +234,8 @@ func CompareGeneric(a, b any, t types.T) int {
 		return types.CompareArrayElementFromBytes[int8](a.([]byte), b.([]byte), false)
 	case types.T_array_uint8:
 		return types.CompareArrayElementFromBytes[uint8](a.([]byte), b.([]byte), false)
+	case types.T_array_float8, types.T_array_float4:
+		return types.CompareBlockScaledFromBytes(a.([]byte), b.([]byte), false)
 	case types.T_any:
 		return 0
 	default:

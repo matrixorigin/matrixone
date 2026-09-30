@@ -329,3 +329,20 @@ func StringToBlockScaled(f BlockScaledFormat, s string) ([]byte, error) {
 	}
 	return AppendBlockScaled(nil, f, v)
 }
+
+// CompareBlockScaledFromBytes orders two cells by their dequantized values with the
+// vecf32 ordering (ArrayCompare). A cell that fails to parse orders by its bytes.
+func CompareBlockScaledFromBytes(x, y []byte, desc bool) int {
+	vx, errx := BlockScaledToFloat32(x)
+	vy, erry := BlockScaledToFloat32(y)
+	var c int
+	if errx != nil || erry != nil {
+		c = bytes.Compare(x, y)
+	} else {
+		c = ArrayCompare(vx, vy)
+	}
+	if desc {
+		return -c
+	}
+	return c
+}
