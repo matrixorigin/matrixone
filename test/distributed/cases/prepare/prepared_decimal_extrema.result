@@ -178,7 +178,7 @@ EXECUTE pc_string_peer USING @decimal_null,@text_peer;
 ➤ c[12,65535,0]  𝄀
 abc
 EXECUTE pg_string_peer USING @text_peer;
-➤ g[-1,16383,0]  𝄀
+➤ g[12,65535,0]  𝄀
 abc
 SET @char_null=CAST(NULL AS CHAR);
 PREPARE pc_char_null FROM 'SELECT COALESCE(?,d) AS c FROM t WHERE id=2';
@@ -240,10 +240,10 @@ EXECUTE pc_prefix_switch USING @switch;
 ➤ v[12,65535,0]  𝄀
 abc
 EXECUTE pg_prefix_switch USING @switch;
-➤ v[-1,16383,0]  𝄀
+➤ v[12,65535,0]  𝄀
 abc
 EXECUTE pl_prefix_switch USING @switch;
-➤ v[-1,16383,0]  𝄀
+➤ v[12,65535,0]  𝄀
 1.25
 SET @switch='0xx';
 EXECUTE pc_prefix_switch USING @switch;
@@ -260,23 +260,23 @@ EXECUTE pc_prefix_switch USING @switch;
 ➤ v[12,65535,0]  𝄀
 abc
 EXECUTE pg_prefix_switch USING @switch;
-➤ v[-1,16383,0]  𝄀
+➤ v[12,65535,0]  𝄀
 abc
 EXECUTE pl_prefix_switch USING @switch;
-➤ v[-1,16383,0]  𝄀
+➤ v[12,65535,0]  𝄀
 1.25
 SET @small='2';
 PREPARE p_char_peer FROM 'SELECT GREATEST(CAST(1 AS DECIMAL(10,0)),?,CAST(10 AS CHAR)) AS g';
 PREPARE p_char_marker FROM 'SELECT GREATEST(CAST(1 AS DECIMAL(10,0)),CAST(? AS CHAR),CAST(10 AS DECIMAL(10,0))) AS g';
 PREPARE p_float_peer FROM 'SELECT GREATEST(CAST(1 AS DECIMAL(10,0)),?,CAST(10 AS DOUBLE)) AS g';
 EXECUTE p_char_peer USING @small;
-➤ g[-1,16383,0]  𝄀
+➤ g[12,65535,0]  𝄀
 2
 EXECUTE p_char_marker USING @small;
 ➤ g[12,65535,0]  𝄀
 2
 EXECUTE p_float_peer USING @small;
-➤ g[-1,16383,0]  𝄀
+➤ g[12,65535,0]  𝄀
 2
 DEALLOCATE PREPARE pg;
 DEALLOCATE PREPARE pl;
