@@ -145,6 +145,20 @@ func TestCDCTargetIdentityAdmissionAndGuard(t *testing.T) {
 		}
 	})
 
+	t.Run("capability reports identity row close error", func(t *testing.T) {
+		db, mock, err := sqlmock.New()
+		require.NoError(t, err)
+		defer db.Close()
+		conn, err := db.Conn(ctx)
+		require.NoError(t, err)
+		defer conn.Close()
+		mock.ExpectQuery(regexp.QuoteMeta("SELECT TABLE_ID FROM information_schema.INNODB_TABLES WHERE NAME = ?")).
+			WithArgs("__mo_cdc_capability_probe__/__absent__").
+			WillReturnRows(sqlmock.NewRows([]string{"TABLE_ID"}).CloseError(errors.New("capability close failed")))
+		require.ErrorContains(t, checkMySQLTargetIdentityCapability(ctx, conn, "db", "t", false), "capability close failed")
+		require.NoError(t, mock.ExpectationsWereMet())
+	})
+
 	t.Run("MO guard returns durable identity", func(t *testing.T) {
 		db, mock, err := sqlmock.New()
 		require.NoError(t, err)
@@ -275,6 +289,25 @@ func TestCDCTargetIdentityAdmissionAndGuard(t *testing.T) {
 				require.NoError(t, mock.ExpectationsWereMet())
 			})
 		}
+	})
+
+	t.Run("MySQL guard reports identity row close error", func(t *testing.T) {
+		db, mock, err := sqlmock.New()
+		require.NoError(t, err)
+		defer db.Close()
+		mock.ExpectBegin()
+		mock.ExpectQuery(regexp.QuoteMeta("SELECT 1 FROM `db`.`t` LIMIT 0")).
+			WillReturnRows(sqlmock.NewRows([]string{"one"}))
+		mock.ExpectQuery(regexp.QuoteMeta("SELECT @@server_uuid, TABLE_ID FROM information_schema.INNODB_TABLES WHERE NAME = ?")).
+			WithArgs("db/t").WillReturnRows(sqlmock.NewRows([]string{"server_uuid", "TABLE_ID"}).
+			AddRow("uuid", uint64(7)).CloseError(errors.New("identity close failed")))
+		mock.ExpectRollback()
+		tx, err := db.BeginTx(ctx, nil)
+		require.NoError(t, err)
+		_, err = guardedCDCTargetIdentity(ctx, tx, CDCSinkType_MySQL, "db", "t")
+		require.ErrorContains(t, err, "identity close failed")
+		require.NoError(t, tx.Rollback())
+		require.NoError(t, mock.ExpectationsWereMet())
 	})
 
 	t.Run("guard rejects unsupported and malformed identities", func(t *testing.T) {
