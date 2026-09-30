@@ -1666,6 +1666,25 @@ func preparedNumericFallbackSource(expr *plan.Expr) (*plan.Expr, bool) {
 	return expr, true
 }
 
+func preparedRoundTruncateCompleteTextParam(param ParamValue) bool {
+	if param.Value == nil {
+		return false
+	}
+	sourceType, hasSourceType := param.SourceType, param.HasSourceType
+	if !hasSourceType && param.HasRuntimeType {
+		sourceType, hasSourceType = param.RuntimeType, true
+	}
+	if !hasSourceType || !preparedRoundTruncateTextParamEligible(param, sourceType) {
+		return false
+	}
+	spelling := preparedParamValueText(param)
+	if !PreparedNumericStringIsComplete(spelling) {
+		return false
+	}
+	_, ok := PreparedRuntimeTypeFromString(strings.TrimSpace(spelling))
+	return ok
+}
+
 func (rule *ResetParamRefRule) rebindPreparedNumericExpr(
 	expr *plan.Expr,
 	positions map[int32]struct{},
@@ -4178,6 +4197,19 @@ func (rule *ResetParamRefRule) applyExpr(e *plan.Expr) (*plan.Expr, error) {
 					// and SIGN must still consume the SQL-mode-aware string source;
 					// ELT's first argument is an index and stays on its native path.
 					sourceRole = preparedStringMathRoleValue
+					if strings.EqualFold(functionName, "round") ||
+						strings.EqualFold(functionName, "truncate") {
+						if position, direct := preparedParamPosition(source); direct &&
+							position < len(rule.paramValues) {
+							if param, ok := rule.paramValues[position].(ParamValue); ok &&
+								preparedRoundTruncateCompleteTextParam(param) {
+								// Complete ordinary text keeps its exact runtime numeric
+								// domain at this value occurrence. Incomplete text remains
+								// on the separate mode-aware DOUBLE source above.
+								sourceRole = preparedStringMathRoleNone
+							}
+						}
+					}
 				}
 				rebound, changed, reboundErr := rule.rebindPreparedNumericExprWithRole(
 					source, boundArgs[0], positions, sourceRole)
