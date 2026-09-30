@@ -12,7 +12,7 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-package isolated
+package issues
 
 import (
 	"bytes"
@@ -32,57 +32,56 @@ import (
 // uses the same running cluster, so a successful first pass cannot hide
 // retained statement or connection state behind a cluster restart.
 func TestIssue29187LongDataWire(t *testing.T) {
-	cluster, err := embed.StartTestCluster(embed.WithCNCount(1))
-	require.NoError(t, err)
-	t.Cleanup(func() { require.NoError(t, cluster.Close()) })
-	cn, err := cluster.GetCNService(0)
-	require.NoError(t, err)
-	address := fmt.Sprintf("127.0.0.1:%d", cn.GetServiceConfig().CN.Frontend.Port)
-	for pass := 1; pass <= 2; pass++ {
-		t.Run(fmt.Sprintf("same-cluster-pass-%d", pass), func(t *testing.T) {
-			conn, err := net.DialTimeout("tcp", address, 10*time.Second)
-			require.NoError(t, err)
-			defer conn.Close()
-			require.NoError(t, conn.SetDeadline(time.Now().Add(90*time.Second)))
-			wire := issue29187Wire{t: t, conn: conn}
-			wire.login("dump", "111")
-			wire.queryOK("set max_allowed_packet = 1024")
-			stmtA := wire.prepare("set @issue29187_a = ?")
-			stmtB := wire.prepare("set @issue29187_b = ?")
+	embed.RunBaseClusterTests(t, func(cluster embed.Cluster) {
+		cn, err := cluster.GetCNService(0)
+		require.NoError(t, err)
+		address := fmt.Sprintf("127.0.0.1:%d", cn.GetServiceConfig().CN.Frontend.Port)
+		for pass := 1; pass <= 2; pass++ {
+			t.Run(fmt.Sprintf("same-cluster-pass-%d", pass), func(t *testing.T) {
+				conn, err := net.DialTimeout("tcp", address, 10*time.Second)
+				require.NoError(t, err)
+				defer conn.Close()
+				require.NoError(t, conn.SetDeadline(time.Now().Add(90*time.Second)))
+				wire := issue29187Wire{t: t, conn: conn}
+				wire.login("dump", "111")
+				wire.queryOK("set max_allowed_packet = 1024")
+				stmtA := wire.prepare("set @issue29187_a = ?")
+				stmtB := wire.prepare("set @issue29187_b = ?")
 
-			// Exactly 1024 bytes are accepted, and SEND itself emits nothing:
-			// the PING and subsequent result set also detect a stray response.
-			wire.sendLongData(stmtA, bytes.Repeat([]byte{'a'}, 512))
-			wire.sendLongData(stmtA, bytes.Repeat([]byte{'b'}, 512))
-			wire.ping()
-			wire.executeOK(stmtA)
-			wire.queryScalar("select length(@issue29187_a)", "1024")
-			t.Log("exact 1024-byte stream executed; SEND emitted no response")
+				// Exactly 1024 bytes are accepted, and SEND itself emits nothing:
+				// the PING and subsequent result set also detect a stray response.
+				wire.sendLongData(stmtA, bytes.Repeat([]byte{'a'}, 512))
+				wire.sendLongData(stmtA, bytes.Repeat([]byte{'b'}, 512))
+				wire.ping()
+				wire.executeOK(stmtA)
+				wire.queryScalar("select length(@issue29187_a)", "1024")
+				t.Log("exact 1024-byte stream executed; SEND emitted no response")
 
-			// Crossing the cumulative limit must fail only at EXECUTE and only
-			// for this statement. Another prepared statement remains usable.
-			wire.sendLongData(stmtA, bytes.Repeat([]byte{'x'}, 1024))
-			wire.sendLongData(stmtA, []byte{'y'})
-			wire.executeError(stmtA, "max_allowed_packet")
-			wire.ping() // catches an unsolicited SEND error packet
-			wire.sendLongData(stmtB, []byte("other"))
-			wire.executeOK(stmtB)
-			wire.queryScalar("select @issue29187_b", "other")
-			t.Log("1025-byte stream failed at EXECUTE; other statement remained usable")
+				// Crossing the cumulative limit must fail only at EXECUTE and only
+				// for this statement. Another prepared statement remains usable.
+				wire.sendLongData(stmtA, bytes.Repeat([]byte{'x'}, 1024))
+				wire.sendLongData(stmtA, []byte{'y'})
+				wire.executeError(stmtA, "max_allowed_packet")
+				wire.ping() // catches an unsolicited SEND error packet
+				wire.sendLongData(stmtB, []byte("other"))
+				wire.executeOK(stmtB)
+				wire.queryScalar("select @issue29187_b", "other")
+				t.Log("1025-byte stream failed at EXECUTE; other statement remained usable")
 
-			wire.reset(stmtA)
-			wire.sendLongData(stmtA, []byte("reused"))
-			wire.executeOK(stmtA)
-			wire.queryScalar("select @issue29187_a", "reused")
-			t.Log("COM_STMT_RESET cleared the deferred error on the same connection")
-			wire.closeStmt(stmtA)
-			wire.closeStmt(stmtB)
-			wire.ping() // CLOSE is also response-free
-			wire.executeError(stmtA, "")
-			wire.command(0x01, nil) // COM_QUIT; no response
-			t.Log("COM_STMT_CLOSE removed both statements; connection quit cleanly")
-		})
-	}
+				wire.reset(stmtA)
+				wire.sendLongData(stmtA, []byte("reused"))
+				wire.executeOK(stmtA)
+				wire.queryScalar("select @issue29187_a", "reused")
+				t.Log("COM_STMT_RESET cleared the deferred error on the same connection")
+				wire.closeStmt(stmtA)
+				wire.closeStmt(stmtB)
+				wire.ping() // CLOSE is also response-free
+				wire.executeError(stmtA, "")
+				wire.command(0x01, nil) // COM_QUIT; no response
+				t.Log("COM_STMT_CLOSE removed both statements; connection quit cleanly")
+			})
+		}
+	})
 }
 
 type issue29187Wire struct {

@@ -1477,7 +1477,7 @@ func preparedPlanFunctionFallbackParamPositions(preparePlan *Plan, functionName 
 
 func isPreparedNumericFallbackFunction(name string) bool {
 	switch strings.ToLower(name) {
-	case "abs", "sign", "elt":
+	case "abs", "sign", "elt", "round", "truncate":
 		return true
 	default:
 		return false
@@ -1493,6 +1493,8 @@ func isPreparedNumericFallbackFunctionCall(name string, argCount int) bool {
 		return argCount >= 2
 	case "abs", "sign":
 		return argCount == 1
+	case "round", "truncate":
+		return argCount == 1 || argCount == 2
 	default:
 		return false
 	}

@@ -4697,7 +4697,7 @@ func (builder *QueryBuilder) initInsertReplaceStmt(bindCtx *BindContext, astRows
 		astSelect = astRows
 
 		subCtx := NewBindContext(builder, bindCtx)
-		subCtx.numericProjectionTypes = insertProjectionTypes(insertColumns, tableDef)
+		subCtx.numericProjectionTypes = insertProjectionTypes(insertColumns, tableDef, builder.isInsertIgnore)
 		lastNodeID, err = builder.bindSelect(astSelect, subCtx, false)
 		if err != nil {
 			return 0, nil, nil, -1, err
@@ -4711,7 +4711,7 @@ func (builder *QueryBuilder) initInsertReplaceStmt(bindCtx *BindContext, astRows
 		astSelect = selectImpl.Select
 
 		subCtx := NewBindContext(builder, bindCtx)
-		subCtx.numericProjectionTypes = insertProjectionTypes(insertColumns, tableDef)
+		subCtx.numericProjectionTypes = insertProjectionTypes(insertColumns, tableDef, builder.isInsertIgnore)
 		lastNodeID, err = builder.bindSelect(astSelect, subCtx, false)
 		if err != nil {
 			return 0, nil, nil, -1, err
@@ -5006,13 +5006,29 @@ func isNumericAssignmentTarget(typ Type) bool {
 	return makeTypeByPlan2Type(typ).IsNumeric()
 }
 
-func insertProjectionTypes(insertColumns []string, tableDef *plan.TableDef) []Type {
+// useNumericAssignmentContext keeps IGNORE conversion at the final assignment
+// cast. A destination hint must not insert an ordinary strict cast into its
+// source expression. Functions and aggregates establish their own numeric
+// consumer contexts independently.
+func useNumericAssignmentContext(typ Type, ignore bool) bool {
+	return isNumericAssignmentTarget(typ) && !(ignore && useIgnoreConversionAssignmentCast(typ))
+}
+
+func isPreparedAssignmentParam(builder *QueryBuilder, expr tree.Expr) bool {
+	if builder == nil || !builder.isReusablePlan() {
+		return false
+	}
+	_, ok := unwrapParenExpr(expr).(*tree.ParamExpr)
+	return ok
+}
+
+func insertProjectionTypes(insertColumns []string, tableDef *plan.TableDef, ignore bool) []Type {
 	// only numeric targets may seed the numeric assignment context; a zero
 	// Type keeps the projection binder on the default binding path
 	targets := make([]Type, len(insertColumns))
 	for i, column := range insertColumns {
 		typ := tableDef.Cols[tableDef.Name2ColIndex[column]].Typ
-		if isNumericAssignmentTarget(typ) {
+		if useNumericAssignmentContext(typ, ignore) {
 			targets[i] = typ
 		}
 	}
@@ -5490,7 +5506,7 @@ func (builder *QueryBuilder) buildValueScan(
 						valueBinder = funcBinder
 					}
 					boundWithNumericContext := false
-					if isNumericAssignmentTarget(col.Typ) {
+					if useNumericAssignmentContext(col.Typ, builder.isInsertIgnore) {
 						if builder.isPrepareStatement {
 							// Analyze prepared functions with the target-free binder. The
 							// explicit numeric context below supplies the assignment domain only
@@ -5505,21 +5521,12 @@ func (builder *QueryBuilder) buildValueScan(
 							if err != nil {
 								return 0, nil, err
 							}
-							// A bare marker is the source value of the assignment, not a
-							// numeric expression. Integer assignments must retain that source
-							// until execute-time numeric typing; IGNORE must retain TEXT
-							// until the outer cast_ignore runs. Otherwise the prepare-time
-							// numeric context creates an ordinary cast(? AS INT/DECIMAL), and
-							// malformed values fail before the IGNORE warning/adjustment mode
-							// is reached.  Keep numeric context for compound expressions such
-							// as ? + 1, whose operands genuinely need numeric binding.
-							directPreparedParam := false
-							if _, ok := unwrapParenExpr(r[i]).(*tree.ParamExpr); ok {
-								directPreparedParam = true
-							}
-							if scan.hasParam && !(directPreparedParam &&
-								(types.T(col.Typ.Id).IsInteger() || (builder.isInsertIgnore &&
-									useIgnoreConversionAssignmentCast(targetTyp.Typ)))) {
+							// The target type shapes compound numeric expressions, but a
+							// bare marker is still the assignment source. Preserve it for the
+							// final assignment cast, including string-to-BIT byte semantics and
+							// IGNORE conversion warnings. Expressions such as ? + 1 still bind
+							// in the target numeric context.
+							if scan.hasParam && !isPreparedAssignmentParam(builder, r[i]) {
 								switch numericBinder := funcBinder.(type) {
 								case *DefaultBinder:
 									defExpr, err = numericBinder.bindNumericExprWithContext(r[i], 0, &col.Typ)
@@ -5537,7 +5544,7 @@ func (builder *QueryBuilder) buildValueScan(
 						if !boundWithNumericContext && valuesExprIsFuncCall(r[i]) {
 							valueBinder = funcBinder
 						}
-					} else if valuesExprIsFuncCall(r[i]) {
+					} else if valuesExprIsFuncCall(r[i]) || (builder.isInsertIgnore && isNumericAssignmentTarget(col.Typ)) {
 						// Geometry and other non-numeric functions need their
 						// arguments to bind independently of the destination type.
 						valueBinder = funcBinder
