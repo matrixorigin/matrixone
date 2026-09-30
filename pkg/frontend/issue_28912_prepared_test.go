@@ -283,7 +283,11 @@ func TestIssue28912SQLExecutePreparedPlanRebindsVariableDomainOnReuse(t *testing
 				t, ses, prepareStmt, cw, execCtx, originalPlan,
 				"reuse_binary_param", tc.value, tc.typ)
 			require.NoError(t, err)
-			requireIssue28912Value(t, observed, tc.want, types.T_text, false)
+			wantType := types.T_text
+			if tc.typ.Id == int32(types.T_varchar) {
+				wantType = types.T_varchar
+			}
+			requireIssue28912Value(t, observed, tc.want, wantType, false)
 		})
 	}
 }

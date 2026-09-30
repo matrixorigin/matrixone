@@ -494,15 +494,15 @@ func TestIssue26087ConcurrentDataBranchQuota(t *testing.T) {
 			).Scan(&optimisticBranchCount))
 			require.Equal(t, 1, optimisticBranchCount)
 
-			// A pessimistic SI transaction passes lifecycle admission but still
-			// cannot serialize a finite quota against its fixed snapshot.
+			// The component protocol rejects a fixed-SI branch owner before
+			// quota, catalog, or source locks are taken.
 			rt.SetGlobalVariables(moruntime.TxnMode, pbtxn.TxnMode_Pessimistic)
 			require.NoError(t, execConn(conn1, "begin"))
 			quotaErr := execConn(conn1,
 				"data branch create table branch_quota_race.pessimistic_si_branch from branch_quota_race.src{snapshot='issue_26087_sp'}")
 			require.Error(t, quotaErr)
 			require.Contains(t, quotaErr.Error(),
-				"finite branch quota requires a pessimistic read committed transaction")
+				"DATA BRANCH CREATE/DELETE requires pessimistic RC")
 			require.NoError(t, execConn(conn1, "rollback"))
 			var pessimisticSIBranchCount int
 			require.NoError(t, conn1.QueryRowContext(execCtx,

@@ -415,6 +415,31 @@ func TestCTASRepeatedDerivedStringDomainReferenceStaysConservative(t *testing.T)
 	require.Greater(t, visible[0].Typ.Width, int32(1))
 }
 
+func TestCastStringDomainMatchesResultType(t *testing.T) {
+	for _, target := range []types.Type{
+		types.T_int64.ToType(), types.T_float64.ToType(), types.New(types.T_decimal128, 24, 3),
+		types.T_varchar.ToType(), types.T_varbinary.ToType(),
+	} {
+		t.Run(target.Oid.String(), func(t *testing.T) {
+			sourceType := types.T_int32.ToType()
+			source := &planpb.Expr{Typ: makePlan2Type(&sourceType), Expr: &planpb.Expr_Col{
+				Col: &planpb.ColRef{RelPos: 1, ColPos: 0},
+			}}
+			cast, err := appendCastBeforeExpr(context.Background(), source, makePlan2Type(&target))
+			require.NoError(t, err)
+			var want uint8
+			if target.Oid == types.T_varchar || target.Oid == types.T_varbinary {
+				want = possibleStringDomainText
+			}
+			domains := possibleStringDomainsForExpr(cast)
+			require.Equal(t, want, domains)
+			if domains != 0 {
+				require.NoError(t, stringDomainSourceWitness(cast, domains).ValidateStringLiteralForms())
+			}
+		})
+	}
+}
+
 func TestStringDomainSourceWitnessStaysBounded(t *testing.T) {
 	source := makePlan2VarBinaryConstExprWithType("x")
 	for i := 0; i < 64; i++ {

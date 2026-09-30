@@ -2704,7 +2704,7 @@ func TestFillValuesOfParamsUsesDoubleDomainForNumericTextComparison(t *testing.T
 			ProjectList: []*planpb.Expr{comparison},
 		}},
 	}}}
-	require.True(t, PreparedPlanNeedsRuntimeTextComparisonSpecialization(
+	require.NotEmpty(t, preparedNumericComparisonTextParamPositions(
 		query, []types.Type{types.T_int8.ToType(), types.T_text.ToType()}))
 
 	filled, specialized, err := FillValuesOfParamsInPlanWithSpecialization(ctx, query, []any{
@@ -2790,12 +2790,11 @@ func TestFillValuesOfParamsUsesDoubleDomainForNumericTextComparison(t *testing.T
 			ProjectList: []*planpb.Expr{implicitComparison},
 		}},
 	}}}
-	require.False(t, PreparedPlanNeedsRuntimeSpecialization(implicitQuery))
-	require.True(t, PreparedPlanNeedsRuntimeTextComparisonSpecialization(
+	require.NotEmpty(t, preparedNumericComparisonTextParamPositions(
 		implicitQuery, []types.Type{types.T_text.ToType()}))
 	require.True(t, preparedNumericComparisonTextParamPositions(
 		implicitQuery, []types.Type{types.T_text.ToType()})[0])
-	require.False(t, PreparedPlanNeedsRuntimeTextComparisonSpecialization(
+	require.Empty(t, preparedNumericComparisonTextParamPositions(
 		implicitQuery, []types.Type{types.T_int64.ToType()}))
 	filled, specialized, err = FillValuesOfParamsInPlanWithSpecialization(ctx, implicitQuery, []any{
 		ParamValue{
@@ -2875,6 +2874,24 @@ func TestPreparedComparisonExactIntegerExpr(t *testing.T) {
 			require.Equal(t, test.target.Id, expr.Typ.Id)
 		})
 	}
+	for _, test := range []struct {
+		name   string
+		value  string
+		target planpb.Type
+		want   int64
+	}{
+		{name: "signed text", value: "-54321.0", target: int64Type, want: -54321},
+		{name: "signed exponent", value: "5.4321e4", target: int64Type, want: 54321},
+		{name: "last safe positive", value: "9007199254740991", target: int64Type, want: 9007199254740991},
+		{name: "last safe negative", value: "-9007199254740991", target: int64Type, want: -9007199254740991},
+	} {
+		t.Run(test.name, func(t *testing.T) {
+			expr, ok, err := preparedComparisonExactIntegerExpr(ctx, test.value, test.target)
+			require.NoError(t, err)
+			require.True(t, ok)
+			require.Equal(t, test.want, expr.GetLit().GetI64Val())
+		})
+	}
 
 	for _, test := range []struct {
 		name   string
@@ -2885,6 +2902,10 @@ func TestPreparedComparisonExactIntegerExpr(t *testing.T) {
 		{name: "uint64 overflow", value: "18446744073709551616", target: uint64Type},
 		{name: "negative unsigned", value: "-1", target: uint64Type},
 		{name: "int64 overflow", value: "9223372036854775808", target: int64Type},
+		{name: "double collision positive", value: "9007199254740992", target: int64Type},
+		{name: "double collision negative", value: "-9007199254740992", target: int64Type},
+		{name: "signed fractional", value: "54321.5", target: int64Type},
+		{name: "signed suffix", value: "54321tail", target: int64Type},
 		{name: "nonnumeric", value: "tail", target: bit64Type},
 		{name: "numeric prefix keeps warning path", value: "9007199254740993tail", target: bit64Type},
 		{name: "huge positive exponent", value: "1e1000000", target: uint64Type},
@@ -2958,7 +2979,7 @@ func TestFillValuesOfParamsKeepsBitDomainForExactTextComparison(t *testing.T) {
 			ProjectList: []*planpb.Expr{comparison},
 		}},
 	}}}
-	require.True(t, PreparedPlanNeedsRuntimeTextComparisonSpecialization(
+	require.NotEmpty(t, preparedNumericComparisonTextParamPositions(
 		query, []types.Type{types.T_text.ToType()}))
 
 	filled, specialized, err := FillValuesOfParamsInPlanWithSpecialization(ctx, query, []any{

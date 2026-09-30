@@ -278,10 +278,10 @@ func (c *Compile) FreezeResultMetadata() {
 	}
 }
 
-func (c *Compile) Reset(proc *process.Process, startAt time.Time, fill func(*batch.Batch, *perfcounter.CounterSet) error, sql string) error {
+func (c *Compile) Reset(proc *process.Process, startAt time.Time, fill func(*batch.Batch, *perfcounter.CounterSet) error, sql string, diagnosticProof ...bool) error {
 	// A cached Compile must never expose the previous execution's CTAS values.
 	c.preparedParamValues = nil
-	c.preparedJoinDiagnosticFree = false
+	c.preparedJoinDiagnosticFree = len(diagnosticProof) != 0 && diagnosticProof[0]
 	// Reset only supports the TP topology admitted by prepare-time compilation.
 	// AP scan state and worker placement belong to one execution; updating the
 	// transaction offset cannot make them valid for another execution.
@@ -536,6 +536,8 @@ func (c *Compile) clear() {
 	c.needLockMeta = false
 	c.isInternal = false
 	c.temporaryDDLInExecutorTxn = false
+	c.temporaryDropRetryStage = nil
+	c.temporaryDropRetryActive = false
 	c.resourceAttemptOwnerEligible = false
 	c.allocationAccountRegistry = nil
 	c.allocationAccountLimit = 0
@@ -1438,8 +1440,8 @@ func (c *Compile) compileQuery(qry *plan.Query) ([]*Scope, error) {
 		v2.TxnStatementCompileQueryHistogram.Observe(time.Since(start).Seconds())
 	}()
 
-	c.execType = sequenceExecType(
-		plan2.GetExecType(c.pn.GetQuery(), c.getHaveDDL(), c.isPrepare), qry)
+	c.execType = vectorQueryExecType(sequenceExecType(
+		plan2.GetExecType(c.pn.GetQuery(), c.getHaveDDL(), c.isPrepare), qry), qry)
 
 	c.cnList, err = c.scheduleQueryWorkers()
 	if err != nil {
@@ -2136,6 +2138,10 @@ func (c *Compile) compilePlanScopeWithUnionAllDemand(
 		ss = c.ensureCoordinatorOnlyFunctions(node, ss)
 		ss = c.compileSort(node, ss)
 		return ss, nil
+	case plan.Node_VECTOR_QUERY_TOP:
+		return c.compileVectorQueryTop(step, node, nodes, curNodeIdx)
+	case plan.Node_VECTOR_QUERY_SOURCE:
+		return c.compileVectorQuerySource(node)
 	case plan.Node_ADAPTIVE_TOP:
 		if len(node.Children) < 2 || len(node.Children) > 3 || node.Limit == nil {
 			return nil, moerr.NewInternalErrorNoCtx("invalid adaptive top plan")
@@ -5747,7 +5753,7 @@ func (c *Compile) compileTableScanDataSource(s *Scope) error {
 
 	c.filterExprMu.Lock()
 	defer c.filterExprMu.Unlock()
-	storageFilters := filterScanStorageExprs(c.proc, node.FilterList)
+	storageFilters := filterScanStorageExprs(c.proc, node.FilterList, c.preparedJoinDiagnosticFree)
 	filters, executors, rebuilt, err := prepareFoldedFilterExprs(
 		c.proc, storageFilters, s.DataSource.FilterList, c.filterExprExes, true)
 	if err != nil {
@@ -5759,8 +5765,18 @@ func (c *Compile) compileTableScanDataSource(s *Scope) error {
 	}
 	s.DataSource.FilterExpr = colexec.RewriteFilterExprList(s.DataSource.FilterList)
 
+	blockFilters := filterScanStorageExprs(c.proc, node.BlockFilterList, c.preparedJoinDiagnosticFree)
+	if c.preparedJoinDiagnosticFree {
+		blockFilters = plan2.CompletePreparedDiagnosticBlockFilters(ctx, node, storageFilters, blockFilters)
+	}
+	// Keep the reusable plan intact. Remote scopes need this execution's raw
+	// subset because the folded list contains coordinator-owned Fold IDs.
+	s.DataSource.remoteBlockFilters = blockFilters
+	if blockFilters == nil {
+		s.DataSource.remoteBlockFilters = []*plan.Expr{}
+	}
 	filters, executors, rebuilt, err = prepareFoldedFilterExprs(
-		c.proc, filterScanStorageExprs(c.proc, node.BlockFilterList), s.DataSource.BlockFilterList, c.filterExprExes, false)
+		c.proc, blockFilters, s.DataSource.BlockFilterList, c.filterExprExes, false)
 	if err != nil {
 		return err
 	}
@@ -5786,23 +5802,24 @@ func (c *Compile) compileTableScanDataSource(s *Scope) error {
 // filterScanStorageExprs excludes row-dependent predicates from the engine
 // reader. The complete node.FilterList remains owned by TableScan or Restrict,
 // so these predicates are still evaluated once at the row-level boundary.
-func filterScanStorageExprs(proc *process.Process, exprs []*plan.Expr) []*plan.Expr {
+func filterScanStorageExprs(proc *process.Process, exprs []*plan.Expr, provenFree bool) []*plan.Expr {
+	var filtered []*plan.Expr
 	for i, expr := range exprs {
-		if plan2.ContainsVolatileFunction(expr) || plan2.ContainsConstantFilterDiagnostic(proc, expr) ||
-			plan2.ContainsStatementInvariantFilterDiagnostic(proc, expr) {
-			filtered := make([]*plan.Expr, 0, len(exprs)-1)
-			filtered = append(filtered, exprs[:i]...)
-			for _, remaining := range exprs[i+1:] {
-				if !plan2.ContainsVolatileFunction(remaining) &&
-					!plan2.ContainsConstantFilterDiagnostic(proc, remaining) &&
-					!plan2.ContainsStatementInvariantFilterDiagnostic(proc, remaining) {
-					filtered = append(filtered, remaining)
-				}
+		exclude := plan2.ContainsVolatileFunction(expr) || plan2.ContainsConstantFilterDiagnostic(proc, expr) ||
+			plan2.ContainsStatementInvariantFilterDiagnosticWithProof(proc, expr, provenFree)
+		if exclude {
+			if filtered == nil {
+				filtered = make([]*plan.Expr, 0, len(exprs)-1)
+				filtered = append(filtered, exprs[:i]...)
 			}
-			return filtered
+		} else if filtered != nil {
+			filtered = append(filtered, expr)
 		}
 	}
-	return exprs
+	if filtered == nil {
+		return exprs
+	}
+	return filtered
 }
 
 func (c *Compile) compileVectorIndexScanDataSource(s *Scope) error {
@@ -5969,7 +5986,7 @@ func (c *Compile) needsCoordinatorConstantFilterDiagnostic(node *plan.Node) bool
 		return false
 	}
 	for _, expr := range node.FilterList {
-		if plan2.ContainsStatementInvariantFilterDiagnostic(c.proc, expr) {
+		if plan2.ContainsStatementInvariantFilterDiagnosticWithProof(c.proc, expr, c.preparedJoinDiagnosticFree) {
 			return true
 		}
 	}
@@ -6577,10 +6594,12 @@ func scopesContainOperator(scopes []*Scope, target vm.OpType) bool {
 }
 
 func (c *Compile) compileJoin(node, left, right *plan.Node, probeScopes, buildScopes []*Scope) []*Scope {
-	if containsStatementInvariantDiagnosticInList(c.proc, node.OnList) {
-		// The ON expression is a single logical diagnostic owner. Keep the
-		// join on one coordinator pipeline; shuffle and parallel copies would
-		// each evaluate the same statement-invariant operand independently.
+	if containsStatementInvariantDiagnosticInList(c.proc, node.OnList) ||
+		c.joinNeedsLocalWindow(node, probeScopes, buildScopes) {
+		// Keep WINDOW local: it has no remote encoding. The same local
+		// stage also gives statement-invariant ON diagnostics a single owner.
+		// Neither shuffle nor parallel copies may independently evaluate
+		// those diagnostic operands.
 		if !c.scopesRunOnCoordinator(probeScopes) {
 			probeScopes = []*Scope{c.newMergeScope(probeScopes)}
 		}
@@ -6610,6 +6629,14 @@ func (c *Compile) compileJoin(node, left, right *plan.Node, probeScopes, buildSc
 		}
 	}
 
+	// Resolve local SINK_SCAN/foreign dependencies before any force-one-CN
+	// reshaping. FULL, DEDUP and right-sided equi joins can then change the
+	// probe owner; colocate their build again before installing HashJoin.
+	probeScopes, buildScopes = c.colocateBroadcastJoinInputs(probeScopes, buildScopes)
+	if broadcastJoinForcesOneCN(node, c.broadcastJoinUsesHash(node)) {
+		probeScopes = c.newProbeScopeListForBroadcastJoin(probeScopes, true)
+		probeScopes, buildScopes = c.colocateBroadcastJoinInputs(probeScopes, buildScopes)
+	}
 	rs := c.compileProbeSideForBroadcastJoin(node, left, right, probeScopes)
 	return c.compileBuildSideForBroadcastJoin(node, rs, buildScopes)
 }
@@ -6625,6 +6652,7 @@ func (c *Compile) compileBroadcastAsofBuildLeft(
 	if len(rightScopes) != 1 || rightScopes[0].NodeInfo.Mcpu != 1 {
 		rightScopes = []*Scope{c.newMergeScope(rightScopes)}
 	}
+	rightScopes, leftScopes = c.colocateBroadcastJoinInputs(rightScopes, leftScopes)
 
 	leftTypes := make([]types.Type, len(left.ProjectList))
 	for i, expr := range left.ProjectList {
@@ -7092,7 +7120,7 @@ func (c *Compile) compileProbeSideForBroadcastJoin(node, left, right *plan.Node,
 		}
 		c.anal.isFirst = false
 	case plan.Node_LEFT, plan.Node_RIGHT, plan.Node_SEMI, plan.Node_ANTI, plan.Node_SINGLE:
-		rs = c.newProbeScopeListForBroadcastJoin(probeScopes, isEq && node.IsRightJoin)
+		rs = c.newProbeScopeListForBroadcastJoin(probeScopes, broadcastJoinForcesOneCN(node, isEq))
 		currentFirstFlag := c.anal.isFirst
 		if isEq {
 			for i := range rs {
@@ -7119,10 +7147,8 @@ func (c *Compile) compileProbeSideForBroadcastJoin(node, left, right *plan.Node,
 		c.anal.isFirst = false
 	case plan.Node_OUTER:
 		// FULL OUTER JOIN: equi → hashjoin (Phase 1); non-equi → loopjoin
-		// (Phase 4). IsRightJoin=true (set in stats.go for Node_OUTER) routes
-		// the probe scope through forceOneCN, avoiding distributed
-		// double-emission of unmatched-build rows.
-		rs = c.newProbeScopeListForBroadcastJoin(probeScopes, true)
+		// (Phase 4). Force one probe CN to emit unmatched-build rows once.
+		rs = c.newProbeScopeListForBroadcastJoin(probeScopes, broadcastJoinForcesOneCN(node, isEq))
 		currentFirstFlag := c.anal.isFirst
 		if isEq {
 			for i := range rs {
@@ -7140,7 +7166,7 @@ func (c *Compile) compileProbeSideForBroadcastJoin(node, left, right *plan.Node,
 		c.anal.isFirst = false
 	case plan.Node_DEDUP:
 		if node.IsRightJoin {
-			rs = c.newProbeScopeListForBroadcastJoin(probeScopes, true)
+			rs = c.newProbeScopeListForBroadcastJoin(probeScopes, broadcastJoinForcesOneCN(node, isEq))
 			currentFirstFlag := c.anal.isFirst
 			for i := range rs {
 				op := constructRightDedupJoin(node, leftTypes, rightTypes, c.proc)
@@ -7150,7 +7176,7 @@ func (c *Compile) compileProbeSideForBroadcastJoin(node, left, right *plan.Node,
 			}
 			c.anal.isFirst = false
 		} else {
-			rs = c.newProbeScopeListForBroadcastJoin(probeScopes, true)
+			rs = c.newProbeScopeListForBroadcastJoin(probeScopes, broadcastJoinForcesOneCN(node, isEq))
 			currentFirstFlag := c.anal.isFirst
 			for i := range rs {
 				op := constructDedupJoin(node, leftTypes, rightTypes, c.proc)
