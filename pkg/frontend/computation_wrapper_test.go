@@ -6218,6 +6218,12 @@ func TestPreparedUserVariableStringDomainIsBoundPerStatement(t *testing.T) {
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			ses, scratch, cw, execCtx := newPreparedExecuteEnv(t, 124)
+			// This fixture exercises prepared string-domain binding while keeping
+			// legacy numeric-prefix behavior for @bound_s + 0 explicit.
+			execCtx.reqCtx = defines.AttachAccountId(execCtx.reqCtx, catalog.System_Account)
+			require.NoError(t, ses.SetSessionSysVar(
+				execCtx.reqCtx, "sql_mode", "MYSQL_NUMERIC_COMPATIBILITY"))
+			refreshStatementScopedSessionInfo(ses, cw.proc)
 			t.Cleanup(func() {
 				cw.proc.SetPrepareParams(nil)
 				scratch.Close()
