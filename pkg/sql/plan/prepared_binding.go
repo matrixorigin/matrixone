@@ -615,6 +615,20 @@ func bindPreparedConsumerArguments(ctx context.Context, name string, args []*Exp
 					target = exact
 				}
 			}
+		case i == 0 && (name == "round" || name == "truncate") &&
+			(binding.Type.Oid == types.T_char || binding.Type.Oid == types.T_varchar || binding.Type.Oid == types.T_text):
+			// COM_STMT string values for the value operand retain their exact
+			// numeric domain only when the whole spelling is numeric. SQL EXECUTE
+			// VARCHAR and binary-string sources keep their existing prefix domain.
+			if pos := int(source.GetP().Pos); pos >= 0 && pos < len(state.values) {
+				if param, ok := state.values[pos].(ParamValue); ok && param.IsBinaryProtocol &&
+					!param.IsBin && !param.IsBinaryString &&
+					param.RuntimeStringDomain != types.RuntimeStringBinary {
+					if exact, ok := preparedExactNumericStringType(ctx, pos); ok {
+						target = exact
+					}
+				}
+			}
 		case binding.NumericType.Oid.IsDecimal() &&
 			(isNumericContextFunction(name) || supportsGenericNumericFunctionContext(name) ||
 				preparedSQLExecuteNumericResultConsumer(name) || isPreparedNumericComparisonContext(name)):

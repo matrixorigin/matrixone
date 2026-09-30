@@ -823,6 +823,93 @@ func TestPreparedExecutionPlanMathPrecisionUsesSourceProvenance(t *testing.T) {
 	}
 }
 
+func TestPreparedExecutionPlanRoundTextUsesExactComStmtDomain(t *testing.T) {
+	for _, tc := range []struct {
+		name       string
+		source     types.Type
+		value      ParamValue
+		wantExact  bool
+		wantDouble bool
+	}{
+		{
+			name:   "COM_STMT complete text value",
+			source: types.T_text.ToType(),
+			value: ParamValue{
+				Value: "1.5", IsBinaryProtocol: true,
+				RuntimeStringDomain: types.RuntimeStringText,
+			},
+			wantExact: true,
+		},
+		{
+			name:   "SQL EXECUTE proven VARCHAR keeps prefix domain",
+			source: types.T_varchar.ToType(),
+			value: ParamValue{
+				Value: "1.5", SourceType: types.T_varchar.ToType(), HasSourceType: true,
+			},
+			wantDouble: true,
+		},
+		{
+			name:   "COM_STMT binary literal stays out of exact domain",
+			source: types.T_text.ToType(),
+			value: ParamValue{
+				Value: "1.5", IsBinaryProtocol: true, IsBin: true,
+				RuntimeStringDomain: types.RuntimeStringText,
+			},
+		},
+		{
+			name:   "COM_STMT binary runtime domain stays out of exact domain",
+			source: types.T_text.ToType(),
+			value: ParamValue{
+				Value: "1.5", IsBinaryProtocol: true,
+				RuntimeStringDomain: types.RuntimeStringBinary,
+			},
+		},
+		{
+			name:   "COM_STMT VARBINARY source stays out of exact domain",
+			source: types.T_varbinary.ToType(),
+			value: ParamValue{
+				Value: "1.5", IsBinaryProtocol: true,
+				RuntimeStringDomain: types.RuntimeStringBinary,
+			},
+		},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			mock := NewMockOptimizer(false)
+			stmt, err := parsers.ParseOne(context.Background(), dialect.MYSQL, "select round(?, ?)", 2)
+			require.NoError(t, err)
+			defer stmt.Free()
+			precision := ParamValue{
+				Value: "0", IsBinaryProtocol: true,
+				RuntimeStringDomain: types.RuntimeStringText,
+			}
+			bound, err := BuildPreparedExecutionPlan(&mock.ctxt, stmt,
+				[]PreparedSourceBinding{
+					{Position: 0, Type: tc.source},
+					{Position: 1, Type: types.T_text.ToType()},
+				}, []any{tc.value, precision})
+			require.NoError(t, err)
+			round := findPlanFunctionExpr(bound.Plan, "round")
+			require.NotNil(t, round)
+			require.Len(t, round.GetF().Args, 2)
+			valueArg := round.GetF().Args[0]
+			if tc.wantExact {
+				require.True(t, bound.ValueDependent)
+				require.Equal(t, int32(types.T_decimal64), valueArg.Typ.Id, valueArg.String())
+				require.NotNil(t, valueArg.GetF(), "the exact domain must wrap, not replace, the parameter")
+				require.NotNil(t, valueArg.GetF().Args[0].GetP(), valueArg.String())
+				require.Equal(t, int32(0), valueArg.GetF().Args[0].GetP().Pos)
+			} else {
+				require.NotEqual(t, int32(types.T_decimal64), valueArg.Typ.Id, valueArg.String())
+			}
+			if tc.wantDouble {
+				require.Equal(t, int32(types.T_float64), valueArg.Typ.Id, valueArg.String())
+			}
+			precisionArg := round.GetF().Args[1]
+			require.Equal(t, int32(types.T_int64), precisionArg.Typ.Id, precisionArg.String())
+		})
+	}
+}
+
 func TestPreparedBinarySourceKeepsRuntimeTextWidth(t *testing.T) {
 	for _, sql := range []string{"select left(?,1)", "select left(v,1) from (select ? v) s"} {
 		t.Run(sql, func(t *testing.T) {
