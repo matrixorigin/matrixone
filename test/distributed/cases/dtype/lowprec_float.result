@@ -68,6 +68,45 @@ SELECT CAST('7' AS float4);
 Data truncation: data out of range: data type FLOAT4, value 7
 SELECT CAST('1000' AS float8);
 Data truncation: data out of range: data type FLOAT8, value 1000
+SELECT CAST(7 AS float4);
+Data truncation: data out of range: data type FLOAT4, value 7
+SELECT CAST(1000 AS float8);
+Data truncation: data out of range: data type FLOAT8, value 1000
+SELECT CAST(70000 AS float16);
+Data truncation: data out of range: data type FLOAT16, value 70000
+SELECT CAST(1e300 AS bf16);
+invalid input: value +Inf is not a finite BF16
+SELECT CAST('inf' AS float8);
+invalid input: value +Inf is not a finite FLOAT8
+SELECT CAST('nan' AS bf16);
+invalid input: value NaN is not a finite BF16
+SELECT CAST('-inf' AS float16);
+invalid input: value -Inf is not a finite FLOAT16
+SELECT CAST(1e308 * 100 AS bf16);
+Data truncation: data out of range: data type float64, DOUBLE value is out of range in '(1e+308 * 100)'
+SELECT CAST(6 * 2 AS float4);
+Data truncation: data out of range: data type FLOAT4, value 12
+DROP TABLE IF EXISTS t2_ovf;
+CREATE TABLE t2_ovf (id INT PRIMARY KEY, a float4, b float4);
+INSERT INTO t2_ovf VALUES (1, 3, 4);
+SELECT CAST(a + b AS float4) FROM t2_ovf;
+Data truncation: data out of range: data type FLOAT4, value 7
+SELECT CAST(0.015 AS float8);
+➤ cast(0.015 as float8)[7,24,0]  𝄀
+0.015625
+SELECT CAST(0.001953125 AS float8), CAST(0.0001 AS float8);
+➤ cast(0.001953125 as float8)[7,24,0]  ¦  cast(0.0001 as float8)[7,24,0]  𝄀
+0.001953125  ¦  0.0
+SELECT CAST(0.5 AS float4), CAST(0.25 AS float4);
+➤ cast(0.5 as float4)[7,24,0]  ¦  cast(0.25 as float4)[7,24,0]  𝄀
+0.5  ¦  0.0
+DROP TABLE IF EXISTS d256;
+CREATE TABLE d256 (id INT PRIMARY KEY, v decimal(40,2));
+INSERT INTO d256 VALUES (1, 2.00), (2, -3.50);
+SELECT id, CAST(v AS bf16) AS b, CAST(v AS float8) AS c FROM d256 ORDER BY id;
+➤ id[4,32,0]  ¦  b[7,24,0]  ¦  c[7,24,0]  𝄀
+1  ¦  2.0  ¦  2.0  𝄀
+2  ¦  -3.5  ¦  -3.5
 DROP TABLE IF EXISTS t2;
 CREATE TABLE t2 (id INT PRIMARY KEY, a bf16, c float8);
 INSERT INTO t2 SELECT id, a, c FROM t WHERE a IS NOT NULL;
