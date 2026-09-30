@@ -1707,7 +1707,12 @@ func TestPreparedMathStringValueAndPrecisionRoles(t *testing.T) {
 			require.NoError(t, err)
 			got, err := eval(t, findPlanFunctionExpr(valid, name))
 			require.NoError(t, err, "the same template must work after rejected precision values")
-			require.Equal(t, float64(1.5), got.value)
+			if name == "round" || name == "truncate" {
+				require.Equal(t, "1.5", got.value,
+					"complete text values retain the exact decimal domain")
+			} else {
+				require.Equal(t, float64(1.5), got.value)
+			}
 			require.True(t, proto.Equal(original, preparePlan), "EXECUTE must not mutate the cached template")
 		})
 

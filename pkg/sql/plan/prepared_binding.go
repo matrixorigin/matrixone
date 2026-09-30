@@ -144,20 +144,24 @@ func preparedRoundTruncateTextSourceEligible(
 	ordinal int,
 	binding PreparedSourceBinding,
 ) bool {
-	switch binding.Type.Oid {
-	case types.T_char, types.T_varchar, types.T_text:
-	default:
-		return false
-	}
-	if types.StaticStringDomain(binding.Type) != types.StringDomainText {
-		return false
-	}
 	state := preparedBindingState(ctx)
 	if state == nil || ordinal < 0 || ordinal >= len(state.values) {
 		return false
 	}
 	param, ok := state.values[ordinal].(ParamValue)
-	if !ok || param.IsBin || param.IsBinaryString ||
+	return ok && preparedRoundTruncateTextParamEligible(param, binding.Type)
+}
+
+func preparedRoundTruncateTextParamEligible(param ParamValue, sourceType types.Type) bool {
+	switch sourceType.Oid {
+	case types.T_char, types.T_varchar, types.T_text:
+	default:
+		return false
+	}
+	if types.StaticStringDomain(sourceType) != types.StringDomainText {
+		return false
+	}
+	if param.IsBin || param.IsBinaryString ||
 		param.RuntimeStringDomain == types.RuntimeStringBinary {
 		return false
 	}
@@ -306,7 +310,8 @@ func preparedSafeRoundIntegerComparison(ctx context.Context, source *Expr, targe
 		return nil, false, nil
 	}
 	binding, bound := state.bindingForPosition(param.GetP().Pos)
-	if !bound || !binding.Type.Oid.IsMySQLString() {
+	if !bound || !preparedRoundTruncateTextSourceEligible(
+		ctx, int(param.GetP().Pos), binding) {
 		return nil, false, nil
 	}
 	value, present := preparedConfigurationValue(ctx, param)

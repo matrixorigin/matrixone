@@ -472,8 +472,8 @@ func TestPreparedRoundAndTruncateKeepRuntimeValueDomain(t *testing.T) {
 				"prepare p from 'select "+name+"(?,?)'")
 			require.NoError(t, err)
 			template := prepared.GetDcl().GetPrepare().Plan
-			require.Equal(t, []int32{0, 1}, PreparedPlanNumericFallbackParamPositions(template),
-				"value overload and integer precision each require execution-time source decoding")
+			require.Equal(t, []int32{0}, PreparedPlanNumericFallbackParamPositions(template),
+				"only the value overload requires execution-time source decoding; precision stays INT64")
 			fn := findPlanFunctionExpr(template, name)
 			require.NotNil(t, fn)
 			require.Equal(t, int32(types.T_float64), fn.GetF().Args[0].Typ.Id, fn.String())
