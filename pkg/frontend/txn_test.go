@@ -2375,6 +2375,8 @@ func TestRequiresPessimisticObjectLifecycleTxn(t *testing.T) {
 	} {
 		require.True(t, requiresPessimisticObjectLifecycleTxn(nil, stmt, ""))
 	}
+	require.False(t, requiresPessimisticObjectLifecycleTxn(nil, &tree.CreateTable{}, ""))
+	require.False(t, requiresPessimisticObjectLifecycleTxn(nil, &tree.CreateTable{Temporary: true}, ""))
 	require.False(t, requiresPessimisticObjectLifecycleTxn(nil, &tree.CreateView{}, ""))
 	require.False(t, requiresPessimisticObjectLifecycleTxn(nil, &tree.DropTable{Temporary: true}, ""))
 	require.False(t, requiresPessimisticObjectLifecycleTxn(nil, &tree.Select{}, ""))
