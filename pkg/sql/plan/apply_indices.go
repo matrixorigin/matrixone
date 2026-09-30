@@ -27,6 +27,7 @@ import (
 	indexplugin "github.com/matrixorigin/matrixone/pkg/indexplugin"
 	planplugin "github.com/matrixorigin/matrixone/pkg/indexplugin/plan"
 	"github.com/matrixorigin/matrixone/pkg/pb/plan"
+	"github.com/matrixorigin/matrixone/pkg/sql/plan/function"
 	"github.com/matrixorigin/matrixone/pkg/vm/message"
 )
 
@@ -162,6 +163,10 @@ func isRuntimeConstExpr(expr *plan.Expr) bool {
 		return true
 
 	case *plan.Expr_F:
+		f, exists := function.GetFunctionByIdWithoutError(exprImpl.F.Func.GetObj())
+		if !exists || f.CannotFold() {
+			return false
+		}
 		for _, subExpr := range exprImpl.F.Args {
 			if !isRuntimeConstExpr(subExpr) {
 				return false

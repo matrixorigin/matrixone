@@ -23,6 +23,7 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/container/types"
 	"github.com/matrixorigin/matrixone/pkg/container/vector"
 	planpb "github.com/matrixorigin/matrixone/pkg/pb/plan"
+	"github.com/matrixorigin/matrixone/pkg/sql/colexec"
 	"github.com/matrixorigin/matrixone/pkg/sql/parsers/dialect/mysql"
 	"github.com/matrixorigin/matrixone/pkg/sql/util"
 	"github.com/stretchr/testify/require"
@@ -1219,4 +1220,60 @@ func requireNoFuncNames(t *testing.T, filters []*planpb.Expr, names ...string) {
 			require.NotEqual(t, name, fn.Func.ObjName)
 		}
 	}
+}
+
+func TestVolatileBoundsStayRowEvaluated(t *testing.T) {
+	ctx := NewMockCompilerContext(true)
+	for _, tc := range []struct {
+		name   string
+		stable bool
+	}{{"rand", false}, {"now", true}} {
+		t.Run(tc.name, func(t *testing.T) {
+			bound, err := BindFuncExprImplByPlanExpr(ctx.GetContext(), tc.name, nil)
+			require.NoError(t, err)
+			require.Equal(t, tc.stable, isRuntimeConstExpr(bound))
+			require.Equal(t, tc.stable, ExprIsZonemappable(ctx.GetContext(), bound))
+			var exes []colexec.ExpressionExecutor
+			defer func() {
+				for _, exe := range exes {
+					exe.Free()
+				}
+			}()
+			canFold, err := ReplaceFoldExpr(ctx.GetProcess(), bound, &exes)
+			require.NoError(t, err)
+			require.Equal(t, tc.stable, canFold)
+		})
+	}
+	param := &planpb.Expr{Typ: planpb.Type{Id: int32(types.T_int64)}, Expr: &planpb.Expr_P{P: &planpb.ParamRef{Pos: 0}}}
+	require.True(t, isRuntimeConstExpr(param))
+	require.True(t, ExprIsZonemappable(ctx.GetContext(), param))
+	table := makeExprOptCompositeClusterKeyTableDef()
+	table.Name = "volatile_probe"
+	table.Cols[0].Typ.Scale = -1
+	ctx.tables[table.Name] = table
+	ctx.objects[table.Name] = &planpb.ObjectRef{Obj: int64(table.TblId), ObjName: table.Name, SchemaName: "tpch"}
+	stmt, err := mysql.ParseOne(ctx.GetContext(), "select a from volatile_probe where a > cast(rand()*100 as signed)", 1)
+	require.NoError(t, err)
+	built, err := BuildPlan(ctx, stmt, false)
+	require.NoError(t, err)
+	found := false
+	for _, node := range built.GetQuery().Nodes {
+		if node.NodeType != planpb.Node_TABLE_SCAN {
+			continue
+		}
+		found = true
+		require.NotEmpty(t, node.FilterList)
+		require.Empty(t, node.BlockFilterList)
+		row := DeepCopyExpr(node.FilterList[0])
+		var exes []colexec.ExpressionExecutor
+		defer func() {
+			for _, exe := range exes {
+				exe.Free()
+			}
+		}()
+		_, err := ReplaceFoldExpr(ctx.GetProcess(), row, &exes)
+		require.NoError(t, err)
+		require.Equal(t, "rand", row.GetF().Args[1].GetF().Args[0].GetF().Args[0].GetF().Func.ObjName)
+	}
+	require.True(t, found)
 }

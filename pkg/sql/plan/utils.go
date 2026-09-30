@@ -1188,6 +1188,10 @@ func ExprIsZonemappable(ctx context.Context, expr *plan.Expr) bool {
 	}
 	switch exprImpl := expr.Expr.(type) {
 	case *plan.Expr_F:
+		f, exists := function.GetFunctionByIdWithoutError(exprImpl.F.Func.GetObj())
+		if !exists || f.CannotFold() {
+			return false
+		}
 		isConst := true
 		for _, arg := range exprImpl.F.Args {
 			if isRuntimeConstExpr(arg) {
@@ -3304,6 +3308,11 @@ func ReplaceFoldExpr(proc *process.Process, expr *Expr, exes *[]colexec.Expressi
 	}
 	if f.IsAgg() || f.IsWin() {
 		panic("ReplaceFoldVal: agg or window function")
+	}
+
+	// Volatile functions must be evaluated for each row, never as a scan bound.
+	if f.CannotFold() {
+		return false, nil
 	}
 
 	argFold := make([]bool, len(fn.Args))
