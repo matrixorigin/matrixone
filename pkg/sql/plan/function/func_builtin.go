@@ -1195,7 +1195,7 @@ func builtInConcatCheck(_ []overload, inputs []types.Type) checkResult {
 
 		ret := make([]types.Type, len(inputs))
 		for i, source := range inputs {
-			if !source.Oid.IsMySQLString() {
+			if !source.Oid.IsMySQLString() && source.Oid != types.T_json {
 				c, _ := tryToMatch([]types.Type{source}, []types.T{types.T_varchar})
 				if c == matchFailed {
 					return newCheckResultWithFailure(failedFunctionParametersWrong)
@@ -1216,6 +1216,15 @@ func builtInConcatCheck(_ []overload, inputs []types.Type) checkResult {
 	return newCheckResultWithFailure(failedFunctionParametersWrong)
 }
 
+// JSON stores an encoded value; concatenation consumes its JSON text, including
+// quotes around JSON strings. Keep assignment CAST's unquoting contract separate.
+func concatStringValue(source types.T, value []byte) ([]byte, error) {
+	if source != types.T_json {
+		return value, nil
+	}
+	return types.DecodeJson(value).MarshalJSON()
+}
+
 func builtInConcat(parameters []*vector.Vector, result vector.FunctionResultWrapper, proc *process.Process, length int, selectList *FunctionSelectList) error {
 	rs := vector.MustFunctionResult[types.Varlena](result)
 	ps := make([]vector.FunctionParameterWrapper[types.Varlena], len(parameters))
@@ -1233,7 +1242,7 @@ func builtInConcat(parameters []*vector.Vector, result vector.FunctionResultWrap
 		var vs string
 		apv := true
 
-		for _, p := range ps {
+		for j, p := range ps {
 			v, null := p.GetStrValue(i)
 			if null {
 				if err := rs.AppendBytes(nil, true); err != nil {
@@ -1242,6 +1251,10 @@ func builtInConcat(parameters []*vector.Vector, result vector.FunctionResultWrap
 				apv = false
 				break
 			} else {
+				v, err := concatStringValue(parameters[j].GetType().Oid, v)
+				if err != nil {
+					return err
+				}
 				vs += string(v)
 			}
 		}

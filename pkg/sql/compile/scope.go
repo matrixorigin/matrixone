@@ -302,6 +302,7 @@ func (s *Scope) resetForReuse(c *Compile) (err error) {
 
 	if s.DataSource != nil && !s.DataSource.isConst {
 		s.DataSource.R = nil
+		s.DataSource.remoteBlockFilters = nil
 	}
 
 	// The previous execution's cleanup delivered terminal signals into this
@@ -1132,13 +1133,14 @@ func buildScanParallelRun(s *Scope, c *Compile) (*Scope, error) {
 		readers[i].SetIndexParam(s.DataSource.IndexReaderParam)
 
 		ss[i].DataSource = &Source{
-			R:            readers[i],
-			SchemaName:   s.DataSource.SchemaName,
-			RelationName: s.DataSource.RelationName,
-			Attributes:   s.DataSource.Attributes,
-			AccountId:    s.DataSource.AccountId,
-			node:         s.DataSource.node,
-			RecvMsgList:  recvMsgList,
+			R:                  readers[i],
+			SchemaName:         s.DataSource.SchemaName,
+			RelationName:       s.DataSource.RelationName,
+			Attributes:         s.DataSource.Attributes,
+			AccountId:          s.DataSource.AccountId,
+			node:               s.DataSource.node,
+			remoteBlockFilters: s.DataSource.remoteBlockFilters,
+			RecvMsgList:        recvMsgList,
 		}
 	}
 	if err := c.attachRuntimeAllocationOwners([]*Scope{ms}); err != nil {

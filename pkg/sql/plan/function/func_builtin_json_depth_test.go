@@ -34,6 +34,10 @@ func TestJsonDepthRegistrationAndTypeCheck(t *testing.T) {
 		types.T_varchar.ToType(),
 		types.T_text.ToType(),
 		types.T_any.ToType(),
+		types.T_binary.ToType(),
+		types.T_varbinary.ToType(),
+		types.T_blob.ToType(),
+		types.NewWithCharset(types.T_varchar, 16, 0, types.CharsetBinary),
 	} {
 		resolved, err := GetFunctionByName(ctx, "json_depth", []types.Type{typ})
 		require.NoError(t, err, typ)
@@ -50,13 +54,9 @@ func TestJsonDepthRegistrationAndTypeCheck(t *testing.T) {
 		types.T_bool.ToType(),
 		types.T_int64.ToType(),
 		types.T_float64.ToType(),
-		types.T_binary.ToType(),
-		types.T_varbinary.ToType(),
-		types.T_blob.ToType(),
 		types.T_date.ToType(),
 		types.T_geometry.ToType(),
 		types.T_array_float32.ToType(),
-		types.NewWithCharset(types.T_varchar, 16, 0, types.CharsetBinary),
 	} {
 		_, err := GetFunctionByName(ctx, "json_depth", []types.Type{typ})
 		require.Error(t, err, typ)

@@ -20,23 +20,12 @@ import (
 
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
 	"github.com/matrixorigin/matrixone/pkg/container/batch"
+	"github.com/matrixorigin/matrixone/pkg/container/types"
 	"github.com/matrixorigin/matrixone/pkg/pb/plan"
 	"github.com/matrixorigin/matrixone/pkg/sql/plan/function"
 	"github.com/matrixorigin/matrixone/pkg/sql/plan/rule"
 	"github.com/matrixorigin/matrixone/pkg/vm/process"
 )
-
-type preparedJoinDiagnosticFreeKey struct{}
-
-// WithPreparedJoinDiagnosticFree marks one execution-local replan after its
-// normalized prepared ON operands were evaluated without diagnostics.
-func WithPreparedJoinDiagnosticFree(ctx context.Context) context.Context {
-	return context.WithValue(ctx, preparedJoinDiagnosticFreeKey{}, true)
-}
-
-func preparedJoinDiagnosticFree(ctx context.Context) bool {
-	return ctx != nil && ctx.Value(preparedJoinDiagnosticFreeKey{}) == true
-}
 
 // ContainsConstantFilterDiagnostic probes a logical constant under a filter
 // with an isolated warning sink. A diagnostic expression must retain one
@@ -52,10 +41,16 @@ func ContainsConstantFilterDiagnostic(proc *process.Process, expr *plan.Expr) bo
 // ContainsStatementInvariantFilterDiagnostic excludes explicit numeric CASTs,
 // whose existing conversion policy reports once per evaluated row.
 func ContainsStatementInvariantFilterDiagnostic(proc *process.Process, expr *plan.Expr) bool {
+	return ContainsStatementInvariantFilterDiagnosticWithProof(proc, expr, false)
+}
+
+// ContainsStatementInvariantFilterDiagnosticWithProof applies the current
+// binding's diagnostic proof while retaining literal and row-scoped warnings.
+func ContainsStatementInvariantFilterDiagnosticWithProof(proc *process.Process, expr *plan.Expr, provenFree bool) bool {
 	if proc == nil || proc.Base == nil || expr == nil {
 		return false
 	}
-	return containsStatementInvariantFilterDiagnostic(proc, expr, false)
+	return containsStatementInvariantFilterDiagnostic(proc, expr, provenFree)
 }
 
 // ContainsGuardedJoinDiagnostic identifies a diagnostic below row-dependent
@@ -99,12 +94,10 @@ func containsStatementInvariantFilterDiagnostic(proc *process.Process, expr *pla
 	if expr == nil {
 		return false
 	}
+	if function.MayDiagnoseStatementParameter(expr) && !provenFree {
+		return true
+	}
 	if fn := expr.GetF(); fn != nil {
-		if function.MayDiagnoseStatementParameter(expr) {
-			if !provenFree {
-				return true
-			}
-		}
 		if isExecutionConstant(expr) && !function.ContainsRowScopedConversion(expr) {
 			_, free, warned, err := rule.EvaluateConstantExpression(proc, expr, batch.EmptyForConstFoldBatch)
 			if free != nil {
@@ -128,23 +121,123 @@ func containsStatementInvariantFilterDiagnostic(proc *process.Process, expr *pla
 	return false
 }
 
-// PreparedPlanHasJoinParameterDiagnostic is computed once per prepared plan
-// generation so ordinary executions do not scan their query trees.
-func PreparedPlanHasJoinParameterDiagnostic(p *plan.Plan) bool {
+// PreparedPlanDiagnosticCandidates collects maximal statement-constant
+// diagnostic expressions in predicate owners. Their references belong to p
+// and must be discarded with that plan generation. Collecting the minimal
+// probes once avoids searching every predicate tree on each EXECUTE.
+func PreparedPlanDiagnosticCandidates(p *plan.Plan) []*plan.Expr {
+	return preparedPlanDiagnosticCandidates(p, false)
+}
+
+// PreparedPlanRuntimeDiagnosticCandidates also includes diagnostic literals
+// produced by value specialization. A cached runtime plan must recheck them
+// for its current binding even when no ParamRef remains in that expression.
+func PreparedPlanRuntimeDiagnosticCandidates(p *plan.Plan) []*plan.Expr {
+	return preparedPlanDiagnosticCandidates(p, true)
+}
+
+func preparedPlanDiagnosticCandidates(p *plan.Plan, includeMaterialized bool) []*plan.Expr {
 	if p == nil || p.GetQuery() == nil {
-		return false
+		return nil
 	}
-	for _, node := range p.GetQuery().Nodes {
-		if node.NodeType != plan.Node_JOIN {
-			continue
+	var candidates []*plan.Expr
+	seen := make(map[*plan.Expr]struct{})
+	var addProbe func(*plan.Expr) bool
+	addProbe = func(expr *plan.Expr) bool {
+		if expr == nil || !containsStatementDiagnostic(expr, true) {
+			return false
 		}
-		for _, expr := range node.OnList {
-			if containsStatementParameterDiagnostic(expr) {
-				return true
+		if function.IsStatementConstantInput(expr) && !function.ContainsRowScopedConversion(expr) {
+			if _, found := seen[expr]; !found {
+				seen[expr] = struct{}{}
+				candidates = append(candidates, expr)
+			}
+			return true
+		}
+		found := false
+		if fn := expr.GetF(); fn != nil {
+			for _, arg := range fn.Args {
+				found = addProbe(arg) || found
+			}
+		}
+		if list := expr.GetList(); list != nil {
+			for _, item := range list.List {
+				found = addProbe(item) || found
+			}
+		}
+		return found
+	}
+	add := func(exprs []*plan.Expr) {
+		for _, expr := range exprs {
+			if !containsStatementParameterDiagnostic(expr) &&
+				(!includeMaterialized || !containsStatementDiagnostic(expr, true)) {
+				continue
+			}
+			foundProbe := addProbe(expr)
+			// A new diagnostic with row-dependent inputs may have no constant
+			// child. Keep its original conservative probe until it has a
+			// dedicated static descriptor.
+			if !foundProbe {
+				if _, found := seen[expr]; !found {
+					seen[expr] = struct{}{}
+					candidates = append(candidates, expr)
+				}
 			}
 		}
 	}
-	return false
+	for _, node := range p.GetQuery().Nodes {
+		if node == nil {
+			continue
+		}
+		add(node.OnList)
+		add(node.FilterList)
+		add(node.BlockFilterList)
+		if node.VectorIndexScan != nil {
+			add(node.VectorIndexScan.PreFilters)
+		}
+	}
+	return candidates
+}
+
+// PreparedPlanHasJoinParameterDiagnostic is retained for existing callers.
+func PreparedPlanHasJoinParameterDiagnostic(p *plan.Plan) bool {
+	return len(PreparedPlanDiagnosticCandidates(p)) != 0
+}
+
+// CompletePreparedDiagnosticBlockFilters restores zone-map pruning for
+// parameterized scan predicates admitted by this binding's diagnostic proof.
+// PREPARE may omit a block copy while the parameter is still unknown. Only
+// predicates already admitted to the reader are considered here.
+const PreparedBlockFilterDisabledScanOption = "matrixone:prepared_block_filter_disabled"
+
+func CompletePreparedDiagnosticBlockFilters(
+	ctx context.Context, node *plan.Node, storageFilters, blockFilters []*plan.Expr,
+) []*plan.Expr {
+	// ExtraOptions records an explicit blockFilter=2 decision in a prepared
+	// plan. Other scan options are not ours to reinterpret as a stats omission.
+	if node == nil || node.NodeType != plan.Node_TABLE_SCAN || node.ExtraOptions != "" {
+		return blockFilters
+	}
+	selected := blockFilters
+	for _, expr := range storageFilters {
+		if !containsStatementParameterDiagnostic(expr) || !ExprIsZonemappable(ctx, expr) {
+			continue
+		}
+		duplicate := false
+		for _, existing := range selected {
+			if blockFilterSemanticallyEquivalent(existing, expr) {
+				duplicate = true
+				break
+			}
+		}
+		if !duplicate {
+			if len(selected) == len(blockFilters) {
+				selected = append([]*plan.Expr(nil), blockFilters...)
+			}
+			selected = append(selected, DeepCopyExpr(expr))
+		}
+	}
+	return selected
 }
 
 func containsStatementParameterDiagnostic(expr *plan.Expr) bool {
@@ -181,36 +274,70 @@ func containsStatementDiagnostic(expr *plan.Expr, materialized bool) bool {
 // diagnostic keeps the conservative plan; resource and internal failures fail
 // the execution rather than being mistaken for SQL diagnostics.
 func ProbePreparedJoinParameterDiagnostics(proc *process.Process, p *plan.Plan) (bool, error) {
-	if proc == nil || proc.Base == nil || p == nil || p.GetQuery() == nil {
+	if p == nil || p.GetQuery() == nil {
 		return false, nil
 	}
-	// The scoped optimizer flag only relaxes JOIN ON and filter pushdown.
-	// Projection, grouping, and ordering keep their execution owners; a
-	// diagnostic there must not disable an unrelated selective JOIN plan.
-	// Visit all nodes, including auxiliary/subquery nodes outside Steps, since
-	// those predicates can still be changed by the scoped replan.
-	for _, node := range p.GetQuery().Nodes {
-		for _, exprs := range [...][]*plan.Expr{node.OnList, node.FilterList, node.BlockFilterList} {
-			for _, expr := range exprs {
-				safe, err := probeJoinParameterExpression(proc, expr)
-				if !safe || err != nil {
-					return safe, err
-				}
-			}
+	return ProbePreparedDiagnosticCandidates(proc, PreparedPlanRuntimeDiagnosticCandidates(p))
+}
+
+// ProbePreparedDiagnosticCandidates checks the current binding without
+// publishing warnings. The caller must probe both conservative and optimized
+// template candidates before using a relaxed plan.
+func ProbePreparedDiagnosticCandidates(proc *process.Process, candidates []*plan.Expr) (bool, error) {
+	return ProbePreparedDiagnosticCandidatesWithProof(proc, candidates, nil)
+}
+
+// ProbePreparedDiagnosticCandidatesWithProof allows the caller that decoded
+// this binding's protocol parameters to prove a narrow conversion directly.
+// The callback must return false whenever its current-value proof is absent.
+func ProbePreparedDiagnosticCandidatesWithProof(
+	proc *process.Process, candidates []*plan.Expr, fastSafe func(*plan.Expr) bool,
+) (bool, error) {
+	if proc == nil || proc.Base == nil {
+		return false, nil
+	}
+	for _, expr := range candidates {
+		if fastSafe != nil && fastSafe(expr) {
+			continue
 		}
-		if scan := node.VectorIndexScan; scan != nil {
-			for _, expr := range scan.PreFilters {
-				safe, err := probeJoinParameterExpression(proc, expr)
-				if !safe || err != nil {
-					return safe, err
-				}
-			}
+		safe, err := ProbeStatementParameterDiagnosticFree(proc, expr)
+		if !safe || err != nil {
+			return safe, err
 		}
 	}
 	return true, nil
 }
 
-func probeJoinParameterExpression(proc *process.Process, expr *plan.Expr) (bool, error) {
+// PreparedDirectImplicitIntegerCastParam identifies only the bare conversion
+// whose integer packet can be range-proved by the frontend. Composite
+// expressions and explicit row-scoped casts still use diagnostic evaluation.
+func PreparedDirectImplicitIntegerCastParam(expr *plan.Expr) (int32, types.T, bool) {
+	if expr == nil {
+		return 0, types.T_any, false
+	}
+	if param := expr.GetP(); param != nil && param.Pos >= 0 && types.T(expr.Typ.Id).IsInteger() {
+		return param.Pos, types.T(expr.Typ.Id), true
+	}
+	fn := expr.GetF()
+	if fn == nil || fn.Func == nil || fn.GetSyntaxExplicitCast() || len(fn.Args) != 2 ||
+		fn.Args[0] == nil || fn.Args[1] == nil || fn.Args[1].GetT() == nil {
+		return 0, types.T_any, false
+	}
+	id, _ := function.DecodeOverloadID(fn.Func.Obj)
+	if id != function.CAST || !types.T(fn.Args[0].Typ.Id).IsMySQLString() {
+		return 0, types.T_any, false
+	}
+	param := fn.Args[0].GetP()
+	if param == nil || param.Pos < 0 || fn.Args[1].Typ.Id != expr.Typ.Id {
+		return 0, types.T_any, false
+	}
+	return param.Pos, types.T(expr.Typ.Id), true
+}
+
+// ProbeStatementParameterDiagnosticFree checks the current parameter binding
+// without publishing warnings. A predicate can be copied to a storage reader
+// only when its statement-constant conversions are diagnostic-free.
+func ProbeStatementParameterDiagnosticFree(proc *process.Process, expr *plan.Expr) (bool, error) {
 	if expr == nil || !containsStatementDiagnostic(expr, true) {
 		return true, nil
 	}
@@ -242,7 +369,7 @@ func probeJoinParameterExpression(proc *process.Process, expr *plan.Expr) (bool,
 	}
 	if fn := expr.GetF(); fn != nil {
 		for _, arg := range fn.Args {
-			safe, err := probeJoinParameterExpression(proc, arg)
+			safe, err := ProbeStatementParameterDiagnosticFree(proc, arg)
 			if !safe || err != nil {
 				return safe, err
 			}
@@ -250,7 +377,7 @@ func probeJoinParameterExpression(proc *process.Process, expr *plan.Expr) (bool,
 	}
 	if list := expr.GetList(); list != nil {
 		for _, item := range list.List {
-			safe, err := probeJoinParameterExpression(proc, item)
+			safe, err := ProbeStatementParameterDiagnosticFree(proc, item)
 			if !safe || err != nil {
 				return safe, err
 			}

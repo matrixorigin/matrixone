@@ -1112,8 +1112,8 @@ func (tcc *TxnCompilerContext) ResolveVariableType(varName string, isSystemVar, 
 	}
 	udVar, err := tcc.GetSession().GetUserDefinedVar(varName)
 	if err != nil {
-		// An unassigned user variable is NULL; TEXT is the neutral binding type
-		// and lets a numeric context perform the normal MySQL coercion.
+		// An unassigned user variable is untyped NULL. Its consumer supplies
+		// the conversion domain; the transport must not invent a TEXT source.
 		return inferUserDefinedVarType(nil), nil
 	}
 	if udVar.Type.Id != 0 {
