@@ -193,5 +193,8 @@ The Q1 policy design was approved by GPT-6.1-sol xhigh from Astra xhigh v2
 (SHA256 c6c95bca15aacc79baeef7a87deaf1a5dba5b44a4095013a447acbf7f5d43d56).
 Placement follows Astra xhigh v4, independently reviewed by GPT-6.1-sol xhigh
 (SHA256 7b3535a3281efd5ebc568b3165a3765c309323979b4807b262b81e3558c9af99).
-Rollback restores local required placement and prior read policy. There is no
-persistent migration or write change; new CPU cache keys expire normally.
+Rollback restores local required placement and prior read policy with a
+protocol-compatible binary. There is no stored data-format migration or
+production write change; new CPU cache keys expire normally. Existing admission
+may advance the persisted authoring version floor to 102, so restarting a 101
+binary after that advance is unsupported; do not edit the floor to downgrade.
