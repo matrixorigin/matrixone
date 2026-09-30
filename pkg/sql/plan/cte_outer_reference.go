@@ -34,7 +34,7 @@ type localCTEDomain struct {
 	// Outer-only consumer WHERE predicates constrain replay before producer
 	// expressions run; the original consumer predicate is retained as well.
 	demandFilters []*plan.Expr
-	// Runtime variable reads/conversions must not run for empty seeds.
+	// Runtime parameter/variable reads and conversions must not run for empty seeds.
 	variableDemand         []*plan.Expr
 	variableDemandProjects map[int32]bool
 	consumerRoot           int32
@@ -133,7 +133,13 @@ func (builder *QueryBuilder) parameterizeLocalCTEs(
 		}
 		return id
 	}
-	return lower(subID), nil
+	result := lower(subID)
+	// Parent traversal assigns lowered children after the domain rewrite.
+	// Insert consumer barriers only after those assignments are complete.
+	for _, d := range domains {
+		d.splitConsumerDemandFilters()
+	}
+	return result, nil
 }
 
 // Inspect every path from the subquery root to this CTE. Moving HAVING
@@ -207,14 +213,25 @@ func (d *localCTEDomain) admitConsumer(root int32) error {
 			}
 		case plan.Node_FILTER:
 			if !having && !windowed && !branched && len(n.Children) == 1 && d.consumerFilterReadsCTE(n.Children[0]) {
-				for _, cond := range n.FilterList {
+				deletesInput := d.consumerCanDeleteDemandInput(n.Children[0])
+				conjuncts := splitPlanConjunctions(n.FilterList)
+				for _, cond := range conjuncts {
+					if !hasCorrCol(cond) && localCTEGuardedPredicateSafe(cond) {
+						deletesInput = true
+					}
+				}
+				for _, cond := range conjuncts {
 					if hasCorrCol(cond) {
 						d.consumerFilters[id] = true
 					}
 					if demand := d.outerOnlyDemand(cond); demand != nil {
-						variable := false
-						walkLocalCTEExpr(demand, func(e *plan.Expr) { variable = variable || e.GetV() != nil })
-						if variable {
+						runtimeInput := false
+						walkLocalCTEExpr(demand, func(e *plan.Expr) { runtimeInput = runtimeInput || e.GetV() != nil || e.GetP() != nil })
+						if runtimeInput && deletesInput {
+							// Runtime inputs belong to the surviving consumer rows,
+							// not to the seed when pagination/filtering deletes them.
+							d.guarded = true
+						} else if runtimeInput {
 							d.variableDemand = append(d.variableDemand, demand)
 						} else {
 							d.demandFilters = append(d.demandFilters, demand)
@@ -264,6 +281,24 @@ func (d *localCTEDomain) consumerFilterReadsCTE(id int32) bool {
 	default:
 		return false
 	}
+}
+
+// Determine whether an intervening consumer can remove every row of an
+// identity before the runtime demand expression is evaluated.
+func (d *localCTEDomain) consumerCanDeleteDemandInput(id int32) bool {
+	if d.nodes[id] {
+		return false
+	}
+	n := d.builder.qry.Nodes[id]
+	if n.Limit != nil || n.Offset != nil || n.NodeType == plan.Node_FILTER {
+		return true
+	}
+	for _, child := range n.Children {
+		if d.consumerCanDeleteDemandInput(child) {
+			return true
+		}
+	}
+	return false
 }
 
 // A consumer predicate can constrain the producer domain only when it reads
@@ -331,8 +366,8 @@ func (d *localCTEDomain) outerOnlyDemand(expr *plan.Expr) *plan.Expr {
 	return copy
 }
 
-// Evaluate variable demand after the seed's row selection but before its
-// projection. Hoisting a possibly failing variable conversion into cloneDomain
+// Evaluate runtime demand after the seed's row selection but before its
+// projection. Hoisting a possibly failing input conversion into cloneDomain
 // would introduce errors for empty seeds. Only total work may precede this
 // barrier; source-step producers receive their own barrier before projection.
 func (d *localCTEDomain) admitVariableDemand(root int32) error {
@@ -964,12 +999,32 @@ func (d *localCTEDomain) lowerConsumerFilters(id, root int32, values []*plan.Exp
 		}
 		return payload
 	case plan.Node_FILTER, plan.Node_SORT, plan.Node_WINDOW:
-		// WINDOW preserves its input columns. Identity predicates below it
-		// are still pulled up to extend the existing per-identity partition;
-		// the consumer WHERE remains above the completed window calculation.
 		return payload
 	default:
 		return nil
+	}
+}
+
+func (d *localCTEDomain) splitConsumerDemandFilters() {
+	for id := range d.consumerFilters {
+		n := d.builder.qry.Nodes[id]
+		// Total conjuncts own row deletion before possibly failing runtime
+		// input conversions. Keep a barrier so optimization cannot merge
+		// them back into one eager filter evaluation.
+		var total, remaining []*plan.Expr
+		for _, expr := range splitPlanConjunctions(n.FilterList) {
+			if localCTEGuardedPredicateSafe(expr) {
+				total = append(total, expr)
+			} else {
+				remaining = append(remaining, expr)
+			}
+		}
+		if len(total) > 0 && len(remaining) > 0 {
+			n.Children[0] = d.builder.appendNode(&plan.Node{NodeType: plan.Node_FILTER,
+				Children: []int32{n.Children[0]}, FilterList: total, FilterIsBarrier: true}, d.builder.ctxByNode[id])
+			n.FilterList = remaining
+			n.FilterIsBarrier = true
+		}
 	}
 }
 

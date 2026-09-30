@@ -973,6 +973,54 @@ from guarded_abs p order by p.id;
 set session auto_increment_increment=@saved_increment;
 set @saved_increment=null;
 set @cte_demand=null;
+set @cte_demand='bad';
+select p.id, (with q(n) as (select p.id)
+select n from (select n from q limit 1 offset 1) d where p.id=@cte_demand) as c
+from guarded_abs p order by p.id;
+➤ id[4,32,0]  ¦  c[4,32,0]  𝄀
+1  ¦  null  𝄀
+2  ¦  null
+select p.id, (with q(n) as (select p.id)
+select count(*) from q where n<0 and p.id=@cte_demand) as c
+from guarded_abs p order by p.id;
+➤ id[4,32,0]  ¦  c[-5,64,0]  𝄀
+1  ¦  0  𝄀
+2  ¦  0
+select p.id, (with q(n) as (select p.id)
+select count(*) from q where n>0 and p.id=@cte_demand) as c
+from guarded_abs p order by p.id;
+invalid argument cast to int, bad value bad
+prepare empty_runtime_seed from 'select p.id, (with recursive q(n) as (select p.id where p.id<0 union all select n from q where n=1) select count(*) from q where p.id=cast(? as signed)) as c from guarded_abs p order by p.id';
+execute empty_runtime_seed using @cte_demand;
+➤ id[4,32,0]  ¦  c[-5,64,0]  𝄀
+1  ¦  0  𝄀
+2  ¦  0
+set @cte_demand=null;
+execute empty_runtime_seed using @cte_demand;
+➤ id[4,32,0]  ¦  c[-5,64,0]  𝄀
+1  ¦  0  𝄀
+2  ¦  0
+set @cte_demand=2;
+execute empty_runtime_seed using @cte_demand;
+➤ id[4,32,0]  ¦  c[-5,64,0]  𝄀
+1  ¦  0  𝄀
+2  ¦  0
+deallocate prepare empty_runtime_seed;
+prepare active_runtime_seed from 'select p.id, (with recursive q(n) as (select p.id union all select n from q where n=1) select count(*) from q where p.id=cast(? as signed)) as c from guarded_abs p order by p.id';
+execute active_runtime_seed using @cte_demand;
+➤ id[4,32,0]  ¦  c[-5,64,0]  𝄀
+1  ¦  0  𝄀
+2  ¦  1
+set @cte_demand='bad';
+execute active_runtime_seed using @cte_demand;
+invalid argument cast to int, bad value bad
+set @cte_demand=2;
+execute active_runtime_seed using @cte_demand;
+➤ id[4,32,0]  ¦  c[-5,64,0]  𝄀
+1  ¦  0  𝄀
+2  ¦  1
+deallocate prepare active_runtime_seed;
+set @cte_demand=null;
 insert into guarded_abs values (-2147483648,0);
 select p.id, (with recursive q(n) as (
 select p.id union all select n from q where n=1

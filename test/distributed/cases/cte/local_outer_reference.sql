@@ -678,6 +678,32 @@ from guarded_abs p order by p.id;
 set session auto_increment_increment=@saved_increment;
 set @saved_increment=null;
 set @cte_demand=null;
+-- Runtime demand must not execute after pagination/filters delete its input.
+set @cte_demand='bad';
+select p.id, (with q(n) as (select p.id)
+select n from (select n from q limit 1 offset 1) d where p.id=@cte_demand) as c
+from guarded_abs p order by p.id;
+select p.id, (with q(n) as (select p.id)
+select count(*) from q where n<0 and p.id=@cte_demand) as c
+from guarded_abs p order by p.id;
+select p.id, (with q(n) as (select p.id)
+select count(*) from q where n>0 and p.id=@cte_demand) as c
+from guarded_abs p order by p.id;
+prepare empty_runtime_seed from 'select p.id, (with recursive q(n) as (select p.id where p.id<0 union all select n from q where n=1) select count(*) from q where p.id=cast(? as signed)) as c from guarded_abs p order by p.id';
+execute empty_runtime_seed using @cte_demand;
+set @cte_demand=null;
+execute empty_runtime_seed using @cte_demand;
+set @cte_demand=2;
+execute empty_runtime_seed using @cte_demand;
+deallocate prepare empty_runtime_seed;
+prepare active_runtime_seed from 'select p.id, (with recursive q(n) as (select p.id union all select n from q where n=1) select count(*) from q where p.id=cast(? as signed)) as c from guarded_abs p order by p.id';
+execute active_runtime_seed using @cte_demand;
+set @cte_demand='bad';
+execute active_runtime_seed using @cte_demand;
+set @cte_demand=2;
+execute active_runtime_seed using @cte_demand;
+deallocate prepare active_runtime_seed;
+set @cte_demand=null;
 -- INT32_MIN is representable after the ABS widening.
 insert into guarded_abs values (-2147483648,0);
 select p.id, (with recursive q(n) as (

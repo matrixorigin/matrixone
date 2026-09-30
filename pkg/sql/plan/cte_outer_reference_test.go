@@ -68,6 +68,17 @@ func TestLocalCTEOuterReferencesExecutablePlan(t *testing.T) {
 				select abs(n) from q where p.n_nationkey=2) from tpch.nation p`,
 		},
 		{
+			name: "runtime demand remains after consumer offset",
+			sql: `select p.n_nationkey, (with q(n) as (select p.n_nationkey)
+				select n from (select n from q limit 1 offset 1) d
+				where p.n_nationkey=@demand) from tpch.nation p`,
+		},
+		{
+			name: "runtime demand remains after total consumer filter",
+			sql: `select p.n_nationkey, (with q(n) as (select p.n_nationkey)
+				select count(*) from q where n<0 and p.n_nationkey=@demand) from tpch.nation p`,
+		},
+		{
 			name: "null demand is total despite untyped null cast",
 			sql: `select p.n_nationkey, (with q(n) as (select abs(p.n_regionkey))
 				select count(*) from q where p.n_nationkey=null) from tpch.nation p`,
@@ -413,6 +424,11 @@ func TestPreparedLocalCTEOuterReferences(t *testing.T) {
 		{"outer parameter", `select (with recursive r(n) as (
 			select p.n_regionkey union all select n-1 from r where n>1
 		) select count(*) from r) from tpch.nation p where p.n_nationkey=?`, false},
+		{"empty seed explicit parameter conversion", `select p.n_nationkey,
+			(with recursive q(n) as (select p.n_nationkey where p.n_nationkey<0
+			union all select n from q where n=1)
+			select count(*) from q where p.n_nationkey=cast(? as signed))
+			from tpch.nation p`, true},
 		{"distinct parameter demand", `select p.n_nationkey,
 			(with q(n) as (select abs(p.n_regionkey))
 			select n from (select distinct n from q) d where p.n_nationkey=?)
@@ -440,6 +456,42 @@ func TestPreparedLocalCTEOuterReferences(t *testing.T) {
 			}
 		})
 	}
+}
+
+func TestLocalCTERuntimeDemandFollowsConsumerFilter(t *testing.T) {
+	logicPlan, err := runOneStmt(NewMockOptimizer(false), t,
+		`select p.n_nationkey, (with q(n) as (select p.n_nationkey)
+		select count(*) from q where n<0 and p.n_nationkey=@demand) from tpch.nation p`)
+	require.NoError(t, err)
+	query := logicPlan.GetQuery()
+	found := false
+	var visit func(int32)
+	visit = func(id int32) {
+		node := query.Nodes[id]
+		variable := false
+		for _, filter := range node.FilterList {
+			walkLocalCTEExpr(filter, func(e *planpb.Expr) { variable = variable || e.GetV() != nil })
+		}
+		if variable {
+			require.True(t, node.FilterIsBarrier)
+			require.Len(t, node.Children, 1)
+			child := query.Nodes[node.Children[0]]
+			require.Equal(t, planpb.Node_FILTER, child.NodeType)
+			require.True(t, child.FilterIsBarrier)
+			require.NotEmpty(t, child.FilterList)
+			for _, filter := range child.FilterList {
+				walkLocalCTEExpr(filter, func(e *planpb.Expr) { require.Nil(t, e.GetV()) })
+			}
+			found = true
+		}
+		for _, child := range node.Children {
+			visit(child)
+		}
+	}
+	for _, root := range query.Steps {
+		visit(root)
+	}
+	require.True(t, found, "the live plan must retain both ordered barriers")
 }
 
 func TestLocalCTEVariableDemandPreservesReferences(t *testing.T) {
