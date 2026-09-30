@@ -703,63 +703,16 @@ func (q *Query) Close(ctx context.Context) (resultErr error) {
 				return ctx.Err()
 			}
 		}
-		native, idle := q.native, q.idle
-		q.mu.Unlock()
-
-		var err error
-		if native != nil {
-			err = callCleanup("native query cancel", native.cancel)
-		}
-		select {
-		case <-idle:
-		case <-ctx.Done():
-			return errors.Join(err, ctx.Err())
-		}
-
-		q.mu.Lock()
-		if q.cleanupRunning {
-			done := q.cleanupDone
-			q.mu.Unlock()
-			select {
-			case <-done:
-				if err != nil {
-					return err
-				}
-				continue
-			case <-ctx.Done():
-				return errors.Join(err, ctx.Err())
-			}
-		}
+		// Claim the entire attempt before borrowing the native handle for
+		// cancel. idle joins Run's borrowers, but cannot join another Close's
+		// cancel; competitors must wait on cleanupDone instead.
 		q.cleanupRunning = true
 		q.cleanupDone = make(chan struct{})
 		done := q.cleanupDone
-		native = q.native
+		native, idle := q.native, q.idle
 		q.mu.Unlock()
 
-		if native != nil {
-			closeErr := callCleanup("native query close", func() error { return native.close(ctx) })
-			err = errors.Join(err, closeErr)
-			if closeErr == nil {
-				q.mu.Lock()
-				if q.native == native {
-					q.native = nil
-				}
-				q.mu.Unlock()
-			}
-		}
-		q.mu.Lock()
-		release := q.release
-		canRelease := q.native == nil
-		q.mu.Unlock()
-		if canRelease && release != nil {
-			releaseErr := callCleanup("release callback", func() error { return release(ctx) })
-			err = errors.Join(err, releaseErr)
-			if releaseErr == nil {
-				q.mu.Lock()
-				q.release = nil
-				q.mu.Unlock()
-			}
-		}
+		err := q.closeAttempt(ctx, native, idle)
 		q.mu.Lock()
 		closed := q.native == nil && q.release == nil
 		q.cleanupRunning = false
@@ -772,6 +725,44 @@ func (q *Query) Close(ctx context.Context) (resultErr error) {
 		}
 		return err
 	}
+}
+
+// closeAttempt owns cancel, the Run join, native destruction, and read release.
+// It never holds q.mu across a native call or join. Even an interrupted attempt
+// returns to Close's common completion path, which wakes retrying competitors.
+func (q *Query) closeAttempt(ctx context.Context, native queryDriver, idle <-chan struct{}) error {
+	var err error
+	if native != nil {
+		err = callCleanup("native query cancel", native.cancel)
+	}
+	select {
+	case <-idle:
+	case <-ctx.Done():
+		return errors.Join(err, ctx.Err())
+	}
+	if native != nil {
+		closeErr := callCleanup("native query close", func() error { return native.close(ctx) })
+		err = errors.Join(err, closeErr)
+		if closeErr == nil {
+			q.mu.Lock()
+			q.native = nil
+			q.mu.Unlock()
+		}
+	}
+	q.mu.Lock()
+	release := q.release
+	canRelease := q.native == nil
+	q.mu.Unlock()
+	if canRelease && release != nil {
+		releaseErr := callCleanup("release callback", func() error { return release(ctx) })
+		err = errors.Join(err, releaseErr)
+		if releaseErr == nil {
+			q.mu.Lock()
+			q.release = nil
+			q.mu.Unlock()
+		}
+	}
+	return err
 }
 
 type terminal string

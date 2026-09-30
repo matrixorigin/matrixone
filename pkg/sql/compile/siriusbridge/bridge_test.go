@@ -160,6 +160,11 @@ func TestCloseRetainsBorrowedResultAndRelease(t *testing.T) {
 	<-borrowed
 	ctx, cancel := context.WithCancel(context.Background())
 	cancel()
+	// An owner interrupted while joining Run must relinquish its attempt so
+	// the later runtime cleanup can retry after the borrowed result returns.
+	if err := q.Close(ctx); !errors.Is(err, context.Canceled) {
+		t.Fatalf("query Close: %v", err)
+	}
 	if err := r.Close(ctx); !errors.Is(err, context.Canceled) {
 		t.Fatalf("Close: %v", err)
 	}
@@ -754,6 +759,89 @@ func TestConcurrentQueryCloseWaitsWithOwnContext(t *testing.T) {
 	}
 	if d.stops.Load() != 1 {
 		t.Fatalf("runtime stop calls: %d", d.stops.Load())
+	}
+}
+
+func TestConcurrentQueryCloseJoinsCancelBeforeDestroy(t *testing.T) {
+	for _, completed := range []bool{false, true} {
+		t.Run(map[bool]string{false: "prepared", true: "completed"}[completed], func(t *testing.T) {
+			r, d := testRuntime()
+			ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
+			defer cancel()
+			cancelEntered, cancelGate := make(chan struct{}), make(chan struct{})
+			var gateOnce sync.Once
+			openGate := func() { gateOnce.Do(func() { close(cancelGate) }) }
+			var workers sync.WaitGroup
+			t.Cleanup(func() { openGate(); workers.Wait(); _ = r.Close(context.Background()) })
+			var cancelActive, overlapped atomic.Bool
+			cancelFn := func() error {
+				if d.q.cancels.Load() == 1 {
+					cancelActive.Store(true)
+					close(cancelEntered)
+					<-cancelGate
+					cancelActive.Store(false)
+				}
+				return nil
+			}
+			d.q.closeFn = func(context.Context) error {
+				overlapped.Store(cancelActive.Load())
+				return nil
+			}
+			// Engine stop has its own handle, not a borrowed query handle. Do not
+			// model it with testDriver's default delegation to query.cancel here.
+			d.stopFn = func() error { return nil }
+			var releases atomic.Int32
+			req := testRequest()
+			req.Release = func(context.Context) error { releases.Add(1); return nil }
+			q, err := r.Prepare(ctx, req)
+			if err != nil {
+				t.Fatal(err)
+			}
+			if completed {
+				d.q.nextErr = errEOF
+				if err = q.Run(ctx, func(Result) error { return nil }); err != nil {
+					t.Fatal(err)
+				}
+				// Run has joined all its control calls. Count Close's borrowers only.
+				d.q.cancels.Store(0)
+			}
+			d.q.cancelFn = cancelFn // idle is closed in both lifecycle states.
+			first := make(chan error, 1)
+			workers.Add(1)
+			go func() { defer workers.Done(); first <- q.Close(ctx) }()
+			select {
+			case <-cancelEntered:
+			case <-ctx.Done():
+				t.Fatal("cancel did not enter")
+			}
+			// A cancelled competitor must return promptly without borrowing the
+			// handle. The old pre-claim window invokes a second cancel every time.
+			short, cancelShort := context.WithCancel(ctx)
+			cancelShort()
+			if err = q.Close(short); !errors.Is(err, context.Canceled) {
+				t.Fatalf("competing Close: %v", err)
+			}
+			if d.q.cancels.Load() != 1 || d.q.closes.Load() != 0 || releases.Load() != 0 {
+				t.Fatalf("unjoined cancel borrower: cancel=%d close=%d release=%d", d.q.cancels.Load(), d.q.closes.Load(), releases.Load())
+			}
+			second := make(chan error, 1)
+			workers.Add(1)
+			go func() { defer workers.Done(); second <- q.Close(ctx) }()
+			openGate()
+			for _, done := range []chan error{first, second} {
+				select {
+				case err = <-done:
+					if err != nil {
+						t.Fatal(err)
+					}
+				case <-ctx.Done():
+					t.Fatal("Close did not finish")
+				}
+			}
+			if overlapped.Load() || d.q.cancels.Load() != 1 || d.q.closes.Load() != 1 || releases.Load() != 1 {
+				t.Fatalf("native lifetime: overlap=%v cancel=%d close=%d release=%d", overlapped.Load(), d.q.cancels.Load(), d.q.closes.Load(), releases.Load())
+			}
+		})
 	}
 }
 
