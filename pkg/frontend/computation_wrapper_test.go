@@ -80,6 +80,18 @@ func TestResourceAttemptOwnerEligible(t *testing.T) {
 	require.False(t, resourceAttemptOwnerEligible(derived))
 }
 
+func TestPreparedExecutionBindingKeyIncludesSourceTypeProvenance(t *testing.T) {
+	binding := []plan2.PreparedSourceBinding{{Position: 0, Type: types.T_float64.ToType()}}
+	proven := []any{plan2.ParamValue{
+		Value: 2.5, SourceType: types.T_float64.ToType(), HasSourceType: true,
+	}}
+	unproven := []any{plan2.ParamValue{Value: 2.5}}
+	require.NotEqual(t,
+		preparedExecutionBindingKey(binding, proven),
+		preparedExecutionBindingKey(binding, unproven),
+		"source-aware math precision binding must not reuse an inferred-source plan")
+}
+
 func (m *mockCompile) Run(ts uint64) (*util2.RunResult, error) { return m.runFunc(ts) }
 func (m *mockCompile) GetPlan() *plan.Plan                     { return m.getPlanFunc() }
 func (m *mockCompile) PlanGenerationRebuilt() bool             { return m.planGenerationRebuilt }

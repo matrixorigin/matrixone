@@ -376,24 +376,21 @@ const (
 // execution contracts.
 // JSONScalarLiteralContracts requires MORPC v104 because older executors
 // decode JSON-typed Sval literals as VARCHAR rather than encoded JSON.
-// StrictStringNumericCompatibility requires the current latest MORPC floor
-// when the sender uses the strict-by-default contract. Pre-floor workers
-// understand the prefix-cast
+// StrictStringNumericCompatibility requires MORPC v107 when the sender uses
+// the strict-by-default contract. Older workers understand the prefix-cast
 // representation but default to permissive conversion when the new SessionInfo
 // marker is absent.
-// NumericBinaryLiteralProvenance requires the current latest MORPC floor in
-// every mode when a
+// NumericBinaryLiteralProvenance requires MORPC v107 in every mode when a
 // CASE/IF/COALESCE result can carry a selected non-NULL HEX/BIT marker. The
 // marker can affect a downstream numeric cast even when every non-NULL branch
-// is marked (or the other branch is NULL), and pre-floor flow-control executors
+// is marked (or the other branch is NULL), and pre-v107 flow-control executors
 // do not propagate it. This is independent of string-prefix conversion mode.
-// HistoricalStringMathCompatibility requires the current latest MORPC floor
-// in every mode: old CEIL/FLOOR
+// HistoricalStringMathCompatibility requires MORPC v107 in every mode: old
+// CEIL/FLOOR
 // VARCHAR overloads used ParseFloat, not the current mode-aware parser.
-// Ordinary/comparison/set-operation FLOAT -> INT64 casts require the current
-// latest MORPC floor's exact bounds in every mode, independently of
-// string-prefix conversion.
-// ScalarMathPrecisionCompatibility requires the current latest MORPC floor to preserve row-level
+// Ordinary/comparison/set-operation FLOAT -> INT64 casts require MORPC v107's
+// exact bounds in every mode, independently of string-prefix conversion.
+// ScalarMathPrecisionCompatibility requires MORPC v107 to preserve row-level
 // warnings while presenting a constant precision argument to CEIL/FLOOR kernels.
 type RemoteExpressionFeatures struct {
 	NumericPrefix                     bool

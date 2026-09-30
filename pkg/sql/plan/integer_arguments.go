@@ -124,7 +124,7 @@ func (b *baseBinder) bindIntegerSourceAst(ast tree.Expr, depth int32, target typ
 	if function.IntegerArgumentSourceDependent(name, position) {
 		return appendSourceDependentIntegerArgument(b.GetContext(), source, name, position)
 	}
-	if nativeTarget, native := function.IntegerArgumentNativeOrdinaryCastTarget(name, position, types.T(source.Typ.Id)); native {
+	if nativeTarget, native := function.IntegerArgumentNativeOrdinaryCastTarget(name, position, types.T(source.Typ.Id)); native && preparedMathPrecisionUsesNativeSource(b.GetContext(), source, name, position) {
 		return appendIntegerArgument(b.GetContext(), source, nativeTarget, false)
 	}
 	if ordinaryTarget, ordinary := function.IntegerArgumentOrdinaryCastTarget(name, position); ordinary {
@@ -132,6 +132,30 @@ func (b *baseBinder) bindIntegerSourceAst(ast tree.Expr, depth int32, target typ
 		return appendCastBeforeExpr(b.GetContext(), source, makePlan2Type(&typ))
 	}
 	return appendIntegerArgument(b.GetContext(), source, target, false)
+}
+
+// preparedMathPrecisionUsesNativeSource distinguishes a proven SQL EXECUTE
+// numeric source from binary-protocol or runtime-inferred values. Those latter
+// values keep the ordinary INT64 CAST contract even when their bound type is
+// floating point.
+func preparedMathPrecisionUsesNativeSource(ctx context.Context, source *Expr, name string, position int) bool {
+	if source == nil || source.GetP() == nil {
+		return true
+	}
+	state := preparedBindingState(ctx)
+	if state == nil {
+		return true
+	}
+	positionInValues := source.GetP().Pos
+	if positionInValues < 0 || int(positionInValues) >= len(state.values) {
+		return false
+	}
+	param, ok := state.values[positionInValues].(ParamValue)
+	if !ok || param.IsBinaryProtocol || !param.HasSourceType {
+		return false
+	}
+	_, ok = function.IntegerArgumentNativeOrdinaryCastTarget(name, position, param.SourceType.Oid)
+	return ok
 }
 
 // bindOrdinaryMathPrecisionAst preserves normal expression binding for
