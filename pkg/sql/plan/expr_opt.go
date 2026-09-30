@@ -259,9 +259,6 @@ func (builder *QueryBuilder) rewriteNumericDomainFilters(nodeID int32) {
 						continue
 					}
 					column := comparisonCastSource(fn.Args[side])
-					if column == nil && side == 1 {
-						column = fn.Args[side] // Early binding may already expose the reversed column.
-					}
 					value := comparisonCastSource(fn.Args[1-side])
 					if column == nil || column.GetCol() == nil || !types.T(column.Typ.Id).IsSignedInt() || value == nil {
 						continue

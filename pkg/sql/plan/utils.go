@@ -2013,6 +2013,35 @@ func getPath(expr *plan.Expr) []int {
 }
 
 func ConstantTranspose(expr *plan.Expr, proc *process.Process) (*plan.Expr, error) {
+	fn := expr.GetF()
+	if hasNonNilFunctionArgs(fn, 2) {
+		if fn.Func.ObjName == "and" || fn.Func.ObjName == "or" {
+			var args []*plan.Expr
+			for i, arg := range fn.Args {
+				transposed, err := ConstantTranspose(arg, proc)
+				if err != nil {
+					return nil, err
+				}
+				if transposed != arg {
+					if args == nil {
+						args = append([]*plan.Expr(nil), fn.Args...)
+					}
+					args[i] = transposed
+				}
+			}
+			if args == nil {
+				return expr, nil
+			}
+			return BindFuncExprImplByPlanExpr(proc.Ctx, fn.Func.ObjName, args)
+		}
+		if fn.Args[0].GetCol() != nil {
+			return expr, nil
+		}
+		// Scan consumers interpret native ranges with the column on the left.
+		if isRangeOp(fn) && fn.Args[1].GetCol() != nil && isScanInvariantRuntimeConstExpr(fn.Args[0]) {
+			return BindFuncExprImplByPlanExpr(proc.Ctx, canonicalRangeOp(fn), []*plan.Expr{fn.Args[1], fn.Args[0]})
+		}
+	}
 	can, leftCnt, rightCnt := canTranspose(expr)
 	if !can {
 		return expr, nil
@@ -2028,7 +2057,7 @@ func ConstantTranspose(expr *plan.Expr, proc *process.Process) (*plan.Expr, erro
 		expr = exchangedExpr
 	}
 
-	fn := expr.GetF()
+	fn = expr.GetF()
 	curLeft, curRight := fn.Args[0], fn.Args[1]
 
 	colPath := getPath(curLeft)

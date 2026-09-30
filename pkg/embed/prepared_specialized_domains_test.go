@@ -268,7 +268,6 @@ func TestPreparedSpecializedDomains(t *testing.T) {
 			exec(t, "create table rounding_keys(id bigint primary key)")
 			defer conn.ExecContext(ctx, "drop table rounding_keys")
 			exec(t, "insert into rounding_keys values (54320),(54321),(54322)")
-			exec(t, "set @rounding_key_source='54321.0'")
 			for _, fn := range []string{"round", "truncate"} {
 				for _, source := range []string{"?", "(select ?)"} {
 					for _, tc := range []struct {
@@ -276,9 +275,21 @@ func TestPreparedSpecializedDomains(t *testing.T) {
 						want [][]string
 					}{{"<", [][]string{{"54322"}}}, {"<=", [][]string{{"54321"}, {"54322"}}},
 						{">", [][]string{{"54320"}}}, {">=", [][]string{{"54320"}, {"54321"}}}} {
-						exec(t, "prepare rounding_key from 'select id from rounding_keys where "+fn+"("+source+")"+tc.op+"id order by id'")
-						require.Equal(t, tc.want, query(t, "execute rounding_key using @rounding_key_source"), fn, source, tc.op)
-						exec(t, "deallocate prepare rounding_key")
+						t.Run(fn+"/"+source+"/"+tc.op, func(t *testing.T) {
+							predicate := fn + "(" + source + ")" + tc.op
+							exec(t, "prepare rounding_key from 'select id from rounding_keys where "+predicate+"id order by id'")
+							defer conn.ExecContext(ctx, "deallocate prepare rounding_key")
+							exec(t, "prepare rounding_key_control from 'select id from rounding_keys where "+predicate+"cast(id as decimal(38,0)) order by id'")
+							defer conn.ExecContext(ctx, "deallocate prepare rounding_key_control")
+							for _, value := range []string{"'54321.0'", "54321", "54321.5", "null", "'54321.0'"} {
+								exec(t, "set @rounding_key_source="+value)
+								got := query(t, "execute rounding_key using @rounding_key_source")
+								require.Equal(t, query(t, "execute rounding_key_control using @rounding_key_source"), got, value)
+								if value == "54321" || value == "'54321.0'" {
+									require.Equal(t, tc.want, got, value)
+								}
+							}
+						})
 					}
 				}
 			}

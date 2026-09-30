@@ -1185,6 +1185,51 @@ func TestConstantTranspose(t *testing.T) {
 		},
 	}
 
+	bind := func(t *testing.T, name string, args ...*plan.Expr) *plan.Expr {
+		t.Helper()
+		expr, err := plan2.BindFuncExprImplByPlanExpr(proc.Ctx, name, args)
+		require.NoError(t, err)
+		return expr
+	}
+	param := &plan.Expr{Typ: colExpr.Typ, Expr: &plan.Expr_P{P: &plan.ParamRef{Pos: 0}}}
+	for _, tc := range []struct{ op, inverse string }{{"<", ">"}, {"<=", ">="}, {">", "<"}, {">=", "<="}} {
+		t.Run("native_range_"+tc.op, func(t *testing.T) {
+			input := bind(t, tc.op, param, colExpr)
+			result, err := plan2.ConstantTranspose(input, proc)
+			require.NoError(t, err)
+			require.Equal(t, bind(t, tc.inverse, colExpr, param), result)
+			require.Equal(t, tc.op, input.GetF().Func.ObjName, "input must stay unchanged")
+			again, err := plan2.ConstantTranspose(result, proc)
+			require.NoError(t, err)
+			require.Same(t, result, again, "normal form needs no replacement")
+		})
+	}
+	t.Run("native_range_nested_boolean", func(t *testing.T) {
+		equality := bind(t, "=", colExpr, makeConstExpr(42))
+		input := bind(t, "or", equality, bind(t, "and", bind(t, "<=", param, colExpr), equality))
+		before := plan2.DeepCopyExpr(input)
+		result, err := plan2.ConstantTranspose(input, proc)
+		require.NoError(t, err)
+		require.Equal(t, bind(t, "or", equality, bind(t, "and", bind(t, ">=", colExpr, param), equality)), result)
+		require.Equal(t, before, input, "Boolean children may be shared")
+	})
+	target := &plan.Expr{Typ: colExpr.Typ, Expr: &plan.Expr_T{T: &plan.TargetType{}}}
+	wideParam := plan2.DeepCopyExpr(param)
+	wideParam.Typ.Id = int32(types.T_int64)
+	for _, peer := range []*plan.Expr{makeConstExpr(42), makeAddExpr(makeConstExpr(40), makeConstExpr(2)), bind(t, "cast", wideParam, target)} {
+		input := bind(t, "<=", peer, colExpr)
+		result, err := plan2.ConstantTranspose(input, proc)
+		require.NoError(t, err)
+		require.Equal(t, bind(t, ">=", colExpr, peer), result, "peer domain must stay executable")
+	}
+	volatile := bind(t, "cast", bind(t, "rand"), target)
+	wrappedCol := bind(t, "cast", colExpr, &plan.Expr{Typ: wideParam.Typ, Expr: &plan.Expr_T{T: &plan.TargetType{}}})
+	for _, input := range []*plan.Expr{bind(t, "<=", volatile, colExpr), bind(t, "<=", colExpr, colExpr), bind(t, "<=", wideParam, wrappedCol)} {
+		result, err := plan2.ConstantTranspose(input, proc)
+		require.NoError(t, err)
+		require.Same(t, input, result, "only scan-invariant peers beside bare columns qualify")
+	}
+
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
 			input := plan2.DeepCopyExpr(tt.input)
