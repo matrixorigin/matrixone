@@ -1863,6 +1863,28 @@ var supportedStringBuiltIns = []FuncNew{
 		},
 	},
 
+	// function `json_agg_to_double` — internal MySQL warning-conversion
+	// boundary for SUM/AVG/VAR_*/STDDEV_* over JSON operands.
+	{
+		functionId: JSON_AGG_TO_DOUBLE,
+		class:      plan.Function_STRICT,
+		layout:     STANDARD_FUNCTION,
+		checkFn:    fixedTypeMatch,
+
+		Overloads: []overload{
+			{
+				overloadId: 0,
+				args:       []types.T{types.T_json},
+				retType: func(parameters []types.Type) types.Type {
+					return types.T_float64.ToType()
+				},
+				newOp: func() executeLogicOfOverload {
+					return JsonAggToDouble
+				},
+			},
+		},
+	},
+
 	// function `json_keys`
 	{
 		functionId: JSON_KEYS,
@@ -16506,16 +16528,7 @@ var supportedOthersBuiltIns = []FuncNew{
 		class:      plan.Function_STRICT,
 		layout:     STANDARD_FUNCTION,
 		checkFn: func(overloads []overload, inputs []types.Type) checkResult {
-			if len(inputs) != 1 {
-				return newCheckResultWithFailure(failedFunctionParametersWrong)
-			}
-			switch inputs[0].Oid {
-			case types.T_any:
-				return newCheckResultWithCast(0, []types.Type{types.T_varbinary.ToType()})
-			case types.T_binary, types.T_varbinary, types.T_blob:
-				return newCheckResultWithSuccess(0)
-			}
-			return newCheckResultWithFailure(failedFunctionParametersWrong)
+			return opaqueStateTypeCheck(inputs, failedFunctionParametersWrong)
 		},
 
 		Overloads: []overload{

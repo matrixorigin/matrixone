@@ -22,6 +22,8 @@
 
 # Top-level folders
 /cgo @aunjgr @XuPeng-SH
+/cgo/cuda @aunjgr @XuPeng-SH @cpegeric
+/cgo/cuvs @aunjgr @XuPeng-SH @cpegeric
 /docs @fengttt @XuPeng-SH
 /etc @XuPeng-SH
 /optools @fengttt @XuPeng-SH

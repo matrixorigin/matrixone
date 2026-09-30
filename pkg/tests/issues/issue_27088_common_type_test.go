@@ -238,7 +238,8 @@ func TestIssue27088PreparedDecimalCommonType(t *testing.T) {
 		mustExec(t, ctx, conn, `insert into prepared_exact_integer_cmp values
 			(1, 9007199254740992, 9007199254740992),
 			(2, 9007199254740993, 9007199254740993),
-			(3, 9007199254740994, 9007199254740994)`)
+			(3, 9007199254740994, 9007199254740994),
+			(4, 100, 100)`)
 
 		t.Run("issue 27492 COM_STMT exact integer comparison", func(t *testing.T) {
 			for _, column := range []string{"u", "b"} {
@@ -256,6 +257,20 @@ func TestIssue27088PreparedDecimalCommonType(t *testing.T) {
 						require.NoError(t, rows.Err())
 					}
 					queryAndAssert("9007199254740993", 2)
+					queryAndAssert("9007199254740993.0", 2)
+					queryAndAssert("100.0", 4)
+					queryAndAssert("1e2", 4)
+					if column == "b" {
+						rows, queryErr := stmt.QueryContext(ctx, "100.5")
+						if rows != nil {
+							defer rows.Close()
+							require.NoError(t, rows.Err())
+						}
+						require.ErrorContains(t, queryErr, "invalid argument cast to uint64")
+					} else {
+						queryAndAssert("100.5")
+					}
+					queryAndAssert("1e2", 4)
 					queryAndAssert(uint64(9007199254740993), 2)
 					queryAndAssert(nil)
 					queryAndAssert("9007199254740993", 2)
@@ -283,6 +298,25 @@ func TestIssue27088PreparedDecimalCommonType(t *testing.T) {
 
 				mustExec(t, ctx, conn, "set @issue27492_value = '9007199254740993'")
 				querySQLAndAssert(2)
+				mustExec(t, ctx, conn, "set @issue27492_value = '9007199254740993.0'")
+				querySQLAndAssert(2)
+				mustExec(t, ctx, conn, "set @issue27492_value = '100.0'")
+				querySQLAndAssert(4)
+				mustExec(t, ctx, conn, "set @issue27492_value = '1e2'")
+				querySQLAndAssert(4)
+				mustExec(t, ctx, conn, "set @issue27492_value = '100.5'")
+				if column == "b" {
+					rows, queryErr := conn.QueryContext(ctx, "execute "+statementName+" using @issue27492_value")
+					if rows != nil {
+						defer rows.Close()
+						require.NoError(t, rows.Err())
+					}
+					require.ErrorContains(t, queryErr, "invalid argument cast to uint64")
+				} else {
+					querySQLAndAssert()
+				}
+				mustExec(t, ctx, conn, "set @issue27492_value = '1e2'")
+				querySQLAndAssert(4)
 				mustExec(t, ctx, conn, "set @issue27492_value = null")
 				querySQLAndAssert()
 				mustExec(t, ctx, conn, "set @issue27492_value = '9007199254740993'")
@@ -417,9 +451,9 @@ func TestIssue27088PreparedDecimalCommonType(t *testing.T) {
 			defer rows.Close()
 			assertIDs(t, rows, queryErr)
 			require.NoError(t, rows.Err())
-			// SQL user-variable NULL has a concrete TEXT domain. The common
-			// result is a string; the enclosing decimal comparison uses DOUBLE,
-			// exactly as direct SQL using that same variable does.
+			// The direct variable remains TEXT. In SQL PREPARE, the marker
+			// inherits the fixed DECIMAL peer, including when this execution
+			// supplies NULL; MySQL makes the same distinction.
 			mustExec(t, ctx, conn, "set @issue27088_nested = null")
 			rows, queryErr = conn.QueryContext(ctx, `select id from common_type
 				where coalesce(@issue27088_nested, d) = cast('9007199254740992.0000000002' as decimal(38,10)) order by id`)
@@ -430,7 +464,7 @@ func TestIssue27088PreparedDecimalCommonType(t *testing.T) {
 			rows, queryErr = conn.QueryContext(ctx, "execute issue27088_nested_sql using @issue27088_nested")
 			require.NoError(t, queryErr)
 			defer rows.Close()
-			assertIDs(t, rows, queryErr, 1, 2, 3)
+			assertIDs(t, rows, queryErr, 2)
 			require.NoError(t, rows.Err())
 		})
 
@@ -479,8 +513,9 @@ func TestIssue27088PreparedDecimalCommonType(t *testing.T) {
 			value, valueType := readResult(t, "select @issue27088_out")
 			require.Equal(t, "12.5tail", direct)
 			require.Equal(t, "VARCHAR", directType)
-			require.Equal(t, direct, value)
-			require.Equal(t, directType, valueType)
+			// The prepared marker takes the DECIMAL peer's result domain.
+			require.Equal(t, "12.5000000000", value)
+			require.Equal(t, "DECIMAL", valueType)
 		})
 
 		t.Run("COM_STMT SET scalar subquery preserves runtime type", func(t *testing.T) {
@@ -668,17 +703,19 @@ func TestIssue27088PreparedDecimalCommonType(t *testing.T) {
 			mustExec(t, ctx, conn, `prepare issue27088_set_outer from
 				'set @issue27088_outer_out = coalesce(?, (select cast(1 as decimal(38,10))))'`)
 			defer func() { _, _ = conn.ExecContext(context.Background(), "deallocate prepare issue27088_set_outer") }()
-			for _, tc := range []struct{ source, want string }{
-				{"'12.5tail'", "12.5tail"}, {"'tail'", "tail"}, {"null", "1.0000000000"},
+			for _, tc := range []struct{ source, directWant, preparedWant, preparedType string }{
+				{"'12.5tail'", "12.5tail", "12.5000000000", "DECIMAL"},
+				{"'tail'", "tail", "tail", "VARCHAR"},
+				{"null", "1.0000000000", "1.0000000000", "DECIMAL"},
 			} {
 				mustExec(t, ctx, conn, "set @issue27088_outer_value = "+tc.source)
-				direct, directType := readResult(t,
+				direct, _ := readResult(t,
 					"select coalesce(@issue27088_outer_value, (select cast(1 as decimal(38,10))))")
-				require.Equal(t, tc.want, direct)
+				require.Equal(t, tc.directWant, direct)
 				mustExec(t, ctx, conn, "execute issue27088_set_outer using @issue27088_outer_value")
 				prepared, preparedType := readResult(t, "select @issue27088_outer_out")
-				require.Equal(t, direct, prepared)
-				require.Equal(t, directType, preparedType)
+				require.Equal(t, tc.preparedWant, prepared)
+				require.Equal(t, tc.preparedType, preparedType)
 			}
 		})
 

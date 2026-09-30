@@ -1,0 +1,25 @@
+prepare round_value from 'select cast(round(?,1) as double) as v';
+set @v = '1.46';
+execute round_value using @v;
+➤ v[8,53,31]  𝄀
+1.5
+set @v = 2;
+execute round_value using @v;
+➤ v[8,53,31]  𝄀
+2.0
+set @v = '2.5';
+execute round_value using @v;
+➤ v[8,53,31]  𝄀
+2.5
+deallocate prepare round_value;
+prepare round_scalar from 'select cast(round((select ?),0) as double) as v';
+execute round_scalar using @v;
+➤ v[8,53,31]  𝄀
+3.0
+deallocate prepare round_scalar;
+prepare truncate_derived from 'select cast(truncate(x,1) as double) as v from (select ? x limit 1) d';
+set @v = '1.46';
+execute truncate_derived using @v;
+➤ v[8,53,31]  𝄀
+1.4
+deallocate prepare truncate_derived;

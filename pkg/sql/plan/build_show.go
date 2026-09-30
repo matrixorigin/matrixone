@@ -680,9 +680,13 @@ func buildShowColumns(stmt *tree.ShowColumns, ctx CompilerContext) (*Plan, error
 			return nil, err
 		}
 		sql = strings.Replace(sql, "FROM "+MO_CATALOG_DB_NAME+".mo_columns col", "FROM "+columns+" col", 1)
-		viewDependencies = appendPrepareSchemas(dependencies, prepareSchemaRefWithSnapshot(obj, tableDef, nil))
+		viewDependencies = dependencies
 		viewMetadataDependsOnUdf = dependsOnUdf
 	}
+	// Even an ordinary table determines plan-time formatting and the metadata
+	// row source. If it is replaced by a View, reusing its catalog-only plan
+	// would bypass on-demand binding and expose the persisted View columns.
+	viewDependencies = appendPrepareSchemas(viewDependencies, prepareSchemaRefWithSnapshot(obj, tableDef, nil))
 
 	var result *Plan
 	if stmt.Where != nil {

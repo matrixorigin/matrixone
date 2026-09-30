@@ -72,6 +72,9 @@ message LockOptions {
   // Exclusive waiter. It is opt-in because ordinary Shared locks rely on
   // reader barging for throughput. Range locking retains its merge semantics.
   bool                WriterFair        = 13;
+  // KeepRows prevents automatic coarsening for this transaction/table. All
+  // participating lock owners must support it before callers enable it.
+  bool                KeepRows          = 14;
 }
 
 // LockTable describes which CN manages a Table's Locks.

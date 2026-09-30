@@ -15,6 +15,7 @@
 package plan
 
 import (
+	"github.com/matrixorigin/matrixone/pkg/container/types"
 	"github.com/matrixorigin/matrixone/pkg/pb/plan"
 	"github.com/matrixorigin/matrixone/pkg/sql/parsers/tree"
 )
@@ -122,13 +123,11 @@ func (b *ProjectionBinder) BindExpr(astExpr tree.Expr, depth int32, isRoot bool)
 		target := b.numericTargetType
 		b.numericTargetType = nil
 		defer func() { b.numericTargetType = target }()
-		_, isDirectPreparedParam := unwrapParenExpr(astExpr).(*tree.ParamExpr)
-		if b.builder != nil && b.builder.isPrepareStatement && isDirectPreparedParam &&
-			(b.builder.isInsertIgnore || (b.ctx != nil && b.ctx.assignmentIgnore)) &&
-			useIgnoreConversionAssignmentCast(*target) {
-			// A bare marker is the assignment source, not a numeric expression.
-			// Leave it as TEXT so the final DML assignment boundary can use
-			// cast_ignore and emit the per-row warning/adjustment at execution.
+		if types.T(target.Id) == types.T_bit && isPreparedAssignmentParam(b.builder, astExpr) {
+			// The marker is the assignment source, not an arithmetic expression.
+			// BIT assignments distinguish string bytes from numeric values.
+			// Preserve that source until the final assignment cast. Numeric
+			// function and aggregate inputs still require their target context.
 			return b.baseBindExpr(astExpr, depth, isRoot)
 		}
 		_, isBareColumn := unwrapParenExpr(astExpr).(*tree.UnresolvedName)
