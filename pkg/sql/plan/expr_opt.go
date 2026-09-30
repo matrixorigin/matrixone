@@ -251,7 +251,7 @@ func (builder *QueryBuilder) rewriteNumericDomainFilters(nodeID int32) {
 					return nil
 				}
 				fn := current.GetF()
-				if fn == nil || fn.Func == nil || fn.Func.GetObjName() != "=" || len(fn.Args) != 2 {
+				if fn == nil || fn.Func == nil || !isPreparedNumericComparison(fn.Func.GetObjName()) || len(fn.Args) != 2 {
 					return nil
 				}
 				for side := range fn.Args {
@@ -267,7 +267,11 @@ func (builder *QueryBuilder) rewriteNumericDomainFilters(nodeID int32) {
 					if err != nil || !ok {
 						continue
 					}
-					rewritten, err := BindFuncExprImplByPlanExpr(builder.GetContext(), "=", []*plan.Expr{DeepCopyExpr(column), castValue})
+					args := make([]*plan.Expr, 2)
+					args[side], args[1-side] = DeepCopyExpr(column), castValue
+					// Native scan predicates use column-first comparisons, including reversed ranges.
+					name := canonicalRangeOp(&plan.Function{Func: fn.Func, Args: args})
+					rewritten, err := BindFuncExprImplByPlanExpr(builder.GetContext(), name, []*plan.Expr{args[side], args[1-side]})
 					if err == nil {
 						*current = *rewritten
 					}
