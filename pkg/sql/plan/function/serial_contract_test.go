@@ -78,7 +78,8 @@ func TestSerialEncodedTypeSizeBound(t *testing.T) {
 			want:      2*types.MaxBlobLen + 3,
 			supported: true,
 		},
-		{name: "unsupported", typ: types.T_decimal256.ToType()},
+		{name: "decimal256", typ: types.T_decimal256.ToType(), want: 33, supported: true},
+		{name: "unsupported", typ: types.T_any.ToType()},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			got, ok := SerialEncodedTypeSizeBound(tc.typ)
@@ -96,6 +97,14 @@ func TestSerialEncodedTypeSizeBoundCoversRuntimeValue(t *testing.T) {
 		name string
 		vec  *vector.Vector
 	}{
+		{
+			name: "decimal256 full width",
+			vec: func() *vector.Vector {
+				vec := vector.NewVec(types.T_decimal256.ToType())
+				require.NoError(t, vector.AppendFixed(vec, types.Decimal256{B192_255: 1}, false, mp))
+				return vec
+			}(),
+		},
 		{
 			name: "maximum int32 encoding",
 			vec: func() *vector.Vector {
@@ -129,6 +138,7 @@ func TestSerialEncodedTypeSizeBoundCoversRuntimeValue(t *testing.T) {
 			runtimeBound, err := SerialEncodedValueSizeBound(tc.vec, 0)
 			require.NoError(t, err)
 
+			require.True(t, SerialTypeSupported(tc.vec.GetType().Oid))
 			encoder, err := NewSerialValueEncoder(tc.vec)
 			require.NoError(t, err)
 			packer := types.NewPacker()

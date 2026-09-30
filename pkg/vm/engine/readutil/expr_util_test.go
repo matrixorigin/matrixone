@@ -83,6 +83,71 @@ func TestGetNonIntPkValueByExpr(t *testing.T) {
 	})
 }
 
+func TestPKConsumersUseQualifiedColumnIdentity(t *testing.T) {
+	proc := testutil.NewProcess(t)
+	defer proc.Free()
+	for _, tc := range []struct {
+		name, qualifier, pk string
+		valid               bool
+	}{
+		{"a", "", "a", true},
+		{"t.a", "", "a", true},
+		{"x.y.a", "x.y", "a", true},
+		{"t.a.b", "t", "a.b", true},
+		{"x.y.a.b", "x.y", "a.b", true},
+		{"x.y.b", "x.y", "a", false},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			table := &plan.TableDef{
+				Name2ColIndex: map[string]int32{"other": 0, tc.pk: 1},
+				Cols: []*plan.ColDef{
+					{Name: "other", Typ: plan.Type{Id: int32(types.T_varchar)}},
+					{Name: tc.pk, Typ: plan.Type{Id: int32(types.T_int64)}, Primary: true},
+				},
+				Pkey: &plan.PrimaryKeyDef{PkeyColName: tc.pk},
+			}
+			for _, shape := range []string{"=", "reversed =", "in"} {
+				t.Run(shape, func(t *testing.T) {
+					// Compact scan position 0 is deliberately different from the
+					// relation's primary-key position 1.
+					col := MakeColExprForTest(0, types.T_int64, tc.name)
+					col.GetCol().TblName = tc.qualifier
+					value := plan2.MakePlan2Int64ConstExprWithType(42)
+					if shape == "in" {
+						value = plan2.MakePlan2Int64VecExprWithType(proc.Mp(), 42, 73)
+					}
+					args, op := []*plan.Expr{col, value}, "="
+					if shape == "reversed =" {
+						args = []*plan.Expr{value, col}
+					} else if shape == "in" {
+						op = "in"
+					}
+					expr := MakeFunctionExprForTest(op, args)
+					pkExpr := getPkExpr(expr, tc.pk, proc)
+					if tc.valid {
+						require.Equal(t, value, pkExpr)
+					} else {
+						require.Nil(t, pkExpr)
+					}
+					foldExpressionForTest(t, proc, expr)
+					filter, err := ConstructBasePKFilter(expr, table, proc.Mp())
+					defer filter.Cleanup()
+					require.NoError(t, err)
+					require.Equal(t, tc.valid, filter.Valid)
+					if tc.valid {
+						require.Equal(t, types.T_int64, filter.Oid)
+						if shape == "in" {
+							require.Equal(t, []int64{42, 73}, vector.MustFixedColWithTypeCheck[int64](filter.Vec))
+						} else {
+							require.Equal(t, int64(42), types.DecodeInt64(filter.LB))
+						}
+					}
+				})
+			}
+		})
+	}
+}
+
 func TestGetPKExpr(t *testing.T) {
 	m := mpool.MustNew(t.Name())
 	proc := testutil.NewProcessWithMPool(t, "", m)

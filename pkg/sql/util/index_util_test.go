@@ -192,6 +192,119 @@ func TestCompactUniqueKeyBatch(t *testing.T) {
 	}
 }
 
+func TestSerialWithCompactedDecimal256(t *testing.T) {
+	values := []types.Decimal256{
+		(types.Decimal256{B0_63: 1}).Minus(),
+		{B128_191: 1}, {}, {B192_255: 1}, {B64_127: 1},
+	}
+	for _, nullable := range []bool{false, true} {
+		name := "without_null"
+		if nullable {
+			name = "mixed_null"
+		}
+		t.Run(name, func(t *testing.T) {
+			proc := testutil.NewProcess(t)
+			defer proc.Free()
+			decimal := vector.NewVec(types.New(types.T_decimal256, 65, 2))
+			defer decimal.Free(proc.Mp())
+			require.NoError(t, vector.AppendFixedList(decimal, values, nil, proc.Mp()))
+			other := vector.NewVec(types.T_int64.ToType())
+			defer other.Free(proc.Mp())
+			require.NoError(t, vector.AppendFixedList(other, []int64{7, 7, 7, 7, 7}, nil, proc.Mp()))
+			kept := []int{0, 1, 2, 3, 4}
+			if nullable {
+				decimal.GetNulls().Add(2)
+				other.GetNulls().Add(4)
+				kept = []int{0, 1, 3}
+			}
+			out := vector.NewVec(types.T_varchar.ToType())
+			defer out.Free(proc.Mp())
+			var packers PackerList
+			defer packers.Free()
+			removed, err := serialWithCompacted([]*vector.Vector{decimal, other}, out, proc, &packers, DefaultPackerSize)
+			require.NoError(t, err)
+			require.Equal(t, len(kept), out.Length())
+			for i := range values {
+				require.Equal(t, nullable && (i == 2 || i == 4), removed.Contains(uint64(i)))
+			}
+			for i, sourceRow := range kept {
+				tuple, schema, err := types.UnpackWithSchema(out.GetBytesAt(i))
+				require.NoError(t, err)
+				require.Equal(t, []types.T{types.T_decimal256, types.T_int64}, schema)
+				require.Equal(t, types.Tuple{values[sourceRow], int64(7)}, tuple)
+				for j := 0; j < i; j++ {
+					require.NotEqual(t, out.GetBytesAt(j), out.GetBytesAt(i), "distinct decimal components must not collapse to the same unique key")
+				}
+			}
+		})
+	}
+}
+
+func TestCompactSingleIndexColDecimal256(t *testing.T) {
+	values := []types.Decimal256{
+		(types.Decimal256{B0_63: 1}).Minus(), {B128_191: 1}, {}, {B192_255: 1},
+	}
+	for _, nullable := range []bool{false, true} {
+		name := "without_null"
+		if nullable {
+			name = "mixed_null"
+		}
+		t.Run(name, func(t *testing.T) {
+			proc := testutil.NewProcess(t)
+			defer proc.Free()
+			input := vector.NewVec(types.New(types.T_decimal256, 65, 2))
+			defer input.Free(proc.Mp())
+			require.NoError(t, vector.AppendFixedList(input, values, nil, proc.Mp()))
+			want := values
+			if nullable {
+				input.GetNulls().Add(0, 2)
+				want = []types.Decimal256{values[1], values[3]}
+			}
+			out := vector.NewVec(*input.GetType())
+			defer out.Free(proc.Mp())
+			removed, err := compactSingleIndexCol(input, out, proc)
+			require.NoError(t, err)
+			require.Equal(t, len(want), out.Length())
+			require.Equal(t, want, vector.MustFixedColNoTypeCheck[types.Decimal256](out))
+			require.Equal(t, *input.GetType(), *out.GetType())
+			require.False(t, out.HasNull())
+			for i := range values {
+				require.Equal(t, nullable && (i == 0 || i == 2), removed.Contains(uint64(i)))
+			}
+		})
+	}
+}
+
+func TestCompactPrimaryColDecimal256(t *testing.T) {
+	values := []types.Decimal256{{B128_191: 1}, {B128_191: 2}, {B128_191: 3}, {B128_191: 4}, {B128_191: 5}}
+	for _, compact := range []bool{false, true} {
+		name := "empty_bitmap"
+		if compact {
+			name = "index_null_bitmap"
+		}
+		t.Run(name, func(t *testing.T) {
+			proc := testutil.NewProcess(t)
+			defer proc.Free()
+			input := vector.NewVec(types.New(types.T_decimal256, 65, 0))
+			defer input.Free(proc.Mp())
+			require.NoError(t, vector.AppendFixedList(input, values, nil, proc.Mp()))
+			removed := new(nulls.Nulls)
+			want := values
+			if compact {
+				removed.Add(2, 4)
+				want = []types.Decimal256{values[0], values[1], values[3]}
+			}
+			out := vector.NewVec(*input.GetType())
+			defer out.Free(proc.Mp())
+			require.NoError(t, compactPrimaryCol(input, out, removed, proc))
+			require.Equal(t, len(want), out.Length())
+			require.Equal(t, want, vector.MustFixedColNoTypeCheck[types.Decimal256](out), "primary keys must retain the source positions selected by the unique index bitmap")
+			require.Equal(t, *input.GetType(), *out.GetType())
+			require.False(t, out.HasNull())
+		})
+	}
+}
+
 func TestIsIndexTableName(t *testing.T) {
 	tests := []struct {
 		name      string

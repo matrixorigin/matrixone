@@ -169,18 +169,21 @@ func (builder *QueryBuilder) appendCompositePartBlockFilters(filters map[int32][
 	for nodeID, candidates := range filters {
 		node := builder.qry.Nodes[nodeID]
 		for _, candidate := range candidates {
-			duplicate := false
-			for _, existing := range node.BlockFilterList {
-				if blockFilterEquivalent(existing, candidate.copy) {
-					duplicate = true
-					break
-				}
-			}
-			if !duplicate {
-				node.BlockFilterList = append(node.BlockFilterList, candidate.copy)
-			}
+			appendUniqueBlockFilter(node, candidate.copy, false)
 		}
 	}
+}
+
+func appendUniqueBlockFilter(node *plan.Node, filter *plan.Expr, copyFilter bool) {
+	for _, existing := range node.BlockFilterList {
+		if blockFilterEquivalent(existing, filter) {
+			return
+		}
+	}
+	if copyFilter {
+		filter = DeepCopyExpr(filter)
+	}
+	node.BlockFilterList = append(node.BlockFilterList, filter)
 }
 
 // retainConsumedCompositePartBlockFilters keeps only predicates removed by the
@@ -282,24 +285,143 @@ func (builder *QueryBuilder) appendCompoundKeyBlockFilters(nodeID int32) {
 			return
 		}
 		allowed := map[int32]struct{}{compoundPos: {}}
-		for _, filter := range node.FilterList {
-			if !ExprIsZonemappable(builder.GetContext(), filter) ||
-				!exprOnlyReferencesColumns(filter, node.BindingTags[0], allowed) {
-				continue
-			}
-			duplicate := false
-			for _, existing := range node.BlockFilterList {
-				if blockFilterEquivalent(existing, filter) {
-					duplicate = true
-					break
+		var leadingPos int32 = -1
+		if node.TableDef.ClusterBy != nil && util.JudgeIsCompositeClusterByColumn(node.TableDef.ClusterBy.Name) {
+			parts := util.SplitCompositeClusterByColumnName(node.TableDef.ClusterBy.Name)
+			if len(parts) > 0 {
+				if pos, found := node.TableDef.Name2ColIndex[parts[0]]; found {
+					leadingPos = pos
 				}
 			}
-			if !duplicate {
-				node.BlockFilterList = append(node.BlockFilterList, DeepCopyExpr(filter))
+		} else if node.TableDef.Pkey != nil && len(node.TableDef.Pkey.Names) > 1 {
+			if pos, found := node.TableDef.Name2ColIndex[node.TableDef.Pkey.Names[0]]; found {
+				leadingPos = pos
 			}
+		}
+		for _, filter := range node.FilterList {
+			zonemappable := ExprIsZonemappable(builder.GetContext(), filter)
+			if leadingPos >= 0 && zonemappable {
+				if prefix := builder.leadingCompositeRangeBlockFilter(filter, node.TableDef, node.BindingTags[0], leadingPos, compoundPos); prefix != nil {
+					appendUniqueBlockFilter(node, prefix, false)
+				}
+			}
+			if !zonemappable || !exprOnlyReferencesColumns(filter, node.BindingTags[0], allowed) {
+				continue
+			}
+			appendUniqueBlockFilter(node, filter, true)
 		}
 	}
 	visit(nodeID)
+}
+
+// leadingCompositeRangeBlockFilter adds an object-pruning predicate without
+// replacing the SQL row predicate. In particular, NULL and unsupported bound
+// types must continue through the ordinary row comparison.
+func (builder *QueryBuilder) leadingCompositeRangeBlockFilter(filter *plan.Expr, tableDef *plan.TableDef, tag, leadingPos, compoundPos int32) *plan.Expr {
+	fn := filter.GetF()
+	if fn == nil || fn.Func == nil || len(fn.Args) < 2 || fn.Args[0] == nil {
+		return nil
+	}
+	op := fn.Func.ObjName
+	col := fn.Args[0]
+	if op == "<" || op == "<=" || op == ">" || op == ">=" {
+		op = canonicalRangeOp(fn)
+		if fn.Args[0].GetCol() == nil && len(fn.Args) == 2 {
+			col = fn.Args[1]
+		}
+	}
+	if col.GetCol() == nil || col.GetCol().RelPos != tag || col.GetCol().ColPos != leadingPos ||
+		!compositeRangeOrderPreserving(types.T(col.Typ.Id)) {
+		return nil
+	}
+	boundCompatible := func(bound *plan.Expr) bool {
+		if bound == nil {
+			return false
+		}
+		if lit := stripConstLiteralCasts(bound).GetLit(); lit != nil && lit.Isnull {
+			return false
+		}
+		return isRuntimeConstExpr(bound) && bound.Typ.Id == col.Typ.Id &&
+			(!types.T(col.Typ.Id).IsDecimal() || bound.Typ.Scale == col.Typ.Scale)
+	}
+	key := &plan.Expr{Typ: tableDef.Cols[compoundPos].Typ, Expr: &plan.Expr_Col{Col: &plan.ColRef{
+		RelPos: tag, ColPos: compoundPos, Name: tableDef.Cols[compoundPos].Name,
+	}}}
+	serial := func(bound *plan.Expr) *plan.Expr {
+		ret, ok := builder.bindCompositeKeySerial([]*plan.Expr{bound})
+		if !ok {
+			return nil
+		}
+		return ret
+	}
+	var name string
+	var args []*plan.Expr
+	switch op {
+	case "between", "in_range":
+		if (op == "between" && len(fn.Args) != 3) ||
+			(op == "in_range" && len(fn.Args) != 4) {
+			return nil
+		}
+		if !boundCompatible(fn.Args[1]) || !boundCompatible(fn.Args[2]) {
+			return nil
+		}
+		lower, upper := serial(fn.Args[1]), serial(fn.Args[2])
+		if lower == nil || upper == nil {
+			return nil
+		}
+		name = "prefix_between"
+		args = []*plan.Expr{key, lower, upper}
+		if op == "in_range" {
+			if fn.Args[3] == nil || !isRuntimeConstExpr(fn.Args[3]) {
+				return nil
+			}
+			name = "prefix_in_range"
+			args = append(args, fn.Args[3])
+		}
+	case "<", "<=", ">", ">=":
+		boundExpr := rangeFilterConstValue(fn)
+		if len(fn.Args) != 2 || !boundCompatible(boundExpr) {
+			return nil
+		}
+		bound := serial(boundExpr)
+		if bound == nil {
+			return nil
+		}
+		empty := makePlan2StringConstExprWithType("")
+		empty.Typ.Id = int32(types.T_varchar)
+		var flag byte
+		if op == "<" || op == "<=" {
+			args = []*plan.Expr{key, empty, bound}
+			if op == "<" {
+				flag = 2
+			}
+		} else {
+			args = []*plan.Expr{key, bound, empty}
+			if op == ">" {
+				flag = 1
+			}
+		}
+		name = "prefix_in_range"
+		args = append(args, makePlan2Uint8ConstExprWithType(flag))
+	default:
+		return nil
+	}
+	ret, ok := builder.bindCompositeKeyPredicate(name, args...)
+	if !ok {
+		return nil
+	}
+	return ret
+}
+
+func compositeRangeOrderPreserving(oid types.T) bool {
+	switch oid {
+	case types.T_int8, types.T_int16, types.T_int32, types.T_int64,
+		types.T_uint8, types.T_uint16, types.T_uint32, types.T_uint64,
+		types.T_date, types.T_time, types.T_datetime, types.T_timestamp,
+		types.T_decimal64, types.T_decimal128, types.T_decimal256:
+		return true
+	}
+	return false
 }
 
 func existingCompositeBlockFilters(node *plan.Node) []*plan.Expr {
@@ -2177,6 +2299,11 @@ func (builder *QueryBuilder) doMergeFiltersOnCompositeKey(tableDef *plan.TableDe
 		if _, ok := sortKeyPartCols[col.ColPos]; !ok {
 			continue
 		}
+		// Keep first-component SQL bounds intact. Their optional compound-key
+		// object filter is added separately without casting or consuming them.
+		if col.ColPos == tableDef.Name2ColIndex[Parts[0]] {
+			continue
+		}
 		if isLower {
 			colLowerBounds[col.ColPos] = i
 		} else {
@@ -2298,6 +2425,10 @@ func (builder *QueryBuilder) doMergeFiltersOnCompositeKey(tableDef *plan.TableDe
 		return filters
 	}
 	lastFuncName := lastFn.Func.ObjName
+	if len(filterIdx) == 1 && (lastFuncName == "between" || lastFuncName == "in_range" ||
+		lastFuncName == "<" || lastFuncName == "<=" || lastFuncName == ">" || lastFuncName == ">=") {
+		return filters
+	}
 	if lastFuncName == "in" {
 		if !hasNonNilFunctionArgs(lastFn, 2) {
 			return filters
@@ -2386,10 +2517,6 @@ func (builder *QueryBuilder) doMergeFiltersOnCompositeKey(tableDef *plan.TableDe
 			serialArgs[i] = filters[filterIdx[i]].GetF().Args[1]
 		}
 
-		if len(filterIdx) < numParts && len(serialArgs) == 0 {
-			return filters
-		}
-
 		tmpSerialArgs := DeepCopyExprList(serialArgs)
 		tmpSerialArgs = append(tmpSerialArgs, lastFn.Args[1])
 		leftArg, ok := builder.bindCompositeKeySerial(tmpSerialArgs)
@@ -2424,10 +2551,6 @@ func (builder *QueryBuilder) doMergeFiltersOnCompositeKey(tableDef *plan.TableDe
 		serialArgs := make([]*plan.Expr, len(filterIdx)-1)
 		for i := 0; i < len(filterIdx)-1; i++ {
 			serialArgs[i] = filters[filterIdx[i]].GetF().Args[1]
-		}
-
-		if len(filterIdx) < numParts && len(serialArgs) == 0 {
-			return filters
 		}
 
 		tmpSerialArgs := append(DeepCopyExprList(serialArgs), lastFn.Args[1])

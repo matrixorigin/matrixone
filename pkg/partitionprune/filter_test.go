@@ -28,6 +28,14 @@ import (
 	"github.com/stretchr/testify/require"
 )
 
+func TestPartitionColumnUsesExplicitDottedQualifier(t *testing.T) {
+	for _, name := range []string{"a", "a.b"} {
+		col := &plan.ColRef{Name: "x.y." + name, TblName: "x.y", ColPos: 1}
+		require.True(t, matchesPartitionColumn(col, 0, newTestRangeExpr(name, 1)))
+		require.False(t, matchesPartitionColumn(col, 1, newTestRangeExpr("other", 1)))
+	}
+}
+
 func TestFilter(t *testing.T) {
 	mp := mpool.MustNewZeroNoFixed()
 	proc := process.NewTopProcess(
@@ -52,6 +60,30 @@ func TestFilter(t *testing.T) {
 		want     []int
 		wantErr  bool
 	}{
+		{
+			name:     "different column sharing scan position cannot prune partitions",
+			filters:  []*plan.Expr{makeNamedEqualExpr(0, "hidden_key", 1)},
+			metadata: namedRangePartitionMetadata("a"),
+			want:     []int{0, 1, 2},
+		},
+		{
+			name:     "same column at compact scan position prunes partitions",
+			filters:  []*plan.Expr{makeNamedEqualExpr(1, "range_probe.a", 1)},
+			metadata: namedRangePartitionMetadata("a"),
+			want:     []int{1},
+		},
+		{
+			name:     "dotted column name must not alias partition column",
+			filters:  []*plan.Expr{makeNamedEqualExpr(0, "t.a.b", 1)},
+			metadata: namedRangePartitionMetadata("b"),
+			want:     []int{0, 1, 2},
+		},
+		{
+			name:     "dotted alias cannot be distinguished from dotted partition column",
+			filters:  []*plan.Expr{makeNamedEqualExpr(1, "x.a.b", 1)},
+			metadata: namedRangePartitionMetadata("a.b"),
+			want:     []int{0, 1, 2},
+		},
 		{
 			name:    "empty filters",
 			filters: []*plan.Expr{},
@@ -346,6 +378,23 @@ func makeEqualExpr(colPos int32, value int64) *plan.Expr {
 					},
 				},
 			},
+		},
+	}
+}
+
+func makeNamedEqualExpr(colPos int32, name string, value int64) *plan.Expr {
+	expr := makeEqualExpr(colPos, value)
+	expr.GetF().Args[0].GetCol().Name = name
+	return expr
+}
+
+func namedRangePartitionMetadata(name string) partition.PartitionMetadata {
+	return partition.PartitionMetadata{
+		Method: partition.PartitionMethod_Range,
+		Partitions: []partition.Partition{
+			{Position: 0, Expr: newTestRangeExpr(name, 0)},
+			{Position: 1, Expr: newTestRangeExpr(name, 1)},
+			{Position: 2, Expr: newTestRangeExpr(name, 2)},
 		},
 	}
 }

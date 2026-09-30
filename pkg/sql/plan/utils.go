@@ -1061,6 +1061,15 @@ func getUnionSelects(ctx context.Context, stmt *tree.UnionClause, selects *[]tre
 	return nil
 }
 
+// ColRefColumnName removes the exact scan qualifier when available. Legacy
+// plans without that identity retain their historical one-dot representation.
+func ColRefColumnName(col *plan.ColRef) string {
+	if col.TblName != "" && strings.HasPrefix(col.Name, col.TblName+".") {
+		return col.Name[len(col.TblName)+1:]
+	}
+	return col.Name[strings.IndexByte(col.Name, '.')+1:]
+}
+
 func GetColumnMapByExpr(expr *plan.Expr, tableDef *plan.TableDef, columnMap map[int]int) {
 	if expr == nil {
 		return
@@ -1073,9 +1082,7 @@ func GetColumnMapByExpr(expr *plan.Expr, tableDef *plan.TableDef, columnMap map[
 
 	case *plan.Expr_Col:
 		idx := exprImpl.Col.ColPos
-		colName := exprImpl.Col.Name
-		dotIdx := strings.Index(colName, ".")
-		colName = colName[dotIdx+1:]
+		colName := ColRefColumnName(exprImpl.Col)
 		colIdx := tableDef.Name2ColIndex[colName]
 		seqnum := int(colIdx) // for extenal scan case, tableDef has only Name2ColIndex, no Cols, leave seqnum as colIdx
 		if len(tableDef.Cols) > 0 {
@@ -1188,6 +1195,10 @@ func ExprIsZonemappable(ctx context.Context, expr *plan.Expr) bool {
 	}
 	switch exprImpl := expr.Expr.(type) {
 	case *plan.Expr_F:
+		f, exists := function.GetFunctionByIdWithoutError(exprImpl.F.Func.GetObj())
+		if !exists || f.CannotFold() {
+			return false
+		}
 		isConst := true
 		for _, arg := range exprImpl.F.Args {
 			if isRuntimeConstExpr(arg) {
@@ -3304,6 +3315,11 @@ func ReplaceFoldExpr(proc *process.Process, expr *Expr, exes *[]colexec.Expressi
 	}
 	if f.IsAgg() || f.IsWin() {
 		panic("ReplaceFoldVal: agg or window function")
+	}
+
+	// Volatile functions must be evaluated for each row, never as a scan bound.
+	if f.CannotFold() {
+		return false, nil
 	}
 
 	argFold := make([]bool, len(fn.Args))

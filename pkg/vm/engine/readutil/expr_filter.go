@@ -346,7 +346,7 @@ func compileTemporalFilterExpr(
 	if !ok {
 		return nil, nil, nil, nil, nil, false, false, true
 	}
-	colDef := getColDefByName(expr, colExpr.Col.Name, colExpr.Col.ColPos, tableDef)
+	colDef := getColDefByName(expr, colExpr.Col, tableDef)
 	if !columnOnLeft {
 		op = reverseTemporalFilterOperator(op)
 	}
@@ -588,6 +588,27 @@ func compileFilterExpr(
 	// case *plan.Expr_Lit:
 	// case *plan.Expr_Col:
 	case *plan.Expr_F:
+		switch exprImpl.F.Func.ObjName {
+		case "=", "<", "<=", ">", ">=", "between", "in_range", "in":
+			for _, arg := range exprImpl.F.Args {
+				if arg.GetCol() != nil && types.T(arg.Typ.Id) == types.T_decimal256 {
+					// Raw DECIMAL256 min/max do not fit the persisted ZM layout;
+					// UpdateZM deliberately leaves these statistics uninitialized.
+					// An absent ZM cannot reject a block or seek past it. Keep an
+					// unknown branch true for OR/AND composition and let the row
+					// predicate (including runtime IN) do the exact filtering.
+					// Serialized compound keys are VARCHAR and remain prunable.
+					fastFilterOp = func(*objectio.ObjectStats) (bool, error) { return true, nil }
+					objectFilterOp = func(objectio.ObjectMeta, objectio.BloomFilter) (bool, error) {
+						return true, nil
+					}
+					blockFilterOp = func(int, objectio.BlockObject, objectio.BloomFilter) (bool, bool, error) {
+						return false, true, nil
+					}
+					return
+				}
+			}
+		}
 		if op1, op2, op3, op4, op5, can, hsh, handled := compileTemporalFilterExpr(
 			expr, exprImpl, tableDef, fs, zone,
 		); handled {
@@ -793,7 +814,7 @@ func compileFilterExpr(
 				canCompile = false
 				return
 			}
-			colDef := getColDefByName(expr, colExpr.Col.Name, colExpr.Col.ColPos, tableDef)
+			colDef := getColDefByName(expr, colExpr.Col, tableDef)
 			_, isSorted := isSortedKey(colDef)
 			if isSorted {
 				fastFilterOp = func(obj *objectio.ObjectStats) (bool, error) {
@@ -827,7 +848,7 @@ func compileFilterExpr(
 				canCompile = false
 				return
 			}
-			colDef := getColDefByName(expr, colExpr.Col.Name, colExpr.Col.ColPos, tableDef)
+			colDef := getColDefByName(expr, colExpr.Col, tableDef)
 			_, isSorted := isSortedKey(colDef)
 			if isSorted {
 				fastFilterOp = func(obj *objectio.ObjectStats) (bool, error) {
@@ -866,7 +887,7 @@ func compileFilterExpr(
 				canCompile = false
 				return
 			}
-			colDef := getColDefByName(expr, colExpr.Col.Name, colExpr.Col.ColPos, tableDef)
+			colDef := getColDefByName(expr, colExpr.Col, tableDef)
 			_, isSorted := isSortedKey(colDef)
 			if isSorted {
 				fastFilterOp = func(obj *objectio.ObjectStats) (bool, error) {
@@ -905,7 +926,7 @@ func compileFilterExpr(
 				canCompile = false
 				return
 			}
-			colDef := getColDefByName(expr, colExpr.Col.Name, colExpr.Col.ColPos, tableDef)
+			colDef := getColDefByName(expr, colExpr.Col, tableDef)
 			_, isSorted := isSortedKey(colDef)
 			if isSorted {
 				fastFilterOp = func(obj *objectio.ObjectStats) (bool, error) {
@@ -939,7 +960,7 @@ func compileFilterExpr(
 				canCompile = false
 				return
 			}
-			colDef := getColDefByName(expr, colExpr.Col.Name, colExpr.Col.ColPos, tableDef)
+			colDef := getColDefByName(expr, colExpr.Col, tableDef)
 			isPK, isSorted := isSortedKey(colDef)
 			if isSorted {
 				fastFilterOp = func(obj *objectio.ObjectStats) (bool, error) {
@@ -986,7 +1007,7 @@ func compileFilterExpr(
 				canCompile = false
 				return
 			}
-			colDef := getColDefByName(expr, colExpr.Col.Name, colExpr.Col.ColPos, tableDef)
+			colDef := getColDefByName(expr, colExpr.Col, tableDef)
 			_, isSorted := isSortedKey(colDef)
 			if isSorted {
 				fastFilterOp = func(obj *objectio.ObjectStats) (bool, error) {
@@ -1032,7 +1053,7 @@ func compileFilterExpr(
 				return
 			}
 			hint := vals[2][0]
-			colDef := getColDefByName(expr, colExpr.Col.Name, colExpr.Col.ColPos, tableDef)
+			colDef := getColDefByName(expr, colExpr.Col, tableDef)
 			_, isSorted := isSortedKey(colDef)
 			if isSorted {
 				fastFilterOp = func(obj *objectio.ObjectStats) (bool, error) {
@@ -1081,7 +1102,7 @@ func compileFilterExpr(
 				canCompile = false
 				return
 			}
-			colDef := getColDefByName(expr, colExpr.Col.Name, colExpr.Col.ColPos, tableDef)
+			colDef := getColDefByName(expr, colExpr.Col, tableDef)
 			_, isSorted := isSortedKey(colDef)
 			if isSorted {
 				fastFilterOp = func(obj *objectio.ObjectStats) (bool, error) {
@@ -1124,7 +1145,7 @@ func compileFilterExpr(
 				return
 			}
 			hint := vals[2][0]
-			colDef := getColDefByName(expr, colExpr.Col.Name, colExpr.Col.ColPos, tableDef)
+			colDef := getColDefByName(expr, colExpr.Col, tableDef)
 			_, isSorted := isSortedKey(colDef)
 			if isSorted {
 				fastFilterOp = func(obj *objectio.ObjectStats) (bool, error) {
@@ -1182,7 +1203,7 @@ func compileFilterExpr(
 			}
 			vec := vector.NewVec(types.T_any.ToType())
 			_ = vec.UnmarshalBinary(val)
-			colDef := getColDefByName(expr, colExpr.Col.Name, colExpr.Col.ColPos, tableDef)
+			colDef := getColDefByName(expr, colExpr.Col, tableDef)
 			isPK, isSorted := isSortedKey(colDef)
 			if isSorted {
 				fastFilterOp = func(obj *objectio.ObjectStats) (bool, error) {
@@ -1241,7 +1262,7 @@ func compileFilterExpr(
 				canCompile = false
 				return
 			}
-			colDef := getColDefByName(expr, colExpr.Col.Name, colExpr.Col.ColPos, tableDef)
+			colDef := getColDefByName(expr, colExpr.Col, tableDef)
 			fastFilterOp = nil
 			loadOp = loadMetadataOnlyOpFactory(fs)
 			seqNum := colDef.Seqnum
@@ -1262,7 +1283,7 @@ func compileFilterExpr(
 				canCompile = false
 				return
 			}
-			colDef := getColDefByName(expr, colExpr.Col.Name, colExpr.Col.ColPos, tableDef)
+			colDef := getColDefByName(expr, colExpr.Col, tableDef)
 			fastFilterOp = nil
 			loadOp = loadMetadataOnlyOpFactory(fs)
 			seqNum := colDef.Seqnum
@@ -1284,7 +1305,7 @@ func compileFilterExpr(
 			}
 			vec := vector.NewVec(types.T_any.ToType())
 			_ = vec.UnmarshalBinary(val)
-			colDef := getColDefByName(expr, colExpr.Col.Name, colExpr.Col.ColPos, tableDef)
+			colDef := getColDefByName(expr, colExpr.Col, tableDef)
 			isPK, isSorted := isSortedKey(colDef)
 			if isSorted {
 				fastFilterOp = func(obj *objectio.ObjectStats) (bool, error) {
@@ -1353,7 +1374,7 @@ func compileFilterExpr(
 				canCompile = false
 				return
 			}
-			colDef := getColDefByName(expr, colExpr.Col.Name, colExpr.Col.ColPos, tableDef)
+			colDef := getColDefByName(expr, colExpr.Col, tableDef)
 			isPK, isSorted := isSortedKey(colDef)
 			if isSorted {
 				fastFilterOp = func(obj *objectio.ObjectStats) (bool, error) {
