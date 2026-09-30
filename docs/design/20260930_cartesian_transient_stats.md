@@ -1,6 +1,6 @@
 # Transient optimizer statistics for Cartesian DML
 
-Design revision: v5, reviewed by GPT-6.1-sol / xhigh before implementation.
+Design revision: v6, reviewed by GPT-6.1-sol / xhigh before implementation.
 Owning issues: [#29497](https://github.com/matrixorigin/matrixone/issues/29497),
 [#29533](https://github.com/matrixorigin/matrixone/issues/29533),
 [#29534](https://github.com/matrixorigin/matrixone/issues/29534).
@@ -60,14 +60,17 @@ existing execution owner; estimates are not a universal memory/accuracy guarante
 - Existing Workspace.Readonly() fast path has no lock/scan and no own writes.
   Snapshot-clone workspaces are empty/read-only. A created table may use a positive
   workspace-only bound; no observed rows remains unknown, not a fabricated zero.
-- Otherwise TryLock the existing transaction mutex. Under it, inspect the visible
-  existing writes prefix [0, GetSnapshotWriteOffset()), clipped to current length,
-  for this database/table. Sum INSERT memory batch.RowCount and persisted INSERT
+- Otherwise TryLock the existing transaction mutex. Under it, inspect the
+  complete existing workspace write log for this database/table. This is a
+  conservative planning upper bound; execution visibility remains its existing
+  prefix owner. NewCompile advances that prefix after planning, so using it here
+  omits the preceding statement's writes (public own-growth red: 40 vs 80).
+  Including any tail beyond the execution prefix can only increase the bound. Sum INSERT memory batch.RowCount and persisted INSERT
   ObjectStats.Rows at the actual metadata attribute. Ignore DELETE conservatively.
   Malformed/incomplete metadata must not yield a partial low sum. Do not call
   ForEachTableWrites while locked; reuse/extract its private locked iteration if
   appropriate. No engine/subscription/internal SQL/I/O under the workspace lock.
-- This is O(visible entries + matching object metadata), not O(rows). Read-only
+- This is O(existing entries + matching object metadata), not O(rows). Read-only
   autocommit stays O(1). The exceptional writing-transaction cost must be measured.
   The global memory counter is rejected: 500 unrelated inserts would estimate
   sources as 505/508 and reintroduce object writing for 40 actual output rows.
@@ -130,7 +133,7 @@ recalc, PROJECT and downstream build. Recorded red and owning-package/public
 SEMI green prove this independent closure, not the future provider implementation.
 
 Focused existing-fixture UT: memory/object/zero/published maps; Rows/Size ownership;
-workspace memory versus multi-object batches, unrelated500 rows, prefix rollback/
+workspace memory versus multi-object batches, unrelated500 rows, log rollback/
 compaction and already-held mutex; huge anonymous bounds through integer consumers;
 both compiler caches within3s; stable generation/compile identity and rapid growth,
 nil/default/forced-model controls, snapshot/tenant/version and rebuild rejection.
@@ -153,3 +156,10 @@ race only the actual shared-admission closure. Cover cancellation of snapshot wa
 TryLock fail-closed return, iterator cleanup, errors before stale cached execution,
 and failed metadata publication/compile cleanup. Existing untouched spill lifecycle
 evidence can be reused. Old-head CI cannot certify unimplemented remediation.
+
+Revision v6: GPT-6.1-sol / xhigh independently approved the complete-log
+workspace bound on 2026-09-30 after the public transaction-growth counterexample.
+Do not advance execution snapshotWriteOffset during planning or add admission
+hooks. Preserve readonly O(1), target-only INSERT metadata, TryLock fail-closed,
+rollback log removal, and persisted ObjectStats.Rows validation. The public red
+and expected 80-row green are required delivery evidence.
