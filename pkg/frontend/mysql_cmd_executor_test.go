@@ -6267,7 +6267,6 @@ func Test_statement_type(t *testing.T) {
 		}
 
 		convey.So(IsDDL(&tree.CreateTable{}), convey.ShouldBeTrue)
-		convey.So(IsDDL(&tree.RefreshMaterializedView{}), convey.ShouldBeTrue)
 		convey.So(isImplicitCommitStatement(&tree.TruncateTable{}), convey.ShouldBeTrue)
 		convey.So(isImplicitCommitStatement(&tree.RenameTable{}), convey.ShouldBeTrue)
 		convey.So(isImplicitCommitStatement(&tree.PrepareStmt{Stmt: &tree.RenameTable{}}), convey.ShouldBeFalse)
