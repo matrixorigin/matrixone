@@ -3194,6 +3194,47 @@ func TestParseExecuteDataMemberOfBinaryFloat32PreservesConcreteType(t *testing.T
 	require.Equal(t, int64(1), vector.GetFixedAtNoTypeCheck[int64](result, 0))
 }
 
+func TestParseExecuteDataPreparedJSONArrayInsertBinaryFloat32PreservesConcreteType(t *testing.T) {
+	const query = `select json_array_insert('[0]', '$[0]', ?)`
+	ctx := context.Background()
+	proto, proc, prepareStmt := newBinaryPrepareProtocolTestCase(t, query)
+	defer func() {
+		proc.SetPrepareParams(nil)
+		prepareStmt.clearBinaryParamState(proc)
+	}()
+
+	require.NoError(t, proto.ParseExecuteData(
+		ctx, proc, prepareStmt,
+		buildFloat32ExecutePacket(float32(0.1)), 0))
+	require.Equal(t, []byte{byte(defines.MYSQL_TYPE_FLOAT), 0}, prepareStmt.ParamTypes)
+	require.Equal(t, "0.1", prepareStmt.params.GetStringAt(0))
+	runtimeType, ok := binaryProtocolPrepareParamType(
+		defines.MYSQL_TYPE_FLOAT, false, prepareStmt.params.GetRawBytesAt(0))
+	require.True(t, ok)
+	require.Equal(t, types.T_float32, runtimeType.Oid)
+
+	preparedPlan := prepareStmt.PreparePlan.GetDcl().GetPrepare().Plan
+	require.Equal(t, []int32{0}, plan.PreparedJSONComparisonParamPositions(preparedPlan))
+	proc.SetPrepareParamsWithTypedMeta(
+		prepareStmt.params,
+		nil,
+		[]vector.PrepareParamKind{vector.PrepareParamFloat},
+		[]types.T{types.T_float32},
+	)
+
+	queryPlan := preparedPlan.GetQuery()
+	projectNode := queryPlan.Nodes[queryPlan.Steps[len(queryPlan.Steps)-1]]
+	require.Len(t, projectNode.ProjectList, 1)
+	executor, err := colexec.NewExpressionExecutor(proc, projectNode.ProjectList[0])
+	require.NoError(t, err)
+	defer executor.Free()
+	result, err := executor.Eval(proc, []*batch.Batch{batch.EmptyForConstFoldBatch}, nil)
+	require.NoError(t, err)
+	require.Equal(t, types.T_json, result.GetType().Oid)
+	require.False(t, result.IsNull(0))
+	require.Equal(t, `[0.10000000149011612, 0]`, types.DecodeJson(result.GetBytesAt(0)).String())
+}
+
 func TestParseExecuteDataDecimalRebindsPreparedAbsExactly(t *testing.T) {
 	const value = "12345678901234567890123456789012345.6789"
 	ctx := context.TODO()

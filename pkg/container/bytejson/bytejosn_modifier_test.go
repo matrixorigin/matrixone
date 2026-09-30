@@ -250,6 +250,126 @@ func TestArrayAppendRejectsInvalidInputs(t *testing.T) {
 	require.Error(t, err)
 }
 
+func TestArrayInsert(t *testing.T) {
+	tests := []struct {
+		name   string
+		input  string
+		paths  []string
+		values []string
+		want   string
+	}{
+		{
+			name:   "insert before middle element",
+			input:  `[1,2,3]`,
+			paths:  []string{"$[1]"},
+			values: []string{"9"},
+			want:   `[1, 9, 2, 3]`,
+		},
+		{
+			name:   "forward out of range appends",
+			input:  `[1,2]`,
+			paths:  []string{"$[99]"},
+			values: []string{"9"},
+			want:   `[1, 2, 9]`,
+		},
+		{
+			name:   "last inserts before last",
+			input:  `[1,2,3]`,
+			paths:  []string{"$[last]"},
+			values: []string{"9"},
+			want:   `[1, 2, 9, 3]`,
+		},
+		{
+			name:   "reverse underflow clamps to head",
+			input:  `[1,2]`,
+			paths:  []string{"$[last-5]"},
+			values: []string{"9"},
+			want:   `[9, 1, 2]`,
+		},
+		{
+			name:   "empty array inserts at head",
+			input:  `[]`,
+			paths:  []string{"$[last]"},
+			values: []string{"9"},
+			want:   `[9]`,
+		},
+		{
+			name:   "nested array",
+			input:  `{"a":[1,2]}`,
+			paths:  []string{"$.a[1]"},
+			values: []string{"9"},
+			want:   `{"a": [1, 9, 2]}`,
+		},
+		{
+			name:   "pairs see prior insertion",
+			input:  `{"a":[1,2]}`,
+			paths:  []string{"$.a[1]", "$.a[2]"},
+			values: []string{"9", "8"},
+			want:   `{"a": [1, 9, 8, 2]}`,
+		},
+		{
+			name:   "missing parent is noop",
+			input:  `{"a":[1]}`,
+			paths:  []string{"$.missing[0]"},
+			values: []string{"9"},
+			want:   `{"a": [1]}`,
+		},
+		{
+			name:   "non array parent is noop",
+			input:  `{"a":1}`,
+			paths:  []string{"$.a[0]"},
+			values: []string{"9"},
+			want:   `{"a": 1}`,
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			bj := mustParseByteJson(t, tt.input)
+			paths := make([]*Path, 0, len(tt.paths))
+			values := make([]ByteJson, 0, len(tt.values))
+			for _, pathStr := range tt.paths {
+				path, err := ParseJsonPath(pathStr)
+				require.NoError(t, err)
+				paths = append(paths, &path)
+			}
+			for _, value := range tt.values {
+				values = append(values, mustParseByteJson(t, value))
+			}
+
+			got, err := bj.Modify(paths, values, JsonModifyArrayInsert)
+			require.NoError(t, err)
+			require.Equal(t, tt.want, mustMarshalByteJson(t, got))
+		})
+	}
+}
+
+func TestArrayInsertRejectsInvalidPaths(t *testing.T) {
+	bj := mustParseByteJson(t, `{"a":[1]}`)
+	value := mustParseByteJson(t, `2`)
+	for _, pathStr := range []string{"$", "$.a", "$.a.*", "$.a[0 to 1]"} {
+		path, err := ParseJsonPath(pathStr)
+		require.NoError(t, err)
+		_, err = bj.Modify([]*Path{&path}, []ByteJson{value}, JsonModifyArrayInsert)
+		require.Error(t, err, pathStr)
+	}
+}
+
+func TestArrayInsertRejectsTooDeepResult(t *testing.T) {
+	input := nestedJSONArrayForLimit(JSONDocumentMaxNestingDepth, "1")
+	bj := mustParseByteJson(t, input)
+	pathString := "$" + strings.Repeat("[0]", JSONDocumentMaxNestingDepth)
+	path, err := ParseJsonPath(pathString)
+	require.NoError(t, err)
+
+	_, err = bj.Modify(
+		[]*Path{&path},
+		[]ByteJson{mustParseByteJson(t, "[1]")},
+		JsonModifyArrayInsert,
+	)
+	require.ErrorContains(t, err, "json document nesting depth exceeds 100")
+}
+
 func TestArrayAppendSizeMatchesEncoding(t *testing.T) {
 	tests := []struct {
 		input string
