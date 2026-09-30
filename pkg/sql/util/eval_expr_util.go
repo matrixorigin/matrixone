@@ -132,7 +132,7 @@ func GenVectorByVarValueWithAllocation(
 		}
 		return vector.NewConstNullWithAllocation(typ, 1, selection)
 	}
-	if typ.Oid.IsArrayRelate() {
+	if typ.Oid.IsVectorType() {
 		value, err := arrayUserVariableValueToBytes(typ, val)
 		if err != nil {
 			return nil, err
@@ -270,9 +270,43 @@ func arrayUserVariableValueToBytes(typ types.Type, val any) ([]byte, error) {
 		return arrayUserVariableTypedValueToBytes[int8](typ, val)
 	case types.T_array_uint8:
 		return arrayUserVariableTypedValueToBytes[uint8](typ, val)
+	case types.T_array_float8, types.T_array_float4:
+		return blockScaledUserVariableValueToBytes(typ, val)
 	default:
 		return nil, moerr.NewInternalErrorNoCtxf("unsupported array type %s", typ.Oid.String())
 	}
+}
+
+// blockScaledUserVariableValueToBytes quantizes text or []float32 into a vecf8/vecf4
+// cell, or validates an existing cell ([]byte), and enforces a declared dimension.
+func blockScaledUserVariableValueToBytes(typ types.Type, val any) ([]byte, error) {
+	f, _ := typ.Oid.BlockScaledFormat()
+	var cell []byte
+	var err error
+	switch v := val.(type) {
+	case string:
+		cell, err = types.StringToBlockScaled(f, v)
+	case []float32:
+		cell, err = types.AppendBlockScaled(nil, f, v)
+	case []byte:
+		cell = v
+	default:
+		return nil, moerr.NewInvalidArgNoCtx("array user variable value", fmt.Sprintf("%T", val))
+	}
+	if err != nil {
+		return nil, err
+	}
+	c, err := types.ParseBlockScaledCell(cell)
+	if err != nil {
+		return nil, err
+	}
+	if c.Format != f {
+		return nil, moerr.NewInvalidInputNoCtxf("%s value is not a %s cell", c.Format, f)
+	}
+	if typ.Width > 0 && typ.Width != types.MaxArrayDimension && c.Dim != int(typ.Width) {
+		return nil, moerr.NewArrayDefMismatchNoCtx(int(typ.Width), c.Dim)
+	}
+	return cell, nil
 }
 
 func arrayUserVariableTypedValueToBytes[T types.ArrayElement](typ types.Type, val any) ([]byte, error) {
@@ -831,7 +865,7 @@ func SetInsertValueString(proc *process.Process, numVal *tree.NumVal, typ *types
 		// hard rejection that would ignore sql_mode.
 		checkWidth := typ.Oid != types.T_char && typ.Oid != types.T_varchar &&
 			typ.Oid != types.T_text && typ.Oid != types.T_datalink &&
-			(typ.Oid != types.T_binary || binaryLiteral) && destLen != 0 && !typ.Oid.IsArrayRelate()
+			(typ.Oid != types.T_binary || binaryLiteral) && destLen != 0 && !typ.Oid.IsVectorType()
 		if checkWidth {
 			srcLen := utf8.RuneCountInString(s)
 			if binaryLiteral && (typ.Oid == types.T_binary || typ.Oid == types.T_varbinary) {
@@ -849,8 +883,8 @@ func SetInsertValueString(proc *process.Process, numVal *tree.NumVal, typ *types
 		}
 
 		var v []byte
-		if typ.Oid.IsArrayRelate() {
-			// 与参数绑定共用六类型解析及固定/动态维度校验。
+		if typ.Oid.IsVectorType() {
+			// 与参数绑定共用向量类型解析及固定/动态维度校验。
 			var err error
 			v, err = arrayUserVariableValueToBytes(*typ, s)
 			if err != nil {

@@ -1786,8 +1786,8 @@ func buildNotNullColumnVal(col *ColDef) string {
 	} else if isEnumPlanType(&col.Typ) {
 		enumvalues := strings.Split(col.Typ.Enumvalues, ",")
 		defaultValue = enumvalues[0]
-	} else if types.T(col.Typ.Id).IsArrayRelate() {
-		// IsArrayRelate covers all six vector types. Enumerating only f32/f64
+	} else if types.T(col.Typ.Id).IsVectorType() {
+		// IsVectorType covers every vector type, including vecf8/vecf4. Enumerating only f32/f64
 		// here made ALTER TABLE ... ADD v VECF16(n) NOT NULL fall through to
 		// "null" below — an invalid backfill for a NOT NULL column, where the
 		// same statement on vecf32 synthesized a zero vector.

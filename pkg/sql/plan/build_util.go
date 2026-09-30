@@ -2081,7 +2081,7 @@ func (builder *QueryBuilder) applyGeneratedColumnAssignmentCast(expr *plan.Expr,
 		return expr, nil
 	}
 	f := expr.GetF()
-	if types.T(expr.Typ.Id).IsArrayRelate() && needsSameTypeAssignmentCast(expr.Typ) {
+	if types.T(expr.Typ.Id).IsVectorType() && needsSameTypeAssignmentCast(expr.Typ) {
 		// 旧目录中的生成列表达式可能没有赋值 CAST；执行新 DML 时补齐，
 		// 已有的根 CAST 则继续复用，避免重复复制每个向量。
 		if f != nil && f.Func != nil && f.Func.ObjName == "cast" {

@@ -249,7 +249,8 @@ func checkIndexColumnSupportability(ctx context.Context, col *ColDef, keyPart *t
 		return moerr.NewNotSupported(ctx, fmt.Sprintf("JSON column '%s' cannot be in index", colName))
 	case int32(types.T_array_float32), int32(types.T_array_float64),
 		int32(types.T_array_float16), int32(types.T_array_bf16),
-		int32(types.T_array_int8), int32(types.T_array_uint8):
+		int32(types.T_array_int8), int32(types.T_array_uint8),
+		int32(types.T_array_float8), int32(types.T_array_float4):
 		// A vector column is valid only as the key of a vector index, AND only if
 		// that algorithm supports this element type. Delegate to the plugin's
 		// catalog hook (SupportedVectorTypes) rather than hardcoding — each algo

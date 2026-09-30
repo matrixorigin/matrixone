@@ -158,7 +158,7 @@ func (zm ZM) IsString() bool {
 }
 
 func (zm ZM) IsArray() bool {
-	return zm.GetType().IsArrayRelate()
+	return zm.GetType().IsVectorType()
 }
 
 func (zm ZM) Valid() bool {
@@ -499,6 +499,9 @@ func (zm ZM) getValue(buf []byte) any {
 		return types.BytesToArray[int8](buf)
 	case types.T_array_uint8:
 		return types.BytesToArray[uint8](buf)
+	case types.T_array_float8, types.T_array_float4:
+		// Block-scaled cells have no typed element slice; the value is the cell.
+		return buf
 	}
 	panic(fmt.Sprintf("unsupported type: %v", zm.GetType()))
 }
