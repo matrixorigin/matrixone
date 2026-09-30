@@ -25,17 +25,24 @@ import (
 	"github.com/panjf2000/ants/v2"
 	"github.com/prashantv/gostub"
 
+	"github.com/matrixorigin/matrixone/pkg/common/bloomfilter"
+	"github.com/matrixorigin/matrixone/pkg/common/moerr"
 	"github.com/matrixorigin/matrixone/pkg/common/runtime"
+	"github.com/matrixorigin/matrixone/pkg/container/batch"
 	"github.com/matrixorigin/matrixone/pkg/container/types"
+	"github.com/matrixorigin/matrixone/pkg/container/vector"
 	"github.com/matrixorigin/matrixone/pkg/defines"
 	"github.com/matrixorigin/matrixone/pkg/fileservice"
 	"github.com/matrixorigin/matrixone/pkg/logservice"
 	"github.com/matrixorigin/matrixone/pkg/objectio"
+	"github.com/matrixorigin/matrixone/pkg/objectio/ioutil"
 	"github.com/matrixorigin/matrixone/pkg/sql/parsers/tree"
 	"github.com/matrixorigin/matrixone/pkg/util/fault"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/ckputil"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/catalog"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/common"
+	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/db/checkpoint"
+	gc "github.com/matrixorigin/matrixone/pkg/vm/engine/tae/db/gc/v3"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/db/testutil"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/iface/handle"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/logtail"
@@ -159,7 +166,7 @@ func TestExecBackupKeepsObjectDeletedAfterRestoreTimestamp(t *testing.T) {
 	// DropTS is after the restore timestamp. ReWriteCheckpointAndBlockFromKey
 	// clears this DeleteTS and retains the non-appendable object, so its physical
 	// file must be present in the backup.
-	files := selectBackupObjects(objects, checkpointStart, nil, nil)
+	files := selectBackupObjects(objects, checkpointStart, nil, nil, nil)
 	require.Contains(t, files, objectName.String())
 	_, err = parallelCopyData(ctx, src, dst, files, 1, nil)
 	require.NoError(t, err)
@@ -276,7 +283,11 @@ func TestSelectBackupObjectsFromIncrementalCheckpointOmitsHistoricalObject(t *te
 			// The object file is deliberately absent; only checkpoint files may be copied.
 			_, err = src.StatFile(ctx, objectName.String())
 			require.Error(t, err)
-			files := selectBackupObjects(objects, restoreTS, nil, nil)
+			writeGCMetadata(t, ctx, src, types.BuildTS(1, 0), restoreTS)
+			retention, err := loadBackupObjectRetention(ctx, "backup-test", src, restoreTS, nil)
+			require.NoError(t, err)
+			require.Equal(t, restoreTS, retention.end)
+			files := selectBackupObjects(objects, restoreTS, nil, nil, retention)
 			require.Contains(t, files, checkpointLocation.Name().String())
 			_, err = parallelCopyData(ctx, src, dst, files, 1, nil)
 			require.NoError(t, err)
@@ -287,6 +298,222 @@ func TestSelectBackupObjectsFromIncrementalCheckpointOmitsHistoricalObject(t *te
 			}
 		})
 	}
+}
+
+type backupCheckpointMetaRecorder struct {
+	checkpoint.Runner
+	files map[string]struct{}
+}
+
+func (r *backupCheckpointMetaRecorder) AddCheckpointMetaFile(name string) {
+	r.files[name] = struct{}{}
+}
+
+func newBackupLocalFS(t *testing.T, name string) fileservice.FileService {
+	fs, err := fileservice.NewFileService(t.Context(), fileservice.Config{
+		Name: name, Backend: "DISK", DataDir: t.TempDir(), Cache: fileservice.DisabledCacheConfig,
+	}, nil)
+	require.NoError(t, err)
+	t.Cleanup(func() { fs.Close(context.Background()) })
+	return fs
+}
+
+func TestExecBackupKeepsSnapshotRetainedObjectFromCompactedCheckpoint(t *testing.T) {
+	ctx := t.Context()
+	src := newBackupLocalFS(t, "snapshot-retained-src")
+	dst := newBackupLocalFS(t, "snapshot-retained-dst")
+	createTS := types.BuildTS(5, 0)
+	snapshotTS := types.BuildTS(7, 0)
+	dropTS := types.BuildTS(10, 0)
+	checkpointStart := types.BuildTS(1, 0)
+	checkpointEnd := types.BuildTS(20, 0)
+	restoreTS := types.BuildTS(20, 1)
+	backupEnd := types.BuildTS(30, 0)
+
+	objectID := objectio.NewObjectid()
+	objectName := objectio.BuildObjectNameWithObjectID(&objectID)
+	data := batch.NewWithSize(1)
+	data.Vecs[0] = vector.NewVec(types.T_int64.ToType())
+	defer data.Clean(common.DebugAllocator)
+	require.NoError(t, vector.AppendFixed(data.Vecs[0], int64(42), false, common.DebugAllocator))
+	data.SetRowCount(1)
+	writer, err := ioutil.NewBlockWriterNew(src, objectName, 0, []uint16{0}, false)
+	require.NoError(t, err)
+	_, err = writer.WriteBatch(data)
+	require.NoError(t, err)
+	blocks, _, err := writer.Sync(ctx)
+	require.NoError(t, err)
+	require.Len(t, blocks, 1)
+	stats := writer.GetObjectStats()
+	require.False(t, stats.GetAppendable())
+
+	cat := catalog.MockCatalog(nil)
+	defer cat.Close()
+	db, err := cat.CreateDBEntry("backup_test", "", "", nil)
+	require.NoError(t, err)
+	table, err := db.CreateTableEntry(catalog.MockSchema(2, 0), nil, nil)
+	require.NoError(t, err)
+	entry, err := table.CreateCommittedObject(createTS, &objectio.CreateObjOpt{Stats: &stats}, nil)
+	require.NoError(t, err)
+	catalog.MockDroppedObjectEntry2List(entry, dropTS)
+
+	incremental, err := logtail.IncrementalCheckpointDataFactory(
+		checkpointStart, checkpointEnd, 0, src,
+	)(cat)
+	require.NoError(t, err)
+	defer incremental.Close()
+	incrementalLocation, _, err := incremental.Sync(ctx, src)
+	require.NoError(t, err)
+	_, incrementalReader, err := logtail.LoadCheckpointEntriesFromKey(
+		ctx, "backup-test", src, incrementalLocation, logtail.CheckpointCurrentVersion, nil, &types.TS{},
+	)
+	require.NoError(t, err)
+	incrementalRows, err := incrementalReader.GetCheckpointData(ctx)
+	require.NoError(t, err)
+	defer incrementalRows.Clean(common.CheckpointAllocator)
+	retainedStats := vector.NewVec(ckputil.TableObjectsTypes[ckputil.TableObjectsAttr_ID_Idx])
+	defer retainedStats.Free(common.CheckpointAllocator)
+	var deletedRows int
+	for row := 0; row < incrementalRows.RowCount(); row++ {
+		encoded := incrementalRows.Vecs[ckputil.TableObjectsAttr_ID_Idx].GetBytesAt(row)
+		rowStats := objectio.ObjectStats(encoded)
+		if rowStats.ObjectName().String() != objectName.String() {
+			continue
+		}
+		require.NoError(t, vector.AppendBytes(retainedStats, encoded, false, common.CheckpointAllocator))
+		deletedAt := vector.GetFixedAtWithTypeCheck[types.TS](
+			incrementalRows.Vecs[ckputil.TableObjectsAttr_DeleteTS_Idx], row,
+		)
+		if !deletedAt.IsEmpty() {
+			require.Equal(t, dropTS, deletedAt)
+			require.True(t, logtail.ObjectIsSnapshotRefers(&rowStats, nil, &createTS, &dropTS, []types.TS{snapshotTS}))
+			deletedRows++
+		}
+	}
+	require.Equal(t, 1, deletedRows)
+	require.Equal(t, 2, retainedStats.Length())
+	filter := bloomfilter.New(int64(retainedStats.Length()), 0.01)
+	defer filter.Free()
+	filter.Add(retainedStats)
+
+	incrementalEntry := checkpoint.NewCheckpointEntry(
+		"", checkpointStart, checkpointEnd, checkpoint.ET_Incremental,
+		checkpoint.WithStateEntryOption(checkpoint.ST_Finished),
+	)
+	incrementalEntry.SetLocation(incrementalLocation, incrementalLocation)
+	metaRecorder := &backupCheckpointMetaRecorder{files: make(map[string]struct{})}
+	_, _, compactedEntry, compactedRows, err := gc.MergeCheckpoint(
+		ctx, "snapshot-retained-test", "backup-test", []*checkpoint.CheckpointEntry{incrementalEntry},
+		&filter, &checkpointEnd, metaRecorder, common.CheckpointAllocator, src,
+	)
+	require.NoError(t, err)
+	defer compactedRows.Clean(common.CheckpointAllocator)
+	require.Equal(t, checkpoint.ET_Compacted, compactedEntry.GetType())
+	require.Len(t, metaRecorder.files, 1)
+	compactedObjects, _, err := logtail.LoadCheckpointEntriesFromKey(
+		ctx, "backup-test", src, compactedEntry.GetLocation(), compactedEntry.GetVersion(), nil, &types.TS{},
+	)
+	require.NoError(t, err)
+	var retained bool
+	for _, object := range compactedObjects {
+		if object.Location.Name().String() == objectName.String() && object.DropTS.Equal(&dropTS) {
+			retained = true
+		}
+	}
+	require.True(t, retained)
+
+	special, err := logtail.BackupCheckpointDataFactory(restoreTS, backupEnd, src)(cat)
+	require.NoError(t, err)
+	defer special.Close()
+	specialLocation, _, err := special.Sync(ctx, src)
+	require.NoError(t, err)
+	specialObjects, _, err := logtail.LoadCheckpointEntriesFromKey(
+		ctx, "backup-test", src, specialLocation, logtail.CheckpointCurrentVersion, nil, &types.TS{},
+	)
+	require.NoError(t, err)
+	for _, object := range specialObjects {
+		require.NotEqual(t, objectName.String(), object.Location.Name().String())
+	}
+	meta := batch.NewWithSchema(false, checkpoint.CheckpointSchema.Attrs(), checkpoint.CheckpointSchema.Types())
+	defer meta.Clean(common.CheckpointAllocator)
+	for _, value := range []struct {
+		index int
+		value types.TS
+	}{
+		{checkpoint.CheckpointAttr_StartTSIdx, checkpointStart},
+		{checkpoint.CheckpointAttr_EndTSIdx, checkpointEnd},
+	} {
+		require.NoError(t, vector.AppendFixed(meta.Vecs[value.index], value.value, false, common.CheckpointAllocator))
+	}
+	for _, index := range []int{checkpoint.CheckpointAttr_MetaLocationIdx, checkpoint.CheckpointAttr_AllLocationsIdx} {
+		require.NoError(t, vector.AppendBytes(meta.Vecs[index], incrementalLocation, false, common.CheckpointAllocator))
+	}
+	require.NoError(t, vector.AppendFixed(meta.Vecs[checkpoint.CheckpointAttr_EntryTypeIdx], true, false, common.CheckpointAllocator))
+	require.NoError(t, vector.AppendFixed(meta.Vecs[checkpoint.CheckpointAttr_VersionIdx], logtail.CheckpointCurrentVersion, false, common.CheckpointAllocator))
+	require.NoError(t, vector.AppendFixed(meta.Vecs[checkpoint.CheckpointAttr_CheckpointLSNIdx], uint64(0), false, common.CheckpointAllocator))
+	require.NoError(t, vector.AppendFixed(meta.Vecs[checkpoint.CheckpointAttr_TruncateLSNIdx], uint64(0), false, common.CheckpointAllocator))
+	require.NoError(t, vector.AppendFixed(meta.Vecs[checkpoint.CheckpointAttr_TypeIdx], int8(checkpoint.ET_Incremental), false, common.CheckpointAllocator))
+	require.NoError(t, vector.AppendBytes(meta.Vecs[checkpoint.CheckpointAttr_TableIDLocationIdx], nil, false, common.CheckpointAllocator))
+	meta.SetRowCount(1)
+	metaWriter, err := objectio.NewObjectWriterSpecial(
+		objectio.WriterCheckpoint,
+		ioutil.EncodeCKPMetadataFullName(checkpointStart, checkpointEnd), src,
+	)
+	require.NoError(t, err)
+	_, err = metaWriter.Write(meta)
+	require.NoError(t, err)
+	_, err = metaWriter.WriteEnd(ctx)
+	require.NoError(t, err)
+	compactedMetaName := ioutil.EncodeCompactCKPMetadataFullName(checkpointStart, checkpointEnd)
+	_, err = src.StatFile(ctx, compactedMetaName)
+	require.NoError(t, err)
+	sourceSnapshotEntries, err := checkpoint.ListSnapshotCheckpoint(
+		ctx, "backup-test", src, snapshotTS, metaRecorder.files,
+	)
+	require.NoError(t, err)
+	require.NotEmpty(t, sourceSnapshotEntries)
+	writeGCMetadata(t, ctx, src, checkpointStart, restoreTS)
+	retention, err := loadBackupObjectRetention(ctx, "backup-test", src, restoreTS,
+		map[string][]*objectio.BackupObject{compactedEntry.GetLocation().String(): compactedObjects})
+	require.NoError(t, err)
+	require.Equal(t, checkpointStart, retention.start)
+	require.Equal(t, restoreTS, retention.end)
+	require.Contains(t, retention.retained, *objectName.Short())
+
+	names := []string{
+		"2026-09-30 00:00:00",
+		fmt.Sprintf("%s:%d:%s:%s:%s", specialLocation.String(), logtail.CheckpointCurrentVersion,
+			backupEnd.ToString(), specialLocation.String(), restoreTS.ToString()),
+		fmt.Sprintf("%s:%d", compactedEntry.GetLocation().String(), compactedEntry.GetVersion()),
+		fmt.Sprintf("%s:%d", specialLocation.String(), logtail.CheckpointCurrentVersion),
+	}
+	require.NoError(t, execBackup(ctx, "backup-test", src, dst, names, 1, types.TS{}, "full", nil, nil, nil))
+	_, compactedMeta := ioutil.TryDecodeTSRangeFile(compactedMetaName)
+	_, err = dst.StatFile(ctx, compactedMeta.GetCKPFullName())
+	require.NoError(t, err)
+	selected, err := checkpoint.ListSnapshotCheckpoint(ctx, "backup-test", dst, snapshotTS, metaRecorder.files)
+	require.NoError(t, err)
+	var selectedCompacted bool
+	for _, checkpointEntry := range selected {
+		if checkpointEntry.GetType() == checkpoint.ET_Compacted &&
+			checkpointEntry.GetLocation().Name().String() == compactedEntry.GetLocation().Name().String() {
+			selectedCompacted = true
+		}
+	}
+	require.True(t, selectedCompacted)
+
+	reader, err := ioutil.NewObjectReader(
+		dst, stats.ObjectLocation(),
+		objectio.WithDataCachePolicyOption(fileservice.SkipAllCache),
+		objectio.WithMetaCachePolicyOption(fileservice.SkipAllCache),
+	)
+	require.NoError(t, err)
+	readData, release, err := reader.LoadColumns(
+		ctx, []uint16{0}, []types.Type{types.T_int64.ToType()}, 0, common.DebugAllocator,
+	)
+	require.NoError(t, err)
+	defer release()
+	require.Equal(t, []int64{42}, vector.MustFixedColWithTypeCheck[int64](readData.Vecs[0]))
 }
 
 func TestSelectBackupObjectsOnlySkipsObjectsDeletedBeforeRestoreTimestamp(t *testing.T) {
@@ -314,6 +541,7 @@ func TestSelectBackupObjectsOnlySkipsObjectsDeletedBeforeRestoreTimestamp(t *tes
 		types.BuildTS(15, 0),
 		nil,
 		nil,
+		&backupObjectRetention{start: types.BuildTS(1, 0), end: types.BuildTS(15, 0)},
 	)
 	require.NotContains(t, files, before.Location.Name().String())
 	require.Contains(t, files, at.Location.Name().String())
@@ -432,7 +660,8 @@ func TestSelectBackupObjectsOwnerLifecycle(t *testing.T) {
 				globalIndex = NewGlobalFileIndex()
 				globalIndex.Add(name)
 			}
-			files := selectBackupObjects(objects, test.restoreTS, dstHave, globalIndex)
+			files := selectBackupObjects(objects, test.restoreTS, dstHave, globalIndex,
+				&backupObjectRetention{start: types.BuildTS(1, 0), end: restore})
 			if !test.wantFile {
 				require.NotContains(t, files, name)
 				return
@@ -454,11 +683,35 @@ func TestSelectBackupObjectsOwnerLifecycle(t *testing.T) {
 			{Location: location(oldName), TableID: 1, ObjectType: dataType, CrateTS: create, DropTS: drop, NeedCopy: true},
 			{Location: location(liveName), TableID: 1, ObjectType: dataType, CrateTS: create, NeedCopy: true},
 		}
-		files := selectBackupObjects(objects, restore, nil, nil)
+		files := selectBackupObjects(objects, restore, nil, nil,
+			&backupObjectRetention{start: types.BuildTS(1, 0), end: restore})
 		require.NotContains(t, files, oldName.String())
 		require.Contains(t, files, liveName.String())
 		require.True(t, files[liveName.String()].NeedCopy)
 		require.Len(t, files, 1)
+	})
+	t.Run("recent incremental retention requires missing source", func(t *testing.T) {
+		objectID := objectio.NewObjectid()
+		name := objectio.BuildObjectNameWithObjectID(&objectID)
+		location := objectio.BuildLocation(name, objectio.NewExtent(0, 0, 1, 1), 1, 0)
+		objects := []*objectio.BackupObject{
+			{Location: location, TableID: 1, ObjectType: dataType, CrateTS: create, NeedCopy: true},
+			{Location: location, TableID: 1, ObjectType: dataType, CrateTS: create, DropTS: drop, NeedCopy: true},
+		}
+		retention := &backupObjectRetention{
+			start:    types.BuildTS(1, 0),
+			end:      restore,
+			retained: map[objectio.ObjectNameShort]struct{}{*name.Short(): {}},
+		}
+		require.Contains(t, selectBackupObjects(objects, restore, nil, nil, nil), name.String())
+		files := selectBackupObjects(objects, restore, nil, nil, retention)
+		require.Contains(t, files, name.String())
+		require.True(t, files[name.String()].NeedCopy)
+		src := newBackupMemoryFS(t, "retained-missing-src")
+		dst := newBackupMemoryFS(t, "retained-missing-dst")
+		_, err := parallelCopyData(t.Context(), src, dst, files, 1, nil)
+		require.Error(t, err)
+		require.True(t, moerr.IsMoErrCode(err, moerr.ErrFileNotFound), err)
 	})
 }
 
