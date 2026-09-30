@@ -624,7 +624,7 @@ var supportedAggInNewFramework = []FuncNew{
 		class:      plan.Function_AGG,
 		layout:     STANDARD_FUNCTION,
 		checkFn: func(overloads []overload, inputs []types.Type) checkResult {
-			return fixedUnaryAggTypeCheck(inputs, []types.T{types.T_varbinary})
+			return opaqueStateTypeCheck(inputs, failedAggParametersWrong)
 		},
 
 		Overloads: []overload{
@@ -674,16 +674,7 @@ var supportedAggInNewFramework = []FuncNew{
 		class:      plan.Function_AGG | plan.Function_PRODUCE_NO_NULL,
 		layout:     STANDARD_FUNCTION,
 		checkFn: func(overloads []overload, inputs []types.Type) checkResult {
-			if len(inputs) != 1 {
-				return newCheckResultWithFailure(failedAggParametersWrong)
-			}
-			switch inputs[0].Oid {
-			case types.T_any:
-				return newCheckResultWithCast(0, []types.Type{types.T_varbinary.ToType()})
-			case types.T_binary, types.T_varbinary, types.T_blob:
-				return newCheckResultWithSuccess(0)
-			}
-			return newCheckResultWithFailure(failedAggParametersWrong)
+			return opaqueStateTypeCheck(inputs, failedAggParametersWrong)
 		},
 
 		Overloads: []overload{
@@ -760,7 +751,9 @@ func typeInList(typ types.T, supported []types.T) bool {
 }
 
 // mysqlNumericAggTypeCheck implements MySQL's numeric coercion for variance
-// and standard-deviation aggregates. Unlike SUM, these aggregates accept
+// and standard-deviation aggregates. JSON operands resolve to DOUBLE; SQL
+// binding supplies the aggregate warning conversion. Unlike SUM, these
+// aggregates also accept
 // string and temporal expressions and evaluate their numeric representation.
 // BIT's storage domain is unsigned, but its legacy aggregate state is not
 // widened. Bind through the existing UINT64 aggregate instead of changing the
@@ -772,6 +765,9 @@ func sumAvgTypeCheck(inputs []types.Type) checkResult {
 	if len(inputs) == 1 && inputs[0].Oid == types.T_bit {
 		return newCheckResultWithCast(0, []types.Type{types.T_uint64.ToType()})
 	}
+	if len(inputs) == 1 && inputs[0].Oid == types.T_json {
+		return newCheckResultWithCast(0, []types.Type{types.T_float64.ToType()})
+	}
 	return fixedUnaryAggTypeCheck(inputs, SumSupportedTypes)
 }
 
@@ -782,6 +778,8 @@ func mysqlNumericAggTypeCheck(inputs []types.Type) checkResult {
 
 	t := inputs[0]
 	switch {
+	case t.Oid == types.T_json:
+		return newCheckResultWithCast(0, []types.Type{types.T_float64.ToType()})
 	case t.Oid == types.T_any:
 		return newCheckResultWithCast(0, []types.Type{types.T_float64.ToType()})
 	case typeInList(t.Oid, SumSupportedTypes):

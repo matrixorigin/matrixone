@@ -1382,6 +1382,28 @@ func TestFoldVarExprsInRemoteRunScopeDoesNotMutateReusableScope(t *testing.T) {
 	require.True(t, scopeContainsVarExpr(scope))
 }
 
+func TestCopyBlockFiltersForRemoteRunUsesAdmittedSubset(t *testing.T) {
+	admitted := plan2.MakePlan2Int64ConstExprWithType(7)
+	staleFold := plan2.MakePlan2Int64ConstExprWithType(8)
+	scope := &Scope{DataSource: &Source{
+		node:               &plan.Node{BlockFilterList: []*plan.Expr{admitted}},
+		remoteBlockFilters: []*plan.Expr{admitted},
+		BlockFilterList:    []*plan.Expr{staleFold},
+	}}
+
+	remote := copyBlockFiltersForRemoteRun(scope)
+	require.NotSame(t, scope, remote)
+	require.Equal(t, int64(7), remote.DataSource.BlockFilterList[0].GetLit().GetI64Val())
+	require.NotSame(t, admitted, remote.DataSource.BlockFilterList[0])
+	require.Same(t, staleFold, scope.DataSource.BlockFilterList[0])
+
+	scope.DataSource.remoteBlockFilters = []*plan.Expr{}
+	remote = copyBlockFiltersForRemoteRun(scope)
+	require.NotSame(t, scope, remote)
+	require.Empty(t, remote.DataSource.BlockFilterList)
+	require.Same(t, staleFold, scope.DataSource.BlockFilterList[0])
+}
+
 func TestRemoteUserVariableFoldPreservesStringSource(t *testing.T) {
 	makeProc := func(value any) *process.Process {
 		proc := testutil.NewProcess(t)

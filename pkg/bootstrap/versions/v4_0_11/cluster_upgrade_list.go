@@ -36,7 +36,7 @@ func cdcWatermarkColumn(name, definition string) versions.UpgradeEntry {
 		TableName:               catalog.MO_CDC_WATERMARK,
 		UpgType:                 versions.ADD_COLUMN,
 		UpgSql:                  "alter table mo_catalog.mo_cdc_watermark add column " + name + " " + definition,
-		RequiredProtocolVersion: defines.MORPCVersion101,
+		RequiredProtocolVersion: defines.MORPCVersion102,
 		CheckFunc: func(txn executor.TxnExecutor, accountID uint32) (bool, error) {
 			column, err := versions.CheckTableColumn(txn, accountID, catalog.MO_CATALOG, catalog.MO_CDC_WATERMARK, name)
 			return column.IsExits, err

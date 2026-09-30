@@ -84,4 +84,38 @@ EXECUTE show_target;
 ➤ Field[1,0,0]  ¦  Type[1,0,0]  ¦  Null[1,0,0]  ¦  Key[1,0,0]  ¦  Default[1,0,0]  ¦  Extra[1,0,0]  ¦  Comment[1,0,0]  𝄀
 code  ¦  BIGINT(64)  ¦  YES  ¦    ¦  null  ¦    ¦  
 DEALLOCATE PREPARE show_target;
+DROP SNAPSHOT IF EXISTS view_metadata_restore;
+CREATE SNAPSHOT view_metadata_restore FOR ACCOUNT;
+ALTER TABLE src MODIFY COLUMN code VARCHAR(180);
+PREPARE restored_view FROM 'SHOW COLUMNS FROM view_metadata_on_demand.v';
+EXECUTE restored_view;
+➤ Field[1,0,0]  ¦  Type[1,0,0]  ¦  Null[1,0,0]  ¦  Key[1,0,0]  ¦  Default[1,0,0]  ¦  Extra[1,0,0]  ¦  Comment[1,0,0]  𝄀
+id  ¦  BIGINT(64)  ¦  YES  ¦    ¦  null  ¦    ¦    𝄀
+code  ¦  VARCHAR(180)  ¦  YES  ¦    ¦  null  ¦    ¦    𝄀
+qty  ¦  BIGINT(64)  ¦  NO  ¦    ¦  11  ¦    ¦    𝄀
+price  ¦  DECIMAL(24,6)  ¦  YES  ¦    ¦  null  ¦    ¦    𝄀
+total  ¦  DECIMAL(43,6)  ¦  YES  ¦    ¦  null  ¦    ¦  
+RESTORE TABLE view_metadata_on_demand.src {snapshot='view_metadata_restore'};
+EXECUTE restored_view;
+➤ Field[1,0,0]  ¦  Type[1,0,0]  ¦  Null[1,0,0]  ¦  Key[1,0,0]  ¦  Default[1,0,0]  ¦  Extra[1,0,0]  ¦  Comment[1,0,0]  𝄀
+id  ¦  BIGINT(64)  ¦  YES  ¦    ¦  null  ¦    ¦    𝄀
+code  ¦  VARCHAR(120)  ¦  YES  ¦    ¦  null  ¦    ¦    𝄀
+qty  ¦  BIGINT(64)  ¦  NO  ¦    ¦  11  ¦    ¦    𝄀
+price  ¦  DECIMAL(24,6)  ¦  YES  ¦    ¦  null  ¦    ¦    𝄀
+total  ¦  DECIMAL(43,6)  ¦  YES  ¦    ¦  null  ¦    ¦  
+SELECT column_name, column_type FROM information_schema.columns
+WHERE table_schema = 'view_metadata_on_demand' AND table_name = 'v'
+ORDER BY ordinal_position;
+➤ column_name[12,256,0]  ¦  column_type[12,65535,0]  𝄀
+id  ¦  BIGINT(64)  𝄀
+code  ¦  VARCHAR(120)  𝄀
+qty  ¦  BIGINT(64)  𝄀
+price  ¦  DECIMAL(24,6)  𝄀
+total  ¦  DECIMAL(43,6)
+DEALLOCATE PREPARE restored_view;
+CREATE TABLE restored_copy AS SELECT code FROM v;
+DESC restored_copy;
+➤ Field[1,0,0]  ¦  Type[1,0,0]  ¦  Null[1,0,0]  ¦  Key[1,0,0]  ¦  Default[1,0,0]  ¦  Extra[1,0,0]  ¦  Comment[1,0,0]  𝄀
+code  ¦  VARCHAR(120)  ¦  YES  ¦    ¦  null  ¦    ¦  
+DROP SNAPSHOT view_metadata_restore;
 DROP DATABASE view_metadata_on_demand;

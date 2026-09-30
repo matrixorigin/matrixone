@@ -289,3 +289,73 @@ func TestExpressionResultContractDestinationProtocolValidation(t *testing.T) {
 		require.NoError(t, validateRemoteExpressionPipelineProtocol(c.proc, wire))
 	})
 }
+
+func TestVersion101ExpressionContractsProtocolBoundaries(t *testing.T) {
+	for _, name := range []string{"concat", "concat_ws", "json_depth", "cast_year_bit"} {
+		t.Run(name, func(t *testing.T) {
+			c, client := expressionProtocolTestCompile(t)
+			c.proc.Base.QueryClient = client
+			args := []*planpb.Expr{
+				{Typ: planpb.Type{Id: int32(types.T_json)}, Expr: &planpb.Expr_Col{Col: &planpb.ColRef{ColPos: 0}}},
+				plan2.MakePlan2StringConstExprWithType("x"),
+			}
+			if name == "json_depth" {
+				args = args[:1]
+				args[0].Typ.Id = int32(types.T_blob)
+			}
+			fnName := name
+			if name == "cast_year_bit" {
+				fnName = "cast"
+				args = []*planpb.Expr{
+					{Typ: planpb.Type{Id: int32(types.T_year)}, Expr: &planpb.Expr_Col{Col: &planpb.ColRef{ColPos: 0}}},
+					{Typ: planpb.Type{Id: int32(types.T_bit), Width: 64}, Expr: &planpb.Expr_T{T: &planpb.TargetType{}}},
+				}
+			}
+			expr, err := plan2.BindFuncExprImplByPlanExpr(context.Background(), fnName, args)
+			require.NoError(t, err)
+			features, err := planpb.RequiredRemoteExpressionFeatures(expr)
+			require.NoError(t, err)
+			require.Equal(t, name == "cast_year_bit", features.YearBitCast)
+			require.Equal(t, name != "cast_year_bit", features.JSONInputContracts)
+			require.True(t, features.Any())
+			floor, err := plan2.RequiredPersistedExpressionProtocolVersion(expr)
+			require.NoError(t, err)
+			require.Equal(t, defines.MORPCVersion101, floor)
+			qry := &planpb.Query{Nodes: []*planpb.Node{{ProjectList: []*planpb.Expr{expr}}}, Steps: []int32{0}}
+			op := projection.NewArgument()
+			defer op.Release()
+			op.ProjectList = []*planpb.Expr{expr}
+			scope := &Scope{Magic: Remote, Proc: c.proc, NodeInfo: engine.Node{Id: "old-worker", Addr: "remote:6001"}, RootOp: op}
+			place := func(version int64) {
+				client.version = version
+				c.execType = plan2.ExecTypeAP_MULTICN
+				c.cnList = engine.Nodes{{Id: "old-worker", Addr: "remote:6001", Mcpu: 4}}
+				require.NoError(t, c.constrainIPFunctionWorkers(qry))
+			}
+			place(defines.MORPCVersion100)
+			require.Equal(t, plan2.ExecTypeAP_ONECN, c.execType)
+			place(defines.MORPCVersion101)
+			require.Equal(t, plan2.ExecTypeAP_MULTICN, c.execType)
+			data, err := encodeRemoteScope(scope, c.proc)
+			require.NoError(t, err)
+			client.version = defines.MORPCVersion100
+			_, err = encodeRemoteScope(scope, c.proc)
+			require.ErrorContains(t, err, "version 101")
+			require.Equal(t, client.calls, client.releases)
+			wire := new(pipeline.Pipeline)
+			require.NoError(t, wire.Unmarshal(data))
+			rt := runtime.ServiceRuntime(c.proc.GetService())
+			rt.SetGlobalVariables(runtime.MOProtocolVersion, defines.MORPCVersion100)
+			require.ErrorContains(t, validateRemoteExpressionPipelineProtocol(c.proc, wire), "version 101")
+			rt.SetGlobalVariables(runtime.MOProtocolVersion, defines.MORPCVersion101)
+			require.NoError(t, validateRemoteExpressionPipelineProtocol(c.proc, wire))
+			args[0] = plan2.MakePlan2StringConstExprWithType("text")
+			expr, err = plan2.BindFuncExprImplByPlanExpr(context.Background(), fnName, args)
+			require.NoError(t, err)
+			features, err = planpb.RequiredRemoteExpressionFeatures(expr)
+			require.NoError(t, err)
+			require.False(t, features.JSONInputContracts)
+			require.False(t, features.YearBitCast)
+		})
+	}
+}

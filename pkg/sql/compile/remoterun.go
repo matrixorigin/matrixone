@@ -94,6 +94,9 @@ func encodeScope(s *Scope) ([]byte, error) {
 	if err != nil {
 		return nil, err
 	}
+	if err = validateRemoteBoundStringVariables(p); err != nil {
+		return nil, err
+	}
 	if err = validateRemotePadSpacePipelineProtocol(s.Proc, p); err != nil {
 		return nil, err
 	}
@@ -119,6 +122,9 @@ func encodeRemoteScope(s *Scope, proc *process.Process) ([]byte, error) {
 func encodeRemoteScopeWithVectorProtocol(s *Scope, proc *process.Process, requiresBoundProtocol *bool) ([]byte, error) {
 	p, err := fillPipeline(s)
 	if err != nil {
+		return nil, err
+	}
+	if err = validateRemoteBoundStringVariables(p); err != nil {
 		return nil, err
 	}
 	if err = validateVectorPartitionDestinationWithResult(proc, p, requiresBoundProtocol); err != nil {
@@ -168,7 +174,7 @@ func encodeRemoteScopeWithVectorProtocol(s *Scope, proc *process.Process, requir
 		}
 	}
 	if features.IPFunctionSemantics || features.TOBase64ResultContracts || features.IPFunctionResultContracts ||
-		features.ExpressionResultMetadataContracts {
+		features.ExpressionResultMetadataContracts || features.JSONInputContracts || features.YearBitCast {
 		if err = validateIPFunctionDestination(proc, p); err != nil {
 			return nil, err
 		}
@@ -302,6 +308,9 @@ func decodeScope(data []byte, proc *process.Process, isRemote bool, eng engine.E
 		return nil, err
 	}
 	if isRemote {
+		if err = validateRemoteBoundStringVariables(p); err != nil {
+			return nil, err
+		}
 		if err = validateRemoteVectorPartitionProtocol(proc, p); err != nil {
 			return nil, err
 		}
@@ -2368,6 +2377,12 @@ func validateRemoteExpressionPipelineProtocol(
 		(!hasProtocolVersion || protocolVersion < defines.MORPCVersion72) {
 		return moerr.NewNotSupportedNoCtx(
 			"corrected IP function semantics require MORPC protocol version 72",
+		)
+	}
+	if (features.JSONInputContracts || features.YearBitCast) &&
+		(!hasProtocolVersion || protocolVersion < defines.MORPCVersion101) {
+		return moerr.NewNotSupportedNoCtx(
+			"versioned expression contracts require MORPC protocol version 101",
 		)
 	}
 	if features.ExpressionResultMetadataContracts || features.TOBase64ResultContracts || features.IPFunctionResultContracts {

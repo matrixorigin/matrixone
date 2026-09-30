@@ -22,6 +22,7 @@ import (
 	"strings"
 
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
+	"github.com/matrixorigin/matrixone/pkg/container/types"
 	"github.com/matrixorigin/matrixone/pkg/pb/plan"
 	pb "github.com/matrixorigin/matrixone/pkg/pb/statsinfo"
 	"github.com/matrixorigin/matrixone/pkg/sql/parsers/tree"
@@ -343,6 +344,14 @@ type UserVariableTypeResolver interface {
 	ResolveVariableType(varName string, isSystemVar, isGlobalVar bool) (Type, error)
 }
 
+// UserVariableStringDomainResolver exposes the assigned value's domain override
+// at binding time. A variable expression captures that domain in its VarRef,
+// independently of its static Type. It does not rewrite the session value or
+// EXECUTE USING parameters.
+type UserVariableStringDomainResolver interface {
+	ResolveVariableStringDomain(varName string, isSystemVar, isGlobalVar bool) (types.RuntimeStringDomain, error)
+}
+
 type Optimizer interface {
 	Optimize(stmt tree.Statement) (*Query, error)
 	CurrentContext() CompilerContext
@@ -374,6 +383,7 @@ type ViewData struct {
 }
 
 type QueryBuilder struct {
+	preparedBindingProof *bool
 	// Deep existential regions are owned by a SQL block, never by a partially
 	// constructed node. The registry stays nil on the ordinary flattening path.
 	nextExistentialBlock    uint64
@@ -1120,6 +1130,7 @@ type baseBinder struct {
 	// Integer consumers own the source domain of their operands. An enclosing
 	// default/assignment target must not pre-convert their numeric literals.
 	integerArgumentSourceContext     bool
+	preparedFieldArgumentContext     bool
 	numericParamType                 *Type
 	numericSubqueryTarget            *Type
 	numericFunctionTarget            bool

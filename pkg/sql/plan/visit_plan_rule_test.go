@@ -2704,7 +2704,7 @@ func TestFillValuesOfParamsUsesDoubleDomainForNumericTextComparison(t *testing.T
 			ProjectList: []*planpb.Expr{comparison},
 		}},
 	}}}
-	require.True(t, PreparedPlanNeedsRuntimeTextComparisonSpecialization(
+	require.NotEmpty(t, preparedNumericComparisonTextParamPositions(
 		query, []types.Type{types.T_int8.ToType(), types.T_text.ToType()}))
 
 	filled, specialized, err := FillValuesOfParamsInPlanWithSpecialization(ctx, query, []any{
@@ -2790,12 +2790,11 @@ func TestFillValuesOfParamsUsesDoubleDomainForNumericTextComparison(t *testing.T
 			ProjectList: []*planpb.Expr{implicitComparison},
 		}},
 	}}}
-	require.False(t, PreparedPlanNeedsRuntimeSpecialization(implicitQuery))
-	require.True(t, PreparedPlanNeedsRuntimeTextComparisonSpecialization(
+	require.NotEmpty(t, preparedNumericComparisonTextParamPositions(
 		implicitQuery, []types.Type{types.T_text.ToType()}))
 	require.True(t, preparedNumericComparisonTextParamPositions(
 		implicitQuery, []types.Type{types.T_text.ToType()})[0])
-	require.False(t, PreparedPlanNeedsRuntimeTextComparisonSpecialization(
+	require.Empty(t, preparedNumericComparisonTextParamPositions(
 		implicitQuery, []types.Type{types.T_int64.ToType()}))
 	filled, specialized, err = FillValuesOfParamsInPlanWithSpecialization(ctx, implicitQuery, []any{
 		ParamValue{
@@ -2958,7 +2957,7 @@ func TestFillValuesOfParamsKeepsBitDomainForExactTextComparison(t *testing.T) {
 			ProjectList: []*planpb.Expr{comparison},
 		}},
 	}}}
-	require.True(t, PreparedPlanNeedsRuntimeTextComparisonSpecialization(
+	require.NotEmpty(t, preparedNumericComparisonTextParamPositions(
 		query, []types.Type{types.T_text.ToType()}))
 
 	filled, specialized, err := FillValuesOfParamsInPlanWithSpecialization(ctx, query, []any{

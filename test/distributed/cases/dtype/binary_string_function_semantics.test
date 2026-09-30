@@ -155,6 +155,20 @@ execute remote_domain_stmt using @binary_value, @binary_value;
 execute remote_domain_stmt using @selected_text, @selected_text;
 deallocate prepare remote_domain_stmt;
 
+-- Bare variables freeze both axes; remote folding must preserve the binary
+-- static identity and the selected text row domain after reassignment.
+prepare remote_bound_stmt from
+    'select min(charset(@selected_text)), sum(char_length(@selected_text)),
+            min(hex(left(@selected_text, 1))) from remote_prepare_source';
+execute remote_bound_stmt;
+set @selected_text = X'e4bda061';
+execute remote_bound_stmt;
+select charset(@selected_text), char_length(@selected_text), hex(left(@selected_text, 1));
+-- A schema change starts a new binding generation using the current assignment.
+alter table remote_prepare_source add column binding_generation int;
+execute remote_bound_stmt;
+deallocate prepare remote_bound_stmt;
+
 -- A valid late wildcard alignment must not be rejected by a performance guard.
 select concat(repeat(_binary 'a', 8998), _binary 'bxc')
        like concat(_binary '%', repeat(_binary '_', 5000), _binary 'b_%c')
