@@ -2013,6 +2013,14 @@ func getPath(expr *plan.Expr) []int {
 }
 
 func ConstantTranspose(expr *plan.Expr, proc *process.Process) (*plan.Expr, error) {
+	normalized, err := normalizeNativeRangeDirection(expr, proc)
+	if err != nil || normalized != expr {
+		return normalized, err
+	}
+	fn := expr.GetF()
+	if hasNonNilFunctionArgs(fn, 2) && fn.Args[0].GetCol() != nil {
+		return expr, nil
+	}
 	can, leftCnt, rightCnt := canTranspose(expr)
 	if !can {
 		return expr, nil
@@ -2028,7 +2036,7 @@ func ConstantTranspose(expr *plan.Expr, proc *process.Process) (*plan.Expr, erro
 		expr = exchangedExpr
 	}
 
-	fn := expr.GetF()
+	fn = expr.GetF()
 	curLeft, curRight := fn.Args[0], fn.Args[1]
 
 	colPath := getPath(curLeft)
@@ -2086,6 +2094,38 @@ func ConstantTranspose(expr *plan.Expr, proc *process.Process) (*plan.Expr, erro
 	}
 
 	return newExpr, nil
+}
+
+// Normalize comparison direction inside Boolean trees without applying the
+// legacy equality algebra, which is not valid for every arithmetic domain.
+func normalizeNativeRangeDirection(expr *plan.Expr, proc *process.Process) (*plan.Expr, error) {
+	fn := expr.GetF()
+	if hasNonNilFunctionArgs(fn, 2) {
+		if fn.Func.ObjName == "and" || fn.Func.ObjName == "or" {
+			var args []*plan.Expr
+			for i, arg := range fn.Args {
+				transposed, err := normalizeNativeRangeDirection(arg, proc)
+				if err != nil {
+					return nil, err
+				}
+				if transposed != arg {
+					if args == nil {
+						args = append([]*plan.Expr(nil), fn.Args...)
+					}
+					args[i] = transposed
+				}
+			}
+			if args == nil {
+				return expr, nil
+			}
+			return BindFuncExprImplByPlanExpr(proc.Ctx, fn.Func.ObjName, args)
+		}
+		// Scan consumers interpret native ranges with the column on the left.
+		if isRangeOp(fn) && fn.Args[1].GetCol() != nil && isScanInvariantRuntimeConstExpr(fn.Args[0]) {
+			return BindFuncExprImplByPlanExpr(proc.Ctx, canonicalRangeOp(fn), []*plan.Expr{fn.Args[1], fn.Args[0]})
+		}
+	}
+	return expr, nil
 }
 
 func ConstantFold(bat *batch.Batch, expr *plan.Expr, proc *process.Process, varAndParamIsConst bool, foldInExpr bool) (*plan.Expr, error) {

@@ -190,10 +190,12 @@ func preparedNumericValueSpelling(value any) string {
 // normal comparison domain.
 func preparedZeroPrecisionRoundParam(ctx context.Context, expr *Expr) *Expr {
 	fn := expr.GetF()
-	if fn == nil || fn.Func == nil || (fn.Func.GetObjName() != "round" && fn.Func.GetObjName() != "truncate") || len(fn.Args) != 2 {
+	if fn == nil || fn.Func == nil || (fn.Func.GetObjName() != "round" && fn.Func.GetObjName() != "truncate") ||
+		(len(fn.Args) != 1 && len(fn.Args) != 2) {
 		return nil
 	}
-	if !preparedZeroIntegerArgument(ctx, fn.Args[1]) {
+	// Both unary overloads use precision zero; an explicit precision still needs proof.
+	if len(fn.Args) == 2 && !preparedZeroIntegerArgument(ctx, fn.Args[1]) {
 		return nil
 	}
 	value := fn.Args[0]
