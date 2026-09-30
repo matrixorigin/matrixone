@@ -453,6 +453,9 @@ func matchesPartitionColumn(col *plan.ColRef, position int32, partitionExpr *pla
 	if col.Name != "" {
 		partitionName, consistent := partitionExpressionColumnName(partitionExpr)
 		scanName, unambiguous := scanColumnName(col.Name)
+		if col.TblName != "" {
+			scanName, unambiguous = p.ColRefColumnName(col), true
+		}
 		return consistent && unambiguous && partitionName != "" &&
 			strings.EqualFold(scanName, partitionName)
 	}

@@ -62,20 +62,16 @@ func ConstructInExpr(
 	)
 }
 
-func getColDefByName(expr *plan.Expr, name string, colPos int32, tableDef *plan.TableDef) *plan.ColDef {
-	idx := strings.Index(name, ".")
-	var pos int32
-	if idx >= 0 {
-		subName := name[idx+1:]
-		pos = tableDef.Name2ColIndex[subName]
-	} else {
-		pos = tableDef.Name2ColIndex[name]
-	}
+func getColDefByName(expr *plan.Expr, col *plan.ColRef, tableDef *plan.TableDef) *plan.ColDef {
+	name := col.Name
+	colPos := col.ColPos
+	physicalName := plan2.ColRefColumnName(col)
+	pos := tableDef.Name2ColIndex[physicalName]
 	common.DoIfDebugEnabled(func() {
 		// ColPos is local to the scan (and can be a metadata-only slot),
 		// while tableDef is the full relation schema. Validate the name used
 		// for resolution instead of indexing this schema with ColPos.
-		if int(pos) >= len(tableDef.Cols) || tableDef.Cols[pos].Name != name[strings.LastIndexByte(name, '.')+1:] {
+		if int(pos) >= len(tableDef.Cols) || tableDef.Cols[pos].Name != physicalName {
 			logutil.Error(
 				"Bad-ColExpr",
 				zap.String("col-name", name),

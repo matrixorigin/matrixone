@@ -15,7 +15,9 @@
 package plan
 
 import (
+	"fmt"
 	"math"
+	"strings"
 	"testing"
 
 	"github.com/matrixorigin/matrixone/pkg/common/mpool"
@@ -26,6 +28,7 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/sql/colexec"
 	"github.com/matrixorigin/matrixone/pkg/sql/parsers/dialect/mysql"
 	"github.com/matrixorigin/matrixone/pkg/sql/util"
+	"github.com/matrixorigin/matrixone/pkg/vm/process"
 	"github.com/stretchr/testify/require"
 )
 
@@ -152,6 +155,66 @@ func TestLeadingCompositeRangeRejectsUnsafeEncoding(t *testing.T) {
 	}
 }
 
+func TestLeadingCompositeRangeDecimalSerializerEligibility(t *testing.T) {
+	for _, tc := range []struct {
+		name     string
+		oid      types.T
+		width    int32
+		eligible bool
+	}{
+		{"decimal64", types.T_decimal64, 18, true},
+		{"decimal128", types.T_decimal128, 38, true},
+		{"decimal256", types.T_decimal256, 40, true},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			ctx := NewMockCompilerContext(true)
+			proc := ctx.GetProcess()
+			proc.SetResolveVariableFunc(ctx.ResolveVariable)
+			ctx.GetProcessFunc = func() *process.Process { return proc }
+			t.Cleanup(proc.Free)
+			table := makeExprOptCompositeClusterKeyTableDef()
+			table.Name = "decimal_range_probe"
+			table.Cols[0].Typ = planpb.Type{Id: int32(tc.oid), Width: tc.width, Scale: 0}
+			ctx.tables[table.Name] = table
+			ctx.objects[table.Name] = &planpb.ObjectRef{Obj: int64(table.TblId), ObjName: table.Name, SchemaName: "tpch"}
+			for _, bound := range []string{"1", "@int_var"} {
+				t.Run(bound, func(t *testing.T) {
+					stmt, err := mysql.ParseOne(ctx.GetContext(), "select b from decimal_range_probe where a > cast("+bound+" as decimal("+fmt.Sprint(tc.width)+",0))", 1)
+					require.NoError(t, err)
+					built, err := BuildPlan(ctx, stmt, false)
+					require.NoError(t, err)
+					found := false
+					for _, node := range built.GetQuery().Nodes {
+						if node.NodeType != planpb.Node_TABLE_SCAN {
+							continue
+						}
+						found = true
+						require.NotEmpty(t, node.FilterList)
+						if tc.eligible {
+							requireFuncNames(t, node.BlockFilterList, "prefix_in_range")
+							for _, filter := range node.BlockFilterList {
+								fold := DeepCopyExpr(filter)
+								var exes []colexec.ExpressionExecutor
+								t.Cleanup(func() {
+									for _, exe := range exes {
+										exe.Free()
+									}
+								})
+								_, err = ReplaceFoldExpr(ctx.GetProcess(), fold, &exes)
+								require.NoError(t, err)
+								require.NoError(t, EvalFoldExpr(ctx.GetProcess(), fold, &exes))
+							}
+						} else {
+							requireNoFuncNames(t, node.BlockFilterList, "prefix_in_range", "prefix_between", "serial")
+						}
+					}
+					require.True(t, found)
+				})
+			}
+		})
+	}
+}
+
 func TestLeadingCompositePairedBoundsRemainIndependent(t *testing.T) {
 	ctx := NewMockCompilerContext(true)
 	builder := NewQueryBuilder(planpb.Query_SELECT, ctx, false, false)
@@ -190,6 +253,7 @@ func TestLeadingCompositeRangeReachableFromSQL(t *testing.T) {
 	ctx := NewMockCompilerContext(true)
 	table := makeExprOptCompositeClusterKeyTableDef()
 	table.Name = "range_probe"
+	table.Cols[0].Typ.Scale = -1
 	table.TblId = 29507
 	for i, col := range table.Cols {
 		col.Seqnum = uint32(i + 1)
@@ -202,6 +266,7 @@ func TestLeadingCompositeRangeReachableFromSQL(t *testing.T) {
 	}{
 		{"select a from range_probe where a >= 10 and a < 20", []string{"a"}},
 		{"select a from range_probe where a > 10", []string{"a"}},
+		{"select a from range_probe as `x.y` where a > 10", []string{"a"}},
 		{"select b from range_probe where a > 10", []string{"a", "b"}},
 	} {
 		t.Run(tc.sql, func(t *testing.T) {
@@ -223,7 +288,19 @@ func TestLeadingCompositeRangeReachableFromSQL(t *testing.T) {
 				}
 				require.Equal(t, tc.readCols, readCols, "block-only composite key must not become a reader attribute")
 				blockKey := node.BlockFilterList[0].GetF().Args[0].GetCol()
-				require.Equal(t, table.Name+"."+table.ClusterBy.Name, blockKey.Name)
+				qualifier := table.Name
+				if strings.Contains(tc.sql, "`x.y`") {
+					qualifier = "x.y"
+				}
+				require.Equal(t, qualifier+"."+table.ClusterBy.Name, blockKey.Name)
+				require.Equal(t, qualifier, blockKey.TblName)
+				copied := DeepCopyExpr(node.BlockFilterList[0])
+				require.Equal(t, qualifier, copied.GetF().Args[0].GetCol().TblName)
+				data, err := copied.Marshal()
+				require.NoError(t, err)
+				var remote planpb.Expr
+				require.NoError(t, remote.Unmarshal(data))
+				require.Equal(t, qualifier, remote.GetF().Args[0].GetCol().TblName)
 				require.GreaterOrEqual(t, blockKey.ColPos, int32(len(readCols)))
 				columnMap := make(map[int]int)
 				blockFilters := node.BlockFilterList

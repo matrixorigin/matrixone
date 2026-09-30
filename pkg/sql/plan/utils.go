@@ -1061,6 +1061,15 @@ func getUnionSelects(ctx context.Context, stmt *tree.UnionClause, selects *[]tre
 	return nil
 }
 
+// ColRefColumnName removes the exact scan qualifier when available. Legacy
+// plans without that identity retain their historical one-dot representation.
+func ColRefColumnName(col *plan.ColRef) string {
+	if col.TblName != "" && strings.HasPrefix(col.Name, col.TblName+".") {
+		return col.Name[len(col.TblName)+1:]
+	}
+	return col.Name[strings.IndexByte(col.Name, '.')+1:]
+}
+
 func GetColumnMapByExpr(expr *plan.Expr, tableDef *plan.TableDef, columnMap map[int]int) {
 	if expr == nil {
 		return
@@ -1073,9 +1082,7 @@ func GetColumnMapByExpr(expr *plan.Expr, tableDef *plan.TableDef, columnMap map[
 
 	case *plan.Expr_Col:
 		idx := exprImpl.Col.ColPos
-		colName := exprImpl.Col.Name
-		dotIdx := strings.Index(colName, ".")
-		colName = colName[dotIdx+1:]
+		colName := ColRefColumnName(exprImpl.Col)
 		colIdx := tableDef.Name2ColIndex[colName]
 		seqnum := int(colIdx) // for extenal scan case, tableDef has only Name2ColIndex, no Cols, leave seqnum as colIdx
 		if len(tableDef.Cols) > 0 {

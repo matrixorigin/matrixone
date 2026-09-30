@@ -299,6 +299,16 @@ func (builder *QueryBuilder) remapSingleColRef(col *plan.ColRef, colMap map[[2]i
 		col.RelPos = mappedCol[0]
 		col.ColPos = mappedCol[1]
 		col.Name = builder.nameByColRef[mapID]
+		if remapInfo != nil && len(remapInfo.originalScanCols) > 0 &&
+			mapID[0] == remapInfo.node.BindingTags[0] && mapID[1] >= 0 &&
+			int(mapID[1]) < len(remapInfo.originalScanCols) {
+			// Keep the exact qualifier: alias and physical column names can
+			// both contain dots, so consumers cannot infer the split from Name.
+			column := remapInfo.originalScanCols[mapID[1]].Name
+			if strings.HasSuffix(col.Name, "."+column) {
+				col.TblName = strings.TrimSuffix(col.Name, "."+column)
+			}
+		}
 	} else {
 		colName := "<unknown>"
 		if builder != nil {
@@ -1020,6 +1030,9 @@ func (builder *QueryBuilder) remapAllColRefs(nodeID int32, step int32, colRefCnt
 
 		colTag := node.BindingTags[0]
 		originalCols := node.TableDef.Cols
+		if node.NodeType == plan.Node_TABLE_SCAN {
+			remapInfo.originalScanCols = originalCols
+		}
 		newTableDef := CloneTableDefForPlan(node.TableDef, false)
 
 		// An external scan that reports parse errors must read the whole

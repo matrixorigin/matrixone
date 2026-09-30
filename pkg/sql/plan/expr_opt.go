@@ -342,7 +342,7 @@ func (builder *QueryBuilder) leadingCompositeRangeBlockFilter(filter *plan.Expr,
 			return false
 		}
 		return isRuntimeConstExpr(bound) && bound.Typ.Id == col.Typ.Id &&
-			bound.Typ.Scale == col.Typ.Scale
+			(!types.T(col.Typ.Id).IsDecimal() || bound.Typ.Scale == col.Typ.Scale)
 	}
 	key := &plan.Expr{Typ: tableDef.Cols[compoundPos].Typ, Expr: &plan.Expr_Col{Col: &plan.ColRef{
 		RelPos: tag, ColPos: compoundPos, Name: tableDef.Cols[compoundPos].Name,

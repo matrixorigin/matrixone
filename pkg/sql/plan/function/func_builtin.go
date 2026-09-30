@@ -2386,12 +2386,14 @@ func (op *opSerial) BuiltInSerialFull(parameters []*vector.Vector, result vector
 	var err error
 	if len(op.funcs) == 0 {
 		op.funcs = make([]func(v *vector.Vector, idx int, ps *types.Packer), len(parameters))
-		for i, p := range parameters {
-			if !p.IsConstNull() {
-				op.funcs[i], err = getPackFun(p)
-				if err != nil {
-					return err
-				}
+	}
+	// A NULL first batch does not select an encoder. Resolve it when the
+	// component first becomes non-NULL, including after executor reuse.
+	for i, p := range parameters {
+		if op.funcs[i] == nil && !p.IsConstNull() {
+			op.funcs[i], err = getPackFun(p)
+			if err != nil {
+				return err
 			}
 		}
 	}
@@ -2513,6 +2515,11 @@ func getPackFun(v *vector.Vector) (func(v *vector.Vector, idx int, ps *types.Pac
 		return func(v *vector.Vector, idx int, ps *types.Packer) {
 			val := vector.GetFixedAtNoTypeCheck[types.Decimal128](v, idx)
 			ps.EncodeDecimal128(val)
+		}, nil
+	case types.T_decimal256:
+		return func(v *vector.Vector, idx int, ps *types.Packer) {
+			val := vector.GetFixedAtNoTypeCheck[types.Decimal256](v, idx)
+			ps.EncodeDecimal256(val)
 		}, nil
 	case types.T_uuid:
 		return func(v *vector.Vector, idx int, ps *types.Packer) {
@@ -2918,6 +2925,25 @@ func SerialHelper(v *vector.Vector, bitMap *nulls.Nulls, ps []*types.Packer, isF
 				ps[i].EncodeDecimal128(b)
 			}
 		}
+	case types.T_decimal256:
+		s := vector.ExpandFixedCol[types.Decimal256](v)
+		if hasNull {
+			for i, b := range s {
+				if v.IsNull(uint64(i)) {
+					if isFull {
+						ps[i].EncodeNull()
+					} else {
+						nulls.Add(bitMap, uint64(i))
+					}
+				} else {
+					ps[i].EncodeDecimal256(b)
+				}
+			}
+		} else {
+			for i, b := range s {
+				ps[i].EncodeDecimal256(b)
+			}
+		}
 	case types.T_uuid:
 		s := vector.ExpandFixedCol[types.Uuid](v)
 		if hasNull {
@@ -3014,6 +3040,9 @@ func builtInSerialExtract(parameters []*vector.Vector, result vector.FunctionRes
 		return serialExtractExceptStrings(p1, p2, rs, proc, length, selectList)
 	case types.T_decimal128:
 		rs := vector.MustFunctionResult[types.Decimal128](result)
+		return serialExtractExceptStrings(p1, p2, rs, proc, length, selectList)
+	case types.T_decimal256:
+		rs := vector.MustFunctionResult[types.Decimal256](result)
 		return serialExtractExceptStrings(p1, p2, rs, proc, length, selectList)
 	case types.T_bool:
 		rs := vector.MustFunctionResult[bool](result)
@@ -3115,7 +3144,7 @@ func serialExtractExceptStrings[T types.Number | bool | types.Date | types.Datet
 			return err
 		}
 
-		if int(v2) >= len(tuple) {
+		if v2 < 0 || v2 >= int64(len(tuple)) {
 			return moerr.NewInternalError(proc.Ctx, "index out of range")
 		}
 
@@ -3194,7 +3223,7 @@ func serialExtractForString(p1 vector.FunctionParameterWrapper[types.Varlena],
 			return err
 		}
 
-		if int(v2) >= len(tuple) {
+		if v2 < 0 || v2 >= int64(len(tuple)) {
 			return moerr.NewInternalError(proc.Ctx, "index out of range")
 		}
 
