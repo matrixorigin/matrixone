@@ -27,26 +27,43 @@ alter table q32 drop index q32bf16;
 create index q32i8 using ivfflat on q32(v) lists=2 op_type 'vector_l2_ops' quantization 'int8';
 select a from q32 order by l2_distance(v,'[1,1,1,1]') limit 3;
 
--- Bounded affine-quantized searches stay on the exact local range-before-Top-K
--- path. With trained [0,1], mul=255: rows 2 and 4 have raw squared distances
--- 57 and 11 from the zero query. Both inclusive boundaries must retain them.
+-- #29536: trained [0,1] clips row 5's source distance 2.5 to index
+-- distance 1. SQL predicates must use the original source vector.
 create table qrange(a int primary key, v vecf32(3));
 insert into qrange values
     (1,'[0,0,0]'),
     (2,'[0.02745098,0.007843137,0.007843137]'),
     (3,'[1,1,0]'),
-    (4,'[0.011764706,0.003921569,0.003921569]');
+    (4,'[0.011764706,0.003921569,0.003921569]'),
+    (5,'[2.5,0,0]');
 create index qrangei8 using ivfflat on qrange(v) lists=1 op_type 'vector_l2_ops' quantization 'int8';
--- Thresholds must NOT equal any row's exact distance: this is an int8-quantized index whose
--- range check computes a distance up to ~1 float32 ULP from the exact scalar, so a boundary-exact
--- threshold makes a row's membership depend on the index-vs-brute-force path and flakes. Pick values
--- strictly between rows -- dists are a1=0, a4=0.0130, a2=0.0296, a3=1.4142.
 select a from qrange
 where l2_distance(v,'[0,0,0]') <= 0.5
 order by l2_distance(v,'[0,0,0]') limit 10;
 select a from qrange
 where l2_distance(v,'[0,0,0]') >= 0.02
 order by l2_distance(v,'[0,0,0]') limit 10;
+-- Explicit POST preserves indexed candidates on this small fixture.
+select a from qrange where l2_distance(v,'[0,0,0]') > 1.5 and l2_distance(v,'[0,0,0]') < 3 order by l2_distance(v,'[0,0,0]') limit 10 by rank with option 'mode=post';
+set @entries = (select distinct i.index_table_name from mo_catalog.mo_indexes i join mo_catalog.mo_tables t on i.table_id=t.rel_id where t.reldatabase=database() and t.relname='qrange' and i.name='qrangei8' and i.algo_table_type='entries');
+-- @ignore:0
+select mo_ctl('dn','flush',concat(database(),'.',@entries));
+set @stats = concat('select table_cnt, accurate_object_number > 0 as persisted from table_stats("',database(),'.',@entries,'","refresh","full") g');
+prepare entry_stats from @stats;
+execute entry_stats;
+deallocate prepare entry_stats;
+select a from qrange where l2_distance_sq(v,'[0,0,0]') > 2.25 and l2_distance_sq(v,'[0,0,0]') < 9 order by l2_distance_sq(v,'[0,0,0]') limit 10 by rank with option 'mode=post';
+select a from qrange where l2_distance(v,'[0,0,0]') < 1.1 order by l2_distance(v,'[0,0,0]') limit 10 by rank with option 'mode=post';
+select a from qrange where l2_distance(v,'[0,0,0]') >= 2.5 and l2_distance(v,'[0,0,0]') <= 2.5 order by l2_distance(v,'[0,0,0]') limit 10 by rank with option 'mode=post';
+prepare clipped_range from 'select a from qrange where l2_distance(v,''[0,0,0]'') > ? and l2_distance(v,''[0,0,0]'') < ? order by l2_distance(v,''[0,0,0]'') limit 10 by rank with option ''mode=post''';
+set @lo = 1.5;
+set @hi = 3;
+execute clipped_range using @lo,@hi;
+set @lo = NULL;
+execute clipped_range using @lo,@hi;
+set @lo = 1.5;
+execute clipped_range using @lo,@hi;
+deallocate prepare clipped_range;
 create table q64(a int primary key, v vecf64(4));
 insert into q64 values (1,'[1,1,1,1]'),(2,'[3,3,3,3]'),(3,'[5,5,5,5]'),(4,'[50,50,50,50]'),(5,'[52,52,52,52]'),(6,'[54,54,54,54]');
 create index q64f32 using ivfflat on q64(v) lists=2 op_type 'vector_l2_ops' quantization 'float32';

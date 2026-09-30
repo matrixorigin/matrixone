@@ -638,7 +638,7 @@ func TestPrepareIvfIndexContext_Success(t *testing.T) {
 	assert.Equal(t, "l2_distance", result.origFuncName)
 	assert.Equal(t, int32(0), result.partPos)
 	assert.Equal(t, int32(1), result.pkPos)
-	assert.Equal(t, idxAlgoParams, result.params)
+	assert.False(t, result.lossyEntries)
 	assert.Equal(t, int64(4), result.nThread)
 	assert.Equal(t, int64(10), result.nProbe)
 	assert.NotNil(t, result.vecLitArg)

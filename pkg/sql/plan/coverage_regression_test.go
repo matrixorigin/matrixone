@@ -62,38 +62,72 @@ func TestApplyIndicesForSortUsingIvfflat_PostModeOffsetCompensationUsesCompensat
 	require.True(t, tableFuncNode.VectorIndexScan.GetPostFilterOverFetch())
 }
 
-func TestApplyIndicesForSortUsingIvfflat_DistRangeOnlyFilterCompensatesOffset(t *testing.T) {
-	builder, _, scanNode, scanNodeID, multiTableIndex := newIvfIncludeModeTestBuilder(t)
+func TestApplyIndicesForSortUsingIvfflat_DistancePredicateOwnership(t *testing.T) {
+	for _, tc := range []struct {
+		name         string
+		source       types.T
+		quantization string
+		lossy        bool
+		mode         string
+	}{
+		{"f32", types.T_array_float32, "", false, "post"},
+		{"f64", types.T_array_float64, "", false, "post"},
+		{"same_f32", types.T_array_float32, "float32", false, "post"},
+		{"same_bf16", types.T_array_bf16, "bf16", false, "post"},
+		{"bf16", types.T_array_float32, "bf16", true, "post"},
+		{"f16", types.T_array_float32, "float16", true, "post"},
+		{"f64_to_f32", types.T_array_float64, "float32", true, "post"},
+		{"int8", types.T_array_float32, "int8", true, "post"},
+		{"uint8", types.T_array_float32, "uint8", true, "post"},
+		{"same_int8_affine", types.T_array_int8, "int8", true, "post"},
+		{"int8_pre", types.T_array_float32, "int8", true, "pre"},
+		{"int8_include", types.T_array_float32, "int8", true, "include"},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			builder, _, scanNode, scanNodeID, multiTableIndex := newIvfIncludeModeTestBuilder(t)
 
-	vecCtx := newIvfIncludeModeVectorSortContext(scanNode, scanNodeID, "post", 0, 2, 4)
-	setIvfIncludeModeTestPagination(vecCtx, 2, 1)
-	scanNode.FilterList = []*planpb.Expr{
-		{
-			Typ: planpb.Type{Id: int32(types.T_bool)},
-			Expr: &planpb.Expr_F{
-				F: &planpb.Function{
-					Func: &planpb.ObjectRef{ObjName: "<="},
-					Args: []*planpb.Expr{
-						{
-							Typ:  planpb.Type{Id: int32(types.T_float64)},
-							Expr: &planpb.Expr_F{F: vecCtx.distFnExpr},
+			scanNode.TableDef.Cols[1].Typ.Id = int32(tc.source)
+			for _, def := range multiTableIndex.IndexDefs {
+				def.IndexAlgoParams = `{"op_type":"vector_l2_ops","quantization":"` + tc.quantization + `"}`
+			}
+			vecCtx := newIvfIncludeModeVectorSortContext(scanNode, scanNodeID, tc.mode, 0, 2)
+			setIvfIncludeModeTestPagination(vecCtx, 2, 1)
+			scanNode.FilterList = []*planpb.Expr{
+				{
+					Typ: planpb.Type{Id: int32(types.T_bool)},
+					Expr: &planpb.Expr_F{
+						F: &planpb.Function{
+							Func: &planpb.ObjectRef{ObjName: "<="},
+							Args: []*planpb.Expr{
+								{
+									Typ:  planpb.Type{Id: int32(types.T_float64)},
+									Expr: &planpb.Expr_F{F: vecCtx.distFnExpr},
+								},
+								MakePlan2Float64ConstExprWithType(0.5),
+							},
 						},
-						MakePlan2Float64ConstExprWithType(0.5),
 					},
 				},
-			},
-		},
+			}
+
+			original := DeepCopyExpr(scanNode.FilterList[0])
+			_, err := builder.applyIndicesForSortUsingIvfflat(scanNodeID, vecCtx, multiTableIndex, nil, nil)
+			require.NoError(t, err)
+
+			tableFuncNode := findIvfTableFunctionNode(builder, vecCtx.projNode.Children[0])
+			require.NotNil(t, tableFuncNode)
+			require.Equal(t, uint64(3), tableFuncNode.VectorIndexScan.GetCandidateLimit().GetLit().GetU64Val())
+			if tc.lossy {
+				require.Nil(t, tableFuncNode.VectorIndexScan.GetDistanceRange())
+				require.True(t, tableFuncNode.VectorIndexScan.GetPostFilterOverFetch())
+				require.Equal(t, []*planpb.Expr{original}, scanNode.FilterList)
+			} else {
+				require.NotNil(t, tableFuncNode.VectorIndexScan.GetDistanceRange().GetUpperBound())
+				require.False(t, tableFuncNode.VectorIndexScan.GetPostFilterOverFetch())
+				require.Empty(t, scanNode.FilterList)
+			}
+		})
 	}
-
-	_, err := builder.applyIndicesForSortUsingIvfflat(scanNodeID, vecCtx, multiTableIndex, nil, nil)
-	require.NoError(t, err)
-
-	sortNode := builder.qry.Nodes[vecCtx.projNode.Children[0]]
-	tableFuncNode := findIvfTableFunctionNode(builder, sortNode.Children[0])
-	require.NotNil(t, tableFuncNode)
-	require.Equal(t, uint64(3), tableFuncNode.VectorIndexScan.GetCandidateLimit().GetLit().GetU64Val())
-	require.NotNil(t, tableFuncNode.VectorIndexScan.GetDistanceRange())
-	require.NotNil(t, tableFuncNode.VectorIndexScan.GetDistanceRange().GetUpperBound())
 }
 
 func TestRenameColumnUpdatesAlterContextAndClusterMetadata(t *testing.T) {

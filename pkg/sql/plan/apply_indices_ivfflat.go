@@ -28,6 +28,7 @@ import (
 	ivfflatplan "github.com/matrixorigin/matrixone/pkg/vectorindex/ivfflat/plugin/plan"
 	"github.com/matrixorigin/matrixone/pkg/vectorindex/metric"
 	"github.com/matrixorigin/matrixone/pkg/vectorindex/overfetch"
+	"github.com/matrixorigin/matrixone/pkg/vectorindex/quantizer"
 )
 
 type ivfIndexContext struct {
@@ -41,7 +42,7 @@ type ivfIndexContext struct {
 	partType        plan.Type
 	pkPos           int32
 	pkType          plan.Type
-	params          string
+	lossyEntries    bool
 	nThread         int64
 	nProbe          int64
 	totalLists      int64
@@ -573,6 +574,10 @@ func (builder *QueryBuilder) prepareIvfIndexContext(vecCtx *vectorSortContext, m
 	pkPos := vecCtx.scanNode.TableDef.Name2ColIndex[vecCtx.scanNode.TableDef.Pkey.PkeyColName]
 	pkType := vecCtx.scanNode.TableDef.Cols[pkPos].Typ
 	partType := vecCtx.scanNode.TableDef.Cols[partPos].Typ
+	quantization, _ := vectorIndexStringParam(params, catalog.Quantization)
+	entryType, quantized := quantizer.ToVectorType(quantization)
+	lossyEntries := quantized && (entryType != types.T(partType.Id) ||
+		entryType == types.T_array_int8 || entryType == types.T_array_uint8)
 
 	return &ivfIndexContext{
 		vecCtx:          vecCtx,
@@ -585,7 +590,7 @@ func (builder *QueryBuilder) prepareIvfIndexContext(vecCtx *vectorSortContext, m
 		partType:        partType,
 		pkPos:           pkPos,
 		pkType:          pkType,
-		params:          idxDef.IndexAlgoParams,
+		lossyEntries:    lossyEntries,
 		nThread:         nThread.(int64),
 		nProbe:          nProbe,
 		totalLists:      totalLists,
@@ -663,7 +668,14 @@ func (builder *QueryBuilder) applyIndicesForSortUsingIvfflatWithContext(
 		}
 	}
 
-	newFilterList, distRange := builder.getDistRangeFromFilters(scanNode.FilterList, ivfCtx.partPos, ivfCtx.origFuncName, ivfCtx.vecLitArg)
+	// Lossy entries can round or clip distinct source distances to the same
+	// score. Keep their distance predicates on the source scan; encoded scores
+	// still order bounded ANN candidates, but cannot decide exact SQL predicates.
+	newFilterList := scanNode.FilterList
+	var distRange *plan.DistRange
+	if !ivfCtx.lossyEntries {
+		newFilterList, distRange = builder.getDistRangeFromFilters(newFilterList, ivfCtx.partPos, ivfCtx.origFuncName, ivfCtx.vecLitArg)
+	}
 	includeColumns, err := getVectorIndexIncludedColumns(multiTableIndex)
 	if err != nil {
 		return 0, err
