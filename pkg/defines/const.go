@@ -137,7 +137,8 @@ const (
 	MORPCVersion99     int64 = 99  // owner-atomic writer-fair row-lock admission
 	MORPCVersion100    int64 = 100 // on-demand View metadata column descriptions
 	MORPCVersion101    int64 = 101 // JSON source domains for CONCAT and JSON_DEPTH
-	MORPCLatestVersion       = MORPCVersion101
+	MORPCVersion103    int64 = 103 // string-numeric semantics and row-level binary-literal provenance
+	MORPCLatestVersion       = MORPCVersion103
 )
 
 // DefaultLockWaitTimeoutSeconds is shared by the frontend default and by

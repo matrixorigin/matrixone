@@ -49,7 +49,7 @@ func (c *Compile) constrainStringNumericResultWorkers(qry *plan.Query) error {
 }
 
 // constrainStrictStringNumericCompatibilityWorkers keeps expressions whose
-// conversion semantics changed in v101 away from older workers. Historical
+// conversion semantics changed in v103 away from older workers. Historical
 // CEIL/FLOOR overloads require this in every mode. A legacy process marker is
 // rejected rather than silently treated as the new sender contract.
 func (c *Compile) constrainStrictStringNumericCompatibilityWorkers(qry *plan.Query) error {
@@ -65,7 +65,7 @@ func (c *Compile) constrainStrictStringNumericCompatibilityWorkers(qry *plan.Que
 			"string numeric compatibility cannot run with a legacy session contract",
 		)
 	}
-	supported, err := remoteWorkersSupportProtocol(c.proc, c.cnList, defines.MORPCVersion101)
+	supported, err := remoteWorkersSupportProtocol(c.proc, c.cnList, defines.MORPCVersion103)
 	if err != nil {
 		return err
 	}
@@ -77,16 +77,15 @@ func (c *Compile) constrainStrictStringNumericCompatibilityWorkers(qry *plan.Que
 	return err
 }
 
-// validateStrictStringNumericCompatibilityDestination repeats the worker
-// capability probe immediately before a remote send. Placement is only a
-// snapshot: a selected CN may be drained or replaced by an older binary before
-// the scope is serialized. Without this check a new coordinator could still
-// send strict semantics to a pre-v101 worker after passing compile-time
-// admission.
+// validateStrictStringNumericCompatibilityDestination rechecks the worker
+// capability at the final destination probe before the scope is serialized.
+// A downgrade visible to this probe is rejected; the query-service probe and
+// pipeline send do not bind a process generation, so a replacement after this
+// probe is outside the guard and requires quiescent rollout.
 func validateStrictStringNumericCompatibilityDestination(proc *process.Process, p *pipeline.Pipeline) error {
 	if p == nil || p.Node == nil || p.Node.Addr == "" {
 		return moerr.NewNotSupportedNoCtx(
-			"string numeric compatibility requires a known v101 remote destination",
+			"string numeric compatibility requires a known v103 remote destination",
 		)
 	}
 	if proc.GetSessionInfo().LegacyNumericCompatibilityMode {
@@ -97,14 +96,14 @@ func validateStrictStringNumericCompatibilityDestination(proc *process.Process, 
 	supported, err := remoteWorkersSupportProtocol(
 		proc,
 		engine.Nodes{{Id: p.Node.Id, Addr: p.Node.Addr}},
-		defines.MORPCVersion101,
+		defines.MORPCVersion103,
 	)
 	if err != nil {
 		return err
 	}
 	if !supported {
 		return moerr.NewNotSupportedNoCtx(
-			"string numeric compatibility requires MORPC protocol version 101 on the remote destination",
+			"string numeric compatibility requires MORPC protocol version 103 on the remote destination",
 		)
 	}
 	return nil
